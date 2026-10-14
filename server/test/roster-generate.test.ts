@@ -321,3 +321,92 @@ describe('generateAccountsSh — the pool projection', () => {
     expect(sh(junkHome, "_ccrc_pool 'junk' ; echo \"rc=$?\"")).toBe('rc=0');
   });
 });
+
+// D-3524. ccd's auth-dead marker expires once the account's credential FILE
+// changes, and the file is the roster's `exec.secretsFile` — which reached bash
+// nowhere until this projection. Additive, like `_ccrc_pool`: ccd asks
+// `declare -F _ccrc_secrets_file`, and an accounts.sh from before it means "ccd
+// cannot name this credential", which keeps the old rule.
+describe('generateAccountsSh — the credential-file projection (D-3524)', () => {
+  const secretsRoster = parseRoster({ version: 1, accounts: [
+    { id: 'a', label: 'A', configDirSuffix: '.a', exec: { kind: 'upstream', secretsFile: '.cc-secrets/a-oauth.env' }, homeAble: true, hue: 'cyan', telemetry: 'anthropic' },
+    { id: 'a-b-c', label: 'ABC', configDirSuffix: '.abc', exec: { kind: 'generated', provider: 'anthropic', secretsFile: '.cc-secrets/a-b-c-oauth.env' }, homeAble: true, hue: 'violet', telemetry: 'anthropic' },
+    { id: 'a-b', label: 'AB', configDirSuffix: '.ab', exec: { kind: 'external' }, homeAble: false, hue: 'blue', telemetry: 'none' },
+  ] });
+  const secretsHome = mkTmp('roster-gen-secrets-');
+  mkdirSync(path.join(secretsHome, '.ccrc'), { recursive: true });
+  writeFileSync(path.join(secretsHome, '.ccrc', 'accounts.sh'), generateAccountsSh(secretsRoster));
+
+  const bareHome = mkTmp('roster-gen-secrets-bare-');
+  mkdirSync(path.join(bareHome, '.ccrc'), { recursive: true });
+  writeFileSync(path.join(bareHome, '.ccrc', 'accounts.sh'), generateAccountsSh(roster));
+
+  it('is defined even when NO account declares a secrets file, so `declare -F` is a version probe', () => {
+    expect(sh(bareHome, 'declare -F _ccrc_secrets_file >/dev/null && echo yes')).toBe('yes');
+    expect(sh(bareHome, "_ccrc_secrets_file 'a' ; echo \"rc=$?\"")).toBe('rc=0');
+  });
+
+  it('answers the HOME-relative path an account declares, on any exec kind', () => {
+    expect(sh(secretsHome, "_ccrc_secrets_file 'a'")).toBe('.cc-secrets/a-oauth.env');
+    expect(sh(secretsHome, "_ccrc_secrets_file 'a-b-c'")).toBe('.cc-secrets/a-b-c-oauth.env');
+  });
+
+  it('answers NOTHING at rc 0 for an account that declares none, and for an unknown id — never a guessed `<id>-oauth.env`', () => {
+    expect(sh(secretsHome, "_ccrc_secrets_file 'a-b' ; echo \"rc=$?\"")).toBe('rc=0');
+    expect(sh(secretsHome, "_ccrc_secrets_file 'nosuch' ; echo \"rc=$?\"")).toBe('rc=0');
+  });
+
+  it('emits one arm per DECLARING account only, and no default arm', () => {
+    const body = generateAccountsSh(secretsRoster);
+    const block = body.slice(body.indexOf('_ccrc_secrets_file() {'));
+    const caseBody = block.slice(0, block.indexOf('esac'));
+    expect([...caseBody.matchAll(/^ {4}([a-z0-9-]+)\)/gm)].map((m) => m[1])).toEqual(['a-b-c', 'a']);
+    expect(caseBody).not.toMatch(/^\s*\*\)/m);
+  });
+
+  it('prints a path shaped like an `echo` option verbatim — `printf`, not `echo`', () => {
+    // `SECRETS_SAFE_RE` admits a leading `-`, so `-n` is a legal secretsFile, and
+    // bash's `echo -n` would print nothing: an unnameable credential by accident.
+    const dashRoster = parseRoster({ version: 1, accounts: [
+      { id: 'a', label: 'A', configDirSuffix: '.a', exec: { kind: 'upstream', secretsFile: '-n' }, homeAble: true, hue: 'cyan', telemetry: 'anthropic' },
+    ] });
+    const dashHome = mkTmp('roster-gen-secrets-dash-');
+    mkdirSync(path.join(dashHome, '.ccrc'), { recursive: true });
+    writeFileSync(path.join(dashHome, '.ccrc', 'accounts.sh'), generateAccountsSh(dashRoster));
+    expect(sh(dashHome, "_ccrc_secrets_file 'a'")).toBe('-n');
+  });
+
+  it('escapes an unvalidated secretsFile as inert literal text, and the payload never runs', () => {
+    // Built by hand, never parsed — the generator's own lock, independent of the
+    // parser's, exactly as the hostile-configDirSuffix case above.
+    const hostileHome = mkTmp('roster-gen-secrets-hostile-');
+    mkdirSync(path.join(hostileHome, '.ccrc'), { recursive: true });
+    const canary = path.join(hostileHome, 'canary-hit');
+    const hostile = `x$(touch ${canary})\`touch ${canary}\`"; touch ${canary}; echo "y`;
+    const acct = {
+      id: 'h', label: 'H', configDirSuffix: '.h',
+      exec: { kind: 'upstream' as const, secretsFile: hostile }, homeAble: true,
+      hue: 'cyan' as const, telemetry: 'anthropic' as const, hidden: false, pool: null,
+    };
+    const hostileRoster = {
+      version: 1 as const, accounts: [acct], byId: new Map([['h', acct]]),
+      byIdLengthDesc: [acct], homeAble: [acct], upstreamId: 'h',
+    };
+    writeFileSync(path.join(hostileHome, '.ccrc', 'accounts.sh'), generateAccountsSh(hostileRoster));
+    expect(sh(hostileHome, "_ccrc_secrets_file 'h'")).toBe(hostile);
+    expect(existsSync(canary)).toBe(false);
+  });
+
+  it('reads the FLAT shape `rosterFromJson` produces too — the deploy CLI\'s roster, not only `parseRoster`\'s', () => {
+    // `deploy/gen-accounts.mjs` feeds this generator a roster whose accounts carry
+    // `secretsFile` at the top level beside `execKind`, with no `exec` object.
+    const flat = { id: 'a', label: 'A', configDirSuffix: '.a', execKind: 'upstream', secretsFile: '.cc-secrets/a-oauth.env',
+      homeAble: true, hue: 'cyan', telemetry: 'anthropic', pool: null };
+    const flatRoster = { version: 1, accounts: [flat], byIdLengthDesc: [flat], homeAble: [flat], upstreamId: 'a' };
+    const flatHome = mkTmp('roster-gen-secrets-flat-');
+    mkdirSync(path.join(flatHome, '.ccrc'), { recursive: true });
+    writeFileSync(path.join(flatHome, '.ccrc', 'accounts.sh'),
+      generateAccountsSh(flatRoster as unknown as Parameters<typeof generateAccountsSh>[0]));
+    expect(sh(flatHome, "_ccrc_secrets_file 'a'")).toBe('.cc-secrets/a-oauth.env');
+  });
+});

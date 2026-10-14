@@ -320,9 +320,23 @@ describe('the reconstruction drill', () => {
       dispatchedAt: true,
       closedAt: true, handoffCommit: true, items: true, unreadMail: true,
       health: true,
+      childReclaim: true,
     };
     // Bumped 22 -> 24: `kind`/`reviews` (design 2026-09-14 §5.1, task 3).
-    expect(Object.keys(RUN_SUMMARY_KEYS).length).toBe(24);
+    // Bumped 24 -> 25: `childReclaim` (child-reclamation wave 5). It is NOT in
+    // UNRECOVERABLE above, and deliberately so. Nothing stores it: GET /api/runs
+    // derives it on every read. A reconstructed run carries `closedAt: null`
+    // (UNRECOVERABLE), and `withChildReclaim` looks no mirror event up for such
+    // a row, so the answers that rest on the mirror (reclaimed, a refusal, a
+    // failure line) cannot reach it. The registry-side answers still can, and
+    // a rebuilt row is not always silent: where the watcher's last listing
+    // carries a `.child` marker naming the rebuilt run's id and no open run
+    // names its session, the chip answers by the row rule, as for any marked
+    // row (spec §5.9: the sweep's verdict and its in-memory entry, and the
+    // fleet switch). With no such marker it shows no chip. Either way it says
+    // only what the registry and the sweep show now, never a mirror answer for
+    // an instant nobody can place.
+    expect(Object.keys(RUN_SUMMARY_KEYS).length).toBe(25);
 
     const r = reconstruct(fx);
     for (const field of UNRECOVERABLE) {

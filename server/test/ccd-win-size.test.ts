@@ -22,7 +22,7 @@
 // IT IS NOT REACHABLE FROM THE PWA, and that is a property of the CALL
 // CONVENTION rather than of the table: every tmux argv in `server/src/exec.ts`
 // is a literal token array, and the wire-supplied values land as SINGLE tokens
-// (`target(id)` is one token, `sendLiteral`'s text is the one token after
+// (`tmuxTarget(id)` is one token, `sendLiteral`'s text is the one token after
 // `-l`). Measured on the same socket: `send-keys -t <s> -l ';'` and
 // `send-keys -t <s> -l '; set-option -g window-size manual'` both leave the
 // global at `latest`, and a `;` inside a `resize-window -x` value is refused
@@ -64,9 +64,11 @@ const TMUX_MUTATE_FAIL =
 // THE THREE ARGVS THIS VERB MAY PRODUCE, spelled once each as literals (never
 // derived from `ccd/ccd`, which would make them tautological). Every target is
 // `=`-anchored: `=name` is tmux's EXACT-match form, and the trailing `:` is the
-// window target the two mutating commands take. See the `anchors EVERY tmux
-// target` case for the measurements behind each character.
-const PROBE = 'tmux has-session -t =cc-demo-quiet-basin';
+// window target the two mutating commands need. The probe carries the colon
+// too since D-3525: one exact spelling (`_tmux_at`) for every target in ccd.
+// See the `anchors EVERY tmux target` case for the measurements behind each
+// character.
+const PROBE = 'tmux has-session -t =cc-demo-quiet-basin:';
 const UNPIN = 'tmux set-option -t =cc-demo-quiet-basin: window-size smallest';
 const REPIN = 'tmux resize-window -t =cc-demo-quiet-basin: -x 220 -y 50';
 
@@ -187,24 +189,23 @@ describe('ccd win-size', () => {
     //   resize-window -t '=cc-demo:' -x 177 -y 33 -> rc 1 can't find session
     // For a WINDOW target `=` only binds with the colon present. Drop the colon
     // from the pin arm and D-2780 is LIVE again — a wrong-session resize at
-    // rc 0. `has-session` takes a SESSION target and gets no colon; it is the
-    // one command for which `=` alone binds.
+    // rc 0. `has-session` alone would bind with `=` and no colon, but since
+    // D-3525 it takes the same `=…:` as the rest — one spelling, no per-verb
+    // choice to get wrong.
     h.sh(`${TMUX_OK} cmd_win_size --session demo-quiet-basin --mode smallest`);
     h.sh(`${TMUX_OK} cmd_win_size --session demo-quiet-basin --mode canonical`);
     const targets = calls().map((c) => /\s-t\s(\S+)/.exec(c)?.[1] ?? null);
     // Anti-vacuity: two runs, each a probe plus one mutation. Without this the
     // loop below passes over an empty list if the verb ever stops calling tmux.
     expect(targets, 'two runs must produce four -t targets').toHaveLength(4);
-    // PER COMMAND, BECAUSE THE COLON IS NOT OPTIONAL ON THE MUTATING ARMS. A
-    // single `/^=cc-demo-quiet-basin:?$/` over all four accepts a colon-less
-    // MUTATION target, which is the live D-2780 defect measured above — this
-    // case, whose whole declared job is the anchor, could not see it, and only
-    // the whole-sequence pins in the two cases above reddened on a colon-less
-    // mutant. Split so each arm is held to the form its own tmux command needs.
+    // THE COLON IS REQUIRED ON EVERY TARGET. A `/^=cc-demo-quiet-basin:?$/`
+    // would accept a colon-less MUTATION target, which is the live D-2780
+    // defect measured above — this case, whose whole declared job is the
+    // anchor, could not see it. Since D-3525 the probe carries the colon too,
+    // so all four are held to the one exact form.
     for (const c of calls()) {
       const t = /\s-t\s(\S+)/.exec(c)?.[1] ?? null;
-      if (c.includes('has-session')) expect(t, c).toMatch(/^=cc-demo-quiet-basin$/);
-      else expect(t, c).toMatch(/^=cc-demo-quiet-basin:$/);
+      expect(t, c).toMatch(/^=cc-demo-quiet-basin:$/);
     }
   });
 

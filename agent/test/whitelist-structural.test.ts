@@ -120,6 +120,48 @@ const EXPECTED: Record<string, { what: string; codes: string[] }> = {
     what: 'the window-size verb granted without the flag that is its whole argument surface',
     codes: ['TS2322'],
   },
+  // CHILD RECLAMATION wave 3, g5's shape for the second destructive verb with a
+  // confirmation token: the enrolment, not the grant, is what refuses it.
+  'g13-ws-reclaim-without-expect.ts': {
+    what: 'the child-reclaim verb granted without its confirmation token',
+    codes: ['TS2322'],
+  },
+  // CHILD RECLAMATION wave 4, g9's shape a fifth time: a two-token grant is
+  // only two tokens wide while its verb is ENROLLED in `REQUIRED_VERB_FLAG`.
+  'g14-reclaim-pause-without-state.ts': {
+    what: 'the reclaim kill-switch granted without the flag that is its whole argument surface',
+    codes: ['TS2322'],
+  },
+  // WORKSPACE LIFECYCLE wave 3, g13's shape for ws-reclaim's sibling: the archived workspace's teardown, enrolled on
+  // its confirmation token, so the narrowed grant is a compile error.
+  'g15-ws-expire-without-expect.ts': {
+    what: 'the archived-workspace expiry verb granted without its confirmation token',
+    codes: ['TS2322'],
+  },
+  // NATIVE DOCS READER wave 2, g14's shape for the four docs verbs: read-only, no confirmation token, so the flag is
+  // each verb's whole argument surface, and the enrolment is what makes the narrowed grant a compile error.
+  'g16-docs-index-without-all.ts': {
+    what: 'the fleet-wide docs listing granted without --all, its whole argument surface',
+    codes: ['TS2322'],
+  },
+  'g17-docs-tree-without-project.ts': {
+    what: 'the docs tree verb granted without --project',
+    codes: ['TS2322'],
+  },
+  'g18-docs-show-without-project.ts': {
+    what: 'the docs show verb (one grant, both argv shapes) granted without --project',
+    codes: ['TS2322'],
+  },
+  'g19-docs-fetch-without-project.ts': {
+    what: 'the docs fetch verb granted without --project',
+    codes: ['TS2322'],
+  },
+  // CHILD RECLAMATION wave 7, g13's and g15's shape for the temp-root collector: enrolled on its confirmation token, so
+  // the narrowed grant is a compile error.
+  'g20-ws-collect-without-expect.ts': {
+    what: 'the temp-root collector granted without its confirmation token',
+    codes: ['TS2322'],
+  },
 };
 
 describe('mechanism 1+2 — granting `gh` fails to COMPILE, wherever it is written', () => {
@@ -320,6 +362,61 @@ describe('mechanism 3, values — a prefix that grants more than it names is a b
     // own length and nothing past it.
     expect(() => auditExecWhitelist(withCcd([['ws-reap', '--session', '--expect']])))
       .toThrow(/only grantable with '--expect'/);
+  });
+
+  // CHILD RECLAMATION wave 3, fix round 1 — `ws-reap`'s own case one verb over.
+  // Without this, mutation row 2 (narrowing the shipped grant to `['ws-reclaim']`)
+  // is caught only by the module-load crash every consumer of `whitelist.ts`
+  // takes on import, which proves the crash fires, not that THIS verb's rule
+  // is what fires it. This case runs the audit over a CONSTRUCTED table, so
+  // the row reds here as an assertion instead.
+  it('throws on a ws-expire with no confirmation token, the third destructive verb (workspace lifecycle wave 3)', () => {
+    expect(() => auditExecWhitelist(withCcd([['ws-expire']])))
+      .toThrow(/only grantable with '--expect'/);
+    expect(() => auditExecWhitelist(withCcd([['ws-expire', '--session']])))
+      .toThrow(/only grantable with '--expect'/);
+    expect(() => auditExecWhitelist(withCcd([['ws-expire', '--expect']]))).not.toThrow();
+  });
+
+  it('throws on a ws-collect with no confirmation token, the fourth destructive verb (child reclamation wave 7)', () => {
+    expect(() => auditExecWhitelist(withCcd([['ws-collect']])))
+      .toThrow(/only grantable with '--expect'/);
+    expect(() => auditExecWhitelist(withCcd([['ws-collect', '--session']])))
+      .toThrow(/only grantable with '--expect'/);
+    expect(() => auditExecWhitelist(withCcd([['ws-collect', '--expect']]))).not.toThrow();
+  });
+
+  // NATIVE DOCS READER wave 2: the four docs verbs, enrolled for their ARGUMENT SURFACE (`coord-pause`'s reason).
+  // Run over CONSTRUCTED tables, so narrowing a shipped docs grant reds here as an assertion naming the verb's own
+  // rule, not only as the module-load crash every importer of `whitelist.ts` takes. The flag must be the token
+  // IMMEDIATELY after the verb, so a misplaced `--project` is refused like a missing one.
+  it('throws on a docs verb with no flag, the wrong flag, or the flag out of place (docs W2)', () => {
+    const REFUSED: readonly (readonly [prefix: readonly string[], flag: string])[] = [
+      [['docs-index'], '--all'],
+      [['docs-index', '--project'], '--all'],
+      [['docs-tree'], '--project'],
+      [['docs-show', '--all'], '--project'],
+      [['docs-fetch'], '--project'],
+      [['docs-show', '--ref', '--project'], '--project'],
+    ];
+    for (const [prefix, flag] of REFUSED) {
+      expect(() => auditExecWhitelist(withCcd([prefix])), prefix.join(' '))
+        .toThrow(new RegExp(`only grantable with '${flag}'`));
+    }
+    const LAWFUL: readonly (readonly string[])[] = [
+      ['docs-index', '--all'], ['docs-tree', '--project'], ['docs-show', '--project'], ['docs-fetch', '--project'],
+    ];
+    for (const prefix of LAWFUL) {
+      expect(() => auditExecWhitelist(withCcd([prefix])), prefix.join(' ')).not.toThrow();
+    }
+  });
+
+  it('throws on a ws-reclaim with no confirmation token, the second destructive verb', () => {
+    expect(() => auditExecWhitelist(withCcd([['ws-reclaim']])))
+      .toThrow(/only grantable with '--expect'/);
+    expect(() => auditExecWhitelist(withCcd([['ws-reclaim', '--session']])))
+      .toThrow(/only grantable with '--expect'/);
+    expect(() => auditExecWhitelist(withCcd([['ws-reclaim', '--expect']]))).not.toThrow();
   });
 
   it('throws on a coord-pause grant with no --state — the flag is the whole grant', () => {

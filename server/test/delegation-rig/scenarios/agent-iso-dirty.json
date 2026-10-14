@@ -1,0 +1,17 @@
+{
+  "scenario": "agent-iso-dirty", "covers": ["Q6"],
+  "steps": [
+    {"waitReady": 60}, {"type": "dlg agent-iso-dirty"}, {"keys": ["Enter"]},
+    {"waitLabels": ["sub-done", "main-done"], "timeoutS": 120}
+  ],
+  "settleS": 10,
+  "entries": [
+    {"label": "main-call", "match": {"kind": "tools", "lastUser": "dlg agent-iso-dirty"},
+     "tool_use": {"nameAny": ["Agent", "Task"], "input": {"description": "dlg iso dirty", "prompt": "dlg-sub-iso-d", "subagent_type": "general-purpose", "run_in_background": false, "isolation": "worktree"}}},
+    {"label": "sub-bash", "match": {"kind": "tools", "lastUser": "dlg-sub-iso-d"},
+     "tool_use": {"name": "Bash", "input": {"command": "printf 'x\\n' > dirty.txt && echo DLG-ACK-iso-d", "description": "leave an uncommitted file"}}},
+    {"label": "sub-done", "match": {"kind": "tools", "lastUser": "DLG-ACK-iso-d"}, "text": "DLG-SUB-DONE-iso-d"},
+    {"label": "main-done", "match": {"kind": "tools", "lastUser": "DLG-SUB-DONE-iso-d|^$"}, "text": "DLG-DONE"}
+  ],
+  "default": {"text": "DLG-WAIT", "repeat": true}
+}

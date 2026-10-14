@@ -41,8 +41,8 @@
 import { describe, it, expect } from 'vitest';
 import { spawnSync } from 'node:child_process';
 import {
-  chmodSync, closeSync, existsSync, ftruncateSync, mkdirSync, openSync, readdirSync, readFileSync,
-  renameSync, statSync, symlinkSync, writeFileSync,
+  chmodSync, closeSync, existsSync, ftruncateSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync,
+  readlinkSync, renameSync, statSync, symlinkSync, utimesSync, writeFileSync,
 } from 'node:fs';
 import path, { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -599,6 +599,21 @@ describe('ccrc wrappers: a file ccrc did NOT write', () => {
   });
 });
 
+/** A copy of the shipped tree whose `deploy/gen-wrappers.mjs` is `stub`.
+ *  `ccrc` resolves both its shape library and the generator through
+ *  `${BASH_SOURCE[0]}`, so a copied `ccd/` plus a sibling `deploy/` is the
+ *  whole install as far as this verb is concerned. */
+function kitWith(stub: string): string {
+  const kit = mkTmp('ccrc-wrappers-kit-');
+  mkdirSync(join(kit, 'ccd'), { recursive: true });
+  mkdirSync(join(kit, 'deploy'), { recursive: true });
+  for (const f of ['ccrc', 'ccrc-wrapper-shape']) {
+    writeFileSync(join(kit, 'ccd', f), readFileSync(join(CCD_DIR, f), 'utf8'), { mode: 0o755 });
+  }
+  writeFileSync(join(kit, 'deploy', 'gen-wrappers.mjs'), stub, { mode: 0o755 });
+  return join(kit, 'ccd', 'ccrc');
+}
+
 // ── D-156: LOCK 5, THE WITNESS INDEX ──────────────────────────────────────
 //
 // D-156 (cut 2) closed the `--force` door on a file this reader cannot parse.
@@ -635,6 +650,12 @@ describe('ccrc wrappers: a file ccrc did NOT write', () => {
 // box case all stay GREEN under mutant 1, because D-156's cut 2 already refuses
 // that file on its own. Their value is as guards against BOTH locks regressing,
 // not as evidence for this one.
+//
+// Spec §5 Pin 3 (Plan 2b-2) adds the one box here whose witnesses do NOT exec
+// the upstream: every launcher on it is a Codex lane's. Its mutations are
+// stated in the case itself, and one of them is the reason it exists — an
+// index narrowed to non-Codex targets reds it ALONE, while every Anthropic case
+// above stays green.
 describe('ccrc wrappers: the witness lock (D-156)', () => {
   /** The reference box's `~/.local/bin/claude`: a launcher that picks a version
    *  and injects a token, deliberately never matching
@@ -837,6 +858,85 @@ describe('ccrc wrappers: the witness lock (D-156)', () => {
     expect(`${r.stdout}${r.stderr}`).toMatch(/stat is required by 'ccrc wrappers'/);
     expect(`${r.stdout}${r.stderr}`).toMatch(/[Nn]othing was written/);
     expect(binEntries(home)).toEqual(before);
+  });
+
+  it('counts a box whose ONLY launchers are Codex lanes: their shared target is refused too (spec §5 Pin 3)', () => {
+    // Every case above is an Anthropic box — the witnesses exec the upstream.
+    // A generated Codex launcher execs the GPT lane's common launcher instead,
+    // through the same one exec line `_wrap_parse_shape` reads, so it must
+    // cast its vote for THAT name. Without it, a box whose lanes are all Codex
+    // has an empty index, and a generated wrapper written at the launcher's
+    // path would turn every Codex lane into a Claude Code session against the
+    // upstream under the lane's own config dir — silently, on every lane at once.
+    //
+    // The roster cannot ask for that write: both roster mirrors reserve the
+    // name as an account id, so `ccrc wrappers` dies in the generator first.
+    // The request therefore arrives through a generator stub (`kitWith`, the
+    // route the manifest cases below take), and the target is read out of the
+    // real emitter's output, never typed here.
+    //
+    // MUTATIONS, measured both ways (plan Task 9's table): the gate's
+    // `if [ -n "$wit" ]` -> `if false` reds this with the move-aside and
+    // ordering cases; `[ "$wtarget" = <target> ] && continue` after the strict
+    // parse reds THIS CASE ALONE. The control at the end is what makes a green
+    // here a statement about the index.
+    const launcher = (id: string): string => markGenerated(generateWrapperBody(
+      { id, configDirSuffix: `.${id}`, execKind: 'codex' }, UPSTREAM_ID,
+    ));
+    const m = /^exec "\$HOME\/\.local\/bin\/([^"]+)" "\$@"$/m.exec(launcher('codex-a'));
+    expect(m, 'a Codex launcher no longer ends in the one exec line the shape reader parses').not.toBeNull();
+    const target = m![1]!;
+    expect(target, 'a Codex launcher execs the upstream, so this box would not be Codex-only').not.toBe(UPSTREAM_ID);
+    const esc = target.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const staged = markGenerated(generateWrapperBody(
+      { id: target, configDirSuffix: `.claude-${target}`, execKind: 'generated' }, UPSTREAM_ID,
+    ));
+    // Arithmetically consistent, so no manifest gate speaks first: one
+    // generated record and nothing protected (total = 1 + 0 + 0 + 0).
+    const kitFor = (klass: 'absent' | 'foreign'): string => kitWith(
+      'import { writeFileSync } from "node:fs";\nimport { join } from "node:path";\n'
+      + `writeFileSync(join(process.argv[4], ${JSON.stringify(target)}), ${JSON.stringify(staged)});\n`
+      + `process.stdout.write(${JSON.stringify(`summary\t1\t1\t0\t0\t0\nwrapper\t${target}\t${klass}\tno\n`)});\n`,
+    );
+    const refusal = new RegExp(
+      `^REFUSE ${esc}: .*, but codex-a codex-b in .* already exec it as their upstream binary$`, 'm');
+
+    const home = makeHome('ccrc-wrappers-witness-codex-only-');
+    const bin = binOf(home);
+    for (const id of ['codex-a', 'codex-b']) writeFileSync(join(bin, id), launcher(id), { mode: 0o755 });
+    expect(binEntries(home), 'the box under test carries more than the two Codex launchers').toEqual(['codex-a', 'codex-b']);
+
+    // (1) Nothing at the launcher's path — the state a move-aside manufactures,
+    //     and the one the absent arm writes into with no flag at all.
+    for (const flags of [[], ['--force', '--adopt']]) {
+      const r = runWrappers(home, flags, kitFor('absent'));
+      expect(r.code, `flags=${JSON.stringify(flags)}\nstdout:\n${r.stdout}\nstderr:\n${r.stderr}`).toBe(1);
+      expect(r.stdout, `flags=${JSON.stringify(flags)}`).toMatch(refusal);
+      expect(remedyAfter(r.stdout, new RegExp(`^REFUSE ${esc}: `))).toMatch(/No flag overrides this one/);
+      expect(existsSync(join(bin, target)), `flags=${JSON.stringify(flags)}: the launcher's path was written`).toBe(false);
+    }
+
+    // (2) The shipped launcher at that path, as `ccrc install` leaves it.
+    //     Reading it out of `ccd/` is itself a claim: the name every Codex
+    //     launcher execs is a file this repository ships.
+    const shipped = readFileSync(join(CCD_DIR, target));
+    writeFileSync(join(bin, target), shipped, { mode: 0o755 });
+    for (const flags of [[], ['--force', '--adopt']]) {
+      const r = runWrappers(home, flags, kitFor('foreign'));
+      expect(r.code, `flags=${JSON.stringify(flags)}\nstdout:\n${r.stdout}\nstderr:\n${r.stderr}`).toBe(1);
+      expect(r.stdout, `flags=${JSON.stringify(flags)}`).toMatch(refusal);
+      expect(readFileSync(join(bin, target)), `flags=${JSON.stringify(flags)}: the shipped launcher changed`).toEqual(shipped);
+      expect(backupsFor(home, target)).toEqual([]);
+    }
+
+    // CONTROL: the votes were the Codex launchers'. The same stub on a box
+    // WITHOUT them writes into the empty path, so the refusals above were the
+    // index's decision, not the stub's or the kit's.
+    const bare = makeHome('ccrc-wrappers-witness-codex-control-');
+    const c = runWrappers(bare, [], kitFor('absent'));
+    expect(c.code, `stdout:\n${c.stdout}\nstderr:\n${c.stderr}`).toBe(0);
+    expect(c.stdout).toMatch(new RegExp(`^WRITE ${esc}: `, 'm'));
+    expect(c.stdout).not.toMatch(/^REFUSE /m);
   });
 });
 
@@ -1081,21 +1181,6 @@ describe('ccrc wrappers: orphans', () => {
 });
 
 describe('ccrc wrappers: a manifest it cannot trust', () => {
-  /** A copy of the shipped tree whose `deploy/gen-wrappers.mjs` is `stub`.
-   *  `ccrc` resolves both its shape library and the generator through
-   *  `${BASH_SOURCE[0]}`, so a copied `ccd/` plus a sibling `deploy/` is the
-   *  whole install as far as this verb is concerned. */
-  function kitWith(stub: string): string {
-    const kit = mkTmp('ccrc-wrappers-kit-');
-    mkdirSync(join(kit, 'ccd'), { recursive: true });
-    mkdirSync(join(kit, 'deploy'), { recursive: true });
-    for (const f of ['ccrc', 'ccrc-wrapper-shape']) {
-      writeFileSync(join(kit, 'ccd', f), readFileSync(join(CCD_DIR, f), 'utf8'), { mode: 0o755 });
-    }
-    writeFileSync(join(kit, 'deploy', 'gen-wrappers.mjs'), stub, { mode: 0o755 });
-    return join(kit, 'ccd', 'ccrc');
-  }
-
   it('refuses a manifest whose summary and wrapper records disagree, and writes nothing', () => {
     // D6: bash asserts it read exactly `<generated>` wrapper records, so a
     // manifest truncated in transit is LOUD. Without that assertion a
@@ -1335,5 +1420,86 @@ describe('ccrc wrappers: its own prerequisites', () => {
     expect(r.stdout).toMatch(/usage: ccrc/);
     expect(r.stdout).toMatch(/wrappers/);
     expect(binEntries(home)).toEqual([]);
+  });
+});
+
+describe('ccrc wrappers: the Codex launcher target (D-3478)', () => {
+  it('writes a Codex lane\'s launcher to exec $HOME/.local/bin/ccrc-codex, and writes nothing at ccgpt', () => {
+    // `ccgpt` is another repository's live launcher on the fleet box; a Codex
+    // lane's launcher exec'ing it would run that repository's first lane.
+    const home = makeHome('ccrc-wrappers-codex-target-', { roster: CODEX_FIXTURE });
+    const r = runWrappers(home);
+    expect(r.code, `stderr:\n${r.stderr}\nstdout:\n${r.stdout}`).toBe(0);
+    const text = readFileSync(join(binOf(home), CODEX_ID), 'utf8');
+    expect(text).toContain('\nexec "$HOME/.local/bin/ccrc-codex" "$@"\n');
+    expect(text).not.toContain('/.local/bin/ccgpt"');
+    expect(existsSync(join(binOf(home), 'ccgpt')), 'ccrc wrappers wrote a file at ccgpt').toBe(false);
+  });
+});
+
+// ════════════════════════════════════════════════════════════════════════
+// Plan 3a Task 9 — a launcher that is a SYMLINK is backed up as that symlink.
+// `--force` (and every other rewrite) copies the file at `<id>` aside as
+// `<id>.pre-ccrc-<UTC>` before the rename lands. The rename REPLACES a
+// symlink at `<id>` rather than writing through it, so the backup must be the
+// symlink too: a copy of the bytes behind it would restore, by `mv`, a frozen
+// second copy of somebody else's launcher in place of the link to it.
+// ════════════════════════════════════════════════════════════════════════
+describe('ccrc wrappers: a rewritten launcher is backed up as what was there (Plan 3a Task 9)', () => {
+  /** A wrapper-shaped launcher nobody generated, saying something else (its
+   *  own config dir), so `--force` rewrites it: the foreign class's `dok = ok`
+   *  arm. It sits BESIDE the id under a dot-name, which can never match
+   *  WRAPPER_ID_RE, so neither the witness scan nor the orphan report reads it
+   *  as an account; the id is a RELATIVE symlink to it. */
+  const TARGET = '.codex-a-launcher';
+  const targetText = handWritten({
+    suffix: '.codex-a-elsewhere', target: 'ccrc-codex',
+    note: 'another tool\'s launcher, reached through a symlink',
+  });
+
+  it('a symlinked launcher rewritten under --force is backed up as the same symlink, and one mv restores it exactly', () => {
+    const home = makeHome('ccrc-wrappers-symlink-force-', { roster: CODEX_FIXTURE });
+    writeFileSync(join(binOf(home), TARGET), targetText, { mode: 0o755 });
+    symlinkSync(TARGET, join(binOf(home), CODEX_ID));
+    const r = runWrappers(home, ['--force']);
+    expect(r.code, `stdout:\n${r.stdout}\nstderr:\n${r.stderr}`).toBe(0);
+    expect(r.stdout).toMatch(/^REWRITE codex-a: /m);
+    // The launcher is the roster's now: a regular file that REPLACED the link
+    // by a rename, and the file the link pointed at is byte for byte what it was.
+    const p = join(binOf(home), CODEX_ID);
+    expect(lstatSync(p).isSymbolicLink()).toBe(false);
+    expect(readFileSync(p, 'utf8')).toBe(bodyFor(CODEX_FIXTURE, CODEX_ID));
+    expect(readFileSync(join(binOf(home), TARGET), 'utf8')).toBe(targetText);
+    const backups = backupsFor(home, CODEX_ID);
+    expect(backups).toHaveLength(1);
+    expect(backups[0]).toMatch(/^codex-a\.pre-ccrc-\d{8}T\d{6}Z$/);
+    const b = join(binOf(home), backups[0] ?? '');
+    expect(lstatSync(b).isSymbolicLink(),
+      'the backup is a regular file: the copy followed the link and saved the bytes behind it').toBe(true);
+    expect(readlinkSync(b)).toBe(TARGET);
+    // The one act the backup's name promises restores what was there, exactly.
+    renameSync(b, p);
+    expect(lstatSync(p).isSymbolicLink()).toBe(true);
+    expect(readlinkSync(p)).toBe(TARGET);
+    expect(readFileSync(p, 'utf8')).toBe(targetText);
+    expect(binEntries(home)).toEqual([TARGET, CODEX_ID, ...GENERATED_IDS].sort());
+  });
+
+  it('a regular-file launcher is still backed up as a regular file, with its bytes and its mtime', () => {
+    // The CONTROL for the row above: `-P` changes nothing for a file that is
+    // not a link, and `-p` still carries the replaced file's timestamps.
+    const home = makeHome('ccrc-wrappers-regular-force-', { roster: CODEX_FIXTURE });
+    const p = join(binOf(home), CODEX_ID);
+    writeFileSync(p, targetText, { mode: 0o755 });
+    const then = new Date('2026-01-02T03:04:05Z');
+    utimesSync(p, then, then);
+    const r = runWrappers(home, ['--force']);
+    expect(r.code, `stdout:\n${r.stdout}\nstderr:\n${r.stderr}`).toBe(0);
+    const backups = backupsFor(home, CODEX_ID);
+    expect(backups).toHaveLength(1);
+    const b = join(binOf(home), backups[0] ?? '');
+    expect(lstatSync(b).isFile()).toBe(true);
+    expect(readFileSync(b, 'utf8')).toBe(targetText);
+    expect(Math.round(statSync(b).mtimeMs)).toBe(then.getTime());
   });
 });

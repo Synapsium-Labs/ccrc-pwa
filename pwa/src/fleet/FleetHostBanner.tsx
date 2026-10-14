@@ -20,15 +20,21 @@
 //    both versions (or shas, for an unversioned deploy.sh stamp) from the node
 //    inventory (`nodes`, FleetScreen's one /api/updates poll — centralised-
 //    update §14; the same `remoteSides` BuildLine reads), and says nothing of
-//    versions until that answer is in. No action button: the fix is `ccrc
-//    rollout`/`ccrc update`, run from a terminal. `'unknown'` remains silent,
-//    same rule as the two above.
+//    versions until that answer is in. No action button. The REMEDY it names is
+//    `skewRemedy`'s (updateHalt.ts; programme wave 14, R15(c)): while a node
+//    halts the fleet, the halt and its Ack (the halt banner), then what happens
+//    after the ack; while the fleet's auto-install is on and auto would move
+//    every lagging node, so that every node ends on one tag (D-4271), the
+//    console's own move, followed in Settings; otherwise — and whenever the
+//    inventory has not answered, or a lease could not be read — `ccrc rollout`/
+//    `ccrc update` from a terminal.
+//    `'unknown'` remains silent, same rule as the two above.
 //  - POOLS UNAVAILABLE (amber): the host is up, but its ccd has no project-pool
 //    capability. No action button: the remedy is an agent-lane deploy.
 //    `'unknown'` remains silent.
 import { useState } from 'react';
 import type { ReactNode } from 'react';
-import type { FleetHealth, NodeWire } from '../../../shared/api';
+import type { FleetHealth, NodeWire, UpdateIntentWire } from '../../../shared/api';
 import { api, apiErrorText } from '../lib/api';
 import { toast } from '../components/Toast';
 import { QuickConfirm } from '../components/QuickConfirm';
@@ -36,6 +42,7 @@ import { useNow } from '../lib/useNow';
 import { elapsedWords } from '../lib/elapsed';
 import { useFleetHealth } from './useFleetHealth';
 import { remoteSides, statedOf } from '../../../shared/update-summary';
+import { SKEW_AUTO_TEXT, SKEW_HALT_THEN_AUTO_TAIL, skewHaltLead, skewRemedy } from './updateHalt';
 import './fleet.css';
 
 const POLL_MS = 15_000;
@@ -47,7 +54,9 @@ const elapsedSince = (downSince: number, nowMs: number): string =>
   `${elapsedWords(nowMs - downSince)} ago`;
 
 export function FleetHostBanner(
-  { health: injected, nodes }: { health?: FleetHealth | null; nodes?: readonly NodeWire[] | null } = {},
+  { health: injected, nodes, intent }: {
+    health?: FleetHealth | null; nodes?: readonly NodeWire[] | null; intent?: readonly UpdateIntentWire[] | null;
+  } = {},
 ): ReactNode {
   // Polls only when nothing was injected: FleetScreen polls once for this
   // banner and BuildLine together; the standalone shape (tests, other
@@ -93,11 +102,26 @@ export function FleetHostBanner(
     };
     const sides = Array.isArray(nodes) ? remoteSides(nodes) : null;
     const fleet = sides ? ` fleet ${name(sides.fleet)} · server ${name(sides.server)}.` : '';
+    const remedy = skewRemedy(nodes, intent);
     return (
       <div className="fleet-host-banner fleet-host-banner--warn" role="status">
         <span className="fleet-host-banner-msg">
-          The two boxes run different builds.{fleet} Run <code>ccrc rollout</code> from the deploying
-          machine, or <code>ccrc update</code> on the lagging box, fleet box first.
+          The two boxes run different builds.{fleet}{' '}
+          {remedy.kind === 'halt' && remedy.then === 'auto' ? (
+            `${skewHaltLead(remedy.halting)}${SKEW_HALT_THEN_AUTO_TAIL}`
+          ) : remedy.kind === 'halt' ? (
+            <>
+              {skewHaltLead(remedy.halting)}, then run <code>ccrc rollout</code> from the deploying machine, or{' '}
+              <code>ccrc update</code> on the lagging box, fleet box first.
+            </>
+          ) : remedy.kind === 'auto' ? (
+            SKEW_AUTO_TEXT
+          ) : (
+            <>
+              Run <code>ccrc rollout</code> from the deploying machine, or <code>ccrc update</code> on the lagging
+              box, fleet box first.
+            </>
+          )}
         </span>
       </div>
     );

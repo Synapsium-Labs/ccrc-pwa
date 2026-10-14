@@ -58,7 +58,9 @@ describe('refusal-token <-> sentence linkage (ccd source <-> wsaudit.ts SENTENCE
   for (const m of ccdSrc.matchAll(/"refused":"([a-zA-Z0-9-]+)"/g)) tokens.add(m[1]!);
   for (const m of ccdSrc.matchAll(/'!([a-zA-Z0-9-]+)/g)) tokens.add(m[1]!);
   for (const m of ccdSrc.matchAll(/"verdict":"([a-zA-Z0-9-]+)"/g)) {
-    if (m[1] !== 'reapable') tokens.add(m[1]!);
+    // `reapable` and `reclaimable` are the two SUCCESS verdicts — each means "a
+    // token follows" — not refusals, so neither has (or may have) a sentence.
+    if (m[1] !== 'reapable' && m[1] !== 'reclaimable') tokens.add(m[1]!);
   }
   const ccdTokens = [...tokens].sort();
 
@@ -119,6 +121,21 @@ describe('refusalSentence', () => {
     expect(s).toMatch(/pasted images/i);
     expect(s).toContain('.cc-clips');
     expect(s).toMatch(/nothing was removed/i);
+  });
+
+  it('child-dirty names every cause ccd refuses it for — ignored files included — and the read that shows them all', () => {
+    // `ReapSheet` renders the sentence, never `detail`, and ccd's one
+    // `child-dirty` rung has two details: `N uncommitted file(s)` (tracked
+    // changes and untracked files) and `N ignored file(s)`. An ignored file is
+    // invisible to a plain `git status`, so a sentence that says only
+    // "uncommitted" points the operator at a read that shows nothing.
+    const s = refusalSentence('child-dirty');
+    expect(s).toMatch(/ignored files/);
+    expect(s).toContain('git -C <child path> status --ignored --untracked-files=all');
+    expect(s).toMatch(/changed tracked files/);
+    expect(s).toMatch(/untracked files/);
+    expect(s).toMatch(/commit, move or delete them in that checkout, then reap again/);
+    expect(s, 'the remedy is the operator’s own act, not another verb').not.toMatch(/reclaim/i);
   });
 
   it('maps reaping-phase-unknown — the Task 7 token this task was holding open for', () => {

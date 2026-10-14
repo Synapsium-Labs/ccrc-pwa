@@ -48,7 +48,7 @@ describe('the wrapper the writer writes is the wrapper the reader reads', () => 
     it(`round-trips ${a.id} unmarked`, () => {
       const r = parseShape(generateWrapperBody(a, UPSTREAM_ID));
       expect(r.ok).toBe('ok');
-      expect(r.target).toBe(a.execKind === 'codex' ? 'ccgpt' : UPSTREAM_ID);
+      expect(r.target).toBe(a.execKind === 'codex' ? 'ccrc-codex' : UPSTREAM_ID);
       expect(r.suffix).toBe(a.configDirSuffix);
       expect(r.secrets).toBe((a as { secretsFile?: string }).secretsFile ?? '');
     });
@@ -59,7 +59,7 @@ describe('the wrapper the writer writes is the wrapper the reader reads', () => 
       // being true, every wrapper ccrc installs becomes foreign to ccrc.
       const r = parseShape(markGenerated(generateWrapperBody(a, UPSTREAM_ID)));
       expect(r.ok).toBe('ok');
-      expect(r.target).toBe(a.execKind === 'codex' ? 'ccgpt' : UPSTREAM_ID);
+      expect(r.target).toBe(a.execKind === 'codex' ? 'ccrc-codex' : UPSTREAM_ID);
       expect(r.suffix).toBe(a.configDirSuffix);
       expect(r.secrets).toBe((a as { secretsFile?: string }).secretsFile ?? '');
     });

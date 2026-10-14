@@ -254,6 +254,22 @@ describe('refusals that protect the remote', () => {
     expect(r.stderr).toMatch(/no origin remote for demo/);
     expect(h.ghCalls()).toEqual([]);
   });
+
+  it.each([
+    ['example-org/example-repo'],      // a bare relative path: no GitHub prefix matched
+    ['https://github.com/../x'],       // a dot segment after a real prefix
+  ])('refuses an origin of %s before any push or gh call (decision 11)', (url) => {
+    // `--repo` rides a WRITE-scoped token, so an origin that is not a GitHub
+    // repository must stop the verb before it pushes or asks gh anything.
+    workspace('demo', 'quiet-basin');
+    h.git(path.join(h.home, 'projects', 'demo'), 'config', 'remote.origin.url', url);
+    const r = open();
+    expect(r.code).toBe(1);
+    expect(r.stderr).toMatch(/no origin remote for demo/);
+    expect(h.ghCalls()).toEqual([]);
+    expect(() => h.git(path.join(h.home, 'origins', 'demo.git'), 'rev-parse', '--verify', 'refs/heads/ws/quiet-basin'))
+      .toThrow();
+  });
 });
 
 describe('the happy path', () => {
@@ -351,7 +367,7 @@ describe('the happy path', () => {
     expect(h.run(`${GH_STUB} ${GH_CREATES} cmd_pr_open --session demo-quiet-basin --title t --body-b64 ${b64('b')} --draft false`).code).toBe(0);
     const asked = 'pr list --repo o/r --head ws/quiet-basin --state all --limit 100 '
       + '--json number,state,headRefName,headRefOid,baseRefName,isCrossRepository,'
-      + 'mergedAt,mergeCommit,url,title,isDraft,statusCheckRollup';
+      + 'mergedAt,mergeCommit,url,title,isDraft,createdAt,statusCheckRollup';
     // Exactly twice, byte for byte, and never a third time: --state all (a
     // CLOSED PR on this branch must read as "exists"), the 100-PR window, the
     // head filter that scopes it to this branch, and every field the answer is

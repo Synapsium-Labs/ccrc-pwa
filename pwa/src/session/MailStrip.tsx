@@ -135,6 +135,11 @@ const GATE_PHRASE: Record<MailGate, string> = {
   // "held 3h 12m · the session has only just gone quiet" was measured. The
   // phrase now covers both arms and points at the one an operator can act on.
   'not-quiet': 'the session has no usable quiet-time stamp',
+  // Worker stall watch §5.1: under `mail-gate-busy`, the session's turn marker
+  // (`$REG/<id>.turn.json`) could not be read (unmeasured) or did not parse
+  // (malformed). A FLEET FAULT, not a busy session, so it is not `not-idle`:
+  // the operator looks at the marker, not at the session's work.
+  'turn-mark-unreadable': "this session's turn marker could not be read",
 };
 
 /** An UNKNOWN member renders the raw token rather than `undefined` — an older

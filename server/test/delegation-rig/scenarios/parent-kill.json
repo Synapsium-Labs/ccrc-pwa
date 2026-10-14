@@ -1,0 +1,14 @@
+{
+  "scenario": "parent-kill", "covers": ["Q6"],
+  "steps": [
+    {"waitReady": 60}, {"type": "dlg parent-kill"}, {"keys": ["Enter"]},
+    {"waitLabels": ["sub-hang"], "timeoutS": 120}, {"sleep": 5}, {"snapshot": "before-kill"}, {"kill9": true}, {"sleep": 5}
+  ],
+  "settleS": 3,
+  "entries": [
+    {"label": "main-call", "match": {"kind": "tools", "lastUser": "dlg parent-kill"},
+     "tool_use": {"nameAny": ["Agent", "Task"], "input": {"description": "dlg kill", "prompt": "dlg-sub-kill", "subagent_type": "general-purpose", "run_in_background": false, "isolation": "worktree"}}},
+    {"label": "sub-hang", "match": {"kind": "tools", "lastUser": "dlg-sub-kill"}, "hang_ms": 600000, "text": "never"}
+  ],
+  "default": {"text": "DLG-WAIT", "repeat": true}
+}

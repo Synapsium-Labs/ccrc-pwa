@@ -176,9 +176,20 @@ export type PyOutcome = {
  *  all, or whose subject refuses before ever reaching one. */
 export function runPy(
   file: string,
-  opts: { home: string; args?: string[]; env?: Record<string, string>; stdin?: string; timeoutMs?: number },
+  opts: {
+    home: string; args?: string[]; env?: Record<string, string>; stdin?: string; timeoutMs?: number;
+    /** An interpreter OTHER than the box's python3 — an absolute path, e.g. a
+     *  venv's `bin/python` that has a real litellm (Plan 2b-2 Task 3's opt-in
+     *  probe suite). Borrowed, never written to: the containment below is the
+     *  same for it as for python3, and PYTHONDONTWRITEBYTECODE keeps its
+     *  site-packages free of `.pyc` droppings. */
+    python?: string;
+  },
 ): PyOutcome {
-  const py = pythonOrSkip();
+  if (opts.python !== undefined && (!path.isAbsolute(opts.python) || !existsSync(opts.python))) {
+    throw new Error(`runPy: opts.python must be an absolute path to an existing interpreter — got ${JSON.stringify(opts.python)}`);
+  }
+  const py = opts.python ?? pythonOrSkip();
   if (!py) throw new Error('runPy called with no python3 — guard with pythonOrSkip() first');
   const { cwd, env } = containedSpawnOptions(opts.home, opts.env, 'runPy');
   const r = spawnSync(py, [file, ...(opts.args ?? [])], {

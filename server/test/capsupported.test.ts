@@ -11,7 +11,7 @@ import { readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
-  ACTOR_FLAGS_CAP, CCD_ARGV, CHILD_ARGV_CAP, WIN_SIZE_CAP, capSupported, stopSurfaceSupported, verbSupported,
+  ACTOR_FLAGS_CAP, CCD_ARGV, CHILD_ARGV_CAP, DOCS_CAP, RECLAIM_CAP, RECLAIM_PAUSE_CAP, WIN_SIZE_CAP, capSupported, stopSurfaceSupported, verbSupported,
   deviceActor, type ActorFlags,
 } from '../src/ccdargv.js';
 import { isExecAllowed } from '../../agent/src/whitelist.js';
@@ -101,6 +101,34 @@ describe('capSupported', () => {
     expect(verbSupported(state(null), ['win-size'])).toBe(true);
   });
 
+  it('spells the reclaim-pause token exactly once in server/src, and reads it with the REFUSING default', () => {
+    // The other two spellings: ccd's own `echo reclaim-pause-v1` and
+    // `ccd-archive.test.ts`'s KNOWN_CAPABILITY_TOKENS, whose `toContain` holds
+    // all three equal. The scan proves it is reading files by finding the one.
+    expect(RECLAIM_PAUSE_CAP).toBe('reclaim-pause-v1');
+    expect(literalSpellings(RECLAIM_PAUSE_CAP)).toBe(1);
+    // THE POLARITY, asserted rather than left in a docstring: no evidence
+    // REFUSES, and the VERB's presence is not the TOKEN's presence.
+    expect(capSupported(state(null), RECLAIM_PAUSE_CAP)).toBe(false);
+    expect(capSupported(undefined, RECLAIM_PAUSE_CAP)).toBe(false);
+    expect(capSupported(state(['reclaim-pause']), RECLAIM_PAUSE_CAP)).toBe(false);
+    expect(capSupported(state([RECLAIM_PAUSE_CAP]), RECLAIM_PAUSE_CAP)).toBe(true);
+    expect(verbSupported(state(null), ['reclaim-pause'])).toBe(true);
+  });
+
+  it('spells the reclaim token exactly once in server/src, and it REFUSES on no evidence', () => {
+    // Child reclamation, wave 3. The verb this token gates DESTROYS a workspace:
+    // `verbSupported` permits on an absent verb list, which is right for verbs
+    // that have always existed and exactly wrong here (spec 2026-09-22 §6).
+    expect(RECLAIM_CAP).toBe('reclaim-v1');
+    expect(literalSpellings(RECLAIM_CAP)).toBe(1);
+    expect(capSupported(state(null), RECLAIM_CAP)).toBe(false);
+    expect(capSupported(undefined, RECLAIM_CAP)).toBe(false);
+    expect(capSupported(state(['ws-reclaim']), RECLAIM_CAP), 'the verb is not the token').toBe(false);
+    expect(capSupported(state([RECLAIM_CAP]), RECLAIM_CAP)).toBe(true);
+    expect(verbSupported(state(null), ['ws-reclaim'])).toBe(true);
+  });
+
   it('spells the child-argv token exactly once in server/src', () => {
     // The win-size case above is the shape this copies, scan included. The
     // polarity matters more here than for any token before it: `--child` is a
@@ -116,6 +144,21 @@ describe('capSupported', () => {
     expect(capSupported(state([CHILD_ARGV_CAP]), CHILD_ARGV_CAP)).toBe(true);
     expect(verbSupported(state(null), ['ws-add'])).toBe(true);
     expect(verbSupported(state(['ws-add']), ['ws-add', '--no-rc', '--child', '7', 'demo'])).toBe(true);
+  });
+
+  it('spells the docs token exactly once in server/src, and reads it with the REFUSING default (docs W2)', () => {
+    // The other two spellings: ccd's own `echo docs-v1` and `ccd-archive.test.ts`'s KNOWN_CAPABILITY_TOKENS, whose
+    // `toContain(DOCS_CAP)` holds all three equal. The scan proves it is reading files by finding the one.
+    expect(DOCS_CAP).toBe('docs-v1');
+    expect(literalSpellings(DOCS_CAP)).toBe(1);
+    // THE POLARITY: no evidence REFUSES, and a VERB's presence is not the TOKEN's presence. The docs adapter's gate
+    // adds its own `caps` arm in front of this (`docs-source.test.ts`), because `capSupported` alone would fold
+    // "nothing measured" into "too old".
+    expect(capSupported(state(null), DOCS_CAP)).toBe(false);
+    expect(capSupported(undefined, DOCS_CAP)).toBe(false);
+    expect(capSupported(state(['docs-tree']), DOCS_CAP)).toBe(false);
+    expect(capSupported(state([DOCS_CAP]), DOCS_CAP)).toBe(true);
+    expect(verbSupported(state(null), ['docs-tree'])).toBe(true);
   });
 });
 

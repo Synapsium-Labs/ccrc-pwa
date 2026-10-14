@@ -1,0 +1,18 @@
+{
+  "scenario": "wf-iso", "covers": ["Q1", "Q3", "Q6"],
+  "steps": [
+    {"waitReady": 60}, {"type": "dlg wf-iso"}, {"keys": ["Enter"]},
+    {"sleep": 10},
+    {"waitLabels": ["wf-i1-done", "wf-i2"], "timeoutS": 180}
+  ],
+  "settleS": 20,
+  "entries": [
+    {"label": "main-call", "match": {"kind": "tools", "lastUser": "dlg wf-iso"},
+     "tool_use": {"name": "Workflow", "input": {"script": "export const meta = { name: 'dlgwfi', description: 'dlg wf iso' }\nconst r = await Promise.all([agent('dlg-wf-i1', { label: 'i1', isolation: 'worktree' }), agent('dlg-wf-i2', { label: 'i2', isolation: 'worktree' })])\nreturn r\n"}}},
+    {"label": "wf-i1-bash", "match": {"kind": "tools", "lastUser": "dlg-wf-i1"},
+     "tool_use": {"name": "Bash", "input": {"command": "printf 'x\\n' > wf.txt && git add wf.txt && git commit -qm dlg-wf && echo DLG-ACK-wf-i1", "description": "commit a change"}}},
+    {"label": "wf-i1-done", "match": {"kind": "tools", "lastUser": "DLG-ACK-wf-i1"}, "text": "DLG-WF-I1"},
+    {"label": "wf-i2", "match": {"kind": "tools", "lastUser": "dlg-wf-i2"}, "text": "DLG-WF-I2"}
+  ],
+  "default": {"text": "DLG-WAIT", "repeat": true}
+}

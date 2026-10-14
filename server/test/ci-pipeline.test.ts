@@ -18,7 +18,7 @@
 
 import { describe, it, expect } from 'vitest';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import path, { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mkTmp } from './tmpHelpers.js';
@@ -312,10 +312,11 @@ describe('ci.yml: the map\'s inputs and outputs (design 2026-09-23 §5.3-§5.5)'
     expect(step(job('trace-shard'), 'Keep the records')).toMatch(/^ {8}if: always\(\)$/m);
   });
 
-  it('a trace shard hands trace-run exactly its matrix row\'s files — no --shard split of its own', () => {
-    const t = runScript(step(job('trace-shard'), 'Trace'));
-    expect(t).toBe('echo "$FILES" | tr \' \' \'\\n\' > "$RUNNER_TEMP/trace.txt"\n'
-      + 'node .github/ci/trace-run.mjs --repo "$GITHUB_WORKSPACE" --files "$RUNNER_TEMP/trace.txt" --out "$RUNNER_TEMP/records.json" --jobs 2 --timeout 1560\n');
+  it('a trace shard hands trace-run exactly its matrix row\'s files and worker count — no split of its own', () => {
+    const st = step(job('trace-shard'), 'Trace');
+    expect(st).toMatch(/^ {10}WORKERS: \$\{\{ matrix\.workers \}\}$/m);
+    expect(runScript(st)).toBe('echo "$FILES" | tr \' \' \'\\n\' > "$RUNNER_TEMP/trace.txt"\n'
+      + 'node .github/ci/trace-run.mjs --repo "$GITHUB_WORKSPACE" --files "$RUNNER_TEMP/trace.txt" --out "$RUNNER_TEMP/records.json" --jobs "$WORKERS" --timeout 1560\n');
   });
 
   it('map-build keeps the map it built as an artifact, so a replay can fetch it (gh run download -n testmap)', () => {
@@ -542,17 +543,22 @@ describe('ci.yml: a pull request that changes the pipeline runs everything, deci
     return dir;
   }
 
-  it('runs only on pull_request, and hands select --input-mode full when it answers changed=true', () => {
-    expect(pipelineStep()).toMatch(/^ {8}if: github\.event_name == 'pull_request'$/m);
+  it('runs on pull_request and on merge_group, and hands select --input-mode full when it answers changed=true', () => {
+    // A merge-queue run asks the same question (operator ruling 2026-09-28:
+    // it runs what a pull request runs), or a pull request that edits the
+    // selector would choose the tests of the queue run that gates its merge.
+    expect(pipelineStep()).toMatch(/^ {8}if: github\.event_name == 'pull_request' \|\| github\.event_name == 'merge_group'$/m);
+    // A queue run has no base_ref; its base is the sha the queue built on.
+    expect(pipelineStep()).toMatch(/^ {10}BASE: \$\{\{ github\.event_name == 'merge_group' && github\.event\.merge_group\.base_sha \|\| format\('origin\/\{0\}', github\.base_ref\) \}\}$/m);
     const sel = step(job('select'), 'Select');
     expect(sel).toMatch(/^ {10}PIPELINE_CHANGED: \$\{\{ steps\.pipeline\.outputs\.changed \}\}$/m);
     expect(runScript(sel)).toContain('elif [ "$PIPELINE_CHANGED" = true ]; then args+=(--input-mode full); fi');
   });
 
   it('a change under .github/ -> changed=true; anything else -> false; a base it cannot diff against -> true', () => {
-    expect(runStep(pipelineStep(), prRepo('.github/ci/select-tests.mjs'), { BASE_REF: 'main' })).toMatchObject({ status: 0, output: 'changed=true\n' });
-    expect(runStep(pipelineStep(), prRepo('server/y.ts'), { BASE_REF: 'main' })).toMatchObject({ status: 0, output: 'changed=false\n' });
-    expect(runStep(pipelineStep(), prRepo('server/y.ts'), { BASE_REF: 'nope' })).toMatchObject({ status: 0, output: 'changed=true\n' });
+    expect(runStep(pipelineStep(), prRepo('.github/ci/select-tests.mjs'), { BASE: 'origin/main' })).toMatchObject({ status: 0, output: 'changed=true\n' });
+    expect(runStep(pipelineStep(), prRepo('server/y.ts'), { BASE: 'origin/main' })).toMatchObject({ status: 0, output: 'changed=false\n' });
+    expect(runStep(pipelineStep(), prRepo('server/y.ts'), { BASE: 'origin/nope' })).toMatchObject({ status: 0, output: 'changed=true\n' });
   });
 
   it('diffs from the merge base, so a pipeline change main made since the branch point is not this pull request\'s', () => {
@@ -565,7 +571,17 @@ describe('ci.yml: a pull request that changes the pipeline runs everything, deci
     g('add', '-A'); g('commit', '-qm', 'main moves on');
     g('update-ref', 'refs/remotes/origin/main', 'HEAD');
     g('checkout', '-q', 'main');
-    expect(runStep(pipelineStep(), dir, { BASE_REF: 'main' })).toMatchObject({ status: 0, output: 'changed=false\n' });
+    expect(runStep(pipelineStep(), dir, { BASE: 'origin/main' })).toMatchObject({ status: 0, output: 'changed=false\n' });
+  });
+
+  it('a merge-queue run asks it too, against the base sha the queue built its group on', () => {
+    // `prRepo`'s origin/main is the base the entry sits on; a queue run names
+    // it by sha (`merge_group.base_sha`), never by a branch name it lacks.
+    const head = (dir: string): string => execFileSync('git', ['rev-parse', 'origin/main'], { cwd: dir, encoding: 'utf8' }).trim();
+    const pipe = prRepo('.github/ci/select-tests.mjs');
+    expect(runStep(pipelineStep(), pipe, { BASE: head(pipe) })).toMatchObject({ status: 0, output: 'changed=true\n' });
+    const other = prRepo('server/y.ts');
+    expect(runStep(pipelineStep(), other, { BASE: head(other) })).toMatchObject({ status: 0, output: 'changed=false\n' });
   });
 });
 
@@ -616,10 +632,13 @@ describe('ci.yml: the daily run\'s "already green?" question fails SAFE (design 
 });
 
 describe('ci.yml: the full-suite verdict and the legs it runs (design 2026-09-23 §7, §8)', () => {
-  it('full-suite needs every leg — Linux shards, typecheck, agent, pwa, build, macOS — and asks verdict.mjs full', () => {
+  it('full-suite needs every leg — Linux shards, typecheck, agent, pwa, build, macOS, the Node floor — and asks verdict.mjs full', () => {
     const b = job('full-suite');
-    expect(needs(b)).toEqual(['build-pwa', 'select', 'server', 'server-shard', 'server-typecheck', 'test', 'test-macos']);
-    expect(jobKey(b, 'if')).toBe("always() && needs.select.outputs.tests == 'full'");
+    expect(needs(b)).toEqual(['build-pwa', 'node-floor', 'select', 'server', 'server-shard', 'server-typecheck', 'test', 'test-macos']);
+    // Never on a merge-queue run (landing-order stage 2): a queue run skips
+    // test-macos, and a queue run that fell back to `full` would read that skip
+    // as a red leg here (ci-merge-queue.test.ts derives the rule).
+    expect(jobKey(b, 'if')).toBe("always() && github.event_name != 'merge_group' && needs.select.outputs.tests == 'full'");
     // RESULTS carries exactly one `name=result` pair per need — never toJSON(needs), which carries every select
     // matrix and outgrows an environment string's 128 KB as the suite grows.
     expect(b).not.toContain('toJSON(needs)');
@@ -642,12 +661,13 @@ describe('ci.yml: the full-suite verdict and the legs it runs (design 2026-09-23
     // with `|| true` appended, with the run replaced by a no-op and the old line kept as a comment, and with
     // `continue-on-error: true` on the step (all three measured).
     const list = 'echo "$FILES" | tr \' \' \'\\n\' > "$RUNNER_TEMP/tests.txt"\n';
-    const run = 'CCRC_TEST_LIST="$RUNNER_TEMP/tests.txt" ./node_modules/.bin/vitest run --config vitest.select.config.ts ${VITEST_SHARD:+--shard=$VITEST_SHARD}';
+    const run = 'CCRC_TEST_LIST="$RUNNER_TEMP/tests.txt" ./node_modules/.bin/vitest run --config vitest.select.config.ts ${VITEST_SHARD:+--shard=$VITEST_SHARD} --maxWorkers="$WORKERS"';
     expect(runScript(step(job('server-shard'), 'Test'))).toBe(
       `${list}${run} --reporter=default --reporter=json --outputFile.json="$RUNNER_TEMP/times.json"\n`);
     expect(runScript(step(job('test-macos'), 'Test'))).toBe(`${list}${run}\n`);
     for (const id of ['server-shard', 'test-macos']) {
       const st = step(job(id), 'Test');
+      expect(st, `${id}: matrix workers reach the Test command`).toMatch(/^ {10}WORKERS: \$\{\{ matrix\.workers \}\}$/m);
       expect(st, `${id}: the Test step runs in server/`).toMatch(/^ {8}working-directory: server$/m);
       // A failed shard must fail its job: no continue-on-error (on the step or the job), and the runner's own
       // `bash -e` — no shell override on the step, and no `defaults:` on the job or the workflow.
@@ -669,5 +689,93 @@ describe('ci.yml: the full-suite verdict and the legs it runs (design 2026-09-23
     for (const pkg of ['server', 'agent', 'pwa']) {
       expect(a, `server-deps no longer installs ${pkg}/`).toMatch(new RegExp(`^ {6}working-directory: ${pkg}\\n {6}run: npm ci$`, 'm'));
     }
+  });
+});
+
+// ── the node-floor leg (ccrc history spec 2026-10-05 §9.9, pin O18) ─────────
+// Every other leg's node-version is '22', which setup-node resolves to the
+// newest 22.x, so no other leg can tell a floor that holds from one that only
+// holds on a newer interpreter. The setup-node comment on `server-shard` used
+// to say nothing pinned a node-version string against `engines.node`; this
+// describe is that pin, for the one job whose string has to equal it.
+describe('ci.yml: the node-floor leg runs on exactly the declared floor (spec 2026-10-05 §9.9, O18)', () => {
+  /** `engines.node` without its `>=` — node-floor.test.ts's one-range-form
+   *  rule, re-derived here rather than imported (importing a .test.ts file
+   *  registers its whole suite a second time). */
+  const floor = (): string => {
+    const range = (JSON.parse(read('server/package.json')) as { engines?: { node?: string } }).engines?.node ?? '';
+    const m = /^>=(\d+\.\d+\.\d+)$/.exec(range.trim());
+    expect(m, `server/package.json engines.node is not one '>=x.y.z' range: ${JSON.stringify(range)}`).not.toBeNull();
+    return m![1];
+  };
+
+  it('sets node-version to the engines floor, exactly and once (O18)', () => {
+    const b = job('node-floor');
+    // D-4261: count the setup-node STEPS and every node-version key in any
+    // quoting, so a second step (or a re-quoted line) cannot move the leg off
+    // the floor while this pin reads only the one line it knew.
+    expect(b.match(/uses:\s*actions\/setup-node@/g) ?? [], 'the node-floor leg must have exactly one setup-node step').toHaveLength(1);
+    const versions = [...b.matchAll(/^\s+node-version:\s*['"]?([^'"\s]+)['"]?\s*$/gm)].map((m) => m[1]);
+    expect(versions, 'the node-floor leg must set node-version exactly once').toHaveLength(1);
+    expect(versions[0], 'the leg must run the floor itself — any newer 22.x proves nothing about it').toBe(floor());
+    // A version FILE would hand setup-node the range `>=x.y.z`, which resolves
+    // to the newest match: the very thing this leg exists not to do.
+    expect(b).not.toMatch(/node-version-file/);
+  });
+
+  it('is named for the version it runs, needs nothing, and carries no job-level if:', () => {
+    const b = job('node-floor');
+    expect(jobKey(b, 'name'), 'the check name must not claim a version the leg does not run').toBe(`node floor (${floor()})`);
+    // A job-level `if:` that skips it reads as red in full-suite and as nothing
+    // on a pull request; a failed `needs:` skips it the same way.
+    expect(jobKey(b, 'if')).toBeNull();
+    expect(needs(b)).toEqual([]);
+  });
+
+  it('skips by STEP, only on a refresh or a rebuild, like the required legs', () => {
+    const leg = "${{ ((github.event_name == 'push' && !inputs.mode) || inputs.mode == 'rebuild') && 'skip' || 'run' }}";
+    const b = job('node-floor');
+    expect(b, 'the job-level leg switch').toContain(`\n    env:\n      CCRC_LEG: ${leg}\n`);
+    const s = steps(b);
+    expect(s.length, 'node-floor parsed no steps').toBeGreaterThan(0);
+    for (const st of s) expect(st, `a step runs even on a refresh:\n${st}`).toMatch(/^(?: {6}- | {8})if: env\.CCRC_LEG == 'run'$/m);
+  });
+
+  it('installs through server-deps and runs exactly its list through vitest.select.config.ts', () => {
+    const b = job('node-floor');
+    expect(b, 'node-floor must install what any server file needs')
+      .toMatch(/^ {6}- uses: \.\/\.github\/actions\/server-deps\n {8}if: env\.CCRC_LEG == 'run'\n {8}with:\n {10}platform: linux$/m);
+    const st = step(b, 'Test');
+    expect(st).toMatch(/^ {8}working-directory: server$/m);
+    expect(b, 'a failed run must fail the job').not.toMatch(/continue-on-error/);
+    expect(st, 'no shell override: the runner\'s own bash -e').not.toMatch(/^ {8}shell:/m);
+    const lines = runScript(st).split('\n');
+    expect(lines[0]).toBe('cat > "$RUNNER_TEMP/tests.txt" <<\'EOF\'');
+    const end = lines.indexOf('EOF');
+    expect(end, 'the list has no closing EOF line').toBeGreaterThan(1);
+    const listed = lines.slice(1, end);
+    expect(listed, 'the leg exists for this file first').toContain('test/node-floor.test.ts');
+    expect(new Set(listed).size, 'a file is listed twice').toBe(listed.length);
+    for (const f of listed) {
+      expect(f, `not a server test path: ${f}`).toMatch(/^test\/[\w.-]+\.test\.ts$/);
+      expect(existsSync(join(REPO, 'server', f)), `${f} is listed but does not exist`).toBe(true);
+    }
+    // Exact after the list: nothing appended, nothing commented out.
+    expect(lines.slice(end + 1)).toEqual([
+      'CCRC_TEST_LIST="$RUNNER_TEMP/tests.txt" ./node_modules/.bin/vitest run --config vitest.select.config.ts', '']);
+  });
+});
+
+describe('the node-floor leg runs every history test file on the floor interpreter (spec 2026-10-05 §9.9)', () => {
+  // The 22.16.0 leg exists because history needs FTS5 and a GC-safe `.iterate()` that 22.15 lacks; a history
+  // test that never runs on the floor proves nothing about it. So the leg's list is DERIVED from the directory:
+  // a new `history-*.test.ts` without its line here reds, and so does a line naming a file that is gone.
+  it('its Test step lists node-floor.test.ts, every history-*.test.ts and measure-history.test.ts, and nothing else', () => {
+    const script = runScript(step(job('node-floor'), 'Test'));
+    const listed = [...script.matchAll(/\btest\/([\w.-]+\.test\.ts)\b/g)].map((m) => m[1]!).sort();
+    const history = readdirSync(join(REPO, 'server', 'test')).filter((f) => /^history-[\w.-]+\.test\.ts$/.test(f));
+    expect(history.length, 'no history-*.test.ts file exists — the derivation saw nothing').toBeGreaterThan(2);
+    expect(listed, 'the 22.16.0 leg does not run exactly the history test files — add the new one to its list')
+      .toEqual(['measure-history.test.ts', 'node-floor.test.ts', ...history].sort());
   });
 });

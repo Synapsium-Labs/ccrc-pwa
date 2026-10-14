@@ -76,6 +76,28 @@ export type RenameNeedsSession = Assert<Equals<(typeof REQUIRED_VERB_FLAG)['ws-r
  *  of the positive control. `g12-win-size-without-session.ts` is the same
  *  mechanism from the other side. */
 export type WinSizeNeedsSession = Assert<Equals<(typeof REQUIRED_VERB_FLAG)['win-size'], '--session'>>;
+/** The reclaim kill-switch (child-reclamation wave 4). Deleting this ENROLMENT
+ *  turns `['reclaim-pause','--state']` into a bare `['reclaim-pause']` with every
+ *  subset test still green; asserted here, losing it stops this project
+ *  compiling. `g14-reclaim-pause-without-state.ts` is the other side. */
+export type ChildReclaimPauseNeedsState = Assert<Equals<(typeof REQUIRED_VERB_FLAG)['reclaim-pause'], '--state'>>;
+/** Child reclamation (wave 3). The destructive verb the server composes with no
+ *  human in the path is enrolled on its confirmation token; losing the
+ *  enrolment stops this project compiling. `g13-ws-reclaim-without-expect.ts`
+ *  is the same mechanism from the other side. */
+export type WsReclaimNeedsExpect = Assert<Equals<(typeof REQUIRED_VERB_FLAG)['ws-reclaim'], '--expect'>>;
+/** Archived-workspace expiry (workspace lifecycle wave 3): ws-reclaim's sibling, enrolled on its confirmation token;
+ *  losing the enrolment stops this project compiling. `g15-ws-expire-without-expect.ts` is the other side. */
+export type WsExpireNeedsExpect = Assert<Equals<(typeof REQUIRED_VERB_FLAG)['ws-expire'], '--expect'>>;
+/** The child temp-root collector (child reclamation wave 7): enrolled on its confirmation token like its two siblings;
+ *  losing the enrolment stops this project compiling. `g20-ws-collect-without-expect.ts` is the other side. */
+export type WsCollectNeedsExpect = Assert<Equals<(typeof REQUIRED_VERB_FLAG)['ws-collect'], '--expect'>>;
+/** The four docs verbs (native Docs reader, wave 2): read-only, enrolled on the flag that is each one's whole
+ *  argument surface; losing an enrolment stops this project compiling. `g16`-`g19` are the other side. */
+export type DocsIndexNeedsAll = Assert<Equals<(typeof REQUIRED_VERB_FLAG)['docs-index'], '--all'>>;
+export type DocsTreeNeedsProject = Assert<Equals<(typeof REQUIRED_VERB_FLAG)['docs-tree'], '--project'>>;
+export type DocsShowNeedsProject = Assert<Equals<(typeof REQUIRED_VERB_FLAG)['docs-show'], '--project'>>;
+export type DocsFetchNeedsProject = Assert<Equals<(typeof REQUIRED_VERB_FLAG)['docs-fetch'], '--project'>>;
 export type WsRmIsUngrantable = Assert<'ws-rm' extends (typeof UNGRANTABLE_VERBS)[number] ? true : false>;
 export type WsGcIsUngrantable = Assert<'ws-gc' extends (typeof UNGRANTABLE_VERBS)[number] ? true : false>;
 

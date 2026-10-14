@@ -109,6 +109,13 @@ if [ "$RELEASE_MODE" = true ]; then
   # every `ccrc update` from here verifies provenance before extracting.
   echo "install.sh: first install trusts the release's transport checksum only; every update from here verifies provenance"
   trap - EXIT
+  # M6 (W1 minor): CCRC_UPDATE_VERIFIED is `cmd_update`'s word to the spine
+  # that it VERIFIED this tree's provenance — `_inst_installed` reads it and
+  # nothing else to decide the marker's line 2. This bootstrap verified
+  # nothing (trust on first use, said above), so an export left in the
+  # caller's shell must never reach the verb. A builtin, not `env -u`: this
+  # script runs on a bare box and names no tool it does not need.
+  unset CCRC_UPDATE_VERIFIED
   exec bash "$STAGING/tree/ccd/ccrc" install "$@"
 fi
 
@@ -145,8 +152,8 @@ fi
 
 command -v node >/dev/null 2>&1 || { echo "install.sh: node is not installed — install Node (nodesource or nvm), then re-run" >&2; exit 1; }
 # The floor is READ from the shipped package.json — never a second copy
-# (node-floor.test.ts pins the three package.jsons identical; the server does
-# not degrade below it, it fails to boot on node:sqlite).
+# (node-floor.test.ts pins all three identical). Without node:sqlite the server
+# will not boot; without its FTS5 ccrc history captures unsearched (fts5-absent; D-4296).
 floor="$(node -e 'process.stdout.write(require(process.argv[1]).engines.node)' "$ROOT/server/package.json" 2>/dev/null)" \
   || { echo "install.sh: cannot read engines.node from $ROOT/server/package.json — is this a complete checkout?" >&2; exit 1; }
 node -e '
@@ -171,4 +178,7 @@ echo "install.sh: building (server deps, PWA bundle, server dist)…"
 # NOT building it cost a live fleet its agent.
 ( cd "$ROOT/agent" && npm ci --no-audit --no-fund && npm run build )
 
+# M6: a checkout install verified nothing either — the release arm's rule,
+# said there.
+unset CCRC_UPDATE_VERIFIED
 exec bash "$ROOT/ccd/ccrc" install

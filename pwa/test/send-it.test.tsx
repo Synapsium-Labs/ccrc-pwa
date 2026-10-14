@@ -38,7 +38,7 @@ describe('Send it', () => {
   // design: a refusal earns the button only where the server also PROVED the
   // box holds the whole message.
   it('is absent for every failure with nothing to submit', () => {
-    for (const code of ['dialog-open', 'not-alive', 'draft-clear-failed']) {
+    for (const code of ['dialog-open', 'not-alive', 'draft-clear-failed', 'turn-running']) {
       cleanup();
       render(<ChatListInner id="s" events={[]} pending={[failed({ code, error: 'nope' })]} />);
       expect(screen.queryByRole('button', { name: 'Send it' }), code).toBeNull();

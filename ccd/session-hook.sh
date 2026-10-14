@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# session-hook.sh — Claude Code hook → ~/.cc-sessions/<id>.hookstate.json
+# session-hook.sh — Claude Code hook → ~/.cc-sessions/<id>.hookstate.json, the main thread's turn marker <id>.turn.json beside it, and, for a session whose id ends -hookcap, one capture file per event under ~/.ccrc/hook-capture/<id>/
 #
 # Runs on the HOT PATH of every tool call in every fleet session, so the
 # contract is absolute: exit 0 on every path, write atomically or not at
@@ -70,7 +70,7 @@ _hook_timeout() {
 # another event would not be noise; it would be an answer to a question nobody
 # asked. So this emitter is called from inside the SessionStart arm and nowhere
 # else; `_hook_deny_json` (the gate, D-1613) and `_hook_nudge_json` (the Read
-# nudge, D-1745) are BUILDERS called only inside a `$( )` from the PreToolUse
+# nudge, D-1745, and the landing advisory) are BUILDERS called only inside a `$( )` from the PreToolUse
 # arm, and whichever one the arm chose is printed from ONE site at the end of
 # the file, after the hookstate rename lands (D-1689) — at most one line per
 # event, never both. Every failure path in any of them prints NOTHING; this
@@ -704,12 +704,12 @@ _hook_memory_converge() {   # -> converge this (home, project) pair; prints noth
   # (measured: a dozen `-tmp-*` slugs in one home), and converging those would
   # fill the store with empty directories nobody will ever read.
   #
-  # FOUR PREFIXES, ONE RULE — "the OS scratch root", which is not spelled the
-  # same on both platforms this tool ships to. `-tmp*` alone was the LINUX
+  # FOUR PREFIXES PLUS ONE INFIX, ONE RULE — "the OS scratch root", not spelled
+  # the same on both platforms this tool ships to. `-tmp*` alone was the LINUX
   # spelling and is DEAD CODE on Darwin (D-2375); `_mem_is_scratch` in `ccrc`
   # carries the measurement, and what is deliberately NOT in the list. The
-  # pattern list is byte-identical at all three sites, pinned there.
-  case "$slug" in -tmp*|-private-tmp*|-var-folders*|-private-var-folders*) return 0 ;; esac
+  # pattern list is byte-identical at all three sites, pinned there (A4: a marked child's `$HOME/.cc-tmp/<id>`).
+  case "$slug" in -tmp*|-private-tmp*|-var-folders*|-private-var-folders*|*--cc-tmp-*) return 0 ;; esac
   # THE EXISTENCE CHECK. See the block above: this is the whole reason
   # computing the slug is safe.
   [ -d "$projects/$slug" ] || return 0
@@ -836,7 +836,7 @@ _hook_hold_card() {
     return 0
   fi
   (( ${#h} <= CCRC_HOLD_MAX )) || return 0
-  [[ "$h" =~ ^program:[A-Za-z0-9._-]+' 'wave:[0-9]+(/[0-9]+)?(' 'run:[0-9]+)?$ ]] || return 0
+  [[ "$h" =~ $CCRC_HOLD_WAVE_RE ]] || return 0
   # AN ARCHIVE DOES NOT CLEAR A HOLD. `cmd_ws_archive` does no registry rm, and
   # `close.ts`'s failed+archive arm releases nothing, so the bytes outlive the
   # workspace. Live on this box today.
@@ -1219,7 +1219,7 @@ _hook_lock_acquire() {   # <wait-seconds> -> 0 acquired (HOOK_LOCK_FD set); 1 re
   local lock="$REG/.$id.compactions.lock" al="" fd="" tries=0
   HOOK_LOCK_FD=""
   # WHY, NOT A SECOND STATUS. Every one of this file's five acquire sites reads
-  # the acquire as a boolean (`|| return 0`) and ccd's seven read the VALUE, with
+  # the acquire as a boolean (`|| return 0`) and ccd's eight read the VALUE, with
   # two FUNCTIONS across three of those sites — `cmd_start`, and `_spawn_start`,
   # which holds two of them — falling through an unknown code into a silent
   # continue, so a third numeric status would be a distinct refusal nobody
@@ -2660,8 +2660,8 @@ COMPACT_SHAPE_PRED='(type=="object" and (.chars|type)=="number" and (.fences|typ
 # false (fix wave, I7). There are three spellings, because an ERE cannot
 # interpolate a bracket-class variable the way `case` can: this constant, the
 # session-id gate `[[ "$id" =~ ^[A-Za-z0-9._-]+$ ]]` near the bottom of this
-# file, and the hold's shape gate `^program:[A-Za-z0-9._-]+ wave:...` in
-# `_hook_hold_card`. And `single-definition.test.ts`'s four `ROOTS` are the
+# file, and the hold's shape gate `CCRC_HOLD_WAVE_RE` (`^program:[A-Za-z0-9._-]+
+# wave:...`). And `single-definition.test.ts`'s four `ROOTS` are the
 # TypeScript packages, so they do not cover `ccd/` — BUT A SECOND BASH CORPUS
 # DOES: `bashRoots` is `[<repo>/ccd, <repo>/deploy]`, `BASH` is every bash file
 # under them plus `install.sh`, `holdersOf` filters that corpus on non-comment
@@ -2680,19 +2680,19 @@ CCRC_ID_MAX=128
 CCRC_FRESH_S=120
 # The hold's own bound. `POST /api/sessions/:id/hold` validates only that the
 # reason is a non-blank string and `ccd` only blankness, while `--actor` on the
-# same verb IS capped at 512 — so this is the first bound the value meets.
-# A hold that fails it is UNSPEAKABLE and the subject is silent.
-#
-# 127, NOT 256, AND THE OFF-BY-ONE IS THE WHOLE POINT (D-1896). `_ct_read` reads at most
+# same verb IS capped at 512 — so this is the first bound the value meets. A
+# hold that fails it is UNSPEAKABLE and the subject is silent. 127, NOT 256,
+# AND THE OFF-BY-ONE IS THE WHOLE POINT (D-1896): `_ct_read` reads at most
 # `CCRC_ID_MAX` (128) characters, so a value that comes back 128 long MAY have
-# been truncated and there is no way to tell from here. Refusing at 127 means
-# every value this function ever quotes was captured WHOLE. A 256 bound would
-# be unreachable — dead, and worse than absent, because a 400-character hold
-# would arrive truncated to 128, could lose its ` run:<id>` suffix in the cut,
-# and would then render as CASE B ("It names NO run") for a hold that names one.
-# Quoting a truncated hold as if it were the whole hold is exactly the lying
-# card this design exists to prevent, so the bound refuses instead.
+# been truncated, and refusing at 127 means every value quoted was captured
+# WHOLE. A 256 bound would let a 400-character hold arrive cut to 128, lose its
+# ` run:<id>` suffix and render as CASE B ("It names NO run") for a hold that
+# names one — the lying card this design exists to prevent.
 CCRC_HOLD_MAX=127
+# THE SHAPE of a hold that names a programme wave, spelled ONCE: the card's
+# gate (`_hook_hold_card`) and the worker merge deny (landing-order wave 2);
+# `run-routes.test.ts` holds every hold the server can write inside it.
+CCRC_HOLD_WAVE_RE='^program:[A-Za-z0-9._-]+ wave:[0-9]+(/[0-9]+)?( run:[0-9]+)?$'
 # The workdir's own two bounds (C1), argued at the gate that uses them in
 # `_hook_hold_card`. The class is DERIVED from `CCRC_PROJ_CLASS` with the `/`
 # PREPENDED, never appended: appended, the `-` this file's class ends with would
@@ -2764,10 +2764,10 @@ id="${tname#cc-}"
 [[ -d "$REG" ]] || exit 0
 command -v jq >/dev/null 2>&1 || exit 0
 
-event=$(jq -r '.hook_event_name // empty' <<<"$payload" 2>/dev/null) || exit 0
+{ read -r event; read -r psid; read -r paid; } < <(jq -r 'def keep(f): explode | map(select(f)) | implode; def alpha: (. >= 65 and . <= 90) or (. >= 97 and . <= 122); (.hook_event_name // "" | tostring | keep(alpha)), (.session_id // "" | tostring | keep(alpha or (. >= 48 and . <= 57) or . == 95 or . == 45)), (if ((.agent_id // "") | tostring | length) > 0 then "1" else "" end)' <<<"$payload" 2>/dev/null) || exit 0   # no regex builtin: every event runs it, and a jq built without Oniguruma (an optional build dependency) must not skip the write
 [[ -n "$event" ]] || exit 0
 
-state="" ask_json="null" interrupted="false" src="" gcmd=""
+state="" ask_json="null" interrupted="false" src="" gcmd="" stopfail="" bg="-1" bgk="" bgi="" err="" hts="" msid="" sessend=""
 case "$event" in
   UserPromptSubmit) state="working" ;;
   PostToolUse)
@@ -2906,10 +2906,193 @@ case "$event" in
     state="done" ;;
   Stop)
     state="done"
-    [[ $(jq -r '.is_interrupt // false' <<<"$payload" 2>/dev/null) == true ]] && interrupted="true" ;;
+    # `is_interrupt` is not read: no installed lane's Stop carries it (spec §5.1); `interrupted` stays false here (the
+    # Subagent branch carries an older value). This fork measures `background_tasks`: bg -1 unless it is an ARRAY (bg-kinds-only-from-an-array (D-3659)), each alias cleaned alone.
+    # Its regexes (and StopFailure's) feed the marker alone, and the program emits its three lines only together: a jq built without Oniguruma leaves bg -1 / err "", never a count without its kinds, and never the hookstate (the payload parse above is regex-free).
+    { read -r bg; read -r bgk; read -r bgi; } < <(jq -r '(if (.background_tasks|type) == "array" then .background_tasks else null end) as $a | [(if $a == null then -1 else ($a|length) end), ([$a[]? | objects | .type | strings | ascii_downcase | gsub(" "; "-") | gsub("[^a-z_-]"; "") | select(length > 0)] | join(",")), ([$a[]? | objects | .id | strings | select(test("^[A-Za-z0-9_-]{1,64}\\z"))] | .[0:8] | join(","))] | .[]' <<<"$payload" 2>/dev/null) ;;
+  StopFailure) stopfail=1; err=$(jq -r '(.error // "") | tostring | gsub("[^a-z_]"; "") | .[0:64]' <<<"$payload" 2>/dev/null) ;;
+  SessionEnd) sessend=1 ;;   # delegation broker §5.3: a termination HINT only — captured below in a -hookcap session, otherwise inert (no hookstate, no marker)
   SubagentStart|SubagentStop) state="" ;;   # subagent-set update only
   *) exit 0 ;;
 esac
+# THE CAPTURE ARM (worker stall watch §5.1's first task; capture-arm-keyed-on-hookcap (D-3612),
+# capture-arm-is-permanent (D-3613), capture-file-carries-a-meta-line (D-3669)). Only a session whose
+# ccd id ends `-hookcap` pays more than this one test. Every registered event that
+# reaches this line (all but SessionStart `compact`, which exits in its arm, and an
+# unknown event) is copied to one 0600 file in a 0700 per-id directory OUTSIDE the
+# registry. Line 1 is a meta line naming this pane's own session id, sanitised; the
+# rest is the payload as sent. It stops at 200 files, prints nothing, and no failure
+# in it reaches the exit status. Raw files never leave the box:
+# deploy/hook-capture-reduce.mjs reduces a directory to key sets, types and
+# validated tokens, and only that is ever committed, because the repo is public.
+# `hcat` is reset on every run, so a later reuse of the stamp (`${hcat:-…}`) can
+# never take it from the environment.
+hcat=""
+if [[ "$id" == *-hookcap ]]; then
+  hcdir="$HOME/.ccrc/hook-capture/$id"
+  ( umask 077; mkdir -p "$hcdir" ) 2>/dev/null
+  hcn=( "$hcdir"/*.cap )
+  if [[ -d "$hcdir" ]] && { [[ ! -e "${hcn[0]}" ]] || (( ${#hcn[@]} < 200 )); }; then
+    hcat=$(_hook_epoch_ms); hcsid="${CLAUDE_CODE_SESSION_ID:-}"; hcsid="${hcsid//[^A-Za-z0-9-]/}"
+    hctmp="$hcdir/.$event.$$.capture.tmp"
+    { ( umask 077; printf '{"envSid":"%s"}\n%s\n' "$hcsid" "$payload" > "$hctmp" ); } 2>/dev/null \
+      && mv -f "$hctmp" "$hcdir/$event-$hcat-$$.cap" 2>/dev/null || rm -f "$hctmp" 2>/dev/null
+  fi
+fi
+
+# THE TURN MARKER (worker stall watch, spec §5.1): `$REG/<id>.turn.json`, one JSON
+# line that the stall lane and the mail gate read. It is written HERE, below the
+# case, because README anchors this file at :2900 and nothing new may land above
+# that line (marker-logic-in-the-tail (D-3615)).
+#
+# WHO WRITES: main-thread events only. `paid` is the payload parse's flag for a
+# non-empty `agent_id`. It is set by that one read and never re-declared, so a
+# subagent's event reaches here with it set and touches nothing. And only on a row
+# ccd created: a plain `-e` on `.generation`, no fork (`_hook_generation_ok` forks
+# `link`+`rm` and belongs to the compaction arms).
+#
+# WHICH SESSION: the env id first, the same source hookstate's `sessionId` uses, so
+# the two files agree. The payload's cleaned `session_id` is used only when the env
+# is empty (marker-identity-from-env (D-3614)).
+#
+# WHAT IT COSTS: a main TOOL event (PreToolUse, PostToolUse) while this session is
+# already `working` is a builtin `read`, no fork. A UserPromptSubmit always writes:
+# a new prompt is a new turn, even over a `working` line an Esc interrupt left
+# behind (a-prompt-always-opens-a-turn (D-3675); spec §5.1 exempts only later TOOL events).
+# A write is one jq and one `mv`, and its stamp is the one this
+# hook run's hookstate write reuses (one-stamp-per-hook-run (D-3616)). A temp left by a
+# killed write is dotted and holds no slug. Like the hookstate's own temp, it is
+# never swept (marker-tmp-parity-with-hookstate (D-3617)).
+#
+# ONE PROGRAM, SINGLE-QUOTED: no shell variable expands inside it, and every value
+# enters by --arg/--argjson. A previous line is carried only when it parses, is
+# `v:1` and names THIS session id; a foreign or unreadable line reads as absent.
+# `fitk` keeps WHOLE aliases inside 200 bytes: a byte cut after the join can leave
+# half an alias or a trailing comma, which the reader refuses
+# (alias-list-fits-whole-aliases (D-3658)). `fiti` keeps at most 8 ids.
+# restart: a same-session done moves bg* into lost* (a union, lost-kinds-accumulate (D-3660)); clear: a fresh line.
+TURN_MARK_PROGRAM='
+def csv: split(",") | map(select(length > 0));
+def fitk: reduce .[] as $k (""; if (length + (if length > 0 then 1 else 0 end) + ($k|length)) <= 200 then (if length > 0 then . + "," + $k else $k end) else . end);
+def fiti: .[0:8] | join(",");
+($prev | try fromjson catch null) as $raw
+| (if ($raw | type) == "object" and $raw.v == 1 then $raw else null end) as $p
+| ($p != null and $p.sessionId == $sid) as $same
+| {v: 1, sessionId: $sid, state: "done", event: $ev, at: $at,
+   turnAt: (if $same then $p.turnAt else null end),
+   stopAt: (if $same then $p.stopAt else null end),
+   bg: (if $same then ($p.bg // -1) else -1 end),
+   bgKinds: (if $same then ($p.bgKinds // "") else "" end),
+   bgIds: (if $same then ($p.bgIds // "") else "" end),
+   err: (if $same then $p.err else null end),
+   restartAt: (if $same then $p.restartAt else null end),
+   lostBg: (if $same then ($p.lostBg // 0) else 0 end),
+   lostKinds: (if $same then ($p.lostKinds // "") else "" end),
+   lostIds: (if $same then ($p.lostIds // "") else "" end)} as $b
+| if $kind == "working" then $b + {state: "working", turnAt: $at, lostBg: 0, lostKinds: "", lostIds: ""}
+  elif $kind == "done" then $b + {stopAt: $at, bg: $bg, bgKinds: ($bgk | csv | unique | fitk), bgIds: ($bgi | csv | fiti)}
+  elif $kind == "failed" then $b + {state: "failed", stopAt: $at, err: $err}
+  elif $kind == "restart" then $b
+    + (if $same and $p.state == "done" then {lostBg: (($p.lostBg // 0) + ([($p.bg // -1), 0] | max)), lostKinds: ((($p.lostKinds // "") + "," + ($p.bgKinds // "")) | csv | unique | fitk), lostIds: ((($p.lostIds // "") + "," + ($p.bgIds // "")) | csv | fiti)} else {} end)
+    + {restartAt: $at, bg: 0, bgKinds: "", bgIds: ""}
+  elif $kind == "clear" then {v: 1, sessionId: $sid, state: "done", event: $ev, at: $at, turnAt: null, stopAt: null, bg: -1, bgKinds: "", bgIds: "", err: null, restartAt: null, lostBg: 0, lostKinds: "", lostIds: ""}
+  else empty end'
+_hook_turn_mark() {   # <kind: working|done|failed|restart|clear> -> 0 written; 1 not written (never fatal)
+  local kind="$1" mf="$REG/$id.turn.json" prev="" out
+  [[ "$bg" =~ ^-?[0-9]+$ ]] || bg=-1
+  { IFS= read -r prev < "$mf"; } 2>/dev/null   # braces: a missing file's redirection error stays silent (D-1691)
+  out=$(jq -cn --arg prev "$prev" --arg kind "$kind" --arg sid "$msid" --arg ev "$event" --argjson at "$hts" \
+    --argjson bg "$bg" --arg bgk "$bgk" --arg bgi "$bgi" --arg err "$err" "$TURN_MARK_PROGRAM" 2>/dev/null) || return 1
+  [[ -n "$out" ]] || return 1
+  _hook_write_atomic "$mf" "turn-$hts" "$out"
+}
+msid="${CLAUDE_CODE_SESSION_ID:-$psid}"
+if [[ -z "$paid" && -e "$REG/$id.generation" ]]; then
+  tmkind=""
+  case "$event" in
+    UserPromptSubmit) tmkind=working ;;   # a new prompt is a new turn, even over a working line (a-prompt-always-opens-a-turn (D-3675))
+    PreToolUse|PostToolUse)
+      tmline=""; { IFS= read -r tmline < "$REG/$id.turn.json"; } 2>/dev/null
+      [[ "$tmline" == *'"state":"working"'* && "$tmline" == *"\"sessionId\":\"$msid\""* ]] || tmkind=working ;;
+    Stop) tmkind=done ;;
+    StopFailure) tmkind=failed ;;
+    SessionStart) [[ "$src" == clear ]] && tmkind=clear || tmkind=restart ;;   # compact exited in its arm (D-306); absent or unknown is a restart (D-1248)
+  esac
+  if [[ -n "$tmkind" ]]; then hts="${hcat:-$(_hook_epoch_ms)}"; _hook_turn_mark "$tmkind" || true; fi
+fi
+# >>> history-spool (spec 2026-10-05 §5.1)
+# THE HISTORY SPOOL LINE (ccrc history spec 2026-10-05 §5.1, W1-B1): one fenced,
+# text-free JSON line appended to ~/.ccrc/history/spool/<id>.jsonl, which
+# ccd-history-sweep drains on its next tick. HERE, below the turn marker and
+# above the StopFailure exit and the hookstate write, so neither a failed
+# hookstate write nor compact-card-off can cost the line. Like the turn marker,
+# it is in the tail because nothing new may land above :2900.
+#
+# BUILTINS ONLY, ON THE HOT PATH: no command substitution, no jq, no fork of
+# any kind — `_ct_read` is a builtin `read -N` that sets CT_V, so it is called
+# bare. Every value is one this hook already sanitised (`$id`, `$psid`) or a
+# whitelisted literal, so nothing needs escaping; an optional field that fails
+# its whitelist is left out, never written wrong.
+#
+# GATES: the main thread only (`$paid`); the spool directory must already exist
+# — the hook never creates it, so a box with no store writes nothing; the id fits
+# SPOOL_ID_MAX = 224, so `.draining/<id>.<ms>.<pid>.jsonl` fits a 255-byte name.
+# The off-switch silences Stop and PostCompact and never the SessionStart epoch
+# lines D-4252. Only startup, resume and clear are spooled D-4253: compact exited
+# in its arm, and fork and any other source write nothing D-4173. A SessionStart
+# line declares its epoch's sid, which lib.mjs SPOOL_KEYS requires, so without a
+# lowercase-UUID sid none is written at all. A startup or resume line carries
+# `reg`, this hook's own read of `.uuid` D-4175. No summary hash rides it D-4177.
+#
+# THE FENCE: `\n<json>\n` in one write(2) on an O_APPEND descriptor, so a short
+# write under a full disk leaves a torn line the next append cannot fuse with
+# D-4176. The braces put the redirection's own failure under 2>/dev/null (the
+# note at the hookstate write below), and `|| true` keeps exit 0 on every path.
+# A REGULAR FILE OR NOTHING D-4418: a symlink (a dangling one too), FIFO or other
+# node at the path, or a symlinked spool/, writes no line (builtin tests). Bash has no
+# O_NOFOLLOW or O_NONBLOCK redirection, so a node swapped in after the test is opened:
+# a link is followed; a FIFO blocks until Claude Code kills the hook (install-session-hooks.sh HOOK_TIMEOUT_S).
+_hs="" _hs_g="" _hs_s="" _hs_f="" _hs_t="" _hs_p="$HOME/.ccrc/history/spool/$id.jsonl"
+if [[ -z "$paid" && -d "$HOME/.ccrc/history/spool" && ! -L "$HOME/.ccrc/history/spool" ]] && (( ${#id} <= 224 )); then
+  case "$event" in
+    Stop) [[ -e "$HOME/.ccrc/history-off" ]] || _hs='{"v":1,"ev":"Stop"' ;;
+    PostCompact) [[ -e "$HOME/.ccrc/history-off" ]] || _hs='{"v":1,"ev":"PostCompact"' ;;
+    SessionStart) [[ "$psid" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]] && case "$src" in startup|resume|clear) _hs='{"v":1,"ev":"SessionStart"' ;; esac ;;
+  esac
+  if [[ -n "$_hs" ]]; then
+    _hs+=",\"id\":\"$id\""
+    # `$psid` is only cleaned to [A-Za-z0-9_-] at :2767, and the drain's grammar wants a lowercase UUID. `trig` is PostCompact's alone D-4315.
+    # On Stop and PostCompact a non-UUID sid is left out and the line stands without it, never written
+    # wrong. A SessionStart line exists to declare its epoch's sid, so lib.mjs SPOOL_KEYS requires one:
+    # its arm above writes nothing at all without a lowercase-UUID sid, so this test is always true there.
+    [[ "$psid" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]] && _hs+=",\"sid\":\"$psid\""
+    if [[ "$event" == SessionStart ]]; then
+      _hs+=",\"src\":\"$src\""
+      if [[ "$src" != clear ]] && _ct_read "$REG/$id.uuid" \
+        && [[ "$CT_V" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]]; then
+        _hs+=",\"reg\":\"$CT_V\""
+      fi
+    fi
+    [[ "$event" == PostCompact ]] && case "${trig:-}" in manual|auto) _hs+=",\"trig\":\"$trig\"" ;; esac
+    _hs_g="${CCRC_SESSION_GENERATION:-}"
+    [[ "$_hs_g" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]] && _hs+=",\"gen\":\"$_hs_g\""
+    # `_hook_epoch_ms`'s expansion form, inline (it forks `date` when EPOCHREALTIME is unset), read ONCE into `_hs_t`:
+    # each expansion reads the clock anew, so two reads can straddle a second. Either decimal point (the locale's); a value
+    # that is not `<1-12 digits, no leading 0>[.,]<digits>` writes no `ts`, and the drain stamps receive time D-4315.
+    _hs_t="${EPOCHREALTIME:-}"
+    if [[ "$_hs_t" =~ ^[1-9][0-9]{0,11}[.,][0-9]*$ ]]; then
+      _hs_s="${_hs_t%%[.,]*}" _hs_f="${_hs_t#*[.,]}000"
+      _hs+=",\"ts\":${_hs_s}${_hs_f:0:3}"
+    fi
+    _hs+='}'
+    [[ ! -L "$_hs_p" && ( -f "$_hs_p" || ! -e "$_hs_p" ) ]] && { printf '\n%s\n' "$_hs" >> "$_hs_p"; } 2>/dev/null || true
+  fi
+fi
+# <<< history-spool
+# StopFailure (§5.1) leaves hookstate.json alone and prints nothing: its arm raised
+# the flag and read `err` for the marker above (stopfailure-sets-a-flag (D-3611)), and nothing
+# below may run for it. SessionEnd is a termination hint, captured above in a -hookcap session and otherwise inert.
+[[ -n "$stopfail$sessend" ]] && exit 0
 
 f="$REG/$id.hookstate.json"
 # Prior subagent set survives state transitions; a corrupt file reads as [].
@@ -3113,6 +3296,575 @@ if [[ "$event" == PreToolUse && "$hs_unreadable" -eq 0 && "$gq" -eq 0 ]] \
   fi
 fi
 
+# ── THE LANDING-ORDER ADVISORY (landing-order spec 2026-09-23 §5.1) ─────────
+# A Bash call that merges, pulls or rebases `main` into the current branch —
+# or asks GitHub to do the same from its side (the Update branch button's
+# `gh pr` verb, its REST route or its GraphQL mutation) — gets
+# `additionalContext` naming the three triggers worker clause 16 licenses an
+# absorption on, and the probe that measures the first. ADVICE, NEVER A
+# DECISION: 27% of the fleet's sync episodes (spec §1, item 8) came from
+# sessions that load no ccrc skill, and this text is the only thing those
+# sessions see; the call proceeds either way.
+#
+# OUTSIDE THE GRAPH ARM ON PURPOSE. That arm runs only when the hookstate
+# parsed, the session has not queried the graph, and the gate's kill-switch is
+# absent — three conditions that have nothing to do with a sync of main. So
+# this block reads none of them, and a test pins that it advises with the gate
+# switched off and the hookstate unreadable.
+#
+# ONE LINE PER EVENT, still (`pre_json`, printed once at the end of the file):
+# a deny or a nudge the graph arm already built wins, and this block says
+# nothing. They CAN meet on one call: the gate reads a search at the HEAD of
+# the line, so a compound `grep -rn x .; git merge origin/main` is a gated
+# search AND a sync. That is what the `-z "$pre_json"` conjunct is for, and a
+# test pins it: without it the advice would overwrite the deny after the arm
+# had already charged the session a denial for it.
+#
+# ORDER IS BUDGET, as in the arms above: the tool name is already in hand, the
+# glob tests over the raw payload cost no fork, and only a payload carrying
+# `main` or `origin` AND a sync verb, or GitHub's branch-update spelling, pays
+# the one jq that reads the command. The regexes are matched against the
+# COMMAND, never the payload, so a `Write` of a file that merely mentions a
+# merge stays silent.
+#
+# THE SHAPE: `git` IN COMMAND POSITION — at the start of the command or after
+# a separator (`;`, `&`, `|`, `(`, `{`, a newline), past any `VAR=value`
+# prefixes — then any global options (`-C <dir>`, `-c <k=v>`, `--no-pager`,
+# `--x=y`), one of the three verbs, any arguments, then `main`, `origin/main`,
+# `origin main`, `origin/HEAD` or `origin HEAD` (the slash forms may be quoted)
+# as a whole word. Command position is what keeps a MENTION silent: a commit
+# message, an `echo`, or a PR comment that quotes a sync puts a quote or a
+# word before `git` — unless the quoted text itself holds a separator, which
+# the regex cannot tell from a real one (the first limit below). The verb needs
+# whitespace after it, so `git merge-tree` (the probe itself) and `git
+# merge-base` never match.
+#
+# WHITESPACE INSIDE THE SHAPE IS `[[:blank:]]`, never `[[:space:]]`: a newline
+# separates commands, so it may begin one but never continue one. With the
+# wider class the arguments of one line ran on into the next, which advised on
+# `git pull` then `git push origin main` on the next line, and made a run of
+# newline-separated `git merge a` lines quadratic (3.5 s on 36 KB measured).
+#
+# EVERY TOKEN CLASS STOPS AT EVERY SEPARATOR: `[^[:space:];&|({]`, in the
+# arguments, the `-C` directory, the `--x=value` and the env-var value alike.
+# A separator opens a new start position, so a token that could run on across
+# one lets every start walk to the end of the line: quadratic again, for `(` and
+# `{` in the arguments (4.5 s on 39 KB measured), and for every separator in an
+# option or env-var value with no whitespace in it (5.7 s). The cost is a token
+# that holds a `(` or a `{` ends the walk, so those syncs are not advised (the
+# misses below). The timing pin runs every separator through every class.
+#
+# KNOWN MISSES AND LIMITS, each a deliberate trade for a hot path that forks
+# nothing. This is advice: a miss costs one ritual sync, which is the status
+# quo, and a false advice costs one sentence. The examples below were measured
+# against this regex; they are examples, not an exhaustive list.
+#   - It ADVISES on text it cannot read as text. A regex cannot see quoting or
+#     comments, so a separator INSIDE quoted text begins a "command": `echo
+#     "(git merge origin/main)"`, `git commit -m "docs: say when to sync; git
+#     merge origin/main only on a conflict"`, `gh pr comment 5 --body "fixed
+#     (git rebase origin/main was wrong)"`; so does a multi-line quoted string
+#     or heredoc whose own line begins with a sync command. A word inside `-m`
+#     matches as the target (`git merge -m "merge main into x" feature/x`), and
+#     so does a word in a trailing comment (`git merge --abort  # was
+#     origin/main`).
+#   - It ADVISES on updating a main checkout itself, which is no sync of a
+#     branch: `git checkout main && git pull origin main`, `git -C ~/proj pull
+#     --ff-only origin main`. Coordinators and operators do this routinely, and
+#     each is told it "brings main into the current branch".
+#   - It MISSES `git` behind a word: `if git merge origin/main; then`, `! git
+#     merge origin/main`, `time git ...`, `env VAR=x git ...`, `timeout 600 git
+#     pull origin main`, `for b in a; do git ...; done`, `sudo -u x git ...`,
+#     `command git ...`, a backtick substitution (`$(git ...)` advises: its `(`
+#     is a separator). Only a separator or a `VAR=value` prefix puts `git` in
+#     command position.
+#   - It MISSES a token it cannot walk: a quoted global-option value with a
+#     space (`git -C "/w/my demo" merge origin/main`, `git -c user.name="A B"
+#     merge ...`); any token holding a `(` or a `{` (`git -C "$(pwd)" merge
+#     origin/main`, `git merge -m "x (y)" origin/main`, a brace expansion);
+#     a redirection glued to the target (`git merge origin/main>/tmp/log`, the
+#     terminator class has no `>` or `<`).
+#   - It MISSES a ref spelled another way: a revision suffix (`origin/main~1`,
+#     `origin/main^0`), a full ref name (`refs/remotes/origin/main`), a refspec
+#     (`git pull origin main:main`), `FETCH_HEAD`, `git merge origin` (the
+#     remote's HEAD by default), or any local ref of another name.
+#   - It MISSES a sync split by a backslash line continuation (`git merge \`
+#     then `origin/main` on the next line).
+#
+# THE GITHUB BRANCH-UPDATE DETECTOR HAS NO COMMAND-POSITION RULE. The
+# MENTION-silence above belongs to the sync regex alone: a commit message or a
+# comment that merely quotes GitHub's branch-update verb, route or mutation
+# does advise. That is tolerated because the advice is advice only, and the
+# phrase is rare outside the call itself.
+LANDING_SYNC_RE='(^|[;&|({'$'\n''])[[:blank:]]*([A-Za-z_][A-Za-z0-9_]*=[^[:space:];&|({]*[[:blank:]]+)*git([[:blank:]]+(-[Cc][[:blank:]]+[^[:space:];&|({]+|--[a-z-]+(=[^[:space:];&|({]+)?))*[[:blank:]]+(merge|pull|rebase)([[:blank:]]+[^[:space:];&|({]+)*[[:blank:]]+(origin/main|origin[[:blank:]]+main|origin/HEAD|origin[[:blank:]]+HEAD|main|"(origin/main|origin/HEAD|main)"|'\''(origin/main|origin/HEAD|main)'\'')([[:space:];&|)]|$)'
+LANDING_UB_RE='gh[[:space:]]+pr[[:space:]]+update-branch|/update-branch([^A-Za-z0-9_-]|$)|updatePullRequestBranch'
+if [[ "$event" == PreToolUse && -z "$pre_json" && "${tool:-}" == Bash ]] \
+   && [[ ( ( "$payload" == *main* || "$payload" == *origin* ) \
+           && ( "$payload" == *merge* || "$payload" == *pull* || "$payload" == *rebase* ) ) \
+         || "$payload" == *update-branch* || "$payload" == *updatePullRequestBranch* ]]; then
+  lcmd=$(jq -r '.tool_input.command // "" | tostring' \
+    <<<"$payload" 2>/dev/null) || lcmd=""
+  if [[ -n "$lcmd" ]] && { [[ "$lcmd" =~ $LANDING_SYNC_RE ]] || [[ "$lcmd" =~ $LANDING_UB_RE ]]; }; then
+    lreason='ccrc landing advisory: this command brings main into the current branch. Absorb main only on one of three triggers:'
+    lreason+=' (1) the branch conflicts — probe with `git fetch origin && git merge-tree --write-tree --name-only --no-messages HEAD origin/HEAD`: exit 1 with a tree id on the first line is a conflict, exit 0 is clean, and any other answer is unmeasured and licenses nothing;'
+    lreason+=' (2) a required check on the PR is red while main passes the same tests: re-run its failing test files on a clean checkout of `origin/HEAD` in scratch, and a red there too is a red main also shows (report it once as main-red and leave main alone);'
+    lreason+=" (3) the coordinator's fix-round mail names this PR ejected from the landing line with a base sha, or next to land in a strict-protection repository."
+    lreason+=' Otherwise leave main alone: a clean branch lands as it is, and every needless sync restarts CI.'
+    lreason+=' When you do absorb: `git merge` only — never a rebase, a force-push or the Update branch of GitHub (its button, `gh pr` verb or API) — and on a conflict in a `# ccrc:generated` stamp line, take either side of that line only, resolve the rest of the file as source, then run `~/.local/bin/ccrc restamp <file>`.'
+    pre_json=$(_hook_nudge_json "$lreason") || pre_json=""
+  fi
+fi
+
+# ── THE WORKER MERGE DENY (landing-order wave 2, spec §5.2) ─────────────
+# "The coordinator merges, workers never do" (R5) was prose while every merge
+# here needed the admin bypass. Once the operator sets the ruleset's approval
+# count to 0, any session holding the fleet's one login could land with a
+# plain `gh pr merge`. So a session whose hold names a programme wave — a
+# dispatched worker's or reviewer's, the only sessions a dispatch holds — and
+# any workspace that carries the CHILD MARKER (`$REG/<id>.child`, written by
+# `ws-add --child` for a dispatch and by nothing else) is DENIED `gh pr merge`
+# in every spelling this file can parse at a COMMAND HEAD:
+# after a line start or `;` `&` `|` `(` or `$(`; past `VAR=value` prefixes,
+# the reserved words and grouping a head can follow (`if` `then` `do` `else`
+# `elif` `while` `until` `{` `!`), the wrappers `time` `env` `command` `exec`
+# `nohup` `sudo` and `timeout <n>` (in any order, `env`'s assignments too); a
+# path to the binary; and gh's own flags before `pr` or between `pr` and
+# `merge` (`-R owner/repo`). The `merge` word may be followed by a blank, one
+# of `;` `&` `|` `(` `)` `<` `>`, or the end (`gh pr merge;echo ok` runs the
+# merge). `--auto`, `--squash`, `--admin` and every other merge flag are the
+# same act from a worker and are denied with it.
+#
+# QUOTED TEXT IS REMOVED BEFORE MATCHING, in the same jq that reads the
+# command (MERGE_STRIP_JQ), leftmost first as bash reads it: a backslash
+# escape with the rest of its word (so `\ #` opens no comment), `$$` (a word,
+# so `$` pairs are read from the start of a run and never lend a `$` to a
+# `$'…'`), a `$'…'` string (its `\'` escapes honoured), a '…' span, a "…"
+# span, a heredoc, a `#` comment that starts a word. A "…" span is matched
+# WHOLE — its `\"` escapes, backtick spans, `${…}` expansions with their own
+# "…" and '…' (as bash reads them there) and `$(…)` substitutions included,
+# each substitution with its own quotes, parentheses, `${…}` and heredocs —
+# and is replaced by its substitutions alone, each stripped the same way:
+# `X="$(date)"` reads `X=$(date)`, and "docs; gh pr merge 42 is how" reads as
+# nothing. A heredoc (its delimiter a bare word, a backslash and a word, or
+# one quoted word, blanks allowed when quoted) keeps its `<<` line and loses
+# its body up to its terminator line: the WHOLE line at the top level (`<<-`:
+# tab-indented), and inside a quoted `$(…)` a line that may go on with `)`, as
+# bash ends one there. An unquoted delimiter's body keeps its substitutions,
+# and the rest of the `<<` line is stripped too. `$((…))`, `((…))` and `$[…]`
+# (to two nested parentheses, on one line) are kept as written — never
+# dropped, so a `$(…)` inside them still reaches the match — and a shift's
+# `<<` in them opens no heredoc. FAIL CLOSED: what the strip cannot COMPLETE
+# keeps its RAW text, so a merge after it is still matched — a "…" span, a
+# `$'…'` or a `$(…)` that never closes keeps its own text; and a heredoc
+# opener the strip SEES (not `<<<`, not in quotes or arithmetic) but cannot
+# complete keeps EVERYTHING from the opener to the end raw, so no quote is
+# ever parsed through a body it did not remove. A heredoc is incomplete when
+# its exact terminator line never comes, when its `<<` line holds another
+# `<<`, or once stripped still holds a quote or a backtick, or when its body
+# holds a line that begins `EOF)` (bash would read the body to the end, or end
+# it at `EOF)` inside a `$(…)` the strip does not parse at the top level). The
+# cost is a deny bash would not need: such a text that holds a merge at a
+# command head is refused. Three spellings that passed before this rule now
+# deny: `x=$(cat <<'EOF'…EOF)` whose body has a line that begins `gh pr
+# merge`, a heredoc whose terminator line carries a trailing blank, and a
+# heredoc with a body line that begins `EOF)`. The standard commit and PR-body
+# form, `EOF` and `)` on separate lines, still passes. So a commit message, a
+# PR body, a grep pattern, a terminated heredoc or a comment that MENTIONS `gh
+# pr merge` passes, and no apostrophe in a comment, a heredoc body or a "…"
+# span, and no escaped quote, opens a span that swallows a live merge after it
+# — wherever the strip can parse the span, which the list below bounds.
+# WHAT PASSES UNPARSED, said rather than hidden. The deny is contract-grade
+# (spec §4), so these are listed, not closed; each one was measured passing
+# by this wave's tasks, its reviews (241, 247) or their fix rounds:
+# `bash -c "…"`; a quoted or escaped command word (`"gh" pr merge`) and
+# quoting INSIDE the `pr` or `merge` word (`gh pr "merge"`, `gh 'pr' merge`,
+# `gh pr m'erg'e`, `gh pr \merge`: the strip drops a quoted span, it does not
+# unquote it); legacy backticks; `xargs`; an unlisted wrapper (`nice`,
+# `stdbuf`, `coproc`); a NAMED wrapper spelled with a path (`/usr/bin/env gh
+# pr merge`, `/usr/bin/timeout 60 gh pr merge`); a named wrapper's own
+# flags (`sudo -E`, `command -p`; only `timeout`'s one argument is parsed); a
+# leading redirection (`2>&1 gh …`, `>/dev/null gh …`, `</dev/null gh …`); a
+# `case` arm (`*) gh pr merge`); a function body (`f() { gh pr merge 42; }`);
+# a variable command word or argument (`$GH pr merge`, `gh pr $m`); a gh alias
+# (`gh alias set m 'pr merge'`); a `#` comment straight after a `)`; a ` #` or
+# `(#` inside an unquoted top-level `${…}`, which the strip reads as a comment
+# (`echo ${x:- #}; gh pr merge 42`); a form feed or vertical tab before a `#`
+# (the strip's blank class is Oniguruma `\s`; bash splits words on space, tab
+# and newline only); a top-level "…" span holding `$${`, whose `${` the strip
+# reads as an expansion that closes at a later `}` where bash reads `$$` and a
+# literal `{` (`(echo "$${"); gh pr merge 42; (echo "}")`); a
+# backslash-newline continuation (`gh pr \<newline> merge`); a `$(…)` that
+# holds a newline, a `;` `&` `|` or `(` inside a `VAR=` or flag value. And
+# where the strip itself mis-reads a span it can close — a "…" span is then
+# read as unquoted text, so an apostrophe in it can open a span that hides a
+# merge after it: a `case` pattern's bare `)` inside a "…" span's `$(…)`; a
+# "…" span nesting `$("…")` more than six deep (the regex engine's call-depth
+# bound). And heredocs the strip reads as complete though bash does not, so a
+# merge after them can run: a delimiter quoted in part or carrying a suffix
+# (`<<E"O"F`, `<<"EOF"x`), when a line equal to the strip's shorter word (`E`,
+# `EOF`) follows the merge; a `<<` line that goes on past its newline without
+# a quote, through a trailing `\` or an open `$(`; a heredoc inside `$(…)`
+# that bash 5.2 ends at a line that starts with the word and holds a `)` later
+# (`EOF )`, `EOF<tab>)`, `EOFx)`), when an exact `EOF` follows the merge; and
+# a heredoc inside backticks, likewise. A terminated heredoc BODY line that
+# begins `gh pr merge` is text and passes, unless an unquoted body runs it
+# inside `$(…)`.
+# The hook is a contract the fleet honours, not an access boundary (spec §4),
+# and identity on this box is attribution. A session with neither — a
+# coordinator's own, the operator's — is never asked, so the coordinator's `gh
+# pr merge <n> --match-head-commit <sha>` enqueues. A coordinator whose
+# workspace DOES carry one is refused like a worker: a self-claimed run's hold
+# (`POST /api/runs` admits a claimant that is its own session), or a reclaim
+# heir that was the programme's own worker (hold and marker both). The hook
+# cannot tell it from a worker; the lifecycle reference sends that coordinator
+# to the operator's shell.
+# The strip's jq is Oniguruma regex throughout (lookaround, atomic groups,
+# subexpression calls, backreferences), so a jq built without Oniguruma — or
+# any jq error, a jq killed for memory (OOM), or a hook timeout — leaves no
+# mcmd to match and the deny FAILS OPEN (#224 keeps the hookstate parse
+# regex-free for exactly that reason).
+#
+# WHY THE MARKER TOO. A close releases the hold (`ws-release`), and a child's
+# reclaim runs AFTER the close answers, on its own queue, and defers while the
+# pane is attached, the tree is busy or reclaim is paused: between the two a
+# released child still has its pane and its login, and no hold. The marker is
+# written at birth and purged only with the registry row, at the END of the
+# reclaim, so it covers that window. Its EXISTENCE decides — a marker this
+# hook cannot read is still a marker — and its contents are never read.
+# Only a dispatch mints a child; a coordinator carries one only as that
+# reclaim heir (above).
+# Denying `--admin` to EVERY session, and a `gh api` merge — the pulls merge
+# endpoint, or a GraphQL merge mutation (`mergePullRequest`,
+# `enqueuePullRequest`, `enablePullRequestAutoMerge`) — is wave 2b's, after
+# the operator's queue ruleset and proof run (spec §5.2 step 4); until then
+# each passes this deny, measured.
+#
+# ORDER IS BUDGET, this arm's rule: the tool name is already read, the
+# substring prefilter costs no fork, and only a Bash payload carrying `merge`
+# pays the one jq for its command. The hold is read through `_ct_read` and
+# judged by `CCRC_HOLD_WAVE_RE` under `CCRC_HOLD_MAX` — the card's own reader,
+# shape and bound — so an absent, unreadable, empty, oversized or non-wave hold
+# is not a worker wave, exactly as the card declines to call it one; such a
+# session is then asked only whether it is a marked child.
+#
+# A DENY SUPERSEDES ADVICE: `pre_json` may already hold an `additionalContext`
+# for this same call (the Read nudge, or a sync advisory); the merge deny
+# replaces it. It never replaces the graph gate's DENY, which has already
+# counted the denial it prints (D-1689) — that call is refused either way.
+# COMPLEXITY: the match restarts at every separator, so no token class may
+# cross one, and the blanks inside a head are space and tab only, never a
+# newline: a class that could walks to the end of the line for each start (5
+# to 9 s on a 36 KB `;a=;a=…` or newline x `a=` command, which
+# `session-hook-sync-advisory.test.ts`'s env-var shape pins; now ~10 ms). A
+# value, a `timeout` argument or a flag may still hold ONE `$(…)` (blanks
+# allowed, no `;` `&` `|` and no nesting past `$((…))`): `X=$(date) gh pr
+# merge` runs, and a class that stopped at `(` would let it through. The
+# body stops at the first `)`: linear against the separator-restart inputs the
+# plan's regex was quadratic on. Separator-free chains still grow superlinearly
+# (hook, 36/100/200 KB: closed `$(…)` 142, 559, 1532 ms; the space/tab
+# family 186, 902, 2895 ms, which the plan's regex had). The strip pays one regex match per
+# quoted span, heredoc or comment, and jq 1.7's match costs grow with each
+# match's offset, so a command DENSE with quotes is superlinear too: 1584 ms at
+# 36 KB and 6885 ms (0.56 GB) at 100 KB of bare `"` through the hook (the strip
+# before this one: 21 s at 100 KB on jq alone), while 100 KB of real prose
+# in a heredoc commit or PR body takes ~130 ms. No start scans the rest of the
+# payload twice: a span, substitution or heredoc that never closes runs to
+# the end instead of failing and being retried from the next character, a
+# heredoc looks ahead only as far as the next `<<` on its line, an
+# incomplete heredoc ends the strip there (one cut, kept raw), and a
+# heredoc's rest-of-line is stripped without a second heredoc (a `<<a <<a`
+# line once recursed once per `<<`: 15 s and 2.9 GB at 36 KB, measured).
+# THE PAYLOAD CAP (landing-order wave 3): a command longer than
+# MERGE_PARSE_CAP bytes (UTF-8, as jq's `utf8bytelength` counts them) is never
+# parsed: neither the strip nor GH_MERGE_RE reads it. The strip's cost grows
+# with the quoted spans and substitutions it reads, and a hook that times out
+# or a jq killed for memory fails this deny OPEN (above), so an unbounded
+# command was a way past it. Over the cap the program asks the RAW command one
+# question, with a fixed-string segment rule (`ocwords`): split the command on
+# each of `;` `&` `|` and the newline, the separators between COMMANDS, and in
+# any one segment find `gh` (not preceded by a letter, digit or `_`, and
+# followed by a blank), then `pr` as a word (a blank before it, a blank or the
+# segment's end after it), then `merge` as a word that a blank, the end of the
+# segment, a backtick, `(`, `)`, `<` or `>` ends (that end class is `merge`'s
+# alone), each searched for after the one before (one leftmost match each, so
+# linear). The redirections and parentheses do not split: a gh flag's value may
+# hold them (`gh -R $(echo o/r) pr merge`, `gh -R o/r<x pr merge`), and a merge
+# is still a merge there.
+# gh's own flags may stand between the words (`gh -R o/r pr merge`, `gh pr -R
+# o/r merge`), which main's full parse refuses (landing-order wave 3's fix
+# round, review 267 F3). Yes: the arm reads it as a merge it could not
+# parse, and a held or child session is DENIED with a reason that names the
+# length and the cap and tells it to split the command or rephrase it (a long
+# PR body or mail goes in a file the Write tool writes, passed by path); a
+# landing is the operator's, from their own shell. No: it passes unparsed.
+# The split is `split` on a FIXED string, never `splits`: `splits` is a
+# regex-global walk, measured superlinear on jq 1.7 (43-52 s at 100 KB of
+# `;`, 14 s at 100 KB of `gh;`), and a hook that times out fails this deny
+# OPEN. A `contains("gh") and contains("merge")` prefilter, whole and per
+# segment, keeps the word tests off nearly every segment. Three of the six
+# 100 KB pins (`;` only, `gh;` repeated, newlines only) never reach the
+# split, since the whole-command prefilter is false for each, so the `splits`
+# timings above describe a rule without the prefilter; the structural
+# `splits(` ban and mutation row SP are what guard it. Measured through
+# the whole hook at 100 KB, on jq 1.7 and 1.8.2: 90 to 320 ms on `;`, `gh;`,
+# `gh pr merged;`, newlines and `gh merge `; the costliest measured, `gh
+# merge;` and `merge gh pr;` repeated (many segments that pass the prefilter),
+# reached 343 to 384 ms at load ~15. That is about 20% of the sync-advisory
+# 1500 ms bound idle (~250 to 380 ms at 100 KB, measured), not the parse's
+# quarter above; a review measured ~600 ms (~40%) once. The cost is linear in
+# the length, so the bound is crossed at ~450 to 500 KB at the idle slope. The
+# word rule, not two bare substrings, because `gh` is inside "though" and
+# "high" and `merge` inside "merged": the two substrings matched 1,340 of
+# 4,478 over-cap fleet commands in one two-day window, mostly prose. The
+# in-order search slices by `match` offsets, which jq 1.7 and 1.8 count in
+# codepoints (measured correct after é and an emoji); jq 1.6 is unverified.
+# Only where the deny already applies: a session with no wave hold and no
+# child marker is never refused, under the cap or over it. THE VALUE IS
+# MEASURED: the largest round size at which the worst quote-dense shape
+# measured costs about a quarter of `session-hook-sync-advisory.test.ts`'s
+# 1500 ms whole-hook bound. That shape is a run of quoted substitutions that
+# each hold a quote or a `<` (`"$(<)"` repeated), one nested strip per span:
+# ~350 ms of CPU at 2048 bytes and ~650 ms at 4096 (bare `"`: ~125 and
+# ~190 ms), measured on the fleet box at load ~18.
+# THE COST, said: a held or child session's over-cap command is refused when any
+# ONE segment (the text between `;` `&` `|` and newlines) names `gh`, then `pr`,
+# then `merge` as words, prose included: a one-line JSON mail body (its `\n`
+# escapes keep it one segment), a trailing `# comment`, a PR body that quotes or
+# merely mentions them in that order. It stays refused until it is split,
+# rephrased, or moved into a file. The coordinator accepted it (ruling 3510): of
+# 3,537 over-cap fleet commands in another two-day window, the segment rule
+# refuses at most 12 more than a word-bounded three-word match would (that count
+# measured the three word tests unordered; the in-order search is stricter). No
+# narrowing: letting only gh's flags stand between the words would need a
+# repeated group, the nested quantifier this rule exists to avoid. The backtick
+# is a STRICTER OVER-CAP READING, NOT A CLOSURE: a bare `` `gh pr merge` `` is
+# refused over the cap because the end class holds a backtick, while legacy
+# backticks still pass under the cap (listed above). WHAT PASSES OVER THE CAP,
+# said, each measured through this hook, held, padded past the cap: `bash -c "gh
+# pr merge"` and `eval "gh pr merge"` (the closing quote is not in the end
+# class; `bash -c "gh pr merge 42"` is refused), quoting inside a word (`g"h" pr
+# merge`, `gh p""r merge`), a variable (`x=gh; $x pr merge`), an alias, a
+# separator inside a quoted flag value or inside a substitution that holds `;`
+# `&` `|` or a newline (`gh pr -R "a;b" merge 42`), and a NUL next to a word
+# (`gh pr merge\0 42`, which passes over the cap and is denied under it; bash
+# strips NUL from command text and Node refuses it in spawn arguments).
+# `gh<newline>pr<newline>merge` passes too, rightly: bash reads three
+# commands. Three classes pass under the cap too, so they are not regressions
+# of it: a backslash-newline continuation between the words (`gh pr
+# \<newline> merge 42`, measured held, under the cap), a redirection glued
+# between the command words (`gh pr>x merge 42`, `gh>x pr merge 42`;
+# GH_MERGE_RE needs a blank before `pr` and `merge`), and a backslash-newline
+# straight after `merge` (`gh pr merge\<newline> 42`).
+# Classified, not closed (the stopping line, ruled 2026-10-03).
+# The cap also BOUNDS every superlinear walk above: the strip and GH_MERGE_RE
+# never read more than MERGE_PARSE_CAP bytes, so the 36-200 KB timings above
+# are what the cap prevents, not what a command costs.
+# The cap needs jq 1.6 or later (utf8bytelength): on an older jq the whole
+# program fails to compile, and the deny fails OPEN at every length, as with
+# no Oniguruma (above).
+# The deny's jq floor is 1.6, and it is tested on jq 1.7 and 1.8. jq 1.8 binds
+# `E as $x` to the whole binary chain left of it where 1.7 binds the nearest
+# term, so every `as` in these programs that follows a binary operator is
+# parenthesised on its own, and the merge-deny suite pins that structurally;
+# before that, a jq 1.8 box failed this deny open on every command holding a
+# heredoc.
+MERGE_PARSE_CAP=2048
+GH_MERGE_RE=$'(^|[;&|(\n]|\\$\\()[ \t]*(([!{]|if|then|do|else|elif|while|until|time|env|command|exec|nohup|sudo)[ \t]+|timeout[ \t]+([^[:space:];&|()]|\\$\\(\\(?[^;&|()\n]*\\)?\\))+[ \t]+|[A-Za-z_][A-Za-z0-9_]*=([^[:space:];&|()]|\\$\\(\\(?[^;&|()\n]*\\)?\\))*[ \t]+)*([^[:space:];&|()]*/)?gh([ \t]+-([^[:space:];&|()]|\\$\\(\\(?[^;&|()\n]*\\)?\\))+([ \t]+([^-[:space:];&|()]|\\$\\(\\(?[^;&|()\n]*\\)?\\))([^[:space:];&|()]|\\$\\(\\(?[^;&|()\n]*\\)?\\))*)?)*[ \t]+pr([ \t]+-([^[:space:];&|()]|\\$\\(\\(?[^;&|()\n]*\\)?\\))+([ \t]+([^-[:space:];&|()]|\\$\\(\\(?[^;&|()\n]*\\)?\\))([^[:space:];&|()]|\\$\\(\\(?[^;&|()\n]*\\)?\\))*)?)*[ \t]+merge([[:space:];&|()<>]|$)'
+MERGE_STRIP_JQ='
+def SQ: $q + "[^" + $q + "]*" + $q;
+def AQ: "\\$" + $q + "(?>(?:[^\\\\" + $q + "]++|\\\\(?:.|\\n|\\z))*)(?:" + $q + "|(?<ua>\\z))";
+def W: "[^\\s;&|()<>\"" + $q + "\\\\]+";
+def T($n; $tabs; $end): $tabs + "\\k<w\($n)>" + $end;
+def hd1($n; $tabs; $end):
+  "(?:(?<q\($n)>[\"" + $q + "])|\\\\?)(?<w\($n)>(?(<q\($n)>)[^\"" + $q + "\\n]+|" + W + "))(?(<q\($n)>)\\k<q\($n)>)"
+  + "(?![^\\n]*?(?<!<)<<(?!<))(?>[^\\n]*)(?:\\n|\\z)"
+  + "(?>(?:(?!" + T($n; $tabs; $end) + ")[^\\n]*\\n)*(?:(?!" + T($n; $tabs; $end) + ")[^\\n]++)?)(?:" + T($n; $tabs; $end) + ")?";
+def AR: "(?>(?:[^()\\n]++|\\((?>(?:[^()\\n]++|\\([^()\\n]*+\\))*)\\))*)";
+def DEFS:
+  "(?<hd>(?<!<)<<(?:-[ \\t]*" + hd1("t"; "\\t*"; "(?![^\\n])") + "|[ \\t]*" + hd1(""; ""; "(?![^\\n])") + ")){0}"
+  + "(?<hs>(?<!<)<<(?:-[ \\t]*" + hd1("st"; "\\t*"; "(?![^\\n)])") + "|[ \\t]*" + hd1("s"; ""; "(?![^\\n)])") + ")){0}"
+  + "(?<sub>\\$\\(\\(" + AR + "\\)\\)|\\$\\((?<sb>(?>(?:[^" + $q + "\"()\\\\<#$]++|\\$\\$|" + AQ + "|\\g<pe>|\\$|\\\\(?:.|\\n|\\z)[^\\s;&|()<>\"" + $q + "`\\\\$]*|\\g<hs>|(?<!<)<<(?!<)[\\s\\S]*|<|(?<![^\\s;&|(])#[^\\n]*|#|" + $q + "[^" + $q + "]*+(?:" + $q + "|\\z)|\\g<dq>|\\(\\(" + AR + "\\)\\)|\\(\\g<sb>(?:\\)|\\z))*))(?:\\)|(?<us>\\z))){0}"
+  + "(?<pe>\\$\\{(?>(?:[^}\"" + $q + "\\\\$`]++|\\\\(?:.|\\n|\\z)|\\g<dq>|\\$\\$|" + AQ + "|" + $q + "[^" + $q + "]*+(?:" + $q + "|\\z)|\\g<sub>|\\g<pe>|`(?>(?:[^`\\\\]++|\\\\(?:.|\\n))*)`|`|\\$(?![({]))*)(?:\\}|\\z)){0}"
+  + "(?<dq>\"(?>(?:[^\"\\\\$`]++|\\\\(?:.|\\n|\\z)|\\g<pe>|\\$(?![({])|\\g<sub>|`(?>(?:[^`\\\\]++|\\\\(?:.|\\n))*)`|`)*)(?:\"|(?<ud>\\z))){0}";
+def fs(re; f): . as $in | [match(re; "g") | [.offset, .length, .string, any(.captures[]; (.name == "us" or .name == "ud" or .name == "ua") and .string != null)]] as $ms
+  | if ($ms | length) == 0 then $in else ($in | explode) as $cp
+    | [range(0; $ms | length) as $i | $ms[$i] as $m
+       | (if $i == 0 then 0 else $ms[$i - 1] | .[0] + .[1] end) as $p
+       | ($cp[$p:$m[0]] | implode), ($m[2:4] | f)] as $parts
+    | ($parts | map(. == null) | index(true)) as $stop
+    | if $stop == null then $parts + [$cp[($ms[-1] | .[0] + .[1]):] | implode] | add
+      else ($parts[0:$stop] | add // "") + ($cp[$ms[($stop - 1) / 2][0]:] | implode) end end;
+def plain: . as $s | all(($q, "\"", "\\", "#", "<", "`", "((", "$["); . as $c | $s | contains($c) | not);
+def qs($h):
+  def subs: if contains("$(") | not then ""
+    elif startswith("$(") and endswith(")") and (.[2:-1] | plain and (contains("(") or contains(")") or contains("$") | not)) then .
+    else fs(DEFS + "\\\\(?:.|\\n)|\\g<sub>|[^\\\\$]+|\\$";
+      .[1] as $open | .[0] | if (startswith("$(") | not) then "" elif $open then . elif startswith("$((") then . else "$(" + (.[2:-1] | qs(true)) + ")" end) end;
+  if plain then . else fs(DEFS + "\\\\.[^\\s;&|()<>\"" + $q + "`\\\\$]*|\\$\\$|" + AQ + "|" + SQ + "|\\g<dq>|" + (if $h then "\\g<hd>|(?<!<)<<(?!<)|" else "" end) + "(?<![^\\s;&|(])#[^\\n]*|\\$?\\(\\(" + AR + "\\)\\)|\\$\\[[^\\]\\n]*\\]";
+    .[1] as $open | .[0] | if $open then .
+    elif startswith("\"") then .[1:-1] | subs
+    elif . == "<<" then null
+    elif startswith("<<") then (split("\n") | last) as $last
+      | [capture("^<<(?<d>-?)[ \\t]*(?:(?<q>[\"" + $q + "])(?<w>[^\"" + $q + "\\n]+)\\k<q>|(?<x>\\\\?)(?<w2>" + W + "))(?<r>[^\\n]*)(?<b>[\\s\\S]*)")] | if length == 0 then null else .[0]
+      | (.r | qs(false)) as $rest
+      | ((.b | contains("\n")) and (if .d == "-" then $last | sub("^\\t+"; "") else $last end) == (.w // .w2)
+         and ($rest | contains("\"") or contains($q) or contains("`") | not)
+         and (((.w // .w2) + ")") as $wp | (.d == "-") as $dash
+             | .b | split("\n") | any(if $dash then sub("^\\t+"; "") else . end | startswith($wp)) | not)) as $done
+      | if $done | not then null else "<<" + $rest + "\n" + (if .x == "" and .q == null then .b | subs else "" end) end end
+    elif startswith("$((") or startswith("((") or startswith("$[") or startswith("$$") then .
+    else "" end) end;
+def ocsegs: reduce (";", "&", "|", "\n") as $s ([.]; map(split($s)) | add);
+def ocafter($re): . as $s | [match($re)] | if length == 0 then empty else $s[.[0].offset + .[0].length:] end;
+def ocmerge: ocafter("(^|[^A-Za-z0-9_])gh(?=\\s)") | ocafter("\\spr(?=\\s|$)") | ocafter("\\smerge($|[\\s`()<>])");
+def ocwords: contains("gh") and contains("merge")
+  and any(ocsegs[] | select(contains("gh") and contains("merge")) | ocmerge; true);
+def capped(f): (.tool_input.command // "") as $c
+  | if ($c | type) == "string" and ($c | utf8bytelength) > $cap
+    then (if ($c | ocwords) then "!\($c | utf8bytelength)" else "" end)
+    else "=" + f end;
+capped(if .tool_name == "Bash" then ((.tool_input.command // "") | qs(true)) else "" end)'
+if [[ "$event" == PreToolUse && "${tool:-}" == Bash && "$payload" == *merge* \
+      && "$pre_json" != *'"permissionDecision":"deny"'* ]]; then
+  mout=$(jq -r --arg q "'" --argjson cap "$MERGE_PARSE_CAP" "$MERGE_STRIP_JQ" <<<"$payload" 2>/dev/null) || mout=""
+  mcmd="" mover=""
+  case "$mout" in
+    '='*) mcmd=${mout#=} ;;
+    '!'*) mover=${mout#!} ;;
+  esac
+  if [[ -n "$mover" ]] || [[ -n "$mcmd" && "$mcmd" =~ $GH_MERGE_RE ]]; then
+    mwhy=""
+    if _ct_read "$REG/$id.hold" && (( ${#CT_V} <= CCRC_HOLD_MAX )) && [[ "$CT_V" =~ $CCRC_HOLD_WAVE_RE ]]; then
+      mwhy="this workspace's hold reads \`$CT_V\` — a programme wave's session"
+    elif [[ -e "$REG/$id.child" ]]; then
+      mwhy="this workspace carries the child marker — a dispatched child, whose run has let it go"
+    fi
+    if [[ -n "$mwhy" && -n "$mover" ]]; then
+      mreason="ccrc: this command is $mover bytes, over the merge deny's $MERGE_PARSE_CAP-byte parse cap, and its raw text reads as a \`gh … pr … merge\` command, so the deny cannot read whether it runs one; $mwhy, and a wave's session never merges (landing-order R5: the coordinator merges, workers never do)."
+      mreason+=" Split it into commands of at most $MERGE_PARSE_CAP bytes, or rephrase it so its text does not read as a \`gh … pr … merge\` command (prose that names gh, pr and merge in that order reads as one, a mail or PR body that quotes it included): write a long mail body to a file with the Write tool and send it with \`ccrc-api mail send --json <file>\`, which keeps the command short, or a long PR body to a file for \`gh pr create --body-file <file>\`. A landing is the operator's, from their own shell."
+    elif [[ -n "$mwhy" ]]; then
+      mreason="ccrc: $mwhy, and a wave's session never merges (landing-order R5: the coordinator merges, workers never do)."
+      mreason+=" Report wave-done to your coordinator; it lands the PR."
+    fi
+    if [[ -n "$mwhy" ]]; then
+      pre_json=$(_hook_deny_json "$mreason") || pre_json=""
+    fi
+  fi
+fi
+
+# ── THE ROLE-SKILL DENY (D-4934) ─────────────────────────────────────────
+# Three skills make whoever loads them act AS the session: `ccrc-worker`,
+# `ccrc-reviewer` and `ccrc-coordinator` ack mail, take claims, send wave-done
+# or review-done, and open or dispatch runs, all under the session's identity.
+# A subagent (a session started by another session's Agent tool or a workflow
+# agent() call) cannot be the session, and one that loaded the worker skill once
+# sent a false wave-done as its worker. The three descriptions already say
+# "Never use it inside a subagent", and a subagent on a Codex lane loaded the
+# reviewer skill as its first action after that wording shipped, so wording is
+# not enough: this arm refuses the call, on every lane. It is the operator's
+# ruling of 2026-10-13 ("guard against those 3"), and it is a speed bump in the
+# merge deny's sense: a subagent that wants the text can still read the file.
+# NOTHING ELSE IS LIMITED. Subagents may use skills by design, so any other
+# skill passes, and so does the main thread: `paid` (the payload parse's flag,
+# a non-empty `agent_id`) is what tells the two apart, and an empty string is no
+# id. The skill is matched by its exact name, or by its name behind ONE
+# `<namespace>:` prefix (`x:ccrc-worker`), never as a substring: `ccrc-workers`,
+# `my-ccrc-worker` and `ccrc-worker:x` (the skill `x` of a plugin named
+# `ccrc-worker`) are other skills.
+# THE NAME IS READ THE WAY CLAUDE CODE READS IT (fix round 1, D-4934): its Skill
+# tool trims the `skill` string, JavaScript's `String.prototype.trim` set
+# (U+0009-000D, U+0020, U+00A0, U+1680, U+2000-200A, U+2028, U+2029, U+202F,
+# U+205F, U+3000 and U+FEFF), and strips ONE leading `/` before it resolves the
+# skill (read in the shipped 2.1.296 tool's input validation), so ` ccrc-worker`,
+# `ccrc-worker<tab>` and `/ccrc-worker` all load the worker skill and each must
+# be denied. The one jq that reads the field does both, in this order, and
+# then the match below runs: `explode` and `implode` and no regex builtin,
+# since this file must work with a jq built without Oniguruma. `//ccrc-worker`
+# strips one slash and so stays a name no skill has, and `a:b:ccrc-worker` has
+# two prefixes and the match strips one.
+# THE THREE NAMES ARE WRITTEN HERE, ONCE. `session-hook-role-skill-deny.test.ts`
+# pins them against the `name:` frontmatter of the three SKILL.md files, so a
+# rename turns that suite red rather than silently disarming this deny.
+# ORDER IS BUDGET, as in the merge deny above: the event, the tool name and
+# `paid` are already in memory, so a non-Skill event, and the main thread's
+# Skill call, pay no fork at all, and only a subagent's Skill call pays the one
+# jq for the skill's name.
+# A deny already set is never replaced (the merge deny's own guard, copied
+# whole). Today it cannot be set on a Skill call, because every other deny here
+# fires on another tool, and the guard is written for the day one does.
+# FAIL-OPEN, like every gate in this file: a jq that cannot read the payload
+# (`.tool_input.skill?` swallows a `tool_input` that is no object) answers
+# nothing, and a `_hook_deny_json` that cannot build the envelope leaves
+# `pre_json` as it was. This arm prints nothing itself: the one print site at
+# the end of the file emits the envelope, after the hookstate rename.
+ROLE_SKILLS="ccrc-worker ccrc-reviewer ccrc-coordinator"
+if [[ "$event" == PreToolUse && "${tool:-}" == Skill && -n "$paid" \
+      && "$pre_json" != *'"permissionDecision":"deny"'* ]]; then
+  rsk=$(jq -r '
+    def ws: . == 32 or (. >= 9 and . <= 13) or . == 160 or . == 5760
+      or (. >= 8192 and . <= 8202) or . == 8232 or . == 8233 or . == 8239
+      or . == 8287 or . == 12288 or . == 65279;
+    .tool_input.skill? // "" | tostring | explode
+    | until(length == 0 or (.[0] | ws | not); .[1:])
+    | until(length == 0 or (.[-1] | ws | not); .[:-1])
+    | if .[0] == 47 then .[1:] else . end
+    | implode' <<<"$payload" 2>/dev/null) || rsk=""
+  rbare=${rsk#*:}
+  for rname in $ROLE_SKILLS; do
+    if [[ "$rsk" == "$rname" || "$rbare" == "$rname" ]]; then
+      rreason="ccrc: this call loads the \`$rname\` skill from a subagent (a session started by another session's Agent tool or a workflow agent() call), and that skill makes whoever loads it act as the session."
+      rreason+=" A subagent never acks, claims or sends ccrc mail and never opens or dispatches a run: do the task you were given and return your report to your parent."
+      if rjson=$(_hook_deny_json "$rreason"); then pre_json=$rjson; fi
+      break
+    fi
+  done
+fi
+
+# `carry-only-a-main-thread-wait` (D-4039, task review): who raised the wait. `waitby` is "subagent" only when THIS event
+# freshly set `waiting` and carries an `agent_id` (`$paid`); it is stored as the additive key `waitBy`, preserved with
+# the carried state below, and absent everywhere else, so every other write keeps today's shape byte for byte.
+waitby=""
+[[ "$state" == waiting && -n "$paid" ]] && waitby="subagent"
+
+# `a-carried-wait-keeps-its-stamp` (D-4041, review 397 F3; the race is that review's artifact 2, "P1 exception 1").
+# ONE fresh `jq` read of the file at the carry point answers every question the two subagent arms below ask: its state,
+# who raised the wait, the ask, `interrupted`, and the wait's own `updatedAt` and `event`. It is a read of the file as it
+# stands NOW, not of `prev_state`, which the prefilter took ~650 lines up: a main-thread answer that lands in between
+# must not be overwritten by a `waiting` decided from the old read. Lines, not `@tsv` (see the prefilter's note above).
+# `state` prints only when it is one of the three words this hook writes (an exact match, so a corrupt value is never
+# healed into one: `"wait\ning"` is empty here, not `waiting`); `event` is cut to letters, and `updatedAt` prints its
+# floor when it is a number. WHAT MAKES A STAMP KEEPABLE is the `^[0-9]+$` test in `_hook_keep_stamp` below, and only that
+# (a negative prints with its `-` and fails it; mutation N2 pins it). The `type == "number"` here is POSITIONAL, not a
+# guard: `floor` on a string, array, object, null or boolean aborts the jq program, which would blank every line printed after
+# `updatedAt` (today only `event`, unused while `fr_upd` is empty); it keeps a later field safe if one is ever added.
+# A jq that fails on its first output (a root that is neither an object nor null, or an unparseable file) prints nothing: every field comes up
+# empty, which both arms read as "nothing to carry". Lines printed before a later error still come out.
+fr_state="" fr_by="" fr_ask="" fr_int="" fr_upd="" fr_ev=""
+_hook_fresh_read() {
+  fr_state="" fr_by="" fr_ask="" fr_int="" fr_upd="" fr_ev=""
+  { read -r fr_state; read -r fr_by; read -r fr_ask; read -r fr_int; read -r fr_upd; read -r fr_ev; } < <(jq -r \
+    'def keep(f): explode | map(select(f)) | implode; def alpha: (. >= 65 and . <= 90) or (. >= 97 and . <= 122);
+     (.state | if . == "working" or . == "waiting" or . == "done" then . else "" end),
+     (if .waitBy == "subagent" then "subagent" else "" end),
+     (.ask // null | tojson),
+     (if .interrupted == true then "true" else "false" end),
+     (.updatedAt | if type == "number" then floor | tostring else "" end),
+     (.event | if type == "string" then keep(alpha) else "" end)' "$f" 2>/dev/null)
+}
+# The stamp a carried wait keeps. A MAIN-thread wait (fresh state `waiting`, not raised by a subagent) that a subagent
+# event writes over keeps the file's own `updatedAt` and `event` (the wait's START, which the attention bucket, the ask
+# row's `askAt` and the stall watch's hold 2a read) and gains the additive `aliveAt` = now (the liveness the aged door,
+# `hookstate.ts`, reads, so a long wait with subagents working stays fresh). Every other write has no `aliveAt`, and a
+# file whose `updatedAt` is negative, is not a number (null, a boolean, a string), or is a value jq prints in exponent
+# form (such as 1e16 or 1e300: which values print that way follows jq's number formatting, not a size cut) fails the
+# `^[0-9]+$` test below and keeps nothing: it is written as before, with a fresh stamp.
+# A fractional value keeps its floor: the hook writes integer milliseconds only, so one is a foreign or corrupt file,
+# and the floor moves the stamp by under 1 ms.
+w_ev="" w_upd="" w_alive=""
+_hook_keep_stamp() {
+  [[ "$fr_state" == waiting && "$fr_by" != subagent && "$fr_upd" =~ ^[0-9]+$ ]] || return 0
+  w_upd="$fr_upd" w_ev="$fr_ev" w_alive=$(_hook_epoch_ms)
+}
+
 if [[ "$event" == SubagentStart || "$event" == SubagentStop ]]; then
   name=$(jq -r '.agent_name // .subagent_name // .agent_type // "subagent"' <<<"$payload" 2>/dev/null) || name="subagent"
   now=$(_hook_epoch_ms)
@@ -3122,12 +3874,40 @@ if [[ "$event" == SubagentStart || "$event" == SubagentStop ]]; then
   else
     subs=$(jq -c --arg n "$name" 'del(.[ (map(.name) | index($n)) // empty ])' <<<"$subs" 2>/dev/null) || subs="[]"
   fi
-  # Session state untouched: keep the previous state (or skip entirely when
-  # no state was ever written — a subagent event before any turn is inert).
+  # Session state untouched: keep the state the file holds (or skip entirely when no state was ever written, or the file
+  # is gone or unreadable by now — a subagent event before any turn is inert). `prev_state` is only the no-fork prefilter.
+  # A stored state that is not one of the hook's three words (a corrupt file) reads empty at the fresh read and exits
+  # there too, which ALSO skips the subagent-list update above: at base that update was written over the corrupt state
+  # (a multi-line one mangled by the prefilter) (D-4041).
   [[ -n "$prev_state" ]] || exit 0
-  state="$prev_state"
-  ask_json=$(jq -c '.ask // null' "$f" 2>/dev/null) || ask_json="null"
-  interrupted=$(jq -r 'if .interrupted == true then "true" else "false" end' "$f" 2>/dev/null) || interrupted="false"
+  _hook_fresh_read
+  [[ -n "$fr_state" ]] || exit 0
+  state="$fr_state"
+  ask_json="${fr_ask:-null}"
+  [[ "$fr_int" == true ]] && interrupted="true" || interrupted="false"
+  waitby="$fr_by"
+  _hook_keep_stamp
+fi
+
+# `subagent-tool-event-keeps-the-waiting-ask` (D-4039, finding 4063): a subagent's PreToolUse/PostToolUse never ends the
+# main thread's wait. It reaches the case above as `working` with a null ask, and written as is it erased a question the
+# main thread asked 3.1 s earlier, before any pane tick could mint the ask row. Only `waiting` is carried, with its ask and
+# `interrupted`, and every other state keeps today's write. (A subagent's PermissionRequest is not a tool event of this
+# kind: it still replaces a main question with its own approval, as it always did — Review Focus 1.)
+# `a-carried-wait-keeps-its-stamp` (D-4041): the carry keeps the wait's `updatedAt` and `event` and adds `aliveAt`
+# (above). The reader that needs the stamp to MOVE is the aged door (`hookstate.ts`), and it reads `aliveAt` for that.
+# `carry-only-a-main-thread-wait` (task review, Important 1): a wait that a subagent raised itself (`waitBy` stored
+# as "subagent") is NOT carried, so that subagent's own approved dialog ends at its next tool event as it always did.
+# `prev_state` is the no-fork prefilter only; the decision is made on the one fresh read, on a subagent's tool event.
+if [[ -n "$paid" && "$prev_state" == waiting && ( "$event" == PreToolUse || "$event" == PostToolUse ) ]]; then
+  _hook_fresh_read
+  if [[ "$fr_state" == waiting && "$fr_by" != subagent ]]; then
+    state="waiting"
+    ask_json="${fr_ask:-null}"
+    [[ "$fr_int" == true ]] && interrupted="true" || interrupted="false"
+    waitby=""
+    _hook_keep_stamp
+  fi
 fi
 
 # Transitions to working/done clear the ask: an answered question must not
@@ -3135,17 +3915,19 @@ fi
 [[ "$state" == working || "$state" == done ]] && { [[ "$event" == SubagentStart || "$event" == SubagentStop ]] || ask_json="null"; }
 
 out=$(jq -cn \
-  --argjson v 1 --arg state "$state" --arg event "$event" \
+  --argjson v 1 --arg state "$state" --arg event "${w_ev:-$event}" \
   --arg sessionId "${CLAUDE_CODE_SESSION_ID:-}" --argjson pid "${CLAUDE_PID:-0}" \
-  --argjson updatedAt "$(_hook_epoch_ms)" --argjson interrupted "$interrupted" \
+  --argjson updatedAt "${w_upd:-${hts:-$(_hook_epoch_ms)}}" --argjson interrupted "$interrupted" \
   --argjson ask "$ask_json" --argjson subagents "$subs" --argjson graphQueries "$gq" \
-  --argjson graphGateDenials "$gd" \
+  --argjson graphGateDenials "$gd" --arg waitBy "$waitby" --arg aliveAt "$w_alive" \
   --argjson ccrcPeerReads "$cp" --argjson ccrcClaims "$cc" \
   '{v:$v, state:$state, event:$event, sessionId:$sessionId, pid:$pid,
     updatedAt:$updatedAt, ask:$ask, subagents:$subagents, graphQueries:$graphQueries,
     graphGateDenials:$graphGateDenials, ccrcPeerReads:$ccrcPeerReads,
     ccrcClaims:$ccrcClaims}
-   + (if $interrupted then {interrupted:true} else {} end)') || exit 0
+   + (if $interrupted then {interrupted:true} else {} end)
+   + (if $waitBy == "subagent" then {waitBy:"subagent"} else {} end)
+   + (if $aliveAt != "" then {aliveAt: ($aliveAt | tonumber)} else {} end)') || exit 0
 
 # 64KB cap: drop the questions envelope before anything else — a truncated
 # envelope is worse than none.
@@ -3161,7 +3943,7 @@ tmp="$REG/.$id.$$.hookstate.tmp"
 { printf '%s\n' "$out" > "$tmp"; } 2>/dev/null || { rm -f "$tmp"; exit 0; }
 mv -f "$tmp" "$f" 2>/dev/null || { rm -f "$tmp"; exit 0; }
 # The one PreToolUse envelope this file ever prints — a deny (R5) or a nudge
-# (R6) — and only now: the count a deny names is on disk, so the next event
+# (R6, or the landing advisory) — and only now: the count a deny names is on disk, so the next event
 # will see it (D-1689). The nudge counts nothing, but it shares this site so
 # that neither branch can ever print from inside the arm.
 [ -z "$pre_json" ] || printf '%s\n' "$pre_json"

@@ -1,0 +1,14 @@
+{
+  "scenario": "raw-worktree", "covers": ["Q3", "Q6"],
+  "steps": [
+    {"waitReady": 60}, {"type": "dlg raw-worktree"}, {"keys": ["Enter"]},
+    {"waitLabels": ["main-done"], "timeoutS": 90}
+  ],
+  "settleS": 5,
+  "entries": [
+    {"label": "main-bash", "match": {"kind": "tools", "lastUser": "dlg raw-worktree"},
+     "tool_use": {"name": "Bash", "input": {"command": "git worktree add -q -b dlg-raw ../raw-wt && echo DLG-RAW-OK", "description": "add a worktree by hand"}}},
+    {"label": "main-done", "match": {"kind": "tools", "lastUser": "DLG-RAW-OK"}, "text": "DLG-DONE"}
+  ],
+  "default": {"text": "DLG-WAIT", "repeat": true}
+}

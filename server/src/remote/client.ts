@@ -10,6 +10,7 @@ import type {
   TailData,
   TailReset,
 } from '../../../shared/agent-protocol.js';
+import { UPDATE_OP_DETAIL_MAX } from '../../../shared/agent-protocol.js';
 import { parseBuildInfo } from '../../../shared/buildinfo.js';
 import { validCapWords } from '../../../shared/api.js';
 import type { Runner } from '../exec.js';
@@ -90,6 +91,53 @@ function isRecord(v: unknown): v is Record<string, unknown> {
 export function readReadyOps(raw: unknown): string[] {
   if (!Array.isArray(raw)) return [];
   return validCapWords(raw) ?? [];
+}
+
+/**
+ * A `ResErr` the AGENT SENT (design 2026-09-20 §10, D-3373), as
+ * opposed to a request the LINK failed. A link failure AFTER the send stays a
+ * plain `Error` whose message is `disconnected`, `timeout` or `aborted`; one
+ * before the send is a `LinkNotSentError` (below, D-3555) carrying
+ * `disconnected` or `aborted`, or — for a synchronous `JSON.stringify`/`ws.send`
+ * throw — the thrown message; `timeout` is never pre-send. The dispatcher must
+ * tell "the node answered busy" from "the node could not be asked", and a
+ * message string cannot do that, because nothing stops an agent word from being
+ * spelled `timeout`. `instanceof` can.
+ *
+ * `message` is `err`, exactly what `new Error(err)` carried before this class
+ * existed, so the one existing `.message` reader (`createRunner`'s catch arm,
+ * which reports it as stderr) is unchanged; `caps()` and the io adapter catch
+ * without reading the error at all. `detail` is `ResErr`'s ADDITIVE field. Absence
+ * permits: an agent that sends none reads `null`. `onMessage` below is its ONE
+ * reader, and it cuts the text to `UPDATE_OP_DETAIL_MAX`
+ * (D-3391), because a peer that ignores the agent's
+ * own bound must not write an unbounded string into an inventory row.
+ */
+export class AgentOpError extends Error {
+  readonly code: string;
+  readonly detail: string | null;
+  constructor(code: string, detail: string | null) {
+    super(code);
+    this.name = 'AgentOpError';
+    this.code = code;
+    this.detail = detail;
+  }
+}
+
+/** D-3555: a request this client never handed to `ws`'s sender — no ready link at the call
+ *  (`disconnected`), a signal already aborted (`aborted`), or a synchronous throw from `JSON.stringify` or `ws.send`
+ *  (the thrown message). `ws.send`'s measured throw sites are before it queues the frame (its `CONNECTING` check, which
+ *  the OPEN test above excludes in the same tick); nothing below it was found to throw synchronously. Every other
+ *  rejection of `request()` — `timeout`, an abort after the send, `disconnected` when the socket closes or `close()`
+ *  runs with the request pending — comes AFTER `ws.send` returned, when the frame may already be with the agent, and
+ *  stays a plain `Error`. `message` is the word a plain `Error` carried before this class existed, so every `.message`
+ *  reader is unchanged; only `instanceof` tells the two apart (the dispatcher's `linkAnswer`). A `send` that returns
+ *  proves the frame reached `ws`'s sender, not the agent: that is all "handed to the link" means. */
+export class LinkNotSentError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'LinkNotSentError';
+  }
 }
 
 /**
@@ -196,9 +244,9 @@ export class FleetClient {
 
   request(payload: AgentReqPayload, timeoutMs?: number, signal?: AbortSignal): Promise<ResOk> {
     if (!this.ready || !this.socket || this.socket.readyState !== WebSocket.OPEN) {
-      return Promise.reject(new Error('disconnected'));
+      return Promise.reject(new LinkNotSentError('disconnected'));
     }
-    if (signal?.aborted) return Promise.reject(new Error('aborted'));
+    if (signal?.aborted) return Promise.reject(new LinkNotSentError('aborted'));
     const ws = this.socket;
     const id = this.nextId++;
     const wait = timeoutMs ?? this.cfg.requestTimeoutMs;
@@ -225,7 +273,17 @@ export class FleetClient {
       });
       signal?.addEventListener('abort', abort, { once: true });
       const req = { ...payload, t: 'req', id } as AgentReq;
-      ws.send(JSON.stringify(req));
+      try {
+        ws.send(JSON.stringify(req));
+      } catch (e) {
+        // D-3555: `JSON.stringify` or `ws.send` threw before queuing the frame (ws throws only at
+        // CONNECTING, which the OPEN check above excludes), so undo the registration above and say so. After this
+        // `send` returns, every rejection is a plain Error: the frame may already be with the agent.
+        clearTimeout(timer);
+        this.pending.delete(id);
+        dispose();
+        reject(new LinkNotSentError(e instanceof Error ? e.message : String(e)));
+      }
     });
   }
 
@@ -313,7 +371,9 @@ export class FleetClient {
       clearTimeout(entry.timer);
       entry.dispose();
       if (msg.ok === false) {
-        entry.reject(new Error(typeof msg.err === 'string' ? msg.err : 'error'));
+        // THE ONE READER of `ResErr.detail` (design 2026-09-20 §10, D-3373): an answer the agent
+        // SENT rejects as an `AgentOpError`. A link failure never reaches this line (`onClose`, the timer, the abort).
+        entry.reject(new AgentOpError(typeof msg.err === 'string' ? msg.err : 'error', typeof msg.detail === 'string' ? msg.detail.slice(0, UPDATE_OP_DETAIL_MAX) : null));
       } else {
         entry.resolve(msg as unknown as ResOk);
       }

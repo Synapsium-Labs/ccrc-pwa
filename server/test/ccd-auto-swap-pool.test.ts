@@ -252,8 +252,9 @@ describe('_strand_why names the candidates the decision was actually about', () 
   // LINUX-ONLY, and not because the assertion is awkward on darwin: a darwin
   // FLEET BOX CANNOT EXIST. `ccd-pool-sync` is never installed there at all —
   // its only runner is a systemd timer, and `ccrc` says so in its own install
-  // summary ("no ccd-pool-sync — their timers are systemd-only",
-  // `ccd/ccrc:9733`). So `_pool_sync_installed` is correctly FALSE on darwin,
+  // summary ("no ccd-pool-sync and no ccd-update-sync — their timers are
+  // systemd-only", `_inst_bins`' Darwin echo in `ccd/ccrc`). So
+  // `_pool_sync_installed` is correctly FALSE on darwin,
   // the box has no control plane BY CONFIGURATION, and the declared-tag
   // fallback is the right answer there rather than a degraded one. Planting a
   // plist to force this arm would fabricate a state production cannot reach
@@ -770,7 +771,13 @@ describe('_reg_purge`s dot-free inventory', () => {
     const src = fs.readFileSync(CCD, 'utf8');
     const from = src.indexOf('The dot-free claim, measured against every `$REG/<id>.<field>` file');
     expect(from, 'the inventory comment could not be found').toBeGreaterThan(-1);
-    const block = src.slice(from, from + 2400);
+    // The window ends at the inventory list's own last field, not at a byte
+    // count: a fixed 2400 left 14 characters of headroom after continuity
+    // wave 2's plan was measured, and the stall watch's `turn` spent them
+    // before that wave's `rescuewait` landed (departure 3847).
+    const to = src.indexOf('`wrapper`. Note that `pool` here', from);
+    expect(to, 'the inventory list\'s end could not be found after its claim').toBeGreaterThan(from);
+    const block = src.slice(from, to);
     for (const f of ['`crosspool`', '`stranded`', '`strandnotify`']) {
       expect(block, `${f} is written by this build and missing from the inventory`).toContain(f);
     }

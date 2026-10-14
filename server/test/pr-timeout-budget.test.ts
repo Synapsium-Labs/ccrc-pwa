@@ -3,9 +3,10 @@
  * halves — because a comment tried to hold this relationship and got it exactly
  * backwards.
  *
- * `ccd pr-state --project` now makes TWO network calls: the row window
- * (`PR_GH_TIMEOUT`) and the open-PR check rollup (`PR_GH_CHECKS_TIMEOUT`),
- * both in bash. What KILLS the whole verb is in TypeScript, one process and one
+ * `ccd pr-state --project` now makes THREE network calls: the row window
+ * (`PR_GH_TIMEOUT`), the open-PR check rollup (`PR_GH_CHECKS_TIMEOUT`) and,
+ * since landing-order wave 2, the merge-queue read (`PR_GH_QUEUE_TIMEOUT`),
+ * all in bash. What KILLS the whole verb is in TypeScript, one process and one
  * box away: `CCD_VERB_TIMEOUT_MS['pr-state']` in `server/src/remote/runner.ts`,
  * applied by `timeoutMsFor` to every `runCcd` in remote mode — this fleet's
  * standing config.
@@ -18,10 +19,13 @@
  * left TWO SECONDS for `_pr_state_one` to loop every workspace of the project,
  * each costing a dozen-odd `git` spawns plus a python3 interpreter start.
  *
- * So this reads all three numbers from their real sources and asserts the
- * arithmetic. It is deliberately a BUDGET assertion rather than three literal
- * pins: the numbers may move, and what must not move is that the two calls
- * cannot eat the bound.
+ * (The bound is 25_000 since landing-order wave 2, raised for the third call
+ * rather than squeezing the two measured ones.)
+ *
+ * So this reads every number from its real source and asserts the
+ * arithmetic. It is deliberately a BUDGET assertion rather than literal pins:
+ * the numbers may move, and what must not move is that the calls cannot eat
+ * the bound.
  */
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
@@ -62,31 +66,36 @@ describe('pr-state fits inside the bound that kills it', () => {
   // with eight workspaces that is seconds, not milliseconds.
   const LOCAL_LOOP_RESERVE = 0.3;
 
-  it('the two gh calls together leave real room for the per-workspace loop', () => {
-    const rows = ccdSeconds('PR_GH_TIMEOUT');
-    const checks = ccdSeconds('PR_GH_CHECKS_TIMEOUT');
+  // THREE calls since landing-order wave 2: the merge-queue read
+  // (`PR_GH_QUEUE_TIMEOUT`, `_gh_pr_queue`) runs after the local loop and adds
+  // to the same wall clock the outer bound kills, so it is summed here with
+  // the other two — and the bound was raised 20 s -> 25 s to make room for it
+  // rather than squeezing the two measured budgets.
+  const CALLS = ['PR_GH_TIMEOUT', 'PR_GH_CHECKS_TIMEOUT', 'PR_GH_QUEUE_TIMEOUT'] as const;
+
+  it('the three gh calls together leave real room for the per-workspace loop', () => {
+    const secs = CALLS.map((c) => ccdSeconds(c));
     const outerMs = verbTimeoutMs('pr-state');
 
     // Guard the guard: a regex that silently stopped matching would make every
     // assertion below vacuous, which is the failure mode this whole file exists
     // to retire one level up.
-    expect(rows, 'PR_GH_TIMEOUT read as zero').toBeGreaterThan(0);
-    expect(checks, 'PR_GH_CHECKS_TIMEOUT read as zero').toBeGreaterThan(0);
+    CALLS.forEach((c, i) => expect(secs[i], `${c} read as zero`).toBeGreaterThan(0));
     expect(outerMs, 'the outer bound read as zero').toBeGreaterThan(0);
 
     const budgetS = outerMs / 1000;
-    expect(rows + checks,
-      `the two gh calls (${rows}s + ${checks}s) leave only ${budgetS - rows - checks}s of the `
+    const sum = secs.reduce((a, b) => a + b, 0);
+    expect(sum,
+      `the three gh calls (${secs.join('s + ')}s) leave only ${budgetS - sum}s of the `
       + `${budgetS}s pr-state bound for _pr_state_one to loop every workspace — raise the bound in `
       + `server/src/remote/runner.ts or lower a timeout in ccd, but do not leave them in this ratio`)
       .toBeLessThanOrEqual(budgetS * (1 - LOCAL_LOOP_RESERVE));
   });
 
   it('each single call also fits the bound on its own — a trivially true check that stops a silly one', () => {
-    // If either call alone could outlive the verb, the sum assertion above
-    // would still be satisfiable by making the OTHER one tiny.
+    // If any call alone could outlive the verb, the sum assertion above would
+    // still be satisfiable by making the OTHERS tiny.
     const outerS = verbTimeoutMs('pr-state') / 1000;
-    expect(ccdSeconds('PR_GH_TIMEOUT')).toBeLessThan(outerS);
-    expect(ccdSeconds('PR_GH_CHECKS_TIMEOUT')).toBeLessThan(outerS);
+    for (const c of CALLS) expect(ccdSeconds(c), c).toBeLessThan(outerS);
   });
 });

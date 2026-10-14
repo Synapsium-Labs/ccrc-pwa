@@ -1129,6 +1129,209 @@ export const MIGRATIONS: readonly string[] = [
   CREATE TABLE update_epoch (id INTEGER PRIMARY KEY CHECK (id = 1), epoch INTEGER NOT NULL, issuedAt INTEGER NOT NULL);
   INSERT INTO update_epoch (id, epoch, issuedAt) VALUES (1, 0, 0);
   `,
+  // ── 15: user_version 14 -> 15 ───────────────────────────────────────────
+  // Indexes for the stall watch's per-candidate mail read, `CoordStore.stallMailFor` (worker stall watch wave 5).
+  // That read runs once per stall candidate per sweep on the server's one synchronous handle, and before this entry
+  // both of its statements planned `SCAN mail` and `SCAN mail_deliveries` (EXPLAIN QUERY PLAN, measured), so every
+  // sweep's cost grew with the whole mail history, which is never pruned.
+  //
+  // THREE INDEXES, AND `mail_deliveries(toId)` IS NOT ONE OF THEM. The review that found the scan proposed
+  // `mail_deliveries(mailId)` and `mail_deliveries(toId)`. Measured: an index led by `toId` takes over every
+  // delivery read that filters `toId = ? AND state IN ('queued','delivered')`, because this server never runs
+  // ANALYZE and the planner rates one equality above a two-value IN. On a 20 000-mail fixture whose busiest
+  // recipient held half the deliveries, the peer-duplicate and peer-quota probes went from about 0.01 ms to about
+  // 14 ms and `outstandingMailFor` from about 0.7 ms to about 33 ms. The read's delivered-to arm is bounded through
+  // `mail_by_at` instead (`store.ts`, `stallMailFor`), so it needs no `toId` index. `stall-store.test.ts`'s plan rows
+  // pin that those reads still use `mail_deliveries_due`.
+  //
+  // `mail_by_run` serves the read's run clause (and `hasMailWithSubject`, every per-run mail statement, and the
+  // health read's join); `mail_by_at` its horizon; `mail_deliveries_by_mail` its delivery statement. `mail` is
+  // append-only and `mail_deliveries.mailId` is never rewritten, so the write cost is one b-tree insert per row.
+  // `IF NOT EXISTS`, so a database where an operator made one of these by hand still starts.
+  //
+  // MIGRATIONS[0..13] are frozen: `db.ts` iterates from the live `user_version`, so an edit to an applied entry
+  // never runs. THIS ENTRY IS SLOT 15 AS WRITTEN, measured against origin/main at the wave's first step; an open
+  // branch held `user_version 14 -> 15` too, and whichever merges second moves up (entry 12 records the last branch
+  // that lost this race). RE-MEASURE immediately before the PR and before merge:
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE INDEX IF NOT EXISTS mail_by_run ON mail(runId);
+  CREATE INDEX IF NOT EXISTS mail_by_at ON mail(at);
+  CREATE INDEX IF NOT EXISTS mail_deliveries_by_mail ON mail_deliveries(mailId);
+  `,
+  // ── 16: user_version 15 -> 16 ─────────────────────────────────────────────
+  // Child reclamation (design 2026-09-22 §5.1, §5.3): `runs.sessionBornAt`, the
+  // child's BIRTH — write-once per BOUND session, never a first stamp per run.
+  // `dispatchStartedAt` (migration 5) keeps its every-attempt meaning: it
+  // moves on every fresh-spawn dispatch attempt, retries included, and the
+  // spawn-in-flight render still reads it unchanged. `sessionBornAt` answers a
+  // narrower question — "when was THIS occupant's tenancy of this workspace
+  // minted" — and `childBirthOf` (`coord/childSpent.ts`) moves onto this
+  // column in the same task that adds it, so every PR row a child's branch has
+  // ever carried is placed against the SESSION's own birth, not against
+  // whichever attempt most recently touched `dispatchStartedAt`.
+  //
+  // `runs.sessionBornFor` — a cross-build rollback can leave a stale birth on
+  // a row, which is why this column rides beside `sessionBornAt` — names the
+  // session the birth was recorded FOR. This build's `CoordStore.bindSession`
+  // is the only writer that keeps both columns honest across a rebind; an
+  // OLDER build's `clearSession`/two-argument `setSession` unbind or rebind
+  // `sessionId` without touching either, so a roll-forward after a
+  // roll-back-then-forward across this migration can leave a row whose
+  // `sessionId` has moved on while its birth still names the PREVIOUS
+  // occupant. `childBirthOf` refuses to place a birth unless `sessionBornFor`
+  // still equals the row's own `sessionId`, so that stale pairing reads as
+  // unplaceable rather than as a too-early date on the new occupant.
+  // `childBirthOf` ALSO requires `sessionBornAt` to equal `dispatchStartedAt`
+  // (migration 5) — the `sessionBornFor` check alone cannot see a rollback
+  // followed by a SAME-id redraw (a recycled slug, spec §5.5, extended across
+  // a rollback: the id never changes, so `sessionBornFor` still matches), but
+  // every genuine re-mint re-stamps `dispatchStartedAt` first, so a birth
+  // still dated to an earlier occupant no longer agrees with it either. Both
+  // columns have no migration of their own — this slot has never shipped, so
+  // they are edited in place rather than adding a slot 17 for a fix to a slot
+  // nothing has run yet.
+  //
+  // The backfill dates every row that already carries a bound session to the
+  // ONLY birth this build has ever recorded for it — `dispatchStartedAt` —
+  // with `sessionBornFor` set to that same row's own `sessionId` (never a
+  // second read: the row already carries both). Setting `sessionBornAt` FROM
+  // `dispatchStartedAt` also means the equality check above is trivially
+  // satisfied for every backfilled row — no separate write is needed. ONE
+  // exception: a row whose `run_events` trail carries a `spawn-adopted:` event bound to an
+  // EARLIER attempt's workspace, never this session's own mint (`dispatch.ts`'s
+  // fresh arm: an adopted winner binds with a NULL birth, because the
+  // workspace it adopted may be an earlier attempt's, and a backfilled guess
+  // would date it to the wrong attempt). An unbound row (`sessionId IS NULL`)
+  // is left NULL by the `WHERE` clause alone, matching a run nothing has ever
+  // dispatched. The exclusion OVER-REACHES in one narrow, fail-closed way,
+  // accepted rather than special-cased: a row whose CURRENT occupant is a
+  // clean re-dispatch — `clearSession` unbound the adopted occupant, then a
+  // fresh `ws-add` bound a new one — still carries the OLD `spawn-adopted:`
+  // event on its trail from the earlier occupant, so the backfill leaves it
+  // NULL too, even though the current occupant's own mint was clean. A row in
+  // that shape reaches `sessionBornAt`/`childBirthOf`'s live write path on its
+  // NEXT dispatch regardless, since `bindSession` — not the backfill — is
+  // this build's own ongoing writer; the backfill only ever dates history the
+  // live path has not yet had a chance to.
+  //
+  // MIGRATIONS[0..14] are frozen: `db.ts:182` iterates from the live
+  // `user_version`, so an edit to an applied entry never runs.
+  //
+  // THIS ENTRY WAS SLOT 15 WHEN IT WAS WRITTEN. #237 (the stall watch's mail
+  // indexes) merged first and took `user_version 14 -> 15`, so this one moved
+  // up a slot at merge time rather than sharing an index: two entries at one
+  // `user_version` is a migration that never runs on a db that has already
+  // passed that version. Nothing else about it changed.
+  `
+  ALTER TABLE runs ADD COLUMN sessionBornAt INTEGER;
+  ALTER TABLE runs ADD COLUMN sessionBornFor TEXT;
+  UPDATE runs SET sessionBornAt = dispatchStartedAt, sessionBornFor = sessionId
+    WHERE sessionId IS NOT NULL
+      AND NOT EXISTS (SELECT 1 FROM run_events e WHERE e.runId = runs.id AND e.detail LIKE 'spawn-adopted:%');
+  `,
+  // ── 17: user_version 16 -> 17 ─────────────────────────────────────────────
+  // Stall watch settings (design 2026-10-05 §8): the operator's stall-watch level and quiet time, chosen in Settings.
+  // ONE ROW, `CHECK (id = 1)`, the `coordinator_state` idiom. Its writer is `CoordStore.setStallSettings`, called only
+  // by the settings POST; its reader is `CoordStore.stallSettings`, whose values `parseStallSettings` (`stallsettings.ts`)
+  // decides: `level` through `isStallLevelChoice` and `quietMs` through `isStallQuietMs`, never cast. `quietMs` NULL is
+  // the built-in quiet time, and has no other meaning.
+  //
+  // THE SEED IS TODAY'S BEHAVIOUR: `follow` (the fleet box's files decide) and NULL (the built-in quiet time), so this
+  // entry changes nothing on deploy. `STALL_SETTINGS_SEED` (`stallsettings.ts`) carries the same two values for the
+  // store's insert arm, which a lost row takes.
+  //
+  // `run_events_by_at` serves the notice-count read, `CoordStore.stallObservationsSince` (§11): `run_events` had only
+  // `run_events_by_run(runId, at)`, whose leading column is `runId`, so a window on `at` alone scanned the table. This
+  // server never runs ANALYZE, so the planner's choice for a one-sided range is fixed, and
+  // `stall-settings-store.test.ts` pins the plan (departure `run-events-at-index` (D-4028)). `IF NOT EXISTS`, so a
+  // database where an operator made it by hand still starts.
+  //
+  // MIGRATIONS[0..15] are frozen. THIS ENTRY IS SLOT 17 AS WRITTEN, measured against origin/main at the wave's first
+  // step; whichever branch holding the same slot merges second moves up. RE-MEASURE immediately before the PR and
+  // before merge:
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE stall_settings (
+    id        INTEGER PRIMARY KEY CHECK (id = 1),
+    level     TEXT NOT NULL,
+    quietMs   INTEGER,
+    updatedAt INTEGER NOT NULL
+  );
+  INSERT INTO stall_settings (id, level, quietMs, updatedAt) VALUES (1, 'follow', NULL, 0);
+  CREATE INDEX IF NOT EXISTS run_events_by_at ON run_events(at);
+  `,
+  // ── 18: user_version 17 -> 18 ─────────────────────────────────────────────
+  // The dead-coordinator lane's DURABLE first-dead anchor (workspace lifecycle spec 2026-09-24 §5.4, "The hour is the
+  // lane's own observation, made durable"): one row per claimant the lane last measured CRASHED — `firstDeadAt`, the
+  // first pass of the episode, and `lastDeadAt`, the latest — written on a crashed pass and deleted on any alive,
+  // unmeasurable or non-crash answer (`CoordStore.setDeadAnchor`/`deleteDeadAnchor`, the table's one writer pair).
+  // Epoch ms, the server's clock. The table survives restarts; `.supervised`'s stamp may only RAISE the anchor
+  // (`deadCoordinatorSince`).
+  //
+  // A NEW TABLE AND NOTHING ELSE, and that is the choice that keeps a ROLLBACK bootable — `ccrc-update-watchdog` can
+  // roll a server box back with no human in the loop. MEASURED against `origin/main`'s own `db.ts` (wave 4's plan,
+  // Pre-flight): an older build opening a file at `user_version 18` takes rule 3 — it warns, reads as-is, migrates
+  // nothing, and its runs, mail, claims and ledger reads and writes work unchanged, because it never names this table
+  // and every read names its columns. An `ALTER TABLE runs ADD COLUMN … NOT NULL` would have been the dangerous shape:
+  // an older build's `INSERT INTO runs` names no such column. What the older build cannot do is keep the anchors, so
+  // rows it leaves behind are an episode nobody measured — which is why `lastDeadAt` rides beside `firstDeadAt`, and
+  // the lane restarts an episode whose last crashed pass is older than `DEAD_COORDINATOR_GAP_MS` (the departure
+  // `dead-anchor-restarts-after-an-unobserved-gap`).
+  //
+  // MIGRATIONS[0..16] are frozen: `db.ts` iterates from the live `user_version`, so an edit to an applied entry never
+  // runs. THIS ENTRY WAS SLOT 17 WHEN ITS PLAN WAS WRITTEN. Stall-watch-settings W1 (#320) merged first and took
+  // `user_version 16 -> 17`, so this one moved up a slot rather than sharing an index, as entry 12 did before it.
+  // RE-MEASURE immediately before the PR and before merge:
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE dead_claimants (claimantId TEXT NOT NULL PRIMARY KEY, firstDeadAt INTEGER NOT NULL, lastDeadAt INTEGER NOT NULL);
+  `,
+  // ── 19: user_version 18 -> 19 ─────────────────────────────────────────────
+  // The dead-coordinator breaker's TYPED STATE (workspace lifecycle spec 2026-09-24 §5.4 and §12; the operator's ruling
+  // 4286, which chose a dedicated typed table over a sentinel claimant row or an untyped `run_events` marker). ONE ROW,
+  // `CHECK (id = 1)`, the `coordinator_state` and `stall_settings` idiom: it is control state, never a claimant, so no
+  // `claimedBy` can collide with it.
+  //   - `state` is `dirty`, `clean` or `sealed`. The lane writes `dirty` ALONE, in its own statement, before it changes any
+  //     anchor (`CoordStore.markDeadCoordinatorBreakerDirty`), and `clean` only in the ONE transaction that also writes the
+  //     breaker's exact held snapshot and every anchor change of the pass (`CoordStore.commitDeadCoordinatorBreakerState`).
+  //     `sealed` (fix round 5, D-4916, the operator's choice of 2026-10-13, "Seal on clean shutdown") is `clean` with a
+  //     witness: the server's shutdown handler writes it, in one generation-checked statement over the same snapshot, only
+  //     when nothing is pending and the state is durably clean (`CoordStore.sealDeadCoordinatorBreakerState`). A start
+  //     trusts a snapshot ONLY when it reads `sealed`, and the lane's first pass writes `clean` back at once
+  //     (`unsealDeadCoordinatorBreakerState`); `clean` and `dirty` both seed the conservative hold.
+  //   - `generation` moves on at every write, so a commit lands only over the dirty mark it was handed.
+  //   - `held` is that snapshot, in `deadCoordinatorBreakerHeldDetail`'s encoding (the `run_events` record's): NULL only
+  //     on a row marked dirty before any snapshot landed.
+  //   - `writtenAt` is the write-time clock of the last write (epoch ms, the server's clock).
+  // NO SEED ROW. An absent row reads as dirty (`CoordStore.deadCoordinatorBreakerState`'s `absent`), so the first pass
+  // after the deploy that creates this table flags every claimant it does not release (it holds them only when two or more
+  // stand unreleased) and writes the first exact snapshot: a database whose lane ran on an older build carries no record
+  // of that lane's hold, and an empty seed would read as "nothing held". Clean (unsealed), dirty, absent and unreadable
+  // all fail shut; nothing clears dirty by comparing timestamps.
+  //
+  // A NEW TABLE AND NOTHING ELSE, entry 18's argument: an older build opening a file at `user_version 19` takes rule 3
+  // (it warns, reads as-is, migrates nothing) and never names this table, so its runs, mail, claims and ledger work
+  // unchanged. What it cannot do is keep the breaker's hold — which is why the spec's §12 says to disarm the lane before
+  // rolling back below this release.
+  //
+  // MIGRATIONS[0..17] are frozen. THIS ENTRY IS SLOT 19 AS WRITTEN, measured against origin/main (28e8dc1b2, 18 entries)
+  // at this fix round's first step; whichever branch holding the same slot merges second moves up. RE-MEASURE
+  // immediately before the PR and before merge:
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE dead_coordinator_breaker_state (
+    id         INTEGER PRIMARY KEY CHECK (id = 1),
+    generation INTEGER NOT NULL,
+    state      TEXT NOT NULL CHECK (state IN ('clean', 'dirty', 'sealed')),
+    held       TEXT,
+    writtenAt  INTEGER NOT NULL
+  );
+  `,
 ];
 
 /** The version this build writes. `MIGRATIONS.length` and nothing else: a

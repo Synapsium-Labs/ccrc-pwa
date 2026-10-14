@@ -1,5 +1,6 @@
 import type { FleetState } from './fleetstate.js';
-import { ROUTE_WRITABLE_FIELDS, type RouteFields, type StopSurface } from '../../shared/api.js';
+import { ROUTE_WRITABLE_FIELDS, type CollectToken, type RouteFields, type StopSurface } from '../../shared/api.js';
+import type { DocSectionSlug } from '../../shared/docs.js';
 
 declare const CcdArgvBrand: unique symbol;
 
@@ -107,6 +108,17 @@ const decFlags = (dec: ActorFlags | null): readonly string[] =>
        ...(dec.reason === null ? [] : ['--reason', dec.reason])];
 
 /**
+ * `--defer-expired`, or nothing (child reclamation, spec 2026-09-22 §5.7: the
+ * presence defer's ceiling, spent on the audit and the verb alike). A named
+ * helper and not an inline ternary ON PURPOSE: `ccdargv-dec-parity.test.ts`
+ * derives the dec-appending verbs from every `argv([…])` literal in the table
+ * below with a LAZY match to the first `])`, and an inline `: []` inside
+ * `wsReclaim`'s literal would end that match before `decFlags(` — hiding
+ * `ws-reclaim` from the one test that runs the real binary on its dec.
+ */
+const deferFlags = (deferExpired: boolean): readonly string[] => (deferExpired ? ['--defer-expired'] : []);
+
+/**
  * `decFlags`' own `--actor`/`--reason` half, WITHOUT `--surface` — for
  * `route`, the one dec-carrying verb below that never touches a pane and
  * whose real parser (`cmd_route`, `ccd/ccd`) has no `--surface` case at all.
@@ -147,6 +159,22 @@ const routeFlags = (r: RouteFields | null): string[] =>
  */
 const childFlags = (child: number | null): string[] =>
   child === null ? [] : ['--child', String(child)];
+
+/**
+ * The `--ref <R>` pair for `docs-tree` (native Docs reader, spec 2026-10-01
+ * section 2 (a)), or nothing. `null` means exactly one thing: the request named
+ * no ref, so ccd serves the origin default branch. A named helper and not an
+ * inline ternary for `childFlags`' measured reason: `ccdargv-dec-parity.test.ts`
+ * walks each `argv([...])` literal in the table below to its first `])`.
+ */
+const docsRefFlags = (ref: string | null): string[] => (ref === null ? [] : ['--ref', ref]);
+
+/**
+ * The `--branch <B>` pair for `docs-fetch`, or nothing. `null` means exactly
+ * one thing: fetch the origin default branch (ccd resolves it and answers
+ * `defaultVia`). Named for `docsRefFlags`' reason.
+ */
+const docsBranchFlags = (branch: string | null): string[] => (branch === null ? [] : ['--branch', branch]);
 
 /**
  * The session's own device label as an `--actor` value.
@@ -389,6 +417,47 @@ export const CCD_ARGV = {
                argv(['ws-restore', '--session', id, ...decFlags(dec)]),
   wsAudit:   (id: string) => argv(['ws-audit', '--session', id]),
   wsReap:    (tok: string, id: string) => argv(['ws-reap', '--expect', tok, '--session', id]),
+  /** `ws-audit --reclaim` (child reclamation, spec 2026-09-22 §5.5): the SAME
+   *  verb and the SAME granted prefix as `wsAudit` — `['ws-audit','--session']`
+   *  — with the mode flag AFTER the id, the order `cmd_ws_audit`'s fixed-arity
+   *  parse reads. No grant of its own: the audit destroys nothing. */
+  wsReclaimAudit: (id: string, deferExpired: boolean) =>
+    argv(['ws-audit', '--session', id, '--reclaim', ...deferFlags(deferExpired)]),
+  /** `ws-reclaim` — the ONE destructive argv this server composes with no human
+   *  in the path (spec §5.5). `childOf` is the run the SERVER holds as having
+   *  minted the workspace — the second authority, which ccd compares to the
+   *  box's `.child` marker, refusing `not-a-child` on any disagreement.
+   *  `token` is `ws-audit --reclaim`'s, re-proven by ccd inside the reap lock.
+   *  The confirmation token LEADS (`['ws-reclaim','--expect']` is the grant);
+   *  `--defer-expired` and the dec trail, and ccd strips both before it binds a
+   *  positional. */
+  wsReclaim: (token: string, childOf: number, id: string, deferExpired: boolean, dec: ActorFlags | null) =>
+    argv(['ws-reclaim', '--expect', token, '--child-of', String(childOf), '--session', id,
+          ...deferFlags(deferExpired), ...decFlags(dec)]),
+  /** `ws-audit --expire` (workspace lifecycle, spec 2026-09-24 §5.3): the SAME verb and granted prefix as
+   *  `wsAudit` — `['ws-audit','--session']` — with the mode flag after the id, the order `cmd_ws_audit` reads. No
+   *  grant of its own, and no `--defer-expired`: an expiry never skips its presence rungs. */
+  wsExpireAudit: (id: string) => argv(['ws-audit', '--session', id, '--expire']),
+  /** `ws-expire` — the server-composed teardown of an ARCHIVED workspace seven days after its archive. `token` is
+   *  `ws-audit --expire`'s, re-proven by ccd inside the reap lock; it binds the archive's epoch. The confirmation token
+   *  LEADS (`['ws-expire','--expect']` is the grant); the dec trails, and ccd strips it before it binds a positional.
+   *  Workspace lifecycle wave 3b's lane is its one caller (`expireArchived`'s act), behind `EXPIRE_CAP`. */
+  wsExpire: (token: string, id: string, dec: ActorFlags | null) =>
+    argv(['ws-expire', '--expect', token, '--session', id, ...decFlags(dec)]),
+  /** `ws-audit --collect` (child reclamation, spec 2026-09-22 §5.10): the SAME verb and granted prefix as `wsAudit` —
+   *  `['ws-audit','--session']` — with the mode flag after the id, the order `cmd_ws_audit` reads. No grant of its own,
+   *  and no `--defer-expired`. Its document carries a witnessed temp root's verdict and, when it is collectable, the
+   *  token `ws-collect` spends. */
+  wsCollectAudit: (id: string) => argv(['ws-audit', '--session', id, '--collect']),
+  /** `ws-collect` — the collector of a witnessed child temp root whose workspace is gone. `token` is
+   *  `ws-audit --collect`'s, recomputed and compared by ccd inside the reap lock BEFORE anything moves. It is a
+   *  `CollectToken` (`shared/api.ts`, spec §5.10), which only the collect audit's reader casts to, so a string from
+   *  anywhere else does not compile here. The confirmation token LEADS (`['ws-collect','--expect']` is the grant); the
+   *  dec trails, and ccd strips it before it binds a positional. Its ONE composer is the collector's executor
+   *  (`coord/collectTempRoot.ts`), behind `COLLECT_CAP`, armed only by `$REG/collect-lane-live`;
+   *  `ws-collect-wiring.test.ts` pins that no other server source composes it. */
+  wsCollect: (token: CollectToken, id: string, dec: ActorFlags | null) =>
+    argv(['ws-collect', '--expect', token, '--session', id, ...decFlags(dec)]),
   wsAttic:   (id: string) => argv(['ws-attic', '--session', id]),
   /** The dec flags ride AFTER `--reason`, and `--reason` is NOT one of them: on
    *  `ws-hold` the hold reason IS the declared reason (ccd's `cmd_ws_hold` says
@@ -423,6 +492,11 @@ export const CCD_ARGV = {
    *  the on|off vocabulary is ccd's — the mapping happens once, at the call
    *  site, so no route can invent a third word the verb would `die` on. */
   coordPause: (state: 'on' | 'off') => argv(['coord-pause', '--state', state]),
+  /** The reclaim kill-switch's writer (child-reclamation wave 4, spec §5.8) —
+   *  `coordPause`'s shape exactly: `state` is a two-member union, so the on|off
+   *  vocabulary is ccd's and no route can invent a third word the verb would
+   *  `die` on. The flag LEADS, where the agent's two-token grant expects it. */
+  reclaimPause: (state: 'on' | 'off') => argv(['reclaim-pause', '--state', state]),
   /** The project pool tag's two writers (account pools, spec §5.4.2). TWO
    *  ENTRIES, not one builder taking `pool: string | null` — the `start`/
    *  `enable` rule above: the project-pool route picks between two words rather
@@ -551,6 +625,50 @@ export const CCD_ARGV = {
    *  it in the shape the agent grants. */
   winSize: (id: string, mode: 'smallest' | 'canonical') =>
              argv(['win-size', '--session', id, '--mode', mode]),
+
+  /** NATIVE DOCS READER (spec 2026-10-01 section 2 (a), docs W2): one builder per
+   *  argv shape of the four read verbs `docs-v1` names. The verb comes first and
+   *  the flag the agent grants second (`--all` here, `--project` for the other
+   *  four builders); `docs-show`'s two builders ride ONE grant,
+   *  `['docs-show','--project']`. Every value reaches ccd UNVALIDATED by these
+   *  builders: the server's L1 parsers refuse a bad value with a 400 before any
+   *  exec, and ccd re-checks every token against the same grammars, so this
+   *  table holds no third copy of them. The one type-level closure is
+   *  `section: DocSectionSlug`. No builder takes `--blob` or `--worktree`, and
+   *  none emits `--`.
+   *
+   *  `docsIndex` is project-less: `--all` is its whole argument surface. */
+  docsIndex: () => argv(['docs-index', '--all']),
+
+  /** One project's listing. `ref` is the request's ref in either grammar, bare
+   *  or qualified, or `null` for the origin default branch, which adds no
+   *  `--ref` at all (`docsRefFlags`). */
+  docsTree: (project: string, ref: string | null) =>
+              argv(['docs-tree', '--project', project, ...docsRefFlags(ref)]),
+
+  /** A committed file, 12 tokens after the verb. `commit` is the pin the tree
+   *  answer served; `servedRef` is that answer's `ref.served`, qualified, which
+   *  ccd uses only for the `onRef` provenance check and never to choose bytes.
+   *  `maxBytes` is `DOCS_CLASS_CAP[contentClass(path)]`, the class cap the
+   *  server chose, stringified; ccd enforces `min(N, DOCS_MAX_FILE_BYTES)`. */
+  docsShowCommitted: (project: string, commit: string, servedRef: string, section: DocSectionSlug, path: string,
+                      maxBytes: number) =>
+                       argv(['docs-show', '--project', project, '--commit', commit, '--ref', servedRef,
+                             '--section', section, '--path', path, '--max-bytes', String(maxBytes)]),
+
+  /** A draft file, 14 tokens after the verb: the worktree holding `branch`
+   *  (bare) at `head`, read only while its bytes still hash to `fp`. ccd
+   *  resolves the worktree itself; `maxBytes` as for `docsShowCommitted`. */
+  docsShowDraft: (project: string, branch: string, head: string, section: DocSectionSlug, path: string, fp: string,
+                  maxBytes: number) =>
+                   argv(['docs-show', '--project', project, '--draft-branch', branch, '--head', head,
+                         '--section', section, '--path', path, '--fingerprint', fp, '--max-bytes', String(maxBytes)]),
+
+  /** The one docs verb that writes: a fetch of `branch` (bare) from origin, or
+   *  of the origin default branch for `null`, which adds no `--branch` at all
+   *  (`docsBranchFlags`). */
+  docsFetch: (project: string, branch: string | null) =>
+               argv(['docs-fetch', '--project', project, ...docsBranchFlags(branch)]),
 } as const;
 
 /**
@@ -717,6 +835,68 @@ export const ROUTE_APPLY_CAP = 'route-apply-v1';
  *  This is a note on the token, not a wrapper function — the gate belongs at
  *  wave 3's own seam, where its mutation test can red on it. */
 export const WIN_SIZE_CAP = 'win-size-v1';
+
+/** The `ccd caps` token that says this box has child-workspace reclamation
+ *  (spec 2026-09-22 §5.5, wave 3): `ws-audit --reclaim`, `ws-reclaim` with its
+ *  own ladder, pin phase and tail arm, and ws-reap's mirror refusal — one ccd
+ *  inode. Spelled ONCE in `server/src`; ccd's `echo reclaim-v1` and
+ *  `ccd-archive.test.ts`'s `KNOWN_CAPABILITY_TOKENS` are the other two
+ *  spellings, held equal by that test's `toContain`.
+ *
+ *  READ IT WITH `capSupported`, NEVER `verbSupported`. `verbSupported` PERMITS
+ *  on an absent verb list; the verb this token gates deletes a workspace, and a
+ *  destructive verb dispatched to a box with no evidence it exists is the
+ *  failure the capability reader was built to prevent. A box without the token
+ *  simply defers every child as `unsupported` — nothing is lost, nothing early. */
+export const RECLAIM_CAP = 'reclaim-v1';
+
+/** The `ccd caps` token that says this box has `ccd reclaim-pause` — the
+ *  writer of `$REG/reclaim-paused` (child-reclamation wave 4). Spelled ONCE in
+ *  `server/src`, for `ACTOR_FLAGS_CAP`'s reason; ccd's own
+ *  `echo reclaim-pause-v1` and `ccd-archive.test.ts`'s
+ *  `KNOWN_CAPABILITY_TOKENS` are the other two spellings, and that test's
+ *  `toContain` holds this one equal to them.
+ *
+ *  READ IT WITH `capSupported`, NEVER `verbSupported`: the route that composes
+ *  this verb answers 501 on a box that never advertised it, rather than
+ *  sending a verb an older ccd answers with its usage line — which the phone
+ *  would render as "the switch is broken" when the truth is "the fleet host is
+ *  older than this server". A note on the token, not a wrapper: the gate lives
+ *  at the route's own seam, where its mutation test reds on it. */
+export const RECLAIM_PAUSE_CAP = 'reclaim-pause-v1';
+
+/** The `ccd caps` token that says this box has archived-workspace expiry (workspace lifecycle spec 2026-09-24 §5.3,
+ *  wave 3): `ws-audit --expire`, `ws-expire`, the `expire` journal act and the `expire:` breadcrumb with its refusals
+ *  and its spawn gate — one ccd inode. Spelled ONCE in `server/src`; ccd's `echo expire-v1` and
+ *  `ccd-archive.test.ts`'s `KNOWN_CAPABILITY_TOKENS` are the other two spellings, held equal by that test's
+ *  `toContain`.
+ *
+ *  READ IT WITH `capSupported`, NEVER `verbSupported`: the verb it gates deletes a workspace, and a destructive verb
+ *  sent to a box with no evidence it exists is the failure the capability reader was built to prevent. Nothing reads
+ *  it in this build — wave 3b's lane does, before its first audit. */
+export const EXPIRE_CAP = 'expire-v1';
+
+/** The `ccd caps` token that says this box has the native Docs reader (spec 2026-10-01 section 2 (a), docs W2):
+ *  `docs-index`, `docs-tree`, `docs-show` and `docs-fetch` at exactly the argv the `docs*` builders above emit — one
+ *  ccd inode. Spelled ONCE in `server/src`; ccd's `echo docs-v1` and `ccd-archive.test.ts`'s
+ *  `KNOWN_CAPABILITY_TOKENS` are the other two spellings, held equal by that test's `toContain`.
+ *
+ *  READ IT WITH `capSupported`, NEVER `verbSupported`, and NEVER ALONE. The docs adapter's gate
+ *  (`docs/ccdsource.ts`) is a tri-state: a `ccdVerbs` of `null`, or a list without the token `caps` (an agent whose
+ *  boot read of `ccd caps` failed seeds `[]`), measured nothing and answers `caps-unknown`; only a list that DID
+ *  come from `ccd caps` and lacks this token answers `unsupported` (section 7.1's skew table, C1). `capSupported`
+ *  alone folds the first into the second, and the two have different remedies. */
+export const DOCS_CAP = 'docs-v1';
+
+/** The `ccd caps` token that says this box has the child temp-root collector (child reclamation spec 2026-09-22 §5.10,
+ *  §8's wave 7): `ws-audit --collect`, `ws-collect`, the `collect` journal act and the quarantine record — one ccd
+ *  inode. Spelled ONCE in `server/src`; ccd's `echo collect-v1` and `ccd-archive.test.ts`'s `KNOWN_CAPABILITY_TOKENS`
+ *  are the other two spellings, held equal by that test's `toContain`.
+ *
+ *  READ IT WITH `capSupported`, NEVER `verbSupported`: the verb it gates deletes a directory, and a destructive verb sent
+ *  to a box with no evidence it exists is the failure the capability reader was built to prevent. The collector's lane
+ *  asks it before every audit and again in the act's own scope (`verb-gate.test.ts`, `collect-temp-root.test.ts`). */
+export const COLLECT_CAP = 'collect-v1';
 
 /**
  * Whether the DEPLOYED ccd advertised a CAPABILITY token — a verb-shaped string

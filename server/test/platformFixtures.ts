@@ -27,6 +27,41 @@ export const describeDarwin = describe.skipIf(!IS_DARWIN);
 export const itLinux = it.skipIf(IS_DARWIN);
 export const itDarwin = it.skipIf(!IS_DARWIN);
 
+/** The two `python3 -c` programs `ccrc install` runs on macOS (W6 Task 2),
+ *  in the bytes `ccd/ccrc` spells them: the Darwin arm of `_plat_ln_swap` —
+ *  the `~/ccrc` flip, one `os.replace` — and `cmd_install`'s preflight
+ *  probe, which proves an interpreter RUNS (macOS's `/usr/bin/python3` is an
+ *  `xcode-select` stub until the Command Line Tools are installed). The
+ *  `python3` stubs of `ccrc-install.test.ts` and `ccrc-update.test.ts` hand
+ *  exactly these to the real interpreter and refuse every other `-c`, so a
+ *  new `python3 -c` on the install path is seen, not silently run.
+ *  `macos-platform.test.ts` pins the first against `_plat_ln_swap`'s argv
+ *  with its own `PY` (W6 Task 1). */
+export const DARWIN_PYTHON3_PROGRAMS = [
+  'import os, sys; os.replace(sys.argv[1], sys.argv[2])',
+  'import os',
+] as const;
+
+/** The one `python3 -IS -c` program the install path runs on EVERY platform
+ *  (D-3696): the interpreter names its own canonical path, which
+ *  `_inst_entry_python` (`ccd/ccrc`) and `install_ccd_pair` (`deploy/deploy.sh`)
+ *  render into ccd's launcher shebang. Every later call goes to THAT path
+ *  directly, never through a PATH stub. Spelled byte-for-byte as both files
+ *  spell it; `ccd-child-reclaim-entry.test.ts` pins the agreement. */
+export const ENTRY_PYTHON3_PROGRAM = 'import os,sys;sys.stdout.write(os.path.realpath(sys.executable))';
+
+/** The stubs' `-c` arm: sh lines, empty when `real` (a resolved python3) is
+ *  empty. The Darwin programs pass through on `-c`; the entry program on
+ *  `-IS -c`, exactly — so the interpreter it reports is the real one. */
+export function python3ProgramArm(real: string): string[] {
+  if (real === '') return [];
+  const pats = DARWIN_PYTHON3_PROGRAMS.map((prog) => `'${prog}'`).join('|');
+  return [
+    `if [ "$1" = "-c" ]; then case "$2" in ${pats}) exec '${real}' "$@" ;; esac; fi`,
+    `if [ "$1" = "-IS" ] && [ "$2" = "-c" ] && [ "$3" = '${ENTRY_PYTHON3_PROGRAM}' ] && [ "$#" = 3 ]; then exec '${real}' "$@"; fi`,
+  ];
+}
+
 /** The service manager binary a fixture must stub on this platform. */
 export const MANAGER_BIN = IS_DARWIN ? 'launchctl' : 'systemctl';
 

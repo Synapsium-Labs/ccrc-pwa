@@ -22,11 +22,11 @@ round 1 (task-10-fix-rulings.md I-2), which is when the third was noticed:
      (`_probe_model` below), never hard-coded — a model frozen into a
      publisher is a second model policy. `lane.json`'s writer is
      `deploy/models-op.mjs`'s materialiser (Plan 2b-1 Task 6), which every
-     `ccrc models <id>` mutation runs; doctor has no `lane.json` arm. So this
-     file reads the manifest if present, and REFUSES if it is absent or
-     unusable, each refusal naming a remedy — the absent-file refusal's
-     remedy is Plan 3's to settle (it still names `ccrc doctor --fix`, spec
-     §12's planned `--fix` arm). Nothing here invents a default model.
+     `ccrc models <id>` mutation runs, and which `ccrc doctor --fix` runs
+     where doctor FAILs a lane's lane.json (Plan 3a Task 8). So this file
+     reads the manifest if present, and REFUSES if it is absent or unusable,
+     each refusal naming a remedy that works on this tree. Nothing here
+     invents a default model.
   2. `CCGPT_ACCOUNT_ID`'s fallback to "the first lane" (the reference
      script's `${CCGPT_ACCOUNT_ID:-gpt}`) is REMOVED. An unnamed lane is an
      error, not lane one (task-10-brief.md) — see `_required_env`.
@@ -148,7 +148,7 @@ def _required_env(name: str) -> str:
     `docs/superpowers/plans/2026-09-21-gpt-lane-ownership-2a-request-path.md`'s
     Task 10): an unnamed lane is
     an error, not lane one, because a template unit
-    (`ccgpt-usage@<id>.timer`) always names its instance, and a publisher
+    (`ccrc-codex-usage@<id>.timer`) always names its instance, and a publisher
     that guesses a lane when it is not told one can silently publish the
     wrong lane's row under an empty-string or missing id.
     """
@@ -231,6 +231,72 @@ LANE_MANIFEST_PATH = os.path.join(os.path.expanduser("~"), ".ccrc", "codex", ACC
 from litellm.llms.chatgpt.authenticator import Authenticator  # noqa: E402
 
 
+# ── unattended-authenticator guard (Plan 3a Task 1): one text, in ccd/ccrc-models-probe and ccd/ccgpt-usage.py ──
+# A caller nobody watches must never start LiteLLM's device sign-in. What
+# litellm 1.101.0 does (the floor of the runtime's requirement, read from its
+# source): get_access_token falls through a usable token and a refresh to two
+# steps:
+#   - _wait_for_access_token, which polls up to 300 s on another sign-in's
+#     cooldown;
+#   - _login_device_code, which WRITES device_code_requested_at into the
+#     lane's auth.json, prints a code nobody reads, and polls up to 15 minutes.
+# A deadline cannot undo that write. A poll killed part-way leaves the marker,
+# and the lane's own LiteLLM tier then waits out the cooldown on live requests.
+# So both are refused here, in-process, before either can write. A runtime
+# whose Authenticator lacks a name this guard overrides, or one its caller
+# needs, is refused too: overriding a name the library no longer calls guards
+# nothing.
+import contextlib  # noqa: E402
+import logging  # noqa: E402
+
+
+class LoginRequired(Exception):
+    """The lane holds no token LiteLLM can use or refresh: only a person can sign it in."""
+
+
+class RuntimeApiMoved(Exception):
+    """This runtime's Authenticator lacks a name the guard depends on."""
+
+
+def _unattended(authenticator, required=("get_access_token",)):
+    missing = [name for name in (*required, "_login_device_code", "_wait_for_access_token")
+               if not callable(getattr(authenticator, name, None))]
+    if missing:
+        raise RuntimeApiMoved(", ".join(missing))
+
+    class Unattended(authenticator):
+        def _login_device_code(self, *args, **kwargs):
+            raise LoginRequired("device-code")
+
+        def _wait_for_access_token(self, *args, **kwargs):
+            raise LoginRequired("device-code-cooldown")
+
+    return Unattended
+
+
+# The guarded calls also run with logging switched off (fix round 1). On a
+# token it can neither use nor refresh, litellm LOGS a warning before the
+# guard refuses ("ChatGPT refresh token failed, re-login required: ..."),
+# with the token endpoint's error in it, and on a malformed answer that
+# answer's whole body ("Refresh response missing fields: {data}"). It would
+# land on stderr AHEAD of the caller's refusal, and the model probe keeps only
+# the first 300 characters of its stderr. Read from litellm's source, never
+# run: the warning goes through the `LiteLLM` logger. 1.101.0's handler
+# re-reads sys.stderr on every record, but an older `_logging`'s plain
+# StreamHandler bound sys.stderr when it was made, at import, out of
+# contextlib.redirect_stderr's reach. `logging.disable` stops every record
+# before any handler sees it, whatever stream that handler holds.
+@contextlib.contextmanager
+def _silenced():
+    previous = logging.root.manager.disable
+    logging.disable(logging.CRITICAL)
+    try:
+        yield
+    finally:
+        logging.disable(previous)
+# ── end unattended-authenticator guard ──
+
+
 def _read_lane() -> dict:
     """Read and parse `~/.ccrc/codex/<id>/lane.json` once — the single read
     both `_probe_model` and `_token_dir` work from (task-10-fix-rulings.md
@@ -239,15 +305,15 @@ def _read_lane() -> dict:
     away — read once, here, instead).
 
     `lane.json` is written by `deploy/models-op.mjs`'s materialiser, which
-    every `ccrc models <id>` mutation runs (Plan 2b-1 Task 6); doctor has no
-    `lane.json` arm, whatever the design spec's `--fix` table plans. The
-    behaviour for the file itself: read it if present and well-formed, and
-    REFUSE if it is absent or not valid JSON. The absent-file refusal still
-    names `ccrc doctor --fix` (task-10-rulings.md (commit 4893935a) §4) —
-    which remedy it should name is deferred to Plan 3, together with the
-    doctor arm it points at. Per-field validation (a present-but-wrong-shape
-    `probeModel`/`authDir`) happens at each field's own reader below, and
-    each names a remedy that works today.
+    every `ccrc models <id>` mutation runs (Plan 2b-1 Task 6), and which
+    `ccrc doctor --fix` runs where doctor FAILs a lane's lane.json (Plan 3a
+    Task 8). The behaviour for the file itself: read it if present and
+    well-formed, and REFUSE if it is absent or not valid JSON. The absent
+    refusal names both acts that render it — `ccrc doctor --fix`, and, for a
+    lane with no class registry yet, `ccrc models <id> init codex` (settling
+    task-10-rulings.md (commit 4893935a) §4's deferral). Per-field validation
+    (a present-but-wrong-shape `probeModel`/`authDir`) happens at each
+    field's own reader below, and each names a remedy that works today.
     """
     try:
         with open(LANE_MANIFEST_PATH, "r") as f:
@@ -255,7 +321,7 @@ def _read_lane() -> dict:
     except OSError:
         sys.exit(
             f"ccgpt-usage: refusing to publish — {LANE_MANIFEST_PATH} does not exist; "
-            "run `ccrc doctor --fix` to render it"
+            f"run `ccrc doctor --fix` (no class registry yet: `ccrc models {ACCOUNT_ID} init codex`)"
         )
     try:
         lane = json.loads(raw)
@@ -277,7 +343,7 @@ def _probe_model(lane: dict) -> str:
     `ccrc doctor --fix` (Plan 2b-1 Task 6 fix round 1, T2): the manifest's
     writer (`deploy/models-op.mjs`'s `laneManifest`) takes `probeModel` from
     the lane's haiku class and OMITS it when that class is unassigned, so any
-    re-render (`ccrc models`' own; doctor has no lane.json arm yet) reproduces it, and
+    re-render (`ccrc models`' own, or `ccrc doctor --fix`'s) reproduces it, and
     assigning haiku is the one act that cures it (that verb re-renders
     lane.json as it goes). The ABSENT-file refusal in `_read_lane` keeps its
     own remedy.
@@ -316,7 +382,7 @@ def _token_dir(lane: dict) -> str:
     materialiser copies `authDir` from the roster's `exec.authDir` on every
     mutation, so any one of them re-renders a manifest that lost it — and a
     roster whose codex row has no `exec.authDir` is refused by that same verb,
-    naming the field. Doctor renders no `lane.json`.
+    naming the field. `ccrc doctor --fix` re-renders it too (Plan 3a Task 8).
     """
     auth_dir = lane.get("authDir")
     if not isinstance(auth_dir, str) or not auth_dir:
@@ -576,11 +642,23 @@ def main() -> None:
     # let an ambient CHATGPT_TOKEN_DIR silently win over what was just
     # computed and checked above.
     os.environ["CHATGPT_TOKEN_DIR"] = token_dir
-    # Authenticator refreshes the access token if it has expired. Stubbed in
-    # every test in this wave (server/test/fixtures/pystub, Task 1) to
-    # return a fixed non-secret string — this file never sees, stores or
-    # logs a real credential either way.
-    token = Authenticator().get_access_token()
+    # Authenticator refreshes the access token if it has expired, and it
+    # never starts a device sign-in here: the unattended guard above refuses
+    # one before it can write auth.json (Plan 3a Task 1). Stubbed in every
+    # test (codexLaneFixture.ts's writeAuthStub) with a fixed non-secret
+    # string. This file never sees, stores or logs a real credential. The
+    # call runs `_silenced()` (fix round 1), so litellm's own warning, and the
+    # token endpoint's answer in it, never go ahead of this poll's refusal.
+    try:
+        with _silenced():
+            token = _unattended(Authenticator)().get_access_token()
+    except RuntimeApiMoved as missing:
+        sys.exit(f"ccgpt-usage: runtime-api-moved: run ccrc update — this runtime's Authenticator has no "
+                 f"{missing}, so this poll cannot run without risking an interactive sign-in; nothing was published")
+    except LoginRequired:
+        sys.exit(f"ccgpt-usage: login-required: run ccrc codex login {ACCOUNT_ID} — lane {ACCOUNT_ID} holds no "
+                 "token the Codex runtime can use or refresh, and this unattended poll never starts a device "
+                 "sign-in; nothing was published")
     headers = _fetch_headers(model, token)
     out = _build_row(headers)
     _publish(out)

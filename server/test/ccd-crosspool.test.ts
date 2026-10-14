@@ -1224,8 +1224,9 @@ describe('cmd_prefer', () => {
   // LINUX-ONLY, and not because the assertion is awkward on darwin: a darwin
   // FLEET BOX CANNOT EXIST. `ccd-pool-sync` is never installed there at all —
   // its only runner is a systemd timer, and `ccrc` says so in its own install
-  // summary ("no ccd-pool-sync — their timers are systemd-only",
-  // `ccd/ccrc:9733`). So `_pool_sync_installed` is correctly FALSE on darwin,
+  // summary ("no ccd-pool-sync and no ccd-update-sync — their timers are
+  // systemd-only", `_inst_bins`' Darwin echo in `ccd/ccrc`). So
+  // `_pool_sync_installed` is correctly FALSE on darwin,
   // the box has no control plane BY CONFIGURATION, and the declared-tag
   // fallback is the right answer there rather than a degraded one. Planting a
   // plist to force this arm would fabricate a state production cannot reach

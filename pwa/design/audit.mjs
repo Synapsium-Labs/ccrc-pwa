@@ -488,7 +488,7 @@ export const GROUNDS = {
   // `background: transparent` rules — the border and the ink are the whole
   // treatment.
   'chat.css .pending-actions button': { under: ['var(--bg-page)'], why: 'ghost button in the message column; chat.css:16 paints the screen --bg-page. Clears on every plausible ground' },
-  'chat.css .code-block-copy': { under: ['var(--well-bar-bg)'], why: 'the copy affordance sits in the code block BAR (.code-block-bar, background --well-bar-bg — 5% ink over the well), not on the bare well: MessageBubble.tsx renders it inside that div. The entry used to say --bg-well, which flattered every ratio here by ~0.3; the bar is the pixels behind it. Load-bearing either way — it reads 1.10-1.29 on page / surface / raised / sheet' },
+  'chat.css .code-block-copy': { under: ['var(--well-bar-bg)'], why: 'the copy affordance sits in the code block BAR (.code-block-bar, background --well-bar-bg — 5% ink over the well), not on the bare well: CodeBlock (lib/markdown.tsx) renders it inside that div. The entry used to say --bg-well, which flattered every ratio here by ~0.3; the bar is the pixels behind it. Load-bearing either way — it reads 1.10-1.29 on page / surface / raised / sheet' },
   'chat.css .compaction-head': { under: ['var(--bg-page)'], why: 'a full-width divider in the message column. Clears on every plausible ground' },
   'chat.css .task-card-toggle': { under: ['var(--bg-surface)'], why: 'the disclosure is rendered INSIDE .task-card (TaskCard.tsx), which paints background: var(--bg-surface) — the same ground .mail-card gives its own contents' },
   'primitives.css .btn-ghost': { under: ['var(--bg-sheet)'], why: 'the ghost button is a sheet/dialog control. Clears on every plausible ground' },
@@ -605,7 +605,7 @@ export const INHERITED_GROUNDS = {
   },
   'chat.css .code-block-lang': {
     under: ['var(--well-bar-bg)'],
-    why: "the language label is the copy affordance's sibling inside .code-block-bar (MessageBubble.tsx) and takes --syn-comment on the same 5%-ink-over-well fill. It sets no background of its own and its selector names no ancestor, so no route could ground it — it was in the uncovered census next to a rule that was shipping at 3.03:1",
+    why: "the language label is the copy affordance's sibling inside .code-block-bar (CodeBlock, lib/markdown.tsx) and takes --syn-comment on the same 5%-ink-over-well fill. It sets no background of its own and its selector names no ancestor, so no route could ground it — it was in the uncovered census next to a rule that was shipping at 3.03:1",
   },
   'chat.css .term-histbar-word': {
     under: ['color-mix(in srgb, var(--bg-well) 88%, var(--ink-on-well))'],
@@ -613,7 +613,7 @@ export const INHERITED_GROUNDS = {
   },
   'chat.css .compaction-raw': {
     under: ['var(--bg-surface)'],
-    why: "the raw body of a `system` compaction card is rendered as `<pre class=\"compaction-body compaction-raw\">` INSIDE the card (MessageBubble.tsx:285), and .compaction-body paints nothing — the ground is .compaction's own `background: var(--bg-surface)` (chat.css:1223), the same ground .compaction-head is registered against in GROUNDS. Its selector names no painted ancestor, so the auditor cannot recover that ground from CSS alone",
+    why: "the raw body of a `system` compaction card is rendered as `<pre class=\"compaction-body compaction-raw\">` INSIDE the card (FoldedCard, MessageBubble.tsx), and .compaction-body paints nothing — the ground is .compaction's own `background: var(--bg-surface)` (chat.css:1223), the same ground .compaction-head is registered against in GROUNDS. Its selector names no painted ancestor, so the auditor cannot recover that ground from CSS alone",
   },
   'chat.css .task-card-glyph': {
     under: ['var(--bg-surface)'],
@@ -646,6 +646,10 @@ export const INHERITED_GROUNDS = {
   'fleet.css .sess-repo': {
     under: ['var(--bg-surface)'],
     why: "the repo slug composed into .sess-open's accessible name (Task 6, board-placement wave 2), same ink-tertiary register as .sess-held next door — both sit directly on the project card's own ground. Its selector names no ancestor, so no route could ground it. The SELECTED row is answered by the achromatic group (--edge-strong), pinned separately in fleet-css.test.ts",
+  },
+  'fleet.css .sess-child': {
+    under: ['var(--bg-surface)'],
+    why: "child-reclamation wave 5's child-of-run label is a .sess-meta cell on an unselected .sess-line, whose ground is the project card, in the same ink-tertiary register as .sess-held next door. Its selector names no ancestor, so no route could ground it; without this entry it would join the uncovered census, which new rules may not do. The SELECTED row is answered by the achromatic group (--edge-strong), pinned separately in fleet-css.test.ts",
   },
   'fleet.css .sess-spawn': {
     under: ['var(--bg-surface)'],
@@ -707,6 +711,14 @@ export const INHERITED_GROUNDS = {
     under: ['var(--bg-surface)'],
     why: "the emptied card's own sentence about where its work went (spec §6, board-placement wave 2), same ground and register as .proj-abroad-line above — both sit directly on .proj-card-body's ground. Its selector names no ancestor, so no route could ground it",
   },
+  'fleet.css .proj-released-toggle': {
+    under: ['var(--bg-surface)'],
+    why: "the Released (N) fold's toggle (workspace lifecycle spec §5.1), a sibling of .proj-card-body inside the card, on the card's own ground, with the Archived fold toggle's ink. It sets no background of its own and its selector names no ancestor, so no route could ground it",
+  },
+  'fleet.css .proj-released-heading, .proj-released-note': {
+    under: ['var(--bg-surface)'],
+    why: "the Released fold's programme headings and its children note, inside .proj-released-body on the same card ground as the toggle above, same register. A grouped selector names no painted ancestor, so it needs its own registration",
+  },
   'fleet.css .mail-chip': {
     under: ['var(--bg-page)'],
     why: "the OFF state of the programme filter chip (F4, cross-repo wave 2). `.mail-screen` sets no background of its own, so its real ground is body's --bg-page (styles/base.css). Its selector names no ancestor, so no route could ground it",
@@ -734,6 +746,11 @@ export const INHERITED_GROUNDS = {
   'chat.css .opt-degraded': {
     under: ['var(--bg-sheet)'],
     why: "routing slice 6, whole-branch review M1: the model picker's 'serving <class> (share ceiling)' note, rendered in the same .opt row as .opt-inert above and therefore on the same .sheet-panel ground. Registered for the same reason and by the same argument: its selector names no painted ancestor, so the auditor cannot recover the ground from CSS alone, but a reader of PickSheet.tsx can — leaving it in the uncovered census would call a knowable ground unmeasurable.",
+  },
+  // ── native Docs reader W4, Task 6: chat's plain-text note ─────────────
+  'chat.css .msg-plain-note': {
+    under: ['var(--bg-page)'],
+    why: "the one-line note under a chat message shown as plain text (lib/markdown.tsx's MsgPlain, a <p> after the <pre className=\"msg-plain\">). It is a child of .msg-assist, which paints no background, inside .chat, which paints --bg-page (chat.css's .chat rule), so --bg-page is behind it: the .settings-back reasoning. Its selector names no painted ancestor, so no route could ground it. An opened compaction recap puts the same note on .compaction's --bg-surface, where --ink-secondary measures higher still (tokens.css: 8.67:1 dark, 7.41:1 light); the auditor takes one ground per rule",
   },
   'fleet.css .build-line': {
     under: ['var(--bg-surface)'],
@@ -794,9 +811,10 @@ export const INHERITED_GROUNDS = {
     under: ['var(--bg-page)'],
     why: "the 'refused by N of M nodes' line in the same unfilled release row, retinted to --status-attention-text. Same ground and same reason as .settings-release-date; registered separately because it sets its own colour",
   },
-  'fleet.css .settings-move-note': {
+  // ── wave 8 item F2 (D-3591): the running release row's words ───────────
+  'fleet.css .settings-release-running': {
     under: ['var(--bg-page)'],
-    why: "the 'lands with the next release (W4)' note beside a disabled Install/Roll back button, in the same unfilled release row (and in any other unfilled row of this screen that reuses it). Same ground as .settings-release-date; the NOTE is live text and is measured, unlike the disabled button beside it (primitives.css .btn-ghost:disabled, WCAG 1.4.3)",
+    why: "the running row's words in place of the Install/Roll back button, inside .settings-release-actions in the same unfilled release row (SettingsScreen.tsx's ReleaseItem). Same ground and same reason as .settings-release-date; registered separately because it sets its own colour",
   },
   // ── centralised update management W3, Task 9: the node inventory ───────
   'fleet.css .settings-node-current--amber': {

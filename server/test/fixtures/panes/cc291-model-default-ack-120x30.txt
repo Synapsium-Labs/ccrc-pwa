@@ -1,0 +1,29 @@
+  line 64 of a long reply that fills the screen
+  line 65 of a long reply that fills the screen
+  line 66 of a long reply that fills the screen
+  line 67 of a long reply that fills the screen
+  line 68 of a long reply that fills the screen
+  line 69 of a long reply that fills the screen
+
+✻ Worked for 5s · done 1:07 PM
+
+❯ /model
+  ⎿  Set model to Opus 5.5 (default) for this session only
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  👤 cfg │ 🤖 Opus 5.5 · medium │ 🎯 repo │ ▓ ctx ░░░░░░░░ 0% │ 💲 $0.0533
+  ⏸ manual mode on · ← for agents
+                                                                 Set model to Opus 5.5 (default) for this session only
+
+
+
+
+
+
+
+
+
+
+

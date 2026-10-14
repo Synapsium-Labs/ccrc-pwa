@@ -30,7 +30,7 @@ const run = (over: Partial<RunSummary> = {}): RunSummary => ({
   // predates the warn row and must keep rendering exactly as it did.
   health: { mailOutstanding: 0, mailParked: 0, mailReplayMax: 0, doneRejects: 0,
             lastRejectCode: null, briefQueued: true, clearError: null,
-            coordKickoffPendingSince: null }, ...over,
+            coordKickoffPendingSince: null }, childReclaim: null, ...over,
 });
 
 const sess = (over: Partial<FleetSession> = {}): FleetSession => ({
@@ -41,7 +41,7 @@ const sess = (over: Partial<FleetSession> = {}): FleetSession => ({
   hookState: null, askSummary: null, subagents: null, graphQueries: null, graphGateDenials: null, held: null,
   bucket: 'working', bucketSince: null, unmeasured: [], statusUnmeasured: false,
   lifecycle: null, stoppedBy: null, swapBlocked: null, stranded: null, substrate: null, started: true,
-  spawnState: null, ask: null, usage: null, boardProject: null, route: null, child: { kind: 'none' }, ...over,
+  spawnState: null, ask: null, usage: null, boardProject: null, route: null, child: { kind: 'none' }, releasedFrom: null, ...over,
 });
 
 describe('coordPresence — three answers, because the client cannot measure what the server measures', () => {

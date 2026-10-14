@@ -6,8 +6,8 @@
 //
 // Two cues per row, always: the word is the fact and the glyph is the shape, so
 // no state has to be read out of colour (StatusDot.tsx's own discipline).
-import { KICKOFF_UNACKED_MS, MAIL_REPLAY_WARN_COUNT, SPAWN_STALL_MS, isRunState,
-  type RunHealth, type RunItemTally, type RunKind, type RunState, type RunSummary } from '../../../shared/api';
+import { KICKOFF_UNACKED_MS, MAIL_REPLAY_WARN_COUNT, SPAWN_STALL_MS, isChildReclaimWord, isRunState,
+  type ChildMark, type ChildReclaimStatus, type ChildReclaimWord, type RunHealth, type RunItemTally, type RunKind, type RunState, type RunSummary } from '../../../shared/api';
 import { formatAge } from './formatReset';
 
 export const RUN_WORD: Record<RunState, string> = {
@@ -621,3 +621,208 @@ export function runWarnings(
   return out;
 }
 
+/* ── child-workspace reclamation (child-reclamation wave 5, spec §5.9) ────── */
+
+/**
+ * One glyph per word, TOTAL over `ChildReclaimWord`: a word the server gains is
+ * a TS2741 here before it is a blank cell anywhere. The glyph is the SHAPE and
+ * the word is the FACT, the board's standing two-cue rule. `⊘` is the
+ * journal's own refusal glyph (`OUTCOME_GLYPH.refused`), so one mark means one
+ * thing across both surfaces.
+ */
+export const CHILD_RECLAIM_CHIP_GLYPH: Record<ChildReclaimWord, string> = {
+  reclaimed: '∅', pending: '…', deferred: '⧖', paused: '‖', refused: '⊘',
+};
+
+export interface ChildReclaimChip {
+  /** The server's word, or `unknown` for one this build was never compiled to know. */
+  readonly word: ChildReclaimWord | 'unknown';
+  readonly glyph: string;
+  /** The visible text. */
+  readonly label: string;
+  /** The server's sentence, verbatim, or null. Never composed here. */
+  readonly sentence: string | null;
+  /** The sentence again when the word is a refusal, the one word the operator
+   *  may need to read in full, so it gets its own wrapped line. Null otherwise;
+   *  the other words carry their sentence in the title. */
+  readonly line: string | null;
+  /** Epoch ms of the moment the word describes, or null. */
+  readonly at: number | null;
+}
+
+/**
+ * THE ONE READER of `RunSummary.childReclaim` in `pwa/src` (CLAUDE.md "Wire
+ * discipline": a newer peer tolerates an older peer omitting a field, through a
+ * SINGLE reader per field). The field is optional here although the wire type
+ * requires it: `api.runs()` is a bare cast, and a server that predates wave 5
+ * omits the key. Every member is checked, not trusted. `null` means render
+ * nothing, which is what every non-child row and every open row does.
+ *
+ * It MAPS NOTHING. The word is the server's, the sentence is the server's, and
+ * the only vocabulary here is `CHILD_RECLAIM_CHIP_GLYPH`, keyed on the word.
+ */
+export const childReclaimChip = (run: { childReclaim?: ChildReclaimStatus | null }): ChildReclaimChip | null => {
+  const s: unknown = run.childReclaim;
+  if (s === undefined || s === null || typeof s !== 'object') return null;
+  const o = s as { word?: unknown; sentence?: unknown; at?: unknown };
+  const sentence = typeof o.sentence === 'string' && o.sentence !== '' ? o.sentence : null;
+  const at = typeof o.at === 'number' && Number.isFinite(o.at) ? o.at : null;
+  if (!isChildReclaimWord(o.word)) {
+    return { word: 'unknown', glyph: '·', label: 'workspace: unknown state', sentence, line: null, at };
+  }
+  return {
+    word: o.word,
+    glyph: CHILD_RECLAIM_CHIP_GLYPH[o.word],
+    label: `workspace ${o.word}`,
+    sentence,
+    line: o.word === 'refused' ? sentence : null,
+    at,
+  };
+};
+
+/** The chip's `title`: the server's sentence, or the label when it sent none,
+ *  and the age of the chip's moment when it has one. */
+export const childReclaimTitle = (chip: ChildReclaimChip, nowSec: number): string => {
+  const head = chip.sentence ?? chip.label;
+  return chip.at === null ? head : `${head} · ${formatAge(nowSec - Math.floor(chip.at / 1000))}`;
+};
+
+/** Is the session this row names GONE? Only a reclaimed child's is, and then
+ *  the row must stop offering to open it (spec §5.9). Every other word leaves
+ *  a workspace behind. */
+export const childReclaimGone = (chip: ChildReclaimChip | null): boolean =>
+  chip !== null && chip.word === 'reclaimed';
+
+const CHILD_RECLAIM_UNSETTLED: ReadonlySet<string> = new Set<ChildReclaimWord>(['pending', 'deferred', 'paused']);
+
+/**
+ * Should the board re-read its archive? Yes exactly when a FINISHED row whose
+ * chip is still unsettled names a session that was in the previous fleet frame
+ * and is not in this one. A child's reclaim purges its registry row, so this is
+ * the socket carrying the moment the chip goes stale. The board refuses a poll
+ * (RunsScreen's header) and needs none.
+ *
+ * `reclaimed` and `refused` are settled: the first has nothing left to vanish,
+ * and the second is the attention item's to keep live. A session never listed
+ * cannot vanish.
+ */
+export function childReclaimRefreshDue(
+  finished: readonly RunSummary[], before: ReadonlySet<string>, after: ReadonlySet<string>,
+): boolean {
+  for (const run of finished) {
+    const sid = run.sessionId;
+    if (sid === null || !before.has(sid) || after.has(sid)) continue;
+    const chip = childReclaimChip(run);
+    if (chip !== null && CHILD_RECLAIM_UNSETTLED.has(chip.word)) return true;
+  }
+  return false;
+}
+
+/**
+ * Should the board re-read its archive because the server's newest reclaim end
+ * moved (child-reclamation wave 6, spec §5.9)? The vanish trigger above
+ * races the server's journal mirror: ccd purges the child's row before it
+ * journals the end, so that read can come back with no chip. This is the
+ * second trigger, on the fact the race was waiting for.
+ *
+ * Due exactly when `after` is a value, it differs from `before` (a CHANGE,
+ * never only an increase, because a restarted server reads null first), and
+ * some FINISHED row is unsettled:
+ *   • its chip is pending, deferred or paused; or
+ *   • it has no chip and `hadChild` holds its run, which is the race's own row.
+ * An open row is never counted: its chip is blank by design.
+ */
+export function childReclaimDoneRefreshDue(
+  runs: readonly RunSummary[], hadChild: ReadonlySet<number>, before: number | null, after: number | null,
+): boolean {
+  if (after === null || after === before) return false;
+  for (const run of runs) {
+    if (!isRunClosed(run)) continue;
+    const chip = childReclaimChip(run);
+    if (chip === null ? hadChild.has(run.id) : CHILD_RECLAIM_UNSETTLED.has(chip.word)) return true;
+  }
+  return false;
+}
+
+/** What a fleet row's `child` field says — four answers, never folded. `child`: a
+ *  marker naming run `runId`. `none`: no marker — or no key at all, which only a
+ *  server predating child marks sends, and such a server reclaims nothing.
+ *  `unreadable`: the server could not read the marker. `unrecognised`: a shape this
+ *  build cannot read (a newer or faulty server). */
+export type ChildMarkRead =
+  | { readonly kind: 'child'; readonly runId: number }
+  | { readonly kind: 'none' }
+  | { readonly kind: 'unreadable' }
+  | { readonly kind: 'unrecognised' };
+
+/** THE ONE READER of `FleetSession.child` in `pwa/src`. Optional here although the
+ *  wire type requires it: the live `fleet` frame is cast, never revived. Three
+ *  callers: `childOfRunLabel` (the fleet line), `abandonChildOf` (the abandon
+ *  sheet) and `childRunsSeen` (the board's memory of which runs had a child).
+ *  The label says nothing for `none` OR `unrecognised`; the sheet must hedge on
+ *  `unrecognised` and not on `none`; the board's memory keeps `child` alone. So
+ *  this answers four ways, and the label's `null` is never reused as a mark. */
+export const childMarkOf = (session: { child?: ChildMark }): ChildMarkRead => {
+  const c: unknown = session.child;
+  if (c === undefined) return { kind: 'none' };
+  if (c === null || typeof c !== 'object') return { kind: 'unrecognised' };
+  const o = c as { kind?: unknown; runId?: unknown };
+  if (o.kind === 'child' && typeof o.runId === 'number' && Number.isSafeInteger(o.runId)) {
+    return { kind: 'child', runId: o.runId };
+  }
+  if (o.kind === 'none') return { kind: 'none' };
+  if (o.kind === 'unreadable') return { kind: 'unreadable' };
+  return { kind: 'unrecognised' };
+};
+
+/**
+ * The run ids this board knows had a child (child-reclamation wave 6). A fleet
+ * frame's child mark names its minting run, and a finished row carries a chip
+ * only for a child. By the time the reclaim's end reaches the coord frame, the
+ * child has left the fleet frame and its row may carry no chip, so the board
+ * accumulates the answer across frames and reads. Never forgets: the set lives
+ * as long as the board, and holds a few integers. Returns a new set.
+ */
+export function childRunsSeen(
+  seen: ReadonlySet<number>, sessions: readonly { child?: ChildMark }[], runs: readonly RunSummary[],
+): ReadonlySet<number> {
+  const out = new Set(seen);
+  for (const s of sessions) {
+    const m = childMarkOf(s);
+    if (m.kind === 'child') out.add(m.runId);
+  }
+  for (const run of runs) if (childReclaimChip(run) !== null) out.add(run.id);
+  return out;
+}
+
+export interface ChildOfRunLabel {
+  readonly text: string;
+  readonly data: 'child' | 'unreadable';
+  readonly title: string;
+}
+
+/**
+ * The fleet line's label, projected from `childMarkOf` (the one reader of
+ * `FleetSession.child`). THREE answers and no boolean (spec §5.1). A child names
+ * its minting run. An unreadable marker says so, because the server treats it as
+ * neither "a child" nor "not a child": it refuses a second run and defers a
+ * reclaim. No marker, or a shape this build cannot read, says nothing.
+ */
+export const childOfRunLabel = (session: { child?: ChildMark }): ChildOfRunLabel | null => {
+  const m = childMarkOf(session);
+  if (m.kind === 'child') {
+    return {
+      text: `child of run #${m.runId}`,
+      data: 'child',
+      title: `minted by run #${m.runId} for one PR; the server reclaims it when nothing keeps it`,
+    };
+  }
+  if (m.kind === 'unreadable') {
+    return {
+      text: 'child marker unreadable',
+      data: 'unreadable',
+      title: 'this workspace’s child marker could not be read: it takes no second run, and is not reclaimed until it can be read',
+    };
+  }
+  return null;
+};

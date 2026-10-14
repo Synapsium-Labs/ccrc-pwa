@@ -26,7 +26,9 @@ import { writeFileSync, mkdirSync, readFileSync, existsSync, symlinkSync, rmSync
 import path, { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mkTmp } from './tmpHelpers.js';
-import { ghContainedEnv } from './ccdWsHelpers.js';
+import { ccrcContainedEnv } from './ccrcContainment.js';
+import { TOKEN_VERB_MISSING_PREFIXES } from '../../shared/agent-protocol.js';
+import { assertNoRealTool } from './containedTools.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const CCRC = path.resolve(here, '..', '..', 'ccd', 'ccrc');
@@ -55,7 +57,10 @@ interface Result { code: number; stdout: string; stderr: string }
  *  PATH is left intact deliberately — `ccrc version` genuinely needs `jq`, and
  *  a fixture-only PATH would test a box nobody runs. */
 function runCcrcRaw(home: string, args: string[] = []): Result {
-  const r = spawnSync('bash', [CCRC, ...args], { env: ccrcEnv(home), encoding: 'utf8' });
+  const env = ccrcEnv(home);
+  // Wave 9 R10d: the runner's FINAL env holds no real ssh, scp, manager, tmux, gh or curl, and no real user bus.
+  assertNoRealTool(env, home);
+  const r = spawnSync('bash', [CCRC, ...args], { env, encoding: 'utf8' });
   return { code: r.status ?? -1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
 }
 
@@ -71,7 +76,9 @@ function runCcrcRaw(home: string, args: string[] = []): Result {
  *  a containment that each test has to remember is the containment that was
  *  already missing for `gh` when `doctor` landed. */
 function ccrcEnv(home: string): NodeJS.ProcessEnv {
-  const env = ghContainedEnv(home, { ...process.env, HOME: home });
+  // Wave 9 R10d (D-3818): from `ccrcContainedEnv` — ssh, scp, tmux, the managers, launchctl and curl poisoned and the
+  // user bus pointed at two absent paths under HOME — and the three poisons below only restate what it planted.
+  const env = ccrcContainedEnv(home, process.env, { managers: true, curl: 'poison' });
   const poison = (name: string, says: string): void =>
     writeFileSync(join(home, '.local', 'bin', name),
       `#!/bin/sh\nprintf '%s\\n' "$*" >> "$HOME/${name}-poison"\n`
@@ -167,6 +174,12 @@ describe('ccrc: dispatch and usage', () => {
     // tree. Same split again: `server/test/ccrc-update.test.ts` owns what it
     // does, this line owns that an operator can find it.
     //
+    // `rollback` joined it in the centralised-update programme's wave 4
+    // (design 2026-09-20 §11) — a verb, not the recipe `_upd_report` used to
+    // print: update's own path, below the floor, under update's lock, then the
+    // gate and the sweep. Same split: `server/test/ccrc-update.test.ts` owns
+    // what it does, this line owns that an operator can find it.
+    //
     // `uninstall`, `backup` and `logs` joined it in stage 4 Task 8 (spec §7):
     // the exit ramp that leaves reinstall safe, update's backup step
     // standalone, and the role-aware journalctl passthrough. Same split:
@@ -176,17 +189,61 @@ describe('ccrc: dispatch and usage', () => {
     // a box a public name and a real certificate (spec D1–D3), the same shape
     // as `passwd`: prompts on a tty, writes ccrc-owned files, never runs sudo.
     // `server/test/ccrc-expose.test.ts` owns what it does.
+    //
+    // `channel` joined it in W4a Task 8 — the READ-ONLY view of this box's
+    // update-intent projection: what `ccrc update` with no --to would follow,
+    // and the line `ccrc rollout --channel` reads over ssh. It takes no
+    // argument, by decision 15. `server/test/ccrc-update.test.ts` owns what it
+    // does.
+    //
+    // `watchdog` joined it in W4a Task 9 — the verb `ccrc-update-watchdog.timer`
+    // runs every minute on a server/both box: it re-measures a self-update
+    // whose report went stale and reverts only a box that fails its health
+    // probe. A timer's verb is still a verb an operator can type by hand.
+    // `server/test/ccrc-update.test.ts` owns what it does.
+    //
+    // `versions` joined it in W6 Task 5 (design 2026-09-20 §11) — the kept
+    // release trees under ~/ccrc-versions and the one hand-run prune, which
+    // never removes a version the box needs. Same split:
+    // `server/test/ccrc-update.test.ts` owns what it does, this line owns that
+    // an operator can find it.
+    //
+    // `codex` joined it in Plan 2b-2 Task 5 — `ccrc codex start|stop|status|login <id>`,
+    // which runs a Codex lane's two tiers. Placed after `models` because it is the
+    // lane's other half: models says what the lane routes, codex runs it. Same
+    // split as every verb above: `server/test/ccrc-codex.test.ts` owns what it does.
+    //
+    // `history` joined it in the ccrc-history programme's W1-B1 (spec 2026-10-05 §5.1) — the one
+    // dispatch line that execs ccd/history/cli.mjs. It joins the line in place, last; its paragraph (review 316 F40) is
+    // _usage_history_paragraph, reached by a command substitution on the restamp paragraph's last line,
+    // because every line of the usage body sits above ccd/ccrc's corpus cut and is cited by number elsewhere.
+    // `server/test/history-cli.test.ts` owns what it does.
     const home = mkTmp('ccrc-cli-usage-verbs-');
     const r = runCcrcRaw(home, ['-h']);
-    expect(r.stdout).toMatch(/usage: ccrc \{doctor\|status\|adopt\|wrappers\|account\|memory\|models\|install\|update\|rollout\|uninstall\|backup\|logs\|passwd\|expose\|version\}/);
+    expect(r.stdout).toMatch(/usage: ccrc \{doctor\|status\|adopt\|wrappers\|account\|memory\|models\|codex\|install\|update\|rollback\|versions\|channel\|rollout\|uninstall\|backup\|logs\|passwd\|expose\|token\|restamp\|version\|watchdog\|history\}/);
+    expect(r.stdout).toMatch(/^ {2}codex {5}run a Codex lane's two tiers/m);
     expect(r.stdout).toMatch(/^ {2}account {3}connect, check and remove the accounts/m);
     expect(r.stdout).toMatch(/^ {2}memory {4}census every \(home, project\) memory pair/m);
     expect(r.stdout).toMatch(/^ {2}models {4}the model-class registry/m);
     expect(r.stdout).toMatch(/^ {2}update {4}fetch a published release/m);
+    expect(r.stdout).toMatch(/^ {2}versions {2}list the kept release trees under ~\/ccrc-versions/m);
+    expect(r.stdout).toMatch(/^ {2}channel {3}print this box's update channel as the control plane projects/m);
+    expect(r.stdout).toMatch(/^ {2}rollback {2}return this box to an earlier published release/m);
     expect(r.stdout).toMatch(/^ {2}uninstall {1}/m);
     expect(r.stdout).toMatch(/^ {2}backup {4}/m);
     expect(r.stdout).toMatch(/^ {2}logs {6}/m);
     expect(r.stdout).toMatch(/^ {2}expose {4}give this box a public name/m);
+    // `token` joined it in the box-token lifecycle's wave 1 (spec 2026-10-07 §4.5) — the fleet side of a
+    // rotation, which ccrc-agent's token-sync op spawns. `server/test/ccrc-token-sync.test.ts` owns what it does.
+    expect(r.stdout).toMatch(/^ {2}token {5}the box token's fleet side/m);
+    // `restamp` joined it in landing-order wave 1 (spec 2026-09-23 §5.1) — the
+    // regenerator worker clause 16 names for a `ccrc:generated` stamp.
+    // `server/test/ccrc-restamp.test.ts` owns what it does.
+    expect(r.stdout).toMatch(/^ {2}restamp {3}re-stamp one file ccrc generated/m);
+    expect(r.stdout).toMatch(/^ {2}history {3}the session-history store on this box/m);
+    expect(r.stdout).toContain('~/.ccrc/history-off');
+    expect(r.stdout.indexOf('  history   ')).toBeLessThan(r.stdout.indexOf('-h, --help'));
+    expect(r.stdout).toMatch(/^ {2}watchdog {2}\(server\/both, Linux; run by ccrc-update-watchdog\.timer/m);
     // …and its `ip` arm (stage 5, S10) is discoverable from the same
     // paragraph: no domain at all, caddy's internal CA, passphrase-only.
     expect(r.stdout).toMatch(/ip \(no domain at all/);
@@ -339,6 +396,25 @@ describe('ccrc: adopt', () => {
     expect(r.status).toBe(1);
     expect(r.stderr).toMatch(/^ccrc: adopt's script is missing/m);
     expect(r.stderr).toContain('ccrc-adopt');
+  });
+
+  it("`token` with its script missing refuses in the verb-missing class, so the server holds `verb-missing` and does not fail the sync (residue 2)", () => {
+    // `cmd_token` execs `ccrc-token-sync` beside `ccrc`. A box whose copy of
+    // `ccrc` lacks that sibling cannot do the verb, and the server must read
+    // that as the named hold D-4395 gives an older ccrc, not as a failure.
+    // The agent only relays the spawned child's first stderr line; the SERVER
+    // folds it through `isTokenVerbMissing` (`TOKEN_VERB_MISSING_PREFIXES`,
+    // imported, never copied) into the `verb-missing` hold, so the refusal's
+    // first line must start with one of them.
+    // Red before the change: the line read `ccrc: token's script is missing`.
+    const lone = join(mkTmp('ccrc-cli-token-lonely-'), 'ccrc');
+    writeFileSync(lone, readFileSync(CCRC, 'utf8'), { mode: 0o755 });
+    const home = mkTmp('ccrc-cli-token-lonely-home-');
+    const r = spawnSync('bash', [lone, 'token', 'sync', '--from', 'agent'], { env: ccrcEnv(home), encoding: 'utf8', timeout: 60_000 });
+    expect(r.status).not.toBe(0);
+    const first = r.stderr.split('\n')[0];
+    expect(TOKEN_VERB_MISSING_PREFIXES.some((p) => first.startsWith(p)), `first stderr line: ${first}`).toBe(true);
+    expect(r.stderr).toContain('ccrc-token-sync');
   });
 
   it('resolves its own location via BASH_SOURCE, not $0+dirname — a lying dirname on PATH cannot derail a symlinked invocation', () => {
@@ -595,7 +671,10 @@ describe('ccrc: version', () => {
     writeFileSync(join(home, '.ccrc', 'build.json'),
       JSON.stringify({ sha: 'abc123', ref: 'main', builtAt: '2026-08-15T00:00:00Z', dirty: false }));
     const script = `real_bash="$(command -v bash)"; PATH=/nonexistent-ccrc-test-path "$real_bash" "${CCRC}" version`;
-    const r = spawnSync('bash', ['-c', script], { env: { ...process.env, HOME: home }, encoding: 'utf8' });
+    // The inner `PATH=/nonexistent-…` stays: it is this case's subject. The OUTER env is contained (wave 9 R10d).
+    const env = ccrcContainedEnv(home, process.env, { managers: true, curl: 'poison' });
+    assertNoRealTool(env, home);
+    const r = spawnSync('bash', ['-c', script], { env, encoding: 'utf8' });
     expect(r.status).toBe(1);
     expect(r.stderr).toMatch(/jq/);
     expect(r.stderr).not.toMatch(/unreadable/);
@@ -621,9 +700,11 @@ describe('ccrc: the BASH_SOURCE guard actually guards', () => {
     // "Important 1" section for the before/after mutation measurement this
     // finding demanded.
     const home = mkTmp('ccrc-cli-source-guard-');
+    const env = ccrcContainedEnv(home, process.env, { managers: true, curl: 'poison' });
+    assertNoRealTool(env, home);
     const r = spawnSync('bash', ['-c',
       `source "${CCRC}" version; declare -F cmd_version >/dev/null && echo CMD_VERSION_DEFINED`],
-      { env: { ...process.env, HOME: home }, encoding: 'utf8' });
+      { env, encoding: 'utf8' });
     expect(r.status).toBe(0);
     expect(r.stderr).toBe('');
     expect(r.stdout).toContain('CMD_VERSION_DEFINED');
@@ -726,5 +807,10 @@ describe('ccrc: the runner cannot reach the real gh', () => {
     const home = mkTmp('ccrc-cli-gh-contained-');
     const r = spawnSync('bash', ['-c', 'command -v gh'], { env: ccrcEnv(home), encoding: 'utf8' });
     expect(r.stdout.trim()).toBe(join(home, '.local', 'bin', 'gh'));
+  });
+
+  it('ccrcEnv hands out no env under which a real ssh, scp, systemctl, systemd-run, launchctl, tmux, gh or curl can run, and no real user bus (wave 9 R10d)', () => {
+    const home = mkTmp('ccrc-cli-contained-');
+    expect(() => assertNoRealTool(ccrcEnv(home), home)).not.toThrow();
   });
 });

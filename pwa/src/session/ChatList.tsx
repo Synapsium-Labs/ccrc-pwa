@@ -9,9 +9,11 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { Virtuoso, type VirtuosoHandle } from 'react-virtuoso';
 import type { ChatEvent, MailEnvelope, TaskNotification } from '../../../shared/api';
-import { parseFetchedMailEnvelope, parseMailEnvelope, parseTaskNotification } from '../../../shared/api';
+import { isImageClip, parseFetchedMailEnvelope, parseMailEnvelope, parseTaskNotification } from '../../../shared/api';
 import { api, ApiError, apiErrorText, clipUrl, submitErrorText } from '../lib/api';
 import { toast } from '../components/Toast';
+import { RenderBoundary } from '../components/RenderBoundary';
+import { MsgPlain } from '../lib/markdown';
 import type { PendingAttachment, PendingSend } from '../stores/session';
 import { MailCard } from './MailCard';
 import { TaskCard } from './TaskCard';
@@ -225,12 +227,20 @@ function WorkingIndicator(): ReactNode {
  *  attach tray already created, so chip → pending never flickers empty
  *  waiting on a server round trip. Falls back to `clipUrl` if a pending ever
  *  arrives without one (e.g. rehydrated across a reload, where blob URLs
- *  don't survive). */
+ *  don't survive).
+ *
+ *  A DOCUMENT has no object URL by construction (the tray mints none) and
+ *  nothing to draw if it did, so it takes the same name chip the confirmed
+ *  bubble gives it — the two must agree, or every send would visibly change
+ *  shape the moment it confirms. */
 function PendingClipThumbs({ id, attachments }: { id: string; attachments: PendingAttachment[] }): ReactNode {
   return (
     <div className="msg-attach" data-count={Math.min(attachments.length, 2)}>
       {attachments.map((a) => {
         const name = a.path.slice(a.path.lastIndexOf('/') + 1);
+        if (!isImageClip(name)) {
+          return <span key={a.path} className="msg-attach-doc">{name}</span>;
+        }
         return (
           <img
             key={a.path}
@@ -396,7 +406,7 @@ function PendingBubble({
   );
 }
 
-function ChatItemView({
+function ChatItemBody({
   item,
   id,
   onRetry,
@@ -430,6 +440,29 @@ function ChatItemView({
     case 'working':
       return <WorkingIndicator />;
   }
+}
+
+/** The note under a message whose bubble threw while rendering (design 2026-10-01 section 4.12). */
+const ITEM_MESSAGE_NOTE = 'This message could not render; shown as plain text.';
+
+/** One chat item behind its own RenderBoundary (design 2026-10-01 section 4.12), so an item that throws while
+ *  rendering costs that item alone. A message falls back to its raw text (`MsgPlain`: `<pre className="msg-plain">`,
+ *  then the note) and is keyed by its text, so a streaming message that threw on one chunk is tried again on the
+ *  next; every other kind says "This item could not be shown." and is keyed by its item key. `ChatListInner` and the
+ *  virtualised `ChatList` both render through here. */
+function ChatItemView(props: Parameters<typeof ChatItemBody>[0]): ReactNode {
+  const { item } = props;
+  return (
+    <RenderBoundary
+      where="chat item"
+      resetKey={item.kind === 'message' ? item.event.text : item.key}
+      fallback={() => item.kind === 'message'
+        ? <MsgPlain text={item.event.text} note={ITEM_MESSAGE_NOTE} />
+        : <p className="msg-plain-note">This item could not be shown.</p>}
+    >
+      <ChatItemBody {...props} />
+    </RenderBoundary>
+  );
 }
 
 export interface ChatListProps {

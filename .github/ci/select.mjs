@@ -40,9 +40,11 @@ import { planShards, toMatrix, PROFILES } from './shards.mjs';
  * misconfigured caller gets the SAFE answer, never a silent no-op.
  *
  * Order is significant, and matches the contract's own listing:
- *   1. `pull_request`                          -> selected / none — or full / none with `inputMode === 'full'`,
- *                                                 which ci.yml passes when the PR changes `.github/` (a plain-bash
- *                                                 check, so a PR cannot talk its own selector out of a full run)
+ *   1. `pull_request` or `merge_group`         -> selected / none — or full / none with `inputMode === 'full'`,
+ *                                                 which ci.yml passes when the change touches `.github/` (a
+ *                                                 plain-bash check, so a PR cannot talk its own selector out of a
+ *                                                 full run). A merge-queue run runs what a pull request runs
+ *                                                 (operator ruling 2026-09-28, landing-order wave 2).
  *   2. `push` with no `inputMode`               -> none / refresh
  *   3. `schedule`                                -> fullGreen ? none/none/skip : full/rebuild
  *   4. `inputMode === 'full'`                    -> full / none
@@ -53,7 +55,7 @@ import { planShards, toMatrix, PROFILES } from './shards.mjs';
  * @returns {ModeDecision}
  */
 export function decideMode({ event, inputMode, fullGreen }) {
-  if (event === 'pull_request') {
+  if (event === 'pull_request' || event === 'merge_group') {
     return inputMode === 'full'
       ? { tests: 'full', trace: 'none', skip: false }
       : { tests: 'selected', trace: 'none', skip: false };
@@ -77,13 +79,14 @@ export function decideMode({ event, inputMode, fullGreen }) {
 
 /**
  * What a trigger can never answer (ruling T2), checked on decideMode's answer before anything runs: a pull
- * request always runs server tests (never `none`), and a schedule, a refresh push or a rebuild never runs a
+ * request, and a merge-queue run (landing-order wave 2), always runs server tests (never `none`), and a
+ * schedule, a refresh push or a rebuild never runs a
  * per-file SELECTION (they run everything or nothing). A violation is a bug in this module; the CLI refuses it.
  * @param {string} event @param {string | undefined} inputMode @param {'selected'|'full'|'none'} tests
  * @returns {string | null}
  */
 export function modeInvariantViolation(event, inputMode, tests) {
-  if (event === 'pull_request' && tests === 'none') return 'a pull_request answered tests: none';
+  if ((event === 'pull_request' || event === 'merge_group') && tests === 'none') return `a ${event} answered tests: none`;
   if (tests === 'selected' && (event === 'schedule' || (event === 'push' && !inputMode) || inputMode === 'rebuild')) {
     return `a ${inputMode === 'rebuild' ? 'rebuild' : event} answered tests: selected`;
   }

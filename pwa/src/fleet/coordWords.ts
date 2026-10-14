@@ -2,15 +2,20 @@
 // …>` tables spec §4.2 asks for. Two cues, word and glyph, so no state is read
 // out of colour alone (RUN_WORD/RUN_GLYPH's own discipline, `runWords.ts`).
 //
-// PAUSE-ONLY, despite the `MarkerState` typing: `CoordStatus` carries TWO
-// markers (`pause` and `mail`, `shared/api.ts`), and `MarkerState` types both
-// — but only `coord.pause` is ever rendered anywhere in Build 4 (`CoordBanner`
-// is the one reader). The words below ("paused", "not paused") are written
-// for that one marker specifically, not as a marker-generic vocabulary. A
-// future surface reading `coord.mail` through these same tables would get
-// wording that reads wrong for it (`unmeasurable`'s sentence names
-// "dispatch", which is a `pause`-specific consequence) — it would need its
-// own table, not a widened reuse of this one.
+// PAUSE-ONLY, despite the `MarkerState` typing: `CoordStatus` carries THREE
+// markers (`pause`, `mail` and, since child-reclamation wave 4, `reclaim` —
+// plus `childReclaimAttention`, not a marker at all, `shared/api.ts`), and
+// `MarkerState` types all three — but only `coord.pause` is ever rendered
+// through THESE tables (`CoordBanner` is their one reader — this paragraph
+// used to say `CoordBanner` was the frame's only reader, which stopped being
+// true the moment `ChildReclaimBanner` became a SECOND reader of `coord`,
+// through its own `childReclaimWords.ts` tables). The words below ("paused",
+// "not paused") are written for the `pause` marker specifically, not as a marker-generic
+// vocabulary. A future surface reading `coord.mail` through these same
+// tables would get wording that reads wrong for it (`unmeasurable`'s
+// sentence names "dispatch", which is a `pause`-specific consequence) — it
+// would need its own table, not a widened reuse of this one, exactly as
+// `childReclaimWords.ts` argued for `reclaim`.
 //
 // `unmeasurable`'s WORD is not a euphemism or a bare label: `dispatchRun`
 // treats an unlistable registry as a pause it cannot rule out and FAILS SHUT

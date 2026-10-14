@@ -11,6 +11,7 @@
 import type { Hue } from './roster.js';
 import type { AccountPoolWire } from './poolrule.js';
 import type { BuildInfo } from './buildinfo.js';
+import type { BoxTokenView } from './box-token.js';
 
 export type SessionStatus = 'busy' | 'idle' | 'dead';
 
@@ -490,6 +491,10 @@ export interface FleetSession {
    * `none`. No `FLEET_PROTO` bump.
    */
   readonly child: ChildMark;
+
+  /** Where this workspace was RELEASED from, or `null` — `ReleasedFrom`, at the end of this file, carries the
+   *  contract; `releasedFromOf` there is the field's one reader. */
+  readonly releasedFrom: ReleasedFrom | null;
 }
 
 /**
@@ -1389,17 +1394,17 @@ export type BucketInput = Pick<
  * …and that sentence is also the archived rungs' PRECONDITION, not merely
  * their justification (D-74). They are entered on `archivedAt !== null` AND
  * `status === 'dead'`, because a live pane is proof the marker has outlived
- * what it describes: `cmd_ws_archive` kills the session before it stamps
- * (`ccd:5164`), but `ccd start`/`ccd ensure` clear `.stopped` and
- * `.swapblocked` on a deliberate revival and leave `$REG/<id>.archived`
- * standing — only `ws-restore` removes it (`ccd:5704`). So a workspace
- * archived on merge and later revived for more work carried a marker that
- * outranked every live rung below, for ever. MEASURED on the live fleet
- * 2026-08-17: 5 of the 7 archive markers on the box sat on sessions with a
- * live tmux pane, 4 of them mid-turn — a quarter of the fleet reading
- * `merged` while working, ranked below idle and counted out of its project's
- * busy total, and a revived workspace's QUESTION unreachable through the
- * attention section it belongs in.
+ * what it describes: `cmd_ws_archive` kills the session before it stamps,
+ * but `ccd start`/`ccd ensure` once cleared `.stopped` and `.swapblocked` on
+ * a deliberate revival and left `$REG/<id>.archived` standing; `cmd_ws_restore`
+ * clears it through `_ws_unarchive`, and since #143 so does `_spawn_start`.
+ * So a workspace archived on merge and later revived carried a marker that
+ * outranked every live rung below, for ever. MEASURED 2026-08-17, BEFORE #143:
+ * 5 of the 7 archive markers sat on sessions with a live tmux pane, 4 mid-turn.
+ * SINCE #143 (f06abdce3, 2026-09-17) `_spawn_start` calls `_ws_unarchive` on
+ * every pane ccd creates, so a live pane still carrying the marker is now a
+ * pre-#143 pane that never respawned, or one made outside ccd: rarer, but
+ * the same proof the marker outlived its pane, so this conjunct stays.
  *
  * The conjunct costs the cleanup bucket nothing: an ordinary archive is dead,
  * which is what every archived case in `bucket.test.ts` already fixtures. And
@@ -1535,10 +1540,10 @@ export function sessionBucket(
 export type TurnStallInput = Pick<FleetSession, 'status' | 'statusUpdatedAt'>;
 
 /**
- * D-2016 — the wedge's other half, WITH NO NEW WIRE FIELD. `statusUpdatedAt`
- * already ticks only on a busy↔idle transition (`ccd/ccd:12386-12388`), so
- * `now - statusUpdatedAt` on a `busy` row IS the current turn's age; this is
- * that subtraction plus a threshold, nothing more.
+ * D-2016 — the wedge's other half, WITH NO NEW WIRE FIELD. The live file is
+ * rewritten only when its word changes, so `now - statusUpdatedAt` on a `busy`
+ * row is how long that word has stood: a turn's age, OR how long an idle main
+ * loop has waited on background agents (or held a collapsed `shell`/`waiting`).
  *
  * Deliberately NOT a new `sessionBucket` rung, and not even a call this
  * function makes itself: "attention" means a human answer unblocks the
@@ -3039,6 +3044,7 @@ export function reviveFleetSession(raw: unknown, unnamedSpawnWord: UnnamedSpawnW
       boardProject: optStr(o, 'boardProject'),
       route: reviveRoute(o, 'route'),
       child: reviveChildMark(o, 'child'),
+      releasedFrom: reviveReleasedFrom(o, 'releasedFrom'),
     };
 
     // A recorded bucket is taken as recorded, timestamp and all — the server
@@ -3763,11 +3769,160 @@ export function isMarkerState(v: unknown): v is MarkerState {
   return typeof v === 'string' && (MARKER_STATES as readonly string[]).includes(v);
 }
 
-/** The two markers the coordination lane is governed by: `coordinator-paused`
- *  (spec §4.2 — the one file that stops a program mid-flight) and
- *  `mail-disabled` (the injection kill-switch `sweepMail` already gates on).
- *  Read together because they come from one listing. */
-export interface CoordStatus { pause: MarkerState; mail: MarkerState }
+/** The sweep's words for a marked child it keeps for a person (child-reclamation
+ *  spec §5.9): standing answers, read from records rather than a failed read, that
+ *  automatic reclamation never acts on while they stand. Spelled ONCE, as the keys
+ *  of a total table, and the runtime list is derived. The SERVER's sweep answers
+ *  them and composes their sentences (`server/src/childReclaimSweep.ts`, which
+ *  says what ends each). The PWA renders sentences and never switches on a word. */
+export type ChildReclaimKeptWord =
+  | 'coordinating' | 'minting-run-absent' | 'minting-run-postdates-child'
+  | 'reviewed-run-absent' | 'not-a-workspace';
+const CHILD_RECLAIM_KEPT_WORD_TABLE: Readonly<Record<ChildReclaimKeptWord, true>> = {
+  coordinating: true, 'minting-run-absent': true, 'minting-run-postdates-child': true,
+  'reviewed-run-absent': true, 'not-a-workspace': true,
+};
+export const CHILD_RECLAIM_KEPT_WORDS: readonly ChildReclaimKeptWord[] =
+  Object.keys(CHILD_RECLAIM_KEPT_WORD_TABLE) as ChildReclaimKeptWord[];
+/** Use THIS, never `.includes(x as ChildReclaimKeptWord)`: `isRunState`'s rule. */
+export function isChildReclaimKeptWord(v: unknown): v is ChildReclaimKeptWord {
+  return typeof v === 'string' && (CHILD_RECLAIM_KEPT_WORDS as readonly string[]).includes(v);
+}
+/** One child inside a collapsed kept line (`kind: 'kept-many'`). */
+export interface ChildReclaimKeptMember { readonly sessionId: string; readonly runId: number }
+
+/** One entry of the fleet-level attention list (child-reclamation spec §5.9):
+ *  a child that automatic reclamation has left standing, or one whose reclaim
+ *  keeps failing. A REPORT, never a tap: nothing waits on it, and ignoring it
+ *  costs disk rather than correctness. The four arms below and the five this file's foot declares (stuck, kept
+ *  leaves, the collector's) are told apart by `kind`, save the three that share `kept-many`, which only `word` tells apart:
+ *
+ *  - `terminal`: a TERMINAL reclaim refusal left the child standing.
+ *  - `failing`: the child's reclaim has kept FAILING past the defer ceiling,
+ *    and is still retried, backing off in between. The run of failures is made
+ *    of `failed` lines, plus `refused` lines whose token is a pre-lock token
+ *    (`CHILD_RECLAIM_PRE_LOCK_TOKEN`, `server/src/childReclaimSweep.ts`): those are
+ *    pre-lock dies that the server retries.
+ *  - `kept`: one marked child the sweep keeps on purpose, named by a
+ *    `ChildReclaimKeptWord`.
+ *  - `kept-many`: one collapsed line for many children kept for the same word
+ *    (a lost coordination database keeps every child at once).
+ *
+ *  `terminal` and `failing` are DERIVED from the lifecycle mirror by EVERY sweep pass (the latest `reclaim` event
+ *  of any outcome in the id's current workspace generation is that refusal, or the last of that run of failures,
+ *  and the registry row still exists), so a restart does not lose them. `kept` and a kept word's `kept-many` come
+ *  from the sweep's last JUDGING pass over durable state: the registry listing, coord.db and the mirror. They are
+ *  kept as they are, never erased, across a pass that judged nothing. The leaf arms (`leaf-kept`, and the `kept-many`
+ *  whose `word` is `'leaf-kept'`) are re-derived from the mirror on every pass that clears the fail-shut try AND
+ *  whose own kept-leaf read succeeds, a paused pass included; when that read fails, the last leaf items stand.
+ *
+ *  A child has at most one item. A `kept` item replaces a `failing` item for
+ *  the same child. A child whose last judged verdict is `held` has no `failing`
+ *  item; with no verdict recorded (a restart, or a pass that judged nothing)
+ *  the failing arm lists it as before. A `terminal` item stands, and that
+ *  child gets no kept item.
+ *
+ *  `sentence` is the SERVER's — a refusal's through `wsaudit.ts`'s one lookup,
+ *  a failure's from the journal's own word for it, a kept word's from the
+ *  sweep — and the PWA renders it and maps no token or word itself: several of
+ *  `ws-reclaim`'s tokens share names with the audit's, and the two
+ *  vocabularies are held disjoint server-side. On the three journal arms (`terminal`, `failing`, `stuck`) `token`
+ *  is the refusal's or the failure's (empty when ccd journaled a failure with none) and rides beside it for a
+ *  maintainer's grep, never for a renderer's
+ *  switch. `runId` is the run the item's own evidence names, else null: the registry marker's minting run on
+ *  `terminal`, `failing`, `stuck` and `kept` (never null on `kept`), the journal line's `meas.childOf` on
+ *  `leaf-kept`, and the collect audit's `collect.witness.run` on `collect`; a box-wide `collect` line has none.
+ *
+ *  `at` (epoch ms) is ccd's clock alone, and only `terminal`, `failing`, `stuck` and `leaf-kept` carry it: a refusal's
+ *  journal line, the first failure of the run that ccd placed, a stuck line's own, or a kept leaf's line, which is
+ *  always ccd's dated `at` (the leaf read selects dated lines only). On `terminal` and `failing`, a child whose
+ *  latest line carried no `at` cannot be placed and is not listed; `stuck` lists that child at `at: null`. The
+ *  mirror's `ingestedAt` is the server's clock and is never read as an event time (D8, `server/src/coord/schema.ts`).
+ *  A `kept` or `kept-many` item carries no time: a kept word's condition is durable and nothing this read holds
+ *  dates it.
+ *
+ *  `kind` is ADDITIVE: an older server's items carry none, and the PWA's one
+ *  reader reads such an item as it always did. A `kept-many` item has no
+ *  `sessionId`, so an older PWA bundle's reader drops it under its own
+ *  malformed-member rule. That is the accepted cost. */
+export type ChildReclaimAttention =
+  | { readonly kind: 'terminal'; readonly sessionId: string; readonly runId: number | null;
+      readonly token: string; readonly sentence: string; readonly at: number }
+  | { readonly kind: 'failing'; readonly sessionId: string; readonly runId: number | null;
+      readonly token: string; readonly sentence: string; readonly at: number }
+  | { readonly kind: 'kept'; readonly sessionId: string; readonly runId: number;
+      readonly word: ChildReclaimKeptWord; readonly sentence: string }
+  | { readonly kind: 'kept-many'; readonly word: ChildReclaimKeptWord;
+      readonly members: readonly ChildReclaimKeptMember[]; readonly sentence: string } | ChildReclaimStuckAttention | ChildReclaimLeafKeptAttention | ChildReclaimLeafKeptMany | ChildReclaimCollectAttention | ChildReclaimCollectMany;
+
+/** One ARCHIVED WORKSPACE the expiry lane reports (workspace lifecycle spec 2026-09-24 §5.3, wave 3b): one the lane
+ *  WOULD clean up while it runs shadowed (`would-expire`), one held past its seven days (`held`), one a process keeps
+ *  (`in-use`, after it has stood a few passes), one ccd refused for good (`refused`), one whose cleanup keeps failing
+ *  (`failing`), and one whose fleet box cannot say when it expires (`no-evidence`). A REPORT, never a tap. NEVER
+ *  child reclamation's: its own list, so wave 5's run chip cannot see it. `sentence` is the SERVER's — the pid, the
+ *  command and the path of an `in-use` row among them — and the PWA renders it. `archivedAt` and `expiresAt` are
+ *  epoch SECONDS, ccd's (`expiresAt` is ccd's own `archivedAt + WS_EXPIRE_AFTER_S`, null when the box did not say);
+ *  `at` (epoch ms, the server's clock) is since when this report stands — kept in the lane's memory, so a restart
+ *  rebuilds it on the passes that follow rather than reading it back. */
+export interface ExpiryAttention {
+  readonly sessionId: string;
+  readonly kind: 'would-expire' | 'held' | 'in-use' | 'refused' | 'failing' | 'no-evidence' | 'kept';
+  readonly sentence: string;
+  readonly archivedAt: number;
+  readonly expiresAt: number | null;
+  readonly at: number;
+}
+
+/** One report of the DEAD-COORDINATOR lane (workspace lifecycle spec 2026-09-24 §5.4, wave 4): a claimant it WOULD end
+ *  the programme of while it runs shadowed (`would-end`), one it cannot tell crashed from put down on purpose
+ *  (`unmeasured`), one whose runs the abandon arm could not move (`stuck`), and the circuit breaker (`breaker`, naming
+ *  every claimant it holds). A REPORT, never a tap: the doors that act are the ones that already exist — revive,
+ *  reclaim, abandon. NEVER the child or expiry lane's list. `sentence` is the SERVER's; `at` (epoch ms, the server's
+ *  clock) is since when it stands, kept in the lane's memory and rebuilt on the passes after a restart. */
+export interface DeadCoordinatorAttention {
+  readonly kind: 'would-end' | 'unmeasured' | 'stuck' | 'breaker';
+  readonly claimants: readonly string[];
+  readonly sentence: string;
+  readonly at: number;
+}
+
+/** The three markers the coordination lane is governed by, read together
+ *  because they come from one listing: `coordinator-paused` (spec §4.2 — the
+ *  one file that stops a program mid-flight), `mail-disabled` (the injection
+ *  kill-switch `sweepMail` already gates on) and `reclaim-paused`
+ *  (child-reclamation §5.8 — the one file that stops automatic reclamation).
+ *  Plus the reclaim attention list, which rides this frame because it is
+ *  shown in the same banner row as the reclaim switch.
+ *
+ *  ADDITIVE on the wire (no `FLEET_PROTO` bump): a frame from a server that
+ *  predates `reclaim`/`childReclaimAttention` omits both, a server older than
+ *  wave 6 omits `childReclaimDoneAt`, and the PWA's ONE reader per field
+ *  (`pwa/src/fleet/childReclaimWords.ts`) renders exactly what it rendered
+ *  before. */
+export interface CoordStatus {
+  pause: MarkerState;
+  mail: MarkerState;
+  reclaim: MarkerState;
+  childReclaimAttention: readonly ChildReclaimAttention[];
+  /** Child-reclamation wave 6 (spec §5.9): the `at` (ccd's clock, epoch ms)
+   *  of the newest `reclaim`/`done` journal row the server's mirror has
+   *  COMMITTED. It is a trigger and nothing renders it: the board re-reads its
+   *  archive once each time this value CHANGES while a finished row's reclaim
+   *  chip is unsettled, because the vanish re-read races the journal.
+   *
+   *  OPTIONAL, ADDITIVE, absence permits. It is OMITTED, never null, while
+   *  the server has committed none, which is always the case right after a
+   *  restart because the value lives in memory and only ever rises. A server
+   *  older than this field omits it too. The PWA's ONE reader is
+   *  `childReclaimDoneAtOf` (`pwa/src/fleet/childReclaimWords.ts`). */
+  childReclaimDoneAt?: number;
+  /** The expiry lane's own list (wave 3b). OPTIONAL on the wire: an older server omits it, and the PWA's one reader
+   *  (`pwa/src/fleet/expiryWords.ts`) reads absence as no items. */
+  expiryAttention?: readonly ExpiryAttention[];
+  /** The dead-coordinator lane's own list (wave 4). OPTIONAL on the wire: an older server omits it, and the PWA's one
+   *  reader (`pwa/src/fleet/deadCoordinatorWords.ts`) reads absence as no items. */
+  deadCoordinatorAttention?: readonly DeadCoordinatorAttention[];
+}
 
 /** A `/`-command the composer can autocomplete. `insert` is what gets typed
  *  (with a trailing space so arguments follow naturally). */
@@ -4014,14 +4169,14 @@ export interface NotifyEvent {
    *  switches on three members, so a fourth arrived typed as one of the three
    *  it is not.
    *
-   *  `coord` is a change to the COORDINATION CONFIG itself — a cap raised or
-   *  lowered — and it is a seventh member rather than a reuse of `run` because
-   *  there is no run: `recordRunEvent` writes `fromState === toState` and
-   *  `pushNewRuns` skips exactly those rows, so an attribution row would land
-   *  in `run_events` and be seen by nobody (D-1163). Additive: an older client
-   *  degrades it to `unknown` through `reviveNotifyEvent`, which is the
-   *  degradation this union was given `unknown` for. */
-  kind: 'ask' | 'done' | 'merged' | 'mail' | 'run' | 'coord' | 'unknown';
+   *  `coord` is a change to the COORDINATION CONFIG itself — a cap raised or lowered — and it
+   *  is a seventh member rather than a reuse of `run` because there is no run: `recordRunEvent`
+   *  writes `fromState === toState` and `pushNewRuns` skips exactly those rows, so an
+   *  attribution row would land in `run_events` and be seen by nobody (D-1163). Additive: an
+   *  older client degrades it to `unknown` through `reviveNotifyEvent`, which is the
+   *  degradation this union was given `unknown` for. `update` is a move the update dispatcher
+   *  leased (wave 8 item A) — about no session and no run, recorded, never pushed; `queue` is the landing lane's dequeue notice. */
+  kind: 'ask' | 'done' | 'merged' | 'mail' | 'run' | 'coord' | 'update' | 'queue' | 'unknown';
   sessionId: string; title: string; body: string;
   /**
    * WHICH RUN this notification is about, or `null` when it is about none.
@@ -4060,7 +4215,7 @@ export interface CatchUp { epoch: string; seq: number; resync: boolean; events: 
 /** The recognised `NotifyEvent.kind` tokens. Kept private; the door in is
  *  `isNotifyKind` below, the same split `PR_PHASES`/`isPrPhase` use and for
  *  the identical reason (that function's own docstring has the argument). */
-const NOTIFY_KINDS: readonly NotifyEvent['kind'][] = ['ask', 'done', 'merged', 'mail', 'run', 'coord', 'unknown'];
+const NOTIFY_KINDS: readonly NotifyEvent['kind'][] = ['ask', 'done', 'merged', 'mail', 'run', 'coord', 'update', 'queue', 'unknown'];
 
 /**
  * Use THIS, never `NOTIFY_KINDS.includes(x as NotifyEvent['kind'])` — the
@@ -5496,7 +5651,7 @@ export type MailGate =
   | 'registry-absent' | 'registry-unmeasurable'
   | 'tmux-gone' | 'session-dead' | 'tmux-unknown'
   | 'pending-ask' | 'no-pane' | 'no-config-dir'
-  | 'not-idle' | 'not-quiet';
+  | 'not-idle' | 'not-quiet' | 'turn-mark-unreadable';
 
 /** Total, so a refusal path added to `sweepMail` without a member here is a
  *  TS2739 rather than a silent hole — the `RUN_REFUSE_CODE_MAP` shape, and the
@@ -5506,7 +5661,7 @@ const MAIL_GATE_MAP: Record<MailGate, true> = {
   'registry-absent': true, 'registry-unmeasurable': true,
   'tmux-gone': true, 'session-dead': true, 'tmux-unknown': true,
   'pending-ask': true, 'no-pane': true, 'no-config-dir': true,
-  'not-idle': true, 'not-quiet': true,
+  'not-idle': true, 'not-quiet': true, 'turn-mark-unreadable': true,
 };
 export const MAIL_GATES: readonly MailGate[] = Object.keys(MAIL_GATE_MAP) as MailGate[];
 
@@ -5641,10 +5796,12 @@ export interface RunHealth {
   /** Deliveries PARKED — `rejected` — for a reason that is NOT a deliberate
    *  cancel: every reason named by `store.ts`'s `DELIBERATE_CANCEL_ERRORS_SQL`
    *  is excluded (PR #75 review round 1, store-7) — a `run closed` park (the
-   *  run ended), a `coordinator reclaimed` park (a chair changed hands) and a
+   *  run ended), a `coordinator reclaimed` park (a chair changed hands), a
    *  `recipient rebound` park (a worker was re-bound to a new session,
-   *  cross-repo §4) are all the machinery working as designed, and reporting
-   *  any of them would announce a change that has already been handled. */
+   *  cross-repo §4) and a `child workspace reclaimed` park (the server
+   *  reclaimed a finished child, spec 2026-09-22 §5.6) are all the machinery
+   *  working as designed, and reporting any of them would announce a change
+   *  that has already been handled. */
   readonly mailParked: number;
   /** MAX(`replayCount`) across this run's deliveries. Mail 120 reached 722
    *  delivery attempts and mail 129 reached 911, each arriving after the work it
@@ -5681,6 +5838,52 @@ export interface RunHealth {
    *  new one) — three conditions a caller renders identically, and deliberately:
    *  none of them is "somebody is stuck". */
   readonly coordKickoffPendingSince: number | null;
+}
+
+/* ── child-workspace reclamation: the closed run's chip (wave 5, spec §5.9) ── */
+
+/**
+ * What became of a CHILD workspace once its run closed, in the five words spec
+ * §5.9 names. THE SERVER CHOOSES THE WORD AND COMPOSES THE SENTENCE
+ * (`childReclaimStatus`, `server/src/coord/childReclaim.ts`). The PWA renders
+ * both and maps no ws-reclaim refusal token itself. Several of that verb's
+ * tokens share names with the audit's, whose sentences are server-only, and the
+ * PWA-reachable journal words (`LC_REFUSAL_WORD`) are held DISJOINT from them by
+ * a red suite. So the phone can say the server's sentence only by being
+ * handed it.
+ *
+ * Spelled ONCE, as the keys of a total table. `CHILD_RECLAIM_WORDS` is derived
+ * (`single-definition`'s doctrine), so adding a word here is a compile error at
+ * every total `Record<ChildReclaimWord, …>` the PWA keeps.
+ */
+export type ChildReclaimWord = 'reclaimed' | 'pending' | 'deferred' | 'paused' | 'refused';
+const CHILD_RECLAIM_WORD_TABLE: Readonly<Record<ChildReclaimWord, true>> = {
+  reclaimed: true, pending: true, deferred: true, paused: true, refused: true,
+};
+export const CHILD_RECLAIM_WORDS: readonly ChildReclaimWord[] =
+  Object.keys(CHILD_RECLAIM_WORD_TABLE) as ChildReclaimWord[];
+/** Use THIS, never `CHILD_RECLAIM_WORDS.includes(x as ChildReclaimWord)` — `isRunState`'s rule. */
+export function isChildReclaimWord(v: unknown): v is ChildReclaimWord {
+  return typeof v === 'string' && (CHILD_RECLAIM_WORDS as readonly string[]).includes(v);
+}
+
+/**
+ * One closed run's chip. `sentence` is the server's, verbatim. It is null only
+ * where the server had none to give. `at` is epoch ms, and its source depends
+ * on the word:
+ *   • a word read off the lifecycle mirror takes the journal event's own `at`
+ *     (ccd's clock), and is null when the line carried none. A failure run
+ *     past the ceiling takes the `at` of the run's first placed line instead;
+ *   • a defer the sweep is holding takes the sweep's FIRST deferral of any kind
+ *     (the server's clock), never the presence-only clock of the defer ceiling;
+ *   • every other word has `at: null`.
+ * It is NEVER `ingestedAt`, which is the mirror's own clock and never an event
+ * time (D8).
+ */
+export interface ChildReclaimStatus {
+  readonly word: ChildReclaimWord;
+  readonly sentence: string | null;
+  readonly at: number | null;
 }
 
 export interface RunSummary {
@@ -5815,6 +6018,28 @@ export interface RunSummary {
    * tolerance guarantee. No JSX reads a member directly.
    */
   health: RunHealth;
+
+  /**
+   * Child-reclamation wave 5 (spec §5.9): what became of this run's CHILD
+   * workspace. `null` means there is nothing to say: the run is still open, its
+   * workspace is not a child, or nothing about it is known yet.
+   *
+   * COMPOSED BY `GET /api/runs` AND NOWHERE ELSE. The store answers `null` for
+   * every row (`hydrateRun`), because the answer needs the registry's child
+   * marker and the sweep's in-memory defer, and the store sees neither. Every
+   * OTHER emitter of a `RunSummary` carries only runs for which the derivation's
+   * own answer is `null` too (`childReclaimStatus`'s first rule: a non-terminal
+   * run says nothing). Those emitters are the live `{type:'runs'}` frame and its
+   * cold-start copy, both active-only by construction, and the advance route's
+   * echo, which never reaches a terminal state (`ADVANCE_TARGETS`). So that
+   * `null` is the same answer, not a second meaning.
+   *
+   * ADDITIVE; `FLEET_PROTO` is not bumped. REQUIRED here for `health`'s reason
+   * (`hydrateRun` returns a literal). OPTIONAL at the PWA's one reader,
+   * `childReclaimChip` (`pwa/src/fleet/runWords.ts`), because an older server
+   * omits it and a `RunSummary` is cast, never revived.
+   */
+  childReclaim: ChildReclaimStatus | null;
 }
 
 /** Speed and quality per run (routing spec 2026-09-14 §6), READ-ONLY, from the
@@ -6348,10 +6573,11 @@ export interface MailSummary {
    * store-7). `backOff` and `rejectDelivery` accept arbitrary strings, and the
    * lane currently passes typed `sendPrompt` errors, registry/lifecycle/tmux
    * diagnoses, and a whole English sentence (`MAIL_REPLAY_CEILING_ERROR`).
-   * Three direct SQL writers add the deliberate-cancel sentences `'run
-   * closed'`, `'coordinator reclaimed'`, and `'recipient rebound'`. Those are
-   * examples of the column's contents, not a closed census or vocabulary: it
-   * is a maintainer's grep target and has never been validated on the way in.
+   * Four direct SQL writers add the deliberate-cancel sentences `'run
+   * closed'`, `'coordinator reclaimed'`, `'recipient rebound'` and `'child
+   * workspace reclaimed'`. Those are examples of the column's contents, not
+   * a closed census or vocabulary: it is a maintainer's grep target and has
+   * never been validated on the way in.
    *
    * SO THE RULE FOR EVERY CLIENT, and it is not negotiable: branch on the ONE
    * literal token you have a surface for (`=== 'draft-present'`), never key a
@@ -6454,6 +6680,57 @@ export interface CoordCapsView {
 export interface StagedClip { path: string; name: string; bytes: number }
 
 /**
+ * Every filename extension the clip store admits — ONE definition, because the
+ * list is read in five places that must not drift: the upload gate, the
+ * stored-name rule, the path regex, the picker's `accept`, and the renderer's
+ * thumbnail-or-chip decision.
+ *
+ * The split is not cosmetic. An IMAGE is staged for what it LOOKS like, so the
+ * composer may re-encode it (downscale, JPEG) on the way. A DOCUMENT is staged
+ * for what READS it: the path is typed into the session and Claude Code opens
+ * the file itself, so the bytes must arrive untouched — a canvas pass over a
+ * PDF produces a picture of nothing.
+ *
+ * That same reading is why the document half stops where it does. What is here
+ * is what `Read` can open off a path: plain text in its various dresses, plus
+ * PDF, which it reads natively. `.docx`/`.xlsx`/`.pptx` are deliberately ABSENT
+ * — they are ZIP containers, so admitting one would stage a file that reaches
+ * Claude as binary noise, and converting them is a fleet-box dependency this
+ * tree does not have. Widening this list is safe only for a format `Read`
+ * already understands.
+ */
+export const CLIP_IMAGE_EXTS = ['png', 'jpg', 'jpeg', 'webp'] as const;
+export const CLIP_DOC_EXTS =
+  ['md', 'txt', 'log', 'csv', 'tsv', 'json', 'yaml', 'yml', 'rtf', 'pdf'] as const;
+export const CLIP_EXTS: readonly string[] = [...CLIP_IMAGE_EXTS, ...CLIP_DOC_EXTS];
+
+/** The `png|jpg|…` alternation, for the two regexes that gate clip names and
+ *  paths. Derived, so a new extension never needs a regex edited by hand. */
+export const CLIP_EXT_ALT = CLIP_EXTS.join('|');
+
+/** The lowercase extension of a filename or path; '' when it has none. */
+function extOf(nameOrPath: string): string {
+  const base = nameOrPath.slice(nameOrPath.lastIndexOf('/') + 1);
+  const dot = base.lastIndexOf('.');
+  return dot < 0 ? '' : base.slice(dot + 1).toLowerCase();
+}
+
+/** True when a filename carries an extension the clip store admits. */
+export function hasClipExt(nameOrPath: string): boolean {
+  return CLIP_EXTS.includes(extOf(nameOrPath));
+}
+
+/**
+ * True for a clip a renderer should draw as a picture rather than as a document
+ * chip. Decided on the EXTENSION, never on a MIME type: the stored name is all
+ * a bubble has — it is rebuilt from the prompt text, which carries no types —
+ * and the extension in it is the real one `clipName` wrote.
+ */
+export function isImageClip(nameOrPath: string): boolean {
+  return (CLIP_IMAGE_EXTS as readonly string[]).includes(extOf(nameOrPath));
+}
+
+/**
  * A clip path anywhere in a string: `…/.cc-clips/<session>/clip-<stem>.<ext>`.
  * Matched by SHAPE, never by touching the filesystem, so it works client-side.
  * Exported WITHOUT the `g` flag to avoid stateful `lastIndex` — a g-flagged
@@ -6461,7 +6738,7 @@ export interface StagedClip { path: string; name: string; bytes: number }
  * Internal consumers build their own `new RegExp(CLIP_PATH_RE.source, 'g')`.
  */
 export const CLIP_PATH_RE =
-  /\/[^\s]*\/\.cc-clips\/[^/\s]+\/clip-[A-Za-z0-9._-]+\.(?:png|jpe?g|webp)/;
+  new RegExp(`\\/[^\\s]*\\/\\.cc-clips\\/[^/\\s]+\\/clip-[A-Za-z0-9._-]+\\.(?:${CLIP_EXT_ALT})`);
 
 /**
  * Attachment paths first, each on its own line, then the user's text. Paths
@@ -6904,6 +7181,20 @@ export type LifecycleAct =
   | 'archive' | 'restore'
   | 'attic-drop'    // ws-attic --drop deleted pinned refs
   | 'reap'          // ws-reap
+  | 'reclaim'       // ws-reclaim (spec 2026-09-22 §5.9): a CHILD's pin-then-teardown,
+                    // server-composed. DISTINCT FROM `reap`: a reap is a human's
+                    // confirmed removal of an archived workspace; a reclaim is the
+                    // automated end of a workspace dispatch minted for one run. One
+                    // act per verb, so the journal never has to be read with a verb
+                    // filter to tell the two apart.
+  | 'expire'        // ws-expire (spec 2026-09-24 §5.3): an ARCHIVED workspace's pin-then-
+                    // teardown, server-composed seven days after its archive. Its own act,
+                    // never `reclaim`'s: the population, the token and the deciding rung
+                    // differ, and stage 4's crash clause reads a deliberate removal by act.
+  | 'collect'       // ws-collect (spec 2026-09-22 §5.10): a witnessed child TEMP ROOT whose
+                    // workspace is already gone, moved aside and removed. Its own act, never
+                    // `reclaim`'s: it removes no workspace and puts down no session (no row
+                    // stands for the id when it acts), so no removal set counts it.
   | 'rehome'        // A session's HOME account moving. TWO EMITTERS, both
                     // landed (account pools, wave 2b): the 5-second tick's
                     // own re-seed (`_auto_swap_check`, §5.5.4 — grep
@@ -6935,10 +7226,10 @@ export type LifecycleAct =
                     // <to>" (no new dec key — the dec vocabulary is pinned at
                     // four). Additive on the wire, as every act is.
   | 'start' | 'ensure' | 'swap' | 'enable' | 'stop' | 'forget'
-  | 'unarchive'     // `_spawn_start` cleared an archive stamp because a pane was
-                    // being created. DISTINCT FROM `restore`: that is an
-                    // operator asking for the workspace back; this is a spawn
-                    // repairing an invariant nobody declared (CCR-10).
+  | 'unarchive'     // a return verb's gate (wave 3b) or `_spawn_start` cleared
+                    // an archive stamp because a pane was asked for. DISTINCT
+                    // FROM `restore`: that is the deliberate way back; this is
+                    // a start/ensure/swap/enable on an archived row (CCR-10).
   | 'unknown';      // the reader's degrade. NEVER written by a ccd call site.
 
 /** Derived from the type, never restated beside it — `PR_REASON_MAP`'s idiom
@@ -6949,7 +7240,7 @@ export type LifecycleAct =
 const LIFECYCLE_ACT_MAP: Record<LifecycleAct, true> = {
   create: true, claim: true, purge: true, supervise: true, unsupervise: true,
   destroy: true, rename: true, hold: true, release: true, archive: true, restore: true,
-  'attic-drop': true, reap: true, rehome: true, gc: true, spawn: true, route: true, start: true, ensure: true,
+  'attic-drop': true, reap: true, reclaim: true, expire: true, collect: true, rehome: true, gc: true, spawn: true, route: true, start: true, ensure: true,
   swap: true, enable: true, stop: true, forget: true, unarchive: true,
   unknown: true,
 };
@@ -7387,10 +7678,10 @@ export interface LifecycleMeas {
   /** How many bytes `ws-reap` measured before destroying the worktree, or
    *  `null` when `_ws_gc_bytes` did not return a plain integer. */
   readonly bytes: number | null;
-  /** The reap PHASE (`children` | `worktree` | `branch` | `clips`) a resumed
-   *  `ws-reap` was interrupted at, read back from the registry's own
-   *  `.reaping` marker — not a boolean; an interrupted reap resumes from
-   *  wherever it stopped. */
+  /** The PHASE a resumed act was interrupted at, read back from the registry's
+   *  own `.reaping` marker — not a boolean, and ONE meaning for both verbs:
+   *  ws-reap's `children|worktree|branch|clips`, or ws-reclaim's
+   *  `children|worktree|branch|artifacts` (its `reclaim:` prefix stripped). */
   readonly resumed: string | null;
   /** The tombstone record's own path, as `_ws_tombstone` returned it. */
   readonly tombstone: string | null;
@@ -7418,6 +7709,33 @@ export interface LifecycleMeas {
    *  removed and there is nothing to name — the two must not be told apart by
    *  reading a sentence. It is prose for a person and never a parsed list. */
   readonly unremoved: string | null;
+  /** The run a `reclaim` act's CHILD was minted for — `ws-reclaim --child-of`,
+   *  equal to the box's `.child` marker or the act never started (child
+   *  reclamation, spec 2026-09-22 §5.5). The decimal string ccd wrote: every
+   *  `meas.` value crosses the encoder as a string, so a reader parses it
+   *  rather than trusting a `number` this seam never carried. */
+  readonly childOf: string | null;
+  /** The WIP commit a `reclaim` made of the child's uncommitted work, or null
+   *  when the tree was clean and no commit was made (ccd passes an empty value,
+   *  which the encoder omits). */
+  readonly wip: string | null;
+  /** The bytes `ws-reclaim`'s residue probe measured OUTSIDE the child's temp
+   *  root and left in place — the decimal string ccd wrote, or the literal
+   *  string `null` when the probe could not measure it (`ws-reap`'s
+   *  `meas.bytes` precedent) — never a fabricated 0. A `null` VALUE here means
+   *  the key was absent: an act that is not a reclaim. */
+  readonly residueBytes: string | null;
+  /** The per-session temp root (`$HOME/.cc-tmp/<id>`) a `reclaim` or `expire`
+   *  tail did not prove gone (child reclamation wave 6, spec §5.6): `in-use`
+   *  (a process of this uid still used it after the tail's bounded wait),
+   *  `unmeasured` (whether one did could not be measured, or a removal failed
+   *  part-way or was undone: kept means NOT PROVEN GONE, not untouched) or
+   *  `refused` (the helper refused it). The act COMPLETED, so this rides the
+   *  `done` row and a purge failure's; `detail` says why. Null: it went, or another act. */
+  readonly tmpRootKept: string | null;
+  /** The same for the session's clips directory (`$HOME/.cc-clips/<id>`):
+   *  `refused` or `unmeasured` only — nothing waits on a clips directory's users. */
+  readonly clipsKept: string | null;
 }
 
 /** Derived from the interface, never restated beside it — `LIFECYCLE_ACT_MAP`'s
@@ -7439,7 +7757,7 @@ const LIFECYCLE_MEAS_KEY_MAP: Record<keyof LifecycleMeas, true> = {
   workdir: true, base: true, old: true, rc: true, mode: true, inUnit: true,
   from: true, dropped: true, registered: true, state: true, bytes: true,
   resumed: true, tombstone: true, home: true, pool: true, reason: true,
-  unremoved: true,
+  unremoved: true, childOf: true, wip: true, residueBytes: true, tmpRootKept: true, clipsKept: true,
 };
 /** The one list `server/test/ccd-lifecycle-contain.test.ts` checks ccd's
  *  emitted keys against — imported, not re-typed, so the two sides cannot
@@ -7610,7 +7928,19 @@ export type LcRefusalToken =
   | 'spawn-failed'             // _lc_fail: the undo landed, the session did not come back
   | 'purge-refused'            // D-2605: the row's compaction mutex was unavailable, so the registry row stands
   | 'purge-incomplete'         // D-2605: the purge RAN — the row is gone, the fact is journaled — and something beside it would not unlink
-  | 'purge-mechanism-absent';  // D-2605 r3: the box cannot take the lock AT ALL (flock/mktemp/link off PATH) while a generation is live
+  | 'purge-mechanism-absent'  // D-2605 r3: the box cannot take the lock AT ALL (flock/mktemp/link off PATH) while a generation is live
+  | 'pin-failed'              // ws-reclaim (spec 2026-09-22 §5.5): ccrc could not keep the child's work — the pin phase, or one of the tail's per-deletion keeps — so the verb stopped before deleting anything further
+  | 'unit-still-active'       // ws-reclaim (spec 2026-09-22 §5.6): the child's unit or its tmux pane could not be proven stopped after unsupervise and the kill, so the tail stopped before deleting anything further
+  | 'branch-unmeasured'       // ws-reclaim or ws-expire (spec §5.5, §5.6): the tail's step 5 could not read whether the child's branch still exists, or a recorded tip (step 5) or a nested checkout's recorded head (step 3, phase `children`, where the child's tree may still stand) is the all-zero id (git reads that as an unconditional delete), so it stopped before the branch's compare-and-swap and removed nothing further — journaled `failed`, never `refused`
+  | 'probe-unmeasured'        // ws-reclaim and `ws-audit --reclaim` (spec §5.9): a probe the ladder needs could not run or be read, before any act — journaled `failed`, its `verb` telling the two arms apart
+  | 'token-malformed'         // ws-reclaim (spec §5.9): `--expect` is not 64 lowercase hex — journaled `refused` before the lock, once the session id is valid
+  | 'run-id-malformed'        // ws-reclaim (spec §5.9): `--child-of` fails ccd's run-id grammar — journaled `refused` before the lock, once the session id is valid
+  | 'containment-refuted'     // ws-reclaim or ws-expire (spec §5.6): the tail's removal-time re-ask PROVED the tree at the workdir is not only the child's own, so it stopped before deleting anything further — journaled `failed`, never `refused`
+  | 'witness-mismatch'        // ws-audit --collect and ws-collect (spec §5.10): the temp root at the id is not the real directory its witness names by dev, ino and birth time, or the witness cannot be read or has no birth time — TERMINAL, journaled `refused`: offered to the operator, never taken
+  | 'quarantine-kept'         // ws-audit --collect and ws-collect (spec §5.10): a quarantine record, its slot or its slot's leaf the collector cannot read, prove or clear, or the directory's original path taken again — TERMINAL, journaled `refused`, kept as it stands for the operator; or ws-collect kept a record a later pass can finish from — journaled `failed`
+  | 'not-witnessed'           // ws-audit --collect and ws-collect (spec §5.2): no witness and no quarantine record names the id — RETRYABLE: there is nothing to collect
+  | 'registered'              // ws-audit --collect and ws-collect (spec §5.10): a registry row of the id, or what one left behind, still stands (`.child`, `.uuid`, or what the slug still holds) — RETRYABLE: the temp root is treated as that workspace's
+  | 'changed-recently';       // ws-audit --collect and ws-collect (spec §5.10): the newest change under the temp root is younger than the idle floor — RETRYABLE
 
 /**
  * The word for each. DECLARED ONCE AND EXPORTED — there is no module-private
@@ -7671,6 +8001,86 @@ export const LC_REFUSAL_WORD: Record<LcRefusalToken, string> = {
   // because one map entry serves four callers.
   'purge-mechanism-absent':
     'The registry row could not be removed: this box cannot take the session\'s compaction lock at all — flock, mktemp or link is missing from the PATH ccd ran with — and the session still has a live generation, so ccrc refused rather than race a compaction it has no way to serialise against. Whatever the verb had already done is done; the row and its generation are still there. Waiting will not help: re-run from a PATH that resolves those tools.',
+  // Child reclamation, wave 3. ws-reclaim's pin phase — the WIP commit and the
+  // attic pins, or the settle's re-pin once the session is stopped — failed, so
+  // the verb stopped BEFORE its next deletion. Only ever rides `_lc_fail`: the
+  // act started (a WIP commit may already exist, which destroys nothing), and a
+  // retry pins again. The sentence claims nothing about the worktree or the
+  // branch: on the vanished arm there is no worktree, and on a resumed act an
+  // earlier attempt may already have removed either.
+  'pin-failed':
+    'ccrc could not keep this workspace’s uncommitted work or its commits, so it stopped before deleting anything further. Reclamation tries again.',
+  // Child reclamation, wave 3. The tail disabled the unit and killed the pane,
+  // then asked the service manager and tmux, and one did not PROVE "stopped":
+  // still up, or not answering (a Restart=always unit; a claude left in its
+  // pane by KillMode=process). Only ever rides `_lc_fail`; the breadcrumb stays
+  // and a retry stops both again. True of every arm and cause: nothing FURTHER went.
+  'unit-still-active':
+    'ccrc could not prove this session’s service and its terminal pane had both stopped, so it stopped before deleting anything further. Reclamation tries again.',
+  // Child reclamation, wave 6 (spec §5.5). The tail's step 5 could not read
+  // whether the child's branch still exists: `git show-ref --exists` answered
+  // neither present nor absent. Only ever rides `_lc_fail`, after the act
+  // started. By step 5 the unit is stopped, the pane is gone and the tree was
+  // removed (or never stood, on the vanished arm), so the sentence promises
+  // nothing intact, only that nothing FURTHER went. The breadcrumb stays at the
+  // branch, and the retry resumes there. Wave 7 (spec §5.6) adds two arms that
+  // print it with the branch READ as present: the tombstone's recorded tip
+  // (step 5, breadcrumb at `branch`), or a nested checkout's recorded head
+  // (step 3, phase `children`, where the child's tree can still stand and the
+  // breadcrumb is not at `branch`), is the all-zero id, which `update-ref -d`
+  // reads as no compare at all. Both stop before the branch's compare-and-swap,
+  // so the sentence names the record that cannot be compared against too.
+  'branch-unmeasured':
+    'ccrc could not read whether the branch still exists, or the record it keeps of the branch cannot be compared against, so it stopped before removing anything further; it tries again.',
+  // Child reclamation, wave 6 (spec §5.9). A probe the reclaim ladder needs
+  // could not run, or its answer could not be read. That happens at audit time
+  // (`verb ws-audit`) or in ws-reclaim's locked recomputation
+  // (`verb ws-reclaim`). It only ever rides `_lc_fail`, with no intent before
+  // it. Two things are true of both arms: THIS attempt removed nothing (a
+  // resumed arm's earlier one may have), and the server's retry starts over
+  // (`parseChildReclaimResult` reads the verb's document as not-resumable).
+  'probe-unmeasured':
+    'ccrc could not finish measuring this workspace — a check it relies on could not run, or its answer could not be read — so this attempt started nothing and removed nothing. The next attempt measures again from the start.',
+  // Child reclamation, wave 6 (spec §5.9). These are the two argv dies of
+  // ws-reclaim that are tied to an id. Each is journaled through `_lc_refuse`
+  // before the lock, once the session id is valid. The server composes this
+  // argv itself, so either one is a ccrc defect. Both join wave 5's reader,
+  // which classes them as pre-lock FAILURES (`CHILD_RECLAIM_PRE_LOCK_TOKEN`),
+  // so the chip reads `deferred`, never `refused`.
+  'token-malformed':
+    'ccrc asked for this clean-up with a confirmation token that is not a shape ccd mints, so nothing was looked up and nothing was removed. This is a ccrc bug, not something about this workspace.',
+  'run-id-malformed':
+    'ccrc named the run this workspace belongs to with a run id that is not a shape ccrc mints, so nothing was looked up and nothing was removed. This is a ccrc bug, not something about this workspace.',
+  // Child reclamation, wave 7 (spec §5.6). The tail's removal-time re-ask
+  // (`_ws_reclaim_owned`) PROVED that what it would remove is not only the
+  // child's own: another session's registry row at, inside or through the
+  // worktree or a leaf, a gone row's tree moved inside it, a workdir that is the
+  // main checkout or the project directory, a link or a non-directory at the
+  // workdir, or a recorded workdir that is not one plain path. It only ever rides
+  // `_lc_fail`, after the unit was stopped and the pane killed, from ws-reclaim
+  // and ws-expire alike, because the tail is shared. The sentence says only what
+  // is true under any server. It never says whether, or when, ccrc retries.
+  'containment-refuted':
+    'ccrc found that what it would remove is not only this workspace’s own tree — another session’s tree or registry row lies at, inside or through it, or the recorded path is not this workspace’s worktree — so it stopped. The session was stopped and nothing further was deleted. A retry finds the same thing until that other tree or row is moved or removed.',
+  // The temp-root collector (spec §5.10). `witness-mismatch` is TERMINAL, journaled `refused` by `ws-audit --collect`
+  // and `ws-collect`; so is `quarantine-kept` when what it names is one the collector cannot read, prove or clear, or
+  // the directory's original path is taken again. `ws-collect` also journals it `failed` when it stopped partway (for
+  // example a record, slot or witness it could not read back, clear or compare, or a removal or restore it could not
+  // prove) and keeps what stands. Each says only what is true wherever it is printed: nothing further is removed.
+  'witness-mismatch':
+    'The temporary directory under this id is not the one ccrc recorded handing out — it was replaced or moved, or its record cannot be read or vouches for too little — so ccrc’s collector will not remove it. Nothing was removed; it is listed for you to look at.',
+  'quarantine-kept':
+    'ccrc’s collector found something it cannot finish safely — a quarantine record or slot it cannot read, prove or clear, or the directory’s original path taken again — and keeps what still stands of it and any record of it. Nothing further was removed. It is listed for you to look at, and ccrc finishes it on a later look only if it can prove it again.',
+  // The temp-root collector's RETRYABLE words (spec §5.2, §5.10): printed by `ws-audit --collect`, journaled `refused`
+  // by `ws-collect` at its one refusal point. Each is true wherever it is printed: neither the audit nor the verb has
+  // removed anything when it answers one. The verb answers `registered` after a PROVEN restore of a leaf it had
+  // moved, or on a resume whose leaf stays in its quarantine slot, untouched.
+  'not-witnessed':
+    'ccrc has no record of handing out a temporary directory under this id, so there is nothing for it to clean up. Nothing was removed.',
+  'registered':
+    'A workspace with this id, or what one left behind, still stands in the registry, so ccrc treats the temporary directory there as that workspace’s and will not clean it up. Nothing was removed; ccrc looks again once the id is free.',
+  'changed-recently':
+    'Something in this temporary directory changed recently, so ccrc leaves it alone for now. Nothing was removed; ccrc looks again once it has stayed unchanged long enough.',
 };
 
 /** Derived from the map — the `PR_REASON_MAP` idiom, so a member added to the
@@ -8246,19 +8656,19 @@ export type PaneHistoryReply =
  * WHAT DOES NOT YET HONOUR IT. `ccd/ccd` is the only code that GATES on it.
  * The one other code reference in server/src, pwa/src or agent/src is the
  * PWA's actions sheet, which prints it in the `narrow` spawn note — it names
- * the floor, it enforces none; every other hit in those trees is prose. In
- * particular the server's mail
- * lane is NOT width-aware: `server/src/watch.ts` asks for the hold with
- * `sendPrompt(…, holdIfAutoContinueArmed: true)` and `server/src/inject/send.ts`
- * decides it with `autoContinueArmed(armWindow)` over the last 8 captured rows —
- * a phrase match (`AUTO_CONTINUE_RE`) with no width measurement anywhere on that
- * path. The failure direction is the dangerous one: on a pane below this width
- * Claude Code's own limit-recovery line WRAPS, the phrase is no longer on one
- * row, `autoContinueArmed` answers false, the hold does NOT fire, and the server
- * types into a pane whose auto-continue was armed — cancelling it. An earlier
- * version of this docstring said "and the mail lane holds"; nothing shipped ever
- * made that true. Teaching that lane this floor is a deliberate later widening,
- * not something to infer from this constant's existence.
+ * the floor, it enforces none; every other hit in those trees is prose. The
+ * server's mail lane is NOT width-aware: `server/src/inject/send.ts` runs two
+ * phrase matches over the last 8 captured rows and measures no width for
+ * either — `autoContinueArmed(armWindow)` (`AUTO_CONTINUE_RE`, asked for with
+ * `holdIfAutoContinueArmed`) and `turnRunning(armWindow)` (`esc to interrupt`,
+ * asked for with `refuseIfTurnRunning` on a `shell` delivery). Below this width
+ * each phrase WRAPS off one row and its match answers false: the armed hold
+ * does NOT fire and the server types into a pane whose auto-continue was armed,
+ * cancelling it; the turn guard does NOT refuse, and a nudge typed into a
+ * running turn is folded in at its next tool boundary — which is why that guard
+ * is a drift tripwire, never a proof of idleness. An earlier version of this
+ * docstring said "and the mail lane holds"; nothing shipped ever made that true.
+ * Teaching the lane this floor is a deliberate later widening, not an inference.
  *
  * DERIVED, not chosen. Claude Code's TUI is Ink, which wraps its own status
  * line at the terminal width before tmux ever stores the row. This tree cannot
@@ -8551,13 +8961,14 @@ export const FLEET_SCOPE = '*';
  *  checked since this process started — never "up to date". */
 export interface CatalogueState { lastOkAt: number | null; lastError: { at: number; reason: string } | null }
 /** `GET /api/updates` (§12). */
-export interface UpdatesView { catalogue: CatalogueState; releases: ReleaseWire[]; nodes: NodeWire[]; intent: UpdateIntentWire[] }
+export interface UpdatesView { catalogue: CatalogueState; releases: ReleaseWire[]; nodes: NodeWire[]; intent: UpdateIntentWire[]; boxToken?: BoxTokenView }
 
 /** Every refusal word an update route answers with (§12). */
 export type UpdateRouteError =
   | 'unauthenticated' | 'not-configured' | 'bad-tag' | 'bad-request' | 'unknown-scope' | 'unknown-node'
   | 'superseded' | 'busy' | 'auto-needs-rollback-gate' | 'rate-limited' | 'no-channel'
-  | 'journal-unreadable' | 'journal-unwritable';
+  | 'journal-unreadable' | 'journal-unwritable'
+  | Exclude<DispatchRefusal, 'no-update-gate' | 'waiting-for-fleet'> | 'no-previous' | 'no-desired';   // wave 5: the moves' 409s (spec §12)
 export interface UpdateRouteRefusal {
   ok: false; error: UpdateRouteError;
   field?: string; nodes?: string[]; detail?: string; retryAfterS?: number;
@@ -8594,12 +9005,16 @@ export interface AckAnswer { ok: true; node: NodeWire }
  *    label-key-taken — `markUnreachable` found no live row for the label and
  *                    could not write the label-keyed placeholder: a row
  *                    already holds that key.
- *    not-busy      — `releaseLease` on a settled row: there is no lease.
- *    stale-report  — a report whose run began before the lease (even the
- *                    last ms its whole-second `startedAt` covers,
- *                    `startedAt*1000 + 999`, is before `updateStartedAt`)
- *                    belongs to a previous run and never moves it (design
- *                    §8's precedence).
+ *    not-busy      — `releaseLease`, `noteLeaseDetail` on a settled row: there
+ *                    is no lease (for the note, a report or the deadline
+ *                    settled it first, and its verdict is not the
+ *                    dispatcher's to overwrite).
+ *    stale-report  — the identity guard refused: `releaseLease`/`settleNode`'s
+ *                    row no longer holds the `updateStartedAt` the caller read
+ *                    (the lease moved on), or `noteLeaseDetail`'s row holds a
+ *                    newer lease than the one the caller acquired (D-3413).
+ *                    Freshness is change plus the lease's tag, never a clock
+ *                    (D-3405).
  *    empty-patch   — `setIntent`'s patch names none of channel/pinnedTag/
  *                    auto/notify.
  *    bad-field     — a named patch field's value is outside its vocabulary
@@ -8627,13 +9042,26 @@ export interface AckAnswer { ok: true; node: NodeWire }
  *                    the tag; nothing is written.
  *    already-notified — `markReleaseNotified` (W3): the tag's `notifiedAt` is
  *                    already set. The first mark stands, and the caller
- *                    sends nothing (design §13: one push per tag). */
+ *                    sends nothing (design §13: one push per tag).
+ *    bad-kind      — `requestNode`/`dispatchNode` (programme wave 5): a kind
+ *                    outside `REQUEST_KINDS`; decided before any SQL.
+ *    no-request    — `dispatchNode`: a rollback with no matching operator
+ *                    rollback request — a move down is never automatic
+ *                    (design decision 8). Nothing is written.
+ *    not-idle      — `noteDispatchRefusal`: the row is not `idle`. A
+ *                    `failed`/`reverted` row's detail is the verdict the halt
+ *                    reads and a busy row's is its lease's; nothing is written.
+ *    no-lease-to-hand — `handOffLease` (D-3412): the donor is not a BUSY row
+ *                    of the heir's label retired TOWARD the heir (absent,
+ *                    live, settled, retired toward another node, or another
+ *                    box's row); nothing is written. */
 export const UPDATE_STORE_REFUSE_CODES = [
   'bad-tag', 'duplicate-tag', 'bad-row', 'empty-listing', 'unknown-node',
   'bad-node-id', 'label-key-taken', 'not-busy', 'stale-report',
   'empty-patch', 'bad-field', 'unknown-scope', 'no-channel', 'journal-unreadable', 'journal-unwritable',
   'single-not-one', 'withdrawn-not-empty',
   'unknown-release', 'already-notified',
+  'bad-kind', 'no-request', 'not-idle', 'no-lease-to-hand',
 ] as const;
 export type UpdateStoreRefuseCode = (typeof UPDATE_STORE_REFUSE_CODES)[number];
 export function isUpdateStoreRefuseCode(v: unknown): v is UpdateStoreRefuseCode {
@@ -8673,3 +9101,706 @@ export function isTagFileRead(v: unknown): v is TagFileRead {
  *  settings screen, which disables its auto-install control before a tap (D-3297), read
  *  one word. `server/src/update/resolve.ts` re-exports it, so W2's importers keep their path. */
 export const UPDATE_GATE_CAP = 'update-gate';
+
+/**
+ * `FleetSession.releasedFrom` — the run a WORKSPACE was released from (workspace lifecycle spec §5.1), which is
+ * what puts its row in its card's `Released (N)` fold. The server writes it once, in `assembleFleet`'s row
+ * literal, from the pure `releasedFrom` decision (`server/src/coord/released.ts`); nothing else computes it.
+ *
+ * Non-null only when the row is a workspace, carries no hold, is not archived, its NEWEST run as `sessionId` is
+ * terminal, no non-terminal run names it as `sessionId`, and no non-terminal run names it as `claimedBy` (a former
+ * worker that now coordinates is not released).
+ *
+ * `null` collapses THREE conditions, deliberately: not released; this server did not decide (an older peer, or a
+ * snapshot from a build predating the field); and this server could not decide (its `coord.db` read failed this
+ * tick, or the newest run carried no readable close time). A reader does the identical thing with all three —
+ * the row renders where it always did — and none may branch on which it was: that distinction is not on the
+ * wire. `boardProject` makes the same trade for the same reason.
+ *
+ * The wire word is not "released": `released` already names an `AskState` and a `ClaimState` with other
+ * meanings, so the word appears only as the fold's label.
+ *
+ *   - `runId`, `program`, `claimedBy`, `closedAt` — the newest run's own columns; `closedAt` is epoch MS.
+ *   - `programTitle` — `programs.title`, `null` only if the programme row could not be joined.
+ *   - `child` — the registry's CCR-15 child reading (`FleetSession.child`) is `child` or `unreadable`. An
+ *     unreadable marker reads as a child, the direction that defers: "Archive all" skips children, which leave
+ *     through CCR-15's own reclamation.
+ *
+ * ADDITIVE; `FLEET_PROTO` is not bumped. The LIVE `fleet` frame is CAST, not revived (`pwa/src/stores/fleet.ts`'s
+ * `asFleetMsg`), so a row from an older server has no key at all — read it ONLY through `releasedFromOf`.
+ */
+export interface ReleasedFrom {
+  readonly runId: number;
+  readonly program: string;
+  readonly programTitle: string | null;
+  readonly claimedBy: string | null;
+  readonly closedAt: number;
+  readonly child: boolean;
+}
+
+/** THE ONE READER of `FleetSession.releasedFrom`. `undefined` (a live frame from a server predating the field)
+ *  reads exactly as `null`. */
+export function releasedFromOf(s: FleetSession): ReleasedFrom | null {
+  return s.releasedFrom ?? null;
+}
+
+/** `FleetSession.releasedFrom`'s persistence contract: absent or null → `null`. A present value this build cannot
+ *  read ALSO revives as `null`, rather than rejecting the whole session the way `child` does — here the
+ *  degrade is the safe direction, since `null` leaves the row at the top level of its card, where it rendered
+ *  before this field existed. */
+function reviveReleasedFrom(o: RawObj, k: string): ReleasedFrom | null {
+  const v = o[k];
+  if (v === undefined || v === null || typeof v !== 'object' || Array.isArray(v)) return null;
+  const r = v as RawObj;
+  const { runId, program, programTitle, claimedBy, closedAt, child } = r;
+  if (!isPositiveDecimalSafeInteger(runId) || typeof program !== 'string') return null;
+  if (programTitle !== null && typeof programTitle !== 'string') return null;
+  if (claimedBy !== null && typeof claimedBy !== 'string') return null;
+  if (!isPositiveDecimalSafeInteger(closedAt) || typeof child !== 'boolean') return null;
+  return { runId, program, programTitle, claimedBy, closedAt, child };
+}
+
+/** What a `~/.ccrc/update.json` text says about a run IN FLIGHT (design
+ *  2026-09-20 §10). Two callers ask it: the agent's `update` op, before it spawns
+ *  (D-3371), and the server-role local spawn
+ *  (programme wave 5 Task 5). The inventory NEVER asks it: `reportFrom`
+ *  (`server/src/update/inventory.ts`) is that reader, and it answers a different
+ *  question — the five report columns, with `unknown` for garbage. This one
+ *  answers only "is a run in flight right now". So garbage is `null` here, not
+ *  busy, and the node's own lock decides instead (the `--detach` parent's
+ *  `_upd_lock_probe`, then the run's `_upd_lock`). `startedAtS` stays in
+ *  SECONDS (ruling R1) because it is shown, never compared. */
+export interface InFlightReport { phase: UpdatePhase; target: string | null; startedAtS: number | null; pid: number | null }
+/** Non-null iff `text` is ONE JSON object whose `phase` is in
+ *  `IN_FLIGHT_UPDATE_PHASES`. Fields are read BY NAME and every other key is
+ *  ignored (ruling R2: any key this reader does not name). `target` passes
+ *  through `isReleaseTag`, else `null`. `startedAt` must be a positive safe
+ *  integer ≤ `UNIX_SECONDS_MAX` (W2's one declaration, above in this file), else `null`, and the report is still kept.
+ *  `pid` (D-3411) is the WRITER's own pid — wave 4 stamps every in-flight write with the process that wrote it —
+ *  and is a positive safe integer or `null`, never 0 or a negative number: `kill(2)` reads those as a process
+ *  group, so a pid this reader admitted as such would ask about the wrong thing. A report whose pid is `null`
+ *  is kept (its writer is unmeasurable, which is not dead). */
+export function inFlightReport(text: string): InFlightReport | null {
+  let parsed: unknown;
+  try { parsed = JSON.parse(text); } catch { return null; }
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return null;
+  const doc = parsed as Record<string, unknown>;
+  const phase = doc.phase;
+  if (!isUpdatePhase(phase) || !(IN_FLIGHT_UPDATE_PHASES as readonly UpdatePhase[]).includes(phase)) return null;
+  const started = doc.startedAt;
+  return {
+    phase,
+    target: isReleaseTag(doc.target) ? doc.target : null,
+    startedAtS: typeof started === 'number' && Number.isSafeInteger(started) && started > 0 && started <= UNIX_SECONDS_MAX
+      ? started : null,
+    pid: typeof doc.pid === 'number' && Number.isSafeInteger(doc.pid) && doc.pid > 0 ? doc.pid : null,
+  };
+}
+
+/* ---------------------------------------------------------------------------
+ * THE DISPATCHER'S VOCABULARY AND ORDER (design 2026-09-20 §9/§10; programme
+ * wave 5, Task 4). Still inside the end-of-file update block (D-3188, ruling
+ * R13): appended, so no line README or the session-hook audit cites moves.
+ * `server/src/update/dispatch.ts` (L1) decides with these; the update routes
+ * answer with the words; the PWA's move planner sorts with the comparator —
+ * one spelling of each, which `single-definition.test.ts` holds.
+ * ------------------------------------------------------------------------- */
+
+/** Why the dispatcher did not move a node it considered (spec §9/§10). EVERY word is NON-halting: it is noted
+ *  in `updateDetail` on an `idle` row (D-3375) and a standing request stays standing
+ *  (decision 7). The routes answer every word but `no-update-gate` (auto only — a route writes a request, never
+ *  auto) and `waiting-for-fleet` (the order, not a refusal of this node) as a single-node `409`. */
+export const DISPATCH_REFUSALS = [
+  'unknown-tag', 'not-newer', 'refused-by-node', 'stamp-unread', 'floor-unread', 'no-detach-cap',
+  'no-update-gate', 'no-rollback-cap', 'agent-predates-update-op', 'halted', 'waiting-for-fleet', 'no-bundle',
+] as const;
+export type DispatchRefusal = (typeof DISPATCH_REFUSALS)[number];
+/** Use THIS, never `DISPATCH_REFUSALS.includes(x as DispatchRefusal)` — `isRunState`'s rule. */
+export function isDispatchRefusal(v: unknown): v is DispatchRefusal {
+  return typeof v === 'string' && (DISPATCH_REFUSALS as readonly string[]).includes(v);
+}
+
+/** THE dispatch order's one spelling (spec §10's standing order: the server reads what the fleet host's hook
+ *  writes, and the agent caches `ccd caps` at boot). `fleet` 0; `server` and `both` 1 — the box the server
+ *  process runs on; `null`, a role token this build cannot name, 2 — last, so an unnamed row never jumps the
+ *  fleet. */
+export function dispatchRank(role: NodeRole | null): 0 | 1 | 2 {
+  if (role === 'fleet') return 0;
+  if (role === 'server' || role === 'both') return 1;
+  return 2;
+}
+
+/** `dispatchRank`, then `label`, then `nodeId`, the last two by UTF-16 code unit — never `localeCompare`, whose
+ *  answer follows the box's locale. The server's `planDispatch` and the PWA's `planMove` both sort with this, so
+ *  a confirm sheet names the nodes in the order the dispatcher will move them. */
+export function compareDispatchOrder(a: { role: NodeRole | null; label: string; nodeId: string }, b: { role: NodeRole | null; label: string; nodeId: string }): number {
+  const rank = dispatchRank(a.role) - dispatchRank(b.role);
+  if (rank !== 0) return rank;
+  if (a.label !== b.label) return a.label < b.label ? -1 : 1;
+  if (a.nodeId !== b.nodeId) return a.nodeId < b.nodeId ? -1 : 1;
+  return 0;
+}
+
+/** `POST /api/updates/apply` (design 2026-09-20 §12, update-management wave 5). Exactly one of `nodeId` / `all`;
+ *  `tag` absent = each named node's resolved `desiredTag`. */
+export type ApplyUpdateBody = ({ nodeId: string } | { all: true }) & { tag?: string };
+/** `POST /api/updates/rollback` (§12). `to` absent = the node's measured `previousVersion`. */
+export interface RollbackUpdateBody { nodeId: string; to?: string }
+/** Why `{all: true}` wrote no request for a live node (D-3385, D-3401):
+ *  the dispatcher's own per-node refusal with the fleet's halt set aside (an update move is never asked for the
+ *  rollback cap, and never `no-update-gate` — that is auto's), or no tag to move it to. Every refusal word but
+ *  `not-newer` is also noted in that node's `updateDetail` (§12), which is where the inventory shows it. A node
+ *  whose OWN lease is already busy is skipped `busy` too (D-3406): a request written there would be silently
+ *  erased the moment that running move settles (`settleNode` clears the request columns unconditionally), and
+ *  the single-node route already answers `409 busy` for the same row rather than writing a doomed request.
+ *
+ *  Two more words a row's OWN state can answer with (D-3408): a row that is ITSELF halting
+ *  (`isHalting`, a `failed`/`reverted` row that is not a provenance verdict) is skipped `halted` before its move
+ *  is even asked — the only door out of a halt is `ack`, which clears the request columns, so a request written
+ *  beside a halting row's own verdict would be silently erased the same way a busy row's would; its detail is
+ *  already the verdict, so nothing is noted either. And once any live FLEET-role row was skipped this call for
+ *  its own busy lease or its own halt, every non-fleet row is skipped `waiting-for-fleet` rather than requested —
+ *  a fleet-first move the operator's tap could not reach must not let the server move ahead of it, and a
+ *  server-role row's own halt does not trigger this (only a fleet-role row's own busy/halted does). */
+export type MoveSkipWhy = Exclude<DispatchRefusal, 'no-update-gate' | 'no-rollback-cap' | 'no-bundle'> | 'no-desired' | 'busy';
+export interface MoveSkip { nodeId: string; why: MoveSkipWhy }
+/** §12's `202 {requested}`, plus `skipped`. `requested` is in dispatch order (`compareDispatchOrder`); a single-node
+ *  move answers `requested: [nodeId]` and `skipped: []`. A request, not a dispatch: the row shows it as
+ *  `request: {tag, kind, at}` until convergence or `ack` clears it. */
+export interface MoveRequestAnswer { ok: true; requested: string[]; skipped: MoveSkip[] }
+
+/** The word a `failed` node's detail begins with when the node refuses a RELEASE, not a fault of its own: a verdict
+ *  on the tag, recorded beside the row (`node_release_refusals`, D-3378) and NOT a halt. Spelled ONCE: `isHalting`
+ *  (update/dispatch.ts) reads it in JS, the store's `haltingRowSql` in SQL (D-3412), and `sweepPlanFor` decides
+ *  the refusal by it. */
+export const PROVENANCE_DETAIL_PREFIX = 'provenance:';
+
+/** Wave 8 item C: a ROLLBACK the node is known to refuse, decidable from the inventory alone, or null. THE one
+ *  spelling: the dispatcher's `moveRefusal` and `planDispatch`'s fleet holds (server/src/update/dispatch.ts) and the
+ *  PWA's release and node rows (pwa/src/fleet/movePlan.ts, pwa/src/screens/SettingsScreen.tsx) all call it.
+ *  `unknown-tag`: no catalogue row, the inventory's one proxy for `cmd_rollback`'s "not a published release" (404).
+ *  `no-bundle`: the catalogue lists no provenance bundle for the tag and the node's install is VERIFIED, so its ccrc
+ *  refuses to DOWNLOAD the tag without --allow-unsigned, which the one-tap never passes. A kept copy of the tag would
+ *  flip with no such question, but the inventory has no kept fact, so this refuses anyway (conservative; the no-bundle
+ *  sentences name `ccrc rollback --to <tag>` on that box, D-3589). Everything else is undecidable here and stays
+ *  permitted: an `unverified` node passes --allow-unsigned itself, an `unknown` one reads only its own marker, a
+ *  yanked release may be a kept copy. `provenance` is required on NodeWire since W6; `undefined` (a pre-W6 server)
+ *  reads as not verified. */
+export function rollbackTargetRefusal(
+  release: { bundleListed: boolean } | undefined, provenance: ProvenanceState | undefined,
+): 'unknown-tag' | 'no-bundle' | null {
+  if (release === undefined) return 'unknown-tag';
+  return release.bundleListed !== true && provenance === 'verified' ? 'no-bundle' : null;
+}
+
+/** Wave 8 item F4: the words a lease settles with when its node reports `done` of the tag and runs it. Spelled
+ *  ONCE: the inventory sweep writes them (server/src/update/inventory.ts) and the PWA recognises them to show a
+ *  finished move as one line (pwa/src/screens/SettingsScreen.tsx). */
+export function settledDoneDetail(tag: string): string {
+  return `done: ${tag}`;
+}
+
+/** Design 2026-09-14: the subject a reviewer's done-claim mail carries (`kind: 'status'`). It is the review run's
+ *  sibling of `WAVE_DONE_SUBJECT`, and it is compared by EQUALITY, never as a prefix: `close.ts`'s review rejection
+ *  subject begins with the same characters and means the opposite. ONE spelling: the stall watch
+ *  (`server/src/coord/stall.ts`) reads it to hand the ball to the coordinator, and the reviewer skill quotes it
+ *  (`stall-vocabulary.test.ts` pins the two together). It is appended at the end of this file, not beside
+ *  `WAVE_DONE_SUBJECT`, because an insertion there would move README's citation anchors into this file. */
+export const REVIEW_DONE_SUBJECT = 'review-done';
+
+/**
+ * The archive door's refusal codes (workspace lifecycle spec §5.2): every `error` word `POST
+ * /api/sessions/:id/archive` refuses with, declared ONCE. The server sends them and the PWA branches on them and says
+ * each in words; neither spells one as a bare literal (`single-definition.test.ts`). Appended at the end of this file,
+ * like `REVIEW_DONE_SUBJECT` above, so no line README or a contract cites moves.
+ *
+ *   - `runOpen` — a non-terminal run names this session as its WORKER. `{force:true}` proceeds; the 409 names the runs.
+ *   - `sessionBusy` — a turn MEASURED in progress: the server's fail-closed read (`stopVerdict`) or the frame's row
+ *     (`archiveInterrupts`), or ccd after that read (a race). `{interrupt:true}` stops the session first; the turn is lost.
+ *   - `coordinatorHasOpenRuns` — this session is the CLAIMANT of a non-terminal run. `{programme:'end'}` ends the
+ *     programme first; the 409 names the runs, or carries `runs: []` when the store could not be read (fail-shut).
+ *   - `programmePartlyEnded` — `{programme:'end'}` could not end every run. Nothing was stopped or archived.
+ *   - `worktreeGone`, `statusUnknown`, `manifestUnbuildable` — the three refusals the operator cannot fix from the
+ *     phone (`ARCHIVE_STOP_ONLY`), each ccd's own `cmd_ws_archive` refusal before it touches anything. The server
+ *     issues two itself: `statusUnknown` where its fail-closed read could not measure the turn (`decideArchive`,
+ *     `refusedAtStop`; a main checkout's only source), `worktreeGone` where it PROVES the worktree absent (local mode).
+ *
+ * A refusal or failure that arrives AFTER `{programme:'end'}` closed runs carries them as `ended` beside its `error`
+ * (`archiveOutcome`, `server/src/coord/archiveDoor.ts`): what only ccd measures is measured after the end.
+ */
+export const ARCHIVE_REFUSALS = {
+  runOpen: 'run-open',
+  sessionBusy: 'session-busy',
+  coordinatorHasOpenRuns: 'coordinator-has-open-runs',
+  programmePartlyEnded: 'programme-partly-ended',
+  worktreeGone: 'worktree-gone',
+  statusUnknown: 'status-unknown',
+  manifestUnbuildable: 'manifest-unbuildable',
+} as const;
+export type ArchiveRefusal = (typeof ARCHIVE_REFUSALS)[keyof typeof ARCHIVE_REFUSALS];
+
+/** Every archive refusal code, DERIVED from `ARCHIVE_REFUSALS` — never a second list. */
+export const ARCHIVE_REFUSAL_CODES: readonly ArchiveRefusal[] = Object.values(ARCHIVE_REFUSALS);
+
+export function isArchiveRefusal(v: unknown): v is ArchiveRefusal {
+  return typeof v === 'string' && (ARCHIVE_REFUSAL_CODES as readonly string[]).includes(v);
+}
+
+/** The refusals after which the session actions sheet offers "Stop only" (spec §5.2): the ones the operator cannot
+ *  fix from the phone, so a live session is never left without a way to put it down. Exactly these three. */
+export const ARCHIVE_STOP_ONLY: readonly ArchiveRefusal[] = [
+  ARCHIVE_REFUSALS.worktreeGone, ARCHIVE_REFUSALS.statusUnknown, ARCHIVE_REFUSALS.manifestUnbuildable,
+];
+
+/** `POST /api/sessions/:id/archive`'s body (spec §5.2). Each consent is a SECOND tap, sent only after the operator read
+ *  the refusal it answers: `force` answers `run-open`, `interrupt` answers `session-busy` and `programme: 'end'`
+ *  answers `coordinator-has-open-runs`. Absent means not given. The PWA builds it (`api.archive`) and the server reads
+ *  it by these keys (`archiveFlags`), so a renamed consent is a compile error on both sides. */
+export interface ArchiveBody {
+  readonly force?: true;
+  readonly interrupt?: true;
+  readonly programme?: 'end';
+}
+
+/** The door's 2xx answer. `archived: true` — the session is put away: a workspace archived, a main checkout stopped
+ *  (it folds into Archived and is never deleted). `archived: false` arises only when the door STOPPED the session
+ *  and `ws-archive` then refused (`refusal`, or `null` for a refusal this build has no word for, with ccd's text in
+ *  `detail`): the row stays at the top level, stopped, with Archive offered again. `ended` lists the runs a
+ *  `{programme:'end'}` closed, `[]` when none was asked or none was open. */
+export interface ArchiveAnswer {
+  readonly ok: true;
+  readonly archived: boolean;
+  readonly stopped: boolean;
+  readonly ended: readonly { readonly id: number; readonly program: string; readonly wave: number; readonly waveOf: number | null }[];
+  readonly refusal?: ArchiveRefusal | null;
+  readonly detail?: string;
+}
+
+/**
+ * Whether ARCHIVING this row costs a turn in progress — spec §5.2's "busy (either kind)". ONE predicate: the door
+ * reads it off a row it assembles on the request (`assembleFleet` over that one registry row, the fleet frame's own
+ * derivation), and the PWA reads it off the row it holds to choose the confirm's words. `status` is Claude Code's own
+ * live word (`waiting` already collapsed into `busy`, an unreadable live file painted `busy`, D-115); `working` and
+ * `attention` are the bucket ladder's reading of the hook beside it. A dead row is none of these.
+ */
+export function archiveInterrupts(s: Pick<FleetSession, 'status' | 'bucket'>): boolean {
+  return s.status === 'busy' || s.bucket === 'working' || s.bucket === 'attention';
+}
+
+/**
+ * Whether a row belongs in its card's `Archived (N)` fold (workspace lifecycle spec §5.2) — the ONE predicate the
+ * board's split and the actions sheet's Restore gate both read; neither keys on `archivedAt` or `workspace` alone.
+ * An archived workspace (the `archived` BUCKET: archived and dead, never `cleanup`), or a STOPPED main checkout (no
+ * workspace, no pane, and a stop stamp). A main checkout started again leaves the fold, because `cmd_start` and
+ * `cmd_ensure` remove the stop stamp on the attempt; a stopped workspace that is not archived stays at the top level,
+ * where Archive is offered again. `stoppedBy` is read `?? null`: the live frame is cast, not revived.
+ */
+export function inArchivedFold(s: Pick<FleetSession, 'bucket' | 'workspace' | 'status' | 'stoppedBy'>): boolean {
+  return s.bucket === 'archived' || (s.workspace === null && s.status === 'dead' && (s.stoppedBy ?? null) !== null);
+}
+
+/** When a row entered the Archived fold, the fold's sort key (newest first): `bucketSince` for an archived workspace
+ *  (its archive time), the stop stamp's time for a stopped main checkout. `null` when neither is known. */
+export function archivedFoldSince(s: Pick<FleetSession, 'bucket' | 'bucketSince' | 'stoppedBy'>): number | null {
+  if (s.bucket === 'archived') return s.bucketSince;
+  return (s.stoppedBy ?? null)?.at ?? null;
+}
+
+/** How long an UNACKED delivery waits before `sweepMail` replays it (10 min), the way `MAIL_MAX_ATTEMPTS` is L0: both sides
+ *  name it. `watch.ts` ENFORCES it, and `stall.ts` (L1) estimates a replayed row's first delivery from it,
+ *  `deliveredAt - replayCount * MAIL_REPLAY_MS` (`replayed-deaf-from-first-delivery-estimate` (D-3803)), where a second
+ *  `600_000` would be a second copy of a policy number. What it MEANS lives in `watch.ts`'s docstring in that file's constants block.
+ *  It stands at the END of this file, not beside `MAIL_MAX_ATTEMPTS`: README and the compaction card cite this file by line,
+ *  and an insertion above those lines moves every anchor under it. */
+export const MAIL_REPLAY_MS = 600_000;
+
+// ── Stall watch settings (design 2026-10-05, §5, §5.1, §12) ────────────────────────────────────────────────────────
+// The whole block was APPENDED below `MAIL_REPLAY_MS` (later blocks follow it), for that constant's own reason: README
+// and the compaction card cite this file by line, and an insertion above them moves every anchor under it. Every string
+// the Settings page's Stall watch section shows is one of the constants below, and no other file spells one. A
+// `{name}` slot is filled by the PWA's one helper, `fillStallText`. No text spells a registry marker name, a rung
+// code or a wave number; the level `does` and stage `stops` and `gate` texts (`stall-settings.test.ts` pins them)
+// spell no duration, and `unread` below does name one. The counts heading takes its window from the wire. The ladder's
+// flag and mail-mode columns are L1's (`STALL_LADDER`, `server/src/coord/stallsettings.ts`),
+// keyed by the same `StallLevel`, so a level added to one Record and not the other is a compile error.
+
+/** The six ladder levels, in ladder order, each with its label and what it does (§5). Each includes the ones below it
+ *  in what it sends. `STALL_LEVELS` is derived from this Record, and `stall-settings.test.ts` pins its order. */
+export const STALL_LEVEL_TEXT = {
+  off: {
+    label: 'Off',
+    does: "The stall watch does not run: nothing is checked, recorded or sent. The mail gate stays as the fleet box's files set it. For a stop that survives a rollback or a lost setting, use the fleet box's kill switch (README: Fleet coordination, The stall watch).",
+  },
+  log: {
+    label: 'Log only',
+    does: 'Every notice the watch would send is recorded, and nothing is sent.',
+  },
+  check: {
+    label: 'Check silent workers',
+    does: 'Adds a check mail to a worker that has been quiet past the quiet time. No one else is told.',
+  },
+  alert: {
+    label: 'Alert coordinator and you',
+    does: "Adds a report to the worker's coordinator after an unanswered check, then a push to you, and pushes to you about a long usage limit, a dialog left open, and a coordinator that has held a run too long. Pushes arrive wherever push notifications are switched on in Settings.",
+  },
+  deliver: {
+    label: 'Deliver mail to busy sessions',
+    does: "Adds delivery to a busy session whose main turn has ended, so mail stops waiting for that session's background work.",
+  },
+  all: {
+    label: 'Everything',
+    does: "Adds the further checks: a worker that died, froze or failed, lost background work, a coordinator not reading its mail, mail stuck in the queue, and a turn record that cannot be read. A worker's quiet time then follows its turn record, backs off for a worker that keeps answering 'working', and holds while its subagents run.",
+  },
+} as const;
+export type StallLevel = keyof typeof STALL_LEVEL_TEXT;
+/** Ladder order, derived; never a hand list. */
+export const STALL_LEVELS = Object.keys(STALL_LEVEL_TEXT) as StallLevel[];
+/** What a write may choose: a level, or `follow`, the default, which lets the fleet box's files decide. */
+export type StallLevelChoice = StallLevel | 'follow';
+/** The one level guard, for the write and the read. Its body is pinned (§6.1): never `in` and never `MAP[v]`, because
+ *  `'toString' in` any object literal is true, the trap `isReclaimRefuseCode` records. */
+export function isStallLevelChoice(v: unknown): v is StallLevelChoice {
+  return typeof v === 'string' && (v === 'follow' || (STALL_LEVELS as readonly string[]).includes(v));
+}
+
+/** The five confirm stages, in §5.1's order: each one thing the watch or the mail gate does that the operator is told
+ *  about before it starts, with its name, the line a confirm shows when it stops, and the gate it waits on. `gate` is
+ *  `null` for the busy gate alone, and that `null` has one meaning: it adds no delivery, so nothing waits on it. */
+export const STALL_STAGE_TEXT = {
+  checks: {
+    name: 'Checks on quiet workers',
+    stops: 'Checks on quiet workers stop.',
+    gate: 'A review of the notices recorded in shadow finds the would-be checks true or harmless.',
+  },
+  alerts: {
+    name: 'Reports to coordinators and pushes to you',
+    stops: 'Reports to coordinators and pushes to you stop.',
+    gate: 'Checks have run live for a while, and the reports and pushes recorded in shadow look right. A known limit: a dialog left open can be pushed to you again, at most once each quiet time.',
+  },
+  busyDelivery: {
+    name: 'Busy delivery',
+    stops: 'Busy delivery stops.',
+    gate: 'The busy-gate log has been reviewed (it is in the server log, not on this page), and a pane still showing a running turn has been seen to refuse the delivery.',
+  },
+  busyGate: {
+    name: 'The busy gate',
+    stops: 'The busy gate stops.',
+    gate: null,
+  },
+  wave2: {
+    name: 'The further checks',
+    stops: "The further checks stop, and a worker's quiet time goes back to the plain clock: no back-off, and no hold while its subagents run or just after a restart. Some checks, and while reports to coordinators are on some reports, can fall due at the next sweep.",
+    gate: "Busy delivery is on and its log has been reviewed (in the server log, not on this page); the stuck-mail and coordinator-not-reading checks have been re-measured in shadow; and repeated pushes about sessions on no run have been counted while alerts were on. This step also moves each worker's quiet time onto its turn record, which shadow never measured.",
+  },
+} as const satisfies Record<string, { readonly name: string; readonly stops: string; readonly gate: string | null }>;
+export type StallStage = keyof typeof STALL_STAGE_TEXT;
+/** §5.1's order, derived; every list of stages on the wire (`waitsOn`, `turnsOn`, `turnsOff`) is in it. */
+export const STALL_STAGES = Object.keys(STALL_STAGE_TEXT) as StallStage[];
+
+/** The stages a resolved arming has on, derived server-side (`stallStages`), so no mail-mode word crosses the wire.
+ *  `runs` is the lane running: the Now block reads it, and it is not a confirm stage. */
+export interface StallWatchStages { runs: boolean; checks: boolean; alerts: boolean; busyDelivery: boolean; busyGate: boolean; wave2: boolean }
+/** What the fleet box holds, as camelCase booleans, never file names. */
+export interface StallHeld { watchOff: boolean; mailOff: boolean; gateStrict: boolean; wave2HeldByStrict: boolean }
+/** The Next step, as three words, so "no Next step" and "the top" are never one `null`. */
+export type StallNextStep =
+  | { kind: 'none' }                                                 // custom, or the reading differs from the choice
+  | { kind: 'top' }                                                  // at Everything
+  | { kind: 'step'; level: StallLevel; waitsOn: StallStage[] };      // §5.1 order, gated stages only
+export type StallWatchEffective =
+  | { measured: false }                                              // unlistable registry: "unknown", never "off"
+  | { measured: true; level: StallLevel | 'custom'; files: StallLevel | 'custom';
+      source: 'chosen' | 'files' | 'held'; stages: StallWatchStages; held: StallHeld;
+      next?: StallNextStep; filesExceed?: boolean };                 // left out only if the view's second try caught
+export type StallWriteEffect =
+  | { measured: false }                                              // unlistable registry: cannot be shown
+  | { measured: true; turnsOn: StallStage[]; turnsOff: StallStage[]; leavesWave2: boolean;
+      heldByBox: boolean;                                            // a turn-on held by the kill switch or strict gate
+      quietLowered: boolean; filesExceed: boolean;                   // filesExceed: for the state after the write
+      before: StallWatchStages; after: StallWatchStages;             // the resolved reading, mail off read as on
+      quietMs: { before: number; after: number }; mailOff: boolean };
+/** The POST's 409 body: the effect the server measured at the write, and the key a re-POST sends back as `confirm`. */
+export interface StallConfirmRequired { ok: false; error: 'confirm-required'; effect: StallWriteEffect; effectKey: string }
+
+/** The four notice-count rows, by role (§11), in this key order on the wire, zeros included. */
+export const STALL_NOTICE_TEXT = {
+  checks: 'Stall checks to quiet workers',
+  wakes: 'Notices to a session about its own failed turn or lost background work',
+  reports: 'Reports to a coordinator, or pushes to you when the run has no coordinator or coordination is paused',
+  pushes: 'Pushes to you',
+} as const;
+export interface StallNoticeCount { row: keyof typeof STALL_NOTICE_TEXT; sent: number; shadow: number }
+
+/** How the read of the settings row went: a row, no row, or a read that failed. Its two failure words are
+ *  `ReadFailure`'s (`shared/agent-protocol.ts`), widened by `row`. This file cannot import that type (its three
+ *  type-only imports are pinned, `peers-claims-l0.test.ts`), so the union is DERIVED from this array, as `STAMP_READS`
+ *  does, and `stall-settings.test.ts` holds `Exclude<StallStored, 'row'>` EQUAL to `ReadFailure` at compile time. */
+export const STALL_STORED_STATES = ['row', 'absent', 'unreadable'] as const;
+export type StallStored = (typeof STALL_STORED_STATES)[number];
+
+/** `GET`/`POST /api/coord/stall-watch`'s answer (§10, §12). `chosen` reports each stored field's own state, and
+ *  `stored` tells an absent row from an unreadable one: no absent row is ever sent as `follow` or `'default'`. */
+export interface StallWatchView {
+  chosen: { level: StallLevelChoice | 'unreadable'; quietMs: number | 'default' | 'unreadable';
+            updatedAt: number | null; stored: StallStored };
+  effective: StallWatchEffective;
+  quiet: { effectiveMs: number; builtInMs: number; minMs: number; maxMs: number; stepMs: number;
+           source: 'chosen' | 'default' };
+  notices: { ok: true; since: number; windowMs: number; counts: StallNoticeCount[] } | { ok: false };
+  fallback: { at: number; reason: string } | null;                   // the builder's own catch, or stallFallback()
+}
+/** A partial write: an omitted field keeps its stored value; `'default'` returns to the built-in. No `null` crosses. */
+export interface StallWatchRequest { level?: StallLevelChoice; quietMs?: number | 'default'; confirm?: string }
+
+/** The default choice's label: the fleet box's files decide, as they did before this section existed. */
+export const STALL_FOLLOW_LABEL = "Follow the fleet box's files";
+/** The source line, from `effective.source`. `held`'s `{reason}` is one of `STALL_HELD_REASON`. */
+export const STALL_SOURCE_TEXT = {
+  files: "Following the fleet box's files",
+  chosen: 'Chosen here',
+  held: 'Chosen: {label}, held back by the fleet box ({reason})',
+} as const;
+export const STALL_HELD_REASON = {
+  watchOff: 'its kill switch is on',
+  gateStrict: 'its mail gate is set to strict',
+} as const;
+/** One line per `StallHeld` flag, worded without file names (§13). */
+export const STALL_HELD_TEXT = {
+  watchOff: 'A kill switch on the fleet box has the watch off, whatever is chosen here.',
+  mailOff: 'Mail is switched off on the fleet box: no mail is delivered, and checks and reports are held. Pushes to you still go.',
+  gateStrict: 'The mail gate is set to strict on the fleet box: busy delivery and the busy gate are off.',
+  wave2HeldByStrict: 'The strict mail gate also holds the further checks off, because they need busy delivery.',
+} as const satisfies Record<keyof StallHeld, string>;
+/** The busy gate's Now sentence: `holds` always while `stages.busyGate`, then `logs` while busy delivery is off. */
+export const STALL_BUSY_GATE_TEXT = {
+  holds: 'The mail gate also holds mail for a session whose main turn is running.',
+  logs: 'It also logs what busy delivery would do.',
+} as const;
+export const STALL_BUSY_GATE_OFF_TEXT = "The busy gate is off: the fleet box's files do not turn it on.";
+/** §6.4's warning, shown while alerts and the further checks are on with busy delivery off, and mail is not off. */
+export const STALL_HAZARD_TEXT = 'Alerts and the further checks are on while busy delivery is off: the stuck-mail and coordinator-not-reading pushes will mistake a busy session for a deaf one.';
+export const STALL_FILES_EXCEED_TEXT = "The fleet box's files arm more than this choice. If the choice stops applying (a rollback, a lost setting), they apply again, and notices recorded in shadow meanwhile go out.";
+/** The five stored-choice lines (§13): exactly one shows whenever the stored row does not apply whole. `both` is both
+ *  fields unreadable in a row that reads; `level` and `quiet` are one field alone. */
+export const STALL_STORED_TEXT = {
+  absent: "No stored choice was found: following the fleet box's files and the built-in quiet time.",
+  unreadable: "The stored choice could not be read: following the fleet box's files and the built-in quiet time.",
+  level: "The stored level could not be read, so neither stored choice applies: following the fleet box's files and the built-in quiet time.",
+  quiet: "The stored quiet time could not be read, so neither stored choice applies: following the fleet box's files and the built-in quiet time.",
+  both: "The stored level and quiet time could not be read, so neither applies: following the fleet box's files and the built-in quiet time.",
+} as const;
+export const STALL_FALLBACK_TEXT = "Your choice is not being applied ({reason}); the watch is following the fleet box's files and the built-in quiet time.";
+export const STALL_NOT_AVAILABLE_TEXT = "Stall-watch settings are not available on this server. Any choice shown before is no longer applied; the watch follows the fleet box's files.";
+export const STALL_NEXT_TEXT = { lead: 'Next step:', waitsOn: 'Waits on:', top: 'Top of the ladder.' } as const;
+/** §7's note under the quiet-time control: no number and no level label in it. */
+export const STALL_QUIET_NOTE = "This also sets when a dialog left open is pushed to you, how far apart repeat pushes about one open dialog can be, and, while the further checks are on, the base of the back-off for a worker that keeps answering 'working'. While they are off there is no back-off and no hold while subagents run, so a worker that keeps waiting is checked once every quiet time.";
+/** The confirm sheet's lines (§13), chosen by the PWA's `stallConfirmLines` from the server's `StallWriteEffect`.
+ *  Slots: `{label}` a level's label or `STALL_FOLLOW_LABEL`, `{value}` a formatted quiet time, `{name}` and `{gate}` a
+ *  stage's, `{detail}` the server's refusal detail. */
+export const STALL_CONFIRM_TEXT = {
+  title: 'Set the stall watch to {label}?',
+  followTitle: '{label}?',
+  quietTitle: 'Set the quiet time to {value}?',
+  confirm: 'Set',
+  turnsOn: '{name} turns on. Waits on: {gate}',
+  turnsOnFree: '{name} turns on.',
+  backOn: "{name} turns back on: the fleet box's files arm it.",
+  heldByBox: 'Held by the fleet box until its kill switch or strict gate is removed; it applies then without asking again.',
+  due: 'At the next sweep every notice now due is sent, including ones recorded in shadow; later rungs follow on their own clocks.',
+  dueFromOff: 'Off recorded nothing. At the next sweep every worker already quiet past the quiet time is checked, and a worker whose check went out before Off gets the next notice now due.',
+  dueMail: 'Mail held for a busy session whose main turn has ended is delivered at the next mail sweep.',
+  dueMailOff: 'Pushes to you now due go out at the next sweep, including ones recorded in shadow; checks and reports wait until mail is back.',
+  dueMailOffHeld: 'Checks and reports now due wait until mail is back.',
+  dueMailBack: 'Mail held for a busy session whose main turn has ended is delivered once mail is back.',
+  quietDue: 'Every worker already quiet past {value} is checked at the next sweep.',
+  quietDueAll: "At the next sweep every worker whose turn record has been quiet past {value} is checked, unless it is backed off for answering 'working' or its subagents are running.",
+  quietDueMailOff: 'Every worker already quiet past {value} falls due for a check at the next sweep, and is held until mail is back.',
+  quietDueAllMailOff: "Every worker whose turn record has been quiet past {value} falls due for a check, unless it is backed off for answering 'working' or its subagents are running, and is held until mail is back.",
+  quietRecorded: 'Every worker already quiet past {value} has a check recorded in shadow at the next sweep; nothing is sent.',
+  quietOff: 'The watch is off, so nothing falls due until it runs.',
+  quietRepeat: 'While the further checks are off, a worker that keeps waiting is checked every {value}, because no back-off applies.',
+  quietRepeatMailOff: 'While the further checks are off, a worker that keeps waiting falls due for a check every {value}, because no back-off applies, and is held until mail is back.',
+  quietDialogs: 'A dialog left open longer than {value} is pushed to you from the next sweep, and repeat pushes about one open dialog can come {value} apart.',
+  unknown: "The fleet box's files could not be read, so what this choice turns on cannot be shown.",
+  refused: 'Nothing was changed: {detail}',
+  // A write with no answer (a network failure): unanswered-write-has-its-own-l0-line (D-4043). The 2xx-unreadable
+  // arm keeps the PWA's shared UNCONFIRMED_TEXT.
+  unanswered: 'Not confirmed — the server did not answer; the screen will re-check.',
+} as const;
+export const STALL_RUNLESS_FOOTNOTE = 'Counts notices on runs only. Notices about a session on no run, or about a coordinator itself, sent or shadow, are not counted here; shadow ones appear only in the server log.';
+/** The section's headings and small words. `counts` takes the window from the reply's `windowMs`, so no text copies
+ *  it. `builtIn` and `chosenHere` follow a quiet value; `builtInOption` is the select's first option. */
+export const STALL_SECTION_TEXT = {
+  title: 'Stall watch',
+  level: 'Level',
+  quiet: 'Quiet time before a worker check',
+  builtIn: '{value} (built-in)',
+  builtInOption: 'Built-in ({value})',
+  chosenHere: '{value} (chosen here)',
+  range: '{min} to {max}',
+  counts: 'Last {window}',
+  sent: '{count} sent',
+  shadow: '{count} shadow',
+  countsFailed: 'The notice counts could not be read.',
+  custom: 'Custom',
+  unknown: 'Unknown — the fleet registry could not be read',
+  theySay: 'they say: {level}',
+  theySayUnknown: 'they say: unknown',
+  stale: 'The latest read failed — this is the last answer that landed.',
+  unread: 'The stall watch settings could not be read — the screen tries again every minute.',
+} as const;
+
+/* ── child-workspace reclamation: the reclaim server half (wave 8, spec §5.5, §5.9) ──────────────────────────────
+ * APPENDED at the foot, never inserted above: README and the frozen spec and plan corpus cite this file by line, so
+ * every declaration below sits under every anchor they hold. The two edits above (`ChildReclaimAttention`'s doc line
+ * pair and its last arm's line) are rewritten in place, line for line. */
+
+/** The grammar of a registry row's GENERATION, `$REG/<id>.generation` (spec §5.5): exactly 36 lowercase ASCII UUID
+ *  characters and nothing else, so no newline, no byte-order mark and no padding. It is ccd's `_reg_generation_valid`
+ *  grammar, and `server/test/child-reclaim-generation-shape.test.ts` holds this `.source` equal to that function's
+ *  own regex text. NO FLAGS: an `m` flag would let `$` match before a trailing newline, and a `g` flag would make
+ *  `.test` stateful. `NODE_ID_RE` (`server/src/coord/store.ts`) spells the same text for another concept, an update
+ *  node's id, and is deliberately not this constant: two concepts never share a name because their text agrees. */
+export const REG_GENERATION_SHAPE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+/** A registry row's generation as ONE read of `$REG/<id>.generation` answered (spec §5.5). Three answers, never
+ *  folded:
+ *  - `value`: the file holds exactly a `REG_GENERATION_SHAPE` value, and `v` is that content, byte for byte;
+ *  - `absent`: a PROVEN ENOENT, and nothing else;
+ *  - `unreadable`: everything else, a read that failed or content that is not the grammar.
+ *  NOT the lifecycle mirror's generation (`childReclaimGeneration`, `server/src/coord/childReclaim.ts`, which slices
+ *  journal rows at a `create`). This is the value ccd mints with the row and binds a reclaim token to. */
+export type ChildReclaimGeneration =
+  | { readonly kind: 'value'; readonly v: string }
+  | { readonly kind: 'absent' }
+  | { readonly kind: 'unreadable' };
+
+/** The generation as a KEY (spec §5.5): what the sweep's entry, its hold-retired memory and every sweep request
+ *  carry. `unreadable` is never a key: a read that could not say makes the row's identity unmeasured instead. */
+export type ChildReclaimGenerationKey = Extract<ChildReclaimGeneration, { readonly kind: 'value' | 'absent' }>;
+
+/** One arm of `ChildReclaimAttention` (spec §5.9): a child whose reclaim ccd PROVED cannot finish as things stand,
+ *  `containment-refuted`, because a tree or a registry row the removal would reach is not the child's own. Listed at
+ *  once, and retried only on the long, capped persistent tier. `token` is ccd's word, beside the sentence for a
+ *  maintainer's grep. `sentence` is the server's and names what to fix. `at` is the journal line's own (ccd's
+ *  clock), or null when the line carried none. `runId` is the minting run the marker names, or null when the marker
+ *  no longer reads as a child. */
+export interface ChildReclaimStuckAttention {
+  readonly kind: 'stuck'; readonly sessionId: string; readonly runId: number | null;
+  readonly token: string; readonly sentence: string; readonly at: number | null;
+}
+
+/** One arm of `ChildReclaimAttention` (spec §5.9): a leaf the reclaim tail KEPT once the act had completed, the
+ *  clips directory or the temp root, which ccd's removal helper refused, could not measure, or found in use. The
+ *  workspace itself is gone, so this item outlives the registry row. `at` is the journal line's own (ccd's clock),
+ *  and always dated: the source read selects dated lines only, so this arm never carries the type's null. */
+export interface ChildReclaimLeafKeptAttention {
+  readonly kind: 'leaf-kept'; readonly sessionId: string; readonly runId: number | null;
+  readonly sentence: string; readonly at: number | null;
+}
+
+/** One arm of `ChildReclaimAttention` (spec §5.9): many kept-leaf items collapsed into one line, with the sentence
+ *  stating the count. It has `kept-many`'s shape and member type, so the PWA's one reader renders it unchanged, under
+ *  a `word` that no `ChildReclaimKeptWord` uses, because that reader keys a collapsed line by its word. A member's
+ *  `runId` is a number, as the PWA requires of a member (`pwa/src/fleet/childReclaimWords.ts`, `isKeptMember`): a
+ *  kept leaf whose run is not known stays a single `leaf-kept` item, which the PWA renders with a null run. */
+export interface ChildReclaimLeafKeptMany {
+  readonly kind: 'kept-many'; readonly word: 'leaf-kept';
+  readonly members: readonly ChildReclaimKeptMember[]; readonly sentence: string;
+}
+
+/** ccd's words for a leaf the shared reclaim and expire tail KEPT (`clipsKept`, `tmpRootKept`; spec §5.6): `refused`
+ *  (its removal helper refused it), `unmeasured` (whether it went could not be measured) and `in-use` (a process
+ *  still used it after the bounded wait). Spelled ONCE, as a total table's keys, and the runtime list is derived. */
+export type LeafKeptWord = 'refused' | 'unmeasured' | 'in-use';
+const LEAF_KEPT_WORD_TABLE: Readonly<Record<LeafKeptWord, true>> = { refused: true, unmeasured: true, 'in-use': true };
+export const LEAF_KEPT_WORDS: readonly LeafKeptWord[] = Object.keys(LEAF_KEPT_WORD_TABLE) as LeafKeptWord[];
+
+/** THE WORD HALF: the ONE classifier of a kept-leaf word (spec §5.6), shared by child reclamation and workspace
+ *  lifecycle. One of ccd's three words is itself; ANY other value (a string ccd does not print, `null`, a number,
+ *  `undefined`) is `unmeasured`, because ccd prints only its three words, so anything else means a leaf stood.
+ *  NULL AND ABSENCE ARE NOT ITS QUESTION. Each carrier asks them BEFORE it calls this, because the two wires give
+ *  them two meanings: on a stdout document a missing key is an older ccd (`unreported`) and `null` is nothing
+ *  kept, while the mirror's meas has already folded a missing key into `null`, which reads "nothing kept, or not
+ *  reported". */
+export function leafKeptWord(v: unknown): LeafKeptWord {
+  return typeof v === 'string' && (LEAF_KEPT_WORDS as readonly string[]).includes(v) ? v as LeafKeptWord : 'unmeasured';
+}
+
+/* ── child-workspace reclamation: the temp-root collector's server lane (wave 9, spec §5.9, §5.10) ───────────────
+ * APPENDED at the foot for wave 8's reason above: README and the frozen spec and plan corpus cite this file by line.
+ * The three edits above (`ChildReclaimAttention`'s doc line pair, its `runId` sentence and its last arm's line) are
+ * rewritten in place, line for line. */
+
+/** The longest temp-root id (spec §5.10): 255 characters.
+ *  - A session id is a FILE NAME component (`$REG/<id>.uuid`, `$REG/tmproots/<id>`), and no file system this runs on
+ *    takes a component over 255 bytes. The session-id shape is ASCII, so a character is a byte.
+ *  - ccd's own names run out sooner: `.reap-<id>.lock` past 244, and a slot's or a record's name sooner still (spec §7).
+ *  - The coordination store's displacement parsers bound a candidate id by it too. */
+export const TMPROOT_ID_MAX_CHARS = 255;
+
+/** THE ONE PREDICATE of a temp-root id (spec §5.10): ccd's `_ws_tmproot_id_ok` (a session id's shape, no leading
+ *  `.`), plus NO LEADING `-` and at most `TMPROOT_ID_MAX_CHARS` characters.
+ *  - The leading `-` is a SAFETY rule, not defence in depth. ccd's destructive verbs read their decision flags from any
+ *    position, `--session`'s value included, and every such flag begins `--`. The shape refuses `=`, so no
+ *    `--flag=value` can be an id either.
+ *  - The collector asks it of every listed name before any argv, and again of a job's id before its audit or its act.
+ *  - The kept-leaf reader asks it before it names a leaf, so an id the collector never audits is not listed there
+ *    either.
+ *  - A non-string is not an id. The length is asked first, so a long string never reaches the shape's regex. */
+export function isTmpRootId(id: unknown): id is string {
+  return typeof id === 'string' && id.length <= TMPROOT_ID_MAX_CHARS && isSessionIdShape(id)
+    && !id.startsWith('.') && !id.startsWith('-');
+}
+
+declare const collectTokenBrand: unique symbol;
+/** The consent `ws-collect` spends (spec §5.10): a `ws-audit --collect` token, 64 lowercase hex characters.
+ *  - The brand is PHANTOM, so it costs nothing at run time.
+ *  - The shipped tree's one cast to it is the collect audit's reader (`parseCollectAudit`, `server/src/collectLane.ts`).
+ *  - `CCD_ARGV.wsCollect` takes nothing else, so a token from anywhere else does not compile into that argv.
+ *  - It is a `string` underneath, so it is assignable to one. It does not keep itself out of another builder's
+ *    string parameter. */
+export type CollectToken = string & { readonly [collectTokenBrand]: true };
+
+/** One arm of `ChildReclaimAttention` (spec §5.9, §5.10): an item of the temp-root collector's.
+ *  - `sessionId` is the temp-root id on a per-id item. On a box-wide line it is a `COLLECT_BOX_LABELS` label, which no
+ *    session id can equal.
+ *  - `word` is the collector's word for the line, beside the sentence, for a maintainer's grep and never for a
+ *    renderer's switch.
+ *  - `runId` is the latest collect audit's `collect.witness.run`, or null: a quarantine record's run is not on the wire,
+ *    and a box-wide line has none.
+ *  - It carries no `at`. The item is built from the server's memory, which holds no ccd clock. */
+export interface ChildReclaimCollectAttention {
+  readonly kind: 'collect'; readonly sessionId: string; readonly runId: number | null;
+  readonly word: string; readonly sentence: string;
+}
+
+/** One arm of `ChildReclaimAttention` (spec §5.9): many per-id collector items collapsed into one line, whose
+ *  sentence states the count.
+ *  - It has `kept-many`'s shape and member type, so the PWA's one reader renders it unchanged.
+ *  - Its word begins `collect:`, which no `ChildReclaimKeptWord` and not `'leaf-kept'` does. The PWA keys a collapsed
+ *    line by its word.
+ *  - A member needs a number `runId`. A collector item with no run never joins one. */
+export interface ChildReclaimCollectMany {
+  readonly kind: 'kept-many'; readonly word: `collect:${string}`;
+  readonly members: readonly ChildReclaimKeptMember[]; readonly sentence: string;
+}
+
+/** The fixed `sessionId` of each BOX-WIDE collector line (spec §5.9, §5.10): one line per condition, never one per id.
+ *  - Each label holds a `/`, which no file name under $REG (so no registry id) and no session id's shape can carry.
+ *  - Each is distinct, because the banner keys a single line by its `sessionId`.
+ *  - The labels are spelled once, in this total table, and the list of lines is derived. */
+export const COLLECT_BOX_LABELS = {
+  tmproots: '~/.cc-sessions/tmproots',
+  tmpquarantine: '~/.cc-sessions/tmpquarantine',
+  'refused-names': 'unusable names under ~/.cc-sessions',
+  'box-probe': 'collector / the fleet box',
+  'no-document': 'collector / audits that printed nothing',
+  lock: 'collector / temp-root reap locks',
+  flock: 'collector / flock on the fleet box',
+  unsettled: 'collector / calls still running',
+  unvouched: 'collector / temp roots coord.db cannot vouch for',
+  'no-run': 'collector / temp roots with no run',
+} as const;
+export type CollectBoxLine = keyof typeof COLLECT_BOX_LABELS;
+export const COLLECT_BOX_LINES: readonly CollectBoxLine[] = Object.keys(COLLECT_BOX_LABELS) as CollectBoxLine[];

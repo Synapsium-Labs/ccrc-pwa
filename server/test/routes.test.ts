@@ -38,7 +38,7 @@ const seedSession = (home: string, id: string, wrapper: string) => {
  *  mkdtemp dir created inside this call, so it can't be known before calling. */
 async function makeApp(
   panes: (string | null)[] | ((home: string) => (string | null)[]),
-  opts: { status?: 'busy' | 'idle'; io?: FleetIO } = {},
+  opts: { status?: 'busy' | 'idle'; io?: FleetIO; mailToken?: string } = {},
 ): Promise<{ app: FastifyInstance; calls: string[][]; bus: Bus; home: string }> {
   const home = mkTmp('ccrc-');
   seedRoster(home);
@@ -68,7 +68,8 @@ async function makeApp(
   const bus = new Bus();
   const cfg = loadConfig({ CCRC_HOME: home });
   const app = await buildServer(
-    { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: opts.io ?? localIO, queue: new KeyedQueue() },
+    { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: opts.io ?? localIO, queue: new KeyedQueue(),
+      ...(opts.mailToken !== undefined ? { mailToken: opts.mailToken } : {}) },
     bus,
   );
   return { app, calls, bus, home };
@@ -307,8 +308,8 @@ describe('write routes', () => {
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual({ ok: true });
     expect(sendKeysCalls(calls)).toEqual([
-      ['tmux', 'send-keys', '-t', `cc-${ID}`, '-l', 'hello'],
-      ['tmux', 'send-keys', '-t', `cc-${ID}`, 'Enter'],
+      ['tmux', 'send-keys', '-t', `=cc-${ID}:`, '-l', 'hello'],
+      ['tmux', 'send-keys', '-t', `=cc-${ID}:`, 'Enter'],
     ]);
     await app.close();
   });
@@ -391,8 +392,8 @@ describe('write routes', () => {
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual({ ok: true });
     expect(sendKeysCalls(calls)).toEqual([
-      ['tmux', 'send-keys', '-t', `cc-${ID}`, 'Down'],
-      ['tmux', 'send-keys', '-t', `cc-${ID}`, 'Enter'],
+      ['tmux', 'send-keys', '-t', `=cc-${ID}:`, 'Down'],
+      ['tmux', 'send-keys', '-t', `=cc-${ID}:`, 'Enter'],
     ]);
     await app.close();
   });
@@ -415,7 +416,7 @@ describe('write routes', () => {
     const res = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/interrupt`, payload: {} });
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual({ ok: true });
-    expect(sendKeysCalls(calls)).toEqual([['tmux', 'send-keys', '-t', `cc-${ID}`, 'Escape']]);
+    expect(sendKeysCalls(calls)).toEqual([['tmux', 'send-keys', '-t', `=cc-${ID}:`, 'Escape']]);
     await app.close();
   });
 
@@ -454,7 +455,7 @@ describe('POST /api/sessions/:id/submit', () => {
     const res = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/submit`, payload: { expect: 'half-typed' } });
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual({ ok: true });
-    expect(sendKeysCalls(calls)).toEqual([['tmux', 'send-keys', '-t', `cc-${ID}`, 'Enter']]);
+    expect(sendKeysCalls(calls)).toEqual([['tmux', 'send-keys', '-t', `=cc-${ID}:`, 'Enter']]);
     await app.close();
   });
 
@@ -488,7 +489,7 @@ describe('POST /api/sessions/:id/submit', () => {
     const res = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/submit`, payload: { expect: 'half-typed' } });
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual({ ok: true });
-    expect(sendKeysCalls(calls)).toEqual([['tmux', 'send-keys', '-t', `cc-${ID}`, 'Enter']]);
+    expect(sendKeysCalls(calls)).toEqual([['tmux', 'send-keys', '-t', `=cc-${ID}:`, 'Enter']]);
     await app.close();
   });
 
@@ -502,7 +503,7 @@ describe('POST /api/sessions/:id/submit', () => {
     const res = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/submit`, payload: { expect: 'stuck words' } });
     expect(res.statusCode).toBe(409);
     expect(res.json()).toEqual({ ok: false, error: 'enter-ignored' });
-    expect(sendKeysCalls(calls)).toEqual([['tmux', 'send-keys', '-t', `cc-${ID}`, 'Enter']]);
+    expect(sendKeysCalls(calls)).toEqual([['tmux', 'send-keys', '-t', `=cc-${ID}:`, 'Enter']]);
     await app.close();
   }, 10_000);
 
@@ -583,7 +584,7 @@ describe('POST /api/sessions/:id/ask', () => {
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual({ ok: true });
     // Single-select: the digit alone, no Enter — see ask.ts's own comment.
-    expect(sendKeysCalls(calls)).toEqual([['tmux', 'send-keys', '-t', `cc-${ID}`, '2']]);
+    expect(sendKeysCalls(calls)).toEqual([['tmux', 'send-keys', '-t', `=cc-${ID}:`, '2']]);
     await app.close();
   });
 
@@ -668,10 +669,10 @@ describe('prompt route attachment handling', () => {
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual({ ok: true });
     expect(sendKeysCalls(calls)).toEqual([
-      ['tmux', 'send-keys', '-t', `cc-${ID}`, '-l', clip],
-      ['tmux', 'send-keys', '-t', `cc-${ID}`, 'M-Enter'],
-      ['tmux', 'send-keys', '-t', `cc-${ID}`, '-l', 'what is this'],
-      ['tmux', 'send-keys', '-t', `cc-${ID}`, 'Enter'],
+      ['tmux', 'send-keys', '-t', `=cc-${ID}:`, '-l', clip],
+      ['tmux', 'send-keys', '-t', `=cc-${ID}:`, 'M-Enter'],
+      ['tmux', 'send-keys', '-t', `=cc-${ID}:`, '-l', 'what is this'],
+      ['tmux', 'send-keys', '-t', `=cc-${ID}:`, 'Enter'],
     ]);
     await app.close();
   });
@@ -690,8 +691,8 @@ describe('prompt route attachment handling', () => {
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual({ ok: true });
     expect(sendKeysCalls(calls)).toEqual([
-      ['tmux', 'send-keys', '-t', `cc-${ID}`, '-l', clip],
-      ['tmux', 'send-keys', '-t', `cc-${ID}`, 'Enter'],
+      ['tmux', 'send-keys', '-t', `=cc-${ID}:`, '-l', clip],
+      ['tmux', 'send-keys', '-t', `=cc-${ID}:`, 'Enter'],
     ]);
     await app.close();
   });
@@ -713,6 +714,13 @@ describe('upload route id handling', () => {
     form.append('file', new Blob([new Uint8Array(8)], { type: 'image/png' }), name);
     return form;
   };
+  /** A document part, with the type field set to whatever an OS felt like —
+   *  `''` included, which is what a phone hands over for a .md. */
+  const doc = (name: string, type = '', bytes = 'hello') => {
+    const form = new FormData();
+    form.append('file', new Blob([bytes], { type }), name);
+    return form;
+  };
 
   it('stages a picked image and returns where it landed', async () => {
     const { app } = await makeApp([null]);
@@ -721,8 +729,50 @@ describe('upload route id handling', () => {
     });
     expect(res.statusCode).toBe(200);
     const clip = res.json().clip as { path: string; name: string; bytes: number };
-    expect(clip.name).toMatch(/^clip-\d{8}-\d{6}-[0-9a-f]{8}\.png$/);
+    expect(clip.name).toMatch(/^clip-\d{8}-\d{6}-[0-9a-f]{8}-shot\.png$/);
     expect(clip.path).toContain(`/.cc-clips/${ID}/`);
+  });
+
+  // The whole point of the document half: the path is typed into the session
+  // and Claude Code opens the file itself, so anything `Read` can open belongs
+  // here. The type field is deliberately wrong or blank on these — the
+  // EXTENSION decides, because a phone's idea of a .md's MIME type is not
+  // something the store can be built on.
+  it('stages a document whatever the client called its type', async () => {
+    const { app } = await makeApp([null]);
+    for (const [name, type] of [
+      ['design-notes.md', ''],
+      ['notes.txt', 'application/octet-stream'],
+      ['report.pdf', 'application/pdf'],
+      ['letter.rtf', 'text/rtf'],
+      ['rows.csv', 'text/csv'],
+    ] as const) {
+      const res = await app.inject({
+        method: 'POST', url: `/api/sessions/${ID}/upload`, payload: doc(name, type),
+      });
+      expect(res.statusCode, name).toBe(200);
+      const clip = res.json().clip as { name: string };
+      // The uploader's own name rides along: four documents in one prompt are
+      // otherwise four paths differing only by a random suffix.
+      expect(clip.name, name).toMatch(
+        new RegExp(`^clip-\\d{8}-\\d{6}-[0-9a-f]{8}-${name.replace('.', '\\.')}$`),
+      );
+    }
+  });
+
+  // Absent by decision, not by oversight: a .docx is a ZIP container `Read`
+  // cannot open, so staging one would put a file in the prompt that reaches
+  // Claude as noise. Widening the list is only ever safe for a format the
+  // reader on the far end already understands.
+  it('refuses what the reader on the far end could not open', async () => {
+    const { app } = await makeApp([null]);
+    for (const name of ['deck.pptx', 'book.xlsx', 'memo.docx', 'bundle.zip', 'run.sh', 'page.html']) {
+      const res = await app.inject({
+        method: 'POST', url: `/api/sessions/${ID}/upload`, payload: doc(name),
+      });
+      expect(res.statusCode, name).toBe(415);
+      expect(res.json().error, name).toBe('unsupported-type');
+    }
   });
 
   // A bare '..' is deliberately absent: the router normalises
@@ -761,6 +811,28 @@ describe('clip route', () => {
     form.append('file', new Blob([CLIP_BYTES], { type: 'image/png' }), name);
     return form;
   };
+
+  // A document is staged for a reader, so what comes back off the wire must be
+  // what went up — and it must come back as something a browser will not decide
+  // for itself is HTML. `nosniff` is the second half of that: `CLIP_MIME` names
+  // no script type, but without the header a browser may promote a text/plain
+  // clip to markup and run it in the app's own origin.
+  it('serves a document with its own type, nosniff, and its bytes untouched', async () => {
+    const { app } = await makeApp([null]);
+    const body = '# heading\n\n<script>alert(1)</script>\n';
+    const form = new FormData();
+    form.append('file', new Blob([body], { type: '' }), 'notes.md');
+    const up = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/upload`, payload: form });
+    expect(up.statusCode).toBe(200);
+    const { name } = up.json().clip as { name: string };
+
+    const res = await app.inject({ method: 'GET', url: `/api/sessions/${ID}/clip/${name}` });
+    expect(res.statusCode).toBe(200);
+    expect(res.headers['content-type']).toContain('text/markdown');
+    expect(res.headers['x-content-type-options']).toBe('nosniff');
+    expect(res.rawPayload.toString('utf8')).toBe(body);
+    await app.close();
+  });
 
   it('serves a staged clip with an immutable cache header, bytes intact on the wire', async () => {
     const { app } = await makeApp([null]);
@@ -832,15 +904,20 @@ describe('clip route', () => {
   });
 });
 
+// `/api/notify` fails shut since the box-token lifecycle (spec 4.3), so ingestion is
+// exercised with the token a fleet box's notify.sh presents.
+const NOTIFY_TOKEN = 'f'.repeat(64);
+
 describe('notify ingestion', () => {
   it('POST /api/notify with a swap message emits notice and the session event', async () => {
-    const { app, bus } = await makeApp(['❯ \n']);
+    const { app, bus } = await makeApp(['❯ \n'], { mailToken: NOTIFY_TOKEN });
     const notices: string[] = [];
     const sessionMsgs: SessionStreamMsg[] = [];
     bus.on('notice', (n) => notices.push(n.message));
     bus.on(`session:${ID}`, (m) => sessionMsgs.push(m));
     const message = `cc swap: ${ID} moved claude-a -> claude (limits) — reopen it on claude.ai under the claude account`;
-    const res = await app.inject({ method: 'POST', url: '/api/notify', payload: { message } });
+    const res = await app.inject({ method: 'POST', url: '/api/notify', payload: { message },
+      headers: { 'x-ccrc-mail-token': NOTIFY_TOKEN } });
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual({ ok: true });
     expect(notices).toEqual([message]);
@@ -849,13 +926,14 @@ describe('notify ingestion', () => {
   });
 
   it('POST /api/notify with a non-swap message emits only notice', async () => {
-    const { app, bus } = await makeApp(['❯ \n']);
+    const { app, bus } = await makeApp(['❯ \n'], { mailToken: NOTIFY_TOKEN });
     const notices: string[] = [];
     const sessionMsgs: SessionStreamMsg[] = [];
     bus.on('notice', (n) => notices.push(n.message));
     bus.on(`session:${ID}`, (m) => sessionMsgs.push(m));
     const message = 'deploy finished on the server box';
-    const res = await app.inject({ method: 'POST', url: '/api/notify', payload: { message } });
+    const res = await app.inject({ method: 'POST', url: '/api/notify', payload: { message },
+      headers: { 'x-ccrc-mail-token': NOTIFY_TOKEN } });
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual({ ok: true });
     expect(notices).toEqual([message]);
@@ -898,6 +976,24 @@ describe('POST /api/sessions/:id/stop', () => {
     const res = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/stop` });
     expect(res.statusCode).toBe(503);
     expect(res.json()).toMatchObject({ ok: false, error: 'registry-unmeasurable' });
+    await app.close();
+  });
+
+  it('the archive door refuses 503 registry-unmeasurable too, and runs no ccd verb (workspace lifecycle §5.2)', async () => {
+    const home = mkTmp('ccrc-');
+    seedRoster(home);
+    seedSession(home, ID, 'claude-a');
+    const calls: string[][] = [];
+    const run: Runner = async (_c, args) => { calls.push(args); return { code: 0, stdout: '', stderr: '' }; };
+    const cfg = loadConfig({ CCRC_HOME: home });
+    const app = await buildServer(
+      { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: unreadableField(ID, 'wrapper'), queue: new KeyedQueue() },
+      new Bus(),
+    );
+    const res = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/archive` });
+    expect(res.statusCode).toBe(503);
+    expect(res.json()).toMatchObject({ ok: false, error: 'registry-unmeasurable' });
+    expect(calls.filter((c) => c[0] === 'ws-archive' || c[0] === 'stop')).toEqual([]);
     await app.close();
   });
 
@@ -1199,7 +1295,7 @@ describe('layer 1 — the guard runner', () => {
   it('testDeps wires the guard onto deps.tmux as well, not just onto deps.runCcd', async () => {
     const deps = testDeps(undefined, async () => ({ code: 0, stdout: '', stderr: '' }));
     const tmuxRunner = (deps.tmux as unknown as { run: Runner }).run;
-    await expect(tmuxRunner('tmux', ['kill-session', '-t', 'cc-x']))
+    await expect(tmuxRunner('tmux', ['kill-session', '-t', '=cc-x:']))
       .rejects.toThrow(/argv not in the agent EXEC_WHITELIST/);
   });
 });
@@ -1235,6 +1331,12 @@ describe('POST /api/sessions/:id/archive — and an open run', () => {
     const home = mkTmp('ccrc-');
     seedRoster(home);
     seedSession(home, id, 'claude-a');
+    // Workspace lifecycle wave 2: the one Archive archives a WORKSPACE whose worktree it measured present; a row with
+    // no `workspace` is a main checkout, which it stops instead (`archive-door.test.ts`).
+    const worktree = path.join(home, 'worktrees', id);
+    mkdirSync(worktree, { recursive: true });
+    writeFileSync(path.join(home, '.cc-sessions', `${id}.workspace`), id);
+    writeFileSync(path.join(home, '.cc-sessions', `${id}.workdir`), worktree);
     return home;
   };
   const recording = (calls: string[][]): Runner => async (_cmd, args) => {
@@ -1278,8 +1380,9 @@ describe('POST /api/sessions/:id/archive — and an open run', () => {
     const res = await app.inject({ method: 'POST', url: '/api/sessions/demo-claimed/archive' });
     expect(res.statusCode).toBe(409);
     // The SHAPE does not change with the condition — `runs` is present and
-    // empty, because no row was read. Fail-shut at a destructive act.
-    expect(res.json()).toEqual({ ok: false, error: 'run-open', runs: [] });
+    // empty, because no row was read. Fail-shut at a destructive act. And the
+    // store's own words ride it (workspace lifecycle wave 3b).
+    expect(res.json()).toEqual({ ok: false, error: 'run-open', runs: [], detail: expect.stringMatching(/\S/) });
     expect(calls.filter((c) => c[0] === 'ws-archive')).toEqual([]);
     await app.close();
   });

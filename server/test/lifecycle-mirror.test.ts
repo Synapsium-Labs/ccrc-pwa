@@ -297,6 +297,45 @@ describe('JournalMirror.health', () => {
     expect(rig().mirror.health().state).toBe('unknown');
   });
 
+  it('a generation it could not READ is no successful sweep: one failed tick is absorbed, a persistent one reads stale (review 339, open item 2)', async () => {
+    let failing = false;
+    const io: FleetIO = { ...localIO,
+      readFileFrom: async (p, from) => (failing && p.includes(G2) ? null : localIO.readFileFrom(p, from)) };
+    const r = rig(io);
+    fs.writeFileSync(path.join(r.dir, genFile(G1)), `${line('a.1')}\n`);
+    await r.mirror.sweep();
+    expect(r.mirror.health()).toMatchObject({ state: 'ok', lastOk: 1_000_000 });
+    fs.writeFileSync(path.join(r.dir, genFile(G2)), `${line('b.1')}\n`);
+    failing = true;
+    r.now.v += 5000;
+    await r.mirror.sweep();
+    expect(r.mirror.health(), 'the pass that could not read G2 is not an ok sweep — the last ok stands').toMatchObject({ state: 'ok', lastOk: 1_000_000 });
+    r.now.v += STALE_AFTER;
+    await r.mirror.sweep();
+    expect(r.mirror.health().state, 'unreadable for three intervals: stale, so the dead-coordinator lane decides nothing').toBe('stale');
+    failing = false;
+    r.now.v += 5000;
+    await r.mirror.sweep();
+    expect(r.mirror.health().state, 'read again: ok').toBe('ok');
+    expect(r.store.lifecycleFor({ limit: 50 }).map((e) => e.uid)).toEqual(['a.1', 'b.1']);
+  });
+
+  it('a truncation whose re-read fails is a RECORDED loss, not an unread generation: that sweep is the last ok (review 339, open item 2)', async () => {
+    let failReread = false;
+    const io: FleetIO = { ...localIO,
+      readFileFrom: async (p, from) => (failReread && from === 0 ? null : localIO.readFileFrom(p, from)) };
+    const r = rig(io);
+    const f = path.join(r.dir, genFile(G1));
+    fs.writeFileSync(f, `${line('a.1')}\n${line('a.2')}\n`);
+    await r.mirror.sweep();
+    fs.writeFileSync(f, `${line('a.3')}\n`);          // truncated in place; the re-read from 0 answers nothing
+    failReread = true;
+    r.now.v += 5000;
+    await r.mirror.sweep();
+    expect(r.store.lifecycleGaps(10)[0], 'the loss is a gap row, which the lane\'s journal clause reads').toMatchObject({ gen: G1, reason: 'shrank' });
+    expect(r.mirror.health(), 'a recorded loss is no silence: this sweep counts').toMatchObject({ state: 'ok', lastOk: 1_005_000 });
+  });
+
   it('goes `stale` once three sweep intervals pass with no successful sweep', async () => {
     const r = rig();
     await r.mirror.sweep();

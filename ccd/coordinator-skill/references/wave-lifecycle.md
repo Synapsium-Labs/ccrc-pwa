@@ -26,7 +26,7 @@ row for the whole program. `$REG` is `$HOME/.cc-sessions` throughout — SKILL.m
 | `home-mismatch` | this programme already stores a DIFFERENT home project; `by` names the stored one | stop and report. A programme has one home — the repo holding its ledger, spec and plan — and it does not move. Either you are addressing the wrong programme or the `homeProject` you sent is wrong. Nothing was opened |
 | `claimant-is-a-worker` | the `claimedBy` you sent is itself the WORKER of an open run; `by` names that worker's coordinator | stop and report. A dispatched worker never opens a run — the board brackets one level and a chain would render its middle detached. This session is a worker until its own run is closed; nothing was opened and nothing was held |
 | `workspace-spent` | the `sessionId` you passed is a CHILD workspace — one carrying the `$REG/<id>.child` marker, ordinarily minted for a run — whose branch has already had a PR (open, draft, merged or closed); `pr` names it. A child carries at most one PR | open the wave again WITHOUT `sessionId`; its dispatch mints a fresh child (§5, "One PR per child"). Nothing was opened and nothing was held |
-| `spent-unmeasured` | the `sessionId` you passed may be a spent child and the server could not tell: the child marker, the PR ledger, the registry listing or the live PR lookup did not answer; `detail` says which. An UNLISTABLE registry (`detail` `the registry could not be listed`) answers this for ANY `sessionId`, marked or not — without the listing the server cannot tell a child from any other workspace | retry the same open. It is NOT `workspace-spent` — the evidence was unreadable, not absent — so do not drop `sessionId` on its account. If it repeats, stop and report. Nothing was opened and nothing was held |
+| `spent-unmeasured` | the `sessionId` you passed may be a spent child and the server could not tell: the child marker, the PR ledger, the registry listing or the live PR lookup did not answer; `detail` says which. An UNLISTABLE registry (`detail` `the registry could not be listed`) answers this for ANY `sessionId`, marked or not — without the listing the server cannot tell a child from any other workspace | retry the same open. It is NOT `workspace-spent` — the evidence was unreadable, not absent — so do not drop `sessionId` on its account. If it repeats, stop and report. When the repeated `detail` shows the child's branch or tip does not resolve (a hand rename), the next run opens on a fresh child rather than retrying this one. Nothing was opened and nothing was held |
 | `error:'bad-request'` (400) with a `detail` | the programme slug is longer than the shared budget (`detail` reads `program must be at most 56 characters`), or is not `[A-Za-z0-9_-]+` | **this is the refusal a too-long slug actually earns** — shorten the programme slug and retry. Refused at the door: nothing is opened, no programme row is written, and no `ws-hold` runs |
 | `error:'hold-invalid'` (400) | a wave, denominator, or exact generated/reused run id is not a positive JavaScript safe integer | stop and report the input defect. A fresh refusal rolls both inserts back; no `ws-hold` runs |
 | `error:'hold-oversize'` (413) | DEFENCE IN DEPTH, and unreachable from this route today | the slug cap above is derived so that the widest hold this route can compose is 124 of 127 characters, so a slug that would overflow is refused as `bad-request` before `openRun` is called. The row is kept because the store enforces it for any future non-HTTP caller; §2 and §3 CAN emit it, on persisted rows that never passed this door |
@@ -736,13 +736,14 @@ whole time, which is the only prevention this ordering rule buys.
    MERGED with `headRefOid` equal to it — the coordinator merges with
    `gh pr merge <pr> --squash --match-head-commit <handoffCommit>` (plus
    `--admin` where the repository's ruleset requires it) for exactly this
-   reason. An UNMARKED producer — every workspace minted without a marker,
-   before wave 1's deploy, or by a dispatch that journaled `child-omitted`
-   (§2) — is never refused this way; dropping its `sessionId` anyway is
-   still safe and follows the same one-PR rule. The same-project arm is for
-   a producer whose workspace
-   opened no PR — a research or measurement wave —
-   and only for that. Naming a spent workspace is refused `workspace-spent`,
+   reason — and on a native-queue project it lands with the same binding, as
+   "Landing on a native-queue project" below says. An UNMARKED producer —
+   every workspace minted without a marker: by a box whose ccd did not yet
+   mark children, or by a dispatch that journaled `child-omitted` (§2) — is
+   never refused this way; dropping its `sessionId` anyway is still safe and
+   follows the same one-PR rule. The same-project arm is for a producer whose
+   workspace opened no PR — a research or measurement wave — and only for
+   that. Naming a spent workspace is refused `workspace-spent`,
    with `pr` naming the PR, and nothing is opened; `spent-unmeasured` means
    the server could not read the evidence either way — retry the same open,
    and do not drop `sessionId` on its account. If the PR lands after you
@@ -752,6 +753,69 @@ whole time, which is the only prevention this ordering rule buys.
    from the default branch and carrying none of the spent producer's code, so
    if wave N+1 depends on that code, wait for the same merge proof before
    redispatching.
+
+   **Landing on a native-queue project** (one whose `main` requires GitHub's
+   merge queue — measure it before each landing, never from memory: from a
+   checkout of its repository,
+   `gh api 'repos/{owner}/{repo}/rules/branches/main' --jq 'any(.[]; .type == "merge_queue")'`
+   answers `true`): the producer LANDS BEFORE IT CLOSES. Once its review is
+   clean and wave N+1 is open — or, on the programme's LAST wave, which has
+   no wave N+1, once its review is clean (its close is SKILL.md step 7's and
+   §6's) — advance the producer's run to `merging` (§4 — from
+   `awaiting-review`, re-measured). Enqueue only a PR whose required checks
+   have all passed — `gh pr checks <pr> --required` exits 0 (8 is pending, 1
+   is failed): for any other PR gh arms auto-merge instead of queueing it,
+   and prints the same "will be added to the merge queue … when ready" line
+   either way. On `8`, wait for them in the foreground —
+   `gh pr checks <pr> --required --watch`, again if the call times out —
+   never by ending your turn: no mail comes when checks finish. On `1`,
+   send the owning worker a fix round (below), or, for a red that is not
+   this PR's own, one `gh run rerun <run id> --failed` and the same wait.
+   Then, from your own session, enqueue its PR with
+   `gh pr merge <pr> --match-head-commit <handoffCommit>`: no `--squash`,
+   because the queue's merge method applies, and never `--admin`. Prove it
+   is IN the queue before you rely on the server:
+   `gh api graphql -F o='{owner}' -F n='{repo}' -F p=<pr> -f query='query($o: String!, $n: String!, $p: Int!) { repository(owner: $o, name: $n) { pullRequest(number: $p) { state autoMergeRequest { enabledAt } mergeQueueEntry { state } } } }'`
+   gives one of four answers. A queued PR answers a non-null
+   `mergeQueueEntry`, the success answer. A `state` of `MERGED` means it
+   already landed: wait for or prove `merged:#<pr>`, and never disarm — a
+   merged PR answers a null entry too, so the entry alone cannot tell merged
+   from nothing queued. A PR with no entry but a non-null `autoMergeRequest`
+   means it is only armed, and nothing is queued and nothing will tell you so:
+   disarm it (`gh pr merge <pr> --disable-auto`) and read why before you do
+   anything else. A PR with no entry, no `autoMergeRequest` and not merged
+   means nothing is queued: read why before you do anything else. Disarm the
+   same way before any fix round from `merging` — an armed auto-merge queues
+   whatever head the branch carries once its checks pass, and GitHub disarms it on a push only
+   from a login without write access. End your turn. The run waits at
+   `merging`, holding the child, so its workspace is not reclaimed under a PR
+   still in the queue, and the server tells you how the queue answered: a
+   `status` mail `merged:#<pr>` once the PR reads merged, or
+   `dequeued:#<pr>@<time>` when the queue removed it without landing (GitHub
+   does not re-enqueue). On `merged:`, prove the merge exactly as above —
+   MERGED, `headRefOid` equal to `handoffCommit` — then close the producer as
+   this step closes a spent one (on the last wave, as §6 closes it), and only
+   then dispatch wave N+1. A `merged:#<pr>` can also reach a run at `merging`
+   on a project without the queue, when a sweep reads your own synchronous
+   merge before your close: prove and close as usual; a run already closed
+   needs nothing. On `dequeued:`, read why from the queue's own CI run, not
+   the PR's checks, which ran on a different commit and can read green —
+   `gh run list --event merge_group --json databaseId,headBranch,conclusion`
+   finds it by its `headBranch` (`gh-readonly-queue/<base>/pr-<pr>-…`) and
+   `gh run view <id> --log-failed` says why, while
+   `gh pr view <pr> --json mergeStateStatus` answers a conflict. Then either
+   enqueue it again exactly as above — checks first, then the read-back — or
+   send the owning worker a fix round on the `merging → working` edge
+   (SKILL.md step 6's send-back; its fresh wave-done gets a fresh review run,
+   and a fresh `merging`). Closing before the landing would hand a PR still
+   in the queue to a reclaim: nothing could then tell you of its dequeue, and
+   no worker would be left to fix it. A coordinator whose own workspace
+   carries a programme-wave hold or the child marker — a self-claimed run's,
+   or a reclaim heir that was the programme's own worker — is refused its
+   enqueue by the session hook, like any worker. Do not close to shed the
+   hold (a final close of a child reclaims your own pane): ask the operator
+   to enqueue, or disarm, with the same spellings from their own shell, and
+   wait at `merging` as above.
 
    **Same project:** open wave N+1 first with this producer's `sessionId`, then
    close the producer with `final:false`; the hold transfers to the already-open
@@ -787,12 +851,19 @@ whole time, which is the only prevention this ordering rule buys.
 
 ## 6 — Final merge
 
+On a native-queue project the last wave's producer lands BEFORE this close,
+exactly as §5's "Landing on a native-queue project" says: with no wave N+1
+open, closing it first would retire the programme and reclaim the child
+under a PR still queued.
+
 `POST /api/runs/:id/close` `{"fingerprint":{…},"final":true}` on the last
 wave's run — re-measures, closes this run `done`, and releases the hold
 (`ws-release`) **only when no other open run names this session**. The response
-carries `released`. `released: true` means the claim is gone — this workspace is
-an ordinary unheld, unclaimed row again, and nothing archives it: it stays live
-and supervised until a human archives it. `released: false` means the
+carries `released`. `released: true` means the claim is gone. A workspace that
+is not a child — your own, or any workspace dispatch did not mint — is an
+ordinary unheld, unclaimed row again; nothing archives it, and it stays live
+and supervised until a human cleans it up. A child is reclaimed instead (below).
+`released: false` means the
 claim was **handed over**, not dropped: another run still owns this workspace,
 so the hold was rewritten with that run's own reason and nothing was archived.
 That is not an error — it is the ordinary consequence of opening wave N+1
@@ -804,11 +875,59 @@ picks which notice to push: a workspace whose hold is absent but whose run is
 still open is announced as **still claimed**, naming that run. Releasing a hold
 by hand only changes which of the two notices the next sweep sends.
 
-Neither notice archives anything, and nothing else does either. A merged
-workspace stays where it is — live, supervised, its PR merged — until a human
-archives it, and when a human does, its manifest carries the whole PR lineage.
+Neither notice archives anything, and nothing else touches a workspace that is
+not a child. Such a merged workspace stays where it is — live, supervised, its
+PR merged — until a human archives it, and when a human does, its manifest
+carries the whole PR lineage. A child the close has finished with is the one
+exception, and the server's, not yours (below).
 You do not reap, ever (clause 3); cleanup is the operator's ceremony
 in the PWA.
+
+**A child is reclaimed; your own workspace is not.** A CHILD is a workspace
+dispatch minted for one of your runs — the box marks it with the run that
+minted it, and the server holds the same run as having minted it; both must
+agree, or it is not a child. When a close FINISHES with a child — a `final`
+close, an abandon (`state:'failed'`), a close of a child whose branch opened
+a PR after it was created, or a close that leaves your program with no open
+run — the server
+RELEASES it rather than holding it for a next wave, and the close response
+carries `"childReclaim":"queued"`. The reclaim itself runs after the answer,
+on the child's own queue: it records anything left uncommitted as a WIP
+commit (it moves no branch) — except a secret-shaped file, which is never
+committed and is deleted with the tree — pins every commit and stash in the
+attic, writes a tombstone, and then removes the pane, the worktree, the
+branch, the clips directory and the child's temp directory. Its outcome
+lands in the feed — reclaimed, deferred with its reason, refused with its
+sentence, or failed — and never in a reply to you. A child that another open
+run still names, or that the operator is looking at, is deferred and picked
+up later; nothing you do speeds it or stops it. Otherwise
+the response carries `"childReclaim":"not-queued"` and `childReclaimWhy`
+says why: `not-a-child`, `marker-unreadable`, `siblings-open`,
+`siblings-unreadable`, `review-report-live`, `has-coordinated`,
+`not-finished-undated`, `not-finished-merge-commit`, `not-finished-unmeasured`
+or `not-finished` — the last is
+the ordinary non-final close holding a child for wave N+1.
+`not-finished-undated`, `-merge-commit` and `-unmeasured` hold a child whose
+spent evidence the server could not use: a PR from its branch that no dated
+row places in this workspace's life, a fast-path PR number (the registry's
+own, or a `.prhistory` row) the live read dated to an earlier workspace of the
+same name, or a spent read that did not
+answer. A next wave's bind re-reads it and refuses `workspace-spent` or
+`spent-unmeasured` rather than take a spent child; the server reclaims it
+once your program has no open run. `has-coordinated` means the child has
+coordinated a run, so its workspace is cleaned up by a human. No
+`childReclaimWhy` at all means the child was eligible but the hand-off did
+not start; it is reached regardless. **A review run's reviewer
+is a child too, but it is kept while the run it reviewed is open**: its
+clips directory holds the report you cite by path in every `fix-round` mail.
+If the run it reviewed is still open when the review run closes, that close
+releases the reviewer and answers `review-report-live`; if the reviewed run
+is by then already terminal, the review close finishes the reviewer
+directly instead, with no `review-report-live` deferral. Either way, the
+reviewer is reclaimed only after the run it reviewed has closed. Nothing
+changes in how you read or cite the report (SKILL.md step 6). Your own
+workspace, and any workspace dispatch did not mint, is never reclaimed — it
+stays until a human cleans it up, or — when it carries no child marker — until the server cleans it up seven days after it is archived, once the operator has armed the server’s expiry lane (until then the lane only records what it would expire).
 
 ## What happened to a workspace that is gone
 

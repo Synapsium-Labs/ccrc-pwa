@@ -9,7 +9,7 @@ import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { makeCcdHarness, ghContainedEnv, harnessBin, CCD, WS_ADD, type CcdHarness } from './ccdWsHelpers.js';
 import { mungePath } from '../src/munge.js';
-import { ACCOUNT_POOLS_CAP, ACTOR_FLAGS_CAP, CHILD_ARGV_CAP, POOLS_CAP, ROUTE_APPLY_CAP, ROUTE_ARGV_CAP, ROUTE_CAP, WIN_SIZE_CAP } from '../src/ccdargv.js';
+import { ACCOUNT_POOLS_CAP, ACTOR_FLAGS_CAP, CHILD_ARGV_CAP, COLLECT_CAP, DOCS_CAP, EXPIRE_CAP, POOLS_CAP, RECLAIM_CAP, RECLAIM_PAUSE_CAP, ROUTE_APPLY_CAP, ROUTE_ARGV_CAP, ROUTE_CAP, WIN_SIZE_CAP } from '../src/ccdargv.js';
 
 /** sha256 of the empty string — what a failed read used to be indistinguishable
  *  from, and what a genuinely empty ignored set still legitimately hashes to. */
@@ -151,7 +151,7 @@ describe('ccd caps', () => {
   // still fail loudly on anything ELSE that drifts: a THIRD capability token
   // added without updating this list is exactly as much a silent hole as an
   // undispatched verb would be.
-  const KNOWN_CAPABILITY_TOKENS = ['account-pools', 'account-v1', 'actor-flags-v1', 'child-argv-v1', 'lifecycle-v1', 'pools-v1', 'route-apply-v1', 'route-argv-v1', 'route-v1', 'stop-surface', 'win-size-v1'];
+  const KNOWN_CAPABILITY_TOKENS = ['account-pools', 'account-v1', 'actor-flags-v1', 'child-argv-v1', 'collect-v1', 'docs-v1', 'expire-v1', 'lifecycle-v1', 'pools-v1', 'reclaim-pause-v1', 'reclaim-v1', 'route-apply-v1', 'route-argv-v1', 'route-v1', 'stop-surface', 'win-size-v1'];
 
   it('advertises exactly the verbs the dispatcher implements, plus the known capability tokens', () => {
     // The THIRD spelling of this token, closing the parity gap `ccdargv.ts`'s
@@ -172,10 +172,26 @@ describe('ccd caps', () => {
     // without it `win-size-v1` would be the one known token whose three
     // spellings are free to drift, which is the drift this block exists for.
     expect(KNOWN_CAPABILITY_TOKENS).toContain(WIN_SIZE_CAP);
+    // Child reclamation wave 3's token: the third spelling of `reclaim-v1`,
+    // held equal to the constant the executor gates on (`capSupported`) and to
+    // ccd's own `echo reclaim-v1`.
+    expect(KNOWN_CAPABILITY_TOKENS).toContain(RECLAIM_CAP);
+    // Child-reclamation wave 4's token: holds the STRING Task 2 appended equal
+    // to the constant `POST /api/coord/reclaim-pause` reads.
+    expect(KNOWN_CAPABILITY_TOKENS).toContain(RECLAIM_PAUSE_CAP);
     // Child-workspace reclamation wave 1's token, landed in the SAME commit as
     // ccd's `echo child-argv-v1` — this test reads the real `ccd/ccd`, so the
     // string here and the echo there cannot ship apart without a red suite.
     expect(KNOWN_CAPABILITY_TOKENS).toContain(CHILD_ARGV_CAP);
+    // Workspace lifecycle wave 3's token: the third spelling of `expire-v1`, held equal to the constant wave 3b's lane
+    // will gate on (`capSupported`) and to ccd's own `echo expire-v1`.
+    expect(KNOWN_CAPABILITY_TOKENS).toContain(EXPIRE_CAP);
+    // Child reclamation wave 7's token: the third spelling of `collect-v1`, held equal to the constant the collector's
+    // lane will gate on (`capSupported`) and to ccd's own `echo collect-v1`.
+    expect(KNOWN_CAPABILITY_TOKENS).toContain(COLLECT_CAP);
+    // The native Docs reader's token (docs W2): the third spelling of `docs-v1`, held equal to the constant the docs
+    // adapter's gate reads (`capSupported`) and to ccd's own `echo docs-v1` (W1).
+    expect(KNOWN_CAPABILITY_TOKENS).toContain(DOCS_CAP);
     // The deployed ~/.local/bin/ccd is a COPY, not a symlink to the repo, so a
     // verb can pass the agent whitelist and still not exist on the box. This
     // list is what the agent reports; a list that drifts from the dispatcher
@@ -544,8 +560,9 @@ describe('_ws_ignored_digest', () => {
 
 describe('_ws_status', () => {
   it('reads ONLY "idle" as idle — shell, compacting and anything new are busy', () => {
-    // server/src/livestate.ts:14-30 is this repo's own record of the wrapper's
-    // vocabulary (`idle`, `busy`, and `shell` = a Bash tool command is running)
+    // `liveSessionStatus`'s docstring (server/src/livestate.ts) is this repo's
+    // own record of the wrapper's vocabulary (`idle`, `busy`, `waiting`, and
+    // `shell` = an idle main loop relabelled while a background shell runs)
     // and of what matching `busy` and calling the rest idle cost when the
     // server side did it. An allowlist is the only polarity that survives a
     // vocabulary that grows.

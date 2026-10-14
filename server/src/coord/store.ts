@@ -7,6 +7,25 @@ import { decideAllocation } from './ledger.js';
 // policy — the house port pattern. This read exists to feed that policy and
 // nothing else, so the shape it returns is the policy's to define.
 import type { CoordPlacementStamp } from './placement.js';
+import type { LastRun } from './released.js';
+// Stall watch wave 1: the stall lane's row shapes are declared by their CONSUMER,
+// the L1 `stall.ts` (the same port rule as `CoordPlacementStamp` above); the
+// reads below implement them.
+import type { StallDeliveryRow, StallMailRow, StallReadFailure, StallRunRow, StallWriteMiss } from './stall.js';
+// Stall watch settings (design 2026-10-05 §8, §11): the settings row's port and the notice-count row are declared by
+// their consumer, the L1 `stallsettings.ts`; the insert arm starts from its seed, and the no-op skip asks its compare.
+import { STALL_SETTINGS_SEED, stallPatchIsNoOp } from './stallsettings.js';
+import type { StallObservationRow, StallSettingsPatch, StallSettingsRead } from './stallsettings.js';
+// The coordination fence's claim shape is declared by its CONSUMER, the L1
+// sweep file's `childReclaimCoordinated` (the same port rule as above); the
+// read below implements it.
+import {
+  CHILD_RECLAIM_LEAF_FAILED_TOKENS, type ChildReclaimCoordinatorClaim, type ChildReclaimLeafEndRow,
+  type ChildReclaimLeafSourceRow,
+} from '../childReclaimSweep.js';
+// Type-only: ties `AUTO_CONTINUE_ARMED_LAST_ERROR` below to the send adapter's
+// own refusal word, so a rename there is a compile error here, not a silent miss.
+import type { SendResult } from '../inject/send.js';
 import type { LedgerLog } from './ledgerlog.js';
 import type { PoolEdgeLog } from './pooledgelog.js';
 import type { UpdateIntentLog } from './updateintentlog.js';
@@ -24,6 +43,10 @@ import {
 } from './rundefs.js';
 import { reviveDec, reviveMeas, reviveObs, type JournalRow } from './journalparse.js';
 import {
+  DEAD_COORDINATOR_BREAKER_HELD_HEAD, DEAD_COORDINATOR_JOURNAL_ACTS, deadCoordinatorBreakerHeldDetail,
+  splitDeadCoordinatorBreakerHeld, type DeadAnchor, type DeadCoordinatorBreakerMember, type DeadCoordinatorJournalRow,
+} from '../deadCoordinator.js';
+import {
   CLAIM_HARD_CAP_MS, CLAIM_LEASE_MS, DONE_AUTHORITY_CODES,
   isAskState, isClaimState, isDeviationAllocState, isLifecycleAct, isLifecycleGapReason,
   isLifecycleOutcome,
@@ -33,7 +56,7 @@ import {
   isReleaseTag, isUpdateChannel,
   // design 2026-09-20 §6/§8/§10 (W2): the node inventory's vocabularies and the lease's two lists.
   BUSY_UPDATE_STATES, isInstallState, isNodeOs, isNodeRole, isProvenanceState, isRequestKind, isStampRead,
-  isUpdatePhase, isUpdateState, SETTLED_UPDATE_STATES, validCapWords,
+  isUpdatePhase, isUpdateState, PROVENANCE_DETAIL_PREFIX, SETTLED_UPDATE_STATES, validCapWords,
   // fix round 1, D-3213: the floor/previous read-state vocabulary beside `highestVersion`/`previousVersion`.
   isTagFileRead,
   // design 2026-09-20 §6/§9 (W2): the intent row's vocabularies, and the fleet-default scope — declared ONCE in
@@ -47,16 +70,19 @@ import {
   // `mail-routes.test.ts`'s scanner to arbitrate". Imported, never retyped.
   isPositiveDecimalSafeInteger,
   parseArmEventDetail,
+  // The coordination fence's two instants (`childReclaimCoordinatorClaims`) are
+  // read in their canonical spelling only.
+  parseCanonicalPositiveSafeInteger,
   parseRouteEventDetail,
   parseWaveDoneSignals,
   PROGRAM_KICKOFF_SUBJECT,
   RUN_HOLD_NUMBER_MAX,
-  IDLE_RUN_STATES, transitionsFor, TERMINAL_DELIVERY_STATES, TERMINAL_RUN_STATES,
+  IDLE_RUN_STATES, transitionsFor, TERMINAL_DELIVERY_STATES, TERMINAL_RUN_STATES, TMPROOT_ID_MAX_CHARS,
   WAVE_DONE_SUBJECT,
   type AskState,
   type ClaimConflict, type ClaimState, type ClaimSummary,
   type CoordCaps, type DeviationAllocation, type DeviationAllocState,
-  type LifecycleGap, type LifecycleGapReason,
+  type LifecycleAct, type LifecycleGap, type LifecycleGapReason, type LifecycleOutcome,
   type MailDeliveryState, type MailGate,
   type MailKind, type MailRejectCode, type MailSummary, type MirroredLifecycleEvent,
   type NotifyEvent, type PeerDeliverable, type ProgramState,
@@ -91,8 +117,24 @@ export interface PrLineageEntry { pr: number; branch: string; phase: string; rec
  * made, kept here for the board-placement policy to read server-side. It is
  * NOT one of the design's two wire additions, so it stays off `RunSummary`
  * and gets stripped by `toRunSummary` alongside `prLineage`.
+ *
+ * `sessionBornAt` (child-reclamation spec §5.1, §5.3): the child's BIRTH,
+ * write-once per BOUND session — `bindSession` below is the one writer of a
+ * NON-NULL birth (`clearSession` and migration 16's backfill also touch the
+ * column, both only ever to NULL or to seed it), on `coordProject`'s idiom of
+ * a server-side measurement nothing on the wire needs. `childBirthOf`
+ * (`coord/childSpent.ts`) reads it, never `dispatchStartedAt`, which keeps its
+ * own every-attempt meaning unchanged. `sessionBornFor` rides beside it: the
+ * session the birth was recorded FOR, so a cross-build rollback that rebinds
+ * `sessionId` through an older build's `clearSession`/`setSession` — which
+ * never touch either column — leaves a birth `childBirthOf` can prove is no
+ * longer this occupant's own (spec §5.3, the recycled-slug hazard extended
+ * across a rollback).
  */
-export interface RunRow extends RunSummary { prLineage: PrLineageEntry[]; coordProject: string | null }
+export interface RunRow extends RunSummary {
+  prLineage: PrLineageEntry[]; coordProject: string | null;
+  sessionBornAt: number | null; sessionBornFor: string | null;
+}
 
 /** One open run naming a session. NOT a `RunRow`: these four columns are all
  *  the three consumers (`closeRun`, `FleetWatcher.sweepMerged`, the by-hand
@@ -125,9 +167,12 @@ export type { CoordPlacementStamp };
  *  server-side, and NOT one of that design's two wire additions — see
  *  `RunRow`'s own docstring. Shared by `GET /api/runs` (`coord/routes.ts`)
  *  and the `runs` WS frame's own emitter (`watch.ts`'s `emitRuns`, Task 10)
- *  rather than each holding its own copy of the strip. */
+ *  rather than each holding its own copy of the strip. Strips `sessionBornAt`
+ *  and `sessionBornFor` (migration 16) on the same idiom: server-only
+ *  measurements, never sent. */
 export const toRunSummary = (row: RunRow): RunSummary => {
-  const { prLineage: _prLineage, coordProject: _coordProject, ...summary } = row;
+  const { prLineage: _prLineage, coordProject: _coordProject, sessionBornAt: _sessionBornAt,
+          sessionBornFor: _sessionBornFor, ...summary } = row;
   return summary;
 };
 
@@ -150,7 +195,10 @@ class OpenRunHoldRefused extends Error {
 export type AdvanceResult =
   | { ok: true; from: RunState; to: RunState }
   | { ok: false; error: 'bad-transition'; from: RunState; to: RunState }
-  | { ok: false; error: 'unknown-run' };
+  | { ok: false; error: 'unknown-run' }
+  /** `closeRun`'s compare-and-set (workspace lifecycle spec 2026-09-24 §5.4, "No successor"): the run's `claimedBy`
+   *  is no longer the id the caller expected — a successor took the programme — so nothing was written. */
+  | { ok: false; error: 'claimant-changed'; claimedBy: string | null };
 
 /** `setAccountPools`'s answer (T6-R4, fix round 1; `error`'s vocabulary moved
  *  to `shared/api.ts`'s `SetAccountPoolsRefuseCode` in fix round 2 — see C1
@@ -387,6 +435,67 @@ export type AckNodeResult =
   | { ok: false; why: 'unknown-node' }
   | { ok: false; why: 'superseded'; supersededBy: string }
   | { ok: false; why: 'busy'; state: BusyUpdateState };
+
+/** Design 2026-09-20 §6/§12 (programme wave 5). `requestNode`'s answers.
+ *  `replaced` is the request that stood before this one and is now
+ *  overwritten — `null` when none stood; its `kind` is `null` when the stored
+ *  word is one this build cannot name (the reader's fallback, D-3181), never
+ *  folded into a word it is not. `bad-tag`/`bad-kind` are decided before any
+ *  SQL; `unknown-node`/`superseded` are read back after the zero-change
+ *  write. The C2 warning `setAccountPools` carries applies: bind the value and
+ *  discriminate `.ok` before answering the operator. */
+export type RequestNodeResult =
+  | { ok: true; replaced: { tag: string; kind: RequestKind | null } | null }
+  | { ok: false; why: 'unknown-node' }
+  | { ok: false; why: 'superseded'; supersededBy: string }
+  | { ok: false; why: 'bad-tag' }
+  | { ok: false; why: 'bad-kind' };
+
+/** `dispatchNode`'s answers — THE lease acquire (design §10). `busy` names
+ *  the first live row holding a lease (`heldBy`, by nodeId) — this node's own
+ *  or another's: one node at a time, fleet-wide. `no-request` is a rollback
+ *  with no matching operator rollback request
+ *  (D-3376). Every refusal writes nothing. */
+export type DispatchNodeResult =
+  | { ok: true }
+  | { ok: false; why: 'busy'; heldBy: string }
+  | { ok: false; why: 'no-request' }
+  | { ok: false; why: 'unknown-node' }
+  | { ok: false; why: 'superseded'; supersededBy: string }
+  | { ok: false; why: 'bad-tag' }
+  | { ok: false; why: 'bad-kind' };
+
+/** `noteDispatchRefusal`'s answers (D-3375).
+ *  `changed: false` = the row already said this, and nothing was written.
+ *  `not-idle` carries the state that refused the note: a `failed`/`reverted`
+ *  row's detail is the verdict the halt reads, and a busy row's is its
+ *  lease's — neither is the dispatcher's to overwrite. */
+export type NoteDispatchRefusalResult =
+  | { ok: true; changed: boolean }
+  | { ok: false; why: 'unknown-node' }
+  | { ok: false; why: 'superseded'; supersededBy: string }
+  | { ok: false; why: 'not-idle'; state: UpdateState };
+
+/** `noteLeaseDetail`'s answers (D-3413). `stale-report` = the row holds a busy lease that is not the one the caller
+ *  acquired (`updateStartedAt` names the one it holds); `not-busy` = a report or the deadline already settled the row,
+ *  and its verdict is not the dispatcher's to overwrite. Every refusal writes nothing. */
+export type NoteLeaseDetailResult =
+  | { ok: true }
+  | { ok: false; why: 'unknown-node' }
+  | { ok: false; why: 'superseded'; supersededBy: string }
+  | { ok: false; why: 'not-busy'; state: UpdateState }
+  | { ok: false; why: 'stale-report'; updateStartedAt: number | null };
+
+/** `handOffLease`'s answers (D-3412). The heir's arms are read back first: `unknown-node`, `superseded` (the heir
+ *  itself was retired again) and `halted` (a row that HALTS — `reverted`, or `failed` whose detail does not begin
+ *  `provenance:` — keeps its verdict; a lease is never written over one). `no-lease-to-hand` = the donor is not a BUSY row of the heir's label that was retired TOWARD the heir
+ *  (absent, live, settled, retired toward another node, or another box's row). Every refusal writes nothing. */
+export type HandOffLeaseResult =
+  | { ok: true }
+  | { ok: false; why: 'unknown-node' }
+  | { ok: false; why: 'superseded'; supersededBy: string }
+  | { ok: false; why: 'halted'; state: UpdateState }
+  | { ok: false; why: 'no-lease-to-hand' };
 
 /** A partial intent write. `undefined` = leave the field as it stands;
  *  `pinnedTag: null` = CLEAR the pin — two different requests, never folded. */
@@ -641,8 +750,43 @@ export type OpenSiblingsResult =
   | { ok: true; siblings: OpenSibling[] }
   | { ok: false; kind: 'run-unreadable'; detail: string };
 
+/** `runsNamingSession`'s row — `OpenSibling` plus `sessionId` (the session
+ *  this whole read is scoped to, carried per row so a caller building
+ *  `ChildReclaimHoldCandidate`s never has to remember it separately) and
+ *  `state` (child-reclamation wave 4: unlike `OpenSibling`'s rows, which are
+ *  non-terminal by construction, these span every state, and the hold read
+ *  needs to know which ones are terminal). */
+export interface ChildReclaimNamingRow {
+  readonly id: number; readonly sessionId: string; readonly program: string;
+  readonly wave: number; readonly waveOf: number | null; readonly state: RunState;
+}
+
+export type RunsNamingSessionResult =
+  | { readonly ok: true; readonly runs: readonly ChildReclaimNamingRow[] }
+  | { readonly ok: false; readonly kind: 'run-unreadable'; readonly detail: string };
+
+/** What `insertStallObservation`/`recordStallObservation` did, said out loud
+ *  (stall watch wave 1, spec 2026-09-29 §4.2 "Durable dedupe, no migration").
+ *  NOT `recordRunEvent`'s `void`: that writer no-ops silently on an absent run,
+ *  and a stall rung must tell "already recorded" (never send it again) from "the
+ *  run is gone" (nothing left to watch) from "recorded now" (send it).
+ *  `run-gone` means the run is ABSENT or NO LONGER ACTIVE, an idle or terminal
+ *  state (D-3584 run-gone-includes-inactive): the spec's word meant absent only,
+ *  but a run that closed while the lane awaited is just as unwatchable, and a
+ *  row or mail written for it would outlive its close.
+ *  `eventId` is the row's own `run_events.id`. */
+export type StallObservation =
+  | { recorded: true; eventId: number }
+  | { recorded: false; why: StallWriteMiss };
+
 export type CoordPlacementStampsResult =
   | { ok: true; stamps: CoordPlacementStamp[] }
+  | { ok: false; kind: 'run-unreadable'; detail: string };
+
+/** `lastRunBySession`'s answer (workspace lifecycle spec §5.1): each asked session's newest run as `sessionId`,
+ *  the asked sessions a non-terminal run names as `sessionId`, and every `claimedBy` of a non-terminal run. */
+export type LastRunsResult =
+  | { ok: true; last: LastRun[]; openWorkers: string[]; openClaimants: string[] }
   | { ok: false; kind: 'run-unreadable'; detail: string };
 
 export type AskReadResult =
@@ -691,6 +835,8 @@ interface RunRowDb {
   briefQueued: number | null;
   clearError: string | null;
   coordProject: string | null;
+  sessionBornAt: number | null;
+  sessionBornFor: string | null;
 }
 
 /** CAST-to-TEXT rather than `setReadBigInts(true)` (D-2590, a deliberate
@@ -710,7 +856,8 @@ const RUN_ROW_COLUMNS =
   'r.workspace, r.branch, r.state, r.kind, CAST(r.reviews AS TEXT) AS reviewsText, r.claimedBy, ' +
   'r.resumed, r.clearedAt, r.openedAt, r.dispatchStartedAt, ' +
   'r.dispatchedAt, r.closedAt, ' +
-  'r.handoffCommit, r.prLineage, r.briefQueued, r.clearError, r.coordProject';
+  'r.handoffCommit, r.prLineage, r.briefQueued, r.clearError, r.coordProject, r.sessionBornAt, ' +
+  'r.sessionBornFor';
 
 /** ONE persisted integer, read as TEXT and proven representable.
  *
@@ -735,6 +882,60 @@ const persistedInt = (text: string, column: string): PersistedInt => {
   return isPositiveDecimalSafeInteger(value)
     ? { ok: true, value }
     : { ok: false, detail: `${column} is not a positive safe integer` };
+};
+
+/** A held-set detail (`deadCoordinatorBreakerHeldDetail`'s encoding, the `run_events` record's and the typed state's
+ *  snapshot alike) read back into members, ALL-OR-FAILURE: a text `splitDeadCoordinatorBreakerHeld` refuses, or an
+ *  instant this process cannot prove (`persistedInt`, D-2545's rule), is a failure, never a smaller set. */
+const parseBreakerHeld = (detail: string):
+  { ok: true; members: DeadCoordinatorBreakerMember[] } | { ok: false; detail: string } => {
+  const parts = splitDeadCoordinatorBreakerHeld(detail);
+  if (parts === null) return { ok: false, detail: 'the breaker held-set row is malformed' };
+  const members: DeadCoordinatorBreakerMember[] = [];
+  for (const p of parts) {
+    const ats: number[] = [];
+    for (const text of p.texts) {
+      const at = persistedInt(text, 'breaker held firstDeadAt');
+      if (!at.ok) return { ok: false, detail: at.detail };
+      ats.push(at.value);
+    }
+    members.push({ id: p.id, firstDeadAt: ats[0]!, ...(ats.length > 1 ? { instants: ats } : {}), ...(p.fallback ? { fallback: true as const } : {}) });
+  }
+  return { ok: true, members };
+};
+
+/** What the breaker's typed state row still carries as its snapshot (`deadCoordinatorBreakerState`'s `dirty` arm): the
+ *  members of the last landed snapshot, `none` before any landed, or a text it cannot read. Three answers, never folded. */
+export type DeadCoordinatorBreakerSnapshot =
+  | { readonly kind: 'none' }
+  | { readonly kind: 'members'; readonly members: readonly DeadCoordinatorBreakerMember[] }
+  | { readonly kind: 'unreadable'; readonly detail: string };
+
+/** `deadCoordinatorBreakerState`'s answer (D-4857). */
+export type DeadCoordinatorBreakerStateRead =
+  | { readonly kind: 'clean'; readonly generation: number; readonly held: readonly DeadCoordinatorBreakerMember[]; readonly writtenAt: number }
+  | { readonly kind: 'sealed'; readonly generation: number; readonly held: readonly DeadCoordinatorBreakerMember[]; readonly writtenAt: number }
+  | { readonly kind: 'dirty'; readonly generation: number; readonly snapshot: DeadCoordinatorBreakerSnapshot }
+  | { readonly kind: 'absent' }
+  | { readonly kind: 'unreadable'; readonly detail: string };
+
+/** `setStallSettings`' answer: written, with the read before and the read after (equal on a no-op), or a conflict
+ *  carrying the read it found and wrote nothing over. */
+export type StallSettingsWrite =
+  | { kind: 'written'; before: StallSettingsRead; after: StallSettingsRead }
+  | { kind: 'conflict'; before: StallSettingsRead };
+
+/** `stallObservationsSince`' answer: the window's rows, or a read that failed, with its detail. */
+export type StallObservationsRead = { ok: true; rows: StallObservationRow[] } | { ok: false; detail: string };
+
+/** Whether two settings reads are the same state, compared as read, before any parse, so a `bigint` meets a `bigint`:
+ *  the same kind and, for a row, the same three values, `updatedAt` included. Two unreadable reads are the same
+ *  kind; `setStallSettings` throws on its own unreadable read before it asks. */
+const sameStallSettingsRead = (a: StallSettingsRead, b: StallSettingsRead): boolean => {
+  if (a.kind === 'row' && b.kind === 'row') {
+    return a.row.level === b.row.level && a.row.quietMs === b.row.quietMs && a.row.updatedAt === b.row.updatedAt;
+  }
+  return a.kind === b.kind;
 };
 
 /** The four persisted integers every run-shaped read carries, proven. */
@@ -807,11 +1008,22 @@ const OUTSTANDING_STATES_SQL = "('queued','delivered')";
  *  (D-1406). */
 const TERMINAL_DELIVERY_SQL = `('${TERMINAL_DELIVERY_STATES.join("','")}')`;
 
+/** The `lastError` the mail sweep's auto-continue arm hands `backOff` (`watch.ts`,
+ *  passing on `sendPrompt`'s refusal of the same spelling), read back by
+ *  `autoContinueHeldUntil` for the stall watch's limit hold. Typed against the
+ *  send adapter's own union, so the two cannot drift apart silently.
+ *  `mail-routes.test.ts`'s kebab scan admits the word by name, as a send
+ *  refusal passing through, the way it admits its `enter-ignored` sibling. */
+const AUTO_CONTINUE_ARMED_LAST_ERROR: Extract<Extract<SendResult, { ok: false }>['error'], 'auto-continue-armed'> =
+  'auto-continue-armed';
+
 /** The cap's predicate, NEGATIVE over everything that is not active — the idle
  *  and terminal lists, both L0, joined the way `TERMINAL_DELIVERY_SQL` is
  *  (design 2026-09-14 §7.1 as corrected by D-2803): a raw state token this build
  *  cannot name is neither idle nor terminal and so COUNTS, which is the safe
- *  direction for a cap and the reason `unknown` sits in `ACTIVE_RUN_STATES`. */
+ *  direction for a cap and the reason `unknown` sits in `ACTIVE_RUN_STATES`.
+ *  `stallCandidates` reads it too (stall watch wave 1), for the same safe
+ *  direction: an unnamed state is a candidate, and the lane's verdict holds it. */
 const INACTIVE_RUN_STATES_SQL = `('${[...IDLE_RUN_STATES, ...TERMINAL_RUN_STATES].join("','")}')`;
 /** Every "still open" predicate in this file — `runs()`, `programOpenRunCount`,
  *  `openRunsForSession`, the strands query, `advanceInner`'s `closedAt` CASE —
@@ -837,12 +1049,30 @@ const HALTED_UPDATE_STATES = SETTLED_UPDATE_STATES.filter(
   (s): s is Exclude<SettledUpdateState, 'idle'> => s !== 'idle');
 const HALTED_UPDATE_SQL = `('${HALTED_UPDATE_STATES.join("','")}')`;
 
+/** The rows that actually HALT dispatch — `isHalting`'s (`update/dispatch.ts`) own notion, in SQL (D-3412): a settled
+ *  state but `idle`, EXCEPT a `failed` row whose detail begins `PROVENANCE_DETAIL_PREFIX` (a verdict on the release,
+ *  not a fault of the node). `HALTED_UPDATE_SQL` above is the STATE list only and is wider: `settleNode` refuses
+ *  every `failed` row whatever its detail, which is its own rule. The prefix is compared by `substr`, byte for byte
+ *  like `startsWith` — `LIKE` folds ASCII case. A NULL detail makes the comparison NULL, so the whole halting test is
+ *  NULL and the guard `AND NOT` it refuses: a `failed` row with no detail halts, as `isHalting` says. */
+const haltingRowSql = (t: string): string =>
+  `(${t}.updateState IN ${HALTED_UPDATE_SQL} AND NOT (${t}.updateState = 'failed' AND ` +
+  `substr(${t}.updateDetail, 1, ${PROVENANCE_DETAIL_PREFIX.length}) = '${PROVENANCE_DETAIL_PREFIX}'))`;
+/** The same notion over a read-back row (`handOffLease`'s `why`). A state this build cannot name reads `unknown`,
+ *  which is busy and never halts. */
+const rowHalts = (state: UpdateState, detail: string | null): boolean =>
+  haltedOf(state) !== null && !(state === 'failed' && detail !== null && detail.startsWith(PROVENANCE_DETAIL_PREFIX));
+
 /** The shape of a node id: the lowercase uuid `_inst_node_id` mints
  *  (`ccd/ccrc:9494-9513`) and nothing else, so an uppercase, padded or
  *  CR-terminated `~/.ccrc/node-id` never becomes a row key. Declared ONCE,
  *  here, beside the one writer that re-keys by it; the inventory's validator
  *  (`update/inventory.ts`, Task 11) imports it. */
 export const NODE_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+/** `rekeyNode`'s release of a revived busy row that another box's lease displaces (D-3412): the request stands, and
+ *  the detail names the rekey — the reader learns why a row they saw busy reads idle. */
+const REKEY_RELEASE_DETAIL = 'released on a rekey: the node-id came back while another node held the lease; the request stands';
 
 /** `ackNode`'s `updateDetail`: the row went back to idle because a person
  *  said so, not because anything converged. */
@@ -960,16 +1190,41 @@ export const MAIL_RECLAIM_CANCELLED_ERROR = 'coordinator reclaimed';
  */
 export const MAIL_REBIND_SUPERSEDED_ERROR = 'recipient rebound';
 
-/** The three parks that are DECISIONS rather than abandonment — a run closing
- *  (`closeRun`), a chair changing hands (`reclaimProgram`) and an occupant
- *  changing (`bindSession`) — as one SQL list, so the read-side exclusion below
- *  names a set rather than growing a second hand-written `!=` per writer. Every
- *  future "this delivery was cancelled on purpose" park joins HERE and inherits
- *  the exclusion; a park that means "we gave up" (the replay ceiling, the
- *  attempt ceiling, a purged recipient) must never be added, because those are
- *  exactly the rows that predicate exists to keep visible. */
+/**
+ * The child-reclaim park (child-reclamation spec 2026-09-22 §5.6): every
+ * outstanding delivery ADDRESSED TO a child workspace the server has just
+ * reclaimed, parked by `cancelDeliveriesTo`. Its OWN sentence, for
+ * `MAIL_REBIND_SUPERSEDED_ERROR`'s reason: `'run closed'` is false of a
+ * delivery from an earlier wave's run or from a peer (no run at all), and
+ * `lastError` reaches an operator's eye through `MailSummary.lastError`.
+ *
+ * A DELIBERATE cancel, so it joins `DELIBERATE_CANCEL_ERRORS_SQL` below — and
+ * it is not "a purged recipient", the abandonment park that set must never
+ * hold. That park (`watch.ts`'s `sweepMail`) is the lane DISCOVERING a
+ * recipient gone from under it, ~26 minutes after the fact, which is worth a
+ * human's look. This one is the server's own act, taken the instant the
+ * reclaim it caused succeeded: the recipient was removed ON PURPOSE because
+ * its run had closed, and a row that stayed visible as "this still needs a
+ * human" would ask a human to act on mail to a workspace that, by rule 4, no
+ * human was ever meant to open. It is also what ends the recycled-slug hazard
+ * `sweepMail`'s own comment names: `_ws_slug_new` re-mints a purged id, and a
+ * delivery left outstanding would be typed into the stranger that inherits
+ * it. No apostrophe: it is interpolated into the SQL fragment below.
+ */
+export const MAIL_CHILD_RECLAIMED_ERROR = 'child workspace reclaimed';
+
+/** The four parks that are DECISIONS rather than abandonment — a run closing
+ *  (`closeRun`), a chair changing hands (`reclaimProgram`), an occupant
+ *  changing (`bindSession`) and a child workspace reclaimed
+ *  (`cancelDeliveriesTo`, child-reclamation wave 3) — as one SQL list, so the
+ *  read-side exclusion below names a set rather than growing a second
+ *  hand-written `!=` per writer. Every future "this delivery was cancelled on
+ *  purpose" park joins HERE and inherits the exclusion; a park that means "we
+ *  gave up" (the replay ceiling, the attempt ceiling, a purged recipient)
+ *  must never be added, because those are exactly the rows that predicate
+ *  exists to keep visible. */
 const DELIBERATE_CANCEL_ERRORS_SQL =
-  `('${MAIL_RUN_CLOSED_ERROR}','${MAIL_RECLAIM_CANCELLED_ERROR}','${MAIL_REBIND_SUPERSEDED_ERROR}')`;
+  `('${MAIL_RUN_CLOSED_ERROR}','${MAIL_RECLAIM_CANCELLED_ERROR}','${MAIL_REBIND_SUPERSEDED_ERROR}','${MAIL_CHILD_RECLAIMED_ERROR}')`;
 
 /** The ABANDONMENT half of the predicate below, lifted into its own name because
  *  it is about to have a second reader: `requeueAbandonedMail`
@@ -1208,6 +1463,127 @@ class IntentJournalFault extends Error {
   constructor(readonly why: 'journal-unreadable' | 'journal-unwritable', cause: unknown) {
     super(cause instanceof Error ? cause.message : String(cause));
   }
+}
+
+/** Every id that may be the `from` of one `reclaimProgram` row, or `null`
+ *  for a row the writer cannot have produced. The writer emits
+ *  `reclaim:<from> -> <to>` (below, `this.recordRunEvent(m.id, 'operator',
+ *  \`reclaim:${m.claimedBy} -> ${to}\`, at)`, one call per row the UPDATE just
+ *  rewrote). A row the reader cannot use makes it throw, and `run_events`
+ *  rows are never deleted, so one such row stops every automatic
+ *  reclamation for good: this must accept EVERY string the writer can emit.
+ *
+ *  Neither side has a shape it can be split on. `from` is `runs.claimedBy`
+ *  as sqlite reads it back; `POST /api/runs` checks it only with
+ *  `claimedBy.trim() === ''` and no charset guard (`shared/api.ts`'s
+ *  `isSessionIdShape` exists precisely because the route does not enforce
+ *  one), so `from` may hold whitespace, a line terminator beside other
+ *  characters, its own ` -> `, or nothing at all — `trim` keeps NUL, and
+ *  node:sqlite reads `"\u0000demo"` back truncated to `""`. `to` is the
+ *  trimmed id `reclaimRun` (`reclaim.ts`) found as `<to>.uuid` in the
+ *  registry listing: never empty, but a filename, so it may hold a space, a
+ *  tab, a line feed or a ` -> ` of its own, or start with `-> `. With an
+ *  arrow on both sides, `reclaim:<from> -> <to>` has more than one reading,
+ *  and no single split recovers `from` in every case.
+ *
+ *  So this does not pick a split. It returns the prefix before EVERY
+ *  occurrence of ` -> ` in the text after `reclaim:`, overlapping ones
+ *  included (the search resumes one character past each hit, so `a -> -> b`
+ *  yields both `a` and `a ->`). The writer's own separator is one of those
+ *  occurrences, so the true `from` is always among the prefixes, whatever
+ *  either side contains. THE COST IS OVER-PROTECTION: the extra prefixes
+ *  join the set of ids that have coordinated, so a session whose id happens
+ *  to equal one of them — `demo` beside a displaced `demo -> x`, say — is
+ *  never reclaimed automatically. That is the fail-shut direction (it can
+ *  only leave a workspace for a human to clean up), where choosing one split
+ *  could silently drop the real `from` and let the displaced coordinator's
+ *  workspace be reclaimed. A well-shaped row (`demo-a -> heir-x`) has one
+ *  occurrence and yields exactly its `from`.
+ *
+ *  `null` — which the one reader, `childReclaimCoordinatorClaims`, below, turns
+ *  into a THROW rather than a silent drop — only for text that does not
+ *  start with `reclaim:` or holds no ` -> ` at all: the writer always emits
+ *  the prefix and one separator, so such a row is hand-written or a future
+ *  reword of the writer. The SQL selection below is case-SENSITIVE
+ *  (`substr(detail, 1, 8) = 'reclaim:'`, wave 4's fix — SQLite's `LIKE` is
+ *  case-insensitive for ASCII by default and would have handed this reader a
+ *  row it can never attribute, such as an operator's own `RECLAIM:x -> y`
+ *  note, which is exactly the "hand-written" case this function throws on.
+ *
+ *  THE LENGTH BOUND. A candidate longer than
+ *  `TMPROOT_ID_MAX_CHARS` (255) is never returned, and the
+ *  search stops at the first occurrence past that offset. Safe because a
+ *  session id is a FILENAME component — the registry holds `<id>.uuid`, and
+ *  no filesystem this runs on takes a component over 255 bytes, which no
+ *  string over 255 characters can fit in — so no longer id can ever be a
+ *  reclaimable child: dropping such a candidate can only fail to protect a
+ *  session that cannot exist. Every `from` of 255 characters or fewer is
+ *  still among the prefixes, exactly as before. Necessary because `from`
+ *  is unbounded upstream (the Fastify body limit is its only cap): a
+ *  megabyte `claimedBy` built of repeated ` -> ` yielded one prefix per
+ *  occurrence, up to a megabyte each, and every pass inserted them all into
+ *  a `Set` — seconds of synchronous event-loop stall per call, on every
+ *  sweep pass and every close. The bound makes the work per row
+ *  proportional to 255, not to the row. `null` still means "no ` -> ` at
+ *  all"; a row whose every candidate is too long parses to `[]`. */
+/* The bound is L0's `TMPROOT_ID_MAX_CHARS` (spec §5.10), the one temp-root id cap, imported above. */
+function childReclaimDisplacedCandidates(detail: string): string[] | null {
+  const prefix = 'reclaim:';
+  if (!detail.startsWith(prefix)) return null;
+  const body = detail.slice(prefix.length);
+  const first = body.indexOf(' -> ');
+  if (first === -1) return null;
+  const out: string[] = [];
+  for (let i = first; i !== -1 && i <= TMPROOT_ID_MAX_CHARS; i = body.indexOf(' -> ', i + 1)) {
+    out.push(body.slice(0, i));
+  }
+  return out;
+}
+
+/** Every id that may be the `to` of one `reclaimProgram` row — the HEIR the
+ *  row's chair moved to — or `null` exactly when `childReclaimDisplacedCandidates`
+ *  answers `null` (text that does not start with `reclaim:`, or holds no ` -> `).
+ *  The mirror of that parser, for its reason: neither side can be split on, so
+ *  this returns the suffix after EVERY occurrence of ` -> `, overlapping ones
+ *  included, and the writer's own separator is always one of them. It searches
+ *  from the END (`lastIndexOf`, resuming one character before each hit), so the
+ *  suffixes come shortest first, and it stops at the first one longer than
+ *  `TMPROOT_ID_MAX_CHARS` — every later one is longer still, and
+ *  no session id can be (that bound's own docstring, above). The extra readings
+ *  over-protect, which is the fail-shut direction. */
+function childReclaimDisplacedHeirCandidates(detail: string): string[] | null {
+  const prefix = 'reclaim:';
+  if (!detail.startsWith(prefix)) return null;
+  const body = detail.slice(prefix.length);
+  const last = body.lastIndexOf(' -> ');
+  if (last === -1) return null;
+  const out: string[] = [];
+  for (let i = last; i !== -1 && body.length - (i + 4) <= TMPROOT_ID_MAX_CHARS;
+    i = i === 0 ? -1 : body.lastIndexOf(' -> ', i - 1)) {
+    out.push(body.slice(i + 4));
+  }
+  return out;
+}
+
+/** The acts the birth read returns (spec §5.7: a creation is placed, or it is doubt). `create` opens a generation,
+ *  and `purge` is the one removal. Every removal of a row ends in ccd's `_reg_purge`, which journals `purge done`
+ *  BEFORE it unlinks the row's files, and that line carries the row's `meas.uuid`. `collect` never purges: it
+ *  removes the leftover temp root of a row that is already gone. So it is not here, by construction. The
+ *  runtime list derives from the map. */
+export type LifecycleBirthAct = Extract<LifecycleAct, 'create' | 'purge'>;
+const LIFECYCLE_BIRTH_ACT: Readonly<Record<LifecycleBirthAct, true>> = { create: true, purge: true };
+const LIFECYCLE_BIRTH_ACTS = Object.keys(LIFECYCLE_BIRTH_ACT) as LifecycleBirthAct[];
+const isLifecycleBirthAct = (v: string): v is LifecycleBirthAct =>
+  Object.prototype.hasOwnProperty.call(LIFECYCLE_BIRTH_ACT, v);
+
+/** One row of the birth read: a `done` `create` or `done` `purge` of one session. `id` is the mirror's own row id
+ *  (ingest order, never ccd's clock). `at` is ccd's clock. `uuid` is the line's `meas.uuid`, or null when the
+ *  line carried none. */
+export interface LifecycleBirthEvent {
+  readonly id: number;
+  readonly act: LifecycleBirthAct;
+  readonly at: number | null;
+  readonly uuid: string | null;
 }
 
 /**
@@ -1758,8 +2134,8 @@ export class CoordStore {
    * writer in the tree to give one `mail` row a second delivery. Nothing else
    * ever did — `queueDelivery` has exactly two other call sites and each follows
    * an `insertMail` — and `mail_deliveries` carries no unique key on
-   * `(mailId, toId)` to fall back on (`schema.ts`: the one index is
-   * `mail_deliveries_due`). So:
+   * `(mailId, toId)` to fall back on (`schema.ts`: neither of its indexes,
+   * `mail_deliveries_due` and `mail_deliveries_by_mail`, is unique). So:
    *   `GROUP BY m.id` — a program whose rows disagree about the claimant (the
    *     hand-recovered row the caller's own comment describes) puts TWO
    *     displaced ids in `displaced`, and one mail parked against both would
@@ -1812,7 +2188,7 @@ export class CoordStore {
    *     non-NULL state on every row it can select. It is `GET
    *     /api/mail?program=`'s default, non-`all`, arm.
    *
-   * On the narrower `OUTSTANDING_STATES_SQL` — ten holders, in file order:
+   * On the narrower `OUTSTANDING_STATES_SQL` — twelve holders, in file order:
    *   `OUTSTANDING_OR_ABANDONED_SQL`'s own definition — the composed constant,
    *     no reader of its own.
    *   `cancelKickoffsTo` and `repointCoordinatorMail` — both run BEFORE this
@@ -1830,8 +2206,8 @@ export class CoordStore {
    *     single-line-signature method (D-2338; see `requeueAbandonedMail`'s
    *     call site) rather than inlined, and therefore a THIRD, separate
    *     holder: its own `WHERE state IN` guards exactly which outstanding
-   *     rows the predecessor loses. This whole bullet, and the "ten holders"
-   *     count above, is itself a consequence of D-2338 — the brief's own
+   *     rows the predecessor loses. This whole bullet, and the tenth holder
+   *     counted above, is itself a consequence of D-2338 — the brief's own
    *     verbatim replacement text for this docstring (Step 7) named nine and
    *     said nothing about this method, because it assumed the inline shape.
    *   `cancelOutstandingDeliveries` — reached, and correctly. A new row belongs
@@ -1839,6 +2215,13 @@ export class CoordStore {
    *     other outstanding delivery, with `MAIL_RUN_CLOSED_ERROR` — a DELIBERATE
    *     cancel, which `ABANDONED_PARK_SQL` excludes, so it cannot come back
    *     round through this arm on a later reclaim.
+   *   `cancelDeliveriesTo` (child reclamation, wave 3) — reached only if an
+   *     operator named a CHILD workspace as the heir chair, and correct then
+   *     too: it runs after that child has been reclaimed, so the re-queued row
+   *     is parked like every other delivery to it, with
+   *     `MAIL_CHILD_RECLAIMED_ERROR` — a DELIBERATE cancel, which
+   *     `ABANDONED_PARK_SQL` excludes, so it cannot come back round through
+   *     this arm either.
    *   `runHealth`'s outstanding-vs-parked count — THE ONE READER WHOSE OUTPUT
    *     THIS ARM CHANGES, and the one the hand-typed walk omitted. Both halves
    *     of that query are per-DELIVERY, exactly as `RunHealth.mailOutstanding`
@@ -1875,6 +2258,14 @@ export class CoordStore {
    *     alone would then be resting on `m.subject` happening to differ.
    *   `hasOutstandingPeerDuplicate` and `outstandingPeerCount` are
    *     `m.runId IS NULL`-scoped and therefore unreachable too.
+   *   `autoContinueHeldUntil` (stall watch wave 1) is a READ, never a writer:
+   *     the latest `nextAttemptAt` among one session's outstanding deliveries
+   *     held back by an armed auto-continue. A re-queued row reaches it only
+   *     after that row is itself refused by an armed auto-continue on its NEW
+   *     recipient's pane, and it is correct then too: the heir's pane really is
+   *     waiting out a limit, which is the fact the stall lane's limit hold
+   *     reads. A terminal row never counts, so an acked or parked refusal
+   *     cannot keep a worker's limit hold alive.
    *
    * BOUNDED by the role-addressed reports of ONE program that parked while its
    * coordinator was dead, at most one new row per `mail` row, and deliberately
@@ -2097,6 +2488,54 @@ export class CoordStore {
   }
 
   /**
+   * The stall watch's observation row (spec 2026-09-29 §4.2 "Durable dedupe, no
+   * migration"): one `run_events` row per rung, with `detail` the rung's
+   * `stallDetail` and `fromState = toState` = the run's current state, so
+   * `pushNewRuns` skips it as a non-transition, as it does every
+   * `recordRunEvent` row. `causedBy` is `operator`, the role the watch speaks for.
+   *
+   * NOT `recordRunEvent`: that writer returns `void` and no-ops on an absent run.
+   * This one answers `StallObservation` and refuses a second row with the same
+   * `(runId, detail)`, which is the dedupe that survives a restart: the ladder
+   * reads its rung times back from these rows, never from memory.
+   *
+   * `run-gone` covers a run that is absent or no longer active (D-3584, the
+   * comment in the body), so a close that landed after the lane's candidate read
+   * is never given a row or a mail.
+   *
+   * OPENS NO TRANSACTION, so `queueStallNotice` (`rundefs.ts`) can hold this
+   * row and its mail in ONE. `tx` is not re-entrant. A caller with no
+   * transaction of its own uses `recordStallObservation` below, so the check and
+   * the insert are never split by another writer.
+   */
+  insertStallObservation(runId: number, detail: string, at: number): StallObservation {
+    // D-3584 run-gone-includes-inactive: "gone" is absent OR no longer active. The
+    // lane awaits between `stallCandidates` and this write (the pane pid, the live
+    // file, `measureClaimant`), so a close can land in that window, and a stall mail
+    // queued after close's `cancelOutstandingDeliveries` would be delivered on a
+    // closed run (`dueDeliveries` does not filter on run state). The fragment is
+    // `stallCandidates`' own, so the candidate and the write cannot disagree about
+    // which states are live, and `unknown` still counts as active.
+    const run = this.db.prepare(
+      `SELECT state FROM runs WHERE id = ? AND state NOT IN ${INACTIVE_RUN_STATES_SQL}`,
+    ).get(runId) as { state: string } | undefined;
+    if (run === undefined) return { recorded: false, why: 'run-gone' };
+    const seen = this.db.prepare('SELECT 1 AS x FROM run_events WHERE runId = ? AND detail = ? LIMIT 1').get(runId, detail);
+    if (seen !== undefined) return { recorded: false, why: 'duplicate' };
+    const res = this.db.prepare(
+      'INSERT INTO run_events (runId, at, fromState, toState, causedBy, detail) VALUES (?, ?, ?, ?, ?, ?)',
+    ).run(runId, at, run.state, run.state, 'operator', detail);
+    return { recorded: true, eventId: Number(res.lastInsertRowid) };
+  }
+
+  /** `insertStallObservation` in exactly one transaction: the stall lane's shadow
+   *  rows and its push-only rungs (r3 and the three caps), each recorded BEFORE
+   *  it is pushed. */
+  recordStallObservation(runId: number, detail: string, at: number): StallObservation {
+    return tx(this.db, () => this.insertStallObservation(runId, detail, at));
+  }
+
+  /**
    * The WHOLE dispatch commit, as ONE transaction (D-277 (was D-B4-4)). Before this, the
    * dispatch route ran `markDispatched`, `setClearedAt` and `advance` as three
    * independent `tx()`s — the identical split `closeRun` below was created to
@@ -2172,8 +2611,18 @@ export class CoordStore {
   closeRun(input: {
     runId: number; finalState: 'done' | 'failed'; causedBy: string;
     handoffCommit: string | null; program: string; viaClosing: boolean;
+    /** THE COMPARE-AND-SET (workspace lifecycle spec 2026-09-24 §5.4, "No successor"): when given, the close commits
+     *  only while the run's `claimedBy` still equals it, read INSIDE this transaction; otherwise `claimant-changed`
+     *  and nothing is written. The dead-coordinator lane passes the crashed id; every other caller passes nothing. */
+    expectClaimedBy?: string;
   }): AdvanceResult {
     return tx(this.db, () => {
+      if (input.expectClaimedBy !== undefined) {
+        const row = this.db.prepare('SELECT claimedBy FROM runs WHERE id = ?').get(input.runId) as
+          { claimedBy: string | null } | undefined;
+        if (row === undefined) return { ok: false, error: 'unknown-run' };
+        if (row.claimedBy !== input.expectClaimedBy) return { ok: false, error: 'claimant-changed', claimedBy: row.claimedBy };
+      }
       // `viaClosing: false` is the ABANDON of a `planned` run (D-281 (was D-B4-8)).
       // `RUN_TRANSITIONS.planned` has a `failed` edge and deliberately no
       // `closing` one (`shared/api.ts`'s own docstring), and that table is NOT
@@ -2235,6 +2684,36 @@ export class CoordStore {
     ).run(runId);
   }
 
+  /** Child reclamation (spec 2026-09-22 §5.6): every outstanding delivery
+   *  ADDRESSED TO `toId`, parked `rejected('undeliverable')` with
+   *  `MAIL_CHILD_RECLAIMED_ERROR` — called by `reclaimChild` ONLY once the
+   *  child is gone: after `ws-reclaim` answered `reclaimed`, or when its own
+   *  registry read MEASURED the row absent — confirmed by a second listing
+   *  naming no `.uuid`/`.child` for the id (an earlier attempt's box half
+   *  finished without reaching this call). Never before, and never on a
+   *  refusal or a failure — those leave a live recipient that may still read
+   *  its mail.
+   *
+   *  KEYED ON THE RECIPIENT, and that is why it is its own writer rather than
+   *  `cancelOutstandingDeliveries` above: that one is keyed on `mail.runId`, so
+   *  it cannot reach a delivery from an EARLIER wave's run that the child never
+   *  acked, nor peer mail with no run at all. `mail_deliveries.toId` is the
+   *  RESOLVED session, never the `'coordinator'`/`'worker'` role `mail.toId`
+   *  may carry, so this parks exactly what was sent to the child.
+   *
+   *  RETURNS the number of rows it parked, never `void` — so it is not one of
+   *  the writers CLAUDE.md lists as returning `void`, and a caller can tell a
+   *  park from a no-op. An already-`acked` or already-parked row is left
+   *  alone: `OUTSTANDING_STATES_SQL` is the whole guard. Plain enough (no
+   *  nested `tx()`) to call standalone, like its sibling. */
+  cancelDeliveriesTo(toId: string): number {
+    const res = this.db.prepare(
+      "UPDATE mail_deliveries SET state = 'rejected', rejectCode = 'undeliverable', " +
+      `lastError = '${MAIL_CHILD_RECLAIMED_ERROR}' WHERE state IN ${OUTSTANDING_STATES_SQL} AND toId = ?`,
+    ).run(toId);
+    return Number(res.changes);
+  }
+
   /**
    * THE ONE WRITER that can RE-BIND `runs.sessionId` (design 2026-09-08 §4).
    *
@@ -2276,11 +2755,39 @@ export class CoordStore {
    * later SQLite failure rolls the binding, re-issued delivery and event back
    * together (D-2505).
    */
-  bindSession(runId: number, sessionId: string): { rebound: boolean; reissued: number } {
+  bindSession(runId: number, sessionId: string, bornAt?: number | null): { rebound: boolean; reissued: number } {
     const row = this.db.prepare('SELECT sessionId FROM runs WHERE id = ?')
       .get(runId) as { sessionId: string | null } | undefined;
     const predecessor = row?.sessionId ?? null;
     this.db.prepare('UPDATE runs SET sessionId = ? WHERE id = ?').run(sessionId, runId);
+    // The child's BIRTH is write-once PER BOUND SESSION, never a first stamp
+    // per run (child-reclamation spec §5.1, §5.3 — `childBirthOf` reads these
+    // two columns, `coord/childSpent.ts`). An EXPLICIT `bornAt` — only the
+    // fresh-spawn dispatch arm passes one, because it alone knows whether this
+    // spawn is genuinely new or an adoption of an earlier attempt's workspace —
+    // wins outright: a real stamp writes `sessionBornFor = sessionId` beside
+    // it, and an explicit `null` (the adopted arm) writes `sessionBornFor =
+    // NULL` too — there is no birth to attribute, so nothing is attributed.
+    // Omitting the argument means this bind is not the moment of birth: a
+    // same-session re-statement leaves BOTH columns untouched (this call is
+    // outside a `tx()` on the fresh-spawn arm — see below — so the invariant
+    // `sessionId IS NULL ⇒ sessionBornAt IS NULL` is what keeps a crash
+    // between the two UPDATEs fail-closed: the predecessor there is always
+    // NULL, never a bound session whose birth this branch could leave
+    // orphaned), and an occupant change nulls both, because a birth dated to
+    // a session that no longer holds this run is not this session's birth —
+    // `sessionBornFor` is how `childBirthOf` catches a birth an OLDER build
+    // left stale across a rollback (a build that predates this column rebinds
+    // `sessionId` through `clearSession`/two-argument `setSession` without
+    // touching either). Neither statement below names `sessionId` in its SET
+    // list, so the one-writer scan above still counts exactly one write of
+    // that column per statement.
+    if (bornAt !== undefined) {
+      this.db.prepare('UPDATE runs SET sessionBornAt = ?, sessionBornFor = ? WHERE id = ?')
+        .run(bornAt, bornAt === null ? null : sessionId, runId);
+    } else if (predecessor !== sessionId) {
+      this.db.prepare('UPDATE runs SET sessionBornAt = NULL, sessionBornFor = NULL WHERE id = ?').run(runId);
+    }
     // NULL is a FIRST bind, not a re-bind, and it re-issues nothing: there is no
     // predecessor to inherit from, and every wave-1 dispatch on the box lands
     // here. The same-session case is a re-statement, not a change of occupant.
@@ -2312,7 +2819,7 @@ export class CoordStore {
    * sentence in the paragraph above is still true of what this method DOES;
    * what changed is only where the statement lives.
    */
-  setSession(runId: number, sessionId: string): { rebound: boolean; reissued: number } {
+  setSession(runId: number, sessionId: string, bornAt?: number | null): { rebound: boolean; reissued: number } {
     // Delegated, not re-implemented: `bindSession` above is the writer of this
     // column. Its answer is RETURNED, not dropped (D-2351; PR #75 review
     // round 1, store-2): the open route is a live RE-bind path — a retried open of a
@@ -2320,7 +2827,13 @@ export class CoordStore {
     // predecessor — and records what it was told on the run's trail. The
     // fresh-spawn arm (`dispatch.ts`) binds a run that names no session yet,
     // where the answer is always `{rebound:false, reissued:0}` and is ignored.
-    return this.bindSession(runId, sessionId);
+    //
+    // `bornAt` (migration 16) is forwarded as-is, undefined included:
+    // `bindSession` is where the write-once-birth logic lives, on both the
+    // explicit and the omitted arm, so this method adds nothing of its own.
+    // The open route (`routes.ts`) calls the two-argument form, never naming a
+    // birth — it re-binds an already-dispatched wave, not a fresh spawn.
+    return this.bindSession(runId, sessionId, bornAt);
   }
 
   /**
@@ -2356,8 +2869,13 @@ export class CoordStore {
       const row = this.db.prepare("SELECT sessionId FROM runs WHERE id = ? AND state = 'planned'")
         .get(runId) as { sessionId: string | null } | undefined;
       if (row === undefined || row.sessionId === null) return { ok: true as const, cleared: false };
+      // `sessionBornAt`/`sessionBornFor` clear alongside `sessionId` (migration
+      // 15): the spent occupant's birth belongs to nobody once the run names no
+      // session, and the next dispatch's fresh-spawn arm mints a fresh birth
+      // for whichever session it binds.
       this.db.prepare(
-        "UPDATE runs SET sessionId = NULL, workspace = NULL, branch = NULL WHERE id = ? AND state = 'planned'",
+        "UPDATE runs SET sessionId = NULL, workspace = NULL, branch = NULL, " +
+        "sessionBornAt = NULL, sessionBornFor = NULL WHERE id = ? AND state = 'planned'",
       ).run(runId);
       this.recordRunEvent(runId, 'coordinator', `session-unbound: ${row.sessionId} (workspace-spent #${pr})`);
       return { ok: true as const, cleared: true };
@@ -2646,6 +3164,33 @@ export class CoordStore {
   }
 
   /**
+   * "Which OPEN runs does this session COORDINATE?" — `openRunsForSession`'s question asked of the OTHER column
+   * (workspace lifecycle spec §5.2): every non-terminal run whose `claimedBy` is `claimantId`, in id order, for the
+   * archive door's `coordinator-has-open-runs` refusal and its `{programme:'end'}` act. `openCoordinatorIds` answers
+   * WHO coordinates something, as a set of ids; this answers WHICH runs, with the columns the refusal names.
+   *
+   * `openRunsForSession`'s predicate (`state NOT IN` the terminal set, so a row in a state this build cannot name
+   * counts as open) and its row (`OpenSibling`, the four integers CAST and proven, ALL-OR-FAILURE, D-2545): a partial
+   * list is how "this coordinator has no open runs" gets asserted about one that does, one step from an archive.
+   * Synchronous, like every other read on this store.
+   */
+  openRunsClaimedBy(claimantId: string): OpenSiblingsResult {
+    const rows = this.db.prepare(
+      'SELECT CAST(id AS TEXT) AS idText, program, CAST(wave AS TEXT) AS waveText, ' +
+      'CAST(waveOf AS TEXT) AS waveOfText, CAST(reviews AS TEXT) AS reviewsText FROM runs ' +
+      `WHERE claimedBy = ? AND state NOT IN ${TERMINAL_RUN_STATES_SQL} ORDER BY id`,
+    ).all(claimantId) as unknown as
+      { idText: string; program: string; waveText: string; waveOfText: string | null; reviewsText: string | null }[];
+    const runs: OpenSibling[] = [];
+    for (const r of rows) {
+      const m = measureRunNumbers(r);
+      if (!m.ok) return { ok: false, kind: 'run-unreadable', detail: m.detail };
+      runs.push({ id: m.nums.id, program: r.program, wave: m.nums.wave, waveOf: m.nums.waveOf });
+    }
+    return { ok: true, siblings: runs };
+  }
+
+  /**
    * "Which OPEN runs name this session?" — the question the hold file
    * structurally cannot answer, asked at three destructive decision points.
    *
@@ -2696,6 +3241,81 @@ export class CoordStore {
     return { ok: true, siblings };
   }
 
+  /** `openRunsForSession`'s shape, with its `state NOT IN …` filter REMOVED
+   *  (child-reclamation wave 4, spec §5.7's "no hold" conjunct): every run
+   *  naming `sessionId`, in ANY state, TERMINAL included. `openRunsForSession`
+   *  answers "is this workspace still claimed?" and deliberately excludes a
+   *  terminal run; the hold read needs the OPPOSITE population — a run that
+   *  has FINISHED, because only a terminal run's own claim can be what a held
+   *  child's text renders. `state` rides on every row (`openRunsForSession`'s
+   *  narrower row omits it — every row it returns is non-terminal by
+   *  construction, so its caller never needs to ask): the hold read compares
+   *  each candidate's `state` itself. ALL-OR-FAILURE, `openRunsForSession`'s
+   *  own rule: a partial candidate list is how a hold this build did write can
+   *  read as one it never wrote. */
+  runsNamingSession(sessionId: string): RunsNamingSessionResult {
+    const rows = this.db.prepare(
+      'SELECT CAST(id AS TEXT) AS idText, program, CAST(wave AS TEXT) AS waveText, ' +
+      'CAST(waveOf AS TEXT) AS waveOfText, CAST(reviews AS TEXT) AS reviewsText, state FROM runs ' +
+      'WHERE sessionId = ? ORDER BY id',
+    ).all(sessionId) as unknown as
+      { idText: string; program: string; waveText: string; waveOfText: string | null;
+        reviewsText: string | null; state: string }[];
+    const runs: ChildReclaimNamingRow[] = [];
+    for (const r of rows) {
+      const m = measureRunNumbers(r);
+      if (!m.ok) return { ok: false, kind: 'run-unreadable', detail: m.detail };
+      runs.push({ id: m.nums.id, sessionId, program: r.program, wave: m.nums.wave, waveOf: m.nums.waveOf,
+        state: isRunState(r.state) ? r.state : 'unknown' });
+    }
+    return { ok: true, runs };
+  }
+
+  /**
+   * The stall watch's candidates (spec 2026-09-29 §4.2 "Candidates"): every run
+   * in an ACTIVE state that names a worker, of both kinds, with the columns the
+   * lane's verdict and its notices read. `state NOT IN ${INACTIVE_RUN_STATES_SQL}`
+   * is the dispatch cap's own predicate, reused and never respelled, so a run in
+   * `unknown`, or in a state this build cannot name, IS a candidate, and the
+   * verdict holds it rather than this read hiding it. `openRunsForSession` is not
+   * reused: its predicate also returns `planned` and idle runs, and it carries no
+   * `state`, `kind` or `dispatchedAt`.
+   *
+   * CAST AND PROVEN (D-2545's idiom, `openRunsForSession`'s shape): `id`, `wave`,
+   * `waveOf` and `reviews` through `measureRunNumbers`, so the two reads cannot
+   * disagree about the domain, and `dispatchedAt` through `persistedInt`.
+   * ALL-OR-FAILURE: one unrepresentable row refuses the whole read, and the lane
+   * holds every worker that tick. A partial list is how a silent worker would go
+   * unwatched with nothing said. The row shape is `StallRunRow`, declared by its
+   * consumer (`stall.ts`).
+   */
+  stallCandidates(): { ok: true; runs: StallRunRow[] } | { ok: false; kind: Extract<StallReadFailure, 'run-unreadable'>; detail: string } {
+    const rows = this.db.prepare(
+      'SELECT CAST(id AS TEXT) AS idText, kind, state, sessionId, claimedBy, ' +
+      'CAST(dispatchedAt AS TEXT) AS dispatchedAtText, program, CAST(wave AS TEXT) AS waveText, ' +
+      'CAST(waveOf AS TEXT) AS waveOfText, CAST(reviews AS TEXT) AS reviewsText, project, workspace FROM runs ' +
+      `WHERE state NOT IN ${INACTIVE_RUN_STATES_SQL} AND sessionId IS NOT NULL ORDER BY id`,
+    ).all() as unknown as
+      { idText: string; kind: string; state: string; sessionId: string; claimedBy: string | null;
+        dispatchedAtText: string | null; program: string; waveText: string; waveOfText: string | null;
+        reviewsText: string | null; project: string; workspace: string | null }[];
+    const runs: StallRunRow[] = [];
+    for (const r of rows) {
+      const nums = measureRunNumbers(r);
+      if (!nums.ok) return { ok: false, kind: 'run-unreadable', detail: nums.detail };
+      let dispatchedAt: number | null = null;
+      if (r.dispatchedAtText !== null) {
+        const at = persistedInt(r.dispatchedAtText, 'run dispatchedAt');
+        if (!at.ok) return { ok: false, kind: 'run-unreadable', detail: at.detail };
+        dispatchedAt = at.value;
+      }
+      runs.push({ id: nums.nums.id, kind: r.kind, state: r.state, sessionId: r.sessionId, claimedBy: r.claimedBy,
+        dispatchedAt, program: r.program, wave: nums.nums.wave, waveOf: nums.nums.waveOf,
+        project: r.project, workspace: r.workspace });
+    }
+    return { ok: true, runs };
+  }
+
   /** The sessions COORDINATING something live: every distinct `claimedBy` of a
    *  run this build calls non-terminal. NOT `openRunsForSession`'s question one
    *  method up — that one keys on `sessionId`, the WORKER column, which is the
@@ -2727,6 +3347,382 @@ export class CoordStore {
       'SELECT DISTINCT claimedBy FROM runs ' +
       `WHERE claimedBy IS NOT NULL AND state NOT IN ${TERMINAL_RUN_STATES_SQL}`,
     ).all() as { claimedBy: string }[]).map((r) => r.claimedBy);
+  }
+
+  /** The dead-coordinator lane's durable anchors (`dead_claimants`, migration 18; workspace lifecycle spec §5.4) —
+   *  EVERY row, one statement. Both integers ride CAST to TEXT and are proven, ALL-OR-FAILURE (D-2545's rule): an
+   *  anchor misread is how an hour gets counted that nobody measured, so one bad row fails the read and the lane acts
+   *  on nothing that pass. */
+  deadAnchors(): { ok: true; anchors: Map<string, DeadAnchor> } | { ok: false; detail: string } {
+    const rows = this.db.prepare(
+      'SELECT claimantId, CAST(firstDeadAt AS TEXT) AS firstText, CAST(lastDeadAt AS TEXT) AS lastText FROM dead_claimants',
+    ).all() as unknown as { claimantId: string; firstText: string; lastText: string }[];
+    const anchors = new Map<string, DeadAnchor>();
+    for (const r of rows) {
+      const first = persistedInt(r.firstText, 'firstDeadAt');
+      if (!first.ok) return { ok: false, detail: first.detail };
+      const last = persistedInt(r.lastText, 'lastDeadAt');
+      if (!last.ok) return { ok: false, detail: last.detail };
+      anchors.set(r.claimantId, { firstDeadAt: first.value, lastDeadAt: last.value });
+    }
+    return { ok: true, anchors };
+  }
+
+  /** Write one claimant's anchor — the lane's crashed pass. One statement, an upsert keyed by the claimant, and NO
+   *  transaction of its own: the lane writes anchors only inside `commitDeadCoordinatorBreakerState`, with the breaker's
+   *  exact snapshot and its state turning clean (D-4857). */
+  setDeadAnchor(claimantId: string, a: DeadAnchor): void {
+    this.db.prepare(
+      'INSERT INTO dead_claimants (claimantId, firstDeadAt, lastDeadAt) VALUES (?, ?, ?) ' +
+      'ON CONFLICT(claimantId) DO UPDATE SET firstDeadAt = excluded.firstDeadAt, lastDeadAt = excluded.lastDeadAt',
+    ).run(claimantId, a.firstDeadAt, a.lastDeadAt);
+  }
+
+  /** Delete one claimant's anchor — an alive, unmeasurable or non-crash answer, or a claimant that left the
+   *  population. Deleting a row that is not there is a no-op. Like `setDeadAnchor`, the lane calls it only inside
+   *  `commitDeadCoordinatorBreakerState` (D-4857): a delete never lands without the snapshot that still holds it. */
+  deleteDeadAnchor(claimantId: string): void {
+    this.db.prepare('DELETE FROM dead_claimants WHERE claimantId = ?').run(claimantId);
+  }
+
+  /** The RECORD of the dead-coordinator breaker's held set (review 381, F1; since D-4857 the typed state,
+   *  `deadCoordinatorBreakerState`, is the authority and this row records each change of it) — the stall watch's
+   *  "Durable dedupe" shape: ONE `run_events` observation row, `fromState = toState` = the carrier run's current state (so
+   *  `pushNewRuns` skips it), `causedBy` `operator`, `detail` `deadCoordinatorBreakerHeldDetail`'s encoding. NO dedupe
+   *  on `(runId, detail)`: a held set can recur after a clear, and the LATEST row is the truth
+   *  (`deadCoordinatorBreakerHeldLatest`). The carrier is ANY existing run, whatever its state — the detail carries the
+   *  whole set. Ids are percent-escaped and the encoding is total (a lone surrogate included, D-4857), so every claimant
+   *  id is carried. `run-gone` is an absent run; `invalid` is a set no pass builds (an instant that is not a positive safe
+   *  integer, or two members with one id): nothing is written then. NO transaction of its own: the lane writes this row
+   *  only inside `commitDeadCoordinatorBreakerState`, so it is a RECORD of the typed state's snapshot, never the truth
+   *  itself. Synchronous, like every write on this store. */
+  recordDeadCoordinatorBreakerHeld(
+    runId: number, held: readonly DeadCoordinatorBreakerMember[], at: number,
+  ): { recorded: true; eventId: number } | { recorded: false; why: 'run-gone' | 'invalid' } {
+    const detail = deadCoordinatorBreakerHeldDetail(held);
+    if (detail === null) return { recorded: false, why: 'invalid' };
+    const run = this.db.prepare('SELECT state FROM runs WHERE id = ?').get(runId) as { state: string } | undefined;
+    if (run === undefined) return { recorded: false, why: 'run-gone' };
+    const res = this.db.prepare(
+      'INSERT INTO run_events (runId, at, fromState, toState, causedBy, detail) VALUES (?, ?, ?, ?, ?, ?)',
+    ).run(runId, at, run.state, run.state, 'operator', detail);
+    return { recorded: true, eventId: Number(res.lastInsertRowid) };
+  }
+
+  /** The LATEST held-set row (`ORDER BY id DESC LIMIT 1` over the head): the members and the run that carries it. No row
+   *  at all is `{ ok: true, held: [], runId: null }`; a row this build cannot parse, or whose integers it cannot prove
+   *  (`persistedInt`, D-2545's rule), is `{ ok: false }` — ALL-OR-FAILURE like `deadAnchors`, never an empty set and
+   *  never an older row's. Since D-4857 the lane reads it only beside the typed state: for the run an empty set is written
+   *  on (its `runId`, readable or not), and, under a state that is not clean, for the members, instants and flags it still
+   *  carries, which the conservative seed keeps. The unreadable answer carries the row it could not read, `eventId`
+   *  (`null` for a read that threw before any row was found) and the `runId` it sits on (`null` when none, or when the run
+   *  id itself cannot be proved). A member the fallback held carries a
+   *  `*` after its complete `+` list of instants and reads back `fallback: true`. NO RELEASED BUILD READS THIS RECORD AT ALL (the build that
+   *  first had a reader, before the flag, never shipped), so a rollback to a released build starts with no hold: the
+   *  restart hole, failing OPEN — the spec's §12 says to disarm the lane before rolling back. A thrown statement is
+   *  `{ ok: false }` too. */
+  deadCoordinatorBreakerHeldLatest():
+    { ok: true; held: DeadCoordinatorBreakerMember[]; runId: number | null }
+    | { ok: false; detail: string; eventId: number | null; runId: number | null } {
+    let eventId: number | null = null;
+    let runId: number | null = null;
+    try {
+      const row = this.db.prepare(
+        'SELECT CAST(id AS TEXT) AS idText, CAST(runId AS TEXT) AS runText, CAST(detail AS TEXT) AS detail FROM run_events ' +
+        "WHERE causedBy = 'operator' AND substr(detail, 1, ?) = ? ORDER BY id DESC LIMIT 1",
+      ).get(DEAD_COORDINATOR_BREAKER_HELD_HEAD.length, DEAD_COORDINATOR_BREAKER_HELD_HEAD) as
+        { idText: string; runText: string; detail: string } | undefined;
+      if (row === undefined) return { ok: true, held: [], runId: null };
+      const ev = persistedInt(row.idText, 'run_events id');
+      if (ev.ok) eventId = ev.value;
+      const run = persistedInt(row.runText, 'run_events runId');
+      if (!run.ok) return { ok: false, detail: run.detail, eventId, runId };
+      runId = run.value;
+      const parsed = parseBreakerHeld(row.detail);
+      if (!parsed.ok) return { ok: false, detail: parsed.detail, eventId, runId };
+      return { ok: true, held: parsed.members, runId: run.value };
+    } catch (err) {
+      return { ok: false, detail: err instanceof Error ? err.message : String(err), eventId, runId };
+    }
+  }
+
+  /** THE BREAKER'S TYPED STATE (`dead_coordinator_breaker_state`, migration 19; the operator's ruling 4286, D-4857):
+   *  the one row, as the lane reads it at its first pass. FIVE answers, never folded:
+   *   - `sealed` (D-4916): the server's shutdown handler wrote it over a `clean` state, and `held` is that state's EXACT
+   *     snapshot, written at `writtenAt` (the write-time clock) in the one transaction that also wrote every anchor change
+   *     that pass made. ONLY this answer is seeded as it reads;
+   *   - `clean`: the last commit (or the first pass's unseal) landed, and `held` is the exact snapshot. A start that finds
+   *     it did not end through a clean shutdown (a kill, a crash, a stop that outlived its timeout), so it seeds
+   *     conservatively, keeping what it reads;
+   *   - `dirty`: a pass marked the state before changing anchors and its commit has not landed (or a process died
+   *     between the two). `snapshot` is what the row still carries — the last landed one, `none` before any landed, or
+   *     `unreadable` — and the lane keeps whatever of it it can read;
+   *   - `absent`: no row: a database no lane of this release has written yet (the deploy that creates the table);
+   *   - `unreadable`: a row this build cannot read — an integer it cannot prove, a state word it does not know, a clean
+   *     row with no readable snapshot — or a read that threw.
+   *  The last four (clean, dirty, absent, unreadable) FAIL SHUT the same way (the lane flags every claimant the pass does
+   *  not release and holds them only when two or more stand unreleased), and keep their own words. Nothing is cleared by comparing timestamps. Synchronous, like every read on this store. */
+  deadCoordinatorBreakerState(): DeadCoordinatorBreakerStateRead {
+    try {
+      const row = this.db.prepare(
+        'SELECT CAST(generation AS TEXT) AS genText, CAST(state AS TEXT) AS state, CAST(held AS TEXT) AS held, ' +
+        'CAST(writtenAt AS TEXT) AS atText FROM dead_coordinator_breaker_state WHERE id = 1',
+      ).get() as { genText: string | null; state: string | null; held: string | null; atText: string | null } | undefined;
+      if (row === undefined) return { kind: 'absent' };
+      const gen = persistedInt(row.genText ?? '', 'breaker state generation');
+      if (!gen.ok) return { kind: 'unreadable', detail: gen.detail };
+      const at = persistedInt(row.atText ?? '', 'breaker state writtenAt');
+      if (!at.ok) return { kind: 'unreadable', detail: at.detail };
+      const parsed = row.held === null ? null : parseBreakerHeld(row.held);
+      const snapshot: DeadCoordinatorBreakerSnapshot = parsed === null ? { kind: 'none' }
+        : parsed.ok ? { kind: 'members', members: parsed.members } : { kind: 'unreadable', detail: parsed.detail };
+      if (row.state === 'dirty') return { kind: 'dirty', generation: gen.value, snapshot };
+      if (row.state !== 'clean' && row.state !== 'sealed') return { kind: 'unreadable', detail: 'the breaker state word is not one this build knows' };
+      if (snapshot.kind !== 'members') {
+        return { kind: 'unreadable', detail: snapshot.kind === 'none' ? 'a clean breaker state carries no snapshot' : snapshot.detail };
+      }
+      return { kind: row.state, generation: gen.value, held: snapshot.members, writtenAt: at.value };
+    } catch (err) {
+      return { kind: 'unreadable', detail: err instanceof Error ? err.message : String(err) };
+    }
+  }
+
+  /** SEAL THE BREAKER'S STATE (D-4916, the operator's choice of 2026-10-13, "Seal on clean shutdown"): ONE statement, one
+   *  generation-checked write that turns a `clean` row into `sealed` over the SAME snapshot (`held` and `writtenAt` are
+   *  untouched) with the generation moved on. It writes nothing unless the row reads `clean` at exactly `generation`: a
+   *  dirty, sealed, absent or foreign-moved row refuses it. The caller (`FleetWatcher.sealDeadCoordinatorBreaker`)
+   *  decides WHETHER to seal; this only never seals what it did not see clean. */
+  sealDeadCoordinatorBreakerState(generation: number): { ok: true; generation: number } | { ok: false; detail: string } {
+    return this.moveBreakerState('clean', 'sealed', generation);
+  }
+
+  /** UNSEAL THE BREAKER'S STATE (D-4916): the mirror of the seal. The lane's first pass of a process that read `sealed`
+   *  writes `clean` back, generation-checked over the same snapshot, so a process that dies later leaves a state no start
+   *  trusts. Writes nothing unless the row reads `sealed` at exactly `generation`. */
+  unsealDeadCoordinatorBreakerState(generation: number): { ok: true; generation: number } | { ok: false; detail: string } {
+    return this.moveBreakerState('sealed', 'clean', generation);
+  }
+
+  private moveBreakerState(from: 'clean' | 'sealed', to: 'clean' | 'sealed', generation: number): { ok: true; generation: number } | { ok: false; detail: string } {
+    try {
+      const row = this.db.prepare(
+        `UPDATE dead_coordinator_breaker_state SET state = '${to}', generation = generation + 1 ` +
+        `WHERE id = 1 AND state = '${from}' AND generation = ? AND held IS NOT NULL RETURNING CAST(generation AS TEXT) AS genText`,
+      ).get(generation) as { genText: string } | undefined;
+      if (row === undefined) return { ok: false, detail: `the breaker state is not ${from} at generation ${generation}` };
+      const gen = persistedInt(row.genText, 'breaker state generation');
+      return gen.ok ? { ok: true, generation: gen.value } : { ok: false, detail: gen.detail };
+    } catch (err) {
+      return { ok: false, detail: err instanceof Error ? err.message : String(err) };
+    }
+  }
+
+  /** MARK THE BREAKER'S STATE DIRTY (D-4857), ALONE, before the lane changes any anchor: ONE statement, its own
+   *  transaction, so it is durable when it returns. It creates the row (generation 1, no snapshot) or moves the
+   *  generation on and keeps the snapshot it carries. Its answer is the generation the commit must find, or a failure —
+   *  and on a failure the lane changes no anchor and acts on nothing that pass. A malformed generation is overwritten
+   *  by a dirty one, which fails shut. */
+  markDeadCoordinatorBreakerDirty(at: number): { ok: true; generation: number } | { ok: false; detail: string } {
+    try {
+      const row = this.db.prepare(
+        "INSERT INTO dead_coordinator_breaker_state (id, generation, state, held, writtenAt) VALUES (1, 1, 'dirty', NULL, ?) " +
+        "ON CONFLICT(id) DO UPDATE SET generation = CAST(generation AS INTEGER) + 1, state = 'dirty', writtenAt = excluded.writtenAt " +
+        'RETURNING CAST(generation AS TEXT) AS genText',
+      ).get(at) as { genText: string } | undefined;
+      const gen = persistedInt(row?.genText ?? '', 'breaker state generation');
+      return gen.ok ? { ok: true, generation: gen.value } : { ok: false, detail: gen.detail };
+    } catch (err) {
+      return { ok: false, detail: err instanceof Error ? err.message : String(err) };
+    }
+  }
+
+  /** THE COMMIT (D-4857): in ONE synchronous `BEGIN IMMEDIATE` transaction, the breaker's EXACT held snapshot, every
+   *  anchor change of the pass (`upserts`, then the staged `deletes`) and the state turned `clean` with the generation
+   *  moved on — and, when `record` names carrier runs and one still exists, the `run_events` record of the set
+   *  (`recordDeadCoordinatorBreakerHeld`; the first carrier that exists takes it, and with none the table alone carries
+   *  the snapshot). It commits only over the dirty mark it was handed: the row must read `dirty` at `generation`, so a
+   *  mark it did not make (another writer's) refuses it. ANY failure — that refusal, a set no pass builds, a statement
+   *  that throws, a COMMIT that throws — rolls the whole of it back: no anchor moved, the snapshot and the run_events
+   *  record as they were, the state still dirty. Only `{ ok: true }` lets the lane update what it knows was committed,
+   *  or act. */
+  commitDeadCoordinatorBreakerState(c: {
+    readonly generation: number;
+    readonly upserts: readonly (readonly [string, DeadAnchor])[];
+    readonly deletes: readonly string[];
+    readonly held: readonly DeadCoordinatorBreakerMember[];
+    readonly at: number;
+    readonly record: readonly number[] | null;
+  }): { ok: true; generation: number; recordedOn: number | null } | { ok: false; detail: string } {
+    const detail = deadCoordinatorBreakerHeldDetail(c.held);
+    if (detail === null) return { ok: false, detail: 'the held set is not one a pass builds' };
+    try {
+      return tx(this.db, () => {
+        const row = this.db.prepare(
+          'SELECT CAST(generation AS TEXT) AS genText, CAST(state AS TEXT) AS state FROM dead_coordinator_breaker_state WHERE id = 1',
+        ).get() as { genText: string | null; state: string | null } | undefined;
+        if (row === undefined || row.state !== 'dirty' || row.genText !== String(c.generation)) {
+          throw new Error('the breaker state is not the dirty mark this pass made');
+        }
+        this.db.prepare(
+          "UPDATE dead_coordinator_breaker_state SET generation = ?, state = 'clean', held = ?, writtenAt = ? WHERE id = 1",
+        ).run(c.generation + 1, detail, c.at);
+        for (const [id, a] of c.upserts) this.setDeadAnchor(id, a);
+        let recordedOn: number | null = null;
+        for (const runId of c.record ?? []) {
+          const w = this.recordDeadCoordinatorBreakerHeld(runId, c.held, c.at);
+          if (w.recorded) { recordedOn = runId; break; }
+        }
+        for (const id of c.deletes) this.deleteDeadAnchor(id);
+        return { ok: true as const, generation: c.generation + 1, recordedOn };
+      });
+    } catch (err) {
+      return { ok: false, detail: err instanceof Error ? err.message : String(err) };
+    }
+  }
+
+  /** Per session id, the LATEST instant it held a coordinator's chair. This is
+   *  what the coordination fence reads (spec §1 rule 4, with spec §5.6's
+   *  recycled slugs: "ever coordinated" means this incarnation of the
+   *  workspace).
+   *  - `'open'` while any run naming it `claimedBy` is not terminal. This is
+   *    `programOpenRunCount`'s predicate, copied, so `'unknown'` counts as open.
+   *  - `'unplaced'` when none is open but a claim carries no readable instant:
+   *    a terminal run with no `closedAt`, as a reconstructed or legacy row has,
+   *    or a `closedAt` or displacement `at` that is not the canonical decimal
+   *    spelling of a positive safe integer. Both columns are INTEGER affinity,
+   *    so SQLite already stores any spelling it can read as an integer as an
+   *    INTEGER on write (`'1e3'`, `' 5'`, `'+5'`, `'05'` and `'5.0'` read back
+   *    as 1000, 5, 5, 5 and 5). The parse guards what stays TEXT or REAL
+   *    (`'0x10'`, `'0b1'`, `''`, `5.5`, `1e20`, ±Infinity), and it also refuses
+   *    an INTEGER outside 1..2^53−1 (`'-5'`, `'0'`, `'1e18'`,
+   *    `'9007199254740993'`): CAST to TEXT, because the schema is not STRICT,
+   *    then `parseCanonicalPositiveSafeInteger`, never `Number()`, which reads
+   *    a TEXT `0x10` as 16, an instant before any workspace's birth, and would
+   *    let the fence call a coordinator "not coordinated". No writer in this
+   *    tree stores any of them.
+   *  - Otherwise, the greatest of: each terminal run's `closedAt` that names it
+   *    today; and the `at` of every `reclaim:` displacement row naming it on
+   *    EITHER side. The `from` side (`childReclaimDisplacedCandidates`) is a
+   *    claim that ended at that instant, which no run names any more. The `to`
+   *    side (`childReclaimDisplacedHeirCandidates`) is a claim on
+   *    already-terminal runs that began then, after their `closedAt`.
+   *
+   *  The parsers' extra readings over-protect, which is the fail-shut
+   *  direction. An unparseable row THROWS. `reclaimProgram` is the only
+   *  writer of a `causedBy = 'operator'` row whose detail starts `reclaim:`
+   *  (the stall lane's operator rows start `stall:` or `stall-shadow:`, and
+   *  `closeRun`'s carry a NULL detail), so an unparseable such row — which
+   *  throws, and so keeps every child — can come from no other writer in this
+   *  tree. An id absent from the map has never held a chair. The residual is unchanged: a lost or rebuilt `coord.db`
+   *  loses this history, and every minting run with it.
+   *
+   *  Synchronous, like every other read on this store — see
+   *  `openRunsForSession`'s own docstring for why that is not an oversight to
+   *  be wrapped. */
+  childReclaimCoordinatorClaims(): ReadonlyMap<string, ChildReclaimCoordinatorClaim> {
+    const claims = new Map<string, ChildReclaimCoordinatorClaim>();
+    // THE FOLD, per id: `'open'` over everything, then `'unplaced'` over any
+    // number, then the greatest number.
+    const note = (id: string, c: ChildReclaimCoordinatorClaim): void => {
+      const had = claims.get(id);
+      if (had === 'open' || had === c) return;
+      if (had === undefined || c === 'open' || c === 'unplaced') { claims.set(id, c); return; }
+      if (had !== 'unplaced' && c > had) claims.set(id, c);
+    };
+    // The runs read. `closedAt` rides CAST to TEXT and is parsed by
+    // `parseCanonicalPositiveSafeInteger`: the schema is not STRICT, and SQLite
+    // ranks TEXT above INTEGER, so a raw read could hand this fold a string or
+    // a fraction. The column's INTEGER affinity already turns a spelling SQLite
+    // reads as an integer (`'1e3'`, `' 5'`, `'+5'`, `'05'`, `'5.0'`) into an
+    // INTEGER on write; what the parse guards is what stays TEXT or REAL
+    // (`'0x10'`, `'0b1'`, `''`, `5.5`, `1e20`, ±Infinity), and an INTEGER outside
+    // 1..2^53−1 (`'-5'`, `'0'`, `'1e18'`, `'9007199254740993'`). Canonical only,
+    // never `persistedInt`'s `Number()`: that reads `'0x10'` as an instant no
+    // writer wrote (16, before any birth: fail-OPEN), where `'unplaced'` keeps
+    // the child.
+    const runs = this.db.prepare(
+      `SELECT claimedBy, CASE WHEN state NOT IN ${TERMINAL_RUN_STATES_SQL} THEN 1 ELSE 0 END AS open, ` +
+      'CAST(closedAt AS TEXT) AS closedAtText FROM runs WHERE claimedBy IS NOT NULL',
+    ).all() as { claimedBy: string; open: number; closedAtText: string | null }[];
+    for (const r of runs) {
+      if (r.open === 1) { note(r.claimedBy, 'open'); continue; }
+      const closed = r.closedAtText === null ? null : parseCanonicalPositiveSafeInteger(r.closedAtText);
+      note(r.claimedBy, closed ?? 'unplaced');
+    }
+    // The displacement read. `substr(...) = 'reclaim:'`, never `LIKE
+    // 'reclaim:%'` (child-reclamation wave 4): SQLite's `LIKE` is
+    // case-insensitive for ASCII by default, so an unrelated OPERATOR note that
+    // merely starts `RECLAIM:…` would have matched and then reached the
+    // parsers, whose own `startsWith('reclaim:')` is case-SENSITIVE — a
+    // mismatch they read as "not this writer's row", which this read throws on.
+    // One hand-written note in the wrong case would have broken automatic
+    // reclamation fleet-wide. `substr` selects only what the writer's own
+    // `reclaim:${…}` template can produce.
+    // `DISTINCT`: `reclaimProgram` writes one identical row (one `at` for the
+    // act) per run of the programme it moves, so N runs would otherwise parse
+    // the same text N times; the candidate length bound is the parsers' own
+    // (`TMPROOT_ID_MAX_CHARS`, whose docstring states why dropping
+    // a longer one is safe). There is no SQL `MAX`: each row's instant is
+    // proven before the fold compares it.
+    const displacements = this.db.prepare(
+      'SELECT DISTINCT detail, CAST(at AS TEXT) AS atText FROM run_events ' +
+      "WHERE causedBy = 'operator' AND substr(detail, 1, 8) = 'reclaim:'",
+    ).all() as { detail: string; atText: string | null }[];
+    for (const row of displacements) {
+      const froms = childReclaimDisplacedCandidates(row.detail);
+      const heirs = childReclaimDisplacedHeirCandidates(row.detail);
+      if (froms === null || heirs === null) {
+        throw new Error(`run_events carries an unparseable reclaim-displacement row: ${JSON.stringify(row.detail)}`);
+      }
+      // Parsed canonically, for the runs read's reason above.
+      const at = row.atText === null ? null : parseCanonicalPositiveSafeInteger(row.atText);
+      const instant: ChildReclaimCoordinatorClaim = at ?? 'unplaced';
+      for (const id of froms) note(id, instant);
+      for (const id of heirs) note(id, instant);
+    }
+    return claims;
+  }
+
+  /**
+   * The run facts `FleetSession.releasedFrom` is decided from (workspace lifecycle spec §5.1), for the sessions
+   * one fleet assembly describes — ONE call per assembly, never one per row, beside `coordPlacementStamps`.
+   * That read cannot answer this: it filters to `coordProject IS NOT NULL` and carries no state.
+   * `openRunsForSession` is per-session and reserved for destructive decision points.
+   *
+   * Three statements, one synchronous call: nothing else writes `coord.db` between them. The claimant set is
+   * `openCoordinatorIds`' own read, reused rather than respelled.
+   *
+   * `id` rides CAST to TEXT and proven, ALL-OR-FAILURE (D-2545's rule, `openRunsForSession`'s): a partial list
+   * is how a session's newest run could silently read as an older, terminal one. `closedAt` is proven PER ROW
+   * instead: an unreadable close time makes that one session's `LastRun.closedAt` null, which `releasedFrom`
+   * reads as doubt, and costs no other row its answer.
+   */
+  lastRunBySession(sessionIds: readonly string[]): LastRunsResult {
+    if (sessionIds.length === 0) return { ok: true, last: [], openWorkers: [], openClaimants: [] };
+    const ph = placeholders(sessionIds.length);
+    const rows = this.db.prepare(
+      'SELECT CAST(r.id AS TEXT) AS idText, r.sessionId, r.state, r.program, p.title AS programTitle, ' +
+      'r.claimedBy, CAST(r.closedAt AS TEXT) AS closedAtText FROM runs r ' +
+      'LEFT JOIN programs p ON p.slug = r.program ' +
+      `WHERE r.id IN (SELECT MAX(id) FROM runs WHERE sessionId IN (${ph}) GROUP BY sessionId) ORDER BY r.id`,
+    ).all(...sessionIds) as unknown as {
+      idText: string; sessionId: string; state: string; program: string; programTitle: string | null;
+      claimedBy: string | null; closedAtText: string | null;
+    }[];
+    const last: LastRun[] = [];
+    for (const r of rows) {
+      const id = persistedInt(r.idText, 'run id');
+      if (!id.ok) return { ok: false, kind: 'run-unreadable', detail: id.detail };
+      const closed = r.closedAtText === null ? null : persistedInt(r.closedAtText, 'closedAt');
+      last.push({
+        sessionId: r.sessionId, runId: id.value, state: r.state, program: r.program,
+        programTitle: r.programTitle, claimedBy: r.claimedBy, closedAt: closed !== null && closed.ok ? closed.value : null,
+      });
+    }
+    const openWorkers = (this.db.prepare(
+      `SELECT DISTINCT sessionId FROM runs WHERE sessionId IN (${ph}) AND state NOT IN ${TERMINAL_RUN_STATES_SQL}`,
+    ).all(...sessionIds) as { sessionId: string }[]).map((r) => r.sessionId);
+    return { ok: true, last, openWorkers, openClaimants: this.openCoordinatorIds() };
   }
 
   /** `detail` joins the SELECT (fix, found in Task 9 review — D-47): `advance`
@@ -2959,11 +3955,20 @@ export class CoordStore {
    *  (idle ∪ terminal, dispatched/working/unknown sessions only survive it),
    *  while this one still names `TERMINAL_RUN_STATES_SQL`'s complement
    *  (every non-terminal state, IDLE included) — a program with every run
-   *  parked at `awaiting-review` is still open, and must stay so. */
-  programOpenRunCount(program: string): number {
+   *  parked at `awaiting-review` is still open, and must stay so.
+   *
+   *  `excludeRunId` (child reclamation, wave 3) asks the SAME question with one
+   *  run set aside: "would closing THIS run retire the program?", which
+   *  `closeRun` in `coord/close.ts` must answer BEFORE its fleet act, while the
+   *  closing run is still non-terminal. One predicate, two askers — the
+   *  retirement check above passes no exclusion, because by then the closing
+   *  run already reads terminal inside its own transaction. `-1` when absent,
+   *  an id AUTOINCREMENT never mints, so both are ONE query —
+   *  `openRunsForSession`'s own idiom. */
+  programOpenRunCount(program: string, excludeRunId?: number): number {
     return (this.db.prepare(
-      `SELECT count(*) AS c FROM runs WHERE program = ? AND state NOT IN ${TERMINAL_RUN_STATES_SQL}`,
-    ).get(program) as { c: number }).c;
+      `SELECT count(*) AS c FROM runs WHERE program = ? AND state NOT IN ${TERMINAL_RUN_STATES_SQL} AND id != ?`,
+    ).get(program, excludeRunId ?? -1) as { c: number }).c;
   }
 
   /** The one NON-TERMINAL review run naming `workRunId`, or null (design
@@ -3084,6 +4089,12 @@ export class CoordStore {
       // for the whole batch in four (D-1299). A REQUIRED parameter, so a caller
       // cannot forget it and quietly ship a zeroed health object.
       health,
+      // Child-reclamation wave 5: NOT composed here. See `RunSummary.childReclaim`:
+      // the answer needs the registry's child marker and the sweep's in-memory
+      // defer, and this class sees neither. `GET /api/runs` replaces this for
+      // every row it ships; every other emitter carries only non-terminal runs,
+      // for which the derivation answers null as well.
+      childReclaim: null,
       prLineage: row.prLineage ? (JSON.parse(row.prLineage) as PrLineageEntry[]) : [],
       // Read straight through, on `homeProject`'s idiom: a free-form project
       // name stamped once at open time (migration 12), never re-derived here.
@@ -3092,6 +4103,22 @@ export class CoordStore {
       // this stays off the wire (`toRunSummary` strips it alongside
       // `prLineage`).
       coordProject: row.coordProject,
+      // The child's BIRTH (migration 16, child-reclamation spec §5.1, §5.3),
+      // read straight through on `coordProject`'s idiom directly above: a
+      // server-side measurement, `bindSession`'s one writer of a NON-NULL
+      // value, stripped off the wire by `toRunSummary` the same way. NULL
+      // means no fresh-spawn bind has ever stamped a birth for the CURRENT
+      // occupant of `sessionId` — an unbound run, an adopted spawn
+      // (deliberately unplaceable), or a predecessor's birth nulled by a
+      // later re-bind.
+      sessionBornAt: row.sessionBornAt,
+      // The session the birth above was recorded FOR (migration 16), read
+      // through on the same idiom. `childBirthOf` refuses to place a birth
+      // unless this equals `sessionId` — the guard against a cross-build
+      // rollback leaving a stale birth on a row an older build has since
+      // rebound (spec §5.3's recycled-slug hazard, extended across a
+      // rollback).
+      sessionBornFor: row.sessionBornFor,
     };
   }
 
@@ -3416,6 +4443,89 @@ export class CoordStore {
     return { running, dispatchedIn24h };
   }
 
+  // ── stall watch settings (design 2026-10-05 §8, §11) ───────────────────────
+
+  /** The settings row, every value as read: a row, no row, or a read that failed, three words and never one `null`.
+   *  The statement is prepared AND run inside the `try`, so a missing table or a driver throw is `unreadable` with the
+   *  driver's detail, never a throw. `setReadBigInts(true)`: without it an oversize INTEGER makes `.get()` throw
+   *  `ERR_OUT_OF_RANGE`, so one bad field would cost every field's own state; with it, that field arrives as a `bigint`
+   *  and only it parses unreadable (measured on node 22.13.0 and 24.14.1). Nothing is decided here:
+   *  `parseStallSettings` (L1) decides what each value means, `updatedAt` included. */
+  stallSettings(): StallSettingsRead {
+    try {
+      const st = this.db.prepare('SELECT level, quietMs, updatedAt FROM stall_settings WHERE id = 1');
+      st.setReadBigInts(true);
+      const r = st.get() as { level: unknown; quietMs: unknown; updatedAt: unknown } | undefined;
+      return r === undefined ? { kind: 'absent' } : { kind: 'row', row: { level: r.level, quietMs: r.quietMs, updatedAt: r.updatedAt } };
+    } catch (err) {
+      return { kind: 'unreadable', detail: err instanceof Error ? err.message : String(err) };
+    }
+  }
+
+  /** The settings write, in ONE `tx()`: read, compare, write, read again. It validates nothing; the route has decided
+   *  (the `setCaps` division of labour).
+   *  - A read that is itself unreadable takes neither arm: the store cannot tell an insert from an update, so it
+   *    THROWS inside the `tx()`, which rolls back. The route refuses on its own unreadable read first; this is the
+   *    second guard.
+   *  - It writes only over the row the route measured: a read that differs from `expected` (another kind, or any of a
+   *    row's three values as read, `updatedAt` included, since a hand edit need not move it) writes nothing and answers
+   *    `conflict` with the read it found (departure `server-decides-the-confirm` (D-4033)).
+   *  - A lost row takes the insert arm: `STALL_SETTINGS_SEED`, overridden only by the named fields.
+   *  - A patch that changes nothing in a stored row (`stallPatchIsNoOp`, after the `bigint` conversion) runs no
+   *    `UPDATE`, so `updatedAt` stays and `before` is `after` (departure `no-op-write-records-no-feed-event` (D-4031)).
+   *  - Otherwise the update arm sets only the named fields and `updatedAt`, so a quiet-only write keeps a stored level
+   *    as it is, an unreadable one included.
+   *  `stallSettingsAfter` (L1) is the projection of these arms; `stall-settings-store.test.ts` pins that they agree. */
+  setStallSettings(patch: StallSettingsPatch, at: number, expected: StallSettingsRead): StallSettingsWrite {
+    return tx(this.db, () => {
+      const before = this.stallSettings();
+      if (before.kind === 'unreadable') throw new Error(`stall settings unreadable inside the write: ${before.detail}`);
+      if (!sameStallSettingsRead(before, expected)) return { kind: 'conflict', before };
+      const quietMs = (q: NonNullable<StallSettingsPatch['quiet']>): number | null => (q.kind === 'default' ? null : q.ms);
+      if (before.kind === 'absent') {
+        this.db.prepare('INSERT INTO stall_settings (id, level, quietMs, updatedAt) VALUES (1, ?, ?, ?)').run(
+          patch.level ?? STALL_SETTINGS_SEED.level,
+          patch.quiet === undefined ? STALL_SETTINGS_SEED.quietMs : quietMs(patch.quiet),
+          at,
+        );
+      } else if (stallPatchIsNoOp(before.row, patch)) {
+        return { kind: 'written', before, after: before };
+      } else {
+        const sets: string[] = [];
+        const binds: (string | number | null)[] = [];
+        if (patch.level !== undefined) { sets.push('level = ?'); binds.push(patch.level); }
+        if (patch.quiet !== undefined) { sets.push('quietMs = ?'); binds.push(quietMs(patch.quiet)); }
+        sets.push('updatedAt = ?');
+        binds.push(at);
+        this.db.prepare(`UPDATE stall_settings SET ${sets.join(', ')} WHERE id = 1`).run(...binds);
+      }
+      return { kind: 'written', before, after: this.stallSettings() };
+    });
+  }
+
+  /** The notice-count read (§11): every `run_events` row at or after `since`, unordered (the counts are order-free,
+   *  and an `ORDER BY id` would invite a rowid scan on a database that never sees ANALYZE). It plans a SEARCH on
+   *  `run_events_by_at`, which `stall-settings-store.test.ts` pins. It spells no detail head: L1's
+   *  `stallNoticeCounts` classifies (`mail-stuck-decided-in-l1`'s discipline). `at` is CAST and proven (D-2545's
+   *  idiom), ALL-OR-FAILURE, the detail naming the column and no value; `detail` is CAST so a hand-edited non-text
+   *  value arrives as its text, which no stall detail matches. A thrown statement is `{ ok: false }`, never a throw. */
+  stallObservationsSince(since: number): StallObservationsRead {
+    try {
+      const rows = this.db.prepare(
+        'SELECT CAST(at AS TEXT) AS atText, CAST(detail AS TEXT) AS detail FROM run_events WHERE at >= ?',
+      ).all(since) as unknown as { atText: string; detail: string | null }[];
+      const out: StallObservationRow[] = [];
+      for (const r of rows) {
+        const at = persistedInt(r.atText, 'run_events at');
+        if (!at.ok) return { ok: false, detail: at.detail };
+        out.push({ at: at.value, detail: r.detail });
+      }
+      return { ok: true, rows: out };
+    } catch (err) {
+      return { ok: false, detail: err instanceof Error ? err.message : String(err) };
+    }
+  }
+
   // ── work items ─────────────────────────────────────────────────────────────
 
   addWorkItem(runId: number, title: string, blockedBy: readonly number[]): { id: number } {
@@ -3550,6 +4660,116 @@ export class CoordStore {
     ).run(Date.now(), m.fromId, m.fromUuid, m.toId, m.runId, m.kind, m.subject, m.body,
       JSON.stringify(m.artifacts));
     return { id: Number(res.lastInsertRowid) };
+  }
+
+  /**
+   * The LOWEST id of a mail on `runId` from `fromId` to `toId` (the mail's own
+   * addressee column) whose subject begins with `prefix`, or null. Stall watch
+   * wave 1: `pushNewMail`'s reply bind reads the first stall-check to a worker,
+   * so a reply older than every check is never bound. PREFIX BY `substr`, NEVER
+   * `LIKE`: `LIKE` folds ASCII case and reads `_` and `%` in the prefix as
+   * wildcards, so it would widen what counts as a check.
+   */
+  firstMailIdWithPrefix(runId: number, fromId: string, toId: string, prefix: string): number | null {
+    const row = this.db.prepare(
+      'SELECT MIN(id) AS id FROM mail WHERE runId = ? AND fromId = ? AND toId = ? ' +
+      'AND substr(subject, 1, length(?)) = ?',
+    ).get(runId, fromId, toId, prefix, prefix) as { id: number | null } | undefined;
+    return row?.id ?? null;
+  }
+
+  /**
+   * One read per stall candidate (stall watch wave 2, `one-mail-read-per-candidate` (D-3641)): every mail the lane's
+   * verdicts judge, and the delivery rows of exactly those mails, in two statements.
+   *
+   * Statement 1: the mail rows, oldest id first. A row is selected when it is on one of `runIds` (the run
+   * verdict's history, UNBOUNDED, because the ladder keys on the run's whole exchange), or when it touches the
+   * session inside the horizon: sent by it, addressed to it by the row's own `toId`, or delivered to it (a mail
+   * to the coordinator ROLE carries the role in `toId`, and the session only on its delivery row). The horizon
+   * is `at >= sinceAt` (`stall-mail-read-time-bounded` (D-3651)), and the lane passes `now - BACKLOG_HORIZON_MS`.
+   * PLANNED ON INDEXES, NEVER A TABLE SCAN (schema.ts's stall-read entry; `stall-store.test.ts` pins each plan): the
+   * run clause reads `mail_by_run`, the horizon `mail_by_at`, and both delivery reads `mail_deliveries_by_mail`. Two
+   * shapes here exist for the planner, and neither changes an answer. The delivered-to subquery is bounded by the
+   * horizon too: the outer row it selects must pass `at >= sinceAt` anyway, so the bound only lets the subquery walk
+   * `mail_by_at` instead of every delivery (there is deliberately no index led by `toId`; schema.ts says why).
+   * Statement 1 is MATERIALIZED before its ORDER BY, because this server never runs ANALYZE and the planner
+   * otherwise prefers a rowid-order scan of all of `mail` to an index read and a sort. An empty `runIds` drops the
+   * run clause rather than binding an empty list.
+   *
+   * The read is a SUPERSET of the run's mail. The lane therefore narrows the run verdict's `StallInput.mail`
+   * through L1's `stallRunMail` (`run-mail-filtered-in-l1` (D-3650)), and only the session verdicts see the whole read.
+   *
+   * Statement 2: those mails' delivery rows, oldest delivery id first. A re-queued mail has two, and the newest
+   * is the live one. Its predicate is statement 1's own, as a subquery, bound with the same values, so it binds
+   * a handful of values however long the run's history is. The two statements run back to back on this one
+   * synchronous handle with no await between them, so they see the same mail. The gate columns are SELECTED as
+   * plain values and never filter, order or group (D-792: a diagnostic is not a scheduling input). L1 decides
+   * mail-stuck from them, and `watch.ts` passes the rows through whole without naming a field
+   * (`delivery-and-deaf-facts-ride-the-mail-read` (D-3648)).
+   *
+   * Every integer is CAST and proven (D-2545), `runId` included: an off-run row's `runId` equals none of the
+   * bound ids, so it cannot be read raw the way wave 1's run-only read did. SQL NULL is decided here, at the call
+   * site, never inside `persistedInt`. ALL-OR-FAILURE: one unrepresentable value refuses the whole read, the
+   * kind names its table (`mail-unreadable` or `delivery-unreadable`), and the detail names the column and no value.
+   * `kind`, `state` and `lastGate` are the raw columns: L1 compares
+   * them with words, and an unnamed token matches none.
+   */
+  stallMailFor(sessionId: string, runIds: readonly number[], sinceAt: number): { ok: true; mail: StallMailRow[]; deliveries: StallDeliveryRow[] } | { ok: false; kind: Extract<StallReadFailure, 'mail-unreadable' | 'delivery-unreadable'>; detail: string } {
+    const onRuns = runIds.length === 0 ? '' : `runId IN (${placeholders(runIds.length)}) OR `;
+    const where = `${onRuns}((fromId = ? OR toId = ? OR id IN (SELECT mailId FROM mail_deliveries WHERE toId = ? ` +
+      'AND mailId IN (SELECT id FROM mail WHERE at >= ?))) AND at >= ?)';
+    const binds = [...runIds, sessionId, sessionId, sessionId, sinceAt, sinceAt];
+    const rows = this.db.prepare(
+      'WITH sel AS MATERIALIZED (SELECT id, CAST(id AS TEXT) AS idText, CAST(at AS TEXT) AS atText, ' +
+      `CAST(runId AS TEXT) AS runIdText, fromId, toId, kind, subject FROM mail WHERE ${where}) ` +
+      'SELECT idText, atText, runIdText, fromId, toId, kind, subject FROM sel ORDER BY id',
+    ).all(...binds) as unknown as
+      { idText: string; atText: string; runIdText: string | null; fromId: string; toId: string; kind: string; subject: string }[];
+    const mail: StallMailRow[] = [];
+    for (const r of rows) {
+      const id = persistedInt(r.idText, 'mail id');
+      if (!id.ok) return { ok: false, kind: 'mail-unreadable', detail: id.detail };
+      const at = persistedInt(r.atText, 'mail at');
+      if (!at.ok) return { ok: false, kind: 'mail-unreadable', detail: at.detail };
+      let runId: number | null = null;
+      if (r.runIdText !== null) {
+        const onRun = persistedInt(r.runIdText, 'mail runId');
+        if (!onRun.ok) return { ok: false, kind: 'mail-unreadable', detail: onRun.detail };
+        runId = onRun.value;
+      }
+      mail.push({ id: id.value, at: at.value, runId, fromId: r.fromId, toId: r.toId, kind: r.kind, subject: r.subject });
+    }
+    if (mail.length === 0) return { ok: true, mail, deliveries: [] };
+    const drows = this.db.prepare(
+      'SELECT CAST(id AS TEXT) AS idText, CAST(mailId AS TEXT) AS mailIdText, toId, state, ' +
+      'CAST(deliveredAt AS TEXT) AS deliveredAtText, CAST(ackedAt AS TEXT) AS ackedAtText, lastGate, ' +
+      'CAST(gateSince AS TEXT) AS gateSinceText, CAST(replayCount AS TEXT) AS replayCountText ' +
+      `FROM mail_deliveries WHERE mailId IN (SELECT id FROM mail WHERE ${where}) ORDER BY id`,
+    ).all(...binds) as unknown as
+      { idText: string; mailIdText: string; toId: string; state: string; deliveredAtText: string | null;
+        ackedAtText: string | null; lastGate: string | null; gateSinceText: string | null; replayCountText: string }[];
+    const nullable = (text: string | null, column: string): { ok: true; value: number | null } | { ok: false; detail: string } =>
+      text === null ? { ok: true, value: null } : persistedInt(text, column);
+    const deliveries: StallDeliveryRow[] = [];
+    for (const d of drows) {
+      const id = persistedInt(d.idText, 'delivery id');
+      if (!id.ok) return { ok: false, kind: 'delivery-unreadable', detail: id.detail };
+      const mailId = persistedInt(d.mailIdText, 'delivery mailId');
+      if (!mailId.ok) return { ok: false, kind: 'delivery-unreadable', detail: mailId.detail };
+      const deliveredAt = nullable(d.deliveredAtText, 'delivery deliveredAt');
+      if (!deliveredAt.ok) return { ok: false, kind: 'delivery-unreadable', detail: deliveredAt.detail };
+      const ackedAt = nullable(d.ackedAtText, 'delivery ackedAt');
+      if (!ackedAt.ok) return { ok: false, kind: 'delivery-unreadable', detail: ackedAt.detail };
+      const gateSince = nullable(d.gateSinceText, 'delivery gateSince');
+      if (!gateSince.ok) return { ok: false, kind: 'delivery-unreadable', detail: gateSince.detail };
+      // NOT NULL DEFAULT 0, and zero is decided here as NULL is for the nullable columns, because `persistedInt` proves a
+      // positive count (`gate-held-mail-is-not-stuck` (D-3798): coord-deaf tells a first delivery from a replay by it).
+      const replayCount = d.replayCountText === '0' ? { ok: true as const, value: 0 } : persistedInt(d.replayCountText, 'delivery replayCount');
+      if (!replayCount.ok) return { ok: false, kind: 'delivery-unreadable', detail: replayCount.detail };
+      deliveries.push({ id: id.value, mailId: mailId.value, toId: d.toId, state: d.state, deliveredAt: deliveredAt.value,
+        ackedAt: ackedAt.value, lastGate: d.lastGate, gateSince: gateSince.value, replayCount: replayCount.value });
+    }
+    return { ok: true, mail, deliveries };
   }
 
   /**
@@ -3801,6 +5021,34 @@ export class CoordStore {
     return row !== undefined;
   }
 
+  /** Whether ANY mail with this exact (fromId, runId, toId, subject) was ever
+   *  queued — in EVERY delivery state, which is the whole difference from
+   *  `hasOutstandingMail` above. Two readers. `queueStallNotice`'s run-less arm
+   *  (stall watch wave 2, `run-less-stall-notice` (D-3640)): a session notice has no
+   *  `run_events` row to dedupe on, so this is its durable "already sent", and
+   *  its subject names the episode to the day and minute
+   *  (`self-mail-subjects-carry-the-date` (D-3668)). And `sweepLanding`'s durable
+   *  "already told" read (landing-order wave 2, which finds this method here
+   *  and adds no second copy: `has-mail-with-subject-lands-here-first` (D-3639)): its
+   *  latch is in memory, `queueSystemMail`'s dedupe sees outstanding rows only,
+   *  and a PR that stays dequeued through a fix round would otherwise be mailed
+   *  again after every server restart once its first notice was acked. `mail`
+   *  is never pruned, so this answer does not decay. `toId` is the mail row's
+   *  own, which for system mail is the resolved session id `queueSystemMail`
+   *  was handed. It reads `mail` alone and names no delivery table, so the
+   *  delivery-writer census does not see it. It answers a bare `boolean`, not
+   *  a result union, deliberately: landing-order wave 2's plan inserts this
+   *  exact method, and byte-identity with it wins over the rule that a new
+   *  store member answers a union. There is no third condition to carry
+   *  either: a failed read throws to its caller, and never folds into
+   *  `false`. */
+  hasMailWithSubject(fromId: string, runId: number | null, toId: string, subject: string): boolean {
+    const row = this.db.prepare(
+      'SELECT 1 AS x FROM mail WHERE fromId = ? AND runId IS ? AND toId = ? AND subject = ? LIMIT 1',
+    ).get(fromId, runId, toId, subject);
+    return row !== undefined;
+  }
+
   /** Whether an OUTSTANDING peer mail with this exact (fromId, toId, subject)
    *  triple exists — the 409 'duplicate' probe (Build 9b wave 0, D10 hole 2).
    *  `runId IS NULL` no longer scopes it to the peer lane by construction —
@@ -3874,9 +5122,11 @@ export class CoordStore {
    * and this method never re-derives its argument — it only stores what the
    * caller already computed.
    *
-   * GUARDED. The three direct callers expand to FIVE reachable paths, all in
+   * GUARDED. The three direct callers expand to SIX reachable paths, all in
    * the same transaction as their `queueDelivery`: the mail route's send `tx`,
-   * the system-mail queue's own `tx`, `dispatchRun`'s dispatch `tx` through
+   * the system-mail queue's own `tx` and the stall watch's (`queueSystemMail`
+   * and `queueStallNotice`, each around `rundefs.ts`'s `insertSystemMailTx`),
+   * `dispatchRun`'s dispatch `tx` through
    * `markDispatched` -> `bindSession` -> `requeueAbandonedMail`,
    * `reclaimProgram`'s `tx`, and the open route's post-hold `tx` through
    * `setSession` -> `bindSession` (D-2505). `tx` is `BEGIN IMMEDIATE` over a
@@ -4178,17 +5428,40 @@ export class CoordStore {
    *  other writer of this column is: the row's recorded reason for its own
    *  terminal state should name the write that actually caused it.
    *
-   *  `countsAsAttempt` (default `true`): `false` belongs to three refusal paths
+   *  `countsAsAttempt` (default `true`): `false` belongs to four refusal paths
    *  that are not send failures. The registry-unmeasurable and tmux-unknown
-   *  branches never reach `sendPrompt`; D-2369's `auto-continue-armed` hold
-   *  reaches it but refuses before any keystroke. `attempts` is SEND-FAILURE
-   *  budget (`MAIL_MAX_ATTEMPTS`'s own docstring), so none may march toward the
-   *  same park ceiling as a prompt that was actually attempted and failed. */
+   *  branches never reach `sendPrompt`; D-2369's `auto-continue-armed` hold and
+   *  the stall watch's `turn-running` hold reach it but refuse before any
+   *  keystroke. `attempts` is SEND-FAILURE budget (`MAIL_MAX_ATTEMPTS`'s own
+   *  docstring): none may march toward the park ceiling of a failed prompt. */
   backOff(id: number, lastError: string, nextAttemptAt: number, countsAsAttempt = true): void {
     this.db.prepare(
       'UPDATE mail_deliveries SET attempts = attempts + ?, lastError = ?, nextAttemptAt = ? ' +
       `WHERE id = ? AND state NOT IN ${TERMINAL_DELIVERY_SQL}`,
     ).run(countsAsAttempt ? 1 : 0, lastError, nextAttemptAt, id);
+  }
+
+  /**
+   * The stall watch's hold-3 read (spec 2026-09-29 §4.2 hold 3): the LATEST
+   * `nextAttemptAt` over still-outstanding deliveries to `toId` that the mail
+   * sweep backed off because the recipient's pane had an auto-continue armed
+   * (`AUTO_CONTINUE_ARMED_LAST_ERROR`, a `backOff` reason and never a
+   * `MailGate`), or null when there is none. The lane subtracts
+   * `MAIL_ARMED_HOLD_MS` in `watch.ts`, where that constant is private, to get
+   * the hold's START; this read derives no time of its own. OUTSTANDING ONLY
+   * (`OUTSTANDING_STATES_SQL`, named in the reader walk above): an acked or
+   * parked row is not a hold on anyone. `nextAttemptAt` is CAST and proven
+   * (D-2545), so an unrepresentable value answers in words rather than
+   * throwing out of the lane.
+   */
+  autoContinueHeldUntil(toId: string): { ok: true; until: number | null } | { ok: false; kind: Extract<StallReadFailure, 'delivery-unreadable'>; detail: string } {
+    const row = this.db.prepare(
+      'SELECT CAST(MAX(nextAttemptAt) AS TEXT) AS untilText FROM mail_deliveries ' +
+      `WHERE toId = ? AND lastError = ? AND state IN ${OUTSTANDING_STATES_SQL}`,
+    ).get(toId, AUTO_CONTINUE_ARMED_LAST_ERROR) as { untilText: string | null } | undefined;
+    if (row === undefined || row.untilText === null) return { ok: true, until: null };
+    const until = persistedInt(row.untilText, 'delivery nextAttemptAt');
+    return until.ok ? { ok: true, until: until.value } : { ok: false, kind: 'delivery-unreadable', detail: until.detail };
   }
 
   /**
@@ -4336,6 +5609,18 @@ export class CoordStore {
     }));
   }
 
+  /** Whether the feed archive holds a record of this kind, about this session,
+   *  with exactly this body — `sweepLanding`'s durable "already told" read for
+   *  a removal no open run names (landing-order wave 2), whose body carries the
+   *  removal time. Bounded by `FEED_RETENTION` like every feed read: a record
+   *  pruned out of the archive reads as never recorded, and is announced again. */
+  hasFeedEvent(kind: string, sessionId: string, body: string): boolean {
+    const row = this.db.prepare(
+      'SELECT 1 AS x FROM feed_events WHERE kind = ? AND sessionId = ? AND body = ? LIMIT 1',
+    ).get(kind, sessionId, body);
+    return row !== undefined;
+  }
+
   /**
    * `GET /api/feed?program=<slug>`'s reader — the events of one programme,
    * oldest-first and clamped exactly as `feedEvents` clamps its own, through
@@ -4405,17 +5690,25 @@ export class CoordStore {
    * way `project`/`workspace` are — those degrade because they have no
    * meaning without a run; `runId` itself is the fact the predicate needs
    * verbatim, null included.
+   *
+   * `runSessionId` (stall watch wave 1) is the RUN's worker, `runs.sessionId`
+   * off the same `LEFT JOIN`: null for run-less mail and for a run not yet
+   * dispatched. `pushNewMail`'s stall reply bind needs it, because a reply's own
+   * `fromId` is only a CLAIM to be the worker, and the bind checks that claim
+   * against the run. Additive: every existing reader ignores it.
    */
   mailQueuedSince(sinceId: number): { deliveryId: number; mailId: number; toId: string; fromId: string;
                                        runId: number | null; kind: string; subject: string;
-                                       project: string | null; workspace: string | null }[] {
+                                       project: string | null; workspace: string | null;
+                                       runSessionId: string | null }[] {
     return this.db.prepare(
       'SELECT d.id AS deliveryId, m.id AS mailId, d.toId, m.fromId, m.runId, m.kind, m.subject, ' +
-      'r.project, r.workspace ' +
+      'r.project, r.workspace, r.sessionId AS runSessionId ' +
       'FROM mail_deliveries d JOIN mail m ON m.id = d.mailId LEFT JOIN runs r ON r.id = m.runId ' +
       'WHERE d.id > ? ORDER BY d.id',
     ).all(sinceId) as { deliveryId: number; mailId: number; toId: string; fromId: string; runId: number | null;
-                         kind: string; subject: string; project: string | null; workspace: string | null }[];
+                         kind: string; subject: string; project: string | null; workspace: string | null;
+                         runSessionId: string | null }[];
   }
 
   /** `run_events`'s current high-water id — same priming role as
@@ -4729,7 +6022,79 @@ export class CoordStore {
           refusal: string | null; detail: string | null; truncated: number;
           obsJson: string | null; decJson: string | null; measJson: string | null; raw: string;
         }[];
-    return rows.map((r) => ({
+    return rows.map((r) => CoordStore.reviveLifecycleRow(r));
+  }
+
+  /** One session's `create` rows ALONE, oldest-first, UNCAPPED by `LIFECYCLE_PAGE_MAX` (child-reclamation wave 4,
+   *  spec §5.9).
+   *  - Why uncapped: a failing child's ordinary window (`lifecycleFor`, 500 rows) scrolls past its own opening
+   *    `create` in days of retried refusals, and the attention list's generation needs that row for the LIFE
+   *    of the workspace.
+   *  - Its one caller is the sweep's attention rows (`childReclaimAttentionGenerationRows`), which merge it into
+   *    the window. The birth reads `lifecycleBirthEventsFor` instead, which adds the `purge` rows
+   *    (spec §5.7).
+   *  - Cost: bounded to one ACT. `lifecycle_by_session` is `(sessionId, id)`, so this still walks every row of
+   *    the session (it filters `act` after the index narrows to the session), not a narrower index on `act`.
+   *    The bound is on the SESSION, never the whole table.
+   *  - It never answers the oldest `create`, which would skip every recycled slug (spec §5.7).
+   *    `childReclaimGeneration` cuts "every create this session ever had" down to the CURRENT generation.
+   *  - Same column set and same reviver as `lifecycleFor`: `reviveLifecycleRow` is the one definition both share. */
+  lifecycleCreatesFor(sessionId: string): MirroredLifecycleEvent[] {
+    const c = CoordStore.LC_COLS;
+    const act: LifecycleAct = 'create';
+    const rows = this.db.prepare(
+      `SELECT ${c} FROM lifecycle_events WHERE sessionId = ? AND act = ? ORDER BY id ASC`,
+    ).all(sessionId, act) as {
+      uid: string | null; gen: string; at: number | null; ingestedAt: number;
+      act: string; badact: string | null; outcome: string; badoutcome: string | null;
+      verb: string | null; sessionId: string | null; tx: string | null;
+      refusal: string | null; detail: string | null; truncated: number;
+      obsJson: string | null; decJson: string | null; measJson: string | null; raw: string;
+    }[];
+    return rows.map((r) => CoordStore.reviveLifecycleRow(r));
+  }
+
+  /** THE ONE SPELLING of `lifecycleBirthEventsFor`'s statement. It is public so that its test reads the text this
+   *  method runs: the hint is present, and the plan seeks. `INDEXED BY lifecycle_by_session` is
+   *  `childReclaimEventsSql`'s idiom: the table is never pruned, so this read costs one session's own history. */
+  static readonly LIFECYCLE_BIRTH_EVENTS_SQL =
+    'SELECT id, act, at, measJson FROM lifecycle_events INDEXED BY lifecycle_by_session ' +
+    `WHERE sessionId = ? AND act IN (${placeholders(LIFECYCLE_BIRTH_ACTS.length)}) AND outcome = ? ` +
+    'ORDER BY id ASC';
+
+  /** The birth's rows for one session (spec §5.7): every `done` `create` and every `done` `purge`, oldest
+   *  first by the mirror's own `id`.
+   *  - UNCAPPED, like `lifecycleCreatesFor` and for its reason: the opening create must stay findable for the
+   *    life of the workspace.
+   *  - A refused or intent row of either act is not returned. A refused ws-add minted nothing, and an intent
+   *    without its done never completed.
+   *  - It decides nothing. Which create opens the generation, and which purge follows it, is
+   *    `childReclaimBornAt`'s decision.
+   *  - It throws when the statement returns an act it never asked for. Every caller already reads a throw as
+   *    unreadable. */
+  lifecycleBirthEventsFor(sessionId: string): readonly LifecycleBirthEvent[] {
+    const done: LifecycleOutcome = 'done';
+    const rows = this.db.prepare(CoordStore.LIFECYCLE_BIRTH_EVENTS_SQL).all(sessionId, ...LIFECYCLE_BIRTH_ACTS, done) as
+      { id: number; act: string; at: number | null; measJson: string | null }[];
+    return rows.map((r) => {
+      if (!isLifecycleBirthAct(r.act)) {
+        throw new Error(`lifecycleBirthEventsFor: the statement returned act ${JSON.stringify(r.act)}, which it never asks for`);
+      }
+      return { id: r.id, act: r.act, at: r.at, uuid: reviveMeas(jsonOrNull(r.measJson))?.uuid ?? null };
+    });
+  }
+
+  /** The reviver `lifecycleFor` and `lifecycleCreatesFor` share, extracted so
+   *  a column gaining a field lands in both readers or neither — never one and
+   *  not the other. Private and static: it touches no instance state. */
+  private static reviveLifecycleRow(r: {
+    uid: string | null; gen: string; at: number | null; ingestedAt: number;
+    act: string; badact: string | null; outcome: string; badoutcome: string | null;
+    verb: string | null; sessionId: string | null; tx: string | null;
+    refusal: string | null; detail: string | null; truncated: number;
+    obsJson: string | null; decJson: string | null; measJson: string | null; raw: string;
+  }): MirroredLifecycleEvent {
+    return {
       uid: r.uid, gen: r.gen, at: r.at, ingestedAt: r.ingestedAt,
       // Through the guards, never a cast — the same discipline `feedEvents`
       // gives `kind` and `programs()` gives `state`. A token a NEWER build
@@ -4754,7 +6119,192 @@ export class CoordStore {
       dec: reviveDec(jsonOrNull(r.decJson)),
       meas: reviveMeas(jsonOrNull(r.measJson)),
       raw: r.raw,
-    }));
+    };
+  }
+
+  /** Every session id the lifecycle mirror holds a `reclaim` row for
+   *  (child-reclamation wave 4, spec §5.9) — the NARROWING read before the
+   *  sweep's per-session history reads: it asks `lifecycleFor`/
+   *  `lifecycleCreatesFor` only for the listed rows in this set, so a registry
+   *  full of non-children costs one statement a sweep, not one per row. A
+   *  SUPERSET on purpose: it names ids whose only `reclaim` rows belong to an
+   *  EARLIER workspace under a recycled slug (spec §5.6), and the generation
+   *  fence (`childReclaimGeneration`) is what drops those — this method
+   *  decides nothing about generations. The act is BOUND, typed against its
+   *  union, so it is not a second hand-spelled literal. */
+  childReclaimSessionIds(): Set<string> {
+    const act: LifecycleAct = 'reclaim';
+    const rows = this.db.prepare(
+      'SELECT DISTINCT sessionId FROM lifecycle_events WHERE act = ? AND sessionId IS NOT NULL',
+    ).all(act) as { sessionId: string }[];
+    return new Set(rows.map((r) => r.sessionId));
+  }
+
+  /** The acts the reclaim chip's read returns (child-reclamation wave 5):
+   *  `reclaim`, the act itself, and `create`, which fences one workspace
+   *  generation from the next when ws-add hands a recycled slug out again
+   *  (wave 4's `childReclaimGeneration`). Typed, so a rename in `LifecycleAct` is a
+   *  compile error here rather than a silently empty read. */
+  private static readonly CHILD_RECLAIM_EVENT_ACTS: readonly LifecycleAct[] = ['reclaim', 'create'];
+
+  /** THE ONE SPELLING of `childReclaimEvents`' statement. Public so the test
+   *  (`child-reclaim-events-store.test.ts`) reads the text this method runs, not
+   *  a copy that could keep a hint the source dropped. It pins two things over
+   *  that one text: the hint is PRESENT (a string assertion, because today's
+   *  planner picks the index unhinted, so EXPLAIN alone cannot see the hint
+   *  go), and the plan SEEKS rather than scans (EXPLAIN, which `NOT INDEXED`
+   *  would turn into a scan).
+   *
+   *  `INDEXED BY lifecycle_by_session`, `recentProvenance`'s idiom: the table
+   *  is NEVER PRUNED, so this read's cost must be bounded by the requested
+   *  sessions' own histories, never by the table's. Today's planner picks the
+   *  index unhinted. The hint keeps that independent of `ANALYZE` statistics. */
+  static childReclaimEventsSql(sessions: number): string {
+    return `SELECT ${CoordStore.LC_COLS} FROM lifecycle_events INDEXED BY lifecycle_by_session ` +
+      `WHERE sessionId IN (${placeholders(sessions)}) ` +
+      `AND act IN (${placeholders(CoordStore.CHILD_RECLAIM_EVENT_ACTS.length)}) ` +
+      'ORDER BY sessionId, id';
+  }
+
+  /**
+   * Every `reclaim` and `create` row of each requested session, oldest-first by
+   * this table's own `id` (never `at`, which is ccd's nullable clock), for the
+   * reclaim chip on `GET /api/runs` (child-reclamation wave 5, spec §5.9).
+   *
+   * ONE STATEMENT, WHATEVER THE ROW COUNT. The board read already spends
+   * several statements per row (`runHealth`'s docstring prices a per-row read
+   * at ~3,000 for one load), and a per-session loop here would add hundreds
+   * more. Measured at planning: one `IN` statement was the cheapest of three
+   * shapes at 100k and 500k rows.
+   *
+   * EVERY requested id gets an entry, `[]` included. A caller forced to supply
+   * a default for a missing key is where an overloaded null is born
+   * (`runHealth`'s rule). Duplicate ids are asked once.
+   *
+   * The GENERATION is not decided here. Which of these rows belong to a given
+   * run's workspace is wave 4's `childReclaimGeneration`, the ONE fence
+   * (spec §5.6: slugs recycle), a pure function with its own pin, because a
+   * SQL fence costs three index walks per run where this read costs one per
+   * session. Which of them decides is wave 4's `childReclaimLatest`, likewise.
+   *
+   * Rows revive through `reviveLifecycleRow`, the one mapper `lifecycleFor`
+   * and `lifecycleCreatesFor` already share.
+   */
+  childReclaimEvents(sessionIds: readonly string[]): Map<string, MirroredLifecycleEvent[]> {
+    const ids = [...new Set(sessionIds)];
+    const out = new Map<string, MirroredLifecycleEvent[]>(ids.map((id) => [id, []]));
+    // An empty request answers without a statement: nothing to ask the mirror.
+    if (ids.length === 0) return out;
+    const rows = this.db.prepare(CoordStore.childReclaimEventsSql(ids.length))
+      .all(...ids, ...CoordStore.CHILD_RECLAIM_EVENT_ACTS) as unknown as Parameters<typeof CoordStore.reviveLifecycleRow>[0][];
+    for (const r of rows) {
+      if (r.sessionId !== null) out.get(r.sessionId)?.push(CoordStore.reviveLifecycleRow(r));
+    }
+    return out;
+  }
+
+  /** THE ONE SPELLING of `lifecycleReclaimRowsSince`'s statement, public so its test runs EXPLAIN over the
+   *  text this method runs. `INDEXED BY lifecycle_by_at`, `recentProvenance`'s idiom and its reason: the
+   *  table is NEVER PRUNED, and the planner prefers a scan that orders by `id` for free over a seek plus a
+   *  sort. `at >= ?` also excludes an undated row, which the horizon cannot place. */
+  static lifecycleReclaimRowsSinceSql(): string {
+    return `SELECT ${CoordStore.LC_COLS} FROM lifecycle_events INDEXED BY lifecycle_by_at ` +
+      'WHERE at >= ? AND act = ? AND sessionId IS NOT NULL ' +
+      `AND (outcome = ? OR (outcome = ? AND refusal IN (${placeholders(CHILD_RECLAIM_LEAF_FAILED_TOKENS.length)}))) ` +
+      'AND (measJson IS NOT NULL OR truncated = 1) ORDER BY id';
+  }
+
+  /**
+   * The kept-leaf item's SOURCE (child-reclamation spec §5.6, §5.9): every `reclaim` row ccd dated at or
+   * after `atMs` that may carry the two kept-leaf keys. These are a `done`, or a failure whose token is one
+   * of `CHILD_RECLAIM_LEAF_FAILED_TOKENS` (the act completed, then only the purge failed), carrying a `meas`
+   * or cut to fit. ONE statement, bounded by the window and never by the table. Oldest first, by this
+   * table's own `id`.
+   *
+   * Nothing is decided here: which row of an id stands, what it kept and what ends it are L1's
+   * (`childReclaimLeafKept`). Each row keeps `meas` and `truncated` exactly as the mirror holds them, so a
+   * cut line and a line with nothing measured never collapse into one value.
+   */
+  lifecycleReclaimRowsSince(atMs: number): ChildReclaimLeafSourceRow[] {
+    const act: LifecycleAct = 'reclaim';
+    const done: LifecycleOutcome = 'done';
+    const failed: LifecycleOutcome = 'failed';
+    const rows = this.db.prepare(CoordStore.lifecycleReclaimRowsSinceSql())
+      .all(atMs, act, done, failed, ...CHILD_RECLAIM_LEAF_FAILED_TOKENS) as unknown as
+        ({ id: number } & Parameters<typeof CoordStore.reviveLifecycleRow>[0])[];
+    return rows.flatMap((r) => {
+      // The WHERE excludes both; the row type cannot know it.
+      if (r.sessionId === null || r.at === null) return [];
+      const e = CoordStore.reviveLifecycleRow(r);
+      return [{ id: r.id, sessionId: r.sessionId, at: r.at, outcome: e.outcome, refusal: e.refusal,
+        truncated: e.truncated, meas: e.meas, detail: e.detail }];
+    });
+  }
+
+  /** THE ONE SPELLING of `lifecycleLeafEndsFor`'s statement. `INDEXED BY lifecycle_by_session`, as
+   *  `childReclaimEventsSql` is: the cost is bounded by the asked sessions' own histories. */
+  static lifecycleLeafEndsSql(sessions: number): string {
+    return 'SELECT id, sessionId, act, at FROM lifecycle_events INDEXED BY lifecycle_by_session ' +
+      `WHERE sessionId IN (${placeholders(sessions)}) AND act IN (?, ?) AND outcome = ? ORDER BY sessionId, id`;
+  }
+
+  /** What may END a kept-leaf item (spec §5.9): each asked id's `done` `create` and `collect` rows, oldest
+   *  first, with the mirror's id and ccd's nullable `at`. ONE statement whatever the id count. EVERY asked
+   *  id gets an entry, `[]` included (`childReclaimEvents`' rule). Whether a row FOLLOWS an item's source,
+   *  and whether a create is placed, are L1's. */
+  lifecycleLeafEndsFor(sessionIds: readonly string[]): Map<string, ChildReclaimLeafEndRow[]> {
+    const ids = [...new Set(sessionIds)];
+    const out = new Map<string, ChildReclaimLeafEndRow[]>(ids.map((id) => [id, []]));
+    if (ids.length === 0) return out;
+    const create: ChildReclaimLeafEndRow['act'] = 'create';
+    const collect: ChildReclaimLeafEndRow['act'] = 'collect';
+    const done: LifecycleOutcome = 'done';
+    const rows = this.db.prepare(CoordStore.lifecycleLeafEndsSql(ids.length))
+      .all(...ids, create, collect, done) as { id: number; sessionId: string; act: string; at: number | null }[];
+    for (const r of rows) {
+      const act = r.act === create ? create : r.act === collect ? collect : null;
+      if (act !== null) out.get(r.sessionId)?.push({ id: r.id, act, at: r.at });
+    }
+    return out;
+  }
+
+  /** THE JOURNAL CLAUSE'S ONE READ (workspace lifecycle spec 2026-09-24 §5.4, the dead-coordinator lane): for each
+   *  asked claimant, its rows of the acts the clause reads (`DEAD_COORDINATOR_JOURNAL_ACTS`), in this table's own id
+   *  order (INGEST order — the clause itself orders them by generation, then this id), and whether the mirror holds
+   *  ANY row for it — "no history at all" is a fact the clause turns on (an absent row with none is unmeasured), and it is not the same fact as "none of the clause's acts". TWO
+   *  statements whatever the claimant count, each `INDEXED BY lifecycle_by_session` (`recentProvenance`'s idiom: the
+   *  table is never pruned). EVERY asked id gets an entry. A failing read THROWS, and the lane reads that as
+   *  `unreadable` — never as no history. */
+  deadCoordinatorJournalRows(sessionIds: readonly string[]): Map<string, { rows: DeadCoordinatorJournalRow[]; hasHistory: boolean }> {
+    const ids = [...new Set(sessionIds)];
+    const out = new Map<string, { rows: DeadCoordinatorJournalRow[]; hasHistory: boolean }>(
+      ids.map((id) => [id, { rows: [], hasHistory: false }]));
+    if (ids.length === 0) return out;
+    const rows = this.db.prepare(
+      `SELECT ${CoordStore.LC_COLS} FROM lifecycle_events INDEXED BY lifecycle_by_session ` +
+      `WHERE sessionId IN (${placeholders(ids.length)}) AND act IN (${placeholders(DEAD_COORDINATOR_JOURNAL_ACTS.length)}) ` +
+      'ORDER BY sessionId, id',
+    ).all(...ids, ...DEAD_COORDINATOR_JOURNAL_ACTS) as unknown as Parameters<typeof CoordStore.reviveLifecycleRow>[0][];
+    for (const r of rows) {
+      const e = r.sessionId === null ? undefined : out.get(r.sessionId);
+      if (e === undefined) continue;
+      const ev = CoordStore.reviveLifecycleRow(r);
+      e.rows.push({ act: ev.act, outcome: ev.outcome, at: ev.at, gen: ev.gen, dec: ev.dec, meas: ev.meas, raw: ev.raw });
+    }
+    const any = this.db.prepare(
+      'SELECT DISTINCT sessionId FROM lifecycle_events INDEXED BY lifecycle_by_session ' +
+      `WHERE sessionId IN (${placeholders(ids.length)})`,
+    ).all(...ids) as { sessionId: string }[];
+    for (const r of any) { const e = out.get(r.sessionId); if (e !== undefined) e.hasHistory = true; }
+    return out;
+  }
+
+  /** EVERY generation the mirror recorded lost bytes in, distinct, one statement — the dead-coordinator lane's journal
+   *  trust (workspace lifecycle spec §5.4, the departure `journal-loss-reads-as-unmeasured`): a gap in a generation
+   *  that is not older than a claimant's last successful spawn may have lost a deliberate act. Never limited: a gap
+   *  the read did not return is a gap the lane would trust past. A failing read THROWS, and the lane trusts nothing. */
+  lifecycleGapGens(): string[] {
+    return (this.db.prepare('SELECT DISTINCT gen FROM lifecycle_gaps').all() as { gen: string }[]).map((r) => r.gen);
   }
 
   /** The holes, newest-first — a timeline with a hole in it says so. */
@@ -6070,15 +7620,16 @@ export class CoordStore {
   //
   // The node row's writer groups, one method family each (§6): measurement +
   // report (`upsertNodeMeasurement`, `markUnreachable`), identity
-  // (`rekeyNode`), lease (`releaseLease`, `settleNode`, `ackNode`; W4 adds
-  // `dispatchNode`), resolved (`resolveNode`), request (`settleNode` and
-  // `ackNode` clear it; W4's `requestNode` sets it). Every guard is in the
+  // (`rekeyNode`), lease (`dispatchNode` acquires; `releaseLease`,
+  // `settleNode` and `ackNode` release; `noteDispatchRefusal` notes a refusal
+  // on an idle row), resolved (`resolveNode`), request (`requestNode` sets it;
+  // `settleNode` and `ackNode` clear it). Every guard is in the
   // `WHERE`; a zero-change write reads its `why` back AFTER the write; every
   // signature is ONE line, so Task 7's writer-group scan can attribute each
   // statement to its method (`mail-hardening.test.ts`'s `SIG`, the D-2338
-  // precedent). Nothing in W2 calls a lease writer on a real row — no W2 code
-  // acquires a lease — so the release and settle arms are pinned on planted
-  // fixtures for W4's dispatcher to reach.
+  // precedent). W2 pinned the release and settle arms on PLANTED leases;
+  // programme wave 5's `dispatchNode` is the acquire that makes them real
+  // (`update-store-dispatch.test.ts`).
 
   /** The measurement and report groups, plus `role` and `label`, and nothing
    *  else. A row whose id was superseded is never written again: the heir is
@@ -6161,11 +7712,20 @@ export class CoordStore {
    *  point at each other and both read as superseded forever. Then every
    *  OTHER live row carrying the label under a different id is superseded
    *  too: the same connection answering a new id is a re-installed box, and
-   *  its old identity is retired (D-3193). One transaction; idempotent. */
+   *  its old identity is retired (D-3193). A REVIVED row's lease then follows
+   *  the label, not its frozen columns (D-3412, `leaseFollowsLabel`): one box,
+   *  one lease. One transaction; idempotent. */
   rekeyNode(label: string, nodeId: string): RekeyNodeResult {
     if (!NODE_ID_RE.test(nodeId)) return { ok: false, why: 'bad-node-id' };
     return tx(this.db, (): RekeyNodeResult => {
       let how: 'rekeyed' | 'superseded' | 'no-label-row' = 'no-label-row';
+      // D-3412: the lease a revive must not lose. Read BEFORE either supersede below — the busy same-label live row
+      // this rekey is about to retire (the run the box is actually doing) — and only when a revive is possible.
+      const heir = this.nodeLeaseRow(nodeId);
+      const donor = heir === null || heir.supersededBy === null ? undefined : this.db.prepare(
+        'SELECT nodeId FROM nodes WHERE label = ? AND supersededBy IS NULL AND nodeId <> ? ' +
+        `AND updateState NOT IN ${SETTLED_UPDATE_SQL} ORDER BY updateStartedAt IS NULL, updateStartedAt DESC, nodeId LIMIT 1`,
+      ).get(label, nodeId) as { nodeId: string } | undefined;
       const sup = this.db.prepare(
         'UPDATE nodes SET supersededBy = ? WHERE nodeId = ? AND supersededBy IS NULL ' +
         'AND EXISTS (SELECT 1 FROM nodes WHERE nodeId = ?)',
@@ -6187,24 +7747,61 @@ export class CoordStore {
       const retired = this.db.prepare(
         'UPDATE nodes SET supersededBy = ? WHERE label = ? AND supersededBy IS NULL AND nodeId <> ? AND nodeId <> ?',
       ).run(nodeId, label, nodeId, label);
+      if (revived) this.leaseFollowsLabel(label, nodeId, donor === undefined ? null : donor.nodeId);
       return { ok: true, how, retired: Number(retired.changes), revived };
     });
+  }
+
+  /** `rekeyNode`'s lease step for a REVIVED row (D-3412), AFTER every same-label row this rekey retires is
+   *  retired: one box, one lease. The revived row's lease columns are frozen at the day it was retired, so they say
+   *  nothing about the box's run now. Decided in this order:
+   *  - a row that HALTS (`isHalting`'s notion, `haltingRowSql`: `reverted`, or `failed` whose detail does not begin
+   *    `provenance:`) keeps its verdict — `handOffLease` and `releaseLease` each refuse it in their own `WHERE`, so
+   *    nothing is written whatever else is busy (the halt blocks every other move until `ack`; the retired row's
+   *    lease is dropped, W2's gap); every other settled row — `idle`, and a `failed: provenance:` row, whose verdict
+   *    survives in `node_release_refusals` — is handed a lease but is never released;
+   *  - a same-label row this rekey retired that held a busy lease HANDS it over (`handOffLease`) — it is the run the
+   *    box is doing, so it is never dropped, and it replaces whatever the revived row froze;
+   *  - otherwise a revived BUSY row keeps its lease unless a live row with a DIFFERENT label is busy, when it is
+   *    released `idle` (`releaseLease`, its request standing) with a detail naming the rekey.
+   *  It calls only the lease group's writers, and opens no `tx()` — it runs inside `rekeyNode`'s. */
+  private leaseFollowsLabel(label: string, nodeId: string, donorId: string | null): void {
+    const row = this.nodeLeaseRow(nodeId);
+    if (row === null) return;
+    if (donorId !== null && this.handOffLease(donorId, nodeId).ok) return;   // refuses a heir that halts, in its own WHERE
+    const other = this.db.prepare(
+      `SELECT nodeId FROM nodes WHERE label <> ? AND supersededBy IS NULL AND updateState NOT IN ${SETTLED_UPDATE_SQL} LIMIT 1`,
+    ).get(label) as { nodeId: string } | undefined;
+    if (other === undefined) return;
+    this.releaseLease(nodeId, 'idle', `${REKEY_RELEASE_DETAIL} (${other.nodeId} holds the lease)`, row.updateStartedAt);   // refuses a settled row itself
   }
 
   /** A refusal, a drop, a deadline, or a `failed`/`reverted`/stamp-mismatch
    *  report (§8, §10): a BUSY lease back to a settled state. The request
    *  columns are untouched — a refusal does not consume the request (decision
-   *  7). `reportStartedAt` is the report's own start when the release is
-   *  report-driven — the LATEST ms its whole-second stamp covers,
-   *  `startedAt*1000 + 999`, which the sweep computes
-   *  (D-3199) — and `null` otherwise; a report whose
-   *  run began before the lease belongs to a previous run and never moves it. */
-  releaseLease(nodeId: string, to: SettledUpdateState, detail: string, reportStartedAt: number | null): ReleaseLeaseResult {
+   *  7). `expectedStartedAt` is the row's OWN `updateStartedAt` — the
+   *  acquire's ms clock value, NOT a unique lease id — as the caller last
+   *  read it, when the release is report-driven — never a report's own
+   *  `startedAt` (W4 review 155, C33, D-3405: the two boxes' clocks are never
+   *  ordered against each other; freshness is the report DIFFERING from what
+   *  the row held AND naming this lease's own tag, both decided by the
+   *  caller before this write, never a timestamp compared here) — and `null`
+   *  otherwise. The guard's WHERE clause is IDENTITY: a write whose caller
+   *  observed a lease that has since moved on (a newer `dispatchNode`,
+   *  between that read and this write) is refused; one observing the SAME
+   *  lease, or observing none (a legacy row with no recorded start), always
+   *  proceeds. In practice this is DEFENCE IN DEPTH, structurally
+   *  unreachable today: the caller (`applyMeasurement`, `inventory.ts`) reads
+   *  `preRow` and reaches this write in one synchronous stretch with no
+   *  await between them, so nothing can move the row's `updateStartedAt` in
+   *  between — the clause guards against a caller shape that does not exist
+   *  yet, not a race this build can produce. */
+  releaseLease(nodeId: string, to: SettledUpdateState, detail: string, expectedStartedAt: number | null): ReleaseLeaseResult {
     const res = this.db.prepare(
       'UPDATE nodes SET updateState = ?, updateDetail = ? WHERE nodeId = ? AND supersededBy IS NULL ' +
       `AND updateState NOT IN ${SETTLED_UPDATE_SQL} ` +
-      'AND (? IS NULL OR updateStartedAt IS NULL OR ? >= updateStartedAt)',
-    ).run(to, detail, nodeId, reportStartedAt, reportStartedAt);
+      'AND (? IS NULL OR updateStartedAt IS NULL OR updateStartedAt IS ?)',
+    ).run(to, detail, nodeId, expectedStartedAt, expectedStartedAt);
     if (Number(res.changes) > 0) return { ok: true, state: to };
     const row = this.nodeLeaseRow(nodeId);
     if (row === null) return { ok: false, why: 'unknown-node' };
@@ -6212,24 +7809,25 @@ export class CoordStore {
     if ((SETTLED_UPDATE_STATES as readonly string[]).includes(row.updateState)) {
       return { ok: false, why: 'not-busy', state: row.updateState };
     }
-    // Live and busy, and still refused: the precedence clause is the only
-    // predicate left, and it fails only when `updateStartedAt` is set.
+    // Live and busy, and still refused: the identity clause is the only
+    // predicate left, and it fails only when `updateStartedAt` is set and no
+    // longer matches what the caller expected — the lease moved on.
     return { ok: false, why: 'stale-report', updateStartedAt: row.updateStartedAt! };
   }
 
   /** Convergence (§10): the row back to `idle` and its request cleared — the
    *  only path besides `ack` that clears one. Refused on a HALTED row
    *  (`failed`/`reverted` wait for the operator's `ack`); takes the same
-   *  precedence as `releaseLease`. */
-  settleNode(nodeId: string, detail: string, reportStartedAt: number | null): SettleNodeResult {
+   *  identity guard as `releaseLease` (C33, D-3405). */
+  settleNode(nodeId: string, detail: string, expectedStartedAt: number | null): SettleNodeResult {
     return tx(this.db, (): SettleNodeResult => {
       const had = this.requestedTagOf(nodeId) !== null;
       const res = this.db.prepare(
         "UPDATE nodes SET updateState = 'idle', updateDetail = ?, requestedTag = NULL, requestedKind = NULL, " +
         'requestedAt = NULL WHERE nodeId = ? AND supersededBy IS NULL ' +
         `AND updateState NOT IN ${HALTED_UPDATE_SQL} ` +
-        'AND (? IS NULL OR updateStartedAt IS NULL OR ? >= updateStartedAt)',
-      ).run(detail, nodeId, reportStartedAt, reportStartedAt);
+        'AND (? IS NULL OR updateStartedAt IS NULL OR updateStartedAt IS ?)',
+      ).run(detail, nodeId, expectedStartedAt, expectedStartedAt);
       if (Number(res.changes) > 0) return { ok: true, clearedRequest: had };
       const row = this.nodeLeaseRow(nodeId);
       if (row === null) return { ok: false, why: 'unknown-node' };
@@ -6278,6 +7876,162 @@ export class CoordStore {
     });
   }
 
+  /** The request group's SETTER (design §6, §12; programme wave 5): the
+   *  `apply` and `rollback` routes write the operator's one-tap here, and it
+   *  stands until convergence (`settleNode`) or the operator (`ackNode`)
+   *  clears it — a refusal or a drop never does (decision 7). Writes the three
+   *  request columns and nothing else, on a LIVE row. THIS WRITER does not
+   *  refuse a row that holds a lease — it is written beside it. But `settleNode`
+   *  clears the request columns UNCONDITIONALLY the moment that lease settles
+   *  (it does not read them first), so a request written beside a row's OWN
+   *  held lease is not "waiting its turn": it is erased under the operator's
+   *  own newer tap the instant the running move finishes. That is why the
+   *  routes never write one there — the single-node route refuses a busy named
+   *  node `409 busy` (D-3386), and `{all: true}`'s `requestAll` skips a node
+   *  whose own lease is busy before it ever calls this writer (D-3406). The
+   *  previous request is read inside the same IMMEDIATE transaction only to
+   *  REPORT it (`replaced`); the write's own `WHERE` is the guard. `at` is the
+   *  caller's clock: a value that is not a non-negative safe integer throws,
+   *  because SQLite binds NaN as NULL (`markReleaseNotified`'s reason). */
+  requestNode(nodeId: string, tag: string, kind: RequestKind, at: number): RequestNodeResult {
+    if (!Number.isSafeInteger(at) || at < 0) {
+      throw new RangeError(`requestNode: at must be a non-negative integer ms timestamp, got ${String(at)}`);
+    }
+    if (!isReleaseTag(tag)) return { ok: false, why: 'bad-tag' };
+    if (!isRequestKind(kind)) return { ok: false, why: 'bad-kind' };
+    return tx(this.db, (): RequestNodeResult => {
+      const prev = this.db.prepare('SELECT requestedTag, requestedKind FROM nodes WHERE nodeId = ?')
+        .get(nodeId) as { requestedTag: string | null; requestedKind: string | null } | undefined;
+      const res = this.db.prepare(
+        'UPDATE nodes SET requestedTag = ?, requestedKind = ?, requestedAt = ? WHERE nodeId = ? AND supersededBy IS NULL',
+      ).run(tag, kind, at, nodeId);
+      if (Number(res.changes) > 0) {
+        if (prev === undefined || prev.requestedTag === null) return { ok: true, replaced: null };
+        return { ok: true, replaced: { tag: prev.requestedTag,
+          kind: isRequestKind(prev.requestedKind) ? prev.requestedKind : null } };
+      }
+      const row = this.nodeLeaseRow(nodeId);
+      if (row === null) return { ok: false, why: 'unknown-node' };
+      // The row exists and the only other predicate is `supersededBy IS NULL`.
+      return { ok: false, why: 'superseded', supersededBy: row.supersededBy! };
+    });
+  }
+
+  /** THE lease acquire (design §6, §10; programme wave 5) — the ONE writer
+   *  that moves a settled row to busy. One `UPDATE … WHERE` under `tx`
+   *  (`BEGIN IMMEDIATE`, synchronous), so two sweeps cannot dispatch two
+   *  nodes: the row must be live and settled; NO live row anywhere may hold a
+   *  lease (busy is `NOT IN` settled, so `unknown` and a token this build
+   *  cannot name hold it — W2's stance; a superseded row is invisible here as
+   *  everywhere); and a rollback must match the operator's rollback request
+   *  (D-3376 — a move down is never automatic;
+   *  an update carries no such clause, since an auto-driven update has no
+   *  request). The row's own `IN settled` predicate is subsumed by the
+   *  `NOT EXISTS` (a live row is one of the rows it reads) and is kept as the
+   *  rule's plain statement. Capability, direction and the halt are policy,
+   *  decided by the pure planner (`update/dispatch.ts`) in the same
+   *  synchronous stretch (D-3377). The request columns are
+   *  never written here, and the row reads `pending` until the sweep settles
+   *  or releases it (D-3382). A zero-change write is read
+   *  back in the same transaction only to LABEL the refusal (the `markAcked`
+   *  idiom). `startedAt` is the caller's clock and throws as `requestNode`'s
+   *  `at` does. */
+  dispatchNode(nodeId: string, target: string, kind: RequestKind, startedAt: number, detail: string): DispatchNodeResult {
+    if (!Number.isSafeInteger(startedAt) || startedAt < 0) {
+      throw new RangeError(`dispatchNode: startedAt must be a non-negative integer ms timestamp, got ${String(startedAt)}`);
+    }
+    if (!isReleaseTag(target)) return { ok: false, why: 'bad-tag' };
+    if (!isRequestKind(kind)) return { ok: false, why: 'bad-kind' };
+    return tx(this.db, (): DispatchNodeResult => {
+      const res = this.db.prepare(
+        "UPDATE nodes SET updateState = 'pending', updateTarget = ?, updateStartedAt = ?, updateDetail = ? " +
+        `WHERE nodeId = ? AND supersededBy IS NULL AND updateState IN ${SETTLED_UPDATE_SQL} ` +
+        `AND NOT EXISTS (SELECT 1 FROM nodes b WHERE b.supersededBy IS NULL AND b.updateState NOT IN ${SETTLED_UPDATE_SQL}) ` +
+        "AND (? <> 'rollback' OR (requestedKind = 'rollback' AND requestedTag = ?))",
+      ).run(target, startedAt, detail, nodeId, kind, target);
+      if (Number(res.changes) > 0) return { ok: true };
+      const row = this.nodeLeaseRow(nodeId);
+      if (row === null) return { ok: false, why: 'unknown-node' };
+      if (row.supersededBy !== null) return { ok: false, why: 'superseded', supersededBy: row.supersededBy };
+      const holder = this.db.prepare(
+        `SELECT nodeId FROM nodes WHERE supersededBy IS NULL AND updateState NOT IN ${SETTLED_UPDATE_SQL} ORDER BY nodeId LIMIT 1`,
+      ).get() as { nodeId: string } | undefined;
+      if (holder !== undefined) return { ok: false, why: 'busy', heldBy: holder.nodeId };
+      // Live, settled, no lease held anywhere, and still refused: the rollback
+      // clause is the only predicate left (an update cannot reach this line).
+      return { ok: false, why: 'no-request' };
+    });
+  }
+
+  /** A refusal the dispatcher planned, written where the operator reads it
+   *  (design §9/§10/§12: a settled, non-halting refusal "shown in
+   *  `updateDetail`"; D-3375). `updateDetail` ONLY, ONLY
+   *  on a live `idle` row, and ONLY when the text differs — the dispatcher
+   *  re-plans every node on every run, so one refusal is written once, not
+   *  every sweep. It never touches a `failed`/`reverted` row, whose detail is
+   *  the verdict `isHalting` reads (the `provenance:` prefix is what keeps a
+   *  provenance verdict non-halting), nor a busy row, whose detail is its
+   *  lease's; and it never touches the request (decision 7). */
+  noteDispatchRefusal(nodeId: string, detail: string): NoteDispatchRefusalResult {
+    return tx(this.db, (): NoteDispatchRefusalResult => {
+      const res = this.db.prepare(
+        'UPDATE nodes SET updateDetail = ? WHERE nodeId = ? AND supersededBy IS NULL ' +
+        "AND updateState = 'idle' AND updateDetail IS NOT ?",
+      ).run(detail, nodeId, detail);
+      if (Number(res.changes) > 0) return { ok: true, changed: true };
+      const row = this.nodeLeaseRow(nodeId);
+      if (row === null) return { ok: false, why: 'unknown-node' };
+      if (row.supersededBy !== null) return { ok: false, why: 'superseded', supersededBy: row.supersededBy };
+      if (row.updateState !== 'idle') return { ok: false, why: 'not-idle', state: row.updateState };
+      return { ok: true, changed: false };
+    });
+  }
+
+  /** What the node said about a lease it now HOLDS (D-3413; the bound's arms B and D): `updateDetail` ONLY, ONLY on a
+   *  live BUSY row, and ONLY while that row's `updateStartedAt` is the lease the caller acquired (`startedAt` — the
+   *  acquire's ms clock value, the same identity `releaseLease`'s guard reads). The state stays as it is, `pending`,
+   *  and the request is untouched: a hold releases nothing. It never writes over a settled row (a report or the
+   *  deadline got there first, and a `failed` row's detail is the verdict the halt reads) nor over a newer lease. */
+  noteLeaseDetail(nodeId: string, detail: string, startedAt: number): NoteLeaseDetailResult {
+    return tx(this.db, (): NoteLeaseDetailResult => {
+      const res = this.db.prepare(
+        'UPDATE nodes SET updateDetail = ? WHERE nodeId = ? AND supersededBy IS NULL ' +
+        `AND updateState NOT IN ${SETTLED_UPDATE_SQL} AND updateStartedAt IS ?`,
+      ).run(detail, nodeId, startedAt);
+      if (Number(res.changes) > 0) return { ok: true };
+      const row = this.nodeLeaseRow(nodeId);
+      if (row === null) return { ok: false, why: 'unknown-node' };
+      if (row.supersededBy !== null) return { ok: false, why: 'superseded', supersededBy: row.supersededBy };
+      if ((SETTLED_UPDATE_STATES as readonly string[]).includes(row.updateState)) {
+        return { ok: false, why: 'not-busy', state: row.updateState };
+      }
+      return { ok: false, why: 'stale-report', updateStartedAt: row.updateStartedAt };
+    });
+  }
+
+  /** The lease follows the label (D-3412; `rekeyNode` is its only caller): the four lease columns of a BUSY row
+   *  this rekey RETIRED toward `toNodeId`, copied onto the heir — the row carrying the same label that was revived.
+   *  Guards, all in the `WHERE`: the heir is live and does not HALT (`haltingRowSql`, `isHalting`'s own notion: a
+   *  verdict is never written over, but a `failed: provenance:` row halts nothing and receives the lease); the donor is the
+   *  same label's, busy, and retired toward THIS heir. The request columns are not the lease's and are not touched,
+   *  and neither is the donor row. It opens no `tx()`: it runs inside `rekeyNode`'s, like `releaseLease`. */
+  handOffLease(fromNodeId: string, toNodeId: string): HandOffLeaseResult {
+    const res = this.db.prepare(
+      'UPDATE nodes SET updateState = f.updateState, updateTarget = f.updateTarget, ' +
+      'updateStartedAt = f.updateStartedAt, updateDetail = f.updateDetail FROM nodes f ' +
+      'WHERE nodes.nodeId = ? AND nodes.supersededBy IS NULL ' +
+      `AND NOT ${haltingRowSql('nodes')} ` +
+      'AND f.nodeId = ? AND f.label = nodes.label AND f.supersededBy = nodes.nodeId ' +
+      `AND f.updateState NOT IN ${SETTLED_UPDATE_SQL}`,
+    ).run(toNodeId, fromNodeId);
+    if (Number(res.changes) > 0) return { ok: true };
+    const row = this.nodeLeaseRow(toNodeId);
+    if (row === null) return { ok: false, why: 'unknown-node' };
+    if (row.supersededBy !== null) return { ok: false, why: 'superseded', supersededBy: row.supersededBy };
+    if (rowHalts(row.updateState, row.updateDetail)) return { ok: false, why: 'halted', state: row.updateState };
+    return { ok: false, why: 'no-lease-to-hand' };
+  }
+
   /** Every LIVE node — the inventory every reader starts from; a superseded row
    *  is invisible here (§8). */
   nodes(): NodeRow[] {
@@ -6305,12 +8059,12 @@ export class CoordStore {
 
   /** The lease-state read a zero-change node write takes its `why` from —
    *  AFTER the write, never before it. `null` = no row with this id. */
-  private nodeLeaseRow(nodeId: string): { updateState: UpdateState; updateStartedAt: number | null; supersededBy: string | null } | null {
-    const r = this.db.prepare('SELECT updateState, updateStartedAt, supersededBy FROM nodes WHERE nodeId = ?')
-      .get(nodeId) as { updateState: string; updateStartedAt: number | null; supersededBy: string | null } | undefined;
+  private nodeLeaseRow(nodeId: string): { updateState: UpdateState; updateStartedAt: number | null; updateDetail: string | null; supersededBy: string | null } | null {
+    const r = this.db.prepare('SELECT updateState, updateStartedAt, updateDetail, supersededBy FROM nodes WHERE nodeId = ?')
+      .get(nodeId) as { updateState: string; updateStartedAt: number | null; updateDetail: string | null; supersededBy: string | null } | undefined;
     if (r === undefined) return null;
     return { updateState: isUpdateState(r.updateState) ? r.updateState : 'unknown',
-             updateStartedAt: r.updateStartedAt, supersededBy: r.supersededBy };
+             updateStartedAt: r.updateStartedAt, updateDetail: r.updateDetail, supersededBy: r.supersededBy };
   }
 
   /** Whether a request was outstanding, for `clearedRequest` — a report,

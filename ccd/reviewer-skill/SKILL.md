@@ -1,6 +1,6 @@
 ---
 name: ccrc-reviewer
-description: Read one finished wave of a ccrc program as the dispatched reviewer — measure the worker branch's tip once, read it in your own worktree, run the review lenses and the whole-branch pass against the plan, and report findings to the coordinator as one mail artifact. Use when a brief arrives naming a review run and the work run it reviews. Never use it to rule on a wave — a reviewer that sends work back or allocates a deviation has become a coordinator with no ledger.
+description: Read one finished wave of a ccrc program as the dispatched reviewer — measure the worker branch's tip once, read it in your own worktree, run the review lenses and the whole-branch pass against the plan, and report findings to the coordinator as one mail artifact. Use when a brief arrives naming a review run and the work run it reviews. Never use it inside a subagent — a review lens agent, or any session started by another session's Agent tool or a workflow agent() call, is a subagent and returns its findings to its parent without sending mail. Never use it to rule on a wave — a reviewer that sends work back or allocates a deviation has become a coordinator with no ledger.
 ---
 
 # Reviewing one wave of a ccrc program
@@ -142,6 +142,16 @@ The first line of the body is the fingerprint the coordinator submits; the
 client exits 0 whenever a response arrived, so read stdout, not the exit code.
 Then end your turn. The coordinator closes your run; your workspace is
 released with it.
+
+**This workspace ends when the coordinator is finished with it — usually when
+its run closes.** You are a child the server
+minted for this review, so once the coordinator closes your run AND the run
+you reviewed has closed, the server reclaims it: anything not committed on
+this branch by then is committed for you as a WIP commit and attic-pinned,
+and then the worktree, the branch, the clips directory — your report's
+directory — and this session's temp directory are removed. Your report stays
+where you wrote it for as long as the run you reviewed is open, because the
+coordinator cites it by path; you do nothing different.
 
 ## When something is wrong
 

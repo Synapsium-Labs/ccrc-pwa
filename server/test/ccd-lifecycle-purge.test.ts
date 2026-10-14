@@ -1712,7 +1712,7 @@ describe('the lock mechanism is absent (spec §4, §5)', () => {
    *  `_compact_lock_why_remedy`'s SECOND argument selects it: `ws-gc --prune`
    *  declines before anything irreversible (`_lc_refuse_return`, never
    *  `_lc_fail`), so "the registry row is untouched" is the true residue
-   *  there, while the other three have already torn the workspace down and own
+   *  there, while the other four have already torn the workspace down and own
    *  "$REG/$id.* and $REG/$id.generation still stand" instead. The helper's own
    *  docstring calls that "a different claim, not a style choice", and nothing
    *  measured it: swapping the gc caller's verb argument left this file and
@@ -2469,6 +2469,61 @@ describe('the lock mechanism is absent (spec §4, §5)', () => {
       'and its replacement heads all four durable callers').toBe(4);
   });
 
+  // Review 170 F18 (fix round 1, review-fr-H I2): `cmd_ws_reclaim`'s
+  // purge-refused detail is a FIFTH durable caller of this shared renderer
+  // (`_rcl_why=$(_compact_lock_why_remedy "$id" ws-reclaim)`), and nothing may
+  // run `ws-reclaim` by hand — it is a server-only verb. Before the F18 fix
+  // the ordinary-contention catch-all arm rendered "re-run ccd $verb $id",
+  // which for this verb read "re-run ccd ws-reclaim <id>" — a shape
+  // `cmd_ws_reclaim` dies on and a verb no human may run. MEASURED red first,
+  // before the fix: with `COMPACT_LOCK_WHY` empty and `verb=ws-reclaim`, the
+  // renderer answered "...re-run ccd ws-reclaim demo-child-row once the
+  // compaction settles".
+  //
+  // Every other `COMPACT_LOCK_WHY` arm's non-`ws-gc --prune` branch ALSO said
+  // bare "re-run" before the fix (the `canonical-vanished`, `lock-path-occupied`,
+  // `lock-source-refused` and `lock-publish-failed` arms of
+  // `_compact_lock_why_remedy` itself, each now substituting `$rerun`), which
+  // is equally wrong for a verb no human runs — so each of those four is
+  // asserted POSITIVELY here too, not merely by the absence of "re-run ccd"
+  // (which their pre-fix text never contained, so that check alone cannot
+  // catch a REVERTED `$rerun`). Reverting any ONE of the four back to a
+  // literal "re-run" turns ONLY that row red — verified by mutating each arm
+  // individually in an isolated copy (one edit per arm), running this case,
+  // and confirming exactly that row's assertion failed, before restoring the
+  // file and sha-checking it unchanged.
+  it('(d1h) ws-reclaim never tells a human to "re-run ccd" — the server retries instead, on every token', () => {
+    const id = 'demo-child-row';
+    const knownTokens = ['', 'canonical-vanished', 'lock-path-occupied', 'lock-source-refused',
+      'lock-publish-failed'] as const;
+    for (const why of knownTokens) {
+      const out = h.sh(`COMPACT_LOCK_WHY='${why}' `
+        + `_r=$(_compact_lock_why_remedy ${id} ws-reclaim); printf 'OUT<<%s>>' "$_r"`);
+      const m = /OUT<<([\s\S]*)>>/.exec(out);
+      expect(m, `WHY=${why || '(empty)'}: the helper answered at all`).not.toBeNull();
+      const sentence = m![1]!;
+      expect(sentence, `WHY=${why || '(empty)'}: never tells a human to run the verb itself`)
+        .not.toContain('re-run ccd');
+      // POSITIVE: names the server as the one that retries. The empty-WHY arm
+      // has trailing words after `$rerun` ("… once the compaction settles");
+      // the other four end the sentence AT `$rerun` — asserted both ways so a
+      // reverted substitution reds this exact row.
+      expect(sentence, `WHY=${why || '(empty)'}: names the SERVER as the one that retries`)
+        .toContain('the server retries the reclaim');
+      expect(sentence, `WHY=${why || '(empty)'}: and never falls back to the bare human-facing "re-run"`)
+        .not.toMatch(/(and|then) re-run$/);
+    }
+    // THE ONE ARM WITH NO RE-RUN WORDING AT ALL: an unrecognised token reaches
+    // the outer catch-all, which never names a remedy clause and carries no
+    // `$rerun` substitution — so only the baseline negative applies.
+    const out = h.sh(`COMPACT_LOCK_WHY='a-token-with-no-arm' `
+      + `_r=$(_compact_lock_why_remedy ${id} ws-reclaim); printf 'OUT<<%s>>' "$_r"`);
+    const m = /OUT<<([\s\S]*)>>/.exec(out);
+    expect(m, 'the catch-all answered at all').not.toBeNull();
+    expect(m![1], 'the catch-all never tells a human to run the verb itself either')
+      .not.toContain('re-run ccd');
+  });
+
   it('(d3) THE SWEEP REACHES THE NEXT ROW: a declining row does not truncate `ws-gc --prune`', () => {
     // The plan requires the arity pin to ship "with the behaviour control that
     // the `ws-gc --prune` forced-refusal fixture must still reach the NEXT
@@ -2553,4 +2608,39 @@ describe('the lock mechanism is absent (spec §4, §5)', () => {
       'and so does its authorization').toBe(true);
     expect(h.sh(`_ws_slug_free demo quiet-basin; echo "free=$?"`)).toContain('free=1');
   }, 30_000);
+});
+
+// ── The stall watch's turn marker goes with its row (worker stall watch wave 2, spec 2026-09-29 §5.1) ─────
+// `session-hook.sh` writes `$REG/<id>.turn.json` beside `<id>.hookstate.json`. Both names carry a SECOND dot,
+// so the purge loop's `*.*` skip (the nested-id guard) passes over them, and `_reg_purge` names both
+// explicitly after the loop (slug `purge-loop-uses-fresh-variable` (D-3618): through `hf`, never the glob loop's `f`).
+describe('_reg_purge takes the turn marker with the row (stall watch wave 2)', () => {
+  it('removes <id>.turn.json beside <id>.hookstate.json, and leaves a neighbour\'s marker standing', () => {
+    const id = seed();
+    const REGD = path.join(h.home, '.cc-sessions');
+    const mine = [`${id}.turn.json`, `${id}.hookstate.json`];
+    // Two neighbours. A LONGER id sharing this one as a prefix has no dot after the id, so neither the glob nor
+    // an explicit name can reach it. A NESTED id's marker IS a glob match, and the `*.*` skip must keep it.
+    const neighbours = [`${id}x.turn.json`, `${id}.x-y.turn.json`];
+    for (const n of [...mine, ...neighbours]) fs.writeFileSync(path.join(REGD, n), '{"v":1}\n');
+    const out = h.sh(`_reg_purge ${id}; echo "rc=$?"; echo "unremoved=[$REG_PURGE_UNREMOVED]"`);
+    expect(out, 'nothing was refused').toContain('rc=0');
+    expect(out, 'and the out-parameter stays empty').toContain('unremoved=[]');
+    for (const n of mine) expect(fs.existsSync(path.join(REGD, n)), `${n} goes with the row`).toBe(false);
+    for (const n of neighbours) expect(fs.existsSync(path.join(REGD, n)), `${n} is another row's`).toBe(true);
+  });
+
+  it('a directory at <id>.turn.json is its own condition: status 3, and the path is named in REG_PURGE_UNREMOVED', () => {
+    const id = seed();
+    const REGD = path.join(h.home, '.cc-sessions');
+    const dir = path.join(REGD, `${id}.turn.json`);
+    fs.mkdirSync(dir);
+    fs.writeFileSync(path.join(REGD, `${id}.hookstate.json`), '{"v":1}\n');
+    const out = h.sh(`_reg_purge ${id}; echo "rc=$?"; echo "unremoved=[$REG_PURGE_UNREMOVED]"`);
+    expect(out, 'an unlink that failed after the emit is status 3').toContain('rc=3');
+    expect(out, 'and the refused path is named, alone').toContain(`unremoved=[${dir}]`);
+    expect(fs.existsSync(path.join(REGD, `${id}.hookstate.json`)), 'its sibling in the same loop still went')
+      .toBe(false);
+    expect(h.reg(id, 'uuid'), 'and so did the rest of the row').toBeNull();
+  });
 });
