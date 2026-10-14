@@ -1644,15 +1644,19 @@ at a time, each restored and `cmp`-checked, at the commit named in its heading. 
 
 FS1, FS2, FS3 and N2 (Task 1 Step 3), and FS1 on the file without the two cases.
 
-FS1 (`floor | tostring` → `tostring` at :3850) → 1 failed (a non-negative fractional updatedAt is kept as its floor and writes aliveAt (12.7 is kept as 12, 0.5 as 0))
-FS2 (`floor` → `ceil` at :3850) → 1 failed (a non-negative fractional updatedAt is kept as its floor and writes aliveAt (12.7 is kept as 12, 0.5 as 0))
-FS3 (`^[0-9]+$` → `^-?[0-9]+$` at :3864) → 2 failed (an updatedAt that is negative, non-numeric or printed by jq in exponent form keeps no stamp and writes no aliveAt (a fractional one keeps its floor); a negative fractional updatedAt is refused: -0.5 floors to -1, so the carry keeps no stamp, takes the current event and writes no aliveAt)
-N2 (drop `&& "$fr_upd" =~ ^[0-9]+$` at :3864) → 2 failed (an updatedAt that is negative, non-numeric or printed by jq in exponent form keeps no stamp and writes no aliveAt (a fractional one keeps its floor); a negative fractional updatedAt is refused: -0.5 floors to -1, so the carry keeps no stamp, takes the current event and writes no aliveAt)
-FS1 on the 28-case file (`dca1566ac`'s test file, same mutation as FS1) → 0 failed (28 passed of 28)
+- FS1 (`floor | tostring` → `tostring` at :3850) → 1 failed (a non-negative fractional updatedAt is kept as its floor and writes aliveAt (12.7 is kept as 12, 0.5 as 0))
+- FS2 (`floor` → `ceil` at :3850) → 1 failed (a non-negative fractional updatedAt is kept as its floor and writes aliveAt (12.7 is kept as 12, 0.5 as 0))
+- FS3 (`^[0-9]+$` → `^-?[0-9]+$` at :3864) → 2 failed (an updatedAt that is negative, non-numeric or printed by jq in exponent form keeps no stamp and writes no aliveAt (a fractional one keeps its floor); a negative fractional updatedAt is refused: -0.5 floors to -1, so the carry keeps no stamp, takes the current event and writes no aliveAt)
+- N2 (drop `&& "$fr_upd" =~ ^[0-9]+$` at :3864) → 2 failed (an updatedAt that is negative, non-numeric or printed by jq in exponent form keeps no stamp and writes no aliveAt (a fractional one keeps its floor); a negative fractional updatedAt is refused: -0.5 floors to -1, so the carry keeps no stamp, takes the current event and writes no aliveAt)
+- FS1 on the 28-case file (`dca1566ac`'s test file, same mutation as FS1) → 0 failed (28 passed of 28)
 
-### Task 2 (at `<commit>`)
+### Task 2 (at `22260db29`)
 
 JF1 at floor 51 and at floor 52, and JF2 if taken (Task 2 Steps 2 and 4).
+
+- JF1 at floor 51 (`session-hook.sh` :3869's `name=$(jq -r '.agent_name // …' …) || name="subagent"` → `name="subagent"`, floor 51, at the base `5144136a0`) → 0 failed (123 passed of 123; 51 >= 51: the hole review 422 measured)
+- JF1 at floor 52 (the same mutation, at `22260db29`) → 1 failed (no jq program in ccd/session-hook.sh binds `as` to a binary chain; `AssertionError: jq programs found: expected 51 to be greater than or equal to 52`)
+- JF2 (`session-hook.sh` :3802-3810's `rsk=$(jq -r '…' <<<"$payload" 2>/dev/null) || rsk=""` → `rsk=""`, floor 52, at `22260db29`) → 1 failed (no jq program in ccd/session-hook.sh binds `as` to a binary chain; `AssertionError: jq programs found: expected 51 to be greater than or equal to 52`) in `session-hook-merge-deny.test.ts`; the same mutation also reds `session-hook-role-skill-deny.test.ts` → 9 failed of 19 (10 passed)
 
 ### Task 3 (at `<commit>`)
 
