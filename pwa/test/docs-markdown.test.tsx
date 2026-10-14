@@ -126,6 +126,19 @@ describe('M4.P9: the render gate (spec 4.10 step 1)', () => {
     expect(container.querySelector('pre')).toBeNull();
   });
 
+  it('the gate counts UTF-8 bytes, not characters: a text over it in bytes and under it in length is gated, with 0 parses', async () => {
+    const text = 'é'.repeat(DOCS_RENDER_GATE_BYTES / 2 + 1);
+    expect(text.length).toBeLessThan(DOCS_RENDER_GATE_BYTES);
+    expect(utf8ByteLength(text)).toBeGreaterThan(DOCS_RENDER_GATE_BYTES);
+    const parser = realParser();
+    const { container, getByRole } = render(<DocMarkdown text={text} pinKey="p" parser={parser} link={LINK} />);
+    await act(async () => { await new Promise((r) => setTimeout(r, 20)); });
+    expect(container.querySelector('.doc-gate-copy')?.textContent).toBe(docGateSentence(utf8ByteLength(text)));
+    expect(getByRole('button', { name: DOC_MARKDOWN_ACTION.formatAnyway })).toBeTruthy();
+    expect(parser).toHaveBeenCalledTimes(0);
+    expect(container.querySelector('article')).toBeNull();
+  });
+
   it('Show as text gives pre.doc-plain with the whole text, and still no parse', async () => {
     const parser = realParser();
     const { container, getByRole } = render(<DocMarkdown text={big} pinKey="p" parser={parser} link={LINK} />);
@@ -206,6 +219,18 @@ describe('M4.P7 (W5 half): worker-unavailable (spec 4.10 step 3)', () => {
 
   it('a 5 KiB doc renders DocPlain with the worker-unavailable note', async () => {
     const text = doc(5 * KIB);
+    const { container } = render(<DocMarkdown text={text} pinKey="p" parser={noWorker()} link={LINK} />);
+    await waitFor(() => expect(container.querySelector('.doc-plain-note')?.textContent)
+      .toBe(docsPlainNote({ kind: 'worker-unavailable' })));
+    expect(container.querySelector('pre.doc-plain')?.textContent).toBe(text);
+    expect(container.querySelector('article')).toBeNull();
+    expect(renderSpy).not.toHaveBeenCalled();
+  });
+
+  it('the in-thread limit counts UTF-8 bytes: 2 049 two-byte characters (4 098 bytes, length 2 049) are DocPlain, never parsed in-thread', async () => {
+    const text = 'é'.repeat(2049);
+    expect(text.length).toBeLessThan(CHAT_SYNC_MAX_BYTES);
+    expect(utf8ByteLength(text)).toBeGreaterThan(CHAT_SYNC_MAX_BYTES);
     const { container } = render(<DocMarkdown text={text} pinKey="p" parser={noWorker()} link={LINK} />);
     await waitFor(() => expect(container.querySelector('.doc-plain-note')?.textContent)
       .toBe(docsPlainNote({ kind: 'worker-unavailable' })));
@@ -381,6 +406,8 @@ describe('M4.B2: the doc-body boundary, keyed by the pin (spec 4.12)', () => {
     await waitFor(() => expect(container.querySelector('article.doc-body h1')?.textContent).toBe('Body'));
     expect(container.querySelector('.doc-plain')).toBeNull();
     expect(container.querySelector('header.docs-truth')).not.toBeNull();
+    // Decision 3: the throw was the renderer's, inside DocParse's boundary, so the parse is kept: one parse, never a second.
+    expect(parser).toHaveBeenCalledTimes(1);
   });
 });
 
