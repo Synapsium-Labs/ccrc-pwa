@@ -34,9 +34,9 @@ the ledger's R32 and `.superpowers/sdd/stall-watch-settings/finding-4063-forensi
 ## Global Constraints
 
 - **Nothing new above `ccd/session-hook.sh:2900`.** README anchors that line, and the turn marker's departure
-  `marker-logic-in-the-tail` (D-3615) put all new logic below it. The change in Task 1 sits directly after the
+  `marker-logic-in-the-tail` (D-3615) put all new logic below it. Task 1's carry block sits directly after the
   SubagentStart/SubagentStop block (≈:3754-3770 at `da1373cf6`) and before the "Transitions to working/done clear the
-  ask" line.
+  ask" line; the fix rounds put its fresh read and `_hook_keep_stamp` just before that block, and edited the block.
 - **Do not edit `server/test/session-hook.test.ts`** (claim 1188, run 354, held to 22:22Z on 2026-10-12 and rotated
   serially). Task 1's tests go in a new file, `server/test/session-hook-subagent-ask.test.ts`, with the harness copied
   from `session-hook-turnmark.test.ts`, which documents the same reason. Running `session-hook.test.ts` read-only is
@@ -85,7 +85,7 @@ the ledger's R32 and `.superpowers/sdd/stall-watch-settings/finding-4063-forensi
 | File | Change |
 |---|---|
 | `docs/superpowers/plans/2026-10-12-stall-watch-settings-w3-hidden-ask.md` | this plan, committed first, unchanged; its Deviations section is the only part a worker edits |
-| `ccd/session-hook.sh` | Task 1: one block after the SubagentStart/SubagentStop block |
+| `ccd/session-hook.sh` | Task 1: one block after the SubagentStart/SubagentStop block; the fix rounds add the fresh read and `_hook_keep_stamp` before that block and edit it |
 | `server/test/session-hook-subagent-ask.test.ts` | Task 1: new |
 | `server/src/coord/stall.ts` | Task 2: `dialogQuietSince`, the dialog cap's use of it, `capQuietSince`'s docstring |
 | `server/test/stall-verdict.test.ts` | Task 2: one new `describe` |
@@ -94,8 +94,8 @@ the ledger's R32 and `.superpowers/sdd/stall-watch-settings/finding-4063-forensi
 
 ### Task 1: a subagent's tool event keeps the main thread's `waiting` and its ask
 
-> **D-4041 supersedes this task's snippet wherever it handles the stamp:** a carried `waiting` keeps the file's `updatedAt`
-> and `event` and writes `aliveAt` (D-4041 below). The snippet and the steps below are the first round's text, kept as written.
+> **D-4041 and `carry-only-a-main-thread-wait` supersede this task's snippet, Produces line and steps:** the shipped
+> carry keeps the stamp, writes `aliveAt`, carries a main-thread wait only, and decides from one fresh read (below).
 
 **Files:**
 - Modify: `ccd/session-hook.sh` (tail, after the `if [[ "$event" == SubagentStart || "$event" == SubagentStop ]]` block)
