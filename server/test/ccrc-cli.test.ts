@@ -245,6 +245,9 @@ describe('ccrc: dispatch and usage', () => {
     // …and B2's read verbs and the operator's own door (fix round 1, F18).
     expect(r.stdout).toContain('grep|describe|expand|tree');
     expect(r.stdout).toContain('import|prune|reparse');
+    // A dry run of import|prune|reparse runs inside a session (decideOpGate(null) is ok); only --apply and doctor refuse.
+    expect(r.stdout).toContain('(each a dry run unless --apply)');
+    expect(r.stdout).not.toContain('each refuses');
     expect(r.stdout).toContain('--repair|--migrate|--adopt|--restore|--rebuild');
     expect(r.stdout).toContain('README,');
     expect(r.stdout.indexOf('  history   ')).toBeLessThan(r.stdout.indexOf('-h, --help'));

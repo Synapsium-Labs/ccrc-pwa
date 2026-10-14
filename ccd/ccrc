@@ -23794,10 +23794,11 @@ _usage_history_paragraph() {
     '            a session printed included; touch ~/.ccrc/history-off to pause' \
     '            it. status [--json] reports the store and its health. A' \
     '            session recalls with grep|describe|expand|tree. The operator' \
-    '            alone, from a terminal outside any session (each refuses' \
-    '            inside one): import|prune|reparse and doctor --backup|' \
-    '            --repair|--migrate|--adopt|--restore|--rebuild. See README,' \
-    '            "Session history: lossless recall"'
+    '            alone, from a terminal outside any session, runs' \
+    '            import|prune|reparse (each a dry run unless --apply) and' \
+    '            doctor --backup|--repair|--migrate|--adopt|--restore|--rebuild;' \
+    '            every --apply form and every doctor flag refuses inside a' \
+    '            session. See README, "Session history: lossless recall"'
 }
 
 # `--purge --purge-history` with a LINKED `db/` (history spec §9.5): remove,
