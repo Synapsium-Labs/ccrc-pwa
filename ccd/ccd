@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=02fefb6e45f6a833f37f44166049c1ae9b2ca13c3531423192c2214c7f2e0ce8
+# ccrc:generated 1 sha256=58af71117c4ab2b7f0b816976fe1d5d24ec7b84f461c8a33e46810118c21048a
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -21102,6 +21102,10 @@ _child_tmpdir() {   # id -> rc 0 + path on stdout | 1 not a child | 2 child, lea
 # DEATH belongs to `_ws_tmproot_witness_drop` alone (RECLAIM region), and only
 # once the leaf is PROVEN absent (`_ws_leaf_remove`, or `_ws_reclaim_absent`).
 _ws_tmproot_witness_file() { printf '%s' "$REG/tmproots/${1-}"; }   # id -> the witness's path (a path, not a decision)
+
+# THE ID A VERB MAY BIND (path-identity spec §2.4): the registry charset, read under LC_ALL=C, and never
+# dash-leading, because a dash-leading word is a flag spelling and every decision flag the server appends begins `--`.
+_reg_id_ok() { local LC_ALL=C; [[ "${1-}" =~ ^[A-Za-z0-9._-]+$ && "${1-}" != -* ]]; }   # word -> 0 iff a --session or positional id may bind it
 
 # THE ID A WITNESS MAY BE NAMED FOR: the tail's own id shape, never
 # dot-leading — `.`, `..` and the writer's `.<id>.*.tmp` names live there.
