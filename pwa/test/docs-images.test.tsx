@@ -634,6 +634,25 @@ describe('M4.U6: object URLs are revoked', () => {
     const second = vi.mocked(URL.createObjectURL).mock.results[1]!.value as string;
     await waitFor(() => expect(loadedSrcs(r.container)).toEqual([second]));
   });
+
+  it('a replaced SVG shows Loading, never the old data: image, until its new bytes arrive', async () => {
+    const assets = fakeAssets();
+    const tree = treeOk({ entries: [entry('specs', 'a.md'), entry('specs', 'd.svg'), entry('specs', 'e.svg')] });
+    const r = renderDoc('![d](d.svg)', { tree, assets });
+    await waitFor(() => expect(loadedSrcs(r.container)).toEqual([SVG_DATA]));
+    let release: () => void = () => {};
+    assets.file.mockImplementationOnce(() => new Promise<DocsFileAnswer>((resolve) => {
+      release = () => resolve(okSvg('<svg xmlns="http://www.w3.org/2000/svg"/>'));
+    }));
+    r.rerender(docUi('![d](e.svg)', { tree, assets }).ui);
+    await act(async () => {});
+    expect(assets.file).toHaveBeenCalledTimes(2);
+    expect(imgs(r.container)).toHaveLength(0);
+    expect(r.container.querySelectorAll('.doc-img-loading')).toHaveLength(1);
+    await act(async () => { release(); });
+    await waitFor(() => expect(loadedSrcs(r.container)).toEqual(
+      ['data:image/svg+xml;base64,' + btoa('<svg xmlns="http://www.w3.org/2000/svg"/>')]));
+  });
 });
 
 describe('the per-screen fetch queue (spec 4.11: concurrency 2)', () => {
