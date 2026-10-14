@@ -19,7 +19,7 @@
 // for systemd and tmux containment, and HOME is always `makeCcdHarness`'s
 // fixture, never the live one.
 //
-// THE PAIR PARTS (path identity W1a, a coordinator ruling at plan review). The
+// THE PAIR (path identity W1a, a coordinator ruling at plan review). The
 // second describe runs the SERVER, not ccd: `/stop` and the archive door over
 // planted legacy rows, through Task 2's `appFor` in its own `mkTmp` fixture
 // HOME, with a runner that records argv and never execs.
@@ -153,14 +153,17 @@ describe('stop sends --surface before the id (spec §2.3, §2.4)', () => {
   });
 });
 
-// THE PAIR PARTS. `stopPair`'s project is a legacy row's `.project`, and its
-// wrapper the row's `.wrapper` when the id does not end in `-<project>`: fields
-// no id gate reads. `cmd_stop`'s `--surface=*` arm strips a token of that
-// spelling from ANY position, so a field reading `--surface=<word>` made the
-// pair a one-argument stop of the OTHER token, in the leading, trailing and
-// bare forms alike. Both callers of `stopArgvFor` now ask `stopPairRefused` in
-// their identity arm and answer 503 `registry-unmeasurable`, with no argv
-// composed.
+// THE PAIR. `stopPairRefused` refuses a legacy row's pair when a part is not a
+// registry id OR the pair is not the id. ccd's two-argument stop recomputes
+// `<wrapper>-<project>`, so the pair clause alone refuses every fallback-arm row,
+// one whose id does not end in `-<project>` and whose wrapper would be the row's
+// `.wrapper`: that fallback never reaches `stopPair`. The part checks stand
+// beside it because `cmd_stop`'s `--surface=*` arm strips a token of that
+// spelling from ANY position, so a part reading `--surface=<word>` made the pair
+// a one-argument stop of the OTHER token, in the leading, trailing and bare
+// forms alike, and no argv order refuses it. Both callers of `stopArgvFor` ask
+// `stopPairRefused` in their identity arm and answer 503
+// `registry-unmeasurable`, with no argv composed.
 
 /** Records every argv and never execs. tmux answers that the pane is GONE, so the archive door's fail-closed turn
  *  read is `idle` for a rostered wrapper, and only the identity arm stands between a request and its stop. */
@@ -187,7 +190,7 @@ const WITH_SURFACE: FleetState = {
 };
 const REFUSED = { ok: false, error: 'registry-unmeasurable' };
 
-describe('stop refuses a legacy pair part that is not a registry id', () => {
+describe('stop refuses a legacy pair with a part that is not a registry id, or that is not the id', () => {
   let opened: FastifyInstance[] = [];
   afterEach(async () => { for (const a of opened) await a.close(); opened = []; });
 
@@ -200,7 +203,7 @@ describe('stop refuses a legacy pair part that is not a registry id', () => {
     return { home, app, stops: () => calls.filter((c) => c[0] === 'stop'), all: () => calls };
   };
 
-  it('/stop refuses a pair part: a .project spelled --surface=pwa, 503 and no stopPair argv', async () => {
+  it('/stop refuses a .project spelled --surface=pwa (the project and pair clauses): 503 and no stopPair argv', async () => {
     // The id does not end in `---surface=pwa`, so the pair is the row's `.wrapper` and `.project`. Composed in the
     // leading form, it was `stop --surface pwa claude-a --surface=pwa`, a stop of `claude-a`.
     const r = await rig(WITH_SURFACE);
@@ -211,7 +214,7 @@ describe('stop refuses a legacy pair part that is not a registry id', () => {
     expect(res.json()).toEqual(REFUSED);
   });
 
-  it('/stop refuses a pair part: a dash-leading fallback .wrapper, 503 and no stopPair argv', async () => {
+  it('/stop refuses a dash-leading fallback .wrapper (the wrapper and pair clauses): 503 and no stopPair argv', async () => {
     // The id does not end in `-demo`, so the wrapper is the row's `.wrapper`. Composed with no capability evidence,
     // it was the bare `stop --surface=pwa demo`, a stop of `demo`.
     const r = await rig();
@@ -222,7 +225,7 @@ describe('stop refuses a legacy pair part that is not a registry id', () => {
     expect(res.json()).toEqual(REFUSED);
   });
 
-  it('the archive door refuses a pair part before its turn read: a .project spelled --surface=pwa, 503 and no stop', async () => {
+  it('the archive door refuses a .project spelled --surface=pwa before its turn read (the project and pair clauses): 503 and no stop', async () => {
     // `claude-a` has a config dir and its pane is gone, so the turn reads idle and nothing else refuses. Composed, it
     // was the bare `stop claude-a --surface=pwa`, a stop of `claude-a`.
     const r = await rig();
@@ -233,7 +236,7 @@ describe('stop refuses a legacy pair part that is not a registry id', () => {
     expect(res.json()).toEqual(REFUSED);
   });
 
-  it('the archive door refuses a pair part before its turn read: a dash-leading fallback .wrapper, 503 and no stop', async () => {
+  it('the archive door refuses a dash-leading fallback .wrapper before its turn read (the wrapper and pair clauses): 503 and no stop', async () => {
     // A roster id never begins with `-`, so this wrapper has no config dir. Without the identity arm's refusal, the
     // fail-closed turn read answers first, 409 `status-unknown`; the refusal stands before that read.
     const r = await rig();
@@ -244,11 +247,24 @@ describe('stop refuses a legacy pair part that is not a registry id', () => {
     expect(res.json()).toEqual(REFUSED);
   });
 
+  it('/stop refuses a .project that is not a registry id when the id ends in -<project> (the project clause): 503 and no stopPair argv', async () => {
+    // The id passes `isRegistryId`, `stopPairWrapper`'s prefix arm gives `demo-a`, and the pair clause passes, so
+    // only the project clause refuses. Composed, it was `stop --surface pwa demo-a -x`.
+    const r = await rig(WITH_SURFACE);
+    seedLegacy(r.home, 'demo-a--x', 'demo-a', '-x');
+    const res = await r.app.inject({ method: 'POST', url: '/api/sessions/demo-a--x/stop' });
+    expect(r.stops(), 'a stopPair argv was composed and sent').toEqual([]);
+    expect(res.statusCode).toBe(503);
+    expect(res.json()).toEqual(REFUSED);
+  });
+
   // THE PAIR IS THE ID. ccd's two-argument stop recomputes `<wrapper>-<project>`, so a legacy row whose id does not
   // end in `-<project>` made the pair name a DIFFERENT session: the fallback wrapper arm never stopped the row that was
-  // tapped. The reachable shape is a workspace row whose `.workspace` read failed, which reads as legacy; a row with no
-  // `.workspace` file is that row to the server. `stopPairRefused` refuses it in both identity arms, and a well-formed
-  // legacy row, a swapped one included, stops as before.
+  // tapped. Two shapes reach it. A workspace row whose `.workspace` read failed reads as legacy, and its pair would
+  // stop the project's main checkout; a row with no `.workspace` file is that row to the server. A legacy row whose
+  // `.project` is absent or unreadable reads as `project = id` (the registry's `project ?? id`), so its pair would
+  // stop `<wrapper>-<id>`. `stopPairRefused` refuses both in both identity arms, and a well-formed legacy row, a
+  // swapped one included, stops as before.
   describe('and a pair that is not the tapped id', () => {
     it('/stop refuses a legacy row whose id does not end in -<project>: 503 and no ccd call', async () => {
       // Composed, it was `stop --surface pwa demo-a demo`, a stop of `demo-a-demo`, a session nobody tapped.

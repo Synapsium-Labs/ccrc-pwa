@@ -318,19 +318,25 @@ export const CCD_ARGV = {
    *  --surface` dies on ccd's usage line and stops nothing. The server's id
    *  gates (`knownId`, `readSessionRecord`'s `bad-id`) refuse such an id
    *  before either builder runs; this order is the lock behind them, for any
-   *  future caller of `stopId`. `stopPair` is narrower: its project is the
-   *  legacy row's `.project`, and its wrapper the row's `.wrapper` when the
-   *  id does not end in `-<project>`, fields no id gate reads. `cmd_stop`'s
-   *  `--surface=*` arm strips a token of that spelling from any position, so
-   *  a field reading `--surface=<word>` leaves a one-argument stop of the
-   *  other token in either order, and no order can refuse it. The server
-   *  refuses it before this builder runs: `stopArgvFor`'s two callers ask
-   *  `stopPairRefused` (`server.ts`), which needs `isRegistryId` of each part.
+   *  future caller of `stopId`. `stopPair` carries a legacy row's id split
+   *  at its `-<project>` suffix, and only that: `stopPairRefused`
+   *  (`server.ts`) refuses a non-workspace row whose id is not
+   *  `<wrapper>-<project>` before `stopArgvFor` runs, so the row's
+   *  `.wrapper` fallback never reaches `stopPair`. The value of
+   *  `identity.wrapper` no longer changes any outcome: a row that would use
+   *  it is refused by that pair clause, while `measuredIdentity`'s null arm
+   *  still answers 503. Defence in depth stands behind it: a project part
+   *  that is not a registry id (a `.project` spelled `--surface=<word>`, or
+   *  leading `-` or `.`) is also refused by `stopPairRefused`'s part
+   *  check, because `cmd_stop`'s `--surface=*` arm strips a token of that
+   *  spelling from any position, leaving a one-argument stop of the other
+   *  token, and no argv order can refuse it.
    *  The order is safe on every ccd that advertises `stop-surface`,
-   *  whose loop strips the flag from any position (the loop shipped in the
-   *  same ccd as the token, and `ccd-session-state.test.ts`'s "takes the
-   *  flag before the id as well" pins the current one). A ccd without the
-   *  token is still sent no flag at all, by the `null` arm above.
+   *  whose loop strips the flag from any position: the any-position loop
+   *  came two days before the `stop-surface` token, so every ccd that
+   *  advertises the token has the loop (`ccd-session-state.test.ts`'s
+   *  "takes the flag before the id as well" pins the current one). A ccd
+   *  without the token is still sent no flag at all, by the `null` arm above.
    *  `ccd-stop-argv-order.test.ts` runs both builders' argv through the
    *  real `cmd_stop`. */
   stopId:    (id: string, surface: StopSurface | null) =>

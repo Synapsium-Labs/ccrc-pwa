@@ -2981,17 +2981,30 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   }
 
   /**
-   * True when a stop of this row would hand `CCD_ARGV.stopPair` a part that is not a registry id (path identity W1a,
-   * a coordinator ruling at plan review). The pair's project is the legacy row's `.project`, and its wrapper is the
-   * row's `.wrapper` when the id does not end in `-<project>`: fields no id gate reads. `cmd_stop`'s `--surface=*`
-   * arm strips a token of that spelling from ANY position, so a field reading `--surface=<word>` turned the pair
-   * into a one-argument stop of the OTHER token, a session nobody named, in the leading, trailing and bare forms
-   * alike. No argv order refuses that, and no ccd rule refuses it without also refusing the pre-W1a trailing order
-   * while the fleet box runs ahead of this server. So each part must pass `isRegistryId`: the session-id charset,
-   * which has no `=`, and no leading `-` or `.`. It is also true when the pair is not the id: ccd recomputes
-   * `<wrapper>-<project>`, so an id that does not end in `-<project>` makes the pair name a different session (a
-   * workspace row whose `.workspace` read failed reads as legacy, and its pair would stop the project's main
-   * checkout); refusing that changes no well-formed stop, because an id ending in `-<project>` always equals its pair.
+   * True when a stop of this row would hand `CCD_ARGV.stopPair` a pair that is not the id, or a part that is not a
+   * registry id (path identity W1a, a coordinator ruling at plan review).
+   *
+   * THE PAIR IS THE ID, and that clause is the rule that does the work. ccd recomputes `<wrapper>-<project>`, so an
+   * id that does not end in `-<project>` makes the pair name a different session (a workspace row whose `.workspace`
+   * read failed reads as legacy, and its pair would stop the project's main checkout; a legacy row whose `.project`
+   * is absent or unreadable reads as `project = id`, and its pair would stop `<wrapper>-<id>`). Those are exactly the
+   * fallback-arm rows, whose wrapper would be the row's `.wrapper`: the clause refuses every one, so that fallback
+   * never reaches `stopPair`, and the pair it carries is always the id split at its `-<project>` suffix. Refusing it
+   * changes no well-formed stop, because an id ending in `-<project>` always equals its pair.
+   *
+   * THE PARTS stay checked. `cmd_stop`'s `--surface=*` arm strips a token of that spelling from ANY position, so a
+   * part reading `--surface=<word>` turned the pair into a one-argument stop of the OTHER token, a session nobody
+   * named, in the leading, trailing and bare forms alike. No argv order refuses that, and no ccd rule refuses it
+   * without also refusing the pre-W1a trailing order while the fleet box runs ahead of this server. So each part must
+   * pass `isRegistryId`: the session-id charset, which has no `=`, and no leading `-` or `.`.
+   * - The project clause is defence in depth. ccd refuses a dash-leading project only once ccd's own half of the id
+   *   gate lands (W1b); until then this clause refuses a row whose id ends in `-<project>` with a project that is not
+   *   a registry id (`demo-a--x` with `.project` `-x`), which the pair clause passes.
+   * - The wrapper clause is an equivalent mutant, kept as the part check's other half. On the fallback arm the pair
+   *   clause refuses on its own (`<wrapper>-<project>` ends in `-<project>`, so it never equals an id that does not);
+   *   on the prefix arm the wrapper is a non-empty prefix of an id the caller already vetted with `isRegistryId`, so
+   *   it passes. Deleting the clause changes no outcome.
+   *
    * Both callers of `stopArgvFor` ask this in their identity arm and answer what an unmeasured identity field
    * answers, 503 `registry-unmeasurable`, with no argv composed; the archive door asks it before its turn read, its
    * claim reads and the programme's end. A workspace row is never refused here: it stops by its id, which each
