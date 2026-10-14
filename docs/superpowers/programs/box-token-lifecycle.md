@@ -1490,6 +1490,59 @@ spec's after wave 1.
   - **A citation to re-point (mail 4787, review 438's F2).** #399 moved `server/test/single-definition.test.ts` down
     by 21 lines. The spec cites its seven-day-threshold pin at `:4774-4780`, which now begins at `:4798`. No test
     reads the citation. Row 3a does not edit the spec, so the next edit of the spec re-points it.
+- **2026-10-14 09:32 UTC: row 3a's held-out review of PR #403 at `d1b35d82d`, clean by the bar; group G sent.**
+  - **Its shape (correcting the 08:04 entry).** That entry named three bar lenses as "the" panel. What ran is the
+    panel as written, plus those three lenses, as row 2c's review did:
+    - The panel's own three lenses, correctness, spec conformance and does-it-reproduce, ran as the reference script
+      states. One line was added to its read-only text: the fixture-`HOME` rule, because the reproduce lens runs
+      suites.
+    - The three bar lenses were the live rotation path and the previous build; doctor's live `PASS` and the
+      residue; and pins, secrets, scope, numbers and the public repo.
+    - Every finding went to three Sonnet refuters, and the majority decided. The lenses read a local clone at the
+      tip, not the coordinator's worktree. Two restarts of this session (at 08:13 and 09:06 UTC) cut the runs. Each
+      was resumed from its recorded results, and no lens was lost.
+  - **The verdict: clean by the bar.** Every lens reported, and nothing was left unexamined. All findings are
+    minor, and none is of a bar class.
+    - The panel: correctness 1 confirmed; spec 1 confirmed and 1 refuted; reproduce 3 confirmed (one of them a
+      record of what reproduced) and 1 refuted.
+    - The bar lenses: live path 3 confirmed and 1 refuted; doctor and residue 1 confirmed; pins, scope and public 2
+      confirmed.
+  - **The one class-1 claim, refuted 3 to 0.** It said that a scheduled value handed out with its answer lost
+    becomes an owed `confirm-deadline` rotation after the confirm window, and then stages once per tick on a
+    flapping link. The refuters found it is spec §5.1's owed rule, which Q1 left unchanged. It is bounded by the
+    confirm window and the pending cap (measured: 3 sends in 7 minutes, then the cap's hold). It becomes a named
+    limit.
+  - **What the reproduce lens re-measured.** Every green count it could run, and about 45 of the commits' mutants,
+    reproduce. The grid and the prose pin are evidence scripts outside the tree, so their counts are records.
+  - **The two real defects among the minors:**
+    - Doctor's overdue WARN tests `pending` but not `promoting`. So a state left by a crash between promote's
+      discard and its commit reads `WARN rotation-overdue ... nothing in flight` rc 2, where the base read `PASS ... a
+      rotation in progress` rc 0. That state is reachable, so Task 5's "equivalent mutant" record was wrong. It is
+      not today's live shape, and a WARN moves no exit code.
+    - The one-definition pin misses a second definition typed `: number`.
+  - **The rest:**
+    - E8d's title claims a scheduled-miss hold no row can show (P8 alone pins it).
+    - Review Focus 8's kill-switch sentence is backed by one row only.
+    - Three more limits: the scheduled-to-owed path; a backward clock step after a miss; and a press during a
+      scheduled stage's pending write, labelled scheduled.
+    - The value scan's hex, octal and binary blind spot.
+    - The six minors the PR body lists.
+  - **CI at `d1b35d82d`.** Every Linux leg of PR run 38532462858 and of full run 38532471392 is green. The PR run's
+    selection ran 579 test files in five shards, among them `token-shared`, `token-policy`, `token-rotation-e2e`,
+    `doctor-box-token`, `ccrc-doctor` and `ccrc-install`. The macOS legs of both runs are red, so the full run's
+    `full-suite` is red too, because it counts them. Both runs fail the same 23 tests in 8 files this branch does not
+    touch (`ccd-child-reclaim-*`, `ccd-docs-tree`, `ccd-leaf-remove` and `ccd-review-335-pins`), and none in a token,
+    doctor, install or update file. macOS gates nothing (ruling 2026-09-28).
+  - **The ruling.** No fix round is owed, because the bar is clean. By the bar's last line, every confirmed minor and
+    the PR body's six go into ONE commit, group G, before the merge:
+    - the overdue clause gains the promoting test, pinned red first, with Task 6's grid re-run;
+    - the pin's regex admits `: number`;
+    - E8g is added, with a miss standing and presses through it, and E8d is re-titled;
+    - the kill-switch rows are extended;
+    - the comments, limits and records are corrected.
+
+    It is reviewed by two Opus lenses, the rulings and the live doctor and driver, and re-verified: the suites, the
+    doctor, install and update split with coverage reconciled, and the scans. The merge follows when it is green.
 
 ## Carried constraints
 
