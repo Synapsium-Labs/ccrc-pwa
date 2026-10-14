@@ -816,3 +816,18 @@ describe('ci.yml: the browser leg (native Docs reader spec 2026-10-01 §5.7)', (
     expect(b).not.toMatch(/^ {4}permissions:/m);
   });
 });
+
+describe('Review 439 F26: the browser leg cannot be softened by continue-on-error, a shell override or defaults', () => {
+  // The full-suite legs are pinned the same three ways above. A browser leg that
+  // failed and still reported green would read as a pass in full-suite's RESULTS.
+  it('has no continue-on-error (job or step), no shell override on any step, and no job or workflow defaults', () => {
+    const b = job('browser-pwa');
+    expect(b, 'continue-on-error on the job or a step').not.toMatch(/continue-on-error/);
+    for (const st of steps(b)) {
+      expect(st, `a shell override on a step:\n${st}`).not.toMatch(/^(?: {6}- | {8})shell:/m);
+    }
+    expect(step(b, 'Test'), 'a shell override on the Test step').not.toMatch(/^ {8}shell:/m);
+    expect(b, 'job-level defaults').not.toMatch(/^ {4}defaults:/m);
+    expect(read(CI), 'workflow-level defaults').not.toMatch(/^defaults:/m);
+  });
+});
