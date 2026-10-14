@@ -31,7 +31,7 @@ time.
 | 1 | server: L0 wire types and texts; L1 `stallsettings.ts` (ladder, resolver, write effect and key, counts, busy clock); `stall.ts` (quiet time, backoff ceiling, busy clock bound); the migration and store methods; both sweeps through one never-throwing resolution; `GET`/`POST /api/coord/stall-watch` and their censuses; README, `CLAUDE.md` and the parent spec | server | #320 | merged `7f7bf4afc` 2026-10-07 (v0.0.119); run 295 closed `done` (R20) |
 | 2 | the Settings section: API client and hook; a multi-line `QuickConfirm`; `StallWatchSection`; the Notifications label rename; README; wave 1's review residue | server (it serves the PWA) | #322 | merged `6e4524164` 2026-10-12; run 322 closed `done`, `final:true` (R37) |
 | 3 | finding 4063's two fixes: a subagent's tool event keeps the main thread's `waiting` and its ask (`ccd/session-hook.sh`, D-4039); the dialog cap's clock ignores inbound mail (`stall.ts`, D-4040) | both (hook on the fleet box, `stall.ts` on the server) | #362 | merged `f515cdfd4` 2026-10-13 (v0.0.177); run 394 closed `done`, `final:true` (R51) |
-| 4 | R51's follow-up list (a)-(h): the fractional-stamp cases and the hook's words; the merge-deny jq floor; the bounded POST slice; a save that confirms nothing reads unconfirmed (D-4045); one duration formatter in L0; stale comments and README; the R37 list; the W3 plan's words and rewrap | server (it serves the PWA); the hook's edits are comments | — | planned (R52) |
+| 4 | R51's follow-up list (a)-(h): the fractional-stamp cases and the hook's words; the merge-deny jq floor; the bounded POST slice; a save that confirms nothing reads unconfirmed (D-4045); one duration formatter in L0; stale comments and README; the R37 list; the W3 plan's words and rewrap | server (it serves the PWA); the hook's edits are comments | — | run 437 dispatched to a fresh child (R52) |
 
 ## Decisions & deviations
 
@@ -1185,6 +1185,17 @@ time.
     - implementers run on Sonnet · high, and per-task reviewers on Opus · high;
     - scouts run on Haiku;
     - workflows are off, and compact is at 40.
+  - Ruling 1 amended (00:35): the new unconfirmed line is `STALL_CONFIRM_TEXT.unconfirmed` in `shared/api.ts`, not a
+    constant in `shared/stall-watch.ts`, because the P6 device-word row reads only `shared/api.ts`'s exports, and
+    widening P6 would edit beside #384's own P6 hunk. It replaces a comment line, so the line count is unchanged.
+    Asked of run 400's coordinator by mail 4745.
+  - Pre-flight: three Opus lenses and a Sonnet refuter per major finding reviewed the plan before dispatch. Five
+    major findings survived, and all 14 findings were applied. The one blocker was a README replacement that would
+    have deleted half a sentence.
+  - Consents, all on 4468's terms, none naming a line to keep off: run 400's coordinator by mails 4717 and 4747
+    (which also names #397, editing `shared/api.ts` about 55 lines below), and run 354's by mail 4719.
+  - Dispatched (01:03): run 437 to the fresh child `ccrc-pwa-keen-meadow`, with nine items and the route above.
+    Plan at `b0e53b110` (blob `4550cadf7`); brief `.superpowers/sdd/stall-watch-settings/w4-wave-brief.md`.
 
 ## Carried constraints (reviewers get these)
 
