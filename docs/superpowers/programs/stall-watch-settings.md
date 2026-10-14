@@ -3,12 +3,13 @@
 Spec: `docs/superpowers/specs/2026-10-05-stall-watch-settings-design.md` (rev 3.2, approved 2026-10-05 17:46 UTC)
 Plans: `docs/superpowers/plans/2026-10-05-stall-watch-settings-w1-server.md` (wave 1),
 `docs/superpowers/plans/2026-10-05-stall-watch-settings-w2-pwa.md` (wave 2),
-`docs/superpowers/plans/2026-10-12-stall-watch-settings-w3-hidden-ask.md` (wave 3; it landed with the wave's PR, R38)
+`docs/superpowers/plans/2026-10-12-stall-watch-settings-w3-hidden-ask.md` (wave 3; it landed with the wave's PR, R38),
+`docs/superpowers/plans/2026-10-14-stall-watch-settings-w4-residue.md` (wave 4; it lands with the wave's PR, R52)
 Home project: `ccrc-pwa`   Coordinator: `ccrc-pwa-calm-harbor`   Workspace: **a fresh child per wave**
 Predecessor: `stall-watch`, complete (its ledger's R38).
-**Status: complete** (R51, 2026-10-13). Wave 1 merged as `7f7bf4afc` (#320), wave 2 as `6e4524164` (#322), the
-ledger to R37 as `da1373cf6` (#356), and wave 3, finding 4063's two fixes, as `f515cdfd4` (#362). The follow-up
-list is in R51.
+**Status: wave 4 open** (R52, 2026-10-14). Wave 1 merged as `7f7bf4afc` (#320), wave 2 as `6e4524164` (#322), wave 3
+as `f515cdfd4` (#362), and the ledger to R51 as `ac60e373f` (#394). Wave 4 is R51's follow-up list, in one PR, by the
+operator's ruling.
 
 **What this program is.** The Settings page gains a **Stall watch** section with one arming ladder and one quiet
 time.
@@ -30,6 +31,7 @@ time.
 | 1 | server: L0 wire types and texts; L1 `stallsettings.ts` (ladder, resolver, write effect and key, counts, busy clock); `stall.ts` (quiet time, backoff ceiling, busy clock bound); the migration and store methods; both sweeps through one never-throwing resolution; `GET`/`POST /api/coord/stall-watch` and their censuses; README, `CLAUDE.md` and the parent spec | server | #320 | merged `7f7bf4afc` 2026-10-07 (v0.0.119); run 295 closed `done` (R20) |
 | 2 | the Settings section: API client and hook; a multi-line `QuickConfirm`; `StallWatchSection`; the Notifications label rename; README; wave 1's review residue | server (it serves the PWA) | #322 | merged `6e4524164` 2026-10-12; run 322 closed `done`, `final:true` (R37) |
 | 3 | finding 4063's two fixes: a subagent's tool event keeps the main thread's `waiting` and its ask (`ccd/session-hook.sh`, D-4039); the dialog cap's clock ignores inbound mail (`stall.ts`, D-4040) | both (hook on the fleet box, `stall.ts` on the server) | #362 | merged `f515cdfd4` 2026-10-13 (v0.0.177); run 394 closed `done`, `final:true` (R51) |
+| 4 | R51's follow-up list (a)-(h): the fractional-stamp cases and the hook's words; the merge-deny jq floor; the bounded POST slice; a save that confirms nothing reads unconfirmed (D-4045); one duration formatter in L0; stale comments and README; the R37 list; the W3 plan's words and rewrap | server (it serves the PWA); the hook's edits are comments | — | planned (R52) |
 
 ## Decisions & deviations
 
@@ -1149,6 +1151,40 @@ time.
   - Next: this ledger lands on `main` by a docs PR from this branch, after `main` is merged in (the W3 plan taken as
     `main` has it). The follow-up list goes to the operator as a proposed residue wave; whether and when it runs is
     the operator's call.
+- **R52 (2026-10-14 00:07)**, the operator opens wave 4: every follow-up in one PR, merged by this session once
+  reviewed and green.
+  - The operator, 2026-10-13 23:48: "do all the follow-ups in a single PR", then "push and merge it once you've
+    reviewed it and merge when green".
+    - This session read the second message as covering ledger PR #394 too, which it had asked about in those words.
+      #394 merged at 23:52:30Z as `ac60e373f`, by `--admin --squash --match-head-commit f796f96b4`, with every
+      required check green (macOS still running, advisory). `main` was then merged back into this branch.
+  - Ruling: wave 4 is R51's list (a)-(h), in `docs/superpowers/plans/2026-10-14-stall-watch-settings-w4-residue.md`:
+    eight tasks, one fresh child, one PR. The plan rides in the PR's first commit, as R38 ruled for wave 3.
+    - At wave-done: re-measure, advance, then a review run with the held-out panel over plan and code.
+    - On the review's acceptance with every required check green, this session merges with `--admin --squash
+      --match-head-commit <the reviewed tip>`, under the operator's go-ahead. Arming stays the operator's.
+  - Research: five read-only Opus readers measured every item at `f515cdfd4` (evidence `w4-facts.json`), and the
+    rulings are in `w4-rulings.md`. The ones that shape the plan:
+    - One new L0 file, `shared/stall-watch.ts`, holds the duration formatter, the save's refusal codes and the new
+      unconfirmed line. `shared/api.ts` gets only a comment: run 400 holds it, and #384 also appends at its foot.
+    - The save that confirms nothing defines D-4045, `an-answer-without-a-refusal-code-reads-unconfirmed`. It is the
+      programme's one reserve number.
+    - The refusal list is the POST route's own three codes, as #384's collector list is.
+    - The W3 plan's rewrap is the last task, and this ledger's line citations into that plan are dated snapshots.
+    - Why: one PR, as asked, with every code edit kept off the lines other runs are changing.
+    - Cost if wrong: a held file's merge needs a manual resolution, or a plan line a ruling cites moves.
+  - Claims: runs 354 and 400 hold ten of the wave's files. Every edit in them was measured clear of the holder's own
+    changes.
+    - The code edits are in three files run 400 holds: `useStallWatchView.ts`, `settings-screen.test.tsx` and
+      `single-definition.test.ts`. The rest are comments or one sentence.
+    - Consent is asked under 4468's terms: mail 4715 to run 400's coordinator, and mail 4716 to run 354's.
+    - The worker edits a held path only after this session relays that holder's answer. The plan orders those paths
+      late.
+  - Route: unchanged from wave 3. A spec'd plan of small, independent tasks fits one context, so:
+    - the main loop runs on Opus · high;
+    - implementers run on Sonnet · high, and per-task reviewers on Opus · high;
+    - scouts run on Haiku;
+    - workflows are off, and compact is at 40.
 
 ## Carried constraints (reviewers get these)
 
@@ -1194,3 +1230,9 @@ time.
   - At wave-done: re-measure, advance, then a review run with the held-out panel over plan and code. The merge is the
     operator's call. Wave 3 is the last wave, so its close carries `final:true`.
   - Done: run 394, merged as `f515cdfd4` (#362), and closed `done` with `final:true` (R51).
+- **Wave 4:** `docs/superpowers/plans/2026-10-14-stall-watch-settings-w4-residue.md`, all eight tasks, on a fresh
+  child of `ccrc-pwa` (R52). The plan's first commit takes it unchanged from this branch.
+  - Held paths (runs 354 and 400) are edited only after this session relays each holder's agreement.
+  - At wave-done: re-measure, advance, then a review run with the held-out panel over plan and code. On acceptance,
+    with every required check green, this session merges under the operator's go-ahead. Wave 4 is the last wave, so
+    its close carries `final:true`.
