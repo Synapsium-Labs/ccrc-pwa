@@ -5681,3 +5681,50 @@ describe('child reclamation wave 9: the collector’s lane and executor call the
     }
   });
 });
+
+// Docs W5 part 1, Task 1 (spec 2026-10-01 3.11, amended 2026-10-13): the permalink builder, its answer type and the
+// one private URL assembler are declared once, in shared/docs.ts. A second `githubUrlAt` anywhere in the four roots
+// is a second assembler (M3.17's drift), and a second `githubPermalink` is a second Share link rule. APPENDED after
+// the file's last line, as its own describe: `session-hook.test.ts`'s citation audit cites this file by line, so the
+// docs section H block's TYPES and FUNCTIONS lists above are never edited. The same two declaration patterns as that
+// block, with a planted CONTROL: a third file holding a copy makes the holder list two long.
+describe('docs section H, W5: GithubPermalink, githubPermalink and githubUrlAt are declared once, in shared/docs.ts', () => {
+  const TYPES = ['GithubPermalink'] as const;
+  const FUNCTIONS = ['githubPermalink', 'githubUrlAt'] as const;
+  const TYPE_DEF = (name: string): RegExp =>
+    new RegExp(`^\\s*(?:export\\s+)?(?:declare\\s+)?(?:type\\s+${name}\\b\\s*(?:<[^>\\n]*>)?\\s*=|interface\\s+${name}\\b)`, 'm');
+  const FN_DEF = (name: string): RegExp =>
+    new RegExp(`^\\s*(?:export\\s+)?(?:function\\s+${name}\\b|(?:const|let|var)\\s+${name}\\b)`, 'm');
+  // The holders of a declaration over the four roots, plus any planted [path, text] pairs, sorted.
+  const holders = (def: RegExp, planted: readonly (readonly [string, string])[] = []): string[] =>
+    [...ALL.map((f) => [rel(f), readFileSync(f, 'utf8')] as const), ...planted]
+      .filter(([, text]) => def.test(text)).map(([p]) => p).sort();
+
+  it('CONTROL: the patterns see a declaration, a local copy and an arrow copy, and not an import, a call or another name', () => {
+    expect(TYPE_DEF('GithubPermalink').test('export type GithubPermalink =')).toBe(true);
+    expect(TYPE_DEF('GithubPermalink').test("type GithubPermalink = { ok: true; url: string };"), 'a local copy').toBe(true);
+    expect(TYPE_DEF('GithubPermalink').test('export type GithubPermalinkRow = {'), 'another name').toBe(false);
+    expect(FN_DEF('githubPermalink').test('export function githubPermalink(github: DocsGithub, ref: Ref,')).toBe(true);
+    expect(FN_DEF('githubUrlAt').test('function githubUrlAt(slug: string, at: string, target: GithubTarget):')).toBe(true);
+    expect(FN_DEF('githubUrlAt').test('const githubUrlAt = (slug: string): string => slug;'), 'an arrow copy').toBe(true);
+    expect(FN_DEF('githubPermalink').test("import { githubPermalink } from '../../../shared/docs.js';"), 'an import').toBe(false);
+    expect(FN_DEF('githubPermalink').test('  const link = githubPermalink(github, ref, commit, target);'), 'a call').toBe(false);
+    expect(FN_DEF('githubUrlAt').test('function githubUrlAtCommit('), 'another name').toBe(false);
+  });
+
+  it('CONTROL: a third file holding a copy is seen beside shared/docs.ts', () => {
+    expect(holders(FN_DEF('githubPermalink'), [['pwa/src/docs/planted.ts', 'function githubPermalink(x: string) {}']]))
+      .toEqual(['pwa/src/docs/planted.ts', 'shared/docs.ts']);
+  });
+
+  for (const name of TYPES) {
+    it(`declares ${name} exactly once, in shared/docs.ts`, () => {
+      expect(holders(TYPE_DEF(name))).toEqual(['shared/docs.ts']);
+    });
+  }
+  for (const name of FUNCTIONS) {
+    it(`defines ${name} exactly once, in shared/docs.ts`, () => {
+      expect(holders(FN_DEF(name))).toEqual(['shared/docs.ts']);
+    });
+  }
+});
