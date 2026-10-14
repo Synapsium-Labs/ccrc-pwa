@@ -23,7 +23,7 @@ the one sanctioned restart. The operator's rulings are the spec's §3 (C1–C14)
 | 2 | 4, rules 2–3 (rule 1 shipped in #207) | the dated row the waits read; the rescue wait near a five-hour reset (600 s) with its own grace; the no-room wait; spread, no-bounce, the chain wait; `$REG/<id>.rescuewait`; the stage-4 instrument rows | **AGENT-FIRST** (ccd) | — | #235 | merged 2026-10-03 (`db44b136`); run 237 closed; deploy via ccrc's updater |
 | 3 | 7 | `$REG/<id>.typed`; the operator's own `/model`/`/effort` promoted to the route record before a stop; the alias table and the `familyClassOf` port with its agreement pin; FIRST, wave 2's residue | **AGENT-FIRST** (ccd) | — | #250 | merged 2026-10-05 (`77f8d63a`); run 248 closed; deploy AGENT-FIRST via ccrc's updater |
 | 4 | 6, first part | the reap-class OOM count in the instrument (its baseline week starts at deploy); `ccd-scope-sweep` with its units, verdict record and doctor reader; the limit-banner harness leak | **AGENT-FIRST** (ccd, deploy, doctor) | wave 3 | #299 | merged 2026-10-06 (`1bb88d5e`); run 274 closed; deploy AGENT-FIRST via ccrc's updater (baseline B starts at deploy); run 274 (`ccrc-pwa-still-river`); plan #288 (`0dad0fdf`); block 4012–4021 + 4088–4093 |
-| 4b | 6, first part | `CLAUDE_CODE_DISABLE_BG_SHELL_PRESSURE_REAP=1` in the spawn environment; 3925's `/clear` fix | **AGENT-FIRST** (ccd) | wave 4 plus its one baseline week | — | baseline B complete 2026-10-13: 0 reap-class / 34 pane-scope OOM stops, 5 unmapped and 4 unmeasured; run 308 open (planned; the run's wave 5), block 4316–4325; plan drafted, written review pending; FIRST commit: wave 4's residue (review 305 F1(a), the PASS line, I1, …); scope sweep remains SHADOWED |
+| 4b | 6, first part | `CLAUDE_CODE_DISABLE_BG_SHELL_PRESSURE_REAP=1` in the spawn environment; 3925's `/clear` fix | **AGENT-FIRST** (ccd) | wave 4 plus its one baseline week | plan #401 | baseline B complete 2026-10-13: 0 reap-class / 34 pane-scope OOM stops, 5 unmapped and 4 unmeasured; run 308 open (planned; the run's wave 5), block 4316–4325; plan published, written review pending; FIRST commit: wave 4's residue (review 305 F1(a), the PASS line, I1, …); scope sweep remains SHADOWED |
 | 5 | 2 | the spike: native exit handoff under ccd; a paused workflow under a blocked parent; `OOMPolicy=continue` on a scratch pane scope | measurement — needs a scratch account from the operator | wave 1 | — | to plan |
 | 6 | 3 | graceful stop; the launch record; the manifest; the composed redrive prompt | **AGENT-FIRST** | waves 1, 5 | — | after wave 5 |
 | 7 | 4, the refusal | non-rescue swaps refuse while delegated work is in flight; `--cut-delegated`; its own 409 | **AGENT-FIRST**, then server | wave 6 | — | after wave 6 |
@@ -555,6 +555,13 @@ re-measures the citation corpus and the `_reg_get` census on the merged tree bef
     (one test is planned new). The snippets and mutations have not been replayed as a product prototype.
   - Run 308 remains planned; its issued block is 4316–4325. Written-plan review is still required before
     implementation or dispatch. No updater intent, restart, sweep marker or repository setting is changed.
+- **2026-10-14 05:45 — wave 4b's plan is published as #401; written review remains pending.**
+  - Planning commit `80756e79f` carries only the plan and this ledger. Privacy and deviation-reference guards
+    passed before and after that commit: 2 files, 86 tests, including the introduced-history scan; staged and
+    committed whitespace checks passed. The rendered preview's plan title, distinctive content and served
+    branch were verified. These are documentation checks, not executed implementation tests or mutations.
+  - The existing sequential subagent-driven method is preserved. No implementation, dispatch, merge, updater
+    change, restart or sweep arming follows from publication; run 308 remains planned pending written review.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` token appears in
   this file until a plan on the same ref defines it (`deviation-refs.test.ts`).
 
