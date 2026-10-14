@@ -333,6 +333,20 @@ describe('store.mjs: the binding', () => {
     expect(fs.existsSync(path.join(P.backups, '.pre-v2.attempt.tmp.99'))).toBe(false);
   });
 
+  // Tick-stale review T2 (D-5016): the scheduled pass's marker is written with writeFileAtomic too, so its temp is swept like the others.
+  it('a pass.tmp.<pid> a killed marker write left is swept by removeStaleAtomicTemps; the marker itself and look-alikes are not (D-5016, T2)', () => {
+    const h = home();
+    const P = historyPaths(h);
+    fs.mkdirSync(P.root, { recursive: true });
+    fs.writeFileSync(path.join(P.root, 'pass.tmp.4242'), 'x');
+    fs.writeFileSync(path.join(P.root, 'pass'), '1 2 3 4\n');
+    fs.writeFileSync(path.join(P.root, 'pass.tmp.x'), 'x');
+    fs.writeFileSync(path.join(P.root, 'passes.tmp.7'), 'x');
+    expect(removeStaleAtomicTemps(h), 'only the pass temp').toEqual(['pass.tmp.4242']);
+    expect(fs.existsSync(path.join(P.root, 'pass.tmp.4242'))).toBe(false);
+    for (const keep of ['pass', 'pass.tmp.x', 'passes.tmp.7']) expect(fs.existsSync(path.join(P.root, keep)), `CONTROL: ${keep} stays`).toBe(true);
+  });
+
   it('mkdirDurable fsyncs every parent that gained an entry, top-down, and nothing when the directory exists (review 316 F23)', () => {
     const base = home();
     const first = recordDirFsyncs(() => mkdirDurable(`${base}/a/b/c`));

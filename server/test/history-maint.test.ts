@@ -221,6 +221,17 @@ describe.skipIf(process.platform === 'darwin')('O54 (relay half): the CLI and th
     expect(stubArgv(box), 'the shim was spawned with --op backup').toEqual(['--op backup']);
   }, HEAVY);
 
+  // D-5022: the shim's stderr is now a pipe the relay drains, and the lines it writes go to this process's stderr. With that stream closed
+  // every such write is EPIPE: the relay must keep draining the shim's stderr, or the shim blocks on a full pipe and the op never ends.
+  it('D-4600 (D-5022): a closed stderr pipe in the human form does not stop the relay draining the shim\'s own stderr: the result is still its exit', async () => {
+    const box = boundBox('ccrc-hist-d4600e-');
+    stubShim(box, { stderr: `${'shim stderr line\n'.repeat(6000)}`, stdout: '{"rc":2,"reason":"adopt-refused"}\n', exit: 2 });
+    const r = await closedPipe(box, process.execPath, ['--no-warnings', CLI, 'doctor', '--backup'], { which: 'stderr', lateExit: true });
+    expect(r.stdout, 'no unhandled EPIPE and no stack').not.toMatch(/EPIPE|node:events/);
+    expect(r.code, `an unhandled EPIPE on stderr is exit 1; stdout: ${r.stdout}`).toBe(2);
+    expect(stubArgv(box), 'the shim was spawned with --op backup').toEqual(['--op backup']);
+  }, HEAVY);
+
   it('D-4600 (H-200): the direct door survives a closed stderr pipe and exits with its own rc', async () => {
     const box = boundBox('ccrc-hist-d4600d-');
     // The journal half names a spool/ that is no real directory on stderr, once per pass: the shim's own stderr line.
@@ -350,6 +361,87 @@ describe.skipIf(process.platform === 'darwin')('the relay redaction: every line 
     for (const [where, text] of [['human stdout', h.stdout], ['--json stderr', j.stderr]] as const) {
       expect({ G: leaks(text, G), V: leaks(text, V) }, `${where}: no belt-width stretch of either value`).toEqual({ G: [], V: [] });
     }
+  }, HEAVY);
+});
+
+describe.skipIf(process.platform === 'darwin')('the relay pipes the shim\'s stderr through the same belt as its stdout (D-5022, fix round 1 review 441 F10 and F2)', () => {
+  const AL = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+  const alnum = (n: number): string => Array.from(randomBytes(n), (b) => AL[b % AL.length]!).join('');
+  /** Secret-bearing lines of the F2 cases, each with the runs of its value that must not reach the terminal. */
+  const F2: Array<[string, string[]]> = [
+    ['"token": "ab<cdXQ"', ['ab<', 'cdXQ']],
+    ['{"password": "hun&ter2YZ"}', ['hun&', 'ter2YZ']],
+    ['Authorization: Bearer abc&defUT', ['&defUT', 'abc&']],
+    ['x-ccrc-mail-token: ab<c>d&e\\fghPQ', ['<c>', 'd&e', 'e\\f', 'fghPQ']],
+  ];
+  /** A declared secretsFile's key: no shape matches it, so only its recorded pair masks it (C49's shape; C69's G). */
+  const boxWithRegisteredValue = (prefix: string, G: string): HistoryBox => {
+    const roster = structuredClone(DEFAULT_TEST_ROSTER) as { version: number; accounts: Record<string, unknown>[] };
+    roster.accounts.find((a) => a['id'] === 'gpt')!['exec'] = { kind: 'external', secretsFile: '.config/x22-gw/gw.env' };
+    const box = makeHistoryBox(prefix, { role: 'fleet', shim: true, roster });
+    const p = path.join(box.home, '.config', 'x22-gw', 'gw.env');
+    fs.mkdirSync(path.dirname(p), { recursive: true, mode: 0o700 });
+    fs.writeFileSync(p, `GW_X22_KEY=${G}\n`, { mode: 0o600 });
+    const bound = runShim(box);   // the real shim's pass records the value's pair and the file's path
+    expect(bound.code, bound.stderr).toBe(0);
+    return box;
+  };
+  const leaks = (text: string, s: string): string[] => {
+    const w = beltWidth(s);
+    const low = text.toLowerCase();
+    const out: string[] = [];
+    for (let k = 0; k + w <= s.length; k += 1) if (low.includes(s.slice(k, k + w).toLowerCase())) out.push(s.slice(k, k + w));
+    return out;
+  };
+
+  it('a registered value the shim writes to stderr reaches the terminal masked, each line in order, a partial last line flushed, human and --json', () => {
+    const G = `${alnum(39)}7`;
+    const box = boxWithRegisteredValue('ccrc-hist-relay-err-', G);
+    stubShim(box, {
+      stderr: `zqx22 err one ${G} end\nzqx22 err two\nzqx22 err partial ${G}`,
+      stdout: `zqx22 out ${G}\n{"rc":0}\n`, exit: 0,
+    });
+    const h = op(box, ['doctor', '--backup']);
+    const j = op(box, ['doctor', '--backup', '--json']);
+    expect(h.code, h.stderr).toBe(0);
+    expect(j.code, j.stderr).toBe(0);
+    expect(stubArgv(box), 'CONTROL: both runs reached the stand-in').toEqual(['--op backup', '--op backup']);
+    for (const [where, text] of [['human stderr', h.stderr], ['--json stderr', j.stderr]] as const) {
+      expect(text, `CONTROL ${where}: the first line is relayed`).toContain('zqx22 err one');
+      expect(text.indexOf('zqx22 err one'), `${where}: arrival order`).toBeLessThan(text.indexOf('zqx22 err two'));
+      expect(text.indexOf('zqx22 err two'), `${where}: arrival order`).toBeLessThan(text.indexOf('zqx22 err partial'));
+      expect(text, `${where}: the partial last line is flushed at the child's exit, with its newline`).toMatch(/zqx22 err partial .*\n/);
+      expect(leaks(text, G), `${where}: no belt-width stretch of the value`).toEqual([]);
+      expect(text, `CONTROL ${where}: the mark stands where the value was`).toContain(REDACTED_MARK);
+    }
+    expect(h.stdout, 'CONTROL: stdout carries the stdout line, masked').toContain('zqx22 out');
+    expect(leaks(h.stdout, G), 'human stdout: no stretch of the value').toEqual([]);
+    expect(h.stdout, 'a stderr line is not written to stdout').not.toContain('zqx22 err');
+  }, HEAVY);
+
+  it('values holding < > & " and a backslash that the shim prints on stdout or on stderr are masked whole at the terminal (D-5021)', () => {
+    const G = `${alnum(39)}7`;
+    const box = boxWithRegisteredValue('ccrc-hist-relay-f2-', G);
+    stubShim(box, {
+      stderr: `${F2.map(([c]) => `zqx22 e ${c}`).join('\n')}\n`,
+      stdout: `${F2.map(([c]) => `zqx22 o ${c}`).join('\n')}\n{"rc":0}\n`, exit: 0,
+    });
+    const h = op(box, ['doctor', '--backup']);
+    expect(h.code, h.stderr).toBe(0);
+    for (const [where, text, tag] of [['stdout', h.stdout, 'zqx22 o '], ['stderr', h.stderr, 'zqx22 e ']] as const) {
+      expect(text.split('\n').filter((l) => l.startsWith(tag)), `CONTROL ${where}: every line is relayed`).toHaveLength(F2.length);
+      expect(text.match(/\[redacted\]/g) ?? [], `CONTROL ${where}: one mark per case`).toHaveLength(F2.length);
+      for (const [c, runs] of F2) for (const run of runs) expect(text, `${where}: ${c} leaves ${run}`).not.toContain(run);
+    }
+  }, HEAVY);
+
+  it('a shim that fills its stderr pipe while its stdout holds the result still finishes: both pipes are drained', () => {
+    const box = boundBox('ccrc-hist-relay-fill-');
+    // 400 KB on stderr: several times the 64 KB pipe buffer, so an undrained stderr pipe would block the shim before its result.
+    stubShim(box, { stderr: 'x'.repeat(99) + '\n'.repeat(1) + `${'y'.repeat(99)}\n`.repeat(4000), stdout: '{"rc":0}\n', exit: 0 });
+    const r = op(box, ['doctor', '--backup']);
+    expect(r.code, r.stderr.slice(0, 300)).toBe(0);
+    expect(r.stderr.split('\n').filter((l) => l.startsWith('yyyy')), 'every stderr line arrived').toHaveLength(4000);
   }, HEAVY);
 });
 

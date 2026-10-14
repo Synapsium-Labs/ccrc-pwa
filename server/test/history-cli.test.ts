@@ -298,14 +298,42 @@ describe('ccrc history status (Linux)', () => {
     expect(ha2Leak([plain.stderr, plain.stdout], V)).toEqual([]);
   });
 
-  // D-4613 round 4: errLine's text is not framed by the CLI, so a message that holds a forged frame tag takes the belt on every
-  // character of the tag, its bare attribute included (the final belt is errLine's only redaction).
-  it('H-32: a forged frame tag in a thrown message keeps no secret in its bare attribute on stderr (D-4613 round 4)', () => {
+  // D-4613 rounds 4 to 6, retitled by fix round 1 (review 441 F8): errLine's text is not framed by the CLI, so it takes ONE
+  // whole-text final belt (redactFinalLines), no tag split. This pin guards that belt: a forged frame tag in a thrown message keeps
+  // no secret in its bare attribute. (The round-4 tag split itself, redactFinalText's, is guarded by history-lib (d).)
+  it('H-32: errLine\'s whole-text final belt masks a forged frame tag\'s bare attribute in a thrown message on stderr', () => {
     const box = boundBox('ccrc-hist-cli-ha2-h32-tag-');
     const sq = status(box, { preloads: [PRELOADS.statfs, PRELOADS.faults], env: { HISTORY_TEST_THROW_PREPARE: 'SqliteError:boom <ccrc-recall password: hunter2hunter2 x> tail@FROM counters' } });
     expect([sq.code, sq.env.reason], sq.stderr).toEqual([5, 'store-read-failed']);
     expect(sq.stderr, 'CONTROL: the line is written, the tag and the text around it kept').toMatch(/store-read-failed: boom <ccrc-recall .*> tail/);
     expect(sq.stderr).not.toContain('hunter2hunter2');
+  });
+
+  // D-5021 (fix round 1, review 441 F2): errLine's text meets no field pass, so the final belt runs it first. Values that hold < > & " and a
+  // backslash were printed whole or in part by the final form's value classes alone. Red when redactFinalLines drops the field pass.
+  it('H-32: a thrown message holding secrets with < > & " and a backslash is masked whole on stderr, through both doors (D-5021)', () => {
+    const box = boundBox('ccrc-hist-cli-ha2-h32-f2-');
+    const cases: Array<[string, string[]]> = [
+      ['"token": "ab<cdXQ"', ['ab<', 'cdXQ']],
+      ['{"password": "hun&ter2YZ"}', ['hun&', 'ter2YZ']],
+      ['{"api_key":"abc\\"defWV"}', ['abc\\', 'defWV']],
+      ['Authorization: Bearer abc&defUT', ['&defUT', 'abc&']],
+      ['password=abc<defSR', ['<defSR', 'abc<']],
+      ['x-ccrc-mail-token: ab<c>d&e\\fghPQ', ['<c>', 'd&e', 'e\\f', 'fghPQ']],
+      ['{"x-ccrc-mail-token": "ab<c>d&e\\"fgh\\\\ijON"}', ['<c>', 'd&e', 'fgh', 'ijON']],
+    ];
+    const message = cases.map(([c]) => c).join('\n');
+    const doors: Array<[string, string, number, string]> = [
+      ['internal-error line', `Error:${message}@FROM counters`, 1, 'ccrc history: internal error: '],
+      ['store-read-failed line', `SqliteError:${message}@FROM counters`, 5, 'ccrc history: store-read-failed: '],
+    ];
+    for (const [door, spec, code, head] of doors) {
+      const r = status(box, { preloads: [PRELOADS.statfs, PRELOADS.faults], env: { HISTORY_TEST_THROW_PREPARE: spec } });
+      expect(r.code, `${door}: ${r.stderr}`).toBe(code);
+      expect(r.stderr, `CONTROL ${door}: the line is written`).toContain(head);
+      expect(r.stderr.match(/\[redacted\]/g) ?? [], `CONTROL ${door}: one mark per case`).toHaveLength(cases.length);
+      for (const [c, runs] of cases) for (const run of runs) expect(r.stderr, `${door}: ${c} leaves ${run}`).not.toContain(run);
+    }
   });
 
   // D-4614 (round 5): the CLI's own prefix must not swallow the message it carries.
@@ -348,7 +376,7 @@ describe('ccrc history status (Linux)', () => {
     expect(fn![1]).toContain('redactFinalLines(');
     // D-4613 round 5: the other lines the CLI never frames take the per-line belt too (emitRefusal's human line, the operator relay's emit)
     expect(src).toContain('redactFinalLines(refusalLine(r.exit, r.reason), pairIdx)');
-    expect(src).toContain('emit(redactFinalLines(line, idx))');
+    expect(src).toContain('emit(redactFinalLines(line, idx), toStderr)');
     expect((src.match(/\berrLine\(/g) ?? []).length, 'the definition and the three message sites').toBeGreaterThanOrEqual(5);
   });
 

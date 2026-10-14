@@ -448,11 +448,18 @@ const USAGE = [
  *  layers (§8.3). */
 const NO_PAIRS = makePairIndex([]);
 
-/** One stderr line carrying a thrown error's text, through redactFinalLines (D-4613 round 5: never framed, so no tag split) like every other output (§8.3, §12: the final
+/** One stderr line carrying a thrown error's text, through redactFinalLines (D-4613 round 5: never framed, so no tag split;
+ *  D-5021: the field pass first, as the only redaction raw text gets) like every other output (§8.3, §12: the final
  *  stdout, stderr and --json each take one more pass). A SQLite message can quote a value, and the three sites that
- *  wrote `e.message` raw did not redact it (HA2 H-32). Every error text on stderr goes through here. */
+ *  wrote `e.message` raw did not redact it (HA2 H-32). Every error text on stderr goes through here. `idx` is the pair
+ *  index of the read the text belongs to, where there is one (D-5023): NO_PAIRS only where no index was built. */
 function errLine(text, idx = NO_PAIRS) {
   process.stderr.write(redactFinalLines(`${text}\n`, idx));
+}
+
+/** A thrown value's text for an internal-error line. */
+function thrownText(e) {
+  return e && e.message ? e.message : String(e);
 }
 const ABSENT = Object.freeze({ state: 'absent' });
 const UNREADABLE = Object.freeze({ state: 'unreadable' });
@@ -609,9 +616,32 @@ function realOrNull(p) {
   }
 }
 
+/** A defect (exit 1) thrown out of readContext after the read's identity resolved, D-5023 (fix round 1, review 441 F6): it
+ *  carries the identity and generation known at the throw, so readVerb counts the call (rc 1) as it counts every other
+ *  identity-resolved call. `cause` is the thrown value itself. */
+class ReadDefect extends Error {
+  constructor(cause, id, gen) {
+    super(thrownText(cause));
+    this.cause = cause;
+    this.id = id;
+    this.gen = gen;
+  }
+}
+
 /** The read context: every step of the order above through the scope, or the refusal that stopped it.
- *  On success the caller owns `rc.db` and closes it. */
+ *  On success the caller owns `rc.db` and closes it. A throw that is not a failed read of the admitted store is a
+ *  defect, and once the identity resolved it leaves as a ReadDefect (D-5023). */
 export async function readContext(home, verb, parsed, nowMs = Date.now()) {
+  const seen = { id: null, gen: null };
+  try {
+    return await readContextIn(home, verb, parsed, nowMs, seen);
+  } catch (e) {
+    if (typeof seen.id === 'string') throw new ReadDefect(e, seen.id, seen.gen);
+    throw e;
+  }
+}
+
+async function readContextIn(home, verb, parsed, nowMs, seen) {
   const P = historyPaths(home);
   if (process.platform === 'darwin' || readRole(P) === 'server') {
     const d = decideCliStore(cliFactsOf(await measureReach(home)));
@@ -627,6 +657,8 @@ export async function readContext(home, verb, parsed, nowMs = Date.now()) {
     envGen: process.env.CCRC_SESSION_GENERATION ?? null, regGen: regPresence(P, id, 'generation'),
   });
   let gen = generation.value;
+  seen.id = id;
+  seen.gen = gen;
   const offFile = presenceOf(recallOffPath(home, id));
   const offNow = generation.value !== null || offFile.state !== 'value';
   if (offNow && decideRecallOff({ file: offFile, generation: generation.value ?? '' }) === 'off') {
@@ -657,7 +689,7 @@ export async function readContext(home, verb, parsed, nowMs = Date.now()) {
       // 'newest' is a store fact. Use its actual family generation for recall-off and counter accounting.
       const own = familiesOf(db, { kind: 'family', id, generation: null, project: null, workdir: null, workdirReal: null });
       const ownGen = own.length === 1 ? own[0].generation : '';
-      if (UUID_RE.test(ownGen)) gen = ownGen;
+      if (UUID_RE.test(ownGen)) { gen = ownGen; seen.gen = gen; }
       if (!offNow && decideRecallOff({ file: offFile, generation: ownGen }) === 'off') {
         return refusal(EXIT.RECALL_OFF, undefined, storeId, id, gen);
       }
@@ -685,6 +717,7 @@ export async function readContext(home, verb, parsed, nowMs = Date.now()) {
     });
     if (session === null && verdict.kind === 'family' && families.length === 1 && UUID_RE.test(families[0].generation)) {
       gen = families[0].generation;
+      seen.gen = gen;
     }
     const transcriptPks = transcriptsOf(db, families.map((f) => f.sessionPk));
     if (transcriptPks.length === 0) return refusal(EXIT.NOT_INDEXED, undefined, storeId, id, gen);
@@ -788,32 +821,52 @@ async function readVerb(home, verb, argv) {
     process.stderr.write(`ccrc history: ${verb} is not in this build\n${USAGE}\n`);
     return emitRefusal({ exit: EXIT.REFUSED, reason: 'bad-args', storeId: null }, json, NO_PAIRS);
   }
-  const ctx = await readContext(home, verb, parsed, t0);
-  let exit;
-  if (!('db' in ctx)) {
-    exit = emitRefusal(ctx, json, NO_PAIRS);
-  } else {
+  // D-5023 (history-read-defect-keeps-the-reads-index-and-counter, review 441 F6 and F11): a defect (a throw that
+  // readFailure does not map to an exit-5 answer) is answered HERE, by the call that knows the read: its internal-error
+  // line is redacted with the context's pair index and belt once the context exists, and the counter line is written
+  // in the `finally`, which a throw cannot skip, with rc 1.
+  let ctx = null;
+  let who = null;
+  let exit = EXIT.INTERNAL;
+  try {
     try {
-      let res = null;
-      let failed = null;
-      try {
-        res = runner(ctx, parsed, argv);
-        // The header reads derivation_state and ingest_files. A runner may answer without reaching either (a refusal, a
-        // not-found, describe of a depth>0 node), and then the first read of a damaged table would happen in emitResult,
-        // outside this try. Priming it here puts that SQLite error through readFailure (exit 5), not the entry guard
-        // (exit 1). scopeHeader caches per context, so emitResult reuses it (HA2 H-21; HI2 H-170).
-        scopeHeader(ctx);
-      } catch (e) {
-        const f = readFailure(e, ctx.storeId, ctx.id, ctx.gen, ctx.pairIdx);
-        if (f === null) throw e;
-        failed = f;
-      }
-      exit = failed === null ? emitResult(ctx, res, json) : emitRefusal(failed, json, ctx.pairIdx);
-    } finally {
-      ctx.db.close();
+      ctx = await readContext(home, verb, parsed, t0);
+    } catch (x) {
+      if (!(x instanceof ReadDefect)) throw x;
+      who = { id: x.id, gen: x.gen };
+      throw x.cause;
     }
+    who = { id: ctx.id, gen: ctx.gen };
+    if (!('db' in ctx)) {
+      exit = emitRefusal(ctx, json, NO_PAIRS);
+    } else {
+      try {
+        let res = null;
+        let failed = null;
+        try {
+          res = runner(ctx, parsed, argv);
+          // The header reads derivation_state and ingest_files. A runner may answer without reaching either (a refusal, a
+          // not-found, describe of a depth>0 node), and then the first read of a damaged table would happen in emitResult,
+          // outside this try. Priming it here puts that SQLite error through readFailure (exit 5), not the defect arm
+          // (exit 1). scopeHeader caches per context, so emitResult reuses it (HA2 H-21; HI2 H-170).
+          scopeHeader(ctx);
+        } catch (e) {
+          const f = readFailure(e, ctx.storeId, ctx.id, ctx.gen, ctx.pairIdx);
+          if (f === null) throw e;
+          failed = f;
+        }
+        exit = failed === null ? emitResult(ctx, res, json) : emitRefusal(failed, json, ctx.pairIdx);
+      } finally {
+        ctx.db.close();
+      }
+    }
+  } catch (e) {
+    exit = EXIT.INTERNAL;
+    errLine(`ccrc history: internal error: ${thrownText(e)}`, ctx !== null && 'db' in ctx ? ctx.pairIdx : NO_PAIRS);
+    return exit;
+  } finally {
+    if (who !== null && typeof who.id === 'string') countRecall(home, { id: who.id, gen: who.gen, cmd: verb, rc: exit, ms: Date.now() - t0, ts: Date.now() });
   }
-  if (typeof ctx.id === 'string') countRecall(home, { id: ctx.id, gen: ctx.gen, cmd: verb, rc: exit, ms: Date.now() - t0, ts: Date.now() });
   return exit;
 }
 
@@ -1238,9 +1291,11 @@ export function formatHealth(health) {
 //      form only, the bounded
 //      `tmux display-message -p -t "$TMUX_PANE" '#S'` (Task 10's tmuxSession). The sweep runs the same gate again
 //      from its own environment (slug history-op-gate-in-sweep): decided once, executed twice;
-//   4. the shim, `~/.local/bin/ccd-history-sweep --op <op> <args…>`, as a child. stdin and stderr are inherited, so
-//      the sweep's own isatty(0) is the operator's terminal. stdout is piped and relayed line by line as it arrives
-//      (an import's dry run can list thousands of files). Its LAST line, the sweep's `{"rc":…}`, is held back for
+//   4. the shim, `~/.local/bin/ccd-history-sweep --op <op> <args…>`, as a child. stdin is inherited, so the sweep's
+//      own isatty(0) is the operator's terminal (nothing on the --op path asks whether stderr is a terminal). stdout
+//      and stderr are piped and relayed line by line as they arrive (an import's dry run can list thousands of
+//      files), each line through redactFinalLines with the read verbs' index (D-5022, review 441 F10; spec §9.8:
+//      redacted on every output). Its LAST stdout line, the sweep's `{"rc":…}`, is held back for
 //      decideRelay: 75 (the shim found the lock held) is exit 4 writer-busy, a well-formed result is its rc and
 //      reason, and anything else is exit 1.
 // It never runs sweep.mjs itself: the shim is the ONE lock taker (§5.1, RV13). It passes no env: the child inherits
@@ -1290,14 +1345,17 @@ function opPaneName(form) {
   return t.settled && t.status === 0 ? t.stdout.trim() : null;
 }
 
-/** The shim as a child: its stdout relayed line by line as it arrives, its LAST line held back for the relay. */
+/** The shim as a child: its stdout relayed line by line as it arrives, its LAST stdout line held back for the relay;
+ *  its stderr relayed the same way, every line as it arrives and none held back (D-5022, review 441 F10). `emit(line,
+ *  true)` is a stderr line. Each stream's lines keep their arrival order; the two streams are not ordered between
+ *  themselves. A partial last line of either stream is flushed at the child's close. */
 function opRelay(P, op, opArgs, emit) {
   return new Promise((resolve) => {
     let done = false;
     const finish = (r) => { if (!done) { done = true; resolve(r); } };
     let child;
     try {
-      child = spawnOp(P.shim, ['--op', op, ...opArgs], { stdio: ['inherit', 'pipe', 'inherit'] });
+      child = spawnOp(P.shim, ['--op', op, ...opArgs], { stdio: ['inherit', 'pipe', 'pipe'] });
     } catch {
       finish({ exit: EXIT.INTERNAL });
       return;
@@ -1305,7 +1363,7 @@ function opRelay(P, op, opArgs, emit) {
     let buf = '';
     let held = null;
     const take = (line) => {
-      if (held !== null) emit(held);
+      if (held !== null) emit(held, false);
       held = line;
     };
     child.stdout.setEncoding('utf8');
@@ -1316,12 +1374,22 @@ function opRelay(P, op, opArgs, emit) {
         buf = buf.slice(i + 1);
       }
     });
+    let errBuf = '';
+    child.stderr.setEncoding('utf8');
+    child.stderr.on('data', (d) => {
+      errBuf += d;
+      for (let i = errBuf.indexOf('\n'); i !== -1; i = errBuf.indexOf('\n')) {
+        emit(errBuf.slice(0, i), true);
+        errBuf = errBuf.slice(i + 1);
+      }
+    });
     child.on('error', () => finish({ exit: EXIT.INTERNAL }));
     child.on('close', (status, signal) => {
+      if (errBuf !== '') emit(errBuf, true);
       if (buf !== '') take(buf);
       let lastLine = null;
       if (held !== null && held.startsWith('{"rc"')) lastLine = held;
-      else if (held !== null) emit(held);
+      else if (held !== null) emit(held, false);
       finish(healthLib.decideRelay({ status, signal, lastLine }));
     });
   });
@@ -1351,8 +1419,9 @@ function relayIndexOf(home, P, reach) {
   return makePairIndex(files.pairs, makeBelt(beltUnits(files.values)));
 }
 
-/** One operator verb through the door. `emit` gets each line the sweep printed before its result, already through
- *  redactFinalLines with relayIndexOf's index, which is built only once the gate has passed, before the shim starts. */
+/** One operator verb through the door. `emit(line, toStderr)` gets each line the sweep printed before its result on
+ *  stdout, and each line it printed on stderr (`toStderr` true; D-5022), already through redactFinalLines with
+ *  relayIndexOf's index, which is built only once the gate has passed, before the shim starts. */
 export async function runOpVerb(home, verb, rest, emit) {
   const P = healthLib.historyPaths(home);
   const map = opFormOf(verb, rest);
@@ -1376,12 +1445,13 @@ export async function runOpVerb(home, verb, rest, emit) {
     isattyOp(0), opPaneName(form));
   if (!gate.ok) return { exit: gate.rc, reason: gate.reason };
   const idx = relayIndexOf(home, P, reach);
-  return opRelay(P, map.op, map.opArgs, (line) => emit(redactFinalLines(line, idx)));
+  return opRelay(P, map.op, map.opArgs, (line, toStderr) => emit(redactFinalLines(line, idx), toStderr));
 }
 
 /** D-4600 (history-operator-door-survives-a-closed-pipe): `ccrc history import --apply | head -1` closes stdout under the
  *  CLI, and `… --json 2>&1 >/dev/null | head -1` closes stderr, the stream the relay writes the sweep's lines to under --json
- *  and the one the shim inherits. A write to either is an EPIPE 'error' event that, unhandled, kills the process with a
+ *  and, since D-5022, every line of the shim's own stderr, which the relay now pipes and writes there too (the pipe from
+ *  the shim is drained whatever this process's own stderr does). A write to either is an EPIPE 'error' event that, unhandled, kills the process with a
  *  stack; the relay then stops draining the shim, whose own next write crashes it mid-op, and the operator loses the result.
  *  The operator arm swallows EPIPE alone on BOTH streams, so the relay keeps draining, the op finishes and its exit is
  *  relayed. Any other stream error still throws. Installed once per process.
@@ -1414,9 +1484,9 @@ export async function operatorMain(home, argv) {
     return env.exit;
   }
   const P = healthLib.historyPaths(home);
-  const emit = (line) => {
+  const emit = (line, toStderr = false) => {
     const text = `${line}\n`;
-    if (json) process.stderr.write(text);
+    if (json || toStderr) process.stderr.write(text);
     else process.stdout.write(text);
   };
   // A throw out of the door that is neither a StoreError nor a SQLite error (relayIndexOf's rethrow) is a defect: exit 1.
@@ -1429,7 +1499,7 @@ export async function operatorMain(home, argv) {
   } catch (e) {
     thrown = true;
     r = { exit: EXIT.INTERNAL };
-    errLine(`ccrc history ${verb}: internal error: ${e && e.message ? e.message : String(e)}; ${OP_OPERATOR_NOTE_ANY}`);
+    errLine(`ccrc history ${verb}: internal error: ${thrownText(e)}; ${OP_OPERATOR_NOTE_ANY}`);
   }
   if (json) {
     const id = readTrimmed(P.storeId);
@@ -1457,7 +1527,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(realpathSync(process.ar
   main(process.argv.slice(2))
     .then((code) => { process.exitCode = code; process.stdout.write('', () => process.exit()); })
     .catch((e) => {
-      errLine(`ccrc history: internal error: ${e && e.message ? e.message : String(e)}`);
+      errLine(`ccrc history: internal error: ${thrownText(e)}`);
       process.exitCode = EXIT.INTERNAL;
       process.exit();
     });

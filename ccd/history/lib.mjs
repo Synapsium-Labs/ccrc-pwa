@@ -224,6 +224,9 @@ export const MAX_INTERRUPTED_ATTEMPTS = 2;
 export const BUSY_TIMEOUT_MS = 30_000;
 export const SHIM_GRACE_MS = 4 * 60 * 1000;         // two timer periods of the shim's mtime (§9.6)
 export const TICK_STALE_MS = 10 * 60 * 1000;
+/** How far past `nowMs` a live pass's recorded start may lie before `deriveHealth` stops reading it: a small slack for
+ *  two clocks read a moment apart, not for a clock that stepped back (tick-stale review T3). */
+export const PASS_FUTURE_SLACK_MS = 60 * 1000;
 export const LAG_FAIL_MS = 30 * 60 * 1000;
 export const RECOVERY_STALL_TICKS = 15;
 export const CATCHING_UP_TICKS = 3;
@@ -2659,14 +2662,20 @@ export function redactFinalJson(value, idx) {
 }
 
 /** The final belt over lines the CLI never framed (an error line, a relayed operator line, a refusal line), D-4613
- *  (whole-branch fix round 6): ONE whole-text `redactFinal` pass, with no line split and no frame-tag split. Unframed
- *  text has no structure to protect, so nothing here needs a cut: a JSON-form pair whose value is on the next line and
- *  a PEM block that spans lines are matched whole (round 5's per-line split lost both), and text that merely looks like
- *  a frame tag (`<ccrc-recall TOKEN="x">`) is plain text whose context key is seen with its quoted value. The final
- *  form's value classes never cross a line, so no rule runs a value over a break. `redactFinalText` (tag-aware) stays
- *  for the human page, which recallEnvelope frames. */
+ *  (whole-branch fix round 6), D-5021 (fix round 1, review 441 F2): the field pass and then ONE whole-text `redactFinal`
+ *  pass, `redactFinal(redactField(text))`, as `redactFinalJson` runs them per string leaf, with no line split and no
+ *  frame-tag split. Unframed text has no structure to protect, so nothing here needs a cut: a JSON-form pair whose value
+ *  is on the next line and a PEM block that spans lines are matched whole (round 5's per-line split lost both), and text
+ *  that merely looks like a frame tag (`<ccrc-recall TOKEN="x">`) is plain text whose context key is seen with its
+ *  quoted value. The final form's value classes never cross a line, so no rule runs a value over a break; but they
+ *  also stop at `<`, `>`, `&`, `"` and a backslash, so a secret holding one of those printed its tail (`"token": "ab<cd"`
+ *  came back unchanged). This is the only redaction such text receives, so it must mask whatever `redactField`
+ *  masks: the field pass runs first. Every caller treats its result as text for a person and never parses it (the relay
+ *  holds back and parses the sweep's `{"rc"` line from the RAW line, before any emit), so over-masking by the field
+ *  form's wider value classes costs a reader a few characters and breaks no structure. It is idempotent on the field
+ *  pass's marks. `redactFinalText` (tag-aware) stays for the human page, which recallEnvelope frames. */
 export function redactFinalLines(text, idx) {
-  return redactFinal(text, idx);
+  return redactFinal(redactField(text, idx), idx);
 }
 
 /** A frame tag of the recalled-text envelope (recallEnvelope's opening and closing tag). escapeXmlAttr has escaped every
@@ -3480,10 +3489,15 @@ export function deriveHealth(h) {
   // D-5016 (history-doctor-reads-a-live-pass): the ticks row is stamped with the pass START but written at its END, so a
   // healthy pass that runs longer than the timer's period shows an old tick while it runs. A pass the marker proves
   // LIVE (its identity measured equal; lib's decidePassLive) that started within TICK_STALE_MS is a fresh tick, for
-  // every rule that reads tickFresh: catching-up and recovering (a running sweep's evidence is still moving, FE3),
-  // lag-unmeasured (a running pass has not yet reached every file's end), and the stale-tick FAIL itself. One that has
+  // every rule that reads tickFresh: catching-up and recovering (FE3; under a live pass their evidence is the last ticks rows, which
+  // may be old, and the hold lasts at most TICK_STALE_MS from the pass's start), lag-unmeasured (a running pass has not yet
+  // reached every file's end), and the stale-tick FAIL itself. A held state also holds lag-high back, as a fresh tick does. A pass that has
   // run past TICK_STALE_MS is hung, and FAILs below. No live pass reads as it always did.
-  const passLive = h.pass !== null && h.pass !== undefined && h.pass.live === true;
+  // A start more than PASS_FUTURE_SLACK_MS PAST nowMs means the wall clock stepped back since the marker was written (or
+  // the marker is forged): its age would be negative for as long as the step lasts, and the pass would read as fresh
+  // that long. Such a pass is not read at all, so the verdict is the one a box with no live pass gets (fix round 1,
+  // tick-stale review T3). `tickAge` below keeps the same weakness; it predates B2 and is left as it was.
+  const passLive = h.pass !== null && h.pass !== undefined && h.pass.live === true && h.pass.startMs - h.nowMs <= PASS_FUTURE_SLACK_MS;
   const passAge = passLive ? h.nowMs - h.pass.startMs : null;
   const passFresh = passLive && passAge <= TICK_STALE_MS;
   const passHung = passLive && passAge > TICK_STALE_MS;

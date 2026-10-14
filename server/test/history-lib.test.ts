@@ -2412,6 +2412,37 @@ describe('redaction: values, context and shapes (spec 8.3)', () => {
     // CONTROL: plain multi-line text is unchanged, line breaks kept
     expect(libRedact.redactFinalLines('exit 2 bad-args: nothing to see\nsecond line\n', idx)).toBe('exit 2 bad-args: nothing to see\nsecond line\n');
   });
+  // D-5021 (fix round 1, review 441 F2): unframed text has no field pass before it, so the final belt must mask whatever the
+  // field pass masks. The final form's value classes stop at < > & " and a backslash; each case below holds one inside the secret.
+  it('(j2) unframed text masks whole every value the field pass masks, whatever it holds of < > & " and a backslash (D-5021)', () => {
+    const idx = idxOf([]);
+    const cases: Array<[string, string]> = [
+      ['"token": "ab<cd"', `"token": "${M}"`],
+      ['{"password": "hun&ter2"}', `{"password": "${M}"}`],
+      ['{"api_key":"abc\\"def"}', `{"api_key":"${M}"}`],
+      ['Authorization: Bearer abc&def', `Authorization: Bearer ${M}`],
+      ['password=abc<def', `password=${M}`],
+      ['password=abc>def', `password=${M}`],
+      ['x-ccrc-mail-token: ab<c>d&e\\fgh', `x-ccrc-mail-token: ${M}`],
+      ['{"x-ccrc-mail-token": "ab<c>d&e\\"fgh\\\\ij"}', `{"x-ccrc-mail-token": "${M}"}`],
+    ];
+    for (const [input, want] of cases) {
+      const out = libRedact.redactFinalLines(input, idx);
+      expect(out, input).toBe(want);
+      expect(libRedact.redactFinal(input, idx), `CONTROL ${input}: the final form alone leaves a tail or the whole value`).not.toBe(want);
+      expect(libRedact.redactFinalLines(out, idx), `idempotent on its own marks: ${input}`).toBe(out);
+    }
+    // a whole message of them, one per line, and the text around them kept
+    const text = `ccrc history: internal error:\n${cases.map(([i]) => i).join('\n')}\ntail\n`;
+    const out = libRedact.redactFinalLines(text, idx);
+    expect(out.split('\n').slice(1, 9), 'one mark per line').toEqual(cases.map(([, w]) => w));
+    expect(out.startsWith('ccrc history: internal error:\n'), 'CONTROL: the prefix is kept').toBe(true);
+    expect(out.endsWith('\ntail\n'), 'CONTROL: the text after is kept').toBe(true);
+    // CONTROLs: a line with no secret name is unchanged, and so are marks
+    for (const x of ['level=INFO path=/a/b', 'a=b&c=d <x> "q" \\ end', `TOKEN=${M} password: ${M}`]) {
+      expect(libRedact.redactFinalLines(x, idx), x).toBe(x);
+    }
+  });
   // D-4614 (whole-branch fix round 7): layers 2 and 3 are ORDER-FREE. Every context rule and every shape matches the same text,
   // the union of their spans is masked in one pass. Round 5's order (the named rule first) and round 6's (anchors and shapes
   // first) each lost something a glued name or anchor carried; these pins hold both directions.
@@ -3977,8 +4008,23 @@ describe('deriveHealth: every §9.6 rule as a word with its class, detail and re
     const rec = healthLib.deriveHealth(base({ lastTickMs: NOW - 40 * MIN, recovering: { ...RECOVER, cursorUnmovedTicks: 2 }, pass: live(MIN) }));
     expect(words(rec, 'warn')).toContain('recovering');
     expect(words(rec, 'fail')).toEqual([]);
-    // It answers for the tick only: lag-high is its own rule and still fires.
+    // It answers for the tick only: lag-high is its own rule and still fires where no held state applies ...
     expect(words(healthLib.deriveHealth(base({ lastTickMs: NOW - 40 * MIN, lagS: 7200, pass: live(MIN) })), 'fail')).toEqual(['lag-high']);
+    // ... and is held back, as a fresh tick holds it back, where one does (here catching-up, which the pass's freshness makes live).
+    expect(words(healthLib.deriveHealth(base({ lastTickMs: NOW - 40 * MIN, lagS: 7200, bytesBehindLast3: [300, 200, 100], pass: live(MIN) })), 'fail')).toEqual([]);
+  });
+  // Tick-stale review T3: the age comes from the marker's wall-clock start, so a clock stepped back leaves a start in the FUTURE.
+  it('D-5016 (d): a live pass whose start lies more than PASS_FUTURE_SLACK_MS past now is not read: the verdict is the one with no live pass', () => {
+    const ahead = (by: number) => ({ pid: 4242, startMs: NOW + by, live: true });
+    const slack = healthLib.PASS_FUTURE_SLACK_MS;
+    const stepped = healthLib.deriveHealth(base({ lastTickMs: NOW - 40 * MIN, pass: ahead(slack + 1) }));
+    expect(words(stepped, 'fail'), 'an old tick still FAILs: the pass does not keep it fresh').toEqual(['tick-stale']);
+    expect(stepped.fail[0]!.detail).toContain('the last tick ran 40 min ago');
+    const none = healthLib.deriveHealth(base({ lastTickMs: null, lagS: null, shimMtimeMs: NOW - 60 * MIN, pass: ahead(2 * 60 * MIN) }));
+    expect(none.fail[0]!.detail).toContain('no tick has run');
+    // CONTROL: a start inside the slack (two clocks read a moment apart) is a live, fresh pass as before.
+    expect(words(healthLib.deriveHealth(base({ lastTickMs: NOW - 40 * MIN, pass: ahead(slack) })), 'fail')).toEqual([]);
+    expect(words(healthLib.deriveHealth(base({ lastTickMs: NOW - 40 * MIN, pass: ahead(0) })), 'fail')).toEqual([]);
   });
   it('D-5016 (b): a LIVE pass that started more than TICK_STALE_MS ago is FAIL tick-stale, naming the running pass and how long', () => {
     const hung = { pid: 4242, startMs: NOW - healthLib.TICK_STALE_MS - 1, live: true };

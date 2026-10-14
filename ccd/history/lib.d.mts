@@ -69,6 +69,7 @@ export const SCHEMA_VERSION: number;
 export const BUSY_TIMEOUT_MS: number;
 export const SHIM_GRACE_MS: number;
 export const TICK_STALE_MS: number;
+export const PASS_FUTURE_SLACK_MS: number;
 export const LAG_FAIL_MS: number;
 export const RECOVERY_STALL_TICKS: number;
 export const CATCHING_UP_TICKS: number;

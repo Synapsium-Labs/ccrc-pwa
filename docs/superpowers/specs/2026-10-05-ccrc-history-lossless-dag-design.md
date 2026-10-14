@@ -1738,7 +1738,7 @@ No overloaded value:
 
 **Operator verbs**: `import`, `prune`, `doctor [--repair|--backup|--migrate|--adopt|--restore <file>|--rebuild [--store-id <uuid>]]`, `reparse`, and in W2 `recall-off <id> [--clear]` and `recall-off --clear-all`.
 - Dry run by default.
-- **Every writing form runs `"$HOME/.local/bin/ccd-history-sweep" --op <verb> …` as a child and waits** (RV13; rev 3.2 review, FE4). Stdin and stderr are inherited; stdout is piped.
+- **Every writing form runs `"$HOME/.local/bin/ccd-history-sweep" --op <verb> …` as a child and waits** (RV13; rev 3.2 review, FE4). Stdin is inherited; stdout and stderr are piped, and the CLI relays each line of both through the output redaction of §8.3 (D-5022).
   - The shim's `flock -n 9` is the only lock. When it is held, an `--op` pass exits 75 and the CLI answers exit 4 `writer-busy` (a scheduled pass exits 0 instead, §5.1).
   - `sweep.mjs --op` prints one JSON result, `{rc, reason}` with `reason` from `REASONS`, and exits with an `EXIT` value. The CLI relays the result into its own envelope, so a refusal decided under the lock (`adopt-refused`, `history-off`, `migrate-refused`, …) reaches the operator as exit 2 with its word. Rev 3.1 said "re-execs", which cannot map 75 to 4 or wrap a refusal.
   - So there is one writer implementation and one writer at a time.

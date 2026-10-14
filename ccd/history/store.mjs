@@ -544,9 +544,9 @@ export function writeFileAtomic(path, text, mode = 0o600) {
   fsyncDir(path.slice(0, path.lastIndexOf('/')));
 }
 
-/** `writeFileAtomic`'s `<path>.tmp.<pid>` for every path it is handed: the root's three binding files and `op`,
- *  and db/backups/'s attempt markers. */
-const ATOMIC_TEMP_RE = /^(store\.writer|store\.id\.pending|store\.id|op|\.pre-v[0-9]+\.attempt)\.tmp\.[0-9]+$/;
+/** `writeFileAtomic`'s `<path>.tmp.<pid>` for every path it is handed: the root's three binding files, `op` and `pass`
+ *  (the scheduled pass's marker, D-5016), and db/backups/'s attempt markers. */
+const ATOMIC_TEMP_RE = /^(store\.writer|store\.id\.pending|store\.id|op|pass|\.pre-v[0-9]+\.attempt)\.tmp\.[0-9]+$/;
 
 /** Remove the temps a killed `writeFileAtomic` left under another pid, from the root and db/backups/, and answer the
  *  names removed (§9.10 "Stale temp": a writer's temp is removed by the next pass that takes the lock). An absent or

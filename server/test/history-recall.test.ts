@@ -5036,6 +5036,65 @@ describe.skipIf(process.platform === 'darwin')('HA2: --json carries the hint, a 
       w.close();
     }
   }, 2 * HEAVY);
+
+  // D-5023 (fix round 1, review 441 F11): a defect thrown after the read's context exists is worded with THAT context's pair index and belt.
+  it('F11: a defect thrown by the runner, holding a pair-only value, is masked on stderr with the read\'s own index (D-5023)', () => {
+    // A 40-char [a-z0-9] value with no token shape, so only the recorded pair can mask it.
+    const ALPHA = 'abcdefghjkmnpqrstuvwxyz23456789';
+    const PV = `zqpq${Array.from({ length: 36 }, (_, i) => ALPHA[(i * 11 + 5) % ALPHA.length]).join('')}`;
+    expect(PV, 'CONTROL: the value is 40 characters').toHaveLength(40);
+    const digest = t18createHash('sha256').update(PV).digest();
+    const w = writer();
+    w.prepare('INSERT INTO redact_hashes (len, sha256, first_seen_ms) VALUES (?, ?, 1)').run(40, digest);
+    try {
+      // ingest_files is read by scopeHeader inside the read verb's try, past readContext, so the context (and its index) exists.
+      const r = cli(['tree', '--json'], { preloads: [PRELOADS.faults], env: { HISTORY_TEST_THROW_PREPARE: `Error:${PV}@FROM ingest_files` } });
+      expect(r.code, r.stderr).toBe(1);
+      expect(r.stdout.trim(), 'a defect has no answer').toBe('');
+      expect(r.stderr, 'CONTROL: the guard line is written').toContain('ccrc history: internal error: ');
+      expect(t18leaks([r.stderr, r.stdout], PV)).toEqual([]);
+    } finally {
+      w.prepare('DELETE FROM redact_hashes WHERE len = 40 AND sha256 = ?').run(digest);
+      w.close();
+    }
+  }, 2 * HEAVY);
+
+  // D-5023 (review 441 F6): one counter line per identity-resolved read call, whatever its exit, a defect's too (rc 1).
+  it('F6: a read that ends in an exit-1 defect writes its recall counter line once, rc 1; an ordinary exit writes one; a refusal before the identity writes none (D-5023)', () => {
+    const spool = path.join(libRead.historyPaths(box.home).spool, `${HID}.jsonl`);
+    const linesNow = (): Array<Record<string, unknown>> => (fs.existsSync(spool) ? fs.readFileSync(spool, 'utf8') : '')
+      .split('\n').filter((l) => l !== '').map((l) => JSON.parse(l) as Record<string, unknown>);
+    const added = (run: () => CliRun): { r: CliRun; lines: Array<Record<string, unknown>> } => {
+      const before = linesNow().length;
+      const r = run();
+      return { r, lines: linesNow().slice(before) };
+    };
+    // the runner's own throw (past readContext)
+    const runner = added(() => cli(['tree', '--json'], { preloads: [PRELOADS.faults], env: { HISTORY_TEST_THROW_PREPARE: 'TypeError@FROM ingest_files' } }));
+    expect(runner.r.code, runner.r.stderr).toBe(1);
+    expect(runner.r.stderr, 'CONTROL: it is the defect arm').toContain('ccrc history: internal error: ');
+    expect(runner.lines, 'the runner defect: exactly one counter line').toHaveLength(1);
+    expect(runner.lines[0]).toMatchObject({ v: 1, ev: 'recall', id: HID, cmd: 'tree', rc: 1 });
+    // readContext's own throw after the identity resolved (the pair index's read)
+    const context = added(() => cli(['tree', '--json'], { preloads: [PRELOADS.faults], env: { HISTORY_TEST_THROW_PREPARE: 'TypeError@FROM redact_hashes' } }));
+    expect(context.r.code, context.r.stderr).toBe(1);
+    expect(context.r.stderr, 'CONTROL: it is the defect arm').toContain('ccrc history: internal error: ');
+    expect(context.lines, 'the readContext defect: exactly one counter line').toHaveLength(1);
+    expect(context.lines[0]).toMatchObject({ v: 1, ev: 'recall', id: HID, cmd: 'tree', rc: 1 });
+    // CONTROL: an ordinary exit writes exactly one line
+    const ok = added(() => cli(['tree', '--json']));
+    expect(ok.r.code, ok.r.stderr).toBe(0);
+    expect(ok.lines).toHaveLength(1);
+    expect(ok.lines[0]).toMatchObject({ ev: 'recall', id: HID, cmd: 'tree', rc: 0 });
+    // CONTROL: a refusal after the identity is counted with its own rc, once
+    const bad = added(() => cli(['tree', '--session', '..', '--json']));
+    expect(bad.r.code, bad.r.stderr).toBe(2);
+    expect(bad.lines.map((l) => l['rc'])).toEqual([2]);
+    // CONTROL: a refusal before the identity (no pane) writes none
+    const before = added(() => rH.runCli(box, ['tree', '--json'], { env: { TMUX_PANE: '' } }));
+    expect(before.r.code, before.r.stderr).not.toBe(0);
+    expect(before.lines, 'no identity, no counter line').toEqual([]);
+  }, 3 * HEAVY);
 });
 
 // ── Whole-branch fix round 1, item A (D-4613): the final belt keeps --json valid ────────────────────────

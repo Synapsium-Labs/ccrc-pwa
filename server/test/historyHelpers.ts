@@ -480,15 +480,16 @@ function atEndOfFile(box: HistoryBox, uuid: string): boolean {
 
 // ── W1-B2 Task 19: the operator door's stand-ins ──────────────────────────────────────────────────────
 /** Replace the box's placed shim with a stand-in: it appends its argv, one line per run, to
- *  `<home>/stub-shim-argv`, prints `stdout` verbatim and exits `exit`. The CLI's relay is then measured against an
- *  answer the case chose; a case that must spawn nothing reads the argv file as absent. A box keeps its stand-in;
- *  a case that needs the real shim builds its own box. */
-export function stubShim(box: HistoryBox, script: { stdout: string; exit: number }): void {
+ *  `<home>/stub-shim-argv`, prints `stderr` (when given) verbatim on stderr, then `stdout` verbatim, and exits `exit`.
+ *  The CLI's relay is then measured against an answer the case chose; a case that must spawn nothing reads the argv
+ *  file as absent. A box keeps its stand-in; a case that needs the real shim builds its own box. */
+export function stubShim(box: HistoryBox, script: { stdout: string; exit: number; stderr?: string }): void {
   const quote = (s: string): string => `'${s.replace(/'/g, `'\\''`)}'`;
   const p = path.join(box.home, '.local', 'bin', 'ccd-history-sweep');
   fs.writeFileSync(p, [
     '#!/usr/bin/env bash',
     'printf \'%s\\n\' "$*" >> "$HOME/stub-shim-argv"',
+    ...(script.stderr === undefined ? [] : [`printf '%s' ${quote(script.stderr)} >&2`]),
     `printf '%s' ${quote(script.stdout)}`,
     `exit ${script.exit}`,
     '',
