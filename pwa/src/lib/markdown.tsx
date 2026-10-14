@@ -86,14 +86,14 @@ export function openExternal(e: React.MouseEvent, href: string | undefined): voi
   window.open(absolute(href), '_blank', 'noopener,noreferrer');
 }
 
-/** highlight.js's `xml` grammar (registered as `xml`, `html` and `svg`) with the `subLanguage` removed from the two modes
+/** highlight.js's `xml` grammar (registered as `xml`, with `html` and `svg` and every alias xml declares: xhtml, rss, atom, xjb, xsd, xsl, plist and wsf) with the `subLanguage` removed from the two modes
  *  that carry one that costs: the `<script>` mode (`["javascript","handlebars","xml"]`) and the `<style>` mode
  *  (`["css","xml"]`), the `starts` of the two tag modes. Those are the only modes of the stock definition with a
  *  `subLanguage`; each keeps its `end` and `returnEnd`, so the contents run to the closing tag as ONE plain run.
  *  Why (D-4928): the grammar is quadratic on those regions whatever they embed (`<script>` repeated one per line, no
  *  closer: 1, 2, 4 and 8 KiB cost 66, 308, 1 729 and 7 918 ms; `<style>{` per line, 8 KiB 2.4 s with no javascript
- *  involved), and with them removed every probed shape is linear (xml at most 167 ms per 64 KiB, markdown, which embeds
- *  xml, 290 ms). What it costs: script and style contents are uncoloured (one real 375-character html fence holds
+ *  involved), and with them removed every probed shape is linear (a snapshot of 2026-10-14 on a loaded box, load average about 40: xml 167 ms per 64 KiB at most, markdown, which
+ *  embeds xml, 290 ms; the claim it supports is the GROWTH, linear from 8 to 128 KiB, not the figures). What it costs: script and style contents are uncoloured (one real 375-character html fence holds
  *  `<script` or `<style>`); markup outside them is coloured as before. `xml` and `markdown` then reach no bounded
  *  grammar, so they keep the 64 KiB cap. */
 const xmlWithoutSubLanguages: LanguageFn = (h) => {
@@ -308,6 +308,15 @@ export function highlightBlockCap(lang: string): number {
  *  block's size (`DOCS_HIGHLIGHT_SCAN_PAGE_MAX_CHARS`, D-4928): every grammar in `HIGHLIGHT_BOUNDED_CAPS`. */
 export function inScanPageBudget(lang: string): boolean {
   return boundedCap(lang) !== null;
+}
+
+/** Whether a block in `lang` counts against a Docs page's budget for `markdown` code
+ *  (`DOCS_HIGHLIGHT_MARKDOWN_PAGE_MAX_CHARS`, D-4928): every alias highlight.js resolves to the `markdown` grammar, by
+ *  identity. */
+export function inMarkdownPageBudget(lang: string): boolean {
+  if (!lang) return false;
+  const def = hljs.getLanguage(lang);
+  return def !== undefined && def === hljs.getLanguage('markdown');
 }
 
 /** Fenced code: language label + copy bar over a syntax-highlighted well.

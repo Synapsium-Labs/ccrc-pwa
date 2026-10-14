@@ -148,3 +148,71 @@ describe('D-4928: the scan budget, a page\'s code of typescript, javascript and 
     expect(decisions([bare, lang('ts', filler(100))])).toEqual([true, true]);
   });
 });
+
+describe('D-4928: the markdown budget, a page\'s markdown code (131 072 characters), outside the scan set', () => {
+  // Literal sizes, never the imported constants, so a mutated constant reds a behaviour case.
+  const lang = (name: string, text: string): HastElement => ({
+    type: 'element', tagName: 'pre', properties: {},
+    children: [{ type: 'element', tagName: 'code', properties: { className: [`language-${name}`] }, children: [{ type: 'text', value: text }] }],
+  });
+  const filler = (n: number): string => 'x'.repeat(n);
+  /** `n` characters of the measured worst shape for markdown (its tags go to xml): `</a>` repeated, in lines of 1 797
+   *  characters (under the line bound). */
+  const worst = (n: number): string => ('</a>'.repeat(449) + '\n').repeat(Math.ceil(n / 1797)).slice(0, n);
+  const decisions = (blocks: readonly HastElement[]): (boolean | null | undefined)[] => {
+    const d = detachUrls({ type: 'root', children: [...blocks] });
+    return pres(d.tree).map((p) => d.urls.get(p)?.highlight);
+  };
+
+  it('(a) three markdown blocks of 65 536 characters: the first two (exactly 131 072) are highlighted, the third is not', () => {
+    expect(decisions([lang('markdown', worst(65536)), lang('markdown', worst(65536)), lang('markdown', worst(65536))]))
+      .toEqual([true, true, false]);
+  });
+
+  it('(a2) at the budget: markdown blocks summing to exactly 131 072 all highlight, one more character in a following markdown block does not', () => {
+    expect(decisions([
+      lang('markdown', worst(32768)), lang('md', worst(32768)), lang('markdown', worst(32768)), lang('markdown', worst(32768)),
+      lang('markdown', worst(1)),
+    ])).toEqual([true, true, true, true, false]);
+  });
+
+  it('(b) an md block counts in the same sum, every alias highlight.js resolves to markdown included', () => {
+    expect(decisions([lang('md', filler(65536)), lang('markdown', filler(65535)), lang('mkdown', filler(2))])).toEqual([true, true, false]);
+    expect(decisions([lang('markdown', filler(65536)), lang('md', filler(65537))])).toEqual([true, false]);
+  });
+
+  it('(c) a yaml block and a ts block after them are still highlighted: another grammar is never refused by it', () => {
+    expect(decisions([
+      lang('markdown', filler(65536)), lang('markdown', filler(65536)), lang('markdown', filler(1)),
+      lang('yaml', filler(100)), lang('ts', filler(100)),
+    ])).toEqual([true, true, false, true, true]);
+  });
+
+  it('(d) markdown does not count in the scan sum: a ts block after 128 KiB of markdown is highlighted, and only its own sum refuses it', () => {
+    expect(decisions([lang('markdown', filler(65536)), lang('md', filler(65536)), lang('ts', filler(393216)), lang('ts', filler(1))]))
+      .toEqual([true, true, true, false]);
+  });
+
+  it('(d2) code of other grammars does not use the markdown budget: 131 072 characters of yaml and of json leave two markdown blocks of 65 536 highlighted', () => {
+    expect(decisions([lang('yaml', filler(131072)), lang('json', filler(65536)), lang('markdown', worst(65536)), lang('md', worst(65536))]))
+      .toEqual([true, true, true, true]);
+  });
+
+  it('(e) the page budget still refuses a markdown block past it', () => {
+    expect(decisions([lang('python', filler(524288)), lang('markdown', filler(1))])).toEqual([true, false]);
+  });
+
+  it('(f) rendered: a third 64 KiB markdown block renders unhighlighted through PreHighlightContext, the first two highlighted', () => {
+    const md = (): HastElement => lang('markdown', worst(65536));
+    const d = detachUrls({ type: 'root', children: [md(), md(), md()] });
+    expect(pres(d.tree).map((p) => d.urls.get(p)?.highlight)).toEqual([true, true, false]);
+    const { container } = render(
+      <PreHighlightContext value={(pre) => d.urls.get(pre)?.highlight !== false}>
+        {renderHast(d.tree, { components: SHARED_COMPONENTS })}
+      </PreHighlightContext>,
+    );
+    const marks = [...container.querySelectorAll('.code-block')].map((b) => b.querySelectorAll('.hljs-tag').length);
+    expect(marks.slice(0, 2).every((n) => n > 0)).toBe(true);
+    expect(marks[2]).toBe(0);
+  }, 60000);
+});

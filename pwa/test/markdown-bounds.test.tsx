@@ -17,7 +17,8 @@ import { act, cleanup, render } from '@testing-library/react';
 import hljs from 'highlight.js/lib/core';
 import type { Root as HastRoot } from 'hast';
 import {
-  ChatMarkdown, CodeBlock, HIGHLIGHT_BOUNDED_CAPS, SHARED_COMPONENTS, deriveBoundedCaps, longestBlankRun, longestWordRun,
+  ChatMarkdown, CodeBlock, HIGHLIGHT_BOUNDED_CAPS, SHARED_COMPONENTS, deriveBoundedCaps, highlightBlockCap, inMarkdownPageBudget, inScanPageBudget,
+  longestBlankRun, longestWordRun,
 } from '../src/lib/markdown';
 import { keystrokeParts, utf8ByteLength } from '../src/lib/markdownGuard';
 import {
@@ -728,6 +729,36 @@ describe('D-4928 closure: a grammar that embeds a bounded grammar through `subLa
     expect(hljs.getLanguage('ruby')).toBeUndefined();
     expect(hljs.getLanguage('handlebars')).toBeUndefined();
     expect([...subLanguagesOf(hljs.getLanguage('yaml')!, [])]).toContain('ruby');
+  });
+
+  it('every name of HIGHLIGHT_BOUNDED_CAPS and every alias highlight.js resolves to it takes its cap and the scan budget; every other grammar takes 65 536 and does not', () => {
+    const bounded = new Set<string>();
+    for (const [name, cap] of HIGHLIGHT_BOUNDED_CAPS) {
+      const aliases = (hljs.getLanguage(name) as { aliases?: string[] }).aliases ?? [];
+      for (const alias of [name, ...aliases, ...(name === 'typescript' ? ['tsx'] : [])]) {
+        bounded.add(alias);
+        expect(hljs.getLanguage(alias), alias).toBe(hljs.getLanguage(name));
+        expect(highlightBlockCap(alias), alias).toBe(cap);
+        expect(inScanPageBudget(alias), alias).toBe(true);
+      }
+    }
+    expect(bounded.size).toBeGreaterThanOrEqual(3);
+    const others = hljs.listLanguages().filter((n) => !HIGHLIGHT_BOUNDED_CAPS.has(n));
+    expect(others.length).toBeGreaterThan(0);
+    for (const name of others) {
+      expect(highlightBlockCap(name), name).toBe(65536);
+      expect(inScanPageBudget(name), name).toBe(false);
+    }
+  });
+
+  it('inMarkdownPageBudget is true for markdown and every alias highlight.js resolves to it, and false for every other name', () => {
+    const mdDef = hljs.getLanguage('markdown')!;
+    const aliases = (mdDef as { aliases?: string[] }).aliases ?? [];
+    expect(aliases).toEqual(expect.arrayContaining(['md']));
+    for (const alias of ['markdown', ...aliases]) expect(inMarkdownPageBudget(alias), alias).toBe(true);
+    for (const name of hljs.listLanguages().filter((n) => n !== 'markdown')) expect(inMarkdownPageBudget(name), name).toBe(false);
+    expect(inMarkdownPageBudget('')).toBe(false);
+    expect(inMarkdownPageBudget('nope')).toBe(false);
   });
 
   it('the registered xml carries no subLanguage on any mode (script and style contents are one plain run), and every alias of xml is that grammar', () => {

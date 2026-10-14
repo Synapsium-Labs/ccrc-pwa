@@ -90,6 +90,11 @@ export const MD_HIGHLIGHT_RUST_BLOCK_MAX_CHARS = 4096;
  *  style sub-languages): `detachUrls` sums it beside `DOCS_HIGHLIGHT_PAGE_MAX_CHARS` and refuses those grammars from the
  *  block that passes it, while a block of another grammar is never refused by it (D-4928). */
 export const DOCS_HIGHLIGHT_SCAN_PAGE_MAX_CHARS = 393216;
+/** The most `markdown` code (every alias highlight.js resolves to it, `md` among them) in characters that a Docs page
+ *  highlights: `detachUrls` sums it beside the other two and refuses a markdown block from the one that passes it,
+ *  while a block of another grammar is never refused by it (D-4928). `markdown` hands every HTML tag to `xml`, a linear
+ *  but high rate, so it has this budget of its own and stays out of the scan set. */
+export const DOCS_HIGHLIGHT_MARKDOWN_PAGE_MAX_CHARS = 131072;
 /** The longest inline code span that can be a keystroke chord (W5 bound r11); a longer one is plain inline code,
  *  never trimmed or split. The longest chord of named keys is about 40 characters. */
 export const MD_KEYSTROKE_MAX_CHARS = 64;

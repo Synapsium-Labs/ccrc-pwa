@@ -13,8 +13,10 @@ import {
   admitDraft, docsPageUrl, entryView, githubBlobUrl, isDocsBareRef, isDocsProject, resolveDocRef,
   type DocPin, type DocSectionSlug, type DocsEntry, type DocsPageLocation, type DocsRefSpec, type DocsTreeOk,
 } from '../../../shared/docs';
-import { codeLanguage, inScanPageBudget } from '../lib/markdown';
-import { DOCS_HIGHLIGHT_PAGE_MAX_CHARS, DOCS_HIGHLIGHT_SCAN_PAGE_MAX_CHARS } from '../lib/markdownLimits';
+import { codeLanguage, inMarkdownPageBudget, inScanPageBudget } from '../lib/markdown';
+import {
+  DOCS_HIGHLIGHT_MARKDOWN_PAGE_MAX_CHARS, DOCS_HIGHLIGHT_PAGE_MAX_CHARS, DOCS_HIGHLIGHT_SCAN_PAGE_MAX_CHARS,
+} from '../lib/markdownLimits';
 import { DOC_LINK_INERT_SENTENCE, type DocLinkInertReason } from './docsText';
 import type { DocLinkContextValue } from './DocLink';
 import { pinFor } from './useDocsVisit';
@@ -87,7 +89,9 @@ function preCodeClass(pre: HastElement): string {
  *  `inScanPageBudget` names (`typescript`, `javascript` and `rust`, and any grammar whose sub-language chain reaches them:
  *  none today, `xml` being registered without its script and style sub-languages; aliases included), has its own budget,
  *  `DOCS_HIGHLIGHT_SCAN_PAGE_MAX_CHARS`: a block of those grammars is `false` from the one that passes it, and a block
- *  of any other grammar is never refused by it (D-4928). An element with nothing to record has no
+ *  of any other grammar is never refused by it (D-4928). A third sum, of the blocks whose language `inMarkdownPageBudget`
+ *  names (`markdown` and its aliases, `md` among them, which are outside the scan set), has its own budget,
+ *  `DOCS_HIGHLIGHT_MARKDOWN_PAGE_MAX_CHARS`, and refuses only markdown blocks the same way (D-4928). An element with nothing to record has no
  *  entry. Never writes `tree`, so a kept outcome can be detached again, and part 2's Export reuses the copy and its
  *  map (a second detach of the copy finds no URL). */
 export function detachUrls(tree: HastRoot): Detached {
@@ -101,6 +105,7 @@ export function detachUrls(tree: HastRoot): Detached {
   let images = 0;
   let codeChars = 0;
   let scanChars = 0;
+  let markdownChars = 0;
   schedule(tree.children, root.children);
   while (stack.length > 0) {
     const { node, to } = stack.pop()!;
@@ -126,9 +131,13 @@ export function detachUrls(tree: HastRoot): Detached {
     if (node.tagName === 'pre') {
       const chars = preCodeChars(node);
       codeChars += chars;
-      const scan = inScanPageBudget(codeLanguage(preCodeClass(node)));
+      const language = codeLanguage(preCodeClass(node));
+      const scan = inScanPageBudget(language);
       if (scan) scanChars += chars;
-      highlight = codeChars <= DOCS_HIGHLIGHT_PAGE_MAX_CHARS && (!scan || scanChars <= DOCS_HIGHLIGHT_SCAN_PAGE_MAX_CHARS);
+      const md = inMarkdownPageBudget(language);
+      if (md) markdownChars += chars;
+      highlight = codeChars <= DOCS_HIGHLIGHT_PAGE_MAX_CHARS && (!scan || scanChars <= DOCS_HIGHLIGHT_SCAN_PAGE_MAX_CHARS)
+        && (!md || markdownChars <= DOCS_HIGHLIGHT_MARKDOWN_PAGE_MAX_CHARS);
     }
     if (Object.keys(attrs).length > 0 || imageIndex !== null || highlight !== null) {
       urls.set(copy, { attrs, imageIndex, highlight });
