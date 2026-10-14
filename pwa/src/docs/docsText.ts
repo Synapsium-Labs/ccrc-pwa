@@ -167,8 +167,9 @@ export const RELATION_SENTENCE: Record<DocsTreeOk['ref']['relation'], string> = 
 export const RELATION_DIVERGED_ORIGIN_SENTENCE = "local and origin have diverged ({ahead} vs {behind}), showing origin's";
 
 /** The relation sentences without a count, for a counted relation whose counts ccd did not measure (`count` is
- *  `timeout` or `shallow`, with null `ahead`/`behind`, while the relation itself stays measured): the same words, with
- *  the count left out, so no `?` reaches the page. `diverged` keeps naming the side it shows. */
+ *  `timeout`, with null `ahead`/`behind`, while the relation itself stays measured): the same words, with the count
+ *  left out, so no `?` reaches the page. `diverged` keeps naming the side it shows. A shallow repository never gets
+ *  here: ccd answers its relation `unmeasured`, which carries no count. */
 export const RELATION_COUNTLESS_SENTENCE: Partial<Record<DocsTreeOk['ref']['relation'], string>> = {
   'local-ahead': 'local is ahead of origin',
   'local-behind': 'origin is ahead of local',
