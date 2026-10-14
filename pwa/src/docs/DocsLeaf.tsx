@@ -156,12 +156,21 @@ function RasterBody(p: { readonly link: LinkBase; readonly name: string }): Reac
   return <div className="docs-raster"><DocLinkContext value={ctx}><DocImage node={node} alt={p.name} /></DocLinkContext></div>;
 }
 
-/** A Markdown leaf's body: `DocMarkdown` keyed by the pin, under the page's link context. */
-function MarkdownBody(p: { readonly show: DocsShowOk; readonly pinKey: string; readonly link: LinkBase; readonly parser: MarkdownParser }): ReactNode {
+/** What a Markdown body is keyed by: a value that changes only when the bytes can. A draft is keyed by its pin (every
+ *  field, its fingerprint among them, so a new fingerprint asks the render gate again). A committed body is keyed by
+ *  the blob the ANSWER carries, so a re-list that moves the commit but not the file keeps the formatted body (and its
+ *  scroll), and an answer with no blob falls back to the commit-bearing pin. */
+function bodyKeyOf(pin: DocPin, show: DocsShowOk, pinKey: string): string {
+  if (pin.kind === 'draft' || show.blob === undefined) return pinKey;
+  return ['blob', show.blob, show.section, show.path].join('\u0000');
+}
+
+/** A Markdown leaf's body: `DocMarkdown` keyed by its bytes' identity, under the page's link context. */
+function MarkdownBody(p: { readonly show: DocsShowOk; readonly bodyKey: string; readonly link: LinkBase; readonly parser: MarkdownParser }): ReactNode {
   const src = useMemo(() => docMarkdownSource(p.show), [p.show]);
   if (src.kind === 'no-bytes') return <DocsFailureView answer={malformed(DOCS_SHOW_NO_BYTES)} />;
   if (src.kind === 'not-utf8') return <DocPlain text={src.text} note={DOC_NOT_UTF8_NOTE} />;
-  return <DocMarkdown key={p.pinKey} text={src.text} pinKey={p.pinKey} parser={p.parser} link={p.link} />;
+  return <DocMarkdown key={p.bodyKey} text={src.text} pinKey={p.bodyKey} parser={p.parser} link={p.link} />;
 }
 
 /** One leaf page's body (spec 4.4). `page` is a leaf of `tree` (`docsPathKind` said so); given anything else it
@@ -225,7 +234,7 @@ export function DocsLeaf(p: {
       const pinKey = docsApi.file(page.project, file.pin);
       switch (cls) {
         case 'markdown':
-          body = <MarkdownBody show={show} pinKey={pinKey} link={link} parser={parser} />;
+          body = <MarkdownBody show={show} bodyKey={bodyKeyOf(file.pin, show, pinKey)} link={link} parser={parser} />;
           break;
         case 'text':
           body = <TextBody show={show} path={page.path} />;

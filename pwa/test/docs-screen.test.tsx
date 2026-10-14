@@ -23,22 +23,22 @@ import { parseMarkdown } from '../src/lib/markdownParse';
 import { docsRunner, type MarkdownParser } from '../src/lib/markdownRunner';
 import { navigate, useLocation } from '../src/lib/router';
 import {
-  COMMIT_A, COMMIT_B, FP_1, RAN, draftOf, entry, failedAnswer, fakeLoaders, fileResponse, holder, okRefresh, okTree,
-  pageAt, treeOk, treeResponse, type FakeLoaders,
+  BLOB_1, COMMIT_A, COMMIT_B, FP_1, RAN, draftOf, entry, failedAnswer, fakeLoaders, fileResponse, holder,
+  okRefresh, okTree, pageAt, treeOk, treeResponse, type FakeLoaders,
 } from './docsFixtures';
 
 /** Parses in this thread, as the worker would. */
 const parser: MarkdownParser = async (src) => parseMarkdown(src, 'docs');
 
 /** The screen under the live location, as the app's `docs` arm mounts it (one mount across navigations). */
-function Routed(p: { readonly loaders: DocsLoaders }): ReactNode {
+function Routed(p: { readonly loaders: DocsLoaders; readonly parser?: MarkdownParser }): ReactNode {
   const { path, search } = useLocation();
-  return <DocsScreen path={path} search={search} loaders={p.loaders} parser={parser} />;
+  return <DocsScreen path={path} search={search} loaders={p.loaders} parser={p.parser ?? parser} />;
 }
 
-function open(url: string, f: FakeLoaders): ReturnType<typeof render> {
+function open(url: string, f: FakeLoaders, withParser?: MarkdownParser): ReturnType<typeof render> {
   navigate(url);
-  return render(<Routed loaders={f.loaders} />);
+  return render(<Routed loaders={f.loaders} parser={withParser} />);
 }
 
 const here = (): string => location.pathname + location.search;
@@ -803,3 +803,21 @@ describe('the index after a sign-in (review I3)', () => {
   });
 });
 
+
+describe('T13 review 3-3: a re-list that moves the pin but not the blob keeps the Markdown body', () => {
+  it('same blob at a new commit: the same h1 node survives, the parser is called once, and no second read is made', async () => {
+    const base = fileResponse('# A\n');
+    const f = fakeLoaders({ tree: okTree(treeOk()) });
+    f.file.mockResolvedValue({ s: 'ok', value: { ...base, show: { ...base.show, blob: BLOB_1, commit: COMMIT_A } } });
+    f.refresh.mockResolvedValue(okRefresh(RAN, treeResponse(treeOk({ commit: COMMIT_B }))));
+    const counting = vi.fn(parser);
+    const { container } = open('/docs/demo/specs/a.md', f, counting);
+    const h1 = await screen.findByRole('heading', { name: 'A' });
+    expect(counting).toHaveBeenCalledTimes(1);
+    fireEvent.click(container.querySelector('button.docs-fresh') as HTMLElement);
+    await waitFor(() => expect(container.querySelector('code.docs-truth-commit')?.getAttribute('title')).toBe(COMMIT_B));
+    expect(screen.getByRole('heading', { name: 'A' })).toBe(h1);
+    expect(counting).toHaveBeenCalledTimes(1);
+    expect(f.file).toHaveBeenCalledTimes(1);
+  });
+});
