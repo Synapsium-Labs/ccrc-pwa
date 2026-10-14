@@ -480,6 +480,12 @@ export function stallDeadShaped(lifecycle: string | null): lifecycle is 'orphan'
 export type AskRowFact = { readonly kind: 'row'; readonly state: string; readonly at: number } | { readonly kind: 'none' } | { readonly kind: 'unmeasured' };
 export type StallWorker =
   | { readonly present: false }
+  /** A worker id the tick's registry listing REFUSED (`RegistryRead.refused`, path identity spec §2.3): listed, but never
+   *  read or built, so it is in no `records` and no `sessions`. Its own arm, never `{ present: false }` plus a flag: an
+   *  absent worker is the dead arm after DEAD_GRACE_MS, and a refused id was never measured absent. The lane reads
+   *  nothing about it and moves none of its clocks, and every verdict holds it `unmeasured` (slug
+   *  `tick-lanes-hold-a-refused-id`). */
+  | { readonly present: 'refused' }
   | { readonly present: true; readonly unmeasured: boolean; readonly lifecycle: string | null;
       readonly limits: { readonly five: number | null; readonly seven: number | null } | null;
       readonly dialogPending: boolean; readonly stranded: boolean; readonly swapBlocked: boolean;
@@ -687,7 +693,7 @@ export function stallFacts(input: StallInput): StallFacts {
   const capKeyMs = Math.max(workerLast?.at ?? 0, waitLast?.at ?? 0, primary.dispatchedAt ?? 0);
   const episodeKeyMs = Math.max(capKeyMs, stallReactivatedAt(input));
   const w = input.worker;
-  const quietSince = w.present && w.live.ok && isIdleWord(w.live.word) && w.live.since !== null
+  const quietSince = w.present === true && w.live.ok && isIdleWord(w.live.word) && w.live.since !== null
     ? Math.max(w.live.since, workerLast?.at ?? 0, inboundLast?.at ?? 0, primary.dispatchedAt ?? 0, stallReactivatedAt(input))
     : null;
   return { ball, episodeKeyMs, capKeyMs, quietSince, workerLast, inboundLast, lastExchangeAt };
@@ -1001,6 +1007,12 @@ export function stallVerdict(input: StallInput, now: number): StallVerdict {
 
 /** §10 after wave 2, in the spec's own numbers. The first match wins:
  *  (1) a run this build cannot name;
+ *  (1b) a worker id the registry listing refused (`StallWorker`'s `refused` arm) holds `unmeasured`, AHEAD of (2a) and
+ *      of every later step. This departs from the stall-watch spec's §10 order, where (2a) comes first and "then any
+ *      unmeasured input" (slug `tick-lanes-hold-a-refused-id`). The lane takes no read for that id and moves none of
+ *      its clocks, so an absent, dead or marker-unreadable clock it carries is an earlier observation's, never a
+ *      measurement of this subject: judged in the spec's order, it would push marker-unreadable or report the worker
+ *      dead off a read nobody took;
  *  (2) the marker-unreadable push, then a worker absent from the tick (the dead arm after DEAD_GRACE_MS), then an
  *      unmeasured fleet row, lifecycle, dispatch or re-activation;
  *  (3) lifecycle: a deliberate stop holds; an orphan or never-started pane is the dead arm after DEAD_GRACE_MS;
@@ -1030,16 +1042,19 @@ function stallVerdictInner(input: StallInput, now: number): StallVerdict {
   const mark = w2?.mark;
   const okMark = mark !== undefined && mark.ok ? mark : null;
   const markReason = mark !== undefined && !mark.ok ? mark.reason : null;
+  const w = input.worker;
+  // (1b) a refused worker id (`tick-lanes-hold-a-refused-id`): held before any fact is derived or any clock is read.
+  if (w.present === 'refused') return holdVerdict('unmeasured');
   const f = stallFacts(input);
   const key = f.episodeKeyMs;
-  // (2a) the marker-unreadable push: spec-exact, ahead of every unmeasured input, once per episode. The reasons that
-  // count live once, in Task 10's `stallMarkUnreadable` (the L1 ruling).
+  // (2a) the marker-unreadable push: ahead of every other unmeasured input, once per episode. The spec puts it ahead
+  // of all of them; (1b)'s refused worker id comes first by `tick-lanes-hold-a-refused-id`. The reasons that count
+  // live once, in Task 10's `stallMarkUnreadable` (the L1 ruling).
   if (w2 !== undefined && stallMarkUnreadable(w2.mark) && w2.markUnreadableSince !== null
     && now - w2.markUnreadableSince >= MARKER_UNREADABLE_MS && rungDoneAt(input, 'marker-unreadable', 1, key) === null) {
     return { act: 'notify', arm: 'marker-unreadable', rung: 1, key, to: 'operator' };
   }
   // (2b) a worker absent from this tick holds (`absent-worker-holds`, D-3566), and is the dead arm after DEAD_GRACE_MS (`absent-worker-is-dead-after-grace` (D-3631))
-  const w = input.worker;
   if (!w.present) {
     return w2 !== undefined && stallDeadDue(input, w2.absentSince, key, now) ? stallW2Notify(input, 'dead', key, 'registry-absent') : holdVerdict('absent');
   }
@@ -1210,7 +1225,7 @@ function stallQuietFrom(facts: StallFacts): number {
  *  wave 1's ladder, so this is exactly the set of r1s the marker clock sent. */
 function stallR1MarkQuiet(input: StallInput, facts: StallFacts): number | null {
   const w = input.worker;
-  if (input.arming.w2Live !== true || input.w2 === undefined || !input.w2.mark.ok || !w.present) return null;
+  if (input.arming.w2Live !== true || input.w2 === undefined || !input.w2.mark.ok || w.present !== true) return null;
   const view = stallMarkView(input.w2.mark, w.live);
   return view.state === 'working' ? null : stallMarkQuiet(view, facts, input);
 }
@@ -1383,7 +1398,8 @@ function stallR3Cause(because: StallR3Cause, input: StallInput, coordinator: str
 
 /** Why the limit hold held: only facts the tick measured. */
 function stallLimitFacts(w: StallWorker): string {
-  if (!w.present) return 'the worker is absent';
+  if (w.present === false) return 'the worker is absent';
+  if (w.present === 'refused') return 'the worker id is refused by the registry listing, so nothing about it was read';
   const parts: string[] = [];
   if (w.limits === null) parts.push('limits unmeasured');
   else parts.push(`5h ${stallPercent(w.limits.five)}`, `7d ${stallPercent(w.limits.seven)}`);
@@ -1417,7 +1433,7 @@ export function stallPushText(input: StallInput, facts: StallFacts, n: StallNoti
       // `dialog-cap-keyed-on-the-dialog` (D-3799): the dialog's own stretch, read from the live stamp its key comes from.
       // `n.key` is the episode key whenever the dialog predates the worker's last mail, so it is never printed as the age.
       const w = input.worker;
-      const live = w.present && w.live.ok && w.live.since !== null ? { word: w.live.word, since: w.live.since } : null;
+      const live = w.present === true && w.live.ok && w.live.since !== null ? { word: w.live.word, since: w.live.since } : null;
       const stretch = live === null
         ? 'its live status was not measured'
         : `its live status has read ${stallSafe(live.word)} since ${stallUtc(live.since)} (${stallSpan(now - live.since)})`;
@@ -1558,6 +1574,8 @@ function stallSessionHolds(input: StallSessionInput, now: number, holdDialog: bo
   if (input.role === 'worker' && r !== null
     && (!isRunState(r.state) || r.state === 'unknown' || (r.kind !== 'work' && r.kind !== 'review'))) return holdVerdict('run-unnamed');
   const w = input.worker;
+  // A refused id (`tick-lanes-hold-a-refused-id`): nothing about it was read, so it is unmeasured, never absent.
+  if (w.present === 'refused') return holdVerdict('unmeasured');
   if (!w.present) return holdVerdict('absent');
   const lc = w.lifecycle;
   if (w.unmeasured || lc === null || !isSessionLifecycle(lc) || lc === 'unmeasurable') return holdVerdict('unmeasured');
@@ -1571,7 +1589,7 @@ function stallSessionHolds(input: StallSessionInput, now: number, holdDialog: bo
 /** The measured live word and its stamp, or null when any part of it is unmeasured. */
 function stallSessionLive(input: StallSessionInput): { readonly word: string; readonly since: number } | null {
   const w = input.worker;
-  if (!w.present || !w.live.ok || w.live.since === null) return null;
+  if (w.present !== true || !w.live.ok || w.live.since === null) return null;
   return { word: w.live.word, since: w.live.since };
 }
 
@@ -1809,16 +1827,21 @@ export function stallMailStuckVerdicts(input: StallSessionInput, now: number): S
 /** A coordinator's marker-unreadable (§5.1 "on a candidate"; `coordinator-marker-unreadable` (D-3654)). The marker has been
  *  unreadable since the lane first saw it so, for MARKER_UNREADABLE_MS. Which reads count is Task 10's
  *  `stallMarkUnreadable`, never re-spelled here. Holds 1 and 2 do NOT apply, because the unreadable mark is the fact
- *  reported. The limit hold does, when the session is present. The push goes to the operator. Key: the in-memory
- *  first-seen time, which a server restart re-times. A run worker gets this arm through the run verdict (step 2a),
- *  and a registry row is no candidate until its marker reads. */
+ *  reported. The limit hold does, when the session is present. A claimant id the registry listing refused holds
+ *  `unmeasured` ahead of all of it: the lane read no marker for it, so no unreadable mark is there to report (slug
+ *  `tick-lanes-hold-a-refused-id`). The push goes to the operator. Key: the in-memory first-seen time, which a server
+ *  restart re-times. A run worker gets this arm through the run verdict (step 2a), and a registry row is no candidate
+ *  until its marker reads. */
 function stallSessionMarkerInner(input: StallSessionInput, now: number): StallVerdict {
   if (input.role !== 'coordinator') return VERDICT_NONE;
+  // A refused claimant id (`tick-lanes-hold-a-refused-id`): the lane read no marker for it, so there is no unreadable
+  // read to report, and a first-seen time it carries is an earlier observation's.
+  if (input.worker.present === 'refused') return holdVerdict('unmeasured');
   if (!stallMarkUnreadable(input.mark)) return VERDICT_NONE;
   const since = input.markUnreadableSince;
   if (since === null || now - since < MARKER_UNREADABLE_MS) return VERDICT_NONE;
   const w = input.worker;
-  if (w.present && stallLimited(w, now)) return holdVerdict('limit');
+  if (w.present === true && stallLimited(w, now)) return holdVerdict('limit');
   return { act: 'notify', arm: 'marker-unreadable', rung: 1, key: since, to: 'operator' };
 }
 
@@ -1888,7 +1911,7 @@ function stallOrphanDMail(input: StallSessionInput): StallNoticeText {
 function stallOrphanEMail(input: StallSessionInput, now: number): StallNoticeText {
   const m = stallReadMark(input, 'an orphan notice (E)');
   const w = input.worker;
-  const since = w.present && w.live.ok ? w.live.since : null;
+  const since = w.present === true && w.live.ok ? w.live.since : null;
   const idle = since === null ? '' : `: your main loop has been idle since ${stallUtcSec(since)} (${stallSpan(now - since)})`;
   return {
     subject: stallOrphanESubject(m),

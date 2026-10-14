@@ -257,6 +257,19 @@ describe('tick hands its records to the lanes that would otherwise read the regi
   });
 });
 
+// Path identity, fix round 2 (spec §2.3; slug `tick-lanes-hold-a-refused-id`): the lanes on the tick that would read a
+// refused id's absence from `records` as a fact are each handed THIS tick's `registryRead.refused`, and hold it. Their
+// lane cases (`tick-refused-lanes.test.ts`) hand a lane the set directly, so a tick that stopped handing it, or handed
+// an empty set, would leave every one of them green. These pins see the hand-off itself.
+describe('tick hands this tick\'s refused set to the lanes that hold a refused id (tick-lanes-hold-a-refused-id)', () => {
+  const tickBody = (): string => tickBodyOf(tickCode(readFileSync(TICK_WATCH_TS, 'utf8')), TICK_HEAD);
+
+  it('tick() hands registryRead.refused to sweepStalls( on its StallTick', () => {
+    expect(tickBody(), 'tick no longer hands the stall lane its refused set: a refused worker or claimant would read as absent')
+      .toMatch(/\bthis\.sweepStalls\([^;]*\{[^}]*\brefused:\s*registryRead\.refused\s*\}/);
+  });
+});
+
 // PATH IDENTITY W1a, TASK 7 (spec §2.3). The three migrated readers and the three new reads carry their placed words,
 // and every production `assembleFleet(` call passes the rows it read, so `assembleFleet`'s own fallback read, tagged
 // `tests-only`, is reached by tests alone. A production call left at `undefined` would quietly bring back the fallback's

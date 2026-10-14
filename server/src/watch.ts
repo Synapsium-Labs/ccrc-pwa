@@ -300,6 +300,11 @@ interface StallResolution {
 export interface StallTick {
   readonly panePids: ReadonlyMap<string, number | null>;
   readonly records: readonly SessionRecord[];
+  /** The ids this tick's listing REFUSED (`RegistryRead.refused`, path identity spec §2.3): listed, never read or built,
+   *  so in no `records` and no `sessions`. A run worker or a claimant among them is held as unmeasured, never read as
+   *  absent: the lane composes no path or argv from it, takes no read about it and moves none of its clocks (slug
+   *  `tick-lanes-hold-a-refused-id`). */
+  readonly refused: ReadonlySet<string>;
 }
 
 /** The registry uuid the stall lane reads a marker and a hookstate against, off the tick's rows: `uuid: null` for no
@@ -312,6 +317,10 @@ interface StallLive { readonly live: LiveWordRead; readonly startedAt: number | 
 const STALL_HOOK_ASK_UNREAD: HookAskFact = { kind: 'unmeasured' };
 /** An identity the tick could not measure: the hookstate cannot be compared with it, so it is not read. */
 const STALL_RAW_UNMEASURED: HookStateRawRead = { ok: false, reason: 'unmeasured' };
+/** A turn marker this lane did not read (a refused id, `tick-lanes-hold-a-refused-id`): `unmeasured` says it was not
+ *  read, as `stallMarkRead` answers for an identity the tick could not measure. No verdict reaches it: each holds the
+ *  refused arm first. */
+const STALL_MARK_UNREAD: TurnMarkRead = { ok: false, reason: 'unmeasured' };
 
 /** The hookstate ask the run verdict's holds 2a and 2b read, projected from the ONE raw read
  *  (`readHookStateRawMeasured`). A foreign or unregistered file carries no ask of this session's. `absent` and
@@ -2286,10 +2295,12 @@ export class FleetWatcher {
       }
       // The stall watch (spec 2026-09-29 §4.2, §5) runs after the claim lanes, on THIS tick's `sessions`, its
       // registry listing (the listing carries the markers) and what this tick already measured: the pane pids
-      // `assembleFleet` read and the registry rows (`StallTick`), so the lane reads neither again. It is never
-      // awaited: its reads are async, so it cannot sit in the claim pair's synchronous try-block. It gates itself
-      // on `primed`, which is set below, so the priming tick never judges.
-      void this.sweepStalls(sessions, registryRead.names, { panePids, records }).catch(() => { /* one bad sweep must not kill the poll */ });
+      // `assembleFleet` read and the registry rows (`StallTick`), so the lane reads neither again. It is handed the
+      // listing's refused ids too, so a refused worker or claimant holds as unmeasured rather than reading as absent
+      // from `sessions` (`tick-lanes-hold-a-refused-id`). It is never awaited: its reads are async, so it cannot sit in
+      // the claim pair's synchronous try-block. It gates itself on `primed`, which is set below, so the priming tick
+      // never judges.
+      void this.sweepStalls(sessions, registryRead.names, { panePids, records, refused: registryRead.refused }).catch(() => { /* one bad sweep must not kill the poll */ });
       // NEVER awaited, same reasoning as `sweepDivergences`: each is a
       // handful of io reads per PROJECT, on an hourly / 15-minute clock.
       void this.sweepLedgerFloor(records).catch(() => { /* one bad sweep must not kill the poll */ });
@@ -5662,16 +5673,25 @@ export class FleetWatcher {
     const primary = subject.primary;
     const id = primary.sessionId;
     const s = sessions.find((x) => x.id === id);
-    this.stallSince(this.stallAbsentSince, id, s === undefined, now);
-    this.stallSince(this.stallDeadSince, id, s !== undefined && stallDeadShaped(s.lifecycle), now);
-    const ident = this.stallUuid(tick, id);
-    const lr = s === undefined ? null : await this.stallLiveRead(id, s.wrapper, tick);
-    const mark = await this.stallMarkRead(id, ident, lr);
-    this.stallMarkClock(id, ident, mark, now);
-    const raw = ident.ok
-      ? await readHookStateRawMeasured(this.deps.io, this.deps.cfg.registryDir, id, ident.uuid)
-      : STALL_RAW_UNMEASURED;
-    const worker = this.stallWorkerFor(store, s, lr, stallHookAskOf(raw));
+    // A worker id this tick's listing refused (`tick-lanes-hold-a-refused-id`) is in no `sessions`, and that is no
+    // measure of absence. The lane carries the fact and decides nothing: it composes no path or argv from the id, takes
+    // no live, marker or hookstate read, and moves none of its clocks, so each keeps its prior value. L1 holds the arm.
+    const refused = tick.refused.has(id);
+    let lr: StallLive | null = null;
+    let mark: TurnMarkRead = STALL_MARK_UNREAD;
+    let raw: HookStateRawRead = STALL_RAW_UNMEASURED;
+    if (!refused) {
+      this.stallSince(this.stallAbsentSince, id, s === undefined, now);
+      this.stallSince(this.stallDeadSince, id, s !== undefined && stallDeadShaped(s.lifecycle), now);
+      const ident = this.stallUuid(tick, id);
+      lr = s === undefined ? null : await this.stallLiveRead(id, s.wrapper, tick);
+      mark = await this.stallMarkRead(id, ident, lr);
+      this.stallMarkClock(id, ident, mark, now);
+      raw = ident.ok
+        ? await readHookStateRawMeasured(this.deps.io, this.deps.cfg.registryDir, id, ident.uuid)
+        : STALL_RAW_UNMEASURED;
+    }
+    const worker = this.stallWorkerFor(store, s, lr, stallHookAskOf(raw), refused);
     const runIds = subject.runs.map((r) => r.id);
     const read = store.stallMailFor(id, runIds, now - BACKLOG_HORIZON_MS);
     if (!read.ok) {
@@ -5723,11 +5743,18 @@ export class FleetWatcher {
   ): Promise<void> {
     const id = c.sessionId;
     const s = sessions.find((x) => x.id === id);
-    const ident = this.stallUuid(tick, id);
-    const lr = s === undefined ? null : await this.stallLiveRead(id, s.wrapper, tick);
-    const mark = await this.stallMarkRead(id, ident, lr);
-    this.stallMarkClock(id, ident, mark, now);
-    const worker = this.stallWorkerFor(store, s, lr, STALL_HOOK_ASK_UNREAD);
+    // A refused claimant id, as `judgeStall`'s refused worker (`tick-lanes-hold-a-refused-id`): no composed path, no
+    // live or marker read, and its marker clock keeps its prior value. Every session verdict below holds the arm.
+    const refused = tick.refused.has(id);
+    let lr: StallLive | null = null;
+    let mark: TurnMarkRead = STALL_MARK_UNREAD;
+    if (!refused) {
+      const ident = this.stallUuid(tick, id);
+      lr = s === undefined ? null : await this.stallLiveRead(id, s.wrapper, tick);
+      mark = await this.stallMarkRead(id, ident, lr);
+      this.stallMarkClock(id, ident, mark, now);
+    }
+    const worker = this.stallWorkerFor(store, s, lr, STALL_HOOK_ASK_UNREAD, refused);
     const read = store.stallMailFor(id, [], now - BACKLOG_HORIZON_MS);
     if (!read.ok) {
       console.warn(`ccrc-server: stall-watch coordinator ${id} mail unreadable (${read.kind}: ${read.detail}) — held this sweep`);
@@ -5766,7 +5793,8 @@ export class FleetWatcher {
     if (!mark.ok || !stallOrphanDCandidate(mark)) return;
     const s = sessions.find((x) => x.id === r.id);
     const lr = s === undefined ? null : await this.stallLiveRead(r.id, s.wrapper, tick);
-    const worker = this.stallWorkerFor(store, s, lr, STALL_HOOK_ASK_UNREAD);
+    // A row of `records` is never refused: the listing builds no refused row.
+    const worker = this.stallWorkerFor(store, s, lr, STALL_HOOK_ASK_UNREAD, false);
     const read = store.stallMailFor(r.id, [], now - BACKLOG_HORIZON_MS);
     if (!read.ok) {
       console.warn(`ccrc-server: stall-watch session ${r.id} mail unreadable (${read.kind}: ${read.detail}) — held this sweep`);
@@ -5815,8 +5843,10 @@ export class FleetWatcher {
 
   /** The session's facts. They come from this tick's fleet row, the live read and the hookstate ask; the two store
    *  reads are synchronous. A failed auto-continue read has no slot of its own: it is a failed store read, hold 1,
-   *  so it raises `unmeasured`. */
-  private stallWorkerFor(store: CoordStore, s: FleetSession | undefined, lr: StallLive | null, hookAsk: HookAskFact): StallWorker {
+   *  so it raises `unmeasured`. The one constructor of `StallWorker`: an id this tick's listing refused is its own
+   *  arm, built before the absent test and never folded into it (`tick-lanes-hold-a-refused-id`), with no store read. */
+  private stallWorkerFor(store: CoordStore, s: FleetSession | undefined, lr: StallLive | null, hookAsk: HookAskFact, refused: boolean): StallWorker {
+    if (refused) return { present: 'refused' };
     if (s === undefined || lr === null) return { present: false };
     const ask = store.currentAskFor(s.id);
     const askRow: AskRowFact = !ask.ok ? { kind: 'unmeasured' }

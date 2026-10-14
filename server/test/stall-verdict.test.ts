@@ -2024,3 +2024,46 @@ describe('dialog-cap-clock-ignores-inbound-mail (D-4040)', () => {
       .toEqual(capOf('limit-cap', RUN67_DISPATCHED));
   });
 });
+
+// Path identity, fix round 2 (spec §2.3; slug `tick-lanes-hold-a-refused-id`). A run's stored worker id that the
+// registry listing refused (listed, never read or built) reaches L1 as its own `StallWorker` arm, never as absent.
+// The lane reads nothing about it and moves none of its clocks, so the clocks it carries are a prior observation's:
+// here they are set past their thresholds by hand, which no lane case can do, so these rows are the ones the order
+// mutations red.
+describe('a refused worker id holds unmeasured, ahead of step (2a) and of every later step', () => {
+  const REFUSED: StallWorker = { present: 'refused' };
+  const pastBoth: Partial<StallW2Facts> = {
+    absentSince: NOW - DEAD_GRACE_MS, markUnreadableSince: NOW - MARKER_UNREADABLE_MS, deadSince: NOW - DEAD_GRACE_MS,
+  };
+
+  it.each([UNREADABLE, MALFORMED])('both clocks past their thresholds and a marker reading $reason: hold unmeasured', (mark) => {
+    expect(vw({ worker: REFUSED, arming: W2_LIVE }, { ...pastBoth, mark })).toEqual(hold('unmeasured'));
+    expect(vw({ worker: REFUSED }, { ...pastBoth, mark }), 'in the dark too').toEqual(hold('unmeasured'));
+  });
+
+  it('the absent clock alone past DEAD_GRACE_MS, with a marker that reads: hold unmeasured, never the dead arm', () => {
+    expect(vw({ worker: REFUSED, arming: W2_LIVE }, { absentSince: NOW - DEAD_GRACE_MS })).toEqual(hold('unmeasured'));
+    // CONTROL: the same facts on an absent worker are the dead arm.
+    expect(vw({ worker: { present: false }, arming: W2_LIVE }, { absentSince: NOW - DEAD_GRACE_MS }))
+      .toEqual(dead(RUN67_DISPATCHED, 'registry-absent'));
+  });
+
+  it('the marker clock alone past MARKER_UNREADABLE_MS: hold unmeasured, never the marker-unreadable push', () => {
+    expect(vw({ worker: REFUSED, arming: W2_LIVE }, { mark: MALFORMED, markUnreadableSince: NOW - MARKER_UNREADABLE_MS }))
+      .toEqual(hold('unmeasured'));
+    // CONTROL: the same facts on an absent worker push marker-unreadable (step (2a) precedes the absent hold).
+    expect(vw({ worker: { present: false }, arming: W2_LIVE }, { mark: MALFORMED, markUnreadableSince: NOW - MARKER_UNREADABLE_MS }))
+      .toEqual(w2Push('marker-unreadable', RUN67_DISPATCHED));
+  });
+
+  it('without the wave-2 facts it holds unmeasured too, and step (1) still comes first', () => {
+    expect(stallVerdict(stallInput({ worker: REFUSED }), NOW)).toEqual(hold('unmeasured'));
+    expect(vw({ worker: REFUSED, arming: W2_LIVE, primary: { state: 'unknown' } }, pastBoth)).toEqual(hold('run-unnamed'));
+  });
+
+  it('no rung, cap or report reaches a refused worker, whatever the mail says', () => {
+    const question = [mailRow(4001, NOW - 40 * H, WORKER, 'coordinator', 'question', 'which base?')];
+    expect(vw({ worker: REFUSED, arming: W2_LIVE }, pastBoth, NOW + 40 * H)).toEqual(hold('unmeasured'));
+    expect(vw({ worker: REFUSED, arming: W2_LIVE, mail: question }, pastBoth, NOW + 40 * H)).toEqual(hold('unmeasured'));
+  });
+});
