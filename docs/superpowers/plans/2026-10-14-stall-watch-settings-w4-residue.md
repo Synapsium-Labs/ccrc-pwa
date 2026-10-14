@@ -1658,9 +1658,11 @@ JF1 at floor 51 and at floor 52, and JF2 if taken (Task 2 Steps 2 and 4).
 - JF1 at floor 52 (the same mutation, at `22260db29`) → 1 failed (no jq program in ccd/session-hook.sh binds `as` to a binary chain; `AssertionError: jq programs found: expected 51 to be greater than or equal to 52`)
 - JF2 (`session-hook.sh` :3802-3810's `rsk=$(jq -r '…' <<<"$payload" 2>/dev/null) || rsk=""` → `rsk=""`, floor 52, at `22260db29`) → 1 failed (no jq program in ccd/session-hook.sh binds `as` to a binary chain; `AssertionError: jq programs found: expected 51 to be greater than or equal to 52`) in `session-hook-merge-deny.test.ts`; the same mutation also reds `session-hook-role-skill-deny.test.ts` → 9 failed of 19 (10 passed)
 
-### Task 3 (at `<commit>`)
+### Task 3 (at `6cabc4b86`)
 
 BS1 (Task 3 Step 5).
+
+- BS1 (`--depth === 0` → `--depth === -1` in the new `sliceTo`, at `6cabc4b86`) → 2 failed (CONTROL (R51 (c)): the slice ends at the handler's own closing brace, never on into what follows it; the stall-watch block, docstring included, and stallsettings.ts hold no device word) in `stall-settings-route.test.ts`; the first fires at `sliceTo`'s `expect(end, …)` (`AssertionError: app.post('/api/coord/stall-watch''s handler never closes — the slice would run on: expected -1 to be greater than -1`), because the planted handler never reaches depth -1; the second is the predicted spill, since on the real file the end moves to the enclosing function's brace and the block then holds the docstring's device word (`the stall-watch routes' prose names a device: expected '/** \`GET\`/\`POST /api/coord/stall-watc…' not to match /phone/i`); the other rows, including the two POST-handler device rows, stay green (37 passed of 39)
 
 ### Task 5 (at `<commit>`)
 
