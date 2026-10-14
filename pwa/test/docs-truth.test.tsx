@@ -127,7 +127,7 @@ describe('the truth line on every page with a listing (M4.T1)', () => {
     ['origin', 'origin', 'local-behind', { ahead: 3, behind: 0 }, "you asked for ws/a, showing origin's", 'origin is 3 ahead of local', 'info'],
     ['origin', 'origin', 'origin-only', { ahead: 2, behind: 3 }, "you asked for ws/a, showing origin's", 'only on origin', 'info'],
     ['local', 'local', 'unmeasured', { ahead: 2, behind: 3 }, 'you asked for ws/a, showing local', 'local vs origin not measured', 'info'],
-  ] as const)('via %s (%s served) with relation %s: the via sentence, then the relation (%s; %s; tone %s)',
+  ] as const)('via %s (%s served) with relation %s and counts %o: the via sentence (%s), then the relation (%s; tone %s)',
     (via, side, relation, counts, viaText, relationText, tone) => {
       const tree = withRef({
         requested: 'ws/a', via, relation, side,

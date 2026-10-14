@@ -161,7 +161,8 @@ export function longestLine(s: string): number {
  *  so in its label, its size in whole KiB of characters, rounded up; one within it that holds a longer word renders
  *  as plain text labelled with that word's length, and one with a longer line, labelled with that line's length
  *  (a block that trips both is labelled by its word). The size check comes first, so a block over the cap is never
- *  scanned. */
+ *  scanned. A block the page budget refuses (`highlight={false}`) is labelled by its size the same way, and is never
+ *  scanned either. */
 export function CodeBlock({ children, highlight }: { children?: ReactNode; highlight?: boolean }): ReactNode {
   const [copied, setCopied] = useState(false);
   const codeEl = React.Children.toArray(children).find(React.isValidElement) as
@@ -170,8 +171,12 @@ export function CodeBlock({ children, highlight }: { children?: ReactNode; highl
   const lang = (/language-([\w-]+)/.exec(codeEl?.props.className ?? '')?.[1] ?? '').toLowerCase();
   const label = LANG_LABEL[lang] ?? (lang || 'text');
   const raw = nodeText(children).replace(/\n$/, '');
-  const wanted = highlight !== false && Boolean(lang && hljs.getLanguage(lang));
+  const registered = Boolean(lang && hljs.getLanguage(lang));
+  const wanted = highlight !== false && registered;
   const overCap = wanted && raw.length > MD_HIGHLIGHT_BLOCK_MAX_CHARS;
+  // A block the page budget refuses is over the cap all the same, and says so (M4.H1); the size is read from the
+  // length alone, so a refused block is never scanned for a word or a line.
+  const refusedOverCap = registered && !wanted && raw.length > MD_HIGHLIGHT_BLOCK_MAX_CHARS;
   const word = wanted && !overCap ? longestWordRun(raw) : 0;
   const overWord = word > MD_HIGHLIGHT_MAX_WORD_CHARS;
   const line = wanted && !overCap ? longestLine(raw) : 0;
@@ -189,7 +194,7 @@ export function CodeBlock({ children, highlight }: { children?: ReactNode; highl
     <div className="code-block">
       <div className="code-block-bar">
         <span className="code-block-lang">
-          {overCap
+          {overCap || refusedOverCap
             ? `${label} · not highlighted (${Math.ceil(raw.length / 1024)} KiB)`
             : overWord ? `${label} · not highlighted (a ${word}-character word)`
               : overLine ? `${label} · not highlighted (a ${line}-character line)` : label}

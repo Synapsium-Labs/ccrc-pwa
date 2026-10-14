@@ -354,3 +354,35 @@ describe("W5 bound 2-2: the parse's element count includes the chips inline code
     expect(container.querySelectorAll('kbd')).toHaveLength(0);
   });
 });
+
+describe('T13 review 4-3: a block the page budget refuses labels itself by its size when it is over the cap', () => {
+  const big = 'const a = 1;\n'.repeat(5400);
+  const KIB = Math.ceil(big.replace(/\n$/, '').length / 1024);
+
+  it('highlight={false} over the cap reads "{label} · not highlighted ({KiB} KiB)", with no scan and no colour', () => {
+    expect(big.length).toBeGreaterThan(MD_HIGHLIGHT_BLOCK_MAX_CHARS);
+    const spy = spyHighlight();
+    const { container } = render(<CodeBlock highlight={false}><code className="language-ts">{big}</code></CodeBlock>);
+    expect(label(container)).toBe(`TypeScript · not highlighted (${KIB} KiB)`);
+    expect(spy).not.toHaveBeenCalled();
+    expect(container.querySelector('.hljs-keyword')).toBeNull();
+  });
+
+  it('highlight={false} within the cap keeps its plain label, and an unregistered language over it keeps its own', () => {
+    const small = render(<CodeBlock highlight={false}><code className="language-ts">{'const a = 1;'}</code></CodeBlock>);
+    expect(label(small.container)).toBe('TypeScript');
+    const other = render(<CodeBlock highlight={false}><code className="language-nosuchlang">{big}</code></CodeBlock>);
+    expect(label(other.container)).toBe('nosuchlang');
+  });
+
+  it('a refused block is never scanned for a word or a line, however long either is', () => {
+    const word = 'a'.repeat(MD_HIGHLIGHT_BLOCK_MAX_CHARS + 10);
+    spyHighlight();
+    const calls = vi.spyOn(String.prototype, 'charCodeAt');
+    const { container } = render(<CodeBlock highlight={false}><code className="language-ts">{word}</code></CodeBlock>);
+    const n = calls.mock.calls.length;
+    calls.mockRestore();
+    expect(label(container)).toBe(`TypeScript · not highlighted (${Math.ceil(word.length / 1024)} KiB)`);
+    expect(n).toBeLessThan(1000);
+  });
+});
