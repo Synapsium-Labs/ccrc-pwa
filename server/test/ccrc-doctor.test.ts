@@ -3681,6 +3681,49 @@ describe('ccrc doctor: transcripts', () => {
     expect(r.stdout).toContain('own registry row could not be read');
   });
 
+  it('a .uuid that is a DANGLING symlink is still a row — counted apart, never silently dropped (DR1, verifier D-V1)', () => {
+    // The loop's guard is `-e || -L`: `-e` alone follows the link, finds
+    // nothing, and the row vanished from the count — a PASS that says every
+    // row was measured over a row nobody looked at.
+    const home = healthy('ccrc-doctor-transcripts-dangling-uuid-');
+    seedAccountsSh(home, TRANSCRIPT_ROSTER);
+    linkReal(home, 'tail');
+    goodRow(home);
+    const reg = badRow(home);
+    rmSync(join(reg, 'sess-bad.uuid'));
+    symlinkSync(join(home, 'nowhere', 'gone.uuid'), join(reg, 'sess-bad.uuid'));
+    const r = runTranscripts(home);
+    expect(r.stdout).toMatch(/^PASS transcripts: 1 session\(s\) measured, 1 not measured/m);
+    expect(r.stdout).toContain('own registry row could not be read');
+    expect(r.stderr).toBe('');
+  });
+
+  it('a row whose .workdir is EMPTY is counted apart — not explained as an account swap (DR1, verifier D-V2)', () => {
+    const home = healthy('ccrc-doctor-transcripts-empty-workdir-');
+    seedAccountsSh(home, TRANSCRIPT_ROSTER);
+    linkReal(home, 'tail');
+    goodRow(home);
+    const reg = badRow(home);
+    writeFileSync(join(reg, 'sess-bad.workdir'), '');
+    const r = runTranscripts(home);
+    expect(r.stdout).toMatch(/^PASS transcripts: 1 session\(s\) measured, 1 not measured/m);
+    expect(r.stdout).toContain('own registry row could not be read');
+    expect(r.stdout, 'not the account-swap reason').not.toContain('at neither direct spelling');
+  });
+
+  it('a row whose wrapper the roster does not know is counted apart — not explained as an account swap (DR1, verifier D-V3)', () => {
+    const home = healthy('ccrc-doctor-transcripts-unknown-wrapper-');
+    seedAccountsSh(home, TRANSCRIPT_ROSTER);
+    linkReal(home, 'tail');
+    goodRow(home);
+    const reg = badRow(home);
+    writeFileSync(join(reg, 'sess-bad.wrapper'), 'claude-nosuch\n');
+    const r = runTranscripts(home);
+    expect(r.stdout).toMatch(/^PASS transcripts: 1 session\(s\) measured, 1 not measured/m);
+    expect(r.stdout).toContain('own registry row could not be read');
+    expect(r.stdout, 'not the account-swap reason').not.toContain('at neither direct spelling');
+  });
+
   it('a marker whose successor was never written is NOT called superseded — it is named apart, with a remedy that can clear it (DR2)', () => {
     // ccd declines such a hop (D-4942) and a resume stays on the row's own
     // transcript (D-4944), so "roll the fleet box forward" and "the next

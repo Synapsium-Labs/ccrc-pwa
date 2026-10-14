@@ -9,6 +9,7 @@ import { mkdirSync, writeFileSync, utimesSync, existsSync, readFileSync, symlink
 import { execSync, spawnSync } from 'node:child_process';
 import path from 'node:path';
 import { mungePath } from '../src/munge.js';
+import { eventsOf } from './lifecycleHelpers.js';
 
 let h: CcdHarness;
 beforeEach(() => { h = makeCcdHarness('sync-uuid'); });
@@ -1687,8 +1688,12 @@ describe('#189 round 2 (RR-2): the supervisor waits for a live background job, i
   });
 
   it('`ccd ensure` / `ccd start` say the supervisor is waiting, instead of timing out on a pane that is not coming', () => {
-    h.sh(`_reg_set ${ID} wrapper ${W}; _reg_set ${ID} bgwait "state=open job=${JOB} id=${C} since=1 wrapper=${W}"; _reg_set ${ID} supervised "$(date +%s)"`);
-    const out = h.sh(`SUPERVISED_START_WAIT=3; sleep() { echo slept >> "$HOME/ccd-calls"; }; _have_systemctl() { return 0; }; `
+    // The record is written by `_ci_bgwait_open` in the SAME shell that then
+    // polls: it names its supervisor, and that supervisor must still run for
+    // the wait to be reported (PR4, below).
+    h.sh(`_reg_set ${ID} wrapper ${W}`);
+    const out = h.sh(`_ci_bgwait_open ${ID} ${JOB} ${C} ${W} 2>/dev/null; _reg_set ${ID} supervised "$(date +%s)"; `
+      + `SUPERVISED_START_WAIT=3; sleep() { echo slept >> "$HOME/ccd-calls"; }; _have_systemctl() { return 0; }; `
       + '_svc_reset_failed() { :; }; _svc_enable_now() { return 0; }; _alive() { return 1; }; '
       + `{ _supervised_start ${ID}; echo "RC:$?"; } 2>&1`);
     expect(pick(out, 'RC')).toBe('1');
@@ -1697,8 +1702,11 @@ describe('#189 round 2 (RR-2): the supervisor waits for a live background job, i
   });
 
   it('a wait recorded by a supervisor that is no longer heartbeating is not reported', () => {
-    h.sh(`_reg_set ${ID} wrapper ${W}; _reg_set ${ID} bgwait "state=open job=${JOB} id=${C} since=1 wrapper=${W}"; _reg_set ${ID} supervised 1000`);
-    const out = h.sh(`SUPERVISED_START_WAIT=2; sleep() { :; }; _have_systemctl() { return 0; }; `
+    // Its supervisor still runs (the record names this very shell), so it is
+    // the HEARTBEAT that refuses here — a stalled supervisor, not a dead one.
+    h.sh(`_reg_set ${ID} wrapper ${W}`);
+    const out = h.sh(`_ci_bgwait_open ${ID} ${JOB} ${C} ${W} 2>/dev/null; _reg_set ${ID} supervised 1000; `
+      + `SUPERVISED_START_WAIT=2; sleep() { :; }; _have_systemctl() { return 0; }; `
       + '_svc_reset_failed() { :; }; _svc_enable_now() { return 0; }; _alive() { return 1; }; _svc_status_hint() { :; }; '
       + `{ _supervised_start ${ID}; echo "RC:$?"; } 2>&1`);
     expect(out).not.toContain('is waiting');
@@ -1896,5 +1904,231 @@ describe('#189 round 2 (RR-4): a read that failed is not measured — never "no 
     plantFailingJq(1);
     runSup(`${SUP_STUBS} __t=0; sleep() { __t=$((__t+1)); }; cmd_supervise ${ID}`);
     expect(h.calls().filter((c) => c.startsWith('ensure '))).toEqual([`ensure uuid=${C} tick=1`]);
+  });
+});
+
+// ── #189 review round 2, the verifier's gaps ──────────────────────────────────
+// Each guard the round-2 change added that nothing pinned (V1, V2, V3, V6, V7,
+// V9), the false "waiting" report (PR4), and the two residuals it found: a
+// pane read that keeps failing was re-read every tick, and a restore of a held
+// row left it unsupervised.
+
+/** A real binary's path, resolved outside the harness PATH (the shims below
+ *  exec it). */
+const realBin = (name: string): string => execSync(`command -v ${name}`, { shell: '/bin/bash', encoding: 'utf8',
+  env: { PATH: '/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin' } }).trim();
+
+/** A shim on the harness PATH that FAILS (exit 137, the OOM killer's) whenever
+ *  its arguments name `needle` — at most `times` times, or until
+ *  `$HOME/<name>-heal` exists — logging each failure, and is the real binary
+ *  otherwise. A failing `jq` drains its stdin first, as a killed one would
+ *  leave its pipe. */
+function plantFailingFor(name: string, needle: string, opts: { times?: number } = {}): void {
+  const real = realBin(name);
+  const bin = path.join(h.home, '.local', 'bin');
+  mkdirSync(bin, { recursive: true });
+  const log = path.join(h.home, `${name}-fails`);
+  const heal = path.join(h.home, `${name}-heal`);
+  const limit = opts.times === undefined ? ''
+    : `  n=0; [ -f "${log}" ] && n=$(grep -c x "${log}"); [ "$n" -ge ${opts.times} ] && exec ${real} "$@"\n`;
+  const drain = name === 'jq' ? 'cat >/dev/null; ' : '';
+  writeFileSync(path.join(bin, name),
+    `#!/bin/sh\ncase "$*" in *${needle}*)\n  [ -e "${heal}" ] && exec ${real} "$@"\n${limit}`
+    + `  echo x >> "${log}"; ${drain}exit 137 ;;\nesac\nexec ${real} "$@"\n`, { mode: 0o755 });
+}
+const failsOf = (name: string): number => {
+  const f = path.join(h.home, `${name}-fails`);
+  return existsSync(f) ? readFileSync(f, 'utf8').split('\n').filter(Boolean).length : 0;
+};
+
+describe('#189 round 2, verifier pins: every guard the wait and the three-way reads added', () => {
+  const clock = (act: string): string =>
+    `__t=0; sleep() { __t=$((__t+1)); echo "tick $__t" >> "$HOME/ccd-calls"; ${act} };`;
+
+  it('a supervisor restarted while the pane is LIVE (its agents view still open) supervises it — it does not wait for the job (V1)', () => {
+    // A deploy's try-restart lands while the pane still shows the agents view:
+    // the conversation's chain end is held by a live job, but the PANE is up.
+    // A supervisor that waited here would leave that live pane unsupervised —
+    // no _sync_uuid, no auto-swap, no compact — for the job's whole life.
+    row(h.home, A);
+    plant(h.home, A, `${turnLine('one')}${marker(A, C)}`);
+    plant(h.home, C, turnLine('two'));
+    h.sh(`_reg_set ${ID} started 1`);
+    const r = runSup(`systemctl() { :; }; launchctl() { :; }; _svc_enable() { :; };
+      __n=0; _session_probe() { __n=$((__n+1)); if (( __n <= 2 )); then PROBE_VERDICT=live; else PROBE_VERDICT=gone; fi; PROBE_DETAIL=""; };
+      _sync_uuid() { echo "sync tick=\${__t:-0}" >> "$HOME/ccd-calls"; }; _auto_stale_check() { :; }; _auto_swap_check() { :; }; _auto_compact_check() { :; }; _route_apply_check() { :; };
+      cmd_ensure() { echo "ensure tick=\${__t:-0}" >> "$HOME/ccd-calls"; };
+      command sleep 60 >/dev/null 2>&1 & w=$!; trap 'kill -9 $w 2>/dev/null' EXIT; ${bgRecord(C, JOB, '$w')}
+      ${clock('(( __t > 4 )) && { kill -9 $w; wait $w 2>/dev/null; };')}
+      cmd_supervise ${ID}`);
+    const calls = h.calls();
+    expect(calls.filter((c) => c.startsWith('ensure ')), r.err).toEqual(['ensure tick=0']);
+    expect(calls).toContain('sync tick=0');   // the live pane is supervised at once
+    expect(existsSync(path.join(h.home, '.cc-sessions', `${ID}.bgwait`))).toBe(false);
+  });
+
+  it('a `stat` of the pane’s pre-fork id that FAILS refuses it for that tick — not measured is not "let in" (V2)', () => {
+    // A restarted supervisor (no walk memory), the pane unparked on A, A
+    // superseded by C. The size/mtime stat is the stamp the verdict is keyed
+    // by; without it nothing was measured, so A is refused this tick.
+    row('/w', C);
+    plant('/w', A, `${turnLine('one')}${marker(A, C)}`);
+    plant('/w', C, turnLine('two'));
+    plantPane(paneRecord(A));
+    plantFailingFor('stat', `${A}.jsonl`, { times: 1 });
+    const out = h.sh(`${TMUX_PANE} _sync_uuid ${ID}; echo "T1:$(_reg_get ${ID} uuid)"; _sync_uuid ${ID}; echo "T2:$(_reg_get ${ID} uuid)"`);
+    expect(failsOf('stat')).toBe(1);
+    expect(pick(out, 'T1')).toBe(C);
+    expect(pick(out, 'T2')).toBe(C);
+  });
+
+  it('a pane id the walk remembers stays refused when its addresses cannot be resolved — an unreadable workdir is not "no transcript" (V3)', () => {
+    row('/w', A);
+    plant('/w', A, `${turnLine('one')}${marker(A, C)}`);
+    plant('/w', C, turnLine('two'));
+    plantPane(paneRecord(A));
+    const out = h.sh(`${TMUX_PANE} _sync_uuid ${ID}; _sync_uuid ${ID}; echo "HOP:$(_reg_get ${ID} uuid)"; `
+      + `rm -f "$REG/${ID}.workdir"; _sync_uuid ${ID}; echo "T3:$(_reg_get ${ID} uuid)"; _sync_uuid ${ID}; echo "T4:$(_reg_get ${ID} uuid)"`);
+    expect(pick(out, 'HOP')).toBe(C);
+    expect(pick(out, 'T3')).toBe(C);
+    expect(pick(out, 'T4')).toBe(C);
+  });
+
+  it('the failed-read backoff is keyed by the STAMP: a changed file is read at once, and its first failure counts from one (V6)', () => {
+    // jq fails on its first four calls. Ticks 2, 3 and 5 fail (the third
+    // failure puts the next read off for three ticks); then A changes (Claude
+    // Code re-stamps metadata after the marker — D-4940 steps over it), and the
+    // new stamp is read at tick 7 (fails: the fourth) and again at tick 8 —
+    // not after the OLD stamp's countdown, and not after a fourth-failure one.
+    row('/w', A);
+    const fA = plant('/w', A, `${turnLine('one')}${marker(A, B)}`);
+    plant('/w', B, turnLine('two'));
+    plantFailingJq(4);
+    const meta = JSON.stringify({ type: 'last-prompt', lastPrompt: 'go on', sessionId: A });
+    const out = h.sh(`${Array.from({ length: 5 }, () => `_sync_uuid ${ID}`).join('; ')}; echo "T5:$(_reg_get ${ID} uuid)"; `
+      + `printf '%s\\n' '${meta}' >> '${fA}'; `
+      + `_sync_uuid ${ID}; _sync_uuid ${ID}; echo "T7:$(_reg_get ${ID} uuid)"; _sync_uuid ${ID}; echo "T8:$(_reg_get ${ID} uuid)"`);
+    expect(pick(out, 'T5')).toBe(A);
+    expect(pick(out, 'T7')).toBe(A);
+    expect(jqCalls()).toBe(5);
+    expect(pick(out, 'T8')).toBe(B);
+  });
+
+  it('without /proc, the wait asks `ps` for the worker’s recorded procStart every tick — a recycled pid ends it (V7)', () => {
+    // The pid-reuse check on a box with no /proc compares the procStart the
+    // worker's record carried when the wait began with `ps -o lstart=` now.
+    // Here `ps` starts answering another start time at tick 3 — the pid has
+    // been handed to another process — and the wait ends there, not when the
+    // worker is finally killed at tick 8.
+    row(h.home, A);
+    plant(h.home, A, `${turnLine('one')}${marker(A, C)}`);
+    plant(h.home, C, turnLine('two'));
+    h.sh(`_reg_set ${ID} started 1`);
+    const T0 = 'Mon Jan  1 00:00:00 2024', T1 = 'Tue Jan  2 00:00:00 2024';
+    const bin = path.join(h.home, '.local', 'bin');
+    mkdirSync(bin, { recursive: true });
+    writeFileSync(path.join(bin, 'ps'), '#!/bin/sh\ncase "$*" in *lstart*)\n'
+      + `  if [ "\${__T:-0}" -ge 3 ]; then echo '${T1}'; else echo '${T0}'; fi; exit 0 ;;\nesac\nexec ${realBin('ps')} "$@"\n`, { mode: 0o755 });
+    runSup(`${SUP_STUBS} command sleep 60 >/dev/null 2>&1 & w=$!; trap 'kill -9 $w 2>/dev/null' EXIT; ${bgRecord(C, JOB, '$w', T0)}
+      _CI_PROC="$HOME/no-proc"
+      ${clock('export __T=$__t; (( __t == 8 )) && { kill -9 $w; wait $w 2>/dev/null; };')}
+      cmd_supervise ${ID}`);
+    expect(h.calls().filter((c) => c.startsWith('ensure '))).toEqual([`ensure uuid=${C} tick=3`]);
+  });
+
+  it('a CLOSED wait is never reported, even with its supervisor up and its heartbeat fresh — the pane is on its way (V9)', () => {
+    // The supervisor that closed the wait is the one now resuming the
+    // conversation (a long resume can take minutes before the pane is up).
+    h.sh(`_reg_set ${ID} wrapper ${W}`);
+    const out = h.sh(`_ci_bgwait_open ${ID} ${JOB} ${C} ${W} 2>/dev/null; _ci_bgwait_close ${ID} over ${C}; _reg_set ${ID} supervised "$(date +%s)"; `
+      + `SUPERVISED_START_WAIT=5; __n=0; _alive() { __n=$((__n+1)); (( __n >= 3 )); }; sleep() { :; }; _have_systemctl() { return 0; }; `
+      + '_svc_reset_failed() { :; }; _svc_enable_now() { return 0; }; '
+      + `{ _supervised_start ${ID}; echo "RC:$?"; } 2>&1`);
+    expect(h.reg(ID, 'bgwait')).toMatch(/^state=closed .*sup=\d+ /);
+    expect(out).not.toContain('is waiting');
+    expect(pick(out, 'RC')).toBe('0');
+  });
+
+  it('a wait left OPEN by a supervisor that was stopped is not reported on the NEXT supervisor’s first heartbeat (PR4)', () => {
+    // `ccd stop` mid-wait SIGTERMs the supervisor (KillMode=process, the wait
+    // has no trap): the record stays state=open. The job then ends, `ccd
+    // start` starts a new supervisor, and that one stamps `supervised` at its
+    // first line — long before its pre-flight closes the record. The pane
+    // comes up moments later; nothing holds the conversation.
+    h.sh(`_reg_set ${ID} wrapper ${W}`);
+    h.sh(`"$BASH" -c 'source "${CCD}"; _ci_bgwait_open ${ID} ${JOB} ${C} ${W}' 2>/dev/null`);   // a supervisor, now gone
+    expect(h.reg(ID, 'bgwait')).toMatch(/^state=open .*sup=\d+/);
+    const out = h.sh(`_reg_set ${ID} supervised "$(date +%s)"; `
+      + `SUPERVISED_START_WAIT=5; __n=0; _alive() { __n=$((__n+1)); (( __n >= 3 )); }; sleep() { :; }; _have_systemctl() { return 0; }; `
+      + '_svc_reset_failed() { :; }; _svc_enable_now() { return 0; }; '
+      + `{ _supervised_start ${ID}; echo "RC:$?"; } 2>&1`);
+    expect(out).not.toContain('is waiting');
+    expect(pick(out, 'RC')).toBe('0');
+  });
+
+  it('a supervisor restarted mid-wait takes the open record over — the onset kept, its own name written — and is reported (PR4)', () => {
+    h.sh(`_reg_set ${ID} wrapper ${W}`);
+    h.sh(`"$BASH" -c 'source "${CCD}"; _ci_bgwait_open ${ID} ${JOB} ${C} ${W}' 2>/dev/null`);
+    const since = /since=(\d+)/.exec(h.reg(ID, 'bgwait') ?? '')?.[1];
+    const out = h.sh(`_ci_bgwait_open ${ID} ${JOB} ${C} ${W} 2>/dev/null; echo "ME:$$"; _reg_set ${ID} supervised "$(date +%s)"; `
+      + `SUPERVISED_START_WAIT=3; sleep() { :; }; _have_systemctl() { return 0; }; `
+      + '_svc_reset_failed() { :; }; _svc_enable_now() { return 0; }; _alive() { return 1; }; '
+      + `{ _supervised_start ${ID}; echo "RC:$?"; } 2>&1`);
+    const rec = h.reg(ID, 'bgwait') ?? '';
+    expect(rec).toContain(`since=${since} `);
+    expect(rec).toContain(`sup=${pick(out, 'ME')} `);
+    expect(out).toContain(`background job ${JOB} holds conversation ${C}`);
+    expect(pick(out, 'RC')).toBe('1');
+    const log = readFileSync(path.join(h.home, '.cc-sessions', 'swap.log'), 'utf8');
+    expect(log.match(/ bgwait demo-quiet-basin:/g) ?? []).toHaveLength(1);   // one entry: the onset, not the take-over
+  });
+
+  it('a record naming a supervisor pid that another process now holds is not reported — the /proc start time decides (PR4)', () => {
+    const run = (supst: string): string => h.sh(`_CI_PROC="$HOME/proc"; mkdir -p "$HOME/proc/$$"; `
+      + `printf '%s (bash) S 1 1 1 0 -1 0 0 0 0 0 0 0 0 0 20 0 1 0 777 0 0\\n' $$ > "$HOME/proc/$$/stat"; `
+      + `_reg_set ${ID} bgwait "state=open job=${JOB} id=${C} since=1 wrapper=${W} sup=$$ supst=${supst}"; _reg_set ${ID} supervised "$(date +%s)"; `
+      + 'SUPERVISED_START_WAIT=2; sleep() { :; }; _have_systemctl() { return 0; }; _svc_reset_failed() { :; }; _svc_enable_now() { return 0; }; '
+      + `_alive() { return 1; }; _svc_status_hint() { :; }; { _supervised_start ${ID}; echo "RC:$?"; } 2>&1`);
+    h.sh(`_reg_set ${ID} wrapper ${W}`);
+    expect(run('12345')).not.toContain('is waiting');   // the pid answers, but it is not the process that wrote the record
+    expect(run('777')).toContain('is waiting');         // the same pid, the same start time: the supervisor itself
+  });
+
+  it('a box whose jq never works for the pane’s id re-reads it on a backoff, refusing it meanwhile — and a changed stamp is read at once (residual a)', () => {
+    // A restarted supervisor, the pane unparked on superseded A. Every read of
+    // A fails: it is refused each tick, and read at ticks 1, 2, 4 and 8 — not
+    // 10 times in 10 ticks. Then a finished turn lands in A (the session went
+    // on in it: D-4940 cancels the marker) and jq works again: the next tick
+    // reads the new stamp at once, and the pane writing A wins.
+    row('/w', C);
+    const fA = plant('/w', A, `${turnLine('one')}${marker(A, C)}`);
+    plant('/w', C, turnLine('two'));
+    plantPane(paneRecord(A));
+    plantFailingFor('jq', A);
+    const turn = (turnLine('back in the pane') + asst('ok')).replace(/'/g, "'\\''");
+    const out = h.sh(`${TMUX_PANE} ${Array.from({ length: 10 }, () => `_sync_uuid ${ID}`).join('; ')}; `
+      + `echo "T10:$(_reg_get ${ID} uuid) F10:$(grep -c x "$HOME/jq-fails")"; `
+      + `printf '%s' '${turn}' >> '${fA}'; : > "$HOME/jq-heal"; _sync_uuid ${ID}; echo "T11:$(_reg_get ${ID} uuid)"`);
+    expect(pick(out, 'T10')).toBe(C);
+    expect(pick(out, 'F10')).toBe('4');
+    expect(pick(out, 'T11')).toBe(A);
+  });
+
+  it('a ws-restore of a row whose conversation a live background job holds leaves it SUPERVISED — the wait takes over (residual b)', () => {
+    // `_spawn_start` declines (rc `_CI_HELD_RC`) after the archive stamps are
+    // already gone; the row used to end unarchived, paneless and unsupervised,
+    // with nothing to revive it when the job ended.
+    row(h.home, A);
+    plant(h.home, A, `${turnLine('one')}${marker(A, C)}`);
+    plant(h.home, C, turnLine('two'));
+    h.sh(`_reg_set ${ID} started 1; _reg_set ${ID} archived 1787000000; _reg_set ${ID} archivedreason test`);
+    const out = h.sh(`sleep() { :; }; ${TMUX_UP} _spawn_settle() { :; }; _ws_supervise() { echo "supervise $1" >> "$HOME/ccd-calls"; }; `
+      + `command sleep 60 >/dev/null 2>&1 & w=$!; ${bgRecord(C, JOB, '$w')} `
+      + `{ cmd_ws_restore --session ${ID}; echo "RC:$?"; } 2>&1; kill -9 $w`);
+    expect(pick(out, 'RC')).toBe(h.sh('echo $_CI_HELD_RC'));
+    expect(h.calls()).toContain(`supervise ${ID}`);
+    expect(spawnedArgs()).toEqual([]);
+    expect(existsSync(path.join(h.home, '.cc-sessions', `${ID}.archived`))).toBe(false);
+    expect(JSON.stringify(eventsOf(h.home, 'restore'))).toContain(`background job ${JOB} holds its conversation`);
   });
 });

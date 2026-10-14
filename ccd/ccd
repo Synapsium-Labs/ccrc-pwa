@@ -10519,12 +10519,19 @@ cmd_ws_restore() {   # ccd ws-restore --session <id> — undo an archive entirel
          "_compact_lock_acquire rc $_wr_grc (1 = contended, 2 = no flock mechanism);" \
          "if this row carries none, the restored pane's compaction lifecycle is inert until its next respawn" >&2
   fi
+  # A CONVERSATION A LIVE BACKGROUND JOB HOLDS (#189 review round 2, RR-2) is
+  # claimed and supervised too: `_spawn_start` spawned nothing (rc
+  # `_CI_HELD_RC`), and the archive stamps are already gone, so the row's
+  # supervisor waits for the job (`_ci_held_wait`) and resumes the
+  # conversation in a pane once it ends. Left as every other failed spawn is
+  # left, the row stayed unarchived, paneless and unsupervised, and nothing
+  # revived it when the job ended (the re-review's residual (b)). One claim
+  # site for both, as before.
   local rc=0
-  if _spawn_start "$id" resume; then
+  _spawn_start "$id" resume || rc=$?
+  if (( rc == 0 || rc == _CI_HELD_RC )); then
     _reg_claim "$id"
     _ws_supervise "$id"
-  else
-    rc=$?
   fi
   # GIVEN BACK BEFORE THE SETTLE, not merely before the verb answers. The reason
   # `cmd_ws_reap` gives at its own close applies unchanged (`flock` treats two
@@ -10549,8 +10556,10 @@ cmd_ws_restore() {   # ccd ws-restore --session <id> — undo an archive entirel
   # `_lc_refuse`: the archive stamps are already gone at ccd:5316, so calling
   # this a refusal would say nothing was touched, which is false. AFTER
   # ccd:5361's close, so it sits on no path that still holds the descriptor.
-  [[ "$rc" -eq 0 ]] || { _lc_fail restore "$id" "" spawn-failed \
-      "the archive stamps were removed but $id did not come back up (spawn rc $rc)" \
+  [[ "$rc" -eq 0 ]] || { local why="the archive stamps were removed but $id did not come back up (spawn rc $rc)"
+    (( rc == _CI_HELD_RC )) \
+      && why="the archive stamps were removed and $id is supervised, but background job $_CI_RESUME_HELD holds its conversation — its pane comes back when that job ends (spawn rc $rc)"
+    _lc_fail restore "$id" "" spawn-failed "$why" \
       dec.surface "$lc_surface" dec.actor "$lc_actor" dec.reason "$lc_reason"
     return "$rc"; }
   _spawn_settle "$id" "$SPAWN_FROMSWAP"; rc=$?
@@ -16071,9 +16080,36 @@ declare -A _CI_EXPECT=()  # id -> the uuid this function itself last placed ther
 declare -A _CI_PEND=()       # id -> the "$uuid:$st" whose hop DECLINED (successor absent or empty) — D-4942
 declare -A _CI_PENDNEXT=()   # id -> the successor that declined hop names
 declare -A _CI_PENDADDRS=()  # id -> where that successor's transcript can appear, one address per line
-declare -A _CI_UNREAD=()     # id -> "$uuid:$st n skip": a read of that stamp FAILED n times running; skip ticks left (RR-4)
+declare -A _CI_UNREAD=()     # slot -> "key n skip": a read of that key FAILED n times running; skip ticks left (RR-4)
+                             #   slots: "<id>" (the follow's read, key "$uuid:$st") and "pane:<id>" (the pane id's, key "$sid:$st")
 _CI_UNREAD_SKIP_CAP=63       # the longest a failing read is put off: 64 ticks, about five minutes
 _CI_WALK_CAP=16
+
+# A READ THAT KEEPS FAILING IS PUT OFF, NOT REPEATED EVERY TICK (RR-4, #189
+# review round 2). One backoff, two readers: `_follow_continued_in` (slot
+# `<id>`) and `_ci_pane_refused` (slot `pane:<id>`). The n-th consecutive
+# failure of a read of one KEY (the transcript's id and stamp) skips the next
+# 2^(n-1)-1 ticks, capped at `_CI_UNREAD_SKIP_CAP`: the first retry is
+# immediate, and a box that cannot read at all (no jq) settles to about one
+# read per five minutes per slot. KEYED BY THE STAMP, both ways: a changed file
+# is read at once (it is not put off by the old file's countdown), and its
+# first failure counts from one again. One entry per slot; builtins only.
+_ci_unread_put_off() {   # slot key -> rc 0 iff this tick's read of key is put off (one skip spent)
+  local ur="${_CI_UNREAD[$1]:-}" k n s
+  [[ -n "$ur" ]] || return 1
+  read -r k n s <<< "$ur"
+  [[ "$k" == "$2" ]] && (( s > 0 )) || return 1
+  _CI_UNREAD["$1"]="$k $n $((s - 1))"
+}
+
+_ci_unread_failed() {   # slot key -> one more consecutive failed read of key
+  local ur="${_CI_UNREAD[$1]:-}" k="" n=0 s=0
+  [[ -n "$ur" ]] && read -r k n s <<< "$ur"
+  [[ "$k" == "$2" ]] || n=0
+  (( n < 7 )) && n=$((n + 1))
+  s=$(( (1 << (n - 1)) - 1 )); (( s > _CI_UNREAD_SKIP_CAP )) && s=$_CI_UNREAD_SKIP_CAP
+  _CI_UNREAD["$1"]="$2 $n $s"
+}
 
 _ci_walk_has() {   # id uuid -> 0 iff uuid is already on id's current walk
   local id="$1" cand="$2" w
@@ -16262,7 +16298,7 @@ _follow_continued_in() {   # id cfg — one hop per tick, on a quiescence-gated 
   # stops a re-read of unchanged content, and `_CI_ORIGIN`/`_CI_WALK` stop a
   # cycle — unconditionally through the origin, or through the capped walk
   # for a shorter local repeat (see the comment above `_CI_LAST`).
-  local id="$1" cfg="$2" uuid pk addrs f st key prev done_key next sf msz mmt pend rc ur un us
+  local id="$1" cfg="$2" uuid pk addrs f st key prev done_key next sf msz mmt pend rc
   uuid=$(_reg_get "$id" uuid); [[ -n "$uuid" ]] || return 0
   # WALK-START DETECTION (M1, third review round). A registry uuid that does
   # not match what this function itself last placed there — a hop's
@@ -16319,28 +16355,14 @@ _follow_continued_in() {   # id cfg — one hop per tick, on a quiescence-gated 
     # the supervisor. A transient failure (a fork refused under memory
     # pressure, a jq the OOM killer took) is read again on the very next
     # quiescent tick. A failure that repeats (no jq on PATH) must not become a
-    # read on EVERY tick of every quiescent session for ever, so the n-th
-    # consecutive failure on one stamp skips the next 2^(n-1)-1 ticks, capped
-    # at `_CI_UNREAD_SKIP_CAP`: the first retry is immediate, and a box that
-    # cannot read at all settles to about one read per five minutes per row.
-    # The memo is one entry per id, keyed by the stamp it failed on, so a
-    # changed file starts over.
-    ur="${_CI_UNREAD[$id]:-}"
-    if [[ "${ur%% *}" == "$key" ]]; then
-      read -r _ un us <<< "$ur"
-      if (( us > 0 )); then _CI_UNREAD["$id"]="$key $un $((us - 1))"; return 0; fi
-    else
-      un=0
-    fi
+    # read on EVERY tick of every quiescent session for ever: it is put off on
+    # the backoff above (`_ci_unread_put_off`), keyed by the stamp it failed on,
+    # so a changed file is read at once and starts over.
+    _ci_unread_put_off "$id" "$key" && return 0
     unset "_CI_PEND[$id]" "_CI_PENDNEXT[$id]" "_CI_PENDADDRS[$id]"
     _ci_walk_add "$id" "$uuid"
     next=$(_continued_in_of "$f" "$uuid"); rc=$?
-    if (( rc == 2 )); then
-      (( un < 7 )) && un=$((un + 1))
-      us=$(( (1 << (un - 1)) - 1 )); (( us > _CI_UNREAD_SKIP_CAP )) && us=$_CI_UNREAD_SKIP_CAP
-      _CI_UNREAD["$id"]="$key $un $us"
-      return 0
-    fi
+    if (( rc == 2 )); then _ci_unread_failed "$id" "$key"; return 0; fi
     unset "_CI_UNREAD[$id]"
     _CI_DONE["$id"]="$key"
     [[ -n "$next" ]] || return 0
@@ -16421,8 +16443,15 @@ _follow_continued_in() {   # id cfg — one hop per tick, on a quiescence-gated 
 #     away has no marker left to read, and then memory is all that refuses it
 #     (F5) — but no longer once it is measured NOT superseded: the pane is
 #     writing it, and it wins, exactly as it does for a fresh supervisor;
-#   - a read that FAILED (rc 2, RR-4) refuses for this tick and remembers
-#     nothing, so the next tick reads again.
+#   - a read that FAILED (rc 2, RR-4) refuses for this tick and remembers no
+#     verdict. The next tick reads again; a read that keeps failing on one
+#     stamp is put off on the follow's own backoff (`_ci_unread_put_off`, slot
+#     `pane:<id>`), still refused while it is put off, and a changed stamp is
+#     read at once. So a box whose reads never work (no jq — `ccrc doctor`
+#     FAILs that) pays about one read per five minutes here, not one per tick;
+#     and what it cannot read it keeps refusing: a pane `/resume X` there
+#     reaches the registry only once a read of X succeeds (a residual, stated
+#     in D-4943 — on such a box the chain is not followed either).
 # COST: one stat pair per tick, and only on a row whose UNPARKED pane disagrees
 # with the registry — a parked pane (the shape a 2.1.296 left-arrow fork
 # leaves) is refused before any of this, with builtins, and a pane that agrees
@@ -16453,8 +16482,10 @@ _ci_pane_refused() {   # id cfg recfile sid -> 0 iff the pane's sid must not rea
   msz=$(_plat_size -- "$f" 2>/dev/null) && mmt=$(_plat_mtime -- "$f" 2>/dev/null) || return 0   # not measured: this tick only
   st="$sid:$msz:$mmt"
   [[ "${_CI_PANE_DEAD[$id]:-}" == "$st" ]] && return 0   # measured superseded at this very stamp
+  _ci_unread_put_off "pane:$id" "$st" && return 0        # a read of this stamp keeps failing: refused, not re-read
   next=$(_continued_in_of "$f" "$sid"); rc=$?
-  (( rc == 2 )) && return 0                              # not measured: refused this tick, remembered never (RR-4)
+  if (( rc == 2 )); then _ci_unread_failed "pane:$id" "$st"; return 0; fi   # not measured: refused, no verdict kept (RR-4)
+  unset "_CI_UNREAD[pane:$id]"
   if [[ -n "$next" ]]; then _CI_PANE_DEAD["$id"]="$st"; return 0; fi
   unset "_CI_PANE_DEAD[$id]"
   return 1   # measured NOT superseded: whatever the walk remembers, the pane is writing this one
@@ -16847,10 +16878,15 @@ _ci_resume_follow() {   # id cfg -> the chain's last WRITTEN id into the registr
   # back on the conversation as it stood before the fork, beside the fork still
   # running in the daemon.
   #
-  # ONLY A WRITTEN ID REACHES THE REGISTRY (RR-1): `_ci_chain_end` never ends
-  # on an unwritten successor, so nothing here can name one — the hook's
-  # pane-less fallback and the server's stream never see an id with no
-  # conversation behind it (that also moots the server's SV-2 window).
+  # NO UNWRITTEN FORK SUCCESSOR REACHES THE REGISTRY (RR-1): `_ci_chain_end`
+  # never ends on one, so nothing here can name one, and neither does any
+  # other writer of a successor (the per-tick hop and `_ci_bg_follow` both
+  # require a transcript with a line in it) — so the hook's pane-less fallback
+  # and the server's stream never see a fork successor with no conversation
+  # behind it (that moots the server's SV-2 window). This is a claim about
+  # SUCCESSORS only: the id a `/clear` mints in the pane is written at once,
+  # before its first line, by design (D-4943 — it is a rotation the pane
+  # announced, not a fork the chain inferred).
   #
   # A CONVERSATION A LIVE BACKGROUND JOB HOLDS, MEASURED IN THE 2.1.296
   # BINARY: an interactive `--resume <id>` first lists live sessions, and when
@@ -16961,12 +16997,46 @@ _ci_hold_live() {   # pid pstart procstart -> 0 iff the worker the wait pinned s
   [[ -z "$got" || "$got" == "$want" ]]
 }
 
+# THE RECORD NAMES THE SUPERVISOR THAT WROTE IT (`sup=<pid> supst=<start>`) —
+# the re-review's PR4. `ccd stop` mid-wait SIGTERMs the supervisor (the unit's
+# KillMode=process; the wait has no trap), so the record stays `state=open`;
+# a supervisor killed any other way (OOM, a deploy's restart) leaves it the
+# same. A reader that paired an open record with a fresh heartbeat alone then
+# took the NEXT supervisor's first heartbeat — stamped at its first line, long
+# before its pre-flight re-asks the job — for this wait, and `ccd start` said
+# "its supervisor is waiting" about a job that had ended. So `_supervised_start`
+# reports a wait only while the supervisor named in it still runs
+# (`_ci_bgwait_owner_live`: `kill -0`, plus the `/proc` start time where there
+# is one, so a recycled pid is not it), and a supervisor that takes over an
+# open wait — restarted mid-wait — writes its own name into it.
+_CI_SUPME=""   # `_ci_sup_me`'s out-parameter: "sup=<this supervisor's pid> supst=<its /proc start time, or empty>"
+
+_ci_sup_me() {   # -> _CI_SUPME set for the shell that runs the wait
+  _ci_proc_start "$$" || _CI_PSTART=""
+  _CI_SUPME="sup=$$ supst=$_CI_PSTART"
+}
+
+_ci_bgwait_owner_live() {   # bgwait-record -> 0 iff the supervisor that wrote it still runs
+  local p
+  p=$(_rw_field "$1" sup)
+  [[ "$p" =~ ^[1-9][0-9]*$ ]] || return 1
+  _ci_hold_live "$p" "$(_rw_field "$1" supst)" ""
+}
+
 _ci_bgwait_open() {   # id job hid wrapper -> record the wait ONCE: a supervisor restarted mid-wait keeps its onset
   local id="$1" job="$2" hid="$3" w="$4" rec now
+  _ci_sup_me
   rec=$(_reg_get "$id" bgwait)
-  [[ "$(_rw_field "$rec" state)" == open && "$(_rw_field "$rec" job)" == "$job" ]] && return 0
+  if [[ "$(_rw_field "$rec" state)" == open && "$(_rw_field "$rec" job)" == "$job" ]]; then
+    # THIS WAIT, CONTINUING: nothing new to say. Under a supervisor that was
+    # restarted mid-wait, the onset is kept and the record takes the new
+    # supervisor's name — no second swap.log entry.
+    [[ "$(_rw_field "$rec" sup)" == "$$" && "$(_rw_field "$rec" supst)" == "$_CI_PSTART" ]] && return 0
+    _reg_set "$id" bgwait "state=open job=$job id=$hid since=$(_rw_field "$rec" since) wrapper=$w $_CI_SUPME" || true
+    return 0
+  fi
   printf -v now '%(%s)T' -1
-  _reg_set "$id" bgwait "state=open job=$job id=$hid since=$now wrapper=$w" || true
+  _reg_set "$id" bgwait "state=open job=$job id=$hid since=$now wrapper=$w $_CI_SUPME" || true
   echo "$(date '+%F %T') bgwait $id: background job $job holds $hid — no pane until it ends ($w attach $job opens it; $w stop $job ends it)" >> "$REG/swap.log"
   echo "ccd: $id: background job $job holds conversation $hid — waiting for it, not spawning ($w attach $job opens it there; $w stop $job ends it, and this session resumes here)" >&2
 }
@@ -16979,7 +17049,8 @@ _ci_bgwait_close() {   # id end-word uuid -> RECORDED ONCE ON EXIT; a no-op unle
   job=$(_rw_field "$rec" job); hid=$(_rw_field "$rec" id); since=$(_rw_field "$rec" since); w=$(_rw_field "$rec" wrapper)
   [[ "$since" =~ ^[0-9]+$ ]] || since=0
   printf -v now '%(%s)T' -1
-  _reg_set "$id" bgwait "state=closed job=$job id=$hid since=$since wrapper=$w until=$now end=$end" || true
+  _ci_sup_me
+  _reg_set "$id" bgwait "state=closed job=$job id=$hid since=$since wrapper=$w $_CI_SUPME until=$now end=$end" || true
   echo "$(date '+%F %T') bgwait-end $id: job=$job after $((now - 10#$since))s end=$end resuming=$3" >> "$REG/swap.log"
 }
 
@@ -23593,11 +23664,15 @@ _supervised_start() {   # id — ask the UNIT to spawn, then WAIT for an observa
     # THE SUPERVISOR IS WAITING FOR A BACKGROUND JOB (RR-2, `_ci_held_wait`):
     # no pane is coming until that job ends, so say so now rather than time
     # out in thirty seconds with "no pane appeared". Read only while the
-    # supervisor's heartbeat is fresh — a wait recorded by a supervisor that
-    # has since been killed is not one.
+    # supervisor's heartbeat is fresh AND the supervisor the record names
+    # still runs (`_ci_bgwait_owner_live`) — a wait recorded by a supervisor
+    # that has since been stopped or killed is not one, and the heartbeat alone
+    # cannot say so: a NEW supervisor stamps it at its first line, before its
+    # pre-flight has asked whether the job still holds anything (PR4).
     if [[ -e "$REG/$id.bgwait" ]]; then
       bw=$(_reg_get "$id" bgwait); sup=$(_reg_get "$id" supervised); printf -v now '%(%s)T' -1
-      if [[ "$(_rw_field "$bw" state)" == open && "$sup" =~ ^[0-9]+$ ]] && (( now - sup >= 0 && now - sup < 120 )); then
+      if [[ "$(_rw_field "$bw" state)" == open && "$sup" =~ ^[0-9]+$ ]] && (( now - sup >= 0 && now - sup < 120 )) \
+         && _ci_bgwait_owner_live "$bw"; then
         echo "ccd: $id: its supervisor is waiting — background job $(_rw_field "$bw" job) holds conversation $(_rw_field "$bw" id); the pane comes back on its own when that job ends ($(_rw_field "$bw" wrapper) attach $(_rw_field "$bw" job) opens it there; $(_rw_field "$bw" wrapper) stop $(_rw_field "$bw" job) ends it)" >&2
         return 1
       fi
