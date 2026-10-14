@@ -672,7 +672,7 @@ describe('T13 review 4-1: the relation sentence speaks of local against origin, 
     ['local-behind', 'local', { ahead: 0, behind: 3 }, 'origin is 3 ahead of local'],
     ['local-behind', 'origin', { ahead: 3, behind: 0 }, 'origin is 3 ahead of local'],
     ['diverged', 'local', { ahead: 2, behind: 3 }, 'local and origin have diverged (2 vs 3), showing local'],
-    ['diverged', 'origin', { ahead: 3, behind: 2 }, 'local and origin have diverged (2 vs 3), showing local'],
+    ['diverged', 'origin', { ahead: 3, behind: 2 }, "local and origin have diverged (2 vs 3), showing origin's"],
   ] as const)('%s with %s served and counts %o reads %s', (relation, side, counts, text) => {
     const tree = withRef({
       requested: 'ws/a', served: side === 'local' ? 'refs/heads/ws/a' : 'refs/remotes/origin/ws/a', name: 'ws/a', side,
@@ -690,5 +690,24 @@ describe('T13 review 4-1: the relation sentence speaks of local against origin, 
     });
     head('/docs/demo?ref=ws/a', tree);
     expect(q('.docs-truth-relation').textContent).not.toMatch(/\d/);
+  });
+});
+
+describe('Review 439 F6: the diverged sentence names the side that is served', () => {
+  const diverged = (side: 'local' | 'origin'): DocsTreeOk => withRef({
+    requested: 'ws/a', served: side === 'local' ? 'refs/heads/ws/a' : 'refs/remotes/origin/ws/a', name: 'ws/a', side,
+    via: 'qualified', relation: 'diverged',
+    counterpart: { ref: side === 'local' ? 'refs/remotes/origin/ws/a' : 'refs/heads/ws/a', commit: COMMIT_B, ahead: 2, behind: 3, count: 'measured' },
+  });
+
+  it('with local served it ends "showing local"', () => {
+    head('/docs/demo?ref=ws/a', diverged('local'));
+    expect(q('.docs-truth-relation').textContent).toBe('local and origin have diverged (2 vs 3), showing local');
+  });
+
+  it("with origin served it ends \"showing origin's\", and the counts keep local's lead first", () => {
+    head('/docs/demo?ref=refs/remotes/origin/ws/a', diverged('origin'));
+    expect(q('.docs-truth-relation').textContent).toBe("local and origin have diverged (3 vs 2), showing origin's");
+    expect(q('.docs-truth-relation').getAttribute('data-tone')).toBe('warn');
   });
 });

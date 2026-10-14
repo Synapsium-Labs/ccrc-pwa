@@ -117,7 +117,9 @@ export const VIA_SENTENCE: Record<DocsTreeOk['ref']['via'], string> = {
   'qualified': 'exactly the ref you asked for',
 };
 
-/** Local against origin (spec 4.5, verbatim; `{ahead}` and `{behind}` are the counterpart's counts). */
+/** Local against origin (spec 4.5, verbatim; `{ahead}` is local's lead over origin and `{behind}` is origin's lead
+ *  over local, whichever side is served: the truth line swaps ccd's served-side counts before filling them). The one
+ *  departure is `diverged` with origin served, which is `RELATION_DIVERGED_ORIGIN_SENTENCE` (see `relationSentence`). */
 export const RELATION_SENTENCE: Record<DocsTreeOk['ref']['relation'], string> = {
   'equal': 'local and origin agree',
   'local-only': 'not on origin',
@@ -127,6 +129,15 @@ export const RELATION_SENTENCE: Record<DocsTreeOk['ref']['relation'], string> = 
   'diverged': 'local and origin have diverged ({ahead} vs {behind}), showing local',
   'unmeasured': 'local vs origin not measured',
 };
+
+/** `diverged` when the origin side is served (a qualified `refs/remotes/origin/<b>`): the same sentence, ending with
+ *  the side the page is showing, in the words `VIA_SENTENCE.origin` uses. */
+export const RELATION_DIVERGED_ORIGIN_SENTENCE = "local and origin have diverged ({ahead} vs {behind}), showing origin's";
+
+/** The relation sentence for the side that is served: only `diverged` names the side it shows. */
+export function relationSentence(relation: DocsTreeOk['ref']['relation'], side: DocsTreeOk['ref']['side']): string {
+  return relation === 'diverged' && side === 'origin' ? RELATION_DIVERGED_ORIGIN_SENTENCE : RELATION_SENTENCE[relation];
+}
 
 /** The one badge text, for rows and leaf headers alike (spec 4.6: `draft · modified`, `draft · new`). */
 export const ENTRY_BADGE_TEXT: Record<EntryBadge, string> = {

@@ -17,8 +17,8 @@ import { useMediaQuery } from '../lib/useMediaQuery';
 import { useNow } from '../lib/useNow';
 import { docsLocation } from './docsLinks';
 import {
-  DOCS_HEAD_TEXT, ENTRY_BADGE_TEXT, GITHUB_REFUSAL_TEXT, RELATION_SENTENCE, VIA_SENTENCE,
-  failureSentence, fillSentence, kib, servedRefText, shortCommit, slotSentence, worktreeLabel,
+  DOCS_HEAD_TEXT, ENTRY_BADGE_TEXT, GITHUB_REFUSAL_TEXT, VIA_SENTENCE,
+  failureSentence, fillSentence, kib, relationSentence, servedRefText, shortCommit, slotSentence, worktreeLabel,
 } from './docsText';
 import { SECTION_LABEL, docsPathKind } from './docsTree';
 import { DocsPageLink } from './DocsTreeView';
@@ -320,7 +320,7 @@ function TruthLine(p: {
         <>
           {SEP}
           <span className="docs-truth-relation" data-tone={ref.relation === 'diverged' ? 'warn' : 'info'}>
-            {fillSentence(RELATION_SENTENCE[ref.relation], counts)}
+            {fillSentence(relationSentence(ref.relation, ref.side), counts)}
           </span>
         </>
       )}
