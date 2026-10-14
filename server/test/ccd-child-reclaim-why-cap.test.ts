@@ -42,7 +42,8 @@ const printableThenMark = (s: string): void => {
 };
 
 describe('_ws_reclaim_normalise: every reason it sets is one capped line', () => {
-  it('rc 1 (an entry still unreadable after the pass) — the session-chosen name is cut, the rc unchanged', () => {
+  // APFS rejects non-UTF-8 names (EILSEQ); the Linux run covers this.
+  it.skipIf(process.platform === 'darwin')('rc 1 (an entry still unreadable after the pass) — the session-chosen name is cut, the rc unchanged', () => {
     const { wt } = makeChild(h);
     const locked = lockedUnder(wt);
     try {
@@ -55,7 +56,8 @@ describe('_ws_reclaim_normalise: every reason it sets is one capped line', () =>
     } finally { fs.chmodSync(locked, 0o755); }
   }, 60_000);
 
-  it.each([
+  // APFS rejects non-UTF-8 names (EILSEQ); the Linux run covers this.
+  it.skipIf(process.platform === 'darwin').each([
     ['the pass ran out of time (124)', 124],
     ['the pass did not run to the end (125)', 125],
   ] as const)('rc 2, %s — a long directory path is cut too', (_what, code) => {
@@ -72,7 +74,8 @@ describe('_ws_reclaim_normalise: every reason it sets is one capped line', () =>
 });
 
 describe('the ladder’s refusal row keeps its verb and its decision (spec §5.9)', () => {
-  it('tree-unreadable over a session-chosen name: verb, dec.actor and detail survive, uncut by the encoder', () => {
+  // APFS rejects non-UTF-8 names (EILSEQ); the Linux run covers this.
+  it.skipIf(process.platform === 'darwin')('tree-unreadable over a session-chosen name: verb, dec.actor and detail survive, uncut by the encoder', () => {
     const { wt } = makeChild(h);
     const locked = lockedUnder(wt);
     try {
@@ -102,7 +105,8 @@ describe('rung 8’s reason for git’s silence is one capped line too (spec §5
   // live verb journals that reason as its failed probe-unmeasured row: raw, the encoder would drop `verb` and `dec.*`.
   /** git's list prints no record, the shape an unreadable admin entry makes, stubbed at its one reader. */
   const LIST_OMITS = '_ws_reclaim_record() { RECLAIM_REC_BRANCH=; RECLAIM_REC_HEAD=; RECLAIM_REC_MAIN=0; RECLAIM_REC_PRUNABLE=0; return 1; };';
-  it.each([
+  // APFS rejects non-UTF-8 names (EILSEQ); the Linux run covers this.
+  it.skipIf(process.platform === 'darwin').each([
     ['the present arm (the tree stands)', false],
     ['the vanished arm (the tree is gone)', true],
   ] as const)('%s: an admin entry named by the session, its gitdir unreadable — verb, dec and a cut detail survive', (_arm, gone) => {
