@@ -586,13 +586,23 @@ const sourcesUnder = (dir: string): string[] =>
 const ROUTES_SRC = (): string => readFileSync(path.join(srcRoot, 'coord', 'routes.ts'), 'utf8');
 const POST_DECL = "app.post('/api/coord/stall-watch'";
 const DOC_ANCHOR = '/** `GET`/`POST /api/coord/stall-watch`';
-/** From `from` to the next route registration after `decl`. Fails loudly on a missing anchor. */
+/** From `from` to the closing brace of the handler `decl` registers, never on to the next registration: a helper
+ *  declared between the two (`composeChildReclaim`, or another route's helpers) is not the handler. Braces are
+ *  counted on `blankCommentsAndStrings` of the text from `decl` on, so a brace in a comment or a string never moves
+ *  the end. Fails loudly on a missing anchor or a body that never closes. */
 const sliceTo = (raw: string, from: number, decl: string): string => {
   const at = raw.indexOf(decl);
   expect(at, `${decl} is gone — this scan is over nothing`).toBeGreaterThan(-1);
   expect(from, 'the slice starts after the registration it must cover').toBeLessThanOrEqual(at);
-  const next = /app\.(?:get|post)\('/.exec(raw.slice(at + decl.length));
-  return raw.slice(from, next === null ? raw.length : at + decl.length + next.index);
+  const flat = blankCommentsAndStrings(raw.slice(at));
+  let depth = 0;
+  let end = -1;
+  for (let i = flat.indexOf('{'); i >= 0 && i < flat.length && end < 0; i++) {
+    if (flat[i] === '{') depth += 1;
+    else if (flat[i] === '}' && --depth === 0) end = i;
+  }
+  expect(end, `${decl}'s handler never closes — the slice would run on`).toBeGreaterThan(-1);
+  return raw.slice(from, at + end + 1);
 };
 const postHandler = (raw: string): string => sliceTo(raw, raw.indexOf(POST_DECL), POST_DECL);
 const stallWatchBlock = (raw: string): string => {
@@ -608,6 +618,18 @@ describe('M29: the handler never branches on the device label, and the new prose
     const body = stripComments(postHandler(ROUTES_SRC()));
     expect(body.length).toBeGreaterThan(400);
     expect(body.split('deviceActor(sessionAuth(req).device)').length - 1).toBe(1);
+  });
+
+  it('CONTROL (R51 (c)): the slice ends at the handler\'s own closing brace, never on into what follows it', () => {
+    const planted = "app.get('/api/coord/stall-watch', a);\napp.post('/api/coord/stall-watch', async () => {\n"
+      + "  const s = '}';\n  // }\n  if (x) { w(); }\n});\nconst below = () => s.setStallSettings(r);\napp.get('/api/runs', b);\n";
+    expect(postHandler(planted), 'a brace in a string or a comment, or a helper below, moved the end')
+      .toBe("app.post('/api/coord/stall-watch', async () => {\n  const s = '}';\n  // }\n  if (x) { w(); }\n}");
+    const real = postHandler(ROUTES_SRC());
+    expect(real, 'the real slice ends at the handler\'s last statement and its brace')
+      .toMatch(/return reply\.code\(200\)\.send\(\{ ok: true, \.\.\.stallWatchView\([^\n]*\);\n\s*\}$/);
+    expect(real.slice(POST_DECL.length), 'the real slice holds no later registration')
+      .not.toMatch(/app\.(?:get|post)\('/);
   });
 
   it('with that one call removed, no device token is left in the POST handler', () => {
