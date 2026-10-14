@@ -373,11 +373,8 @@ export function useDocsVisit(page: DocsPageLocation | null, loaders: DocsLoaders
       st.freshness.set(key, fresh);
       return;
     }
-    // The fetch happened whatever the listing's order: the chip says so. A listing older than the one the slot
-    // holds is not applied (a GET that started before this answer arrived).
-    if (!isNewest(key, seq)) {
-      st.freshness.set(key, { s: 'answered', fetch, at: now });
-    } else if (tree.ok) {
+    // This answer's number was taken on arrival, so it is newer than every number the slot holds: no order check.
+    if (tree.ok) {
       setTreeOk(key, seq, tree);
       releaseRelistWaiters(key);
       st.freshness.set(key, { s: 'answered', fetch, at: now });
