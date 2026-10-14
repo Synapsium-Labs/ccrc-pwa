@@ -1,99 +1,87 @@
 // What the chat list believes a row costs before it has measured one — learned
-// from this browser's own transcripts rather than guessed once in the source.
+// from this browser's own rows rather than guessed once in the source.
 //
 // WHY IT CANNOT BE A CONSTANT. Virtuoso needs a height for every item it has
 // not measured, and the total it reports — the scrollbar — is built from those
 // numbers. Get them wrong and the thumb lies, then corrects as real heights
 // arrive, dragging the scroll position with it.
 //
-// WHY IT CANNOT BE ONE NUMBER PER ROW KIND EITHER, which is what this module
-// held until 2026-09-28. The chat shows the last `BACKLOG_N = 50` events, so
-// the list is about three dozen rows — there is no averaging to hide behind.
-// Measured in a real browser on one live session: 18 tool cards at a flat 62px,
-// 3 dividers at 35px, and 8 assistant turns running from 40px to 1413px. Eight
-// rows of thirty-five carried 76% of the list's height, with a 35x spread
-// INSIDE that one kind. A mean of that population describes none of its
-// members, and which member turns up in the last fifty events is a property of
-// the session, not of the kind.
+// WHY IT CANNOT BE ONE NUMBER PER ROW KIND EITHER. The chat shows the last
+// `BACKLOG_N = 50` events, so the list is about three dozen rows — there is no
+// averaging to hide behind. Measured in a real browser on one live session: 18
+// tool cards at a flat 62px, 3 dividers at 35px, and 8 assistant turns running
+// from 40px to 1413px. Eight rows of thirty-five carried 76% of the list's
+// height, with a 35x spread INSIDE that one kind. A mean of that population
+// describes none of its members.
 //
 // SO THE MODEL IS A LINE, not a number: `px = a + b * lines`, one pair per
-// kind, both learned. The predictor is the row's own text, which the list holds
-// at mount, before anything is rendered. Cross-validated in a headless browser
-// across four live sessions from two projects (2026-09-28) — trained on one
-// session, asked about another it had never seen:
+// kind. The predictor is what the row SHOWS — its prose, or the one row a
+// folded card or a collapsed tool call draws whatever it carries — which the
+// list knows at mount, before anything is rendered. The slope is a property of
+// the RENDERING (font, measure, line height), so it carries from session to
+// session, which a mean never could.
 //
-//     per-kind MEAN   total off by 24% on average, each row by 85-321px
-//     per-kind LINE   total off by  5% on average, each row by   9- 35px
+// WHAT IS REMEMBERED IS THE EVIDENCE, NOT THE LINE: the most recent measured
+// rows of each kind, as `(lines, px)` pairs — never any text. The line is
+// fitted from them, robustly, whenever the list opens. Two things follow that a
+// stored line could not do:
 //
-// and every one of the twelve train/test pairs improved. The slope is a
-// property of the RENDERING — font, measure, line height — so it carries from
-// session to session, which is exactly what a mean could never do.
+//   - A kind that turns up once or twice a visit (the asks in a tool-heavy
+//     session) accumulates rows ACROSS visits until there are enough to fit,
+//     instead of freezing whatever constant its first one or two rows implied.
+//   - One odd row — an opened card, a turn measured mid-render — is outvoted
+//     by its neighbours rather than bending the least-squares line for the
+//     whole kind.
 
-/** Used only until this browser has measured anything at all. */
+/** Used for any kind this browser has not measured enough of. */
 export const FALLBACK_ITEM_HEIGHT = 96;
 
-/** The band a LEGACY SCALAR must land in — see `clampHeight`. */
-export const MIN_ITEM_HEIGHT = 40;
-export const MAX_ITEM_HEIGHT = 600;
+/** What one row of attachment thumbnails costs before any has been measured:
+ *  `.msg-attach-img { max-height: 220px }`, the CSS's own cap. A screenshot is
+ *  usually tall enough to hit it; the measured term replaces it from then on. */
+export const THUMB_ROW_PX = 220;
 
 /** The band a per-row ESTIMATE lands in.
  *
  *  THE CEILING IS A SANITY BOUND ON A CORRUPTED MODEL, NOT A BELIEF ABOUT
- *  ROWS, and it is set high for a reason paid for twice. The old band capped a
- *  row at 600px, which quietly halved every long turn. Raising it to 4000
- *  looked generous and was measured, in a browser, to be the ENTIRE remaining
- *  error on one session: a single assistant turn of 396 nominal lines really
- *  renders 7728px, the model predicted 7291px — a 6% miss — and the ceiling
- *  threw away 3291px of it, turning a 5% estimate into a 34% one. A ceiling
- *  that trims a correct prediction is not a guard. What remains here only
- *  refuses arithmetic nobody could mean.
+ *  ROWS, and it is set high for a reason paid for twice. A 600px band quietly
+ *  halved every long turn, and a 4000px one was measured, in a browser, to be
+ *  the ENTIRE remaining error on one session: a single assistant turn of 396
+ *  nominal lines really renders 7728px, the model predicted 7291px — a 6% miss
+ *  — and the ceiling threw away 3291px of it. A ceiling that trims a correct
+ *  prediction is not a guard. What remains here only refuses arithmetic nobody
+ *  could mean.
  *
  *  The floor is what a divider costs (35px, measured) with room to spare. */
 export const MIN_ROW_PX = 16;
 export const MAX_ROW_PX = 50_000;
 
-/** The slope's band: pixels per nominal line. It cannot sensibly exceed a few
- *  text lines' worth; measured values are 0 (a collapsed tool card, whose
- *  height ignores its content) to ~23 (a user bubble, `white-space: pre-wrap`).
- *
- *  THE INTERCEPT HAS NO BAND OF ITS OWN — it is held to the ROW band, which is
- *  wide. A tighter ceiling was tried and removed the same day: a visit that
- *  measures one row of a kind cannot see a slope, so the whole of that row's
- *  height lands in the intercept, and a 900px measurement clamped to 600 is the
- *  exact lie this change exists to remove. A measurement is not clamped away
- *  because it is inconvenient; the later visit that can see a slope moves it. */
+/** The slope's band: pixels per nominal line. Measured values run from 0 (a
+ *  row whose height ignores its content) to a few tens (a user bubble). */
 export const MAX_PX_PER_LINE = 200;
 
-/** How much of a fresh visit's fit is allowed to move the remembered one.
- *  Blended rather than replaced: one atypical session — a long tool-only run,
- *  a single enormous report — should nudge the model, not seize it. */
-const BLEND = 0.3;
+/** A kind needs this many measured rows before it is priced from them at all.
+ *  One or two rows are not a kind: a single 50-line report at 1413px, taken as
+ *  the kind's constant, priced every later two-line reply at 1413px. Below
+ *  this the kind keeps the fallback, and its rows wait in the record for more. */
+export const MIN_FIT_ROWS = 3;
 
-/** A fit needs this many measured rows before it is allowed to claim a slope,
- *  and their lengths must differ by at least this much (variance, in nominal
- *  lines squared). Below either, the visit has said nothing about the slope and
- *  the one already learned is kept — see `fitRowModel`. */
-const MIN_FIT_ROWS = 3;
-const MIN_LINE_VARIANCE = 1;
+/** How many measured rows of each kind the record keeps — the newest. */
+export const RESERVOIR_ROWS = 30;
 
-const KEY = 'ccrc:chat-item-height';
+/** How many rows one visit may add to a kind. A third of the record: one
+ *  atypical session — a long tool-only run, one enormous report — NUDGES the
+ *  fit rather than seizing it, and a changed rendering is learned in about
+ *  three visits as its rows displace the oldest. */
+export const VISIT_ROWS = 10;
 
-/** The per-bucket record. A SECOND key rather than a rewrite of the first: a
- *  browser that rolls back to an older build must keep working, and the oldest
- *  build reads a scalar from `KEY`.
- *
- *  This key now holds `{a, b}` pairs where it used to hold bare numbers. Both
- *  shapes are READ (a bare number is an intercept with no slope), so an upgrade
- *  keeps everything this browser had learned. A ROLLBACK is the other
- *  direction: the previous build reads `Number({a,b})` as NaN, discards it and
- *  falls back to the scalar guess — it renders exactly as it did before this
- *  key existed, which is a cost worth naming and not a break. */
-const KINDS_KEY = 'ccrc:chat-item-heights';
+/** The record: `{ [kind]: [[lines, px], …] }`, newest last. */
+export const ROWS_KEY = 'ccrc:chat-row-samples';
 
-/** `localStorage` throws outright in some privacy modes, and a thumbnailer or
- *  a preview frame can hand back a store that refuses writes. Every access here
- *  goes through this, and every failure means "nothing remembered" — the list
- *  renders identically, just with the fallback. */
+/** `localStorage` throws outright in some privacy modes — on merely being
+ *  named — and a thumbnailer or a preview frame can hand back a store that
+ *  refuses writes. Every access goes through this, and every failure means
+ *  "nothing remembered": the list renders identically, with the fallback. */
 function store(): Storage | null {
   try {
     return typeof localStorage === 'undefined' ? null : localStorage;
@@ -102,37 +90,32 @@ function store(): Storage | null {
   }
 }
 
-export function clampHeight(px: number): number {
-  return Math.min(MAX_ITEM_HEIGHT, Math.max(MIN_ITEM_HEIGHT, Math.round(px)));
-}
-
 const clampRow = (px: number): number =>
   Math.min(MAX_ROW_PX, Math.max(MIN_ROW_PX, Math.round(px)));
+const clampIntercept = (a: number): number =>
+  Math.min(MAX_ROW_PX, Math.max(0, a));
+const clampSlope = (b: number): number =>
+  Math.min(MAX_PX_PER_LINE, Math.max(0, b));
 
 /**
- * THE PREDICTOR: how many lines of the nominal measure this text would take.
+ * THE PREDICTOR for a row drawn as MARKDOWN (an assistant turn): how many lines
+ * of the nominal measure this text would take.
  *
  * It is deliberately NOT a pixel count. The three rules below are shape, drawn
  * from this tree's own CSS; the conversion from shape to pixels is the slope,
- * and the slope is measured in the browser that will do the rendering. That
- * split is what lets one constant here be wrong by a factor and cost nothing —
- * the slope absorbs it — while a hard-coded pixel would simply be wrong.
+ * and the slope is measured in the browser that will do the rendering.
  *
  *   1. A line shorter than the measure is ONE line. Raw character count gets
  *      this catastrophically wrong: a ten-item list is ten lines, not one
  *      sixth of one.
  *   2. A table row does not WRAP however wide it is, because `.md-table-wrap`
- *      scrolls sideways (`overflow-x: auto`). It is taller than a line of
- *      prose, though, and by a ratio the tokens state outright: a cell is set
- *      in `--text-sm` at `--leading-normal` with `--sp-2` above and below, so
- *      (13 x 1.5 + 8 + 8) / (15 x 1.5) = 1.58 — `TABLE_ROW_LINES`. Counting it
- *      as one line under-measured a table-heavy session by 15%, and this ratio
- *      is what brought four live sessions from 19.7-22.1 px per nominal line
- *      to 18.9-19.3 — the same rendering, finally described the same way.
+ *      scrolls sideways. It is taller than a line of prose, by a ratio the
+ *      tokens state outright: a cell is `--text-sm` at `--leading-normal` with
+ *      `--sp-2` above and below, so (13 x 1.5 + 8 + 8) / (15 x 1.5) = 1.58.
+ *      Counting it as one line under-measured a table-heavy session by 15%.
  *   3. A fenced block SATURATES, because `.msg-assist pre` caps at
  *      `--well-max` (240px) and scrolls inside itself. `WELL_LINES` is that
- *      cap expressed in this function's own unit: 240px over a ~24px text
- *      line. A thousand-line diff and a twelve-line one cost the same.
+ *      cap in this function's own unit: 240px over a ~24px text line.
  */
 export const NOMINAL_MEASURE = 60;
 export const WELL_LINES = 10;
@@ -140,9 +123,7 @@ export const TABLE_ROW_LINES = 1.58;
 
 export function nominalLines(text: string): number {
   const body = String(text ?? '');
-  // No text is no lines. Not one: a row with nothing in it has no prose to
-  // price, and `''.split()` answering with a single empty line would teach the
-  // fit that such a row costs a line's worth of pixels.
+  // No text is no lines: a row with nothing in it has no prose to price.
   if (body === '') return 0;
   let lines = 0;
   let inFence = false;
@@ -164,49 +145,55 @@ export function nominalLines(text: string): number {
   return lines;
 }
 
-/** What the OLD single-number build left in this browser, or null if it left
- *  nothing usable. Absent and unusable fold together here on purpose — both
- *  mean "nothing learned" and there is no caller that treats them apart — but
- *  neither folds into a NUMBER, because "never learned" and "learned 96" are
- *  two conditions `openingHeight`'s caller answers differently. */
-function learnedScalar(s: Storage | null): number | null {
-  const raw = (() => { try { return s?.getItem(KEY) ?? null; } catch { return null; } })();
-  if (raw === null) return null;
-  const n = Number(raw);
-  // A corrupted or hand-edited value is not a reason to render badly.
-  return Number.isFinite(n) && n > 0 ? clampHeight(n) : null;
+/** The predictor for text drawn AS IT IS, `white-space: pre-wrap` — a user
+ *  bubble, a pill. No Markdown happens there, so nothing saturates: a pasted
+ *  fence is every one of its lines, and a `|` line is a line. */
+export function plainLines(text: string): number {
+  const body = String(text ?? '');
+  if (body === '') return 0;
+  let lines = 0;
+  for (const line of body.split('\n')) lines += Math.max(1, Math.ceil(line.trimEnd().length / NOMINAL_MEASURE));
+  return lines;
 }
 
-/** The best available GUESS for a kind nobody has measured. Read ONCE per mount
- *  by the caller: virtuoso takes its opening number at initialisation, so
- *  changing it later changes nothing and only risks re-running the initial
- *  positioning. */
-export function rememberedHeight(s: Storage | null = store()): number {
-  return learnedScalar(s) ?? FALLBACK_ITEM_HEIGHT;
+/** The predictor for a `pre.well`: it neither wraps (it scrolls sideways) nor
+ *  grows past `--well-max` (it scrolls inside itself). */
+export function wellLines(text: string): number {
+  const body = String(text ?? '');
+  return body === '' ? 0 : Math.min(body.split('\n').length, WELL_LINES);
 }
 
 /**
- * THE POPULATION A ROW BELONGS TO, for sizing.
+ * THE POPULATION A ROW BELONGS TO, for sizing — by the FORM it renders in.
  *
  * `message` splits by its event kind because a user turn and an assistant turn
- * are the two ends of the distribution. Every other member is its own
- * `ChatItem` kind.
+ * are the two ends of the distribution, and every other `ChatItem` kind is its
+ * own population. `folded` is the one bucket that is a form rather than a kind:
+ * a /compact recap and a multi-line system row both render as one collapsed
+ * card, whoever said them and however long they are, so they are one
+ * population of fixed-height rows.
+ *
+ * `attach` prices no row of its own. It is a TERM: a row of attachment
+ * thumbnails above a user bubble, measured off the grid's own element and
+ * added to the bubble's estimate, so a screenshot neither looks like a line of
+ * text nor teaches the user bucket that three lines cost 300px.
  *
  * THE RECORD IS THE VOCABULARY. `HEIGHT_BUCKETS` derives from it rather than
- * restating it, so a new `ChatItem` kind is a compile error here and not a
- * silently unsized row — the rule `single-definition.test.ts` enforces across
- * this tree.
+ * restating it, so a new bucket is a compile error here, not an unsized row.
  */
-export type HeightBucket =
-  | 'user' | 'assistant' | 'system'
+export type RowKind =
+  | 'user' | 'assistant' | 'system' | 'folded'
   | 'divider' | 'tool' | 'mail' | 'task' | 'pending' | 'working';
+export type HeightBucket = RowKind | 'attach';
 
 const BUCKET_MAP: Record<HeightBucket, true> = {
-  user: true, assistant: true, system: true,
+  user: true, assistant: true, system: true, folded: true,
   divider: true, tool: true, mail: true, task: true, pending: true, working: true,
+  attach: true,
 };
 
 export const HEIGHT_BUCKETS = Object.keys(BUCKET_MAP) as HeightBucket[];
+const isBucket = (k: string): k is HeightBucket => Object.hasOwn(BUCKET_MAP, k);
 
 /** What a row of one kind costs: `px = a + b * lines`. */
 export interface RowModel { a: number; b: number }
@@ -214,100 +201,76 @@ export interface RowModel { a: number; b: number }
 /** One measured row: what it was predicted to be worth, and what it cost. */
 export interface RowSample { lines: number; px: number }
 
-/** A row the list is about to show, before anything has rendered. */
-export interface RowShape { bucket: HeightBucket; lines: number }
+/** A row the list is about to show, before anything has rendered. `attach` is
+ *  the rows of attachment thumbnails above it (0 or absent: none). */
+export interface RowShape { bucket: RowKind; lines: number; attach?: number }
 
 export type RowModels = Record<HeightBucket, RowModel | null>;
 
-/** What this browser has learned, per kind, or null where it has learned
- *  nothing. A bare number is what an older build wrote: an intercept with no
- *  slope, which prices rows exactly as that build did until the first visit
- *  measures a slope. */
-export function rememberedModels(s: Storage | null = store()): RowModels {
-  const raw = (() => { try { return s?.getItem(KINDS_KEY) ?? null; } catch { return null; } })();
-  const saved: Record<string, unknown> = (() => {
-    if (raw === null) return {};
-    try {
-      const v: unknown = JSON.parse(raw);
-      return v !== null && typeof v === 'object' ? v as Record<string, unknown> : {};
-    } catch { return {}; }
-  })();
+/** What this browser remembers: the newest measured rows of each kind. */
+export type RowRecord = Record<HeightBucket, readonly RowSample[]>;
+
+const isSample = (s: RowSample): boolean =>
+  Number.isFinite(s.px) && s.px > 0 && Number.isFinite(s.lines) && s.lines >= 0;
+
+function median(xs: number[]): number {
+  const v = [...xs].sort((p, q) => p - q);
+  const mid = v.length >> 1;
+  return v.length % 2 === 1 ? v[mid]! : (v[mid - 1]! + v[mid]!) / 2;
+}
+
+/**
+ * Fit the line to measured rows — ROBUSTLY (Theil–Sen): the slope is the
+ * median of the slopes between every pair of rows of different length, and
+ * the intercept the median of what is left over. Its breakdown point is about
+ * 29%: fewer wrong rows than that cannot drag the line arbitrarily far. Least
+ * squares, which this replaced, let ONE row decide it: six asks at ~28px/line plus one folded
+ * recap (262 lines of text, 47px on screen) fitted `{a: 633, b: 0}`, and every
+ * ask, one line or fifty, was priced at 633px. Measured in a browser.
+ *
+ * FEWER THAN `MIN_FIT_ROWS` ROWS ARE NO MODEL — null, and the kind keeps the
+ * fallback. Rows that are all one length cannot show a slope, and say what
+ * they can: a level, `b = 0`.
+ *
+ * A FALLING SLOPE IS REFUSED, and what is left is the LEVEL of the rows — the
+ * median of what they measured. More text cannot make a row shorter, and the
+ * intercept that belonged to the falling line sits above every row that was
+ * measured, so it is not kept. (Review 191, F4.)
+ *
+ * A NEGATIVE INTERCEPT IS REFUSED BY REFITTING THROUGH THE ORIGIN, not by
+ * clamping: a fit is a pair, and clamping `a` while keeping the slope computed
+ * FOR a negative one leaves a line that misses its own data — measured, it put
+ * every assistant row ~40px low. The robust line through the origin is the
+ * median of `px / lines`.
+ */
+export function fitRowModel(samples: readonly RowSample[]): RowModel | null {
+  const rows = samples.filter(isSample);
+  if (rows.length < MIN_FIT_ROWS) return null;
+  const slopes: number[] = [];
+  for (let i = 0; i < rows.length; i += 1) {
+    for (let j = i + 1; j < rows.length; j += 1) {
+      const dx = rows[j]!.lines - rows[i]!.lines;
+      if (dx !== 0) slopes.push((rows[j]!.px - rows[i]!.px) / dx);
+    }
+  }
+  const free = slopes.length === 0 ? 0 : median(slopes);
+  if (!(free > 0)) return { a: clampIntercept(median(rows.map((r) => r.px))), b: 0 };
+  const b = clampSlope(free);
+  const a = median(rows.map((r) => r.px - b * r.lines));
+  if (a >= 0) return { a: clampIntercept(a), b };
+  const ratios = rows.filter((r) => r.lines > 0).map((r) => r.px / r.lines);
+  return { a: 0, b: clampSlope(ratios.length === 0 ? 0 : median(ratios)) };
+}
+
+/** Every kind's line, fitted from the record. Run once per mount. */
+export function modelsOf(record: RowRecord): RowModels {
   const out = {} as RowModels;
-  for (const b of HEIGHT_BUCKETS) out[b] = readModel(saved[b]);
+  for (const b of HEIGHT_BUCKETS) out[b] = fitRowModel(record[b]);
   return out;
 }
 
-function readModel(v: unknown): RowModel | null {
-  if (typeof v === 'number') {
-    return Number.isFinite(v) && v > 0 ? { a: clampIntercept(v), b: 0 } : null;
-  }
-  if (v === null || typeof v !== 'object') return null;
-  const { a, b } = v as { a?: unknown; b?: unknown };
-  const na = Number(a);
-  const nb = Number(b);
-  if (!Number.isFinite(na) || na < 0) return null;
-  return { a: clampIntercept(na), b: Number.isFinite(nb) ? clampSlope(nb) : 0 };
-}
-
-const clampIntercept = (a: number): number =>
-  Math.min(MAX_ROW_PX, Math.max(0, a));
-const clampSlope = (b: number): number =>
-  Math.min(MAX_PX_PER_LINE, Math.max(0, b));
-
-/**
- * Fit the line to what this visit measured.
- *
- * A VISIT THAT CANNOT SEE THE SLOPE KEEPS THE ONE IT WAS GIVEN, and only
- * re-seats the intercept so the line passes through what it did measure. This
- * is the difference between a model that accumulates and one that is wiped by
- * the next thin session: a visit whose rows happen to be all the same length
- * has said nothing about how height grows with text, and discarding a measured
- * slope on that silence is treating silence as evidence. Measured against four
- * live sessions, the degenerate case is common — a chat that is nearly all tool
- * cards has too few turns of any other kind to fit anything.
- *
- * A NEGATIVE SLOPE IS REFUSED rather than stored. More text cannot make a row
- * shorter; a fit that says so is noise, and the clamp turns it into "this kind
- * does not grow with its text", which is the true statement nearby.
- */
-export function fitRowModel(
-  samples: readonly RowSample[],
-  prior: RowModel | null,
-): RowModel | null {
-  let n = 0, sx = 0, sy = 0, sxx = 0, sxy = 0;
-  for (const { lines, px } of samples) {
-    // Virtuoso reports a size of 0 for an item it has not measured yet, and
-    // folding those in would drag every model toward zero on a fast scroll.
-    if (!Number.isFinite(px) || px <= 0) continue;
-    if (!Number.isFinite(lines) || lines < 0) continue;
-    n += 1; sx += lines; sy += px; sxx += lines * lines; sxy += lines * px;
-  }
-  if (n === 0) return null;
-  const mx = sx / n;
-  const my = sy / n;
-  const spread = sxx - n * mx * mx;   // n * variance of the predictor
-  if (!(n >= MIN_FIT_ROWS && spread >= n * MIN_LINE_VARIANCE)) {
-    // Nothing here can see a slope. Keep the one already learned and re-seat
-    // the intercept through what this visit did measure.
-    const b = clampSlope(prior?.b ?? 0);
-    return { a: clampIntercept(my - b * mx), b };
-  }
-  const free = (sxy - n * mx * my) / spread;
-  const at = my - free * mx;
-  // A NEGATIVE INTERCEPT IS REFUSED BY REFITTING, not by clamping. A row
-  // cannot cost less than nothing, but a fit is a pair: clamping `a` to zero
-  // while keeping the slope that was computed FOR a negative one leaves a line
-  // that no longer passes through its own data, and the bias is systematic —
-  // measured in a browser, it put every assistant row ~40px low. The honest
-  // answer under the constraint is the least-squares line THROUGH THE ORIGIN.
-  const b = clampSlope(at >= 0 ? free : (sxx === 0 ? 0 : sxy / sxx));
-  return { a: clampIntercept(at >= 0 ? at : 0), b };
-}
-
 /** What one row is believed to cost. A kind with no model takes the caller's
- *  GUESS — the scalar an older build left, or the shipped fallback. It is
- *  substituted HERE, at the render, and never written back, so it can never be
- *  mistaken for evidence. */
+ *  GUESS; it is substituted here, at the render, and never stored. */
 export function estimateRow(
   model: RowModel | null,
   lines: number,
@@ -315,6 +278,14 @@ export function estimateRow(
 ): number {
   if (model === null) return unmeasured;
   return clampRow(model.a + model.b * Math.max(0, lines));
+}
+
+/** One row's estimate: its own kind's line, plus its thumbnails' term. */
+export function estimateShape(shape: RowShape, models: RowModels, unmeasured: number): number {
+  const body = estimateRow(models[shape.bucket] ?? null, shape.lines, unmeasured);
+  const thumbs = shape.attach ?? 0;
+  if (!(thumbs > 0)) return body;
+  return clampRow(body + estimateRow(models.attach, thumbs, thumbs * THUMB_ROW_PX));
 }
 
 /** Every row's own estimate, in order — what the list seeds virtuoso with, so
@@ -325,7 +296,7 @@ export function rowHeights(
   unmeasured: number,
 ): number[] {
   const out: number[] = [];
-  for (const r of rows) out.push(estimateRow(models[r.bucket] ?? null, r.lines, unmeasured));
+  for (const r of rows) out.push(estimateShape(r, models, unmeasured));
   return out;
 }
 
@@ -344,58 +315,81 @@ export function openingHeight(
   return clampRow(px.reduce((a, b) => a + b, 0) / px.length);
 }
 
+const emptyRecord = (): Record<HeightBucket, RowSample[]> => {
+  const out = {} as Record<HeightBucket, RowSample[]>;
+  for (const b of HEIGHT_BUCKETS) out[b] = [];
+  return out;
+};
+
+/** The record as it stands. A row that is not a well-formed `[lines, px]`
+ *  pair is dropped, a kind that is not an array is empty, and a refused or
+ *  corrupted store is an empty record — never a throw: a hand-edited value is
+ *  not a reason to render badly. */
+export function rememberedRows(s: Storage | null = store()): RowRecord {
+  const out = emptyRecord();
+  const raw = (() => { try { return s?.getItem(ROWS_KEY) ?? null; } catch { return null; } })();
+  if (raw === null) return out;
+  let saved: unknown;
+  try { saved = JSON.parse(raw); } catch { return out; }
+  if (saved === null || typeof saved !== 'object' || Array.isArray(saved)) return out;
+  for (const [k, v] of Object.entries(saved as Record<string, unknown>)) {
+    if (!isBucket(k) || !Array.isArray(v)) continue;
+    const rows: RowSample[] = [];
+    for (const pair of v) {
+      if (!Array.isArray(pair) || pair.length !== 2) continue;
+      const [lines, px] = pair as unknown[];
+      if (typeof lines !== 'number' || typeof px !== 'number') continue;
+      const row = { lines, px };
+      if (isSample(row)) rows.push(row);
+    }
+    out[k] = rows.slice(-RESERVOIR_ROWS);
+  }
+  return out;
+}
+
+/** At most `n` of a visit's rows, chosen to SPAN its lengths rather than to be
+ *  whichever it saw first — the slope lives in the spread. */
+function spread(rows: readonly RowSample[], n: number): RowSample[] {
+  if (rows.length <= n) return [...rows];
+  const sorted = [...rows].sort((p, q) => p.lines - q.lines || p.px - q.px);
+  return Array.from({ length: n }, (_, i) => sorted[Math.round((i * (sorted.length - 1)) / (n - 1))]!);
+}
+
 /**
- * Fold this visit's fits into what is remembered — ONCE per visit, however many
+ * Add this visit's measured rows to the record — ONCE per visit, however many
  * times this is called.
  *
- * THE BASELINE IS A PARAMETER, and that is the whole point. The blend is meant
- * to let one atypical session nudge the model rather than seize it, and the
- * previous wiring broke that guarantee without touching the arithmetic: the
- * list saved every 25 new samples, so a 200-item visit blended eight times and
- * took 94% of the distance instead of 30%. Blending from the value this VISIT
- * opened with makes every save land in the same place, so saving early — which
- * exists for the tab that is closed without running cleanup — stops being a
- * second vote.
+ * THE BASELINE IS A PARAMETER, and that is the whole point. The list saves
+ * whenever the page is hidden and again when the session is left, and a
+ * backgrounded PWA can be hidden many times in one visit. Each save writes the
+ * record THIS VISIT OPENED WITH plus this visit's rows, so every save of a
+ * visit lands in the same place and the last one wins — a fourth save is not a
+ * fourth vote.
  *
- * A kind with no sample is left exactly as it was: silence is not evidence.
+ * A kind with no measured row is left exactly as it now stands: silence is not
+ * evidence. A save that measured nothing writes NOTHING, so an empty visit can
+ * never look like a learned one.
  */
-export function rememberModels(
-  samples: ReadonlyMap<HeightBucket, readonly RowSample[]>,
-  baseline: RowModels,
+export function rememberRows(
+  visit: ReadonlyMap<HeightBucket, readonly RowSample[]>,
+  baseline: RowRecord,
   s: Storage | null = store(),
 ): void {
-  if (s === null || samples.size === 0) return;
-  const raw = (() => { try { return s.getItem(KINDS_KEY); } catch { return null; } })();
-  const merged: Record<string, RowModel> = (() => {
-    if (raw === null) return {};
-    try {
-      const v: unknown = JSON.parse(raw);
-      if (v === null || typeof v !== 'object') return {};
-      const out: Record<string, RowModel> = {};
-      for (const [k, val] of Object.entries(v as Record<string, unknown>)) {
-        const m = readModel(val);
-        if (m !== null) out[k] = m;
-      }
-      return out;
-    } catch { return {}; }
-  })();
-  let took = 0;
-  for (const [bucket, rows] of samples) {
-    const prev = baseline[bucket] ?? null;
-    const fit = fitRowModel(rows, prev);
-    if (fit === null) continue;
-    took += 1;
-    // A kind this browser has never learned takes the fit WHOLE: there is
-    // nothing to blend with, and blending against the shipped fallback would
-    // hold every first visit 70% of the way to a number nobody measured.
-    merged[bucket] = prev === null ? fit : {
-      a: clampIntercept(prev.a * (1 - BLEND) + fit.a * BLEND),
-      b: clampSlope(prev.b * (1 - BLEND) + fit.b * BLEND),
-    };
+  if (s === null) return;
+  const fresh = new Map<HeightBucket, RowSample[]>();
+  for (const [bucket, rows] of visit) {
+    const measured = rows.filter(isSample);
+    if (measured.length === 0) continue;
+    fresh.set(bucket, [...baseline[bucket], ...spread(measured, VISIT_ROWS)].slice(-RESERVOIR_ROWS));
   }
-  // A save that accepted no sample writes NOTHING. Storing the merge anyway
-  // would turn "nothing was measurable" into a record, and a later read cannot
-  // tell that record from a learned one.
-  if (took === 0) return;
-  try { s.setItem(KINDS_KEY, JSON.stringify(merged)); } catch { /* storage refused — keep the fallback */ }
+  if (fresh.size === 0) return;
+  const now = rememberedRows(s);
+  const out: Record<string, [number, number][]> = {};
+  for (const b of HEIGHT_BUCKETS) {
+    const rows = fresh.get(b) ?? now[b];
+    // Lengths to two places (a table row is 1.58 lines) and whole pixels:
+    // nothing else is stored, and no text ever is.
+    if (rows.length > 0) out[b] = rows.map((r) => [Math.round(r.lines * 100) / 100, Math.round(r.px)]);
+  }
+  try { s.setItem(ROWS_KEY, JSON.stringify(out)); } catch { /* storage refused — keep the fallback */ }
 }

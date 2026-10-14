@@ -2,34 +2,28 @@
 // measured one.
 //
 // Testable where the list itself is not: jsdom reports every rendered height as
-// 0, so nothing here can measure a bubble. What it CAN do is hold the
-// arithmetic and the storage contract, which is where this goes wrong quietly —
-// a model that drifts out of band, or a browser that refuses storage, both end
-// as a scrollbar that lies and neither raises anything.
+// 0, so nothing here can measure a bubble. What it CAN hold is the arithmetic
+// and the storage contract, which is where this goes wrong quietly — a model
+// bent by one odd row, a guess stored as if it were learned, a browser that
+// refuses storage — and every one of those ends as a scrollbar that lies
+// without raising anything.
 //
-// THE PIXELS THEMSELVES were measured in a real browser against four live
-// sessions (2026-09-28, headless Chromium on the fleet box). Trained on one
-// session and asked about another it had never seen, a per-bucket MEAN missed
-// the list's total by 24% on average and each row by 85-321px; the model this
-// file pins missed by 5% and 9-35px, and improved all twelve train/test pairs.
-// Those numbers are why the model is a LINE and not a number. They cannot be
-// re-derived here — jsdom has no layout — so they are recorded, not asserted.
-import { describe, expect, it } from 'vitest';
+// THE PIXELS THEMSELVES were measured in headless Chromium with the real
+// react-virtuoso. They cannot be re-derived here — jsdom has no layout — so
+// they are recorded in the PR description, not asserted.
+import { afterEach, describe, expect, it } from 'vitest';
 import {
-  FALLBACK_ITEM_HEIGHT, HEIGHT_BUCKETS, MAX_PX_PER_LINE, MAX_ROW_PX,
-  MIN_ROW_PX, NOMINAL_MEASURE, TABLE_ROW_LINES, WELL_LINES,
-  estimateRow, fitRowModel, nominalLines, openingHeight, rememberModels,
-  rememberedHeight, rememberedModels, rowHeights,
-  type HeightBucket, type RowModel, type RowSample,
+  FALLBACK_ITEM_HEIGHT, HEIGHT_BUCKETS, MAX_PX_PER_LINE, MAX_ROW_PX, MIN_FIT_ROWS,
+  MIN_ROW_PX, NOMINAL_MEASURE, RESERVOIR_ROWS, ROWS_KEY, TABLE_ROW_LINES,
+  THUMB_ROW_PX, VISIT_ROWS, WELL_LINES,
+  estimateRow, estimateShape, fitRowModel, modelsOf, nominalLines, openingHeight,
+  plainLines, rememberRows, rememberedRows, rowHeights, wellLines,
+  type HeightBucket, type RowModel, type RowModels, type RowRecord, type RowSample,
 } from '../src/session/itemHeight';
 
-const KEY = 'ccrc:chat-item-height';
-const KINDS_KEY = 'ccrc:chat-item-heights';
-
 /** A Storage that works, so the tests do not depend on jsdom's own. */
-const fake = (seed?: string): Storage => {
+const fake = (): Storage => {
   const m = new Map<string, string>();
-  if (seed !== undefined) m.set(KEY, seed);
   return {
     get length() { return m.size; },
     clear: () => m.clear(),
@@ -50,33 +44,20 @@ const hostile = (): Storage => ({
   setItem: () => { throw new Error('denied'); },
 }) as Storage;
 
-/** A Storage already holding learned MODELS. */
-const learned = (m: Partial<Record<HeightBucket, RowModel | number>>): Storage => {
-  const s = fake();
-  s.setItem(KINDS_KEY, JSON.stringify(m));
-  return s;
+/** ONE visit: it opens with whatever is stored, then saves what it measured. */
+const visit = (s: Storage, samples: Partial<Record<HeightBucket, RowSample[]>>): void => {
+  rememberRows(new Map(Object.entries(samples) as [HeightBucket, RowSample[]][]), rememberedRows(s), s);
 };
 
-/** ONE visit: it opens with whatever is stored, then saves. The blend is a
- *  property of the visit, so a test that wants two blends runs this twice. */
-const visit = (
-  s: Storage,
-  samples: Partial<Record<HeightBucket, RowSample[]>>,
-): void => {
-  const map = new Map<HeightBucket, RowSample[]>(
-    Object.entries(samples) as [HeightBucket, RowSample[]][],
-  );
-  rememberModels(map, rememberedModels(s), s);
-};
-
-const modelOf = (s: Storage, b: HeightBucket = 'tool'): RowModel | null =>
-  rememberedModels(s)[b];
+const modelOf = (s: Storage, b: HeightBucket): RowModel | null => modelsOf(rememberedRows(s))[b];
 
 /** Rows on an exact line, for the tests that check the fit recovers it. */
 const onLine = (a: number, b: number, xs: number[]): RowSample[] =>
   xs.map((lines) => ({ lines, px: a + b * lines }));
 
-describe('nominalLines — the predictor the model is a line in', () => {
+const none = (): RowModels => modelsOf(rememberedRows(fake()));
+
+describe('nominalLines — the predictor for a row drawn as Markdown', () => {
   it('counts a short line as one, however short', () => {
     expect(nominalLines('ok')).toBe(1);
     expect(nominalLines('a\nb\nc')).toBe(3);
@@ -91,24 +72,18 @@ describe('nominalLines — the predictor the model is a line in', () => {
   it('does not WRAP a table row however wide — the table scrolls sideways', () => {
     const row = `| ${'c'.repeat(400)} |`;
     expect(nominalLines(row)).toBe(TABLE_ROW_LINES);
-    // and the same text outside a table does not get that exemption
     expect(nominalLines(row.slice(2))).toBeGreaterThan(5);
   });
 
   it('counts a table row as TALLER than a line of prose, by what the tokens say', () => {
-    // A cell is --text-sm at --leading-normal with --sp-2 above and below:
-    // (13 * 1.5 + 8 + 8) / (15 * 1.5). Counting it as one line under-measured
-    // a table-heavy session by 15% in a browser.
+    // A cell is --text-sm at --leading-normal with --sp-2 above and below.
     expect(TABLE_ROW_LINES).toBeCloseTo((13 * 1.5 + 8 + 8) / (15 * 1.5), 2);
     expect(nominalLines('| a | b |\n| c | d |')).toBeCloseTo(2 * TABLE_ROW_LINES, 6);
   });
 
   it('saturates a fenced block, because `pre` caps at --well-max and scrolls', () => {
     const body = Array.from({ length: 200 }, (_, i) => `line ${i}`).join('\n');
-    const fenced = '```js\n' + body + '\n```';
-    // the two fence lines are real; the body is capped
-    expect(nominalLines(fenced)).toBe(2 + WELL_LINES);
-    // …and without the fence the same body is 200 lines
+    expect(nominalLines('```js\n' + body + '\n```')).toBe(2 + WELL_LINES);
     expect(nominalLines(body)).toBe(200);
   });
 
@@ -122,95 +97,120 @@ describe('nominalLines — the predictor the model is a line in', () => {
   });
 });
 
+describe('plainLines and wellLines — the predictors for text drawn as it is', () => {
+  it('a pre-wrap bubble wraps long lines and saturates NOTHING', () => {
+    expect(plainLines('')).toBe(0);
+    expect(plainLines('ok\nfine')).toBe(2);
+    expect(plainLines('x'.repeat(NOMINAL_MEASURE * 2 + 1))).toBe(3);
+    // No markdown here: a fence is two more lines, a table row is a line.
+    const fence = '```\n' + Array.from({ length: 40 }, () => 'x').join('\n') + '\n```';
+    expect(plainLines(fence)).toBe(42);
+    expect(plainLines('| a | b |')).toBe(1);
+  });
+
+  it('a well neither wraps nor grows past its cap', () => {
+    expect(wellLines('')).toBe(0);
+    expect(wellLines('x'.repeat(5000))).toBe(1);
+    expect(wellLines('a\nb\nc')).toBe(3);
+    expect(wellLines(Array.from({ length: 300 }, () => 'x').join('\n'))).toBe(WELL_LINES);
+  });
+});
+
 describe('fitRowModel — learning the line from measured rows', () => {
   it('recovers the line its samples lie on', () => {
-    const m = fitRowModel(onLine(40, 18, [1, 5, 20, 60]), null);
+    const m = fitRowModel(onLine(40, 18, [1, 5, 20, 60]));
     expect(m?.a).toBeCloseTo(40, 6);
     expect(m?.b).toBeCloseTo(18, 6);
   });
 
   it('learns a slope of ZERO for a row whose height does not follow its text', () => {
-    // every tool card measured 62px in a real browser, across 18 cards whose
-    // inputs ranged from 45 to 5696 characters.
-    const m = fitRowModel([1, 9, 40, 300].map((lines) => ({ lines, px: 62 })), null);
-    expect(m?.b).toBe(0);
+    const m = fitRowModel([1, 9, 40, 300].map((lines) => ({ lines, px: 62 })));
+    expect(m).toEqual({ a: 62, b: 0 });
+  });
+
+  // Review 191, F3: one or two rows used to become a stored per-kind CONSTANT —
+  // a 50-line report at 1413px priced every later 2-line reply at 1413px, and a
+  // blend of 0.3 per visit took six visits to bring that to 226.
+  it('claims NOTHING from fewer rows than it needs — one long report is not a kind', () => {
+    expect(fitRowModel([{ lines: 50, px: 1413 }])).toBeNull();
+    expect(fitRowModel([{ lines: 50, px: 1413 }, { lines: 2, px: 60 }])).toBeNull();
+    expect(fitRowModel(onLine(30, 19, [2, 7, 50]))).not.toBeNull();
+    expect(MIN_FIT_ROWS).toBe(3);
+  });
+
+  // Review 191, F2: one measured row whose height does not follow its text —
+  // a folded recap, an opened card — used to bend least squares for the whole
+  // kind. Measured in a browser: six real asks at ~28px/line plus one folded
+  // recap fitted {a: 633, b: 0}, and every ask, one line or fifty, was 633px.
+  it('is not bent by one row that does not follow its text', () => {
+    const asks = onLine(62, 28, [4, 14, 33, 10, 57, 6]);
+    const m = fitRowModel([...asks, { lines: 262, px: 47 }]);
+    expect(m?.b).toBeCloseTo(28, 6);
     expect(m?.a).toBeCloseTo(62, 6);
   });
 
-  it('KEEPS a slope it cannot re-measure, and re-seats only the intercept', () => {
-    // A visit whose rows are all the same length says nothing about the slope.
-    // Discarding what an earlier visit measured would be treating silence as
-    // evidence, and it is how one thin session used to wipe a good model.
-    const prior: RowModel = { a: 40, b: 18 };
-    const m = fitRowModel([{ lines: 10, px: 400 }, { lines: 10, px: 400 }], prior);
-    expect(m?.b).toBe(18);
-    expect(m?.a).toBe(400 - 18 * 10);
+  it('is not moved by one card the reader happened to leave open', () => {
+    const cards = [...Array.from({ length: 8 }, () => ({ lines: 1, px: 62 })), { lines: 1, px: 640 }];
+    expect(fitRowModel(cards)).toEqual({ a: 62, b: 0 });
   });
 
-  it('refuses a slope from too few rows even when they do differ', () => {
-    const m = fitRowModel([{ lines: 1, px: 50 }, { lines: 50, px: 900 }], { a: 0, b: 7 });
-    expect(m?.b).toBe(7);
-  });
-
-  it('ignores a row virtuoso has not measured — it reports those as zero', () => {
-    const m = fitRowModel(
-      [...onLine(40, 18, [1, 5, 20, 60]), { lines: 999, px: 0 }],
-      null,
-    );
-    expect(m?.b).toBeCloseTo(18, 6);
-  });
-
-  it('answers null when nothing in the batch was measurable', () => {
-    expect(fitRowModel([{ lines: 5, px: 0 }, { lines: 7, px: -3 }], null)).toBeNull();
-    expect(fitRowModel([], { a: 1, b: 1 })).toBeNull();
+  // Review 191, F4: a negative slope was clamped to zero while the intercept
+  // computed FOR that slope was kept, leaving a line above all of its data.
+  it('refusing a falling slope leaves the LEVEL of what was measured, not the old intercept', () => {
+    // Free fit: 110 - 10/line. The intercept of a line that is then flattened
+    // is 110 — above every row measured. The flat line through them is 85.
+    const m = fitRowModel(onLine(110, -10, [1, 2, 3, 4]));
+    expect(m).toEqual({ a: 85, b: 0 });
   });
 
   it('refits through the ORIGIN rather than clamping a negative intercept', () => {
-    // Rows that bend upward: the free fit wants an intercept BELOW zero, so
-    // the two treatments actually differ and this case can tell them apart.
-    // Clamping `a` to zero while keeping the slope computed for a negative one
-    // leaves a line that misses its own data, every row, for ever; the
-    // constrained answer is least squares through the origin, b = Sxy / Sxx.
-    const rows = [{ lines: 1, px: 5 }, { lines: 10, px: 200 }, { lines: 40, px: 900 }];
-    const m = fitRowModel(rows, null);
+    // Rows that bend upward: the free line would cross zero, and a row cannot
+    // cost less than nothing. Clamping `a` alone keeps the slope computed for
+    // the negative intercept and puts every row low; the constrained answer is
+    // the (median) line through the origin.
+    const m = fitRowModel([{ lines: 10, px: 150 }, { lines: 20, px: 400 }, { lines: 40, px: 900 }]);
     expect(m?.a).toBe(0);
-    expect(m?.b).toBeCloseTo(38005 / 1701, 6);   // 22.34, not the free 23.05
-    // …and on points that DO pass through the origin it is still the line.
-    const exact = fitRowModel(onLine(0, 20, [1, 5, 20, 60]), null);
-    expect(exact?.b).toBeCloseTo(20, 6);
+    expect(m?.b).toBeCloseTo(20, 6);           // the median of 15, 20 and 22.5 px per line
+    const exact = fitRowModel(onLine(0, 20, [1, 5, 20, 60]));
+    expect(exact).toEqual({ a: 0, b: 20 });
     expect(estimateRow(exact, 20, 96)).toBe(400);
   });
 
   it('never learns that more text makes a row SHORTER', () => {
-    const m = fitRowModel(onLine(900, -8, [1, 10, 40, 80]), null);
-    expect(m?.b).toBe(0);
+    expect(fitRowModel(onLine(900, -8, [1, 10, 40, 80]))?.b).toBe(0);
   });
 
   it('holds the slope and the intercept inside their bands', () => {
-    const steep = fitRowModel(onLine(0, 10_000, [1, 2, 3, 4]), null);
-    expect(steep?.b).toBe(MAX_PX_PER_LINE);
-    const tall = fitRowModel([1, 2, 3, 4].map((lines) => ({ lines, px: 99_999 })), null);
-    expect(tall?.a).toBeLessThanOrEqual(MAX_ROW_PX);
+    expect(fitRowModel(onLine(0, 10_000, [1, 2, 3, 4]))?.b).toBe(MAX_PX_PER_LINE);
+    expect(fitRowModel([1, 2, 3, 4].map((lines) => ({ lines, px: 99_999 })))?.a).toBe(MAX_ROW_PX);
+  });
+
+  it('ignores a sample that is not a measurement', () => {
+    const m = fitRowModel([
+      ...onLine(40, 18, [1, 5, 20]),
+      { lines: 999, px: 0 }, { lines: 3, px: -5 }, { lines: Number.NaN, px: 80 }, { lines: -1, px: 80 },
+    ]);
+    expect(m?.a).toBeCloseTo(40, 6);
+    expect(m?.b).toBeCloseTo(18, 6);
+    expect(fitRowModel([{ lines: 5, px: 0 }, { lines: 7, px: -3 }, { lines: 1, px: Number.NaN }])).toBeNull();
   });
 });
 
-describe('estimateRow — what one row is believed to cost', () => {
-  const models = { assistant: { a: 40, b: 18 } } as Record<HeightBucket, RowModel | null>;
+describe('estimating a row — what it is believed to cost before it renders', () => {
+  const assistant: RowModel = { a: 40, b: 18 };
 
   it('prices a row by its own text', () => {
-    expect(estimateRow(models.assistant, 10, 96)).toBe(220);
-    expect(estimateRow(models.assistant, 60, 96)).toBe(1120);
+    expect(estimateRow(assistant, 10, 96)).toBe(220);
+    expect(estimateRow(assistant, 60, 96)).toBe(1120);
   });
 
-  it('hands an unlearned bucket the caller GUESS, and never stores it', () => {
+  it('hands an unlearned kind the caller GUESS', () => {
     expect(estimateRow(null, 60, 137)).toBe(137);
   });
 
   it('does NOT trim a long turn — the ceiling is for nonsense, not for tall rows', () => {
     // Measured in a browser: one assistant turn of 396 nominal lines really
-    // rendered 7728px. With `a=10.6, b=18.4` the model asks for 7291px, a 6%
-    // miss; a 4000px ceiling turned that into a 34% one and was the whole of
-    // the residual error on that session.
+    // rendered 7728px; a 4000px ceiling turned a 6% miss into a 34% one.
     expect(estimateRow({ a: 10.58, b: 18.38 }, 396, 96)).toBeGreaterThan(7000);
   });
 
@@ -218,113 +218,173 @@ describe('estimateRow — what one row is believed to cost', () => {
     expect(estimateRow({ a: 0, b: 0 }, 0, 96)).toBe(MIN_ROW_PX);
     expect(estimateRow({ a: 600, b: 200 }, 10_000, 96)).toBe(MAX_ROW_PX);
   });
+
+  it('adds a row of thumbnails as its own term, at the CSS cap until one is measured', () => {
+    const models = { ...none(), user: { a: 50, b: 20 } };
+    expect(estimateShape({ bucket: 'user', lines: 1 }, models, 96)).toBe(70);
+    expect(estimateShape({ bucket: 'user', lines: 1, attach: 2 }, models, 96)).toBe(70 + 2 * THUMB_ROW_PX);
+    const learned = { ...models, attach: { a: 150, b: 0 } };
+    expect(estimateShape({ bucket: 'user', lines: 1, attach: 1 }, learned, 96)).toBe(220);
+  });
 });
 
 describe('openingHeight — the ONE number virtuoso opens with', () => {
   it('is the mean of what the rows are each believed to cost', () => {
-    const models = {
-      tool: { a: 62, b: 0 }, assistant: { a: 40, b: 18 },
-    } as Record<HeightBucket, RowModel | null>;
+    const models = { ...none(), tool: { a: 62, b: 0 }, assistant: { a: 40, b: 18 } };
     const rows = [
-      ...Array.from({ length: 3 }, () => ({ bucket: 'tool' as const, lines: 5 })),
+      ...Array.from({ length: 3 }, () => ({ bucket: 'tool' as const, lines: 1 })),
       { bucket: 'assistant' as const, lines: 60 },
     ];
-    // (62 + 62 + 62 + 1120) / 4
-    expect(openingHeight(rows, models, 96)).toBe(327);
+    expect(openingHeight(rows, models, 96)).toBe(327);          // (62 * 3 + 1120) / 4
     expect(rowHeights(rows, models, 96)).toEqual([62, 62, 62, 1120]);
   });
 
   it('answers the fallback for a transcript with no rows at all', () => {
-    expect(openingHeight([], {} as Record<HeightBucket, RowModel | null>, 210))
-      .toBe(FALLBACK_ITEM_HEIGHT);
+    expect(openingHeight([], none(), 210)).toBe(FALLBACK_ITEM_HEIGHT);
   });
 });
 
 describe('the storage contract', () => {
-  it('reads what an OLDER build left — a bare number is an intercept, no slope', () => {
-    const s = learned({ tool: 64, assistant: 557 });
-    expect(modelOf(s, 'tool')).toEqual({ a: 64, b: 0 });
-    expect(modelOf(s, 'assistant')).toEqual({ a: 557, b: 0 });
-    // …so the first visit after the upgrade prices rows exactly as before,
-    // and the slope is learned from that visit's own measurements.
+  const original = Object.getOwnPropertyDescriptor(globalThis, 'localStorage');
+  afterEach(() => {
+    if (original !== undefined) Object.defineProperty(globalThis, 'localStorage', original);
+    else delete (globalThis as { localStorage?: Storage }).localStorage;
   });
 
-  it('answers null for every bucket when storage refuses, and never throws', () => {
-    const models = rememberedModels(hostile());
-    for (const b of HEIGHT_BUCKETS) expect(models[b]).toBeNull();
-    expect(() => visit(hostile(), { tool: [{ lines: 1, px: 62 }] })).not.toThrow();
-    expect(rememberedHeight(hostile())).toBe(FALLBACK_ITEM_HEIGHT);
+  it('answers an empty record when storage refuses, and never throws', () => {
+    const rows = rememberedRows(hostile());
+    for (const b of HEIGHT_BUCKETS) expect(rows[b]).toEqual([]);
+    expect(() => visit(hostile(), { tool: onLine(62, 0, [1, 1, 1]) })).not.toThrow();
+  });
+
+  // The default store: some privacy modes throw on merely NAMING `localStorage`.
+  it('survives a browser where touching `localStorage` itself throws', () => {
+    Object.defineProperty(globalThis, 'localStorage', {
+      configurable: true,
+      get() { throw new DOMException('denied', 'SecurityError'); },
+    });
+    expect(rememberedRows().user).toEqual([]);
+    expect(() => rememberRows(new Map([['user', onLine(50, 20, [1, 2, 3])]]), rememberedRows())).not.toThrow();
   });
 
   it('survives a corrupted record rather than rendering badly', () => {
-    const s = fake(); s.setItem(KINDS_KEY, '{not json');
-    for (const b of HEIGHT_BUCKETS) expect(rememberedModels(s)[b]).toBeNull();
-  });
-
-  it('leaves a bucket nobody sampled exactly as it was — silence is not evidence', () => {
-    const s = learned({ tool: { a: 62, b: 0 }, assistant: { a: 40, b: 18 } });
-    visit(s, { tool: onLine(70, 0, [1, 2, 3, 4]) });
-    expect(modelOf(s, 'assistant')).toEqual({ a: 40, b: 18 });
-  });
-
-  it('writes NOTHING when a save accepted no sample', () => {
     const s = fake();
-    visit(s, { tool: [{ lines: 3, px: 0 }] });
-    expect(s.getItem(KINDS_KEY)).toBeNull();
+    s.setItem(ROWS_KEY, '{not json');
+    for (const b of HEIGHT_BUCKETS) expect(rememberedRows(s)[b]).toEqual([]);
+    s.setItem(ROWS_KEY, '[1,2]');
+    for (const b of HEIGHT_BUCKETS) expect(rememberedRows(s)[b]).toEqual([]);
+  });
+
+  it('keeps the well-formed rows of a record and drops the rest', () => {
+    const s = fake();
+    s.setItem(ROWS_KEY, JSON.stringify({
+      user: [[1, 70], [2, 'x'], [3, -4], [Number.NaN, 5], 'row', [-1, 50], [2, 90]],
+      tool: { a: 62, b: 0 },
+      nonsense: [[1, 1]],
+    }));
+    const rows = rememberedRows(s);
+    expect(rows.user).toEqual([{ lines: 1, px: 70 }, { lines: 2, px: 90 }]);
+    expect(rows.tool).toEqual([]);
+  });
+
+  it('never holds more than its bound, keeping the newest', () => {
+    const s = fake();
+    const many = Array.from({ length: RESERVOIR_ROWS + 7 }, (_, i) => [i, 100 + i]);
+    s.setItem(ROWS_KEY, JSON.stringify({ assistant: many }));
+    const rows = rememberedRows(s).assistant;
+    expect(rows.length).toBe(RESERVOIR_ROWS);
+    expect(rows[0]).toEqual({ lines: 7, px: 107 });
+  });
+
+  it('stores lengths and pixels, never text', () => {
+    const s = fake();
+    visit(s, { user: onLine(50, 20, [1, 2, 3]) });
+    expect(JSON.parse(s.getItem(ROWS_KEY)!)).toEqual({ user: [[1, 70], [2, 90], [3, 110]] });
   });
 });
 
-describe('the blend — one session nudges the model, it never seizes it', () => {
-  it('takes a bucket nobody had measured WHOLE', () => {
-    const s = fake('240');           // an old scalar is a guess, not a measurement
-    visit(s, { assistant: onLine(40, 18, [1, 5, 20, 60]) });
-    expect(modelOf(s, 'assistant')?.a).toBeCloseTo(40, 4);
-    expect(modelOf(s, 'assistant')?.b).toBeCloseTo(18, 4);
+describe('a visit — what it adds to the record, and how much', () => {
+  it('writes NOTHING when the visit measured nothing', () => {
+    const s = fake();
+    visit(s, { tool: [{ lines: 3, px: 0 }] });
+    rememberRows(new Map(), rememberedRows(s), s);
+    expect(s.getItem(ROWS_KEY)).toBeNull();
   });
 
-  it('moves a learned model 30% of the way, not all of it', () => {
-    const s = learned({ assistant: { a: 40, b: 10 } });
-    visit(s, { assistant: onLine(40, 20, [1, 5, 20, 60]) });
-    expect(modelOf(s, 'assistant')?.b).toBeCloseTo(10 * 0.7 + 20 * 0.3, 4);
+  it('leaves a kind nobody measured exactly as it was — silence is not evidence', () => {
+    const s = fake();
+    visit(s, { tool: onLine(62, 0, [1, 1, 1]), assistant: onLine(40, 18, [1, 5, 20]) });
+    visit(s, { tool: onLine(70, 0, [1, 1, 1]) });
+    expect(rememberedRows(s).assistant).toEqual(onLine(40, 18, [1, 5, 20]));
   });
 
-  it('is IDEMPOTENT: saving twice inside one visit lands where saving once does', () => {
-    // The list saves as it goes, for the tab that is closed without cleanup.
-    // Blending from the value the VISIT opened with is what stops that from
-    // being a second vote — measured before this rule: a 200-item visit saved
-    // eight times and moved 94% of the way instead of 30%.
-    const once = learned({ assistant: { a: 40, b: 10 } });
-    const twice = learned({ assistant: { a: 40, b: 10 } });
-    const base = rememberedModels(twice);
-    const samples = new Map<HeightBucket, RowSample[]>([['assistant', onLine(40, 20, [1, 5, 20, 60])]]);
-    visit(once, { assistant: onLine(40, 20, [1, 5, 20, 60]) });
-    rememberModels(samples, base, twice);
-    rememberModels(samples, base, twice);
-    rememberModels(samples, base, twice);
-    expect(modelOf(twice, 'assistant')).toEqual(modelOf(once, 'assistant'));
+  // The other half of F3: a kind that turns up once or twice a visit — the
+  // asks in a tool-heavy session — used to keep the constant its first visit
+  // guessed. Its rows now ACCUMULATE until there are enough to fit.
+  it('learns a kind that turns up twice a visit by its second visit, not from its first', () => {
+    const s = fake();
+    visit(s, { user: onLine(50, 25, [2, 30]) });
+    expect(modelOf(s, 'user')).toBeNull();
+    visit(s, { user: onLine(50, 25, [8, 1]) });
+    expect(modelOf(s, 'user')?.a).toBeCloseTo(50, 6);
+    expect(modelOf(s, 'user')?.b).toBeCloseTo(25, 6);
+  });
+
+  it('lets one visit NUDGE the record, never seize it', () => {
+    const s = fake();
+    for (let v = 0; v < 3; v += 1) visit(s, { assistant: onLine(40, 18, [1, 3, 5, 8, 12, 20, 30, 45, 60, 80]) });
+    // An atypical session: forty rows on a different line.
+    visit(s, { assistant: onLine(200, 30, Array.from({ length: 40 }, (_, i) => i + 1)) });
+    const rows = rememberedRows(s).assistant;
+    expect(rows.length).toBe(RESERVOIR_ROWS);
+    expect(rows.filter((r) => r.px === 200 + 30 * r.lines).length).toBe(VISIT_ROWS);
+    // …spanning its whole range rather than the first ten it happened to see.
+    const added = rows.slice(-VISIT_ROWS).map((r) => r.lines);
+    expect(Math.min(...added)).toBe(1);
+    expect(Math.max(...added)).toBe(40);
+    // Two thirds of the record still speak for the long run.
+    expect(modelOf(s, 'assistant')?.b).toBeCloseTo(18, 6);
+  });
+
+  it('lets the oldest rows go first, so a changed rendering is learned in a few visits', () => {
+    const s = fake();
+    for (let v = 0; v < 3; v += 1) visit(s, { tool: Array.from({ length: VISIT_ROWS }, () => ({ lines: 1, px: 62 })) });
+    for (let v = 0; v < 3; v += 1) visit(s, { tool: Array.from({ length: VISIT_ROWS }, () => ({ lines: 1, px: 58 })) });
+    expect(modelOf(s, 'tool')).toEqual({ a: 58, b: 0 });
+  });
+
+  it('is IDEMPOTENT: saving one visit four times lands where saving it once does', () => {
+    // The list saves on every hide and again on leaving. Each save adds this
+    // visit's rows to the record the VISIT OPENED WITH, so the fourth save is
+    // not a fourth vote.
+    const once = fake();
+    const four = fake();
+    visit(once, { user: onLine(50, 20, [1, 2, 3]) });
+    visit(four, { user: onLine(50, 20, [1, 2, 3]) });
+    const samples = new Map<HeightBucket, RowSample[]>([['user', onLine(55, 22, [4, 5, 6])]]);
+    rememberRows(samples, rememberedRows(once), once);
+    const base: RowRecord = rememberedRows(four);
+    for (let i = 0; i < 4; i += 1) rememberRows(samples, base, four);
+    expect(four.getItem(ROWS_KEY)).toBe(once.getItem(ROWS_KEY));
   });
 });
 
 describe('the whole point, in arithmetic', () => {
-  // The shape of the session this was measured on: 18 tool cards at a flat
-  // 62px, 8 assistant turns whose real heights ran 40px to 1413px, and the
-  // list's true total was 7204px.
+  // The shape of a session measured in a browser: 18 tool cards at a flat
+  // 62px, and 8 assistant turns from 40px to 1413px.
   const session = [
-    ...Array.from({ length: 18 }, () => ({ bucket: 'tool' as const, lines: 4 })),
+    ...Array.from({ length: 18 }, () => ({ bucket: 'tool' as const, lines: 1 })),
     ...[1, 2, 6, 14, 22, 35, 48, 74].map((lines) => ({ bucket: 'assistant' as const, lines })),
   ];
 
-  it('a SECOND visit opens near the truth, where one number per bucket could not', () => {
+  it('a SECOND visit opens near the truth, where one number per kind could not', () => {
     const s = fake();
-    // visit one measures the rows; assistant really is 40 + 18.6/line here
     visit(s, {
-      tool: Array.from({ length: 18 }, (_, i) => ({ lines: 4 + i, px: 62 })),
+      tool: Array.from({ length: 18 }, () => ({ lines: 1, px: 62 })),
       assistant: onLine(40, 18.6, [1, 2, 6, 14, 22, 35, 48, 74]),
     });
-    const models = rememberedModels(s);
-    const truth = session.reduce(
-      (sum, r) => sum + (r.bucket === 'tool' ? 62 : 40 + 18.6 * r.lines), 0);
-    const believed = openingHeight(session, models, rememberedHeight(s)) * session.length;
+    const truth = session.reduce((sum, r) => sum + (r.bucket === 'tool' ? 62 : 40 + 18.6 * r.lines), 0);
+    const believed = openingHeight(session, modelsOf(rememberedRows(s)), FALLBACK_ITEM_HEIGHT) * session.length;
     expect(Math.abs(believed - truth) / truth).toBeLessThan(0.02);
   });
 });
