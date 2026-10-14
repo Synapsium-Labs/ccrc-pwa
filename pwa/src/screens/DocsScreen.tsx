@@ -20,7 +20,7 @@ import { DocsIndexView } from '../docs/DocsIndexView';
 import { DocsLeaf } from '../docs/DocsLeaf';
 import { DocsPageLink, DocsTreeView } from '../docs/DocsTreeView';
 import { createFetchQueue } from '../docs/fetchQueue';
-import type { DocsLoaders, DocsNotOk } from '../docs/failures';
+import { docsRetryPlan, type DocsLoaders, type DocsNotOk } from '../docs/failures';
 import { docsLocation } from '../docs/docsLinks';
 import { DOCS_PAGE_INVALID_SENTENCE, DOCS_VIEW_TEXT, fillSentence } from '../docs/docsText';
 import { docsPathKind } from '../docs/docsTree';
@@ -145,6 +145,20 @@ export function DocsScreen(p: {
     if (isIndex && index === null) loadIndex();
   }, [isIndex, index, loadIndex]);
   useEffect(() => onAuthRegained(() => setIndex((s) => (s?.s === 'auth' ? null : s))), []);
+  // An auto-class word (`docs-busy` and its kind) is read once more after its wait, like the tree's and the file's
+  // (`useDocsVisit`): once per visit, and only if the index is still that same failure when the wait ends. The second
+  // failure shows Retry. The timer ends with the page or the screen.
+  const indexRetried = useRef(false);
+  useEffect(() => {
+    if (!isIndex || index === null || index.s !== 'failed' || indexRetried.current) return undefined;
+    const plan = docsRetryPlan(index.body);
+    if (plan.kind !== 'auto') return undefined;
+    const t = setTimeout(() => {
+      indexRetried.current = true;
+      setIndex((s) => (s === index ? null : s));
+    }, plan.afterMs);
+    return () => clearTimeout(t);
+  }, [isIndex, index]);
 
   // Every redirect is a replace (M4.R4): canonicalisation, the slash the tree decides, the owner of a worktree.
   const tree = treeOf(visit.tree);

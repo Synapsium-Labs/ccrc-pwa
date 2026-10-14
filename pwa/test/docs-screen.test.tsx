@@ -861,3 +861,51 @@ describe('T13 review 4-4: a drafted raster leaf is not an embedded draft asset',
     expect(screen.queryByText(/embeds \d+ uncommitted asset/)).toBeNull();
   });
 });
+
+describe('T13 review 3-7: the index retries an auto-class word once, then shows Retry', () => {
+  afterEach(() => { vi.useRealTimers(); });
+  const busy = (): ReturnType<typeof failedAnswer> => failedAnswer('docs-busy', { retryAfterMs: 2000 });
+  const advance = (ms: number): Promise<void> => act(async () => { await vi.advanceTimersByTimeAsync(ms); });
+
+  it('docs-busy with retryAfterMs: one more GET after that wait, a second busy answer shows Retry and no third GET', async () => {
+    vi.useFakeTimers();
+    const f = fakeLoaders();
+    f.projects.mockResolvedValueOnce(busy()).mockResolvedValueOnce(busy())
+      .mockResolvedValue({ s: 'ok', value: indexAnswer() });
+    open('/docs', f);
+    await advance(10);
+    expect(f.projects).toHaveBeenCalledTimes(1);
+    await advance(1500);
+    expect(f.projects).toHaveBeenCalledTimes(1);
+    await advance(600);
+    expect(f.projects).toHaveBeenCalledTimes(2);
+    expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument();
+    await advance(60_000);
+    expect(f.projects).toHaveBeenCalledTimes(2);
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    await advance(10);
+    expect(f.projects).toHaveBeenCalledTimes(3);
+    expect(mainRowNames()).toContain('wt');
+  });
+
+  it('leaving the screen before the wait ends cancels the retry', async () => {
+    vi.useFakeTimers();
+    const f = fakeLoaders();
+    f.projects.mockResolvedValue(busy());
+    const { unmount } = open('/docs', f);
+    await advance(10);
+    expect(f.projects).toHaveBeenCalledTimes(1);
+    unmount();
+    await advance(60_000);
+    expect(f.projects).toHaveBeenCalledTimes(1);
+  });
+
+  it('a word that is not auto-class (a manual one) is not retried by itself', async () => {
+    vi.useFakeTimers();
+    const f = fakeLoaders();
+    f.projects.mockResolvedValue(failedAnswer('repo-unreadable'));
+    open('/docs', f);
+    await advance(60_000);
+    expect(f.projects).toHaveBeenCalledTimes(1);
+  });
+});
