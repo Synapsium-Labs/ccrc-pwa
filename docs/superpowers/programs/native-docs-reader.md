@@ -21,13 +21,31 @@ The spec (§7.7) orders them W1 -> W2 -> W3 -> W5 -> W6 -> W7, with W1 -> W4 -> 
 | 2 | grants and adapter: agent grants, `DOCS_CAP` and builders, runner budgets, `server/src/docs/{policy,ports,ccdsource}.ts`, the docs ring guard | #319 | **merged** 2026-10-09 (`5a6e5d3d7`). Run 315: review 317, then three fix rounds (two defects, then the one-reader scan), a merge of `main` after ccrc-history B1 landed, and closure review 343. Run 315 closed done |
 | 3 | routes: `server/src/docs/{routes,hooks,lane,cache}.ts`, registration, dark rollout, R1/R2 | #339 | **merged** 2026-10-09 (`f4d75a741`). Run 342: review 361, one fix round, scoped re-review 364 clean. After the merge, the operator runs the dark rollout, fleet first, then R2 and R1 (§7.8). Both gate W5's merge |
 | 4 | PWA foundation: markdown extraction, `RenderBoundary`, chat hardening (U3), `docs-sw` | #381 | **merged** 2026-10-13 (`baba5c1bc`). Run 367: review 408 (12 findings, one critical: the built worker chunk could not load in a browser worker), one fix round, scoped re-review 412 (8 minor, carried to W5). Nine deviations, 4768 to 4776; 4777 to 4783 unspent. Run 367 closed done after W5's run opened |
-| 5 | Docs screen, plus Share and Export (see Decisions, 2026-10-06); plain, plus `<br>` as a line break in the docs profile (2026-10-12) | — | **run 413 open** (planned) 2026-10-13, block 4917 to 4932; plan not yet written |
+| 5 | Docs screen, plus Share and Export (see Decisions, 2026-10-06); plain, plus `<br>` as a line break in the docs profile (2026-10-12). Split into two runs (operator, 2026-10-13) | — | **part 1 (the Docs screen): plan written**, run 413 (planned, block 4917 to 4932). **Part 2 (Share and Export):** planned after part 1's review, dispatched after part 1 merges |
 | 5b | parity, server half: sections `vision` and `promise`, per-doc history (`docs-log`), page key `at=<sha>` (rich-docs spec 2026-10-12) | — | after W5 (operator, 2026-10-13) |
 | 6 | mockups | — | after W5 |
 | 7 | docs and release | — | after W6 |
 | 8 | the reader frame: the shared library `docserver` mounted in a sandboxed frame with a checked bridge, the plain pipeline as fallback (proposed, rich-docs spec 2026-10-12) | — | proposed; after W5b, W6, W7 and library v1 |
 
 ## Decisions & deviations
+- **2026-10-13: W5 is split, and three more rulings (operator).**
+  - W5 runs as two sequential runs, each with its own plan, PR and review:
+    - Part 1 is the Docs screen (14 tasks, run 413). It merges and rolls out on the dev channel with no Share or Export.
+    - Part 2 is Share and Export, planned after part 1's review.
+    - W5b follows part 2.
+  - W4's C-1 is accepted as is: a crafted chat message of 4 KiB or less, nested by indentation, costs up to about 0.67 s of main-thread parse.
+  - The new `browser (pwa)` leg is required by `full-suite` (daily and at the stable gate), not by branch protection.
+  - The Share and Export amendment (#385) is approved and merged.
+- **2026-10-13: W5 part 1's plan (coordinator).**
+  - It was written in stages: four scouts and an architect, then one writer per task applying it to a scratch tree in chunks of four, then a three-lens review with three refuters per finding. All ten findings were applied. The plan holds 332 mutation rows.
+  - **Five departures from the spec's text, defined with the block's first five numbers:**
+    - (a) the split;
+    - (b) an HTML leaf shows a stand-in until W6;
+    - (c) the worktree redirect's sentence stays true when the branch could not be read;
+    - (d) the 2-2 bound lives in the parse's element count, exactly what the component draws;
+    - (x) a base64 `.md` that is valid UTF-8 is formatted, and only bytes that are not UTF-8 get the "Not valid UTF-8." note.
+  - **Bounds measured while planning:** highlighting stops at a 256-character word (r10), and a keystroke chord at 64 characters (r11).
+- **2026-10-13: the ccd slug fix merged (#386, `6b939bd46`).** A GitHub slug needs a GitHub prefix, ASCII, and no `.` or `..` segment; an owner may not start with a dot, but a repository name may (`org/.github`). It reaches the boxes through ccrc's update mechanism, fleet first.
 - **2026-10-13: Share and Export, and W5b's place (operator).** The operator accepted the recommended option on all 12 decisions of the Share/Export design:
   - Share always opens ccrc's sheet, and its access note always shows.
   - Export never fetches; images not yet loaded wait up to 10 s, then become placeholders. The file is capped at 10 MiB.
@@ -213,10 +231,13 @@ The spec (§7.7) orders them W1 -> W2 -> W3 -> W5 -> W6 -> W7, with W1 -> W4 -> 
   - N1's docstring nits.
 - **U5:** the private vulnerability report is not filed yet. The spec's one-line mention is public since #301.
 
-## Next-wave brief (W5)
+## Next-wave brief (W5 part 1), for run 413
 
-- **Plan:** not written yet. W5 needs W3 and W4 (both merged). Before its merge, the operator runs W3's dark rollout, fleet first, then R2 and R1 (spec §7.8).
-- **Scope:** the Docs screen, plus Share and Export (Decisions, 2026-10-06), plain, plus `<br>` as a line break in the docs profile (2026-10-12). W5b follows W5 (operator, 2026-10-13).
-- **Inputs:** the amended 2026-10-01 spec (Share and Export, §4.16, §4.17, §7.7's W5 row and gate), W4's results (the W5 halves of D-4768, M4.P12's mutation included, and "Carried, not fixed"), the W4 residue and carried items above, and the bounds on r10, r11 and 2-2 (Decisions, 2026-10-13).
-- **Base:** `main` at or after `baba5c1bc`.
-- **Run and block:** run 413, opened 2026-10-13 (planned). Deviation block 4917 to 4932, issued at run-open.
+- **Plan:** `docs/superpowers/plans/2026-10-13-native-docs-reader-w5-part1-docs-screen.md`, Tasks 1-14. Task 13 is the held-out whole-branch review. Task 14 pushes and opens the one PR.
+- **Base:** `main` at dispatch. The plan was written at `a59685566`, so any drift in its files is replayed and named in the brief.
+- **Routing:** an Opus·high main loop with Sonnet·high implementers. Opus·high task reviewers and Task 13's panel. Workflows off, `compact 40`.
+- **Branch discipline:** commit on the workspace's own branch, never a separate feature branch.
+- **Deviation block:** 4917 to 4932. Task 12's Deviations step defines the plan's five departures with the first five numbers.
+- **Claims:** the plan's shared-file list, checked at dispatch. A claim held by another run on `server/test/single-definition.test.ts` and `pwa/src/lib/api.ts` needs scoped co-edit terms: the second to merge keeps this wave's appended describe last.
+- **Merge gate:** the operator's W3 dark rollout, then R2 and R1 (spec §7.8).
+- **Carried constraints:** the list above.

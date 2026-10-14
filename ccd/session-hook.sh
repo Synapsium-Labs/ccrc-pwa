@@ -3828,8 +3828,8 @@ waitby=""
 # `a-carried-wait-keeps-its-stamp` (D-4041, review 397 F3; the race is that review's artifact 2, "P1 exception 1").
 # ONE fresh `jq` read of the file at the carry point answers every question the two subagent arms below ask: its state,
 # who raised the wait, the ask, `interrupted`, and the wait's own `updatedAt` and `event`. It is a read of the file as it
-# stands NOW, not of `prev_state`, which the prefilter took ~650 lines up: a main-thread answer that lands in between
-# must not be overwritten by a `waiting` decided from the old read. Lines, not `@tsv` (see the prefilter's note above).
+# stands NOW, not of `prev_state`, which the prefilter's `read -r prev_state` took far above: a main-thread answer
+# landing in between must not be overwritten by a `waiting` decided from the old read. Lines, not `@tsv` (see its note).
 # `state` prints only when it is one of the three words this hook writes (an exact match, so a corrupt value is never
 # healed into one: `"wait\ning"` is empty here, not `waiting`); `event` is cut to letters, and `updatedAt` prints its
 # floor when it is a number. WHAT MAKES A STAMP KEEPABLE is the `^[0-9]+$` test in `_hook_keep_stamp` below, and only that
@@ -3857,8 +3857,8 @@ _hook_fresh_read() {
 # file whose `updatedAt` is negative, is not a number (null, a boolean, a string), or is a value jq prints in exponent
 # form (such as 1e16 or 1e300: which values print that way follows jq's number formatting, not a size cut) fails the
 # `^[0-9]+$` test below and keeps nothing: it is written as before, with a fresh stamp.
-# A fractional value keeps its floor: the hook writes integer milliseconds only, so one is a foreign or corrupt file,
-# and the floor moves the stamp by under 1 ms.
+# A non-negative fractional value keeps its floor (a negative one floors to a negative and fails that test): the hook
+# writes integer milliseconds only, so one is a foreign or corrupt file, and the floor moves the stamp by under 1 ms.
 w_ev="" w_upd="" w_alive=""
 _hook_keep_stamp() {
   [[ "$fr_state" == waiting && "$fr_by" != subagent && "$fr_upd" =~ ^[0-9]+$ ]] || return 0

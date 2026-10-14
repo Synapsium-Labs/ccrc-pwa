@@ -1640,25 +1640,51 @@ From the tree's root:
 The worker fills this section in. Each row is `<mutation> → <n> failed (<titles>)`, measured out of tree, one mutation
 at a time, each restored and `cmp`-checked, at the commit named in its heading. D-4045's rows go under its entry below.
 
-### Task 1 (at `<commit>`)
+### Task 1 (at `a8e769f47`)
 
 FS1, FS2, FS3 and N2 (Task 1 Step 3), and FS1 on the file without the two cases.
 
-### Task 2 (at `<commit>`)
+- FS1 (`floor | tostring` → `tostring` at :3850) → 1 failed (a non-negative fractional updatedAt is kept as its floor and writes aliveAt (12.7 is kept as 12, 0.5 as 0))
+- FS2 (`floor` → `ceil` at :3850) → 1 failed (a non-negative fractional updatedAt is kept as its floor and writes aliveAt (12.7 is kept as 12, 0.5 as 0))
+- FS3 (`^[0-9]+$` → `^-?[0-9]+$` at :3864) → 2 failed (an updatedAt that is negative, non-numeric or printed by jq in exponent form keeps no stamp and writes no aliveAt (a fractional one keeps its floor); a negative fractional updatedAt is refused: -0.5 floors to -1, so the carry keeps no stamp, takes the current event and writes no aliveAt)
+- N2 (drop `&& "$fr_upd" =~ ^[0-9]+$` at :3864) → 2 failed (an updatedAt that is negative, non-numeric or printed by jq in exponent form keeps no stamp and writes no aliveAt (a fractional one keeps its floor); a negative fractional updatedAt is refused: -0.5 floors to -1, so the carry keeps no stamp, takes the current event and writes no aliveAt)
+- FS1 on the 28-case file (`dca1566ac`'s test file, same mutation as FS1) → 0 failed (28 passed of 28)
+
+### Task 2 (at `22260db29`)
 
 JF1 at floor 51 and at floor 52, and JF2 if taken (Task 2 Steps 2 and 4).
 
-### Task 3 (at `<commit>`)
+- JF1 at floor 51 (`session-hook.sh` :3869's `name=$(jq -r '.agent_name // …' …) || name="subagent"` → `name="subagent"`, floor 51, at the base `5144136a0`) → 0 failed (123 passed of 123; 51 >= 51: the hole review 422 measured)
+- JF1 at floor 52 (the same mutation, at `22260db29`) → 1 failed (no jq program in ccd/session-hook.sh binds `as` to a binary chain; `AssertionError: jq programs found: expected 51 to be greater than or equal to 52`)
+- JF2 in session-hook-merge-deny (`session-hook.sh` :3802-3810's `rsk=$(jq -r '…' <<<"$payload" 2>/dev/null) || rsk=""` → `rsk=""`, floor 52, at `22260db29`) → 1 failed (no jq program in ccd/session-hook.sh binds `as` to a binary chain; `AssertionError: jq programs found: expected 51 to be greater than or equal to 52`) in `session-hook-merge-deny.test.ts`
+- JF2 in session-hook-role-skill-deny (the same mutation, at `22260db29`, re-measured out of tree) → 9 failed of 19 (10 passed): the Skill event pays no fork before the gate's own jq — the condition is bash builtins and the one read is inside `then`; a subagent's denied load leaves the hookstate write alone — the deny prints, the state still lands; costs one jq, for the skill's name, and only on a subagent's Skill call — no event of any other kind, and not the main thread, pays a fork for it; names the skill the call named, not another of the three; reads an empty-string `agent_id` as the main thread — only a non-empty one marks a subagent; reads the name the way Claude Code reads it — trimmed, and ONE leading `/` stripped, before the match; refuses a subagent's load of each of the three role skills, in the PreToolUse deny envelope, naming the skill; refuses the same three behind one `<namespace>:` prefix — `x:ccrc-worker` is the worker skill; trims exactly the characters JavaScript's String.prototype.trim does, at both ends; the first is in the describe "the deny never replaces a deny already set", the other eight in "the role-skill deny"
+
+### Task 3 (at `6cabc4b86`)
 
 BS1 (Task 3 Step 5).
 
-### Task 5 (at `<commit>`)
+- BS1 (`--depth === 0` → `--depth === -1` in the new `sliceTo`, at `6cabc4b86`) → 2 failed (CONTROL (R51 (c)): the slice ends at the handler's own closing brace, never on into what follows it; the stall-watch block, docstring included, and stallsettings.ts hold no device word) in `stall-settings-route.test.ts`; the first fires at `sliceTo`'s `expect(end, …)` (`AssertionError: app.post('/api/coord/stall-watch''s handler never closes — the slice would run on: expected -1 to be greater than -1`), because the planted handler never reaches depth -1; the second is the predicted spill, since on the real file the end moves to the enclosing function's brace and the block then holds the docstring's device word (`the stall-watch routes' prose names a device: expected '/** \`GET\`/\`POST /api/coord/stall-watc…' not to match /phone/i`); the other rows, including the two POST-handler device rows, stay green (37 passed of 39)
+
+### Task 5 (at `c53387f6d`)
 
 The red-first run (Step 1), DW1 before (Step 2), and SD1, SD2, SD3, DW1, DW2 and DW3 (Step 10).
 
-### Task 7 (at `<commit>`)
+- Red-first run (Step 1; `./node_modules/.bin/vitest run test/single-definition.test.ts -t 'words a duration once'` at
+  the pre-implementation tree, `99b651592` plus the one describe) → 2 failed (the template is spelled on a code line in shared/stall-watch.ts alone; the section and the feed body import it from L0); the CONTROL (the fingerprint sees the template and not another shape) passed. The first received `pwa/src/screens/StallWatchSection.tsx` and `server/src/coord/stallsettings.ts` as holders; the second fails on `pwa/src/screens/StallWatchSection.tsx`, the first reader its loop meets
+- DW1 before (Step 2, at `99b651592`: `|kiosks?` added to the PWA's `DEVICE_WORD` in `settings-screen.test.tsx`, and ` on a kiosk` planted after "the push bell" in README's Settings paragraph) → 0 failed (6 passed of 6, in `stall-settings-readme.test.ts`: the server's copy lacks the word, the hole)
+- SD1 (the old `stallQuietWords` function body pasted back into `stallsettings.ts` in place of the alias) → 1 failed (the template is spelled on a code line in shared/stall-watch.ts alone; received `server/src/coord/stallsettings.ts` beside the real home) in the whole of `single-definition.test.ts` (539 passed of 540)
+- SD2 (`'../../../shared/stall-watch.js'` dropped from M19b's `ALLOWED` in `stall-settings.test.ts`) → 1 failed (takes value imports only from L0, stall.ts and turnidle.ts; anything else is a type import; `AssertionError: stallsettings.ts takes a value import from ../../../shared/stall-watch.js: expected [ '../../../shared/api.js', …(2) ] to include '../../../shared/stall-watch.js'`); 113 passed of 114
+- SD3 (`quietText`'s own body restored in `StallWatchSection.tsx`, and its `stallDurationText` import line deleted) → 2 failed (the template is spelled on a code line in shared/stall-watch.ts alone; the section and the feed body import it from L0) in the whole of `single-definition.test.ts` (538 passed of 540); both predicted titles red
+- DW1 (as in Step 2, at `c53387f6d`, after Step 7: `|kiosks?` added to the PWA's `DEVICE_WORD`, ` on a kiosk` planted in README) → 1 failed (the Settings paragraph names no device, as the section itself names none (§2, 2026-10-05); the paragraph matched the derived `DEVICE_WORD`); 5 passed of 6
+- DW2 (the PWA's `DEVICE_WORD` line duplicated) → 1 failed (the Settings paragraph names no device, as the section itself names none (§2, 2026-10-05); `AssertionError: the PWA scan spells DEVICE_WORD once: expected [ [ …(3), index: 169217, …(2) ], …(1) ] to have a length of 1 but got 2`); 5 passed of 6
+- DW3 (control, README's "the push bell" → "the phone-push bell") → 1 failed (the Settings paragraph names no device, as the section itself names none (§2, 2026-10-05); the paragraph matched the derived `DEVICE_WORD` through "phone"); 5 passed of 6
+
+### Task 7 (at `519f4f422`)
 
 X65 before and after the fixture (Step 7).
+
+- X65 before (the mutation `StallWatchSection.tsx`:344's pinned option `label: quietText(pinnedBuiltIn)` → `label: fillStallText(STALL_SECTION_TEXT.chosenHere, { value: quietText(pinnedBuiltIn) })`, at `2ea8e603a`, the commit before the fixture edit) → 2 failed (a stored quiet time equal to the built-in as a number is a pinned choice, shown as its own option labelled plain like every step; one off the list (the server cannot send it today) selects none; a pinned built-in number reads plain "2 h" in the select whatever the quiet line says: under a fallback (source default) the line reads built-in and the option still reads plain); 187 passed of 189
+- X65 after (the same mutation, at `519f4f422`, the fixture commit) → 2 failed (a stored quiet time equal to the built-in as a number is a pinned choice, shown as its own option labelled plain like every step; one off the list (the server cannot send it today) selects none; a pinned built-in number reads plain "2 h" in the select whatever the quiet line says: under a fallback (source default) the line reads built-in and the option still reads plain); 187 passed of 189 — as predicted
 
 ## Deviations found
 
@@ -1701,18 +1727,18 @@ wave. Every other departure is named by its slug.
   - The W2 plan's fold text is a dated execution record and stays, apart from the pointer.
 - **Pinned by:** the six rows Task 4 Step 6 writes in `pwa/test/use-stall-watch-view.test.tsx` (four titled D-4045),
   the two "P2 (D-4045)" rows of `pwa/test/settings-screen.test.tsx`, its unchanged P6 device-word row for the new
-  line's words, and the census in `server/test/stall-settings-route.test.ts`. The rows below are the predictions of
-  Task 4 Steps 2, 9 and 13. Replace each with its measurement, and name the commit:
-  U1 (the fold's last line → `return { kind: 'refused', detail };`) → 6 failed (the fold's 500, gateway, unknown-code and never-blank rows; both "P2 (D-4045)" rows) — predicted; measure;
-  U2 (the fold's last line → `return { kind: 'unconfirmed', detail };`) → about 6 failed (D-4045: only the route's own codes are refusals, and the list is L0's; the three known-code rows at :263-280; P2: a refused write toasts the server's detail, re-reads, and leaves the stored radio checked; P2: a cancelled or refused quiet write leaves the select on the stored value, never the tap) — predicted; measure;
-  U3 (`.includes(v)` → `v in STALL_WATCH_REFUSAL_TABLE`) → 1 failed (D-4045: a code this build does not know is unconfirmed, on any status, a 409 included) — predicted; measure;
-  U4 (the network arm's `detail: null` → `detail: String(err)`) → 2 failed (reads a rejection that is not an ApiError as unconfirmed with no detail, never a refusal: the POST may have landed; a write whose answer never arrived says it was not confirmed, never "Saved" or "Nothing was changed", and re-reads) — predicted; measure;
-  U5 (the section's two unconfirmed arms → one `else toast(STALL_CONFIRM_TEXT.unanswered);`) → 2 failed (both "P2 (D-4045)" rows) — predicted; measure;
-  U6 (the section's unconfirmed toast given `'error'`) → 1 failed (P2 (D-4045): a gateway 502 says the choice may or may not have been saved, plain, never "Nothing was changed", and re-reads) — predicted; measure;
-  U7 (`STALL_CONFIRM_TEXT.unconfirmed`'s `may not have been saved` → `may not have been saved on your phone`) → 1 failed (P6: no L0 STALL_* string names a device, and the Notifications row says push) — predicted; measure;
-  RC1 (`routes.ts` :2702 `'bad-request'` → `'bad-body'`) → at least 1 failed (the codes the POST handler sends, notConfigured's included, are STALL_WATCH_REFUSALS, no more and no fewer) — predicted; measure;
-  RC2 (`'bad-request'` deleted from the table and the union) → 1 failed in `server/` (the same census title) and about 4 failed in `pwa/`, both files run (D-4045: only the route's own codes are refusals, and the list is L0's; takes the server's detail when it sends one; P2: a refused write toasts the server's detail, re-reads, and leaves the stored radio checked; P2: a cancelled or refused quiet write leaves the select on the stored value, never the tap) — predicted; measure;
-  RC3 (Task 3's `sliceTo` reverted, and `void { ok: false, error: 'teapot' };` added to `composeChildReclaim`) → 2 failed (the census title and Task 3's CONTROL (R51 (c)) row); 0 with the bounded slice — predicted; measure.
+  line's words, and the census in `server/test/stall-settings-route.test.ts`. The rows below were measured at 4d0a8f435,
+  out of tree, one at a time, each restored and `cmp`-checked; each agrees with its prediction:
+  U1 (the fold's last line → `return { kind: 'refused', detail };`) → 6 failed, both PWA files run (D-4045: a 500 is unconfirmed, never a refusal: the store may have committed before the throw; D-4045: a gateway 502 or 504 is unconfirmed, never a refusal: the POST may have reached the server; D-4045: a code this build does not know is unconfirmed, on any status, a 409 included; never leaves either detail blank: a body whose only text is empty or whitespace names the HTTP status; P2 (D-4045): a 500 says the choice may or may not have been saved, with the cause the server named, and re-reads; P2 (D-4045): a gateway 502 says the choice may or may not have been saved, plain, never "Nothing was changed", and re-reads) — measured;
+  U2 (the fold's last line → `return { kind: 'unconfirmed', detail };`) → 6 failed, both PWA files run (D-4045: only the route's own codes are refusals, and the list is L0's; reads a confirm body on any other status as a refusal: the status and the code must both match; reads a 409 whose body is not a readable confirm as a refusal that still names something; takes the server's detail when it sends one; P2: a refused write toasts the server's detail, re-reads, and leaves the stored radio checked; P2: a cancelled or refused quiet write leaves the select on the stored value, never the tap) — measured;
+  U3 (`.includes(v)` → `v in STALL_WATCH_REFUSAL_TABLE`) → 1 failed, both PWA files run (D-4045: a code this build does not know is unconfirmed, on any status, a 409 included), at its `constructor` row ("an inherited key is no code": expected 'refused' to be 'unconfirmed', `use-stall-watch-view.test.tsx:315`) — measured;
+  U4 (the network arm's `detail: null` → `detail: String(err)`) → 2 failed, both PWA files run (reads a rejection that is not an ApiError as unconfirmed with no detail, never a refusal: the POST may have landed; a write whose answer never arrived says it was not confirmed, never "Saved" or "Nothing was changed", and re-reads) — measured;
+  U5 (the section's two unconfirmed arms → one `else toast(STALL_CONFIRM_TEXT.unanswered);`) → 2 failed, both PWA files run (P2 (D-4045): a 500 says the choice may or may not have been saved, with the cause the server named, and re-reads; P2 (D-4045): a gateway 502 says the choice may or may not have been saved, plain, never "Nothing was changed", and re-reads), all in `settings-screen.test.tsx` — measured;
+  U6 (the section's unconfirmed toast given `'error'`) → 1 failed, both PWA files run (P2 (D-4045): a gateway 502 says the choice may or may not have been saved, plain, never "Nothing was changed", and re-reads), at `not.toHaveClass('toast--error')` ("a plain toast, as the unanswered line", `settings-screen.test.tsx:2591`) — measured;
+  U7 (`STALL_CONFIRM_TEXT.unconfirmed`'s `may not have been saved` → `may not have been saved on your phone`) → 1 failed, `settings-screen.test.tsx` only (P6: no L0 STALL_* string names a device, and the Notifications row says push), so the scan reads the new line with no edit to the row — measured;
+  RC1 (`routes.ts` :2702 `'bad-request'` → `'bad-body'`) → 2 failed in `stall-settings-route.test.ts` (the codes the POST handler sends, notConfigured's included, are STALL_WATCH_REFUSALS, no more and no fewer; and the route row M14: refuses with 400 and the detail, writes nothing and records nothing, which expects `bad-request`) — measured;
+  RC2 (`'bad-request'` deleted from the table and the union, `tsc` rc 0) → 1 failed in `server/` (the same census title) and 4 failed in `pwa/`, both files run (`use-stall-watch-view.test.tsx`: takes the server's detail when it sends one; D-4045: only the route's own codes are refusals, and the list is L0's; `settings-screen.test.tsx`: P2: a refused write toasts the server's detail, re-reads, and leaves the stored radio checked; P2: a cancelled or refused quiet write leaves the select on the stored value, never the tap); deleting only the table's key with the union kept fails `tsc` (rc 1, `shared/stall-watch.ts(17,7): error TS2741: Property '"bad-request"' is missing in type '{ 'not-configured': true; 'confirm-required': true; }' but required in type 'Readonly<Record<StallWatchRefusal, true>>'`) — measured;
+  RC3 (Task 3's `sliceTo` reverted to its `050dc2eb4` form, and `void { ok: false, error: 'teapot' };` added as the first statement of `composeChildReclaim`) → 2 failed in `stall-settings-route.test.ts` (CONTROL (R51 (c)): the slice ends at the handler's own closing brace, never on into what follows it; the census title); with the bounded `sliceTo` and the same added line, 0 failed (40 passed), which shows Task 3 carries the census — measured.
 - **Cost if wrong:**
   - A refusal whose body lacks a route code, where "Nothing was changed" was in fact true, now says "may or may not
     have been saved": the route's own two 500s (an unreadable row, a second conflict), whose message says "nothing
