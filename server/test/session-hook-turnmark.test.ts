@@ -727,11 +727,11 @@ describe('the payload parse needs no regex engine', () => {
       return src.slice(from, src.indexOf(close, from));
     };
     // THREE PIECES, one jq program (delegation broker wave 3, Task 5): the parse proper, which every event compiles and which
-    // is spelled on one physical line because nothing may be added above :2900; the delegation spool's definitions, spliced in
+    // is spelled on one physical line because nothing may be added above the `_hook_emit_context "$CARD" "$CARD_COMPACT"` line README cites; the delegation spool's definitions (`DSP_DEFS`), spliced in
     // by the shell only for a payload that names a delegation tool or event; and the spool's extra output expression. All
     // three are scanned, because a regex builtin in any of them fails the whole program on a jq without Oniguruma.
     const parse = between('{ read -r event; read -r psid; read -r paid; read -r aid; read -r dsp_bucket; read -r dsp_cut; read -r dsp_cwd; read -r dsp_line; } < <(jq -r --arg sid "$id" --arg gen "$dsp_gen" --arg ver "$dsp_ver" \'', '" <<<"$payload"');
-    const spoolDefs = between("dsp_defs='", "'; dsp_out=");
+    const spoolDefs = between("DSP_DEFS='", "'; dsp_dir=");
     const spoolOut = between("dsp_out=', ((", ") | .[])'");
     const mark = between('TURN_MARK_PROGRAM=\'\n', '\'\n');
     // Landmarks, so a renamed variable or a moved quote cannot leave this scanning nothing: each extraction must open
