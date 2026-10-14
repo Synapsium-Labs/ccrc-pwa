@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=22bc83d70d1be0382568c0ab81dc16336aad28e314ef504bd877371439328631
+# ccrc:generated 1 sha256=03cfdbdacdcf325973c53108d3604fc3a931f24597a1e33bded61cc43adc280a
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -8666,7 +8666,7 @@ EOF
   echo docs-show
   echo docs-fetch
   echo docs-index
-  echo docs-v1
+  echo docs-v1; echo delegation-events-v1   # delegation broker wave 3: the spool grammar and ccd-made spool directories (`_delegation_spool_dir`); the hook's registration is the doctor's to measure, not this token's
 }
 
 cmd_version() {   # what THIS box runs, per the deploy's own stamp — never a guess.
@@ -21042,6 +21042,35 @@ _child_tmpdir() {   # id -> rc 0 + path on stdout | 1 not a child | 2 child, lea
   printf '%s' "$dir"
 }
 
+# ── THE OWNER'S DELEGATION SPOOL DIRECTORY (delegation broker wave 3, spec §5.3) ─
+# `$REG/delegation/spool/<id>`, mode 0700, made HERE, at every spawn, and nowhere else. The session hook appends one line per
+# delegation event to `<YYYYMMDDHH>.spool` inside it and NEVER makes it: a hook that created the directory would be a hook
+# that forked `mkdir` on the hot path of every tool call, and a directory it finds missing says something true, that no ccd
+# which speaks `delegation-events-v1` has spawned this session, so it skips. The same reasoning is why the path is made by
+# the spawn and not by `ws-add` or `cmd_start`: a respawn, a swap and a supervisor restart reach `_spawn_start` too, and a
+# session that predates this code gains its directory at its next spawn.
+# NEVER A REFUSAL, like `_child_tmpdir`'s rc 2: a spawn that died here would leave a supervisor restart with no session at
+# all, for the sake of evidence the census backstops. A path that cannot be made a private directory warns and returns 1;
+# the spawn goes on and the hook skips until a later spawn makes it.
+# NEVER THROUGH A LINK: the root, the spool directory and the owner's directory must not be symlinks, so a link planted at
+# any of them cannot aim the hook's appends or its prune elsewhere (the hook refuses the same three).
+# THE ID is the registry's own shape and never dot-leading: `.` and `..` would name the spool root or the registry itself,
+# and a dot-leading name is one the hook refuses to write for. Mode is set with `chmod -- 0700 <dir>` (the operand last
+# after `--`, D-3510), so a directory an older ccd or an operator widened is private again at the next spawn.
+# NOTHING PURGES IT: the spool is evidence the server may not have read yet, and it outlives the row the way `tmproots/` does;
+# the hook prunes its own buckets after 24 hours (an id's directory itself is not reclaimed in this wave).
+_delegation_spool_dir() {   # id -> 0 the owner's directory stands, private | 1 not made (warned, or refused for the id): a failure never fails a spawn
+  local LC_ALL=C id="${1-}" base="$REG/delegation" d
+  [[ "$id" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || return 1
+  d="$base/spool/$id"
+  if [[ -L "$base" || -L "$base/spool" || -L "$d" ]] \
+     || ! mkdir -p -m 0700 -- "$base" "$base/spool" "$d" 2>/dev/null \
+     || [[ ! -d "$d" || -L "$d" || -L "$base" || -L "$base/spool" ]] || ! chmod -- 0700 "$d" 2>/dev/null; then
+    echo "ccd: warn: $id's delegation spool directory $d could not be made a private directory — spawning without it; the delegation hook skips until a later spawn makes it" >&2
+    return 1
+  fi
+}
+
 # ── THE TEMP ROOT'S POSITIVE WITNESS (child-workspace reclamation, spec §5.2) ─
 # `$REG/tmproots/<id>` says "ccd handed THIS directory, by dev, ino and btime,
 # to run <run> as its temp root": one line, `v=1 id=<id> run=<run> dev=<n>
@@ -21515,6 +21544,9 @@ _spawn_start() {   # id mode(new|resume) -> creates the tmux session, sets SPAWN
   # uncontained; the spawn proceeds either way.
   local tmpenv="" ctmp
   ctmp=$(_child_tmpdir "$id") && tmpenv="TMPDIR='$ctmp'"
+  # THE OWNER'S DELEGATION SPOOL DIRECTORY (delegation broker wave 3, `_delegation_spool_dir`): made here, once per spawn, for every
+  # session and not only a child; a failure has already warned and never refuses the spawn.
+  _delegation_spool_dir "$id" || true
   resenv="$resenv${routeenv:+ $routeenv}${tmpenv:+ $tmpenv}"
   local launchflags="$rcflag${routeflags:+${rcflag:+ }$routeflags}"
   # COLORTERM=truecolor so Claude Code emits 24-bit colour (it otherwise quantises

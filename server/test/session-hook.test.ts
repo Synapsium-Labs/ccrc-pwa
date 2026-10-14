@@ -10168,13 +10168,27 @@ describe('exact-pane hook ownership: the session name is asked of $TMUX_PANE, ne
   const otherState = (): string => path.join(reg(), 'other-hookcap.hookstate.json');
   const captureRoot = (): string => path.join(home, '.ccrc', 'hook-capture');
   const spoolRoot = (): string => path.join(reg(), 'delegation');
+  /** A valid delegation event: with its pane attributed to a session that has a spool directory and a generation, it WOULD write a
+   *  line there, so "no line" below measures the attribution and not a payload the spool would have refused anyway. */
   const EVENT = { hook_event_name: 'UserPromptSubmit' };
-  /** What the hook may have written for ANY session: a hookstate, a turn marker, a capture, a spool. */
+  const SESSION_END = { hook_event_name: 'SessionEnd', session_id: 'uuid-1', reason: 'clear' };
+  /** BOTH sessions' spool directories exist, each with the row's generation, so a mis-attributed SessionEnd has somewhere valid to land
+   *  (delegation broker wave 3, carried minor of Task 1: this check could not fail while the directories did not exist). */
+  const plantSpoolDirs = (): void => {
+    for (const sid of ['demo-quiet-basin', 'other-hookcap']) fs.mkdirSync(path.join(spoolRoot(), 'spool', sid), { recursive: true });
+    fs.writeFileSync(path.join(reg(), 'other-hookcap.generation'), GENERATION);
+  };
+  beforeEach(plantSpoolDirs);
+  /** What the hook may have written for ANY session: a hookstate, a turn marker, a capture, a spool bucket. */
   const wroteNothing = (): void => {
-    expect(fs.readdirSync(reg()).sort(), 'the registry holds only the fixture row\'s generation file')
-      .toEqual(['demo-quiet-basin.generation']);
+    expect(fs.readdirSync(reg()).sort(), 'the registry holds only the two rows\' generation files and the spool root')
+      .toEqual(['delegation', 'demo-quiet-basin.generation', 'other-hookcap.generation']);
     expect(fs.existsSync(captureRoot()), 'no capture directory').toBe(false);
-    expect(fs.existsSync(spoolRoot()), 'no delegation spool').toBe(false);
+    for (const sid of ['demo-quiet-basin', 'other-hookcap']) {
+      const dir = path.join(spoolRoot(), 'spool', sid);
+      expect(fs.existsSync(dir), `${sid}'s spool directory stands (anti-vacuity: a line had somewhere to go)`).toBe(true);
+      expect(fs.readdirSync(dir), `no bucket in ${sid}'s spool`).toEqual([]);
+    }
   };
 
   describe.skipIf(EXACT_PANE_TMUX === null)('real tmux, private socket'
@@ -10244,11 +10258,13 @@ describe('exact-pane hook ownership: the session name is asked of $TMUX_PANE, ne
       const old = spawnSync(EXACT_PANE_TMUX!, ['-L', SOCK, '-f', '/dev/null', 'display-message', '-p', '#S'], {
         encoding: 'utf8', env: { ...process.env, TMUX: undefined, TMUX_PANE: ownerPane, TMUX_TMPDIR: undefined } as NodeJS.ProcessEnv });
       expect(old.stdout.trim(), 'an untargeted question names the survivor').toBe(OTHER);
-      for (const event of [EVENT, { hook_event_name: 'Stop' }, { hook_event_name: 'SessionEnd' }]) {
+      const events = [EVENT, { hook_event_name: 'Stop' }, SESSION_END];
+      for (const event of events) {
         expect(runFull(event, { TMUX_PANE: ownerPane }), `${event.hook_event_name}: silent, exit 0`).toEqual({ stdout: '', stderr: '' });
       }
       wroteNothing();
-      expect(argvLog().every((l) => l === `display-message -p -t ${ownerPane} #S`), 'every question named the dead pane').toBe(true);
+      // The exact log, not `every` over it (which passes on an empty one): one question per event, each naming the dead pane.
+      expect(argvLog(), 'every question named the dead pane, once per event').toEqual(events.map(() => `display-message -p -t ${ownerPane} #S`));
     });
   });
 
@@ -10396,6 +10412,73 @@ describe('a bare agent_id is not a subagent: captured delegation payloads replay
       fs.rmSync(markerFile());
       fs.rmSync(stateFile());
     }
+  });
+});
+
+// ── The delegation spool beside the hook's other writers (delegation broker wave 3, Task 5) ──
+//
+// `delegation-spool.test.ts` owns the line grammar, the caps and the prune. This describe owns what the append must NOT
+// disturb in the hook around it: the compact SessionStart still exits before the hookstate, the turn marker and the capture arm
+// (its early `exit 0` became a flag that the same tail honours, so the spool line can be written first); a SessionEnd is still
+// inert; and the line does not wait on the hookstate write that follows it.
+describe('the delegation spool leaves the hook\'s other writers alone', () => {
+  const SPOOL = (): string => path.join(home, '.cc-sessions', 'delegation', 'spool', 'demo-quiet-basin');
+  const turnFile = (): string => path.join(home, '.cc-sessions', 'demo-quiet-basin.turn.json');
+  const spoolLines = (): any[] => (fs.existsSync(SPOOL()) ? fs.readdirSync(SPOOL()).filter((f) => f.endsWith('.spool')).flatMap((f) =>
+    fs.readFileSync(path.join(SPOOL(), f), 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l))) : []);
+  const SID = '6350faa0-a1be-4e78-939c-57485268f6fc';
+  beforeEach(() => { fs.mkdirSync(SPOOL(), { recursive: true }); });
+
+  it('compact SessionStart: one spool line, and still no hookstate, no turn marker, and an untouched marker already on disk', () => {
+    run({ hook_event_name: 'UserPromptSubmit' });                       // a turn is open: marker working, hookstate working
+    const marker = fs.readFileSync(turnFile(), 'utf8');
+    const state = fs.readFileSync(stateFile(), 'utf8');
+    runFull({ hook_event_name: 'SessionStart', source: 'compact', session_id: SID, transcript_path: '/rig/t.jsonl', cwd: home });
+    expect(spoolLines().map((l) => [l.eventKind, l.source])).toEqual([['SessionStart', 'compact']]);
+    expect(fs.readFileSync(turnFile(), 'utf8'), 'compact leaves whatever PreCompact wrote standing (D-306)').toBe(marker);
+    expect(fs.readFileSync(stateFile(), 'utf8')).toBe(state);
+  });
+
+  it('compact SessionStart on a -hookcap session is still not captured (it never reached the capture arm), while a startup is', () => {
+    fs.writeFileSync(path.join(home, 'bin', 'tmux'), '#!/bin/sh\necho "cc-demo-hookcap"\n', { mode: 0o755 });
+    fs.writeFileSync(path.join(home, '.cc-sessions', 'demo-hookcap.generation'), GENERATION);
+    const cap = path.join(home, '.ccrc', 'hook-capture', 'demo-hookcap');
+    runFull({ hook_event_name: 'SessionStart', source: 'compact', session_id: SID, cwd: home });
+    expect(fs.existsSync(cap) ? fs.readdirSync(cap) : [], 'no capture for compact').toEqual([]);
+    runFull({ hook_event_name: 'SessionStart', source: 'startup', session_id: SID, cwd: home });
+    expect(fs.readdirSync(cap).filter((f) => f.startsWith('SessionStart-')), 'a startup is captured as before').toHaveLength(1);
+  });
+
+  it('compact SessionStart writes no history-spool line (its arm excludes compact) though the delegation spool takes one', () => {
+    const hist = path.join(home, '.ccrc', 'history', 'spool');
+    fs.mkdirSync(hist, { recursive: true });
+    const sid = '7d0c3f5e-1a2b-4c3d-8e9f-0a1b2c3d4e5f';
+    runFull({ hook_event_name: 'SessionStart', source: 'compact', session_id: sid, cwd: home });
+    expect(fs.existsSync(path.join(hist, 'demo-quiet-basin.jsonl'))).toBe(false);
+    expect(spoolLines()).toHaveLength(1);
+    runFull({ hook_event_name: 'SessionStart', source: 'startup', session_id: sid, cwd: home });
+    expect(fs.existsSync(path.join(hist, 'demo-quiet-basin.jsonl')), 'control: a startup does write the history line').toBe(true);
+  });
+
+  it('SessionEnd: a spool line, and no hookstate and no turn marker (it stays a termination hint)', () => {
+    runFull({ hook_event_name: 'SessionEnd', session_id: SID, reason: 'prompt_input_exit' });
+    expect(spoolLines().map((l) => [l.eventKind, l.reason])).toEqual([['SessionEnd', 'prompt_input_exit']]);
+    expect(fs.existsSync(stateFile())).toBe(false);
+    expect(fs.existsSync(turnFile())).toBe(false);
+  });
+
+  it('the line does not wait on the hookstate write: with the hookstate path unwritable the delegation line is still in', () => {
+    fs.mkdirSync(stateFile());                                          // a directory where the file belongs: the rename fails
+    runFull({ hook_event_name: 'PostToolUse', tool_name: 'Bash', tool_input: { command: 'true' }, tool_use_id: 'toolu_01', session_id: SID, tool_response: { stdout: '' } });
+    expect(spoolLines().map((l) => l.eventKind)).toEqual(['PostToolUse']);
+  });
+
+  it('a Stop and a StopFailure add no line and change nothing they changed before', () => {
+    runFull({ hook_event_name: 'UserPromptSubmit', session_id: SID });
+    runFull({ hook_event_name: 'Stop', session_id: SID });
+    expect(readState().state).toBe('done');
+    runFull({ hook_event_name: 'StopFailure', session_id: SID, error: 'server_error' });
+    expect(spoolLines()).toEqual([]);
   });
 });
 

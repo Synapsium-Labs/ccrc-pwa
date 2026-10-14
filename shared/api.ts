@@ -10041,3 +10041,47 @@ export interface DelegationHealthInput {
   lastCheckpointRevision: number | null;
   lastIngestedAt: string | null;
 }
+
+/** The size and shape bounds of one delegation spool line (delegation broker wave 3, spec §5.3), declared ONCE. The hook's
+ *  jq program and shell block spell the same numbers in `ccd/session-hook.sh` (`def maxid:` and the others there, and the
+ *  `DSP_` constants beside the append) because a hook cannot import this file; `delegation-spool.test.ts` reads both and
+ *  fails on any drift, and the server's reader imports THIS object. Every byte count is UTF-8 bytes, never characters.
+ *
+ *  Each value is chosen from measurement, on the fixture corpus (`fixtures/delegation/<version>/`, 2.1.280 to 2.1.299) and on
+ *  the fleet's own transcript trees, never from a guess:
+ *   - `lineBytesBelow`: the plan says LESS than 4096 bytes, not less than or equal, counting the LF. A line that is built
+ *     in one buffered `printf` and so reaches the file in ONE `write(2)` must fit one 4096-byte stdio block, and 4095 is the
+ *     most that block holds. An O_APPEND write of one block is the only append the hook can make that two hooks racing on
+ *     one bucket never interleave.
+ *   - `idBytes`: the longest id seen in a payload is 36 (a Claude session UUID); a `tool_use_id` is about 30. 64 is the
+ *     bound the hook's own agent-id grammar already uses (`idmax`), so one number covers agent, tool-use, task, run and
+ *     Claude session ids. An id outside `[A-Za-z0-9_-]{1,64}` is never recorded, and never cleaned into one that is.
+ *   - `ownerIdBytes`: the ccd session id, which is also the spool directory's name. 128 is the hook's `CCRC_ID_MAX`.
+ *   - `labelBytes`: display-grade strings (agent type, workflow name, task type, `source`, `reason`, `isolation`, Claude
+ *     version). The longest seen is 17 bytes; a workflow's name is its author's choice, so the bound is generous.
+ *   - `pathBytes`: the longest transcript, workflow-directory, workflow-script and agent-transcript path found under the
+ *     fleet's account homes is 254 bytes (measured over 11,753 transcripts, 8,737 workflow directories, 7,098 scripts and
+ *     178,389 agent transcripts); 512 is twice that. A longer path is dropped, never cut, because a cut path names a
+ *     different place.
+ *   - `listingNames`: the busiest repository on the fleet carries 93 linked-worktree admin records; 256 is nearly three
+ *     times that. A listing over this count is dropped whole, never cut, because a partial listing reads as a complete one.
+ *   - `listingNameBytes`: the longest admin record name seen is 37 bytes (the busiest repos' longest are 23 to 37; Claude
+ *     Code's own `agent-<17 hex>` is 23). A name longer than 64 bytes, or outside `[A-Za-z0-9._@+-]`, drops the listing.
+ *   A listing of 93 real names is about 2.6 KiB, so the line cap (not the count) is what usually drops a listing: the
+ *   cap is reached at about 130 names of the usual length, which is the ~3.9 KiB case the plan measures.
+ *
+ *  When a line is over `lineBytesBelow` its optional fields are dropped in this order until it fits, and `truncated: true`
+ *  is set: `listing`, `claudeVersion`, `cwd`, `agentType` (omitted where optional, null where the variant requires the key),
+ *  `transcriptPath`. The required identity fields, `agentTranscriptPath` among them, are never dropped. With every bound
+ *  above at its maximum and nothing escaped they sum to under 3.2 KiB; a line whose required fields alone pass the cap
+ *  (a launch whose paths are inflated six-fold by control-character escapes) is not written at all, because a lost line can
+ *  delay a link and an over-cap line could tear one. */
+export const DELEGATION_SPOOL_BOUNDS = {
+  lineBytesBelow: 4096,
+  idBytes: 64,
+  ownerIdBytes: 128,
+  labelBytes: 128,
+  pathBytes: 512,
+  listingNames: 256,
+  listingNameBytes: 64,
+} as const;

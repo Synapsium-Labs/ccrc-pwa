@@ -726,21 +726,32 @@ describe('the payload parse needs no regex engine', () => {
       const from = src.indexOf(open) + open.length;
       return src.slice(from, src.indexOf(close, from));
     };
-    const parse = between('{ read -r event; read -r psid; read -r paid; read -r aid; } < <(jq -r \'', '\' <<<"$payload"');
+    // THREE PIECES, one jq program (delegation broker wave 3, Task 5): the parse proper, which every event compiles and which
+    // is spelled on one physical line because nothing may be added above :2900; the delegation spool's definitions, spliced in
+    // by the shell only for a payload that names a delegation tool or event; and the spool's extra output expression. All
+    // three are scanned, because a regex builtin in any of them fails the whole program on a jq without Oniguruma.
+    const parse = between('{ read -r event; read -r psid; read -r paid; read -r aid; read -r dsp_bucket; read -r dsp_cut; read -r dsp_cwd; read -r dsp_line; } < <(jq -r --arg sid "$id" --arg gen "$dsp_gen" --arg ver "$dsp_ver" \'', '" <<<"$payload"');
+    const spoolDefs = between("dsp_defs='", "'; dsp_out=");
+    const spoolOut = between("dsp_out=', ((", ") | .[])'");
     const mark = between('TURN_MARK_PROGRAM=\'\n', '\'\n');
     // Landmarks, so a renamed variable or a moved quote cannot leave this scanning nothing: each extraction must open
     // and close on the program's own text.
     expect(parse.startsWith('def keep(f):'), 'the payload parse program opens on its first definition').toBe(true);
     expect(parse).toContain('.agent_id');
-    expect(parse.endsWith('else "" end)'), 'and closes on its last term, the raw id or nothing').toBe(true);
+    expect(parse.endsWith('else "" end)\'"$dsp_out'), 'and closes on its last term, the raw id or nothing, then the spool\'s output').toBe(true);
     expect(parse, 'the id alphabet and its length bound are spelled once, by name').toContain('def idch:');
     expect(parse).toContain('def idmax: 64;');
+    expect(spoolDefs.startsWith('def maxline:'), 'the spool\'s definitions open on their first').toBe(true);
+    expect(spoolDefs.endsWith('else ["", "", "", ""] end;'), 'and close on the end of `spool`').toBe(true);
+    expect(spoolOut).toContain('try spool catch');
     expect(mark.startsWith('def csv:'), 'the marker program opens on its first definition').toBe(true);
     for (const kind of ['working', 'done', 'failed', 'restart', 'clear']) expect(mark, kind).toContain(`$kind == "${kind}"`);
     expect(mark.endsWith('else empty end'), 'and closes on its last branch').toBe(true);
     // CONTROL: the scan sees a regex builtin when there is one, `gsub` through its `sub(`.
     expect(regexCalls('. | test("x") | gsub("a"; "b") | capture("c") | scan("d")')).toEqual(['test(', 'sub(', 'capture(', 'scan(']);
     expect(regexCalls(parse), 'the payload parse runs on every event').toEqual([]);
+    expect(regexCalls(spoolDefs), 'the spool\'s program runs on every delegation event, and a regex failure there would cost the hookstate too').toEqual([]);
+    expect(regexCalls(spoolOut)).toEqual([]);
     expect(regexCalls(mark), 'a marker branch that no row runs is still bound').toEqual([]);
   });
 
@@ -1213,6 +1224,65 @@ describe('only an agent id with a qualifying join is a subagent to the turn mark
     });
   });
 
+  describe('rotation cannot be turned against a swapped path, and a failed append leaves no orphan (Task 2 review, carried into Task 5)', () => {
+    // The rotation checks `jf` (a regular file or nothing, at the top), then opens it on a descriptor, takes `flock -n`, and only
+    // then renames: a path that changes after the check is not what `mv -f` should meet. These rows put the change at exactly that
+    // point by shadowing `flock` with a shell function (BASH_ENV), so no sleep is involved. GNU `mv -f joined joinedprev` onto a
+    // DIRECTORY moves the file INTO it and answers 0; onto a symlink it replaces the link.
+    const shadow = (body: string): Record<string, string> => {
+      const f = path.join(home, 'shadow.sh');
+      fs.writeFileSync(f, `${body}\n`);
+      return { BASH_ENV: f };
+    };
+    const full = (): void => { fs.writeFileSync(joinFile(), `${Array.from({ length: 128 }, (_, i) => `j${i}`).join('\n')}\n`); };
+    const hasFlock = spawnSync('sh', ['-c', 'command -v flock'], { encoding: 'utf8' }).status === 0;
+
+    it.skipIf(!hasFlock)('control: with no swap the 129th line renames the whole file to joinedprev', () => {
+      doneLine();
+      full();
+      run({ hook_event_name: 'SubagentStart', agent_id: 'kept-1', agent_type: 'general-purpose' }, shadow('flock() { return 0; }'));
+      expect(fs.existsSync(joinFile())).toBe(false);
+      expect(joinedPrev()).toHaveLength(129);
+    });
+
+    it.skipIf(!hasFlock)('a symlink swapped in for joined AFTER the open (to the same inode, so -ef still says yes) is not renamed onto joinedprev', () => {
+      doneLine();
+      full();
+      const real = path.join(reg(), 'demo-quiet-basin.joined-target');
+      const env = shadow(`flock() { command mv '${joinFile()}' '${real}' && command ln -s '${real}' '${joinFile()}'; return 0; }`);
+      run({ hook_event_name: 'SubagentStart', agent_id: 'swap-1', agent_type: 'general-purpose' }, env);
+      expect(fs.lstatSync(joinFile()).isSymbolicLink(), 'fixture: the swap happened').toBe(true);
+      expect(fs.lstatSync(prevFile(), { throwIfNoEntry: false }), 'the symlink was not renamed onto joinedprev').toBeUndefined();
+    });
+
+    it.skipIf(!hasFlock)('a directory that appears at joinedprev AFTER the check is not moved into: the file stays whole and the directory stays empty', () => {
+      doneLine();
+      full();
+      const env = shadow(`flock() { command mkdir '${prevFile()}'; return 0; }`);
+      run({ hook_event_name: 'SubagentStart', agent_id: 'dir-1', agent_type: 'general-purpose' }, env);
+      expect(fs.statSync(prevFile()).isDirectory(), 'fixture: the directory appeared').toBe(true);
+      expect(fs.readdirSync(prevFile()), 'nothing was moved into it').toEqual([]);
+      expect(joined(), 'and the file was not renamed away').toHaveLength(129);
+    });
+
+    it('an append that FAILS after the file was created, with the row purged meanwhile, leaves no empty joined behind (the re-check runs on that path too)', () => {
+      doneLine();
+      const GEN = path.join(reg(), 'demo-quiet-basin.generation');
+      // The redirection has created `joined` by the time the shadowed printf runs; it purges the row and fails the write (ENOSPC's shape).
+      const env = shadow(`printf() { if [[ "\${1:-}" == '%s\\n' && "\${2:-}" == "orphan-3" ]]; then rm -f '${GEN}'; return 1; fi; builtin printf "$@"; }`);
+      run({ hook_event_name: 'SubagentStart', agent_id: 'orphan-3', agent_type: 'general-purpose' }, env);
+      expect(fs.existsSync(GEN), 'fixture: the shadow ran, the row is gone').toBe(false);
+      expect(fs.readdirSync(reg()).filter((n) => n.includes('.joined')), 'no empty join record orphaned beside a purged row').toEqual([]);
+    });
+
+    it('control: the same failed append with the row standing leaves nothing to clean and the hook exits 0', () => {
+      doneLine();
+      const env = shadow(`printf() { if [[ "\${1:-}" == '%s\\n' && "\${2:-}" == "failed-1" ]]; then return 1; fi; builtin printf "$@"; }`);
+      run({ hook_event_name: 'SubagentStart', agent_id: 'failed-1', agent_type: 'general-purpose' }, env);
+      expect(joined() ?? [], 'a failed write recorded no id').toEqual([]);
+    });
+  });
+
   describe('only a live row, and only the pane that owns it, gets a join file', () => {
     it('control: the fixture row\'s own pane writes it', () => {
       start('a-1');
@@ -1387,6 +1457,27 @@ describe('only an agent id with a qualifying join is a subagent to the turn mark
       expect(main, 'the shim sees the hook\'s jq calls').toBeGreaterThanOrEqual(2);
       expect(joinedForks, 'a joined id: the membership read added no jq').toBe(main);
       expect(bareForks, 'an unjoined id: nor did this').toBe(main);
+    });
+
+    it('the delegation spool line adds no jq: the same events fork jq exactly as often with a spool directory as without one (delegation broker wave 3, Task 5)', () => {
+      const count = countJq();
+      const forks = (payload: object): number => { const c = count(); run(payload); return count() - c; };
+      const events: Array<[string, object]> = [
+        ['PostToolUse Bash', { hook_event_name: 'PostToolUse', tool_name: 'Bash', tool_input: { command: 'true' }, tool_use_id: 'toolu_01', session_id: 'uuid-1', tool_response: { stdout: '' } }],
+        ['PreToolUse Bash naming a worktree', { hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command: 'git worktree list' }, tool_use_id: 'toolu_02', session_id: 'uuid-1', cwd: home }],
+        ['PreToolUse Agent', { hook_event_name: 'PreToolUse', tool_name: 'Agent', tool_input: {}, tool_use_id: 'toolu_03', session_id: 'uuid-1' }],
+        ['SubagentStart', { hook_event_name: 'SubagentStart', agent_id: 'a-1', agent_type: 'general-purpose', session_id: 'uuid-1' }],
+        ['SessionEnd', { hook_event_name: 'SessionEnd', reason: 'clear', session_id: 'uuid-1' }],
+      ];
+      for (const [, p] of events) run(p);                                    // warm-up: the marker and the join are in the state both passes share
+      const without = events.map(([, p]) => forks(p));
+      fs.mkdirSync(path.join(reg(), 'delegation', 'spool', 'demo-quiet-basin'), { recursive: true });
+      const withSpool = events.map(([, p]) => forks(p));
+      const dir = path.join(reg(), 'delegation', 'spool', 'demo-quiet-basin');
+      const written = fs.readdirSync(dir).flatMap((f) => fs.readFileSync(path.join(dir, f), 'utf8').split('\n').filter(Boolean));
+      expect(written, 'anti-vacuity: every event above wrote its line').toHaveLength(events.length);
+      expect(withSpool, 'jq forks per event, spool present vs absent').toEqual(without);
+      expect(Math.min(...withSpool), 'and the parse is among them').toBeGreaterThanOrEqual(1);
     });
   });
 });

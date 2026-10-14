@@ -202,6 +202,67 @@ describe('install-session-hooks.sh default homes are the roster, behaviourally',
   });
 });
 
+// ── The delegation event set (delegation broker wave 3, Task 5; mutation W3-M05) ───────────────────────────────────────
+// The spool records seven hook events (`DELEGATION_EVENT_KINDS`), and the installer must register every one of them and
+// nothing that would change what Claude Code does. `WorktreeCreate` and `WorktreeRemove` are the second half of that: a
+// registered hook for either REPLACES Claude Code's own worktree handling (spec §3.1), so ccrc never registers them, and
+// `ToolSearch` is not an event at all (a tool name; the one PreToolUse entry's matcher `*` already reaches the hook, which
+// records nothing for it). Registration is measured per home by the doctor (Task 14), not attested by the capability token.
+describe('the installer registers the delegation events, and never a native worktree hook (W3-M05)', () => {
+  const managed = (s: any, ev: string): any[] => ((s.hooks?.[ev] ?? []) as any[]).filter((e) =>
+    e.hooks?.some((h: any) => String(h.command).includes('/session-hook.sh')));
+  const wiredEvents = (s: any): string[] => Object.keys(s.hooks ?? {}).filter((ev) => managed(s, ev).length > 0).sort();
+
+  it('every kind of DELEGATION_EVENT_KINDS has exactly one managed entry in every home, and PreToolUse alone carries a matcher (*)', async () => {
+    const { DELEGATION_EVENT_KINDS } = await import('../../shared/api.js');
+    run();
+    for (const d of ['.claude', '.claude-personal']) {
+      const s = JSON.parse(fs.readFileSync(cfg(d), 'utf8'));
+      for (const ev of DELEGATION_EVENT_KINDS) expect(managed(s, ev), `${d} ${ev}`).toHaveLength(1);
+      for (const ev of wiredEvents(s)) {
+        for (const e of managed(s, ev)) {
+          if (ev === 'PreToolUse') expect(e.matcher, 'PreToolUse reaches every tool, Agent, Task, Workflow and Bash among them').toBe('*');
+          else expect(e, `${ev} has no matcher`).not.toHaveProperty('matcher');
+        }
+      }
+    }
+  });
+
+  it('the wired set is the hook\'s handled set and contains no native worktree event, no ToolSearch and nothing spelled like one', () => {
+    run();
+    const s = JSON.parse(fs.readFileSync(cfg('.claude'), 'utf8'));
+    const wired = wiredEvents(s);
+    expect(wired).not.toContain('WorktreeCreate');
+    expect(wired).not.toContain('WorktreeRemove');
+    expect(wired.filter((e) => /worktree|toolsearch/i.test(e))).toEqual([]);
+    expect(s.hooks.WorktreeCreate).toBeUndefined();
+    expect(s.hooks.WorktreeRemove).toBeUndefined();
+    const SRC = fs.readFileSync(INSTALLER, 'utf8');
+    const list = JSON.parse(/^EVENTS_JSON='(.*)'$/m.exec(SRC)![1]!) as string[];
+    expect(list.filter((e) => /worktree|toolsearch/i.test(e)), 'EVENTS_JSON names neither').toEqual([]);
+    expect(SRC.replace(/^\s*#.*$/gm, '')).not.toMatch(/Worktree(Create|Remove)/);
+  });
+
+  it('a foreign WorktreeCreate or WorktreeRemove hook the operator owns survives a run untouched, and none of ours is added beside it', () => {
+    const s0 = JSON.parse(fs.readFileSync(cfg('.claude'), 'utf8'));
+    s0.hooks.WorktreeCreate = [{ hooks: [{ type: 'command', command: '/opt/x/make-worktree.sh' }] }];
+    s0.hooks.WorktreeRemove = [{ hooks: [{ type: 'command', command: '/opt/x/remove-worktree.sh' }] }];
+    fs.writeFileSync(cfg('.claude'), JSON.stringify(s0, null, 2));
+    run();
+    const s = JSON.parse(fs.readFileSync(cfg('.claude'), 'utf8'));
+    expect(s.hooks.WorktreeCreate).toEqual(s0.hooks.WorktreeCreate);
+    expect(s.hooks.WorktreeRemove).toEqual(s0.hooks.WorktreeRemove);
+  });
+
+  it('--remove takes every managed delegation entry out and leaves the operator\'s own hooks', () => {
+    run();
+    execFileSync('bash', [INSTALLER, '--remove', '--homes', path.join(home, '.claude'), path.join(home, '.claude-personal')], { env: { ...process.env, HOME: home } });
+    const s = JSON.parse(fs.readFileSync(cfg('.claude'), 'utf8'));
+    expect(wiredEvents(s)).toEqual([]);
+    expect(s.hooks.SessionEnd).toEqual(EXISTING.hooks.SessionEnd);
+  });
+});
+
 // D-306. The set of events session-hook.sh HANDLES was enumerated twice — as
 // `case` arms in the hook, and as EVENTS_JSON in the installer — with nothing
 // tying them together. They drifted: the hook grew a SessionStart arm (F1) that

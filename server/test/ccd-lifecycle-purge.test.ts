@@ -2635,7 +2635,7 @@ describe('_reg_purge takes the delegation join record with the row (delegation b
 });
 
 // ── No window orphans a join record (delegation broker wave 3, Task 2, fix round 2) ───────────────────────────
-// The hook takes no lock for its append, and `_reg_purge` removes `generation` LAST, so a SubagentStart can land its
+// The hook takes no lock for its append, and `_reg_purge` removes `generation` and then, last, the join record, so a SubagentStart can land its
 // append while a purge is running. An orphaned `<id>.joined` is a dot-free field: `_ws_slug_free` returns 1 on it for
 // ever and `ws-gc`'s dead-reg arm (keyed on `.uuid`/`.workspace`) never clears it; `<id>.joinedprev`, the rotation's
 // renamed file, is the same kind of field. Two windows, closed by two lines:
