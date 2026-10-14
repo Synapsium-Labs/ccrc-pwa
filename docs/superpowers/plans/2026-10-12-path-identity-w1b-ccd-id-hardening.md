@@ -8438,7 +8438,7 @@ Read all ten loops, `_reg_id_ok`, `_ws_tmproot_id_ok`, stop and ws-add at the ti
 
 ## Deviations found
 
-**No block yet.** This wave's numbers are not issued. The coordinator allocates its block when the run opens, after #351 merges (R14). When the block arrives, it is listed here singly, one number at a time, never as a range.
+**Block issued.** This wave's numbers come from the block the allocator issued for run 433 on 2026-10-14, after #351 merged (R14): twenty-four single numbers, 4980, 4981, 4982, 4983, 4984, 4985, 4986, 4987, 4988, 4989, 4990, 4991, 4992, 4993, 4994, 4995, 4996, 4997, 4998, 4999, 5000, 5001, 5002 and 5003. The coordinator assigns them at the fix round, one per departure. Each is defined here, singly. They are written without the `D-` prefix until they are defined, because a prefixed number above the ledger's defined high-water reds `deviation-refs.test.ts`.
 
 How numbers are issued and assigned:
 - The coordinator assigns the numbers at the fix round. Each substantive departure gets its own number, defined here once. Each task gets one number for its plan-text corrections and extra pins.

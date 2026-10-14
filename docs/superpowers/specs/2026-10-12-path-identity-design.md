@@ -195,6 +195,226 @@ The operator rules on the rows marked Operator. The rows marked Coordinator are 
 - A fixture-HOME case for each verb in section 2.2, answering refused and never redirected. Among them: `stop --surface --surface pwa` is refused, and no stop of `pwa` happens; `ws-release --session --actor ...` is refused.
 - One pin per mint site at 222 and 223 characters.
 
+### 2.9 As built (W1b)
+
+W1b built ccd's half of this section. This subsection records where what it built narrows, corrects or spells out
+§2.2 to §2.8, and names the residuals it leaves. It amends, and rewrites none of the text above. Every claim is
+measured at the wave's tip unless it says otherwise.
+
+**One rule for an id a verb binds (SEC1, SEC3).**
+- `_reg_id_ok` is the rule: the registry charset, read under `LC_ALL=C`, and no leading `-`. The locale is fixed, so
+  a locale whose letter ranges admit a non-ASCII letter cannot widen it.
+- The eight `--session` verbs take each identity key and its value as one pair: `--session` at all eight, `--expect`
+  at ws-reclaim, ws-expire and ws-collect, `--child-of` at ws-reclaim, ws-hold's positional `--reason`, and
+  ws-rename's `--branch`. The pair goes to the loop's residue, never into a variable, so each verb's own arity and
+  order checks still refuse a duplicate key, a wrong order and a lone key, with the words they used before. No
+  identity arm refuses anything itself, and a value is never scanned again as a flag.
+- Every post-loop id check in those eight verbs refuses a leading `-` through `_reg_id_ok`. The three token verbs
+  reach it through `_ws_tmproot_id_ok`, which is built on it (SEC4 below).
+- Apart from the dot rule below, a call to these verbs that spells no id as a flag answers as before, byte for byte.
+  A call whose id spells a flag may now answer `bad session id` where it answered a usage line, a "needs a value"
+  line, or bound another row. A few inputs change because a value itself spells a flag and is now taken whole:
+  - a token or run id at the token verbs answers `bad token` or `bad run id` where it answered the usage line, and
+    ws-reclaim journals that refusal against the real id; no server builder composes such a token or run id;
+  - a ws-rename `--branch` value answers `bad-branch` where the surface word became the new branch name;
+  - a hold reason is held verbatim where the surface word was held or the usage line answered;
+  - a `--session` key with no value of its own, followed by a decision flag, takes that flag as its id. So
+    `ws-release --session --actor ''` dies on the usage line where it died on `--actor must be non-blank`, and
+    `--expect <token> --session --surface=w` at a token verb answers `bad session id` where it answered the usage
+    line. Each is still a refusal, with the same exit code and before any act: §2.4's atomic consumption.
+- `--actor` and `--reason` prose, and a hold reason, may still begin with `-`.
+- No refusal word, probe word or journal act was added, and the refusal scan's sanctioned `die` set is unchanged. The
+  verbs reuse `bad session id` and their usage lines. Stop's two new refusals print `bad session id: ` followed by
+  the token or the id they refused.
+
+**Corrections to §2.4.**
+- §2.4's "`--surface`, `--expect`, and `--branch` retain their existing verb-specific grammars" holds everywhere
+  except at stop and ws-add. Those are the two positional-id verbs, and there a `--surface` value that begins with
+  `-` is refused with the verb's usage line, in both the `--surface <v>` and the `--surface=<v>` spellings, because
+  there it closes a redirect. The eight `--session` verbs keep their surface grammar, since the `--session` pair
+  already closes their redirect.
+- `stop --surface pwa --surface` is refused by the loop's arity check, not by the post-loop id check.
+- §2.4's "remains non-blank and bounded": bounded holds for the `--actor` and `--reason` decision fields only.
+  ws-hold's positional reason is checked for blankness only, and W1b adds no byte cap to it.
+- Stop also refuses a residue token that begins with `-`, and a composed id that `_reg_id_ok` refuses (one holding a
+  `/` or a space, for example), before any unit call or journal row. In the two-argument form that includes a third,
+  dash-leading token: `stop <wrapper> <project> --x` was silently ignored, and now answers `bad session id: --x`. No
+  server builder composes it.
+- ws-add refuses a second `--actor`, in either spelling or any mix of them, with its usage line. That closes a
+  project spelled `--actor` without any change to the server's builder order.
+
+**The predicates (SEC4).**
+- `_ws_project_valid` refuses a leading `-` on a line of its own, beside its leading-`.` line. Its four callers that
+  print its refusal, `enable`'s new project check among them, say "no LEADING dot or dash". This closes the only mint
+  path for a dash-leading id. Before the edit, the wave's entry check counted no dash-leading name in the registry,
+  `pools/`, `tmproots/`, `tmpquarantine/`, the project directories or the worktrees, on either box (measured; counts
+  only, no names).
+- `_ws_tmproot_id_ok` is `_reg_id_ok` plus no leading `.`. It is ccd's mirror of `isTmpRootId` without the length
+  rule, pinned against it name by name.
+- `enable <wrapper> <project>` checks its project with `_ws_project_valid` before it journals anything. It refuses
+  more than before: a dot- or dash-leading project leaves no `enable` row. Ahead of it, enable asks its wrapper with
+  `cmd_start`'s own check and words, so an unrostered or flag-spelled wrapper leaves no `enable` row and no reap lock
+  either.
+
+**Dots (SEC6).**
+- ws-reclaim, ws-expire and ws-collect refuse a dot-leading id at entry through `_ws_tmproot_id_ok`. So do
+  `ws-audit --reclaim` and `ws-audit --expire`, for symmetry with `isRegistryId`. Plain `ws-audit` keeps the check it
+  had.
+- ws-release, ws-archive, ws-restore, ws-hold, ws-rename and stop still accept a dot-leading id
+  (`dot-rule-only-at-the-token-verbs`). A dot rule there is the operator's option, and was not built.
+- A dot-leading id at the reclaim and expire audits now exits 1, which the server's expiry and reclaim lanes read as
+  an unreadable audit, where it got a terminal `no-such-session` document at exit 0. It is reachable only through a
+  hand-planted run row, until the server's id gate lands.
+
+**The composed-id cap, in place of §2.6's 222 (SEC5).**
+- The cap comes from a census of every name derived from an id, in every file under `ccd/` (skill and doc text
+  excluded) and in `server/src`. The census covers:
+  - the registry fields and their dot-leading temp names;
+  - the hook-state and turn files and the supervise log;
+  - the compaction and generation locks and the start counter;
+  - the reap and ws-add locks, and the quarantine slot;
+  - the `claude-session@<id>.service` unit;
+  - the history sweep's draining name and the server's per-id usage file;
+  - the session hook's own temp and stage names.
+- The widest overhead is 81 bytes, for `.<id>.compactcard.<pid>.<nonce>.session-claim.tmp`, so 255 minus 81 is 174.
+  §2.6's 222 fit only the slot name.
+- The session hook bounds ids too:
+  - `CCRC_ID_MAX` is 128. The hook's peer census skips a longer id, and its `.project` reads stop at that length.
+  - `CCRC_PROJ_MAX` is 64. A session whose project is longer gets no card, and so does a session with no project
+    whose id is longer.
+- `_REG_ID_MAX` is 128: the smaller of 174 and the hook's 128, so ccd never mints an id the hook's peer census would
+  skip.
+- ccd applies the cap at every mint site, before any row, worktree, branch or `.uuid` is created or journaled. Each
+  site has its own die line, ending "nothing was created", and the sentence before it lives once, in
+  `_REG_ID_CAP_WHY`. The sites:
+  - ws-add, once the slug is chosen and before `git fetch` and `git worktree add`, for a positional slug and for
+    `CCD_WS_SLUG` alike;
+  - start's creating form, even when the row already exists;
+  - enable's two-argument form, before its journal row.
+- The one thing a cap refusal can leave behind is ws-add's per-project add lock, which ws-add takes before it chooses
+  a slug, as every ws-add refusal after that lock does.
+- `ccd-id-cap.test.ts` holds the census table, the files it left out, and the number. A template added in a scanned
+  file without a row reds it.
+- The census left out `server/src/token/files.ts`, because its `${id}` is a box-token generation id, never a session
+  id, so `mail-pending-<generation>.token` embeds no registry id (`files-outside-the-name-census`).
+- Two sets of names are built from a bare id or a file name that the census scanner's spellings do not match, and are
+  stated residuals:
+  - `history-spool-names-outside-the-census-patterns`: the hook's `spool/<id>.jsonl` and the sweep's `.obs` sidecar.
+    The table holds the draining name, `<id>.<ms>.<pid>.jsonl`, and neither of the other two is wider than it.
+  - `quarantine-record-names-outside-the-census-patterns`: the quarantine record `tmpquarantine/<id>.<ns>.<pid>`, 28
+    bytes, and the temp `.<id>.<ns>.<pid>.<pid>.<R>.tmp` its writer makes, 47 bytes, spell the id `$name`. The
+    witness writer's temp, `.<id>.<pid>.<R>.tmp` at 19 bytes, is built the same way. Each is narrower than the widest
+    row, so the cap is unaffected.
+- §2.8's "One pin per mint site at 222 and 223 characters" reads: one pin per mint site at `_REG_ID_MAX` and at one
+  byte more.
+
+**The reap lock is taken after a parse (SEC7).**
+- The collect audit and the collect verb open `$REG/.reap-<id>.lock` only after an advisory pass. The pass grants
+  nothing and writes nothing. In order:
+  1. The id must contain a `-`. If it does not, the answer is unmeasured `registry`, in the same words the locked
+     evaluation uses.
+  2. Records are listed, and a listing that fails is unmeasured `records`. A record whose body parses and names the id
+     lets the lock open. If records exist but none both parses and names the id, the answer is the one the locked
+     resume gives, word and detail byte for byte: `quarantine-kept`, or unmeasured `records` or `quarantine`.
+  3. With no record, a witness whose body parses lets the lock open.
+  4. A witness that does not parse first gets a registry peek, and the lock opens unless all three of these hold:
+     `$REG/<id>.child` and `$REG/<id>.uuid` are proven absent; `$REG` can be listed; and the id's slug is free across
+     every `$REG/<id>.<field>` and every dot family. When the lock opens, the locked evaluation answers `registered`
+     or unmeasured `registry`, as before. Only when all three hold is the witness's answer given before the lock.
+- So a live row of any kind still answers `registered` ahead of `witness-mismatch`, with nothing journaled. A junk
+  witness or junk record of an id that no row names creates no permanent lock.
+- Under the lock every input is listed, read and parsed again before any act. A race between the pass and the lock
+  can therefore only refuse, or be judged again.
+- The verb reads the cleanup pause under the lock, so its pre-lock answers now come ahead of the cleanup pause. A
+  junk witness or record is refused with its own word and a detail saying "no lock was taken", even while the pause
+  stands. Nothing moves either way.
+- The pre-lock answers also come ahead of the lock's own. At the audit they precede unmeasured `lock` and
+  `in-progress`, and its `mv` and `flock` checks still run first. At the verb they precede `flock-unavailable`,
+  `lock-unopenable` and `in-progress`. So junk input answers terminal `witness-mismatch` or `quarantine-kept` while
+  another process holds the lock, as it does when none does: ccd writes a witness or a record by temp file and
+  rename, so a junk body is never a write in progress.
+- For an id with no `-`, unmeasured `registry` now comes ahead of every answer the resume gave before its registry
+  rung, ahead of a standing `.child` or `.uuid`'s `registered`, and ahead of the listing's unmeasured `records`. The
+  audit document prints `records: []` for it. This is unreachable in practice: every mint composes `<a>-<b>`, and the
+  entry check counted no dash-free name on either box.
+
+**Proof (§2.8, §8).**
+- The real-binary proof is a file of its own, `ccdargv-dash-id-parity.test.ts`. It is not `ccdargv-dec-parity`,
+  which this wave leaves unedited.
+  - It composes every argv through the server's own builders and runs it on `ccd/ccd` under `bash -p`, with fixture
+    HOMEs.
+  - For stop it adds one typed argv: the order W1a composes.
+  - An anti-whitelist keeps every decision-appending verb in it.
+- §8's "the verb verdicts of section 2.2" were not measured by the entry check, which writes nothing. They were
+  measured by that matrix, run once against the pre-wave binary (a copy outside the tree). Of its 259 cases, 188 went
+  red there and 71 stayed green, and all 259 are green at the tip. The matrix agrees with §2.2's readings of the
+  loops, and shows more. Wherever no decision flag ate an id that spells a flag, the pre-wave binary bound it
+  literally and looked it up. And one verdict is wider than §2.2's: its stop row names the one-argument form, but the
+  two-argument form redirected too, since a project of `--surface` stopped `<wrapper>-pwa`.
+
+| Verb | Ids that went red before W1b | What the pre-wave binary did | At the tip |
+|---|---|---|---|
+| ws-release | all eight | `--actor`, `--surface` and `--reason` bound the surface word `agent` and released it; the other five bound the literal id and looked it up | Refused before any act |
+| ws-archive | all eight | Bound an id and looked it up as a row | Refused before any act |
+| ws-restore | all eight | Created a reap lock and journaled a line naming a decoy or the id | Refused before any lock |
+| ws-hold | `--reason`, `--expect`, `--defer-expired`, `--session`, `--branch`, `--child-of` | Bound the literal id and looked it up | Refused before any act |
+| ws-rename | `--expect`, `--defer-expired`, `--session`, `--branch`, `--child-of` | Bound the literal id and looked it up | Refused before any act |
+| ws-reclaim | all but `--defer-expired` | Looked the id up as a row, created a reap lock and journaled a line | Refused before any lock |
+| ws-expire | all eight | As ws-reclaim; `--defer-expired` also stayed literal and created a lock | Refused before any lock |
+| ws-collect | all eight | `--actor`, `--surface` and `--reason` created the reap lock of `agent`, where the fixture plants a junk witness, and journaled a line; the other five answered `not-witnessed` and journaled a line | Refused before any lock |
+| ws-add | `--actor`, `--surface` as the project | Bound project `agent`, which is a create: a worktree, rows, a unit and a pane | Refused before any worktree |
+| stop | all eight in the builder's order, and all but `--surface` in the order W1a composes | The builder's order stopped the literal id, and an id of `--surface` stopped `pwa`; the other order stopped the literal id | Refused before any unit call |
+| Ids that arity already refused: ws-hold's `--actor` and `--surface`; ws-rename's `--actor`, `--surface` and `--reason`; ws-reclaim's `--defer-expired`; stop's `--surface` in the order W1a composes | None | Refused | Refused, as before |
+
+*Table 1. The decision-carrying verbs, under a decision with and without a reason (ws-add without only).*
+
+| Builder | Values that went red before W1b | What the pre-wave binary did | At the tip |
+|---|---|---|---|
+| `stopPair` | A dash-leading wrapper, `--surface` excepted, and a dash-leading project | Stopped `<dash>-<project>` or `<wrapper>-<dash>`, with a unit and a pane; a project of `--surface` stopped `<wrapper>-pwa` | Refused before any unit call |
+| `start`, `enable` | A dash-leading project | Created `<wrapper>-<dash>`: a unit, a pane and rows; a dash-leading wrapper was refused already | Refused before any row, start or journal line |
+| `forget`, `swap`, `swapCross` | None: their arity or usage checks refused them | Refused | Refused, as before |
+| `wsReclaimAudit`, `wsExpireAudit`, `wsCollectAudit` | All eight, for each | Answered an audit document at exit 0 for the dash-leading id, and took no lock | Refused at entry |
+| `wsAudit` | Not a refusal row: it audits the literal id | Audited the literal id | Kept as before (`verbs-outside-sec1-keep-the-inline-regex`) |
+
+*Table 2. The verbs that take a positional id and carry no decision.*
+
+**Comment carries (§7 items 29 to 31).** Each edit kept its line count. The collector's header now says three things:
+- the cleanup pause stops a witness-only collection;
+- the audit pays one kill grace, about 73 s, or 78 s at the widest grace, against ws-audit's 90 s row;
+- the lane acts only once the operator arms it, by the fleet box's legacy marker or by the Settings switch where it
+  has shipped.
+
+**Stated residuals.**
+- `dot-rule-only-at-the-token-verbs`: release, archive, restore, hold, rename and stop still accept a dot-leading id.
+  Refusing it there is an operator option.
+- `verbs-outside-sec1-keep-the-inline-regex`: ws-attic, pr-open, plain ws-audit, ws-reap, forget, `start <id>` and
+  `pr-state --session <id>` keep the inline id check they had, which admits a leading `-`, and `ensure <id>` takes
+  its one positional with no shape check and needs an existing row. None of them carries the decision flags the
+  server appends, so none can be redirected by an id that spells one. Plain ws-audit audits a dash-leading id
+  literally and acts on no other row (pinned).
+- `enable-one-arg-journals-an-unchecked-id`: `enable <id>` journals its row before any check of the id, as it did
+  before the wave. `cmd_start`, which it calls next, applies the inline charset check and needs an existing row.
+- `hand-planted-ids-over-the-cap`: a row planted by hand above `_REG_ID_MAX` is not refused. ccd never mints one.
+- `files-outside-the-name-census`: the file the cap's census left out, listed above.
+- `history-spool-names-outside-the-census-patterns` and `quarantine-record-names-outside-the-census-patterns`: the
+  names listed above, whose spelling the census scanner does not match.
+- `random-slug-decides-the-cap-near-the-boundary`: ws-add caps the id after it chooses the slug. For a project of 114
+  to 118 bytes given no slug, the random slug's length, 9 to 14 bytes, decides whether the add succeeds or is refused.
+- `projects-over-64-get-no-hook-card`: the cap bounds the composed id, not the project. A project longer than
+  `CCRC_PROJ_MAX` still gets no card.
+- `hold-card-workdir-quote-silent-near-the-cap`: the hook's `CCRC_WD_MAX` is 127, one under the length its reads stop
+  at, and the hold card quotes a workspace's directory only when the path fits it. A worktree path past 127
+  characters, which an id near the cap can reach, loses the quote. The card degrades to silence, never to a false
+  statement.
+- `btime-less-witness-takes-the-lock`: a witness that parses but records no birth time opens the lock. Its
+  `witness-mismatch` stays an answer given under the lock.
+- `dash-leading-pool-tag-unclearable-on-an-upgraded-box`: on a box that already holds the pool tag of a dash-leading
+  project, `ccd project-pool --project -lead --clear` now refuses. The entry check counted none on either box, and the
+  doctor's text for a tag it cannot print as a command already says to remove it by hand.
+- `server-docstrings-call-ccds-predicate-dot-only`: the docstrings of `isTmpRootId` (`shared/api.ts`) and
+  `childReclaimLeafKept` (`server/src/childReclaimSweep.ts`) still describe ccd's `_ws_tmproot_id_ok` as refusing a
+  leading `.` only. They are carried to the next wave that edits those files.
+
 ## 3. The temp-root tail and the collector
 
 This section hardens what the reclaim and expiry tail and the collector believe about a temp-root leaf, and what any removal is licensed against when a mount stands inside the tree. Everything here uses identity ccd already records (the witness's `dev=`) and helpers that already exist, so it needs no format change.
@@ -838,14 +1058,14 @@ This table has one row for every carried item (37 from the pre-flight and three 
 | 21 | ccd-cured-standing-residuals | correctness | standing, W4 | Proposed | standing; root sentinel cures renumbering only (TR10) |
 | 22 | registry-id-shape-gate (SECURITY) | security | W1a | Proposed | `isRegistryId`, `readSessionRecord.kind`, `RegistryRead.refused`, and classification or migration of all 12 compatibility callers (SEC2) |
 | 23 | run-and-pwa-session-ids-unshaped | security | W1a | Proposed | gate `knownId`, POST /api/runs, every stored-row argv seam including child-spent, and stop builder order (SEC2) |
-| 24 | ccd-id-predicates-admit-leading-dash | security | W1b | Proposed | refuse a leading dash after the Task 0 re-count (SEC3, SEC4) |
-| 25 | ccd-flag-loops-scan-session-value | security | W1b | Proposed | eight loops plus stop and ws-add, dash values refused (SEC1) |
-| 26 | collect-audit-creates-reap-lock-for-junk-names | security | W1b | Proposed | pure checks and a parse before the lock (SEC7) |
-| 27 | entry-id-dot-leading-rule | security | W1b | Proposed | refuse at ws-reclaim and ws-expire entry (SEC6) |
-| 28 | id-223-to-244-bytes-name-no-slot | correctness | W1b | Proposed | cap the composed id at 222 at every mint site (SEC5) |
-| 29 | witness-only-header-omits-the-pause-rung | prose | W1b, else W2 | Proposed | line-neutral comment fix, rides the first ccd restamp |
-| 30 | collector-budget-header-sums-a-grace-per-probe (F22) | prose | W1b, else W2 | Proposed | one grace, 73 s or 78 s; drop the stale wave-9 clause |
-| 31 | collect-v1-ships-it-inert | prose | W1b, else W2 | Proposed | say the lane is armed by the switch (marker or Settings) |
+| 24 | ccd-id-predicates-admit-leading-dash | security | W1b | Built (W1b) | refuse a leading dash after the Task 0 re-count (SEC3, SEC4) |
+| 25 | ccd-flag-loops-scan-session-value | security | W1b | Built (W1b) | eight loops plus stop and ws-add, dash values refused (SEC1) |
+| 26 | collect-audit-creates-reap-lock-for-junk-names | security | W1b | Built (W1b) | pure checks and a parse before the lock (SEC7) |
+| 27 | entry-id-dot-leading-rule | security | W1b | Built (W1b) | refuse at ws-reclaim and ws-expire entry (SEC6) |
+| 28 | id-223-to-244-bytes-name-no-slot | correctness | W1b | Built (W1b) | cap the composed id at 222 at every mint site (SEC5) |
+| 29 | witness-only-header-omits-the-pause-rung | prose | W1b, else W2 | Built (W1b) | line-neutral comment fix, rides the first ccd restamp |
+| 30 | collector-budget-header-sums-a-grace-per-probe (F22) | prose | W1b, else W2 | Built (W1b) | one grace, 73 s or 78 s; drop the stale wave-9 clause |
+| 31 | collect-v1-ships-it-inert | prose | W1b, else W2 | Built (W1b) | say the lane is armed by the switch (marker or Settings) |
 | 32 | stale-wave9-carry-comments-in-tests | prose | W2 | Proposed | re-point race-spawn; race-crash closed with TR4 |
 | 33 | c1-resume-boundary-spawn-pins | test-only | W2 | Proposed | a representative 6 in a Linux-only file (TR12) |
 | 34 | c13-reach-to-another-admin-entry | test-only | W2 | Proposed | add the sibling-entry case |
