@@ -32,8 +32,10 @@ export interface DocLinkContextValue {
 export const DocLinkContext = createContext<DocLinkContextValue | null>(null);
 
 /** `true` inside the children of a `DocLink` anchor (an in-app, fragment, external or GitHub link), `false` elsewhere.
- *  `DocImage` reads it: an image inside a link is not a second control, so one tap is the link's alone and no button
- *  is ever nested inside an anchor. An inert link is a span with no action and does not set it. */
+ *  `DocImage` reads it: a loaded image inside a link is a bare `<img>` and a refused one is plain text, so
+ *  their tap is the link's alone. A DEFERRED image (index 30 and on) inside a link still renders its Load button
+ *  inside the anchor, because the image can be loaded no other way; its tap loads the image and does not follow the
+ *  link. An inert link is a span with no action and does not set it. */
 export const DocInLinkContext = createContext(false);
 
 /** A primary-button click with no modifier: the one click `DocLink` handles in-app. A modifier or middle click is the

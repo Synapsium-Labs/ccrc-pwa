@@ -153,7 +153,8 @@ const IGNORE_DRAFT_ASSET = (): void => {};
  *  itself, so two things a Markdown image does are withheld here: a tap on it opens nothing (its target is this very
  *  leaf, and `DocImage` would push a duplicate entry and drop `view=committed`), so it renders inside
  *  `DocInLinkContext` as a bare `<img>` with no button to focus; and it is not counted as a drafted asset the page
- *  embeds. The leaf's header already offers Download, so the in-link refusal (no action buttons) loses nothing. */
+ *  embeds. The Download button sits in the actions row under this body, so the in-link refusal (no action buttons) loses
+ *  nothing. */
 function RasterBody(p: { readonly link: LinkBase; readonly name: string }): ReactNode {
   const assets = useContext(DocsAssetContext);
   const own = useMemo<DocsAssetContextValue | null>(

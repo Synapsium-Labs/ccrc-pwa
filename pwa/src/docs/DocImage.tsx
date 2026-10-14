@@ -247,7 +247,7 @@ export function DocImage(p: ComponentProps<'img'> & { node?: HastElement }): Rea
   const label = alt ?? '';
   if (plan.kind === 'refused') {
     const reason = fillSentence(DOC_IMAGE_REFUSED_SENTENCE[plan.why], plan.fields);
-    // Inside a link the link's action is the tap's alone: no second action, and no button inside the anchor.
+    // Inside a link the link's action is the tap's alone: no second action, so no action button here.
     const action = inLink ? null : plan.action;
     return (
       <>
@@ -277,7 +277,8 @@ export function DocImage(p: ComponentProps<'img'> & { node?: HastElement }): Rea
     return (
       <>
         <button type="button" className="doc-img-load" onClick={(e) => {
-          // Inside a link this tap loads the image and is not the link's.
+          // Inside a link this Load button still sits inside the anchor (the image can be loaded no other way), and its
+          // tap loads the image and is not the link's.
           e.preventDefault();
           e.stopPropagation();
           setAsked(true);
@@ -293,7 +294,7 @@ export function DocImage(p: ComponentProps<'img'> & { node?: HastElement }): Rea
     return <><span className="doc-img-failed" role="img" aria-label={label}>{shown.sentence}</span>{chips}</>;
   }
   if (inLink) {
-    // The link is the control: a bare image, so one tap is the link's and no button sits inside the anchor.
+    // The link is the control: a loaded image is a bare image, so its tap is the link's.
     return <><img src={shown.src} alt={label} title={title} className="msg-img" />{chips}</>;
   }
   const leafHref = plan.leafHref;
