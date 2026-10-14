@@ -145,10 +145,12 @@ export function truthSource(tree: DocsTreeOk, page: Leaf, opened: DocPin | null)
 /** The freshness chip's `data-state` (spec 4.5's table). */
 export type FreshChipState = 'none' | 'never' | 'ok' | 'local' | 'failed' | 'fetching' | 'soon';
 
-/** When the `soon` chip's wait ends (ms since the epoch), or null when the chip is not `soon`. The visit's own `soon`
- *  (its one automatic retry pending) carries it; an answered `fetch-too-soon` past that retry (a second one in the
- *  visit) is `soon` too (spec 4.5: an answered fetch-too-soon is the `soon` state), counted from the answer's
- *  `retryAfterMs` and when it landed, with no retry behind it. */
+/** When the `soon` chip's wait ends (ms since the epoch), or null when the freshness is not a `soon` one. The visit's
+ *  own `soon` (its one automatic retry pending) carries it; an answered `fetch-too-soon` past that retry (a second one
+ *  in the visit) is `soon` too (spec 4.5: an answered fetch-too-soon is the `soon` state), counted from the answer's
+ *  `retryAfterMs` and when it landed, with no retry behind it. The time can lie in the past: a retry dropped because
+ *  the user left the key leaves its `soon` behind, and a second answer's wait runs out with nothing after it. The
+ *  chip then falls back to the stamp (`freshnessChip`). */
 export function soonUntil(freshness: Freshness): number | null {
   if (freshness.s === 'soon') return freshness.retryAt;
   if (freshness.s === 'answered' && freshness.fetch.state === 'failed' && freshness.fetch.failure.failure === 'fetch-too-soon') {
@@ -158,7 +160,9 @@ export function soonUntil(freshness: Freshness): number | null {
   return null;
 }
 
-/** The freshness chip (spec 4.5), from the tree's own facts and the visit's refresh state. Ages are
+/** The freshness chip (spec 4.5), from the tree's own facts and the visit's refresh state. A `soon` freshness shows
+ *  its countdown only while `now < soonUntil`; from that time on (nothing is due and nothing is pending) the chip
+ *  is the stamp's, as if the visit had no `soon`. Ages are
  *  `attemptAgeMs + (now - receivedAt)` (and `okAgeMs` likewise), in `formatAge`'s words; an answer this visit got is
  *  aged from when it landed. */
 export function freshnessChip(
@@ -184,7 +188,10 @@ export function freshnessChip(
     case 'answered': {
       const until = soonUntil(freshness);
       if (until !== null) {
-        return { state: 'soon', text: fillSentence(DOCS_HEAD_TEXT.freshSoon, { n: Math.max(0, Math.ceil((until - now) / 1000)) }) };
+        // The wait is over (now >= until): nothing is due and nothing is pending, so the chip is what it would be with
+        // no `soon` at all, the stamp's. Before then `n` is at least 1, so it never reads "again in 0s".
+        if (now < until) return { state: 'soon', text: fillSentence(DOCS_HEAD_TEXT.freshSoon, { n: Math.ceil((until - now) / 1000) }) };
+        break;
       }
       if (freshness.s !== 'answered') break;
       if (freshness.fetch.state === 'skipped') return { state: 'local', text: DOCS_HEAD_TEXT.freshLocalRef };
@@ -379,7 +386,9 @@ export function DocsHead(p: { readonly page: DocsPageLocation; readonly visit: D
   const { page, visit, tree } = p;
   const slow = useNow(30_000, tree !== null);
   // While the chip is `soon` it counts seconds: a 1 s tick re-renders, and the figure is read from the clock at render
-  // (never from the last tick), so an answer that lands between two 30 s ticks does not overstate the wait.
+  // (never from the last tick), so an answer that lands between two 30 s ticks does not overstate the wait. The tick
+  // runs only while `Date.now() < until`: the one that lands at or past `until` renders the stamp (`freshnessChip`)
+  // and, `active` being false from then on, is the last, so a chip never sits on "again in 0s".
   const until = soonUntil(visit.freshness);
   useNow(1000, tree !== null && until !== null && Date.now() < until);
   const now = until === null ? slow : Date.now();

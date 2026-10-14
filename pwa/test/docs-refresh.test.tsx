@@ -5,9 +5,10 @@
 // a stale lock and an unmeasured one never. Loaders are spies; nothing reaches a server.
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { Activity, type ReactNode } from 'react';
-import { act, cleanup, renderHook } from '@testing-library/react';
+import { act, cleanup, render, renderHook } from '@testing-library/react';
 import { DOCS_STALE_MS, type DocsPageLocation } from '../../shared/docs';
 import { clearAuthLost, raiseAuthLost } from '../src/lib/auth';
+import { DocsHead } from '../src/docs/DocsHead';
 import { useDocsVisit } from '../src/docs/useDocsVisit';
 import type { DocsLoaders, DocsRefreshLoaderAnswer } from '../src/docs/failures';
 import {
@@ -605,5 +606,60 @@ describe('T13 review A-2: a refresh that answers while the screen is hidden leav
     h.set('visible');
     await flush();
     expect(h.result.current.freshness).toEqual(before);
+  });
+});
+
+describe('Review 439 F9: the soon chip falls back to the stamp once its time has passed', () => {
+  /** The real hook feeding the real header, as the screen mounts them. */
+  function Header(p: { readonly loaders: DocsLoaders; readonly url: string }): ReactNode {
+    const page = pageAt(p.url);
+    const v = useDocsVisit(page, p.loaders);
+    return <DocsHead page={page} visit={v} tree={v.tree?.s === 'ok' ? v.tree.answer.tree : null} />;
+  }
+  const chip = (): HTMLElement => {
+    const el = document.querySelector<HTMLElement>('.docs-fresh');
+    if (el === null) throw new Error('no chip');
+    return el;
+  };
+  const STAMP = 'never fetched ↻';
+
+  it('a second fetch-too-soon, the one automatic retry spent, counts down to the stamp and never reads 0s', async () => {
+    vi.useFakeTimers({ now: 1_000_000 });
+    const f = fakeLoaders({ tree: due() });
+    f.refresh.mockResolvedValue(okRefresh(fetchFailed('fetch-too-soon', { retryAfterMs: 4000 })));
+    render(<Header loaders={f.loaders} url="/docs/demo" />);
+    await flush();
+    expect(chip().textContent).toBe('fetched moments ago; again in 4s');
+    const seen: string[] = [];
+    for (let i = 0; i < 12; i += 1) {
+      await advance(1000);
+      seen.push(`${chip().getAttribute('data-state')}: ${chip().textContent}`);
+    }
+    expect(f.refresh).toHaveBeenCalledTimes(2);
+    expect(seen.filter((t) => /again in 0s/.test(t))).toEqual([]);
+    expect(seen.some((t) => /again in [1-4]s/.test(t))).toBe(true);
+    expect(seen.at(-1)).toBe(`never: ${STAMP}`);
+    // The tick stops once the time has passed: a long wait keeps the stamp and POSTs nothing.
+    await advance(600_000);
+    expect(f.refresh).toHaveBeenCalledTimes(2);
+    expect(chip().textContent).toBe(STAMP);
+  });
+
+  it('a pending retry dropped because the user left the key, then back, shows the stamp, never again in 0s', async () => {
+    vi.useFakeTimers({ now: 1_000_000 });
+    const f = fakeLoaders({ tree: due() });
+    f.refresh.mockResolvedValueOnce(okRefresh(fetchFailed('fetch-too-soon', { retryAfterMs: 4000 })));
+    const { rerender } = render(<Header loaders={f.loaders} url="/docs/demo" />);
+    await flush();
+    expect(chip().textContent).toBe('fetched moments ago; again in 4s');
+    rerender(<Header loaders={f.loaders} url="/docs/other" />);
+    await flush();
+    await advance(10_000);
+    rerender(<Header loaders={f.loaders} url="/docs/demo" />);
+    await flush();
+    expect(f.refresh.mock.calls.filter((c) => c[0] === 'demo')).toHaveLength(1);
+    expect(chip().textContent).not.toMatch(/again in/);
+    expect(chip().textContent).toBe(STAMP);
+    expect(chip().getAttribute('data-state')).toBe('never');
   });
 });

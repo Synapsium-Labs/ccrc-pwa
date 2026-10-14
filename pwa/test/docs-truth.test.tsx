@@ -304,15 +304,19 @@ describe('the freshness chip (spec 4.5)', () => {
       'fetch failed 3m ago: Fetching from origin took too long and was stopped. · last good 14m ago ↻');
   });
 
-  it('an answered fetch-too-soon is the soon state, counted from its own retryAfterMs and answer time (no auto-retry)', () => {
+  it('an answered fetch-too-soon is the soon state until its own retryAfterMs, from the answer time, has passed (no auto-retry)', () => {
     vi.useFakeTimers({ now: NOW });
     const tree = withStamp(stamp({}));
     const freshness: Freshness = { s: 'answered', fetch: fetchFailed('fetch-too-soon', { retryAfterMs: 10_000 }), at: NOW - 4000 };
     render(<DocsHead page={pageAt('/docs/demo')} visit={visitOf(tree, { freshness }, NOW - MIN)} tree={tree} />);
     expect(q('.docs-fresh')).toHaveAttribute('data-state', 'soon');
     expect(q('.docs-fresh').textContent).toBe('fetched moments ago; again in 6s');
-    act(() => { vi.advanceTimersByTime(6000); });
-    expect(q('.docs-fresh').textContent).toBe('fetched moments ago; again in 0s');
+    act(() => { vi.advanceTimersByTime(5000); });
+    expect(q('.docs-fresh').textContent).toBe('fetched moments ago; again in 1s');
+    // At the time the wait ends nothing is due and nothing is pending: the chip is the stamp's, never "again in 0s".
+    act(() => { vi.advanceTimersByTime(1000); });
+    expect(q('.docs-fresh')).toHaveAttribute('data-state', 'ok');
+    expect(q('.docs-fresh').textContent).toBe('fetched 5m ago ↻');
   });
 
   it('no origin is static text, not a button', () => {
