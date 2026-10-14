@@ -232,12 +232,20 @@ describe('shared/box-token.ts — the claim door, value and generation shapes, a
 });
 
 // 4556, 4557: the weekly interval and its overdue slack are declared ONCE, in L0, and held there by NAME (one
-// definition) and by VALUE (no other numeric expression in the four shipped roots equals seven days in ms, whatever
-// its spelling). The seven-day regex in `single-definition.test.ts` scans `server/src` and `pwa/src` only and lets
-// `604_800_000` and `7 * 86_400_000` through; this scan covers `shared/` and `agent/src` too and reads products.
+// definition) and by VALUE (no other numeric expression in the four shipped roots equals seven days in ms, in the
+// spellings the controls below show). The seven-day regex in `single-definition.test.ts` scans `server/src` and
+// `pwa/src` only and lets `604_800_000` and `7 * 86_400_000` through; this scan covers `shared/` and `agent/src` too
+// and reads products.
 //
 // What the scan does NOT see: a sum (`6 * DAY + DAY`), a division, a float or exponent literal (`6.048e8`), a
-// lower-case or imported-alias name, and a value built at run time. The controls below pin what it does see.
+// lower-case or imported-alias name, a value built at run time, and a product with parenthesised grouping
+// (`(7 * 24) * 60 * 60_000`). Its name table is built from `const NAME = <product>;` alone, on one line: a name defined
+// by `let`, with `as const`, or across lines is no entry, and a chain of names deeper than the table's three passes
+// stays unresolved. The table is one for all files and the last definition wins, so two files that define one name with
+// different values make a product of it resolve to the later one (today `CLEAR_POLL_MS` and `POLL_MS` are each defined
+// twice with different values; neither reaches seven days). The roots are read for `.ts` and `.tsx` only: the
+// deploy-side `shared/*.mjs` and the `*.d.mts` files are outside the scan, and none holds a seven-day value today.
+// The controls below pin what it does see.
 describe('the rotation interval: declared once in L0, pinned by name and by value (4556, 4557)', () => {
   const REPO = path.resolve(here, '..', '..');
   const ROOTS = ['shared', 'server/src', 'pwa/src', 'agent/src'].map((r) => path.join(REPO, r));
@@ -327,18 +335,30 @@ describe('the rotation interval: declared once in L0, pinned by name and by valu
   });
 
   const DAY = { rel: 'd.ts', text: 'const DAY_MS = 86_400_000;' };
-  it.each([
+  const SEEN: { name: string; files: { rel: string; text: string }[]; want: string[] }[] = [
     ...['604_800_000', '604800000', '7 * 86_400_000', '7 * 86400000', '7 * 24 * 3_600_000', '7 * 24 * 3600 * 1000',
       '168 * 60 * 60_000', '10_080 * 60_000', '7 * 24 * 60 * 60_000', '7*24*60*60*1000']
       .map((s) => ({ name: s, files: [{ rel: 'x.ts', text: `const A = ${s};` }], want: ['x.ts:A'] })),
-    { name: '7 * DAY_MS, with DAY_MS defined on the line above (DAY_MS itself is no holder)',
+    // `7 * DAY_MS` with DAY_MS defined on the line above: the holder is A, and DAY_MS itself is none.
+    { name: 'name, line above',
       files: [{ rel: 'x.ts', text: 'const DAY_MS = 86_400_000;\nconst A = 7 * DAY_MS;' }], want: ['x.ts:A'] },
-    { name: '7 * DAY_MS, with DAY_MS defined in another file',
+    // `7 * DAY_MS` with DAY_MS defined in another file.
+    { name: 'name, other file',
       files: [DAY, { rel: 'x.ts', text: 'const A = 7 * DAY_MS;' }], want: ['x.ts:A'] },
-    { name: 'the same expression on a line with no const is named by its line',
+    // The same expression on a line with no const is named by its line.
+    { name: 'name, no const',
       files: [DAY, { rel: 'x.ts', text: 'f(7 * DAY_MS);' }], want: ['x.ts:line 1'] },
-  ])('the scan sees $name (CONTROLS)', ({ files, want }) => {
+  ];
+  it.each(SEEN)('the scan sees $name (CONTROLS)', ({ files, want }) => {
     expect(sevenDayHolders(files)).toEqual(want);
+  });
+
+  // Vitest clips a long `$name` in a row title to about 37 characters and an ellipsis, which cut three of these rows
+  // mid-word. A name is short and the reason it gives lives in a comment above its row.
+  it('every CONTROLS row name fits the clip vitest puts on a row title, so a red names its row in full', () => {
+    const NAME_CLIP = 32;
+    for (const c of SEEN) expect(c.name.length, c.name).toBeLessThanOrEqual(NAME_CLIP);
+    expect(new Set(SEEN.map((c) => c.name)).size, 'a name is used twice').toBe(SEEN.length);
   });
 
   it('the scan does not count a reference, a comment, or another number (CONTROLS)', () => {
@@ -348,11 +368,20 @@ describe('the rotation interval: declared once in L0, pinned by name and by valu
     expect(sevenDayHolders([{ rel: 'x.ts', text: 'const C = 7 * 24 * 60 * 60_001;\nconst D = 604800;' }])).toEqual([]);
   });
 
+  // What a red of the holders row says. The row reds in two directions (a holder added, a holder gone), so the words
+  // must be true of both: the pin below holds the message to naming each.
+  const HOLDERS_MESSAGE = 'the seven-day holders changed. A new one must import TOKEN_ROTATION_INTERVAL_MS from '
+    + 'shared/box-token.ts, or be ruled in as a separate quantity; a missing one means the L0 home moved or changed value';
+
+  it('the holders row\'s failure message names both directions: a new holder, and a missing one', () => {
+    expect(HOLDERS_MESSAGE, 'a new holder').toMatch(/import TOKEN_ROTATION_INTERVAL_MS[^]*ruled in/);
+    expect(HOLDERS_MESSAGE, 'a missing holder').toMatch(/missing[^]*(moved|changed value)/);
+  });
+
   it('the holders across shared, server/src, pwa/src and agent/src are exactly the three separate seven-day quantities', () => {
     // A weekly interval anywhere else must import the one in shared/box-token.ts. These three are separate
     // quantities (the coordinator confirmed them, Q2); a new, unrelated seven-day quantity needs a ruling to join.
-    expect(sevenDayHolders(ALL), 'a second seven-day ms definition: import TOKEN_ROTATION_INTERVAL_MS from shared/box-token.ts, '
-      + 'or have the new quantity ruled in as a fourth separate holder').toEqual([
+    expect(sevenDayHolders(ALL), HOLDERS_MESSAGE).toEqual([
       'server/src/childReclaimSweep.ts:CHILD_RECLAIM_LEAF_KEPT_HORIZON_MS',
       'shared/api.ts:LEDGER_STALE_MS',
       'shared/box-token.ts:TOKEN_ROTATION_INTERVAL_MS',
