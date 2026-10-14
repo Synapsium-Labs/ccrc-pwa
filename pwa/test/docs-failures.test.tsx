@@ -402,8 +402,6 @@ describe('Review 439 F7, F8: no ? ever reaches a page', () => {
       .toBe('This repository has 70000 entries, more than Docs lists at once.');
     expect(failureSentence(bodyOf('too-many-entries', { bytes: 9 })))
       .toBe('This repository has more entries than Docs lists at once.');
-    expect(failureSentence(bodyOf('too-large', { cap: 2048, bytes: 3000000 })))
-      .toBe('This file is larger than Docs shows; Docs shows files of this kind up to 2 KiB.');
     expect(failureSentence(bodyOf('too-large', { size: 4096 })))
       .toBe('This file is 4 KiB, over the limit for files of this kind.');
     expect(failureSentence(bodyOf('too-large'))).toBe('This file is larger than Docs shows files of this kind.');
@@ -433,5 +431,18 @@ describe('Review 439 F10: the "Did you mean" link navigates in the app', () => {
     document.removeEventListener('click', stop);
     expect(leftToBrowser).toBe(true);
     expect(location.pathname + location.search).toBe('/docs/demo?ref=mian');
+  });
+});
+
+describe('Review 439 F8: a too-large answer with a cap and no size does not call the cap a limit of the file kind', () => {
+  // ccd's guard_show answers {bytes: framed answer, cap: the bound on the framed ANSWER} and no size; that cap is not
+  // the per-kind file limit, so the sentence speaks of the fleet box's answer.
+  it('says the fleet box\'s answer was over the size it sends', () => {
+    expect(failureSentence(bodyOf('too-large', { cap: 6 * 1024 * 1024, bytes: 7000000 })))
+      .toBe("The fleet box's answer for this file was larger than it sends (at most 6144 KiB).");
+  });
+
+  it('never names a file kind or Docs showing a kind up to the cap', () => {
+    expect(failureSentence(bodyOf('too-large', { cap: 2048, bytes: 3000000 }))).not.toMatch(/of this kind/);
   });
 });

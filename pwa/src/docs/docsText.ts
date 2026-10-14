@@ -78,7 +78,8 @@ export const DOCS_FAILURE_SENTENCE: Record<DocsFailure, string> = {
 
 /** The sentences a failure word falls back to when its answer omits a field the sentence above names (absent means
  *  unmeasured: the server sends `ccd-fault` with no `code`, ccd sends `too-many-entries` with no `count` and
- *  `too-large` with no `size`). Ordered from the most to the least specific; `failureSentence` takes the first
+ *  `too-large` with no `size`; when it also holds a `cap`, that is the bound on the framed answer, not a file-kind
+ *  limit). Ordered from the most to the least specific; `failureSentence` takes the first
  *  template, the present-field one above included, whose every `{name}` the answer holds, so the last of each list
  *  names no field. Every word that names a field has one (docs-failures.test.tsx renders each with every subset of
  *  its fields omitted and finds no `?`). */
@@ -90,7 +91,7 @@ export const DOCS_FAILURE_FALLBACK_SENTENCE: Partial<Record<DocsFailure, readonl
     'That ref does not name a commit.',
   ],
   'too-large': [
-    'This file is larger than Docs shows; Docs shows files of this kind up to {cap}.',
+    "The fleet box's answer for this file was larger than it sends (at most {cap}).",
     'This file is {size}, over the limit for files of this kind.',
     'This file is larger than Docs shows files of this kind.',
   ],
