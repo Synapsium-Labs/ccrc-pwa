@@ -1678,9 +1678,12 @@ The red-first run (Step 1), DW1 before (Step 2), and SD1, SD2, SD3, DW1, DW2 and
 - DW2 (the PWA's `DEVICE_WORD` line duplicated) → 1 failed (the Settings paragraph names no device, as the section itself names none (§2, 2026-10-05); `AssertionError: the PWA scan spells DEVICE_WORD once: expected [ [ …(3), index: 169217, …(2) ], …(1) ] to have a length of 1 but got 2`); 5 passed of 6
 - DW3 (control, README's "the push bell" → "the phone-push bell") → 1 failed (the Settings paragraph names no device, as the section itself names none (§2, 2026-10-05); the paragraph matched the derived `DEVICE_WORD` through "phone"); 5 passed of 6
 
-### Task 7 (at `<commit>`)
+### Task 7 (at `519f4f422`)
 
 X65 before and after the fixture (Step 7).
+
+- X65 before (the mutation `StallWatchSection.tsx`:344's pinned option `label: quietText(pinnedBuiltIn)` → `label: fillStallText(STALL_SECTION_TEXT.chosenHere, { value: quietText(pinnedBuiltIn) })`, at `2ea8e603a`, the commit before the fixture edit) → 2 failed (a stored quiet time equal to the built-in as a number is a pinned choice, shown as its own option labelled plain like every step; one off the list (the server cannot send it today) selects none; a pinned built-in number reads plain "2 h" in the select whatever the quiet line says: under a fallback (source default) the line reads built-in and the option still reads plain); 187 passed of 189
+- X65 after (the same mutation, at `519f4f422`, the fixture commit) → 2 failed (a stored quiet time equal to the built-in as a number is a pinned choice, shown as its own option labelled plain like every step; one off the list (the server cannot send it today) selects none; a pinned built-in number reads plain "2 h" in the select whatever the quiet line says: under a fallback (source default) the line reads built-in and the option still reads plain); 187 passed of 189 — as predicted
 
 ## Deviations found
 
