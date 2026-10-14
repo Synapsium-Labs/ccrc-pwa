@@ -544,6 +544,10 @@ Assigned from the programme's reserve by the coordinator's ruling R40. It resolv
   A3 (a malformed `aliveAt` rejects the whole read as `malformed`) → 1 failed (a malformed aliveAt is ignored: not malformed, not no-state by itself, and it revives nothing);
   A4 (`Math.max` dropped: `aliveAt` alone sets the age) → 1 failed (the later of the two wins: an aliveAt OLDER than a fresh updatedAt does not age the file);
   A5 (the raw read drops `aliveAt`) → 3 failed (a wait stamped past 30 minutes ago is fresh through a recent aliveAt; the boundary is the same one: exactly 30 minutes from the later stamp is still fresh; the raw read reports a finite aliveAt beside the unchanged state, and HookState itself does not grow).
+  - The two fractional-stamp cases were added after the merge (programme ledger R51, follow-up (a)); every row above was measured on the 28 cases before them. Measured at `a8e769f47`, out of tree, one mutation at a time, each restored and `cmp`-checked:
+  FS1 (`floor | tostring` → `tostring` on the fresh read's `updatedAt` line) → 1 failed (a non-negative fractional updatedAt is kept as its floor and writes aliveAt (12.7 is kept as 12, 0.5 as 0));
+  FS2 (`floor` → `ceil` on that line) → 1 failed (the same case);
+  FS3 (`^[0-9]+$` → `^-?[0-9]+$` in `_hook_keep_stamp`) → 2 failed (an updatedAt that is negative, non-numeric or printed by jq in exponent form keeps no stamp and writes no aliveAt (a fractional one keeps its floor); a negative fractional updatedAt is refused: -0.5 floors to -1, so the carry keeps no stamp, takes the current event and writes no aliveAt).
   - **N3 is gone and N4 is a named survivor.** The first round's `. >= 0` on the fresh read's `updatedAt` was dead code
     (it survived 28 of 28): `_hook_keep_stamp`'s `^[0-9]+$` is the rule, since a negative prints with its `-` and fails
     it, and N2 pins that. It was removed in fix round 2 (review 402 F7, check 7). N4 (`type == "number"`) stays, and is

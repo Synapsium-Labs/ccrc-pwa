@@ -1640,9 +1640,15 @@ From the tree's root:
 The worker fills this section in. Each row is `<mutation> → <n> failed (<titles>)`, measured out of tree, one mutation
 at a time, each restored and `cmp`-checked, at the commit named in its heading. D-4045's rows go under its entry below.
 
-### Task 1 (at `<commit>`)
+### Task 1 (at `a8e769f47`)
 
 FS1, FS2, FS3 and N2 (Task 1 Step 3), and FS1 on the file without the two cases.
+
+FS1 (`floor | tostring` → `tostring` at :3850) → 1 failed (a non-negative fractional updatedAt is kept as its floor and writes aliveAt (12.7 is kept as 12, 0.5 as 0))
+FS2 (`floor` → `ceil` at :3850) → 1 failed (a non-negative fractional updatedAt is kept as its floor and writes aliveAt (12.7 is kept as 12, 0.5 as 0))
+FS3 (`^[0-9]+$` → `^-?[0-9]+$` at :3864) → 2 failed (an updatedAt that is negative, non-numeric or printed by jq in exponent form keeps no stamp and writes no aliveAt (a fractional one keeps its floor); a negative fractional updatedAt is refused: -0.5 floors to -1, so the carry keeps no stamp, takes the current event and writes no aliveAt)
+N2 (drop `&& "$fr_upd" =~ ^[0-9]+$` at :3864) → 2 failed (an updatedAt that is negative, non-numeric or printed by jq in exponent form keeps no stamp and writes no aliveAt (a fractional one keeps its floor); a negative fractional updatedAt is refused: -0.5 floors to -1, so the carry keeps no stamp, takes the current event and writes no aliveAt)
+FS1 on the 28-case file (`dca1566ac`'s test file, same mutation as FS1) → 0 failed (28 passed of 28)
 
 ### Task 2 (at `<commit>`)
 
