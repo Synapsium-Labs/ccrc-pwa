@@ -7418,10 +7418,11 @@ _check_history() {
 # `TOKEN_ROTATION_OVERDUE_SLACK_MS` (`shared/box-token.ts`). `_BT_LOST_WORDS` are the rest of
 # `BoxTokenView.lastFailure`'s vocabulary, which has no L0 list of its own: `link.ts`'s non-exported `LOST_WORDS`
 # (pinned by a text scan of that file) plus `mint-failed`, the one word `link.ts` does not list (the console view's
-# word for a failed mint). The state record CAN hold it, as `lastFailure`: the driver commits `lastFailure: 'mint-failed'` on a failed stage write.
+# word for a failed mint). The state record CAN hold it, as `lastFailure`: the driver commits
+# `lastFailure: 'mint-failed'` on a failed stage write.
 # D-4551's two words are doctor-local, like `pending-overdue`: `retire-overdue:<min>` (a previous value more than
 # one driver tick past its `hardUntil`) and `retiring-unlanded:<min>` (the oldest `retiring` digest older than two
-# ticks, one tick plus one tick of slack). "In grace" is never printed past `hardUntil`. `rotation-overdue:` (4557) is
+# ticks, one tick plus one tick of slack). "In grace" is never printed past `hardUntil`. `rotation-overdue` (4557) is
 # doctor-local too, computed from the state and never persisted, like `pending-overdue`: the weekly schedule's anchor
 # (the last promotion, else the mint of the current value) older than the interval plus its slack, with no hold standing
 # and nothing pending.
@@ -7828,14 +7829,17 @@ _bt_fleet_paths() {
 
 # `_bt_server_trace <dir> <own: 0|1>` — 4554: a trace beside the state file that only a server that once held a value can have, by
 # NAME only (never opened: mail-previous.token holds a value). Sets the caller's BT_TRACE to the first trace's FULL PATH, or to
-# one of two words, or leaves it empty. The order is fixed (row 3a, R18, 4554 amended): the unlisted test comes FIRST, then
-# the named traces, then on an own-write box the fleet file, the generation file and `unsearchable`, then the set-aside copies.
+# one of two words, or leaves it empty. The order is fixed (row 3a, R18 and R19, 4554 amended): the unlisted test comes FIRST,
+# then the named traces, then on an own-write box the fleet file and the generation file, then the set-aside copies, and last,
+# on an own-write box, `unsearchable`.
 #   `unlisted`      the directory exists and cannot be listed, so a set-aside copy cannot be ruled out (fail closed). Tested
 #                   before every trace, whatever the directory or the fleet side holds: boot refuses to start on it, so
 #                   `chmod u+r` is its remedy and "restart the server" would be false even beside a named trace.
-#   `unsearchable`  (row 3a, R19) own-write only: with no generation file standing, the fleet token file's directory exists and
+#   `unsearchable`  (row 3a, R19) own-write only: with no other trace standing, the fleet token file's directory exists and
 #                   cannot be searched, so `-e` cannot tell whether the server wrote the fleet file there. BT_TRACE_DIR holds
-#                   that directory. Its own word and remedy (`chmod u+x`), never folded into `unlisted`: two conditions.
+#                   that directory. Its own word and remedy (`chmod u+x`), never folded into `unlisted`: two conditions. It
+#                   is tested after the set-aside copies: a copy is a definite trace, and the word says only that none can
+#                   be told.
 #   empty           no trace; a directory that does not exist holds none (the caller's reads already measured that ENOENT).
 # On an own-write box (`own` = 1: role both, local, no agent.env marking the fleet) the SERVER wrote the fleet token file
 # and the generation file (`boot.ts` step 7, and the driver's own-write promotion), so either one existing is a trace too
@@ -7852,17 +7856,20 @@ _bt_server_trace() {
     _bt_fleet_paths
     # The fleet file first, as before (a directory that cannot be searched hides it from `-e`, so this test is false there),
     # then the generation file, which lives outside that directory: when it stands, the history is told whatever the
-    # directory's mode. Only then is a directory that cannot be searched its own word.
+    # directory's mode. A directory that cannot be searched is its own word only after the set-aside copies (below).
     if [ -e "$BT_FLEET_FILE" ] || [ -L "$BT_FLEET_FILE" ]; then BT_TRACE="$BT_FLEET_FILE"; return 0; fi
     if [ -e "$BT_GEN_FILE" ] || [ -L "$BT_GEN_FILE" ]; then BT_TRACE="$BT_GEN_FILE"; return 0; fi
-    f="${BT_FLEET_FILE%/*}"
-    if [ -d "$f" ] && [ ! -x "$f" ]; then BT_TRACE=unsearchable; BT_TRACE_DIR="$f"; return 0; fi
   fi
   for n in "${_BT_ASIDE[@]}"; do
     for f in "$d/$n"*; do
       if [ -e "$f" ] || [ -L "$f" ]; then BT_TRACE="$f"; return 0; fi
     done
   done
+  if [ "$own" = 1 ]; then
+    # Last, so a set-aside copy (a definite trace) is named before a directory that merely cannot be told (row 3a, R19).
+    f="${BT_FLEET_FILE%/*}"
+    if [ -d "$f" ] && [ ! -x "$f" ]; then BT_TRACE=unsearchable; BT_TRACE_DIR="$f"; return 0; fi
+  fi
   return 0
 }
 
@@ -7895,9 +7902,9 @@ _bt_server_arm() {   # <token path> <state path> <own-write: 0|1>
     # `BT_SERVER_STATE` records `trace`, so an own-write fleet arm reads no `absent` state either. A token directory that
     # exists and cannot be listed cannot rule a set-aside copy out, so it fails closed with a sentence and remedy of its own,
     # whatever else it or the fleet side holds (row 3a, R18): boot refuses to start on it (`boot.ts`, `setAsideNames`), and
-    # "restart the server" would be false there. On an own-write box with no generation file standing, a `~/.cc-secrets` that
-    # cannot be searched does too (`unsearchable`, remedy `chmod u+x`, row 3a, R19). A directory that does not exist holds no
-    # trace: a fresh server whose override directory is not created yet stays the fresh PASS.
+    # "restart the server" would be false there. On an own-write box with no generation file and no set-aside copy standing,
+    # a `~/.cc-secrets` that cannot be searched does too (`unsearchable`, remedy `chmod u+x`, row 3a, R19). A directory that
+    # does not exist holds no trace: a fresh server whose override directory is not created yet stays the fresh PASS.
     absent) if [ "$tai" -ge 0 ]; then
               _bt_server_trace "${state%/*}" "$own"
               if [ -z "$BT_TRACE" ]; then
@@ -7960,7 +7967,7 @@ _bt_server_arm() {   # <token path> <state path> <own-write: 0|1>
   [ "$grace" -eq 1 ] && extra="$extra, the previous value in grace"
   if [ -n "$ahead" ]; then
     if [ "$aheaddue" = 1 ]; then extra="$extra, its schedule stamp $(_bt_age "$ahead") ahead of this clock (more than the interval, so the server rotates now)"
-    else extra="$extra, its schedule stamp $(_bt_age "$ahead") ahead of this clock (the weekly schedule waits for the clock to pass it)"; fi
+    else extra="$extra, its schedule stamp $(_bt_age "$ahead") ahead of this clock (the weekly schedule counts its interval from that stamp)"; fi
   fi
   BT_PART+=("server: generation #$seq, $how, fleet confirmed$extra"); BT_CLASS+=(PASS); BT_FIX+=("")
 }

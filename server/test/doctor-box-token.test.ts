@@ -213,10 +213,11 @@ describe('doctor box-token: PASS, and only on a measured healthy box', () => {
 
   // Row 2c invariant: the live server's disk (mail.token, box-token.json at generation #3 with counters 0 and 0 and a
   // null stamp, and box-token-retired.json in the writer's shape) is PASS at every commit.
-  const plantLiveServer = (b: Box, ageMs = 60 * MIN): void => {
+  const plantLiveServer = (b: Box, ageMs?: number): void => {
     editState(b, (s) => {
       s.current.seq = 3; s.nextSeq = 4;
-      s.lastRotationAt = Date.now() - ageMs; s.current.since = Date.now() - ageMs;
+      // Row 3a: the age is overridden only when a row passes one; row 2c's rows keep healthyState's own plant.
+      if (ageMs !== undefined) { s.lastRotationAt = Date.now() - ageMs; s.current.since = Date.now() - ageMs; }
       s.counters = { previousPresented: 0, retiredPresented: 0, retiredPresentedAt: null };
     });
     writeFileSync(dot(b, 'box-token-retired.json'), '{"v":1,"retired":[]}\n', { mode: 0o600 });
@@ -528,7 +529,8 @@ describe('doctor box-token: the weekly schedule, overdue and ahead (4557)', () =
       s.origin = 'minted'; s.lastRotationAt = null; s.retiredRefusedAt = null; s.current.since = now() - OVER - 60 * MIN;
     });
     const r = runCheck(b, CHECKS_SRC);
-    expect(r.stdout).toMatch(/^WARN box-token: server: rotation-overdue — no rotation has completed for 8 d/);
+    // The whole sentence, so a wrong constant in its words reds (the slack term spelled with the interval says 7 d, not 24 h).
+    expect(r.stdout).toMatch(/^WARN box-token: server: rotation-overdue — no rotation has completed for 8 d, past the 7 d schedule and its 24 h slack, with no hold standing and nothing in flight\b/);
     expect(r.stdout).toMatch(/\n {2}remedy: \S/);
     expect(r.code).toBe(2);
   });
@@ -573,7 +575,7 @@ describe('doctor box-token: the weekly schedule, overdue and ahead (4557)', () =
     // A margin off `_bt_age`'s 7200 s boundary: Python reads its clock a few ms after the test's `now()`.
     editState(b, (s) => { s.lastRotationAt = now() + 2 * 60 * MIN + 5 * MIN; });
     const r = runCheck(b, CHECKS_SRC);
-    expect(r.stdout).toBe('PASS box-token: server: generation #2, rotated 0 s ago, fleet confirmed, retired value refused, its schedule stamp 2 h ahead of this clock (the weekly schedule waits for the clock to pass it)\n');
+    expect(r.stdout).toBe('PASS box-token: server: generation #2, rotated 0 s ago, fleet confirmed, retired value refused, its schedule stamp 2 h ahead of this clock (the weekly schedule counts its interval from that stamp)\n');
     expect(r.code).toBe(0);
   });
 
@@ -1359,6 +1361,21 @@ describe('doctor box-token: an unsearchable parent directory is unreadable, neve
       const r = runCheck(b, CHECKS_SRC);
       expect(r.stdout).toMatch(new RegExp(`^FAIL box-token: server: token-absent — .* but .*${reEsc(NODE_FILES.tokenGeneration)} does: this server held a value once`));
       expect(r.stdout).not.toContain('cannot be searched');
+      expect(r.code).toBe(1);
+    });
+  });
+  // A set-aside copy beside the state file is a definite trace, so it is named even when ~/.cc-secrets cannot be searched:
+  // the unsearchable word says only that the history cannot be told, and here a copy tells it.
+  itNonRoot('both role, local, own-write: with ~/.cc-secrets unsearchable and a set-aside copy of the state file in the token directory, the copy is the named trace, not unsearchable (row 3a, R19)', () => {
+    const b = box({ role: 'both' });
+    lostServerAndFleetHistory(b);
+    const aside = dot(b, 'box-token.json.unusable-1760000000000');
+    writeFileSync(aside, '{}\n', { mode: 0o600 });
+    unsearchable(join(b.home, '.cc-secrets'), () => {
+      const r = runCheck(b, CHECKS_SRC);
+      expect(r.stdout).toMatch(new RegExp(`^FAIL box-token: server: token-absent — .* but ${reEsc(aside)} does: this server held a value once`));
+      expect(r.stdout).not.toContain('cannot be searched, so whether this box');
+      expect(r.stdout).not.toContain('its search bit');
       expect(r.code).toBe(1);
     });
   });
