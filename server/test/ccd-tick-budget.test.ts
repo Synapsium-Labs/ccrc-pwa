@@ -62,6 +62,15 @@ import {
  *    away-over-ceiling 193/91 -> 148/46 (15) · hard-blocked 406/218 -> 244/56 (54) ·
  *    cooldown 97/36 (none) · fable 156/65 -> 138/47 (6) · leaving 391/224 -> 223/56 (56) ·
  *    fable-leaving 375/211 -> 225/61 (50).
+ *
+ *  LOWERED BY W2 Task 10 (D-4962, `_share_pct_to`'s memo; macOS, bash 5.3): `_share_pct` runs
+ *  python3 once per distinct wrapper inside one `_swap_target` call. The `fable-leaving` fixture
+ *  reads home's share twice (stay gate, then the candidate loop), so one python3 invocation is
+ *  removed: -2 forks / -1 exec on that fixture only. Before -> after:
+ *    idle-home 140/46 -> 140/46 · busy 137/45 -> 137/45 · narrow 75/28 -> 75/28 ·
+ *    away-over-ceiling 148/46 -> 148/46 · hard-blocked 244/56 -> 244/56 ·
+ *    cooldown 97/36 -> 97/36 · fable 138/47 -> 138/47 · leaving 223/56 -> 223/56 ·
+ *    fable-leaving 225/61 -> 223/60.
  */
 const TICK_BUDGET: Record<FixtureName, { forks: number; execs: number }> = {
   'idle-home': { forks: 140, execs: 46 },
@@ -72,7 +81,7 @@ const TICK_BUDGET: Record<FixtureName, { forks: number; execs: number }> = {
   cooldown: { forks: 97, execs: 36 },
   fable: { forks: 138, execs: 47 },
   leaving: { forks: 223, execs: 56 },
-  'fable-leaving': { forks: 225, execs: 61 },
+  'fable-leaving': { forks: 223, execs: 60 },
 };
 
 /** `_plat_timeout`'s `-k` probe, per tick inside the loop. On `main` at

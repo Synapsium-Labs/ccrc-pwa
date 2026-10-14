@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=7efe3769a33bba19dfbc5a528d61982c2ccbcbab8f0dfbda9efdcd95fb1131b1
+# ccrc:generated 1 sha256=dd9d1ba3cf576e270fa1b268e721dde1b6b99ca00f7d6d3a9d08471df52f813d
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -17490,7 +17490,7 @@ _serviceable() {   # wrapper class -> rc 0 servable | 1 unservable | 2 unmeasure
   [[ -z "$c" || "$c" == default ]] && return 3
   if [[ "$c" == fable ]]; then
     _is_anthropic_backend "$w" || { printf 'backend'; return 1; }
-    fig=$(_share_pct "$w"); rc=$?
+    _share_pct_to fig "$w"; rc=$?
     # EVERY NON-ZERO RC IS UNMEASURED, and the `*` arm is the whole fix (final
     # review finding 1). This named 1 and 2 ALONE, so any other exit code fell
     # through to the ceiling test below with `fig` EMPTY — and `[[ "" -ge 40 ]]`
@@ -17792,7 +17792,7 @@ _swap_target() {   # id cur home [force] [hrc] -> destination on stdout; rc 0 = 
   # blocked wrapper, so home is never the blocked lane, and a forced call
   # that finds home recovered must go straight there instead of falling
   # through to the pool loop and picking some third lane.
-  local id="$1" cur="$2" home="$3" force="${4:-}" hrc="${5:-0}" cand best="" best_score=999 obest="" obest_score=999 sc
+  local id="$1" cur="$2" home="$3" force="${4:-}" hrc="${5:-0}" cand best="" best_score=999 obest="" obest_score=999 sc; local CCD_SHARE_MEMO_ON=1; local -A CCD_SHARE_MEMO=()
   # THE CLASS DIMENSION (routing spec §5.4). Read PURE — `_route_peek` writes no
   # note and no floor marker; a decision function that may return before acting
   # must not leave a trail (slice 1, fix round 2). `default` and no record are
@@ -24379,6 +24379,27 @@ _limit_json_num_to() {   # var file key -> var and rc exactly as `v=$(_limit_jso
   if _limit_text_to __lj_t "$2"; then _limit_num_in_to "$1" "$__lj_t" "$3"; return; fi
   __lj_v=$(grep -oE "\"$3\"[[:space:]]*:[[:space:]]*[0-9]+" "$2" | head -1 | grep -oE '[0-9]+$'); __lj_rc=$?   # the legacy pipeline, in the CALLER's locale
   printf -v "$1" '%s' "$__lj_v"; return "$__lj_rc"
+}
+
+# D-4962 (tick-diet spec §6.3): `_share_pct`'s memo. `_share_pct` runs python3 on every
+# call, and one `_swap_target` call can ask the same lane's share more than once (home's
+# stay gate, then the candidate loop). `_share_pct_to` answers a repeat from a memo that
+# holds the rc beside the value, `CCD_SHARE_MEMO[w]="rc:value"`. The memo is the pair of
+# dynamically scoped locals on `_swap_target`'s first `local` line, so it exists for exactly
+# one `_swap_target` call and every function that call runs, and dies with it. A second
+# call, or a sweep rewritten between two calls, reads afresh. Outside `_swap_target`,
+# `CCD_SHARE_MEMO_ON` is unset and every call runs `_share_pct` by name, so a test's
+# `_share_pct` or `python3` stub is honoured. An empty wrapper is no memo key: bash
+# refuses the empty subscript, and its assignment error ends the shell.
+_share_pct_to() {   # var wrapper -> var and rc as `v=$(_share_pct w); rc=$?` leaves them; memoised only inside one `_swap_target` call
+  local __sp_v __sp_rc
+  if [[ -n "${CCD_SHARE_MEMO_ON:-}" && -n "$2" && -n "${CCD_SHARE_MEMO[$2]+x}" ]]; then
+    __sp_rc="${CCD_SHARE_MEMO[$2]%%:*}"; __sp_v="${CCD_SHARE_MEMO[$2]#*:}"
+  else
+    __sp_v=$(_share_pct "$2"); __sp_rc=$?
+    [[ -n "${CCD_SHARE_MEMO_ON:-}" && -n "$2" ]] && CCD_SHARE_MEMO[$2]="$__sp_rc:$__sp_v"
+  fi
+  printf -v "$1" '%s' "$__sp_v"; return "$__sp_rc"
 }
 
 cmd_supervise() {   # systemd ExecStart: ensure then block until the session dies

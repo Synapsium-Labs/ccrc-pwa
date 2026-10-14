@@ -17,6 +17,8 @@
 //  - E3, the rows, per locale. W1's are here; W2 and W3 add theirs, red first, from `tickDietCorpus.ts`.
 //  - E5, W2's limits rows (D-4962), per locale: every limits row and 500 random ones through both forms, and the
 //    structural row that says which side of spec §6.3's domain each row fell on. (E5 sits above E4 in the file.)
+//  - E6, W2's share rows (D-4962, plan Task 10): `_share_pct_to` and its per-`_swap_target` memo, inside and outside
+//    the memo scope, including the empty-key departure.
 //  - E4, the corpus module: deterministic, and every row plants the shape it names.
 //
 // RED FIRST, AND STILL A GREEN COMMIT. A row whose live helper has not landed yet is PENDING: its live side must fail,
@@ -102,7 +104,7 @@ const PLANNED_FORMS: Readonly<Record<string, string>> = {
  *  `_now_s_to` and `_now_s`; Task 5 landed `_cfg_dir_to`; W2 Task 8 (D-4962) landed `_limit_text_to`,
  *  `_limit_num_in_to` and `_limit_json_num_to`; W2's later tasks and W3 remove theirs. */
 const LANDED: ReadonlySet<string> = new Set([
-  '_now_s_to', '_now_s', '_cfg_dir_to', '_limit_text_to', '_limit_num_in_to', '_limit_json_num_to',
+  '_now_s_to', '_now_s', '_cfg_dir_to', '_limit_text_to', '_limit_num_in_to', '_limit_json_num_to', '_share_pct_to',
 ]);
 const PENDING: ReadonlySet<string> = new Set(
   [...Object.keys(PLANNED_FORMS), '_now_s'].filter((n) => !LANDED.has(n)),
@@ -1371,6 +1373,117 @@ describe.each(LOCALES)('E5 the W2 limits rows under $name (tick-diet spec §6.3,
       'directory', 'absent', ...(AS_ROOT ? [] : ['mode-000', 'dir-unsearchable'])]) {
       expect(note(id), `${id} is outside the domain`).toBe('3 pipeline');
     }
+  });
+});
+
+// ── E6: the W2 share rows (D-4962, plan Task 10) ─────────────────────────────────────────────────────────────────────
+
+const SHARE_FRESH = '2026-10-14T12:00:00Z';   // fixed fresh stamp: identical bytes on both sides of every differential row
+const SHARE_STALE = '2020-01-01T00:00:00Z';
+
+function shareFile(finishedAt: string, perAccount: Record<string, unknown>): string {
+  const content = JSON.stringify({ finishedAt, perAccount });
+  return `command mkdir -p -- "$REG/usage/sweep" && command printf '%s' ${JSON.stringify(content)} > "$REG/usage/sweep/latest.json"`;
+}
+
+/** E6a rows: `_share_pct_to` outside the memo scope matches `_legacy_share_pct` for every sweep shape. */
+function e6aRows(): Row[] {
+  const rows: Row[] = [];
+  const add = (id: string, setup: string, outVar = 'v') => {
+    rows.push(toRow(`share memo off: ${id}`, '_legacy_share_pct', '_share_pct_to', ['claude-a'], setup, outVar));
+  };
+  add('fresh 0.5', shareFile(SHARE_FRESH, { 'claude-a': { fableShare: { estimate: 0.5 } } }));
+  add('fresh 0.125', shareFile(SHARE_FRESH, { 'claude-a': { fableShare: { estimate: 0.125 } } }));
+  add('fresh 0', shareFile(SHARE_FRESH, { 'claude-a': { fableShare: { estimate: 0 } } }));
+  add('stale 0.5', shareFile(SHARE_STALE, { 'claude-a': { fableShare: { estimate: 0.5 } } }));
+  add('no row', shareFile(SHARE_FRESH, {}));
+  add('null', shareFile(SHARE_FRESH, { 'claude-a': { fableShare: { estimate: null } } }));
+  add('true', shareFile(SHARE_FRESH, { 'claude-a': { fableShare: { estimate: true } } }));
+  add('broken json', `command mkdir -p -- "$REG/usage/sweep" && command printf '%s' 'not json' > "$REG/usage/sweep/latest.json"`);
+  add('no file', `command mkdir -p -- "$REG/usage/sweep"`);
+  add('directory', `command mkdir -p -- "$REG/usage/sweep/latest.json"`);
+  if (!AS_ROOT) add('mode 000', `${shareFile(SHARE_FRESH, { 'claude-a': { fableShare: { estimate: 0.5 } } })} && command chmod 000 "$REG/usage/sweep/latest.json"`);
+  // `_serviceable`'s own out-var name, to pin the migrated call site.
+  add('fresh 0.5 into fig', shareFile(SHARE_FRESH, { 'claude-a': { fableShare: { estimate: 0.5 } } }), 'fig');
+  add('stale 0.5 into fig', shareFile(SHARE_STALE, { 'claude-a': { fableShare: { estimate: 0.5 } } }), 'fig');
+  return rows;
+}
+
+/** E6b rows: the memo serves a repeat call from one scope without re-running `_share_pct`. */
+function e6bRows(): Row[] {
+  const sweeps = [
+    { id: 'fresh 0.5', setup: shareFile(SHARE_FRESH, { 'claude-a': { fableShare: { estimate: 0.5 } } }) },
+    { id: 'stale', setup: shareFile(SHARE_STALE, { 'claude-a': { fableShare: { estimate: 0.5 } } }) },
+    { id: 'no row', setup: shareFile(SHARE_FRESH, {}) },
+    { id: 'no file', setup: `command mkdir -p -- "$REG/usage/sweep"` },
+  ];
+  return sweeps.map(({ id, setup }) => ({
+    id: `share memo on: ${id}`,
+    setup,
+    needs: ['_share_pct_to'],
+    sides: [
+      { label: 'legacy', body: `__diet_caller v 'v=$(_legacy_share_pct claude-a); v=$(_legacy_share_pct claude-a)'` },
+      { label: 'live', body: `__diet_caller v '__diet_memo_scope() { local CCD_SHARE_MEMO_ON=1; local -A CCD_SHARE_MEMO=(); _share_pct_to v claude-a; _share_pct_to v claude-a; }; __diet_memo_scope'` },
+    ],
+  }));
+}
+
+/** E6c row: an empty wrapper is no memo key; the shell survives and the call runs each time. */
+const E6C_ROW: Row = {
+  id: 'share memo on: empty wrapper',
+  setup: shareFile(SHARE_FRESH, { 'claude-a': { fableShare: { estimate: 0.5 } } }),
+  needs: ['_share_pct_to'],
+  sides: [
+    { label: 'legacy', body: `__diet_caller v 'v=$(_legacy_share_pct ""); v=$(_legacy_share_pct "")'` },
+    { label: 'live', body: `__diet_caller v '__diet_memo_scope() { local CCD_SHARE_MEMO_ON=1; local -A CCD_SHARE_MEMO=(); _share_pct_to v ""; _share_pct_to v ""; }; __diet_memo_scope'` },
+  ],
+};
+
+describe.each(LOCALES)('E6 the W2 share rows under $name (tick-diet spec §6.3, D-4962, plan Task 10)', ({ locale }) => {
+  const rows = [...e6aRows(), ...e6bRows(), E6C_ROW];
+  let h: CcdHarness;
+  let batch: Batch | null = null;
+  beforeAll(() => {
+    h = makeCcdHarness('ccrc-diet-e6-');
+    if (locale !== null) batch = runBatch(h, rows, locale);
+  }, 300_000);
+  afterAll(() => h.cleanup());
+
+  const got = (ctx: { skip: (note?: string) => never }): Batch => {
+    if (locale === null) {
+      if (process.platform === 'darwin') ctx.skip(NO_UTF8);
+      throw new Error(`${NO_UTF8} — the supervisors run under one, so this half cannot be skipped here`);
+    }
+    return batch!;
+  };
+
+  it('E6x the batch ran every row to the end, inside its deadline', (ctx) => {
+    const b = got(ctx);
+    expect(b.hung, `a row never finished: ${b.stderr.slice(0, 2000)}`).toBeNull();
+    expect(b.status).toBe(0);
+  });
+
+  it('E6a `_share_pct_to` off matches `_legacy_share_pct` for every sweep shape, including `_serviceable`\'s `fig` (D-4962)', (ctx) => {
+    const b = got(ctx);
+    for (const row of e6aRows()) expectEquivalent(row, b.results.get(row.id)!, locale!);
+    // Non-vacuity: python3 really ran in the contained env.
+    expect(b.results.get('share memo off: fresh 0.5')![0]!.val!.toString()).toBe('50');
+    expect(b.results.get('share memo off: fresh 0.5')![0]!.rc).toBe(0);
+    expect(b.results.get('share memo off: stale 0.5')![0]!.rc).toBe(2);
+  });
+
+  it('E6b the memo serves a repeat call from the same scope without re-running python3 (D-4962)', (ctx) => {
+    const b = got(ctx);
+    for (const row of e6bRows()) expectEquivalent(row, b.results.get(row.id)!, locale!);
+    // Non-vacuity: the legacy sides really answered with the expected rcs.
+    expect(b.results.get('share memo on: stale')![0]!.rc).toBe(2);
+    expect(b.results.get('share memo on: no row')![0]!.rc).toBe(1);
+    expect(b.results.get('share memo on: no file')![0]!.rc).toBe(1);
+  });
+
+  it('E6c an empty wrapper is no memo key: both calls run and the shell survives (D-4962, departure share-memo-empty-key)', (ctx) => {
+    const b = got(ctx);
+    expectEquivalent(E6C_ROW, b.results.get(E6C_ROW.id)!, locale!);
   });
 });
 
