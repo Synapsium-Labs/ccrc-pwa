@@ -382,7 +382,8 @@ export class BoxTokenDriver implements TokenRouteDriver {
       this.warn(`ccrc-server: box token: sync failed (${out.state.lastFailure}); attempt ${out.state.failures}, retrying with backoff`);
     }
     if (r.kind === 'synced') this.backoffUntil = null;
-    if (id === this.scheduledGen) {   // before the commit, which can throw on the same fault F3(b): memory and a warn line only
+    // Before the commit, which can throw on the same fault (F3(b)): memory and a warn line only.
+    if (id === this.scheduledGen) {
       this.scheduledGen = null;
       if (out.promote === null) this.noteScheduleMiss(r.kind);   // 4558: any answer that promotes nothing is a miss
     }

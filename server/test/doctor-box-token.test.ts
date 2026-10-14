@@ -543,7 +543,8 @@ describe('doctor box-token: the weekly schedule, overdue and ahead (4557)', () =
     expect(r.stdout).not.toContain('rotation-overdue');
   });
 
-  // A rotation in flight, staged, handed out or promoting, always has its id pending, so it is not overdue.
+  // A rotation in flight is not overdue: a staged or handed-out value has its id pending, and a recorded promotion
+  // counts whether or not its id is still pending (the crash-window row below).
   const inFlight = 'PASS box-token: server: generation #2, rotated 8 d ago, fleet confirmed, retired value refused, a rotation in progress\n';
   it('a rotation in flight is not overdue: a staged value', () => {
     const b = box({ role: 'server' });
@@ -556,6 +557,16 @@ describe('doctor box-token: the weekly schedule, overdue and ahead (4557)', () =
   it('a rotation in flight is not overdue: a promotion recorded, its id still pending', () => {
     const b = box({ role: 'server' });
     editState(b, (s) => { oldAnchor(s); s.pending = [pendingEntry()]; s.promoting = { id: ID_OLD }; });
+    const r = runCheck(b, CHECKS_SRC);
+    expect(r.stdout).toBe(inFlight);
+    expect(r.code).toBe(0);
+  });
+
+  // A crash between promote's discard write and its commit leaves `promoting` set with `pending` empty. The PASS arm
+  // reads that as a rotation in progress, so the overdue clause must read it the same way (not "nothing in flight").
+  it('a rotation in flight is not overdue: a promotion recorded with nothing pending (the crash window)', () => {
+    const b = box({ role: 'server' });
+    editState(b, (s) => { oldAnchor(s); s.pending = []; s.promoting = { id: ID_OLD }; });
     const r = runCheck(b, CHECKS_SRC);
     expect(r.stdout).toBe(inFlight);
     expect(r.code).toBe(0);
@@ -1313,6 +1324,9 @@ describe('doctor box-token: an unsearchable parent directory is unreadable, neve
       expect(r.stdout).not.toContain('restart the server');
       expect(r.stdout).not.toContain(SERVER_NEVER);
       expect(r.code).toBe(1);
+      const d = runCheck(b, disarmed());
+      expect(d.stdout).toMatch(/^SKIP box-token: /);
+      expect(d.code).toBe(3);
     });
   });
   itNonRoot('both role, local, own-write: an unlistable token directory with the fleet file and the generation file surviving gets the chmod u+r remedy (row 3a, R18)', () => {
@@ -1327,6 +1341,9 @@ describe('doctor box-token: an unsearchable parent directory is unreadable, neve
       expect(r.stdout).toMatch(/\n {2}remedy: .*chmod u\+r /);
       expect(r.stdout).not.toContain('restart the server (ccrc.service)');
       expect(r.code).toBe(1);
+      const d = runCheck(b, disarmed());
+      expect(d.stdout).toMatch(/^SKIP box-token: /);
+      expect(d.code).toBe(3);
     });
   });
   // Row 3a, R19 (4554 amended): on an own-write box a `~/.cc-secrets` that exists and cannot be searched hides the fleet
@@ -1362,6 +1379,9 @@ describe('doctor box-token: an unsearchable parent directory is unreadable, neve
       expect(r.stdout).toMatch(new RegExp(`^FAIL box-token: server: token-absent — .* but .*${reEsc(NODE_FILES.tokenGeneration)} does: this server held a value once`));
       expect(r.stdout).not.toContain('cannot be searched');
       expect(r.code).toBe(1);
+      const d = runCheck(b, disarmed());
+      expect(d.stdout).toMatch(/^SKIP box-token: /);
+      expect(d.code).toBe(3);
     });
   });
   // A set-aside copy beside the state file is a definite trace, so it is named even when ~/.cc-secrets cannot be searched:
@@ -1377,6 +1397,9 @@ describe('doctor box-token: an unsearchable parent directory is unreadable, neve
       expect(r.stdout).not.toContain('cannot be searched, so whether this box');
       expect(r.stdout).not.toContain('its search bit');
       expect(r.code).toBe(1);
+      const d = runCheck(b, disarmed());
+      expect(d.stdout).toMatch(/^SKIP box-token: /);
+      expect(d.code).toBe(3);
     });
   });
 });

@@ -237,15 +237,16 @@ describe('shared/box-token.ts — the claim door, value and generation shapes, a
 // `pwa/src` only and lets `604_800_000` and `7 * 86_400_000` through; this scan covers `shared/` and `agent/src` too
 // and reads products.
 //
-// What the scan does NOT see: a sum (`6 * DAY + DAY`), a division, a float or exponent literal (`6.048e8`), a
-// lower-case or imported-alias name, a value built at run time, and a product with parenthesised grouping
-// (`(7 * 24) * 60 * 60_000`). Its name table is built from `const NAME = <product>;` on one line, with an optional
-// `export` and an optional `: number`: a name defined by `let`, with `as const`, or across lines is no entry, and a
-// chain of names ordered against the file walk and deeper than the table's three passes stays unresolved. The table
-// is one for all files and the last definition wins, so two files that define one name with different values make a
-// product of it resolve to the later one (today `CLEAR_POLL_MS` and `POLL_MS` are each defined twice with different
-// values; neither reaches seven days). The roots are read for `.ts` and `.tsx` only: the deploy-side `shared/*.mjs` and
-// the `*.d.mts` files are outside the scan, and none holds a seven-day value today.
+// What the scan does NOT see: a sum (`6 * DAY + DAY`), a division, a float or exponent literal (`6.048e8`), a hex,
+// octal or binary literal (`0x...`, `0o...`, `0b...`: a factor reads decimal digits only), a lower-case or
+// imported-alias name, a value built at run time, and a product with parenthesised grouping
+// (`(7 * 24) * 60 * 60_000`). Its name table is built from `const NAME = <product>;` on one line, with anything before
+// `const` (an `export`, say) and an optional `: number`: a name defined by `let`, with `as const`, or across lines is
+// no entry, and a chain of names ordered against the file walk and deeper than the table's three passes stays
+// unresolved. The table is one for all files and the last definition wins, so two files that define one name with
+// different values make a product of it resolve to the later one (today `CLEAR_POLL_MS` and `POLL_MS` are each defined
+// twice with different values; neither reaches seven days). The roots are read for `.ts` and `.tsx` only: the
+// deploy-side `shared/*.mjs` and the `*.d.mts` files are outside the scan, and none holds a seven-day value today.
 // The controls below pin what it does see.
 describe('the rotation interval: declared once in L0, pinned by name and by value (4556, 4557)', () => {
   const REPO = path.resolve(here, '..', '..');
@@ -330,7 +331,7 @@ describe('the rotation interval: declared once in L0, pinned by name and by valu
 
   it('each is defined in exactly one file, shared/box-token.ts', () => {
     for (const name of ['TOKEN_ROTATION_INTERVAL_MS', 'TOKEN_ROTATION_OVERDUE_SLACK_MS']) {
-      const DEFINES = new RegExp(`^\\s*(?:export\\s+)?const\\s+${name}\\s*=`, 'm');
+      const DEFINES = new RegExp(`^\\s*(?:export\\s+)?const\\s+${name}\\s*(?::\\s*number\\s*)?=`, 'm');
       expect(ALL.filter((f) => DEFINES.test(f.text)).map((f) => f.rel), name).toEqual(['shared/box-token.ts']);
     }
   });

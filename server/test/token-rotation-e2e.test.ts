@@ -2519,7 +2519,7 @@ describe('the weekly schedule through the real driver (4556, 4558)', () => {
     } finally { await r2.app.close(); }
   });
 
-  it('E8d: a press on the same flapping link is never held by the scheduled-miss backoff: one send per press, as on main (4558: no-change row)', async () => {
+  it('E8d: a press on a flapping link, with no schedule due, keeps one send per press, as on main (4558)', async () => {
     const link = countingLink({ kind: 'lost', why: 'timeout' });
     const { r2 } = await restartDue(2 * 24 * 3_600_000, { link });
     try {
@@ -2551,7 +2551,7 @@ describe('the weekly schedule through the real driver (4556, 4558)', () => {
     } finally { await r2.app.close(); }
   }, 120_000);
 
-  it('E8f: a scheduled answer whose commit throws is still counted as a miss: the schedule backs off, it does not stage again on the next tick (4558)', async () => {
+  it('E8f: a scheduled answer whose commit throws still counts as a miss: it follows the ladder (4558)', async () => {
     const link = countingLink({ kind: 'unsent' });
     let thrown = 0;
     const { r2 } = await restartDue(WEEK + 60_000, { link, wrap: (st) => ({ ...st, writeState: async (x) => {
@@ -2571,6 +2571,32 @@ describe('the weekly schedule through the real driver (4556, 4558)', () => {
       expect(missAt).toBeLessThan(failedAt);
       expect(link.sends, 'a miss not counted would let the next fresh ready stage again: five sends in ten minutes').toBeLessThanOrEqual(LADDER_MAX);
       expect(link.sends).toBeGreaterThanOrEqual(2);
+    } finally { await r2.app.close(); }
+  }, 120_000);
+
+  it('E8g: a press on a flapping link with a scheduled miss standing is not held by its backoff (4558)', async () => {
+    const link = countingLink({ kind: 'unsent' });
+    const { r2, t } = await restartDue(WEEK + 60_000, { link });
+    const sendsAt: number[] = [];
+    const missLines = (): number =>
+      r2.printed.filter((l) => l.includes('the scheduled rotation did not complete (unsent)')).length;
+    try {
+      expect(dueByL0(await stateOf(r2), driverNow(r2))).toBe(true);
+      // Minutes 0, 1 and 3 are the schedule's own attempts (the ladder: 60 s, 120 s, 240 s), each answered unsent. From
+      // minute 4 a press lands inside the third miss's backoff, which stands until minute 7.
+      await flapTicks(r2, 8, async (m) => {
+        sendsAt[m] = link.sends;
+        if (m < 4) return;
+        if (m === 4) {
+          expect(missLines(), 'the scheduled misses stand').toBe(3);
+          expect((await stateOf(r2)).lastRotationAt, 'no promotion').toBe(t);
+        }
+        expect(await r2.driver.rotateNow(driverNow(r2))).toMatchObject({ ok: true, outcome: 'started' });
+      });
+      expect(sendsAt, 'three scheduled sends on the ladder, then one send per press').toEqual([0, 1, 2, 2, 3, 4, 5, 6]);
+      expect(link.sends).toBe(7);
+      expect(missLines(), 'a press is no scheduled attempt').toBe(3);
+      expect(r2.driver.view()).toMatchObject({ failures: 0, banner: false });
     } finally { await r2.app.close(); }
   }, 120_000);
 

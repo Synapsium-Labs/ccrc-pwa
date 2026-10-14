@@ -7562,9 +7562,10 @@ if over:
     say("finding", "pending-overdue", max(over) // 1000)
 if s["rotationOwed"]:
     say("finding", "rotation-owed:" + s["owedWhy"])
-# 4557: no rotation for longer than the interval plus its slack, with no hold standing and nothing pending (a
-# rotation in flight, staged, handed out or promoting, always has its id pending, so it is not overdue).
-if now - anchor > interval + slack and s["hold"] is None and not s["pending"]:
+# 4557: no rotation for longer than the interval plus its slack, with no hold standing and nothing in flight: nothing
+# pending and nothing promoting, the same two tests as the rotating word above (a crash between the promotion discard
+# and its commit leaves promoting set with pending empty, and that is a rotation in progress, not an overdue one).
+if now - anchor > interval + slack and s["hold"] is None and not s["pending"] and s["promoting"] is None:
     say("finding", "rotation-overdue", (now - anchor) // 1000)
 if ls is not None and ls["word"] == "proof-unmeasured" and not (f > 0 and lf == "proof-unmeasured"):
     say("finding", "proof-unmeasured", age(ls["at"]))
