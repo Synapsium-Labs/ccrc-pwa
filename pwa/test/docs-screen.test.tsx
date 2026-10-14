@@ -978,3 +978,29 @@ describe('Review 439 F3: the not-contained banner describes the pin, and a Re-li
     expect(screen.getByRole('heading', { name: 'Kept' })).toBeInTheDocument();
   });
 });
+
+describe("Review 439 F23: a direct load's #fragment survives the linked-worktree owner redirect", () => {
+  const FOOTNOTE = 'B.[^1]\n\n[^1]: The note.\n';
+
+  it("is honoured once on the owner's page, and a later in-app visit to the page does not honour it again", async () => {
+    const scroll = vi.spyOn(HTMLElement.prototype, 'scrollIntoView').mockImplementation(() => {});
+    const f = fakeLoaders();
+    f.tree.mockImplementation(async (project: string) => project === 'b'
+      ? failedAnswer('linked-worktree', { owner: 'a', branch: 'ws/a' })
+      : okTree(treeOk({ entries: [entry('specs', 'x.md'), entry('specs', 'y.md')] })));
+    f.file.mockImplementation(async (_project: string, pin: DocPin) => ({
+      s: 'ok', value: fileResponse(pin.path === 'x.md' ? FOOTNOTE : '# Y\n'),
+    }));
+    history.pushState(null, '', '/docs/b/specs/x.md#user-content-fn-1');
+    const { container } = render(<Routed loaders={f.loaders} />);
+    await waitFor(() => expect(here()).toBe('/docs/a/specs/x.md?ref=ws/a'));
+    await waitFor(() => expect(scroll).toHaveBeenCalledTimes(1));
+    expect(scroll.mock.contexts[0]).toBe(container.querySelector('article li#user-content-fn-1'));
+    act(() => { navigate('/docs/a/specs/y.md?ref=ws/a'); });
+    expect(await screen.findByRole('heading', { name: 'Y' })).toBeInTheDocument();
+    act(() => { navigate('/docs/a/specs/x.md?ref=ws/a'); });
+    await waitFor(() => expect(container.querySelector('article li#user-content-fn-1')).not.toBeNull());
+    await act(async () => { await new Promise((r) => setTimeout(r, 20)); });
+    expect(scroll).toHaveBeenCalledTimes(1);
+  });
+});

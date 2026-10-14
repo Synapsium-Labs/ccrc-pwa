@@ -227,9 +227,12 @@ export function DocsScreen(p: {
     if (target === null || target === here) return;
     if (targetNote !== null) setNote({ at: target, text: targetNote, arrived: false });
     if (viaOwner) setTrail((t) => ({ from: [...t.from, here], next: target }));
-    // The reader's #fragment rides along: the router never reads it, so a replace would otherwise drop it.
+    // The reader's #fragment rides along: the router never reads it, so a replace would otherwise drop it. An owner
+    // redirect moves the page to another project, so the direct load's fragment (held under the old page's key) is
+    // handed to the owner's page too, honoured once there (refinement (o)).
+    if (viaOwner && location.hash.length > 1) setFragment(location.hash.slice(1), target);
     navigate(target + location.hash, { replace: true });
-  }, [target, targetNote, viaOwner, here]);
+  }, [target, targetNote, viaOwner, here, setFragment]);
 
   let body: ReactNode;
   if (!parsed.ok) {
