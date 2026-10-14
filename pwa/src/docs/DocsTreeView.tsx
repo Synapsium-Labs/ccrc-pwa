@@ -1,10 +1,11 @@
 // The project, section and directory pages of the Docs screen (spec 2026-10-01 4.4; W5 part 1 Task 9), and a path
 // page the tree answer does not list. Pure renderers of one tree answer: every row and link is built by
 // `docsLocation` (refinement (q)), so it keeps the page's project and ref; rows come from `listDir` in
-// `SECTION_ORDER`; every word is `DOCS_VIEW_TEXT`'s. The header (crumbs, truth line, actions, banners) is Task 10's.
+// `SECTION_ORDER`; every word is `DOCS_VIEW_TEXT`'s. The header and the banners above it (crumbs, truth line, actions,
+// the default-view hint) are `DocsHead`'s and `DocsBanners`', which `DocsScreen` mounts.
 import { useState, type MouseEvent, type ReactNode } from 'react';
 import {
-  DOC_SECTION_SLUGS, contentClass, docsPageUrl, entryView, parseDocsRef,
+  DOC_SECTION_SLUGS, contentClass, docsPageUrl, entryView,
   type DocSectionSlug, type DocsPageLocation, type DocsTreeOk, type EntryMode,
 } from '../../../shared/docs';
 import { navigate } from '../lib/router';
@@ -143,31 +144,13 @@ function ListingPage(p: {
   );
 }
 
-/** A path the tree answer does not list (spec 4.4): "Not in this listing at <short commit>", and, in the default view
- *  of a holder whose worktree has a draft at or under the path, the hint with **Open the draft view** linking this
- *  page at `refs/heads/<drafts.branch>`. */
-function MissingPage(p: { readonly tree: DocsTreeOk; readonly page: DocsPageLocation & { kind: 'path' } }): ReactNode {
-  const { tree, page } = p;
-  const drafts = tree.drafts;
-  const under = page.path + '/';
-  const drafted = page.ref === null && drafts.state === 'holder' && tree.entries.some((e) =>
-    e.section === page.section && (e.path === page.path || e.path.startsWith(under))
-    && e.draft !== null && e.draft.state !== 'deleted');
-  const draftRef = drafts.state === 'holder' ? parseDocsRef('refs/heads/' + drafts.branch) : null;
+/** A path the tree answer does not list (spec 4.4): "Not in this listing at <short commit>". The default-view hint
+ *  that may follow it (spec 4.4: "plus the default-view hint when it applies") is `DocsBanners`' one hint, shown on
+ *  every default-view page of a holder with drafts, so this page draws no second copy of it. */
+function MissingPage(p: { readonly tree: DocsTreeOk }): ReactNode {
   return (
     <div className="docs-missing">
-      <p className="docs-note">{fillSentence(DOCS_VIEW_TEXT.missing, { short: shortCommit(tree.ref.commit) })}</p>
-      {drafted && drafts.state === 'holder' && draftRef !== null && (
-        <p className="docs-note">
-          {fillSentence(DOCS_VIEW_TEXT.missingDraftHint, { branch: drafts.branch })}{' '}
-          <DocsPageLink
-            className="docs-hint-link"
-            href={docsPageUrl(docsLocation(page, { kind: 'same-page', project: page.project, ref: draftRef }))}
-          >
-            {DOCS_VIEW_TEXT.openDraftView}
-          </DocsPageLink>
-        </p>
-      )}
+      <p className="docs-note">{fillSentence(DOCS_VIEW_TEXT.missing, { short: shortCommit(p.tree.ref.commit) })}</p>
     </div>
   );
 }
@@ -188,7 +171,7 @@ export function DocsTreeView(p: { readonly tree: DocsTreeOk; readonly page: Docs
       if (kind === 'dir') {
         return <ListingPage key={page.section + '/' + page.path} tree={tree} page={page} section={page.section} dir={page.path} />;
       }
-      return kind === 'missing' ? <MissingPage tree={tree} page={page} /> : null;
+      return kind === 'missing' ? <MissingPage tree={tree} /> : null;
     }
   }
 }

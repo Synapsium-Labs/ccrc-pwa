@@ -321,7 +321,6 @@ export const DOCS_VIEW_TEXT = {
   opaque: 'Drafts inside nested repositories are not shown: {dirs}.',
   emptyListing: 'Nothing is listed here.',
   missing: 'Not in this listing at {short}.',
-  missingDraftHint: 'It may be an uncommitted draft on {branch}.',
   openDraftView: 'Open the draft view',
   loading: 'Loading…',
   noPreview: 'No preview ({size})',
@@ -344,4 +343,101 @@ export const DOCS_VIEW_TEXT = {
 /** A count's plural suffix for `{s}`. */
 export function pluralS(n: number): string {
   return n === 1 ? '' : 's';
+}
+
+/** The header's words (spec 4.4's layout; spec 4.5's truth line, freshness chip and actions; W5 part 1 Task 10). The
+ *  chip's texts are spec 4.5's table, verbatim; the rest fill its silences in the same register. `{age}` and `{okAge}`
+ *  are `formatAge`'s, `{n}` a count of whole seconds, `{sentence}` a failure's or a client slot's sentence, and
+ *  `{badge}` is `ENTRY_BADGE_TEXT`'s (or `sourceDraftUnbadged`). */
+export const DOCS_HEAD_TEXT = {
+  back: 'Up one level',
+  crumbs: 'Docs path',
+  crumbsMore: 'Show the whole path',
+  index: 'Docs',
+  servedOrigin: 'origin/{name}',
+  servedLocal: '{name} (local)',
+  danglingHead: 'origin/HEAD points at a missing branch',
+  copyCommit: 'copy commit',
+  copied: 'copied',
+  copyFailed: 'copy failed',
+  sourceCommitted: 'committed',
+  sourceViewCommitted: 'committed (view=committed)',
+  sourceDraft: '{badge} in {label}',
+  sourceDraftUnbadged: 'draft',
+  sourceNone: 'nothing opened',
+  updatedTo: 'Updated to {short}',
+  github: 'View on GitHub',
+  githubMayDiffer: "GitHub's copy may differ from this view",
+  githubOff: 'View on GitHub: {reason}',
+  openCommitted: 'Open committed version',
+  freshNone: 'no origin',
+  freshNever: 'never fetched ↻',
+  freshOk: 'fetched {age} ↻',
+  freshLocalOnly: 'local only ↻',
+  freshFailed: 'fetch failed {age}: {sentence} · last good {okAge} ↻',
+  freshNeverGood: 'never',
+  freshFetching: 'fetching…',
+  freshSoon: 'fetched moments ago; again in {n}s',
+  freshStaleLock: 'stale lock on {ref}',
+  freshStaleLockUnnamed: 'stale lock (the answer named no ref)',
+  freshLocalRef: 'local ref; fetch does not change it',
+  freshRelistFailed: 're-list failed: {sentence} ↻',
+  freshRefreshFailed: 'refresh failed: {sentence} ↻',
+  worktreeMain: 'main checkout',
+  worktreeWorkspace: 'workspace {name}',
+} as const;
+
+/** Why View on GitHub gives no link (spec 3.11's refusals), as "View on GitHub: {reason}". */
+export const GITHUB_REFUSAL_TEXT: Record<Extract<GithubLink, { ok: false }>['why'], string> = {
+  'no-github-origin': 'no GitHub origin',
+  'not-on-origin': 'not pushed',
+  'uncommitted': 'not committed',
+  'bad-slug': "the repository's GitHub name cannot be linked",
+  'bad-target': 'this branch or path cannot be linked',
+};
+
+/** The banners' words (spec 4.5's table, verbatim; W5 part 1 Task 10). `{s}` is `pluralS`'s; `{label}` is
+ *  `worktreeLabel`'s; `{served}` is `servedRefText`'s; `{why}` in `skipped` is the distinct reasons joined by `, `. */
+export const DOCS_BANNER_TEXT = {
+  defaultHint: '{n} uncommitted doc{s} in {label} on {branch}',
+  baseHint: '{n} uncommitted doc{s} in {label} are based on local {branch} at {short}; this page shows {served}',
+  openLocalView: 'Open the local view',
+  ambiguous: 'Two or more worktrees hold {branch}, so drafts are not shown:',
+  untrusted: 'The worktree holding {branch} failed the ownership check ({why}); drafts are not shown.',
+  unreadable: 'Drafts could not be read ({step}); showing committed only.',
+  unsettled: 'The worktree changed while Docs read it; showing committed only.',
+  retry: 'Retry',
+  tooMany: '{count} uncommitted files is over the limit; showing committed only.',
+  skipped: '{k} worktree records for {branch} were skipped ({why}).',
+  caveatHash: 'Some drafts were found by content hash.',
+  caveatFilters: 'Clean/smudge filters were bypassed; drafts show raw working-tree bytes.',
+  showingCommitted: 'Showing the committed version.',
+  deleted: 'Deleted in {label} (uncommitted).',
+  typechange: 'Its type changed in {label}; the draft is not read.',
+  conflicted: 'Contains unresolved merge-conflict markers.',
+  notContained: 'Commit {short} is no longer on {served} (the branch was rewritten).',
+  relist: 'Re-list',
+  draftAssets: 'This draft page embeds {k} uncommitted asset{s}.',
+  viewCommitted: 'Showing the committed version at {short}.',
+  backToDraft: 'Back to the draft',
+} as const;
+
+/** The served ref as the truth line and the banners name it (spec 4.5): `origin/<b>` when the origin side is served,
+ *  `<b> (local)` when the local side is; the full refname (`ref.served`) goes in a `title` beside it. */
+export function servedRefText(ref: DocsTreeOk['ref']): string {
+  return fillSentence(ref.side === 'origin' ? DOCS_HEAD_TEXT.servedOrigin : DOCS_HEAD_TEXT.servedLocal, { name: ref.name });
+}
+
+/** A worktree as the truth line and the banners name it (spec 4.5): "main checkout", "workspace <last segment>", or
+ *  the path's last two segments; the full path goes in a `title` beside it. */
+export function worktreeLabel(w: { readonly path: string; readonly class: 'main' | 'workspace' | 'other' }): string {
+  const parts = w.path.split('/').filter((s) => s !== '');
+  switch (w.class) {
+    case 'main':
+      return DOCS_HEAD_TEXT.worktreeMain;
+    case 'workspace':
+      return fillSentence(DOCS_HEAD_TEXT.worktreeWorkspace, { name: parts.at(-1) ?? w.path });
+    case 'other':
+      return parts.slice(-2).join('/');
+  }
 }

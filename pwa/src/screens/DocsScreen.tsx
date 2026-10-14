@@ -3,13 +3,17 @@
 // index), fixes a non-canonical URL by replace, loads the index or the visit's tree, follows a linked worktree to the
 // repository that owns it by replace, and hands the page to its view: the index, a project, section or directory
 // page, or a leaf. It owns the page's image queue and the drafted-asset count, and gives both to the images through
-// `DocsAssetContext`. The header, banners and freshness chip are Task 10's.
+// `DocsAssetContext`. Above the view sit `DocsHead` (back, crumbs, truth line, freshness chip, actions) on every page
+// that parsed, and `DocsBanners` on a page with a listing; so a tree failure keeps the crumbs and a file failure keeps
+// the header and the truth line (spec 4.7's placement, M4.F4).
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import {
   DOCS_PAGE_PREFIX, docsPageUrl, parseDocsPage, parseDocsRef,
   type DocsPageLocation, type DocsProjectsResponse, type DocsRefSpec, type DocsTreeOk,
 } from '../../../shared/docs';
 import { DocsAssetContext, type DocsAssetContextValue } from '../docs/DocImage';
+import { DocsBanners } from '../docs/DocsBanners';
+import { DocsHead } from '../docs/DocsHead';
 import { DocsFailureView } from '../docs/DocsFailureView';
 import { DocsIndexView } from '../docs/DocsIndexView';
 import { DocsLeaf } from '../docs/DocsLeaf';
@@ -180,7 +184,11 @@ export function DocsScreen(p: {
   return (
     <DocsAssetContext value={assets}>
       <div className="docs-screen" data-draft-assets={draftAssets}>
+        {page !== null && <DocsHead page={page} visit={visit} tree={tree} />}
         {note !== null && note.at === here && <p className="docs-note docs-redirect-note" role="status">{note.text}</p>}
+        {page !== null && page.kind !== 'index' && tree !== null && (
+          <DocsBanners page={page} tree={tree} file={visit.file} draftAssets={draftAssets} onRelist={visit.retryTree} />
+        )}
         {body}
       </div>
     </DocsAssetContext>

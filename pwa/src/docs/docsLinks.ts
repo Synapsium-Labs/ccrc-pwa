@@ -234,7 +234,7 @@ export function imagePinFor(
   if (pinFor(tree, page)?.kind !== 'draft') return committed(page.ref !== null && admitDraft(e, drafts));
   const draft = e.draft;
   if (draft === null) return committed(false);
-  if (draft.state === 'deleted') return { ok: false, why: 'deleted-in-worktree' };
+  if (entryView(e, drafts, 'ref').badge === 'deleted') return { ok: false, why: 'deleted-in-worktree' };
   if (entryView(e, drafts, 'ref').opens !== 'draft' || drafts.state !== 'holder' || draft.fp === null) {
     return { ok: false, why: 'draft-withheld' };
   }

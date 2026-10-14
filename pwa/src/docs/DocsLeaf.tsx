@@ -3,8 +3,8 @@
 // an object URL); `svg` is the same `data:` image Markdown gets, with Source and Download; `html` is the stand-in
 // until W6's mockup viewer (no frame of any kind); `text` is the file in `<pre class="doc-plain">`, or `CodeBlock`
 // when a registered grammar matches its extension; `other` is "No preview" and Download. A listed size over its
-// class cap is the `too-large` sentence, and nothing was requested (the visit's `too-large` slot). The header and
-// banners are Task 10's.
+// class cap is the `too-large` sentence, and nothing was requested (the visit's `too-large` slot). The header and the
+// banners are `DocsScreen`'s (`DocsHead`, `DocsBanners`), above this body, so a file failure replaces only the body.
 import { useContext, useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from 'react';
 import type { Element as HastElement } from 'hast';
 import hljs from 'highlight.js/lib/core';

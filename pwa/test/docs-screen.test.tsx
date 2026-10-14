@@ -370,12 +370,12 @@ describe('section and directory pages (spec 4.4)', () => {
     expect(screen.queryByText('Open the draft view')).toBeNull();
   });
 
-  it('a draft-only file in the default view: not in this listing, and the hint opens it at refs/heads/<branch>', async () => {
+  it('a draft-only file in the default view: not in this listing, and the default-view hint opens it at refs/heads/<branch>', async () => {
     const drafted: DocsEntry[] = [...entries, { section: 'specs', path: 'n.md', committed: null, draft: draftOf('untracked') }];
     const f = fakeLoaders({ tree: okTree(treeOk({ entries: drafted, drafts: holder() })) });
     open('/docs/demo/specs/n.md', f);
     expect(await screen.findByText(`Not in this listing at ${COMMIT_A.slice(0, 8)}.`)).toBeInTheDocument();
-    expect(screen.getByText(/It may be an uncommitted draft on main\./)).toBeInTheDocument();
+    expect(screen.getByText('2 uncommitted docs in main checkout on main')).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Open the draft view' })).toHaveAttribute('href', '/docs/demo/specs/n.md?ref=refs/heads/main');
     expect(f.file).not.toHaveBeenCalled();
   });
