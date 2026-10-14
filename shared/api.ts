@@ -8871,14 +8871,14 @@ export function isStampRead(v: unknown): v is StampRead {
   return typeof v === 'string' && (STAMP_READS as readonly string[]).includes(v);
 }
 
-/** A node's role (§6 `nodes.role`): the bash spine's `CCRC_ROLE` words. A
- *  token outside the list reads `null` on the wire. */
-export type NodeRole = 'server' | 'fleet' | 'both';
-export const NODE_ROLES = ['server', 'fleet', 'both'] as const satisfies readonly NodeRole[];
-/** Use THIS, never `NODE_ROLES.includes(x as NodeRole)` — `isRunState`'s rule. */
-export function isNodeRole(v: unknown): v is NodeRole {
-  return typeof v === 'string' && (NODE_ROLES as readonly string[]).includes(v);
-}
+/** A node's role (§6 `nodes.role`) and its guard live in the L0 sibling
+ *  node-role.ts, so server/src/config.ts imports the guard without loading this
+ *  ~10k-line file at runtime. Only the TYPE comes back here (D-3021: this file
+ *  imports nothing at runtime); NODE_ROLES and isNodeRole are imported from
+ *  node-role.ts itself. Eight lines, like the definition they replace, so line
+ *  citations into this file (the README's, the compaction card's) still hold. */
+import type { NodeRole } from './node-role.js';
+export type { NodeRole } from './node-role.js';
 
 /** A node's OS, from `~/.ccrc/ccrc-caps` line 1 (`os linux|darwin`, §8).
  *  `unknown` = no caps file, or one that failed validation. */
