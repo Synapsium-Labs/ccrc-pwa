@@ -153,7 +153,7 @@ describe('W5 bound r10: no highlighting for a block holding a word longer than M
   });
 });
 
-describe('W5 bound r10 (line): no highlighting for a block holding a line longer than MD_HIGHLIGHT_MAX_LINE_CHARS', () => {
+describe('the line bound: no highlighting for a block holding a line longer than MD_HIGHLIGHT_MAX_LINE_CHARS', () => {
   const MAX = MD_HIGHLIGHT_MAX_LINE_CHARS;
   /** `unit` repeated and cut to `n` characters. */
   const unitLine = (unit: string, n: number): string => unit.repeat(Math.ceil(n / unit.length)).slice(0, n);
