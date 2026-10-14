@@ -1073,7 +1073,9 @@ the compaction card cite this file by line, and an insertion above moves every a
 `shared/api.ts:7684-7686`, `:7726`, `:7734` and `:7747`, and `session-hook.test.ts`'s "README HAS ITS OWN CENSUS
 ENTRY, and it is EMPTY" (≈:8674) reds if any of them moves. The natural homes beside `CoordStatus` (≈:3813) or
 `CoordCapsView` (≈:6471) are both above those anchors, so they are not used. The plan's verification step re-runs
-the README citation instrument and `session-hook.test.ts`'s per-file census (§17).
+the README citation instrument and `session-hook.test.ts`'s per-file census (§17). Since wave 4 the refusal codes
+(`StallWatchRefusal`, `STALL_WATCH_REFUSALS`, `isStallWatchRefusal`; D-4045) and the duration formatter
+(`stallDurationText`) live in the new L0 file `shared/stall-watch.ts` instead, not at the foot of `shared/api.ts`.
 
 **Types and the guard.**
 
@@ -1443,13 +1445,17 @@ text says pushes arrive wherever push notifications are switched on in Settings,
    only: the `quietMs` field and its reader; the backoff ceiling; `StallArming.busySince` and the bounded change to
    `stallIdleStart`; and `stallArmHasRung`. None spells a marker. Its single value import stays L0, which
    `stall-vocabulary.test.ts` pins.
-4. **L0 imports nothing.** The new `shared/api.ts` members are literals, types and one guard, appended at the end
-   of the file (§12).
+4. **L0 imports nothing, bar one type.** The new `shared/api.ts` members are literals, types and one guard, appended
+   at the end of the file (§12). Since wave 4 the refusal codes (`StallWatchRefusal`, `STALL_WATCH_REFUSALS`,
+   `isStallWatchRefusal`; D-4045) and `stallDurationText` live in `shared/stall-watch.ts`, whose one import is
+   `import type { StallConfirmRequired } from './api.js'`, erased at build: no value import and no `node:` module.
+   `STALL_CONFIRM_TEXT.unconfirmed` stays in `shared/api.ts`.
 5. **L1 purity, enforced by its own rows.** No existing scan covers a new L1 file, so
    `server/test/stall-settings.test.ts` carries purity rows in `stall-vocabulary.test.ts`'s idiom (its
    `NODE_BUILTIN`, `SIDE_EFFECT_IMPORT` and `valueImportSpecifiers` shapes): no `node:` import, no `require` or
-   dynamic import, no `Date.now` or `new Date`, and value imports only from `../../../shared/api.js`, `./stall.js` and
-   `../turnidle.js`, with a CONTROL row proving the scan reads the file. `turnidle.ts` still imports nothing.
+   dynamic import, no `Date.now` or `new Date`, and value imports only from `../../../shared/api.js`,
+   `../../../shared/stall-watch.js`, `./stall.js` and `../turnidle.js`, with a CONTROL row proving the scan reads the
+   file. `turnidle.ts` still imports nothing.
    `stallEffectKey`'s hash is plain JavaScript, so the key needs no `node:crypto`.
 6. **The mail gate's precedence (strict > busy > busy-shadow > shell)** holds whenever the files decide; a strict
    file still wins under any chosen level, and also holds the wave-2 step off (§6.3).
