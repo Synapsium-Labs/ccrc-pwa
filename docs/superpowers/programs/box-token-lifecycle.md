@@ -21,7 +21,7 @@ spec's after wave 1.
 | 2a | 1, follow-up | Part 1 of the arming plan (`docs/superpowers/plans/2026-10-10-box-token-lifecycle-w1-arming.md`): review 365's R1 and R2 pins, red-first; R3 and R4; review 362's R-f and R-g; the token-line stripper's quote state; the 12:00 entry's residue 3 and 5, and residue 2, 4 and 6(a) if claim 1141 is gone. The arms stay off | 370 | #348 | **MERGED** `c6e8c5d8d` (PR #348, 2026-10-11 00:43:17 UTC; run 370 done) on review 375, clean by the 23:59 bar. Its tree is byte-identical to the reviewed tip `b747f3681`, since `main` had not moved. Was: **IN REVIEW** 2026-10-10 23:59 UTC: wave-done at `b747f3681` (mail 4193), re-measured; review run 375 dispatched 10-11 00:02 UTC to `ccrc-pwa-warm-summit`; Task 11 not taken (claim 1141 live), so it moves to part 2; the bar is in the 23:59 entry. Was: **DISPATCHED** 2026-10-10 22:20 UTC to `ccrc-pwa-amber-harbor` (9 items: Tasks 1, 2, 5 to 10, and 11 only if claim 1141 is gone; route Opus·high / Sonnet / workflow off / compact 40). The plan reached `main` in #347. Was: **PLANNED** 2026-10-10 22:15 UTC: the plan was drafted, attacked (26 breaks: 23 applied, 1 risk note, 1 rejected) and split. The brief goes out once the plan reaches `main`. Was: **Run 370 open, planned** 2026-10-10 20:33 UTC, before run 350 closed |
 | 2b | 1, follow-up | Part 2 of the arming plan: `retired-presented` clears when a rotation answers it (number 4552), then the flip, `_BT_ARMS_ON` 0 to 1, with the fresh-box classes (number 4553 if ruled). Bound: merged before row 3's first PR | 377 | #353 | **MERGED** `82464a449` (PR #353, 2026-10-12 18:40 UTC), **live on both boxes as v0.0.153 at 18:48 UTC, both `PASS`**, tree verified, run 377 closed final; the operator ruled "merge now, fix both after" on review 391's two class-3 edges, which go to row 2c. Was: **TO THE OPERATOR** 2026-10-12 18:24 UTC: review 391 at `250f7f318` is clean on nine classes; two class-3 cases (F1, a server left with only its retired file; F2, a fleet box that synced, refused, then lost both files) contradict D-139's "lost stays FAIL", so the merge waits on the operator. Was: **IN SCOPED REVIEW** 2026-10-12 12:55 UTC: the fix-round wave-done at `250f7f318` (mail 4315), re-measured; review run 391 against the committed bar, where a bar-class finding now goes to the operator. Was: **FIX ROUND 1 SENT** 2026-10-12 10:03 UTC (mail 4287, `rulings-run377-fix1.md`) on review 383 at `f167754b1`: F1, F5 and F12 meet class 3, F2 class 1, F3 class 7; the operator ruled D-139 wins (never-handed reads PASS with its sentence); run 377 back to `working`. Was: **IN REVIEW** 2026-10-11 18:06 UTC: wave-done at `f167754b1` (mail 4244), re-measured; the bar is in the 18:06 entry. Was: **DISPATCHED** 2026-10-11 13:20 UTC to `ccrc-pwa-clear-harbor` (6 items: the rulings into the plan, Tasks 3, 4, 11, R and 12; route Opus·high / Sonnet / workflow off / compact 40); README consent granted (mail 4227) and the operator's Plan 4 ruling made (option 2, mail 4225), both forwarded in mail 4229. Was: **Run 377 open, planned** 2026-10-11 00:42 UTC, before run 370 closed. waits on: the operator's Decisions 1 and 2; the operator's ruling on the GPT-lane Plan 4 soak (`ccrc-pwa-clear-mesa` recommends accepting `box-token` WARNs by name on the sampler's doctor baseline; the window closes about 10-21 10:31 UTC); rulings on residue 8(a) and R-i; claim 1141 |
 | 2c | 1, follow-up | D-139's two edges from review 391: a server arm that counts its sibling files as history (F1), and a sync refusal that keeps the last held generation (F2); review 391's F3 to F10 prose and coverage. Numbers 4554 to 4558. Bound: merged before row 3's first PR | 398 | #376 | **MERGED** 2026-10-13 07:01 UTC as `e4405056e`, **live on both boxes as v0.0.164 at 07:35 UTC, both `PASS`**; review 409 clean at the bar; run 398 closed final. Was: **IN SCOPED REVIEW** 2026-10-13 05:36 UTC: fix round 1's wave-done at `faa0ef03e` (mail 4512), re-measured; review run 409. Was: **FIX ROUND 1 SENT** 2026-10-13 03:17 UTC (mail 4502, `rulings-run398-fix1.md`) on review 405 at `6faca9bdf`: F1 (an own-write box's fleet-side records are a server trace) meets class 3; F2's prefixed commit-message literal is kept off `main` by a hand-written squash body. Was: **IN REVIEW** 2026-10-13 00:46 UTC: the wave-done at `6faca9bdf` (mail 4445), re-measured; the bar is in the 00:46 entry; review run 405. Was: **DISPATCHED** 2026-10-12 19:34 UTC to `ccrc-pwa-calm-delta` (7 items; the plan rides in its PR as Task 1; route Opus·high / Sonnet / workflow off / compact 40). Was: **planned** 2026-10-12 18:39 UTC, opened before run 377 closed |
-| 3 | 2 | The weekly schedule; the agent link token by the same code-then-HTTPS claim. Split (proposed in the 2026-10-13 07:46 entry): 3a the schedule plus row 2c's residue; 3b dormant link readers; 3c link rotation; 3d its arming; 3e pairing | 410 (3a) | — | **planned** 2026-10-13 07:00 UTC, opened before run 398 closed. 3a **in progress** from 23:19 UTC in the coordinator's own workspace, by the operator's direction (the daily cap refused its dispatch twice). The operator ruled both questions before 08:19 UTC (accept and guard; console code before arming), so the order is 3a, 3b, 3c, 3d pairing and repair, 3e arming |
+| 3 | 2 | The weekly schedule; the agent link token by the same code-then-HTTPS claim. Split (proposed in the 2026-10-13 07:46 entry): 3a the schedule plus row 2c's residue; 3b dormant link readers; 3c link rotation; 3d its arming; 3e pairing | 410 (3a) | #403 (3a) | 3a **MERGED** `8b36d8b6a` (PR #403, 2026-10-14 13:40:57 UTC; released as v0.0.183 at 13:42:07), on the held-out review clean by the bar and group G's closing commit; the live proof on both boxes is the next entry's. Run 410 stays `planned`: it was never dispatched. Was: **planned** 2026-10-13 07:00 UTC, opened before run 398 closed. 3a **in progress** from 23:19 UTC in the coordinator's own workspace, by the operator's direction (the daily cap refused its dispatch twice). The operator ruled both questions before 08:19 UTC (accept and guard; console code before arming), so the order is 3a, 3b, 3c, 3d pairing and repair, 3e arming |
 | 4 | 3 | A token per box, stored as hashes | — | — | later |
 
 ## Decisions & deviations
@@ -1543,6 +1543,49 @@ spec's after wave 1.
 
     It is reviewed by two Opus lenses, the rulings and the live doctor and driver, and re-verified: the suites, the
     doctor, install and update split with coverage reconciled, and the scans. The merge follows when it is green.
+- **2026-10-14 13:42 UTC: row 3a merged as `8b36d8b6a` (#403), released as v0.0.183; claim 1289 released.**
+  - **Group G (`fa9e05f72`)** closed every finding the review confirmed and the PR body's six minors, by the 09:32
+    entry's ruling:
+    - doctor's overdue WARN now also requires nothing promoting. A crash between an abandoned promotion's discard and
+      its commit had read WARN "nothing in flight" where `main` read PASS "a rotation in progress". The new row reds
+      before the fix and under its mutant.
+    - the one-definition pin admits a typed second definition;
+    - E8g presses while a scheduled miss stands, and is the only row that reds when the miss backoff's scope is
+      widened to every why;
+    - the new residue rows assert the kill switch's SKIP;
+    - the limits and records are corrected.
+
+    Its two Opus lenses (the rulings; the live doctor and driver) approved it with minors only. Its three verifiers
+    are green at `fa9e05f72`:
+    - every suite;
+    - the doctor, install and update split, re-reconciled at 898, 299 and 502, all passed (at load 45 to 105, with
+      raised timeouts; every red passed alone);
+    - the scans.
+
+    Task 6's grid has 0 verdict or rc moves against `e4405056e` in its own states. The planted crash state reads PASS
+    again, as at `e4405056e`.
+  - **Commit H (`5772edebb`)** is prose only: three plan sentences group G's reviews passed on.
+  - **CI at `5772edebb`.** PR run 38569369095 and full run 38569360585: every Linux leg is green. The PR run
+    selected 161 files, among them the six the plan names. The macOS legs are red in 9 files this branch does not
+    touch (the same 8 as before, plus `ccd-docs-index`), so the full run's `full-suite` is red. macOS gates nothing.
+  - **The merge.** `gh pr merge 403 --squash --admin --match-head-commit 5772edebb`, with no branch deletion and a
+    hand-written body (numbers bare, scanned).
+    - `main` was at `e66ca6acd`. #395 and #190 had landed since the base, on none of the branch's files, and
+      `merge-tree` was clean.
+    - The run's own claim was the only one on its files, and 1289 was released after the merge.
+  - **Corrections.** The 09:32 entry said no finding is "of a bar class". Three confirmed minors were tagged with
+    their nearest class (one 4, two 6), and none breaks it:
+    - the backward clock step leaves the anchor rule intact, so the schedule is still due and only 4558's backoff
+      holds the stage longer;
+    - the two pin findings have no holder in the tree.
+
+    All three are fixed or named limits.
+  - **Run 410** was never dispatched, so it cannot advance and stays `planned`. Ending it is the operator's abandon
+    door; nothing here forces it.
+  - **Next:**
+    - the live proof: both boxes on v0.0.183 read `box-token` PASS, and no update exits 3 on a `box-token` FAIL;
+    - the first scheduled rotation, read-only, expected about 2026-10-17 (R20);
+    - 3b's plan (the dormant link readers).
 
 ## Carried constraints
 
