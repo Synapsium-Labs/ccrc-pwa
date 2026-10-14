@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=1906c64fa76f59e45e9848a3df305a32be7908decaedff7d3e085e96876ac45c
+# ccrc:generated 1 sha256=d2618373194325372c73cc826847e68baebaadf2854e854474ef96e276521e5a
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -7218,7 +7218,7 @@ cmd_ws_add() {   # [--no-rc] [--child <runId>] [--surface <word>] [--actor <text
                         _ws_slug_free "$project" "$slug" || die "slug in use: $slug — in $REG: $(_ws_slug_residue "$project" "$slug")"; \
                           gs=$(_ws_slug_git_state "$project" "$slug") || { [[ $? -eq 1 ]] && die "slug in use: $slug — ${gs#taken }"; die "cannot judge slug $slug for $project — $gs"; }; }
   [[ -z "$slug" ]] && { slug=$(CCD_WS_SLUG="${CCD_WS_SLUG:-}" _ws_slug_new "$project") \
-                        || die "could not find a free slug for $project"; }
+                        || die "could not find a free slug for $project"; }; _reg_id_cap "$project-$slug" || die "$_REG_ID_CAP_WHY — choose a shorter project or slug; nothing was created"
 
   git -C "$main" fetch origin --quiet 2>/dev/null || echo "warn: fetch failed; basing on the last known origin" >&2
   local base
@@ -21107,6 +21107,30 @@ _ws_tmproot_witness_file() { printf '%s' "$REG/tmproots/${1-}"; }   # id -> the 
 # dash-leading, because a dash-leading word is a flag spelling and every decision flag the server appends begins `--`.
 _reg_id_ok() { local LC_ALL=C; [[ "${1-}" =~ ^[A-Za-z0-9._-]+$ && "${1-}" != -* ]]; }   # word -> 0 iff a --session or positional id may bind it
 
+# THE COMPOSED-ID CAP (path-identity spec §2.6). A NEW id must fit every name ccd, its hook
+# and the server derive from it within the 255-byte NAME_MAX, or a write that names it
+# fails long after the id exists. The widest such name is the hook's claim temp,
+# .<id>.compactcard.<pid>.<nonce>.session-claim.tmp: 81 bytes beyond the id (a 7-digit
+# pid, and the 41-byte compact-<ms>-<pid>-<R>-<R> nonce), which leaves 174. The hook's own
+# gate is lower: its CCRC_ID_MAX (128) skips a longer peer id in the peer census, and that
+# session silently loses its card and its listing. So the cap is 128, the lower of the two.
+# ccd-id-cap.test.ts holds the census of every such name, and this number.
+#
+# BYTES under LC_ALL=C, as `_lc_dec_ok` counts its text. Three sites call it, each before any
+# row, worktree, branch or journal line exists, each with its own die line: ws-add (on its slug
+# line, after the per-project add lock, which every later ws-add refusal also leaves), start's
+# creating form (even when the row exists) and enable's two-argument form.
+# `start <id>` and `enable <id>` name a row that already exists and are not capped, so a
+# row planted by hand above the cap stays startable that way.
+_REG_ID_MAX=128
+_REG_ID_CAP_WHY=''   # the cap's one sentence; `_reg_id_cap` sets it whenever it answers 1
+_reg_id_cap() {   # id -> 0 iff its BYTES fit _REG_ID_MAX; 1 sets _REG_ID_CAP_WHY. Prints nothing; never dies.
+  local LC_ALL=C id="${1-}"
+  (( ${#id} <= _REG_ID_MAX )) && return 0
+  _REG_ID_CAP_WHY="id '$id' is ${#id} bytes; a new id may be at most $_REG_ID_MAX, so that every name ccd derives from it fits the 255-byte name limit"
+  return 1
+}
+
 # THE ID A WITNESS MAY BE NAMED FOR (path-identity spec §2.4): an id `_reg_id_ok` accepts, so never
 # dash-leading, and never dot-leading either — `.`, `..` and the writer's `.<id>.*.tmp` names live there.
 _ws_tmproot_id_ok() { _reg_id_ok "${1-}" && [[ "${1-}" != .* ]]; }   # id -> 0 iff a witness, a token verb or its audit may name it
@@ -22428,6 +22452,7 @@ cmd_start() {   # <id>  |  <wrapper> <project> [workdir]
     _ws_project_valid "$project" \
       || die "invalid project '$project' — allowed chars: A-Za-z0-9 . _ -, and no LEADING dot or dash"
     id=$(_id "$wrapper" "$project")
+    _reg_id_cap "$id" || die "$_REG_ID_CAP_WHY — choose a shorter project; nothing was created"
   else
     id="${1:?usage: ccd start <id> | ccd start <wrapper> <project> [workdir]}"
     # The id becomes a path under $REG, so its shape is checked exactly as
@@ -25926,6 +25951,7 @@ cmd_enable() {   # <id>  |  <wrapper> <project> [workdir]
   # `start` line; this one records that boot-persistence was asked for. No
   # shared tx: tx is for one intent/outcome PAIR, never for a call tree, and
   # folding these would report one act where two happened.
+  if (( $# >= 2 )); then _reg_id_cap "$id" || die "$_REG_ID_CAP_WHY — choose a shorter project; nothing was created"; fi
   _ws_expire_refuse_return "$id" enable   # a return during an expiry refuses, before anything is journaled (EXPIRE region)
   _lc_done enable "$id" ""
   cmd_start ${cross:+--cross-pool} "${route[@]}" "$@" || return $?
