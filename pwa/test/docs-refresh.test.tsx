@@ -525,3 +525,30 @@ describe('fetch-too-soon and the three lock ages (row 61, PWA half)', () => {
     expect(f.refresh.mock.calls[1]).toEqual(['demo', { ref: null, reason: 'manual' }]);
   });
 });
+
+describe('T13 review 3-6 and 4-5: a sign-in clears a refresh that failed for want of one', () => {
+  it('a refresh POST that answered auth no longer shows refresh-failed once the sign-in is back, and does not POST again', async () => {
+    const f = fakeLoaders({ tree: due() });
+    f.refresh.mockResolvedValueOnce({ s: 'auth' });
+    const { result } = visit(f.loaders, '/docs/demo');
+    await flush();
+    expect(result.current.freshness).toEqual({ s: 'refresh-failed', answer: { s: 'auth' } });
+    raiseAuthLost('expired');
+    act(() => clearAuthLost());
+    await flush();
+    expect(result.current.freshness).toEqual({ s: 'idle' });
+    expect(f.refresh).toHaveBeenCalledTimes(1);
+  });
+
+  it('a refresh that failed for another reason keeps its chip through a sign-in', async () => {
+    const f = fakeLoaders({ tree: due() });
+    f.refresh.mockResolvedValueOnce({ s: 'unreachable' });
+    const { result } = visit(f.loaders, '/docs/demo');
+    await flush();
+    expect(result.current.freshness).toEqual({ s: 'refresh-failed', answer: { s: 'unreachable' } });
+    raiseAuthLost('expired');
+    act(() => clearAuthLost());
+    await flush();
+    expect(result.current.freshness).toEqual({ s: 'refresh-failed', answer: { s: 'unreachable' } });
+  });
+});

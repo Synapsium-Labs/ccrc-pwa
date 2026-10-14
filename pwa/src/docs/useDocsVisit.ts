@@ -502,6 +502,11 @@ export function useDocsVisit(page: DocsPageLocation | null, loaders: DocsLoaders
         if (slot.s === 'auth' && target !== undefined) listTree(target);
       }
       for (const [fKey, e] of st.files) if (e.slot.s === 'auth') st.files.delete(fKey);
+      // A refresh that answered 401 failed for want of the sign-in that is back: its chip goes, but the POST is not
+      // made again (spec 4.3 item 3: once per open), so the next one is the user's tap.
+      for (const [key, f] of st.freshness) {
+        if (f.s === 'refresh-failed' && f.answer.s === 'auth') st.freshness.set(key, { s: 'idle' });
+      }
       changed();
     });
     const onVisibility = (): void => {
