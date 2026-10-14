@@ -11,10 +11,13 @@
 // Bounded per W5 Task 3 (section 4.10's "Bounds on the shared components"): `CodeBlock` does not highlight a block
 // holding a word longer than `MD_HIGHLIGHT_MAX_WORD_CHARS` (r10), and `keystrokeParts` moved to `markdownGuard.ts`,
 // where the parse's element count calls it too (2-2) and it refuses a span over `MD_KEYSTROKE_MAX_CHARS` (r11).
+// W5 Task 6: `SHARED_COMPONENTS.pre` reads `PreHighlightContext`, the Docs page's highlight budget; chat provides
+// none, so chat's output is unchanged (refinement (h)).
 import Markdown, { defaultUrlTransform } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import type { Components } from 'react-markdown';
-import React, { useCallback, useState, type ReactNode } from 'react';
+import React, { createContext, useCallback, useContext, useState, type ReactNode } from 'react';
+import type { Element as HastElement } from 'hast';
 import hljs from 'highlight.js/lib/core';
 import bash from 'highlight.js/lib/languages/bash';
 import typescript from 'highlight.js/lib/languages/typescript';
@@ -210,7 +213,22 @@ export function TableWrap({ children }: { children?: ReactNode }): ReactNode {
   return <div className="md-table-wrap"><table>{children}</table></div>;
 }
 
-/** The components chat and the Docs screen share: inline code (kbd chips), fenced code, tables. */
+/** The Docs page's highlight budget as `pre` reads it (spec 4.10 "Highlighting"; refinement (h)): given the `pre`
+ *  element being rendered (its hast `node`), whether the page admits highlighting it; `false` gives `CodeBlock`
+ *  `highlight={false}`. `null`, the default, has ONE meaning: no page budget (chat never provides one), so the block
+ *  rule alone decides, exactly as before. */
+export const PreHighlightContext = createContext<((pre: HastElement) => boolean) | null>(null);
+
+/** Fenced code through `CodeBlock`, under the page budget when one is provided. With a budget and no `node` (neither
+ *  react-markdown nor `renderHast` ever omits it) the block is not highlighted: the budget cannot be asked. */
+function SharedPre({ children, node }: { children?: ReactNode; node?: HastElement }): ReactNode {
+  const budget = useContext(PreHighlightContext);
+  const refused = budget !== null && (node === undefined || !budget(node));
+  return <CodeBlock highlight={refused ? false : undefined}>{children}</CodeBlock>;
+}
+
+/** The components chat and the Docs screen share: inline code (kbd chips), fenced code (under the Docs page's highlight
+ *  budget when one is provided), tables. */
 export const SHARED_COMPONENTS: Components = {
   code({ className, children }) {
     const text = String(children ?? '');
@@ -232,7 +250,7 @@ export const SHARED_COMPONENTS: Components = {
     }
     return <code className="md-code">{children}</code>;
   },
-  pre: ({ children }) => <CodeBlock>{children}</CodeBlock>,
+  pre: SharedPre,
   table: ({ children }) => <TableWrap>{children}</TableWrap>,
 };
 

@@ -4,8 +4,8 @@
 // braces. The spec's own sentences are copied verbatim (docs-failures.test.tsx pins them); the rest fill its
 // silences in the same register: what happened, in the operator's words, and nothing the page cannot know.
 import type {
-  DocsFailure, DocsFailureBody, DocsFailureContext, DocsNotAFileKind, DocsPageParseFailure, DocsTreeOk, EntryBadge,
-  WithheldReason,
+  DocRefResolution, DocsFailure, DocsFailureBody, DocsFailureContext, DocsNotAFileKind, DocsPageParseFailure,
+  DocsTreeOk, EntryBadge, GithubLink, WithheldReason,
 } from '../../../shared/docs';
 import { isDocsFailureWord, type DocsClientSlot } from './failures';
 
@@ -215,3 +215,32 @@ export function slotSentence(slot: DocsClientSlot): string {
  *  PWA file single-definition.test.ts's archive-door census lets spell the third word quoted on a code line. */
 export const DOCS_RELIST_WORDS: ReadonlySet<DocsFailure> =
   new Set<DocsFailure>(['unknown-commit', 'draft-changed', 'worktree-moved', 'worktree-gone']);
+
+/** Why a Markdown link on a Docs page is inert (spec 4.11, the `DocLink` arm "everything else"): a `resolveDocRef`
+ *  refusal, a self-contained scheme (`data`, `blob`), or the reason `githubBlobUrl` gives no link for an in-repo
+ *  file outside the four sections. */
+export type DocLinkInertReason =
+  | Extract<DocRefResolution, { kind: 'refused' }>['why']
+  | Extract<DocRefResolution, { kind: 'self-contained' }>['scheme']
+  | Extract<GithubLink, { ok: false }>['why'];
+
+/** The first half of an inert link's title, `<sentence>: <raw>` (spec 4.11). */
+export const DOC_LINK_INERT_SENTENCE: Record<DocLinkInertReason, string> = {
+  'empty': 'This link has no target',
+  'malformed': 'This link holds a space, a control character or a backslash',
+  'scheme': 'This link uses a scheme Docs does not open',
+  'protocol-relative': 'This link names another host without a scheme',
+  'root-relative': 'This link points at a server path, not at a document',
+  'above-root': 'This link climbs above the repository',
+  'bad-path': 'This link names a path Docs cannot address',
+  'data': 'This link carries its own content, which Docs does not open',
+  'blob': 'This link points at an object made inside a browser, which Docs does not open',
+  'no-github-origin': 'This file is outside the Docs sections, and the repository has no GitHub origin',
+  'not-on-origin': 'This file is outside the Docs sections, and this branch is not on GitHub',
+  'uncommitted': 'This file is outside the Docs sections, and it is not committed',
+  'bad-slug': "This file is outside the Docs sections, and the repository's GitHub name cannot be linked",
+  'bad-target': 'This file is outside the Docs sections, and its branch or path cannot be linked',
+};
+
+/** The whole title of a link `DocLink` renders with no Docs page around it (no `DocLinkContext`). */
+export const DOC_LINK_OUTSIDE_PAGE = 'Links open only inside a Docs page';
