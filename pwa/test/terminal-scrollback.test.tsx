@@ -27,7 +27,7 @@ afterEach(() => {
   FakeSocket.instances.length = 0;
 });
 
-const ID = 'claude-a-MekWarLive';
+const ID = 'lane-a-project-a';
 const ESC = String.fromCharCode(27);
 /** What tmux sends a fresh client, measured: alternate screen + app cursor keys. */
 const TMUX_ATTACH = `${ESC}[?1049h${ESC}[?1h${ESC}=`;

@@ -18,7 +18,7 @@ afterEach(() => {
   FakeSocket.instances.length = 0;
 });
 
-const ID = 'claude:OpenClawHetzner';
+const ID = 'lane-a:project-a';
 
 // — fakes —
 
