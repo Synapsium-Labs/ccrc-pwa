@@ -137,13 +137,17 @@ export function DocsBanners(p: {
       }
       if (v.badge === 'conflicted') out.push(<Banner key="conflicted" id="conflicted" tone="warn" text={DOCS_BANNER_TEXT.conflicted} />);
       if (file.s === 'ok' && file.answer.show.onRef === 'not-contained') {
-        const short = shortCommit(file.answer.show.commit ?? tree.ref.commit);
-        out.push(
-          <Banner key="not-contained" id="not-contained" tone="warn"
-            text={fillSentence(DOCS_BANNER_TEXT.notContained, { short, served: servedRefText(tree.ref) })}>
-            <RelistButton label={DOCS_BANNER_TEXT.relist} onRelist={onRelist} />
-          </Banner>,
-        );
+        // The commit the PAGE read: the answer's own, else the committed pin's. Never the tree's (the served ref's
+        // tip, on the ref by definition), so a page whose commit is unknown says nothing rather than a wrong one.
+        const read = file.answer.show.commit ?? (file.pin.kind === 'committed' ? file.pin.commit : null);
+        if (read !== null) {
+          out.push(
+            <Banner key="not-contained" id="not-contained" tone="warn"
+              text={fillSentence(DOCS_BANNER_TEXT.notContained, { short: shortCommit(read), served: servedRefText(tree.ref) })}>
+              <RelistButton label={DOCS_BANNER_TEXT.relist} onRelist={onRelist} />
+            </Banner>,
+          );
+        }
       }
       if (draftAssets > 0) {
         out.push(

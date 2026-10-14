@@ -118,6 +118,11 @@ function leafSource(tree: DocsTreeOk, page: Leaf, opened: DocPin | null): LeafSo
     : { kind: 'draft', badge, label: opened.branch, worktreePath: null };
 }
 
+/** The pin the leaf has open: the visit's file slot's, else the one the tree implies (nothing read yet). */
+function openedPin(tree: DocsTreeOk, page: Leaf, file: DocsVisit['file']): DocPin | null {
+  return file.s === 'none' ? pinFor(tree, page) : file.pin;
+}
+
 function badgeText(badge: EntryBadge | null): string {
   return badge === null ? DOCS_HEAD_TEXT.sourceDraftUnbadged : ENTRY_BADGE_TEXT[badge];
 }
@@ -140,6 +145,19 @@ export function truthSource(tree: DocsTreeOk, page: Leaf, opened: DocPin | null)
 /** The freshness chip's `data-state` (spec 4.5's table). */
 export type FreshChipState = 'none' | 'never' | 'ok' | 'local' | 'failed' | 'fetching' | 'soon';
 
+/** When the `soon` chip's wait ends (ms since the epoch), or null when the chip is not `soon`. The visit's own `soon`
+ *  (its one automatic retry pending) carries it; an answered `fetch-too-soon` past that retry (a second one in the
+ *  visit) is `soon` too (spec 4.5: an answered fetch-too-soon is the `soon` state), counted from the answer's
+ *  `retryAfterMs` and when it landed, with no retry behind it. */
+export function soonUntil(freshness: Freshness): number | null {
+  if (freshness.s === 'soon') return freshness.retryAt;
+  if (freshness.s === 'answered' && freshness.fetch.state === 'failed' && freshness.fetch.failure.failure === 'fetch-too-soon') {
+    const after = freshness.fetch.failure.retryAfterMs;
+    return freshness.at + (typeof after === 'number' && Number.isFinite(after) && after >= 0 ? after : 0);
+  }
+  return null;
+}
+
 /** The freshness chip (spec 4.5), from the tree's own facts and the visit's refresh state. Ages are
  *  `attemptAgeMs + (now - receivedAt)` (and `okAgeMs` likewise), in `formatAge`'s words; an answer this visit got is
  *  aged from when it landed. */
@@ -153,11 +171,6 @@ export function freshnessChip(
   switch (freshness.s) {
     case 'fetching':
       return { state: 'fetching', text: DOCS_HEAD_TEXT.freshFetching };
-    case 'soon':
-      return {
-        state: 'soon',
-        text: fillSentence(DOCS_HEAD_TEXT.freshSoon, { n: Math.max(0, Math.ceil((freshness.retryAt - now) / 1000)) }),
-      };
     case 'stale-lock':
       return {
         state: 'failed',
@@ -167,8 +180,18 @@ export function freshnessChip(
       return { state: 'failed', text: fillSentence(DOCS_HEAD_TEXT.freshRelistFailed, { sentence: notOkSentence(freshness.answer) }) };
     case 'refresh-failed':
       return { state: 'failed', text: fillSentence(DOCS_HEAD_TEXT.freshRefreshFailed, { sentence: notOkSentence(freshness.answer) }) };
-    case 'answered':
+    case 'soon':
+    case 'answered': {
+      const until = soonUntil(freshness);
+      if (until !== null) {
+        return { state: 'soon', text: fillSentence(DOCS_HEAD_TEXT.freshSoon, { n: Math.max(0, Math.ceil((until - now) / 1000)) }) };
+      }
+      if (freshness.s !== 'answered') break;
       if (freshness.fetch.state === 'skipped') return { state: 'local', text: DOCS_HEAD_TEXT.freshLocalRef };
+      // The same word the stamp path maps to `local`: the repository has no such branch on origin, which is not a failure.
+      if (freshness.fetch.state === 'failed' && freshness.fetch.failure.failure === 'remote-branch-absent') {
+        return { state: 'local', text: DOCS_HEAD_TEXT.freshLocalOnly };
+      }
       if (freshness.fetch.state === 'failed') {
         const age = formatAge(Math.floor(Math.max(0, now - freshness.at) / 1000));
         return {
@@ -177,6 +200,7 @@ export function freshnessChip(
         };
       }
       break;
+    }
     case 'idle':
       break;
   }
@@ -263,7 +287,7 @@ function TruthLine(p: {
     const k = docsPathKind(tree, page.section, page.path, modeOf(page));
     if (k.kind === 'leaf') {
       const file = visit.file;
-      const opened = file.s === 'none' ? pinFor(tree, page) : file.pin;
+      const opened = openedPin(tree, page, file);
       const s = leafSource(tree, page, opened);
       const source = s.kind === 'draft'
         ? (
@@ -286,7 +310,7 @@ function TruthLine(p: {
     <p className="docs-truth">
       <span className="docs-truth-ref" title={ref.served}>{servedRefText(ref)}</span>{SEP}
       <code className="docs-truth-commit" title={ref.commit}>{shortCommit(ref.commit)}</code>{' '}
-      <CopyCommit commit={ref.commit} />{SEP}
+      <CopyCommit key={ref.commit} commit={ref.commit} />{SEP}
       <span className="docs-truth-via">{fillSentence(VIA_SENTENCE[ref.via], ref.requested === null ? {} : { requested: ref.requested })}</span>
       {withRelation && (
         <>
@@ -304,8 +328,9 @@ function TruthLine(p: {
   );
 }
 
-/** View on GitHub (spec 3.11, opened with `openExternal` on tap), with its may-differ note, or its refusal in words. */
-function GithubAction(p: { readonly tree: DocsTreeOk; readonly target: GithubTarget }): ReactNode {
+/** View on GitHub (spec 3.11, opened with `openExternal` on tap), with its may-differ note, or its refusal in words.
+ *  `showsDraft`: the leaf shows draft bytes, which GitHub never has, so the note stands whatever the ref's relation. */
+function GithubAction(p: { readonly tree: DocsTreeOk; readonly target: GithubTarget; readonly showsDraft: boolean }): ReactNode {
   const link = githubBlobUrl(p.tree.github, p.tree.ref, p.target);
   if (!link.ok) {
     return <span className="docs-action-off">{fillSentence(DOCS_HEAD_TEXT.githubOff, { reason: GITHUB_REFUSAL_TEXT[link.why] })}</span>;
@@ -315,7 +340,7 @@ function GithubAction(p: { readonly tree: DocsTreeOk; readonly target: GithubTar
       <a className="docs-action" href={link.url} target="_blank" rel="noopener noreferrer" onClick={(e) => openExternal(e, link.url)}>
         {DOCS_HEAD_TEXT.github}
       </a>
-      {link.note === 'may-differ' && <span className="docs-action-note">{DOCS_HEAD_TEXT.githubMayDiffer}</span>}
+      {(link.note === 'may-differ' || p.showsDraft) && <span className="docs-action-note">{DOCS_HEAD_TEXT.githubMayDiffer}</span>}
     </>
   );
 }
@@ -323,9 +348,10 @@ function GithubAction(p: { readonly tree: DocsTreeOk; readonly target: GithubTar
 /** The actions (spec 4.5): View on GitHub, and Open committed version, offered iff `entryView(...).offersCommitted`
  *  on a leaf not already at `view=committed`. It navigates with a history entry (URL state, so Back returns to the
  *  draft); the commit never enters the URL, it is resolved from this visit's tree. */
-function Actions(p: { readonly page: TreePage; readonly tree: DocsTreeOk }): ReactNode {
-  const { page, tree } = p;
+function Actions(p: { readonly page: TreePage; readonly tree: DocsTreeOk; readonly file: DocsVisit['file'] }): ReactNode {
+  const { page, tree, file } = p;
   const target = githubTargetFor(page, tree);
+  const showsDraft = page.kind === 'path' && openedPin(tree, page, file)?.kind === 'draft';
   let committedHref: string | null = null;
   if (page.kind === 'path' && page.view !== 'committed') {
     const k = docsPathKind(tree, page.section, page.path, modeOf(page));
@@ -337,7 +363,7 @@ function Actions(p: { readonly page: TreePage; readonly tree: DocsTreeOk }): Rea
   if (target === null && committedHref === null) return null;
   return (
     <div className="docs-actions">
-      {target !== null && <GithubAction tree={tree} target={target} />}
+      {target !== null && <GithubAction tree={tree} target={target} showsDraft={showsDraft} />}
       {committedHref !== null && <DocsPageLink className="docs-action" href={committedHref}>{DOCS_HEAD_TEXT.openCommitted}</DocsPageLink>}
     </div>
   );
@@ -347,7 +373,12 @@ function Actions(p: { readonly page: TreePage; readonly tree: DocsTreeOk }): Rea
  *  no project), so the header is back and the crumbs only (spec 4.7: a tree failure keeps the crumbs). */
 export function DocsHead(p: { readonly page: DocsPageLocation; readonly visit: DocsVisit; readonly tree: DocsTreeOk | null }): ReactNode {
   const { page, visit, tree } = p;
-  const now = useNow(30_000, tree !== null);
+  const slow = useNow(30_000, tree !== null);
+  // While the chip is `soon` it counts seconds: a 1 s tick re-renders, and the figure is read from the clock at render
+  // (never from the last tick), so an answer that lands between two 30 s ticks does not overstate the wait.
+  const until = soonUntil(visit.freshness);
+  useNow(1000, tree !== null && until !== null && Date.now() < until);
+  const now = until === null ? slow : Date.now();
   const crumbs = docsCrumbs(page);
   const slot = visit.tree;
   const receivedAt = slot?.s === 'ok' ? slot.receivedAt : now;
@@ -362,7 +393,7 @@ export function DocsHead(p: { readonly page: DocsPageLocation; readonly visit: D
       {tree !== null && page.kind !== 'index' && (
         <>
           <TruthLine page={page} visit={visit} tree={tree} receivedAt={receivedAt} now={now} />
-          <Actions page={page} tree={tree} />
+          <Actions page={page} tree={tree} file={visit.file} />
         </>
       )}
       {visit.updatedTo !== null && (

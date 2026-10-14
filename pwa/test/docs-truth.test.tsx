@@ -262,6 +262,8 @@ describe('the freshness chip (spec 4.5)', () => {
     ['never fetched', withStamp(null), { s: 'idle' }, 'never', 'never fetched ↻'],
     ['fetched, aged by now - receivedAt', withStamp(stamp({})), { s: 'idle' }, 'ok', 'fetched 5m ago ↻'],
     ['remote branch absent', withStamp(stamp({ lastOutcome: 'remote-branch-absent' })), { s: 'idle' }, 'local', 'local only ↻'],
+    ['remote branch absent, answered this visit', withStamp(stamp({})),
+      { s: 'answered', fetch: fetchFailed('remote-branch-absent'), at: NOW }, 'local', 'local only ↻'],
     ['a failed stamp', withStamp(stamp({ lastOutcome: 'fetch-transport', okAgeMs: 179 * MIN })), { s: 'idle' }, 'failed',
       'fetch failed 5m ago: Fetching from origin failed: the connection to origin did not work. · last good 3h ago ↻'],
     ['a failed stamp that never succeeded', withStamp(stamp({ lastOutcome: 'fetch-timeout', okAgeMs: null })), { s: 'idle' },
@@ -292,6 +294,26 @@ describe('the freshness chip (spec 4.5)', () => {
     expect(q('.docs-fresh').textContent).toBe(text);
   });
 
+  it('an answered fetch failure is aged from `at`, not from when the listing landed; the last good age from receivedAt', () => {
+    vi.useFakeTimers({ now: NOW });
+    const tree = withStamp(stamp({}));
+    const freshness: Freshness = { s: 'answered', fetch: fetchFailed('fetch-timeout'), at: NOW - 3 * MIN };
+    render(<DocsHead page={pageAt('/docs/demo')} visit={visitOf(tree, { freshness }, NOW - 10 * MIN)} tree={tree} />);
+    expect(q('.docs-fresh').textContent).toBe(
+      'fetch failed 3m ago: Fetching from origin took too long and was stopped. · last good 14m ago ↻');
+  });
+
+  it('an answered fetch-too-soon is the soon state, counted from its own retryAfterMs and answer time (no auto-retry)', () => {
+    vi.useFakeTimers({ now: NOW });
+    const tree = withStamp(stamp({}));
+    const freshness: Freshness = { s: 'answered', fetch: fetchFailed('fetch-too-soon', { retryAfterMs: 10_000 }), at: NOW - 4000 };
+    render(<DocsHead page={pageAt('/docs/demo')} visit={visitOf(tree, { freshness }, NOW - MIN)} tree={tree} />);
+    expect(q('.docs-fresh')).toHaveAttribute('data-state', 'soon');
+    expect(q('.docs-fresh').textContent).toBe('fetched moments ago; again in 6s');
+    act(() => { vi.advanceTimersByTime(6000); });
+    expect(q('.docs-fresh').textContent).toBe('fetched moments ago; again in 0s');
+  });
+
   it('no origin is static text, not a button', () => {
     head('/docs/demo', withStamp(null, null));
     expect(q('.docs-fresh').tagName).toBe('SPAN');
@@ -317,6 +339,69 @@ describe('the freshness chip (spec 4.5)', () => {
     expect(q('.docs-fresh').textContent).toBe('fetched 5m ago ↻');
     act(() => { vi.advanceTimersByTime(2 * MIN); });
     expect(q('.docs-fresh').textContent).toBe('fetched 7m ago ↻');
+  });
+});
+
+describe('the soon chip counts down on a 1 s clock (spec 4.5)', () => {
+  const stamp = { okAgeMs: 4 * MIN, attemptAgeMs: 4 * MIN, lastOutcome: 'ok', okCommit: COMMIT_A } as const;
+
+  async function flush(): Promise<void> {
+    for (let i = 0; i < 6; i += 1) await act(async () => {});
+  }
+  async function advance(ms: number): Promise<void> {
+    await act(async () => { vi.advanceTimersByTime(ms); });
+    await flush();
+  }
+
+  it('a visit that mounted 25 s ago and is answered fetch-too-soon (10 s) reads 10s, then 9s a second later', () => {
+    vi.useFakeTimers({ now: NOW });
+    const tree = withStamp(stamp);
+    const page = pageAt('/docs/demo');
+    const { rerender } = render(<DocsHead page={page} visit={visitOf(tree)} tree={tree} />);
+    act(() => { vi.advanceTimersByTime(25_000); });
+    rerender(<DocsHead page={page} visit={visitOf(tree, { freshness: { s: 'soon', retryAt: NOW + 35_000 } })} tree={tree} />);
+    expect(q('.docs-fresh').textContent).toBe('fetched moments ago; again in 10s');
+    act(() => { vi.advanceTimersByTime(1000); });
+    expect(q('.docs-fresh').textContent).toBe('fetched moments ago; again in 9s');
+    act(() => { vi.advanceTimersByTime(3000); });
+    expect(q('.docs-fresh').textContent).toBe('fetched moments ago; again in 6s');
+  });
+
+  it('measured end to end: mount, wait 25 s, tap, the answer says 10 s: the chip reads 10s, never 35s, then counts down', async () => {
+    vi.useFakeTimers({ now: NOW });
+    const f = fakeLoaders({ tree: okTree(treeOk({ commit: COMMIT_A })) });
+    f.refresh.mockResolvedValueOnce(okRefresh(fetchFailed('fetch-too-soon', { retryAfterMs: 10_000 })));
+    navigate('/docs/demo');
+    render(<Routed loaders={f.loaders} />);
+    await flush();
+    expect(q('.docs-fresh').textContent).toBe('never fetched ↻');
+    await advance(25_000);
+    act(() => { fireEvent.click(q('.docs-fresh')); });
+    await flush();
+    expect(q('.docs-fresh')).toHaveAttribute('data-state', 'soon');
+    expect(q('.docs-fresh').textContent).toBe('fetched moments ago; again in 10s');
+    await advance(1000);
+    expect(q('.docs-fresh').textContent).toBe('fetched moments ago; again in 9s');
+  });
+
+  it('a second fetch-too-soon in one visit is still soon (the one automatic retry is spent), and nothing retries again', async () => {
+    vi.useFakeTimers({ now: NOW });
+    const f = fakeLoaders({ tree: okTree(treeOk({ commit: COMMIT_A })) });
+    f.refresh.mockResolvedValue(okRefresh(fetchFailed('fetch-too-soon', { retryAfterMs: 4000 })));
+    navigate('/docs/demo');
+    render(<Routed loaders={f.loaders} />);
+    await flush();
+    act(() => { fireEvent.click(q('.docs-fresh')); });
+    await flush();
+    expect(f.refresh).toHaveBeenCalledTimes(1);
+    expect(q('.docs-fresh').textContent).toBe('fetched moments ago; again in 4s');
+    await advance(4000);
+    expect(f.refresh).toHaveBeenCalledTimes(2);
+    expect(q('.docs-fresh')).toHaveAttribute('data-state', 'soon');
+    expect(q('.docs-fresh').textContent).toBe('fetched moments ago; again in 4s');
+    expect(q('.docs-fresh').textContent).not.toMatch(/fetch failed/);
+    await advance(60_000);
+    expect(f.refresh).toHaveBeenCalledTimes(2);
   });
 });
 
@@ -358,6 +443,34 @@ describe('View on GitHub (spec 3.11, 4.5)', () => {
     head('/docs/demo?ref=ws/a', withRef({ side: 'local', name: 'ws/a', via: 'local', relation: 'local-ahead' }));
     expect(screen.getByRole('link', { name: 'View on GitHub' })).toHaveAttribute('href', 'https://github.com/example-org/example-repo/tree/ws/a');
     expect(screen.getByText("GitHub's copy may differ from this view")).toBeInTheDocument();
+  });
+
+  describe('a leaf that shows draft bytes says GitHub may differ, whatever the ref relation', () => {
+    const MAY_DIFFER = "GitHub's copy may differ from this view";
+    const drafted = treeOk({ entries: [entry('specs', 'a.md', { draft: draftOf('modified') })], drafts: holder() });
+
+    it('a draft leaf (the served ref equal to origin): link and note', () => {
+      head('/docs/demo/specs/a.md?ref=main', drafted);
+      expect(screen.getByRole('link', { name: 'View on GitHub' })).toHaveAttribute(
+        'href', 'https://github.com/example-org/example-repo/blob/main/docs/superpowers/specs/a.md');
+      expect(screen.getByText(MAY_DIFFER)).toBeInTheDocument();
+    });
+
+    it('the same leaf at view=committed, a withheld draft, and the default view show committed bytes: no note', () => {
+      head('/docs/demo/specs/a.md?ref=main&view=committed', drafted);
+      expect(screen.queryByText(MAY_DIFFER)).toBeNull();
+      cleanup();
+      head('/docs/demo/specs/a.md?ref=main', treeOk({ entries: [entry('specs', 'a.md', { draft: draftOf('modified', { fp: null }) })], drafts: holder() }));
+      expect(screen.queryByText(MAY_DIFFER)).toBeNull();
+      cleanup();
+      head('/docs/demo/specs/a.md', drafted);
+      expect(screen.queryByText(MAY_DIFFER)).toBeNull();
+    });
+
+    it('the opened pin decides, not the entry: a draft pin read for a project page shows no note', () => {
+      head('/docs/demo/specs?ref=main', drafted);
+      expect(screen.queryByText(MAY_DIFFER)).toBeNull();
+    });
   });
 
   it.each([
@@ -424,6 +537,20 @@ describe('copy commit through copyText (spec 4.5, refinement (t))', () => {
     fireEvent.click(screen.getByRole('button', { name: 'copy commit' }));
     expect(await screen.findByText('copied')).toBeInTheDocument();
     expect(writeText).toHaveBeenCalledWith(COMMIT_A);
+  });
+
+  it('a re-list that moves the commit clears "copied": the next commit has not been copied', async () => {
+    const writeText = vi.fn(async () => {});
+    clipboard(writeText);
+    const page = pageAt('/docs/demo');
+    const { rerender } = render(<DocsHead page={page} visit={visitOf(treeOk())} tree={treeOk()} />);
+    fireEvent.click(screen.getByRole('button', { name: 'copy commit' }));
+    expect(await screen.findByText('copied')).toBeInTheDocument();
+    const moved = treeOk({ commit: COMMIT_B });
+    rerender(<DocsHead page={page} visit={visitOf(moved)} tree={moved} />);
+    expect(screen.queryByText('copied')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'copy commit' }));
+    await waitFor(() => expect(writeText).toHaveBeenLastCalledWith(COMMIT_B));
   });
 
   it('a refused clipboard says copy failed', async () => {

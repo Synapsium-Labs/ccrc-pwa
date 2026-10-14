@@ -8,7 +8,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { ReactNode } from 'react';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import type { DocsEntry, DocsTreeOk, DraftsFacts } from '../../shared/docs';
+import type { DocPin, DocsEntry, DocsTreeOk, DraftsFacts } from '../../shared/docs';
 import { DocsBanners } from '../src/docs/DocsBanners';
 import type { DocsLoaders } from '../src/docs/failures';
 import type { FileSlot } from '../src/docs/useDocsVisit';
@@ -35,6 +35,13 @@ function banners(url: string, tree: DocsTreeOk, file: FileSlot = NONE, draftAsse
   return render(<DocsBanners page={pageAt(url)} tree={tree} file={file} draftAssets={draftAssets} onRelist={onRelist} />);
 }
 
+/** A holder of `ws/a`, a branch that is NOT the served ref's name (`main`): a hint that took the served ref's name
+ *  instead of the holder's branch would say `main` and link `refs/heads/main`. */
+const BRANCH = 'ws/a';
+function holderOnBranch(head = COMMIT_A, baseEqual = true): DraftsFacts {
+  return { ...(holder(head, baseEqual) as Extract<DraftsFacts, { state: 'holder' }>), branch: BRANCH };
+}
+
 /** Three drafts in the holder's worktree: a modified committed doc and two new ones. */
 const THREE: DocsEntry[] = [
   entry('specs', 'a.md', { draft: draftOf('modified') }),
@@ -50,11 +57,11 @@ afterEach(() => {
 
 describe('the default view never overlays; its hint is qualified (M4.T2, row 67)', () => {
   it('a holder on local main with 3 dirty docs: zero draft rows, and a hint (n = 3) linking ?ref=refs/heads/main', async () => {
-    const f = fakeLoaders({ tree: okTree(treeOk({ entries: THREE, drafts: holder() })) });
+    const f = fakeLoaders({ tree: okTree(treeOk({ entries: THREE, drafts: holderOnBranch() })) });
     navigate('/docs/demo/specs');
     render(<Routed loaders={f.loaders} />);
-    expect(await screen.findByText('3 uncommitted docs in main checkout on main')).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: 'Open the draft view' })).toHaveAttribute('href', '/docs/demo/specs?ref=refs/heads/main');
+    expect(await screen.findByText('3 uncommitted docs in main checkout on ws/a')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Open the draft view' })).toHaveAttribute('href', '/docs/demo/specs?ref=refs/heads/ws/a');
     expect([...document.querySelectorAll('.docs-listing .docs-row-name')].map((n) => n.textContent)).toEqual(['a.md']);
     expect(document.querySelector('.docs-badge')).toBeNull();
     expect(banner('default-hint')).toHaveAttribute('data-tone', 'info');
@@ -62,32 +69,32 @@ describe('the default view never overlays; its hint is qualified (M4.T2, row 67)
   });
 
   it('a default-view leaf reads the committed pin; loaders.file never receives a DraftPin', async () => {
-    const f = fakeLoaders({ tree: okTree(treeOk({ entries: THREE, drafts: holder() })) });
+    const f = fakeLoaders({ tree: okTree(treeOk({ entries: THREE, drafts: holderOnBranch() })) });
     navigate('/docs/demo/specs/a.md');
     render(<Routed loaders={f.loaders} />);
     await waitFor(() => expect(f.file).toHaveBeenCalled());
     expect(f.file.mock.calls.every((c) => c[1].kind === 'committed')).toBe(true);
-    expect(await screen.findByText('3 uncommitted docs in main checkout on main')).toBeInTheDocument();
+    expect(await screen.findByText('3 uncommitted docs in main checkout on ws/a')).toBeInTheDocument();
   });
 
   it('one draft says doc, not docs; no drafts, no hint', () => {
-    banners('/docs/demo/specs', treeOk({ entries: [THREE[0] as DocsEntry], drafts: holder() }));
-    expect(textOf('default-hint')).toBe('1 uncommitted doc in main checkout on main');
+    banners('/docs/demo/specs', treeOk({ entries: [THREE[0] as DocsEntry], drafts: holderOnBranch() }));
+    expect(textOf('default-hint')).toBe('1 uncommitted doc in main checkout on ws/a');
     cleanup();
-    banners('/docs/demo/specs', treeOk({ entries: [entry('specs', 'a.md')], drafts: holder() }));
+    banners('/docs/demo/specs', treeOk({ entries: [entry('specs', 'a.md')], drafts: holderOnBranch() }));
     expect(banner('default-hint')).toBeNull();
   });
 });
 
 describe('a ref view overlays only when the base is equal (M4.T3, row 67)', () => {
   it('baseEqual false: the base hint linking refs/heads/<b>, and no overlay', async () => {
-    const drafts = holder(COMMIT_B, false);
+    const drafts = holderOnBranch(COMMIT_B, false);
     const f = fakeLoaders({ tree: okTree(treeOk({ entries: THREE, drafts })) });
     navigate('/docs/demo/specs?ref=main');
     render(<Routed loaders={f.loaders} />);
     expect(await screen.findByText(
-      '3 uncommitted docs in main checkout are based on local main at bbbbbbbb; this page shows origin/main')).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: 'Open the local view' })).toHaveAttribute('href', '/docs/demo/specs?ref=refs/heads/main');
+      '3 uncommitted docs in main checkout are based on local ws/a at bbbbbbbb; this page shows origin/main')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Open the local view' })).toHaveAttribute('href', '/docs/demo/specs?ref=refs/heads/ws/a');
     expect([...document.querySelectorAll('.docs-listing .docs-row-name')].map((n) => n.textContent)).toEqual(['a.md']);
     expect(document.querySelector('.docs-badge')).toBeNull();
     expect(banner('default-hint')).toBeNull();
@@ -207,25 +214,41 @@ describe("a leaf's draft banners (spec 4.5, row 54)", () => {
 });
 
 describe('a commit the branch no longer contains (M4.T5)', () => {
-  const ok = (onRef: 'contains' | 'not-contained' | 'unmeasured'): FileSlot => {
+  // The page read at COMMIT_A; the served ref has since moved on to COMMIT_B (the tree commit), so the banner must
+  // name the commit the PAGE read, never the served ref's tip.
+  const movedTree = (): DocsTreeOk => treeOk({ commit: COMMIT_B });
+  const ok = (onRef: 'contains' | 'not-contained' | 'unmeasured', over: { commit?: string | null; pin?: DocPin } = {}): FileSlot => {
     const r = fileResponse('# A');
+    const { commit, ...rest } = { ...r.show, onRef };
+    const show = over.commit === null ? rest : { ...rest, commit: over.commit ?? COMMIT_A };
     return {
-      s: 'ok', pin: { kind: 'committed', commit: COMMIT_A, servedRef: SERVED, section: 'specs', path: 'a.md' },
-      answer: { ...r, show: { ...r.show, commit: COMMIT_A, onRef } }, receivedAt: 0,
+      s: 'ok', pin: over.pin ?? { kind: 'committed', commit: COMMIT_A, servedRef: SERVED, section: 'specs', path: 'a.md' },
+      answer: { ...r, show }, receivedAt: 0,
     };
   };
 
-  it('not-contained warns, naming the short commit and the served ref, with Re-list', () => {
+  it('not-contained warns, naming the short commit the page read and the served ref, with Re-list', () => {
     const onRelist = vi.fn();
-    banners('/docs/demo/specs/a.md', treeOk(), ok('not-contained'), 0, onRelist);
+    banners('/docs/demo/specs/a.md', movedTree(), ok('not-contained'), 0, onRelist);
     expect(textOf('not-contained')).toBe('Commit aaaaaaaa is no longer on origin/main (the branch was rewritten).');
     expect(banner('not-contained')).toHaveAttribute('data-tone', 'warn');
     fireEvent.click(screen.getByRole('button', { name: 'Re-list' }));
     expect(onRelist).toHaveBeenCalledTimes(1);
   });
 
+  it("an answer that names no commit falls back to the committed pin's own commit, never the tree's", () => {
+    banners('/docs/demo/specs/a.md', movedTree(), ok('not-contained', { commit: null }));
+    expect(textOf('not-contained')).toBe('Commit aaaaaaaa is no longer on origin/main (the branch was rewritten).');
+  });
+
+  it('no commit anywhere (no answer commit, a draft pin): no banner rather than a guessed commit', () => {
+    const draft = { kind: 'draft', branch: 'ws/a', head: COMMIT_B, section: 'specs', path: 'a.md', fp: 'f'.repeat(64) } as const;
+    banners('/docs/demo/specs/a.md', movedTree(), ok('not-contained', { commit: null, pin: draft }));
+    expect(banner('not-contained')).toBeNull();
+  });
+
   it.each(['contains', 'unmeasured'] as const)('%s says nothing', (onRef) => {
-    banners('/docs/demo/specs/a.md', treeOk(), ok(onRef));
+    banners('/docs/demo/specs/a.md', movedTree(), ok(onRef));
     expect(bannerIds()).toEqual([]);
   });
 });
