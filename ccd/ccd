@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=8334fe22b52c75309f9404a27d75f79da6b8db1ea8b3f0c8643ec8261b7afff9
+# ccrc:generated 1 sha256=69f1650a90f21dd7cd4009e19e39f27600a92b0170928ff1d1d16bb34ccb474e
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -32946,10 +32946,10 @@ _ws_collect_rows_clear() {   # id leaf -> 0 when no registry row lies at, inside
 # Then a slot of the id that no record names is the operator's
 # (`quarantine-kept`, and the witness stays beside it), and a quarantine that
 # is a link or not a directory, or whose slots cannot be listed, is unmeasured
-# `quarantine`. Past those it is collectable at once with a token of its own,
-# and the verb then drops the witness and nothing else. So a FRESH collection
-# never orphans a slot in silence (spec §5.10): the resume does not ask,
-# because a record names its own slot there, and the reclaim tail's witness
+# `quarantine`. Past those, and unless the cleanup pause stands, it is collectable
+# with a token of its own, and the verb then drops the witness and nothing else.
+# So a FRESH collection never orphans a slot in silence (spec §5.10): the resume
+# does not ask, because a record names its own slot there, and the reclaim tail's witness
 # drop is not the collector's (`tail-drop-ignores-a-recordless-slot`).
 #
 # THE DOCUMENT mirrors `ws-audit --expire`'s, with a `collect` object.
@@ -32967,15 +32967,15 @@ _ws_collect_rows_clear() {   # id leaf -> 0 when no registry row lies at, inside
 # reads anything, and so does a box whose `mv` has no `--no-copy` (`mv`): the
 # verb's move is one `renameat2(RENAME_NOREPLACE)` or nothing.
 #
-# BOUNDED, AND NOT ALWAYS INSIDE THE RUNNER'S ROW. The fresh rungs can spend,
-# in sequence, the idle walk's `WS_COLLECT_IDLE_SCAN_S` (30 s), the in-use
-# probe's `WS_PATH_USERS_SCAN_S` (10 s) and the checkout scan's
-# `REAP_SCAN_SECONDS` (30 s), and each `_plat_timeout` adds its TERM-to-KILL
-# grace (`CCD_TIMEOUT_KILL_AFTER`, 3 s by default, at most 8 s): about 79 s
-# by default and 94 s at the widest grace, before the row pass, which no bound
-# of its own caps — against ws-audit's 90 s runner row. A runner that kills the
-# audit gets no document, which the server reads as a failed audit and
-# retries: it fails closed. A budget keyed on the mode is wave 9's.
+# BOUNDED, AND INSIDE THE RUNNER'S ROW BUT FOR THE ROW PASS. The fresh rungs can
+# spend, in sequence, the idle walk's `WS_COLLECT_IDLE_SCAN_S` (30 s), the
+# in-use probe's `WS_PATH_USERS_SCAN_S` (10 s) and the checkout scan's
+# `REAP_SCAN_SECONDS` (30 s). A probe that reaches its bound ends the audit, so
+# ONE `_plat_timeout` TERM-to-KILL grace is paid (`CCD_TIMEOUT_KILL_AFTER`, 3 s
+# by default, at most 8 s): about 73 s, or 78 s at the widest grace, against
+# ws-audit's 90 s runner row (`collect-audit-budget.test.ts` holds the sum). The
+# row pass has no bound of its own; a runner that kills the audit there gets no
+# document, which the server reads as a failed audit and retries: it fails closed.
 _WS_COLLECT_PROBE=''; _WS_COLLECT_REG_WHY=''; _WS_COLLECT_PHASE=''; _WS_COLLECT_LEAF=''
 _WS_COLLECT_RECORD=''; _WS_COLLECT_SLOT=''; _WS_COLLECT_NEWEST_NS=''; _WS_COLLECT_ENTRIES=''
 _WS_COLLECT_IDLE_AT=''; _WS_COLLECT_FLOOR=''
@@ -34420,9 +34420,9 @@ _ws_collect_locked() {   # token id surface actor reason — everything the reap
 # quarantine record under `$REG/tmpquarantine/` — one ccd inode, one token
 # (spec 2026-09-22 §5.10, §8's wave 7). The server composes the destructive verb
 # ONLY behind `capSupported(state, 'collect-v1')`, which refuses on no evidence;
-# the collector's lane composes it, and this wave ships it inert. Both protected
-# shapes cross the direct-entry boundary at the top of this file and in
-# `ccd/ccd-entry.py`.
+# the collector's lane composes it, and acts only once the operator arms the lane
+# (the fleet box's legacy marker, or the Settings switch where it has shipped). Both protected
+# shapes cross the direct-entry boundary at the top of this file and in `ccd/ccd-entry.py`.
 # ── end temp-root collection ─────────────────────────────────────────────────── COLLECT-END ──
 
 # ── ws-reap's mirrors: a reclaim breadcrumb, a leaf link (spec 2026-09-22 §5.5-§5.6) ─ MIRROR-BEGIN ──
