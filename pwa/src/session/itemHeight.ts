@@ -22,13 +22,15 @@
 // session, which a mean never could.
 //
 // WHAT IS REMEMBERED IS THE EVIDENCE, NOT THE LINE: the most recent measured
-// rows of each kind, as `(lines, px)` pairs — never any text. The line is
-// fitted from them, robustly, whenever the list opens. Two things follow that a
-// stored line could not do:
+// rows of each kind, as `(lines, px, row)` triples — never any text; `row` is
+// a number naming the row (`rowId`). The line is fitted from them, robustly,
+// whenever the list opens. Two things follow that a stored line could not do:
 //
 //   - A kind that turns up once or twice a visit (the asks in a tool-heavy
 //     session) accumulates rows ACROSS visits until there are enough to fit,
 //     instead of freezing whatever constant its first one or two rows implied.
+//     Rows, not sightings: the same row measured on a later visit replaces its
+//     older measurement, so a session reopened three times is not three rows.
 //   - One odd row — an opened card, a turn measured mid-render — is outvoted
 //     by its neighbours rather than bending the least-squares line for the
 //     whole kind.
@@ -60,10 +62,11 @@ export const MAX_ROW_PX = 50_000;
  *  row whose height ignores its content) to a few tens (a user bubble). */
 export const MAX_PX_PER_LINE = 200;
 
-/** A kind needs this many measured rows before it is priced from them at all.
- *  One or two rows are not a kind: a single 50-line report at 1413px, taken as
- *  the kind's constant, priced every later two-line reply at 1413px. Below
- *  this the kind keeps the fallback, and its rows wait in the record for more. */
+/** A kind needs this many measured ROWS — different rows, not sightings of one
+ *  — before it is priced from them at all. One or two rows are not a kind: a
+ *  single 50-line report at 1413px, taken as the kind's constant, priced every
+ *  later two-line reply at 1413px. Below this the kind keeps the fallback, and
+ *  its rows wait in the record for more. */
 export const MIN_FIT_ROWS = 3;
 
 /** How many measured rows of each kind the record keeps — the newest. */
@@ -75,7 +78,7 @@ export const RESERVOIR_ROWS = 30;
  *  three visits as its rows displace the oldest. */
 export const VISIT_ROWS = 10;
 
-/** The record: `{ [kind]: [[lines, px], …] }`, newest last. */
+/** The record: `{ [kind]: [[lines, px, row], …] }`, newest last; `row` is `rowId`. */
 export const ROWS_KEY = 'ccrc:chat-row-samples';
 
 /** `localStorage` throws outright in some privacy modes — on merely being
@@ -201,6 +204,10 @@ export interface RowModel { a: number; b: number }
 /** One measured row: what it was predicted to be worth, and what it cost. */
 export interface RowSample { lines: number; px: number }
 
+/** A measured row as the record keeps it: with the number that names it
+ *  (`rowId`), so the same row measured again is recognised as the same row. */
+export interface MeasuredRow extends RowSample { id: number }
+
 /** A row the list is about to show, before anything has rendered. `attach` is
  *  the rows of attachment thumbnails above it (0 or absent: none). */
 export interface RowShape { bucket: RowKind; lines: number; attach?: number }
@@ -208,10 +215,52 @@ export interface RowShape { bucket: RowKind; lines: number; attach?: number }
 export type RowModels = Record<HeightBucket, RowModel | null>;
 
 /** What this browser remembers: the newest measured rows of each kind. */
-export type RowRecord = Record<HeightBucket, readonly RowSample[]>;
+export type RowRecord = Record<HeightBucket, readonly MeasuredRow[]>;
 
 const isSample = (s: RowSample): boolean =>
   Number.isFinite(s.px) && s.px > 0 && Number.isFinite(s.lines) && s.lines >= 0;
+
+const isRowId = (id: unknown): id is number =>
+  typeof id === 'number' && Number.isInteger(id) && id >= 0 && id < 2 ** 32;
+
+/**
+ * THE NUMBER THAT NAMES A ROW: a 32-bit FNV-1a hash of the session and the
+ * row's key (an event's uuid, a tool call's id). Review 191, F3 after the fix:
+ * the record kept rows as bare `(lines, px)`, so a session reopened three times
+ * added its one long report three times, and three sightings of one row passed
+ * `MIN_FIT_ROWS` as three rows. Measured in a browser: the next ordinary
+ * session opened at +104.5% of its true length.
+ *
+ * A HASH, so the record can tell one row from another without holding the key
+ * or anything else from the transcript. THE SESSION IS PART OF IT because a key
+ * is not unique across sessions: the working row is `working` in every one.
+ */
+export function rowId(session: string, key: string): number {
+  let h = 0x811c9dc5;
+  const name = `${session}\u0000${key}`;
+  for (let i = 0; i < name.length; i += 1) {
+    h ^= name.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
+  }
+  return h >>> 0;
+}
+
+/**
+ * THE KINDS PRICED BY THEIR PROSE — a row of these runs from one line to
+ * hundreds — for which a LEVEL is not a model.
+ *
+ * Rows that are all one length cannot show a slope, and a slope that will not
+ * rise says the rows do not follow their text. For a kind whose rows ARE one
+ * length by construction that level is exactly right: a divider, a folded card,
+ * the working row, a collapsed tool card, a task card's summary, a system pill
+ * (a second line folds it into `folded`; only a long line wraps), a row of
+ * thumbnails. For the four kinds below it is the per-kind constant review
+ * 191's F3 removed, reached another way: three one-line replies would price a
+ * 50-line report at 40px, and three 46-line reports every reply at 1790px. So
+ * they are priced by a rising line or not at all — the fallback, until rows of
+ * different lengths arrive.
+ */
+export const PROSE_KINDS: ReadonlySet<HeightBucket> = new Set<HeightBucket>(['user', 'assistant', 'pending', 'mail']);
 
 function median(xs: number[]): number {
   const v = [...xs].sort((p, q) => p - q);
@@ -237,13 +286,16 @@ function median(xs: number[]): number {
  * intercept that belonged to the falling line sits above every row that was
  * measured, so it is not kept. (Review 191, F4.)
  *
+ * `needsSlope` (a `PROSE_KINDS` kind) refuses the level too: no rising slope,
+ * no model.
+ *
  * A NEGATIVE INTERCEPT IS REFUSED BY REFITTING THROUGH THE ORIGIN, not by
  * clamping: a fit is a pair, and clamping `a` while keeping the slope computed
  * FOR a negative one leaves a line that misses its own data — measured, it put
  * every assistant row ~40px low. The robust line through the origin is the
  * median of `px / lines`.
  */
-export function fitRowModel(samples: readonly RowSample[]): RowModel | null {
+export function fitRowModel(samples: readonly RowSample[], needsSlope = false): RowModel | null {
   const rows = samples.filter(isSample);
   if (rows.length < MIN_FIT_ROWS) return null;
   const slopes: number[] = [];
@@ -254,7 +306,7 @@ export function fitRowModel(samples: readonly RowSample[]): RowModel | null {
     }
   }
   const free = slopes.length === 0 ? 0 : median(slopes);
-  if (!(free > 0)) return { a: clampIntercept(median(rows.map((r) => r.px))), b: 0 };
+  if (!(free > 0)) return needsSlope ? null : { a: clampIntercept(median(rows.map((r) => r.px))), b: 0 };
   const b = clampSlope(free);
   const a = median(rows.map((r) => r.px - b * r.lines));
   if (a >= 0) return { a: clampIntercept(a), b };
@@ -265,7 +317,7 @@ export function fitRowModel(samples: readonly RowSample[]): RowModel | null {
 /** Every kind's line, fitted from the record. Run once per mount. */
 export function modelsOf(record: RowRecord): RowModels {
   const out = {} as RowModels;
-  for (const b of HEIGHT_BUCKETS) out[b] = fitRowModel(record[b]);
+  for (const b of HEIGHT_BUCKETS) out[b] = fitRowModel(record[b], PROSE_KINDS.has(b));
   return out;
 }
 
@@ -315,14 +367,15 @@ export function openingHeight(
   return clampRow(px.reduce((a, b) => a + b, 0) / px.length);
 }
 
-const emptyRecord = (): Record<HeightBucket, RowSample[]> => {
-  const out = {} as Record<HeightBucket, RowSample[]>;
+const emptyRecord = (): Record<HeightBucket, MeasuredRow[]> => {
+  const out = {} as Record<HeightBucket, MeasuredRow[]>;
   for (const b of HEIGHT_BUCKETS) out[b] = [];
   return out;
 };
 
-/** The record as it stands. A row that is not a well-formed `[lines, px]`
- *  pair is dropped, a kind that is not an array is empty, and a refused or
+/** The record as it stands. A row that is not a well-formed `[lines, px, row]`
+ *  triple is dropped — a row nothing names cannot be told from a second
+ *  sighting of itself — a kind that is not an array is empty, and a refused or
  *  corrupted store is an empty record — never a throw: a hand-edited value is
  *  not a reason to render badly. */
 export function rememberedRows(s: Storage | null = store()): RowRecord {
@@ -334,12 +387,12 @@ export function rememberedRows(s: Storage | null = store()): RowRecord {
   if (saved === null || typeof saved !== 'object' || Array.isArray(saved)) return out;
   for (const [k, v] of Object.entries(saved as Record<string, unknown>)) {
     if (!isBucket(k) || !Array.isArray(v)) continue;
-    const rows: RowSample[] = [];
-    for (const pair of v) {
-      if (!Array.isArray(pair) || pair.length !== 2) continue;
-      const [lines, px] = pair as unknown[];
-      if (typeof lines !== 'number' || typeof px !== 'number') continue;
-      const row = { lines, px };
+    const rows: MeasuredRow[] = [];
+    for (const triple of v) {
+      if (!Array.isArray(triple) || triple.length !== 3) continue;
+      const [lines, px, id] = triple as unknown[];
+      if (typeof lines !== 'number' || typeof px !== 'number' || !isRowId(id)) continue;
+      const row = { lines, px, id };
       if (isSample(row)) rows.push(row);
     }
     out[k] = rows.slice(-RESERVOIR_ROWS);
@@ -349,7 +402,7 @@ export function rememberedRows(s: Storage | null = store()): RowRecord {
 
 /** At most `n` of a visit's rows, chosen to SPAN its lengths rather than to be
  *  whichever it saw first — the slope lives in the spread. */
-function spread(rows: readonly RowSample[], n: number): RowSample[] {
+function spread<T extends RowSample>(rows: readonly T[], n: number): T[] {
   if (rows.length <= n) return [...rows];
   const sorted = [...rows].sort((p, q) => p.lines - q.lines || p.px - q.px);
   return Array.from({ length: n }, (_, i) => sorted[Math.round((i * (sorted.length - 1)) / (n - 1))]!);
@@ -366,30 +419,37 @@ function spread(rows: readonly RowSample[], n: number): RowSample[] {
  * visit lands in the same place and the last one wins — a fourth save is not a
  * fourth vote.
  *
+ * A ROW IS ONE ROW, however many visits measure it: a row this visit measured
+ * replaces its older measurement in the record (by `rowId`) and moves to the
+ * newest end, so a session reopened three times does not vote three times.
+ *
  * A kind with no measured row is left exactly as it now stands: silence is not
  * evidence. A save that measured nothing writes NOTHING, so an empty visit can
  * never look like a learned one.
  */
 export function rememberRows(
-  visit: ReadonlyMap<HeightBucket, readonly RowSample[]>,
+  visit: ReadonlyMap<HeightBucket, readonly MeasuredRow[]>,
   baseline: RowRecord,
   s: Storage | null = store(),
 ): void {
   if (s === null) return;
-  const fresh = new Map<HeightBucket, RowSample[]>();
+  const fresh = new Map<HeightBucket, MeasuredRow[]>();
   for (const [bucket, rows] of visit) {
-    const measured = rows.filter(isSample);
+    // One entry per row, its last measurement, even within the visit.
+    const measured = [...new Map(rows.filter((r) => isSample(r) && isRowId(r.id)).map((r) => [r.id, r])).values()];
     if (measured.length === 0) continue;
-    fresh.set(bucket, [...baseline[bucket], ...spread(measured, VISIT_ROWS)].slice(-RESERVOIR_ROWS));
+    const added = spread(measured, VISIT_ROWS);
+    const again = new Set(added.map((r) => r.id));
+    fresh.set(bucket, [...baseline[bucket].filter((r) => !again.has(r.id)), ...added].slice(-RESERVOIR_ROWS));
   }
   if (fresh.size === 0) return;
   const now = rememberedRows(s);
-  const out: Record<string, [number, number][]> = {};
+  const out: Record<string, [number, number, number][]> = {};
   for (const b of HEIGHT_BUCKETS) {
     const rows = fresh.get(b) ?? now[b];
-    // Lengths to two places (a table row is 1.58 lines) and whole pixels:
-    // nothing else is stored, and no text ever is.
-    if (rows.length > 0) out[b] = rows.map((r) => [Math.round(r.lines * 100) / 100, Math.round(r.px)]);
+    // Lengths to two places (a table row is 1.58 lines), whole pixels, and the
+    // row's number: nothing else is stored, and no text ever is.
+    if (rows.length > 0) out[b] = rows.map((r) => [Math.round(r.lines * 100) / 100, Math.round(r.px), r.id]);
   }
   try { s.setItem(ROWS_KEY, JSON.stringify(out)); } catch { /* storage refused — keep the fallback */ }
 }

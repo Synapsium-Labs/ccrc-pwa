@@ -10,7 +10,9 @@
 //   - the model is taught ONLY by heights read off a row's own element — never
 //     by the estimates virtuoso reports for rows it has not measured;
 //   - a visit saves when the page is hidden or closed, not only on a clean
-//     unmount, and counts once however many times it saves.
+//     unmount, and counts once however many times it saves;
+//   - a row counts once however many visits measure it: a session reopened
+//     three times is the same rows, not three times as many.
 //
 // Virtuoso is replaced by a list that renders every row, and ResizeObserver by
 // one the test drives: `measure()` plays the browser, handing each row's
@@ -52,11 +54,13 @@ vi.mock('react-virtuoso', async () => {
 
 const { ChatList, buildChatItems, shapeOf } = await import('../src/session/ChatList');
 const {
-  FALLBACK_ITEM_HEIGHT, ROWS_KEY, plainLines, rememberRows, rememberedRows,
+  FALLBACK_ITEM_HEIGHT, ROWS_KEY, TABLE_ROW_LINES, WELL_LINES, plainLines, rememberRows, rememberedRows,
 } = await import('../src/session/itemHeight');
 type HeightBucket = import('../src/session/itemHeight').HeightBucket;
 type RowSample = import('../src/session/itemHeight').RowSample;
+type MeasuredRow = import('../src/session/itemHeight').MeasuredRow;
 type RowRecord = import('../src/session/itemHeight').RowRecord;
+type ChatItem = import('../src/session/ChatList').ChatItem;
 
 /** The browser's side of the observer: it is told which elements to watch, and
  *  `measure()` reports a size for them, exactly as a layout pass would. */
@@ -155,15 +159,19 @@ const seededRows = (props: Record<string, unknown> | null = seen.props): number[
 const estimatesFor = (n: number) =>
   Array.from({ length: n }, (_, index) => ({ index, size: FALLBACK_ITEM_HEIGHT, offset: index * FALLBACK_ITEM_HEIGHT }));
 
-const visit = (events: ChatEvent[] = exchanges()) =>
-  render(<ChatList id="s" events={events} pending={[]} />);
+const visit = (events: ChatEvent[] = exchanges(), session = 's', busy = false) =>
+  render(<ChatList id={session} events={events} pending={[]} busy={busy} />);
 
 /** Put a record in storage the way a previous visit would have left it. */
-const remembered = (rows: Partial<Record<HeightBucket, RowSample[]>>): void => {
-  rememberRows(new Map(Object.entries(rows) as [HeightBucket, RowSample[]][]), rememberedRows(localStorage), localStorage);
+const remembered = (rows: Partial<Record<HeightBucket, MeasuredRow[]>>): void => {
+  rememberRows(new Map(Object.entries(rows) as [HeightBucket, MeasuredRow[]][]), rememberedRows(localStorage), localStorage);
 };
-const onLine = (a: number, b: number, xs: number[]): RowSample[] => xs.map((lines) => ({ lines, px: a + b * lines }));
+let nextId = 0;
+const onLine = (a: number, b: number, xs: number[]): MeasuredRow[] =>
+  xs.map((lines) => ({ lines, px: a + b * lines, id: (nextId += 1) }));
 const stored = (): RowRecord => rememberedRows(localStorage);
+/** What was measured, without who it was. */
+const bare = (rows: readonly RowSample[]): RowSample[] => rows.map(({ lines, px }) => ({ lines, px }));
 
 describe('the chat list tells virtuoso how tall a row is before it renders one', () => {
   // Virtuoso's own docs: without it, it "assumes the default item height from
@@ -265,6 +273,11 @@ describe('the list learns from heights its rows MEASURED, never from estimates',
     localStorage.clear();
     remembered(before);
     visit();
+    // Hidden once with only the first two exchanges measured…
+    measure((row) => (row < 12 ? TRUTH[row] : undefined));
+    hide();
+    unhide();
+    // …then the reader comes back, the rest is measured, and the page goes.
     measure(TRUTH);
     pagehide();
     hide();
@@ -272,8 +285,9 @@ describe('the list learns from heights its rows MEASURED, never from estimates',
     pagehide();
     cleanup();
     // Every save adds this visit's rows to the record THIS VISIT OPENED WITH,
-    // so four saves land exactly where one does. Re-reading storage at each
-    // save would add the same rows four times over.
+    // so five saves land exactly where one does. Re-reading storage at each
+    // save would keep the first save's rows AND add the later ones: one visit
+    // would add more than its share.
     expect(localStorage.getItem(ROWS_KEY)).toBe(once);
   });
 
@@ -324,7 +338,7 @@ describe('the list learns from heights its rows MEASURED, never from estimates',
     rerender(<ChatList id="s" events={grown} pending={[]} busy />);
     measure((row) => (row === TRUTH.length - 1 ? 30 + 19 * 40 : undefined));
     cleanup();
-    expect(stored().assistant).toEqual([{ lines: 40, px: 790 }]);
+    expect(bare(stored().assistant)).toEqual([{ lines: 40, px: 790 }]);
   });
 
   // The next visit opens every disclosure CLOSED, so a row the reader opened is
@@ -365,8 +379,67 @@ describe('the list learns from heights its rows MEASURED, never from estimates',
     measure((r) => (r === 1 ? 250 : undefined));
     cleanup();
     // The bubble is priced by its prose alone; the thumbnails are their own term.
-    expect(stored().user).toEqual([{ lines: 1, px: 70 }]);
-    expect(stored().attach).toEqual([{ lines: 1, px: 180 }]);
+    expect(bare(stored().user)).toEqual([{ lines: 1, px: 70 }]);
+    expect(bare(stored().attach)).toEqual([{ lines: 1, px: 180 }]);
+  });
+
+  it('stops listening when the visit ends — a later hide writes nothing', () => {
+    visit();
+    measure(TRUTH);
+    cleanup();
+    localStorage.clear();
+    hide();
+    unhide();
+    pagehide();
+    expect(localStorage.length).toBe(0);
+  });
+
+  // THE VERIFIER'S REPRO (review 191, F3 after the fix): a tool-heavy session
+  // whose rendered window holds ONE assistant turn, a long report, visited
+  // three times. The same row, measured on three visits, was three rows —
+  // enough to fit — and the fit was that report as a level: every assistant
+  // turn of the next session was priced at 1790px. Measured in headless
+  // Chromium with the real virtuoso: it opened at +104.5% of its true length.
+  it('a report seen on three visits does not price the next session\'s replies', () => {
+    const report = linesOf(46, 'finding');
+    const audit: ChatEvent[] = [
+      { kind: 'user', uuid: 'd-u', ts: at(0), text: 'Run the audit and report back.' },
+      ...Array.from({ length: 6 }, (_, i): ChatEvent[] => [
+        { kind: 'tool_use', uuid: `d-tu${i}`, ts: at(0), toolId: `d-t${i}`, name: 'Bash', input: JSON.stringify({ command: `check ${i}` }) },
+        { kind: 'tool_result', ts: at(0), toolId: `d-t${i}`, text: 'ok', isError: false },
+      ]).flat(),
+      { kind: 'assistant', uuid: 'd-a', ts: at(0), text: report },
+    ];
+    // Rows: the divider, the ask, six cards, the report.
+    const px = (row: number) => (row === 0 ? 35 : row === 8 ? 1790 : 62);
+    for (let v = 0; v < 3; v += 1) {
+      visit(audit);
+      measure(px);
+      pagehide();
+      cleanup();
+    }
+    expect(bare(stored().assistant)).toEqual([{ lines: 46, px: 1790 }]);
+    visit([
+      { kind: 'user', uuid: 'b-u', ts: at(0), text: 'q' },
+      { kind: 'tool_use', uuid: 'b-tu', ts: at(0), toolId: 'b-t', name: 'Bash', input: JSON.stringify({ command: 'ls' }) },
+      { kind: 'tool_result', ts: at(0), toolId: 'b-t', text: 'ok', isError: false },
+      { kind: 'assistant', uuid: 'b-a', ts: at(0), text: 'two\nlines' },
+    ]);
+    // The cards are learned; one report and one ask are not a kind, so the
+    // divider, the ask and the reply take the fallback.
+    expect(seededRows()).toEqual([FALLBACK_ITEM_HEIGHT, FALLBACK_ITEM_HEIGHT, 62, FALLBACK_ITEM_HEIGHT]);
+  });
+
+  // A row's identity is its session AND its key: the working row has the key
+  // `working` in every session, and those are different rows.
+  it('tells the same row on a later visit from the same key in another session', () => {
+    const turn: ChatEvent[] = [{ kind: 'assistant', uuid: 'w-a', ts: at(0), text: 'on it' }];
+    // Rows: the divider, the turn, the working row.
+    const px = (row: number) => (row === 2 ? 30 : undefined);
+    for (let v = 0; v < 3; v += 1) { visit(turn, 'one', true); measure(px); cleanup(); }
+    expect(stored().working.length).toBe(1);
+    for (const session of ['two', 'three']) { visit(turn, session, true); measure(px); cleanup(); }
+    expect(stored().working.length).toBe(3);
   });
 });
 
@@ -395,6 +468,18 @@ describe('it seeds virtuoso with a size for EVERY row, not one for all of them',
       { startIndex: 1, endIndex: 3, size: 70 },
       { startIndex: 4, endIndex: 4, size: 1120 },
     ]);
+  });
+
+  // The one number virtuoso prices a row it was NOT seeded with — a row that
+  // arrives while the session tails — is this transcript's own mean, under the
+  // learned model; the fallback is for a browser that has learned nothing.
+  it('opens with the LEARNED default height, the mean of its own rows', () => {
+    learned();
+    visit();
+    const rows = seededRows()!;
+    const mean = Math.round(rows.reduce((a, b) => a + b, 0) / rows.length);
+    expect(mean).not.toBe(FALLBACK_ITEM_HEIGHT);
+    expect(seen.props?.defaultItemHeight).toBe(mean);
   });
 
   it('opens at the bottom UNDER ITS OWN MODEL, so the two openings agree', () => {
@@ -453,10 +538,10 @@ describe('it seeds virtuoso with a size for EVERY row, not one for all of them',
   });
 
   it('DOES seed once any one kind on screen has been learned', () => {
-    remembered({ user: onLine(60, 0, [1, 1, 1]) });
+    remembered({ divider: onLine(35, 0, [1, 1, 1]) });
     visit([{ kind: 'user', uuid: 'u0', ts: at(0), text: 'ask' }]);
-    // The divider is not learned yet, so it takes the fallback; the ask its line.
-    expect(seededRows()).toEqual([FALLBACK_ITEM_HEIGHT, 60]);
+    // The ask is not learned yet, so it takes the fallback; the divider its level.
+    expect(seededRows()).toEqual([35, FALLBACK_ITEM_HEIGHT]);
   });
 });
 
@@ -524,6 +609,43 @@ describe('a row is priced by what it RENDERS', () => {
       .toEqual({ bucket: 'user', lines: 1, attach: 2 });
     expect(only([], [{ key: 'p', text: 'look', state: 'sending', attachments: [{ path: clip('a') }, { path: clip('b') }] }]))
       .toEqual({ bucket: 'pending', lines: 1, attach: 1 });
+  });
+
+  it('an assistant turn is Markdown: a fence saturates at the well, a table row is taller', () => {
+    const fence = '```\n' + linesOf(200, 'code') + '\n```';
+    expect(only([{ kind: 'assistant', uuid: 'a', ts: at(0), text: fence }]))
+      .toEqual({ bucket: 'assistant', lines: 2 + WELL_LINES });
+    expect(only([{ kind: 'assistant', uuid: 'a', ts: at(0), text: '| a | b |\n| c | d |' }]))
+      .toEqual({ bucket: 'assistant', lines: 2 * TABLE_ROW_LINES });
+  });
+
+  it('a pending send is plain text too: a fence in it is every one of its lines', () => {
+    const text = '```\n' + linesOf(30, 'code') + '\n```';
+    expect(only([], [{ key: 'p', text, state: 'sending' }])).toEqual({ bucket: 'pending', lines: 32, attach: 0 });
+  });
+
+  // Built directly: what is under test is the shape of the card, not the grammar
+  // that produces one.
+  const event: ChatEvent = { kind: 'user', uuid: 'src', ts: at(0), text: 'x' };
+  it('a mail card is its sender and meta rows, a row per artifact, and its body\'s capped well', () => {
+    const mail = (artifacts: string[], body: string): ChatItem => ({
+      kind: 'mail', key: 'm', event: event as Extract<ChatItem, { kind: 'mail' }>['event'],
+      envelope: { id: 1, fromId: 'a', toId: 'b', runId: null, program: null, wave: null, waveOf: null,
+        kind: 'status', subject: 'done', artifacts, body },
+    });
+    // A well neither wraps nor grows past its cap, and is not Markdown.
+    expect(shapeOf(mail(['/x/a.md', '/x/b.md'], linesOf(40, 'body')))).toEqual({ bucket: 'mail', lines: 2 + 2 + WELL_LINES });
+    expect(shapeOf(mail([], 'x'.repeat(600)))).toEqual({ bucket: 'mail', lines: 2 + 1 });
+    expect(shapeOf(mail([], ''))).toEqual({ bucket: 'mail', lines: 2 });
+  });
+
+  it('a task card is its summary row, and the closed details toggle when it has details', () => {
+    const task = (fields: { name: string; value: string }[]): ChatItem => ({
+      kind: 'task', key: 't', event: event as Extract<ChatItem, { kind: 'task' }>['event'],
+      notification: { summary: 'build finished', status: 'completed', fields },
+    });
+    expect(shapeOf(task([]))).toEqual({ bucket: 'task', lines: 1 });
+    expect(shapeOf(task([{ name: 'output', value: linesOf(30, 'log') }]))).toEqual({ bucket: 'task', lines: 2 });
   });
 
   it('a user bubble is plain text: a fence in it is every one of its lines', () => {

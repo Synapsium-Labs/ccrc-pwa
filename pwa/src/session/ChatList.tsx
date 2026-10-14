@@ -22,8 +22,8 @@ import { TaskCard } from './TaskCard';
 import { MessageBubble, foldsAway, timeOf, type MessageEvent } from './MessageBubble';
 import {
   FALLBACK_ITEM_HEIGHT, modelsOf, nominalLines, openingHeight, plainLines, rememberRows,
-  rememberedRows, rowHeights, wellLines,
-  type HeightBucket, type RowRecord, type RowSample, type RowShape,
+  rememberedRows, rowHeights, rowId, wellLines,
+  type HeightBucket, type MeasuredRow, type RowRecord, type RowShape,
 } from './itemHeight';
 import { ToolCard, askCardLines, type ToolResultEvent, type ToolUseEvent } from './ToolCard';
 import './chat.css';
@@ -682,18 +682,20 @@ function openWith(items: readonly ChatItem[]): Opening {
  *
  * Keyed by the ROW'S KEY: a row measured again is still one sample, and the
  * last measurement wins — a streaming turn is as tall as it ended up — and a
- * row keeps its sample after it scrolls out of the rendered window.
+ * row keeps its sample after it scrolls out of the rendered window. The sample
+ * carries the row's number (`rowId`, from the session and the key), which is
+ * how the record knows the row again on the NEXT visit.
  */
 class RowMeter {
   private observer: ResizeObserver | null = null;
-  private readonly rows = new Map<Element, () => ChatItem>();
-  private readonly taken = new Map<string, { bucket: HeightBucket; sample: RowSample }>();
+  private readonly rows = new Map<Element, () => MeteredRow>();
+  private readonly taken = new Map<string, { bucket: HeightBucket; sample: MeasuredRow }>();
 
-  /** Measure `el` as the row `item()` is at the time; the return stops it. */
-  observe(el: Element, item: () => ChatItem): () => void {
+  /** Measure `el` as the row `row()` is at the time; the return stops it. */
+  observe(el: Element, row: () => MeteredRow): () => void {
     if (typeof ResizeObserver === 'undefined') return () => {};
     this.observer ??= new ResizeObserver((entries) => { for (const e of entries) this.take(e); });
-    this.rows.set(el, item);
+    this.rows.set(el, row);
     this.observer.observe(el);
     return () => {
       this.rows.delete(el);
@@ -702,8 +704,8 @@ class RowMeter {
   }
 
   /** Everything this visit measured, by bucket. */
-  visit(): Map<HeightBucket, RowSample[]> {
-    const out = new Map<HeightBucket, RowSample[]>();
+  visit(): Map<HeightBucket, MeasuredRow[]> {
+    const out = new Map<HeightBucket, MeasuredRow[]>();
     for (const { bucket, sample } of this.taken.values()) {
       const list = out.get(bucket);
       if (list === undefined) out.set(bucket, [sample]);
@@ -713,8 +715,9 @@ class RowMeter {
   }
 
   private take(entry: ResizeObserverEntry): void {
-    const item = this.rows.get(entry.target)?.();
-    if (item === undefined) return;
+    const row = this.rows.get(entry.target)?.();
+    if (row === undefined) return;
+    const { item, session } = row;
     const el = entry.target;
     const box = entry.borderBoxSize?.[0];
     const px = Math.round(box === undefined ? el.getBoundingClientRect().height : box.blockSize);
@@ -727,9 +730,11 @@ class RowMeter {
     // without them, and the grid's height is a sample of `attach`.
     const grid = thumbs > 0 ? el.querySelector('.msg-attach') : null;
     const gridPx = grid === null ? 0 : Math.round(grid.getBoundingClientRect().height);
-    this.taken.set(item.key, { bucket: shape.bucket, sample: { lines: shape.lines, px: px - gridPx } });
+    // One row, one number: the grid is the same row, in its own bucket.
+    const id = rowId(session, item.key);
+    this.taken.set(item.key, { bucket: shape.bucket, sample: { lines: shape.lines, px: px - gridPx, id } });
     if (gridPx > 0) {
-      this.taken.set(`${item.key}\u0000thumbs`, { bucket: 'attach', sample: { lines: thumbs, px: gridPx } });
+      this.taken.set(`${item.key}\u0000thumbs`, { bucket: 'attach', sample: { lines: thumbs, px: gridPx, id } });
     }
   }
 }
@@ -746,21 +751,27 @@ function inOpeningForm(el: Element): boolean {
   return true;
 }
 
+/** What the meter needs of a row when it measures one: the row as it is now,
+ *  and the session it belongs to. */
+interface MeteredRow { item: ChatItem; session: string }
+
 /** One rendered row, measured for as long as virtuoso keeps it mounted. */
 function MeasuredItem({
   item,
+  session,
   meter,
   children,
 }: {
   item: ChatItem;
+  session: string;
   meter: RowMeter;
   children: ReactNode;
 }): ReactNode {
   const el = useRef<HTMLDivElement>(null);
   // The row at this key changes as events arrive (a streaming turn grows); a
   // measurement is paired with what the row is THEN, not when it mounted.
-  const current = useRef(item);
-  useLayoutEffect(() => { current.current = item; });
+  const current = useRef<MeteredRow>({ item, session });
+  useLayoutEffect(() => { current.current = { item, session }; });
   useLayoutEffect(() => {
     const node = el.current;
     return node === null ? undefined : meter.observe(node, () => current.current);
@@ -835,7 +846,7 @@ export function ChatList({
           const item = items[i];
           if (!item) return null;
           return (
-            <MeasuredItem item={item} meter={meter}>
+            <MeasuredItem item={item} session={id} meter={meter}>
               <ChatItemView
                 item={item}
                 id={id}
