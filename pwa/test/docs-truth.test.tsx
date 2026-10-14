@@ -750,3 +750,18 @@ describe('Review 439 F7: a relation whose counts are not measured names no count
     expect(q('.docs-truth-relation').textContent).toBe('local is 4 ahead of origin');
   });
 });
+
+describe('Review 439 F9: the soon chip stops its 1 s tick once its wait has passed', () => {
+  it('after the stamp shows, no timer is left running and further time schedules none', () => {
+    vi.useFakeTimers({ now: NOW });
+    const tree = withStamp({ okAgeMs: 4 * MIN, attemptAgeMs: 4 * MIN, lastOutcome: 'ok', okCommit: COMMIT_A });
+    render(<DocsHead page={pageAt('/docs/demo')} visit={visitOf(tree, { freshness: { s: 'soon', retryAt: NOW + 3000 } })} tree={tree} />);
+    expect(q('.docs-fresh').textContent).toBe('fetched moments ago; again in 3s');
+    const ticking = vi.getTimerCount();
+    act(() => { vi.advanceTimersByTime(3000); });
+    expect(q('.docs-fresh').textContent).toBe('fetched 4m ago ↻');
+    expect(vi.getTimerCount()).toBe(ticking - 1);
+    act(() => { vi.advanceTimersByTime(20_000); });
+    expect(vi.getTimerCount()).toBe(ticking - 1);
+  });
+});
