@@ -6,11 +6,12 @@
 // - the claim lease lanes (`renewClaims`, `lapseClaims`);
 // - the divergence census's open-run side.
 // Each case plants a fully seeded `--actor` row beside a valid one under a fixture HOME, reads the registry as `tick()`
-// reads it (`readRegistryMeasured`), and hands the lane exactly what `tick()` hands it. That `tick()` hands each lane
+// reads it (`readRegistryMeasured`), and hands the lane exactly what `tick()` hands it; (A2) and (A3) then unlist it, to
+// pin that the stall lane moves none of a refused subject's clocks. That `tick()` hands each lane
 // `registryRead.refused` is pinned in `registry-refused-census.test.ts`. Fakes and fixture HOMEs only: no live fleet, no
 // real ccd, no real tmux.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { Bus } from '../src/bus.js';
 import type { Runner } from '../src/exec.js';
@@ -170,6 +171,76 @@ describe('the stall lane holds a listed-but-refused id it is handed (tick-lanes-
     expect(r.touched.filter(aboutBad), 'its marker is never read').toEqual([]);
     // CONTROL: the valid worker WAS judged, so the lane ran: its marker was read on every sweep.
     expect(r.touched.filter((p) => path.basename(p) === `${GOOD}.turn.json`).length).toBeGreaterThan(0);
+  }, 60_000);
+
+  // The lane moves none of a refused subject's clocks: each keeps its prior value. A clock it moved while the id was
+  // refused would show once the id is UNLISTED (its `.uuid` gone, so it is in no `refused` either, and absence is read
+  // as on main: `unlisted-non-registry-id-reads-absent-on-the-tick`). The instants, one sweep per STALL_SWEEP_MS:
+  // refused from T0 to END (T0 + 62 min), past DEAD_GRACE_MS and MARKER_UNREADABLE_MS; unlisted between END and
+  // U = END + STALL_SWEEP_MS (T0 + 63 min), the first sweep that reads it absent, where its clocks start. A clock
+  // started in the refused stretch would date from T0 and fire at U.
+  const U = END + STALL_SWEEP_MS;
+  type Listed = Awaited<ReturnType<typeof tickRead>>;
+  /** One sweep per STALL_SWEEP_MS from `from` to `to`, both included, handed what `tick()` hands the lane off `read`. */
+  const sweepEach = async (r: Rig, read: Listed, from: number, to: number): Promise<void> => {
+    for (let t = from; t <= to; t += STALL_SWEEP_MS) {
+      at(t);
+      await r.w.sweepStalls([fleetRow(GOOD)], read.names, { panePids: new Map(), records: read.records, refused: read.refused });
+    }
+  };
+  /** Unlists --actor: deletes every `--actor.*` file but `keep`, then reads the registry as `tick()` reads it. */
+  const unlist = async (r: Rig, keep: readonly string[] = []): Promise<Listed> => {
+    for (const f of readdirSync(r.reg)) if (aboutBad(f) && !keep.includes(f)) rmSync(path.join(r.reg, f));
+    const read = await readRegistryMeasured(r.deps.io, r.deps.cfg);
+    if (!read.listed) throw new Error('fixture: the registry did not list');
+    expect([...read.refused], '--actor is unlisted, so no longer refused').toEqual([]);
+    expect(read.records.map((x) => x.id)).toEqual([GOOD]);
+    return read;
+  };
+  const markerPushes = (r: Rig): PushPayload[] => r.sent.filter((p) => (p.tag ?? '').includes('-marker-unreadable-'));
+
+  it('(A2) the absent clock does not run while the worker id is refused: unlisted after the refused stretch, it draws the dead notice DEAD_GRACE_MS after the unlisting, never before', async () => {
+    const r = await rig();
+    plant(r.home, GOOD);
+    plant(r.home, BAD);
+    for (const m of ARMS) writeFileSync(path.join(r.reg, m), '');
+    const runId = storedRun(r.coord, { state: 'working', sessionId: BAD, claimedBy: COORD });
+    await sweepEach(r, await tickRead(r), T0, END);
+    expect(stallMail(r.coord), 'nothing while refused').toEqual([]);
+    expect(stallRows(r.coord, runId)).toEqual([]);
+    const after = await unlist(r);
+    // U to U + DEAD_GRACE_MS − STALL_SWEEP_MS (T0 + 72 min): absent, inside the grace.
+    await sweepEach(r, after, U, U + DEAD_GRACE_MS - STALL_SWEEP_MS);
+    expect(stallMail(r.coord), 'no dead notice before DEAD_GRACE_MS has passed since the unlisting').toEqual([]);
+    expect(stallRows(r.coord, runId), 'and no stall: row').toEqual([]);
+    // CONTROL, U + DEAD_GRACE_MS (T0 + 73 min): the dead notice arrives, so the absent clock started at U.
+    await sweepEach(r, after, U + DEAD_GRACE_MS, U + DEAD_GRACE_MS);
+    const mail = stallMail(r.coord);
+    expect(mail.map((m) => m.toId)).toEqual([COORD]);
+    expect(mail[0]!.subject).toContain('registry row absent');
+    expect(stallRows(r.coord, runId).map((d) => parseStallDetail(d))).toMatchObject([{ mode: 'live', arm: 'dead', rung: 1 }]);
+    expect(r.sent, 'a dead report goes to the coordinator, never a push').toEqual([]);
+  }, 60_000);
+
+  it.each([
+    { role: 'worker', sessionId: BAD, claimedBy: COORD },
+    { role: 'claimant', sessionId: GOOD, claimedBy: BAD },
+  ])('(A3) the marker clock does not run while the $role id is refused: unlisted after the refused stretch with its malformed .turn.json kept, it draws the marker-unreadable push MARKER_UNREADABLE_MS after the unlisting, never before', async ({ sessionId, claimedBy }) => {
+    const r = await rig();
+    plant(r.home, GOOD);
+    plant(r.home, BAD);
+    for (const m of ARMS) writeFileSync(path.join(r.reg, m), '');
+    writeFileSync(path.join(r.reg, `${BAD}.turn.json`), '{ not json');
+    storedRun(r.coord, { state: 'working', sessionId, claimedBy });
+    await sweepEach(r, await tickRead(r), T0, END);
+    expect(r.sent, 'nothing while refused').toEqual([]);
+    const after = await unlist(r, [`${BAD}.turn.json`]);
+    // U to U + MARKER_UNREADABLE_MS − STALL_SWEEP_MS (T0 + 122 min): the marker reads malformed, inside its window.
+    await sweepEach(r, after, U, U + MARKER_UNREADABLE_MS - STALL_SWEEP_MS);
+    expect(markerPushes(r), 'no marker-unreadable push before MARKER_UNREADABLE_MS has passed since the unlisting').toEqual([]);
+    // CONTROL, U + MARKER_UNREADABLE_MS (T0 + 123 min): the push arrives, so the marker clock started at U.
+    await sweepEach(r, after, U + MARKER_UNREADABLE_MS, U + MARKER_UNREADABLE_MS);
+    expect(markerPushes(r)).toHaveLength(1);
   }, 60_000);
 });
 

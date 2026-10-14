@@ -302,8 +302,8 @@ export interface StallTick {
   readonly records: readonly SessionRecord[];
   /** The ids this tick's listing REFUSED (`RegistryRead.refused`, path identity spec §2.3): listed, never read or built,
    *  so in no `records` and no `sessions`. A run worker or a claimant among them is held as unmeasured, never read as
-   *  absent: the lane composes no path or argv from it, takes no read about it and moves none of its clocks (slug
-   *  `tick-lanes-hold-a-refused-id`). */
+   *  absent: the lane takes no live, marker or hookstate read and composes no path or argv from it, and moves none of
+   *  its clocks (slug `tick-lanes-hold-a-refused-id`). */
   readonly refused: ReadonlySet<string>;
 }
 
@@ -2119,10 +2119,10 @@ export class FleetWatcher {
       // records it is compared with. `sweepDivergences` states the race in full.
       // HANDED `registryRead.refused`, though: rule 3's open-run side leaves a
       // refused id out rather than name it as carrying no hold
-      // (`tick-lanes-hold-a-refused-id`). Refusal is a function of the id alone,
-      // so this listing's set can differ from the census's own only by a row
-      // listed or unlisted between the two reads, for one interval, on a kind
-      // that reports and never acts.
+      // (`tick-lanes-hold-a-refused-id`). Rule 3 weighs `refused` against
+      // `records`, never against the census's own listing (that feeds rule 1
+      // only), and both come from this one tick read, so rule 3 compares two
+      // halves of one listing and has no skew.
       void this.sweepDivergences(records, registryRead.refused)
         .catch(() => { /* one bad sweep must not kill the poll */ });
       // NEVER awaited, same reasoning as `sweepNames` above and then some: this

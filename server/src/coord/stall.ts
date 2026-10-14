@@ -482,9 +482,11 @@ export type StallWorker =
   | { readonly present: false }
   /** A worker id the tick's registry listing REFUSED (`RegistryRead.refused`, path identity spec §2.3): listed, but never
    *  read or built, so it is in no `records` and no `sessions`. Its own arm, never `{ present: false }` plus a flag: an
-   *  absent worker is the dead arm after DEAD_GRACE_MS, and a refused id was never measured absent. The lane reads
-   *  nothing about it and moves none of its clocks, and every verdict holds it `unmeasured` (slug
-   *  `tick-lanes-hold-a-refused-id`). */
+   *  absent worker is the dead arm after DEAD_GRACE_MS, and a refused id was never measured absent. The lane takes no
+   *  live, marker or hookstate read and composes no path from it, and moves none of its clocks (slug
+   *  `tick-lanes-hold-a-refused-id`); it still reads the store's mail rows and run events for that id. Every verdict
+   *  holds it `unmeasured`, after a run this build cannot name, EXCEPT mail-stuck's `registry-unmeasurable` clause,
+   *  which still reports its held delivery past `MAIL_STUCK_MS` (`stuck-gate-precedes-holds`). */
   | { readonly present: 'refused' }
   | { readonly present: true; readonly unmeasured: boolean; readonly lifecycle: string | null;
       readonly limits: { readonly five: number | null; readonly seven: number | null } | null;
