@@ -2444,12 +2444,13 @@ button.metachip:active {
   gap: var(--sp-2);
   padding: 0 var(--sp-3);
 }
-/* The keys scroll; the action beside them does not. MEASURED: nine caps at
-   --tap-min, eight gaps and this padding come to 484px against a 390px phone,
+/* The keys scroll; the action beside them does not. MEASURED: ten caps at
+   --tap-min, nine gaps and this padding come to 536px against a 390px phone,
    and `.sheet-panel--full` zeroes the drawer's side padding — so this strip
    has always overflowed. That was survivable while everything in it was a key
    the phone's keyboard also lacks; it stops being survivable once the strip
-   carries the only door touch has to the console history. */
+   carries the only door touch has to the console history. Below 420px the
+   strip wraps instead (the media rule after the history door's rules, D-5007). */
 .term-keys-seq {
   flex: 1;
   min-width: 0;
@@ -2491,7 +2492,8 @@ button.metachip:active {
 /* The history door. Cut from the same ink as the keys deliberately: --accent
    measures under the 4.5:1 a legend needs on the light theme's well, so it is
    the BORDER that says "this one runs no bytes into the pane" — the same move
-   `.term-retry` makes. Placement is load-bearing: this and `.term-keys
+   `.term-retry` makes, and the reason the wrapped view's `⋯` and `ctrl` caps
+   wear it too (D-5007): neither sends a byte of its own. Placement is load-bearing: this and `.term-keys
    .keycap` are both specificity (0,2,0), so source order is what makes `flex`
    and `border-color` win. */
 .term-keys .keycap--act {
@@ -2508,6 +2510,33 @@ button.metachip:active {
   color: var(--bg-well);
   background: var(--ink-on-well);
   border-color: var(--ink-on-well);
+}
+/* The wrapped view's bar (D-5007, spec 2026-10-14 §5.4). The row `⋯` opens is a
+   row of its own under the primary keys and the history door, so this bar wraps
+   at every width, and the keys in that row wrap rather than scroll. */
+.term-keys--wrapped {
+  flex-wrap: wrap;
+  row-gap: var(--sp-2);
+}
+.term-keys-more {
+  flex: 1 0 100%;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+}
+/* BELOW 420px THE BAR IS TWO ROWS, NEVER A STRIP (D-5007). The wrapped view's
+   primary row and the history door come to 8x44 + 7x8 + 2x12 = 432px, so on a
+   phone a strip would scroll a key off the right edge; here the caps wrap onto a
+   second row instead, in either view. */
+@media (max-width: 420px) {
+  .term-keys {
+    flex-wrap: wrap;
+    row-gap: var(--sp-2);
+  }
+  .term-keys-seq {
+    flex-wrap: wrap;
+    overflow-x: visible;
+  }
 }
 
 /* ------------------------------------------------------------------ *
