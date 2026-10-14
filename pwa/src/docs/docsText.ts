@@ -25,7 +25,7 @@ export const DOCS_FAILURE_SENTENCE: Record<DocsFailure, string> = {
   'partial-clone': 'That repository is a partial clone, which Docs does not read.',
   'repo-unreadable': 'The repository could not be read on the fleet box.',
   'no-default-branch': 'This repository has no default branch Docs can find.',
-  'unresolved-ref': 'No branch by that name was found, locally or on origin.',
+  'unresolved-ref': 'No branch by that name was found.',
   'ref-not-commit': '{ref} names a {type}, not a commit.',
   'unknown-commit': 'That commit is not in this repository any more; the listing has to be read again.',
   'not-a-commit': 'That id names a git object that is not a commit.',

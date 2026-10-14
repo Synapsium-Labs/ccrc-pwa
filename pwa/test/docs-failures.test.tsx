@@ -346,3 +346,17 @@ describe('a pre-Docs server (M4.F6 = M7.1)', () => {
     for (const sentence of Object.values(DOCS_FAILURE_SENTENCE)) expect(text).not.toContain(stem(sentence));
   });
 });
+
+describe('T13 review 4-7: unresolved-ref names no side it did not search', () => {
+  // A qualified ref (`refs/remotes/origin/feat`) is looked up on that one ref only, so the sentence cannot say
+  // "locally or on origin"; the tried list beneath it carries which refs were searched.
+  it('the sentence claims neither side, stays a sentence, and the one tried ref is listed under it', () => {
+    const sentence = failureSentence(bodyOf('unresolved-ref', { tried: [{ ref: 'refs/remotes/origin/feat', result: 'absent' }] }));
+    expect(sentence).not.toMatch(/locally|origin/);
+    expect(sentence.length).toBeGreaterThanOrEqual(20);
+    render(<DocsFailureView answer={failed('unresolved-ref', { tried: [{ ref: 'refs/remotes/origin/feat', result: 'absent' }] })} />);
+    expect(screen.getByText(sentence)).toBeInTheDocument();
+    expect(screen.getByText('refs/remotes/origin/feat').closest('li')).toHaveTextContent('refs/remotes/origin/feat not found');
+    expect(document.querySelectorAll('li')).toHaveLength(1);
+  });
+});
