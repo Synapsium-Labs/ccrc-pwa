@@ -515,9 +515,9 @@ Assigned from the programme's reserve by the coordinator's ruling R40. It resolv
       SubagentStop leaves updatedAt and event as the wait set them; the parent is NOT refused; repeated SubagentStops
       never move the guarded number; a subagent TOOL event over the dialog keeps the number too. Out of tree, restored
       and `cmp`-checked.
-  - `server/test/session-hook-merge-deny.test.ts`'s jq-program floor is 51. The extractor's count, measured at each ref:
-    52 at the base, 54 after D-4039 (two programs added), 51 after D-4041 (four removed, the shared fresh read added);
-    the `as $` bindings were 33 throughout.
+  - `server/test/session-hook-merge-deny.test.ts`'s jq-program floor: 51 at this wave's tip, 52 since wave 4 (R51 (b)).
+    The extractor's count at each ref: 52 at the base, 54 after D-4039 (two added), 51 after D-4041 (four removed, the
+    shared fresh read added), 52 merged onto #392's skill-name read (D-4934). The `as $` bindings were 33 throughout.
   - Every S and N row of the list below was re-measured in fix round 2 at commit `df7fb0248` (the hook code of the tip), out of tree, one
     mutation at a time, each restored and `cmp`-checked, with identical counts and titles to the `ed7537045` measurement (S3, N2 and N6 quote one title as fix round 3 renamed it after both, R45 item 7: no count moved, and review 404 re-measured N2 red with the new title);
     the unmutated files pass 28 of 28 and 61 of 61. The A rows live in `hookstate.ts` and that round did not touch it:
