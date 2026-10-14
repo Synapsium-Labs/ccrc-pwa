@@ -140,7 +140,11 @@ export interface DocsVisit {
 }
 
 type Target = { readonly project: string; readonly ref: DocsRefSpec | null };
-type FileEntry = { slot: Exclude<FileSlot, { s: 'none' } | { s: 'too-large' }>; treeKey: string; awaitingRelist: boolean };
+/** `relistAfter`: null = the read waits for no re-list; a number = it does, and is the request number in force when the
+ *  word landed, so only a GET numbered above it (one that STARTED after the word) can release it. */
+type FileEntry = {
+  slot: Exclude<FileSlot, { s: 'none' } | { s: 'too-large' }>; treeKey: string; relistAfter: number | null;
+};
 type Wanted =
   | { kind: 'none' }
   | { kind: 'too-large'; slot: FileSlot }
@@ -294,13 +298,16 @@ export function useDocsVisit(page: DocsPageLocation | null, loaders: DocsLoaders
   };
 
   const hasRelistWaiters = (tKey: string): boolean => {
-    for (const e of st.files.values()) if (e.awaitingRelist && e.treeKey === tKey) return true;
+    for (const e of st.files.values()) if (e.relistAfter !== null && e.treeKey === tKey) return true;
     return false;
   };
 
-  /** Drop every file entry that waited for `tKey`'s re-list, so the next render reads its leaf again. */
-  const releaseRelistWaiters = (tKey: string): void => {
-    for (const [fKey, e] of st.files) if (e.awaitingRelist && e.treeKey === tKey) st.files.delete(fKey);
+  /** Drop every file entry that waited for `tKey`'s re-list and whose word landed before the request numbered `seq`
+   *  started, so the next render reads its leaf again. A GET that started before the word is not the re-list. */
+  const releaseRelistWaiters = (tKey: string, seq: number): void => {
+    for (const [fKey, e] of st.files) {
+      if (e.relistAfter !== null && e.relistAfter < seq && e.treeKey === tKey) st.files.delete(fKey);
+    }
   };
 
   const setTreeOk = (key: string, seq: number, answer: DocsTreeResponse): void => {
@@ -384,7 +391,7 @@ export function useDocsVisit(page: DocsPageLocation | null, loaders: DocsLoaders
     // This answer's number was taken on arrival, so it is newer than every number the slot holds: no order check.
     if (tree.ok) {
       setTreeOk(key, seq, tree);
-      releaseRelistWaiters(key);
+      releaseRelistWaiters(key, seq);
       st.freshness.set(key, { s: 'answered', fetch, at: now });
     } else if (st.trees.get(key)?.s === 'ok') {
       st.freshness.set(key, { s: 'relist-failed', answer: { s: 'failed', body: tree } });
@@ -430,13 +437,19 @@ export function useDocsVisit(page: DocsPageLocation | null, loaders: DocsLoaders
   };
 
   const applyTreeGet = (target: Target, key: string, seq: number, a: DocsTreeAnswer): void => {
-    // A GET started before the answer that last set the slot says what the listing was, not what it is: it releases no
-    // read waiting for a re-list, and those reads get a re-list that is newer than the word they are waiting on.
-    if (!isNewest(key, seq)) {
-      if (hasRelistWaiters(key)) listTree(target);
-      return;
+    // A GET started before the answer that last set the slot says what the listing was, not what it is: it is not
+    // applied and releases no read waiting for a re-list.
+    if (isNewest(key, seq)) {
+      // A newer answer is applied as usual, but frees only the reads whose word landed before this GET started.
+      releaseRelistWaiters(key, seq);
+      applyTreeAnswer(target, key, seq, a);
     }
-    releaseRelistWaiters(key);
+    // A read still waiting was not served by this GET (stale, or started before its word), and no other GET is in
+    // flight for the key (this was its one): the re-list it waits for is one that starts now, and releases it.
+    if (hasRelistWaiters(key)) listTree(target);
+  };
+
+  const applyTreeAnswer = (target: Target, key: string, seq: number, a: DocsTreeAnswer): void => {
     const relisted = st.trees.get(key)?.s === 'ok';
     if (a.s === 'ok') {
       setTreeOk(key, seq, a.value);
@@ -460,7 +473,7 @@ export function useDocsVisit(page: DocsPageLocation | null, loaders: DocsLoaders
   const readFile = (w: Extract<Wanted, { kind: 'read' }>): void => {
     const { fKey, tKey, pin } = w;
     // The entry is the single-flight mark: the effect starts a read only for a key with no entry.
-    st.files.set(fKey, { slot: { s: 'loading', pin }, treeKey: tKey, awaitingRelist: false });
+    st.files.set(fKey, { slot: { s: 'loading', pin }, treeKey: tKey, relistAfter: null });
     const ctl = new AbortController();
     st.aborts.set(ctl, fKey);
     void loadersRef.current.file(w.target.project, pin, ctl.signal).then((a) => {
@@ -477,8 +490,8 @@ export function useDocsVisit(page: DocsPageLocation | null, loaders: DocsLoaders
 
   const applyFile = (w: Extract<Wanted, { kind: 'read' }>, a: DocsFileAnswer): void => {
     const { fKey, tKey, pin } = w;
-    const put = (slot: FileEntry['slot'], awaitingRelist = false): FileEntry => {
-      const e: FileEntry = { slot, treeKey: tKey, awaitingRelist };
+    const put = (slot: FileEntry['slot'], relistAfter: number | null = null): FileEntry => {
+      const e: FileEntry = { slot, treeKey: tKey, relistAfter };
       st.files.set(fKey, e);
       return e;
     };
@@ -499,7 +512,7 @@ export function useDocsVisit(page: DocsPageLocation | null, loaders: DocsLoaders
     if (DOCS_RELIST_WORDS.has(word)) {
       // Spec 4.3 item 1: the listing moved under the read. Re-list once automatically, then "changing, Retry".
       if (takeAutoRetry('relist', page, '')) {
-        put({ s: 'loading', pin }, true);
+        put({ s: 'loading', pin }, st.seq);
         listTree(w.target);
       } else {
         put({ s: 'changing', pin, word });
@@ -635,7 +648,7 @@ export function useDocsVisit(page: DocsPageLocation | null, loaders: DocsLoaders
       const e = st.files.get(w.fKey);
       if (e === undefined || e.slot.s === 'ok' || e.slot.s === 'loading') return;
       if (e.slot.s === 'changing') {
-        st.files.set(w.fKey, { slot: { s: 'loading', pin: w.pin }, treeKey: w.tKey, awaitingRelist: true });
+        st.files.set(w.fKey, { slot: { s: 'loading', pin: w.pin }, treeKey: w.tKey, relistAfter: st.seq });
         listTree(w.target);
       } else {
         st.files.delete(w.fKey);

@@ -861,3 +861,64 @@ describe('Review 439 F19: a stale tree answer releases no waiting read; the one 
     expect(result.current.file.s).toBe('ok');
   });
 });
+
+describe('Review 439 F19: the automatic re-list is a fetch that starts after the word', () => {
+  it('a GET already in flight as the re-list word lands does not count as the re-list: a fresh GET is made and releases the read', async () => {
+    const moved = treeOk({ commit: COMMIT_B, entries: [entry('specs', 'a.md', { committed: { kind: 'file', blob: BLOB_2, size: 9 } })] });
+    const f = fakeLoaders();
+    let settleGet2: (a: DocsTreeAnswer) => void = () => {};
+    let settleGet3: (a: DocsTreeAnswer) => void = () => {};
+    let settleRead1: (a: DocsFileAnswer) => void = () => {};
+    f.tree.mockResolvedValueOnce(okTree());
+    f.tree.mockImplementationOnce(() => new Promise((r) => { settleGet2 = r; }));
+    f.tree.mockImplementationOnce(() => new Promise((r) => { settleGet3 = r; }));
+    f.file.mockImplementationOnce(() => new Promise((r) => { settleRead1 = r; }));
+    const { result } = visit(f.loaders, '/docs/demo/specs/a.md');
+    await flush();
+    act(() => result.current.retryTree());
+    await flush();
+    expect(f.tree).toHaveBeenCalledTimes(2);
+    // the read says the listing moved; the GET already in flight started before the word, so it is not the re-list
+    await act(async () => settleRead1(failedAnswer('unknown-commit')));
+    await flush();
+    expect(f.tree).toHaveBeenCalledTimes(2);
+    await act(async () => settleGet2(okTree()));
+    await flush();
+    expect(f.tree).toHaveBeenCalledTimes(3);
+    expect(f.file).toHaveBeenCalledTimes(1);
+    expect(result.current.file.s).toBe('loading');
+    await act(async () => settleGet3(okTree(moved)));
+    await flush();
+    expect(f.tree).toHaveBeenCalledTimes(3);
+    expect(f.file).toHaveBeenCalledTimes(2);
+    expect(result.current.file).toMatchObject({ s: 'ok', pin: { commit: COMMIT_B } });
+  });
+
+  it('Retry on changing, with a GET already in flight, also waits for a GET that starts after it', async () => {
+    const moved = treeOk({ commit: COMMIT_B, entries: [entry('specs', 'a.md', { committed: { kind: 'file', blob: BLOB_2, size: 9 } })] });
+    const f = fakeLoaders();
+    f.file.mockResolvedValueOnce(failedAnswer('unknown-commit'));
+    f.file.mockResolvedValueOnce(failedAnswer('unknown-commit'));
+    const { result } = visit(f.loaders, '/docs/demo/specs/a.md');
+    await flush();
+    expect(result.current.file.s).toBe('changing');
+    const gets = f.tree.mock.calls.length;
+    let settleGet: (a: DocsTreeAnswer) => void = () => {};
+    let settleNext: (a: DocsTreeAnswer) => void = () => {};
+    f.tree.mockImplementationOnce(() => new Promise((r) => { settleGet = r; }));
+    f.tree.mockImplementationOnce(() => new Promise((r) => { settleNext = r; }));
+    act(() => result.current.retryTree());
+    await flush();
+    expect(f.tree).toHaveBeenCalledTimes(gets + 1);
+    act(() => result.current.retryFile());
+    await flush();
+    expect(f.tree).toHaveBeenCalledTimes(gets + 1);
+    await act(async () => settleGet(okTree()));
+    await flush();
+    expect(f.tree).toHaveBeenCalledTimes(gets + 2);
+    expect(result.current.file.s).toBe('loading');
+    await act(async () => settleNext(okTree(moved)));
+    await flush();
+    expect(result.current.file).toMatchObject({ s: 'ok', pin: { commit: COMMIT_B } });
+  });
+});
