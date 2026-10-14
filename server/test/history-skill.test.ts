@@ -126,6 +126,14 @@ describe('the history skill: its text (spec §8.5; the text half of C23)', () =>
     for (const t of TOKENS) expect(skill, `the skill names the writing-form spelling ${t}`).not.toContain(t);
   });
 
+  it("states what --tool matches and what the regex-syntax refusal spares, as the CLI does (fix round 1, F15 and F16)", () => {
+    expect(flat).toContain("`--tool <name>` matches the model's call (the `tool_use` row) and its input, never the tool's output");
+    expect(flat).toContain('drop every sidecar hit');
+    expect(flat).toContain('`grep <error text> --tool Bash` cannot find a Bash output');
+    expect(flat).toContain('outside double quotes is refused');
+    expect(flat).toContain('is searched as an FTS phrase, not refused');
+  });
+
   it("states grep's reach exactly once, in lib's SEARCH_REACH words, so a changed window reds until this text follows (spec §8.4, rev 3.5)", () => {
     expect(flat.split(SEARCH_REACH).length - 1).toBe(1);
   });
@@ -263,6 +271,15 @@ describe("README states grep's reach, the inexact-window note and the refused sp
     expect(readme).toContain('in single quotes');
     expect(readme, "the pasted line's escape is not code-spanned").toContain("written `'\\''`");
     expect(readme).toContain('outside every `<ccrc-recall>` block');
+  });
+
+  it("states what --tool matches and what the regex-syntax refusal spares, and names the three role skills (fix round 1, F15-F17)", () => {
+    expect(readme).toContain("`--tool <name>` matches the model's call (the `tool_use` row) and its input, never the tool's output");
+    expect(readme).toContain('drops every sidecar hit');
+    expect(readme).toContain('only OUTSIDE double quotes: a quoted phrase holding such characters is searched as an FTS phrase');
+    expect(readme).toContain('None of the three role skills (`ccrc-coordinator`, `ccrc-worker` and `ccrc-reviewer`; not `ccrc-history`)');
+    expect(readme, 'the history skill is in the role skills\' install order').not.toContain('then reviewer, then history');
+    expect(readme).toContain('has no place in that order (below)');
   });
 
   it('says --json output is still redacted, and names both recovering exemptions', () => {

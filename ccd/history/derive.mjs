@@ -1124,7 +1124,9 @@ export function redactNodeFields(db, ictx, nodeIds) {
  *  the leaf parse-failed, counts parser_crash once and answers 'failed', which counts as a change here). A throw that
  *  escapes refreshLeaf (its reads before leafFields; busy rethrows) is counted parser_crash, as deriveLeaves counts a
  *  derive throw, and skipped; the caller's redactNodeFields then
- *  rewrites its stored fields fail-closed. That includes a non-busy SQLite fault raised anywhere in refreshLeaf's try
+ *  rewrites its stored fields fail-closed (a caller that runs under a budget, rederiveGistsFor, does so only while
+ *  its slice and budget last: a path cut short in its leaf loop rewrites none of the attempted leaves' fields, and the
+ *  belt it reopens does, D-5025). That includes a non-busy SQLite fault raised anywhere in refreshLeaf's try
  *  (leafFields included), which refreshLeaf rethrows (D-4602, H-59): here it is caught, counted as parser_crash and the
  *  leaf rewritten fail-closed, so the store-fault-is-not-a-parser-bug distinction holds only for `reparse --apply`
  *  (D-4602, H-194). Nothing retries it on a later pass (the coordinator's ruling RB5): the
@@ -1184,9 +1186,11 @@ const REDERIVE_LEAF_MAX = 64;
  *    runs), as B1's reindexForValues searches blobs_fts (B1's D-4311): redaction matches by unit, so a node holding
  *    only one segment of a multi-run value is found too.
  *  - A leaf whose summary is still stored is re-derived (reparseFailClosed: same id, parents re-rolled, a throw
- *    counted and skipped), up to REDERIVE_LEAF_MAX leaves per call. Every node found, re-derived or not, is then
- *    rewritten through redactNodeFields, and the ancestors of every node that was only rewritten (a pruned or
- *    over-the-cap leaf, a condensed node) are re-rolled from redacted children (D-4610). The rewrite runs in batches of
+ *    counted and skipped), up to REDERIVE_LEAF_MAX leaves per call (reparseSome, with a stop). Every node found,
+ *    re-derived or not, is then rewritten through redactNodeFields, but only while the slice and budget last: a path cut
+ *    short in its leaf loop leaves the attempted leaves' fields to the reopened belt (D-5025). The ancestors of every
+ *    node that was only rewritten (a pruned or over-the-cap leaf, a condensed node) are re-rolled from redacted
+ *    children (D-4610). The rewrite runs in batches of
  *    BELT_NODE_BATCH nodes, one transaction each, the ancestors of a batch's in-place nodes re-rolled right after it.
  *  - It is the same-tick fast path over nodes, as B1's phrase search is over blobs (B1's
  *    D-4344): it moves no mark, and it runs only while `slice` and `budget` last: they are asked on entry, before each
@@ -1234,8 +1238,11 @@ export function rederiveGistsFor(db, ictx, values, budget, slice) {
   const leaves = all.slice(0, max);
   for (const id of all.slice(max)) rewrite.add(id);
   // D-5025 (history-fast-path-stops-at-slice-and-budget): the slice and the run budget are asked before each leaf it
-  // re-derives and before each batch of at most BELT_NODE_BATCH nodes it rewrites, so the path ends inside them whatever
-  // the matched set holds. What it did not reach is owed to the belt (below).
+  // re-derives and before each batch of at most BELT_NODE_BATCH nodes it rewrites, so the re-derivation and the rewrite end
+  // inside them whatever the matched set holds. The match phase above (one nodes_fts MATCH per value unit and one node
+  // lookup per hit, after the entry check and before the first of these checks) is the one unchecked prefix: its cost
+  // grows with the matched set, about 8 microseconds per matched node, measured. What the path did not reach is owed to
+  // the belt (below).
   const more = () => parentsBudgetLeft(slice) && parentsBudgetLeft(budget);
   let cut = false;
   const reached = leaves.length > 0 ? reparseSome(db, ictx, leaves, more) : { changed: 0, attempted: [] };

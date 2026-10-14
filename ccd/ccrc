@@ -23792,9 +23792,12 @@ _usage_history_paragraph() {
     '            Linux): ccd-history-sweep.timer copies the text of every' \
     '            session into ~/.ccrc/history every 2 minutes, verbatim, secrets' \
     '            a session printed included; touch ~/.ccrc/history-off to pause' \
-    '            it. status [--json] reports the store and its health. Its' \
-    '            writing passes (ccd-history-sweep --op import|migrate) belong' \
-    '            to the operator and refuse inside a session'
+    '            it. status [--json] reports the store and its health. A' \
+    '            session recalls with grep|describe|expand|tree. The operator' \
+    '            alone, from a terminal outside any session (each refuses' \
+    '            inside one): import|prune|reparse and doctor --backup|' \
+    '            --repair|--migrate|--adopt|--restore|--rebuild. See README,' \
+    '            "Session history: lossless recall"'
 }
 
 # `--purge --purge-history` with a LINKED `db/` (history spec §9.5): remove,

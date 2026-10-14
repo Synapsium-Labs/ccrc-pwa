@@ -3160,10 +3160,10 @@ workspace and reports — it never rules. Neither carries a `references/` of
 its own — both point at the coordinator's — so each must land *beside* it,
 never instead of it, and never first. Skills resolve per `CLAUDE_CONFIG_DIR`,
 and a session's account drifts on swap — so `ccd/install-coordinator-skill.sh`,
-`ccd/install-worker-skill.sh`, `ccd/install-reviewer-skill.sh` and
-`ccd/install-history-skill.sh` each install into *every* config dir the roster names, in that order — coordinator, then
-worker, then reviewer, then history — the same list
-`install-session-hooks.sh` uses. There is no hooks-able subset — that concept
+`ccd/install-worker-skill.sh` and `ccd/install-reviewer-skill.sh` each install into *every* config dir the roster names, in that
+order — coordinator, then worker, then reviewer — the same list
+`install-session-hooks.sh` uses; the fourth, `ccd/install-history-skill.sh`, installs into the same dirs and has no place in
+that order (below). There is no hooks-able subset — that concept
 existed only while the hooks installer and the first three skill installers
 carried a hand-typed `homes=(…)` array; all five of these now `source` the generated
 `~/.ccrc/accounts.sh` and `continue` past any config dir that is absent, which is what makes
@@ -3184,7 +3184,7 @@ rides the same two lanes into the same homes and teaches a session the `ccrc his
 ("Session history", below). It points into no other skill's tree, so it has no place in that order,
 and its MIT notice, `LICENSE.lossless-claw`, is copied into every home beside its `SKILL.md`.
 
-**None of the three is a subagent's to load, and the hook now enforces it (D-4934).** Each skill's
+**None of the three role skills (`ccrc-coordinator`, `ccrc-worker` and `ccrc-reviewer`; not `ccrc-history`) is a subagent's to load, and the hook now enforces it (D-4934).** Each skill's
 description says "Never use it inside a subagent": a session started by another session's Agent tool or a
 workflow `agent()` call returns its report to its parent, and loading one of these makes it act as the
 session instead (ack mail, take claims, send wave-done or review-done, open or dispatch runs, all under
@@ -5259,7 +5259,12 @@ swaps. Sessions call them by absolute path, because `ccrc` is not on a fleet ses
 - `"$HOME/.local/bin/ccrc" history grep <1-3 terms>` searches the text, terms ANDed; `'abc1234*'`
   (single-quoted, so the shell cannot glob it) finds a SHA by its prefix, `--regex` takes a regular
   expression (refused when it could backtrack without bound, stopped after five seconds), and
-  `--include-recall` also searches earlier `ccrc history` output, which a default search skips;
+  `--include-recall` also searches earlier `ccrc history` output, which a default search skips.
+  Regex syntax (`|`, `.*`, `[...]`, `\d`, an anchor) in a plain query is refused with a `hint:` line (exit 2),
+  and only OUTSIDE double quotes: a quoted phrase holding such characters is searched as an FTS phrase.
+  `--tool <name>` matches the model's call (the `tool_use` row) and its input, never the tool's output, and
+  with `--tool` or `--role` grep drops every sidecar hit, so `grep <error text> --tool Bash` cannot find a Bash
+  output;
 - `describe <node id, prefix or pasted line>` shows a node's gist, topics, refs and files, and one
   line per child or source with its size; a pasted line goes in single quotes, each `'` in it
   written `'\''`;

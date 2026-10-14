@@ -80,13 +80,18 @@ for redaction, not lost: the store still holds them.
 - Find a SHA or any identifier by its prefix with a trailing star, outside a phrase's double
   quotes and inside the shell's single quotes: `'abc1234*'`.
 - Plain search is full text, not a regex. A query holding `|`, `.*`, `[...]`, `\d` or an anchor
-  is refused with a `hint:` line, and nothing is searched. For a regular expression use
+  outside double quotes is refused with a `hint:` line, and nothing is searched; a quoted phrase
+  holding such characters (`'"arr[0]"'`) is searched as an FTS phrase, not refused. For a regular expression use
   `--regex '<pattern>'`: a pattern that could backtrack without bound is refused, and one that
   runs past five seconds is stopped. Both are exit 2, never "not found".
 - Narrow with `--role user` or `--role assistant`, `--tool <name>`, `--since <2d or a date>`,
   `--before <2d or a date>` and `--node <id>`; order with `--sort recency` (the default),
   `--sort relevance` (best match first, at any age) or `--sort hybrid` (best match, discounted
   by age). `--limit` is at most 100.
+- `--tool <name>` matches the model's call (the `tool_use` row) and its input, never the tool's
+  output. Either `--tool` or `--role` makes grep drop every sidecar hit (a tool output saved to
+  its own file). So `grep <error text> --tool Bash` cannot find a Bash output: search the text
+  without `--tool`.
 - Earlier `ccrc history` output stored in this session is skipped; add `--include-recall` to
   search it as well.
 - Recalled text is printed XML-escaped inside `<ccrc-recall>` tags, so `2>&1` reads

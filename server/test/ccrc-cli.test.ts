@@ -242,6 +242,11 @@ describe('ccrc: dispatch and usage', () => {
     expect(r.stdout).toMatch(/^ {2}restamp {3}re-stamp one file ccrc generated/m);
     expect(r.stdout).toMatch(/^ {2}history {3}the session-history store on this box/m);
     expect(r.stdout).toContain('~/.ccrc/history-off');
+    // …and B2's read verbs and the operator's own door (fix round 1, F18).
+    expect(r.stdout).toContain('grep|describe|expand|tree');
+    expect(r.stdout).toContain('import|prune|reparse');
+    expect(r.stdout).toContain('--repair|--migrate|--adopt|--restore|--rebuild');
+    expect(r.stdout).toContain('README,');
     expect(r.stdout.indexOf('  history   ')).toBeLessThan(r.stdout.indexOf('-h, --help'));
     expect(r.stdout).toMatch(/^ {2}watchdog {2}\(server\/both, Linux; run by ccrc-update-watchdog\.timer/m);
     // …and its `ip` arm (stage 5, S10) is discoverable from the same
