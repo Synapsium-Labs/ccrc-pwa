@@ -1545,6 +1545,22 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
         #395 moved `ccd/ccd` again, so its plan's re-measure now covers that too.
       - STATUS: fleet and server v0.0.181, newest v0.0.182, backups fleet 176M/server 700M, disk free fleet 217G/work
         volume 199G/server 32G, no anomalies at 10:42.
+    - **2026-10-14 11:42 UTC: v0.0.182 auto-converged unattended; the fleet box's run exited 3 on a history FAIL.** No
+      action was taken.
+      - The fleet box ran 10:56:11 to 10:58:32, about 30 minutes after the server's 10:25 restart, so it was most likely
+        the server's poll. The server followed at 10:58:56 to 10:59:22. Both reports read `phase: done` and
+        `from: pwa` (defect A).
+      - The fleet box's report says its trailing doctor exited 1. Its one FAIL, at 10:58:03, was `history: tick-stale`:
+        the history sweep's last tick was 12 minutes old, against a 10-minute bound. The run exited 3, the box stayed on
+        v0.0.182 (D-3114), and the server still moved. The mechanism behaved as designed. The FAIL is the history
+        programme's known tick-stale flap, which that programme has queued as its next wave's first task. It had
+        cleared by 11:42.
+      - Both boxes read `box-token` PASS. Server doctor: 26 passed, 0 warned, 0 failed. Fleet doctor: 33 passed, 6
+        warned, 0 failed.
+      - Wave 15 (run 300) is still held, by 1298 (run 354, now `awaiting-review`) on `ccd/ccrc` and 1302 (run 360) on
+        `ccd/ccd`.
+      - STATUS: fleet and server v0.0.182, newest v0.0.182, backups fleet 177M/server 702M, disk free fleet 220G/work
+        volume 194G/server 32G, no anomalies at 11:42.
 
 - **2026-09-30 12:22 UTC — wave 8 opened (run 182) for the live audit's residue, and dispatched.**
   - **Planning:** two Opus scoping agents measured each defect at `a742eb6a`, and an Opus writer assembled the
