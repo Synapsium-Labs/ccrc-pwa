@@ -129,7 +129,7 @@ describe('detachUrls: a copy with every URL moved into the map (spec 4.11; refin
 
   it('moves the URL properties html-url-attributes lacks too (srcSet, xLinkHref, longDesc, ...): the move fails closed', () => {
     const extra = ['srcSet', 'imageSrcSet', 'xLinkHref', 'xLinkArcRole', 'xmlBase', 'longDesc', 'lowSrc', 'background',
-      'classId', 'codeBase', 'archive', 'useMap', 'profile', 'srcDoc'];
+      'classId', 'codeBase', 'archive', 'useMap', 'profile'];
     const img = el('img', { alt: 'x', srcSet: 'a.png 1x, /api/example/b.png 2x' });
     const use = el('use', { xLinkHref: '/api/example/sprite.svg#a', id: 'u' });
     const others = extra.map((k) => el('div', { [k]: `u-${k}`, title: 't' }));

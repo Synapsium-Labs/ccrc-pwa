@@ -34,14 +34,14 @@ export interface Detached {
 
 /** Every property name `html-url-attributes` (3.0.1) lists, and the URL-bearing names in hast's property form it
  *  lacks: `srcSet` and `imageSrcSet` (a list of URLs), `xLinkHref`, `xLinkArcRole` and `xmlBase` (SVG and XML), the
- *  legacy `longDesc`, `lowSrc`, `background`, `classId`, `codeBase`, `archive`, `useMap` and `profile`, and `srcDoc`
- *  (a whole document). So `URL_KEYS` is a superset of `html-url-attributes`. Moved off EVERY element whatever its
- *  tag: the package's tag lists say where a browser reads the key as a URL, and a key on another tag is moved too,
- *  so nothing depends on that list being right (fail closed). */
+ *  legacy `longDesc`, `lowSrc`, `background`, `classId`, `codeBase`, `archive`, `useMap` and `profile`. So
+ *  `URL_KEYS` is a superset of `html-url-attributes`. Moved off EVERY element whatever its tag: the package's tag
+ *  lists say where a browser reads the key as a URL, and a key on another tag is moved too, so nothing depends on
+ *  that list being right (fail closed). */
 const URL_KEYS: readonly string[] = [
   ...Object.keys(urlAttributes),
   'srcSet', 'imageSrcSet', 'xLinkHref', 'xLinkArcRole', 'xmlBase', 'longDesc', 'lowSrc', 'background', 'classId',
-  'codeBase', 'archive', 'useMap', 'profile', 'srcDoc',
+  'codeBase', 'archive', 'useMap', 'profile',
 ];
 
 /** A hast property value as URL text: a string as is, a number in decimal, a list space-joined (as hast-util-to-jsx-
