@@ -693,7 +693,8 @@ describe('T13 review 4-1: the relation sentence speaks of local against origin, 
       counterpart: { ref: 'refs/heads/ws/a', commit: COMMIT_B, ahead: 0, behind: null, count: 'timeout' },
     });
     head('/docs/demo?ref=ws/a', tree);
-    expect(q('.docs-truth-relation').textContent).not.toMatch(/\d/);
+    expect(q('.docs-truth-relation').textContent).toBe('local is ahead of origin');
+    expect(q('.docs-truth-relation').textContent).not.toMatch(/[\d?]/);
   });
 });
 
@@ -713,5 +714,39 @@ describe('Review 439 F6: the diverged sentence names the side that is served', (
     head('/docs/demo?ref=refs/remotes/origin/ws/a', diverged('origin'));
     expect(q('.docs-truth-relation').textContent).toBe("local and origin have diverged (3 vs 2), showing origin's");
     expect(q('.docs-truth-relation').getAttribute('data-tone')).toBe('warn');
+  });
+});
+
+describe('Review 439 F7: a relation whose counts are not measured names no count and shows no ?', () => {
+  type Relation = 'local-ahead' | 'local-behind' | 'diverged';
+  const treeFor = (relation: Relation, side: 'local' | 'origin', ahead: number | null, behind: number | null,
+    count: 'timeout' | 'shallow' | 'measured'): DocsTreeOk => withRef({
+    requested: 'ws/a', served: side === 'local' ? 'refs/heads/ws/a' : 'refs/remotes/origin/ws/a', name: 'ws/a', side,
+    via: 'qualified', relation,
+    counterpart: { ref: side === 'local' ? 'refs/remotes/origin/ws/a' : 'refs/heads/ws/a', commit: COMMIT_B, ahead, behind, count },
+  });
+
+  it.each([
+    ['local-ahead', 'local', 'local is ahead of origin'],
+    ['local-ahead', 'origin', 'local is ahead of origin'],
+    ['local-behind', 'local', 'origin is ahead of local'],
+    ['local-behind', 'origin', 'origin is ahead of local'],
+    ['diverged', 'local', 'local and origin have diverged, showing local'],
+    ['diverged', 'origin', "local and origin have diverged, showing origin's"],
+  ] as const)('%s with %s served and both counts null (timeout) reads %j', (relation, side, text) => {
+    head('/docs/demo?ref=ws/a', treeFor(relation, side, null, null, 'timeout'));
+    expect(q('.docs-truth-relation').textContent).toBe(text);
+    expect(q('.docs-truth-relation').textContent).not.toMatch(/[\d?{}]/);
+  });
+
+  it.each([['local'], ['origin']] as const)('diverged with %s served and only one count measured is count-free too', (side) => {
+    head('/docs/demo?ref=ws/a', treeFor('diverged', side, 4, null, 'shallow'));
+    expect(q('.docs-truth-relation').textContent).not.toMatch(/[\d?{}]/);
+    expect(q('.docs-truth-relation').textContent).toMatch(/^local and origin have diverged, showing /);
+  });
+
+  it('measured counts keep the counted sentences byte for byte', () => {
+    head('/docs/demo?ref=ws/a', treeFor('local-ahead', 'local', 4, 0, 'measured'));
+    expect(q('.docs-truth-relation').textContent).toBe('local is 4 ahead of origin');
   });
 });

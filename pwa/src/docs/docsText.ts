@@ -166,9 +166,28 @@ export const RELATION_SENTENCE: Record<DocsTreeOk['ref']['relation'], string> = 
  *  the side the page is showing, in the words `VIA_SENTENCE.origin` uses. */
 export const RELATION_DIVERGED_ORIGIN_SENTENCE = "local and origin have diverged ({ahead} vs {behind}), showing origin's";
 
-/** The relation sentence for the side that is served: only `diverged` names the side it shows. */
-export function relationSentence(relation: DocsTreeOk['ref']['relation'], side: DocsTreeOk['ref']['side']): string {
-  return relation === 'diverged' && side === 'origin' ? RELATION_DIVERGED_ORIGIN_SENTENCE : RELATION_SENTENCE[relation];
+/** The relation sentences without a count, for a counted relation whose counts ccd did not measure (`count` is
+ *  `timeout` or `shallow`, with null `ahead`/`behind`, while the relation itself stays measured): the same words, with
+ *  the count left out, so no `?` reaches the page. `diverged` keeps naming the side it shows. */
+export const RELATION_COUNTLESS_SENTENCE: Partial<Record<DocsTreeOk['ref']['relation'], string>> = {
+  'local-ahead': 'local is ahead of origin',
+  'local-behind': 'origin is ahead of local',
+  'diverged': 'local and origin have diverged, showing local',
+};
+export const RELATION_DIVERGED_ORIGIN_COUNTLESS_SENTENCE = "local and origin have diverged, showing origin's";
+
+/** The relation sentence for the side that is served: only `diverged` names the side it shows. `counts` holds the
+ *  `{ahead}` and `{behind}` the truth line measured; a sentence whose every `{name}` is held is the counted one above
+ *  (byte for byte), and otherwise the count-free one. */
+export function relationSentence(
+  relation: DocsTreeOk['ref']['relation'], side: DocsTreeOk['ref']['side'], counts: Readonly<Record<string, number>>,
+): string {
+  const counted = relation === 'diverged' && side === 'origin' ? RELATION_DIVERGED_ORIGIN_SENTENCE : RELATION_SENTENCE[relation];
+  const held = [...counted.matchAll(/\{([A-Za-z]+)\}/g)].every((m) => Object.hasOwn(counts, m[1] ?? ''));
+  if (held) return counted;
+  return relation === 'diverged' && side === 'origin'
+    ? RELATION_DIVERGED_ORIGIN_COUNTLESS_SENTENCE
+    : RELATION_COUNTLESS_SENTENCE[relation] ?? counted;
 }
 
 /** The one badge text, for rows and leaf headers alike (spec 4.6: `draft · modified`, `draft · new`). */

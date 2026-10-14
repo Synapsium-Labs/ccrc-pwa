@@ -327,7 +327,7 @@ function TruthLine(p: {
         <>
           {SEP}
           <span className="docs-truth-relation" data-tone={ref.relation === 'diverged' ? 'warn' : 'info'}>
-            {fillSentence(relationSentence(ref.relation, ref.side), counts)}
+            {fillSentence(relationSentence(ref.relation, ref.side, counts), counts)}
           </span>
         </>
       )}
