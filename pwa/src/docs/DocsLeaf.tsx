@@ -5,7 +5,7 @@
 // when a registered grammar matches its extension; `other` is "No preview" and Download. A listed size over its
 // class cap is the `too-large` sentence, and nothing was requested (the visit's `too-large` slot). The header and the
 // banners are `DocsScreen`'s (`DocsHead`, `DocsBanners`), above this body, so a file failure replaces only the body.
-import { useContext, useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from 'react';
+import { useContext, useEffect, useMemo, useRef, useState, type MouseEvent, type ReactNode, type RefObject } from 'react';
 import type { Element as HastElement } from 'hast';
 import hljs from 'highlight.js/lib/core';
 import { contentClass, docsApi, entryView, type DocPin, type DocsPageLocation, type DocsShowOk, type DocsTreeOk } from '../../../shared/docs';
@@ -145,7 +145,9 @@ function HtmlStandIn(p: { readonly show: DocsShowOk; readonly download: ReactNod
 }
 
 /** A `raster` leaf (spec 4.4: "one `DocImage`"): the leaf's own file as the only image of a one-image page, so the
- *  pin rule, the cap, the queue, the raster checks and the object URL are all `DocImage`'s. */
+ *  pin rule, the cap, the queue, the raster checks and the object URL are all `DocImage`'s. The image is the page
+ *  itself, so a tap on it opens nothing (its target is this very leaf, and `DocImage` would push a duplicate entry
+ *  and drop `view=committed`). */
 function RasterBody(p: { readonly link: LinkBase; readonly name: string }): ReactNode {
   const node = useMemo<HastElement>(() => ({ type: 'element', tagName: 'img', properties: {}, children: [] }), []);
   const ctx = useMemo<DocLinkContextValue>(() => {
@@ -153,7 +155,15 @@ function RasterBody(p: { readonly link: LinkBase; readonly name: string }): Reac
     urls.set(node, { attrs: { src: './' + encodeURIComponent(p.name) }, imageIndex: 0, highlight: null });
     return { ...p.link, urls };
   }, [p.link, p.name, node]);
-  return <div className="docs-raster"><DocLinkContext value={ctx}><DocImage node={node} alt={p.name} /></DocLinkContext></div>;
+  // Capture phase, so the tap ends before `DocImage`'s own handler; Load image and the failure chips are untouched.
+  const ownTap = (e: MouseEvent<HTMLDivElement>): void => {
+    if (e.target instanceof Element && e.target.closest('button.doc-img-link') !== null) e.stopPropagation();
+  };
+  return (
+    <div className="docs-raster" onClickCapture={ownTap}>
+      <DocLinkContext value={ctx}><DocImage node={node} alt={p.name} /></DocLinkContext>
+    </div>
+  );
 }
 
 /** What a Markdown body is keyed by: a value that changes only when the bytes can. A draft is keyed by its pin (every

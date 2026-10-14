@@ -29,6 +29,21 @@ import { COMMIT_A, COMMIT_B, SERVED, draftOf, entry, failedAnswer, fileResponse,
 
 const FP_2 = 'e'.repeat(64);
 
+// Counts the sign-in subscriptions that are live (made and not yet unsubscribed), passing every call through.
+const subs = vi.hoisted(() => ({ live: 0 }));
+vi.mock('../src/lib/auth', async (orig) => {
+  const m = await orig<typeof import('../src/lib/auth')>();
+  return {
+    ...m,
+    onAuthRegained: (fn: () => void) => {
+      subs.live += 1;
+      const off = m.onAuthRegained(fn);
+      let done = false;
+      return () => { if (!done) { done = true; subs.live -= 1; } off(); };
+    },
+  };
+});
+
 beforeEach(() => {
   vi.mocked(URL.createObjectURL).mockClear();
   vi.mocked(URL.revokeObjectURL).mockClear();
@@ -883,12 +898,14 @@ describe('T13 review 3-4: an image that answered 401 loads again once sign-in re
     expect(assets.raster).toHaveBeenCalledTimes(1);
   });
 
-  it('an unmounted image no longer listens: sign-in after unmount loads nothing', async () => {
+  it('an unmounted image no longer listens: its subscription is gone, and sign-in after unmount loads nothing', async () => {
     const assets = fakeAssets();
     assets.raster.mockResolvedValueOnce({ s: 'auth' });
     const { container, unmount } = renderDoc('![i](i.png)', { tree: withImage(), assets });
     await waitFor(() => expect(container.querySelector('.doc-img-failed')).not.toBeNull());
+    expect(subs.live).toBeGreaterThan(0);
     unmount();
+    expect(subs.live).toBe(0);
     raiseAuthLost('expired');
     act(() => clearAuthLost());
     await new Promise((r) => setTimeout(r, 30));

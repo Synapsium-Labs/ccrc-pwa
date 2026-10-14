@@ -821,3 +821,31 @@ describe('T13 review 3-3: a re-list that moves the pin but not the blob keeps th
     expect(f.file).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('T13 review 2-2: the one image of a raster leaf is not a link to the leaf it is on', () => {
+  it('tapping it pushes no history entry and leaves the URL as it was', async () => {
+    const f = byPath(treeOk({ entries: [entry('specs', 'x.png')] }), {});
+    const { container } = open('/docs/demo/specs/x.png', f);
+    await waitFor(() => expect(container.querySelectorAll('.docs-leaf img')).toHaveLength(1));
+    const url = here();
+    const length = history.length;
+    fireEvent.click(container.querySelector('.docs-leaf button.doc-img-link') as HTMLElement);
+    expect(history.length).toBe(length);
+    expect(here()).toBe(url);
+  });
+
+  it('on view=committed the tap keeps the view and reads no draft', async () => {
+    const f = byPath(treeOk({ entries: [entry('specs', 'x.png', { draft: draftOf('modified') })], drafts: holder() }), {});
+    const { container } = open('/docs/demo/specs/x.png?ref=main&view=committed', f);
+    await waitFor(() => expect(container.querySelectorAll('.docs-leaf img')).toHaveLength(1));
+    const url = here();
+    expect(url).toBe('/docs/demo/specs/x.png?ref=main&view=committed');
+    const length = history.length;
+    fireEvent.click(container.querySelector('.docs-leaf button.doc-img-link') as HTMLElement);
+    await act(async () => { await new Promise((r) => setTimeout(r, 20)); });
+    expect(history.length).toBe(length);
+    expect(here()).toBe(url);
+    const pins = f.raster.mock.calls.map((c) => (c[1] as DocPin).kind);
+    expect(pins).toEqual(['committed']);
+  });
+});
