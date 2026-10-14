@@ -10,6 +10,10 @@
 // no resize frame goes out and tmux never repaints it. The next keystroke's
 // echo lands rows away from the prompt.
 //
+// The history layer is here for the same reason: whether it follows the live
+// pane's type size is a fact about the drawer's real history terminal, which a
+// fake that records the call cannot show.
+//
 // jsdom has no layout, so the two measurements xterm takes are supplied here
 // and nothing else is: the char-measure element's size (xterm's own DOM
 // measure strategy — jsdom has no OffscreenCanvas, so xterm falls back to it)
@@ -17,7 +21,7 @@
 // is an inline width and height, which `getComputedStyle` reports and the fit
 // addon reads. Everything between those two numbers and the buffer is xterm.
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { act, cleanup, render } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, waitFor } from '@testing-library/react';
 import type { Terminal as XTerm } from '@xterm/xterm';
 
 const made = vi.hoisted(() => ({ terms: [] as unknown[] }));
@@ -39,6 +43,7 @@ const { TerminalDrawer } = await import('../src/session/TerminalDrawer');
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
   FakeSocket.instances.length = 0;
   made.terms.length = 0;
 });
@@ -80,6 +85,18 @@ const parsed = (term: XTerm): Promise<void> => new Promise((resolve) => term.wri
 
 const line = (term: XTerm, y: number): string =>
   term.buffer.active.getLine(y)?.translateToString(true) ?? '';
+
+/** Give a terminal's host a box, as a laid-out glass has. The fit addon reads
+ *  the host's computed width and height; the drawer reads `clientWidth` only to
+ *  tell an unlaid glass from a laid-out one. */
+const layOut = (term: XTerm, width: number, height: number): void => {
+  const host = term.element?.parentElement;
+  if (!host || !term.element) throw new Error('the terminal is not mounted');
+  term.element.style.padding = '0px';
+  host.style.width = `${width}px`;
+  host.style.height = `${height}px`;
+  Object.defineProperty(host, 'clientWidth', { value: width, configurable: true });
+};
 
 describe('the type fit, against the real terminal', () => {
   it('leaves the live screen and its cursor alone on a refit that lands on the same grid', async () => {
@@ -141,5 +158,52 @@ describe('the type fit, against the real terminal', () => {
     act(() => ws.onmessage?.({ data: 'Z' }));
     await parsed(term);
     expect(line(term, y).charAt(x), 'the echo landed somewhere other than the prompt').toBe('Z');
+  });
+
+  it('builds the history layer at the live size, and moves it with the live size', async () => {
+    // The two terminals sit one over the other in the same glass, and one key
+    // moves between them. A history at another size reads as the console
+    // having changed size, not the layer. This is the drawer's real history
+    // factory, so the follow is xterm's own type size and grid, not a call
+    // recorded on a fake.
+    measureLikeAMonospaceFace();
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(
+      JSON.stringify({ ok: true, text: 'a line\nb line\n', lines: 2000, scrollback: 40, alternate: false }),
+      { status: 200, headers: { 'content-type': 'application/json' } },
+    )));
+    const view = render(
+      <TerminalDrawer
+        id="lane-a:project-a" open onClose={() => {}}
+        makeSocket={(u) => new FakeSocket(u) as unknown as WebSocket}
+      />,
+    );
+    const live = made.terms.at(-1) as XTerm | undefined;
+    if (live === undefined) throw new Error('the drawer opened no real terminal');
+    layOut(live, 1700, 700);
+    const ws = FakeSocket.instances.at(-1);
+    if (!ws) throw new Error('the drawer opened no socket');
+    act(() => ws.onopen?.());
+    act(() => { window.dispatchEvent(new Event('resize')); });
+    const shrunk = live.options.fontSize;
+    expect(shrunk, 'the live pane did not shrink, so there is nothing to follow').toBeLessThan(14);
+
+    const back = view.baseElement.querySelector('[aria-label="Scroll back"]');
+    if (!back) throw new Error('the drawer rendered no history key');
+    fireEvent.click(back);
+    await waitFor(() => expect(made.terms.length, 'the history layer never opened').toBe(2));
+    const hist = made.terms.at(-1) as XTerm;
+    expect(hist.options.fontSize, 'the history was built at a size the live pane is not using')
+      .toBe(shrunk);
+
+    // The window widens while the reader is in the history. Both layers fill
+    // the same glass, so both hosts grow.
+    layOut(live, 3500, 700);
+    layOut(hist, 3500, 700);
+    act(() => { window.dispatchEvent(new Event('resize')); });
+
+    expect(live.options.fontSize, 'the live pane did not grow back').toBe(14);
+    expect(hist.options.fontSize, 'the history stayed at the old size').toBe(14);
+    expect({ cols: hist.cols, rows: hist.rows }, 'the history layer shows another grid than the live pane')
+      .toEqual({ cols: live.cols, rows: live.rows });
   });
 });

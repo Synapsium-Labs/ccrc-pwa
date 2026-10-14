@@ -12,10 +12,17 @@
 //   actually happens, is `console-window-fit-xterm.test.tsx`;
 // - the answer depends on the box alone, never on the size the glass happened
 //   to be at;
-// - the history layer is built at the live pane's size and follows it.
+// - the clip notice is read off the grid the terminal measures, never off the
+//   straight-line guess;
+// - the history layer is built at the live pane's size and follows it (the
+//   real-terminal half is in `console-window-fit-xterm.test.tsx`);
+// - a new terminal in the same drawer starts from the base size with no clip,
+//   until a fit has measured its glass.
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, waitFor, within } from '@testing-library/react';
-import { TerminalDrawer, type DrawerTerm, type HistoryTerm } from '../src/session/TerminalDrawer';
+import {
+  TerminalDrawer, type DrawerTerm, type HistoryTerm, type MakeHistoryTerm,
+} from '../src/session/TerminalDrawer';
 import { BASE_CONSOLE_FONT_PX, MIN_CONSOLE_FONT_PX } from '../src/session/consoleFit';
 import { PINNED_WINDOW_COLS } from '../../shared/api';
 
@@ -79,23 +86,29 @@ const fakeTermFactory = (box: number, quirk?: (px: number, cols: number) => numb
     }
     return { ...grid };
   };
-  const makeTerm = (_host: HTMLElement): DrawerTerm => ({
-    write: () => {},
-    onData: () => {},
-    onWheel: () => {},
-    fit: () => settle(at(font)),
-    propose: (px) => {
-      probes.push(px);
-      return at(px);
-    },
-    setFontSize: (px) => {
-      sizes.push(px);
-      font = px;
-      return settle(at(px));
-    },
-    focus: () => {},
-    dispose: () => {},
-  });
+  const makeTerm = (_host: HTMLElement): DrawerTerm => {
+    // A NEW TERMINAL IS BUILT AT THE BASE SIZE, as the drawer's own factory
+    // builds xterm, whatever size the last one on this glass settled at.
+    font = BASE_CONSOLE_FONT_PX;
+    grid = { cols: 80, rows: 24 };
+    return {
+      write: () => {},
+      onData: () => {},
+      onWheel: () => {},
+      fit: () => settle(at(font)),
+      propose: (px) => {
+        probes.push(px);
+        return at(px);
+      },
+      setFontSize: (px) => {
+        sizes.push(px);
+        font = px;
+        return settle(at(px));
+      },
+      focus: () => {},
+      dispose: () => {},
+    };
+  };
   return {
     makeTerm, sizes, probes, grids,
     font: () => font,
@@ -109,10 +122,19 @@ const resizeWindow = (): void => {
   act(() => { window.dispatchEvent(new Event('resize')); });
 };
 
-const mount = (t: ReturnType<typeof fakeTermFactory>, hostWidth = 1560) => {
-  const view = render(
-    <TerminalDrawer id={ID} open onClose={() => {}} makeSocket={makeSocket} makeTerm={t.makeTerm} />,
-  );
+const drawer = (
+  t: ReturnType<typeof fakeTermFactory>, open: boolean, makeHistoryTerm?: MakeHistoryTerm,
+) => (
+  <TerminalDrawer
+    id={ID} open={open} onClose={() => {}} makeSocket={makeSocket} makeTerm={t.makeTerm}
+    makeHistoryTerm={makeHistoryTerm}
+  />
+);
+
+const mount = (
+  t: ReturnType<typeof fakeTermFactory>, hostWidth = 1560, makeHistoryTerm?: MakeHistoryTerm,
+) => {
+  const view = render(drawer(t, true, makeHistoryTerm));
   const host = view.baseElement.querySelector('.term-screen > .term-host');
   if (!host) throw new Error('the drawer rendered no terminal host');
   // jsdom has no layout. The drawer reads the host's width only to tell a
@@ -216,6 +238,24 @@ describe('the glass meets the pinned window', () => {
     const b = mount(oneShort);
     expect(oneShort.font(), 'the fit kept a size that shows one column short').toBe(13.2);
     expect(clientGrid(b.ws).cols).toBeGreaterThanOrEqual(PINNED_WINDOW_COLS);
+  });
+
+  it('says the window is clipped when the line puts the floor in reach but the floor measures short', () => {
+    // THE NOTICE COMES FROM THE GRID, NOT THE LINE. 173 columns at 14px puts
+    // the straight line at 11.009px, just above the floor, so by the line the
+    // window fits. But xterm rounds its cell, and at 11px this glass shows 219
+    // columns, one short. The window does not fit at any size the console may
+    // use, so the console stays at the base size, as on `main`, and the header
+    // must say so. Reading the clip off the line would leave tmux panning a
+    // column with nothing on screen to say why.
+    const t = fakeTermFactory(2425, (px, cols) => (px === MIN_CONSOLE_FONT_PX ? cols - 1 : cols));
+    const { ws, view } = mount(t);
+
+    expect(t.probes, 'the floor was never measured').toContain(MIN_CONSOLE_FONT_PX);
+    expect(t.font(), 'a glass the floor cannot fit left the base size').toBe(BASE_CONSOLE_FONT_PX);
+    expect(clientGrid(ws).cols).toBe(173);
+    expect(notice(view), 'a window one column too wide for the floor was not reported clipped')
+      .not.toBeNull();
   });
 
   it('changes nothing on a refit that lands where it started: no grid move, no frame', () => {
@@ -410,5 +450,76 @@ describe('the glass meets the pinned window', () => {
 
     expect(t.sizes, 'an unmeasurable glass was re-typed').toEqual([]);
     expect(t.probes, 'an unmeasurable glass was measured').toEqual([]);
+  });
+});
+
+/** A history factory that records the size each layer was built at. */
+const historyFactory = () => {
+  const born: (number | undefined)[] = [];
+  const make: MakeHistoryTerm = (_host, _lines, _pane, fontSize) => {
+    born.push(fontSize);
+    return {
+      write: (_d: string, done?: () => void) => done?.(),
+      fit: () => ({ cols: 80, rows: 24 }),
+      rowHeight: () => 0,
+      scrollLines: () => {},
+      onBottom: () => {},
+      dispose: () => {},
+    };
+  };
+  return { born, make };
+};
+
+describe('a new terminal in the same drawer', () => {
+  // THE DRAWER OUTLIVES ITS TERMINAL. Closing the sheet disposes the terminal,
+  // and opening it again builds a new one at the base size, on a glass the
+  // sheet is still animating in. The opening fit cannot measure that glass, so
+  // it changes nothing, and the next fit that can is a frame or more away.
+  // Until then the drawer must describe the terminal it has, not the last one.
+  const reopen = (
+    view: ReturnType<typeof render>,
+    t: ReturnType<typeof fakeTermFactory>,
+    makeHistoryTerm?: MakeHistoryTerm,
+  ): HTMLElement => {
+    view.rerender(drawer(t, false, makeHistoryTerm));
+    view.rerender(drawer(t, true, makeHistoryTerm));
+    const host = view.baseElement.querySelector('.term-screen > .term-host');
+    if (!(host instanceof HTMLElement)) throw new Error('the reopened drawer rendered no terminal host');
+    const ws = FakeSocket.instances.at(-1);
+    if (!ws) throw new Error('the reopened drawer opened no socket');
+    act(() => ws.onopen?.());
+    return host;
+  };
+
+  it('does not show the last terminal\'s clip notice over a glass it has not measured', () => {
+    const t = fakeTermFactory(48 * 14 + 5);
+    const { view, host: first } = mount(t, 390);
+    expect(notice(view), 'the phone was not told why its lines begin off-screen').not.toBeNull();
+
+    const host = reopen(view, t);
+    expect(host, 'the sheet kept its old glass, so this is not a new terminal').not.toBe(first);
+    expect(host.clientWidth, 'the new glass has layout, so the opening fit measured it').toBe(0);
+    expect(notice(view), 'the new terminal inherited a clip nobody has measured').toBeNull();
+  });
+
+  it('builds a history at the size the new terminal renders at, not the size the last one shrank to', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(
+      JSON.stringify({ ok: true, text: 'a line\n', lines: 2000, scrollback: 40, alternate: false }),
+      { status: 200, headers: { 'content-type': 'application/json' } },
+    )));
+    const t = fakeTermFactory(2600);
+    const h = historyFactory();
+    const { view } = mount(t, 1560, h.make);
+    expect(t.font()).toBe(11.7);
+
+    const host = reopen(view, t, h.make);
+    expect(host.clientWidth, 'the new glass has layout, so the opening fit measured it').toBe(0);
+    expect(t.font(), 'the new terminal was not built at the base size').toBe(BASE_CONSOLE_FONT_PX);
+
+    const back = view.baseElement.querySelector('[aria-label="Scroll back"]');
+    if (!back) throw new Error('the drawer rendered no history key');
+    fireEvent.click(back);
+    await waitFor(() => expect(h.born.length, 'the history layer never opened').toBeGreaterThan(0));
+    expect(h.born.at(-1), 'the history was built at the last terminal\'s size').toBe(t.font());
   });
 });
