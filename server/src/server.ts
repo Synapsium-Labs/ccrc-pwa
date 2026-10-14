@@ -1180,8 +1180,10 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     // fallback read is reached by tests alone. An UNLISTABLE registry is not an empty fleet: `{sessions: []}` would
     // tell the phone every session had gone. So this serves what the process last knew (the watcher's last
     // broadcast, else the last-known-good snapshot, else nothing), marked `stale: true`, the disconnected arm's word.
-    // No `pools` key, for that arm's reason (nothing measured to serve), and no `downSince`: the link may be up; it
-    // is the listing that failed.
+    // No `pools` key, for that arm's reason (nothing measured to serve), and no `downSince`: the link may be up and the
+    // listing failed, or a disconnected remote box had no snapshot and fell through to here; either way nothing
+    // measured a down instant to carry. `fleet-health.test.ts`'s 'falls back to a live assemble (no stale flag) when
+    // disconnected but no cache exists yet' is that fall-through with a listable registry.
     // [registry-refused:stale]
     const reg = await readRegistryMeasured(deps.io, deps.cfg);
     if (!reg.listed) {

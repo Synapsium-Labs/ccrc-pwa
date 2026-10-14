@@ -18,7 +18,7 @@ import type { Runner } from '../src/exec.js';
 import { loadSnapshot, saveSnapshot, type FleetState } from '../src/fleetstate.js';
 import { localIO, type FleetIO } from '../src/io.js';
 import type { CcdResult } from '../src/lifecycle.js';
-import type { Deps } from '../src/server.js';
+import { buildServer, type Deps } from '../src/server.js';
 import { tasksDir } from '../src/tasks/read.js';
 import { FleetWatcher } from '../src/watch.js';
 import { MAIL_MAX_ATTEMPTS } from '../../shared/api.js';
@@ -301,4 +301,72 @@ describe('mail holds a delivery to a refused recipient (spec §2.3)', () => {
     expect(row()).toMatchObject({ state: 'queued', rejectCode: null, attempts: 0, lastGate: 'registry-unmeasurable' });
     expect(calls.filter((c) => c[0] === 'send-keys'), 'nothing is typed into any pane').toEqual([]);
   }, 30_000);
+});
+
+describe('one refused row wedges nothing fleet-wide (Review Focus 3)', () => {
+  const GOOD = 'demo-a';
+  /** A valid row and, beside it, a FULLY seeded refused one: a bare `.uuid` is dropped by `buildRecord` either way,
+   *  so it would prove nothing. `plant`'s workdir `/w/<id>` is outside any fixture projects root. */
+  const plantBoth = (home: string): void => { plant(home, GOOD); plant(home, BAD); };
+  /** The scripted `capture-pane` sequence a happy `/clear` needs (`dispatch-child-argv.test.ts`'s). */
+  const CLEAR_PANES = ['scrollback\n❯ \n', 'scrollback\n❯ /clear\n', 'scrollback\n❯ \n'];
+
+  it('the dispatch resume arm resumes the valid row', async () => {
+    // Equivalent if the exclusion is removed: the stored-row gate and the id-equality find never match a refused row.
+    const home = mkTmp('ccrc-refused-wedge-resume-');
+    plantBoth(home);
+    const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
+    const opened = coord.openRun({ program: 'demo-prog', title: 'Wave 2', project: PROJECT, wave: 2, waveOf: 3,
+      claimedBy: COORDINATOR });
+    if (!('id' in opened)) throw new Error(`fixture openRun refused: ${JSON.stringify(opened)}`);
+    coord.setSession(opened.id, GOOD);
+    const calls: string[][] = [];
+    let capIdx = 0;
+    const run: Runner = async (_cmd, args) => {
+      calls.push([...args]);
+      if (args[0] === 'capture-pane') {
+        const pane = CLEAR_PANES[Math.min(capIdx, CLEAR_PANES.length - 1)]!;
+        capIdx += 1;
+        return { code: 0, stdout: pane, stderr: '' };
+      }
+      return { code: 0, stdout: '', stderr: '' };
+    };
+    const base = testDeps(home, run);
+    const deps = { ...base, coord, configDir: (w: string) => configDirFor(base.cfg, w) } as DispatchRunDeps;
+
+    expect(await dispatchRun(deps, opened.id, 'go', undefined))
+      .toMatchObject({ ok: true, resumed: true, sessionId: GOOD });
+    expect(calls.filter((c) => c[0] === 'ensure')).toEqual([['ensure', GOOD]]);
+    expect(calls.filter((c) => c[0] === 'ws-hold').map((c) => c[2]), 'the hold claims the valid row').toEqual([GOOD]);
+  });
+
+  it('the listed GET /api/fleet lists the valid row, carries no --actor session, and has no stale key', async () => {
+    const home = mkTmp('ccrc-refused-wedge-fleet-');
+    plantBoth(home);
+    const app = await buildServer({ ...testDeps(home), stateCachePath: path.join(home, 'state-cache.json') });
+    try {
+      const res = await app.inject({ method: 'GET', url: '/api/fleet' });
+      expect(res.statusCode).toBe(200);
+      const body = res.json() as { sessions: { id: string }[] };
+      expect(body.sessions.map((s) => s.id)).toEqual([GOOD]);
+      expect('stale' in body, 'the registry listed, so this is not the stale arm').toBe(false);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("GET /api/projects answers registry:'listed', and no row carries --actor's workdir", async () => {
+    const home = mkTmp('ccrc-refused-wedge-projects-');
+    plantBoth(home);
+    const app = await buildServer(testDeps(home));
+    try {
+      const res = await app.inject({ method: 'GET', url: '/api/projects' });
+      expect(res.statusCode).toBe(200);
+      const body = res.json() as { registry?: string; projects: { workdir: string }[] };
+      expect(body.registry).toBe('listed');
+      expect(body.projects.map((p) => p.workdir), `the valid row joins; /w/${BAD} never does`).toEqual([`/w/${GOOD}`]);
+    } finally {
+      await app.close();
+    }
+  });
 });
