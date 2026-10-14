@@ -1,0 +1,50 @@
+ ❯ set up the merge checks for project-a
+
+ ● A few questions before I write the workflow.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ ←  ☐ Checks  ✔ Submit  →
+
+ Which checks should run before merge in project-a?
+
+   1. [ ] Lint
+          Style rules over src/.
+ ❯ 2. [ ] Unit tests
+          Runs test/app.test.ts.
+   3. [x] Type check
+          The strict compiler pass.
+   4. [ ] Format
+          Rewrites files in place.
+   5. [ ] Type something
+      Submit
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+   6. Chat about this
+
+ Enter to select · ↑/↓ to navigate · Esc to cancel
