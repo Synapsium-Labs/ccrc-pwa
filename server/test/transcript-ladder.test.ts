@@ -15,7 +15,7 @@ import { fileURLToPath } from 'node:url';
 import { localIO, type FleetIO } from '../src/io.js';
 import {
   collapseHits, continuesInto, MAX_CONTINUATION_HOPS, MEMO_MAX, pickNewest, resolveTranscript, RESOLVER_BACKOFF_MS,
-  RUNG_ORDER, rungRank, transcriptPath, TranscriptResolver, type GlobHit, type ResolveOpts,
+  resumedPastMarker, RUNG_ORDER, rungRank, transcriptPath, TranscriptResolver, type GlobHit, type ResolveOpts,
 } from '../src/transcript/resolve.js';
 import { CONTINUATION_TAIL_BYTES } from '../src/transcript/parse.js';
 import { mkTmp } from './tmpHelpers.js';
@@ -1048,6 +1048,50 @@ describe('TranscriptResolver and the fork', () => {
     expect(await r.resolve(chainOpts(b, A))).toMatchObject({ path: own, uuid: A });   // inside the back-off
     clock += 1;                                  // elapsed === backoffMs exactly
     expect(await r.resolve(chainOpts(b, A))).toMatchObject({ path: to, uuid: B });
+  });
+
+  it('a FOLLOWED answer is re-walked on the back-off — a predecessor resumed past its marker is answered again ' +
+     '(#189 re-review)', async () => {
+    // A followed answer stands on its predecessor's marker, and the memo
+    // revalidates it on the SUCCESSOR's stamp alone. A predecessor resumed
+    // past its marker (a finished turn after it: Claude Code's own reader
+    // then says "not continued") is a change to a file the memo never stats,
+    // so a frozen successor was served for the life of the socket.
+    const b = box();
+    const own = plantChain(b, A, turn('one') + marker(A, B));
+    const to = plantChain(b, B, turn('two'));
+    let clock = 1_000_000;
+    const r = new TranscriptResolver(localIO, { backoffMs: 30_000, now: () => clock });
+    expect(await r.resolve(chainOpts(b, A))).toMatchObject({ path: to, uuid: B, followedFrom: [A] });
+    appendFileSync(own, turn('resumed in the pre-fork session'), 'utf8');   // B is frozen
+    clock += 29_999;
+    expect(await r.resolve(chainOpts(b, A))).toMatchObject({ path: to, uuid: B });   // inside the back-off
+    clock += 1;
+    const again = await r.resolve(chainOpts(b, A));
+    expect(again).toMatchObject({ path: own, uuid: A });
+    expect(again).not.toHaveProperty('followedFrom');
+  });
+
+  it('resumedPastMarker reads the file\'s tail NOW: `resumed` only for a finished turn as the newest deciding ' +
+     'line — a window that decides nothing is `not-shown`, a failed stat or read `unmeasured` (D-4946)', async () => {
+    // The walk folds "no deciding line" into its `none` (the shared 8 KiB
+    // rule: nothing to follow). The stream's un-follow must not: Claude Code
+    // reads 64 KiB back, and 8 KiB of records that are not turns after a
+    // marker is a session it still calls continued.
+    const b = box();
+    const own = plantChain(b, A, turn('one') + marker(A, B));
+    expect(await resumedPastMarker(localIO, own, A)).toBe('not-shown');
+    appendFileSync(own, `${JSON.stringify({ type: 'system', content: 'x'.repeat(CONTINUATION_TAIL_BYTES + 512) })}\n`);
+    expect(await resumedPastMarker(localIO, own, A)).toBe('not-shown');
+    appendFileSync(own, turn('typed after the marker'));
+    expect(await resumedPastMarker(localIO, own, A)).toBe('resumed');
+    const empty = plantChain(b, C, '');
+    expect(await resumedPastMarker(localIO, empty, C)).toBe('not-shown');
+    const failRead: FleetIO = { ...localIO, readFileFromMeasured: async () => ({ ok: false, reason: 'unreadable' }) };
+    expect(await resumedPastMarker(failRead, own, A)).toBe('unmeasured');
+    const failStat: FleetIO = { ...localIO, statMeasured: async () => ({ ok: false, reason: 'unreadable' }) };
+    expect(await resumedPastMarker(failStat, own, A)).toBe('unmeasured');
+    expect(await resumedPastMarker(localIO, path.join(path.dirname(own), `${B}.jsonl`), B)).toBe('unmeasured');
   });
 
   it('still serves the memo when nothing changed', async () => {

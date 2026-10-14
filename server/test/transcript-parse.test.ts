@@ -619,7 +619,7 @@ describe('an absorbed mid-turn message is the operator speaking (D-4950)', () =>
     expect(parseTranscriptLine(queued({ prompt: raw }))).toEqual([{ kind: 'user', uuid: 'q-1', ts: TS_Q, text: raw }]);
   });
 });
-import { continuationOf, continuationInTail, tailRecordOf, CONTINUATION_TAIL_BYTES } from '../src/transcript/parse.js';
+import { continuationOf, continuationInTail, finishedTurnDecides, tailRecordOf, CONTINUATION_TAIL_BYTES } from '../src/transcript/parse.js';
 
 const OLD = 'a'.repeat(36);
 const NEW = 'b'.repeat(36);
@@ -713,5 +713,34 @@ describe('tailRecordOf / continuationInTail (D-4940)', () => {
     expect(continuationInTail(`${turn}\n${marker}\n${meta}\n`, OLD)).toBe(NEW);
     expect(continuationInTail(`${marker}\n${turn}\n${meta}\n`, OLD)).toBeNull();
     expect(continuationInTail('', OLD)).toBeNull();
+  });
+
+  it('finishedTurnDecides: only a FINISHED TURN as the newest deciding line says "resumed" — never a window ' +
+     'with no deciding line, never a marker the rule refuses (D-4946, #189 re-review)', () => {
+    // `continuationInTail` answers null for all three; only the first is what
+    // Claude Code's own reader stops at with "not continued". The stream
+    // un-follows a fork on this answer, not on that null.
+    const meta = line({ type: 'ai-title', aiTitle: 't' });
+    const turn = line({ type: 'user', message: { content: 'x' } });
+    const done = line({ type: 'assistant', message: { content: [], stop_reason: 'end_turn' } });
+    const streaming = line({ type: 'assistant', message: { content: [], stop_reason: null } });
+    const foreign = line({ type: 'continued-in', sessionId: 'c'.repeat(36), continuedInSessionId: NEW });
+    const toSelf = line({ type: 'continued-in', sessionId: OLD, continuedInSessionId: OLD });
+    const nested = line({ message: { content: [{ type: 'tool_use', input: { type: 'continued-in', continuedInSessionId: NEW } }], stop_reason: 'tool_use' }, type: 'assistant', sessionId: OLD });
+    // A finished turn after the marker, metadata or not after it.
+    expect(finishedTurnDecides(`${marker}\n${turn}\n${meta}\n`, OLD)).toBe(true);
+    expect(finishedTurnDecides(`${marker}\n${streaming}\n${done}\n${streaming}\n`, OLD)).toBe(true);
+    // F1: an assistant record carrying a marker-shaped tool input is a turn.
+    expect(finishedTurnDecides(`${marker}\n${nested}\n`, OLD)).toBe(true);
+    // The marker itself is newest: continued.
+    expect(finishedTurnDecides(`${turn}\n${marker}\n${meta}\n`, OLD)).toBe(false);
+    // A marker the rule refuses decides "no successor" — but it is no turn.
+    expect(finishedTurnDecides(`${turn}\n${foreign}\n`, OLD)).toBe(false);
+    expect(finishedTurnDecides(`${turn}\n${toSelf}\n`, OLD)).toBe(false);
+    // Nothing decides: metadata only, a cut line, a turn still streaming, empty.
+    expect(finishedTurnDecides(`${meta}\n${meta}\n`, OLD)).toBe(false);
+    expect(finishedTurnDecides(`${turn.slice(5)}\n${meta}\n`, OLD)).toBe(false);
+    expect(finishedTurnDecides(`${streaming}\n`, OLD)).toBe(false);
+    expect(finishedTurnDecides('', OLD)).toBe(false);
   });
 });
