@@ -178,36 +178,101 @@ export function codeLanguage(className: string): string {
   return (/language-([\w-]+)/.exec(className)?.[1] ?? '').toLowerCase();
 }
 
-/** Which of the three grammars highlight.js is quadratic in (D-4928) `lang` resolves to, compared by identity with
- *  what `hljs.getLanguage` answers for the grammar's own name, so every alias highlight.js knows follows it and no
- *  list of aliases is kept here. */
-function scanGrammar(lang: string): 'js' | 'rust' | null {
-  if (!lang) return null;
-  const def = hljs.getLanguage(lang);
-  if (def === undefined) return null;
-  if (def === hljs.getLanguage('typescript') || def === hljs.getLanguage('javascript')) return 'js';
-  if (def === hljs.getLanguage('rust')) return 'rust';
-  return null;
+/** The registered grammars `lang` embeds through highlight.js `subLanguage`, by registered name, one table for the
+ *  module. A grammar's definition is what `hljs.getLanguage` answers (the object `registerLanguage` stored, whose modes
+ *  highlight.js 11.11.1 compiles into CLONES on first use, so the original `contains`, `variants` and `starts` stay
+ *  readable whether or not a block has been highlighted yet; the walk keeps a `seen` set all the same, because `'self'`
+ *  and compiled modes make the graph cyclic). Never follows `parent`. A name nothing registers (yaml's `ruby`, xml's
+ *  `handlebars`) reaches nothing. */
+function embeddedGrammars(def: object, nameOf: ReadonlyMap<object, string>): ReadonlySet<string> {
+  const found = new Set<string>();
+  const seen = new Set<object>();
+  const stack: object[] = [def];
+  while (stack.length > 0) {
+    const mode = stack.pop()!;
+    if (seen.has(mode)) continue;
+    seen.add(mode);
+    const m = mode as { subLanguage?: unknown; contains?: unknown; variants?: unknown; starts?: unknown };
+    const subs = typeof m.subLanguage === 'string' ? [m.subLanguage] : Array.isArray(m.subLanguage) ? m.subLanguage : [];
+    for (const sub of subs) {
+      const target = typeof sub === 'string' ? hljs.getLanguage(sub) : undefined;
+      const name = target === undefined ? undefined : nameOf.get(target);
+      if (name !== undefined) found.add(name);
+    }
+    for (const list of [m.contains, m.variants]) {
+      if (Array.isArray(list)) for (const child of list) if (typeof child === 'object' && child !== null) stack.push(child);
+    }
+    if (typeof m.starts === 'object' && m.starts !== null) stack.push(m.starts);
+  }
+  return found;
 }
 
-/** The longest block, in characters, `CodeBlock` highlights in `lang`: a smaller cap for `typescript`/`javascript`
- *  and `rust` (D-4928), `MD_HIGHLIGHT_BLOCK_MAX_CHARS` for every other grammar. */
+/** The grammars highlight.js is quadratic in (D-4928), and the cap each takes: typescript and javascript at
+ *  `MD_HIGHLIGHT_JS_BLOCK_MAX_CHARS`, rust at `MD_HIGHLIGHT_RUST_BLOCK_MAX_CHARS`, and every registered grammar whose
+ *  `subLanguage` chain reaches one of them (xml, which highlights `<script>` with javascript, and markdown, which embeds
+ *  xml, today) at the SMALLEST cap among those its chain reaches. Derived ONCE here, from the registered grammars, so a
+ *  grammar registered later that embeds a bounded one is bounded with no list to forget; `markdown-bounds.test.tsx`
+ *  derives the same set again, independently, and asserts it is equal. */
+export const HIGHLIGHT_BOUNDED_CAPS: ReadonlyMap<string, number> = ((): ReadonlyMap<string, number> => {
+  const names = hljs.listLanguages();
+  const nameOf = new Map<object, string>();
+  for (const n of names) {
+    const def = hljs.getLanguage(n);
+    if (def !== undefined) nameOf.set(def, n);
+  }
+  const base = new Map<string, number>([
+    ['typescript', MD_HIGHLIGHT_JS_BLOCK_MAX_CHARS], ['javascript', MD_HIGHLIGHT_JS_BLOCK_MAX_CHARS],
+    ['rust', MD_HIGHLIGHT_RUST_BLOCK_MAX_CHARS],
+  ]);
+  const embeds = new Map<string, ReadonlySet<string>>();
+  for (const n of names) embeds.set(n, embeddedGrammars(hljs.getLanguage(n)!, nameOf));
+  const caps = new Map<string, number>(base);
+  // Fixed point: a cap only ever falls, and there are finitely many grammars, so this ends.
+  for (let changed = true; changed;) {
+    changed = false;
+    for (const n of names) {
+      let cap = caps.get(n) ?? Infinity;
+      for (const sub of embeds.get(n) ?? []) cap = Math.min(cap, caps.get(sub) ?? Infinity);
+      if (cap !== Infinity && cap !== caps.get(n)) {
+        caps.set(n, cap);
+        changed = true;
+      }
+    }
+  }
+  return caps;
+})();
+
+/** `HIGHLIGHT_BOUNDED_CAPS` by definition object, so every alias highlight.js knows follows its grammar by identity and
+ *  no list of aliases is kept here. */
+const BOUNDED_BY_DEF: ReadonlyMap<object, number> = new Map(
+  [...HIGHLIGHT_BOUNDED_CAPS].map(([name, cap]) => [hljs.getLanguage(name)!, cap] as const),
+);
+
+/** The cap of a bounded grammar `lang` resolves to; `null` for any other (or none). */
+function boundedCap(lang: string): number | null {
+  if (!lang) return null;
+  const def = hljs.getLanguage(lang);
+  return def === undefined ? null : BOUNDED_BY_DEF.get(def) ?? null;
+}
+
+/** The longest block, in characters, `CodeBlock` highlights in `lang`: the cap of `HIGHLIGHT_BOUNDED_CAPS` for a
+ *  grammar in it (D-4928; typescript, javascript, rust, and xml and markdown, which embed them),
+ *  `MD_HIGHLIGHT_BLOCK_MAX_CHARS` for every other grammar. */
 export function highlightBlockCap(lang: string): number {
-  const g = scanGrammar(lang);
-  return g === 'js' ? MD_HIGHLIGHT_JS_BLOCK_MAX_CHARS : g === 'rust' ? MD_HIGHLIGHT_RUST_BLOCK_MAX_CHARS : MD_HIGHLIGHT_BLOCK_MAX_CHARS;
+  return boundedCap(lang) ?? MD_HIGHLIGHT_BLOCK_MAX_CHARS;
 }
 
 /** Whether a block in `lang` counts against a Docs page's budget for the grammars that grow with the square of a
- *  block's size (`DOCS_HIGHLIGHT_SCAN_PAGE_MAX_CHARS`, D-4928). */
+ *  block's size (`DOCS_HIGHLIGHT_SCAN_PAGE_MAX_CHARS`, D-4928): every grammar in `HIGHLIGHT_BOUNDED_CAPS`. */
 export function inScanPageBudget(lang: string): boolean {
-  return scanGrammar(lang) !== null;
+  return boundedCap(lang) !== null;
 }
 
 /** Fenced code: language label + copy bar over a syntax-highlighted well.
  *  The bar is a SIBLING above the scrolling <pre>, never an overlay.
  *  Highlighted only when the language is registered, `highlight` is not `false`, the block is at most
  *  `highlightBlockCap(lang)` characters (after the trailing-newline strip: `MD_HIGHLIGHT_BLOCK_MAX_CHARS`, or a smaller
- *  cap for `typescript`/`javascript` and for `rust`, D-4928), its longest run of word units
+ *  cap for the grammars of `HIGHLIGHT_BOUNDED_CAPS`, D-4928), its longest run of word units
  *  (`longestWordRun`) is at most `MD_HIGHLIGHT_MAX_WORD_CHARS` (W5 bound r10), its longest line is at most
  *  `MD_HIGHLIGHT_MAX_LINE_CHARS` (the line bound), and its longest blank run (`longestBlankRun`, whitespace that may
  *  span lines) is at most `MD_HIGHLIGHT_MAX_BLANK_CHARS` (the whitespace bound). A registered block over the size cap

@@ -16,7 +16,9 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, render } from '@testing-library/react';
 import hljs from 'highlight.js/lib/core';
 import type { Root as HastRoot } from 'hast';
-import { ChatMarkdown, CodeBlock, SHARED_COMPONENTS, longestBlankRun, longestWordRun } from '../src/lib/markdown';
+import {
+  ChatMarkdown, CodeBlock, HIGHLIGHT_BOUNDED_CAPS, SHARED_COMPONENTS, longestBlankRun, longestWordRun,
+} from '../src/lib/markdown';
 import { keystrokeParts, utf8ByteLength } from '../src/lib/markdownGuard';
 import {
   CHAT_SYNC_MAX_BYTES, DOCS_MAX_RENDER_ELEMENTS, MD_HIGHLIGHT_BLOCK_MAX_CHARS, MD_HIGHLIGHT_MAX_BLANK_CHARS,
@@ -159,9 +161,12 @@ describe('the line bound: no highlighting for a block holding a line longer than
   const MAX = MD_HIGHLIGHT_MAX_LINE_CHARS;
   /** `unit` repeated and cut to `n` characters. */
   const unitLine = (unit: string, n: number): string => unit.repeat(Math.ceil(n / unit.length)).slice(0, n);
-  /** 64 KiB (less the last partial line) of lines of `n` characters. */
-  const lines = (unit: string, n: number): string =>
-    Array.from({ length: Math.floor(MD_HIGHLIGHT_BLOCK_MAX_CHARS / (n + 1)) }, () => unitLine(unit, n)).join('\n');
+  /** The largest block `lang` highlights, in the test's own words: markdown embeds xml, which embeds javascript, so it
+   *  shares their 8 KiB cap (D-4928); yaml keeps 64 KiB. */
+  const capOf = (lang: string): number => (lang === 'markdown' ? 8192 : MD_HIGHLIGHT_BLOCK_MAX_CHARS);
+  /** The cap of `lang` (less the last partial line) of lines of `n` characters. */
+  const lines = (unit: string, n: number, lang: string): string =>
+    Array.from({ length: Math.floor(capOf(lang) / (n + 1)) }, () => unitLine(unit, n)).join('\n');
 
   it('declares 2048 characters', () => {
     expect(MD_HIGHLIGHT_MAX_LINE_CHARS).toBe(2048);
@@ -180,8 +185,8 @@ describe('the line bound: no highlighting for a block holding a line longer than
     expect(label(c)).toBe(`${name} · not highlighted (a ${MAX + 1}-character line)`);
     expect(c.querySelector('pre > code.hljs')?.textContent).toBe(one);
     cleanup();
-    const big = lines(unit, MAX + 1);
-    expect(big.length).toBeGreaterThan(MD_HIGHLIGHT_BLOCK_MAX_CHARS - 2 * (MAX + 1));
+    const big = lines(unit, MAX + 1, lang);
+    expect(big.length).toBeGreaterThan(capOf(lang) - 2 * (MAX + 1));
     expect(label(block(lang, big))).toBe(`${name} · not highlighted (a ${MAX + 1}-character line)`);
     expect(highlight).not.toHaveBeenCalled();
   });
@@ -191,7 +196,7 @@ describe('the line bound: no highlighting for a block holding a line longer than
     ['yaml', 'a a a ', 'YAML'],
   ])('a %s block of %j lines of exactly the bound is highlighted', (lang, unit, name) => {
     const highlight = spyHighlight();
-    const c = block(lang, lines(unit, MAX));
+    const c = block(lang, lines(unit, MAX, lang));
     expect(label(c)).toBe(name);
     expect(highlight).toHaveBeenCalledTimes(1);
   });
@@ -647,5 +652,126 @@ describe('D-4928: typescript, javascript and rust have their own, smaller block 
     expect(label(block('python', py))).toBe('Python');
     expect(label(block('json', '1,\n'.repeat(7000).slice(0, 20000)))).toBe('JSON');
     expect(highlight).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('D-4928 closure: a grammar that embeds a bounded grammar through `subLanguage` is bounded too', () => {
+  // highlight.js highlights a `<script>` body in `xml` with `javascript`, and `markdown` embeds `xml`, so 64 KiB of
+  // `<script>` then `<a>` lines costs the quadratic scan there too (xml 2.4 to 3.4 s, markdown 1.4 s). Literals below
+  // are the decided values (8 192 for xml and markdown), never the imported constants, so a mutated constant reds.
+  const shape = (unit: string, n: number, chars: number): string => {
+    const line = unit.repeat(Math.ceil(n / unit.length)).slice(0, n);
+    return Array.from({ length: Math.ceil(chars / (line.length + 1)) + 1 }, () => line).join('\n').slice(0, chars);
+  };
+  /** `'<script>\n'`, then `<a>` in lines of 1 800 characters, `chars` in all. */
+  const scripted = (chars: number): string => `<script>\n${shape('<a>', 1800, chars - 9)}`;
+  const OVER_64 = /\u00b7 not highlighted \(64 KiB\)$/;
+
+  // The walk below shares nothing with the module: it follows EVERY object-valued property of a grammar's definition
+  // (not just `contains`, `variants` and `starts`), whatever depth, and reads `subLanguage` as a string or an array.
+  const BASE: Readonly<Record<string, number>> = { typescript: 8192, javascript: 8192, rust: 4096 };
+  const subLanguagesOf = (root: object): Set<string> => {
+    const found = new Set<string>();
+    const seen = new Set<object>();
+    const todo: object[] = [root];
+    while (todo.length > 0) {
+      const node = todo.pop()!;
+      if (seen.has(node)) continue;
+      seen.add(node);
+      for (const [key, value] of Object.entries(node)) {
+        if (key === 'parent') continue;
+        if (key === 'subLanguage') {
+          for (const name of typeof value === 'string' ? [value] : Array.isArray(value) ? value : []) {
+            if (typeof name === 'string') found.add(name);
+          }
+        } else if (typeof value === 'object' && value !== null) {
+          todo.push(value);
+        }
+      }
+    }
+    return found;
+  };
+  const closure = (): Map<string, number> => {
+    const registered = hljs.listLanguages();
+    const canonical = (name: string): string | undefined => {
+      const def = hljs.getLanguage(name);
+      return def === undefined ? undefined : registered.find((r) => hljs.getLanguage(r) === def);
+    };
+    const direct = new Map<string, Set<string>>();
+    for (const g of registered) {
+      const targets = new Set<string>();
+      for (const sub of subLanguagesOf(hljs.getLanguage(g)!)) {
+        const c = canonical(sub);
+        if (c !== undefined) targets.add(c);
+      }
+      direct.set(g, targets);
+    }
+    const out = new Map<string, number>();
+    for (const g of registered) {
+      const reach = new Set<string>([g]);
+      for (const r of reach) for (const t of direct.get(r) ?? []) reach.add(t);
+      const caps = [...reach].map((r) => BASE[r]).filter((c): c is number => c !== undefined);
+      if (caps.length > 0) out.set(g, Math.min(...caps));
+    }
+    return out;
+  };
+
+  it('the module\'s bounded set is exactly the closure of the base set under the registered grammars\' subLanguage references', () => {
+    // Highlight once first: highlight.js compiles a grammar's modes on first use, and the walk must read either shape.
+    for (const g of hljs.listLanguages()) hljs.highlight('<script>a</script>', { language: g, ignoreIllegals: true });
+    expect(Object.fromEntries(HIGHLIGHT_BOUNDED_CAPS)).toEqual(Object.fromEntries(closure()));
+  });
+
+  it('today that set is typescript, javascript, xml and markdown at 8 192 and rust at 4 096; yaml\'s ruby is not registered', () => {
+    expect(Object.fromEntries(HIGHLIGHT_BOUNDED_CAPS)).toEqual({
+      typescript: 8192, javascript: 8192, xml: 8192, markdown: 8192, rust: 4096,
+    });
+    expect(hljs.getLanguage('ruby')).toBeUndefined();
+    expect(hljs.getLanguage('handlebars')).toBeUndefined();
+    expect([...subLanguagesOf(hljs.getLanguage('yaml')!)]).toContain('ruby');
+  });
+
+  it.each([['xml'], ['html'], ['svg'], ['markdown'], ['md']])(
+    'a 64 KiB %s block of <script> then <a> lines is not highlighted and says 64 KiB, in Docs and on the worker path',
+    async (lang) => {
+      const highlight = spyHighlight();
+      const body = scripted(65536);
+      expect(body).toHaveLength(65536);
+      const text = `\`\`\`${lang}\n${body}\n\`\`\`\n`;
+      const docs = render(renderHast(treeOf(text, 'docs'), { components: SHARED_COMPONENTS }));
+      expect(label(docs.container)).toMatch(OVER_64);
+      cleanup();
+      const worker = await chat(text);
+      expect(worker.parser).toHaveBeenCalledTimes(1);
+      expect(label(worker.container)).toMatch(OVER_64);
+      cleanup();
+      expect(label(block(lang, body))).toMatch(OVER_64);
+      expect(highlight).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([['xml'], ['html'], ['markdown']])('a %s block of exactly 8 192 characters is highlighted; 8 193 is not, and says 9 KiB', (lang) => {
+    const highlight = spyHighlight();
+    expect(label(block(lang, scripted(8192)))).not.toMatch(/not highlighted/);
+    expect(highlight).toHaveBeenCalledTimes(1);
+    expect(label(block(lang, scripted(8193)))).toMatch(/\u00b7 not highlighted \(9 KiB\)$/);
+    expect(highlight).toHaveBeenCalledTimes(1);
+  });
+
+  it('a grammar that embeds nothing bounded keeps the 64 KiB cap: 20 000 characters of dockerfile (embeds bash) are highlighted', () => {
+    const highlight = spyHighlight();
+    expect(label(block('dockerfile', 'RUN echo a\n'.repeat(1800).slice(0, 20000)))).toBe('Dockerfile');
+    expect(highlight).toHaveBeenCalledTimes(1);
+  });
+
+  it('a ts block of 10 000 characters the page budget refuses is labelled by its own cap: 10 KiB', () => {
+    const highlight = spyHighlight();
+    const { container } = render(
+      <CodeBlock highlight={false}>
+        <code className="language-ts">{`${'const a = 1;\n'.repeat(800).slice(0, 10000)}\n`}</code>
+      </CodeBlock>,
+    );
+    expect(label(container)).toBe('TypeScript \u00b7 not highlighted (10 KiB)');
+    expect(highlight).not.toHaveBeenCalled();
   });
 });

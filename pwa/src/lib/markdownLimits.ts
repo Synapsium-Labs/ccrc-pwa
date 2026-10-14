@@ -75,14 +75,18 @@ export const MD_HIGHLIGHT_MAX_LINE_CHARS = 2048;
  *  2026-10-14). */
 export const MD_HIGHLIGHT_MAX_BLANK_CHARS = 2048;
 /** The longest code block, in characters, that is highlighted in `typescript` or `javascript` (every alias highlight.js
- *  resolves to them), smaller than `MD_HIGHLIGHT_BLOCK_MAX_CHARS` because those grammars grow with the square of a
+ *  resolves to them) and in every grammar whose `subLanguage` chain reaches them (`xml`, which highlights `<script>`
+ *  with javascript, and `markdown`, which embeds xml, today; `HIGHLIGHT_BOUNDED_CAPS` in `markdown.tsx` derives the set
+ *  from the registered grammars), smaller than `MD_HIGHLIGHT_BLOCK_MAX_CHARS` because those grammars grow with the square of a
  *  block's size on `<a>` shapes (JSX closing-tag scans) that pass the word, line and whitespace bounds (D-4928). */
 export const MD_HIGHLIGHT_JS_BLOCK_MAX_CHARS = 8192;
-/** The longest code block, in characters, that is highlighted in `rust` (and its aliases), smaller than
+/** The longest code block, in characters, that is highlighted in `rust` (and its aliases, and any grammar that embeds
+ *  it: none today), smaller than
  *  `MD_HIGHLIGHT_BLOCK_MAX_CHARS` because an unclosed raw string `r#"` makes that grammar grow with the square of
  *  a block's size (D-4928). */
 export const MD_HIGHLIGHT_RUST_BLOCK_MAX_CHARS = 4096;
-/** The most code, in characters, of `typescript`, `javascript` and `rust` blocks together that a Docs page highlights:
+/** The most code, in characters, of `typescript`, `javascript` and `rust` blocks together that a Docs page highlights,
+ *  and of every grammar whose `subLanguage` chain reaches them (`xml` and `markdown` today, so `html` and `svg` too):
  *  `detachUrls` sums it beside `DOCS_HIGHLIGHT_PAGE_MAX_CHARS` and refuses those grammars from the block that passes
  *  it, while a block of another grammar is never refused by it (D-4928). */
 export const DOCS_HIGHLIGHT_SCAN_PAGE_MAX_CHARS = 393216;
