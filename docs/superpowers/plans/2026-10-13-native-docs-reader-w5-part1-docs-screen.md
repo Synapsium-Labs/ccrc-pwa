@@ -22892,3 +22892,612 @@ No commit in this task but Step 5's: everything else it writes is scratch or git
 - **D-4922 (2026-10-14)** — a fourth bound on highlighting: `CodeBlock` does not highlight a registered block that holds a line longer than `MD_HIGHLIGHT_MAX_LINE_CHARS` = 2 048 characters (spec §4.10 names three bounds on the shared Markdown components, r10, r11 and 2-2, and §4.9's page cap; this is a fourth). The task review measured grammars that are quadratic on shapes that are not one long identifier, with a cost that grows with line length: a `markdown` fence holding one 64 KiB line of `[` about 9.6 s, `[a` or `![` over a 32 KiB line 1.2-1.5 s, a `yaml` fence holding one 64 KiB line of `a a a ...` 2.8-3.6 s, where §4.9 and §4.10 promise a bounded main thread for an arbitrary repository document. Order: the size cap first (a block over it keeps its KiB label and is never scanned), then r10's word scan, then the line scan, both linear with no regular expression; the label is `{label} · not highlighted (a {n}-character line)`. Chat and part 2's Export get the bound through the same components. The value is measured: the line bound removes the cost that grows with line length and stops where that growth meets the length-independent plateau of the slowest grammars (Task 3's decision 9 records the sweep, the two growing families at 512-16 384 characters, the plateau and the corpus: 1 real fence of 17 384 left plain). The operator's ruling on ask 30 (2026-10-14) chose a line bound, on an option that proposed 4 096; the coordinator's ruling by mail 4761 set the terms (the value measured, not taken from the option) and mail 4768 accepted the measured 2 048 and its basis. It joins r10, r11 and 2-2 in the merge gate. Task 3's fix commit `9a1d9b076`, rows W5P1-T3-M16 to W5P1-T3-M21.
 - **D-4923 (2026-10-14)** — r10's word class counts every UTF-16 code unit from 0x7f up as part of a word, not only `[A-Za-z0-9_$]` (the plan's Task 3 decision 5 and refinement (e), which put non-ASCII outside the class on a `typescript` and `bash` measurement; the spec's r10 bound itself, "one long word", is unchanged). highlight.js's PHP grammar takes `\x7f-\xff` as identifier characters, so a 64 KiB `php` fence of `_é` repeated, whose ASCII runs are each one character long, cost 38 s while the narrower class scored it 1. Failing closed costs nothing real: the longest run in a registered-language fence under `docs/superpowers` is 107 under the widened class (64 under the old). The coordinator's ruling by mail 4768 (2026-10-14). Task 3's fix commit `9a1d9b076`, row W5P1-T3-M15 and Task 3's decision 8.
 - **D-4924 (2026-10-14)** — a link to the page being read that carries a fragment (`a.md#sec` or `../specs/a.md#sec` on `specs/a.md`) takes `DocLink`'s `fragment` arm, not its in-app `doc` arm (spec §4.11's `DocLink` arm table routes every `doc` resolution, this page included, through in-app navigation). The `doc` arm pushed a second history entry for the same URL, dropped `view`, and scrolled only if the visit happened to render the unchanged body again; the `fragment` arm is M4.U7's in-page anchor: it scrolls inside the article and writes no history entry. Only `DocLink`'s choice of arm changes: L0's `resolveDocRef`, which §5's viewer shares, is untouched and still answers `doc`. A same-page link with no fragment still takes the `doc` arm, and another page with the same file name is unaffected. On a `view=committed` or ref-view page such a link now scrolls inside the view being read, where the `doc` arm would have opened the default view: an anchor stays on the page you are reading. The coordinator's ruling by mail 4784 (2026-10-14). Task 6's fix commits `08f385a6f` and `c8d141da9`, rows W5P1-T6-M27 to W5P1-T6-M30.
+
+## Wave 5 part 1 results
+
+Measured 2026-10-14 07:01 UTC on the tree at `f4a3839c17c3` (base `162c91491476`, 60 W5.1 commits on the first-parent line). Every number below was printed by a Task 14 command; none is a forecast. The commit that adds this section changes only this file, and it is the wave-done `handoffCommit`.
+
+Deviation entries: 8, the first 8 numbers of the issued block 4917-4932, in order, defined in `## Deviations found` above.
+
+### Suites
+
+Spec section 7.9's every-wave and W5 suites: the PWA `tsc`, the contrast gate, the whole hermetic PWA suite as three shards (proved below to add up to the hermetic file list), the browser leg in a real Chrome, and the server files that read part 1's files as text; all in the foreground. The full server suite runs in this pull request's CI (part 1 edits `pwa/package.json`, the lock, `pwa/tsconfig.json`, a vitest config and `.github/`). First complete run of these suites in this wave: **green** (at `f4a3839c17c3`).
+
+| # | Command | Test Files | Tests | s | rc |
+|---|---|---|---|---|---|
+| 01 | `( cd pwa && CI=1 node node_modules/typescript/bin/tsc --noEmit -p tsconfig.json )` | - | compiled, no errors | 20 | 0 |
+| 02 | `( cd pwa && CI=1 node design/contrast-check.mjs )` | - | ALL 702 PASS | 1 | 0 |
+| 03 | `( cd pwa && CI=1 ./node_modules/.bin/vitest run --shard=1/3 )` | 50 passed (50) | 1368 passed (1368) | 84 | 0 |
+| 04 | `( cd pwa && CI=1 ./node_modules/.bin/vitest run --shard=2/3 )` | 50 passed (50) | 1994 passed (1994) | 83 | 0 |
+| 05 | `( cd pwa && CI=1 ./node_modules/.bin/vitest run --shard=3/3 )` | 49 passed (49) | 1808 passed (1808) | 92 | 0 |
+| 06 | `( cd pwa && CI=1 CCRC_CHROME="$(cat <SCRATCH>/w5p1-chrome)" ./node_modules/.bin/vitest run --config vitest.browser.config.ts )` | 1 passed (1) | 13 passed (13) | 17 | 0 |
+| 07 | `( cd server && ./node_modules/.bin/vitest run test/docs-shared.test.ts test/single-definition.test.ts test/docs-parity.test.ts test/ci-pipeline.test.ts )` | 4 passed (4) | 898 passed (898) | 26 | 0 |
+| 08 | `( cd server && ./node_modules/.bin/vitest run test/docs-url.test.ts test/docs-grammar.test.ts test/ci-merge-queue.test.ts test/ci-verdict.test.ts test/oss-metadata.test.ts test/license.test.ts test/node-floor.test.ts test/run-routes.test.ts test/no-routing-keystroke-from-server.test.ts test/pane-history-route.test.ts test/resume-reclaim-l0.test.ts test/child-reclaim-attention-arms.test.ts )` | 12 passed (12) | 5131 passed (5131) | 142 | 0 |
+| 09 | `( cd server && ./node_modules/.bin/vitest run test/typecheck-tests.test.ts )` | 1 passed (1) | 12 passed (12) | 70 | 0 |
+| 10 | `( cd server && ./node_modules/.bin/vitest run test/topology-clean.test.ts test/source-bytes.test.ts test/deviation-refs.test.ts test/dtbd.test.ts )` | 4 passed (4) | 89 passed (89) | 16 | 0 |
+
+```text
+OK pwa shards: 50 + 50 + 49 = 149 test files; `vitest list --filesOnly` holds 149 hermetic files
+```
+
+### Invariants
+
+From `w5p1-invariants.py` (scope from W5.1's own commits; net shapes against the base, or the last merge of main):
+
+```text
+base 162c91491476, ref 162c91491476, tip f4a3839c17c3, 60 W5.1 commits, 0 merges of main
+PASS subjects      60 first-parent commits since the base; subjects not ending (docs W5.1) or (docs W5.1 review): none
+PASS scope         75 files touched by W5.1 commits (this plan among them: True); outside the scope: none; scope files untouched: none
+PASS untouched     server/src/, agent/, ccd/, deploy/, README.md, CLAUDE.md, chat.css, Sheet.tsx, index.html, sw-denylist.ts, docs-parity.test.ts changed vs ref: none
+PASS frozen        56 golden files; golden files, the corpus, the golden test and message-links changed by a W5.1 commit: none; net vs ref: unchanged
+PASS single-def    server/test/single-definition.test.ts vs ref (5683 lines): 2 line(s) naming docsText.ts beside worktree-gone in place, 1 EOF append (83 lines), other hunks: none
+PASS shared-test   server/test/docs-shared.test.ts: the M3.11 describe spans ref lines 1101-1256; 10 hunks inside it, 1 EOF append; other hunks: none
+PASS section-h     shared/docs.ts: section H spans ref lines 865-983; 8 hunks inside it; other hunks: none
+PASS api           pwa/src/lib/api.ts vs ref: imports 1, apierror 3, throw 1, docs-block 1, other 0
+PASS manifest      pwa/package.json differs at ['devDependencies/playwright-core', 'scripts/test:browser']; playwright-core '1.63.0'; engines and the five W4 pins byte-equal: True
+PASS lock          pwa/package-lock.json differs from ref at ['packages/""/devDependencies/playwright-core', 'packages/node_modules/playwright-core']; it installs playwright-core 1.63.0
+PASS vite-line     the navigateFallbackDenylist line, byte-equal to ref: ["        navigateFallbackDenylist: swDenylist(process.env['CCRC_SW_DENYLIST']),"]
+PASS ci            .github/workflows/ci.yml vs ref: job 1, needs 1, results 1, comment 1, other 0
+PASS w4-plan       docs/superpowers/plans/2026-10-09-native-docs-reader-w4-pwa-foundation.md: 7 row `red` line(s) re-measured in place; other hunks: none
+PASS stylesheets   pwa/**/*.css: 6 at ref, 7 at the tip, added ['pwa/src/docs/docs.css'], removed none
+PASS spellings     pwa/src: no navigator.share(, react-dom/server, ?inline, <iframe or srcDoc; createObjectURL/new Blob under docs and lib/markdown* only in ['pwa/src/docs/objectUrls.ts']; postMessage or a message listener under docs: none
+PASS deviations    ## Deviations found x1 outside fences; defined ['D-<n>', 'D-<n>', 'D-<n>', 'D-<n>', 'D-<n>', 'D-<n>', 'D-<n>', 'D-<n>'] (issued 4917-4932; the first 8 expected in order); malformed definition lines: 0
+PASS no-d-number   D-<n> tokens new in W5.1 files: none; in this plan outside ## Deviations found: none
+17 invariants, 17 PASS
+```
+
+### Build gate
+
+From `w5p1-gate.py`, on `git archive` copies of the base and the tip built for production:
+
+```text
+PASS measured-at     the tip copy is HEAD f4a3839c17c3; HEAD is f4a3839c17c3
+PASS builds          npm run build rc: base 0, tip 0
+PASS worker-chunk    markdownWorker chunks: tip ['assets/markdownWorker-DftuN5no.js'], named [1] time(s) in sw.js; base ['assets/markdownWorker-DdJLW5_N.js']
+PASS one-denylist    denylist:[ in sw.js: tip 1, base 1
+PASS precache        17 entries at the base, 17 at the tip; added none; removed none (no lazy chunk); index js 1370890 -> 1464596 bytes (+93706), index css 141516 -> 150634 bytes (+9118)
+PASS docs-chrome     built index css (1 sheet): tip {"door": 1, "doorActive": 1, "fresh": 3, "docBody": 3}; base {"door": 0, "doorActive": 0, "fresh": 0, "docBody": 0}
+PASS no-test-code    built files naming playwright or the browser harness: none
+PASS built-worker    tip: load ok, document undefined; docs a<br>b {"kind": "tree", "elements": null, "br": 1, "brText": 0}; chat a<br>b {"kind": "tree", "elements": null, "br": 0, "brText": 1}; docs chord flood {"kind": "too-wide", "elements": 25601, "br": 0, "brText": 0}. base: docs a<br>b {"kind": "tree", "elements": null, "br": 0, "brText": 1}; chord flood {"kind": "tree", "elements": null, "br": 0, "brText": 0}
+8 gate checks, 8 PASS
+```
+
+### Mutation table
+
+Every `W5P1-T<n>-M<k>` row of Tasks 1-13, extracted from this plan (a re-anchored id counts once, at its last occurrence) and run by `mutate.py` in a `git archive` copy of the tree at `f4a3839c17c3`, one row at a time, each file restored byte for byte after its row. No task recorded an equivalent mutant.
+
+| Row | Task | File | Result | First red case (measured) |
+|---|---|---|---|---|
+| W5P1-T1-M1 | T1 | `shared/docs.ts` | red | githubBlobUrl equals the oracle on every case |
+| W5P1-T1-M2 | T1 | `shared/docs.ts` | red | the slugs ../x, .x/y, a/.., ./x, a/. and .. give bad-slug in both builders, ahead of every later row; org/.github links |
+| W5P1-T1-M3 | T1 | `shared/docs.ts` | red | githubBlobUrl equals the oracle on every case |
+| W5P1-T1-M4 | T1 | `shared/docs.ts` | red | an at or path segment that is empty, . or .. gives bad-target in both builders, ahead of not-on-origin and uncommitted |
+| W5P1-T1-M5 | T1 | `shared/docs.ts` | red | a commit that is short, empty, uppercase, .., not hex or not 40 or 64 long gives bad-target, ahead of not-on-origin and uncommitted |
+| W5P1-T1-M6 | T1 | `shared/docs.ts` | red | githubPermalink equals the oracle on every case |
+| W5P1-T1-M7 | T1 | `shared/docs.ts` | red | githubPermalink equals the oracle on every case |
+| W5P1-T1-M8 | T1 | `shared/docs.ts` | red | githubPermalink equals the oracle on every case |
+| W5P1-T1-M9 | T1 | `shared/docs.ts` | red | githubBlobUrl equals the oracle on every case |
+| W5P1-T1-M10 | T1 | `shared/docs.ts` | red | githubBlobUrl equals the oracle on every case |
+| W5P1-T1-M11 | T1 | `shared/docs.ts` | red | githubPermalink equals the oracle on every case |
+| W5P1-T1-M12 | T1 | `shared/docs.ts` | red | githubPermalink equals the oracle on every case |
+| W5P1-T1-M13 | T1 | `shared/docs.ts` | red | githubBlobUrl equals the oracle on every case |
+| W5P1-T1-M14 | T1 | `server/src/docs/policy.ts` | red | every export under server/src/docs is declared exactly once across the four roots, in its own file |
+| W5P1-T1-M15 | T1 | `server/src/docs/policy.ts` | red | defines githubUrlAt exactly once, in shared/docs.ts |
+| W5P1-T2-M1 | T2 | `pwa/src/lib/api.ts` | red | projects, tree (default and ref view), file (committed and draft pins), raster and refresh each send the marker through the constants, to docsApi's URL |
+| W5P1-T2-M2 | T2 | `pwa/src/lib/api.ts` | red | no-docs-route needs the status AND the code: a 404 with another code, and a 500 not-found, are unexpected-response |
+| W5P1-T2-M3 | T2 | `pwa/src/lib/api.ts` | red | file() on a raster path and raster() on a non-raster path are programming errors: wrong-representation, before any fetch |
+| W5P1-T2-M4 | T2 | `pwa/src/lib/api.ts` | red | file() on a raster path and raster() on a non-raster path are programming errors: wrong-representation, before any fetch |
+| W5P1-T2-M5 | T2 | `pwa/src/lib/api.ts` | red | refresh sends only ref and reason, whatever else the caller's object holds (the route refuses any other key) |
+| W5P1-T2-M6 | T2 | `pwa/src/docs/failures.ts` | red | a 403 foreign-request body answers failed with the body whole, and raises nothing |
+| W5P1-T2-M7 | T2 | `pwa/src/docs/failures.ts` | red | no-docs-route needs the status AND the code: a 404 with another code, and a 500 not-found, are unexpected-response |
+| W5P1-T2-M8 | T2 | `pwa/src/docs/failures.ts` | red | no-docs-route needs the status AND the code: a 404 with another code, and a 500 not-found, are unexpected-response |
+| W5P1-T2-M9 | T2 | `pwa/src/docs/failures.ts` | red | a 404 {error: not-found} with no failure is a pre-Docs server: no-docs-route (M7.1) |
+| W5P1-T2-M10 | T2 | `pwa/src/docs/failures.ts` | red | a 401 with a verdict raises the login overlay through request, and answers auth |
+| W5P1-T2-M11 | T2 | `pwa/src/docs/failures.ts` | red | a fetch that rejects with a TypeError (offline) answers unreachable |
+| W5P1-T2-M12 | T2 | `pwa/src/docs/failures.ts` | red | a 200 that is not the envelope is unexpected-response: not JSON, ok not true, or a route field missing |
+| W5P1-T2-M13 | T2 | `pwa/src/docs/failures.ts` | red | a 200 that is not the envelope is unexpected-response: not JSON, ok not true, or a route field missing |
+| W5P1-T2-M14 | T2 | `pwa/src/docs/failures.ts` | red | a 200 that is not the envelope is unexpected-response: not JSON, ok not true, or a route field missing |
+| W5P1-T2-M15 | T2 | `pwa/src/docs/failures.ts` | red | a 200 text/html holding PNG bytes is unexpected-response: the content type must be the declared raster MIME |
+| W5P1-T2-M16 | T2 | `pwa/src/docs/failures.ts` | red | a 200 image/png holding GIF bytes is a client-built raster-mismatch with the declared type and the size |
+| W5P1-T2-M17 | T2 | `pwa/src/docs/failures.ts` | red | {failure: 'brand-new-word'} renders a sentence naming it, and no known word's sentence |
+| W5P1-T2-M18 | T2 | `pwa/src/docs/failures.ts` | red | bad-project (class none) with no context follows its class |
+| W5P1-T2-M19 | T2 | `pwa/src/docs/failures.ts` | red | repo-unreadable (class manual) with no context follows its class |
+| W5P1-T2-M20 | T2 | `pwa/src/docs/failures.ts` | red | ref-locked (class auto-while-young) with no context follows its class |
+| W5P1-T2-M21 | T2 | `pwa/src/docs/failures.ts` | red | ref-locked: a young lock and a lock already gone wait 3 s; at or past 60 s it is stale (none); an unmeasured age is manual |
+| W5P1-T2-M22 | T2 | `pwa/src/docs/failures.ts` | red | ref-locked: a young lock and a lock already gone wait 3 s; at or past 60 s it is stale (none); an unmeasured age is manual |
+| W5P1-T2-M23 | T2 | `pwa/src/docs/failures.ts` | red | ref-locked: a young lock and a lock already gone wait 3 s; at or past 60 s it is stale (none); an unmeasured age is manual |
+| W5P1-T2-M24 | T2 | `pwa/src/docs/failures.ts` | red | unknown-commit (class auto) with retryAfterMs 1234 waits it only when auto |
+| W5P1-T2-M25 | T2 | `pwa/src/docs/failures.ts` | red | a negative retryAfterMs is not a wait: the word's own fallback applies |
+| W5P1-T2-M26 | T2 | `pwa/src/docs/failures.ts` | red | caps-unknown (class auto) with no context follows its class |
+| W5P1-T2-M27 | T2 | `pwa/src/docs/DocsFailureView.tsx` | red | {failure: 'brand-new-word'} renders a sentence naming it, and no known word's sentence |
+| W5P1-T2-M28 | T2 | `pwa/src/docs/DocsFailureView.tsx` | red | the slots: unreachable and unexpected-response offer Retry; auth and no-docs-route never do |
+| W5P1-T2-M29 | T2 | `pwa/src/docs/DocsFailureView.tsx` | red | a manual word and an auto word offer Retry; a none word, a stale lock and a missing handler do not |
+| W5P1-T2-M30 | T2 | `pwa/src/docs/DocsFailureView.tsx` | red | Fetch from origin is unresolved-ref's alone |
+| W5P1-T2-M31 | T2 (re-anchored in T13) | `pwa/src/docs/DocsFailureView.tsx` | red | unresolved-ref shows what was tried, the suggestion as a link, the tag hint and Fetch from origin |
+| W5P1-T2-M32 | T2 | `pwa/src/docs/DocsFailureView.tsx` | red | unresolved-ref shows what was tried, the suggestion as a link, the tag hint and Fetch from origin |
+| W5P1-T2-M33 | T2 | `pwa/src/docs/DocsFailureView.tsx` | red | unresolved-ref shows what was tried, the suggestion as a link, the tag hint and Fetch from origin |
+| W5P1-T2-M34 | T2 | `pwa/src/docs/DocsFailureView.tsx` | red | ambiguous-worktree lists its candidates |
+| W5P1-T2-M35 | T2 | `pwa/src/docs/DocsFailureView.tsx` | red | not-a-file renders the kind's text |
+| W5P1-T2-M36 | T2 | `pwa/src/docs/DocsFailureView.tsx` | red | git-failed and ccd-fault show their stderrHead in pre.docs-fail-detail |
+| W5P1-T2-M37 | T2 | `pwa/src/docs/docsText.ts` | red | {failure: 'brand-new-word'} renders a sentence naming it, and no known word's sentence |
+| W5P1-T2-M38 | T2 | `pwa/src/docs/docsText.ts` | red | fills each placeholder in one pass: an absent field renders ?, never the braces, and a value holding braces is not filled again |
+| W5P1-T2-M39 | T2 | `pwa/src/docs/docsText.ts` | red | kib rounds up so a non-empty file never reads as 0; shortCommit is the first 8 hex characters |
+| W5P1-T2-M40 | T2 | `pwa/src/docs/docsText.ts` | red | kib rounds up so a non-empty file never reads as 0; shortCommit is the first 8 hex characters |
+| W5P1-T2-M41 | T2 | `pwa/src/docs/docsText.ts` | red | a known word is filled from its own context, sizes in KiB |
+| W5P1-T2-M42 | T2 | `pwa/src/docs/docsText.ts` | red | each slot renders its sentence; an unexpected-response with no content type says so |
+| W5P1-T2-M43 | T2 | `pwa/src/docs/docsText.ts` | red | every DOCS_FAILURES word has a sentence of 20+ characters, and the map holds no other key |
+| W5P1-T2-M44 | T2 | `pwa/src/docs/docsText.ts` | red | every DocsPageParseFailure has a sentence of 20+ characters, and the map holds no other key |
+| W5P1-T2-M45 | T2 | `pwa/src/docs/docsText.ts` | red | every DOCS_FAILURES word has a sentence of 20+ characters, and the map holds no other key |
+| W5P1-T2-M46 | T2 | `pwa/src/docs/docsText.ts` | red | the seven sentences spec 4.7 gives are verbatim |
+| W5P1-T2-M47 | T2 | `pwa/src/docs/docsText.ts` | red | the truth line's sentences and the slots are spec 4.5's and 4.7's, verbatim once filled |
+| W5P1-T2-M48 | T2 | `pwa/src/docs/failures.ts` | red | 'worktree-gone' is a code-line literal in shared/api.ts alone |
+| W5P1-T2-M49 | T2 | `pwa/src/lib/api.ts` | red | timed out only when mutated (unmutated control green): an aborted signal rejects with the AbortError: the caller aborted, so there is no slot |
+| W5P1-T2-M50 | T2 | `pwa/src/lib/api.ts` | red | timed out only when mutated (unmutated control green): raster: an aborted signal rejects with the AbortError: the caller aborted, so there is no slot |
+| W5P1-T3-M1 | T3 | `pwa/src/lib/markdown.tsx` | red | a ts fence holding a 257-character identifier is not highlighted and says why; 256 is highlighted |
+| W5P1-T3-M2 | T3 | `pwa/src/lib/markdown.tsx` | red | a ts fence holding a 257-character identifier is not highlighted and says why; 256 is highlighted |
+| W5P1-T3-M3 | T3 (re-anchored in T13) | `pwa/src/lib/markdown.tsx` | red | longestWordRun counts letters, digits, _, $ and every code unit from 0x7f up, in one pass |
+| W5P1-T3-M4 | T3 (re-anchored in T13) | `pwa/src/lib/markdown.tsx` | red | a ts fence holding a 257-character identifier is not highlighted and says why; 256 is highlighted |
+| W5P1-T3-M5 | T3 | `pwa/src/lib/markdownGuard.ts` | red | keystrokeParts answers null for a whitespace flood before it trims or splits |
+| W5P1-T3-M6 | T3 | `pwa/src/lib/markdownGuard.ts` | red | keystrokeParts answers null for a whitespace flood before it trims or splits |
+| W5P1-T3-M7 | T3 | `pwa/src/lib/markdownGuard.ts` | red | a 64-character chord still draws chips; a 65-character one is plain inline code |
+| W5P1-T3-M8 | T3 | `pwa/src/lib/markdownParse.ts` | red | 400 spans of a 31-plus chord are too-wide in the docs profile, before any render |
+| W5P1-T3-M9 | T3 | `pwa/src/lib/markdownParse.ts` | red | inlineCodeExtraElements: a chord of N parts adds 2N - 1, a named key 1, anything else 0 |
+| W5P1-T3-M10 | T3 | `pwa/src/lib/markdownParse.ts` | red | code under pre is CodeBlock's and never chips: 400 fenced blocks holding the chord are a tree |
+| W5P1-T3-M11 | T3 | `pwa/src/lib/markdownParse.ts` | red | answers a docs job of 400 spans of a 31-plus chord with too-wide and 25 601 elements |
+| W5P1-T3-M12 | T3 | `pwa/src/lib/markdownParse.ts` | red | MD_KEYSTROKE_MAX_CHARS has exactly one declaration, in pwa/src/lib/markdownLimits.ts |
+| W5P1-T3-M13 | T3 (re-anchored in T13) | `pwa/src/lib/markdownLimits.ts` | red | a ts fence holding a 257-character identifier is not highlighted and says why; 256 is highlighted |
+| W5P1-T3-M14 | T3 | `pwa/src/lib/markdownLimits.ts` | red | a 64-character chord still draws chips; a 65-character one is plain inline code |
+| W5P1-T3-M15 | T3 | `pwa/src/lib/markdown.tsx` | red | longestWordRun counts letters, digits, _, $ and every code unit from 0x7f up, in one pass |
+| W5P1-T3-M16 | T3 | `pwa/src/lib/markdown.tsx` | red | a markdown block of "[" lines one character over the bound is not highlighted and says why |
+| W5P1-T3-M17 | T3 | `pwa/src/lib/markdown.tsx` | red | a markdown block of "[" lines of exactly the bound is highlighted |
+| W5P1-T3-M18 | T3 | `pwa/src/lib/markdownLimits.ts` | red | declares 2048 characters |
+| W5P1-T3-M19 | T3 | `pwa/src/lib/markdown.tsx` | red | a block over MD_HIGHLIGHT_BLOCK_MAX_CHARS is never scanned: the size check comes first |
+| W5P1-T3-M20 | T3 | `pwa/src/lib/markdown.tsx` | red | a block over MD_HIGHLIGHT_BLOCK_MAX_CHARS is never scanned: the size check comes first |
+| W5P1-T3-M21 | T3 | `pwa/src/lib/markdown.tsx` | red | a line break of either kind ends a line: CRLF and lone CR lines of exactly the bound highlight |
+| W5P1-T4-M1 | T4 | `pwa/src/lib/markdownParse.ts` | red | A16: the 'chat' and 'docs' profiles give equal outcomes, except that a raw <br> is a br element in 'docs'; one argument means 'chat' |
+| W5P1-T4-M2 | T4 | `pwa/src/lib/markdownParse.ts` | red | an attribute stays literal text in the docs profile |
+| W5P1-T4-M3 | T4 | `pwa/src/lib/markdownParse.ts` | red | upper case stays literal text in the docs profile |
+| W5P1-T4-M4 | T4 | `pwa/src/lib/markdownParse.ts` | red | a block-level raw node holding more than the tag stays literal text in the docs profile |
+| W5P1-T4-M5 | T4 | `pwa/src/lib/markdownParse.ts` | red | A16: the 'chat' and 'docs' profiles give equal outcomes, except that a raw <br> is a br element in 'docs'; one argument means 'chat' |
+| W5P1-T4-M6 | T4 | `pwa/src/lib/markdownParse.ts` | red | settleHast with one argument keeps 'chat'; with 'docs' a hand-built raw <br/> becomes a br element |
+| W5P1-T4-M7 | T4 | `pwa/src/lib/markdownParse.ts` | red | imports nothing outside the closure but unified, the three remark plugins and the hast/mdast types |
+| W5P1-T4-M8 | T4 (re-anchored in T13) | `pwa/src/lib/useParsedMarkdown.ts` | red | a reply for text A that lands after text B commits, before its passive effects, is never the outcome for B |
+| W5P1-T4-M9 | T4 (re-anchored in T13) | `pwa/src/lib/useParsedMarkdown.ts` | red | Retry (a changed attempt alone) is the latest request: its reply becomes the outcome, and nothing is pending |
+| W5P1-T4-M10 | T4 | `pwa/src/lib/markdownParse.ts` | red | answers a docs job of a<br>b with one br element, and a chat job with the tag as text |
+| W5P1-T4-M11 | T4 | `pwa/src/lib/useParsedMarkdown.ts` | red | the docs profile: its reply is the outcome and nothing stays pending |
+| W5P1-T4-M12 | T4 | `pwa/src/lib/useParsedMarkdown.ts` | red | the docs profile: its reply is the outcome and nothing stays pending |
+| W5P1-T4-M13 | T4 | `pwa/src/lib/useParsedMarkdown.ts` | red | the docs profile: its reply is the outcome and nothing stays pending |
+| W5P1-T4-M14 | T4 | `pwa/src/lib/useParsedMarkdown.ts` | red | a profile change alone (the same text) is a new request: the newer reply is the one shown, never the earlier |
+| W5P1-T4-M15 | T4 | `pwa/src/lib/markdownParse.ts` | red | an escaped angle bracket stays text in the docs profile, with no br element |
+| W5P1-T5-M1 | T5 | `pwa/src/docs/useDocsVisit.ts` | red | project, section, leaf and sibling keep one POST and one tree GET |
+| W5P1-T5-M2 | T5 | `pwa/src/docs/useDocsVisit.ts` | red | is exactly project + NUL + the ref as the page names it, empty for the default view |
+| W5P1-T5-M3 | T5 | `pwa/src/docs/useDocsVisit.ts` | red | an unresolved-ref answer makes zero POSTs; Fetch from origin makes one manual POST |
+| W5P1-T5-M4 | T5 | `pwa/src/docs/useDocsVisit.ts` | red | a refs/heads/ view with refreshDue makes zero automatic POSTs, and a manual one is still allowed |
+| W5P1-T5-M5 | T5 | `pwa/src/docs/useDocsVisit.ts` | red | a listing older than DOCS_STALE_MS is re-listed by one GET and no POST, even when the answer says refreshDue |
+| W5P1-T5-M6 | T5 | `pwa/src/docs/useDocsVisit.ts` | red | a listing older than DOCS_STALE_MS is re-listed by one GET and no POST, even when the answer says refreshDue |
+| W5P1-T5-M7 | T5 | `pwa/src/docs/useDocsVisit.ts` | red | a younger listing is not re-listed |
+| W5P1-T5-M8 | T5 | `pwa/src/docs/useDocsVisit.ts` | red | M4.F5: a 401 gives the auth slot, and clearAuthLost() calls loaders.tree again |
+| W5P1-T5-M9 | T5 (re-anchored in T13) | `pwa/src/docs/useDocsVisit.ts` | red | the bookkeeping is per word: a second word gets its own one retry, a repeated one none |
+| W5P1-T5-M10 | T5 | `pwa/src/docs/useDocsVisit.ts` | red | ref-locked at lockAgeMs 120000 is a stale lock with no retry |
+| W5P1-T5-M11 | T5 | `pwa/src/docs/useDocsVisit.ts` | red | ref-locked at lockAgeMs 120000 is a stale lock with no retry |
+| W5P1-T5-M12 | T5 | `pwa/src/docs/useDocsVisit.ts` | red | a tap at 1 s on the soon chip settles the refresh; the 4 s timer then POSTs nothing |
+| W5P1-T5-M13 | T5 | `pwa/src/docs/useDocsVisit.ts` | red | a committed key names the blob and its place, never the commit |
+| W5P1-T5-M14 | T5 | `pwa/src/docs/useDocsVisit.ts` | red | the default view never opens a draft, even one a holder at the served commit admits |
+| W5P1-T5-M15 | T5 | `pwa/src/docs/useDocsVisit.ts` | red | view=committed on that draft opens the committed side |
+| W5P1-T5-M16 | T5 | `pwa/src/docs/useDocsVisit.ts` | red | a withheld new file opens nothing |
+| W5P1-T5-M17 | T5 | `pwa/src/docs/docsText.ts` | red | the re-list words are exactly the four the spec names |
+| W5P1-T5-M18 | T5 | `pwa/src/docs/useDocsVisit.ts` | red | unknown-commit re-lists the tree once and reads again, then shows changing with Retry |
+| W5P1-T5-M19 | T5 | `pwa/src/docs/useDocsVisit.ts` | red | a leaf listed over its class cap is too-large and is never requested (spec 4.4) |
+| W5P1-T5-M20 | T5 | `pwa/src/docs/useDocsVisit.ts` | red | a leaf listed at exactly its cap is read |
+| W5P1-T5-M21 | T5 | `pwa/src/docs/useDocsVisit.ts` | red | a re-list that fails keeps the listing and says relist-failed |
+| W5P1-T5-M22 | T5 | `pwa/src/docs/useDocsVisit.ts` | red | a re-list answered 401 becomes the auth slot |
+| W5P1-T5-M23 | T5 | `pwa/src/docs/useDocsVisit.ts` | red | a fetch failure changes only the freshness: the tree slot is the same object |
+| W5P1-T5-M24 | T5 | `pwa/src/docs/useDocsVisit.ts` | red | a tree failure keeps the listing and says relist-failed with its word |
+| W5P1-T5-M25 | T5 | `pwa/src/docs/useDocsVisit.ts` | red | unmount cancels a pending automatic retry |
+| W5P1-T5-M26 | T5 (re-anchored in T13) | `pwa/src/docs/useDocsVisit.ts` | red | unmount aborts a file read in flight |
+| W5P1-T5-M27 | T5 | `pwa/src/docs/useDocsVisit.ts` | red | a changed blob is read at the new pin, the old body stays until it answers, then updatedTo names the commit |
+| W5P1-T5-M28 | T5 (re-anchored in T13) | `pwa/src/docs/useDocsVisit.ts` | red | a committed leaf whose blob is unchanged after the branch moves is not read again, and reports the new pin |
+| W5P1-T5-M29 | T5 | `pwa/src/docs/useDocsVisit.ts` | red | Fetch from origin is a no-op on any other slot |
+| W5P1-T5-M30 | T5 | `pwa/src/docs/useDocsVisit.ts` | red | a manual refresh needs a listing |
+| W5P1-T5-M31 | T5 | `pwa/src/docs/useDocsVisit.ts` | red | the POST is in flight as fetching, and a manual tap meanwhile adds nothing |
+| W5P1-T5-M32 | T5 | `pwa/src/docs/useDocsVisit.ts` | red | one GET per key at a time: a Retry while the GET is in flight adds none |
+| W5P1-T5-M33 | T5 | `pwa/src/docs/useDocsVisit.ts` | red | unknown-commit re-lists the tree once and reads again, then shows changing with Retry |
+| W5P1-T5-M34 | T5 | `pwa/src/docs/useDocsVisit.ts` | red | a committed leaf whose blob is unchanged after the branch moves is not read again, and reports the new pin |
+| W5P1-T5-M35 | T5 | `pwa/src/docs/useDocsVisit.ts` | red | a manual Retry at 1 s settles the read; the 5 s timer then drops nothing and reads nothing |
+| W5P1-T5-M36 | T5 | `pwa/src/docs/useDocsVisit.ts` | red | a tap at 1 s on the soon chip settles the refresh; the 4 s timer then POSTs nothing |
+| W5P1-T5-M37 | T5 | `pwa/src/docs/useDocsVisit.ts` | red | an older GET that lands after a newer POST answer does not replace the slot or move the leaf back |
+| W5P1-T5-M38 | T5 | `pwa/src/docs/useDocsVisit.ts` | red | an older GET that lands after a newer POST answer does not replace the slot or move the leaf back |
+| W5P1-T5-M39 | T5 | `pwa/src/docs/useDocsVisit.ts` | red | an older GET that lands after a newer POST answer still releases the reads waiting on a listing |
+| W5P1-T5-M40 | T5 | `pwa/src/docs/useDocsVisit.ts` | red | an older GET that lands after a newer POST answer does not replace the slot or move the leaf back |
+| W5P1-T5-M41 | T5 (re-anchored in T13) | `pwa/src/docs/useDocsVisit.ts` | red | a tree retry set for a page the user then left makes no GET |
+| W5P1-T5-M42 | T5 | `pwa/src/docs/useDocsVisit.ts` | red | a refresh retry set for a page the user then left makes no POST |
+| W5P1-T5-M43 | T5 | `pwa/src/docs/useDocsVisit.ts` | red | drops that read's entry, so showing the screen again reads once more instead of loading for ever |
+| W5P1-T5-M44 | T5 | `pwa/src/docs/useDocsVisit.ts` | red | a slot that goes ok again after a sign-in is not auto-refreshed again: one POST per key per open |
+| W5P1-T5-M45 | T5 | `pwa/src/docs/useDocsVisit.ts` | red | a draft leaf whose fingerprint changes under the same holder HEAD reads the new draft but names no commit |
+| W5P1-T5-M46 | T5 | `pwa/src/docs/useDocsVisit.ts` | red | a tree loader that rejects does not pin its key: Retry makes the next GET |
+| W5P1-T5-M47 | T5 | `pwa/src/docs/useDocsVisit.ts` | red | a refresh loader that rejects does not pin its key: a tap makes the next POST |
+| W5P1-T5-M48 | T5 (re-anchored in T13) | `pwa/src/docs/useDocsVisit.ts` | red | a GET that starts after the POST began and lands before it does not stop the POST's newer tree from landing |
+| W5P1-T5-M49 | T5 | `pwa/src/docs/useDocsVisit.ts` | red | drops the loading slot, so showing the screen again lists again instead of loading for ever |
+| W5P1-T6-M1 | T6 | `pwa/src/docs/docsLinks.ts` | red | moves every html-url-attributes key out of the copy, on any tag, into the map, and keeps every other property |
+| W5P1-T6-M2 | T6 | `pwa/src/docs/docsLinks.ts` | red | returns a copy and never writes its input: a deep-frozen tree detaches, and its JSON is unchanged |
+| W5P1-T6-M3 | T6 | `pwa/src/docs/docsLinks.ts` | red | moves every html-url-attributes key out of the copy, on any tag, into the map, and keeps every other property |
+| W5P1-T6-M4 | T6 | `pwa/src/docs/docsLinks.ts` | red | numbers img elements 0..n-1 in document order, counts them, and records nothing for an element with nothing |
+| W5P1-T6-M5 | T6 | `pwa/src/docs/docsLinks.ts` | red | true while the running sum is within the budget, false from the block that passes it, for every later block |
+| W5P1-T6-M6 | T6 | `pwa/src/docs/docsLinks.ts` | red | true while the running sum is within the budget, false from the block that passes it, for every later block |
+| W5P1-T6-M7 | T6 | `pwa/src/docs/docsLinks.ts` | red | true while the running sum is within the budget, false from the block that passes it, for every later block |
+| W5P1-T6-M8 | T6 | `pwa/src/docs/docsLinks.ts` | red | counts only the text under the pre's code children |
+| W5P1-T6-M9 | T6 | `pwa/src/lib/markdown.tsx` | red | nine 60 000-character ts blocks: the first eight are highlighted and the ninth is not |
+| W5P1-T6-M10 | T6 | `pwa/src/docs/docsLinks.ts` | red | [x](../plans/p.md) from specs/a.md at ref ws/a links in-app with the ref kept and view dropped |
+| W5P1-T6-M11 | T6 | `pwa/src/docs/docsLinks.ts` | red | [x](../plans/p.md) from specs/a.md at ref ws/a links in-app with the ref kept and view dropped |
+| W5P1-T6-M12 | T6 | `pwa/src/docs/docsLinks.ts` | red | keeps the page project and ref and applies the target; view is effective unless the target names it |
+| W5P1-T6-M13 | T6 | `pwa/src/docs/DocLink.tsx` | red | a meta click is left to the browser |
+| W5P1-T6-M14 | T6 | `pwa/src/docs/DocLink.tsx` | red | a plain click is prevented and pushes the page URL, and never opens a window |
+| W5P1-T6-M15 | T6 (re-anchored in T13) | `pwa/src/docs/DocLink.tsx` | red | a cross-doc fragment: the href carries #part-2, a plain click navigates without it and hands it to onFragment |
+| W5P1-T6-M16 | T6 | `pwa/src/docs/DocLink.tsx` | red | a cross-doc fragment: the href carries #part-2, a plain click navigates without it and hands it to onFragment |
+| W5P1-T6-M17 | T6 | `pwa/src/docs/DocLink.tsx` | red | an https link has target _blank and rel noopener noreferrer, and opens a window only when tapped |
+| W5P1-T6-M18 | T6 | `pwa/src/docs/DocLink.tsx` | red | an https link has target _blank and rel noopener noreferrer, and opens a window only when tapped |
+| W5P1-T6-M19 | T6 | `pwa/src/docs/DocLink.tsx` | red | [x](javascript:alert(1)) renders span.doc-link-inert with no href, titled with its sentence and the raw target |
+| W5P1-T6-M20 | T6 | `pwa/src/docs/DocLink.tsx` | red | a link to THIS page spelled with its file name and a fragment is a fragment link: a click scrolls and pushes nothing |
+| W5P1-T6-M21 | T6 | `pwa/src/docs/DocLink.tsx` | red | an element with that id outside the article is never scrolled |
+| W5P1-T6-M22 | T6 (re-anchored in T13) | `pwa/src/docs/docsLinks.ts` | red | [r](../../../README.md) is a GitHub link built by githubBlobUrl, with the trailing mark, opened on tap |
+| W5P1-T6-M23 | T6 | `pwa/src/docs/DocLink.tsx` | red | renders inert, with no href, when no DocLinkContext is provided |
+| W5P1-T6-M24 | T6 | `pwa/src/docs/DocLink.tsx` | red | a footnote label holding a dot: a tap on its reference scrolls the footnote li |
+| W5P1-T6-M25 | T6 | `pwa/src/docs/DocLink.tsx` | red | an id that matches only once the fragment is percent-decoded is found (#%C3%A9 names the id "é") |
+| W5P1-T6-M26 | T6 | `pwa/src/docs/docsText.ts` | red | [x](https://) is malformed because new URL refuses it, and its sentence says so (not only space, control or backslash) |
+| W5P1-T6-M27 | T6 | `pwa/src/docs/docsLinks.ts` | red | a link to THIS page spelled with its file name and a fragment is a fragment link: a click scrolls and pushes nothing |
+| W5P1-T6-M28 | T6 | `pwa/src/docs/docsLinks.ts` | red | a link to this page with NO fragment stays a doc link, and a link to another page with the same file name too |
+| W5P1-T6-M29 | T6 | `pwa/src/docs/docsLinks.ts` | red | a link to this page with NO fragment stays a doc link, and a link to another page with the same file name too |
+| W5P1-T6-M30 | T6 | `pwa/src/docs/docsLinks.ts` | red | a link to this page with NO fragment stays a doc link, and a link to another page with the same file name too |
+| W5P1-T6-M31 | T6 | `pwa/src/docs/docsLinks.ts` | red | moves the URL properties html-url-attributes lacks too (srcSet, xLinkHref, longDesc, ...): the move fails closed |
+| W5P1-T6-M32 | T6 | `pwa/src/docs/docsLinks.ts` | red | moves the URL properties html-url-attributes lacks too (srcSet, xLinkHref, longDesc, ...): the move fails closed |
+| W5P1-T6-M33 | T6 | `pwa/src/docs/docsLinks.ts` | red | moves the URL properties html-url-attributes lacks too (srcSet, xLinkHref, longDesc, ...): the move fails closed |
+| W5P1-T6-M34 | T6 | `pwa/src/docs/docsLinks.ts` | red | moves the URL properties html-url-attributes lacks too (srcSet, xLinkHref, longDesc, ...): the move fails closed |
+| W5P1-T7-M1 | T7 | `pwa/src/docs/docsLinks.ts` | red | no entry at the resolved path is absent, on every page |
+| W5P1-T7-M2 | T7 | `pwa/src/docs/docsLinks.ts` | red | a committed page refuses a committed symlink, a submodule, and nothing committed as absent |
+| W5P1-T7-M3 | T7 | `pwa/src/docs/docsLinks.ts` | red | a ref-view page that opens committed shows committed bytes of a drafted image, and says so |
+| W5P1-T7-M4 | T7 | `pwa/src/docs/docsLinks.ts` | red | a ref-view page that opens committed shows committed bytes of a drafted image, and says so |
+| W5P1-T7-M5 | T7 (re-anchored in T10) | `pwa/src/docs/docsLinks.ts` | red | a draft page refuses a deleted draft as deleted-in-worktree |
+| W5P1-T7-M6 | T7 | `pwa/src/docs/docsLinks.ts` | red | a draft page refuses a withheld or type-changed draft, never falling back to the committed bytes |
+| W5P1-T7-M7 | T7 | `pwa/src/docs/docsLinks.ts` | red | a draft page takes DraftPin(branch, head, fp) for a drafted regular file, and marks it draft |
+| W5P1-T7-M8 | T7 (re-anchored in T13) | `pwa/src/docs/DocImage.tsx` | red | 31 pinned images load 30; the last is one Load image, whose tap loads it (StrictMode: false) |
+| W5P1-T7-M9 | T7 (re-anchored in T13) | `pwa/src/docs/DocImage.tsx` | red | unmount revokes the URL it created |
+| W5P1-T7-M10 | T7 | `pwa/src/docs/DocImage.tsx` | red | an image listed over its class cap is refused too-large before any fetch; at the cap it loads |
+| W5P1-T7-M11 | T7 (re-anchored in T13) | `pwa/src/docs/DocImage.tsx` | red | an unexpected response is a per-image chip with its own sentence |
+| W5P1-T7-M12 | T7 | `pwa/src/docs/DocImage.tsx` | red | an SVG goes through loaders.file and becomes a data:image/svg+xml;base64 URL, never blob: and never /api/ |
+| W5P1-T7-M13 | T7 | `pwa/src/docs/DocImage.tsx` | red | outside a Docs page every image is refused, and nothing is fetched |
+| W5P1-T7-M14 | T7 | `pwa/src/docs/DocImage.tsx` | red | a draft page loads the DraftPin bytes, wears the draft chip, and counts one embed (and uncounts it on unmount) |
+| W5P1-T7-M15 | T7 | `pwa/src/docs/DocImage.tsx` | red | a root-relative API path ("/api/example/x"): no img, no loader call, one refused span with its reason |
+| W5P1-T7-M16 | T7 | `pwa/src/docs/DocImage.tsx` | red | a raster becomes an object URL of its table type: the img src is that URL and nothing else |
+| W5P1-T7-M17 | T7 | `pwa/src/docs/DocImage.tsx` | red | tapping a loaded image opens its own leaf in-app at the page ref, never /api/ |
+| W5P1-T7-M18 | T7 (re-anchored in T13) | `pwa/src/docs/DocImage.tsx` | red | 31 pinned images load 30; the last is one Load image, whose tap loads it (StrictMode: false) |
+| W5P1-T7-M19 | T7 | `pwa/src/docs/objectUrls.ts` | red | throws for "image/svg+xml" and makes no object URL |
+| W5P1-T7-M20 | T7 | `pwa/src/docs/objectUrls.ts` | red | clicks a detached <a download=name> inside the call, typed application/octet-stream, and revokes after 30 s |
+| W5P1-T7-M21 | T7 | `pwa/src/docs/objectUrls.ts` | red | clicks a detached <a download=name> inside the call, typed application/octet-stream, and revokes after 30 s |
+| W5P1-T7-M22 | T7 | `pwa/src/docs/objectUrls.ts` | red | clicks a detached <a download=name> inside the call, typed application/octet-stream, and revokes after 30 s |
+| W5P1-T7-M23 | T7 | `pwa/src/docs/objectUrls.ts` | red | raster (i.png): saved as application/octet-stream through saveBytes, never its own type |
+| W5P1-T7-M24 | T7 | `pwa/src/docs/objectUrls.ts` | red | decodes base64 exactly, high bytes and NUL included |
+| W5P1-T7-M25 | T7 | `pwa/src/docs/fetchQueue.ts` | red | runs two at a time by default, in order, and starts the next when one settles |
+| W5P1-T7-M26 | T7 | `pwa/src/docs/fetchQueue.ts` | red | runs two at a time by default, in order, and starts the next when one settles |
+| W5P1-T7-M27 | T7 | `pwa/src/docs/fetchQueue.ts` | red | a waiting job whose signal aborts never runs and rejects with the reason; the next one runs |
+| W5P1-T7-M28 | T7 | `pwa/src/docs/fetchQueue.ts` | red | timed out only when mutated (unmutated control green): dispose aborts what runs, rejects what waits, and refuses later jobs |
+| W5P1-T7-M29 | T7 | `pwa/src/docs/DocImage.tsx` | red | unmounting an image aborts its load: the loader's signal is aborted, and a waiting image never reaches its loader |
+| W5P1-T7-M30 | T7 | `pwa/src/docs/DocImage.tsx` | red | unmounting an image aborts its load: the loader's signal is aborted, and a waiting image never reaches its loader |
+| W5P1-T7-M31 | T7 | `pwa/src/docs/DocImage.tsx` | red | unmounting an image aborts its load: the loader's signal is aborted, and a waiting image never reaches its loader |
+| W5P1-T7-M32 | T7 | `pwa/src/docs/DocImage.tsx` | red | a raster whose loader resolves after unmount, ignoring its signal, makes no object URL |
+| W5P1-T7-M33 | T7 (re-anchored in T13) | `pwa/src/docs/DocImage.tsx` | red | a replaced SVG shows Loading, never the old data: image, until its new bytes arrive |
+| W5P1-T7-M34 | T7 | `pwa/src/docs/fetchQueue.ts` | red | a job whose signal is already aborted never starts and rejects with its reason |
+| W5P1-T7-M35 | T7 | `pwa/src/docs/DocImage.tsx` | red | A, then B while B is still queued, then A again: the img is never a revoked URL |
+| W5P1-T7-M36 | T7 | `pwa/src/docs/DocImage.tsx` | red | a raster the loader answers with a MIME outside the table is a loader-failed chip, not a page stuck on Loading |
+| W5P1-T7-M37 | T7 | `pwa/src/docs/DocImage.tsx` | red | a draft image listed over its class cap is refused too-large by its DRAFT size, whatever the committed size |
+| W5P1-T7-M38 | T7 | `pwa/src/docs/DocImage.tsx` | red | an SVG over one base64 chunk (32 768 bytes) holding multi-byte UTF-8 keeps its bytes exactly in the data: URL |
+| W5P1-T8-M1 | T8 | `pwa/src/docs/DocMarkdown.tsx` | red | a 600 KiB doc shows the gate with Format anyway and Show as text, and the parser has 0 calls |
+| W5P1-T8-M2 | T8 | `pwa/src/docs/DocMarkdown.tsx` | red | a doc of exactly DOCS_RENDER_GATE_BYTES is not gated: it parses at once at the normal budget |
+| W5P1-T8-M3 | T8 | `pwa/src/docs/DocMarkdown.tsx` | red | M4.P6 (W5 half): Format anyway posts one docs job whose budget timer is DOCS_PARSE_BUDGET_LARGE_MS |
+| W5P1-T8-M4 | T8 | `pwa/src/docs/DocMarkdown.tsx` | red | the normal job's budget is DOCS_PARSE_BUDGET_MS of the UTF-8 bytes, per document |
+| W5P1-T8-M5 | T8 | `pwa/src/docs/DocMarkdown.tsx` | red | DocMarkdown shows {"kind":"worker-unavailable"} as DocPlain with its note, and draws nothing |
+| W5P1-T8-M6 | T8 | `pwa/src/docs/DocMarkdown.tsx` | red | a 4 KiB doc parses on the main thread and renders the article |
+| W5P1-T8-M7 | T8 | `pwa/src/docs/DocMarkdown.tsx` | red | a 4 KiB doc parses on the main thread and renders the article |
+| W5P1-T8-M8 | T8 | `pwa/src/lib/markdownParse.ts` | red | 90 000 thematic breaks under 512 KiB: the too-wide note, and the renderHast spy has 0 calls |
+| W5P1-T8-M9 | T8 | `pwa/src/docs/DocMarkdown.tsx` | red | a throwing renderer gives DocPlain with the fallback note while the header beside it stays; a new pin resets it |
+| W5P1-T8-M10 | T8 | `pwa/src/docs/DocMarkdown.tsx` | red | a throwing renderer gives DocPlain with the fallback note while the header beside it stays; a new pin resets it |
+| W5P1-T8-M11 | T8 | `pwa/src/docs/DocMarkdown.tsx` | red | {"kind":"timeout","budgetMs":2000} |
+| W5P1-T8-M12 | T8 | `pwa/src/docs/DocMarkdown.tsx` | red | a timeout under the normal budget offers Format anyway, which parses again at the large budget; a large timeout offers nothing |
+| W5P1-T8-M13 | T8 | `pwa/src/docs/DocMarkdown.tsx` | red | worker-failed offers Retry, which parses the same text again and renders what it answers |
+| W5P1-T8-M14 | T8 | `pwa/src/docs/DocMarkdown.tsx` | red | base64 bytes that are not UTF-8 are decoded non-fatally and shown as plain text: "Not valid UTF-8." |
+| W5P1-T8-M15 | T8 | `pwa/src/docs/DocMarkdown.tsx` | red | base64 bytes that are not UTF-8 are decoded non-fatally and shown as plain text: "Not valid UTF-8." |
+| W5P1-T8-M16 | T8 | `pwa/src/docs/DocMarkdown.tsx` | red | is exactly the shared components with the Docs a and img |
+| W5P1-T8-M17 | T8 | `pwa/src/docs/DocMarkdown.tsx` | red | the copy is memoised per outcome: a re-render with a new link object renders the same copy |
+| W5P1-T8-M18 | T8 | `pwa/src/docs/DocMarkdown.tsx` | red | renderHast gets the detached copy, DOC_COMPONENTS and no urlTransform; links go through DocLink |
+| W5P1-T8-M19 | T8 | `pwa/src/docs/DocMarkdown.tsx` | red | the page highlight budget reaches the blocks: of nine 60 000-character ts blocks the ninth is not highlighted |
+| W5P1-T8-M20 | T8 | `pwa/src/docs/DocMarkdown.tsx` | red | base64 bytes that are strict UTF-8 are Markdown, decoded |
+| W5P1-T8-M21 | T8 | `pwa/src/docs/DocMarkdown.tsx` | red | the gate counts UTF-8 bytes, not characters: a text over it in bytes and under it in length is gated, with 0 parses |
+| W5P1-T8-M22 | T8 | `pwa/src/docs/DocMarkdown.tsx` | red | the in-thread limit counts UTF-8 bytes: 2 049 two-byte characters (4 098 bytes, length 2 049) are DocPlain, never parsed in-thread |
+| W5P1-T8-M23 | T8 | `pwa/src/docs/DocMarkdown.tsx` | red | a throwing renderer gives DocPlain with the fallback note while the header beside it stays; a new pin resets it |
+| W5P1-T9-M1 | T9 | `pwa/src/app.tsx` | red | /docsearch is not Docs: the placeholder renders and data-view stays fleet |
+| W5P1-T9-M2 | T9 | `pwa/src/app.tsx` | red | /docs renders the Docs screen in the detail pane and joins [data-view="session"] |
+| W5P1-T9-M3 | T9 | `pwa/src/app.tsx` | red | the Docs screen is not keyed: the same mount spans a page, ref and section change |
+| W5P1-T9-M4 | T9 (re-anchored in T13) | `pwa/src/screens/DocsScreen.tsx` | red | /docs/ replace-navigates to /docs, with no history entry |
+| W5P1-T9-M5 | T9 | `pwa/src/screens/DocsScreen.tsx` | red | branch null: the owner's default view, saying the checkout is not on a named branch or could not be read |
+| W5P1-T9-M6 | T9 | `pwa/src/screens/DocsScreen.tsx` | red | branch null: the owner's default view, saying the checkout is not on a named branch or could not be read |
+| W5P1-T9-M7 | T9 | `pwa/src/screens/DocsScreen.tsx` | red | owner null renders the sentence only: no navigation, no second GET |
+| W5P1-T9-M8 | T9 | `pwa/src/screens/DocsScreen.tsx` | red | a shared-repo answer naming only its owner keeps the page's own ref |
+| W5P1-T9-M9 | T9 | `pwa/src/screens/DocsScreen.tsx` | red | a leaf reached with a slash replace-navigates to the slash-less form |
+| W5P1-T9-M10 | T9 | `pwa/src/screens/DocsScreen.tsx` | red | with the default loaders, a re-render makes no second request: the tree, the file and the image once each |
+| W5P1-T9-M11 | T9 | `pwa/src/screens/DocsScreen.tsx` | red | the default parser prewarms docsRunner once per mount; an injected parser does not |
+| W5P1-T9-M12 | T9 | `pwa/src/screens/DocsScreen.tsx` | red | the drafted-asset count is the sum of the images' deltas, and drops to 0 when the page goes |
+| W5P1-T9-M13 | T9 | `pwa/src/screens/DocsScreen.tsx` | red | a direct load's #fragment is honoured once |
+| W5P1-T9-M14 | T9 | `pwa/src/screens/DocsScreen.tsx` | red | a ready row opens the project's default view; the index is read once per visit |
+| W5P1-T9-M15 | T9 | `pwa/src/docs/DocsLeaf.tsx` | red | raster: ONE DocImage through loaders.raster, an object URL, and never loaders.file |
+| W5P1-T9-M16 | T9 | `pwa/src/docs/DocsLeaf.tsx` | red | text with a registered grammar (x.ts) is highlighted through CodeBlock; x.txt is pre.doc-plain |
+| W5P1-T9-M17 | T9 | `pwa/src/docs/DocsLeaf.tsx` | red | a listed size over DOCS_CLASS_CAP is the too-large sentence with zero file requests (spec 4.4, 6.1) |
+| W5P1-T9-M18 | T9 | `pwa/src/docs/DocsLeaf.tsx` | red | svg: the data: image (never blob:, never /api/), with Source and Download |
+| W5P1-T9-M19 | T9 | `pwa/src/docs/DocsLeaf.tsx` | red | html (/docs/demo/specs/m.html): the stand-in with its size, Source and Download, and no frame of any kind |
+| W5P1-T9-M20 | T9 (re-anchored in T13) | `pwa/src/docs/DocsLeaf.tsx` | red | a cross-doc link's fragment scrolls the target in the new page's article |
+| W5P1-T9-M21 | T9 | `pwa/src/docs/DocsLeaf.tsx` | red | Download saves the bytes as an octet-stream named after the leaf |
+| W5P1-T9-M22 | T9 | `pwa/src/docs/useDocsVisit.ts` | red | other (x.pdf): "No preview (N KiB)" with Download, and no file or raster request |
+| W5P1-T9-M23 | T9 (re-anchored in T10) | `pwa/src/docs/docsLinks.ts` | red | owner 'a' with branch 'ws/a': the same page in a at ref ws/a, and history.length is unchanged |
+| W5P1-T9-M24 | T9 | `pwa/src/docs/docsTree.ts` | red | sectionCountsText reads '12 specs · 40 plans · 3 design · 0 conventions', in L0 order |
+| W5P1-T9-M25 | T9 | `pwa/src/docs/docsTree.ts` | red | specs and plans list newest first, product-design and conventions alphabetically |
+| W5P1-T9-M26 | T9 | `pwa/src/docs/docsTree.ts` | red | the default view never lists a draft-only file; a ref view over an admitted holder lists it with its view |
+| W5P1-T9-M27 | T9 | `pwa/src/docs/docsTree.ts` | red | an exact listed entry is a leaf, a listed entry under path/ makes a directory, anything else is missing |
+| W5P1-T9-M28 | T9 | `pwa/src/docs/DocsIndexView.tsx` | red | says what it lists, then ready rows by name, then the rest by name; no-docs projects fold under one line |
+| W5P1-T9-M29 | T9 | `pwa/src/docs/DocsIndexView.tsx` | red | says what it lists, then ready rows by name, then the rest by name; no-docs projects fold under one line |
+| W5P1-T9-M30 | T9 (re-anchored in T10) | `pwa/src/docs/DocsBanners.tsx` | red | a draft-only file in the default view: not in this listing, and the default-view hint opens it at refs/heads/<branch> |
+| W5P1-T9-M31 | T9 | `pwa/src/docs/DocsTreeView.tsx` | red | a ref view counts drafts and withheld drafts per section; the default view does not |
+| W5P1-T9-M32 | T9 | `pwa/src/docs/useDocsVisit.ts` | red | a fragment named for a page is held for that page only, and any page change drops it (review I1) |
+| W5P1-T9-M33 | T9 | `pwa/src/docs/useDocsVisit.ts` | red | a fragment named for a page is held for that page only, and any page change drops it (review I1) |
+| W5P1-T9-M34 | T9 | `pwa/src/docs/useDocsVisit.ts` | red | the page a fragment is for is its project, ref, section and path: not its view, and not its slash |
+| W5P1-T9-M35 | T9 | `pwa/src/docs/useDocsVisit.ts` | red | a fragment named for a page is held for that page only, and any page change drops it (review I1) |
+| W5P1-T9-M36 | T9 | `pwa/src/docs/DocLink.tsx` | red | a cross-doc fragment: the href carries #part-2, a plain click navigates without it and hands it to onFragment |
+| W5P1-T9-M37 | T9 | `pwa/src/docs/DocsLeaf.tsx` | red | a direct load's fragment is honoured once: scrolled when the body holds it, and cleared right then |
+| W5P1-T9-M38 | T9 | `pwa/src/docs/DocsLeaf.tsx` | red | a fragment the rendered body does not hold is cleared too, and nothing scrolls |
+| W5P1-T9-M39 | T9 | `pwa/src/docs/DocsLeaf.tsx` | red | a leaf that is not Markdown cannot hold a fragment: it is cleared, and nothing scrolls |
+| W5P1-T9-M40 | T9 (re-anchored in T13) | `pwa/src/docs/DocsLeaf.tsx` | red | a re-list that moves a draft past the render gate asks first, instead of formatting on the old choice |
+| W5P1-T9-M41 | T9 | `pwa/src/screens/DocsScreen.tsx` | red | a sign-in reads an index that answered auth again, and the rows render |
+| W5P1-T9-M42 | T9 | `pwa/src/screens/DocsScreen.tsx` | red | the redirect note is absent on another page (review M4) |
+| W5P1-T9-M43 | T9 | `pwa/src/screens/DocsScreen.tsx` | red | a linked-worktree answer {"owner":"a","branch":"main"} naming the page's own project at the same ref is a sentence, never "Opening a…" (/docs/a/specs/x.md?ref=m |
+| W5P1-T9-M44 | T9 | `pwa/src/screens/DocsScreen.tsx` | red | two projects that name each other as owner end in a sentence, not in a loop (review M2) |
+| W5P1-T9-M45 | T9 | `pwa/src/screens/DocsScreen.tsx` | red | two projects that name each other as owner end in a sentence, not in a loop (review M2) |
+| W5P1-T9-M46 | T9 | `pwa/src/screens/DocsScreen.tsx` | red | two projects that name each other as owner end in a sentence, not in a loop (review M2) |
+| W5P1-T9-M47 | T9 | `pwa/src/screens/DocsScreen.tsx` | red | a leaf reached with a slash: the address bar ends at the canonical URL and still carries #sec |
+| W5P1-T9-M48 | T9 | `pwa/src/screens/DocsScreen.tsx` | red | a later, separate visit to a page that was redirected from is redirected again: the chain ends when the URL leaves it (review M2) |
+| W5P1-T9-M49 | T9 | `pwa/src/screens/DocsScreen.tsx` | red | two projects that name each other as owner end in a sentence, not in a loop (review M2) |
+| W5P1-T9-M50 | T9 | `pwa/src/screens/DocsScreen.tsx` | red | an owner ABSENT from a linked-worktree answer (not null) renders the sentence only: no navigation, no second GET (review M4) |
+| W5P1-T9-M51 | T9 | `shared/docs.ts` | red | ?ref=a&ref=b shows the repeated-param sentence and a link to the index, and asks for no tree |
+| W5P1-T10-M1 | T10 | `pwa/src/docs/DocsHead.tsx` | red | /docs/demo/specs shows the served ref, the 8-hex commit, how it was chosen and the chip |
+| W5P1-T10-M2 | T10 (re-anchored in T13) | `pwa/src/docs/docsText.ts` | red | /docs/demo shows the served ref, the 8-hex commit, how it was chosen and the chip |
+| W5P1-T10-M3 | T10 | `pwa/src/docs/DocsHead.tsx` | red | /docs/demo shows the served ref, the 8-hex commit, how it was chosen and the chip |
+| W5P1-T10-M4 | T10 | `pwa/src/docs/DocsHead.tsx` | red | /docs/demo shows the served ref, the 8-hex commit, how it was chosen and the chip |
+| W5P1-T10-M5 | T10 | `pwa/src/docs/DocsHead.tsx` | red | via qualified (local served) with relation diverged and counts { ahead: 2, behind: 3 }: the via sentence (exactly the ref you asked for), then the relation (loc |
+| W5P1-T10-M6 | T10 | `pwa/src/docs/DocsHead.tsx` | red | a dangling origin/HEAD in tried[0] adds its sentence |
+| W5P1-T10-M7 | T10 | `pwa/src/docs/DocsHead.tsx` | red | no origin |
+| W5P1-T10-M8 | T10 | `pwa/src/docs/DocsHead.tsx` | red | fetched, aged by now - receivedAt |
+| W5P1-T10-M9 | T10 | `pwa/src/docs/DocsHead.tsx` | red | a tap is one manual refresh; in flight the chip is disabled |
+| W5P1-T10-M10 | T10 (re-anchored in T13) | `pwa/src/docs/DocsHead.tsx` | red | fetch-too-soon |
+| W5P1-T10-M11 | T10 | `pwa/src/docs/DocsHead.tsx` | red | a stale lock |
+| W5P1-T10-M12 | T10 | `pwa/src/docs/DocsHead.tsx` | red | a re-list that failed |
+| W5P1-T10-M13 | T10 | `pwa/src/docs/DocsHead.tsx` | red | skipped: a local ref |
+| W5P1-T10-M14 | T10 | `pwa/src/docs/DocsHead.tsx` | red | remote branch absent |
+| W5P1-T10-M15 | T10 | `pwa/src/docs/DocsHead.tsx` | red | the button copies the FULL commit and says so |
+| W5P1-T10-M16 | T10 | `pwa/src/docs/DocsHead.tsx` | red | a refused clipboard says copy failed |
+| W5P1-T10-M17 | T10 | `pwa/src/docs/DocsHead.tsx` | red | githubTargetFor(/docs/demo) is {"kind":"root"} |
+| W5P1-T10-M18 | T10 | `pwa/src/docs/DocsHead.tsx` | red | githubTargetFor(/docs/demo/specs/n.md?ref=main) is {"kind":"leaf","section":"specs","path":"n.md","uncommitted":true} |
+| W5P1-T10-M19 | T10 | `pwa/src/docs/DocsHead.tsx` | red | /docs/demo links https://github.com/example-org/example-repo/tree/main and opens it with openExternal on tap |
+| W5P1-T10-M20 | T10 (re-anchored in T13) | `pwa/src/docs/DocsHead.tsx` | red | a local side ahead of origin links with the may-differ note |
+| W5P1-T10-M21 | T10 | `pwa/src/docs/DocsHead.tsx` | red | no GitHub origin: no link, and the reason in words |
+| W5P1-T10-M22 | T10 | `pwa/src/docs/DocsHead.tsx` | red | is not offered in the default view, nor for a file with no committed side |
+| W5P1-T10-M23 | T10 | `pwa/src/docs/DocsHead.tsx` | red | navigates to view=committed with a history entry; the loader gets the committed pin; no commit in the URL |
+| W5P1-T10-M24 | T10 | `pwa/src/docs/DocsHead.tsx` | red | navigates to view=committed with a history entry; the loader gets the committed pin; no commit in the URL |
+| W5P1-T10-M25 | T10 | `pwa/src/docs/DocsHead.tsx` | red | /docs goes up to /, with a history entry |
+| W5P1-T10-M26 | T10 | `pwa/src/docs/DocsHead.tsx` | red | /docs/demo/specs/d/x.md goes up to /docs/demo/specs/d/, with a history entry |
+| W5P1-T10-M27 | T10 | `pwa/src/docs/DocsHead.tsx` | red | a phone shows the last two crumbs behind a leading … button, which shows them all |
+| W5P1-T10-M28 | T10 | `pwa/src/docs/DocsHead.tsx` | red | a phone shows the last two crumbs behind a leading … button, which shows them all |
+| W5P1-T10-M29 | T10 | `pwa/src/docs/DocsHead.tsx` | red | the head says the commit the leaf now reads at, and nothing when there was no move |
+| W5P1-T10-M30 | T10 | `pwa/src/docs/DocsHead.tsx` | red | view=committed: source `committed (view=committed)` |
+| W5P1-T10-M31 | T10 | `pwa/src/docs/DocsHead.tsx` | red | the Docs screen code reads no draft state |
+| W5P1-T10-M32 | T10 | `pwa/src/docs/DocsHead.tsx` | red | typechange: the row badge equals the leaf badge, both ENTRY_BADGE_TEXT[entryView(...).badge] |
+| W5P1-T10-M33 | T10 | `pwa/src/docs/docsText.ts` | red | a draft leaf in a ref view: `draft · modified in workspace a`, the worktree path in its title |
+| W5P1-T10-M34 | T10 | `pwa/src/docs/docsText.ts` | red | truthSource names the worktree at /repo/x/y/z (other) as y/z |
+| W5P1-T10-M35 | T10 | `pwa/src/docs/DocsBanners.tsx` | red | baseEqual false: the base hint linking refs/heads/<b>, and no overlay |
+| W5P1-T10-M36 | T10 | `pwa/src/docs/DocsBanners.tsx` | red | a holder on local main with 3 dirty docs: zero draft rows, and a hint (n = 3) linking ?ref=refs/heads/main |
+| W5P1-T10-M37 | T10 | `pwa/src/docs/DocsBanners.tsx` | red | baseEqual true: the overlay appears, and neither hint |
+| W5P1-T10-M38 | T10 | `pwa/src/docs/DocsBanners.tsx` | red | a holder on local main with 3 dirty docs: zero draft rows, and a hint (n = 3) linking ?ref=refs/heads/main |
+| W5P1-T10-M39 | T10 | `pwa/src/docs/DocsBanners.tsx` | red | unreadable |
+| W5P1-T10-M40 | T10 | `pwa/src/docs/DocsBanners.tsx` | red | too-many |
+| W5P1-T10-M41 | T10 | `pwa/src/docs/DocsBanners.tsx` | red | skipped |
+| W5P1-T10-M42 | T10 | `pwa/src/docs/DocsBanners.tsx` | red | unsettled offers Retry, which re-lists |
+| W5P1-T10-M43 | T10 | `pwa/src/docs/DocsBanners.tsx` | red | a holder with caveats ["skip-worktree","filters-bypassed"] says ["caveat-hash","caveat-filters"] |
+| W5P1-T10-M44 | T10 | `pwa/src/docs/DocsBanners.tsx` | red | a withheld NEW file has no committed version to show, so it does not claim one |
+| W5P1-T10-M45 | T10 | `pwa/src/docs/DocsBanners.tsx` | red | deleted and type-changed name the worktree and show the committed version; conflicted warns |
+| W5P1-T10-M46 | T10 (re-anchored in T13) | `pwa/src/docs/DocsBanners.tsx` | red | not-contained warns, naming the short commit the page read and the served ref, with Re-list |
+| W5P1-T10-M47 | T10 | `pwa/src/docs/DocsBanners.tsx` | red | a page embedding drafted images counts them |
+| W5P1-T10-M48 | T10 | `pwa/src/docs/DocsBanners.tsx` | red | view=committed says so at the short commit, with Back to the draft |
+| W5P1-T10-M49 | T10 | `pwa/src/docs/DocsBanners.tsx` | red | the Docs screen code reads no draft state |
+| W5P1-T10-M50 | T10 | `pwa/src/screens/DocsScreen.tsx` | red | a tree failure keeps the crumbs and replaces the listing; there is no truth line (M4.F4) |
+| W5P1-T10-M51 | T10 | `pwa/src/screens/DocsScreen.tsx` | red | a file failure replaces the body and keeps the header and truth line |
+| W5P1-T10-M52 | T10 | `pwa/src/screens/DocsScreen.tsx` | red | a fetch failure changes only the chip: the listing node is the same node |
+| W5P1-T10-M53 | T10 | `pwa/src/screens/DocsScreen.tsx` | red | a holder on local main with 3 dirty docs: zero draft rows, and a hint (n = 3) linking ?ref=refs/heads/main |
+| W5P1-T10-M54 | T10 | `pwa/src/docs/share.ts` | red | copyText writes through the clipboard, and rejects when there is none |
+| W5P1-T10-M55 | T10 | `pwa/src/docs/DocsHead.tsx` | red | an answered fetch-too-soon is the soon state, counted from its own retryAfterMs and answer time (no auto-retry) |
+| W5P1-T10-M56 | T10 | `pwa/src/docs/DocsHead.tsx` | red | an answered fetch-too-soon is the soon state, counted from its own retryAfterMs and answer time (no auto-retry) |
+| W5P1-T10-M57 | T10 | `pwa/src/docs/DocsHead.tsx` | red | an answered fetch-too-soon is the soon state, counted from its own retryAfterMs and answer time (no auto-retry) |
+| W5P1-T10-M58 | T10 | `pwa/src/docs/DocsHead.tsx` | red | an answered fetch-too-soon is the soon state, counted from its own retryAfterMs and answer time (no auto-retry) |
+| W5P1-T10-M59 | T10 | `pwa/src/docs/DocsHead.tsx` | red | remote branch absent, answered this visit |
+| W5P1-T10-M60 | T10 | `pwa/src/docs/DocsBanners.tsx` | red | an answer that names no commit falls back to the committed pin's own commit, never the tree's |
+| W5P1-T10-M61 | T10 | `pwa/src/docs/DocsBanners.tsx` | red | not-contained warns, naming the short commit the page read and the served ref, with Re-list |
+| W5P1-T10-M62 | T10 | `pwa/src/docs/DocsHead.tsx` | red | a draft leaf (the served ref equal to origin): link and note |
+| W5P1-T10-M63 | T10 | `pwa/src/docs/DocsHead.tsx` | red | /docs/demo/specs/d/x.md links https://github.com/example-org/example-repo/blob/main/docs/superpowers/specs/d/x.md and opens it with openExternal on tap |
+| W5P1-T10-M64 | T10 | `pwa/src/docs/DocsHead.tsx` | red | /docs/demo links https://github.com/example-org/example-repo/tree/main and opens it with openExternal on tap |
+| W5P1-T10-M65 | T10 | `pwa/src/docs/DocsHead.tsx` | red | a re-list that moves the commit clears "copied": the next commit has not been copied |
+| W5P1-T10-M66 | T10 | `pwa/src/docs/DocsHead.tsx` | red | an answered fetch failure is aged from `at`, not from when the listing landed; the last good age from receivedAt |
+| W5P1-T10-M67 | T10 | `pwa/src/docs/DocsBanners.tsx` | red | a holder on local main with 3 dirty docs: zero draft rows, and a hint (n = 3) linking ?ref=refs/heads/main |
+| W5P1-T10-M68 | T10 | `pwa/src/docs/DocsBanners.tsx` | red | baseEqual false: the base hint linking refs/heads/<b>, and no overlay |
+| W5P1-T10-M69 | T10 | `pwa/src/docs/DocsBanners.tsx` | red | a holder on local main with 3 dirty docs: zero draft rows, and a hint (n = 3) linking ?ref=refs/heads/main |
+| W5P1-T11-M1 | T11 | `pwa/src/screens/FleetScreen.tsx` | red | is the class the rendered door actually carries |
+| W5P1-T11-M2 | T11 | `pwa/src/screens/FleetScreen.tsx` | red | sits in the fleet header immediately before the accounts door, says Docs, and routes to /docs |
+| W5P1-T11-M3 | T11 | `pwa/src/screens/FleetScreen.tsx` | red | is the class the rendered door actually carries |
+| W5P1-T11-M4 | T11 | `pwa/src/docs/docsLinks.ts` | red | links the branch the worktree holds now, written verbatim, never the workspace slug |
+| W5P1-T11-M5 | T11 | `pwa/src/docs/docsLinks.ts` | red | renders no link for a project outside the project grammar: "" |
+| W5P1-T11-M6 | T11 | `pwa/src/docs/docsLinks.ts` | red | reads the session’s own project, never the card it renders on |
+| W5P1-T11-M7 | T11 | `pwa/src/docs/docsLinks.ts` | red | links the default view when the session reports no branch |
+| W5P1-T11-M8 | T11 | `pwa/src/fleet/SessionActionsSheet.tsx` | red | closes the sheet, then navigates to exactly the href the builder made |
+| W5P1-T11-M9 | T11 | `pwa/src/fleet/SessionActionsSheet.tsx` | red | closes the sheet, then navigates to exactly the href the builder made |
+| W5P1-T11-M10 | T11 | `pwa/src/fleet/SessionActionsSheet.tsx` | red | is a btn-ghost row right after Restart, labelled with the branch |
+| W5P1-T11-M11 | T11 | `pwa/src/session/SessionHeader.tsx` | red | closes the menu and navigates to exactly the href the builder made |
+| W5P1-T11-M12 | T11 | `pwa/src/session/SessionHeader.tsx` | red | is a menu-item named Docs whose hint is the branch, or default |
+| W5P1-T11-M13 | T11 | `pwa/design/audit.mjs` | red | passes every pair it measures |
+| W5P1-T11-M14 | T11 | `pwa/design/audit.mjs` | red | passes every pair it measures |
+| W5P1-T11-M15 | T11 | `pwa/src/docs/docs.css` | red | docs.css .docs-door:active is registered on the page and also clears AA on the desktop sidebar it sits on |
+| W5P1-T11-M16 | T11 | `pwa/src/docs/docs.css` | red | spells no literal colour (tokens only, section 4.14) |
+| W5P1-T11-M17 | T11 | `pwa/src/docs/docs.css` | red | contains no identities beyond the grandfathered blind spots |
+| W5P1-T11-M18 | T11 | `pwa/src/docs/docs.css` | red | keeps every floored rule on the token, never a bare 44px literal |
+| W5P1-T11-M19 | T11 | `pwa/src/docs/docs.css` | red | are at least one tap tall, off the shared token |
+| W5P1-T11-M20 | T11 | `pwa/src/docs/docs.css` | red | keeps every floored rule on the token, never a bare 44px literal |
+| W5P1-T11-M21 | T11 | `pwa/src/docs/docs.css` | red | keeps every floored rule on the token, never a bare 44px literal |
+| W5P1-T11-M22 | T11 | `pwa/src/docs/docs.css` | red | keeps every floored rule on the token, never a bare 44px literal |
+| W5P1-T11-M23 | T11 | `pwa/src/docs/docs.css` | red | keeps every floored rule on the token, never a bare 44px literal |
+| W5P1-T11-M24 | T11 | `pwa/src/docs/DocsHead.tsx` | red | are the classes the rendered chip, copy button and GitHub link carry |
+| W5P1-T11-M25 | T11 (re-anchored in T13) | `pwa/src/docs/DocImage.tsx` | red | are the classes the rendered controls carry |
+| W5P1-T11-M26 | T11 | `pwa/src/docs/docs.css` | red | declares none |
+| W5P1-T11-M27 | T11 | `pwa/src/screens/DocsScreen.tsx` | red | reaches the main stylesheet: DocsScreen imports docs.css, and app.tsx imports DocsScreen statically |
+| W5P1-T11-M28 | T11 | `pwa/src/screens/FleetScreen.tsx` | red | is still there, in the header cluster before the accounts door, with a session present |
+| W5P1-T11-M29 | T11 | `pwa/src/docs/docs.css` | red | keep a long branch name on its own line: the hint truncates beside the word, the row label breaks (jsdom lays nothing out, so the declarations are pinned) |
+| W5P1-T11-M30 | T11 | `pwa/src/docs/docs.css` | red | keep a long branch name on its own line: the hint truncates beside the word, the row label breaks (jsdom lays nothing out, so the declarations are pinned) |
+| W5P1-T11-M31 | T11 | `pwa/src/docs/docs.css` | red | keep a long branch name on its own line: the hint truncates beside the word, the row label breaks (jsdom lays nothing out, so the declarations are pinned) |
+| W5P1-T11-M32 | T11 | `pwa/src/docs/docs.css` | red | ride the shared rules’ floors: .btn-ghost on the token, .menu-item at or above it |
+| W5P1-T11-M33 | T11 | `pwa/src/docs/docs.css` | red | ride the shared rules’ floors: .btn-ghost on the token, .menu-item at or above it |
+| W5P1-T11-M34 | T11 | `pwa/src/docs/docs.css` | red | keep a long branch name on its own line: the hint truncates beside the word, the row label breaks (jsdom lays nothing out, so the declarations are pinned) |
+| W5P1-T12-M1 | T12 | `pwa/vite.config.ts` | red | vite.config.ts's test.exclude is vitest's own defaults plus browser/** |
+| W5P1-T12-M2 | T12 | `pwa/vitest.browser.config.ts` | red | the browser config: its include, a jsdom environment, 60 s per test and per hook |
+| W5P1-T12-M3 | T12 | `pwa/vitest.browser.config.ts` | red | the browser config: its include, a jsdom environment, 60 s per test and per hook |
+| W5P1-T12-M4 | T12 | `pwa/vite.config.ts` | red | half 1: outside vitest it applies when serving and never when building |
+| W5P1-T12-M5 | T12 | `pwa/vite.config.ts` | red | half 2: under vitest (VITEST set, as now) it does not apply, even when serving |
+| W5P1-T12-M6 | T12 | `pwa/browser/harness.ts` | red | CCRC_CHROME at a missing path and no fallback: it THROWS, naming both |
+| W5P1-T12-M7 | T12 | `pwa/browser/harness.ts` | red | a file that is not executable, or a directory, is not a Chrome |
+| W5P1-T12-M8 | T12 | `pwa/package.json` | red | playwright-core is an exact-version devDependency, and the lock installs that version |
+| W5P1-T12-M9 | T12 | `pwa/package.json` | red | "test:browser" runs vitest on the browser config |
+| W5P1-T12-M10 | T12 | `pwa/tsconfig.json` | red | pwa: EVERY .ts file in the package is in some typecheck project — directories discovered, not listed |
+| W5P1-T12-M11 | T12 | `.github/workflows/ci.yml` | red | full-suite needs every leg — Linux shards, typecheck, agent, pwa, build, macOS, the Node floor, the browser — and asks verdict.mjs full |
+| W5P1-T12-M12 | T12 | `.github/workflows/ci.yml` | red | full-suite needs every leg — Linux shards, typecheck, agent, pwa, build, macOS, the Node floor, the browser — and asks verdict.mjs full |
+| W5P1-T12-M13 | T12 | `.github/workflows/ci.yml` | red | the required matrix, build-pwa and the browser leg carry no job-level if: and no needs: |
+| W5P1-T12-M14 | T12 | `.github/workflows/ci.yml` | red | the required legs and the browser leg skip by STEP, only on a refresh or a rebuild |
+| W5P1-T12-M15 | T12 | `.github/workflows/ci.yml` | red | every job declares a timeout-minutes, and one that is still a deadline |
+| W5P1-T12-M16 | T12 | `.github/workflows/ci.yml` | red | is one job, `browser-pwa`, named `browser (pwa)`, on ubuntu-latest with a 15-minute deadline |
+| W5P1-T12-M17 | T12 (re-anchored in T13) | `shared/docs.ts` | red | pages on B (same site) and C (another site) <img> a docs raster: naturalWidth 0 on both, though the request arrives |
+| W5P1-T12-M18 | T12 | `shared/docs.ts` | red | B's <script src> of a JSON docs response does not execute, with every header and with nosniff alone; the request arrives |
+| W5P1-T12-M19 | T12 | `pwa/src/docs/DocImage.tsx` | red | the page on A draws the SVG; no script runs (no marker request, no console line) and no request leaves the page |
+| W5P1-T12-M20 | T12 (re-anchored in T13) | `pwa/browser/docs-headers.browser.test.ts` | red | the page on A draws the SVG; no script runs (no marker request, no console line) and no request leaves the page |
+| W5P1-T12-M21 | T12 | `shared/docs.ts` | red | pages on B (same site) and C (another site) <img> a docs raster: naturalWidth 0 on both, though the request arrives |
+| W5P1-T12-M22 | T12 | `pwa/browser/docs-headers.browser.test.ts` | red | control: the same SVG as a top-level blob:image/svg+xml runs as A, and its fetch carries A's cookie |
+| W5P1-T12-M23 | T12 | `shared/docs.ts` | red | one variable: the same body labelled image/svg+xml WITH every docs header is inert (the CSP alone stops it) |
+| W5P1-T13-M1 | T13 | `pwa/src/docs/useDocsVisit.ts` | red | a draft whose fingerprint moves on every listing re-lists once and then shows changing |
+| W5P1-T13-M2 | T13 | `pwa/src/docs/useDocsVisit.ts` | red | a read that succeeded re-arms the page: its next move gets its own automatic re-list |
+| W5P1-T13-M3 | T13 | `pwa/src/docs/useDocsVisit.ts` | red | a manual Retry that answered ok at 1 s leaves the 5 s timer nothing to list |
+| W5P1-T13-M4 | T13 | `pwa/src/docs/useDocsVisit.ts` | red | a refresh POST that answered auth no longer shows refresh-failed once the sign-in is back, and does not POST again |
+| W5P1-T13-M5 | T13 | `pwa/src/docs/useDocsVisit.ts` | red | the answer is dropped and a screen shown again reads idle, not fetching |
+| W5P1-T13-M6 | T13 | `pwa/src/docs/DocsLeaf.tsx` | red | same blob at a new commit: the same h1 node survives, the parser is called once, and no second read is made |
+| W5P1-T13-M7 | T13 | `pwa/src/docs/DocsLeaf.tsx` | red | tapping it pushes no history entry and leaves the URL as it was |
+| W5P1-T13-M8 | T13 | `pwa/src/docs/DocsLeaf.tsx` | red | data-draft-assets stays 0 and no draft-assets banner is drawn |
+| W5P1-T13-M9 | T13 | `pwa/src/screens/DocsScreen.tsx` | red | docs-busy with retryAfterMs: one more GET after that wait, a second busy answer shows Retry and no third GET |
+| W5P1-T13-M10 | T13 | `pwa/src/screens/DocsScreen.tsx` | red | docs-busy with retryAfterMs: one more GET after that wait, a second busy answer shows Retry and no third GET |
+| W5P1-T13-M11 | T13 | `pwa/src/screens/DocsScreen.tsx` | red | leaving the screen before the wait ends cancels the retry |
+| W5P1-T13-M12 | T13 | `pwa/src/docs/DocsFailureView.tsx` | red | the button is disabled and the page says fetching while the POST runs, then the fetch failure sentence |
+| W5P1-T13-M13 | T13 | `pwa/src/screens/DocsScreen.tsx` | red | the button is disabled and the page says fetching while the POST runs, then the fetch failure sentence |
+| W5P1-T13-M14 | T13 | `pwa/src/screens/DocsScreen.tsx` | red | the button is disabled and the page says fetching while the POST runs, then the fetch failure sentence |
+| W5P1-T13-M15 | T13 | `pwa/src/docs/DocImage.tsx` | red | a refused external image in an in-app link offers no second action: the tap is the link alone |
+| W5P1-T13-M16 | T13 | `pwa/src/docs/DocImage.tsx` | red | a loaded image in an in-app link: one tap is the link alone, and no button sits inside the anchor |
+| W5P1-T13-M17 | T13 | `pwa/src/docs/DocImage.tsx` | red | Load image in a link loads the image and does not follow the link |
+| W5P1-T13-M18 | T13 | `pwa/src/docs/DocImage.tsx` | red | a raster that answered auth is asked for once more on clearAuthLost, and then shows |
+| W5P1-T13-M19 | T13 | `pwa/src/docs/DocImage.tsx` | red | an unmounted image no longer listens: its subscription is gone, and sign-in after unmount loads nothing |
+| W5P1-T13-M20 | T13 | `pwa/src/lib/markdown.tsx` | red | highlight={false} over the cap reads "{label} · not highlighted ({KiB} KiB)", with no scan and no colour |
+| W5P1-T13-M21 | T13 | `pwa/src/lib/markdownParse.ts` | red | whitespace on both sides, a paragraph after stays literal text in the docs profile, with no br element |
+| W5P1-T13-M22 | T13 | `pwa/src/docs/DocMarkdown.tsx` | red | a small text with a <br>, with no Worker, draws a br element and no literal "<br>" |
+| W5P1-T13-M23 | T13 | `pwa/src/docs/DocsHead.tsx` | red | local-ahead with origin served and counts { ahead: +0, behind: 2 } reads local is 2 ahead of origin |
+| W5P1-T13-M24 | T13 | `pwa/src/docs/DocsHead.tsx` | red | via origin (origin served) with relation local-behind and counts { ahead: 3, behind: +0 }: the via sentence (you asked for ws/a, showing origin's), then the rel |
+| W5P1-T13-M25 | T13 | `pwa/src/docs/DocsBanners.tsx` | red | a tree whose drafts include a deletion counts it in n |
+| W5P1-T13-M26 | T13 | `pwa/src/docs/docsText.ts` | red | the sentence claims neither side, stays a sentence, and the one tried ref is listed under it |
+| W5P1-T13-M27 | T13 | `pwa/src/docs/docsLinks.ts` | red | a local page that is local-ahead has the target note and the same may-differ caution on its mark |
+| W5P1-T13-M28 | T13 | `pwa/src/docs/DocLink.tsx` | red | a local page that is local-ahead has the target note and the same may-differ caution on its mark |
+| W5P1-T13-M29 | T13 | `pwa/src/app.tsx` | red | /docs-x renders the placeholder and data-view stays fleet |
+| W5P1-T13-M30 | T13 | `pwa/src/session/SessionHeader.tsx` | red | the Docs item is History’s next sibling in the menu, and nothing sits between them |
+| W5P1-T13-M31 | T13 | `server/test/single-definition.test.ts` | red | CONTROL: the function pattern sees an async, a default, a declare-d and a generator copy |
+| W5P1-T13-M32 | T13 | `pwa/src/screens/DocsScreen.tsx` | red | navigate('/docs/p?ref=a') then '/docs/p?ref=b': loaders.tree is last called with ('p', bare b) |
+| W5P1-T13-M33 | T13 | `pwa/src/docs/DocMarkdown.tsx` | red | 10 000 nested quotes render DocPlain with the line and the depth |
+
+455 rows; 455 measured as expected.
+
+### The four bounds
+
+- **r10**: `MD_HIGHLIGHT_MAX_WORD_CHARS` = 256; no highlighting for a block holding a word (a run of `[A-Za-z0-9_$]` or of any UTF-16 code unit from 0x7f up: the wider class is a departure from refinement (e)'s first reading, recorded in `## Deviations found`, because highlight.js's PHP grammar takes `\x7f-\xff` as identifier characters and a 64 KiB `php` fence of `_é` repeated cost 38 s while the narrow class scored it 1) longer than this, labelled with the word's length (refinement (e)). Basis: at 256 a block's worst case costs what ordinary code of the same size does, so `DOCS_HIGHLIGHT_PAGE_MAX_CHARS` keeps bounding the page (planning: one `typescript` identifier run cost 21, 11, 146 and 2 291 ms at 256, 1 024, 4 096 and 16 384 characters; 64 KiB of 256-character runs 131 ms against 139 ms of ordinary code). Rows: W5P1-T3-M1 red, W5P1-T3-M2 red, W5P1-T3-M3 red, W5P1-T3-M4 red, W5P1-T3-M13 red, W5P1-T3-M15 red.
+- **r11**: `MD_KEYSTROKE_MAX_CHARS` = 64; a code span longer than this is never a chord: `keystrokeParts` answers null before it trims or splits (refinement (f)), which also caps one span at 33 parts. Basis: the longest chord named keys make is about 40 characters, and at 64 the split costs under 0.1 ms (planning: 0.09, 0.84, 16, 396 and 3 854 ms for a span of `a`, L spaces and `b` at L = 64, 1 024, 4 096, 16 384 and 40 000). Rows: W5P1-T3-M5 red, W5P1-T3-M6 red, W5P1-T3-M7 red, W5P1-T3-M12 red, W5P1-T3-M14 red.
+- **2-2**: `DOCS_MAX_RENDER_ELEMENTS` = 20000; the parse's own element count adds, for every inline `code` not under `pre`, exactly what the chip component draws (2N-1 for a chord of N parts), so `too-wide` fires before anything renders, in the worker, for every profile (refinements (d) and (g)). Basis: Task 3 Step 0 measured the exact count moving no real document under `docs/superpowers` across the limit. Rows: W5P1-T3-M8 red, W5P1-T3-M9 red, W5P1-T3-M10 red, W5P1-T3-M11 red.
+- **line**: `MD_HIGHLIGHT_MAX_LINE_CHARS` = 2048; no highlighting for a registered block that holds a line longer than this (a line ends at a line feed or a carriage return), labelled "{label} · not highlighted (a {n}-character line)": the size cap is checked first, then r10's word scan, then this linear line scan with no regular expression (Task 3's decision 9: a fourth bound beside spec 4.10's three, recorded in `## Deviations found`). Basis: some grammars are quadratic on shapes that are not one long identifier, and that cost grows with line length (a `markdown` fence of one 64 KiB line of `[` about 9.6 s, a `yaml` fence of one 64 KiB line of `a a a ...` 2.8-3.6 s); the bound stops where that growth meets the length-independent plateau of the slowest grammars, and at 2 048 the worst line-driven shape costs 245-263 ms, where 4 096 would cost about twice it. The plateau itself is carried below. Rows: W5P1-T3-M16 red, W5P1-T3-M17 red, W5P1-T3-M18 red, W5P1-T3-M19 red, W5P1-T3-M20 red, W5P1-T3-M21 red.
+- Re-measured here (node v24.14.1, highlight.js 11.11.1, one run each, on this box's load): a 256-character `typescript` identifier highlights in 2.26 ms and a 4 096-character one in 100.9 ms; a span of `a`, 64 spaces and `b` splits in 0.16 ms, and with 16 384 spaces in 268.86 ms. The built worker's 2-2 answer is the gate's `built-worker` line above.
+
+### Merge gate
+
+- R1 (p95 under docs load minus p95 idle, at most 250 ms): not yet run (operator, after W3's dark rollout).
+- R2 (every remote class answers `fetch.state === 'ran'`): not yet run (operator, after W3's dark rollout).
+
+The coordinator replaces these two lines with the measured results in a docs-only commit on this branch before the merge; part 1 does not merge until both pass.
+
+### The W5 halves of W4's refinement (a)
+
+| Row | W4 proved | W5 case |
+|---|---|---|
+| M4.R1 | a probe on `useLocation` re-renders for `?ref=a` then `?ref=b` | `pwa/test/router-location.test.tsx:206` |
+| M4.B1 | a mocked throwing `RunsScreen` at `/runs` keeps the shell | `pwa/test/app-docs-boundary.test.tsx:46` |
+| M4.P1 | the refusal, its control and chat's note | `pwa/test/docs-markdown.test.tsx:243` |
+| M4.P6 | the runner honours a 30 000 `budgetMs` | `pwa/test/docs-markdown.test.tsx:152` |
+| M4.P7 | a throwing `spawn` is a sticky `worker-unavailable`; chat's 4 KiB and 5 KiB | `pwa/test/docs-markdown.test.tsx:209` |
+| M4.P12 | `parseMarkdown` gives `too-wide` for both fixtures; a real 500 KiB doc is a tree | `pwa/test/docs-markdown.test.tsx:254` |
+
+M4.P12's mutation "count only after render" is row W5P1-T8-M8 (the parse's too-wide check removed): red.
+
+### For part 2: the seams part 1 hands over
+
+- pinFor: `export function pinFor`, at `pwa/src/docs/useDocsVisit.ts:93`.
+- imagePinFor: `export function imagePinFor`, at `pwa/src/docs/docsLinks.ts:226`.
+- detachUrls (a copy; DocMarkdown's memo per outcome): `export function detachUrls`, at `pwa/src/docs/docsLinks.ts:80`.
+- DocMarkdown's detach memo: `const detached = useMemo(() => detachUrls`, at `pwa/src/docs/DocMarkdown.tsx:148`.
+- copyText: `export async function copyText`, at `pwa/src/docs/share.ts:8`.
+- saveBytes: `export function saveBytes`, at `pwa/src/docs/objectUrls.ts:33`.
+- docs-scans.test.ts (part 2 adds M4.SH7, M4.EX2, M4.EX11, M4.EX16): `describe("clause 1: no Docs file reads a draft's state`, at `pwa/test/docs-scans.test.ts:102`.
+- the browser harness (M5.B9 runs on it): `export async function startOrigins`, at `pwa/browser/harness.ts:87`.
+
+### Measured values
+
+- Grammars registered in `pwa/src/lib/markdown.tsx`: 15 (bash, typescript, javascript, json, python, css, xml, yaml, markdown, diff, sql, dockerfile, rust, go, php).
+- Golden files under `pwa/test/golden/markdown`: 56, unchanged by every W5.1 commit (the `frozen` invariant).
+- Constants `pwa/src/lib/markdownLimits.ts` declares: 14 (MD_MAX_CONTAINER_DEPTH, MD_MAX_DELIMITER_RUN, MD_MAX_TREE_DEPTH, DOCS_MAX_RENDER_ELEMENTS, MD_HIGHLIGHT_BLOCK_MAX_CHARS, DOCS_HIGHLIGHT_PAGE_MAX_CHARS, DOCS_PARSE_BUDGET_MS, DOCS_PARSE_BUDGET_LARGE_MS, DOCS_RENDER_GATE_BYTES, CHAT_SYNC_MAX_BYTES, CHAT_PARSE_BUDGET_MS, MD_HIGHLIGHT_MAX_WORD_CHARS, MD_HIGHLIGHT_MAX_LINE_CHARS, MD_KEYSTROKE_MAX_CHARS).
+
+### Notes
+
+- Task 13: Findings: raised 31, survived 30, fixed 26, carried 4, not a defect 1, asked 0, ruled departures 0. Commits: 7ecec1ef2 228a3d397 2e51bc8ed 97bacf78b 13ca780ef b462293fc 34ee6efbd f13555713 1abcf03b7 534cd0866 88be6c47a c0ef06663 c9b37c40e d951765fa f1f2bf11d 517afdda1 da0d29349 002b3bf70 eddcb12b6 7a3beaf2c 57c39227a 2b1bc7df8 71682f1d9 76e029847 4081c9507 71151f03b. Panel tip cdaade5503d46d55064d3b814203a22696ace48d; fix-wave tip 1abcf03b70601530c17493b83c871c30085e1463.
+- W5P1-T5-M12 and W5P1-T6-M20: red; the first failed case printed is a later review case guarding the same line, and re-run alone each row also fails the case its `red` names (T5-M12: 2 failed, including 'fetch-too-soon gives soon and one automatic retry at retryAfterMs, with the same reason'; T6-M20: 7 failed, including the three its `red` names).
+- The rows of the per-task review rounds were moved into their own tasks' rows blocks (commit f4a3839c1, plan text only) because this extractor admits a later block's id only as a re-anchor; the suites, the invariants and the gate were first measured at 1abcf03b7, whose code is the same.
+- New or changed user-visible sentences from the reviews (no spec text departs; each fills a silence): `DOCS_VIEW_TEXT.redirectLoop` "Docs did not follow it: the owner named for this folder leads back to this folder." (Task 9 review: inconsistent owner data looped the linked-worktree redirect); `DOCS_FAILURE_SENTENCE['unresolved-ref']` now "No branch by that name was found." (Task 13 review 4-7: a qualified ref is never looked up on the other side); `DOC_LINK_INERT_SENTENCE.malformed` now "This link is not a well-formed URL (it may hold a space, a control character or a backslash)" (Task 6 review).
+- Carried, with an owner: W4's table row W4-T4-M14 anchors on a CodeBlock line Task 13's 4-3 fix re-spelled (W4's history; its plan is not this wave's to edit beyond residue R3/R4).
+- Carried: `pwa/src/fleet/fleet.css`'s header-width comments (a FIFTH item; 369/460/546 px wraps) are stale now the Docs door makes six items; re-measure the header and correct the note (W5 may not edit fleet.css).
+- Carried (L0, the coordinator's call): View on GitHub for a directory listed only because of new drafts, or for an absent section, links a GitHub tree that 404s.
+- Carried (spec-literal): "Back to the draft" shows on a typed `view=committed` URL whose draft no longer exists.
+- Carried: the SVG and html-stand-in leaf bodies are still keyed by the commit-bearing pin, so a commit move resets the SVG Source toggle (Task 13's 3-3 fixed the Markdown body only).
+- Carried: the failure view's fetch note (`.docs-fail-fresh`, Task 13 review 3-2) has no rule of its own in docs.css; it inherits the failure view's text colour (contrast and tap-target suites green).
+
+### Carried, not fixed
+
+- Task 13 review R1 (pwa/src/lib/markdownWorker.ts, pwa/src/lib/markdownRunner.ts): both call `postMessage(` and assign `onmessage`, which W6's M5.16 reds the day it lands. CARRIED: W4's refinement (w), to W6 and the M5.16 amendment. Cost: none in part 1; W6 must amend M5.16 with it, or that scan reds the day it lands.
+- Task 13 review R2 (pwa/src/lib/markdown.tsx): a crafted chat message of 4 096 bytes or less still pays its synchronous parse on the main thread. CARRIED: W4's carried item, with the operator (Global Constraints, "Carried into W5 part 1"); Task 14's Carried lists it. Cost: a crafted chat message of 4 096 bytes or less can still hold the main thread while it parses (chat only: Docs parses in the worker).
+- Task 13 review R3 (pwa/src/lib/markdownParse.ts): nesting continued by indentation, and review 1-4, nest the parser deeply. CARRIED: covered by `threw`, `MD_MAX_TREE_DEPTH` and the worker budget (W4's carried items); Task 14's Carried lists them. Cost: such a document is refused (threw, too deep, or the budget) and shown as plain text with its note, never a crash.
+- Task 13 review R4 ((ccd, outside part 1)): fetch stamps accumulate per branch (SEC-4), and no stamp follows a failed post-fetch for-each-ref. CARRIED: ccd behaviour outside part 1's box (PWA + L0), recommended for W5b, which restamps `ccd/ccd`; part 1 renders what ccd writes. Cost: the fetch-stamp directory grows by one file per fetched branch, and after a failed for-each-ref the chip keeps the previous stamp's age.
+- Review 412's residue R2 (`server/test/ccrc-doctor.test.ts`): under another run's claim and outside part 1's files. CARRIED to W7. Cost: none at runtime; one stale test comment until then.
+- The partial-clone `git-failed {step: 'cat-file'}` versus `unknown-commit`, and `too-many-entries`' stripped `bytes`: rendered as their words say (Task 2). Cost: a partial clone missing a blob reads "git failed" rather than "unknown commit", and the too-many sentence names no byte total.
+- W7 prose residue: `pwa/src/lib/api.ts`'s `absolute()` comment, `server/test/sourceScan.ts`'s header counts, README, CLAUDE.md, N1's docstrings, and the spec text brought into line with refinements (a)-(x). CARRIED to W7. Cost: prose only.
+- The highlighting plateau: about 2.4 s for a crafted page of eight 64 KiB blocks of a length-independent plateau shape such as `javascript` over `(` (about 250-300 ms each), against spec 4.9's 0.25 s for a page; the line bound removes only the cost that grows with line length (Task 3's decision 9). CARRIED to the operator by the coordinator; no code change in part 1. Cost: a crafted page of that shape can hold the main thread for about 2.4 s while it highlights.
+- Part 2 (refinement (a)): Share, Markdown, text and image Export, `ExportAssets`, the settled-outcome context, `lib/markdown.css`, M4.SH1-SH8, M4.EX1-EX16, M5.B9, M4.T7's and M4.S1's amended clauses and M5.17's `downloadExport`. Not built here by design; part 2 is dispatched after this merges. Cost: no Share or Export until then.
+
+### After the merge, not this wave
+
+1. The coordinator fills `### Merge gate` (R1 and R2, after the operator's W3 dark rollout) in a docs-only commit on this branch; only then does part 1 merge. An R1 failure fires `docs-chunked-reads`.
+2. The merge becomes a prerelease (the `dev` channel). It rolls out normally, fleet box first: part 1's L0 change is additive (no wire field, route or argv), and the Docs screen goes live with no Share or Export.
+3. Part 2 (Share and Export) is planned after this review and dispatched from a `main` that holds this merge; W5b follows part 2, rolled `--server-first`; the standalone docs server retires after W7.
