@@ -1,8 +1,8 @@
 // The drawer applying `consoleFit`: the wiring, not the search.
 //
 // What it must get right:
-// - the type is actually SET, and the grid that reaches the socket is the one
-//   the terminal really has afterwards;
+// - the type is actually SET, and the grid that reaches the socket is the
+//   window's own, 220x51, whatever the type and whatever the glass (D-5005);
 // - a glass that already fits is left at the base size;
 // - a glass that cannot fit the window even at the floor stays at the base
 //   size, which is the console `main` shows, and says why in the header;
@@ -24,7 +24,7 @@ import {
   TerminalDrawer, type DrawerTerm, type HistoryTerm, type MakeHistoryTerm,
 } from '../src/session/TerminalDrawer';
 import { BASE_CONSOLE_FONT_PX, MIN_CONSOLE_FONT_PX } from '../src/session/consoleFit';
-import { PINNED_WINDOW_COLS } from '../../shared/api';
+import { PINNED_WINDOW_COLS, PINNED_WINDOW_ROWS, TMUX_STATUS_ROWS } from '../../shared/api';
 
 afterEach(() => {
   cleanup();
@@ -64,9 +64,9 @@ type Grid = { cols: number; rows: number };
  * its cell width really does at some widths.
  *
  * `propose` measures and changes nothing, as `FitAddon.proposeDimensions`
- * does. `setFontSize` and `fit` are the only two calls that move the live
- * grid, and every move they make is written to `grids` — so a fit that
- * resizes the buffer to find something out cannot hide it.
+ * does. `pin` is the only call that moves the live grid (D-5005: `setFontSize`
+ * renders the type and moves nothing), and every move is written to `grids` —
+ * so a fit that resizes the buffer to find something out cannot hide it.
  */
 const fakeTermFactory = (box: number, quirk?: (px: number, cols: number) => number) => {
   let width = box;
@@ -86,25 +86,30 @@ const fakeTermFactory = (box: number, quirk?: (px: number, cols: number) => numb
     }
     return { ...grid };
   };
-  const makeTerm = (_host: HTMLElement): DrawerTerm => {
+  const makeTerm = (): DrawerTerm => {
     // A NEW TERMINAL IS BUILT AT THE BASE SIZE, as the drawer's own factory
     // builds xterm, whatever size the last one on this glass settled at.
     font = BASE_CONSOLE_FONT_PX;
     grid = { cols: 80, rows: 24 };
+    let opened = false;
     return {
       write: () => {},
       onData: () => {},
       onWheel: () => {},
-      fit: () => settle(at(font)),
+      pin: (cols, rows) => { settle({ cols, rows }); },
       propose: (px) => {
         probes.push(px);
-        return at(px);
+        return opened ? at(px) : null;
       },
       setFontSize: (px) => {
         sizes.push(px);
         font = px;
-        return settle(at(px));
       },
+      open: () => { opened = true; },
+      isOpen: () => opened,
+      model: () => [],
+      statusRow: () => [],
+      onParsed: () => () => {},
       focus: () => {},
       dispose: () => {},
     };
@@ -153,18 +158,19 @@ const mount = (
   return { ws, view, host: host as HTMLElement };
 };
 
+/** The window's own size plus tmux's status row: every attach dials it. */
+const WINDOW: Grid = { cols: PINNED_WINDOW_COLS, rows: PINNED_WINDOW_ROWS + TMUX_STATUS_ROWS };
+
 /**
  * The grid the SERVER ends up believing: the one dialled into the URL at
- * attach, unless a later fit sent a `resize` frame.
+ * attach. Since D-5005 nothing changes it afterwards — no frame other than
+ * `input` is sent — and this refuses to read a socket that says otherwise.
  */
 const clientGrid = (ws: FakeSocket): Grid => {
-  const frames = ws.sent
-    .map((raw) => JSON.parse(raw) as { type: string; cols?: number; rows?: number })
-    .filter((f) => f.type === 'resize');
-  const last = frames.at(-1);
-  if (last?.cols !== undefined && last.rows !== undefined) {
-    return { cols: last.cols, rows: last.rows };
-  }
+  const other = ws.sent
+    .map((raw) => (JSON.parse(raw) as { type: string }).type)
+    .filter((type) => type !== 'input');
+  expect(other, 'the drawer sent the pane a frame other than input').toEqual([]);
   const q = new URL(ws.url, 'https://x').searchParams;
   return { cols: Number(q.get('cols')), rows: Number(q.get('rows')) };
 };
@@ -174,16 +180,15 @@ const notice = (view: ReturnType<typeof render>): HTMLElement | null =>
   within(view.baseElement).queryByRole('status', { name: /columns wide/ });
 
 describe('the glass meets the pinned window', () => {
-  it('shrinks the type until the whole window is on screen, and dials THAT grid', () => {
+  it('shrinks the type until the whole window is on screen, and the client stays the window\'s size', () => {
     // 185 columns at 14px is an ordinary desktop browser window. The tmux
-    // window is 220, so tmux would pan it. What must reach the server is the
-    // grid the client really has after the fit, not the one it started with.
+    // window is 220, so the type shrinks until all of it is on the glass.
+    // What reaches the server is the window's own size, whatever the type.
     const t = fakeTermFactory(2600);
     const { ws, view } = mount(t);
 
     expect(t.font(), 'the type did not shrink').toBe(11.7);
-    expect(clientGrid(ws).cols, 'the dialled client is still narrower than the window')
-      .toBeGreaterThanOrEqual(PINNED_WINDOW_COLS);
+    expect(clientGrid(ws), 'the dialled client is not the window\'s size').toEqual(WINDOW);
     expect(notice(view), 'a window that fits was reported as clipped').toBeNull();
   });
 
@@ -194,7 +199,9 @@ describe('the glass meets the pinned window', () => {
     expect(t.font()).toBe(BASE_CONSOLE_FONT_PX);
     expect(t.sizes.every((px) => px === BASE_CONSOLE_FONT_PX), 'a glass that fits was re-typed')
       .toBe(true);
-    expect(clientGrid(ws).cols).toBe(240);
+    // INVERTED, NOT DELETED (D-5005): the client was the glass's 240 columns.
+    // It is the window's 220 now, and the glass shows a margin beside it.
+    expect(clientGrid(ws)).toEqual(WINDOW);
     expect(notice(view)).toBeNull();
   });
 
@@ -215,7 +222,9 @@ describe('the glass meets the pinned window', () => {
     // keyboard and zoom event.
     expect(t.probes.every((px) => px === BASE_CONSOLE_FONT_PX), 'a phone measured other sizes')
       .toBe(true);
-    expect(clientGrid(ws).cols).toBe(48);
+    // INVERTED, NOT DELETED (D-5005): the phone's client was its own 48
+    // columns, which tmux panned. It is the window's size now, panned by nobody.
+    expect(clientGrid(ws)).toEqual(WINDOW);
     expect(notice(view), 'the clip was never explained').not.toBeNull();
   });
 
@@ -227,17 +236,17 @@ describe('the glass meets the pinned window', () => {
     const a = mount(fitsAtTheFloor);
     expect(fitsAtTheFloor.font(), 'a glass that fits at the floor was not shrunk to it')
       .toBe(MIN_CONSOLE_FONT_PX);
-    expect(clientGrid(a.ws).cols).toBe(PINNED_WINDOW_COLS);
+    expect(clientGrid(a.ws)).toEqual(WINDOW);
     expect(notice(a.view), 'a window that fits at the floor was reported clipped').toBeNull();
     cleanup();
 
     // DOWN: 209 columns at 14px guesses 13.3, but at 13.3 this glass shows
-    // 219, one short of the window, which tmux would pan by a column with no
-    // notice at all. The fit steps down until the measured grid holds it.
+    // 219, one short of the window, which would leave a column off the glass
+    // with no notice at all. The fit steps down until the measured grid holds it.
     const oneShort = fakeTermFactory(2930, (px, cols) => (px === 13.3 ? cols - 1 : cols));
     const b = mount(oneShort);
     expect(oneShort.font(), 'the fit kept a size that shows one column short').toBe(13.2);
-    expect(clientGrid(b.ws).cols).toBeGreaterThanOrEqual(PINNED_WINDOW_COLS);
+    expect(clientGrid(b.ws)).toEqual(WINDOW);
   });
 
   it('says the window is clipped when the line puts the floor in reach but the floor measures short', () => {
@@ -246,14 +255,15 @@ describe('the glass meets the pinned window', () => {
     // window fits. But xterm rounds its cell, and at 11px this glass shows 219
     // columns, one short. The window does not fit at any size the console may
     // use, so the console stays at the base size, as on `main`, and the header
-    // must say so. Reading the clip off the line would leave tmux panning a
-    // column with nothing on screen to say why.
+    // must say so. Reading the clip off the line would leave a column off the
+    // glass with nothing on screen to say why.
     const t = fakeTermFactory(2425, (px, cols) => (px === MIN_CONSOLE_FONT_PX ? cols - 1 : cols));
     const { ws, view } = mount(t);
 
     expect(t.probes, 'the floor was never measured').toContain(MIN_CONSOLE_FONT_PX);
     expect(t.font(), 'a glass the floor cannot fit left the base size').toBe(BASE_CONSOLE_FONT_PX);
-    expect(clientGrid(ws).cols).toBe(173);
+    // INVERTED, NOT DELETED (D-5005): the client was the glass's 173 columns.
+    expect(clientGrid(ws)).toEqual(WINDOW);
     expect(notice(view), 'a window one column too wide for the floor was not reported clipped')
       .not.toBeNull();
   });
@@ -396,19 +406,20 @@ describe('the glass meets the pinned window', () => {
     expect(followed.at(-1), 'the history stayed at the old size').toBe(BASE_CONSOLE_FONT_PX);
   });
 
-  it('fits at open when the glass is already laid out, so the URL dials the fitted grid', () => {
-    // The opening fit's grid rides the attach URL. A glass with layout at
-    // open must be fitted there, not first attached at the wrong width and
-    // corrected by a resize frame.
+  // INVERTED, NOT DELETED (D-5005): this was "the URL dials the fitted
+  // grid". The opening fit still runs where the glass allows, so the first
+  // paint is at the right type size; the URL never depended on it again.
+  it('fits the type at open when the glass is already laid out, and the URL dials the window\'s size', () => {
     Object.defineProperty(HTMLElement.prototype, 'clientWidth', { configurable: true, get: () => 1560 });
     try {
       const t = fakeTermFactory(2600);
       render(<TerminalDrawer id={ID} open onClose={() => {}} makeSocket={makeSocket} makeTerm={t.makeTerm} />);
       const ws = FakeSocket.instances.at(-1);
       if (!ws) throw new Error('the drawer opened no socket');
+      expect(t.font(), 'a laid-out glass was not fitted at open').toBe(11.7);
       const q = new URL(ws.url, 'https://x').searchParams;
-      expect(Number(q.get('cols')), 'the attach URL dialled an unfitted grid')
-        .toBeGreaterThanOrEqual(PINNED_WINDOW_COLS);
+      expect({ cols: Number(q.get('cols')), rows: Number(q.get('rows')) },
+        'the attach URL dialled something other than the window').toEqual(WINDOW);
     } finally {
       Reflect.deleteProperty(HTMLElement.prototype, 'clientWidth');
     }
@@ -417,8 +428,8 @@ describe('the glass meets the pinned window', () => {
   it('refits after the notice comes or goes, because the header it sits in can change height', async () => {
     // On a narrow phone the notice can take the header onto a second line,
     // and the glass below loses that height with no window event to say so.
-    // Unrefitted, the terminal keeps rows the glass no longer has, and the
-    // bottom one is cut off under the host's `overflow: hidden`.
+    // Unrefitted, the host — which scrolls the pinned grid's fixed rows and is
+    // held at its bottom — would leave the input box under the glass's edge.
     const frame = (): Promise<void> => act(async () => {
       await new Promise<void>((resolve) => { requestAnimationFrame(() => resolve()); });
     });

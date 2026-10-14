@@ -2350,6 +2350,18 @@ button.metachip:active {
   height: 100%;
   overflow: hidden;
 }
+/* The live terminal's host, in its visible position (D-5005). The client is
+   pinned at the window's own 220x51, so a glass of another size is answered
+   HERE rather than by tmux: a taller glass leaves a margin below the grid,
+   and a shorter or narrower one scrolls this box in the browser — tmux pans
+   nothing. The drawer holds it at its bottom, where the input box is, until
+   the operator scrolls it. Contained, so a scroll past either end does not
+   drag the sheet behind it. The history layer's host stays `hidden`: its
+   drag slides the terminal inside a box that must stay put and clip. */
+.term-host--grid {
+  overflow: auto;
+  overscroll-behavior: contain;
+}
 /* The console history — the pane's own scrollback, read with capture-pane and
    laid over the live glass. Same well, same ink: scrolling back must read as
    the same terminal, not as leaving it. */

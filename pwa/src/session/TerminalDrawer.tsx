@@ -2,9 +2,12 @@
 // from --bg-well (the drawer keeps its dark glass in BOTH themes) holding a
 // real xterm attached to the session's tmux window over `/ws/pty/:id`. Raw
 // utf8 frames stream into term.write; keystrokes — and the mobile quick-key
-// bar's control sequences — flow back as {type:'input'} frames; the fit on
-// open dials the measured cols/rows into the URL and later refits ride
-// {type:'resize'}. Closing the drawer closes the socket, after which the
+// bar's control sequences — flow back as {type:'input'} frames, and nothing
+// else ever does. The attach dials the window's own size plus tmux's status
+// row, 220x51, at every glass width, and the terminal is pinned there (D-5005,
+// spec 2026-10-14 §5.1): a client exactly the window's size is one tmux has
+// nothing to pan and nothing to fill, so the glass changes the type size and
+// never the grid. Closing the drawer closes the socket, after which the
 // server restores the session's canonical tmux window size.
 //
 // THE WHEEL IS NOT PART OF THAT CONVERSATION. tmux attaches this client on the
@@ -22,9 +25,18 @@ import { api, ApiError } from '../lib/api';
 import { checkAuth, onAuthRegained } from '../lib/auth';
 import { useKeyboardInset } from '../lib/keyboard';
 import { wsUrl } from '../lib/ws';
-import { PINNED_WINDOW_COLS } from '../../../shared/api';
+import { PINNED_WINDOW_COLS, PINNED_WINDOW_ROWS, TMUX_STATUS_ROWS } from '../../../shared/api';
 import { BASE_CONSOLE_FONT_PX, consoleFit } from './consoleFit';
 import './chat.css';
+
+/** The grid every attach dials and the live terminal is pinned at: the
+ *  window's own size, plus the row tmux takes for its status line (D-5005). */
+const ATTACH = { cols: PINNED_WINDOW_COLS, rows: PINNED_WINDOW_ROWS + TMUX_STATUS_ROWS } as const;
+
+/** One of the window's rows as styled cells. The cells themselves arrive with
+ *  the wrapped view's model (D-5006); until then the seam carries the shape,
+ *  and the default terminal answers it empty. */
+type ModelRow = readonly unknown[];
 
 /** The slice of xterm the drawer drives — injectable so tests can script it. */
 export interface DrawerTerm {
@@ -33,11 +45,13 @@ export interface DrawerTerm {
   /** Install the wheel handler. `false` means "xterm must not process this" —
    *  the return value xterm's own `attachCustomWheelEventHandler` takes. */
   onWheel(cb: (ev: WheelEvent) => boolean): void;
-  /** Fit the grid to the host element; returns the measured cols/rows. */
-  fit(): { cols: number; rows: number };
+  /** Fix the grid at exactly this size (`term.resize`). Never follows a host:
+   *  the drawer pins it once, at the window's size, before it attaches. */
+  pin(cols: number, rows: number): void;
   /**
    * The grid the host WOULD show at this type size (CSS px), measured by the
-   * terminal itself, or null when the host cannot be measured.
+   * terminal itself, or null when it is not open or the host cannot be
+   * measured.
    *
    * IT DOES NOT RESIZE THE LIVE GRID, and that is its whole contract. tmux
    * attaches this client on the alternate screen, where shrinking the grid
@@ -46,15 +60,24 @@ export interface DrawerTerm {
    * terminal's own type size is put back before it returns.
    */
   propose(px: number): { cols: number; rows: number } | null;
-  /** Render at this type size (CSS px) and fit, once; returns the grid. A fit
-   *  that lands on the grid the terminal already has leaves the buffer alone.
-   *  The drawer shrinks the type so the whole pinned tmux window lands on the
-   *  glass; see `consoleFit`. */
-  setFontSize(px: number): { cols: number; rows: number };
+  /** Render at this type size (CSS px). It moves no grid — the grid is pinned —
+   *  so there is nothing to return. */
+  setFontSize(px: number): void;
+  /** Open into this host, once. A later call is a no-op: the host may move,
+   *  the terminal does not. Opening is the drawer's choice, not the factory's. */
+  open(host: HTMLElement): void;
+  isOpen(): boolean;
+  /** The window's rows (the status row excluded), for every reader of the
+   *  screen. Empty until the model lands (D-5006). */
+  model(): ModelRow[];
+  /** tmux's status row, for the grid's display only; nothing decides on it. */
+  statusRow(): ModelRow;
+  /** Fires after parsed writes; returns the unsubscribe. */
+  onParsed(cb: () => void): () => void;
   focus(): void;
   dispose(): void;
 }
-export type MakeTerm = (host: HTMLElement) => DrawerTerm;
+export type MakeTerm = () => DrawerTerm;
 
 /** The history view's terminal: written once, never typed into. Separate from
  *  `DrawerTerm` because it is a different job — it has no pty behind it, and
@@ -286,7 +309,8 @@ export function paintLag(): PaintLag {
   };
 }
 
-/** `fit()` over a FitAddon, with the one failure both terminals share. */
+/** `fit()` over a FitAddon, with the one failure a host with no layout causes.
+ *  The history terminal's alone: the live one is pinned and never fitted. */
 const fitter = (term: Terminal, fit: FitAddon) => () => {
   try {
     fit.fit();
@@ -296,9 +320,14 @@ const fitter = (term: Terminal, fit: FitAddon) => () => {
   return { cols: term.cols, rows: term.rows };
 };
 
-const defaultMakeTerm: MakeTerm = (host) => {
+/** The live terminal: built at the window's own size and NOT opened here.
+ *  Where it opens is the drawer's choice (D-5005). The FitAddon is loaded for
+ *  `propose` alone; nothing on this terminal ever calls its `fit`. */
+const defaultMakeTerm: MakeTerm = () => {
   const term = new Terminal({
     ...glass(),
+    cols: ATTACH.cols,
+    rows: ATTACH.rows,
     cursorBlink: true,
     // INERT ON THIS TERMINAL, and kept for the one case where it is not:
     // `tmux attach` puts the client on the ALTERNATE screen (every attach
@@ -309,14 +338,14 @@ const defaultMakeTerm: MakeTerm = (host) => {
   });
   const fit = new FitAddon();
   term.loadAddon(fit);
-  term.open(host);
+  let opened = false;
   return {
     write: (d) => term.write(d),
     onData: (cb) => {
       term.onData(cb);
     },
     onWheel: (cb) => term.attachCustomWheelEventHandler(cb),
-    fit: fitter(term, fit),
+    pin: (cols, rows) => term.resize(cols, rows),
     // MEASURED, NOT RESIZED. xterm 6.0.0 re-measures its cell synchronously
     // when the type size changes (CharSizeService measures on the option
     // change and RenderService hands the new cell to the renderer in the same
@@ -338,10 +367,20 @@ const defaultMakeTerm: MakeTerm = (host) => {
         if (was !== px) term.options.fontSize = was;
       }
     },
+    // THE TYPE ONLY. A fit here would hand the grid back to the glass, and a
+    // client narrower or wider than the window is one tmux pans or fills.
     setFontSize: (px) => {
       if (term.options.fontSize !== px) term.options.fontSize = px;
-      return fitter(term, fit)();
     },
+    open: (host) => {
+      if (opened) return;
+      opened = true;
+      term.open(host);
+    },
+    isOpen: () => opened,
+    model: () => [],
+    statusRow: () => [],
+    onParsed: () => () => {},
     focus: () => term.focus(),
     dispose: () => term.dispose(),
   };
@@ -568,7 +607,6 @@ export function TerminalDrawer({
   const connRef = useRef<Conn>('connecting');
   const sockRef = useRef<WebSocket | null>(null);
   const termRef = useRef<DrawerTerm | null>(null);
-  const gridRef = useRef({ cols: 80, rows: 24 });
   /** The type size the live glass is rendering at, which is the size a history
    *  layer is built at. The fit does NOT reason from it: every fit starts from
    *  the base size, so the answer depends on the box alone (`consoleFit`). */
@@ -576,9 +614,10 @@ export function TerminalDrawer({
   /** The history layer's terminal while one is up, so a live refit that moves
    *  the type size can move the history's with it. */
   const histTermRef = useRef<HistoryTerm | null>(null);
-  /** True while the live grid is narrower than the pinned window, which is
-   *  the state in which tmux pans the pane, and the reader deserves to be told
-   *  why their lines begin off-screen. */
+  /** True while the glass cannot show the window's 220 columns even at the
+   *  type's floor. tmux pans nothing — the client is the window's size — but
+   *  the host then scrolls sideways, and the reader deserves to be told why
+   *  their lines run off the right of the glass. */
   const [clipped, setClipped] = useState(false);
   const refitRef = useRef<(() => void) | null>(null);
   const histRef = useRef<Hist>({ at: 'live' });
@@ -669,68 +708,67 @@ export function TerminalDrawer({
   };
 
   /**
-   * THE GLASS MEETS THE WINDOW, because the window cannot meet the glass.
+   * THE TYPE MEETS THE GLASS; THE GRID IS THE WINDOW'S (D-5005).
    *
-   * A tmux client smaller than its window is a VIEWPORT, which tmux pans to
-   * follow the cursor — so on any glass narrower than `PINNED_WINDOW_COLS` a
-   * line's beginning slides off to the left while its owner is typing. The
-   * window is pinned and may not be narrowed to suit: tmux reflows stored lines
-   * on a width change, destructively at this fleet's `history-limit` (the
-   * measurement is in `PINNED_WINDOW_COLS`' own docstring). So the type shrinks
-   * until the whole window is on screen. Where even the floor cannot fit it, a
-   * phone above all, the console stays at the base size, which is exactly the
-   * console `main` shows, and the drawer's header says the window is clipped.
+   * The terminal is pinned at the window's own size, 220 columns by 50 rows
+   * plus tmux's status row, and nothing here resizes it. A client exactly the
+   * window's size is one tmux has nothing to pan and nothing to fill (spec
+   * 2026-10-14 §5.1, W6) — where a client narrower than the window was a
+   * viewport tmux panned to follow the cursor, and a line's beginning slid off
+   * to the left while its owner typed. The window is not narrowed to suit the
+   * glass either: tmux reflows stored lines on a width change, destructively at
+   * this fleet's `history-limit` (the measurement is in `PINNED_WINDOW_COLS`'
+   * own docstring).
    *
-   * MEASURE, THEN FIT ONCE. Every candidate size is measured with
-   * `DrawerTerm.propose`, which does not resize the live grid, and only the
-   * chosen size is applied, with one `fit()`. That matters because of where
-   * this terminal lives: tmux attaches it on the alternate screen, and xterm's
-   * alternate buffer does not survive a shrink. Rows below the cursor are
-   * dropped, rows are trimmed off the top, and the cursor is clamped, and
-   * growing back restores none of it. An earlier revision measured the base
-   * size by resizing to it and back, so a refit that landed on the grid it
-   * started from had quietly rearranged the screen. It sent no resize frame,
-   * because the grid had not changed, so tmux never repainted, and typed
-   * text echoed rows away from the prompt. Measured in
-   * `console-window-fit-xterm.test.tsx` against the real terminal. Now a refit
-   * whose grid is unchanged leaves the buffer alone and sends nothing, as
-   * `main`'s plain `fit()` did.
+   * So the glass changes the TYPE SIZE and nothing else. The type shrinks, down
+   * to the floor, until all 220 columns are on screen. Where even the floor
+   * cannot fit them, a phone above all, the console stays at the base size, the
+   * host scrolls sideways, and the drawer's header says why.
    *
-   * THE ROWS FOLLOW THE TYPE, and that is left alone on purpose. A smaller
-   * size fits more rows as well as more columns, so a shrunk client can be
-   * taller than the 50-row window. tmux draws the window from the client's top
-   * row, keeps its status line on the client's last row, and leaves the rows
-   * between unused. Nothing in the window moves. A client SHORTER than the
-   * window is what moves content: tmux pans it vertically to follow the cursor,
-   * which is what a 14px console on a short glass has always done.
+   * MEASURED, NEVER RESIZED. Every candidate size is measured with
+   * `DrawerTerm.propose`, which does not touch the live grid, and only the chosen
+   * size is applied. tmux attaches this client on the alternate screen, and
+   * xterm's alternate buffer does not survive a shrink: rows below the cursor
+   * are dropped, rows are trimmed off the top, the cursor is clamped, and
+   * growing back restores none of it. An earlier revision measured by resizing
+   * to a size and back, and typed text then echoed rows away from the prompt
+   * (`console-window-fit-xterm.test.tsx` measures it against the real
+   * terminal). A pinned grid ends that hazard rather than stepping around it:
+   * no fit moves the grid at all.
+   *
+   * THE ROWS ARE FIXED TOO. A glass taller than the 51 rows leaves a margin
+   * below them; on a shorter one the host scrolls vertically, held at its
+   * bottom where the box is (`keepBottom`, in the attach).
    *
    * The search is `consoleFit`'s, and lives there so it can be tested without a
    * DOM. What is here is only the application of it.
    */
-  const fitToWindow = (t: DrawerTerm): { cols: number; rows: number } => {
+  const fitToWindow = (t: DrawerTerm): void => {
     // A HOST WITH NO LAYOUT IS UNMEASURED, NOT NARROW. The sheet portals its
     // content and animates in, so the first fit can land on an element with no
-    // width at all — and xterm answers that with the grid it was constructed
-    // with, not with a measurement. Taken as one, it would size the type for a
-    // glass that does not exist; the later fit recovers, but the reader has
-    // already seen the jump. Nothing to measure means nothing to change.
-    if (host === null || host.clientWidth <= 0) return t.fit();
+    // width at all. Taken as a measurement, it would size the type for a glass
+    // that does not exist; the later fit recovers, but the reader has already
+    // seen the jump. Nothing measured means nothing changes: the type and the
+    // clip stay as they are, and the first measured fit decides.
+    if (host === null || host.clientWidth <= 0) return;
     const want = consoleFit((px) => t.propose(px)?.cols ?? null, PINNED_WINDOW_COLS);
-    if (want === null) return t.fit();   // unmeasurable: keep the size we have
-    const grid = t.setFontSize(want.fontSize);
+    if (want === null) return;   // unmeasurable: keep what we have
+    t.setFontSize(want.fontSize);
     fontRef.current = want.fontSize;
     histTermRef.current?.setFontSize?.(want.fontSize);
-    // FROM THE GRID THE TERMINAL SETTLED ON, not from the search's own flag:
-    // the window is clipped exactly when the client is narrower than it.
-    setClipped(grid.cols < PINNED_WINDOW_COLS);
-    return grid;
+    // The search's own verdict, and a measured one: it answers "fits" only for
+    // a size whose grid it measured at 220 columns or more. The grid the
+    // terminal has says nothing here — it is 220 wide whatever the glass shows.
+    setClipped(want.clipped);
   };
 
   // Frames are inert until the socket reports open — quick keys pressed
   // during attach are dropped, never queued blind into a dead pipe.
-  const sendFrame = (
-    frame: { type: 'input'; data: string } | { type: 'resize'; cols: number; rows: number },
-  ): void => {
+  //
+  // INPUT IS THE ONLY FRAME THIS DRAWER SENDS (D-5005), and the type says so:
+  // a resize frame would hand the client's size back to the glass, which is
+  // the panning this design ends, so it no longer compiles.
+  const sendFrame = (frame: { type: 'input'; data: string }): void => {
     const ws = sockRef.current;
     if (!ws || connRef.current !== 'open') return;
     ws.send(JSON.stringify(frame));
@@ -739,8 +777,8 @@ export function TerminalDrawer({
   /** A keystroke — from the keyboard or from the quick-key bar. It RETURNS TO
    *  LIVE first, the way a console jumps to the bottom when you type: the keys
    *  reach the session either way, and watching them land is the whole reason
-   *  to type. The resize frame deliberately does not go through here — a
-   *  rotation is not a keystroke and must not throw away the history. */
+   *  to type. A refit deliberately does not go through here — a rotation is
+   *  not a keystroke and must not throw away the history. */
   const typed = (data: string): void => {
     if (histRef.current.at !== 'live') goHist({ at: 'live' });
     sendFrame({ type: 'input', data });
@@ -755,17 +793,47 @@ export function TerminalDrawer({
     };
     setState('connecting');
 
-    const term = (makeTerm ?? defaultMakeTerm)(host);
+    const term = (makeTerm ?? defaultMakeTerm)();
     termRef.current = term;
+    // THE GRID IS THE WINDOW'S, FIRST AND ONCE (D-5005). Pinned before the
+    // socket exists, so the first byte tmux sends lands in a grid of the size
+    // it was told; and never again, because nothing the glass does is a reason
+    // to move it.
+    term.pin(ATTACH.cols, ATTACH.rows);
+    // ONE HOST, opened into once. It is always the visible position here.
+    term.open(host);
     // A NEW TERMINAL STARTS AT THE BASE SIZE, whatever the last one settled
     // on, and nothing is known about its clip until it has been measured.
     fontRef.current = BASE_CONSOLE_FONT_PX;
     setClipped(false);
-    gridRef.current = fitToWindow(term); // fit-on-open → measured grid rides the URL
+
+    /**
+     * THE BOX IS AT THE BOTTOM, and so is the host's scroll. The grid's 51
+     * rows are fixed, so a glass shorter than them scrolls the host — in the
+     * browser; tmux pans nothing — and Claude Code's input box is on the last
+     * rows. So the host is held at its bottom through every refit (a keyboard
+     * opening, a rotation, the type changing size) UNLESS the operator has
+     * scrolled it: a reader who went up to read the top rows keeps their place
+     * until they scroll back down. `atBottom` is read off the host on every
+     * scroll, the drawer's own included, so a scroll that ends at the bottom
+     * re-arms it whoever made it.
+     */
+    let atBottom = true;
+    const onHostScroll = (): void => {
+      atBottom = host.scrollHeight - host.scrollTop - host.clientHeight <= 1;
+    };
+    const keepBottom = (): void => {
+      if (atBottom) host.scrollTop = host.scrollHeight - host.clientHeight;
+    };
+    host.addEventListener('scroll', onHostScroll, { passive: true });
+
+    fitToWindow(term);   // the type, measured at open where the glass allows
+    keepBottom();
 
     const make = makeSocket ?? ((u: string) => new WebSocket(u));
-    const { cols, rows } = gridRef.current;
-    const ws = make(wsUrl(`/ws/pty/${encodeURIComponent(id)}?cols=${cols}&rows=${rows}`));
+    // THE CONSTANTS, NEVER A MEASUREMENT: whatever the glass, the client the
+    // server attaches is the window's size.
+    const ws = make(wsUrl(`/ws/pty/${encodeURIComponent(id)}?cols=${ATTACH.cols}&rows=${ATTACH.rows}`));
     sockRef.current = ws;
 
     // The SECOND websocket path, and it needs the same treatment as
@@ -842,6 +910,16 @@ export function TerminalDrawer({
       // the alternate buffer would put arrow keys on the pty, which is the
       // whole defect this handler exists to stop.
       if (!ev.ctrlKey && ev.deltaY < 0) openHistory();
+      // AND THE HOST DOES NOT SCROLL ON IT EITHER (D-5005). The host scrolls
+      // now — the grid's 51 rows are fixed and a short glass shows part of
+      // them — and `false` above stops xterm, not the browser, which would
+      // otherwise scroll the host under the history it just asked for. The
+      // vertical wheel keeps the one meaning it has had; the host's scrollbar
+      // is how a short glass reaches its top rows. A pinch stays the browser's
+      // zoom, and a sideways scroll stays the host's own.
+      if (!ev.ctrlKey && ev.deltaY !== 0 && Math.abs(ev.deltaY) >= Math.abs(ev.deltaX)) {
+        ev.preventDefault();
+      }
       return false;
     });
 
@@ -860,8 +938,11 @@ export function TerminalDrawer({
      * work alone. vaul installs `preventScrollMobileSafari` while a drawer is
      * open — `document`, capture phase, `passive: false` — and it calls
      * `preventDefault()` on touchmove for any touch whose scroll parent is the
-     * document, which on this glass is every touch (`.term-host` and every
-     * xterm element inside it are `overflow: hidden`). Safari answers a
+     * document, which on this glass was every touch while `.term-host` and
+     * every xterm element inside it were `overflow: hidden`. The live host
+     * scrolls since D-5005, and vaul still prevents a touchmove that pushes a
+     * scroller past either end — and a second open sheet prevents regardless
+     * (the history layer's own note). Safari answers a
      * prevented touchmove by tearing down the POINTER stream for that gesture,
      * so `pointermove` never arrives and the drag that opens the history could
      * never have fired on an iPhone. It never did: measured on the operator's
@@ -929,15 +1010,14 @@ export function TerminalDrawer({
     host.addEventListener('touchend', openTouchEnd, { passive: true, capture: true });
     host.addEventListener('touchcancel', openTouchEnd, { passive: true, capture: true });
 
-    // Later size changes (rotation, keyboard, desktop resize) → refit; only a
-    // changed grid is worth a resize frame.
+    // Later size changes (rotation, keyboard, desktop resize) → refit: the
+    // type follows the glass and the host keeps its bottom. Nothing is SENT —
+    // the client is the window's size whatever the glass does (D-5005).
     const refit = (): void => {
       const t = termRef.current;
       if (!t) return;
-      const next = fitToWindow(t);
-      if (next.cols === gridRef.current.cols && next.rows === gridRef.current.rows) return;
-      gridRef.current = next;
-      sendFrame({ type: 'resize', cols: next.cols, rows: next.rows });
+      fitToWindow(t);
+      keepBottom();
     };
     refitRef.current = refit;
     window.addEventListener('resize', refit);
@@ -946,6 +1026,7 @@ export function TerminalDrawer({
     return () => {
       window.removeEventListener('resize', refit);
       window.visualViewport?.removeEventListener('resize', refit);
+      host.removeEventListener('scroll', onHostScroll);
       host.removeEventListener('pointerdown', openDown);
       host.removeEventListener('pointermove', openMove);
       host.removeEventListener('pointerup', openEnd);
@@ -1019,9 +1100,10 @@ export function TerminalDrawer({
     // since it shipped (`refit`, in the attach effect); this is the same pair,
     // for the layer that exists to be read.
     //
-    // No grid comparison here, unlike the live one: there is no resize frame to
-    // send and nothing downstream to spare, so a fit that changes nothing is
-    // cheaper than the bookkeeping to avoid it.
+    // A REAL FIT, unlike the live one's type-only refit: this terminal has no
+    // pty behind it, so its grid is free to follow the glass, and there is no
+    // frame to send and nothing downstream to spare. A fit that changes
+    // nothing is cheaper than the bookkeeping to avoid it.
     const refitHistory = (): void => { term.fit(); };
     window.addEventListener('resize', refitHistory);
     window.visualViewport?.addEventListener('resize', refitHistory);
@@ -1300,9 +1382,10 @@ export function TerminalDrawer({
     // eslint-disable-next-line react-hooks/exhaustive-deps -- goHist writes a ref + state only
   }, [hist, histHost, makeHistoryTerm]);
 
-  // The keyboard inset changes the drawer's inner height — refit after paint.
-  // So can the clip notice: it sits in the header above the glass, and on a
-  // narrow phone it can take the header onto a second line.
+  // The keyboard inset changes the drawer's inner height — refit after paint,
+  // so the host keeps its bottom on the glass that is left. So can the clip
+  // notice: it sits in the header above the glass, and on a narrow phone it
+  // can take the header onto a second line.
   useEffect(() => {
     if (!open) return undefined;
     const raf = requestAnimationFrame(() => refitRef.current?.());
@@ -1326,9 +1409,9 @@ export function TerminalDrawer({
         <span
           className="term-clip"
           role="status"
-          aria-label={`The session window is ${PINNED_WINDOW_COLS} columns wide, wider than this screen, so the view pans to follow the cursor`}
+          aria-label={`The session window is ${PINNED_WINDOW_COLS} columns wide, wider than this screen, so the console scrolls sideways`}
         >
-          {`window ${PINNED_WINDOW_COLS} cols · pans`}
+          {`window ${PINNED_WINDOW_COLS} cols · scrolls`}
         </span>
       )}
     </span>
@@ -1338,7 +1421,9 @@ export function TerminalDrawer({
     <Sheet open={open} onClose={onClose} full title="Terminal" eyebrow={eyebrow}>
       <div className="term" style={kbInset > 0 ? { paddingBottom: kbInset } : undefined}>
         <div className="term-screen">
-          <div ref={setHost} className="term-host" />
+          {/* The live terminal's one host, in its visible position (D-5005):
+              it scrolls where the pinned grid is larger than the glass. */}
+          <div ref={setHost} className="term-host term-host--grid" />
           {/* The history layer sits OVER the live one rather than replacing it:
               the live terminal keeps its socket, its grid and its scroll
               position, so leaving the history is not a re-attach. */}

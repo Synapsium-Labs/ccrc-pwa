@@ -122,8 +122,8 @@ const fakeTermFactory = () => {
   // — and a suite that can only drive one of them cannot state it.
   let dataCb: ((data: string) => void) | null = null;
   let grid = { cols: 48, rows: 20 };
-  const makeTerm = (host: HTMLElement): DrawerTerm => {
-    hosts.push(host);
+  const makeTerm = (): DrawerTerm => {
+    let opened = false;
     return {
       write: (d) => write(d),
       onData: (cb) => {
@@ -132,9 +132,17 @@ const fakeTermFactory = () => {
       onWheel: (cb) => {
         wheelHandlers.push(cb);
       },
-      fit: () => ({ ...grid }),
+      pin: () => {},
       propose: () => ({ ...grid }),
-      setFontSize: () => ({ ...grid }),
+      setFontSize: () => {},
+      open: (host) => {
+        hosts.push(host);
+        opened = true;
+      },
+      isOpen: () => opened,
+      model: () => [],
+      statusRow: () => [],
+      onParsed: () => () => {},
       focus: () => {},
       dispose,
     };
@@ -558,8 +566,10 @@ describe('the ways back to live', () => {
 
     expect(historyDoor(), 'a rotation closed the history the reader was in').toBeTruthy();
     expect(h.dispose, 'a rotation disposed the history the reader was in').not.toHaveBeenCalled();
-    // …and the resize itself still reached the pane, which is what a refit is for.
-    expect(lastFrame(ws)).toEqual({ type: 'resize', cols: 60, rows: 18 });
+    // INVERTED, NOT DELETED (D-5005): this read "the resize itself still
+    // reached the pane". The client is the window's size now, so a rotation
+    // changes the type and sends the pane nothing at all.
+    expect(lastFrame(ws), 'a rotation sent the pane a frame').toBeUndefined();
   });
 
   it('a re-attach drops the history, and the fresh terminal gets a fresh wheel guard', async () => {
