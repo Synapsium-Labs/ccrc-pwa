@@ -29,6 +29,7 @@ import { PINNED_WINDOW_COLS, PINNED_WINDOW_ROWS, TMUX_STATUS_ROWS } from '../../
 import { BASE_CONSOLE_FONT_PX, consoleFit } from './consoleFit';
 import { GLASS_ANSI, readModel } from './drawerModel';
 import type { ModelRow } from './drawerModel';
+import { KeyBar } from './KeyBarView';
 import './chat.css';
 
 /** The grid every attach dials and the live terminal is pinned at: the
@@ -509,20 +510,6 @@ export const defaultMakeHistoryTerm: MakeHistoryTerm = (host, lines, pane, fontS
     dispose: () => term.dispose(),
   };
 };
-
-// The phone keyboard's missing keys, with the exact control sequences a tmux
-// pane expects: Esc \x1b · arrows CSI A/B/D/C · Tab \t · Shift+Tab CSI Z ·
-// Enter \r. Legends are mono keycaps (DIRECTION); labels name them for AT.
-const QUICK_KEYS: { legend: string; label: string; seq: string }[] = [
-  { legend: 'esc', label: 'Escape', seq: '\x1b' },
-  { legend: '↑', label: 'Arrow up', seq: '\x1b[A' },
-  { legend: '↓', label: 'Arrow down', seq: '\x1b[B' },
-  { legend: '←', label: 'Arrow left', seq: '\x1b[D' },
-  { legend: '→', label: 'Arrow right', seq: '\x1b[C' },
-  { legend: 'tab', label: 'Tab', seq: '\t' },
-  { legend: '⇧tab', label: 'Shift Tab', seq: '\x1b[Z' },
-  { legend: '⏎', label: 'Enter', seq: '\r' },
-];
 
 /** Lines one wheel notch moves — xterm's own default step, and the amount the
  *  history view opens by so the gesture reads as a scroll rather than a jump. */
@@ -1418,6 +1405,48 @@ export function TerminalDrawer({
     </span>
   );
 
+  /*
+   * THE HISTORY DOOR, beside the key bar and never inside its strip.
+   *
+   * A phone has no wheel, and MEASURED against the real Terminal, a touch drag
+   * over xterm emits nothing to the pty in either buffer — so touch has no
+   * gesture to fix and no gesture that opens this. This key IS its door, which
+   * is why `KeyBar` renders it OUTSIDE the scroller: the one affordance touch has
+   * must never be the thing that scrolled off the edge.
+   *
+   * An ACTION, not a sequence — outside KEY_SEQ so that table goes on meaning
+   * "bytes the pane receives". The legend is a word rather than a glyph for the
+   * same reason: every other legend here IS the key it transmits, and `⇞` would
+   * promise a PageUp this button never sends.
+   */
+  const histDoor = (
+    <button
+      type="button"
+      className="keycap keycap--act"
+      aria-label={atLive ? 'Scroll back' : 'Back to live'}
+      /* A real toggle, not two buttons: one key in, the same key out.
+         `aria-pressed` is what carries the engaged state to AT and,
+         through the attribute selector, to the inverted fill in CSS —
+         one fact, one source, with no `data-` twin to drift from it.
+         ENGAGED MEANS A LAYER IS UP, so it reads the history state
+         itself and not `!atLive`: `reading` and `empty` are also "not
+         live", but in neither has anything been entered, and `empty` is
+         where every reader lands after a swap re-creates the pane with
+         no scrollback. A pressed cap over the live pane tells them they
+         are somewhere they are not. The LEGEND still names the
+         destination in those states, because the cap's job there is to
+         dismiss the notice — engaged and useful are different claims. */
+      aria-pressed={hist.at === 'history'}
+      onPointerDown={(e) => e.preventDefault()} // keep focus in the terminal
+      onClick={() => (atLive ? openHistory() : goHist({ at: 'live' }))}
+    >
+      {/* The legend names the destination, the way every other cap here
+          names what it sends: from live it offers `hist`, and from the
+          history it offers the way back. */}
+      <span aria-hidden="true">{atLive ? 'hist' : 'live'}</span>
+    </button>
+  );
+
   return (
     <Sheet open={open} onClose={onClose} full title="Terminal" eyebrow={eyebrow}>
       <div className="term" style={kbInset > 0 ? { paddingBottom: kbInset } : undefined}>
@@ -1468,67 +1497,7 @@ export function TerminalDrawer({
             </div>
           )}
         </div>
-        <div className="term-keys" role="toolbar" aria-label="Terminal keys">
-          {/* The sequence caps are the half allowed to scroll away. MEASURED:
-              nine caps at --tap-min plus eight gaps and this bar's padding
-              come to 9x44 + 8x8 + 2x12 = 484px before a legend is laid out,
-              and `.sheet-panel--full` drops the drawer's side padding to zero
-              — so on a 390px phone the ninth cap starts at x=428, entirely off
-              the right edge. Survivable while every cap was a key the phone's
-              own keyboard also lacks; not survivable once the strip holds the
-              only door touch has to the console history. */}
-          <div className="term-keys-seq">
-            {QUICK_KEYS.map((k) => (
-              <button
-                key={k.label}
-                type="button"
-                className="keycap"
-                aria-label={k.label}
-                onPointerDown={(e) => e.preventDefault()} // keep focus in the terminal
-                onClick={() => typed(k.seq)}
-              >
-                <span aria-hidden="true">{k.legend}</span>
-              </button>
-            ))}
-          </div>
-          {/* A phone has no wheel, and MEASURED against the real Terminal, a
-              touch drag over xterm emits nothing to the pty in either buffer —
-              so touch has no gesture to fix and no gesture that opens this.
-              This key IS its door, which is why it sits OUTSIDE the scroller
-              above: the one affordance touch has must never be the thing that
-              scrolled off the edge.
-
-              An ACTION, not a sequence — outside QUICK_KEYS so that table goes
-              on meaning "bytes the pane receives". The legend is a word rather
-              than a glyph for the same reason: every other legend here IS the
-              key it transmits, and `⇞` would promise a PageUp this button
-              never sends. */}
-          <button
-            type="button"
-            className="keycap keycap--act"
-            aria-label={atLive ? 'Scroll back' : 'Back to live'}
-            /* A real toggle, not two buttons: one key in, the same key out.
-               `aria-pressed` is what carries the engaged state to AT and,
-               through the attribute selector, to the inverted fill in CSS —
-               one fact, one source, with no `data-` twin to drift from it.
-               ENGAGED MEANS A LAYER IS UP, so it reads the history state
-               itself and not `!atLive`: `reading` and `empty` are also "not
-               live", but in neither has anything been entered, and `empty` is
-               where every reader lands after a swap re-creates the pane with
-               no scrollback. A pressed cap over the live pane tells them they
-               are somewhere they are not. The LEGEND still names the
-               destination in those states, because the cap's job there is to
-               dismiss the notice — engaged and useful are different claims. */
-            aria-pressed={hist.at === 'history'}
-            onPointerDown={(e) => e.preventDefault()} // keep focus in the terminal
-            onClick={() => (atLive ? openHistory() : goHist({ at: 'live' }))}
-          >
-            {/* The legend names the destination, the way every other cap here
-                names what it sends: from live it offers `hist`, and from the
-                history it offers the way back. */}
-            <span aria-hidden="true">{atLive ? 'hist' : 'live'}</span>
-          </button>
-        </div>
+        <KeyBar view="grid" send={typed} action={histDoor} />
       </div>
     </Sheet>
   );
