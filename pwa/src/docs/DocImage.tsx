@@ -156,6 +156,8 @@ function useImageSrc(job: LoadJob | null): Shown {
     const ctl = new AbortController();
     let live = true;
     let created: string | null = null;
+    // `.then(ok).catch(err)`, not `.then(ok, err)`: a throw inside `ok` (`rasterObjectUrl` on a MIME outside the table)
+    // is the same chip as a loader that rejects, never an unhandled rejection over an image stuck on Loading.
     job.queue.run((signal) => fetchImage(job, signal), ctl.signal).then((f) => {
       if (!live) return;
       if (f.s === 'raster') {
@@ -166,7 +168,7 @@ function useImageSrc(job: LoadJob | null): Shown {
       } else {
         setDone({ key, shown: f });
       }
-    }, (err: unknown) => {
+    }).catch((err: unknown) => {
       if (!live) return;
       const error = err instanceof Error ? err.message : String(err);
       setDone({ key, shown: { s: 'failed', sentence: fillSentence(DOC_IMAGE_TEXT.loaderFailed, { error }) } });
@@ -174,7 +176,12 @@ function useImageSrc(job: LoadJob | null): Shown {
     return () => {
       live = false;
       ctl.abort();
-      if (created !== null) URL.revokeObjectURL(created);
+      if (created !== null) {
+        URL.revokeObjectURL(created);
+        // `done` still holds the URL just revoked under this key; a render that comes back to the key (A, B, A, or the
+        // same image under new loaders) would show it. Drop it, so the image reads Loading until its new bytes arrive.
+        setDone((d) => (d !== null && d.key === key ? null : d));
+      }
     };
     // The job's other fields are fixed by its key (`docsApi.file(project, pin)` and the class its path gives).
   }, [key, job?.loaders, job?.queue]);

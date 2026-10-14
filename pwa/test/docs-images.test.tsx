@@ -4,6 +4,7 @@
 // replacement) or an SVG's `data:image/svg+xml;base64,` URL (never a `blob:`), loaded through the page's queue
 // (concurrency 2) from an image the pin rule admits. Everything else is a refused span with its reason. Every page is
 // a placeholder (`demo`, `main`, `example-org/example-repo`, `https://evil.example`, `https://a.example`).
+import { StrictMode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, waitFor } from '@testing-library/react';
 import type { Root as HastRoot } from 'hast';
@@ -93,6 +94,8 @@ interface DocOpts {
   readonly url?: string;
   readonly tree?: DocsTreeOk;
   readonly assets?: Assets;
+  /** Wrap the page in `<StrictMode>` (its effects run, clean up and run again on mount). */
+  readonly strict?: boolean;
 }
 
 /** `src` (Markdown, or a hast tree as is) detached and rendered as a Docs page body with `DocLink` and `DocImage`. */
@@ -105,7 +108,7 @@ function docUi(src: string | HastRoot, o: DocOpts = {}) {
     project: page.project, pageRef: page.ref, view: page.view, section: page.section, path: page.path, tree,
     pageSource: 'committed', urls: d.urls, onFragment: vi.fn(),
   };
-  const ui = (
+  const page$ = (
     <article>
       <DocLinkContext value={ctx}>
         <DocsAssetContext value={assets.value}>
@@ -114,6 +117,7 @@ function docUi(src: string | HastRoot, o: DocOpts = {}) {
       </DocLinkContext>
     </article>
   );
+  const ui = o.strict === true ? <StrictMode>{page$}</StrictMode> : page$;
   return { ui, assets, page, tree };
 }
 
@@ -241,6 +245,7 @@ describe('M4.U1: nothing hostile becomes src, and nothing is fetched for it', ()
     ['an empty source', '', 'empty'],
     ['a mailto: URL', 'mailto:you@example.com', 'scheme'],
     ['a fragment', '#fn-1', 'fragment'],
+    ['an encoded slash in a segment', 'x%2Fy.png', 'bad-path'],
   ];
 
   it.each(CASES)('%s (%j): no img, no loader call, one refused span with its reason', async (_name, src, why) => {
@@ -294,6 +299,19 @@ describe('M4.U1: nothing hostile becomes src, and nothing is fetched for it', ()
     cleanup();
     const atCap = renderDoc('![i](i.png)', { tree: withImage({ committed: { kind: 'file', blob: '1'.repeat(40), size: cap } }) });
     await waitFor(() => expect(imgs(atCap.container)).toHaveLength(1));
+  });
+
+  it('a draft image listed over its class cap is refused too-large by its DRAFT size, whatever the committed size', async () => {
+    const cap = DOCS_CLASS_CAP.raster;
+    const tree = withImage(
+      { committed: { kind: 'file', blob: '1'.repeat(40), size: 10 }, draft: draftOf('modified', { fp: FP_2, size: cap + 1 }) },
+      { draft: draftOf('modified') });
+    const { container, assets } = renderDoc('![i](i.png)', { tree, url: '/docs/demo/specs/a.md?ref=main' });
+    await act(async () => {});
+    expect(container.querySelector('span.doc-img-refused')?.textContent)
+      .toBe(refusedText('too-large', { size: kib(cap + 1), cap: kib(cap) }));
+    expect(assets.raster).not.toHaveBeenCalled();
+    expect(imgs(container)).toHaveLength(0);
   });
 
   it('outside a Docs page every image is refused, and nothing is fetched', () => {
@@ -439,6 +457,36 @@ describe('loading: raster object URLs, SVG data: URLs, failures (spec 4.11, 5.4,
     expect(imgs(container)).toHaveLength(0);
   });
 
+  it('an SVG over one base64 chunk (32 768 bytes) holding multi-byte UTF-8 keeps its bytes exactly in the data: URL', async () => {
+    const text = '<svg xmlns="http://www.w3.org/2000/svg"><!--' + '\u00e9\u{1F600}'.repeat(7000) + '--></svg>';
+    const want = new TextEncoder().encode(text);
+    expect(want.length).toBeGreaterThan(0x8000 * 1.25);
+    const tree = treeOk({ entries: [entry('specs', 'a.md'), entry('specs', 'd.svg')] });
+    const assets = fakeAssets();
+    assets.file.mockResolvedValue(okSvg(text));
+    const { container } = renderDoc('![d](d.svg)', { tree, assets });
+    await waitFor(() => expect(imgs(container)).toHaveLength(1));
+    const src = loadedSrcs(container)[0]!;
+    expect(src.startsWith('data:image/svg+xml;base64,')).toBe(true);
+    const binary = atob(src.slice('data:image/svg+xml;base64,'.length));
+    const got = Uint8Array.from(binary, (c) => c.charCodeAt(0));
+    expect(got.length).toBe(want.length);
+    expect(got.every((b, i) => b === want[i])).toBe(true);
+  });
+
+  it('a raster the loader answers with a MIME outside the table is a loader-failed chip, not a page stuck on Loading', async () => {
+    const assets = fakeAssets();
+    assets.raster.mockResolvedValue(
+      { s: 'ok', value: { bytes: pngBytes(), mime: 'image/x-unexpected' as 'image/png' } });
+    const { container } = renderDoc('![i](i.png)', { tree: withImage(), assets });
+    await waitFor(() => expect(container.querySelector('span.doc-img-failed')).not.toBeNull());
+    expect(container.querySelector('span.doc-img-failed')!.textContent).toBe(
+      fillSentence(DOC_IMAGE_TEXT.loaderFailed, { error: "rasterObjectUrl: 'image/x-unexpected' is not a raster type" }));
+    expect(container.querySelectorAll('.doc-img-loading')).toHaveLength(0);
+    expect(imgs(container)).toHaveLength(0);
+    expect(URL.createObjectURL).not.toHaveBeenCalled();
+  });
+
   it('a loader that rejects is a chip naming the error', async () => {
     const assets = fakeAssets();
     assets.raster.mockRejectedValue(new Error('boom'));
@@ -450,21 +498,28 @@ describe('loading: raster object URLs, SVG data: URLs, failures (spec 4.11, 5.4,
 });
 
 describe('M4.U5: the image cap', () => {
-  it(`${DOCS_MAX_IMAGES_PER_PAGE + 1} pinned images make ${DOCS_MAX_IMAGES_PER_PAGE} loader calls; the last is Load image, whose tap loads it`, async () => {
-    const n = DOCS_MAX_IMAGES_PER_PAGE + 1;
-    const names = Array.from({ length: n }, (_, i) => `i${i}.png`);
-    const tree = treeOk({ entries: [entry('specs', 'a.md'), ...names.map((p) => entry('specs', p))] });
-    const { container, assets, getAllByRole } = renderDoc(names.map((p) => `![${p}](${p})`).join('\n\n'), { tree });
-    await waitFor(() => expect(imgs(container)).toHaveLength(DOCS_MAX_IMAGES_PER_PAGE));
-    expect(assets.raster).toHaveBeenCalledTimes(DOCS_MAX_IMAGES_PER_PAGE);
-    expect(assets.raster.mock.calls.map(([, pin]) => pin.path)).toEqual(names.slice(0, DOCS_MAX_IMAGES_PER_PAGE));
-    const load = getAllByRole('button', { name: DOC_IMAGE_TEXT.load });
-    expect(load).toHaveLength(1);
-    fireEvent.click(load[0]!);
-    await waitFor(() => expect(imgs(container)).toHaveLength(n));
-    expect(assets.raster).toHaveBeenCalledTimes(n);
-    expect(assets.raster.mock.calls[n - 1]?.[1].path).toBe(names[n - 1]);
-  });
+  // StrictMode runs every effect, cleans it up and runs it again, so a loader may be asked twice for one image there
+  // (the first ask aborted); what must hold in both is WHICH images load, and that exactly one waits for Load image.
+  it.each([[false], [true]])(
+    `${DOCS_MAX_IMAGES_PER_PAGE + 1} pinned images load ${DOCS_MAX_IMAGES_PER_PAGE}; the last is one Load image, whose tap loads it (StrictMode: %s)`,
+    async (strict) => {
+      const n = DOCS_MAX_IMAGES_PER_PAGE + 1;
+      const names = Array.from({ length: n }, (_, i) => `i${i}.png`);
+      const tree = treeOk({ entries: [entry('specs', 'a.md'), ...names.map((p) => entry('specs', p))] });
+      const { container, assets, getAllByRole } = renderDoc(
+        names.map((p) => `![${p}](${p})`).join('\n\n'), { tree, strict });
+      await waitFor(() => expect(imgs(container)).toHaveLength(DOCS_MAX_IMAGES_PER_PAGE));
+      const asked = (): string[] => [...new Set(assets.raster.mock.calls.map(([, pin]) => pin.path))];
+      expect(asked()).toEqual(names.slice(0, DOCS_MAX_IMAGES_PER_PAGE));
+      if (!strict) expect(assets.raster).toHaveBeenCalledTimes(DOCS_MAX_IMAGES_PER_PAGE);
+      const load = getAllByRole('button', { name: DOC_IMAGE_TEXT.load });
+      expect(load).toHaveLength(1);
+      fireEvent.click(load[0]!);
+      await waitFor(() => expect(imgs(container)).toHaveLength(n));
+      expect(asked()).toEqual(names);
+      if (!strict) expect(assets.raster).toHaveBeenCalledTimes(n);
+      expect(assets.raster.mock.calls.some(([, pin]) => pin.path === names[n - 1])).toBe(true);
+    });
 });
 
 describe('M4.U6: object URLs are revoked', () => {
@@ -490,6 +545,59 @@ describe('M4.U6: object URLs are revoked', () => {
     await waitFor(() => expect(loadedSrcs(r.container)).toEqual([second]));
     expect(URL.revokeObjectURL).toHaveBeenCalledWith(first);
     expect(URL.revokeObjectURL).not.toHaveBeenCalledWith(second);
+  });
+
+  /** No `img` on the page may carry a URL that `URL.revokeObjectURL` has been called with. */
+  const noRevokedShown = (c: HTMLElement): void => {
+    const revoked = vi.mocked(URL.revokeObjectURL).mock.calls.map(([u]) => u);
+    for (const s of loadedSrcs(c)) expect(revoked).not.toContain(s);
+  };
+
+  it('A, then B while B is still queued, then A again: the img is never a revoked URL', async () => {
+    const assets = fakeAssets();
+    const tree = treeOk({ entries: [entry('specs', 'a.md'), entry('specs', 'i.png'), entry('specs', 'j.png')] });
+    const r = renderDoc('![i](i.png)', { tree, assets });
+    await waitFor(() => expect(imgs(r.container)).toHaveLength(1));
+    const first = vi.mocked(URL.createObjectURL).mock.results[0]!.value as string;
+    assets.raster.mockImplementationOnce(() => new Promise<DocsRasterAnswer>(() => {}));
+    r.rerender(docUi('![i](j.png)', { tree, assets }).ui);
+    await act(async () => {});
+    expect(URL.revokeObjectURL).toHaveBeenCalledWith(first);
+    noRevokedShown(r.container);
+    r.rerender(docUi('![i](i.png)', { tree, assets }).ui);
+    noRevokedShown(r.container);
+    expect(loadedSrcs(r.container)).not.toContain(first);
+    await act(async () => {});
+    noRevokedShown(r.container);
+    await waitFor(() => expect(imgs(r.container)).toHaveLength(1));
+    const created = vi.mocked(URL.createObjectURL).mock.results.map((x) => x.value as string);
+    expect(loadedSrcs(r.container)).toEqual([created[created.length - 1]]);
+    expect(created[created.length - 1]).not.toBe(first);
+    noRevokedShown(r.container);
+  });
+
+  it('the same image under new loaders and a new queue loads again and never shows the URL the old run revoked', async () => {
+    const tree = withImage();
+    const one = fakeAssets();
+    const r = renderDoc('![i](i.png)', { tree, assets: one });
+    await waitFor(() => expect(imgs(r.container)).toHaveLength(1));
+    const first = vi.mocked(URL.createObjectURL).mock.results[0]!.value as string;
+    const two = fakeAssets();
+    let release: () => void = () => {};
+    two.raster.mockImplementationOnce(() => new Promise<DocsRasterAnswer>((resolve) => {
+      release = () => resolve({ s: 'ok', value: { bytes: pngBytes(), mime: 'image/png' } });
+    }));
+    r.rerender(docUi('![i](i.png)', { tree, assets: two }).ui);
+    await act(async () => {});
+    expect(URL.revokeObjectURL).toHaveBeenCalledWith(first);
+    noRevokedShown(r.container);
+    expect(two.raster).toHaveBeenCalledTimes(1);
+    expect(r.container.querySelectorAll('.doc-img-loading')).toHaveLength(1);
+    await act(async () => { release(); });
+    await waitFor(() => expect(imgs(r.container)).toHaveLength(1));
+    const second = vi.mocked(URL.createObjectURL).mock.results[1]!.value as string;
+    expect(loadedSrcs(r.container)).toEqual([second]);
+    noRevokedShown(r.container);
   });
 
   it('a raster whose loader resolves after unmount, ignoring its signal, makes no object URL', async () => {
