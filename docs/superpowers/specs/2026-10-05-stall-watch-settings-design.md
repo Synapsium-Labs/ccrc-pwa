@@ -1065,7 +1065,7 @@ One path, registered in `server/src/coord/routes.ts` beside `/api/coord/caps`: *
 - **Cost.** The read is bounded by 48 h of `run_events` on the `run_events_by_at` index, and runs once per GET (60 s
   per open Settings page).
 
-## 12. Wire types (L0, `shared/api.ts`, additive, imports nothing)
+## 12. Wire types (L0, `shared/api.ts` and, since wave 4, `shared/stall-watch.ts`, additive, type imports only)
 
 **Placement.** The whole block is appended at the **end** of `shared/api.ts`, below `MAIL_REPLAY_MS` (≈:9096, the
 file's last line at origin/main be93d159e). That constant's own docstring (≈:9094–9095) gives the reason: README and
@@ -1144,7 +1144,9 @@ form that keeps every word in L0.
 | `STALL_NOT_AVAILABLE_TEXT` | "Stall-watch settings are not available on this server. Any choice shown before is no longer applied; the watch follows the fleet box's files." |
 | `STALL_NEXT_TEXT` | `{ lead: 'Next step:', waitsOn: 'Waits on:', top: 'Top of the ladder.' }` |
 | `STALL_QUIET_NOTE` | §7's note, with no number and no level label |
-| `STALL_CONFIRM_TEXT` | the sheet's lines (§13): `title`, `followTitle`, `quietTitle`, `confirm`, `turnsOn`, `turnsOnFree`, `backOn`, `heldByBox`, `due`, `dueFromOff`, `dueMail`, `dueMailOff`, `dueMailOffHeld`, `dueMailBack`, `quietDue`, `quietDueAll`, `quietDueMailOff`, `quietDueAllMailOff`, `quietRecorded`, `quietOff`, `quietRepeat`, `quietRepeatMailOff`, `quietDialogs`, `unknown`, and the refusal toast `refused` |
+| `STALL_CONFIRM_TEXT` | the sheet's lines (§13): `title`, `followTitle`, `quietTitle`, `confirm`, `turnsOn`, `turnsOnFree`, `backOn`, `heldByBox`, `due`, `dueFromOff`, `dueMail`, `dueMailOff`, `dueMailOffHeld`, `dueMailBack`, `quietDue`, `quietDueAll`, `quietDueMailOff`, `quietDueAllMailOff`, `quietRecorded`, `quietOff`, `quietRepeat`, `quietRepeatMailOff`, `quietDialogs`, `unknown`, the refusal toast `refused`, and `unanswered`, the toast for a POST with no answer (departure `unanswered-write-has-its-own-l0-line`) |
+| `STALL_CONFIRM_TEXT.unconfirmed` | a key of `STALL_CONFIRM_TEXT` in `shared/api.ts` (wave 4): "Not confirmed — the choice may or may not have been saved ({detail}); the screen will re-check.", the toast for an answer that carries none of the route's refusal codes (D-4045) |
+| `STALL_WATCH_REFUSALS` | in `shared/stall-watch.ts` (wave 4): the POST's refusal codes, `bad-request`, `confirm-required` and `not-configured`, the keys of a total table over the `StallWatchRefusal` union, with the guard `isStallWatchRefusal` (D-4045) |
 | `STALL_NOTICE_TEXT` | `{ checks, wakes, reports, pushes }`, the four count labels (§11) |
 | `STALL_RUNLESS_FOOTNOTE` | "Counts notices on runs only. Notices about a session on no run, or about a coordinator itself, sent or shadow, are not counted here; shadow ones appear only in the server log." |
 | `STALL_SECTION_TEXT` | the headings and small words: `title` ('Stall watch'), `level`, `quiet` ('Quiet time before a worker check'), `builtIn`, `chosenHere`, `range` ('{min} to {max}'), `counts` ('Last {window}', filled from `windowMs`), `sent`, `shadow`, `countsFailed`, `custom`, `unknown`, `theySay` ('they say: {level}'), `stale`, `unread` |
@@ -1318,9 +1320,16 @@ difference. "Don't know yet" never borrows the rendering of "nothing there".
      key the server no longer matches opens a fresh sheet from the fresh effect: another page wrote, or the fleet
      box's files moved, while the sheet was open. Nothing is written until the operator has confirmed what the
      server will actually do.
-5. Any other refusal gives `toast(STALL_CONFIRM_TEXT.refused, 'error')`, "Nothing was changed: <detail>", with the
-   server's detail in the slot, then `reload()`. Because the controls render from the server's answer, they show the
-   stored value again.
+5. A refusal whose body's `error` is one of the route's own codes, `STALL_WATCH_REFUSALS` (`bad-request`,
+   `confirm-required`, `not-configured`), gives `toast(STALL_CONFIRM_TEXT.refused, 'error')`, "Nothing was changed:
+   <detail>", then `reload()`. Any other answer confirms nothing about the write
+   (`an-answer-without-a-refusal-code-reads-unconfirmed`, D-4045): a gateway's 502 or 504 can follow a POST that
+   reached the server, and a 500 can follow a store that committed. It gives a plain
+   `toast(STALL_CONFIRM_TEXT.unconfirmed)`, "Not confirmed — the choice may or may not have been saved (<detail>); the
+   screen will re-check.", then `reload()`. A POST with no answer at all gives `STALL_CONFIRM_TEXT.unanswered`
+   (departure `unanswered-write-has-its-own-l0-line`), then `reload()`. The detail is the server's `detail`, else
+   Fastify's `message`, else the error's text, else the HTTP status. Because the controls render from the server's
+   answer, they show the stored value again.
 
 The section never decides whether a write needs a confirm, never previews a choice, and holds no ladder.
 
@@ -1552,7 +1561,7 @@ text says pushes arrive wherever push notifications are switched on in Settings,
 | A write that makes a stored choice apply: a level written over a stored quiet time that did not apply, or a quiet time written over a stored level that did not | The effect is measured on the row the write will leave, so the stored half that comes into force is part of it (§10). | The confirm, with the stage lines or the quiet lines the other half brings. |
 | Two Settings pages write at once | Each write is one transaction, and the last one wins. Each reply re-reads, and the feed records both, each with its actor. A confirm is decided by the server at the write, and its key carries the row's `updatedAt`, so a write that lands between one page's sheet and its re-POST makes that page's key stale. | The second page gets a fresh sheet for what its write now does. The next poll shows the final value on both pages. |
 | The confirm's key no longer matches (another page wrote, or the fleet box's files moved, while the sheet was open) | Nothing is written. The POST answers 409 again with the fresh effect and key. | A fresh sheet. |
-| The row changes outside the server between the POST's read and its transaction (a hand edit of `coord.db`) | The store finds a different row and answers `conflict` without writing (§8). The route measures once more on the row it found: 409 with the fresh effect when that needs a confirm, otherwise the write. A second conflict is refused with a 500, and nothing is written. | A fresh sheet, a settled write, or the refusal toast. |
+| The row changes outside the server between the POST's read and its transaction (a hand edit of `coord.db`) | The store finds a different row and answers `conflict` without writing (§8). The route measures once more on the row it found: 409 with the fresh effect when that needs a confirm, otherwise the write. A second conflict is refused with a 500, and nothing is written. | A fresh sheet, a settled write, or, on the second conflict's 500, the unconfirmed toast with the route's own message, which says nothing was written (§13 step 5). |
 | The feed archive write fails | The setting is written and the record degrades, with a warn, and the flush still runs. | No feed row for that change. |
 | A write's reply cannot be read | It may have landed. | "Saved — the server's answer could not be read; the screen will re-check." Then a reload. |
 | A newer PWA meets an older server | The GET answers 404 `not-found`. | The not-available text, whether or not a view had landed (§13). |

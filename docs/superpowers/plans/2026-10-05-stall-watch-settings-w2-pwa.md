@@ -201,8 +201,10 @@ Record every line in the wave-done mail. If another PR has landed rows in any of
   never arrived (a network failure after the POST may have left) gives `toast(STALL_CONFIRM_TEXT.unanswered)` (fix
   round 1, F1), then `reload()`: it may have landed, so it never says "Nothing was changed" (§15's "A write's reply
   cannot be read" row). Any other refusal gives `STALL_CONFIRM_TEXT.refused` with its
-  detail (the server's `detail`, else the 500 body's `message`, else the error's own text), then `reload()`. The
-  controls are locked while a write is in flight or its sheet is open.
+  detail (the server's `detail`, else the 500 body's `message`, else the error's own text), then `reload()`. Wave 4
+  narrows this to the route's own codes and reads any other answer as unconfirmed (D-4045 in
+  `docs/superpowers/plans/2026-10-14-stall-watch-settings-w4-residue.md`). The controls are locked while a write is in
+  flight or its sheet is open.
 - **Not-configured wins over a landed view** (§13, D-4035). Only 501 `not-configured` and 404 `not-found` map to
   `not-configured`, and both status and code must match. The section's whole body is then `STALL_NOT_AVAILABLE_TEXT`:
   no Now block, no control, no checked radio.
