@@ -121,16 +121,17 @@ describe('the truth line on every page with a listing (M4.T1)', () => {
   });
 
   it.each([
-    ['qualified', 'diverged', 'exactly the ref you asked for', 'local and origin have diverged (2 vs 3), showing local', 'warn'],
-    ['origin', 'equal', "you asked for ws/a, showing origin's", 'local and origin agree', 'info'],
-    ['local', 'local-behind', 'you asked for ws/a, showing local', 'origin is 3 ahead of local', 'info'],
-    ['origin', 'origin-only', "you asked for ws/a, showing origin's", 'only on origin', 'info'],
-    ['local', 'unmeasured', 'you asked for ws/a, showing local', 'local vs origin not measured', 'info'],
-  ] as const)('via %s with relation %s: the via sentence, then the relation (%s; %s; tone %s)',
-    (via, relation, viaText, relationText, tone) => {
+    ['qualified', 'local', 'diverged', { ahead: 2, behind: 3 }, 'exactly the ref you asked for', 'local and origin have diverged (2 vs 3), showing local', 'warn'],
+    ['origin', 'origin', 'equal', { ahead: 0, behind: 0 }, "you asked for ws/a, showing origin's", 'local and origin agree', 'info'],
+    // ccd counts from the served side: a local-behind tree serves origin, whose lead over local is `ahead`.
+    ['origin', 'origin', 'local-behind', { ahead: 3, behind: 0 }, "you asked for ws/a, showing origin's", 'origin is 3 ahead of local', 'info'],
+    ['origin', 'origin', 'origin-only', { ahead: 2, behind: 3 }, "you asked for ws/a, showing origin's", 'only on origin', 'info'],
+    ['local', 'local', 'unmeasured', { ahead: 2, behind: 3 }, 'you asked for ws/a, showing local', 'local vs origin not measured', 'info'],
+  ] as const)('via %s (%s served) with relation %s: the via sentence, then the relation (%s; %s; tone %s)',
+    (via, side, relation, counts, viaText, relationText, tone) => {
       const tree = withRef({
-        requested: 'ws/a', via, relation, side: via === 'origin' ? 'origin' : 'local',
-        counterpart: { ref: 'refs/remotes/origin/ws/a', commit: COMMIT_B, ahead: 2, behind: 3, count: 'measured' },
+        requested: 'ws/a', via, relation, side,
+        counterpart: { ref: 'refs/remotes/origin/ws/a', commit: COMMIT_B, ahead: counts.ahead, behind: counts.behind, count: 'measured' },
       });
       head('/docs/demo?ref=ws/a', tree);
       expect(q('.docs-truth-via').textContent).toBe(viaText);
@@ -662,3 +663,32 @@ describe('back is up one level, and the crumbs (spec 4.4 layout)', () => {
   });
 });
 
+describe('T13 review 4-1: the relation sentence speaks of local against origin, whichever side ccd served', () => {
+  // ccd counts from the SERVED side (ccd/ccd counts_of; server/test/ccd-docs-tree.test.ts 'counts measured from the
+  // served side'): `ahead` is the served ref's lead over the counterpart, `behind` the counterpart's lead over it.
+  it.each([
+    ['local-ahead', 'local', { ahead: 2, behind: 0 }, 'local is 2 ahead of origin'],
+    ['local-ahead', 'origin', { ahead: 0, behind: 2 }, 'local is 2 ahead of origin'],
+    ['local-behind', 'local', { ahead: 0, behind: 3 }, 'origin is 3 ahead of local'],
+    ['local-behind', 'origin', { ahead: 3, behind: 0 }, 'origin is 3 ahead of local'],
+    ['diverged', 'local', { ahead: 2, behind: 3 }, 'local and origin have diverged (2 vs 3), showing local'],
+    ['diverged', 'origin', { ahead: 3, behind: 2 }, 'local and origin have diverged (2 vs 3), showing local'],
+  ] as const)('%s with %s served and counts %o reads %s', (relation, side, counts, text) => {
+    const tree = withRef({
+      requested: 'ws/a', served: side === 'local' ? 'refs/heads/ws/a' : 'refs/remotes/origin/ws/a', name: 'ws/a', side,
+      via: 'qualified', relation,
+      counterpart: { ref: side === 'local' ? 'refs/remotes/origin/ws/a' : 'refs/heads/ws/a', commit: COMMIT_B, ahead: counts.ahead, behind: counts.behind, count: 'measured' },
+    });
+    head('/docs/demo?ref=ws/a', tree);
+    expect(q('.docs-truth-relation').textContent).toBe(text);
+  });
+
+  it('an unmeasured count stays out of the sentence on either side', () => {
+    const tree = withRef({
+      requested: 'ws/a', side: 'origin', via: 'qualified', relation: 'local-ahead',
+      counterpart: { ref: 'refs/heads/ws/a', commit: COMMIT_B, ahead: 0, behind: null, count: 'timeout' },
+    });
+    head('/docs/demo?ref=ws/a', tree);
+    expect(q('.docs-truth-relation').textContent).not.toMatch(/\d/);
+  });
+});

@@ -279,9 +279,13 @@ function TruthLine(p: {
   const ref = tree.ref;
   const withRelation = ref.via === 'local' || ref.via === 'origin' || ref.via === 'qualified';
   const c = ref.counterpart;
+  // ccd counts from the SERVED side (`ahead`: the served ref's lead over the counterpart), but the sentences speak of
+  // LOCAL against origin. So when origin is served the two numbers trade places: `{ahead}` is always local's lead.
   const counts: Record<string, number> = {};
-  if (c !== null && c.ahead !== null) counts['ahead'] = c.ahead;
-  if (c !== null && c.behind !== null) counts['behind'] = c.behind;
+  const localLead = c === null ? null : ref.side === 'origin' ? c.behind : c.ahead;
+  const originLead = c === null ? null : ref.side === 'origin' ? c.ahead : c.behind;
+  if (localLead !== null) counts['ahead'] = localLead;
+  if (originLead !== null) counts['behind'] = originLead;
   let leaf: ReactNode = null;
   if (page.kind === 'path') {
     const k = docsPathKind(tree, page.section, page.path, modeOf(page));
