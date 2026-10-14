@@ -35,6 +35,7 @@ import { MailStrip } from '../src/session/MailStrip';
 import { PrKeycap } from '../src/session/PrKeycap';
 import { PrSheet } from '../src/session/PrSheet';
 import { ReapSheet } from '../src/session/ReapSheet';
+import { RootFallback, ScreenFallback } from '../src/components/RenderBoundary';
 
 const read = (...seg: string[]): string =>
   readFileSync(path.join(import.meta.dirname, '..', 'src', ...seg), 'utf8');
@@ -488,5 +489,35 @@ describe('.program-start-go — the sheet’s own confirm control', () => {
       loadProjects={async () => ({ roots: [], projects: [{ name: 'ccrc-pwa', workdir: '/w' }] })} />);
     fireEvent.click(await screen.findByRole('button', { name: /ccrc-pwa/i }));
     expect(await screen.findByRole('button', { name: /^start/i })).toHaveClass('program-start-go');
+  });
+});
+
+// — native Docs reader, W4 Task 8: the two RenderBoundary fallbacks' buttons (Reload, Back to the fleet) —
+//
+// Both are `.btn-primary`, whose own rule (components/primitives.css) carries the floor; `.render-fallback
+// .btn-primary` (styles/shell.css) gives the width back and must not lower the height.
+
+describe('.render-fallback .btn-primary — the boundary fallbacks’ Reload and Back to the fleet', () => {
+  const primitivesCss = read('components', 'primitives.css');
+  const shellCss = read('styles', 'shell.css');
+
+  it('is at least one tap tall, off the shared token, and the fallback rule does not lower it', () => {
+    expect(declValue(ruleIn(primitivesCss, '.btn-primary'), 'min-height')).toBe('var(--tap-min)');
+    const local = ruleIn(shellCss, '.render-fallback .btn-primary');
+    expect(declValue(local, 'min-height')).toBeNull();
+    expect(declValue(local, 'height')).toBeNull();
+    expect(declValue(local, 'max-height')).toBeNull();
+  });
+
+  it('is the class both rendered fallback buttons actually carry, inside .render-fallback', () => {
+    render(<RootFallback reload={() => {}} />);
+    const reload = screen.getByRole('button', { name: 'Reload' });
+    expect(reload).toHaveClass('btn-primary');
+    expect(reload.closest('.render-fallback')).not.toBeNull();
+    cleanup();
+    render(<ScreenFallback />);
+    const back = screen.getByRole('button', { name: 'Back to the fleet' });
+    expect(back).toHaveClass('btn-primary');
+    expect(back.closest('.render-fallback')).not.toBeNull();
   });
 });

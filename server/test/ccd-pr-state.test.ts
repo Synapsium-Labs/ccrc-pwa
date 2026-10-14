@@ -564,6 +564,81 @@ describe('_gh_repo_slug', () => {
     h.git(main, 'config', 'remote.origin.url', url);
     expect(() => h.sh(`_gh_repo_slug "${main}"`)).toThrow();
   });
+
+  // Two guards from decision 11 of the Share/Export design. The answer is spent
+  // as `gh --repo` on a WRITE-scoped token (pr-open, pr-state, ws-reap) and as
+  // the docs wire's github slug, so (1) one of the three GitHub prefixes must
+  // have MATCHED — an origin that is a bare relative path such as `owner/name`
+  // is a directory, not a GitHub repository — and (2) neither segment after the
+  // prefix may be exactly `.` or `..`, and the OWNER may not start with `.`,
+  // which no GitHub owner name does. A repository NAME may start with `.`:
+  // `org/.github` and `user/.dotfiles` are real repositories, so they are slugs.
+  it.each([
+    ['example-org/example-repo'],                // a bare relative path: no prefix matched
+    ['../x'],                                    // dot segments, no prefix
+    ['./x'],
+    ['.x/y'],
+    ['x/.y'],                                    // no prefix: refused though `.y` is a valid name
+    ['x/..'],
+    ['x/.'],
+    ['https://github.com/../x'],                 // dot segments AFTER a real prefix
+    ['https://github.com/./x'],
+    ['https://github.com/x/..'],
+    ['https://github.com/o/..git'],              // one .git strips, leaving o/.
+    ['git@github.com:.x/y.git'],
+    ['http://github.com/o/r'],                   // not one of the three prefixes
+    ['git' + '@gitlab.com:o/r'],                 // not GitHub (built from parts: topology-clean's email class)
+    ['git@github.com:https://github.com/o/r'],   // exactly ONE prefix strips
+  ])('refuses %s (decision 11: a GitHub prefix matched, no . or .. segment, no dot owner)', (url) => {
+    const main = h.makeRepo('demo');
+    h.git(main, 'config', 'remote.origin.url', url);
+    expect(() => h.sh(`_gh_repo_slug "${main}"`)).toThrow();
+  });
+
+  it.each([
+    ['https://github.com/example-org/example.repo', 'example-org/example.repo'],   // a dot inside a segment
+    ['git@github.com:o.x/r..y.git', 'o.x/r..y'],
+    ['https://github.com/o/r.', 'o/r.'],                                          // a trailing dot is not a leading one
+    ['https://github.com/o/r.git.git', 'o/r.git'],                                // one trailing .git, not two
+    ['ssh://git@github.com/o-1/r_2', 'o-1/r_2'],
+    ['https://github.com/org/.github', 'org/.github'],                            // a leading-dot NAME is a slug
+    ['git@github.com:user/.dotfiles.git', 'user/.dotfiles'],
+    ['ssh://git@github.com/x/.y', 'x/.y'],
+  ])('still reads %s as %s (decision 11 changes nothing a real prefix already named)', (url, slug) => {
+    const main = h.makeRepo('demo');
+    h.git(main, 'config', 'remote.origin.url', url);
+    expect(h.sh(`_gh_repo_slug "${main}"`)).toBe(slug);
+  });
+
+  // The regex's ranges are ASCII only under the C locale. Under a UTF-8 locale
+  // such as en_US.UTF-8, bash matches `[A-Za-z]` by collation, so a non-ASCII
+  // letter would pass and reach `gh --repo`. The python copy's `re.fullmatch`
+  // matches by code point, so the two copies would disagree. The function pins
+  // `LC_ALL=C` for itself. These rows run once under the inherited locale and
+  // once under en_US.UTF-8. That second run fails without the pin on any host
+  // that has the locale installed; where it is missing, bash falls back to C.
+  const nonAscii = [
+    `https://github.com/o/r${String.fromCharCode(0xe9)}`,          // a Latin-1 letter in the name
+    `https://github.com/${String.fromCharCode(0xf3)}/r`,            // ... in the owner
+    `git@github.com:${String.fromCharCode(0xff4f)}/r.git`,          // a fullwidth letter
+  ];
+  it.each(nonAscii.flatMap((url) => [[url, 'inherited'], [url, 'en_US.UTF-8']]))(
+    'refuses the non-ASCII origin %s under the %s locale (the regex is ASCII in every locale)', (url, loc) => {
+      const main = h.makeRepo('demo');
+      h.git(main, 'config', 'remote.origin.url', url);
+      const env = loc === 'inherited' ? {} : { LC_ALL: loc };
+      expect(() => h.sh(`_gh_repo_slug "${main}"`, env)).toThrow();
+    });
+
+  it('answers no-remote for a bare owner/name origin and never reaches gh', () => {
+    // End to end: the slug is the gate before `--repo`, so a refused origin
+    // spends no gh call at all.
+    const { main } = workspaceWithCommit('demo', 'quiet-basin');
+    h.git(main, 'config', 'remote.origin.url', 'example-org/example-repo');
+    expect(JSON.parse(h.sh(`${GH_STUB} cmd_pr_state --session demo-quiet-basin`)))
+      .toEqual({ phase: 'unknown', reason: 'no-remote' });
+    expect(h.ghCalls()).toEqual([]);
+  });
 });
 
 describe('binding', () => {

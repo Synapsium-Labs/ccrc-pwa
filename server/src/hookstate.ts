@@ -2,7 +2,7 @@ import path from 'node:path';
 import type { FleetIO } from './io.js';
 import type { HookAsk, HookAskQuestion } from '../../shared/api.js';
 
-/** A hookstate file older than this is presumed stale: the writing hook
+/** A hookstate file whose `updatedAt` and `aliveAt` are both older than this is presumed stale: the writing hook
  *  process may be dead, wedged, or the session may have moved on without a
  *  terminal event (a killed pane, a box reboot). Orca's own constant,
  *  carried over rather than re-derived. */
@@ -249,9 +249,14 @@ export async function readHookStateMeasured(
  * (`currentUuid === null`), `current` when `sessionId === currentUuid` (including the `'' === ''` case that
  * read has always passed), and `foreign` otherwise. `empty-uuid-is-foreign` (D-3619) is the turn marker's rule, not
  * this file's.
+ *
+ * `aliveAt` (D-4041, `a-carried-wait-keeps-its-stamp`) is the hook's additive liveness stamp. A subagent's tool event
+ * over a main-thread wait keeps that wait's `updatedAt` (its start) and writes `aliveAt` = now. It is present only when the
+ * file's value is a finite number; an absent or malformed one is ABSENT here, never `malformed`. It is not on
+ * `HookState`: the one reader that needs it is the age cut (`foldHookStateRead`), which reads the later of the two.
  */
 export type HookStateRawRead =
-  | { ok: true; state: HookState; sessionId: string; identity: 'current' | 'foreign' | 'unregistered' }
+  | { ok: true; state: HookState; sessionId: string; identity: 'current' | 'foreign' | 'unregistered'; aliveAt?: number }
   | { ok: false; reason: 'absent' | 'unmeasured' | 'malformed' };
 
 /** The raw read's one parse-failure answer, spelled once: each rejection below is a file this reader DID look at (the
@@ -298,6 +303,10 @@ export async function readHookStateRawMeasured(io: FleetIO, registryDir: string,
   const updatedAt = raw['updatedAt'];
   if (typeof updatedAt !== 'number' || !Number.isFinite(updatedAt)) return MALFORMED;
 
+  // D-4041: ignored unless a finite number (a bad one must not condemn a file whose `updatedAt` is good).
+  const aliveRaw = raw['aliveAt'];
+  const aliveAt = typeof aliveRaw === 'number' && Number.isFinite(aliveRaw) ? aliveRaw : undefined;
+
   const interruptedRaw = raw['interrupted'];
   if (interruptedRaw !== undefined && typeof interruptedRaw !== 'boolean') return MALFORMED;
 
@@ -322,6 +331,7 @@ export async function readHookStateRawMeasured(io: FleetIO, registryDir: string,
       },
       sessionId,
       identity: currentUuid === null ? 'unregistered' : sessionId === currentUuid ? 'current' : 'foreign',
+      ...(aliveAt === undefined ? {} : { aliveAt }),
     };
   } catch (err) {
     if (err instanceof Malformed) return MALFORMED;
@@ -343,7 +353,9 @@ const RAW_FAILURE_FOLD: Record<Extract<HookStateRawRead, { ok: false }>['reason'
 function foldHookStateRead(raw: HookStateRawRead, now: number): HookStateRead {
   if (!raw.ok) return RAW_FAILURE_FOLD[raw.reason];
   if (raw.identity !== 'current') return NO_STATE;
-  if (now - raw.state.updatedAt > HOOKSTATE_FRESH_MS) return NO_STATE;
+  // The age cut's clock is the later of the file's `updatedAt` and its `aliveAt` (D-4041): a main-thread wait that a
+  // subagent keeps touching holds its start in `updatedAt`, and the touches are what say the session is alive.
+  if (now - Math.max(raw.state.updatedAt, raw.aliveAt ?? raw.state.updatedAt) > HOOKSTATE_FRESH_MS) return NO_STATE;
   return { ok: true, state: raw.state };
 }
 

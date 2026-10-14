@@ -210,7 +210,7 @@ CCRC_DOCTOR_CHECKS=(
   fleet
   memory
   routing model-default   # one line, as `flock timeout` above; _check_model-default is at the END of this file
-  models codex docs history   # four entries on one line: every line below is cited by number elsewhere
+  models codex docs history docs-sw   # five entries on one line: every line below is cited by number elsewhere
 )
 
 # ── verdict helpers ───────────────────────────────────────────────────────
@@ -7404,9 +7404,10 @@ _check_history() {
 # of 2026-10-12: a fresh install ends green): an absent token takes its class from the box's history (4553;
 # `_bt_server_arm`, `_bt_fleet_arm`). With no history it is not a finding, only a fact named in the detail (the server
 # mints at boot; the server's next rotation hands the fleet its value), the way `auth` and `provenance` name theirs.
-# A box that once held a value and lost it stays FAIL. That PASS is not an arm's finding, so the kill switch leaves it
-# PASS as well; every real finding is SKIP there. An absent token on a box without `python3` FAILs, by fail-closed
-# design: nothing can be read to class it lower.
+# A box that once held a value and lost it stays FAIL (on the server, a sibling trace counts as that history, 4554, and so,
+# on an own-write box, do the fleet file and the generation file its server wrote).
+# That PASS is not an arm's finding, so the kill switch leaves it PASS as well; every real finding is SKIP there. An
+# absent token on a box without `python3` FAILs, by fail-closed design: nothing can be read to class it lower.
 # `transport http` is printed on a PASS line and is never a verdict.
 #
 # THE WORDS ARE L0's, pinned by `doctor-box-token.test.ts`: `_BT_HOLDS` is `TOKEN_HOLDS`, `_BT_OWED` is
@@ -7428,6 +7429,12 @@ _BT_ARMS_ON=1
 # The value line `deploy/ccrc-mail.token.example` ships. A copy of `PLACEHOLDER_TOKEN` (`server/src/coord/token.ts`),
 # held to it by a text pin in `coord-token.test.ts`. Both arms read it: a token file carrying it is no token.
 _BT_PLACEHOLDER='REPLACE-THIS-LINE-WITH-THE-OUTPUT-OF-openssl-rand--hex-32'
+# 4554: the names beside the server's state file that only a server that once held a value can have. Held to the writer by
+# `doctor-box-token.test.ts`: `_BT_TRACES` are `tokenPaths`' `retired` and `previous` basenames (`server/src/token/files.ts`),
+# `_BT_ASIDE` are the prefixes of boot's own set-aside list (`server/src/token/boot.ts`, `setAsideNames`: the retired and
+# state files plus `SET_ASIDE_MARK`, `.unusable-`). Tested by NAME only: `mail-previous.token` holds a value.
+_BT_TRACES=(box-token-retired.json mail-previous.token)
+_BT_ASIDE=(box-token-retired.json.unusable- box-token.json.unusable-)
 # What `String.prototype.trim` strips beyond ASCII (`extractToken` trims with it), as byte sequences: no-break space,
 # BOM, U+1680, U+2000-200A, U+2028, U+2029, U+202F, U+205F, U+3000. `_bt_value_file` strips it (with ASCII whitespace) from
 # every line before it tells a blank or `#` line apart, and compares the value line to the placeholder; `doctor-box-token.test.ts`
@@ -7601,6 +7608,8 @@ r = regular(rp)
 if r == "absent":
     say("finding", "never-synced")
     sys.exit(0)
+def g16(x):
+    return type(x) is str and re.fullmatch(r"[0-9a-f]{16}", x) is not None
 def unreadable():
     say("finding", "sync-unreadable")
     sys.exit(0)
@@ -7611,7 +7620,8 @@ try:
         j = json.loads(f.read().decode("utf-8"))
     res, at, gen, tr, pf = j["result"], j["at"], j["generation"], j["transport"], j["proof"]
     ok = (type(j) is dict and j["v"] == 1 and type(at) is int and at >= 0 and (res == "synced" or res in errs)
-        and (gen is None or (type(gen) is str and re.fullmatch(r"[0-9a-f]{16}", gen) is not None))
+        and (gen is None or g16(gen))
+        and ("held" not in j or g16(j["held"]))
         and (tr is None or tr in transports) and pf in (None, "proved", "proof-failed", "proof-unmeasured"))
 except Exception:
     ok = False
@@ -7622,7 +7632,9 @@ age = max(0, now - at)
 # proved), or any report that carries a generation (a `write-failed` of `ccrc-token-sync` after the write). A report that
 # records only a refusal, no generation (`bad-code`, `stale-client`, `claim-refused`, `code-used`, `busy`, `spawn-failed`,
 # or a `write-failed` before anything was written), says nothing was ever handed to this box: it is no history.
-if res not in ("synced", "proof-failed", "proof-unmeasured") and gen is None:
+# 4555: a refusal that wrote nothing carries `held` (the generation this box held) when it held one, and that is history,
+# so the rule needs `held` absent. A present `held` that is not one generation id makes the report unreadable above.
+if res not in ("synced", "proof-failed", "proof-unmeasured") and gen is None and "held" not in j:
     say("refusal-only")
 if res == "synced":
     if pf != "proved" or tr is None:
@@ -7691,7 +7703,7 @@ _bt_find() {
   local arm="$1" word="$2" a="${3:-}" b="${4:-}" say="" cls=WARN fix=""
   local card="Rotate now on the console's Box token card"
   case "$arm:$word" in
-    server:token-absent) cls=FAIL   # 4553: `_bt_server_arm` lowers it to WARN once the state read shows no state file
+    server:token-absent) cls=FAIL   # 4553/D-139: _bt_server_arm lowers it to PASS with its sentence when the state read is absent and no sibling trace stands (4554)
       say="$a does not exist, so every box-token lane on this server answers 401"
       fix="restart the server (ccrc.service), which mints a value at boot; if it still has none, its log names the failed mint" ;;
     server:token-mode|fleet:fleet-token-mode) cls=FAIL
@@ -7757,7 +7769,7 @@ _bt_find() {
     server:file:*) cls=FAIL
       say="on re-read ($(_bt_age "$a") ago) the server's $b token file was found ${word#file:}; the last good value is kept in memory"
       fix="look at the file without printing it (ls -l); the next rotation rewrites the server's token files ($card), and a restart re-reads them" ;;
-    fleet:fleet-token-absent) cls=FAIL   # 4553: `_bt_fleet_arm` lowers it to WARN for a box never handed a value
+    fleet:fleet-token-absent) cls=FAIL   # 4553/D-139: _bt_fleet_arm lowers it to PASS with its sentence for a box never handed a value (4555: a refusal's held generation is history)
       say="$a does not exist, so this box's calls to the server carry no box token"
       fix="the server writes it at its next rotation ($card); a single box records CCRC_ROLE=both in ~/.ccrc/ccrc.env and restarts the server, which writes it at boot" ;;
     fleet:no-generation)
@@ -7788,8 +7800,44 @@ _bt_drop() {
   BT_PART=(${p[@]+"${p[@]}"}); BT_CLASS=(${c[@]+"${c[@]}"}); BT_FIX=(${f[@]+"${f[@]}"})
 }
 
-_bt_server_arm() {   # <token path> <state path>
-  local tok="$1" state="$2" before="${#BT_CLASS[@]}" out="" kw w n node seq="" since="" rot="" rotating=0 grace=0 refused=0 bad=0 tai=-1
+# `_bt_fleet_paths` — the fleet file and the generation file, spelled once: `_bt_fleet_arm` reads them as the fleet's records,
+# and on an own-write box `_bt_server_trace` counts them as the server's own writes. Sets BT_FLEET_FILE and BT_GEN_FILE.
+_bt_fleet_paths() {
+  BT_FLEET_FILE="$HOME/.cc-secrets/ccrc-mail.token"
+  BT_GEN_FILE="$HOME/.ccrc/box-token-generation"
+}
+
+# `_bt_server_trace <dir> <own: 0|1>` — 4554: a trace beside the state file that only a server that once held a value can have, by
+# NAME only (never opened: mail-previous.token holds a value). Sets the caller's BT_TRACE to the first trace's FULL PATH,
+# `unlisted` when the directory exists and cannot be listed (a set-aside copy cannot be ruled out: fail closed), else
+# empty. A directory that does not exist holds no trace (the caller's reads already measured that ENOENT).
+# On an own-write box (`own` = 1: role both, local, no agent.env marking the fleet) the SERVER wrote the fleet token file
+# and the generation file (`boot.ts` step 7, and the driver's own-write promotion), so either one existing is a trace too
+# (4554, amended by review 405 F1). By existence only: the fleet file holds a value. Never off such a box: there they are
+# the fleet agent's records, and a server-role or fleet-role box does not reach this arm with them as its own.
+_bt_server_trace() {
+  local d="$1" own="${2:-0}" n f BT_FLEET_FILE BT_GEN_FILE
+  BT_TRACE=""
+  for n in "${_BT_TRACES[@]}"; do
+    if [ -e "$d/$n" ] || [ -L "$d/$n" ]; then BT_TRACE="$d/$n"; return 0; fi
+  done
+  if [ "$own" = 1 ]; then
+    _bt_fleet_paths
+    for f in "$BT_FLEET_FILE" "$BT_GEN_FILE"; do
+      if [ -e "$f" ] || [ -L "$f" ]; then BT_TRACE="$f"; return 0; fi
+    done
+  fi
+  if [ -d "$d" ] && [ ! -r "$d" ]; then BT_TRACE=unlisted; return 0; fi
+  for n in "${_BT_ASIDE[@]}"; do
+    for f in "$d/$n"*; do
+      if [ -e "$f" ] || [ -L "$f" ]; then BT_TRACE="$f"; return 0; fi
+    done
+  done
+  return 0
+}
+
+_bt_server_arm() {   # <token path> <state path> <own-write: 0|1>
+  local tok="$1" state="$2" own="${3:-0}" before="${#BT_CLASS[@]}" out="" kw w n node seq="" since="" rot="" rotating=0 grace=0 refused=0 bad=0 tai=-1 BT_TRACE=""
   _bt_value_file "$tok"
   case "$BT_TF" in
     absent) tai="${#BT_CLASS[@]}"; _bt_find server token-absent "$tok" ;;
@@ -7811,9 +7859,27 @@ _bt_server_arm() {   # <token path> <state path>
     # the verdict moves, and the server's own `state-absent` is not a second line for it. Every other state read (ok,
     # unreadable, no python3 above) leaves the token's FAIL, because a state file means there was a value once; an
     # unreadable one still says so, and an undecidable history fails closed.
+    # A trace of a value beside the absent state (4554) is history too: `box-token-retired.json`, `mail-previous.token`, or a
+    # set-aside copy (`_bt_server_trace`, by name only), and on an own-write box the fleet token file or the generation file
+    # the server itself wrote (review 405 F1). Then the FAIL stays, its sentence names the trace, and
+    # `BT_SERVER_STATE` records `trace`, so an own-write fleet arm reads no `absent` state either. A token directory that
+    # exists and cannot be listed cannot rule a set-aside copy out, so it fails closed with a sentence and remedy of its own:
+    # boot refuses to start on it (`boot.ts`, `setAsideNames`), and "restart the server" would be false there. A directory
+    # that does not exist holds no trace: a fresh server whose override directory is not created yet stays the fresh PASS.
     absent) if [ "$tai" -ge 0 ]; then
-              BT_PART[tai]="server: token-absent — $tok does not exist, and neither does the server's state file: no value has been minted here yet, and the server mints one at boot"
-              BT_CLASS[tai]=PASS; BT_FIX[tai]=""
+              _bt_server_trace "${state%/*}" "$own"
+              if [ -z "$BT_TRACE" ]; then
+                BT_PART[tai]="server: token-absent — $tok does not exist, and neither does the server's state file: no value has been minted here yet, and the server mints one at boot, or its log says why that mint failed"
+                BT_CLASS[tai]=PASS; BT_FIX[tai]=""
+              else
+                BT_SERVER_STATE=trace   # 4554: an own-write fleet arm reads this as no `absent` read either
+                if [ "$BT_TRACE" = unlisted ]; then
+                  BT_PART[tai]="server: token-absent — $tok does not exist, and neither does the server's state file, and ${state%/*} cannot be listed, so a value held here once cannot be ruled out, and the server refuses to boot until it can list it"
+                  BT_FIX[tai]="give ${state%/*} its read bit (chmod u+r ${state%/*}); the server then boots and mints a value"
+                else
+                  BT_PART[tai]="server: token-absent — $tok does not exist, and neither does the server's state file, but $BT_TRACE does: this server held a value once and lost it; the server mints a new one at its next boot, and the fleet must then be handed it"
+                fi
+              fi
             else _bt_find server state-absent "$state"; fi
             return 0 ;;
     ok) ;;
@@ -7860,7 +7926,8 @@ _bt_server_arm() {   # <token path> <state path>
 }
 
 _bt_fleet_arm() {   # <own-write: 0|1>
-  local own="$1" ff="$HOME/.cc-secrets/ccrc-mail.token" gen="$HOME/.ccrc/box-token-generation" rep="$HOME/.ccrc/token-sync.json"
+  local own="$1" ff gen rep="$HOME/.ccrc/token-sync.json" BT_FLEET_FILE BT_GEN_FILE
+  _bt_fleet_paths; ff="$BT_FLEET_FILE"; gen="$BT_GEN_FILE"
   local before="${#BT_CLASS[@]}" out="" kw w n x bad=0 tr="" ownseen=0 tai=-1 nogen=0 nosync=0 refonly=0
   _bt_value_file "$ff"
   case "$BT_TF" in
@@ -7898,8 +7965,8 @@ _bt_fleet_arm() {   # <own-write: 0|1>
   # report included, leaves the FAIL.
   # An own-write box (both, local, no agent.env) writes the fleet file, the generation file and `fleetConfirmed` together,
   # so the server arm's state outranks the generation file alone (review 383 F1): it reads never-handed only when that
-  # state read was itself `absent`. Any present state, readable or not, records or may record the hand-out. The state is
-  # read once, by the server arm, which runs first on such a box.
+  # state read was itself `absent` with no sibling trace (it records `trace` otherwise, 4554). Any present state, readable or
+  # not, records or may record the hand-out. The state is read once, by the server arm, which runs first on such a box.
   if [ "$tai" -ge 0 ] && [ "$nogen" -eq 1 ] && { [ "$nosync" -eq 1 ] || [ "$refonly" -eq 1 ] || { [ "$ownseen" -eq 1 ] && [ "$BT_SERVER_STATE" = absent ]; }; }; then
     BT_PART[tai]="fleet: fleet-token-absent — $ff does not exist: no value has been handed to this box yet, and the server's next rotation hands one"
     BT_CLASS[tai]=PASS; BT_FIX[tai]=""
@@ -7961,7 +8028,7 @@ _check_box-token() {
     _dr_skip box-token "no-role — this box records no CCRC_ROLE and holds neither the server's token files ($tok, $state) nor a fleet agent's $HOME/.ccrc/agent.env, so neither arm has a subject"
     return 3
   fi
-  case " $arms " in *" server "*) _bt_server_arm "$tok" "$state" ;; esac
+  case " $arms " in *" server "*) _bt_server_arm "$tok" "$state" "$own" ;; esac
   case " $arms " in *" fleet "*) _bt_fleet_arm "$own" ;; esac
   for c in ${BT_CLASS[@]+"${BT_CLASS[@]}"}; do
     case "$c" in FAIL) worst=FAIL ;; WARN) [ "$worst" = FAIL ] || worst=WARN ;; esac
@@ -7976,4 +8043,132 @@ _check_box-token() {
   if [ "$worst" = FAIL ]; then _dr_fail box-token "$detail" "$fix"; return 1; fi
   _dr_warn box-token "$detail" "$fix"
   return 2
+}
+
+# ── docs-sw: the installed service worker keeps the Docs pages on the app shell ──
+# The server half of the Docs pair (spec 2026-10-01 §7.2; native Docs reader
+# W4). Every page under the Docs prefix is the app shell: the server's
+# not-found handler and the worker's navigateFallback both hand it
+# `index.html`. A worker whose navigation denylist covers the prefix sends
+# every hard load of a Docs page past the shell, so the page breaks on reload
+# and offline. The build already refuses such a `CCRC_SW_DENYLIST` entry
+# (`pwa/src/lib/sw-denylist.ts`); this check is the one measurement of the
+# bundle actually INSTALLED, which catches a hand-built bundle, a pre-Docs
+# checkout and a regression in the built-ins. It probes nothing else: not a
+# unit, not a port, not a proxy mapping.
+#
+# THE PREFIX IS ONE ASSIGNMENT, the line below, and every message and the ERE
+# interpolate it; `docs-parity.test.ts` (M7.3's doctor half) holds it to one
+# line, equal to `DOCS_PAGE_PREFIX` in `shared/docs.ts`, and holds the check's
+# body to the variable.
+#
+# 1. A FLEET BOX SKIPs, on either piece of evidence `_check_update-exposure`
+#    uses: a recorded `CCRC_ROLE=fleet`, or a unit directory holding
+#    `ccrc-agent.service` and no `ccrc.service` (the env-less fleet host this
+#    file's header describes). A `server` or `both` box, and a box with no
+#    evidence either way, is measured. Neither SKIP names a path: a SKIP has
+#    nothing to fix.
+# 2. THE WORKER is `$BOX_TREE_DIR/server/dist-pwa/sw.js`, where both lanes put
+#    the bundle (`~/ccrc`, through its version symlink on a release-lane box).
+#    Absent, or there and not a readable file: FAIL, `ccrc update --force`.
+# 3. THE SHAPE: workbox emits the whole worker as ONE minified line, so the
+#    `denylist:[` OCCURRENCES are counted, never lines, by parameter-expansion
+#    length arithmetic; a line count could never see two lists. Exactly one,
+#    closed by the next `]}`, or WARN: this check knows that shape and no
+#    other, and a verdict on a shape it does not know would be a guess.
+# 4. THE PREFIX: each comma-separated entry of that list, as the worker prints
+#    it (a RegExp literal, every `/` escaped: the knob's `/wiki` is
+#    `/^\/wiki(\/|$)/`), is matched with bash's own ERE, built from the prefix,
+#    for an entry equal to the prefix or under it: the knob form, a bare `$`
+#    anchor, no end anchor at all, or `\/` and anything after. A sibling that
+#    merely starts the same way (`/docsy`, `/docs-archive`) is not. FAIL names
+#    every entry that covers it.
+#
+# BUILTINS ONLY: `$(<file)`, `${var//pattern/}`, `${#var}` and `[[ =~ ]]`. No
+# grep, sed, awk, tr, head or cut: this file reaches for none of them, and the
+# doctor suite's PATH holds no system directory (`_check_docs`' note).
+CCRC_DOCS_PAGE_PREFIX='/docs'
+
+_check_docs-sw() {
+  # BYTE-WISE, whatever the caller's locale: under a UTF-8 one an invalid byte anywhere in the worker (a hand-edited
+  # bundle's, a foreign tool's) makes `[[ $body =~ $re_open ]]` fail to match across it, and the check would say the
+  # denylist "never closes" instead of reading it. `_check_pools`' own `local LC_ALL=C`, for the same family of reason.
+  local LC_ALL=C
+  if [ -z "${BOX_TREE_DIR:-}" ] || ! declare -F _box_env_value >/dev/null 2>&1; then
+    _dr_fail docs-sw "ccrc's own tree path and config reader are not loaded, so the installed service worker was not measured" \
+      "this is a bug in ccrc, not a fact about your box — _check_docs-sw reads BOX_TREE_DIR and this box's recorded CCRC_ROLE through _box_env_value, both declared in ccrc itself, and this check table was sourced by something that is not ccrc"
+    return 1
+  fi
+  local role=""
+  # -f BEFORE -r: `_check_skills`' guard order, for its reason (a directory answers -r too).
+  [ -f "${BOX_ENV_FILE:-}" ] && [ -r "${BOX_ENV_FILE:-}" ] && role="$(_box_env_value "$BOX_ENV_FILE" CCRC_ROLE)"
+  if [ "$role" = fleet ]; then
+    _dr_skip docs-sw "this box records CCRC_ROLE=fleet, so it serves no PWA bundle and no service worker of its own"
+    return 3
+  fi
+  if [ ! -f "$CCRC_UNIT_DIR/$(_dr_unit_file ccrc.service)" ] && [ -f "$CCRC_UNIT_DIR/$(_dr_unit_file ccrc-agent.service)" ]; then
+    _dr_skip docs-sw "this box runs no ccrc server (its units are ccrc-agent.service and no ccrc.service), so it serves no PWA bundle and no service worker of its own"
+    return 3
+  fi
+
+  local p="$CCRC_DOCS_PAGE_PREFIX" sw="$BOX_TREE_DIR/server/dist-pwa/sw.js"
+  if [ ! -e "$sw" ] && [ ! -L "$sw" ]; then
+    _dr_fail docs-sw "no service worker at $sw, so this box serves its PWA bundle without the file every browser installs" \
+      "ccrc update --force"
+    return 1
+  fi
+  if [ ! -f "$sw" ] || [ ! -r "$sw" ]; then
+    _dr_fail docs-sw "$sw is there but is not a file this check can read, so what it refuses was not measured" \
+      "ccrc update --force"
+    return 1
+  fi
+
+  local body open='denylist:[' close=']}' without n after="" shape="" re_open='denylist:\[(.*)$'
+  body="$(<"$sw")"
+  without="${body//"$open"/}"
+  n=$(( (${#body} - ${#without}) / ${#open} ))
+  # The text after the FIRST `denylist:[`, by bash's own regex: `${body#*"$open"}` is quadratic in the offset, and in
+  # a real worker the precache manifest comes first, so the offset is about the file's size (80 KB took 11.6 s,
+  # 320 KB over 120 s). The regex and the `//` count above are linear.
+  [[ $body =~ $re_open ]] && after="${BASH_REMATCH[1]}"
+  if [ "$n" -ne 1 ]; then
+    shape="carries $n denylists"
+  elif [[ "$after" != *"$close"* ]]; then
+    shape="carries 1 denylist that never closes"
+  fi
+  if [ -n "$shape" ]; then
+    _dr_warn docs-sw "$sw $shape, and this check knows the shape workbox emits (exactly one, closed by $close), so whether it refuses $p was not measured" \
+      "hard-reload $p/ in a browser and check that the Docs screen renders"
+    return 2
+  fi
+
+  # The prefix as the worker prints it, as ERE text: each `/` is `\/` in the
+  # RegExp literal, matched by the ERE `\\/`; a letter, digit, `_` or `-` is
+  # itself; anything else is bracketed so it matches only itself.
+  local list="${after%%"$close"*}" ere="" c i
+  for (( i = 0; i < ${#p}; i++ )); do
+    c="${p:i:1}"
+    case "$c" in
+      /) ere+='\\/' ;;
+      [A-Za-z0-9_-]) ere+="$c" ;;
+      *) ere+="[$c]" ;;
+    esac
+  done
+  # After `/^` and the prefix: the literal's end (no end anchor), `$/`, the
+  # knob's `(\/|$)/`, or `\/` and anything (an entry under the prefix).
+  local head='^/\^' tail='(/|\$/|\(\\/\|\$\)/|\\/.*)$'
+  local re="$head$ere$tail" rest="$list," e k=0 found=""
+  while [ -n "$rest" ]; do
+    e="${rest%%,*}"
+    rest="${rest#*,}"
+    [ -n "$e" ] || continue
+    k=$((k + 1))
+    if [[ $e =~ $re ]]; then found+="${found:+, }$e"; fi
+  done
+  if [ -n "$found" ]; then
+    _dr_fail docs-sw "the installed service worker refuses the app shell to $p; Docs pages break on a hard load and offline ($sw denies $found)" \
+      "remove $p from CCRC_SW_DENYLIST in the deploying machine's ~/.ccrc/deploy.env and deploy again, or move to the release lane: ccrc update"
+    return 1
+  fi
+  _dr_pass docs-sw "$sw keeps $p on the app shell: its one denylist holds $k entries ($list), none of them $p or under it"
 }

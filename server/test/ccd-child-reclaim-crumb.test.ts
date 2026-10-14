@@ -9,9 +9,11 @@
 //   - `true` means printed past the act's breadcrumb (the act had started),
 //     never that a breadcrumb stands now: a tail `purge-*` failure prints it
 //     after the row and its breadcrumb were purged;
-//   - `ws-expire`'s own pre-breadcrumb documents (its `probe-unmeasured`,
-//     `pin-failed` and `tombstone-unwritable`) carry NO key: its locked body is
-//     another programme's region and is not edited;
+//   - `ws-expire` says it on its own documents too (workspace lifecycle wave 6,
+//     question (k)): `false` on its fresh arm before its breadcrumb (its
+//     `probe-unmeasured`, `pin-failed`, `state-changed` and
+//     `tombstone-unwritable`), `true` on its resumed arm (its `probe-unmeasured`,
+//     printed while its `expire:` breadcrumb stands);
 //   - a breadcrumb that stands but cannot be read says nothing either way.
 // FIXTURE HOMEs ONLY: every ccd call runs through the harness, never against $HOME.
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
@@ -107,26 +109,61 @@ describe('ws-reclaim', () => {
   }, 60_000);
 });
 
-describe('ws-expire — its locked body is not edited', () => {
-  it('pre-breadcrumb pin-failed carries NO crumb, even with one exported', () => {
+describe('ws-expire — its own documents say crumb too (workspace lifecycle wave 6, question (k))', () => {
+  it('fresh arm, before the breadcrumb: pin-failed says crumb false, whatever value is exported', () => {
     makeArchived(h);
     const tok = expireToken(h);
     let out = '';
     try {
       out = h.sh(`${EXP_STUBS} ${PIN_FAILS} ${CHILD_ENV} cmd_ws_expire --expect ${tok} --session ${EXP_ID}`,
-        { _WS_RCL_CRUMB: 'false' });
+        { _WS_RCL_CRUMB: 'true' });
     } catch (e) { out = String((e as { stdout?: string }).stdout ?? ''); }
-    expect(JSON.parse(out)).toEqual({ failed: 'pin-failed', detail: 'the disk is full' });
-    expect(h.reg(EXP_ID, 'reaping')).toBeNull();
+    expect(JSON.parse(out)).toEqual({ failed: 'pin-failed', detail: 'the disk is full', crumb: false });
+    expect(h.reg(EXP_ID, 'reaping'), 'no breadcrumb was written').toBeNull();
   }, 90_000);
 
-  it('its own probe-unmeasured (printed by `_ws_reclaim_failed_json` directly) carries NO crumb', () => {
+  it('fresh arm: its own probe-unmeasured (printed by `_ws_reclaim_failed_json` directly) says crumb false', () => {
     makeArchived(h);
     const r = expireVerb(h, expireToken(h), { pre: STASH_FAILS });
     expect(r.code, r.stderr).toBe(1);
+    expect(docOf(r)).toMatchObject({ failed: 'probe-unmeasured', crumb: false });
+  }, 90_000);
+
+  it('fresh arm: tombstone-unwritable, printed before the breadcrumb, says crumb false', () => {
+    makeArchived(h);
+    const r = expireVerb(h, expireToken(h), { pre: '_ws_tombstone() { :; };' });
+    expect(r.code, r.stdout + r.stderr).toBe(1);
+    expect(docOf(r)).toMatchObject({ failed: 'tombstone-unwritable', crumb: false });
+    expect(h.reg(EXP_ID, 'reaping'), 'no breadcrumb was written').toBeNull();
+  }, 90_000);
+
+  it('resumed arm: probe-unmeasured over a standing `expire:` breadcrumb says crumb TRUE (the next attempt resumes)', () => {
+    const a = makeArchived(h);
+    // A previous expiry that died right after its pin phase wrote the tombstone and the breadcrumb.
+    h.sh(`${EXP_STUBS} _WS_RCL_ACT=expire; _ws_expire_eval ${EXP_ID} >/dev/null`
+      + ` && _ws_reclaim_pin ${EXP_ID} "${a.wt}" "${a.main}" "$REAP_BRANCH" "$EXPIRE_ARCHIVED_AT"`
+      + ` && _ws_tombstone ${EXP_ID} '[]' "$(_ws_reclaim_tomb_fields "$EXPIRE_ARCHIVED_AT" present)" >/dev/null`
+      + ` && _reg_set ${EXP_ID} reaping expire:worktree`);
+    const tomb = path.join(h.home, '.cc-sessions', '.reaped', `${EXP_ID}.json`);
+    fs.chmodSync(tomb, 0o000);
+    try {
+      // Any well-formed token: the unmeasured verdict answers before a token is compared.
+      const r = expireVerb(h, '0'.repeat(64));
+      expect(r.code, r.stdout + r.stderr).toBe(1);
+      expect(docOf(r)).toMatchObject({ failed: 'probe-unmeasured', crumb: true });
+      expect(h.reg(EXP_ID, 'reaping'), 'the breadcrumb stands').toBe('expire:worktree');
+    } finally { fs.chmodSync(tomb, 0o644); }
+  }, 90_000);
+
+  it('a breadcrumb that stands but cannot be read: probe-unmeasured carries NO crumb', () => {
+    makeArchived(h);
+    const tok = expireToken(h);
+    fs.mkdirSync(path.join(h.home, '.cc-sessions', `${EXP_ID}.reaping`));
+    const r = expireVerb(h, tok);
+    expect(r.code, r.stdout + r.stderr).toBe(1);
     const d = docOf(r);
     expect(d['failed']).toBe('probe-unmeasured');
-    expect(d).not.toHaveProperty('crumb');
+    expect(d, 'whether an act started is unknown, so nothing is said').not.toHaveProperty('crumb');
   }, 90_000);
 
   it('the SHARED tail says crumb true for an expiry too', () => {
