@@ -597,6 +597,52 @@ describe('the row codecs — checkpoint shapes to table columns and back, with t
     expect(back).toEqual(row);
   });
 
+  describe('a later wave’s lease: every clock and number is its own column (codec conflation, in both directions)', () => {
+    /** Codec-only fixture (no wave-3 guard runs on it): every clock a DIFFERENT instant and every number a different integer,
+     *  so a codec that reads or writes one from another's column cannot round-trip. */
+    const M = (k: number): string => formatDelegationInstant(Date.UTC(2026, 9, 14, 0, k, 0, 0));
+    const CLOCKS = ['firstObservedAt', 'lastObservedAt', 'terminalEvidenceAt', 'adoptedAt', 'retainedAt', 'promotedAt', 'cleanupDueAt',
+      'cleanupStartedAt', 'cleanupFinishedAt', 'releasedAt'] as const;
+    const clocked = (): DelegationLeaseRow => lease({
+      generation: 3, creatingJournalSequence: 4, currentJournalSequence: 9, creationBase: 'abc123', parentageState: 'conflicting',
+      workspaceState: 'absent', disposition: 'promoted', cleanupState: 'reclaimed', cleanupEvidenceJson: '{"audit":"x"}', carrierGenerationSeen: 2,
+      firstObservedAt: M(1), lastObservedAt: M(2), terminalEvidenceAt: M(3), adoptedAt: M(4), retainedAt: M(5), promotedAt: M(6),
+      cleanupDueAt: M(7), cleanupStartedAt: M(8), cleanupFinishedAt: M(9), releasedAt: M(10),
+    });
+
+    it('the fixture really has ten different clocks and four different integers', () => {
+      const row = clocked();
+      expect(new Set(CLOCKS.map((c) => row[c])).size).toBe(10);
+      expect(new Set([row.generation, row.creatingJournalSequence, row.currentJournalSequence, row.carrierGenerationSeen]).size).toBe(4);
+    });
+
+    it.each(CLOCKS.map((c, i) => [c, i + 1] as const))('toDb writes %s from its own field', (clock, minute) => {
+      expect(delegationLeaseCodec.toDb(clocked())[clock]).toBe(Date.parse(M(minute)));
+    });
+
+    it('toDb writes every integer column from its own field', () => {
+      const db = delegationLeaseCodec.toDb(clocked());
+      expect([db['generation'], db['creatingJournalSequence'], db['currentJournalSequence'], db['carrierGenerationSeen']]).toEqual([3, 4, 9, 2]);
+    });
+
+    it.each(CLOCKS.map((c, i) => [c, i + 1] as const))('fromDb reads %s from its own column', (clock, minute) => {
+      const raw = delegationLeaseCodec.toDb(clocked());
+      const distinct: Record<string, unknown> = { ...raw };
+      for (const c of CLOCKS) distinct[c] = Date.parse(M(CLOCKS.indexOf(c) + 1));
+      expect(delegationLeaseCodec.fromDb(distinct)[clock]).toBe(M(minute));
+    });
+
+    it('round-trips the whole row', () => {
+      const row = clocked();
+      expect(delegationLeaseCodec.fromDb(delegationLeaseCodec.toDb(row))).toEqual(row);
+    });
+
+    it('fromDb reads every integer column from its own column', () => {
+      const back = delegationLeaseCodec.fromDb(delegationLeaseCodec.toDb(clocked()));
+      expect([back.generation, back.creatingJournalSequence, back.currentJournalSequence, back.carrierGenerationSeen]).toEqual([3, 4, 9, 2]);
+    });
+  });
+
   it('lists exactly the DDL’s columns, in the DDL’s order', () => {
     expect(delegationSessionCodec.columns).toEqual([
       'sessionId', 'parentIncarnation', 'explicitIntentAt', 'effective', 'effectiveBasisJson',

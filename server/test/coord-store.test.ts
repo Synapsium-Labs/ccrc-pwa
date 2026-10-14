@@ -29,7 +29,7 @@ import { mkTmp } from './tmpHelpers.js';
 import { okRun, okRuns, okSiblings } from './coordReadHelpers.js';
 import type { DatabaseSync } from 'node:sqlite';
 import {
-  delegationActivityCodec, delegationAttemptCodec, delegationEventCodec, delegationLeaseCodec, delegationLineageCodec,
+  DelegationModelError, delegationActivityCodec, delegationAttemptCodec, delegationEventCodec, delegationLeaseCodec, delegationLineageCodec,
   delegationSessionCodec, delegationSha256Hex, deriveDelegationActivityId, emptyDelegationCheckpoint,
   encodeDelegationNaturalKey, formatDelegationInstant, projectionViewOfDelegationCheckpoint,
   type DelegationActivityRow, type DelegationAttemptRow, type DelegationCheckpointV1, type DelegationEventRow,
@@ -978,9 +978,11 @@ describe('CoordStore: the delegation projection (delegation broker wave 3, Task 
   /** Wraps a handle so every DELETE/INSERT on a delegation table is recorded (and optionally faulted) before it runs. */
   const traced = (real: DatabaseSync) => {
     const log: Array<{ kind: 'delete' | 'insert'; table: string; sql: string }> = [];
+    const execs: string[] = [];
     let failAt: number | null = null;
     const db = new Proxy(real, {
       get(target, prop) {
+        if (prop === 'exec') return (sql: string) => { execs.push(sql); target.exec(sql); };
         if (prop === 'prepare') {
           return (sql: string) => {
             const stmt = target.prepare(sql);
@@ -1006,7 +1008,7 @@ describe('CoordStore: the delegation projection (delegation broker wave 3, Task 
         return typeof v === 'function' ? v.bind(target) : v;
       },
     }) as DatabaseSync;
-    return { db, log, failAt: (i: number | null) => { failAt = i; log.length = 0; }, words: () => log.map((w) => `${w.kind} ${w.table}`) };
+    return { db, log, execs, failAt: (i: number | null) => { failAt = i; log.length = 0; }, words: () => log.map((w) => `${w.kind} ${w.table}`) };
   };
 
   it('round-trips a checkpoint: server-minted lease ID, deterministic lineage ID, both journal sequences, generation 0, intent, every future-facing field', () => {
@@ -1115,6 +1117,28 @@ describe('CoordStore: the delegation projection (delegation broker wave 3, Task 
       refused(() => s.projectDelegationCheckpoint(bad), 'bad-row');
       expect(dump(s)).toEqual(before);
       expect(() => s.readDelegationProjection(), 'what is there is still readable').not.toThrow();
+    });
+
+    it('refuses a checkpoint that repeats a session key BEFORE it opens a transaction, and leaves SQLite untouched', () => {
+      const t = traced(openCoordDb(path.join(mkTmp('ccrc-coord-'), '.ccrc', 'coord.db')));
+      const { s, cp } = setup(0, t.db);
+      s.projectDelegationCheckpoint(cp);
+      const before = dump(s);
+      t.execs.length = 0; t.failAt(null);
+      const first = cp.sessions[0]!;
+      for (const [label, sessions] of [
+        ['an identical repeat', [...cp.sessions, first]],
+        ['a repeat with other content (the upsert would quietly keep the last)', [first, { ...first, claudeSessionIds: ['other'], lastObservedAt: at(25) }, ...cp.sessions.slice(1)]],
+      ] as const) {
+        refused(() => s.projectDelegationCheckpoint({ ...cp, sessions }), 'bad-checkpoint');
+        expect(dump(s), `${label}: nothing written`).toEqual(before);
+        expect(t.log, `${label}: no DELETE or INSERT ran`).toEqual([]);
+        expect(t.execs.filter((e) => /BEGIN|COMMIT|ROLLBACK/.test(e)), `${label}: no transaction was opened`).toEqual([]);
+      }
+      // The same sessionId under another incarnation is a different key, not a repeat.
+      expect(cp.sessions.filter((x) => x.sessionId === first.sessionId).length).toBeGreaterThan(1);
+      expect(() => s.projectDelegationCheckpoint(cp)).not.toThrow();
+      expect(() => s.readDelegationProjection()).not.toThrow();
     });
 
     it('refuses to project when the connection does not enforce foreign keys, and writes nothing (the order below depends on them)', () => {
@@ -1243,20 +1267,34 @@ describe('CoordStore: the delegation projection (delegation broker wave 3, Task 
     });
   });
 
-  it('lease-sequence round-trip table: both journal sequences and the generation come back from their own columns (W3-M65)', () => {
+  it('lease-sequence round-trip table: both journal sequences, the generation and EVERY clock come back from their own columns (W3-M65)', () => {
     const { s, cp } = setup();
     s.projectDelegationCheckpoint(withLeases(cp, []));
     // The DDL is the complete future-facing shape, and the READER is not wave 3's guard: a later wave’s row reads back whole.
-    const triples: Array<[string, number, number, number]> = [['x1', 4, 4, 0], ['x2', 5, 9, 0], ['x3', 7, 12, 3]];
-    for (const [id, creating, current, generation] of triples) {
-      const row = delegationLeaseCodec.toDb({ ...cp.leases[0]!, leaseId: id, canonicalPath: `/work/${id}`, generation,
-        creatingJournalSequence: creating, currentJournalSequence: current });
+    // Every clock of every row below is a DIFFERENT instant, and every number differs from every other, so a codec that
+    // conflates two of them (in either direction) cannot round-trip.
+    const later = (id: string, k: number, over: Partial<DelegationLeaseRow>): DelegationLeaseRow => ({
+      ...cp.leases[0]!, leaseId: id, canonicalPath: `/work/${id}`, adminRecord: `wt-${id}`, creationBase: `base-${id}`,
+      parentageState: 'conflicting', workspaceState: 'absent', disposition: 'promoted', cleanupState: 'reclaimed',
+      firstObservedAt: at(k), lastObservedAt: at(k + 1), terminalEvidenceAt: at(k + 2), adoptedAt: at(k + 3), retainedAt: at(k + 4),
+      promotedAt: at(k + 5), cleanupDueAt: at(k + 6), cleanupStartedAt: at(k + 7), cleanupFinishedAt: at(k + 8),
+      cleanupEvidenceJson: JSON.stringify({ audit: id }), releasedAt: at(k + 9), ...over,
+    });
+    const rows: DelegationLeaseRow[] = [
+      later('x1', 1, { creatingJournalSequence: 4, currentJournalSequence: 4, generation: 0, carrierGenerationSeen: null }),
+      later('x2', 11, { creatingJournalSequence: 5, currentJournalSequence: 9, generation: 2, carrierGenerationSeen: 1 }),
+      later('x3', 21, { creatingJournalSequence: 7, currentJournalSequence: 12, generation: 3, carrierGenerationSeen: 8 }),
+    ];
+    for (const row of rows) {
+      const db = delegationLeaseCodec.toDb(row);
       s.db.prepare(`INSERT INTO delegation_leases (${delegationLeaseCodec.columns.join(', ')}) VALUES (${delegationLeaseCodec.columns.map(() => '?').join(', ')})`)
-        .run(...delegationLeaseCodec.columns.map((c) => row[c]));
+        .run(...delegationLeaseCodec.columns.map((c) => db[c]));
     }
-    expect(s.readDelegationProjection().leases.map((l) => [l.leaseId, l.creatingJournalSequence, l.currentJournalSequence, l.generation]))
-      .toEqual(triples);
-    // And the wave-3 writer fills both from the lease it is given.
+    const read = s.readDelegationProjection().leases;
+    expect(read.map((l) => [l.leaseId, l.creatingJournalSequence, l.currentJournalSequence, l.generation, l.carrierGenerationSeen]))
+      .toEqual([['x1', 4, 4, 0, null], ['x2', 5, 9, 2, 1], ['x3', 7, 12, 3, 8]]);
+    expect(read, 'every column of every row, clocks included').toEqual(rows);
+    // And the wave-3 writer fills both sequences from the lease it is given.
     s.projectDelegationCheckpoint({ ...withLeases(cp, [{ ...cp.leases[0]!, creatingJournalSequence: 8, currentJournalSequence: 8 }]), appliedJournalSequence: 9 });
     expect(s.db.prepare('SELECT creatingJournalSequence AS c, currentJournalSequence AS u, generation AS g FROM delegation_leases').get())
       .toEqual({ c: 8, u: 8, g: 0 });
@@ -1352,6 +1390,120 @@ describe('CoordStore: the delegation projection (delegation broker wave 3, Task 
       s.projectDelegationCheckpoint(withLeaver(cp));
       s.projectDelegationCheckpoint(cp);
       expect(s.db.prepare('SELECT count(*) AS n FROM delegation_events').get()).toEqual({ n: 0 });
+    });
+  });
+
+  describe('insertDelegationEvents and delegationEventStats — the batch port Task 8A drives', () => {
+    const ev = (n: number, over: Partial<DelegationEventRow> = {}): DelegationEventRow => event(n, over);
+    const live = () => {
+      const t = traced(openCoordDb(path.join(mkTmp('ccrc-coord-'), '.ccrc', 'coord.db')));
+      const { s, cp, fixture: fx } = setup(0, t.db);
+      s.projectDelegationCheckpoint(cp);
+      t.execs.length = 0; t.failAt(null);
+      return { t, s, cp, fx };
+    };
+    const stored = (s: CoordStore): Array<[number, string]> =>
+      (s.db.prepare('SELECT journalSequence AS q, eventId AS e FROM delegation_events ORDER BY journalSequence').all() as Array<{ q: number; e: string }>).map((r) => [r.q, r.e]);
+
+    it('reports inserted, duplicate and conflicting rows; a conflict never aborts the rows after it', () => {
+      const { s } = live();
+      const changed = ev(1, { payloadJson: '{"v":1,"n":999}' });                // the SAME eventId as ev(1), a different row
+      const thief = ev(20, { journalSequence: 2 });                              // ANOTHER event on ev(2)'s journalSequence
+      const batch = [ev(1), ev(2), ev(3), ev(1), changed, thief, ev(5, { sessionId: 'lane-b-demo' })];
+      const r = s.insertDelegationEvents(batch);
+      expect(r).toEqual({ inserted: 4, duplicate: 1, conflicts: [changed, thief] });
+      expect(stored(s), 'ev(5) landed AFTER two conflicts; the conflicting rows did not').toEqual([[1, ev(1).eventId], [2, ev(2).eventId], [3, ev(3).eventId], [5, ev(5).eventId]]);
+      // Again: everything is now a duplicate, and the two conflicts are conflicts still.
+      expect(s.insertDelegationEvents(batch)).toEqual({ inserted: 0, duplicate: 5, conflicts: [changed, thief] });
+      expect(stored(s)).toHaveLength(4);
+    });
+
+    it('finds a conflict against a row already stored, not only one inside the batch', () => {
+      const { s } = live();
+      s.insertDelegationEvent(ev(1));
+      s.insertDelegationEvent(ev(2));
+      const changed = ev(1, { claudeSessionId: 'cs-other' });
+      const thief = ev(30, { journalSequence: 2 });
+      expect(s.insertDelegationEvents([changed, thief, ev(3)])).toEqual({ inserted: 1, duplicate: 0, conflicts: [changed, thief] });
+    });
+
+    it('is ONE transaction for the whole list, however long (and none for an empty list’s writes)', () => {
+      const { t, s } = live();
+      s.insertDelegationEvents(Array.from({ length: 25 }, (_, k) => ev(k + 1)));
+      expect(t.execs.filter((e) => e === 'BEGIN IMMEDIATE')).toHaveLength(1);
+      expect(t.execs.filter((e) => e === 'COMMIT')).toHaveLength(1);
+      expect(t.log.filter((w) => w.kind === 'insert' && w.table === 'delegation_events')).toHaveLength(25);
+      expect(s.insertDelegationEvents([])).toEqual({ inserted: 0, duplicate: 0, conflicts: [] });
+      expect(stored(s)).toHaveLength(25);
+    });
+
+    it('goes through the same path as insertDelegationEvent: one row at a time, the verdicts agree', () => {
+      const a = live(), b = live();
+      const rows = [ev(1), ev(1), ev(2), ev(1, { payloadJson: '{"v":1,"n":7}' }), ev(40, { journalSequence: 2 }), ev(3, { sessionId: 'lane-b-demo' })];
+      const verdicts = rows.map((row) => {
+        try { return a.s.insertDelegationEvent(row); } catch (err) {
+          if (err instanceof DelegationModelError && err.code === 'event-conflict') return 'conflict';
+          if (err instanceof Error && /UNIQUE constraint failed: delegation_events\.journalSequence/.test(err.message)) return 'conflict';
+          throw err;
+        }
+      });
+      const batch = b.s.insertDelegationEvents(rows);
+      expect(batch.inserted).toBe(verdicts.filter((v) => v === 'inserted').length);
+      expect(batch.duplicate).toBe(verdicts.filter((v) => v === 'duplicate').length);
+      expect(batch.conflicts).toEqual(rows.filter((_, i) => verdicts[i] === 'conflict'));
+      expect(stored(b.s)).toEqual(stored(a.s));
+    });
+
+    it('rolls the WHOLE batch back and rethrows on a failure that is not a conflict (here an unknown session, mid-batch)', () => {
+      const { t, s } = live();
+      expect(() => s.insertDelegationEvents([ev(1), ev(2), ev(3, { sessionId: 'nobody' }), ev(4)])).toThrow(/FOREIGN KEY/);
+      expect(stored(s), 'the two rows before the failure are not kept').toEqual([]);
+      expect(t.execs.filter((e) => e === 'ROLLBACK')).toHaveLength(1);
+      expect(s.insertDelegationEvents([ev(1), ev(2)]), 'the connection is not left inside a transaction').toEqual({ inserted: 2, duplicate: 0, conflicts: [] });
+    });
+
+    it('rolls the whole batch back on an injected fault at a row after conflicts and inserts', () => {
+      const { t, s } = live();
+      s.insertDelegationEvent(ev(9));
+      const before = dump(s);
+      t.failAt(2);                                                                // the third INSERT of the batch
+      expect(() => s.insertDelegationEvents([ev(1), ev(9, { payloadJson: '{"v":1,"n":5}' }), ev(2), ev(3), ev(4)])).toThrow('injected fault');
+      expect(dump(s)).toEqual(before);
+    });
+
+    it('refuses a malformed row BEFORE opening a transaction, writing nothing', () => {
+      const { t, s } = live();
+      refused(() => s.insertDelegationEvents([ev(1), ev(2, { eventKind: 'Stop' as unknown as DelegationEventRow['eventKind'] }), ev(3)]), 'bad-event');
+      refused(() => s.insertDelegationEvents([ev(1), ev(2, { acceptedAt: 'yesterday' })]), 'bad-instant');
+      expect(stored(s)).toEqual([]);
+      expect(t.execs.filter((e) => /BEGIN/.test(e))).toEqual([]);
+    });
+
+    it('delegationEventStats: an empty table is {count: 0, maxSequence: null}, never 0 for the sequence', () => {
+      const { s } = live();
+      expect(s.delegationEventStats()).toEqual({ count: 0, maxSequence: null });
+    });
+
+    it('delegationEventStats counts the rows and names the highest journalSequence, wherever it sits', () => {
+      const { s, fx } = live();
+      s.insertDelegationEvents([ev(5), ev(100), ev(7, { sessionId: 'lane-b-demo' })]);
+      expect(s.delegationEventStats()).toEqual({ count: 3, maxSequence: 100 });
+      s.insertDelegationEvent(ev(101));
+      expect(s.delegationEventStats()).toEqual({ count: 4, maxSequence: 101 });
+      // A projection that removes a session removes its events, and the statistics follow.
+      s.projectDelegationCheckpoint({ ...fx(0), sessions: fx(0).sessions.filter((x) => x.sessionId !== 'lane-b-demo'),
+        attempts: fx(0).attempts.filter((x) => x.parentId !== 'lane-b-demo'), activities: fx(0).activities.filter((x) => x.parentId !== 'lane-b-demo'),
+        leases: fx(0).leases.filter((x) => x.parentId !== 'lane-b-demo'), lineage: fx(0).lineage.filter((x) => x.parentId !== 'lane-b-demo') });
+      expect(s.delegationEventStats()).toEqual({ count: 3, maxSequence: 101 });
+    });
+
+    it('the result type has one home: the L1 model. store.ts imports it from there and never from delegation-checkpoint.ts', () => {
+      const here = path.dirname(fileURLToPath(import.meta.url));
+      const src = (f: string): string => readFileSync(path.join(here, '..', 'src', 'coord', f), 'utf8');
+      expect(src('delegation-model.ts')).toMatch(/export interface DelegationInsertEventsResult\b/);
+      expect(src('delegation-checkpoint.ts')).not.toMatch(/interface DelegationInsertEventsResult\b/);
+      expect(src('store.ts')).not.toMatch(/delegation-checkpoint/);
+      expect(src('store.ts')).toMatch(/type DelegationInsertEventsResult\b/);
     });
   });
 
@@ -1452,6 +1604,47 @@ describe('CoordStore: the delegation projection (delegation broker wave 3, Task 
       }
     });
 
+    it('an incarnation change: the old incarnation (same sessionId) leaves with its events, the new one and every other session stay untouched', () => {
+      const { s, fixture: fx } = setup();
+      const before = fx(0);
+      s.projectDelegationCheckpoint(before);
+      // lane-a-demo restarted: g1 is replaced by g2. Everything g1 owned goes with it (it had children in every child table).
+      const g1 = (x: { parentId: string; parentIncarnation: string }) => x.parentId === 'lane-a-demo' && x.parentIncarnation === 'g1';
+      const after: DelegationCheckpointV1 = {
+        ...before,
+        sessions: before.sessions.filter((x) => !(x.sessionId === 'lane-a-demo' && x.parentIncarnation === 'g1')),
+        activities: before.activities.filter((x) => !g1(x)), attempts: before.attempts.filter((x) => !g1(x)),
+        leases: before.leases.filter((x) => !g1(x)), lineage: before.lineage.filter((x) => !g1(x)),
+      };
+      expect(before.sessions.map((x) => `${x.sessionId}/${x.parentIncarnation}`)).toEqual(['lane-a-demo/g1', 'lane-a-demo/g2', 'lane-b-demo/g1']);
+      const evs: Array<[string, string, number]> = [['lane-a-demo', 'g1', 3], ['lane-a-demo', 'g2', 2], ['lane-b-demo', 'g1', 2]];
+      let n = 100;
+      for (const [sessionId, parentIncarnation, count] of evs) {
+        for (let k = 0; k < count; k++) s.insertDelegationEvent(event(++n, { sessionId, parentIncarnation }));
+      }
+      s.db.exec('CREATE TEMP TABLE zz_session_deletes (sessionId TEXT, parentIncarnation TEXT)');
+      s.db.exec('CREATE TEMP TRIGGER zz_watch_session_deletes BEFORE DELETE ON main.delegation_sessions '
+        + 'BEGIN INSERT INTO zz_session_deletes VALUES (old.sessionId, old.parentIncarnation); END');
+      const rowsOf = (sessionId: string, parentIncarnation: string) => ({
+        events: s.db.prepare('SELECT * FROM delegation_events WHERE sessionId = ? AND parentIncarnation = ? ORDER BY id').all(sessionId, parentIncarnation),
+        session: s.db.prepare('SELECT rowid AS r, * FROM delegation_sessions WHERE sessionId = ? AND parentIncarnation = ?').all(sessionId, parentIncarnation),
+      });
+      const g2Before = rowsOf('lane-a-demo', 'g2');
+      const bBefore = rowsOf('lane-b-demo', 'g1');
+      expect([g2Before.events.length, bBefore.events.length]).toEqual([2, 2]);
+
+      s.projectDelegationCheckpoint(after);
+
+      expect(s.db.prepare("SELECT count(*) AS n FROM delegation_events WHERE sessionId = 'lane-a-demo' AND parentIncarnation = 'g1'").get(), 'the old incarnation’s events go').toEqual({ n: 0 });
+      expect(s.db.prepare("SELECT count(*) AS n FROM delegation_sessions WHERE sessionId = 'lane-a-demo' AND parentIncarnation = 'g1'").get()).toEqual({ n: 0 });
+      expect(rowsOf('lane-a-demo', 'g2'), 'the new incarnation of the SAME sessionId: its row and its events are untouched').toEqual(g2Before);
+      expect(rowsOf('lane-b-demo', 'g1'), 'another session: untouched').toEqual(bBefore);
+      expect((s.db.prepare('SELECT sessionId, parentIncarnation FROM zz_session_deletes').all() as Array<{ sessionId: string; parentIncarnation: string }>)
+        .map((r) => [r.sessionId, r.parentIncarnation]), 'only the old incarnation’s row was ever deleted').toEqual([['lane-a-demo', 'g1']]);
+      expect(s.readDelegationProjection()).toEqual(projectionViewOfDelegationCheckpoint(after));
+      expect((s.db.prepare('SELECT count(*) AS n FROM delegation_events').get() as { n: number }).n).toBe(4);
+    });
+
     it('upserts EVERY column of a staying session: a later checkpoint changes each of them in place, and only the leaving session is ever deleted', () => {
       const { s, fixture: fx } = setup();
       s.projectDelegationCheckpoint(withLeaver(fx(0)));
@@ -1528,9 +1721,9 @@ describe('CoordStore: the delegation projection (delegation broker wave 3, Task 
     expect(s.readDelegationProjection()).toEqual(projectionViewOfDelegationCheckpoint(cp));
   });
 
-  it('adds exactly three delegation methods: no health reader, no intent writer, no per-row updater', () => {
+  it('adds exactly five delegation methods: no health reader, no intent writer, no per-row updater', () => {
     expect(Object.getOwnPropertyNames(CoordStore.prototype).filter((n) => /delegation/i.test(n)).sort())
-      .toEqual(['insertDelegationEvent', 'projectDelegationCheckpoint', 'readDelegationProjection']);
+      .toEqual(['delegationEventStats', 'insertDelegationEvent', 'insertDelegationEvents', 'projectDelegationCheckpoint', 'readDelegationProjection']);
   });
 });
 

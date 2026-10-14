@@ -216,6 +216,18 @@ export interface DelegationCheckpointV1 {
   pruningHolds: readonly DelegationPruningHold[];
 }
 
+/**
+ * What `CoordStore.insertDelegationEvents` answers: how many rows of the batch were new, how many were already there
+ * identically, and the rows SQLite holds DIFFERENTLY. A conflict is the same `eventId` with another row, or another event on
+ * the same `journalSequence`; it is reported and never thrown, and it does not stop the rows after it. Declared here (L1) so the
+ * store and the applier's port both name it without either importing the other.
+ */
+export interface DelegationInsertEventsResult {
+  inserted: number;
+  duplicate: number;
+  conflicts: readonly DelegationEventRow[];
+}
+
 export interface DelegationRecoveryState {
   checkpoint: DelegationCheckpointV1;
   /** The shared health type owns this pair; read from it, never re-spelled. */

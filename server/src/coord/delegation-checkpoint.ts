@@ -54,6 +54,7 @@ import {
   type DelegationBucketCursor,
   type DelegationCheckpointV1,
   type DelegationEventRow,
+  type DelegationInsertEventsResult,
   type DelegationIntervalState,
   type DelegationJournalEntryV1,
   type DelegationJournalRecordV1,
@@ -1008,13 +1009,6 @@ export async function recoverDelegationFromFiles(port: DelegationFilePort, dir: 
 }
 
 // ── The SQLite projection port and its repair (ruling R20) ───────────────────────────────────────────────────────────
-
-export interface DelegationInsertEventsResult {
-  inserted: number;
-  duplicate: number;
-  /** Rows SQLite holds DIFFERENTLY (the same eventId with another row, or another event on the same journalSequence). */
-  conflicts: readonly DelegationEventRow[];
-}
 
 /**
  * What the applier needs of `coord.db`, as a port. Every call is the synchronous store; nothing is awaited inside one.

@@ -34,7 +34,7 @@ import type { UpdateIntentLog } from './updateintentlog.js';
 import {
   assertWave3Leases, delegationActivityCodec, delegationAttemptCodec, delegationCheckpointOfProjection, delegationEventCodec,
   delegationLeaseCodec, delegationLineageCodec, delegationSessionCodec, DelegationModelError,
-  type DelegationCheckpointV1, type DelegationEventRow, type DelegationRowCodec, type DelegationSqlValue,
+  type DelegationCheckpointV1, type DelegationEventRow, type DelegationInsertEventsResult, type DelegationRowCodec, type DelegationSqlValue,
 } from './delegation-model.js';
 // `bodyDigest` comes from `shared/mark.mjs` — `server.ts:30` imports it as
 // `'../../shared/mark.mjs'`; from `server/src/coord/` the path is one level
@@ -8227,14 +8227,24 @@ export class CoordStore {
     const attempts = checkpoint.attempts.map((r) => delegationAttemptCodec.toDb(r));
     const leases = checkpoint.leases.map((r) => delegationLeaseCodec.toDb(r));
     const lineage = checkpoint.lineage.map((r) => delegationLineageCodec.toDb(r));
+    const sessionKey = (id: unknown, incarnation: unknown): string => JSON.stringify([id, incarnation]);
+    // A key repeated inside the checkpoint is refused HERE, before BEGIN. The plain INSERT used to refuse it with a UNIQUE
+    // error; the upsert would take it quietly (it updates the one row twice and the last wins), narrowing a distinction the
+    // checkpoint carried: two rows for one session is a corrupt checkpoint, not a session with a second opinion.
+    const staying = new Set<string>();
+    for (const r of sessions) {
+      const key = sessionKey(r.sessionId, r.parentIncarnation);
+      if (staying.has(key)) {
+        throw new DelegationModelError('bad-checkpoint', `session ${String(r.sessionId)} (incarnation ${String(r.parentIncarnation)}) appears more than once`);
+      }
+      staying.add(key);
+    }
     // `PRAGMA foreign_keys` is a no-op inside a transaction, so it is read here, before BEGIN. The statement order below is
     // a foreign-key order; on a handle that does not enforce them it would still "work" and prove nothing.
     const fk = (this.db.prepare('PRAGMA foreign_keys').get() as { foreign_keys: number } | undefined)?.foreign_keys;
     if (fk !== 1) {
       throw new DelegationModelError('foreign-keys-off', `PRAGMA foreign_keys reads ${String(fk)}; the projection needs 1`);
     }
-    const sessionKey = (id: unknown, incarnation: unknown): string => JSON.stringify([id, incarnation]);
-    const staying = new Set(sessions.map((r) => sessionKey(r.sessionId, r.parentIncarnation)));
 
     tx(this.db, () => {
       const leaving = (this.db.prepare('SELECT sessionId, parentIncarnation FROM delegation_sessions').all() as
@@ -8270,18 +8280,54 @@ export class CoordStore {
    * whose session is not in the projection (the foreign key). The row is validated before any statement runs.
    */
   insertDelegationEvent(row: DelegationEventRow): 'inserted' | 'duplicate' {
-    const values = delegationEventCodec.toDb(row);
-    const columns = delegationEventCodec.columns;
-    const res = this.db.prepare(`${delegationInsertSql(delegationEventCodec)} ON CONFLICT (eventId) DO NOTHING`)
-      .run(...columns.map((c) => values[c]));
-    if (Number(res.changes) === 1) return 'inserted';
-    const stored = this.db.prepare(`SELECT ${columns.join(', ')} FROM delegation_events WHERE eventId = ?`)
-      .get(values.eventId) as Record<string, unknown> | undefined;
-    const differs = stored === undefined ? 'eventId' : columns.find((c) => stored[c] !== values[c]);
-    if (differs !== undefined) {
-      throw new DelegationModelError('event-conflict', `evidence event ${row.eventId} is already recorded with a different ${differs}`);
+    return writeDelegationEventRow(this.db, delegationEventCodec.toDb(row), row);
+  }
+
+  /**
+   * `insertDelegationEvent` over a list, in ONE transaction: the batch the applier's port drives once per tick. Every row is
+   * validated BEFORE `BEGIN` (a malformed row throws and nothing is written), then each goes through the same row writer as
+   * `insertDelegationEvent`. A CONFLICT is REPORTED, never thrown, and does not stop the rows after it: the same `eventId` with a
+   * different row, or another event on a `journalSequence` that a different `eventId` already holds. Anything else (an event
+   * whose session is not in the projection, a failed statement) rolls the whole batch back and rethrows. The conflicting rows
+   * come back in the order they were given.
+   */
+  insertDelegationEvents(rows: readonly DelegationEventRow[]): DelegationInsertEventsResult {
+    const encoded = rows.map((row) => ({ row, values: delegationEventCodec.toDb(row) }));
+    return tx(this.db, () => {
+      let inserted = 0;
+      let duplicate = 0;
+      const conflicts: DelegationEventRow[] = [];
+      const holder = this.db.prepare('SELECT eventId FROM delegation_events WHERE journalSequence = ?');
+      for (const { row, values } of encoded) {
+        // Another event on this sequence is a conflict SQLite would raise as a UNIQUE error mid-batch; asking first reports it
+        // without sniffing an error message.
+        const held = holder.get(values.journalSequence) as { eventId: string } | undefined;
+        if (held !== undefined && held.eventId !== values.eventId) { conflicts.push(row); continue; }
+        try {
+          if (writeDelegationEventRow(this.db, values, row) === 'inserted') inserted++; else duplicate++;
+        } catch (err) {
+          if (err instanceof DelegationModelError && err.code === 'event-conflict') { conflicts.push(row); continue; }
+          throw err;
+        }
+      }
+      return { inserted, duplicate, conflicts };
+    });
+  }
+
+  /**
+   * `COUNT(*)` of `delegation_events` and its highest `journalSequence` (null when there is none, never 0): what the applier's
+   * repair resumes from. SQLite's own answer about its own table, not an authority about the journal.
+   */
+  delegationEventStats(): { count: number; maxSequence: number | null } {
+    const r = this.db.prepare('SELECT COUNT(*) AS n, MAX(journalSequence) AS m FROM delegation_events').get() as
+      { n: unknown; m: unknown } | undefined;
+    if (r === undefined || typeof r.n !== 'number' || !Number.isSafeInteger(r.n)) {
+      throw new DelegationModelError('unreadable-row', 'delegation_events: COUNT(*) is not an integer');
     }
-    return 'duplicate';
+    if (r.m !== null && (typeof r.m !== 'number' || !Number.isSafeInteger(r.m))) {
+      throw new DelegationModelError('unreadable-row', 'delegation_events: MAX(journalSequence) is not an integer');
+    }
+    return { count: r.n, maxSequence: r.m };
   }
 
   /**
@@ -8310,6 +8356,27 @@ export class CoordStore {
 // ── delegation broker wave 3, Task 7: the projection's two SQL spellings ─────────────────────────────────────────────
 // Both name their columns from the codec, which lists the DDL's columns in the DDL's order; no statement here is
 // `SELECT *`, and no position is hand-kept.
+
+/**
+ * One evidence row into `delegation_events`: the single path `insertDelegationEvent` and `insertDelegationEvents` share.
+ * `'duplicate'` only for an IDENTICAL stored row; the same `eventId` with another row throws `event-conflict`; another event on
+ * the row's `journalSequence` raises SQLite's own UNIQUE error (the batch asks first, so it never reaches it).
+ */
+function writeDelegationEventRow(
+  db: DatabaseSync, values: Readonly<Record<(typeof delegationEventCodec.columns)[number], DelegationSqlValue>>, row: DelegationEventRow,
+): 'inserted' | 'duplicate' {
+  const columns = delegationEventCodec.columns;
+  const res = db.prepare(`${delegationInsertSql(delegationEventCodec)} ON CONFLICT (eventId) DO NOTHING`)
+    .run(...columns.map((c) => values[c]));
+  if (Number(res.changes) === 1) return 'inserted';
+  const stored = db.prepare(`SELECT ${columns.join(', ')} FROM delegation_events WHERE eventId = ?`)
+    .get(values.eventId) as Record<string, unknown> | undefined;
+  const differs = stored === undefined ? 'eventId' : columns.find((c) => stored[c] !== values[c]);
+  if (differs !== undefined) {
+    throw new DelegationModelError('event-conflict', `evidence event ${row.eventId} is already recorded with a different ${differs}`);
+  }
+  return 'duplicate';
+}
 
 /** `INSERT INTO <table> (<columns>) VALUES (?, ...)` for a delegation table. */
 function delegationInsertSql<Row, Col extends string>(codec: DelegationRowCodec<Row, Col>): string {

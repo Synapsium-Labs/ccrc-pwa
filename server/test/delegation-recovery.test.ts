@@ -12,7 +12,7 @@ import { appendFileSync, cpSync, existsSync, readFileSync, readdirSync, rmSync, 
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { DatabaseSync } from 'node:sqlite';
-import { openCoordDb, tx } from '../src/coord/db.js';
+import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
 import { mkTmp } from './tmpHelpers.js';
 import type { DelegationEventEnvelopeV1 } from '../../shared/api.js';
@@ -75,37 +75,15 @@ import {
 // ── fixtures ─────────────────────────────────────────────────────────────────────────────────────────────────────────
 
 /**
- * The projection port over the store. `CoordStore` has `projectDelegationCheckpoint` but not yet a batch insert or an event
- * statistics reader, and no coord module but the store may hold its handle (the coord ring, `single-definition.test.ts`), so the
- * port is built HERE from the store's handle, the way the production port will be once Task 7's follow-up adds those two methods
- * to the store: `insertEvents` is `insertDelegationEvent` over the list in ONE transaction that reports a conflict instead of
- * aborting on it, and `eventStats` is the count and the highest journalSequence.
+ * The projection port over the store: three one-line adapters. `projectDelegationCheckpoint`, `insertDelegationEvents` (ONE
+ * transaction, a conflict reported and never thrown) and `delegationEventStats` are the production methods Task 7's second fix round
+ * gave the store, so this is the same port production uses and the SQLite differential below runs against the real thing.
  */
 function delegationProjectionPortOfStore(store: CoordStore): DelegationProjectionPort {
   return {
     project: (cp) => store.projectDelegationCheckpoint(cp),
-    insertEvents: (rows) => tx(store.db, () => {
-      let inserted = 0;
-      let duplicate = 0;
-      const conflicts: typeof rows[number][] = [];
-      for (const row of rows) {
-        try {
-          if (store.insertDelegationEvent(row) === 'inserted') inserted++; else duplicate++;
-        } catch (err) {
-          const conflict = (err instanceof DelegationModelError && err.code === 'event-conflict')
-            || (err instanceof Error && /UNIQUE constraint failed: delegation_events\.journalSequence/.test(err.message));
-          if (!conflict) throw err;
-          conflicts.push(row);
-        }
-      }
-      return { inserted, duplicate, conflicts };
-    }),
-    eventStats: () => {
-      const r = store.db.prepare('SELECT COUNT(*) AS n, MAX(journalSequence) AS m FROM delegation_events').get();
-      const n = r?.['n'];
-      const m = r?.['m'];
-      return { count: typeof n === 'number' ? n : typeof n === 'bigint' ? Number(n) : 0, maxSequence: typeof m === 'number' ? m : typeof m === 'bigint' ? Number(m) : null };
-    },
+    insertEvents: (rows) => store.insertDelegationEvents(rows),
+    eventStats: () => store.delegationEventStats(),
   };
 }
 
@@ -521,11 +499,8 @@ describe('projectability: a checkpoint no projection could accept is refused bef
   for (const [name, bad] of table) {
     it(`refuses ${name}, exactly as SQLite would`, () => {
       expect(failureCode(() => assertDelegationCheckpointProjectable(bad))).toBe('unprojectable');
-      // The differential: wherever the pure check refuses, the real store refuses too (a SQLite error, or its own pre-flight).
-      // One exception, pinned so it cannot pass unnoticed: the store's session UPSERT accepts a repeated session key (it
-      // updates the row twice). Task 7's follow-up round makes the store refuse it before BEGIN; until then only the pure
-      // check stands between a duplicate session and a durable checkpoint.
-      if (name === 'two sessions with one key') return;
+      // The differential, with no exception: wherever the pure check refuses, the real store refuses too (a SQLite error, or its
+      // own pre-flight; a repeated session key is the store's `bad-checkpoint`, refused before BEGIN).
       expect(() => store().projectDelegationCheckpoint({ ...bad, appliedJournalSequence: Math.max(bad.appliedJournalSequence, 4) })).toThrow();
     });
   }
