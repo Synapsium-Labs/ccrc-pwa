@@ -62,7 +62,7 @@ import {
   mergeJournalByTime, decideBind, restoreNameOk,
 } from './lib.mjs';
 import {
-  MIGRATIONS, StoreError, bump, clearDoneMarkers, closeWriter, createStore, dropPending, finishPending, getMeta,
+  MIGRATIONS, OWED_INDEX, StoreError, bump, clearDoneMarkers, closeWriter, createStore, dropPending, finishPending, getMeta,
   measureStoreFacts, measuredSize, openReader, openWriter, readAttempts, removeStaleMigrationTemps, removeStaleTemps, runMigration, setMeta,
   syncWriterMirror, userVersion, withTx, writeFileAtomic, removeEntry, readBounded, removeStaleAtomicTemps, mkdirDurable,
   CODEC, brotli, unbrotli, unbrotliPrefix, compressFdRange, probeFts5, createFtsTables, recoverStepAt, storedVersionAt,
@@ -4855,16 +4855,37 @@ function ftsUndecodableKey(blobId) {
  *  change of mode (a sidecar now references it) makes it owed again. `b` is blobs; binds INDEXED_PROVENANCE twice.
  *  Its first two terms, `b.fts_indexed = 0 AND b.z IS NOT NULL`, are the predicate of schema v2's partial index `blobs_unindexed`
  *  (store.mjs's V2) written out, which is what lets SQLite read the owed rows from that index instead of scanning `blobs` (D-5015);
- *  FTS_ELIGIBLE_SQL's `b.z IS NOT NULL` must stay a top-level term of this AND chain. */
+ *  FTS_ELIGIBLE_SQL's `b.z IS NOT NULL` must stay a top-level term of this AND chain. Both queries below that read it NAME the
+ *  index (INDEXED BY, D-5018) behind ftsOwedIndexed's presence guard. */
 const FTS_OWED_SQL = `b.fts_indexed = 0 AND ${FTS_ELIGIBLE_SQL}
         AND NOT EXISTS (SELECT 1 FROM meta m WHERE m.k = '${FTS_UNDECODABLE_META}' || b.blob_id
                           AND m.v = CASE WHEN ${FTS_IS_SIDECAR_SQL} THEN 'sidecar' ELSE 'entry' END)`;
+
+/** Whether this store carries the owed-row index (schema v2's `blobs_unindexed`): a point lookup in sqlite_master. A store at v1 does
+ *  not, and a statement that NAMES a missing index fails to prepare ("no such index"). The two owed queries are written in two forms,
+ *  forced (`FROM blobs b INDEXED BY blobs_unindexed`) and plain, and this picks between them (D-5018). The forced form is the only one
+ *  that keeps the plan once sqlite_stat1 records the index as most of the table (D-5018: the planner then prefers a scan of `blobs`,
+ *  the full read D-5015 removed); the plain form is the v1 plan and is only ever used on a store that has no index to name. */
+function ftsOwedIndexed(db) {
+  return db.prepare("SELECT 1 AS one FROM sqlite_master WHERE type = 'index' AND name = ?").get(OWED_INDEX) !== undefined;
+}
+/** `blobs b`, naming the owed-row index when `forced`. */
+const ftsOwedFrom = (forced) => (forced ? `blobs b INDEXED BY ${OWED_INDEX}` : 'blobs b');
+/** The backfill's select over the ONE owed relation; binds the cursor, INDEXED_PROVENANCE twice, the limit. */
+const ftsBackfillSql = (forced) => `SELECT b.blob_id AS blob_id, length(b.z) AS zlen,
+        ${FTS_IS_SIDECAR_SQL} AS is_sidecar
+      FROM ${ftsOwedFrom(forced)}
+      WHERE b.blob_id > ? AND ${FTS_OWED_SQL}
+      ORDER BY b.blob_id LIMIT ?`;
+/** The owed check's select over the ONE owed relation; binds INDEXED_PROVENANCE twice. */
+const ftsOwesRowSql = (forced) => `SELECT 1 AS one FROM ${ftsOwedFrom(forced)} WHERE ${FTS_OWED_SQL} LIMIT 1`;
 
 /** Statements over the FTS tables. These are prepared only once ftsPrepare has made the tables:
  *  node:sqlite refuses to prepare against a table that does not exist. */
 function ftsStmts(db) {
   let f = FTS_STMTS.get(db);
   if (f !== undefined) return f;
+  const backfillSql = ftsBackfillSql(ftsOwedIndexed(db));
   f = {
     ins: db.prepare('INSERT INTO blobs_fts (rowid, body) VALUES (?, ?)'),
     del: db.prepare('DELETE FROM blobs_fts WHERE rowid = ?'),
@@ -4874,11 +4895,8 @@ function ftsStmts(db) {
     merge: db.prepare("INSERT INTO blobs_fts (blobs_fts, rank) VALUES ('merge', ?)"),
     total: db.prepare('SELECT total_changes() AS n'),
     rederive: db.prepare('SELECT blob_id, length(z) AS zlen FROM blobs WHERE blob_id > ? AND blob_id <= ? AND fts_indexed = 1 ORDER BY blob_id LIMIT ?'),
-    backfill: db.prepare(`SELECT b.blob_id AS blob_id, length(b.z) AS zlen,
-        ${FTS_IS_SIDECAR_SQL} AS is_sidecar
-      FROM blobs b
-      WHERE b.blob_id > ? AND ${FTS_OWED_SQL}
-      ORDER BY b.blob_id LIMIT ?`),
+    backfill: db.prepare(backfillSql),
+    backfillSql,
   };
   FTS_STMTS.set(db, f);
   return f;
@@ -4890,22 +4908,36 @@ function ftsStmts(db) {
  *  deduplicated onto a new referrer) eligible without storing anything. Every id is measured, because the owed relation
  *  already excludes what the backfill passed over as undecodable (D-4346): that blob is classified by the mode that
  *  failed it, so a healthy tick neither re-opens nor recounts it. */
-function ftsOwesRow(db) {
+export function ftsOwesRow(db) {
   // Prepared here, not in ftsStmts: it reads no FTS table, and ftsStmts cannot be prepared where the tables are gone.
-  return db.prepare(FTS_OWES_ROW_SQL).get(...INDEXED_PROVENANCE, ...INDEXED_PROVENANCE) !== undefined;
+  return db.prepare(ftsOwesRowStatement(db)).get(...INDEXED_PROVENANCE, ...INDEXED_PROVENANCE) !== undefined;
 }
 
-/** ftsOwesRow's one statement. A healthy pass runs it on every tick once ('fts', 1) is complete, so it must cost O(owed rows), not
- *  O(blobs) (D-5015, review 441 F1). It does, because FTS_OWED_SQL's two leading terms, `b.fts_indexed = 0 AND b.z IS NOT NULL`, are
- *  schema v2's partial index `blobs_unindexed` predicate WRITTEN OUT (store.mjs's V2), and SQLite only uses a partial index whose
- *  WHERE the query's own implies. Never `INDEXED BY`: if a term here drifts from the index, the plan scans `blobs` and
- *  history-store.test.ts's EXPLAIN QUERY PLAN pin goes red. */
-export const FTS_OWES_ROW_SQL = `SELECT 1 AS one FROM blobs b WHERE ${FTS_OWED_SQL} LIMIT 1`;
+/** The owed check's SQL for THIS store: forced onto the owed-row index when the store has it, plain when it has none (a v1 store).
+ *  The one choice, read by ftsOwesRow and by ftsOwedPlans, so a pin of the plan sees what the pass runs. Measured per call, a
+ *  point lookup in sqlite_master, so a store that gains the index (its migration) is not left on the plain form. */
+const ftsOwesRowStatement = (db) => ftsOwesRowSql(ftsOwedIndexed(db));
 
-/** EXPLAIN QUERY PLAN of ftsOwesRow's exact statement, as its `detail` lines in plan order: a pure read, for the pin that the owed check
- *  is an index search or scan of the owed-row index and never a scan of `blobs`. */
-export function ftsOwesRowPlan(db) {
-  return db.prepare(`EXPLAIN QUERY PLAN ${FTS_OWES_ROW_SQL}`).all(...INDEXED_PROVENANCE, ...INDEXED_PROVENANCE).map((r) => String(r.detail));
+/** ftsOwesRow's statement on a store that carries the owed-row index, FORCED onto it. A healthy pass runs it on every tick once
+ *  ('fts', 1) is complete, so it must cost O(index), never O(blobs) (D-5015, review 441 F1). FTS_OWED_SQL's two leading terms,
+ *  `b.fts_indexed = 0 AND b.z IS NOT NULL`, are schema v2's partial index `blobs_unindexed` predicate WRITTEN OUT (store.mjs's V2), and
+ *  SQLite only admits a partial index whose WHERE the query's own implies; INDEXED BY then keeps it chosen (D-5018), because the
+ *  planner alone drops it for `SCAN b` once the closing PRAGMA optimize has recorded the index as about 70% or more of the blobs rows
+ *  (or as empty, `0 0`): the stat is written at the migrating pass's own close and never refreshed. If a term here drifts from the
+ *  index the forced statement no longer prepares, and history-store.test.ts's pins go red. A store without the index (v1) is
+ *  answered by the plain form, which ftsOwesRow picks. */
+export const FTS_OWES_ROW_SQL = ftsOwesRowSql(true);
+
+/** EXPLAIN QUERY PLAN of the two owed queries exactly as this store would run them (ftsOwesRow's, and the backfill's select as
+ *  ftsStmts prepares it), as `detail` lines in plan order (and the two statements' text): a pure read of the plan, for the pins that each is a search or scan of the
+ *  owed-row index and never a scan of `blobs`, whatever sqlite_stat1 says, and that the entries probe is covering. The backfill's
+ *  needs the FTS tables, as ftsStmts does. */
+export function ftsOwedPlans(db) {
+  const P = [...INDEXED_PROVENANCE, ...INDEXED_PROVENANCE];
+  const plan = (sql, ...args) => db.prepare(`EXPLAIN QUERY PLAN ${sql}`).all(...args).map((r) => String(r.detail));
+  const owesSql = ftsOwesRowStatement(db);
+  const backfillSql = ftsStmts(db).backfillSql;
+  return { owes: plan(owesSql, ...P), backfill: plan(backfillSql, 0, ...P, 1), owesSql, backfillSql };
 }
 
 /** What ftsTextOfBlob answers for a blob whose stored bytes do not decode (D-4346, history-permanent-failures-classified). */

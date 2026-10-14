@@ -19,7 +19,7 @@ import * as pty from 'node-pty';
 import {
   makeHistoryBox, runSweep, runShim, runDriver, skipOnDarwin, openStoreRO, counters, journalRecords, plantSession,
   plantTranscript, spoolLine, preloadOptions, PRELOADS, CLI, recoverRow, boundEmptyStore,
-  runCli, withPane, seedFamily, journalDirOf, REPO, type HistoryBox, type SpawnOpts,
+  runCli, withPane, seedFamily, journalDirOf, REPO, rewindStoreToV1, type HistoryBox, type SpawnOpts,
 } from './historyHelpers.js';
 import { userRow, assistantRow, boundaryRow, summaryRow } from './historyFixtures.js';
 import { removeTmpFixturesEachTest, mkTmp } from './tmpHelpers.js';
@@ -28,7 +28,7 @@ import {
   REDACTED_MARK, BELT_VERSION, parseBeltState, beltWidth, type BeltState, planReplay,
   NODE_PARSER_VERSION, makePairIndex, secretPairs, parentRollup, nodeIndexTexts,
 } from '../../ccd/history/lib.mjs';
-import { StoreError, abortRestore, closeWriter, createFtsTables, createStore, getMeta, getStep, openWriter, setMeta, setStep, stageRestore } from '../../ccd/history/store.mjs';
+import { V2_INDEXES, StoreError, abortRestore, closeWriter, createFtsTables, createStore, getMeta, getStep, openWriter, setMeta, setStep, stageRestore } from '../../ccd/history/store.mjs';
 
 skipOnDarwin();
 removeTmpFixturesEachTest();
@@ -1190,6 +1190,21 @@ const plantWork = (box: HistoryBox, uuid: string, rowUuid: string): void => {
 };
 
 describe('C55: doctor --adopt (W1-B2 Task 26; spec §8.4)', () => {
+  it('a v1 store adopted (D-5015): the adopt binds it at v1, and the next pass migrates it to the REAL v2', async () => {
+    const { box } = unboundBox('ccrc-history-adopt-v2-');
+    const P = historyPaths(box.home);
+    rewindStoreToV1(P.dbFile);
+    const uv = (): number => { const db = new DatabaseSync(P.dbFile, { readOnly: true }); try { return Number((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version); } finally { db.close(); } };
+    const indexes = (): string[] => { const db = new DatabaseSync(P.dbFile, { readOnly: true }); try { return (db.prepare("SELECT name FROM sqlite_master WHERE type = 'index'").all() as Array<{ name: string }>).map((r) => r.name); } finally { db.close(); } };
+    expect(uv(), 'CONTROL: the unbound store is a v1').toBe(1);
+    const r = await cliOnPty(box, ['doctor', '--adopt']);
+    expect(r.code, r.out).toBe(0);
+    expect(uv(), 'CONTROL: adopt binds, it does not migrate').toBe(1);
+    pass(box);
+    expect(uv()).toBe(SCHEMA_VERSION);
+    for (const ix of V2_INDEXES) expect(indexes(), `the migration made ${ix}`).toContain(ix);
+  }, 1.5 * HEAVY);
+
   it('DB present, store.id absent → doctor --adopt on a terminal binds it under a new writer, journals the bind before answering 0, and the next tick ingests', async () => {
     const { box, storeId, oldWriter } = unboundBox('ccrc-history-adopt-');
     const P = historyPaths(box.home);
@@ -1666,6 +1681,30 @@ describe('C57: doctor --restore, the drill (W1-B2 Task 27)', () => {
       expect(t.code, `${t.stdout}\n${t.stderr}`).toBe(0);
     }
     expect(rrRecovered(box)).toBe(true);
+  }, 1.5 * HEAVY);
+
+  it('a v1 backup, no seam (D-5015): the restore (the CLI, on a terminal) binds it at v1, and the next pass migrates it to the REAL v2: user_version is SCHEMA_VERSION and every V2 index is there', async () => {
+    const { box, storeId } = rrBuilt('ccrc-hist-c57v2-');
+    const P = rrRoot(box);
+    const name = rrBackup(box);
+    const backup = path.join(P.backups, name);
+    const indexesOf = (file: string): string[] => rrFileDb(file, (db) => (db.prepare("SELECT name FROM sqlite_master WHERE type = 'index'").all() as Array<{ name: string }>).map((r) => r.name));
+    rewindStoreToV1(backup);   // the backup is what a B1 build would have taken: schema v1, none of the indexes v2 made
+    expect(rrUserVersion(backup), 'CONTROL: the backup is a v1').toBe(1);
+    for (const ix of V2_INDEXES) expect(indexesOf(backup), `CONTROL: the v1 backup has no ${ix}`).not.toContain(ix);
+    rrLose(box, { binding: true, journal: true });
+    const r = await cliOnPty(box, ['doctor', '--restore', name]);
+    expect(r.code, r.out).toBe(0);
+    rrExpectBound(box, storeId, 'restore', rrDbMeta(backup, 'writer'));
+    expect(rrUserVersion(P.dbFile), 'CONTROL: the restored store is the backup\'s v1, not yet migrated').toBe(1);
+    const mig = runShim(box);
+    expect(mig.code, `${mig.stdout}\n${mig.stderr}`).toBe(0);
+    expect(mig.stdout, 'the pass migrates before it recovers').toMatch(/^history-sweep: migrated$/m);
+    expect(rrUserVersion(P.dbFile)).toBe(SCHEMA_VERSION);
+    for (const ix of V2_INDEXES) expect(indexesOf(P.dbFile), `the migration made ${ix}`).toContain(ix);
+    expect(fs.existsSync(path.join(P.backups, 'pre-v2.db')), 'the migration snapshot').toBe(true);
+    rrTickUntil(box, () => rrRecovered(box));
+    expect(rrUserVersion(P.dbFile)).toBe(SCHEMA_VERSION);
   }, 1.5 * HEAVY);
 
   it('a backup taken after a re-key: the recovery completes with one (id, G) family (DI4)', async () => {

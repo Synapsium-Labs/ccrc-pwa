@@ -494,6 +494,22 @@ describe('DM35: only regular files under a rostered projects/ root', () => {
   }, 60_000);
 });
 
+describe('the migration seam driver (D-5015)', () => {
+  it('a seamed pass on a HOME with no store throws loudly and creates nothing; it does not pass vacuously on the real v2', () => {
+    const box = makeHistoryBox('ccrc-hist-seamtrap-', { role: 'fleet', shim: true });
+    const p = paths(box);
+    expect(fs.existsSync(p.db), 'CONTROL: the HOME holds no store').toBe(false);
+    const r = runDriver(box, { extraMigrations: [V2] });
+    expect(r.code, `${r.stdout}${r.stderr}`).not.toBe(0);
+    expect(r.stderr).toMatch(/extraMigrations needs a store already on disk/);
+    expect(fs.existsSync(p.db), 'the refused pass made no store').toBe(false);
+    // and with a store on disk the same call runs: the trap is the missing store, not the seam
+    const bound = boundBox('ccrc-hist-seamtrap2-');
+    expect(runDriver(bound, { extraMigrations: [V2] }).code).toBe(0);
+    expect(versionOf(paths(bound).db), 'the seam\'s migration ran over the rewound v1').toBe(2);
+  });
+});
+
 describe('DM43: no copy a scheduled pass cannot finish', () => {
   it('an over-bound store: the scheduled pass writes no .tmp and no snapshot and counts migration_needs_op; --op migrate snapshots, migrates and records copy_bps', () => {
     const box = boundBox('ccrc-hist-dm43-');

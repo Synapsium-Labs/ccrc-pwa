@@ -28,7 +28,7 @@ import { ccrcContainedEnv } from './ccrcContainment.js';
 import { assertNoRealTool } from './containedTools.js';
 import { parseRoster } from '../../shared/roster.js';
 import { historyPaths } from '../../ccd/history/lib.mjs';
-import { createStore } from '../../ccd/history/store.mjs';
+import { createStore, V2_INDEXES } from '../../ccd/history/store.mjs';
 
 export const REPO = path.resolve(__dirname, '..', '..');
 export const SWEEP = path.join(REPO, 'ccd', 'history', 'sweep.mjs');
@@ -199,13 +199,14 @@ export function openStoreRO(box: HistoryBox): DatabaseSync {
   return new DatabaseSync(historyPaths(box.home).dbFile, { readOnly: true });
 }
 
-/** Take a store the real code just made back to schema v1: drop the owed-row index schema v2 added (D-5015) and stamp
- *  user_version 1. What is left is the store B1 shipped, so the writer's migration path (v1 -> this build's v2) runs on it
- *  for real. The caller holds no open connection to the file. */
+/** Take a store the real code just made back to schema v1: drop every index schema v2 made (store.mjs's V2_INDEXES, derived from
+ *  V2's own text, so a later index in V2 is rewound with no list to edit here) and stamp user_version 1. What is left is the store
+ *  B1 shipped, so the writer's migration path (v1 -> this build's v2) runs on it for real. The caller holds no open connection to
+ *  the file. fixtures/history/run-pass.mjs rewinds from the same list. */
 export function rewindStoreToV1(dbFile: string): void {
   const db = new DatabaseSync(dbFile);
   try {
-    db.exec('DROP INDEX IF EXISTS blobs_unindexed');   // tolerant: a mutant that never made it must fail at the migration's assertion, not here
+    for (const name of V2_INDEXES) db.exec(`DROP INDEX IF EXISTS ${name}`);   // tolerant: a mutant that never made one must fail at the migration's assertion, not here
     db.exec('PRAGMA user_version = 1');
   } finally { db.close(); }
 }
@@ -219,9 +220,11 @@ export function plantBlobs(dbFile: string, n: { owed?: number; indexed?: number;
     const ins = db.prepare('INSERT INTO blobs (sha256, codec, z, raw_len, fts_indexed, pruned_ms) VALUES (?, ?, ?, ?, ?, ?)');
     let k = Number((db.prepare('SELECT count(*) AS n FROM blobs').get() as { n: number }).n);   // a later call continues the shas
     const sha = (): Buffer => { const b = Buffer.alloc(32); b.writeUInt32BE(k += 1, 0); return b; };
+    db.exec('BEGIN');   // one commit, not one per row: the statistics pins plant thousands
     for (let i = 0; i < (n.owed ?? 0); i += 1) ins.run(sha(), 'br5', Buffer.from('z'), 1, 0, null);
     for (let i = 0; i < (n.indexed ?? 0); i += 1) ins.run(sha(), 'br5', Buffer.from('z'), 1, 1, null);
     for (let i = 0; i < (n.pruned ?? 0); i += 1) ins.run(sha(), 'br5', null, 1, 0, 1);
+    db.exec('COMMIT');
   } finally { db.close(); }
 }
 

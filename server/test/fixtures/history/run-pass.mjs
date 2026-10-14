@@ -28,10 +28,14 @@
 //   openStoreWord      the word an --op pass's store open answers instead of opening (FU4 M28: a word whose REASONS code is
 //                      not exit 5), handed to sweep.mjs as deps.openStore
 //   extraMigrations    SQL run as v2, v3, ... over the v1 DDL alone (the migration seam, DM42/DM43): a build whose v2 is the seam,
-//                      standing in for the real v2 (D-5015: the owed-row index). A store the real code just made carries that index and
-//                      reads user_version = SCHEMA_VERSION, so the driver first REWINDS such a store to v1 (drops the index, stamps 1):
-//                      the store the seam migrates is then the v1 store these cases were written for. A store the seam already migrated
-//                      carries no index and is left alone.
+//                      standing in for the real v2 (D-5015: the owed-row index and the rest of V2_INDEXES). A store the real code just
+//                      made carries those indexes and reads user_version = SCHEMA_VERSION, so the driver first REWINDS such a store to
+//                      v1 (drops every V2_INDEXES index, stamps 1): the store the seam migrates is then the v1 store these cases were
+//                      written for. A store the seam already migrated carries none of them and is left alone.
+//                      THE TRAP, and why the driver refuses it: a pass on a HOME with NO store creates one, and createStore stamps the
+//                      REAL SCHEMA_VERSION with the real indexes, so a seam of one migration (code version 2) would find the store
+//                      already at its version and never run, and the case would pass having tested nothing. So a seamed pass on a HOME
+//                      with no store THROWS here, loudly. Make the store first (createStore, a pass without the seam, or a helper).
 //   heavy              the versions among those that SCHEMA_ADDED marks heavy
 //   managedSettings    the managed-settings list the census reads instead of /etc (Task 26)
 //   budgetMs, budgetBytes, chunkBytes  the run budget's limits, handed to sweep.mjs as deps.budget (W1-B2 Task 25)
@@ -40,7 +44,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { syncBuiltinESMExports } from 'node:module';
 import { runPass } from '../../../../ccd/history/sweep.mjs';
-import { MIGRATIONS, closeWriter, openWriter, userVersion } from '../../../../ccd/history/store.mjs';
+import { MIGRATIONS, V2_INDEXES, closeWriter, openWriter, userVersion } from '../../../../ccd/history/store.mjs';
 import { SCHEMA_ADDED, SCHEMA_VERSION, historyPaths } from '../../../../ccd/history/lib.mjs';
 
 const spec = JSON.parse(process.env.HISTORY_TEST_DEPS ?? '{}');
@@ -51,18 +55,20 @@ if (spec.offsetMs !== undefined || spec.stepMs !== undefined) {
 }
 if (Array.isArray(spec.extraMigrations) && spec.extraMigrations.length > 0) {
   const dbFile = historyPaths(process.env.HOME).dbFile;
-  if (fs.existsSync(dbFile)) {
-    // Through store.mjs's own open (this fixture's ring forbids node:sqlite); a store that open refuses is left for the pass to refuse.
-    let db = null;
-    try { db = openWriter(dbFile); } catch { /* not ours to rewind */ }
-    if (db !== null) {
-      try {
-        if (userVersion(db) === SCHEMA_VERSION && db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = 'blobs_unindexed'").get() !== undefined) {
-          db.exec('DROP INDEX blobs_unindexed');
-          db.exec('PRAGMA user_version = 1');
-        }
-      } finally { closeWriter(db); }
-    }
+  if (!fs.existsSync(dbFile)) {
+    throw new Error(`run-pass: extraMigrations needs a store already on disk at ${dbFile}; a pass that creates one stamps it with the real schema, so the seam's migration would never run and the case would pass vacuously`);
+  }
+  // Through store.mjs's own open (this fixture's ring forbids node:sqlite); a store that open refuses is left for the pass to refuse.
+  let db = null;
+  try { db = openWriter(dbFile); } catch { /* not ours to rewind */ }
+  if (db !== null) {
+    try {
+      const present = (name) => db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = ?").get(name) !== undefined;
+      if (userVersion(db) === SCHEMA_VERSION && V2_INDEXES.every(present)) {
+        for (const name of V2_INDEXES) db.exec(`DROP INDEX ${name}`);
+        db.exec('PRAGMA user_version = 1');
+      }
+    } finally { closeWriter(db); }
   }
   deps.migrations = [MIGRATIONS[0], ...spec.extraMigrations];
   const added = { 1: SCHEMA_ADDED[1] };

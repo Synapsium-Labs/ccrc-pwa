@@ -11,15 +11,15 @@ import { spawnSync } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
-import { pathToFileURL } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { syncBuiltinESMExports } from 'node:module';
 import { DatabaseSync } from 'node:sqlite';
 import { brotliCompressSync, constants as Z } from 'node:zlib';
 import { mkTmp } from './tmpHelpers.js';
 import { recordDirFsyncs, recordOpenFlags, rewindStoreToV1, plantBlobs, owedIndexFacts } from './historyHelpers.js';
-import { BLOB_DECODE_MAX, SIDECAR_WHOLE_MAX, makePairIndex, MAX_INTERRUPTED_ATTEMPTS, SCHEMA_ADDED, SCHEMA_VERSION, UUID_RE, WRITER_RE, decideStoreOpen, historyPaths, backupNameOf, FTS_SHADOWS, ftsTablesHealthy } from '../../ccd/history/lib.mjs';
+import { INDEXED_PROVENANCE, BLOB_DECODE_MAX, SIDECAR_WHOLE_MAX, makePairIndex, MAX_INTERRUPTED_ATTEMPTS, SCHEMA_ADDED, SCHEMA_VERSION, UUID_RE, WRITER_RE, decideStoreOpen, historyPaths, backupNameOf, FTS_SHADOWS, ftsTablesHealthy } from '../../ccd/history/lib.mjs';
 import {
-  CODEC, MIGRATIONS, StoreError, openWriter, openReader, userVersion, probeFts5, withTx, brotli, unbrotli,
+  CODEC, MIGRATIONS, OWED_INDEX, V2_INDEXES, StoreError, openWriter, openReader, userVersion, probeFts5, withTx, brotli, unbrotli,
   measuredSize, getMeta, setMeta, bump, closeWriter, schemaOf,
   mintStoreId, mintWriter, writeFileAtomic, peekStoreId, measureStoreFacts, removeStaleTemps, removeStaleMigrationTemps, createStore,
   finishPending, dropPending, syncWriterMirror, createFtsTables, integrityCheck, foreignKeyRows, ftsMeasure, dropFtsTables, setCounter,
@@ -2029,31 +2029,143 @@ describe('blobPlainTextMeasured: a stored body as text, with the condition that 
   });
 });
 
-// ── schema v2: the owed-row partial index (D-5015, review 441 F1) ───────────────────────────────────────────────
+// ── schema v2: every derived index, versioned (D-5015, D-5018, D-5019, D-5020; review 441 F1) ─────────────────────
 // A healthy pass asks "is any blob still owed an FTS row?" on every tick (sweep.mjs's ftsOwesRow). Without an index on fts_indexed that is
-// a read of the whole blobs table, which cost minutes of cold I/O on a half-gigabyte store; schema v2's partial index makes it O(owed).
-describe('schema v2: the owed-row partial index (D-5015)', () => {
-  interface OwedSweep { ftsOwesRowPlan(db: DatabaseSync): string[]; FTS_OWES_ROW_SQL: string }
+// a read of the whole blobs table, which cost minutes of cold I/O on a half-gigabyte store; schema v2's partial index makes it O(index), the
+// two owed queries NAME it (INDEXED BY, behind a presence guard) so a stored statistic cannot steer them back to a scan, and the probe into
+// `entries` is covering. The two node indexes derivation used to make with an unversioned IF NOT EXISTS are made here too.
+describe('schema v2: the owed-row index, its covering probe and the node indexes (D-5015, D-5018, D-5019, D-5020)', () => {
+  interface OwedPlans { owes: string[]; backfill: string[]; owesSql: string; backfillSql: string }
+  interface OwedSweep { ftsOwedPlans(db: DatabaseSync): OwedPlans; ftsOwesRow(db: DatabaseSync): boolean; FTS_OWES_ROW_SQL: string }
   const loadSweep = async (): Promise<OwedSweep> => (await import('../../ccd/history/sweep.mjs')) as unknown as OwedSweep;
   const fresh = (): { h: string; file: string } => { const h = mkTmp('ccrc-history-v2idx-'); createStore(h); return { h, file: historyPaths(h).dbFile }; };
-  const planOf = async (file: string): Promise<string[]> => {
+  const INDEXED_BY = ' INDEXED BY blobs_unindexed';
+  /** Both owed queries' plans on a fresh writer connection (so sqlite_stat1 is read as stored), as the pass would prepare them. The
+   *  backfill's statement needs the FTS tables, as ftsStmts does. The connection is closed plainly: closeWriter's PRAGMA optimize
+   *  would write statistics of its own into the fixture. */
+  const plansOf = async (file: string): Promise<OwedPlans> => {
     const S = await loadSweep();
+    const db = openWriter(file);
+    try {
+      if (!probeTables(db)) createFtsTables(db);
+      return S.ftsOwedPlans(db);
+    } finally { db.close(); }
+  };
+  const probeTables = (db: DatabaseSync): boolean => db.prepare("SELECT 1 FROM sqlite_master WHERE name = 'blobs_fts'").get() !== undefined;
+  const planOfSql = (file: string, sql: string, ...args: unknown[]): string[] => {
     const db = new DatabaseSync(file, { readOnly: true });
-    try { return S.ftsOwesRowPlan(db); } finally { db.close(); }
+    try { return (db.prepare(`EXPLAIN QUERY PLAN ${sql}`).all(...(args as never[])) as Array<{ detail: string }>).map((r) => String(r.detail)); } finally { db.close(); }
+  };
+  const withDb = <T>(file: string, fn: (db: DatabaseSync) => T): T => { const db = new DatabaseSync(file); try { return fn(db); } finally { db.close(); } };
+  const usesTheIndex = (plan: string[], what: string): void => {
+    expect(plan[0], `${what}: ${plan.join(' | ')}`).toMatch(/^(SCAN|SEARCH) b USING INDEX blobs_unindexed\b/);
+    expect(plan.filter((l) => /^SCAN b\s*$/.test(l) || /^SEARCH b USING INTEGER PRIMARY KEY/.test(l)), `${what}: a full read of blobs: ${plan.join(' | ')}`).toEqual([]);
   };
 
-  it('PIN (a): EXPLAIN QUERY PLAN of the owed query names the index and has no full SCAN of blobs', async () => {
+  it('PIN (a): EXPLAIN QUERY PLAN of the owed check and of the backfill names the index and has no full read of blobs', async () => {
     const { file } = fresh();
     plantBlobs(file, { owed: 3, indexed: 3, pruned: 3 });
-    const plan = await planOf(file);
-    expect(plan[0], plan.join('\n')).toMatch(/^(SCAN|SEARCH) b USING (COVERING )?INDEX blobs_unindexed\b/);
-    expect(plan.filter((l) => /^SCAN b\s*$/.test(l)), `a full scan of blobs: ${plan.join(' | ')}`).toEqual([]);
+    const p = await plansOf(file);
+    usesTheIndex(p.owes, 'the owed check');
+    usesTheIndex(p.backfill, 'the backfill select');
+    expect(p.owesSql, 'the owed check names the index').toContain(`FROM blobs b${INDEXED_BY} WHERE`);
+    expect(p.backfillSql, 'the backfill names the index').toContain(`FROM blobs b${INDEXED_BY}`);
   });
 
-  it('CONTROL: the same query over a v1 store (no index) is the full scan the pin refuses, so the pin is not vacuous', async () => {
+  it('CONTROL: the same two queries over a v1 store (no index) are the plain full read the pin refuses, so the pin is not vacuous', async () => {
     const { file } = fresh();
     rewindStoreToV1(file);
-    expect((await planOf(file)).filter((l) => /^SCAN b\s*$/.test(l))).toEqual(['SCAN b']);
+    const p = await plansOf(file);
+    expect(p.owes.filter((l) => /^SCAN b\s*$/.test(l))).toEqual(['SCAN b']);
+    expect(p.backfill[0]).toMatch(/^SEARCH b USING INTEGER PRIMARY KEY/);
+  });
+
+  // The statistics PRAGMA optimize writes at a writer's close (closeWriter) are what steer the planner off an unforced partial index: at
+  // about 70% of the blobs rows, or recorded empty (`0 0`), it takes `SCAN b` for the owed check and the rowid range for the backfill,
+  // both of which read every blob row, overflow chains included. These two pins run ANALYZE first, which PIN (a) does not, and each has a
+  // CONTROL that shows the plain form flipping under the same statistics.
+  it('PIN (a2): at a 90% unindexed share, once ANALYZEd, both queries still plan the index; the plain form flips to the full read', async () => {
+    const { file } = fresh();
+    plantBlobs(file, { owed: 180, indexed: 20 });
+    withDb(file, (db) => db.exec('ANALYZE'));
+    const stat = withDb(file, (db) => db.prepare("SELECT stat FROM sqlite_stat1 WHERE idx = 'blobs_unindexed'").get() as { stat: string });
+    expect(stat.stat, 'the statistic records the index as 180 of 200 rows').toBe('180 1');
+    const p = await plansOf(file);
+    usesTheIndex(p.owes, 'owed check at 90%');
+    usesTheIndex(p.backfill, 'backfill at 90%');
+    const P = [...INDEXED_PROVENANCE, ...INDEXED_PROVENANCE];
+    const plainOwes = planOfSql(file, p.owesSql.replace(INDEXED_BY, ''), ...P);
+    const plainBackfill = planOfSql(file, p.backfillSql.replace(INDEXED_BY, ''), 0, ...P, 1);
+    expect(plainOwes.filter((l) => /^SCAN b\s*$/.test(l)), `CONTROL: the plain owed check flips: ${plainOwes.join(' | ')}`).toEqual(['SCAN b']);
+    expect(plainBackfill[0], `CONTROL: the plain backfill flips: ${plainBackfill.join(' | ')}`).toMatch(/^SEARCH b USING INTEGER PRIMARY KEY/);
+  });
+
+  it('PIN (a3): with the index recorded empty (`0 0`) and owed rows planted after, both queries still plan the index', async () => {
+    const { file } = fresh();
+    plantBlobs(file, { indexed: 2000 });
+    withDb(file, (db) => db.exec('ANALYZE'));
+    expect(withDb(file, (db) => (db.prepare("SELECT stat FROM sqlite_stat1 WHERE idx = 'blobs_unindexed'").get() as { stat: string }).stat), 'CONTROL: ANALYZE over the empty index records `0 0`').toBe('0 0');
+    plantBlobs(file, { owed: 5 });
+    const p = await plansOf(file);
+    usesTheIndex(p.owes, 'owed check at `0 0`');
+    usesTheIndex(p.backfill, 'backfill at `0 0`');
+  });
+
+  it('GUARD, the owed check: over a store with no owed-row index (v1, or v2 with it dropped) it answers, it does not throw "no such index"', async () => {
+    const S = await loadSweep();
+    for (const how of ['v1', 'v2-index-gone'] as const) {
+      const { file } = fresh();
+      plantBlobs(file, { owed: 2 });
+      if (how === 'v1') rewindStoreToV1(file); else withDb(file, (db) => db.exec('DROP INDEX blobs_unindexed'));
+      const db = openWriter(file);
+      try {
+        expect(() => S.ftsOwesRow(db), how).not.toThrow();
+        expect(S.ftsOwesRow(db), `${how}: the plain form answers the same question (a blob with bytes and no referrer is not eligible)`).toBe(false);
+      } finally { db.close(); }
+    }
+  });
+
+  it('GUARD, the backfill: its statement is prepared over a store with no owed-row index, in the plain form', async () => {
+    const S = await loadSweep();
+    for (const how of ['v1', 'v2-index-gone'] as const) {
+      const { file } = fresh();
+      if (how === 'v1') rewindStoreToV1(file); else withDb(file, (db) => db.exec('DROP INDEX blobs_unindexed'));
+      const db = openWriter(file);
+      try {
+        createFtsTables(db);
+        let p: OwedPlans | null = null;
+        expect(() => { p = S.ftsOwedPlans(db); }, how).not.toThrow();
+        expect(p!.backfillSql, `${how}: no INDEXED BY where there is nothing to name`).not.toContain('INDEXED BY');
+        expect(p!.owesSql, `${how}: no INDEXED BY where there is nothing to name`).not.toContain('INDEXED BY');
+      } finally { db.close(); }
+    }
+  });
+
+  it('GUARD, the other way: a store that gains the index (its migration) is not left on the plain form', async () => {
+    const S = await loadSweep();
+    const { file } = fresh();
+    rewindStoreToV1(file);
+    const db = openWriter(file);
+    try {
+      createFtsTables(db);
+      expect(S.ftsOwedPlans(db).owesSql).not.toContain('INDEXED BY');
+      db.exec(MIGRATIONS[1]!);
+      expect(S.ftsOwedPlans(db).owesSql, 'measured per call: the owed check now names it').toContain(INDEXED_BY);
+    } finally { db.close(); }
+  });
+
+  it('PIN (d): the owed check\'s probe into entries is COVERING (entries_blob_prov), and no other probe scans a table', async () => {
+    const { file } = fresh();
+    plantBlobs(file, { owed: 2 });
+    const p = await plansOf(file);
+    for (const [name, plan] of [['owed check', p.owes], ['backfill', p.backfill]] as const) {
+      expect(plan, `${name}: the entries probe reads the covering index alone`).toContain('SEARCH e USING COVERING INDEX entries_blob_prov (blob_id=? AND provenance=?)');
+      expect(plan, `${name}: the sidecars probe is covering too`).toContain('SEARCH s USING COVERING INDEX sidecars_blob (blob_id=?)');
+      // the variants probe is the one that is not covering (entry_variants_blob holds blob_id alone); it is read per blob, a handful of
+      // pages while entry_variants is nearly empty, and its entries row is fetched by primary key only for a blob that HAS a variant
+      expect(plan, `${name}: the variants probe`).toContain('SEARCH v USING INDEX entry_variants_blob (blob_id=?)');
+      expect(plan.filter((l) => /^SCAN /.test(l)), `${name}: the one scan is the owed index; every probe is a SEARCH`).toHaveLength(name === 'owed check' ? 1 : 0);
+    }
   });
 
   it('PIN (b): the index leaves out what can never be owed: N pruned tombstones and N indexed blobs, 0 owed, 0 entries; one owed blob, one entry', () => {
@@ -2077,7 +2189,7 @@ describe('schema v2: the owed-row partial index (D-5015)', () => {
 
   it('PIN (c): a fresh store and a migrated v1 store have the same schema, and the same user_version', () => {
     const fresh2 = fresh();
-    // The v1 store is built from MIGRATIONS[0] alone, never through createStore, so the migration is what adds the index.
+    // The v1 store is built from MIGRATIONS[0] alone, never through createStore, so the migration is what adds every v2 index.
     const h = mkTmp('ccrc-history-v2idx-mig-');
     fs.mkdirSync(historyPaths(h).backups, { recursive: true, mode: 0o700 });
     const v1File = path.join(h, 'v1.db');
@@ -2085,12 +2197,14 @@ describe('schema v2: the owed-row partial index (D-5015)', () => {
     old.exec(MIGRATIONS[0]!);
     old.exec('PRAGMA user_version = 1');
     const dump = (db: DatabaseSync): unknown[] => db.prepare("SELECT type, name, tbl_name, sql FROM sqlite_master WHERE name NOT LIKE 'sqlite_%' ORDER BY type, name").all();
+    const names = (rows: unknown[]): string[] => rows.map((r) => (r as { name: string }).name);
     const before = dump(old);
-    expect(before.some((r) => (r as { name: string }).name === 'blobs_unindexed'), 'CONTROL: v1 has no owed-row index').toBe(false);
+    for (const ix of V2_INDEXES) expect(names(before), `CONTROL: v1 has no ${ix}`).not.toContain(ix);
     runMigration(old, h, { verdict: 'snapshot-then-migrate', from: 1, to: 2, migrations: MIGRATIONS });
     expect(userVersion(old)).toBe(2);
     const now = dump(old);
     old.close();
+    for (const ix of V2_INDEXES) expect(names(now), `the migration made ${ix}`).toContain(ix);
     const f = new DatabaseSync(fresh2.file, { readOnly: true });
     try {
       expect(userVersion(f)).toBe(SCHEMA_VERSION);
@@ -2098,18 +2212,52 @@ describe('schema v2: the owed-row partial index (D-5015)', () => {
     } finally { f.close(); }
   });
 
-  it('SCHEMA_ADDED[2] is light and adds no table or column; its migration is MIGRATIONS[1], one CREATE INDEX with no IF NOT EXISTS', () => {
+  it('SCHEMA_ADDED[2] is light and adds no table or column; MIGRATIONS[1] is exactly four plain CREATE INDEXes, and V2_INDEXES lists them', () => {
     expect(SCHEMA_ADDED[2]).toEqual({ heavy: false, tables: {} });
     expect(MIGRATIONS).toHaveLength(2);
-    expect(MIGRATIONS[1]!.trim().split(';').filter((x) => x.trim() !== '')).toHaveLength(1);
-    expect(MIGRATIONS[1]).toMatch(/^CREATE INDEX blobs_unindexed ON blobs\(blob_id\) WHERE fts_indexed = 0 AND z IS NOT NULL;\s*$/);
+    const stmts = MIGRATIONS[1]!.trim().split(';').map((x) => x.trim()).filter((x) => x !== '');
+    expect(stmts).toEqual([
+      'CREATE INDEX blobs_unindexed ON blobs(blob_id) WHERE fts_indexed = 0 AND z IS NOT NULL',
+      'CREATE INDEX entries_blob_prov ON entries(blob_id, provenance)',
+      'CREATE INDEX nodes_boundary ON nodes(boundary_entry_id)',
+      'CREATE INDEX node_children_child ON node_children(child_id)',
+    ]);
+    expect(V2_INDEXES).toEqual(['blobs_unindexed', 'entries_blob_prov', 'nodes_boundary', 'node_children_child']);
+    expect(OWED_INDEX, 'the name sweep.mjs forces is V2\'s first statement\'s').toBe(V2_INDEXES[0]);
     expect(MIGRATIONS.some((m) => /IF NOT EXISTS/i.test(m) && /INDEX/i.test(m)), 'no unversioned index creation').toBe(false);
   });
 
-  it('createStore builds a fresh store by running every migration in order', () => {
+  it('createStore builds a fresh store by running every migration in order: every v2 index is there', () => {
     const { file } = fresh();
     const db = new DatabaseSync(file, { readOnly: true });
     try { expect(userVersion(db)).toBe(MIGRATIONS.length); } finally { db.close(); }
-    expect(owedIndexFacts(file).sql, 'the index is there on a store born at this build').not.toBeNull();
+    expect(owedIndexFacts(file).sql, 'the owed-row index is there on a store born at this build').not.toBeNull();
+    const have = withDb(file, (db) => (db.prepare("SELECT name FROM sqlite_master WHERE type = 'index'").all() as Array<{ name: string }>).map((r) => r.name));
+    for (const ix of V2_INDEXES) expect(have, ix).toContain(ix);
+  });
+
+  it('D-5019: entries_blob stays beside the covering index (the spec\'s DDL and B1\'s listing name it), and v2 drops nothing', () => {
+    const { file } = fresh();
+    const have = withDb(file, (db) => (db.prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'entries'").all() as Array<{ name: string }>).map((r) => r.name));
+    expect(have).toContain('entries_blob');
+    expect(have).toContain('entries_blob_prov');
+    expect(MIGRATIONS[1], 'v2 is additive: it drops no index').not.toMatch(/\bDROP\b/i);
+  });
+
+  it('D-5020: no index is made outside MIGRATIONS: ccd/history/ holds no CREATE INDEX but store.mjs\'s V1 and V2, and none with IF NOT EXISTS', () => {
+    const dir = fileURLToPath(new URL('../../ccd/history/', import.meta.url));
+    const re = /CREATE\s+(UNIQUE\s+)?INDEX\b/gi;
+    for (const name of fs.readdirSync(dir).filter((n) => /\.(mjs|mts|ts|js)$/.test(n))) {
+      const src = fs.readFileSync(path.join(dir, name), 'utf8');
+      const hits = [...src.matchAll(re)];
+      if (name === 'store.mjs') {
+        const end = src.indexOf('export const MIGRATIONS');
+        expect(end, 'store.mjs\'s MIGRATIONS line').toBeGreaterThan(0);
+        expect(hits.filter((m) => m.index! > end).map((m) => m.index), 'store.mjs: a CREATE INDEX after the migration table').toEqual([]);
+      } else {
+        expect(hits.map((m) => src.slice(Math.max(0, m.index! - 40), m.index! + 60)), `${name}: an index made outside the versioned migrations`).toEqual([]);
+      }
+      for (const m of hits) expect(src.slice(m.index!, m.index! + 90), `${name}: IF NOT EXISTS`).not.toMatch(/IF\s+NOT\s+EXISTS/i);
+    }
   });
 });

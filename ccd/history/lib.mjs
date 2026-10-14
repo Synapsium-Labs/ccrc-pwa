@@ -2927,8 +2927,10 @@ export function retentionLowered(homeRetentionDays) {
 
 /** What each schema version added (§6.11, BK13): its tables, each with the
  *  columns it added in declaration order, and whether its migration is heavy
- *  (backfills or indexes a large table, so `planMigration` counts the copy
- *  twice). v1 is the whole schema. A later version lists only what it adds —
+ *  (backfills rows, or builds an index over a table the snapshot copy has not
+ *  just read, so `planMigration` counts the copy twice; v2's index builds are
+ *  ruled light, and entry 2 says what that rests on and where it stops
+ *  holding). v1 is the whole schema. A later version lists only what it adds —
  *  migrations are additive only — and the CLI builds its named-column queries
  *  for a store's own version from the union up to it. Spelled once, here;
  *  history-store.test.ts holds it equal to the DDL store.mjs runs. */
@@ -2976,9 +2978,18 @@ export const SCHEMA_ADDED = Object.freeze({
       journal_outbox: Object.freeze(['seq', 'rec']),
     }),
   }),
-  // D-5015 (history-schema-v2-owed-index): no table, no column. Its one migration (store.mjs MIGRATIONS[1]) is a partial index on
-  // blobs. `heavy: false` because the index is built right after the pre-migration snapshot copy has just read the file, and
-  // writes only the rows its predicate admits (unindexed blobs still holding bytes), a small share of a healthy store.
+  // D-5015, D-5019, D-5020: no table, no column. Its one migration (store.mjs MIGRATIONS[1]) is four index builds: the owed-row partial
+  // index on blobs, the covering entries(blob_id, provenance) index, and the two node indexes derivation used to make unversioned.
+  // `heavy: false` is the coordinator's ruling (mail 4901), and it rests on the builds reading the very tables the pre-migration
+  // snapshot copy has just read, so they find them in the page cache. They do not write "a small share" of a healthy store: the
+  // partial index holds every blob still unindexed with bytes, about half of a real store (harness rows alone are 48-57% of
+  // real transcripts' rows), and entries_blob_prov one row per entry. MEASURED, cache held the store: a 479 MB store (review 441):
+  // copy 7.1 s, builds and commit 1.75 s; a 351 MB store here: copy 5.2-6.3 s, the whole migration 5.9-6.9 s, 351 MB read. MEASURED, cache
+  // did NOT hold it (a 657 MB store on a loaded box): copy 34-36 s, the whole migration 101-180 s, 1.46-2.25 GB read against the copy's
+  // 0.75 GB, because the partial index re-reads every blob row (fts_indexed sits after the z BLOB, so the overflow chains are walked)
+  // and entries_blob_prov scans entries. So `planMigration`'s estimate (the store size over the copy rate) is the copy's alone and
+  // can be 3-5x short on a store larger than the page cache; a pass killed meanwhile falls back to the attempt marker, and two
+  // interrupted attempts to snapshot-needs-op, with no data lost (D-5015's record carries the numbers and the options).
   2: Object.freeze({ heavy: false, tables: Object.freeze({}) }),
 });
 

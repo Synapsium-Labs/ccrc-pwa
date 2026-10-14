@@ -167,17 +167,36 @@ CREATE TABLE journal_outbox (seq INTEGER PRIMARY KEY AUTOINCREMENT,
   rec TEXT NOT NULL);
 `;
 
-/** Schema v2's one statement (D-5015, history-schema-v2-owed-index): the owed-row partial index. It holds exactly the
- *  blobs the FTS backfill could still owe a row: unindexed AND still holding bytes. The `z IS NOT NULL` term leaves out
- *  prune's tombstones (pruneBatch sets fts_indexed = 0 with z NULL; they can never be owed), so the index never grows
- *  with pruning. sweep.mjs's FTS_OWED_SQL repeats both terms LITERALLY, which is what lets SQLite use a partial index
- *  (its WHERE must be implied by the query's own); change one side and the other together, and history-store.test.ts's
- *  EXPLAIN QUERY PLAN pin goes red. No IF NOT EXISTS: the only place this index is made is this versioned migration. */
+/** Schema v2 (D-5015, D-5018, D-5019, D-5020): every index the derived and recall reads need, and no table or column. Four plain
+ *  plain index statements, none guarded by an existence test, because this versioned migration is the only place they are made.
+ *  - `blobs_unindexed`, the owed-row partial index (D-5015): the blobs the FTS backfill could still owe a row, unindexed AND still
+ *    holding bytes. The `z IS NOT NULL` term leaves out prune's tombstones (pruneBatch sets fts_indexed = 0 with z NULL; they can
+ *    never be owed), so the index never grows with pruning. sweep.mjs's FTS_OWED_SQL repeats both terms LITERALLY, which is what
+ *    lets SQLite admit a partial index (its WHERE must be implied by the query's own), and both owed queries name it with
+ *    INDEXED BY behind a presence guard (D-5018), because the planner leaves it for a scan of `blobs` once sqlite_stat1 records
+ *    it as most of the table.
+ *  - `entries_blob_prov`, covering for the owed check's probe (D-5019): `EXISTS (SELECT 1 FROM entries WHERE blob_id = ? AND
+ *    provenance IN (...))` is answered from this index alone, where `entries_blob` alone fetched an `entries` row per probe.
+ *    `entries_blob` stays (D-5019 says why).
+ *  - `nodes_boundary` and `node_children_child` (D-5020, superseding D-4703): "has this boundary a leaf" and "who is a node's
+ *    parent", which derivation made with an unversioned IF NOT EXISTS until now.
+ *  Each is made in this one migration, so a fresh store and a migrated one are the same by construction. */
 const V2 = `CREATE INDEX blobs_unindexed ON blobs(blob_id) WHERE fts_indexed = 0 AND z IS NOT NULL;
+CREATE INDEX entries_blob_prov ON entries(blob_id, provenance);
+CREATE INDEX nodes_boundary ON nodes(boundary_entry_id);
+CREATE INDEX node_children_child ON node_children(child_id);
 `;
 
+/** The owed-row index's name (V2's first statement): the one spelling sweep.mjs names in INDEXED BY and looks up in sqlite_master. */
+export const OWED_INDEX = 'blobs_unindexed';
+
+/** The name of every index schema v2 creates, in V2's order, derived from V2's own text so the list cannot drift from it. A test
+ *  helper takes a fresh store back to v1 by dropping exactly these (server/test/historyHelpers.ts's rewindStoreToV1, and the
+ *  injected-migration driver), so a later index added to V2 is rewound without a second list to edit. */
+export const V2_INDEXES = Object.freeze([...V2.matchAll(/CREATE INDEX (\w+) ON /g)].map((m) => m[1]));
+
 /** MIGRATIONS[v] takes a store from user_version v to v + 1. Index 0 is the
- *  whole v1 schema and index 1 is v2's owed-row index; `createStore` runs every
+ *  whole v1 schema and index 1 is v2's four indexes; `createStore` runs every
  *  entry in order on a fresh store, so a fresh store and a migrated one are the
  *  same by construction, and `runMigration` runs `from`..`to`-1 on an older one.
  *  FROZEN: an entry, once shipped, is never edited — a store that ran it
@@ -798,7 +817,8 @@ function assertWalGone(tempPath) {
  *      disk before any marker names the store);
  *   3. `history.db.new.<pid>` created O_CREAT|O_EXCL 0600 — a temp whose name
  *      exists, or whose sidecars exist, is never opened;
- *   4. auto_vacuum, WAL, the v1 DDL, meta store_id and writer, user_version 1,
+ *   4. auto_vacuum, WAL, every MIGRATIONS entry in order (the v1 DDL, then v2's indexes), meta store_id and writer,
+ *      user_version SCHEMA_VERSION,
  *      and with `opts.bind` every DB-side fact of the binding (`bound:<ms>`,
  *      the ('recover', <ms>) step, the `bind` outbox row), all in ONE
  *      transaction; then `sealWal` (a TRUNCATE checkpoint that must answer busy 0, H-83), close, and

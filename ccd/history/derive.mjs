@@ -105,14 +105,6 @@ export function nodeToolkit() {
   return Object.freeze({ HEADING_RE, fencedRanges, mineTokens });
 }
 
-/** The two lookups node derivation and the read verbs make by a column no v1 index covers: a boundary's leaf,
- *  and a child's parent. Created by derivation, as the FTS tables are (§9.1), so no schema migration (which every
- *  real store would escalate to snapshot-needs-op, §6.11) is spent on them. D-4703 (history-node-indexes-by-derivation) */
-export function ensureNodeIndexes(db) {
-  db.exec('CREATE INDEX IF NOT EXISTS nodes_boundary ON nodes(boundary_entry_id)');
-  db.exec('CREATE INDEX IF NOT EXISTS node_children_child ON node_children(child_id)');
-}
-
 /** One line from `offset`, without its '\n'; null when no '\n' falls within LINE_MAX bytes or before EOF. */
 function readLineAt(fd, offset, size) {
   const parts = [];
@@ -492,9 +484,10 @@ function recountTranscript(db, s, transcriptPk, nowMs, bytes) {
  *    NODE_PARSER_VERSION retries them. D-4706 (history-parser-crash-recorded)
  *  - A busy store ends the tick, as ingest's does.
  *  The cursor ('leaves', NODE_PARSER_VERSION) is the low-water mark: every boundary at or below it has its leaf or a
- *  crash marker, and a boundary that waits holds it. */
+ *  crash marker, and a boundary that waits holds it.
+ *  - Its two lookups by a column v1 indexes nowhere, a boundary's leaf (`nodes_boundary`) and a child's parent
+ *    (`node_children_child`), are served by indexes schema v2's migration makes (D-5020), not made here. */
 export function deriveLeaves(db, ictx, budget) {
-  ensureNodeIndexes(db);
   const s = stmts(db);
   const kit = ictx.nodeKit ?? nodeToolkit();
   const crashedAt = String(NODE_PARSER_VERSION);

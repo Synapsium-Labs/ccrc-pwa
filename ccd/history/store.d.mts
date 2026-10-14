@@ -10,6 +10,8 @@ export class StoreError extends Error {
   readonly word: string;
 }
 export const MIGRATIONS: readonly string[];
+export const OWED_INDEX: 'blobs_unindexed';
+export const V2_INDEXES: readonly string[];
 export function openWriter(dbPath: string): DatabaseSync;
 export function openReader(dbPath: string): DatabaseSync;
 export function userVersion(db: DatabaseSync): number;
