@@ -4197,7 +4197,14 @@ Expected before the commit: the `grep -vE` prints nothing (only additions and mo
    "test/chat-hardening.test.tsx"
   ],
   "red": "pwa markdown-limits + markdown-bounds + chat-hardening: 3 failed | 156 passed (159) — 'MD_KEYSTROKE_MAX_CHARS is 64'; 'a 64-character chord still draws chips; a 65-character one is plain inline code'; 'inlineCodeExtraElements: a chord of N parts adds 2N - 1, a named key 1, anything else 0'"
- }
+ },
+ {"id": "W5P1-T3-M15", "pkg": "pwa", "file": "pwa/src/lib/markdown.tsx", "old": "|| c === 0x24 || c >= 0x7f)", "new": "|| c === 0x24)", "tests": ["test/markdown-bounds.test.tsx"], "red": "pwa markdown-bounds: 3 failed | 31 passed (34) — 'longestWordRun counts letters, digits, _, $ and every code unit from 0x7f up, in one pass'; 'a php fence of 257 `_é` units (a 514-character run) is not highlighted and says why'; 'a run of 256 code units that holds non-ASCII units still highlights; 257 does not'"},
+ {"id": "W5P1-T3-M16", "pkg": "pwa", "file": "pwa/src/lib/markdown.tsx", "old": "const overLine = line > MD_HIGHLIGHT_MAX_LINE_CHARS;", "new": "const overLine = false;", "tests": ["test/markdown-bounds.test.tsx"], "red": "pwa markdown-bounds: 6 failed | 28 passed (34) — 'a markdown block of \"[\" lines one character over the bound is not highlighted and says why'; 'a markdown block of \"[a\" lines one character over the bound is not highlighted and says why'; 'a markdown block of \"![\" lines one character over the bound is not highlighted and says why'; 'a yaml block of \"a a a \" lines one character over the bound is not highlighted and says why'; 'one long line among short ones is found, and the label carries that line length'; 'chat gets the bound through the shared components, on the synchronous path and the worker path'"},
+ {"id": "W5P1-T3-M17", "pkg": "pwa", "file": "pwa/src/lib/markdown.tsx", "old": "const overLine = line > MD_HIGHLIGHT_MAX_LINE_CHARS;", "new": "const overLine = line >= MD_HIGHLIGHT_MAX_LINE_CHARS;", "tests": ["test/markdown-bounds.test.tsx"], "red": "pwa markdown-bounds: 3 failed | 31 passed (34) — 'a markdown block of \"[\" lines of exactly the bound is highlighted'; 'a yaml block of \"a a a \" lines of exactly the bound is highlighted'; 'a line break of either kind ends a line: CRLF and lone CR lines of exactly the bound highlight'"},
+ {"id": "W5P1-T3-M18", "pkg": "pwa", "file": "pwa/src/lib/markdownLimits.ts", "old": "export const MD_HIGHLIGHT_MAX_LINE_CHARS = 2048;", "new": "export const MD_HIGHLIGHT_MAX_LINE_CHARS = 2049;", "tests": ["test/markdown-limits.test.ts", "test/markdown-bounds.test.tsx"], "red": "pwa markdown-limits + markdown-bounds: 2 failed | 62 passed (64) — 'MD_HIGHLIGHT_MAX_LINE_CHARS is 2048'; 'declares 2048 characters'"},
+ {"id": "W5P1-T3-M19", "pkg": "pwa", "file": "pwa/src/lib/markdown.tsx", "old": "const word = wanted && !overCap ? longestWordRun(raw) : 0;", "new": "const word = wanted ? longestWordRun(raw) : 0;", "tests": ["test/markdown-bounds.test.tsx"], "red": "pwa markdown-bounds: 1 failed | 33 passed (34) — 'a block over MD_HIGHLIGHT_BLOCK_MAX_CHARS is never scanned: the size check comes first'"},
+ {"id": "W5P1-T3-M20", "pkg": "pwa", "file": "pwa/src/lib/markdown.tsx", "old": "const line = wanted && !overCap ? longestLine(raw) : 0;", "new": "const line = wanted ? longestLine(raw) : 0;", "tests": ["test/markdown-bounds.test.tsx"], "red": "pwa markdown-bounds: 1 failed | 33 passed (34) — 'a block over MD_HIGHLIGHT_BLOCK_MAX_CHARS is never scanned: the size check comes first'"},
+ {"id": "W5P1-T3-M21", "pkg": "pwa", "file": "pwa/src/lib/markdown.tsx", "old": "if (c === 0x0a || c === 0x0d) {\n      run = 0;", "new": "if (c === 0x0a) {\n      run = 0;", "tests": ["test/markdown-bounds.test.tsx"], "red": "pwa markdown-bounds: 1 failed | 33 passed (34) — 'a line break of either kind ends a line: CRLF and lone CR lines of exactly the bound highlight'"}
 ]
 ```
 
@@ -5173,7 +5180,12 @@ Expected before the commit: the `grep -vE` prints nothing (only modifications ar
    "test/markdown-worker-built.test.ts"
   ],
   "red": "pwa markdown-worker-built: 1 failed | 2 passed (3) — 'answers a docs job of a<br>b with one br element, and a chat job with the tag as text'"
- }
+ },
+ {"id": "W5P1-T4-M11", "pkg": "pwa", "file": "pwa/src/lib/useParsedMarkdown.ts", "old": "    jobs.current.latest = req;\n", "new": "    jobs.current.latest = { ...req, profile: 'chat' };\n", "tests": ["test/use-parsed-markdown.test.tsx"], "red": "pwa use-parsed-markdown: 2 failed | 16 passed (18) — 'the docs profile: its reply is the outcome and nothing stays pending'; 'a profile change alone (the same text) is a new request: the newer reply is the one shown, never the earlier'"},
+ {"id": "W5P1-T4-M12", "pkg": "pwa", "file": "pwa/src/lib/useParsedMarkdown.ts", "old": "  const pending = settled.answers === undefined || !sameRequest(settled.answers, req);\n", "new": "  const pending = settled.answers === undefined || !sameRequest(settled.answers, { ...req, profile: 'chat' });\n", "tests": ["test/use-parsed-markdown.test.tsx"], "red": "pwa use-parsed-markdown: 2 failed | 16 passed (18) — 'the docs profile: its reply is the outcome and nothing stays pending'; 'a profile change alone (the same text) is a new request: the newer reply is the one shown, never the earlier'"},
+ {"id": "W5P1-T4-M13", "pkg": "pwa", "file": "pwa/src/lib/useParsedMarkdown.ts", "old": "const req: Request = { text, profile, budgetMs, attempt };", "new": "const req: Request = { text, profile: 'chat', budgetMs, attempt };", "tests": ["test/use-parsed-markdown.test.tsx"], "red": "pwa use-parsed-markdown: 2 failed | 16 passed (18) — 'the docs profile: its reply is the outcome and nothing stays pending'; 'a profile change alone (the same text) is a new request: the newer reply is the one shown, never the earlier'"},
+ {"id": "W5P1-T4-M14", "pkg": "pwa", "file": "pwa/src/lib/useParsedMarkdown.ts", "old": "  a.text === b.text && a.profile === b.profile && a.budgetMs === b.budgetMs && a.attempt === b.attempt;", "new": "  a.text === b.text && a.budgetMs === b.budgetMs && a.attempt === b.attempt;", "tests": ["test/use-parsed-markdown.test.tsx"], "red": "pwa use-parsed-markdown: 1 failed | 17 passed (18) — 'a profile change alone (the same text) is a new request: the newer reply is the one shown, never the earlier'"},
+ {"id": "W5P1-T4-M15", "pkg": "pwa", "file": "pwa/src/lib/markdownParse.ts", "old": "      if (child.type === 'raw') {\n        const value = child.value ?? '';", "new": "      if (child.type === 'raw' || (profile === 'docs' && child.type === 'text' && DOCS_BR.test(child.value ?? ''))) {\n        const value = child.value ?? '';", "tests": ["test/markdown-parse.test.ts"], "red": "pwa markdown-parse: 4 failed | 32 passed (36) — 'an escaped angle bracket stays text in the docs profile, with no br element'; 'character references stays text in the docs profile, with no br element'; 'inline code stays text in the docs profile, with no br element'; 'inline code in a line stays text in the docs profile, with no br element'"}
 ]
 ```
 
@@ -7259,7 +7271,22 @@ Expected before the commit: the `grep -vE` prints nothing (only additions and mo
    "test/docs-visit.test.tsx"
   ],
   "red": "pwa docs-visit: 1 failed | 43 passed (44) — 'a committed leaf whose blob is unchanged after the branch moves is not read again, and reports the new pin'"
- }
+ },
+ {"id": "W5P1-T5-M35", "pkg": "pwa", "file": "pwa/src/docs/useDocsVisit.ts", "old": "        if (st.files.get(fKey) !== failed) return;\n", "new": "", "tests": ["test/docs-visit.test.tsx"], "red": "pwa docs-visit: 2 failed | 53 passed (55) — 'a manual Retry at 1 s settles the read; the 5 s timer then drops nothing and reads nothing'; 'a manual read still in flight at 5 s is not read a second time'"},
+ {"id": "W5P1-T5-M36", "pkg": "pwa", "file": "pwa/src/docs/useDocsVisit.ts", "old": "      clearTimeout(pending);\n", "new": "", "tests": ["test/docs-refresh.test.tsx"], "red": "pwa docs-refresh: 1 failed | 36 passed (37) — 'a tap at 1 s on the soon chip settles the refresh; the 4 s timer then POSTs nothing'"},
+ {"id": "W5P1-T5-M37", "pkg": "pwa", "file": "pwa/src/docs/useDocsVisit.ts", "old": "const isNewest = (key: string, seq: number): boolean => seq >= (st.slotSeq.get(key) ?? 0);", "new": "const isNewest = (key: string, seq: number): boolean => true;", "tests": ["test/docs-refresh.test.tsx"], "red": "pwa docs-refresh: 2 failed | 35 passed (37) — 'an older GET that lands after a newer POST answer does not replace the slot or move the leaf back'; 'an older GET that lands after a newer POST answer still releases the reads waiting on a listing'"},
+ {"id": "W5P1-T5-M38", "pkg": "pwa", "file": "pwa/src/docs/useDocsVisit.ts", "old": "    if (!isNewest(key, seq)) return;\n", "new": "", "tests": ["test/docs-refresh.test.tsx"], "red": "pwa docs-refresh: 2 failed | 35 passed (37) — 'an older GET that lands after a newer POST answer does not replace the slot or move the leaf back'; 'an older GET that lands after a newer POST answer still releases the reads waiting on a listing'"},
+ {"id": "W5P1-T5-M39", "pkg": "pwa", "file": "pwa/src/docs/useDocsVisit.ts", "old": "    releaseRelistWaiters(key);\n    // A GET started before the answer that last set the slot says what the listing was, not what it is.\n    if (!isNewest(key, seq)) return;\n", "new": "    // A GET started before the answer that last set the slot says what the listing was, not what it is.\n    if (!isNewest(key, seq)) return;\n    releaseRelistWaiters(key);\n", "tests": ["test/docs-refresh.test.tsx"], "red": "pwa docs-refresh: 1 failed | 36 passed (37) — 'an older GET that lands after a newer POST answer still releases the reads waiting on a listing'"},
+ {"id": "W5P1-T5-M40", "pkg": "pwa", "file": "pwa/src/docs/useDocsVisit.ts", "old": "    st.slotSeq.set(key, seq);\n    st.trees.set(key, { s: 'ok', answer, receivedAt: Date.now() });", "new": "    st.trees.set(key, { s: 'ok', answer, receivedAt: Date.now() });", "tests": ["test/docs-refresh.test.tsx"], "red": "pwa docs-refresh: 2 failed | 35 passed (37) — 'an older GET that lands after a newer POST answer does not replace the slot or move the leaf back'; 'an older GET that lands after a newer POST answer still releases the reads waiting on a listing'"},
+ {"id": "W5P1-T5-M41", "pkg": "pwa", "file": "pwa/src/docs/useDocsVisit.ts", "old": "          if (isCurrentKey(key)) listTree(target);", "new": "          listTree(target);", "tests": ["test/docs-visit.test.tsx"], "red": "pwa docs-visit: 1 failed | 54 passed (55) — 'a tree retry set for a page the user then left makes no GET'"},
+ {"id": "W5P1-T5-M42", "pkg": "pwa", "file": "pwa/src/docs/useDocsVisit.ts", "old": "      if (isCurrentKey(key)) refresh(target, reason);", "new": "      refresh(target, reason);", "tests": ["test/docs-refresh.test.tsx"], "red": "pwa docs-refresh: 2 failed | 35 passed (37) — 'a refresh retry set for a page the user then left makes no POST'; 'a fetch-too-soon retry set for a page the user then left makes no POST'"},
+ {"id": "W5P1-T5-M43", "pkg": "pwa", "file": "pwa/src/docs/useDocsVisit.ts", "old": "        if (st.files.get(fKey)?.slot.s === 'loading') st.files.delete(fKey);\n", "new": "", "tests": ["test/docs-visit.test.tsx"], "red": "pwa docs-visit: 1 failed | 54 passed (55) — 'drops that read's entry, so showing the screen again reads once more instead of loading for ever'"},
+ {"id": "W5P1-T5-M44", "pkg": "pwa", "file": "pwa/src/docs/useDocsVisit.ts", "old": " && !autoRefreshed.current.has(key)", "new": "", "tests": ["test/docs-refresh.test.tsx"], "red": "pwa docs-refresh: 1 failed | 36 passed (37) — 'a slot that goes ok again after a sign-in is not auto-refreshed again: one POST per key per open'"},
+ {"id": "W5P1-T5-M45", "pkg": "pwa", "file": "pwa/src/docs/useDocsVisit.ts", "old": "prev !== undefined && prev.fKey !== wanted.fKey && prev.commit !== commit", "new": "prev !== undefined && prev.fKey !== wanted.fKey", "tests": ["test/docs-visit.test.tsx"], "red": "pwa docs-visit: 1 failed | 54 passed (55) — 'a draft leaf whose fingerprint changes under the same holder HEAD reads the new draft but names no commit'"},
+ {"id": "W5P1-T5-M46", "pkg": "pwa", "file": "pwa/src/docs/useDocsVisit.ts", "old": "      st.treeInflight.delete(key);\n      throw err;", "new": "      throw err;", "tests": ["test/docs-visit.test.tsx"], "red": "pwa docs-visit: 1 failed | 54 passed (55) — 'a tree loader that rejects does not pin its key: Retry makes the next GET'"},
+ {"id": "W5P1-T5-M47", "pkg": "pwa", "file": "pwa/src/docs/useDocsVisit.ts", "old": "      st.refreshInflight.delete(key);\n      throw err;", "new": "      throw err;", "tests": ["test/docs-refresh.test.tsx"], "red": "pwa docs-refresh: 1 failed | 36 passed (37) — 'a refresh loader that rejects does not pin its key: a tap makes the next POST'"},
+ {"id": "W5P1-T5-M48", "pkg": "pwa", "file": "pwa/src/docs/useDocsVisit.ts", "old": "    void loadersRef.current.refresh(target.project, body).then((a) => {\n      st.refreshInflight.delete(key);\n      if (!st.alive) return;\n      // Numbered when it ARRIVES: the route read its tree after its fetch, so it is newer than any GET that\n      // started before this answer, however early the POST began.\n      applyRefresh(target, key, reason, nextSeq(), a);", "new": "    const startSeq = nextSeq();\n    void loadersRef.current.refresh(target.project, body).then((a) => {\n      st.refreshInflight.delete(key);\n      if (!st.alive) return;\n      applyRefresh(target, key, reason, startSeq, a);", "tests": ["test/docs-refresh.test.tsx"], "red": "pwa docs-refresh: 1 failed | 36 passed (37) — 'a GET that starts after the POST began and lands before it does not stop the POST's newer tree from landing'"},
+ {"id": "W5P1-T5-M49", "pkg": "pwa", "file": "pwa/src/docs/useDocsVisit.ts", "old": "      for (const key of st.treeInflight) if (st.trees.get(key)?.s === 'loading') st.trees.delete(key);\n", "new": "", "tests": ["test/docs-visit.test.tsx"], "red": "pwa docs-visit: 1 failed | 54 passed (55) — 'drops the loading slot, so showing the screen again lists again instead of loading for ever'"}
 ]
 ```
 
@@ -8626,7 +8653,18 @@ Expected before the commit: the `grep -vE` prints nothing (only additions and mo
    "test/docs-links.test.tsx"
   ],
   "red": "pwa docs-links: 1 failed | 33 passed (34) — 'renders inert, with no href, when no DocLinkContext is provided'"
- }
+ },
+ {"id": "W5P1-T6-M24", "pkg": "pwa", "file": "pwa/src/docs/DocLink.tsx", "old": "  for (const el of article.querySelectorAll('[id]')) {\n    if (el.id === fragment || el.id === decoded) return el;\n  }\n  return null;\n", "new": "  return article.querySelector('#' + fragment);\n", "tests": ["test/docs-links.test.tsx"], "red": "pwa docs-links: 7 failed | 41 passed (48) — 'a footnote label holding a dot: a tap on its reference scrolls the footnote li'; 'an id that matches only once the fragment is percent-decoded is found (#%C3%A9 names the id \"é\")'; 'a fragment that is not a valid selector (#%E0%A4%A) neither throws nor scrolls'; 'a fragment that is not a valid selector (#100%) neither throws nor scrolls'; 'a fragment that is not a valid selector (#a%zz) neither throws nor scrolls'; 'a fragment that is not a valid selector (#[x]) neither throws nor scrolls'; 'a fragment that is not a valid selector (#a%20b) neither throws nor scrolls'"},
+ {"id": "W5P1-T6-M25", "pkg": "pwa", "file": "pwa/src/docs/DocLink.tsx", "old": "el.id === fragment || el.id === decoded", "new": "el.id === fragment", "tests": ["test/docs-links.test.tsx"], "red": "pwa docs-links: 1 failed | 47 passed (48) — 'an id that matches only once the fragment is percent-decoded is found (#%C3%A9 names the id \"é\")'"},
+ {"id": "W5P1-T6-M26", "pkg": "pwa", "file": "pwa/src/docs/docsText.ts", "old": "'This link is not a well-formed URL (it may hold a space, a control character or a backslash)'", "new": "'This link holds a space, a control character or a backslash'", "tests": ["test/docs-links.test.tsx"], "red": "pwa docs-links: 1 failed | 47 passed (48) — '[x](https://) is malformed because new URL refuses it, and its sentence says so (not only space, control or backslash)'"},
+ {"id": "W5P1-T6-M27", "pkg": "pwa", "file": "pwa/src/docs/docsLinks.ts", "old": "if (r.fragment !== null && r.section === ctx.section && r.path === ctx.path) {", "new": "if (false) {", "tests": ["test/docs-links.test.tsx"], "red": "pwa docs-links: 4 failed | 44 passed (48) — 'a link to THIS page spelled with its file name and a fragment is a fragment link: a click scrolls and pushes nothing'; 'a same-page anchor on the committed view (view=committed) scrolls inside the view being read: no navigation, no history entry, and the href is the bare fragment'; 'a same-page anchor on a ref view, a bare ref scrolls inside the view being read: no navigation, no history entry, and the href is the bare fragment'; 'a same-page anchor on a ref view, a qualified ref scrolls inside the view being read: no navigation, no history entry, and the href is the bare fragment'"},
+ {"id": "W5P1-T6-M28", "pkg": "pwa", "file": "pwa/src/docs/docsLinks.ts", "old": "if (r.fragment !== null && r.section === ctx.section && r.path === ctx.path) {", "new": "if (r.section === ctx.section && r.path === ctx.path) {", "tests": ["test/docs-links.test.tsx"], "red": "pwa docs-links: 1 failed | 47 passed (48) — 'a link to this page with NO fragment stays a doc link, and a link to another page with the same file name too'"},
+ {"id": "W5P1-T6-M29", "pkg": "pwa", "file": "pwa/src/docs/docsLinks.ts", "old": "if (r.fragment !== null && r.section === ctx.section && r.path === ctx.path) {", "new": "if (r.fragment !== null && r.section === ctx.section) {", "tests": ["test/docs-links.test.tsx"], "red": "pwa docs-links: 1 failed | 47 passed (48) — 'a link to this page with NO fragment stays a doc link, and a link to another page with the same file name too'"},
+ {"id": "W5P1-T6-M30", "pkg": "pwa", "file": "pwa/src/docs/docsLinks.ts", "old": "if (r.fragment !== null && r.section === ctx.section && r.path === ctx.path) {", "new": "if (r.fragment !== null && r.path === ctx.path) {", "tests": ["test/docs-links.test.tsx"], "red": "pwa docs-links: 1 failed | 47 passed (48) — 'a link to this page with NO fragment stays a doc link, and a link to another page with the same file name too'"},
+ {"id": "W5P1-T6-M31", "pkg": "pwa", "file": "pwa/src/docs/docsLinks.ts", "old": "  'srcSet', 'imageSrcSet', 'xLinkHref', 'xLinkArcRole', 'xmlBase', 'longDesc', 'lowSrc', 'background', 'classId',\n  'codeBase', 'archive', 'useMap', 'profile',\n", "new": "", "tests": ["test/docs-links.test.tsx"], "red": "pwa docs-links: 1 failed | 47 passed (48) — 'moves the URL properties html-url-attributes lacks too (srcSet, xLinkHref, longDesc, ...): the move fails closed'"},
+ {"id": "W5P1-T6-M32", "pkg": "pwa", "file": "pwa/src/docs/docsLinks.ts", "old": "'srcSet', 'imageSrcSet', 'xLinkHref',", "new": "'imageSrcSet', 'xLinkHref',", "tests": ["test/docs-links.test.tsx"], "red": "pwa docs-links: 1 failed | 47 passed (48) — 'moves the URL properties html-url-attributes lacks too (srcSet, xLinkHref, longDesc, ...): the move fails closed'"},
+ {"id": "W5P1-T6-M33", "pkg": "pwa", "file": "pwa/src/docs/docsLinks.ts", "old": "'srcSet', 'imageSrcSet', 'xLinkHref', 'xLinkArcRole'", "new": "'srcSet', 'imageSrcSet', 'xLinkArcRole'", "tests": ["test/docs-links.test.tsx"], "red": "pwa docs-links: 1 failed | 47 passed (48) — 'moves the URL properties html-url-attributes lacks too (srcSet, xLinkHref, longDesc, ...): the move fails closed'"},
+ {"id": "W5P1-T6-M34", "pkg": "pwa", "file": "pwa/src/docs/docsLinks.ts", "old": "'codeBase', 'archive', 'useMap', 'profile',", "new": "'codeBase', 'archive', 'profile',", "tests": ["test/docs-links.test.tsx"], "red": "pwa docs-links: 1 failed | 47 passed (48) — 'moves the URL properties html-url-attributes lacks too (srcSet, xLinkHref, longDesc, ...): the move fails closed'"}
 ]
 ```
 
@@ -10696,7 +10734,11 @@ Expected before the commit: the `grep -vE` prints nothing (only additions and mo
    "test/docs-images.test.tsx"
   ],
   "red": "pwa docs-images: 1 failed | 57 passed (58) — 'a job whose signal is already aborted never starts and rejects with its reason'"
- }
+ },
+ {"id": "W5P1-T7-M35", "pkg": "pwa", "file": "pwa/src/docs/DocImage.tsx", "old": "        setDone((d) => (d !== null && d.key === key ? null : d));", "new": "", "tests": ["test/docs-images.test.tsx"], "red": "pwa docs-images: 2 failed | 64 passed (66) — 'A, then B while B is still queued, then A again: the img is never a revoked URL'; 'the same image under new loaders and a new queue loads again and never shows the URL the old run revoked'"},
+ {"id": "W5P1-T7-M36", "pkg": "pwa", "file": "pwa/src/docs/DocImage.tsx", "old": "    }).catch((err: unknown) => {", "new": "    }, (err: unknown) => {", "tests": ["test/docs-images.test.tsx"], "red": "pwa docs-images: 1 failed | 65 passed (66) — 'a raster the loader answers with a MIME outside the table is a loader-failed chip, not a page stuck on Loading'"},
+ {"id": "W5P1-T7-M37", "pkg": "pwa", "file": "pwa/src/docs/DocImage.tsx", "old": "  const size = ip.pin.kind === 'draft' ? e?.draft?.size : e?.committed?.size;", "new": "  const size = e?.committed?.size;", "tests": ["test/docs-images.test.tsx"], "red": "pwa docs-images: 1 failed | 65 passed (66) — 'a draft image listed over its class cap is refused too-large by its DRAFT size, whatever the committed size'"},
+ {"id": "W5P1-T7-M38", "pkg": "pwa", "file": "pwa/src/docs/DocImage.tsx", "old": "  return { s: 'svg', src: SVG_DATA_PREFIX + base64Of(bytes) };", "new": "  return { s: 'svg', src: SVG_DATA_PREFIX + btoa(new TextDecoder().decode(bytes)) };", "tests": ["test/docs-images.test.tsx"], "red": "pwa docs-images: 1 failed | 65 passed (66) — 'an SVG over one base64 chunk (32 768 bytes) holding multi-byte UTF-8 keeps its bytes exactly in the data: URL'"}
 ]
 ```
 
@@ -11714,7 +11756,10 @@ Expected before the commit: the `grep -vE` prints nothing (only the two addition
    "test/docs-markdown.test.tsx"
   ],
   "red": "pwa docs-markdown: 1 failed | 44 passed (45) — 'base64 bytes that are strict UTF-8 are Markdown, decoded'"
- }
+ },
+ {"id": "W5P1-T8-M21", "pkg": "pwa", "file": "pwa/src/docs/DocMarkdown.tsx", "old": "  const [choice, setChoice] = useState<Choice>(() => (bytes > DOCS_RENDER_GATE_BYTES ? 'ask' : 'format'));", "new": "  const [choice, setChoice] = useState<Choice>(() => (p.text.length > DOCS_RENDER_GATE_BYTES ? 'ask' : 'format'));", "tests": ["test/docs-markdown.test.tsx"], "red": "pwa docs-markdown: 1 failed | 46 passed (47) — 'M4.P9: the render gate > the gate counts UTF-8 bytes, not characters: a text over it in bytes and under it in length is gated, with 0 parses' (AssertionError: expected undefined to be 'This document is 0.5 MiB. Formatting …')"},
+ {"id": "W5P1-T8-M22", "pkg": "pwa", "file": "pwa/src/docs/DocMarkdown.tsx", "old": "outcome?.kind === 'worker-unavailable' && p.bytes <= CHAT_SYNC_MAX_BYTES ?", "new": "outcome?.kind === 'worker-unavailable' && p.text.length <= CHAT_SYNC_MAX_BYTES ?", "tests": ["test/docs-markdown.test.tsx"], "red": "pwa docs-markdown: 1 failed | 46 passed (47) — 'M4.P7 (W5 half): worker-unavailable > the in-thread limit counts UTF-8 bytes: 2 049 two-byte characters (4 098 bytes, length 2 049) are DocPlain, never parsed in-thread'"},
+ {"id": "W5P1-T8-M23", "pkg": "pwa", "file": "pwa/src/docs/DocMarkdown.tsx", "old": "      <RenderBoundary where=\"doc body\" resetKey={p.pinKey} fallback={() => <DocPlain text={p.text} note={DOC_BODY_FALLBACK_NOTE} />}>\n        <DocTree tree={shown.tree} link={p.link} />\n      </RenderBoundary>\n    );\n  }\n  let action: ReactNode = null;\n  if (shown.kind === 'timeout' && shown.budgetMs < DOCS_PARSE_BUDGET_LARGE_MS) {\n    action = <button type=\"button\" className=\"doc-plain-action\" onClick={p.onFormatAnyway}>{DOC_MARKDOWN_ACTION.formatAnyway}</button>;\n  } else if (shown.kind === 'worker-failed') {\n    action = <button type=\"button\" className=\"doc-plain-action\" onClick={p.onRetry}>{DOC_MARKDOWN_ACTION.retry}</button>;\n  }\n  return <DocPlain text={p.text} note={docsPlainNote(shown)} action={action} />;\n}\n\n/** What the reader has chosen. `ask`: the gate is up and nothing is parsed. `format`: the normal budget. `large`:\n *  **Format anyway**, the large budget. `text`: **Show as text**. */\ntype Choice = 'ask' | 'format' | 'large' | 'text';\n\n/** A Docs page's Markdown body (spec 4.10). The caller keys it by `pinKey`. */\nexport function DocMarkdown(p: DocMarkdownProps): ReactNode {\n  const bytes = useMemo(() => utf8ByteLength(p.text), [p.text]);\n  const [choice, setChoice] = useState<Choice>(() => (bytes > DOCS_RENDER_GATE_BYTES ? 'ask' : 'format'));\n  const [attempt, setAttempt] = useState(0);\n  if (choice === 'ask') {\n    return (\n      <div className=\"doc-gate\">\n        <p className=\"doc-gate-copy\">{docGateSentence(bytes)}</p>\n        <button type=\"button\" className=\"doc-gate-btn\" onClick={() => setChoice('large')}>{DOC_MARKDOWN_ACTION.formatAnyway}</button>\n        <button type=\"button\" className=\"doc-gate-btn\" onClick={() => setChoice('text')}>{DOC_MARKDOWN_ACTION.showAsText}</button>\n      </div>\n    );\n  }\n  if (choice === 'text') return <DocPlain text={p.text} note={docShownAsTextNote(bytes)} />;\n  const budgetMs = choice === 'large' ? DOCS_PARSE_BUDGET_LARGE_MS : DOCS_PARSE_BUDGET_MS(bytes);\n  return (\n    <DocParse\n      {...p} bytes={bytes} budgetMs={budgetMs} attempt={attempt}\n      onFormatAnyway={() => setChoice('large')} onRetry={() => setAttempt((n) => n + 1)}\n    />\n", "new": "      <DocTree tree={shown.tree} link={p.link} />\n    );\n  }\n  let action: ReactNode = null;\n  if (shown.kind === 'timeout' && shown.budgetMs < DOCS_PARSE_BUDGET_LARGE_MS) {\n    action = <button type=\"button\" className=\"doc-plain-action\" onClick={p.onFormatAnyway}>{DOC_MARKDOWN_ACTION.formatAnyway}</button>;\n  } else if (shown.kind === 'worker-failed') {\n    action = <button type=\"button\" className=\"doc-plain-action\" onClick={p.onRetry}>{DOC_MARKDOWN_ACTION.retry}</button>;\n  }\n  return <DocPlain text={p.text} note={docsPlainNote(shown)} action={action} />;\n}\n\n/** What the reader has chosen. `ask`: the gate is up and nothing is parsed. `format`: the normal budget. `large`:\n *  **Format anyway**, the large budget. `text`: **Show as text**. */\ntype Choice = 'ask' | 'format' | 'large' | 'text';\n\n/** A Docs page's Markdown body (spec 4.10). The caller keys it by `pinKey`. */\nexport function DocMarkdown(p: DocMarkdownProps): ReactNode {\n  const bytes = useMemo(() => utf8ByteLength(p.text), [p.text]);\n  const [choice, setChoice] = useState<Choice>(() => (bytes > DOCS_RENDER_GATE_BYTES ? 'ask' : 'format'));\n  const [attempt, setAttempt] = useState(0);\n  if (choice === 'ask') {\n    return (\n      <div className=\"doc-gate\">\n        <p className=\"doc-gate-copy\">{docGateSentence(bytes)}</p>\n        <button type=\"button\" className=\"doc-gate-btn\" onClick={() => setChoice('large')}>{DOC_MARKDOWN_ACTION.formatAnyway}</button>\n        <button type=\"button\" className=\"doc-gate-btn\" onClick={() => setChoice('text')}>{DOC_MARKDOWN_ACTION.showAsText}</button>\n      </div>\n    );\n  }\n  if (choice === 'text') return <DocPlain text={p.text} note={docShownAsTextNote(bytes)} />;\n  const budgetMs = choice === 'large' ? DOCS_PARSE_BUDGET_LARGE_MS : DOCS_PARSE_BUDGET_MS(bytes);\n  return (\n    <RenderBoundary where=\"doc body\" resetKey={p.pinKey} fallback={() => <DocPlain text={p.text} note={DOC_BODY_FALLBACK_NOTE} />}>\n      <DocParse\n        {...p} bytes={bytes} budgetMs={budgetMs} attempt={attempt}\n        onFormatAnyway={() => setChoice('large')} onRetry={() => setAttempt((n) => n + 1)}\n      />\n    </RenderBoundary>\n", "tests": ["test/docs-markdown.test.tsx"], "red": "pwa docs-markdown: 1 failed | 46 passed (47) — 'M4.B2: the doc-body boundary, keyed by the pin > a throwing renderer gives DocPlain with the fallback note while the header beside it stays; a new pin resets it' (AssertionError: expected \"vi.fn()\" to be called 1 times, but got 2 times). Mutation: the doc-body RenderBoundary moves up from around DocTree (in DocParse) to around DocParse (in DocMarkdown), one contiguous edit, so a renderer throw unmounts DocParse and the reset on the new pin re-runs the parse."}
 ]
 ```
 
@@ -14298,7 +14343,27 @@ Expected before the commit: the `grep -vE` prints nothing (only this task's file
    "test/docs-screen.test.tsx"
   ],
   "red": "pwa docs-screen: 1 failed | 45 passed (46) — 'a ref view counts drafts and withheld drafts per section; the default view does not'"
- }
+ },
+ {"id": "W5P1-T9-M32", "pkg": "pwa", "file": "pwa/src/docs/useDocsVisit.ts", "old": "  const pendingFragment = held !== null && held.key === pageKey ? held.fragment : null;", "new": "  const pendingFragment = held?.fragment ?? null;", "tests": ["test/docs-screen.test.tsx", "test/docs-visit.test.tsx"], "red": "pwa docs-screen.test.tsx + docs-visit.test.tsx: 1 failed | 120 passed (121) — 'the fragment hand-off > a fragment named for a page is held for that page only, and any page change drops it (review I1)'"},
+ {"id": "W5P1-T9-M33", "pkg": "pwa", "file": "pwa/src/docs/useDocsVisit.ts", "old": "    setHeld((h) => (h !== null && h.key !== pageKey ? null : h));", "new": "    setHeld((h) => h);", "tests": ["test/docs-visit.test.tsx"], "red": "pwa docs-visit.test.tsx: 1 failed | 54 passed (55) — 'the fragment hand-off > a fragment named for a page is held for that page only, and any page change drops it (review I1)'"},
+ {"id": "W5P1-T9-M34", "pkg": "pwa", "file": "pwa/src/docs/useDocsVisit.ts", "old": "  return [treeKey(page.project, page.ref), page.section, page.path].join(NUL);", "new": "  return [page.project, page.section, page.path].join(NUL);", "tests": ["test/docs-visit.test.tsx"], "red": "pwa docs-visit.test.tsx: 1 failed | 54 passed (55) — 'the fragment hand-off > the page a fragment is for is its project, ref, section and path: not its view, and not its slash'"},
+ {"id": "W5P1-T9-M35", "pkg": "pwa", "file": "pwa/src/docs/useDocsVisit.ts", "old": "    const key = forHref === undefined ? fragmentKey(pageRef.current) : fragmentKeyOfHref(forHref);", "new": "    const key = fragmentKey(pageRef.current);", "tests": ["test/docs-screen.test.tsx", "test/docs-visit.test.tsx"], "red": "pwa docs-screen.test.tsx + docs-visit.test.tsx: 4 failed | 117 passed (121) — \"fragments scroll once the new body renders (refinement (o)) > a cross-doc link's fragment scrolls the target in the new page's article\"; 'the fragment hand-off > a fragment named for a page is held for that page only, and any page change drops it (review I1)'; 'the fragment hand-off > the page a fragment is for is its project, ref, section and path: not its view, and not its slash'; 'the fragment hand-off > an address that names no leaf holds nothing'"},
+ {"id": "W5P1-T9-M36", "pkg": "pwa", "file": "pwa/src/docs/DocLink.tsx", "old": "          if (t.fragment !== null) ctx.onFragment(t.fragment, t.href);", "new": "          if (t.fragment !== null) ctx.onFragment(t.fragment, '');", "tests": ["test/docs-screen.test.tsx", "test/docs-links.test.tsx"], "red": "pwa docs-screen + docs-links: 2 failed | 112 passed (114) — 'a cross-doc fragment: the href carries #part-2, a plain click navigates without it and hands it to onFragment'; 'a cross-doc link's fragment scrolls the target in the new page's article'"},
+ {"id": "W5P1-T9-M37", "pkg": "pwa", "file": "pwa/src/docs/DocsLeaf.tsx", "old": "      clear(null);\n      return true;", "new": "      return true;", "tests": ["test/docs-screen.test.tsx"], "red": "pwa docs-screen.test.tsx: 2 failed | 64 passed (66) — \"a fragment belongs to the page it was meant for (refinement (o), review I1) > a direct load's fragment is honoured once: scrolled when the body holds it, and cleared right then\"; 'a fragment belongs to the page it was meant for (refinement (o), review I1) > a fragment the rendered body does not hold is cleared too, and nothing scrolls'"},
+ {"id": "W5P1-T9-M38", "pkg": "pwa", "file": "pwa/src/docs/DocsLeaf.tsx", "old": "      fragmentTarget(article, fragment)?.scrollIntoView();\n      clear(null);\n      return true;", "new": "      const target = fragmentTarget(article, fragment);\n      if (target === null) return false;\n      target.scrollIntoView();\n      clear(null);\n      return true;", "tests": ["test/docs-screen.test.tsx"], "red": "pwa docs-screen.test.tsx: 1 failed | 65 passed (66) — 'a fragment belongs to the page it was meant for (refinement (o), review I1) > a fragment the rendered body does not hold is cleared too, and nothing scrolls'"},
+ {"id": "W5P1-T9-M39", "pkg": "pwa", "file": "pwa/src/docs/DocsLeaf.tsx", "old": "    if (cls !== 'markdown' && pendingFragment !== null) setFragment(null);", "new": "    if (pendingFragment === null) setFragment(null);", "tests": ["test/docs-screen.test.tsx"], "red": "pwa docs-screen.test.tsx: 1 failed | 65 passed (66) — 'a fragment belongs to the page it was meant for (refinement (o), review I1) > a leaf that is not Markdown cannot hold a fragment: it is cleared, and nothing scrolls'"},
+ {"id": "W5P1-T9-M40", "pkg": "pwa", "file": "pwa/src/docs/DocsLeaf.tsx", "old": "  return <DocMarkdown key={p.pinKey} text=", "new": "  return <DocMarkdown text=", "tests": ["test/docs-screen.test.tsx"], "red": "pwa docs-screen.test.tsx: 1 failed | 65 passed (66) — 'the Markdown body is keyed by the pin (review I2) > a re-list that moves a draft past the render gate asks first, instead of formatting on the old choice'"},
+ {"id": "W5P1-T9-M41", "pkg": "pwa", "file": "pwa/src/screens/DocsScreen.tsx", "old": "  useEffect(() => onAuthRegained(() => setIndex((s) => (s?.s === 'auth' ? null : s))), []);", "new": "  useEffect(() => undefined, []);", "tests": ["test/docs-screen.test.tsx"], "red": "pwa docs-screen.test.tsx: 1 failed | 65 passed (66) — 'the index after a sign-in (review I3) > a sign-in reads an index that answered auth again, and the rows render'"},
+ {"id": "W5P1-T9-M42", "pkg": "pwa", "file": "pwa/src/screens/DocsScreen.tsx", "old": "      return n.arrived ? null : n;", "new": "      return n;", "tests": ["test/docs-screen.test.tsx"], "red": "pwa docs-screen.test.tsx: 2 failed | 64 passed (66) — 'a linked worktree is followed to its owner by replace (spec 4.7, M4.R4, refinement (c)) > the redirect note is absent on another page (review M4)'; 'a linked worktree is followed to its owner by replace (spec 4.7, M4.R4, refinement (c)) > the redirect note does not come back when the reader returns to the URL it was written for (review M1)'"},
+ {"id": "W5P1-T9-M43", "pkg": "pwa", "file": "pwa/src/screens/DocsScreen.tsx", "old": "  return to.href === docsPageUrl(page) || trail.from.includes(here);", "new": "  return trail.from.includes(here);", "tests": ["test/docs-screen.test.tsx"], "red": "pwa docs-screen: 3 failed | 63 passed (66) — 'a linked-worktree answer {\"owner\":\"a\",\"branch\":\"main\"} naming the page's own project at the same ref is a sentence, never \"Opening a…\" (/docs/a/specs/x.md?ref=main; review M2)'; 'a shared-repo answer {\"owner\":\"a\"} naming the page's own project at the same ref is a sentence, never \"Opening a…\" (/docs/a/specs/x.md?ref=main; review M2)'; 'a linked-worktree answer {\"owner\":\"a\",\"branch\":\"main\"} naming the page's own project at the same ref is a sentence, never \"Opening a…\" (/docs/a/specs/x.md; review M2)'"},
+ {"id": "W5P1-T9-M44", "pkg": "pwa", "file": "pwa/src/screens/DocsScreen.tsx", "old": "  return to.href === docsPageUrl(page) || trail.from.includes(here);", "new": "  return to.href === docsPageUrl(page);", "tests": ["test/docs-screen.test.tsx"], "red": "pwa docs-screen.test.tsx: 1 failed | 65 passed (66) — 'a linked worktree is followed to its owner by replace (spec 4.7, M4.R4, refinement (c)) > two projects that name each other as owner end in a sentence, not in a loop (review M2)'"},
+ {"id": "W5P1-T9-M45", "pkg": "pwa", "file": "pwa/src/screens/DocsScreen.tsx", "old": "  else if (!looped) redirect = owned;", "new": "  else redirect = owned;", "tests": ["test/docs-screen.test.tsx"], "red": "pwa docs-screen.test.tsx: 1 failed | 65 passed (66) — 'a linked worktree is followed to its owner by replace (spec 4.7, M4.R4, refinement (c)) > two projects that name each other as owner end in a sentence, not in a loop (review M2)'"},
+ {"id": "W5P1-T9-M46", "pkg": "pwa", "file": "pwa/src/screens/DocsScreen.tsx", "old": "typeof slot.body.owner === 'string' && !looped) {", "new": "typeof slot.body.owner === 'string') {", "tests": ["test/docs-screen.test.tsx"], "red": "pwa docs-screen: 4 failed | 62 passed (66) — 'two projects that name each other as owner end in a sentence, not in a loop (review M2)'; 'a linked-worktree answer {\"owner\":\"a\",\"branch\":\"main\"} naming the page's own project at the same ref is a sentence, never \"Opening a…\" (/docs/a/specs/x.md?ref=main; review M2)'; 'a shared-repo answer {\"owner\":\"a\"} naming the page's own project at the same ref is a sentence, never \"Opening a…\" (/docs/a/specs/x.md?ref=main; review M2)'; 'a linked-worktree answer {\"owner\":\"a\",\"branch\":\"main\"} naming the page's own project at the same ref is a sentence, never \"Opening a…\" (/docs/a/specs/x.md; review M2)'"},
+ {"id": "W5P1-T9-M47", "pkg": "pwa", "file": "pwa/src/screens/DocsScreen.tsx", "old": "    navigate(target + location.hash, { replace: true });", "new": "    navigate(target, { replace: true });", "tests": ["test/docs-screen.test.tsx"], "red": "pwa docs-screen.test.tsx: 4 failed | 62 passed (66) — 'the canonical fix keeps the #fragment (review M3) > a leaf reached with a slash: the address bar ends at the canonical URL and still carries #sec'; 'the canonical fix keeps the #fragment (review M3) > a percent-encoded ref: the address bar ends at the canonical URL and still carries #sec'; 'the canonical fix keeps the #fragment (review M3) > a directory reached without its slash: the address bar ends at the canonical URL and still carries #sec'; 'a linked worktree is followed to its owner by replace (spec 4.7, M4.R4, refinement (c)) > the canonical fix and the owner redirect carry #sec too (review M3)'"},
+ {"id": "W5P1-T9-M48", "pkg": "pwa", "file": "pwa/src/screens/DocsScreen.tsx", "old": "    setTrail((t) => (t.next === null || t.next === here ? t : NO_TRAIL));", "new": "    setTrail((t) => t);", "tests": ["test/docs-screen.test.tsx"], "red": "pwa docs-screen.test.tsx: 1 failed | 65 passed (66) — 'a linked worktree is followed to its owner by replace (spec 4.7, M4.R4, refinement (c)) > a later, separate visit to a page that was redirected from is redirected again: the chain ends when the URL leaves it (review M2)'"},
+ {"id": "W5P1-T9-M49", "pkg": "pwa", "file": "pwa/src/screens/DocsScreen.tsx", "old": "    if (viaOwner) setTrail((t) => ({ from: [...t.from, here], next: target }));", "new": "    if (viaOwner) setTrail((t) => t);", "tests": ["test/docs-screen.test.tsx"], "red": "pwa docs-screen.test.tsx: 1 failed | 65 passed (66) — 'a linked worktree is followed to its owner by replace (spec 4.7, M4.R4, refinement (c)) > two projects that name each other as owner end in a sentence, not in a loop (review M2)'"},
+ {"id": "W5P1-T9-M50", "pkg": "pwa", "file": "pwa/src/screens/DocsScreen.tsx", "old": "  if (typeof owner !== 'string') return null;", "new": "  if (owner === null) return null;", "tests": ["test/docs-screen.test.tsx"], "red": "pwa docs-screen.test.tsx: 2 failed | 64 passed (66) — 'a linked worktree is followed to its owner by replace (spec 4.7, M4.R4, refinement (c)) > an owner ABSENT from a linked-worktree answer (not null) renders the sentence only: no navigation, no second GET (review M4)'; 'a linked worktree is followed to its owner by replace (spec 4.7, M4.R4, refinement (c)) > an owner ABSENT from a shared-repo answer (not null) renders the sentence only: no navigation, no second GET (review M4)'"},
+ {"id": "W5P1-T9-M51", "pkg": "pwa", "file": "shared/docs.ts", "old": "    if (seen.has(k)) return { ok: false, why: 'repeated-param' };", "new": "    if (false) return { ok: false, why: 'repeated-param' };", "tests": ["test/docs-screen.test.tsx"], "red": "pwa docs-screen.test.tsx: 1 failed | 65 passed (66) — 'a repeated query key, on the screen (review M4) > ?ref=a&ref=b shows the repeated-param sentence and a link to the index, and asks for no tree'"}
 ]
 ```
 
@@ -16959,7 +17024,22 @@ Expected before the commit: the `grep -vE` prints nothing (only this task's file
    "test/docs-screen.test.tsx"
   ],
   "red": "pwa docs-screen: 1 failed | 45 passed (46) — 'a draft-only file in the default view: not in this listing, and the default-view hint opens it at refs/heads/<branch>'"
- }
+ },
+ {"id": "W5P1-T10-M55", "pkg": "pwa", "file": "pwa/src/docs/DocsHead.tsx", "old": "const now = until === null ? slow : Date.now();", "new": "const now = slow;", "tests": ["test/docs-truth.test.tsx"], "red": "pwa docs-truth: 4 failed | 90 passed (94) — 'an answered fetch-too-soon is the soon state, counted from its own retryAfterMs and answer time (no auto-retry)'; 'a visit that mounted 25 s ago and is answered fetch-too-soon (10 s) reads 10s, then 9s a second later'; 'measured end to end: mount, wait 25 s, tap, the answer says 10 s: the chip reads 10s, never 35s, then counts down'; 'a second fetch-too-soon in one visit is still soon (the one automatic retry is spent), and nothing retries again'"},
+ {"id": "W5P1-T10-M56", "pkg": "pwa", "file": "pwa/src/docs/DocsHead.tsx", "old": "  useNow(1000, tree !== null && until !== null && Date.now() < until);\n", "new": "", "tests": ["test/docs-truth.test.tsx"], "red": "pwa docs-truth: 3 failed | 91 passed (94) — 'an answered fetch-too-soon is the soon state, counted from its own retryAfterMs and answer time (no auto-retry)'; 'a visit that mounted 25 s ago and is answered fetch-too-soon (10 s) reads 10s, then 9s a second later'; 'measured end to end: mount, wait 25 s, tap, the answer says 10 s: the chip reads 10s, never 35s, then counts down'"},
+ {"id": "W5P1-T10-M57", "pkg": "pwa", "file": "pwa/src/docs/DocsHead.tsx", "old": "if (freshness.s === 'answered' && freshness.fetch.state === 'failed' && freshness.fetch.failure.failure === 'fetch-too-soon') {", "new": "if (freshness.s === 'answered' && freshness.fetch.state === 'failed' && freshness.fetch.failure.failure === 'fetch-too-soon' && false) {", "tests": ["test/docs-truth.test.tsx"], "red": "pwa docs-truth: 2 failed | 92 passed (94) — 'an answered fetch-too-soon is the soon state, counted from its own retryAfterMs and answer time (no auto-retry)'; 'a second fetch-too-soon in one visit is still soon (the one automatic retry is spent), and nothing retries again'"},
+ {"id": "W5P1-T10-M58", "pkg": "pwa", "file": "pwa/src/docs/DocsHead.tsx", "old": "return freshness.at + (typeof after === 'number' && Number.isFinite(after) && after >= 0 ? after : 0);", "new": "return freshness.at;", "tests": ["test/docs-truth.test.tsx"], "red": "pwa docs-truth: 2 failed | 92 passed (94) — 'an answered fetch-too-soon is the soon state, counted from its own retryAfterMs and answer time (no auto-retry)'; 'a second fetch-too-soon in one visit is still soon (the one automatic retry is spent), and nothing retries again'"},
+ {"id": "W5P1-T10-M59", "pkg": "pwa", "file": "pwa/src/docs/DocsHead.tsx", "old": "freshness.fetch.state === 'failed' && freshness.fetch.failure.failure === 'remote-branch-absent') {", "new": "freshness.fetch.state === 'failed' && freshness.fetch.failure.failure === 'remote-branch-absent' && false) {", "tests": ["test/docs-truth.test.tsx"], "red": "pwa docs-truth: 1 failed | 93 passed (94) — 'remote branch absent, answered this visit'"},
+ {"id": "W5P1-T10-M60", "pkg": "pwa", "file": "pwa/src/docs/DocsBanners.tsx", "old": "file.answer.show.commit ?? (file.pin.kind === 'committed' ? file.pin.commit : null);", "new": "file.answer.show.commit ?? tree.ref.commit;", "tests": ["test/docs-banners.test.tsx"], "red": "pwa docs-banners: 2 failed | 30 passed (32) — 'an answer that names no commit falls back to the committed pin's own commit, never the tree's'; 'no commit anywhere (no answer commit, a draft pin): no banner rather than a guessed commit'"},
+ {"id": "W5P1-T10-M61", "pkg": "pwa", "file": "pwa/src/docs/DocsBanners.tsx", "old": "const read = file.answer.show.commit ?? (file.pin.kind === 'committed' ? file.pin.commit : null);", "new": "const read = tree.ref.commit;", "tests": ["test/docs-banners.test.tsx"], "red": "pwa docs-banners: 3 failed | 29 passed (32) — 'not-contained warns, naming the short commit the page read and the served ref, with Re-list'; 'an answer that names no commit falls back to the committed pin's own commit, never the tree's'; 'no commit anywhere (no answer commit, a draft pin): no banner rather than a guessed commit'"},
+ {"id": "W5P1-T10-M62", "pkg": "pwa", "file": "pwa/src/docs/DocsHead.tsx", "old": "(link.note === 'may-differ' || p.showsDraft) &&", "new": "(link.note === 'may-differ') &&", "tests": ["test/docs-truth.test.tsx"], "red": "pwa docs-truth: 1 failed | 93 passed (94) — 'a leaf that shows draft bytes says GitHub may differ, whatever the ref relation > a draft leaf (the served ref equal to origin): link and note'"},
+ {"id": "W5P1-T10-M63", "pkg": "pwa", "file": "pwa/src/docs/DocsHead.tsx", "old": "openedPin(tree, page, file)?.kind === 'draft';", "new": "openedPin(tree, page, file) !== null;", "tests": ["test/docs-truth.test.tsx"], "red": "pwa docs-truth: 2 failed | 92 passed (94) — '/docs/demo/specs/d/x.md links https://github.com/example-org/example-repo/blob/main/docs/superpowers/specs/d/x.md and opens it with openExternal on tap'; 'the same leaf at view=committed, a withheld draft, and the default view show committed bytes: no note'"},
+ {"id": "W5P1-T10-M64", "pkg": "pwa", "file": "pwa/src/docs/DocsHead.tsx", "old": "const showsDraft = page.kind === 'path' && openedPin(tree, page, file)?.kind === 'draft';", "new": "const showsDraft = tree.drafts.state === 'holder';", "tests": ["test/docs-truth.test.tsx"], "red": "pwa docs-truth: 6 failed | 88 passed (94) — '/docs/demo links https://github.com/example-org/example-repo/tree/main and opens it with openExternal on tap'; '/docs/demo/specs links https://github.com/example-org/example-repo/tree/main/docs/superpowers/specs and opens it with openExternal on tap'; '/docs/demo/specs/d/ links https://github.com/example-org/example-repo/tree/main/docs/superpowers/specs/d and opens it with openExternal on tap'; '/docs/demo/specs/d/x.md links https://github.com/example-org/example-repo/blob/main/docs/superpowers/specs/d/x.md and opens it with openExternal on tap'; 'a leaf that shows draft bytes says GitHub may differ, whatever the ref relation > the same leaf at view=committed, a withheld draft, and the default view show committed bytes: no note'; 'a leaf that shows draft bytes says GitHub may differ, whatever the ref relation > the opened pin decides, not the entry: a draft pin read for a project page shows no note'"},
+ {"id": "W5P1-T10-M65", "pkg": "pwa", "file": "pwa/src/docs/DocsHead.tsx", "old": "<CopyCommit key={ref.commit} commit={ref.commit} />", "new": "<CopyCommit commit={ref.commit} />", "tests": ["test/docs-truth.test.tsx"], "red": "pwa docs-truth: 1 failed | 93 passed (94) — 'a re-list that moves the commit clears \"copied\": the next commit has not been copied'"},
+ {"id": "W5P1-T10-M66", "pkg": "pwa", "file": "pwa/src/docs/DocsHead.tsx", "old": "formatAge(Math.floor(Math.max(0, now - freshness.at) / 1000));", "new": "formatAge(Math.floor(Math.max(0, now - receivedAt) / 1000));", "tests": ["test/docs-truth.test.tsx"], "red": "pwa docs-truth: 1 failed | 93 passed (94) — 'an answered fetch failure is aged from `at`, not from when the listing landed; the last good age from receivedAt'"},
+ {"id": "W5P1-T10-M67", "pkg": "pwa", "file": "pwa/src/docs/DocsBanners.tsx", "old": "{ n, s: pluralS(n), label, branch: d.branch })}>", "new": "{ n, s: pluralS(n), label, branch: tree.ref.name })}>", "tests": ["test/docs-banners.test.tsx"], "red": "pwa docs-banners: 3 failed | 29 passed (32) — 'a holder on local main with 3 dirty docs: zero draft rows, and a hint (n = 3) linking ?ref=refs/heads/main'; 'a default-view leaf reads the committed pin; loaders.file never receives a DraftPin'; 'one draft says doc, not docs; no drafts, no hint'"},
+ {"id": "W5P1-T10-M68", "pkg": "pwa", "file": "pwa/src/docs/DocsBanners.tsx", "old": "n, s: pluralS(n), label, branch: d.branch, short:", "new": "n, s: pluralS(n), label, branch: tree.ref.name, short:", "tests": ["test/docs-banners.test.tsx"], "red": "pwa docs-banners: 1 failed | 31 passed (32) — 'baseEqual false: the base hint linking refs/heads/<b>, and no overlay'"},
+ {"id": "W5P1-T10-M69", "pkg": "pwa", "file": "pwa/src/docs/DocsBanners.tsx", "old": "parseDocsRef('refs/heads/' + d.branch);", "new": "parseDocsRef('refs/heads/' + tree.ref.name);", "tests": ["test/docs-banners.test.tsx"], "red": "pwa docs-banners: 2 failed | 30 passed (32) — 'a holder on local main with 3 dirty docs: zero draft rows, and a hint (n = 3) linking ?ref=refs/heads/main'; 'baseEqual false: the base hint linking refs/heads/<b>, and no overlay'"}
 ]
 ```
 
@@ -18710,7 +18790,14 @@ Expected before the commit: the `grep -vE` prints nothing (only this task's file
    "test/tap-targets.test.tsx"
   ],
   "red": "pwa tap-targets: 1 failed | 66 passed (67) — 'reaches the main stylesheet: DocsScreen imports docs.css, and app.tsx imports DocsScreen statically'"
- }
+ },
+ {"id": "W5P1-T11-M28", "pkg": "pwa", "file": "pwa/src/screens/FleetScreen.tsx", "old": "          <button\n            type=\"button\"\n            className=\"docs-door\"\n            aria-label=\"Docs: specs, plans and design notes\"\n            onClick={() => navigate('/docs')}\n          >\n            <span className=\"docs-door-glyph\" aria-hidden=\"true\">📄</span>\n            Docs\n          </button>\n", "new": "          {sessions.length === 0 && (\n          <button\n            type=\"button\"\n            className=\"docs-door\"\n            aria-label=\"Docs: specs, plans and design notes\"\n            onClick={() => navigate('/docs')}\n          >\n            <span className=\"docs-door-glyph\" aria-hidden=\"true\">📄</span>\n            Docs\n          </button>\n          )}\n", "tests": ["test/fleet-screen.test.tsx"], "red": "pwa fleet-screen: 1 failed | 103 passed (104) — 'is still there, in the header cluster before the accounts door, with a session present'"},
+ {"id": "W5P1-T11-M29", "pkg": "pwa", "file": "pwa/src/docs/docs.css", "old": "  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;\n}", "new": "  overflow: hidden; white-space: nowrap;\n}", "tests": ["test/tap-targets.test.tsx"], "red": "pwa tap-targets: 1 failed | 67 passed (68) — 'keep a long branch name on its own line: the hint truncates beside the word, the row label breaks (jsdom lays nothing out, so the declarations are pinned)'"},
+ {"id": "W5P1-T11-M30", "pkg": "pwa", "file": "pwa/src/docs/docs.css", "old": "  flex: 0 1 auto; min-width: 0;\n", "new": "  flex: none; min-width: 0;\n", "tests": ["test/tap-targets.test.tsx"], "red": "pwa tap-targets: 1 failed | 67 passed (68) — 'keep a long branch name on its own line: the hint truncates beside the word, the row label breaks (jsdom lays nothing out, so the declarations are pinned)'"},
+ {"id": "W5P1-T11-M31", "pkg": "pwa", "file": "pwa/src/docs/docs.css", "old": ".docs-session-row { min-width: 0; overflow-wrap: anywhere; }", "new": ".docs-session-row { min-width: 0; }", "tests": ["test/tap-targets.test.tsx"], "red": "pwa tap-targets: 1 failed | 67 passed (68) — 'keep a long branch name on its own line: the hint truncates beside the word, the row label breaks (jsdom lays nothing out, so the declarations are pinned)'"},
+ {"id": "W5P1-T11-M32", "pkg": "pwa", "file": "pwa/src/docs/docs.css", "old": ".docs-session-row { min-width: 0; overflow-wrap: anywhere; }", "new": ".docs-session-row { min-width: 0; overflow-wrap: anywhere; min-height: 20px; }", "tests": ["test/tap-targets.test.tsx"], "red": "pwa tap-targets: 1 failed | 67 passed (68) — 'ride the shared rules’ floors: .btn-ghost on the token, .menu-item at or above it'"},
+ {"id": "W5P1-T11-M33", "pkg": "pwa", "file": "pwa/src/docs/docs.css", "old": "  flex: 0 1 auto; min-width: 0;\n", "new": "  flex: 0 1 auto; min-width: 0; min-height: 20px;\n", "tests": ["test/tap-targets.test.tsx"], "red": "pwa tap-targets: 1 failed | 67 passed (68) — 'ride the shared rules’ floors: .btn-ghost on the token, .menu-item at or above it'"},
+ {"id": "W5P1-T11-M34", "pkg": "pwa", "file": "pwa/src/docs/docs.css", "old": ".docs-session-row { min-width: 0; overflow-wrap: anywhere; }", "new": "", "tests": ["test/tap-targets.test.tsx"], "red": "pwa tap-targets: 1 failed | 67 passed (68) — 'keep a long branch name on its own line: the hint truncates beside the word, the row label breaks (jsdom lays nothing out, so the declarations are pinned)'"}
 ]
 ```
 
@@ -20053,7 +20140,10 @@ Expected before the commit: the `grep -vE` prints nothing and the count is `1`.
    "vitest.browser.config.ts"
   ],
   "red": "pwa browser leg (--config vitest.browser.config.ts, CCRC_CHROME = Chrome for Testing 153.0.8010.12): 1 failed | 8 passed (9) — 'the page on A draws the SVG; no script runs (no marker request, no console line) and no request leaves the page' (its request list: 'a /b5/data-img', 'a /marker/b5-script', 'b /external/b5.png', 'a /marker/b5-onload')"
- }
+ },
+ {"id": "W5P1-T12-M21", "pkg": "pwa", "file": "shared/docs.ts", "old": "  'cross-origin-resource-policy': 'same-origin',\n", "new": "  'cross-origin-resource-policy': 'same-site',\n", "tests": ["--config", "vitest.browser.config.ts"], "red": "pwa browser leg (--config vitest.browser.config.ts, CCRC_CHROME = Chrome for Testing 153.0.8010.12): 2 failed | 11 passed (13) — 'pages on B (same site) and C (another site) <img> a docs raster: naturalWidth 0 on both, though the request arrives'; 'control: CORP same-site in place of same-origin draws the raster on B (same site), width 1, and not on C; same-origin is what keeps B out'"},
+ {"id": "W5P1-T12-M22", "pkg": "pwa", "file": "pwa/browser/docs-headers.browser.test.ts", "old": "`fetch('${o.a}/marker/${tag}-${how}');console.log('${MARK} ${tag}-${how}')`;\n", "new": "`setTimeout(() => { fetch('${o.a}/marker/${tag}-${how}');console.log('${MARK} ${tag}-${how}') }, 3000)`;\n", "tests": ["--config", "vitest.browser.config.ts"], "red": "pwa browser leg (--config vitest.browser.config.ts, CCRC_CHROME = Chrome for Testing 153.0.8010.12): 2 failed | 11 passed (13) — 'control: the same SVG as a top-level blob:image/svg+xml runs as A, and its fetch carries A's cookie'; 'control: the same body labelled image/svg+xml with no docs headers runs its script, within the settle window'"},
+ {"id": "W5P1-T12-M23", "pkg": "pwa", "file": "shared/docs.ts", "old": "export const DOCS_RESPONSE_CSP = \"default-src 'none'; img-src data:; style-src 'unsafe-inline'; sandbox; frame-ancestors 'none'\";\n", "new": "export const DOCS_RESPONSE_CSP = \"default-src * 'unsafe-inline'\";\n", "tests": ["--config", "vitest.browser.config.ts"], "red": "pwa browser leg (--config vitest.browser.config.ts, CCRC_CHROME = Chrome for Testing 153.0.8010.12): 1 failed | 12 passed (13) — 'one variable: the same body labelled image/svg+xml WITH every docs header is inert (the CSP alone stops it)' (CSP replaced by one allowing inline script and any fetch)"}
 ]
 ```
 
@@ -20529,1680 +20619,67 @@ Close the record: fill every `outcome` and `rows`, add a last line `Findings: ra
 
 ```json
 [
- {
-  "id": "W5P1-T3-M15",
-  "pkg": "pwa",
-  "file": "pwa/src/lib/markdown.tsx",
-  "old": "|| c === 0x24 || c >= 0x7f)",
-  "new": "|| c === 0x24)",
-  "tests": [
-   "test/markdown-bounds.test.tsx"
-  ],
-  "red": "pwa markdown-bounds: 3 failed | 31 passed (34) — 'longestWordRun counts letters, digits, _, $ and every code unit from 0x7f up, in one pass'; 'a php fence of 257 `_é` units (a 514-character run) is not highlighted and says why'; 'a run of 256 code units that holds non-ASCII units still highlights; 257 does not'"
- },
- {
-  "id": "W5P1-T3-M16",
-  "pkg": "pwa",
-  "file": "pwa/src/lib/markdown.tsx",
-  "old": "const overLine = line > MD_HIGHLIGHT_MAX_LINE_CHARS;",
-  "new": "const overLine = false;",
-  "tests": [
-   "test/markdown-bounds.test.tsx"
-  ],
-  "red": "pwa markdown-bounds: 6 failed | 28 passed (34) — 'a markdown block of \"[\" lines one character over the bound is not highlighted and says why'; 'a markdown block of \"[a\" lines one character over the bound is not highlighted and says why'; 'a markdown block of \"![\" lines one character over the bound is not highlighted and says why'; 'a yaml block of \"a a a \" lines one character over the bound is not highlighted and says why'; 'one long line among short ones is found, and the label carries that line length'; 'chat gets the bound through the shared components, on the synchronous path and the worker path'"
- },
- {
-  "id": "W5P1-T3-M17",
-  "pkg": "pwa",
-  "file": "pwa/src/lib/markdown.tsx",
-  "old": "const overLine = line > MD_HIGHLIGHT_MAX_LINE_CHARS;",
-  "new": "const overLine = line >= MD_HIGHLIGHT_MAX_LINE_CHARS;",
-  "tests": [
-   "test/markdown-bounds.test.tsx"
-  ],
-  "red": "pwa markdown-bounds: 3 failed | 31 passed (34) — 'a markdown block of \"[\" lines of exactly the bound is highlighted'; 'a yaml block of \"a a a \" lines of exactly the bound is highlighted'; 'a line break of either kind ends a line: CRLF and lone CR lines of exactly the bound highlight'"
- },
- {
-  "id": "W5P1-T3-M18",
-  "pkg": "pwa",
-  "file": "pwa/src/lib/markdownLimits.ts",
-  "old": "export const MD_HIGHLIGHT_MAX_LINE_CHARS = 2048;",
-  "new": "export const MD_HIGHLIGHT_MAX_LINE_CHARS = 2049;",
-  "tests": [
-   "test/markdown-limits.test.ts",
-   "test/markdown-bounds.test.tsx"
-  ],
-  "red": "pwa markdown-limits + markdown-bounds: 2 failed | 62 passed (64) — 'MD_HIGHLIGHT_MAX_LINE_CHARS is 2048'; 'declares 2048 characters'"
- },
- {
-  "id": "W5P1-T3-M19",
-  "pkg": "pwa",
-  "file": "pwa/src/lib/markdown.tsx",
-  "old": "const word = wanted && !overCap ? longestWordRun(raw) : 0;",
-  "new": "const word = wanted ? longestWordRun(raw) : 0;",
-  "tests": [
-   "test/markdown-bounds.test.tsx"
-  ],
-  "red": "pwa markdown-bounds: 1 failed | 33 passed (34) — 'a block over MD_HIGHLIGHT_BLOCK_MAX_CHARS is never scanned: the size check comes first'"
- },
- {
-  "id": "W5P1-T3-M20",
-  "pkg": "pwa",
-  "file": "pwa/src/lib/markdown.tsx",
-  "old": "const line = wanted && !overCap ? longestLine(raw) : 0;",
-  "new": "const line = wanted ? longestLine(raw) : 0;",
-  "tests": [
-   "test/markdown-bounds.test.tsx"
-  ],
-  "red": "pwa markdown-bounds: 1 failed | 33 passed (34) — 'a block over MD_HIGHLIGHT_BLOCK_MAX_CHARS is never scanned: the size check comes first'"
- },
- {
-  "id": "W5P1-T3-M21",
-  "pkg": "pwa",
-  "file": "pwa/src/lib/markdown.tsx",
-  "old": "if (c === 0x0a || c === 0x0d) {\n      run = 0;",
-  "new": "if (c === 0x0a) {\n      run = 0;",
-  "tests": [
-   "test/markdown-bounds.test.tsx"
-  ],
-  "red": "pwa markdown-bounds: 1 failed | 33 passed (34) — 'a line break of either kind ends a line: CRLF and lone CR lines of exactly the bound highlight'"
- },
- {
-  "id": "W5P1-T4-M8",
-  "pkg": "pwa",
-  "file": "pwa/src/lib/useParsedMarkdown.ts",
-  "old": "  useLayoutEffect(() => {\n    jobs.current.latest = req;\n",
-  "new": "  useEffect(() => {\n    jobs.current.latest = req;\n",
-  "tests": [
-   "test/use-parsed-markdown.test.tsx"
-  ],
-  "red": "pwa use-parsed-markdown: 1 failed | 17 passed (18) — 'a reply for text A that lands after text B commits, before its passive effects, is never the outcome for B'"
- },
- {
-  "id": "W5P1-T4-M9",
-  "pkg": "pwa",
-  "file": "pwa/src/lib/useParsedMarkdown.ts",
-  "old": "    jobs.current.latest = req;\n",
-  "new": "    jobs.current.latest = { ...req, attempt: 0 };\n",
-  "tests": [
-   "test/use-parsed-markdown.test.tsx"
-  ],
-  "red": "pwa use-parsed-markdown: 1 failed | 17 passed (18) — 'Retry (a changed attempt alone) is the latest request: its reply becomes the outcome, and nothing is pending'"
- },
- {
-  "id": "W5P1-T4-M11",
-  "pkg": "pwa",
-  "file": "pwa/src/lib/useParsedMarkdown.ts",
-  "old": "    jobs.current.latest = req;\n",
-  "new": "    jobs.current.latest = { ...req, profile: 'chat' };\n",
-  "tests": [
-   "test/use-parsed-markdown.test.tsx"
-  ],
-  "red": "pwa use-parsed-markdown: 2 failed | 16 passed (18) — 'the docs profile: its reply is the outcome and nothing stays pending'; 'a profile change alone (the same text) is a new request: the newer reply is the one shown, never the earlier'"
- },
- {
-  "id": "W5P1-T4-M12",
-  "pkg": "pwa",
-  "file": "pwa/src/lib/useParsedMarkdown.ts",
-  "old": "  const pending = settled.answers === undefined || !sameRequest(settled.answers, req);\n",
-  "new": "  const pending = settled.answers === undefined || !sameRequest(settled.answers, { ...req, profile: 'chat' });\n",
-  "tests": [
-   "test/use-parsed-markdown.test.tsx"
-  ],
-  "red": "pwa use-parsed-markdown: 2 failed | 16 passed (18) — 'the docs profile: its reply is the outcome and nothing stays pending'; 'a profile change alone (the same text) is a new request: the newer reply is the one shown, never the earlier'"
- },
- {
-  "id": "W5P1-T4-M13",
-  "pkg": "pwa",
-  "file": "pwa/src/lib/useParsedMarkdown.ts",
-  "old": "const req: Request = { text, profile, budgetMs, attempt };",
-  "new": "const req: Request = { text, profile: 'chat', budgetMs, attempt };",
-  "tests": [
-   "test/use-parsed-markdown.test.tsx"
-  ],
-  "red": "pwa use-parsed-markdown: 2 failed | 16 passed (18) — 'the docs profile: its reply is the outcome and nothing stays pending'; 'a profile change alone (the same text) is a new request: the newer reply is the one shown, never the earlier'"
- },
- {
-  "id": "W5P1-T4-M14",
-  "pkg": "pwa",
-  "file": "pwa/src/lib/useParsedMarkdown.ts",
-  "old": "  a.text === b.text && a.profile === b.profile && a.budgetMs === b.budgetMs && a.attempt === b.attempt;",
-  "new": "  a.text === b.text && a.budgetMs === b.budgetMs && a.attempt === b.attempt;",
-  "tests": [
-   "test/use-parsed-markdown.test.tsx"
-  ],
-  "red": "pwa use-parsed-markdown: 1 failed | 17 passed (18) — 'a profile change alone (the same text) is a new request: the newer reply is the one shown, never the earlier'"
- },
- {
-  "id": "W5P1-T4-M15",
-  "pkg": "pwa",
-  "file": "pwa/src/lib/markdownParse.ts",
-  "old": "      if (child.type === 'raw') {\n        const value = child.value ?? '';",
-  "new": "      if (child.type === 'raw' || (profile === 'docs' && child.type === 'text' && DOCS_BR.test(child.value ?? ''))) {\n        const value = child.value ?? '';",
-  "tests": [
-   "test/markdown-parse.test.ts"
-  ],
-  "red": "pwa markdown-parse: 4 failed | 32 passed (36) — 'an escaped angle bracket stays text in the docs profile, with no br element'; 'character references stays text in the docs profile, with no br element'; 'inline code stays text in the docs profile, with no br element'; 'inline code in a line stays text in the docs profile, with no br element'"
- },
- {
-  "id": "W5P1-T5-M26",
-  "pkg": "pwa",
-  "file": "pwa/src/docs/useDocsVisit.ts",
-  "old": "        c.abort();",
-  "new": "        void c;",
-  "tests": [
-   "test/docs-visit.test.tsx"
-  ],
-  "red": "pwa docs-visit: 2 failed | 53 passed (55) — 'unmount aborts a file read in flight'; 'drops that read's entry, so showing the screen again reads once more instead of loading for ever'"
- },
- {
-  "id": "W5P1-T5-M28",
-  "pkg": "pwa",
-  "file": "pwa/src/docs/useDocsVisit.ts",
-  "old": "if (prev !== undefined && prev.fKey !== wanted.fKey && prev.commit !== commit) {",
-  "new": "if (true) {",
-  "tests": [
-   "test/docs-visit.test.tsx",
-   "test/docs-refresh.test.tsx"
-  ],
-  "red": "pwa docs-visit + docs-refresh: 6 failed | 86 passed (92) — 'a refresh answer that changes the leaf's pin re-reads it, keeps the old body meanwhile, then sets updatedTo'; 'an older GET that lands after a newer POST answer does not replace the slot or move the leaf back'; 'a committed leaf whose blob is unchanged after the branch moves is not read again, and reports the new pin'; 'a changed blob is read at the new pin, the old body stays until it answers, then updatedTo names the commit'; 'a draft leaf whose fingerprint changes under the same holder HEAD reads the new draft but names no commit'; 'opening the committed version of a draft is a new leaf, not an update'"
- },
- {
-  "id": "W5P1-T5-M35",
-  "pkg": "pwa",
-  "file": "pwa/src/docs/useDocsVisit.ts",
-  "old": "        if (st.files.get(fKey) !== failed) return;\n",
-  "new": "",
-  "tests": [
-   "test/docs-visit.test.tsx"
-  ],
-  "red": "pwa docs-visit: 2 failed | 53 passed (55) — 'a manual Retry at 1 s settles the read; the 5 s timer then drops nothing and reads nothing'; 'a manual read still in flight at 5 s is not read a second time'"
- },
- {
-  "id": "W5P1-T5-M36",
-  "pkg": "pwa",
-  "file": "pwa/src/docs/useDocsVisit.ts",
-  "old": "      clearTimeout(pending);\n",
-  "new": "",
-  "tests": [
-   "test/docs-refresh.test.tsx"
-  ],
-  "red": "pwa docs-refresh: 1 failed | 36 passed (37) — 'a tap at 1 s on the soon chip settles the refresh; the 4 s timer then POSTs nothing'"
- },
- {
-  "id": "W5P1-T5-M37",
-  "pkg": "pwa",
-  "file": "pwa/src/docs/useDocsVisit.ts",
-  "old": "const isNewest = (key: string, seq: number): boolean => seq >= (st.slotSeq.get(key) ?? 0);",
-  "new": "const isNewest = (key: string, seq: number): boolean => true;",
-  "tests": [
-   "test/docs-refresh.test.tsx"
-  ],
-  "red": "pwa docs-refresh: 2 failed | 35 passed (37) — 'an older GET that lands after a newer POST answer does not replace the slot or move the leaf back'; 'an older GET that lands after a newer POST answer still releases the reads waiting on a listing'"
- },
- {
-  "id": "W5P1-T5-M38",
-  "pkg": "pwa",
-  "file": "pwa/src/docs/useDocsVisit.ts",
-  "old": "    if (!isNewest(key, seq)) return;\n",
-  "new": "",
-  "tests": [
-   "test/docs-refresh.test.tsx"
-  ],
-  "red": "pwa docs-refresh: 2 failed | 35 passed (37) — 'an older GET that lands after a newer POST answer does not replace the slot or move the leaf back'; 'an older GET that lands after a newer POST answer still releases the reads waiting on a listing'"
- },
- {
-  "id": "W5P1-T5-M39",
-  "pkg": "pwa",
-  "file": "pwa/src/docs/useDocsVisit.ts",
-  "old": "    releaseRelistWaiters(key);\n    // A GET started before the answer that last set the slot says what the listing was, not what it is.\n    if (!isNewest(key, seq)) return;\n",
-  "new": "    // A GET started before the answer that last set the slot says what the listing was, not what it is.\n    if (!isNewest(key, seq)) return;\n    releaseRelistWaiters(key);\n",
-  "tests": [
-   "test/docs-refresh.test.tsx"
-  ],
-  "red": "pwa docs-refresh: 1 failed | 36 passed (37) — 'an older GET that lands after a newer POST answer still releases the reads waiting on a listing'"
- },
- {
-  "id": "W5P1-T5-M40",
-  "pkg": "pwa",
-  "file": "pwa/src/docs/useDocsVisit.ts",
-  "old": "    st.slotSeq.set(key, seq);\n    st.trees.set(key, { s: 'ok', answer, receivedAt: Date.now() });",
-  "new": "    st.trees.set(key, { s: 'ok', answer, receivedAt: Date.now() });",
-  "tests": [
-   "test/docs-refresh.test.tsx"
-  ],
-  "red": "pwa docs-refresh: 2 failed | 35 passed (37) — 'an older GET that lands after a newer POST answer does not replace the slot or move the leaf back'; 'an older GET that lands after a newer POST answer still releases the reads waiting on a listing'"
- },
- {
-  "id": "W5P1-T5-M41",
-  "pkg": "pwa",
-  "file": "pwa/src/docs/useDocsVisit.ts",
-  "old": "          if (isCurrentKey(key)) listTree(target);",
-  "new": "          listTree(target);",
-  "tests": [
-   "test/docs-visit.test.tsx"
-  ],
-  "red": "pwa docs-visit: 1 failed | 54 passed (55) — 'a tree retry set for a page the user then left makes no GET'"
- },
- {
-  "id": "W5P1-T5-M42",
-  "pkg": "pwa",
-  "file": "pwa/src/docs/useDocsVisit.ts",
-  "old": "      if (isCurrentKey(key)) refresh(target, reason);",
-  "new": "      refresh(target, reason);",
-  "tests": [
-   "test/docs-refresh.test.tsx"
-  ],
-  "red": "pwa docs-refresh: 2 failed | 35 passed (37) — 'a refresh retry set for a page the user then left makes no POST'; 'a fetch-too-soon retry set for a page the user then left makes no POST'"
- },
- {
-  "id": "W5P1-T5-M43",
-  "pkg": "pwa",
-  "file": "pwa/src/docs/useDocsVisit.ts",
-  "old": "        if (st.files.get(fKey)?.slot.s === 'loading') st.files.delete(fKey);\n",
-  "new": "",
-  "tests": [
-   "test/docs-visit.test.tsx"
-  ],
-  "red": "pwa docs-visit: 1 failed | 54 passed (55) — 'drops that read's entry, so showing the screen again reads once more instead of loading for ever'"
- },
- {
-  "id": "W5P1-T5-M44",
-  "pkg": "pwa",
-  "file": "pwa/src/docs/useDocsVisit.ts",
-  "old": " && !autoRefreshed.current.has(key)",
-  "new": "",
-  "tests": [
-   "test/docs-refresh.test.tsx"
-  ],
-  "red": "pwa docs-refresh: 1 failed | 36 passed (37) — 'a slot that goes ok again after a sign-in is not auto-refreshed again: one POST per key per open'"
- },
- {
-  "id": "W5P1-T5-M45",
-  "pkg": "pwa",
-  "file": "pwa/src/docs/useDocsVisit.ts",
-  "old": "prev !== undefined && prev.fKey !== wanted.fKey && prev.commit !== commit",
-  "new": "prev !== undefined && prev.fKey !== wanted.fKey",
-  "tests": [
-   "test/docs-visit.test.tsx"
-  ],
-  "red": "pwa docs-visit: 1 failed | 54 passed (55) — 'a draft leaf whose fingerprint changes under the same holder HEAD reads the new draft but names no commit'"
- },
- {
-  "id": "W5P1-T5-M46",
-  "pkg": "pwa",
-  "file": "pwa/src/docs/useDocsVisit.ts",
-  "old": "      st.treeInflight.delete(key);\n      throw err;",
-  "new": "      throw err;",
-  "tests": [
-   "test/docs-visit.test.tsx"
-  ],
-  "red": "pwa docs-visit: 1 failed | 54 passed (55) — 'a tree loader that rejects does not pin its key: Retry makes the next GET'"
- },
- {
-  "id": "W5P1-T5-M47",
-  "pkg": "pwa",
-  "file": "pwa/src/docs/useDocsVisit.ts",
-  "old": "      st.refreshInflight.delete(key);\n      throw err;",
-  "new": "      throw err;",
-  "tests": [
-   "test/docs-refresh.test.tsx"
-  ],
-  "red": "pwa docs-refresh: 1 failed | 36 passed (37) — 'a refresh loader that rejects does not pin its key: a tap makes the next POST'"
- },
- {
-  "id": "W5P1-T5-M48",
-  "pkg": "pwa",
-  "file": "pwa/src/docs/useDocsVisit.ts",
-  "old": "    void loadersRef.current.refresh(target.project, body).then((a) => {\n      st.refreshInflight.delete(key);\n      if (!st.alive) return;\n      // Numbered when it ARRIVES: the route read its tree after its fetch, so it is newer than any GET that\n      // started before this answer, however early the POST began.\n      applyRefresh(target, key, reason, nextSeq(), a);",
-  "new": "    const startSeq = nextSeq();\n    void loadersRef.current.refresh(target.project, body).then((a) => {\n      st.refreshInflight.delete(key);\n      if (!st.alive) return;\n      applyRefresh(target, key, reason, startSeq, a);",
-  "tests": [
-   "test/docs-refresh.test.tsx"
-  ],
-  "red": "pwa docs-refresh: 1 failed | 36 passed (37) — 'a GET that starts after the POST began and lands before it does not stop the POST's newer tree from landing'"
- },
- {
-  "id": "W5P1-T5-M49",
-  "pkg": "pwa",
-  "file": "pwa/src/docs/useDocsVisit.ts",
-  "old": "      for (const key of st.treeInflight) if (st.trees.get(key)?.s === 'loading') st.trees.delete(key);\n",
-  "new": "",
-  "tests": [
-   "test/docs-visit.test.tsx"
-  ],
-  "red": "pwa docs-visit: 1 failed | 54 passed (55) — 'drops the loading slot, so showing the screen again lists again instead of loading for ever'"
- },
- {
-  "id": "W5P1-T6-M24",
-  "pkg": "pwa",
-  "file": "pwa/src/docs/DocLink.tsx",
-  "old": "  for (const el of article.querySelectorAll('[id]')) {\n    if (el.id === fragment || el.id === decoded) return el;\n  }\n  return null;\n",
-  "new": "  return article.querySelector('#' + fragment);\n",
-  "tests": [
-   "test/docs-links.test.tsx"
-  ],
-  "red": "pwa docs-links: 7 failed | 41 passed (48) — 'a footnote label holding a dot: a tap on its reference scrolls the footnote li'; 'an id that matches only once the fragment is percent-decoded is found (#%C3%A9 names the id \"é\")'; 'a fragment that is not a valid selector (#%E0%A4%A) neither throws nor scrolls'; 'a fragment that is not a valid selector (#100%) neither throws nor scrolls'; 'a fragment that is not a valid selector (#a%zz) neither throws nor scrolls'; 'a fragment that is not a valid selector (#[x]) neither throws nor scrolls'; 'a fragment that is not a valid selector (#a%20b) neither throws nor scrolls'"
- },
- {
-  "id": "W5P1-T6-M25",
-  "pkg": "pwa",
-  "file": "pwa/src/docs/DocLink.tsx",
-  "old": "el.id === fragment || el.id === decoded",
-  "new": "el.id === fragment",
-  "tests": [
-   "test/docs-links.test.tsx"
-  ],
-  "red": "pwa docs-links: 1 failed | 47 passed (48) — 'an id that matches only once the fragment is percent-decoded is found (#%C3%A9 names the id \"é\")'"
- },
- {
-  "id": "W5P1-T6-M26",
-  "pkg": "pwa",
-  "file": "pwa/src/docs/docsText.ts",
-  "old": "'This link is not a well-formed URL (it may hold a space, a control character or a backslash)'",
-  "new": "'This link holds a space, a control character or a backslash'",
-  "tests": [
-   "test/docs-links.test.tsx"
-  ],
-  "red": "pwa docs-links: 1 failed | 47 passed (48) — '[x](https://) is malformed because new URL refuses it, and its sentence says so (not only space, control or backslash)'"
- },
- {
-  "id": "W5P1-T6-M27",
-  "pkg": "pwa",
-  "file": "pwa/src/docs/docsLinks.ts",
-  "old": "if (r.fragment !== null && r.section === ctx.section && r.path === ctx.path) {",
-  "new": "if (false) {",
-  "tests": [
-   "test/docs-links.test.tsx"
-  ],
-  "red": "pwa docs-links: 4 failed | 44 passed (48) — 'a link to THIS page spelled with its file name and a fragment is a fragment link: a click scrolls and pushes nothing'; 'a same-page anchor on the committed view (view=committed) scrolls inside the view being read: no navigation, no history entry, and the href is the bare fragment'; 'a same-page anchor on a ref view, a bare ref scrolls inside the view being read: no navigation, no history entry, and the href is the bare fragment'; 'a same-page anchor on a ref view, a qualified ref scrolls inside the view being read: no navigation, no history entry, and the href is the bare fragment'"
- },
- {
-  "id": "W5P1-T6-M28",
-  "pkg": "pwa",
-  "file": "pwa/src/docs/docsLinks.ts",
-  "old": "if (r.fragment !== null && r.section === ctx.section && r.path === ctx.path) {",
-  "new": "if (r.section === ctx.section && r.path === ctx.path) {",
-  "tests": [
-   "test/docs-links.test.tsx"
-  ],
-  "red": "pwa docs-links: 1 failed | 47 passed (48) — 'a link to this page with NO fragment stays a doc link, and a link to another page with the same file name too'"
- },
- {
-  "id": "W5P1-T6-M29",
-  "pkg": "pwa",
-  "file": "pwa/src/docs/docsLinks.ts",
-  "old": "if (r.fragment !== null && r.section === ctx.section && r.path === ctx.path) {",
-  "new": "if (r.fragment !== null && r.section === ctx.section) {",
-  "tests": [
-   "test/docs-links.test.tsx"
-  ],
-  "red": "pwa docs-links: 1 failed | 47 passed (48) — 'a link to this page with NO fragment stays a doc link, and a link to another page with the same file name too'"
- },
- {
-  "id": "W5P1-T6-M30",
-  "pkg": "pwa",
-  "file": "pwa/src/docs/docsLinks.ts",
-  "old": "if (r.fragment !== null && r.section === ctx.section && r.path === ctx.path) {",
-  "new": "if (r.fragment !== null && r.path === ctx.path) {",
-  "tests": [
-   "test/docs-links.test.tsx"
-  ],
-  "red": "pwa docs-links: 1 failed | 47 passed (48) — 'a link to this page with NO fragment stays a doc link, and a link to another page with the same file name too'"
- },
- {
-  "id": "W5P1-T6-M31",
-  "pkg": "pwa",
-  "file": "pwa/src/docs/docsLinks.ts",
-  "old": "  'srcSet', 'imageSrcSet', 'xLinkHref', 'xLinkArcRole', 'xmlBase', 'longDesc', 'lowSrc', 'background', 'classId',\n  'codeBase', 'archive', 'useMap', 'profile',\n",
-  "new": "",
-  "tests": [
-   "test/docs-links.test.tsx"
-  ],
-  "red": "pwa docs-links: 1 failed | 47 passed (48) — 'moves the URL properties html-url-attributes lacks too (srcSet, xLinkHref, longDesc, ...): the move fails closed'"
- },
- {
-  "id": "W5P1-T6-M32",
-  "pkg": "pwa",
-  "file": "pwa/src/docs/docsLinks.ts",
-  "old": "'srcSet', 'imageSrcSet', 'xLinkHref',",
-  "new": "'imageSrcSet', 'xLinkHref',",
-  "tests": [
-   "test/docs-links.test.tsx"
-  ],
-  "red": "pwa docs-links: 1 failed | 47 passed (48) — 'moves the URL properties html-url-attributes lacks too (srcSet, xLinkHref, longDesc, ...): the move fails closed'"
- },
- {
-  "id": "W5P1-T6-M33",
-  "pkg": "pwa",
-  "file": "pwa/src/docs/docsLinks.ts",
-  "old": "'srcSet', 'imageSrcSet', 'xLinkHref', 'xLinkArcRole'",
-  "new": "'srcSet', 'imageSrcSet', 'xLinkArcRole'",
-  "tests": [
-   "test/docs-links.test.tsx"
-  ],
-  "red": "pwa docs-links: 1 failed | 47 passed (48) — 'moves the URL properties html-url-attributes lacks too (srcSet, xLinkHref, longDesc, ...): the move fails closed'"
- },
- {
-  "id": "W5P1-T6-M34",
-  "pkg": "pwa",
-  "file": "pwa/src/docs/docsLinks.ts",
-  "old": "'codeBase', 'archive', 'useMap', 'profile',",
-  "new": "'codeBase', 'archive', 'profile',",
-  "tests": [
-   "test/docs-links.test.tsx"
-  ],
-  "red": "pwa docs-links: 1 failed | 47 passed (48) — 'moves the URL properties html-url-attributes lacks too (srcSet, xLinkHref, longDesc, ...): the move fails closed'"
- },
- {
-  "id": "W5P1-T7-M9",
-  "pkg": "pwa",
-  "file": "pwa/src/docs/DocImage.tsx",
-  "old": "        URL.revokeObjectURL(created);",
-  "new": "",
-  "tests": [
-   "test/docs-images.test.tsx"
-  ],
-  "red": "pwa docs-images: 4 failed | 62 passed (66) — 'unmount revokes the URL it created'; 'a replaced image revokes the old URL and shows only the new one'; 'A, then B while B is still queued, then A again: the img is never a revoked URL'; 'the same image under new loaders and a new queue loads again and never shows the URL the old run revoked'"
- },
- {
-  "id": "W5P1-T7-M35",
-  "pkg": "pwa",
-  "file": "pwa/src/docs/DocImage.tsx",
-  "old": "        setDone((d) => (d !== null && d.key === key ? null : d));",
-  "new": "",
-  "tests": [
-   "test/docs-images.test.tsx"
-  ],
-  "red": "pwa docs-images: 2 failed | 64 passed (66) — 'A, then B while B is still queued, then A again: the img is never a revoked URL'; 'the same image under new loaders and a new queue loads again and never shows the URL the old run revoked'"
- },
- {
-  "id": "W5P1-T7-M36",
-  "pkg": "pwa",
-  "file": "pwa/src/docs/DocImage.tsx",
-  "old": "    }).catch((err: unknown) => {",
-  "new": "    }, (err: unknown) => {",
-  "tests": [
-   "test/docs-images.test.tsx"
-  ],
-  "red": "pwa docs-images: 1 failed | 65 passed (66) — 'a raster the loader answers with a MIME outside the table is a loader-failed chip, not a page stuck on Loading'"
- },
- {
-  "id": "W5P1-T7-M37",
-  "pkg": "pwa",
-  "file": "pwa/src/docs/DocImage.tsx",
-  "old": "  const size = ip.pin.kind === 'draft' ? e?.draft?.size : e?.committed?.size;",
-  "new": "  const size = e?.committed?.size;",
-  "tests": [
-   "test/docs-images.test.tsx"
-  ],
-  "red": "pwa docs-images: 1 failed | 65 passed (66) — 'a draft image listed over its class cap is refused too-large by its DRAFT size, whatever the committed size'"
- },
- {
-  "id": "W5P1-T7-M38",
-  "pkg": "pwa",
-  "file": "pwa/src/docs/DocImage.tsx",
-  "old": "  return { s: 'svg', src: SVG_DATA_PREFIX + base64Of(bytes) };",
-  "new": "  return { s: 'svg', src: SVG_DATA_PREFIX + btoa(new TextDecoder().decode(bytes)) };",
-  "tests": [
-   "test/docs-images.test.tsx"
-  ],
-  "red": "pwa docs-images: 1 failed | 65 passed (66) — 'an SVG over one base64 chunk (32 768 bytes) holding multi-byte UTF-8 keeps its bytes exactly in the data: URL'"
- },
- {
-  "id": "W5P1-T7-M33",
-  "pkg": "pwa",
-  "file": "pwa/src/docs/DocImage.tsx",
-  "old": "  return done !== null && done.key === key ? done.shown : { s: 'loading' };",
-  "new": "  return done !== null ? done.shown : { s: 'loading' };",
-  "tests": [
-   "test/docs-images.test.tsx"
-  ],
-  "red": "pwa docs-images: 1 failed | 65 passed (66) — 'a replaced SVG shows Loading, never the old data: image, until its new bytes arrive'"
- },
- {
-  "id": "W5P1-T8-M21",
-  "pkg": "pwa",
-  "file": "pwa/src/docs/DocMarkdown.tsx",
-  "old": "  const [choice, setChoice] = useState<Choice>(() => (bytes > DOCS_RENDER_GATE_BYTES ? 'ask' : 'format'));",
-  "new": "  const [choice, setChoice] = useState<Choice>(() => (p.text.length > DOCS_RENDER_GATE_BYTES ? 'ask' : 'format'));",
-  "tests": [
-   "test/docs-markdown.test.tsx"
-  ],
-  "red": "pwa docs-markdown: 1 failed | 46 passed (47) — 'M4.P9: the render gate > the gate counts UTF-8 bytes, not characters: a text over it in bytes and under it in length is gated, with 0 parses' (AssertionError: expected undefined to be 'This document is 0.5 MiB. Formatting …')"
- },
- {
-  "id": "W5P1-T8-M22",
-  "pkg": "pwa",
-  "file": "pwa/src/docs/DocMarkdown.tsx",
-  "old": "outcome?.kind === 'worker-unavailable' && p.bytes <= CHAT_SYNC_MAX_BYTES ?",
-  "new": "outcome?.kind === 'worker-unavailable' && p.text.length <= CHAT_SYNC_MAX_BYTES ?",
-  "tests": [
-   "test/docs-markdown.test.tsx"
-  ],
-  "red": "pwa docs-markdown: 1 failed | 46 passed (47) — 'M4.P7 (W5 half): worker-unavailable > the in-thread limit counts UTF-8 bytes: 2 049 two-byte characters (4 098 bytes, length 2 049) are DocPlain, never parsed in-thread'"
- },
- {
-  "id": "W5P1-T8-M23",
-  "pkg": "pwa",
-  "file": "pwa/src/docs/DocMarkdown.tsx",
-  "old": "      <RenderBoundary where=\"doc body\" resetKey={p.pinKey} fallback={() => <DocPlain text={p.text} note={DOC_BODY_FALLBACK_NOTE} />}>\n        <DocTree tree={shown.tree} link={p.link} />\n      </RenderBoundary>\n    );\n  }\n  let action: ReactNode = null;\n  if (shown.kind === 'timeout' && shown.budgetMs < DOCS_PARSE_BUDGET_LARGE_MS) {\n    action = <button type=\"button\" className=\"doc-plain-action\" onClick={p.onFormatAnyway}>{DOC_MARKDOWN_ACTION.formatAnyway}</button>;\n  } else if (shown.kind === 'worker-failed') {\n    action = <button type=\"button\" className=\"doc-plain-action\" onClick={p.onRetry}>{DOC_MARKDOWN_ACTION.retry}</button>;\n  }\n  return <DocPlain text={p.text} note={docsPlainNote(shown)} action={action} />;\n}\n\n/** What the reader has chosen. `ask`: the gate is up and nothing is parsed. `format`: the normal budget. `large`:\n *  **Format anyway**, the large budget. `text`: **Show as text**. */\ntype Choice = 'ask' | 'format' | 'large' | 'text';\n\n/** A Docs page's Markdown body (spec 4.10). The caller keys it by `pinKey`. */\nexport function DocMarkdown(p: DocMarkdownProps): ReactNode {\n  const bytes = useMemo(() => utf8ByteLength(p.text), [p.text]);\n  const [choice, setChoice] = useState<Choice>(() => (bytes > DOCS_RENDER_GATE_BYTES ? 'ask' : 'format'));\n  const [attempt, setAttempt] = useState(0);\n  if (choice === 'ask') {\n    return (\n      <div className=\"doc-gate\">\n        <p className=\"doc-gate-copy\">{docGateSentence(bytes)}</p>\n        <button type=\"button\" className=\"doc-gate-btn\" onClick={() => setChoice('large')}>{DOC_MARKDOWN_ACTION.formatAnyway}</button>\n        <button type=\"button\" className=\"doc-gate-btn\" onClick={() => setChoice('text')}>{DOC_MARKDOWN_ACTION.showAsText}</button>\n      </div>\n    );\n  }\n  if (choice === 'text') return <DocPlain text={p.text} note={docShownAsTextNote(bytes)} />;\n  const budgetMs = choice === 'large' ? DOCS_PARSE_BUDGET_LARGE_MS : DOCS_PARSE_BUDGET_MS(bytes);\n  return (\n    <DocParse\n      {...p} bytes={bytes} budgetMs={budgetMs} attempt={attempt}\n      onFormatAnyway={() => setChoice('large')} onRetry={() => setAttempt((n) => n + 1)}\n    />\n",
-  "new": "      <DocTree tree={shown.tree} link={p.link} />\n    );\n  }\n  let action: ReactNode = null;\n  if (shown.kind === 'timeout' && shown.budgetMs < DOCS_PARSE_BUDGET_LARGE_MS) {\n    action = <button type=\"button\" className=\"doc-plain-action\" onClick={p.onFormatAnyway}>{DOC_MARKDOWN_ACTION.formatAnyway}</button>;\n  } else if (shown.kind === 'worker-failed') {\n    action = <button type=\"button\" className=\"doc-plain-action\" onClick={p.onRetry}>{DOC_MARKDOWN_ACTION.retry}</button>;\n  }\n  return <DocPlain text={p.text} note={docsPlainNote(shown)} action={action} />;\n}\n\n/** What the reader has chosen. `ask`: the gate is up and nothing is parsed. `format`: the normal budget. `large`:\n *  **Format anyway**, the large budget. `text`: **Show as text**. */\ntype Choice = 'ask' | 'format' | 'large' | 'text';\n\n/** A Docs page's Markdown body (spec 4.10). The caller keys it by `pinKey`. */\nexport function DocMarkdown(p: DocMarkdownProps): ReactNode {\n  const bytes = useMemo(() => utf8ByteLength(p.text), [p.text]);\n  const [choice, setChoice] = useState<Choice>(() => (bytes > DOCS_RENDER_GATE_BYTES ? 'ask' : 'format'));\n  const [attempt, setAttempt] = useState(0);\n  if (choice === 'ask') {\n    return (\n      <div className=\"doc-gate\">\n        <p className=\"doc-gate-copy\">{docGateSentence(bytes)}</p>\n        <button type=\"button\" className=\"doc-gate-btn\" onClick={() => setChoice('large')}>{DOC_MARKDOWN_ACTION.formatAnyway}</button>\n        <button type=\"button\" className=\"doc-gate-btn\" onClick={() => setChoice('text')}>{DOC_MARKDOWN_ACTION.showAsText}</button>\n      </div>\n    );\n  }\n  if (choice === 'text') return <DocPlain text={p.text} note={docShownAsTextNote(bytes)} />;\n  const budgetMs = choice === 'large' ? DOCS_PARSE_BUDGET_LARGE_MS : DOCS_PARSE_BUDGET_MS(bytes);\n  return (\n    <RenderBoundary where=\"doc body\" resetKey={p.pinKey} fallback={() => <DocPlain text={p.text} note={DOC_BODY_FALLBACK_NOTE} />}>\n      <DocParse\n        {...p} bytes={bytes} budgetMs={budgetMs} attempt={attempt}\n        onFormatAnyway={() => setChoice('large')} onRetry={() => setAttempt((n) => n + 1)}\n      />\n    </RenderBoundary>\n",
-  "tests": [
-   "test/docs-markdown.test.tsx"
-  ],
-  "red": "pwa docs-markdown: 1 failed | 46 passed (47) — 'M4.B2: the doc-body boundary, keyed by the pin > a throwing renderer gives DocPlain with the fallback note while the header beside it stays; a new pin resets it' (AssertionError: expected \"vi.fn()\" to be called 1 times, but got 2 times). Mutation: the doc-body RenderBoundary moves up from around DocTree (in DocParse) to around DocParse (in DocMarkdown), one contiguous edit, so a renderer throw unmounts DocParse and the reset on the new pin re-runs the parse."
- },
- {
-  "id": "W5P1-T9-M4",
-  "pkg": "pwa",
-  "file": "pwa/src/screens/DocsScreen.tsx",
-  "old": "    navigate(target + location.hash, { replace: true });",
-  "new": "    navigate(target + location.hash);",
-  "tests": [
-   "test/docs-screen.test.tsx"
-  ],
-  "red": "pwa docs-screen: 6 failed | 60 passed (66) — '/docs/ replace-navigates to /docs, with no history entry'; '/docs/demo/ replace-navigates to /docs/demo, with no history entry'; '/docs/demo/specs/ replace-navigates to /docs/demo/specs, with no history entry'; 'a directory reached without its slash replace-navigates to the slash form, keeping the ref'; 'a leaf reached with a slash replace-navigates to the slash-less form'; 'owner 'a' with branch 'ws/a': the same page in a at ref ws/a, and history.length is unchanged'"
- },
- {
-  "id": "W5P1-T9-M20",
-  "pkg": "pwa",
-  "file": "pwa/src/docs/DocsLeaf.tsx",
-  "old": "  useFragmentScroll(root, cls === 'markdown' ? visit.pendingFragment : null, visit.setFragment);",
-  "new": "",
-  "tests": [
-   "test/docs-screen.test.tsx"
-  ],
-  "red": "pwa docs-screen: 4 failed | 62 passed (66) — 'a cross-doc link's fragment scrolls the target in the new page's article'; 'a direct load's #fragment is honoured once'; 'a direct load's fragment is honoured once: scrolled when the body holds it, and cleared right then'; 'a fragment the rendered body does not hold is cleared too, and nothing scrolls'"
- },
- {
-  "id": "W5P1-T9-M32",
-  "pkg": "pwa",
-  "file": "pwa/src/docs/useDocsVisit.ts",
-  "old": "  const pendingFragment = held !== null && held.key === pageKey ? held.fragment : null;",
-  "new": "  const pendingFragment = held?.fragment ?? null;",
-  "tests": [
-   "test/docs-screen.test.tsx",
-   "test/docs-visit.test.tsx"
-  ],
-  "red": "pwa docs-screen.test.tsx + docs-visit.test.tsx: 1 failed | 120 passed (121) — 'the fragment hand-off > a fragment named for a page is held for that page only, and any page change drops it (review I1)'"
- },
- {
-  "id": "W5P1-T9-M33",
-  "pkg": "pwa",
-  "file": "pwa/src/docs/useDocsVisit.ts",
-  "old": "    setHeld((h) => (h !== null && h.key !== pageKey ? null : h));",
-  "new": "    setHeld((h) => h);",
-  "tests": [
-   "test/docs-visit.test.tsx"
-  ],
-  "red": "pwa docs-visit.test.tsx: 1 failed | 54 passed (55) — 'the fragment hand-off > a fragment named for a page is held for that page only, and any page change drops it (review I1)'"
- },
- {
-  "id": "W5P1-T9-M34",
-  "pkg": "pwa",
-  "file": "pwa/src/docs/useDocsVisit.ts",
-  "old": "  return [treeKey(page.project, page.ref), page.section, page.path].join(NUL);",
-  "new": "  return [page.project, page.section, page.path].join(NUL);",
-  "tests": [
-   "test/docs-visit.test.tsx"
-  ],
-  "red": "pwa docs-visit.test.tsx: 1 failed | 54 passed (55) — 'the fragment hand-off > the page a fragment is for is its project, ref, section and path: not its view, and not its slash'"
- },
- {
-  "id": "W5P1-T9-M35",
-  "pkg": "pwa",
-  "file": "pwa/src/docs/useDocsVisit.ts",
-  "old": "    const key = forHref === undefined ? fragmentKey(pageRef.current) : fragmentKeyOfHref(forHref);",
-  "new": "    const key = fragmentKey(pageRef.current);",
-  "tests": [
-   "test/docs-screen.test.tsx",
-   "test/docs-visit.test.tsx"
-  ],
-  "red": "pwa docs-screen.test.tsx + docs-visit.test.tsx: 4 failed | 117 passed (121) — \"fragments scroll once the new body renders (refinement (o)) > a cross-doc link's fragment scrolls the target in the new page's article\"; 'the fragment hand-off > a fragment named for a page is held for that page only, and any page change drops it (review I1)'; 'the fragment hand-off > the page a fragment is for is its project, ref, section and path: not its view, and not its slash'; 'the fragment hand-off > an address that names no leaf holds nothing'"
- },
- {
-  "id": "W5P1-T9-M36",
-  "pkg": "pwa",
-  "file": "pwa/src/docs/DocLink.tsx",
-  "old": "          if (t.fragment !== null) ctx.onFragment(t.fragment, t.href);",
-  "new": "          if (t.fragment !== null) ctx.onFragment(t.fragment, '');",
-  "tests": [
-   "test/docs-screen.test.tsx",
-   "test/docs-links.test.tsx"
-  ],
-  "red": "pwa docs-screen + docs-links: 2 failed | 112 passed (114) — 'a cross-doc fragment: the href carries #part-2, a plain click navigates without it and hands it to onFragment'; 'a cross-doc link's fragment scrolls the target in the new page's article'"
- },
- {
-  "id": "W5P1-T9-M37",
-  "pkg": "pwa",
-  "file": "pwa/src/docs/DocsLeaf.tsx",
-  "old": "      clear(null);\n      return true;",
-  "new": "      return true;",
-  "tests": [
-   "test/docs-screen.test.tsx"
-  ],
-  "red": "pwa docs-screen.test.tsx: 2 failed | 64 passed (66) — \"a fragment belongs to the page it was meant for (refinement (o), review I1) > a direct load's fragment is honoured once: scrolled when the body holds it, and cleared right then\"; 'a fragment belongs to the page it was meant for (refinement (o), review I1) > a fragment the rendered body does not hold is cleared too, and nothing scrolls'"
- },
- {
-  "id": "W5P1-T9-M38",
-  "pkg": "pwa",
-  "file": "pwa/src/docs/DocsLeaf.tsx",
-  "old": "      fragmentTarget(article, fragment)?.scrollIntoView();\n      clear(null);\n      return true;",
-  "new": "      const target = fragmentTarget(article, fragment);\n      if (target === null) return false;\n      target.scrollIntoView();\n      clear(null);\n      return true;",
-  "tests": [
-   "test/docs-screen.test.tsx"
-  ],
-  "red": "pwa docs-screen.test.tsx: 1 failed | 65 passed (66) — 'a fragment belongs to the page it was meant for (refinement (o), review I1) > a fragment the rendered body does not hold is cleared too, and nothing scrolls'"
- },
- {
-  "id": "W5P1-T9-M39",
-  "pkg": "pwa",
-  "file": "pwa/src/docs/DocsLeaf.tsx",
-  "old": "    if (cls !== 'markdown' && pendingFragment !== null) setFragment(null);",
-  "new": "    if (pendingFragment === null) setFragment(null);",
-  "tests": [
-   "test/docs-screen.test.tsx"
-  ],
-  "red": "pwa docs-screen.test.tsx: 1 failed | 65 passed (66) — 'a fragment belongs to the page it was meant for (refinement (o), review I1) > a leaf that is not Markdown cannot hold a fragment: it is cleared, and nothing scrolls'"
- },
- {
-  "id": "W5P1-T9-M40",
-  "pkg": "pwa",
-  "file": "pwa/src/docs/DocsLeaf.tsx",
-  "old": "  return <DocMarkdown key={p.pinKey} text=",
-  "new": "  return <DocMarkdown text=",
-  "tests": [
-   "test/docs-screen.test.tsx"
-  ],
-  "red": "pwa docs-screen.test.tsx: 1 failed | 65 passed (66) — 'the Markdown body is keyed by the pin (review I2) > a re-list that moves a draft past the render gate asks first, instead of formatting on the old choice'"
- },
- {
-  "id": "W5P1-T9-M41",
-  "pkg": "pwa",
-  "file": "pwa/src/screens/DocsScreen.tsx",
-  "old": "  useEffect(() => onAuthRegained(() => setIndex((s) => (s?.s === 'auth' ? null : s))), []);",
-  "new": "  useEffect(() => undefined, []);",
-  "tests": [
-   "test/docs-screen.test.tsx"
-  ],
-  "red": "pwa docs-screen.test.tsx: 1 failed | 65 passed (66) — 'the index after a sign-in (review I3) > a sign-in reads an index that answered auth again, and the rows render'"
- },
- {
-  "id": "W5P1-T9-M42",
-  "pkg": "pwa",
-  "file": "pwa/src/screens/DocsScreen.tsx",
-  "old": "      return n.arrived ? null : n;",
-  "new": "      return n;",
-  "tests": [
-   "test/docs-screen.test.tsx"
-  ],
-  "red": "pwa docs-screen.test.tsx: 2 failed | 64 passed (66) — 'a linked worktree is followed to its owner by replace (spec 4.7, M4.R4, refinement (c)) > the redirect note is absent on another page (review M4)'; 'a linked worktree is followed to its owner by replace (spec 4.7, M4.R4, refinement (c)) > the redirect note does not come back when the reader returns to the URL it was written for (review M1)'"
- },
- {
-  "id": "W5P1-T9-M43",
-  "pkg": "pwa",
-  "file": "pwa/src/screens/DocsScreen.tsx",
-  "old": "  return to.href === docsPageUrl(page) || trail.from.includes(here);",
-  "new": "  return trail.from.includes(here);",
-  "tests": [
-   "test/docs-screen.test.tsx"
-  ],
-  "red": "pwa docs-screen: 3 failed | 63 passed (66) — 'a linked-worktree answer {\"owner\":\"a\",\"branch\":\"main\"} naming the page's own project at the same ref is a sentence, never \"Opening a…\" (/docs/a/specs/x.md?ref=main; review M2)'; 'a shared-repo answer {\"owner\":\"a\"} naming the page's own project at the same ref is a sentence, never \"Opening a…\" (/docs/a/specs/x.md?ref=main; review M2)'; 'a linked-worktree answer {\"owner\":\"a\",\"branch\":\"main\"} naming the page's own project at the same ref is a sentence, never \"Opening a…\" (/docs/a/specs/x.md; review M2)'"
- },
- {
-  "id": "W5P1-T9-M44",
-  "pkg": "pwa",
-  "file": "pwa/src/screens/DocsScreen.tsx",
-  "old": "  return to.href === docsPageUrl(page) || trail.from.includes(here);",
-  "new": "  return to.href === docsPageUrl(page);",
-  "tests": [
-   "test/docs-screen.test.tsx"
-  ],
-  "red": "pwa docs-screen.test.tsx: 1 failed | 65 passed (66) — 'a linked worktree is followed to its owner by replace (spec 4.7, M4.R4, refinement (c)) > two projects that name each other as owner end in a sentence, not in a loop (review M2)'"
- },
- {
-  "id": "W5P1-T9-M45",
-  "pkg": "pwa",
-  "file": "pwa/src/screens/DocsScreen.tsx",
-  "old": "  else if (!looped) redirect = owned;",
-  "new": "  else redirect = owned;",
-  "tests": [
-   "test/docs-screen.test.tsx"
-  ],
-  "red": "pwa docs-screen.test.tsx: 1 failed | 65 passed (66) — 'a linked worktree is followed to its owner by replace (spec 4.7, M4.R4, refinement (c)) > two projects that name each other as owner end in a sentence, not in a loop (review M2)'"
- },
- {
-  "id": "W5P1-T9-M46",
-  "pkg": "pwa",
-  "file": "pwa/src/screens/DocsScreen.tsx",
-  "old": "typeof slot.body.owner === 'string' && !looped) {",
-  "new": "typeof slot.body.owner === 'string') {",
-  "tests": [
-   "test/docs-screen.test.tsx"
-  ],
-  "red": "pwa docs-screen: 4 failed | 62 passed (66) — 'two projects that name each other as owner end in a sentence, not in a loop (review M2)'; 'a linked-worktree answer {\"owner\":\"a\",\"branch\":\"main\"} naming the page's own project at the same ref is a sentence, never \"Opening a…\" (/docs/a/specs/x.md?ref=main; review M2)'; 'a shared-repo answer {\"owner\":\"a\"} naming the page's own project at the same ref is a sentence, never \"Opening a…\" (/docs/a/specs/x.md?ref=main; review M2)'; 'a linked-worktree answer {\"owner\":\"a\",\"branch\":\"main\"} naming the page's own project at the same ref is a sentence, never \"Opening a…\" (/docs/a/specs/x.md; review M2)'"
- },
- {
-  "id": "W5P1-T9-M47",
-  "pkg": "pwa",
-  "file": "pwa/src/screens/DocsScreen.tsx",
-  "old": "    navigate(target + location.hash, { replace: true });",
-  "new": "    navigate(target, { replace: true });",
-  "tests": [
-   "test/docs-screen.test.tsx"
-  ],
-  "red": "pwa docs-screen.test.tsx: 4 failed | 62 passed (66) — 'the canonical fix keeps the #fragment (review M3) > a leaf reached with a slash: the address bar ends at the canonical URL and still carries #sec'; 'the canonical fix keeps the #fragment (review M3) > a percent-encoded ref: the address bar ends at the canonical URL and still carries #sec'; 'the canonical fix keeps the #fragment (review M3) > a directory reached without its slash: the address bar ends at the canonical URL and still carries #sec'; 'a linked worktree is followed to its owner by replace (spec 4.7, M4.R4, refinement (c)) > the canonical fix and the owner redirect carry #sec too (review M3)'"
- },
- {
-  "id": "W5P1-T9-M48",
-  "pkg": "pwa",
-  "file": "pwa/src/screens/DocsScreen.tsx",
-  "old": "    setTrail((t) => (t.next === null || t.next === here ? t : NO_TRAIL));",
-  "new": "    setTrail((t) => t);",
-  "tests": [
-   "test/docs-screen.test.tsx"
-  ],
-  "red": "pwa docs-screen.test.tsx: 1 failed | 65 passed (66) — 'a linked worktree is followed to its owner by replace (spec 4.7, M4.R4, refinement (c)) > a later, separate visit to a page that was redirected from is redirected again: the chain ends when the URL leaves it (review M2)'"
- },
- {
-  "id": "W5P1-T9-M49",
-  "pkg": "pwa",
-  "file": "pwa/src/screens/DocsScreen.tsx",
-  "old": "    if (viaOwner) setTrail((t) => ({ from: [...t.from, here], next: target }));",
-  "new": "    if (viaOwner) setTrail((t) => t);",
-  "tests": [
-   "test/docs-screen.test.tsx"
-  ],
-  "red": "pwa docs-screen.test.tsx: 1 failed | 65 passed (66) — 'a linked worktree is followed to its owner by replace (spec 4.7, M4.R4, refinement (c)) > two projects that name each other as owner end in a sentence, not in a loop (review M2)'"
- },
- {
-  "id": "W5P1-T9-M50",
-  "pkg": "pwa",
-  "file": "pwa/src/screens/DocsScreen.tsx",
-  "old": "  if (typeof owner !== 'string') return null;",
-  "new": "  if (owner === null) return null;",
-  "tests": [
-   "test/docs-screen.test.tsx"
-  ],
-  "red": "pwa docs-screen.test.tsx: 2 failed | 64 passed (66) — 'a linked worktree is followed to its owner by replace (spec 4.7, M4.R4, refinement (c)) > an owner ABSENT from a linked-worktree answer (not null) renders the sentence only: no navigation, no second GET (review M4)'; 'a linked worktree is followed to its owner by replace (spec 4.7, M4.R4, refinement (c)) > an owner ABSENT from a shared-repo answer (not null) renders the sentence only: no navigation, no second GET (review M4)'"
- },
- {
-  "id": "W5P1-T9-M51",
-  "pkg": "pwa",
-  "file": "shared/docs.ts",
-  "old": "    if (seen.has(k)) return { ok: false, why: 'repeated-param' };",
-  "new": "    if (false) return { ok: false, why: 'repeated-param' };",
-  "tests": [
-   "test/docs-screen.test.tsx"
-  ],
-  "red": "pwa docs-screen.test.tsx: 1 failed | 65 passed (66) — 'a repeated query key, on the screen (review M4) > ?ref=a&ref=b shows the repeated-param sentence and a link to the index, and asks for no tree'"
- },
- {
-  "id": "W5P1-T10-M10",
-  "pkg": "pwa",
-  "file": "pwa/src/docs/DocsHead.tsx",
-  "old": "{ n: Math.max(0, Math.ceil((until - now) / 1000)) }) };",
-  "new": "{ n: Math.max(0, Math.ceil(until / 1000)) }) };",
-  "tests": [
-   "test/docs-truth.test.tsx"
-  ],
-  "red": "pwa docs-truth: 5 failed | 89 passed (94) — 'fetch-too-soon'; 'an answered fetch-too-soon is the soon state, counted from its own retryAfterMs and answer time (no auto-retry)'; 'a visit that mounted 25 s ago and is answered fetch-too-soon (10 s) reads 10s, then 9s a second later'; 'measured end to end: mount, wait 25 s, tap, the answer says 10 s: the chip reads 10s, never 35s, then counts down'; 'a second fetch-too-soon in one visit is still soon (the one automatic retry is spent), and nothing retries again'"
- },
- {
-  "id": "W5P1-T10-M20",
-  "pkg": "pwa",
-  "file": "pwa/src/docs/DocsHead.tsx",
-  "old": "{(link.note === 'may-differ' || p.showsDraft) && <span className=\"docs-action-note\">{DOCS_HEAD_TEXT.githubMayDiffer}</span>}",
-  "new": "",
-  "tests": [
-   "test/docs-truth.test.tsx"
-  ],
-  "red": "pwa docs-truth: 2 failed | 92 passed (94) — 'a local side ahead of origin links with the may-differ note'; 'a leaf that shows draft bytes says GitHub may differ, whatever the ref relation > a draft leaf (the served ref equal to origin): link and note'"
- },
- {
-  "id": "W5P1-T10-M55",
-  "pkg": "pwa",
-  "file": "pwa/src/docs/DocsHead.tsx",
-  "old": "const now = until === null ? slow : Date.now();",
-  "new": "const now = slow;",
-  "tests": [
-   "test/docs-truth.test.tsx"
-  ],
-  "red": "pwa docs-truth: 4 failed | 90 passed (94) — 'an answered fetch-too-soon is the soon state, counted from its own retryAfterMs and answer time (no auto-retry)'; 'a visit that mounted 25 s ago and is answered fetch-too-soon (10 s) reads 10s, then 9s a second later'; 'measured end to end: mount, wait 25 s, tap, the answer says 10 s: the chip reads 10s, never 35s, then counts down'; 'a second fetch-too-soon in one visit is still soon (the one automatic retry is spent), and nothing retries again'"
- },
- {
-  "id": "W5P1-T10-M56",
-  "pkg": "pwa",
-  "file": "pwa/src/docs/DocsHead.tsx",
-  "old": "  useNow(1000, tree !== null && until !== null && Date.now() < until);\n",
-  "new": "",
-  "tests": [
-   "test/docs-truth.test.tsx"
-  ],
-  "red": "pwa docs-truth: 3 failed | 91 passed (94) — 'an answered fetch-too-soon is the soon state, counted from its own retryAfterMs and answer time (no auto-retry)'; 'a visit that mounted 25 s ago and is answered fetch-too-soon (10 s) reads 10s, then 9s a second later'; 'measured end to end: mount, wait 25 s, tap, the answer says 10 s: the chip reads 10s, never 35s, then counts down'"
- },
- {
-  "id": "W5P1-T10-M57",
-  "pkg": "pwa",
-  "file": "pwa/src/docs/DocsHead.tsx",
-  "old": "if (freshness.s === 'answered' && freshness.fetch.state === 'failed' && freshness.fetch.failure.failure === 'fetch-too-soon') {",
-  "new": "if (freshness.s === 'answered' && freshness.fetch.state === 'failed' && freshness.fetch.failure.failure === 'fetch-too-soon' && false) {",
-  "tests": [
-   "test/docs-truth.test.tsx"
-  ],
-  "red": "pwa docs-truth: 2 failed | 92 passed (94) — 'an answered fetch-too-soon is the soon state, counted from its own retryAfterMs and answer time (no auto-retry)'; 'a second fetch-too-soon in one visit is still soon (the one automatic retry is spent), and nothing retries again'"
- },
- {
-  "id": "W5P1-T10-M58",
-  "pkg": "pwa",
-  "file": "pwa/src/docs/DocsHead.tsx",
-  "old": "return freshness.at + (typeof after === 'number' && Number.isFinite(after) && after >= 0 ? after : 0);",
-  "new": "return freshness.at;",
-  "tests": [
-   "test/docs-truth.test.tsx"
-  ],
-  "red": "pwa docs-truth: 2 failed | 92 passed (94) — 'an answered fetch-too-soon is the soon state, counted from its own retryAfterMs and answer time (no auto-retry)'; 'a second fetch-too-soon in one visit is still soon (the one automatic retry is spent), and nothing retries again'"
- },
- {
-  "id": "W5P1-T10-M59",
-  "pkg": "pwa",
-  "file": "pwa/src/docs/DocsHead.tsx",
-  "old": "freshness.fetch.state === 'failed' && freshness.fetch.failure.failure === 'remote-branch-absent') {",
-  "new": "freshness.fetch.state === 'failed' && freshness.fetch.failure.failure === 'remote-branch-absent' && false) {",
-  "tests": [
-   "test/docs-truth.test.tsx"
-  ],
-  "red": "pwa docs-truth: 1 failed | 93 passed (94) — 'remote branch absent, answered this visit'"
- },
- {
-  "id": "W5P1-T10-M60",
-  "pkg": "pwa",
-  "file": "pwa/src/docs/DocsBanners.tsx",
-  "old": "file.answer.show.commit ?? (file.pin.kind === 'committed' ? file.pin.commit : null);",
-  "new": "file.answer.show.commit ?? tree.ref.commit;",
-  "tests": [
-   "test/docs-banners.test.tsx"
-  ],
-  "red": "pwa docs-banners: 2 failed | 30 passed (32) — 'an answer that names no commit falls back to the committed pin's own commit, never the tree's'; 'no commit anywhere (no answer commit, a draft pin): no banner rather than a guessed commit'"
- },
- {
-  "id": "W5P1-T10-M61",
-  "pkg": "pwa",
-  "file": "pwa/src/docs/DocsBanners.tsx",
-  "old": "const read = file.answer.show.commit ?? (file.pin.kind === 'committed' ? file.pin.commit : null);",
-  "new": "const read = tree.ref.commit;",
-  "tests": [
-   "test/docs-banners.test.tsx"
-  ],
-  "red": "pwa docs-banners: 3 failed | 29 passed (32) — 'not-contained warns, naming the short commit the page read and the served ref, with Re-list'; 'an answer that names no commit falls back to the committed pin's own commit, never the tree's'; 'no commit anywhere (no answer commit, a draft pin): no banner rather than a guessed commit'"
- },
- {
-  "id": "W5P1-T10-M62",
-  "pkg": "pwa",
-  "file": "pwa/src/docs/DocsHead.tsx",
-  "old": "(link.note === 'may-differ' || p.showsDraft) &&",
-  "new": "(link.note === 'may-differ') &&",
-  "tests": [
-   "test/docs-truth.test.tsx"
-  ],
-  "red": "pwa docs-truth: 1 failed | 93 passed (94) — 'a leaf that shows draft bytes says GitHub may differ, whatever the ref relation > a draft leaf (the served ref equal to origin): link and note'"
- },
- {
-  "id": "W5P1-T10-M63",
-  "pkg": "pwa",
-  "file": "pwa/src/docs/DocsHead.tsx",
-  "old": "openedPin(tree, page, file)?.kind === 'draft';",
-  "new": "openedPin(tree, page, file) !== null;",
-  "tests": [
-   "test/docs-truth.test.tsx"
-  ],
-  "red": "pwa docs-truth: 2 failed | 92 passed (94) — '/docs/demo/specs/d/x.md links https://github.com/example-org/example-repo/blob/main/docs/superpowers/specs/d/x.md and opens it with openExternal on tap'; 'the same leaf at view=committed, a withheld draft, and the default view show committed bytes: no note'"
- },
- {
-  "id": "W5P1-T10-M64",
-  "pkg": "pwa",
-  "file": "pwa/src/docs/DocsHead.tsx",
-  "old": "const showsDraft = page.kind === 'path' && openedPin(tree, page, file)?.kind === 'draft';",
-  "new": "const showsDraft = tree.drafts.state === 'holder';",
-  "tests": [
-   "test/docs-truth.test.tsx"
-  ],
-  "red": "pwa docs-truth: 6 failed | 88 passed (94) — '/docs/demo links https://github.com/example-org/example-repo/tree/main and opens it with openExternal on tap'; '/docs/demo/specs links https://github.com/example-org/example-repo/tree/main/docs/superpowers/specs and opens it with openExternal on tap'; '/docs/demo/specs/d/ links https://github.com/example-org/example-repo/tree/main/docs/superpowers/specs/d and opens it with openExternal on tap'; '/docs/demo/specs/d/x.md links https://github.com/example-org/example-repo/blob/main/docs/superpowers/specs/d/x.md and opens it with openExternal on tap'; 'a leaf that shows draft bytes says GitHub may differ, whatever the ref relation > the same leaf at view=committed, a withheld draft, and the default view show committed bytes: no note'; 'a leaf that shows draft bytes says GitHub may differ, whatever the ref relation > the opened pin decides, not the entry: a draft pin read for a project page shows no note'"
- },
- {
-  "id": "W5P1-T10-M65",
-  "pkg": "pwa",
-  "file": "pwa/src/docs/DocsHead.tsx",
-  "old": "<CopyCommit key={ref.commit} commit={ref.commit} />",
-  "new": "<CopyCommit commit={ref.commit} />",
-  "tests": [
-   "test/docs-truth.test.tsx"
-  ],
-  "red": "pwa docs-truth: 1 failed | 93 passed (94) — 'a re-list that moves the commit clears \"copied\": the next commit has not been copied'"
- },
- {
-  "id": "W5P1-T10-M66",
-  "pkg": "pwa",
-  "file": "pwa/src/docs/DocsHead.tsx",
-  "old": "formatAge(Math.floor(Math.max(0, now - freshness.at) / 1000));",
-  "new": "formatAge(Math.floor(Math.max(0, now - receivedAt) / 1000));",
-  "tests": [
-   "test/docs-truth.test.tsx"
-  ],
-  "red": "pwa docs-truth: 1 failed | 93 passed (94) — 'an answered fetch failure is aged from `at`, not from when the listing landed; the last good age from receivedAt'"
- },
- {
-  "id": "W5P1-T10-M67",
-  "pkg": "pwa",
-  "file": "pwa/src/docs/DocsBanners.tsx",
-  "old": "{ n, s: pluralS(n), label, branch: d.branch })}>",
-  "new": "{ n, s: pluralS(n), label, branch: tree.ref.name })}>",
-  "tests": [
-   "test/docs-banners.test.tsx"
-  ],
-  "red": "pwa docs-banners: 3 failed | 29 passed (32) — 'a holder on local main with 3 dirty docs: zero draft rows, and a hint (n = 3) linking ?ref=refs/heads/main'; 'a default-view leaf reads the committed pin; loaders.file never receives a DraftPin'; 'one draft says doc, not docs; no drafts, no hint'"
- },
- {
-  "id": "W5P1-T10-M68",
-  "pkg": "pwa",
-  "file": "pwa/src/docs/DocsBanners.tsx",
-  "old": "n, s: pluralS(n), label, branch: d.branch, short:",
-  "new": "n, s: pluralS(n), label, branch: tree.ref.name, short:",
-  "tests": [
-   "test/docs-banners.test.tsx"
-  ],
-  "red": "pwa docs-banners: 1 failed | 31 passed (32) — 'baseEqual false: the base hint linking refs/heads/<b>, and no overlay'"
- },
- {
-  "id": "W5P1-T10-M69",
-  "pkg": "pwa",
-  "file": "pwa/src/docs/DocsBanners.tsx",
-  "old": "parseDocsRef('refs/heads/' + d.branch);",
-  "new": "parseDocsRef('refs/heads/' + tree.ref.name);",
-  "tests": [
-   "test/docs-banners.test.tsx"
-  ],
-  "red": "pwa docs-banners: 2 failed | 30 passed (32) — 'a holder on local main with 3 dirty docs: zero draft rows, and a hint (n = 3) linking ?ref=refs/heads/main'; 'baseEqual false: the base hint linking refs/heads/<b>, and no overlay'"
- },
- {
-  "id": "W5P1-T11-M28",
-  "pkg": "pwa",
-  "file": "pwa/src/screens/FleetScreen.tsx",
-  "old": "          <button\n            type=\"button\"\n            className=\"docs-door\"\n            aria-label=\"Docs: specs, plans and design notes\"\n            onClick={() => navigate('/docs')}\n          >\n            <span className=\"docs-door-glyph\" aria-hidden=\"true\">📄</span>\n            Docs\n          </button>\n",
-  "new": "          {sessions.length === 0 && (\n          <button\n            type=\"button\"\n            className=\"docs-door\"\n            aria-label=\"Docs: specs, plans and design notes\"\n            onClick={() => navigate('/docs')}\n          >\n            <span className=\"docs-door-glyph\" aria-hidden=\"true\">📄</span>\n            Docs\n          </button>\n          )}\n",
-  "tests": [
-   "test/fleet-screen.test.tsx"
-  ],
-  "red": "pwa fleet-screen: 1 failed | 103 passed (104) — 'is still there, in the header cluster before the accounts door, with a session present'"
- },
- {
-  "id": "W5P1-T11-M29",
-  "pkg": "pwa",
-  "file": "pwa/src/docs/docs.css",
-  "old": "  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;\n}",
-  "new": "  overflow: hidden; white-space: nowrap;\n}",
-  "tests": [
-   "test/tap-targets.test.tsx"
-  ],
-  "red": "pwa tap-targets: 1 failed | 67 passed (68) — 'keep a long branch name on its own line: the hint truncates beside the word, the row label breaks (jsdom lays nothing out, so the declarations are pinned)'"
- },
- {
-  "id": "W5P1-T11-M30",
-  "pkg": "pwa",
-  "file": "pwa/src/docs/docs.css",
-  "old": "  flex: 0 1 auto; min-width: 0;\n",
-  "new": "  flex: none; min-width: 0;\n",
-  "tests": [
-   "test/tap-targets.test.tsx"
-  ],
-  "red": "pwa tap-targets: 1 failed | 67 passed (68) — 'keep a long branch name on its own line: the hint truncates beside the word, the row label breaks (jsdom lays nothing out, so the declarations are pinned)'"
- },
- {
-  "id": "W5P1-T11-M31",
-  "pkg": "pwa",
-  "file": "pwa/src/docs/docs.css",
-  "old": ".docs-session-row { min-width: 0; overflow-wrap: anywhere; }",
-  "new": ".docs-session-row { min-width: 0; }",
-  "tests": [
-   "test/tap-targets.test.tsx"
-  ],
-  "red": "pwa tap-targets: 1 failed | 67 passed (68) — 'keep a long branch name on its own line: the hint truncates beside the word, the row label breaks (jsdom lays nothing out, so the declarations are pinned)'"
- },
- {
-  "id": "W5P1-T11-M32",
-  "pkg": "pwa",
-  "file": "pwa/src/docs/docs.css",
-  "old": ".docs-session-row { min-width: 0; overflow-wrap: anywhere; }",
-  "new": ".docs-session-row { min-width: 0; overflow-wrap: anywhere; min-height: 20px; }",
-  "tests": [
-   "test/tap-targets.test.tsx"
-  ],
-  "red": "pwa tap-targets: 1 failed | 67 passed (68) — 'ride the shared rules’ floors: .btn-ghost on the token, .menu-item at or above it'"
- },
- {
-  "id": "W5P1-T11-M33",
-  "pkg": "pwa",
-  "file": "pwa/src/docs/docs.css",
-  "old": "  flex: 0 1 auto; min-width: 0;\n",
-  "new": "  flex: 0 1 auto; min-width: 0; min-height: 20px;\n",
-  "tests": [
-   "test/tap-targets.test.tsx"
-  ],
-  "red": "pwa tap-targets: 1 failed | 67 passed (68) — 'ride the shared rules’ floors: .btn-ghost on the token, .menu-item at or above it'"
- },
- {
-  "id": "W5P1-T11-M34",
-  "pkg": "pwa",
-  "file": "pwa/src/docs/docs.css",
-  "old": ".docs-session-row { min-width: 0; overflow-wrap: anywhere; }",
-  "new": "",
-  "tests": [
-   "test/tap-targets.test.tsx"
-  ],
-  "red": "pwa tap-targets: 1 failed | 67 passed (68) — 'keep a long branch name on its own line: the hint truncates beside the word, the row label breaks (jsdom lays nothing out, so the declarations are pinned)'"
- },
- {
-  "id": "W5P1-T12-M17",
-  "pkg": "pwa",
-  "file": "shared/docs.ts",
-  "old": "  'cross-origin-resource-policy': 'same-origin',\n",
-  "new": "  'cross-origin-resource-policy': 'cross-origin',\n",
-  "tests": [
-   "--config",
-   "vitest.browser.config.ts"
-  ],
-  "red": "pwa browser leg (--config vitest.browser.config.ts, CCRC_CHROME = Chrome for Testing 153.0.8010.12): 2 failed | 11 passed (13) — 'pages on B (same site) and C (another site) <img> a docs raster: naturalWidth 0 on both, though the request arrives'; 'control: CORP same-site in place of same-origin draws the raster on B (same site), width 1, and not on C; same-origin is what keeps B out'"
- },
- {
-  "id": "W5P1-T12-M20",
-  "pkg": "pwa",
-  "file": "pwa/browser/docs-headers.browser.test.ts",
-  "old": "  '/b5/data-img': () => htmlPage(`<img id=\"i\" alt=\"d\" src=\"${svgDataUrl(utf8(hostileSvg('b5')))}\">`),\n",
-  "new": "  '/b5/data-img': () => htmlPage(`<object id=\"i\" type=\"image/svg+xml\" data=\"${svgDataUrl(utf8(hostileSvg('b5')))}\"></object>`),\n",
-  "tests": [
-   "--config",
-   "vitest.browser.config.ts"
-  ],
-  "red": "pwa browser leg (--config vitest.browser.config.ts, CCRC_CHROME = Chrome for Testing 153.0.8010.12): 1 failed | 12 passed (13) — 'the page on A draws the SVG; no script runs (no marker request, no console line) and no request leaves the page'"
- },
- {
-  "id": "W5P1-T12-M21",
-  "pkg": "pwa",
-  "file": "shared/docs.ts",
-  "old": "  'cross-origin-resource-policy': 'same-origin',\n",
-  "new": "  'cross-origin-resource-policy': 'same-site',\n",
-  "tests": [
-   "--config",
-   "vitest.browser.config.ts"
-  ],
-  "red": "pwa browser leg (--config vitest.browser.config.ts, CCRC_CHROME = Chrome for Testing 153.0.8010.12): 2 failed | 11 passed (13) — 'pages on B (same site) and C (another site) <img> a docs raster: naturalWidth 0 on both, though the request arrives'; 'control: CORP same-site in place of same-origin draws the raster on B (same site), width 1, and not on C; same-origin is what keeps B out'"
- },
- {
-  "id": "W5P1-T12-M22",
-  "pkg": "pwa",
-  "file": "pwa/browser/docs-headers.browser.test.ts",
-  "old": "`fetch('${o.a}/marker/${tag}-${how}');console.log('${MARK} ${tag}-${how}')`;\n",
-  "new": "`setTimeout(() => { fetch('${o.a}/marker/${tag}-${how}');console.log('${MARK} ${tag}-${how}') }, 3000)`;\n",
-  "tests": [
-   "--config",
-   "vitest.browser.config.ts"
-  ],
-  "red": "pwa browser leg (--config vitest.browser.config.ts, CCRC_CHROME = Chrome for Testing 153.0.8010.12): 2 failed | 11 passed (13) — 'control: the same SVG as a top-level blob:image/svg+xml runs as A, and its fetch carries A's cookie'; 'control: the same body labelled image/svg+xml with no docs headers runs its script, within the settle window'"
- },
- {
-  "id": "W5P1-T12-M23",
-  "pkg": "pwa",
-  "file": "shared/docs.ts",
-  "old": "export const DOCS_RESPONSE_CSP = \"default-src 'none'; img-src data:; style-src 'unsafe-inline'; sandbox; frame-ancestors 'none'\";\n",
-  "new": "export const DOCS_RESPONSE_CSP = \"default-src * 'unsafe-inline'\";\n",
-  "tests": [
-   "--config",
-   "vitest.browser.config.ts"
-  ],
-  "red": "pwa browser leg (--config vitest.browser.config.ts, CCRC_CHROME = Chrome for Testing 153.0.8010.12): 1 failed | 12 passed (13) — 'one variable: the same body labelled image/svg+xml WITH every docs header is inert (the CSP alone stops it)' (CSP replaced by one allowing inline script and any fetch)"
- },
- {
-  "id": "W5P1-T2-M31",
-  "pkg": "pwa",
-  "file": "pwa/src/docs/DocsFailureView.tsx",
-  "old": "            <li key={i}><code>{t.ref}</code> {Object.hasOwn(TRIED_RESULT_TEXT, t.result) ? TRIED_RESULT_TEXT[t.result] : t.result}</li>",
-  "new": "            <li key={i}>{Object.hasOwn(TRIED_RESULT_TEXT, t.result) ? TRIED_RESULT_TEXT[t.result] : t.result}</li>",
-  "tests": [
-   "test/docs-failures.test.tsx"
-  ],
-  "red": "pwa docs-failures: 2 failed | 142 passed (144) — 'unresolved-ref shows what was tried, the suggestion as a link, the tag hint and Fetch from origin'; 'a tried result that is an Object.prototype key renders as the literal word, never a function'"
- },
- {
-  "id": "W5P1-T3-M3",
-  "pkg": "pwa",
-  "file": "pwa/src/lib/markdown.tsx",
-  "old": " || c === 0x5f || c === 0x24 || c >= 0x7f) {",
-  "new": " || c === 0x5f || c >= 0x7f) {",
-  "tests": [
-   "test/markdown-bounds.test.tsx"
-  ],
-  "red": "pwa markdown-bounds: 1 failed | 33 passed (34) — 'longestWordRun counts letters, digits, _, $ and every code unit from 0x7f up, in one pass'"
- },
- {
-  "id": "W5P1-T3-M4",
-  "pkg": "pwa",
-  "file": "pwa/src/lib/markdown.tsx",
-  "old": "            : overWord ? `${label} · not highlighted (a ${word}-character word)`\n",
-  "new": "",
-  "tests": [
-   "test/markdown-bounds.test.tsx"
-  ],
-  "red": "pwa markdown-bounds: 6 failed | 28 passed (34) — 'a ts fence holding a 257-character identifier is not highlighted and says why; 256 is highlighted'; 'a 32 KiB one-identifier ts fence through SHARED_COMPONENTS never reaches highlight.js'; 'the same fence through chat's worker path (ChatMarkdown, injected parser) never reaches highlight.js'; 'a php fence of 257 `_é` units (a 514-character run) is not highlighted and says why'; 'a run of 256 code units that holds non-ASCII units still highlights; 257 does not'; 'a block that trips both bounds is labelled by its word: the word bound is checked first'"
- },
- {
-  "id": "W5P1-T6-M15",
-  "pkg": "pwa",
-  "file": "pwa/src/docs/DocLink.tsx",
-  "old": "          if (t.fragment !== null) ctx.onFragment(t.fragment, t.href);",
-  "new": "",
-  "tests": [
-   "test/docs-links.test.tsx"
-  ],
-  "red": "pwa docs-links: 1 failed | 47 passed (48) — 'a cross-doc fragment: the href carries #part-2, a plain click navigates without it and hands it to onFragment'"
- },
- {
-  "id": "W5P1-T13-M1",
-  "pkg": "pwa",
-  "file": "pwa/src/docs/useDocsVisit.ts",
-  "old": "takeAutoRetry('relist', page, '')",
-  "new": "takeAutoRetry('file', fKey, word)",
-  "tests": [
-   "test/docs-visit.test.tsx"
-  ],
-  "red": "pwa docs-visit: 1 failed | 57 passed (58) — 'a draft whose fingerprint moves on every listing re-lists once and then shows changing'"
- },
- {
-  "id": "W5P1-T13-M2",
-  "pkg": "pwa",
-  "file": "pwa/src/docs/useDocsVisit.ts",
-  "old": "      autoRetried.current.delete(autoRetryId('relist', page, ''));\n",
-  "new": "",
-  "tests": [
-   "test/docs-visit.test.tsx"
-  ],
-  "red": "pwa docs-visit: 1 failed | 57 passed (58) — 'a read that succeeded re-arms the page: its next move gets its own automatic re-list'"
- },
- {
-  "id": "W5P1-T13-M3",
-  "pkg": "pwa",
-  "file": "pwa/src/docs/useDocsVisit.ts",
-  "old": "if (st.trees.get(key) === a && isCurrentKey(key)) listTree(target);",
-  "new": "if (isCurrentKey(key)) listTree(target);",
-  "tests": [
-   "test/docs-visit.test.tsx"
-  ],
-  "red": "pwa docs-visit: 1 failed | 57 passed (58) — 'a manual Retry that answered ok at 1 s leaves the 5 s timer nothing to list'"
- },
- {
-  "id": "W5P1-T13-M4",
-  "pkg": "pwa",
-  "file": "pwa/src/docs/useDocsVisit.ts",
-  "old": "if (f.s === 'refresh-failed' && f.answer.s === 'auth') st.freshness.set(key, { s: 'idle' });",
-  "new": "if (f.s === 'refresh-failed' && f.answer.s !== 'auth') st.freshness.set(key, { s: 'idle' });",
-  "tests": [
-   "test/docs-refresh.test.tsx"
-  ],
-  "red": "pwa docs-refresh: 2 failed | 39 passed (41) — 'a refresh POST that answered auth no longer shows refresh-failed once the sign-in is back, and does not POST again'; 'a refresh that failed for another reason keeps its chip through a sign-in'"
- },
- {
-  "id": "W5P1-T13-M5",
-  "pkg": "pwa",
-  "file": "pwa/src/docs/useDocsVisit.ts",
-  "old": "if (st.freshness.get(key)?.s === 'fetching') {",
-  "new": "if (st.freshness.get(key)?.s === 'fetching' && st.alive) {",
-  "tests": [
-   "test/docs-refresh.test.tsx"
-  ],
-  "red": "pwa docs-refresh: 2 failed | 39 passed (41) — 'the answer is dropped and a screen shown again reads idle, not fetching'; 'a manual refresh dropped the same way gives the chip back what it showed before'"
- },
- {
-  "id": "W5P1-T5-M41",
-  "pkg": "pwa",
-  "file": "pwa/src/docs/useDocsVisit.ts",
-  "old": "          if (st.trees.get(key) === a && isCurrentKey(key)) listTree(target);",
-  "new": "          if (st.trees.get(key) === a) listTree(target);",
-  "tests": [
-   "test/docs-visit.test.tsx"
-  ],
-  "red": "pwa docs-visit: 1 failed | 57 passed (58) — 'a tree retry set for a page the user then left makes no GET'"
- },
- {
-  "id": "W5P1-T5-M48",
-  "pkg": "pwa",
-  "file": "pwa/src/docs/useDocsVisit.ts",
-  "old": "    void loadersRef.current.refresh(target.project, body).then((a) => {\n      st.refreshInflight.delete(key);\n      if (!st.alive) {\n        // The answer is dropped, so the chip must not stay `fetching` for a screen shown again: it goes back to what it\n        // showed before this POST (the default when it showed nothing).\n        if (st.freshness.get(key)?.s === 'fetching') {\n          if (before === undefined) st.freshness.delete(key);\n          else st.freshness.set(key, before);\n        }\n        return;\n      }\n      // Numbered when it ARRIVES: the route read its tree after its fetch, so it is newer than any GET that\n      // started before this answer, however early the POST began.\n      applyRefresh(target, key, reason, nextSeq(), a);",
-  "new": "    const startSeq = nextSeq();\n    void loadersRef.current.refresh(target.project, body).then((a) => {\n      st.refreshInflight.delete(key);\n      if (!st.alive) {\n        // The answer is dropped, so the chip must not stay `fetching` for a screen shown again: it goes back to what it\n        // showed before this POST (the default when it showed nothing).\n        if (st.freshness.get(key)?.s === 'fetching') {\n          if (before === undefined) st.freshness.delete(key);\n          else st.freshness.set(key, before);\n        }\n        return;\n      }\n      // Numbered when it ARRIVES: the route read its tree after its fetch, so it is newer than any GET that\n      // started before this answer, however early the POST began.\n      applyRefresh(target, key, reason, startSeq, a);",
-  "tests": [
-   "test/docs-refresh.test.tsx"
-  ],
-  "red": "pwa docs-refresh: 1 failed | 40 passed (41) — 'a GET that starts after the POST began and lands before it does not stop the POST's newer tree from landing'"
- },
- {
-  "id": "W5P1-T13-M6",
-  "pkg": "pwa",
-  "file": "pwa/src/docs/DocsLeaf.tsx",
-  "old": "          body = <MarkdownBody show={show} bodyKey={bodyKeyOf(file.pin, show, pinKey)} link={link} parser={parser} />;",
-  "new": "          body = <MarkdownBody show={show} bodyKey={pin.kind === 'draft' ? bodyKeyOf(file.pin, show, pinKey) : docsApi.file(page.project, pin)} link={link} parser={parser} />;",
-  "tests": [
-   "test/docs-screen.test.tsx"
-  ],
-  "red": "pwa docs-screen: 1 failed | 74 passed (75) — 'same blob at a new commit: the same h1 node survives, the parser is called once, and no second read is made'"
- },
- {
-  "id": "W5P1-T9-M40",
-  "pkg": "pwa",
-  "file": "pwa/src/docs/DocsLeaf.tsx",
-  "old": "  return <DocMarkdown key={p.bodyKey} text=",
-  "new": "  return <DocMarkdown text=",
-  "tests": [
-   "test/docs-screen.test.tsx"
-  ],
-  "red": "pwa docs-screen: 1 failed | 74 passed (75) — 'a re-list that moves a draft past the render gate asks first, instead of formatting on the old choice'"
- },
- {
-  "id": "W5P1-T13-M7",
-  "pkg": "pwa",
-  "file": "pwa/src/docs/DocsLeaf.tsx",
-  "old": "<DocInLinkContext value={true}><DocImage node={node} alt={p.name} />",
-  "new": "<DocInLinkContext value={false}><DocImage node={node} alt={p.name} />",
-  "tests": [
-   "test/docs-screen.test.tsx"
-  ],
-  "red": "pwa docs-screen: 3 failed | 72 passed (75) — 'tapping it pushes no history entry and leaves the URL as it was'; 'on view=committed the tap keeps the view and reads no draft'; 'renders no doc-img-link button, only the img'"
- },
- {
-  "id": "W5P1-T13-M8",
-  "pkg": "pwa",
-  "file": "pwa/src/docs/DocsLeaf.tsx",
-  "old": "{ ...assets, onDraftAsset: IGNORE_DRAFT_ASSET }",
-  "new": "{ ...assets }",
-  "tests": [
-   "test/docs-screen.test.tsx"
-  ],
-  "red": "pwa docs-screen: 1 failed | 74 passed (75) — 'data-draft-assets stays 0 and no draft-assets banner is drawn'"
- },
- {
-  "id": "W5P1-T13-M9",
-  "pkg": "pwa",
-  "file": "pwa/src/screens/DocsScreen.tsx",
-  "old": "    if (plan.kind !== 'auto') return undefined;",
-  "new": "    return undefined;",
-  "tests": [
-   "test/docs-screen.test.tsx"
-  ],
-  "red": "pwa docs-screen: 2 failed | 73 passed (75) — 'docs-busy with retryAfterMs: one more GET after that wait, a second busy answer shows Retry and no third GET'; 'leaving the screen before the wait ends cancels the retry'"
- },
- {
-  "id": "W5P1-T13-M10",
-  "pkg": "pwa",
-  "file": "pwa/src/screens/DocsScreen.tsx",
-  "old": "      indexRetried.current = true;\n",
-  "new": "",
-  "tests": [
-   "test/docs-screen.test.tsx"
-  ],
-  "red": "pwa docs-screen: 1 failed | 74 passed (75) — 'docs-busy with retryAfterMs: one more GET after that wait, a second busy answer shows Retry and no third GET'"
- },
- {
-  "id": "W5P1-T13-M11",
-  "pkg": "pwa",
-  "file": "pwa/src/screens/DocsScreen.tsx",
-  "old": "    return () => clearTimeout(t);",
-  "new": "    return undefined;",
-  "tests": [
-   "test/docs-screen.test.tsx"
-  ],
-  "red": "pwa docs-screen: 1 failed | 74 passed (75) — 'leaving the screen before the wait ends cancels the retry'"
- },
- {
-  "id": "W5P1-T13-M12",
-  "pkg": "pwa",
-  "file": "pwa/src/docs/DocsFailureView.tsx",
-  "old": "disabled={p.fetching === true} ",
-  "new": "",
-  "tests": [
-   "test/docs-screen.test.tsx"
-  ],
-  "red": "pwa docs-screen: 1 failed | 74 passed (75) — 'the button is disabled and the page says fetching while the POST runs, then the fetch failure sentence'"
- },
- {
-  "id": "W5P1-T13-M13",
-  "pkg": "pwa",
-  "file": "pwa/src/screens/DocsScreen.tsx",
-  "old": "      return { state: 'fetching', text: DOCS_HEAD_TEXT.freshFetching };",
-  "new": "      return null;",
-  "tests": [
-   "test/docs-screen.test.tsx"
-  ],
-  "red": "pwa docs-screen: 1 failed | 74 passed (75) — 'the button is disabled and the page says fetching while the POST runs, then the fetch failure sentence'"
- },
- {
-  "id": "W5P1-T13-M14",
-  "pkg": "pwa",
-  "file": "pwa/src/screens/DocsScreen.tsx",
-  "old": "          : { state: 'failed', text: failureSentence(f.failure) };",
-  "new": "          : null;",
-  "tests": [
-   "test/docs-screen.test.tsx"
-  ],
-  "red": "pwa docs-screen: 1 failed | 74 passed (75) — 'the button is disabled and the page says fetching while the POST runs, then the fetch failure sentence'"
- },
- {
-  "id": "W5P1-T13-M15",
-  "pkg": "pwa",
-  "file": "pwa/src/docs/DocImage.tsx",
-  "old": "const action = inLink ? null : plan.action;",
-  "new": "const action = plan.action;",
-  "tests": [
-   "test/docs-images.test.tsx"
-  ],
-  "red": "pwa docs-images: 1 failed | 73 passed (74) — 'a refused external image in an in-app link offers no second action: the tap is the link alone'"
- },
- {
-  "id": "W5P1-T13-M16",
-  "pkg": "pwa",
-  "file": "pwa/src/docs/DocImage.tsx",
-  "old": "  if (inLink) {",
-  "new": "  if (false) {",
-  "tests": [
-   "test/docs-images.test.tsx"
-  ],
-  "red": "pwa docs-images: 2 failed | 72 passed (74) — 'a loaded image in an in-app link: one tap is the link alone, and no button sits inside the anchor'; 'a loaded image in an external link: one tap opens the link once and goes nowhere in-app'"
- },
- {
-  "id": "W5P1-T13-M17",
-  "pkg": "pwa",
-  "file": "pwa/src/docs/DocImage.tsx",
-  "old": "          e.stopPropagation();\n",
-  "new": "",
-  "tests": [
-   "test/docs-images.test.tsx"
-  ],
-  "red": "pwa docs-images: 1 failed | 73 passed (74) — 'Load image in a link loads the image and does not follow the link'"
- },
- {
-  "id": "W5P1-T13-M18",
-  "pkg": "pwa",
-  "file": "pwa/src/docs/DocImage.tsx",
-  "old": "c.shown.s === 'failed' && c.shown.auth) {",
-  "new": "c.shown.s === 'failed' && c.shown.auth && false) {",
-  "tests": [
-   "test/docs-images.test.tsx"
-  ],
-  "red": "pwa docs-images: 1 failed | 73 passed (74) — 'a raster that answered auth is asked for once more on clearAuthLost, and then shows'"
- },
- {
-  "id": "W5P1-T13-M19",
-  "pkg": "pwa",
-  "file": "pwa/src/docs/DocImage.tsx",
-  "old": "  useEffect(() => onAuthRegained(() => {\n    const c = current.current;\n    if (c.key !== null && c.shown !== null && c.shown.s === 'failed' && c.shown.auth) {\n      setDone(null); // Loading again, not the old sentence\n      setAttempt((n) => n + 1);\n    }\n  }), []);",
-  "new": "  useEffect(() => { void onAuthRegained(() => {\n    const c = current.current;\n    if (c.key !== null && c.shown !== null && c.shown.s === 'failed' && c.shown.auth) {\n      setDone(null); // Loading again, not the old sentence\n      setAttempt((n) => n + 1);\n    }\n  }); }, []);",
-  "tests": [
-   "test/docs-images.test.tsx"
-  ],
-  "red": "pwa docs-images: 1 failed | 73 passed (74) — 'an unmounted image no longer listens: its subscription is gone, and sign-in after unmount loads nothing'"
- },
- {
-  "id": "W5P1-T13-M20",
-  "pkg": "pwa",
-  "file": "pwa/src/lib/markdown.tsx",
-  "old": "  const refusedOverCap = registered && !wanted && raw.length > MD_HIGHLIGHT_BLOCK_MAX_CHARS;",
-  "new": "  const refusedOverCap = false;",
-  "tests": [
-   "test/markdown-bounds.test.tsx"
-  ],
-  "red": "pwa markdown-bounds: 2 failed | 35 passed (37) — 'highlight={false} over the cap reads \"{label} · not highlighted ({KiB} KiB)\", with no scan and no colour'; 'a refused block is never scanned for a word or a line, however long either is'"
- },
- {
-  "id": "W5P1-T13-M21",
-  "pkg": "pwa",
-  "file": "pwa/src/lib/markdownParse.ts",
-  "old": "const DOCS_BR = /^<br(?: ?\\/)?>$/;",
-  "new": "const DOCS_BR = /^\\s*<br(?: ?\\/)?>\\s*$/;",
-  "tests": [
-   "test/markdown-parse.test.ts"
-  ],
-  "red": "pwa markdown-parse: 3 failed | 36 passed (39) — 'whitespace on both sides, a paragraph after stays literal text in the docs profile, with no br element'; 'leading whitespace only stays literal text in the docs profile, with no br element'; 'trailing whitespace, a paragraph after stays literal text in the docs profile, with no br element'"
- },
- {
-  "id": "W5P1-T13-M22",
-  "pkg": "pwa",
-  "file": "pwa/src/docs/DocMarkdown.tsx",
-  "old": "parseMarkdown(p.text, 'docs')",
-  "new": "parseMarkdown(p.text, 'chat')",
-  "tests": [
-   "test/docs-markdown.test.tsx"
-  ],
-  "red": "pwa docs-markdown: 1 failed | 47 passed (48) — 'a small text with a <br>, with no Worker, draws a br element and no literal \"<br>\"'"
- },
- {
-  "id": "W5P1-T13-M23",
-  "pkg": "pwa",
-  "file": "pwa/src/docs/DocsHead.tsx",
-  "old": "const localLead = c === null ? null : ref.side === 'origin' ? c.behind : c.ahead;",
-  "new": "const localLead = c === null ? null : c.ahead;",
-  "tests": [
-   "test/docs-truth.test.tsx"
-  ],
-  "red": "pwa docs-truth: 3 failed | 98 passed (101) — 'local-ahead with origin served and counts { ahead: +0, behind: 2 } reads local is 2 ahead of origin'; 'diverged with origin served and counts { ahead: 3, behind: 2 } reads local and origin have diverged (2 vs 3), showing local'; 'an unmeasured count stays out of the sentence on either side'"
- },
- {
-  "id": "W5P1-T13-M24",
-  "pkg": "pwa",
-  "file": "pwa/src/docs/DocsHead.tsx",
-  "old": "const originLead = c === null ? null : ref.side === 'origin' ? c.ahead : c.behind;",
-  "new": "const originLead = c === null ? null : c.behind;",
-  "tests": [
-   "test/docs-truth.test.tsx"
-  ],
-  "red": "pwa docs-truth: 3 failed | 98 passed (101) — 'via origin (origin served) with relation local-behind and counts { ahead: 3, behind: +0 }: the via sentence (you asked for ws/a, showing origin's), then the relation (origin is 3 ahead of local; tone info)'; 'local-behind with origin served and counts { ahead: 3, behind: +0 } reads origin is 3 ahead of local'; 'diverged with origin served and counts { ahead: 3, behind: 2 } reads local and origin have diverged (2 vs 3), showing local'"
- },
- {
-  "id": "W5P1-T13-M25",
-  "pkg": "pwa",
-  "file": "pwa/src/docs/DocsBanners.tsx",
-  "old": "const n = tree.entries.filter((e) => e.draft !== null).length;",
-  "new": "const n = tree.entries.filter((e) => { const dr = e.draft; return dr !== null && dr.state !== 'deleted'; }).length;",
-  "tests": [
-   "test/docs-banners.test.tsx"
-  ],
-  "red": "pwa docs-banners: 2 failed | 32 passed (34) — 'a tree whose drafts include a deletion counts it in n'; 'a tree whose ONLY draft is a deletion still shows the banner, with n = 1'"
- },
- {
-  "id": "W5P1-T13-M26",
-  "pkg": "pwa",
-  "file": "pwa/src/docs/docsText.ts",
-  "old": "'unresolved-ref': 'No branch by that name was found.',",
-  "new": "'unresolved-ref': 'No branch by that name was found, locally or on origin.',",
-  "tests": [
-   "test/docs-failures.test.tsx"
-  ],
-  "red": "pwa docs-failures: 1 failed | 144 passed (145) — 'the sentence claims neither side, stays a sentence, and the one tried ref is listed under it'"
- },
- {
-  "id": "W5P1-T13-M27",
-  "pkg": "pwa",
-  "file": "pwa/src/docs/docsLinks.ts",
-  "old": "return link.ok ? { kind: 'github', href: link.url, note: link.note } : inert(link.why);",
-  "new": "return link.ok ? { kind: 'github', href: link.url, note: null } : inert(link.why);",
-  "tests": [
-   "test/docs-links.test.tsx"
-  ],
-  "red": "pwa docs-links: 4 failed | 50 passed (54) — 'a local page that is local-ahead has the target note and the same may-differ caution on its mark'; 'a local page that is local-behind has the target note and the same may-differ caution on its mark'; 'a local page that is diverged has the target note and the same may-differ caution on its mark'; 'a local page that is unmeasured has the target note and the same may-differ caution on its mark'"
- },
- {
-  "id": "W5P1-T13-M28",
-  "pkg": "pwa",
-  "file": "pwa/src/docs/DocLink.tsx",
-  "old": "title={t.note === 'may-differ' ? DOCS_HEAD_TEXT.githubMayDiffer : undefined}",
-  "new": "title={undefined}",
-  "tests": [
-   "test/docs-links.test.tsx"
-  ],
-  "red": "pwa docs-links: 4 failed | 50 passed (54) — 'a local page that is local-ahead has the target note and the same may-differ caution on its mark'; 'a local page that is local-behind has the target note and the same may-differ caution on its mark'; 'a local page that is diverged has the target note and the same may-differ caution on its mark'; 'a local page that is unmeasured has the target note and the same may-differ caution on its mark'"
- },
- {
-  "id": "W5P1-T6-M22",
-  "pkg": "pwa",
-  "file": "pwa/src/docs/docsLinks.ts",
-  "old": "      return link.ok ? { kind: 'github', href: link.url, note: link.note } : inert(link.why);",
-  "new": "      return inert('no-github-origin');",
-  "tests": [
-   "test/docs-links.test.tsx"
-  ],
-  "red": "pwa docs-links: 8 failed | 46 passed (54) — '[r](../../../README.md) is a GitHub link built by githubBlobUrl, with the trailing mark, opened on tap'; 'detached and rendered with DocLink: no src anywhere, and every href is an a DocLink built'; 'a local page that is local-ahead has the target note and the same may-differ caution on its mark'; 'a local page that is local-behind has the target note and the same may-differ caution on its mark'; 'a local page that is diverged has the target note and the same may-differ caution on its mark'; 'a local page that is unmeasured has the target note and the same may-differ caution on its mark'; 'a local page whose relation is equal carries no caution'; 'a origin page whose relation is local-behind carries no caution'"
- },
- {
-  "id": "W5P1-T13-M29",
-  "pkg": "pwa",
-  "file": "pwa/src/app.tsx",
-  "old": "const docs = new RegExp('^/docs(?:/|$)').test(path);",
-  "new": "const docs = new RegExp('^/docs\\\\b').test(path);",
-  "tests": [
-   "test/app.test.tsx"
-  ],
-  "red": "pwa app: 2 failed | 21 passed (23) — '/docs-x renders the placeholder and data-view stays fleet'; '/docs.md renders the placeholder and data-view stays fleet'"
- },
- {
-  "id": "W5P1-T13-M30",
-  "pkg": "pwa",
-  "file": "pwa/src/session/SessionHeader.tsx",
-  "old": "        <div className=\"menu\">\n          <button type=\"button\" className=\"menu-item\" onClick={() => menuAct(onChangeModel)}>\n            <span className=\"menu-label\">Change model</span>\n            <span className=\"menu-hint\" aria-hidden=\"true\">\n              /model\n            </span>\n          </button>\n          <button type=\"button\" className=\"menu-item\" onClick={() => menuAct(onChangeEffort)}>\n            <span className=\"menu-label\">Change effort</span>\n            <span className=\"menu-hint\" aria-hidden=\"true\">\n              /effort\n            </span>\n          </button>\n          <button type=\"button\" className=\"menu-item\" onClick={() => menuAct(onOpenHistory)}>\n            <span className=\"menu-label\">History</span>\n            <span className=\"menu-hint\" aria-hidden=\"true\">\n              journal\n            </span>\n          </button>\n          {docsLink !== null && (\n            <button type=\"button\" className=\"menu-item docs-menu-item\" onClick={() => menuAct(() => navigate(docsLink.href))}>\n              <span className=\"menu-label\">Docs</span>\n              <span className=\"menu-hint\" aria-hidden=\"true\">{docsLink.branch ?? 'default'}</span>\n            </button>\n          )}",
-  "new": "        <div className=\"menu\">\n          {docsLink !== null && (\n            <button type=\"button\" className=\"menu-item docs-menu-item\" onClick={() => menuAct(() => navigate(docsLink.href))}>\n              <span className=\"menu-label\">Docs</span>\n              <span className=\"menu-hint\" aria-hidden=\"true\">{docsLink.branch ?? 'default'}</span>\n            </button>\n          )}\n          <button type=\"button\" className=\"menu-item\" onClick={() => menuAct(onChangeModel)}>\n            <span className=\"menu-label\">Change model</span>\n            <span className=\"menu-hint\" aria-hidden=\"true\">\n              /model\n            </span>\n          </button>\n          <button type=\"button\" className=\"menu-item\" onClick={() => menuAct(onChangeEffort)}>\n            <span className=\"menu-label\">Change effort</span>\n            <span className=\"menu-hint\" aria-hidden=\"true\">\n              /effort\n            </span>\n          </button>\n          <button type=\"button\" className=\"menu-item\" onClick={() => menuAct(onOpenHistory)}>\n            <span className=\"menu-label\">History</span>\n            <span className=\"menu-hint\" aria-hidden=\"true\">\n              journal\n            </span>\n          </button>",
-  "tests": [
-   "test/session-docs-link.test.tsx"
-  ],
-  "red": "pwa session-docs-link: 1 failed | 26 passed (27) — 'the Docs item is History’s next sibling in the menu, and nothing sits between them'"
- },
- {
-  "id": "W5P1-T13-M31",
-  "pkg": "server",
-  "file": "server/test/single-definition.test.ts",
-  "old": "    new RegExp(`^\\\\s*(?:(?:export|default|declare|async)\\\\s+)*(?:function(?:\\\\s*\\\\*\\\\s*|\\\\s+)${name}\\\\b|(?:const|let|var)\\\\s+${name}\\\\b)`, 'm');",
-  "new": "    new RegExp(`^\\\\s*(?:export\\\\s+)?(?:function\\\\s+${name}\\\\b|(?:const|let|var)\\\\s+${name}\\\\b)`, 'm');",
-  "tests": [
-   "test/single-definition.test.ts"
-  ],
-  "red": "server single-definition: 1 failed | 543 passed (544) — 'CONTROL: the function pattern sees an async, a default, a declare-d and a generator copy'"
- },
- {
-  "id": "W5P1-T5-M9",
-  "pkg": "pwa",
-  "file": "pwa/src/docs/useDocsVisit.ts",
-  "old": "  return [scope, key, word].join(NUL);",
-  "new": "  return [scope, key].join(NUL);",
-  "tests": [
-   "test/docs-visit.test.tsx"
-  ],
-  "red": "pwa docs-visit: 1 failed | 57 passed (58) — 'the bookkeeping is per word: a second word gets its own one retry, a repeated one none'"
- },
- {
-  "id": "W5P1-T7-M11",
-  "pkg": "pwa",
-  "file": "pwa/src/docs/DocImage.tsx",
-  "old": "  return { s: 'failed', sentence: a.s === 'failed' ? failureSentence(a.body) : slotSentence(a), auth: a.s === 'auth' };",
-  "new": "  return { s: 'failed', sentence: a.s === 'failed' ? failureSentence(a.body) : 'could not load', auth: a.s === 'auth' };",
-  "tests": [
-   "test/docs-images.test.tsx"
-  ],
-  "red": "pwa docs-images: 3 failed | 71 passed (74) — 'an unexpected response is a per-image chip with its own sentence'; 'an unreachable server is a per-image chip with its own sentence'; 'a lost sign-in is a per-image chip with its own sentence'"
- },
- {
-  "id": "W5P1-T7-M18",
-  "pkg": "pwa",
-  "file": "pwa/src/docs/DocImage.tsx",
-  "old": "          e.stopPropagation();\n          setAsked(true);\n        }}>{DOC_IMAGE_TEXT.load}</button>",
-  "new": "          e.stopPropagation();\n          setAsked(false);\n        }}>{DOC_IMAGE_TEXT.load}</button>",
-  "tests": [
-   "test/docs-images.test.tsx"
-  ],
-  "red": "pwa docs-images: 3 failed | 71 passed (74) — '31 pinned images load 30; the last is one Load image, whose tap loads it (StrictMode: false)'; '31 pinned images load 30; the last is one Load image, whose tap loads it (StrictMode: true)'; 'Load image in a link loads the image and does not follow the link'"
- },
- {
-  "id": "W5P1-T11-M25",
-  "pkg": "pwa",
-  "file": "pwa/src/docs/DocImage.tsx",
-  "old": "        <button type=\"button\" className=\"doc-img-load\" onClick={(e) => {",
-  "new": "        <button type=\"button\" className=\"doc-img-more\" onClick={(e) => {",
-  "tests": [
-   "test/tap-targets.test.tsx"
-  ],
-  "red": "pwa tap-targets: 1 failed | 67 passed (68) — 'are the classes the rendered controls carry'"
- },
- {
-  "id": "W5P1-T3-M13",
-  "pkg": "pwa",
-  "file": "pwa/src/lib/markdownLimits.ts",
-  "old": "export const MD_HIGHLIGHT_MAX_WORD_CHARS = 256;",
-  "new": "export const MD_HIGHLIGHT_MAX_WORD_CHARS = 512;",
-  "tests": [
-   "test/markdown-limits.test.ts",
-   "test/markdown-bounds.test.tsx"
-  ],
-  "red": "pwa markdown-limits + markdown-bounds: 4 failed | 63 passed (67) — 'MD_HIGHLIGHT_MAX_WORD_CHARS is 256'; 'a ts fence holding a 257-character identifier is not highlighted and says why; 256 is highlighted'; 'longestWordRun counts letters, digits, _, $ and every code unit from 0x7f up, in one pass'; 'a run of 256 code units that holds non-ASCII units still highlights; 257 does not'"
- },
- {
-  "id": "W5P1-T7-M8",
-  "pkg": "pwa",
-  "file": "pwa/src/docs/DocImage.tsx",
-  "old": "    deferred: index === null || index >= DOCS_MAX_IMAGES_PER_PAGE,",
-  "new": "    deferred: false,",
-  "tests": [
-   "test/docs-images.test.tsx"
-  ],
-  "red": "pwa docs-images: 3 failed | 71 passed (74) — '31 pinned images load 30; the last is one Load image, whose tap loads it (StrictMode: false)'; '31 pinned images load 30; the last is one Load image, whose tap loads it (StrictMode: true)'; 'Load image in a link loads the image and does not follow the link'"
- },
- {
-  "id": "W5P1-T10-M2",
-  "pkg": "pwa",
-  "file": "pwa/src/docs/docsText.ts",
-  "old": "  return fillSentence(ref.side === 'origin' ? DOCS_HEAD_TEXT.servedOrigin : DOCS_HEAD_TEXT.servedLocal, { name: ref.name });",
-  "new": "  return ref.name;",
-  "tests": [
-   "test/docs-truth.test.tsx",
-   "test/docs-banners.test.tsx"
-  ],
-  "red": "pwa docs-truth + docs-banners: 9 failed | 126 passed (135) — 'baseEqual false: the base hint linking refs/heads/<b>, and no overlay'; 'not-contained warns, naming the short commit the page read and the served ref, with Re-list'; 'an answer that names no commit falls back to the committed pin's own commit, never the tree's'; '/docs/demo shows the served ref, the 8-hex commit, how it was chosen and the chip'; '/docs/demo/specs shows the served ref, the 8-hex commit, how it was chosen and the chip'; '/docs/demo/specs/d/ shows the served ref, the 8-hex commit, how it was chosen and the chip'; '/docs/demo/specs/d/x.md shows the served ref, the 8-hex commit, how it was chosen and the chip'; 'a local side reads `<b> (local)`, with the full refname in its title'; 'a file failure replaces the body and keeps the header and truth line'"
- },
- {
-  "id": "W5P1-T10-M46",
-  "pkg": "pwa",
-  "file": "pwa/src/docs/DocsBanners.tsx",
-  "old": "      if (file.s === 'ok' && file.answer.show.onRef === 'not-contained') {",
-  "new": "      if (file.s === 'ok' && file.answer.show.onRef === 'unmeasured') {",
-  "tests": [
-   "test/docs-banners.test.tsx"
-  ],
-  "red": "pwa docs-banners: 3 failed | 31 passed (34) — 'not-contained warns, naming the short commit the page read and the served ref, with Re-list'; 'an answer that names no commit falls back to the committed pin's own commit, never the tree's'; 'unmeasured says nothing'"
- },
- {
-  "id": "W5P1-T13-M32",
-  "pkg": "pwa",
-  "file": "pwa/src/screens/DocsScreen.tsx",
-  "old": "const parsed = useMemo(() => parseDocsPage(path, search), [path, search]);",
-  "new": "const parsed = useMemo(() => parseDocsPage(path, search), [path]);",
-  "tests": [
-   "test/router-location.test.tsx",
-   "test/docs-screen.test.tsx"
-  ],
-  "red": "pwa router-location + docs-screen: 2 failed | 88 passed (90) — 'navigate('/docs/p?ref=a') then '/docs/p?ref=b': loaders.tree is last called with ('p', bare b)'; 'a linked-worktree answer {\"owner\":\"a\",\"branch\":\"main\"} naming the page's own project at the same ref is a sentence, never \"Opening a…\" (/docs/a/specs/x.md; review M2)'"
- },
- {
-  "id": "W5P1-T13-M33",
-  "pkg": "pwa",
-  "file": "pwa/src/docs/DocMarkdown.tsx",
-  "old": "? `Line ${grouped(o.line)} nests ${grouped(o.value)} levels deep (limit ${grouped(MD_MAX_CONTAINER_DEPTH)}); shown as plain text.`",
-  "new": "? `Line ${grouped(o.line)} nests ${o.value} levels deep (limit ${grouped(MD_MAX_CONTAINER_DEPTH)}); shown as plain text.`",
-  "tests": [
-   "test/docs-markdown.test.tsx"
-  ],
-  "red": "pwa docs-markdown: 1 failed | 47 passed (48) — '10 000 nested quotes render DocPlain with the line and the depth'"
- }
+ {"id": "W5P1-T4-M8", "pkg": "pwa", "file": "pwa/src/lib/useParsedMarkdown.ts", "old": "  useLayoutEffect(() => {\n    jobs.current.latest = req;\n", "new": "  useEffect(() => {\n    jobs.current.latest = req;\n", "tests": ["test/use-parsed-markdown.test.tsx"], "red": "pwa use-parsed-markdown: 1 failed | 17 passed (18) — 'a reply for text A that lands after text B commits, before its passive effects, is never the outcome for B'"},
+ {"id": "W5P1-T4-M9", "pkg": "pwa", "file": "pwa/src/lib/useParsedMarkdown.ts", "old": "    jobs.current.latest = req;\n", "new": "    jobs.current.latest = { ...req, attempt: 0 };\n", "tests": ["test/use-parsed-markdown.test.tsx"], "red": "pwa use-parsed-markdown: 1 failed | 17 passed (18) — 'Retry (a changed attempt alone) is the latest request: its reply becomes the outcome, and nothing is pending'"},
+ {"id": "W5P1-T5-M26", "pkg": "pwa", "file": "pwa/src/docs/useDocsVisit.ts", "old": "        c.abort();", "new": "        void c;", "tests": ["test/docs-visit.test.tsx"], "red": "pwa docs-visit: 2 failed | 53 passed (55) — 'unmount aborts a file read in flight'; 'drops that read's entry, so showing the screen again reads once more instead of loading for ever'"},
+ {"id": "W5P1-T5-M28", "pkg": "pwa", "file": "pwa/src/docs/useDocsVisit.ts", "old": "if (prev !== undefined && prev.fKey !== wanted.fKey && prev.commit !== commit) {", "new": "if (true) {", "tests": ["test/docs-visit.test.tsx", "test/docs-refresh.test.tsx"], "red": "pwa docs-visit + docs-refresh: 6 failed | 86 passed (92) — 'a refresh answer that changes the leaf's pin re-reads it, keeps the old body meanwhile, then sets updatedTo'; 'an older GET that lands after a newer POST answer does not replace the slot or move the leaf back'; 'a committed leaf whose blob is unchanged after the branch moves is not read again, and reports the new pin'; 'a changed blob is read at the new pin, the old body stays until it answers, then updatedTo names the commit'; 'a draft leaf whose fingerprint changes under the same holder HEAD reads the new draft but names no commit'; 'opening the committed version of a draft is a new leaf, not an update'"},
+ {"id": "W5P1-T7-M9", "pkg": "pwa", "file": "pwa/src/docs/DocImage.tsx", "old": "        URL.revokeObjectURL(created);", "new": "", "tests": ["test/docs-images.test.tsx"], "red": "pwa docs-images: 4 failed | 62 passed (66) — 'unmount revokes the URL it created'; 'a replaced image revokes the old URL and shows only the new one'; 'A, then B while B is still queued, then A again: the img is never a revoked URL'; 'the same image under new loaders and a new queue loads again and never shows the URL the old run revoked'"},
+ {"id": "W5P1-T7-M33", "pkg": "pwa", "file": "pwa/src/docs/DocImage.tsx", "old": "  return done !== null && done.key === key ? done.shown : { s: 'loading' };", "new": "  return done !== null ? done.shown : { s: 'loading' };", "tests": ["test/docs-images.test.tsx"], "red": "pwa docs-images: 1 failed | 65 passed (66) — 'a replaced SVG shows Loading, never the old data: image, until its new bytes arrive'"},
+ {"id": "W5P1-T9-M4", "pkg": "pwa", "file": "pwa/src/screens/DocsScreen.tsx", "old": "    navigate(target + location.hash, { replace: true });", "new": "    navigate(target + location.hash);", "tests": ["test/docs-screen.test.tsx"], "red": "pwa docs-screen: 6 failed | 60 passed (66) — '/docs/ replace-navigates to /docs, with no history entry'; '/docs/demo/ replace-navigates to /docs/demo, with no history entry'; '/docs/demo/specs/ replace-navigates to /docs/demo/specs, with no history entry'; 'a directory reached without its slash replace-navigates to the slash form, keeping the ref'; 'a leaf reached with a slash replace-navigates to the slash-less form'; 'owner 'a' with branch 'ws/a': the same page in a at ref ws/a, and history.length is unchanged'"},
+ {"id": "W5P1-T9-M20", "pkg": "pwa", "file": "pwa/src/docs/DocsLeaf.tsx", "old": "  useFragmentScroll(root, cls === 'markdown' ? visit.pendingFragment : null, visit.setFragment);", "new": "", "tests": ["test/docs-screen.test.tsx"], "red": "pwa docs-screen: 4 failed | 62 passed (66) — 'a cross-doc link's fragment scrolls the target in the new page's article'; 'a direct load's #fragment is honoured once'; 'a direct load's fragment is honoured once: scrolled when the body holds it, and cleared right then'; 'a fragment the rendered body does not hold is cleared too, and nothing scrolls'"},
+ {"id": "W5P1-T10-M10", "pkg": "pwa", "file": "pwa/src/docs/DocsHead.tsx", "old": "{ n: Math.max(0, Math.ceil((until - now) / 1000)) }) };", "new": "{ n: Math.max(0, Math.ceil(until / 1000)) }) };", "tests": ["test/docs-truth.test.tsx"], "red": "pwa docs-truth: 5 failed | 89 passed (94) — 'fetch-too-soon'; 'an answered fetch-too-soon is the soon state, counted from its own retryAfterMs and answer time (no auto-retry)'; 'a visit that mounted 25 s ago and is answered fetch-too-soon (10 s) reads 10s, then 9s a second later'; 'measured end to end: mount, wait 25 s, tap, the answer says 10 s: the chip reads 10s, never 35s, then counts down'; 'a second fetch-too-soon in one visit is still soon (the one automatic retry is spent), and nothing retries again'"},
+ {"id": "W5P1-T10-M20", "pkg": "pwa", "file": "pwa/src/docs/DocsHead.tsx", "old": "{(link.note === 'may-differ' || p.showsDraft) && <span className=\"docs-action-note\">{DOCS_HEAD_TEXT.githubMayDiffer}</span>}", "new": "", "tests": ["test/docs-truth.test.tsx"], "red": "pwa docs-truth: 2 failed | 92 passed (94) — 'a local side ahead of origin links with the may-differ note'; 'a leaf that shows draft bytes says GitHub may differ, whatever the ref relation > a draft leaf (the served ref equal to origin): link and note'"},
+ {"id": "W5P1-T12-M17", "pkg": "pwa", "file": "shared/docs.ts", "old": "  'cross-origin-resource-policy': 'same-origin',\n", "new": "  'cross-origin-resource-policy': 'cross-origin',\n", "tests": ["--config", "vitest.browser.config.ts"], "red": "pwa browser leg (--config vitest.browser.config.ts, CCRC_CHROME = Chrome for Testing 153.0.8010.12): 2 failed | 11 passed (13) — 'pages on B (same site) and C (another site) <img> a docs raster: naturalWidth 0 on both, though the request arrives'; 'control: CORP same-site in place of same-origin draws the raster on B (same site), width 1, and not on C; same-origin is what keeps B out'"},
+ {"id": "W5P1-T12-M20", "pkg": "pwa", "file": "pwa/browser/docs-headers.browser.test.ts", "old": "  '/b5/data-img': () => htmlPage(`<img id=\"i\" alt=\"d\" src=\"${svgDataUrl(utf8(hostileSvg('b5')))}\">`),\n", "new": "  '/b5/data-img': () => htmlPage(`<object id=\"i\" type=\"image/svg+xml\" data=\"${svgDataUrl(utf8(hostileSvg('b5')))}\"></object>`),\n", "tests": ["--config", "vitest.browser.config.ts"], "red": "pwa browser leg (--config vitest.browser.config.ts, CCRC_CHROME = Chrome for Testing 153.0.8010.12): 1 failed | 12 passed (13) — 'the page on A draws the SVG; no script runs (no marker request, no console line) and no request leaves the page'"},
+ {"id": "W5P1-T2-M31", "pkg": "pwa", "file": "pwa/src/docs/DocsFailureView.tsx", "old": "            <li key={i}><code>{t.ref}</code> {Object.hasOwn(TRIED_RESULT_TEXT, t.result) ? TRIED_RESULT_TEXT[t.result] : t.result}</li>", "new": "            <li key={i}>{Object.hasOwn(TRIED_RESULT_TEXT, t.result) ? TRIED_RESULT_TEXT[t.result] : t.result}</li>", "tests": ["test/docs-failures.test.tsx"], "red": "pwa docs-failures: 2 failed | 142 passed (144) — 'unresolved-ref shows what was tried, the suggestion as a link, the tag hint and Fetch from origin'; 'a tried result that is an Object.prototype key renders as the literal word, never a function'"},
+ {"id": "W5P1-T3-M3", "pkg": "pwa", "file": "pwa/src/lib/markdown.tsx", "old": " || c === 0x5f || c === 0x24 || c >= 0x7f) {", "new": " || c === 0x5f || c >= 0x7f) {", "tests": ["test/markdown-bounds.test.tsx"], "red": "pwa markdown-bounds: 1 failed | 33 passed (34) — 'longestWordRun counts letters, digits, _, $ and every code unit from 0x7f up, in one pass'"},
+ {"id": "W5P1-T3-M4", "pkg": "pwa", "file": "pwa/src/lib/markdown.tsx", "old": "            : overWord ? `${label} · not highlighted (a ${word}-character word)`\n", "new": "", "tests": ["test/markdown-bounds.test.tsx"], "red": "pwa markdown-bounds: 6 failed | 28 passed (34) — 'a ts fence holding a 257-character identifier is not highlighted and says why; 256 is highlighted'; 'a 32 KiB one-identifier ts fence through SHARED_COMPONENTS never reaches highlight.js'; 'the same fence through chat's worker path (ChatMarkdown, injected parser) never reaches highlight.js'; 'a php fence of 257 `_é` units (a 514-character run) is not highlighted and says why'; 'a run of 256 code units that holds non-ASCII units still highlights; 257 does not'; 'a block that trips both bounds is labelled by its word: the word bound is checked first'"},
+ {"id": "W5P1-T6-M15", "pkg": "pwa", "file": "pwa/src/docs/DocLink.tsx", "old": "          if (t.fragment !== null) ctx.onFragment(t.fragment, t.href);", "new": "", "tests": ["test/docs-links.test.tsx"], "red": "pwa docs-links: 1 failed | 47 passed (48) — 'a cross-doc fragment: the href carries #part-2, a plain click navigates without it and hands it to onFragment'"},
+ {"id": "W5P1-T13-M1", "pkg": "pwa", "file": "pwa/src/docs/useDocsVisit.ts", "old": "takeAutoRetry('relist', page, '')", "new": "takeAutoRetry('file', fKey, word)", "tests": ["test/docs-visit.test.tsx"], "red": "pwa docs-visit: 1 failed | 57 passed (58) — 'a draft whose fingerprint moves on every listing re-lists once and then shows changing'"},
+ {"id": "W5P1-T13-M2", "pkg": "pwa", "file": "pwa/src/docs/useDocsVisit.ts", "old": "      autoRetried.current.delete(autoRetryId('relist', page, ''));\n", "new": "", "tests": ["test/docs-visit.test.tsx"], "red": "pwa docs-visit: 1 failed | 57 passed (58) — 'a read that succeeded re-arms the page: its next move gets its own automatic re-list'"},
+ {"id": "W5P1-T13-M3", "pkg": "pwa", "file": "pwa/src/docs/useDocsVisit.ts", "old": "if (st.trees.get(key) === a && isCurrentKey(key)) listTree(target);", "new": "if (isCurrentKey(key)) listTree(target);", "tests": ["test/docs-visit.test.tsx"], "red": "pwa docs-visit: 1 failed | 57 passed (58) — 'a manual Retry that answered ok at 1 s leaves the 5 s timer nothing to list'"},
+ {"id": "W5P1-T13-M4", "pkg": "pwa", "file": "pwa/src/docs/useDocsVisit.ts", "old": "if (f.s === 'refresh-failed' && f.answer.s === 'auth') st.freshness.set(key, { s: 'idle' });", "new": "if (f.s === 'refresh-failed' && f.answer.s !== 'auth') st.freshness.set(key, { s: 'idle' });", "tests": ["test/docs-refresh.test.tsx"], "red": "pwa docs-refresh: 2 failed | 39 passed (41) — 'a refresh POST that answered auth no longer shows refresh-failed once the sign-in is back, and does not POST again'; 'a refresh that failed for another reason keeps its chip through a sign-in'"},
+ {"id": "W5P1-T13-M5", "pkg": "pwa", "file": "pwa/src/docs/useDocsVisit.ts", "old": "if (st.freshness.get(key)?.s === 'fetching') {", "new": "if (st.freshness.get(key)?.s === 'fetching' && st.alive) {", "tests": ["test/docs-refresh.test.tsx"], "red": "pwa docs-refresh: 2 failed | 39 passed (41) — 'the answer is dropped and a screen shown again reads idle, not fetching'; 'a manual refresh dropped the same way gives the chip back what it showed before'"},
+ {"id": "W5P1-T5-M41", "pkg": "pwa", "file": "pwa/src/docs/useDocsVisit.ts", "old": "          if (st.trees.get(key) === a && isCurrentKey(key)) listTree(target);", "new": "          if (st.trees.get(key) === a) listTree(target);", "tests": ["test/docs-visit.test.tsx"], "red": "pwa docs-visit: 1 failed | 57 passed (58) — 'a tree retry set for a page the user then left makes no GET'"},
+ {"id": "W5P1-T5-M48", "pkg": "pwa", "file": "pwa/src/docs/useDocsVisit.ts", "old": "    void loadersRef.current.refresh(target.project, body).then((a) => {\n      st.refreshInflight.delete(key);\n      if (!st.alive) {\n        // The answer is dropped, so the chip must not stay `fetching` for a screen shown again: it goes back to what it\n        // showed before this POST (the default when it showed nothing).\n        if (st.freshness.get(key)?.s === 'fetching') {\n          if (before === undefined) st.freshness.delete(key);\n          else st.freshness.set(key, before);\n        }\n        return;\n      }\n      // Numbered when it ARRIVES: the route read its tree after its fetch, so it is newer than any GET that\n      // started before this answer, however early the POST began.\n      applyRefresh(target, key, reason, nextSeq(), a);", "new": "    const startSeq = nextSeq();\n    void loadersRef.current.refresh(target.project, body).then((a) => {\n      st.refreshInflight.delete(key);\n      if (!st.alive) {\n        // The answer is dropped, so the chip must not stay `fetching` for a screen shown again: it goes back to what it\n        // showed before this POST (the default when it showed nothing).\n        if (st.freshness.get(key)?.s === 'fetching') {\n          if (before === undefined) st.freshness.delete(key);\n          else st.freshness.set(key, before);\n        }\n        return;\n      }\n      // Numbered when it ARRIVES: the route read its tree after its fetch, so it is newer than any GET that\n      // started before this answer, however early the POST began.\n      applyRefresh(target, key, reason, startSeq, a);", "tests": ["test/docs-refresh.test.tsx"], "red": "pwa docs-refresh: 1 failed | 40 passed (41) — 'a GET that starts after the POST began and lands before it does not stop the POST's newer tree from landing'"},
+ {"id": "W5P1-T13-M6", "pkg": "pwa", "file": "pwa/src/docs/DocsLeaf.tsx", "old": "          body = <MarkdownBody show={show} bodyKey={bodyKeyOf(file.pin, show, pinKey)} link={link} parser={parser} />;", "new": "          body = <MarkdownBody show={show} bodyKey={pin.kind === 'draft' ? bodyKeyOf(file.pin, show, pinKey) : docsApi.file(page.project, pin)} link={link} parser={parser} />;", "tests": ["test/docs-screen.test.tsx"], "red": "pwa docs-screen: 1 failed | 74 passed (75) — 'same blob at a new commit: the same h1 node survives, the parser is called once, and no second read is made'"},
+ {"id": "W5P1-T9-M40", "pkg": "pwa", "file": "pwa/src/docs/DocsLeaf.tsx", "old": "  return <DocMarkdown key={p.bodyKey} text=", "new": "  return <DocMarkdown text=", "tests": ["test/docs-screen.test.tsx"], "red": "pwa docs-screen: 1 failed | 74 passed (75) — 'a re-list that moves a draft past the render gate asks first, instead of formatting on the old choice'"},
+ {"id": "W5P1-T13-M7", "pkg": "pwa", "file": "pwa/src/docs/DocsLeaf.tsx", "old": "<DocInLinkContext value={true}><DocImage node={node} alt={p.name} />", "new": "<DocInLinkContext value={false}><DocImage node={node} alt={p.name} />", "tests": ["test/docs-screen.test.tsx"], "red": "pwa docs-screen: 3 failed | 72 passed (75) — 'tapping it pushes no history entry and leaves the URL as it was'; 'on view=committed the tap keeps the view and reads no draft'; 'renders no doc-img-link button, only the img'"},
+ {"id": "W5P1-T13-M8", "pkg": "pwa", "file": "pwa/src/docs/DocsLeaf.tsx", "old": "{ ...assets, onDraftAsset: IGNORE_DRAFT_ASSET }", "new": "{ ...assets }", "tests": ["test/docs-screen.test.tsx"], "red": "pwa docs-screen: 1 failed | 74 passed (75) — 'data-draft-assets stays 0 and no draft-assets banner is drawn'"},
+ {"id": "W5P1-T13-M9", "pkg": "pwa", "file": "pwa/src/screens/DocsScreen.tsx", "old": "    if (plan.kind !== 'auto') return undefined;", "new": "    return undefined;", "tests": ["test/docs-screen.test.tsx"], "red": "pwa docs-screen: 2 failed | 73 passed (75) — 'docs-busy with retryAfterMs: one more GET after that wait, a second busy answer shows Retry and no third GET'; 'leaving the screen before the wait ends cancels the retry'"},
+ {"id": "W5P1-T13-M10", "pkg": "pwa", "file": "pwa/src/screens/DocsScreen.tsx", "old": "      indexRetried.current = true;\n", "new": "", "tests": ["test/docs-screen.test.tsx"], "red": "pwa docs-screen: 1 failed | 74 passed (75) — 'docs-busy with retryAfterMs: one more GET after that wait, a second busy answer shows Retry and no third GET'"},
+ {"id": "W5P1-T13-M11", "pkg": "pwa", "file": "pwa/src/screens/DocsScreen.tsx", "old": "    return () => clearTimeout(t);", "new": "    return undefined;", "tests": ["test/docs-screen.test.tsx"], "red": "pwa docs-screen: 1 failed | 74 passed (75) — 'leaving the screen before the wait ends cancels the retry'"},
+ {"id": "W5P1-T13-M12", "pkg": "pwa", "file": "pwa/src/docs/DocsFailureView.tsx", "old": "disabled={p.fetching === true} ", "new": "", "tests": ["test/docs-screen.test.tsx"], "red": "pwa docs-screen: 1 failed | 74 passed (75) — 'the button is disabled and the page says fetching while the POST runs, then the fetch failure sentence'"},
+ {"id": "W5P1-T13-M13", "pkg": "pwa", "file": "pwa/src/screens/DocsScreen.tsx", "old": "      return { state: 'fetching', text: DOCS_HEAD_TEXT.freshFetching };", "new": "      return null;", "tests": ["test/docs-screen.test.tsx"], "red": "pwa docs-screen: 1 failed | 74 passed (75) — 'the button is disabled and the page says fetching while the POST runs, then the fetch failure sentence'"},
+ {"id": "W5P1-T13-M14", "pkg": "pwa", "file": "pwa/src/screens/DocsScreen.tsx", "old": "          : { state: 'failed', text: failureSentence(f.failure) };", "new": "          : null;", "tests": ["test/docs-screen.test.tsx"], "red": "pwa docs-screen: 1 failed | 74 passed (75) — 'the button is disabled and the page says fetching while the POST runs, then the fetch failure sentence'"},
+ {"id": "W5P1-T13-M15", "pkg": "pwa", "file": "pwa/src/docs/DocImage.tsx", "old": "const action = inLink ? null : plan.action;", "new": "const action = plan.action;", "tests": ["test/docs-images.test.tsx"], "red": "pwa docs-images: 1 failed | 73 passed (74) — 'a refused external image in an in-app link offers no second action: the tap is the link alone'"},
+ {"id": "W5P1-T13-M16", "pkg": "pwa", "file": "pwa/src/docs/DocImage.tsx", "old": "  if (inLink) {", "new": "  if (false) {", "tests": ["test/docs-images.test.tsx"], "red": "pwa docs-images: 2 failed | 72 passed (74) — 'a loaded image in an in-app link: one tap is the link alone, and no button sits inside the anchor'; 'a loaded image in an external link: one tap opens the link once and goes nowhere in-app'"},
+ {"id": "W5P1-T13-M17", "pkg": "pwa", "file": "pwa/src/docs/DocImage.tsx", "old": "          e.stopPropagation();\n", "new": "", "tests": ["test/docs-images.test.tsx"], "red": "pwa docs-images: 1 failed | 73 passed (74) — 'Load image in a link loads the image and does not follow the link'"},
+ {"id": "W5P1-T13-M18", "pkg": "pwa", "file": "pwa/src/docs/DocImage.tsx", "old": "c.shown.s === 'failed' && c.shown.auth) {", "new": "c.shown.s === 'failed' && c.shown.auth && false) {", "tests": ["test/docs-images.test.tsx"], "red": "pwa docs-images: 1 failed | 73 passed (74) — 'a raster that answered auth is asked for once more on clearAuthLost, and then shows'"},
+ {"id": "W5P1-T13-M19", "pkg": "pwa", "file": "pwa/src/docs/DocImage.tsx", "old": "  useEffect(() => onAuthRegained(() => {\n    const c = current.current;\n    if (c.key !== null && c.shown !== null && c.shown.s === 'failed' && c.shown.auth) {\n      setDone(null); // Loading again, not the old sentence\n      setAttempt((n) => n + 1);\n    }\n  }), []);", "new": "  useEffect(() => { void onAuthRegained(() => {\n    const c = current.current;\n    if (c.key !== null && c.shown !== null && c.shown.s === 'failed' && c.shown.auth) {\n      setDone(null); // Loading again, not the old sentence\n      setAttempt((n) => n + 1);\n    }\n  }); }, []);", "tests": ["test/docs-images.test.tsx"], "red": "pwa docs-images: 1 failed | 73 passed (74) — 'an unmounted image no longer listens: its subscription is gone, and sign-in after unmount loads nothing'"},
+ {"id": "W5P1-T13-M20", "pkg": "pwa", "file": "pwa/src/lib/markdown.tsx", "old": "  const refusedOverCap = registered && !wanted && raw.length > MD_HIGHLIGHT_BLOCK_MAX_CHARS;", "new": "  const refusedOverCap = false;", "tests": ["test/markdown-bounds.test.tsx"], "red": "pwa markdown-bounds: 2 failed | 35 passed (37) — 'highlight={false} over the cap reads \"{label} · not highlighted ({KiB} KiB)\", with no scan and no colour'; 'a refused block is never scanned for a word or a line, however long either is'"},
+ {"id": "W5P1-T13-M21", "pkg": "pwa", "file": "pwa/src/lib/markdownParse.ts", "old": "const DOCS_BR = /^<br(?: ?\\/)?>$/;", "new": "const DOCS_BR = /^\\s*<br(?: ?\\/)?>\\s*$/;", "tests": ["test/markdown-parse.test.ts"], "red": "pwa markdown-parse: 3 failed | 36 passed (39) — 'whitespace on both sides, a paragraph after stays literal text in the docs profile, with no br element'; 'leading whitespace only stays literal text in the docs profile, with no br element'; 'trailing whitespace, a paragraph after stays literal text in the docs profile, with no br element'"},
+ {"id": "W5P1-T13-M22", "pkg": "pwa", "file": "pwa/src/docs/DocMarkdown.tsx", "old": "parseMarkdown(p.text, 'docs')", "new": "parseMarkdown(p.text, 'chat')", "tests": ["test/docs-markdown.test.tsx"], "red": "pwa docs-markdown: 1 failed | 47 passed (48) — 'a small text with a <br>, with no Worker, draws a br element and no literal \"<br>\"'"},
+ {"id": "W5P1-T13-M23", "pkg": "pwa", "file": "pwa/src/docs/DocsHead.tsx", "old": "const localLead = c === null ? null : ref.side === 'origin' ? c.behind : c.ahead;", "new": "const localLead = c === null ? null : c.ahead;", "tests": ["test/docs-truth.test.tsx"], "red": "pwa docs-truth: 3 failed | 98 passed (101) — 'local-ahead with origin served and counts { ahead: +0, behind: 2 } reads local is 2 ahead of origin'; 'diverged with origin served and counts { ahead: 3, behind: 2 } reads local and origin have diverged (2 vs 3), showing local'; 'an unmeasured count stays out of the sentence on either side'"},
+ {"id": "W5P1-T13-M24", "pkg": "pwa", "file": "pwa/src/docs/DocsHead.tsx", "old": "const originLead = c === null ? null : ref.side === 'origin' ? c.ahead : c.behind;", "new": "const originLead = c === null ? null : c.behind;", "tests": ["test/docs-truth.test.tsx"], "red": "pwa docs-truth: 3 failed | 98 passed (101) — 'via origin (origin served) with relation local-behind and counts { ahead: 3, behind: +0 }: the via sentence (you asked for ws/a, showing origin's), then the relation (origin is 3 ahead of local; tone info)'; 'local-behind with origin served and counts { ahead: 3, behind: +0 } reads origin is 3 ahead of local'; 'diverged with origin served and counts { ahead: 3, behind: 2 } reads local and origin have diverged (2 vs 3), showing local'"},
+ {"id": "W5P1-T13-M25", "pkg": "pwa", "file": "pwa/src/docs/DocsBanners.tsx", "old": "const n = tree.entries.filter((e) => e.draft !== null).length;", "new": "const n = tree.entries.filter((e) => { const dr = e.draft; return dr !== null && dr.state !== 'deleted'; }).length;", "tests": ["test/docs-banners.test.tsx"], "red": "pwa docs-banners: 2 failed | 32 passed (34) — 'a tree whose drafts include a deletion counts it in n'; 'a tree whose ONLY draft is a deletion still shows the banner, with n = 1'"},
+ {"id": "W5P1-T13-M26", "pkg": "pwa", "file": "pwa/src/docs/docsText.ts", "old": "'unresolved-ref': 'No branch by that name was found.',", "new": "'unresolved-ref': 'No branch by that name was found, locally or on origin.',", "tests": ["test/docs-failures.test.tsx"], "red": "pwa docs-failures: 1 failed | 144 passed (145) — 'the sentence claims neither side, stays a sentence, and the one tried ref is listed under it'"},
+ {"id": "W5P1-T13-M27", "pkg": "pwa", "file": "pwa/src/docs/docsLinks.ts", "old": "return link.ok ? { kind: 'github', href: link.url, note: link.note } : inert(link.why);", "new": "return link.ok ? { kind: 'github', href: link.url, note: null } : inert(link.why);", "tests": ["test/docs-links.test.tsx"], "red": "pwa docs-links: 4 failed | 50 passed (54) — 'a local page that is local-ahead has the target note and the same may-differ caution on its mark'; 'a local page that is local-behind has the target note and the same may-differ caution on its mark'; 'a local page that is diverged has the target note and the same may-differ caution on its mark'; 'a local page that is unmeasured has the target note and the same may-differ caution on its mark'"},
+ {"id": "W5P1-T13-M28", "pkg": "pwa", "file": "pwa/src/docs/DocLink.tsx", "old": "title={t.note === 'may-differ' ? DOCS_HEAD_TEXT.githubMayDiffer : undefined}", "new": "title={undefined}", "tests": ["test/docs-links.test.tsx"], "red": "pwa docs-links: 4 failed | 50 passed (54) — 'a local page that is local-ahead has the target note and the same may-differ caution on its mark'; 'a local page that is local-behind has the target note and the same may-differ caution on its mark'; 'a local page that is diverged has the target note and the same may-differ caution on its mark'; 'a local page that is unmeasured has the target note and the same may-differ caution on its mark'"},
+ {"id": "W5P1-T6-M22", "pkg": "pwa", "file": "pwa/src/docs/docsLinks.ts", "old": "      return link.ok ? { kind: 'github', href: link.url, note: link.note } : inert(link.why);", "new": "      return inert('no-github-origin');", "tests": ["test/docs-links.test.tsx"], "red": "pwa docs-links: 8 failed | 46 passed (54) — '[r](../../../README.md) is a GitHub link built by githubBlobUrl, with the trailing mark, opened on tap'; 'detached and rendered with DocLink: no src anywhere, and every href is an a DocLink built'; 'a local page that is local-ahead has the target note and the same may-differ caution on its mark'; 'a local page that is local-behind has the target note and the same may-differ caution on its mark'; 'a local page that is diverged has the target note and the same may-differ caution on its mark'; 'a local page that is unmeasured has the target note and the same may-differ caution on its mark'; 'a local page whose relation is equal carries no caution'; 'a origin page whose relation is local-behind carries no caution'"},
+ {"id": "W5P1-T13-M29", "pkg": "pwa", "file": "pwa/src/app.tsx", "old": "const docs = new RegExp('^/docs(?:/|$)').test(path);", "new": "const docs = new RegExp('^/docs\\\\b').test(path);", "tests": ["test/app.test.tsx"], "red": "pwa app: 2 failed | 21 passed (23) — '/docs-x renders the placeholder and data-view stays fleet'; '/docs.md renders the placeholder and data-view stays fleet'"},
+ {"id": "W5P1-T13-M30", "pkg": "pwa", "file": "pwa/src/session/SessionHeader.tsx", "old": "        <div className=\"menu\">\n          <button type=\"button\" className=\"menu-item\" onClick={() => menuAct(onChangeModel)}>\n            <span className=\"menu-label\">Change model</span>\n            <span className=\"menu-hint\" aria-hidden=\"true\">\n              /model\n            </span>\n          </button>\n          <button type=\"button\" className=\"menu-item\" onClick={() => menuAct(onChangeEffort)}>\n            <span className=\"menu-label\">Change effort</span>\n            <span className=\"menu-hint\" aria-hidden=\"true\">\n              /effort\n            </span>\n          </button>\n          <button type=\"button\" className=\"menu-item\" onClick={() => menuAct(onOpenHistory)}>\n            <span className=\"menu-label\">History</span>\n            <span className=\"menu-hint\" aria-hidden=\"true\">\n              journal\n            </span>\n          </button>\n          {docsLink !== null && (\n            <button type=\"button\" className=\"menu-item docs-menu-item\" onClick={() => menuAct(() => navigate(docsLink.href))}>\n              <span className=\"menu-label\">Docs</span>\n              <span className=\"menu-hint\" aria-hidden=\"true\">{docsLink.branch ?? 'default'}</span>\n            </button>\n          )}", "new": "        <div className=\"menu\">\n          {docsLink !== null && (\n            <button type=\"button\" className=\"menu-item docs-menu-item\" onClick={() => menuAct(() => navigate(docsLink.href))}>\n              <span className=\"menu-label\">Docs</span>\n              <span className=\"menu-hint\" aria-hidden=\"true\">{docsLink.branch ?? 'default'}</span>\n            </button>\n          )}\n          <button type=\"button\" className=\"menu-item\" onClick={() => menuAct(onChangeModel)}>\n            <span className=\"menu-label\">Change model</span>\n            <span className=\"menu-hint\" aria-hidden=\"true\">\n              /model\n            </span>\n          </button>\n          <button type=\"button\" className=\"menu-item\" onClick={() => menuAct(onChangeEffort)}>\n            <span className=\"menu-label\">Change effort</span>\n            <span className=\"menu-hint\" aria-hidden=\"true\">\n              /effort\n            </span>\n          </button>\n          <button type=\"button\" className=\"menu-item\" onClick={() => menuAct(onOpenHistory)}>\n            <span className=\"menu-label\">History</span>\n            <span className=\"menu-hint\" aria-hidden=\"true\">\n              journal\n            </span>\n          </button>", "tests": ["test/session-docs-link.test.tsx"], "red": "pwa session-docs-link: 1 failed | 26 passed (27) — 'the Docs item is History’s next sibling in the menu, and nothing sits between them'"},
+ {"id": "W5P1-T13-M31", "pkg": "server", "file": "server/test/single-definition.test.ts", "old": "    new RegExp(`^\\\\s*(?:(?:export|default|declare|async)\\\\s+)*(?:function(?:\\\\s*\\\\*\\\\s*|\\\\s+)${name}\\\\b|(?:const|let|var)\\\\s+${name}\\\\b)`, 'm');", "new": "    new RegExp(`^\\\\s*(?:export\\\\s+)?(?:function\\\\s+${name}\\\\b|(?:const|let|var)\\\\s+${name}\\\\b)`, 'm');", "tests": ["test/single-definition.test.ts"], "red": "server single-definition: 1 failed | 543 passed (544) — 'CONTROL: the function pattern sees an async, a default, a declare-d and a generator copy'"},
+ {"id": "W5P1-T5-M9", "pkg": "pwa", "file": "pwa/src/docs/useDocsVisit.ts", "old": "  return [scope, key, word].join(NUL);", "new": "  return [scope, key].join(NUL);", "tests": ["test/docs-visit.test.tsx"], "red": "pwa docs-visit: 1 failed | 57 passed (58) — 'the bookkeeping is per word: a second word gets its own one retry, a repeated one none'"},
+ {"id": "W5P1-T7-M11", "pkg": "pwa", "file": "pwa/src/docs/DocImage.tsx", "old": "  return { s: 'failed', sentence: a.s === 'failed' ? failureSentence(a.body) : slotSentence(a), auth: a.s === 'auth' };", "new": "  return { s: 'failed', sentence: a.s === 'failed' ? failureSentence(a.body) : 'could not load', auth: a.s === 'auth' };", "tests": ["test/docs-images.test.tsx"], "red": "pwa docs-images: 3 failed | 71 passed (74) — 'an unexpected response is a per-image chip with its own sentence'; 'an unreachable server is a per-image chip with its own sentence'; 'a lost sign-in is a per-image chip with its own sentence'"},
+ {"id": "W5P1-T7-M18", "pkg": "pwa", "file": "pwa/src/docs/DocImage.tsx", "old": "          e.stopPropagation();\n          setAsked(true);\n        }}>{DOC_IMAGE_TEXT.load}</button>", "new": "          e.stopPropagation();\n          setAsked(false);\n        }}>{DOC_IMAGE_TEXT.load}</button>", "tests": ["test/docs-images.test.tsx"], "red": "pwa docs-images: 3 failed | 71 passed (74) — '31 pinned images load 30; the last is one Load image, whose tap loads it (StrictMode: false)'; '31 pinned images load 30; the last is one Load image, whose tap loads it (StrictMode: true)'; 'Load image in a link loads the image and does not follow the link'"},
+ {"id": "W5P1-T11-M25", "pkg": "pwa", "file": "pwa/src/docs/DocImage.tsx", "old": "        <button type=\"button\" className=\"doc-img-load\" onClick={(e) => {", "new": "        <button type=\"button\" className=\"doc-img-more\" onClick={(e) => {", "tests": ["test/tap-targets.test.tsx"], "red": "pwa tap-targets: 1 failed | 67 passed (68) — 'are the classes the rendered controls carry'"},
+ {"id": "W5P1-T3-M13", "pkg": "pwa", "file": "pwa/src/lib/markdownLimits.ts", "old": "export const MD_HIGHLIGHT_MAX_WORD_CHARS = 256;", "new": "export const MD_HIGHLIGHT_MAX_WORD_CHARS = 512;", "tests": ["test/markdown-limits.test.ts", "test/markdown-bounds.test.tsx"], "red": "pwa markdown-limits + markdown-bounds: 4 failed | 63 passed (67) — 'MD_HIGHLIGHT_MAX_WORD_CHARS is 256'; 'a ts fence holding a 257-character identifier is not highlighted and says why; 256 is highlighted'; 'longestWordRun counts letters, digits, _, $ and every code unit from 0x7f up, in one pass'; 'a run of 256 code units that holds non-ASCII units still highlights; 257 does not'"},
+ {"id": "W5P1-T7-M8", "pkg": "pwa", "file": "pwa/src/docs/DocImage.tsx", "old": "    deferred: index === null || index >= DOCS_MAX_IMAGES_PER_PAGE,", "new": "    deferred: false,", "tests": ["test/docs-images.test.tsx"], "red": "pwa docs-images: 3 failed | 71 passed (74) — '31 pinned images load 30; the last is one Load image, whose tap loads it (StrictMode: false)'; '31 pinned images load 30; the last is one Load image, whose tap loads it (StrictMode: true)'; 'Load image in a link loads the image and does not follow the link'"},
+ {"id": "W5P1-T10-M2", "pkg": "pwa", "file": "pwa/src/docs/docsText.ts", "old": "  return fillSentence(ref.side === 'origin' ? DOCS_HEAD_TEXT.servedOrigin : DOCS_HEAD_TEXT.servedLocal, { name: ref.name });", "new": "  return ref.name;", "tests": ["test/docs-truth.test.tsx", "test/docs-banners.test.tsx"], "red": "pwa docs-truth + docs-banners: 9 failed | 126 passed (135) — 'baseEqual false: the base hint linking refs/heads/<b>, and no overlay'; 'not-contained warns, naming the short commit the page read and the served ref, with Re-list'; 'an answer that names no commit falls back to the committed pin's own commit, never the tree's'; '/docs/demo shows the served ref, the 8-hex commit, how it was chosen and the chip'; '/docs/demo/specs shows the served ref, the 8-hex commit, how it was chosen and the chip'; '/docs/demo/specs/d/ shows the served ref, the 8-hex commit, how it was chosen and the chip'; '/docs/demo/specs/d/x.md shows the served ref, the 8-hex commit, how it was chosen and the chip'; 'a local side reads `<b> (local)`, with the full refname in its title'; 'a file failure replaces the body and keeps the header and truth line'"},
+ {"id": "W5P1-T10-M46", "pkg": "pwa", "file": "pwa/src/docs/DocsBanners.tsx", "old": "      if (file.s === 'ok' && file.answer.show.onRef === 'not-contained') {", "new": "      if (file.s === 'ok' && file.answer.show.onRef === 'unmeasured') {", "tests": ["test/docs-banners.test.tsx"], "red": "pwa docs-banners: 3 failed | 31 passed (34) — 'not-contained warns, naming the short commit the page read and the served ref, with Re-list'; 'an answer that names no commit falls back to the committed pin's own commit, never the tree's'; 'unmeasured says nothing'"},
+ {"id": "W5P1-T13-M32", "pkg": "pwa", "file": "pwa/src/screens/DocsScreen.tsx", "old": "const parsed = useMemo(() => parseDocsPage(path, search), [path, search]);", "new": "const parsed = useMemo(() => parseDocsPage(path, search), [path]);", "tests": ["test/router-location.test.tsx", "test/docs-screen.test.tsx"], "red": "pwa router-location + docs-screen: 2 failed | 88 passed (90) — 'navigate('/docs/p?ref=a') then '/docs/p?ref=b': loaders.tree is last called with ('p', bare b)'; 'a linked-worktree answer {\"owner\":\"a\",\"branch\":\"main\"} naming the page's own project at the same ref is a sentence, never \"Opening a…\" (/docs/a/specs/x.md; review M2)'"},
+ {"id": "W5P1-T13-M33", "pkg": "pwa", "file": "pwa/src/docs/DocMarkdown.tsx", "old": "? `Line ${grouped(o.line)} nests ${grouped(o.value)} levels deep (limit ${grouped(MD_MAX_CONTAINER_DEPTH)}); shown as plain text.`", "new": "? `Line ${grouped(o.line)} nests ${o.value} levels deep (limit ${grouped(MD_MAX_CONTAINER_DEPTH)}); shown as plain text.`", "tests": ["test/docs-markdown.test.tsx"], "red": "pwa docs-markdown: 1 failed | 47 passed (48) — '10 000 nested quotes render DocPlain with the line and the depth'"}
 ]
 ```
 
