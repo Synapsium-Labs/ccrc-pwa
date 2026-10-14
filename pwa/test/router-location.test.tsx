@@ -199,3 +199,31 @@ describe('T11 review 4-3: usePath subscribes through useLocation', () => {
     expect(last(seen)).toBe('/docs/p');
   });
 });
+
+// M4.R1's W5 half (W5 part 1 Task 9; design 2026-10-01 section 4.2): the Docs screen, mounted from `useLocation()`
+// exactly as the app's `docs` arm mounts it, reads a change of the search alone: `?ref=a` then `?ref=b` on one path
+// asks the injected `loaders.tree` for ref `b` last. A screen that read only the pathname would never ask for `b`.
+describe('the Docs screen follows the search channel (M4.R1, W5 half)', () => {
+  it("navigate('/docs/p?ref=a') then '/docs/p?ref=b': loaders.tree is last called with ('p', bare b)", async () => {
+    const { DocsScreen } = await import('../src/screens/DocsScreen');
+    const tree = vi.fn(async () => ({ s: 'unreachable' as const }));
+    const loaders = {
+      projects: vi.fn(async () => ({ s: 'unreachable' as const })),
+      tree,
+      file: vi.fn(async () => ({ s: 'unreachable' as const })),
+      raster: vi.fn(async () => ({ s: 'unreachable' as const })),
+      refresh: vi.fn(async () => ({ s: 'unreachable' as const })),
+    };
+    function Docs(): ReactNode {
+      const { path, search } = useLocation();
+      return <DocsScreen path={path} search={search} loaders={loaders} parser={async () => ({ kind: 'worker-unavailable' })} />;
+    }
+    navigate('/');
+    render(<Docs />);
+    act(() => { navigate('/docs/p?ref=a'); });
+    await waitFor(() => expect(tree).toHaveBeenLastCalledWith('p', { kind: 'bare', name: 'a' }));
+    act(() => { navigate('/docs/p?ref=b'); });
+    await waitFor(() => expect(tree).toHaveBeenLastCalledWith('p', { kind: 'bare', name: 'b' }));
+    expect(tree).toHaveBeenCalledTimes(2);
+  });
+});

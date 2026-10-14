@@ -296,3 +296,52 @@ export const DOC_IMAGE_TEXT = {
  *  names (`downloadDocFile`, `DocImage`), and when an SVG path is answered as another class (`DocImage`). */
 export const DOCS_SHOW_NO_BYTES = 'the answer held no bytes';
 export const DOCS_SHOW_NOT_SVG = 'an SVG path was answered as another class';
+
+/** The words of the index, project, section, directory and leaf views (spec 4.4, 4.7; refinements (b), (c), (r)).
+ *  `{field}`s are filled by `fillSentence`; `{s}` is `''` for a count of one and `'s'` otherwise. The spec's own
+ *  phrases are copied verbatim (docs-screen.test.tsx pins them); `redirectNullBranch` is refinement (c)'s sentence,
+ *  which replaces spec 4.7's "that checkout is detached" because `branch: null` also covers an unmeasured read. */
+export const DOCS_VIEW_TEXT = {
+  indexHead: "Each project's default branch, read from the fleet box.",
+  filterProjects: 'Filter projects',
+  filterEntries: 'Filter this listing',
+  noDocs: 'Projects with no docs ({n})',
+  indexUnlisted: '{n} folder{s} not listed (names Docs cannot address).',
+  indexUnwalked: '{n} project{s} not checked (Docs ran out of time listing them).',
+  duplicate: 'same repository as {other}',
+  partOf: 'part of {owner}',
+  partOfUnknown: 'part of a repository outside the projects folder',
+  fetched: 'fetched {age}',
+  neverFetched: 'never fetched',
+  sectionAbsent: 'not in this repository at {short}',
+  sectionNotDir: 'is not a directory at {short}',
+  sectionDrafts: '{n} draft{s}',
+  sectionWithheld: '{n} withheld',
+  treeUnlisted: '{n} file{s} not listed (names Docs cannot address).',
+  opaque: 'Drafts inside nested repositories are not shown: {dirs}.',
+  emptyListing: 'Nothing is listed here.',
+  missing: 'Not in this listing at {short}.',
+  missingDraftHint: 'It may be an uncommitted draft on {branch}.',
+  openDraftView: 'Open the draft view',
+  loading: 'Loading…',
+  noPreview: 'No preview ({size})',
+  htmlStandIn: 'HTML mockups open in a later release; Source shows the file and Download saves it.',
+  size: 'Size: {size}',
+  symlink: 'This is a symbolic link in the repository; Docs does not follow it.',
+  submodule: 'This is a git submodule; Docs does not open it.',
+  nothingToShow: 'There is no committed version of this file to show here.',
+  changing: 'The listing changed while Docs read this file.',
+  source: 'Source',
+  download: 'Download',
+  downloadFailed: 'Download failed: {sentence}',
+  redirecting: 'Opening {owner}…',
+  redirectNullBranch:
+    "That checkout is not on a named branch, or its branch could not be read; showing {owner}'s default branch.",
+  redirectBadBranch: "That checkout's branch {branch} is not one Docs can address; showing {owner}'s default branch.",
+  indexLink: 'Docs index',
+} as const;
+
+/** A count's plural suffix for `{s}`. */
+export function pluralS(n: number): string {
+  return n === 1 ? '' : 's';
+}

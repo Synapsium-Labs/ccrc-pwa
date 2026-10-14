@@ -40,7 +40,7 @@ function isPlainClick(e: MouseEvent): boolean {
 /** The element inside `article` whose id is `fragment`, or `fragment` percent-decoded once. The ids are compared as
  *  strings, so no selector is ever built from document text (spec 4.11 names `CSS.escape`; this needs no escaping, and
  *  jsdom has no `CSS`). An empty fragment names nothing. */
-function fragmentTarget(article: Element, fragment: string): Element | null {
+export function fragmentTarget(article: Element, fragment: string): Element | null {
   if (fragment === '') return null;
   let decoded: string | null;
   try {

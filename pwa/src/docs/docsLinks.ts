@@ -8,7 +8,7 @@ import type { Element as HastElement, Root as HastRoot, RootContent } from 'hast
 import { urlAttributes } from 'html-url-attributes';
 import {
   admitDraft, docsPageUrl, entryView, githubBlobUrl, resolveDocRef,
-  type DocPin, type DocSectionSlug, type DocsEntry, type DocsPageLocation, type DocsTreeOk,
+  type DocPin, type DocSectionSlug, type DocsEntry, type DocsPageLocation, type DocsRefSpec, type DocsTreeOk,
 } from '../../../shared/docs';
 import { DOCS_HIGHLIGHT_PAGE_MAX_CHARS } from '../lib/markdownLimits';
 import { DOC_LINK_INERT_SENTENCE, type DocLinkInertReason } from './docsText';
@@ -121,22 +121,26 @@ export function detachUrls(tree: HastRoot): Detached {
 
 /** Where a page links (refinement (q)). `index`: the Docs index. `project`, `section` and `path`: a page of the same
  *  project at the same ref. `default-view`: another (or the same) project's default view, `ref: null`, from any page,
- *  the index included. A `path` target's `view` absent means `effective`. */
+ *  the index included. `same-page`: this very page (its section, path, view and frame) in `project` at `ref`
+ *  (`ref: null` is that project's default view): the linked-worktree redirect (spec 4.7) and every "open this page at
+ *  another ref" link. A `path` target's `view` absent means `effective`. */
 export type DocsPageTarget =
   | { kind: 'index' }
   | { kind: 'project' }
   | { kind: 'default-view'; project: string }
+  | { kind: 'same-page'; project: string; ref: DocsRefSpec | null }
   | { kind: 'section'; section: DocSectionSlug }
   | { kind: 'path'; section: DocSectionSlug; path: string; dirSlash: boolean; view?: 'effective' | 'committed' };
 
 /** THE one builder of a page location a Docs view links to (refinement (q)): it keeps `page`'s project and ref and
  *  applies `to`; `frame` is always `inline` (W6 owns `full`). Every page URL a view writes is
  *  `docsPageUrl(docsLocation(page, to))`; no view builds a `DocsPageLocation` literal. The index names no project, so
- *  a `project`, `section` or `path` target from it is a programming error and throws. */
+ *  a `project`, `section`, `path` or `same-page` target from it is a programming error and throws. */
 export function docsLocation(page: DocsPageLocation, to: DocsPageTarget): DocsPageLocation {
   if (to.kind === 'index') return { kind: 'index' };
   if (to.kind === 'default-view') return { kind: 'project', project: to.project, ref: null };
   if (page.kind === 'index') throw new Error(`docsLocation: the index names no project for a ${to.kind} target`);
+  if (to.kind === 'same-page') return { ...page, project: to.project, ref: to.ref };
   const { project, ref } = page;
   switch (to.kind) {
     case 'project':

@@ -127,6 +127,12 @@ function base64Of(bytes: Uint8Array): string {
   return btoa(binary);
 }
 
+/** An SVG's bytes as the only `src` Docs ever gives an SVG (spec 5.5): `data:image/svg+xml;base64,...`, never a
+ *  `blob:` and never an `/api/` URL. The SVG leaf (`DocsLeaf`) draws the bytes it already holds through this. */
+export function svgDataUrl(bytes: Uint8Array): string {
+  return SVG_DATA_PREFIX + base64Of(bytes);
+}
+
 /** The bytes for one job, read through its loader with the queue's signal: a raster's verified bytes and table MIME,
  *  an SVG as its `data:` URL, or the sentence of why not. */
 async function fetchImage(job: LoadJob, signal: AbortSignal): Promise<Fetched> {

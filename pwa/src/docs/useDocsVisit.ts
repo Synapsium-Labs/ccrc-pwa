@@ -29,7 +29,8 @@ export type TreeSlot =
 
 /** The current leaf's body. Every arm but `none` carries the pin it is about.
  *  - `none`: no file request is due here: the tree slot is not `ok`, the page is not a leaf of this tree, `pinFor`
- *    answered null, or the leaf is a raster (`DocImage` loads its bytes through `loaders.raster`).
+ *    answered null, or the leaf is a raster (`DocImage` loads its bytes through `loaders.raster`) or of class `other`
+ *    within its cap (spec 4.4: "No preview" and Download, which reads the bytes itself when tapped).
  *  - `too-large`: the listed size is over `DOCS_CLASS_CAP` for the path's class; nothing was requested (spec 4.4).
  *  - `changing`: a read answered a word that means the listing moved (`DOCS_RELIST_WORDS`) after the one automatic
  *    re-list was spent; the page offers Retry.
@@ -197,6 +198,7 @@ function wantedFile(slot: TreeSlot | null, page: DocsPageLocation | null, target
   const size = pin.kind === 'draft' ? entry?.draft?.size : entry?.committed?.size;
   const cap = DOCS_CLASS_CAP[contentClass(page.path)];
   if (typeof size === 'number' && size > cap) return { kind: 'too-large', slot: { s: 'too-large', pin, size, cap } };
+  if (contentClass(page.path) === 'other') return { kind: 'none' };
   const tKey = treeKey(target.project, target.ref);
   const leaf = [tKey, page.section, page.path, page.view].join(NUL);
   return { kind: 'read', target, tKey, fKey: fileKey(pin, tree), leaf, pin };

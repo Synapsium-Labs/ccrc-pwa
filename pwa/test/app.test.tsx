@@ -6,7 +6,7 @@
 // DEVIATION from the brief's Test: list (which names only
 // server/test/fleet.test.ts and pwa/test/archive-screen.test.tsx); see
 // task-19-report.md.
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import type { FleetSession } from '../../shared/api';
 import { App } from '../src/app';
@@ -237,5 +237,46 @@ describe('a route change puts the detail pane back at the top (D-161)', () => {
     const scroll = track(nav, 900);
     act(() => { navigate('/mail'); });
     expect(scroll.top).toBe(900);
+  });
+});
+
+// Docs W5 part 1, Task 9 (M4.R2; design 2026-10-01 section 4.2): `/docs` and every page under it mount the Docs
+// screen in the detail pane and join the data-view chain, `/docsearch` does not (the pattern is `/docs` then a slash
+// or the end, never a bare prefix), and the screen is not keyed, so one mount spans a visit. The screen's default
+// loaders call `fetch`; it is stubbed offline here, so every load is the `unreachable` slot and nothing leaves the test.
+describe('App /docs route (M4.R2)', () => {
+  const offline = (): void => {
+    vi.stubGlobal('fetch', vi.fn(async () => { throw new TypeError('offline'); }));
+  };
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it.each(['/docs', '/docs/demo/specs/x.md'])('%s renders the Docs screen in the detail pane and joins [data-view="session"]', async (url) => {
+    offline();
+    navigate(url);
+    render(<App />);
+    expect(document.querySelector('.shell-detail .docs-screen')).not.toBeNull();
+    expect(document.querySelector('.app-shell')).toHaveAttribute('data-view', 'session');
+    expect(await screen.findByText('The server could not be reached; Docs needs a connection.')).toBeInTheDocument();
+  });
+
+  it('/docsearch is not Docs: the placeholder renders and data-view stays fleet', () => {
+    offline();
+    navigate('/docsearch');
+    render(<App />);
+    expect(document.querySelector('.docs-screen')).toBeNull();
+    expect(screen.getByText('Select a session')).toBeInTheDocument();
+    expect(document.querySelector('.app-shell')).toHaveAttribute('data-view', 'fleet');
+  });
+
+  it('the Docs screen is not keyed: the same mount spans a page, ref and section change', () => {
+    offline();
+    navigate('/docs/demo');
+    render(<App />);
+    const first = document.querySelector('.docs-screen');
+    expect(first).not.toBeNull();
+    act(() => { navigate('/docs/demo/specs?ref=ws/a'); });
+    expect(document.querySelector('.docs-screen')).toBe(first);
   });
 });
