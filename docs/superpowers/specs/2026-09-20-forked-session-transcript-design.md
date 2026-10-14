@@ -1,9 +1,60 @@
 # A session that forks keeps its chat — design
 
 **Date:** 2026-09-20
-**Status:** design, approved in chat; implementation plan not yet written
+**Status:** design, approved in chat (2026-09-20); implemented by
+`docs/superpowers/plans/2026-09-20-forked-session-transcript.md`, Tasks 1–8 (PR #189). **Amended 2026-10-13
+and 2026-10-14** by that plan's two review rounds: the claims listed under "Review rounds" below are superseded by
+the plan's `D-4935`…`D-4954`, which describe what shipped. The sections themselves are left as designed.
 **Branch:** `ws/chat-message-disappears-while-waiting`
 **Reported by:** the operator, 2026-09-19
+
+## Review rounds (2026-10-13, 2026-10-14)
+
+The design below is kept as it was approved. These of its claims no longer hold; each names the deviation in the
+plan's "Deviations found" that replaced it.
+
+- **§1, the follow** ("if the last line is a `continued-in` record, resolves the successor uuid through the same
+  ladder"). The marker is read the way Claude Code 2.1.296 reads it: newest line first over the 8 KiB window, a
+  top-level `continued-in` record decides "continued", a finished turn decides "not", and everything else, such as
+  the metadata Claude Code re-stamps after the marker, is stepped over (D-4940). The successor is looked for where
+  `ccd` looks, in the registry workdir's two project dirs or beside the file, never through the whole ladder
+  (D-4949).
+- **§1, "Parsing the marker is one function."** It is one rule in two spellings: `tailRecordOf` and
+  `continuationInTail` in TypeScript, and one jq program shared byte for byte by `ccd` and the doctor, held equal by
+  `continued-in-parity.test.ts` (D-4940).
+- **§1, the memo.** It is stamped from the walk's own stat (D-4948). An unmeasured read, a declined follow and a
+  followed answer are all keep-looking answers, re-walked on the back-off (D-4946, D-4947).
+- **§1, re-pointing** ("a resolution whose `uuid` differs from the uuid currently being tailed re-points, whatever
+  the rung"), and its row in the testing table. The stream re-points only onto an answer followed through the
+  tailed uuid. It never re-points backwards onto a uuid the tailed answer was followed from, unless that
+  predecessor is measured as resumed past its marker (a finished turn is its newest deciding line). A registry move
+  the stream calls a continuation never trades the file on screen for less (D-4946, D-4947).
+- **§2, "this timer is the only thing that ever clears the bubble"** for a slash command. A command's own `system`
+  echo clears it, and the timer is the fallback (D-4951). A message the session absorbs mid-turn comes back as an
+  attachment, not a `user` row, and is now read as the operator's (D-4950). An echo clears the bubble only when it
+  is newer than the newest event on screen at the send, a bar each re-send raises; an echo that a backlog's
+  fifty-event window no longer reaches is never seen, and that bubble retires at the ten-minute horizon (D-4952).
+  `ChatList.tsx`, then open PR #152's and since merged, is edited after all: its quiet-gap divider no longer
+  rewinds to an absorbed message's enqueue time (D-4950).
+- **§3, the read budget** ("The marker can only be the final line of a file that will never be appended to
+  again"). Claude Code re-stamps metadata after the marker, and a session resumed in its pre-fork id writes a
+  finished turn after it, which cancels it (D-4940). The read is still gated on quiescence; a declined hop is
+  retried with builtins, and a read that failed is retried on a backoff (D-4942).
+- **§3, "Pane first, chain second, so this is a strict extension"** and "Chain-walking rules are the server's".
+  `ccd` follows one hop per tick (D-4935, D-4937). The pane's id is refused while its record is parked or stale, or
+  while its transcript is measured superseded (D-4943). The forked session's own background worker is a third
+  source (D-4945).
+- **§3, "The edit stays inside `_sync_uuid`."** Every resume and every swap follows the chain first. A conversation
+  a live background job holds is waited for by its supervisor, never spawned into, and a swap refuses it (D-4944).
+- **§4, the hook** ("a stranger's Claude session on the same box exits 0 exactly as it does today"). That was false
+  for a stranger that resumes a registry uuid. The fallback is for forked sessions only, gated on `CLAUDE_JOB_DIR`,
+  with a named residual for a process a fork itself starts (D-4953), and it reads registry rows FIFO-safely
+  (D-4954). A fork inherits another row's generation, so its compaction card stays dark (D-4953's residual).
+- **§4, the doctor check** ("read its last line"). It reads the shared rule over the window, counts the rows it
+  could not measure apart, names parked rows and successors never written apart, and FAILs a registry it cannot
+  list (D-4941).
+- **Names.** Review round 2 replaced the two live session names in "What is measured", §4 and the rollout caution
+  with neutral stand-ins, `session-a` and `session-b`. The measurements are unchanged.
 
 ## The report
 
@@ -17,7 +68,7 @@ the PWA erases its own optimistic bubble on a five-second timer.
 ## What is measured
 
 Claude Code 2.1.278 forks a live session into a daemon-hosted background PTY
-under a NEW sessionId. Measured on `ccrc-pwa-bright-canyon`, 2026-09-19
+under a NEW sessionId. Measured on a live session (`session-a` below), 2026-09-19
 22:00:14: the pane process (`claude --resume <old>`, whose
 `<cfg>/sessions/<pid>.json` says `kind:"interactive"`) spawned
 `claude daemon run --origin transient`, which spawned
@@ -39,8 +90,8 @@ typed in the PWA still reaches the session (HTTP -> tmux, unaffected), the reply
 lands in the NEW file, and neither ever reaches the screen.
 
 **Census 2026-09-20:** 14 registry sessions, 2 frozen —
-`application-swift-hollow` (since 2026-09-11T16:07:21Z, eight days) and
-`ccrc-pwa-bright-canyon` (since 2026-09-19T19:00:15Z). The 09-11 incident
+`session-b` (since 2026-09-11T16:07:21Z, eight days) and
+`session-a` (since 2026-09-19T19:00:15Z). The 09-11 incident
 matches to the second: fork at 16:07:21Z, the operator's message at 16:08:05Z
 landed in the successor file, and the screenshot at 16:08:57Z showed neither it
 nor the reply. Reproduce: for each `~/.cc-sessions/*.uuid`, locate
@@ -237,7 +288,7 @@ one function is the whole conflict surface we are willing to create.
 `ccd/session-hook.sh` exits at once for a forked session
 (`[[ -n "${TMUX_PANE:-}" ]] || exit 0`), and the forked process has no `TMUX` or
 `TMUX_PANE` at all (measured via `/proc/<pid>/environ`).
-`ccrc-pwa-bright-canyon.hookstate.json` was last written at 21:58:09 — two
+`session-a`'s hookstate file was last written at 21:58:09 — two
 minutes before the fork — through three hours of active work. So the ask card,
 the subagent list and the compaction card all go dark for exactly the sessions
 that need them.
@@ -326,8 +377,8 @@ vX.Y.Z`. Each of those steps needs the operator's explicit approval at the time;
 none of them is implied by approving this design.
 
 **Live-fleet caution, until lane 3 ships:** do not restart or swap
-`ccrc-pwa-bright-canyon` or `application-swift-hollow`. Their registry uuid
-still names the pre-fork transcript, so a `--resume` would time-travel them.
+`session-a`, `session-b`, or any session whose registry uuid still names a
+pre-fork transcript: a `--resume` would time-travel it.
 
 ## Out of scope
 

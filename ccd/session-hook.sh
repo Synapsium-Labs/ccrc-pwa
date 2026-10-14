@@ -2764,11 +2764,11 @@ payload=$(cat 2>/dev/null) || exit 0
 # prompt it gives a forked session even says to use `$CLAUDE_JOB_DIR/tmp`), so
 # everything a forked session starts has it, and a `claude --resume <registry
 # uuid>` run from a forked session's own shell matches that row and writes its
-# state. No variable tells the two apart: every Claude process sets its own
-# hooks' CLAUDECODE, CLAUDE_CODE_SESSION_ID, CLAUDE_CODE_CHILD_SESSION and
-# CLAUDE_PID afresh, and the background-identity list reaches neither.
-# That residual needs a forked session to start it, so it is far narrower than
-# the hole the marker closes; it is named here, not pretended away (D-4953).
+# state; so may a bare `claude --continue` there (it takes the newest transcript
+# in that directory, usually the fork's own). No variable tells them apart:
+# each Claude process sets its hooks' CLAUDECODE, CLAUDE_CODE_SESSION_ID,
+# CLAUDE_CODE_CHILD_SESSION and CLAUDE_PID afresh. It needs a forked session to
+# start it, so it is far narrower than the hole the marker closes (D-4953).
 #
 # What the fallback must never become is the registry's WRITER. `ccd` decides
 # the uuid (`_sync_uuid`); this only reports against it.

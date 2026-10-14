@@ -178,15 +178,15 @@ describe('resolveTranscript — the ladder, rung by rung (spec §5.1)', () => {
     // input to the PWA's banner — a foreign hit rendered silently is the quiet
     // wrongness this spec exists to remove.
     const b = box();
-    const personal = path.join(b.root, '.claude-personal');
-    const corp = path.join(b.root, '.claude-corp');
-    plant(stranded(personal), 2000, 'older foreign\n');
-    const newest = plant(stranded(corp), 3000, 'newer foreign\n');
+    const laneA = path.join(b.root, '.claude-lane-a');
+    const laneB = path.join(b.root, '.claude-lane-b');
+    plant(stranded(laneA), 2000, 'older foreign\n');
+    const newest = plant(stranded(laneB), 3000, 'newer foreign\n');
     mkdirSync(path.join(b.cfg, 'projects'), { recursive: true }); // own account: listable, empty
     const r = await resolveTranscript(localIO, opts(b, {
-      foreign: [{ account: 'claude2', configDir: personal }, { account: 'claude-corp', configDir: corp }],
+      foreign: [{ account: 'lane-a', configDir: laneA }, { account: 'lane-b', configDir: laneB }],
     }));
-    expect(r).toEqual({ kind: 'found', path: newest, rung: 'foreign-glob', account: 'claude-corp', uuid: UUID });
+    expect(r).toEqual({ kind: 'found', path: newest, rung: 'foreign-glob', account: 'lane-b', uuid: UUID });
   });
 
   it('an own-account answer beats a NEWER foreign one — rung 6 is never reached while rung 5 hits', async () => {
@@ -194,11 +194,11 @@ describe('resolveTranscript — the ladder, rung by rung (spec §5.1)', () => {
     // one uuid would then render another account's frozen history for most of
     // the fleet.
     const b = box();
-    const personal = path.join(b.root, '.claude-personal');
-    plant(stranded(personal), 9000, 'newer, but foreign\n');
+    const laneA = path.join(b.root, '.claude-lane-a');
+    plant(stranded(laneA), 9000, 'newer, but foreign\n');
     const own = plant(stranded(b.cfg), 1000, 'older, but ours\n');
     const r = await resolveTranscript(localIO, opts(b, {
-      foreign: [{ account: 'claude2', configDir: personal }],
+      foreign: [{ account: 'lane-a', configDir: laneA }],
     }));
     expect(r).toEqual({ kind: 'found', path: own, rung: 'uuid-glob', account: null, uuid: UUID });
   });
@@ -277,7 +277,7 @@ describe('resolveTranscript — the ladder, rung by rung (spec §5.1)', () => {
     // messages yet" over history this search never reached.
     //
     // FIXTURE REPAIRED (final review, Important #1). This test used to break
-    // only the foreign `readdir` and never create `.claude-personal` at all,
+    // only the foreign `readdir` and never create `.claude-lane-a` at all,
     // so what it actually pinned was an ABSENT account — the very case that is
     // now measured-empty — while its title claimed an unlistable one. Plant
     // the account for real, then take away everything the resolver could use
@@ -286,16 +286,16 @@ describe('resolveTranscript — the ladder, rung by rung (spec §5.1)', () => {
     // witness. That is a connection which died after the own-account glob
     // succeeded, and it must still refuse.
     const b = box();
-    const personal = path.join(b.root, '.claude-personal');
-    mkdirSync(path.join(personal, 'projects'), { recursive: true });   // the account really is there
+    const laneA = path.join(b.root, '.claude-lane-a');
+    mkdirSync(path.join(laneA, 'projects'), { recursive: true });   // the account really is there
     mkdirSync(path.join(b.cfg, 'projects'), { recursive: true });
     const io: FleetIO = {
       ...localIO,
-      readdir: async (p) => (p.includes('.claude-personal') ? null : localIO.readdir(p)),
-      stat: async (p) => (p === personal || p === b.cfg ? null : localIO.stat(p)),
+      readdir: async (p) => (p.includes('.claude-lane-a') ? null : localIO.readdir(p)),
+      stat: async (p) => (p === laneA || p === b.cfg ? null : localIO.stat(p)),
     };
     const r = await resolveTranscript(io, opts(b, {
-      foreign: [{ account: 'claude2', configDir: personal }],
+      foreign: [{ account: 'lane-a', configDir: laneA }],
     }));
     expect(r).toEqual({ kind: 'fallback', path: transcriptPath(b.cfg, b.liveLink, UUID), complete: false });
   });
@@ -329,14 +329,14 @@ describe('resolveTranscript — the ladder, rung by rung (spec §5.1)', () => {
     // to show (`if (g.hits.length === 0) break`) fails here.
     const b = box();
     mkdirSync(path.join(b.cfg, 'projects'), { recursive: true });
-    const held = plant(stranded(path.join(b.root, '.claude-corp')), 3000, 'stranded here\n');
+    const held = plant(stranded(path.join(b.root, '.claude-lane-b')), 3000, 'stranded here\n');
     const r = await resolveTranscript(localIO, opts(b, {
       foreign: [
         { account: 'claude-never-used', configDir: path.join(b.root, '.claude-never-used') },
-        { account: 'claude-corp', configDir: path.join(b.root, '.claude-corp') },
+        { account: 'lane-b', configDir: path.join(b.root, '.claude-lane-b') },
       ],
     }));
-    expect(r).toEqual({ kind: 'found', path: held, rung: 'foreign-glob', account: 'claude-corp', uuid: UUID });
+    expect(r).toEqual({ kind: 'found', path: held, rung: 'foreign-glob', account: 'lane-b', uuid: UUID });
   });
 
   it("a foreign hit is refused when the OWN account's glob could not run — incomplete beats a foreign answer (review round 1, Important #2, the ruling)", async () => {
@@ -345,17 +345,17 @@ describe('resolveTranscript — the ladder, rung by rung (spec §5.1)', () => {
     // mutant that answers rung 6 whenever the own account's glob has no
     // matches, without checking whether it could be listed at all: that
     // mutant would render a foreign account's frozen copy under a confident
-    // "stranded history, held by claude2" banner while the live transcript
+    // "stranded history, held by lane-a" banner while the live transcript
     // sits unread in the very account the search could not reach.
     const b = box();
     const io: FleetIO = {
       ...localIO,
       readdir: async (p) => (p === path.join(b.cfg, 'projects') ? null : localIO.readdir(p)),
     };
-    const personal = path.join(b.root, '.claude-personal');
-    plant(stranded(personal), 3000, 'foreign, but the own account was never reachable\n');
+    const laneA = path.join(b.root, '.claude-lane-a');
+    plant(stranded(laneA), 3000, 'foreign, but the own account was never reachable\n');
     const r = await resolveTranscript(io, opts(b, {
-      foreign: [{ account: 'claude2', configDir: personal }],
+      foreign: [{ account: 'lane-a', configDir: laneA }],
     }));
     // b.cfg itself is never created by this fixture, so globByUuid's witness
     // stat of the account root ALSO answers null here — the whole account is
@@ -376,12 +376,12 @@ describe('resolveTranscript — the ladder, rung by rung (spec §5.1)', () => {
     const b = box();
     mkdirSync(b.cfg, { recursive: true });          // the account exists...
     // ...but `b.cfg/projects` is deliberately never created.
-    const personal = path.join(b.root, '.claude-personal');
-    const foreignHit = plant(stranded(personal), 3000, 'rescued from the old account\n');
+    const laneA = path.join(b.root, '.claude-lane-a');
+    const foreignHit = plant(stranded(laneA), 3000, 'rescued from the old account\n');
     const r = await resolveTranscript(localIO, opts(b, {
-      foreign: [{ account: 'claude2', configDir: personal }],
+      foreign: [{ account: 'lane-a', configDir: laneA }],
     }));
-    expect(r).toEqual({ kind: 'found', path: foreignHit, rung: 'foreign-glob', account: 'claude2', uuid: UUID });
+    expect(r).toEqual({ kind: 'found', path: foreignHit, rung: 'foreign-glob', account: 'lane-a', uuid: UUID });
   });
 
   it('a genuine outage — BOTH the projects readdir and the account-root stat fail — still refuses rung 6 (review round 2, item 2, the constructed failure case)', async () => {
@@ -401,10 +401,10 @@ describe('resolveTranscript — the ladder, rung by rung (spec §5.1)', () => {
       readdir: async (p) => (p === path.join(b.cfg, 'projects') ? null : localIO.readdir(p)),
       stat: async (p) => (p === b.cfg ? null : localIO.stat(p)),
     };
-    const personal = path.join(b.root, '.claude-personal');
-    plant(stranded(personal), 3000, 'foreign, but the own account is mid-outage\n');
+    const laneA = path.join(b.root, '.claude-lane-a');
+    plant(stranded(laneA), 3000, 'foreign, but the own account is mid-outage\n');
     const r = await resolveTranscript(io, opts(b, {
-      foreign: [{ account: 'claude2', configDir: personal }],
+      foreign: [{ account: 'lane-a', configDir: laneA }],
     }));
     expect(r).toEqual({ kind: 'fallback', path: transcriptPath(b.cfg, b.liveLink, UUID), complete: false });
   });
@@ -680,17 +680,17 @@ describe('TranscriptResolver — the memo (spec §5.4)', () => {
     //   of the socket while the real transcript sits at its own address.
     const { cfg, dir } = flat();
     mkdirSync(path.join(cfg, 'projects'), { recursive: true });   // own account: listable, empty
-    const foreignCfg = path.join(path.dirname(cfg), '.claude-corp');
+    const foreignCfg = path.join(path.dirname(cfg), '.claude-lane-b');
     const held = plant(stranded(foreignCfg), 3000, 'stranded in the old account\n');
     let clock = 1_000_000;
     const { io, n } = counting();
     const r = new TranscriptResolver(io, { backoffMs: 30_000, now: () => clock });
     const o: ResolveOpts = {
       configDir: cfg, dir, registryWorkdir: dir, uuid: UUID,
-      foreign: [{ account: 'claude-corp', configDir: foreignCfg }],
+      foreign: [{ account: 'lane-b', configDir: foreignCfg }],
     };
     expect(await r.resolve(o)).toEqual(
-      { kind: 'found', path: held, rung: 'foreign-glob', account: 'claude-corp', uuid: UUID });
+      { kind: 'found', path: held, rung: 'foreign-glob', account: 'lane-b', uuid: UUID });
     const readdirs = n.readdir;
 
     // The swap lands and carries the history home. The foreign copy is NOT

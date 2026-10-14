@@ -507,7 +507,10 @@ export function tailRecordOf(line: string, ofUuid: string): TailRecord {
   return SKIP;
 }
 
-/** The successor ONE line names when it is this file's own marker, or null. */
+/** The successor ONE line names when it is this file's own marker, or null:
+ *  `tailRecordOf`'s verdict for a single line. No live reader calls it — each
+ *  reads a window (`continuationInTail` here, `CONTINUED_IN_JQ` in ccd and the
+ *  doctor) — and its unit test pins the one-line cases (D-4940). */
 export function continuationOf(line: string, ofUuid: string): string | null {
   const v = tailRecordOf(line, ofUuid);
   return v.kind === 'successor' ? v.to : null;

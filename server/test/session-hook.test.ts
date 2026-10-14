@@ -11146,7 +11146,8 @@ describe('the pane-less fallback: forked sessions only (D-4953), every row read 
   // see, so no case can tell them apart, and what is left to drift is the
   // prose: the header once said a stranger "exits 0 exactly as it did before
   // the fallback existed" with no exception. Both halves are pinned: the claim
-  // carries its condition, and the block names the inheritance.
+  // carries its condition, and the block names the inheritance and both
+  // spellings of the stranger.
   it('the identity block names the stranger the job marker lets through: a process a forked session starts (D-4953)', () => {
     const src = fs.readFileSync(HOOK, 'utf8');
     const start = src.indexOf('# TWO SOURCES FOR ONE QUESTION');
@@ -11157,5 +11158,9 @@ describe('the pane-less fallback: forked sessions only (D-4953), every row read 
     expect(prose).toMatch(/does not carry CLAUDE_JOB_DIR exits 0 exactly as it did before the fallback existed/);
     expect(prose).toMatch(/CLAUDE_JOB_DIR is INHERITED/);
     expect(prose).toMatch(/claude --resume <registry uuid>` run from a forked session's own shell/);
+    // ...and the uuid-less spelling of the same stranger (#189 re-review): a
+    // bare `claude --continue` there resumes the newest transcript in that
+    // directory, which is usually the fork's own.
+    expect(prose).toMatch(/a bare `claude --continue` there/);
   });
 });
