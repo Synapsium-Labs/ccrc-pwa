@@ -29,6 +29,13 @@ import type { SendResult } from '../inject/send.js';
 import type { LedgerLog } from './ledgerlog.js';
 import type { PoolEdgeLog } from './pooledgelog.js';
 import type { UpdateIntentLog } from './updateintentlog.js';
+// Delegation broker wave 3, Task 7: the projection's row shapes, codecs and guards are the PURE `delegation-model.ts`;
+// this file runs the SQL and nothing else.
+import {
+  assertWave3Lease, delegationActivityCodec, delegationAttemptCodec, delegationCheckpointOfProjection, delegationEventCodec,
+  delegationLeaseCodec, delegationLineageCodec, delegationSessionCodec, DelegationModelError,
+  type DelegationCheckpointV1, type DelegationEventRow, type DelegationRowCodec, type DelegationSqlValue,
+} from './delegation-model.js';
 // `bodyDigest` comes from `shared/mark.mjs` — `server.ts:30` imports it as
 // `'../../shared/mark.mjs'`; from `server/src/coord/` the path is one level
 // deeper.
@@ -8175,4 +8182,122 @@ export class CoordStore {
     return this.db.prepare('SELECT epoch, issuedAt FROM update_epoch WHERE id = 1')
       .get() as { epoch: number; issuedAt: number };
   }
+
+  // ── delegation broker wave 3, Task 7: the report-only coordination projection ────────────────────────────────────
+  // The six `delegation_*` tables (MIGRATIONS entry 20) are REPAIRABLE OUTPUT. The journal and the checkpoint are the
+  // authority (Task 8 owns both, and `delegation-model.ts` owns their shapes); these three methods only make SQLite say
+  // what the checkpoint says. `CoordStore` stays synchronous, one transaction per replacement, and holds no health and no
+  // coordinator intent as an authority: the checkpoint's `observationIntervals` and `coordinatorIntentByParent` do, and
+  // the session rows below are DERIVED from that map before they reach this method.
+
+  /**
+   * Replaces the whole projection from `checkpoint`, in ONE transaction with foreign keys enforced, in the one
+   * foreign-key-safe order: DELETE `delegation_lineage`, `_leases`, `_events`, `_attempts`, `_activities`, `_sessions`;
+   * INSERT sessions, then activities, attempts and events, then leases, then lineage. A fault at any statement rolls the
+   * whole replacement back, so the previous projection survives intact.
+   *
+   * Everything that can be refused is refused BEFORE the transaction opens (`assertWave3Lease` over every lease, the
+   * checkpoint's version and applied position, every instant), so a refusal costs no write and no rollback. A row the
+   * schema itself refuses (a CHECK, a unique index, a foreign key) throws SQLite's error from inside the transaction.
+   *
+   * `delegation_events` rows are evidence appended by `insertDelegationEvent`, and a checkpoint carries none, so the
+   * replacement carries over each event whose session the checkpoint still holds, byte for byte, and drops the rest as
+   * stale output (an event whose session left the checkpoint would otherwise fail its foreign key and wedge every repair).
+   * Nothing else survives: no row is merged, and nothing is read from the old projection except those events.
+   */
+  projectDelegationCheckpoint(checkpoint: DelegationCheckpointV1): void {
+    if (checkpoint.v !== 1) throw new DelegationModelError('bad-checkpoint', `version ${String(checkpoint.v)} is not a version-1 checkpoint`);
+    const applied = checkpoint.appliedJournalSequence;
+    if (!Number.isSafeInteger(applied) || applied < 0) {
+      throw new DelegationModelError('bad-checkpoint', `appliedJournalSequence ${String(applied)} is not a non-negative integer`);
+    }
+    for (const lease of checkpoint.leases) assertWave3Lease(lease, applied);
+    // Encoded now, outside the transaction: a malformed instant is a refusal, not a rollback.
+    const sessions = checkpoint.sessions.map((r) => delegationSessionCodec.toDb(r));
+    const activities = checkpoint.activities.map((r) => delegationActivityCodec.toDb(r));
+    const attempts = checkpoint.attempts.map((r) => delegationAttemptCodec.toDb(r));
+    const leases = checkpoint.leases.map((r) => delegationLeaseCodec.toDb(r));
+    const lineage = checkpoint.lineage.map((r) => delegationLineageCodec.toDb(r));
+    const sessionKey = (id: unknown, incarnation: unknown): string => JSON.stringify([id, incarnation]);
+    const sessionsHeld = new Set(sessions.map((r) => sessionKey(r.sessionId, r.parentIncarnation)));
+
+    tx(this.db, () => {
+      const kept = (this.db.prepare(delegationSelectSql(delegationEventCodec, 'journalSequence')).all() as unknown as
+        Array<Record<string, DelegationSqlValue>>)
+        .filter((e) => sessionsHeld.has(sessionKey(e['sessionId'], e['parentIncarnation'])));
+      // Children before parents: lineage names leases and activities, leases name activities, and everything names sessions.
+      for (const table of ['delegation_lineage', 'delegation_leases', 'delegation_events', 'delegation_attempts',
+                           'delegation_activities', 'delegation_sessions'] as const) {
+        this.db.prepare(`DELETE FROM ${table}`).run();
+      }
+      const insertAll = <Row, Col extends string>(codec: DelegationRowCodec<Row, Col>, rows: ReadonlyArray<Readonly<Record<string, DelegationSqlValue>>>): void => {
+        if (rows.length === 0) return;
+        const stmt = this.db.prepare(delegationInsertSql(codec));
+        for (const row of rows) stmt.run(...codec.columns.map((c) => row[c]));
+      };
+      insertAll(delegationSessionCodec, sessions);
+      insertAll(delegationActivityCodec, activities);
+      insertAll(delegationAttemptCodec, attempts);
+      insertAll(delegationEventCodec, kept);
+      insertAll(delegationLeaseCodec, leases);
+      insertAll(delegationLineageCodec, lineage);
+    });
+  }
+
+  /**
+   * Appends one accepted evidence event to `delegation_events`. `'duplicate'` means THIS SAME event is already there
+   * (the same `eventId` and an identical row): the idempotent replay a re-read of the same bytes produces. The same
+   * `eventId` with a DIFFERENT row is a conflict and throws; so does a second event on one `journalSequence`, and an event
+   * whose session is not in the projection (the foreign key). The row is validated before any statement runs.
+   */
+  insertDelegationEvent(row: DelegationEventRow): 'inserted' | 'duplicate' {
+    const values = delegationEventCodec.toDb(row);
+    const columns = delegationEventCodec.columns;
+    const res = this.db.prepare(`${delegationInsertSql(delegationEventCodec)} ON CONFLICT (eventId) DO NOTHING`)
+      .run(...columns.map((c) => values[c]));
+    if (Number(res.changes) === 1) return 'inserted';
+    const stored = this.db.prepare(`SELECT ${columns.join(', ')} FROM delegation_events WHERE eventId = ?`)
+      .get(values.eventId) as Record<string, unknown> | undefined;
+    const differs = stored === undefined ? 'eventId' : columns.find((c) => stored[c] !== values[c]);
+    if (differs !== undefined) {
+      throw new DelegationModelError('event-conflict', `evidence event ${row.eventId} is already recorded with a different ${differs}`);
+    }
+    return 'duplicate';
+  }
+
+  /**
+   * The projection as a checkpoint, for a DRIFT CHECK: what SQLite says, in the shape the checkpoint has. Every table is
+   * read through its typed reader, so an unknown enum word, a malformed list or a wrong storage class throws an
+   * `unreadable-row` `DelegationModelError` and is never cast or defaulted. Rows come back in primary-key order.
+   *
+   * It is NOT a read path. `activityIdsByNaturalKey` and `coordinatorIntentByParent` are derived from the activity and
+   * session rows; the revision, the applied-journal anchor, the bucket cursors, the observation intervals and the pruning
+   * holds are not projected and come back empty, zero or null. No caller may treat any of it as authority, and no health
+   * is derived from it (Task 13 derives health from the checkpoint's `observationIntervals`).
+   */
+  readDelegationProjection(): DelegationCheckpointV1 {
+    const read = <Row, Col extends string>(codec: DelegationRowCodec<Row, Col>, orderBy: string): Row[] =>
+      this.db.prepare(delegationSelectSql(codec, orderBy)).all().map((r) => codec.fromDb(r));
+    return delegationCheckpointOfProjection({
+      sessions: read(delegationSessionCodec, 'sessionId, parentIncarnation'),
+      attempts: read(delegationAttemptCodec, 'attemptId'),
+      activities: read(delegationActivityCodec, 'activityId'),
+      leases: read(delegationLeaseCodec, 'leaseId'),
+      lineage: read(delegationLineageCodec, 'lineageId'),
+    });
+  }
+}
+
+// ── delegation broker wave 3, Task 7: the projection's two SQL spellings ─────────────────────────────────────────────
+// Both name their columns from the codec, which lists the DDL's columns in the DDL's order; no statement here is
+// `SELECT *`, and no position is hand-kept.
+
+/** `INSERT INTO <table> (<columns>) VALUES (?, ...)` for a delegation table. */
+function delegationInsertSql<Row, Col extends string>(codec: DelegationRowCodec<Row, Col>): string {
+  return `INSERT INTO ${codec.table} (${codec.columns.join(', ')}) VALUES (${codec.columns.map(() => '?').join(', ')})`;
+}
+
+/** `SELECT <columns> FROM <table> ORDER BY <orderBy>` for a delegation table. */
+function delegationSelectSql<Row, Col extends string>(codec: DelegationRowCodec<Row, Col>, orderBy: string): string {
+  return `SELECT ${codec.columns.join(', ')} FROM ${codec.table} ORDER BY ${orderBy}`;
 }
