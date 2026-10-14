@@ -757,8 +757,27 @@ describe('the Docs controls (docs W5 part 1, spec 4.14)', () => {
       const token = Number.parseFloat(declValue(ruleIn(tokensCss, ':root'), '--tap-min') ?? 'NaN');
       const menu = declValue(ruleIn(chatCss, '.menu-item'), 'min-height');
       expect(menu === 'var(--tap-min)' || Number.parseFloat(menu ?? 'NaN') >= token, String(menu)).toBe(true);
-      expect(() => ruleIn(docsCss, '.docs-menu-item')).toThrow();
-      expect(() => ruleIn(docsCss, '.docs-session-row')).toThrow();
+      // docs.css may carry OVERFLOW rules for the two (a long branch must not push the word off the row), but no rule
+      // whose selector list names either class may declare a min-height: the floor stays the shared class's.
+      const naming = stripComments(docsCss).split('}')
+        .map((chunk) => chunk.split('{'))
+        .filter(([sel]) => /\.docs-menu-item|\.docs-session-row/.test(sel ?? ''));
+      expect(naming.length).toBeGreaterThan(0);
+      for (const [sel, body] of naming) expect(body ?? '', sel).not.toMatch(/min-height/);
+    });
+    it('keep a long branch name on its own line: the hint truncates beside the word, the row label breaks (jsdom lays nothing out, so the declarations are pinned)', () => {
+      // `.menu-hint` is `flex: none` in chat.css, so beside a 200-character branch the `.menu-label` ("Docs")
+      // collapses; the Docs item's hint may shrink and ellipsise instead. The row's label is a bare text node in a
+      // `display: flex` btn-ghost, which cannot break a branch with no space in it unless the row says it may.
+      const hint = ruleIn(docsCss, '.docs-menu-item .menu-hint');
+      expect(declValue(hint, 'flex')).toBe('0 1 auto');
+      expect(declValue(hint, 'min-width')).toBe('0');
+      expect(declValue(hint, 'overflow')).toBe('hidden');
+      expect(declValue(hint, 'text-overflow')).toBe('ellipsis');
+      expect(declValue(hint, 'white-space')).toBe('nowrap');
+      const row = ruleIn(docsCss, '.docs-session-row');
+      expect(declValue(row, 'overflow-wrap')).toBe('anywhere');
+      expect(declValue(row, 'min-width')).toBe('0');
     });
     it('are the classes the rendered row and item carry', () => {
       vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ accounts: [], projected: null, roster: [] }),

@@ -3056,4 +3056,20 @@ describe('the Docs door (docs design 4.8, M4.L1)', () => {
     act(() => { store.setState({ conn: 'open', sessions: [] }); });
     expect(screen.getByRole('button', { name: 'Docs: specs, plans and design notes' })).toHaveClass('docs-door');
   });
+
+  it('is still there, in the header cluster before the accounts door, with a session present', () => {
+    const store = makeStore();
+    render(<FleetScreen store={store} />);
+    seed(store, { conn: 'open', sessions: [session({ project: 'demo' })] });
+    // The fleet really holds a session now (the header counts it, and the first-run empty state is gone), so the
+    // empty-fleet cases above are not what this one measures.
+    expect(document.querySelector('.fleet-count')?.textContent).toContain('1 session');
+    expect(screen.queryByRole('heading', { name: 'No sessions yet' })).toBeNull();
+    const door = screen.getByRole('button', { name: 'Docs: specs, plans and design notes' });
+    expect(door).toHaveClass('docs-door');
+    expect(door.parentElement).toHaveClass('fleet-head-right');
+    expect(door.nextElementSibling).toHaveClass('accounts-door');
+    fireEvent.click(door);
+    expect(location.pathname).toBe('/docs');
+  });
 });

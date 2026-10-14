@@ -17,8 +17,11 @@
    they read in whatever measured ink their container has and set no colour of their own.
 
    TAP FLOOR. Every control here has `min-height: var(--tap-min)` in its own rule, and tap-targets.test.tsx holds
-   both halves for each: the rule, and a rendered element with the class. The two `btn-ghost` controls take the floor
-   from `.btn-ghost` (components/primitives.css) and restate it here beside the width they give back. */
+   both halves for each: the rule, and a rendered element with the class. The exemption is a link inside running text,
+   which sets no floor of its own (WCAG 2.5.8's inline exception): the failure view's "Did you mean …?" link
+   (`.docs-fail-suggest a`) and the links inside a rendered document. A Docs link that stands alone as a control
+   (`.docs-action`, `.docs-hint-link`, `.docs-owner-link`) carries the floor. The two `btn-ghost` controls take the
+   floor from `.btn-ghost` (components/primitives.css) and restate it here beside the width they give back. */
 
 /* — the Docs door, in the fleet header before `.accounts-door` (section 4.8): `.settings-door`'s box — */
 .docs-door {
@@ -33,6 +36,17 @@
 .docs-door:active { transform: scale(0.88); color: var(--ink-primary); }
 /* The glyph is decoration beside the word, aria-hidden in the markup, sized in the UI font as `.settings-door-glyph`. */
 .docs-door-glyph { font-family: var(--font-ui); font-size: var(--text-xs); line-height: 1; }
+
+/* — the session links (section 4.8): overflow only. The tap floor stays the shared class's (`.btn-ghost`, `.menu-item`),
+   so neither rule below sets a min-height. A branch is not bounded by anything the sheet controls (up to
+   DOCS_REF_MAX_CHARS, no spaces). The session menu's hint is `flex: none` in chat.css, which would collapse the word
+   "Docs" beside a long branch: here it shrinks and ends in an ellipsis instead. The actions sheet's row carries its
+   label as bare text in a flex box, which has no break opportunity inside a branch: it may break anywhere. — */
+.docs-menu-item .menu-hint {
+  flex: 0 1 auto; min-width: 0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.docs-session-row { min-width: 0; overflow-wrap: anywhere; }
 
 /* — the screen — */
 .docs-screen { display: grid; gap: var(--sp-3); padding: var(--sp-2); min-width: 0; }
