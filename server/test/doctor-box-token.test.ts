@@ -25,7 +25,7 @@ import { chmodSync, mkdirSync, readFileSync, renameSync, rmSync, symlinkSync, wr
 import path, { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mkTmp } from './tmpHelpers.js';
-import { TOKEN_HOLDS, OWED_REASONS, TOKEN_ORIGINS } from '../../shared/box-token.js';
+import { TOKEN_HOLDS, OWED_REASONS, TOKEN_ORIGINS, TOKEN_ROTATION_INTERVAL_MS, TOKEN_ROTATION_OVERDUE_SLACK_MS } from '../../shared/box-token.js';
 import { GENERATION_ID_HEX, NODE_FILES, TOKEN_SYNC_OP_ERRORS, TOKEN_TRANSPORTS } from '../../shared/agent-protocol.js';
 import { TOKEN_FILE_PROBLEMS } from '../../shared/box-token.js';
 import { PLACEHOLDER_TOKEN } from '../src/coord/token.js';
@@ -213,9 +213,10 @@ describe('doctor box-token: PASS, and only on a measured healthy box', () => {
 
   // Row 2c invariant: the live server's disk (mail.token, box-token.json at generation #3 with counters 0 and 0 and a
   // null stamp, and box-token-retired.json in the writer's shape) is PASS at every commit.
-  const plantLiveServer = (b: Box): void => {
+  const plantLiveServer = (b: Box, ageMs = 60 * MIN): void => {
     editState(b, (s) => {
       s.current.seq = 3; s.nextSeq = 4;
+      s.lastRotationAt = Date.now() - ageMs; s.current.since = Date.now() - ageMs;
       s.counters = { previousPresented: 0, retiredPresented: 0, retiredPresentedAt: null };
     });
     writeFileSync(dot(b, 'box-token-retired.json'), '{"v":1,"retired":[]}\n', { mode: 0o600 });
@@ -240,12 +241,36 @@ describe('doctor box-token: PASS, and only on a measured healthy box', () => {
     expect(r.code).toBe(0);
     expect(r.stderr).toBe('');
   });
+
+  // Row 3a invariant: the live server is about two days past its last rotation, and the weekly schedule's overdue WARN
+  // (4557) waits for the interval plus its slack, so both ages below read the plain PASS.
+  it('the live server two days after its rotation reads the live line, PASS (row 3a invariant)', () => {
+    const b = box({ role: 'server' });
+    plantLiveServer(b, 2 * 24 * 60 * MIN + 5 * MIN);
+    for (const checks of [CHECKS_SRC, disarmed()]) {
+      const r = runCheck(b, checks);
+      expect(r.stdout).toBe('PASS box-token: server: generation #3, rotated 2 d ago, fleet confirmed, retired value refused\n');
+      expect(r.code).toBe(0);
+      expect(r.stderr).toBe('');
+    }
+  });
+
+  it('seven days and twenty-three hours after the last rotation is still PASS: the overdue WARN waits for the slack (row 3a invariant)', () => {
+    const b = box({ role: 'server' });
+    plantLiveServer(b, (7 * 24 + 23) * 60 * MIN);
+    const r = runCheck(b, CHECKS_SRC);
+    expect(r.stdout).toBe('PASS box-token: server: generation #3, rotated 7 d ago, fleet confirmed, retired value refused\n');
+    expect(r.code).toBe(0);
+    expect(r.stderr).toBe('');
+  });
 });
 
 // ── every armed state: FAIL or WARN with its word (SKIP only in the disarmed copy) ──
 
 interface Row { label?: string; word: string; arm: 'server' | 'fleet'; armedClass: 'FAIL' | 'WARN'; plant: (b: Box) => void }
 const now = (): number => Date.now();
+/** 4557: the age past which a standing schedule is overdue, the interval plus its slack (both L0's). */
+const OVER = TOKEN_ROTATION_INTERVAL_MS + TOKEN_ROTATION_OVERDUE_SLACK_MS;
 const ROWS: Row[] = [
   // 4553 (D-139 ruled over Decision 2 (a), 2026-10-12): the class of an absent token comes from the box's history, read
   // after the state read. A server that has a state file once held a value and lost it: FAIL. One with no state file has
@@ -291,6 +316,8 @@ const ROWS: Row[] = [
   { arm: 'server', word: 'rotation-owed:retired-written-back', armedClass: 'WARN', plant: (b) => editState(b, (s) => { s.rotationOwed = true; s.owedWhy = 'retired-written-back'; }) },
   // D-4412 (Part A, merged after the brief): a retired value presented owes one bounded forward rotation.
   { arm: 'server', word: 'rotation-owed:retired-presented', armedClass: 'WARN', plant: (b) => editState(b, (s) => { s.rotationOwed = true; s.owedWhy = 'retired-presented'; }) },
+  // 4557: no rotation for longer than the interval plus its slack, with no hold and nothing pending. Computed, never persisted.
+  { arm: 'server', word: 'rotation-overdue', armedClass: 'WARN', plant: (b) => editState(b, (s) => { s.lastRotationAt = now() - OVER - 60 * MIN; }) },
   { arm: 'server', word: 'proof-unmeasured', armedClass: 'WARN', plant: (b) => editState(b, (s) => { s.lastSync = { at: now() - MIN, word: 'proof-unmeasured', transport: 'https' }; }) },
   // D-4551 (fix round 1): the two stalled retirements merged Part A can reach. Minutes are floored, so 30 and 45 exactly.
   { arm: 'server', word: 'retire-overdue:30', armedClass: 'FAIL', plant: (b) => editState(b, (s) => {
@@ -485,6 +512,77 @@ describe('doctor box-token: a rotation answers a retired presentation (4552)', (
     expect(r.stdout).toMatch(/remedy: .*this line clears when that rotation completes/);
     expect(r.stdout).not.toMatch(/resync that box/);
     expect(r.stdout).not.toMatch(/Rotate now/);
+  });
+});
+
+// ── the weekly schedule: overdue, and a stamp ahead of the clock (4557) ──
+
+describe('doctor box-token: the weekly schedule, overdue and ahead (4557)', () => {
+  const oldAnchor = (s: BoxTokenState): void => { s.lastRotationAt = now() - OVER - 60 * MIN; s.current.since = s.lastRotationAt; };
+  const pendingEntry = (): BoxTokenState['pending'][number] =>
+    ({ id: ID_OLD, seq: 3, stagedAt: now() - MIN, handedOutAt: null, confirmBy: null, write: { dev: 1, ino: 3, writtenAtMs: now() - MIN } });
+
+  it('a null lastRotationAt counts from current.since: a minted value never rotated for eight days is overdue', () => {
+    const b = box({ role: 'server' });
+    editState(b, (s) => {
+      s.origin = 'minted'; s.lastRotationAt = null; s.retiredRefusedAt = null; s.current.since = now() - OVER - 60 * MIN;
+    });
+    const r = runCheck(b, CHECKS_SRC);
+    expect(r.stdout).toMatch(/^WARN box-token: server: rotation-overdue — no rotation has completed for 8 d/);
+    expect(r.stdout).toMatch(/\n {2}remedy: \S/);
+    expect(r.code).toBe(2);
+  });
+
+  it('a standing hold is the finding, not the schedule', () => {
+    const b = box({ role: 'server' });
+    editState(b, (s) => { oldAnchor(s); s.hold = 'link-down'; });
+    const r = runCheck(b, CHECKS_SRC);
+    expect(r.stdout).toContain('server: held:link-down — ');
+    expect(r.stdout).not.toContain('rotation-overdue');
+  });
+
+  // A rotation in flight, staged, handed out or promoting, always has its id pending, so it is not overdue.
+  const inFlight = 'PASS box-token: server: generation #2, rotated 8 d ago, fleet confirmed, retired value refused, a rotation in progress\n';
+  it('a rotation in flight is not overdue: a staged value', () => {
+    const b = box({ role: 'server' });
+    editState(b, (s) => { oldAnchor(s); s.pending = [pendingEntry()]; });
+    const r = runCheck(b, CHECKS_SRC);
+    expect(r.stdout).toBe(inFlight);
+    expect(r.code).toBe(0);
+  });
+
+  it('a rotation in flight is not overdue: a promotion recorded, its id still pending', () => {
+    const b = box({ role: 'server' });
+    editState(b, (s) => { oldAnchor(s); s.pending = [pendingEntry()]; s.promoting = { id: ID_OLD }; });
+    const r = runCheck(b, CHECKS_SRC);
+    expect(r.stdout).toBe(inFlight);
+    expect(r.code).toBe(0);
+  });
+
+  it('an owed rotation that is also overdue names both', () => {
+    const b = box({ role: 'server' });
+    editState(b, (s) => { oldAnchor(s); s.rotationOwed = true; s.owedWhy = 'recovered'; });
+    const r = runCheck(b, CHECKS_SRC);
+    expect(r.stdout).toContain('server: rotation-owed:recovered — ');
+    expect(r.stdout).toContain('server: rotation-overdue — ');
+    expect(r.code).toBe(2);
+  });
+
+  it('a stamp ahead of the clock says so on the PASS line, and the schedule waits', () => {
+    const b = box({ role: 'server' });
+    // A margin off `_bt_age`'s 7200 s boundary: Python reads its clock a few ms after the test's `now()`.
+    editState(b, (s) => { s.lastRotationAt = now() + 2 * 60 * MIN + 5 * MIN; });
+    const r = runCheck(b, CHECKS_SRC);
+    expect(r.stdout).toBe('PASS box-token: server: generation #2, rotated 0 s ago, fleet confirmed, retired value refused, its schedule stamp 2 h ahead of this clock (the weekly schedule waits for the clock to pass it)\n');
+    expect(r.code).toBe(0);
+  });
+
+  it('a stamp more than one interval ahead says the server rotates now', () => {
+    const b = box({ role: 'server' });
+    editState(b, (s) => { s.lastRotationAt = now() + TOKEN_ROTATION_INTERVAL_MS + 60 * MIN; });
+    const r = runCheck(b, CHECKS_SRC);
+    expect(r.stdout).toContain('its schedule stamp 7 d ahead of this clock (more than the interval, so the server rotates now)');
+    expect(r.code).toBe(0);
   });
 });
 
@@ -1230,6 +1328,10 @@ describe('doctor box-token: the shell spellings are pinned to L0', () => {
   it('the pending cap and the driver tick are the policy\'s', () => {
     expect(arr('_BT_PENDING_CAP')).toEqual([String(PENDING_HARD_CAP)]);
     expect(arr('_BT_TICK_MS')).toEqual([String(DRIVER_TICK_MS)]);
+  });
+  it('the interval and its overdue slack are L0\'s (4557)', () => {
+    expect(arr('_BT_INTERVAL_MS')).toEqual([String(TOKEN_ROTATION_INTERVAL_MS)]);
+    expect(arr('_BT_OVERDUE_SLACK_MS')).toEqual([String(TOKEN_ROTATION_OVERDUE_SLACK_MS)]);
   });
   it('the failure count that turns failed:* FAIL is the banner threshold', () => {
     expect(arr('_BT_FAIL_AT')).toEqual([String(FAILURES_FOR_BANNER)]);

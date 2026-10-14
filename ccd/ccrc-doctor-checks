@@ -7414,13 +7414,17 @@ _check_history() {
 # `OWED_REASONS`, `_BT_ORIGINS` is `TOKEN_ORIGINS` (`shared/box-token.ts`); `_BT_SYNC_ERRORS` is
 # `TOKEN_SYNC_OP_ERRORS` and `_BT_TRANSPORTS` is `TOKEN_TRANSPORTS` (`shared/agent-protocol.ts`); `_BT_FAIL_AT`
 # is `FAILURES_FOR_BANNER`, `_BT_PENDING_CAP` is `PENDING_HARD_CAP` and `_BT_TICK_MS` is `DRIVER_TICK_MS`
-# (`server/src/token/policy.ts`). `_BT_LOST_WORDS` are the rest of `BoxTokenView.lastFailure`'s vocabulary, which
-# has no L0 list of its own: `link.ts`'s non-exported `LOST_WORDS` (pinned by a text scan of that file) plus
-# `mint-failed`, the one word `link.ts` does not list (the console view's word for a failed mint). The state record
-# CAN hold it, as `lastFailure`: the driver commits `lastFailure: 'mint-failed'` on a failed stage write.
+# (`server/src/token/policy.ts`); `_BT_INTERVAL_MS` is `TOKEN_ROTATION_INTERVAL_MS` and `_BT_OVERDUE_SLACK_MS` is
+# `TOKEN_ROTATION_OVERDUE_SLACK_MS` (`shared/box-token.ts`). `_BT_LOST_WORDS` are the rest of
+# `BoxTokenView.lastFailure`'s vocabulary, which has no L0 list of its own: `link.ts`'s non-exported `LOST_WORDS`
+# (pinned by a text scan of that file) plus `mint-failed`, the one word `link.ts` does not list (the console view's
+# word for a failed mint). The state record CAN hold it, as `lastFailure`: the driver commits `lastFailure: 'mint-failed'` on a failed stage write.
 # D-4551's two words are doctor-local, like `pending-overdue`: `retire-overdue:<min>` (a previous value more than
 # one driver tick past its `hardUntil`) and `retiring-unlanded:<min>` (the oldest `retiring` digest older than two
-# ticks, one tick plus one tick of slack). "In grace" is never printed past `hardUntil`.
+# ticks, one tick plus one tick of slack). "In grace" is never printed past `hardUntil`. `rotation-overdue:` (4557) is
+# doctor-local too, computed from the state and never persisted, like `pending-overdue`: the weekly schedule's anchor
+# (the last promotion, else the mint of the current value) older than the interval plus its slack, with no hold standing
+# and nothing pending.
 #
 # `set +x` is the function's first statement, not the file's: this file is sourced into `ccrc`, and doctor runs
 # each check in its own `$( … )`, so it cannot leak; it writes nothing, so it sets no umask (a file-level
@@ -7452,12 +7456,14 @@ _BT_LOST_WORDS=(timeout disconnected aborted mint-failed)
 _BT_FAIL_AT=3
 _BT_PENDING_CAP=3
 _BT_TICK_MS=60000
+_BT_INTERVAL_MS=604800000
+_BT_OVERDUE_SLACK_MS=86400000
 _BT_SKIP_TAIL='; the FAIL and WARN arms are switched off (_BT_ARMS_ON=0)'
 
 # The server's state record, read strictly: any field missing or of the wrong kind is `unreadable`, never a
 # default. Prints `absent`, `unreadable`, or `ok` then `<key> <value>` lines and `finding <word> [<n>] [<node>]`.
 # argv: path, origins, holds, owed reasons, last-failure words, transports, file-problem words (each space-joined),
-# the pending cap, the driver tick in ms. Times are ms.
+# the pending cap, the driver tick in ms, the rotation interval and the overdue slack in ms. Times are ms.
 # The shape is `isBoxTokenState`'s (server/src/token/files.ts) as of D-4413/D-4414: up to PENDING_HARD_CAP
 # pending entries (argv, `_BT_PENDING_CAP`), a `recovering` key, `fileProblem` and `retiring` optional (`retiring`
 # is a list of {sha256, at} awaiting their append: only the oldest `at` is read, no digest is kept or printed).
@@ -7472,6 +7478,7 @@ def bad():
 p = sys.argv[1]
 origins, holds, owed, fails, transports, fileprobs = (set(a.split()) for a in sys.argv[2:8])
 cap, tick = int(sys.argv[8]), int(sys.argv[9])
+interval, slack = int(sys.argv[10]), int(sys.argv[11])
 now = int(time.time() * 1000)
 H16 = re.compile(r"[0-9a-f]{16}\Z")
 H64 = re.compile(r"[0-9a-f]{64}\Z")
@@ -7528,6 +7535,11 @@ say("rotated", "never" if lr is None else age(lr))
 say("rotating", 1 if (s["pending"] or s["promoting"] is not None) else 0)
 say("grace", 1 if (pv is not None and now <= pv["hardUntil"]) else 0)
 say("refused", 0 if s["retiredRefusedAt"] is None else 1)
+# 4556/4557: the anchor of the schedule is the last promotion, else the mint of the current value. A stamp ahead of
+# this clock is said (the schedule waits for it, or rotates at once when it is more than one interval ahead).
+anchor = lr if lr is not None else c["since"]
+if anchor > now:
+    say("ahead", (anchor - now) // 1000, 1 if anchor - now > interval else 0)
 if s["mintFailedAt"] is not None:
     say("finding", "mint-failed", age(s["mintFailedAt"]))
 # D-4551: a previous value past its hard bound (plus one driver tick) is still here, and a retired digest whose
@@ -7549,6 +7561,10 @@ if over:
     say("finding", "pending-overdue", max(over) // 1000)
 if s["rotationOwed"]:
     say("finding", "rotation-owed:" + s["owedWhy"])
+# 4557: no rotation for longer than the interval plus its slack, with no hold standing and nothing pending (a
+# rotation in flight, staged, handed out or promoting, always has its id pending, so it is not overdue).
+if now - anchor > interval + slack and s["hold"] is None and not s["pending"]:
+    say("finding", "rotation-overdue", (now - anchor) // 1000)
 if ls is not None and ls["word"] == "proof-unmeasured" and not (f > 0 and lf == "proof-unmeasured"):
     say("finding", "proof-unmeasured", age(ls["at"]))
 if br is not None and (lr is None or lr < br["at"]):
@@ -7744,6 +7760,9 @@ _bt_find() {
     server:rotation-owed:*)
       say="a rotation is owed (${word#rotation-owed:}) and has not completed"
       fix="$card, or let the driver's next tick start it" ;;
+    server:rotation-overdue)   # 4557: doctor-local, computed from the state, never persisted
+      say="no rotation has completed for $(_bt_age "$a"), past the $(_bt_age "$((_BT_INTERVAL_MS / 1000))") schedule and its $(_bt_age "$((_BT_OVERDUE_SLACK_MS / 1000))") slack, with no hold standing and nothing in flight"
+      fix="a running server starts the scheduled rotation on its next tick unless a backoff stands: read the console's Box token card and the server's log; if the server is not running, start it (ccrc.service)" ;;
     server:proof-unmeasured)
       say="the fleet's last sync ($(_bt_age "$a") ago) wrote the value but could not prove it against this server"
       fix="run ccrc doctor on the fleet box: its box-token line names the sync's own result" ;;
@@ -7837,7 +7856,7 @@ _bt_server_trace() {
 }
 
 _bt_server_arm() {   # <token path> <state path> <own-write: 0|1>
-  local tok="$1" state="$2" own="${3:-0}" before="${#BT_CLASS[@]}" out="" kw w n node seq="" since="" rot="" rotating=0 grace=0 refused=0 bad=0 tai=-1 BT_TRACE=""
+  local tok="$1" state="$2" own="${3:-0}" before="${#BT_CLASS[@]}" out="" kw w n node seq="" since="" rot="" ahead="" aheaddue=0 rotating=0 grace=0 refused=0 bad=0 tai=-1 BT_TRACE=""
   _bt_value_file "$tok"
   case "$BT_TF" in
     absent) tai="${#BT_CLASS[@]}"; _bt_find server token-absent "$tok" ;;
@@ -7851,7 +7870,7 @@ _bt_server_arm() {   # <token path> <state path> <own-write: 0|1>
   if ! command -v python3 >/dev/null 2>&1; then _bt_find server state-unreadable "$state" no-python; return 0; fi
   out="$(python3 -I -c "$_BT_PY_STATE" "$state" "${_BT_ORIGINS[*]}" "${_BT_HOLDS[*]}" "${_BT_OWED[*]}" \
     "${_BT_SYNC_ERRORS[*]} ${_BT_LOST_WORDS[*]}" "${_BT_TRANSPORTS[*]}" "${_BT_FILE_PROBLEMS[*]}" \
-    "$_BT_PENDING_CAP" "$_BT_TICK_MS" 2>/dev/null)" || out=""
+    "$_BT_PENDING_CAP" "$_BT_TICK_MS" "$_BT_INTERVAL_MS" "$_BT_OVERDUE_SLACK_MS" 2>/dev/null)" || out=""
   case "${out%%$'\n'*}" in absent) BT_SERVER_STATE=absent ;; ok) BT_SERVER_STATE=ok ;; esac   # anything else stays unreadable
   case "${out%%$'\n'*}" in
     # 4553, as D-139 rules it (operator, 2026-10-12): an absent token beside an absent state is a server that has never run
@@ -7890,6 +7909,7 @@ _bt_server_arm() {   # <token path> <state path> <own-write: 0|1>
       ok) ;;
       seq) _bt_num "$w" && seq="$w" ;;
       since) _bt_num "$w" && since="$w" ;;
+      ahead) if _bt_num "$w" && [[ "$n" =~ ^[01]$ ]]; then ahead="$w"; aheaddue="$n"; else bad=1; fi ;;
       rotated) { [ "$w" = never ] || _bt_num "$w"; } && rot="$w" ;;
       rotating) [ "$w" = 1 ] && rotating=1 ;;
       grace) [ "$w" = 1 ] && grace=1 ;;
@@ -7897,7 +7917,7 @@ _bt_server_arm() {   # <token path> <state path> <own-write: 0|1>
       finding)
         case "$w" in
           retired-presented) if _bt_num "$n" && { [ "$node" = - ] || _bt_num "$node"; }; then _bt_find server "$w" "$n" "$node"; else bad=1; fi ;;
-          mint-failed|pending-overdue|proof-unmeasured|recovered) _bt_num "$n" && _bt_find server "$w" "$n" || bad=1 ;;
+          mint-failed|pending-overdue|rotation-overdue|proof-unmeasured|recovered) _bt_num "$n" && _bt_find server "$w" "$n" || bad=1 ;;
           retire-overdue|retiring-unlanded) _bt_num "$n" && _bt_find server "$w:$n" "$n" || bad=1 ;;
           fleet-behind|fleet-unconfirmed) _bt_find server "$w" ;;
           file:*) if _bt_member "${w#file:}" "${_BT_FILE_PROBLEMS[@]}" && _bt_num "$n" && [[ "$node" =~ ^(current|pending|previous)$ ]]; then
@@ -7922,6 +7942,10 @@ _bt_server_arm() {   # <token path> <state path> <own-write: 0|1>
   [ "$refused" -eq 1 ] && extra=", retired value refused"      # spec 10.3's proof, once the server recorded it
   [ "$rotating" -eq 1 ] && extra="$extra, a rotation in progress"
   [ "$grace" -eq 1 ] && extra="$extra, the previous value in grace"
+  if [ -n "$ahead" ]; then
+    if [ "$aheaddue" = 1 ]; then extra="$extra, its schedule stamp $(_bt_age "$ahead") ahead of this clock (more than the interval, so the server rotates now)"
+    else extra="$extra, its schedule stamp $(_bt_age "$ahead") ahead of this clock (the weekly schedule waits for the clock to pass it)"; fi
+  fi
   BT_PART+=("server: generation #$seq, $how, fleet confirmed$extra"); BT_CLASS+=(PASS); BT_FIX+=("")
 }
 
