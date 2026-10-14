@@ -955,7 +955,7 @@ describe('Review 450 F3: the no-listing page\'s fetch note stops counting at the
   const tooSoon = (ms: number): ReturnType<typeof okRefresh> => okRefresh(fetchFailed('fetch-too-soon', { retryAfterMs: ms }), failedAnswer('unresolved-ref').body);
   const noteText = (c: HTMLElement): string | undefined => c.querySelector('.docs-fail-fresh')?.textContent ?? undefined;
 
-  it('a second fetch-too-soon (past the visit\'s one automatic retry) counts down from 1s, then leaves no note', async () => {
+  it('a second fetch-too-soon (past the visit\'s one automatic retry) counts down, never below 1s, then leaves no note', async () => {
     vi.useFakeTimers();
     const f = fakeLoaders({ tree: failedAnswer('unresolved-ref') });
     f.refresh.mockResolvedValueOnce(tooSoon(2000)).mockResolvedValueOnce(tooSoon(4000));
