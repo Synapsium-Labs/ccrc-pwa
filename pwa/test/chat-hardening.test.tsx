@@ -9,14 +9,14 @@ import { act, cleanup, render, screen } from '@testing-library/react';
 import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { MessageBubble } from '../src/session/MessageBubble';
-import { CHAT_COMPONENTS, chatPlainNote, countChatTableCells, isRefusedChatImageSrc, keystrokeParts } from '../src/lib/markdown';
+import { CHAT_COMPONENTS, chatPlainNote, countChatTableCells, isRefusedChatImageSrc } from '../src/lib/markdown';
 import { remarkAlerts } from '../src/lib/remarkAlerts';
 import { chatRunner } from '../src/lib/markdownRunner';
 import { parseMarkdown, type ParseOutcome } from '../src/lib/markdownParse';
-import { utf8ByteLength } from '../src/lib/markdownGuard';
+import { keystrokeParts, utf8ByteLength } from '../src/lib/markdownGuard';
 import {
-  CHAT_PARSE_BUDGET_MS, CHAT_SYNC_MAX_BYTES, DOCS_MAX_RENDER_ELEMENTS, MD_MAX_CONTAINER_DEPTH, MD_MAX_DELIMITER_RUN,
-  MD_MAX_TREE_DEPTH,
+  CHAT_PARSE_BUDGET_MS, CHAT_SYNC_MAX_BYTES, DOCS_MAX_RENDER_ELEMENTS, MD_KEYSTROKE_MAX_CHARS, MD_MAX_CONTAINER_DEPTH,
+  MD_MAX_DELIMITER_RUN, MD_MAX_TREE_DEPTH,
 } from '../src/lib/markdownLimits';
 import { CHAT_CORPUS } from './markdownCorpus';
 
@@ -340,9 +340,9 @@ describe('isRefusedChatImageSrc: chat draws an image only from an absolute http(
   });
 });
 
-describe('T11 review 2-2: a keystroke chord is split into chips only up to a bound a 4 KiB message can reach', () => {
-  // The longest chord of single-character parts inside backticks and 4 096 bytes: 2 + 4 093 bytes, 2 047 parts.
-  const MAX_SYNC_PARTS = Math.floor((CHAT_SYNC_MAX_BYTES - 2 + 1) / 2);
+describe('T11 review 2-2, bounded by W5 r11: a keystroke chord is split into chips only up to MD_KEYSTROKE_MAX_CHARS', () => {
+  // The longest chord of single-character parts within MD_KEYSTROKE_MAX_CHARS characters: 2n - 1 <= 64, 32 parts.
+  const MAX_PARTS = Math.floor((MD_KEYSTROKE_MAX_CHARS + 1) / 2);
   const chord = (n: number): string => `${'a+'.repeat(n - 1)}a`;
 
   it('a 200 KB chord on the worker path draws a bounded number of elements, as plain inline code', async () => {
@@ -367,18 +367,25 @@ describe('T11 review 2-2: a keystroke chord is split into chips only up to a bou
     expect([...container.querySelectorAll('kbd')].map((k) => k.textContent)).toEqual(['Ctrl', 'Shift', 'P']);
   });
 
-  it('the longest chord a 4 KiB message can hold is still chips, so chat at 4 KiB renders as before', () => {
-    const text = `\`${chord(MAX_SYNC_PARTS)}\``;
-    expect(utf8ByteLength(text)).toBeLessThanOrEqual(CHAT_SYNC_MAX_BYTES);
-    const { container } = assistant(text);
-    expect(container.querySelectorAll('kbd')).toHaveLength(MAX_SYNC_PARTS);
+  it('on the synchronous path the longest chord within the limit is still chips, and one part more is plain inline code', () => {
+    const { container } = assistant(`\`${chord(MAX_PARTS)}\``);
+    expect(container.querySelectorAll('kbd')).toHaveLength(MAX_PARTS);
     expect(container.querySelector('code.md-code')).toBeNull();
+    cleanup();
+    const text = `\`${chord(MAX_PARTS + 1)}\``;
+    expect(utf8ByteLength(text)).toBeLessThanOrEqual(CHAT_SYNC_MAX_BYTES);
+    const over = assistant(text).container;
+    expect(over.querySelectorAll('kbd')).toHaveLength(0);
+    expect(over.querySelector('code.md-code')?.textContent).toBe(chord(MAX_PARTS + 1));
   });
 
-  it('keystrokeParts answers null past CHAT_SYNC_MAX_BYTES / 2 parts and parts at that count', () => {
-    expect(keystrokeParts(chord(MAX_SYNC_PARTS))).toHaveLength(MAX_SYNC_PARTS);
-    expect(keystrokeParts(chord(CHAT_SYNC_MAX_BYTES / 2))).toHaveLength(CHAT_SYNC_MAX_BYTES / 2);
-    expect(keystrokeParts(chord(CHAT_SYNC_MAX_BYTES / 2 + 1))).toBeNull();
+  it('keystrokeParts answers null past MD_KEYSTROKE_MAX_CHARS characters and parts at it', () => {
+    expect(keystrokeParts(chord(MAX_PARTS))).toHaveLength(MAX_PARTS);
+    expect(keystrokeParts(` ${chord(MAX_PARTS)}`)).toHaveLength(MAX_PARTS);
+    expect(` ${chord(MAX_PARTS)}`).toHaveLength(MD_KEYSTROKE_MAX_CHARS);
+    expect(keystrokeParts(`  ${chord(MAX_PARTS)}`)).toBeNull();
+    expect(keystrokeParts(chord(MAX_PARTS + 1))).toBeNull();
+    expect(keystrokeParts(chord(CHAT_SYNC_MAX_BYTES / 2))).toBeNull();
   });
 });
 
@@ -669,5 +676,18 @@ describe('T11 review Q1 (operator ruling): chat shows an image only when its sou
     expect(isRefusedChatImageSrc('  https://h.example/x.png')).toBe(false);
     const { container } = assistant('[x](https://h.example/x.png)');
     expect(container.querySelectorAll('img')).toHaveLength(1);
+  });
+});
+
+describe("W5 bound 2-2 reaches chat: the parse's element count includes the chips inline code draws", () => {
+  it('a message of 400 spans of a 31-plus chord on the worker path is plain text with the too-wide note, no chip drawn', async () => {
+    const calls = deferChatParses();
+    const text = Array.from({ length: 400 }, () => `\`${'a+'.repeat(31)}a\``).join(' ');
+    expect(utf8ByteLength(text)).toBeGreaterThan(CHAT_SYNC_MAX_BYTES);
+    const { container } = assistant(text);
+    await answer(calls, 0);
+    expect(plainOf(container)?.textContent).toBe(text);
+    expect(noteOf(container)).toBe(chatPlainNote({ kind: 'too-wide', elements: 1 + 400 * 64 }));
+    expect(container.querySelectorAll('kbd')).toHaveLength(0);
   });
 });

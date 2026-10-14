@@ -593,6 +593,19 @@ export function FleetScreen({
               {poolLag}
             </span>
           )}
+          {/* THE DOOR TO /docs (native Docs reader design 2026-10-01, section 4.8): the `.settings-door` pattern below,
+              a glyph AND a word, placed immediately before `.accounts-door`. Rendered unconditionally, like Settings:
+              the Docs index lists every project, so a fleet with no sessions still has docs to read. Its box lives
+              in docs/docs.css, which reaches the main stylesheet through app.tsx's static import of DocsScreen. */}
+          <button
+            type="button"
+            className="docs-door"
+            aria-label="Docs: specs, plans and design notes"
+            onClick={() => navigate('/docs')}
+          >
+            <span className="docs-door-glyph" aria-hidden="true">📄</span>
+            Docs
+          </button>
           {/* THE DURABLE DOOR TO /accounts (D-161). The AccountsStrip tap
               target was the only one — its own comment says so — and its
               accessible name is "account usage — open accounts": a full-width

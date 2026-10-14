@@ -1114,6 +1114,11 @@ describe('docs section H: entryView, admitDraft and githubBlobUrl', () => {
     const VIAS = Object.keys(VIA_KEYS) as Ref['via'][];
     const NAMED: docsH.DocsGithub = { state: 'named', slug: 'example-org/example-repo' };
     const NONE: docsH.DocsGithub = { state: 'none' };
+    // A slug with a dot segment: the bad-slug row (spec 3.11, amended 2026-10-13). ccd's slug fix refuses it
+    // upstream; the L0 assembler refuses it whether or not that fix has landed.
+    const DOT_SLUG: docsH.DocsGithub = { state: 'named', slug: 'example-org/..' };
+    const GITHUBS = { named: NAMED, 'dot-slug': DOT_SLUG, none: NONE } as const;
+    const GITHUB_NAMES = Object.keys(GITHUBS) as (keyof typeof GITHUBS)[];
     const refOf = (side: Ref['side'], relation: Ref['relation'], via: Ref['via'], name = 'ws/a b'): Ref => ({
       requested: null, served: (side === 'local' ? 'refs/heads/' : 'refs/remotes/origin/') + name, name, side,
       commit: 'c'.repeat(40), via, tried: [], relation, counterpart: null,
@@ -1123,24 +1128,33 @@ describe('docs section H: entryView, admitDraft and githubBlobUrl', () => {
       newLeaf: { kind: 'leaf', section: 'plans', path: 'sub dir/x y.md', uncommitted: true },
       section: { kind: 'section', section: 'plans' },
       dir: { kind: 'dir', section: 'plans', path: 'sub dir' },
+      repo: { kind: 'repo', repoPath: 'README.md' },
+      root: { kind: 'root' },
+      dotRepo: { kind: 'repo', repoPath: 'docs/../README.md' },
     } as const satisfies Record<string, docsH.GithubTarget>;
     type TargetName = keyof typeof TARGETS;
-    // Hand-written; never built by the code under test. `newLeaf` never reaches a link (row 3 refuses it first).
-    const URL_OF: Record<Exclude<TargetName, 'newLeaf'>, string> = {
+    // Hand-written; never built by the code under test. `newLeaf` never reaches a link (row 3 refuses it first),
+    // and neither does `dotRepo` (row 1b refuses its `..` segment first).
+    const URL_OF: Record<Exclude<TargetName, 'newLeaf' | 'dotRepo'>, string> = {
       leaf: 'https://github.com/example-org/example-repo/blob/ws/a%20b/docs/superpowers/plans/sub%20dir/x%20y.md',
       section: 'https://github.com/example-org/example-repo/tree/ws/a%20b/docs/superpowers/plans',
       dir: 'https://github.com/example-org/example-repo/tree/ws/a%20b/docs/superpowers/plans/sub%20dir',
+      repo: 'https://github.com/example-org/example-repo/blob/ws/a%20b/README.md',
+      root: 'https://github.com/example-org/example-repo/tree/ws/a%20b',
     };
 
     interface LinkCase {
-      github: 'named' | 'none'; side: Ref['side']; relation: Ref['relation']; via: Ref['via']; target: TargetName;
+      github: keyof typeof GITHUBS; side: Ref['side']; relation: Ref['relation']; via: Ref['via']; target: TargetName;
     }
-    const urlFor = (c: LinkCase): string => (c.target === 'newLeaf' ? 'unreachable' : URL_OF[c.target]);
+    const urlFor = (c: LinkCase): string =>
+      (c.target === 'newLeaf' || c.target === 'dotRepo' ? 'unreachable' : URL_OF[c.target]);
     // THE ORACLE: spec 3.11's table, in its order, the first match winning, plus one row the table leaves out:
     // a local side reading `origin-only` cannot arrive, and the builder gives it the cautious note.
     type LinkRow = { row: string; when: (c: LinkCase) => boolean; link: (c: LinkCase) => docsH.GithubLink };
     const LINK_ROWS: readonly LinkRow[] = [
       { row: '1 no github origin', when: (c) => c.github === 'none', link: () => ({ ok: false, why: 'no-github-origin' }) },
+      { row: '1a a dot-segment slug', when: (c) => c.github === 'dot-slug', link: () => ({ ok: false, why: 'bad-slug' }) },
+      { row: '1b a dot segment in the path', when: (c) => c.target === 'dotRepo', link: () => ({ ok: false, why: 'bad-target' }) },
       {
         row: '2 local-only, or a local default',
         when: (c) => c.relation === 'local-only' || c.via === 'default:local-main' || c.via === 'default:local-master',
@@ -1164,17 +1178,17 @@ describe('docs section H: entryView, admitDraft and githubBlobUrl', () => {
       },
     ];
     const LINK_CASES: LinkCase[] = [];
-    for (const github of ['named', 'none'] as const) for (const side of SIDES) for (const relation of RELATIONS) {
+    for (const github of GITHUB_NAMES) for (const side of SIDES) for (const relation of RELATIONS) {
       for (const via of VIAS) for (const target of Object.keys(TARGETS) as TargetName[]) {
         LINK_CASES.push({ github, side, relation, via, target });
       }
     }
     const canon = (o: object): string => JSON.stringify(Object.entries(o).sort(([a], [b]) => (a < b ? -1 : 1)));
     const linkOf = (c: LinkCase): docsH.GithubLink =>
-      docsH.githubBlobUrl(c.github === 'named' ? NAMED : NONE, refOf(c.side, c.relation, c.via), TARGETS[c.target]);
+      docsH.githubBlobUrl(GITHUBS[c.github], refOf(c.side, c.relation, c.via), TARGETS[c.target]);
 
-    it('the table covers 2 origins x 2 sides x 7 relations x 8 vias x 4 targets, and every oracle row is reached', () => {
-      expect(LINK_CASES.length).toBe(2 * 2 * 7 * 8 * 4);
+    it('the table covers 3 origins x 2 sides x 7 relations x 8 vias x 7 targets, and every oracle row is reached', () => {
+      expect(LINK_CASES.length).toBe(3 * 2 * 7 * 8 * 7);
       const reached = new Set(LINK_CASES.map((c) => LINK_ROWS.find((r) => r.when(c))?.row ?? 'no row'));
       expect([...reached].sort()).toEqual(LINK_ROWS.map((r) => r.row).sort());
     });
@@ -1252,6 +1266,297 @@ describe('docs section H: entryView, admitDraft and githubBlobUrl', () => {
       const link = docsH.githubBlobUrl(NAMED, refOf('origin', 'equal', 'origin'), TARGETS.leaf);
       expect(link.ok && link.url.includes('c'.repeat(40))).toBe(false);
       expect(link).toMatchObject({ ok: true });
+    });
+  });
+});
+
+// ---- Section H, W5 part 1 Task 1: githubPermalink, the one assembler, and the repo and root targets ------------
+// Spec 2026-10-01 3.11 as amended 2026-10-13 (Share and Export): M3.16, M3.17 and M3.18. M3.11's widened oracle is
+// in the githubBlobUrl describe above. APPENDED after the file's last line. One namespace import, so no binding
+// here can collide with a name an earlier block imported.
+import * as docsP from '../../shared/docs.js';
+
+describe('docs section H, W5: githubPermalink, the one assembler, and the repo and root targets', () => {
+  type Ref = docsP.DocsTreeOk['ref'];
+  type Target = docsP.GithubTarget;
+  const SIDE_KEYS: Record<Ref['side'], true> = { local: true, origin: true };
+  const RELATION_KEYS: Record<Ref['relation'], true> = {
+    equal: true, 'local-only': true, 'origin-only': true, 'local-ahead': true, 'local-behind': true,
+    diverged: true, unmeasured: true,
+  };
+  const VIA_KEYS: Record<Ref['via'], true> = {
+    'default:origin-head': true, 'default:origin-main': true, 'default:origin-master': true,
+    'default:local-main': true, 'default:local-master': true, local: true, origin: true, qualified: true,
+  };
+  // The target kinds as a Record over the type's own union: a kind added to GithubTarget without a row here is a
+  // compile error (typecheck-tests), and the first case below checks that TARGETS reaches every kind.
+  const KIND_KEYS: Record<Target['kind'], true> = { leaf: true, section: true, dir: true, repo: true, root: true };
+  const SIDES = Object.keys(SIDE_KEYS) as Ref['side'][];
+  const RELATIONS = Object.keys(RELATION_KEYS) as Ref['relation'][];
+  const VIAS = Object.keys(VIA_KEYS) as Ref['via'][];
+  const NAMED: docsP.DocsGithub = { state: 'named', slug: 'example-org/example-repo' };
+  const NONE: docsP.DocsGithub = { state: 'none' };
+  const named = (slug: string): docsP.DocsGithub => ({ state: 'named', slug });
+  // The commit the page opened. It is neither ref.commit ('c' x 40) nor ref.name, so a builder that wrote either
+  // instead of its argument is seen.
+  const COMMIT = 'e'.repeat(40);
+  const refOf = (side: Ref['side'], relation: Ref['relation'], via: Ref['via'], name = 'ws/a b'): Ref => ({
+    requested: null, served: (side === 'local' ? 'refs/heads/' : 'refs/remotes/origin/') + name, name, side,
+    commit: 'c'.repeat(40), via, tried: [], relation, counterpart: null,
+  });
+  const ORIGIN_EQUAL = refOf('origin', 'equal', 'origin');
+  const TARGETS = {
+    leaf: { kind: 'leaf', section: 'plans', path: 'sub dir/x y.md', uncommitted: false },
+    newLeaf: { kind: 'leaf', section: 'plans', path: 'sub dir/x y.md', uncommitted: true },
+    section: { kind: 'section', section: 'plans' },
+    dir: { kind: 'dir', section: 'plans', path: 'sub dir' },
+    repo: { kind: 'repo', repoPath: 'README.md' },
+    root: { kind: 'root' },
+  } as const satisfies Record<string, Target>;
+  type TargetName = keyof typeof TARGETS;
+  const TARGET_NAMES = Object.keys(TARGETS) as TargetName[];
+  const GH = 'https://github.com/example-org/example-repo';
+  // Hand-written; never built by the code under test. `newLeaf` never reaches a link (row 5 refuses it first).
+  const PERMALINK_OF: Record<Exclude<TargetName, 'newLeaf'>, string> = {
+    leaf: `${GH}/blob/${COMMIT}/docs/superpowers/plans/sub%20dir/x%20y.md`,
+    section: `${GH}/tree/${COMMIT}/docs/superpowers/plans`,
+    dir: `${GH}/tree/${COMMIT}/docs/superpowers/plans/sub%20dir`,
+    repo: `${GH}/blob/${COMMIT}/README.md`,
+    root: `${GH}/tree/${COMMIT}`,
+  };
+  const canon = (o: object): string => JSON.stringify(Object.entries(o).sort(([a], [b]) => (a < b ? -1 : 1)));
+
+  describe('githubPermalink (M3.16)', () => {
+    interface PermaCase {
+      github: 'named' | 'none'; side: Ref['side']; relation: Ref['relation']; via: Ref['via']; target: TargetName;
+    }
+    const permalinkFor = (c: PermaCase): string => (c.target === 'newLeaf' ? 'unreachable' : PERMALINK_OF[c.target]);
+    // THE ORACLE: spec 3.11's permalink table, in its order, the first match winning, numbered as the table's
+    // rows. Rows 2 (bad-slug) and 3 (bad-target) are off this product's axes (its slug and commit are well
+    // formed); the named cases below reach them. One row the table leaves out: a local side reading `origin-only`
+    // cannot arrive, and no row of the table links it, so the builder refuses it as not-on-origin.
+    type PermaRow = { row: string; when: (c: PermaCase) => boolean; want: (c: PermaCase) => docsP.GithubPermalink };
+    const PERMA_ROWS: readonly PermaRow[] = [
+      { row: '1 no github origin', when: (c) => c.github === 'none', want: () => ({ ok: false, why: 'no-github-origin' }) },
+      {
+        row: '4 local-only, or a local default',
+        when: (c) => c.relation === 'local-only' || c.via === 'default:local-main' || c.via === 'default:local-master',
+        want: () => ({ ok: false, why: 'not-on-origin' }),
+      },
+      { row: '5 a new draft leaf', when: (c) => c.target === 'newLeaf', want: () => ({ ok: false, why: 'uncommitted' }) },
+      {
+        row: '6 origin side, or equal, or local-behind',
+        when: (c) => c.side === 'origin' || c.relation === 'equal' || c.relation === 'local-behind',
+        want: (c) => ({ ok: true, url: permalinkFor(c), commit: COMMIT }),
+      },
+      {
+        row: '7 local side, ahead or diverged',
+        when: (c) => c.side === 'local' && (c.relation === 'local-ahead' || c.relation === 'diverged'),
+        want: () => ({ ok: false, why: 'not-on-origin' }),
+      },
+      { row: '8 unmeasured', when: (c) => c.relation === 'unmeasured', want: () => ({ ok: false, why: 'unmeasured' }) },
+      {
+        row: '9 local side reading origin-only (off-contract)',
+        when: (c) => c.side === 'local' && c.relation === 'origin-only',
+        want: () => ({ ok: false, why: 'not-on-origin' }),
+      },
+    ];
+    const PERMA_CASES: PermaCase[] = [];
+    for (const github of ['named', 'none'] as const) for (const side of SIDES) for (const relation of RELATIONS) {
+      for (const via of VIAS) for (const target of TARGET_NAMES) PERMA_CASES.push({ github, side, relation, via, target });
+    }
+    const permaOf = (c: PermaCase): docsP.GithubPermalink =>
+      docsP.githubPermalink(c.github === 'named' ? NAMED : NONE, refOf(c.side, c.relation, c.via), COMMIT, TARGETS[c.target]);
+
+    it('the table covers 2 origins x 2 sides x 7 relations x 8 vias x 6 targets (every kind), and every oracle row is reached', () => {
+      expect(PERMA_CASES.length).toBe(2 * 2 * 7 * 8 * 6);
+      expect([...new Set(Object.values(TARGETS).map((t) => t.kind))].sort()).toEqual(Object.keys(KIND_KEYS).sort());
+      const reached = new Set(PERMA_CASES.map((c) => PERMA_ROWS.find((r) => r.when(c))?.row ?? 'no row'));
+      expect([...reached].sort()).toEqual(PERMA_ROWS.map((r) => r.row).sort());
+    });
+
+    it('githubPermalink equals the oracle on every case', () => {
+      const wrong: string[] = [];
+      for (const c of PERMA_CASES) {
+        const row = PERMA_ROWS.find((r) => r.when(c));
+        const want = row === undefined ? null : row.want(c);
+        const got = permaOf(c);
+        if (want === null || canon(got) !== canon(want)) {
+          wrong.push(`${JSON.stringify(c)} [${row?.row ?? 'no row'}]: got ${JSON.stringify(got)}, want ${JSON.stringify(want)}`);
+        }
+      }
+      expect(wrong.slice(0, 10)).toEqual([]);
+      expect(wrong.length).toBe(0);
+    });
+
+    it('every link names the full commit it was given, never ref.name and never the served commit', () => {
+      let links = 0;
+      for (const c of PERMA_CASES) {
+        const got = permaOf(c);
+        if (!got.ok) continue;
+        links += 1;
+        expect(got.commit, JSON.stringify(c)).toBe(COMMIT);
+        expect(got.url.includes(`/${COMMIT}`), JSON.stringify(c)).toBe(true);
+        expect(got.url.includes('ws/a%20b') || got.url.includes('c'.repeat(40)), JSON.stringify(c)).toBe(false);
+      }
+      expect(links).toBe(6 * (6 + 2) * 5);
+      const sha256 = 'e'.repeat(64);
+      expect(docsP.githubPermalink(NAMED, ORIGIN_EQUAL, sha256, TARGETS.repo))
+        .toEqual({ ok: true, url: `${GH}/blob/${sha256}/README.md`, commit: sha256 });
+    });
+
+    it('local-ahead and diverged give not-on-origin and unmeasured gives unmeasured, where View on GitHub links all three (decision 10)', () => {
+      for (const relation of ['local-ahead', 'diverged'] as const) {
+        const ref = refOf('local', relation, 'local');
+        expect(docsP.githubPermalink(NAMED, ref, COMMIT, TARGETS.leaf), relation).toEqual({ ok: false, why: 'not-on-origin' });
+        expect(docsP.githubBlobUrl(NAMED, ref, TARGETS.leaf), relation).toMatchObject({ ok: true, note: 'may-differ' });
+      }
+      const unmeasured = refOf('local', 'unmeasured', 'qualified');
+      expect(docsP.githubPermalink(NAMED, unmeasured, COMMIT, TARGETS.leaf)).toEqual({ ok: false, why: 'unmeasured' });
+      expect(docsP.githubBlobUrl(NAMED, unmeasured, TARGETS.leaf)).toMatchObject({ ok: true, note: 'may-differ' });
+    });
+
+    it('an origin side links whatever the relation, origin-only included; a local side links when equal or behind', () => {
+      for (const relation of ['origin-only', 'local-ahead', 'local-behind', 'diverged', 'unmeasured', 'equal'] as const) {
+        expect(docsP.githubPermalink(NAMED, refOf('origin', relation, 'default:origin-head'), COMMIT, TARGETS.dir), relation)
+          .toEqual({ ok: true, url: PERMALINK_OF.dir, commit: COMMIT });
+      }
+      for (const relation of ['equal', 'local-behind'] as const) {
+        expect(docsP.githubPermalink(NAMED, refOf('local', relation, 'local'), COMMIT, TARGETS.section), relation)
+          .toEqual({ ok: true, url: PERMALINK_OF.section, commit: COMMIT });
+      }
+    });
+
+    it('the slugs ../x, .x/y, a/.., ./x, a/. and .. give bad-slug in both builders, ahead of every later row; org/.github links', () => {
+      for (const slug of ['../x', '.x/y', 'a/..', './x', 'a/.', '..']) {
+        expect(docsP.githubPermalink(named(slug), ORIGIN_EQUAL, COMMIT, TARGETS.leaf), slug).toEqual({ ok: false, why: 'bad-slug' });
+        expect(docsP.githubBlobUrl(named(slug), ORIGIN_EQUAL, TARGETS.leaf), slug).toEqual({ ok: false, why: 'bad-slug' });
+      }
+      // Ahead of bad-target, not-on-origin and uncommitted: every one of those also holds here.
+      const localOnly = refOf('local', 'local-only', 'local', 'a/../b');
+      expect(docsP.githubPermalink(named('../x'), localOnly, '..', TARGETS.newLeaf)).toEqual({ ok: false, why: 'bad-slug' });
+      expect(docsP.githubBlobUrl(named('../x'), localOnly, TARGETS.newLeaf)).toEqual({ ok: false, why: 'bad-slug' });
+      // A repository name may start with a dot; an owner may not.
+      expect(docsP.githubPermalink(named('example-org/.github'), ORIGIN_EQUAL, COMMIT, TARGETS.root))
+        .toEqual({ ok: true, url: `https://github.com/example-org/.github/tree/${COMMIT}`, commit: COMMIT });
+      expect(docsP.githubBlobUrl(named('example-org/.github'), ORIGIN_EQUAL, TARGETS.root))
+        .toEqual({ ok: true, url: 'https://github.com/example-org/.github/tree/ws/a%20b', note: null });
+    });
+
+    it('a commit that is short, empty, uppercase, .., not hex or not 40 or 64 long gives bad-target, ahead of not-on-origin and uncommitted', () => {
+      const bad = ['e'.repeat(7), '', 'E'.repeat(40), '..', 'g'.repeat(40), 'e'.repeat(39), 'e'.repeat(41),
+        'e'.repeat(63), `${'e'.repeat(20)}/${'e'.repeat(19)}`];
+      for (const commit of bad) {
+        expect(docsP.githubPermalink(NAMED, ORIGIN_EQUAL, commit, TARGETS.leaf), JSON.stringify(commit))
+          .toEqual({ ok: false, why: 'bad-target' });
+      }
+      expect(docsP.githubPermalink(NAMED, refOf('local', 'local-only', 'local'), 'e'.repeat(7), TARGETS.newLeaf))
+        .toEqual({ ok: false, why: 'bad-target' });
+    });
+
+    it('an at or path segment that is empty, . or .. gives bad-target in both builders, ahead of not-on-origin and uncommitted', () => {
+      const badTargets: readonly Target[] = [
+        { kind: 'repo', repoPath: '' },
+        { kind: 'repo', repoPath: 'a//b.md' },
+        { kind: 'repo', repoPath: './README.md' },
+        { kind: 'repo', repoPath: 'docs/../README.md' },
+        { kind: 'repo', repoPath: 'docs/' },
+        { kind: 'leaf', section: 'specs', path: 'a/../x.md', uncommitted: false },
+        { kind: 'leaf', section: 'specs', path: '../x.md', uncommitted: true },
+        { kind: 'dir', section: 'conventions', path: '..' },
+        { kind: 'dir', section: 'conventions', path: '' },
+      ];
+      for (const t of badTargets) {
+        expect(docsP.githubPermalink(NAMED, ORIGIN_EQUAL, COMMIT, t), JSON.stringify(t)).toEqual({ ok: false, why: 'bad-target' });
+        expect(docsP.githubBlobUrl(NAMED, ORIGIN_EQUAL, t), JSON.stringify(t)).toEqual({ ok: false, why: 'bad-target' });
+        expect(docsP.githubBlobUrl(NAMED, refOf('local', 'local-only', 'local'), t), JSON.stringify(t))
+          .toEqual({ ok: false, why: 'bad-target' });
+      }
+      // View on GitHub's `at` is ref.name, judged segment by segment too.
+      for (const name of ['a/../b', '', 'ws//a', '.', 'ws/a/', '..']) {
+        expect(docsP.githubBlobUrl(NAMED, refOf('origin', 'equal', 'origin', name), TARGETS.leaf), JSON.stringify(name))
+          .toEqual({ ok: false, why: 'bad-target' });
+        expect(docsP.githubBlobUrl(NAMED, refOf('local', 'local-only', 'local', name), TARGETS.newLeaf), JSON.stringify(name))
+          .toEqual({ ok: false, why: 'bad-target' });
+      }
+    });
+  });
+
+  describe('one assembler (M3.17)', () => {
+    // A TEXT scan of shared/docs.ts, and NOT EXHAUSTIVE: it sees GitHub's address written in a string or template
+    // literal, and the host named anywhere at all, comments included. It does not see an address assembled from
+    // pieces (a scheme plus a host held apart), from character codes, or read from another module. The case after
+    // it is the behavioural half: wherever both builders link, their URLs agree but for the `at` segment.
+    const QUOTED = /["'`]https:\/\/github\.com\//g;
+    const HOST = /github\.com/g;
+    const count = (re: RegExp, s: string): number => (s.match(re) ?? []).length;
+
+    it('CONTROL: the scan sees each quoting and the bare host, and nothing else', () => {
+      const planted = "const a = 'https://github.com/'; const b = \"https://github.com/x\"; const c = `https://github.com/${a}`;";
+      expect(count(QUOTED, planted)).toBe(3);
+      expect(count(QUOTED, '// the host is https://github.com/ here')).toBe(0);
+      expect(count(HOST, '// the host is https://github.com/ here')).toBe(1);
+      expect(count(HOST, "const u = 'https://example.com/';")).toBe(0);
+    });
+
+    it("shared/docs.ts holds exactly one 'https://github.com/' literal, inside githubUrlAt, and names the host nowhere else", () => {
+      const src = readFileSync(DOCS, 'utf8');
+      expect(count(QUOTED, src)).toBe(1);
+      expect(count(HOST, src)).toBe(1);
+      const start = src.indexOf('\nfunction githubUrlAt(');
+      const end = src.indexOf('\n}\n', start);
+      expect(start).toBeGreaterThan(0);
+      expect(end).toBeGreaterThan(start);
+      expect(count(QUOTED, src.slice(start, end))).toBe(1);
+    });
+
+    it('where both builders answer ok, their URLs differ only in the at segment', () => {
+      const wrong: string[] = [];
+      let compared = 0;
+      for (const side of SIDES) for (const relation of RELATIONS) for (const via of VIAS) for (const t of TARGET_NAMES) {
+        const ref = refOf(side, relation, via);
+        const blob = docsP.githubBlobUrl(NAMED, ref, TARGETS[t]);
+        const perma = docsP.githubPermalink(NAMED, ref, COMMIT, TARGETS[t]);
+        if (!blob.ok || !perma.ok) continue;
+        compared += 1;
+        const a = blob.url.replace('/ws/a%20b', '/<at>');
+        const b = perma.url.replace(`/${COMMIT}`, '/<at>');
+        if (a !== b) wrong.push(`${side} ${relation} ${via} ${t}: ${blob.url} vs ${perma.url}`);
+      }
+      expect(wrong).toEqual([]);
+      // Both link: a via that is not a local default, a relation that is not local-only, a committed target, and
+      // the permalink's link row (origin side: 6 relations; local side: equal and local-behind).
+      expect(compared).toBe(6 * (6 + 2) * 5);
+    });
+  });
+
+  describe('the repo and root targets (M3.18)', () => {
+    it('repo gives /blob/<at>/<repoPath> and root gives /tree/<at>, in both builders', () => {
+      const main = refOf('origin', 'equal', 'default:origin-main', 'main');
+      expect(docsP.githubBlobUrl(NAMED, main, TARGETS.repo)).toEqual({ ok: true, url: `${GH}/blob/main/README.md`, note: null });
+      expect(docsP.githubBlobUrl(NAMED, main, TARGETS.root)).toEqual({ ok: true, url: `${GH}/tree/main`, note: null });
+      expect(docsP.githubPermalink(NAMED, main, COMMIT, TARGETS.repo))
+        .toEqual({ ok: true, url: `${GH}/blob/${COMMIT}/README.md`, commit: COMMIT });
+      expect(docsP.githubPermalink(NAMED, main, COMMIT, TARGETS.root))
+        .toEqual({ ok: true, url: `${GH}/tree/${COMMIT}`, commit: COMMIT });
+    });
+
+    it('a repo path is encoded segment by segment, its slashes kept', () => {
+      const t: Target = { kind: 'repo', repoPath: 'sub dir/a#b?.md' };
+      expect(docsP.githubBlobUrl(NAMED, refOf('origin', 'equal', 'origin', 'ws/a#1'), t))
+        .toEqual({ ok: true, url: `${GH}/blob/ws/a%231/sub%20dir/a%23b%3F.md`, note: null });
+      expect(docsP.githubPermalink(NAMED, ORIGIN_EQUAL, COMMIT, t))
+        .toEqual({ ok: true, url: `${GH}/blob/${COMMIT}/sub%20dir/a%23b%3F.md`, commit: COMMIT });
+    });
+
+    it('a repo or root target is never uncommitted: only a leaf carries that flag', () => {
+      for (const relation of ['local-ahead', 'unmeasured'] as const) {
+        const ref = refOf('local', relation, 'local');
+        expect(docsP.githubBlobUrl(NAMED, ref, TARGETS.repo), relation)
+          .toEqual({ ok: true, url: `${GH}/blob/ws/a%20b/README.md`, note: 'may-differ' });
+        expect(docsP.githubBlobUrl(NAMED, ref, TARGETS.root), relation)
+          .toEqual({ ok: true, url: `${GH}/tree/ws/a%20b`, note: 'may-differ' });
+      }
     });
   });
 });

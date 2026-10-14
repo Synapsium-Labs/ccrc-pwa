@@ -127,19 +127,20 @@ describe('ci.yml: the required checks cannot go missing (design 2026-09-23 §4.2
     }
   });
 
-  it('the required matrix and build-pwa carry no job-level if: and no needs:', () => {
+  it('the required matrix, build-pwa and the browser leg carry no job-level if: and no needs:', () => {
     // A job-level `if:` that skips the matrix means it never expands: no
     // `test (agent)` check exists, and the PR waits on it forever. A failed
-    // `needs:` skips the job the same way.
-    for (const id of ['test', 'build-pwa']) {
+    // `needs:` skips the job the same way. The browser leg is not a required
+    // check, but full-suite reads a skipped need as red, so it obeys the same rule.
+    for (const id of ['test', 'build-pwa', 'browser-pwa']) {
       expect(jobKey(job(id), 'if'), `${id} has a job-level if:`).toBeNull();
       expect(needs(job(id)), `${id} needs another job — its failure would skip a required check`).toEqual([]);
     }
   });
 
-  it('the required legs skip by STEP, only on a refresh or a rebuild', () => {
+  it('the required legs and the browser leg skip by STEP, only on a refresh or a rebuild', () => {
     const leg = "${{ ((github.event_name == 'push' && !inputs.mode) || inputs.mode == 'rebuild') && 'skip' || 'run' }}";
-    for (const id of ['test', 'build-pwa']) {
+    for (const id of ['test', 'build-pwa', 'browser-pwa']) {
       expect(job(id), `${id}: the job-level leg switch`).toContain(`\n    env:\n      CCRC_LEG: ${leg}\n`);
       const s = steps(job(id));
       expect(s.length, `${id} parsed no steps`).toBeGreaterThan(0);
@@ -632,9 +633,9 @@ describe('ci.yml: the daily run\'s "already green?" question fails SAFE (design 
 });
 
 describe('ci.yml: the full-suite verdict and the legs it runs (design 2026-09-23 §7, §8)', () => {
-  it('full-suite needs every leg — Linux shards, typecheck, agent, pwa, build, macOS, the Node floor — and asks verdict.mjs full', () => {
+  it('full-suite needs every leg — Linux shards, typecheck, agent, pwa, build, macOS, the Node floor, the browser — and asks verdict.mjs full', () => {
     const b = job('full-suite');
-    expect(needs(b)).toEqual(['build-pwa', 'node-floor', 'select', 'server', 'server-shard', 'server-typecheck', 'test', 'test-macos']);
+    expect(needs(b)).toEqual(['browser-pwa', 'build-pwa', 'node-floor', 'select', 'server', 'server-shard', 'server-typecheck', 'test', 'test-macos']);
     // Never on a merge-queue run (landing-order stage 2): a queue run skips
     // test-macos, and a queue run that fell back to `full` would read that skip
     // as a red leg here (ci-merge-queue.test.ts derives the rule).
@@ -777,5 +778,56 @@ describe('the node-floor leg runs every history test file on the floor interpret
     expect(history.length, 'no history-*.test.ts file exists — the derivation saw nothing').toBeGreaterThan(2);
     expect(listed, 'the 22.16.0 leg does not run exactly the history test files — add the new one to its list')
       .toEqual(['measure-history.test.ts', 'node-floor.test.ts', ...history].sort());
+  });
+});
+
+// ── the real-browser leg (native Docs reader spec 2026-10-01 §5.7) ──────────
+//
+// pwa's second vitest config, driving a real Chrome. Not a branch-protection
+// check (operator ruling 2026-10-13): what makes it count is full-suite's
+// `needs:` and RESULTS (pinned above), and the step-skip and no-if/no-needs
+// rules it shares with the required legs (pinned above). Here: its one name,
+// its runner and deadline, and exactly what it runs.
+describe('ci.yml: the browser leg (native Docs reader spec 2026-10-01 §5.7)', () => {
+  it('is one job, `browser-pwa`, named `browser (pwa)`, on ubuntu-latest with a 15-minute deadline', () => {
+    const b = job('browser-pwa');
+    expect(jobKey(b, 'name')).toBe('browser (pwa)');
+    const named = [...jobs(read(CI)).values()].map((x) => jobKey(x, 'name'));
+    expect(named.filter((n) => n === 'browser (pwa)'), 'two jobs report `browser (pwa)`').toHaveLength(1);
+    expect(jobKey(b, 'runs-on')).toBe('ubuntu-latest');
+    expect(jobKey(b, 'timeout-minutes')).toBe('15');
+  });
+
+  it('checks out, sets up Node 22, installs pwa with npm ci, and runs the browser config with the local vitest', () => {
+    const s = steps(job('browser-pwa'));
+    expect(s, 'the browser leg has exactly four steps').toHaveLength(4);
+    expect(s[0]).toMatch(/^ {6}- uses: actions\/checkout@v4\n/);
+    expect(s[1]).toMatch(/^ {6}- uses: actions\/setup-node@v4\n/);
+    expect(s[1]).toMatch(/^ {10}node-version: '22'$/m);
+    expect(s[1]).toMatch(/^ {10}cache-dependency-path: pwa\/package-lock\.json$/m);
+    expect(step(job('browser-pwa'), 'Install')).toMatch(/^ {8}working-directory: pwa\n {8}run: npm ci\n/m);
+    expect(step(job('browser-pwa'), 'Test'))
+      .toMatch(/^ {8}working-directory: pwa\n {8}run: \.\/node_modules\/\.bin\/vitest run --config vitest\.browser\.config\.ts\n/m);
+  });
+
+  it('reads no secret and asks for no permission of its own', () => {
+    const b = job('browser-pwa');
+    expect(b).not.toContain('secrets.');
+    expect(b).not.toMatch(/^ {4}permissions:/m);
+  });
+});
+
+describe('Review 439 F26: the browser leg cannot be softened by continue-on-error, a shell override or defaults', () => {
+  // The full-suite legs are pinned the same three ways above. A browser leg that
+  // failed and still reported green would read as a pass in full-suite's RESULTS.
+  it('has no continue-on-error (job or step), no shell override on any step, and no job or workflow defaults', () => {
+    const b = job('browser-pwa');
+    expect(b, 'continue-on-error on the job or a step').not.toMatch(/continue-on-error/);
+    for (const st of steps(b)) {
+      expect(st, `a shell override on a step:\n${st}`).not.toMatch(/^(?: {6}- | {8})shell:/m);
+    }
+    expect(step(b, 'Test'), 'a shell override on the Test step').not.toMatch(/^ {8}shell:/m);
+    expect(b, 'job-level defaults').not.toMatch(/^ {4}defaults:/m);
+    expect(read(CI), 'workflow-level defaults').not.toMatch(/^defaults:/m);
   });
 });

@@ -4210,7 +4210,7 @@ describe('the archive door\'s refusal codes are spelled once, in L0 (workspace l
   //     in `cmd_ws_archive` (`session-busy`, `status-unknown`) — the audit's seam, not the door's;
   //   - the temp-root collector's open-run hold word `run-open` (`server/src/collectLane.ts`,
   //     `server/src/coord/collectTempRoot.ts`) — the collector's seam, not the door's;
-  //   - the docs reader's `worktree-gone` (`server/src/docs/policy.ts`, `shared/docs.ts`) — the reader's own word;
+  //   - the docs reader's `worktree-gone` (`server/src/docs/policy.ts`, `shared/docs.ts`, `pwa/src/docs/docsText.ts`) — the reader's own word;
   //   - `className="run-open"` is the runs board's row button (D-287), a CSS identity — excluded by the pattern.
   // The collector's and the docs reader's excusals are by FILE (the `want` line below), a known width: a door code
   // spelled in one of those files is not seen.
@@ -4236,7 +4236,7 @@ describe('the archive door\'s refusal codes are spelled once, in L0 (workspace l
   });
 
   it.each(CODES)("'%s' is a code-line literal in shared/api.ts alone", (code) => {
-    const want = AUDIT_WORDS.has(code) ? ['server/src/wsaudit.ts', 'shared/api.ts'] : code === 'run-open' ? ['server/src/collectLane.ts', 'server/src/coord/collectTempRoot.ts', 'shared/api.ts'] : code === 'worktree-gone' ? ['server/src/docs/policy.ts', 'shared/api.ts', 'shared/docs.ts'] : ['shared/api.ts'];
+    const want = AUDIT_WORDS.has(code) ? ['server/src/wsaudit.ts', 'shared/api.ts'] : code === 'run-open' ? ['server/src/collectLane.ts', 'server/src/coord/collectTempRoot.ts', 'shared/api.ts'] : code === 'worktree-gone' ? ['pwa/src/docs/docsText.ts', 'server/src/docs/policy.ts', 'shared/api.ts', 'shared/docs.ts'] : ['shared/api.ts'];
     expect(ALL.filter((f) => literal(code).test(stallCode(f))).map(rel).sort(), `a second '${code}'`).toEqual(want);
   });
 });
@@ -5722,4 +5722,87 @@ describe('child reclamation wave 9: the collector’s lane and executor call the
         .toMatch(/import\s*(?:type\s*)?\{[^}]*\bisTmpRootId\b[^}]*\}\s*from\s*'(?:\.\.\/)+shared\/api\.js'/);
     }
   });
+});
+
+// Docs W5 part 1, Task 1 (spec 2026-10-01 3.11, amended 2026-10-13): the permalink builder, its answer type and the
+// one private URL assembler are declared once, in shared/docs.ts. A second `githubUrlAt` anywhere in the four roots
+// is a second assembler (M3.17's drift), and a second `githubPermalink` is a second Share link rule. APPENDED after
+// the file's last line, as its own describe: `session-hook.test.ts`'s citation audit cites this file by line, so the
+// docs section H block's TYPES and FUNCTIONS lists above are never edited. The same two declaration patterns as that
+// block, with a planted CONTROL: a third file holding a copy makes the holder list two long.
+// The function pattern accepts `async`, `default` and `declare` (and a generator star) before `function`, with a
+// planted control for each. It is a line-anchored regex, NOT EXHAUSTIVE, and not a parser: the evasions it still
+// misses are listed in the second CONTROL below (a method, a re-export, a CommonJS assignment, a copy in a comment or
+// string, a function expression bound by none of `const`, `let` or `var`).
+describe('docs section H, W5: GithubPermalink, githubPermalink and githubUrlAt are declared once, in shared/docs.ts', () => {
+  const TYPES = ['GithubPermalink'] as const;
+  const FUNCTIONS = ['githubPermalink', 'githubUrlAt'] as const;
+  const TYPE_DEF = (name: string): RegExp =>
+    new RegExp(`^\\s*(?:export\\s+)?(?:declare\\s+)?(?:type\\s+${name}\\b\\s*(?:<[^>\\n]*>)?\\s*=|interface\\s+${name}\\b)`, 'm');
+  // Any run of `export`, `default`, `declare` and `async` before `function [*] NAME` or `const|let|var NAME`.
+  const FN_DEF = (name: string): RegExp =>
+    new RegExp(`^\\s*(?:(?:export|default|declare|async)\\s+)*(?:function(?:\\s*\\*\\s*|\\s+)${name}\\b|(?:const|let|var)\\s+${name}\\b)`, 'm');
+  // The holders of a declaration over the four roots, plus any planted [path, text] pairs, sorted.
+  const holders = (def: RegExp, planted: readonly (readonly [string, string])[] = []): string[] =>
+    [...ALL.map((f) => [rel(f), readFileSync(f, 'utf8')] as const), ...planted]
+      .filter(([, text]) => def.test(text)).map(([p]) => p).sort();
+
+  it('CONTROL: the patterns see a declaration, a local copy and an arrow copy, and not an import, a call or another name', () => {
+    expect(TYPE_DEF('GithubPermalink').test('export type GithubPermalink =')).toBe(true);
+    expect(TYPE_DEF('GithubPermalink').test("type GithubPermalink = { ok: true; url: string };"), 'a local copy').toBe(true);
+    expect(TYPE_DEF('GithubPermalink').test('export type GithubPermalinkRow = {'), 'another name').toBe(false);
+    expect(FN_DEF('githubPermalink').test('export function githubPermalink(github: DocsGithub, ref: Ref,')).toBe(true);
+    expect(FN_DEF('githubUrlAt').test('function githubUrlAt(slug: string, at: string, target: GithubTarget):')).toBe(true);
+    expect(FN_DEF('githubUrlAt').test('const githubUrlAt = (slug: string): string => slug;'), 'an arrow copy').toBe(true);
+    expect(FN_DEF('githubPermalink').test("import { githubPermalink } from '../../../shared/docs.js';"), 'an import').toBe(false);
+    expect(FN_DEF('githubPermalink').test('  const link = githubPermalink(github, ref, commit, target);'), 'a call').toBe(false);
+    expect(FN_DEF('githubUrlAt').test('function githubUrlAtCommit('), 'another name').toBe(false);
+  });
+
+  it('CONTROL: the function pattern sees an async, a default, a declare-d and a generator copy', () => {
+    for (const text of [
+      'export async function githubPermalink(',
+      'async function githubPermalink(',
+      'export default function githubUrlAt(',
+      'export default async function githubUrlAt(',
+      'export declare function githubPermalink(',
+      'declare function githubPermalink(',
+      'export function* githubPermalink(',
+      'export declare const githubUrlAt:',
+      'export const githubUrlAt = async (slug: string) => slug;',
+    ]) {
+      const name = text.includes('githubUrlAt') ? 'githubUrlAt' : 'githubPermalink';
+      expect(FN_DEF(name).test(text), text).toBe(true);
+    }
+    expect(FN_DEF('githubPermalink').test('export async function githubPermalinks('), 'another name').toBe(false);
+    expect(FN_DEF('githubPermalink').test('  await githubPermalink(github, ref);'), 'an awaited call').toBe(false);
+  });
+
+  it('CONTROL: what the function pattern still misses is named here, and a miss is not a pass', () => {
+    // NOT EXHAUSTIVE. These evasions are known and stay unseen: an object or class method (`githubPermalink(x) {`),
+    // a re-export under the name (`export { other as githubPermalink }`), a CommonJS assignment
+    // (`exports.githubPermalink = `), a copy inside a block comment or string, and a
+    // function expression that no `const`, `let` or `var` binds.
+    for (const text of [
+      '  githubPermalink(github: DocsGithub) {',
+      'export { other as githubPermalink };',
+      'exports.githubPermalink = function () {};',
+    ]) expect(FN_DEF('githubPermalink').test(text), text).toBe(false);
+  });
+
+  it('CONTROL: a third file holding a copy is seen beside shared/docs.ts', () => {
+    expect(holders(FN_DEF('githubPermalink'), [['pwa/src/docs/planted.ts', 'function githubPermalink(x: string) {}']]))
+      .toEqual(['pwa/src/docs/planted.ts', 'shared/docs.ts']);
+  });
+
+  for (const name of TYPES) {
+    it(`declares ${name} exactly once, in shared/docs.ts`, () => {
+      expect(holders(TYPE_DEF(name))).toEqual(['shared/docs.ts']);
+    });
+  }
+  for (const name of FUNCTIONS) {
+    it(`defines ${name} exactly once, in shared/docs.ts`, () => {
+      expect(holders(FN_DEF(name))).toEqual(['shared/docs.ts']);
+    });
+  }
 });

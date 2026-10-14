@@ -37,7 +37,9 @@
 // which outranks the original on specificity from any position — read as a
 // stranger; cssRule.ts's `simples` is the fix). What is still NOT covered is
 // enumerated at `declaredValues` in cssRule.ts, and this file's claims are
-// scoped to it: no rule shape outside that list, and no other stylesheet.
+// scoped to it: no rule shape outside that list, and no other stylesheet but
+// one rule about one more: docs/docs.css (native Docs reader W5) declares no
+// overflow on `.shell-detail` at all (the describe at the end of this file).
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -163,5 +165,38 @@ describe('the desktop detail pane scrolls by default (D-161)', () => {
     for (const prop of ['min-height', 'min-width'] as const) {
       for (const v of values('.shell-detail', prop)) expect(v, prop).toBe('0');
     }
+  });
+});
+
+// ── native Docs reader W5 part 1, Task 11: docs/docs.css leaves the pane alone (spec 2026-10-01 section 4.14) ──
+// The Docs screen renders into the same detail pane, and the scroll contract above is shell.css's to keep: the Docs
+// sheet declares NO overflow on `.shell-detail` in any spelling the reader sees (the shorthand, either longhand, any
+// rule whose subject targets the pane, a compound or a descendant chain ending in it). It inherits every gap
+// `declaredValues` lists in cssRule.ts, so it is NOT EXHAUSTIVE: a broader subject (`*`, `section`,
+// `:where(.shell-detail)`) is not seen. A planted control proves the reader would see the regression in this sheet.
+describe('docs/docs.css sets no overflow on .shell-detail (spec 4.14)', () => {
+  const docsCss = readFileSync(path.join(import.meta.dirname, '..', 'src', 'docs', 'docs.css'), 'utf8');
+  /** Every overflow value `css` declares on the pane; `[]` when no rule targets it at all (the expected state). */
+  const paneOverflow = (css: string): string[] => {
+    let found: string[] = [];
+    try {
+      found = ['overflow', 'overflow-x', 'overflow-y'].flatMap((prop) => declaredValues(css, '.shell-detail', prop));
+    } catch (e) {
+      if (!String(e).includes('no rule targeting .shell-detail')) throw e;
+    }
+    return found;
+  };
+
+  it('declares none', () => {
+    expect(docsCss).toContain('.docs-screen');          // the real sheet, not an empty read
+    expect(paneOverflow(docsCss)).toEqual([]);
+  });
+
+  it.each([
+    '.shell-detail { overflow: hidden; }',
+    '.app-shell .shell-detail { overflow-y: clip; }',
+    'section.shell-detail { overflow-x: auto; }',
+  ])('would see %s planted in it', (planted) => {
+    expect(paneOverflow(`${docsCss}\n${planted}\n`)).not.toEqual([]);
   });
 });
