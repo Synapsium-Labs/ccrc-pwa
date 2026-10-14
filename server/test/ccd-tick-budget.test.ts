@@ -79,6 +79,13 @@ import {
  *    idle-home 140/46 -> 128/46 (3 calls) · busy 137/45 -> 125/45 (3) · narrow 75/28 (none) ·
  *    away-over-ceiling 148/46 -> 128/46 (5) · hard-blocked 244/56 -> 172/56 (18) · cooldown 97/36 (none) ·
  *    fable 138/47 -> 130/47 (2) · leaving 223/56 -> 151/56 (18) · fable-leaving 223/60 -> 159/60 (16).
+ *
+ *  RE-MEASURED AT W2 CLOSE (Task 11) on the merged tree, Tasks 8, 10 and 9 together: macOS, bash 5.3, and Linux,
+ *  bash 5.2 with GNU grep 3.8, print the same table, ticks 1-4 included. The figures below are that dump, never
+ *  the sum of the three blocks above (which agree with it). W2 against W1 + #189, forks/execs per steady tick:
+ *    idle-home 167/73 -> 128/46 · busy 164/72 -> 125/45 · narrow 75/28 (=) · away-over-ceiling 193/91 -> 128/46 ·
+ *    hard-blocked 406/218 -> 172/56 · cooldown 97/36 (=) · fable 156/65 -> 130/47 · leaving 391/224 -> 151/56 ·
+ *    fable-leaving 375/211 -> 159/60.
  */
 const TICK_BUDGET: Record<FixtureName, { forks: number; execs: number }> = {
   'idle-home': { forks: 128, execs: 46 },

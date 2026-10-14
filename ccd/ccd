@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=1db6770b9ee924c10c609c5e88f8f4193e36bf73f848e66756f19efae04c3233
+# ccrc:generated 1 sha256=2596146515d4f50c7bf2247d07cf066e82968ca7cbc61abd784f67566fa94111
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -24317,7 +24317,8 @@ cmd_ensure() {   # id — idempotent; used by systemd. arg is the id directly.
 # D-4960: prime `_plat_timeout`'s `-k` cache once in the supervisor's own shell (Task 3).
 # D-4961: the clock seam — `_now_s_to` / `_now_s` (Task 4, this block).
 # `_cfg_dir_to` (Task 5): an exact per-wrapper memo of `_cfg_dir`; it needs no number (spec §6.2).
-# D-4962: limits JSON parsed with builtins on a stated domain (W2).
+# D-4962: limits JSON parsed with builtins on a stated domain, the file read once per `_limit_field_to`
+#  call (Tasks 8, 9); `_share_pct_to`'s memo, scoped to one `_swap_target` call (Task 10). W2, this block.
 # D-4963: registry reads with builtins; the route chain through out-vars (W3).
 
 # D-4961 (tick-diet spec §6.2): var -> var = epoch seconds. `$EPOCHSECONDS` when the
