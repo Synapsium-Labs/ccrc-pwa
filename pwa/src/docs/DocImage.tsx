@@ -4,12 +4,13 @@
 // asks `imagePinFor` which bytes the page may show, and loads them through the screen's queue. The only `src` it ever
 // writes is an object URL of verified raster bytes (`rasterObjectUrl`, revoked on unmount and on replacement) or an
 // SVG's `data:image/svg+xml;base64,` URL (never a `blob:`); everything else is a refused span with its reason.
-import { createContext, useContext, useEffect, useMemo, useState, type ComponentProps, type ReactNode } from 'react';
+import { createContext, useContext, useEffect, useMemo, useRef, useState, type ComponentProps, type ReactNode } from 'react';
 import type { Element as HastElement } from 'hast';
 import {
   DOCS_CLASS_CAP, DOCS_MAX_IMAGES_PER_PAGE, contentClass, docsApi, docsPageUrl, resolveDocRef,
   type DocPin, type DocsPageLocation, type RasterMime,
 } from '../../../shared/docs';
+import { onAuthRegained } from '../lib/auth';
 import { openExternal } from '../lib/markdown';
 import { navigate } from '../lib/router';
 import { DocInLinkContext, DocLinkContext, type DocLinkContextValue } from './DocLink';
@@ -110,14 +111,15 @@ interface LoadJob {
 type Fetched =
   | { s: 'raster'; bytes: Uint8Array<ArrayBuffer>; mime: RasterMime }
   | { s: 'svg'; src: string }
-  | { s: 'failed'; sentence: string };
+  | { s: 'failed'; sentence: string; auth: boolean };
 
-type Shown = { s: 'loading' } | { s: 'loaded'; src: string } | { s: 'failed'; sentence: string };
+/** `auth` is true for a 401 only: the one failure that signing in cures, so the one the image asks again after. */
+type Shown = { s: 'loading' } | { s: 'loaded'; src: string } | { s: 'failed'; sentence: string; auth: boolean };
 
 const SVG_DATA_PREFIX = 'data:image/svg+xml;base64,';
 
-function notOkSentence(a: DocsNotOk): string {
-  return a.s === 'failed' ? failureSentence(a.body) : slotSentence(a);
+function notOkFailure(a: DocsNotOk): Extract<Fetched, { s: 'failed' }> {
+  return { s: 'failed', sentence: a.s === 'failed' ? failureSentence(a.body) : slotSentence(a), auth: a.s === 'auth' };
 }
 
 /** Bytes as base64, in chunks small enough to spread into `String.fromCharCode`. */
@@ -140,14 +142,14 @@ async function fetchImage(job: LoadJob, signal: AbortSignal): Promise<Fetched> {
     const a = await job.loaders.raster(job.project, job.pin, signal);
     return a.s === 'ok'
       ? { s: 'raster', bytes: a.value.bytes, mime: a.value.mime }
-      : { s: 'failed', sentence: notOkSentence(a) };
+      : notOkFailure(a);
   }
   const a = await job.loaders.file(job.project, job.pin, signal);
-  if (a.s !== 'ok') return { s: 'failed', sentence: notOkSentence(a) };
+  if (a.s !== 'ok') return notOkFailure(a);
   const bytes = a.value.contentClass === 'svg' ? showBytes(a.value.show) : null;
   if (bytes === null) {
     const why = a.value.contentClass === 'svg' ? DOCS_SHOW_NO_BYTES : DOCS_SHOW_NOT_SVG;
-    return { s: 'failed', sentence: failureSentence({ ok: false, failure: 'malformed-answer', why }) };
+    return { s: 'failed', sentence: failureSentence({ ok: false, failure: 'malformed-answer', why }), auth: false };
   }
   return { s: 'svg', src: SVG_DATA_PREFIX + base64Of(bytes) };
 }
@@ -157,6 +159,18 @@ async function fetchImage(job: LoadJob, signal: AbortSignal): Promise<Fetched> {
 function useImageSrc(job: LoadJob | null): Shown {
   const [done, setDone] = useState<{ key: string; shown: Shown } | null>(null);
   const key = job === null ? null : job.key;
+  const [attempt, setAttempt] = useState(0);
+  // What is on screen now, for the sign-in callback below (a ref, so the subscription is not remade on every answer).
+  const current = useRef<{ key: string | null; shown: Shown | null }>({ key: null, shown: null });
+  current.current = { key, shown: done !== null && done.key === key ? done.shown : null };
+  // Sign-in returned: an image whose load answered 401 asks once more. Any other state is left as it is.
+  useEffect(() => onAuthRegained(() => {
+    const c = current.current;
+    if (c.key !== null && c.shown !== null && c.shown.s === 'failed' && c.shown.auth) {
+      setDone(null); // Loading again, not the old sentence
+      setAttempt((n) => n + 1);
+    }
+  }), []);
   useEffect(() => {
     if (job === null || key === null) return undefined;
     const ctl = new AbortController();
@@ -177,7 +191,7 @@ function useImageSrc(job: LoadJob | null): Shown {
     }).catch((err: unknown) => {
       if (!live) return;
       const error = err instanceof Error ? err.message : String(err);
-      setDone({ key, shown: { s: 'failed', sentence: fillSentence(DOC_IMAGE_TEXT.loaderFailed, { error }) } });
+      setDone({ key, shown: { s: 'failed', sentence: fillSentence(DOC_IMAGE_TEXT.loaderFailed, { error }), auth: false } });
     });
     return () => {
       live = false;
@@ -190,7 +204,7 @@ function useImageSrc(job: LoadJob | null): Shown {
       }
     };
     // The job's other fields are fixed by its key (`docsApi.file(project, pin)` and the class its path gives).
-  }, [key, job?.loaders, job?.queue]);
+  }, [key, job?.loaders, job?.queue, attempt]);
   return done !== null && done.key === key ? done.shown : { s: 'loading' };
 }
 

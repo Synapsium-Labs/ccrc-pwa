@@ -12,6 +12,7 @@ import {
   DOCS_CLASS_CAP, DOCS_MAX_IMAGES_PER_PAGE, DOCS_RASTER_TYPES, docsPageUrl,
   type DocPin, type DocsEntry, type DocsPageLocation, type DocsTreeOk,
 } from '../../shared/docs';
+import { clearAuthLost, raiseAuthLost } from '../src/lib/auth';
 import { SHARED_COMPONENTS } from '../src/lib/markdown';
 import { parseMarkdown } from '../src/lib/markdownParse';
 import { renderHast } from '../src/lib/renderHast';
@@ -853,5 +854,44 @@ describe('T13 review 2-1: an image inside a link is not a second control, so one
     await waitFor(() => expect(imgs(container)).toHaveLength(1));
     fireEvent.click(container.querySelector('button.doc-img-link')!);
     expect(seen).toEqual(['/docs/demo/specs/i.png']);
+  });
+});
+
+describe('T13 review 3-4: an image that answered 401 loads again once sign-in returns', () => {
+  afterEach(() => { clearAuthLost(); });
+
+  it('a raster that answered auth is asked for once more on clearAuthLost, and then shows', async () => {
+    const assets = fakeAssets();
+    assets.raster.mockResolvedValueOnce({ s: 'auth' });
+    const { container } = renderDoc('![i](i.png)', { tree: withImage(), assets });
+    await waitFor(() => expect(container.querySelector('.doc-img-failed')).not.toBeNull());
+    expect(assets.raster).toHaveBeenCalledTimes(1);
+    raiseAuthLost('expired');
+    act(() => clearAuthLost());
+    await waitFor(() => expect(imgs(container)).toHaveLength(1));
+    expect(assets.raster).toHaveBeenCalledTimes(2);
+  });
+
+  it('a failure that is not auth is not retried by sign-in', async () => {
+    const assets = fakeAssets();
+    assets.raster.mockResolvedValueOnce({ s: 'failed', body: { ok: false, failure: 'malformed-answer', why: 'x' } });
+    const { container } = renderDoc('![i](i.png)', { tree: withImage(), assets });
+    await waitFor(() => expect(container.querySelector('.doc-img-failed')).not.toBeNull());
+    raiseAuthLost('expired');
+    act(() => clearAuthLost());
+    await new Promise((r) => setTimeout(r, 30));
+    expect(assets.raster).toHaveBeenCalledTimes(1);
+  });
+
+  it('an unmounted image no longer listens: sign-in after unmount loads nothing', async () => {
+    const assets = fakeAssets();
+    assets.raster.mockResolvedValueOnce({ s: 'auth' });
+    const { container, unmount } = renderDoc('![i](i.png)', { tree: withImage(), assets });
+    await waitFor(() => expect(container.querySelector('.doc-img-failed')).not.toBeNull());
+    unmount();
+    raiseAuthLost('expired');
+    act(() => clearAuthLost());
+    await new Promise((r) => setTimeout(r, 30));
+    expect(assets.raster).toHaveBeenCalledTimes(1);
   });
 });
