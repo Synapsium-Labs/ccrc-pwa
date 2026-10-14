@@ -681,3 +681,22 @@ describe('T13 review 3-1: the one automatic re-list is spent per page, not per f
     expect(result.current.file.s).toBe('ok');
   });
 });
+
+describe('T13 review 3-5: the tree auto-retry timer acts only on the failure it was set for', () => {
+  it('a manual Retry that answered ok at 1 s leaves the 5 s timer nothing to list', async () => {
+    vi.useFakeTimers();
+    const f = fakeLoaders();
+    f.tree.mockResolvedValueOnce(failedAnswer('docs-busy', { retryAfterMs: 5000 }));
+    f.tree.mockResolvedValueOnce(okTree());
+    const { result } = visit(f.loaders, '/docs/demo');
+    await flush();
+    expect(result.current.tree?.s).toBe('failed');
+    await advance(1000);
+    act(() => result.current.retryTree());
+    await flush();
+    expect(f.tree).toHaveBeenCalledTimes(2);
+    expect(result.current.tree?.s).toBe('ok');
+    await advance(10_000);
+    expect(f.tree).toHaveBeenCalledTimes(2);
+  });
+});

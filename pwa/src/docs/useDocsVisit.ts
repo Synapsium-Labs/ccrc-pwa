@@ -424,7 +424,8 @@ export function useDocsVisit(page: DocsPageLocation | null, loaders: DocsLoaders
       const plan = docsRetryPlan(a.body);
       if (plan.kind === 'auto' && takeAutoRetry('tree', key, a.body.failure)) {
         later(plan.afterMs, () => {
-          if (isCurrentKey(key)) listTree(target);
+          // Only the failed slot this timer was set for: a Retry since then has put another in its place.
+          if (st.trees.get(key) === a && isCurrentKey(key)) listTree(target);
         });
       }
     }
