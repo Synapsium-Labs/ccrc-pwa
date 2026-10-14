@@ -133,7 +133,8 @@ export type DocsPageTarget =
   | { kind: 'path'; section: DocSectionSlug; path: string; dirSlash: boolean; view?: 'effective' | 'committed' };
 
 /** THE one builder of a page location a Docs view links to (refinement (q)): it keeps `page`'s project and ref and
- *  applies `to`; `frame` is always `inline` (W6 owns `full`). Every page URL a view writes is
+ *  applies `to`; a `path` target's `frame` is `inline` (W6 owns `full`), while a `same-page` target keeps the page's
+ *  own frame, view and everything else. Every page URL a view writes is
  *  `docsPageUrl(docsLocation(page, to))`; no view builds a `DocsPageLocation` literal. The index names no project, so
  *  a `project`, `section`, `path` or `same-page` target from it is a programming error and throws. */
 export function docsLocation(page: DocsPageLocation, to: DocsPageTarget): DocsPageLocation {

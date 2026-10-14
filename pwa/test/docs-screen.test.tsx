@@ -13,14 +13,18 @@ import {
   type DocsTreeOk, type DraftsFacts,
 } from '../../shared/docs';
 import { DocsScreen } from '../src/screens/DocsScreen';
-import { DOCS_FAILURE_SENTENCE, DOCS_PAGE_INVALID_SENTENCE } from '../src/docs/docsText';
+import { DocsLeaf } from '../src/docs/DocsLeaf';
+import { pinFor, type DocsVisit } from '../src/docs/useDocsVisit';
+import { DOCS_FAILURE_SENTENCE, DOCS_PAGE_INVALID_SENTENCE, DOCS_VIEW_TEXT } from '../src/docs/docsText';
+import { clearAuthLost, raiseAuthLost } from '../src/lib/auth';
+import { DOCS_RENDER_GATE_BYTES } from '../src/lib/markdownLimits';
 import type { DocsFileAnswer, DocsLoaders, DocsRasterAnswer } from '../src/docs/failures';
 import { parseMarkdown } from '../src/lib/markdownParse';
 import { docsRunner, type MarkdownParser } from '../src/lib/markdownRunner';
 import { navigate, useLocation } from '../src/lib/router';
 import {
-  COMMIT_A, COMMIT_B, FP_1, draftOf, entry, failedAnswer, fakeLoaders, fileResponse, holder, okTree, treeOk,
-  treeResponse, type FakeLoaders,
+  COMMIT_A, COMMIT_B, FP_1, RAN, draftOf, entry, failedAnswer, fakeLoaders, fileResponse, holder, okRefresh, okTree,
+  pageAt, treeOk, treeResponse, type FakeLoaders,
 } from './docsFixtures';
 
 /** Parses in this thread, as the worker would. */
@@ -66,6 +70,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  clearAuthLost();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
   history.replaceState(null, '', '/');
@@ -124,6 +129,32 @@ describe('canonical URLs are fixed by replace (spec 3.1, M4.R4)', () => {
   });
 });
 
+describe('the canonical fix keeps the #fragment (review M3)', () => {
+  it.each([
+    ['a leaf reached with a slash', '/docs/demo/specs/b.md/#sec', '/docs/demo/specs/b.md'],
+    ['a percent-encoded ref', '/docs/demo/specs/b.md?ref=ws%2Fa#sec', '/docs/demo/specs/b.md?ref=ws/a'],
+    ['a directory reached without its slash', '/docs/demo/specs/d?ref=ws/a#sec', '/docs/demo/specs/d/?ref=ws/a'],
+  ])('%s: the address bar ends at the canonical URL and still carries #sec', async (_name, from, to) => {
+    const f = fakeLoaders({ tree: okTree(treeOk({ entries: [entry('specs', 'b.md'), entry('specs', 'd/x.md')] })) });
+    history.pushState(null, '', from);
+    render(<Routed loaders={f.loaders} />);
+    await waitFor(() => expect(here()).toBe(to));
+    expect(location.hash).toBe('#sec');
+  });
+});
+
+describe('a repeated query key, on the screen (review M4)', () => {
+  it('?ref=a&ref=b shows the repeated-param sentence and a link to the index, and asks for no tree', () => {
+    const f = fakeLoaders();
+    open('/docs/demo/specs/a.md?ref=a&ref=b', f);
+    expect(screen.getByText(DOCS_PAGE_INVALID_SENTENCE['repeated-param'])).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Docs index' })).toHaveAttribute('href', '/docs');
+    expect(f.tree).not.toHaveBeenCalled();
+    expect(f.projects).not.toHaveBeenCalled();
+    expect(f.file).not.toHaveBeenCalled();
+  });
+});
+
 describe('a linked worktree is followed to its owner by replace (spec 4.7, M4.R4, refinement (c))', () => {
   const owned = (ctx: Record<string, unknown>, word = 'linked-worktree'): FakeLoaders => {
     const f = fakeLoaders();
@@ -176,6 +207,75 @@ describe('a linked worktree is followed to its owner by replace (spec 4.7, M4.R4
     expect(here()).toBe('/docs/b/specs/x.md');
     expect(f.tree).toHaveBeenCalledTimes(1);
   });
+
+  it.each([['linked-worktree', { branch: 'ws/a' }], ['shared-repo', {}]])(
+    'an owner ABSENT from a %s answer (not null) renders the sentence only: no navigation, no second GET (review M4)',
+    async (word, ctx) => {
+      const f = owned(ctx, word);
+      open('/docs/b/specs/x.md', f);
+      expect(await screen.findByText(DOCS_FAILURE_SENTENCE[word as 'linked-worktree'])).toBeInTheDocument();
+      expect(screen.queryByText(/Opening/)).toBeNull();
+      expect(here()).toBe('/docs/b/specs/x.md');
+      expect(f.tree).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  const NOTE = "That checkout is not on a named branch, or its branch could not be read; showing a's default branch.";
+
+  it('the redirect note is absent on another page (review M4)', async () => {
+    const f = owned({ owner: 'a', branch: null });
+    open('/docs/b/specs/x.md?ref=ws/a', f);
+    expect(await screen.findByText(NOTE)).toBeInTheDocument();
+    act(() => { navigate('/docs/a/specs'); });
+    expect(await screen.findByText('x.md')).toBeInTheDocument();
+    expect(screen.queryByText(NOTE)).toBeNull();
+  });
+
+  it('the redirect note does not come back when the reader returns to the URL it was written for (review M1)', async () => {
+    const f = owned({ owner: 'a', branch: null });
+    open('/docs/b/specs/x.md?ref=ws/a', f);
+    await waitFor(() => expect(here()).toBe('/docs/a/specs/x.md'));
+    expect(await screen.findByText(NOTE)).toBeInTheDocument();
+    act(() => { navigate('/docs/a/specs'); });
+    expect(await screen.findByText('x.md')).toBeInTheDocument();
+    act(() => { navigate('/docs/a/specs/x.md'); });
+    expect(await screen.findByRole('heading', { name: 'A' })).toBeInTheDocument();
+    expect(screen.queryByText(NOTE)).toBeNull();
+  });
+
+  it('the canonical fix and the owner redirect carry #sec too (review M3)', async () => {
+    const f = owned({ owner: 'a', branch: 'ws/a' });
+    history.pushState(null, '', '/docs/b/specs/x.md#sec');
+    render(<Routed loaders={f.loaders} />);
+    await waitFor(() => expect(here()).toBe('/docs/a/specs/x.md?ref=ws/a'));
+    expect(location.hash).toBe('#sec');
+  });
+
+  it('two projects that name each other as owner end in a sentence, not in a loop (review M2)', async () => {
+    const f = fakeLoaders();
+    f.tree.mockImplementation(async (project: string) =>
+      failedAnswer('linked-worktree', { owner: project === 'a' ? 'b' : 'a', branch: 'main' }));
+    open('/docs/a/specs/x.md', f);
+    expect(await screen.findByText(DOCS_VIEW_TEXT.redirectLoop)).toBeInTheDocument();
+    expect(screen.getByText(DOCS_FAILURE_SENTENCE['linked-worktree'])).toBeInTheDocument();
+    expect(screen.queryByText(/Opening/)).toBeNull();
+    expect(here()).toBe('/docs/a/specs/x.md?ref=main');
+    expect(f.tree).toHaveBeenCalledTimes(3);
+  });
+
+  it.each([
+    ['linked-worktree', { owner: 'a', branch: 'main' }, '/docs/a/specs/x.md?ref=main', 1],
+    ['shared-repo', { owner: 'a' }, '/docs/a/specs/x.md?ref=main', 1],
+    ['linked-worktree', { owner: 'a', branch: 'main' }, '/docs/a/specs/x.md', 2],
+  ])('a %s answer %j naming the page\'s own project at the same ref is a sentence, never "Opening a…" (%s; review M2)',
+    async (word, ctx, url, gets) => {
+      const f = fakeLoaders();
+      f.tree.mockResolvedValue(failedAnswer(word, ctx));
+      open(url, f);
+      expect(await screen.findByText(DOCS_VIEW_TEXT.redirectLoop)).toBeInTheDocument();
+      expect(screen.queryByText(/Opening/)).toBeNull();
+      expect(f.tree).toHaveBeenCalledTimes(gets);
+    });
 });
 
 /** The index fixture (refinement (r)): every state, a duplicate pair, a no-docs pair, both footers. */
@@ -587,3 +687,106 @@ describe('fragments scroll once the new body renders (refinement (o))', () => {
     expect(scroll.mock.contexts[0]).toBe(container.querySelector('article li#user-content-fn-1'));
   });
 });
+
+describe('a fragment belongs to the page it was meant for (refinement (o), review I1)', () => {
+  const FOOTNOTE = 'C.[^1]\n\n[^1]: The note.\n';
+  const settle = async (): Promise<void> => { await act(async () => { await new Promise((r) => setTimeout(r, 20)); }); };
+
+  it('a fragment the linked page does not hold is not spent on the next page that does (measured)', async () => {
+    const scroll = vi.spyOn(HTMLElement.prototype, 'scrollIntoView').mockImplementation(() => {});
+    const f = byPath(treeOk({ entries: [entry('specs', 'a.md'), entry('specs', 'b.md'), entry('specs', 'c.md')] }), {
+      'a.md': fileAs('a.md', '# A\n\n[to b](b.md#user-content-fn-1)\n\n[to c](c.md)\n', 'markdown'),
+      'b.md': fileAs('b.md', '# B\n', 'markdown'),
+      'c.md': fileAs('c.md', '# C\n\n' + FOOTNOTE, 'markdown'),
+    });
+    open('/docs/demo/specs/a.md', f);
+    fireEvent.click(await screen.findByRole('link', { name: 'to b' }));
+    expect(await screen.findByRole('heading', { name: 'B' })).toBeInTheDocument();
+    await settle();
+    act(() => { navigate('/docs/demo/specs/a.md'); });
+    fireEvent.click(await screen.findByRole('link', { name: 'to c' }));
+    expect(await screen.findByRole('heading', { name: 'C' })).toBeInTheDocument();
+    await settle();
+    expect(scroll).not.toHaveBeenCalled();
+  });
+
+  /** A leaf of `b.md` (or `path`) with the visit's file already read; the visit's actions are spies. */
+  function renderLeaf(text: string, over: Partial<DocsVisit> = {}, path = 'b.md', contentClass: DocsFileResponse['contentClass'] = 'markdown') {
+    const tree = treeOk({ entries: [entry('specs', path)] });
+    const page = pageAt('/docs/demo/specs/' + path);
+    if (page.kind !== 'path') throw new Error('fixture: not a leaf');
+    const pin = pinFor(tree, page);
+    if (pin === null) throw new Error('fixture: no pin');
+    const base = fileResponse(text);
+    const visit: DocsVisit = {
+      tree: { s: 'ok', answer: treeResponse(tree), receivedAt: 0 },
+      file: { s: 'ok', pin, answer: { ...base, contentClass }, receivedAt: 0 },
+      freshness: { s: 'idle' }, updatedTo: null, pendingFragment: null,
+      retryTree: vi.fn(), retryFile: vi.fn(), refreshManual: vi.fn(), fetchFromOrigin: vi.fn(), setFragment: vi.fn(),
+      ...over,
+    };
+    return { visit, ...render(<DocsLeaf visit={visit} tree={tree} page={page} parser={parser} />) };
+  }
+
+  it("a direct load's fragment is honoured once: scrolled when the body holds it, and cleared right then", async () => {
+    const scroll = vi.spyOn(HTMLElement.prototype, 'scrollIntoView').mockImplementation(() => {});
+    const { visit, container } = renderLeaf('# B\n\n' + FOOTNOTE, { pendingFragment: 'user-content-fn-1' });
+    expect(visit.setFragment).not.toHaveBeenCalled();
+    await waitFor(() => expect(scroll).toHaveBeenCalledTimes(1));
+    expect(scroll.mock.contexts[0]).toBe(container.querySelector('article li#user-content-fn-1'));
+    expect(visit.setFragment).toHaveBeenCalledTimes(1);
+    expect(visit.setFragment).toHaveBeenCalledWith(null);
+  });
+
+  it('a fragment the rendered body does not hold is cleared too, and nothing scrolls', async () => {
+    const scroll = vi.spyOn(HTMLElement.prototype, 'scrollIntoView').mockImplementation(() => {});
+    const { visit } = renderLeaf('# B\n', { pendingFragment: 'user-content-fn-1' });
+    expect(visit.setFragment).not.toHaveBeenCalled();
+    expect(await screen.findByRole('heading', { name: 'B' })).toBeInTheDocument();
+    await waitFor(() => expect(visit.setFragment).toHaveBeenCalledWith(null));
+    expect(scroll).not.toHaveBeenCalled();
+  });
+
+  it('a leaf that is not Markdown cannot hold a fragment: it is cleared, and nothing scrolls', async () => {
+    const scroll = vi.spyOn(HTMLElement.prototype, 'scrollIntoView').mockImplementation(() => {});
+    const { visit } = renderLeaf('plain words', { pendingFragment: 'user-content-fn-1' }, 'x.txt', 'text');
+    await waitFor(() => expect(visit.setFragment).toHaveBeenCalledWith(null));
+    expect(scroll).not.toHaveBeenCalled();
+  });
+});
+
+describe('the Markdown body is keyed by the pin (review I2)', () => {
+  it('a re-list that moves a draft past the render gate asks first, instead of formatting on the old choice', async () => {
+    const FP_2 = 'e'.repeat(64);
+    const small = '# Small\n';
+    const big = '# Big\n\n' + 'x'.repeat(DOCS_RENDER_GATE_BYTES);
+    const draftTree = (fp: string): DocsTreeOk =>
+      treeOk({ entries: [entry('specs', 'a.md', { draft: draftOf('modified', { fp }) })], drafts: holder() });
+    const f = fakeLoaders({ tree: okTree(draftTree(FP_1)) });
+    f.file.mockImplementation(async (_project: string, pin: DocPin) =>
+      ({ s: 'ok', value: fileResponse(pin.kind === 'draft' && pin.fp === FP_2 ? big : small) }));
+    f.refresh.mockResolvedValue(okRefresh(RAN, treeResponse(draftTree(FP_2))));
+    const { container } = open('/docs/demo/specs/a.md?ref=main', f);
+    expect(await screen.findByRole('heading', { name: 'Small' })).toBeInTheDocument();
+    fireEvent.click(container.querySelector('button.docs-fresh') as HTMLElement);
+    expect(await screen.findByText(/Formatting it may take a while/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Format anyway' })).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'Big' })).toBeNull();
+  });
+});
+
+describe('the index after a sign-in (review I3)', () => {
+  it('a sign-in reads an index that answered auth again, and the rows render', async () => {
+    const f = fakeLoaders();
+    f.projects.mockResolvedValueOnce({ s: 'auth' }).mockResolvedValue({ s: 'ok', value: indexAnswer() });
+    open('/docs', f);
+    await waitFor(() => expect(document.querySelector('.docs-fail[data-state="auth"]')).not.toBeNull());
+    expect(f.projects).toHaveBeenCalledTimes(1);
+    act(() => { raiseAuthLost('expired'); });
+    act(() => { clearAuthLost(); });
+    expect(await screen.findByText("Each project's default branch, read from the fleet box.")).toBeInTheDocument();
+    expect(f.projects).toHaveBeenCalledTimes(2);
+    expect(mainRowNames()).toContain('wt');
+  });
+});
+

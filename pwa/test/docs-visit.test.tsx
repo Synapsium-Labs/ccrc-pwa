@@ -603,4 +603,38 @@ describe('the fragment hand-off', () => {
     act(() => result.current.setFragment(null));
     expect(result.current.pendingFragment).toBeNull();
   });
+
+  it('a fragment named for a page is held for that page only, and any page change drops it (review I1)', () => {
+    const f = fakeLoaders();
+    const { result, rerender } = visit(f.loaders, '/docs/demo/specs/a.md');
+    act(() => result.current.setFragment('fn-1', '/docs/demo/specs/b.md'));
+    expect(result.current.pendingFragment).toBeNull();
+    rerender({ page: pageAt('/docs/demo/specs/b.md') });
+    expect(result.current.pendingFragment).toBe('fn-1');
+    rerender({ page: pageAt('/docs/demo/specs/a.md') });
+    expect(result.current.pendingFragment).toBeNull();
+    rerender({ page: pageAt('/docs/demo/specs/b.md') });
+    expect(result.current.pendingFragment).toBeNull();
+  });
+
+  it('the page a fragment is for is its project, ref, section and path: not its view, and not its slash', () => {
+    const f = fakeLoaders();
+    const { result, rerender } = visit(f.loaders, '/docs/demo/specs/a.md?ref=ws/a');
+    act(() => result.current.setFragment('fn-1', '/docs/demo/specs/b.md?ref=ws/a'));
+    rerender({ page: pageAt('/docs/demo/specs/b.md?ref=ws/a&view=committed') });
+    expect(result.current.pendingFragment).toBe('fn-1');
+    rerender({ page: pageAt('/docs/demo/specs/a.md?ref=ws/a') });
+    act(() => result.current.setFragment('fn-2', '/docs/demo/specs/b.md?ref=ws/a'));
+    rerender({ page: pageAt('/docs/demo/specs/b.md') });
+    expect(result.current.pendingFragment).toBeNull();
+  });
+
+  it('an address that names no leaf holds nothing', () => {
+    const f = fakeLoaders();
+    const { result } = visit(f.loaders, '/docs/demo/specs/a.md');
+    for (const href of ['/docs/demo/specs', '/docs/demo', '/docs', '/x', '/docs/demo/specs/b.md?zz=1']) {
+      act(() => result.current.setFragment('fn-1', href));
+      expect(result.current.pendingFragment, href).toBeNull();
+    }
+  });
 });

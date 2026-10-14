@@ -40,13 +40,23 @@ type IndexSlot = { s: 'loading' } | { s: 'ok'; answer: DocsProjectsResponse } | 
 /** A replace-navigation the screen owes, and the note the page it lands on shows (`null`: none). */
 interface Redirect { readonly href: string; readonly note: string | null }
 
+/** The redirect note, with the URL it was written for. `arrived`: the reader has been on that URL, so the note is
+ *  spent as soon as the URL moves away from it (it does not come back on a later visit to the same URL). */
+interface Note { readonly at: string; readonly text: string; readonly arrived: boolean }
+
+/** The owner redirects of one chain: the pages already redirected from, and the URL the last one went to (the chain
+ *  ends when the URL is anything else). Inconsistent owner data (a names b, b names a) is refused by it. */
+interface Trail { readonly from: readonly string[]; readonly next: string | null }
+const NO_TRAIL: Trail = { from: [], next: null };
+
 /** The words that send a page to the repository that owns it (spec 4.7). */
 function isOwnedElsewhere(slot: TreeSlot | null): slot is Extract<TreeSlot, { s: 'failed' }> {
   return slot?.s === 'failed' && (slot.body.failure === 'linked-worktree' || slot.body.failure === 'shared-repo');
 }
 
-/** The owner redirect (spec 4.7, refinement (c)): the same page in the owner's project. `branch` a ref Docs can
- *  address: that ref. `branch: null` (a detached HEAD, or a branch ccd could not read): the owner's default view,
+/** The owner redirect (spec 4.7, refinement (c)): the same page in the owner's project. A redirect to the page
+ *  itself (the owner is the page's own project at the same ref) is no redirect: the screen says so (review M2).
+ *  `branch` a ref Docs can address: that ref. `branch: null` (a detached HEAD, or a branch ccd could not read): the owner's default view,
  *  with refinement (c)'s sentence. A `branch` string Docs cannot address: the default view, saying so. `branch`
  *  ABSENT (a `shared-repo` answer names only its owner): the page's own ref, since it is the same repository. An
  *  owner that is not a string (`null`, or absent): no redirect; the page renders the word's sentence. */
@@ -64,6 +74,11 @@ function ownerRedirect(page: DocsPageLocation, slot: TreeSlot | null): Redirect 
     if (ref === null) note = fillSentence(DOCS_VIEW_TEXT.redirectBadBranch, { owner, branch });
   }
   return { href: docsPageUrl(docsLocation(page, { kind: 'same-page', project: owner, ref })), note };
+}
+
+/** Whether the owner redirect `to` would lead back: to the page itself, or to a page this chain already left. */
+function leadsBack(to: Redirect, page: DocsPageLocation, here: string, trail: Trail): boolean {
+  return to.href === docsPageUrl(page) || trail.from.includes(here) || trail.from.includes(to.href);
 }
 
 /** A path page whose slash the tree contradicts (spec 3.1): a directory reached without its slash goes to the slash
@@ -131,18 +146,34 @@ export function DocsScreen(p: {
 
   // Every redirect is a replace (M4.R4): canonicalisation, the slash the tree decides, the owner of a worktree.
   const tree = treeOf(visit.tree);
+  const [trail, setTrail] = useState<Trail>(NO_TRAIL);
+  const [note, setNote] = useState<Note | null>(null);
+  // A chain of owner redirects ends when the URL is anything but the one the last of them went to; a note is spent
+  // once the URL leaves the one it was written for. (Declared before the redirect effect, which then wins a tie.)
+  useEffect(() => {
+    setTrail((t) => (t.next === null || t.next === here ? t : NO_TRAIL));
+    setNote((n) => {
+      if (n === null) return n;
+      if (n.at === here) return n.arrived ? n : { ...n, arrived: true };
+      return n.arrived ? null : n;
+    });
+  }, [here]);
+  const owned = page === null ? null : ownerRedirect(page, visit.tree);
+  const looped = owned !== null && page !== null && leadsBack(owned, page, here, trail);
   let redirect: Redirect | null = null;
   if (parsed.ok && parsed.canonical !== here) redirect = { href: parsed.canonical, note: null };
   else if (page !== null && tree !== null) redirect = slashRedirect(page, tree);
-  else if (page !== null) redirect = ownerRedirect(page, visit.tree);
-  const [note, setNote] = useState<{ readonly at: string; readonly text: string } | null>(null);
+  else if (!looped) redirect = owned;
+  const viaOwner = redirect !== null && redirect === owned;
   const target = redirect?.href ?? null;
   const targetNote = redirect?.note ?? null;
   useEffect(() => {
     if (target === null || target === here) return;
-    if (targetNote !== null) setNote({ at: target, text: targetNote });
-    navigate(target, { replace: true });
-  }, [target, targetNote, here]);
+    if (targetNote !== null) setNote({ at: target, text: targetNote, arrived: false });
+    if (viaOwner) setTrail((t) => ({ from: [...t.from, here], next: target }));
+    // The reader's #fragment rides along: the router never reads it, so a replace would otherwise drop it.
+    navigate(target + location.hash, { replace: true });
+  }, [target, targetNote, viaOwner, here]);
 
   let body: ReactNode;
   if (!parsed.ok) {
@@ -167,7 +198,7 @@ export function DocsScreen(p: {
       body = leaf && page.kind === 'path'
         ? <DocsLeaf visit={visit} tree={t} page={page} parser={parser} />
         : <DocsTreeView tree={t} page={page} />;
-    } else if (isOwnedElsewhere(slot) && typeof slot.body.owner === 'string') {
+    } else if (isOwnedElsewhere(slot) && typeof slot.body.owner === 'string' && !looped) {
       body = <p className="docs-loading">{fillSentence(DOCS_VIEW_TEXT.redirecting, { owner: slot.body.owner })}</p>;
     } else {
       const suggestHref = (name: string): string => {
@@ -175,9 +206,12 @@ export function DocsScreen(p: {
         return ref === null ? here : docsPageUrl(docsLocation(page, { kind: 'same-page', project: page.project, ref }));
       };
       body = (
-        <DocsFailureView
-          answer={slot} onRetry={visit.retryTree} onFetchFromOrigin={visit.fetchFromOrigin} suggestHref={suggestHref}
-        />
+        <>
+          <DocsFailureView
+            answer={slot} onRetry={visit.retryTree} onFetchFromOrigin={visit.fetchFromOrigin} suggestHref={suggestHref}
+          />
+          {looped && <p className="docs-note">{DOCS_VIEW_TEXT.redirectLoop}</p>}
+        </>
       );
     }
   }

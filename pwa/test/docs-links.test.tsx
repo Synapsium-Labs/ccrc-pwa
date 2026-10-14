@@ -234,7 +234,7 @@ describe('DocLink: doc links in-app (M4.U3; refinement (o))', () => {
     expect(a.getAttribute('href')).toBe(`${want}#part-2`);
     fireEvent.click(a);
     expect(push.mock.calls[0]?.[2]).toBe(want);
-    expect(ctx.onFragment).toHaveBeenCalledWith('part-2');
+    expect(ctx.onFragment).toHaveBeenCalledWith('part-2', want);
     expect(location.hash).toBe('');
   });
 

@@ -13,8 +13,8 @@ import { docLinkTarget, type DetachedUrls } from './docsLinks';
 
 /** The page a link is resolved from (spec 4.11's `{project, pageRef, view, section, path, tree, pageSource}`; refinement
  *  (p)), plus the detached tree's map and the fragment hand-off. `pageRef: null` is the default view (the page names
- *  no ref). `pageSource` is the source of the body on screen. `onFragment` receives a cross-doc link's fragment when
- *  its plain click navigates in-app, so the visit scrolls to it once the new body renders (refinement (o)). */
+ *  no ref). `pageSource` is the source of the body on screen. `onFragment` receives a cross-doc link's fragment, and
+ *  the in-app URL that click navigates to, so the visit scrolls to it once THAT page's body renders (refinement (o)). */
 export interface DocLinkContextValue {
   readonly project: string;
   readonly pageRef: DocsRefSpec | null;
@@ -24,7 +24,7 @@ export interface DocLinkContextValue {
   readonly tree: DocsTreeOk;
   readonly pageSource: 'committed' | 'draft';
   readonly urls: WeakMap<HastElement, DetachedUrls>;
-  readonly onFragment: (fragment: string) => void;
+  readonly onFragment: (fragment: string, href: string) => void;
 }
 
 /** The Docs page around a document body. `null`, the default, has ONE meaning: `DocLink` is rendered outside a Docs
@@ -83,7 +83,7 @@ export function DocLink(p: ComponentProps<'a'> & { node?: HastElement }): ReactN
         <a {...rest} href={t.fragment === null ? t.href : `${t.href}#${t.fragment}`} onClick={(e) => {
           if (!isPlainClick(e)) return;
           e.preventDefault();
-          if (t.fragment !== null) ctx.onFragment(t.fragment);
+          if (t.fragment !== null) ctx.onFragment(t.fragment, t.href);
           navigate(t.href);
         }}>{children}</a>
       );

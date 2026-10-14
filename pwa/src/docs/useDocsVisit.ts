@@ -7,9 +7,9 @@
 // Every request is started from an effect or an answer handler, never from render; render only reads. The visit's
 // memory lives in refs (so an answer handler always reads the newest state, and StrictMode's second effect pass sees
 // the first pass's in-flight request), and a version counter re-renders when an answer lands.
-import { useEffect, useReducer, useRef, useState } from 'react';
+import { useCallback, useEffect, useReducer, useRef, useState } from 'react';
 import {
-  DOCS_CLASS_CAP, DOCS_STALE_MS, contentClass, docsRefText, entryView,
+  DOCS_CLASS_CAP, DOCS_STALE_MS, contentClass, docsRefText, entryView, parseDocsPage,
   type DocPin, type DocsEntry, type DocsFailure, type DocsFailureBody, type DocsFileResponse, type DocsPageLocation,
   type DocsRefreshFetch, type DocsRefSpec, type DocsTreeOk, type DocsTreeResponse,
 } from '../../../shared/docs';
@@ -119,7 +119,8 @@ export interface DocsVisit {
   /** The commit the current leaf now reads at (a committed pin's commit, a draft pin's holder HEAD) after a re-list
    *  changed its pin and the new read answered; null = no such change for this leaf in this visit. */
   readonly updatedTo: string | null;
-  /** A fragment to scroll to once the body renders; null = nothing to scroll to. */
+  /** A fragment to scroll to once the body renders; null = nothing to scroll to. It belongs to ONE page (a leaf's
+   *  project, ref, section and path): it reads `null` on any other page, and leaves the visit when the page changes. */
   readonly pendingFragment: string | null;
   /** GET the current tree again now: Retry on a failed slot, Re-list on an ok one. A no-op while one is in flight. */
   retryTree(): void;
@@ -129,7 +130,9 @@ export interface DocsVisit {
   refreshManual(): void;
   /** `unresolved-ref`'s Fetch from origin: one manual POST, only while the slot holds that word. */
   fetchFromOrigin(): void;
-  setFragment(fragment: string | null): void;
+  /** Hand the visit a fragment for the page named by `forHref` (a cross-doc link's in-app URL, which the link is about
+   *  to navigate to), or, with no `forHref`, for the page open now (a direct load's `location.hash`). `null` clears. */
+  setFragment(fragment: string | null, forHref?: string): void;
 }
 
 type Target = { readonly project: string; readonly ref: DocsRefSpec | null };
@@ -204,6 +207,21 @@ function wantedFile(slot: TreeSlot | null, page: DocsPageLocation | null, target
   return { kind: 'read', target, tKey, fKey: fileKey(pin, tree), leaf, pin };
 }
 
+/** The page a pending fragment is meant for: a leaf's project, ref, section and path, never its view, slash or frame
+ *  (a link drops the view, and a canonical fix moves the slash, without changing the page). Null: a page that holds no
+ *  body to scroll in (the index, a project, a section, a directory, or a URL that did not parse). */
+function fragmentKey(page: DocsPageLocation | null): string | null {
+  if (page === null || page.kind !== 'path') return null;
+  return [treeKey(page.project, page.ref), page.section, page.path].join(NUL);
+}
+
+/** `fragmentKey` of the page an in-app URL (`/docs/...` plus an optional `?search`) names; null if it names none. */
+function fragmentKeyOfHref(href: string): string | null {
+  const q = href.indexOf('?');
+  const parsed = parseDocsPage(q < 0 ? href : href.slice(0, q), q < 0 ? '' : href.slice(q));
+  return parsed.ok ? fragmentKey(parsed.loc) : null;
+}
+
 function pinCommit(pin: DocPin): string {
   return pin.kind === 'committed' ? pin.commit : pin.head;
 }
@@ -212,11 +230,22 @@ function pinCommit(pin: DocPin): string {
  *  renders; the newest is used for every later request. */
 export function useDocsVisit(page: DocsPageLocation | null, loaders: DocsLoaders): DocsVisit {
   const [, bump] = useReducer((n: number) => n + 1, 0);
-  const [pendingFragment, setFragment] = useState<string | null>(null);
   const loadersRef = useRef(loaders);
   loadersRef.current = loaders;
   const pageRef = useRef(page);
   pageRef.current = page;
+  // A fragment is stored WITH the page it was meant for, so it is spent on that page or on none (refinement (o)).
+  const [held, setHeld] = useState<{ readonly fragment: string; readonly key: string } | null>(null);
+  const pageKey = fragmentKey(page);
+  const setFragment = useCallback((fragment: string | null, forHref?: string): void => {
+    const key = forHref === undefined ? fragmentKey(pageRef.current) : fragmentKeyOfHref(forHref);
+    setHeld(fragment === null || key === null ? null : { fragment, key });
+  }, []);
+  // Any page change drops a fragment meant for another page: it was either spent, or it will never be.
+  useEffect(() => {
+    setHeld((h) => (h !== null && h.key !== pageKey ? null : h));
+  }, [pageKey]);
+  const pendingFragment = held !== null && held.key === pageKey ? held.fragment : null;
   // Spec 4.3 items 3 and 4: one Set each, per mount. A key is added BEFORE its POST, synchronously.
   const autoRefreshed = useRef(new Set<string>());
   const autoRetried = useRef(new Set<string>());

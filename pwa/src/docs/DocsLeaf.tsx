@@ -42,24 +42,24 @@ function notOkOf(file: Extract<FileSlot, { s: 'failed' | 'auth' | 'unreachable' 
   }
 }
 
-/** Scrolls the visit's pending fragment into view once the body under `root` holds it (refinement (o)): a cross-doc
+/** Scrolls the visit's pending fragment into view once the body under `root` has rendered (refinement (o)): a cross-doc
  *  link's fragment, or a direct load's `location.hash`. Looked up inside the leaf's `<article>` by `DocLink`'s own id
- *  rule, then cleared, so it scrolls once. The body renders after the parse settles, so it watches for it. */
+ *  rule. The fragment is spent when the article is there, whether it holds the id or not, so it scrolls once and never
+ *  waits for a later page. The body renders after the parse settles, so it watches for the article. */
 function useFragmentScroll(root: RefObject<HTMLElement | null>, fragment: string | null, clear: (f: null) => void): void {
   useEffect(() => {
     const el = root.current;
     if (fragment === null || el === null) return undefined;
-    const found = (): boolean => {
+    const settle = (): boolean => {
       const article = el.querySelector('article');
-      const target = article === null ? null : fragmentTarget(article, fragment);
-      if (target === null) return false;
-      target.scrollIntoView();
+      if (article === null) return false;
+      fragmentTarget(article, fragment)?.scrollIntoView();
       clear(null);
       return true;
     };
-    if (found()) return undefined;
+    if (settle()) return undefined;
     const watch = new MutationObserver(() => {
-      if (found()) watch.disconnect();
+      if (settle()) watch.disconnect();
     });
     watch.observe(el, { childList: true, subtree: true });
     return () => watch.disconnect();
@@ -171,7 +171,13 @@ export function DocsLeaf(p: {
 }): ReactNode {
   const { visit, tree, page, parser } = p;
   const root = useRef<HTMLDivElement | null>(null);
-  useFragmentScroll(root, visit.pendingFragment, visit.setFragment);
+  const cls = contentClass(page.path);
+  // Only a Markdown body has anchors; a fragment meant for any other leaf is spent as soon as that leaf is open.
+  useFragmentScroll(root, cls === 'markdown' ? visit.pendingFragment : null, visit.setFragment);
+  const { pendingFragment, setFragment } = visit;
+  useEffect(() => {
+    if (cls !== 'markdown' && pendingFragment !== null) setFragment(null);
+  }, [cls, pendingFragment, setFragment]);
   const pin = pinFor(tree, page);
   const link = useMemo<LinkBase>(() => ({
     project: page.project, pageRef: page.ref, view: page.view, section: page.section, path: page.path, tree,
@@ -180,7 +186,6 @@ export function DocsLeaf(p: {
   const entry = tree.entries.find((e) => e.section === page.section && e.path === page.path);
   if (entry === undefined) return null;
   const view = entryView(entry, tree.drafts, page.ref === null ? 'default' : 'ref');
-  const cls = contentClass(page.path);
   const name = leafName(page.path);
   let body: ReactNode;
   if (view.opens === 'none' || pin === null) {

@@ -337,6 +337,7 @@ export const DOCS_VIEW_TEXT = {
   redirectNullBranch:
     "That checkout is not on a named branch, or its branch could not be read; showing {owner}'s default branch.",
   redirectBadBranch: "That checkout's branch {branch} is not one Docs can address; showing {owner}'s default branch.",
+  redirectLoop: 'Docs did not follow it: the owner named for this folder leads back to this folder.',
   indexLink: 'Docs index',
 } as const;
 
