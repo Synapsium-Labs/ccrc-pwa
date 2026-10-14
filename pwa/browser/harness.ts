@@ -3,7 +3,11 @@
 // the L0 tables rather than typed. It runs in the browser config's vitest process (`vitest.browser.config.ts`), never
 // in the hermetic run, which excludes `browser/**`; `test/browser-leg.test.ts` imports `resolveChrome` alone.
 //
-// Origins: A and B are `127.0.0.1` on two ephemeral ports (same site, two origins), C is `localhost` (another site).
+// Origins: A is `a.site.localhost` and B is `b.site.localhost`, on two ephemeral ports (same site, two origins: Chrome
+// takes the registrable domain `site.localhost` for both, while two ports on `127.0.0.1` are two sites to its CORP
+// check), C is `localhost` (another site). Chrome resolves every `*.localhost` name to loopback, so the one
+// `127.0.0.1` listener each origin has answers it. Each hit records `Sec-Fetch-Site`, so a case can state what Chrome
+// itself called the relation between the page and the request, not what the fixture assumes.
 // Every origin serves every route, over plain `node:http`, so a docs fixture carries exactly the headers its route
 // answers with (`DOCS_RESPONSE_HEADERS` from `shared/docs.ts`, or a control's subset) and no Fastify is involved.
 import { accessSync, constants, statSync } from 'node:fs';
@@ -50,6 +54,8 @@ export interface OriginHit {
   readonly method: string;
   readonly path: string;
   readonly cookie: string | null;
+  /** The `Sec-Fetch-Site` header Chrome sent (`same-origin`, `same-site`, `cross-site` or `none`); null when absent. */
+  readonly fetchSite: string | null;
 }
 
 /** A route's answer. `status` absent means 200. `headers` are sent exactly as given, nothing added. */
@@ -71,6 +77,10 @@ export interface Origins {
   close(): Promise<void>;
 }
 
+function headerText(v: string | string[] | undefined): string | null {
+  return v === undefined ? null : Array.isArray(v) ? v.join(', ') : v;
+}
+
 const NOT_FOUND: OriginAnswer = { status: 404, headers: { 'content-type': 'text/plain; charset=utf-8' }, body: 'no such fixture' };
 
 /** Start A, B and C on ephemeral ports, each serving `routes`. */
@@ -78,7 +88,8 @@ export async function startOrigins(routes: Readonly<Record<string, OriginRoute>>
   const hits: OriginHit[] = [];
   const handler = (origin: OriginName) => (req: IncomingMessage, res: ServerResponse): void => {
     const url = new URL(req.url ?? '/', 'http://fixture.invalid');
-    const hit: OriginHit = { origin, method: req.method ?? '', path: url.pathname + url.search, cookie: req.headers.cookie ?? null };
+    const hit: OriginHit = { origin, method: req.method ?? '', path: url.pathname + url.search, cookie: req.headers.cookie ?? null,
+      fetchSite: headerText(req.headers['sec-fetch-site']) };
     hits.push(hit);
     const route = Object.hasOwn(routes, url.pathname) ? routes[url.pathname] : undefined;
     const answer = route === undefined ? NOT_FOUND : route(hit);
@@ -97,8 +108,8 @@ export async function startOrigins(routes: Readonly<Record<string, OriginRoute>>
     s.close(() => resolve());
   });
   return {
-    a: `http://127.0.0.1:${port(sa)}`,
-    b: `http://127.0.0.1:${port(sb)}`,
+    a: `http://a.site.localhost:${port(sa)}`,
+    b: `http://b.site.localhost:${port(sb)}`,
     c: `http://localhost:${port(sc)}`,
     hits,
     close: async () => { await Promise.all([close(sa), close(sb), close(sc)]); },

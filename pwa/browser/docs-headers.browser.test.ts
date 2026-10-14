@@ -81,11 +81,19 @@ const ROUTES: Readonly<Record<string, OriginRoute>> = {
   '/control/raster-no-corp.png': () => ({
     headers: { ...docsHeadersWithout('cross-origin-resource-policy'), 'content-type': DOCS_RASTER_TYPES.png.mime }, body: PNG,
   }),
+  // CORP `same-site` in place of the docs headers' `same-origin`: what tells the two apart (B is same site, C is not).
+  '/control/raster-same-site.png': () => ({
+    headers: { ...DOCS_RESPONSE_HEADERS, 'cross-origin-resource-policy': 'same-site', 'content-type': DOCS_RASTER_TYPES.png.mime }, body: PNG,
+  }),
   '/b6/img-docs': () => htmlPage(`<img id="i" alt="r" src="${o.a}/docs/raster.png">`),
   '/b6/img-no-corp': () => htmlPage(`<img id="i" alt="r" src="${o.a}/control/raster-no-corp.png">`),
+  '/b6/img-same-site': () => htmlPage(`<img id="i" alt="r" src="${o.a}/control/raster-same-site.png">`),
   // M5.B6: an SVG body labelled as a raster, opened top-level; its control is the same body labelled as SVG, bare.
   '/docs/svg-as.png': () => ({ headers: { ...DOCS_RESPONSE_HEADERS, 'content-type': DOCS_RASTER_TYPES.png.mime }, body: hostileSvg('b6svg') }),
   '/control/svg.svg': () => ({ headers: { 'content-type': 'image/svg+xml' }, body: hostileSvg('b6svgc') }),
+  // The one-variable controls of that case: the label alone, and the headers alone.
+  '/control/svg-docs-headers.svg': () => ({ headers: { ...DOCS_RESPONSE_HEADERS, 'content-type': 'image/svg+xml' }, body: hostileSvg('b6svgh') }),
+  '/control/svg-as-png-bare.png': () => ({ headers: { 'content-type': DOCS_RASTER_TYPES.png.mime }, body: hostileSvg('b6svgp') }),
   // M5.B6: a JSON docs response as B's <script src>, with every header, with nosniff alone (no CORP), and bare.
   '/docs/doc.json': () => ({ headers: { ...DOCS_RESPONSE_HEADERS, 'content-type': JSON_TYPE }, body: JSON_BODY }),
   '/control/doc-nosniff-only.json': () => ({ headers: { ...docsHeadersWithout('cross-origin-resource-policy'), 'content-type': JSON_TYPE }, body: JSON_BODY }),
@@ -122,6 +130,8 @@ afterEach(async () => {
 
 const marks = (): string[] => consoleLines.filter((l) => l.includes(MARK));
 const since = (from: number): OriginHit[] => o.hits.slice(from);
+/** Chrome's own request for a document's icon (an SVG or image document has none of its own): not the document's doing. */
+const notIcon = (h: OriginHit): boolean => h.path !== '/favicon.ico';
 const where = (h: OriginHit): string => `${h.origin} ${h.path}`;
 
 /** The `#i` image's naturalWidth once it has loaded or failed. */
@@ -161,10 +171,16 @@ describe('M5.B5: an SVG drawn as Docs draws it, a data: image, runs nothing and 
   it('control: the same SVG as a top-level blob:image/svg+xml runs as A, and its fetch carries A\'s cookie', async () => {
     const from = o.hits.length;
     await page.goto(`${o.a}/b5/blob-top`);
-    const hit = await waitForHit(o, from, (h) => h.origin === 'a' && h.path === '/marker/b5c-script', CONTROL_MS);
-    expect(hit, 'the blob document\'s script never ran').not.toBeNull();
+    await page.waitForURL(/^blob:/, { waitUntil: 'load' });
+    // The settle window is proven here, each run: what a running SVG does has arrived by SETTLE_MS after its load
+    // (in practice before it, as an inline script runs while the page loads), so a property that waits that long has
+    // waited longer than a running script needs.
+    const hit = await waitForHit(o, from, (h) => h.origin === 'a' && h.path === '/marker/b5c-script', SETTLE_MS);
+    expect(hit, `the blob document's script did not request its marker within ${SETTLE_MS} ms of load`).not.toBeNull();
     expect(hit?.cookie ?? '').toContain(`${COOKIE.name}=${COOKIE.value}`);
-    expect(await waitForHit(o, from, (h) => h.origin === 'b' && h.path === '/external/b5c.png', CONTROL_MS)).not.toBeNull();
+    expect(await waitForHit(o, from, (h) => h.origin === 'a' && h.path === '/marker/b5c-onload', SETTLE_MS)).not.toBeNull();
+    expect(await waitForHit(o, from, (h) => h.origin === 'b' && h.path === '/external/b5c.png', SETTLE_MS)).not.toBeNull();
+    await expect.poll(() => marks().sort(), { timeout: SETTLE_MS }).toEqual([`${MARK} b5c-onload`, `${MARK} b5c-script`]);
   });
 });
 
@@ -178,6 +194,16 @@ describe('M5.B6: the docs response headers', () => {
     }
   });
 
+  it('the relations are what the titles say: Chrome calls A\'s request from B same-site and from C cross-site', async () => {
+    for (const [at, name, site] of [[o.b, 'b', 'same-site'], [o.c, 'c', 'cross-site']] as const) {
+      const from = o.hits.length;
+      await page.goto(`${at}/b6/img-docs`);
+      await imageWidth(page);
+      const hit = await waitForHit(o, from, (h) => h.origin === 'a' && h.path === '/docs/raster.png', CONTROL_MS);
+      expect(hit?.fetchSite, `${name} is ${site} to A`).toBe(site);
+    }
+  });
+
   it('control: without CORP the same raster is drawn on both, width 1', async () => {
     for (const at of [o.b, o.c]) {
       await page.goto(`${at}/b6/img-no-corp`);
@@ -185,18 +211,48 @@ describe('M5.B6: the docs response headers', () => {
     }
   });
 
-  it('an SVG body labelled image/png, opened top-level, runs no script', async () => {
+  it('control: CORP same-site in place of same-origin draws the raster on B (same site), width 1, and not on C; same-origin is what keeps B out', async () => {
+    await page.goto(`${o.b}/b6/img-same-site`);
+    expect(await imageWidth(page), 'B (same site) did not draw a CORP same-site raster').toBe(1);
+    await page.goto(`${o.c}/b6/img-same-site`);
+    expect(await imageWidth(page), 'C (another site) drew a CORP same-site raster').toBe(0);
+    const from = o.hits.length;
+    await page.goto(`${o.b}/b6/img-docs`);
+    expect(await imageWidth(page), 'B drew the docs-headers raster, so same-origin is no stricter than same-site').toBe(0);
+    expect(since(from).filter((h) => h.origin === 'a').map(where), 'the docs-headers request still arrives').toEqual(['a /docs/raster.png']);
+  });
+
+  it('an SVG body labelled image/png with every docs header, opened top-level, runs no script (the label and the headers together)', async () => {
     const from = o.hits.length;
     await page.goto(`${o.a}/docs/svg-as.png`, { waitUntil: 'load' });
     await page.waitForTimeout(SETTLE_MS);
-    expect(since(from).map(where)).toEqual(['a /docs/svg-as.png']);
+    expect(since(from).filter(notIcon).map(where)).toEqual(['a /docs/svg-as.png']);
     expect(marks()).toEqual([]);
   });
 
-  it('control: the same body labelled image/svg+xml with no docs headers runs its script', async () => {
+  it('control: the same body labelled image/svg+xml with no docs headers runs its script, within the settle window', async () => {
     const from = o.hits.length;
-    await page.goto(`${o.a}/control/svg.svg`);
-    expect(await waitForHit(o, from, (h) => h.origin === 'a' && h.path === '/marker/b6svgc-script', CONTROL_MS)).not.toBeNull();
+    await page.goto(`${o.a}/control/svg.svg`, { waitUntil: 'load' });
+    expect(await waitForHit(o, from, (h) => h.origin === 'a' && h.path === '/marker/b6svgc-script', SETTLE_MS),
+      `the bare SVG's script did not request its marker within ${SETTLE_MS} ms of load`).not.toBeNull();
+  });
+
+  it('one variable: the same body labelled image/svg+xml WITH every docs header is inert (the CSP alone stops it)', async () => {
+    const from = o.hits.length;
+    await page.goto(`${o.a}/control/svg-docs-headers.svg`, { waitUntil: 'load' });
+    await page.waitForTimeout(SETTLE_MS);
+    expect(since(from).filter(notIcon).map(where)).toEqual(['a /control/svg-docs-headers.svg']);
+    expect(marks()).toEqual([]);
+  });
+
+  it('one variable: the same body labelled image/png WITHOUT any docs header is an image document that does not decode and runs no script (the label alone)', async () => {
+    const from = o.hits.length;
+    await page.goto(`${o.a}/control/svg-as-png-bare.png`, { waitUntil: 'load' });
+    await page.waitForTimeout(SETTLE_MS);
+    expect(since(from).filter(notIcon).map(where)).toEqual(['a /control/svg-as-png-bare.png']);
+    expect(marks()).toEqual([]);
+    expect(await page.evaluate(() => document.contentType), 'the label did not make Chrome treat it as an image').toBe('image/png');
+    expect(await page.evaluate(() => document.querySelector('img')?.naturalWidth), 'the SVG body decoded as a PNG').toBe(0);
   });
 
   it("B's <script src> of a JSON docs response does not execute, with every header and with nosniff alone; the request arrives", async () => {
@@ -208,7 +264,7 @@ describe('M5.B6: the docs response headers', () => {
     }
   });
 
-  it('control: without nosniff (and CORP) the same JSON executes as B\'s script', async () => {
+  it('control: without nosniff (and CORP) the same JSON is not refused as B\'s script (load, not error: the script element took it, which is all this proves)', async () => {
     await page.goto(`${o.b}/b6/script-bare`);
     expect(await scriptOutcome(page)).toBe('load');
   });
