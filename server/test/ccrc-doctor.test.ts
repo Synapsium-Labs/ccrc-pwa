@@ -3741,7 +3741,7 @@ describe('ccrc doctor: transcripts', () => {
     const out = runDoctor(home).stdout;
     const line = lineFor(out, 'transcripts') ?? '';
     expect(line, out).toMatch(/^WARN transcripts: /);
-    expect(line).toContain(`names a successor never written here (sess-forked -> ${uuidNew})`);
+    expect(line).toContain(`names a successor never written here (sess-forked -> ${uuidNew} on claude)`);
     expect(line).not.toContain('Claude Code has superseded');
     const remedy = /^WARN transcripts: .*\n\s+remedy: (.*)$/m.exec(out)?.[1] ?? '';
     expect(remedy).toContain('first prompt it answers');
@@ -3760,6 +3760,52 @@ describe('ccrc doctor: transcripts', () => {
     writeTranscript(home, '.claude', wd, uuidNew, '');
     const line = lineFor(runDoctor(home).stdout, 'transcripts') ?? '';
     expect(line).toContain('names a successor never written here');
+  });
+
+  it('a pending row on a lane that is not the default names ITS wrapper — `<wrapper> agents`, never `claude agents` (review round 3)', () => {
+    // A background job lives under its own config dir's `jobs/`, so `claude
+    // agents` on a `lane-b` row lists the DEFAULT config dir's agents: the
+    // fork's starting job is not there, the operator concludes it "failed or
+    // is gone", and the prompt they then send cancels the pointer while the
+    // job is in fact still starting.
+    const home = healthy('ccrc-doctor-transcripts-pending-lane-');
+    seedAccountsSh(home, { version: 1, accounts: [
+      ...TRANSCRIPT_ROSTER.accounts,
+      { id: 'lane-b', label: 'lane-b', configDirSuffix: '.claude-lane-b',
+        exec: { kind: 'generated', secretsFile: '.cc-secrets/lane-b-oauth.env' }, homeAble: true, hue: 'violet', telemetry: 'anthropic' },
+    ] });
+    linkReal(home, 'tail');
+    const wd = join(home, 'projects', 'forked');
+    mkdirSync(wd, { recursive: true });
+    const uuidOld = 'd'.repeat(36), uuidNew = 'e'.repeat(36);
+    writeTranscriptSession(home, 'sess-forked', 'lane-b', wd, uuidOld);
+    writeTranscript(home, '.claude-lane-b', wd, uuidOld, `${turnLine('before the fork')}${continuedInLine(uuidOld, uuidNew)}`);
+    const out = runDoctor(home).stdout;
+    const line = lineFor(out, 'transcripts') ?? '';
+    expect(line, out).toContain(`(sess-forked -> ${uuidNew} on lane-b)`);
+    const remedy = /^WARN transcripts: .*\n\s+remedy: (.*)$/m.exec(out)?.[1] ?? '';
+    expect(remedy).toContain('`<wrapper> agents`');
+    expect(remedy).not.toContain('claude agents');
+  });
+
+  it('SKIPs on a server-role box — it hosts no sessions, so a registry left behind is not measured (review round 3)', () => {
+    // A box that changed role from fleet to server and kept its old registry
+    // would otherwise be told to "roll the fleet box forward" about rows no
+    // supervisor runs for — and a box with no registry would print a vacuous
+    // clean PASS the README's server-role rule says is not printed.
+    const home = healthy('ccrc-doctor-transcripts-server-');
+    writeCcrcEnv(home, ['CCRC_ROLE=server', 'CCRC_FLEET=local', 'CCRC_HOST=ccrc-fixture.invalid', 'CCRC_PORT=7788', ''].join('\n'));
+    seedAccountsSh(home, TRANSCRIPT_ROSTER);
+    linkReal(home, 'tail');
+    const wd = join(home, 'projects', 'frozen');
+    mkdirSync(wd, { recursive: true });
+    const uuidOld = 'd'.repeat(36), uuidNew = 'e'.repeat(36);
+    writeTranscriptSession(home, 'sess-frozen', 'claude', wd, uuidOld);
+    writeTranscript(home, '.claude', wd, uuidOld, `${turnLine('before the fork')}${continuedInLine(uuidOld, uuidNew)}`);
+    writeTranscript(home, '.claude', wd, uuidNew, turnLine('after the fork'));
+    const r = runDoctor(home);
+    expect(r.stdout).toMatch(/^SKIP transcripts: this box records CCRC_ROLE=server, so it hosts no sessions/m);
+    expect(r.stdout).not.toMatch(/^(PASS|WARN|FAIL) transcripts:/m);
   });
 });
 

@@ -3,7 +3,7 @@
 **Date:** 2026-09-20
 **Status:** design, approved in chat (2026-09-20); implemented by
 `docs/superpowers/plans/2026-09-20-forked-session-transcript.md`, Tasks 1–8 (PR #189). **Amended 2026-10-13
-and 2026-10-14** by that plan's two review rounds: the claims listed under "Review rounds" below are superseded by
+and 2026-10-14** by that plan's three review rounds: the claims listed under "Review rounds" below are superseded by
 the plan's `D-4935`…`D-4954`, which describe what shipped. The sections themselves are left as designed.
 **Branch:** `ws/chat-message-disappears-while-waiting`
 **Reported by:** the operator, 2026-09-19
@@ -35,7 +35,7 @@ plan's "Deviations found" that replaced it.
   is newer than the newest event on screen at the send, a bar each re-send raises; an echo that a backlog's
   fifty-event window no longer reaches is never seen, and that bubble retires at the ten-minute horizon (D-4952).
   `ChatList.tsx`, then open PR #152's and since merged, is edited after all: its quiet-gap divider no longer
-  rewinds to an absorbed message's enqueue time (D-4950).
+  rewinds to an absorbed message's enqueue time, and it follows transcript time only (D-4950).
 - **§3, the read budget** ("The marker can only be the final line of a file that will never be appended to
   again"). Claude Code re-stamps metadata after the marker, and a session resumed in its pre-fork id writes a
   finished turn after it, which cancels it (D-4940). The read is still gated on quiescence; a declined hop is
@@ -51,8 +51,8 @@ plan's "Deviations found" that replaced it.
   with a named residual for a process a fork itself starts (D-4953), and it reads registry rows FIFO-safely
   (D-4954). A fork inherits another row's generation, so its compaction card stays dark (D-4953's residual).
 - **§4, the doctor check** ("read its last line"). It reads the shared rule over the window, counts the rows it
-  could not measure apart, names parked rows and successors never written apart, and FAILs a registry it cannot
-  list (D-4941).
+  could not measure apart, names parked rows and successors never written apart, FAILs a registry it cannot
+  list, and SKIPs on a server-role box (D-4941).
 - **Names.** Review round 2 replaced the two live session names in "What is measured", §4 and the rollout caution
   with neutral stand-ins, `session-a` and `session-b`. The measurements are unchanged.
 

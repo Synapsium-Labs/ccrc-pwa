@@ -175,7 +175,10 @@ const localDivider = (text: string): ChatEvent => {
   localSeq += 1;
   return { kind: 'system', uuid: `local-${localSeq}`, ts: new Date().toISOString(), text };
 };
-const isLocalDivider = (e: ChatEvent): boolean =>
+/** A divider this store minted, stamped with the PHONE's clock — never a
+ *  transcript time. Exported so every reader of event time skips it the same
+ *  way (`newestTranscriptTs` here, the quiet-gap divider in `ChatList`). */
+export const isLocalDivider = (e: ChatEvent): boolean =>
   e.kind === 'system' && e.uuid.startsWith('local-');
 
 /** Append `incoming` to `existing`, skipping events already present. */

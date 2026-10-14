@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import type { ChatEvent } from '../../shared/api';
+import type { ChatEvent, SessionStreamMsg } from '../../shared/api';
 import { useLayoutEffect, useRef } from 'react';
 import type { ReactNode } from 'react';
 import { createSessionStore, type SessionStore } from '../src/stores/session';
@@ -907,5 +907,49 @@ describe('the quiet-gap divider measures from the newest time seen, not the last
       at('user', 'q1', '09:59:00'),
       at('assistant', 'a1', '10:10:00'),
     ])).toEqual(['div-a0', 'div-a1']);
+  });
+
+  // Review round 3 (RR2-PWA-1): the clock follows TRANSCRIPT time only. A
+  // local divider is minted with the PHONE's clock at "now" — the reason the
+  // store's own `newestTranscriptTs` skips it — so one counted here pinned the
+  // never-rewound clock at phone time, and every gap measured after it read
+  // negative.
+  const storeEvents = (msgs: SessionStreamMsg[]): ChatEvent[] => {
+    const store = makeStore('demo:dividers');
+    for (const m of msgs) store.getState().apply(m);
+    return store.getState().events;
+  };
+  const backlogOf = (uuid: string, events: ChatEvent[]): SessionStreamMsg =>
+    ({ type: 'backlog', uuid, events, offset: 100, file: `/t/${uuid}.jsonl`, missing: false });
+
+  it('after a rotation, the next backlog keeps its quiet-gap dividers — the "Session context reset" divider does not set the clock', () => {
+    const events = storeEvents([
+      backlogOf('u1', [at('assistant', 'p0', '08:00:00')]),
+      { type: 'rotated', uuid: 'u2' },
+      backlogOf('u2', [
+        at('assistant', 'a0', '09:00:00'), at('assistant', 'a1', '09:01:00'),
+        at('assistant', 'a2', '10:30:00'), at('assistant', 'a3', '12:00:00'),
+      ]),
+    ]);
+    expect(events[0], 'the reset divider stays on top of the new backlog').toMatchObject({ kind: 'system', uuid: expect.stringMatching(/^local-/) });
+    const keys = dividers(events);
+    expect(keys).toContain('div-a2');
+    expect(keys).toContain('div-a3');
+    expect(keys).not.toContain('div-a1');
+  });
+
+  it('a notice (a swap, a reconnect) does not suppress the dividers after it, whatever the phone clock reads', () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date('2027-03-01T00:00:00.000Z'));   // a phone far ahead of the box
+      const events = storeEvents([
+        backlogOf('u1', [at('assistant', 'a0', '09:00:00')]),
+        { type: 'notice', message: 'cc swap: demo moved lane-a -> lane-b' },
+        { type: 'events', uuid: 'u1', offset: 200, events: [at('assistant', 'a1', '09:15:00')] },
+      ]);
+      expect(dividers(events)).toContain('div-a1');
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

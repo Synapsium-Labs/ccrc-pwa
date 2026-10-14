@@ -717,16 +717,16 @@ const TMUX_PANE = 'tmux() { case "$1" in list-panes) echo 4242 ;; esac; return 0
  *  the two strings are equal). A test may pass a string to record instead —
  *  one that does NOT match is a recycled pid — or `null` to leave the field
  *  out, as a record from a build that never wrote it would. */
-const bgRecord = (sid: string, job: string, pid = '$$', procStart?: string | null): string => {
+const bgRecord = (sid: string, job: string, pid = '$$', procStart?: string | null, wrapper: string = W): string => {
   const ps = procStart === undefined
     ? `"$(LC_ALL=C TZ=UTC ps -o lstart= -p ${pid} | sed 's/ *$//')"`
     : `'${procStart ?? ''}'`;
   const field = procStart === null ? '' : '"procStart":"%s",';
   const arg = procStart === null ? '' : `"$__ps"`;
-  return `mkdir -p "$(_cfg_dir ${W})/sessions"; __ps=${ps}; `
+  return `mkdir -p "$(_cfg_dir ${wrapper})/sessions"; __ps=${ps}; `
     + `printf '{"pid":%s,"sessionId":"%s","cwd":"/w","startedAt":1,${field}"version":"2.1.296",`
     + `"peerProtocol":1,"kind":"bg","entrypoint":"cli","jobId":"%s"}' "${pid}" '${sid}' ${arg} '${job}' `
-    + `> "$(_cfg_dir ${W})/sessions/${pid}.json"; `;
+    + `> "$(_cfg_dir ${wrapper})/sessions/${pid}.json"; `;
 };
 
 const pick = (out: string, tag: string): string | undefined => new RegExp(`${tag}:(\\S+)`).exec(out)?.[1];
@@ -1138,18 +1138,27 @@ describe('D-4944: every resume follows the chain before it resumes', () => {
     // reads the sessions directory of ITS OWN config dir, so on the target
     // account `--resume <id>` finds nobody holding the id and starts — while
     // the job keeps writing the source account's copy. Two writers, one id.
-    h.sh(`_reg_set ${swapId} wrapper ${W}; _reg_set ${swapId} workdir "$HOME"; _reg_set ${swapId} uuid ${A}`);
-    const dir = path.join(h.sh(`_cfg_dir ${W}`), 'projects', h.sh('_munge_wd "$(_ws_realpath "$HOME")"'));
+    //
+    // ON A LANE THAT IS NOT THE DEFAULT, so the refusal's "stop it" is pinned
+    // to the ROW's wrapper (review round 3, DOCS-R2-4): a job lives under its
+    // own config dir's `jobs/`, and `claude stop <job>` on a `claude-a` row
+    // asks the default config dir, where the job does not exist.
+    const lane = 'claude-a';
+    h.sh(`_reg_set ${swapId} wrapper ${lane}; _reg_set ${swapId} workdir "$HOME"; _reg_set ${swapId} uuid ${A}`);
+    const dir = path.join(h.sh(`_cfg_dir ${lane}`), 'projects', h.sh('_munge_wd "$(_ws_realpath "$HOME")"'));
     mkdirSync(dir, { recursive: true });
     writeFileSync(path.join(dir, `${A}.jsonl`), `${turnLine('one')}${marker(A, C)}`);
     writeFileSync(path.join(dir, `${C}.jsonl`), turnLine('two'));
     let status = 0;
-    try { h.sh(`${SWAP_STUBS} ${bgRecord(C, JOB)} cmd_swap ${swapId} claude-a`); } catch (e) { status = (e as { status?: number }).status ?? 1; }
+    try { h.sh(`${SWAP_STUBS} ${bgRecord(C, JOB, '$$', undefined, lane)} cmd_swap ${swapId} ${W}`); } catch (e) { status = (e as { status?: number }).status ?? 1; }
     expect(status).not.toBe(0);
     expect(h.calls().join('\n')).not.toContain('svc_stop');
     expect(h.calls().filter((c) => c.startsWith('carry '))).toEqual([]);
-    expect(h.reg(swapId, 'wrapper')).toBe(W);
-    expect(h.reg(swapId, 'swapblocked') ?? '').toContain(JOB);
+    expect(h.reg(swapId, 'wrapper')).toBe(lane);
+    const blocked = h.reg(swapId, 'swapblocked') ?? '';
+    expect(blocked).toContain(JOB);
+    expect(blocked).toContain(`(${lane} stop ${JOB})`);
+    expect(blocked).not.toContain(`claude stop`);
   });
 
   // ── Fix-forward (second verifier round) ─────────────────────────────────────
@@ -1770,6 +1779,62 @@ describe('#189 round 2 (RR-2): the supervisor waits for a live background job, i
     runSup(`${SUP_STUBS} ${clock('')} cmd_supervise ${ID}`);
     expect(h.calls().filter((c) => c.startsWith('ensure '))).toEqual([`ensure uuid=${A} tick=0`]);
     expect(existsSync(path.join(h.home, '.cc-sessions', `${ID}.bgwait`))).toBe(false);
+  });
+
+  // ── Review round 3 (RR2-W1-1): the pre-flight's verdict is re-taken after a wait ──
+  // The pre-flight probes ONCE, before the wait, and the wait lasts as long
+  // as the background worker lives (hours, measured). A tmux server that
+  // wedges silent during the wait, with the job ending inside the wedge, used
+  // to send the supervisor into cmd_ensure on the pre-wait `gone`, and from
+  // there into `_tmux_new_session`, whose list-sessions/new-session carry no
+  // deadline: the hang the pre-flight exists to refuse.
+  /** A probe that answers `gone` until `$HOME/wedged` exists, then `unknown`
+   *  with a silent (not absent) substrate twice, then `gone` again so the
+   *  loop leaves by its own exit. Every answer is logged with its tick. */
+  const WEDGING_PROBE = `systemctl() { :; }; launchctl() { :; }; _svc_enable() { :; };
+    _substrate_mark() { echo "mark tick=\${__t:-0}" >> "$HOME/ccd-calls"; };
+    __u=0; _session_probe() {
+      if [[ -e "$HOME/wedged" ]] && (( ++__u <= 2 )); then PROBE_VERDICT=unknown; PROBE_SUBSTRATE=unmeasured
+      else PROBE_VERDICT=gone; PROBE_SUBSTRATE=present; fi
+      PROBE_DETAIL=""; echo "probe $PROBE_VERDICT tick=\${__t:-0}" >> "$HOME/ccd-calls"; };
+    cmd_ensure() { echo "ensure tick=\${__t:-0}" >> "$HOME/ccd-calls"; };`;
+
+  it('a wait that ends inside a substrate fault re-probes, and does not ensure into the wedge — the loop is entered on `unknown`', () => {
+    row(h.home, A);
+    plant(h.home, A, `${turnLine('one')}${marker(A, C)}`);
+    plant(h.home, C, turnLine('two'));
+    h.sh(`_reg_set ${ID} started 1`);
+    const r = runSup(`${WEDGING_PROBE} command sleep 60 >/dev/null 2>&1 & w=$!; trap 'kill -9 $w 2>/dev/null' EXIT; ${bgRecord(C, JOB, '$w')}
+      ${clock('(( __t == 2 )) && : > "$HOME/wedged"; (( __t == 3 )) && { kill -9 $w; wait $w 2>/dev/null; };')}
+      cmd_supervise ${ID}`);
+    const calls = h.calls();
+    expect(calls.filter((c) => c.startsWith('ensure ')), r.err).toEqual([]);
+    // the pre-flight's own probe, then the re-probe the moment the wait ended
+    expect(calls.filter((c) => c.startsWith('probe ')).slice(0, 2)).toEqual(['probe gone tick=0', 'probe unknown tick=3']);
+    expect(calls).toContain('mark tick=3');   // the loop's `unknown` arm, not cmd_ensure
+  });
+
+  it('a wait that ends on a healthy substrate still ensures, after its re-probe', () => {
+    row(h.home, A);
+    plant(h.home, A, `${turnLine('one')}${marker(A, C)}`);
+    plant(h.home, C, turnLine('two'));
+    h.sh(`_reg_set ${ID} started 1`);
+    const r = runSup(`${WEDGING_PROBE} command sleep 60 >/dev/null 2>&1 & w=$!; trap 'kill -9 $w 2>/dev/null' EXIT; ${bgRecord(C, JOB, '$w')}
+      ${clock('(( __t == 3 )) && { kill -9 $w; wait $w 2>/dev/null; };')}
+      cmd_supervise ${ID}`);
+    const calls = h.calls();
+    expect(calls.slice(0, calls.indexOf('ensure tick=3') + 1).filter((c) => /^(probe|ensure) /.test(c)), r.err)
+      .toEqual(['probe gone tick=0', 'probe gone tick=3', 'ensure tick=3']);
+  });
+
+  it('with nothing to wait for, the pre-flight probes ONCE before it ensures — the re-probe costs the common path nothing', () => {
+    row(h.home, A);
+    plant(h.home, A, turnLine('one'));
+    h.sh(`_reg_set ${ID} started 1`);
+    const r = runSup(`${WEDGING_PROBE} ${clock('')} cmd_supervise ${ID}`);
+    const calls = h.calls();
+    expect(calls.slice(0, calls.indexOf('ensure tick=0') + 1).filter((c) => /^(probe|ensure) /.test(c)), r.err)
+      .toEqual(['probe gone tick=0', 'ensure tick=0']);
   });
 });
 

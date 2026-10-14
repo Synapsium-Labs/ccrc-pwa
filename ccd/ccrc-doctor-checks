@@ -4113,6 +4113,19 @@ _check_transcripts() {
   # failure mode this check was already rewritten once to avoid.
   local reg="$HOME/.cc-sessions" sh="$HOME/.ccrc/accounts.sh"
   local u id uuid cfg wd raw rwd munged f stale="" parked="" pending="" pendwhat="" nf n=0 skipped=0 unread=0 rowbad=0 scope="" any=0 rc why remedy detail
+  local _srv_role=""
+
+  # A SERVER-ROLE BOX HOSTS NO SESSIONS (review round 3), so it SKIPs here as
+  # every other per-session check does (`_check_jq_regex`'s idiom, and the
+  # README's server-role list). Asked before the registry is looked at: a box
+  # that changed role and kept its old `~/.cc-sessions` would otherwise be told
+  # to roll a fleet box forward about rows no supervisor runs for, and a box
+  # with no registry would print the vacuous PASS that rule says is not printed.
+  [ -f "${BOX_ENV_FILE:-}" ] && [ -r "${BOX_ENV_FILE:-}" ] && _srv_role="$(_box_env_value "$BOX_ENV_FILE" CCRC_ROLE)"
+  if [ "$_srv_role" = server ]; then
+    _dr_skip transcripts "this box records CCRC_ROLE=server, so it hosts no sessions and no supervisor follows a registry here"
+    return 3
+  fi
 
   # `$REG` UNLISTABLE IS A FAIL, in `_check_pools`' own words for the same
   # fact: nothing under it — no session's transcript included — can be
@@ -4277,7 +4290,7 @@ _check_transcripts() {
          nf="$cfg/projects/$munged/$_DR_CI_NEXT.jsonl"
          [ -f "$nf" ] || nf="$cfg/projects/$raw/$_DR_CI_NEXT.jsonl"
          if ! { [ -f "$nf" ] && [ -s "$nf" ]; }; then
-           pending="$pending $id"; pendwhat="${pendwhat:+$pendwhat, }$id -> $_DR_CI_NEXT"
+           pending="$pending $id"; pendwhat="${pendwhat:+$pendwhat, }$id -> $_DR_CI_NEXT on $wrapper"
          # A ROW NO SUPERVISOR TICKS (D-4941). Only a running `ccd supervise`
          # walks the pointer, and a stopped or archived session has none, so
          # "clears itself on the next supervise tick" can never come true for
@@ -4313,7 +4326,7 @@ _check_transcripts() {
     fi
     if [ -n "$pending" ]; then
       # shellcheck disable=SC2086 -- registry basenames, as above
-      remedy="${remedy:+$remedy. }$(_dr_join $pending): ccd keeps each on its own transcript and does not follow a pointer to a conversation that was never written. If that fork's background job is still starting (see claude agents, or jobs/<the successor's first 8 characters>/state.json in the session's config dir), wait: this clears when its first line lands. If the job failed or is gone, the session's own transcript is still the conversation — the first prompt it answers there cancels the stale pointer (a finished turn after the marker), and this clears"
+      remedy="${remedy:+$remedy. }$(_dr_join $pending): ccd keeps each on its own transcript and does not follow a pointer to a conversation that was never written. If that fork's background job is still starting (\`<wrapper> agents\` lists it, with the row's wrapper named beside it above — a job lives under its own account's config dir, so another wrapper's list does not show it — or read jobs/<the successor's first 8 characters>/state.json in that wrapper's config dir), wait: this clears when its first line lands. If the job failed or is gone, the session's own transcript is still the conversation — the first prompt it answers there cancels the stale pointer (a finished turn after the marker), and this clears"
     fi
     detail=""
     # shellcheck disable=SC2086 -- the ids are registry basenames, matched by

@@ -1019,6 +1019,27 @@ describe('the echo that clears a pending', () => {
       store.getState().apply(backlog('/t/b.jsonl', [userAt('copy-1', 'yes', T0)], 'u2'));
       expect(store.getState().pending).toHaveLength(1);
     });
+
+    it(`a ${via}() never LOWERS the bar onto OLDER events: a screen now holding only history below the first bar keeps that bar`, async () => {
+      // Review round 3 (RR2-PWA-2). The case above takes the "nothing from a
+      // transcript on screen" arm; this one takes the `Math.max` arm. The first
+      // send's bar is 10:06; the screen is then replaced by another file whose
+      // newest event is 10:00 (a repoint onto another copy, a rotation onto
+      // older history) and the operator re-sends. A bar REPLACED rather than
+      // raised would fall to 10:00, and a replayed "yes" stamped 10:05 —
+      // history from before the first send — would clear a re-send that has
+      // not been delivered.
+      const store = failingOnce(`r-${via}-4`, failures[via]());
+      store.getState().apply(backlog('/t/a.jsonl', [assistantAt('hi-0', 'ready', T6)]));
+      await store.getState().send('yes');
+      const key = store.getState().pending[0]!.key;
+      expect(store.getState().pending[0]!.state).toBe('failed');
+      store.getState().apply(backlog('/t/b.jsonl', [assistantAt('lo-0', 'older', T0)], 'u2'));
+
+      await reSend[via](store, key);
+      store.getState().apply(backlog('/t/b.jsonl', [assistantAt('lo-0', 'older', T0), userAt('mid-1', 'yes', T5)], 'u2'));
+      expect(store.getState().pending).toHaveLength(1);
+    });
   }
 });
 

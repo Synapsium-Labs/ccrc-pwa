@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=7d2801fb1c52adca77abae7ac0991eb6ed7acdfb5d73a0fe2018947e0fbfe0de
+# ccrc:generated 1 sha256=45197ca8da40db11084f80ad9d1a184d0631dd5653c2088aa121eff2dff4e1eb
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -24460,8 +24460,30 @@ cmd_supervise() {   # systemd ExecStart: ensure then block until the session die
     # NO SPAWN INTO A CONVERSATION A LIVE BACKGROUND JOB HOLDS (RR-2): wait
     # here, heartbeating, until it is not held — see `_ci_held_wait`. A live
     # pane spawns nothing, so it is not asked.
-    [[ "$PROBE_VERDICT" == live ]] || _ci_held_wait "$id"
-    cmd_ensure "$id"
+    #
+    # AND A WAIT RE-TAKES THIS GATE'S VERDICT (review round 3, RR2-W1-1). The
+    # probe above was taken BEFORE the wait, and the wait lasts as long as the
+    # background worker lives — hours, measured. A tmux server that wedged
+    # silent during it, with the job ending inside the wedge, would otherwise
+    # walk this supervisor into the deadline-less `_tmux_new_session` on a
+    # `gone` that is hours old: the hang the gate exists to refuse. So after a
+    # REAL wait the substrate is probed again and the same gate is applied; on
+    # `unknown` with a silent substrate the loop below is entered instead.
+    # "Real" is read from `_CI_SUPME`: `_ci_held_wait` writes the `.bgwait`
+    # record only when it waits (`_ci_bgwait_open`) or closes one a previous
+    # supervisor left open (`_ci_bgwait_close`), and both name this supervisor
+    # first (`_ci_sup_me`). Nothing else in a supervisor sets it, so a row with
+    # nothing to wait for — the common path — costs one assignment and one
+    # test; the RR-4 unread retries (a few ticks of sleep, no record) do not
+    # count, and a record closed at once costs one extra probe, once.
+    if [[ "$PROBE_VERDICT" != live ]]; then
+      _CI_SUPME=""
+      _ci_held_wait "$id"
+      [[ -z "$_CI_SUPME" ]] || _session_probe "$id"
+    fi
+    if [[ "$PROBE_VERDICT" != unknown || "${PROBE_SUBSTRATE:-}" == absent ]]; then
+      cmd_ensure "$id"
+    fi
   fi
   # D-4960: `_plat_timeout` caches whether `timeout -k` works, but the tick's probe calls it inside `$( )`, so the
   # cache died with that subshell and every tick re-ran the probe (3 forks). Prime it ONCE, here, in this shell.
@@ -27084,7 +27106,7 @@ cmd_swap() {   # [--force] [--cross-pool] id target-wrapper — move a session t
   local bgheld=""
   _ci_chain_end "$id" "$srccfg" && bgheld="$_CI_END_HELD"
   if [[ -n "$bgheld" ]]; then
-    _swap_refuse "$id" "$cur" "$target" "conversation $_CI_END_HID is live in background job $bgheld on $cur — a swap would resume a copy on $target while that job keeps writing here; let it finish or stop it (claude stop $bgheld) first" 0 \
+    _swap_refuse "$id" "$cur" "$target" "conversation $_CI_END_HID is live in background job $bgheld on $cur — a swap would resume a copy on $target while that job keeps writing here; let it finish or stop it ($cur stop $bgheld) first" 0 \
       "--force does not move it: --force accepts a transcript that cannot be found, and this is the opposite hazard — two writers. Swap again once the job has ended."
     return 1
   fi

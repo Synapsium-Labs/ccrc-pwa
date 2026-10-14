@@ -41,10 +41,19 @@ import {
  *    Task 5 (`_cfg_dir_to`, an exact memo): -1 fork on the two leaving fixtures.
  *  The merged figures below are the dump of this suite on the merged tree, never
  *  a sum of the three. Lowered only by a change that measures the new figure and
- *  states it in its PR's departure. *  RAISED BY #189 (the forked-session continued-in chain): +4 forks / +1 exec on EVERY fixture,
- *  measured on the merged tree — `_sync_uuid` now runs `_ci_bg_follow` and `_follow_continued_in`
- *  each tick (D-4935, D-4945), whose quiescence stat and checks are the four forks. A deliberate
- *  feature cost, stated rather than hidden; trimming it is the tick-diet spec's stage 2(c).
+ *  states it in its PR's departure.
+ *
+ *  RAISED BY #189 (the forked-session continued-in chain): +4 forks / +1 exec on EVERY fixture,
+ *  measured on the merged tree. ON THESE FIXTURES that is not the walk's quiescence stat, which
+ *  they never reach: no fixture plants a `workdir` field, so `_ci_bg_follow` (D-4945) costs
+ *  nothing and `_follow_continued_in` (D-4935) stops before its stat. The four forks are
+ *  `_follow_continued_in`'s per-tick `uuid` re-read (`$(_reg_get …)`: a subshell and `cat`, 2
+ *  forks and the 1 exec) and a FAILING `$(_ci_addrs …)` for a row with no workdir (a subshell and
+ *  its own `$(_reg_get … workdir)`, 2 forks, no exec; a failure is not memoized, so it repeats
+ *  every tick). #189's real steady cost on a row WITH a workdir — the uuid re-read plus the
+ *  size/mtime `stat` pair on a quiescent transcript — is NOT YET COUNTED by this harness (no
+ *  fixture plants a workdir, and `stat` is not a passthrough shim); counting and trimming it is
+ *  the tick-diet spec's stage 2(c) (§7.2). A deliberate feature cost, stated rather than hidden.
  */
 const TICK_BUDGET: Record<FixtureName, { forks: number; execs: number }> = {
   'idle-home': { forks: 167, execs: 73 },
