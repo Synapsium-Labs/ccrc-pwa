@@ -509,6 +509,14 @@ export function leaseSourceKindOfActivity(kind: DelegationActivitySourceKind): D
   }
 }
 
+/**
+ * The lease provenances wave 3 may WRITE: the shared lease vocabulary minus `attached`, which the complete migration can represent
+ * and no wave-3 writer produces. Derived once, here, from the one declaration, so a new provenance is a decision and not a second
+ * hand-kept list.
+ */
+export const WAVE3_LEASE_SOURCE_KINDS: readonly Exclude<DelegationLeaseSourceKind, 'attached'>[] =
+  DELEGATION_LEASE_SOURCE_KINDS.filter((k): k is Exclude<DelegationLeaseSourceKind, 'attached'> => k !== 'attached');
+
 // ── Instants ──────────────────────────────────────────────────────────────────────────────────────────────────────────
 
 const CANONICAL_INSTANT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;

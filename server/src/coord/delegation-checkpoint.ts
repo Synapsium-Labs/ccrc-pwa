@@ -49,6 +49,7 @@ import {
   parseDelegationInstant,
   restoreOrAllocateActivityId,
   sortedProjectionRows,
+  WAVE3_LEASE_SOURCE_KINDS,
   type DelegationActivityRow,
   type DelegationAttemptRow,
   type DelegationBucketCursor,
@@ -840,12 +841,42 @@ export interface DelegationRecoveryFailure {
   detail: string;
 }
 
+/** How many evidence records the retained journal holds, in all and up to a sequence. Recovery counts them while it reads, so the
+ *  projection repair can tell from SQLite's `(COUNT, MAX(journalSequence))` alone whether it has anything to read the journal for. */
+export interface DelegationEvidenceCounts {
+  readonly total: number;
+  countAtOrBelow(sequence: number): number;
+}
+
+/** The evidence records' sequences, in order (8 bytes each). A lease-created record is not evidence and is not counted. */
+export class DelegationEvidenceIndex implements DelegationEvidenceCounts {
+  private readonly sequences: number[] = [];
+  get total(): number { return this.sequences.length; }
+  /** Sequences arrive strictly increasing (the chain has already proved it); anything else is a bug and is refused. */
+  add(sequence: number): void {
+    const last = this.sequences[this.sequences.length - 1];
+    if (last !== undefined && sequence <= last) refuse('fold-refused', `evidence sequence ${sequence} does not follow ${last}`);
+    this.sequences.push(sequence);
+  }
+  countAtOrBelow(sequence: number): number {
+    let lo = 0;
+    let hi = this.sequences.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >>> 1;
+      if ((this.sequences[mid] ?? Number.POSITIVE_INFINITY) <= sequence) lo = mid + 1; else hi = mid;
+    }
+    return lo;
+  }
+}
+
 /** What a successful recovery hands to the live path. */
 export interface DelegationRecoveryFacts {
   builder: DelegationCheckpointBuilder;
   /** Every accepted evidence `eventId` in the retained journal (the deduplication index). */
   eventIds: Set<string>;
   head: DelegationJournalPosition | null;
+  /** The per-sequence evidence count, for the projection repair. */
+  evidence: DelegationEvidenceIndex;
 }
 
 export interface DelegationRecoveryReport {
@@ -875,6 +906,7 @@ export class DelegationRecovery {
   private builder: DelegationCheckpointBuilder | null = null;
   private chain: DelegationJournalChain | null = null;
   private readonly eventIds = new Set<string>();
+  private readonly evidenceIndex = new DelegationEvidenceIndex();
   private held = new Set<string>();
   private replayed = 0;
   private scanned = 0;
@@ -924,7 +956,10 @@ export class DelegationRecovery {
         throw new DelegationJournalError('sequence-gap', `the retained journal begins at ${record.sequence}, past the sequence after the checkpoint's ${this.applied}`);
       }
       this.held.delete(record.journalId);
-      if (record.entry.kind === 'evidence-accepted') this.eventIds.add(record.entry.event.eventId);
+      if (record.entry.kind === 'evidence-accepted') {
+        this.eventIds.add(record.entry.event.eventId);
+        this.evidenceIndex.add(record.sequence);
+      }
       if (record.sequence <= this.applied) {
         this.phase = 'identity-evidence';
         this.builder.observeRecord(record);
@@ -958,7 +993,7 @@ export class DelegationRecovery {
         const checkpoint = this.builder.build(this.decoded.revision);
         this.done.push('final-validate');
         state = { checkpoint, phase: 'ready' };
-        facts = { builder: this.builder, eventIds: this.eventIds, head: this.chain.head() };
+        facts = { builder: this.builder, eventIds: this.eventIds, head: this.chain.head(), evidence: this.evidenceIndex };
       } catch (err) {
         this.record(err);
         journal = null;
@@ -1013,11 +1048,13 @@ export async function recoverDelegationFromFiles(port: DelegationFilePort, dir: 
 /**
  * What the applier needs of `coord.db`, as a port. Every call is the synchronous store; nothing is awaited inside one.
  *
- * `CoordStore` already has `projectDelegationCheckpoint`. It has NO batch insert and NO statistics reader yet, and this module
- * may not reach around the store for its handle (the coord ring's rule, pinned by `single-definition.test.ts`), so the port is
- * stated here as the contract those two methods fill: `insertEvents` is `insertDelegationEvent` over a list in ONE
- * transaction that reports a conflict instead of aborting on it, and `eventStats` is `COUNT(*)` and `MAX(journalSequence)` of
- * `delegation_events`. Task 8A's tests carry a port built over the store's handle; the production port is the store's.
+ * The PRODUCTION port is three `CoordStore` methods, one per member (this module may not reach around the store for its handle:
+ * the coord ring, pinned by `single-definition.test.ts`, so the store is the only thing that holds it):
+ *   - `project(cp)`        is `store.projectDelegationCheckpoint(cp)` (the five non-event tables, one transaction);
+ *   - `insertEvents(rows)` is `store.insertDelegationEvents(rows)` (ONE transaction; a conflict is reported, never thrown, and
+ *                           does not stop the rows after it);
+ *   - `eventStats()`       is `store.delegationEventStats()` (`COUNT(*)` and `MAX(journalSequence)` of `delegation_events`).
+ * The wiring is three one-line adapters, which `delegation-recovery.test.ts` builds and runs against the real store.
  */
 export interface DelegationProjectionPort {
   project(checkpoint: DelegationCheckpointV1): void;
@@ -1035,20 +1072,24 @@ export interface DelegationProjectionRepairReport {
   healedSessions: number;
   /** True when SQLite's event count disagreed with the journal's below the resume point, so every event was replayed. */
   fullReplay: boolean;
-  /** True when SQLite held events the journal does not (stray rows): every session's events were deleted and replayed. The
-   *  last resort, and the only repair that costs O(all events); it is drift, never a normal path. */
+  /** True when SQLite held events the journal does not (stray rows), or a conflict was still outstanding after the sessions that
+   *  held one were healed: every session's events were deleted and replayed. The last resort, and the only repair that costs
+   *  O(all events); it is drift, never a normal path. */
   wipedAll: boolean;
+  /** How many times the repair read the journal from its start. 0 when SQLite's (count, max) already matched recovery's counts. */
+  journalPasses: number;
 }
 
 const yieldToEventLoop = (): Promise<void> => new Promise((resolve) => { setImmediate(resolve); });
 
-/** The checkpoint without one session and everything that names it: projecting it deletes that session's events (the
- *  projection deletes the events of a LEAVING session), and projecting the whole checkpoint again re-adds the session. */
-function checkpointWithoutSession(cp: DelegationCheckpointV1, sessionId: string, incarnation: string): DelegationCheckpointV1 {
-  const keep = (r: { parentId: string; parentIncarnation: string }): boolean => !(r.parentId === sessionId && r.parentIncarnation === incarnation);
+/** The checkpoint without some sessions and everything that names them: projecting it deletes those sessions' events (the
+ *  projection deletes the events of a LEAVING session), and projecting the whole checkpoint again re-adds the sessions. */
+function checkpointWithoutSessions(cp: DelegationCheckpointV1, drifted: readonly { sessionId: string; incarnation: string }[]): DelegationCheckpointV1 {
+  const gone = new Set(drifted.map((k) => sessionKeyOf(k.sessionId, k.incarnation)));
+  const keep = (r: { parentId: string; parentIncarnation: string }): boolean => !gone.has(sessionKeyOf(r.parentId, r.parentIncarnation));
   return {
     ...cp,
-    sessions: cp.sessions.filter((s) => !(s.sessionId === sessionId && s.parentIncarnation === incarnation)),
+    sessions: cp.sessions.filter((s) => !gone.has(sessionKeyOf(s.sessionId, s.parentIncarnation))),
     attempts: cp.attempts.filter(keep), activities: cp.activities.filter(keep), leases: cp.leases.filter(keep), lineage: cp.lineage.filter(keep),
   };
 }
@@ -1058,10 +1099,15 @@ function checkpointWithoutSession(cp: DelegationCheckpointV1, sessionId: string,
  *   1. project the checkpoint (the five non-event tables);
  *   2. replay the retained journal's evidence through `insertEvents`, in bounded chunks that YIELD THE EVENT LOOP, resuming from
  *      SQLite's `MAX(journalSequence)`; when SQLite's count disagrees with the journal's below that point, replay everything;
- *   3. a conflict is SQLite drift and SQLite loses: delete that session's events (by projecting the checkpoint without it and then
- *      with it) and replay its events from the journal. Rows SQLite holds that the journal does not are drift too; they are cleared
- *      by deleting every session's events and replaying (the last resort). The cost of that deletion is the one session's events (about 70 to 85 µs
- *      each), paid only on drift and one session at a time with the loop yielded between sessions.
+ *   3. a conflict is SQLite drift and SQLite loses: delete those sessions' events (by projecting the checkpoint without a session and
+ *      then with it, ONE session at a time with the loop yielded between them) and replay their events from the journal, ALL of them
+ *      in ONE pass. A conflict still outstanding after that, or
+ *      rows SQLite holds that the journal does not, are cleared by deleting every session's events and replaying (the last resort):
+ *      the repair never reports success with a conflict outstanding. The cost of deleting is the sessions' events (about 70 to 85 µs
+ *      each), paid only on drift.
+ * With `evidence` (recovery's per-sequence count) the repair knows BEFORE reading whether the journal has anything to tell SQLite: a
+ * matching `(count, max)` and nothing past it skips the read entirely, and a count that disagrees goes straight to the one full pass
+ * instead of a counting pass followed by a full one. Without it, the repair counts as it reads (two passes when counts disagree).
  * The journal is read as a stream through `journal()`, a fresh async iterable per pass.
  */
 export async function repairDelegationProjection(input: {
@@ -1071,17 +1117,23 @@ export async function repairDelegationProjection(input: {
   chunkSize?: number;
   /** Sessions already known to have drifted (an application met a conflicting row): healed whatever the counts say. */
   heal?: readonly { sessionId: string; incarnation: string }[];
+  /** Recovery's count of the journal's evidence records, to skip or shorten the passes. */
+  evidence?: DelegationEvidenceCounts;
 }): Promise<DelegationProjectionRepairReport> {
   const { projection, checkpoint } = input;
   const chunkSize = input.chunkSize ?? 500;
   projection.project(checkpoint);
   const stats = projection.eventStats();
   const resume = stats.maxSequence ?? 0;
-  const report: DelegationProjectionRepairReport = { resumedAfter: resume, inserted: 0, duplicate: 0, healedSessions: 0, fullReplay: false, wipedAll: false };
+  const report: DelegationProjectionRepairReport = {
+    resumedAfter: resume, inserted: 0, duplicate: 0, healedSessions: 0, fullReplay: false, wipedAll: false, journalPasses: 0,
+  };
   const conflicted = new Map<string, { sessionId: string; incarnation: string }>();
-  for (const k of input.heal ?? []) conflicted.set(JSON.stringify([k.sessionId, k.incarnation]), k);
+  for (const k of input.heal ?? []) conflicted.set(sessionKeyOf(k.sessionId, k.incarnation), k);
 
-  const replay = async (from: number, only: { sessionId: string; incarnation: string } | null): Promise<{ evidenceBelow: number; total: number }> => {
+  /** One pass over the journal. `from`: rows at or below it are only counted. `only`: just these sessions' events. */
+  const replay = async (from: number, only: ReadonlySet<string> | null): Promise<{ evidenceBelow: number; total: number }> => {
+    report.journalPasses++;
     let chunk: DelegationEventRow[] = [];
     let evidenceBelow = 0;
     let total = 0;
@@ -1090,14 +1142,14 @@ export async function repairDelegationProjection(input: {
       const r = projection.insertEvents(chunk);
       report.inserted += r.inserted;
       report.duplicate += r.duplicate;
-      for (const c of r.conflicts) conflicted.set(JSON.stringify([c.sessionId, c.parentIncarnation]), { sessionId: c.sessionId, incarnation: c.parentIncarnation });
+      for (const c of r.conflicts) conflicted.set(sessionKeyOf(c.sessionId, c.parentIncarnation), { sessionId: c.sessionId, incarnation: c.parentIncarnation });
       chunk = [];
       await yieldToEventLoop();
     };
     for await (const record of input.journal()) {
       if (record.entry.kind !== 'evidence-accepted') continue;
       const e = record.entry.event;
-      if (only !== null && !(e.sessionId === only.sessionId && e.parentIncarnation === only.incarnation)) continue;
+      if (only !== null && !only.has(sessionKeyOf(e.sessionId, e.parentIncarnation))) continue;
       total++;
       if (record.sequence <= from) { evidenceBelow++; continue; }
       chunk.push(delegationEventRowOfRecord(record));
@@ -1107,25 +1159,44 @@ export async function repairDelegationProjection(input: {
     return { evidenceBelow, total };
   };
 
-  const first = await replay(resume, null);
-  if (first.evidenceBelow !== stats.count) {
-    report.fullReplay = true;
-    await replay(0, null);
+  let total: number;
+  const known = input.evidence;
+  if (known !== undefined) {
+    total = known.total;
+    const below = known.countAtOrBelow(resume);
+    const behind = below !== stats.count;
+    if (behind) report.fullReplay = true;
+    if (behind || total > below) await replay(behind ? 0 : resume, null);
+  } else {
+    const first = await replay(resume, null);
+    total = first.total;
+    if (first.evidenceBelow !== stats.count) {
+      report.fullReplay = true;
+      await replay(0, null);
+    }
   }
-  for (const key of [...conflicted.values()]) {
-    projection.project(checkpointWithoutSession(checkpoint, key.sessionId, key.incarnation));
-    projection.project(checkpoint);
-    await yieldToEventLoop();
-    conflicted.delete(JSON.stringify([key.sessionId, key.incarnation]));
-    await replay(0, key);
-    report.healedSessions++;
+
+  if (conflicted.size > 0) {
+    const drifted = [...conflicted.values()];
+    conflicted.clear();
+    // Each drifted session leaves for a moment, which deletes its SQLite events on the loop (about 70 to 85 µs each): ONE session at
+    // a time, the loop yielded between them, so no stall is longer than one session's events. The journal is then read ONCE for all.
+    for (const k of drifted) {
+      projection.project(checkpointWithoutSessions(checkpoint, [k]));
+      projection.project(checkpoint);
+      await yieldToEventLoop();
+    }
+    report.healedSessions += drifted.length;
+    await replay(0, new Set(drifted.map((k) => sessionKeyOf(k.sessionId, k.incarnation))));
   }
-  if (projection.eventStats().count !== first.total) {
+  if (conflicted.size > 0 || projection.eventStats().count !== total) {
     report.wipedAll = true;
+    conflicted.clear();
     projection.project(emptyDelegationCheckpoint());
     projection.project(checkpoint);
     await yieldToEventLoop();
     await replay(0, null);
+    if (conflicted.size > 0) throw new Error('SQLite still conflicts with the journal after every session\'s events were deleted and replayed');
   }
   return report;
 }
@@ -1214,6 +1285,7 @@ export class DelegationDurability {
   private writer: DelegationJournalWriter;
   private builder = DelegationCheckpointBuilder.from(emptyDelegationCheckpoint());
   private eventIds = new Set<string>();
+  private evidence = new DelegationEvidenceIndex();
   private head: DelegationJournalPosition | null = null;
   private current: DelegationRecoveryState = { checkpoint: emptyDelegationCheckpoint(), phase: 'reconstructing' };
   private failureNow: DelegationDurabilityFailure | null = { phase: 'checkpoint-decode', code: 'not-recovered', detail: 'recovery has not run' };
@@ -1281,18 +1353,22 @@ export class DelegationDurability {
       this.eventIds = report.facts.eventIds;
       this.head = report.facts.head;
       this.current = report.state;
+      this.evidence = report.facts.evidence;
       // Recovery is the one moment the in-memory state may be ahead of the file: persist it through the same replacement. A
       // checkpoint of revision 0 with a journal behind it was never persisted (every persisted checkpoint has revision >= 1).
+      // The applier stays NOT ready (`failureNow` still set, so pruning stays off) until the save has succeeded.
       const needsSave = report.replayed > 0 || (report.state.checkpoint.revision === 0 && this.head !== null);
-      this.failureNow = null;
       if (needsSave) {
         try {
           await this.commitLocked({ items: [], mutate: null, force: true, project: false });
-        } catch {
-          // commitLocked has already marked the applier failed; the failure is the recovery's.
+        } catch (err) {
+          // A failure inside steps 1 to 7 has already been marked by `commitLocked`; one BEFORE step 1 (the build, the encoding) has
+          // not, and the replayed suffix is then unsaved: mark it here, so a recovery that could not save is never reported ready.
+          if (this.failureNow === null || this.failureNow.code === 'recovering') this.fail(err);
           return { ...report, state: this.current, failure: this.failureNow };
         }
       }
+      this.failureNow = null;
       await this.repairLocked();
       return { ...report, state: this.current };
     });
@@ -1308,7 +1384,7 @@ export class DelegationDurability {
     if (projection === null) return null;
     try {
       const report = await repairDelegationProjection({
-        projection, checkpoint: this.current.checkpoint, journal: () => readDelegationJournalRecords(this.port, this.journalPath), heal: [...this.drifted.values()],
+        projection, checkpoint: this.current.checkpoint, journal: () => readDelegationJournalRecords(this.port, this.journalPath), heal: [...this.drifted.values()], evidence: this.evidence,
       });
       this.projectionStale = false;
       this.drifted.clear();
@@ -1373,6 +1449,28 @@ export class DelegationDurability {
               refuse('change-refused', `a change removed the session (${s.sessionId}, ${s.parentIncarnation}): wave 3 never removes a session from the checkpoint (it would delete its SQLite events on the event loop)`);
             }
           }
+          // O4, the immutable mapping: only the fold and the meta door open an activity, and nothing drops or re-derives one. A change
+          // that edited the rows AND the map together would stay self-consistent, so `build()` cannot catch it; this does.
+          const beforeIds = before.activityIdsByNaturalKey;
+          const afterIds = after.activityIdsByNaturalKey;
+          for (const [key, id] of Object.entries(beforeIds)) {
+            if (!Object.hasOwn(afterIds, key) || afterIds[key] !== id) {
+              refuse('change-refused', `a change dropped or re-mapped the activity ID of the natural key ${key}: the mapping is immutable (O4)`);
+            }
+          }
+          for (const key of Object.keys(afterIds)) {
+            if (!Object.hasOwn(beforeIds, key)) {
+              refuse('change-refused', `a change added the natural key ${key}: only a journal append and the meta door open an activity`);
+            }
+          }
+          const activitiesAfter = new Map(after.activities.map((a) => [a.activityId, a] as const));
+          for (const a of before.activities) {
+            const b = activitiesAfter.get(a.activityId);
+            if (b === undefined || b.parentId !== a.parentId || b.parentIncarnation !== a.parentIncarnation || b.sourceKind !== a.sourceKind
+                || b.upstreamId !== a.upstreamId || b.identityJournalId !== a.identityJournalId || b.openedAt !== a.openedAt) {
+              refuse('change-refused', `a change dropped or altered the identity of the activity ${a.activityId}: its ID, parent, source, upstream ID, identity journalId and opening instant are immutable (O4)`);
+            }
+          }
           const leaseState = (cp: DelegationCheckpointV1): string => canonicalDelegationJson([cp.leases, cp.lineage.filter((n) => n.leaseId !== null)]);
           if (leaseState(after) !== leaseState(before)) {
             refuse('change-refused', 'a checkpoint-only change cannot add or alter a lease or a lease\'s lineage: the journal alone creates leases');
@@ -1435,7 +1533,9 @@ export class DelegationDurability {
       };
       const applied = await this.commitLocked({ items: [{ entry, acceptedAt: nowInstant(this.deps.now()) }], mutate: null, force: false });
       const record = applied.appended.find((r) => r.entry.kind === 'lease-created');
-      if (record === undefined) return { kind: 'duplicate', leaseId };
+      // Unreachable: the identity and path were checked against the very leases the planner reads. If it ever happens the
+      // minted UUID names no lease, and no answer built from it may leave this method.
+      if (record === undefined) throw new Error(`the append plan skipped the lease-created entry for the minted lease ${leaseId}`);
       return { kind: 'created', leaseId, lineageId, sequence: record.sequence, applied };
     });
   }
@@ -1447,7 +1547,7 @@ export class DelegationDurability {
       if (typeof v !== 'string' || v === '') return unmeasured(`${name} is not a measured non-empty string`);
     }
     if (r.creationBase !== null && (typeof r.creationBase !== 'string' || r.creationBase === '')) return unmeasured('creationBase is neither null nor a non-empty string');
-    if (!isMember(['agent', 'workflow', 'raw'] as const, r.sourceKind)) return unmeasured('wave 3 writes only agent, workflow and raw leases');
+    if (!isMember(WAVE3_LEASE_SOURCE_KINDS, r.sourceKind)) return unmeasured(`wave 3 writes only ${WAVE3_LEASE_SOURCE_KINDS.join(', ')} leases`);
     if (!isLowerHex64(r.activityId) || !Array.isArray(r.correlationJournalIds) || !r.correlationJournalIds.every((id) => isLowerHex64(id))) {
       return unmeasured('an ID is not a lowercase 64-hex SHA-256');
     }
@@ -1514,7 +1614,11 @@ export class DelegationDurability {
     this.current = { checkpoint, phase: 'ready' };
     const last = plan.records[plan.records.length - 1];
     if (last !== undefined) this.head = { sequence: last.sequence, journalId: last.journalId, digest: last.digest };
-    for (const r of plan.records) if (r.entry.kind === 'evidence-accepted') this.eventIds.add(r.entry.event.eventId);
+    for (const r of plan.records) {
+      if (r.entry.kind !== 'evidence-accepted') continue;
+      this.eventIds.add(r.entry.event.eventId);
+      this.evidence.add(r.sequence);
+    }
     const rows = plan.records.filter((r) => r.entry.kind === 'evidence-accepted').map(delegationEventRowOfRecord);
     const projection: DelegationApplyOutcome['projection'] = args.project === false ? { status: 'unprojected' } : await this.projectLocked(checkpoint, rows);
     return {

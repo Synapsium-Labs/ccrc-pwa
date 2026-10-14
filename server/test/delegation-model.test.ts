@@ -28,6 +28,7 @@ import {
   DelegationModelError,
   assertDelegationCheckpointIdentity,
   assertWave3Lease,
+  WAVE3_LEASE_SOURCE_KINDS,
   assertWave3Leases,
   canonicalDelegationJson,
   delegationActivityCodec,
@@ -821,6 +822,14 @@ describe('the projection view — what a checkpoint looks like once projected an
     const before = canonicalDelegationJson(cp);
     projectionViewOfDelegationCheckpoint(cp);
     expect(canonicalDelegationJson(cp)).toBe(before);
+  });
+});
+
+describe('Task 8A fix round 1: the lease source kinds wave 3 may write', () => {
+  it('are the shared lease vocabulary minus `attached`, derived once (no hand-kept second list)', () => {
+    expect([...WAVE3_LEASE_SOURCE_KINDS]).toEqual(DELEGATION_LEASE_SOURCE_KINDS.filter((k) => k !== 'attached'));
+    expect(WAVE3_LEASE_SOURCE_KINDS).not.toContain('attached');
+    for (const kind of WAVE3_LEASE_SOURCE_KINDS) expect(DELEGATION_LEASE_SOURCE_KINDS).toContain(kind);
   });
 });
 

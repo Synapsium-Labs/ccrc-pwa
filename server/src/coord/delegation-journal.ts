@@ -179,7 +179,9 @@ function isEventEnvelope(v: unknown): v is DelegationEventEnvelopeV1 {
 }
 
 /** The closed entry grammar: `evidence-accepted` and `lease-created`, nothing else. A later wave may ADD a variant; it may not
- *  reinterpret either of these two. Returns a fresh typed value, never the caller's object. */
+ *  reinterpret either of these two. Returns a fresh entry object, but an evidence entry keeps the caller's `event` BY REFERENCE (its
+ *  variant-specific fields are opaque here), so a caller must not mutate an event it has handed over. A lease-created entry is
+ *  rebuilt field by field. */
 function validateEntry(entry: unknown): DelegationJournalEntryV1 {
   if (!isRecord(entry)) return refuse('bad-field', 'entry is not an object');
   if (entry['kind'] === 'evidence-accepted') {

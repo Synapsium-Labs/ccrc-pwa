@@ -6,7 +6,7 @@
 // and M71 (the grammar rows M20 to M24 are in `coordination-snapshot.test.ts`). Every hash is computed independently of the
 // implementation (Python's hashlib and json, or Node's crypto over a preimage spelled out in the test), and every file is in a
 // FIXTURE directory: nothing here reads or writes the live `~/.ccrc`.
-import { afterEach, describe, it, expect } from 'vitest';
+import { afterEach, describe, it, expect, vi } from 'vitest';
 import { createHash } from 'node:crypto';
 import { appendFileSync, cpSync, existsSync, readFileSync, readdirSync, rmSync, statSync, truncateSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
@@ -60,6 +60,7 @@ import {
   DelegationCheckpointBuilder,
   DelegationCheckpointError,
   DelegationDurability,
+  DelegationEvidenceIndex,
   assertDelegationCheckpointProjectable,
   decodeDelegationCheckpoint,
   encodeDelegationCheckpoint,
@@ -71,6 +72,20 @@ import {
   type DelegationDurabilityEdge,
   type DelegationProjectionPort,
 } from '../src/coord/delegation-checkpoint.js';
+
+// A pass-through of the journal's append planner that a test can switch to "skip everything". `createLease` calls the planner after its
+// own checks, so no real input makes the planner skip the entry it was handed; this is the only way to reach that branch (fix round 1, M6).
+const planControl = vi.hoisted(() => ({ skipEverything: false }));
+vi.mock('../src/coord/delegation-journal.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../src/coord/delegation-journal.js')>();
+  return {
+    ...actual,
+    planDelegationJournalAppend: (input: Parameters<typeof actual.planDelegationJournalAppend>[0]) =>
+      planControl.skipEverything
+        ? { records: [], skipped: input.items.map((_, index) => ({ index, reason: 'duplicate-lease' as const, leaseId: 'phantom' })) }
+        : actual.planDelegationJournalAppend(input),
+  };
+});
 
 // ── fixtures ─────────────────────────────────────────────────────────────────────────────────────────────────────────
 
@@ -1179,6 +1194,13 @@ function copyDisk(from: string, opts: { journalSyncedSize?: number; checkpointBy
   return to;
 }
 
+// THE TWO DISK MODELS, AND THE THIRD OUTCOME. Each crash below is recovered under a process crash (every issued write survives) and a
+// power loss (only fsynced bytes survive). Both models treat an unfsynced journal tail as vanishing WHOLE, which is the clean case.
+// A real power loss in the middle of an append can instead leave a PARTIAL last record, and that is the honest third result: not the
+// old state and not the new one but a recovery FAILURE (`torn-tail`), fail-closed, with the phase `reconstructing`, pruning off and
+// nothing appended behind the fragment (the plan forbids any truncate caller, so only a restore repairs it). It is pinned by "every
+// position of a torn tail on disk is a recovery failure" and "a torn journal tail is a recovery failure" below; this matrix is the
+// "old or new" half of the guarantee, and those rows are the third.
 describe('O5 fault matrix (W3-M15): a crash injected at EVERY edge, before and after, leaves the old state or the new one', () => {
   const EDGES = DELEGATION_DURABILITY_EDGES.filter((e) => e !== 'project');
   /** After these (edge, when) pairs the checkpoint replacement has completed in the process-crash model. */
@@ -1202,7 +1224,11 @@ describe('O5 fault matrix (W3-M15): a crash injected at EVERY edge, before and a
     return { oldRows, newRows: rowsOf(dur.state().checkpoint) };
   })());
 
-  async function crashRun(edge: DelegationDurabilityEdge, when: 'before' | 'after') {
+  /** The application under test: X's join, alone, or carrying the bucket cursor and the observation interval a Task 9 batch carries. */
+  const joinBatch = (withBucket: boolean) => batch([subagentStart(3, X)], withBucket
+    ? { cursor: cursorFor('2026101400', 300), interval: intervalFor('2026101400', 'measured', T(3)) } : {});
+
+  async function crashRun(edge: DelegationDurabilityEdge, when: 'before' | 'after', withBucket = false) {
     const h = harness();
     // Old state: X's bare occurrence is journaled and checkpointed. The application under test is X's join, which opens the activity.
     const old = await h.open();
@@ -1216,7 +1242,7 @@ describe('O5 fault matrix (W3-M15): a crash injected at EVERY edge, before and a
     const crashing = await h2.open({ onEdge: (e, w) => { if (e === edge && w === when) { hits++; throw new SimulatedCrash(`${edge}:${when}`); } } });
     h2.log.length = 0;
     const idsExposed: string[] = [];
-    await expect(crashing.applyAccepted(batch([subagentStart(3, X)])).then((o) => { idsExposed.push(...o.openedActivities.map((a) => a.activityId)); return o; })).rejects.toThrow(SimulatedCrash);
+    await expect(crashing.applyAccepted(joinBatch(withBucket)).then((o) => { idsExposed.push(...o.openedActivities.map((a) => a.activityId)); return o; })).rejects.toThrow(SimulatedCrash);
     expect(hits).toBe(1);
     expect(idsExposed).toEqual([]);                                  // no ID escaped
     // The crashed applier is poisoned: reconstructing, pruning off, and it refuses everything until it re-recovers.
@@ -1274,6 +1300,118 @@ describe('O5 fault matrix (W3-M15): a crash injected at EVERY edge, before and a
         if (checkpointDurable(edge, when)) continue;
         const { projectionLog } = await crashRun(edge, when);
         expect(projectionLog.filter((l) => l === 'project' || l.startsWith('insertEvents')), `${when} ${edge}`).toEqual([]);
+      }
+    }
+  });
+
+  describe('a batch that carries a cursor and an interval, as Task 9\'s batches will (fix round 1, M4)', () => {
+    // The checkpoint-owned cursor and interval are NOT in the journal, so a crash that leaves the journal ahead of the checkpoint
+    // recovers the NEW ROWS with the OLD cursor and interval: a legitimate fourth state, REPLAYED. It converges: the bucket is
+    // re-read, its event is a duplicate (nothing appended), and the cursor-only application brings the state to FULL.
+    let fullRows: Promise<string> | null = null;
+    const full = (): Promise<string> => (fullRows ??= (async () => {
+      const dur = await harness().open();
+      await dur.applyAccepted(batch([sessionStart(1), bareTool(2, X)]));
+      await dur.applyAccepted(joinBatch(true));
+      return rowsOf(dur.state().checkpoint);
+    })());
+    /** Process-crash model: the rename has happened. */
+    const renamed = (edge: DelegationDurabilityEdge, when: 'before' | 'after'): boolean =>
+      edge === 'directory-fsync' || (edge === 'checkpoint-rename' && when === 'after');
+
+    for (const edge of EDGES) {
+      for (const when of ['before', 'after'] as const) {
+        it(`crash ${when} ${edge}: old rows, new rows with the old bucket state, or everything, and a re-read converges`, async () => {
+          const { oldRows, newRows: replayedRows } = await reference();
+          const fullRowsNow = await full();
+          // Independently of the code that built it: the FULL state carries exactly this cursor and this interval.
+          const fullState = JSON.parse(fullRowsNow) as { bucketCursors: unknown; observationIntervals: unknown };
+          expect(fullState.bucketCursors).toEqual([cursorFor('2026101400', 300)]);
+          expect(fullState.observationIntervals).toEqual([intervalFor('2026101400', 'measured', T(3))]);
+          const { h2, oldDisk } = await crashRun(edge, when, true);
+          const powerDisk = copyDisk(h2.dir, {
+            journalSyncedSize: journalSynced(edge, when) ? undefined : oldDisk.journal!.length,
+            checkpointBytes: checkpointDurable(edge, when) ? undefined : oldDisk.checkpoint,
+          });
+          const expectations = [
+            ['process crash', h2.dir, renamed(edge, when) ? 'full' : journalWritten(edge, when) ? 'replayed' : 'old'],
+            ['power loss', powerDisk, checkpointDurable(edge, when) ? 'full' : journalSynced(edge, when) ? 'replayed' : 'old'],
+          ] as const;
+          for (const [variant, source, expected] of expectations) {
+            const dir = copyDisk(source, {});
+            const fresh = await harness({ dir }).open();
+            expect(fresh.failure(), `${variant}: ${JSON.stringify(fresh.failure())}`).toBeNull();
+            const got = rowsOf(fresh.state().checkpoint);
+            const byName = { old: oldRows, replayed: replayedRows, full: fullRowsNow };
+            expect(got, `${variant} at ${when} ${edge}: expected the ${expected} state`).toBe(byName[expected]);
+            if (expected === 'replayed') {
+              expect(fresh.state().checkpoint.bucketCursors, 'the journal carries no cursor').toEqual([]);
+              expect(fresh.state().checkpoint.observationIntervals).toEqual([]);
+            }
+            // The bucket is re-read: whichever state recovery reached, the same batch converges on the full one.
+            const reread = await fresh.applyAccepted(joinBatch(true));
+            expect(reread.appended.length, `${variant}: the re-read appends only what the journal lacks`).toBe(expected === 'old' ? 1 : 0);
+            expect(rowsOf(fresh.state().checkpoint), `${variant}: the re-read did not converge`).toBe(fullRowsNow);
+          }
+        });
+      }
+    }
+  });
+
+  describe('createLease: a crash before the checkpoint replacement exposes neither the UUID nor the ID mapping (fix round 1, M4; brief Step 3)', () => {
+    const UUID0 = '5b0d9d9e-6d3c-4d2e-9f7a-0a1b2c3d4e5f';
+    const renamedAt = (edge: DelegationDurabilityEdge, when: 'before' | 'after'): boolean =>
+      edge === 'directory-fsync' || (edge === 'checkpoint-rename' && when === 'after');
+
+    for (const edge of EDGES) {
+      for (const when of ['before', 'after'] as const) {
+        it(`crash ${when} ${edge}`, async () => {
+          const h = harness();
+          let crashAt: { edge: DelegationDurabilityEdge; when: 'before' | 'after' } | null = null;
+          const dur = await h.open({ onEdge: (e, w) => { if (crashAt !== null && e === crashAt.edge && w === crashAt.when) throw new SimulatedCrash(`${e}:${w}`); } });
+          const built = await dur.applyAccepted(batch([sessionStart(1), bareTool(2, X), subagentStart(3, X)]));
+          const act = built.openedActivities[0]!;
+          const oldDisk = readDisk(h.dir);
+          const lineageId = deriveDelegationLineageId({ leaseId: UUID0, parentId: PARENT, parentIncarnation: INC, activityId: act.activityId });
+          h.log.length = 0;
+          crashAt = { edge, when };
+          const returned: unknown[] = [];
+          const request: DelegationLeaseCreationRequest = {
+            activityId: act.activityId, parentId: PARENT, parentIncarnation: INC, project: 'project-a', adminRecord: 'wt-1', canonicalPath: '/work/project-a/wt-1',
+            creationBase: null, sourceKind: 'agent', correlationJournalIds: [], firstObservedAt: T(40),
+          };
+          await expect(dur.createLease(request).then((o) => { returned.push(o); return o; })).rejects.toThrow(SimulatedCrash);
+          expect(returned, 'no lease ID was handed back').toEqual([]);
+          expect(h.uuidCalls.n, 'the UUID was minted once, after deduplication').toBe(1);
+          // The UUID and the lineage mapping are in none of the applier's views...
+          const seenInState = JSON.stringify(dur.state().checkpoint);
+          expect(seenInState).not.toContain(UUID0);
+          expect(seenInState).not.toContain(lineageId);
+          expect(dur.state().checkpoint.leases).toEqual([]);
+          expect(dur.state().checkpoint.lineage).toEqual([]);
+          // ...not in SQLite (nothing was projected before the directory fsync)...
+          expect(h.log.filter((l) => l === 'project' || l.startsWith('insertEvents'))).toEqual([]);
+          expect(h.store.readDelegationProjection().leases).toEqual([]);
+          expect(h.store.readDelegationProjection().lineage).toEqual([]);
+          // ...and not in the checkpoint file unless the rename completed (the journal MAY hold the entry: it is authority, not exposure).
+          const onDisk = readDisk(h.dir).checkpoint!.toString('utf8');
+          expect(onDisk.includes(UUID0), 'the checkpoint file on disk').toBe(renamedAt(edge, when));
+          expect(onDisk.includes(lineageId)).toBe(renamedAt(edge, when));
+          expect(decodeDelegationCheckpoint(new Uint8Array(oldDisk.checkpoint!)).leases).toEqual([]);
+          // Recovery under both disk models: the lease exists only if its journal entry survived, and then with the SAME UUID and lineage.
+          const journalHasIt = !(edge === 'journal-write' && when === 'before');
+          const powerDisk = copyDisk(h.dir, {
+            journalSyncedSize: journalSynced(edge, when) ? undefined : oldDisk.journal!.length,
+            checkpointBytes: checkpointDurable(edge, when) ? undefined : oldDisk.checkpoint,
+          });
+          for (const [variant, source, hasLease] of [['process crash', h.dir, journalHasIt], ['power loss', powerDisk, journalSynced(edge, when)]] as const) {
+            const fresh = await harness({ dir: copyDisk(source, {}) }).open();
+            expect(fresh.failure(), variant).toBeNull();
+            const leases = fresh.state().checkpoint.leases;
+            expect(leases.map((l) => l.leaseId), `${variant} at ${when} ${edge}`).toEqual(hasLease ? [UUID0] : []);
+            expect(fresh.state().checkpoint.lineage.map((n) => n.lineageId)).toEqual(hasLease ? [lineageId] : []);
+          }
+        });
       }
     }
   });
@@ -1572,7 +1710,8 @@ describe('adapter-owned UUID and replay-stable lineage table (W3-M62)', () => {
     for (const [name, request, kind] of calls) {
       const out = await dur.createLease(request);
       expect(out.kind, name).toBe(kind);
-      expect(act.activityId).toBe(request.activityId === act.activityId ? act.activityId : act.activityId);
+      // `attached` has no wave-3 writer: it is refused as an unmeasured REQUEST, before any activity check could refuse it for another reason.
+      if (request.sourceKind === 'attached') expect(out).toMatchObject({ kind: 'refused', reason: 'unmeasured-request', detail: expect.stringContaining('agent, workflow, raw') });
     }
     expect(h.uuidCalls.n).toBe(before);
     expect(dur.state().checkpoint.leases).toHaveLength(1);
@@ -1693,6 +1832,71 @@ describe('checkpoint-only changes, and wave 3 never removes a session (hand-off 
   });
 });
 
+// ── fix round 1, I1: O4's immutable mapping on the checkpoint-only door ──────────────────────────────────────────────
+
+describe('O4 guard on the checkpoint-only door (fix round 1, I1): a change cannot drop, re-map or add an activity', () => {
+  async function withX() {
+    const h = harness();
+    const dur = await h.open();
+    await dur.applyAccepted(batch([sessionStart(1), bareTool(2, X), subagentStart(3, X)]));
+    const act = activityOf(dur.state().checkpoint, X)!;
+    return { h, dur, act, enc: encodeDelegationNaturalKey(keyOf(X)) };
+  }
+  const otherJournalId = eid(99);
+  const otherId = deriveDelegationActivityId(keyOf(X), otherJournalId);
+
+  type Change = (cp: DelegationCheckpointV1, act: DelegationActivityRow, enc: string) => DelegationCheckpointV1;
+  const table: Array<[string, Change]> = [
+    ['drops an activity and its mapping', (cp) => ({ ...cp, activities: [], activityIdsByNaturalKey: {} })],
+    ['re-maps an activity to another identity journalId, rows and map consistent', (cp, act, enc) => ({
+      ...cp, activities: [{ ...act, activityId: otherId, identityJournalId: otherJournalId }], activityIdsByNaturalKey: { [enc]: otherId },
+    })],
+    ['re-maps the natural-key map alone', (cp, _act, enc) => ({ ...cp, activityIdsByNaturalKey: { [enc]: otherId } })],
+    ['adds an activity and its mapping (only the fold and the meta door open activities)', (cp, act) => {
+      const y = { ...act, activityId: deriveDelegationActivityId(keyOf(Y), eid(98)), upstreamId: Y, identityJournalId: eid(98), openedAt: T(5), lastEventAt: T(5) };
+      return { ...cp, activities: [act, y], activityIdsByNaturalKey: { ...cp.activityIdsByNaturalKey, [encodeDelegationNaturalKey(keyOf(Y))]: y.activityId } };
+    }],
+    ['changes an identity column of a kept activity (openedAt)', (cp, act) => ({ ...cp, activities: [{ ...act, openedAt: T(3) }] })],
+  ];
+  for (const [name, change] of table) {
+    it(`refuses a change that ${name}, writes nothing and does not poison the applier`, async () => {
+      const { h, dur, act, enc } = await withX();
+      const before = readDisk(h.dir);
+      const stateBefore = dur.state();
+      h.log.length = 0;
+      await expect(dur.applyCheckpointChange((cp) => change(cp, act, enc))).rejects.toMatchObject({ code: 'change-refused' });
+      expect(h.log, 'nothing was written').toEqual([]);
+      expect(readDisk(h.dir)).toEqual(before);
+      expect(dur.state()).toBe(stateBefore);
+      expect(dur.failure()).toBeNull();
+      expect(dur.pruningEnabled()).toBe(true);
+      // The activity is still there under the same ID, and the applier still applies.
+      expect(activityOf(dur.state().checkpoint, X)!.activityId).toBe(act.activityId);
+      await dur.applyAccepted(batch([sessionStart(9)]));
+    });
+  }
+
+  it('accepts a change that updates the activity\'s non-identity columns, with the ID and the mapping unchanged', async () => {
+    const { dur, act, enc } = await withX();
+    const out = await dur.applyCheckpointChange((cp) => ({
+      ...cp, activities: cp.activities.map((a) => ({ ...a, displayName: 'reviewer', executionState: 'ended' as const, endedAt: T(6), lastEventAt: T(6) })),
+    }));
+    expect(out.durable).toBe(true);
+    const after = activityOf(dur.state().checkpoint, X)!;
+    expect(after).toMatchObject({ activityId: act.activityId, identityJournalId: act.identityJournalId, openedAt: act.openedAt, displayName: 'reviewer', executionState: 'ended' });
+    expect(dur.state().checkpoint.activityIdsByNaturalKey).toEqual({ [enc]: act.activityId });
+  });
+
+  it('and a recovery after those refusals still finds the one original ID', async () => {
+    const { h, dur, act } = await withX();
+    await expect(dur.applyCheckpointChange((cp) => ({ ...cp, activities: [], activityIdsByNaturalKey: {} }))).rejects.toMatchObject({ code: 'change-refused' });
+    await dur.close();
+    const fresh = await harness({ dir: h.dir }).open();
+    expect(fresh.failure()).toBeNull();
+    expect(fresh.state().checkpoint.activities.map((a) => a.activityId)).toEqual([act.activityId]);
+  });
+});
+
 // ── SQLite as repairable output (R20) ────────────────────────────────────────────────────────────────────────────────
 
 describe('SQLite is repaired from the checkpoint and the journal (ruling R20)', () => {
@@ -1765,6 +1969,25 @@ describe('SQLite is repaired from the checkpoint and the journal (ruling R20)', 
     expect(statsOf(h.store)).toEqual({ count: 6, maxSequence: 6 });
   });
 
+  it('a conflict found WHILE healing is never declared repaired: it falls through to the last resort (fix round 1, M1)', async () => {
+    const h = harness();
+    const dur = await h.open();
+    await dur.applyAccepted(batch([sessionStart(1), sessionStart(2), sessionStart(3, { sessionId: 'lane-b-demo' }), sessionStart(4, { sessionId: 'lane-b-demo' })]));
+    const db: DatabaseSync = h.store.db;
+    // lane-a's event at sequence 1 is missing, and lane-b owns a STRAY row on sequence 2 (lane-a's slot). After the replay the counts
+    // agree with the journal's, so only the conflict itself says anything is wrong; healing lane-a deletes lane-a's rows and never
+    // lane-b's stray one, so the conflict is found again while healing.
+    db.prepare('DELETE FROM delegation_events WHERE journalSequence = 1').run();
+    db.prepare("UPDATE delegation_events SET eventId = 'stray', sessionId = 'lane-b-demo' WHERE journalSequence = 2").run();
+    const report = await dur.repairProjection();
+    expect(report).toMatchObject({ fullReplay: true, wipedAll: true });
+    const rows = db.prepare('SELECT journalSequence AS s, eventId AS e, sessionId AS sid FROM delegation_events ORDER BY journalSequence').all();
+    expect(rows.map((r) => [r['s'], r['e'], r['sid']])).toEqual([
+      [1, eid(1), PARENT], [2, eid(2), PARENT], [3, eid(3), 'lane-b-demo'], [4, eid(4), 'lane-b-demo'],
+    ]);
+    expect(dur.failure()).toBeNull();
+  });
+
   it('an application that meets a conflicting SQLite row reports the projection stale, and the next one heals it from the journal', async () => {
     const h = harness();
     const dur = await h.open();
@@ -1805,6 +2028,196 @@ describe('SQLite is repaired from the checkpoint and the journal (ruling R20)', 
   });
 });
 
+// ── fix round 1, M3: the repair's passes over the journal ────────────────────────────────────────────────────────────
+
+describe('the repair reads the journal as few times as it can (fix round 1, M3)', () => {
+  const records = evidenceChain([1, 2, 3, 4, 5, 6].map((n) => sessionStart(n)));
+  const checkpoint = recoverDelegation(null, records).state.checkpoint;
+  /** Recovery's count of the evidence records, built inside the test that uses it. */
+  const countsOf = (): DelegationEvidenceIndex => {
+    const evidence = new DelegationEvidenceIndex();
+    for (const r of records) if (r.entry.kind === 'evidence-accepted') evidence.add(r.sequence);
+    return evidence;
+  };
+
+  /** A projection port over a set of sequences SQLite "has"; counts what the repair does to it. */
+  function fakeProjection(have: readonly number[]) {
+    const held = new Set(have);
+    const calls = { project: 0, inserts: [] as number[] };
+    const port: DelegationProjectionPort = {
+      project: () => { calls.project++; },
+      insertEvents: (rows) => {
+        calls.inserts.push(rows.length);
+        let inserted = 0;
+        for (const r of rows) if (!held.has(r.journalSequence)) { held.add(r.journalSequence); inserted++; }
+        return { inserted, duplicate: rows.length - inserted, conflicts: [] };
+      },
+      eventStats: () => ({ count: held.size, maxSequence: held.size === 0 ? null : Math.max(...held) }),
+    };
+    return { port, calls };
+  }
+  function journalOf() {
+    const seen = { passes: 0 };
+    return { seen, journal: () => { seen.passes++; return (async function* () { for (const r of records) yield r; })(); } };
+  }
+
+  it('skips the whole-journal pass when SQLite\'s (count, max) matches what recovery counted', async () => {
+    const { port, calls } = fakeProjection([1, 2, 3, 4, 5, 6]);
+    const j = journalOf();
+    const report = await repairDelegationProjection({ projection: port, checkpoint, journal: j.journal, evidence: countsOf() });
+    expect(j.seen.passes).toBe(0);
+    expect(report).toMatchObject({ journalPasses: 0, inserted: 0, fullReplay: false, wipedAll: false, healedSessions: 0 });
+    expect(calls.inserts).toEqual([]);
+  });
+
+  it('reads once, from the resume point, when SQLite is merely behind', async () => {
+    const { port } = fakeProjection([1, 2, 3]);
+    const j = journalOf();
+    const report = await repairDelegationProjection({ projection: port, checkpoint, journal: j.journal, evidence: countsOf() });
+    expect(j.seen.passes).toBe(1);
+    expect(report).toMatchObject({ journalPasses: 1, inserted: 3, fullReplay: false, resumedAfter: 3 });
+  });
+
+  it('reads ONCE, in full, when the counts disagree below the resume point (no counting pass first)', async () => {
+    const { port } = fakeProjection([1, 2, 3, 5]);                      // count 4 but the journal has 5 evidence records up to sequence 5
+    const j = journalOf();
+    const report = await repairDelegationProjection({ projection: port, checkpoint, journal: j.journal, evidence: countsOf() });
+    expect(j.seen.passes).toBe(1);
+    expect(report).toMatchObject({ journalPasses: 1, fullReplay: true, inserted: 2, wipedAll: false });
+  });
+
+  it('without recovery\'s counts it still counts as it reads: two passes when the counts disagree (the old behaviour, kept as the fallback)', async () => {
+    const { port } = fakeProjection([1, 2, 3, 5]);
+    const j = journalOf();
+    const report = await repairDelegationProjection({ projection: port, checkpoint, journal: j.journal });
+    expect(j.seen.passes).toBe(2);
+    expect(report).toMatchObject({ journalPasses: 2, fullReplay: true });
+  });
+
+  it('heals every drifted session in ONE journal pass, deleting them one session at a time with the loop yielded between', async () => {
+    // Three sessions, so "without one session" is visible in what the projection is handed.
+    const three = evidenceChain([sessionStart(1, { sessionId: 's1' }), sessionStart(2, { sessionId: 's2' }), sessionStart(3, { sessionId: 's3' })]);
+    const threeCp = recoverDelegation(null, three).state.checkpoint;
+    const threeCounts = (): DelegationEvidenceIndex => { const e = new DelegationEvidenceIndex(); for (const r of three) e.add(r.sequence); return e; };
+    const threeJournal = () => { const seen = { passes: 0 }; return { seen, journal: () => { seen.passes++; return (async function* () { for (const r of three) yield r; })(); } }; };
+    const keys = [{ sessionId: 's1', incarnation: 'g1' }, { sessionId: 's2', incarnation: 'g1' }, { sessionId: 's3', incarnation: 'g1' }];
+    const sessionsSeen = (held: number[]) => {
+      const seenSessions: number[] = [];
+      const f = fakeProjection(held);
+      return { seenSessions, port: { ...f.port, project: (cp: DelegationCheckpointV1) => { seenSessions.push(cp.sessions.length); f.port.project(cp); } } satisfies DelegationProjectionPort };
+    };
+
+    const withCounts = sessionsSeen([1, 2, 3]);
+    const j1 = threeJournal();
+    const a = await repairDelegationProjection({ projection: withCounts.port, checkpoint: threeCp, journal: j1.journal, evidence: threeCounts(), heal: keys });
+    expect(j1.seen.passes).toBe(1);                                      // the main pass was skipped; the heal is the only pass
+    expect(a).toMatchObject({ healedSessions: 3, journalPasses: 1, wipedAll: false });
+    // the checkpoint, then (without one session, the whole checkpoint) three times: never two sessions gone at once
+    expect(withCounts.seenSessions).toEqual([3, 2, 3, 2, 3, 2, 3]);
+
+    const without = sessionsSeen([1, 2, 3]);
+    const j2 = threeJournal();
+    const b = await repairDelegationProjection({ projection: without.port, checkpoint: threeCp, journal: j2.journal, heal: keys });
+    expect(j2.seen.passes).toBe(2);                                      // one counting pass, one heal pass: never one pass per session
+    expect(b).toMatchObject({ healedSessions: 3, journalPasses: 2 });
+    expect(without.seenSessions).toEqual([3, 2, 3, 2, 3, 2, 3]);
+  });
+
+  it('recovery hands over its per-sequence evidence count, leases excluded, and the applier keeps it current', async () => {
+    const base = evidenceChain([sessionStart(1), subagentStart(2, X), sessionStart(3)]);
+    const act = activityOf(recoverDelegation(null, base).state.checkpoint, X)!;
+    const mixed = [...base, ...chainOf([leaseEntryFor(act.activityId)], 4, base[2]!.digest)];
+    const more = [...mixed, ...evidenceChain([sessionStart(5), sessionStart(6)], 5, mixed[3]!.digest)];
+    const facts = recoverDelegation(null, more).facts!;
+    expect(facts.evidence.total).toBe(5);                                // 1,2,3,5,6: the lease at 4 is not evidence
+    expect([0, 1, 2, 3, 4, 5, 6, 7, 100].map((n) => facts.evidence.countAtOrBelow(n))).toEqual([0, 1, 2, 3, 3, 4, 5, 5, 5]);
+    // The applier's live copy of the counts is kept current by every application (a lease is not evidence): with SQLite in sync, its
+    // own repair finds nothing to read.
+    const h = harness();
+    const dur = await h.open();
+    const built = await dur.applyAccepted(batch([sessionStart(1), subagentStart(2, X)]));
+    await dur.createLease({ activityId: built.openedActivities[0]!.activityId, parentId: PARENT, parentIncarnation: INC, project: 'p', adminRecord: 'wt', canonicalPath: '/w/1', creationBase: null, sourceKind: 'agent', correlationJournalIds: [], firstObservedAt: T(9) });
+    await dur.applyAccepted(batch([sessionStart(5)]));
+    expect(await dur.repairProjection()).toMatchObject({ journalPasses: 0, inserted: 0, fullReplay: false, wipedAll: false });
+  });
+
+  it('open() against an SQLite that is in sync reads the journal ONCE (recovery\'s own pass), not twice', async () => {
+    const h = harness();
+    const first = await h.open();
+    await first.applyAccepted(batch([sessionStart(1), bareTool(2, X), subagentStart(3, X), sessionStart(4)]));
+    await first.close();
+    let journalReads = 0;
+    const inner = spyPort(h.log);
+    const counting: DelegationFilePort = { ...inner, openRead: async (p) => { if (p.endsWith(DELEGATION_JOURNAL_FILE)) journalReads++; return inner.openRead(p); } };
+    const again = await h.open({ port: counting });
+    expect(again.failure()).toBeNull();
+    expect(journalReads).toBe(1);
+    // A lost SQLite is still rebuilt (the pass is skipped only when nothing needs inserting).
+    const lost = new CoordStore(openCoordDb(path.join(mkTmp('ccrc-deleg-lost2-'), 'coord.db')));
+    journalReads = 0;
+    const rebuilt = await harness({ dir: h.dir, store: lost }).open({ port: counting });
+    expect(rebuilt.failure()).toBeNull();
+    expect(journalReads).toBe(2);
+    expect(delegationProjectionPortOfStore(lost).eventStats()).toEqual({ count: 4, maxSequence: 4 });
+  });
+});
+
+// ── fix round 1, M5 / M6: two small guards ───────────────────────────────────────────────────────────────────────────
+
+describe('the recovery save and the lease adapter fail loudly (fix round 1, M5 and M6)', () => {
+  it('M5: a throw BEFORE step 1 of the recovery save marks the applier failed; it is never reported ready', async () => {
+    const h = harness();
+    // Leave the journal ahead of the checkpoint: a crash before the rename of the second batch.
+    let armed = false;
+    const crashing = await h.open({ onEdge: (e, w) => { if (armed && e === 'checkpoint-rename' && w === 'before') throw new SimulatedCrash('rename'); } });
+    await crashing.applyAccepted(batch([sessionStart(1)]));
+    armed = true;
+    await expect(crashing.applyAccepted(batch([sessionStart(2)]))).rejects.toThrow(SimulatedCrash);
+    const before = readDisk(h.dir);
+    // Recovery replays record 2 and must save it. The save's own build throws before anything is written (the first build is
+    // recovery's final validation; the second is the save's).
+    const realBuild = DelegationCheckpointBuilder.prototype.build;
+    let builds = 0;
+    const spy = vi.spyOn(DelegationCheckpointBuilder.prototype, 'build').mockImplementation(function (this: DelegationCheckpointBuilder, revision: number) {
+      builds++;
+      if (builds === 2) throw new Error('injected: a throw before step 1');
+      return realBuild.call(this, revision);
+    });
+    let dur: DelegationDurability;
+    try { dur = await harness({ dir: h.dir }).open(); } finally { spy.mockRestore(); }
+    expect(builds).toBe(2);
+    expect(dur.failure()).toMatchObject({ phase: 'durable-application', detail: expect.stringContaining('injected') });
+    expect(dur.state().phase).toBe('reconstructing');
+    expect(dur.pruningEnabled()).toBe(false);
+    await expect(dur.applyAccepted(batch([sessionStart(3)]))).rejects.toMatchObject({ code: 'not-ready' });
+    expect(readDisk(h.dir)).toEqual(before);                             // nothing was written
+    // A later recovery, without the injected throw, is ready and saves.
+    const report = await dur.recover();
+    expect(report.failure).toBeNull();
+    expect(dur.pruningEnabled()).toBe(true);
+    expect(dur.state().checkpoint.appliedJournalSequence).toBe(2);
+  });
+
+  it('M6: if the planner skips the lease entry it was handed, createLease throws; it does not answer "duplicate" with a UUID that names no lease', async () => {
+    const h = harness();
+    const dur = await h.open();
+    const built = await dur.applyAccepted(batch([sessionStart(1), subagentStart(2, X)]));
+    const request: DelegationLeaseCreationRequest = {
+      activityId: built.openedActivities[0]!.activityId, parentId: PARENT, parentIncarnation: INC, project: 'project-a', adminRecord: 'wt-1',
+      canonicalPath: '/work/project-a/wt-1', creationBase: null, sourceKind: 'agent', correlationJournalIds: [], firstObservedAt: T(40),
+    };
+    planControl.skipEverything = true;
+    try {
+      await expect(dur.createLease(request)).rejects.toThrow(/skipped the lease-created entry/);
+    } finally {
+      planControl.skipEverything = false;
+    }
+    expect(dur.failure()).toBeNull();                                    // nothing was written, so nothing is poisoned
+    expect(dur.state().checkpoint.leases).toEqual([]);
+    expect((await dur.createLease(request)).kind).toBe('created');
+  });
+});
+
 // ── retention planning, and no compaction (W3-M38) ───────────────────────────────────────────────────────────────────
 
 describe('no-compaction / hold table (W3-M38): holds are computed and tested, and nothing rewrites the journal', () => {
@@ -1833,7 +2246,7 @@ describe('no-compaction / hold table (W3-M38): holds are computed and tested, an
     expect(plan.prunableThroughSequence).toBe(2);                         // the candidate at 3 is the first held record
   });
 
-  it('dropping any one reason changes the plan: each reason is the only thing holding some record', () => {
+  it('open-lease and open-lineage each hold a lease\'s evidence on their own: dropping either leaves the plan unchanged, dropping both frees it', () => {
     const base2 = evidenceChain([sessionStart(1), subagentStart(2, X)]);
     const act = activityOf(recoverDelegation(null, base2).state.checkpoint, X)!;
     const evidenceId = base2[0]!.journalId;
