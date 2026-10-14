@@ -4,6 +4,7 @@
 // `auto` plan is retried once per (key, word), a `manual` one never; a 401 re-fetches on sign-in (M4.F5); and an
 // unmount ends every timer and read. Loaders are spies; nothing reaches a server.
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { Activity, type ReactNode } from 'react';
 import { act, cleanup, renderHook } from '@testing-library/react';
 import { DOCS_CLASS_CAP, type DocPin, type DocsPageLocation } from '../../shared/docs';
 import { clearAuthLost, raiseAuthLost } from '../src/lib/auth';
@@ -12,7 +13,7 @@ import { fileKey, pinFor, treeKey, useDocsVisit } from '../src/docs/useDocsVisit
 import type { DocsLoaders } from '../src/docs/failures';
 import {
   BLOB_1, BLOB_2, COMMIT_A, COMMIT_B, FP_1, SERVED, draftOf, entry, failedAnswer, fakeLoaders, holder, okFile, okTree,
-  pageAt, treeOk,
+  pageAt, recordingRejections, treeOk,
 } from './docsFixtures';
 
 afterEach(() => {
@@ -269,6 +270,24 @@ describe('the file slot', () => {
     expect(result.current.updatedTo).toBe(COMMIT_B);
   });
 
+  it('a draft leaf whose fingerprint changes under the same holder HEAD reads the new draft but names no commit', async () => {
+    const FP_2 = 'e'.repeat(64);
+    const withFp = (fp: string) => okTree(treeOk({
+      entries: [entry('specs', 'a.md', { draft: draftOf('modified', { fp }) })], drafts: holder(COMMIT_A),
+    }));
+    const f = fakeLoaders();
+    f.tree.mockResolvedValueOnce(withFp(FP_1));
+    f.tree.mockResolvedValueOnce(withFp(FP_2));
+    const { result } = visit(f.loaders, '/docs/demo/specs/a.md?ref=refs/heads/main');
+    await flush();
+    act(() => result.current.retryTree());
+    await flush();
+    expect(f.file).toHaveBeenCalledTimes(2);
+    expect(f.file.mock.calls[1]?.[1]).toMatchObject({ kind: 'draft', head: COMMIT_A, fp: FP_2 });
+    expect(result.current.file).toMatchObject({ s: 'ok', pin: { fp: FP_2 } });
+    expect(result.current.updatedTo).toBeNull();
+  });
+
   it('opening the committed version of a draft is a new leaf, not an update', async () => {
     const tree = treeOk({ entries: [entry('specs', 'a.md', { draft: draftOf('modified') })], drafts: holder() });
     const f = fakeLoaders({ tree: okTree(tree) });
@@ -398,6 +417,84 @@ describe('retries: one automatic retry per key and word, a manual word never (sp
   });
 });
 
+describe('a timer acts only on the state it was set for', () => {
+  const busy = () => failedAnswer('docs-busy', { retryAfterMs: 5000 });
+
+  it('a manual Retry at 1 s settles the read; the 5 s timer then drops nothing and reads nothing', async () => {
+    vi.useFakeTimers();
+    const f = fakeLoaders();
+    f.file.mockResolvedValueOnce(busy());
+    const { result } = visit(f.loaders, '/docs/demo/specs/a.md');
+    await flush();
+    expect(result.current.file.s).toBe('failed');
+    await advance(1000);
+    act(() => result.current.retryFile());
+    await flush();
+    expect(f.file).toHaveBeenCalledTimes(2);
+    expect(result.current.file.s).toBe('ok');
+    await advance(4000);
+    expect(f.file).toHaveBeenCalledTimes(2);
+    expect(result.current.file.s).toBe('ok');
+  });
+
+  it('a manual read still in flight at 5 s is not read a second time', async () => {
+    vi.useFakeTimers();
+    const f = fakeLoaders();
+    f.file.mockResolvedValueOnce(busy());
+    f.file.mockImplementationOnce(() => new Promise(() => {}));
+    const { result } = visit(f.loaders, '/docs/demo/specs/a.md');
+    await flush();
+    await advance(1000);
+    act(() => result.current.retryFile());
+    await flush();
+    expect(f.file).toHaveBeenCalledTimes(2);
+    await advance(4000);
+    expect(f.file).toHaveBeenCalledTimes(2);
+    expect(result.current.file.s).toBe('loading');
+  });
+
+  it('a tree retry set for a page the user then left makes no GET', async () => {
+    vi.useFakeTimers();
+    const f = fakeLoaders();
+    f.tree.mockResolvedValueOnce(busy());
+    const { rerender } = visit(f.loaders, '/docs/demo');
+    await flush();
+    rerender({ page: pageAt('/docs/other') });
+    await flush();
+    expect(f.tree).toHaveBeenCalledTimes(2);
+    await advance(10_000);
+    expect(f.tree).toHaveBeenCalledTimes(2);
+  });
+
+  it('a tree retry whose page is open when it fires is made', async () => {
+    vi.useFakeTimers();
+    const f = fakeLoaders();
+    f.tree.mockResolvedValueOnce(busy());
+    const { rerender } = visit(f.loaders, '/docs/demo');
+    await flush();
+    rerender({ page: pageAt('/docs/other') });
+    await flush();
+    rerender({ page: pageAt('/docs/demo/specs') });
+    await flush();
+    await advance(5000);
+    expect(f.tree.mock.calls.filter((c) => c[0] === 'demo')).toHaveLength(2);
+  });
+});
+
+describe('a request that fails leaves no mark behind', () => {
+  it('a tree loader that rejects does not pin its key: Retry makes the next GET', async () => {
+    const f = fakeLoaders();
+    f.tree.mockImplementationOnce(() => Promise.reject(new Error('loader broke')));
+    const { result } = visit(f.loaders, '/docs/demo');
+    const seen = await recordingRejections(flush);
+    expect(seen).toHaveLength(1);
+    act(() => result.current.retryTree());
+    await flush();
+    expect(f.tree).toHaveBeenCalledTimes(2);
+    expect(result.current.tree?.s).toBe('ok');
+  });
+});
+
 describe('sign-in and unmount', () => {
   it('M4.F5: a 401 gives the auth slot, and clearAuthLost() calls loaders.tree again', async () => {
     const f = fakeLoaders();
@@ -442,6 +539,31 @@ describe('sign-in and unmount', () => {
     expect(signal?.aborted).toBe(false);
     unmount();
     expect(signal?.aborted).toBe(true);
+  });
+});
+
+describe('an effect cleanup that aborts a read', () => {
+  it('drops that read\'s entry, so showing the screen again reads once more instead of loading for ever', async () => {
+    const f = fakeLoaders();
+    f.file.mockImplementationOnce(() => new Promise(() => {}));
+    let mode: 'visible' | 'hidden' = 'visible';
+    const wrapper = ({ children }: { children: ReactNode }) => <Activity mode={mode}>{children}</Activity>;
+    const props = { page: pageAt('/docs/demo/specs/a.md') as DocsPageLocation | null };
+    const { rerender, result } = renderHook((p: { page: DocsPageLocation | null }) => useDocsVisit(p.page, f.loaders), {
+      initialProps: props, wrapper,
+    });
+    await flush();
+    expect(f.file).toHaveBeenCalledTimes(1);
+    const signal = f.file.mock.calls[0]?.[2];
+    mode = 'hidden';
+    rerender(props);
+    await flush();
+    expect(signal?.aborted).toBe(true);
+    mode = 'visible';
+    rerender(props);
+    await flush();
+    expect(f.file).toHaveBeenCalledTimes(2);
+    expect(result.current.file.s).toBe('ok');
   });
 });
 

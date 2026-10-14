@@ -134,3 +134,22 @@ export function pageAt(url: string): DocsPageLocation {
   if (!parsed.ok) throw new Error(`fixture URL ${url} does not parse: ${parsed.why}`);
   return parsed.loc;
 }
+
+/** Runs `run` with the process's unhandled-rejection listeners swapped for one that records, then puts them back and
+ *  answers what was recorded. For a test of a loader that rejects: the hook lets that rejection surface (nothing
+ *  handles it), and the runner would otherwise fail the whole run on it. Real timers only. */
+export async function recordingRejections(run: () => Promise<void>): Promise<unknown[]> {
+  const seen: unknown[] = [];
+  const saved = process.listeners('unhandledRejection');
+  process.removeAllListeners('unhandledRejection');
+  const mine = (reason: unknown): void => { seen.push(reason); };
+  process.on('unhandledRejection', mine);
+  try {
+    await run();
+    await new Promise<void>((r) => { setTimeout(r, 0); });
+  } finally {
+    process.removeListener('unhandledRejection', mine);
+    for (const l of saved) process.on('unhandledRejection', l);
+  }
+  return seen;
+}

@@ -6,15 +6,17 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, renderHook } from '@testing-library/react';
 import { DOCS_STALE_MS, type DocsPageLocation } from '../../shared/docs';
+import { clearAuthLost, raiseAuthLost } from '../src/lib/auth';
 import { useDocsVisit } from '../src/docs/useDocsVisit';
 import type { DocsLoaders, DocsRefreshLoaderAnswer } from '../src/docs/failures';
 import {
   BLOB_2, COMMIT_A, COMMIT_B, RAN, bodyOf, entry, failedAnswer, fakeLoaders, fetchFailed, okFile, okRefresh, okTree,
-  pageAt, treeOk, treeResponse,
+  pageAt, recordingRejections, treeOk, treeResponse,
 } from './docsFixtures';
 
 afterEach(() => {
   cleanup();
+  clearAuthLost();
   Reflect.deleteProperty(document, 'visibilityState');
   vi.useRealTimers();
 });
@@ -222,6 +224,26 @@ describe('M4.A3: re-list on return', () => {
     await flush();
     expect(result.current.tree).toEqual({ s: 'auth' });
   });
+
+  it('a slot that goes ok again after a sign-in is not auto-refreshed again: one POST per key per open', async () => {
+    vi.useFakeTimers();
+    const f = fakeLoaders({ tree: due() });
+    f.refresh.mockResolvedValueOnce(okRefresh());
+    const { result } = visit(f.loaders, '/docs/demo');
+    await flush();
+    expect(f.refresh).toHaveBeenCalledTimes(1);
+    f.tree.mockResolvedValueOnce({ s: 'auth' });
+    await advance(DOCS_STALE_MS + 1);
+    await act(async () => show('visible'));
+    await flush();
+    expect(result.current.tree).toEqual({ s: 'auth' });
+    raiseAuthLost('expired');
+    act(() => clearAuthLost());
+    await flush();
+    expect(f.tree).toHaveBeenCalledTimes(3);
+    expect(result.current.tree?.s).toBe('ok');
+    expect(f.refresh).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe('the refresh answer', () => {
@@ -299,6 +321,116 @@ describe('the refresh answer', () => {
     expect(f.refresh).toHaveBeenCalledTimes(2);
     await advance(600_000);
     expect(f.refresh).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('a timer or an answer acts only on the state it was for', () => {
+  /** A held GET (started by Re-list) and a held POST, released by the test in either order. */
+  function held<T>() {
+    let settle: (v: T) => void = () => {};
+    const promise = new Promise<T>((r) => { settle = r; });
+    return { promise, settle: (v: T) => settle(v) };
+  }
+
+  it('a tap at 1 s on the soon chip settles the refresh; the 4 s timer then POSTs nothing', async () => {
+    vi.useFakeTimers({ now: 1_000_000 });
+    const f = fakeLoaders({ tree: due() });
+    f.refresh.mockResolvedValueOnce(okRefresh(fetchFailed('fetch-too-soon', { retryAfterMs: 4000 })));
+    const { result } = visit(f.loaders, '/docs/demo');
+    await flush();
+    expect(result.current.freshness.s).toBe('soon');
+    await advance(1000);
+    act(() => result.current.refreshManual());
+    await flush();
+    expect(f.refresh).toHaveBeenCalledTimes(2);
+    expect(f.refresh.mock.calls[1]).toEqual(['demo', { ref: null, reason: 'manual' }]);
+    await advance(10_000);
+    expect(f.refresh).toHaveBeenCalledTimes(2);
+    expect(result.current.freshness.s).toBe('answered');
+  });
+
+  it('an older GET that lands after a newer POST answer does not replace the slot or move the leaf back', async () => {
+    const f = fakeLoaders();
+    const get = held<Awaited<ReturnType<DocsLoaders['tree']>>>();
+    f.tree.mockResolvedValueOnce(okTree(treeOk({ commit: COMMIT_A })));
+    f.tree.mockImplementationOnce(() => get.promise);
+    f.refresh.mockResolvedValueOnce(okRefresh(RAN, treeResponse(treeOk({ commit: COMMIT_B }))));
+    const { result } = visit(f.loaders, '/docs/demo/specs/a.md');
+    await flush();
+    act(() => result.current.retryTree());
+    await flush();
+    act(() => result.current.refreshManual());
+    await flush();
+    const at = (slot: typeof result.current.tree) => (slot?.s === 'ok' ? slot.answer.tree.ref.commit : slot?.s);
+    expect(at(result.current.tree)).toBe(COMMIT_B);
+    expect(result.current.file).toMatchObject({ s: 'ok', pin: { commit: COMMIT_B } });
+    await act(async () => get.settle(okTree(treeOk({ commit: COMMIT_A }))));
+    await flush();
+    expect(at(result.current.tree)).toBe(COMMIT_B);
+    expect(result.current.file).toMatchObject({ s: 'ok', pin: { commit: COMMIT_B } });
+    expect(result.current.updatedTo).toBeNull();
+  });
+
+  it('an older GET that lands after a newer POST answer still releases the reads waiting on a listing', async () => {
+    const moved = treeOk({ commit: COMMIT_B, entries: [entry('specs', 'a.md', { committed: { kind: 'file', blob: BLOB_2, size: 9 } })] });
+    const f = fakeLoaders();
+    const get = held<Awaited<ReturnType<DocsLoaders['tree']>>>();
+    f.tree.mockResolvedValueOnce(okTree(treeOk({ commit: COMMIT_A })));
+    f.tree.mockImplementationOnce(() => get.promise);
+    f.refresh.mockResolvedValueOnce(okRefresh(RAN, treeResponse(moved)));
+    const { result } = visit(f.loaders, '/docs/demo/specs/a.md');
+    await flush();
+    act(() => result.current.retryTree());
+    await flush();
+    // the POST answers; the read at the new pin says the listing moved, and its re-list is the GET already held
+    f.file.mockResolvedValueOnce(failedAnswer('unknown-commit'));
+    act(() => result.current.refreshManual());
+    await flush();
+    expect(f.file).toHaveBeenCalledTimes(2);
+    await act(async () => get.settle(okTree(treeOk({ commit: COMMIT_A }))));
+    await flush();
+    expect(f.file).toHaveBeenCalledTimes(3);
+    expect(result.current.file).toMatchObject({ s: 'ok', pin: { commit: COMMIT_B } });
+  });
+
+  it('a refresh retry set for a page the user then left makes no POST', async () => {
+    vi.useFakeTimers();
+    const f = fakeLoaders({ tree: due() });
+    f.refresh.mockResolvedValueOnce(failedAnswer('docs-busy', { retryAfterMs: 2000 }));
+    const { rerender } = visit(f.loaders, '/docs/demo');
+    await flush();
+    rerender({ page: pageAt('/docs/other') });
+    await flush();
+    await advance(10_000);
+    expect(f.refresh.mock.calls.filter((c) => c[0] === 'demo')).toHaveLength(1);
+  });
+
+  it('a fetch-too-soon retry set for a page the user then left makes no POST', async () => {
+    vi.useFakeTimers();
+    const f = fakeLoaders({ tree: due() });
+    f.refresh.mockResolvedValueOnce(okRefresh(fetchFailed('fetch-too-soon', { retryAfterMs: 4000 })));
+    const { rerender } = visit(f.loaders, '/docs/demo');
+    await flush();
+    rerender({ page: pageAt('/docs/other') });
+    await flush();
+    await advance(10_000);
+    expect(f.refresh.mock.calls.filter((c) => c[0] === 'demo')).toHaveLength(1);
+  });
+
+  it('a refresh loader that rejects does not pin its key: a tap makes the next POST', async () => {
+    const f = fakeLoaders();
+    f.refresh.mockImplementationOnce(() => Promise.reject(new Error('loader broke')));
+    const { result } = visit(f.loaders, '/docs/demo');
+    await flush();
+    const seen = await recordingRejections(async () => {
+      act(() => result.current.refreshManual());
+      await flush();
+    });
+    expect(seen).toHaveLength(1);
+    act(() => result.current.refreshManual());
+    await flush();
+    expect(f.refresh).toHaveBeenCalledTimes(2);
+    expect(result.current.freshness.s).toBe('answered');
   });
 });
 

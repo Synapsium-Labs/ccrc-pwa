@@ -146,18 +146,25 @@ interface Store {
   readonly refreshInflight: Set<string>;
   readonly freshness: Map<string, Freshness>;
   readonly files: Map<string, FileEntry>;
-  /** Per leaf (tree key, section, path, view): the file key last shown `ok`. */
-  readonly shown: Map<string, string>;
+  /** Per leaf (tree key, section, path, view): the file key last shown `ok`, and the commit its pin named then. */
+  readonly shown: Map<string, { readonly fKey: string; readonly commit: string }>;
   readonly updatedTo: Map<string, string>;
   readonly timers: Set<ReturnType<typeof setTimeout>>;
-  readonly aborts: Set<AbortController>;
+  /** The pending automatic refresh retry per tree key: a POST of any kind for the key ends it. */
+  readonly refreshTimers: Map<string, ReturnType<typeof setTimeout>>;
+  /** The in-flight file reads, each with the file key whose entry it is the single-flight mark of. */
+  readonly aborts: Map<AbortController, string>;
+  /** The last request number handed out (a GET or a POST takes one when it STARTS), and per tree key the number
+   *  of the answer that last set the slot: an older answer landing later is not applied. */
+  seq: number;
+  readonly slotSeq: Map<string, number>;
 }
 
 function newStore(): Store {
   return {
     alive: false, targets: new Map(), trees: new Map(), treeInflight: new Set(), refreshInflight: new Set(),
     freshness: new Map(), files: new Map(), shown: new Map(), updatedTo: new Map(),
-    timers: new Set(), aborts: new Set(),
+    timers: new Set(), refreshTimers: new Map(), aborts: new Map(), seq: 0, slotSeq: new Map(),
   };
 }
 
@@ -218,13 +225,26 @@ export function useDocsVisit(page: DocsPageLocation | null, loaders: DocsLoaders
   const changed = (): void => {
     if (st.alive) bump();
   };
-  const later = (ms: number, fn: () => void): void => {
+  const later = (ms: number, fn: () => void): ReturnType<typeof setTimeout> => {
     const t = setTimeout(() => {
       st.timers.delete(t);
       fn();
     }, ms);
     st.timers.add(t);
+    return t;
   };
+  /** True while `key` is the tree key of the page now open: a retry for a page the user left is not made. */
+  const isCurrentKey = (key: string): boolean => {
+    const now = targetOf(pageRef.current);
+    return now !== null && treeKey(now.project, now.ref) === key;
+  };
+  /** A request's number, taken when it starts. */
+  const nextSeq = (): number => {
+    st.seq += 1;
+    return st.seq;
+  };
+  /** Whether an answer to the request numbered `seq` is at least as new as the answer that last set `key`'s slot. */
+  const isNewest = (key: string, seq: number): boolean => seq >= (st.slotSeq.get(key) ?? 0);
   /** One automatic retry per (request kind, key, word) for the whole visit; true when this call takes it. */
   const takeAutoRetry = (scope: string, key: string, word: string): boolean => {
     const id = [scope, key, word].join(NUL);
@@ -238,7 +258,8 @@ export function useDocsVisit(page: DocsPageLocation | null, loaders: DocsLoaders
     for (const [fKey, e] of st.files) if (e.awaitingRelist && e.treeKey === tKey) st.files.delete(fKey);
   };
 
-  const setTreeOk = (key: string, answer: DocsTreeResponse): void => {
+  const setTreeOk = (key: string, seq: number, answer: DocsTreeResponse): void => {
+    st.slotSeq.set(key, seq);
     st.trees.set(key, { s: 'ok', answer, receivedAt: Date.now() });
     if (st.freshness.get(key)?.s === 'relist-failed') st.freshness.set(key, { s: 'idle' });
   };
@@ -246,25 +267,46 @@ export function useDocsVisit(page: DocsPageLocation | null, loaders: DocsLoaders
   const refresh = (target: Target, reason: 'auto' | 'manual'): void => {
     const key = treeKey(target.project, target.ref);
     if (st.refreshInflight.has(key)) return;
+    // A POST now answers whatever a pending automatic retry was waiting to ask.
+    const pending = st.refreshTimers.get(key);
+    if (pending !== undefined) {
+      clearTimeout(pending);
+      st.timers.delete(pending);
+      st.refreshTimers.delete(key);
+    }
     st.refreshInflight.add(key);
     st.freshness.set(key, { s: 'fetching', reason });
+    const seq = nextSeq();
     const body = { ref: target.ref === null ? null : docsRefText(target.ref), reason };
     void loadersRef.current.refresh(target.project, body).then((a) => {
       st.refreshInflight.delete(key);
       if (!st.alive) return;
-      applyRefresh(target, key, reason, a);
+      applyRefresh(target, key, reason, seq, a);
       changed();
+    }, (err: unknown) => {
+      // The mark is the single-flight guard: a loader that rejects must not leave the key pinned for good.
+      st.refreshInflight.delete(key);
+      throw err;
     });
   };
 
-  const applyRefresh = (target: Target, key: string, reason: 'auto' | 'manual', a: DocsRefreshLoaderAnswer): void => {
+  /** An automatic refresh retry for `key`: ended by any later POST for the key, skipped once the page has left it. */
+  const retryRefreshLater = (target: Target, key: string, reason: 'auto' | 'manual', ms: number): void => {
+    const t = later(ms, () => {
+      st.refreshTimers.delete(key);
+      if (isCurrentKey(key)) refresh(target, reason);
+    });
+    st.refreshTimers.set(key, t);
+  };
+
+  const applyRefresh = (target: Target, key: string, reason: 'auto' | 'manual', seq: number, a: DocsRefreshLoaderAnswer): void => {
     const now = Date.now();
     if (a.s !== 'ok') {
       st.freshness.set(key, { s: 'refresh-failed', answer: a });
       if (a.s === 'failed') {
         const plan = docsRetryPlan(a.body);
         if (plan.kind === 'auto' && takeAutoRetry('refresh', key, a.body.failure)) {
-          later(plan.afterMs, () => refresh(target, reason));
+          retryRefreshLater(target, key, reason, plan.afterMs);
         }
       }
       return;
@@ -276,7 +318,7 @@ export function useDocsVisit(page: DocsPageLocation | null, loaders: DocsLoaders
       const plan = docsRetryPlan(body);
       let fresh: Freshness = { s: 'answered', fetch, at: now };
       if (plan.kind === 'auto' && takeAutoRetry('refresh', key, body.failure)) {
-        later(plan.afterMs, () => refresh(target, reason));
+        retryRefreshLater(target, key, reason, plan.afterMs);
         if (body.failure === 'fetch-too-soon') fresh = { s: 'soon', retryAt: now + plan.afterMs };
       } else if (body.failure === 'ref-locked' && plan.kind === 'none') {
         fresh = { s: 'stale-lock', ref: typeof body.ref === 'string' ? body.ref : null };
@@ -284,13 +326,18 @@ export function useDocsVisit(page: DocsPageLocation | null, loaders: DocsLoaders
       st.freshness.set(key, fresh);
       return;
     }
-    if (tree.ok) {
-      setTreeOk(key, tree);
+    // The fetch happened whatever the listing's order: the chip says so. A listing older than the one the slot
+    // holds is not applied (the POST's tree is newer than a GET started before it answered, not than one after).
+    if (!isNewest(key, seq)) {
+      st.freshness.set(key, { s: 'answered', fetch, at: now });
+    } else if (tree.ok) {
+      setTreeOk(key, seq, tree);
       releaseRelistWaiters(key);
       st.freshness.set(key, { s: 'answered', fetch, at: now });
     } else if (st.trees.get(key)?.s === 'ok') {
       st.freshness.set(key, { s: 'relist-failed', answer: { s: 'failed', body: tree } });
     } else {
+      st.slotSeq.set(key, seq);
       st.trees.set(key, { s: 'failed', body: tree });
       st.freshness.set(key, { s: 'answered', fetch, at: now });
     }
@@ -303,19 +350,25 @@ export function useDocsVisit(page: DocsPageLocation | null, loaders: DocsLoaders
     st.targets.set(key, target);
     // A held listing stays on screen through its re-list; anything else shows loading.
     if (st.trees.get(key)?.s !== 'ok') st.trees.set(key, { s: 'loading' });
+    const seq = nextSeq();
     void loadersRef.current.tree(target.project, target.ref).then((a) => {
       st.treeInflight.delete(key);
       if (!st.alive) return;
-      applyTreeGet(target, key, a);
+      applyTreeGet(target, key, seq, a);
       changed();
+    }, (err: unknown) => {
+      st.treeInflight.delete(key);
+      throw err;
     });
   };
 
-  const applyTreeGet = (target: Target, key: string, a: DocsTreeAnswer): void => {
+  const applyTreeGet = (target: Target, key: string, seq: number, a: DocsTreeAnswer): void => {
     releaseRelistWaiters(key);
+    // A GET started before the answer that last set the slot says what the listing was, not what it is.
+    if (!isNewest(key, seq)) return;
     const relisted = st.trees.get(key)?.s === 'ok';
     if (a.s === 'ok') {
-      setTreeOk(key, a.value);
+      setTreeOk(key, seq, a.value);
       // Auto-refresh (spec 4.3): when the slot BECOMES ok (a re-list of a held listing is a GET only, M4.A3), once
       // per key per visit, and never on a refs/heads/ view (refinement (m)).
       if (!relisted && a.value.refreshDue && !isLocalHeadsRef(target.ref) && !autoRefreshed.current.has(key)) {
@@ -328,11 +381,14 @@ export function useDocsVisit(page: DocsPageLocation | null, loaders: DocsLoaders
       st.freshness.set(key, { s: 'relist-failed', answer: a });
       return;
     }
+    st.slotSeq.set(key, seq);
     st.trees.set(key, a);
     if (a.s === 'failed') {
       const plan = docsRetryPlan(a.body);
       if (plan.kind === 'auto' && takeAutoRetry('tree', key, a.body.failure)) {
-        later(plan.afterMs, () => listTree(target));
+        later(plan.afterMs, () => {
+          if (isCurrentKey(key)) listTree(target);
+        });
       }
     }
   };
@@ -342,7 +398,7 @@ export function useDocsVisit(page: DocsPageLocation | null, loaders: DocsLoaders
     // The entry is the single-flight mark: the effect starts a read only for a key with no entry.
     st.files.set(fKey, { slot: { s: 'loading', pin }, treeKey: tKey, awaitingRelist: false });
     const ctl = new AbortController();
-    st.aborts.add(ctl);
+    st.aborts.set(ctl, fKey);
     void loadersRef.current.file(w.target.project, pin, ctl.signal).then((a) => {
       st.aborts.delete(ctl);
       if (!st.alive) return;
@@ -357,8 +413,10 @@ export function useDocsVisit(page: DocsPageLocation | null, loaders: DocsLoaders
 
   const applyFile = (w: Extract<Wanted, { kind: 'read' }>, a: DocsFileAnswer): void => {
     const { fKey, tKey, pin } = w;
-    const put = (slot: FileEntry['slot'], awaitingRelist = false): void => {
-      st.files.set(fKey, { slot, treeKey: tKey, awaitingRelist });
+    const put = (slot: FileEntry['slot'], awaitingRelist = false): FileEntry => {
+      const e: FileEntry = { slot, treeKey: tKey, awaitingRelist };
+      st.files.set(fKey, e);
+      return e;
     };
     if (a.s === 'ok') {
       put({ s: 'ok', pin, answer: a.value, receivedAt: Date.now() });
@@ -379,10 +437,12 @@ export function useDocsVisit(page: DocsPageLocation | null, loaders: DocsLoaders
       }
       return;
     }
-    put({ s: 'failed', pin, body: a.body });
+    const failed = put({ s: 'failed', pin, body: a.body });
     const plan = docsRetryPlan(a.body);
     if (plan.kind === 'auto' && takeAutoRetry('file', fKey, word)) {
       later(plan.afterMs, () => {
+        // Only the failed entry this timer was set for: a Retry since then has put another in its place.
+        if (st.files.get(fKey) !== failed) return;
         st.files.delete(fKey);
         changed();
       });
@@ -416,8 +476,13 @@ export function useDocsVisit(page: DocsPageLocation | null, loaders: DocsLoaders
       document.removeEventListener('visibilitychange', onVisibility);
       for (const t of st.timers) clearTimeout(t);
       st.timers.clear();
-      for (const c of st.aborts) c.abort();
+      for (const [c, fKey] of st.aborts) {
+        c.abort();
+        // The aborted read's answer is dropped, so its mark must go: the next effect pass reads again.
+        if (st.files.get(fKey)?.slot.s === 'loading') st.files.delete(fKey);
+      }
       st.aborts.clear();
+      st.refreshTimers.clear();
     };
     // `st` is this mount's store: one object for the hook's life, so this runs once per mount (twice under
     // StrictMode, whose second pass finds nothing to start).
@@ -445,10 +510,12 @@ export function useDocsVisit(page: DocsPageLocation | null, loaders: DocsLoaders
       dirty = true;
     }
     const prev = st.shown.get(wanted.leaf);
-    if (prev !== wanted.fKey) {
-      st.shown.set(wanted.leaf, wanted.fKey);
-      if (prev !== undefined) {
-        st.updatedTo.set(wanted.leaf, pinCommit(wanted.pin));
+    const commit = pinCommit(wanted.pin);
+    if (prev?.fKey !== wanted.fKey || prev.commit !== commit) {
+      st.shown.set(wanted.leaf, { fKey: wanted.fKey, commit });
+      // A new body at the same commit (a draft whose fingerprint moved) names no commit it was not already on.
+      if (prev !== undefined && prev.fKey !== wanted.fKey && prev.commit !== commit) {
+        st.updatedTo.set(wanted.leaf, commit);
         dirty = true;
       }
     }
@@ -465,7 +532,7 @@ export function useDocsVisit(page: DocsPageLocation | null, loaders: DocsLoaders
       file = e.slot;
     } else {
       // While the new pin's read is in flight, the leaf keeps the body it showed (spec 4.3: "keeping scroll").
-      const prev = st.shown.get(wanted.leaf);
+      const prev = st.shown.get(wanted.leaf)?.fKey;
       const held = prev === undefined || prev === wanted.fKey ? undefined : st.files.get(prev);
       file = held?.slot.s === 'ok' ? held.slot : { s: 'loading', pin: wanted.pin };
     }
