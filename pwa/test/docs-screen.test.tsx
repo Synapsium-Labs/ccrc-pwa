@@ -895,7 +895,9 @@ describe('T13 review 3-7: the index retries an auto-class word once, then shows 
     const { unmount } = open('/docs', f);
     await advance(10);
     expect(f.projects).toHaveBeenCalledTimes(1);
+    expect(vi.getTimerCount()).toBeGreaterThan(0);
     unmount();
+    expect(vi.getTimerCount()).toBe(0);
     await advance(60_000);
     expect(f.projects).toHaveBeenCalledTimes(1);
   });
