@@ -219,7 +219,7 @@ export function DocsScreen(p: {
     <DocsAssetContext value={assets}>
       <div className="docs-screen" data-draft-assets={draftAssets}>
         {page !== null && <DocsHead page={page} visit={visit} tree={tree} />}
-        {note !== null && note.at === here && <p className="docs-note docs-redirect-note" role="status">{note.text}</p>}
+        {note !== null && <p className="docs-note docs-redirect-note" role="status">{note.text}</p>}
         {page !== null && page.kind !== 'index' && tree !== null && (
           <DocsBanners page={page} tree={tree} file={visit.file} draftAssets={draftAssets} onRelist={visit.retryTree} />
         )}
