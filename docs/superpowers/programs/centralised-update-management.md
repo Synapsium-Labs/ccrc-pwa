@@ -1631,6 +1631,16 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
         `dispatched`) on `ccd/ccd`. None of the four merges touched its files.
       - STATUS: fleet and server v0.0.190, newest v0.0.191, backups fleet 178M/server 717M, disk free fleet 217G/work
         volume 189G/server 32G, no anomalies at 16:42.
+    - **2026-10-14 17:42 UTC: v0.0.191 auto-converged unattended, with both runs clean.** No action was taken.
+      - The fleet box ran from 16:47:22 to 16:49:08, about a minute after a poll falls due on the server's grid from its
+        16:16 restart, as the 16:42 entry expected. The server followed from 16:49:49 to 16:50:14. Both reports read
+        `phase: done` and `from: pwa` (defect A), with no doctor detail.
+      - Both trailing doctors passed. Fleet: 34 passed, 6 warned, 0 failed. Server: 26 passed, 0 warned, 0 failed.
+        Both read `box-token` PASS. No history sweep has hit its timeout since 15:41:55.
+      - Nothing has merged since v0.0.191. Wave 15 (run 300) is still held, by 1332 (run 354, `working`) on `ccd/ccrc`
+        and 1302 (run 360, `dispatched`) on `ccd/ccd`.
+      - STATUS: fleet and server v0.0.191, newest v0.0.191, backups fleet 179M/server 720M, disk free fleet 217G/work
+        volume 190G/server 32G, no anomalies at 17:42.
 
 - **2026-09-30 12:22 UTC — wave 8 opened (run 182) for the live audit's residue, and dispatched.**
   - **Planning:** two Opus scoping agents measured each defect at `a742eb6a`, and an Opus writer assembled the
