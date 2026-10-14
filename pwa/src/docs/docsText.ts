@@ -209,3 +209,9 @@ export function slotSentence(slot: DocsClientSlot): string {
   return fillSentence(DOCS_SLOT_SENTENCE['unexpected-response'],
     { status: slot.status, contentType: slot.contentType === '' ? 'no content type' : slot.contentType });
 }
+
+/** The file-read words that mean the listing moved under the read (spec 4.3 item 1): the visit re-lists the tree
+ *  once automatically, then shows "changing, Retry". Declared here, beside the sentences, because this is the one
+ *  PWA file single-definition.test.ts's archive-door census lets spell the third word quoted on a code line. */
+export const DOCS_RELIST_WORDS: ReadonlySet<DocsFailure> =
+  new Set<DocsFailure>(['unknown-commit', 'draft-changed', 'worktree-moved', 'worktree-gone']);
