@@ -700,3 +700,18 @@ describe('T13 review 3-5: the tree auto-retry timer acts only on the failure it 
     expect(f.tree).toHaveBeenCalledTimes(2);
   });
 });
+
+describe('Review 439 F5: a file slot that answered 401 reads again when sign-in comes back', () => {
+  it('a leaf whose read hit a 401 shows the body after the sign-in, with one more read', async () => {
+    const f = fakeLoaders();
+    f.file.mockResolvedValueOnce({ s: 'auth' });
+    const { result } = visit(f.loaders, '/docs/demo/specs/a.md');
+    await flush();
+    expect(result.current.file).toEqual({ s: 'auth', pin: committedPin('a.md') });
+    raiseAuthLost('expired');
+    act(() => clearAuthLost());
+    await flush();
+    expect(f.file).toHaveBeenCalledTimes(2);
+    expect(result.current.file.s).toBe('ok');
+  });
+});
