@@ -19,7 +19,7 @@
 //    structural row that says which side of spec §6.3's domain each row fell on, and the one rc edge inside that domain
 //    (E5e: grep's SIGPIPE, which no builtin can equal). (E5 sits above E4 in the file.)
 //  - E6, W2's share rows (D-4962, plan Task 10): `_share_pct_to` and its per-`_swap_target` memo, inside and outside
-//    the memo scope, including the empty-key departure.
+//    the memo scope, including the empty-key departure (D-5042).
 //  - E7, W2 Task 9's rows (D-4962), per locale: `_limit_field` and `_limit_field_to` over every limits row at three
 //    clocks, both fields and four maxages; into its callers' names; the one-read row; and `_avail`/`_limit_score`
 //    against their vendored legacy, called bare as the tick calls them. (E6 and E7 also sit above E4 in the file.)
@@ -1403,7 +1403,7 @@ describe.each(LOCALES)('E5 the W2 limits rows under $name (tick-diet spec §6.3,
     }
   });
 
-  it('E5e the one rc edge inside the domain: a file under the cap whose matches outrun the pipe gets the legacy\'s digits with rc 0, where the legacy\'s grep dies of SIGPIPE (D-4962, departure limit-json-num-in-cap-sigpipe-rc)', (ctx) => {
+  it('E5e the one rc edge inside the domain: a file under the cap whose matches outrun the pipe gets the legacy\'s digits with rc 0, where the legacy\'s grep dies of SIGPIPE (D-4962; D-5040, limit-json-num-in-cap-sigpipe-rc)', (ctx) => {
     const s = got(ctx).fixed.results.get(rows.sigpipe.id)![0]!;
     expect(s.setupRc, `the setup failed: ${s.setupLog}`).toBe(0);
     expect(s.err, 'the edge row wrote to stderr').toBe('');
@@ -1527,7 +1527,7 @@ describe.each(LOCALES)('E6 the W2 share rows under $name (tick-diet spec §6.3, 
     expect(b.results.get('share memo on: no file')![0]!.rc).toBe(1);
   });
 
-  it('E6c an empty wrapper is no memo key: both calls run and the shell survives (D-4962, departure share-memo-empty-key)', (ctx) => {
+  it('E6c an empty wrapper is no memo key: both calls run and the shell survives (D-4962; D-5042, share-memo-empty-key)', (ctx) => {
     const b = got(ctx);
     expectEquivalent(E6C_ROW, b.results.get(E6C_ROW.id)!, locale!);
   });

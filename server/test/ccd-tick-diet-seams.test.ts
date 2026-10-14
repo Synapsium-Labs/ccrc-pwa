@@ -358,7 +358,7 @@ describe('`_share_pct`\'s memo lives and dies with one `_swap_target` call (D-49
     expect(lines(path.join(h.home, 'seam-py')), 'the repeat was not served from the memo').toEqual(['claude-a']);
   }, 120_000);
 
-  it('(e) the empty-wrapper departure: the shell survives and both calls run', () => {
+  it('(e) the empty-wrapper departure (D-5042): the shell survives and both calls run', () => {
     const h = harness();
     const snippet = [
       '__memo_scope() { local CCD_SHARE_MEMO_ON=1; local -A CCD_SHARE_MEMO=(); _share_pct_to v ""; echo "rc=$? v=[$v]"; _share_pct_to v ""; echo "rc=$? v=[$v]"; echo survived; }',
