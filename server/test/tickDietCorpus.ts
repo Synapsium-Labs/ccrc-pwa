@@ -166,6 +166,16 @@ export const LIMITS_REWRITE: { readonly before: FileRow; readonly after: FileRow
   after: reg('rewrite-after', raw(`{"five":50,"seven":10,"ts":${T - 999999},"fiveResetAt":${T - 1}}`)),
 };
 
+/** The one rc edge INSIDE spec §6.3's domain (D-4962; departure `limit-json-num-in-cap-sigpipe-rc`, found by the W2
+ *  verifier): 10,922 copies of `"ts":1`, 65,532 printable-ASCII bytes, under the 64 KiB cap. The legacy's `grep -o`
+ *  writes 76,454 bytes into a pipe that `head -1` stops reading after its first line, so grep dies of SIGPIPE and,
+ *  under `pipefail`, the legacy answers its first match WITH rc 141 (measured 141 in 20 of 20 runs on macOS bash 5.3
+ *  / BSD grep and on Linux bash 5.2 / GNU grep 3.8, and on bash 4.4 / GNU grep 3.12). That rc belongs to the pipe and
+ *  the scheduler, not to the bytes: with `"ts":1` copies GNU grep 3.8 reaches it racily from about 800 matches and
+ *  mostly by 1,000, macOS from about 3,000. No builtin can equal it, and the fast core answers the same digits with
+ *  rc 0. Not a `FILE_ROW_SETS` row: those rows compare rc, and this one states the divergence instead. */
+export const LIMITS_IN_CAP_SIGPIPE: FileRow = reg('in-cap-many-matches', raw('"ts":1'.repeat(10922)));
+
 /** `$REG/<id>.<field>` values (spec §9 "registry values", plan Task 13's list). `_reg_set` writes `printf '%s'`, so a
  *  real field carries no trailing newline; the newline rows are the hand-edited and older-writer shapes `$(cat)`
  *  strips. */

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=2596146515d4f50c7bf2247d07cf066e82968ca7cbc61abd784f67566fa94111
+# ccrc:generated 1 sha256=ca3a62cd1e810809c14e1c8517d0497e6d3359713d45a1aea78d83ab3df91d13
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -24359,7 +24359,13 @@ _cfg_dir_to() {   # var wrapper -> var = `_cfg_dir wrapper`, memoised per wrappe
 # `_limit_json_num_to`. `_limit_json_num`'s one code line prints the value with grep's
 # newline WHATEVER the rc: a match can come back with a non-zero rc, when a file over the
 # cap holds so many matches that `head -1` closes the pipe on grep (SIGPIPE, rc 141 under
-# `pipefail`), and the legacy printed its first match then too.
+# `pipefail`), and the legacy printed its first match then too. THE ONE rc EDGE INSIDE THE
+# DOMAIN: that SIGPIPE needs no oversized file. Once grep's `-o` output outruns the pipe
+# before `head -1` exits (one key's matches: racily from about 800 with GNU grep, mostly
+# by 1,000; about 3,000 on macOS), the legacy answers its first match with rc 141, where
+# the fast core answers the same digits with rc 0. Stdout is equal, and no caller reads
+# this rc (each call site assigns a `$( )`, and `_limit_field_to` ignores its picks' rc),
+# so the domain keeps such a file; the equivalence suite's E5e row states the divergence.
 _limit_text_to() {   # var file -> rc 0: var = the file's text, INSIDE the stated domain | 3: outside it (the caller runs the pipeline)
   local LC_ALL=C __lt_t='' __lt_ran='' __lt_rc __lt_ws=$' \t\n\v\f\r'
   printf -v "$1" '%s' ''

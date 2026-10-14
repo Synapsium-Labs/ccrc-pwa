@@ -15,8 +15,9 @@
 //    silent: `printf -v` lands in the callee's own local and the caller keeps its old value.
 //  - E2, the runner's own proofs: it can red, it isolates sides, and a hang is a bounded, NAMED failure.
 //  - E3, the rows, per locale. W1's are here; W2 and W3 add theirs, red first, from `tickDietCorpus.ts`.
-//  - E5, W2's limits rows (D-4962), per locale: every limits row and 500 random ones through both forms, and the
-//    structural row that says which side of spec §6.3's domain each row fell on. (E5 sits above E4 in the file.)
+//  - E5, W2's limits rows (D-4962), per locale: every limits row and 500 random ones through both forms, the
+//    structural row that says which side of spec §6.3's domain each row fell on, and the one rc edge inside that domain
+//    (E5e: grep's SIGPIPE, which no builtin can equal). (E5 sits above E4 in the file.)
 //  - E6, W2's share rows (D-4962, plan Task 10): `_share_pct_to` and its per-`_swap_target` memo, inside and outside
 //    the memo scope, including the empty-key departure.
 //  - E7, W2 Task 9's rows (D-4962), per locale: `_limit_field` and `_limit_field_to` over every limits row at three
@@ -48,7 +49,7 @@ import { inheritedEnv } from './gitEnvStrip.js';
 import { DEFAULT_TEST_ROSTER } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 import {
-  FILE_ROW_SETS, LIMIT_KEYS, LIMITS_REWRITE, LIMITS_ROWS, LIMITS_TS, RANDOM_ALPHABET, ROUTE_ROWS, blocksByName,
+  FILE_ROW_SETS, LIMIT_KEYS, LIMITS_IN_CAP_SIGPIPE, LIMITS_REWRITE, LIMITS_ROWS, LIMITS_TS, RANDOM_ALPHABET, ROUTE_ROWS, blocksByName,
   inLimitsDomain, needsNonRoot, randomRows, type FileRow,
 } from './tickDietCorpus.js';
 
@@ -1260,8 +1261,11 @@ interface DomainRow extends Row { readonly row: FileRow }
  *  - `domain`: structural, not differential. `_limit_text_to`'s rc says which side of spec §6.3's domain a row fell
  *    on, and a `grep` function says whether `_limit_json_num_to` ran the pipeline. An out-of-domain row that took the
  *    fast path could still give grep's answer (the size cap is a memory bound, not an answer change), so only this
- *    row sees the cap and the regular-and-readable guard go. */
-function w2LimitsRows(): { files: Row[]; named: Row[]; random: Row[]; domain: DomainRow[] } {
+ *    row sees the cap and the regular-and-readable guard go;
+ *  - `sigpipe`: structural too, the one rc edge INSIDE the domain (`LIMITS_IN_CAP_SIGPIPE`). The legacy's rc there is
+ *    grep's SIGPIPE, a race between grep's writes and `head -1`'s exit, so no differential row can hold it: the side
+ *    prints the live answer, `|`, then the legacy's, and notes the domain, the path taken and each rc. */
+function w2LimitsRows(): { files: Row[]; named: Row[]; random: Row[]; domain: DomainRow[]; sigpipe: Row } {
   const side = (label: string, cmd: string, outVar: string): Side => ({ label, body: `__diet_caller ${outVar} ${q(cmd)}` });
   const both = (id: string, r: FileRow): Row => ({
     id, setup: plant(r, LIM_AT), needs: ['_limit_json_num_to'],
@@ -1297,6 +1301,24 @@ function w2LimitsRows(): { files: Row[]; named: Row[]; random: Row[]; domain: Do
     named,
     random: randomRows(LIM_SEED, 500).map((r) => both(`six keys, both forms: ${r.id}`, r)),
     domain,
+    sigpipe: {
+      id: `rc edge: ${LIMITS_IN_CAP_SIGPIPE.id}`, setup: plant(LIMITS_IN_CAP_SIGPIPE, LIM_AT),
+      needs: ['_limit_text_to', '_limit_json_num_to'],
+      sides: [{
+        label: 'edge',
+        body: [
+          'grep() { : > "$PWD/grep.ran"; command grep "$@"; }',
+          `_limit_text_to __t ${LIM_AT}; __d=$?`,
+          `_limit_json_num ${LIM_AT} ts; __lr=$?`,
+          `_limit_json_num_to __v ${LIM_AT} ts; __vr=$?`,
+          'if [[ -e "$PWD/grep.ran" ]]; then __p=pipeline; else __p=builtins; fi',
+          'unset -f grep',
+          "printf '|'",
+          `_legacy_limit_json_num ${LIM_AT} ts; __gr=$?`,
+          'printf \'%s %s %s %s %s %s\' "$__d" "$__p" "$__lr" "$__v" "$__vr" "$__gr" > "$PWD/note"',
+        ].join('\n'),
+      }],
+    },
   };
 }
 
@@ -1308,7 +1330,7 @@ describe.each(LOCALES)('E5 the W2 limits rows under $name (tick-diet spec §6.3,
   beforeAll(() => {
     h = makeCcdHarness('ccrc-diet-e5-');
     if (locale !== null) {
-      fixed = runBatch(h, [...rows.files, ...rows.named, ...rows.domain], locale, 300);
+      fixed = runBatch(h, [...rows.files, ...rows.named, ...rows.domain, rows.sigpipe], locale, 300);
       random = runBatch(h, rows.random, locale, 300);
     }
   }, 700_000);
@@ -1379,6 +1401,21 @@ describe.each(LOCALES)('E5 the W2 limits rows under $name (tick-diet spec §6.3,
       'directory', 'absent', ...(AS_ROOT ? [] : ['mode-000', 'dir-unsearchable'])]) {
       expect(note(id), `${id} is outside the domain`).toBe('3 pipeline');
     }
+  });
+
+  it('E5e the one rc edge inside the domain: a file under the cap whose matches outrun the pipe gets the legacy\'s digits with rc 0, where the legacy\'s grep dies of SIGPIPE (D-4962, departure limit-json-num-in-cap-sigpipe-rc)', (ctx) => {
+    const s = got(ctx).fixed.results.get(rows.sigpipe.id)![0]!;
+    expect(s.setupRc, `the setup failed: ${s.setupLog}`).toBe(0);
+    expect(s.err, 'the edge row wrote to stderr').toBe('');
+    expect(inLimitsDomain(LIMITS_IN_CAP_SIGPIPE), 'the corpus states the row inside the domain').toBe(true);
+    const [d, p, lr, v, vr, gr] = s.note.split(' ');
+    expect({ d, p }, 'inside the domain, so `_limit_text_to` answers 0 and the fast path runs no grep').toEqual({ d: '0', p: 'builtins' });
+    // Stdout is the contract every caller reads (each assigns a `$( )`): the printing form prints the legacy's bytes.
+    expect(s.out.toString('latin1'), 'live, then `|`, then the legacy: the first match and grep\'s newline on each side').toBe('1\n|1\n');
+    expect({ lr, v, vr }, 'the fast core answers the first match with rc 0').toEqual({ lr: '0', v: '1', vr: '0' });
+    // The legacy's rc is 141 when grep's later writes find `head -1` gone (measured 141 on every platform the plan
+    // names), and 0 only if head drained the pipe first; either way it is not a property of the bytes.
+    expect(['0', '141'], `the legacy's rc: ${gr}`).toContain(gr);
   });
 });
 
