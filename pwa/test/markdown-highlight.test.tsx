@@ -18,6 +18,10 @@ afterEach(cleanup);
  *  the strip would take). */
 const tsBody = (chars: number): string => 'const a = 1;\n'.repeat(Math.ceil(chars / 13)).slice(0, chars - 1) + 'x';
 
+/** A Python body of exactly `chars` characters, every line a keyword, ending in `x`: Python keeps the 64 KiB cap that
+ *  `ts` no longer has (D-4928: `typescript` is capped at 8 192 characters), so it measures the general cap. */
+const pyBody = (chars: number): string => 'import a\n'.repeat(Math.ceil(chars / 9)).slice(0, chars - 1) + 'x';
+
 /** One fenced block, as react-markdown hands it to the `pre` component. */
 function block(lang: string, body: string, highlight?: boolean): HTMLElement {
   return render(
@@ -48,18 +52,18 @@ describe('M4.H1: the block highlight cap', () => {
 
   it('the cap is inclusive: 65 536 characters are highlighted, 65 537 are not', () => {
     expect(MD_HIGHLIGHT_BLOCK_MAX_CHARS).toBe(65536);
-    const at = block('ts', tsBody(MD_HIGHLIGHT_BLOCK_MAX_CHARS));
+    const at = block('python', pyBody(MD_HIGHLIGHT_BLOCK_MAX_CHARS));
     expect(keywords(at)).toBeGreaterThan(0);
-    expect(label(at)).toBe('TypeScript');
+    expect(label(at)).toBe('Python');
     cleanup();
-    const over = block('ts', tsBody(MD_HIGHLIGHT_BLOCK_MAX_CHARS + 1));
+    const over = block('python', pyBody(MD_HIGHLIGHT_BLOCK_MAX_CHARS + 1));
     expect(keywords(over)).toBe(0);
-    expect(label(over)).toBe('TypeScript · not highlighted (65 KiB)');
+    expect(label(over)).toBe('Python · not highlighted (65 KiB)');
   });
 
   it('counts the block after the trailing-newline strip, as the copy button does', () => {
-    // tsBody(65 536) plus the newline `block` appends is 65 537 characters before the strip.
-    expect(keywords(block('ts', tsBody(MD_HIGHLIGHT_BLOCK_MAX_CHARS)))).toBeGreaterThan(0);
+    // pyBody(65 536) plus the newline `block` appends is 65 537 characters before the strip.
+    expect(keywords(block('python', pyBody(MD_HIGHLIGHT_BLOCK_MAX_CHARS)))).toBeGreaterThan(0);
   });
 
   it('a 70 000-char block from the parse pipeline is capped too', () => {

@@ -325,13 +325,13 @@ describe('a tree renders through detachUrls and DOC_COMPONENTS (spec 4.10 step 4
     expect(parser).toHaveBeenCalledTimes(1);
   });
 
-  it('the page highlight budget reaches the blocks: of nine 60 000-character ts blocks the ninth is not highlighted', async () => {
+  it('the page highlight budget reaches the blocks: of nine 60 000-character python blocks the ninth is not highlighted', async () => {
     // 60 000 characters in 60 lines of 1 000 (the line bound caps a line at MD_HIGHLIGHT_MAX_LINE_CHARS, so one long line
     // would be unhighlighted), with no long run of blank units (the whitespace bound, MD_HIGHLIGHT_MAX_BLANK_CHARS).
-    const body = 'const a = 1;' + ' x'.repeat(493) + ' \n' + (' x'.repeat(499) + ' \n').repeat(59);
+    const body = 'import a = 1' + ' x'.repeat(493) + ' \n' + (' x'.repeat(499) + ' \n').repeat(59);
     const fence = (): HastElement => ({
       type: 'element', tagName: 'pre', properties: {},
-      children: [{ type: 'element', tagName: 'code', properties: { className: ['language-ts'] }, children: [{ type: 'text', value: body }] }],
+      children: [{ type: 'element', tagName: 'code', properties: { className: ['language-python'] }, children: [{ type: 'text', value: body }] }],
     });
     const tree: HastRoot = { type: 'root', children: Array.from({ length: 9 }, fence) };
     const { container } = render(<DocMarkdown text="nine blocks" pinKey="p" parser={answering({ kind: 'tree', tree, depth: 3 })} link={LINK} />);

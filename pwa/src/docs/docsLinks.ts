@@ -13,7 +13,8 @@ import {
   admitDraft, docsPageUrl, entryView, githubBlobUrl, isDocsBareRef, isDocsProject, resolveDocRef,
   type DocPin, type DocSectionSlug, type DocsEntry, type DocsPageLocation, type DocsRefSpec, type DocsTreeOk,
 } from '../../../shared/docs';
-import { DOCS_HIGHLIGHT_PAGE_MAX_CHARS } from '../lib/markdownLimits';
+import { codeLanguage, inScanPageBudget } from '../lib/markdown';
+import { DOCS_HIGHLIGHT_PAGE_MAX_CHARS, DOCS_HIGHLIGHT_SCAN_PAGE_MAX_CHARS } from '../lib/markdownLimits';
 import { DOC_LINK_INERT_SENTENCE, type DocLinkInertReason } from './docsText';
 import type { DocLinkContextValue } from './DocLink';
 import { pinFor } from './useDocsVisit';
@@ -69,12 +70,23 @@ function preCodeChars(pre: HastElement): number {
   return chars;
 }
 
+/** The class of `pre`'s first `code` child, as `CodeBlock` reads it: hast holds `className` as an array of strings, joined
+ *  with a space here; `''` when there is no `code` child or it has no class. */
+function preCodeClass(pre: HastElement): string {
+  const code = pre.children.find((c): c is HastElement => c.type === 'element' && c.tagName === 'code');
+  const cls = code?.properties.className;
+  return Array.isArray(cls) ? cls.map((v) => String(v)).join(' ') : typeof cls === 'string' ? cls : '';
+}
+
 /** A copy of `tree` with every URL moved out (spec 4.11; refinement (n)). Iteratively, in document pre-order: the root
  *  and every element are copied (text, comment and doctype nodes are shared, untouched); every `URL_KEYS` property of
  *  an element is deleted from its copy and recorded in `urls` under the copy; `img` elements are numbered 0..n-1;
  *  and each `pre` records the page highlight budget's decision: the `pre > code` text of every block so far, this one
  *  included, is summed, and the block is `highlight: true` while the sum is at most `DOCS_HIGHLIGHT_PAGE_MAX_CHARS`,
- *  `false` from the block that passes it on, for every later block too. An element with nothing to record has no
+ *  `false` from the block that passes it on, for every later block too. A second sum, of the blocks whose language
+ *  `inScanPageBudget` names (`typescript`, `javascript` and `rust`, aliases included), has its own budget,
+ *  `DOCS_HIGHLIGHT_SCAN_PAGE_MAX_CHARS`: a block of those grammars is `false` from the one that passes it, and a block
+ *  of any other grammar is never refused by it (D-4928). An element with nothing to record has no
  *  entry. Never writes `tree`, so a kept outcome can be detached again, and part 2's Export reuses the copy and its
  *  map (a second detach of the copy finds no URL). */
 export function detachUrls(tree: HastRoot): Detached {
@@ -87,6 +99,7 @@ export function detachUrls(tree: HastRoot): Detached {
   };
   let images = 0;
   let codeChars = 0;
+  let scanChars = 0;
   schedule(tree.children, root.children);
   while (stack.length > 0) {
     const { node, to } = stack.pop()!;
@@ -110,8 +123,11 @@ export function detachUrls(tree: HastRoot): Detached {
     }
     let highlight: boolean | null = null;
     if (node.tagName === 'pre') {
-      codeChars += preCodeChars(node);
-      highlight = codeChars <= DOCS_HIGHLIGHT_PAGE_MAX_CHARS;
+      const chars = preCodeChars(node);
+      codeChars += chars;
+      const scan = inScanPageBudget(codeLanguage(preCodeClass(node)));
+      if (scan) scanChars += chars;
+      highlight = codeChars <= DOCS_HIGHLIGHT_PAGE_MAX_CHARS && (!scan || scanChars <= DOCS_HIGHLIGHT_SCAN_PAGE_MAX_CHARS);
     }
     if (Object.keys(attrs).length > 0 || imageIndex !== null || highlight !== null) {
       urls.set(copy, { attrs, imageIndex, highlight });

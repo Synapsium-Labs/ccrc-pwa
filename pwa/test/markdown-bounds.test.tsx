@@ -10,6 +10,8 @@
 // Every parse here is `parseMarkdown`, the function the worker runs; chat's worker path gets it through an injected
 // parser. `hljs.highlight` is spied where a case asserts it is not called, and answers nothing, so a red run never
 // pays for a long word.
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, render } from '@testing-library/react';
 import hljs from 'highlight.js/lib/core';
@@ -80,22 +82,22 @@ describe('W5 bound r10: no highlighting for a block holding a word longer than M
     expect(label(at)).toBe('TypeScript');
   });
 
-  it('a 32 KiB one-identifier ts fence through SHARED_COMPONENTS never reaches highlight.js', () => {
+  it('a 32 KiB one-identifier python fence through SHARED_COMPONENTS never reaches highlight.js', () => {
     const highlight = spyHighlight();
-    const { container } = render(renderHast(treeOf(`\`\`\`ts\n${'a'.repeat(32768)}\n\`\`\`\n`, 'docs'), { components: SHARED_COMPONENTS }));
+    const { container } = render(renderHast(treeOf(`\`\`\`python\n${'a'.repeat(32768)}\n\`\`\`\n`, 'docs'), { components: SHARED_COMPONENTS }));
     expect(highlight).not.toHaveBeenCalled();
-    expect(label(container)).toBe('TypeScript · not highlighted (a 32768-character word)');
+    expect(label(container)).toBe('Python · not highlighted (a 32768-character word)');
   });
 
   it("the same fence through chat's worker path (ChatMarkdown, injected parser) never reaches highlight.js", async () => {
     const highlight = spyHighlight();
-    const text = `\`\`\`ts\n${'a'.repeat(32768)}\n\`\`\`\n`;
+    const text = `\`\`\`python\n${'a'.repeat(32768)}\n\`\`\`\n`;
     expect(utf8ByteLength(text)).toBeGreaterThan(CHAT_SYNC_MAX_BYTES);
     const { container, parser } = await chat(text);
     expect(parser).toHaveBeenCalledTimes(1);
     expect(container.querySelector('pre.msg-plain')).toBeNull();
     expect(highlight).not.toHaveBeenCalled();
-    expect(label(container)).toBe('TypeScript · not highlighted (a 32768-character word)');
+    expect(label(container)).toBe('Python · not highlighted (a 32768-character word)');
   });
 
   it('a block over MD_HIGHLIGHT_BLOCK_MAX_CHARS keeps its size label even when it holds a long word', () => {
@@ -199,7 +201,7 @@ describe('the line bound: no highlighting for a block holding a line longer than
     const one = 'const answer = compute(42); // the answer';
     const body = Array.from({ length: Math.floor(MD_HIGHLIGHT_BLOCK_MAX_CHARS / (one.length + 1)) }, () => one).join('\n');
     expect(body.length).toBeLessThanOrEqual(MD_HIGHLIGHT_BLOCK_MAX_CHARS);
-    expect(label(block('ts', body))).toBe('TypeScript');
+    expect(label(block('python', body))).toBe('Python');
     expect(highlight).toHaveBeenCalledTimes(1);
   });
 
@@ -410,8 +412,9 @@ describe('Review 439 F1: a fence of whitespace that spans lines is not highlight
     expect(label(c)).toBe(said(MAX + 1));
     expect(c.querySelector('pre > code.hljs')?.textContent).toBe(one);
     cleanup();
-    const big = unitRun(unit, MD_HIGHLIGHT_BLOCK_MAX_CHARS);
-    expect(label(block('ts', big))).toBe(said(MD_HIGHLIGHT_BLOCK_MAX_CHARS));
+    // A `ts` block is capped at 8 192 characters (D-4928), so the largest that reaches the whitespace bound is that.
+    const big = unitRun(unit, 8192);
+    expect(label(block('ts', big))).toBe(said(8192));
     expect(highlight).not.toHaveBeenCalled();
   });
 
@@ -425,7 +428,7 @@ describe('Review 439 F1: a fence of whitespace that spans lines is not highlight
   it('the same shapes through Docs (parseMarkdown, renderHast, SHARED_COMPONENTS) never reach highlight.js', () => {
     const highlight = spyHighlight();
     for (const [unit] of SHAPES) {
-      const src = `\`\`\`ts\n${unitRun(unit, MD_HIGHLIGHT_BLOCK_MAX_CHARS - 2)}\n\`\`\`\n`;
+      const src = `\`\`\`ts\n${unitRun(unit, 8000)}\n\`\`\`\n`;
       const { container } = render(renderHast(treeOf(src, 'docs'), { components: SHARED_COMPONENTS }));
       expect(label(container)).toMatch(NOT_HIGHLIGHTED);
       expect(Number(NOT_HIGHLIGHTED.exec(label(container) ?? '')?.[1])).toBeGreaterThan(MAX);
@@ -517,7 +520,7 @@ describe('Review 439 F1: a fence of whitespace that spans lines is not highlight
     expect(highlight).not.toHaveBeenCalled();
   });
 
-  it('64 KiB of ordinary code with indentation and blank lines is highlighted, with markup', () => {
+  it('8 KiB of ordinary code with indentation and blank lines is highlighted, with markup', () => {
     const chunk = [
       'export function total(items: readonly Item[]): number {',
       '  let sum = 0;',
@@ -533,10 +536,116 @@ describe('Review 439 F1: a fence of whitespace that spans lines is not highlight
       '}',
       '',
     ].join('\n');
-    const body = unitRun(chunk, MD_HIGHLIGHT_BLOCK_MAX_CHARS);
-    expect(body.length).toBe(MD_HIGHLIGHT_BLOCK_MAX_CHARS);
+    const body = unitRun(chunk, 8192);
+    expect(body.length).toBe(8192);
     const c = block('ts', body);
     expect(label(c)).toBe('TypeScript');
     expect(c.querySelectorAll('.hljs-keyword').length).toBeGreaterThan(0);
+  });
+});
+
+describe('D-4928: typescript, javascript and rust have their own, smaller block caps', () => {
+  // highlight.js 11.11.1 is quadratic in a block's size for `<a>` in `typescript`/`javascript` (JSX `hasClosingTag`) and
+  // for a raw string `r#"` with no closer in `rust`, on shapes that pass the word, line and whitespace bounds. The
+  // literals below are the decided values (8 192 and 4 096), never the imported constants, so a mutated constant reds.
+  /** `unit` repeated, in lines of `n` characters (or one unit per line when `n` is 0), cut to `chars`. */
+  const shape = (unit: string, n: number, chars: number): string => {
+    const line = n === 0 ? unit : unit.repeat(Math.ceil(n / unit.length)).slice(0, n);
+    return Array.from({ length: Math.ceil(chars / (line.length + 1)) + 1 }, () => line).join('\n').slice(0, chars);
+  };
+  const OVER_64 = /\u00b7 not highlighted \(64 KiB\)$/;
+  const SHAPES: ReadonlyArray<readonly [string, number]> = [['<a>', 1800], ['<a>', 0], ['<ab>', 1800]];
+  const JS_LANGS = ['ts', 'tsx', 'javascript'];
+
+  it.each(JS_LANGS.flatMap((lang) => SHAPES.map(([unit, n]) => [lang, unit, n] as const)))(
+    'a 64 KiB %s block of %j in lines of %d characters is not highlighted and says 64 KiB (Docs)',
+    (lang, unit, n) => {
+      const highlight = spyHighlight();
+      const body = shape(unit, n, 65536);
+      expect(body).toHaveLength(65536);
+      const { container } = render(renderHast(treeOf(`\`\`\`${lang}\n${body}\n\`\`\`\n`, 'docs'), { components: SHARED_COMPONENTS }));
+      expect(label(container)).toMatch(OVER_64);
+      expect(highlight).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(JS_LANGS)("the same %s shapes through chat's worker path are not highlighted either", async (lang) => {
+    const highlight = spyHighlight();
+    for (const [unit, n] of SHAPES) {
+      const text = `\`\`\`${lang}\n${shape(unit, n, 65536)}\n\`\`\`\n`;
+      expect(utf8ByteLength(text)).toBeGreaterThan(CHAT_SYNC_MAX_BYTES);
+      const { container, parser } = await chat(text);
+      expect(parser).toHaveBeenCalledTimes(1);
+      expect(label(container)).toMatch(OVER_64);
+      cleanup();
+    }
+    expect(highlight).not.toHaveBeenCalled();
+  });
+
+  it('a 64 KiB rust block of `r#"` lines is not highlighted and says 64 KiB, in Docs and on the worker path', async () => {
+    const highlight = spyHighlight();
+    const text = `\`\`\`rust\n${shape('r#"', 1800, 65536)}\n\`\`\`\n`;
+    const docs = render(renderHast(treeOf(text, 'docs'), { components: SHARED_COMPONENTS }));
+    expect(label(docs.container)).toMatch(OVER_64);
+    cleanup();
+    const worker = await chat(text);
+    expect(worker.parser).toHaveBeenCalledTimes(1);
+    expect(label(worker.container)).toMatch(OVER_64);
+    cleanup();
+    expect(label(block('rust', shape('r#"', 0, 65536)))).toMatch(OVER_64);
+    expect(highlight).not.toHaveBeenCalled();
+  });
+
+  it.each([['ts'], ['tsx'], ['jsx'], ['javascript'], ['mjs'], ['cts']])(
+    'a %s block of exactly 8 192 characters is highlighted; 8 193 is not, and says 9 KiB',
+    (lang) => {
+      const highlight = spyHighlight();
+      expect(label(block(lang, shape('<a>', 1800, 8192)))).not.toMatch(/not highlighted/);
+      expect(highlight).toHaveBeenCalledTimes(1);
+      expect(label(block(lang, shape('<a>', 1800, 8193)))).toMatch(/\u00b7 not highlighted \(9 KiB\)$/);
+      expect(highlight).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it.each([['rust'], ['rs']])('a %s block of exactly 4 096 characters is highlighted; 4 097 is not, and says 5 KiB', (lang) => {
+    const highlight = spyHighlight();
+    expect(label(block(lang, shape('r#"', 1800, 4096)))).not.toMatch(/not highlighted/);
+    expect(highlight).toHaveBeenCalledTimes(1);
+    expect(label(block(lang, shape('r#"', 1800, 4097)))).toMatch(/\u00b7 not highlighted \(5 KiB\)$/);
+    expect(highlight).toHaveBeenCalledTimes(1);
+  });
+
+  it('a highlighted-within-the-cap block through the worker path keeps its colour at exactly 8 192 characters', async () => {
+    const highlight = spyHighlight();
+    const text = `\`\`\`ts\n${shape('<a>', 1800, 8192)}\n\`\`\`\n`;
+    const { container, parser } = await chat(text);
+    expect(parser).toHaveBeenCalledTimes(1);
+    expect(label(container)).toBe('TypeScript');
+    expect(highlight).toHaveBeenCalledTimes(1);
+  });
+
+  it('a real-sized TypeScript fence of about 7 KiB is highlighted, with markup', () => {
+    const source = readFileSync(path.join(import.meta.dirname, '..', 'src', 'lib', 'markdownGuard.ts'), 'utf8');
+    const lines = source.split('\n');
+    let real = '';
+    for (const l of lines) {
+      if ((real + l + '\n').length > 7000) break;
+      real += `${l}\n`;
+    }
+    real = real.replace(/\n$/, '');
+    expect(real.length).toBeGreaterThan(6000);
+    expect(real.length).toBeLessThan(8192);
+    const c = block('ts', real);
+    expect(label(c)).toBe('TypeScript');
+    expect(c.querySelectorAll('.hljs-keyword').length).toBeGreaterThan(0);
+  });
+
+  it('a grammar outside the set keeps the 64 KiB cap: 20 000 characters of python and of json are highlighted', () => {
+    const highlight = spyHighlight();
+    const py = 'x = 1\n'.repeat(3400).slice(0, 20000);
+    expect(py).toHaveLength(20000);
+    expect(label(block('python', py))).toBe('Python');
+    expect(label(block('json', '1,\n'.repeat(7000).slice(0, 20000)))).toBe('JSON');
+    expect(highlight).toHaveBeenCalledTimes(2);
   });
 });

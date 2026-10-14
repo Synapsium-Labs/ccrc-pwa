@@ -103,8 +103,8 @@ function SourceText(p: { readonly show: DocsShowOk }): ReactNode {
   return <pre className="doc-plain">{src.text}</pre>;
 }
 
-/** A `text` leaf (spec 4.4): highlighted through the shared `CodeBlock` (and its size and word bounds) when a
- *  registered grammar knows the extension, else plain. */
+/** A `text` leaf (spec 4.4): highlighted through the shared `CodeBlock` (and every bound it applies: the size cap of
+ *  its grammar, and the word, line and whitespace bounds) when a registered grammar knows the extension, else plain. */
 function TextBody(p: { readonly show: DocsShowOk; readonly path: string }): ReactNode {
   const src = docMarkdownSource(p.show);
   if (src.kind === 'no-bytes') return <DocsFailureView answer={malformed(DOCS_SHOW_NO_BYTES)} />;

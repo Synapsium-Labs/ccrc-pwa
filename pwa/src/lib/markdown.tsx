@@ -37,7 +37,7 @@ import php from 'highlight.js/lib/languages/php';
 import { remarkAlerts } from './remarkAlerts';
 import {
   CHAT_PARSE_BUDGET_MS, CHAT_SYNC_MAX_BYTES, DOCS_MAX_RENDER_ELEMENTS, MD_HIGHLIGHT_BLOCK_MAX_CHARS,
-  MD_HIGHLIGHT_MAX_BLANK_CHARS, MD_HIGHLIGHT_MAX_LINE_CHARS, MD_HIGHLIGHT_MAX_WORD_CHARS,
+  MD_HIGHLIGHT_JS_BLOCK_MAX_CHARS, MD_HIGHLIGHT_RUST_BLOCK_MAX_CHARS, MD_HIGHLIGHT_MAX_BLANK_CHARS, MD_HIGHLIGHT_MAX_LINE_CHARS, MD_HIGHLIGHT_MAX_WORD_CHARS,
   MD_MAX_CONTAINER_DEPTH, MD_MAX_DELIMITER_RUN, MD_MAX_TREE_DEPTH,
 } from './markdownLimits';
 import { keystrokeParts, prescanMarkdown, utf8ByteLength } from './markdownGuard';
@@ -173,10 +173,41 @@ export function longestBlankRun(s: string): number {
   return best;
 }
 
+/** The language a code element's class names (`language-<name>`), lower-cased; `''` when it names none. */
+export function codeLanguage(className: string): string {
+  return (/language-([\w-]+)/.exec(className)?.[1] ?? '').toLowerCase();
+}
+
+/** Which of the three grammars highlight.js is quadratic in (D-4928) `lang` resolves to, compared by identity with
+ *  what `hljs.getLanguage` answers for the grammar's own name, so every alias highlight.js knows follows it and no
+ *  list of aliases is kept here. */
+function scanGrammar(lang: string): 'js' | 'rust' | null {
+  if (!lang) return null;
+  const def = hljs.getLanguage(lang);
+  if (def === undefined) return null;
+  if (def === hljs.getLanguage('typescript') || def === hljs.getLanguage('javascript')) return 'js';
+  if (def === hljs.getLanguage('rust')) return 'rust';
+  return null;
+}
+
+/** The longest block, in characters, `CodeBlock` highlights in `lang`: a smaller cap for `typescript`/`javascript`
+ *  and `rust` (D-4928), `MD_HIGHLIGHT_BLOCK_MAX_CHARS` for every other grammar. */
+export function highlightBlockCap(lang: string): number {
+  const g = scanGrammar(lang);
+  return g === 'js' ? MD_HIGHLIGHT_JS_BLOCK_MAX_CHARS : g === 'rust' ? MD_HIGHLIGHT_RUST_BLOCK_MAX_CHARS : MD_HIGHLIGHT_BLOCK_MAX_CHARS;
+}
+
+/** Whether a block in `lang` counts against a Docs page's budget for the grammars that grow with the square of a
+ *  block's size (`DOCS_HIGHLIGHT_SCAN_PAGE_MAX_CHARS`, D-4928). */
+export function inScanPageBudget(lang: string): boolean {
+  return scanGrammar(lang) !== null;
+}
+
 /** Fenced code: language label + copy bar over a syntax-highlighted well.
  *  The bar is a SIBLING above the scrolling <pre>, never an overlay.
  *  Highlighted only when the language is registered, `highlight` is not `false`, the block is at most
- *  `MD_HIGHLIGHT_BLOCK_MAX_CHARS` characters (after the trailing-newline strip), its longest run of word units
+ *  `highlightBlockCap(lang)` characters (after the trailing-newline strip: `MD_HIGHLIGHT_BLOCK_MAX_CHARS`, or a smaller
+ *  cap for `typescript`/`javascript` and for `rust`, D-4928), its longest run of word units
  *  (`longestWordRun`) is at most `MD_HIGHLIGHT_MAX_WORD_CHARS` (W5 bound r10), its longest line is at most
  *  `MD_HIGHLIGHT_MAX_LINE_CHARS` (the line bound), and its longest blank run (`longestBlankRun`, whitespace that may
  *  span lines) is at most `MD_HIGHLIGHT_MAX_BLANK_CHARS` (the whitespace bound). A registered block over the size cap
@@ -191,15 +222,16 @@ export function CodeBlock({ children, highlight }: { children?: ReactNode; highl
   const codeEl = React.Children.toArray(children).find(React.isValidElement) as
     | React.ReactElement<{ className?: string; children?: ReactNode }>
     | undefined;
-  const lang = (/language-([\w-]+)/.exec(codeEl?.props.className ?? '')?.[1] ?? '').toLowerCase();
+  const lang = codeLanguage(codeEl?.props.className ?? '');
   const label = LANG_LABEL[lang] ?? (lang || 'text');
   const raw = nodeText(children).replace(/\n$/, '');
   const registered = Boolean(lang && hljs.getLanguage(lang));
   const wanted = highlight !== false && registered;
-  const overCap = wanted && raw.length > MD_HIGHLIGHT_BLOCK_MAX_CHARS;
+  const cap = highlightBlockCap(lang);
+  const overCap = wanted && raw.length > cap;
   // A block the page budget refuses is over the cap all the same, and says so (M4.H1); the size is read from the
   // length alone, so a refused block is never scanned for a word or a line.
-  const refusedOverCap = registered && !wanted && raw.length > MD_HIGHLIGHT_BLOCK_MAX_CHARS;
+  const refusedOverCap = registered && !wanted && raw.length > cap;
   const word = wanted && !overCap ? longestWordRun(raw) : 0;
   const overWord = word > MD_HIGHLIGHT_MAX_WORD_CHARS;
   const line = wanted && !overCap ? longestLine(raw) : 0;
