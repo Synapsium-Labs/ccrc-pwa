@@ -349,9 +349,13 @@ describe('a failed journal append undoes its own bytes (path-identity spec 2026-
     expect(c.fired(), 'CONTROL: the directory close threw').toBe(1);
     expect(fsyncOn, 'CONTROL: the fsync fault is on the success path’s directory descriptor').toBe(dirFds[0]);
     expect(closeOn, 'CONTROL: the close fault is on that same directory descriptor').toBe(dirFds[0]);
-    // By position, never by descriptor number alone: a descriptor closed early can be reused by the next open.
-    expect(closeAt, 'CONTROL: the faulted close follows the directory’s open, so it is never the journal’s')
-      .toBeGreaterThan(log.findIndex((x) => x.name === 'openSync' && x.args[0] === dir));
+    // The directory's close sits in the `finally` straight after its fsync, so the first close after that fsync is the
+    // directory's own; the journal's close is never that close, so a fault armed on the journal's descriptor reds here.
+    const dirOpenAt = log.findIndex((x) => x.name === 'openSync' && x.args[0] === dir);
+    const dirFsyncAt = log.findIndex((x, i) => i > dirOpenAt && x.name === 'fsyncSync' && x.args[0] === dirFds[0]);
+    expect(dirFsyncAt, 'CONTROL: the directory was fsynced after its open').toBeGreaterThan(-1);
+    expect(closeAt, 'CONTROL: the faulted close is the first close after the directory’s fsync, the directory’s own')
+      .toBe(log.findIndex((x, i) => i > dirFsyncAt && x.name === 'closeSync'));
     h.hooks.clear();
     expect(out).toEqual({ kind: 'failed', phase: 'append', code: 'EIO' });
     expect(existsSync(j.logPath), 'the file this call created is still there').toBe(false);
@@ -379,9 +383,13 @@ describe('a failed journal append undoes its own bytes (path-identity spec 2026-
     expect(c.fired(), 'CONTROL: the directory close threw').toBe(1);
     const journalFd = log.find((x) => x.name === 'writeSync')?.args[0];
     expect(closeOn, 'CONTROL: the close fault is on the success path’s directory descriptor').toBe(dirFds[0]);
-    // By position, never by descriptor number alone: a descriptor closed early can be reused by the next open.
-    expect(closeAt, 'CONTROL: the faulted close follows the directory’s open, so it is never the journal’s')
-      .toBeGreaterThan(log.findIndex((x) => x.name === 'openSync' && x.args[0] === dir));
+    // The directory's close sits in the `finally` straight after its fsync, so the first close after that fsync is the
+    // directory's own; the journal's close is never that close, so a fault armed on the journal's descriptor reds here.
+    const dirOpenAt = log.findIndex((x) => x.name === 'openSync' && x.args[0] === dir);
+    const dirFsyncAt = log.findIndex((x, i) => i > dirOpenAt && x.name === 'fsyncSync' && x.args[0] === dirFds[0]);
+    expect(dirFsyncAt, 'CONTROL: the directory was fsynced after its open').toBeGreaterThan(-1);
+    expect(closeAt, 'CONTROL: the faulted close is the first close after the directory’s fsync, the directory’s own')
+      .toBe(log.findIndex((x, i) => i > dirFsyncAt && x.name === 'closeSync'));
     expect(log.filter((x) => x.name === 'fsyncSync').slice(0, 2).map((x) => x.args[0]),
       'CONTROL: both fsyncs ran and succeeded, the file’s then the directory’s').toEqual([journalFd, dirFds[0]]);
     h.hooks.clear();
@@ -402,7 +410,8 @@ describe('a failed journal append undoes its own bytes (path-identity spec 2026-
     h.log = null;
     expect(readFileSync(j.logPath, 'utf8'), 'CONTROL: the record landed').toBe('{"generation":1}\n');
     expect(dirFds, 'CONTROL: the success path opened the directory once').toHaveLength(1);
-    // Located by position, never by descriptor number alone: a descriptor closed early can be reused by the next open.
+    // The journal's close is the first close carrying its descriptor's number, sound because the log begins at the
+    // journal's own open; the directory's fsync is the first fsync on its descriptor after the directory's open.
     const journalFd = log.find((c) => c.name === 'writeSync')?.args[0];
     const dirOpen = log.findIndex((c) => c.name === 'openSync' && c.args[0] === dir);
     const dirFsync = log.findIndex((c, i) => i > dirOpen && c.name === 'fsyncSync' && c.args[0] === dirFds[0]);
