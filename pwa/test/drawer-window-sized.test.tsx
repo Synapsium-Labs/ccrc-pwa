@@ -22,7 +22,9 @@
 // (f) the grid's 51 rows are fixed, so a shorter glass scrolls the host, held
 //     at its bottom (where the box is) until the operator scrolls it;
 // (g) the wheel keeps its meaning — the history — so it does not scroll the
-//     host as well; a pinch and a sideways scroll stay the browser's.
+//     host as well; a pinch and a sideways scroll stay the browser's;
+// (h) a glass the terminal cannot measure changes nothing: the type and the
+//     clip stay as they were, and nothing is sent (plan Refinement 9).
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render } from '@testing-library/react';
 import type { Terminal as XTerm } from '@xterm/xterm';
@@ -127,6 +129,8 @@ const fakeTerm = () => {
   const sizes: number[] = [];
   const probes: number[] = [];
   let open = false;
+  /** Laid out, but nothing the terminal measures there is a measurement. */
+  let blind = false;
   let dataCb: ((data: string) => void) | null = null;
   let wheelCb: ((ev: WheelEvent) => boolean) | null = null;
   const makeTerm: MakeTerm = (): DrawerTerm => ({
@@ -136,7 +140,7 @@ const fakeTerm = () => {
     pin: (cols, rows) => { pins.push([cols, rows]); log.push(`pin ${cols}x${rows}`); },
     propose: (px) => {
       probes.push(px);
-      if (!open) return null;
+      if (!open || blind) return null;
       return { cols: Math.floor(glass.width / (px * 0.6)), rows: Math.floor(glass.height / (px * 1.2)) };
     },
     setFontSize: (px) => { sizes.push(px); },
@@ -150,6 +154,7 @@ const fakeTerm = () => {
   });
   return {
     makeTerm, pins, opened, sizes, probes,
+    blind: (v: boolean) => { blind = v; },
     type: (d: string) => dataCb?.(d),
     wheel: (init: WheelEventInit) => {
       const ev = new WheelEvent('wheel', { cancelable: true, ...init });
@@ -396,5 +401,58 @@ describe('the grid\'s rows are fixed, so the host scrolls and keeps the box in v
       .toBe(false);
     expect(t.wheel({ deltaX: 120, deltaY: 0 }).ev.defaultPrevented, 'a sideways scroll was taken from the host')
       .toBe(false);
+  });
+});
+
+describe('a glass the terminal cannot measure keeps what it has (Refinement 9)', () => {
+  // `consoleFit` answers null when the terminal cannot measure the glass. That
+  // is "not measured", never "fits" and never "clipped": the type and the clip
+  // the last measured fit chose stay, and the next measured fit decides.
+  //
+  // MUTATION ROWS (fitToWindow's `want === null` arm; RUN 2026-10-14, each
+  // applied, this file run alone, restored): null raises the clip → the first
+  // case RED; null clears the clip → the second RED; null re-types to the base
+  // size → both RED; null treated as a phone (base size and clip) → both RED.
+  const clipNotice = (view: ReturnType<typeof render>): Element | null =>
+    view.baseElement.querySelector('.term-clip');
+
+  it('(h) keeps a fitted type, and raises no clip it never measured', async () => {
+    const t = fakeTerm();
+    const { view, ws } = mount(t);
+    await frame();
+    const typed = [...t.sizes];
+    expect(typed.at(-1), 'the measured 1700px glass did not shrink the type').toBeLessThan(14);
+    expect(clipNotice(view), 'a glass that fits was called clipped').toBeNull();
+
+    t.blind(true);
+    glass.width = 390;
+    resizeWindow();
+    await frame();
+
+    expect(t.sizes, 'an unmeasurable glass was re-typed').toEqual(typed);
+    expect(clipNotice(view), 'an unmeasurable glass was called clipped').toBeNull();
+    expect(frameTypes(ws), 'an unmeasurable glass sent the pane a frame').toEqual([]);
+  });
+
+  it('(h) keeps a clip it measured, until a measured fit clears it', async () => {
+    glass.width = 390;
+    const t = fakeTerm();
+    const { view, ws } = mount(t);
+    await frame();
+    expect(clipNotice(view), 'the 390px glass was not called clipped').not.toBeNull();
+    const typed = [...t.sizes];
+
+    t.blind(true);
+    glass.width = 2600;
+    resizeWindow();
+    await frame();
+    expect(t.sizes, 'an unmeasurable glass was re-typed').toEqual(typed);
+    expect(clipNotice(view), 'an unmeasurable glass cleared a measured clip').not.toBeNull();
+
+    t.blind(false);
+    resizeWindow();
+    await frame();
+    expect(clipNotice(view), 'a measured fit that fits did not clear the clip').toBeNull();
+    expect(frameTypes(ws)).toEqual([]);
   });
 });
