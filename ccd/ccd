@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=45197ca8da40db11084f80ad9d1a184d0631dd5653c2088aa121eff2dff4e1eb
+# ccrc:generated 1 sha256=b0d85171b80008bdbfd9d82edcc2e58bea134d6a04b7788fd012a1740be4f2a5
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -4224,7 +4224,7 @@ _session_state() {   # id -> running|unsupervised|unclaimed|stopped|restarting|o
   # it a FUTURE-dated stamp (clock skew, or a hand-edited registry) reads as
   # fresh forever — `now - sup` goes negative, which satisfies `< 120`
   # unconditionally and never ages out.
-  [[ "$sup" =~ ^[0-9]+$ ]] && (( now - sup >= 0 && now - sup < 120 )) && fresh=1
+  _sup_fresh "$sup" "$now" && fresh=1   # the ONE spelling of the 120 s supervisor heartbeat (keepalive parity)
   if _alive "$id"; then
     # §1.6, and the FIRST rung inside this branch on purpose — the same position
     # the TS ladder puts it in, because both are driven from one fixture. A live
@@ -23601,6 +23601,17 @@ _ws_unit_state() {   # id -> enabled|loaded|absent, or EMPTY where there is no s
   echo absent
 }
 
+# THE SUPERVISOR-HEARTBEAT FRESHNESS RULE, SPELLED ONCE: a `supervised` stamp is
+# fresh when it is a bare integer no more than 120 s old and not in the future
+# (`>= 0` — a future-dated stamp would otherwise read fresh forever).
+# `_session_state` and `_supervised_start`'s held-wait report both ask it, and
+# `keepalive-freshness-parity.test.ts` holds the telemetry keepalive's
+# `KA_SESSION_FRESH` to this one number — so it may exist in exactly one place.
+_sup_fresh() {   # sup now -> rc 0 iff the heartbeat stamp `sup` is fresh at `now`
+  local sup="$1" now="$2"
+  [[ "$sup" =~ ^[0-9]+$ ]] && (( now - sup >= 0 && now - sup < 120 ))
+}
+
 _supervised_start() {   # id — ask the UNIT to spawn, then WAIT for an observable verdict.
   # `ccd start`/`ccd ensure` outside a unit become `_svc_enable_now`, and the unit's
   # ExecStart (`ccd supervise %i`) does the spawning it already does. That is what makes a restarted
@@ -23671,7 +23682,7 @@ _supervised_start() {   # id — ask the UNIT to spawn, then WAIT for an observa
     # pre-flight has asked whether the job still holds anything (PR4).
     if [[ -e "$REG/$id.bgwait" ]]; then
       bw=$(_reg_get "$id" bgwait); sup=$(_reg_get "$id" supervised); printf -v now '%(%s)T' -1
-      if [[ "$(_rw_field "$bw" state)" == open && "$sup" =~ ^[0-9]+$ ]] && (( now - sup >= 0 && now - sup < 120 )) \
+      if [[ "$(_rw_field "$bw" state)" == open ]] && _sup_fresh "$sup" "$now" \
          && _ci_bgwait_owner_live "$bw"; then
         echo "ccd: $id: its supervisor is waiting — background job $(_rw_field "$bw" job) holds conversation $(_rw_field "$bw" id); the pane comes back on its own when that job ends ($(_rw_field "$bw" wrapper) attach $(_rw_field "$bw" job) opens it there; $(_rw_field "$bw" wrapper) stop $(_rw_field "$bw" job) ends it)" >&2
         return 1
