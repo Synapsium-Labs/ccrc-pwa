@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=d2618373194325372c73cc826847e68baebaadf2854e854474ef96e276521e5a
+# ccrc:generated 1 sha256=7a62cb836c8221dbfae839a13d3bb406c6c7c086f9aff272e8bf88fdd016e21f
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -12856,7 +12856,7 @@ cmd_ws_audit() {   # ccd ws-audit --session <id> — read-only about the WORKSPA
     (( $# == 4 )) && defer=1
   fi
   local id=$2
-  [[ $id =~ ^[A-Za-z0-9._-]+$ ]] || die "bad session id"
+  [[ $id =~ ^[A-Za-z0-9._-]+$ ]] && { [[ $mode != reclaim ]] || _ws_tmproot_id_ok "$id"; } || die "bad session id"
 
   # `_json_str`'s status, checked ONCE and up front — the same probe, for the
   # same reason, as `_ws_archive_manifest` (ccd:8133). Nineteen `_json_str` substitutions
@@ -31142,7 +31142,7 @@ cmd_ws_reclaim() {   # ccd ws-reclaim --expect <token> --child-of <runId> --sess
   #   - a malformed session id, because it is no id to journal against;
   #   - the python3 probe below, which cannot journal at all, because the
   #     journal's encoder (`_lc_json`) is python3.
-  _reg_id_ok "$id"                       || die "bad session id"
+  _ws_tmproot_id_ok "$id" || die "bad session id"
   [[ $token =~ ^[0-9a-f]{64}$ ]]         || _lc_refuse reclaim "$id" token-malformed "bad token"
   # wave 1's grammar, ASCII under LC_ALL=C
   _child_runid_valid "$childof"          || _lc_refuse reclaim "$id" run-id-malformed "bad run id"
@@ -31972,8 +31972,8 @@ cmd_ws_expire() {   # ccd ws-expire --expect <token> --session <id> [--surface <
     || die "usage: ccd ws-expire --expect <token> --session <id> [--surface <word>] [--actor <text>] [--reason <text>]"
   local token=$2 id=$4
   [[ $token =~ ^[0-9a-f]{64}$ ]]         || die "bad token"
-  # NO FLAG SPELLING BINDS: `_reg_id_ok` refuses a leading `-` (path-identity spec §2.4), before the reap lock.
-  _reg_id_ok "$id"                       || die "bad session id"
+  # NO FLAG SPELLING AND NO DOT-LEADING NAME BINDS: `_ws_tmproot_id_ok` refuses both (path-identity spec §2.4, §2.6), before the reap lock.
+  _ws_tmproot_id_ok "$id" || die "bad session id"
   _json_str probe >/dev/null 2>&1 \
     || die "python3 unavailable — cannot quote the expiry record safely"
   # THE FLAVOUR, for this call and everything it reaches (THE FLAVOUR, RECLAIM region).
@@ -32109,7 +32109,7 @@ _ws_expire_audit() {   # id -> `ccd ws-audit --session <id> --expire`, whole: th
 
 _ws_expire_audit_contained() {   # `_ws_expire_audit`'s body, run under `_ws_reclaim_contained` — call that
   local id="$1" exists=false aliveflag=false workdir reaping sens="[" first=1 s
-  [[ $id =~ ^[A-Za-z0-9._-]+$ ]] || die "bad session id"
+  _ws_tmproot_id_ok "$id" || die "bad session id"
   _json_str probe >/dev/null 2>&1 \
     || die "python3 unavailable — cannot quote the audit record safely"
   _alive "$id" && aliveflag=true
@@ -34169,7 +34169,7 @@ cmd_ws_collect() {   # ccd ws-collect --expect <token> --session <id> [--surface
   local token=$2 id=$4
   [[ $token =~ ^[0-9a-f]{64}$ ]]                            || die "bad token"
   # NO FLAG SPELLING BINDS (`_reg_id_ok`, path-identity spec §2.4), and no dot-leading name (`_ws_tmproot_id_ok`).
-  _reg_id_ok "$id" && _ws_tmproot_id_ok "$id"               || die "bad session id"
+  _ws_tmproot_id_ok "$id" || die "bad session id"
   _json_str probe >/dev/null 2>&1 \
     || die "python3 unavailable — cannot quote the collection record safely"
   # THE FLAVOUR `_ws_reclaim_fail` journals under (act `collect`, verb
