@@ -1664,9 +1664,19 @@ BS1 (Task 3 Step 5).
 
 - BS1 (`--depth === 0` → `--depth === -1` in the new `sliceTo`, at `6cabc4b86`) → 2 failed (CONTROL (R51 (c)): the slice ends at the handler's own closing brace, never on into what follows it; the stall-watch block, docstring included, and stallsettings.ts hold no device word) in `stall-settings-route.test.ts`; the first fires at `sliceTo`'s `expect(end, …)` (`AssertionError: app.post('/api/coord/stall-watch''s handler never closes — the slice would run on: expected -1 to be greater than -1`), because the planted handler never reaches depth -1; the second is the predicted spill, since on the real file the end moves to the enclosing function's brace and the block then holds the docstring's device word (`the stall-watch routes' prose names a device: expected '/** \`GET\`/\`POST /api/coord/stall-watc…' not to match /phone/i`); the other rows, including the two POST-handler device rows, stay green (37 passed of 39)
 
-### Task 5 (at `<commit>`)
+### Task 5 (at `c53387f6d`)
 
 The red-first run (Step 1), DW1 before (Step 2), and SD1, SD2, SD3, DW1, DW2 and DW3 (Step 10).
+
+- Red-first run (Step 1; `./node_modules/.bin/vitest run test/single-definition.test.ts -t 'words a duration once'` at
+  the pre-implementation tree, `99b651592` plus the one describe) → 2 failed (the template is spelled on a code line in shared/stall-watch.ts alone; the section and the feed body import it from L0); the CONTROL (the fingerprint sees the template and not another shape) passed. The first received `pwa/src/screens/StallWatchSection.tsx` and `server/src/coord/stallsettings.ts` as holders; the second fails on `pwa/src/screens/StallWatchSection.tsx`, the first reader its loop meets
+- DW1 before (Step 2, at `99b651592`: `|kiosks?` added to the PWA's `DEVICE_WORD` in `settings-screen.test.tsx`, and ` on a kiosk` planted after "the push bell" in README's Settings paragraph) → 0 failed (6 passed of 6, in `stall-settings-readme.test.ts`: the server's copy lacks the word, the hole)
+- SD1 (the old `stallQuietWords` function body pasted back into `stallsettings.ts` in place of the alias) → 1 failed (the template is spelled on a code line in shared/stall-watch.ts alone; received `server/src/coord/stallsettings.ts` beside the real home) in the whole of `single-definition.test.ts` (539 passed of 540)
+- SD2 (`'../../../shared/stall-watch.js'` dropped from M19b's `ALLOWED` in `stall-settings.test.ts`) → 1 failed (takes value imports only from L0, stall.ts and turnidle.ts; anything else is a type import; `AssertionError: stallsettings.ts takes a value import from ../../../shared/stall-watch.js: expected [ '../../../shared/api.js', …(2) ] to include '../../../shared/stall-watch.js'`); 113 passed of 114
+- SD3 (`quietText`'s own body restored in `StallWatchSection.tsx`, and its `stallDurationText` import line deleted) → 2 failed (the template is spelled on a code line in shared/stall-watch.ts alone; the section and the feed body import it from L0) in the whole of `single-definition.test.ts` (538 passed of 540); both predicted titles red
+- DW1 (as in Step 2, at `c53387f6d`, after Step 7: `|kiosks?` added to the PWA's `DEVICE_WORD`, ` on a kiosk` planted in README) → 1 failed (the Settings paragraph names no device, as the section itself names none (§2, 2026-10-05); the paragraph matched the derived `DEVICE_WORD`); 5 passed of 6
+- DW2 (the PWA's `DEVICE_WORD` line duplicated) → 1 failed (the Settings paragraph names no device, as the section itself names none (§2, 2026-10-05); `AssertionError: the PWA scan spells DEVICE_WORD once: expected [ [ …(3), index: 169217, …(2) ], …(1) ] to have a length of 1 but got 2`); 5 passed of 6
+- DW3 (control, README's "the push bell" → "the phone-push bell") → 1 failed (the Settings paragraph names no device, as the section itself names none (§2, 2026-10-05); the paragraph matched the derived `DEVICE_WORD` through "phone"); 5 passed of 6
 
 ### Task 7 (at `<commit>`)
 
