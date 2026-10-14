@@ -280,3 +280,20 @@ describe('App /docs route (M4.R2)', () => {
     expect(document.querySelector('.docs-screen')).toBe(first);
   });
 });
+
+// Docs W5.1 review 5-2: the pattern is `/docs` then a slash or the end. A word boundary would also take `/docs-x` and
+// `/docs.md`, which are not Docs pages; `/docsearch` alone was tested.
+describe('T13 review 5-2: /docs-x and /docs.md are not Docs', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it.each(['/docs-x', '/docs.md'])('%s renders the placeholder and data-view stays fleet', (url) => {
+    vi.stubGlobal('fetch', vi.fn(async () => { throw new TypeError('offline'); }));
+    navigate(url);
+    render(<App />);
+    expect(document.querySelector('.docs-screen')).toBeNull();
+    expect(screen.getByText('Select a session')).toBeInTheDocument();
+    expect(document.querySelector('.app-shell')).toHaveAttribute('data-view', 'fleet');
+  });
+});
