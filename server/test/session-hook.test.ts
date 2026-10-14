@@ -10287,10 +10287,10 @@ describe('exact-pane hook ownership: the session name is asked of $TMUX_PANE, ne
 // SubagentStart naming it, no main-thread event (Stop, StopFailure, PostCompact, PreCompact, SessionStart,
 // SessionEnd, UserPromptSubmit) carries one in any of the 140 captured scenarios, and the only SubagentStop with no
 // Start is the unpaired one around /compact (empty agent_type). The marker therefore trusts an id only once a
-// SubagentStart has named it in THIS owner's hookstate; the same payloads with their SubagentStarts taken out are the
-// measured "agent_id alone" lane (amendment `tool-agent-id-alone-is-unjoined-evidence`), and there the parent's own
-// tool call must be recorded. SessionStart and SessionEnd are left out of the replay: they carry no id and run the
-// card and teardown machinery this property does not need.
+// SubagentStart has named it in THIS owner's join file (`<id>.joined`); the same payloads with their SubagentStarts
+// taken out are the measured "agent_id alone" lane (amendment `tool-agent-id-alone-is-unjoined-evidence`), and there
+// the parent's own tool call must be recorded. SessionStart and SessionEnd are left out of the replay: they carry no
+// id and run the card and teardown machinery this property does not need.
 describe('a bare agent_id is not a subagent: captured delegation payloads replayed through the hook', () => {
   const FIXTURES = path.resolve(__dirname, 'fixtures/delegation');
   type Captured = { seq: number; event: string; envSid: string; payload: Record<string, unknown> & { agent_id?: string } };
@@ -10314,6 +10314,20 @@ describe('a bare agent_id is not a subagent: captured delegation payloads replay
     return rows;
   };
   const withoutStarts = (events: Captured[]): Captured[] => events.filter((e) => e.event !== 'SubagentStart');
+  /** `agent-input-keys-are-the-callers`: the Agent `tool_input` key set is whatever the calling model sends, and both real
+   *  lanes omitted `subagent_type`, which the rig's mock always sends. The classification reads no `tool_input` key. */
+  const withoutSubagentType = (events: Captured[]): Captured[] => {
+    let removed = 0;
+    const out = events.map((e) => {
+      const input = e.payload['tool_input'];
+      if (e.payload['tool_name'] !== 'Agent' || typeof input !== 'object' || input === null || !('subagent_type' in input)) return e;
+      removed += 1;
+      const { subagent_type: _gone, ...rest } = input as Record<string, unknown>;
+      return { ...e, payload: { ...e.payload, tool_input: rest } };
+    });
+    expect(removed, 'anti-vacuity: the capture\'s Agent launch events did carry a subagent_type').toBeGreaterThanOrEqual(1);
+    return out;
+  };
 
   const CASES: Array<[string, string]> = [
     ['2.1.280', 'agent-plain'], ['2.1.292', 'agent-plain'],
@@ -10347,7 +10361,26 @@ describe('a bare agent_id is not a subagent: captured delegation payloads replay
     }
   });
 
-  it('the captured unpaired SubagentStop (the /compact one, empty agent_type) admits nothing: its id is still the main thread', () => {
+  const AGENT_CASES = CASES.filter(([, scenario]) => scenario.startsWith('agent-'));
+  it.each(AGENT_CASES)('%s %s, agent-input-keys-are-the-callers: with `subagent_type` removed from every Agent launch the joined subagent is still a subagent', (version, scenario) => {
+    const rows = replay(withoutSubagentType(load(version, scenario)));
+    expect(rows.length).toBeGreaterThanOrEqual(2);
+    for (const r of rows) {
+      expect(r.joined, `seq ${r.seq}`).toBe(true);
+      expect(r.after, `seq ${r.seq}: the subagent's tool event left the marker as it found it`).toBe(r.before);
+    }
+  });
+
+  it.each(AGENT_CASES)('%s %s, agent-input-keys-are-the-callers: with `subagent_type` removed and the Starts taken out, the bare id is still the main thread', (version, scenario) => {
+    const rows = replay(withoutStarts(withoutSubagentType(load(version, scenario))));
+    const afterStop = rows.filter((r) => r.before !== null && (JSON.parse(r.before) as { state: string }).state === 'done');
+    expect(afterStop.length).toBeGreaterThanOrEqual(1);
+    for (const r of afterStop) {
+      expect(JSON.parse(r.after as string), `seq ${r.seq}`).toMatchObject({ state: 'working', event: expect.stringMatching(/ToolUse$/) });
+    }
+  });
+
+  it('post-turn-subagentstop-is-unpaired: the captured unpaired SubagentStop (empty agent_type, no Start), after the parent\'s Stop, admits nothing: its id is still the main thread', () => {
     for (const version of ['2.1.280', '2.1.292']) {
       const stray = (JSON.parse(fs.readFileSync(path.join(FIXTURES, version, 'clear-compact-resume.json'), 'utf8')) as { events: Captured[] })
         .events.find((e) => e.event === 'SubagentStop')!;

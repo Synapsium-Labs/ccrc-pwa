@@ -8,12 +8,11 @@
 // session-hook.test.ts's own lines are cited by the compaction-card audit, so
 // no row of this wave is inserted there.
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { execFileSync, spawnSync } from 'node:child_process';
+import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { mkTmp } from './tmpHelpers.js';
 import { readTurnMarkMeasured } from '../src/turnmark.js';
-import { readHookStateRawMeasured } from '../src/hookstate.js';
 import { localIO } from '../src/io.js';
 
 const HOOK = path.resolve(__dirname, '../../ccd/session-hook.sh');
@@ -210,6 +209,12 @@ const plantTurn = (line: string): void => { fs.writeFileSync(turnFile(), line); 
 /** The writer's key order: the base object in TURN_MARK_PROGRAM fixes it. */
 const TURN_KEYS: readonly string[] = ['v', 'sessionId', 'state', 'event', 'at', 'turnAt', 'stopAt', 'bg', 'bgKinds',
   'bgIds', 'err', 'restartAt', 'lostBg', 'lostKinds', 'lostIds'];
+
+/** The delegation join record (`<id>.joined`, delegation broker wave 3): one cleaned agent id per line, appended by a
+ *  SubagentStart. `undefined` when the file is absent, so "nothing was ever joined" reads differently from an empty list. */
+const joinFile = (): string => path.join(home, '.cc-sessions', 'demo-quiet-basin.joined');
+const joined = (): string[] | undefined =>
+  (fs.existsSync(joinFile()) ? fs.readFileSync(joinFile(), 'utf8').split('\n').filter((l) => l !== '') : undefined);
 
 describe('the turn marker (§5.1)', () => {
   /** A Stop's line with nothing carried: what the writer emits over a foreign or unreadable previous line. */
@@ -694,14 +699,14 @@ describe('the payload parse needs no regex engine', () => {
     noRegexJq();
     run({ hook_event_name: 'UserPromptSubmit' });
     run({ hook_event_name: 'SubagentStart', agent_id: 'a-1', agent_type: 'general-purpose' });
-    expect(readState()['joined'], 'the join was written by a jq that has no regex engine').toEqual(['a-1']);
+    expect(joined(), 'the join was recorded under a jq that has no regex engine').toEqual(['a-1']);
     run({ hook_event_name: 'Stop' });
     const done = turnRaw();
     run({ hook_event_name: 'PostToolUse', tool_name: 'Bash', tool_input: { command: 'true' }, agent_id: 'a-1' });
     expect(turnRaw(), 'the joined id').toBe(done);
     run({ hook_event_name: 'PostToolUse', tool_name: 'Bash', tool_input: { command: 'true' }, agent_id: 'a-bare' });
     expect(turnMark().state, 'the bare id').toBe('working');
-    expect(readState()['joined'], 'and the list was carried through the rewrites').toEqual(['a-1']);
+    expect(joined(), 'and the record is untouched by the main events').toEqual(['a-1']);
   });
 
   /** The regex builtins a jq built without Oniguruma cannot run; `sub(` covers `gsub(`. */
@@ -716,27 +721,20 @@ describe('the payload parse needs no regex engine', () => {
       return src.slice(from, src.indexOf(close, from));
     };
     const parse = between('{ read -r event; read -r psid; read -r paid; read -r aid; } < <(jq -r \'', '\' <<<"$payload"');
-    // The hookstate read (it carries the join list in) and the hookstate write (it carries it out) run on every event too.
-    const carryIn = between('read -r joined; read -r subs; } < <(jq -r \\\n  \'', '\' \\\n  "$f"');
-    const carryOut = between('--arg joinadd "$joinadd" \\\n  \'', '\') || exit 0');
     const mark = between('TURN_MARK_PROGRAM=\'\n', '\'\n');
     // Landmarks, so a renamed variable or a moved quote cannot leave this scanning nothing: each extraction must open
     // and close on the program's own text.
     expect(parse.startsWith('def keep(f):'), 'the payload parse program opens on its first definition').toBe(true);
     expect(parse).toContain('.agent_id');
-    expect(parse.endsWith('| .[0:64])'), 'and closes on its last term, the cleaned id').toBe(true);
-    expect(carryIn.startsWith('def okid:'), 'the join list read opens on its definition').toBe(true);
-    expect(carryIn.endsWith('(.subagents // [] | tostring)'), 'and closes on the subagent list').toBe(true);
-    expect(carryOut.startsWith('{v:$v, state:$state'), 'the hookstate write opens on its object').toBe(true);
-    expect(carryOut).toContain('{joined: .}');
+    expect(parse.endsWith('else "" end)'), 'and closes on its last term, the raw id or nothing').toBe(true);
+    expect(parse, 'the id alphabet and its length bound are spelled once, by name').toContain('def idch:');
+    expect(parse).toContain('def idmax: 64;');
     expect(mark.startsWith('def csv:'), 'the marker program opens on its first definition').toBe(true);
     for (const kind of ['working', 'done', 'failed', 'restart', 'clear']) expect(mark, kind).toContain(`$kind == "${kind}"`);
     expect(mark.endsWith('else empty end'), 'and closes on its last branch').toBe(true);
     // CONTROL: the scan sees a regex builtin when there is one, `gsub` through its `sub(`.
     expect(regexCalls('. | test("x") | gsub("a"; "b") | capture("c") | scan("d")')).toEqual(['test(', 'sub(', 'capture(', 'scan(']);
     expect(regexCalls(parse), 'the payload parse runs on every event').toEqual([]);
-    expect(regexCalls(carryIn), 'so does the hookstate read').toEqual([]);
-    expect(regexCalls(carryOut), 'and the hookstate write').toEqual([]);
     expect(regexCalls(mark), 'a marker branch that no row runs is still bound').toEqual([]);
   });
 
@@ -834,33 +832,52 @@ describe('SessionEnd (delegation broker §5.3)', () => {
   });
 });
 
+
 // ── A bare agent_id is not a subagent (delegation broker wave 3, Task 2) ──
 // The turn marker used to read ANY non-empty `agent_id` as a subagent's event and write nothing. The real
 // lanes show why that is wrong (ledger amendment `tool-agent-id-alone-is-unjoined-evidence`): a main-checkout
 // PreToolUse carried an `agent_id` that no launch response, SubagentStart or SubagentStop ever named, so the
-// parent's own tool call went unrecorded. Now only an id with a QUALIFYING JOIN — a SubagentStart for that id in
-// this owner's hookstate (`joined`) — is a subagent to the marker. A join is a fact, not liveness: the SubagentStop
-// does not take it back, and an unpaired SubagentStop (a post-turn one, or the /compact one) never gives it.
-// `$paid` itself is untouched (the spool gate, the role-skill guard and the wait rules still read "any id").
+// parent's own tool call went unrecorded. Now only an id with a QUALIFYING JOIN — a SubagentStart for that id,
+// recorded in this owner's join file `<id>.joined` — is a subagent to the marker. A join is a fact, not liveness:
+// the SubagentStop does not take it back, and an unpaired SubagentStop (`post-turn-subagentstop-is-unpaired`, and the
+// /compact one) never gives it. `$paid` itself is untouched (the spool gate, the role-skill guard and the wait rules
+// still read "any id"). The join lives in a file of its own, appended with one short write, because hookstate.json is
+// rewritten whole by every event and a join kept there was lost to a concurrent hook (the concurrency rows below).
 describe('only an agent id with a qualifying join is a subagent to the turn marker (delegation broker wave 3)', () => {
-  const start = (id: string, extra: Record<string, unknown> = {}): void => {
+  const start = (id: unknown, extra: Record<string, unknown> = {}): void => {
     run({ hook_event_name: 'SubagentStart', agent_id: id, agent_type: 'general-purpose', ...extra });
   };
   /** The stop of a joined subagent carries its type; the UNPAIRED stops of the real lanes (post-turn, /compact) carry none. */
   const stop = (id: string, agent_type = 'general-purpose'): void => {
     run({ hook_event_name: 'SubagentStop', agent_id: id, agent_type });
   };
-  const tool = (id: string, event: 'PreToolUse' | 'PostToolUse' = 'PreToolUse', extra: Record<string, unknown> = {}): void => {
+  const tool = (id: unknown, event: 'PreToolUse' | 'PostToolUse' = 'PreToolUse', extra: Record<string, unknown> = {}): void => {
     run({ hook_event_name: event, tool_name: 'Bash', tool_input: { command: 'true' }, agent_id: id, ...extra });
   };
-  /** A finished main turn with the hookstate in place (a SubagentStart before any hookstate is inert): the done line. */
+  /** A finished main turn with the hookstate in place: the done line. */
   const doneLine = (): string => {
     run({ hook_event_name: 'UserPromptSubmit' });
     run({ hook_event_name: 'Stop' });
     expect(turnMark().state, 'fixture: the main turn is done').toBe('done');
     return turnRaw();
   };
-  const joined = (): unknown => readState()['joined'];
+  /** Is `id` a subagent to the marker? Measured by behaviour, the only thing that matters: a tool event under it, over a
+   *  done line, leaves the line alone (joined) or re-opens the turn (not). Every call starts from its own Stop. */
+  const isJoined = (id: unknown): boolean => {
+    run({ hook_event_name: 'Stop' });
+    const done = turnRaw();
+    tool(id);
+    return turnRaw() === done;
+  };
+  /** One hook process, started now: resolves when it exits 0. */
+  const runAsync = (payload: object): Promise<void> => new Promise((resolve, reject) => {
+    const child = spawn('bash', [HOOK], { env: hookEnv({}), stdio: ['pipe', 'ignore', 'ignore'] });
+    child.on('error', reject);
+    child.on('close', (code) => (code === 0 ? resolve() : reject(new Error(`the hook exited ${code}`))));
+    child.stdin.end(JSON.stringify(payload));
+  });
+  const later = (ms: number, payload: object): Promise<void> =>
+    new Promise((resolve, reject) => { setTimeout(() => { runAsync(payload).then(resolve, reject); }, ms); });
 
   it('a main PreToolUse carrying an agent_id nobody joined is the main thread: it stamps working', () => {
     doneLine();
@@ -926,16 +943,16 @@ describe('only an agent id with a qualifying join is a subagent to the turn mark
     expect(turnRaw()).toBe(done);
   });
 
-  it('an unpaired SubagentStop admits nothing: the id it names stays the main thread', () => {
+  it('post-turn-subagentstop-is-unpaired: an unpaired SubagentStop admits nothing, and the id it names stays the main thread', () => {
     const done = doneLine();
-    stop('a-9', '');
+    stop('a-9', '');   // the real shape: after the parent's Stop, an id, an EMPTY agent_type, no SubagentStart
     expect(joined(), 'no join recorded').toBeUndefined();
     expect(turnRaw(), 'and the stop itself touched no marker').toBe(done);
     tool('a-9', 'PreToolUse');
     expect(turnMark()).toMatchObject({ state: 'working', event: 'PreToolUse' });
   });
 
-  it('an unpaired stop beside a real join changes neither: the joined id stays joined, the unpaired one stays unjoined', () => {
+  it('post-turn-subagentstop-is-unpaired: beside a real join it changes neither answer (the joined id stays joined, the unpaired one stays unjoined)', () => {
     const done = doneLine();
     start('a-1');
     stop('a-9', '');
@@ -947,15 +964,16 @@ describe('only an agent id with a qualifying join is a subagent to the turn mark
     expect(turnMark().state, 'the unpaired id').toBe('working');
   });
 
-  it('a SubagentStart before any hookstate is inert (no join recorded), so its events read as the main thread', () => {
+  it('a SubagentStart before any hookstate still records its join: the record needs only the live row', () => {
     start('a-1');
-    expect(fs.existsSync(stateFile()), 'fixture: nothing written').toBe(false);
-    doneLine();
+    expect(fs.existsSync(stateFile()), 'fixture: the Start wrote no hookstate').toBe(false);
+    expect(joined()).toEqual(['a-1']);
+    const done = doneLine();
     tool('a-1');
-    expect(turnMark().state).toBe('working');
+    expect(turnRaw(), 'and its events stay off the marker').toBe(done);
   });
 
-  it('a SubagentStart with no usable id (absent, empty, or all stripped by the cleaning) joins nobody', () => {
+  it('a SubagentStart with no usable id (absent, empty, or not a plain id) joins nobody', () => {
     doneLine();
     run({ hook_event_name: 'SubagentStart', agent_type: 'general-purpose' });
     run({ hook_event_name: 'SubagentStart', agent_id: '', agent_type: 'general-purpose' });
@@ -963,16 +981,26 @@ describe('only an agent id with a qualifying join is a subagent to the turn mark
     expect(joined()).toBeUndefined();
     expect(readState()['subagents'], 'the live list still counts them, as before').toHaveLength(3);
     tool('é;é');
-    expect(turnMark().state, 'an id the cleaning strips to nothing is never joined').toBe('working');
+    expect(turnMark().state, 'an id that is not a plain id is never joined').toBe('working');
   });
 
-  it('the membership is the cleaned id: the join and the event are cleaned the same way', () => {
-    const done = doneLine();
-    start('a 1;x');
-    expect(joined()).toEqual(['a1x']);
-    tool('a1x');
-    tool('a;1 x', 'PostToolUse');
-    expect(turnRaw()).toBe(done);
+  it('the membership is the RAW id: one that is not already 1-64 of [A-Za-z0-9_-] is never recorded and never suppresses the marker', () => {
+    doneLine();
+    start('a-1');
+    expect(isJoined('a-1'), 'control: a plain id joins').toBe(true);
+    const long64 = `L${'x'.repeat(63)}`;
+    start(long64);
+    expect(isJoined(long64), 'the 64-character edge joins').toBe(true);
+    const bad: unknown[] = ['a 1', 'a;1', 'é1', 'a-1\n', ' a-1', 'a-1;', 'A-1x;', `${long64}y`, 7, true, ['a-1'], { id: 'a-1' }];
+    for (const raw of bad) {
+      const before = joined();
+      start(raw);
+      expect(joined(), `${JSON.stringify(raw)} was not recorded`).toEqual(before);
+      expect(isJoined(raw), `${JSON.stringify(raw)} is the main thread`).toBe(false);
+    }
+    // THE LOOKALIKE: 'a-1;' cleans to the joined 'a-1', and a cleaned match would let it ride that join.
+    expect(isJoined('a-1;'), 'a lookalike of a joined id').toBe(false);
+    expect(isJoined('a-1'), 'and the joined id itself is unharmed').toBe(true);
   });
 
   it('an id is matched whole: a joined id does not make its prefix, its extension or a neighbour a subagent', () => {
@@ -990,70 +1018,177 @@ describe('only an agent id with a qualifying join is a subagent to the turn mark
     }
   });
 
-  it('a repeated start moves the id to the end instead of listing it twice; the list carries across every other event', () => {
+  it('the record is append-only: a repeated start lists the id twice, and no other event rewrites the file', () => {
     doneLine();
     start('a-1');
     start('a-2');
     start('a-1');
-    expect(joined()).toEqual(['a-2', 'a-1']);
+    expect(joined()).toEqual(['a-1', 'a-2', 'a-1']);
+    const bytes = fs.readFileSync(joinFile());
+    const mtime = fs.statSync(joinFile()).mtimeMs;
     run({ hook_event_name: 'UserPromptSubmit' });
-    run({ hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command: 'true' } });
+    tool('a-1', 'PreToolUse');
+    stop('a-1');
     run({ hook_event_name: 'Stop' });
-    expect(joined(), 'main events carry the list through their rewrites').toEqual(['a-2', 'a-1']);
+    expect(fs.readFileSync(joinFile()), 'main events, tool events and a stop leave it byte-identical').toEqual(bytes);
+    expect(fs.statSync(joinFile()).mtimeMs).toBe(mtime);
   });
 
-  it('the list keeps the 64 most recent joins: the 65th evicts the oldest, and only the oldest', () => {
-    doneLine();
-    const ids = Array.from({ length: 64 }, (_, i) => `j${i}`);
-    const st = readState();
-    fs.writeFileSync(stateFile(), JSON.stringify({ ...st, joined: ids }) + '\n');
-    start('j-new');
-    expect(joined()).toEqual([...ids.slice(1), 'j-new']);
-    const done = turnRaw();
-    tool('j1');
-    tool('j63', 'PostToolUse');
-    tool('j-new');
-    expect(turnRaw(), 'the 63 survivors and the newcomer are still subagents').toBe(done);
-    tool('j0');
-    expect(turnMark().state, 'the evicted id is unjoined again').toBe('working');
+  describe('the file is bounded: a SubagentStart past 128 lines rewrites it to the 64 most recent', () => {
+    const plant = (n: number): string[] => {
+      const ids = Array.from({ length: n }, (_, i) => `j${i}`);
+      fs.writeFileSync(joinFile(), `${ids.join('\n')}\n`);
+      return ids;
+    };
+    it('at 128 lines it only appends; the 129th rewrites it, keeping exactly the 64 most recent and leaving no temp behind', () => {
+      doneLine();
+      const ids = plant(127);
+      start('j-new');
+      expect(joined(), 'the 128th line: appended, no rewrite').toEqual([...ids, 'j-new']);
+      start('j-newer');
+      const all = [...ids, 'j-new', 'j-newer'];
+      expect(joined(), 'the 129th: rewritten to the 64 most recent').toEqual(all.slice(-64));
+      expect(joined()).toHaveLength(64);
+      expect(fs.readdirSync(reg()).filter((n) => n.endsWith('.tmp')), 'no temp left behind').toEqual([]);
+      expect(fs.statSync(joinFile()).isFile()).toBe(true);
+    });
+
+    it('the 64 survive and the 65th-oldest does not: j65 is still a subagent, j64 is the main thread again', () => {
+      doneLine();
+      plant(128);
+      start('j-new');   // 129 entries -> the last 64: j65..j127 (63 of them) and j-new
+      expect(joined()![0]).toBe('j65');
+      expect(joined()).toHaveLength(64);
+      expect(isJoined('j65'), 'the oldest survivor').toBe(true);
+      expect(isJoined('j-new'), 'the newcomer').toBe(true);
+      expect(isJoined('j64'), 'the first evicted').toBe(false);
+      expect(isJoined('j0'), 'an old one').toBe(false);
+    });
+
+    it('an append after the rewrite lands in the new file', () => {
+      doneLine();
+      plant(128);
+      start('j-new');
+      start('j-after');
+      expect(joined()!.slice(-2)).toEqual(['j-new', 'j-after']);
+      expect(isJoined('j-after')).toBe(true);
+    });
   });
 
-  it('a hookstate that carries no list, or a corrupt one, makes every id unjoined and never breaks the write', () => {
+  describe('what the file may hold', () => {
+    it('garbage content: a line is a join only if it is, whole and newline-terminated, the id', () => {
+      doneLine();
+      fs.writeFileSync(joinFile(), ['a-1', '', '   ', 'bad id', 'é', 'b-2 ', 'c-3\r', '-d_4', 'e-5'].join('\n'));   // no final newline
+      const outcome = Object.fromEntries(['a-1', 'bad', 'id', 'b-2', 'c-3', '-d_4', 'e-5', 'a'].map((id) => [id, isJoined(id)]));
+      expect(outcome).toEqual({ 'a-1': true, bad: false, id: false, 'b-2': false, 'c-3': false, '-d_4': true, 'e-5': false, a: false });
+    });
+
+    it('a binary or oversized file never matches an id it does not hold, and never breaks the hook', () => {
+      doneLine();
+      fs.writeFileSync(joinFile(), Buffer.concat([Buffer.from('a-1\n'), Buffer.alloc(40_000, 0xff), Buffer.from('\nz-9\n')]));
+      expect(isJoined('a-1'), 'inside the read window').toBe(true);
+      expect(isJoined('z-9'), 'past the read window: fails toward the main turn').toBe(false);
+      expect(isJoined('q-1')).toBe(false);
+    });
+
+    it('a directory, a symlink or a FIFO at the path joins nobody, is never written through, and never blocks the hook', () => {
+      doneLine();
+      fs.writeFileSync(path.join(home, 'elsewhere'), 'a-1\n');
+      for (const make of [
+        () => fs.mkdirSync(joinFile()),
+        () => fs.symlinkSync(path.join(home, 'elsewhere'), joinFile()),
+        () => { execFileSync('mkfifo', [joinFile()]); },
+      ]) {
+        fs.rmSync(joinFile(), { recursive: true, force: true });
+        make();
+        for (const payload of [
+          { hook_event_name: 'SubagentStart', agent_id: 'a-2', agent_type: 'general-purpose' },
+          { hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command: 'true' }, agent_id: 'a-1' },
+        ]) {
+          const t0 = Date.now();
+          const r = spawnSync('bash', [HOOK], { input: JSON.stringify(payload), encoding: 'utf8', env: hookEnv({}), timeout: 20_000 });
+          expect(r.status, `${payload.hook_event_name}: exit 0, never blocked`).toBe(0);
+          expect(Date.now() - t0).toBeLessThan(15_000);
+        }
+        expect(fs.readFileSync(path.join(home, 'elsewhere'), 'utf8'), 'nothing was written through').toBe('a-1\n');
+        expect(turnMark().state, 'the event under the id the file seems to hold read as the main thread').toBe('working');
+        run({ hook_event_name: 'Stop' });
+      }
+    });
+  });
+
+  describe('only a live row, and only the pane that owns it, gets a join file', () => {
+    it('control: the fixture row\'s own pane writes it', () => {
+      start('a-1');
+      expect(joined()).toEqual(['a-1']);
+    });
+
+    it('a purged row (no .generation) gets none', () => {
+      fs.rmSync(path.join(reg(), 'demo-quiet-basin.generation'));
+      start('a-1');
+      expect(fs.readdirSync(reg()).filter((n) => n.endsWith('.joined'))).toEqual([]);
+    });
+
+    it('a pane that names another row, or none, gets none', () => {
+      fs.writeFileSync(path.join(home, 'bin', 'tmux'), '#!/bin/sh\necho "cc-other-row"\n', { mode: 0o755 });
+      start('a-1');
+      expect(fs.readdirSync(reg()).filter((n) => n.endsWith('.joined')), 'another row without a generation').toEqual([]);
+      fs.writeFileSync(path.join(reg(), 'other-row.generation'), GENERATION);
+      start('a-1');
+      expect(fs.existsSync(path.join(reg(), 'other-row.joined')), 'the pane\'s own row, live: its file').toBe(true);
+      expect(fs.existsSync(joinFile()), 'and never the fixture row\'s').toBe(false);
+      fs.writeFileSync(path.join(home, 'bin', 'tmux'), '#!/bin/sh\nexit 1\n', { mode: 0o755 });
+      fs.rmSync(path.join(reg(), 'other-row.joined'));
+      start('a-1');
+      expect(fs.readdirSync(reg()).filter((n) => n.endsWith('.joined')), 'a tmux that cannot answer').toEqual([]);
+    });
+  });
+
+  describe('concurrent hooks never lose a join (the record is not read-modified-written)', () => {
+    /** The ids whose events the marker does NOT treat as a subagent's. */
+    const lost = (ids: string[]): string[] => ids.filter((id) => !isJoined(id));
+
+    it('agent-input-keys-are-the-callers: a SubagentStart beside the parent\'s Agent launch event and a joined sibling\'s event, 24 times, mostly Start-first', async () => {
+      doneLine();
+      start('sib');
+      const ids: string[] = [];
+      const DELAYS = [3, 8, 15, 30];
+      for (let i = 0; i < 24; i += 1) {
+        const id = `c${i}`;
+        ids.push(id);
+        // The launch event as the real lanes send it: no `subagent_type` in the Agent tool_input.
+        const launch = { hook_event_name: 'PostToolUse', tool_name: 'Agent', tool_input: { prompt: 'x' } };
+        const sibling = { hook_event_name: 'PostToolUse', tool_name: 'Bash', tool_input: { command: 'true' }, agent_id: 'sib' };
+        const starting = { hook_event_name: 'SubagentStart', agent_id: id, agent_type: 'general-purpose' };
+        const d = DELAYS[i % DELAYS.length]!;
+        // Two of every three trials are the order the captures show most (the Start first, the launch event landing
+        // within a few ms); the third is the launch event first.
+        const race = i % 3 !== 2
+          ? [runAsync(starting), later(d, launch), later(d + 5, sibling)]
+          : [runAsync(launch), later(d, starting)];
+        await Promise.all(race);
+      }
+      expect(lost(['sib', ...ids]), 'every join survived the hooks that ran beside it').toEqual([]);
+    }, 120_000);
+
+    it('a workflow fan-out: eight SubagentStarts at once, three rounds, all recorded', async () => {
+      doneLine();
+      const ids: string[] = [];
+      for (let round = 0; round < 3; round += 1) {
+        const batch = Array.from({ length: 8 }, (_, k) => `w${round}-${k}`);
+        ids.push(...batch);
+        await Promise.all(batch.map((id) => runAsync({ hook_event_name: 'SubagentStart', agent_id: id, agent_type: 'workflow-subagent' })));
+      }
+      expect(lost(ids), 'every start of the fan-out is a join').toEqual([]);
+      expect([...(joined() ?? [])].sort(), 'one line each, none lost').toEqual([...ids].sort());
+    }, 120_000);
+  });
+
+  it('hookstate.json no longer carries the join: after a Start with an id its keys are the base shape', () => {
     doneLine();
     start('a-1');
-    const st = readState();
-    for (const bad of [null, 'a-1', 7, { 0: 'a-1' }, ['a-1', 7, null, 'b\nc', { x: 1 }]]) {
-      fs.writeFileSync(stateFile(), JSON.stringify({ ...st, joined: bad }) + '\n');
-      run({ hook_event_name: 'Stop' });   // main event: rewrites the hookstate over the odd list
-      const after = readState();
-      expect(after['state'], `joined ${JSON.stringify(bad)}: the write went through`).toBe('done');
-      // Only plain-id strings survive the carry; the odd shapes come out as no list, or as the one clean id.
-      expect(after['joined'] === undefined || (Array.isArray(after['joined']) && after['joined'].every((x) => /^[A-Za-z0-9_-]+$/.test(String(x)))),
-        `joined ${JSON.stringify(bad)} reads back clean`).toBe(true);
-    }
-    fs.rmSync(stateFile());
-    run({ hook_event_name: 'UserPromptSubmit' });
-    run({ hook_event_name: 'Stop' });
-    tool('a-1');
-    expect(turnMark().state, 'a hookstate with no list: unjoined').toBe('working');
-  });
-
-  it('the hookstate stays readable by the server reader with the additive key in it', async () => {
-    doneLine();
-    start('a-1');
-    expect(joined()).toEqual(['a-1']);
-    const r = await readHookStateRawMeasured(localIO, path.join(home, '.cc-sessions'), 'demo-quiet-basin', 'uuid-1');
-    expect(r.ok, JSON.stringify(r)).toBe(true);
-    if (!r.ok) return;
-    expect(r.state.state).toBe('done');
-    expect(r.state.subagents).toHaveLength(1);
-  });
-
-  it('the hookstate has no `joined` key until a SubagentStart names an id: every other write keeps its shape', () => {
-    run({ hook_event_name: 'UserPromptSubmit' });
-    run({ hook_event_name: 'SubagentStart', agent_type: 'general-purpose' });
-    run({ hook_event_name: 'Stop' });
-    expect(Object.keys(readState())).not.toContain('joined');
+    expect(Object.keys(readState())).toEqual(['v', 'state', 'event', 'sessionId', 'pid', 'updatedAt', 'ask', 'subagents',
+      'graphQueries', 'graphGateDenials', 'ccrcPeerReads', 'ccrcClaims']);
   });
 
   describe('the membership read costs no fork', () => {

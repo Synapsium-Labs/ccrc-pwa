@@ -2644,3 +2644,25 @@ describe('_reg_purge takes the turn marker with the row (stall watch wave 2)', (
     expect(h.reg(id, 'uuid'), 'and so did the rest of the row').toBeNull();
   });
 });
+
+// ── The delegation join record goes with its row (delegation broker wave 3, Task 2) ─────────────────────────────
+// `session-hook.sh` appends the ids a SubagentStart named to `$REG/<id>.joined`: a DOT-FREE suffix on purpose, so the
+// purge loop's glob unlinks it with the row and no explicit name is needed (unlike the two-dot hookstate and turn
+// marker above). Dot-free is also what makes a LEFTOVER one hold the slug under `_ws_slug_free`'s any-field check, which is
+// why the hook writes it only while the row's `.generation` stands (`_reg_purge` removes that last).
+describe('_reg_purge takes the delegation join record with the row (delegation broker wave 3)', () => {
+  it('removes <id>.joined, leaves a longer id\'s and a nested id\'s standing, and the slug reads free again', () => {
+    const id = seed();
+    const REGD = path.join(h.home, '.cc-sessions');
+    fs.writeFileSync(path.join(REGD, `${id}.joined`), 'aef14f3b6908dc0a9\n');
+    const neighbours = [`${id}x.joined`, `${id}.x-y.joined`];
+    for (const n of neighbours) fs.writeFileSync(path.join(REGD, n), 'a-1\n');
+    expect(h.sh(`_ws_slug_free demo still-river; echo "free=$?"`), 'a dot-free field holds the slug while it stands').toContain('free=1');
+    const out = h.sh(`_reg_purge ${id}; echo "rc=$?"; echo "unremoved=[$REG_PURGE_UNREMOVED]"`);
+    expect(out, 'nothing was refused').toContain('rc=0');
+    expect(out, 'and the out-parameter stays empty').toContain('unremoved=[]');
+    expect(fs.existsSync(path.join(REGD, `${id}.joined`)), 'goes with the row').toBe(false);
+    for (const n of neighbours) expect(fs.existsSync(path.join(REGD, n)), `${n} is another row's`).toBe(true);
+    expect(h.sh(`_ws_slug_free demo still-river; echo "free=$?"`), 'and the slug is free again').toContain('free=0');
+  });
+});

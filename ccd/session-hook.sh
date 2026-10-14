@@ -2764,7 +2764,7 @@ id="${tname#cc-}"
 [[ -d "$REG" ]] || exit 0
 command -v jq >/dev/null 2>&1 || exit 0
 
-{ read -r event; read -r psid; read -r paid; read -r aid; } < <(jq -r 'def keep(f): explode | map(select(f)) | implode; def alpha: (. >= 65 and . <= 90) or (. >= 97 and . <= 122); (.hook_event_name // "" | tostring | keep(alpha)), (.session_id // "" | tostring | keep(alpha or (. >= 48 and . <= 57) or . == 95 or . == 45)), (if ((.agent_id // "") | tostring | length) > 0 then "1" else "" end), (.agent_id // "" | tostring | keep(alpha or (. >= 48 and . <= 57) or . == 95 or . == 45) | .[0:64])' <<<"$payload" 2>/dev/null) || exit 0   # no regex builtin: every event runs it, and a jq built without Oniguruma (an optional build dependency) must not skip the write
+{ read -r event; read -r psid; read -r paid; read -r aid; } < <(jq -r 'def keep(f): explode | map(select(f)) | implode; def alpha: (. >= 65 and . <= 90) or (. >= 97 and . <= 122); def idch: alpha or (. >= 48 and . <= 57) or . == 95 or . == 45; def idmax: 64; (.hook_event_name // "" | tostring | keep(alpha)), (.session_id // "" | tostring | keep(idch)), (if ((.agent_id // "") | tostring | length) > 0 then "1" else "" end), (.agent_id | if type == "string" and length >= 1 and length <= idmax and (explode | all(idch)) then . else "" end)' <<<"$payload" 2>/dev/null) || exit 0   # no regex builtin: every event runs it, and a jq built without Oniguruma (an optional build dependency) must not skip the write
 [[ -n "$event" ]] || exit 0
 
 state="" ask_json="null" interrupted="false" src="" gcmd="" stopfail="" bg="-1" bgk="" bgi="" err="" hts="" msid="" sessend=""
@@ -2946,22 +2946,20 @@ fi
 # that line (marker-logic-in-the-tail (D-3615)).
 #
 # WHO WRITES: main-thread events only. A subagent's event is one whose `agent_id`
-# has a QUALIFYING JOIN: a SubagentStart for that id, recorded in THIS owner's
-# hookstate as `joined` (the SubagentStart arm below writes it). A bare `agent_id`
-# is not one: real lanes sent a main-checkout tool event with an `agent_id` that
-# no launch response, SubagentStart or SubagentStop ever named, and treating any
-# id as a subagent left the parent's own turn unrecorded (delegation broker wave 3,
-# amendment `tool-agent-id-alone-is-unjoined-evidence`). A join is a fact, not
-# liveness: SubagentStop does not take it back, and a Stop with no Start never
-# gives one. Never decided by `agent_type`, a display name or a path. `paid` (the
-# payload parse's flag for ANY non-empty `agent_id`) is NOT the test here and is
-# not narrowed: the history spool, the role-skill guard and the wait rules still
-# read it as "any id". `aid` is the same id, cleaned. The membership is read with
-# builtins (a payload with no id pays nothing; one with an id, one `read`), and a
-# hookstate that is absent, unreadable or carries no list leaves every id unjoined:
-# the failure records the main turn. And only on a row ccd created: a plain `-e` on
-# `.generation`, no fork (`_hook_generation_ok` forks `link`+`rm` and belongs to
-# the compaction arms).
+# has a QUALIFYING JOIN: a SubagentStart for that id, recorded in THIS owner's join
+# file `$REG/<id>.joined` (below). A bare `agent_id` is not one: real lanes sent a
+# main-checkout tool event with an `agent_id` that no launch response, SubagentStart
+# or SubagentStop ever named, and treating any id as a subagent left the parent's own
+# turn unrecorded (delegation broker wave 3, amendment
+# `tool-agent-id-alone-is-unjoined-evidence`). A join is a fact, not liveness:
+# SubagentStop does not take it back, and a Stop with no Start never gives one
+# (`post-turn-subagentstop-is-unpaired`). Never decided by `agent_type`, a display
+# name or a path. `paid` (the payload parse's flag for ANY non-empty `agent_id`) is
+# NOT the test here and is not narrowed: the history spool, the role-skill guard and
+# the wait rules still read it as "any id". `aid` is the id itself, and only when it
+# is already a plain id (below). And only on a row ccd created: a plain `-e` on
+# `.generation`, no fork (`_hook_generation_ok` forks `link`+`rm` and belongs to the
+# compaction arms).
 #
 # WHICH SESSION: the env id first, the same source hookstate's `sessionId` uses, so
 # the two files agree. The payload's cleaned `session_id` is used only when the env
@@ -3019,15 +3017,48 @@ _hook_turn_mark() {   # <kind: working|done|failed|restart|clear> -> 0 written; 
   _hook_write_atomic "$mf" "turn-$hts" "$out"
 }
 msid="${CLAUDE_CODE_SESSION_ID:-$psid}"
-# `joined` is the hookstate's LAST-but-optional key (an array of cleaned ids, see the write below), so the final
-# `"joined":[` in the one line is the top-level key and nothing nested can follow it; ids hold no `]`.
-tmsub="" hsl="" hsj="" hsk='"joined":['
-if [[ -n "$paid" && -n "$aid" ]]; then
-  { IFS= read -r hsl < "$REG/$id.hookstate.json"; } 2>/dev/null
-  if [[ "$hsl" == *"$hsk"* ]]; then
-    hsj=${hsl##*"$hsk"}; hsj=${hsj%%]*}
-    [[ ",$hsj," == *",\"$aid\","* ]] && tmsub=1
-  fi
+# THE JOIN RECORD (delegation broker wave 3): `$REG/<id>.joined`, one agent id per line, APPENDED by this hook on a
+# SubagentStart and by nobody else. It is a file of its own and NOT a key of hookstate.json, because every event
+# rewrites hookstate.json whole (a read at the top, a write at the bottom, forks between), so a join kept there was lost
+# whenever another hook's write landed last: the captures put a SubagentStart within a few ms of the parent's Agent
+# launch event, and a fixture probe lost 20-37% of joins that way, each loss turning that subagent's later events into a
+# phantom main-thread `working`. One `printf` of a short line to an O_APPEND descriptor is one write(2), so concurrent
+# hooks never erase each other's joins. Exactly one copy of membership.
+# THE ID: `aid` (the payload parse) is the RAW `agent_id` when it is already a string of 1 to `idmax` characters of
+# `idch` ([A-Za-z0-9_-], spelled once, in that jq program), else empty. Cleaning an id first would let a lookalike
+# (`a-1;`) ride a real join, so such an id is unjoinable: never recorded here, never suppressing the marker below.
+# WHEN: the row is live (`<id>.generation`, the witness `_reg_purge` removes LAST, so a purged row gets no file and
+# nothing orphans one), for the pane this hook owns (the exact-pane lookup above has already exited otherwise), and
+# whether or not a hookstate exists yet. The suffix is DOT-FREE so `_reg_purge`'s glob loop unlinks it with the row.
+# A REGULAR FILE OR NOTHING, as the history spool's append: a symlink, directory or FIFO at the path is neither read nor
+# written (builtin tests; a FIFO read would block the hook).
+# BOUNDED: past JOIN_ROTATE_AT lines a SubagentStart rewrites the file to its JOIN_KEEP most recent (temp + rename,
+# `_hook_write_atomic`); forks are fine there, it is rare, and the hysteresis makes it rarer (a workflow's whole
+# fan-out fits). THE ROTATION WINDOW, stated: an append that lands between the `tail` and the rename goes to the old
+# inode and is lost, and two rotations can race the same way. That costs one subagent's join (its events then read as
+# the main thread, the direction this file fails in everywhere), only at a rotation, and only beside a concurrent Start.
+# A short write (a full disk) can fuse a torn id with the next line; that too fails toward the main turn.
+# The file is written only by this block, one id per line, and read back whole-line only (below).
+JOIN_KEEP=64 JOIN_ROTATE_AT=128 JOIN_READ_MAX=16384
+_hook_join_record() {   # $aid -> 0 appended; 1 refused (never fatal: the caller says `|| true`)
+  local jf="$REG/$id.joined" cur="" nl="" tail_ids=""
+  [[ ! -L "$jf" && ( -f "$jf" || ! -e "$jf" ) ]] || return 1
+  { printf '%s\n' "$aid" >> "$jf"; } 2>/dev/null || return 1
+  { IFS= read -r -N "$JOIN_READ_MAX" cur < "$jf"; } 2>/dev/null
+  nl="${cur//[!$'\n']/}"
+  (( ${#nl} > JOIN_ROTATE_AT )) || return 0
+  tail_ids=$(tail -n "$JOIN_KEEP" "$jf" 2>/dev/null) && [[ -n "$tail_ids" ]] && _hook_write_atomic "$jf" joined "$tail_ids"
+  return 0
+}
+if [[ "$event" == SubagentStart && -n "$aid" && -e "$REG/$id.generation" ]]; then _hook_join_record || true; fi
+# THE MEMBERSHIP TEST, on the hot path of every subagent tool event: one builtin `read` of a file under
+# JOIN_READ_MAX characters (128 ids of 64 fill about 8 K), then a whole-line match: the id between two newlines, the
+# last line only if its newline arrived. An absent or unreadable file, or anything else, joins nobody and the main turn
+# is stamped. A payload with no id pays nothing.
+tmsub="" hsl="" jfile="$REG/$id.joined"
+if [[ -n "$paid" && -n "$aid" && ! -L "$jfile" && -f "$jfile" ]]; then
+  { IFS= read -r -N "$JOIN_READ_MAX" hsl < "$jfile"; } 2>/dev/null
+  [[ $'\n'"$hsl" == *$'\n'"$aid"$'\n'* ]] && tmsub=1
 fi
 if [[ -z "$tmsub" && -e "$REG/$id.generation" ]]; then
   tmkind=""
@@ -3145,21 +3176,13 @@ f="$REG/$id.hookstate.json"
 # degrade it already had (D-1613 measures that failure separately for the gate,
 # just below: for the WRITE the degrade is unchanged). This file runs under `set -uo pipefail` and NOT
 # `set -e`, so a `read` hitting EOF is inert.
-#
-# THE JOIN LIST (delegation broker wave 3): `joined`, the ids a SubagentStart named, rides this same read as ONE more
-# line, before `subs` (D-1249's order: the only line that can carry unbounded text stays last). It comes out as a
-# comma-joined STRING of whole plain ids (`okid`: one to 64 of [A-Za-z0-9_-], anything else in the array is dropped, so a
-# hand-edited element can never carry a newline into the positional reads) and goes back in by `--arg`, never
-# `--argjson`: a corrupt list degrades to no list and cannot fail the write. No extra fork.
-subs=""; prev_state=""; gq=""; gd=""; cp=""; cc=""; joined=""; joinadd=""
-{ read -r prev_state; read -r gq; read -r gd; read -r cp; read -r cc; read -r joined; read -r subs; } < <(jq -r \
-  'def okid: type == "string" and length > 0 and length <= 64 and (explode | all(. == 45 or . == 95 or (. >= 48 and . <= 57) or (. >= 65 and . <= 90) or (. >= 97 and . <= 122)));
-   (.state // ""),
+subs=""; prev_state=""; gq=""; gd=""; cp=""; cc=""
+{ read -r prev_state; read -r gq; read -r gd; read -r cp; read -r cc; read -r subs; } < <(jq -r \
+  '(.state // ""),
    (if (.graphQueries | type) == "number" then (.graphQueries | floor) else 0 end),
    (if (.graphGateDenials | type) == "number" then (.graphGateDenials | floor) else 0 end),
    (if (.ccrcPeerReads | type) == "number" then (.ccrcPeerReads | floor) else 0 end),
    (if (.ccrcClaims | type) == "number" then (.ccrcClaims | floor) else 0 end),
-   (.joined // [] | if type == "array" then map(select(okid)) | .[-64:] | join(",") else "" end),
    (.subagents // [] | tostring)' \
   "$f" 2>/dev/null)
 # A HOOKSTATE THAT EXISTS AND WILL NOT PARSE IS NOT A SESSION THAT COUNTED ZERO
@@ -3172,7 +3195,6 @@ subs=""; prev_state=""; gq=""; gd=""; cp=""; cc=""; joined=""; joinadd=""
 hs_unreadable=0
 [[ -f "$f" && -z "$gq" ]] && hs_unreadable=1
 [[ "$subs" == \[* ]] || subs="[]"
-[[ "$joined" =~ ^[A-Za-z0-9_,-]*$ ]] || joined=""
 [[ "$gq" =~ ^[0-9]+$ ]] || gq=0
 [[ "$gd" =~ ^[0-9]+$ ]] || gd=0
 [[ "$cp" =~ ^[0-9]+$ ]] || cp=0
@@ -3900,11 +3922,6 @@ if [[ "$event" == SubagentStart || "$event" == SubagentStop ]]; then
   name=$(jq -r '.agent_name // .subagent_name // .agent_type // "subagent"' <<<"$payload" 2>/dev/null) || name="subagent"
   now=$(_hook_epoch_ms)
   if [[ "$event" == SubagentStart ]]; then
-    # THE QUALIFYING JOIN (delegation broker wave 3): the id this start names, cleaned at the payload parse, joins THIS
-    # owner's `joined` list when the write below goes through (the list itself is kept there). Only a start gives one:
-    # a SubagentStop, paired or not, takes nothing and gives nothing (a join is a fact, not liveness), and a start whose
-    # id the cleaning strips to nothing joins nobody. The id is never the display name below, and never `agent_type`.
-    joinadd="$aid"
     subs=$(jq -c --arg n "$name" --argjson t "$now" \
       '(. + [{name:$n, startedAt:$t}]) | .[-32:]' <<<"$subs" 2>/dev/null) || subs="[]"
   else
@@ -3956,15 +3973,14 @@ out=$(jq -cn \
   --argjson updatedAt "${w_upd:-${hts:-$(_hook_epoch_ms)}}" --argjson interrupted "$interrupted" \
   --argjson ask "$ask_json" --argjson subagents "$subs" --argjson graphQueries "$gq" \
   --argjson graphGateDenials "$gd" --arg waitBy "$waitby" --arg aliveAt "$w_alive" \
-  --argjson ccrcPeerReads "$cp" --argjson ccrcClaims "$cc" --arg joined "$joined" --arg joinadd "$joinadd" \
+  --argjson ccrcPeerReads "$cp" --argjson ccrcClaims "$cc" \
   '{v:$v, state:$state, event:$event, sessionId:$sessionId, pid:$pid,
     updatedAt:$updatedAt, ask:$ask, subagents:$subagents, graphQueries:$graphQueries,
     graphGateDenials:$graphGateDenials, ccrcPeerReads:$ccrcPeerReads,
     ccrcClaims:$ccrcClaims}
    + (if $interrupted then {interrupted:true} else {} end)
    + (if $waitBy == "subagent" then {waitBy:"subagent"} else {} end)
-   + (if $aliveAt != "" then {aliveAt: ($aliveAt | tonumber)} else {} end)
-   + ($joined | split(",") | map(select(length > 0)) | (if $joinadd != "" then (. - [$joinadd]) + [$joinadd] else . end) | .[-64:] | if length > 0 then {joined: .} else {} end)') || exit 0
+   + (if $aliveAt != "" then {aliveAt: ($aliveAt | tonumber)} else {} end)') || exit 0
 
 # 64KB cap: drop the questions envelope before anything else — a truncated
 # envelope is worse than none.
