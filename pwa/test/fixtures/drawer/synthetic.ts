@@ -36,11 +36,16 @@ export interface SyntheticScreen {
 }
 
 export const SRC_COLS = PINNED_WINDOW_COLS;
-/** The column Claude Code word-wraps prose at, inside a 220-column window. A
- *  lower bound of 214 is measured on `server/test/fixtures/panes/ask-2col-chat-about.txt`
- *  (a 214-cell row whose next word would have reached 221). Task 6's recorded
- *  pairs correct this value, and the builder follows them where they differ. */
-export const CC_WRAP_COLS = 216;
+/** The column Claude Code word-wraps prose at, inside a 220-column window: the
+ *  window's own edge. MEASURED on the recorded pairs (Claude Code 2.1.299,
+ *  `recorded/2.1.299/`): a reply row reaches 220 cells and breaks only where the
+ *  next word would pass 220. An earlier capture
+ *  (`server/test/fixtures/panes/ask-2col-chat-about.txt`) put only a lower bound
+ *  of 214 on it, and the builder guessed 216 until the recordings came in.
+ *  `drawer-synthetic-screens.test.ts` holds this to every reply break on every
+ *  recorded screen, so a recording at a new Claude Code version that wraps
+ *  elsewhere reds there and the builder follows it (plan Refinement 2). */
+export const CC_WRAP_COLS = 220;
 /** tmux's default status line, neutral: no hostname, no clock.
  *  Painted on row index PINNED_WINDOW_ROWS. */
 export const STATUS_TEXT = '[cc-demo] 0:node*';
