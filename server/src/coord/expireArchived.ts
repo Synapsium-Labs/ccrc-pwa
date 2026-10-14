@@ -8,7 +8,8 @@ import { CCD_ARGV, EXPIRE_CAP, capSupported, sweepDec, verbSupported } from '../
 import type { CoordStore } from './store.js';
 import { RECLAIM_PAUSE_MARKER } from './rundefs.js';
 import {
-  EXPIRE_LANE_LIVE_MARKER, EXPIRE_TOKEN_KIND, archivedExpiryStoreSkip, expireKeptParts, parseExpireAudit, parseExpireResult, reviewKeeps,
+  EXPIRE_ASKS_AGAIN_CADENCE, EXPIRE_HALT_WORDS, EXPIRE_LANE_LIVE_MARKER, EXPIRE_TOKEN_KIND, archivedExpiryStoreSkip, expireKeptParts, parseExpireAudit,
+  parseExpireResult, reviewKeeps,
   type ArchivedExpiryOutcome, type ExpireAuditRead, type ExpiryStoreRead,
 } from '../archivedExpiry.js';
 import { isRegistryId } from '../../../shared/api.js';
@@ -129,6 +130,7 @@ export async function expireArchived(deps: ExpireArchivedDeps, req: ExpireArchiv
         : answer({ kind: 'refused', token: verb.token, detail: verb.detail, inUse: [] });
     case 'failed': return answer({ kind: 'failed', resumable: verb.resumable, detail: verb.detail });
     case 'restart': return answer({ kind: 'restart', detail: verb.detail });
+    case 'stuck': return answer({ kind: 'stuck', detail: verb.detail });
     case 'box': return answer({ kind: 'box', word: verb.word, detail: verb.detail });
     case 'composition': return answer({ kind: 'composition', detail: verb.detail });
   }
@@ -230,14 +232,17 @@ const FEED_TITLE: Readonly<Record<ArchivedExpiryOutcome['kind'], string>> = {
   gone: 'archived workspace gone',
   failed: 'archived workspace cleanup failed',
   'audit-failed': 'archived workspace cleanup failed',
-  restart: 'archived workspace changed under its cleanup',
+  restart: 'archived workspace cleanup stopped before it began',
+  stuck: 'archived workspace cleanup stuck',
   box: 'archived workspace cleanup failed',
   composition: 'archived workspace cleanup failed',
   'no-evidence': 'archived workspace cleanup has no evidence',
 };
 
-/** The feed row's words: what happened, to which archive, and when it was due. */
-export function expireFeedBody(r: ExpireArchivedResult): string {
+/** The feed row's words: what happened, to which archive, and when it was due. `standing`: the row's attention entry
+ *  STANDS (`expiryReportStands`) — an earlier attempt may have stopped part-way — so a shadow row over it never says that
+ *  nothing was deleted, only that THIS pass deleted nothing (wave 6; the standing entry's own words). */
+export function expireFeedBody(r: ExpireArchivedResult, standing = false): string {
   const who = `${r.sessionId} (archived ${iso(r.archivedAt)}, due ${iso(r.expiresAt)})`;
   switch (r.kind) {
     case 'expired': {
@@ -255,7 +260,9 @@ export function expireFeedBody(r: ExpireArchivedResult): string {
       return `${who} was cleaned up: its commits are kept in the attic (ccd ws-attic --session ${r.sessionId}), ${wip}${secrets}${leaves}.`;
     }
     case 'would-expire':
-      return `${who} would be cleaned up now — the cleanup is not armed (shadow), so nothing was deleted`
+      return `${who} would be cleaned up now — the cleanup is not armed (shadow), so `
+        + `${standing ? 'this pass deleted nothing — but an earlier attempt may have stopped part-way, so what is left on disk is '
+          + 'not known, and its attention entry stands' : 'nothing was deleted'}`
         + `${r.sensitive > 0 ? `; ${r.sensitive} secret-shaped ${r.sensitive === 1 ? 'file' : 'files'} would be dropped` : ''}.`;
     case 'deferred': return `${who}: deferred (${r.why}) — ${r.detail}.`;
     case 'refused': return `${who}: ccd refused (${r.token}) — ${r.detail}`;
@@ -264,9 +271,17 @@ export function expireFeedBody(r: ExpireArchivedResult): string {
       : 'It is not retried: the box said it will not resume, so the lane stops asking for this archive.'}`;
     case 'audit-failed': return `${who}: its expiry's own audit could not be read (${r.detail}), so no verb ran. `
       + 'It is retried, backing off in between.';
-    case 'restart': return `${who}: the workspace changed under the expiry's consent — its branch was deleted or made `
-      + `inside the lock (${r.detail}) — so nothing was deleted, and the lane audits it afresh.`;
-    case 'box': return `${who}: the fleet box refused before it started (${r.word}) — ${r.detail}.`;
+    // ccd said it stopped before this attempt's breadcrumb (`crumb: false`, or an older ccd's `state-changed`): never a
+    // sentence about one cause, since a fresh pin's failure says the same (wave 6).
+    case 'restart': return `${who}: ccd stopped before this attempt started anything (${r.detail}) — nothing was deleted, `
+      + 'and the lane audits it afresh.';
+    case 'stuck': return `${who}: ccd stopped part-way (${r.detail}) — the session was stopped and nothing further was `
+      + `deleted. It is listed at once, and asked again ${EXPIRE_ASKS_AGAIN_CADENCE}, `
+      + 'until an attempt completes, a verdict stops it for good, or the workspace is archived again.';
+    // `flock-unavailable` halts the lane on that box until the server restarts (`watch.ts`): the row says so, whatever the
+    // row's own attention entry says (a standing one stands through it; wave 6).
+    case 'box': return `${who}: the fleet box refused before it started (${r.word}) — ${r.detail}.` + (r.word === 'flock-unavailable'
+      ? ` ${EXPIRE_HALT_WORDS}` : '');
     case 'composition': return `${who}: ccd rejected the call this server composed — ${r.detail}. It is not retried.`;
     case 'no-evidence': return `${who}: the fleet box's ccd does not say when this archive expires; nothing was composed.`;
   }
@@ -275,11 +290,11 @@ export function expireFeedBody(r: ExpireArchivedResult): string {
 /** ONE feed row for an outcome — written by the LANE, and only when the row's outcome CHANGED, so a refusal that
  *  stands is one row, not one a minute. `kind: 'run'` with no run: recorded, never pushed, in the unfiltered feed.
  *  A missing log degrades the record and never the act. */
-export function recordExpireFeed(deps: Pick<ExpireArchivedDeps, 'coord' | 'notifyLog'>, r: ExpireArchivedResult): void {
+export function recordExpireFeed(deps: Pick<ExpireArchivedDeps, 'coord' | 'notifyLog'>, r: ExpireArchivedResult, standing = false): void {
   const log = deps.notifyLog;
   if (!log) return;
   try {
-    const ev = log.record({ kind: 'run', sessionId: r.sessionId, runId: null, title: FEED_TITLE[r.kind], body: expireFeedBody(r) });
+    const ev = log.record({ kind: 'run', sessionId: r.sessionId, runId: null, title: FEED_TITLE[r.kind], body: expireFeedBody(r, standing) });
     deps.coord.recordFeedEvent(log.epoch, ev);
   } catch (err) {
     console.warn('ccrc-server: recordFeedEvent failed '

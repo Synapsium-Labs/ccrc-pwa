@@ -109,20 +109,21 @@ import {
 import { CHILD_BIRTH_SKEW_MS } from './coord/childSpent.js';
 import {
   EXPIRE_AUDITS_PER_PASS, archivedExpiryDue, archivedExpiryEntryFor, archivedExpiryLearned, archivedExpiryNextEntry,
-  archivedExpiryOutcomeKey, archivedExpirySighted, archivedExpiryVerdict, expiryAttention,
+  archivedExpiryOutcomeKey, archivedExpirySighted, archivedExpiryVerdict, expiryAttention, expiryReportStands,
   type ArchivedExpiryEntry, type ExpiryStoreRead,
 } from './archivedExpiry.js';
 import { expireArchived, expiryReviewing, learnExpiry, recordExpireFeed } from './coord/expireArchived.js';
 import {
-  deadAnchorNext, deadCoordinatorAttention, deadCoordinatorBreaker,
-  deadCoordinatorBreakerKey, deadCoordinatorCrash, deadCoordinatorDue, deadCoordinatorEntry, deadCoordinatorJournal,
+  deadAnchorNext, deadCoordinatorNewEpisode, deadCoordinatorAttention, deadCoordinatorBreaker,
+  deadCoordinatorBreakerHeldKey, deadCoordinatorBreakerKey, deadCoordinatorCrash, deadCoordinatorDue, deadCoordinatorEntry, deadCoordinatorJournal, deadCoordinatorJournalSpawnedAt,
   deadCoordinatorNextEntry, deadCoordinatorOutcomeKey, deadCoordinatorSighted, deadCoordinatorSince, deadCoordinatorThrew,
   type ClaimantDeadCause, type DeadAnchor, type DeadCoordinatorActOutcome, type DeadCoordinatorBreaker,
-  type DeadCoordinatorBreakerMember, type DeadCoordinatorEntry, type DeadCoordinatorJournal,
+  type DeadCoordinatorBreakerMember, type DeadCoordinatorEntry, type DeadCoordinatorJournal, type DeadCoordinatorJournalTrust,
+  type DeadCoordinatorSealResult, type DeadCoordinatorSeedCause,
 } from './deadCoordinator.js';
 import {
-  DeadCoordinatorActThrew, deadCoordinatorLaneArmed, endDeadCoordinator, readDeadCoordinatorJournalTrust, recordDeadCoordinatorBreaker,
-  recordDeadCoordinatorFeed, recordDeadCoordinatorThrew,
+  DeadCoordinatorActThrew, deadCoordinatorLaneArmed, endDeadCoordinator, readDeadCoordinatorJournalTrust, recordDeadCoordinatorBreaker, recordDeadCoordinatorBreakerSeed,
+  recordDeadCoordinatorFeed, recordDeadCoordinatorThrew, rereadDeadCoordinatorJournalTrust,
 } from './coord/endDeadCoordinator.js';
 import type { CoordRoutesHandle } from './coord/routes.js';
 import { localIO } from './io.js';
@@ -649,6 +650,22 @@ export type ReleasePushOutcome =
   | { did: 'pushed'; tag: string; payload: PushPayload }
   | { did: 'refused'; tag: string; why: Extract<MarkReleaseNotifiedResult, { ok: false }>['why'] }
   | { did: 'failed'; detail: string };
+
+/** Two readings of the breaker's held set merged, member by member: every instant and every flag either carries (D-4857:
+ *  under a state that is not clean the lane keeps whatever it can still read). */
+function mergeBreakerMembers(
+  a: readonly DeadCoordinatorBreakerMember[], b: readonly DeadCoordinatorBreakerMember[],
+): DeadCoordinatorBreakerMember[] {
+  const out = new Map<string, DeadCoordinatorBreakerMember>();
+  for (const m of [...a, ...b]) {
+    const had = out.get(m.id);
+    const all = [...new Set([...(had === undefined ? [] : [had.firstDeadAt, ...(had.instants ?? [])]), m.firstDeadAt, ...(m.instants ?? [])])]
+      .sort((x, y) => x - y);
+    const flagged = m.fallback === true || had?.fallback === true;
+    out.set(m.id, { id: m.id, firstDeadAt: all[0]!, ...(all.length > 1 ? { instants: all } : {}), ...(flagged ? { fallback: true as const } : {}) });
+  }
+  return [...out.values()];
+}
 
 export class FleetWatcher {
   private timer: NodeJS.Timeout | null = null;
@@ -1275,7 +1292,11 @@ export class FleetWatcher {
   /** The expiry lane's clock and memory (wave 3b): its OWN — never the child lane's map, which wave 5's chip reads.
    *  Per archived workspace, `ArchivedExpiryEntry` (L1): the instant ccd gave for THIS archive, the twice-observed
    *  sighting, the last outcome (for change-only feed rows), the in-use and failure runs and the report. IN MEMORY
-   *  ONLY: a restart can only DELAY an expiry. */
+   *  ONLY (review 381, F10): a restart drops the +∞ rows and the process halt (`archivedExpiryBoxRefused`), so an armed
+   *  lane can ask again about a row it had stopped — each ask behind a fresh audit and ccd's in-lock re-proof. It
+   *  also drops each row's `nextAskAt` (a fresh entry's is `0`) and `failures` (review 382, R6), so a tier or stuck row
+   *  (normally asked every four hours) and a row backing off on the ladder are asked again within a few passes,
+   *  SOONER; and it restarts the twice-observed sighting and the hour's runs, which DELAY an expiry. */
   private lastArchivedExpirySweep = 0;
   private archivedExpiryState = new Map<string, ArchivedExpiryEntry>();
   /** ONE PASS AT A TIME. `tick()` dispatches the lane with `void`, and a pass whose audits and act outlast the cadence
@@ -1293,10 +1314,43 @@ export class FleetWatcher {
   private deadCoordinatorSweeping = false;
   private deadCoordinatorState = new Map<string, DeadCoordinatorEntry>();
   private deadCoordinatorBreakerState: DeadCoordinatorBreaker = { tripped: false };
-  /** The breaker's memory: the members it holds with their ORIGINAL first-dead instants, released only on evidence
+  /** The breaker's memory: the members it holds with every first-dead instant they have carried, released only on evidence
    *  (`breaker-remembers-its-cluster`); and the key of the trip its feed row last recorded. */
   private deadCoordinatorBreakerHeld: readonly DeadCoordinatorBreakerMember[] = [];
   private deadCoordinatorBreakerRecorded: string | null = null;
+  /** The held set SURVIVES A RESTART (review 381, F1), in the breaker's TYPED STATE (D-4857, the operator's ruling 4286):
+   *  `coord.db`'s `dead_coordinator_breaker_state`, read back ONCE per process at the first pass that reaches step three.
+   *  Every pass that changes anything durable marks that state DIRTY alone, before any anchor changes
+   *  (`markDeadCoordinatorBreakerDirty`), then writes the exact held snapshot, every anchor change and the state CLEAN in
+   *  ONE transaction (`commitDeadCoordinatorBreakerState`), with the `run_events` record of a changed set inside it. Only
+   *  a commit that landed lets the pass act, or moves what this process knows was committed. A state that reads anything
+   *  but `sealed` (D-4916: clean, dirty, absent or unreadable) seeds the conservative hold (review 382, R2): every claimant
+   *  the pass does not release, FLAGGED (a wildcard in the breaker, which HOLDS only when two or more stand unreleased; one
+   *  alone only has its hour restarted), beside every member, instant and flag of the snapshot it can still read.
+   *  `Seeded` is that once; `CommittedKey` is the key of the snapshot the last landed commit wrote (`''` until one lands
+   *  or a sealed state is read: it matches no set's key); `DurableClean` says this process knows the state reads clean;
+   *  `AnchorsPending` holds the anchor changes a commit has not landed yet (`null`: a staged delete), re-sent by the next
+   *  commit and laid over the durable anchors meanwhile, so a retry is idempotent; `HeldRunId` is the run the last
+   *  `run_events` record sits on (where an empty set is written). */
+  private deadCoordinatorBreakerSeeded = false;
+  private deadCoordinatorBreakerCommittedKey = '';
+  private deadCoordinatorBreakerDurableClean = false;
+  private deadCoordinatorAnchorsPending = new Map<string, DeadAnchor | null>();
+  private deadCoordinatorBreakerHeldRunId: number | null = null;
+  /** THE SEAL (fix round 5, D-4916; the operator's choice of 2026-10-13, "Seal on clean shutdown"). A start trusts the
+   *  stored snapshot ONLY when it reads `sealed`; `Generation` is the generation of the row this process last read or wrote;
+   *  `UnsealPending` is a sealed start's first-pass duty, writing `clean` back (retried each pass until it lands); `Landed`
+   *  says a write of THIS process has landed (the unseal, or a dirty mark): until it has, the `unchanged` fast path is
+   *  refused and nothing seals, and a sealed start writes no breaker state or anchor beyond its unseal (a tripping pass may
+   *  still write its feed row) and acts on nothing until its unseal has landed (a later mark does not count in its place: R1.5); `Sealed` says this process's seal landed; `Stopped` is set by the first seal attempt, after
+   *  which no pass runs; `PassRun` is the pass in flight, which a seal attempt awaits with a bound. */
+  private deadCoordinatorBreakerGeneration: number | null = null;
+  private deadCoordinatorBreakerUnsealPending = false;
+  private deadCoordinatorBreakerUnsealWarned = false;
+  private deadCoordinatorBreakerLanded = false;
+  private deadCoordinatorBreakerSealed = false;
+  private deadCoordinatorStopped = false;
+  private deadCoordinatorPassRun: Promise<void> | null = null;
   private deadCoordinatorAttentionList: readonly DeadCoordinatorAttention[] = [];
   /** The coordination serialiser's sweep handle (`CoordRoutesHandle.withSweepAbandon`), handed over by `buildServer`
    *  once `registerCoordRoutes` has built it. Until then the lane measures and records, and ends nothing. */
@@ -4750,7 +4804,10 @@ export class FleetWatcher {
           presence: this.deps.presence, notifyLog: this.deps.notifyLog,
         }, { sessionId: id, archivedAt: entry.archivedAt, expiresAt: entry.expiresAt! }));
         if (result.kind === 'box' && result.word === 'flock-unavailable') this.archivedExpiryBoxRefused = result.detail;
-        if (archivedExpiryOutcomeKey(result) !== entry.lastOutcome) recordExpireFeed({ coord, notifyLog: this.deps.notifyLog }, result);
+        // Whether the row's entry STANDS rides the feed row, so a shadow row over it never says nothing was deleted (wave 6).
+        if (archivedExpiryOutcomeKey(result) !== entry.lastOutcome) {
+          recordExpireFeed({ coord, notifyLog: this.deps.notifyLog }, result, expiryReportStands(entry.report));
+        }
         const next = archivedExpiryNextEntry(entry, result, Date.now(), CHILD_RECLAIM_SWEEP_MS);
         if (next === null) this.archivedExpiryState.delete(id); else this.archivedExpiryState.set(id, next);
       } catch (err) {
@@ -4758,7 +4815,7 @@ export class FleetWatcher {
       }
     }
     // FIVE — the attention list, from the lane's memory alone.
-    this.expiryAttentionList = expiryAttention(this.archivedExpiryState);
+    this.expiryAttentionList = expiryAttention(this.archivedExpiryState, this.archivedExpiryBoxRefused !== null);
   }
 
   /** One archived row's store answers in the lane's pass (spec §5.3's run conjuncts). `reviewing` — a REVIEW run
@@ -4801,15 +4858,85 @@ export class FleetWatcher {
    */
   async sweepDeadCoordinators(records: readonly SessionRecord[], names: readonly string[]): Promise<void> {
     const coord = this.deps.coord;
-    if (!coord || this.deadCoordinatorSweeping) return;
+    if (!coord || this.deadCoordinatorSweeping || this.deadCoordinatorStopped) return;
     const now = Date.now();
     if (this.lastDeadCoordinatorSweep !== 0 && now - this.lastDeadCoordinatorSweep < CHILD_RECLAIM_SWEEP_MS) return;
     this.lastDeadCoordinatorSweep = now;
     this.deadCoordinatorSweeping = true;
+    const run = this.deadCoordinatorPass(coord, records, names, now);
+    this.deadCoordinatorPassRun = run;
     try {
-      await this.deadCoordinatorPass(coord, records, names, now);
+      await run;
     } finally {
       this.deadCoordinatorSweeping = false;
+      this.deadCoordinatorPassRun = null;
+    }
+  }
+
+  /** SEAL THE BREAKER'S STATE (D-4916), synchronously, over a pass that is not running: the shutdown handler's one act on the
+   *  lane (`sealDeadCoordinatorBreaker` awaits a pass first). The first attempt STOPS the lane — no pass runs after it, so
+   *  nothing can change the state behind the seal. It writes `sealed` (one generation-checked statement over the same
+   *  snapshot) ONLY when all of these hold, tested in this order, and otherwise writes nothing and says why: a store; no
+   *  pass in flight; a write of this process has landed; not already sealed; no anchor change pending; the state durably
+   *  clean; the held set's key the one the last commit wrote. Never throws. */
+  sealDeadCoordinatorBreakerNow(): DeadCoordinatorSealResult {
+    this.deadCoordinatorStopped = true;
+    const coord = this.deps.coord;
+    if (!coord) return { sealed: false, reason: 'no-store' };
+    if (this.deadCoordinatorSweeping) return { sealed: false, reason: 'pass-in-flight' };
+    if (!this.deadCoordinatorBreakerLanded) return { sealed: false, reason: 'no-landed-write' };
+    if (this.deadCoordinatorBreakerSealed) return { sealed: false, reason: 'already-sealed' };
+    if (this.deadCoordinatorAnchorsPending.size > 0) return { sealed: false, reason: 'changes-pending' };
+    // A write DID land (a mark) but no commit has, so no generation is known: the state is not durably clean, and that is the
+    // true reason (review of fix round 5, F3), not `no-landed-write`.
+    if (!this.deadCoordinatorBreakerDurableClean || this.deadCoordinatorBreakerGeneration === null) return { sealed: false, reason: 'not-durably-clean' };
+    if (deadCoordinatorBreakerHeldKey(this.deadCoordinatorBreakerHeld) !== this.deadCoordinatorBreakerCommittedKey) return { sealed: false, reason: 'key-mismatch' };
+    try {
+      const w = coord.sealDeadCoordinatorBreakerState(this.deadCoordinatorBreakerGeneration);
+      if (!w.ok) return { sealed: false, reason: 'write-failed' };
+      this.deadCoordinatorBreakerSealed = true;
+      this.deadCoordinatorBreakerGeneration = w.generation;
+      return { sealed: true, generation: w.generation };
+    } catch {
+      return { sealed: false, reason: 'write-failed' };
+    }
+  }
+
+  /** `sealDeadCoordinatorBreakerNow` after the pass in flight, awaited for at most `boundMs`: past the bound it writes
+   *  nothing (`pass-in-flight`) and the lane stays stopped. */
+  async sealDeadCoordinatorBreaker(boundMs: number): Promise<DeadCoordinatorSealResult> {
+    this.deadCoordinatorStopped = true;
+    const run = this.deadCoordinatorPassRun;
+    if (run !== null) {
+      let timer: NodeJS.Timeout | undefined;
+      await Promise.race([
+        run.then(() => undefined, () => undefined),
+        new Promise<void>((resolve) => { timer = setTimeout(resolve, boundMs); }),
+      ]);
+      if (timer !== undefined) clearTimeout(timer);
+    }
+    return this.sealDeadCoordinatorBreakerNow();
+  }
+
+  /** The sealed start's first act (D-4916, R1.5): write `clean` back over the same snapshot, generation-checked, BEFORE any
+   *  step of the pass can change state or act. Retried each pass until it lands; a failure is said once. A write of this
+   *  process has landed when it does. */
+  private unsealDeadCoordinatorBreaker(coord: CoordStore): void {
+    const gen = this.deadCoordinatorBreakerGeneration;
+    const w = gen === null ? null : coord.unsealDeadCoordinatorBreakerState(gen);
+    if (w?.ok === true) {
+      this.deadCoordinatorBreakerUnsealPending = false;
+      this.deadCoordinatorBreakerLanded = true;
+      this.deadCoordinatorBreakerGeneration = w.generation;
+      return;
+    }
+    // A failed unseal re-reads the row, so a generation another writer moved does not wedge the retry for good while it leaves the row sealed
+    // (a writer that moves it to any other state makes the unseal impossible: fail-shut, one warn line, no feed row).
+    const now = coord.deadCoordinatorBreakerState();
+    if (now.kind === 'sealed') this.deadCoordinatorBreakerGeneration = now.generation;
+    if (!this.deadCoordinatorBreakerUnsealWarned) {
+      this.deadCoordinatorBreakerUnsealWarned = true;
+      console.warn(`ccrc-server: sweepDeadCoordinators could not unseal the breaker's state (${w === null ? 'no generation' : w.detail}) — no act and no write until the unseal lands; retried each pass`);
     }
   }
 
@@ -4834,19 +4961,74 @@ export class FleetWatcher {
       forget();
       return;
     }
-    // THREE — the population, the anchors: one statement each. Either failing decides nothing this pass.
+    // THREE — the population, the anchors: one statement each. Either failing decides nothing this pass. The anchors are
+    // the durable rows with every change a commit has not landed yet laid over them (D-4857): what this process decided.
     let ids: string[];
-    let anchors: ReadonlyMap<string, DeadAnchor>;
+    const anchors = new Map<string, DeadAnchor>();
     try {
       ids = [...new Set(coord.openCoordinatorIds())].sort();
       const a = coord.deadAnchors();
       if (!a.ok) throw new Error(a.detail);
-      anchors = a.anchors;
+      for (const [id, x] of a.anchors) anchors.set(id, x);
+      for (const [id, x] of this.deadCoordinatorAnchorsPending) if (x === null) anchors.delete(id); else anchors.set(id, x);
     } catch (err) {
       console.warn(`ccrc-server: sweepDeadCoordinators could not read the coordination store (${err instanceof Error ? err.message : String(err)}) — no decisions this pass`);
       forget();
       return;
     }
+    // ...and, ONCE per process, the breaker's held set from its TYPED STATE (D-4857). A state that reads SEALED is the exact
+    // snapshot of the last landed commit, vouched for by a clean shutdown (D-4916), and the only one seeded as it reads. Any
+    // other answer — CLEAN (the last server did not end through a clean shutdown, so a hold it formed and could not write is
+    // not ruled out), DIRTY (a pass marked it and its commit did not land, or the process died between), ABSENT (no lane of this release has written it: the deploy that creates the
+    // table) or UNREADABLE — is a hold this pass cannot know, and an EMPTY seed would let a restart dissolve the very
+    // cluster the breaker exists to hold; stopping the lane would freeze it for good, since only a commit can supersede the
+    // row. So the pass goes on and step six seeds the conservative hold, where `released` is known: nothing clears dirty by
+    // comparing timestamps.
+    let seedCause: DeadCoordinatorSeedCause | null = null;
+    let readable: readonly DeadCoordinatorBreakerMember[] = [];
+    if (!this.deadCoordinatorBreakerSeeded) {
+      const st = coord.deadCoordinatorBreakerState();
+      // The `run_events` record: the run an empty set is written on, and, under a state that is not clean, members to keep.
+      const rec = coord.deadCoordinatorBreakerHeldLatest();
+      this.deadCoordinatorBreakerHeldRunId ??= rec.runId;
+      if (st.kind === 'sealed') {
+        // A SEALED state (D-4916) is the only one a start trusts as it reads: the server's shutdown handler wrote it over a
+        // clean state with nothing pending, so it is the exact snapshot of the last landed commit.
+        // RECOVERY OF A LOST WRITE (fix round 4, D-4826), against the clean snapshot's write time. Every claimant of this
+        // pass's population whose durable anchor STARTED (its `firstDeadAt`, never `lastDeadAt`, which every crashed pass
+        // rewrites) after that snapshot was written is added to the seed, FLAGGED, at its anchor instant, beside every
+        // member, instant and flag the snapshot carries. Since D-4857 every anchor change this release makes lands in the
+        // same transaction as the snapshot, written with the write-time clock, so under a sealed state this flags only
+        // anchors written outside those commits: an older build's, run against this database after a rollback (it writes
+        // `dead_claimants` and never this table). It stays as the rule; the class it could not close (a held instant that
+        // lived in memory alone while writes failed) is closed by the dirty state, not by it.
+        const seeded = new Map(st.held.map((m) => [m.id, m]));
+        for (const id of ids) {
+          const a = anchors.get(id);
+          if (a === undefined || a.firstDeadAt <= st.writtenAt) continue;
+          const had = seeded.get(id);
+          const all = [...new Set([...(had === undefined ? [] : [had.firstDeadAt, ...(had.instants ?? [])]), a.firstDeadAt])].sort((x, y) => x - y);
+          seeded.set(id, { id, firstDeadAt: all[0]!, ...(all.length > 1 ? { instants: all } : {}), fallback: true as const });
+        }
+        this.deadCoordinatorBreakerHeld = [...seeded.values()];
+        this.deadCoordinatorBreakerCommittedKey = deadCoordinatorBreakerHeldKey(st.held);
+        this.deadCoordinatorBreakerDurableClean = true;
+        this.deadCoordinatorBreakerSeeded = true;
+        this.deadCoordinatorBreakerGeneration = st.generation;
+        this.deadCoordinatorBreakerUnsealPending = true;
+      } else {
+        seedCause = st.kind === 'absent' ? { kind: 'absent' } : st.kind === 'dirty' ? { kind: 'dirty', generation: st.generation }
+          : st.kind === 'clean' ? { kind: 'unsealed', generation: st.generation }
+            : { kind: 'unreadable', reason: st.detail.slice(0, 64) };
+        // Every member, instant and flag it can still read: the snapshot the row carries (a dirty row's last landed one, an
+        // unsealed clean row's exact one), and the latest record.
+        readable = mergeBreakerMembers(
+          st.kind === 'dirty' ? (st.snapshot.kind === 'members' ? st.snapshot.members : []) : st.kind === 'clean' ? st.held : [],
+          rec.ok ? rec.held : []);
+      }
+    }
+    // THE EAGER UNSEAL (D-4916): before any step can change state or act, a process that read `sealed` writes `clean` back.
+    if (this.deadCoordinatorBreakerUnsealPending) this.unsealDeadCoordinatorBreaker(coord);
     // FOUR — each claimant, measured by the reclaim door's own ladder, one at a time, through a tmux port that notes
     // a tmux that did not answer (a FLEET-wide doubt the breaker reads); then the journal clause for the dead ones in
     // ONE store read. A read that throws is `unreadable` for each of them — never "no history".
@@ -4872,57 +5054,92 @@ export class FleetWatcher {
     }
     const dead = ids.filter((id) => measured.get(id)!.state === 'dead');
     let journalOf: (id: string) => DeadCoordinatorJournal;
+    /** The newest successful spawn's instant for a claimant the clause called crashed (so the journal was trusted), or `null`. */
+    let journalSpawnedAtOf: (id: string) => number | null = () => null;
     try {
       const rows = coord.deadCoordinatorJournalRows(dead);
       journalOf = (id) => {
         const j = rows.get(id);
         return j === undefined ? { kind: 'no-history' } : deadCoordinatorJournal(j.rows, j.hasHistory, journal.trust);
       };
+      journalSpawnedAtOf = (id) => { const j = rows.get(id); return j === undefined ? null : deadCoordinatorJournalSpawnedAt(j.rows); };
     } catch (err) {
       const detail = err instanceof Error ? err.message : String(err);
       journalOf = () => ({ kind: 'unreadable', detail });
     }
-    // FIVE — a crash and only a crash keeps (or starts) the durable anchor; any other answer deletes it.
+    // FIVE — a crash and only a crash keeps (or starts) the durable anchor; any other answer deletes it. DECIDED HERE, IN
+    // MEMORY (D-4857): the decisions drive this pass's breaker and due test exactly as before, and reach `coord.db` only
+    // through step six's commit, after the dirty mark.
     const crashed: { id: string; firstDeadAt: number; since: number; cause: Exclude<ClaimantDeadCause, 'stopped'> }[] = [];
     const unmeasurable: string[] = [];
     /** Claimants this pass gave EVIDENCE about — alive, stopped, a deliberate act: the breaker releases them. */
     const released = new Set<string>();
+    const upserts: [string, DeadAnchor][] = [];
+    const deletes: string[] = [];
     for (const id of ids) {
       const c = deadCoordinatorCrash(measured.get(id)!, journalOf(id));
       if (c.kind === 'unmeasurable') unmeasurable.push(id);
       if (c.kind === 'alive' || c.kind === 'stopped' || c.kind === 'deliberate') released.add(id);
       const at = measuredAt.get(id)!;
-      let entry = deadCoordinatorSighted(this.deadCoordinatorState.get(id) ?? deadCoordinatorEntry(), c, at);
-      try {
-        if (c.kind === 'crashed') {
-          const a = deadAnchorNext(anchors.get(id) ?? null, at);
-          coord.setDeadAnchor(id, a);
-          const supervisedAt = records.find((r) => r.id === id)?.supervisedAt ?? null;
-          crashed.push({ id, firstDeadAt: a.firstDeadAt, since: deadCoordinatorSince(a, supervisedAt, at), cause: c.cause });
-        } else if (anchors.has(id)) {
-          coord.deleteDeadAnchor(id);
-        }
-      } catch (err) {
-        // An anchor this pass could not write is an hour nobody can count: the run of crashed passes starts again.
-        console.warn(`ccrc-server: sweepDeadCoordinators could not keep ${id}'s anchor (${err instanceof Error ? err.message : String(err)})`);
-        entry = { ...entry, crashedPasses: 0 };
+      this.deadCoordinatorState.set(id, deadCoordinatorSighted(this.deadCoordinatorState.get(id) ?? deadCoordinatorEntry(), c, at));
+      if (c.kind === 'crashed') {
+        const supervisedAt = records.find((r) => r.id === id)?.supervisedAt ?? null;
+        // A supervisor heartbeat LATER than the anchor is supervision since it began: a new episode, anchored afresh (D-4825).
+        // On the CONSERVATIVE SEED's pass (a state that was clean but not sealed, dirty, absent or unreadable) no durable anchor is taken as
+        // continuing: a delete this process's predecessor decided may never have landed, so every crashed claimant's hour
+        // restarts at this pass (review of D-4857, item 3). That only delays an act.
+        const prev = seedCause !== null ? null : anchors.get(id) ?? null;
+        // ...or a trusted journal's newest successful spawn later than it (D-4827): the unsupervised fallbacks stamp no heartbeat.
+        const spawnedAt = journalSpawnedAtOf(id);
+        const fresh = deadCoordinatorNewEpisode(prev, supervisedAt, at, spawnedAt);
+        const a = deadAnchorNext(fresh ? null : prev, at);
+        upserts.push([id, a]);
+        crashed.push({ id, firstDeadAt: a.firstDeadAt, since: deadCoordinatorSince(a, supervisedAt, at), cause: c.cause });
+      } else if (anchors.has(id)) {
+        deletes.push(id);
       }
-      this.deadCoordinatorState.set(id, entry);
     }
     // A claimant that left the population (its runs closed, or reclaimed by an heir) is forgotten, anchor and all.
     for (const id of [...this.deadCoordinatorState.keys()]) if (!ids.includes(id)) this.deadCoordinatorState.delete(id);
-    for (const id of anchors.keys()) {
-      if (!ids.includes(id)) {
-        try { coord.deleteDeadAnchor(id); } catch { /* the next pass deletes it */ }
-      }
-    }
+    for (const id of anchors.keys()) if (!ids.includes(id)) deletes.push(id);
     // SIX — the circuit breaker, evaluated in shadow too, WITH ITS MEMORY: a member stays held until this pass gave
-    // evidence about it or it left the population; a pass that only doubted it keeps it, at its first instant.
-    const held = this.deadCoordinatorBreakerHeld.filter((m) => ids.includes(m.id) && !released.has(m.id));
+    // evidence about it or it left the population; a pass that only doubted it keeps it, at every instant it carries.
+    let held: readonly DeadCoordinatorBreakerMember[];
+    if (seedCause === null) {
+      held = this.deadCoordinatorBreakerHeld.filter((m) => ids.includes(m.id) && !released.has(m.id));
+    } else {
+      // THE CONSERVATIVE SEED (D-4857; review 382, R2; D-4916): the state was clean but not sealed, dirty, absent or unreadable,
+      // so FLAG every claimant of this pass's population that this pass does not release (alive, stopped, deliberate), each
+      // `fallback` (the breaker HOLDS them only when two or more stand unreleased; one alone has its hour restarted), with
+      // every instant and flag a readable snapshot or record still carries for it (a claimant it names nothing for is held
+      // at `now`, which is compared with nothing). A flagged member clusters with every other entry whatever the instants
+      // (`deadCoordinatorBreaker`, which carries the proof that this never loosens: a wildcard only adds clustered pairs,
+      // adding entries never breaks a within-window adjacency, and every member any lane holds is an unreleased claimant of
+      // the population, so the seed holds it). The flag is written into the commit's snapshot, so a later restart seeds
+      // it too; the commit's key differs from the unseeded `''`, so step six's commit always runs.
+      const kept = new Map(readable.map((m) => [m.id, m]));
+      held = ids.filter((id) => !released.has(id)).map((id) => {
+        const m = kept.get(id);
+        return m === undefined ? { id, firstDeadAt: now, fallback: true as const } : { ...m, fallback: true as const };
+      });
+    }
     const breaker = deadCoordinatorBreaker(crashed, held, unmeasurable, ids.length,
       fleetDoubt.length === 0 ? null : fleetDoubt.join('; '), now);
     this.deadCoordinatorBreakerState = breaker;
-    this.deadCoordinatorBreakerHeld = breaker.tripped ? breaker.members : [];
+    const before = this.deadCoordinatorBreakerHeld;
+    const next = breaker.tripped ? breaker.members : [];
+    // THE COMMIT (D-4857): the dirty mark alone, then ONE transaction for the anchor changes, the exact snapshot and the
+    // state clean. Whatever lands, the in-memory hold MOVES to this pass's (monotone): a dirty mark or a commit that did
+    // not land keeps the anchor changes pending (laid over the durable anchors, re-sent by the next commit), and the pass
+    // acts on nothing (review of D-4857, items 1 and 2: a failed write must never forget a trip or a doubt).
+    // The hold moves BEFORE the commit's first statement (fix round 5, R2): nothing the commit does can drop it.
+    this.deadCoordinatorBreakerHeld = next;
+    const commit = this.commitDeadCoordinatorBreaker(coord, next, upserts, deletes, ids, before);
+    if (seedCause !== null) {
+      this.deadCoordinatorBreakerSeeded = true;
+      this.noteDeadCoordinatorSeed(coord, seedCause, next.map((m) => m.id), breaker.tripped, ids, commit === 'committed');
+    }
+    const recorded = commit === 'committed' || commit === 'unchanged';
     const key = deadCoordinatorBreakerKey(breaker);
     if (breaker.tripped && key !== this.deadCoordinatorBreakerRecorded) {
       recordDeadCoordinatorBreaker({ coord, notifyLog: this.deps.notifyLog }, breaker);
@@ -4931,8 +5148,10 @@ export class FleetWatcher {
     // SEVEN — the act, never while the breaker stands, the longest dead first. ARMED, at most ONE claimant a pass. In
     // SHADOW every due claimant is recorded — a would-end touches nothing on the box, and the shadow list is what the
     // operator arms on (the shadow half of `one-dead-coordinator-per-pass`). The executor decides shadow from its own listing, so
-    // an outcome that is not a would-end ends the pass however this pass's listing read.
-    if (!breaker.tripped) {
+    // an outcome that is not a would-end ends the pass however this pass's listing read. And only on a pass whose commit
+    // LANDED, or that had nothing to commit over a state it knows is clean (`recorded`, D-4857, review 382, R3): shadow
+    // would-ends included, so the durable state never lags an act.
+    if (!breaker.tripped && recorded) {
       const due = crashed.filter((c) => {
         const e = this.deadCoordinatorState.get(c.id)!;
         return deadCoordinatorDue(c.since, e.crashedPasses, now) && now >= e.nextAskAt;
@@ -4945,6 +5164,116 @@ export class FleetWatcher {
     }
     // EIGHT — the attention list, from the lane's memory and its breaker alone.
     this.deadCoordinatorAttentionList = deadCoordinatorAttention(this.deadCoordinatorState, this.deadCoordinatorBreakerState);
+  }
+
+  /** THE COMMIT of one pass (D-4857, the operator's ruling 4286) — in shadow too: `coord.db` rows, not a fleet act.
+   *  The changes are this pass's anchor upserts and deletes laid over every change a commit has not landed yet
+   *  (`AnchorsPending`). Four answers:
+   *   - `unchanged`: nothing to change — no anchor, the held set's key is what the last landed commit wrote, and the state
+   *     is known clean. Nothing is written; the pass may act;
+   *   - `unseal-pending` (D-4916): a sealed start whose unseal has not landed. No breaker state or anchor is written (a tripping pass's feed row may be) and no act is composed;
+   *     the changes stay pending and the caller moves the in-memory hold; the next pass retries the unseal first;
+   *   - `mark-failed`: the dirty mark did not land. NO anchor change and no act; the changes stay pending for the next
+   *     commit, as on `commit-failed`, and the caller moves the in-memory hold. The state still reads as the last landed
+   *     write left it (clean, if it was, and never sealed: the first pass of every process unseals), older than this
+   *     process's hold; a restart finds a state no start trusts, and seeds conservatively (D-4916);
+   *   - `commit-failed`: the mark landed and the transaction did not (a refusal, a statement or a COMMIT that threw, or any
+   *     statement between the mark and its result: the carrier read included).
+   *     Nothing of it moved, the state stays dirty, the changes stay pending for the next commit, and the pass acts on
+   *     nothing; the caller keeps the new in-memory hold;
+   *   - `committed`: the exact snapshot, every change and the state clean landed together. Only now does this process
+   *     move what it knows was committed (`CommittedKey`, `DurableClean`) or let the pass act.
+   *  The `run_events` record rides the transaction when the set CHANGED: the carrier is any run that exists — for a set,
+   *  the lowest open run a member coordinates; for an empty set, the run the last record sits on, else a run any claimant
+   *  in the population (the members `before` the change first) coordinates; with none, the table alone carries it. */
+  private commitDeadCoordinatorBreaker(
+    coord: CoordStore, next: readonly DeadCoordinatorBreakerMember[], upserts: readonly (readonly [string, DeadAnchor])[],
+    deletes: readonly string[], ids: readonly string[], before: readonly DeadCoordinatorBreakerMember[],
+  ): 'unchanged' | 'unseal-pending' | 'mark-failed' | 'commit-failed' | 'committed' {
+    const key = deadCoordinatorBreakerHeldKey(next);
+    const changes = new Map(this.deadCoordinatorAnchorsPending);
+    for (const [id, a] of upserts) changes.set(id, a);
+    for (const id of deletes) changes.set(id, null);
+    // A sealed start whose unseal has NOT landed writes nothing and acts on nothing (D-4916, R1.5): a later mark or commit of
+    // this process does not count in its place, and writing one would move the row off `sealed` and make the unseal
+    // impossible. The pass's changes go pending, the hold has moved, and the next pass retries the unseal first.
+    if (this.deadCoordinatorBreakerUnsealPending) {
+      for (const [id, a] of changes) this.deadCoordinatorAnchorsPending.set(id, a);
+      return 'unseal-pending';
+    }
+    // `unchanged` also needs a write of this process to have landed and the state known clean (D-4916; review 401, F7).
+    // Both terms are redundant HERE and kept as defence (X9, and this Landed term, measured equivalent): a sealed start's
+    // pass returned above until its unseal landed; a conservative seed's CommittedKey `''` matches no set's key, so its first
+    // pass commits; and the state is known unclean only after a mark whose commit did not land, whose anchor changes sit in
+    // `AnchorsPending` or whose key differs from `CommittedKey`, so no pass reaches here with it unclean and nothing to write.
+    if (changes.size === 0 && key === this.deadCoordinatorBreakerCommittedKey && this.deadCoordinatorBreakerDurableClean
+      && this.deadCoordinatorBreakerLanded) return 'unchanged';
+    // NO EXCEPTION MAY DROP A COMPUTED HOLD (fix round 5, R2; review 401, F2): the changes go PENDING before the first
+    // statement that can throw, and a throw anywhere between here and the commit's result is folded into exactly the
+    // commit-failed path (state dirty, changes pending, no act). The caller moves the in-memory hold before it calls.
+    for (const [id, a] of changes) this.deadCoordinatorAnchorsPending.set(id, a);
+    this.deadCoordinatorBreakerDurableClean = false;
+    try {
+      const mark = coord.markDeadCoordinatorBreakerDirty(Date.now());
+      if (!mark.ok) {
+        console.warn(`ccrc-server: sweepDeadCoordinators could not mark the breaker's state dirty (${mark.detail}) — no anchor changed and no act this pass; the changes stay pending`);
+        return 'mark-failed';
+      }
+      // The mark landed: a write of this process. (A sealed start never reaches here before its unseal has landed.)
+      this.deadCoordinatorBreakerLanded = true;
+      const record: number[] = [];
+      if (key !== this.deadCoordinatorBreakerCommittedKey) {
+        if (next.length === 0 && this.deadCoordinatorBreakerHeldRunId !== null) record.push(this.deadCoordinatorBreakerHeldRunId);
+        for (const id of [...next.map((m) => m.id), ...before.map((m) => m.id), ...ids]) {
+          const open = coord.openRunsClaimedBy(id);
+          if (open.ok && open.siblings.length > 0) { record.push(open.siblings[0]!.id); break; }
+        }
+      }
+      // The WRITE-TIME clock, never the pass's `now`: a same-pass anchor (measured at its own, later instant) must not read
+      // as started after this snapshot (fix round 4, D-4826).
+      const c = coord.commitDeadCoordinatorBreakerState({ generation: mark.generation, held: next, at: Date.now(),
+        upserts: [...changes].flatMap(([id, a]) => (a === null ? [] : [[id, a] as const])),
+        deletes: [...changes].flatMap(([id, a]) => (a === null ? [id] : [])),
+        record: key === this.deadCoordinatorBreakerCommittedKey ? null : record });
+      if (!c.ok) {
+        console.warn(`ccrc-server: sweepDeadCoordinators could not commit the breaker's state (${c.detail}) — it stays dirty, no act this pass; the next pass commits again`);
+        return 'commit-failed';
+      }
+      this.deadCoordinatorAnchorsPending.clear();
+      this.deadCoordinatorBreakerCommittedKey = key;
+      this.deadCoordinatorBreakerDurableClean = true;
+      this.deadCoordinatorBreakerGeneration = c.generation;
+      if (c.recordedOn !== null) this.deadCoordinatorBreakerHeldRunId = c.recordedOn;
+      return 'committed';
+    } catch (err) {
+      console.warn(`ccrc-server: sweepDeadCoordinators: a statement of the breaker's commit threw (${err instanceof Error ? err.message : String(err)}) — it stays dirty, no act this pass; the changes stay pending and the hold stands`);
+      return 'commit-failed';
+    }
+  }
+
+  /** The words for a pass that seeded the hold conservatively (D-4857; review 382, R2): ONE warn line and ONE feed row,
+   *  naming the cause — `no breaker state yet` (absent), a state left dirty, or a row it could not read (a bounded
+   *  reason, never the row's content) — through `recordRows`, saying whether that pass's record LANDED. They are said
+   *  once because the pass that seeds sets `Seeded`. No new attention kind, no wire word. */
+  private noteDeadCoordinatorSeed(
+    coord: CoordStore, cause: DeadCoordinatorSeedCause, held: readonly string[], tripped: boolean, ids: readonly string[],
+    landed: boolean,
+  ): void {
+    const record = cause.kind === 'absent' ? 'the first state' : 'a fresh record';
+    // Conditioned like the feed row beside it (review 401, F5): a hold forms only when two or more coordinators stand unreleased.
+    const what = held.length > 0 ? 'it holds every coordinator this pass did not see released, flagged'
+      : tripped ? 'fewer than two coordinators stood unreleased, so no cluster formed, but the breaker tripped on a fleet-wide doubt and holds the lane'
+        : 'fewer than two coordinators stood unreleased, so no cluster formed and it holds none';
+    const rest = `— ${what}, and restarts every crashed coordinator's hour; ${landed
+      ? `it wrote ${record}` : `${record} did not land, so it ends nothing until one does`}`;
+    console.warn(cause.kind === 'absent'
+      ? `ccrc-server: sweepDeadCoordinators: no breaker state yet ${rest}`
+      : cause.kind === 'dirty'
+        ? `ccrc-server: sweepDeadCoordinators found the breaker's state left dirty (generation ${cause.generation}) ${rest}`
+        : cause.kind === 'unsealed'
+          ? `ccrc-server: sweepDeadCoordinators found the breaker's state not sealed (generation ${cause.generation}: the last server did not end through a clean shutdown) ${rest}`
+          : `ccrc-server: sweepDeadCoordinators could not read the breaker's record of its hold (the breaker state row: ${cause.reason}) ${rest}`);
+    recordDeadCoordinatorBreakerSeed({ coord, notifyLog: this.deps.notifyLog }, cause, held, tripped, ids, landed);
   }
 
   /** The act — or its shadow — for one due claimant, on the coordination serialiser. Its outcome, or `null` when it
@@ -4961,7 +5290,9 @@ export class FleetWatcher {
       // Each re-measure reads the clock as it measures (the watcher's own source, `Date.now`), never the pass's `now`.
       now: (): number => Date.now(),
       // WHOLE — the hold with the trust — so a mirror gone stale since the pass is a `hold` stop (review 339, F4).
-      journalTrust: () => readDeadCoordinatorJournalTrust({ coord, io: this.deps.io, cfg: this.deps.cfg }, this.lifecycleHealth()) };
+      journalTrust: () => readDeadCoordinatorJournalTrust({ coord, io: this.deps.io, cfg: this.deps.cfg }, this.lifecycleHealth()),
+      // ...and its synchronous half again AFTER the claimant's measure, from the mirror as it is THEN (wave 6; review 355, F7).
+      journalReread: (early: DeadCoordinatorJournalTrust) => rereadDeadCoordinatorJournalTrust(coord, this.lifecycleHealth(), early) };
     try {
       const out = await serial(coord, (abandon) => endDeadCoordinator({ ...deps, abandon }, pick.id, now));
       const e = this.deadCoordinatorState.get(pick.id) ?? deadCoordinatorEntry();
@@ -4972,8 +5303,12 @@ export class FleetWatcher {
       this.deadCoordinatorState.set(pick.id, deadCoordinatorNextEntry(e, out, pick.cause, pick.since, Date.now(), CHILD_RECLAIM_SWEEP_MS));
       // A re-measure that found it NOT crashed is evidence: its hour starts again from the next crash (ruling E: any
       // answer but a crash deletes the anchor, and `deadCoordinatorNextEntry` forgets the run of crashed passes).
+      // The delete is STAGED (D-4857): pending, then a commit of its own — the dirty mark, the delete and the unchanged
+      // snapshot in one transaction. One that does not land stays pending: the next pass lays it over the durable anchors
+      // (a crash then starts a fresh anchor) and re-sends it.
       if (out.kind === 'ended' && out.stoppedBy?.kind === 'remeasured') {
-        try { coord.deleteDeadAnchor(pick.id); } catch { /* the next pass's own answer deletes or keeps it */ }
+        this.deadCoordinatorAnchorsPending.set(pick.id, null);
+        this.commitDeadCoordinatorBreaker(coord, this.deadCoordinatorBreakerHeld, [], [], [], []);
       }
       return out;
     } catch (err) {
@@ -7426,11 +7761,11 @@ export class FleetWatcher {
           // was a write that did NOT change the question on screen. Advance
           // `askAt` to match, or the next parent answer refuses `ask-moved`
           // over a bump nobody made — see `restampAsk`'s own docstring for
-          // the writer that does this (`session-hook.sh`'s subagent arm) and
-          // for why re-stamping is not a weakening. Runs BEFORE the
-          // amendment gate, and independent of it: a held ask goes stale on
-          // a subagent event whether or not its notification is being
-          // replaced.
+          // the writers that still do this (since D-4041 a subagent event over
+          // a MAIN-thread wait keeps `updatedAt`; one over a wait a subagent
+          // raised, and any other bump, still moves it) and for why
+          // re-stamping is not a weakening. Runs BEFORE the amendment gate, and
+          // independent of it, whether or not the notification is replaced.
           this.restampHeldAsk(r.id, dialog.id);
           if (notify && actions && this.actionlessAsks.get(r.id) === dialog.id) {
             // The amendment. Same question, same tag — `push-sw.js` sets

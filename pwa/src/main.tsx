@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client';
 import { registerSW } from 'virtual:pwa-register';
 import './styles/base.css';
 import { App } from './app';
+import { RenderBoundary, RootFallback } from './components/RenderBoundary';
 import { initTheme } from './lib/theme';
 import { setUpdater } from './lib/swupdate';
 
@@ -10,9 +11,15 @@ import { setUpdater } from './lib/swupdate';
 // pre-bundle paint is right; this adds the live change listener + meta sync).
 initTheme();
 
+// The root boundary (design 2026-10-01 section 4.12): a throw anywhere in the
+// app while rendering shows "ccrc could not draw this screen." and Reload
+// instead of unmounting the root into a blank page. Its key is a constant, so
+// it never resets: Reload is the way back.
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
-    <App />
+    <RenderBoundary where="root" resetKey="root" fallback={() => <RootFallback />}>
+      <App />
+    </RenderBoundary>
   </StrictMode>,
 );
 

@@ -480,7 +480,8 @@ each item is a departure named there).
 - **The attention list is the lane's own memory.** Child reclamation derives its list from the lifecycle mirror alone; the
   expiry's entries (a shadow `would-expire`, a `held` row past its instant, a standing `in-use`, a refusal, a failure, no
   evidence) are mostly never journaled, so the lane lists them from its own passes and a restart rebuilds the list over
-  the next ones, which can delay an expiry and never cause one.
+  the next ones, which can delay an expiry and can ask again a row the lane had stopped asking, always behind a fresh
+  audit whose token ccd proves again inside its lock (§12).
 - **As wave 5 closes the lane's follow-ups** (each a departure named in the wave-5 plan,
   `docs/superpowers/plans/2026-10-08-workspace-lifecycle-wave5-residue-and-expiry-follow-ups.md`).
   - **The consent binds the branch.** Inside its lock `ws-expire` reads the branch three ways at the recompute and
@@ -488,19 +489,19 @@ each item is a departure named there).
     (detached, on another branch, or with the worktree gone), one deleted) it stops
     there, `failed` `state-changed`, after the pin, which only keeps, and before the tombstone and the breadcrumb.
     With HEAD symbolic to `ws/<slug>`, a branch deleted inside the lock is refused earlier, at the pin, as
-    `pin-failed`, which is resumable. A branch already absent when the token was minted reads absent twice and expires
+    `pin-failed`, before the breadcrumb: resumable on a ccd older than wave 6, audited afresh since (below). A branch already absent when the token was minted reads absent twice and expires
     with its work in the attic. A branch deleted between the fresh pin and the tail's settle is as wave 6 of CCR-15
     left it: its tip was pinned at the fresh pin.
   - **A `failed` `state-changed` is audited afresh.** ccd prints that document only on a fresh expiry, before the
     tombstone and the breadcrumb, so nothing started. As on the reclaim side, "not resumable" means start over, not
     final: the lane forgets the instant it learned and its sightings and returns to learning, so a later pass's audit
     mints a fresh token over what stands, and the row is asked again only once seen eligible twice past its instant. A
-    feed row records it, and nothing is listed. `probe-unmeasured` is still read as final, but ccd prints it on a
+    feed row records it, and nothing is listed. `probe-unmeasured` was read as final (and still is from a ccd that prints no `crumb`), but ccd prints it on a
     resumed expiry too, after an earlier attempt's breadcrumb (a tombstone it cannot read, or a tmux probe that did not
-    answer), so there it can stop the lane on a part-expired archive until a restart. That is a known gap, routed to
-    this programme's wave 6 once CCR-15 wave 7's `crumb` field is on `main`, and an arming blocker for the lane until
-    then. `pin-failed` and `tombstone-unwritable` stay resumable, because the shared tail prints each after the
-    breadcrumb too; the `crumb` field is what can tell those apart.
+    answer), so there it could stop the lane on a part-expired archive until a restart. That was a known gap and an
+    arming blocker for the lane; wave 6 closes it with CCR-15 wave 7's `crumb` field (below). Without `crumb` (an older
+    ccd), `pin-failed` and `tombstone-unwritable` stay resumable, because the shared tail prints each after the
+    breadcrumb too; the `crumb` field is what tells those apart.
   - **A kept leaf is listed.** The `expired` document's `clipsKept` and `tmpRootKept` are read by name. A kept word
     (`refused`, `unmeasured`, `in-use`) lists the archive, though its row is gone, saying what was kept and why, until
     the server restarts. An absent key (an older ccd) is recorded in the feed row as unmeasured and lists nothing, so a
@@ -510,12 +511,45 @@ each item is a departure named there).
     reaches the persistent tier, only the verb's does: the tier's day and its attempts count the verb's failures
     alone. Its report stands on the list, naming the first failure, the attempts and the last detail, saying the
     expiry may have stopped part-way (the server cannot yet tell), and suggesting no destructive verb. The lane asks
-    again every four hours, never stopping. No answer that ends no attempt replaces the entry or resets its run: a
-    hold, a deferral, a shadow audit (its feed row's "nothing was deleted" is about that audit alone), a refusal the
+    again four hours after each failed attempt, never stopping. No answer that ends no attempt replaces the entry or resets its run: a
+    hold, a deferral, a shadow audit (its feed row then says only that this pass deleted nothing), a refusal the
     box retries, an in-use, ccd's "not yet", an older ccd's silence.
-    The entry goes when an attempt completes, finds that none had begun (a `failed` `state-changed`, which ccd prints
-    only before the breadcrumb) or stops for good, or when the workspace is archived again; a restart re-learns. A
+    The entry goes when an attempt completes, finds that none had begun (any failed document ccd marks `crumb: false`,
+    or an older ccd's `state-changed`) or stops for good, or when the workspace is archived again; a restart re-learns. A
     terminal refusal and a composition error are still never asked again.
+- **As wave 6 closes the lane** (each a departure named in the wave-6 plan,
+  `docs/superpowers/plans/2026-10-11-workspace-lifecycle-wave6-resumed-expiry-and-arming-close-out.md`).
+  - **`ws-expire` says `crumb`, and the lane reads it first.** Every `failed` document `ws-expire` prints carries
+    CCR-15's `crumb`: `false` on a fresh expiry, before its breadcrumb (`probe-unmeasured`, `pin-failed`,
+    `state-changed`, `tombstone-unwritable`), `true` on a resumed one (its `probe-unmeasured`, printed while its
+    `expire:` breadcrumb stands) and, as before, in the shared tail; a breadcrumb that stands but cannot be read leaves
+    it unsaid, as `ws-reclaim` does. The parser reads the word, then `crumb`: `false` is audited afresh, `true` is
+    resumed, and an absent or non-boolean `crumb` (an older ccd) falls back to the word rule above, exactly. So a
+    resumed expiry's `probe-unmeasured` is retried, never final; a fresh one's, which was final before, is audited
+    afresh and counted; and a fresh pin's `pin-failed`, a symbolic HEAD's deleted branch among them, is audited afresh
+    rather than resumed. The one document still read final by its word is a `probe-unmeasured` over a breadcrumb that
+    turns unreadable between the act's audit and the fork's in-lock read: nothing is deleted, and the row is listed and
+    not asked again until the server restarts. A breadcrumb already unreadable at the lane's audit never gets that far,
+    and what the lane does with it depends on whether it has learned the row's instant. On a learned row the act's own
+    audit answers `unmeasured` (exit 1), read as `audit-failed`: backed off and listed after the hour. On a row not yet
+    learned (every row after a server restart, and any but a stuck one after a `restart` answer), `learnExpiry` meets it
+    first and lists it at once as a non-final `failing` ("its expiry could not be learned"). Neither is final, and nothing is deleted.
+  - **`containment-refuted` is stuck.** The shared tail prints it, past the breadcrumb, when its removal-time re-ask
+    proves that what it would remove is not only this workspace's own. Whatever `crumb` says, the row is listed at
+    once, saying the expiry stopped part-way and nothing further was deleted, and goes straight to the persistent
+    tier. The entry outranks a failing one and stands until an attempt completes or the workspace is archived again; a
+    terminal verdict still outranks it, as on the reclaim side. On the wire it is a `failing` entry: no new word.
+  - **A restart that recurs is counted.** A failed document the lane audits afresh counts on the run of failures every
+    failure of the act counts on, and the learn after it carries that run: it backs off, and is listed once the run
+    has lasted the hour. It never reaches the persistent tier, since nothing it started stands.
+  - **The words say when.** A standing entry is asked again four hours after each failed attempt, sooner after an
+    answer that ends no attempt and never while the workspace is held. A fleet box that answers `flock-unavailable`
+    gets no cleanup composed at all, for any workspace, until the server restarts. Its feed row says so, and so does
+    the row's entry; a stuck or tier entry keeps its place, and every row whose sentence promises another ask says the
+    halt in its own sentence while it stands (a stuck entry, a tier entry and the hourly ladder's non-final `failing`
+    row, `lock-unopenable` included), with no new kind and no new word. A shadow feed row over a standing
+    entry says that pass deleted nothing and that an earlier attempt may have stopped part-way; it never says nothing
+    was deleted.
 
 ### 5.4 Stage 4 — the dead-coordinator lane (L4)
 
@@ -616,22 +650,45 @@ each item is a departure named there).
   succeeded (it was started and never ran); a horizon with no spawn row at all still reads crashed.
 - **The anchor restarts after a gap nobody measured.** `dead_claimants` carries `lastDeadAt` beside `firstDeadAt`; an
   episode whose last crashed pass is older than ten minutes (a server down, an older build running after a rollback,
-  which never writes the table) starts again at the pass that measures it. The table is a new table and nothing else,
-  so a rolled-back build boots on it.
+  which never writes the table) starts again at the pass that measures it. A claimant crashed with
+  evidence of a later life later than its anchor starts a fresh anchor, as a first crash does, and the hour counts from
+  it; the evidence is a supervisor heartbeat (supervision evidence: re-stamped every 30 seconds, at every supervisor
+  start and by a swap, so it also shows a supervisor's restart) or the trusted journal's newest successful spawn (which
+  covers an unsupervised fallback that stamps none), either later than the anchor and not after now; the breaker adds
+  that instant to every instant it remembers, so a lane that skipped the pass that saw it alive no longer keeps the old
+  episode alone (D-4825, D-4827). A later life that leaves neither is not seen, and in remote mode a fleet clock running
+  behind the server's can hide one; neither is permissive. The table is a new table
+  and nothing else, so a rolled-back build boots on it.
 - **The breaker holds the whole lane**, not only the claimants it names, and it **clears through the doors that
   already exist**: the claimants fall back under the threshold when the operator revives them, reclaims their
   programmes or abandons their runs. No new route.
-- **The breaker remembers.** It keeps each member's first-dead instant and releases a member only on evidence (alive,
+- **The breaker remembers.** It keeps every first-dead instant each member has carried while held and releases a member only on evidence (alive,
   stopped, a deliberate act) or when it leaves the population, so one pass that cannot measure a member — which deletes
   that member's anchor — does not dissolve the cluster. "Fleet-wide" is what the pass measured: tmux not answering for
-  any claimant trips it whatever the count; a registry that will not list stops the tick before the lane runs.
+  any claimant trips it whatever the count; a registry that will not list stops the tick before the lane runs. The held
+  set is kept in `coord.db`'s typed breaker state, `dead_coordinator_breaker_state` (one row: a generation, `clean`, `dirty` or
+  `sealed`, the exact held snapshot and its write time; a new table, the operator's choice over a sentinel claimant row or
+  an untyped marker), and recorded beside it as a `run_events` observation row (`fromState = toState`, so nothing pushes
+  it) whenever the held set changes, in shadow too; both carry each member's first-dead instants with ids
+  percent-escaped by a total encoding (a lone surrogate is `%u` and four hex digits), so any claimant id is carried and
+  reads back exactly (several instants of one member are `+`-joined; a member the
+  fallback below holds carries a `*` after the list), and the state is read back once per process at the first pass (review 381, F1; D-4857).
+  Its clustering is monotone: a member keeps every first-dead instant it has carried while held, adds its current anchor
+  each time it is crashed and anchored, and clusters at all of them, and two entries cluster when any instant of one is
+  within the window of any instant of the other, so a held instant never replaces a re-anchored one, and, for the
+  passes and evidence both lanes share, a restarted lane's breaker stands wherever an unrestarted lane's does, under the
+  conditions §12 names; anchors and releases are pass-sampled (review 384, F1; review 385, F3); the
+  cost is that a member held at an old instant that crashes anew also clusters near its new instant, and a held member's
+  instants, and its record, grow by one per re-anchor while it is held.
 - **One claimant a pass**, the longest dead first, ARMED; in shadow every due claimant is recorded.
 - **The re-measure runs inside the arm.** A compare-and-set on `claimedBy` cannot see a revive of the same id, so the
   abandon arm re-measures the claimant immediately before each run's fleet act and again after it, before the commit;
   a revive that lands inside that last round trip is the residual. A re-measure that reads anything but a crash deletes
   the anchor, as a pass's would.
 - **The attention list is the lane's own memory** (the expiry lane's shape): would-end, unmeasured, stuck and the
-  breaker, rebuilt over the passes after a restart, which can delay an act and never cause one.
+  breaker, rebuilt over the passes after a restart. A restart keeps the lane's first-dead anchor (a gap of more than ten
+  minutes re-anchors it, as above) and the breaker's hold (the typed state above, read back at the first pass, and trusted only when it reads `sealed`, which a clean shutdown writes (D-4916); a state that is clean but not sealed, dirty, absent or cannot be read makes the lane flag every claimant that pass does not release, beside every member, instant and flag it can still read, and write an exact record, with a warn line and a feed row saying so: a flagged claimant clusters with any other crashed or held claimant, whatever the instants, until evidence releases it, so every claimant a readable record would hold is held too, but only when two or more stand unreleased (one alone holds nothing and only has its hour restarted, and a flagged pair dissolves when evidence releases one of the two), at the cost that while one stands a claimant that crashes is swept into the hold and is flagged itself, until evidence releases it or fewer than two stand), restarts the run of crashed passes, which delays an act, and drops the backoff after a stuck or thrown act, which can bring an abandon back sooner. Every pass that changes an anchor or the held set first marks the state dirty, alone, then writes the exact snapshot, every anchor change and the state clean in one transaction; a mark or a commit that fails, or a statement that throws between them, keeps the changes pending and the new hold in memory and acts on nothing, so a restart finds the last complete state, a dirty one or the new complete one, and a state no start trusts unless a clean shutdown sealed it (D-4857, D-4916; §12's residual (7) is closed by the seal); the server's shutdown handler (SIGTERM and SIGINT, `index.ts`) stops the lane and seals within a bound of five seconds when nothing is pending, warns once on a refusal, never throws and re-raises the signal, and the first pass of a process that read `sealed` unseals it before it can change state or act; an unclean exit starts conservatively, which is a cost: each crashed claimant's hour restarts, and two or more unreleased claimants hold the lane, flagged, until evidence releases one; under a sealed state the first pass still flags every claimant whose durable anchor began after the snapshot was written (D-4826).
+  The lane composes no act on a pass whose commit did not land, so the durable state never lags an act. Every act is still behind the claimant's re-measure before and after the fleet act.
 - **The lane never pushes.** The stall watch notifies about a dead coordinator's stalled workers — r3
   (`coordinator-dead`) and, once its wave-2 arms are armed, `coord-deaf`, one push per worker, each naming the
   coordinator; this lane's feed rows (each with the claimant's first-dead instant, and one per breaker trip) are records
@@ -655,6 +712,21 @@ each item is a departure named there).
   pre-start `reclaim` `failed` `probe-unmeasured` row reads as a deliberate act and the lane abstains from that
   claimant. Abstention ends nothing. It is reachable only by a marked child that becomes a claimant or an heir before
   any successful reclaim of it.
+
+**As wave 6 closes the lane** (each a departure named in the wave-6 plan,
+`docs/superpowers/plans/2026-10-11-workspace-lifecycle-wave6-resumed-expiry-and-arming-close-out.md`).
+- **The journal's trust is read again after the claimant's measure.** The act reads three things before it measures
+  the claimant: the mirror's health state, its gap list and the last instant ccd counted a journal line it could not
+  write. The first two are synchronous and are read again after the measure, with nothing awaited between that read
+  and the commit, so the revive window stays the measure's own round trip. A mirror that turned `stale` or `unknown`
+  meanwhile stops the act as a hold (the anchor and the run of passes stand), and a gap recorded meanwhile joins the
+  gaps the clause reads. The write-error instant needs a stat, an await, so it stays the early read's; but the count
+  behind it is the mirror's and is read again, so a failure counted during the measure where the early read saw none
+  makes it unknown, and the claimant unmeasured. A further failure on top of one already counted is not seen before the
+  commit.
+- **A hold met after the fleet act is recorded.** A mirror that goes stale between a release and the commit stops the
+  act with the worker released and its run open; the feed row and the attention entry say so, the anchor stands, and
+  the next pass ends the programme.
 
 ## 6. What this changes outside itself
 
@@ -772,3 +844,171 @@ The rulings stand as given. Two consequences of them surfaced in review, and the
 2. **Every workspace archive starts the 7-day clock.** After L2 there is no way to put a workspace down that is not
    an archive, so a "stop for now" to free memory also becomes a deletion in 7 days unless it is brought back.
    Main checkouts are unaffected.
+
+## 12. Before arming
+
+Nothing in this tree arms either lane, and nothing writes either live file (`single-definition.test.ts` pins both).
+Arming is the operator's act alone: touching `$REG/expire-lane-live`, and then, in the recommended order,
+`$REG/dead-coordinator-lane-live`, by hand in the registry the server reads. These are the facts to know before each,
+gathered when the programme's last wave (6) closed; each is designed where §5.3 and §5.4 say, and this section only
+collects them.
+
+**Both lanes.**
+- **Deploy first, the fleet box first.** Both boxes run the release that carries wave 6 (`ccrc version`, and
+  `/health`'s `version`), and the feed shows the dead-coordinator lane's shadow rows as well as the expiry lane's. A
+  fleet box whose ccd predates it prints no `crumb` on `ws-expire`'s own documents, and the server then reads them by
+  the word alone, as before wave 6: a resumed expiry's `probe-unmeasured` is final again.
+- **The recommended order.** Arm the expiry lane first, once this release is deployed and its shadow list has been read;
+  then the dead-coordinator lane, after its own shadow list has been read and any breaker trip worked through.
+- **Their memory is in memory.** A server restart re-learns the expiry lane's instants, sightings, runs of failures and
+  attention entries, and the dead-coordinator lane's run of crashed passes, backoff and attention entries. So a restart
+  can delay an act and can ask again a row the lane had stopped asking (a halted box, a failure the box said will not
+  resume, the unreadable-breadcrumb row below), always behind the lane's own guard: for the expiry lane a fresh audit
+  whose token ccd proves again inside its lock, for the dead-coordinator lane the claimant measured again before and
+  after the fleet act; neither acts without it. A restart also drops each expiry row's `nextAskAt` (a fresh entry's is
+  `0`) and its run of `failures`, so a tier or stuck row (normally asked every four hours) and a row backing off on the
+  ladder are asked again within a few passes, SOONER than an unrestarted lane would; every ask is still behind a fresh
+  audit and ccd's in-lock re-proof. A kept-leaf entry is lost with it (question (i)).
+  The dead-coordinator lane keeps two things across a restart. One is its first-dead anchor (`dead_claimants`), which is
+  re-anchored after a gap of more than ten minutes (`DEAD_COORDINATOR_GAP_MS`) in which no pass measured the
+  claimant crashed, or when evidence of a later life shows (D-4825, D-4827), so a restart shorter than that keeps the hour. The other is the breaker's hold: its typed state in `coord.db` (`dead_coordinator_breaker_state`: `sealed` or `clean`, each with the exact held snapshot, or `dirty`), written by every pass that changes an anchor or the held set (in shadow too), with a `run_events` record of each change, and read back at the lane's first pass, where only a `sealed` state is trusted as it reads (D-4916, below).
+  A state the lane finds dirty, clean (not sealed), absent or unreadable does not stop it: for that pass the lane flags every claimant the pass does not release,
+  each flagged in the new record (a `*` after its complete `+` list of instants), beside every member, instant and flag it can still read, and writes an exact record before the state is clean or anything acts. A flagged claimant clusters with any other crashed or held claimant, whatever the instants, until
+  evidence releases it, so every claimant a readable record would hold is held too; the cost is that while one stands a
+  coordinator that crashes is swept into the hold and is flagged itself, until evidence releases it or fewer than two
+  entries stand. The flags HOLD only when two or more claimants stand unreleased: a single one holds nothing and only has its hour restarted, which is a delay, and a flagged pair dissolves when evidence releases one of the two. The server logs one warning and writes one feed row saying which, the operator's sign: "dead coordinator: no breaker state yet" when there is no state, "dead coordinator: breaker state left dirty", "dead coordinator: breaker state not sealed" when the state reads clean but no clean shutdown sealed it, or, with a `ccrc-server: sweepDeadCoordinators could not read the breaker's record of its hold` warning, "dead coordinator: breaker record unreadable". The hold releases on what releases it without a restart: evidence that the
+  claimant is alive, stopped or was stopped on purpose, or the claimant leaving the population. For that lane a restart
+  also means the run of crashed passes starts again, which delays an act, and the backoff after a stuck or thrown act
+  (`nextAskAt`, `attempts`) is lost, so a restarted lane can ask for that abandon SOONER than an unrestarted one would.
+  Every pass that changes an anchor or the held set marks the state dirty first, alone, and then commits the exact snapshot, every anchor change and the state clean in one transaction. A mark or a commit that fails changes no durable anchor and acts on nothing; its anchor changes stay pending in memory, laid over the durable anchors and re-sent by the next commit, and the in-memory hold moves to that pass's before the first statement that can throw, and a throw anywhere between the mark and the commit's result (the carrier read included) is the commit-failed path, so a failed write or a thrown statement never forgets a trip or a doubt in the process that saw it. A commit that fails leaves the state dirty, so a restart is conservative; a mark that fails leaves the state as the last landed write left it (`clean`, or `dirty` after an earlier commit that failed) and never `sealed`, because the first pass of every process unseals (D-4857, D-4916).
+  THE SEAL (D-4916, the operator's choice of 2026-10-13, "Seal on clean shutdown"). A start trusts the stored snapshot ONLY when the state reads `sealed`; `clean`, `dirty`, absent, unreadable and malformed all seed conservatively. `sealed` is written by the server's shutdown handler, the one signal handler the process has (`index.ts`, through `shutdownseal.ts`): on SIGTERM or SIGINT it stops the watcher, asks the lane to seal within one bound of five seconds (well inside systemd's default stop timeout of ninety, which the unit leaves alone: a pass in flight asks tmux about a few coordinators and the seal itself is one local statement), logs one `ccrc-server: shutdown:` warn line when the seal is refused or fails, never throws, and re-raises the same signal. The exit status is identical to what it was before the handler existed (death by the signal), so systemd, `ccrc update`'s health gate and the watchdog read it as before; the stop takes up to the bound longer. During that bound the watcher's tick is stopped; a tick already in flight, the routes and the independent timers (the box-token driver's, the auth sessions', the session sockets') keep running, so an act begun then is cut off by the re-raise, as any act could be by a SIGKILL. A second identical signal during the bound kills at once, with no seal: the listeners are `once`, so the second reaches the default action, and the cost is an unclean exit. A different signal during the bound (a SIGINT inside a SIGTERM's, or the reverse) is handled, because its `once` listener stands until the first handler ends: both handlers wait on the pass in flight, the first to resume seals and re-raises its own signal, and the process dies of that one; the seal is one generation-checked statement, so no second write can land. The refusal's warn line says what the next start does: for `no-landed-write` and `already-sealed`, which write nothing and leave the state as it stands, it says that a sealed state is trusted, and never that the state is seeded conservatively. For every other refusal, an overrun of the bound and a throw, it says the next start seeds conservatively, unless no write of this server landed and the state still reads sealed (a bound overrun on a sealed start's first pass, before its unseal), when the old seal stands and is trusted. The lane seals in one generation-checked statement over the same snapshot, and only when no pass is in flight (a pass is awaited within the bound), a write of this process has landed, no anchor change is pending, the state is durably clean and the held set's key is the one the last commit wrote; otherwise it writes nothing and says which. A seal attempt stops the lane: no pass runs after it. The first pass of a process that read `sealed` writes `clean` back, before any step can change state or act (eagerly, not at the first change, so a trip formed before the first change whose mark then fails is not trusted by the next start), generation-checked and over the same snapshot, and retries each pass until it lands; until that unseal has landed a sealed start writes no breaker state or anchor beyond it (a tripping pass's feed row may still be written; a later mark or commit does not count in its place) and acts on nothing, and takes no `unchanged` shortcut; a conservative seed's permission is its first landed commit.
+  Under a sealed state the first pass also flags, at its anchor instant, every claimant of the population whose durable anchor began after the snapshot was written (D-4826); since every anchor change of this release commits with its snapshot, that is only an older build's anchor, written after a rollback.
+  The snapshot is written with the write-time clock of the commit that carries the pass's anchor changes, so an anchor of that pass is not flagged. The cost is the conservative seed's, and it is a COST, not a residual: after an unclean exit (a kill, an OOM kill, a crash, or a stop that outlives systemd's timeout) or over a dirty, absent or unreadable state, every claimant the pass does not release is flagged, and held when two or more stand unreleased, until evidence releases it, and no durable anchor is taken as continuing, so each crashed claimant's hour restarts at that pass (an hour's delay for each, the deploy's first pass included); a clean shutdown pays none of it; while the breaker's writes keep failing nothing acts. The limit: a server clock that steps backwards across a restart can make a later anchor read earlier than the snapshot.
+  The class mail 4266 measured, and residual (7) after it, are CLOSED, not accepted (D-4857, D-4916): a held instant that lived only in memory because held-set writes failed while anchor writes landed, its anchor deleted by a doubt before a restart, cannot arise, because no anchor change lands without the snapshot that holds it, a commit that fails leaves the state dirty, which a restart reads as fail-shut, and every claimant id, a lone surrogate included, has a spelling; the same loss through a mark that fails is closed by the seal, because a state that was not sealed by a clean shutdown is never trusted.
+  Anchors and releases are
+  pass-sampled: an anchor sits on its lane's own pass, up to one cadence after the crash, evidence that releases a hold is
+  seen only at a pass, and a restart moves the pass grid as any start does, so a pair near the ten-minute window's edge
+  can cluster or release in one lane and not in the other, the lane with more passes may act sooner, and the comparison
+  below is claimed only for the passes and evidence both lanes share. The breaker's clustering is monotone (§5.4), so for
+  the passes, anchors and evidence both lanes share a restarted lane's breaker stands wherever an unrestarted lane's does when the restarted lane's population differs only
+  by claimants the unrestarted lane has already ended. A claimant the
+  unrestarted lane ended that returns under a new run is covered by the episode boundary: a supervisor heartbeat later
+  than its durable anchor starts a fresh anchor at its next crash, so the restarted lane carries the new instant beside
+  every one it remembers (D-4825). That rests on a heartbeat or a journaled successful spawn (D-4827): a return that leaves neither is not seen, in remote
+  mode a fleet clock behind the server's can hide one, and no claim is made that no other corner exists. The lost backoff has a knock-on: if the unrestarted lane backs off a stuck claimant
+  while the restarted lane, its backoff lost, ends it, the unrestarted lane keeps that claimant as an extra entry that can
+  cluster with a new crash, so the restarted lane can end a third claimant the unrestarted lane holds. The lane composes no act on a pass whose commit did not land, so the durable state never lags an act, and every act is still behind the claimant's re-measure before and after the fleet act.
+- **`$REG/reclaim-paused` stops both lanes at once**, shadow included: the cleanup row's toggle on `/runs`.
+
+**The expiry lane (`$REG/expire-lane-live`).**
+- **Its arming blockers are closed.** A pre-breadcrumb `state-changed` is audited afresh (wave 5). A resumed expiry's
+  `probe-unmeasured` is retried (wave 6, through `crumb`), and a fresh one's is audited afresh, counted and listed after
+  the hour if it recurs, where it was final before. `_ws_expire_cwd_users` resolves its parent through
+  `_ws_dir_physical`, so a parent whose physical path holds a newline is unmeasured, never "nobody" (CCR-15 wave 6; its
+  case in `ccd-leaf-root-newline.test.ts` goes red when the bare `pwd -P` is put back, measured in wave 6).
+- **One residual of question (k), in a narrow window.** A breadcrumb that stands but cannot be read (a
+  `$REG/<id>.reaping` that is not a readable file) leaves `crumb` unsaid, as on the reclaim side. If it is already
+  unreadable at the lane's audit, `ws-audit --expire` answers `unmeasured` (exit 1): on a learned row that is read as
+  `audit-failed`, backed off and listed after the hour; on a row not yet learned (every row after a server restart, and
+  any but a stuck one after a `restart` answer), `learnExpiry` lists it at once as a non-final `failing` ("its expiry
+  could not be learned"). Neither is final. Only a breadcrumb that turns unreadable between the act's audit and the
+  in-lock fork leaves a `probe-unmeasured` read by its word: listed at once and not asked again for that archive until
+  the server restarts. Nothing is deleted either way; read what stands in that row before anything else.
+- **One archived tree holds a leaked test tmux server** (the ledger's pre-arming item (d)). The lane refuses that row
+  `in-use` each time it is asked and lists it after three, naming the process; it never ends it. End that server first, once
+  you know what it is, or arm knowing the row stays listed.
+- **A branch already gone now expires.** Since CCR-15 wave 6, an archived workspace whose branch is gone when its token
+  is minted expires with its work in the attic, where `main` stopped at `pin-failed`, and its ignored and secret-shaped
+  files go with the tree, as the standing policy says. A branch deleted between the fresh pin and the tail's settle has
+  its tip pinned at the fresh pin. With HEAD still symbolic to a deleted branch the pin fails before the breadcrumb, and
+  the lane audits it afresh each time, counted and listed after the hour.
+- **A branch deleted or made inside the lock stops the act** before the breadcrumb, in both directions (question (j)).
+- **An archive whose admin `gitdir` names no path** is unmeasured and retried, never `no-worktree-record` (CCR-15
+  wave 7, rung 8); a record that is truly absent stays terminal.
+- **What each answer does to a row.** A person viewing it defers it with no ceiling. A process working in it is refused
+  `in-use` each time the row is asked (the lane makes at most one act per pass, fleet-wide) and listed after three, naming
+  the process; the lane never kills. A held row past its instant is listed,
+  never touched. A terminal refusal, or a failure the box says will not resume, is listed and never asked again for that
+  archive. A resumable failure backs off and is listed after the hour (a box answer such as `lock-unopenable` at once); after a day of the verb's failures it becomes a
+  standing entry, asked again four hours after each failed attempt. `containment-refuted` is listed at once on that
+  tier. A failure ccd printed before the breadcrumb is audited afresh, counted, and listed after the hour if it keeps
+  happening. A completed expiry that kept a leaf is listed until a restart.
+- **A stuck entry stands through a `restart` answer** (ruling (m)). An act whose document says ccd stopped before it began
+  (`crumb: false`) ends a tier entry, but not a stuck one: it keeps its entry, its first instant and the tier's cadence,
+  because a restart says nothing about whether the leaf that refused containment is gone. Only an attempt that completes,
+  a verdict that stops the row for good, or a fresh archive ends it (a server restart drops it, as it drops every entry).
+- **`flock-unavailable` halts the lane's act** on that box until the server restarts. The halt is one process-wide field
+  gating only the act: learn audits go on. Its feed row says so, and so does the row's entry; a stuck or tier entry keeps
+  its place, and every row whose sentence promises another ask (a stuck entry, a tier entry, the hourly ladder's
+  non-final `failing` row, `lock-unopenable` included) says the halt in its own sentence while it stands.
+- **The first armed pass faces the backlog** at one expiry a pass, fleet-wide. The operator expired fifteen archives by
+  hand on 2026-10-07; raise `WS_EXPIRE_AFTER_S` first if what remains is too many at that pace.
+
+**The dead-coordinator lane (`$REG/dead-coordinator-lane-live`).**
+- **Arm it after the expiry lane**, once its own shadow list is read and any breaker trip is worked through.
+- **Its wave-5 arming blockers are closed**: the act's own clock is pinned, a second crash is a second record, a
+  release and a re-hold are told apart, every thrown act is recorded, and an unread generation is no successful sweep.
+  What stands instead is listed in full below, residual by residual.
+- **The three early reads, and what wave 6 closes.** Before measuring the claimant the act reads the mirror's health
+  state, its gap list and the last instant ccd counted an unwritten journal line. Wave 6 reads the first two again after
+  the measure, and the count behind the third: a failure counted during the measure's round trip, where the early read
+  saw none, leaves the claimant unmeasured. One thing stays early: a further failure on top of one already counted is
+  placed by the earlier instant, so it is not seen before the commit.
+- **The journal-gap trade.** A coordinator whose last successful spawn is not newer than a recorded gap stays listed as
+  unmeasured, never ended, until it spawns again (wave 4, accepted). Ageing a gap out is carried, for a decision on
+  shadow evidence.
+- **The accepted residuals, every one of them** (arm only knowing these; this release closes none of them). (1) A lane
+  gap of over ten minutes re-anchors every crashed coordinator on the same pass, so the breaker holds and no shadow row
+  is written until all but one are revived, reclaimed or abandoned. (2) A revive of the same id inside the act's last
+  re-measure window, sub-second to one agent round trip, can still lose its runs. (3) Anchors and releases are
+  pass-sampled: an anchor sits on its lane's own pass, up to one cadence after the crash, and evidence that releases a
+  hold (alive, stopped, deliberate) is seen only at a pass, so two lanes, or a restarted and an unrestarted one, with
+  passes at different moments can hold or release a pair near the ten-minute window's edge differently, and the lane
+  with more passes may act sooner. (4) A restart drops the in-memory backoff and retry population (`nextAskAt`,
+  `attempts`), so a restarted lane can let another claimant proceed sooner, and if the unrestarted lane backs off a
+  stuck claimant while the restarted one ends it, the first keeps it as an extra entry that can cluster with a new
+  crash; it still re-audits, waits its durable hour, re-measures before and after the act, and is blocked by the durable
+  breaker hold. (5) A later life that leaves neither a supervisor heartbeat nor a journaled successful spawn is not
+  seen, and in remote mode a fleet clock running behind the server's can hide one. (6) A start over a state that is not `sealed` (an unclean exit: a kill, an OOM kill, a crash, or a stop that outlived systemd's timeout; a dirty, absent or unreadable state; the deploy that creates the table is one such start) flags every claimant its first pass does not release and restarts every crashed claimant's hour at that pass, which is a COST of the seal's design, paid only on an unclean exit. It HOLDS only when two or more claimants stand unreleased, and then until evidence releases one of them (a flagged pair dissolves when evidence releases one of the two); a single unreleased claimant holds nothing and only has its hour restarted, a delay; while the breaker's writes keep failing nothing acts; and a server clock that steps backwards across a restart can make a later anchor read earlier than the snapshot. (7) is CLOSED, not accepted (D-4916, the operator's choice of 2026-10-13): a restart after a dirty mark that could not be written used to seed the older clean state and could bring an act sooner, and now seeds conservatively, because only a state a clean shutdown sealed is trusted and the first pass of every process unseals it. What stands is the floor any durable design has, named so it is not mistaken for a hole: a process none of whose writes lands, from its first pass to its death, leaves no trace, so the next start trusts the older seal and the trip, doubt or release that process held in memory is lost with it (pinned in the lane's tests: seal, a sealed start whose every write fails, a crash, and the next start trusts the older seal); it needs the store to refuse every write for a process's whole life and then recover for the next, and it is not the class mail 4266 measured. The class mail 4266 measured is not on this list because it is closed, not accepted (D-4857). Each of (1), (2), (5) and (6) only delays an act or holds more; (3) and (4), and the floor named in (7), can bring an act sooner; none
+  bypasses the lane's own fresh audit, hour, journal, re-measure or breaker decision. The one action to take before a
+  rollback is the next item's.
+- **The deploy that creates the breaker's table starts conservatively, once.** The table this release creates has no
+  row, and an absent row reads `absent`, which seeds the conservative hold as an unsealed one does: its first pass flags every coordinator it does not see alive, stopped or
+  put down on purpose, restarts every crashed coordinator's hour at that pass, writes the first exact record (the state
+  reads clean at once) and says so ("dead coordinator: no breaker state yet"). It HOLDS only when two or more such
+  coordinators stand unreleased; one alone has its hour restarted, a delay, and a flagged pair dissolves when evidence
+  releases one of the two. What lasts, while both lanes are shadowed, is that flagged hold, only for two or more: an
+  operator arming later should expect it while they are still crashed, and it releases through the doors that already
+  exist: revive, reclaim or abandon. An unclean exit afterwards reads its own words ("dead coordinator: breaker state not
+  sealed" when the state was clean, "breaker state left dirty" after a commit that failed); the flags, and holding only for two or more, are the same; a clean shutdown (SIGTERM or SIGINT, handled in `index.ts`) seals
+  the state and the next start pays none of it (D-4916).
+- **Roll back below this release only with the lane disarmed.** No released build before this one reads the breaker's
+  held-set record, so a rollback below it (`ccrc rollback`, or the unattended update watchdog) starts with no hold, the
+  restart hole failing open: arm the lane only on a release that carries the reader, and before rolling back below it
+  remove `$REG/dead-coordinator-lane-live`: the lane then only records, and never acts. Nor does an older build keep the
+  typed state: an older build neither reads nor writes `dead_coordinator_breaker_state`, and it changes `dead_claimants`
+  outside it, so on rolling forward again the state reads as this release left it (sealed, trusted, when it stopped cleanly; clean, seeded conservatively, when it did not), and under a sealed one only the anchors the
+  older build started are flagged (D-4826), not a hold it formed in memory and lost; read the shadow list and any breaker
+  trip again before re-arming, as at the first arming.
+- **A permanently unreadable generation pins the mirror `stale`**, with no diagnostic of its own: the lane then decides
+  nothing at all, which fails shut. `/api/fleet/health`'s lifecycle state shows it.
+- **An accepted abstention** (§5.4): a child's pre-start `reclaim` failure reads as a deliberate act.
+- **An abandoned programme's row** stays `abandoned` while a revived coordinator's new run is open (§5.4; question
+  (f)). The consequence: `toId:'coordinator'` mail that carries no `runId` is refused while nothing else is active, and
+  goes to ANOTHER programme's coordinator when exactly one other programme is active; mail naming a `runId` still
+  resolves.
+
+**Questions still open**, lettered as the programme's ledger letters them.
+- (b) The archive-confirm copy: the ledger holds it open; wave 4 hedged both confirms to a sentence true before and
+  after arming. Is that the copy you want?
+- (f) Should a new run under an abandoned programme return its row to active?
+- (g) A stale mirror at the act keeps the run of crashed passes, where the switch resets it. Keep, or reset?
+- (i) A kept-leaf entry lives until a server restart. Is that the life you want?
+- (j) `ws-expire` refuses a branch made inside the lock as well as one deleted. Keep both directions?
+- (p) Should a breadcrumb that turns unreadable between the act's audit and the in-lock fork (the only shape left once
+  an unreadable one at the audit is backed off) be retried on the persistent tier, rather than listed at once and not
+  asked again until the server restarts?
+- Wave 2's three: the PR sheet's "Archive now" offers no consent for a busy or coordinating workspace; a real worktree
+  check in remote mode needs an agent-first probe; L5's "Its workers will be cleaned up" is true only for CCR-15's
+  children.
+- Wave 6's own are in its plan's questions for the operator.

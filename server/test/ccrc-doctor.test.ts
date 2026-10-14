@@ -1245,6 +1245,11 @@ function healthy(prefix: string): string {
   // object, so this stub cannot drift from ccd.
   writeFileSync(join(home, '.local', 'bin', 'ccd'),
     docsIndexStubScript(JSON.stringify(DOCS_INDEX_READY)), { mode: 0o755 });
+  // …and its PWA bundle carries the service worker every browser installs (spec 2026-10-01 §7.2): `docs-sw` is a
+  // check, and healthy()'s contract is that every check PASSES. `swJs()` is the default-denylist worker in the
+  // one-line shape a build emits, the same text `TREE_STUBS` and `ccrc-update.test.ts`'s tree plant.
+  mkdirSync(join(home, 'ccrc', 'server', 'dist-pwa'), { recursive: true });
+  writeFileSync(join(home, 'ccrc', 'server', 'dist-pwa', 'sw.js'), swJs());
   return home;
 }
 
@@ -1267,6 +1272,9 @@ import { DatabaseSync } from 'node:sqlite';
 import { createStore } from '../../ccd/history/store.mjs';
 import { HEALTH_COUNTERS, HEALTH_META, HEALTH_WORDS, RECOVERY_STALL_TICKS, deriveHealth } from '../../ccd/history/lib.mjs';
 import { PRELOADS, preloadOptions } from './historyHelpers.js';
+// The PWA bundle's one fixture worker (Docs W4): `healthy()` plants it and the `docs-sw` describe at the end of
+// this file measures it. Imported here, below every line another file cites, for the block comment above's reason.
+import { SW_DENYLIST_DEFAULT, swJs } from './swFixtures.js';
 
 /** python3, or null. `plantFakeRuntime`'s interpreter hands `ccgpt-runtime
  *  check`'s stamp read and probe hash to a real python3, so without one every
@@ -3367,7 +3375,7 @@ describe('ccrc doctor: config', () => {
     expect(r.stdout).toMatch(/^SKIP build: /m);
     expect(r.stdout).toMatch(/^SKIP update-exposure: .*ccrc-agent\.service/m);
     expect(r.stdout).toMatch(
-      new RegExp(`^summary: \\d+ checks \\(${5 + HEALTHY_SKIPS} skipped\\)`, 'm'));
+      new RegExp(`^summary: \\d+ checks \\(${6 + HEALTHY_SKIPS} skipped\\)`, 'm'));
     expect(r.code).toBe(0);
   });
 
@@ -13771,5 +13779,328 @@ describe('ccrc doctor: box-token', () => {
     expect(anyVerdictFor(r.stdout, 'box-token')).not.toContain('state-');
     expect(lineAfter(r.stdout, 'FAIL box-token: ')).toMatch(/^ {2}remedy: \S/);
     expect(r.code).toBe(1);
+  });
+});
+
+// ── Docs W4 Task 10: `docs-sw`, the installed service worker (spec 2026-10-01 §7.2, M7.5, M7.6) ──────────────
+// The server half of the Docs pair: `$BOX_TREE_DIR/server/dist-pwa/sw.js`, the worker both lanes install, must not
+// refuse the app shell to `/docs`. The build already refuses such a knob (`pwa/src/lib/sw-denylist.ts`, §7.3); this
+// check is the one measurement of the bundle actually installed. Every body below is `swJs()`'s one-line,
+// workbox-shaped text, the same text `healthy()`, `TREE_STUBS` and `ccrc-update.test.ts`'s tree plant, so a verdict
+// here is a verdict on the shape a real build emits. Each knob entry is printed by `String(new RegExp(...))`, which
+// is how a RegExp reaches `sw.js` (`/^\/wiki(\/|$)/`), built as `sw-denylist.ts` builds it.
+// The check SKIPs on either fleet evidence `_check_update-exposure` uses, a recorded `CCRC_ROLE=fleet` or a unit
+// directory holding `ccrc-agent.service` and no `ccrc.service` (refinement (d)), and counts `denylist:[`
+// OCCURRENCES with bash builtins, never lines (refinement (c): workbox's whole worker is one line).
+describe('ccrc doctor: docs-sw', () => {
+  const knob = (p: string): string => String(new RegExp(`^${p}(/|$)`));
+  const list = (...extra: string[]): string =>
+    `denylist:[${['/^\\/api\\//', '/^\\/ws\\//', ...extra].join(',')}]`;
+  const swPath = (home: string): string => join(home, 'ccrc', 'server', 'dist-pwa', 'sw.js');
+  const plant = (home: string, body: string): void => { writeFileSync(swPath(home), body); };
+  /** `_check_docs-sw` alone, as `cmd_doctor` runs it: `ccrc` sourced first (its `BOX_TREE_DIR`, `BOX_ENV_FILE`,
+   *  `_box_env_value`), then the table, both through the fixture's `<home>/ccrc/ccd` links. */
+  const runDocsSw = (home: string, timeout?: number): Result => {
+    const ccd = join(home, 'ccrc', 'ccd');
+    const r = spawnSync(BASH, ['-c',
+      `set -uo pipefail; . ${shq(join(ccd, 'ccrc'))}; . ${shq(join(ccd, 'ccrc-doctor-checks'))}; _check_docs-sw`],
+    { env: doctorEnv(home), encoding: 'utf8', ...(timeout === undefined ? {} : { timeout }) });
+    return { code: r.status ?? -1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
+  };
+  const lines = (out: string): string[] => out.split('\n').filter((l) => l !== '');
+  const REFUSES = 'the installed service worker refuses the app shell to /docs; Docs pages break on a hard load and offline';
+  const REMEDY = "  remedy: remove /docs from CCRC_SW_DENYLIST in the deploying machine's ~/.ccrc/deploy.env and deploy again, or move to the release lane: ccrc update";
+  const SHAPE = 'this check knows the shape workbox emits';
+  const SHAPE_REMEDY = '  remedy: hard-reload /docs/ in a browser and check that the Docs screen renders';
+
+  it('the shared fixture text is the one-line, one-denylist shape a build emits', () => {
+    expect(SW_DENYLIST_DEFAULT).toBe(list());
+    expect(swJs().split('\n')).toEqual([expect.stringContaining(`{${SW_DENYLIST_DEFAULT}}`), '']);
+    expect(swJs().split('denylist:[')).toHaveLength(2);
+    expect(knob('/docs')).toBe('/^\\/docs(\\/|$)/');
+  });
+
+  it('PASSes the default bundle healthy() plants, naming the worker it read and what its list holds', () => {
+    const home = healthy('ccrc-doctor-docs-sw-default-');
+    expect(readFileSync(swPath(home), 'utf8')).toBe(swJs());
+    const r = runDocsSw(home);
+    expect(lines(r.stdout), r.stderr).toEqual([
+      `PASS docs-sw: ${swPath(home)} keeps /docs on the app shell: its one denylist holds 2 entries (/^\\/api\\//,/^\\/ws\\//), none of them /docs or under it`,
+    ]);
+    expect(r.code).toBe(0);
+  });
+
+  it('FAILs a /docs entry with the spec\'s sentence and remedy, naming the entry', () => {
+    const home = healthy('ccrc-doctor-docs-sw-docs-');
+    plant(home, swJs(list(knob('/wiki'), knob('/docs'))));
+    const r = runDocsSw(home);
+    expect(lines(r.stdout)).toEqual([
+      `FAIL docs-sw: ${REFUSES} (${swPath(home)} denies ${knob('/docs')})`,
+      REMEDY,
+    ]);
+    expect(r.code).toBe(1);
+  });
+
+  it('FAILs an entry under /docs, and a hand-built one with no end anchor; names every covering entry', () => {
+    const home = healthy('ccrc-doctor-docs-sw-under-');
+    plant(home, swJs(list(knob('/docs/x'))));
+    expect(lines(runDocsSw(home).stdout)[0]).toBe(`FAIL docs-sw: ${REFUSES} (${swPath(home)} denies ${knob('/docs/x')})`);
+    plant(home, swJs(list('/^\\/docs\\//', '/^\\/docs/')));
+    const r = runDocsSw(home);
+    expect(lines(r.stdout)).toEqual([
+      `FAIL docs-sw: ${REFUSES} (${swPath(home)} denies /^\\/docs\\//, /^\\/docs/)`,
+      REMEDY,
+    ]);
+    expect(r.code).toBe(1);
+  });
+
+  it('PASSes /docsy and /docs-archive: a sibling that merely starts the same way is not under /docs', () => {
+    const home = healthy('ccrc-doctor-docs-sw-sibling-');
+    for (const sibling of ['/docsy', '/docs-archive']) {
+      plant(home, swJs(list(knob('/wiki'), knob(sibling))));
+      const r = runDocsSw(home);
+      expect(lines(r.stdout), sibling).toEqual([
+        `PASS docs-sw: ${swPath(home)} keeps /docs on the app shell: its one denylist holds 4 entries (/^\\/api\\//,/^\\/ws\\//,${knob('/wiki')},${knob(sibling)}), none of them /docs or under it`,
+      ]);
+      expect(r.code, sibling).toBe(0);
+    }
+  });
+
+  // Review 408's F5: the ERE's start anchor. An entry that ends in /docs, or holds it, is another co-tenant's (a
+  // wiki's own docs section), which the build allows; only an entry that starts /docs covers ccrc's Docs pages.
+  it('PASSes /wiki/docs and /a/docs/b: an entry that ends in or holds /docs is not under /docs', () => {
+    const home = healthy('ccrc-doctor-docs-sw-elsewhere-');
+    for (const elsewhere of ['/wiki/docs', '/a/docs/b']) {
+      plant(home, swJs(list(knob(elsewhere))));
+      const r = runDocsSw(home);
+      expect(lines(r.stdout), elsewhere).toEqual([
+        `PASS docs-sw: ${swPath(home)} keeps /docs on the app shell: its one denylist holds 3 entries (/^\\/api\\//,/^\\/ws\\//,${knob(elsewhere)}), none of them /docs or under it`,
+      ]);
+      expect(r.code, elsewhere).toBe(0);
+    }
+  });
+
+  it('WARNs on two denylists on ONE line: occurrences are counted, not lines (refinement (c))', () => {
+    const home = healthy('ccrc-doctor-docs-sw-two-');
+    plant(home, swJs(`${list()}},{${list(knob('/docs'))}`));
+    expect(readFileSync(swPath(home), 'utf8').split('\n')).toHaveLength(2);
+    const r = runDocsSw(home);
+    expect(lines(r.stdout)).toEqual([
+      `WARN docs-sw: ${swPath(home)} carries 2 denylists, and ${SHAPE} (exactly one, closed by ]}), so whether it refuses /docs was not measured`,
+      SHAPE_REMEDY,
+    ]);
+    expect(r.code).toBe(2);
+  });
+
+  it('WARNs on no denylist at all, and on one that never closes: neither is the shape it knows', () => {
+    const home = healthy('ccrc-doctor-docs-sw-none-');
+    plant(home, swJs('allowlist:[/./]'));
+    expect(lines(runDocsSw(home).stdout)).toEqual([
+      `WARN docs-sw: ${swPath(home)} carries 0 denylists, and ${SHAPE} (exactly one, closed by ]}), so whether it refuses /docs was not measured`,
+      SHAPE_REMEDY,
+    ]);
+    plant(home, `self.x={denylist:[/^\\/api\\//,${knob('/docs')}\n`);
+    const r = runDocsSw(home);
+    expect(lines(r.stdout)).toEqual([
+      `WARN docs-sw: ${swPath(home)} carries 1 denylist that never closes, and ${SHAPE} (exactly one, closed by ]}), so whether it refuses /docs was not measured`,
+      SHAPE_REMEDY,
+    ]);
+    expect(r.code).toBe(2);
+  });
+
+  it('FAILs an absent worker with ccrc update --force', () => {
+    const home = healthy('ccrc-doctor-docs-sw-absent-');
+    rmSync(swPath(home));
+    const r = runDocsSw(home);
+    expect(lines(r.stdout)).toEqual([
+      `FAIL docs-sw: no service worker at ${swPath(home)}, so this box serves its PWA bundle without the file every browser installs`,
+      '  remedy: ccrc update --force',
+    ]);
+    expect(r.code).toBe(1);
+  });
+
+  it.skipIf(process.getuid?.() === 0)('FAILs a worker it cannot read with ccrc update --force, never a WARN', () => {
+    const home = healthy('ccrc-doctor-docs-sw-unreadable-');
+    chmodSync(swPath(home), 0o000);
+    const r = runDocsSw(home);
+    chmodSync(swPath(home), 0o644);
+    expect(lines(r.stdout)).toEqual([
+      `FAIL docs-sw: ${swPath(home)} is there but is not a file this check can read, so what it refuses was not measured`,
+      '  remedy: ccrc update --force',
+    ]);
+    expect(r.code).toBe(1);
+  });
+
+  it('SKIPs a box that records CCRC_ROLE=fleet, with no remedy, even with no bundle at all', () => {
+    const home = healthy('ccrc-doctor-docs-sw-fleet-role-');
+    writeCcrcEnv(home, 'CCRC_ROLE=fleet\nCCRC_FLEET=local\n');
+    rmSync(join(home, 'ccrc', 'server', 'dist-pwa'), { recursive: true, force: true });
+    const r = runDocsSw(home);
+    expect(lines(r.stdout)).toEqual([
+      'SKIP docs-sw: this box records CCRC_ROLE=fleet, so it serves no PWA bundle and no service worker of its own',
+    ]);
+    expect(r.code).toBe(3);
+  });
+
+  it('SKIPs an env-less box whose units are the fleet role\'s, never FAILs it for a bundle it never had (refinement (d))', () => {
+    const home = healthy('ccrc-doctor-docs-sw-fleet-units-');
+    rmSync(join(home, '.ccrc', 'ccrc.env'), { force: true });
+    removeUnitFile(home, 'ccrc.service');
+    writeUnitFile(home, 'ccrc-agent.service');
+    rmSync(join(home, 'ccrc', 'server', 'dist-pwa'), { recursive: true, force: true });
+    const r = runDocsSw(home);
+    expect(lines(r.stdout)).toEqual([
+      'SKIP docs-sw: this box runs no ccrc server (its units are ccrc-agent.service and no ccrc.service), so it serves no PWA bundle and no service worker of its own',
+    ]);
+    expect(r.code).toBe(3);
+  });
+
+  it('runs on a server and on a both box: the role does not excuse either', () => {
+    for (const role of ['server', 'both']) {
+      const home = healthy(`ccrc-doctor-docs-sw-role-${role}-`);
+      writeCcrcEnv(home, `CCRC_ROLE=${role}\nCCRC_FLEET=local\n`);
+      expect(lines(runDocsSw(home).stdout)[0], role).toMatch(/^PASS docs-sw: /);
+      plant(home, swJs(list(knob('/docs'))));
+      expect(lines(runDocsSw(home).stdout)[0], role).toMatch(/^FAIL docs-sw: the installed service worker refuses/);
+    }
+  });
+
+  it('names no path but the worker it reads, on every arm: a SKIP names none at all', () => {
+    const home = healthy('ccrc-doctor-docs-sw-paths-');
+    const measured: string[] = [runDocsSw(home).stdout];
+    plant(home, swJs(list(knob('/docs'))));
+    measured.push(runDocsSw(home).stdout);
+    plant(home, swJs('allowlist:[/./]'));
+    measured.push(runDocsSw(home).stdout);
+    rmSync(swPath(home));
+    measured.push(runDocsSw(home).stdout);
+    for (const out of measured) {
+      const at = out.split(home).slice(1);
+      expect(at.length, out).toBe(1);
+      expect(at[0]?.startsWith('/ccrc/server/dist-pwa/sw.js'), out).toBe(true);
+    }
+    writeCcrcEnv(home, 'CCRC_ROLE=fleet\n');
+    const byRole = runDocsSw(home).stdout;
+    rmSync(join(home, '.ccrc', 'ccrc.env'), { force: true });
+    removeUnitFile(home, 'ccrc.service');
+    writeUnitFile(home, 'ccrc-agent.service');
+    const byUnits = runDocsSw(home).stdout;
+    for (const out of [byRole, byUnits]) {
+      expect(out, out).toMatch(/^SKIP docs-sw: /);
+      expect(out.includes(home), out).toBe(false);
+    }
+  });
+
+  // Linux only, like the whole-run `0 warned` case before it: a healthy macOS doctor run WARNs `linger` (review 408's
+  // r-own; the plan's Task 10 wrote this case as it()).
+  itLinux('a whole healthy doctor run PASSes docs-sw, and the healthy skip count does not move (M7.6)', () => {
+    const home = healthy('ccrc-doctor-docs-sw-whole-');
+    const r = runDoctor(home);
+    expect(lineFor(r.stdout, 'docs-sw'), r.stdout).toMatch(/^PASS docs-sw: /);
+    expect(r.stdout).toMatch(new RegExp(
+      `^summary: \\d+ checks \\(${HEALTHY_SKIPS} skipped\\), \\d+ verdicts — \\d+ passed, 0 warned, 0 failed$`, 'm'));
+    expect(r.code).toBe(0);
+  });
+
+  it('says so, rather than guessing, when ccrc\'s own tree path and config reader are not loaded', () => {
+    const nowhere = join(REPO, 'no-such-home-for-check-docs-sw');
+    const r = spawnSync(BASH, ['-c', `set -uo pipefail; . ${shq(CHECKS_SRC)}; _check_docs-sw`],
+      { encoding: 'utf8', env: { HOME: nowhere, PATH: nowhere, LC_ALL: 'C' } });
+    expect(r.stdout).toMatch(/^FAIL docs-sw: ccrc's own tree path and config reader are not loaded/m);
+    expect(r.stdout).toMatch(/^ {2}remedy: this is a bug in ccrc/m);
+    expect(r.status).toBe(1);
+  });
+
+  it('reads a large worker in linear time: a ~300 KB precache manifest BEFORE the one denylist still PASSes within the bound', () => {
+    // A real build prints `precacheAndRoute([...])` before the NavigationRoute, so `denylist:[` sits near the END of a
+    // file that grows with the manifest. `${body#*"$open"}` is quadratic in that offset (measured on bash 5.2: 20 KB
+    // 0.47 s, 80 KB 11.6 s, 320 KB over 120 s); the regex extraction is linear. The spawn is killed at 20 s so the
+    // quadratic form fails fast with an empty verdict instead of holding the suite for minutes.
+    const home = healthy('ccrc-doctor-docs-sw-large-');
+    const entries: string[] = [];
+    for (let i = 0; entries.join(',').length < 300_000; i++) {
+      entries.push(`{url:"assets/chunk-${String(i).padStart(5, '0')}-aBcDeFgH.js",revision:null}`);
+    }
+    plant(home, `self.__WB_MANIFEST=[${entries.join(',')}];${swJs()}`);
+    expect(statSync(swPath(home)).size).toBeGreaterThan(300_000);
+    const t0 = Date.now();
+    const r = runDocsSw(home, 20_000);
+    const elapsed = Date.now() - t0;
+    expect(lines(r.stdout), `after ${elapsed} ms: ${r.stderr}`).toEqual([
+      `PASS docs-sw: ${swPath(home)} keeps /docs on the app shell: its one denylist holds 2 entries (/^\\/api\\//,/^\\/ws\\//), none of them /docs or under it`,
+    ]);
+    expect(r.code).toBe(0);
+    expect(elapsed, 'the linear extraction takes well under a second; the bound is for a box at load 50+').toBeLessThan(10_000);
+  }, 40_000);
+
+  it('docs-sw is the table\'s last name and _check_docs-sw is declared (M7.6)', () => {
+    const names = tableNames();
+    expect(names[names.length - 1]).toBe('docs-sw');
+    expect(names.filter((n) => n === 'docs-sw')).toHaveLength(1);
+    const r = spawnSync(BASH, ['-c', `set -uo pipefail; . ${shq(CHECKS_SRC)}; declare -F _check_docs-sw`],
+      { encoding: 'utf8' });
+    expect(r.stdout.trim()).toBe('_check_docs-sw');
+  });
+});
+
+// ── Docs W4 Task 11 review 5-1 and A-6: the two docs-sw pins the whole-branch review found missing ─────────────
+describe('T11 review 5-1: docs-sw pins the bare-$ covered form', () => {
+  const swPath = (home: string): string => join(home, 'ccrc', 'server', 'dist-pwa', 'sw.js');
+  const runDocsSw = (home: string): Result => {
+    const ccd = join(home, 'ccrc', 'ccd');
+    const r = spawnSync(BASH, ['-c',
+      `set -uo pipefail; . ${shq(join(ccd, 'ccrc'))}; . ${shq(join(ccd, 'ccrc-doctor-checks'))}; _check_docs-sw`],
+    { env: doctorEnv(home), encoding: 'utf8' });
+    return { code: r.status ?? -1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
+  };
+
+  it('FAILs an installed worker whose denylist holds /^\\/docs$/, naming it', () => {
+    // The header lists "a bare `$` anchor" as a covered form; `tail`'s `\$/` alternative is the only thing that reads it.
+    // The fixtures above plant the knob form, `/^\/docs\//` and `/^\/docs/`, so deleting that alternative left them green.
+    const home = healthy('ccrc-doctor-docs-sw-dollar-');
+    writeFileSync(swPath(home), swJs(`${SW_DENYLIST_DEFAULT.slice(0, -1)},/^\\/docs$/]`));
+    const r = runDocsSw(home);
+    expect(r.stdout.split('\n')[0], r.stdout).toBe(
+      `FAIL docs-sw: the installed service worker refuses the app shell to /docs; Docs pages break on a hard load and offline (${swPath(home)} denies /^\\/docs$/)`);
+    expect(r.code).toBe(1);
+  });
+});
+
+describe('T11 review A-6: docs-sw reads the worker byte-wise under a UTF-8 locale', () => {
+  const swPath = (home: string): string => join(home, 'ccrc', 'server', 'dist-pwa', 'sw.js');
+  /** A UTF-8 locale this box has, or null: `locale -a` spells them `C.utf8` / `en_US.utf8`. */
+  const utf8 = ((): string | null => {
+    const r = spawnSync('locale', ['-a'], { encoding: 'utf8' });
+    const have = (r.stdout ?? '').split('\n').map((l) => l.trim());
+    return ['C.UTF-8', 'C.utf8', 'en_US.UTF-8', 'en_US.utf8'].find((l) => have.includes(l)) ?? null;
+  })();
+  const runUnder = (home: string, locale: string): Result => {
+    const ccd = join(home, 'ccrc', 'ccd');
+    const r = spawnSync(BASH, ['-c',
+      `set -uo pipefail; . ${shq(join(ccd, 'ccrc'))}; . ${shq(join(ccd, 'ccrc-doctor-checks'))}; _check_docs-sw`],
+    { env: { ...doctorEnv(home), LC_ALL: locale }, encoding: 'utf8' });
+    return { code: r.status ?? -1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
+  };
+  // The byte is planted as a Buffer (0xFF, never valid UTF-8) AFTER `denylist:[`, inside the span `(.*)$` must cross:
+  // under a UTF-8 locale bash's `[[ =~ ]]` fails to match across it, and the check said "never closes" (a WARN)
+  // instead of reading the list. The check pins `LC_ALL=C` for its own body.
+  const plantWithBadByte = (home: string, list: string): void => {
+    writeFileSync(swPath(home), Buffer.concat([Buffer.from(swJs(list).trimEnd()), Buffer.from([0xff]), Buffer.from('\n')]));
+  };
+
+  it.skipIf(utf8 === null)('still FAILs a /docs entry when an invalid UTF-8 byte follows the denylist', () => {
+    const home = healthy('ccrc-doctor-docs-sw-badbyte-fail-');
+    plantWithBadByte(home, `${SW_DENYLIST_DEFAULT.slice(0, -1)},/^\\/docs(\\/|$)/]`);
+    const r = runUnder(home, utf8 as string);
+    expect(r.stdout.split('\n')[0], r.stdout).toMatch(/^FAIL docs-sw: the installed service worker refuses the app shell to \/docs;/);
+    expect(r.code).toBe(1);
+  });
+
+  it.skipIf(utf8 === null)('still PASSes the default list when an invalid UTF-8 byte follows the denylist', () => {
+    const home = healthy('ccrc-doctor-docs-sw-badbyte-pass-');
+    plantWithBadByte(home, SW_DENYLIST_DEFAULT);
+    const r = runUnder(home, utf8 as string);
+    expect(r.stdout.split('\n')[0], r.stdout).toMatch(/^PASS docs-sw: .* holds 2 entries \(\/\^\\\/api\\\/\/,\/\^\\\/ws\\\/\/\), none of them \/docs or under it$/);
+    expect(r.code).toBe(0);
   });
 });

@@ -2,14 +2,14 @@
 // tail's word for a PROVEN refusal at its removal-time re-ask. It is declared
 // with its ccd emission (`_ws_reclaim_tail`'s literal `_ws_reclaim_fail …
 // containment-refuted`). Its sentence says only what is true under any server.
-// Wave 8's `stuck` class reads it in the reclaim parser as `stuck`; until a
-// server classes it, the expiry parser reads it as the resumable failure it is,
-// so it is retried. Wave 8 changed the reclaim parser's pin below on purpose.
+// Both parsers class it `stuck`: the reclaim parser since CCR-15 wave 8, the
+// expiry parser since workspace lifecycle wave 6 (ruling B), in a describe of
+// its own below. Wave 8 changed the reclaim parser's pin below on purpose.
 import { describe, it, expect } from 'vitest';
 import { LC_REFUSAL_WORD, isLcRefusalToken, lcRefusalWord } from '../../shared/api.js';
 import { SENTENCES, refusalSentence } from '../src/wsaudit.js';
-import { childReclaimTokenKind, parseChildReclaimResult } from '../src/coord/childReclaim.js';
-import { parseExpireResult } from '../src/archivedExpiry.js';
+import { CHILD_RECLAIM_STUCK_TOKENS, childReclaimTokenKind, parseChildReclaimResult } from '../src/coord/childReclaim.js';
+import { EXPIRE_STUCK_WORD, parseExpireResult } from '../src/archivedExpiry.js';
 import { childReclaimFailureLine, childReclaimTerminalRefusal } from '../src/childReclaimSweep.js';
 
 const W = 'containment-refuted' as const;
@@ -36,15 +36,10 @@ describe('the word', () => {
 
 // Wave 8 retitles this describe and flips ONE assertion in it on purpose (spec
 // §5.6, the stuck class): the reclaim parser reads the word as `stuck`.
-// `parseExpireResult`'s, below, is workspace-lifecycle's and is left as found.
-describe('the parsers read it as a failure: the reclaim parser as stuck, the expiry parser as resumable', () => {
+describe('the reclaim parser reads it as a stuck failure', () => {
   it('parseChildReclaimResult: failed, stuck, with its token', () => {
     expect(parseChildReclaimResult('demo-quiet-basin', DOC, '')).toEqual({
       kind: 'failed', resume: 'stuck', detail: `${W}: d`, token: W });
-  });
-
-  it('parseExpireResult: failed, resumable — the expiry lane asks again on its backoff, never at +∞', () => {
-    expect(parseExpireResult('demo-quiet-dune', DOC, '')).toEqual({ kind: 'failed', resumable: true, detail: `${W}: d` });
   });
 
   it('the sweep reads its journal line as a FAILURE line, never a terminal refusal', () => {
@@ -53,5 +48,23 @@ describe('the parsers read it as a failure: the reclaim parser as stuck, the exp
     expect(childReclaimTerminalRefusal(
       { sessionId: 'demo-quiet-basin', outcome: 'failed', refusal: W, at: 1, failingSince: 1 }, childReclaimTokenKind,
     )).toBe(false);
+  });
+});
+
+describe('the expiry lane reads it as STUCK, whatever crumb says (workspace lifecycle wave 6, ruling B; CCR-15’s R76 and R77)', () => {
+  it('parseExpireResult: stuck — listed at once and asked again on the persistent tier, never at +∞', () => {
+    for (const extra of [{}, { crumb: true }, { crumb: false }, { crumb: 'yes' }]) {
+      expect(parseExpireResult('demo-quiet-dune', JSON.stringify({ failed: W, detail: 'd', ...extra }), ''), JSON.stringify(extra))
+        .toEqual({ kind: 'stuck', detail: `${W}: d` });
+    }
+  });
+
+  it('reads the word from its L0 home: the expiry’s stuck word IS the journal-only token, typed against it', () => {
+    expect(EXPIRE_STUCK_WORD).toBe(W);
+    expect(isLcRefusalToken(EXPIRE_STUCK_WORD)).toBe(true);
+  });
+
+  it('the expiry lane\'s stuck word is the reclaim lane\'s stuck class — one class, two carriers', () => {
+    expect([EXPIRE_STUCK_WORD]).toEqual([...CHILD_RECLAIM_STUCK_TOKENS]);
   });
 });

@@ -8338,6 +8338,10 @@ describeLinux('ccrc install: a timer systemd refuses is a COUNTED degraded step 
  *  outside any git repo, by a MEASURE-only case that builds `liveBox()` itself, with the old
  *  literal re-serialised byte-identical first, and nothing moved (the live shape holds the
  *  fleet files, so it never was a never-handed box): zero differing lines.
+ *  RE-MEASURED again when doctor gained its `docs-sw` check (native Docs reader
+ *  W4, spec 2026-10-01 §7.2), by the live-shape case on the W4 tree: the three
+ *  maps each gained `"docs-sw": "SKIP"` (the `--role fleet` box records
+ *  `CCRC_ROLE=fleet` and serves no PWA bundle) and nothing else moved.
  *  It is a golden: nothing re-measures
  *  it, so a merge-up that moves a doctor check's class on the live shape reds
  *  the live-shape case until Step 3 is re-run on a disposable copy of the new
@@ -8366,6 +8370,7 @@ const BASE_LIVE_SHAPE: LiveShapeMeasure = {
         "credentials": "PASS",
         "disk": "PASS",
         "docs": "PASS",
+        "docs-sw": "SKIP",
         "exposure": "SKIP",
         "fleet": "SKIP",
         "flock": "PASS",
@@ -8417,6 +8422,7 @@ const BASE_LIVE_SHAPE: LiveShapeMeasure = {
         "credentials": "PASS",
         "disk": "PASS",
         "docs": "PASS",
+        "docs-sw": "SKIP",
         "exposure": "SKIP",
         "fleet": "SKIP",
         "flock": "PASS",
@@ -8538,6 +8544,7 @@ const BASE_LIVE_SHAPE: LiveShapeMeasure = {
       "credentials": "PASS",
       "disk": "PASS",
       "docs": "PASS",
+      "docs-sw": "SKIP",
       "exposure": "SKIP",
       "fleet": "SKIP",
       "flock": "PASS",

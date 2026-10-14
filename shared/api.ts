@@ -6680,6 +6680,57 @@ export interface CoordCapsView {
 export interface StagedClip { path: string; name: string; bytes: number }
 
 /**
+ * Every filename extension the clip store admits — ONE definition, because the
+ * list is read in five places that must not drift: the upload gate, the
+ * stored-name rule, the path regex, the picker's `accept`, and the renderer's
+ * thumbnail-or-chip decision.
+ *
+ * The split is not cosmetic. An IMAGE is staged for what it LOOKS like, so the
+ * composer may re-encode it (downscale, JPEG) on the way. A DOCUMENT is staged
+ * for what READS it: the path is typed into the session and Claude Code opens
+ * the file itself, so the bytes must arrive untouched — a canvas pass over a
+ * PDF produces a picture of nothing.
+ *
+ * That same reading is why the document half stops where it does. What is here
+ * is what `Read` can open off a path: plain text in its various dresses, plus
+ * PDF, which it reads natively. `.docx`/`.xlsx`/`.pptx` are deliberately ABSENT
+ * — they are ZIP containers, so admitting one would stage a file that reaches
+ * Claude as binary noise, and converting them is a fleet-box dependency this
+ * tree does not have. Widening this list is safe only for a format `Read`
+ * already understands.
+ */
+export const CLIP_IMAGE_EXTS = ['png', 'jpg', 'jpeg', 'webp'] as const;
+export const CLIP_DOC_EXTS =
+  ['md', 'txt', 'log', 'csv', 'tsv', 'json', 'yaml', 'yml', 'rtf', 'pdf'] as const;
+export const CLIP_EXTS: readonly string[] = [...CLIP_IMAGE_EXTS, ...CLIP_DOC_EXTS];
+
+/** The `png|jpg|…` alternation, for the two regexes that gate clip names and
+ *  paths. Derived, so a new extension never needs a regex edited by hand. */
+export const CLIP_EXT_ALT = CLIP_EXTS.join('|');
+
+/** The lowercase extension of a filename or path; '' when it has none. */
+function extOf(nameOrPath: string): string {
+  const base = nameOrPath.slice(nameOrPath.lastIndexOf('/') + 1);
+  const dot = base.lastIndexOf('.');
+  return dot < 0 ? '' : base.slice(dot + 1).toLowerCase();
+}
+
+/** True when a filename carries an extension the clip store admits. */
+export function hasClipExt(nameOrPath: string): boolean {
+  return CLIP_EXTS.includes(extOf(nameOrPath));
+}
+
+/**
+ * True for a clip a renderer should draw as a picture rather than as a document
+ * chip. Decided on the EXTENSION, never on a MIME type: the stored name is all
+ * a bubble has — it is rebuilt from the prompt text, which carries no types —
+ * and the extension in it is the real one `clipName` wrote.
+ */
+export function isImageClip(nameOrPath: string): boolean {
+  return (CLIP_IMAGE_EXTS as readonly string[]).includes(extOf(nameOrPath));
+}
+
+/**
  * A clip path anywhere in a string: `…/.cc-clips/<session>/clip-<stem>.<ext>`.
  * Matched by SHAPE, never by touching the filesystem, so it works client-side.
  * Exported WITHOUT the `g` flag to avoid stateful `lastIndex` — a g-flagged
@@ -6687,7 +6738,7 @@ export interface StagedClip { path: string; name: string; bytes: number }
  * Internal consumers build their own `new RegExp(CLIP_PATH_RE.source, 'g')`.
  */
 export const CLIP_PATH_RE =
-  /\/[^\s]*\/\.cc-clips\/[^/\s]+\/clip-[A-Za-z0-9._-]+\.(?:png|jpe?g|webp)/;
+  new RegExp(`\\/[^\\s]*\\/\\.cc-clips\\/[^/\\s]+\\/clip-[A-Za-z0-9._-]+\\.(?:${CLIP_EXT_ALT})`);
 
 /**
  * Attachment paths first, each on its own line, then the user's text. Paths
@@ -9359,8 +9410,8 @@ export function archivedFoldSince(s: Pick<FleetSession, 'bucket' | 'bucketSince'
  *  name it. `watch.ts` ENFORCES it, and `stall.ts` (L1) estimates a replayed row's first delivery from it,
  *  `deliveredAt - replayCount * MAIL_REPLAY_MS` (`replayed-deaf-from-first-delivery-estimate` (D-3803)), where a second
  *  `600_000` would be a second copy of a policy number. What it MEANS lives in `watch.ts`'s docstring in that file's constants block.
- *  It stands at the END of this file, not beside `MAIL_MAX_ATTEMPTS`: README and the compaction card cite this file by line,
- *  and an insertion above those lines moves every anchor under it. */
+ *  It was APPENDED where this file then ended, not beside `MAIL_MAX_ATTEMPTS`: README and the compaction card cite this
+ *  file by line, and an insertion above those lines moves every anchor under it. Later blocks follow it. */
 export const MAIL_REPLAY_MS = 600_000;
 
 // ── Stall watch settings (design 2026-10-05, §5, §5.1, §12) ────────────────────────────────────────────────────────
@@ -9545,7 +9596,7 @@ export const STALL_NEXT_TEXT = { lead: 'Next step:', waitsOn: 'Waits on:', top: 
 export const STALL_QUIET_NOTE = "This also sets when a dialog left open is pushed to you, how far apart repeat pushes about one open dialog can be, and, while the further checks are on, the base of the back-off for a worker that keeps answering 'working'. While they are off there is no back-off and no hold while subagents run, so a worker that keeps waiting is checked once every quiet time.";
 /** The confirm sheet's lines (§13), chosen by the PWA's `stallConfirmLines` from the server's `StallWriteEffect`.
  *  Slots: `{label}` a level's label or `STALL_FOLLOW_LABEL`, `{value}` a formatted quiet time, `{name}` and `{gate}` a
- *  stage's, `{detail}` the server's refusal detail. */
+ *  stage's, `{detail}` the server's detail, for a refusal or for an answer that confirms nothing. */
 export const STALL_CONFIRM_TEXT = {
   title: 'Set the stall watch to {label}?',
   followTitle: '{label}?',
@@ -9572,9 +9623,9 @@ export const STALL_CONFIRM_TEXT = {
   quietDialogs: 'A dialog left open longer than {value} is pushed to you from the next sweep, and repeat pushes about one open dialog can come {value} apart.',
   unknown: "The fleet box's files could not be read, so what this choice turns on cannot be shown.",
   refused: 'Nothing was changed: {detail}',
-  // A write with no answer (a network failure): unanswered-write-has-its-own-l0-line (D-4043). The 2xx-unreadable
-  // arm keeps the PWA's shared UNCONFIRMED_TEXT.
+  // No answer at all: unanswered-write-has-its-own-l0-line (D-4043). An answer with no refusal code: D-4045.
   unanswered: 'Not confirmed — the server did not answer; the screen will re-check.',
+  unconfirmed: 'Not confirmed — the choice may or may not have been saved ({detail}); the screen will re-check.',
 } as const;
 export const STALL_RUNLESS_FOOTNOTE = 'Counts notices on runs only. Notices about a session on no run, or about a coordinator itself, sent or shadow, are not counted here; shadow ones appear only in the server log.';
 /** The section's headings and small words. `counts` takes the window from the reply's `windowMs`, so no text copies
