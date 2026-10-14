@@ -1979,8 +1979,10 @@ describe('grep --regex: refused unspawned, killed at its budget, matched over re
   const T = 0x41;
   /** A synthetic 64-hex fixture secret: one [A-Za-z0-9_-] run, so the value layer replaces it whole. */
   const TOKEN = `${'c0ffee'.repeat(10)}abcd`;
-  /** An admitted pattern that backtracks for seconds on 30 'a's with no 'b' (measured: 9 `a*` on 28 'a's took 8.7 s
-   *  on 22.16.0). It has no group, so neither upstream's guard nor P10's structural check refuses it. */
+  /** An admitted pattern that backtracks without end on the fixture's 80 'a's with no 'b'. It has no group, so neither
+   *  upstream's guard nor P10's structural check refuses it. The work grows by about (n+9)/n per added 'a': 28 'a's
+   *  took about 2 s on a loaded box, and an idle CI runner finished 30 'a's inside C8b's 3 s budget (a CI red), so the
+   *  row carries 80, about 3,000 times 30's work: minutes on any runner, against budgets of 50 ms and 3 s. */
   const SLOW = 'a*a*a*a*a*a*a*a*a*b';
   let box: rH.HistoryBox;
   beforeAll(() => {
@@ -1991,7 +1993,7 @@ describe('grep --regex: refused unspawned, killed at its budget, matched over re
     const rows: rFx.Row[] = [
       GRX.user(T, 1, 'zq123x marker row'),
       GRX.user(T, 2, 'zq9x second'),
-      GRX.user(T, 3, `zq ${'a'.repeat(30)} end`),
+      GRX.user(T, 3, `zq ${'a'.repeat(80)} end`),
       GRX.user(T, 4, `the key is ${TOKEN} ok`),
     ];
     // More candidate blobs than mutation 4's 64-blob cut, with a match after the 64th: the child's one iterate() must
