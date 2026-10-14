@@ -700,3 +700,42 @@ describe("Review 439 F21: a refresh answer is numbered when it arrives, so a GET
     expect(result.current.updatedTo).toBeNull();
   });
 });
+
+describe('Review 439 F19 (task review): a refresh answer releases no read waiting for a re-list', () => {
+  function held<T>() {
+    let settle: (v: T) => void = () => {};
+    const promise = new Promise<T>((r) => { settle = r; });
+    return { promise, settle: (v: T) => settle(v) };
+  }
+
+  it('a POST that began before the word answers with the old tree: the read keeps waiting, and the GET that starts after the word releases it', async () => {
+    const moved = treeOk({ commit: COMMIT_B, entries: [entry('specs', 'a.md', { committed: { kind: 'file', blob: BLOB_2, size: 9 } })] });
+    const f = fakeLoaders();
+    const read = held<Awaited<ReturnType<DocsLoaders['file']>>>();
+    const post = held<DocsRefreshLoaderAnswer>();
+    const get2 = held<Awaited<ReturnType<DocsLoaders['tree']>>>();
+    f.tree.mockResolvedValueOnce(okTree(treeOk({ commit: COMMIT_A })));
+    f.file.mockImplementationOnce(() => read.promise);
+    const { result } = visit(f.loaders, '/docs/demo/specs/a.md');
+    await flush();
+    f.refresh.mockImplementationOnce(() => post.promise);
+    act(() => result.current.refreshManual());
+    await flush();
+    expect(f.refresh).toHaveBeenCalledTimes(1);
+    // the read says the listing moved while the POST is in flight; the re-list is a GET that starts now
+    f.tree.mockImplementationOnce(() => get2.promise);
+    await act(async () => read.settle(failedAnswer('unknown-commit')));
+    await flush();
+    expect(f.tree).toHaveBeenCalledTimes(2);
+    // the POST began before the word, and its route read the tree before the move
+    await act(async () => post.settle(okRefresh(RAN, treeResponse(treeOk({ commit: COMMIT_A })))));
+    await flush();
+    expect(f.file).toHaveBeenCalledTimes(1);
+    expect(result.current.file.s).toBe('loading');
+    f.tree.mockResolvedValueOnce(okTree(moved));
+    await act(async () => get2.settle(okTree(moved)));
+    await flush();
+    expect(f.file).toHaveBeenCalledTimes(2);
+    expect(result.current.file).toMatchObject({ s: 'ok', pin: { commit: COMMIT_B } });
+  });
+});

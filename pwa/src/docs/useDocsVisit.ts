@@ -119,10 +119,12 @@ export interface DocsVisit {
   readonly tree: TreeSlot | null;
   readonly file: FileSlot;
   readonly freshness: Freshness;
-  /** The commit the current leaf now reads at after its pin moved to a new file key and the new read answered: for a
-   *  committed pin, a new blob (its new pin's commit); for a draft, a new holder HEAD or a new fingerprint (the holder's
-   *  HEAD), so a HEAD move with the same fingerprint counts. Null = the leaf's pin has not moved to a new file key in
-   *  this visit. A same-blob move of a committed pin keeps its file key and sets nothing. */
+  /** The commit the current leaf now reads at after its pin moved to a new file key and the new read answered: the
+   *  new pin's commit (committed) or the holder's HEAD (draft). A file key changes with a committed pin's blob (or,
+   *  for an entry the tree lists with no blob, its commit), a draft's holder HEAD or fingerprint (so a HEAD move with
+   *  the same fingerprint counts), the draft's branch, and a switch between the committed and draft sides. Null = the
+   *  leaf's pin has not moved to a new file key in this visit. A same-blob move of a committed pin keeps its file key
+   *  and sets nothing. */
   readonly updatedTo: string | null;
   /** A fragment to scroll to once the body renders; null = nothing to scroll to. It belongs to ONE page (a leaf's
    *  project, ref, section and path): it reads `null` on any other page, and leaves the visit when the page changes. */
@@ -391,8 +393,9 @@ export function useDocsVisit(page: DocsPageLocation | null, loaders: DocsLoaders
     }
     // This answer's number was taken on arrival, so it is newer than every number the slot holds: no order check.
     if (tree.ok) {
+      // It frees no read waiting for a re-list: the POST may have started before that read's word, and its route may
+      // have read the tree before the move. Only a GET started after the word releases such a read (applyTreeGet).
       setTreeOk(key, seq, tree);
-      releaseRelistWaiters(key, seq);
       st.freshness.set(key, { s: 'answered', fetch, at: now });
     } else if (st.trees.get(key)?.s === 'ok') {
       st.freshness.set(key, { s: 'relist-failed', answer: { s: 'failed', body: tree } });
@@ -603,7 +606,8 @@ export function useDocsVisit(page: DocsPageLocation | null, loaders: DocsLoaders
     const prev = st.shown.get(wanted.leaf);
     if (prev !== wanted.fKey) {
       st.shown.set(wanted.leaf, wanted.fKey);
-      // Every changed body is an update, a draft whose fingerprint alone moved included: it names the holder's HEAD.
+      // Every move of the pin to a new file key is an update, a draft whose fingerprint alone moved included: it names
+      // the new pin's commit, the holder's HEAD for a draft.
       if (prev !== undefined) {
         st.updatedTo.set(wanted.leaf, pinCommit(wanted.pin));
         dirty = true;
