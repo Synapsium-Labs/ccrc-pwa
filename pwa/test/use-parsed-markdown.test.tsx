@@ -5,6 +5,7 @@
 // swallows a rejection. Every case drives a deferred fake parser that IGNORES its signal, so a job settles only
 // when the test says so, even after the hook has aborted it (a parser that answers late).
 import { afterEach, describe, expect, it } from 'vitest';
+import { useLayoutEffect } from 'react';
 import { act, cleanup, renderHook } from '@testing-library/react';
 import type { Root as HastRoot } from 'hast';
 import type { ParseOutcome } from '../src/lib/markdownParse';
@@ -259,5 +260,58 @@ describe('T11 review A-5: a parser that throws synchronously settles its job as 
     expect(result.current.pending).toBe(false);
     rerender({ text: 'b' });
     expect(calls).toEqual(['a', 'b']);
+  });
+});
+
+describe("W5 N1: the hook's commit-to-effect window is closed (the latest request is recorded at commit)", () => {
+  // W4's carried N1 (review 412's R5): the latest request was written in a passive effect, so a reply for the previous
+  // text that settled after a newer text committed, but before that commit's passive effects ran, was taken as the
+  // latest one's and became the `outcome` while the newer text was pending. In a browser that reply is the worker's
+  // message, a task that can run between a commit and its passive effects. Here the window is made deterministic: the
+  // parser answers with a thenable whose fulfilment the test calls itself, from a layout effect of the component that
+  // renders the hook, which runs after the hook's own layout effects and before any passive effect of that commit.
+  it('a reply for text A that lands after text B commits, before its passive effects, is never the outcome for B', () => {
+    const srcs: string[] = [];
+    const fulfil: ((o: ParseOutcome) => void)[] = [];
+    const parser: MarkdownParser = (src) => {
+      srcs.push(src);
+      return {
+        then(onFulfilled: (o: ParseOutcome) => void) {
+          fulfil.push(onFulfilled);
+        },
+      } as unknown as Promise<ParseOutcome>;
+    };
+    const a = treeOf('A');
+    const { result, rerender } = renderHook(
+      (p: { readonly text: string }) => {
+        const parsed = useParsedMarkdown(p.text, parser, { profile: 'chat', budgetMs: 2000 });
+        useLayoutEffect(() => {
+          if (p.text === 'B') fulfil[0]?.(tree(a));
+        }, [p.text]);
+        return parsed;
+      },
+      { initialProps: { text: 'A' } },
+    );
+    expect(srcs).toEqual(['A']);
+    rerender({ text: 'B' });
+    expect(srcs).toEqual(['A', 'B']);
+    expect(result.current).toEqual({ outcome: null, lastGood: a, pending: true });
+    const b = treeOf('B');
+    act(() => {
+      fulfil[1]?.(tree(b));
+    });
+    expect(result.current).toEqual({ outcome: tree(b), lastGood: b, pending: false });
+  });
+
+  it('Retry (a changed attempt alone) is the latest request: its reply becomes the outcome, and nothing is pending', async () => {
+    const { parser, calls } = deferredParser();
+    const { result, rerender } = mount(parser, { text: 'a' });
+    await settle(calls[0], TIMEOUT);
+    rerender({ text: 'a', attempt: 1 });
+    expect(calls).toHaveLength(2);
+    expect(result.current.pending).toBe(true);
+    const a = treeOf('a');
+    await settle(calls[1], tree(a));
+    expect(result.current).toEqual({ outcome: tree(a), lastGood: a, pending: false });
   });
 });

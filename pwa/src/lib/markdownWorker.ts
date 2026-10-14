@@ -1,6 +1,7 @@
 // The parse worker's entry (native Docs reader, W4 Task 5; design 2026-10-01 section 4.10's "Worker and runner").
-// `markdownRunner.ts` spawns it as a module worker; Vite emits it as its own chunk (`worker: { format: 'es' }`), which
-// the service worker precaches with the rest of the shell. It is only the wiring: each message goes to
+// `markdownRunner.ts` spawns it as a module worker; Vite emits it as its own ES module chunk (the `worker` key of
+// `vite.config.ts` sets that format and the worker-only plugin), which the service worker precaches with the rest of
+// the shell. It is only the wiring: each message goes to
 // `answerMarkdownJob` (`markdownParse.ts`), whose answer is posted back to the runner. Messages are received by
 // assigning `onmessage`, never by adding a listener (the W4 plan's refinement (w)).
 //

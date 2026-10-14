@@ -3,7 +3,9 @@
 //   1. the pre-scan (`markdownGuard.ts`); a refusal ends here;
 //   2. react-markdown's own processor, called stage by stage: remark-parse, then remark-gfm and the alert
 //      callouts, then remark-rehype with raw HTML kept as `raw` nodes; `runSync(parse(src), src)`;
-//   3. every `raw` node becomes a `text` node, so raw HTML renders as literal text, never as markup;
+//   3. every `raw` node becomes a `text` node, so raw HTML renders as literal text, never as markup; in the docs
+//      profile alone, a `raw` node whose whole value is `<br>`, `<br/>` or `<br />` becomes an empty `br` element
+//      instead (the 2026-10-12 spec's A16; W5 Task 4): built here, never parsed, so nothing else is markup;
 //   4. one walk drops `position` and measures the tree: deeper than `MD_MAX_TREE_DEPTH` is `too-deep`, more than
 //      `DOCS_MAX_RENDER_ELEMENTS` elements is `too-wide`, an inline `code` counting the chips its component draws
 //      (`inlineCodeExtraElements`, W5 bound 2-2), so the cap bounds the DOM before anything renders;
@@ -39,7 +41,7 @@ export type ParseOutcome =
 const REMARK_PLUGINS: PluggableList = [remarkGfm, remarkAlerts];
 
 /** The remark plugins by profile: one list for both. `markdown-parse.test.ts` holds the two profiles' outcomes
- *  equal, so a divergence here is a deliberate change that reds it first. */
+ *  equal except for step 3's docs `<br>` (A16), so a divergence here is a deliberate change that reds it first. */
 const PLUGINS_BY_PROFILE: Readonly<Record<MarkdownProfile, PluggableList>> = {
   chat: REMARK_PLUGINS,
   docs: REMARK_PLUGINS,
@@ -49,6 +51,8 @@ const PLUGINS_BY_PROFILE: Readonly<Record<MarkdownProfile, PluggableList>> = {
 interface WalkNode {
   type: string;
   tagName?: string;
+  /** An element's properties; step 3 writes `{}` for the docs `br` and reads no one's. */
+  properties?: Record<string, unknown>;
   value?: string;
   children?: WalkNode[];
   position?: unknown;
@@ -60,8 +64,14 @@ function errorName(e: unknown): string {
   return typeof e;
 }
 
-/** Step 3: every `raw` node becomes a `text` node with the same value, in place, with an explicit stack. */
-function rawToText(tree: WalkNode): void {
+/** The one raw spelling the docs profile draws (A16): a whole value of `<br>`, `<br/>` or `<br />`, lower case, with
+ *  no attribute. `<BR>`, `<br class=x>` and a block-level raw node holding more than the tag do not match. */
+const DOCS_BR = /^<br(?: ?\/)?>$/;
+
+/** Step 3: every `raw` node becomes a `text` node with the same value, in place, with an explicit stack; in the
+ *  docs profile a raw node `DOCS_BR` matches becomes an empty `br` element instead. No HTML is parsed: the element
+ *  is built here, and every other raw value stays text in both profiles. */
+function rawToText(tree: WalkNode, profile: MarkdownProfile): void {
   const stack: WalkNode[] = [tree];
   while (stack.length > 0) {
     const node = stack.pop()!;
@@ -69,8 +79,14 @@ function rawToText(tree: WalkNode): void {
     if (!children) continue;
     for (let i = 0; i < children.length; i += 1) {
       const child = children[i]!;
-      if (child.type === 'raw') children[i] = { type: 'text', value: child.value ?? '' };
-      else if (child.children) stack.push(child);
+      if (child.type === 'raw') {
+        const value = child.value ?? '';
+        children[i] = profile === 'docs' && DOCS_BR.test(value)
+          ? { type: 'element', tagName: 'br', properties: {}, children: [] }
+          : { type: 'text', value };
+      } else if (child.children) {
+        stack.push(child);
+      }
     }
   }
 }
@@ -119,11 +135,12 @@ function measure(tree: WalkNode): { depth: number; elements: number } {
   return { depth, elements };
 }
 
-/** Steps 3 and 4 over a hast tree, in place: the outcome the pipeline gives for it. Exported so tests can hand it
- *  a tree no Markdown source could produce (a 100 000-deep one) and prove both walks keep no recursion. */
-export function settleHast(tree: HastRoot): ParseOutcome {
+/** Steps 3 and 4 over a hast tree, in place: the outcome the pipeline gives for it in `profile` (absent means
+ *  `'chat'`, so a one-argument caller keeps chat's raw step). Exported so tests can hand it a tree no Markdown source
+ *  could produce (a 100 000-deep one) and prove both walks keep no recursion. */
+export function settleHast(tree: HastRoot, profile: MarkdownProfile = 'chat'): ParseOutcome {
   const node = tree as unknown as WalkNode;
-  rawToText(node);
+  rawToText(node, profile);
   const { depth, elements } = measure(node);
   if (depth > MD_MAX_TREE_DEPTH) return { kind: 'too-deep', depth };
   if (elements > DOCS_MAX_RENDER_ELEMENTS) return { kind: 'too-wide', elements };
@@ -137,7 +154,7 @@ function run(src: string, profile: MarkdownProfile): ParseOutcome {
       .use(remarkParse)
       .use(PLUGINS_BY_PROFILE[profile])
       .use(remarkRehype, { allowDangerousHtml: true });
-    return settleHast(processor.runSync(processor.parse(src), src));
+    return settleHast(processor.runSync(processor.parse(src), src), profile);
   } catch (e) {
     return { kind: 'threw', error: errorName(e) };
   }

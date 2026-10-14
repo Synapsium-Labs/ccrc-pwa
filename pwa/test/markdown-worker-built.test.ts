@@ -107,3 +107,38 @@ describe('the built markdownWorker chunk counts the chips inline code draws (W5 
     expect(result.replies).toEqual([{ id: 7, outcome: { kind: 'too-wide', elements: 1 + 400 * 64 } }]);
   }, 90_000);
 });
+
+// Docs W5 part 1, Task 4 (M9.1, the 2026-10-12 spec's A16): the docs profile's real `<br>` is made in the parse's raw
+// step, inside the worker closure, so only the built chunk proves the shipped worker carries it, for the docs profile
+// alone: a docs job of `a<br>b` answers a tree holding one `br` element, and a chat job the tag as literal text.
+describe('the built markdownWorker chunk draws a raw <br> as a br element in the docs profile alone (M9.1)', () => {
+  it('answers a docs job of a<br>b with one br element, and a chat job with the tag as text', () => {
+    const assets = path.join(out, 'assets');
+    const chunk = readdirSync(assets).find((n) => /^markdownWorker-[\w-]+\.js$/.test(n));
+    expect(chunk).toBeDefined();
+    const docsLoader = LOADER.replace("profile: 'chat'", "profile: 'docs'");
+    expect(docsLoader).not.toBe(LOADER);
+    const answer = (loader: string) => {
+      const stdout = execFileSync(
+        process.execPath,
+        ['--input-type=module', '-e', loader, path.join(assets, chunk!), 'a<br>b'],
+        { encoding: 'utf8', env: { PATH: process.env['PATH'] ?? '' }, timeout: 60_000 },
+      );
+      return JSON.parse(stdout.trim().split('\n').at(-1)!) as { load: string; replies?: unknown[] };
+    };
+    const paragraph = (middle: unknown) => ({
+      kind: 'tree',
+      depth: 2,
+      tree: {
+        type: 'root',
+        children: [{ type: 'element', tagName: 'p', properties: {}, children: [{ type: 'text', value: 'a' }, middle, { type: 'text', value: 'b' }] }],
+      },
+    });
+    const docs = answer(docsLoader);
+    expect(docs.load).toBe('ok');
+    expect(docs.replies).toEqual([{ id: 7, outcome: paragraph({ type: 'element', tagName: 'br', properties: {}, children: [] }) }]);
+    const chat = answer(LOADER);
+    expect(chat.load).toBe('ok');
+    expect(chat.replies).toEqual([{ id: 7, outcome: paragraph({ type: 'text', value: '<br>' }) }]);
+  }, 120_000);
+});

@@ -11,7 +11,7 @@
 // `MD_MAX_TREE_DEPTH`, which turns a deep tree into 'too-deep'; and the worker's budget, the only time bound. Chat's
 // synchronous path renders a message of 4 KiB or less on the main thread, without `parseMarkdown`: it has no budget
 // and none of those other bounds, so for such a message the guards before the render are this pre-scan and chat's
-// table-cell bound (`countChatTableCells` in `markdown.tsx`, the operator's ruling on Task 11's review 2-3), which
+// table cell bound (`countChatTableCells` in `markdown.tsx`, the operator's ruling on Task 11's review 2-3), which
 // caps what its tables could draw.
 //
 // Imports only `markdownLimits.ts`: the parse worker's closure reaches this file (`markdown-purity.test.ts`).

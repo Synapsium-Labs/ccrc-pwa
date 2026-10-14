@@ -1,11 +1,16 @@
 // The parse pipeline (native Docs reader, W4 Task 3; design 2026-10-01 section 4.10 and section 4.15's M4.P1's
 // control, M4.P4 and M4.P12's W4 half). `parseMarkdown` pre-scans, runs react-markdown's own processor stage by
 // stage, turns raw HTML into text, drops `position`, measures depth and elements, and never throws.
+// W5 Task 4 adds the docs profile's real `<br>` (the 2026-10-12 spec's A16 and M9.1; the W5 plan's refinement (i)):
+// W4's profile-equality case is amended to A16's form in place, and M9.1's cases are appended at the end.
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
 import type { Root as HastRoot } from 'hast';
 import { describe, expect, it } from 'vitest';
+import { cleanup, render } from '@testing-library/react';
+import { SHARED_COMPONENTS } from '../src/lib/markdown';
 import { parseMarkdown, parseWithoutPrescan, settleHast, type ParseOutcome } from '../src/lib/markdownParse';
+import { renderHast } from '../src/lib/renderHast';
 import { prescanMarkdown, utf8ByteLength } from '../src/lib/markdownGuard';
 import { CHAT_CORPUS, RECAP_CASE } from './markdownCorpus';
 
@@ -33,6 +38,47 @@ const treeOf = (o: ParseOutcome): HastRoot => {
   return o.tree;
 };
 
+/** The three spellings the docs profile draws as a `br` element (the 2026-10-12 spec's A16), as a whole value. */
+const BR_SPELLING = /^<br(?: ?\/)?>$/;
+
+/** `docs` with every `br` element that stands where `chat` holds a text node spelling `<br>`, `<br/>` or `<br />`
+ *  put back as that text node: the one difference A16 allows between the two profiles, undone. Every other node is
+ *  copied as it is, so any other difference survives the copy and fails the deep-equal that follows. A hard line
+ *  break's `br` is in both trees, so it is compared like any element. Explicit stack. */
+function brAsChatText(docs: ParseOutcome, chat: ParseOutcome): ParseOutcome {
+  if (docs.kind !== 'tree' || chat.kind !== 'tree') return docs;
+  const tree = structuredClone(docs.tree);
+  const stack: [AnyNode, AnyNode][] = [[tree as unknown as AnyNode, chat.tree as unknown as AnyNode]];
+  while (stack.length > 0) {
+    const [d, c] = stack.pop()!;
+    const dk = d.children ?? [];
+    const ck = c.children ?? [];
+    for (let i = 0; i < dk.length; i += 1) {
+      const dn = dk[i]!;
+      const cn = ck[i];
+      if (cn === undefined) continue;
+      if (dn.type === 'element' && dn.tagName === 'br' && cn.type === 'text' && BR_SPELLING.test(cn.value ?? '')) {
+        dk[i] = { type: 'text', value: cn.value };
+      } else {
+        stack.push([dn, cn]);
+      }
+    }
+  }
+  return { ...docs, tree };
+}
+
+/** Inputs holding a raw `<br>`, `<br/>` or `<br />` (A16): each differs between the two profiles, only by `br`. */
+const BR_INPUTS: readonly string[] = [
+  'a<br>b',
+  'a<br/>b',
+  'a<br />b',
+  '<br>',
+  'one<br>two<br/>three<br />four',
+  '| a | b |\n|---|---|\n| x<br>y | z |',
+  '> quoted<br>line',
+  '- item<br>more',
+];
+
 describe('the outcome for ordinary Markdown', () => {
   it('a heading is a tree with no position, depth 2 (root > h1 > text)', () => {
     expect(parseMarkdown('# hi')).toEqual({
@@ -48,12 +94,22 @@ describe('the outcome for ordinary Markdown', () => {
     }
   });
 
-  it("the 'chat' and 'docs' profiles give equal outcomes over the corpus; one argument means 'chat'", () => {
-    for (const c of [...CHAT_CORPUS, RECAP_CASE]) {
-      const chat = parseMarkdown(c.text, 'chat');
-      expect(parseMarkdown(c.text, 'docs'), c.name).toEqual(chat);
-      expect(parseMarkdown(c.text), c.name).toEqual(chat);
+  // Amended by W5 Task 4 to A16's form: equal, except on inputs that hold `<br>`, `<br/>` or `<br />`, which differ
+  // only by `br` elements in the docs profile. The corpus holds none, so every corpus case is still strictly equal.
+  it("A16: the 'chat' and 'docs' profiles give equal outcomes, except that a raw <br> is a br element in 'docs'; one argument means 'chat'", () => {
+    const holdsBr = /<br(?: ?\/)?>/;
+    const cases = [
+      ...[...CHAT_CORPUS, RECAP_CASE].map((c) => ({ name: c.name, text: c.text })),
+      ...BR_INPUTS.map((text) => ({ name: text, text })),
+    ];
+    for (const { name, text } of cases) {
+      const chat = parseMarkdown(text, 'chat');
+      const docs = parseMarkdown(text, 'docs');
+      expect(parseMarkdown(text), name).toEqual(chat);
+      expect(brAsChatText(docs, chat), name).toEqual(chat);
+      if (!holdsBr.test(text)) expect(docs, name).toEqual(chat);
     }
+    for (const text of BR_INPUTS) expect(parseMarkdown(text, 'docs'), text).not.toEqual(parseMarkdown(text, 'chat'));
   });
 });
 
@@ -169,5 +225,72 @@ describe('the raw step and the measuring walk keep no recursion', () => {
     expect(settleHast(root as unknown as HastRoot)).toEqual({ kind: 'too-deep', depth: DEEP + 1 });
     expect(parent.children[0]).toEqual({ type: 'text', value: '<b>deep</b>' });
     expect(Object.hasOwn(parent, 'position')).toBe(false);
+  });
+});
+
+describe("M9.1: the docs profile's real <br> (the 2026-10-12 spec's A16; the W5 plan's refinement (i))", () => {
+  const BR = { type: 'element', tagName: 'br', properties: {}, children: [] };
+  const P = (children: unknown[]) => ({ type: 'element', tagName: 'p', properties: {}, children });
+  const brs = (o: ParseOutcome): AnyNode[] => nodes(treeOf(o)).filter((n) => n.type === 'element' && n.tagName === 'br');
+  const textOf = (o: ParseOutcome): string =>
+    nodes(treeOf(o)).filter((n) => n.type === 'text').map((n) => n.value).reverse().join('');
+
+  it.each(['<br>', '<br/>', '<br />'])('a%sb is one br element between two text nodes in the docs profile', (tag) => {
+    expect(parseMarkdown(`a${tag}b`, 'docs')).toEqual({
+      kind: 'tree',
+      depth: 2,
+      tree: { type: 'root', children: [P([{ type: 'text', value: 'a' }, BR, { type: 'text', value: 'b' }])] },
+    });
+  });
+
+  it.each(['<br>', '<br/>', '<br />'])('a%sb stays literal text in the chat profile', (tag) => {
+    expect(parseMarkdown(`a${tag}b`, 'chat')).toEqual({
+      kind: 'tree',
+      depth: 2,
+      tree: { type: 'root', children: [P([{ type: 'text', value: 'a' }, { type: 'text', value: tag }, { type: 'text', value: 'b' }])] },
+    });
+  });
+
+  it('a line that is only <br> is one br element under the root in the docs profile, and text in chat', () => {
+    expect(parseMarkdown('<br>', 'docs')).toEqual({ kind: 'tree', depth: 1, tree: { type: 'root', children: [BR] } });
+    expect(parseMarkdown('<br>', 'chat')).toEqual({ kind: 'tree', depth: 1, tree: { type: 'root', children: [{ type: 'text', value: '<br>' }] } });
+  });
+
+  it.each([
+    ['an attribute', 'a<br class=x>b'],
+    ['an event handler', 'a<br onclick=x>b'],
+    ['upper case', 'a<BR>b'],
+    ['two spaces before the slash', 'a<br  />b'],
+    ['a closing tag', 'a</br>b'],
+    ['a block-level raw node holding more than the tag', '<br>\nhello'],
+    ['a script element', '<script>x</script>'],
+  ])('%s stays literal text in the docs profile', (_why, src) => {
+    const o = parseMarkdown(src, 'docs');
+    expect(brs(o)).toEqual([]);
+    expect(nodes(treeOf(o)).filter((n) => n.type === 'raw')).toEqual([]);
+    expect(textOf(o)).toBe(src);
+    expect(o).toEqual(parseMarkdown(src, 'chat'));
+  });
+
+  it('the br elements count toward DOCS_MAX_RENDER_ELEMENTS before anything renders', () => {
+    const src = 'a<br>'.repeat(20000);
+    expect(parseMarkdown(src, 'docs')).toEqual({ kind: 'too-wide', elements: 20001 });
+    expect(parseMarkdown(src, 'chat').kind).toBe('tree');
+  }, 60000);
+
+  it('the docs br renders through renderHast as a real <br>; chat renders the tag as text', () => {
+    const docs = render(renderHast(treeOf(parseMarkdown('a<br>b', 'docs')), { components: SHARED_COMPONENTS }));
+    expect(docs.container.innerHTML).toBe('<p>a<br>b</p>');
+    cleanup();
+    const chat = render(renderHast(treeOf(parseMarkdown('a<br>b', 'chat')), { components: SHARED_COMPONENTS }));
+    expect(chat.container.innerHTML).toBe('<p>a&lt;br&gt;b</p>');
+    cleanup();
+  });
+
+  it("settleHast with one argument keeps 'chat'; with 'docs' a hand-built raw <br/> becomes a br element", () => {
+    const tree = (): HastRoot => ({ type: 'root', children: [{ type: 'raw', value: '<br/>' }] }) as unknown as HastRoot;
+    expect(settleHast(tree())).toEqual({ kind: 'tree', depth: 1, tree: { type: 'root', children: [{ type: 'text', value: '<br/>' }] } });
+    expect(settleHast(tree(), 'chat')).toEqual(settleHast(tree()));
+    expect(settleHast(tree(), 'docs')).toEqual({ kind: 'tree', depth: 1, tree: { type: 'root', children: [BR] } });
   });
 });
