@@ -5688,13 +5688,18 @@ describe('child reclamation wave 9: the collector’s lane and executor call the
 // the file's last line, as its own describe: `session-hook.test.ts`'s citation audit cites this file by line, so the
 // docs section H block's TYPES and FUNCTIONS lists above are never edited. The same two declaration patterns as that
 // block, with a planted CONTROL: a third file holding a copy makes the holder list two long.
+// The function pattern accepts `async`, `default` and `declare` (and a generator star) before `function`, with a
+// planted control for each. It is a line-anchored regex, NOT EXHAUSTIVE, and not a parser: the evasions it still
+// misses are listed in the second CONTROL below (a method, a re-export, a CommonJS assignment, a copy in a comment or
+// string, a function expression bound by none of `const`, `let` or `var`).
 describe('docs section H, W5: GithubPermalink, githubPermalink and githubUrlAt are declared once, in shared/docs.ts', () => {
   const TYPES = ['GithubPermalink'] as const;
   const FUNCTIONS = ['githubPermalink', 'githubUrlAt'] as const;
   const TYPE_DEF = (name: string): RegExp =>
     new RegExp(`^\\s*(?:export\\s+)?(?:declare\\s+)?(?:type\\s+${name}\\b\\s*(?:<[^>\\n]*>)?\\s*=|interface\\s+${name}\\b)`, 'm');
+  // Any run of `export`, `default`, `declare` and `async` before `function [*] NAME` or `const|let|var NAME`.
   const FN_DEF = (name: string): RegExp =>
-    new RegExp(`^\\s*(?:export\\s+)?(?:function\\s+${name}\\b|(?:const|let|var)\\s+${name}\\b)`, 'm');
+    new RegExp(`^\\s*(?:(?:export|default|declare|async)\\s+)*(?:function\\s*\\*?\\s*${name}\\b|(?:const|let|var)\\s+${name}\\b)`, 'm');
   // The holders of a declaration over the four roots, plus any planted [path, text] pairs, sorted.
   const holders = (def: RegExp, planted: readonly (readonly [string, string])[] = []): string[] =>
     [...ALL.map((f) => [rel(f), readFileSync(f, 'utf8')] as const), ...planted]
@@ -5710,6 +5715,37 @@ describe('docs section H, W5: GithubPermalink, githubPermalink and githubUrlAt a
     expect(FN_DEF('githubPermalink').test("import { githubPermalink } from '../../../shared/docs.js';"), 'an import').toBe(false);
     expect(FN_DEF('githubPermalink').test('  const link = githubPermalink(github, ref, commit, target);'), 'a call').toBe(false);
     expect(FN_DEF('githubUrlAt').test('function githubUrlAtCommit('), 'another name').toBe(false);
+  });
+
+  it('CONTROL: the function pattern sees an async, a default, a declare-d and a generator copy', () => {
+    for (const text of [
+      'export async function githubPermalink(',
+      'async function githubPermalink(',
+      'export default function githubUrlAt(',
+      'export default async function githubUrlAt(',
+      'export declare function githubPermalink(',
+      'declare function githubPermalink(',
+      'export function* githubPermalink(',
+      'export declare const githubUrlAt:',
+      'export const githubUrlAt = async (slug: string) => slug;',
+    ]) {
+      const name = text.includes('githubUrlAt') ? 'githubUrlAt' : 'githubPermalink';
+      expect(FN_DEF(name).test(text), text).toBe(true);
+    }
+    expect(FN_DEF('githubPermalink').test('export async function githubPermalinks('), 'another name').toBe(false);
+    expect(FN_DEF('githubPermalink').test('  await githubPermalink(github, ref);'), 'an awaited call').toBe(false);
+  });
+
+  it('CONTROL: what the function pattern still misses is named here, and a miss is not a pass', () => {
+    // NOT EXHAUSTIVE. These evasions are known and stay unseen: an object or class method (`githubPermalink(x) {`),
+    // a re-export under the name (`export { other as githubPermalink }`), a CommonJS assignment
+    // (`exports.githubPermalink = `), a copy inside a block comment or string, and a
+    // function expression that no `const`, `let` or `var` binds.
+    for (const text of [
+      '  githubPermalink(github: DocsGithub) {',
+      'export { other as githubPermalink };',
+      'exports.githubPermalink = function () {};',
+    ]) expect(FN_DEF('githubPermalink').test(text), text).toBe(false);
   });
 
   it('CONTROL: a third file holding a copy is seen beside shared/docs.ts', () => {
