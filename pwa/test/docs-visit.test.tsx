@@ -567,6 +567,32 @@ describe('an effect cleanup that aborts a read', () => {
   });
 });
 
+describe('an effect cleanup while the first tree GET is in flight', () => {
+  it('drops the loading slot, so showing the screen again lists again instead of loading for ever', async () => {
+    const f = fakeLoaders();
+    let answer: (a: Awaited<ReturnType<DocsLoaders['tree']>>) => void = () => {};
+    f.tree.mockImplementationOnce(() => new Promise((r) => { answer = r; }));
+    let mode: 'visible' | 'hidden' = 'visible';
+    const wrapper = ({ children }: { children: ReactNode }) => <Activity mode={mode}>{children}</Activity>;
+    const props = { page: pageAt('/docs/demo') as DocsPageLocation | null };
+    const { rerender, result } = renderHook((p: { page: DocsPageLocation | null }) => useDocsVisit(p.page, f.loaders), {
+      initialProps: props, wrapper,
+    });
+    await flush();
+    expect(f.tree).toHaveBeenCalledTimes(1);
+    mode = 'hidden';
+    rerender(props);
+    await flush();
+    await act(async () => answer(okTree()));
+    await flush();
+    mode = 'visible';
+    rerender(props);
+    await flush();
+    expect(f.tree).toHaveBeenCalledTimes(2);
+    expect(result.current.tree?.s).toBe('ok');
+  });
+});
+
 describe('the fragment hand-off', () => {
   it('holds a fragment until it is cleared', () => {
     const f = fakeLoaders();

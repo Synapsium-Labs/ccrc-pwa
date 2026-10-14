@@ -371,6 +371,26 @@ describe('a timer or an answer acts only on the state it was for', () => {
     expect(result.current.updatedTo).toBeNull();
   });
 
+  it('a GET that starts after the POST began and lands before it does not stop the POST\'s newer tree from landing', async () => {
+    const f = fakeLoaders();
+    const post = held<DocsRefreshLoaderAnswer>();
+    f.tree.mockResolvedValueOnce(okTree(treeOk({ commit: COMMIT_A })));
+    f.tree.mockResolvedValueOnce(okTree(treeOk({ commit: COMMIT_A })));
+    f.refresh.mockImplementationOnce(() => post.promise);
+    const { result } = visit(f.loaders, '/docs/demo/specs/a.md');
+    await flush();
+    act(() => result.current.refreshManual());
+    await flush();
+    act(() => result.current.retryTree());
+    await flush();
+    expect(f.tree).toHaveBeenCalledTimes(2);
+    await act(async () => post.settle(okRefresh(RAN, treeResponse(treeOk({ commit: COMMIT_B })))));
+    await flush();
+    const slot = result.current.tree;
+    expect(slot?.s === 'ok' && slot.answer.tree.ref.commit).toBe(COMMIT_B);
+    expect(result.current.file).toMatchObject({ s: 'ok', pin: { commit: COMMIT_B } });
+  });
+
   it('an older GET that lands after a newer POST answer still releases the reads waiting on a listing', async () => {
     const moved = treeOk({ commit: COMMIT_B, entries: [entry('specs', 'a.md', { committed: { kind: 'file', blob: BLOB_2, size: 9 } })] });
     const f = fakeLoaders();

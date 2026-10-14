@@ -154,7 +154,7 @@ interface Store {
   readonly refreshTimers: Map<string, ReturnType<typeof setTimeout>>;
   /** The in-flight file reads, each with the file key whose entry it is the single-flight mark of. */
   readonly aborts: Map<AbortController, string>;
-  /** The last request number handed out (a GET or a POST takes one when it STARTS), and per tree key the number
+  /** The last request number handed out (a GET takes one when it STARTS, a POST when its answer ARRIVES), and per tree key the number
    *  of the answer that last set the slot: an older answer landing later is not applied. */
   seq: number;
   readonly slotSeq: Map<string, number>;
@@ -238,7 +238,7 @@ export function useDocsVisit(page: DocsPageLocation | null, loaders: DocsLoaders
     const now = targetOf(pageRef.current);
     return now !== null && treeKey(now.project, now.ref) === key;
   };
-  /** A request's number, taken when it starts. */
+  /** A request's number: a GET takes it when it starts, a refresh POST when its answer arrives. */
   const nextSeq = (): number => {
     st.seq += 1;
     return st.seq;
@@ -276,12 +276,13 @@ export function useDocsVisit(page: DocsPageLocation | null, loaders: DocsLoaders
     }
     st.refreshInflight.add(key);
     st.freshness.set(key, { s: 'fetching', reason });
-    const seq = nextSeq();
     const body = { ref: target.ref === null ? null : docsRefText(target.ref), reason };
     void loadersRef.current.refresh(target.project, body).then((a) => {
       st.refreshInflight.delete(key);
       if (!st.alive) return;
-      applyRefresh(target, key, reason, seq, a);
+      // Numbered when it ARRIVES: the route read its tree after its fetch, so it is newer than any GET that
+      // started before this answer, however early the POST began.
+      applyRefresh(target, key, reason, nextSeq(), a);
       changed();
     }, (err: unknown) => {
       // The mark is the single-flight guard: a loader that rejects must not leave the key pinned for good.
@@ -327,7 +328,7 @@ export function useDocsVisit(page: DocsPageLocation | null, loaders: DocsLoaders
       return;
     }
     // The fetch happened whatever the listing's order: the chip says so. A listing older than the one the slot
-    // holds is not applied (the POST's tree is newer than a GET started before it answered, not than one after).
+    // holds is not applied (a GET that started before this answer arrived).
     if (!isNewest(key, seq)) {
       st.freshness.set(key, { s: 'answered', fetch, at: now });
     } else if (tree.ok) {
@@ -483,6 +484,9 @@ export function useDocsVisit(page: DocsPageLocation | null, loaders: DocsLoaders
       }
       st.aborts.clear();
       st.refreshTimers.clear();
+      // A first GET still in flight is orphaned (its answer is dropped while not alive): its `loading` slot goes, so
+      // the next effect pass lists again instead of waiting for ever on an answer that will not be read.
+      for (const key of st.treeInflight) if (st.trees.get(key)?.s === 'loading') st.trees.delete(key);
     };
     // `st` is this mount's store: one object for the hook's life, so this runs once per mount (twice under
     // StrictMode, whose second pass finds nothing to start).
