@@ -2,7 +2,7 @@
 // suites run ccd: a stub tmux on PATH answers the session name, stdin carries
 // the hook payload, and the assertion reads the file the script wrote.
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { execFileSync, spawnSync, spawn } from 'node:child_process';
+import { execFileSync, spawnSync, spawn, type SpawnSyncReturns } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
@@ -10133,6 +10133,150 @@ describe('memory convergence (spec 2026-09-08 §2)', () => {
     expect(fs.lstatSync(link()).isSymbolicLink()).toBe(true);
     expect(fs.readlinkSync(link())).toBe(store());
     expect(fs.readdirSync(store())).toEqual([]);    // nothing planted INSIDE the store
+  });
+});
+
+// ── EXACT-PANE OWNERSHIP (delegation broker wave 3, task 1; mutation W3-M01) ──
+//
+// The hook learns WHOSE event it is from one question to the tmux server, and the
+// answer decides every file it writes: the hookstate, the turn marker, the capture
+// of a `-hookcap` session, and the delegation spool this wave adds. Untargeted,
+// `tmux display-message -p '#S'` answers for the pane the server calls CURRENT,
+// which is this hook's own only while tmux can still resolve the pane from its
+// client. MEASURED on tmux 3.4: with `TMUX_PANE` in the client's environment and
+// the pane alive, tmux resolves it by itself; with the pane GONE, or with a client
+// that carries no pane, it falls back to the most recently active session. So a
+// hook event from a torn-down pane was written under whatever ccrc session was
+// current, and that session's state belonged to someone else. The lookup is
+// therefore `-t "$TMUX_PANE"`: the exact pane or nothing.
+//
+// Two groups. The first drives a REAL tmux on a private socket (`-L <name> -f
+// /dev/null`, the way ccd-tmux-anchor.test.ts does: never the default server);
+// the second a stub that answers the untargeted question and fails or wedges the
+// targeted one, which is the lookup-failure half and needs no tmux at all.
+const EXACT_PANE_TMUX: string | null = (() => {
+  const r = spawnSync('sh', ['-c', 'command -v tmux'], { encoding: 'utf8' });
+  const p = (r.stdout ?? '').trim();
+  return r.status === 0 && p.startsWith('/') ? p : null;
+})();
+describe('exact-pane hook ownership: the session name is asked of $TMUX_PANE, never of the server\'s current pane', () => {
+  /** The fixture row (`stateFile()` reads its hookstate) and a SECOND ccrc session whose id ends
+   *  `-hookcap`, so a wrong attribution to it leaves BOTH a hookstate and a capture directory. */
+  const OWNER = 'cc-demo-quiet-basin';
+  const OTHER = 'cc-other-hookcap';
+  const reg = (): string => path.join(home, '.cc-sessions');
+  const otherState = (): string => path.join(reg(), 'other-hookcap.hookstate.json');
+  const captureRoot = (): string => path.join(home, '.ccrc', 'hook-capture');
+  const spoolRoot = (): string => path.join(reg(), 'delegation');
+  const EVENT = { hook_event_name: 'UserPromptSubmit' };
+  /** What the hook may have written for ANY session: a hookstate, a turn marker, a capture, a spool. */
+  const wroteNothing = (): void => {
+    expect(fs.readdirSync(reg()).sort(), 'the registry holds only the fixture row\'s generation file')
+      .toEqual(['demo-quiet-basin.generation']);
+    expect(fs.existsSync(captureRoot()), 'no capture directory').toBe(false);
+    expect(fs.existsSync(spoolRoot()), 'no delegation spool').toBe(false);
+  };
+
+  describe.skipIf(EXACT_PANE_TMUX === null)('real tmux, private socket'
+    + (EXACT_PANE_TMUX === null ? ' — SKIPPED: no tmux on PATH, so there is no real tmux to measure against' : ''), () => {
+    /** Short (macOS `sun_path`) and unique per run (concurrent suites). */
+    const SOCK = `hkex${process.pid}${Math.random().toString(36).slice(2, 6)}`;
+    const T = (...args: string[]): SpawnSyncReturns<string> =>
+      spawnSync(EXACT_PANE_TMUX!, ['-L', SOCK, '-f', '/dev/null', ...args], {
+        encoding: 'utf8', env: { ...process.env, TMUX: undefined, TMUX_PANE: undefined, TMUX_TMPDIR: undefined } as NodeJS.ProcessEnv });
+    /** `kill-server` returns before the server has gone, and a `new-session` that lands in that window
+     *  answers `server exited unexpectedly` (measured, ccd-tmux-anchor.test.ts) — so poll until tmux itself
+     *  says there is nothing to connect to. */
+    const resetServer = (): void => {
+      T('kill-server');
+      for (let i = 0; i < 200; i++) {
+        const r = T('list-sessions');
+        if (r.status !== 0 && /no server running|error connecting/.test(r.stderr)) return;
+        spawnSync('sleep', ['0.05']);
+      }
+      throw new Error(`the private tmux server on ${SOCK} would not go away`);
+    };
+    /** A session whose one pane sits in `sleep`; its pane id, which is what the hook receives as `TMUX_PANE`. */
+    const mk = (name: string): string => {
+      const r = T('new-session', '-d', '-P', '-F', '#{pane_id}', '-s', name, '-x', '80', '-y', '24', 'exec sleep 600');
+      expect(r.status, `fixture new-session ${name}: ${r.stderr}`).toBe(0);
+      return r.stdout.trim();
+    };
+    const argvLog = (): string[] => fs.readFileSync(path.join(home, 'tmux-argv'), 'utf8').split('\n').filter(Boolean);
+    /** The fixture PATH's `tmux`: the private-socket tmux, argv recorded. `CLIENT_BLIND` strips `TMUX_PANE`
+     *  from the CLIENT's environment — a tmux client that carries no pane, which is what an untargeted
+     *  question needs the server's idea of "current" for. */
+    const plantShim = (): void => fs.writeFileSync(path.join(home, 'bin', 'tmux'),
+      `#!/bin/sh\nunset TMUX TMUX_TMPDIR\n[ -n "\${CLIENT_BLIND:-}" ] && unset TMUX_PANE\n`
+      + `printf '%s\\n' "$*" >> "$HOME/tmux-argv"\nexec '${EXACT_PANE_TMUX}' -L '${SOCK}' -f /dev/null "$@"\n`, { mode: 0o755 });
+
+    beforeEach(() => { resetServer(); plantShim(); });
+    afterEach(() => {
+      T('kill-server');
+      // tmux leaves the socket FILE behind after `kill-server` (measured, 3.4): tmux's own default
+      // directory, since TMUX_TMPDIR is unset, and a name that is this run's alone.
+      if (typeof process.getuid === 'function') fs.rmSync(path.join('/tmp', `tmux-${process.getuid()}`, SOCK), { force: true });
+    });
+
+    it('another pane is CURRENT while TMUX_PANE names the owner: the event is the owner\'s, and only the owner\'s', () => {
+      const ownerPane = mk(OWNER);
+      spawnSync('sleep', ['0.1']);
+      mk(OTHER);
+      // THE PREMISE, MEASURED: an untargeted question to this server answers the other, newer session. Without
+      // this the case below passes for a hook that asks nothing exact.
+      expect(T('display-message', '-p', '#S').stdout.trim(), 'the server\'s current session is the OTHER one').toBe(OTHER);
+      const r = runFull(EVENT, { TMUX_PANE: ownerPane, CLIENT_BLIND: '1' });
+      expect(r).toEqual({ stdout: '', stderr: '' });
+      expect(fs.existsSync(stateFile()), 'the owner\'s hookstate was written').toBe(true);
+      expect(readState().state, 'the owner\'s hookstate').toBe('working');
+      expect(fs.existsSync(otherState()), 'the current pane\'s session got nothing').toBe(false);
+      expect(fs.existsSync(captureRoot()), 'and no capture of its').toBe(false);
+      expect(argvLog(), 'the one tmux question names the pane').toEqual([`display-message -p -t ${ownerPane} #S`]);
+    });
+
+    it('exact-pane teardown: the pane is gone but another ccrc pane remains — no hookstate, no capture, no delegation spool', () => {
+      const ownerPane = mk(OWNER);
+      mk(OTHER);
+      expect(T('kill-session', '-t', `=${OWNER}`).status, 'the owner\'s session is torn down').toBe(0);
+      expect(T('list-sessions', '-F', '#{session_name}').stdout.trim(), 'only the other ccrc session remains').toBe(OTHER);
+      // THE PREMISE, MEASURED: the very question the old hook asked, from a client whose `TMUX_PANE` still
+      // names the dead pane, answers the survivor — which is the wrong session for this event.
+      const old = spawnSync(EXACT_PANE_TMUX!, ['-L', SOCK, '-f', '/dev/null', 'display-message', '-p', '#S'], {
+        encoding: 'utf8', env: { ...process.env, TMUX: undefined, TMUX_PANE: ownerPane, TMUX_TMPDIR: undefined } as NodeJS.ProcessEnv });
+      expect(old.stdout.trim(), 'an untargeted question names the survivor').toBe(OTHER);
+      for (const event of [EVENT, { hook_event_name: 'Stop' }, { hook_event_name: 'SessionEnd' }]) {
+        expect(runFull(event, { TMUX_PANE: ownerPane }), `${event.hook_event_name}: silent, exit 0`).toEqual({ stdout: '', stderr: '' });
+      }
+      wroteNothing();
+      expect(argvLog().every((l) => l === `display-message -p -t ${ownerPane} #S`), 'every question named the dead pane').toBe(true);
+    });
+  });
+
+  describe('a stub tmux that answers the UNTARGETED question with a ccrc name', () => {
+    /** Untargeted: the fixture row's name. Targeted: `ask`. */
+    const plantTmux = (ask: string): void => fs.writeFileSync(path.join(home, 'bin', 'tmux'),
+      `#!/bin/sh\ncase " $* " in *" -t "*) ${ask} ;; esac\necho "${OWNER}"\n`, { mode: 0o755 });
+
+    it('a targeted lookup that FAILS attributes nothing: exit 0, no hookstate, no capture, no delegation spool', () => {
+      plantTmux('echo "can\'t find pane" >&2; exit 1');
+      expect(runFull(EVENT, { TMUX_PANE: '%7' })).toEqual({ stdout: '', stderr: '' });
+      wroteNothing();
+    });
+
+    it('a targeted lookup that NEVER ANSWERS costs the bound and attributes nothing', () => {
+      plantTmux('sleep 30');
+      const t0 = Date.now();
+      expect(runFull(EVENT, { TMUX_PANE: '%7' })).toEqual({ stdout: '', stderr: '' });
+      const ms = Date.now() - t0;
+      expect(ms, `the hook took ${ms}ms — the bound did not fire`).toBeLessThan(10_000);
+      wroteNothing();
+    });
+
+    it('control: the same stub, asked about the pane it can resolve, attributes to it', () => {
+      plantTmux(`echo "${OWNER}"; exit 0`);
+      runFull(EVENT, { TMUX_PANE: '%7' });
+      expect(readState().state).toBe('working');
+    });
   });
 });
 
