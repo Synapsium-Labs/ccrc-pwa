@@ -188,3 +188,16 @@ describe('one builder for both surfaces (spec 4.8, M4.L2)', () => {
       expect(text).not.toMatch(/['"`]\/docs\b|\?ref=|\bdocsPageUrl\(|\bdocsLocation\(/);
     });
 });
+
+describe('T13 review 5-3: the session menu lists Docs directly after History', () => {
+  it('the Docs item is History’s next sibling in the menu, and nothing sits between them', () => {
+    render(<SessionHeader {...headerProps(s())} />);
+    fireEvent.click(screen.getByRole('button', { name: 'More' }));
+    const history = screen.getByRole('button', { name: 'History' });
+    const docs = screen.getByRole('button', { name: 'Docs' });
+    expect(history.nextElementSibling).toBe(docs);
+    expect(docs.parentElement).toBe(history.parentElement);
+    const labels = [...(history.parentElement?.children ?? [])].map((n) => n.querySelector('.menu-label')?.textContent);
+    expect(labels.slice(0, 4)).toEqual(['Change model', 'Change effort', 'History', 'Docs']);
+  });
+});
