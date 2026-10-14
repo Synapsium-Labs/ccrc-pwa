@@ -17,7 +17,8 @@ import type { Root as HastRoot } from 'hast';
 import { ChatMarkdown, CodeBlock, SHARED_COMPONENTS, longestWordRun } from '../src/lib/markdown';
 import { keystrokeParts, utf8ByteLength } from '../src/lib/markdownGuard';
 import {
-  CHAT_SYNC_MAX_BYTES, DOCS_MAX_RENDER_ELEMENTS, MD_HIGHLIGHT_MAX_WORD_CHARS, MD_KEYSTROKE_MAX_CHARS,
+  CHAT_SYNC_MAX_BYTES, DOCS_MAX_RENDER_ELEMENTS, MD_HIGHLIGHT_BLOCK_MAX_CHARS, MD_HIGHLIGHT_MAX_LINE_CHARS,
+  MD_HIGHLIGHT_MAX_WORD_CHARS, MD_KEYSTROKE_MAX_CHARS,
 } from '../src/lib/markdownLimits';
 import { inlineCodeExtraElements, parseMarkdown, type MarkdownProfile } from '../src/lib/markdownParse';
 import type { MarkdownParser } from '../src/lib/markdownRunner';
@@ -115,14 +116,157 @@ describe('W5 bound r10: no highlighting for a block holding a word longer than M
     expect(c.querySelectorAll('.hljs-keyword').length).toBeGreaterThan(0);
   });
 
-  it('longestWordRun counts letters, digits, _ and $ only, in one pass', () => {
+  it('longestWordRun counts letters, digits, _, $ and every code unit from 0x7f up, in one pass', () => {
     expect(longestWordRun('')).toBe(0);
     expect(longestWordRun('ab cd')).toBe(2);
     expect(longestWordRun('a_b$c9')).toBe(6);
     expect(longestWordRun('a-b.c')).toBe(1);
-    expect(longestWordRun('é'.repeat(300))).toBe(0);
+    // highlight.js's PHP grammar treats \x7f-\xff as identifier characters, so every unit from 0x7f up is a word
+    // unit (fail closed): a run of non-ASCII letters, of astral units and of 0x7f itself is counted.
+    expect(longestWordRun('é'.repeat(300))).toBe(300);
+    expect(longestWordRun('_é'.repeat(257))).toBe(514);
+    expect(longestWordRun('\u{1F600}'.repeat(3))).toBe(6);
+    expect(longestWordRun('\x7f\x7f')).toBe(2);
+    expect(longestWordRun('~~~')).toBe(0);
+    expect(longestWordRun('é - é')).toBe(1);
     expect(longestWordRun(`${'x'.repeat(300)} ${'y'.repeat(5)}`)).toBe(300);
     expect(longestWordRun('Z'.repeat(MD_HIGHLIGHT_MAX_WORD_CHARS + 1))).toBe(257);
+  });
+
+  it('a php fence of 257 `_é` units (a 514-character run) is not highlighted and says why', () => {
+    // The measured gap: highlight.js's PHP grammar takes \x7f-\xff as identifier characters, and 64 KiB of `_é`
+    // cost about 38 s before the class counted every unit from 0x7f up.
+    const highlight = spyHighlight();
+    const over = '_é'.repeat(257);
+    const c = block('php', over);
+    expect(highlight).not.toHaveBeenCalled();
+    expect(label(c)).toBe('PHP · not highlighted (a 514-character word)');
+    expect(c.querySelector('pre > code.hljs')?.textContent).toBe(over);
+  });
+
+  it('a run of 256 code units that holds non-ASCII units still highlights; 257 does not', () => {
+    const highlight = spyHighlight();
+    expect(label(block('php', `${'_é'.repeat(127)}ab`))).toBe('PHP');
+    expect(highlight).toHaveBeenCalledTimes(1);
+    expect(label(block('php', `${'_é'.repeat(127)}abc`))).toBe('PHP · not highlighted (a 257-character word)');
+    expect(highlight).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('W5 bound r10 (line): no highlighting for a block holding a line longer than MD_HIGHLIGHT_MAX_LINE_CHARS', () => {
+  const MAX = MD_HIGHLIGHT_MAX_LINE_CHARS;
+  /** `unit` repeated and cut to `n` characters. */
+  const unitLine = (unit: string, n: number): string => unit.repeat(Math.ceil(n / unit.length)).slice(0, n);
+  /** 64 KiB (less the last partial line) of lines of `n` characters. */
+  const lines = (unit: string, n: number): string =>
+    Array.from({ length: Math.floor(MD_HIGHLIGHT_BLOCK_MAX_CHARS / (n + 1)) }, () => unitLine(unit, n)).join('\n');
+
+  it('declares 2048 characters', () => {
+    expect(MD_HIGHLIGHT_MAX_LINE_CHARS).toBe(2048);
+  });
+
+  it.each([
+    ['markdown', '[', 'Markdown'],
+    ['markdown', '[a', 'Markdown'],
+    ['markdown', '![', 'Markdown'],
+    ['yaml', 'a a a ', 'YAML'],
+  ])('a %s block of %j lines one character over the bound is not highlighted and says why', (lang, unit, name) => {
+    const highlight = spyHighlight();
+    const one = unitLine(unit, MAX + 1);
+    const c = block(lang, one);
+    expect(highlight).not.toHaveBeenCalled();
+    expect(label(c)).toBe(`${name} · not highlighted (a ${MAX + 1}-character line)`);
+    expect(c.querySelector('pre > code.hljs')?.textContent).toBe(one);
+    cleanup();
+    const big = lines(unit, MAX + 1);
+    expect(big.length).toBeGreaterThan(MD_HIGHLIGHT_BLOCK_MAX_CHARS - 2 * (MAX + 1));
+    expect(label(block(lang, big))).toBe(`${name} · not highlighted (a ${MAX + 1}-character line)`);
+    expect(highlight).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['markdown', '[', 'Markdown'],
+    ['yaml', 'a a a ', 'YAML'],
+  ])('a %s block of %j lines of exactly the bound is highlighted', (lang, unit, name) => {
+    const highlight = spyHighlight();
+    const c = block(lang, lines(unit, MAX));
+    expect(label(c)).toBe(name);
+    expect(highlight).toHaveBeenCalledTimes(1);
+  });
+
+  it('64 KiB of ordinary short lines is highlighted', () => {
+    const highlight = spyHighlight();
+    const one = 'const answer = compute(42); // the answer';
+    const body = Array.from({ length: Math.floor(MD_HIGHLIGHT_BLOCK_MAX_CHARS / (one.length + 1)) }, () => one).join('\n');
+    expect(body.length).toBeLessThanOrEqual(MD_HIGHLIGHT_BLOCK_MAX_CHARS);
+    expect(label(block('ts', body))).toBe('TypeScript');
+    expect(highlight).toHaveBeenCalledTimes(1);
+  });
+
+  it('a line break of either kind ends a line: CRLF and lone CR lines of exactly the bound highlight', () => {
+    const highlight = spyHighlight();
+    const line = '['.repeat(MAX);
+    expect(label(block('markdown', `${line}\r\n${line}\r\n${line}`))).toBe('Markdown');
+    expect(label(block('yaml', `${line}\r${line}`))).toBe('YAML');
+    expect(highlight).toHaveBeenCalledTimes(2);
+  });
+
+  it('one long line among short ones is found, and the label carries that line length', () => {
+    const highlight = spyHighlight();
+    const body = `# title\n${'a '.repeat(1100)}\nend`;
+    expect(label(block('yaml', body))).toBe('YAML · not highlighted (a 2200-character line)');
+    expect(highlight).not.toHaveBeenCalled();
+  });
+
+  it('chat gets the bound through the shared components, on the synchronous path and the worker path', async () => {
+    const highlight = spyHighlight();
+    const small = `\`\`\`markdown\n${'['.repeat(MAX + 1)}\n\`\`\`\n`;
+    expect(utf8ByteLength(small)).toBeLessThanOrEqual(CHAT_SYNC_MAX_BYTES);
+    expect(label((await chat(small)).container)).toBe(`Markdown · not highlighted (a ${MAX + 1}-character line)`);
+    cleanup();
+    const large = `\`\`\`markdown\n${['['.repeat(MAX + 1), '['.repeat(MAX + 1), '['.repeat(MAX + 1)].join('\n')}\n\`\`\`\n`;
+    expect(utf8ByteLength(large)).toBeGreaterThan(CHAT_SYNC_MAX_BYTES);
+    const { container, parser } = await chat(large);
+    expect(parser).toHaveBeenCalledTimes(1);
+    expect(label(container)).toBe(`Markdown · not highlighted (a ${MAX + 1}-character line)`);
+    expect(highlight).not.toHaveBeenCalled();
+  });
+
+  it('a block that trips both bounds is labelled by its word: the word bound is checked first', () => {
+    const highlight = spyHighlight();
+    expect(label(block('ts', 'a'.repeat(5000)))).toBe('TypeScript · not highlighted (a 5000-character word)');
+    expect(highlight).not.toHaveBeenCalled();
+  });
+
+  it('a block over the size cap keeps its size label whatever its lines', () => {
+    const highlight = spyHighlight();
+    expect(label(block('markdown', '['.repeat(70000)))).toBe('Markdown · not highlighted (69 KiB)');
+    expect(highlight).not.toHaveBeenCalled();
+  });
+
+  it('a block over MD_HIGHLIGHT_BLOCK_MAX_CHARS is never scanned: the size check comes first', () => {
+    // Both scans read the block through `charCodeAt` and nothing else on the block's path does, so the count of its
+    // calls is the count of scanned units.
+    spyHighlight();
+    const calls = vi.spyOn(String.prototype, 'charCodeAt');
+    block('ts', 'a'.repeat(MD_HIGHLIGHT_BLOCK_MAX_CHARS + 1));
+    const over = calls.mock.calls.length;
+    calls.mockClear();
+    block('ts', 'a'.repeat(1000));
+    const within = calls.mock.calls.length;
+    calls.mockRestore();
+    expect(over).toBeLessThan(1000);
+    expect(within).toBeGreaterThanOrEqual(1000);
+  });
+
+  it('an unregistered fence and highlight={false} are never scanned either', () => {
+    spyHighlight();
+    const calls = vi.spyOn(String.prototype, 'charCodeAt');
+    block('mermaid', 'a'.repeat(5000));
+    render(<CodeBlock highlight={false}><code className="language-ts">{'a'.repeat(5000)}</code></CodeBlock>);
+    const n = calls.mock.calls.length;
+    calls.mockRestore();
+    expect(n).toBeLessThan(1000);
   });
 });
 

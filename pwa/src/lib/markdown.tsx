@@ -34,7 +34,8 @@ import php from 'highlight.js/lib/languages/php';
 import { remarkAlerts } from './remarkAlerts';
 import {
   CHAT_PARSE_BUDGET_MS, CHAT_SYNC_MAX_BYTES, DOCS_MAX_RENDER_ELEMENTS, MD_HIGHLIGHT_BLOCK_MAX_CHARS,
-  MD_HIGHLIGHT_MAX_WORD_CHARS, MD_MAX_CONTAINER_DEPTH, MD_MAX_DELIMITER_RUN, MD_MAX_TREE_DEPTH,
+  MD_HIGHLIGHT_MAX_LINE_CHARS, MD_HIGHLIGHT_MAX_WORD_CHARS,
+  MD_MAX_CONTAINER_DEPTH, MD_MAX_DELIMITER_RUN, MD_MAX_TREE_DEPTH,
 } from './markdownLimits';
 import { keystrokeParts, prescanMarkdown, utf8ByteLength } from './markdownGuard';
 import type { ParseOutcome } from './markdownParse';
@@ -111,14 +112,17 @@ export function nodeText(n: ReactNode): string {
   return '';
 }
 
-/** The longest run of `[A-Za-z0-9_$]` in `s` (0 for none): one pass over its UTF-16 code units, no regular
- *  expression, so its cost is linear in the length of `s` whatever it holds. */
+/** The longest run of word units in `s` (0 for none): a word unit is a UTF-16 code unit in `[A-Za-z0-9_$]` or at
+ *  `0x7f` or above. The upper range is counted because highlight.js's PHP grammar takes `\x7f-\xff` as identifier
+ *  characters (64 KiB of `_é` in a `php` fence cost about 38 s), and a unit above it cannot be told from one inside
+ *  it without the grammar, so the class fails closed. One pass over its code units, no regular expression, so its
+ *  cost is linear in the length of `s` whatever it holds. */
 export function longestWordRun(s: string): number {
   let best = 0;
   let run = 0;
   for (let i = 0; i < s.length; i += 1) {
     const c = s.charCodeAt(i);
-    if ((c >= 0x30 && c <= 0x39) || (c >= 0x41 && c <= 0x5a) || (c >= 0x61 && c <= 0x7a) || c === 0x5f || c === 0x24) {
+    if ((c >= 0x30 && c <= 0x39) || (c >= 0x41 && c <= 0x5a) || (c >= 0x61 && c <= 0x7a) || c === 0x5f || c === 0x24 || c >= 0x7f) {
       run += 1;
       if (run > best) best = run;
     } else {
@@ -128,14 +132,33 @@ export function longestWordRun(s: string): number {
   return best;
 }
 
+/** The length in UTF-16 code units of the longest line of `s` (0 for none); a line ends at `\n` or `\r`, so a
+ *  CRLF pair counts neither character. One pass, linear in the length of `s`. */
+export function longestLine(s: string): number {
+  let best = 0;
+  let run = 0;
+  for (let i = 0; i < s.length; i += 1) {
+    const c = s.charCodeAt(i);
+    if (c === 0x0a || c === 0x0d) {
+      run = 0;
+    } else {
+      run += 1;
+      if (run > best) best = run;
+    }
+  }
+  return best;
+}
+
 /** Fenced code: language label + copy bar over a syntax-highlighted well.
  *  The bar is a SIBLING above the scrolling <pre>, never an overlay.
  *  Highlighted only when the language is registered, `highlight` is not `false`, the block is at most
- *  `MD_HIGHLIGHT_BLOCK_MAX_CHARS` characters (after the trailing-newline strip), and its longest run of
- *  `[A-Za-z0-9_$]` is at most `MD_HIGHLIGHT_MAX_WORD_CHARS` (W5 bound r10). A registered block over the size cap
- *  renders as plain text and says so in its label, its size in whole KiB of characters, rounded up; one within it
- *  that holds a longer word renders as plain text labelled with that word's length. The size check comes first, so
- *  a block over the cap is never scanned. */
+ *  `MD_HIGHLIGHT_BLOCK_MAX_CHARS` characters (after the trailing-newline strip), its longest run of word units
+ *  (`longestWordRun`) is at most `MD_HIGHLIGHT_MAX_WORD_CHARS`, and its longest line is at most
+ *  `MD_HIGHLIGHT_MAX_LINE_CHARS` (W5 bound r10). A registered block over the size cap renders as plain text and says
+ *  so in its label, its size in whole KiB of characters, rounded up; one within it that holds a longer word renders
+ *  as plain text labelled with that word's length, and one with a longer line, labelled with that line's length
+ *  (a block that trips both is labelled by its word). The size check comes first, so a block over the cap is never
+ *  scanned. */
 export function CodeBlock({ children, highlight }: { children?: ReactNode; highlight?: boolean }): ReactNode {
   const [copied, setCopied] = useState(false);
   const codeEl = React.Children.toArray(children).find(React.isValidElement) as
@@ -148,7 +171,9 @@ export function CodeBlock({ children, highlight }: { children?: ReactNode; highl
   const overCap = wanted && raw.length > MD_HIGHLIGHT_BLOCK_MAX_CHARS;
   const word = wanted && !overCap ? longestWordRun(raw) : 0;
   const overWord = word > MD_HIGHLIGHT_MAX_WORD_CHARS;
-  const html = wanted && !overCap && !overWord
+  const line = wanted && !overCap ? longestLine(raw) : 0;
+  const overLine = line > MD_HIGHLIGHT_MAX_LINE_CHARS;
+  const html = wanted && !overCap && !overWord && !overLine
     ? hljs.highlight(raw, { language: lang, ignoreIllegals: true }).value // sync, never throws
     : null;
   const onCopy = useCallback(() => {
@@ -163,7 +188,8 @@ export function CodeBlock({ children, highlight }: { children?: ReactNode; highl
         <span className="code-block-lang">
           {overCap
             ? `${label} · not highlighted (${Math.ceil(raw.length / 1024)} KiB)`
-            : overWord ? `${label} · not highlighted (a ${word}-character word)` : label}
+            : overWord ? `${label} · not highlighted (a ${word}-character word)`
+              : overLine ? `${label} · not highlighted (a ${line}-character line)` : label}
         </span>
         <button type="button" className="code-block-copy" onClick={onCopy}
                 aria-label="Copy code" data-copied={copied || undefined}>
