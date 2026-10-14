@@ -3027,16 +3027,28 @@ msid="${CLAUDE_CODE_SESSION_ID:-$psid}"
 # THE ID: `aid` (the payload parse) is the RAW `agent_id` when it is already a string of 1 to `idmax` characters of
 # `idch` ([A-Za-z0-9_-], spelled once, in that jq program), else empty. Cleaning an id first would let a lookalike
 # (`a-1;`) ride a real join, so such an id is unjoinable: never recorded here, never suppressing the marker below.
-# WHEN: the row is live (`<id>.generation`, the witness `_reg_purge` removes LAST, so a purged row gets no file and
-# nothing orphans one), for the pane this hook owns (the exact-pane lookup above has already exited otherwise), and
-# whether or not a hookstate exists yet. The suffix is DOT-FREE so `_reg_purge`'s glob loop unlinks it with the row.
+# WHEN: the row is live (`<id>.generation`, the witness `_reg_purge` removes LAST) when the append starts, for the pane
+# this hook owns (the exact-pane lookup above has already exited otherwise), and whether or not a hookstate exists yet.
+# The suffix is DOT-FREE so `_reg_purge`'s glob loop unlinks it with the row.
+# NO WINDOW ORPHANS THE FILE, by one line on each side, because this hook takes no lock and a purge can run while it
+# writes. An orphan is a dot-free field: it would hold the slug for ever (`_ws_slug_free` returns 1 on any such field and
+# `ws-gc` never clears it). (a) AFTER the write, and after a rotation's rename, which can create the file again, the hook
+# looks at `<id>.generation` once more and, if the row is gone, removes what it wrote. (b) `_reg_purge` removes
+# `<id>.joined` once more AFTER it removes `generation`. An append that lands while `generation` still stands is taken by
+# (b); one that lands or finishes after it is gone is taken by (a): whichever side of the generation's removal the write
+# falls on, one of the two sees it. NOT closed: a hook killed between its write and its re-check, after a purge that had
+# already finished, leaves the file; that needs a purge to complete inside the hook's own few milliseconds AND the kill.
 # A REGULAR FILE OR NOTHING, as the history spool's append: a symlink, directory or FIFO at the path is neither read nor
 # written (builtin tests; a FIFO read would block the hook).
 # BOUNDED: past JOIN_ROTATE_AT lines a SubagentStart rewrites the file to its JOIN_KEEP most recent (temp + rename,
-# `_hook_write_atomic`); forks are fine there, it is rare, and the hysteresis makes it rarer (a workflow's whole
-# fan-out fits). THE ROTATION WINDOW, stated: an append that lands between the `tail` and the rename goes to the old
-# inode and is lost, and two rotations can race the same way. That costs one subagent's join (its events then read as
-# the main thread, the direction this file fails in everywhere), only at a rotation, and only beside a concurrent Start.
+# `_hook_write_atomic`); forks are fine there, and the hysteresis makes it rare (about one Start in 64 once the file has
+# rotated). THE ROTATION WINDOW, stated exactly: an append that lands between a rotation's `tail` and its rename goes to
+# the old inode and is lost, and a hook whose append went there then reads the new, short file and does not rotate
+# itself. Once rotated the file sits between 64 and 128 lines, so a fan-out of k Starts straddles the cap with probability
+# about k/65, and every Start that reads more than 128 lines rotates at the same time: a fan-out that straddles the cap
+# can lose SEVERAL joins, those appended inside a rotation's tail..rename window (a few ms each). Only a session's first
+# 128 joins are free of it, because the file has not rotated yet. Every lost join fails toward the main turn: that
+# subagent's events read as the main thread, the direction this file fails in everywhere.
 # A short write (a full disk) can fuse a torn id with the next line; that too fails toward the main turn.
 # The file is written only by this block, one id per line, and read back whole-line only (below).
 JOIN_KEEP=64 JOIN_ROTATE_AT=128 JOIN_READ_MAX=16384
@@ -3046,8 +3058,10 @@ _hook_join_record() {   # $aid -> 0 appended; 1 refused (never fatal: the caller
   { printf '%s\n' "$aid" >> "$jf"; } 2>/dev/null || return 1
   { IFS= read -r -N "$JOIN_READ_MAX" cur < "$jf"; } 2>/dev/null
   nl="${cur//[!$'\n']/}"
-  (( ${#nl} > JOIN_ROTATE_AT )) || return 0
-  tail_ids=$(tail -n "$JOIN_KEEP" "$jf" 2>/dev/null) && [[ -n "$tail_ids" ]] && _hook_write_atomic "$jf" joined "$tail_ids"
+  if (( ${#nl} > JOIN_ROTATE_AT )); then
+    tail_ids=$(tail -n "$JOIN_KEEP" "$jf" 2>/dev/null) && [[ -n "$tail_ids" ]] && _hook_write_atomic "$jf" joined "$tail_ids"
+  fi
+  [[ -e "$REG/$id.generation" ]] || rm -f "$jf"   # (a) of "no window orphans the file" above: the row was purged under the write
   return 0
 }
 if [[ "$event" == SubagentStart && -n "$aid" && -e "$REG/$id.generation" ]]; then _hook_join_record || true; fi

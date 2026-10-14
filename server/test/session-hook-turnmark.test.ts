@@ -210,8 +210,9 @@ const plantTurn = (line: string): void => { fs.writeFileSync(turnFile(), line); 
 const TURN_KEYS: readonly string[] = ['v', 'sessionId', 'state', 'event', 'at', 'turnAt', 'stopAt', 'bg', 'bgKinds',
   'bgIds', 'err', 'restartAt', 'lostBg', 'lostKinds', 'lostIds'];
 
-/** The delegation join record (`<id>.joined`, delegation broker wave 3): one cleaned agent id per line, appended by a
- *  SubagentStart. `undefined` when the file is absent, so "nothing was ever joined" reads differently from an empty list. */
+/** The delegation join record (`<id>.joined`, delegation broker wave 3): one agent id per line, exactly as the payload sent it
+ *  (only an id that is already a plain `[A-Za-z0-9_-]{1,64}` is ever recorded), appended by a SubagentStart. `undefined`
+ *  when the file is absent, so "nothing was ever joined" reads differently from an empty list. */
 const joinFile = (): string => path.join(home, '.cc-sessions', 'demo-quiet-basin.joined');
 const joined = (): string[] | undefined =>
   (fs.existsSync(joinFile()) ? fs.readFileSync(joinFile(), 'utf8').split('\n').filter((l) => l !== '') : undefined);
@@ -1141,6 +1142,55 @@ describe('only an agent id with a qualifying join is a subagent to the turn mark
       fs.rmSync(path.join(reg(), 'other-row.joined'));
       start('a-1');
       expect(fs.readdirSync(reg()).filter((n) => n.endsWith('.joined')), 'a tmux that cannot answer').toEqual([]);
+    });
+  });
+
+  describe('no window orphans a join record (the row can be purged while a Start is writing)', () => {
+    // An orphan is a dot-free field: it holds the slug for ever. The hook takes no lock, so the only thing it can do is look again
+    // after it has written: if the row's `generation` is gone it removes what it wrote. These rows drive the window with a
+    // shell function that `BASH_ENV` plants in the hook's own shell and that fires on ONE call, the join's append (or the
+    // rotation's `tail`), so the purge lands at exactly that point and no sleep is involved. `_reg_purge`'s half of the pair
+    // (an append after the loop, before generation goes) is in `ccd-lifecycle-purge.test.ts`.
+    const GEN = (): string => path.join(reg(), 'demo-quiet-basin.generation');
+    const shadow = (body: string): Record<string, string> => {
+      const f = path.join(home, 'shadow.sh');
+      fs.writeFileSync(f, `${body}\n`);
+      return { BASH_ENV: f };
+    };
+    const registry = (): string[] => fs.readdirSync(reg()).sort();
+
+    it('control: the shadow fires on the one call it names and the row stands, so the file is kept', () => {
+      const env = shadow(`printf() { if [[ "\${1:-}" == '%s\\n' && "\${2:-}" == "orphan-1" ]]; then rm -f '${GEN()}'; fi; builtin printf "$@"; }`);
+      run({ hook_event_name: 'SubagentStart', agent_id: 'other-1', agent_type: 'general-purpose' }, env);
+      expect(joined(), 'a different id does not trip it').toEqual(['other-1']);
+      expect(fs.existsSync(GEN())).toBe(true);
+    });
+
+    it('the row is purged between the Start\'s check and its append: the file the append made is removed', () => {
+      const env = shadow(`printf() { if [[ "\${1:-}" == '%s\\n' && "\${2:-}" == "orphan-1" ]]; then rm -f '${GEN()}'; fi; builtin printf "$@"; }`);
+      run({ hook_event_name: 'SubagentStart', agent_id: 'orphan-1', agent_type: 'general-purpose' }, env);
+      expect(fs.existsSync(GEN()), 'fixture: the shadow ran, the row is gone').toBe(false);
+      expect(fs.existsSync(joinFile()), 'no join record orphaned beside a purged row').toBe(false);
+      expect(registry().filter((n) => n.endsWith('.joined') || n.endsWith('.tmp')), 'and no temp').toEqual([]);
+    });
+
+    it('the row is purged while a ROTATION runs: the rename that recreates the file is followed by the same check', () => {
+      fs.writeFileSync(joinFile(), `${Array.from({ length: 128 }, (_, i) => `j${i}`).join('\n')}\n`);
+      // The purge (generation and the record unlinked) lands after the rotation's `tail` has read the file and before the
+      // rename publishes its result, which would create the file again.
+      const env = shadow(`tail() { local out; out=$(command tail "$@"); rm -f '${GEN()}' '${joinFile()}'; builtin printf '%s\\n' "$out"; }`);
+      run({ hook_event_name: 'SubagentStart', agent_id: 'orphan-2', agent_type: 'general-purpose' }, env);
+      expect(fs.existsSync(GEN()), 'fixture: the shadow ran, the row is gone').toBe(false);
+      expect(fs.existsSync(joinFile()), 'the rename\'s file is removed again').toBe(false);
+      expect(registry().filter((n) => n.endsWith('.joined') || n.includes('.hook-write.')), 'no file and no temp left').toEqual([]);
+    });
+
+    it('control: the same rotation with the row standing keeps the 64 most recent and the new id', () => {
+      fs.writeFileSync(joinFile(), `${Array.from({ length: 128 }, (_, i) => `j${i}`).join('\n')}\n`);
+      const env = shadow(`tail() { command tail "$@"; }`);
+      run({ hook_event_name: 'SubagentStart', agent_id: 'kept-1', agent_type: 'general-purpose' }, env);
+      expect(joined()).toHaveLength(64);
+      expect(joined()!.at(-1)).toBe('kept-1');
     });
   });
 

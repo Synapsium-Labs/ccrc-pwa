@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=02fefb6e45f6a833f37f44166049c1ae9b2ca13c3531423192c2214c7f2e0ce8
+# ccrc:generated 1 sha256=021768b0463653ac0d3b2d5375a4f52b10bcd9d4fbd42aa3eac056498874fbdc
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -4084,11 +4084,11 @@ _reg_purge() {   # id -> rm -f every "$REG/$id.<field>" registry file for id
     _ws_private_family "$psuffix" || continue
     rm -f "$pf" || _reg_purge_unremoved "$pf"
   done
-  # GENERATION LAST, after the archived/reaping tail and after every private
-  # family — and OUTSIDE the loop above, which skips it. It is the row's
-  # authorization: while it stands, a hook holding it can still take the lock,
-  # so it is the last thing to go.
-  rm -f "$REG/$id.generation" || _reg_purge_unremoved "$REG/$id.generation"
+  # GENERATION LAST, after the archived/reaping tail and every private family, and OUTSIDE the loop above, which skips it: the row's authorization, so while it stands a hook holding it can still take the lock.
+  # `joined` ONCE MORE, AFTER IT, on the same line, and the order is the point: session-hook.sh appends `$REG/$id.joined` on a SubagentStart WITHOUT this lock, only while `generation` stands (it checks before the append and again after it, and removes what it wrote if the row is gone), and the glob loop above passed the name tens of milliseconds before this line.
+  # An append that lands before this line is taken by it; one that lands after `generation` has gone sees no row on its re-check and removes itself. Placed earlier, it would leave a hook that still sees the row free to write behind it, and an orphaned dot-free field holds the slug for ever (`_ws_slug_free`'s any-field check; `ws-gc`, keyed on `.uuid`/`.workspace`, never clears it).
+  # Its own literal path and never the loop's `f` (the note beside the `hf` loop: a second unlink through that variable is a second canonical write on the compaction card's allow-list; `joined` is not on it). Line-neutral by construction, so no cited anchor below moves.
+  rm -f "$REG/$id.generation" || _reg_purge_unremoved "$REG/$id.generation"; rm -f "$REG/$id.joined" || _reg_purge_unremoved "$REG/$id.joined"
   _compact_lock_release "$_pg_fd"
   return "$_pg_urc"
 }
