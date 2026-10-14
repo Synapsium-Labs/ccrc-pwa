@@ -1,7 +1,9 @@
 // Every sentence the Docs screen's part 1 shows for a word (spec 2026-10-01 4.5, 4.6, 4.7), each map keyed by the
 // word's own type so a new word is a compile error until it has its sentence. `{field}` placeholders are filled by
 // `fillSentence` from the failure's context or the caller's facts; a field that is absent renders `?`, never the
-// braces. The spec's own sentences are copied verbatim (docs-failures.test.tsx pins them); the rest fill its
+// braces, but no failure sentence reaches a page that way: a word whose optional field the server or ccd may omit
+// has a fallback below (`DOCS_FAILURE_FALLBACK_SENTENCE`) that omits the clause or says the value was not measured.
+// The spec's own sentences are copied verbatim (docs-failures.test.tsx pins them); the rest fill its
 // silences in the same register: what happened, in the operator's words, and nothing the page cannot know.
 import type {
   DocRefResolution, DocsFailure, DocsFailureBody, DocsFailureContext, DocsNotAFileKind, DocsPageParseFailure,
@@ -72,6 +74,35 @@ export const DOCS_FAILURE_SENTENCE: Record<DocsFailure, string> = {
   'bad-query': "The server refused this request's parameters.",
   'raster-mismatch': 'These bytes are not a {declared} image.',
   'response-type-refused': 'The server refused to send an answer of an unexpected type.',
+};
+
+/** The sentences a failure word falls back to when its answer omits a field the sentence above names (absent means
+ *  unmeasured: the server sends `ccd-fault` with no `code`, ccd sends `too-many-entries` with no `count` and
+ *  `too-large` with no `size`). Ordered from the most to the least specific; `failureSentence` takes the first
+ *  template, the present-field one above included, whose every `{name}` the answer holds, so the last of each list
+ *  names no field. Every word that names a field has one (docs-failures.test.tsx renders each with every subset of
+ *  its fields omitted and finds no `?`). */
+export const DOCS_FAILURE_FALLBACK_SENTENCE: Partial<Record<DocsFailure, readonly string[]>> = {
+  'unknown-project': ["There is no project by that name under the fleet box's projects folder."],
+  'ref-not-commit': [
+    '{ref} names something that is not a commit.',
+    'That ref names a {type}, not a commit.',
+    'That ref does not name a commit.',
+  ],
+  'too-large': [
+    'This file is larger than Docs shows; Docs shows files of this kind up to {cap}.',
+    'This file is {size}, over the limit for files of this kind.',
+    'This file is larger than Docs shows files of this kind.',
+  ],
+  'too-many-entries': ['This repository has more entries than Docs lists at once.'],
+  'unreadable-path': ['That path could not be read on the fleet box.'],
+  'untrusted-worktree': ['The worktree holding this draft failed the ownership check.'],
+  'git-failed': ['A git command failed on the fleet box.'],
+  'ccd-killed': ["The fleet box's ccd was stopped before it answered."],
+  'ccd-fault': ["The fleet box's ccd failed; its exit code was not measured."],
+  'malformed-answer': ["The fleet box's answer could not be read."],
+  'unknown-failure': ['The fleet box answered a failure this server does not know.'],
+  'raster-mismatch': ['These bytes are not the kind of image the file declares.'],
 };
 
 /** A page-URL refusal (spec 4.4: a parse failure renders this and a link to the index), 20+ characters each. */
@@ -201,8 +232,8 @@ export function shortCommit(sha: string): string {
   return sha.slice(0, 8);
 }
 
-/** The sentence for one failure body: a known word's sentence filled from the body's own context (sizes in KiB), or
- *  the unknown-word sentence naming the word. */
+/** The sentence for one failure body: a known word's sentence filled from the body's own context (sizes in KiB), or its
+ *  fallback when the answer omits a field the sentence names, or the unknown-word sentence naming the word. */
 export function failureSentence(body: DocsFailureBody): string {
   const word: string = body.failure;
   if (!isDocsFailureWord(word)) return unknownWordSentence(word);
@@ -212,7 +243,9 @@ export function failureSentence(body: DocsFailureBody): string {
   }
   if (typeof body.size === 'number') fields['size'] = kib(body.size);
   if (typeof body.cap === 'number') fields['cap'] = kib(body.cap);
-  return fillSentence(DOCS_FAILURE_SENTENCE[word], fields);
+  const templates = [DOCS_FAILURE_SENTENCE[word], ...(DOCS_FAILURE_FALLBACK_SENTENCE[word] ?? [])];
+  const holdsAll = (t: string): boolean => [...t.matchAll(/\{([A-Za-z]+)\}/g)].every((m) => Object.hasOwn(fields, m[1] ?? ''));
+  return fillSentence(templates.find(holdsAll) ?? templates[0] ?? '', fields);
 }
 
 /** The sentence for a client slot; an `unexpected-response` with no content-type header says so in words. */

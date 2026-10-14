@@ -258,7 +258,9 @@ describe('DocsFailureView: the context each word renders (spec 4.7)', () => {
     expect(container.querySelector('pre.docs-fail-detail')?.textContent).toBe('fatal: bad object');
     expect(screen.getByRole('alert')).toHaveTextContent('A git command failed on the fleet box (cat-file).');
     unmount();
-    render(<DocsFailureView answer={failed('ccd-fault', { code: 1, stderrHead: 'Traceback: x' })} />);
+    // The server sends ccd-fault with no `code` (absent means unmeasured); the sentence's present-code form is pinned
+    // separately, in 'Review 439 F7'.
+    render(<DocsFailureView answer={failed('ccd-fault', { stderrHead: 'Traceback: x' })} />);
     expect(document.querySelector('pre.docs-fail-detail')?.textContent).toBe('Traceback: x');
   });
 
@@ -358,5 +360,52 @@ describe('T13 review 4-7: unresolved-ref names no side it did not search', () =>
     expect(screen.getByText(sentence)).toBeInTheDocument();
     expect(screen.getByText('refs/remotes/origin/feat').closest('li')).toHaveTextContent('refs/remotes/origin/feat not found');
     expect(document.querySelectorAll('li')).toHaveLength(1);
+  });
+});
+
+describe('Review 439 F7, F8: no ? ever reaches a page', () => {
+  /** The `{names}` a word's present-field sentence fills. */
+  const fieldsOf = (template: string): string[] => [...template.matchAll(/\{([A-Za-z]+)\}/g)].map((m) => m[1] ?? '');
+  const SAMPLE: Record<string, unknown> = { size: 4096, cap: 2048, count: 90000 };
+  /** Every subset of `names`, the empty one and the full one included. */
+  const subsets = (names: readonly string[]): string[][] =>
+    names.reduce<string[][]>((acc, n) => [...acc, ...acc.map((s) => [...s, n])], [[]]);
+
+  it('every failure word reads without a ? whichever of its optional fields the answer omits', () => {
+    const words = Object.keys(DOCS_FAILURE_SENTENCE);
+    expect(words.length).toBeGreaterThan(50);
+    let cases = 0;
+    for (const word of words) {
+      const names = fieldsOf(DOCS_FAILURE_SENTENCE[word as DocsFailure]);
+      for (const present of subsets(names)) {
+        const ctx: Record<string, unknown> = {};
+        for (const n of present) ctx[n] = SAMPLE[n] ?? 'x';
+        const { unmount } = render(<DocsFailureView answer={failed(word, ctx)} />);
+        const text = document.querySelector('.docs-fail-sentence')?.textContent ?? '';
+        expect(text, `${word} with ${JSON.stringify(present)}`).not.toContain('?');
+        expect(text, `${word} with ${JSON.stringify(present)}`).not.toMatch(/[{}]/);
+        expect(text.length).toBeGreaterThanOrEqual(20);
+        unmount();
+        cases += 1;
+      }
+    }
+    expect(cases).toBeGreaterThan(words.length);
+  });
+
+  it('ccd-fault names its exit code when it is measured, and says nothing about a number when it is not', () => {
+    expect(failureSentence(bodyOf('ccd-fault', { code: 3 }))).toBe("The fleet box's ccd failed with exit code 3.");
+    expect(failureSentence(bodyOf('ccd-fault'))).toBe("The fleet box's ccd failed; its exit code was not measured.");
+  });
+
+  it('too-many-entries, too-large and the other omitted-field sentences', () => {
+    expect(failureSentence(bodyOf('too-many-entries', { count: 70000 })))
+      .toBe('This repository has 70000 entries, more than Docs lists at once.');
+    expect(failureSentence(bodyOf('too-many-entries', { bytes: 9 })))
+      .toBe('This repository has more entries than Docs lists at once.');
+    expect(failureSentence(bodyOf('too-large', { cap: 2048, bytes: 3000000 })))
+      .toBe('This file is larger than Docs shows; Docs shows files of this kind up to 2 KiB.');
+    expect(failureSentence(bodyOf('too-large', { size: 4096 })))
+      .toBe('This file is 4 KiB, over the limit for files of this kind.');
+    expect(failureSentence(bodyOf('too-large'))).toBe('This file is larger than Docs shows files of this kind.');
   });
 });
