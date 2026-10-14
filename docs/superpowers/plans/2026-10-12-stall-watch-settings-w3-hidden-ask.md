@@ -368,7 +368,7 @@ coordinator's ruling R40 (the fix round after review). One number of the block r
   13 of D-4039's original fourteen (the fourteenth, the stamp-moves case, is retired) and 7 that D-4041 added; the
   second describe, "the carry is decided from one fresh read", holds 8, all D-4041's. Every row below was re-measured
   at commit `ed7537045`, out of tree, one mutation at a time, each restored and `cmp`-checked; the unmutated hook passes
-  28 of 28. The carry now reads the file once, fresh (D-4041), so the conditions below are the ones the code holds today,
+  28 of 28. (M1 and M13 below quote one failing title as fix round 3 renamed it after this measurement, R45 item 7; their counts are unchanged.) The carry now reads the file once, fresh (D-4041), so the conditions below are the ones the code holds today,
   and `$fr_by`, `$fr_state` and `$fr_ask` are that read's values:
   M1 (delete the carry block) → 14 failed (a carried write keeps updatedAt and event and writes aliveAt; a main-thread wait survives a SubagentStop and a SubagentStart, and is not flipped to subagent-raised; a main-thread write after a carried one carries no aliveAt; a subagent AskUserQuestion over a main-thread question leaves the main wait, still main-owned; a subagent PostToolUse does too, and so do many in a row; a subagent PreToolUse after a PermissionRequest question leaves waiting and the questions; a subagent PreToolUse keeps the stamp and writes aliveAt too, and a second carry keeps the FIRST stamp; an approval dialog is kept the same way; an updatedAt that is negative, non-numeric or printed by jq in exponent form keeps no stamp and writes no aliveAt (a fractional one keeps its floor); control: with no interleaving the shim is a pass-through and the wait is carried; the PreToolUse question arm is kept the same way; the interrupted flag is carried with the wait; the kept event is cut to letters: a stored event with other characters is written without them; the prefilter keeps the fresh read off every other event: one read over working or done, and for a main-thread event over a wait);
   M2 (drop `"$prev_state" == waiting &&`, now the no-fork prefilter only: the fresh read still decides, so only the read-count pin sees it) → 1 failed (the prefilter keeps the fresh read off every other event: one read over working or done, and for a main-thread event over a wait);
@@ -455,7 +455,7 @@ Assigned from the programme's reserve by the coordinator's ruling R40. It resolv
     PreToolUse/PostToolUse and SubagentStart/SubagentStop. A main-thread write rewrites the file with no `aliveAt`, and
     so does every other write.
   - The carry is decided from ONE fresh `jq` read of the file at the carry point (state, `waitBy`, ask, `interrupted`,
-    `updatedAt`, `event`), not from `prev_state`, which the prefilter read ~650 lines earlier. `prev_state` stays as the
+    `updatedAt`, `event`), not from `prev_state`, which the prefilter read much earlier. `prev_state` stays as the
     no-fork prefilter. The SubagentStart/SubagentStop block takes its state, ask, `interrupted` and `waitBy` from the
     same read, so its three forks become one.
   - The fresh read prints `state` only when it is one of the three words the hook writes (`working`, `waiting`,
@@ -470,8 +470,8 @@ Assigned from the programme's reserve by the coordinator's ruling R40. It resolv
     is ignored: never `malformed`, never `no-state` by itself. `HookState` is unchanged; `aliveAt` rides on the raw
     read's ok variant as an optional field.
   - A file whose `updatedAt` is negative, is not a number, or is a value jq prints in exponent form (such as 1e16 or
-    1e300: which values print that way follows jq's number formatting, not a size cut) keeps no stamp: the write is as before, with a fresh one. A fractional value keeps its floor (the hook writes integer
-    milliseconds only, so one is a foreign or corrupt file, and the floor moves the stamp by under 1 ms).
+    1e300: which values print that way follows jq's number formatting, not a size cut) keeps no stamp: the write is as before, with a fresh one. A non-negative fractional value keeps its floor (the hook writes integer
+    milliseconds only, so one is a foreign or corrupt file, and the floor moves the stamp by under 1 ms); a negative one, such as -0.5, floors to -1 and is refused.
 - **Why:** the moving stamp (D-4039 as first shipped) was meant to serve the `delegates` hold and the frozen arm. Neither
   can see a carried `waiting`: a `waiting` hookstate sets fleet `dialogPending`, and the verdict returns at its dialog
   step before them. What the moving stamp did instead:
@@ -499,8 +499,8 @@ Assigned from the programme's reserve by the coordinator's ruling R40. It resolv
     overwritten by that hook's `working` write, as at the base. The fresh read runs only when the prefilter read `waiting`;
     running it on every subagent tool event would cost a fork on each.
 - **Pinned by:**
-  - `server/test/session-hook-subagent-ask.test.ts` (28 cases, layout under D-4039): the "stamp" cases, the defensive
-    cuts of the fresh read (an `updatedAt` that is negative, non-numeric or printed by jq in exponent form keeps no stamp, and a fractional one keeps its floor; the kept `event` is letters only;
+  - `server/test/session-hook-subagent-ask.test.ts` (28 cases, layout under D-4039, and two fractional-stamp cases added after the merge): the "stamp" cases, the defensive
+    cuts of the fresh read (an `updatedAt` that is negative, non-numeric or printed by jq in exponent form keeps no stamp, a non-negative fractional one keeps its floor, and -0.5 is refused; the kept `event` is letters only;
     a corrupt state is never carried), and the "carry is decided from one fresh read" describe (a `jq` shim in the
     fixture's `bin/` rewrites the file after the prefilter read, as a main-thread answer would, and counts reads); and
     `server/test/hookstate.test.ts` (7 cases in the `aliveAt` describe).
@@ -519,7 +519,7 @@ Assigned from the programme's reserve by the coordinator's ruling R40. It resolv
     52 at the base, 54 after D-4039 (two programs added), 51 after D-4041 (four removed, the shared fresh read added);
     the `as $` bindings were 33 throughout.
   - Every S and N row of the list below was re-measured in fix round 2 at commit `df7fb0248` (the hook code of the tip), out of tree, one
-    mutation at a time, each restored and `cmp`-checked, with identical counts and titles to the `ed7537045` measurement;
+    mutation at a time, each restored and `cmp`-checked, with identical counts and titles to the `ed7537045` measurement (S3, N2 and N6 quote one title as fix round 3 renamed it after both, R45 item 7: no count moved, and review 404 re-measured N2 red with the new title);
     the unmutated files pass 28 of 28 and 61 of 61. The A rows live in `hookstate.ts` and that round did not touch it:
     they stand as measured at `ed7537045`. N1 still reds 2 cases, and the
     `'waitingx'` iteration of the tool-event case really runs (fix round 2 removes the shim before each iteration's ask, so
