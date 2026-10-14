@@ -1378,12 +1378,15 @@ describe.each(LOCALES)('E5 the W2 limits rows under $name (tick-diet spec §6.3,
 
 // ── E6: the W2 share rows (D-4962, plan Task 10) ─────────────────────────────────────────────────────────────────────
 
-const SHARE_FRESH = '2026-10-14T12:00:00Z';   // fixed fresh stamp: identical bytes on both sides of every differential row
+/** A fresh `finishedAt`, taken ONCE when the suite loads: both sides of a row then plant identical bytes (the
+ *  registry tree is compared), and it stays inside `SHARE_FRESH_S` (8 h) for any run. A literal date would turn every
+ *  "fresh" row stale 8 h after it was written, and the non-vacuity rows red. */
+const SHARE_FRESH = new Date().toISOString().replace(/\.\d{3}Z$/, 'Z');
 const SHARE_STALE = '2020-01-01T00:00:00Z';
 
 function shareFile(finishedAt: string, perAccount: Record<string, unknown>): string {
   const content = JSON.stringify({ finishedAt, perAccount });
-  return `command mkdir -p -- "$REG/usage/sweep" && command printf '%s' ${JSON.stringify(content)} > "$REG/usage/sweep/latest.json"`;
+  return `command mkdir -p -- "$REG/usage/sweep" && command printf '%s' ${q(content)} > "$REG/usage/sweep/latest.json"`;
 }
 
 /** E6a rows: `_share_pct_to` outside the memo scope matches `_legacy_share_pct` for every sweep shape. */
@@ -1472,7 +1475,7 @@ describe.each(LOCALES)('E6 the W2 share rows under $name (tick-diet spec §6.3, 
     expect(b.results.get('share memo off: stale 0.5')![0]!.rc).toBe(2);
   });
 
-  it('E6b the memo serves a repeat call from the same scope without re-running python3 (D-4962)', (ctx) => {
+  it('E6b inside one memo scope, a repeat call leaves the legacy value AND rc (the second answer comes from the memo; seams row (a) counts the python3 runs) (D-4962)', (ctx) => {
     const b = got(ctx);
     for (const row of e6bRows()) expectEquivalent(row, b.results.get(row.id)!, locale!);
     // Non-vacuity: the legacy sides really answered with the expected rcs.

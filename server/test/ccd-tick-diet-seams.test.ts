@@ -333,17 +333,18 @@ describe('`_share_pct`\'s memo lives and dies with one `_swap_target` call (D-49
 
   const rcCases: { name: string; setup: string; stub?: string; want: string; rc: number }[] = [
     { name: 'stale sweep', setup: `command python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); d["finishedAt"]="2020-01-01T00:00:00Z"; json.dump(d, open(sys.argv[1],"w"))' "$REG/usage/sweep/latest.json"`, want: 'stale', rc: 2 },
-    { name: 'python3 rc 127', setup: '', stub: 'python3() { return 127; }', want: 'no-figure', rc: 2 },
-    { name: 'python3 rc 126', setup: '', stub: 'python3() { return 126; }', want: 'no-figure', rc: 2 },
-    { name: 'python3 rc 137', setup: '', stub: 'python3() { return 137; }', want: 'no-figure', rc: 2 },
+    { name: 'python3 rc 127', setup: '', stub: 'python3() { printf \'%s\\n\' "$3" >> "$HOME/seam-py"; return 127; }', want: 'no-figure', rc: 2 },
+    { name: 'python3 rc 126', setup: '', stub: 'python3() { printf \'%s\\n\' "$3" >> "$HOME/seam-py"; return 126; }', want: 'no-figure', rc: 2 },
+    { name: 'python3 rc 137', setup: '', stub: 'python3() { printf \'%s\\n\' "$3" >> "$HOME/seam-py"; return 137; }', want: 'no-figure', rc: 2 },
     { name: 'fresh 0.5 sweep', setup: '', want: '50', rc: 1 },
   ];
   it.each(rcCases)('(d) the memo carries rc $rc through a repeat: $name', ({ setup, stub, want, rc }) => {
     const h = harness();
     plantFixture(h.home, ID, 'fable-leaving');
+    // The setup runs BEFORE the counter, so a stale sweep's rewrite is not counted.
     const snippet = [
-      stub ?? '',
       setup,
+      stub ?? python3Counter,
       '__memo_scope() { local CCD_SHARE_MEMO_ON=1; local -A CCD_SHARE_MEMO=(); { _serviceable claude-a fable; __r=$?; echo; echo "rc=$__r"; } > "$HOME/d1"; { _serviceable claude-a fable; __r=$?; echo; echo "rc=$__r"; } > "$HOME/d2"; }',
       '__memo_scope',
     ].join('\n');
@@ -353,6 +354,8 @@ describe('`_share_pct`\'s memo lives and dies with one `_swap_target` call (D-49
     const d2 = lines(path.join(h.home, 'd2'));
     expect(d1).toEqual([want, `rc=${rc}`]);
     expect(d2).toEqual([want, `rc=${rc}`]);
+    // NON-VACUITY: the second answer came from the memo, so the reader ran once.
+    expect(lines(path.join(h.home, 'seam-py')), 'the repeat was not served from the memo').toEqual(['claude-a']);
   }, 120_000);
 
   it('(e) the empty-wrapper departure: the shell survives and both calls run', () => {
