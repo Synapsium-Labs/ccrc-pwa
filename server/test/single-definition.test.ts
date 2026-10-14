@@ -5699,7 +5699,7 @@ describe('docs section H, W5: GithubPermalink, githubPermalink and githubUrlAt a
     new RegExp(`^\\s*(?:export\\s+)?(?:declare\\s+)?(?:type\\s+${name}\\b\\s*(?:<[^>\\n]*>)?\\s*=|interface\\s+${name}\\b)`, 'm');
   // Any run of `export`, `default`, `declare` and `async` before `function [*] NAME` or `const|let|var NAME`.
   const FN_DEF = (name: string): RegExp =>
-    new RegExp(`^\\s*(?:(?:export|default|declare|async)\\s+)*(?:function\\s*\\*?\\s*${name}\\b|(?:const|let|var)\\s+${name}\\b)`, 'm');
+    new RegExp(`^\\s*(?:(?:export|default|declare|async)\\s+)*(?:function(?:\\s*\\*\\s*|\\s+)${name}\\b|(?:const|let|var)\\s+${name}\\b)`, 'm');
   // The holders of a declaration over the four roots, plus any planted [path, text] pairs, sorted.
   const holders = (def: RegExp, planted: readonly (readonly [string, string])[] = []): string[] =>
     [...ALL.map((f) => [rel(f), readFileSync(f, 'utf8')] as const), ...planted]
