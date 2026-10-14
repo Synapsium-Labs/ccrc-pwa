@@ -4286,6 +4286,27 @@ describe('worker stall watch: the wave-done subject is spelled once (spec §4.2 
   });
 });
 
+describe('the stall watch words a duration once, in shared/stall-watch.ts (stall-watch-settings R37 follow-up)', () => {
+  // The Settings section's `quietText` and the feed body's `stallQuietWords` were two copies of one formatter, and they
+  // disagreed off the minute grid (3 570 000 ms read "1 h" in one and "60 min" in the other). The fingerprint is the
+  // formatter's last arm, the hours-and-minutes template, on a code line. KNOWN WIDTH: a copy that builds the string
+  // another way is not seen.
+  const HOURS_AND_MINUTES = /`\$\{\w+\} h \$\{\w+\} min`/;
+  it('CONTROL: the fingerprint sees the template and not another shape', () => {
+    expect(HOURS_AND_MINUTES.test('return m === 0 ? `${h} h` : `${h} h ${m} min`;')).toBe(true);
+    expect(HOURS_AND_MINUTES.test('return `${h}h${m}m`;')).toBe(false);
+  });
+  it('the template is spelled on a code line in shared/stall-watch.ts alone', () => {
+    expect(ALL.filter((f) => HOURS_AND_MINUTES.test(stallCode(f))).map(rel).sort()).toEqual(['shared/stall-watch.ts']);
+  });
+  it('the section and the feed body import it from L0', () => {
+    for (const r of ['pwa/src/screens/StallWatchSection.tsx', 'server/src/coord/stallsettings.ts']) {
+      expect(stallCode(path.join(ccrcRoot, r)), r)
+        .toMatch(/import\s*\{[^}]*\bstallDurationText\b[^}]*\}\s*from\s*'(?:\.\.\/)+shared\/stall-watch(?:\.js)?'/);
+    }
+  });
+});
+
 describe('the archive door\'s refusal codes are spelled once, in L0 (workspace lifecycle wave 2)', () => {
   // `ARCHIVE_REFUSALS` (spec §5.2) is the one declaration; the server sends `ARCHIVE_REFUSALS.<name>` and the PWA
   // compares against it. `run-open` was a bare literal written twice in `server.ts` and once in

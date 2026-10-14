@@ -38,11 +38,11 @@ afterEach(() => { fs.rmSync(home, { recursive: true, force: true }); });
 
 /** The env every hook spawn in this file shares (B3M19: one definition, so a variable added here reaches `run`, `runFull`
  *  and the spool describe's `runSpoolBounded` alike): the fixture HOME, a PATH that finds the fixture's tmux, the pane, the
- *  session id, the pid and the generation. `env` overrides it: each test adds or breaks its own legs there, never in a
- *  second copy of this literal. */
+ *  session id, the pid, the generation and a BLANK job dir (D-4953: `forkedEnv` at the end of this file says why). `env`
+ *  overrides it: each test adds or breaks its own legs there, never in a second copy of this literal. */
 const hookEnv = (env: Record<string, string> = {}): NodeJS.ProcessEnv => ({
   ...process.env, HOME: home, PATH: `${path.join(home, 'bin')}:${process.env['PATH'] ?? ''}`,
-  TMUX_PANE: '%1', CLAUDE_CODE_SESSION_ID: 'uuid-1', CLAUDE_PID: '4242', CCRC_SESSION_GENERATION: GENERATION, ...env,
+  TMUX_PANE: '%1', CLAUDE_CODE_SESSION_ID: 'uuid-1', CLAUDE_PID: '4242', CCRC_SESSION_GENERATION: GENERATION, CLAUDE_JOB_DIR: '', ...env,
 });
 /** Run the hook with a payload; env overrides let each test break one leg.
  *  Returns the hook's STDOUT, which is empty on every event but SessionStart
@@ -658,6 +658,79 @@ describe('the fleet gate and failure polarity', () => {
     };
     const ratio = median(mainTimes) / median(cheapTimes);   // ratio-row-reads-the-median (D-3704) (above)
     expect(ratio).toBeLessThan(4.2);
+  });
+});
+
+// ── The fork fallback: attribution with no pane at all ─────────────────────
+// Claude Code can fork a live session into a daemon-hosted background PTY with
+// no TMUX and no TMUX_PANE. The pane path stays first and unchanged; this is
+// the second source, read only with no pane AND the job marker (D-4953).
+describe('a session with no pane', () => {
+  const REG = (): string => path.join(home, '.cc-sessions');
+  const hookstate = (id: string): unknown =>
+    JSON.parse(fs.readFileSync(path.join(REG(), `${id}.hookstate.json`), 'utf8'));
+  const planted = (id: string, uuid: string): void =>
+    fs.writeFileSync(path.join(REG(), `${id}.uuid`), uuid);
+
+  it('writes hookstate when the registry names its session id as its own', () => {
+    planted('demo-quiet-basin', 'uuid-1');
+    run({ hook_event_name: 'UserPromptSubmit' }, forkedEnv());
+    expect(hookstate('demo-quiet-basin')).toMatchObject({ sessionId: 'uuid-1', state: 'working' });
+  });
+
+  // The guard, stated in the other direction. This is what the TMUX_PANE check
+  // was protecting: a Claude session on this box that ccd does not own must
+  // still be attributed to nobody.
+  it('writes nothing when no registry row names its session id', () => {
+    planted('demo-quiet-basin', 'uuid-someone-else');
+    run({ hook_event_name: 'UserPromptSubmit' }, forkedEnv());
+    // NOT just the named row: attribute-on-CLAUDE_CODE_SESSION_ID-alone (drop
+    // the registry match) would leave `demo-quiet-basin.hookstate.json`
+    // absent while still writing SOME row's state file, named after the raw
+    // session id itself — a stranger attributed to a wrong row instead of to
+    // nobody. Scanning the whole registry for any `.hookstate.json` at all is
+    // what actually pins "attribution stays POSITIVE and measured" rather
+    // than merely "this one row stays untouched".
+    const wroteAnyHookstate = fs.readdirSync(REG()).some((n) => n.endsWith('.hookstate.json'));
+    expect(wroteAnyHookstate, 'no row anywhere was attributed').toBe(false);
+  });
+
+  it('matches a registry uuid file that carries a trailing newline — which every real one does', () => {
+    // Whole-branch review, F8: this loop now reads each row with `read -r var
+    // < file` instead of `$(cat file)`, to stop forking ~21 times per hook
+    // event on the hot path of exactly the forked sessions it serves. The one
+    // real behavioural risk of that substitution is the newline: a command
+    // substitution strips trailing newlines, and `ccd`'s own writers end every
+    // registry field with one, so a reader that kept the newline would match
+    // NOTHING on a real box while this suite — whose `planted` writes no
+    // newline — stayed green. `read -r` strips it too, and this pins that.
+    fs.writeFileSync(path.join(REG(), 'demo-quiet-basin.uuid'), 'uuid-1\n');
+    run({ hook_event_name: 'UserPromptSubmit' }, forkedEnv());
+    expect(hookstate('demo-quiet-basin')).toMatchObject({ sessionId: 'uuid-1', state: 'working' });
+  });
+
+  it('writes nothing when it has no session id to be attributed by, even beside an EMPTY row', () => {
+    planted('demo-quiet-basin', 'uuid-1'); planted('ghost', '');   // '' == '' is the match the `-n` guard refuses
+    run({ hook_event_name: 'UserPromptSubmit' }, { ...forkedEnv(), CLAUDE_CODE_SESSION_ID: '' });
+    expect(fs.readdirSync(REG()).some((n) => n.endsWith('.hookstate.json')), 'no row anywhere was attributed').toBe(false);
+  });
+
+  it('still prefers the pane when there is one', () => {
+    // Two rows: the pane names one, the session id matches the OTHER. The pane
+    // wins, so the fallback can never quietly re-attribute a live session.
+    planted('demo-quiet-basin', 'uuid-pane');
+    planted('other-row', 'uuid-1');
+    run({ hook_event_name: 'UserPromptSubmit' });
+    expect(fs.existsSync(path.join(REG(), 'demo-quiet-basin.hookstate.json'))).toBe(true);
+    expect(fs.existsSync(path.join(REG(), 'other-row.hookstate.json'))).toBe(false);
+  });
+
+  it('is silent on both streams, and exits 0, with no pane and no match', () => {
+    // The file's own header contract. `runFull` is this suite's stdout+stderr
+    // runner, which asserts exit 0 once (see its own comment) rather than the
+    // implicit throw-on-nonzero-exit `run` relies on.
+    expect(runFull({ hook_event_name: 'UserPromptSubmit' }, forkedEnv()))
+      .toMatchObject({ stdout: '', stderr: '' });
   });
 });
 
@@ -8353,6 +8426,9 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
       // `reclaim-pause-v1` line), the two length-neutral comment edits and the
       // docs block below every corpus anchor. Both corpus documents are main's,
       // so nothing was re-pointed. S6-R11, no D-number.
+      // 147 -> 146 on the forked-session-transcript review round (2026-10-13): the review fixes' ccd/ccd insertions slid
+      // lines under frozen anchors; measured from the merged tree's dump, never retyped. S6-R11, no D-number.
+      // 146 -> 147: RE-MEASURED on the forked-session-transcript review round 2 + tick diet W1 merge (2026-10-14), dumped from the merged tree and never retyped. S6-R11, no D-number.
       'ccd/ccd': 147,
       'ccd/session-hook.sh': 21,
       'ccd/compact-card.mjs': 4,
@@ -8664,6 +8740,8 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
     // 197 -> 197 on the merge of `origin/main` at `77c11245` into docs W1: stated 197, base 197, tree 197,
     // measured by `cite-remeasure.py` against `origin/main`; no key moved (argued beside the map).
     // 197 -> 196 at box-token-lifecycle wave 2 B7: `'deploy/deploy.sh'` 4 -> 3 and nothing else moved (argued beside the map).
+    // 196 -> 195 on the forked-session-transcript review round (2026-10-13): `ccd/ccd` 147 -> 146 and nothing else moved. Derived from the census (S6-R11).
+    // 195 -> 196: RE-MEASURED on the forked-session-transcript review round 2 + tick diet W1 merge (2026-10-14), dumped from the merged tree and never retyped. S6-R11, no D-number.
     expect(total, 'the narrated headline is the sum of the census, and this is it').toBe(196);
     // AND EVERY FAILING CITATION POINTS INTO A FILE THIS TASK REWROTE — the
     // claim that makes the census a statement about Task 9 rather than about
@@ -8849,6 +8927,11 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
     // retyped. No D-number.
     expect(set, 'a **Files:** reference stopped naming what its clause quotes — re-measure (D-2849)')
       .toEqual([
+        // RE-MEASURED on the merge of `origin/main` (at the forked-session-transcript review, 2026-10-13) into
+        // the forked-session-transcript branch, dumped from the merged tree and never retyped. ONE ENTERS,
+        // `ccd/ccd:13020` (spec:100's `_rt_prc` cite, whose referent sits at `:14910`): the branch's `_munge_wd`
+        // and `_sync_uuid` insertions (+19 above it) slid a blank comment line under the anchor. FACT TWO holds
+        // (the line fails outright rather than passing on a short token). Nothing re-pointed; S6-R11, no D-number.
         // RE-MEASURED at the tree this ships in (fix round 4). The citation
         // RE-POINT LEFT THIS WAVE — both corpus documents are byte-identical to
         // `origin/main`, so no anchor of this branch's ships. What moved these
@@ -8860,6 +8943,11 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         'ccd/compact-card.mjs:726-728',
         'ccd/compact-card.mjs:726',
         'ccd/ccd:6478',
+        // `ccd/ccd:13020` LEFT this set on the `dcac4691` merge — the same
+        // coincidence class: the merge moved `ccd/ccd` under a stale anchor
+        // and a line carrying a token the clause quotes now stands there. The
+        // citation still does not name its referent. Re-measured, not picked
+        // (S6-R11).
         'ccd/ccd:13020',
         'ccd/ccd:19131',
         // ENTERS on the fourth merge (`ad3d2fbc`), and it is the mirror of the
@@ -9305,6 +9393,12 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
     // two trees, never retyped. No D-number.
     expect(r.failures.map(refKey), 'a `|` row stopped naming what the ROW quotes — re-measure')
       .toEqual([
+        // RE-MEASURED on the forked-session-transcript review round 2 + tick diet W1 merge (2026-10-14), dumped from the merged tree and never retyped. S6-R11, no D-number.
+        // RE-MEASURED on the forked-session-transcript review round (2026-10-13), dumped from the merged
+        // tree and never retyped: the review fixes' ccd/ccd insertions moved which rows fail. S6-R11.
+        // RE-MEASURED on the same merge (forked-session-transcript, 2026-10-13), dumped from the merged tree,
+        // never retyped: the branch's +19 lines above these anchors moved which rows fail, against main's set.
+        // Each entry/exit is a coincidence of the shift, not a repair; Task 11 still owns the debt. S6-R11.
         // RE-DERIVED on the merge with `f06abdce` (round 7). Both sides of that
         // merge carried a set measured on a tree that no longer exists — this
         // branch's, and main's own CCR-10/D-2994 re-measure — so NEITHER was taken
@@ -9536,6 +9630,7 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         'ccd/ccd:8654',
         'ccd/ccd:8673',
         'ccd/ccd:13573-13575',
+        'ccd/ccd:11665-11670',
         'ccd/session-hook.sh:795',
         'ccd/session-hook.sh:796',
         'ccd/ccd:2874',
@@ -9544,7 +9639,7 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         'ccd/ccd:2455',
         'ccd/ccd:2793',
         'ccd/session-hook.sh:802',
-        'ccd/ccd:5725',
+        'ccd/ccd:6771',
         'ccd/ccd:4642-4653',
         'ccd/ccd:5828-5830',
         'ccd/ccd:5819-5823',
@@ -9610,6 +9705,11 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
     // above. Measured by diffing the dumped failure sets of the three trees, never retyped. No D-number.
     expect(r.failures.map(site).filter((k) => seen.has(k)),
       'the rows this pass reads that another pass already reaches').toEqual([
+        // RE-MEASURED on the forked-session-transcript review round 2 + tick diet W1 merge (2026-10-14), dumped from the merged tree and never retyped. S6-R11, no D-number.
+        // RE-MEASURED on the forked-session-transcript review round (2026-10-13), from the same run as the
+        // row-pass set above, dumped and never retyped. S6-R11, no D-number.
+        // RE-MEASURED on the forked-session-transcript merge (2026-10-13), from the same run as the
+        // row-pass set above, dumped and never retyped. S6-R11, no D-number.
       // RE-MEASURED at the tree this ships in (fix round 4). The citation
       // RE-POINT LEFT THIS WAVE — both corpus documents are byte-identical to
       // `origin/main`, so no anchor of this branch's ships. What moved these
@@ -9755,7 +9855,7 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         'spec:2220 ccd/ccd:2874',
         'spec:2220 ccd/ccd:2874',
         'spec:2220 ccd/session-hook.sh:993',
-        'spec:2222 ccd/ccd:5725',
+        'spec:2222 ccd/ccd:6771',
       ]);
   });
 
@@ -11284,5 +11384,177 @@ describe('history spool: the hook enqueues one fenced, text-free line (spec §5.
     expect(block).toContain('HOOK_TIMEOUT_S');
     expect(block).toContain('D-4418');
     expect(fs.readFileSync(path.resolve(__dirname, '../../ccd/install-session-hooks.sh'), 'utf8')).toMatch(/^HOOK_TIMEOUT_S=\d+$/m);
+  });
+});
+
+// ── D-4953 / D-4954: who may take the pane-less fallback, and how it reads a row ──
+// APPENDED, never inserted: this file's citation audit cites it by line. The
+// cases of 'a session with no pane' above run through `forkedEnv`; the cases
+// that pin the two gates and the reader live here.
+
+/** A FORKED session's hook environment: no pane, and the job directory Claude Code hands every background job it
+ *  hosts — the fallback's second gate (D-4953). MEASURED on 2.1.296, not read off its launcher: a hook run by a
+ *  process carrying the background-job identity (`CLAUDE_CODE_SESSION_KIND=bg`, `CLAUDE_BG_BACKEND=daemon`,
+ *  `CLAUDE_BG_SOURCE`, `CLAUDE_JOB_DIR`) sees `CLAUDE_JOB_DIR` and none of the other three, because Claude Code builds
+ *  a hook's environment from a copy scrubbed of its background-identity list. The hook tests the value for presence
+ *  only, so the directory need not exist. `hookEnv` BLANKS it rather than inheriting it: a suite run from inside a
+ *  forked job inherits a real one, and every "a stranger is nobody's" case would quietly test a fork instead.
+ *  A FUNCTION DECLARATION, hoisted, so the describe above can call it from here. */
+function forkedEnv(): Record<string, string> {
+  return { TMUX_PANE: '', CLAUDE_JOB_DIR: path.join(home, '.claude', 'jobs', 'ab12cd34') };
+}
+
+describe('the pane-less fallback: forked sessions only (D-4953), every row read safely (D-4954)', () => {
+  const reg = (...p: string[]): string => path.join(home, '.cc-sessions', ...p);
+  const row = (id: string, uuid: string): void => fs.writeFileSync(reg(`${id}.uuid`), uuid);
+  /** Every row the hook attributed an event to, by its hookstate file — the whole registry, never one named row. */
+  const attributed = (): string[] => fs.readdirSync(reg()).filter((n) => n.endsWith('.hookstate.json')).sort();
+  /** The hook with a wall-clock bound (the spool describe's `runSpoolBounded`, for this describe's env): a hook blocked
+   *  in open(2) is killed, never left to hang the suite. `unset` REMOVES variables, which `env` cannot: a blank variable
+   *  and an unset one are different inputs under the hook's `set -u`. */
+  const runBounded = (payload: object, env: Record<string, string>, unset: string[] = []): ReturnType<typeof spawnSync> => {
+    const e = hookEnv(env);
+    for (const k of unset) delete e[k];
+    return spawnSync('bash', [HOOK], { input: JSON.stringify(payload), encoding: 'utf8', timeout: 10_000, killSignal: 'SIGKILL', env: e });
+  };
+
+  // THE STRANGER THE FALLBACK MUST NOT ADOPT (H2). A plain `claude --resume
+  // <uuid>` keeps the resumed id and its hooks carry it as
+  // CLAUDE_CODE_SESSION_ID (measured on 2.1.296), so a hand-run resume of a
+  // live row, outside tmux, matched that row and wrote SessionStart(resume)
+  // 'done' with the row's own uuid: state the server reads as current while
+  // the row's real pane is mid-turn.
+  it('a Claude session outside tmux that resumes a registry uuid is still nobody\'s', () => {
+    row('demo-quiet-basin', 'uuid-1\n');
+    expect(runFull({ hook_event_name: 'SessionStart', source: 'resume', session_id: 'uuid-1' }, { TMUX_PANE: '' }))
+      .toMatchObject({ stdout: '', stderr: '' });
+    expect(fs.readdirSync(reg()).sort()).toEqual(['demo-quiet-basin.generation', 'demo-quiet-basin.uuid']);
+  });
+
+  // The fleet gate's 'a foreign tmux session name' case, WITH the row it was
+  // missing: without one, it passed because the fallback had nothing to match.
+  it('a tmux session not named cc-* writes nothing, even beside a row that names its session id', () => {
+    fs.writeFileSync(path.join(home, 'bin', 'tmux'), '#!/bin/sh\necho "main"\n', { mode: 0o755 });
+    row('demo-quiet-basin', 'uuid-1\n');
+    run({ hook_event_name: 'Stop' });
+    expect(attributed()).toEqual([]);
+  });
+
+  // THE PANE IS THE PANE'S QUESTION: a process with a pane is answered by the
+  // pane or by nobody, even when it also carries the job marker. This is the
+  // case that isolates the `elif` from the job-marker conjunct.
+  it('a process in a tmux session not named cc-* is never attributed by its session id, job marker or not', () => {
+    fs.writeFileSync(path.join(home, 'bin', 'tmux'), '#!/bin/sh\necho "main"\n', { mode: 0o755 });
+    row('demo-quiet-basin', 'uuid-1\n');
+    run({ hook_event_name: 'UserPromptSubmit' }, { ...forkedEnv(), TMUX_PANE: '%3' });
+    expect(attributed()).toEqual([]);
+  });
+
+  // UNSET IS NOT BLANK (H4). Under `set -u`, a comparison that expands an
+  // unset CLAUDE_CODE_SESSION_ID kills the hook with "unbound variable" and
+  // exit 1. The blank-id case is 'a session with no pane' above.
+  it('the session id UNSET: exit 0, silent on both streams, nobody attributed', () => {
+    row('demo-quiet-basin', 'uuid-1\n');
+    row('ghost', '');
+    const r = runBounded({ hook_event_name: 'UserPromptSubmit' }, forkedEnv(), ['CLAUDE_CODE_SESSION_ID']);
+    expect(r.signal).toBeNull();
+    expect(r.status, 'the hook contract: exit 0 on every path').toBe(0);
+    expect({ stdout: r.stdout, stderr: r.stderr }).toEqual({ stdout: '', stderr: '' });
+    expect(attributed()).toEqual([]);
+  });
+
+  // ── D-4954. The walk opens EVERY row, not just this session's own, so one
+  // bad node anywhere used to reach every event of every forked session. The
+  // `a`/`b`-prefixed names sort before the matching row: the walk meets the
+  // bad node first and must pass it to attribute at all.
+
+  it.skipIf(process.getuid?.() === 0)('a row it cannot read is passed in silence, and the walk goes on to the match', () => {
+    row('a-row', 'uuid-other\n');
+    fs.chmodSync(reg('a-row.uuid'), 0o000);
+    row('demo-quiet-basin', 'uuid-1\n');
+    expect(runFull({ hook_event_name: 'UserPromptSubmit' }, forkedEnv())).toMatchObject({ stdout: '', stderr: '' });
+    expect(attributed()).toEqual(['demo-quiet-basin.hookstate.json']);
+  });
+
+  // THE RACE ITSELF, made deterministic (H3's own scenario: a row unlinked
+  // between the walk's test and its open). A DEBUG trap deletes the row just
+  // before each `read -r` runs (functrace on, so a reader moved into a
+  // function is still reached): the row passes `-f` and is gone at open(2).
+  // Where the open's failure is sent then decides whether bash's "No such
+  // file or directory" reaches the hook's stderr — the braces (D-1691). The
+  // mode-000 case above pins the same braces from the other side: a `-r`
+  // could hide that row, and no `-r` can see this one.
+  it('a row unlinked between its test and its open is passed in silence', () => {
+    row('a-row', 'uuid-other\n');
+    row('demo-quiet-basin', 'uuid-1\n');
+    const trap = path.join(home, 'unlink-race.bash');
+    fs.writeFileSync(trap, 'set -o functrace\ntrap \'case $BASH_COMMAND in *"read -r"*) rm -f "$RACE_ROW" ;; esac\' DEBUG\n');
+    expect(runFull({ hook_event_name: 'UserPromptSubmit' }, { ...forkedEnv(), BASH_ENV: trap, RACE_ROW: reg('a-row.uuid') }))
+      .toMatchObject({ stdout: '', stderr: '' });
+    expect(fs.existsSync(reg('a-row.uuid')), 'the trap fired: the row is gone').toBe(false);
+    expect(attributed()).toEqual(['demo-quiet-basin.hookstate.json']);
+  });
+
+  // THE BOUND: one row costs at most CCRC_ID_MAX characters, whatever it
+  // holds. Not visible in anything the hook writes, so a DEBUG trap records
+  // the length of the value each comparison is about to test. Coupled to the
+  // walk's variable name on purpose: a rename that drops the bound must red.
+  it('reads at most CCRC_ID_MAX characters of a row, however long it is', () => {
+    row('a-long', 'x'.repeat(300));
+    row('demo-quiet-basin', 'uuid-1\n');
+    const lens = path.join(home, 'lens.txt');
+    const trap = path.join(home, 'len-probe.bash');
+    fs.writeFileSync(trap, 'trap \'case $BASH_COMMAND in *"\\"\\$ruuid\\" =="*) printf "%s\\n" "${#ruuid}" >> "$LEN_LOG" ;; esac\' DEBUG\n');
+    run({ hook_event_name: 'UserPromptSubmit' }, { ...forkedEnv(), BASH_ENV: trap, LEN_LOG: lens });
+    const max = Number(/^CCRC_ID_MAX=(\d+)$/m.exec(fs.readFileSync(HOOK, 'utf8'))![1]);
+    expect(fs.readFileSync(lens, 'utf8').trim().split('\n').map(Number)).toEqual([max, 'uuid-1'.length]);
+    expect(attributed()).toEqual(['demo-quiet-basin.hookstate.json']);
+  });
+
+  it('a FIFO at a registry row never blocks the hook: exit 0, silent, the match still found', () => {
+    execFileSync('mkfifo', [reg('aaa-junk.uuid')]);
+    row('demo-quiet-basin', 'uuid-1\n');
+    const r = runBounded({ hook_event_name: 'PreToolUse', tool_name: 'Read' }, forkedEnv());
+    expect(r.signal, 'killed at the bound: the hook blocked in open(2)').toBeNull();
+    expect(r.status).toBe(0);
+    expect(r.stderr).toBe('');
+    expect(attributed()).toEqual(['demo-quiet-basin.hookstate.json']);
+    expect(fs.lstatSync(reg('aaa-junk.uuid')).isFIFO()).toBe(true);
+  }, 30_000);
+
+  it('a row that is a symlink to a character device is never read: exit 0, silent, the match still found', () => {
+    fs.symlinkSync('/dev/zero', reg('bbb-dev.uuid'));
+    row('demo-quiet-basin', 'uuid-1\n');
+    const r = runBounded({ hook_event_name: 'PreToolUse', tool_name: 'Read' }, forkedEnv());
+    expect(r.signal, 'killed at the bound: the hook read an endless device').toBeNull();
+    expect(r.status).toBe(0);
+    expect(r.stderr).toBe('');
+    expect(attributed()).toEqual(['demo-quiet-basin.hookstate.json']);
+  }, 30_000);
+
+  // THE ONE STRANGER THE MARKER LETS THROUGH, written where the gate is.
+  // CLAUDE_JOB_DIR is INHERITED: Claude Code's child-environment builder keeps
+  // it, so a `claude --resume <registry uuid>` started from a forked session's
+  // own shell reaches the fallback with the inputs a fork's own hook has. The
+  // first case of 'a session with no pane' IS that run as far as the hook can
+  // see, so no case can tell them apart, and what is left to drift is the
+  // prose: the header once said a stranger "exits 0 exactly as it did before
+  // the fallback existed" with no exception. Both halves are pinned: the claim
+  // carries its condition, and the block names the inheritance and both
+  // spellings of the stranger.
+  it('the identity block names the stranger the job marker lets through: a process a forked session starts (D-4953)', () => {
+    const src = fs.readFileSync(HOOK, 'utf8');
+    const start = src.indexOf('# TWO SOURCES FOR ONE QUESTION');
+    const end = src.indexOf('elif [[ -n "${CLAUDE_JOB_DIR:-}"');
+    expect(start, 'the block\'s first line').toBeGreaterThan(-1);
+    expect(end, 'the fallback\'s gate, after the block').toBeGreaterThan(start);
+    const prose = src.slice(start, end).replace(/\n#[ \t]*/g, ' ').replace(/\s+/g, ' ');
+    expect(prose).toMatch(/does not carry CLAUDE_JOB_DIR exits 0 exactly as it did before the fallback existed/);
+    expect(prose).toMatch(/CLAUDE_JOB_DIR is INHERITED/);
+    expect(prose).toMatch(/claude --resume <registry uuid>` run from a forked session's own shell/);
+    // ...and the uuid-less spelling of the same stranger (#189 re-review): a
+    // bare `claude --continue` there resumes the newest transcript in that
+    // directory, which is usually the fork's own.
+    expect(prose).toMatch(/a bare `claude --continue` there/);
   });
 });
