@@ -325,9 +325,11 @@ describe('a failed journal append undoes its own bytes (path-identity spec 2026-
 
   it('(xi) the created arm’s directory fsync throws and the directory’s close throws too: setCollectLane’s code is the fsync’s, the file is absent, and the seed coherent', () => {
     const { s, j } = opened();
-    const dirFds = fdsOpenedOn(path.dirname(j.logPath));
+    const dir = path.dirname(j.logPath);
+    const dirFds = fdsOpenedOn(dir);
     let fsyncOn: unknown = null;
     let closeOn: unknown = null;
+    let closeAt = -1;
     const f = failOnce('fsyncSync', (fd) => dirFds.includes(fd as number), (_real, fd) => {
       fsyncOn = fd;
       throw fsError('EIO: i/o error, fsync', 'EIO');
@@ -335,6 +337,7 @@ describe('a failed journal append undoes its own bytes (path-identity spec 2026-
     // The descriptor IS released (Linux closes it even when close reports an error); only the report is the fault.
     const c = failOnce('closeSync', (fd) => dirFds.includes(fd as number), (real, fd) => {
       closeOn = fd;
+      closeAt = (h.log?.length ?? 0) - 1;
       real(fd);
       throw fsError('EBADF: bad file descriptor, close', 'EBADF');
     });
@@ -344,10 +347,11 @@ describe('a failed journal append undoes its own bytes (path-identity spec 2026-
     h.log = null;
     expect(f.fired(), 'CONTROL: the directory fsync threw').toBe(1);
     expect(c.fired(), 'CONTROL: the directory close threw').toBe(1);
-    const journalFd = log.find((x) => x.name === 'writeSync')?.args[0];
     expect(fsyncOn, 'CONTROL: the fsync fault is on the success path’s directory descriptor').toBe(dirFds[0]);
     expect(closeOn, 'CONTROL: the close fault is on that same directory descriptor').toBe(dirFds[0]);
-    expect(closeOn, 'CONTROL: never on the journal’s descriptor').not.toBe(journalFd);
+    // By position, never by descriptor number alone: a descriptor closed early can be reused by the next open.
+    expect(closeAt, 'CONTROL: the faulted close follows the directory’s open, so it is never the journal’s')
+      .toBeGreaterThan(log.findIndex((x) => x.name === 'openSync' && x.args[0] === dir));
     h.hooks.clear();
     expect(out).toEqual({ kind: 'failed', phase: 'append', code: 'EIO' });
     expect(existsSync(j.logPath), 'the file this call created is still there').toBe(false);
@@ -357,11 +361,14 @@ describe('a failed journal append undoes its own bytes (path-identity spec 2026-
 
   it('(xii) the created arm’s fsyncs succeed and only the directory’s close throws: the write is written, the file holds the record, and the row commits at that generation', () => {
     const { s, j } = opened();
-    const dirFds = fdsOpenedOn(path.dirname(j.logPath));
+    const dir = path.dirname(j.logPath);
+    const dirFds = fdsOpenedOn(dir);
     let closeOn: unknown = null;
+    let closeAt = -1;
     // The descriptor IS released (Linux closes it even when close reports an error); only the report is the fault.
     const c = failOnce('closeSync', (fd) => dirFds.includes(fd as number), (real, fd) => {
       closeOn = fd;
+      closeAt = (h.log?.length ?? 0) - 1;
       real(fd);
       throw fsError('EBADF: bad file descriptor, close', 'EBADF');
     });
@@ -372,7 +379,9 @@ describe('a failed journal append undoes its own bytes (path-identity spec 2026-
     expect(c.fired(), 'CONTROL: the directory close threw').toBe(1);
     const journalFd = log.find((x) => x.name === 'writeSync')?.args[0];
     expect(closeOn, 'CONTROL: the close fault is on the success path’s directory descriptor').toBe(dirFds[0]);
-    expect(closeOn, 'CONTROL: never on the journal’s descriptor').not.toBe(journalFd);
+    // By position, never by descriptor number alone: a descriptor closed early can be reused by the next open.
+    expect(closeAt, 'CONTROL: the faulted close follows the directory’s open, so it is never the journal’s')
+      .toBeGreaterThan(log.findIndex((x) => x.name === 'openSync' && x.args[0] === dir));
     expect(log.filter((x) => x.name === 'fsyncSync').slice(0, 2).map((x) => x.args[0]),
       'CONTROL: both fsyncs ran and succeeded, the file’s then the directory’s').toEqual([journalFd, dirFds[0]]);
     h.hooks.clear();
@@ -381,5 +390,26 @@ describe('a failed journal append undoes its own bytes (path-identity spec 2026-
     expect(s.collectLaneRow(), 'the row commits at that generation')
       .toMatchObject({ kind: 'row', row: { choice: 'live', fleetNodeId: NODE_A, generation: 1n } });
     expect(controlOf(s, j)).toMatchObject({ kind: 'coherent', generation: 1, bootstrap: false });
+  });
+
+  it('(xiii) the created arm’s success path fsyncs the directory before the journal’s close', () => {
+    const { j } = opened();
+    const dir = path.dirname(j.logPath);
+    const dirFds = fdsOpenedOn(dir);
+    h.log = [];
+    expect(thrownCode(() => j.appendGeneration(1)), 'CONTROL: the append succeeds').toBe('no throw');
+    const log = h.log;
+    h.log = null;
+    expect(readFileSync(j.logPath, 'utf8'), 'CONTROL: the record landed').toBe('{"generation":1}\n');
+    expect(dirFds, 'CONTROL: the success path opened the directory once').toHaveLength(1);
+    // Located by position, never by descriptor number alone: a descriptor closed early can be reused by the next open.
+    const journalFd = log.find((c) => c.name === 'writeSync')?.args[0];
+    const dirOpen = log.findIndex((c) => c.name === 'openSync' && c.args[0] === dir);
+    const dirFsync = log.findIndex((c, i) => i > dirOpen && c.name === 'fsyncSync' && c.args[0] === dirFds[0]);
+    const journalClose = log.findIndex((c) => c.name === 'closeSync' && c.args[0] === journalFd);
+    expect(dirOpen, 'CONTROL: the directory was opened').toBeGreaterThan(-1);
+    expect(dirFsync, 'CONTROL: the directory was fsynced').toBeGreaterThan(-1);
+    expect(journalClose, 'CONTROL: the journal was closed').toBeGreaterThan(-1);
+    expect(dirFsync, 'the directory fsync comes before the journal’s close').toBeLessThan(journalClose);
   });
 });
