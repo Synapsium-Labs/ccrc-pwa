@@ -8428,7 +8428,8 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
       // so nothing was re-pointed. S6-R11, no D-number.
       // 147 -> 146 on the forked-session-transcript review round (2026-10-13): the review fixes' ccd/ccd insertions slid
       // lines under frozen anchors; measured from the merged tree's dump, never retyped. S6-R11, no D-number.
-      'ccd/ccd': 146,
+      // 146 -> 147: RE-MEASURED on the forked-session-transcript review round 2 + tick diet W1 merge (2026-10-14), dumped from the merged tree and never retyped. S6-R11, no D-number.
+      'ccd/ccd': 147,
       'ccd/session-hook.sh': 21,
       'ccd/compact-card.mjs': 4,
       'server/test/ccd-ws-reap.test.ts': 2,
@@ -8740,7 +8741,8 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
     // measured by `cite-remeasure.py` against `origin/main`; no key moved (argued beside the map).
     // 197 -> 196 at box-token-lifecycle wave 2 B7: `'deploy/deploy.sh'` 4 -> 3 and nothing else moved (argued beside the map).
     // 196 -> 195 on the forked-session-transcript review round (2026-10-13): `ccd/ccd` 147 -> 146 and nothing else moved. Derived from the census (S6-R11).
-    expect(total, 'the narrated headline is the sum of the census, and this is it').toBe(195);
+    // 195 -> 196: RE-MEASURED on the forked-session-transcript review round 2 + tick diet W1 merge (2026-10-14), dumped from the merged tree and never retyped. S6-R11, no D-number.
+    expect(total, 'the narrated headline is the sum of the census, and this is it').toBe(196);
     // AND EVERY FAILING CITATION POINTS INTO A FILE THIS TASK REWROTE — the
     // claim that makes the census a statement about Task 9 rather than about
     // the documents' own quality. A stale citation into an untouched file is a
@@ -9391,6 +9393,7 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
     // two trees, never retyped. No D-number.
     expect(r.failures.map(refKey), 'a `|` row stopped naming what the ROW quotes — re-measure')
       .toEqual([
+        // RE-MEASURED on the forked-session-transcript review round 2 + tick diet W1 merge (2026-10-14), dumped from the merged tree and never retyped. S6-R11, no D-number.
         // RE-MEASURED on the forked-session-transcript review round (2026-10-13), dumped from the merged
         // tree and never retyped: the review fixes' ccd/ccd insertions moved which rows fail. S6-R11.
         // RE-MEASURED on the same merge (forked-session-transcript, 2026-10-13), dumped from the merged tree,
@@ -9592,6 +9595,7 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         'ccd/ccd:13573-13575',
         'ccd/ccd:5797',
         'ccd/ccd:7568',
+        'ccd/ccd:11025',
         'ccd/ccd:11665-11670',
         'ccd/ccd:11669',
         'ccd/ccd:11670',
@@ -9601,6 +9605,7 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         'ccd/ccd:13560-13562',
         'ccd/ccd:19109',
         'ccd/ccd:19098',
+        'ccd/ccd:19120',
         'ccd/ccd:19131',
         'ccd/ccd:11669',
         'ccd/ccd:11670',
@@ -9624,6 +9629,7 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         'ccd/ccd:8609',
         'ccd/ccd:8654',
         'ccd/ccd:8673',
+        'ccd/ccd:13573-13575',
         'ccd/ccd:11665-11670',
         'ccd/session-hook.sh:795',
         'ccd/session-hook.sh:796',
@@ -9699,6 +9705,7 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
     // above. Measured by diffing the dumped failure sets of the three trees, never retyped. No D-number.
     expect(r.failures.map(site).filter((k) => seen.has(k)),
       'the rows this pass reads that another pass already reaches').toEqual([
+        // RE-MEASURED on the forked-session-transcript review round 2 + tick diet W1 merge (2026-10-14), dumped from the merged tree and never retyped. S6-R11, no D-number.
         // RE-MEASURED on the forked-session-transcript review round (2026-10-13), from the same run as the
         // row-pass set above, dumped and never retyped. S6-R11, no D-number.
         // RE-MEASURED on the forked-session-transcript merge (2026-10-13), from the same run as the
@@ -9819,12 +9826,14 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         'spec:2123 ccd/ccd:13573-13575',
         'spec:2125 ccd/ccd:5797',
         'spec:2125 ccd/ccd:7568',
+        'spec:2125 ccd/ccd:11025',
         'spec:2125 ccd/ccd:13561',
         'spec:2125 ccd/ccd:13567',
         'spec:2125 ccd/ccd:13673',
         'spec:2125 ccd/ccd:13560-13562',
         'spec:2125 ccd/ccd:19109',
         'spec:2125 ccd/ccd:19098',
+        'spec:2125 ccd/ccd:19120',
         'spec:2125 ccd/ccd:19131',
         'spec:2204 ccd/ccd:12032-12034',
         'spec:2204 ccd/ccd:12032-12034',
@@ -9842,6 +9851,7 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         'spec:2209 ccd/ccd:8609',
         'spec:2209 ccd/ccd:8654',
         'spec:2209 ccd/ccd:8673',
+        'spec:2210 ccd/ccd:13573-13575',
         'spec:2220 ccd/ccd:2874',
         'spec:2220 ccd/ccd:2874',
         'spec:2220 ccd/session-hook.sh:993',

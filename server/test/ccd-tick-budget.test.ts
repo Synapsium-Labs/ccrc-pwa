@@ -41,17 +41,21 @@ import {
  *    Task 5 (`_cfg_dir_to`, an exact memo): -1 fork on the two leaving fixtures.
  *  The merged figures below are the dump of this suite on the merged tree, never
  *  a sum of the three. Lowered only by a change that measures the new figure and
- *  states it in its PR's departure. */
+ *  states it in its PR's departure. *  RAISED BY #189 (the forked-session continued-in chain): +4 forks / +1 exec on EVERY fixture,
+ *  measured on the merged tree — `_sync_uuid` now runs `_ci_bg_follow` and `_follow_continued_in`
+ *  each tick (D-4935, D-4945), whose quiescence stat and checks are the four forks. A deliberate
+ *  feature cost, stated rather than hidden; trimming it is the tick-diet spec's stage 2(c).
+ */
 const TICK_BUDGET: Record<FixtureName, { forks: number; execs: number }> = {
-  'idle-home': { forks: 163, execs: 72 },
-  busy: { forks: 160, execs: 71 },
-  narrow: { forks: 71, execs: 27 },
-  'away-over-ceiling': { forks: 189, execs: 90 },
-  'hard-blocked': { forks: 402, execs: 217 },
-  cooldown: { forks: 93, execs: 35 },
-  fable: { forks: 152, execs: 64 },
-  leaving: { forks: 387, execs: 223 },
-  'fable-leaving': { forks: 371, execs: 210 },
+  'idle-home': { forks: 167, execs: 73 },
+  busy: { forks: 164, execs: 72 },
+  narrow: { forks: 75, execs: 28 },
+  'away-over-ceiling': { forks: 193, execs: 91 },
+  'hard-blocked': { forks: 406, execs: 218 },
+  cooldown: { forks: 97, execs: 36 },
+  fable: { forks: 156, execs: 65 },
+  leaving: { forks: 391, execs: 224 },
+  'fable-leaving': { forks: 375, execs: 211 },
 };
 
 /** `_plat_timeout`'s `-k` probe, per tick inside the loop. On `main` at
