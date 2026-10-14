@@ -129,6 +129,10 @@ function TruncationCue({ bytes }: { bytes?: number }): ReactNode {
   return <p className="tool-cut">+{bytes} bytes cut</p>;
 }
 
+/** The outcome row's word for an ask that came back without answers — also
+ *  what `askCardLines` counts that row as. */
+const NO_ANSWER = 'no answer';
+
 /** An ask that produced no answer: declined, interrupted, or left to time out.
  *  The result text is the harness briefing the model — the decline preamble
  *  alone runs past 1 kB of it — so it goes behind a tap in the same capped,
@@ -145,7 +149,7 @@ function AskOutcome({ result }: { result: ToolResultEvent }): ReactNode {
         aria-expanded={expanded}
         onClick={() => setExpanded((e) => !e)}
       >
-        <span className="tool-ask-outlabel">no answer</span>
+        <span className="tool-ask-outlabel">{NO_ANSWER}</span>
         {result.isError && <span className="exit-badge">ERROR</span>}
         <span className="tool-chev" aria-hidden="true">
           ▸
@@ -291,6 +295,31 @@ function AskCard({
   );
 }
 
+/** The questions this call renders as an ask card, or null when it renders as
+ *  the generic one-row card. The one decision both readers below take. */
+function askOf(use: ToolUseEvent): string[] | null {
+  return use.name === 'AskUserQuestion' ? askQuestions(use.input) : null;
+}
+
+/** What an ask card SHOWS, one entry per row: each question, its answer on the
+ *  row beneath once one landed, and — when no answers are shown — the one row
+ *  under them (the state word, or the "no answer" outcome). Null when the call
+ *  renders as the generic card, which is ONE row whatever its input holds.
+ *
+ *  The chat list prices the card by this (`ChatList.tsx`'s `shapeOf`), not by
+ *  the call's JSON input: the card draws the questions, never the options. */
+export function askCardLines(use: ToolUseEvent, result?: ToolResultEvent): string[] | null {
+  const questions = askOf(use);
+  if (questions === null) return null;
+  const answers = result !== undefined && !result.isError ? askAnswers(result.text, questions) : null;
+  const rows = questions.flatMap((q, i) => {
+    const a = answers?.[i] ?? '';
+    return a === '' ? [q] : [q, a];
+  });
+  if (answers !== null) return rows;
+  return [...rows, result === undefined ? ASK_WORD.unanswered : NO_ANSWER];
+}
+
 export function ToolCard({
   use,
   result,
@@ -302,13 +331,11 @@ export function ToolCard({
   askPending?: boolean;
   onAnswer?: () => void;
 }): ReactNode {
-  if (use.name === 'AskUserQuestion') {
-    const questions = askQuestions(use.input);
-    if (questions !== null) {
-      return (
-        <AskCard questions={questions} result={result} askPending={askPending} onAnswer={onAnswer} />
-      );
-    }
+  const questions = askOf(use);
+  if (questions !== null) {
+    return (
+      <AskCard questions={questions} result={result} askPending={askPending} onAnswer={onAnswer} />
+    );
   }
   return <GenericToolCard use={use} result={result} />;
 }

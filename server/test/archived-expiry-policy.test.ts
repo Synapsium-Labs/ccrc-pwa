@@ -16,7 +16,7 @@ import {
   EXPIRE_SHADOW_REAUDIT_MS, EXPIRE_TOKEN_KIND, archivedExpiryDue, archivedExpiryEntry, archivedExpiryEntryFor,
   archivedExpiryLearned, archivedExpiryNextEntry, archivedExpirySighted, archivedExpiryVerdict, expireAuditExpiresAt,
   EXPIRE_PRE_CRUMB_FAILED, expireTokenKind, expiryAttention, expiryInUseSentence, expiryReportSentence, parseExpireAudit, parseExpireResult, reviewKeeps,
-  type ArchivedExpiryEntry, type ArchivedExpiryInput,
+  type ArchivedExpiryEntry, type ArchivedExpiryInput, type ExpiryReport,
 } from '../src/archivedExpiry.js';
 
 const ID = 'demo-quiet-dune';
@@ -193,7 +193,27 @@ describe('the verb’s answer — box words told apart from composition errors (
     expect([...EXPIRE_PRE_CRUMB_FAILED].sort()).toEqual(['probe-unmeasured', 'state-changed']);
   });
 
-  it('THE CENSUS: every site of either word in ccd/ccd is placed, and the expiry’s failed state-changed is on its FRESH arm, before the breadcrumb (wave 5)', () => {
+  it('reads the WORD, then `crumb`: false audits afresh, true resumes — an absent or non-boolean crumb is main’s word rule exactly (wave 6, question (k))', () => {
+    const doc = (failed: string, extra: Record<string, unknown> = {}): string => JSON.stringify({ failed, detail: 'x', ...extra });
+    // `false`: printed before this attempt's breadcrumb, so nothing it started stands — the lane audits afresh.
+    for (const w of ['probe-unmeasured', 'pin-failed', 'state-changed', 'tombstone-unwritable']) {
+      expect(parseExpireResult(ID, doc(w, { crumb: false }), ''), w).toEqual({ kind: 'restart', detail: `${w}: x` });
+    }
+    // `true`: printed past a breadcrumb — the resumed arm's probe-unmeasured among them — so the next attempt resumes it.
+    for (const w of ['probe-unmeasured', 'pin-failed', 'worktree-remove-failed']) {
+      expect(parseExpireResult(ID, doc(w, { crumb: true }), ''), w).toEqual({ kind: 'failed', resumable: true, detail: `${w}: x` });
+    }
+    // Absent (an older ccd) or not a boolean: the word rule `main` reads, exactly — agent-first skew changes nothing.
+    for (const extra of [{}, { crumb: 'true' }, { crumb: 'false' }, { crumb: 1 }, { crumb: 0 }, { crumb: null }]) {
+      const why = JSON.stringify(extra);
+      expect(parseExpireResult(ID, doc('state-changed', extra), ''), why).toEqual({ kind: 'restart', detail: 'state-changed: x' });
+      expect(parseExpireResult(ID, doc('probe-unmeasured', extra), ''), why)
+        .toEqual({ kind: 'failed', resumable: false, detail: 'probe-unmeasured: x' });
+      expect(parseExpireResult(ID, doc('pin-failed', extra), ''), why).toEqual({ kind: 'failed', resumable: true, detail: 'pin-failed: x' });
+    }
+  });
+
+  it('THE CENSUS: every site of either word in ccd/ccd is placed, and the expiry’s failed state-changed is on its FRESH arm, before the tombstone (wave 5; bounded at the tombstone since wave 6)', () => {
     // A STOPPING LINE, not a spelling. EVERY non-comment occurrence of either word anywhere in ccd/ccd is placed: by the
     // function that holds it, and by what the line does with it — `failed` (`_ws_reclaim_fail "<id>" "<lctx>" <word>`
     // or `_ws_reclaim_failed_json <word>`), `refused` (`_reap_refuse <word>`, or a `{"refused":"<word>"` printf) or
@@ -203,11 +223,12 @@ describe('the verb’s answer — box words told apart from composition errors (
     // shared tail, a pin, a helper an expiry calls). The one shape no text scan sees is a word assembled at run time
     // from parts; ccd has none. `_ws_reclaim_locked` is ws-reclaim's own verb, which an expiry never reaches.
     //   `_ws_expire_locked`'s failed `state-changed` must lie on its FRESH arm — after `if [[ -z "$phase" ]]` and
-    // before the `expire:` breadcrumb write — so nothing this verb started stands when it prints. Its
+    // before the tombstone write, `_ws_tombstone`, which the `expire:` breadcrumb follows (the bound is the tombstone
+    // since wave 6, where wave 5 drew it at the breadcrumb) — so nothing this verb started stands when it prints. Its
     // `probe-unmeasured` prints at the verdict point, on EVERY arm: on a fresh expiry before anything, and on a
-    // RESUMED one after an earlier attempt's breadcrumb (`_ws_expire_resume_eval`'s unmeasured exits). That is main's
-    // reading, a known gap routed to this programme's wave 6 (an arming blocker until then), and this census records it
-    // rather than hides it.
+    // RESUMED one after an earlier attempt's breadcrumb (`_ws_expire_resume_eval`'s unmeasured exits). The word alone
+    // cannot tell those apart, which is why ccd says `crumb` there since wave 6 (`true` on the resumed arm) and the
+    // server reads it first; this census still records the word's two arms rather than hides them.
     //   THE COLLECTOR'S OWN FAMILY (child reclamation spec §5.10). Every site inside the COLLECT region is placed in
     // its own list, held exactly as the one above is: `ws-collect` journals both words through the shared tail's
     // `_ws_reclaim_fail`, refuses through its ONE `_ws_collect_refused "<id>" "<tx>" <word>`, and sets `REAP_VERDICT`
@@ -218,9 +239,11 @@ describe('the verb’s answer — box words told apart from composition errors (
     const lockedAt = ccd.indexOf('\n_ws_expire_locked() {');
     const freshAt = ccd.indexOf('\n  if [[ -z "$phase" ]]; then', lockedAt);
     const crumbAt = ccd.indexOf('_reg_set "$id" reaping "expire:$start"', lockedAt);
+    const tombAt = ccd.indexOf('_ws_tombstone "$id"', freshAt);
     expect(lockedAt, 'the expiry\'s locked body').toBeGreaterThan(-1);
     expect(freshAt, 'its fresh arm').toBeGreaterThan(lockedAt);
-    expect(crumbAt, 'its breadcrumb write, on that arm').toBeGreaterThan(freshAt);
+    expect(tombAt, 'its tombstone write, on that arm').toBeGreaterThan(freshAt);
+    expect(crumbAt, 'its breadcrumb write, after the tombstone').toBeGreaterThan(tombAt);
     const collectBegin = ccd.indexOf('COLLECT-BEGIN');
     const collectEnd = ccd.indexOf('COLLECT-END');
     expect(collectBegin, 'the COLLECT region').toBeGreaterThan(crumbAt);
@@ -245,7 +268,7 @@ describe('the verb’s answer — box words told apart from composition errors (
           const kind = shape(w, l.slice(0, m.index! + w.length), inCollect(where));
           if (fn === '_ws_expire_locked' && kind === 'failed' && w === 'state-changed') {
             expect(where, 'state-changed in _ws_expire_locked is not on its fresh arm').toBeGreaterThan(freshAt);
-            expect(where, 'state-changed in _ws_expire_locked prints after the breadcrumb').toBeLessThan(crumbAt);
+            expect(where, 'state-changed in _ws_expire_locked prints after the tombstone').toBeLessThan(tombAt);
           }
           (inCollect(where) ? collected : placed).push(`${fn} ${kind} ${w}`);
         }
@@ -540,15 +563,48 @@ describe('the lane’s memory of one row', () => {
     expect(c.report).toMatchObject({ kind: 'failing' });
   });
 
-  it('a failed state-changed (`restart`) starts over: the instant and the sightings are forgotten and learned afresh — no report, never final (wave 5)', () => {
+  it('a failed state-changed (`restart`) starts over: the instant and the sightings are forgotten and learned afresh — never final (wave 5), and COUNTED on the shared run (wave 6, ruling C)', () => {
     // The coordinator's ruling on the wave-5 plan's question (h): the reclaim side's "not resumable" means start over.
-    // Nothing was deleted, so nothing is listed; a run of failures before it is about a state that no longer stands.
+    // Nothing this attempt started stands, so it is never final and never the persistent tier; but it is a failure of
+    // the act, so it climbs the shared ladder (ruling C) — backed off, and listed once the run has lasted the ceiling.
+    const first = archivedExpiryNextEntry(e(), { kind: 'restart', detail: 'state-changed: moved' }, NOW, PASS)!;
+    expect(first).toMatchObject({ expiresAt: null, eligibleSince: null, nextAskAt: NOW + 2 * PASS, report: null, failures: 1,
+      failingSince: NOW, verbFailures: 0, verbFailingSince: null, lastOutcome: 'restart' });
+    expect(archivedExpiryDue(first, NOW + 2 * PASS), 'not due: it is learned again first').toBe(false);
     const failing = archivedExpiryNextEntry(e(), { kind: 'failed', resumable: true, detail: 'pin-failed' }, NOW - EXPIRE_FAILURE_CEILING_MS, PASS)!;
-    const x = archivedExpiryNextEntry({ ...failing, report: { kind: 'failing', at: NOW - EXPIRE_FAILURE_CEILING_MS, detail: 'pin-failed' } },
-      { kind: 'restart', detail: 'state-changed: moved' }, NOW, PASS)!;
-    expect(x).toMatchObject({ expiresAt: null, eligibleSince: null, nextAskAt: NOW + PASS, report: null, failures: 0,
-      failingSince: null, lastOutcome: 'restart' });
-    expect(archivedExpiryDue(x, NOW + PASS), 'not due: it is learned again first').toBe(false);
+    const x = archivedExpiryNextEntry(failing, { kind: 'restart', detail: 'state-changed: moved' }, NOW, PASS)!;
+    expect(x, 'an hour into the shared run: listed, still asked').toMatchObject({ expiresAt: null, eligibleSince: null, failures: 2,
+      failingSince: NOW - EXPIRE_FAILURE_CEILING_MS, verbFailures: 0, verbFailingSince: null,
+      report: { kind: 'failing', at: NOW - EXPIRE_FAILURE_CEILING_MS, detail: 'state-changed: moved' } });
+    expect(x.report, 'never final, never the tier').not.toHaveProperty('final');
+    expect(x.report).not.toHaveProperty('attempts');
+    expect(x.nextAskAt).toBe(NOW + 4 * PASS);
+  });
+
+  it('a RECURRING restart climbs the ladder across its fresh audits — the learn carries the run — and is listed after the hour, never stranded (wave 6, ruling C)', () => {
+    const restart = { kind: 'restart', detail: 'pin-failed: HEAD names a branch that is gone' } as const;
+    const learnedAt = (expiresAt: number) => parseExpireAudit(ID, true, JSON.stringify({ session: ID, mode: 'expire',
+      archivedAt: 1_789_000_000, expiresAt, sensitive: [], verdict: 'expirable', token: TOK }));
+    let x = e();
+    let t = NOW;
+    const waits: number[] = [];
+    while (t - NOW < EXPIRE_FAILURE_CEILING_MS) {
+      x = archivedExpiryNextEntry(x, restart, t, PASS)!;
+      waits.push(x.nextAskAt - t);
+      t = x.nextAskAt;
+      x = archivedExpiryLearned(x, learnedAt(1_789_604_800), t, PASS);
+      expect(x.expiresAt, 'learned afresh').toBe(1_789_604_800);
+      expect(x.failures, 'the learn after a restart carries the run').toBe(waits.length);
+    }
+    expect(waits, 'each restart waits longer: the shared backoff').toEqual([...waits].sort((a, b) => a - b));
+    expect(Math.max(...waits), 'up to the ceiling, never more').toBeLessThanOrEqual(EXPIRE_FAILURE_CEILING_MS);
+    x = archivedExpiryNextEntry(x, restart, t, PASS)!;
+    expect(x.report, 'listed once the run has lasted the hour').toEqual({ kind: 'failing', at: NOW, detail: restart.detail });
+    expect(x.nextAskAt, 'and still asked').toBeLessThan(Number.POSITIVE_INFINITY);
+    expect(archivedExpiryLearned(x, learnedAt(1_789_604_800), x.nextAskAt, PASS).report, 'its report survives the learn').toEqual(x.report);
+    // A learn after anything else still clears the run, as before (the control).
+    const other = archivedExpiryNextEntry(e(), { kind: 'audit-failed', detail: 'x' }, NOW, PASS)!;
+    expect(archivedExpiryLearned(other, learnedAt(1_789_604_800), NOW + PASS, PASS).failures, 'the control').toBe(0);
   });
 
   it('a `not-expired` at the act learns the AUDIT’s instant and starts the twice-observed rule again', () => {
@@ -613,9 +669,13 @@ describe('the lane’s memory of one row', () => {
     expect(expiryReportSentence(x.report!, null)).toBe('cleanup has failed for a day in ways the box said it could resume: the '
       + `first at 2026-09-21 14:13 UTC, ${attempts} attempts, the last: cannot open the reap lock at /r. It may have stopped part-way — `
       + 'the box does not yet say whether an attempt began its cleanup — so what is left on disk is not known. The lane asks again '
-      + 'every 4 hours and keeps this entry until an attempt completes, finds that none had begun or stops for good, or the '
-      + 'workspace is archived again.');
+      + '4 hours after each failed attempt — sooner after an answer that ends no attempt, never while the workspace is held — and '
+      + 'keeps this entry until an attempt completes, finds that none had begun or stops for good, or the workspace is archived again.');
     expect(expiryReportSentence(x.report!, null), 'it never suggests a destructive verb').not.toMatch(/ws-reap|ws-rm|ws-expire|delete|remove/);
+    // Review 381, F3: the tier's entry says the halt too while it stands (the same sentence as the stuck entry's).
+    expect(expiryAttention(new Map([[ID, x]]), true)[0]!.sentence).toBe(`${expiryReportSentence(x.report!, null)} The fleet box has since `
+      + 'refused to serialise a cleanup (flock-unavailable). The lane composes no cleanup on that box, for any archived workspace, '
+      + 'until the server restarts.');
     // Each later failure updates the entry and keeps the cadence; the first failure's instant stands.
     const later = archivedExpiryNextEntry(x, { kind: 'failed', resumable: true, detail: 'worktree-remove-failed: still busy' }, x.nextAskAt, PASS)!;
     expect(later.nextAskAt, 'and again four hours on').toBe(x.nextAskAt + EXPIRE_PERSISTENT_RETRY_MS);
@@ -639,9 +699,12 @@ describe('the lane’s memory of one row', () => {
         .toMatchObject({ report: later.report, failures: attempts + 1, failingSince: NOW, expiresAt: later.expiresAt });
     }
     // A failed state-changed shows that none had begun (the fresh arm runs only while no breadcrumb stands): it ends the
-    // entry and starts over.
-    expect(archivedExpiryNextEntry(later, { kind: 'restart', detail: 'state-changed: moved' }, later.nextAskAt, PASS),
-      'a restart ends it').toMatchObject({ report: null, failures: 0, failingSince: null, expiresAt: null });
+    // entry and starts over — counted on the shared run (wave 6, ruling C), so a day of failures is still listed, with
+    // the hour-ceiling report and never the tier's.
+    const restarted = archivedExpiryNextEntry(later, { kind: 'restart', detail: 'state-changed: moved' }, later.nextAskAt, PASS)!;
+    expect(restarted, 'a restart ends it').toMatchObject({ report: { kind: 'failing', at: NOW, detail: 'state-changed: moved' },
+      verbFailures: 0, verbFailingSince: null, expiresAt: null });
+    expect(restarted.report, 'no longer standing').not.toHaveProperty('attempts');
     // A hold never takes its place nor resets its cadence; an attempt that completes finishes the row; a new archive starts afresh.
     const held = archivedExpirySighted(later, { eligible: false, why: 'held' }, 'h', later.nextAskAt - PASS);
     expect(held.report, 'a hold never hides it').toEqual(later.report);
@@ -784,7 +847,6 @@ describe('the lane’s memory of one row', () => {
 
   it('the STEADY reset: a restart, or any answer that ends the run, resets the verb’s run with the shared one (review 356, F2)', () => {
     const steadies: ReadonlyArray<readonly [string, Parameters<typeof archivedExpiryNextEntry>[1]]> = [
-      ['a restart', { kind: 'restart', detail: 'state-changed: moved' }],
       ['a retryable not-expired refusal', { kind: 'refused', token: 'not-expired', detail: 'young', inUse: [] }],
       ['a deferral', { kind: 'deferred', why: 'presence', detail: 'someone is viewing this session' }],
       ['a shadow audit', { kind: 'would-expire', sensitive: 0 }],
@@ -796,6 +858,14 @@ describe('the lane’s memory of one row', () => {
       expect(between, `${what} resets both runs`).toMatchObject({ failures: 0, failingSince: null, verbFailures: 0, verbFailingSince: null });
       startsAfresh(oneLater(between), `${what}, then one verb failure two days later`);
     }
+  });
+
+  it('the RESTART reset: a restart resets the verb’s run, and counts on the shared one (review 356, F2; wave 6, ruling C)', () => {
+    const between = archivedExpiryNextEntry(twoVerbFailures(), { kind: 'restart', detail: 'state-changed: moved' }, NOW + 2 * PASS, PASS)!;
+    expect(between).toMatchObject({ failures: 3, failingSince: NOW, verbFailures: 0, verbFailingSince: null });
+    expect((oneLater(between).report as { attempts?: number } | null)?.attempts, 'a restart, then one verb failure two days later: no tier')
+      .toBeUndefined();
+    expect(oneLater(between), 'the verb’s run starts afresh').toMatchObject({ verbFailures: 1, verbFailingSince: NOW + TWO_DAYS });
   });
 
   it('the IN-USE reset: an in-use answer resets the verb’s run with the shared one (review 356, F2)', () => {
@@ -814,6 +884,88 @@ describe('the lane’s memory of one row', () => {
     }
   });
 
+  it('containment-refuted is STUCK: listed AT ONCE, on the persistent tier from its first answer, never +∞ (wave 6, ruling B)', () => {
+    const stuck = { kind: 'stuck', detail: 'containment-refuted: demo-other’s registry row lies inside /w/demo-quiet-dune' } as const;
+    const x = archivedExpiryNextEntry(e(), stuck, NOW, PASS)!;
+    expect(x.nextAskAt, 'the persistent tier at once: four hours, never +∞').toBe(NOW + EXPIRE_PERSISTENT_RETRY_MS);
+    expect(x.report).toEqual({ kind: 'stuck', at: NOW, detail: stuck.detail, attempts: 1 });
+    const sentence = expiryReportSentence(x.report!, null);
+    expect(sentence).toContain(`cleanup stopped part-way: ${stuck.detail}.`);
+    expect(sentence).toContain('The session was stopped and nothing further was deleted');
+    // Review 381, F4: the stuck entry's end rule is the whole of it — a verdict that stops the row for good ends it too.
+    expect(sentence).toContain('and keeps this entry until an attempt completes, a verdict stops it for good, or the workspace is archived again.');
+    expect(sentence).not.toContain('until an attempt completes or the workspace');
+    expect(sentence, 'it never suggests a destructive verb').not.toMatch(/ws-reap|ws-rm|ws-expire|delete it|remove it/);
+    expect(expiryAttention(new Map([[ID, x]])).map((a) => [a.kind, a.at]), 'on the wire: a failing entry, at once').toEqual([['failing', NOW]]);
+    // Review 381, F3: while the box's halt stands, a STANDING row's sentence says that nothing is composed on that box until
+    // the server restarts — its own "asks again" is not true then. No new kind, no new word: the sentence only.
+    const halted = expiryAttention(new Map([[ID, x]]), true);
+    expect(halted.map((a) => [a.kind, a.at]), 'on the wire: the same failing entry').toEqual([['failing', NOW]]);
+    expect(halted[0]!.sentence).toBe(`${sentence} The fleet box has since refused to serialise a cleanup (flock-unavailable). `
+      + 'The lane composes no cleanup on that box, for any archived workspace, until the server restarts.');
+    expect(expiryAttention(new Map([[ID, x]]), false)[0]!.sentence, 'no halt, no words').toBe(sentence);
+    const again = archivedExpiryNextEntry(x, stuck, x.nextAskAt, PASS)!;
+    expect(again.report, 'a later stuck answer keeps the first instant and counts the attempt')
+      .toEqual({ kind: 'stuck', at: NOW, detail: stuck.detail, attempts: 2 });
+    expect(again.nextAskAt).toBe(x.nextAskAt + EXPIRE_PERSISTENT_RETRY_MS);
+  });
+
+  it('the halt is said by every row that promises another ask; a row that already says it, or promises nothing, is read as it was (review 381, F3)', () => {
+    const t = NOW;
+    const flock = { kind: 'box', word: 'flock-unavailable', detail: 'flock (util-linux) is unavailable' } as const;
+    const halted = archivedExpiryNextEntry(e(), flock, t, PASS)!;
+    expect(expiryAttention(new Map([[ID, halted]]), true)[0]!.sentence, 'the halted report says it itself, once')
+      .toBe(expiryAttention(new Map([[ID, halted]]), false)[0]!.sentence);
+    // The hourly ladder's own report promises another ask too ("It is retried, backing off in between"); a halted box makes it untrue.
+    const ladder: ExpiryReport = { kind: 'failing', at: t, detail: 'worktree-remove-failed: busy' };
+    const ladderEntry = { ...e(), report: ladder };
+    expect(expiryAttention(new Map([[ID, ladderEntry]]), false)[0]!.sentence).toContain('It is retried, backing off in between.');
+    expect(expiryAttention(new Map([[ID, ladderEntry]]), true)[0]!.sentence, 'a non-final failing report says the halt too (review 381, F3 extended)')
+      .toBe(`${expiryReportSentence(ladder, null)} The fleet box has since refused to serialise a cleanup (flock-unavailable). `
+        + 'The lane composes no cleanup on that box, for any archived workspace, until the server restarts.');
+    const final: ExpiryReport = { kind: 'failing', at: t, detail: 'it will not resume', final: true };
+    expect(expiryAttention(new Map([[ID, { ...e(), report: final }]]), true)[0]!.sentence, 'a final report says it is not asked again')
+      .toBe(expiryReportSentence(final, null));
+    const shadow = archivedExpiryNextEntry(e(), { kind: 'would-expire', sensitive: 0 }, t, PASS)!;
+    expect(expiryAttention(new Map([[ID, shadow]]), true)[0]!.sentence, 'a row that stands for nothing is read as it was')
+      .toBe(expiryAttention(new Map([[ID, shadow]]), false)[0]!.sentence);
+  });
+
+  it('a STUCK entry outranks a failing one and stands until an attempt completes or the archive changes — a terminal verdict still outranks it (wave 6, ruling B)', () => {
+    const stuck = { kind: 'stuck', detail: 'containment-refuted: d' } as const;
+    const { x: tier, t } = aDayOf(verbFailed);
+    const x = archivedExpiryNextEntry(tier, stuck, t, PASS)!;
+    expect(x.report, 'it takes the place of the tier’s failing entry').toEqual({ kind: 'stuck', at: t, detail: stuck.detail, attempts: 1 });
+    const failed = archivedExpiryNextEntry(x, verbFailed, t + PASS, PASS)!;
+    expect(failed.report, 'a later resumable failure does not replace it').toEqual(x.report);
+    expect(failed.nextAskAt, 'and keeps its cadence').toBe(t + PASS + EXPIRE_PERSISTENT_RETRY_MS);
+    const box = archivedExpiryNextEntry(x, { kind: 'box', word: 'lock-unopenable', detail: 'cannot open the reap lock at /r' }, t + PASS, PASS)!;
+    expect(box.report, 'nor does a box word').toEqual(x.report);
+    const restart = archivedExpiryNextEntry(x, { kind: 'restart', detail: 'pin-failed: x' }, t + PASS, PASS)!;
+    expect(restart.report, 'nor a restart').toEqual(x.report);
+    expect(restart.nextAskAt, 'which keeps the cadence too').toBe(t + PASS + EXPIRE_PERSISTENT_RETRY_MS);
+    for (const [what, o] of [...TIER_ANSWERS, ['an audit failure', { kind: 'audit-failed', detail: 'unreadable' }]] as const) {
+      expect(archivedExpiryNextEntry(x, o, t + PASS, PASS)!.report, what).toEqual(x.report);
+    }
+    expect(archivedExpirySighted(x, { eligible: false, why: 'held' }, 'on hold', t + PASS).report, 'a hold').toEqual(x.report);
+    expect(archivedExpiryNextEntry(x, { kind: 'expired', kept: { clips: null, tmpRoot: null } }, t + PASS, PASS), 'completed').toBeNull();
+    expect(archivedExpiryNextEntry(x, { kind: 'expired', kept: { clips: 'in-use', tmpRoot: null } }, t + PASS, PASS)!.report, 'completed, kept')
+      .toMatchObject({ kind: 'kept' });
+    expect(archivedExpiryEntryFor(x, x.archivedAt + 60).report, 'a new archive').toBeNull();
+    expect(archivedExpiryNextEntry(x, { kind: 'refused', token: 'containment-unproven', detail: 'd', inUse: [] }, t + PASS, PASS)!.report,
+      'a terminal refusal (CCR-15’s R77: terminal outranks stuck)').toMatchObject({ kind: 'refused' });
+    // Whole-branch review, item 1: the other two verdicts that end the row for this archive outrank a stuck entry too —
+    // a failure the box says will not resume, and a call ccd rejected as composed. Final, and never asked again.
+    const noResume = archivedExpiryNextEntry(x, { kind: 'failed', resumable: false, detail: 'd' }, t + PASS, PASS)!;
+    expect(noResume.report, 'a non-resumable failure outranks stuck (whole-branch review, item 1)')
+      .toEqual({ kind: 'failing', at: t + PASS, detail: 'd', final: true });
+    expect(noResume.nextAskAt, 'and ends the asking').toBe(Number.POSITIVE_INFINITY);
+    const composed = archivedExpiryNextEntry(x, { kind: 'composition', detail: 'bad token' }, t + PASS, PASS)!;
+    expect(composed.report, 'a composition error outranks stuck (whole-branch review, item 1)')
+      .toEqual({ kind: 'failing', at: t + PASS, detail: 'the server composed a call ccd rejected: bad token', final: true });
+    expect(composed.nextAskAt, 'and ends the asking').toBe(Number.POSITIVE_INFINITY);
+  });
+
   it('a failure the box says will NOT resume stops at once: reported, never asked again for this archive (review 313, parked item 4)', () => {
     // `ExpireVerbRead.failed.resumable` is carried through the outcome, never narrowed: a wrong-row `expired`, a word
     // this build does not know, or `probe-unmeasured` is not something waiting cures — no hour of retries first.
@@ -830,6 +982,35 @@ describe('the lane’s memory of one row', () => {
   it('a box word is reported at once — flock-unavailable will not pass by waiting', () => {
     const x = archivedExpiryNextEntry(e(), { kind: 'box', word: 'flock-unavailable', detail: 'flock …' }, NOW, PASS)!;
     expect(x.report).toMatchObject({ kind: 'failing' });
+  });
+
+  it('flock-unavailable says what it does: the lane composes NO cleanup on that box until the server restarts — never "retried" (wave 6)', () => {
+    const detail = 'flock (util-linux) is unavailable — refusing to run the destructive verb unserialised';
+    const x = archivedExpiryNextEntry(e(), { kind: 'box', word: 'flock-unavailable', detail }, NOW, PASS)!;
+    expect(x.nextAskAt, 'not asked again by this process').toBe(Number.POSITIVE_INFINITY);
+    expect(x.report).toEqual({ kind: 'failing', at: NOW, detail, final: true, halted: true });
+    const sentence = expiryReportSentence(x.report!, null);
+    expect(sentence).toBe(`cleanup stopped: ${detail}. The fleet box cannot serialise a cleanup, so the lane composes none there, `
+      + 'for any archived workspace, until the server restarts; nothing is deleted meanwhile.');
+    expect(sentence, 'never a promise it breaks').not.toMatch(/retried|backing off/);
+    expect(archivedExpirySighted(x, { eligible: false, why: 'held' }, 'h', NOW + PASS).report, 'a hold never hides it').toEqual(x.report);
+    const lock = archivedExpiryNextEntry(e(), { kind: 'box', word: 'lock-unopenable', detail: 'cannot open the reap lock at /r' }, NOW, PASS)!;
+    expect(lock.report, 'the CONTROL: lock-unopenable is retried, as before').toEqual({ kind: 'failing', at: NOW, detail: 'cannot open the reap lock at /r' });
+    expect(lock.nextAskAt).toBeLessThan(Number.POSITIVE_INFINITY);
+  });
+
+  it('flock-unavailable under a STANDING entry keeps it: a stuck entry stands, and a tier entry counts the attempt (wave 6, ruling B)', () => {
+    const flock = { kind: 'box', word: 'flock-unavailable', detail: 'flock (util-linux) is unavailable' } as const;
+    const { x: tier, t } = aDayOf(verbFailed);
+    const stuck = archivedExpiryNextEntry(tier, { kind: 'stuck', detail: 'containment-refuted: d' }, t, PASS)!;
+    const s = archivedExpiryNextEntry(stuck, flock, t + PASS, PASS)!;
+    expect(s.report, 'the stuck entry stands').toEqual(stuck.report);
+    expect(s.nextAskAt, 'on its own cadence, never +∞').toBe(t + PASS + EXPIRE_PERSISTENT_RETRY_MS);
+    const f = archivedExpiryNextEntry(tier, flock, t + PASS, PASS)!;
+    const before = tier.report as { at: number; attempts: number };
+    expect(f.report, 'the tier entry stands, the attempt counted').toEqual({ kind: 'failing', at: before.at, detail: flock.detail,
+      attempts: before.attempts + 1 });
+    expect(f.nextAskAt).toBe(t + PASS + EXPIRE_PERSISTENT_RETRY_MS);
   });
 
   it('in shadow, "would expire" is recorded — and the row is audited again only after the shadow interval', () => {

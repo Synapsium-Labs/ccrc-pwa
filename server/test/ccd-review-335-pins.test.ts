@@ -134,7 +134,8 @@ const cleanReason = (done: Record<string, unknown>, head: string): string => {
 };
 const doneOf = (): Record<string, unknown> => eventsOf(h.home, 'reclaim').find((e) => e['outcome'] === 'done')!;
 
-describe('F9: an rm that fails on a long, non-ASCII name reaches the row as ONE short clean line (spec §5.6)', () => {
+// APFS rejects non-UTF-8 names (EILSEQ); the Linux run covers this.
+describe.skipIf(process.platform === 'darwin')('F9: an rm that fails on a long, non-ASCII name reaches the row as ONE short clean line (spec §5.6)', () => {
   it('the clips leaf’s unmeasured arm (`clipswhy`)', () => {
     makeChild(h);
     const clips = path.join(h.home, '.cc-clips', CHILD_ID);

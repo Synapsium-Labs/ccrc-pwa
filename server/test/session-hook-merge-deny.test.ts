@@ -834,6 +834,12 @@ describe('every jq `as $name` binding in the hook is parenthesised on its own (j
     expect(programs.map((p) => p.name), 'the merge strip is among them').toContain('MERGE_STRIP_JQ');
     // A FLOOR, so the scan can never go vacuous: a deleted jq call lowers these, and the
     // number is then re-measured here rather than silently accepted.
+    // FLOOR 52, composition (the extractor's count, measured at each ref): 52 at the base of the stall-watch work
+    // (the Start/Stop arm read the file with `.ask // null` and `.interrupted == true`); 54 after D-4039 added two
+    // programs (the arm's `.waitBy` read and the tool-event carry's own three-field read); 51 after D-4041 removed
+    // four (those three Start/Stop reads and the carry's read) and added one, the shared `_hook_fresh_read`; 52 once
+    // merged, since the role-skill deny (D-4934, #392) had added one on `main` first, its read of the skill's name
+    // (`main` stood at 53 against a floor of 52). The 33 `as $` bindings below were 33 at every ref.
     expect(programs.length, 'jq programs found').toBeGreaterThanOrEqual(52);
     expect(asBindings(programs), '`as $` bindings found').toBeGreaterThanOrEqual(33);
     // Coverage by EQUALITY, not floors: every `as $` in a non-comment line of the hook

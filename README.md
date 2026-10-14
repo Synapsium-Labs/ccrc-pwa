@@ -569,7 +569,7 @@ under "Attention, notifications and answering" below.
 summary line; it exits 1 when anything FAILs (a WARN does not), which is the exit code `ccrc install`
 ends with. A `server`-role box SKIPs the checks that measure per-account or per-session state — `wrappers`,
 `skills`, `accounts`, `pools`, `memory`, `routing`, `codex`, `graphify`, `graphify-path` (D-3111),
-`timeout`, `model-default`, `history`, and `jq_regex` (no session hook runs there).
+`timeout`, `model-default`, `history`, `transcripts`, and `jq_regex` (no session hook runs there).
 
 | checks | what they measure |
 |---|---|
@@ -586,6 +586,7 @@ ends with. A `server`-role box SKIPs the checks that measure per-account or per-
 | `wrappers`, `skills`, `accounts`, `credentials` | the roster against `~/.local/bin` (Claude Code's binary included); the ccrc skills in every home; declared credential files and provider env blocks (a Codex lane's may omit `ANTHROPIC_BASE_URL`, which its launcher exports, but may not name an endpoint other than its loopback shim); a token file for every account the health probe measures |
 | `codex` | for each `exec.kind: "codex"` lane: the four GPT-lane executables in `~/.local/bin` against the shipped tree; the isolated runtime (`ccgpt-runtime check`, which trusts the build's stamp and compares the installed LiteLLM patch with `patch-source`); the roster row and its ports; `exec.authDir` and its `auth.json`, for existence and mode only; `lane.json` against the roster row and the class registry; a `codex` class registry and its haiku-class probe model; the rendered LiteLLM config against the catalogue; the two tiers (half up, foreign, unmeasurable, down under a live session, or running and not proven to run the installed bytes); and its usage timer and `~/.cc-limits` row. Lane state left under `~/.ccrc/codex/` for an id no longer `codex` is a WARN |
 | `pools`, `memory`, `routing`, `models` | project pool tags; one memory store per project; lane routing; model-catalogue freshness |
+| `transcripts` | every registry row's uuid against its transcript, read by the one `continued-in` rule `ccd` and the server share: a WARN names the sessions reading a transcript Claude Code has superseded (a supervised one clears on its next supervise tick; a stopped or archived one is followed when it is next resumed) and, apart, a session whose marker names a successor never written (it clears at that job's first line, or at the first prompt the session answers on its own transcript; the row's wrapper is named, because `<wrapper> agents` lists only that account's jobs); rows it could not measure (at neither direct spelling, unreadable, or a registry row it cannot read) are counted apart inside the PASS, never claimed clean; a FAIL when `~/.cc-sessions` is not a readable, searchable directory |
 | `pool-sync`, `update-sync` | a fleet box's two pulled projections, present and in lease |
 | `graphify`, `graphify-path` | the pinned graph engine, its skill and the sweep's last census; `graphify` on `PATH` resolving to that engine |
 | `history` | on a `fleet` or `both` box with the history sweep installed (SKIP elsewhere): the last tick and the index lag, the cap and free space, the journal, the export's due and overdue counts and a recovery in progress, each WARN and FAIL with its remedy, all read from `ccrc history status --json` |
@@ -2756,7 +2757,10 @@ the composer sit the session's outstanding mail and its plan (the TUI's task lis
 sends and any modifier with Enter is a newline. `/` completes Claude Code's built-in commands and the skills this
 session can see. Up to four PNG, JPEG or WebP images attach by the picker, by paste or by drag — downscaled to
 2048 px on the long edge — and are staged under `~/.cc-clips/<id>/` on the box that runs the session, where they
-stay as the transcript's thumbnails. A send shows `sending` until the transcript carries it; one that fails keeps
+stay as the transcript's thumbnails. A send shows `sending` until the transcript carries it (a message the session
+takes mid-turn, and a slash command's own echo, count), and retires on its own after ten minutes when no echo ever
+reaches the screen: a command that echoes nothing, or an echo written while the screen was not connected and then
+pushed out of the fifty events a reconnect or a fork follow replays. One that fails keeps
 its text and offers **Retry** and **Discard**; one that finds half-typed text already in the pane's input box
 does not type over it, and offers **Replace draft**, **Append anyway** or **Cancel**.
 
@@ -3592,15 +3596,19 @@ entry in the cleanup row on `/runs` saying it would expire, with what would be d
 composed. Armed, at most one expiry runs per sweep pass, fleet-wide. `$REG/reclaim-paused` is the fleet’s one cleanup switch: raised (the cleanup row's toggle on
 `/runs`, or `ccd reclaim-pause --state on`), it stops child reclamation and this lane alike, shadow included. A
 workspace someone is viewing is left alone for as long as they are; one a process is working in (a forgotten dev
-server, a tmux or fsmonitor daemon) is refused `in-use` on every pass and, after a few, listed with the process's id,
-its command and its path. The lane never kills: find out what the process is first — the fleet's own tmux server is
+server, a tmux or fsmonitor daemon) is refused `in-use` each time it is asked and, after a few, listed with the
+process's id, command and path. The lane never kills: find out what the process is first — the fleet's own tmux server is
 also a `tmux: server`. A workspace held past its seven days is listed, never touched. A cleanup that completed but kept
 the workspace's clips or temp root (ccd's removal refused it, could not measure it, or a process still used it) is
 listed, saying what was kept and why, until the server restarts; a fleet box whose ccd predates that report says so in
 the feed row only. A cleanup the box keeps failing in a way it says it can resume is listed after an hour (a box answer at
 once) and retried, backing off; after a day it becomes a standing entry, with the first failure, the attempts and the last
-error, asked again every four hours, never stopping. The entry stays through a hold, a shadow audit or any other answer that
-ends no attempt, until an attempt completes, finds that none had begun or stops for good, or the workspace is archived again.
+error, asked again four hours after each failed attempt (sooner after an answer that ends no attempt), never stopping. The
+entry stays through a hold, a shadow audit or any other answer that ends no attempt, until an attempt completes, finds that
+none had begun or stops for good, or the workspace is archived again (a server restart drops it too). One that met
+`containment-refuted` is listed at once on that cadence, and ccd's stopping before an attempt began does not end it (an
+attempt completing, a verdict stopping it, or a fresh archive does, and a server restart drops it, as it drops every
+entry); one ccd stopped before it began is audited afresh, and listed after an hour if that recurs; a box with no `flock` gets no cleanup at all until the server restarts. The spec's §12 lists what to know before arming this lane or the next.
 
 **A coordinator that crashed is ended after an hour** (workspace lifecycle spec §5.4). A coordinator whose pane is
 gone with nothing bringing it back (`orphan`, `never-started`), or whose registry row is gone, with no deliberate act
@@ -3608,9 +3616,10 @@ journaled since its last successful spawn — a stop, an archive, a reap, a dest
 expiry, or an unsupervise somebody declared — and that has stayed so for an hour on two passes in a row, has its open
 runs closed `failed` by the server once the operator has armed the lane with `$REG/dead-coordinator-lane-live`; until
 then the lane only records what it would end. The hour counts from the first pass that measured the crash, kept in
-`coord.db` across restarts and raised, never lowered, by a later supervisor heartbeat. A lane gap of more than ten
-minutes (a restart, a pause, a stale mirror) starts the hour afresh, and trips the breaker when two or more coordinators
-were crashed, since each re-anchors on the same pass. A stopped coordinator is never
+`coord.db` across a clean restart (after an unclean exit every crashed claimant's hour starts afresh: D-4916) and
+raised, never lowered, by a later supervisor heartbeat. A lane gap of more than ten minutes (a restart, a pause, a stale
+mirror) starts the hour afresh, and trips the breaker when two or more coordinators were crashed, since each re-anchors
+on the same pass. A stopped coordinator is never
 ended, nor one a supervisor is bringing back, nor one the server cannot measure. A coordinator whose journal the
 server cannot trust to hold every deliberate act — the lifecycle mirror `unavailable` (the fleet's ccd does not journal), a gap it recorded since the
 coordinator's last start, a journal line ccd could not write — is listed and never acted on, and so are one with no
@@ -3632,7 +3641,8 @@ coordinator is ended per pass; in shadow every due one is recorded. `$REG/reclai
 included. It never pushes: the stall watch's pushes about a dead coordinator's stalled workers — one per worker, each
 naming the coordinator — are the notifications, and this lane's rows (each with the instant the coordinator was first
 seen dead, and one when the breaker trips) are records of the same incident. A mirror that goes stale between the pass
-and the act stops the act and keeps the hour, and every act that fails writes a feed row, whatever it had done.
+and the act stops the act and keeps the hour, and every act that fails writes a feed row, whatever it had done. A mirror
+gone stale, or a gap recorded, while the act measures the coordinator stops it too: the act reads both again after it.
 
 **What a crossing costs.** Caps stay global: one row, whole box, no per-project
 and no per-programme cap. Running-worker concurrency counts dispatched runs in
@@ -3865,8 +3875,8 @@ tail prints when it proves that what it would remove is not only the child's own
 inside or through it, a workdir that is the main checkout, a link or non-directory at the workdir); the session was
 stopped and nothing further was deleted, and a retry finds the same thing until the other tree or row is moved or
 removed. What could not be asked stays `worktree-remove-failed`. The failed document carries `crumb`, saying whether
-the failure was printed past the act's breadcrumb, and omits it where that is not known (`ws-expire`'s own
-pre-breadcrumb documents, its resumed arm's `probe-unmeasured`, every `ws-collect` document). Git's silence about a worktree record is no longer believed
+the failure was printed past the act's breadcrumb, and omits it where that is not known (a breadcrumb that stands but
+cannot be read, every `ws-collect` document; `ws-expire` says it too since workspace lifecycle wave 6). Git's silence about a worktree record is no longer believed
 without reading its admin entries, so `no-worktree-record` becomes a retried unmeasured answer when an entry could not
 be read, and a vanished tree whose record names the all-zero head is unmeasured at the audit. The reclaim token also
 binds the row's generation (`ws-audit --reclaim` prints it as `generation`), so a token minted over one row is never
@@ -4985,7 +4995,7 @@ things at that moment: it builds a SECOND card — the files this context was wo
 community and dependents read out of the same graph — and it MEASURES the compaction, writing one line to a
 per-session journal. Three arms of `ccd/session-hook.sh` do it, and **none of them opens a new output
 channel**: the card rides the one `additionalContext` envelope `SessionStart` already prints — the compact
-arm calls `_hook_emit_context "$CARD" "$CARD_COMPACT"` (`ccd/session-hook.sh:2900`), which appends the second
+arm calls `_hook_emit_context "$CARD" "$CARD_COMPACT"` (`ccd/session-hook.sh:3012`), which appends the second
 subject under its own `COMPACT_CARD_MAX_CHARS` ceiling (`:97`) before the single `jq -cn` print (`:103-105`) — and `PreCompact` and
 `PostCompact` print nothing at all. `PreCompact` decides whose transcript is compacting and publishes the
 working set, `SessionStart(compact)` serves the card once beside the graph card in that one envelope, and
@@ -5532,8 +5542,8 @@ field, an older hook) kept apart from `0` (measured none).
 vouch for: a missing file, over 64 KB, malformed JSON, an unrecognised state, a
 `sessionId` that no longer matches the registry's uuid for that session (so a
 restarted session cannot inherit its predecessor's state) or no registry uuid to
-check it against, or a write older than 30 minutes. `null` therefore means *no
-fresh hook data* — never a fourth state. That folded read, `readHookState`, has
+check it against, or a file whose `updatedAt`, and `aliveAt` when it has one, are both over 30 minutes old (D-4041: a
+subagent event over a main-thread wait keeps the wait's start in `updatedAt` and writes `aliveAt` = now). `null` therefore means *no fresh hook data* — never a fourth state. That folded read, `readHookState`, has
 a measured sibling, `readHookStateMeasured`, which keeps the one distinction the
 fold drops: a read that *failed* (`unmeasured` — EACCES, a dropped agent round
 trip) apart from one that found no fresh state. The dispatch busy gate reads the
@@ -5691,7 +5701,7 @@ and without hook state present.
 
 ### What a row's lifecycle reads off the registry
 
-Six registry fields, each written by a single choke point so a stamp is
+Seven registry fields, each written by a single choke point so a stamp is
 never left half-true:
 
 | Field | Shape | Written by |
@@ -5702,6 +5712,7 @@ never left half-true:
 | `$REG/<id>.spawn` | `<epoch> <rc>` | `_spawn`, on EVERY verdict (0/2/3/4/5/6), success included — the one channel from a spawn inside the supervisor unit to a `ccd start` polling from another process |
 | `$REG/<id>.started` | `1` | `_reg_claim` — the one writer; nothing clears it but a row's purge, so a failed revival classifies `orphan`, never `never-started` |
 | `$REG/<id>.substrate` | `<epoch> <reason> (client <v>; server <v>)` | `_substrate_mark`, first write wins (the onset is never rewritten); removed by `_substrate_clear` on the first tick whose tmux probe finds the pane live |
+| `$REG/<id>.bgwait` | `state=open job=<job> id=<uuid> since=<epoch> wrapper=<w> sup=<pid> supst=<start>`, then `state=closed … until=<epoch> end=over` | `_ci_held_wait`'s two ends (`_ci_bgwait_open`, `_ci_bgwait_close`): the supervisor of a row whose conversation a live background job holds. `sup` and `supst` name that supervisor (its pid, and its `/proc` start time where there is one). A record is a wait only while that supervisor still runs and the heartbeat is fresh: one left `open` by a stopped or killed supervisor is not a wait, and a supervisor restarted mid-wait takes it over, keeping `since`. It is not a lifecycle input: a waiting row reads `restarting` |
 
 A heartbeat inside **120 seconds** is fresh; the supervisor re-stamps every
 **30 seconds**, so a live loop never drifts stale under its own steady
@@ -5741,6 +5752,22 @@ tooltip. When every watched row (`running` or `restarting`) reports a fault,
 the fleet board says it once: *tmux unreachable on the fleet host — N sessions
 report it (`<reason>`); sessions are still running unattached. Remedy: restart
 tmux or reboot.* Nothing restarts tmux on your behalf.
+
+**When a background job holds the conversation.** Every resume (a restart, a revival, a restore, a swap's carry)
+first follows the transcript's `continued-in` chain to the newest id that has a conversation written in it, so a
+session forked with the left arrow is resumed where it went on, never at the point it forked from. A left-arrow fork
+moves the conversation into a background job, and once its agents view is closed the pane's own process exits; the
+job's worker stays up, idle, for as long as nobody stops it. Claude Code refuses to resume a conversation a live job
+holds, and resuming the pre-fork id would start a second, divergent copy, so the supervisor does neither: it waits,
+keeps its heartbeat (the row reads `restarting`), and records the wait in `$REG/<id>.bgwait` and in swap.log
+(`bgwait` on entry, `bgwait-end` on exit). `ccd start` and `ccd ensure` say so instead of timing out, and
+`ccd ws-restore` of such a row leaves it supervised, so the wait takes over. `<wrapper> attach <job>` opens the
+conversation where it runs; `<wrapper> stop <job>` ends the job, and the row resumes it in the pane on the next
+tick. A swap of such a row is refused before any teardown, and `--force` does not move it (it would be two writers
+across accounts). The fleet board does not say why yet (the row reads `restarting`); the row's `.bgwait` and
+swap.log do. `ccrc doctor`'s `transcripts` check names a row whose marker points at a successor that was never
+written apart from a superseded one: ccd keeps such a row on its own transcript, and the first prompt it answers
+there clears the WARN.
 
 There is deliberately no reconciler daemon and no `ccd doctor`. The
 2026-08-11 incident's stop was itself deliberate — an operator killing a

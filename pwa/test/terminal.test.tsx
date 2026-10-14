@@ -60,6 +60,8 @@ const fakeTermFactory = (cols = 48, rows = 20) => {
       },
       onWheel: () => {},
       fit: () => ({ ...grid }),
+      propose: () => ({ ...grid }),
+      setFontSize: () => ({ ...grid }),
       focus: () => {},
       dispose,
     };
