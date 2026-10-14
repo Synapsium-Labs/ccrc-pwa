@@ -9,10 +9,11 @@ import { STALL_QUIET_MS, parseStallDetail, rungRecipient, stallArmHasRung, stall
 import type { StallArming, StallRecipient } from './stall.js';
 import { mailTurnModeOf, mailTurnReadsMark } from '../turnidle.js';
 import type { MailTurnMode } from '../turnidle.js';
+import { stallDurationText } from '../../../shared/stall-watch.js';
 /**
  * STALL WATCH SETTINGS, the pure half (design 2026-10-05 §5, §6, §7, §10, §12). L1: no clock, no I/O, no `node:`
  * import, no fastify, no store handle and no `db.js`. `stall-settings.test.ts` pins that, in `stall-vocabulary.test.ts`'s
- * idiom: value imports come only from L0 (`shared/api.ts`), `./stall.js` and `../turnidle.js`.
+ * idiom: value imports come only from L0 (`shared/api.ts`, `shared/stall-watch.ts`), `./stall.js` and `../turnidle.js`.
  *
  * What lives here, once:
  * - the ladder's flag and mail-mode columns (`STALL_LADDER`), keyed by L0's `StallLevel`, whose labels and texts are
@@ -462,12 +463,9 @@ export function stallEffectKey(effect: StallWriteEffect, updatedAt: number | nul
   return h.toString(16).padStart(8, '0');
 }
 
-/** A quiet time as the feed body writes it: `30 min`, `2 h`, `2 h 30 min`. */
-function stallQuietWords(ms: number): string {
-  const h = Math.floor(ms / 3_600_000);
-  const m = Math.round((ms % 3_600_000) / 60_000);
-  return h === 0 ? `${m} min` : m === 0 ? `${h} h` : `${h} h ${m} min`;
-}
+/** A quiet time as the feed body writes it: `30 min`, `2 h`, `2 h 30 min`, by L0's one formatter, the one the Settings
+ *  section writes every duration with. */
+const stallQuietWords = stallDurationText;
 function stallLevelChangeWords(p: StallSettingsParsed): string {
   if (p.level.kind === 'follow') return STALL_FOLLOW_LABEL;
   if (p.level.kind === 'chosen') return STALL_LEVEL_TEXT[p.level.level].label;

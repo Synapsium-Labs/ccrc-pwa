@@ -16,7 +16,7 @@ import { api, ApiError, apiErrorText, clipUrl, submitErrorText } from '../lib/ap
 import { toast } from '../components/Toast';
 import { RenderBoundary } from '../components/RenderBoundary';
 import { MsgPlain } from '../lib/markdown';
-import type { PendingAttachment, PendingSend } from '../stores/session';
+import { isLocalDivider, type PendingAttachment, type PendingSend } from '../stores/session';
 import { MailCard } from './MailCard';
 import { TaskCard } from './TaskCard';
 import { MessageBubble, foldsAway, timeOf, type MessageEvent } from './MessageBubble';
@@ -139,7 +139,15 @@ export function buildChatItems(
       const label = dividerLabel(e.ts);
       if (label !== null) items.push({ kind: 'divider', key: `div-${e.uuid}`, label });
     }
-    if (Number.isFinite(t)) lastTs = t;
+    // The NEWEST time seen, never rewound: transcript order is not time order.
+    // An absorbed mid-turn message (D-4950) carries its ENQUEUE time but is
+    // written where the model took it, minutes of records later, so measuring
+    // the next gap from it drew a divider under a turn that never went quiet.
+    // TRANSCRIPT time only: a local divider (a rotation's "Session context
+    // reset", a notice) is stamped with the PHONE's clock at "now", so
+    // counting it pinned this never-rewound clock above every replayed event
+    // and erased each quiet-gap divider after it.
+    if (Number.isFinite(t) && !isLocalDivider(e) && (lastTs === null || t > lastTs)) lastTs = t;
 
     if (e.kind === 'tool_use') {
       const tool: Extract<ChatItem, { kind: 'tool' }> = { kind: 'tool', key: e.toolId, use: e };
