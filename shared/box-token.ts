@@ -106,6 +106,12 @@ export interface BoxTokenView {
   retiredRefused: boolean;            // the server's own proof at the last retirement
   lastBootRecovery: { at: number; source: 'pending' | 'previous' } | null;
   role: NodeRole;
+  /** 4557: when the weekly schedule is next due (ms): the anchor (the last promotion, else when the current value was
+   *  minted) plus TOKEN_ROTATION_INTERVAL_MS, or the view's own `now` when it is due already. More than one interval
+   *  after the server's own `now` means the anchor is ahead of the server's clock; the view carries no server clock, so a
+   *  reader compares against its own. Null only when this server holds no current value. Optional and additive: an
+   *  older server omits it; the console reads it in a later part. */
+  nextRotationAt?: number | null;
 }
 
 export type RotateAnswer =

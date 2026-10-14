@@ -12,7 +12,7 @@ import { ClaimDoor } from './door.js';
 import { NODE_ID_RE } from '../coord/store.js';
 import {
   DRIVER_TICK_MS, FAILURES_FOR_BANNER, ROTATE_NOW_MIN_INTERVAL_MS, STALL_ALERT_MS, TOKEN_FILE_REREAD_MS, applySyncResult,
-  backoffMs, extendedGraceState, handedOutState, nextAction, owe, mintedState, phaseOf, promotedState, rotationGate,
+  backoffMs, extendedGraceState, handedOutState, nextAction, nextScheduledAt, owe, mintedState, phaseOf, promotedState, rotationGate,
   clampRetiredStamp, oweForRetiredPresentation, pendingExitOpen, retiringDigests, retiringLanded, retiringRecorded, stagedState, type BoxTokenState, type GateInput, type GateVerdict, type GenerationObservation, type StageWhy, type SyncResult, type WriteRecord,
 } from './policy.js';
 import type { BothRoleWriter, GateRowsSource, GenerationReader, TokenStore, TokenSyncLink } from './ports.js';
@@ -229,6 +229,7 @@ export class BoxTokenDriver implements TokenRouteDriver {
       retiredRefused: s?.retiredRefusedAt != null,
       lastBootRecovery: s?.lastBootRecovery ?? null,
       role: this.deps.env.role,
+      nextRotationAt: holds && s !== null ? nextScheduledAt(s, now) : null,   // 4557: the scheduled-miss backoff (4558) is not reflected
     };
   }
 

@@ -2544,4 +2544,65 @@ describe('the weekly schedule through the real driver (4556, 4558)', () => {
       expect(sends - before, 'one miss, one 60 s step, the second send by the +2 minute tick').toBe(2);
     } finally { await r2.app.close(); }
   });
+
+  // ── 4557: the view's optional nextRotationAt ──────────────────────────────────────────────────────────────────────
+  it('V1: the view names the next due instant: the last promotion plus the interval', async () => {
+    const { r2, t } = await restartDue(2 * 24 * 3_600_000);
+    try {
+      expect(dueByL0(await stateOf(r2), driverNow(r2))).toBe(false);
+      expect(r2.driver.view().nextRotationAt).toBe(t + WEEK);
+    } finally { await r2.app.close(); }
+  });
+
+  it('V2: a fresh box counts from its mint', async () => {
+    const r = await rig();
+    try {
+      const v = r.driver.view();
+      expect(v.currentSince, 'the fixture must hold a minted current value').not.toBeNull();
+      expect(v.lastRotationAt, 'a fresh mint has promoted nothing').toBeNull();
+      expect(v.nextRotationAt).toBe((v.currentSince as number) + WEEK);
+    } finally { await r.app.close(); }
+  });
+
+  it('V3: a due schedule held on a closed gate reads now, never null', async () => {
+    const { r2 } = await restartDue(WEEK + 60_000);
+    try {
+      expect(dueByL0(await stateOf(r2), driverNow(r2))).toBe(true);
+      r2.rows.linkUp = false;
+      await r2.driver.tick();
+      expect(r2.agent.calls).toBe(0);
+      expect((await stateOf(r2)).hold).toBe('link-down');
+      const lo = driverNow(r2);
+      const next = r2.driver.view().nextRotationAt;
+      const hi = driverNow(r2);
+      expect(next).not.toBeNull();
+      expect(next as number).toBeGreaterThanOrEqual(lo);
+      expect(next as number).toBeLessThanOrEqual(hi);
+    } finally { await r2.app.close(); }
+  });
+
+  it.skipIf(isRoot)('V4: a box with history whose boot mint fails reads null: no current value, no schedule to name', async () => {
+    const first = await rig({ handMade: 'e'.repeat(64) });
+    await first.driver.tick();                                                   // rotated: the state now has a history
+    await first.app.close();
+    const dir = path.join(first.home, '.ccrc');
+    rmSync(path.join(dir, 'mail.token'));
+    rmSync(path.join(dir, 'mail-previous.token'), { force: true });
+    const r = await rig({ home: first.home, fleetHome: first.fleetHome, lockDirForBoot: true });
+    try {
+      expect(r.boot.holder.hasCurrent(), 'the fixture must hold no current value').toBe(false);
+      expect(r.driver.view().origin, 'the state must survive the failed mint').not.toBeNull();
+      expect(r.driver.view().nextRotationAt).toBeNull();
+    } finally { await r.app.close(); }
+  });
+
+  it('V5: a stamp ahead of the clock by less than an interval names the stamp plus the interval, more than one interval after the server now', async () => {
+    const { r2, t } = await restartDue(-10 * 60_000);
+    try {
+      expect(dueByL0(await stateOf(r2), driverNow(r2))).toBe(false);
+      const next = r2.driver.view().nextRotationAt as number;
+      expect(next).toBe(t + WEEK);
+      expect(next - driverNow(r2), 'the view carries no server clock: the future stamp shows as a due instant past one interval').toBeGreaterThan(WEEK);
+    } finally { await r2.app.close(); }
+  });
 });
