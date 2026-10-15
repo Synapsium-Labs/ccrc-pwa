@@ -8,9 +8,11 @@
 // (d) the one-shot `ctrl` latch, which the drawer feeds the next letter typed
 //     into xterm's textarea (Task 12; `drawer-paste.test.tsx`);
 // (e) the bar wraps when it does not fit, at any width, never at a breakpoint
-//     (`key-bar-wraps-when-it-does-not-fit`): two even halves, read from
-//     chat.css as text (jsdom applies no stylesheet) and checked by arithmetic
-//     from the tokens at 360–460px; and every key is a --tap-min target;
+//     (`key-bar-wraps-when-it-does-not-fit`): two even halves, and the row `⋯`
+//     opens in four groups, read from chat.css as text (jsdom applies no
+//     stylesheet) and checked by arithmetic from the tokens at 320–1280px; the
+//     ^C confirm's two choices kept together beside its sentence; and every key
+//     is a --tap-min target;
 // (f) single definition: no key byte is spelled under `pwa/src/session/`
 //     outside `keyBar.ts`, and the scan is proved live on that file;
 // (g) no two modules under `pwa/src` differ only in case, which is why the
@@ -19,6 +21,30 @@
 //     view, or through the latch — asks before it sends while Claude Code's
 //     exit notice is on the screen, reading the model at tap time; a physical
 //     Ctrl-C typed into the terminal is never asked about.
+//
+// MUTATION TABLE for (e), the stage-1 fix round (RUN 2026-10-15: each mutant
+// applied, this suite run alone, the file restored from a copy and compared;
+// every row RED). RED FIRST: 20 of the bar's new cases failed against the
+// 420px bar (with `barBreak` a stub), and 5 of the overflow row's against its
+// thirteen loose caps; the confirm case against the old confirm.
+//   the bar does not wrap (.term-keys flex-wrap removed) ...... the wraps-and-centring case
+//   a 420px breakpoint wraps the bar again .................... the no-width-breakpoint case
+//   the bar stretches its items across lines (align-items) .... the wraps-and-centring case
+//   a half scrolls its caps (overflow-x: auto, nowrap) ........ the wraps-and-centring case
+//   the tail wraps (the door can fall to a line alone) ........ the wraps-and-centring case
+//   barBreak does not break (one half holds every key) ........ 24 cases: barBreak, quarters, the halves, every line case
+//                                                                  (wrapped 360–438, the grid 360–460, the overflow row 320–600)
+//   barBreak floors (the first half the smaller) .............. the barBreak case
+//   the door outside the tail (a direct item of the bar) ...... the two halves cases, and the arithmetic at 390–438px
+//   the halves grow equally ................................... the two halves cases
+//   the overflow row is one group (quarters returns [caps]) ... 10 cases: quarters, the four groups, the overflow row 320–600px
+//   the overflow row is halves only ........................... 6 cases: quarters, the four groups, the overflow row 320–414px
+//   the overflow groups grow equally .......................... the four-groups case
+//   the overflow row does not wrap ............................ the line-of-its-own case
+//   confirm: the choices not grouped .......................... the confirm-keeps-its-choices case
+//   confirm: send stretches again (flex: none removed) ........ the same case
+//   confirm: the sentence grows ............................... the same case
+//   confirm: the choices wrap apart ........................... the same case
 import { readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
