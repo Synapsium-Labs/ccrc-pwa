@@ -2858,12 +2858,23 @@ mail and run records still land in the feed.
 
 **Answering inside the app.** A pending question raises a bottom sheet on the session screen and puts a waiting
 dot on its row and card. A menu Claude Code drew becomes large tappable rows carrying the digits the TUI answers
-to, the preselected one marked `❯`; an `AskUserQuestion` shows the full question and the option descriptions
-(only the first question of a multi-question ask is tappable); a permission prompt shows **Allow** and **Deny**
-(Deny sends Escape); a menu the server could not parse is shown raw beside **Open terminal to answer**. A tap
-shows `answering…`, and the sheet closes only when the server reports the menu gone; a stale answer is refused
-and the sheet redraws from the current menu. Dismissing it only hides it — the row keeps saying `waiting`, and
-**Answer** in the transcript raises it again.
+to, the preselected one marked `❯`; a permission prompt shows **Allow** and **Deny** (Deny sends Escape); a menu
+the server could not parse is shown raw beside **Open terminal to answer**. A tap shows `answering…`, and the
+sheet closes only when the server reports the menu gone; a refused answer says why, by the route's code, and the
+sheet redraws from the current menu. Dismissing it only hides it — the row keeps saying `waiting`, and **Answer**
+in the transcript raises it again.
+
+An `AskUserQuestion` shows the full question, its header and the option descriptions, and the sheet follows the
+pane through the whole ask (D-5089): the tappable question is the one the pane is painting, matched by its labels
+and, where two questions share them, by the pane's title; the sheet says which of N it is, lists the others
+read-only, and ends on the pane's review screen with **Submit answers** and a **Cancel** that says first that it
+declines every answer. Own words go through the question's own free-text row (`/dialog/text`, D-5090): the text
+stays in the field until the terminal shows the answer taken, a refusal says why and keeps it, a row left holding
+the whole text is submitted without typing it again, a paste over the 1000-character limit is counted and held
+rather than cut, and **Chat about this** is a row of its own that says it declines the ask. A multiSelect question
+is a set of checkboxes, committed whole with **Next** (`/dialog/multi`, D-5091). One send is under way at a time,
+and the rows that decline the whole ask wait for it. When the hook's envelope ages out, thirty minutes into an
+unanswered ask, the sheet carries on from the pane alone with the same rows, field and boxes.
 
 Five routes act on what the pane already shows, each with its own named refusals:
 
