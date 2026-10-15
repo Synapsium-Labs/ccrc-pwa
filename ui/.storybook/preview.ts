@@ -5,6 +5,7 @@ import type { Preview, Decorator } from '@storybook/react-vite';
 // where preflight beats `@layer utilities` and every button loses its fill.
 import './preview.css';
 import { THEMES, PHOSPHOR, applyTheme } from '../src/styles/themes';
+import { SKINS, REFINED, applySkin, resolveSkin } from '../src/styles/skins';
 
 /** Stamp the theme on <html>, THE WAY THE APP DOES — which is the whole point.
  *
@@ -30,8 +31,18 @@ const withTheme: Decorator = (Story, context) => {
   return Story();
 };
 
+/** Stamp the skin on <html>, through `applySkin` — the function the app's
+ *  `setSkin` calls — for the theme decorator's reason: Storybook and the app
+ *  cannot disagree about what selecting a skin means (D-5093). The global is
+ *  resolved first, so a stale value in a bookmarked URL stamps the default
+ *  rather than an attribute no block answers. */
+const withSkin: Decorator = (Story, context) => {
+  applySkin(resolveSkin(context.globals['skin'] as string | undefined), document.documentElement);
+  return Story();
+};
+
 const preview: Preview = {
-  decorators: [withTheme],
+  decorators: [withTheme, withSkin],
   globalTypes: {
     theme: {
       description: 'Palette — every one the app can render',
@@ -49,8 +60,22 @@ const preview: Preview = {
         dynamicTitle: true,
       },
     },
+    skin: {
+      description: 'Skin — density, structure and chrome; never colour',
+      toolbar: {
+        title: 'Skin',
+        icon: 'component',
+        // DERIVED from the catalogue, never re-listed — the same binding as
+        // the theme toolbar above, held by `skin-catalogue.test.ts`.
+        items: SKINS.map((s) => ({
+          value: s.id,
+          title: s.preview ? `${s.label} (preview)` : s.label,
+        })),
+        dynamicTitle: true,
+      },
+    },
   },
-  initialGlobals: { theme: PHOSPHOR },
+  initialGlobals: { theme: PHOSPHOR, skin: REFINED },
   parameters: {
     layout: 'centered',
     backgrounds: { disable: true }, // the decorator owns the ground

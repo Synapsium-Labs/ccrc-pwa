@@ -59,6 +59,10 @@
 @import 'tailwindcss/theme.css' layer(theme);
 @import 'tailwindcss/utilities.css' layer(utilities);
 @import './tokens.css';
+/* The skin axis (D-5093): Instrument's overrides of :root's role, radius,
+   elevation and motion tokens. After tokens.css so the override reads after
+   what it overrides; its (0,2,0) selector, not this order, is what wins. */
+@import './skins.css';
 
 /* Tailwind's automatic source detection is rooted at THIS file's directory,
    which holds only stylesheets. The components live two levels up, so the
@@ -178,6 +182,18 @@
   --text-xl:    var(--fs-xl);
   --text-2xl:   var(--fs-2xl);
   --text-input: var(--fs-input);
+  --text-md:    var(--fs-md);
+
+  /* The type ROLES (D-5093): a size by what it is for, re-pointed per skin
+     in skins.css. Each is a NEW key, so tailwind-merge has to be taught it
+     (ui/src/lib/cn.ts) or `text-meta` deletes the ink beside it. Tailwind
+     attaches no companion line-height to a key it did not define, so a role
+     sets font-size only — pair it with a `leading-*` where the line matters. */
+  --text-ui:      var(--fs-ui);
+  --text-prose:   var(--fs-prose);
+  --text-meta:    var(--fs-meta);
+  --text-page:    var(--fs-page);
+  --text-section: var(--fs-section);
 
   --leading-tight:  var(--lh-tight);
   --leading-normal: var(--lh-normal);
@@ -201,6 +217,12 @@
   --spacing-tap:  var(--tap-min);
   --spacing-lamp: var(--lamp-size);
   --spacing-well-max: var(--well-max);
+  /* The density ROLES (D-5093). One spacing key reaches p, px, gap, m, h and
+     min-h at once; cn.ts's merge learns the same four names. */
+  --spacing-gutter:  var(--gutter);
+  --spacing-row:     var(--row-h);
+  --spacing-card:    var(--pad-card);
+  --spacing-section: var(--gap-section);
 
   --radius-sm:   var(--r-sm);
   --radius-md:   var(--r-md);

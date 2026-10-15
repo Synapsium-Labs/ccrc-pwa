@@ -354,6 +354,32 @@ describe('every class string survives the merge that renders it', () => {
     expect(lost).toEqual([]);
   });
 
+  // THE SKIN ROLES ARE NEW KEYS, AND AN UNTAUGHT MERGE MISREADS THEM (D-5093).
+  // Measured with `cn.ts`'s own config on tailwind-merge 3.7.0 before it was
+  // taught: `cn('text-ink-primary', 'text-meta')` returned "text-meta" — the
+  // prefix rule read the role as a text COLOUR and deleted the ink — and the
+  // same for `text-ui` and `text-page`. The spacing roles failed the other
+  // way: `cn('p-4', 'p-gutter')` kept both, so a caller's role never replaced
+  // a component's step and Tailwind's emit order picked. Nothing reads a role
+  // yet (Task 14 adopts them), so these are the only places the loss shows.
+  it('an ink survives beside every new size key', () => {
+    for (const k of ['md', 'ui', 'prose', 'meta', 'page', 'section']) {
+      expect(cn('text-ink-primary', `text-${k}`).split(/\s+/), `text-${k}`)
+        .toEqual(['text-ink-primary', `text-${k}`]);
+    }
+  });
+
+  it('a new spacing key replaces its scale twin', () => {
+    expect(cn('p-4', 'p-gutter')).toBe('p-gutter');
+    expect(cn('px-4', 'px-gutter')).toBe('px-gutter');
+    expect(cn('min-h-[52px]', 'min-h-row')).toBe('min-h-row');
+    expect(cn('h-8', 'h-row')).toBe('h-row');
+    expect(cn('p-3', 'p-card')).toBe('p-card');
+    expect(cn('gap-2', 'gap-section')).toBe('gap-section');
+    // And back: a scale step after a role replaces the role.
+    expect(cn('p-gutter', 'p-4')).toBe('p-4');
+  });
+
   it('still lets a caller override what a component set', () => {
     // The other direction, and the reason `cn` exists at all: teaching it the
     // two groups must not turn it into `clsx`. A width, an ink and a size are
