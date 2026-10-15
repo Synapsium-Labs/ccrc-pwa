@@ -2968,7 +2968,7 @@ _hook_history_card() {   # folds the history line into CARD_COMPACT; silent; bui
   elif _ct_read "$REG/$id.generation"; [[ -e "$REG/$id.generation" || -L "$REG/$id.generation" ]]; then
     if [[ -L "$REG/$id.generation" ]] || (( CT_RAWN >= CCRC_ID_MAX )); then via=bad; elif [[ "$CT_V" =~ $uuid_re ]]; then gen="$CT_V" via=registry; elif [[ -n "$CT_V" ]]; then via=bad; fi
   fi
-  [[ -L "$off" || ( -e "${off%/*}" && ! ( -d "${off%/*}" && -x "${off%/*}" ) ) ]] && return 0
+  [[ -L "$off" || -L "${off%/*}" || ( -e "${off%/*}" && ! ( -d "${off%/*}" && -x "${off%/*}" ) ) ]] && return 0
   if [[ -e "$off" ]]; then
     [[ -f "$off" && -r "$off" ]] || return 0
     IFS= read -r -N "$CCRC_ID_MAX" o 2>/dev/null < "$off"

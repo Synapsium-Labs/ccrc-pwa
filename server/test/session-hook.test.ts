@@ -12029,7 +12029,7 @@ describe('history card line: SessionStart(compact) serves the sweep\'s predictio
   const NBSP_G = `${String.fromCharCode(0xa0)}${GENERATION}\n`;
   const BOM_G = `${String.fromCharCode(0xfeff)}${GENERATION}\n`;
   type Reg = 'G' | 'G2' | 'absent' | 'unreadable' | 'symlink-G' | 'junk' | 'G-wide' | 'G-nbsp' | 'empty' | 'blank-wide' | 'G2-wide-junk' | 'dangling';
-  type Off = 'absent' | 'G' | 'G-padded' | 'G-wide' | 'G-nbsp' | 'G-bom' | 'G2' | 'empty' | 'unreadable' | 'dir' | 'symlink-G' | 'unsearchable' | 'parent-file' | 'G2-tabcr';
+  type Off = 'absent' | 'G' | 'G-padded' | 'G-wide' | 'G-nbsp' | 'G-bom' | 'G2' | 'empty' | 'unreadable' | 'dir' | 'symlink-G' | 'unsearchable' | 'parent-file' | 'G2-tabcr' | 'link-loop' | 'link-notdir' | 'link-000' | 'link-dangling';
   type Rec = 'G' | 'G2' | 'legacy' | 'absent' | 'junk' | 'symlink-G';
   /** B1's Presence, as a type-only import expression: this file gains no import line (the census cites it by line). */
   type Pres = import('../../ccd/history/lib.mjs').Presence<string>;
@@ -12057,6 +12057,12 @@ describe('history card line: SessionStart(compact) serves the sweep\'s predictio
     // cannot be searched) or ENOTDIR (a file where the directory goes) as UNREADABLE, so off (exit 8); the hook agrees.
     ['recall-off/ itself at mode 000 (cannot be searched)', GENERATION, 'G', 'unsearchable', 'G'],
     ['a regular file where the recall-off/ directory goes', GENERATION, 'G', 'parent-file', 'G'],
+    // F5 of review 476 (D-5060): recall-off/ itself a link. The CLI opens through it and reads ELOOP, ENOTDIR and EACCES
+    // as UNREADABLE (off); builtins cannot tell those from ENOENT, so the hook withholds on any link (RV9 forbids one).
+    ['recall-off/ a link that loops on itself (ELOOP)', GENERATION, 'G', 'link-loop', 'G'],
+    ['recall-off/ a link through a regular file (ENOTDIR)', GENERATION, 'G', 'link-notdir', 'G'],
+    ['recall-off/ a link into a directory at mode 000 (EACCES)', GENERATION, 'G', 'link-000', 'G'],
+    ['recall-off/ a dangling link (fail-closed: the CLI reads ENOENT as absent and recalls)', GENERATION, 'G', 'link-dangling', 'G', 'fail-closed'],
     ['a malformed env generation falls back to .generation (named)', 'not-a-uuid', 'G', 'G', 'G'],
     ['a malformed env generation falls back to .generation (stale)', 'not-a-uuid', 'G', 'G2', 'G'],
     ['the env generation wins over .generation (named)', GENERATION, 'G2', 'G', 'G'],
@@ -12100,7 +12106,7 @@ describe('history card line: SessionStart(compact) serves the sweep\'s predictio
     ['the env generation wins over the record', GENERATION, 'absent', 'G2', 'G2'],
     ['the registry generation wins over the record', '', 'G', 'G2', 'G2'],
   ];
-  const parityRows = PARITY.filter(([, , r, o]) => !ROOT || (r !== 'unreadable' && o !== 'unreadable' && o !== 'unsearchable'));
+  const parityRows = PARITY.filter(([, , r, o]) => !ROOT || (r !== 'unreadable' && o !== 'unreadable' && o !== 'unsearchable' && o !== 'link-000'));
   /** The text each Reg kind plants in $REG/<id>.generation (the CLI reads the same text through presenceOf's trim). */
   const REG_TEXT: Partial<Record<Reg, string>> = {
     G: GENERATION, G2, junk: 'not-a-generation', empty: '',
@@ -12114,7 +12120,7 @@ describe('history card line: SessionStart(compact) serves the sweep\'s predictio
     if (regKind === 'dangling') fs.symlinkSync(path.join(home, 'gen-nowhere'), genFile);
     if (regKind === 'symlink-G') { fs.writeFileSync(path.join(home, 'gen-target'), GENERATION); fs.symlinkSync(path.join(home, 'gen-target'), genFile); }
     const off = histDir('recall-off', ID);
-    if (offKind === 'parent-file') fs.rmSync(histDir('recall-off'), { recursive: true, force: true });
+    if (offKind === 'parent-file' || offKind.startsWith('link-')) fs.rmSync(histDir('recall-off'), { recursive: true, force: true });
     else fs.mkdirSync(histDir('recall-off'), { recursive: true, mode: 0o700 });
     if (offKind === 'G') fs.writeFileSync(off, `${GENERATION}\n`);
     if (offKind === 'G-padded') fs.writeFileSync(off, `  ${GENERATION}  \n\n`);
@@ -12130,6 +12136,17 @@ describe('history card line: SessionStart(compact) serves the sweep\'s predictio
     // The file inside is a stale value, so a reader that searched the directory would serve; the mode comes last.
     if (offKind === 'unsearchable') { fs.writeFileSync(off, `${G2}\n`); fs.chmodSync(histDir('recall-off'), 0o000); }
     if (offKind === 'parent-file') fs.writeFileSync(histDir('recall-off'), `${G2}\n`);
+    // A link at recall-off/ itself. The 'stale' value sits where a reader that followed the link would find it.
+    const rdir = histDir('recall-off');
+    if (offKind === 'link-loop') fs.symlinkSync(rdir, rdir);
+    if (offKind === 'link-notdir') { fs.writeFileSync(path.join(home, 'off-file'), 'x'); fs.symlinkSync(path.join(home, 'off-file', 'sub'), rdir); }
+    if (offKind === 'link-000') {
+      fs.mkdirSync(path.join(home, 'off-root', 'sub'), { recursive: true });
+      fs.writeFileSync(path.join(home, 'off-root', 'sub', ID), `${G2}\n`);
+      fs.symlinkSync(path.join(home, 'off-root', 'sub'), rdir);
+      fs.chmodSync(path.join(home, 'off-root'), 0o000);
+    }
+    if (offKind === 'link-dangling') fs.symlinkSync(path.join(home, 'off-nowhere'), rdir);
     // The sweep's generation record beside the prediction (Task 5; plantAll made card/<id>/).
     const rec = histDir('card', ID, `${SID}.gen`);
     fs.rmSync(rec, { force: true });
@@ -12158,7 +12175,8 @@ describe('history card line: SessionStart(compact) serves the sweep\'s predictio
       : offKind === 'G' || offKind === 'G-padded' || offKind === 'G-wide' || offKind === 'G-nbsp' || offKind === 'G-bom'
         ? { state: 'value', value: GENERATION }
         : offKind === 'G2' || offKind === 'G2-tabcr' ? { state: 'value', value: G2 }
-          : offKind === 'empty' ? { state: 'value', value: '' } : { state: 'unreadable' };
+          : offKind === 'empty' ? { state: 'value', value: '' }
+            : offKind === 'link-dangling' ? { state: 'absent' } : { state: 'unreadable' };
     const generation = cliGeneration(envGen, regGen, recKind);
     // An absent or unreadable file needs no generation (B2 readContext's offNow): decided now, whatever it is.
     if (generation === null) return file.state === 'value' ? 'unknown' : lib.decideRecallOff({ file, generation: GENERATION });
