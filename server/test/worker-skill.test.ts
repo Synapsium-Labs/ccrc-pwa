@@ -24,6 +24,7 @@ import { FAILURE_KINDS, MAIL_MAX_ATTEMPTS, SUITE_WORDS, WAVE_DONE_SUBJECT, type 
 import { WORKER_KICKOFF_PREFIX } from '../src/coord/dispatch.js';
 import { SUBAGENT_CLASSES } from '../../shared/models.mjs';
 import { STALL_RESUMING_KINDS, STALL_WAKE_KINDS } from '../src/coord/stall.js';
+import { COLLECT_LANE_LIVE_MARKER } from '../src/collectLane.js';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const skillDir = path.join(root, 'ccd/worker-skill');
@@ -689,6 +690,21 @@ describe('the worker skill: the routing clauses (routing slice 2)', () => {
   // them.
   it('never names the stall-watch settings door — the worker a check is about is the session most motivated to lower the watch', () => {
     expect(skill).not.toContain('/api/coord/stall-watch');
+  });
+
+  // The collector switch is the operator's alone (path-identity spec 2026-10-12
+  // §5.6, §5.9). Settings, or the hand-touched legacy file, arms the deletion of
+  // temp roots that belong to dispatched workspaces like this one. The skill
+  // names neither of the route's two methods, nor that file, which is read here
+  // from its definer. The bare `collect-lane` token covers the route, the file
+  // and the generation journal at once.
+  it('never names the collector switch or its legacy file — the session whose temp root it removes is the one most motivated to arm or stop it', () => {
+    const words = ['/api/coord/collect-lane', 'GET /api/coord/collect-lane', 'POST /api/coord/collect-lane',
+      'COLLECT_LANE_LIVE_MARKER', COLLECT_LANE_LIVE_MARKER, 'collect-lane'];
+    const named = (text: string): string[] => words.filter((w) => text.includes(w));
+    expect(named(`${skill}\nPOST /api/coord/collect-lane\n`), 'CONTROL: a mention planted in a scratch copy is seen')
+      .toEqual(['/api/coord/collect-lane', 'POST /api/coord/collect-lane', 'collect-lane']);
+    expect(named(skill)).toEqual([]);
   });
 });
 

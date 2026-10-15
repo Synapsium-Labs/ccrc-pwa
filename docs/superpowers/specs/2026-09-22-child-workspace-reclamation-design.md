@@ -1347,6 +1347,21 @@ the lock before anything moves:
 
   Arming is what makes "an orphaned temp root is collected with no human act" true.
 
+**The Settings switch (wave 10), as built.** Wave 10 gives the lane two arms, then one (design
+`docs/superpowers/specs/2026-10-12-path-identity-design.md` §5). The lane is live while `$REG/collect-lane-live`
+stands and its retirement is not yet recorded, or while Settings stores exactly `live` for the fleet node the server
+measured on its current connection; a raised pause, an unlistable registry, a changed connection and a missing
+capability beat both. The choice is the singleton `collect_lane_settings` row in `coord.db`, and every accepted change
+first appends one generation to the server-owned `~/.ccrc/collect-lane-generation.log`; the row and the journal must
+agree exactly, or the lane is safety-stopped and composes nothing. The executor still decides last: after its final
+listing it retires the file when that listing is coherent, unpaused, on the job's epoch and shows the file absent,
+then reads the row, the journal, the node and both capabilities again and resolves, with no await before the argv.
+The pass retires a removed file the same way from its own listing, so an idle lane retires it within one pass. The
+lane flips on the effective boolean, never on its source: a move from the file to Settings while both arm writes no
+row and keeps every pair. Off is refused before the retirement, and Live is refused while sign-in is dark. An Off
+accepted after an act's argv was handed to ccd does not stop that act. The checks under "Before arming" above apply
+to arming in Settings as they do to the file.
+
 **The registry-row rule is asked by the collector itself.** The removal helper does not carry it (§5.6). It is the
 question §5.5 asks of a leaf, in one registry pass with the leaf as the workdir: every row, standing or placed by
 either gone-row arm, compared literally and resolved, at, inside or through the leaf. An unlistable registry, or a
@@ -1943,6 +1958,7 @@ unbindable — without any destructive verb existing yet.
 | 7 | agent (inert) | the collector verb for a witnessed child temp root that a human verb or a kept tail left behind: `ws-audit --collect` and `ws-collect`, the quarantine record, the `collect` act and its words, the `collect-v1` capability token and the agent grant on `--expect`; and the reclaim tail's ccd corrections, which `ws-expire` shares: `containment-refuted`, `crumb`, rung 8's reading of git's silent omission, the capped permission-pass reason, and the reclaim token's binding to the row's generation | the fleet's `ccd caps` advertises the collector's token, and nothing composes it yet |
 | 8 | server | reclaim's server half, as built: the queued licence keyed on the row's generation and re-proved at the executor's re-read and the audit's key (§5.5); the hold-retired memory keyed the same way (§5.7); a birth that a later removal unplaces unless it is the row's own (§5.7); the reader of `crumb` on the verb's failed document and the audit arm that reads an exit-1 audit document's `resume` (§5.9); `containment-refuted` as the stuck class, listed at once and retried on a persistent tier that never stops (§5.7, §5.9); and the report of what a tail kept (`clipsKept`, `tmpRootKept`), which outlives the purged row (§5.9) | a licence minted for one row is never spent on a re-mint of its id; a proven, persistent failure is listed at once and retried slowly, never given up; a kept leaf is reported after its row is purged |
 | 9 | server | the collector's lane, as built and shipped shadowed behind `$REG/collect-lane-live`: its population from the two registry listings and the one id predicate; two observations of one token, the second the act job's own audit, before one act; the capability, pause, presence and open-run gates; its own pacing over reclaim's ramp and tier, and its own destructive slot; collector items in the cleanup row's list, and the feed (§5.10) | in shadow every would-collect is recorded and nothing is composed; once the operator arms it, an orphaned temp root is collected with no human act |
+| 10 | server + pwa | the collector switch in Settings, as built: the `collect_lane_settings` row and the server-owned generation journal that must agree exactly; the fleet node bound to the server's current connection; the switch resolved after the executor's last await; the legacy file's retirement through the journal, from the pass and the executor; `GET` and `POST /api/coord/collect-lane`, session-gated with no box token; the Temp root collector section; restore and downgrade wording that leaves the journal in place (§5.10; path-identity design §5) | Settings arms and stops the collector for the measured fleet node; once the operator removes the legacy file, nothing else arms it, and no database-only restore, re-created file or other fleet box can arm deletion the operator turned off |
 
 Wave 3 built the destructive verb, and it is the one to review hardest. Every later wave that changes what
 reaches a destructive act is reviewed for safety too: wave 4's sweep is its first automatic caller, wave 5's
@@ -1954,7 +1970,8 @@ half and the collector's lane both edit the sweep, so wave 9 was dispatched once
 wave 7's token and wave 8 had merged. Wave 9's subject is what `ws-collect` is licensed against, and it ships its lane
 shadowed: arming it is the operator's act, after the checks §5.10 names. Delivery cancellation rides with wave 3 rather than with
 the sweep, because §5.6 makes it part of the act: shipping reclaim-on-close without it would run the
-slug-recycling hazard at the new, higher rate for as long as wave 4 took to land.
+slug-recycling hazard at the new, higher rate for as long as wave 4 took to land. Wave 10 changes what arms the
+collector's deletion, so it is reviewed for safety too; it changes no ccd verb.
 
 ---
 

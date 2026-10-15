@@ -1,0 +1,31 @@
+ ❯ run the build for project-a
+
+ ● Bash(npm run build --workspace project-a)
+   ⎿  Waiting…
+
+──
+  Bash command
+
+─╌
+    │ npm run build --workspace project-a --verbose
+      --loglevel=info --flag-one=value-one
+      --flag-two=value-two --flag-three=value-three
+      --flag-four=value-four --flag-five=value-five
+      --flag-six=value-six
+    │ --flag-seven=value-seven --flag-eight=value-eight
+      --report=build/report.json
+─╌
+    Build project-a with verbose logs
+
+  Permission rule Bash requires confirmation for this
+  command.
+
+  Do you want to proceed?
+  ❯ 1. Yes
+    2. Yes, and do not ask again for npm run build commands
+       in project-a that pass verbose logging flags to the
+       bundler and write the report to the build directory
+    3. Yes, allow reads from src/ during this session
+    4. No, and tell Claude what to do differently (esc)
+
+  Esc to cancel · Tab to amend
