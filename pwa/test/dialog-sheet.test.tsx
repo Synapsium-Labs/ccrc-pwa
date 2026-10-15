@@ -10,6 +10,14 @@ import { ToastHost } from '@ccrc/ui';
 import { api, ApiError } from '../src/lib/api';
 import { DialogSheet } from '../src/session/DialogSheet';
 import { createSessionStore } from '../src/stores/session';
+import {
+  CACHING_TRACING,
+  DRINK_FEATURES_TOOLS,
+  FOUR_Q,
+  FRUIT_DRINK,
+  PETS_SIZE_MODE,
+  pane,
+} from './askPanes';
 
 afterEach(() => {
   cleanup();
@@ -27,7 +35,8 @@ const fakeSocket = (): WebSocket =>
     close(): void {},
   }) as unknown as WebSocket;
 
-const SESSION_ID = 'claude:OpenClawHetzner';
+// Neutral, as every session id in this public repository is (D-5089's task renamed it).
+const SESSION_ID = 'lane-a:project-a';
 
 const parsedDialog = (patch: Partial<Dialog> = {}): Dialog => ({
   id: 'd-abc',
@@ -750,8 +759,10 @@ describe('DialogSheet (hook envelope)', () => {
     expect(go).toBeDisabled();
     fireEvent.click(go);
     expect(spy).not.toHaveBeenCalled();
+    // D-5089: the pane's title names the question, so the sheet says what it is rather than that it cannot be
+    // matched (D-5091 turns this into boxes where the pane carries `Dialog.multi`).
     const copy = document.querySelector('.ask-envelope .dlg-copy')!;
-    expect(copy.textContent).toMatch(/more than one answer/i);
+    expect(copy.textContent).toMatch(/several answers/i);
     expect(copy.textContent).toMatch(/terminal pane/i);
     expect(copy.textContent).not.toMatch(/catch up/i);
   });
@@ -1103,23 +1114,24 @@ describe('DialogSheet (hook envelope)', () => {
     });
 
     it('I3: a read-only rest-question row carries the muted treatment attribute', () => {
+      // D-5089: the rest are listed one row per QUESTION (its number and text), not by their options.
       renderWithAsk(TWO_QUESTIONS, envDialog());
-      const euRow = screen.getByText('EU').closest('.opt');
-      expect(euRow).toHaveAttribute('aria-disabled', 'true');
+      const row = screen.getByText('Second: which region?').closest('.opt');
+      expect(row).toHaveAttribute('aria-disabled', 'true');
     });
   });
 
-  // — fix round 1, (I2): only questions[0] is tappable —
-  it('with more than one question, only the first is tappable — the rest render read-only', () => {
+  // — fix round 1, (I2), as D-5089 left it: the question the PANE is painting is the tappable one. With question 1 on
+  // the pane that is question 1, and question 2 waits read-only (the control for "the envelope follows the pane").
+  it('question 1 on the pane: question 1 is tappable, question 2 waits read-only', () => {
     const spy = vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise(() => {}));
     renderWithAsk(TWO_QUESTIONS, envDialog());
 
-    // The second question's copy is on screen…
+    // The second question is on screen…
     expect(screen.getByText('Second: which region?')).toBeInTheDocument();
-    expect(screen.getByText('EU')).toBeInTheDocument();
     // …but not as a button: no accidental "digit 1 answers the wrong question".
-    expect(screen.queryByRole('button', { name: 'EU' })).not.toBeInTheDocument();
-    expect(screen.getByText('EU').closest('button')).toBeNull();
+    expect(screen.queryByRole('button', { name: /Second: which region\?/ })).not.toBeInTheDocument();
+    expect(screen.getByText('Second: which region?').closest('button')).toBeNull();
 
     fireEvent.click(screen.getByRole('button', { name: 'Prod' }));
     expect(spy).toHaveBeenCalledWith(SESSION_ID, 'd-abc', 2);
@@ -1177,6 +1189,228 @@ describe('DialogSheet (hook envelope)', () => {
       const deny = screen.getByRole('button', { name: /Deny/ });
       fireEvent.click(deny);
       expect(deny).toHaveAttribute('aria-busy', 'true');
+    });
+  });
+});
+
+// — the envelope follows the pane (D-5089) —
+//
+// Plan docs/superpowers/plans/2026-10-15-ask-sheet-half.md, Task 2. The hook writes every question of an ask at once
+// and keeps the envelope until the tool call ends, while the pane paints one question at a time, then the review
+// screen. The sheet answers the question the PANE is painting (`askLive.ts`'s `liveQuestion`), lists the others
+// read-only, offers the review's own two rows, and says plainly what it cannot answer. When the envelope ages out
+// (`ask_cleared`) the scraped sheet takes over the same pane with the same behaviour.
+//
+// Every screen is a recorded Claude Code 2.1.300 one (`askPanes.ts`, kept equal to `parseDialog` by
+// server/test/dialog.test.ts), named by its fixture; an envelope no recording shows is DERIVED and says so.
+describe('the envelope follows the pane (D-5089)', () => {
+  const renderAsk = (ask: HookAsk, dialog: Dialog | null) => {
+    const store = makeStore();
+    act(() => {
+      if (dialog) store.getState().apply({ type: 'dialog', dialog });
+      store.getState().apply({ type: 'ask', ask, key: null });
+    });
+    render(
+      <>
+        <DialogSheet id={SESSION_ID} store={store} onOpenTerminal={vi.fn()} />
+        <ToastHost />
+      </>,
+    );
+    return { store };
+  };
+  const heading = (name: string): HTMLElement => screen.getByRole('heading', { name });
+  const pending = (): ReturnType<typeof vi.spyOn> =>
+    vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise(() => {}));
+  const CANCEL_SAYS = 'Declines every question in this ask — nothing you answered is sent.';
+  /** The one option BUTTON whose label is exactly `label` (a read-only row is a div, and is not one). By label, not
+   *  by accessible name: the name runs the label into its description (`NoLeave tracing off`), and `/^No/` also
+   *  matches the terminal CTA's `Not now`. */
+  const optionButton = (label: string): HTMLButtonElement => {
+    const buttons = screen.getAllByText(label, { selector: '.opt-label' })
+      .map((l) => l.closest('button'))
+      .filter((b): b is HTMLButtonElement => b !== null);
+    expect(buttons, `option buttons reading ${label}`).toHaveLength(1);
+    return buttons[0]!;
+  };
+
+  it('question 2 on the pane: the sheet shows question 2, and Tea answers pane row 1', () => {
+    const spy = pending();
+    const q2 = pane('cc300-ask-q2-of-2-single');
+    expect(q2.id.startsWith('591e0a9e')).toBe(true);
+    renderAsk(FRUIT_DRINK, q2);
+
+    expect(heading('Which drink?')).toBeInTheDocument();
+    const tea = screen.getByRole('button', { name: /^Tea/ });
+    expect(tea).toBeEnabled();
+    fireEvent.click(tea);
+    expect(spy).toHaveBeenCalledWith(SESSION_ID, q2.id, 1);
+  });
+
+  it('same labels: No under Enable tracing? answers the tracing pane', () => {
+    const spy = pending();
+    const q1 = pane('cc300-ask-same-labels-q1');
+    const q2 = pane('cc300-ask-same-labels-q2');
+    expect(q2.id.startsWith('38f07f99')).toBe(true);
+    const { store } = renderAsk(CACHING_TRACING, q1);
+    expect(heading('Enable caching?')).toBeInTheDocument();
+
+    // Caching answered in the terminal: the pane paints Tracing under the same two labels.
+    act(() => store.getState().apply({ type: 'dialog', dialog: q2 }));
+    expect(heading('Enable tracing?')).toBeInTheDocument();
+    fireEvent.click(optionButton('No'));
+    expect(spy).toHaveBeenCalledWith(SESSION_ID, q2.id, 2);
+  });
+
+  it('progress reads 2 of 2, and the other question is listed read-only', () => {
+    renderAsk(FRUIT_DRINK, pane('cc300-ask-q2-of-2-single'));
+
+    expect(screen.getByText('2 of 2')).toBeInTheDocument();
+    // The eyebrow carries the shown question's header chip; the other question's rides its own row.
+    expect(document.querySelector('.sheet-eyebrow .dlg-header-chip')).toHaveTextContent('Drink');
+    expect(screen.getByText('other questions in this ask')).toBeInTheDocument();
+    const fruit = screen.getByText('Which fruit?').closest('.opt');
+    expect(fruit).not.toBeNull();
+    expect(fruit).toHaveAttribute('aria-disabled', 'true');
+    expect(screen.queryByRole('button', { name: /Which fruit\?/ })).toBeNull();
+    expect(screen.queryByText(/answer these in the terminal/i)).toBeNull();
+  });
+
+  it('a tie the title cannot break stays read-only behind the terminal CTA', () => {
+    const spy = pending();
+    // DERIVED: both questions read Yes/No, and the pane's title (`Enable tracing?`) is a suffix of both.
+    const both: HookAsk = {
+      questions: [
+        { question: 'Enable tracing?', header: 'Tracing', multiSelect: false, options: CACHING_TRACING.questions[1]!.options },
+        { question: 'Really enable tracing?', header: 'Really', multiSelect: false, options: CACHING_TRACING.questions[1]!.options },
+      ],
+    };
+    renderAsk(both, pane('cc300-ask-same-labels-q2'));
+
+    for (const label of ['Yes', 'No']) expect(optionButton(label)).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Open terminal to answer' })).toBeInTheDocument();
+    fireEvent.click(optionButton('No'));
+    expect(spy).not.toHaveBeenCalled();
+  });
+
+  it('the review screen: Submit answers answers row 1, and the pane\'s summary shows with its warning', () => {
+    const spy = pending();
+    const review = pane('cc300-ask-review-skipped');
+    expect(review.id.startsWith('3679f837')).toBe(true);
+    renderAsk(PETS_SIZE_MODE, review);
+
+    expect(heading('Review your answers')).toBeInTheDocument();
+    expect(screen.getByText(/⚠ You have not answered all questions/)).toBeInTheDocument();
+    expect(screen.getByText(/→ Dogs/)).toBeInTheDocument();
+    // The review is the whole ask's: no question is "the other one" here.
+    expect(screen.queryByText('other questions in this ask')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: /^Submit answers/ }));
+    expect(spy).toHaveBeenCalledWith(SESSION_ID, review.id, 1);
+  });
+
+  it('Cancel says it declines every question, and answers row 2', () => {
+    // Measured (`cc300-ask-review-cancelled`): Cancel rejects the whole tool call, every answer discarded.
+    const spy = pending();
+    const review = pane('cc300-ask-review-same-labels');
+    renderAsk(CACHING_TRACING, review);
+
+    const cancel = screen.getByRole('button', { name: /^Cancel/ });
+    expect(cancel).toHaveTextContent(CANCEL_SAYS);
+    fireEvent.click(cancel);
+    expect(spy).toHaveBeenCalledWith(SESSION_ID, review.id, 2);
+  });
+
+  it('a review taller than the parser\'s 20-row climb is still the review', () => {
+    const review = pane('cc300-ask-review-4q-long');
+    // The climb cut the first answer out of `body`, so a summary read from it would lose it.
+    expect(review.body).not.toMatch(/→ Postgres/);
+    renderAsk(FOUR_Q, review);
+
+    expect(screen.getByRole('button', { name: /^Submit answers/ })).toBeEnabled();
+    expect(screen.getByText(/→ Postgres/)).toBeInTheDocument();
+  });
+
+  it('a multiSelect question on the pane is named honestly', () => {
+    renderAsk(DRINK_FEATURES_TOOLS, pane('cc300-ask-multiselect-next-open'));
+
+    expect(heading('Which features do you want?')).toBeInTheDocument();
+    expect(screen.getByText('2 of 3')).toBeInTheDocument();
+    const copy = document.querySelector('.ask-envelope .dlg-copy')!;
+    expect(copy.textContent).toMatch(/several answers/i);
+    expect(copy.textContent).toMatch(/terminal pane/i);
+    expect(screen.queryByText(/catch up/i)).toBeNull();
+    // No box answers by one tap (D-5091 turns these into boxes).
+    expect(screen.getByRole('button', { name: /^Logging/ })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Open terminal to answer' })).toBeInTheDocument();
+  });
+
+  describe('the hand-off: ask_cleared hands the same pane to the scraped sheet', () => {
+    it('ask_cleared while question 2 is live: the scraped sheet shows question 2 and answers the same row', () => {
+      const spy = pending();
+      const q2 = pane('cc300-ask-q2-of-2-single');
+      const { store } = renderAsk(FRUIT_DRINK, q2);
+      act(() => store.getState().apply({ type: 'ask_cleared' }));
+
+      expect(document.querySelector('[data-source="hook"]')).toBeNull();
+      expect(heading('Which drink?')).toBeInTheDocument();
+      // The pane marks the active tab by colour only, so the scraped sheet cannot say which of N this is.
+      expect(screen.queryByText(/^\d+ of \d+$/)).toBeNull();
+      fireEvent.click(screen.getByRole('button', { name: /^Tea/ }));
+      expect(spy).toHaveBeenCalledWith(SESSION_ID, q2.id, 1);
+    });
+
+    it('ask_cleared while the review is live: the scraped sheet titles Review your answers and offers Submit answers', () => {
+      const spy = pending();
+      const review = pane('cc300-ask-review-same-labels');
+      const { store } = renderAsk(CACHING_TRACING, review);
+      act(() => store.getState().apply({ type: 'ask_cleared' }));
+
+      expect(document.querySelector('[data-source="hook"]')).toBeNull();
+      expect(heading('Review your answers')).toBeInTheDocument();
+      expect(screen.getByText(/→ - only in staging, sampled 10%/)).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /^Cancel/ })).toHaveTextContent(CANCEL_SAYS);
+      fireEvent.click(screen.getByRole('button', { name: /^Submit answers/ }));
+      expect(spy).toHaveBeenCalledWith(SESSION_ID, review.id, 1);
+    });
+
+    it('ask_cleared while a multiSelect question is live: the scraped sheet names it the same way', () => {
+      const { store } = renderAsk(DRINK_FEATURES_TOOLS, pane('cc300-ask-multiselect-next-open'));
+      act(() => store.getState().apply({ type: 'ask_cleared' }));
+
+      expect(document.querySelector('[data-source="hook"]')).toBeNull();
+      expect(heading('Which features do you want?')).toBeInTheDocument();
+      expect(screen.getByText(/several answers/i)).toBeInTheDocument();
+      expect(screen.queryByText(/doesn't fit tappable options/i)).toBeNull();
+      expect(screen.getByRole('button', { name: 'Open terminal to answer' })).toBeInTheDocument();
+    });
+
+    it('a hidden envelope stays hidden when ask_cleared hands off the same pane question, and a new question opens it', () => {
+      const { store } = renderAsk(FRUIT_DRINK, pane('cc300-ask-q2-of-2-single'));
+      fireEvent.click(screen.getByTestId('sheet-overlay'));
+      expect(screen.queryByRole('heading', { name: 'Which drink?' })).toBeNull();
+
+      act(() => store.getState().apply({ type: 'ask_cleared' }));
+      expect(screen.queryByRole('heading', { name: 'Which drink?' }), 'the waved-away question popped back').toBeNull();
+
+      // Back to question 1 on the pane (a new dialog id): something new to answer, so the sheet opens.
+      act(() => store.getState().apply({ type: 'dialog', dialog: pane('cc300-ask-freetext-held') }));
+      expect(heading('Which fruit?')).toBeInTheDocument();
+    });
+
+    it('the transcript\'s raise re-opens a question hidden across the hand-off', () => {
+      // D-286's nonce clears every dismissal, the hand-off's carried dialog id included: the transcript's Answer means
+      // "open it", whichever sheet now holds the question.
+      const store = makeStore();
+      act(() => {
+        store.getState().apply({ type: 'dialog', dialog: pane('cc300-ask-q2-of-2-single') });
+        store.getState().apply({ type: 'ask', ask: FRUIT_DRINK, key: null });
+      });
+      const { rerender } = render(<DialogSheet id={SESSION_ID} store={store} raise={0} />);
+      fireEvent.click(screen.getByTestId('sheet-overlay'));
+      act(() => store.getState().apply({ type: 'ask_cleared' }));
+      expect(screen.queryByRole('heading', { name: 'Which drink?' })).toBeNull();
+
+      rerender(<DialogSheet id={SESSION_ID} store={store} raise={1} />);
+      expect(heading('Which drink?')).toBeInTheDocument();
     });
   });
 });

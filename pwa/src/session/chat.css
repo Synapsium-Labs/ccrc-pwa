@@ -1023,16 +1023,19 @@ button.metachip:active {
   gap: var(--sp-2);
 }
 
-/* The hook envelope (EnvelopeSheet in DialogSheet.tsx) — I3: carried no
+/* The hook envelope (EnvelopeSheet.tsx) — I3: carried no
    rules of its own before this. Its children (.dlg-copy/.opts/.dlg-actions
    above) already set their own spacing, so this exists as a stable
    selector, not a source of new layout. */
 .ask-envelope {
   display: block;
 }
-/* Further questions in a multi-question envelope: read-only (only the first
-   question is ever tappable — see DialogSheet's file header). I3: before
-   this they were visually identical to the live rows above them — muted by
+/* The other questions of a multi-question ask (AskParts.tsx's
+   `OtherQuestions`): one read-only row per question, its number, text and
+   header chip. D-5089: the tappable question is the one the PANE is
+   painting, not the first, so these are the ones the pane is not showing,
+   and each becomes tappable when it is. I3: before this they were visually
+   identical to the live rows above them — muted by
    .opt[aria-disabled='true'] now, but a colour change alone is easy to
    miss, so the section also gets its own separator and label. */
 .ask-envelope-more {

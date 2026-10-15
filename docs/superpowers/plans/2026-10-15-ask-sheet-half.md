@@ -4,7 +4,7 @@
 
 **Branch:** `fix/ask-sheet-half`, cut from `origin/main` `a3cebde1`, which carries the server half (#417, plan `2026-10-15-ask-server-half.md`, D-5045 to D-5048) and the design system `@ccrc/ui` (#419).
 
-**Status:** rev 2 (2026-10-15). Tasks 0 and 1 done. Tasks 2 to 5 open. Task 1 also landed `freeTextSlot` and `rowText` (the brief put the free-text row reader in the pure module's task), so Task 3 consumes them.
+**Status:** rev 3 (2026-10-15). Tasks 0 to 2 done. Tasks 3 to 5 open. Task 1 also landed `freeTextSlot` and `rowText` (the brief put the free-text row reader in the pure module's task), so Task 3 consumes them. Task 2 also names a multiSelect question on the SCRAPED sheet (item 13 below), so the hand-off keeps D-5089's honest copy, and pins the `raise` nonce clearing the hand-off's carried dialog id (item 14).
 
 **Operator rulings this plan builds on** (2026-10-15):
 - **AskUserQuestion only.** The own-text rows of permission and plan prompts are the next effort. The approval branch of `EnvelopeSheet` is not touched.
@@ -201,7 +201,7 @@ jsdom has no layout, so these are judged on a real build (Task 5's acceptance ma
 - **The hand-off keeps a hidden sheet hidden.** The envelope's `onHide` records the live dialog's id beside the envelope's key, and the scraped `open` also checks it, so a sheet the operator waved away does not pop back when `ask_cleared` hands the same pane question to the scraped sheet. A new question has a new id and opens. The `raise` nonce clears both.
 - `dialog-sheet.test.tsx`'s shared `SESSION_ID` becomes `'lane-a:project-a'` (the public-repo rule; every case in the file reads it).
 
-- [ ] **Step 1: Red.** `dialog-sheet.test.tsx`, describe "the envelope follows the pane (D-5089)":
+- [x] **Step 1: Red.** `dialog-sheet.test.tsx`, describe "the envelope follows the pane (D-5089)":
   1. "question 2 on the pane: the sheet shows question 2, and Tea answers pane row 1": `FRUIT_DRINK` + `cc300-ask-q2-of-2-single`. Title `Which drink?`; `Tea` enabled; tap calls `answerDialog(SID, '591e0a9e…', 1)`. RED today: the title reads `Which fruit?`, Apple and Pear are disabled, and `Tea` is a read-only div.
   2. "same labels: No under Enable tracing? answers the tracing pane": `CACHING_TRACING` + `-same-labels-q2` titles `Enable tracing?` and `No` calls `answerDialog(SID, '38f07f99…', 2)`; with `-q1` it titles `Enable caching?`. RED today: the sheet reads `Enable caching?` over the tracing pane.
   3. "progress reads 2 of 2, and the other question is listed read-only": the `2 of 2` text; `Which fruit?` as an `aria-disabled` row; no `answer these in the terminal`. RED.
@@ -214,8 +214,11 @@ jsdom has no layout, so these are judged on a real build (Task 5's acceptance ma
   10. Hand-off, "ask_cleared while question 2 is live: the scraped sheet shows question 2 and answers the same row" (`FRUIT_DRINK` + `-q2-of-2-single`, then `ask_cleared`, tap `Tea`). Green today; the companion.
   11. Hand-off, "ask_cleared while the review is live: the scraped sheet titles Review your answers and offers Submit answers" (`-review-same-labels`). RED today: the title is the tab row.
   12. Hand-off, "a hidden envelope stays hidden when ask_cleared hands off the same pane question, and a new question opens it". RED today: the scraped sheet pops open.
-- [ ] **Step 2: Green** as above. `.ask-envelope-more`'s comment in `chat.css` stops saying only the first question is tappable.
-- [ ] **Step 3: Mutation table, run.**
+  13. Hand-off, "ask_cleared while a multiSelect question is live: the scraped sheet names it the same way" (`DRINK_FEATURES_TOOLS` + `-multiselect-next-open`): the question's title, the several-answers line, the terminal CTA, and not "doesn't fit tappable options". RED today: titled "Answer this one in the terminal". Added in the task: "both sheets behave the same" covers the several-answers line too. Task 4's item 12 stays red after it (no boxes).
+  14. "the transcript's raise re-opens a question hidden across the hand-off". Green on arrival (the slot it pins is new); its red is the mutation table's.
+  - Changed with them: "renders a multiSelect question's options as rows but never lets a tap answer it" (`:723`) now reads the several-answers line (the pane's title names its question); "I3: a read-only rest-question row" and the `:1113` rewrite find the other question by its TEXT, since the list is one row per question. `SESSION_ID` is `'lane-a:project-a'`.
+- [x] **Step 2: Green** as above. `.ask-envelope-more`'s comment in `chat.css` stops saying only the first question is tappable (and `option-row.css`'s pointer to it names `AskParts.tsx`). As built: the other questions' header chips ride each row's trailing slot; the eyebrow reads `claude is asking`, the chip, then ` · n of N`; the several-answers line reads "This one takes several answers, so pick them on the terminal pane. The next question, or the review, comes back here." (every multiSelect question is followed by another question or the review, measured), one constant in `AskParts.tsx` that both sheets read; the scraped sheet's multiSelect naming is folded into its one unparsed branch, so `markup-census` sees one block.
+- [x] **Step 3: Mutation table, run.**
 
   | Mutant | RED |
   |---|---|
@@ -228,9 +231,13 @@ jsdom has no layout, so these are judged on a real build (Task 5's acceptance ma
   | `namedQuestion` unused (falls to the catch-up copy) | 8 |
   | the hand-off dismissal carry removed | 12 |
   | the read-only list made tappable | 3 (`Which fruit?` must not be a button) |
+  | the scraped sheet's multiSelect naming removed | 13 |
+  | the `raise` nonce leaves the hand-off's carried dialog id | 14 |
 
-- [ ] **Step 4: Gates:** pwa `dialog-sheet`, `ask-live`, `ask-live-question`, `chat`, `primitives`, `session-screen-refusals`, `design-system-boundary`, `markup-census`, `literal-census`, `contrast`, tsc; server `single-definition`, `deviation-refs`, `dtbd`, `topology-clean`.
-- [ ] **Step 5: Commit** `fix(ask-sheet): the sheet answers the question the pane is painting, offers the review's Submit, and hands off cleanly (D-5089)`.
+  Run (each mutant against the whole `dialog-sheet.test.tsx`, then restored): every row red on its named cases. Extra reds: `questions[0]` again also reds 8; the Cancel sublabel also reds 11; the progress text also reds 8; `namedQuestion` unused also reds `:723`; the list made tappable also reds the I3 case and the `:1113` rewrite.
+
+- [x] **Step 4: Gates:** pwa `dialog-sheet`, `ask-live`, `ask-live-question`, `chat`, `primitives`, `session-screen-refusals`, `design-system-boundary`, `markup-census`, `literal-census`, `contrast`, tsc; server `single-definition`, `deviation-refs`, `dtbd`, `topology-clean`. Also run: `ui-package-boundary`, `control-census`, `shape-census`, `tap-targets`, `option-row-shape`, `session-line`, and ui tsc (`option-row.css`'s comment).
+- [x] **Step 5: Commit** `fix(ask-sheet): the sheet answers the question the pane is painting, offers the review's Submit, and hands off cleanly (D-5089)`.
 
 **Per width:** the eyebrow at 360 (chip plus `2 of 3` wrap, no clip); the review summary of `-4q-long` wraps inside its 38vh scroll at 360, and `Submit answers` is reachable at 360x740 without closing the sheet; the other-questions list stays compact at 2560.
 

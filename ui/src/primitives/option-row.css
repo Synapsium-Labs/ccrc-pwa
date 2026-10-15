@@ -37,8 +37,8 @@
     cursor: default;
   }
   /* While one row answers, its siblings recede; the answering row keeps ink.
-     I3: `.opt[aria-disabled='true']` covers the hook envelope's read-only
-     "rest" questions (DialogSheet.tsx's `.ask-envelope-more`) — plain divs,
+     I3: `.opt[aria-disabled='true']` covers an ask's read-only other
+     questions (the app's `.ask-envelope-more`, AskParts.tsx) — plain divs,
      so `:disabled` (a pseudo-class only a real form control can match) never
      fires for them, and without this they painted identically to the live
      rows above them. There's no aria-busy equivalent for a div that never

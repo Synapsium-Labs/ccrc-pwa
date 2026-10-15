@@ -58,6 +58,11 @@
 //  - Only the FIRST question in a multi-question envelope is tappable — the
 //    digit space answerDialog walks is one live menu's worth at a time,
 //    matching what's actually on screen; later questions render read-only.
+//    SUPERSEDED by D-5089 (plan 2026-10-15-ask-sheet-half.md, Task 2): the
+//    pane paints one question at a time, so "the first" left every later
+//    question and the review screen unanswerable. The tappable question is
+//    now the one the PANE is painting (`askLive.ts`'s `liveQuestion`), the
+//    others are listed read-only, and the review's own rows are offered.
 //  - A blank/empty envelope (no questions, or a blank first question) has
 //    nothing accessible of its own to show, so it is treated as absent and
 //    the sheet falls through to the scraped dialog entirely.
@@ -104,11 +109,19 @@
 // change) drops the envelope out of the way. One dismissal does not
 // necessarily mean "hidden" across both channels at once — only within
 // whichever one is currently being displayed.
+// D-5089 closed the half of this that the envelope's age-out reaches: hiding
+// the envelope also records the id of the pane dialog live at that moment
+// (`dismissedDialogId`), and the scraped sheet stays shut on that id, so an
+// ask the operator waved away does not pop back when `ask_cleared` hands the
+// same pane question over 30 minutes in. A new question has a new id and
+// opens; the `raise` nonce clears both slots.
 import { Fragment, useEffect, useId, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import type { Dialog, HookAsk } from '../../../shared/api';
 import { EYEBROW, OptionRow, Sheet, Well, toast } from '@ccrc/ui';
 import { EnvelopeSheet, TerminalCta } from './EnvelopeSheet';
+import { AskEyebrow, AskReview, REVIEW_TITLE, SEVERAL_ANSWERS } from './AskParts';
+import { isAskReview } from './askLive';
 import { api, ApiError, failedTo } from '../lib/api';
 import { getSessionStore, type SessionStore } from '../stores/session';
 import './chat.css';
@@ -171,6 +184,11 @@ export function DialogSheet({ id, store, onOpenTerminal, raise }: DialogSheetPro
   // envelope preference), and sharing it means a dismissal survives the
   // moment display hands off from one to the other.
   const [dismissedKey, setDismissedKey] = useState<string | null>(null);
+  // D-5089: the pane dialog that was live when the operator hid the ENVELOPE.
+  // The envelope's own key is a hash of its JSON, which no scraped dialog id
+  // ever equals, so without this the hand-off on `ask_cleared` re-opened the
+  // very question the operator had just waved away.
+  const [dismissedDialogId, setDismissedDialogId] = useState<string | null>(null);
   // Free-form reply (answer in your own words) + the raw "full question" view.
   const [reply, setReply] = useState('');
   const [details, setDetails] = useState(false);
@@ -192,10 +210,12 @@ export function DialogSheet({ id, store, onOpenTerminal, raise }: DialogSheetPro
   // store still holds, through the same `open` computation as always, so the
   // raise cannot conjure a sheet for a question that is no longer live.
   useEffect(() => {
-    if (raise) setDismissedKey(null);
+    if (!raise) return;
+    setDismissedKey(null);
+    setDismissedDialogId(null);
   }, [raise]);
 
-  const open = dialog !== null && dialog.id !== dismissedKey;
+  const open = dialog !== null && dialog.id !== dismissedKey && dialog.id !== dismissedDialogId;
 
   const hide = (): void => {
     if (lastRef.current !== null) setDismissedKey(lastRef.current.id);
@@ -296,7 +316,10 @@ export function DialogSheet({ id, store, onOpenTerminal, raise }: DialogSheetPro
         dialog={dialog}
         answering={answering}
         open={askKey !== dismissedKey}
-        onHide={() => setDismissedKey(askKey)}
+        onHide={() => {
+          setDismissedKey(askKey);
+          setDismissedDialogId(dialog?.id ?? null);
+        }}
         onSelectOption={(optionIndex) => void answer(optionIndex)}
         onOpenTerminal={onOpenTerminal}
       />
@@ -306,16 +329,24 @@ export function DialogSheet({ id, store, onOpenTerminal, raise }: DialogSheetPro
   if (shown === null) return null;
 
   if (!shown.parsed) {
+    // D-5089: a multiSelect question the server read as one (`Dialog.multi`)
+    // is NAMED, as the envelope sheet names it, so the hand-off on
+    // `ask_cleared` changes nothing the operator reads: its title, the same
+    // sentence, and the pane's boxes in the raw well. D-5091 answers it with
+    // boxes. Any other unparsed pane keeps the generic dead end, and so does
+    // one whose title came back blank (a sheet with no accessible name).
+    const multi = shown.multi !== undefined && shown.title.trim() !== '';
     return (
       <Sheet
         open={open}
         onClose={close}
-        eyebrow="claude is asking"
-        title="Answer this one in the terminal"
+        eyebrow={<AskEyebrow />}
+        title={multi ? shown.title : 'Answer this one in the terminal'}
       >
         <p className="dlg-copy">
-          This question doesn't fit tappable options. Answer it in the terminal — the
-          session picks up from there.
+          {multi
+            ? SEVERAL_ANSWERS
+            : "This question doesn't fit tappable options. Answer it in the terminal — the session picks up from there."}
         </p>
         <Well className="dlg-raw">{shown.raw}</Well>
         <TerminalCta
@@ -329,6 +360,18 @@ export function DialogSheet({ id, store, onOpenTerminal, raise }: DialogSheetPro
     );
   }
 
+  // D-5089: the review screen an ask ends on, the same as the envelope sheet
+  // renders it (`AskReview`), so an ask whose envelope aged out can still be
+  // submitted from here. Titled `Review your answers`, never the pane's title,
+  // which on this screen is the tab row (or, on a tall review, an answer).
+  if (isAskReview(shown)) {
+    return (
+      <Sheet open={open} onClose={close} eyebrow={<AskEyebrow />} title={REVIEW_TITLE}>
+        <AskReview dialog={shown} answering={answering} onAnswer={(k) => void answer(k)} />
+      </Sheet>
+    );
+  }
+
   // The transcript's copy for this menu, when the two could be matched.
   const ask = shown.ask;
   // Nothing validates the question server-side beyond it being a string, so a
@@ -336,19 +379,11 @@ export function DialogSheet({ id, store, onOpenTerminal, raise }: DialogSheetPro
   // would keep the empty string and leave the sheet with no question on it at
   // all — no title, no preamble, and a dialog with no accessible name.
   const question = ask?.question.trim() ?? '';
-  const eyebrow = ask?.header ? (
-    <>
-      claude is asking <span className="dlg-header-chip">{ask.header}</span>
-    </>
-  ) : (
-    'claude is asking'
-  );
-
   return (
     <Sheet
       open={open}
       onClose={close}
-      eyebrow={eyebrow}
+      eyebrow={<AskEyebrow header={ask?.header} />}
       title={question || shown.title}
     >
       {/* The scraped preamble is a lossy copy of the question — once the real
