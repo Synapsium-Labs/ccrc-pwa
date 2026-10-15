@@ -5809,11 +5809,11 @@ describe('the free-text row\'s placeholder is spelled once, in shared/ask-menu.t
     expect(holders(PLACEHOLDER)).toEqual(['shared/ask-menu.ts']);
   });
 
-  it('the Chat row is spelled in shared/ask-menu.ts, and in the sheet\'s older unanchored copy, which the sheet half deletes', () => {
-    // `DialogSheet.tsx`'s `CHAT_ABOUT_RE` drives the "answer in your own words" path that answers Chat about this and
-    // declines the whole ask (diagnosis root cause 5). This branch makes no sheet change (operator ruling 2026-10-15),
-    // so that copy stays named here until the sheet half removes it — and turns this list into the one home alone.
-    expect(holders(CHAT)).toEqual(['pwa/src/session/DialogSheet.tsx', 'shared/ask-menu.ts']);
+  it('the Chat row is spelled in shared/ask-menu.ts and nowhere else: the sheet half deleted its older copy (D-5090)', () => {
+    // `DialogSheet.tsx`'s `CHAT_ABOUT_RE` drove the "answer in your own words" path that answered Chat about this and
+    // declined the whole ask (diagnosis root cause 5). The sheet half deleted it with `respond()` (D-5090): own words go
+    // through the free-text row, and the sheet reads the Chat row through `CHAT_ABOUT_ROW_RE`, as every reader does.
+    expect(holders(CHAT)).toEqual(['shared/ask-menu.ts']);
   });
 
   it('the guard reads the L0 rules: pane/dialog.ts imports and tests both, and answerDialog asks freeTextRow', () => {
@@ -5922,6 +5922,45 @@ describe("one 'tmux unreachable' sentence (design-system wave)", () => {
     ]) {
       expect(readFileSync(path.join(ccrcRoot, f), 'utf8'), f)
         .toMatch(/substrateFaultT(ext|itle)\(/);
+    }
+  });
+});
+
+// D-5089 (plan docs/superpowers/plans/2026-10-15-ask-sheet-half.md, Task 1). APPENDED at the very end, for the reason
+// the note above the 'tmux unreachable' block states: `session-hook.test.ts` cites this file by line. The sheet tells
+// AskUserQuestion's review screen by its last line ("Ready to submit your answers?") and its two rows, and reads its
+// summary up to that line (`pwa/src/session/askLive.ts`'s `isAskReview` and `reviewSummary`). Those are screen facts,
+// so each is ONE rule in `shared/ask-menu.ts` beside the server half's four, and the sheet imports them. A second
+// spelling that drifts would let one reader call a screen the review that the other does not. Code lines only
+// (`stallCode`): prose names the screen in quotes. KNOWN WIDTH: `Cancel` is common copy and is not scanned, and nor is
+// the heading "Review your answers", whose words are also the sheet's own title for the screen.
+describe('the review screen\'s rows and last line are spelled once, in shared/ask-menu.ts (D-5089)', () => {
+  const READY = /ready\s+to\s+submit/i;
+  const SUBMIT = /submit\s+answers/i;
+  const holders = (re: RegExp): string[] => ALL.filter((f) => re.test(stallCode(f))).map(rel).sort();
+
+  it('CONTROL: the patterns see a regex literal and a string, and pass over comment lines', () => {
+    expect(READY.test('const READY = /ready to submit your answers\\?$/i;')).toBe(true);
+    expect(SUBMIT.test("if (label === 'Submit answers') return 1;")).toBe(true);
+    const prose = '// the "Ready to submit your answers?" line\n * 1. Submit answers\nconst x = 1;';
+    expect(stallCodeText(prose)).not.toMatch(READY);
+    expect(stallCodeText(prose)).not.toMatch(SUBMIT);
+  });
+
+  it('the ready line is spelled on a code line in shared/ask-menu.ts and nowhere else', () => {
+    expect(holders(READY)).toEqual(['shared/ask-menu.ts']);
+  });
+
+  it('the Submit answers row is spelled on a code line in shared/ask-menu.ts and nowhere else', () => {
+    expect(holders(SUBMIT)).toEqual(['shared/ask-menu.ts']);
+  });
+
+  it('the sheet reads the L0 rules: askLive.ts imports and tests each review rule', () => {
+    const live = stallCode(path.join(ccrcRoot, 'pwa/src/session/askLive.ts'));
+    for (const name of ['REVIEW_READY_RE', 'REVIEW_SUBMIT_ROW_RE', 'REVIEW_CANCEL_ROW_RE', 'REVIEW_HEADING_RE']) {
+      expect(live, `askLive.ts does not import ${name} from L0`)
+        .toMatch(new RegExp(`import\\s*\\{[^}]*\\b${name}\\b[^}]*\\}\\s*from\\s*'(?:\\.\\./)+shared/ask-menu(?:\\.js)?'`));
+      expect(live, `askLive.ts does not test ${name}`).toMatch(new RegExp(`\\b${name}\\.test\\(`));
     }
   });
 });

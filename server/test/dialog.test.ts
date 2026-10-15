@@ -1477,3 +1477,29 @@ describe('editHintShown (D-5047)', () => {
     expect(editHintShown(pane)).toBe(false);
   });
 });
+
+// D-5089 (plan docs/superpowers/plans/2026-10-15-ask-sheet-half.md, Task 1). The PWA does not import server code, so
+// the sheet's tests hand-build their `Dialog` objects from `pwa/test/ask-panes.json`: each recorded screen's reading,
+// keyed by its fixture's name, without `raw` (`pwa/test/askPanes.ts` attaches that from the fixture). Those readings
+// are COPIED from `parseDialog`, and this keeps them so: a parser change that reads a recorded screen differently fails
+// here, naming the screen, rather than leaving the sheet's tests passing on screens the server no longer sees.
+describe('the sheet half\'s hand-built readings are parseDialog\'s (D-5089)', () => {
+  const readingsFile = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'pwa', 'test', 'ask-panes.json');
+  const readings = JSON.parse(readFileSync(readingsFile, 'utf8')) as Record<string, Omit<Dialog, 'raw'>>;
+
+  it('names recorded screens, the review and multiSelect ones included', () => {
+    const names = Object.keys(readings);
+    expect(names.length).toBeGreaterThanOrEqual(30);
+    expect(names).toContain('cc300-ask-review-4q-long');
+    expect(names).toContain('cc300-ask-multiselect-next-open');
+  });
+
+  it('every entry equals parseDialog(<fixture>) without raw', () => {
+    for (const [name, reading] of Object.entries(readings)) {
+      const d = parseDialog(fixture(`${name}.txt`));
+      expect(d, name).not.toBeNull();
+      const { raw: _raw, ...fresh } = d!;
+      expect(fresh, name).toEqual(reading);
+    }
+  });
+});

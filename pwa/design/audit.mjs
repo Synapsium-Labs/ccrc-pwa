@@ -1004,7 +1004,7 @@ export const KEYFRAME_TROUGHS = {
   'chat.css jump-in 0': 'a one-shot entrance for the jump-to-latest button; the resting state is opacity 1',
   'chat.css caret-blink 0': 'the terminal caret, a step-end blink between 1 and 0. A caret is a cursor, not content',
   'chat.css working-glyph 0.35': 'the working indicator glyph (.msg-working-glyph). Reduced motion: animation none, opacity 1',
-  'chat.css working-dot 0.25': 'the three working dots (.msg-working-dots i), 4px decorative pips beside a full-strength label. Reduced motion: animation none, opacity inherits 1',
+  'chat.css working-dot 0.25': 'the three working dots (.msg-working-dots i), 4px decorative pips beside a full-strength label; the same dots are the own-words Send\'s busy face (.dlg-reply-wait i), painted in Send\'s busy ink (.dlg-reply-send[aria-busy=\'true\'], measured above) on a button a screen reader hears as Sending…. Reduced motion: animation none, opacity inherits 1',
   'chat.css tool-breathe 0.55': 'the running tool dot (.tool-dot--run, @ccrc/ui tool-card.css — the keyframe stayed here because its other consumer did) and the terminal "attaching" word. Reduced motion: animation none, opacity 0.8 for both — registered and measured above',
   'attach-spin.css attach-spin 1': 'a rotation; the stops set no opacity',
 };
