@@ -593,6 +593,20 @@ re-measures the citation corpus and the `_reg_get` census on the merged tree bef
   - Written-plan review remains pending. Run 308 and its issued block 4316-4325 are unchanged; Task 5 remains
     coordinator-owned. No product implementation, dispatch, updater change, restart, scope-sweep arming or
     repository-settings write follows from this revision.
+- **2026-10-15 15:43 UTC - written plan approved; dispatch preparation checked.**
+  - The operator explicitly approved the wave-4b written plan at `3d8e5559b11ed4f8243911c08b105b39e6a1e26b`
+    (#409). The written-plan gate is complete; the approved sequential execution method is unchanged.
+  - Read-only source integration from `c7776b080` to measured main `a3cebde1b` found the scoped seams intact.
+    The brief retains the admitted-pane guards, background-memory clearing and both follow paths, and requires
+    current doctor-fixture totals and citation composition to be remeasured rather than copied.
+  - Coexistence was refreshed for the successor work holding shared documentation and citation tests: continuity
+    prose only; leave the context-emitter citation line and history section alone; citation-only maintenance in
+    the test, retaining the other work's appended coverage and dated paragraphs. The shared by-file map is
+    remeasured over stated/base/tree values by the second lander; README size is measured, never summed.
+    Existing ccd and scope-sweep doctor region licences remain narrow; any new overlap needs fresh agreement.
+  - Run 308 was freshly read planned, unbound and undispatched. Tasks 1-4 are its four worker items; Task 5
+    remains coordinator-owned. Existing issued numbers 4316-4325 remain unchanged. No product tests, mutation
+    trials, hand deployment, restart, arming or repository-settings act is claimed by this preparation.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` token appears in
   this file until a plan on the same ref defines it (`deviation-refs.test.ts`).
 
@@ -651,9 +665,9 @@ Wave 3 is merged (#250 `77f8d63a`). Wave 4 is merged (#299 `1bb88d5e`) and deplo
 is measured above: 0 reap-class among 34 pane-scope OOM stops, with 5 unmapped and 4 unmeasured; the scope-sweep
 record remains `shadow` and `$REG/scope-sweep-live` remains operator-only.
 
-Wave 4b is run 308 (planned; deviation numbers 4316 to 4325, written bare). Its plan is drafted at
-`docs/superpowers/plans/2026-10-13-session-continuity-wave4b-pressure-reap-and-clear.md`; **written-plan review
-is pending before implementation or dispatch**.
+Wave 4b is run 308 (planned at the latest pre-dispatch measurement; deviation numbers 4316 to 4325, written
+bare). Its plan is at `docs/superpowers/plans/2026-10-13-session-continuity-wave4b-pressure-reap-and-clear.md`;
+**written-plan review was approved on 2026-10-15**. Dispatch follows fresh source, ownership and readiness checks.
 - **Its FIRST commit is wave 4's residue:** review 305 F1(a), the qualified doctor PASS line, I1, `s6_inert`'s
   staleness, the zombie child, the paused log line, baseline B's non-zero check and the per-task minors.
 - **Then it ships** `CLAUDE_CODE_DISABLE_BG_SHELL_PRESSURE_REAP=1` in the spawn environment and 3925's `/clear`

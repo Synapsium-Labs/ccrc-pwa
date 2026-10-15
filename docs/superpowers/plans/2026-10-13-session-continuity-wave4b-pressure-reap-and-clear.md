@@ -2014,6 +2014,6 @@ No new numbered deviation is defined by this planning commit. The issued block i
 
 **Agreed:** frozen B=0 with raw unknowns retained; all carried residue in the FIRST implementation commit; child-scoped primary/retry key; marker-free outgoing choice; direct notifications and pane-OOM remain separate; Tasks 1-4 worker-owned, Task 5 coordinator-owned; the existing sequential subagent-driven execution method.
 
-**Waiting on you:** written-plan review before implementation or dispatch. The draft snippets and mutations have not been replayed as a product prototype; their execution is the worker's red-first obligation, not a claimed planning result.
+**Waiting on you:** nothing for the written-plan gate: the operator approved revision `3d8e5559b11ed4f8243911c08b105b39e6a1e26b` on 2026-10-15. This status-only update changes no task or execution requirement. Dispatch still requires fresh source, ownership and readiness checks. The snippets and mutations have not been replayed as a product prototype; their execution is the worker's red-first obligation, not a claimed planning result.
 
 **Later:** independent acceptance, observation of the existing updater, next-start exposure, the first complete post-variable week and any later B + 2 withdrawal; later continuity waves remain under their own prerequisites. Scope-sweep arming, fleet restarts, updater intent changes and task-7 repository settings are not authorized here.
