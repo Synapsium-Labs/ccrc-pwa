@@ -12028,12 +12028,15 @@ describe('history card line: SessionStart(compact) serves the sweep\'s predictio
   // code points, never written as escapes or as themselves, so no write can turn them into something else.
   const NBSP_G = `${String.fromCharCode(0xa0)}${GENERATION}\n`;
   const BOM_G = `${String.fromCharCode(0xfeff)}${GENERATION}\n`;
-  type Reg = 'G' | 'G2' | 'absent' | 'unreadable' | 'symlink-G' | 'junk';
+  type Reg = 'G' | 'G2' | 'absent' | 'unreadable' | 'symlink-G' | 'junk' | 'G-wide' | 'G-nbsp' | 'empty' | 'blank-wide' | 'G2-wide-junk' | 'dangling';
   type Off = 'absent' | 'G' | 'G-padded' | 'G-wide' | 'G-nbsp' | 'G-bom' | 'G2' | 'empty' | 'unreadable' | 'dir' | 'symlink-G' | 'unsearchable' | 'parent-file' | 'G2-tabcr';
   type Rec = 'G' | 'G2' | 'legacy' | 'absent' | 'junk' | 'symlink-G';
   /** B1's Presence, as a type-only import expression: this file gains no import line (the census cites it by line). */
   type Pres = import('../../ccd/history/lib.mjs').Presence<string>;
-  const PARITY: ReadonlyArray<readonly [string, string, Reg, Off, Rec]> = [
+  /** A row is an AGREE row (the hook's verdict is the CLI's) unless its sixth cell reads 'fail-closed': the hook
+   *  withholds where the CLI serves, the one difference R-recalloff-parity allows (it never serves where the CLI
+   *  answers exit 8), named in §8.2 and §8.6 check 2. */
+  const PARITY: ReadonlyArray<readonly [string, string, Reg, Off, Rec] | readonly [string, string, Reg, Off, Rec, 'fail-closed']> = [
     ['no recall-off file', GENERATION, 'G', 'absent', 'G'],
     ['recall-off names this generation', GENERATION, 'G', 'G', 'G'],
     ['recall-off names it inside whitespace', GENERATION, 'G', 'G-padded', 'G'],
@@ -12066,9 +12069,27 @@ describe('history card line: SessionStart(compact) serves the sweep\'s predictio
     ['no env or registry generation and recall-off names the recorded newest family', '', 'absent', 'G', 'G'],
     ['recall-off names G while the recorded newest family is G2', '', 'absent', 'G', 'G2'],
     ['an unreadable .generation is no generation, the record decides', '', 'unreadable', 'G', 'G'],
-    ['a symlinked .generation is no generation', '', 'symlink-G', 'G', 'G2'],
-    // D-5056: a .generation that fails the UUID grammar names no generation either; the record decides (the CLI exits 8).
-    ['a malformed .generation is no generation, the record decides', '', 'junk', 'G', 'G'],
+    // D-5063: the record decides ONLY when .generation is absent or empty. One the hook cannot read as a UUID (linked,
+    // unreadable, a full read window, any non-UUID value) is unusable, and a recall-off file that exists withholds.
+    ['a symlinked .generation is unusable, recall-off names the recorded G2', '', 'symlink-G', 'G2', 'G2'],
+    ['a symlinked .generation is unusable, recall-off is stale (fail-closed: the CLI recalls)', '', 'symlink-G', 'G', 'G2', 'fail-closed'],
+    ['a malformed .generation, recall-off names the recorded G', '', 'junk', 'G', 'G'],
+    ['a malformed .generation, recall-off is stale (fail-closed: the CLI recalls)', '', 'junk', 'G2', 'G', 'fail-closed'],
+    ['an unreadable .generation, recall-off is stale (fail-closed: the CLI recalls)', '', 'unreadable', 'G2', 'G', 'fail-closed'],
+    // F3 of review 476: a .generation the hook's CCRC_ID_MAX-char window cannot hold (or a no-break space it will not
+    // trim) is G to the CLI, which reads 4,096 bytes and trims in JS. recall-off names G, the record names G2: the CLI
+    // answers exit 8, so a hook that fell back to the record would serve.
+    ['a .generation padded past the read window, recall-off names G, the record G2', '', 'G-wide', 'G', 'G2'],
+    ['a .generation behind a no-break space, recall-off names G, the record G2', '', 'G-nbsp', 'G', 'G2'],
+    ['a .generation padded past the read window, recall-off is stale (fail-closed: the CLI recalls)', '', 'G-wide', 'G2', 'G', 'fail-closed'],
+    ['a .generation behind a no-break space, recall-off is stale (fail-closed: the CLI recalls)', '', 'G-nbsp', 'G2', 'G', 'fail-closed'],
+    ['a .generation of whitespace only past the read window (fail-closed: the CLI recalls)', '', 'blank-wide', 'G2', 'G', 'fail-closed'],
+    // A window that FILLS is unusable even with a UUID inside it: the CLI trims all 4,096 bytes, finds junk after the
+    // padding, and falls to the newest family (the record G, which recall-off names: exit 8).
+    ['a .generation holding G2 in a full read window, junk beyond it, recall-off names the recorded G', '', 'G2-wide-junk', 'G', 'G'],
+    ['a dangling-link .generation is unusable, recall-off is stale (fail-closed: the CLI recalls)', '', 'dangling', 'G2', 'G', 'fail-closed'],
+    ['an empty .generation is none: the record decides (stale)', '', 'empty', 'G2', 'G'],
+    ['an empty .generation is none: the record decides (named)', '', 'empty', 'G', 'G'],
     // The ruling's pin: the CLI exits 8 here, so the card line must not reach the control arm.
     ['R-recalloff: an invalid env generation, an unreadable .generation, recall-off naming the recorded G', 'not-a-uuid', 'unreadable', 'G', 'G'],
     ['R-recalloff: an invalid env generation, no .generation, recall-off naming the recorded G', 'not-a-uuid', 'absent', 'G', 'G'],
@@ -12080,13 +12101,17 @@ describe('history card line: SessionStart(compact) serves the sweep\'s predictio
     ['the registry generation wins over the record', '', 'G', 'G2', 'G2'],
   ];
   const parityRows = PARITY.filter(([, , r, o]) => !ROOT || (r !== 'unreadable' && o !== 'unreadable' && o !== 'unsearchable'));
+  /** The text each Reg kind plants in $REG/<id>.generation (the CLI reads the same text through presenceOf's trim). */
+  const REG_TEXT: Partial<Record<Reg, string>> = {
+    G: GENERATION, G2, junk: 'not-a-generation', empty: '',
+    'G-wide': `${' '.repeat(130)}${GENERATION}\n`, 'G2-wide-junk': `${G2}${' '.repeat(100)}junk\n`, 'G-nbsp': NBSP_G, 'blank-wide': `${' '.repeat(130)}\n`,
+  };
   const plantParity = (regKind: Reg, offKind: Off, recKind: Rec): void => {
     const genFile = reg(`${ID}.generation`);
     fs.rmSync(genFile, { force: true });
-    if (regKind === 'G') fs.writeFileSync(genFile, GENERATION);
-    if (regKind === 'G2') fs.writeFileSync(genFile, G2);
+    if (regKind in REG_TEXT) fs.writeFileSync(genFile, REG_TEXT[regKind]!);
     if (regKind === 'unreadable') { fs.writeFileSync(genFile, GENERATION); fs.chmodSync(genFile, 0o000); }
-    if (regKind === 'junk') fs.writeFileSync(genFile, 'not-a-generation');
+    if (regKind === 'dangling') fs.symlinkSync(path.join(home, 'gen-nowhere'), genFile);
     if (regKind === 'symlink-G') { fs.writeFileSync(path.join(home, 'gen-target'), GENERATION); fs.symlinkSync(path.join(home, 'gen-target'), genFile); }
     const off = histDir('recall-off', ID);
     if (offKind === 'parent-file') fs.rmSync(histDir('recall-off'), { recursive: true, force: true });
@@ -12127,10 +12152,8 @@ describe('history card line: SessionStart(compact) serves the sweep\'s predictio
    *  included — or the trimmed value), handed to B2's own decideRecallOff with the CLI's generation. `unknown`:
    *  a recall-off value the CLI decides against a store this fixture has none of. */
   const cliVerdict = (envGen: string, regKind: Reg, offKind: Off, recKind: Rec): string => {
-    const regGen: Pres = regKind === 'G' ? { state: 'value', value: GENERATION }
-      : regKind === 'G2' ? { state: 'value', value: G2 }
-        : regKind === 'junk' ? { state: 'value', value: 'not-a-generation' }
-          : regKind === 'absent' ? { state: 'absent' } : { state: 'unreadable' };
+    const regGen: Pres = regKind in REG_TEXT ? { state: 'value', value: REG_TEXT[regKind]!.trim() }
+      : regKind === 'absent' ? { state: 'absent' } : { state: 'unreadable' };
     const file: Pres = offKind === 'absent' ? { state: 'absent' }
       : offKind === 'G' || offKind === 'G-padded' || offKind === 'G-wide' || offKind === 'G-nbsp' || offKind === 'G-bom'
         ? { state: 'value', value: GENERATION }
@@ -12147,19 +12170,25 @@ describe('history card line: SessionStart(compact) serves the sweep\'s predictio
   it('CONTROL: the parity table reaches every answer, so it cannot pass by serving always or never', () => {
     const verdicts = PARITY.map(([, env, r, o, k]) => cliVerdict(env, r, o, k));
     expect(new Set(verdicts)).toEqual(new Set(['none', 'stale', 'off', 'unknown']));
+    // A fail-closed row is one the CLI SERVES (else it would be an agree row), and the table holds both kinds.
+    const closed = PARITY.filter((row) => row.length === 6);
+    expect(closed.length).toBeGreaterThan(0);
+    expect(PARITY.length - closed.length).toBeGreaterThan(0);
+    for (const [what, env, r, o, k] of closed) expect(serves(cliVerdict(env, r, o, k)), `fail-closed row "${what}" must be one the CLI serves`).toBe(true);
     // The two R-recalloff-trim rows' CLI reading: presenceOf's String.prototype.trim over the planted text.
     expect([NBSP_G, BOM_G].map((t) => t.trim()), 'the CLI reads both as the generation').toEqual([GENERATION, GENERATION]);
   });
 
-  it.each(parityRows)('C19/C68 (card half), recall-off parity: %s', (_what, envGen, regKind, offKind, recKind) => {
+  it.each(parityRows)('C19/C68 (card half), recall-off parity: %s', (_what, envGen, regKind, offKind, recKind, failClosed) => {
     plantAll();
     plantParity(regKind, offKind, recKind);
     try {
       const verdict = cliVerdict(envGen, regKind, offKind, recKind);
-      expect(served(start(), { CCRC_SESSION_GENERATION: envGen }), `the CLI reads ${verdict}`)
-        .toBe(serves(verdict) ? LINE : null);
+      // R-recalloff-parity: never LINE where the CLI refuses; a fail-closed row withholds where the CLI serves.
+      expect(served(start(), { CCRC_SESSION_GENERATION: envGen }), `the CLI reads ${verdict}${failClosed ? ' (fail-closed)' : ''}`)
+        .toBe(serves(verdict) && failClosed === undefined ? LINE : null);
     } finally {
-      for (const f of [reg(`${ID}.generation`), histDir('recall-off'), histDir('recall-off', ID)]) {
+      for (const f of [reg(`${ID}.generation`), histDir('recall-off'), histDir('recall-off', ID), path.join(home, 'off-root')]) {
         try { fs.chmodSync(f, 0o700); } catch { /* absent or a symlink */ }
       }
     }

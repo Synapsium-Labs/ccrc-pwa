@@ -450,12 +450,12 @@ _hook_graph_card() {
 #
 # The trim reproduces the server's own `field()` (`server/src/registry.ts:378`
 # does `content.trim()`), so the hook and the server group rows the same way.
-_ct_read() {   # <path> -> CT_V ; rc 0 read, 1 absent, 2 unmeasurable
-  CT_V=""
+_ct_read() {   # <path> -> CT_V CT_RAWN ; rc 0 read, 1 absent, 2 unmeasurable
+  CT_V=""; CT_RAWN=$CCRC_ID_MAX
   [[ -e "$1" ]] || return 1
   [[ -f "$1" && -r "$1" ]] || return 2
   IFS= read -r -N "$CCRC_ID_MAX" CT_V 2>/dev/null < "$1"
-  CT_V="${CT_V#"${CT_V%%[![:space:]]*}"}"; CT_V="${CT_V%"${CT_V##*[![:space:]]}"}"
+  CT_RAWN=${#CT_V}; CT_V="${CT_V#"${CT_V%%[![:space:]]*}"}"; CT_V="${CT_V%"${CT_V##*[![:space:]]}"}"
   return 0
 }
 
@@ -2913,13 +2913,13 @@ command -v jq >/dev/null 2>&1 || exit 0
 #      UUID grammar, else `$REG/<id>.generation` when it does, else the record
 #      the sweep wrote beside this prediction, card/<id>/<psid>.gen: the id's
 #      newest family's generation, '' for a legacy family or none, which is what
-#      B2's CLI compares with then (coordinator ruling R-recalloff-parity). With
-#      none of the three, or a linked, unreadable or malformed record, a
-#      recall-off file that exists withholds the line (fail closed). It is
-#      read the way B2's CLI reads it, so the card and `ccrc history` never put
-#      one family in two eval arms: a symlink, a non-file or an unreadable file
-#      is OFF (D-4749 (history-card-recall-off-unreadable-off)), and a symlinked or
-#      unreadable `.generation` names no generation. The read is CCRC_ID_MAX
+#      B2's CLI compares with then (coordinator ruling R-recalloff-parity). The record
+#      is used ONLY when `.generation` is absent or empty (D-5063): a linked, unreadable,
+#      full-window or non-UUID one is unusable, and a recall-off file that exists then
+#      withholds the line, as with a missing, linked, unreadable or malformed record
+#      (fail closed). It is read the way B2's CLI reads it, so the card and `ccrc history`
+#      never put one family in two eval arms: a symlink, a non-file or an unreadable file
+#      is OFF (D-4749 (history-card-recall-off-unreadable-off)). The read is CCRC_ID_MAX
 #      chars where the CLI's is 4,096 bytes, so a read that FILLS the window is
 #      OFF before it is trimmed: a hand edit that pads the file past it withholds
 #      the line, never serves one the CLI answers exit 8 for (W2's verb writes
@@ -2965,8 +2965,8 @@ _hook_history_card() {   # folds the history line into CARD_COMPACT; silent; bui
   [[ "$psid" =~ $uuid_re ]] || return 0
   if [[ "${CCRC_SESSION_GENERATION:-}" =~ $uuid_re ]]; then
     gen="$CCRC_SESSION_GENERATION" via=session
-  elif [[ ! -L "$REG/$id.generation" ]] && _ct_read "$REG/$id.generation" && [[ "$CT_V" =~ $uuid_re ]]; then
-    gen="$CT_V" via=registry
+  elif _ct_read "$REG/$id.generation"; [[ -e "$REG/$id.generation" || -L "$REG/$id.generation" ]]; then
+    if [[ -L "$REG/$id.generation" ]] || (( CT_RAWN >= CCRC_ID_MAX )); then via=bad; elif [[ "$CT_V" =~ $uuid_re ]]; then gen="$CT_V" via=registry; elif [[ -n "$CT_V" ]]; then via=bad; fi
   fi
   [[ -L "$off" || ( -e "${off%/*}" && ! ( -d "${off%/*}" && -x "${off%/*}" ) ) ]] && return 0
   if [[ -e "$off" ]]; then
@@ -2975,7 +2975,7 @@ _hook_history_card() {   # folds the history line into CARD_COMPACT; silent; bui
     (( ${#o} < CCRC_ID_MAX )) || return 0
     o="${o#"${o%%[!$ws]*}"}"; o="${o%"${o##*[!$ws]}"}"
     [[ "$o" == *[!0123456789abcdef-]* ]] && return 0
-    if [[ -z "$via" ]]; then
+    if [[ "$via" == bad ]]; then return 0; elif [[ -z "$via" ]]; then
       [[ -L "$HISTORY_CARD_DIR/$id/$psid.gen" ]] && return 0
       _ct_read "$HISTORY_CARD_DIR/$id/$psid.gen" || return 0
       [[ -z "$CT_V" || "$CT_V" =~ $uuid_re ]] || return 0
