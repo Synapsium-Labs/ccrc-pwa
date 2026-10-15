@@ -2916,7 +2916,7 @@ command -v jq >/dev/null 2>&1 || exit 0
 #      B2's CLI compares with then (coordinator ruling R-recalloff-parity). The record
 #      is used ONLY when `.generation` is absent or empty (D-5063): a linked, unreadable,
 #      full-window, NUL-holding (a bounded `read -d ''` finds it; one after a broken UTF-8 byte fails the grammar instead) or non-UUID one is unusable, and a recall-off file that exists then
-#      withholds the line, as with a missing, linked, unreadable, full-window, NUL-holding or malformed record
+#      withholds the line, as with a missing, linked, unreadable, malformed, NUL-holding or full-window record (one probe finds both)
 #      (fail closed). It is read the way B2's CLI reads it, so the card and `ccrc history`
 #      never put one family in two eval arms: a symlink, a non-file or an unreadable file
 #      is OFF (D-4749 (history-card-recall-off-unreadable-off)). The read is CCRC_ID_MAX
@@ -2977,7 +2977,7 @@ _hook_history_card() {   # folds the history line into CARD_COMPACT; silent; bui
     [[ "$o" == *[!0123456789abcdef-]* ]] && return 0
     if [[ "$via" == bad ]]; then return 0; elif [[ -z "$via" ]]; then
       [[ -L "$HISTORY_CARD_DIR/$id/$psid.gen" ]] && return 0
-      _ct_read "$HISTORY_CARD_DIR/$id/$psid.gen" || return 0; (( CT_RAWN >= CCRC_ID_MAX )) && return 0; { IFS= read -r -d '' -n "$CCRC_ID_MAX" x 2>/dev/null < "$HISTORY_CARD_DIR/$id/$psid.gen"; } && return 0
+      _ct_read "$HISTORY_CARD_DIR/$id/$psid.gen" || return 0; { IFS= read -r -d '' -n "$CCRC_ID_MAX" x 2>/dev/null < "$HISTORY_CARD_DIR/$id/$psid.gen"; } && return 0
       [[ -z "$CT_V" || "$CT_V" =~ $uuid_re ]] || return 0
       gen="$CT_V"
     fi
