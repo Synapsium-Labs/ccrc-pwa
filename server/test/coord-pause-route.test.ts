@@ -214,18 +214,29 @@ describe('the token gate is total, with the operator routes excluded BY NAME', (
    *  rides this entry as the caps read does, because this scan reads `app.post`
    *  handlers and the two verbs share the path.
    *
+   *  `/api/coord/collect-lane` (child-reclamation wave 10): the operator's
+   *  switch on what arms the temp-root collector's deletion. Arming it starts
+   *  a deleting lane rather than releasing a wedge, so `UNGATED`'s argument
+   *  does not apply, and caps' argument holds: no machine lane calls it, and
+   *  the PWA holds no box token. Its POST also refuses `live` while sign-in is
+   *  dark, and its GET half rides this entry as the caps and stall-watch reads
+   *  do.
+   *
    *  A BLIND SPOT, recorded beside the set rather than papered over by widening
    *  the scanner (coordinator ruling, wave 6 item 2). `POST /api/sessions/:id/
-   *  kickoff` is the natural next member — SESSION_ONLY already holds three
-   *  (`/api/coord/caps`, `/api/coord/reclaim-pause`, `/api/coord/stall-watch`),
-   *  so kickoff would be its fourth — a coordination WRITE that is session-gated only — and it is
+   *  kickoff` is the natural next member — SESSION_ONLY already holds four
+   *  (`/api/coord/caps`, `/api/coord/reclaim-pause`, `/api/coord/stall-watch`,
+   *  `/api/coord/collect-lane`), so kickoff would be its fifth — a coordination
+   *  WRITE that is session-gated only — and it is
    *  ABSENT here because this file scans
    *  `coord/routes.ts` alone and that route is registered in `server.ts`. Its
    *  absence is therefore not a judgement that it belongs elsewhere; it is the
    *  scanner's reach, and the difference matters: dodging a pin by placement is
    *  not being ungated, it is being unmeasured. Whoever widens the scan to
    *  `server.ts` should add it here in the same change. */
-  const SESSION_ONLY = new Set(['/api/coord/caps', '/api/coord/reclaim-pause', '/api/coord/stall-watch']);
+  const SESSION_ONLY = new Set([
+    '/api/coord/caps', '/api/coord/reclaim-pause', '/api/coord/stall-watch', '/api/coord/collect-lane',
+  ]);
 
   /** The two mechanisms that count as "the token was checked" — the shared
    *  helper AND the two inline `checkMailToken` sites. Hoisted because BOTH
