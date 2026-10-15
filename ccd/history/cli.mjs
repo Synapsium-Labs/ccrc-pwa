@@ -207,8 +207,16 @@ function boxFacts(env, P) {
   // time and the boot id measured now equal the marker's), never `kill(pid, 0)`, which a reused pid answers; anything
   // unmeasurable (no /proc, a dead pid, an unreadable or malformed marker) is not live, and a malformed one is no marker.
   const pt = readTrimmed(P.pass);
-  const pm = pt === null ? null : parsePassMarker(pt);
-  env.pass = pm === null ? null : { pid: pm.pid, start_ms: pm.startMs, live: decidePassLive(pm, procIdentityOf(pm.pid)) };
+  let pm = pt === null ? null : parsePassMarker(pt);
+  let passLive = pm !== null && decidePassLive(pm, procIdentityOf(pm.pid));
+  if (pm !== null && !passLive && readTrimmed(P.pass) !== pt) {
+    // D-5026: the marker was read, then the identity measured. A pass that writes no tick (held, migrated) can end in between and
+    // remove its marker through its `finally`: it would read here as a dead marker started after the last tick, one false death for
+    // this run. When the identity does not measure live, the marker is read again; gone, or no longer the same text, the pass ended
+    // and there is no marker. Only a marker still there, unchanged, after a failed identity check is read as not live.
+    pm = null;
+  }
+  env.pass = pm === null ? null : { pid: pm.pid, start_ms: pm.startMs, live: passLive };
   // D-5026 (history-pass-death-record): the record a pass left when it found a pass that ended without its tick. Null is ABSENT
   // only; a record that is there and cannot be read or is not in the grammar is 'unmeasured' (as `lag` is), never null, so
   // healthInputsOf names it in the unmeasured extras and doctor FAILs status-unreadable for it, never "no death".

@@ -3203,10 +3203,13 @@ export function formatPassMarker(pid, startMs, identity) {
 /** The death record's one grammar (D-5026 `history-pass-death-record`): `~/.ccrc/history/pass-died` holds ONE line of JSON,
  *  `{"pid":<int|null>,"start_ms":<int>,"found_ms":<int>,"count":<int>}`. A scheduled pass writes it when it FINDS a pass marker
  *  with no live pass behind it (the dead pass ended without its `finally`: the carrier's kill at 10 min, the OOM killer, a
- *  SIGKILL), and a pass removes it once its own tick row is committed. `pid` and `start_ms` are the dead pass's own, from its
+ *  SIGKILL), and by itself when its body throws (the exception ends it without a tick row), and a pass removes it once its own tick row
+ *  is committed. `pid` and `start_ms` are the dead pass's own, from its
  *  marker (`pid` null and `start_ms` an upper bound, the finder's start, when the marker could not be parsed); `found_ms` is the
- *  finder's start; `count` is the deaths recorded since the last tick. Strict: every field present and typed, `count >= 1`,
- *  else null. */
+ *  finder's start; `count` is the deaths recorded since the record was last cleared. It normally equals the deaths since the last
+ *  tick (a pass that writes a tick clears the record), and can over-count when a record outlives a tick: a clear that was cut off,
+ *  or a death recorded for a pass that had already ticked (a throw after its tick row). The FAIL does not read it: only the record's
+ *  start against the last tick decides that. Strict: every field present and typed, `count >= 1`, else null. */
 export function parsePassDied(text) {
   let v;
   try { v = JSON.parse(text); } catch { return null; }
@@ -3519,7 +3522,9 @@ export function deriveHealth(h) {
   // while the last tick is fresh. Their evidence (the last three ticks rows; recover_unmoved_ticks, which grows
   // only while ticks run) stops changing when the sweep dies, so a timer dead mid-backfill would read as a WARN
   // for ever (§9.6 step 4; FE3: a RUNNING sweep in catch-up is not stale). `off` and `op-running` are an
-  // operator switch and a live marker, not tick evidence, so they hold regardless.
+  // operator switch and a live marker, not tick evidence, so they hold regardless, and they hold D-5026's death line back too
+  // (below): no scheduled pass runs under either, so nothing new can die, and the next pass after them either ticks, which clears the
+  // record, or is killed, which is recorded.
   const tickAge = h.lastTickMs === null ? null : h.nowMs - h.lastTickMs;
   // D-5016 (history-doctor-reads-a-live-pass): the ticks row is stamped with the pass START but written at its END, so a
   // healthy pass that runs longer than the timer's period shows an old tick while it runs. A pass the marker proves
@@ -3575,8 +3580,10 @@ export function deriveHealth(h) {
     && h.nowMs - h.heldPassMs <= TICK_STALE_MS && h.heldPassMs - h.nowMs <= PASS_FUTURE_SLACK_MS;
 
   // 4. the FAILs.
-  if (death !== null) {
-    fail.push(item('tick-stale', `${death.count} scheduled pass(es) since the last tick ended without writing one (the carrier kills a pass at ${minutesOf(CARRIER_KILL_S * 1000)} min; the OOM killer or a SIGKILL also ends one); the last (pid ${death.pid === null ? 'unknown' : death.pid}) started ${Math.max(0, minutesOf(h.nowMs - death.startMs))} min ago`));
+  // D-5026: the off switch and an operator pass hold the death line back, as D-4314 says they hold every freshness FAIL (no scheduled pass
+  // runs under either); a live scheduled pass, catching-up and lag-unmeasured do NOT (ruling 5049 F1).
+  if (death !== null && !h.historyOff && !opLive) {
+    fail.push(item('tick-stale', `the sweep has recorded ${death.count} scheduled pass(es) that ended without writing a tick since its last clear; the last (pid ${death.pid === null ? 'unknown' : death.pid}) started ${Math.max(0, minutesOf(h.nowMs - death.startMs))} min ago (the carrier kills a pass at ${minutesOf(CARRIER_KILL_S * 1000)} min; the OOM killer or a SIGKILL also ends one)`));
   }
   if (passHung) {
     fail.push(item('tick-stale', `the scheduled pass (pid ${h.pass.pid}) started ${minutesOf(passAge)} min ago and is still running (hung past ${minutesOf(TICK_STALE_MS)} min)`));

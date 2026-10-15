@@ -3368,8 +3368,10 @@ export function procIdentityOf(pid) {
  *  happen under the sweep lock; the pass goes on as it did). A marker with no live pass behind it is a pass that ended without its
  *  `finally`: the carrier's kill at 10 min (the unit's TimeoutStartSec), the OOM killer, a SIGKILL. A marker that is there and cannot be
  *  read or parsed is a death of an unknown pass (pid null; its start is bounded above by THIS pass's start). Either is recorded in
- *  `pass-died` (pid, start, this pass's start, and the count of deaths since the last tick: the previous record's plus one when a
- *  parseable record stands, else 1), and doctor FAILs until a pass writes a tick, which removes the record (`clearPassDied`).
+ *  `pass-died` (pid, start, this pass's start, and the count of deaths recorded since the record was last cleared: the previous
+ *  record's plus one when a parseable record stands, else 1), and doctor FAILs until a pass writes a tick, which removes the record
+ *  (`clearPassDied`). The count normally equals the deaths since the last tick, and over-counts when a record outlives a tick (a clear
+ *  that was cut off, or a death recorded for a pass that had already ticked); the FAIL itself does not read it.
  *  Answers false only when the record could not be written: the caller then leaves the dead marker standing, which doctor reads as
  *  the same death. */
 function recordPassDeath(P, startMs) {
@@ -3385,10 +3387,17 @@ function recordPassDeath(P, startMs) {
       deadStartMs = pm.startMs;
     }
   }
+  return writePassDied(P, pid, deadStartMs, startMs);
+}
+
+/** The record's one writer (D-5026): `pid` and `deadStartMs` name the pass that ended without its tick, `foundMs` is when it was
+ *  found (the next pass's start for a kill, the dying pass's own clock for a throw), and the count is the previous parseable
+ *  record's plus one, else 1. Answers false when the write failed. */
+function writePassDied(P, pid, deadStartMs, foundMs) {
   const prior = readBounded(P.passDied, CONTROL_FILE_MAX, false);
   const was = prior.state === 'value' ? parsePassDied(prior.value.trim()) : null;
   try {
-    writeFileAtomic(P.passDied, formatPassDied(pid, deadStartMs, startMs, was === null ? 1 : was.count + 1), 0o600);
+    writeFileAtomic(P.passDied, formatPassDied(pid, deadStartMs, foundMs, was === null ? 1 : was.count + 1), 0o600);
     return true;
   } catch {
     return false;
@@ -3448,9 +3457,16 @@ export async function scheduledPass(parsed, deps, out) {
   }
   // D-5016: the pass marker stands from here, before any long step, to the pass's end. D-5026: a marker found here is recorded as a
   // death before it is overwritten, and a pass that could not record it leaves it standing and runs without a marker of its own.
-  const owned = writePassMarker(P, now());
+  const startMs = now();
+  const owned = writePassMarker(P, startMs);
   try {
     return await scheduledPassBody(parsed, deps, out, P, now, role);
+  } catch (e) {
+    // D-5026: a pass that ends by an exception ran its `finally`, so it leaves no marker for the next pass to find; it writes no tick,
+    // and it records its own death here, before the finally removes its marker (pid and start its own, found_ms now). Best effort: a
+    // failed write changes nothing else. A pass that RETURNS (held, migrated, refused, busy, run) records nothing.
+    try { writePassDied(P, process.pid, startMs, now()); } catch { /* evidence only */ }
+    throw e;
   } finally {
     removePassMarker(P, owned);
   }

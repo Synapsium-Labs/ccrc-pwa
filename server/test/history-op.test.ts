@@ -640,7 +640,7 @@ describe('D-5027: a held pass is fresh for tick-stale', () => {
     expect(fs.readFileSync(died, 'utf8'), 'the held pass neither cleared nor rewrote the record').toBe(record);
     const fail = verdict(box);
     expect(fail.map((i) => i.word).sort()).toEqual(['migration-needs-op', 'tick-stale']);
-    expect(fail.find((i) => i.word === 'tick-stale')!.detail).toContain('ended without writing one');
+    expect(fail.find((i) => i.word === 'tick-stale')!.detail).toContain('ended without writing a tick');
   });
 });
 

@@ -469,3 +469,23 @@ import { DatabaseSync as DatabaseSyncRcv } from 'node:sqlite';
     };
   }
 }
+
+// ── W1-B2 fix round 2 batch A2 (D-5026): a pass marker removed between status's read of it and its identity measure ──────
+// HISTORY_TEST_UNLINK_ON_PROC_STAT=<file>: the first time the process reads a `/proc/<pid>/stat` (procIdentityOf's read, which
+//   status makes after it has read the pass marker), <file> is removed first, once. It is the pass that ends through its `finally`
+//   between the two reads, made deterministic. Absent, nothing is patched.
+{
+  const unlinkOnStat = process.env.HISTORY_TEST_UNLINK_ON_PROC_STAT ?? '';
+  if (unlinkOnStat !== '') {
+    const realReadFileSync = fs.readFileSync;
+    let spent = false;
+    fs.readFileSync = function readFileSyncUnlinkOnStat(p, ...rest) {
+      if (!spent && typeof p === 'string' && /^\/proc\/[0-9]+\/stat$/.test(p)) {
+        spent = true;
+        fs.rmSync(unlinkOnStat, { force: true });
+      }
+      return realReadFileSync.call(this, p, ...rest);
+    };
+    syncBuiltinESMExports();
+  }
+}

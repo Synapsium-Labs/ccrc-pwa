@@ -747,6 +747,28 @@ describe('status health: the measured snapshot through deriveHealth (task 28)', 
       } finally { if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL'); }
     });
 
+    // D-5026 (batch A2, item 4): status reads the marker, then measures its pid's identity. A pass that writes no tick (held, migrated) and
+    // ends through its `finally` between the two reads must not read as a dead marker started after the last tick. The faults preload
+    // removes the marker at the identity measure's own read (HISTORY_TEST_UNLINK_ON_PROC_STAT), once.
+    it('(D-5026) a marker removed between status\'s read of it and its identity measure is no marker (pass null, no death FAIL); one that stays is still a death', () => {
+      const box = healthHh.makeHistoryBox('ccrc-history-passgone-', { role: 'fleet', shim: true });
+      ageFile(shimOf(box), 120 * MIN);
+      tickedStore(box, Date.now() - 5 * MIN);                                   // a fresh tick: only a death can FAIL
+      const dead = spawnSync(process.execPath, ['-e', '']).pid!;                // a pid that has already exited: its identity measures nothing
+      const me = identityOf(process.pid);
+      const arrange = (): void => plant(box, dead, 2 * MIN, { procStart: me.procStart, bootId: me.bootId });
+      arrange();
+      const stays = statusOf(box);
+      expect(stays.env!['pass'], 'CONTROL: no preload, the marker is still there: a dead one, started after the last tick').toMatchObject({ pid: dead, live: false });
+      expect(wordsOf(failOf(stays))).toEqual(['tick-stale']);
+      expect(failOf(stays)[0]!.detail).toContain('ended without writing a tick');
+      arrange();
+      const gone = statusOf(box, ['--json'], { preloads: [healthHh.PRELOADS.faults], env: { HISTORY_TEST_UNLINK_ON_PROC_STAT: passFile(box) } });
+      expect(healthFs.existsSync(passFile(box)), 'the seam removed the marker at the identity measure').toBe(false);
+      expect(gone.env!['pass'], 'the pass ended through its finally: no marker').toBeNull();
+      expect(wordsOf(failOf(gone))).toEqual([]);
+    });
+
     // D-5026 (history-pass-death-record; fix round 2, review 462 F1): `status` reads the record a pass left when it found a pass that
     // ended without its tick (`pass_died`: the parsed record, null only when absent). One that is there and cannot be read is
     // 'unmeasured' and reaches doctor as status-unreadable (the no-overloaded-null rule), never as "no death".
@@ -763,7 +785,7 @@ describe('status health: the measured snapshot through deriveHealth (task 28)', 
       const r = statusOf(box);
       expect(r.env!['pass_died']).toMatchObject({ pid: 4242, count: 2 });
       expect(wordsOf(failOf(r))).toEqual(['tick-stale']);
-      expect(failOf(r)[0]!.detail).toContain('2 scheduled pass(es) since the last tick ended without writing one');
+      expect(failOf(r)[0]!.detail).toContain('the sweep has recorded 2 scheduled pass(es) that ended without writing a tick since its last clear');
       expect(failOf(r)[0]!.detail).toContain('pid 4242');
     });
     it('(D-5026) a record whose start is at or before the last tick is closed (the removal after its tick was cut off), and an absent one is null', () => {

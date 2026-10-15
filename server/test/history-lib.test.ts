@@ -4124,7 +4124,7 @@ describe('deriveHealth: every §9.6 rule as a word with its class, detail and re
       const r = healthLib.deriveHealth(base({ ...BASE, bytesBehindLast3: [300, 200, 100], pass: live(0.5 * MIN), passDied: died() }));
       expect(words(r, 'fail')).toContain('tick-stale');
       const item = r.fail.find((i) => i.word === 'tick-stale')!;
-      expect(item.detail).toContain('1 scheduled pass(es) since the last tick ended without writing one');
+      expect(item.detail).toContain('the sweep has recorded 1 scheduled pass(es) that ended without writing a tick since its last clear');
       expect(item.detail).toContain('pid 4242');
       expect(item.detail).toContain('started 40 min ago');
       expect(item.remedy).toBe(healthLib.HEALTH_REMEDIES['tick-stale']);
@@ -4134,16 +4134,16 @@ describe('deriveHealth: every §9.6 rule as a word with its class, detail and re
     it('pin 2: the same with an unmeasured lag (lagS null): FAIL tick-stale naming the death (not WARN lag-unmeasured)', () => {
       const r = healthLib.deriveHealth(base({ ...BASE, lagS: null, pass: live(0.5 * MIN), passDied: died({ count: 3 }) }));
       expect(words(r, 'fail')).toContain('tick-stale');
-      expect(r.fail.find((i) => i.word === 'tick-stale')!.detail).toContain('3 scheduled pass(es) since the last tick ended without writing one');
+      expect(r.fail.find((i) => i.word === 'tick-stale')!.detail).toContain('the sweep has recorded 3 scheduled pass(es) that ended without writing a tick since its last clear');
     });
     it('the death FAILs whether or not a pass is live, once only (no second tick-stale for the old tick), and lag-high is judged as before', () => {
       for (const pass of [null, live(MIN)]) {
         const flat = healthLib.deriveHealth(base({ ...BASE, bytesBehindLast3: [100, 100, 100], pass, passDied: died() }));
         expect(words(flat, 'fail'), `pass ${JSON.stringify(pass)}`).toEqual(['tick-stale', 'lag-high']);
-        expect(flat.fail[0]!.detail).toContain('ended without writing one');
+        expect(flat.fail[0]!.detail).toContain('ended without writing a tick');
         const none = healthLib.deriveHealth(base({ lastTickMs: null, lagS: null, shimMtimeMs: NOW - 60 * MIN, pass, passDied: died() }));
         expect(words(none, 'fail'), 'no tick at all: the record is open, and the no-tick line is not pushed beside it').toEqual(['tick-stale']);
-        expect(none.fail[0]!.detail).toContain('ended without writing one');
+        expect(none.fail[0]!.detail).toContain('ended without writing a tick');
       }
       expect(words(healthLib.deriveHealth(base({ ...BASE, passDied: died({ pid: null }) })), 'fail')[0]).toBe('tick-stale');
       expect(healthLib.deriveHealth(base({ ...BASE, passDied: died({ pid: null }) })).fail[0]!.detail).toContain('pid unknown');
@@ -4161,23 +4161,42 @@ describe('deriveHealth: every §9.6 rule as a word with its class, detail and re
       const dead = (startMs: number) => ({ pid: 4242, startMs, live: false });
       const r = healthLib.deriveHealth(base({ ...BASE, pass: dead(NOW - 3 * MIN) }));
       expect(words(r, 'fail')).toEqual(['tick-stale', 'lag-high']);
-      expect(r.fail[0]!.detail).toContain('ended without writing one');
+      expect(r.fail[0]!.detail).toContain('ended without writing a tick');
       expect(r.fail[0]!.detail).toContain('pid 4242');
-      expect(healthLib.deriveHealth(base({ lastTickMs: null, lagS: null, pass: dead(NOW - 3 * MIN) })).fail[0]!.detail).toContain('ended without writing one');
+      expect(healthLib.deriveHealth(base({ lastTickMs: null, lagS: null, pass: dead(NOW - 3 * MIN) })).fail[0]!.detail).toContain('ended without writing a tick');
       // Not a death: its start is at or before the last tick (it ticked, then was killed in its journal half), or it is live.
       expect(words(healthLib.deriveHealth(base({ lastTickMs: NOW - MIN, pass: dead(NOW - 2 * MIN) })), 'fail')).toEqual([]);
       expect(words(healthLib.deriveHealth(base({ lastTickMs: NOW - MIN, pass: dead(NOW - MIN) })), 'fail')).toEqual([]);
     });
     it('a record and a later dead marker count as two: the marker is a pass the record does not name', () => {
       const r = healthLib.deriveHealth(base({ ...BASE, pass: { pid: 4343, startMs: NOW - 2 * MIN, live: false }, passDied: died({ count: 1 }) }));
-      expect(r.fail[0]!.detail).toContain('2 scheduled pass(es) since the last tick');
+      expect(r.fail[0]!.detail).toContain('the sweep has recorded 2 scheduled pass(es) that ended without writing a tick');
       expect(r.fail[0]!.detail).toContain('pid 4343');
       expect(r.fail[0]!.detail).toContain('started 2 min ago');
     });
     it('the hung arm stays for a pass the kill does not end, beside an open death', () => {
       const r = healthLib.deriveHealth(base({ ...BASE, pass: { pid: 4343, startMs: NOW - 12 * MIN, live: true }, passDied: died() }));
       expect(r.fail.map((i) => i.detail).join('\n')).toContain('still running');
-      expect(r.fail.map((i) => i.detail).join('\n')).toContain('ended without writing one');
+      expect(r.fail.map((i) => i.detail).join('\n')).toContain('ended without writing a tick');
+    });
+    it('pin 8: the off switch and an operator pass hold the death line back (no scheduled pass runs under either): WARN off / op-running with an open record and an old tick, and no FAIL', () => {
+      const off = healthLib.deriveHealth(base({ ...BASE, historyOff: true, passDied: died() }));
+      expect(words(off, 'warn')).toContain('off');
+      expect(words(off, 'fail'), 'an open record under the off switch is no FAIL').toEqual([]);
+      const op = healthLib.deriveHealth(base({ ...BASE, op: { verb: 'backup', pid: 4242, alive: true }, passDied: died() }));
+      expect(words(op, 'warn')).toContain('op-running');
+      expect(words(op, 'fail'), 'an open record under a live operator pass is no FAIL').toEqual([]);
+      // The same hold for a leftover dead marker (the death with no record).
+      expect(words(healthLib.deriveHealth(base({ ...BASE, historyOff: true, pass: { pid: 4242, startMs: NOW - 3 * MIN, live: false } })), 'fail')).toEqual([]);
+      // CONTROL: the switch lifted, the same record FAILs; and a dead op marker (not alive) holds nothing.
+      expect(words(healthLib.deriveHealth(base({ ...BASE, passDied: died() })), 'fail')).toContain('tick-stale');
+      expect(words(healthLib.deriveHealth(base({ ...BASE, op: { verb: 'backup', pid: 4242, alive: false }, passDied: died() })), 'fail')).toContain('tick-stale');
+    });
+    it('the detail says what the count is: the deaths the sweep recorded since the record was last cleared, never "since the last tick"', () => {
+      const r = healthLib.deriveHealth(base({ ...BASE, passDied: died({ count: 4 }) }));
+      const detail = r.fail.find((i) => i.word === 'tick-stale')!.detail;
+      expect(detail).toBe(`store ${STORE}: the sweep has recorded 4 scheduled pass(es) that ended without writing a tick since its last clear; the last (pid 4242) started 40 min ago (the carrier kills a pass at 10 min; the OOM killer or a SIGKILL also ends one)`);
+      expect(detail).not.toContain('since the last tick');
     });
     it('the record grammar: one JSON line, every field present and typed, count at least 1, else null', () => {
       const ok = '{"pid":4242,"start_ms":1700000000000,"found_ms":1700000120000,"count":2}\n';
@@ -4222,7 +4241,7 @@ describe('deriveHealth: every §9.6 rule as a word with its class, detail and re
     it('an open D-5026 death is not closed by a held pass', () => {
       const r = healthLib.deriveHealth(base({ ...HELD, heldPassMs: NOW - MIN, passDied: { pid: 4242, startMs: NOW - 20 * MIN, foundMs: NOW - 18 * MIN, count: 1 } }));
       expect(words(r, 'fail')).toEqual(['tick-stale', 'migration-needs-op']);
-      expect(r.fail[0]!.detail).toContain('ended without writing one');
+      expect(r.fail[0]!.detail).toContain('ended without writing a tick');
     });
   });
   // Task 28F item 3: an input status could not read is not a healthy input (the no-overloaded-null rule).
