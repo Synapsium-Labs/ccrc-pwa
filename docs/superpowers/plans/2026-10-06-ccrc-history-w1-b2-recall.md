@@ -38074,8 +38074,8 @@ C64's CLI door and the direct door of B2's forms, C65-C69; O59 (the belt, rev 3.
 5. **The rollback edge, before any rollback of a node to a B1 release.** Two parts hold from this PR on.
    - A node whose store was migrated to v2 reads as `schema-newer` under a B1 release (spec §6.11, G9; D-5015). B1's
      scheduled pass refuses with exit 5 and leaves the store unchanged: capture pauses and the journal half keeps
-     running until the node is updated forward again. B1 has no restore door, so no step of the operator's restores
-     `pre-v2.db` by hand.
+     running until the node is updated forward again. B1 has no restore verb, so nothing in B1 restores `pre-v2.db`;
+     the way back to a capturing node is `ccrc update` forward to this build.
    - The fork part (spec §6.1, "The rollback edge"). From this PR on, a node journals `fork` epochs, spools `fork`
      lines and may hold a `fork` candidate in `epoch_candidates`. B1 merged with `fork` in `EPOCH_CAUSES` (B1's D-4342
      (`history-epoch-causes-widened-for-rollback`)); its spool set and hook stay without it. So, of the fork part, one

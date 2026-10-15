@@ -1573,10 +1573,14 @@ describe('F13: deriveLeaves steps its scans one row at a time under the budget, 
     const D = (await import('../../ccd/history/derive.mjs')) as unknown as {
       deriveLeaves(db: Writer, ictx: Record<string, unknown>, budget: unknown): { derived: number; waiting: number; failed: number };
     };
+    // Its own box, settled empty: (c) neither relies on what (a) and (b) left derived in the describe's shared box nor leaves its
+    // transcripts there, so a failure of (a) cannot reach (c), and (c)'s own failure names the fork scan.
+    const own = makeHistoryBox('ccrc-hist-f13-forks-');
+    settle(own);
     // Four main transcripts, each with two live copies (the `HAVING count(*) > 1` rows of forkCandidates). They hold no boundary, so
     // the todo scan has nothing to derive and the fork scan is the loop under test.
     const CANDIDATES = 4;
-    const w = openWriter(historyPaths(box.home).dbFile);
+    const w = openWriter(historyPaths(own.home).dbFile);
     try {
       withTx(w, 'NORMAL', () => {
         const tr = w.prepare('INSERT INTO transcripts (transcript_pk, cc_session_uuid) VALUES (?, ?)');
@@ -1591,10 +1595,10 @@ describe('F13: deriveLeaves steps its scans one row at a time under the budget, 
     let left = Number.POSITIVE_INFINITY;
     const now = (): number => { if (left > 0) { left -= 1; return 0; } return 3_600_000; };
     const budget = S.newBudget(now, { maxMs: 1_000 });
-    const db = openWriter(historyPaths(box.home).dbFile);
+    const db = openWriter(historyPaths(own.home).dbFile);
     try {
       const spy = watch(db);
-      const ictx = S.makeIngestCtx(box.home, box.homes, Date.now(), null);
+      const ictx = S.makeIngestCtx(own.home, own.homes, Date.now(), null);
       ictx['fts'] = true;
       left = 1;
       expect(D.deriveLeaves(spy.db, ictx, budget), 'nothing to derive').toEqual({ derived: 0, waiting: 0, failed: 0 });
