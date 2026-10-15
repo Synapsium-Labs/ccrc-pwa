@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=94f07e61032767a564b5166a96087c3c3b694aa49a564fe28e1894d651164fbb
+# ccrc:generated 1 sha256=c4c35e3b5fb9142f72bbc424c50dc60c0fda7f2180ebe2f4b2e72e32e271690f
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -6475,8 +6475,8 @@ _ws_project_valid() {   # project -> 0 when it is a legal project name to CREATE
   # THE ASYMMETRY IS WHY IT MATTERS HERE RATHER THAN SOMEDAY. The reader is now
   # locale-independent; this gate was not, so a project tagged from a `LANG=en_US.UTF-8`
   # shell could not be CLEARED from `claude-session@*`'s LANG-less environment: the tag
-  # kept constraining placement and `ccd project-pool --clear` refused its own name. A
-  # constraint you can create and cannot remove is worse than either locale alone.
+  # kept constraining placement, and the verb that clears it refused its own name:
+  # `ccd project-pool --clear`. A constraint you can create and cannot remove is worse than either locale alone.
   # NO LEADING DASH (path-identity spec §2.4): a dash-leading project mints a flag-spelled id.
   local LC_ALL=C
   [[ "$1" =~ ^[A-Za-z0-9._-]+$ ]] || return 1
