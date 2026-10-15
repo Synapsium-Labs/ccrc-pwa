@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { buildServer, type Deps } from '../src/server.js';
 import { loadConfig } from '../src/config.js';
@@ -13,7 +13,7 @@ import { DEFAULT_TEST_ROSTER, seedRoster, testDeps } from './helpers.js';
 import { parseRoster } from '../../shared/roster.js';
 import { generateAccountsSh } from '../../shared/generate.mjs';
 import { bodyDigest } from '../../shared/mark.mjs';
-import type { FleetSession } from '../../shared/api.js';
+import type { FleetHealth, FleetSession } from '../../shared/api.js';
 import { mkTmp } from './tmpHelpers.js';
 import { Bus } from '../src/bus.js';
 import { FleetWatcher } from '../src/watch.js';
@@ -357,6 +357,87 @@ describe('POST /api/fleet/reboot', () => {
     expect(res.statusCode).toBe(502);
     expect(res.json()).toEqual({ ok: false, error: 'hetzner-error' });
     await app.close();
+  });
+});
+
+describe('/api/fleet/health: the delegation observation health (wave 3, Task 13)', () => {
+  const DELEGATION_CAPS = ['caps', 'delegation-events-v1'];
+  const INC = '0189abcd-1234-5678-9abc-0123456789ab';
+
+  /** A watcher over a store, with a census pass planted for one live session whose spool directory exists: the lane then has run. */
+  async function lane(env: Record<string, string> = {}, verbs: string[] = DELEGATION_CAPS) {
+    const home = mkTmp('ccrc-fh-dg-');
+    seedRoster(home);
+    const cfg = loadConfig({ CCRC_HOME: home, ...env });
+    const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
+    mkdirSync(path.join(cfg.registryDir, 'delegation', 'spool', 'demo-a'), { recursive: true });
+    const full = {
+      cfg, runCcd: ccdRunner(deadRunner, cfg), tmux: new Tmux(deadRunner), io: localIO, queue: new KeyedQueue(), coord,
+      fleetState: { connected: true, downSince: null, ccdVerbs: verbs, rosterFp: null, build: null },
+    } as never as Deps;
+    const bus = new Bus();
+    const watcher = new FleetWatcher(full, bus);
+    const app = await buildServer(full, bus, watcher);
+    const runLane = async (): Promise<void> => {
+      (watcher as unknown as { delegationCensus: unknown }).delegationCensus = {
+        measuredAt: Date.now(), projects: new Map(), incarnations: new Map([['demo-a', { kind: 'measured', incarnation: INC }]]),
+      };
+      await watcher.sweepDelegation([{ id: 'demo-a', project: 'demo', status: 'idle' }] as never, [{ id: 'demo-a', project: 'demo', child: { kind: 'none' } }] as never);
+    };
+    return { app, watcher, runLane };
+  }
+  type Body = Record<string, unknown> & { delegation?: Record<string, unknown> };
+
+  for (const [name, env] of [['local', {}], ['remote', { CCRC_FLEET: 'remote' }]] as const) {
+    it(`${name} mode: the member is ABSENT until the lane has run (absence reads as unknown), then present and report-only`, async () => {
+      const { app, runLane } = await lane(env);
+      try {
+        const before = (await app.inject({ method: 'GET', url: '/api/fleet/health' })).json() as Body;
+        expect('delegation' in before, 'a health that has measured nothing must not render a block').toBe(false);
+        await runLane();
+        const after = (await app.inject({ method: 'GET', url: '/api/fleet/health' })).json() as Body;
+        expect(after.delegation).toMatchObject({ mode: 'report-only', stageGate: 'unmeasured', unmeasuredRate: null, circuitBreaker: 'clear' });
+        // the new member is the only change: nothing else of the response moved
+        const { delegation: _gone, ...rest } = after;
+        const { ...restBefore } = before;
+        expect(rest).toEqual(restBefore);
+      } finally { await app.close(); }
+    });
+  }
+
+  it('an old fleet (a `ccd caps` list without the token) is unmeasured on the wire, never a zero or an eligible', async () => {
+    const { app, runLane } = await lane({}, ['caps', 'ws-rm']);
+    try {
+      await runLane();
+      const body = (await app.inject({ method: 'GET', url: '/api/fleet/health' })).json() as Body;
+      expect(body.delegation).toMatchObject({ stageGate: 'unmeasured', unmeasuredRate: null });
+      expect(body.delegation!['stageGate']).not.toBe('eligible');
+    } finally { await app.close(); }
+  });
+
+  it('a server with a watcher but no coordination database, or no watcher at all, never emits it', async () => {
+    const deps = testDeps(mkTmp('ccrc-fh-dg-'));
+    const bus = new Bus();
+    const watcher = new FleetWatcher(deps, bus);
+    const a = await buildServer(deps, bus, watcher);
+    const b = await buildServer(testDeps(mkTmp('ccrc-fh-dg-')));
+    try {
+      for (const app of [a, b]) {
+        const body = (await app.inject({ method: 'GET', url: '/api/fleet/health' })).json() as Body;
+        expect('delegation' in body).toBe(false);
+      }
+    } finally { await a.close(); await b.close(); }
+  });
+
+  it('adds no PWA state and no fleet frame: the type is an optional member and the PWA source never names it', () => {
+    const fh: FleetHealth = { mode: 'local', connected: true, downSince: null };
+    expect(fh.delegation).toBeUndefined();
+    const pwa = path.resolve(__dirname, '../../pwa/src');
+    const grep = (dir: string): string[] => readdirSync(dir, { withFileTypes: true }).flatMap((e) => {
+      const p = path.join(dir, e.name);
+      return e.isDirectory() ? grep(p) : /\.(ts|tsx|svelte|js)$/.test(e.name) && /DelegationObservationHealth|\.delegation\b/.test(readFileSync(p, 'utf8')) ? [p] : [];
+    });
+    expect(grep(pwa)).toEqual([]);
   });
 });
 

@@ -18,7 +18,8 @@ import { bootBoxToken } from './token/boot.js';
 import { BoxTokenDriver } from './token/driver.js';
 import { fileBothRoleWriter, fileTokenStore, tokenPaths } from './token/files.js';
 import { gateRowsOver, generationReaderOver, tokenSyncLinkOver } from './token/link.js';
-import { openCoordDb } from './coord/db.js';
+import { coordinationRestoreRefusal, openCoordDb } from './coord/db.js';
+import { COORDINATION_RESTORE_MARKER_FILE } from './coord/delegation-checkpoint.js';
 import { CoordStore } from './coord/store.js';
 import { PoolEdgeLog, defaultPoolEdgeLogPath } from './coord/pooledgelog.js';
 import { UpdateIntentLog, defaultUpdateIntentLogPath } from './coord/updateintentlog.js';
@@ -60,6 +61,16 @@ const tokenBoot = await bootBoxToken({
 });
 for (const line of tokenBoot.warnings) console.warn(line);
 const mailToken = tokenBoot.holder;
+
+// R24 (delegation broker wave 3): an active coordination restore marker stops the process BEFORE coord.db is opened, and so does a
+// marker that cannot be measured (fail closed). `ccrc coordination-snapshot` publishes the marker while it replaces coord.db and the
+// delegation journal and checkpoint, so booting over it would open a half-replaced set. Refused the way the agent-link check below
+// refuses: one `ccrc-server:` line on stderr, then a nonzero exit.
+const restoreRefusal = coordinationRestoreRefusal(cfg.ccrcDir, COORDINATION_RESTORE_MARKER_FILE);
+if (restoreRefusal !== null) {
+  console.error(restoreRefusal);
+  process.exit(1);
+}
 
 // Opened at the root, before the watcher: a database that cannot be migrated
 // must stop the process, not be discovered by the first sweep that touches

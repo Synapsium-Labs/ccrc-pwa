@@ -2602,3 +2602,101 @@ describe('Task 9 R36: a stale result can never write replaced:false over a durab
     expect(rows.get('2026101413')).toBe(false);
   });
 });
+
+// ── Task 13, hand-off 6 (D-4648): a Workflow WORKER's positive meta is durable only after the checkpoint replacement (O1, W3-M12) ──
+
+describe('Task 13: applyPositiveWorkflowMeta opens a workflow worker exactly as applyPositiveAgentMeta opens an agent (O1)', () => {
+  const RUN = 'wf_run1';
+  const workflowLaunch = (n: number, runId = RUN): DelegationEventEnvelopeV1 => ({
+    ...base(n), eventKind: 'PostToolUse', toolName: 'Workflow', toolUseId: `toolu_wf${n}`, outcome: 'async-launched',
+    launch: { status: 'async-launched', taskId: `task_${n}`, taskType: 'local_workflow', workflowName: 'review-pass', runId, transcriptDir: `/work/t/${runId}`, scriptPath: '/work/s.js' },
+  });
+  const workerKey = (index: number) => ({ parentId: PARENT, parentIncarnation: INC, sourceKind: 'workflow' as const, upstreamId: `${RUN}-${index}` });
+  const meta = (index: number, over: { parentId?: string } = {}) => ({ parentId: over.parentId ?? PARENT, parentIncarnation: INC, runId: RUN, workerIndex: index });
+  let launchJournalId = '';
+
+  /** The run's launch response is its qualifying join (R44): it opens the RUN row and the mapping, so the worker takes the run's identity record. */
+  async function metaRun(edge: DelegationDurabilityEdge | null, when: 'before' | 'after') {
+    const h = harness();
+    const first = await h.open();
+    const named = await first.applyAccepted(batch([sessionStart(1), workflowLaunch(2)]));
+    launchJournalId = named.appended[1]!.journalId;
+    await first.close();
+    const store2 = new CoordStore(openCoordDb(path.join(h.dir, 'coord.db')));
+    const h2 = harness({ dir: h.dir, store: store2 });
+    const dur = await h2.open({ onEdge: edge === null ? undefined : (e, w) => { if (e === edge && w === when) throw new SimulatedCrash(`${e}:${w}`); } });
+    h2.log.length = 0;
+    return { h2, dur, store2 };
+  }
+  const expectedId = (index: number): string => deriveDelegationActivityId(workerKey(index), launchJournalId);
+
+  it('opens the worker from the RUN\'s record, without a journal event, advancing only the revision, and returns the ID only after the replacement', async () => {
+    const { h2, dur } = await metaRun(null, 'before');
+    const before = dur.state().checkpoint;
+    const out = await dur.applyPositiveWorkflowMeta(meta(1));
+    expect(out).toMatchObject({ kind: 'opened', activityId: expectedId(1) });
+    const after = dur.state().checkpoint;
+    expect(after.revision).toBe(before.revision + 1);
+    expect(after.appliedJournalSequence).toBe(before.appliedJournalSequence);          // no journal sequence invented
+    expect(h2.log.some((l) => l.startsWith('journal.'))).toBe(false);
+    expect(after.activityIdsByNaturalKey[encodeDelegationNaturalKey(workerKey(1))]).toBe(expectedId(1));
+    const row = after.activities.find((a) => a.upstreamId === `${RUN}-1`)!;
+    expect(row).toMatchObject({ sourceKind: 'workflow', identityJournalId: launchJournalId, parentId: PARENT });
+    if (out.kind === 'opened') expect(out.applied.durable).toBe(true);
+    expect(out.kind === 'opened' && after.activities.some((a) => a.activityId === out.activityId)).toBe(true);
+  });
+
+  it('waits when no run is open, answers already-open for a mapped worker, and a second worker takes the same identity record', async () => {
+    const { dur } = await metaRun(null, 'before');
+    expect(await dur.applyPositiveWorkflowMeta({ ...meta(0), runId: 'wf_unknown' })).toEqual({ kind: 'waiting-for-evidence' });
+    expect(dur.state().checkpoint.revision).toBe(1);                                    // a wait writes nothing
+    await dur.applyPositiveWorkflowMeta(meta(0));
+    await dur.applyPositiveWorkflowMeta(meta(1));
+    expect(await dur.applyPositiveWorkflowMeta(meta(0))).toEqual({ kind: 'already-open', activityId: expectedId(0) });
+    const workers = dur.state().checkpoint.activities.filter((a) => /-\d+$/.test(a.upstreamId));
+    expect(workers.map((a) => a.upstreamId).sort()).toEqual([`${RUN}-0`, `${RUN}-1`]);
+    expect(new Set(workers.map((a) => a.identityJournalId))).toEqual(new Set([launchJournalId]));
+  });
+
+  it('refuses an index that is not a non-negative safe integer, writes nothing, and mints nothing', async () => {
+    const { h2, dur } = await metaRun(null, 'before');
+    const before = readDisk(h2.dir);
+    for (const index of [-1, 1.5, Number.NaN, Number.POSITIVE_INFINITY, 2 ** 53, '1' as unknown as number]) {
+      await expect(dur.applyPositiveWorkflowMeta(meta(index)), String(index)).rejects.toMatchObject({ code: 'bad-shape' });
+    }
+    expect(readDisk(h2.dir)).toEqual(before);
+    expect(dur.state().checkpoint.activities.map((a) => a.upstreamId)).toEqual([RUN]);
+    expect(dur.state().phase).toBe('ready');                                            // a refused index is not a failed application
+    expect(dur.failure()).toBeNull();
+  });
+
+  const EDGES = ['build', 'checkpoint-write', 'checkpoint-fsync', 'checkpoint-rename', 'directory-fsync'] as const;
+  for (const edge of EDGES) {
+    for (const when of ['before', 'after'] as const) {
+      it(`O1 crash ${when} ${edge}: the call rejects, no ID is returned, SQLite is untouched, and the ID is on disk only if the rename completed`, async () => {
+        const { h2, dur, store2 } = await metaRun(edge, when);
+        const returned: string[] = [];
+        await expect(dur.applyPositiveWorkflowMeta(meta(1)).then((o) => { if (o.kind === 'opened') returned.push(o.activityId); return o; })).rejects.toThrow(SimulatedCrash);
+        expect(returned).toEqual([]);
+        expect(dur.state().checkpoint.activities.map((a) => a.upstreamId)).toEqual([RUN]);   // not even the applier's own state shows the worker
+        expect(Object.keys(dur.state().checkpoint.activityIdsByNaturalKey)).toHaveLength(1);
+        expect(h2.log.filter((l) => l === 'project' || l.startsWith('insertEvents'))).toEqual([]);
+        expect(store2.readDelegationProjection().activities.map((a) => a.upstreamId)).toEqual([RUN]);
+        const onDisk = decodeDelegationCheckpoint(new Uint8Array(readDisk(h2.dir).checkpoint!));
+        const renamed = edge === 'directory-fsync' || (edge === 'checkpoint-rename' && when === 'after');
+        expect(onDisk.activities.map((a) => a.upstreamId).sort()).toEqual(renamed ? [RUN, `${RUN}-1`] : [RUN]);
+        // A restart never invents it either; the same meta later yields the same, deterministic ID.
+        const fresh = await harness({ dir: h2.dir }).open();
+        const out = await fresh.applyPositiveWorkflowMeta(meta(1));
+        expect(out.kind === 'opened' || out.kind === 'already-open' ? out.activityId : 'none').toBe(expectedId(1));
+      });
+    }
+  }
+
+  it('the new ID cannot escape through the applier\'s serialized queue: a rejected application leaves it reconstructing, and a later call refuses', async () => {
+    const { dur } = await metaRun('checkpoint-rename', 'before');
+    await expect(dur.applyPositiveWorkflowMeta(meta(1))).rejects.toThrow(SimulatedCrash);
+    expect(dur.state().phase).toBe('reconstructing');
+    await expect(dur.applyPositiveWorkflowMeta(meta(1))).rejects.toMatchObject({ code: 'not-ready' });
+  });
+});

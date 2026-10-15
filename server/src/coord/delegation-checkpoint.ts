@@ -1516,6 +1516,18 @@ export class DelegationDurability {
     }
   }
 
+  /**
+   * Visits every record the retained journal holds, in order, READ-ONLY, through the applier's own port and its own journal path, on
+   * the applier's queue (so no application is half-written while it reads). It is how the watcher lane (Task 13) learns the evidence
+   * correlation reads without NAMING the journal file: this module and the journal module stay the only sources that do (a guard in
+   * `delegation-recovery.test.ts` pins that). A decode or IO failure rejects and changes nothing; the applier stays as it was.
+   */
+  visitRetainedRecords(visit: (record: DelegationJournalRecordV1) => void): Promise<void> {
+    return this.enqueue(async () => {
+      for await (const record of readDelegationJournalRecords(this.port, this.journalPath)) visit(record);
+    });
+  }
+
   /** The pruning plan right now. Streams the journal once for the held records' positions; deletes and rewrites nothing. */
   async planPruning(nowMs: number, retentionMs: number): Promise<DelegationPruningPlan> {
     return this.enqueue(async () => {
@@ -1620,6 +1632,30 @@ export class DelegationDurability {
       const applied = await this.commitLocked({
         items: [],
         mutate: (b) => { box.result = b.openFromMeta(meta.parentId, meta.parentIncarnation, meta.agentId); },
+        force: false,
+      });
+      const result = box.result;
+      return result.kind === 'opened' ? { kind: 'opened', activityId: result.activityId, applied } : result;
+    });
+  }
+
+  /**
+   * Opens a Workflow WORKER's activity on a POSITIVE WORKFLOW META read: `applyPositiveAgentMeta`'s sibling, in the same shape and for
+   * the same reason (O1, D-4648). The worker's ID exists only in the builder until a checkpoint holding its natural-key mapping and its
+   * row has been atomically replaced, so it is probed on a CLONE first (a wait, an already-open worker and a refused index change
+   * nothing and write nothing), committed through the one durable application, and returned only after the replacement. No journal
+   * event exists for a meta and none is invented: the revision advances and the applied position does not. A worker index that is
+   * not a non-negative safe integer is refused by the builder (`bad-shape`) before anything is written, and leaves the applier ready.
+   */
+  applyPositiveWorkflowMeta(meta: { parentId: string; parentIncarnation: string; runId: string; workerIndex: number }): Promise<DelegationMetaOutcome> {
+    return this.enqueue(async () => {
+      this.requireReady();
+      const box: { result: DelegationMetaOpenResult } = { result: { kind: 'waiting-for-evidence' } };
+      const probe = this.builder.clone().openWorkflowWorkerFromMeta(meta.parentId, meta.parentIncarnation, meta.runId, meta.workerIndex);
+      if (probe.kind !== 'opened') return probe;
+      const applied = await this.commitLocked({
+        items: [],
+        mutate: (b) => { box.result = b.openWorkflowWorkerFromMeta(meta.parentId, meta.parentIncarnation, meta.runId, meta.workerIndex); },
         force: false,
       });
       const result = box.result;

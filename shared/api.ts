@@ -3349,6 +3349,14 @@ export interface FleetHealth {
    * `state: 'unknown'`, never as `'ok'` and never as an empty history.
    */
   lifecycle?: LifecycleHealth;
+  /**
+   * The delegation broker's report-only observation health (wave 3, Task 13): the seven-day rolling UTC session-hour window of
+   * spool intervals, the stage gate it decides, the breaker and the pass's verdict counts. Optional for the same absence-permits
+   * reason `roster` and `lifecycle` are: an older server omits it, and a reader must treat an absent block as UNKNOWN, never as
+   * healthy and never as zero. A present block can itself say `unmeasured` (`stageGate`), which is a measurement, not an absence.
+   * Wave 3 adds no fleet frame and no PWA state; nothing renders it yet.
+   */
+  delegation?: DelegationObservationHealth;
 }
 
 /**

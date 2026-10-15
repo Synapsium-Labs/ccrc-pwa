@@ -1,5 +1,5 @@
 import { DatabaseSync } from 'node:sqlite';
-import { existsSync, mkdirSync, statSync, unlinkSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, statSync, unlinkSync } from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import { COORD_SCHEMA_VERSION, MIGRATIONS } from './schema.js';
@@ -228,6 +228,35 @@ export function openCoordDb(dbPath: string): DatabaseSync {
     }
   }
   return finishOpen();
+}
+
+/**
+ * The boot check for an active COORDINATION RESTORE (delegation broker wave 3, R24; plan Task 8B). `ccrc coordination-snapshot`
+ * publishes a marker in the coordination directory (`~/.ccrc`) while it replaces the live set — `coord.db` and the delegation
+ * journal and checkpoint — and removes it only when the replacement is whole. While it stands the files are a half-replaced mix, so a
+ * server that booted over them would open a database that disagrees with its own sidecars. Delegation recovery refuses the marker for
+ * itself (`restore-in-progress`); this is the server's own refusal, asked BEFORE `openCoordDb`, so the process stops before it opens
+ * anything rather than running on with the observation lane off.
+ *
+ * Returns the refusal text (one `ccrc-server:` line naming the recovery command), or `null` when there is no marker. FAIL CLOSED: the
+ * only answer that means "no restore is running" is ENOENT. Anything else — a marker of any type, a dangling link, a parent that is
+ * not a directory, a permission error — is a refusal, because a marker that cannot be measured is not a marker that is missing.
+ * `markerFile` is handed in (the caller imports `COORDINATION_RESTORE_MARKER_FILE`): this module is imported by `config.ts` and must
+ * not pull the delegation modules into every importer's graph.
+ */
+export function coordinationRestoreRefusal(ccrcDir: string, markerFile: string): string | null {
+  const marker = path.join(ccrcDir, markerFile);
+  try {
+    lstatSync(marker);
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === 'ENOENT') return null;
+    return `ccrc-server: REFUSING TO START: ${marker} could not be measured (${code ?? 'unknown error'}), so a coordination restore cannot be ruled out. ` +
+      'Fix the directory, then run `ccrc coordination-snapshot recover` if a restore was interrupted.';
+  }
+  return `ccrc-server: REFUSING TO START: a coordination restore is in progress or did not finish (${marker} exists), so coord.db and the ` +
+    'delegation journal and checkpoint may be a half-replaced mix. Run `ccrc coordination-snapshot recover` to finish it; the marker is ' +
+    'removed only when the restore is whole.';
 }
 
 /**

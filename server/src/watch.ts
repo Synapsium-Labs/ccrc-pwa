@@ -34,6 +34,7 @@ import type {
   LifecycleHealth, MailGate, MirroredLifecycleEvent, NotifyEvent, ProjectPoolsWire, ProjectRepoWire, PrState, RunSummary,
   SessionStatus, SessionUsage, TaskProgress,
 } from '../../shared/api.js';
+import type { DelegationEventEnvelopeV1, DelegationHealthInput, DelegationObservationHealth } from '../../shared/api.js';
 // ONE LINE, deliberately: `single-definition.test.ts` scans for `UNCHECKED_PR`
 // arriving from shared/api on a single import line, and a prettier multi-line
 // form is invisible to it.
@@ -53,6 +54,23 @@ import {
   readParentGenerations, readWorktreeCensus, settleParentIncarnations, type DelegationCensusPass, type WorktreeCensus,
 } from './coord/gitref.js';
 import { ccdIdForWorktree, divergences, unclaimedWorktrees, type DivergenceInput } from './divergence.js';
+// The delegation lane's (wave 3, Task 13) imports, in one block of their own: the pure modules it composes, and the durable applier.
+import { randomUUID } from 'node:crypto';
+import type { MeasuredDirectoryRead } from './io.js';
+import { DelegationDurability } from './coord/delegation-checkpoint.js';
+import {
+  DelegationIngestError, delegationBucketDurabilityOf, delegationBucketUtcHour, ingestAndApplyDelegationBucket, readDelegationBucket,
+  unreadableDelegationBucketResult, type DelegationBucketDurability, type DelegationBucketResult,
+} from './coord/delegation-ingest.js';
+import { correlateDelegation, type DelegationCorrelationInput, type DelegationListingWindow } from './coord/delegation-correlation.js';
+import { delegationCircuitBreaker, planDelegationReconciliation, type DelegationReportEffect } from './coord/delegation-policy.js';
+import {
+  DELEGATION_HOUR_CLOSE_MARGIN_MS, DELEGATION_HOUR_MS, DELEGATION_SPOOL_LOOKBACK_HOURS, DELEGATION_UNMEASURED_INCARNATION, DelegationModelError,
+  canonicalDelegationJson, delegationCapabilityState, delegationHealthInputOf, delegationObservationHealthOf, formatDelegationInstant,
+  parseDelegationInstant, upkeepDelegationIntervals,
+  type DeepReadonly, type DelegationAttemptRow, type DelegationBucketCursor, type DelegationCensusRecord, type DelegationCheckpointV1,
+  type DelegationRecoveryState,
+} from './coord/delegation-model.js';
 import { claimExpiry, type LivenessProbe } from './coord/claims.js';
 import { measureClaimant } from './coord/reclaim.js';
 import {
@@ -1821,6 +1839,41 @@ export class FleetWatcher {
     return this.delegationCensus;
   }
 
+  /** The delegation lane (wave 3, Task 13; see `DelegationLane`), made on first use: a parameter property is not yet assigned when a
+   *  field initialiser runs, so it cannot be built beside the other fields. */
+  private delegationLaneMemo: DelegationLane | null = null;
+  private delegationLane(): DelegationLane {
+    this.delegationLaneMemo ??= new DelegationLane(this.deps, () => this.delegationCensus);
+    return this.delegationLaneMemo;
+  }
+
+  /** One pass of the delegation lane. PUBLIC for the reason `sweepNames` is: `tick()` dispatches it with `void`, so a test that awaits
+   *  `tick()` has not awaited it. A no-op without a coordination database, inside the census cadence, or while a pass is running. */
+  sweepDelegation(sessions: readonly LaneSession[], records: readonly LaneRecord[]): Promise<void> {
+    return this.delegationLane().sweep(sessions, records);
+  }
+
+  /** The seven-day observation health, as of now, from the checkpoint's own intervals. `undefined` until the lane has tried to open its
+   *  applier: absence on the wire reads as UNKNOWN, never as healthy. */
+  currentDelegationHealth(): DelegationObservationHealth | undefined {
+    return this.delegationLane().health();
+  }
+
+  /** What the lane last concluded, for tests and diagnostics: nothing here is wire. */
+  delegationReport() {
+    return this.delegationLane().report();
+  }
+
+  /** The lane's durable applier, opened on first use (null when the open itself failed). */
+  delegationApplier(): Promise<DelegationDurability | null> {
+    return this.delegationLane().applier();
+  }
+
+  /** Whether `tick()`'s registry read listed. The health reads it as of the request: an unreadable registry is an unmeasured basis. */
+  noteDelegationRegistry(listed: boolean): void {
+    this.delegationLane().noteRegistry(listed);
+  }
+
   /** Last-swept plan progress — same reasoning as currentPending(). */
   currentTaskProgress(): Map<string, TaskProgress> {
     return new Map(this.taskProgress);
@@ -2028,6 +2081,7 @@ export class FleetWatcher {
       // null. The listed arm's bounded cost and why it stays awaited are stated
       // on `emitPools`; `project-pools-read.test.ts` pins both cost arms.
       await this.emitPools(registryRead.listed ? registryRead.names : null);
+      this.noteDelegationRegistry(registryRead.listed);
       if (!registryRead.listed) {
         // Retain, don't erase, at fleet scale: `this.hookStates`/
         // `this.taskProgress`/`this.prevStatus`/`this.lastJson` are all left
@@ -2305,6 +2359,10 @@ export class FleetWatcher {
       void this.sweepLedgerFloor(records).catch(() => { /* one bad sweep must not kill the poll */ });
       void this.sweepLedgerReconcile().catch(() => { /* one bad sweep must not kill the poll */ });
       void this.sweepReadiness().catch(() => { /* one bad sweep must not kill the poll */ });
+      // NEVER awaited, the same reasons: the DELEGATION lane (wave 3, Task 13) is a sibling at the census's own cadence, on this tick's
+      // `sessions` and registry rows. It reads spool buckets over the agent link, so awaiting it would put the dialog detector and the
+      // busy->idle push behind a slow remote read; it is single-flight and has its own budget (`DelegationLane`).
+      void this.sweepDelegation(sessions, records).catch(() => { /* one bad sweep must not kill the poll */ });
       this.primed = true;
       if (this.deps.cfg.fleetMode === 'remote' && this.deps.fleetState?.connected) {
         // C0.4: `connected` alone is not "this read was complete" — a
@@ -8150,4 +8208,764 @@ function renderAskBrief(askId: number, childId: string, question: string, option
     `Decline (not yours to rule — fires the operator's own notification at once): ` +
     `POST /api/asks/${askId}/release\n\n` +
     `Run the ccrc-coordinator skill.`;
+}
+
+// ── THE DELEGATION LANE (delegation broker wave 3, Task 13; spec §5.5, §5.12) ──────────────────────────────────────────────────
+//
+// A SIBLING of `sweepDivergences`, never a branch of it, and never awaited by `tick()`: it reads each live owner's hourly spool
+// buckets, ingests them durably (Task 9 into Task 8), correlates the census this watcher ALREADY takes once a minute against the
+// retained evidence (Task 11), plans report-only effects (Task 12), applies the durable ones and repairs the SQLite projection
+// (Task 7). It keeps the seven-day observation intervals the health is computed from. WAVE 3 IS OBSERVATION ONLY: this lane writes no
+// carrier, starts no cleanup clock, mints no token and takes no filesystem action; its only durable writes go through
+// `DelegationDurability`, and the policy it applies is closed and non-executable.
+//
+// L4: it GATHERS (the owner's directory listing and a bounded byte range through `FleetIO`) and it APPLIES; every decision is a
+// pure module's (`ingestDelegationBucket`, `correlateDelegation`, `planDelegationReconciliation`, the health arithmetic).
+//
+//   ONE PASS AT A TIME (M5/M6). `sweeping` is the single-flight latch; a pass that finds another running returns at once, which also
+//   keeps two census passes from being reconciled side by side (the newer `measuredAt` only). A pass has a BUDGET enforced by a
+//   deadline the work cannot veto: a read that never answers ends the pass, its late answer is discarded (`signal.aborted` is checked
+//   after every await before anything is applied), and the next pass is not blocked by it.
+//
+//   EVERY INGESTION READS THE DURABLE STATE AT THE MOMENT IT INGESTS, after the range read and never from a copy taken before it: a row
+//   that moved during the read is a disagreement ingestion reports, not a coordinate this lane overwrites. Cursors move ONLY through
+//   ingestion (`applyAccepted`): nothing here rewrites `bucketCursors` through a checkpoint-only change.
+//
+//   NO-OP SKIP (hand-off 2). Every application rewrites the whole checkpoint, so a bucket result that accepts nothing, leaves the cursor
+//   row as it was and would not change the hour's interval makes NO durable call. The one exception is the CLOSE WRITE: once an hour
+//   has ended (plus the hook's margin) it is written one more time, so that its record postdates its close and the lane can tell, after
+//   a restart, an hour it saw whole from one it only saw begin.
+//
+//   THE INTERVALS. Each observed (session, incarnation, UTC hour) has one checkpoint-owned `measured` or `unmeasured` row; unmeasured
+//   is sticky. A session whose spool directory does not exist (a pane older than the spool code, D-4651), a capability the fleet does
+//   not offer, an unreadable directory or range, malformed evidence and a parent whose incarnation is unmeasured are each an
+//   UNMEASURED hour, never a measured-empty one. Only a listing that SUCCEEDED and does not name the bucket is an empty hour.
+//
+//   REPORT-ONLY EFFECTS. Attempts are made durable through one checkpoint-only change BEFORE any lease is journaled (so the next pass
+//   sees them), then each lease request goes through `createLease` (which deduplicates on the identity key, so a request re-emitted
+//   after a crash is a no-op), then the projection is repaired. Measured absence has no durable field in wave 3 (a checkpoint-only
+//   change cannot alter a lease, and wave 3 never releases one): it is remembered in memory, once per tree.
+
+/** The census's own cadence, derived and not respelled: the lane adds no faster read of anything. */
+export const DELEGATION_SWEEP_MS = DIVERGENCE_SWEEP_MS;
+/** What a pass may spend: under the cadence, so a stuck pass ends before the next is due. */
+export const DELEGATION_PASS_BUDGET_MS = 45_000;
+/** What one read of the lane may take (the stat fallback after a failed range read included: it is bounded by the pass signal). */
+const DELEGATION_READ_TIMEOUT_MS = 10_000;
+/** A recovery that failed is tried again no more often than this: it reads the whole journal. */
+const DELEGATION_RECOVERY_RETRY_MS = 5 * 60_000;
+/** The evidence the lane keeps for correlation, newest. Evicting the oldest degrades a verdict to unresolved or unmeasured; it can
+ *  never produce a link. */
+const DELEGATION_EVIDENCE_CAP = 20_000;
+/** A tree seen for the first time may be a ccd workspace being BORN: two reconciliation passes of waiting (spec §5.4, rung 1). */
+const DELEGATION_BIRTH_PASSES = 2;
+/** How long a first-measured-dead instant is remembered: far past the breaker's ten-minute window. */
+const DELEGATION_DEAD_MEMORY_MS = 60 * 60_000;
+/** Rung 2's point lookups (spec §5.4: "a point lookup, never a search ... back-filled at a bounded rate"): at most this many meta
+ *  files are read in a pass, and a tree that gave no meta is not asked again for this long. */
+const DELEGATION_META_READS_PER_PASS = 8;
+const DELEGATION_META_RETRY_MS = 5 * 60_000;
+/** A workflow's meta directory is read for at most this many entries, and a meta file for at most this many characters. */
+const DELEGATION_META_DIR_ENTRIES = 64;
+const DELEGATION_META_MAX_CHARS = 65_536;
+
+type LaneSession = Pick<FleetSession, 'id' | 'project' | 'status'>;
+type LaneRecord = Pick<SessionRecord, 'id' | 'project' | 'child'>;
+type DelegationVerdictCounts = { unresolved: number; conflicting: number; unmeasured: number };
+
+type LanePointMeta = DelegationCorrelationInput['pointMetas'][number];
+/** One owner to observe in a pass. `incarnation: null` is a parent whose incarnation could not be measured (`reason` says why). */
+interface LaneOwner { id: string; incarnation: string | null; reason: string; live: boolean }
+interface LanePass {
+  now: number;
+  signal: AbortSignal;
+  census: DelegationCensusPass;
+  sessions: readonly LaneSession[];
+  records: readonly LaneRecord[];
+  capability: DelegationHealthInput['capabilityState'];
+}
+
+const laneTreeKey = (project: string, adminRecord: string): string => JSON.stringify([project, adminRecord]);
+/** `YYYYMMDDHH`, the bucket name of an hour. */
+const laneBucketOf = (hourMs: number): string => formatDelegationInstant(hourMs).replace(/[-:T]/g, '').slice(0, 10);
+const laneHourOf = (ms: number): number => Math.floor(ms / DELEGATION_HOUR_MS) * DELEGATION_HOUR_MS;
+const laneCloseAt = (hourMs: number): number => hourMs + DELEGATION_HOUR_MS + DELEGATION_HOUR_CLOSE_MARGIN_MS;
+const laneInstantMs = (iso: string): number | null => {
+  try { return parseDelegationInstant(iso); } catch (err) { if (err instanceof DelegationModelError) return null; throw err; }
+};
+
+/** A cursor row nobody needs to store: the state of a bucket with nothing read from it. */
+const laneFreshCursor = (c: DelegationBucketCursor): boolean =>
+  c.cursor === 0 && c.lastSize === 0 && c.anchor === null && !c.replaced && c.lastCompleteAt === null;
+
+/**
+ * The listing windows (rung 4) the retained evidence holds: a Bash call whose PreToolUse carries a `listing` (the admin records
+ * before) paired by `toolUseId` with its PostToolUse listing (after). The window's `repository` is the census's own project key, taken
+ * from the REGISTRY row of the session that ran the call: rung 4 compares it with the census record's `project` verbatim, so both
+ * sides are built from the one key (hand-off 7). A session no registry row has named gives no window, so no link.
+ */
+export function delegationListingWindowsOf(
+  evidence: Iterable<DelegationEventEnvelopeV1>, projectOf: (sessionId: string) => string | undefined,
+): DelegationListingWindow[] {
+  const pre = new Map<string, DelegationEventEnvelopeV1 & { eventKind: 'PreToolUse'; toolName: 'Bash' }>();
+  const post = new Map<string, DelegationEventEnvelopeV1 & { eventKind: 'PostToolUse'; toolName: 'Bash' }>();
+  const keyOf = (e: DelegationEventEnvelopeV1 & { toolUseId: string }): string => JSON.stringify([e.sessionId, e.parentIncarnation, e.toolUseId]);
+  for (const e of evidence) {
+    if (e.eventKind === 'PreToolUse' && e.toolName === 'Bash' && e.listing !== undefined) pre.set(keyOf(e), e);
+    else if (e.eventKind === 'PostToolUse' && e.toolName === 'Bash' && e.listing !== undefined) post.set(keyOf(e), e);
+  }
+  const out: DelegationListingWindow[] = [];
+  for (const [key, start] of pre) {
+    const repository = projectOf(start.sessionId);
+    if (repository === undefined || start.listing === undefined) continue;
+    const end = post.get(key);
+    out.push({
+      sessionId: start.sessionId, parentIncarnation: start.parentIncarnation, toolUseId: start.toolUseId, repository,
+      startedAt: start.observedAt, endedAt: end === undefined ? null : end.observedAt, before: start.listing,
+      after: end === undefined || end.listing === undefined ? null : end.listing,
+    });
+  }
+  return out;
+}
+
+class DelegationLane {
+  private durable: DelegationDurability | null = null;
+  private opening: Promise<DelegationDurability | null> | null = null;
+  /** The lane has tried to open the applier: from then on a health is reported (absence before that reads as unknown). */
+  private attempted = false;
+  private sweeping = false;
+  private lastSweepAt = 0;
+  private lastRecoverAt = 0;
+  private registryListed = true;
+  /** Hours already read after they closed, this process: not read again. Memory only; a restart reads each once more. */
+  private readonly settled = new Set<string>();
+  private passes = 0;
+  private skipped = 0;
+  // evidence for correlation
+  private readonly evidence = new Map<string, { event: DelegationEventEnvelopeV1; key: string | null }>();
+  private readonly evidenceKeys = new Map<string, string>();
+  private evidenceLoaded = false;
+  private evidenceLoading: Promise<void> | null = null;
+  private readonly sessionProject = new Map<string, string>();
+  // reconciliation memory
+  private reconciledAt = 0;
+  private reconciliations = 0;
+  private firstSeen = new Map<string, number>();
+  private previous: { flat: readonly DelegationCensusRecord[]; projects: readonly string[] } | null = null;
+  private verdicts: DelegationVerdictCounts = { unresolved: 0, conflicting: 0, unmeasured: 0 };
+  private reconciled = false;
+  private readonly absences = new Map<string, { project: string; adminRecord: string; observedAt: string }>();
+  private lastAlive = new Set<string>();
+  private aliveSeen = false;
+  private readonly firstDead = new Map<string, number>();
+  /** Rung 2's positive meta reads (a point lookup in the parent's own transcript tree), kept for the process: a meta is read evidence,
+   *  not journal evidence, so it is never durable and is read again after a restart. */
+  private readonly pointMetas = new Map<string, LanePointMeta>();
+  private readonly metaMiss = new Map<string, number>();
+
+  constructor(private readonly deps: Deps, private readonly census: () => DelegationCensusPass | null) {}
+
+  noteRegistry(listed: boolean): void { this.registryListed = listed; }
+
+  report() {
+    return {
+      passes: this.passes, reconciliations: this.reconciliations, skippedApplications: this.skipped,
+      verdicts: { ...this.verdicts }, absences: [...this.absences.values()], breaker: this.breakerNow(Date.now()),
+      evidenceEvents: this.evidence.size,
+    };
+  }
+
+  /** The applier, opened once. A recovery that FAILED is still an applier (it reports `failure()` and refuses to apply); only an IO
+   *  error that stopped the open itself leaves none, and the next pass tries again. */
+  applier(): Promise<DelegationDurability | null> {
+    if (this.opening === null) {
+      const coord = this.deps.coord;
+      this.opening = (async (): Promise<DelegationDurability | null> => {
+        try {
+          const d = await DelegationDurability.open({
+            dir: this.deps.cfg.ccrcDir,
+            projection: coord === undefined ? null : {
+              project: (cp) => coord.projectDelegationCheckpoint(cp),
+              insertEvents: (rows) => coord.insertDelegationEvents(rows),
+              eventStats: () => coord.delegationEventStats(),
+            },
+            now: () => Date.now(), randomUUID: () => randomUUID(), warn: (m) => console.warn(m),
+          });
+          this.durable = d;
+          this.lastRecoverAt = Date.now();                                // open() has just recovered: a retry waits its interval
+          return d;
+        } catch (err) {
+          console.warn(`ccrc-server: the delegation applier could not be opened: ${err instanceof Error ? err.message : String(err)}`);
+          this.opening = null;
+          return null;
+        } finally {
+          this.attempted = true;
+        }
+      })();
+    }
+    return this.opening;
+  }
+
+  // ── the health, as of the request ──────────────────────────────────────────────────────────────────────────────────────
+
+  private firstDeadParents(): { parentId: string; firstMeasuredDeadAt: string }[] {
+    return [...this.firstDead].map(([parentId, ms]) => ({ parentId, firstMeasuredDeadAt: formatDelegationInstant(ms) }));
+  }
+
+  private breakerNow(nowMs: number): DelegationHealthInput['circuitBreaker'] {
+    if (!this.reconciled) return 'unmeasured';
+    return delegationCircuitBreaker({ now: formatDelegationInstant(nowMs), registryReadable: this.registryListed, firstDeadParents: this.firstDeadParents() });
+  }
+
+  /** From the checkpoint's own intervals and the measurements the server holds NOW (the fleet's capability, the registry, the breaker);
+   *  never from SQLite. Absent until the lane has tried to open its applier. */
+  health(): DelegationObservationHealth | undefined {
+    if (!this.attempted) return undefined;
+    const now = Date.now();
+    return delegationObservationHealthOf(delegationHealthInputOf({
+      nowMs: now, state: this.durable === null ? null : this.durable.state(),
+      capabilityState: delegationCapabilityState(this.deps.fleetState?.ccdVerbs), registryReadable: this.registryListed,
+      circuitBreaker: this.breakerNow(now), verdictCounts: this.verdicts,
+    }));
+  }
+
+  // ── a pass ────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+  async sweep(sessions: readonly LaneSession[], records: readonly LaneRecord[]): Promise<void> {
+    if (this.deps.coord === undefined) return;                           // no coordination database, no lane
+    if (this.sweeping) return;                                           // SINGLE FLIGHT (M5/M6)
+    const now = Date.now();
+    if (this.lastSweepAt !== 0 && now - this.lastSweepAt < DELEGATION_SWEEP_MS) return;
+    const census = this.census();
+    if (census === null) return;                                         // no census yet: wait, and keep the cadence unspent
+    this.sweeping = true;
+    this.lastSweepAt = now;
+    const ac = new AbortController();
+    const cut = new Promise<'cut'>((resolve) => { ac.signal.addEventListener('abort', () => resolve('cut'), { once: true }); });
+    const timer = setTimeout(() => ac.abort(), DELEGATION_PASS_BUDGET_MS);
+    timer.unref();
+    const pass: LanePass = { now, signal: ac.signal, census, sessions, records, capability: delegationCapabilityState(this.deps.fleetState?.ccdVerbs) };
+    const work = this.run(pass).then(() => 'done' as const);
+    work.catch(() => undefined);                                         // a late rejection of a cut pass is not an unhandled one
+    try {
+      const outcome = await Promise.race([work, cut]);
+      if (outcome === 'cut') console.warn(`ccrc-server: a delegation pass outran its ${DELEGATION_PASS_BUDGET_MS} ms budget and was cut; its late answers are discarded`);
+    } catch (err) {
+      console.warn(`ccrc-server: a delegation pass failed: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      clearTimeout(timer);
+      ac.abort();                                                        // whatever outlives the pass finds its signal aborted
+      this.sweeping = false;
+    }
+  }
+
+  private async run(pass: LanePass): Promise<void> {
+    this.noteSessions(pass);
+    const durable = await this.applier();
+    if (durable === null || pass.signal.aborted) return;
+    if (durable.state().phase !== 'ready' || durable.failure() !== null) {
+      // A recovery that failed applies NOTHING and reads nothing: the files are left exactly as they are. It is tried again, rarely.
+      if (pass.now - this.lastRecoverAt < DELEGATION_RECOVERY_RETRY_MS) return;
+      this.lastRecoverAt = pass.now;
+      await durable.recover();
+      this.evidenceLoaded = false;
+      if (durable.state().phase !== 'ready' || durable.failure() !== null || pass.signal.aborted) return;
+    }
+    this.passes += 1;
+    await this.loadEvidence(durable);
+    if (pass.signal.aborted) return;
+
+    for (const owner of this.ownersOf(pass, durable.state())) {
+      if (pass.signal.aborted) return;
+      try { await this.observeOwner(pass, durable, owner); }
+      catch (err) { console.warn(`ccrc-server: delegation owner ${owner.id} could not be observed: ${err instanceof Error ? err.message : String(err)}`); }
+    }
+    if (pass.signal.aborted) return;
+
+    // The upkeep: retention, and the hour that was never closed. One checkpoint-only change over the INTERVALS, and only when there is
+    // something to do (the same array comes back otherwise). Cursors are never in it.
+    if (upkeepDelegationIntervals(durable.state().checkpoint.observationIntervals, pass.now).changed) {
+      try {
+        await durable.applyCheckpointChange((cp) => ({ ...cp, observationIntervals: upkeepDelegationIntervals(cp.observationIntervals, pass.now).intervals }));
+      } catch (err) { console.warn(`ccrc-server: delegation interval upkeep failed: ${err instanceof Error ? err.message : String(err)}`); }
+    }
+    if (pass.signal.aborted) return;
+
+    // A census this lane has not reconciled yet; an older or equal one is left alone.
+    if (pass.census.measuredAt > this.reconciledAt && this.evidenceLoaded) await this.reconcile(pass, durable);
+  }
+
+  /** Who died since the last pass, by what this process watched: a parent first seen DEAD is not a fresh death (a restart is not a
+   *  mass-death event), one seen alive and then dead is, and one seen alive again is not dead. */
+  private noteSessions(pass: LanePass): void {
+    for (const r of pass.records) this.sessionProject.set(r.id, r.project);
+    for (const s of pass.sessions) this.sessionProject.set(s.id, s.project);
+    const alive = new Set(pass.sessions.filter((s) => s.status !== 'dead').map((s) => s.id));
+    if (this.aliveSeen) {
+      for (const s of pass.sessions) {
+        if (s.status === 'dead' && this.lastAlive.has(s.id) && !this.firstDead.has(s.id)) this.firstDead.set(s.id, pass.now);
+      }
+    }
+    for (const id of alive) this.firstDead.delete(id);
+    for (const [id, at] of this.firstDead) if (pass.now - at > DELEGATION_DEAD_MEMORY_MS) this.firstDead.delete(id);
+    this.lastAlive = alive;
+    this.aliveSeen = true;
+  }
+
+  /** The live sessions the census took an incarnation of, and the owners with an hour still to close, in a stable order. */
+  private ownersOf(pass: LanePass, state: DeepReadonly<DelegationRecoveryState>): LaneOwner[] {
+    const out = new Map<string, LaneOwner>();
+    const keyOf = (id: string, inc: string | null): string => JSON.stringify([id, inc]);
+    for (const s of pass.sessions) {
+      if (s.status === 'dead') continue;
+      const inc = pass.census.incarnations.get(s.id);
+      if (inc === undefined) continue;                                   // born after the census: the next census names it
+      const owner: LaneOwner = inc.kind === 'measured'
+        ? { id: s.id, incarnation: inc.incarnation, reason: '', live: true }
+        : { id: s.id, incarnation: null, reason: inc.reason, live: true };
+      out.set(keyOf(owner.id, owner.incarnation), owner);
+    }
+    // An owner that is no longer live still has its last hour to close (a session that ended mid-hour).
+    for (const r of state.checkpoint.observationIntervals) {
+      if (r.state !== 'measured' || r.parentIncarnation === DELEGATION_UNMEASURED_INCARNATION) continue;
+      const at = laneInstantMs(r.utcHour);
+      const recorded = laneInstantMs(r.recordedAt);
+      if (at === null || recorded === null || at % DELEGATION_HOUR_MS !== 0) continue;
+      if (pass.now < laneCloseAt(at) || recorded >= laneCloseAt(at)) continue;
+      if (at < laneHourOf(pass.now) - DELEGATION_SPOOL_LOOKBACK_HOURS * DELEGATION_HOUR_MS) continue;
+      const k = keyOf(r.sessionId, r.parentIncarnation);
+      if (!out.has(k)) out.set(k, { id: r.sessionId, incarnation: r.parentIncarnation, reason: '', live: false });
+    }
+    return [...out.values()].sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+  }
+
+  // ── one owner, one hour ───────────────────────────────────────────────────────────────────────────────────────────────
+
+  private async observeOwner(pass: LanePass, durable: DelegationDurability, owner: LaneOwner): Promise<void> {
+    const nowHour = laneHourOf(pass.now);
+    if (owner.incarnation === null) {
+      // The parent's incarnation could not be measured (absent, unreadable, changing): nothing can be bound to it, so nothing is read,
+      // and the hour is a gap under a stand-in incarnation so that it counts.
+      if (owner.live) await this.noteGap(pass, durable, owner.id, DELEGATION_UNMEASURED_INCARNATION, nowHour, `incarnation-unmeasured: the parent's registry incarnation is ${owner.reason}`);
+      return;
+    }
+    const inc = owner.incarnation;
+    const capabilityPresent = pass.capability === 'present' ? true : pass.capability === 'absent' ? false : null;
+    let listing: MeasuredDirectoryRead = { ok: false, reason: 'unreadable' };
+    if (capabilityPresent === true) {
+      try { listing = await this.deps.io.readdirMeasured(this.ownerDir(owner.id), DELEGATION_READ_TIMEOUT_MS, pass.signal); }
+      catch { /* a dropped agent round trip is an unreadable listing */ }
+      if (pass.signal.aborted) return;
+    }
+    for (const hourMs of this.hoursOf(pass, durable.state(), owner, inc, listing)) {
+      if (pass.signal.aborted) return;
+      await this.observeHour(pass, durable, owner.id, inc, hourMs, listing, capabilityPresent);
+    }
+  }
+
+  private ownerDir(id: string): string { return `${this.deps.cfg.registryDir}/delegation/spool/${id}`; }
+
+  private settledKey(id: string, inc: string, hourMs: number): string { return JSON.stringify([id, inc, hourMs]); }
+
+  /** The hours to look at for one owner: the open hour (a live owner), every bucket the listing names within the spool's retention,
+   *  and every hour this owner recorded before it ended and has not closed since; minus the hours already settled. */
+  private hoursOf(pass: LanePass, state: DeepReadonly<DelegationRecoveryState>, owner: LaneOwner, inc: string, listing: MeasuredDirectoryRead): number[] {
+    const nowHour = laneHourOf(pass.now);
+    const oldest = nowHour - DELEGATION_SPOOL_LOOKBACK_HOURS * DELEGATION_HOUR_MS;
+    const hours = new Set<number>();
+    if (owner.live) hours.add(nowHour);
+    if (listing.ok) {
+      for (const name of listing.entries) {
+        const m = /^(\d{10})\.spool$/.exec(name);
+        if (m === null) continue;
+        let at: number;
+        try { at = parseDelegationInstant(delegationBucketUtcHour(m[1]!)); } catch { continue; }
+        if (at >= oldest && at <= nowHour) hours.add(at);
+      }
+    }
+    for (const r of state.checkpoint.observationIntervals) {
+      if (r.sessionId !== owner.id || r.parentIncarnation !== inc || r.state !== 'measured') continue;
+      const at = laneInstantMs(r.utcHour);
+      const recorded = laneInstantMs(r.recordedAt);
+      if (at === null || at % DELEGATION_HOUR_MS !== 0 || at < oldest || at > nowHour) continue;
+      if (recorded === null || recorded < laneCloseAt(at)) hours.add(at);
+    }
+    const closed = (at: number): boolean => {
+      if (pass.now < laneCloseAt(at)) return false;
+      const row = state.checkpoint.observationIntervals.find((r) => r.sessionId === owner.id && r.parentIncarnation === inc && r.utcHour === formatDelegationInstant(at));
+      const recorded = row === undefined ? null : laneInstantMs(row.recordedAt);
+      return (row !== undefined && row.state === 'measured' && recorded !== null && recorded >= laneCloseAt(at)) || this.settled.has(this.settledKey(owner.id, inc, at));
+    };
+    return [...hours].filter((at) => !closed(at)).sort((a, b) => a - b);
+  }
+
+  /** An hour recorded as a gap without a bucket to read: written once. */
+  private async noteGap(pass: LanePass, durable: DelegationDurability, id: string, inc: string, hourMs: number, detail: string): Promise<void> {
+    const hour = formatDelegationInstant(hourMs);
+    const prior = durable.state().checkpoint.observationIntervals.find((r) => r.sessionId === id && r.parentIncarnation === inc && r.utcHour === hour);
+    if (prior !== undefined && prior.state === 'unmeasured') { this.skipped += 1; return; }
+    if (pass.signal.aborted) return;
+    await durable.applyAccepted({
+      accepted: [], cursor: null,
+      interval: { sessionId: id, parentIncarnation: inc, utcHour: hour, state: 'unmeasured', detail, recordedAt: formatDelegationInstant(Date.now()) },
+    });
+  }
+
+  private async observeHour(
+    pass: LanePass, durable: DelegationDurability, id: string, inc: string, hourMs: number, listing: MeasuredDirectoryRead, capabilityPresent: boolean | null,
+  ): Promise<void> {
+    const bucket = laneBucketOf(hourMs);
+    const closing = pass.now >= laneCloseAt(hourMs);
+    const row = durable.state().checkpoint.bucketCursors.find((r) => r.sessionId === id && r.parentIncarnation === inc && r.bucket === bucket);
+    const read = await readDelegationBucket(this.deps.io, {
+      ownerDir: this.ownerDir(id), sessionId: id, parentIncarnation: inc, bucket, cursor: row?.cursor ?? 0, lastSize: row?.lastSize ?? 0,
+      anchorStart: row?.anchor?.start ?? null, capabilityPresent, listing, timeoutMs: DELEGATION_READ_TIMEOUT_MS, signal: pass.signal,
+    });
+    if (pass.signal.aborted) return;                                     // a late answer of a cut pass applies nothing
+    const state = durable.state();                                       // AT THIS MOMENT, never a copy taken before the read (M5/M6)
+    const seen = { accepted: 0 };
+    const gate = this.gateOf(pass, durable, state, id, inc, hourMs, bucket, seen);
+    try {
+      if (read.ok) await ingestAndApplyDelegationBucket(read.input, state, gate);
+      else await gate.applyBucketResult(unreadableDelegationBucketResult({ sessionId: id, parentIncarnation: inc, bucket }, state, { reason: read.reason, detail: read.detail }));
+    } catch (err) {
+      if (err instanceof DelegationIngestError) { console.warn(`ccrc-server: delegation bucket ${id}/${bucket} was refused: ${err.message}`); return; }
+      throw err;
+    }
+    // An hour read AFTER it closed, with nothing new in it, is not read again by this process.
+    if (closing && read.ok && seen.accepted === 0) this.settled.add(this.settledKey(id, inc, hourMs));
+  }
+
+  /** The durable door for one bucket result: the no-op skip, then Task 8's own adapter (taking note of what it journaled). */
+  private gateOf(
+    pass: LanePass, durable: DelegationDurability, state: DeepReadonly<DelegationRecoveryState>, id: string, inc: string, hourMs: number, bucket: string,
+    seen: { accepted: number },
+  ): DelegationBucketDurability {
+    const hour = formatDelegationInstant(hourMs);
+    const adapter = delegationBucketDurabilityOf({
+      applyAccepted: async (batch) => {
+        const out = await durable.applyAccepted(batch);
+        for (const r of out.appended) if (r.entry.kind === 'evidence-accepted') this.noteEvidence(r.journalId, r.entry.event);
+        return out;
+      },
+    }, () => Date.now());
+    return {
+      applyBucketResult: async (result: DelegationBucketResult) => {
+        if (!result.applicable) return adapter.applyBucketResult(result);   // refused by name: a result that is not for a bucket applies nothing
+        seen.accepted = result.accepted.length;
+        const cp = state.checkpoint;
+        const row = cp.bucketCursors.find((r) => r.sessionId === id && r.parentIncarnation === inc && r.bucket === bucket);
+        const prior = cp.observationIntervals.find((r) => r.sessionId === id && r.parentIncarnation === inc && r.utcHour === hour);
+        const cursorSame = row === undefined ? laneFreshCursor(result.cursor) : canonicalDelegationJson(row) === canonicalDelegationJson(result.cursor);
+        const recorded = prior === undefined ? null : laneInstantMs(prior.recordedAt);
+        const needsClose = pass.now >= laneCloseAt(hourMs) && prior !== undefined && prior.state === 'measured' && (recorded === null || recorded < laneCloseAt(hourMs));
+        const intervalMoves = prior === undefined || (prior.state === 'measured' && result.interval === 'unmeasured');
+        if (result.accepted.length === 0 && cursorSame && !needsClose && !intervalMoves) {
+          this.skipped += 1;
+          return state;
+        }
+        if (row === undefined && result.accepted.length === 0 && laneFreshCursor(result.cursor)) {
+          // Nothing was read from this bucket, so there is no cursor to keep: the interval alone is the record.
+          const out = await durable.applyAccepted({
+            accepted: [], cursor: null,
+            interval: { sessionId: id, parentIncarnation: inc, utcHour: hour, state: result.interval, detail: result.detail, recordedAt: formatDelegationInstant(Date.now()) },
+          });
+          return out.state;
+        }
+        return adapter.applyBucketResult(result);
+      },
+    };
+  }
+
+  // ── the evidence correlation reads ────────────────────────────────────────────────────────────────────────────────────
+
+  /**
+   * What the lane keeps of the journal for correlation, which is a thin slice: the join events (a subagent's start and stop, a
+   * launch response), every Bash call that carries a worktree listing, and ONE event per (session, incarnation, agent, working
+   * directory) for anything else that names a directory (rung 3 compares only `cwd`). Bounded by `DELEGATION_EVIDENCE_CAP`, oldest
+   * first out: losing evidence leaves a tree unresolved or unmeasured, and cannot link one.
+   */
+  private noteEvidence(journalId: string, event: DelegationEventEnvelopeV1): void {
+    if (this.evidence.has(journalId)) return;
+    let key: string | null = null;
+    const tupleKey = (): string | null => (typeof event.cwd === 'string' ? JSON.stringify([event.sessionId, event.parentIncarnation, event.agentId ?? '', event.cwd]) : null);
+    if (event.eventKind === 'SubagentStart' || event.eventKind === 'SubagentStop') key = null;
+    else if (event.eventKind === 'PostToolUse' && 'launch' in event && event.launch !== null) key = null;
+    else if ((event.eventKind === 'PreToolUse' || event.eventKind === 'PostToolUse') && event.toolName === 'Bash' && 'listing' in event && event.listing !== undefined) key = null;
+    else {
+      const t = tupleKey();
+      if (t === null || this.evidenceKeys.has(t)) return;
+      key = t;
+    }
+    this.evidence.set(journalId, { event, key });
+    if (key !== null) this.evidenceKeys.set(key, journalId);
+    if (this.evidence.size > DELEGATION_EVIDENCE_CAP) {
+      const [oldest] = this.evidence.keys();
+      if (oldest !== undefined) {
+        const gone = this.evidence.get(oldest);
+        this.evidence.delete(oldest);
+        if (gone !== undefined && gone.key !== null) this.evidenceKeys.delete(gone.key);
+      }
+    }
+  }
+
+  /** Streams the retained journal once, through the applier (which alone names the file), after it is ready; from then on every
+   *  application adds what it journals. */
+  private async loadEvidence(durable: DelegationDurability): Promise<void> {
+    if (this.evidenceLoaded) return;
+    this.evidenceLoading ??= (async () => {
+      try {
+        await durable.visitRetainedRecords((r) => { if (r.entry.kind === 'evidence-accepted') this.noteEvidence(r.journalId, r.entry.event); });
+        this.evidenceLoaded = true;
+      } catch (err) {
+        console.warn(`ccrc-server: the delegation evidence could not be read from the journal: ${err instanceof Error ? err.message : String(err)}`);
+      } finally {
+        this.evidenceLoading = null;
+      }
+    })();
+    await this.evidenceLoading;
+  }
+
+  // ── reconciliation ────────────────────────────────────────────────────────────────────────────────────────────────────
+
+  private async reconcile(pass: LanePass, durable: DelegationDurability): Promise<void> {
+    this.reconciledAt = pass.census.measuredAt;
+    if (durable.state().phase !== 'ready') return;
+    const now = formatDelegationInstant(pass.now);
+
+    // The census, flat: every project whose delegation census was a MEASURED success contributes its records, each (project,
+    // adminRecord) once. A project whose view was null is left OUT of `censusedProjects` and contributes nothing: an empty list would
+    // read as "every tree is gone" (hand-off 12).
+    const censused: string[] = [];
+    const flat: DelegationCensusRecord[] = [];
+    const held = new Set<string>();
+    for (const [project, view] of pass.census.projects) {
+      if (view.delegation === null) continue;
+      censused.push(project);
+      for (const r of view.delegation) {
+        const k = laneTreeKey(r.project, r.adminRecord);
+        if (held.has(k)) continue;
+        held.add(k);
+        flat.push(r);
+      }
+    }
+    this.reconciliations += 1;
+    const nextFirstSeen = new Map(flat.map((r) => [laneTreeKey(r.project, r.adminRecord), this.firstSeen.get(laneTreeKey(r.project, r.adminRecord)) ?? this.reconciliations] as const));
+    const recordsById = new Map(pass.records.map((r) => [r.id, r] as const));
+    const registryRowOf = (record: DelegationCensusRecord): LaneRecord | undefined => {
+      const ccdId = record.canonicalPath === null ? null : ccdIdForWorktree(record.project, record.canonicalPath);
+      return ccdId === null ? undefined : recordsById.get(ccdId);
+    };
+    const waitRemaining = (record: DelegationCensusRecord): number =>
+      DELEGATION_BIRTH_PASSES - (this.reconciliations - (nextFirstSeen.get(laneTreeKey(record.project, record.adminRecord)) ?? this.reconciliations));
+
+    // Rung 2's point lookups come BEFORE the snapshot: a meta that opens an activity changes the checkpoint, and correlation and policy
+    // must both read the one state that includes it.
+    await this.readMetas(pass, durable, flat, (r) => registryRowOf(r) === undefined && waitRemaining(r) <= 0);
+    if (pass.signal.aborted) return;
+    const state = durable.state();                                       // ONE snapshot: correlation and policy both read it
+    if (state.phase !== 'ready') return;
+
+    const evidence = [...this.evidence].map(([journalId, v]) => ({ journalId, event: v.event }));
+    const windows = delegationListingWindowsOf([...this.evidence.values()].map((v) => v.event), (sessionId) => this.sessionProject.get(sessionId));
+    const pointMetas = [...this.pointMetas.values()];
+    const inputFor = (record: DelegationCensusRecord): DelegationCorrelationInput => {
+      const row = registryRowOf(record);
+      return {
+        record,
+        // No wave-3 datum names a checkpoint activity for a run's child (lineage rows owned by a run have no writer), so rung 1 has
+        // nothing to agree with: a ccd workspace is `unresolved` as a workspace, never claimed as a lease and never run-child-owned.
+        runChildAgreement: null,
+        activities: state.checkpoint.activities, acceptedEvidence: evidence, pointMetas, listingWindows: windows,
+        birthPassesRemaining: Math.max(0, Math.min(DELEGATION_BIRTH_PASSES, waitRemaining(record))) as 0 | 1 | 2,
+        hasRegistryRow: row !== undefined, hasChildMarker: row !== undefined && row.child.kind !== 'none',
+      };
+    };
+    // ONE expression: each pair is a census record and the verdict about it, never sorted or filtered apart.
+    const pairs = flat.map((record) => ({ record, verdict: correlateDelegation(inputFor(record)) }));
+
+    const deaths = this.firstDeadParents();
+    const effects = planDelegationReconciliation({
+      now, recovery: state, census: flat, correlations: pairs, registryReadable: this.registryListed, firstDeadParents: deaths,
+      previousSuccessfulCensus: this.previous === null ? null : this.previous.flat,
+      censusedProjects: censused, previousCensusedProjects: this.previous === null ? null : this.previous.projects,
+    });
+
+    // The counts are the pass's VERDICTS, one per census record that is a tree or could not be read; an `absent` record is a tree
+    // being removed. Never attempt rows: policy files none for work no parent is named for.
+    const counts: DelegationVerdictCounts = { unresolved: 0, conflicting: 0, unmeasured: 0 };
+    for (const { record, verdict } of pairs) {
+      if (record.state === 'absent') continue;
+      if (verdict.kind === 'unresolved' || verdict.kind === 'conflicting' || verdict.kind === 'unmeasured') counts[verdict.kind] += 1;
+    }
+    this.verdicts = counts;
+    this.firstSeen = nextFirstSeen;
+    this.previous = { flat, projects: censused };
+    this.reconciled = true;
+    if (pass.signal.aborted) return;
+    await this.applyEffects(pass, durable, effects);
+  }
+
+  // ── rung 2: the positive meta reads ───────────────────────────────────────────────────────────────────────────────────
+
+  /**
+   * Rung 2 decides a tree named `agent-<id>` or `wf_<run>-<n>` here or not at all, and it needs a point lookup: the parent's own
+   * transcript tree holds a `*.meta.json` whose `worktreePath` must equal the tree's canonical path. The directory comes from the
+   * parent's OWN spool history (an event's `transcriptPath` and Claude session id, or a Workflow launch's `transcriptDir`), never a
+   * search. At most `DELEGATION_META_READS_PER_PASS` files are read in a pass, a tree that gave nothing is not asked again for
+   * `DELEGATION_META_RETRY_MS`, and a tree still inside its birth wait or held by the registry is not asked at all. A positive meta
+   * opens the activity it names through the applier's own door (`applyPositiveAgentMeta` / `applyPositiveWorkflowMeta`), whose ID
+   * exists only after the checkpoint replacement (O1); the meta itself is read evidence and is never journaled.
+   */
+  private async readMetas(pass: LanePass, durable: DelegationDurability, flat: readonly DelegationCensusRecord[], askable: (r: DelegationCensusRecord) => boolean): Promise<void> {
+    const budget = { left: DELEGATION_META_READS_PER_PASS };
+    for (const record of flat) {
+      if (budget.left <= 0 || pass.signal.aborted) return;
+      if (record.state !== 'present' || record.canonicalPath === null || !askable(record)) continue;
+      const key = laneTreeKey(record.project, record.adminRecord);
+      if ((this.metaMiss.get(key) ?? 0) > pass.now) continue;
+      const wf = /^(wf_.+)-(\d+)$/.exec(record.adminRecord);
+      let found = false;
+      try {
+        if (record.adminRecord.startsWith('agent-')) found = await this.readAgentMeta(pass, durable, record, record.adminRecord.slice('agent-'.length), budget);
+        else if (wf !== null) found = await this.readWorkflowMeta(pass, durable, record, wf[1]!, budget);
+        else continue;
+      } catch (err) {
+        console.warn(`ccrc-server: a delegation meta read for ${record.adminRecord} failed: ${err instanceof Error ? err.message : String(err)}`);
+      }
+      if (!found && !pass.signal.aborted) this.metaMiss.set(key, pass.now + DELEGATION_META_RETRY_MS);
+    }
+  }
+
+  private async readMetaFile(pass: LanePass, file: string, budget: { left: number }): Promise<{ worktreePath: string } | null> {
+    budget.left -= 1;
+    const read = await this.deps.io.readFileMeasured(file, DELEGATION_READ_TIMEOUT_MS, pass.signal);
+    if (!read.ok || read.content.length > DELEGATION_META_MAX_CHARS || pass.signal.aborted) return null;
+    let parsed: unknown;
+    try { parsed = JSON.parse(read.content); } catch { return null; }
+    const wt = typeof parsed === 'object' && parsed !== null ? (parsed as Record<string, unknown>)['worktreePath'] : undefined;
+    return typeof wt === 'string' && wt !== '' ? { worktreePath: wt } : null;
+  }
+
+  private async readAgentMeta(pass: LanePass, durable: DelegationDurability, record: DelegationCensusRecord, agentId: string, budget: { left: number }): Promise<boolean> {
+    // The parents whose spool names this agent, with the transcript their own events carry.
+    const claimants = new Map<string, { event: DelegationEventEnvelopeV1; journalId: string }>();
+    for (const [journalId, { event }] of this.evidence) {
+      const launched = event.eventKind === 'PostToolUse' && 'launch' in event && event.launch !== null && typeof event.launch === 'object' && 'agentId' in event.launch && event.launch.agentId === agentId;
+      if ((event.agentId !== agentId && !launched) || typeof event.transcriptPath !== 'string') continue;
+      const k = JSON.stringify([event.sessionId, event.parentIncarnation]);
+      if (!claimants.has(k)) claimants.set(k, { event, journalId });
+    }
+    let found = false;
+    for (const { event, journalId } of claimants.values()) {
+      if (budget.left <= 0 || pass.signal.aborted) break;
+      const transcript = event.transcriptPath!;
+      const file = `${transcript.slice(0, transcript.lastIndexOf('/'))}/${event.claudeSessionId}/subagents/agent-${agentId}.meta.json`;
+      const meta = await this.readMetaFile(pass, file, budget);
+      if (meta === null || pass.signal.aborted) continue;
+      this.pointMetas.set(JSON.stringify([event.sessionId, event.parentIncarnation, 'agent', agentId]), {
+        parentId: event.sessionId, parentIncarnation: event.parentIncarnation, sourceKind: 'agent', upstreamId: agentId,
+        worktreePath: meta.worktreePath, evidenceJournalId: journalId,
+      });
+      found = true;
+      // The meta is a qualifying join, but opening waits for at least one retained event naming the agent (a candidate): there is one.
+      const cp = durable.state().checkpoint;
+      if (!cp.activities.some((a) => a.sourceKind === 'agent' && a.upstreamId === agentId && a.parentId === event.sessionId && a.parentIncarnation === event.parentIncarnation)) {
+        await durable.applyPositiveAgentMeta({ parentId: event.sessionId, parentIncarnation: event.parentIncarnation, agentId });
+      }
+    }
+    return found;
+  }
+
+  private async readWorkflowMeta(pass: LanePass, durable: DelegationDurability, record: DelegationCensusRecord, runId: string, budget: { left: number }): Promise<boolean> {
+    // The run's launch response names its transcript directory; its workers' metas are the files directly inside it.
+    let launch: { event: DelegationEventEnvelopeV1; journalId: string; dir: string } | null = null;
+    for (const [journalId, { event }] of this.evidence) {
+      if (event.eventKind !== 'PostToolUse' || event.toolName !== 'Workflow' || event.launch === null || event.launch.runId !== runId) continue;
+      launch = { event, journalId, dir: event.launch.transcriptDir };
+      break;
+    }
+    if (launch === null) return false;
+    let listing: MeasuredDirectoryRead;
+    try { listing = await this.deps.io.readdirMeasured(launch.dir, DELEGATION_READ_TIMEOUT_MS, pass.signal); } catch { return false; }
+    if (!listing.ok || pass.signal.aborted) return false;
+    for (const name of listing.entries.filter((n) => /^agent-[A-Za-z0-9_-]+\.meta\.json$/.test(n)).slice(0, DELEGATION_META_DIR_ENTRIES)) {
+      if (budget.left <= 0 || pass.signal.aborted) return false;
+      const meta = await this.readMetaFile(pass, `${launch.dir}/${name}`, budget);
+      if (meta === null || meta.worktreePath !== record.canonicalPath) continue;
+      // The worker's index is the meta's own: the last component of the worktree path it names is `<runId>-<index>`.
+      const m = /^(.+)-(\d+)$/.exec(meta.worktreePath.slice(meta.worktreePath.lastIndexOf('/') + 1));
+      const workerIndex = m === null ? Number.NaN : Number(m[2]);
+      if (m === null || m[1] !== runId || !Number.isSafeInteger(workerIndex)) continue;
+      this.pointMetas.set(JSON.stringify([launch.event.sessionId, launch.event.parentIncarnation, 'workflow', record.adminRecord]), {
+        parentId: launch.event.sessionId, parentIncarnation: launch.event.parentIncarnation, sourceKind: 'workflow', upstreamId: record.adminRecord,
+        worktreePath: meta.worktreePath, evidenceJournalId: launch.journalId,
+      });
+      await durable.applyPositiveWorkflowMeta({ parentId: launch.event.sessionId, parentIncarnation: launch.event.parentIncarnation, runId, workerIndex });
+      return true;
+    }
+    return false;
+  }
+
+  private async applyEffects(pass: LanePass, durable: DelegationDurability, effects: readonly DelegationReportEffect[]): Promise<void> {
+    const attempts: DelegationAttemptRow[] = [];
+    for (const e of effects) {
+      if (e.kind === 'request-linked-lease-identity' || e.kind === 'record-run-child-owned' || e.kind === 'record-unowned-worktree') attempts.push(e.attempt);
+    }
+    const filed = attempts.length === 0 ? new Set<string>() : await this.fileAttempts(durable, attempts);
+    let repair = false;
+    for (const e of effects) {
+      if (pass.signal.aborted) return;
+      switch (e.kind) {
+        case 'request-linked-lease-identity':
+          // The attempt is on file before the lease is journaled; `createLease` deduplicates on the identity key, so a request re-emitted
+          // after a crash between the two is a no-op.
+          if (!filed.has(e.attempt.attemptId)) break;
+          try { await durable.createLease(e.request); }
+          catch (err) { console.warn(`ccrc-server: a delegation lease identity could not be journaled: ${err instanceof Error ? err.message : String(err)}`); }
+          break;
+        case 'record-run-child-owned':
+        case 'record-unowned-worktree':
+          break;                                                         // the attempt row is the whole record
+        case 'record-measured-absence': {
+          const k = laneTreeKey(e.project, e.adminRecord);
+          if (!this.absences.has(k)) this.absences.set(k, { project: e.project, adminRecord: e.adminRecord, observedAt: e.observedAt });
+          break;
+        }
+        case 'repair-report-projection':
+          repair = true;
+          break;
+        case 'record-observation-interval':
+          try { await durable.applyAccepted({ accepted: [], cursor: null, interval: e.interval }); }
+          catch (err) { console.warn(`ccrc-server: a delegation interval could not be recorded: ${err instanceof Error ? err.message : String(err)}`); }
+          break;
+        default:
+          e satisfies never;
+      }
+    }
+    if (repair && !pass.signal.aborted) {
+      try { await durable.repairProjection(); }
+      catch (err) { console.warn(`ccrc-server: the delegation projection could not be repaired: ${err instanceof Error ? err.message : String(err)}`); }
+    }
+  }
+
+  /** Makes the pass's attempts durable through a checkpoint-only change (an attempt already on file is skipped, so an upsert is a no-op),
+   *  one change for the lot and, if the lot is refused, each alone. Answers the IDs now on file. */
+  private async fileAttempts(durable: DelegationDurability, attempts: readonly DelegationAttemptRow[]): Promise<Set<string>> {
+    const add = (list: readonly DelegationAttemptRow[]) => (cp: DelegationCheckpointV1): DelegationCheckpointV1 => {
+      const have = new Set(cp.attempts.map((a) => a.attemptId));
+      const fresh = list.filter((a, i) => !have.has(a.attemptId) && list.findIndex((b) => b.attemptId === a.attemptId) === i);
+      return fresh.length === 0 ? cp : { ...cp, attempts: [...cp.attempts, ...fresh] };
+    };
+    try {
+      await durable.applyCheckpointChange(add(attempts));
+    } catch (err) {
+      console.warn(`ccrc-server: the delegation attempts could not be filed together (${err instanceof Error ? err.message : String(err)}); filing each alone`);
+      for (const a of attempts) {
+        try { await durable.applyCheckpointChange(add([a])); }
+        catch (e2) { console.warn(`ccrc-server: a delegation attempt could not be filed: ${e2 instanceof Error ? e2.message : String(e2)}`); }
+      }
+    }
+    return new Set(durable.state().checkpoint.attempts.map((a) => a.attemptId));
+  }
 }

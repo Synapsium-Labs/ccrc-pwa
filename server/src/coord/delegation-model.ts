@@ -35,6 +35,7 @@ import {
   type DelegationExecutionState,
   type DelegationHealthInput,
   type DelegationIntentSource,
+  type DelegationObservationHealth,
   type DelegationLeaseSourceKind,
   type DelegationParentageState,
   type DelegationWorkspaceState,
@@ -388,7 +389,8 @@ export const DELEGATION_MODEL_REFUSALS: Readonly<Record<DelegationModelRefusal, 
 export function isDelegationModelKebab(v: string): boolean {
   const own = (o: object): boolean => Object.prototype.hasOwnProperty.call(o, v);
   return own(DELEGATION_MODEL_REFUSALS) || own(DELEGATION_JOURNAL_ENTRY_KINDS) || own(DELEGATION_PRUNING_HOLD_REASONS)
-    || (DELEGATION_ACTIVITY_SOURCE_KINDS as readonly string[]).includes(v) || (DELEGATION_CLEANUP_STATES as readonly string[]).includes(v);
+    || (DELEGATION_ACTIVITY_SOURCE_KINDS as readonly string[]).includes(v) || (DELEGATION_CLEANUP_STATES as readonly string[]).includes(v)
+    || isDelegationHealthKebab(v);
 }
 
 // ── Canonical JSON (RFC 8785 over the plan's closed domain) ──────────────────────────────────────────────────────────
@@ -1095,4 +1097,192 @@ export function delegationCheckpointOfProjection(rows: DelegationProjectionRows)
  *  rows in read order. A drift check compares this, canonically, with `readDelegationProjection()`. */
 export function projectionViewOfDelegationCheckpoint(checkpoint: DelegationCheckpointV1): DelegationCheckpointV1 {
   return delegationCheckpointOfProjection(sortedProjectionRows(checkpoint));
+}
+
+// ── THE OBSERVATION HEALTH (wave 3, Task 13; spec §7 stage 2) ─────────────────────────────────────────────────────────
+//
+// Pure arithmetic from the CHECKPOINT's `observationIntervals` and nothing else. The interval rows are checkpoint-owned: SQLite carries
+// none (`readDelegationProjection` returns them empty), so a health built from SQLite would lose every session-hour a lost `coord.db`
+// loses, and one built from a clock here would drift against the rows it counts. Time comes in as `nowMs`.
+//
+//   THE WINDOW. The 168 complete UTC hours that end at the start of the current hour. A session-hour is a row keyed
+//   (session, incarnation, hour); a row is `measured` when the lane read the hour's bucket (or proved it empty) and `unmeasured` when
+//   it could not, and `unmeasured` is sticky (`mergeDelegationObservationInterval`). The window is COMPLETE only when every one of its
+//   168 hours has at least one row: an hour with none is an hour the lane did not run, and the gate must not read it as a quiet fleet.
+//
+//   THE GATE. `eligible` only for a complete window, a measured capability, a readable registry, a ready recovery and a non-zero
+//   denominator, with strictly fewer than 1% of the session-hours unmeasured: `unmeasured * 100 < total`, in integers, so 0.99% is in
+//   and exactly 1.00% is out whatever a float would say. Every other basis is `unmeasured`, with a null rate: unavailable is not zero
+//   and not healthy (W3-M57). Eligibility activates nothing; waves 4 to 7 are gated separately.
+
+/** The `ccd caps` token that says a fleet writes the delegation spool: the grammar and the ccd-made owner directories. Spelled ONCE in
+ *  `server/src`; ccd's `echo delegation-events-v1` and `delegation-spool.test.ts` are the other spellings. The hook's registration is
+ *  the doctor's to measure, not this token's. */
+export const DELEGATION_EVENTS_CAP = 'delegation-events-v1';
+
+/** Whether the fleet offers the capability, read the way the docs reader reads its own: a list that is a `ccd caps` answer (it names
+ *  `caps` itself) and lacks the token is `absent` (an old fleet); no list, or a list that is not such an answer (an agent whose boot
+ *  read failed seeds `[]`), is `unmeasured`. The token alone is evidence it is offered. */
+export function delegationCapabilityState(ccdVerbs: readonly string[] | null | undefined): DelegationHealthInput['capabilityState'] {
+  if (ccdVerbs === null || ccdVerbs === undefined) return 'unmeasured';
+  if (ccdVerbs.includes(DELEGATION_EVENTS_CAP)) return 'present';
+  return ccdVerbs.includes('caps') ? 'absent' : 'unmeasured';
+}
+
+export const DELEGATION_HOUR_MS = 3_600_000;
+/** Seven days of whole UTC hours. */
+export const DELEGATION_HEALTH_WINDOW_HOURS = 7 * 24;
+/** What the checkpoint keeps: the window and one more day, so the window never rolls onto a row that was just pruned. */
+export const DELEGATION_INTERVAL_RETENTION_HOURS = DELEGATION_HEALTH_WINDOW_HOURS + 24;
+/** How long after an hour ends a hook may still append to its bucket (it names the bucket when it starts, and writes a moment later). */
+export const DELEGATION_HOUR_CLOSE_MARGIN_MS = 120_000;
+/** How long the hook keeps a bucket (it prunes at 24 to 25 hours): the lookback the lane reads, and the age past which an unclosed hour
+ *  can never be closed. */
+export const DELEGATION_SPOOL_LOOKBACK_HOURS = 24;
+/** The incarnation a session-hour is keyed under when the parent's incarnation could not be measured (absent, unreadable, changing):
+ *  there is no real one to name, and the row must exist so the hour counts. */
+export const DELEGATION_UNMEASURED_INCARNATION = 'unmeasured';
+
+const HEALTH_MODE = 'report-only' as const satisfies DelegationObservationHealth['mode'];
+/** The detail of an interval upkeep turned into a gap: an hour recorded before it ended, whose bucket is gone before it was closed. */
+export const DELEGATION_HOUR_NEVER_CLOSED = 'hour-never-closed';
+
+/** The words this section spells, as a TOTAL table, for the coordination scanner's guard. */
+const DELEGATION_HEALTH_WORDS: Readonly<Record<typeof HEALTH_MODE | typeof DELEGATION_HOUR_NEVER_CLOSED, true>> = {
+  [HEALTH_MODE]: true, [DELEGATION_HOUR_NEVER_CLOSED]: true,
+};
+
+const hourFloor = (ms: number): number => Math.floor(ms / DELEGATION_HOUR_MS) * DELEGATION_HOUR_MS;
+
+/** An interval's hour as epoch milliseconds, or null when it is not a canonical instant on an hour boundary (it cannot be placed). */
+function intervalHourMs(utcHour: string): number | null {
+  try {
+    const at = parseDelegationInstant(utcHour);
+    return at % DELEGATION_HOUR_MS === 0 ? at : null;
+  } catch (err) {
+    if (err instanceof DelegationModelError) return null;
+    throw err;
+  }
+}
+
+export interface DelegationHealthWindow {
+  windowStartedAt: string;
+  windowEndedAt: string;
+  measuredSessionHours: number;
+  unmeasuredSessionHours: number;
+  complete: boolean;
+}
+
+/** The rolling window over a set of interval rows. A row that cannot be placed makes the window incomplete, not smaller. */
+export function delegationHealthWindowOf(intervals: readonly DelegationObservationInterval[], nowMs: number): DelegationHealthWindow {
+  const endMs = hourFloor(nowMs);
+  const startMs = endMs - DELEGATION_HEALTH_WINDOW_HOURS * DELEGATION_HOUR_MS;
+  const covered = new Set<number>();
+  let measuredHours = 0;
+  let unmeasuredHours = 0;
+  let placeable = true;
+  for (const r of intervals) {
+    const at = intervalHourMs(r.utcHour);
+    if (at === null) { placeable = false; continue; }
+    if (at < startMs || at >= endMs) continue;
+    covered.add(at);
+    if (r.state === 'measured') measuredHours += 1; else unmeasuredHours += 1;
+  }
+  return {
+    windowStartedAt: formatDelegationInstant(startMs), windowEndedAt: formatDelegationInstant(endMs),
+    measuredSessionHours: measuredHours, unmeasuredSessionHours: unmeasuredHours,
+    complete: placeable && covered.size === DELEGATION_HEALTH_WINDOW_HOURS,
+  };
+}
+
+/**
+ * What the health is computed from, assembled from the applier's state and the measurements the server holds. A state that is not
+ * `ready` (or none at all, when the applier never opened) is not trusted for a single row: its counts are zero, its window is
+ * incomplete and its anchors are null. `verdictCounts` are the last reconciliation pass's VERDICTS, never attempt rows.
+ */
+export function delegationHealthInputOf(src: {
+  nowMs: number;
+  state: DeepReadonly<DelegationRecoveryState> | null;
+  capabilityState: DelegationHealthInput['capabilityState'];
+  registryReadable: boolean;
+  circuitBreaker: DelegationHealthInput['circuitBreaker'];
+  verdictCounts: { unresolved: number; conflicting: number; unmeasured: number };
+}): DelegationHealthInput {
+  const cp = src.state !== null && src.state.phase === 'ready' ? src.state.checkpoint : null;
+  const window = cp === null ? null : delegationHealthWindowOf(cp.observationIntervals, src.nowMs);
+  let lastIngestedAt: string | null = null;
+  if (cp !== null) for (const r of cp.observationIntervals) if (lastIngestedAt === null || r.recordedAt > lastIngestedAt) lastIngestedAt = r.recordedAt;
+  return {
+    windowStartedAt: window === null ? null : window.windowStartedAt,
+    windowEndedAt: window === null ? null : window.windowEndedAt,
+    windowComplete: window !== null && window.complete,
+    measuredSessionHours: window === null ? 0 : window.measuredSessionHours,
+    unmeasuredSessionHours: window === null ? 0 : window.unmeasuredSessionHours,
+    capabilityState: src.capabilityState,
+    registryReadable: src.registryReadable,
+    recoveryPhase: cp === null ? 'reconstructing' : 'ready',
+    circuitBreaker: src.circuitBreaker,
+    unresolved: src.verdictCounts.unresolved, conflicting: src.verdictCounts.conflicting, unmeasured: src.verdictCounts.unmeasured,
+    lastJournalSequence: cp === null || cp.appliedJournalSequence === 0 ? null : cp.appliedJournalSequence,
+    lastCheckpointRevision: cp === null || cp.revision === 0 ? null : cp.revision,
+    lastIngestedAt,
+  };
+}
+
+/** The published health. Every basis that is not measured is `unmeasured` with a null rate; the rate is a number only for a gate that
+ *  has an answer. A recovery that is not ready cannot have measured the breaker either. */
+export function delegationObservationHealthOf(input: DelegationHealthInput): DelegationObservationHealth {
+  const total = input.measuredSessionHours + input.unmeasuredSessionHours;
+  const measuredBasis = input.windowComplete && input.capabilityState === 'present' && input.registryReadable
+    && input.recoveryPhase === 'ready' && total > 0;
+  const stageGate: DelegationObservationHealth['stageGate'] = !measuredBasis ? 'unmeasured'
+    : input.unmeasuredSessionHours * 100 < total ? 'eligible' : 'ineligible';
+  return {
+    mode: HEALTH_MODE,
+    windowStartedAt: input.windowStartedAt, windowEndedAt: input.windowEndedAt,
+    measuredSessionHours: input.measuredSessionHours, unmeasuredSessionHours: input.unmeasuredSessionHours,
+    unmeasuredRate: measuredBasis ? input.unmeasuredSessionHours / total : null,
+    stageGate,
+    circuitBreaker: input.recoveryPhase === 'ready' ? input.circuitBreaker : 'unmeasured',
+    unresolved: input.unresolved, conflicting: input.conflicting, unmeasured: input.unmeasured,
+    lastJournalSequence: input.lastJournalSequence, lastCheckpointRevision: input.lastCheckpointRevision,
+    lastIngestedAt: input.lastIngestedAt,
+  };
+}
+
+/**
+ * The checkpoint's interval upkeep, deterministic and order-independent. It keeps every row of the window and one more day, and it
+ * drops what is older. And it turns an hour into a GAP when the lane recorded it before it ended, never recorded it again after it
+ * closed, and the hook has since pruned its bucket: nothing can prove that hour whole any more. An unmeasured hour is final and is
+ * never touched. When nothing changes the SAME array comes back, so the caller makes no checkpoint replacement for it.
+ */
+export function upkeepDelegationIntervals(
+  intervals: readonly DelegationObservationInterval[], nowMs: number,
+): { intervals: readonly DelegationObservationInterval[]; changed: boolean } {
+  const keepFrom = hourFloor(nowMs) - DELEGATION_INTERVAL_RETENTION_HOURS * DELEGATION_HOUR_MS;
+  const pruned = nowMs - DELEGATION_SPOOL_LOOKBACK_HOURS * DELEGATION_HOUR_MS;
+  const out: DelegationObservationInterval[] = [];
+  let changed = false;
+  for (const r of intervals) {
+    const at = intervalHourMs(r.utcHour);
+    if (at === null) { out.push(r); continue; }                       // an unplaceable row is kept, and keeps the window incomplete
+    if (at < keepFrom) { changed = true; continue; }
+    if (r.state === 'measured') {
+      const closeAt = at + DELEGATION_HOUR_MS + DELEGATION_HOUR_CLOSE_MARGIN_MS;
+      let recorded: number | null = null;
+      try { recorded = parseDelegationInstant(r.recordedAt); } catch (err) { if (!(err instanceof DelegationModelError)) throw err; }
+      if ((recorded === null || recorded < closeAt) && closeAt <= pruned) {
+        out.push({ ...r, state: 'unmeasured', detail: `${DELEGATION_HOUR_NEVER_CLOSED}: recorded before the hour ended and never read again before the spool dropped it`, recordedAt: formatDelegationInstant(nowMs) });
+        changed = true;
+        continue;
+      }
+    }
+    out.push(r);
+  }
+  return changed ? { intervals: out, changed: true } : { intervals, changed: false };
+}
+
+/** Every kebab word this section spells, for `isDelegationModelKebab`. */
+export function isDelegationHealthKebab(v: string): boolean {
+  return Object.prototype.hasOwnProperty.call(DELEGATION_HEALTH_WORDS, v);
 }
