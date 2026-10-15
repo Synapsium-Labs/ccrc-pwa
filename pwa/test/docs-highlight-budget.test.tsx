@@ -7,8 +7,12 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { cleanup, render } from '@testing-library/react';
 import type { Element as HastElement, Root as HastRoot } from 'hast';
+import hljs from 'highlight.js/lib/core';
 import { PreHighlightContext, SHARED_COMPONENTS } from '../src/lib/markdown';
-import { DOCS_HIGHLIGHT_PAGE_MAX_CHARS, MD_HIGHLIGHT_BLOCK_MAX_CHARS } from '../src/lib/markdownLimits';
+import {
+  DOCS_HIGHLIGHT_MARKDOWN_PAGE_MAX_CHARS, DOCS_HIGHLIGHT_PAGE_MAX_CHARS, DOCS_HIGHLIGHT_SCAN_PAGE_MAX_CHARS,
+  MD_HIGHLIGHT_BLOCK_MAX_CHARS, MD_HIGHLIGHT_JS_BLOCK_MAX_CHARS,
+} from '../src/lib/markdownLimits';
 import { renderHast } from '../src/lib/renderHast';
 import { DocLink } from '../src/docs/DocLink';
 import { detachUrls } from '../src/docs/docsLinks';
@@ -215,5 +219,90 @@ describe('review 450 F1: the markdown budget, a page\'s markdown code (131 072 c
     const marks = [...container.querySelectorAll('.code-block')].map((b) => b.querySelectorAll('.hljs-tag').length);
     expect(marks.slice(0, 2).every((n) => n > 0)).toBe(true);
     expect(marks[2]).toBe(0);
+  }, 60000);
+});
+
+// Review 460 F10 asked for the end-to-end page "under the target" as a timed reading; a wall-clock assertion is
+// load-sensitive on a shared box, so this case replaces it with the decision itself: which blocks of a mixed crafted
+// page `detachUrls` and `CodeBlock` highlight and which they refuse, under each budget, read from what highlight.js was
+// asked to highlight. The timings of the same pages are recorded in the plan's results (review 460 F10).
+describe('review 460 F10: which blocks of a mixed crafted page are highlighted, end to end', () => {
+  const lang = (name: string, text: string): HastElement => ({
+    type: 'element', tagName: 'pre', properties: {},
+    children: [{ type: 'element', tagName: 'code', properties: { className: [`language-${name}`] }, children: [{ type: 'text', value: text }] }],
+  });
+  /** One block's text as the parse leaves it: `chars` characters (a first line naming `tag` so every block is unique, then
+   *  `unit` lines, cheap for highlight.js and well inside the word, line and blank bounds), then the newline it keeps. */
+  const text = (tag: string, comment: string, unit: string, chars: number): string =>
+    (`${comment} ${tag}\n` + unit.repeat(Math.ceil(chars / unit.length))).slice(0, chars) + '\n';
+  // One comment, key or heading per 92-character line: highlightable, few elements per block (the case holds about a
+  // megabyte of code, rendered), and each line far under the word, line and blank bounds.
+  const TS = `// ${'c'.repeat(88)}\n`;
+  const YAML = `# ${'c'.repeat(88)}\n`;
+  const MD = `# ${'h'.repeat(88)}\n`;
+  /** A block of `lang` name holding `chars` characters (the newline not counted), numbered `tag`. */
+  const block = (name: string, tag: string, chars: number): { name: string; text: string } => {
+    const kind = name === 'yaml' ? ['#', YAML] : name === 'markdown' || name === 'md' ? ['#', MD] : ['//', TS];
+    return { name, text: text(tag, kind[0]!, kind[1]!, chars) };
+  };
+  /** Render a page through `detachUrls`, PreHighlightContext and SHARED_COMPONENTS, as the Docs page does; return, in block
+   *  order, whether highlight.js was asked to highlight each block's text, and each block's label. */
+  const run = (blocks: readonly { name: string; text: string }[]): { highlighted: boolean[]; labels: string[] } => {
+    // Calls through, so the page is really highlighted; only the text asked is kept (a spy would keep every result too).
+    const asked = new Set<string>();
+    const real = hljs.highlight;
+    hljs.highlight = ((code: string, ...rest: unknown[]) => {
+      asked.add(code);
+      return (real as (...a: unknown[]) => unknown)(code, ...rest);
+    }) as typeof hljs.highlight;
+    try {
+      const d = detachUrls({ type: 'root', children: blocks.map((b) => lang(b.name, b.text)) });
+      const { container } = render(
+        <PreHighlightContext value={(pre) => d.urls.get(pre)?.highlight !== false}>
+          {renderHast(d.tree, { components: { ...SHARED_COMPONENTS, a: DocLink } })}
+        </PreHighlightContext>,
+      );
+      expect(container.querySelectorAll('.code-block')).toHaveLength(blocks.length);
+      expect(new Set(blocks.map((b) => b.text)).size).toBe(blocks.length);
+      return {
+        highlighted: blocks.map((b) => asked.has(b.text.slice(0, -1))),
+        labels: [...container.querySelectorAll('.code-block-lang')].map((l) => l.textContent ?? ''),
+      };
+    } finally {
+      hljs.highlight = real;
+      cleanup();
+    }
+  };
+
+  it('end to end through detachUrls and CodeBlock: a mixed crafted page highlights exactly the blocks each budget admits', () => {
+    const tsChars = MD_HIGHLIGHT_JS_BLOCK_MAX_CHARS - 1; // the newline the parse keeps brings it to the cap
+    const mdChars = MD_HIGHLIGHT_BLOCK_MAX_CHARS - 1;
+    const tsCount = DOCS_HIGHLIGHT_SCAN_PAGE_MAX_CHARS / MD_HIGHLIGHT_JS_BLOCK_MAX_CHARS;
+    const mdCount = DOCS_HIGHLIGHT_MARKDOWN_PAGE_MAX_CHARS / MD_HIGHLIGHT_BLOCK_MAX_CHARS;
+    expect(Number.isInteger(tsCount) && Number.isInteger(mdCount)).toBe(true);
+    expect(tsCount * MD_HIGHLIGHT_JS_BLOCK_MAX_CHARS + mdCount * MD_HIGHLIGHT_BLOCK_MAX_CHARS).toBe(DOCS_HIGHLIGHT_PAGE_MAX_CHARS);
+    const tsFill = (): { name: string; text: string }[] => Array.from({ length: tsCount }, (_, i) => block('ts', `fill ${i}`, tsChars));
+
+    // Page S, the scan budget: 48 ts blocks fill it exactly; then tsx (a ts alias), javascript and rust are refused, yaml is not.
+    const s = run([
+      ...tsFill(),
+      block('tsx', 's-tsx', 100), block('yaml', 's-yaml', 100), block('javascript', 's-js', 100), block('rust', 's-rust', 100),
+      block('ts', 's-over', MD_HIGHLIGHT_JS_BLOCK_MAX_CHARS + 1),
+    ]);
+    expect(s.highlighted).toEqual([...Array.from({ length: tsCount }, () => true), false, true, false, false, false]);
+    expect(s.labels[s.labels.length - 1]).toMatch(/ · not highlighted \(9 KiB\)$/);
+
+    // Page M, the markdown budget: a markdown and an md block fill it exactly; then a small markdown block is refused, yaml is not.
+    const m = run([
+      block('markdown', 'm-1', mdChars), block('md', 'm-2', mdChars), block('markdown', 'm-3', 100), block('yaml', 'm-yaml', 100),
+    ]);
+    expect(m.highlighted).toEqual([true, true, false, true]);
+
+    // Page G, the general budget (the accepted residue's page): 48 ts blocks and two markdown blocks fill it exactly,
+    // all 50 highlighted; yaml is in neither sub-budget and is refused by the general one.
+    const g = run([
+      ...tsFill(), block('markdown', 'g-1', mdChars), block('markdown', 'g-2', mdChars), block('yaml', 'g-yaml', 100),
+    ]);
+    expect(g.highlighted).toEqual([...Array.from({ length: tsCount + mdCount }, () => true), false]);
   }, 60000);
 });
