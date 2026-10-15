@@ -7,6 +7,19 @@
 // D-5005). That arithmetic is only true while ccd/tmux.conf leaves tmux's
 // default single status line, so this test reds the day it turns the line off
 // or makes it multi-line.
+//
+// RED FIRST, reconstructed from git at stage close (2026-10-15: this file at
+// Task 2's commit, run against shared/api.ts as that commit's parent had it):
+// 1 of 8 failed, the is-exactly-1 case. The other seven hold the regex to
+// fixture text, which no change to shared/api.ts can fail.
+//
+// MUTATION TABLE (plan Task 2 Step 4; RUN 2026-10-15 at stage close on an
+// isolated copy of the branch: each mutant applied, the named suites run
+// alone, the file restored and compared byte for byte). Every row went RED:
+//   TMUX_STATUS_ROWS = 0 ...................... is-exactly-1, and drawer-window-sized-client's (a), (b) and (c) on real tmux
+//   a scratch tmux.conf with `status off` ..... the tmux.conf case
+//   the regex without [2-5] ................... the status-2 case, and the leading-spaces case (status 5)
+//   the regex without its ^\s* anchor ......... the commented-out-line case
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';

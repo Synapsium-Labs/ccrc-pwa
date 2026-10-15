@@ -12,6 +12,23 @@
  * window's 50 rows and never the status row, which a guard reading the last
  * rows would otherwise read as one of them. Last, `cellCss` and `GLASS_ANSI`.
  */
+//
+// RED FIRST, reconstructed from git at stage close (2026-10-15: this file at
+// Task 7's commit, run against its parent): the file does not load there,
+// because `drawerModel.ts` is what the commit adds, so every case is red; a
+// per-case count was not recorded at the time. `xterm-unopened-model.test.ts`
+// pins xterm itself (W9) and passes at the parent by design.
+//
+// MUTATION TABLE (plan Task 7 Step 4; RUN 2026-10-15 at stage close on an
+// isolated copy of the branch, each mutant applied, the named suites run
+// alone, the file restored and compared). Every row went RED:
+//   readModel trims every trailing cell, styled or not .. the caret-position case on 8 synthetic screens
+//                                                          (wrap-screen-golden's property (d) stays green: a
+//                                                          caret gone from the model is gone from both sides)
+//   readModel keeps width-0 cells ......................... the cjk-wide rows case
+//   a fixture fed at 220x50, not 220x51 ................... 18 cases: the six recorded fixtures, and twelve synthetic rows cases
+//   model() reads all 51 rows ............................. the real terminal's row-count case
+//   cellCss without the inverse swap ...................... the two inverse cases
 import { describe, expect, it, vi } from 'vitest';
 import { readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';

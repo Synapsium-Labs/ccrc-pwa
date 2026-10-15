@@ -58,6 +58,29 @@
 //   the at-rule walk keeps top-level at-rules only ............. the walk-is-live case
 //   the walk keeps only preludes that name a width ............. the walk-is-live case
 //   nothing is blanked (the unconditional view is the text) .... the walk-is-live case
+//
+// TASKS 10 AND 11 (plan Task 10 Step 3, Task 11 Step 3). RED FIRST,
+// reconstructed from git at stage close (2026-10-15): at Task 10's parent this
+// file does not load (`keyBar.ts` is what that commit adds), so a per-case count
+// was not recorded at the time; at Task 11's parent, 71 of the file's 120 cases
+// then failed: 67 on the exports Task 11 adds (`useKeyInput`, `exitNoticeShowing`,
+// `useExitGuard`, `guardedKey`, `GUARDED_KEYS`; Task 10's own cases among them,
+// their harness now wiring `useKeyInput`), and 4 on behaviour (the drawer sent
+// the second ^C, showed no confirm, and chat.css had no rule for it).
+// MUTATION TABLES, RUN 2026-10-15 at stage close on an isolated copy of the
+// branch, the same way. Every row went RED:
+//   ctrlCode maps digits .................................. ctrlCode 0, 1 and 9, and the non-letter latch case
+//   the latch does not clear after one use ................ sends-and-clears, first-of-two, the latch-then-c guard case,
+//                                                             and four latch cases in drawer-paste.test.tsx
+//   the 420px rule back (the wrap only under max-width) ... the no-at-rule case and the wraps case
+//   the wrap removed ...................................... the wraps case
+//   a half that scrolls (nowrap, overflow-x: auto) ........ the wraps case
+//   QUICK_KEYS's own byte literals back in the drawer ...... the spells-no-key-byte case
+//   the guard reads the last 8 rows ....................... five-rows-higher, exactly-four-rows, and 2 more
+//   the guard reads a model cached at mount ............... read-at-tap-time, and the drawer's three live-model cases
+//   the latch path bypasses the guard ..................... latch-then-c and latch-then-d
+//   the drawer hands the grid strip a bare send ............ the drawer's three live-model cases (jsdom lays nothing
+//                                                             out, so the drawer there shows the grid)
 import { readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';

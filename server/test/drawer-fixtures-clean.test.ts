@@ -2,6 +2,19 @@
 // scanned by the delegation rig's existing allowlist scanner (`sanitize.mjs --scan`), the same scan
 // `record.sh` runs before anything enters the tree (spec 2026-10-14 §9, plan Task 6, D-5006); there is
 // no second sanitiser. Hermetic: it starts no Claude Code, no docker and no tmux.
+//
+// RED FIRST, reconstructed from git at stage close (2026-10-15: this file at
+// Task 6's commit, run against its parent's tree, which had no corpus): 3 of 3
+// failed.
+//
+// MUTATION TABLE (plan Task 6 Step 7; RUN 2026-10-15 at stage close on an
+// isolated copy of the branch, each mutant applied, this file run alone, the
+// file restored and compared). Both RED:
+//   the liveness case plants nothing ......... the liveness case (the scan exits 0; a finding is demanded)
+//   the test scans an empty directory ......... all three cases
+// The recording commit ran two rows of its own, both RED: reply-done.json
+// removed (the corpus case, 5 < 6), and a fixture naming another scenario (the
+// naming case).
 import { describe, it, expect } from 'vitest';
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';

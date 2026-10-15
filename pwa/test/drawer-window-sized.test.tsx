@@ -25,6 +25,21 @@
 //     host as well; a pinch and a sideways scroll stay the browser's;
 // (h) a glass the terminal cannot measure changes nothing: the type and the
 //     clip stay as they were, and nothing is sent (plan Refinement 9).
+//
+// RED FIRST, reconstructed from git at stage close (2026-10-15: this file at
+// Task 4's commit, run against the drawer as that commit's parent had it): 11
+// of 11 failed. Ten on the reshaped seam (the parent's drawer calls the fake's
+// `fit`, which the seam no longer has), one on behaviour: (c) against the real
+// terminal, where a fit moved the grid to 221x46.
+//
+// MUTATION TABLE (plan Task 4 Step 4; RUN 2026-10-15 at stage close on an
+// isolated copy of the branch, each mutant applied, this file run alone, the
+// file restored and compared). Every row went RED:
+//   refit sends {type:'resize'} again, sendFrame widened back .. (b), (c) against the real terminal, and both (h)
+//   the URL dials propose(14)'s grid ............................ (a) at 390, 1280, 1700 and 2600
+//   pin(220, 50) ................................................. (c), and (c) against the real terminal
+//   setFontSize fits the grid to the host ........................ (c) against the real terminal
+//   open() on every refit ........................................ (e)
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, within } from '@testing-library/react';
 import type { Terminal as XTerm } from '@xterm/xterm';
