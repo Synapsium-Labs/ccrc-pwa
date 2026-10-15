@@ -95,6 +95,12 @@ export type SendResult =
        * the arm refused with the text sitting complete in the box and the PWA
        * offering no button at all. A FOURTH shape reaches it, and it is exactly
        * the deserving one. The first three still withhold the flag.
+       *
+       * AND THE FOURTH NO LONGER WAITS FOR THE TAP when the server can prove the
+       * chip is its own (D-TBD-paste-chip-submit, `ownPasteChip`): it presses
+       * the Enter itself, so that send answers `ok` or, Enter swallowed twice,
+       * `enter-ignored` with this flag. Only a chip-led row that fails one of
+       * `ownPasteChip`'s guards still reaches `verify-failed` with the flag.
        */
       submittable?: boolean };
 
@@ -512,6 +518,88 @@ export function isMailResidue(draft: string): boolean {
   return false;
 }
 
+/**
+ * ONE chip and nothing else on the row, in the two shapes Claude Code 2.1.300
+ * was measured drawing (fixtures `cc300-paste-chip-1000.txt`,
+ * `cc300-paste-chip-lines.txt`): `[Pasted text #N]`, and `[Pasted text #N +M
+ * lines]` when the collapsed read held M newlines. Anchored at BOTH ends, unlike
+ * `PASTE_CHIP`, because the question here is "is this row exactly one chip" and
+ * not "does it start like one": `[Pasted text #3][Pasted text #4]` (one line split
+ * across two reads) and `[Pasted text #8] amet…` (a chip with typed text after
+ * it) both start like one and neither is one.
+ */
+const LONE_PASTE_CHIP = /^\[Pasted text #\d+(?: \+(\d+) lines)?\]$/;
+
+/**
+ * Claude Code collapses a terminal read into a chip only when it holds MORE than
+ * this many characters. Measured on 2.1.300, macOS and Linux alike: 800 is typed
+ * as text, 801 collapses. Characters, not bytes: 801 Cyrillic characters (about
+ * 1.6 KB) typed in one call were drawn as text on macOS, whose reads are about
+ * 1 KB, so no read held more than 800 of them. A read cannot hold more characters
+ * than the call that typed it, so a chip over a line of 800 or fewer is not that
+ * line. If a later version lowers the threshold, a shorter line's chip falls back
+ * to the tap, which is the safe direction.
+ */
+const PASTE_COLLAPSE_FLOOR = 800;
+
+/**
+ * What `sendPrompt` PROVED about the box before its type loop, the provenance
+ * half of D-TBD-paste-chip-submit. `proven-empty`: the clobber guard read an
+ * empty box (no marker-row text, no rows below it). `cleared-by-us`: the box
+ * held something and this call's own clear emptied it (`replaceDraft`,
+ * `clearMailResidue`, `ownStrandedClear`). `unproven` is the starting value, so a
+ * path that forgets to establish the proof submits nothing.
+ */
+export type TypeProvenance = 'unproven' | 'proven-empty' | 'cleared-by-us';
+
+/**
+ * D-TBD-paste-chip-submit. Is the box holding OUR whole message, collapsed into a
+ * paste chip, so that one Enter sends exactly it? Answers the chip row (the
+ * needle `submitted()` proves departure with) or `null`, and `null` keeps the
+ * ordinary `verify-failed` refusal, `submittable` and all.
+ *
+ * The operator report this answers: a long paragraph pasted into the PWA
+ * composer came back `verify-failed` with the text sitting complete in the box
+ * behind `[Pasted text #N]`, and the send needed a second act, a tap or an Enter
+ * at the terminal, carrying no information the server did not have. A human
+ * looking at `[Pasted text #1]` cannot see what it holds either.
+ *
+ * Four guards, every one required:
+ *  1. PROVENANCE. The box was proven empty, or emptied by this call, before the
+ *     type loop, and this call has held the session's queue slot since. So the
+ *     chip arrived after our own `sendLiteral`. No property of the string says
+ *     it is ours; the sequence does (the same argument `ownStrandedClear`
+ *     makes).
+ *  2. ONE CHIP, AND NOTHING ELSE IN THE BOX. The marker row is exactly one chip
+ *     and there is no box row below it. Two chips (a line split across two
+ *     reads), a chip with typed text after it, or a chip with more rows below
+ *     are all refused: each is either not provably the whole message or not
+ *     provably only ours.
+ *  3. THE LINE COUNT CORRESPONDS. A chip that states `+M lines` holds M newlines,
+ *     so M must be the newlines we typed. A chip that states none holds one line,
+ *     so we must have typed one.
+ *  4. IT COULD HAVE COLLAPSED. The collapsed read holds over
+ *     `PASTE_COLLAPSE_FLOOR` characters, so the line (or, with a line count, the
+ *     message) we typed must too.
+ *
+ * WHAT IT DOES NOT PROVE: that Claude Code kept every character behind the chip.
+ * The tap it replaces did not prove that either; it pressed the same Enter on
+ * the same row. Shapes that DO show a loss, such as macOS's lost head (only the
+ * tail of a long line drawn, no chip), fail guard 2 and keep their refusal.
+ */
+export function ownPasteChip(ansiPane: string, parts: readonly string[], provenance: TypeProvenance): string | null {
+  if (provenance === 'unproven') return null;
+  const read = draftOfMeasured(ansiPane);
+  if (read.box === 'absent') return null;
+  const chip = LONE_PASTE_CHIP.exec(read.draft);
+  if (chip === null || continuationRows(ansiPane).length > 0) return null;
+  const stated = chip[1] === undefined ? 0 : Number(chip[1]);
+  if (stated !== parts.length - 1) return null;
+  const collapsed = chip[1] === undefined ? parts[0]! : parts.join('\n');
+  if (collapsed.length <= PASTE_COLLAPSE_FLOOR) return null;
+  return read.draft;
+}
+
 /** The exact text `dispatch.ts` types into a resumed worker's box before a
  *  wave brief (`sendPrompt(..., '/clear')`) — the one draft `ownStrandedClear`
  *  can ever be about. */
@@ -674,6 +762,12 @@ export function sendPrompt(
     // any more. The two producers that remain are a HUMAN typing Enter first
     // into the box, and any pre-402 client still on the wire. Both are enough:
     // this guard is what stands between them and a silent concatenation.
+    //
+    // `provenance` records which proof let the type loop run, for the paste-chip
+    // arm below (`ownPasteChip`). It starts `unproven` and only the two proofs
+    // set it: this guard reading an empty box, or one of this call's own clears
+    // returning `cleared`.
+    let provenance: TypeProvenance = 'unproven';
     if (draft || hasContentBelowMarker(pane)) {
       // `resumeIfOwn`'s discrimination: `needle` is derived from THIS call's
       // OWN `text`, and `submitEnter`'s own correspondence gate already
@@ -736,6 +830,7 @@ export function sendPrompt(
         if (cleared.state === 'unreadable') return { ok: false, error: 'box-unreadable' };
         if (cleared.state === 'residue') return { ok: false, error: 'draft-clear-failed', draft: cleared.draft };
         // cleared.state === 'cleared' → fall through to the type loop below.
+        provenance = 'cleared-by-us';
       } else if (!opts.replaceDraft) {
         // `boxText`, not `draft`: the operator is being shown what this refusal
         // is protecting, and every row of it is at stake — the conflict sheet
@@ -760,7 +855,10 @@ export function sendPrompt(
         // built from a scan that found no box.
         if (cleared.state === 'unreadable') return { ok: false, error: 'box-unreadable' };
         if (cleared.state === 'residue') return { ok: false, error: 'draft-clear-failed', draft: cleared.draft };
+        provenance = 'cleared-by-us';
       }
+    } else {
+      provenance = 'proven-empty';
     }
     // D-5046: every line's send is CHECKED, and the first refusal stops the
     // loop before another key. The echo proof below reads the first line's
@@ -901,11 +999,16 @@ export function sendPrompt(
       // for "a live pane whose box read empty" and so could not be read back
       // safely at all; the measured reading carries that distinction itself.
       let lastBox: BoxRead | null = null;
+      // The capture `lastBox` was read from, set in the same breath, so it is
+      // null exactly when `lastBox` is: the paste-chip arm below reads the
+      // whole box from it, not just the marker row `lastBox` carries.
+      let lastPane: string | null = null;
       for (let i = 0; i < ECHO_TRIES && !echoed; i++) {
         await sleep(ECHO_POLL_MS);
         const ansi = await d.tmux.captureAnsi(id);
         if (ansi === null) continue;
         lastBox = draftOfMeasured(ansi);
+        lastPane = ansi;
         if (lastBox.box === 'absent') continue;
         if (lastBox.draft.startsWith(needle)) echoed = true;
       }
@@ -916,7 +1019,18 @@ export function sendPrompt(
         // made a dead pane byte-identical to a live one that never rendered.
         // The attachment path's own clear reports `dead` for exactly this and
         // returns `not-alive`; this is the same question and the same answer.
-        if (lastBox === null) return { ok: false, error: 'not-alive' };
+        if (lastBox === null || lastPane === null) return { ok: false, error: 'not-alive' };
+        // D-TBD-paste-chip-submit: the box holds OUR whole message behind ONE
+        // paste chip, proven by `ownPasteChip`'s four guards. Then the needle
+        // never matching is the widget's rendering, not a failed send, and the
+        // Enter the operator would otherwise press (a tap, or at the terminal)
+        // is pressed here, with the same submit proof every send gets: the chip
+        // row must leave the box (`submitted`). An Enter swallowed twice comes
+        // back `enter-ignored` with `submittable`, the chip as its draft. Any
+        // other shape, chips that fail a guard included, falls through to the
+        // refusal below exactly as before.
+        const ownChip = ownPasteChip(lastPane, parts, provenance);
+        if (ownChip !== null) return pressEnterAndConfirm(d, id, sleep, ownChip.slice(0, ECHO_NEEDLE));
         // THE TEXT STAYS IN THE BOX — no clearBox, no C-u (operator ruling:
         // refuse, never destroy). That was already true; what was missing was
         // saying so. Hand back the box row, FOR DISPLAY, exactly as the
@@ -964,9 +1078,12 @@ export function sendPrompt(
         // read, so a chip verifies as a chip. Nothing downstream needs to learn
         // about paste chips; this arm only stops withholding the flag.
         //
-        // It stays a REFUSAL, deliberately: the operator taps Send it. The
-        // machine does not submit a box it could not read, which is the whole
-        // of §4.1's argument and is untouched.
+        // It stays a REFUSAL HERE, for every chip `ownPasteChip` above would not
+        // vouch for (two chips on the row, a chip with rows below it, a line
+        // count that is not ours, a line too short to have collapsed): the
+        // operator taps Send it. The machine does not submit a box it could not
+        // read, which is the whole of §4.1's argument and is untouched. The one
+        // shape it now submits itself is the one it CAN read whole.
         return {
           ok: false, error: 'verify-failed', pane: (after ?? '').slice(-PANE_TAIL),
           draft: lastDraft,
