@@ -3702,6 +3702,27 @@ describe('FR2-d (D-4340): a read error on one admitted file is that file\'s, nev
     } finally { db.close(); }
   });
 
+  it('a copy whose parse crashes is a skipped copy: tick.skipped names its uuid and no other (D-5061)', async () => {
+    const box = IX.newBox('ccrc-hist-fr1c1-');
+    plantSession(box, 'claude-demo2', { uuid: IX.U2, generation: IX.G, project: 'demo', workdir: '/home/u/tree' });
+    IX.plantCopy(box.homes[0]!, IX.U, IX.jsonl([IX.user(IX.uuidN(1), null, 'a line the parser cannot take', 1)]));
+    IX.plantCopy(box.homes[0]!, IX.U2, IX.jsonl([IX.user(IX.uuidN(21), null, 'a line it takes', 21, { sessionId: IX.U2 })]));
+    const { db, ids } = await IX.openFixtureStore(box);
+    try {
+      const ctx = S.makeIngestCtx(box.home, box.homes, IX.tsMs(0) + 60_000, ids);
+      // The parser module throws on the first uuid's lines only (a bug the copy's content reaches), as O2 (b) does.
+      const realPrepare = ctx.prepareLines as (...a: unknown[]) => unknown;
+      const sel = { ...ctx, prepareLines: (lines: { bytes: Buffer }[], ...rest: unknown[]): unknown => {
+        if (lines.some((l) => l.bytes.toString('utf8').includes('a line the parser cannot take'))) throw new Error('parser bug');
+        return realPrepare(lines, ...rest);
+      } } as typeof ctx;
+      const tick = await S.ingestTick(db, sel, S.newBudget());
+      expect(counterOf(db, 'parser_crash'), 'the parser crash fired').toBe(1);
+      expect(IX.count(db, 'entries'), 'the other copy is ingested').toBe(1);
+      expect([...tick.skipped], 'the crashed copy\'s session is named, and not the copy whose lines parse (CONTROL)').toEqual([IX.U]);
+    } finally { db.close(); }
+  });
+
   it('a programming error is not swallowed: a thrown TypeError out of the read still leaves the tick', async () => {
     const box = IX.newBox('ccrc-hist-fr2d2-');
     const bad = IX.plantCopy(box.homes[0]!, IX.U, IX.jsonl([IX.user(IX.uuidN(1), null, 'one', 1)]));

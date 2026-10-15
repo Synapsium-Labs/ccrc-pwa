@@ -3004,7 +3004,7 @@ export async function bindingPass(home, P, op, args, deps, out) {
  *     consumed, deleted and written (card.mjs; W1-B3 Tasks 5 and 6);
  * 17. `withdrawCards`: every card/ prediction unlinked when this tick ran no card step over a caught-up ingest
  *     (ruling RC2: fail closed; lib decideCardWithdraw names the reason), and, on a pass that kept the rest, the
- *     predictions of the sessions whose transcript copy ingest skipped (a read error) or admission refused this tick
+ *     predictions of the sessions whose transcript copy ingest skipped (a read error), admission refused or whose parse crashed this tick
  *     (D-5061 (history-card-withdraw-on-a-skipped-copy));
  * 18. `mergeSteps`: §6.2's merge steps, which run under any pause: they free space rather than take it;
  * 19. `recordTick`: the tick's row and journal record (a paused ingest records an unmeasured lag);
@@ -4141,6 +4141,7 @@ export async function ingestPath(db, ctx, f, budget, skipped) {
       fileId: bound.fileId, transcriptPk: bound.transcriptPk, ccUuid: f.uuid, fd: a.fd,
       size, mtimeNs: st.mtimeNs, offset: bound.action === 'resume' ? bound.offset : 0,
     }, budget);
+    if (r.crashed === true && skipped !== undefined) skipped.add(f.uuid);   // W1-B3 (D-5061): a parse crash holds the cursor before the boundary, every tick
     return { fileId: bound.fileId, size, mtimeNs: st.mtimeNs, ...r, minNewTsMs: bound.action === 'resume' ? r.minNewTsMs : null };
   } finally {
     closeSync(a.fd);
@@ -4339,7 +4340,10 @@ function isFsError(e) {
  *  marked done, so the file is found again by the next tick that lists it (at once when it was behind or met by a
  *  scan, which then runs again; a hint-only file at its next hint or the next due scan), and the tick goes on
  *  (D-4340, history-ingest-read-error-skips-file). `skipped` answers the cc uuids of the transcript copies the tick
- *  could not read (that read error) or admission refused, which the card step's withdrawal reads (D-5061). */
+ *  could not read (that read error), admission refused, or whose parse crashed (the cursor held before the crashing line,
+ *  every tick, until a parser fix ships), which the card step's withdrawal reads (D-5061). The routine stops are not
+ *  fed: a budget, history-off or floor stop is a whole-pass withdrawal or a no-op, a torn tail is the end of the file, and
+ *  a file that shrank under the read is re-read and rebound by the next tick. */
 export async function ingestTick(db, ctx, budget) {
   const scan = ingestScanDue(db, ctx.nowMs);
   const { files, uuids } = candidateFiles(db, ctx, scan);

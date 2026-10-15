@@ -381,8 +381,8 @@ function withdrawAllCards(db, home, pass, out) {
   return n;
 }
 
-/** Withdraws the predictions of the sessions whose transcript copy this pass could not read (the read error of D-4340) or
- *  admission refused, `skipped` being ingestTick's uuids: such a copy was not read to its end, so it may hold the boundary
+/** Withdraws the predictions of the sessions whose transcript copy this pass could not read (the read error of D-4340), admission
+ *  refused or whose parse crashed, `skipped` being ingestTick's uuids: such a copy was not read to its end, so it may hold the boundary
  *  that consumes the standing line, and the pass keeps the rest. lib's decideCardWithdraw (arm 'copy') decides per
  *  prediction; the record beside a prediction is left as it is. Answers the number withdrawn. The lost-hint shape stays: a boundary whose hint was lost
  *  and whose copy no pass has read waits for the 30-minute scan. D-5061 (history-card-withdraw-on-a-skipped-copy) */
