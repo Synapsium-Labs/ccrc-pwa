@@ -312,12 +312,16 @@ measured at the wave's tip unless it says otherwise.
 
 **The reap lock is taken after a parse (SEC7).**
 - The collect audit and the collect verb open `$REG/.reap-<id>.lock` only after an advisory pass. The pass grants
-  nothing and writes nothing. In order:
+  nothing, prints nothing and writes no registry, lock, journal or quarantine state; listing the records makes two
+  scratch files and removes them before the pass returns. In order:
   1. The id must contain a `-`. If it does not, the answer is unmeasured `registry`, in the same words the locked
      evaluation uses.
   2. Records are listed, and a listing that fails is unmeasured `records`. A record whose body parses and names the id
      lets the lock open. If records exist but none both parses and names the id, the answer is the one the locked
-     resume gives, word and detail byte for byte: `quarantine-kept`, or unmeasured `records` or `quarantine`.
+     resume gives: `quarantine-kept`, or unmeasured `records` or `quarantine`. At the audit every answer of the pass
+     carries the locked evaluation's word and detail byte for byte. The verb keeps that word and detail, and adds its
+     no-lock clause after the detail of an unmeasured answer, so a cut at the reason cap falls on the clause and not
+     on the detail. It puts "no lock was taken: " before the detail of a refusal.
   3. With no record, a witness whose body parses lets the lock open.
   4. A witness that does not parse first gets a registry peek, and the lock opens unless all three of these hold:
      `$REG/<id>.child` and `$REG/<id>.uuid` are proven absent; `$REG` can be listed; and the id's slug is free across
@@ -392,22 +396,32 @@ measured at the wave's tip unless it says otherwise.
 **Stated residuals.**
 - `dot-rule-only-at-the-token-verbs`: release, archive, restore, hold, rename and stop still accept a dot-leading id.
   Refusing it there is an operator option.
-- `verbs-outside-sec1-keep-the-inline-regex`: ws-attic, pr-open, plain ws-audit, ws-reap, forget, `start <id>` and
-  `pr-state --session <id>` keep the inline id check they had, which admits a leading `-`, and `ensure <id>` takes
-  its one positional with no shape check and needs an existing row. None of them carries the decision flags the
-  server appends, so none can be redirected by an id that spells one. Plain ws-audit audits a dash-leading id
-  literally and acts on no other row (pinned).
+- `verbs-outside-sec1-keep-the-inline-regex`: ws-attic, pr-open, plain ws-audit, ws-reap, forget, `start <id>`,
+  `pr-state --session <id>` and `route --session <id>` keep the inline id check they had, which admits a leading
+  `-`. `ensure <id>` and `swap <id> <wrapper>` take their id with no shape check and need an existing row. Among
+  all these verbs only `route` takes any of the decision flags the server appends (`--actor` and `--reason`), and it
+  binds `--session` as a pair, so an id that spells one of them is bound literally and looked up. None of the others
+  carries the decision flags, so none can be redirected by an id that spells one, and neither `route` nor `swap`
+  redirects.
+  The inline checks, `route`'s included (`swap` has none), run without `LC_ALL=C`, so under a widening locale they
+  admit a non-ASCII id and bind it literally. Plain ws-audit audits a dash-leading id literally and acts on no
+  other row (pinned).
 - `enable-one-arg-journals-an-unchecked-id`: `enable <id>` journals its row before any check of the id, as it did
   before the wave. `cmd_start`, which it calls next, applies the inline charset check and needs an existing row.
-- `stripped-flag-positional-collapses-to-the-id-form`: start and enable strip `--cross-pool`, `--` and
-  `--route=<f>=<v>`, and stop strips `--surface` and `--surface=`, from any position before their arity rule, so a
-  positional spelled as one of those never reaches the two-argument checks, and the call collapses to the
-  one-argument (id) form. For example, `enable --cross-pool <existing-id>` and `enable <wrapper> --` journal `enable`
-  against the other positional and start that existing id, and `stop <wrapper> --surface=x --surface pwa` stops
-  `<wrapper>`. This is not a regression: the pre-wave binary does the same. ccd never mints such a name (`=` is
-  outside the charset and a leading `-` is refused). It is reachable only through an operator-typed request body to
-  the server's session-creation route, whose guard (refuse a wrapper outside the roster and a project failing the
-  project rule) is carried to a later server wave.
+- `stripped-flag-positional-collapses-to-the-id-form`: start and enable strip `--cross-pool`, `--`,
+  `--route=<f>=<v>` and the two-token `--route <v>`, and stop strips `--surface` and `--surface=`, from any position
+  before their arity rule, so a positional spelled as one of those never reaches the two-argument checks, and the
+  call collapses to the one-argument (id) form. The two-token `--route <v>` takes the next token whole as the route
+  pair, so it also eats the positional that follows it. For example, `enable --cross-pool <existing-id>` and
+  `enable <wrapper> --` journal `enable` against the other positional and start that existing id,
+  `start <existing-id> --route compact=50` (a project spelled `--route`, a workdir spelled as a route pair) restarts
+  that row and writes the pair, where an eaten token that is no valid route pair is refused by the route check, and
+  `stop <wrapper> --surface=x --surface pwa` stops `<wrapper>`. This is not a regression: the pre-wave binary does
+  the same. ccd never mints such a name (`=` is outside the charset and a leading `-` is refused). At start and
+  enable it is reachable only through an operator-typed request body to the server's session-creation route, whose
+  guard (refuse a wrapper outside the roster and a project failing the project rule) is carried to a later server
+  wave. Stop's half is reached through the stop route's `stopPair`, which takes the project from the registry row, so
+  it needs a hand-planted row whose project spells `--surface=<w>`.
 - `hand-planted-ids-over-the-cap`: a row planted by hand above `_REG_ID_MAX` is not refused. ccd never mints one.
 - `files-outside-the-name-census`: the file the cap's census left out, listed above.
 - `history-spool-names-outside-the-census-patterns` and `quarantine-record-names-outside-the-census-patterns`: the
@@ -428,6 +442,10 @@ measured at the wave's tip unless it says otherwise.
 - `server-docstrings-call-ccds-predicate-dot-only`: the docstrings of `isTmpRootId` (`shared/api.ts`) and
   `childReclaimLeafKept` (`server/src/childReclaimSweep.ts`) still describe ccd's `_ws_tmproot_id_ok` as refusing a
   leading `.` only. They are carried to the next wave that edits those files.
+- `comments-say-ccd-scans-the-session-value`: the `isTmpRootId` docstring (`shared/api.ts`) and the comment above the
+  dash-leading rows of `collect-l0.test.ts` still say ccd's destructive verbs read their decision flags from any
+  position, `--session`'s value included. That is true only of a box on an older ccd: the eight `--session` verbs now
+  take each identity key and its value as one pair. It is carried to the next wave that edits them.
 
 ## 3. The temp-root tail and the collector
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=4114978eadd5731dceb996bf0393441367ec42e8b02792209145280c1aceaad1
+# ccrc:generated 1 sha256=7e596840749549c50c4a9936dfb69fa3e726995aedde03893687e80b55c8d5db
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -22457,8 +22457,8 @@ _reg_id_ok() { local LC_ALL=C; [[ "${1-}" =~ ^[A-Za-z0-9._-]+$ && "${1-}" != -* 
 # fails long after the id exists. The widest such name is the hook's claim temp,
 # .<id>.compactcard.<pid>.<nonce>.session-claim.tmp: 81 bytes beyond the id (a 7-digit
 # pid, and the 41-byte compact-<ms>-<pid>-<R>-<R> nonce), which leaves 174. The hook's own
-# gate is lower: its CCRC_ID_MAX (128) skips a longer peer id in the peer census, and that
-# session silently loses its card and its listing. So the cap is 128, the lower of the two.
+# gate is lower: its CCRC_ID_MAX (128) makes the peer census skip a longer id, so that session
+# is left out of its peers' counts (its own card turns on its project). So the cap is 128, the lower.
 # ccd-id-cap.test.ts holds the census of every such name, and this number.
 #
 # BYTES under LC_ALL=C, as `_lc_dec_ok` counts its text. Three sites call it, each before any
@@ -34902,8 +34902,8 @@ _ws_collect_records_judge() {   # id record... -> 0 the ONE record parsed and na
 
 _ws_collect_prelock() {   # id -> 0 the reap lock may be opened; 1 an answer is set (REAP_VERDICT and REAP_DETAIL;
   #                            _WS_COLLECT_PROBE when unmeasured; _WS_COLLECT_RECORDS once the records were listed)
-  #                            and no lock may be opened. ADVISORY: it grants nothing, and prints, journals and
-  #                            writes nothing
+  #                            and no lock may be opened. ADVISORY: it grants nothing, prints nothing, and writes no
+  #                            registry, lock, journal or quarantine state (it makes and removes two scratch files)
   # A REAP LOCK IS NEVER UNLINKED, so the first open of `$REG/.reap-<id>.lock`
   # makes a name for good (path-identity spec §2.5). The collect audit
   # (`_ws_collect_audit_contained`) and `cmd_ws_collect` ask this first, so a

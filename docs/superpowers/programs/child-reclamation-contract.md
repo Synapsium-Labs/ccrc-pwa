@@ -3669,17 +3669,21 @@ comments and test titles cite the spec, never this contract.
 - W1b was dispatched after workspace lifecycle wave 6 (#351) merged. Its `ccd/ccd` edits went in series, one task at
   a time, and each was restamped with the repository's own tool. When `main` moved during the wave (the supervisor
   tick diet's first wave, #395, merged), it was absorbed with `git merge`; the only conflict was `ccd/ccd`'s stamp
-  line, which was restamped, as R56 says for a second lander.
+  line, which was restamped, as R56 says for a second lander. `main` moved again, and Task 13 absorbed it before the
+  PR opened, a second time, as `65614d35`, of `main` at `c7776b080`. That brought code PRs #189, #190, #191, #403, #406 and #408,
+  plus docs PRs. Its one conflict was the stamp line, regenerated.
 - Workspace lifecycle's coordinator consented to its three `ws-expire` edits: the loop's identity pair and the verb's
   entry line, each with its short comment, and `_ws_expire_audit_contained`'s entry line. `_ws_expire_locked` and the
   EXPIRE-V1 note were not edited.
 - The collector header's COLLECT-V1 note now says the lane acts only once the operator arms it, by the fleet box's
   legacy marker or by the Settings switch where it has shipped. That sentence is true whether or not wave 10 has
   merged.
-- `census-blind-below-line-5362`: the compaction-card corpus's five census passes stay green under a one-line shift
-  anywhere from `ccd/ccd` line 5362 down (bisected). Every edit of this wave, the stamp line aside, lies below that
-  line, so the line neutrality of the functions that start above `cmd_start()` was proven by start-line and line-count
-  diffs, not by the census.
+- `census-blind-below-line-5818`: measured at this tip, the compaction-card corpus's five census passes, and the
+  citation-debt and corpus-fact passes beside them, stay green under a one-line insert after any `ccd/ccd` line from
+  5818 down. An insert after line 5817, and after every line sampled above it, reds the `|`-row pass and no other
+  (bisected to that boundary, then sampled every 500 lines to the end of the file). Every edit of this wave, the stamp
+  line aside, lies below that line, so the line neutrality of the functions that start above `cmd_start()` was proven
+  by start-line and line-count diffs, not by the census.
 
 **SEC1 and SEC3 (which verbs; predicates and loops).**
 - `surface-dash-rule-at-stop-and-ws-add-only`: a dash-leading `--surface` value is refused at stop and ws-add only,
@@ -3769,19 +3773,28 @@ comments and test titles cite the spec, never this contract.
 
 **Stated residuals**, named with no number; spec §2.9 says each one in full.
 - `dot-rule-only-at-the-token-verbs`: release, archive, restore, hold, rename and stop still accept a dot-leading id.
-- `verbs-outside-sec1-keep-the-inline-regex`: ws-attic, pr-open, plain ws-audit, ws-reap, forget, `start <id>` and
-  `pr-state --session <id>` keep the id check they had; `ensure <id>` takes its one positional with no shape check.
-  None carries the decision flags the server appends.
+- `verbs-outside-sec1-keep-the-inline-regex`: ws-attic, pr-open, plain ws-audit, ws-reap, forget, `start <id>`,
+  `pr-state --session <id>` and `route --session <id>` keep the id check they had; `ensure <id>` and
+  `swap <id> <wrapper>` take their id with no shape check and need an existing row. Among all these verbs only
+  `route` takes any of the decision flags the server appends (`--actor` and `--reason`), and it binds `--session` as
+  a pair, so an id that spells one of them is bound literally and looked up. None of the others carries the decision
+  flags, and neither `route` nor `swap` redirects. The inline checks, `route`'s included (`swap` has none), run
+  without `LC_ALL=C`, so under a widening locale they admit a non-ASCII id and bind it literally.
 - `enable-one-arg-journals-an-unchecked-id`: `enable <id>` journals before any check of the id, as it did before.
-- `stripped-flag-positional-collapses-to-the-id-form`: start and enable strip `--cross-pool`, `--` and
-  `--route=<f>=<v>`, and stop strips `--surface` and `--surface=`, from any position before their arity rule, so a
-  positional spelled as one of those never reaches the two-argument checks, and the call collapses to the
-  one-argument (id) form. For example, `enable --cross-pool <existing-id>` and `enable <wrapper> --` journal `enable`
-  against the other positional and start that existing id, and `stop <wrapper> --surface=x --surface pwa` stops
-  `<wrapper>`. Not a regression: the pre-wave binary does the same. ccd never mints such a name (`=` is outside the
-  charset and a leading `-` is refused). It is reachable only through an operator-typed request body to the server's
-  session-creation route, whose guard (refuse a wrapper outside the roster and a project failing the project rule) is
-  carried to a later server wave.
+- `stripped-flag-positional-collapses-to-the-id-form`: start and enable strip `--cross-pool`, `--`,
+  `--route=<f>=<v>` and the two-token `--route <v>`, and stop strips `--surface` and `--surface=`, from any position
+  before their arity rule, so a positional spelled as one of those never reaches the two-argument checks, and the
+  call collapses to the one-argument (id) form. The two-token `--route <v>` takes the next token whole as the route
+  pair, so it also eats the positional that follows it. For example, `enable --cross-pool <existing-id>` and
+  `enable <wrapper> --` journal `enable` against the other positional and start that existing id,
+  `start <existing-id> --route compact=50` (a project spelled `--route`, a workdir spelled as a route pair) restarts
+  that row and writes the pair, where an eaten token that is no valid route pair is refused by the route check, and
+  `stop <wrapper> --surface=x --surface pwa` stops `<wrapper>`. Not a regression: the pre-wave binary does the same.
+  ccd never mints such a name (`=` is outside the charset and a leading `-` is refused). At start and enable it is
+  reachable only through an operator-typed request body to the server's session-creation route, whose guard (refuse a
+  wrapper outside the roster and a project failing the project rule) is carried to a later server wave. Stop's half is
+  reached through the stop route's `stopPair`, which takes the project from the registry row, so it needs a
+  hand-planted row whose project spells `--surface=<w>`.
 - `hand-planted-ids-over-the-cap`: a row planted by hand above `_REG_ID_MAX` is not refused.
 - `files-outside-the-name-census`: the file the cap's census left out.
 - `history-spool-names-outside-the-census-patterns`: the history spool's own names are built from a bare id or a file
@@ -3800,6 +3813,9 @@ comments and test titles cite the spec, never this contract.
   doctor already says to remove such a tag by hand.
 - `server-docstrings-call-ccds-predicate-dot-only`: two server docstrings still call ccd's predicate dot-only, carried
   to the next wave that edits those files.
+- `comments-say-ccd-scans-the-session-value`: the `isTmpRootId` docstring and the comment above `collect-l0.test.ts`'s
+  dash-leading rows still say ccd's destructive verbs read their decision flags from any position, `--session`'s value
+  included. That is true only of a box on an older ccd. Carried to the next wave that edits them.
 
 **Found while building, per task.** Tasks 1, 5 and 8 recorded no slug beyond those above; Tasks 4 and 5 found the one
 census blindness named under R93.

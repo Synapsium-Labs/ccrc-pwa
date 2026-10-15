@@ -9,8 +9,8 @@
  * that census, one row per distinct template, with the bytes each adds beyond the id.
  *
  * The cap is NAME_MAX less the widest overhead, lowered to the hook's own id gate
- * (`CCRC_ID_MAX`). A peer id the hook's census skips is a session that silently loses its
- * card, so the lower bound binds.
+ * (`CCRC_ID_MAX`). A peer id the hook's census skips is a session that drops out of its peers'
+ * counts (its own card turns on its project), so the lower bound binds.
  *
  * THE CENSUS IS A MECHANISM, NOT A LIST. The anti-whitelist case re-scans `ccd/` (doc and
  * skill text excluded) and `server/src` with the census patterns. A name no row covers reds

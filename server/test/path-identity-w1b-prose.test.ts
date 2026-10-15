@@ -69,7 +69,7 @@ const DEPARTURES = ['surface-dash-rule-at-stop-and-ws-add-only', 'dot-rule-exten
   'rename-branch-value-taken-whole', 'valueless-session-key-takes-the-next-flag-as-its-id',
   'ws-add-lock-precedes-the-cap', 'prelock-answer-precedes-in-progress',
   'dash-free-id-answers-unmeasured-registry-before-its-record',
-  'dot-leading-audit-now-exits-1-and-the-server-retries', 'census-blind-below-line-5362'];
+  'dot-leading-audit-now-exits-1-and-the-server-retries', 'census-blind-below-line-5818'];
 
 /** What each task found while building, by slug: plan-text corrections, extra pins and measured notes. The rulings
  *  file's "Found while building" list names every one. */
@@ -90,7 +90,8 @@ const BASE_RESIDUALS = ['dot-rule-only-at-the-token-verbs', 'verbs-outside-sec1-
   'projects-over-64-get-no-hook-card', 'btime-less-witness-takes-the-lock',
   'history-spool-names-outside-the-census-patterns', 'quarantine-record-names-outside-the-census-patterns',
   'random-slug-decides-the-cap-near-the-boundary', 'hold-card-workdir-quote-silent-near-the-cap',
-  'dash-leading-pool-tag-unclearable-on-an-upgraded-box', 'stripped-flag-positional-collapses-to-the-id-form'];
+  'dash-leading-pool-tag-unclearable-on-an-upgraded-box', 'stripped-flag-positional-collapses-to-the-id-form',
+  'comments-say-ccd-scans-the-session-value'];
 
 /** The residuals the records must name at this tip: the fixed list, plus each conditional one while the code still
  *  shows it. These are a server docstring that calls ccd's predicate dot-only, the EXPIRE-V1 note that says it ships
