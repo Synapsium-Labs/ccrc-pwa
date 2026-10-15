@@ -189,6 +189,44 @@ describe('answerDialog and the free-text row (D-5045)', () => {
     expect(sendKeysCalls(calls)).toEqual([]);
   });
 
+  // A multiSelect question parses `parsed: false` (its rows ride `Dialog.multi`, D-5048), so `selectedIndex` is the
+  // constant 1 and proves nothing about the cursor. Enter there does not answer: on an option row it toggles the box,
+  // on the empty "[ ] Type something" row it ticks it, and on Next/Submit it commits the question. `/dialog/multi` is
+  // the one route that answers a multiSelect question.
+  it.each([
+    ['cc300-ask-multiselect-next-open.txt', 'cursor on option 1'],
+    ['cc300-ask-multiselect-on-freetext.txt', 'cursor on the empty free-text row'],
+    ['cc300-ask-multiselect-next-focused.txt', 'cursor on Next'],
+    ['cc300-ask-multiselect-walk-to-next.txt', 'cursor on Next after walking through the free-text row'],
+  ])('a multiSelect question (%s, %s) is refused before any key: Enter there toggles or commits', async (name) => {
+    const multi = fixture(name);
+    expect(parseDialog(multi)!.parsed).toBe(false);
+    const { tmux, calls } = fakeTmux([multi, multi]);
+    const res = await answerDialog(deps(tmux), SID, idOf(multi), 1);
+    expect(res).toEqual({ ok: false, error: 'unparsed-dialog' });
+    expect(sendKeysCalls(calls)).toEqual([]);
+  });
+
+  it('a multiSelect question is refused before the WALK too: no Down is sent toward option 2', async () => {
+    // Index 1 needs no walk, so only the landing check would be seen refusing it. Index 2 needs a Down: refused here
+    // means refused on the first screen, before any key at all.
+    const multi = fixture('cc300-ask-multiselect-next-open.txt');
+    const { tmux, calls } = fakeTmux([multi, multi]);
+    const res = await answerDialog(deps(tmux), SID, idOf(multi), 2);
+    expect(res).toEqual({ ok: false, error: 'unparsed-dialog' });
+    expect(sendKeysCalls(calls)).toEqual([]);
+  });
+
+  it('the landing is looked at again: a walk that lands on a multiSelect screen never presses Enter', async () => {
+    // Row 2 is "No" on the single-select screen the request was checked against; the pane moved on to a multiSelect
+    // question before the landing capture, whose constant selectedIndex would otherwise read as "landed".
+    const multi = fixture('cc300-ask-multiselect-next-open.txt');
+    const { tmux, calls } = fakeTmux([Q2, multi]);
+    const res = await answerDialog(deps(tmux), SID, idOf(Q2), 1);
+    expect(res).toEqual({ ok: false, error: 'unparsed-dialog' });
+    expect(sendKeysCalls(calls)).toEqual([]);
+  });
+
   it('the landing is looked at again: a walk that lands on a free-text row never presses Enter', async () => {
     // Row 3 is "Blue" on the screen the request was checked against, and the free-text row on the screen the walk
     // lands on: the pane moved on between the two captures. `walk-failed` cannot see it, since the cursor IS on row 3.

@@ -1177,6 +1177,11 @@ export type DialogResult = { ok: true } | { ok: false; error: DialogRefuseCode }
  * cursor IS on that index. Walking THROUGH the row to "Chat about this" stays
  * allowed. Up and Down never select or submit, and Enter on Chat after such a
  * walk was measured to give Chat's own outcome.
+ *
+ * Never on an unparsed menu (`unparsed-dialog`), checked on both screens: its `selectedIndex` is a constant 1 that
+ * proves nothing about the cursor. A multiSelect question is one (D-5048 keeps it `parsed: false`, its rows on
+ * `Dialog.multi`), and Enter there toggles a box, ticks the empty free-text box, or commits the question from
+ * Next/Submit, measured on 2.1.300. `/dialog/multi` answers it.
  */
 export function answerDialog(
   d: SendDeps,
@@ -1192,12 +1197,15 @@ export function answerDialog(
     const dialog = parseDialog(pane);
     if (!dialog || dialog.id !== dialogId) return { ok: false, error: 'stale-dialog' };
     if (freeTextRow(pane) === optionIndex) return { ok: false, error: 'free-text-row' };
+    if (!dialog.parsed) return { ok: false, error: 'unparsed-dialog' };
 
     await walkCursor(d, id, dialog.selectedIndex, optionIndex, sleep);
 
     const after = await d.tmux.capture(id);
     const landed = after === null ? null : parseDialog(after);
-    if (after === null || !landed || landed.selectedIndex !== optionIndex) return { ok: false, error: 'walk-failed' };
+    if (after === null || !landed) return { ok: false, error: 'walk-failed' };
+    if (!landed.parsed) return { ok: false, error: 'unparsed-dialog' };
+    if (landed.selectedIndex !== optionIndex) return { ok: false, error: 'walk-failed' };
     if (freeTextRow(after) === optionIndex) return { ok: false, error: 'free-text-row' };
 
     await d.tmux.sendKey(id, 'Enter');

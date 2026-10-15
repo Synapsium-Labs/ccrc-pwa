@@ -9875,10 +9875,13 @@ export const COLLECT_BOX_LINES: readonly CollectBoxLine[] = Object.keys(COLLECT_
  *  - `free-text-row` (D-5045): the requested row is an AskUserQuestion's free-text row (`shared/ask-menu.ts`, read by
  *    `freeTextRow`). Enter on it while it is empty rejects the whole ask, so it is refused before any key, and again on
  *    the screen the walk lands on, before Enter. A row that already holds text is refused too: this route never submits
- *    typed text. */
-export type DialogRefuseCode = 'not-alive' | 'stale-dialog' | 'walk-failed' | 'free-text-row';
+ *    typed text.
+ *  - `unparsed-dialog`: the menu on screen (before the walk, or where it landed) did not parse (`parsed: false`), so
+ *    nothing proves where the cursor is. A multiSelect AskUserQuestion is one: Enter there toggles or commits rather
+ *    than answering, so it is refused with no key; `POST /api/sessions/:id/dialog/multi` answers it (D-5048). */
+export type DialogRefuseCode = 'not-alive' | 'stale-dialog' | 'walk-failed' | 'free-text-row' | 'unparsed-dialog';
 const DIALOG_REFUSE_CODE_MAP: Readonly<Record<DialogRefuseCode, true>> = {
-  'not-alive': true, 'stale-dialog': true, 'walk-failed': true, 'free-text-row': true,
+  'not-alive': true, 'stale-dialog': true, 'walk-failed': true, 'free-text-row': true, 'unparsed-dialog': true,
 };
 export const DIALOG_REFUSE_CODES: readonly DialogRefuseCode[] =
   Object.keys(DIALOG_REFUSE_CODE_MAP) as DialogRefuseCode[];
