@@ -218,9 +218,14 @@ describe('ccrc: dispatch and usage', () => {
     // _usage_history_paragraph, reached by a command substitution on the restamp paragraph's last line,
     // because every line of the usage body sits above ccd/ccrc's corpus cut and is cited by number elsewhere.
     // `server/test/history-cli.test.ts` owns what it does.
+    //
+    // `coordination-snapshot` joined it in delegation-broker wave 3 — the operator's verb to
+    // validate, restore and recover the coordination sidecars (`validate|restore|recover`). It sits
+    // after `backup`, which is the snapshot verb it completes. Same split: `server/test/coordination-snapshot.test.ts`
+    // owns what it does, this line owns that an operator can find it.
     const home = mkTmp('ccrc-cli-usage-verbs-');
     const r = runCcrcRaw(home, ['-h']);
-    expect(r.stdout).toMatch(/usage: ccrc \{doctor\|status\|adopt\|wrappers\|account\|memory\|models\|codex\|install\|update\|rollback\|versions\|channel\|rollout\|uninstall\|backup\|logs\|passwd\|expose\|token\|restamp\|version\|watchdog\|history\}/);
+    expect(r.stdout).toMatch(/usage: ccrc \{doctor\|status\|adopt\|wrappers\|account\|memory\|models\|codex\|install\|update\|rollback\|versions\|channel\|rollout\|uninstall\|backup\|coordination-snapshot\|logs\|passwd\|expose\|token\|restamp\|version\|watchdog\|history\}/);
     expect(r.stdout).toMatch(/^ {2}codex {5}run a Codex lane's two tiers/m);
     expect(r.stdout).toMatch(/^ {2}account {3}connect, check and remove the accounts/m);
     expect(r.stdout).toMatch(/^ {2}memory {4}census every \(home, project\) memory pair/m);
