@@ -1837,6 +1837,7 @@ describe('history ingest: sidecars (plan task 21)', () => {
 interface IxSweep {
   ftsPrepare(db: DatabaseSync, nowMs: number): { state: string; tables: boolean };
   deriveFts(db: DatabaseSync, ctx: IxCtx, budget: IxBudget): Promise<void>;
+  resetFtsPending(db: DatabaseSync): void;
   storedBody(s: { blobZ: { get(id: number): unknown } }, blobId: number): unknown;
   pairedFromStore(db: DatabaseSync, toolUseId: string, parentUuid: string | null): { id: string } | null;
   ftsTextOfBlob(z: Uint8Array, isSidecar: boolean, pairIdx: unknown, rawLen: number): Promise<{ text: string; decoded: number; undecodable: false; overCap?: true } | { text: null; decoded: number; undecodable: true }>;
@@ -2065,7 +2066,7 @@ describe('history ingest: the FTS index (plan task 23)', () => {
     } finally { db.close(); }
   });
 
-  it('DM28 and DM32 (store halves): summary, harness and recall-echo text is not indexed; operator, model and tool text is, a cat of <ccrc-recall included', () => {
+  it('DM28 and DM32 (store halves): summary and harness text is not indexed; operator, model and tool text is, a cat of <ccrc-recall and a recall echo included', () => {
     const box = IX.newBox('ccrc-hist-dm28-');
     IX.plantCopy(box.homes[0]!, IX.U, IX.jsonl([
       IX.user(IX.uuidN(1), null, 'zqoperator words', 1),
@@ -2083,11 +2084,271 @@ describe('history ingest: the FTS index (plan task 23)', () => {
     IX.sweepTwice(box);
     const db = openStoreRO(box);
     try {
-      expect({ operator: matches(db, 'zqoperator'), model: matches(db, 'zqmodel'), tool: matches(db, 'zqtool'), cat: matches(db, 'zqcatbody') })
-        .toEqual({ operator: 1, model: 1, tool: 1, cat: 1 });
-      expect({ harness: matches(db, 'zqharness'), meta: matches(db, 'zqmeta'), summary: matches(db, 'zqsummary'), echo: matches(db, 'zqecho') })
-        .toEqual({ harness: 0, meta: 0, summary: 0, echo: 0 });
+      // A recall echo is indexed for grep --include-recall, while default grep filters its provenance.
+      expect({ operator: matches(db, 'zqoperator'), model: matches(db, 'zqmodel'), tool: matches(db, 'zqtool'), cat: matches(db, 'zqcatbody'), echo: matches(db, 'zqecho') })
+        .toEqual({ operator: 1, model: 1, tool: 1, cat: 1, echo: 1 });
+      expect({ harness: matches(db, 'zqharness'), meta: matches(db, 'zqmeta'), summary: matches(db, 'zqsummary') })
+        .toEqual({ harness: 0, meta: 0, summary: 0 });
+      expect((db.prepare("SELECT count(*) AS n FROM entries WHERE provenance = 'recall-echo'").get() as { n: number }).n).toBe(1);
     } finally { db.close(); }
+  });
+
+  it('history-recall-echo-indexed on a store B1 backfilled: the first B2 tick re-opens the completed backfill once, from 0, and indexes the old echo', () => {
+    const box = IX.newBox('ccrc-hist-echo-b1-');
+    IX.plantCopy(box.homes[0]!, IX.U, IX.jsonl([
+      IX.user(IX.uuidN(1), null, 'zqopener words', 1),
+      IX.assistant(IX.uuidN(2), IX.uuidN(1), [{ type: 'tool_use', id: 'toolu_01RB', name: 'Bash', input: { command: 'ccrc history grep zqasked' } }], 2),
+      IX.user(IX.uuidN(3), IX.uuidN(2), [{ type: 'tool_result', tool_use_id: 'toolu_01RB', content: 'zqoldecho words' }], 3),
+    ]));
+    IX.sweepTwice(box);
+    // The store as B1 leaves it: the echo's blob unindexed, the ('fts', 1) backfill complete, no meta fts_provenance.
+    const w = openWriter(historyPaths(box.home).dbFile);
+    try {
+      const echo = (w.prepare("SELECT blob_id FROM entries WHERE provenance = 'recall-echo'").get() as { blob_id: number }).blob_id;
+      w.prepare('DELETE FROM blobs_fts WHERE rowid = ?').run(echo);
+      w.prepare('UPDATE blobs SET fts_indexed = 0 WHERE blob_id = ?').run(echo);
+      w.prepare("DELETE FROM meta WHERE k = 'fts_provenance'").run();
+    } finally { closeWriter(w); }
+    const doneAt = (db: DatabaseSync): number | null =>
+      (db.prepare("SELECT completed_ms FROM derivation_state WHERE step = 'fts' AND version = 1").get() as { completed_ms: number | null }).completed_ms;
+    let db = openStoreRO(box);
+    try {
+      expect(matches(db, 'zqoldecho'), 'CONTROL: the echo is out of the index, as B1 left it').toBe(0);
+      expect(doneAt(db), 'CONTROL: the backfill is complete').not.toBeNull();
+    } finally { db.close(); }
+    expect(runSweep(box).code).toBe(0);
+    let first: number | null;
+    db = openStoreRO(box);
+    try {
+      expect(matches(db, 'zqoldecho'), 'the re-opened backfill indexed the old echo').toBe(1);
+      expect(matches(db, 'zqopener'), 'and kept what was indexed').toBe(1);
+      expect(metaV(db, 'fts_provenance')).toBe('operator,model,tool,recall-echo');
+      expect(metaV(db, 'fts')).toBe('ready');
+      first = doneAt(db);
+      expect(first).not.toBeNull();
+    } finally { db.close(); }
+    expect(runSweep(box).code).toBe(0);
+    db = openStoreRO(box);
+    try {
+      expect(doneAt(db), 'once only: a tick on a recorded set re-opens nothing').toBe(first);
+    } finally { db.close(); }
+  });
+
+  it('F3: a rolled-back B1 leaves an eligible recall echo unindexed under the CURRENT fts_provenance; the next tick re-opens from 0 once, indexes it, and then leaves a healthy store alone', () => {
+    const box = IX.newBox('ccrc-hist-echo-rollback-');
+    const p = IX.plantCopy(box.homes[0]!, IX.U, IX.jsonl([IX.user(IX.uuidN(1), null, 'zqopener words', 1)]));
+    IX.sweepTwice(box);
+    const stamp = (db: DatabaseSync): { completed: number | null; cursor: string | null; prov: string | undefined } => {
+      const r = db.prepare("SELECT completed_ms AS c, cursor AS k FROM derivation_state WHERE step = 'fts' AND version = 1").get() as { c: number | null; k: string | null };
+      return { completed: r.c, cursor: r.k, prov: metaV(db, 'fts_provenance') };
+    };
+    let db = openStoreRO(box);
+    try { expect(stamp(db).completed, 'CONTROL: the backfill is complete').not.toBeNull(); } finally { db.close(); }
+    // After the completed backfill a row is appended that B2 would index (a recall echo) and one it never indexes (isMeta
+    // harness text): B1 rolled back over this store ingests both and writes neither to the index.
+    fs.appendFileSync(p, IX.jsonl([
+      IX.assistant(IX.uuidN(2), IX.uuidN(1), [{ type: 'tool_use', id: 'toolu_01RR', name: 'Bash', input: { command: 'ccrc history grep zqasked' } }], 2),
+      IX.user(IX.uuidN(3), IX.uuidN(2), [{ type: 'tool_result', tool_use_id: 'toolu_01RR', content: 'zqrollecho words' }], 3),
+      IX.user(IX.uuidN(4), IX.uuidN(3), 'zqrollmeta words', 4, { isMeta: true }),
+    ]));
+    hint(box);
+    expect(runSweep(box).code).toBe(0);
+    const w = openWriter(historyPaths(box.home).dbFile);
+    let echo: number;
+    try {
+      echo = (w.prepare("SELECT blob_id FROM entries WHERE provenance = 'recall-echo' AND uuid = ?").get(IX.uuidN(3)) as { blob_id: number }).blob_id;
+      w.prepare('DELETE FROM blobs_fts WHERE rowid = ?').run(echo);
+      w.prepare('UPDATE blobs SET fts_indexed = 0 WHERE blob_id = ?').run(echo);
+    } finally { closeWriter(w); }
+    let before: ReturnType<typeof stamp>;
+    db = openStoreRO(box);
+    try {
+      before = stamp(db);
+      expect(matches(db, 'zqrollecho'), 'CONTROL: the echo is out of the index').toBe(0);
+      expect(before.completed, 'CONTROL: the backfill is complete').not.toBeNull();
+      expect(before.prov, 'CONTROL: the marker is the current set').toBe('operator,model,tool,recall-echo');
+      expect(Number(before.cursor), 'CONTROL: the echo lies past the completed cursor').toBeLessThan(echo);
+      expect((db.prepare("SELECT fts_indexed AS f FROM blobs b JOIN entries e ON e.blob_id = b.blob_id WHERE e.uuid = ?").get(IX.uuidN(4)) as { f: number }).f, 'CONTROL: harness text is never indexed').toBe(0);
+    } finally { db.close(); }
+    expect(runSweep(box).code).toBe(0);
+    let repaired: ReturnType<typeof stamp>;
+    db = openStoreRO(box);
+    try {
+      expect(matches(db, 'zqrollecho'), 'the owed echo is indexed again').toBe(1);
+      expect(matches(db, 'zqrollmeta'), 'an excluded source class is not broadened in').toBe(0);
+      repaired = stamp(db);
+      expect(repaired.completed).not.toBeNull();
+      expect(repaired.prov).toBe(before.prov);
+      expect(metaV(db, 'fts')).toBe('ready');
+    } finally { db.close(); }
+    for (let i = 0; i < 2; i += 1) expect(runSweep(box).code).toBe(0);
+    db = openStoreRO(box);
+    try {
+      expect(stamp(db), 'a healthy complete store is not re-opened on later ticks').toEqual(repaired);
+      expect(matches(db, 'zqrollecho')).toBe(1);
+    } finally { db.close(); }
+  });
+
+  it('F3 (relation only): a rolled-back build re-labels an OLD deduplicated harness-only blob as a recall echo at or below the completed cursor; the next tick re-opens from 0, indexes it once, and then leaves a healthy store alone', async () => {
+    const { sweep: S, lib } = await IX.api();
+    const box = IX.newBox('ccrc-hist-echo-oldblob-');
+    try {
+      const call = [{ type: 'tool_use', id: 'toolu_01OB', name: 'Bash', input: { command: 'ccrc history grep zqasked' } }];
+      const result = [{ type: 'tool_result', tool_use_id: 'toolu_01OB', content: 'zqoldecho words' }];
+      IX.plantCopy(box.homes[0]!, IX.U, IX.jsonl([
+        IX.user(IX.uuidN(1), null, 'zqopener words', 1),
+        IX.assistant(IX.uuidN(2), IX.uuidN(1), call, 2),
+        IX.user(IX.uuidN(3), IX.uuidN(2), result, 3, { isMeta: true }),   // harness: its blob is not eligible
+        IX.user(IX.uuidN(4), IX.uuidN(3), 'zqlater words', 4),            // a later eligible blob, so the cursor passes the harness one
+      ]));
+      const { db, ids } = await IX.openFixtureStore(box);
+      try {
+        await S.ingestTick(db, S.makeIngestCtx(box.home, box.homes, IX.tsMs(0) + 60_000, ids), S.newBudget());   // no FTS this tick: nothing indexed
+        const cycle = async (k: number): Promise<string> => {
+          const c = S.makeIngestCtx(box.home, box.homes, IX.tsMs(0) + 120_000 + k * 60_000, ids);
+          const p = S.ftsPrepare(db, c.nowMs);
+          c.fts = p.tables;
+          c.pairIdx = lib.makePairIndex([]);
+          await S.deriveFts(db, c, S.newBudget());
+          return p.state;
+        };
+        const stamp = (): { completed: number | null; cursor: string | null; prov: string | undefined; undec: number | undefined } => {
+          const r = db.prepare("SELECT completed_ms AS c, cursor AS k FROM derivation_state WHERE step = 'fts' AND version = 1").get() as { c: number | null; k: string | null };
+          return { completed: r.c, cursor: r.k, prov: metaV(db, 'fts_provenance'), undec: (db.prepare('SELECT n FROM counters WHERE name = ?').get(HEALTH_COUNTERS.blobUndecodable) as { n: number } | undefined)?.n };
+        };
+        const entryOf = (n: number): { blob_id: number; provenance: string } =>
+          db.prepare('SELECT blob_id, provenance FROM entries WHERE uuid = ?').get(IX.uuidN(n)) as { blob_id: number; provenance: string };
+        const old = entryOf(3);
+        expect(old.provenance, 'CONTROL: the entry is harness').toBe('harness');
+        await cycle(0);
+        const done = stamp();
+        expect(done.completed, 'CONTROL: the backfill is complete').not.toBeNull();
+        expect(Number(done.cursor), 'CONTROL: the cursor passed the harness blob').toBeGreaterThanOrEqual(old.blob_id);
+        expect(matches(db, 'zqoldecho'), 'CONTROL: harness text is not indexed').toBe(0);
+        // The rolled-back build ingests a newer-ranked copy of the same uuid and the same canonical body, whose structural
+        // pairing makes it a recall echo. ENTRY_UPSERT retains blob_id; no blob is stored; the build indexes nothing.
+        const blobsBefore = IX.count(db, 'blobs');
+        const second = IX.plantCopy(box.homes[1]!, IX.U, IX.jsonl([
+          IX.assistant(IX.uuidN(2), IX.uuidN(1), call, 2),
+          IX.user(IX.uuidN(3), IX.uuidN(2), result, 3),
+        ]));
+        fs.utimesSync(second, new Date('2099-01-01T00:00:00Z'), new Date('2099-01-01T00:00:00Z'));
+        const r = await S.ingestPath(db, S.makeIngestCtx(box.home, box.homes, IX.tsMs(0) + 90_000, ids), { path: second, uuid: IX.U, home: box.homes[1]! }, S.newBudget());
+        expect(r, 'the second copy was ingested').not.toBeNull();
+        const now = entryOf(3);
+        expect(now.provenance, 'the same entry is now a recall echo').toBe('recall-echo');
+        expect(now.blob_id, 'and keeps its old blob').toBe(old.blob_id);
+        expect(IX.count(db, 'blobs'), 'the body deduplicated').toBe(blobsBefore);
+        expect(old.blob_id).toBeLessThanOrEqual(Number(done.cursor));
+        expect(IX.count(db, 'blobs', `blob_id = ${old.blob_id} AND fts_indexed = 0`)).toBe(1);
+        expect(hasFtsRow(db, old.blob_id)).toBe(false);
+        expect(stamp(), 'the completed state and its marker are untouched').toEqual(done);
+        // The next B2 tick measures the relation from 0.
+        expect(await cycle(1)).toBe('fts-pending');
+        expect(matches(db, 'zqoldecho'), 'the old echo is indexed again').toBe(1);
+        expect(hasFtsRow(db, old.blob_id)).toBe(true);
+        const repaired = stamp();
+        expect(repaired.completed).not.toBeNull();
+        expect(repaired.prov).toBe(done.prov);
+        expect(repaired.undec).toBe(done.undec);
+        for (let k = 2; k < 5; k += 1) {
+          expect(await cycle(k), 'a healthy complete store is not re-opened').toBe('ready');
+          expect(stamp()).toEqual(repaired);
+        }
+        expect(matches(db, 'zqoldecho')).toBe(1);
+      } finally { db.close(); }
+    } finally { fs.rmSync(box.home, { recursive: true, force: true }); }
+  });
+
+  /** The relation-only fixture of the F3 cases: a completed backfill whose cursor passed an OLD harness-only blob, and the
+   *  rollback-era FTS-disabled ingest (a newer same-uuid, same-body copy) that makes that blob a recall echo without allocating one. */
+  const oldEchoStore = async (prefix: string, body: (x: {
+    S: Awaited<ReturnType<typeof IX.api>>['sweep']; db: DatabaseSync; old: number;
+    cycle: (k: number) => Promise<string>; relabel: () => Promise<void>;
+    stamp: () => { completed: number | null; cursor: string | null };
+  }) => Promise<void>): Promise<void> => {
+    const { sweep: S, lib } = await IX.api();
+    const box = IX.newBox(prefix);
+    try {
+      const call = [{ type: 'tool_use', id: 'toolu_01OB', name: 'Bash', input: { command: 'ccrc history grep zqasked' } }];
+      const result = [{ type: 'tool_result', tool_use_id: 'toolu_01OB', content: 'zqoldecho words' }];
+      IX.plantCopy(box.homes[0]!, IX.U, IX.jsonl([
+        IX.user(IX.uuidN(1), null, 'zqopener words', 1),
+        IX.assistant(IX.uuidN(2), IX.uuidN(1), call, 2),
+        IX.user(IX.uuidN(3), IX.uuidN(2), result, 3, { isMeta: true }),   // harness: its blob is not eligible
+        IX.user(IX.uuidN(4), IX.uuidN(3), 'zqlater words', 4),            // a later eligible blob, so the cursor passes the harness one
+      ]));
+      const { db, ids } = await IX.openFixtureStore(box);
+      try {
+        await S.ingestTick(db, S.makeIngestCtx(box.home, box.homes, IX.tsMs(0) + 60_000, ids), S.newBudget());   // no FTS this tick: nothing indexed
+        const cycle = async (k: number): Promise<string> => {
+          const c = S.makeIngestCtx(box.home, box.homes, IX.tsMs(0) + 120_000 + k * 60_000, ids);
+          const p = S.ftsPrepare(db, c.nowMs);
+          c.fts = p.tables;
+          c.pairIdx = lib.makePairIndex([]);
+          await S.deriveFts(db, c, S.newBudget());
+          return p.state;
+        };
+        const stamp = (): { completed: number | null; cursor: string | null } => {
+          const r = db.prepare("SELECT completed_ms AS c, cursor AS k FROM derivation_state WHERE step = 'fts' AND version = 1").get() as { c: number | null; k: string | null };
+          return { completed: r.c, cursor: r.k };
+        };
+        const entryOf = (n: number): { blob_id: number; provenance: string } =>
+          db.prepare('SELECT blob_id, provenance FROM entries WHERE uuid = ?').get(IX.uuidN(n)) as { blob_id: number; provenance: string };
+        const old = entryOf(3);
+        expect(old.provenance, 'CONTROL: the entry is harness').toBe('harness');
+        await cycle(0);
+        expect(stamp().completed, 'CONTROL: the backfill is complete').not.toBeNull();
+        expect(Number(stamp().cursor), 'CONTROL: the cursor passed the harness blob').toBeGreaterThanOrEqual(old.blob_id);
+        const relabel = async (): Promise<void> => {
+          const blobsBefore = IX.count(db, 'blobs');
+          const second = IX.plantCopy(box.homes[1]!, IX.U, IX.jsonl([
+            IX.assistant(IX.uuidN(2), IX.uuidN(1), call, 2),
+            IX.user(IX.uuidN(3), IX.uuidN(2), result, 3),
+          ]));
+          fs.utimesSync(second, new Date('2099-01-01T00:00:00Z'), new Date('2099-01-01T00:00:00Z'));
+          const r = await S.ingestPath(db, S.makeIngestCtx(box.home, box.homes, IX.tsMs(0) + 90_000, ids), { path: second, uuid: IX.U, home: box.homes[1]! }, S.newBudget());
+          expect(r, 'the second copy was ingested').not.toBeNull();
+          expect(entryOf(3), 'the same entry is now a recall echo on its old blob').toEqual({ blob_id: old.blob_id, provenance: 'recall-echo' });
+          expect(IX.count(db, 'blobs'), 'the body deduplicated').toBe(blobsBefore);
+          expect(IX.count(db, 'blobs', `blob_id = ${old.blob_id} AND fts_indexed = 0`)).toBe(1);
+          expect(hasFtsRow(db, old.blob_id)).toBe(false);
+        };
+        await body({ S, db, old: old.blob_id, cycle, relabel, stamp });
+      } finally { db.close(); }
+    } finally { fs.rmSync(box.home, { recursive: true, force: true }); }
+  };
+
+  it('F3 (reset): an explicit no-index reopen of a COMPLETED store sets the cursor to 0, so the very next prepare/derive cycle indexes an old blob the same ingest made eligible', async () => {
+    await oldEchoStore('ccrc-hist-echo-reset-', async ({ S, db, cycle, relabel, stamp }) => {
+      await relabel();
+      S.resetFtsPending(db);
+      expect(stamp(), 'reopened, from zero').toEqual({ completed: null, cursor: '0' });
+      expect(await cycle(1)).toBe('fts-pending');
+      expect(matches(db, 'zqoldecho'), 'the old echo is indexed by the immediately following cycle').toBe(1);
+      expect(stamp().completed).not.toBeNull();
+      const repaired = stamp();
+      for (let k = 2; k < 4; k += 1) {
+        expect(await cycle(k)).toBe('ready');
+        expect(stamp()).toEqual(repaired);
+      }
+    });
+  });
+
+  it('F3 (reset): an explicit reopen of an already-PENDING store with an advanced cursor also sets the cursor to 0', async () => {
+    await oldEchoStore('ccrc-hist-echo-reset-pending-', async ({ S, db, cycle, relabel, stamp }) => {
+      // A backfill stopped part-way (a spent budget): pending, its cursor past the old blob.
+      const past = stamp().cursor;
+      db.prepare("UPDATE derivation_state SET completed_ms = NULL WHERE step = 'fts' AND version = 1").run();
+      expect(stamp(), 'CONTROL: pending at an advanced cursor').toEqual({ completed: null, cursor: past });
+      expect(Number(past)).toBeGreaterThan(0);
+      await relabel();
+      S.resetFtsPending(db);
+      expect(stamp(), 'a pending row is reset to zero too').toEqual({ completed: null, cursor: '0' });
+      expect(await cycle(1)).toBe('fts-pending');
+      expect(matches(db, 'zqoldecho'), 'the old echo is indexed in that cycle').toBe(1);
+      expect(stamp().completed).not.toBeNull();
+    });
   });
 
   it('DM29 (store half): a sidecar indexes its first 512 KB only; the text past it stays in the blob', () => {
@@ -2441,13 +2702,16 @@ describe('history ingest: the FTS index (plan task 23)', () => {
       const { sweep: S, store, lib } = await IX.api();
       const box = IX.newBox('ccrc-hist-f2p-');
       try {
-        const v = `zqf${hex(12)}2`;   // glued by _ or -: §8.3's run grammar leaves it, and a phrase still finds it
+        // Printed with its own `-` as spaces: a phrase of its unit still finds it (unicode61 drops both), and no piece
+        // reaches SECRET_SEGMENT_MIN, so neither the pair, its glue windows nor the belt removes it (W1-B2 Task 7A).
+        const v = `zqf${hex(4)}-${hex(5)}-${hex(4)}2`;
+        const spaced = v.replace(/-/g, ' ');
         const u = `zqu${hex(12)}5`;   // stand-alone: the redaction removes it
         IX.plantCopy(box.homes[0]!, IX.U, IX.jsonl([
           IX.user(IX.uuidN(1), null, `note ${u} end`, 1),
-          IX.user(IX.uuidN(2), IX.uuidN(1), `note ${v}_tail end`, 2),
-          IX.user(IX.uuidN(3), IX.uuidN(2), `note ${v}-tail end`, 3),
-          IX.user(IX.uuidN(4), IX.uuidN(3), `note ${v}_tail two end`, 4),
+          IX.user(IX.uuidN(2), IX.uuidN(1), `note ${spaced} tail end`, 2),
+          IX.user(IX.uuidN(3), IX.uuidN(2), `note ${spaced} other end`, 3),
+          IX.user(IX.uuidN(4), IX.uuidN(3), `note ${spaced} tail two end`, 4),
         ]));
         IX.sweepTwice(box);
         const P = lib.historyPaths(box.home);
@@ -2480,7 +2744,7 @@ describe('history ingest: the FTS index (plan task 23)', () => {
           expect(metaV(w, 'fts_reindex_rid')).toBe(String(ra));
           seen.push(await tick());                                    // u is owed again, and its blob is already clean
           expect(seen).toEqual([3, 1, 0, 0, 0]);
-          expect(matches(w, `"${v}"`), 'CONTROL: the shape: the glued value stays in the index, a phrase still finds all three').toBe(3);
+          expect(matches(w, `"${v}"`), 'CONTROL: the shape: the spaced value stays in the index, a phrase still finds all three').toBe(3);
         } finally { w.close(); }
       } finally { fs.rmSync(box.home, { recursive: true, force: true }); }
     });
@@ -2891,6 +3155,114 @@ describe('history ingest: the FTS index (plan task 23)', () => {
           expect(matches(db, 'zqentry')).toBe(0);
           await S.deriveFts(db, ctx, S.newBudget());
           expect(counterOf(db, HEALTH_COUNTERS.blobUndecodable)).toBe(2);   // a second pass does not recount
+          // F3: each pass-over is classified by the decoder mode that failed it, in a sparse meta row that holds the blob id and
+          // the mode word only; the blob stays unindexed (D-4346), and the classification is what keeps it from being owed.
+          const classes = db.prepare("SELECT k, v FROM meta WHERE k LIKE 'fts\\_undecodable:%' ESCAPE '\\' ORDER BY k").all() as { k: string; v: string }[];
+          expect(Object.fromEntries(classes.map((c) => [c.k, c.v]))).toEqual({ [`fts_undecodable:${entryBlob}`]: 'entry', [`fts_undecodable:${sideBlob}`]: 'sidecar' });
+          expect(classes).toHaveLength(2);
+          const stamp = (): unknown => db.prepare("SELECT cursor, completed_ms FROM derivation_state WHERE step = 'fts' AND version = 1").get();
+          const done = stamp();
+          expect((done as { completed_ms: number | null }).completed_ms).not.toBeNull();
+          // Repeated healthy ticks (ftsPrepare, then deriveFts) neither re-open the store nor recount the same mode.
+          for (let k = 1; k <= 3; k += 1) {
+            const c = S.makeIngestCtx(box.home, box.homes, IX.tsMs(0) + 120_000 + k * 60_000, ids);
+            const prep = S.ftsPrepare(db, c.nowMs);
+            expect(prep.state, `tick ${k}: not re-opened`).toBe('ready');
+            c.fts = prep.tables;
+            c.pairIdx = lib.makePairIndex([]);
+            await S.deriveFts(db, c, S.newBudget());
+            expect(stamp(), `tick ${k}`).toEqual(done);
+            expect(counterOf(db, HEALTH_COUNTERS.blobUndecodable), `tick ${k}`).toBe(2);
+            expect(IX.count(db, 'blobs', `fts_indexed = 0 AND blob_id IN (${entryBlob}, ${sideBlob})`)).toBe(2);
+          }
+          // An unclassified legacy pass-over is retried once, classified, and then left alone.
+          db.prepare("DELETE FROM meta WHERE k LIKE 'fts\\_undecodable:%' ESCAPE '\\'").run();
+          const legacy = S.makeIngestCtx(box.home, box.homes, IX.tsMs(0) + 600_000, ids);
+          const prepL = S.ftsPrepare(db, legacy.nowMs);
+          expect(prepL.state, 'an unclassified failure is owed once').toBe('fts-pending');
+          legacy.fts = prepL.tables;
+          legacy.pairIdx = lib.makePairIndex([]);
+          await S.deriveFts(db, legacy, S.newBudget());
+          expect(db.prepare("SELECT k, v FROM meta WHERE k LIKE 'fts\\_undecodable:%' ESCAPE '\\' ORDER BY k").all()).toEqual(classes);
+          expect(counterOf(db, HEALTH_COUNTERS.blobUndecodable)).toBe(4);
+          const legacyDone = stamp();
+          for (let k = 1; k <= 2; k += 1) {
+            const c = S.makeIngestCtx(box.home, box.homes, IX.tsMs(0) + 700_000 + k * 60_000, ids);
+            expect(S.ftsPrepare(db, c.nowMs).state).toBe('ready');
+            c.fts = true;
+            c.pairIdx = lib.makePairIndex([]);
+            await S.deriveFts(db, c, S.newBudget());
+            expect(stamp()).toEqual(legacyDone);
+            expect(counterOf(db, HEALTH_COUNTERS.blobUndecodable)).toBe(4);
+          }
+        } finally { db.close(); }
+      } finally { fs.rmSync(box.home, { recursive: true, force: true }); }
+    });
+
+    /** One tick's FTS half as the sweep runs it: ftsPrepare (which may re-open), then deriveFts, on a clock that advances. */
+    const ftsCycle = async (S: Awaited<ReturnType<typeof IX.api>>['sweep'], lib: Awaited<ReturnType<typeof IX.api>>['lib'], db: DatabaseSync, box: HistoryBox, ids: Parameters<typeof S.makeIngestCtx>[3], k: number): Promise<string> => {
+      const c = S.makeIngestCtx(box.home, box.homes, IX.tsMs(0) + 120_000 + k * 60_000, ids);
+      const p = S.ftsPrepare(db, c.nowMs);
+      c.fts = p.tables;
+      c.pairIdx = lib.makePairIndex([]);
+      await S.deriveFts(db, c, S.newBudget());
+      return p.state;
+    };
+    const classOf = (db: DatabaseSync, blobId: number): string | undefined => metaV(db, `fts_undecodable:${blobId}`);
+
+    it('F3: an entry-mode failure classified `entry` does not suppress the sidecar attempt once a sidecar references the same blob: the bounded decode succeeds, the blob is indexed, and its classification is cleared', async () => {
+      const { sweep: S, lib } = await IX.api();
+      const box = IX.newBox('ccrc-hist-undec-mode-');
+      try {
+        IX.plantCopy(box.homes[0]!, IX.U, IX.jsonl([IX.user(IX.uuidN(1), null, 'zqmode words', 1), IX.user(IX.uuidN(2), IX.uuidN(1), 'zqother words', 2)]));
+        const { db, ids } = await IX.openFixtureStore(box);
+        try {
+          await S.ingestTick(db, S.makeIngestCtx(box.home, box.homes, IX.tsMs(0) + 60_000, ids), S.newBudget());   // no FTS this tick
+          const blob = (db.prepare('SELECT blob_id AS id FROM entries WHERE uuid = ?').get(IX.uuidN(1)) as { id: number }).id;
+          // Whole brotli bytes whose stored raw_len is short of them: the whole-entry decode (bounded by raw_len) refuses, the sidecar's bounded prefix decode does not.
+          db.prepare('UPDATE blobs SET raw_len = 1 WHERE blob_id = ?').run(blob);
+          const z = (db.prepare('SELECT z FROM blobs WHERE blob_id = ?').get(blob) as { z: Uint8Array }).z;
+          const idx = lib.makePairIndex([]);
+          await expect(S.ftsTextOfBlob(z, false, idx, 1), 'CONTROL: entry mode cannot decode it').resolves.toMatchObject({ undecodable: true });
+          const bounded = await S.ftsTextOfBlob(z, true, idx, 1);
+          expect(bounded.undecodable, 'CONTROL: sidecar mode can').toBe(false);
+          expect(bounded.text).toContain('zqmode');
+          expect(await ftsCycle(S, lib, db, box, ids, 0)).toBe('fts-pending');
+          expect(classOf(db, blob), 'classified by the mode that failed').toBe('entry');
+          expect(counterOf(db, HEALTH_COUNTERS.blobUndecodable)).toBe(1);
+          expect(IX.count(db, 'blobs', `blob_id = ${blob} AND fts_indexed = 0`)).toBe(1);
+          expect(await ftsCycle(S, lib, db, box, ids, 1), 'a healthy tick leaves the classified failure alone').toBe('ready');
+          expect(counterOf(db, HEALTH_COUNTERS.blobUndecodable)).toBe(1);
+          // A sidecar whose bytes are the entry's canonical body deduplicates onto the very same blob.
+          fs.writeFileSync(path.join(sideDir(box), 'mode.txt'), JSON.stringify('zqmode words'));
+          await S.ingestSidecars(db, S.makeIngestCtx(box.home, box.homes, IX.tsMs(0) + 300_000, ids), S.newBudget(), [IX.U]);
+          expect(IX.count(db, 'sidecars', `blob_id = ${blob}`), 'CONTROL: the sidecar references the same blob').toBe(1);
+          expect(classOf(db, blob), 'CONTROL: still classified entry').toBe('entry');
+          expect(await ftsCycle(S, lib, db, box, ids, 5), 'the current mode is sidecar, so the entry classification does not suppress it').toBe('fts-pending');
+          expect(IX.count(db, 'blobs', `blob_id = ${blob} AND fts_indexed = 1`)).toBe(1);
+          expect(matches(db, 'zqmode')).toBe(1);
+          expect(classOf(db, blob), 'the stale classification is cleared').toBeUndefined();
+          expect(counterOf(db, HEALTH_COUNTERS.blobUndecodable), 'a successful attempt counts nothing').toBe(1);
+          expect(await ftsCycle(S, lib, db, box, ids, 6)).toBe('ready');
+        } finally { db.close(); }
+      } finally { fs.rmSync(box.home, { recursive: true, force: true }); }
+    });
+
+    it('F3: a successful index of a blob clears a stale failure classification (a classification of the other mode keeps it owed)', async () => {
+      const { sweep: S, lib } = await IX.api();
+      const box = IX.newBox('ccrc-hist-undec-stale-');
+      try {
+        IX.plantCopy(box.homes[0]!, IX.U, IX.jsonl([IX.user(IX.uuidN(1), null, 'zqstale words', 1)]));
+        const { db, ids } = await IX.openFixtureStore(box);
+        try {
+          await S.ingestTick(db, S.makeIngestCtx(box.home, box.homes, IX.tsMs(0) + 60_000, ids), S.newBudget());   // no FTS this tick
+          const blob = (db.prepare('SELECT blob_id AS id FROM entries').get() as { id: number }).id;
+          db.prepare("INSERT INTO meta (k, v) VALUES (?, 'sidecar')").run(`fts_undecodable:${blob}`);   // a mode this entry blob is no longer read in
+          expect(classOf(db, blob), 'CONTROL: planted').toBe('sidecar');
+          expect(await ftsCycle(S, lib, db, box, ids, 0)).toBe('fts-pending');
+          expect(matches(db, 'zqstale'), 'indexed').toBe(1);
+          expect(classOf(db, blob), 'and the stale classification is gone').toBeUndefined();
+          expect(counterOf(db, HEALTH_COUNTERS.blobUndecodable) ?? 0).toBe(0);
         } finally { db.close(); }
       } finally { fs.rmSync(box.home, { recursive: true, force: true }); }
     });
@@ -3072,6 +3444,82 @@ describe('history ingest: the FTS index (plan task 23)', () => {
       const small = brotliCompressSync(Buffer.from(JSON.stringify([{ type: 'text', text: 'zqoversentinel' }])), { params: { [zc.BROTLI_PARAM_QUALITY]: 5 } });
       await expect(S.ftsTextOfBlob(small, false, idx, lib.BLOB_DECODE_MAX + 1)).resolves.toEqual({ text: '', decoded: 0, undecodable: false, overCap: true });
       expect((await S.ftsTextOfBlob(small, false, idx, 1000)).text).toBe('zqoversentinel');   // CONTROL
+    });
+
+    describe('F5 blobPlainText: the synchronous read verbs\' plain text of a stored blob, direct (Task 12 fix round 1)', () => {
+      const entryBytes = (t: string): Buffer => Buffer.from(JSON.stringify([{ type: 'text', text: t }]));
+
+      it('F5 blobPlainText sidecar cap: a sidecar whose stored rawLen is over SIDECAR_WHOLE_MAX answers empty without decoding; the same bytes within the cap give their indexed text', async () => {
+        const { store, lib } = await IX.api();
+        const idx = lib.makePairIndex([]);
+        const sc = Buffer.from('zqsidehead\nzqsideend\n');
+        const z = q5(sc);
+        expect(store.blobPlainText(z, true, idx, lib.SIDECAR_WHOLE_MAX + 1)).toBe('');
+        expect(store.blobPlainText(z, true, idx, lib.SIDECAR_WHOLE_MAX)).toBe(lib.sidecarIndexText(sc, idx));   // CONTROL: at the cap
+        expect(store.blobPlainText(z, true, idx, sc.length)).toContain('zqsidehead');                          // CONTROL: its true length
+      });
+
+      it('F5 blobPlainText entry cap: an entry whose stored rawLen is BLOB_DECODE_MAX + 1 answers empty; the same bytes at their true length give their text', async () => {
+        const { store, lib } = await IX.api();
+        const idx = lib.makePairIndex([]);
+        const body = entryBytes('zqentrysentinel');
+        const z = q5(body);
+        expect(store.blobPlainText(z, false, idx, lib.BLOB_DECODE_MAX + 1)).toBe('');
+        expect(store.blobPlainText(z, false, idx, body.length)).toBe('zqentrysentinel');   // CONTROL
+      });
+
+      it('F5 blobPlainText structure bound: a valid entry over JSON_NODES_MAX answers empty before any parse; a nearby valid entry gives its text', async () => {
+        const { store, lib } = await IX.api();
+        const idx = lib.makePairIndex([]);
+        const over = Buffer.from(JSON.stringify([{ type: 'text', text: 'zqstructsentinel' }]).slice(0, -1) + ',0'.repeat(lib.JSON_NODES_MAX) + ']');
+        expect(over.length, 'CONTROL: the over-structure body is within the decode cap').toBeLessThanOrEqual(lib.BLOB_DECODE_MAX);
+        expect(lib.jsonWithinStructureBound(over), 'CONTROL: it is over the structure bound').toBe(false);
+        expect(() => JSON.parse(over.toString('utf8')), 'CONTROL: it is valid JSON').not.toThrow();
+        const ok = entryBytes('zqstructsentinel');
+        expect(store.blobPlainText(q5(over), false, idx, over.length)).toBe('');
+        expect(store.blobPlainText(q5(ok), false, idx, ok.length)).toBe('zqstructsentinel');   // CONTROL
+      });
+
+      it('F5 blobPlainText malformed brotli: garbage and truncated bytes answer empty in both arms and never throw', async () => {
+        const { store, lib } = await IX.api();
+        const idx = lib.makePairIndex([]);
+        const good = q5(entryBytes('zqbrotlisentinel'));
+        const truncated = good.subarray(0, Math.floor(good.length / 2));
+        expect(store.blobPlainText(good, false, idx, 1000), 'CONTROL: the whole blob decodes').toBe('zqbrotlisentinel');
+        for (const isSidecar of [false, true]) {
+          for (const z of [Buffer.from('zq-not-brotli'), truncated]) {
+            expect(() => store.blobPlainText(z, isSidecar, idx, 1000)).not.toThrow();
+            expect(store.blobPlainText(z, isSidecar, idx, 1000), `${isSidecar} ${z.length}`).toBe('');
+          }
+        }
+      });
+
+      it('F5 blobPlainText malformed json: a brotli-valid entry whose in-bound JSON does not parse answers empty and never throws', async () => {
+        const { store, lib } = await IX.api();
+        const idx = lib.makePairIndex([]);
+        const bad = Buffer.from('[{"type":"text","text":"zqjsonsentinel"');   // truncated: never closed
+        expect(lib.jsonWithinStructureBound(bad), 'CONTROL: it passes the structure bound, so the parse is what refuses it').toBe(true);
+        expect(() => JSON.parse(bad.toString('utf8')), 'CONTROL: it does not parse').toThrow(SyntaxError);
+        expect(() => store.blobPlainText(q5(bad), false, idx, bad.length)).not.toThrow();
+        expect(store.blobPlainText(q5(bad), false, idx, bad.length)).toBe('');
+        const ok = Buffer.from(bad.toString('utf8') + '}]');
+        expect(store.blobPlainText(q5(ok), false, idx, ok.length)).toBe('zqjsonsentinel');   // CONTROL: closed, it parses
+      });
+
+      it('F5 blobPlainText sidecar extraction: a compressed JSON sidecar is unescaped and redacted through sidecarIndexText, agreeing with it on the raw bytes', async () => {
+        const { store, lib } = await IX.api();
+        const tok = randomBytes(24).toString('hex');
+        const idx = lib.makePairIndex(lib.secretPairs([tok]).pairs);
+        const sc = Buffer.from(JSON.stringify([{ type: 'text', text: `zqpubhead\n${tok}\nzqpubend` }]));
+        expect(sc.toString('utf8').includes(tok), 'CONTROL: the raw bytes carry the fixture secret').toBe(true);
+        const got = store.blobPlainText(q5(sc), true, idx, sc.length);
+        expect(got).toBe(lib.sidecarIndexText(sc, idx));
+        expect(got).toContain('zqpubhead');
+        expect(got).toContain('zqpubend');
+        expect(got.includes(tok.slice(0, 12))).toBe(false);
+        expect(got, 'the JSON newline escape is undone').toContain('zqpubhead\n');
+        expect(got.includes('\\n')).toBe(false);
+      });
     });
 
     it('F7 sibling (D-4346): a row whose canonical body is over BLOB_DECODE_MAX while its line is within LINE_MAX is stored and indexes nothing at ingest, as the backfill and the re-derivation index it', async () => {
@@ -3367,4 +3815,572 @@ describe('FR2-e (D-4341): a numeric row timestamp beyond the Date range is NULL,
       ]);
     } finally { db.close(); }
   });
+});
+
+
+// ── W1-B2 Task 7B: the substring belt in the index (spec §6.2 "The belt", §8.3 layer 4; rev 3.5; O59 store half) ──
+// The shapes B1 measured (review 351; fr2's "For the coordinator" items 1-2), through the real sweep: a stray ESC[ that
+// took a value's second character behind a mid-span ESC[0m (31 of 32 characters one term at 561609adc; 27 with a closing
+// sequence), and the value glued by `_`, `-` and letters. Terms are read through fts5vocab, so a value inside a longer
+// term is seen too. Each value ends in a digit, so the porter stemmer never rewrites the term that holds it.
+describe('O59 (W1-B2 Task 7B): the substring belt in the index (spec §6.2, §8.3 layer 4)', () => {
+  beforeEach((ctx) => { if (process.platform === 'darwin') ctx.skip(); });
+  const E = String.fromCharCode(27);
+  const AL = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+  const alnum = (n: number): string => Array.from(randomBytes(n), (b) => AL[b % 62]!).join('');
+  const mint = (): string => `QP${alnum(29)}7`;
+  const btSecret = (box: HistoryBox, name: string, body: string): string => {
+    fs.mkdirSync(path.join(box.home, '.cc-secrets'), { recursive: true, mode: 0o700 });
+    const p = path.join(box.home, '.cc-secrets', name);
+    fs.writeFileSync(p, body, { mode: 0o600 });
+    return p;
+  };
+  const btMeta = (db: DatabaseSync, k: string): string | undefined =>
+    (db.prepare('SELECT v FROM meta WHERE k = ?').get(k) as { v: string } | undefined)?.v;
+  const btMatch = (db: DatabaseSync, q: string): number =>
+    (db.prepare('SELECT count(*) AS n FROM blobs_fts WHERE blobs_fts MATCH ?').get(q) as { n: number }).n;
+  /** The longest stretch any blobs_fts term shares with `v` (terms are stored folded, so `v` is folded too). */
+  const btShared = (db: DatabaseSync, v: string): number => {
+    db.exec("CREATE VIRTUAL TABLE IF NOT EXISTS temp.btv USING fts5vocab(main, blobs_fts, 'row')");
+    const terms = (db.prepare('SELECT term FROM temp.btv').all() as { term: string }[]).map((r) => r.term);
+    const w = v.toLowerCase();
+    let best = 0;
+    for (const t of terms) for (let i = 0; i < w.length; i += 1) for (let j = i + best + 1; j <= w.length && t.includes(w.slice(i, j)); j += 1) best = j - i;
+    return best;
+  };
+  const btRows = (v: string): IxRow[] => [
+    IX.user(IX.uuidN(1), null, `zqbelt one w ${v[0]}${E}[0m${E}[${v.slice(1)} y`, 1),
+    IX.user(IX.uuidN(2), IX.uuidN(1), `zqbelt two w ${v[0]}${E}[0m${E}[${v.slice(1, 28)}${E}[0m${v.slice(28)} y`, 2),
+    IX.user(IX.uuidN(3), IX.uuidN(2), `zqbelt three ab_${v} end`, 3),
+    IX.user(IX.uuidN(4), IX.uuidN(3), `zqbelt four ab-${v}-tail end`, 4),
+    IX.user(IX.uuidN(5), IX.uuidN(4), `zqbelt five abP${v}x end`, 5),
+  ];
+  const btHint = (box: HistoryBox): void => {
+    fs.mkdirSync(path.join(box.root, 'spool'), { recursive: true });
+    spoolLine(box, IX.ID, { v: 1, ev: 'Stop', id: IX.ID });
+  };
+
+  it('a value known before its text is indexed: no term holds its width, the remnant is no MATCH, the blobs keep it, no meta row holds it, and every pass ends witnessed', async () => {
+    const { lib, sweep } = await IX.api();
+    const W = sweep as unknown as { beltWitness(db: DatabaseSync): string };
+    const box = IX.newBox('ccrc-hist-belt-a-');
+    try {
+      const v = mint();
+      btSecret(box, 'belt.env', `ZQ_BELT=${v}\n`);
+      const p = IX.plantCopy(box.homes[0]!, IX.U, IX.jsonl(btRows(v)));
+      IX.sweepTwice(box);
+      let db = openStoreRO(box);
+      try {
+        expect(btMatch(db, 'zqbelt'), 'CONTROL: the five rows are indexed').toBe(5);
+        expect(btShared(db, v)).toBeLessThan(lib.beltWidth(v));
+        expect(btMatch(db, `"${v.slice(1)}"`), 'the 31 characters the stray CSI left').toBe(0);
+        expect(IX.blobsHold(db, v.slice(1)), 'the store stays lossless').toBe(true);
+        expect(lib.parseBeltState(btMeta(db, lib.BELT_META))?.v, 'the belt state names this version').toBe(lib.BELT_VERSION);
+        for (const k of [lib.BELT_META, lib.REDACT_SOURCES_META, 'fts_rederive']) expect(btMeta(db, k) ?? '', k).not.toContain(v.slice(2, 10));
+      } finally { db.close(); }
+      // R-rollback's stamp: a tick that ingests after its re-derivation step still ends with its own writes witnessed,
+      // so the next tick reads no other build's hand in them.
+      fs.appendFileSync(p, IX.jsonl([IX.user(IX.uuidN(6), IX.uuidN(5), 'zqbelt six plain', 6)]));
+      btHint(box);
+      const r = runSweep(box);
+      expect(r.code, r.stderr).toBe(0);
+      db = openStoreRO(box);
+      try {
+        expect(btMatch(db, 'zqbelt'), 'CONTROL: the tick ingested a row after its re-derivation step').toBe(6);
+        expect(lib.parseBeltState(btMeta(db, lib.BELT_META))?.w, 'the pass ends with its own writes witnessed').toBe(W.beltWitness(db));
+      } finally { db.close(); }
+    } finally { fs.rmSync(box.home, { recursive: true, force: true }); }
+  });
+
+  it('a value learned after its text was indexed: the generation rewrites every shape, the letter-glued one too, and the mark advances', async () => {
+    const { lib } = await IX.api();
+    const box = IX.newBox('ccrc-hist-belt-b-');
+    try {
+      const v = mint();
+      IX.plantCopy(box.homes[0]!, IX.U, IX.jsonl(btRows(v)));
+      IX.sweepTwice(box);
+      let db = openStoreRO(box);
+      try { expect(btShared(db, v), 'CONTROL: indexed in clear, the value not known yet').toBe(32); } finally { db.close(); }
+      btSecret(box, 'late.env', `ZQ_LATE=${v}\n`);
+      btHint(box);
+      const r = runSweep(box);
+      expect(r.code, r.stderr).toBe(0);
+      db = openStoreRO(box);
+      try {
+        expect(btShared(db, v)).toBeLessThan(lib.beltWidth(v));
+        expect(btMeta(db, 'fts_reindex_rid')).toBe(String((db.prepare('SELECT max(rowid) AS r FROM redact_hashes').get() as { r: number }).r));
+      } finally { db.close(); }
+    } finally { fs.rmSync(box.home, { recursive: true, force: true }); }
+  });
+
+  it('a store a build without the belt wrote after B2 (a rollback to B1, then forward): the moved witness opens a belt generation, which rewrites its rows', async () => {
+    const { sweep, store, lib } = await IX.api();
+    const S = sweep as unknown as { ftsTextOfBlob(z: Uint8Array, s: boolean, i: unknown, n: number): Promise<{ text: string | null }> };
+    const box = IX.newBox('ccrc-hist-belt-c-');
+    try {
+      const v = mint();
+      btSecret(box, 'belt.env', `ZQ_BELT=${v}\n`);
+      IX.plantCopy(box.homes[0]!, IX.U, IX.jsonl(btRows(v)));
+      IX.sweepTwice(box);
+      let covered = '';
+      const w = store.openWriter(lib.historyPaths(box.home).dbFile);
+      try {
+        covered = (w.prepare('SELECT v FROM meta WHERE k = ?').get(lib.BELT_META) as { v: string }).v;
+        // What one B1 tick leaves (finding R22's interleave): its ingest wrote a blob and indexed it with the three
+        // layers alone, and its re-derivation rewrote an older row the same way. B1 never reads or writes fts_belt.
+        const bare = lib.makePairIndex((w.prepare('SELECT len, sha256 FROM redact_hashes').all() as { len: number; sha256: Uint8Array }[])
+          .map((p) => ({ len: Number(p.len), sha256: Buffer.from(p.sha256).toString('hex') })));
+        const first = Number((w.prepare('SELECT min(blob_id) AS b FROM blobs WHERE fts_indexed = 1 AND z IS NOT NULL').get() as { b: number }).b);
+        w.prepare('INSERT INTO blobs (sha256, codec, z, raw_len, fts_indexed) SELECT ?, codec, z, raw_len, 1 FROM blobs WHERE blob_id = ?')
+          .run(randomBytes(32), first);
+        const added = Number((w.prepare('SELECT max(blob_id) AS b FROM blobs').get() as { b: number }).b);
+        for (const id of [first, added]) {
+          const b = w.prepare('SELECT z, raw_len FROM blobs WHERE blob_id = ?').get(id) as { z: Uint8Array; raw_len: number };
+          const t = await S.ftsTextOfBlob(b.z, false, bare, Number(b.raw_len));
+          w.prepare('DELETE FROM blobs_fts WHERE rowid = ?').run(id);
+          if (t.text !== null) w.prepare('INSERT INTO blobs_fts (rowid, body) VALUES (?, ?)').run(id, lib.entryIndexText(t.text, bare));
+        }
+      } finally { w.close(); }
+      let db = openStoreRO(box);
+      try {
+        expect(btShared(db, v), 'CONTROL: the rows the other build indexed hold the value').toBeGreaterThanOrEqual(lib.beltWidth(v));
+        expect(btMeta(db, lib.BELT_META), 'CONTROL: fts_belt still records every row covered').toBe(covered);
+        expect(lib.parseBeltState(covered)?.v, 'CONTROL: at this version').toBe(lib.BELT_VERSION);
+      } finally { db.close(); }
+      btHint(box);
+      const r = runSweep(box);
+      expect(r.code, r.stderr).toBe(0);
+      db = openStoreRO(box);
+      try {
+        expect(btShared(db, v)).toBeLessThan(lib.beltWidth(v));
+        expect(lib.parseBeltState(btMeta(db, lib.BELT_META))?.v).toBe(lib.BELT_VERSION);
+        expect(lib.parseRederiveState(btMeta(db, 'fts_rederive'))?.belt, 'the completed belt generation is closed').toBeUndefined();
+        expect((db.prepare('SELECT n FROM counters WHERE name = ?').get(lib.BELT_COUNTERS.generations) as { n: number } | undefined)?.n,
+          'a due record (v: 0) is no event').toBeUndefined();
+      } finally { db.close(); }
+    } finally { fs.rmSync(box.home, { recursive: true, force: true }); }
+  });
+
+  it('a B1 store whose pair generation is open at upgrade: the first tick restarts it from cursor 0 as a belt generation, and that first belt generation is no event', async () => {
+    const { sweep, store, lib } = await IX.api();
+    const S = sweep as unknown as { ftsTextOfBlob(z: Uint8Array, s: boolean, i: unknown, n: number): Promise<{ text: string | null }> };
+    const box = IX.newBox('ccrc-hist-belt-e-');
+    try {
+      const v = mint();
+      btSecret(box, 'belt.env', `ZQ_BELT=${v}\n`);
+      IX.plantCopy(box.homes[0]!, IX.U, IX.jsonl(btRows(v)));
+      IX.sweepTwice(box);
+      const w = store.openWriter(lib.historyPaths(box.home).dbFile);
+      try {
+        // A B1 store (finding R15): every row as the three layers alone index it, no fts_belt, and B1's pair generation
+        // open past its first blob (`<top> <first> <end>` above a mark of 0, B1's grammar).
+        const bare = lib.makePairIndex((w.prepare('SELECT len, sha256 FROM redact_hashes').all() as { len: number; sha256: Uint8Array }[])
+          .map((p) => ({ len: Number(p.len), sha256: Buffer.from(p.sha256).toString('hex') })));
+        const rows = w.prepare('SELECT blob_id, z, raw_len FROM blobs WHERE fts_indexed = 1 AND z IS NOT NULL ORDER BY blob_id').all() as { blob_id: number; z: Uint8Array; raw_len: number }[];
+        for (const b of rows) {
+          const t = await S.ftsTextOfBlob(b.z, false, bare, Number(b.raw_len));
+          w.prepare('DELETE FROM blobs_fts WHERE rowid = ?').run(b.blob_id);
+          if (t.text !== null) w.prepare('INSERT INTO blobs_fts (rowid, body) VALUES (?, ?)').run(b.blob_id, lib.entryIndexText(t.text, bare));
+        }
+        const top = Number((w.prepare('SELECT max(rowid) AS r FROM redact_hashes').get() as { r: number }).r);
+        const end = Number((w.prepare('SELECT max(blob_id) AS b FROM blobs').get() as { b: number }).b);
+        w.prepare('DELETE FROM meta WHERE k = ?').run(lib.BELT_META);
+        const upsert = w.prepare('INSERT INTO meta (k, v) VALUES (?, ?) ON CONFLICT (k) DO UPDATE SET v = excluded.v');
+        upsert.run('fts_reindex_rid', '0');
+        upsert.run('fts_rederive', `${top} ${rows[0]!.blob_id} ${end}`);
+      } finally { w.close(); }
+      let db = openStoreRO(box);
+      try {
+        expect(btShared(db, v), 'CONTROL: the escape and letter shapes are terms again').toBe(32);
+        expect(lib.parseRederiveState(btMeta(db, 'fts_rederive'))?.cursor, 'CONTROL: B1\'s generation is open past the first blob').toBeGreaterThan(0);
+      } finally { db.close(); }
+      btHint(box);
+      const r = runSweep(box);
+      expect(r.code, r.stderr).toBe(0);
+      db = openStoreRO(box);
+      try {
+        expect(btShared(db, v), 'the first blob too: the walk began again at cursor 0').toBeLessThan(lib.beltWidth(v));
+        expect(lib.parseBeltState(btMeta(db, lib.BELT_META))?.v).toBe(lib.BELT_VERSION);
+        expect(lib.parseRederiveState(btMeta(db, 'fts_rederive'))?.belt, 'the completed belt generation is closed').toBeUndefined();
+        expect(btMeta(db, 'fts_reindex_rid'), 'its completion moved the mark').toBe(String((db.prepare('SELECT max(rowid) AS r FROM redact_hashes').get() as { r: number }).r));
+        expect((db.prepare('SELECT n FROM counters WHERE name = ?').get(lib.BELT_COUNTERS.generations) as { n: number } | undefined)?.n,
+          'a store with no state is no event').toBeUndefined();
+      } finally { db.close(); }
+    } finally { fs.rmSync(box.home, { recursive: true, force: true }); }
+  });
+
+  it('a value whose file was unreadable while a row was indexed is no longer covered, and its return opens a belt generation that rewrites that row', async (ctx) => {
+    if (process.getuid?.() === 0) ctx.skip();                       // root reads a 0000 file regardless of its mode
+    const { lib } = await IX.api();
+    const box = IX.newBox('ccrc-hist-belt-d-');
+    try {
+      const v = mint();
+      const file = btSecret(box, 'ret.env', `ZQ_RET=${v}\n`);
+      const p = IX.plantCopy(box.homes[0]!, IX.U, IX.jsonl([IX.user(IX.uuidN(1), null, 'zqbelt before the gap', 1)]));
+      IX.sweepTwice(box);
+      fs.chmodSync(file, 0o000);
+      try {
+        fs.appendFileSync(p, IX.jsonl([IX.user(IX.uuidN(2), IX.uuidN(1), `zqbelt gap abP${v}x end`, 2)]));
+        btHint(box);
+        const r = runSweep(box);
+        expect(r.code, r.stderr).toBe(0);
+      } finally { fs.chmodSync(file, 0o600); }
+      let db = openStoreRO(box);
+      try { expect(btShared(db, v), 'CONTROL: glued by letters, the row indexed in the gap holds the value').toBe(32); } finally { db.close(); }
+      btHint(box);
+      const r = runSweep(box);
+      expect(r.code, r.stderr).toBe(0);
+      db = openStoreRO(box);
+      try {
+        expect(btShared(db, v)).toBeLessThan(lib.beltWidth(v));
+        expect((db.prepare('SELECT n FROM counters WHERE name = ?').get(lib.BELT_COUNTERS.generations) as { n: number } | undefined)?.n,
+          'the return is counted').toBe(1);
+      } finally { db.close(); }
+    } finally { fs.rmSync(box.home, { recursive: true, force: true }); }
+  });
+
+  it('a belt past BELT_GRAMS_MAX counts the units it left to layer 1 in redact_belt_overflow', async () => {
+    const { lib } = await IX.api();
+    const box = IX.newBox('ccrc-hist-belt-f-');
+    try {
+      // 3000 forty-character values: 27 grams each at width 14, 81,000 in all, past BELT_GRAMS_MAX (65,536).
+      btSecret(box, 'many.env', Array.from({ length: 3000 }, (_, i) => `ZQ_MANY_${i}=QP${alnum(37)}7\n`).join(''));
+      IX.plantCopy(box.homes[0]!, IX.U, IX.jsonl([IX.user(IX.uuidN(1), null, 'zqbelt many', 1)]));
+      IX.sweepTwice(box);
+      const db = openStoreRO(box);
+      try {
+        expect((db.prepare('SELECT count(*) AS n FROM redact_hashes').get() as { n: number }).n, 'CONTROL: the values were loaded').toBeGreaterThanOrEqual(3000);
+        expect((db.prepare('SELECT n FROM counters WHERE name = ?').get(lib.BELT_COUNTERS.overflow) as { n: number } | undefined)?.n ?? 0,
+          'the units past the bound are counted').toBeGreaterThan(0);
+      } finally { db.close(); }
+    } finally { fs.rmSync(box.home, { recursive: true, force: true }); }
+  });
+
+  // Finding V13: B1's writeChunk and sidecar path index a blob ALREADY stored whose fts_indexed is 0 (a row of
+  // non-searchable provenance stored it first, or the backfill passed over it, B1's D-4346), moving no id or meta.
+  it('a build without the belt that indexes a blob already stored moves only the index witness, and the next pass rewrites that row', async () => {
+    const { sweep, store, lib } = await IX.api();
+    const S = sweep as unknown as {
+      ftsTextOfBlob(z: Uint8Array, s: boolean, i: unknown, n: number): Promise<{ text: string | null }>;
+      beltWitness(db: DatabaseSync): string;
+      stampBeltWitness(db: DatabaseSync): void;
+    };
+    const box = IX.newBox('ccrc-hist-belt-g-');
+    try {
+      const v = mint();
+      btSecret(box, 'belt.env', `ZQ_BELT=${v}\n`);
+      IX.plantCopy(box.homes[0]!, IX.U, IX.jsonl(btRows(v)));
+      IX.sweepTwice(box);
+      let before = '';
+      const w = store.openWriter(lib.historyPaths(box.home).dbFile);
+      try {
+        // The state such a blob is in when B2 last stamped the store: stored, fts_indexed 0, no index row.
+        const first = Number((w.prepare('SELECT min(blob_id) AS b FROM blobs WHERE fts_indexed = 1 AND z IS NOT NULL').get() as { b: number }).b);
+        w.prepare('DELETE FROM blobs_fts WHERE rowid = ?').run(first);
+        w.prepare('UPDATE blobs SET fts_indexed = 0 WHERE blob_id = ?').run(first);
+        S.stampBeltWitness(w);
+        before = S.beltWitness(w);
+        // What B1's indexBlob then does, with the three layers alone: one index row, and fts_indexed 1.
+        const bare = lib.makePairIndex((w.prepare('SELECT len, sha256 FROM redact_hashes').all() as { len: number; sha256: Uint8Array }[])
+          .map((p) => ({ len: Number(p.len), sha256: Buffer.from(p.sha256).toString('hex') })));
+        const b = w.prepare('SELECT z, raw_len FROM blobs WHERE blob_id = ?').get(first) as { z: Uint8Array; raw_len: number };
+        const t = await S.ftsTextOfBlob(b.z, false, bare, Number(b.raw_len));
+        expect(t.text, 'CONTROL: the blob decodes').not.toBeNull();
+        w.prepare('INSERT INTO blobs_fts (rowid, body) VALUES (?, ?)').run(first, lib.entryIndexText(t.text!, bare));
+        w.prepare('UPDATE blobs SET fts_indexed = 1 WHERE blob_id = ?').run(first);
+      } finally { w.close(); }
+      let db = openStoreRO(box);
+      try {
+        expect(btShared(db, v), 'CONTROL: the row the other build indexed holds the value').toBeGreaterThanOrEqual(lib.beltWidth(v));
+        expect((JSON.parse(S.beltWitness(db)) as unknown[]).slice(0, 5), 'CONTROL: no blob id, pair, mark, re-derivation state or backfill step moved')
+          .toEqual((JSON.parse(before) as unknown[]).slice(0, 5));
+      } finally { db.close(); }
+      btHint(box);
+      const r = runSweep(box);
+      expect(r.code, r.stderr).toBe(0);
+      db = openStoreRO(box);
+      try {
+        expect(btShared(db, v), 'the moved index witness opened a belt generation, which rewrote the row').toBeLessThan(lib.beltWidth(v));
+      } finally { db.close(); }
+    } finally { fs.rmSync(box.home, { recursive: true, force: true }); }
+  });
+
+  // Finding V14: each part of the witness is pinned by the write that moves only it.
+  it('the witness moves with each value a build without the belt writes: a blob, a pair, the mark, the re-derivation state, the backfill step and an index row', async () => {
+    const { sweep, store, lib } = await IX.api();
+    const W = sweep as unknown as { beltWitness(db: DatabaseSync): string };
+    const box = IX.newBox('ccrc-hist-belt-h-');
+    try {
+      IX.plantCopy(box.homes[0]!, IX.U, IX.jsonl([IX.user(IX.uuidN(1), null, 'zqbelt witness parts', 1)]));
+      IX.sweepTwice(box);
+      const w = store.openWriter(lib.historyPaths(box.home).dbFile);
+      try {
+        const upsert = w.prepare('INSERT INTO meta (k, v) VALUES (?, ?) ON CONFLICT (k) DO UPDATE SET v = excluded.v');
+        const first = Number((w.prepare('SELECT min(blob_id) AS b FROM blobs WHERE z IS NOT NULL').get() as { b: number }).b);
+        let added = 0;
+        const moves: [string, () => number][] = [
+          ['a blob it stores, unindexed', () => {
+            const n = Number(w.prepare('INSERT INTO blobs (sha256, codec, z, raw_len, fts_indexed) SELECT ?, codec, z, raw_len, 0 FROM blobs WHERE blob_id = ?')
+              .run(randomBytes(32), first).changes);
+            added = Number((w.prepare('SELECT max(blob_id) AS b FROM blobs').get() as { b: number }).b);
+            return n;
+          }],
+          ['a pair it records', () => Number(w.prepare('INSERT INTO redact_hashes (len, sha256, first_seen_ms) VALUES (?, ?, ?)').run(40, randomBytes(32), 1).changes)],
+          ['the mark its re-derivation moves', () => Number(upsert.run('fts_reindex_rid', '987654').changes)],
+          ['its re-derivation state', () => Number(upsert.run('fts_rederive', '987654 1 2').changes)],
+          ["its backfill's cursor", () => Number(w.prepare("UPDATE derivation_state SET cursor = '987654' WHERE step = 'fts' AND version = 1").run().changes)],
+          ['an index row for a blob already stored', () => Number(w.prepare('INSERT INTO blobs_fts (rowid, body) VALUES (?, ?)').run(added, 'zqwitness parts').changes)],
+        ];
+        for (const [what, move] of moves) {
+          const was = W.beltWitness(w);
+          expect(move(), `CONTROL: ${what} was written`).toBe(1);
+          expect(W.beltWitness(w), what).not.toBe(was);
+        }
+      } finally { w.close(); }
+    } finally { fs.rmSync(box.home, { recursive: true, force: true }); }
+  });
+
+  it('keeps redact_sources when the shim passes no paths after a roster-unreadable pass', async () => {
+    const { lib } = await IX.api();
+    const box = IX.newBox('ccrc-hist-belt-sources-');
+    try {
+      const p = btSecret(box, 'declared.env', `ZQ_DECLARED=${mint()}\n`);
+      expect(runSweep(box, [], { secrets: [p] }).code).toBe(0);
+      expect(runSweep(box, [], { secrets: [p] }).code).toBe(0);
+      let db = openStoreRO(box);
+      try {
+        expect(lib.parseRedactSources(btMeta(db, lib.REDACT_SOURCES_META)), 'CONTROL: declared source paths are recorded')
+          .toEqual([p]);
+      } finally { db.close(); }
+      const r = runSweep(box, ['--roster-unreadable'], { secrets: [], homes: [] });
+      expect(r.code, r.stderr).toBe(0);
+      db = openStoreRO(box);
+      try {
+        expect(lib.parseRedactSources(btMeta(db, lib.REDACT_SOURCES_META))).toEqual([p]);
+      } finally { db.close(); }
+    } finally { fs.rmSync(box.home, { recursive: true, force: true }); }
+  });
+
+  it('admits normalized redact_sources at the shared bound and refuses overflow before it writes', async () => {
+    const { lib } = await IX.api();
+    const box = IX.newBox('ccrc-hist-belt-source-bound-');
+    try {
+      const p = btSecret(box, 'declared.env', `ZQ_DECLARED=${mint()}\n`);
+      const repeats = Array.from({ length: 257 }, () => p);
+      expect(runSweep(box, [], { secrets: repeats }).code, '257 copies of one declared path are one source').toBe(0);
+      let db = openStoreRO(box);
+      try {
+        expect(btMeta(db, lib.REDACT_SOURCES_META), 'only the normalized source list is persisted').toBe(JSON.stringify([p]));
+        expect(lib.parseRedactSources(btMeta(db, lib.REDACT_SOURCES_META))).toEqual([p]);
+      } finally { db.close(); }
+
+      const accepted = [p, ...Array.from({ length: 255 }, (_, i) => path.join(box.home, '.cc-secrets', `source-${i}.env`))];
+      expect(runSweep(box, [], { secrets: accepted }).code, 'the 256-source boundary is accepted').toBe(0);
+      db = openStoreRO(box);
+      let before: { sources: string | undefined; pairs: number; belt: string | undefined };
+      try {
+        before = {
+          sources: btMeta(db, lib.REDACT_SOURCES_META),
+          pairs: Number((db.prepare('SELECT count(*) AS n FROM redact_hashes').get() as { n: number }).n),
+          belt: btMeta(db, lib.BELT_META),
+        };
+        expect(lib.parseRedactSources(before.sources), 'every producer-accepted source list round-trips through the reader').toEqual(accepted);
+      } finally { db.close(); }
+
+      const unchanged = (why: string): void => {
+        db = openStoreRO(box);
+        try {
+          expect({
+            sources: btMeta(db, lib.REDACT_SOURCES_META),
+            pairs: Number((db.prepare('SELECT count(*) AS n FROM redact_hashes').get() as { n: number }).n),
+            belt: btMeta(db, lib.BELT_META),
+          }, why).toEqual(before!);
+        } finally { db.close(); }
+      };
+      const rejected = Array.from({ length: 257 }, (_, i) => path.join(box.home, '.cc-secrets', `overflow-${i}.env`));
+      const overflow = runSweep(box, [], { secrets: rejected });
+      expect(overflow.code, overflow.stderr).toBe(2);
+      unchanged('an over-limit list writes no metadata, pairs, or belt state');
+      const relative = runSweep(box, [], { secrets: [...accepted.slice(0, 255), 'relative.env'] });
+      expect(relative.code, relative.stderr).toBe(2);
+      unchanged('a non-absolute source writes no metadata, pairs, or belt state');
+    } finally { fs.rmSync(box.home, { recursive: true, force: true }); }
+  });
+});
+
+// ── W1-B2 Task 23: a repair rebuild leaves the belt due, and the next tick closes it (spec §6.2 "The belt"; O59) ──────
+describe('O59 (W1-B2 Task 23): a doctor --repair rebuild leaves the belt due, and the next tick closes it', () => {
+  beforeEach((ctx) => { if (process.platform === 'darwin') ctx.skip(); });
+  it('the rebuild records the belt state due; the next scheduled pass runs a belt generation and records BELT_VERSION', async () => {
+    const { sweep, store, lib } = await IX.api();
+    const S = sweep as unknown as {
+      makeIngestCtx(home: string, homes: string[], nowMs: number, ids: object): Record<string, unknown>;
+      secretsStep(db: DatabaseSync, ictx: object, files: string[]): { pairIdx: unknown };
+      newBudget(): object;
+      ftsRebuildJob(db: DatabaseSync, ictx: object, o: { stepVersion: number; budget: object }): Promise<{ done: boolean }>;
+    };
+    const box = IX.newBox('ccrc-hist-belt-r-');
+    try {
+      IX.plantCopy(box.homes[0]!, IX.U, IX.jsonl([IX.user(IX.uuidN(1), null, 'zqrepair one', 1)]));
+      IX.sweepTwice(box);
+      const P = lib.historyPaths(box.home);
+      const ids = { storeId: fs.readFileSync(P.storeId, 'utf8').trim(), writer: fs.readFileSync(P.writer, 'utf8').trim() };
+      const beltOf = (db: DatabaseSync): string | undefined =>
+        (db.prepare('SELECT v FROM meta WHERE k = ?').get(lib.BELT_META) as { v: string } | undefined)?.v;
+      const w = store.openWriter(P.dbFile);
+      try {
+        expect(lib.parseBeltState(beltOf(w))?.v, 'CONTROL: the ticks recorded the belt').toBe(lib.BELT_VERSION);
+        const ictx = S.makeIngestCtx(box.home, box.homes, Date.now(), ids);
+        ictx['pairIdx'] = S.secretsStep(w, ictx, []).pairIdx;
+        ictx['fts'] = true;
+        expect((await S.ftsRebuildJob(w, ictx, { stepVersion: Date.now(), budget: S.newBudget() })).done).toBe(true);
+        expect(lib.parseBeltState(beltOf(w))).toEqual({ v: 0, rids: [], gen: null });
+      } finally { w.close(); }
+      const r = runSweep(box);
+      expect(r.code, r.stderr).toBe(0);
+      const db = openStoreRO(box);
+      try { expect(lib.parseBeltState(beltOf(db))?.v).toBe(lib.BELT_VERSION); } finally { db.close(); }
+    } finally { fs.rmSync(box.home, { recursive: true, force: true }); }
+  }, 120_000);
+});
+
+// ── W1-B2 Task 23: a resumed rebuild re-checks the belt state (spec §6.2 "The belt"; O59) ──
+describe('O59 (W1-B2 Task 23): a resumed rebuild whose belt lacks a unit the belt state records as covered records the belt due', () => {
+  beforeEach((ctx) => { if (process.platform === 'darwin') ctx.skip(); });
+  it('the second pass starts past the first chunk, with the unit unreadable, and still records the belt due', async (ctx) => {
+    if (process.getuid?.() === 0) ctx.skip();                       // root reads a 0000 file regardless of its mode
+    const { sweep, store, lib } = await IX.api();
+    const S = sweep as unknown as {
+      makeIngestCtx(home: string, homes: string[], nowMs: number, ids: object): Record<string, unknown>;
+      secretsStep(db: DatabaseSync, ictx: object, files: string[]): { pairIdx: unknown };
+      newBudget(now?: () => number, limits?: { maxBytes?: number }): object;
+      ftsRebuildJob(db: DatabaseSync, ictx: object, o: { stepVersion: number; budget: object }): Promise<{ done: boolean }>;
+      stampBeltWitness(db: DatabaseSync): void;
+    };
+    const AL = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+    const v = `QP${Array.from(globalThis.crypto.getRandomValues(new Uint8Array(29)), (b) => AL[b % AL.length]!).join('')}7`;
+    const box = IX.newBox('ccrc-hist-belt-rr-');
+    try {
+      const sec = path.join(box.home, '.cc-secrets');
+      fs.mkdirSync(sec, { recursive: true, mode: 0o700 });
+      const file = path.join(sec, 'rr.env');
+      fs.writeFileSync(file, `ZQ_RR=${v}\n`, { mode: 0o600 });
+      IX.plantCopy(box.homes[0]!, IX.U, IX.jsonl([IX.user(IX.uuidN(1), null, `zqresume ab${v}cd one`, 1)]));
+      IX.sweepTwice(box);
+      const P = lib.historyPaths(box.home);
+      const ids = { storeId: fs.readFileSync(P.storeId, 'utf8').trim(), writer: fs.readFileSync(P.writer, 'utf8').trim() };
+      const rawBelt = (): string | undefined => {
+        const db = openStoreRO(box);
+        try { return (db.prepare('SELECT v FROM meta WHERE k = ?').get(lib.BELT_META) as { v: string } | undefined)?.v; } finally { db.close(); }
+      };
+      const covered = rawBelt();
+      expect(lib.parseBeltState(covered)?.v, 'CONTROL: the ticks completed a belt generation').toBe(lib.BELT_VERSION);
+      expect(lib.parseBeltState(covered)?.rids.length, 'CONTROL: recording the one unit covered').toBe(1);
+      /** One repair pass in this process: the pass's own pair index (secretsStep), then one ftsRebuildJob call. */
+      const pass = async (limits?: { maxBytes: number }): Promise<boolean> => {
+        const w = store.openWriter(P.dbFile);
+        try {
+          const ictx = S.makeIngestCtx(box.home, box.homes, Date.now(), ids);
+          ictx['pairIdx'] = S.secretsStep(w, ictx, []).pairIdx;
+          ictx['fts'] = true;
+          const budget = limits === undefined ? S.newBudget() : S.newBudget(Date.now, limits);
+          return (await S.ftsRebuildJob(w, ictx, { stepVersion: Date.now(), budget })).done;
+        } finally { w.close(); }
+      };
+      // Pass 1, every unit loaded: its one chunk takes the store's few blobs, so the phase moves past `blobs`, and the
+      // 1-byte budget ends the call there.
+      expect(await pass({ maxBytes: 1 }), 'CONTROL: the first pass stops after its first chunk').toBe(false);
+      expect(lib.parseBeltState(rawBelt()), 'CONTROL: the first chunk recorded the belt due').toEqual({ v: 0, rids: [], gen: null });
+      // What a tick's belt generation that completes between the two passes leaves: the state the ticks recorded above,
+      // planted back as it was read, so the case does not hang on a tick's budget.
+      const w = store.openWriter(P.dbFile);
+      try { w.prepare('UPDATE meta SET v = ? WHERE k = ?').run(covered!, lib.BELT_META); store.withTx(w, 'NORMAL', () => { S.stampBeltWitness(w); }); } finally { w.close(); }
+      const p = lib.parseBeltState(rawBelt()); const c = lib.parseBeltState(covered)!; expect({ v: p?.v, rids: p?.rids, gen: p?.gen }, 'CONTROL: the state names the unit covered again, stamped as a tick leaves it').toEqual({ v: c.v, rids: c.rids, gen: c.gen });
+      // Pass 2, the unit's file unreadable: it resumes past the start, so the first chunk's record never runs again.
+      fs.chmodSync(file, 0o000);
+      try {
+        let done = false;
+        for (let k = 0; k < 8 && !done; k += 1) done = await pass();
+        expect(done, 'CONTROL: the resumed rebuild completed').toBe(true);
+      } finally { fs.chmodSync(file, 0o600); }
+      expect(lib.parseBeltState(rawBelt()), 'the resumed pass wrote rows without that unit\'s belt: the belt is due')
+        .toEqual({ v: 0, rids: [], gen: null });
+    } finally { fs.rmSync(box.home, { recursive: true, force: true }); }
+  }, 240_000);
+});
+
+// ── W1-B2 Task 23: the rebuild deletes a blob's row before it inserts it (FTS5 merges a second insert of one rowid) ──
+describe('W1-B2 Task 23: a rebuild spread over two passes replaces the row a tick wrote between them, never merges into it', () => {
+  beforeEach((ctx) => { if (process.platform === 'darwin') ctx.skip(); });
+  it('the tail blob, which the first pass did not reach and a tick re-derived, keeps only the second pass\'s text', async () => {
+    const { sweep, store, lib } = await IX.api();
+    const S = sweep as unknown as {
+      makeIngestCtx(home: string, homes: string[], nowMs: number, ids: object): Record<string, unknown>;
+      secretsStep(db: DatabaseSync, ictx: object, files: string[]): { pairIdx: unknown };
+      newBudget(now?: () => number, limits?: { maxBytes?: number }): object;
+      ftsRebuildJob(db: DatabaseSync, ictx: object, o: { stepVersion: number; budget: object }): Promise<{ done: boolean }>;
+    };
+    const AL = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+    /** A value no shape matches (C49's shape): only its pair, learned from a secret file, masks it. */
+    const mint = (): string => `${Array.from(globalThis.crypto.getRandomValues(new Uint8Array(30)), (b) => AL[b % AL.length]!).join('')}7`;
+    const X = mint();   // a secret only from the second rebuild pass on
+    const Y = mint();   // a secret from the tick between the two passes on
+    // More indexable blobs than one rebuild chunk takes (REBUILD_BATCH = 2048), each its own text; the last one holds X and Y.
+    const N = 2100;
+    const rows = Array.from({ length: N }, (_, k) => {
+      const i = k + 1;
+      return IX.user(IX.uuidN(i), i === 1 ? null : IX.uuidN(i - 1), i === N ? `zqdeltail ${X} and ${Y} end` : `zqdelrow ${i}`, i);
+    });
+    const box = IX.newBox('ccrc-hist-t23-del-');
+    try {
+      IX.plantCopy(box.homes[0]!, IX.U, IX.jsonl(rows));
+      const P = lib.historyPaths(box.home);
+      const match = (q: string): number => {
+        const db = openStoreRO(box);
+        try {
+          return (db.prepare('SELECT count(*) AS n FROM blobs_fts WHERE blobs_fts MATCH ?').get(`"${q}"`) as { n: number }).n;
+        } finally { db.close(); }
+      };
+      const tickUntil = (done: () => boolean): void => {
+        for (let k = 0; k < 8 && !done(); k += 1) {
+          const r = runSweep(box);
+          expect(r.code, r.stderr).toBe(0);
+        }
+      };
+      tickUntil(() => fs.existsSync(P.dbFile) && match('zqdeltail') === 1);
+      expect(match('zqdeltail'), 'CONTROL: every row was ingested and indexed').toBe(1);
+      expect(match(X), 'CONTROL: X is no secret yet, so it is a term').toBe(1);
+      const ids = { storeId: fs.readFileSync(P.storeId, 'utf8').trim(), writer: fs.readFileSync(P.writer, 'utf8').trim() };
+      /** One repair pass in this process: the pass's own pair index (secretsStep), then one ftsRebuildJob call. */
+      const pass = async (limits?: { maxBytes: number }): Promise<boolean> => {
+        const w = store.openWriter(P.dbFile);
+        try {
+          const ictx = S.makeIngestCtx(box.home, box.homes, Date.now(), ids);
+          ictx['pairIdx'] = S.secretsStep(w, ictx, []).pairIdx;
+          ictx['fts'] = true;
+          const budget = limits === undefined ? S.newBudget() : S.newBudget(Date.now, limits);
+          return (await S.ftsRebuildJob(w, ictx, { stepVersion: Date.now(), budget })).done;
+        } finally { w.close(); }
+      };
+      // Pass 1: the first chunk (2048 blobs) charges more than one byte, so the budget is spent after it.
+      expect(await pass({ maxBytes: 1 }), 'CONTROL: the first pass stops after one chunk').toBe(false);
+      expect(match('zqdeltail'), 'CONTROL: the first chunk did not reach the tail blob').toBe(0);
+      // Y becomes a secret. The ticks record its pair, and B1's rederiveFts re-derives the tail blob, whose text holds Y,
+      // into the NEW table: delete (nothing there yet), then insert, with X still unknown.
+      const sec = path.join(box.home, '.cc-secrets');
+      fs.mkdirSync(sec, { recursive: true, mode: 0o700 });
+      fs.writeFileSync(path.join(sec, 't23-y.env'), `ZQ_T23_Y=${Y}\n`, { mode: 0o600 });
+      tickUntil(() => match('zqdeltail') === 1);
+      expect(match('zqdeltail'), 'CONTROL: a tick wrote the tail blob\'s row between the two passes').toBe(1);
+      expect(match(X), 'CONTROL: the tick\'s row holds X as a term').toBe(1);
+      expect(match(Y), 'CONTROL: and Y redacted').toBe(0);
+      // X becomes a secret too; the second pass learns its pair and finishes the rebuild.
+      fs.writeFileSync(path.join(sec, 't23-x.env'), `ZQ_T23_X=${X}\n`, { mode: 0o600 });
+      let done = false;
+      for (let k = 0; k < 8 && !done; k += 1) done = await pass();
+      expect(done, 'CONTROL: the rebuild completed').toBe(true);
+      expect(match('zqdeltail'), 'the tail blob keeps its row').toBe(1);
+      expect(match(X), 'the second pass replaced the tick\'s row (deleted first): X is no term').toBe(0);
+    } finally { fs.rmSync(box.home, { recursive: true, force: true }); }
+  }, 240_000);
 });

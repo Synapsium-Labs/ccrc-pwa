@@ -14,10 +14,10 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { DatabaseSync } from 'node:sqlite';
-import { floorThreshold } from '../../ccd/history/lib.mjs';
+import { SCHEMA_VERSION, floorThreshold } from '../../ccd/history/lib.mjs';
 import {
   makeHistoryBox, runSweep, runDriver, preloadOptions, plantSession, plantTranscript, spoolLine, openStoreRO, counters,
-  journalRecords, PRELOADS, SWEEP, type HistoryBox,
+  journalRecords, runCli, PRELOADS, SWEEP, rewindStoreToV1, plantBlobs, owedIndexFacts, type HistoryBox,
 } from './historyHelpers.js';
 
 beforeEach((ctx) => { if (process.platform === 'darwin') ctx.skip(); });
@@ -322,7 +322,10 @@ describe('O46: a hold keeps epochs', () => {
     expect(countOf(box, 'spool_receipts')).toBe(0);
     expect(counter(box, 'migration_refused_low_disk')).toBeGreaterThanOrEqual(7);
     expect(metaOf(box, 'migration')).toBe('refuse-low-disk');
-    // Unpaused: this build's schema, room to spare.
+    // Unpaused, room to spare. The store is still the v1 the seam rewound it to, so the first real pass migrates it (D-5015: this
+    // build's v2 is the owed-row index) and does nothing else; the next one drains.
+    expect(runSweep(box).code).toBe(0);
+    expect(versionOf(paths(box).db)).toBe(SCHEMA_VERSION);
     expect(runSweep(box).code).toBe(0);
     expect(draining(box)).toEqual([]);
     expect(epochsOf(box)).toEqual([
@@ -398,6 +401,37 @@ describe('DM42: no migration without a snapshot', () => {
     expect(countOf(box, 'spool_receipts'), 'a pass that migrates does nothing else but the journal half').toBe(0);
     expect(draining(box)).toHaveLength(1);
     expect(spoolRecs(box).length).toBe(1);
+  });
+
+  it('a REAL v1 store (D-5015): the scheduled pass snapshots to pre-v2.db and migrates to this build, building the owed-row index over the blobs already there', () => {
+    const box = boundBox('ccrc-hist-v2sched-');
+    const p = paths(box);
+    plantBlobs(p.db, { owed: 3, indexed: 2, pruned: 2 });
+    rewindStoreToV1(p.db);
+    const blobsOf = (file: string): unknown[] => {
+      const db = new DatabaseSync(file, { readOnly: true });
+      try { return db.prepare('SELECT blob_id, hex(sha256) AS sha, z, fts_indexed, pruned_ms FROM blobs ORDER BY blob_id').all(); } finally { db.close(); }
+    };
+    const blobs = blobsOf(p.db);
+    const storeId = fs.readFileSync(p.storeId, 'utf8').trim();
+    expect(blobs).toHaveLength(7);
+    expect(versionOf(p.db), 'CONTROL: the store is a v1').toBe(1);
+    expect(owedIndexFacts(p.db).sql, 'CONTROL: and carries no owed-row index').toBeNull();
+    const r = runSweep(box);
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stdout).toMatch(/^history-sweep: migrated$/m);
+    const pre = path.join(p.backups, 'pre-v2.db');
+    expect(names(p.backups), 'the pre-migration snapshot, as runMigration names it').toEqual(['pre-v2.db']);
+    expect(versionOf(pre)).toBe(1);
+    expect(owedIndexFacts(pre).sql, 'the snapshot is the v1 as it was').toBeNull();
+    expect(versionOf(p.db)).toBe(2);
+    expect(versionOf(p.db)).toBe(SCHEMA_VERSION);
+    const facts = owedIndexFacts(p.db);
+    expect(facts.sql).toBe('CREATE INDEX blobs_unindexed ON blobs(blob_id) WHERE fts_indexed = 0 AND z IS NOT NULL');
+    expect(facts.entries, 'built over the 3 owed blobs only: not the 2 indexed, not the 2 tombstones').toBe(3);
+    expect(blobsOf(p.db), 'the data is intact').toEqual(blobs);
+    expect(fs.readFileSync(p.storeId, 'utf8').trim()).toBe(storeId);
+    expect(metaOf(box, 'store_id')).toBe(storeId);
   });
 
   it('a VACUUM INTO killed mid-copy leaves only the .tmp and the attempt marker at user_version 1; the next tick removes the .tmp first and migrates', () => {
@@ -670,7 +704,7 @@ describe('FR2-b (D-4339): a stale pre-migration temp is removed before the room 
     const box = boundBox('ccrc-hist-fr2b3-');
     const a = plant(box, '.pre-v1.db.tmp', 128);
     const b = plant(box, '.pre-v7.db.tmp-journal', 128);
-    const keep = [plant(box, 'pre-v1.db', 64), plant(box, '.pre-v2.attempt', 2), plant(box, '20261005T000000Z.db', 64)];
+    const keep = [plant(box, 'pre-v1.db', 64), plant(box, `.pre-v${SCHEMA_VERSION + 1}.attempt`, 2), plant(box, '20261005T000000Z.db', 64)];
     expect(runSweep(box).code).toBe(0);
     expect(fs.existsSync(a) || fs.existsSync(b)).toBe(false);
     expect(keep.every((f) => fs.existsSync(f)), 'a finished snapshot, an attempt marker and an operator backup are not temps').toBe(true);
@@ -700,5 +734,300 @@ describe('FR2-b (D-4339): a stale pre-migration temp is removed before the room 
     const r = runSweep(box);
     expect(r.code, r.stderr).toBe(0);
     expect(r.stderr).not.toMatch(/internal error/);
+  });
+});
+
+describe('HI2 H-162 (D-4599): a bound store at user_version 0 is refused by the writer as the reader refuses it', () => {
+  it('one pass prints store-schema-missing and exits 5: no pre-v1 snapshot, no attempt marker, the version untouched', () => {
+    const box = boundBox('ccrc-hist-hi2-h162-');
+    const p = paths(box);
+    const w = new DatabaseSync(p.db);
+    try { w.exec('PRAGMA user_version = 0'); } finally { w.close(); }
+    spoolLine(box, ID, startup(U1, { reg: U1 }));
+    const r = runSweep(box);
+    expect(r.stdout, r.stderr).toMatch(/^history-sweep: store-schema-missing$/m);
+    expect(r.code, r.stderr).toBe(5);
+    expect(names(p.backups).filter((n) => /pre-v1/.test(n)), 'no snapshot of a store no migration may touch').toEqual([]);
+    expect(versionOf(p.db), 'the pass wrote nothing to the store').toBe(0);
+    expect(r.stderr).not.toMatch(/internal error/);
+    expect(spoolRecs(box).length, 'the journal half still ran: the spool line is held in the journal').toBe(1);
+  });
+});
+
+// D-5016 (history-doctor-reads-a-live-pass): the scheduled pass writes `~/.ccrc/history/pass` (`<pid> <start_ms> <proc_start> <boot_id>`) when it
+// starts, before any long step, and removes it when it ends on every exit path; doctor reads the marker through status. The pass is seen from
+// INSIDE by the driver's snapshotAtFirstStatfs: its first statfs probe is the first long step.
+describe('D-5016 the scheduled pass marker', () => {
+  const MIN = 60_000;
+  const passFile = (box: HistoryBox): string => path.join(paths(box).root, 'pass');
+  const seen = (box: HistoryBox, name: string): string => fs.readFileSync(path.join(box.home, name), 'utf8');
+  const snap = [{ rel: path.join('.ccrc', 'history', 'pass'), to: 'pass.seen' }];
+  const BOOT = fs.existsSync('/proc/sys/kernel/random/boot_id') ? fs.readFileSync('/proc/sys/kernel/random/boot_id', 'utf8').trim() : null;
+
+  it('(e) the marker stands while the pass runs (this pass\'s own pid, its start, its identity) and is gone when the pass ends', async () => {
+    const lib = await import('../../ccd/history/lib.mjs');
+    const box = boundBox('ccrc-hist-pass-run-');
+    const before = Date.now();
+    expect(fs.existsSync(passFile(box)), 'no marker between passes').toBe(false);
+    const r = runDriver(box, { snapshotAtFirstStatfs: snap });
+    expect(r.code, r.stderr).toBe(0);
+    const m = lib.parsePassMarker(seen(box, 'pass.seen'));
+    expect(m, `a marker in the grammar was standing mid-pass: ${JSON.stringify(seen(box, 'pass.seen'))}`).not.toBeNull();
+    expect(m!.pid, 'the pass\'s own pid, never the runner\'s').toBeGreaterThan(0);
+    expect(m!.pid).not.toBe(process.pid);
+    expect(m!.startMs).toBeGreaterThanOrEqual(before - MIN);
+    expect(m!.startMs).toBeLessThanOrEqual(Date.now());
+    expect(m!.bootId).toBe(BOOT);
+    expect(m!.procStart).toMatch(/^[0-9]+$/);
+    expect(fs.existsSync(passFile(box)), 'removed when the pass ended').toBe(false);
+    expect(names(paths(box).root).filter((n) => n.startsWith('pass')), 'no temp left beside it').toEqual([]);
+  });
+
+  it('(e) the marker is private (0600) and a stale one is overwritten: a killed pass\'s marker and a planted directory never keep the new pass from writing', () => {
+    const box = boundBox('ccrc-hist-pass-stale-');
+    fs.writeFileSync(passFile(box), `4242 1 2 ${BOOT ?? '0b1c2d3e-4f5a-4b6c-8d7e-9f0a1b2c3d4e'}\n`);     // what a killed pass leaves
+    let r = runDriver(box, { snapshotAtFirstStatfs: snap });
+    expect(r.code, r.stderr).toBe(0);
+    expect(seen(box, 'pass.seen')).not.toContain('4242 1 2 ');
+    expect(fs.existsSync(passFile(box))).toBe(false);
+    fs.mkdirSync(passFile(box));                                                                     // a planted directory
+    r = runDriver(box, { snapshotAtFirstStatfs: snap });
+    expect(r.code, r.stderr).toBe(0);
+    expect(seen(box, 'pass.seen'), 'written over a planted directory').toMatch(/^[1-9][0-9]* [0-9]+ [0-9]+ [0-9a-f-]{36}\n$/);
+    expect(fs.existsSync(passFile(box)), 'the empty directory was removed by type, and the marker with it').toBe(false);
+    r = runDriver(box, { snapshotAtFirstStatfs: snap });
+    expect(r.code, r.stderr).toBe(0);
+    expect(seen(box, 'pass.seen.mode'), 'private to the user').toBe('600');
+  });
+
+  it('(e) the marker is removed on a pass that holds early (a store that does not answer) and on one whose tick throws', () => {
+    const box = boundBox('ccrc-hist-pass-exits-');
+    const hung = runDriver(box, { snapshotAtFirstStatfs: snap, afterFirstStatfs: [], hangAfterAppend: true });
+    expect(hung.stdout, hung.stderr).toMatch(/history-sweep: store-unreachable/);
+    expect(seen(box, 'pass.seen'), 'the marker stood when the probe was made').toMatch(/^[1-9][0-9]* /);
+    expect(fs.existsSync(passFile(box)), 'a held pass removes its marker').toBe(false);
+    const thrown = runDriver(box, { snapshotAtFirstStatfs: snap, throwTimesAfterFirstStatfs: { fn: 'readdirSync', needle: '/history/spool', code: 'EIO', times: 1000 } });
+    expect(thrown.code, `the throw ends the pass: ${thrown.stderr}`).not.toBe(0);
+    expect(seen(box, 'pass.seen')).toMatch(/^[1-9][0-9]* /);
+    expect(fs.existsSync(passFile(box)), 'a pass that threw removes its marker').toBe(false);
+  });
+});
+
+// D-5026 (history-pass-death-record; fix round 2, review 462 F1): the carrier kills a scheduled pass at 10 min and leaves its marker; the
+// next pass FINDS it, records the death in `~/.ccrc/history/pass-died` BEFORE it overwrites the marker, and only a tick written by a pass
+// that ran removes the record. A pass that cannot write the record leaves the dead marker standing and runs without a marker of its own.
+// A "pass with no tick" here is one whose tick throws (the existing seam: readdirSync on the spool after the first statfs), which ends
+// the pass after its marker write and before its ticks row. A throw ends through the pass's `finally` (it leaves no marker) and records
+// ITS OWN death (batch A2, item 3), on top of any death it found, so a case that wants the record the FINDER wrote reads it mid-pass
+// (`midRecord`: the file copied at the first statfs, after the finder's write and before the throw).
+describe('D-5026 the pass death record', () => {
+  const root = (box: HistoryBox): string => paths(box).root;
+  const passFile = (box: HistoryBox): string => path.join(root(box), 'pass');
+  const diedFile = (box: HistoryBox): string => path.join(root(box), 'pass-died');
+  const BOOT = fs.existsSync('/proc/sys/kernel/random/boot_id') ? fs.readFileSync('/proc/sys/kernel/random/boot_id', 'utf8').trim() : null;
+  const noTick = { throwTimesAfterFirstStatfs: { fn: 'readdirSync', needle: '/history/spool', code: 'EIO', times: 1000 } };
+  /** What a killed pass leaves: a marker in the grammar whose identity measures nothing now (a proc_start no process has). */
+  const plantDead = (box: HistoryBox, pid: number, startMs: number): string => {
+    const text = `${pid} ${startMs} 2 ${BOOT ?? '0b1c2d3e-4f5a-4b6c-8d7e-9f0a1b2c3d4e'}\n`;
+    fs.writeFileSync(passFile(box), text);
+    return text;
+  };
+  /** A bound store whose tick rows are 30 min old: a pass that started 5 min ago and wrote none is after the last tick. */
+  const agedBox = (prefix: string): HistoryBox => {
+    const box = boundBox(prefix);
+    const db = new DatabaseSync(paths(box).db);
+    try { db.prepare('UPDATE ticks SET ts_ms = ts_ms - ?').run(30 * MIN); } finally { db.close(); }
+    return box;
+  };
+  const status = (box: HistoryBox): { died: unknown; fail: Array<{ word: string; detail: string }> } => {
+    const r = runCli(box, ['status', '--json']);
+    expect(r.code, r.stderr).toBe(0);
+    return { died: r.json!['pass_died'], fail: (r.json!['health'] as { fail: Array<{ word: string; detail: string }> }).fail };
+  };
+  const recordOf = (box: HistoryBox): Record<string, unknown> => JSON.parse(fs.readFileSync(diedFile(box), 'utf8')) as Record<string, unknown>;
+  /** A pass with no tick that also copies the record and the marker at the first statfs (the pass has found the dead marker, recorded it,
+   *  and written its own marker; its throw has not happened yet). */
+  const noTickSeen = {
+    ...noTick,
+    snapshotAtFirstStatfs: [
+      { rel: path.join('.ccrc', 'history', 'pass-died'), to: 'died.seen' },
+      { rel: path.join('.ccrc', 'history', 'pass'), to: 'pass.own' },
+    ],
+  };
+  const midRecord = (box: HistoryBox): Record<string, unknown> => JSON.parse(fs.readFileSync(path.join(box.home, 'died.seen'), 'utf8')) as Record<string, unknown>;
+  const ownMarker = (box: HistoryBox): { pid: number; startMs: number } => {
+    const [pid, startMs] = fs.readFileSync(path.join(box.home, 'pass.own'), 'utf8').trim().split(/\s+/).map(Number);
+    return { pid: pid!, startMs: startMs! };
+  };
+  /** A pass that returns normally and writes no tick: its migration is refused for room (a held pass). It writes its marker and removes it. */
+  const heldPass = (box: HistoryBox): ReturnType<typeof runDriver> =>
+    runDriver(box, { extraMigrations: [V2] }, [], { env: { HISTORY_TEST_STATFS: `${THRESHOLD}:${FS_BYTES}` } });
+
+  it('pin 5: the record survives the next pass\'s marker write: a dead marker, a pass that writes no tick, and the record the finder wrote holds the dead pass\'s pid and start; status and doctor FAIL on it', () => {
+    const box = agedBox('ccrc-hist-d5026-survive-');
+    const start = Date.now() - 5 * MIN;
+    expect(fs.existsSync(diedFile(box)), 'CONTROL: no record before').toBe(false);
+    plantDead(box, 4242, start);
+    const r = runDriver(box, noTickSeen);
+    expect(r.code, 'the pass met its injected throw before its tick').not.toBe(0);
+    const seen = midRecord(box);
+    expect(seen, 'the finder wrote the dead pass\'s record before it overwrote the marker').toMatchObject({ pid: 4242, start_ms: start, count: 1 });
+    expect(seen['found_ms'], 'the finder\'s own start').toBeGreaterThan(start);
+    expect(fs.readFileSync(path.join(box.home, 'died.seen.mode'), 'utf8'), 'private').toBe('600');
+    // The throw then recorded the finder's own death on top: its pid and start (its own marker's), the count one higher.
+    const own = ownMarker(box);
+    expect(own.pid).not.toBe(4242);
+    const rec = recordOf(box);
+    expect(rec).toMatchObject({ pid: own.pid, start_ms: own.startMs, count: 2 });
+    expect(mode(diedFile(box)).toString(8), 'private').toBe('600');
+    expect(fs.existsSync(passFile(box)), 'the pass removed the marker it wrote').toBe(false);
+    expect(names(root(box)).filter((n) => n.startsWith('pass-died.tmp')), 'no temp left').toEqual([]);
+    const st = status(box);
+    expect(st.died).toMatchObject({ pid: own.pid, start_ms: own.startMs, count: 2 });
+    expect(st.fail.map((i) => i.word)).toEqual(['tick-stale']);
+    expect(st.fail[0]!.detail).toContain('the sweep has recorded 2 scheduled pass(es) that ended without writing a tick since its last clear');
+    expect(st.fail[0]!.detail).toContain(`pid ${own.pid}`);
+  });
+
+  it('the count rises by one for each death found while a record stands, and its start is the newest dead pass\'s', () => {
+    const box = agedBox('ccrc-hist-d5026-count-');
+    const first = Date.now() - 6 * MIN;
+    plantDead(box, 4242, first);
+    runDriver(box, noTickSeen);
+    expect(midRecord(box)).toMatchObject({ pid: 4242, start_ms: first, count: 1 });
+    const second = Date.now() - 4 * MIN;
+    plantDead(box, 4343, second);
+    runDriver(box, noTickSeen);
+    // The first pass's throw made it two; the second finder makes three, and its own throw four.
+    expect(midRecord(box)).toMatchObject({ pid: 4343, start_ms: second, count: 3 });
+    expect(recordOf(box)['count']).toBe(4);
+    expect(status(box).fail[0]!.detail).toContain('the sweep has recorded 4 scheduled pass(es) that ended without writing a tick');
+  });
+
+  it('a marker that cannot be parsed or read is a death of an unknown pass: pid null, its start bounded by the finder\'s', () => {
+    const box = agedBox('ccrc-hist-d5026-unknown-');
+    fs.writeFileSync(passFile(box), 'garbage\n');
+    const r = runDriver(box, noTickSeen);
+    expect(r.code).not.toBe(0);
+    const rec = midRecord(box);
+    expect(rec).toMatchObject({ pid: null, count: 1 });
+    expect(rec['start_ms']).toBe(rec['found_ms']);
+    fs.rmSync(diedFile(box));
+    fs.mkdirSync(passFile(box));                                              // a planted directory is not an absent marker
+    runDriver(box, noTickSeen);
+    expect(midRecord(box)).toMatchObject({ pid: null, count: 1 });
+  });
+
+  it('no record is written when no marker stands, or when the marker is a LIVE pass (it cannot be one under the lock, but is no death): a pass that returns normally records nothing', () => {
+    const box = agedBox('ccrc-hist-d5026-none-');
+    const held = heldPass(box);
+    expect(held.stdout, 'CONTROL: the pass was held, and returned').toMatch(/^history-sweep: migration-refused$/m);
+    expect(fs.existsSync(passFile(box)), 'the held pass ended through its finally and left no marker to find').toBe(false);
+    expect(fs.existsSync(diedFile(box)), 'and a pass that returns normally records nothing about itself').toBe(false);
+    heldPass(box);
+    expect(fs.existsSync(diedFile(box)), 'so the next pass found no marker and recorded no death').toBe(false);
+    // The marker of THIS runner's own pid with its measured identity: a live pass.
+    const lib = fs.readFileSync(`/proc/${process.pid}/stat`, 'utf8');
+    const procStart = lib.slice(lib.lastIndexOf(')') + 1).trim().split(/\s+/)[19]!;
+    fs.writeFileSync(passFile(box), `${process.pid} ${Date.now() - MIN} ${procStart} ${BOOT ?? '0b1c2d3e-4f5a-4b6c-8d7e-9f0a1b2c3d4e'}\n`);
+    heldPass(box);
+    expect(fs.existsSync(diedFile(box)), 'a live pass\'s marker is no death').toBe(false);
+  });
+
+  it('pin 9: a pass that ends by an exception records its OWN death (its pid and its own start, found now), the next pass that ticks clears it, and the status verdict FAILs meanwhile', () => {
+    const box = agedBox('ccrc-hist-d5026-threw-');
+    expect(fs.existsSync(passFile(box)), 'CONTROL: no marker for the next pass to find').toBe(false);
+    const before = Date.now();
+    const r = runDriver(box, noTickSeen);
+    expect(r.code, 'the exception is rethrown: the exit is what it was').not.toBe(0);
+    expect(fs.existsSync(diedFile(box)), 'the record exists, and nothing was found for a finder to write: it is the throw\'s').toBe(true);
+    const own = ownMarker(box);
+    const rec = recordOf(box);
+    expect(rec).toMatchObject({ pid: own.pid, start_ms: own.startMs, count: 1 });
+    expect(rec['found_ms'] as number, 'found_ms is the dying pass\'s clock').toBeGreaterThanOrEqual(own.startMs);
+    expect(rec['found_ms'] as number).toBeGreaterThanOrEqual(before);
+    expect(fs.existsSync(passFile(box)), 'its finally removed its marker: nothing for the next pass to find').toBe(false);
+    expect(mode(diedFile(box)).toString(8), 'private').toBe('600');
+    const st = status(box);
+    expect(st.died).toMatchObject({ pid: own.pid, count: 1 });
+    expect(st.fail.map((i) => i.word)).toEqual(['tick-stale']);
+    expect(st.fail[0]!.detail).toContain(`pid ${own.pid}`);
+    expect(st.fail[0]!.detail).toContain('the sweep has recorded 1 scheduled pass(es) that ended without writing a tick since its last clear');
+    const ticks = countOf(box, 'ticks');
+    expect(runSweep(box).code).toBe(0);
+    expect(countOf(box, 'ticks'), 'the next pass ticked').toBe(ticks + 1);
+    expect(fs.existsSync(diedFile(box)), 'and cleared the record').toBe(false);
+    expect(status(box).fail).toEqual([]);
+  });
+
+  it('pin 9b (F4): a thrown pass writes its record BEFORE its finally removes its marker: killed right after that removal, the record stands, names this pass and the marker is gone, and status FAILs on it', () => {
+    const box = agedBox('ccrc-hist-d5026-order-');
+    // The kill lands just AFTER the finally's `unlinkSync` of the marker, the first step that follows the catch's record write. The needle
+    // `/history/pass` also matches `pass.tmp.<pid>` and `pass-died.tmp.<pid>` (writeFileAtomic removes its temp first, by `unlinkSync`), so
+    // the nth is a COUNT, measured with a logging preload and not assumed. This throwing pass's unlinks of a path holding that needle, in order:
+    //   1  writePassMarker's removeEntry(P.pass)            ENOENT (no marker for it to find)
+    //   2  writeFileAtomic's removal of pass.tmp.<pid>      ENOENT
+    //   3  writeFileAtomic's removal of pass-died.tmp.<pid> ENOENT, the catch's record write
+    //   4  removePassMarker's removeEntry(P.pass)           ok: the finally's removal, the call this case kills after
+    // The seam's `:after` kill runs only when the call returns, and calls 1-3 throw ENOENT (removeEntry swallows it), so only the 4th can fire.
+    // Under M11b (the record's write moved into the finally, after the removal) the finally's removal is the 3rd call and the record's
+    // temp removal the 4th, which throws: no kill fires, the pass ends by its rethrown error with an exit code, and the first assertion reds.
+    const r = runDriver(box, noTickSeen, [], { preloads: [PRELOADS.statfs, PRELOADS.faults], env: { HISTORY_TEST_KILL: 'unlinkSync:/history/pass:4:after' } });
+    expect(r.signal, 'the pass was killed right after its finally removed the marker (no exit code, no handler run); a pass that ends with a code did not remove it first, or not before writing the record').toBe('SIGKILL');
+    expect(r.code).toBeNull();
+    const own = ownMarker(box);
+    expect(fs.existsSync(diedFile(box)), 'the record was written before the marker went').toBe(true);
+    expect(recordOf(box)).toMatchObject({ pid: own.pid, start_ms: own.startMs, count: 1 });
+    expect(fs.existsSync(passFile(box)), 'the marker is gone: the kill came after the finally\'s removal').toBe(false);
+    const st = status(box);
+    expect(st.died).toMatchObject({ pid: own.pid, count: 1 });
+    expect(st.fail.map((i) => i.word)).toEqual(['tick-stale']);
+    expect(st.fail[0]!.detail).toContain(`pid ${own.pid}`);
+    expect(st.fail[0]!.detail).toContain('the sweep has recorded 1 scheduled pass(es) that ended without writing a tick since its last clear');
+  });
+
+  it('pin 6: the record clears on the next ran pass\'s tick: after it the record is gone, a tick row exists, and no death FAIL is given', () => {
+    const box = agedBox('ccrc-hist-d5026-clear-');
+    plantDead(box, 4242, Date.now() - 5 * MIN);
+    runDriver(box, noTick);
+    expect(fs.existsSync(diedFile(box)), 'CONTROL: the record stands after a pass with no tick').toBe(true);
+    const ticks = countOf(box, 'ticks');
+    const r = runSweep(box);
+    expect(r.code, r.stderr).toBe(0);
+    expect(countOf(box, 'ticks'), 'the pass wrote its tick').toBe(ticks + 1);
+    expect(fs.existsSync(diedFile(box)), 'and removed the record').toBe(false);
+    const st = status(box);
+    expect(st.died).toBeNull();
+    expect(st.fail).toEqual([]);
+  });
+
+  it('a record that outlives its removal (the removal cut off) is closed by the comparison alone: its start is at or before the last tick', () => {
+    const box = boundBox('ccrc-hist-d5026-stale-record-');
+    const tick = q<{ ts_ms: number }>(box, 'SELECT max(ts_ms) AS ts_ms FROM ticks')[0]!.ts_ms;
+    fs.writeFileSync(diedFile(box), `${JSON.stringify({ pid: 4242, start_ms: tick - 1, found_ms: tick, count: 1 })}\n`, { mode: 0o600 });
+    const st = status(box);
+    expect(st.died).toMatchObject({ count: 1 });
+    expect(st.fail, 'a pass that ticked has a ticks row at or after its start').toEqual([]);
+  });
+
+  it('pin 7: a failed record write keeps the dead marker and the pass writes no marker of its own (and removes none); doctor still FAILs on the dead marker', () => {
+    const box = agedBox('ccrc-hist-d5026-failed-write-');
+    const start = Date.now() - 5 * MIN;
+    const planted = plantDead(box, 4242, start);
+    const r = runDriver(box, {
+      ...noTick,
+      snapshotAtFirstStatfs: [{ rel: path.join('.ccrc', 'history', 'pass'), to: 'pass.seen' }],
+      throwTimesAtStart: { fn: 'renameSync', needle: 'pass-died', code: 'EIO', times: 1000 },
+    });
+    expect(r.code).not.toBe(0);
+    expect(fs.existsSync(diedFile(box)), 'the record could not be written').toBe(false);
+    expect(fs.readFileSync(path.join(box.home, 'pass.seen'), 'utf8'), 'mid-pass the dead marker still stood: the pass wrote none of its own').toBe(planted);
+    expect(fs.readFileSync(passFile(box), 'utf8'), 'and its finally removed nothing it did not write').toBe(planted);
+    expect(names(root(box)).filter((n) => n.includes('.tmp.')), 'no temp left').toEqual([]);
+    const st = status(box);
+    expect(st.died).toBeNull();
+    expect(st.fail.map((i) => i.word)).toEqual(['tick-stale']);
+    expect(st.fail[0]!.detail).toContain('ended without writing a tick');
+    expect(st.fail[0]!.detail).toContain('pid 4242');
   });
 });
