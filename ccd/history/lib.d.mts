@@ -859,3 +859,16 @@ export const COUNTER_STANDING: Readonly<Record<string, 'item' | 'pass'>>;
 export function decideCounterResets(counters: Readonly<Record<string, number>>, standing: Readonly<Record<string, number | null>>):
   Array<{ name: string; n: number }>;
 export function decideIntegrity(rows: readonly string[]): { verdict: 'ok' | 'index' | 'store'; rows: string[] };
+
+// --- W1-B3 Task 1: the card line's vocabulary, paths and line (spec §8.6, §5.1, §5.2, §9.4)
+export const CARD_DIR: 'card';
+export const SCOPE_DIR: 'scope';
+export const CARD_LINE_MAX: 512;
+export const CARD_DESCRIBE_CMD: '~/.local/bin/ccrc history describe';
+export const CARD_LINE_PATTERN: string;
+export const CARD_LINE_RE: RegExp;
+export const PURGED_FILES_GRACE_MS: number;
+export function cardDirOf(home: string, id: string): string;
+export function cardFileOf(home: string, id: string, uuid: string): string;
+export function scopeMarkerOf(home: string, id: string): string;
+export function cardLine(i: { leaf: string; parent?: string | null }): string;

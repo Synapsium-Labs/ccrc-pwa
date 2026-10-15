@@ -7709,3 +7709,62 @@ export function decideIntegrity(rows) {
   if (bad.length > 0 && bad.every((r) => INDEX_DAMAGE_RE.test(r))) return { verdict: 'index', rows: bad };
   return { verdict: 'store', rows: bad.length > 0 ? bad : rows };
 }
+
+// ===========================================================================
+// The card line (spec 2026-10-05 §8.6, §5.1, §5.2, §9.4; W1-B3 plan Tasks 1-3). Pure. The sweep's card.mjs (L4)
+// measures the store, the registry and the history root's files and hands the facts in; the hook spells the
+// grammar, the cap and the two directory names once more in bash, bound to these by single-definition.test.ts
+// (W1-B3 Task 11). Every id that becomes a path passes idOk first, and every uuid UUID_RE
+// (D-4170).
+// ===========================================================================
+
+/** `~/.ccrc/history/card/<id>/<uuid>.txt`: the sweep's one-line predictions (§5.2, §8.6). */
+export const CARD_DIR = 'card';
+/** `~/.ccrc/history/scope/<id>`: the PreCompact scope markers the hook writes (§5.1). */
+export const SCOPE_DIR = 'scope';
+/** The longest card line the hook serves, in characters: it reads 513 and refuses more than 512 (§8.6, C21), and
+ *  the render reserves CARD_LINE_MAX + 1 (C38). The grammar's own longest line is 145 characters; the cap is the
+ *  spec's and is not tightened here. D-4736 (history-card-fold-and-reserve) */
+export const CARD_LINE_MAX = 512;
+/** The command the card names, as the grammar spells it: the literal `~/.local/bin/ccrc`, which bash expands at the
+ *  start of a word. B2's `next:` lines keep their own spelling, HISTORY_CMD. B2's D-4682 (history-skill-literal-path) */
+export const CARD_DESCRIBE_CMD = '~/.local/bin/ccrc history describe';
+/** The card line's one positive grammar (§8.6), character for character, built from CARD_PREFIX and
+ *  CARD_DESCRIBE_CMD so neither is spelled twice. The ellipsis and the middle dot are U+2026 and U+00B7, written as
+ *  themselves. */
+export const CARD_LINE_PATTERN = `^${escapeRe(CARD_PREFIX)}node L[0-9a-f]{6,20}… \\(this compaction\\)( · parent N[0-9a-f]{6,20}…)? · ${escapeRe(CARD_DESCRIBE_CMD)} L[0-9a-f]{6,20}$`;
+export const CARD_LINE_RE = new RegExp(CARD_LINE_PATTERN);
+/** How long a purged session's scope marker and card directory stay (§9.4: "the files of purged sessions after
+ *  7 days"). */
+export const PURGED_FILES_GRACE_MS = 7 * 24 * 60 * 60 * 1000;
+
+function cardIdOk(fn, id) {
+  if (!idOk(id)) throw new TypeError(`${fn}: not a session id: ${JSON.stringify(id)}`);
+}
+
+/** `~/.ccrc/history/card/<id>`. The id passes idOk before the path exists (C66's shape). */
+export function cardDirOf(home, id) {
+  cardIdOk('cardDirOf', id);
+  return `${historyPaths(home).root}/${CARD_DIR}/${id}`;
+}
+
+/** `~/.ccrc/history/card/<id>/<uuid>.txt`: one session's prediction, keyed on the uuid the hook reads as `psid`. */
+export function cardFileOf(home, id, uuid) {
+  if (typeof uuid !== 'string' || !UUID_RE.test(uuid)) throw new TypeError(`cardFileOf: not a session uuid: ${JSON.stringify(uuid)}`);
+  return `${cardDirOf(home, id)}/${uuid}.txt`;
+}
+
+/** `~/.ccrc/history/scope/<id>`: one session's PreCompact scope marker (§5.1). */
+export function scopeMarkerOf(home, id) {
+  cardIdOk('scopeMarkerOf', id);
+  return `${historyPaths(home).root}/${SCOPE_DIR}/${id}`;
+}
+
+/** The card line for a leaf display prefix and, when one is named, a parent's (§8.6 Shape). Only a line the grammar
+ *  takes is ever answered: a leaf that is not `L` plus 6 to 20 lowercase hex, a parent that is not `N` plus the
+ *  same, or anything else the grammar refuses throws, so no caller can write a line the hook would refuse. */
+export function cardLine({ leaf, parent = null }) {
+  const line = `${CARD_PREFIX}node ${String(leaf)}… (this compaction)${parent === null ? '' : ` · parent ${String(parent)}…`} · ${CARD_DESCRIBE_CMD} ${String(leaf)}`;
+  if (!CARD_LINE_RE.test(line)) throw new TypeError(`cardLine: not a card line: ${JSON.stringify(line)}`);
+  return line;
+}
