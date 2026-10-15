@@ -1976,7 +1976,8 @@ describe('docs draft snapshot (docs W1a Task 14)', () => {
       expect(o.entries).toBe(1);
     }, 60000);
 
-    it('a new draft whose name the rel grammar refuses is counted in unlisted by its reason, and never a row', () => {
+    // APFS rejects non-UTF-8 names (EILSEQ); the Linux run covers this.
+    it.skipIf(process.platform === 'darwin')('a new draft whose name the rel grammar refuses is counted in unlisted by its reason, and never a row', () => {
       const { wt, head } = t14holder({ [`${T14_S}a.md`]: 'aaaa\n' });
       const dir = Buffer.from(t14path.join(wt, T14_S));
       t14fs.writeFileSync(Buffer.concat([dir, Buffer.from([0x62, 0xff, 0x2e, 0x6d, 0x64])]), 'bad utf-8\n');

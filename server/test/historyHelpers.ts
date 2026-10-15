@@ -6,7 +6,7 @@
 // ISOLATION, in three layers:
 //  - HOME is a mkTmp fixture; the shim and the sweep read only $HOME paths.
 //  - the env is SCRUBBED of the operator's own Claude Code and tmux state
-//    (CLAUDECODE, CLAUDE_CONFIG_DIR, TMUX, TMUX_PANE, every CCRC_RECALL_*),
+//    (CLAUDECODE, CLAUDE_CONFIG_DIR, TMUX, TMUX_PANE, CCRC_SESSION_GENERATION, every CCRC_RECALL_*),
 //    which a spawn would otherwise inherit from the session running the suite;
 //  - it is ccrcContainedEnv's (wave 9): gh, tmux, ssh, scp, curl and the
 //    service managers poisoned in <home>/.local/bin, first on PATH, the user
@@ -18,7 +18,7 @@ import { beforeEach } from 'vitest';
 import fs from 'node:fs';
 import { syncBuiltinESMExports } from 'node:module';
 import path from 'node:path';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
 import { DatabaseSync } from 'node:sqlite';
 import { mkTmp } from './tmpHelpers.js';
@@ -28,6 +28,7 @@ import { ccrcContainedEnv } from './ccrcContainment.js';
 import { assertNoRealTool } from './containedTools.js';
 import { parseRoster } from '../../shared/roster.js';
 import { historyPaths } from '../../ccd/history/lib.mjs';
+import { createStore, V2_INDEXES } from '../../ccd/history/store.mjs';
 
 export const REPO = path.resolve(__dirname, '..', '..');
 export const SWEEP = path.join(REPO, 'ccd', 'history', 'sweep.mjs');
@@ -37,6 +38,7 @@ export const PRELOADS = {
   statfs: path.join(__dirname, 'fixtures', 'history', 'preload-statfs.mjs'),
   faults: path.join(__dirname, 'fixtures', 'history', 'preload-faults.mjs'),
   readspy: path.join(__dirname, 'fixtures', 'history', 'preload-readspy.mjs'),
+  throwwrite: path.join(__dirname, 'fixtures', 'history', 'preload-throwwrite.mjs'),
 } as const;
 
 /** Linux-only spawns skip on darwin (O24; the graph-sweep.test.ts:12
@@ -49,7 +51,7 @@ export function skipOnDarwin(): void {
 export function scrubbedEnv(base: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
   const e: NodeJS.ProcessEnv = { ...base };
   for (const k of Object.keys(e)) {
-    if (k === 'CLAUDECODE' || k === 'CLAUDE_CONFIG_DIR' || k === 'TMUX' || k === 'TMUX_PANE'
+    if (k === 'CLAUDECODE' || k === 'CLAUDE_CONFIG_DIR' || k === 'TMUX' || k === 'TMUX_PANE' || k === 'CCRC_SESSION_GENERATION'
       || k.startsWith('CCRC_RECALL_') || k.startsWith('HISTORY_TEST_') || k === 'NODE_OPTIONS') delete e[k];
   }
   return e;
@@ -198,6 +200,49 @@ export function openStoreRO(box: HistoryBox): DatabaseSync {
   return new DatabaseSync(historyPaths(box.home).dbFile, { readOnly: true });
 }
 
+/** Take a store the real code just made back to schema v1: drop every index schema v2 made (store.mjs's V2_INDEXES, derived from
+ *  V2's own text, so a later index in V2 is rewound with no list to edit here) and stamp user_version 1. What is left is the store
+ *  B1 shipped, so the writer's migration path (v1 -> this build's v2) runs on it for real. The caller holds no open connection to
+ *  the file. fixtures/history/run-pass.mjs rewinds from the same list. */
+export function rewindStoreToV1(dbFile: string): void {
+  const db = new DatabaseSync(dbFile);
+  try {
+    for (const name of V2_INDEXES) db.exec(`DROP INDEX IF EXISTS ${name}`);   // tolerant: a mutant that never made one must fail at the migration's assertion, not here
+    db.exec('PRAGMA user_version = 1');
+  } finally { db.close(); }
+}
+
+/** Plant blobs rows straight into a store: `owed` are unindexed with bytes (what the FTS backfill still owes), `indexed` are
+ *  fts_indexed = 1 with bytes, `pruned` are prune's tombstones (z NULL, fts_indexed = 0: they can never be owed). The shas are
+ *  distinct and deterministic. Raw rows, no entries: the owed-row index and its predicate are measured over blobs alone. */
+export function plantBlobs(dbFile: string, n: { owed?: number; indexed?: number; pruned?: number }): void {
+  const db = new DatabaseSync(dbFile);
+  try {
+    const ins = db.prepare('INSERT INTO blobs (sha256, codec, z, raw_len, fts_indexed, pruned_ms) VALUES (?, ?, ?, ?, ?, ?)');
+    let k = Number((db.prepare('SELECT count(*) AS n FROM blobs').get() as { n: number }).n);   // a later call continues the shas
+    const sha = (): Buffer => { const b = Buffer.alloc(32); b.writeUInt32BE(k += 1, 0); return b; };
+    db.exec('BEGIN');   // one commit, not one per row: the statistics pins plant thousands
+    for (let i = 0; i < (n.owed ?? 0); i += 1) ins.run(sha(), 'br5', Buffer.from('z'), 1, 0, null);
+    for (let i = 0; i < (n.indexed ?? 0); i += 1) ins.run(sha(), 'br5', Buffer.from('z'), 1, 1, null);
+    for (let i = 0; i < (n.pruned ?? 0); i += 1) ins.run(sha(), 'br5', null, 1, 0, 1);
+    db.exec('COMMIT');
+  } finally { db.close(); }
+}
+
+/** The owed-row index (schema v2, D-5015) as a store holds it: its SQL from sqlite_master (null when the store has none) and how many
+ *  entries it holds (null when it has none), read from ANALYZE's own count for that index (sqlite_stat1's first integer, absent for an
+ *  empty index), so it is the index's population and not a filtered count over blobs. Writes sqlite_stat1 into the fixture store. */
+export function owedIndexFacts(dbFile: string): { sql: string | null; entries: number | null } {
+  const db = new DatabaseSync(dbFile);
+  try {
+    const row = db.prepare("SELECT sql FROM sqlite_master WHERE type = 'index' AND name = 'blobs_unindexed'").get() as { sql: string } | undefined;
+    if (row === undefined) return { sql: null, entries: null };
+    db.exec('ANALYZE blobs_unindexed');
+    const st = db.prepare("SELECT stat FROM sqlite_stat1 WHERE idx = 'blobs_unindexed'").get() as { stat: string } | undefined;
+    return { sql: row.sql, entries: st === undefined ? 0 : Number(st.stat.split(' ')[0]) };
+  } finally { db.close(); }
+}
+
 /** Every counter row, as a record. */
 export function counters(box: HistoryBox): Record<string, number> {
   const db = openStoreRO(box);
@@ -241,6 +286,8 @@ export interface DriverDeps {
   sizeBytesSeq?: number[];
   /** Appended to `$HOME/<rel>` once the pass's first statfs call has answered (RF5a F19: a line landing mid-pass). */
   afterFirstStatfs?: Array<{ rel: string; text: string }>;
+  /** When the first statfs call answers, `$HOME/<rel>` is copied to `$HOME/<to>` (the word `absent` when there is none): D-5016, the pass marker seen from inside the pass. */
+  snapshotAtFirstStatfs?: Array<{ rel: string; to: string }>;
   /** The first statfs call never settles after it has appended afterFirstStatfs's lines (FU4 M27: a dead volume). */
   hangAfterAppend?: boolean;
   /** Once the first statfs call has answered, the first <times> (default 1) calls of fs.<fn> on a path holding <needle> throw <code> (FU4 M26). */
@@ -250,6 +297,12 @@ export interface DriverDeps {
   /** The word an --op pass's store open answers instead of opening (FU4 M28), handed to sweep.mjs as deps.openStore. */
   openStoreWord?: string;
   extraMigrations?: string[]; heavy?: number[]; managedSettings?: string[];
+  /** W1-B2 Task 25: the run budget's wall-clock limit in ms, handed to sweep.mjs as deps.budget.maxMs (default lib's RUN_BUDGET_MS). */
+  budgetMs?: number;
+  /** W1-B2 Task 25: the run budget's byte limit, handed to sweep.mjs as deps.budget.maxBytes (default lib's RUN_BUDGET_BYTES). */
+  budgetBytes?: number;
+  /** W1-B2 Task 25: the bytes one chunk reads before it stops at the next non-spool record, as deps.budget.chunkBytes (default lib's CHUNK_BYTES). */
+  chunkBytes?: number;
 }
 export interface DriverResult { code: number | null; signal: NodeJS.Signals | null; stdout: string; stderr: string }
 /** NODE_OPTIONS for these preloads, each as a file URL (Task 14's childEnv rule): NODE_OPTIONS splits on
@@ -334,4 +387,190 @@ export function recordDirFsyncs<T>(fn: () => T): { out: T; dirs: string[] } {
     fs.openSync = realOpen; fs.closeSync = realClose; fs.fsyncSync = realFsync;
     syncBuiltinESMExports();
   }
+}
+
+// ── W1-B2 Task 10: the CLI runner, the pane fixtures, and a captured family ─────────────────────────────
+/** The pane every read-verb case runs in. */
+export const PANE = '%1';
+
+/** A working tmux in <home>/.local/bin, over the poison: it records its argv in $HOME/tmux-calls and answers
+ *  `cc-<id>` (or `opts.name` verbatim) as the pane's session name. Returns the env a CLI child needs. */
+export function withPane(box: HistoryBox, id: string, opts: { name?: string } = {}): Record<string, string> {
+  const name = opts.name ?? `cc-${id}`;
+  const bin = path.join(box.home, '.local', 'bin', 'tmux');
+  fs.writeFileSync(bin, `#!/bin/sh\nprintf '%s\\n' "$*" >> "$HOME/tmux-calls"\nprintf '%s\\n' '${name}'\n`);
+  fs.chmodSync(bin, 0o755);
+  return { TMUX_PANE: PANE };
+}
+
+/** A tmux that never answers: `exec sleep` keeps one pid, so the CLI's SIGKILL at its deadline ends it (a child
+ *  `sleep` would keep the pipe open past the kill). */
+export function sleepyTmux(box: HistoryBox, seconds: number): Record<string, string> {
+  const bin = path.join(box.home, '.local', 'bin', 'tmux');
+  fs.writeFileSync(bin, `#!/bin/sh\nexec sleep ${String(seconds)}\n`);
+  fs.chmodSync(bin, 0o755);
+  return { TMUX_PANE: PANE };
+}
+
+/** `node --no-warnings cli.mjs <args>` in the box, on the statfs preload, capped like every spawn here. `json` is
+ *  the last stdout line parsed, or null when it is not a JSON object. */
+export function runCli(box: HistoryBox, args: string[], opts: SpawnOpts = {}): SpawnResult & { json: Record<string, unknown> | null } {
+  const r = timed(() => spawnSync(process.execPath, ['--no-warnings', CLI, ...args],
+    { env: childEnv(box, opts), cwd: box.home, encoding: 'utf8', timeout: opts.timeoutMs ?? SPAWN_TIMEOUT_MS, killSignal: 'SIGTERM' }));
+  let json: Record<string, unknown> | null = null;
+  try {
+    const v: unknown = JSON.parse(r.stdout.trim().split('\n').at(-1) ?? '');
+    if (v !== null && typeof v === 'object' && !Array.isArray(v)) json = v as Record<string, unknown>;
+  } catch {
+    // a human-format answer
+  }
+  return { ...r, json };
+}
+
+/** The project slug a seeded transcript sits under. */
+export const SEED_SLUG = '-home-u-tree-demo';
+export interface SeedSpec {
+  id: string; project: string; uuid: string; rows: object[];
+  workdir?: string; generation?: string | null; accountId?: string;
+}
+
+/** One family, captured as the box captures one:
+ *  - one priming sweep first, which spends the first tick's registry scan so the epoch is the hook's 'startup' and
+ *    not the scan's 'import' (B1's scanDue is true while meta scan_ms is null; registryBackfill books a planted .uuid);
+ *  - its registry fields;
+ *  - its transcript, under the roster's first account unless `accountId` names another;
+ *  - a SessionStart(startup) line whose `reg` is the uuid; B1 drains it one tick after renaming it, so the epoch
+ *    appears on the second sweep (§6.1);
+ *  - sweep ticks until one leaves the transcript at end-of-file AND its epoch confirmed.
+ *  A string `generation` is written to the registry and carried on the line; null writes none (a gen-less line).
+ *  Throws when four ticks do not get there: a seed that stops short would make every case built on it vacuous. */
+export function seedFamily(box: HistoryBox, f: SeedSpec): { uuid: string; transcript: string } {
+  const prime = runSweep(box);
+  if (prime.code !== 0) throw new Error(`seedFamily(${f.id}): the priming sweep exited ${String(prime.code)}: ${prime.stderr}${prime.stdout}`);
+  plantSession(box, f.id, {
+    uuid: f.uuid, project: f.project,
+    ...(f.generation === undefined ? {} : { generation: f.generation }),
+    ...(f.workdir === undefined ? {} : { workdir: f.workdir }),
+  });
+  const transcript = plantTranscript(box, f.accountId ?? Object.keys(box.accountHome)[0]!, SEED_SLUG, f.uuid, f.rows);
+  spoolLine(box, f.id, {
+    v: 1, ev: 'SessionStart', id: f.id, sid: f.uuid, src: 'startup', reg: f.uuid,
+    ...(typeof f.generation === 'string' ? { gen: f.generation } : {}),
+  });
+  for (let i = 0; i < 4; i += 1) {
+    const r = runSweep(box);
+    if (r.code !== 0) throw new Error(`seedFamily(${f.id}): the sweep exited ${String(r.code)}: ${r.stderr}${r.stdout}`);
+    if (atEndOfFile(box, f.uuid)) return { uuid: f.uuid, transcript };
+  }
+  throw new Error(`seedFamily(${f.id}): four ticks left ${f.uuid} short of end-of-file`);
+}
+
+function atEndOfFile(box: HistoryBox, uuid: string): boolean {
+  const db = openStoreRO(box);
+  try {
+    const row = db.prepare("SELECT count(*) AS n FROM ingest_files f JOIN transcripts t ON t.transcript_pk = f.transcript_pk WHERE t.cc_session_uuid = ? AND f.source_key = '' AND f.eof_ms IS NOT NULL")
+      .get(uuid) as { n: number };
+    // B1 reaches the transcript's EOF through hintedUuids in the tick that RENAMES the line, but drains the line (and so
+    // books the family and its epoch) only in the next: EOF alone would return before the family exists.
+    const ep = db.prepare('SELECT count(*) AS n FROM epochs WHERE cc_session_uuid = ? AND confirmed_ms IS NOT NULL').get(uuid) as { n: number };
+    return Number(row.n) > 0 && Number(ep.n) > 0;
+  } finally {
+    db.close();
+  }
+}
+
+// ── W1-B2 Task 19: the operator door's stand-ins ──────────────────────────────────────────────────────
+/** Replace the box's placed shim with a stand-in: it appends its argv, one line per run, to
+ *  `<home>/stub-shim-argv`, prints `stderr` (when given) verbatim on stderr, then `stdout` verbatim, and exits `exit`.
+ *  The CLI's relay is then measured against an answer the case chose; a case that must spawn nothing reads the argv
+ *  file as absent. A box keeps its stand-in; a case that needs the real shim builds its own box. */
+export function stubShim(box: HistoryBox, script: { stdout: string; exit: number; stderr?: string }): void {
+  const quote = (s: string): string => `'${s.replace(/'/g, `'\\''`)}'`;
+  const p = path.join(box.home, '.local', 'bin', 'ccd-history-sweep');
+  fs.writeFileSync(p, [
+    '#!/usr/bin/env bash',
+    'printf \'%s\\n\' "$*" >> "$HOME/stub-shim-argv"',
+    ...(script.stderr === undefined ? [] : [`printf '%s' ${quote(script.stderr)} >&2`]),
+    `printf '%s' ${quote(script.stdout)}`,
+    `exit ${script.exit}`,
+    '',
+  ].join('\n'));
+  fs.chmodSync(p, 0o755);
+}
+
+/** The placed shim replaced by a stand-in written line by line (bash), for a case a canned stdout and stderr cannot say: a shim
+ *  that is killed by a signal, or that stays up until the CLI is signalled. The first line records its argv as stubShim's does. */
+export function rawShim(box: HistoryBox, lines: string[]): void {
+  const p = path.join(box.home, '.local', 'bin', 'ccd-history-sweep');
+  fs.writeFileSync(p, ['#!/usr/bin/env bash', 'printf \'%s\\n\' "$*" >> "$HOME/stub-shim-argv"', ...lines, ''].join('\n'));
+  fs.chmodSync(p, 0o755);
+}
+
+export interface LiveCli { pid: number; send: (sig: NodeJS.Signals) => void; /** What the child has written so far, before it ends. */ peek: () => { stdout: string; stderr: string }; done: Promise<{ code: number | null; signal: NodeJS.Signals | null; stdout: string; stderr: string }> }
+/** `node --no-warnings cli.mjs <args>` as a child the case can signal while it runs (runCli blocks until the child ends). It is
+ *  capped like every spawn here, and `send` signals only this child, by the pid it was started with. */
+export function startCli(box: HistoryBox, args: string[], opts: SpawnOpts = {}): LiveCli {
+  const child = spawn(process.execPath, ['--no-warnings', CLI, ...args], { env: childEnv(box, opts), cwd: box.home, stdio: ['ignore', 'pipe', 'pipe'] });
+  let stdout = '';
+  let stderr = '';
+  child.stdout.setEncoding('utf8');
+  child.stderr.setEncoding('utf8');
+  child.stdout.on('data', (d: string) => { stdout += d; });
+  child.stderr.on('data', (d: string) => { stderr += d; });
+  const cap = setTimeout(() => { child.kill('SIGTERM'); }, opts.timeoutMs ?? SPAWN_TIMEOUT_MS);
+  const done = new Promise<{ code: number | null; signal: NodeJS.Signals | null; stdout: string; stderr: string }>((resolve) => {
+    child.on('close', (code, signal) => { clearTimeout(cap); resolve({ code, signal, stdout, stderr }); });
+  });
+  return { pid: child.pid ?? 0, send: (sig) => { child.kill(sig); }, peek: () => ({ stdout, stderr }), done };
+}
+
+/** Hold the shim's lock from outside, as a first concurrent pass holds it: a `flock` holder that sleeps, in its own
+ *  process group, until the returned release kills it. Returns only once the lock is really taken. The holder sleeps 600 s,
+ *  longer than any case budget (2.5 * HEAVY = 300 s), so the lock cannot lapse mid-case; and release signals nothing once the
+ *  holder has exited or been signalled, so a process-group id the OS may have recycled for another session is never killed. */
+export function holdLock(box: HistoryBox): () => void {
+  const lock = historyPaths(box.home).lock;
+  fs.mkdirSync(path.dirname(lock), { recursive: true });
+  const holder = spawn('flock', [lock, 'sleep', '600'], { stdio: 'ignore', detached: true });
+  const release = (): void => {
+    if (holder.exitCode !== null || holder.signalCode !== null) return;
+    try { process.kill(-holder.pid!, 'SIGKILL'); } catch { /* already gone */ }
+  };
+  for (let i = 0; i < 200; i += 1) {
+    if (spawnSync('flock', ['-n', lock, 'true']).status !== 0) return release;
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 25);
+  }
+  release();
+  throw new Error('holdLock: the holder never took the lock');
+}
+
+// ── W1-B2 Task 25: recovery fixtures ──────────────────────────────────────────────────────────────────────────
+/** The box's journal directory for its bound store: `~/.ccrc/history/journal/<store.id>`. */
+export function journalDirOf(box: HistoryBox): string {
+  return path.join(box.root, 'journal', fs.readFileSync(path.join(box.root, 'store.id'), 'utf8').trim());
+}
+
+/** The newest recovery step registered in the box's store (what status reads), or undefined. */
+export function recoverRow(box: HistoryBox): { version: number; cursor: string | null; completed_ms: number | null } | undefined {
+  const db = openStoreRO(box);
+  try {
+    const r = db.prepare("SELECT version, cursor, completed_ms FROM derivation_state WHERE step = 'recover' ORDER BY version DESC LIMIT 1")
+      .get() as { version: number; cursor: string | null; completed_ms: number | null } | undefined;
+    if (r === undefined) return undefined;
+    return {
+      version: Number(r.version),
+      cursor: r.cursor === null ? null : String(r.cursor),
+      completed_ms: r.completed_ms === null ? null : Number(r.completed_ms),
+    };
+  } finally {
+    db.close();
+  }
+}
+
+/** What `doctor --rebuild` leaves before its first recovery tick, made in-process: a fresh history.db with `storeId`
+ *  and a new writer token, and inside it the ('recover', version) step, the `bind` outbox row and `bound:<version>`
+ *  (store.mjs createStore with a rebuild bind, W1-B2 Task 24). The caller has already removed the lost DB. */
+export function boundEmptyStore(box: HistoryBox, storeId: string, version = Date.now()): { storeId: string; writer: string; version: number } {
+  const got = createStore(box.home, { storeId, bind: { kind: 'rebuild', nowMs: version } });
+  return { ...got, version };
 }

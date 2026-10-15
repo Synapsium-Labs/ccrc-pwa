@@ -3242,10 +3242,10 @@ fi
 # — the hook never creates it, so a box with no store writes nothing; the id fits
 # SPOOL_ID_MAX = 224, so `.draining/<id>.<ms>.<pid>.jsonl` fits a 255-byte name.
 # The off-switch silences Stop and PostCompact and never the SessionStart epoch
-# lines D-4252. Only startup, resume and clear are spooled D-4253: compact exited
-# in its arm, and fork and any other source write nothing D-4173. A SessionStart
+# lines D-4252. Only startup, resume, clear and fork are spooled D-4253 D-4734 (history-fork-spooled): compact
+# exited in its arm, and any other source writes nothing (as fork did in W1-B1, D-4173). A SessionStart
 # line declares its epoch's sid, which lib.mjs SPOOL_KEYS requires, so without a
-# lowercase-UUID sid none is written at all. A startup or resume line carries
+# lowercase-UUID sid none is written at all. A startup, resume or fork line carries
 # `reg`, this hook's own read of `.uuid` D-4175. No summary hash rides it D-4177.
 #
 # THE FENCE: `\n<json>\n` in one write(2) on an O_APPEND descriptor, so a short
@@ -3261,7 +3261,7 @@ if [[ -z "$paid" && -d "$HOME/.ccrc/history/spool" && ! -L "$HOME/.ccrc/history/
   case "$event" in
     Stop) [[ -e "$HOME/.ccrc/history-off" ]] || _hs='{"v":1,"ev":"Stop"' ;;
     PostCompact) [[ -e "$HOME/.ccrc/history-off" ]] || _hs='{"v":1,"ev":"PostCompact"' ;;
-    SessionStart) [[ "$psid" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]] && case "$src" in startup|resume|clear) _hs='{"v":1,"ev":"SessionStart"' ;; esac ;;
+    SessionStart) [[ "$psid" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]] && case "$src" in startup|resume|clear|fork) _hs='{"v":1,"ev":"SessionStart"' ;; esac ;;
   esac
   if [[ -n "$_hs" ]]; then
     _hs+=",\"id\":\"$id\""

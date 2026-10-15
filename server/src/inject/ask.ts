@@ -13,13 +13,23 @@ export interface AskDeps extends SendDeps {
 export type AskResult = { ok: true } | { ok: false; error: AskRefuseCode };
 
 /**
- * Answer a hook-reported AskUserQuestion by option index, without the pane
- * coordinates `answerDialog` needs.
+ * Answer a hook-reported single-select AskUserQuestion by option index, without
+ * the pane coordinates `answerDialog` needs.
  *
  * MEASURED, Build 1 live probe against Claude Code 2.1.222: a DIGIT ALONE both
  * selects and confirms a single-select question — no Enter, and sending one
- * would submit the NEXT thing. Multi-select is the opposite: each digit toggles
- * and Enter commits, which is why it is this route's acceptance test.
+ * would submit the NEXT thing. Re-measured on 2.1.300 for the ask server-half
+ * plan (docs/superpowers/plans/2026-10-15-ask-server-half.md): it still does.
+ *
+ * NEVER a multiSelect question (D-5048). The same 2.1.222 probe said a digit
+ * toggles a box and Enter commits, and this route sent the digits then Enter.
+ * On 2.1.280 and 2.1.300 Enter TOGGLES the cursor row and commits nothing
+ * (`cc280-multiselect-seq-*.txt`, and `3` then Enter on 2.1.300 left two boxes
+ * ticked with the question still up), so that answer came back ok:true with the
+ * wrong boxes ticked. It is refused `multiselect` before any key. The pane route
+ * `POST /api/sessions/:id/dialog/multi` (`answerDialogMulti`, `send.ts`) answers
+ * it: it reads each box's tick, toggles only the boxes that differ, proves the
+ * ticks, and commits with Tab.
  *
  * Fail-shut, in order, each hazard with its own name (analysis Tier-1 #4).
  */
@@ -66,11 +76,15 @@ export async function answerAsk(
     if (indexes.some((i) => i > 8)) return { ok: false, error: 'range' };
     if (indexes.length > 1 && q.multiSelect !== true) return { ok: false, error: 'multiselect' };
     // [0,0] on a multiSelect question toggles the SAME option twice — which
-    // cancels out to nothing selected — and then Enter commits that empty
-    // selection. That is not a refusal-shaped failure, it is a WRONG ANSWER
-    // sent with ok:true, which is worse: refuse rather than silently submit
-    // a selection the client never asked for.
+    // cancels out to nothing selected. That is not a refusal-shaped failure, it
+    // is a WRONG ANSWER, so it keeps its own name even though the next guard
+    // refuses every multiSelect question anyway.
     if (new Set(indexes).size !== indexes.length) return { ok: false, error: 'duplicate-index' };
+    // D-5048: a multiSelect question is never answered here, whatever the
+    // index count. Digits then Enter is wrong on Claude Code 2.1.280 and later:
+    // Enter toggles the cursor row and commits nothing (see the docstring). The
+    // pane route `/dialog/multi` answers it. Before any capture or key.
+    if (q.multiSelect === true) return { ok: false, error: 'multiselect' };
 
     // The LAST gates before a keystroke, and deliberately last: everything
     // above is about whether this ANSWER still makes sense; these are about
@@ -122,33 +136,18 @@ export async function answerAsk(
     // thrown error.
     //
     // FAIL-FAST, not best-effort: the loop returns the instant one digit
-    // does not land, rather than pressing on through the rest of `indexes`.
-    // On a multi-select answer this can leave SOME boxes toggled and others
-    // not — a genuinely partial state — but that is the honest cost of the
-    // alternative being worse: continuing to press into a pane this call can
-    // no longer prove is the one it was reading (the same reason the capture
-    // above is taken as late as possible) would risk sending digits into
-    // whatever now owns the keyboard. A caller told `not-alive` knows the
-    // answer did not land and that the pane may need a fresh look; a caller
-    // told `ok:true` would have no reason to ever check again — which is the
-    // whole D-2177 defect this closes.
+    // does not land. Since D-5048 only a single-select question reaches it, so
+    // `indexes` holds one digit, and there is no partial state to leave. A
+    // caller told `not-alive` knows the answer did not land and that the pane
+    // may need a fresh look; a caller told `ok:true` would have no reason to
+    // ever check again — which is the whole D-2177 defect this closes.
+    //
+    // No Enter after it, ever: the digit already confirmed, so an Enter would
+    // submit whatever the TUI painted next. The commit Enter this loop used to
+    // send for a multiSelect question is gone with that arm (D-5048): on
+    // current Claude Code it toggled the cursor row instead of committing.
     for (const i of indexes) {
       if (await d.tmux.sendKey(id, String(i + 1)) === false) return { ok: false, error: 'not-alive' };
-    }
-    // Gated on the QUESTION's kind, never on how many options were picked. On
-    // a multi-select menu a digit only TOGGLES a box; Enter is what commits,
-    // so a one-option multi-select answer needs it exactly as much as a
-    // three-option one — without it the session stays `waiting` with a box
-    // ticked while this returns ok:true, and the retry toggles it back off.
-    // Single-select is the opposite and must NOT get one: the digit already
-    // confirmed, so an Enter would submit whatever the TUI painted next.
-    //
-    // The commit Enter gets the identical fail-fast check: every digit
-    // toggling successfully and then the Enter failing to land is STILL a
-    // wrong answer sent as ok:true if unchecked — the selection sits ticked
-    // but never confirmed, same shape as the digit-loop failure above.
-    if (q.multiSelect === true) {
-      if (await d.tmux.sendKey(id, 'Enter') === false) return { ok: false, error: 'not-alive' };
     }
     return { ok: true };
   });

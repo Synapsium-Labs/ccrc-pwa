@@ -7003,7 +7003,7 @@ _acct_provision() {   # <cfgdir> <base-url> <models-json> -> appends to ACCT_PRO
   # BEFORE REVIEWER: the worker skill points at ../ccrc-coordinator/references/…, and
   # the reviewer skill points into the same tree (`_inst_skills`, :6841-6844).
   for n in install-session-hooks.sh install-coordinator-skill.sh \
-           install-worker-skill.sh install-reviewer-skill.sh install-graphify-skill.sh; do
+           install-worker-skill.sh install-reviewer-skill.sh install-graphify-skill.sh install-history-skill.sh; do
     [ -x "$HOME/.cc-sessions/$n" ] \
       || _acct_refuse 1 provision-failed "the installer $HOME/.cc-sessions/$n is missing or not executable, so this lane's home cannot be converged — and 'ccrc install' is what places it there. $stands"
     bash "$HOME/.cc-sessions/$n" --homes "$dir" \
@@ -8478,7 +8478,7 @@ _acct_unprovision() {   # <id> <what-still-stands> -> ACCT_REMOVE_CFG
   if [ -d "$cfg/skills" ]; then
     real="$(realpath "$cfg/skills" 2>/dev/null)" \
       || _acct_refuse 1 skills-unreadable "could not resolve $cfg/skills, so no skill can be removed safely. $stands"
-    for name in ccrc-coordinator ccrc-worker ccrc-reviewer graphify; do
+    for name in ccrc-coordinator ccrc-worker ccrc-reviewer graphify ccrc-history; do
       { [ -e "$real/$name" ] || [ -L "$real/$name" ]; } || continue
       if [ -L "$real/$name" ] || [ -f "$real/$name" ]; then
         rm -f -- "$real/$name" \
@@ -15949,12 +15949,12 @@ _inst_hooks() {
   echo "install: hooks: session-hook.sh and the statusline registered in each account's settings.json"
 }
 
-# ── _inst_skills — the three skills, placed and then INSTALLED ────────────
+# ── _inst_skills — the four skills, placed and then INSTALLED ─────────────
 # THE ASYMMETRY THIS STEP CLOSES. `deploy/deploy.sh agent <host>` has shipped
 # the coordinator skill to the fleet host since Build 7, and now ships the
-# worker and reviewer skills beside it — while a box that installed ITSELF
+# worker, reviewer and history skills beside it — while a box that installed ITSELF
 # got NONE OF THEM, because no step of this verb had ever heard of a skill.
-# That gap is not cosmetic. All three installers exist because skills
+# That gap is not cosmetic. All four installers exist because skills
 # resolve per `CLAUDE_CONFIG_DIR`, and a session's ACCOUNT drifts on swap
 # while its id does not: a coordinator (or a worker, or a reviewer) is
 # placed with no pinned account, so it has to find its skill in EVERY
@@ -15978,6 +15978,8 @@ _inst_hooks() {
 # installed tree by relative path (`../ccrc-coordinator/references/…`, both
 # skills side by side under one config dir) — and the reviewer skill, third,
 # points into the same tree.
+# The history skill, fourth (ccrc history spec 2026-10-05 §8.5), points into
+# no other skill's tree, so its place at the end is a grouping, not an order.
 #
 # ITS FAILURE IS FATAL, exactly as `_inst_hooks`' is. Each installer converges
 # per home, backs up what it is about to replace and rolls back a swap it could
@@ -15991,13 +15993,13 @@ _inst_skills() {
   if [ "$INST_ROLE" = server ]; then echo "install: skills: skipped — a server-role box hosts no sessions"; return 0; fi
   local tree="$BOX_TREE_DIR" name
   mkdir -p "$HOME/.cc-sessions" || _ccrc_die "cannot create \$HOME/.cc-sessions"
-  for name in coordinator-skill worker-skill reviewer-skill; do
+  for name in coordinator-skill worker-skill reviewer-skill history-skill; do
     _inst_tree_copy "$tree/ccd/$name" "$HOME/.cc-sessions/$name"
     _inst_atomic "$tree/ccd/install-$name.sh" "$HOME/.cc-sessions/install-$name.sh" 755
     CCRC_SKILL_SRC="$HOME/.cc-sessions/$name" bash "$HOME/.cc-sessions/install-$name.sh" \
       || _ccrc_die "install-$name.sh refused — read its lines above; it converges one account's skill directory at a time and rolls back a swap it could not finish, so no home was left without the skill it already had"
   done
-  echo "install: skills: ccrc-coordinator, ccrc-worker and ccrc-reviewer in each account's skills directory"
+  echo "install: skills: ccrc-coordinator, ccrc-worker, ccrc-reviewer and ccrc-history in each account's skills directory"
 }
 
 # The graphify skill is NOT one of _inst_skills' names on purpose (spec §B):
@@ -23628,12 +23630,12 @@ _uninst_cc_sessions() {
   rm -f -- "$reg/session-hook.sh" "$reg/install-session-hooks.sh" "$reg/notify.sh" \
     "$reg/compact-card.mjs" \
     "$reg/install-coordinator-skill.sh" "$reg/install-worker-skill.sh" \
-    "$reg/install-reviewer-skill.sh" \
+    "$reg/install-reviewer-skill.sh" "$reg/install-history-skill.sh" \
     "$reg/install-graphify-skill.sh" \
     || _ccrc_die "removing ccrc's files under $reg failed"
-  rm -rf -- "$reg/coordinator-skill" "$reg/worker-skill" "$reg/reviewer-skill" \
+  rm -rf -- "$reg/coordinator-skill" "$reg/worker-skill" "$reg/reviewer-skill" "$reg/history-skill" \
     || _ccrc_die "removing the skill trees under $reg failed"
-  echo "uninstall: ~/.cc-sessions: ccrc's own artifacts removed (hooks, notify, the three skill trees); the registry rows and operator switches stay"
+  echo "uninstall: ~/.cc-sessions: ccrc's own artifacts removed (hooks, notify, the four skill trees); the registry rows and operator switches stay"
 }
 
 # ── _uninst_graphify_skills — the per-home graphify skill directories ─────
@@ -23941,9 +23943,15 @@ _usage_history_paragraph() {
     '            Linux): ccd-history-sweep.timer copies the text of every' \
     '            session into ~/.ccrc/history every 2 minutes, verbatim, secrets' \
     '            a session printed included; touch ~/.ccrc/history-off to pause' \
-    '            it. status [--json] reports the store and its health. Its' \
-    '            writing passes (ccd-history-sweep --op import|migrate) belong' \
-    '            to the operator and refuse inside a session'
+    '            it. status [--json] reports the store and its health. A' \
+    '            session recalls with grep|describe|expand|tree.' \
+    '            import|prune|reparse are dry runs unless --apply, and a dry' \
+    '            run runs inside a session. Every --apply form and every' \
+    '            doctor flag, such as doctor' \
+    '            --backup|--repair|--migrate|--adopt|--restore|--rebuild, is' \
+    '            for the operator alone, from a terminal outside any session;' \
+    '            inside one it is refused.' \
+    '            See README, "Session history: lossless recall"'
 }
 
 # `--purge --purge-history` with a LINKED `db/` (history spec §9.5): remove,

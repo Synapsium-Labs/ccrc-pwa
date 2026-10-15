@@ -11,8 +11,11 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { randomBytes } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
 import { DatabaseSync } from 'node:sqlite';
+import { SCHEMA_VERSION, formatPassMarker, procStartOf, bootIdOf, redactField, makePairIndex } from '../../ccd/history/lib.mjs';
+import { f2Cases } from './fixtures/history/f2Cases.js';
 import { makeHistoryBox, runSweep, preloadOptions, PRELOADS, CLI, REPO, type HistoryBox } from './historyHelpers.js';
 import * as healthCp from 'node:child_process';
 import * as healthFs from 'node:fs';
@@ -34,6 +37,7 @@ interface Envelope {
   journal: { bytes: number; newest_month: string | null; outbox: number; growth_30d_bytes: number; skipped: number; unwritable: boolean; other_store_dirs: string[] };
   export: Record<string, { horizon_days: number | null; retention_days: number | null; due_blobs: number; overdue_blobs: number; segments: number }>;
   recovering: { step: string; cursor: string } | null; op: { verb: string; pid: number; alive: boolean; start_ms: number } | null;
+  pass: { pid: number; start_ms: number; live: boolean } | null;
   history_off: boolean; shim_mtime_ms: number | null; counters: Record<string, number>;
   health: { pass: string | null; warn: unknown[]; fail: unknown[] };
 }
@@ -273,6 +277,162 @@ describe('ccrc history status (Linux)', () => {
     expect(r.env.store_id).toBe(storeIdOf(box));
   });
 
+  // HA2 H-32 (spec §8.3, §12): stderr takes the final redaction pass as stdout does. The preload throws the planted
+  // value as the message of a SQLite error (the status read's store-read-failed line) or of a plain Error (the entry
+  // guard's internal-error line). A token shape the belt knows needs no registered pair.
+  const ha2Leak = (texts: string[], v: string): string[] => {
+    const windows = Array.from({ length: v.length - 7 }, (_, i) => v.slice(i, i + 8));
+    return texts.flatMap((t, i) => windows.filter((w) => t.includes(w)).slice(0, 1).map((w) => `#${i}: ${w}`));
+  };
+  const ha2Token = (): string => `ghp_${randomBytes(27).toString('base64url').slice(0, 36).replace(/[-_]/g, 'q')}`;
+
+  it('H-32: the store-read-failed line and the internal-error line of status carry no planted token', () => {
+    const box = boundBox('ccrc-hist-cli-ha2-h32-');
+    const V = ha2Token();
+    const sq = status(box, { preloads: [PRELOADS.statfs, PRELOADS.faults], env: { HISTORY_TEST_THROW_PREPARE: `SqliteError:${V}@FROM counters` } });
+    expect([sq.code, sq.env.reason], sq.stderr).toEqual([5, 'store-read-failed']);
+    expect(sq.stderr, 'CONTROL: the line is written, with the message in its place').toContain('ccrc history: store-read-failed: ');
+    expect(ha2Leak([sq.stderr, sq.stdout], V)).toEqual([]);
+    const plain = status(box, { preloads: [PRELOADS.statfs, PRELOADS.faults], env: { HISTORY_TEST_THROW_PREPARE: `Error:${V}@FROM counters` } });
+    expect(plain.code, plain.stderr).toBe(1);
+    expect(plain.stderr, 'CONTROL: the guard line is written').toContain('ccrc history: internal error: ');
+    expect(ha2Leak([plain.stderr, plain.stdout], V)).toEqual([]);
+  });
+
+  // D-4613 rounds 4 to 6, retitled by fix round 1 (review 441 F8): errLine's text is not framed by the CLI, so it takes ONE
+  // whole-text final belt (redactFinalLines), no tag split. This pin guards that belt: a forged frame tag in a thrown message keeps
+  // no secret in its bare attribute. (The round-4 tag split itself, redactFinalText's, is guarded by history-lib (d).)
+  it('H-32: errLine\'s whole-text final belt masks a forged frame tag\'s bare attribute in a thrown message on stderr', () => {
+    const box = boundBox('ccrc-hist-cli-ha2-h32-tag-');
+    const sq = status(box, { preloads: [PRELOADS.statfs, PRELOADS.faults], env: { HISTORY_TEST_THROW_PREPARE: 'SqliteError:boom <ccrc-recall password: hunter2hunter2 x> tail@FROM counters' } });
+    expect([sq.code, sq.env.reason], sq.stderr).toEqual([5, 'store-read-failed']);
+    expect(sq.stderr, 'CONTROL: the line is written, the tag and the text around it kept').toMatch(/store-read-failed: boom <ccrc-recall .*> tail/);
+    expect(sq.stderr).not.toContain('hunter2hunter2');
+  });
+
+  // D-5021 (fix round 1, review 441 F2): errLine's text meets no field pass, so the final belt runs it first. Values that hold < > & " and a
+  // backslash were printed whole or in part by the final form's value classes alone. Red when redactFinalLines drops the field pass.
+  it('H-32: a thrown message holding secrets with < > & " and a backslash is masked whole on stderr, through both doors (D-5021)', () => {
+    const box = boundBox('ccrc-hist-cli-ha2-h32-f2-');
+    const cases: Array<[string, string[]]> = [
+      ['"token": "ab<cdXQ"', ['ab<', 'cdXQ']],
+      ['{"password": "hun&ter2YZ"}', ['hun&', 'ter2YZ']],
+      ['{"api_key":"abc\\"defWV"}', ['abc\\', 'defWV']],
+      ['Authorization: Bearer abc&defUT', ['&defUT', 'abc&']],
+      ['password=abc<defSR', ['<defSR', 'abc<']],
+      ['x-ccrc-mail-token: ab<c>d&e\\fghPQ', ['<c>', 'd&e', 'e\\f', 'fghPQ']],
+      ['{"x-ccrc-mail-token": "ab<c>d&e\\"fgh\\\\ijON"}', ['<c>', 'd&e', 'fgh', 'ijON']],
+    ];
+    const message = cases.map(([c]) => c).join('\n');
+    const doors: Array<[string, string, number, string]> = [
+      ['internal-error line', `Error:${message}@FROM counters`, 1, 'ccrc history: internal error: '],
+      ['store-read-failed line', `SqliteError:${message}@FROM counters`, 5, 'ccrc history: store-read-failed: '],
+    ];
+    for (const [door, spec, code, head] of doors) {
+      const r = status(box, { preloads: [PRELOADS.statfs, PRELOADS.faults], env: { HISTORY_TEST_THROW_PREPARE: spec } });
+      expect(r.code, `${door}: ${r.stderr}`).toBe(code);
+      expect(r.stderr, `CONTROL ${door}: the line is written`).toContain(head);
+      expect(r.stderr.match(/\[redacted\]/g) ?? [], `CONTROL ${door}: one mark per case`).toHaveLength(cases.length);
+      for (const [c, runs] of cases) for (const run of runs) expect(r.stderr, `${door}: ${c} leaves ${run}`).not.toContain(run);
+    }
+  });
+
+  // D-5021 (ruling 5020): the shared table of f2Cases (history-lib (j3)'s) through errLine: the five characters in the JSON, Bearer, named
+  // and box-token forms, whole where the form's class admits the character, the field pass's own output where it ends. Red when the
+  // field pass leaves redactFinalLines.
+  it('H-32: the F2 table (every form, each of < > & " and a backslash) through errLine: whole where the class admits, equal to the field pass where it ends (D-5021)', () => {
+    const box = boundBox('ccrc-hist-cli-ha2-h32-f2t-');
+    const cases = f2Cases().filter((c) => c.viaStream);
+    const message = ['first', ...cases.map((c) => c.input)].join('\n');
+    const NONE = makePairIndex([]);
+    for (const [door, spec, code, head] of [
+      ['internal-error line', `Error:${message}@FROM counters`, 1, 'ccrc history: internal error: '],
+      ['store-read-failed line', `SqliteError:${message}@FROM counters`, 5, 'ccrc history: store-read-failed: '],
+    ] as const) {
+      const r = status(box, { preloads: [PRELOADS.statfs, PRELOADS.faults], env: { HISTORY_TEST_THROW_PREPARE: spec } });
+      expect(r.code, `${door}: ${r.stderr}`).toBe(code);
+      expect(r.stderr, `CONTROL ${door}: the line is written`).toContain(`${head}first`);
+      const lines = r.stderr.split('\n');
+      for (const c of cases) {
+        const why = `${door}: ${c.form} with ${JSON.stringify(c.char)}`;
+        const want = redactField(c.input, NONE);
+        expect(lines, `${why}: the line is the field pass's own output`).toContain(want);
+        // a class that ends at the character prints its tail on its own line, so a whole-mask case is judged on its own line
+        for (const run of c.runs) expect(want, `${why}: leaves ${run}`).not.toContain(run);
+      }
+    }
+  });
+
+  // D-4614 (round 5): the CLI's own prefix must not swallow the message it carries.
+  it('H-32: a message that starts with a context key behind the CLI prefix is masked on stderr (D-4614)', () => {
+    const box = boundBox('ccrc-hist-cli-ha2-h32-pfx-');
+    const plain = status(box, { preloads: [PRELOADS.statfs, PRELOADS.faults], env: { HISTORY_TEST_THROW_PREPARE: 'Error:TOKEN=abcdef0123456789@FROM counters' } });
+    expect(plain.code, plain.stderr).toBe(1);
+    expect(plain.stderr, 'CONTROL: the line is written with the key in its place').toMatch(/ccrc history: internal error: TOKEN=/);
+    expect(plain.stderr).not.toContain('abcdef0123456789');
+    const sq = status(box, { preloads: [PRELOADS.statfs, PRELOADS.faults], env: { HISTORY_TEST_THROW_PREPARE: 'SqliteError:<ccrc-recall TOKEN="abcdef0123456789">@FROM counters' } });
+    expect(sq.stderr, 'CONTROL: the line is written').toContain('ccrc history: store-read-failed: ');
+    expect(sq.stderr, 'an unframed forged tag with a quoted value').not.toContain('abcdef0123456789');
+  });
+
+  // D-4613 (round 6): errLine's text is one unframed whole-text pass, so a value on the next line and a PEM block are masked.
+  it('H-32: a JSON-form pair whose value is on the next line, and a PEM block, in a thrown message are masked on stderr (D-4613 round 6)', () => {
+    const box = boundBox('ccrc-hist-cli-ha2-h32-ml-');
+    const json = status(box, { preloads: [PRELOADS.statfs, PRELOADS.faults], env: { HISTORY_TEST_THROW_PREPARE: 'Error:{"token":\n"s3cr3tVALUE123"}@FROM counters' } });
+    expect(json.code, json.stderr).toBe(1);
+    expect(json.stderr, 'CONTROL: the line is written').toContain('ccrc history: internal error: ');
+    expect(json.stderr).not.toContain('s3cr3tVALUE123');
+    const pem = status(box, { preloads: [PRELOADS.statfs, PRELOADS.faults], env: { HISTORY_TEST_THROW_PREPARE: 'Error:-----BEGIN PRIVATE KEY-----\nMIIBVgIBADANBgkqhkiG9w0BAQEFAASCAUAwggE8\n-----END PRIVATE KEY-----@FROM counters' } });
+    expect(pem.code, pem.stderr).toBe(1);
+    expect(pem.stderr, 'CONTROL: the line is written').toContain('ccrc history: internal error: ');
+    expect(pem.stderr).not.toContain('MIIB');
+  });
+
+  it('H-32: no stderr write in cli.mjs prints an error message except through errLine, which redacts', () => {
+    const src = fs.readFileSync(path.join(REPO, 'ccd', 'history', 'cli.mjs'), 'utf8');
+    // H-168: scan by line, not by regex up to ';' (an argument can hold one). Every write stands on one line, so the count below
+    // proves the scan sees them all; a new write is a deliberate edit of this number and of the allowlist beside it.
+    const writes = src.split('\n').filter((l) => /process\.stderr\.write\(/.test(l));
+    expect(writes.length, 'the scan sees every stderr write').toBe(9);
+    expect(writes.filter((w) => /\.message|String\(e\)|\$\{e\b/.test(w)), 'a raw error text on stderr').toEqual([]);
+    // Each write's argument is a fixed line (it starts `ccrc history` or `${USAGE}`), errLine's redactFinalLines, the op relay's `text`, or
+    // an EMPTY write (D-5022: the signal handler's and the exit's wait for stderr to drain write nothing, they only wait on a callback).
+    const allowed = /process\.stderr\.write\((?:[`']ccrc history|`\$\{USAGE\}|redactFinalLines\(|text\)|'', )/;
+    expect(writes.filter((w) => !allowed.test(w)), 'a write whose argument is neither a fixed line, errLine\'s redactFinal nor the relay text').toEqual([]);
+    const fn = /function errLine\([^)]*\) \{([\s\S]*?)\n\}/.exec(src);
+    expect(fn, 'errLine is defined').not.toBeNull();
+    expect(fn![1]).toContain('redactFinalLines(');
+    // D-4613 round 5: the other lines the CLI never frames take the per-line belt too (emitRefusal's human line, the operator relay's emit)
+    expect(src).toContain('redactFinalLines(refusalLine(r.exit, r.reason), pairIdx)');
+    expect(src).toContain('emit(redactFinalLines(line, idx), toStderr)');
+    expect((src.match(/\berrLine\(/g) ?? []).length, 'the definition and the three message sites').toBeGreaterThanOrEqual(5);
+  });
+
+  // HA2 H-78 (D-4604): status's fts word is the word grep is gated by, both reading the same three facts.
+  it('H-78: status fts reads fts-pending while a repair rebuild is open or the backfill row is incomplete, as grep does', () => {
+    const box = boundBox('ccrc-hist-cli-ha2-h78-');
+    expect(status(box).env.fts, 'CONTROL: a finished backfill is ready').toBe('ready');
+    const db = new DatabaseSync(dbFile(box));
+    try {
+      db.exec("INSERT INTO derivation_state (step, version, cursor, completed_ms) VALUES ('fts-rebuild', 1, NULL, NULL)");
+      expect(status(box).env.fts, 'an open rebuild row').toBe('fts-pending');
+      db.exec("DELETE FROM derivation_state WHERE step = 'fts-rebuild'");
+      expect(status(box).env.fts, 'CONTROL: the rebuild row closed').toBe('ready');
+      db.exec("UPDATE derivation_state SET completed_ms = NULL WHERE step = 'fts' AND version = 1");
+      expect(status(box).env.fts, 'a backfill that has not completed').toBe('fts-pending');
+    } finally { db.close(); }
+  });
+
+  // HA2 H-24 (D-4599): a bound store at user_version 0 is damage, not a pending migration.
+  it('H-24: status on a store at user_version 0 answers 5 store-schema-missing', () => {
+    const box = boundBox('ccrc-hist-cli-ha2-h24-');
+    const db = new DatabaseSync(dbFile(box));
+    try { db.exec('PRAGMA user_version = 0'); } finally { db.close(); }
+    const r = status(box);
+    expect([r.code, r.env.reason], r.stderr).toEqual([5, 'store-schema-missing']);
+    expect(r.env.user_version).toBe(0);
+  });
+
   // FU4 M31 (review 316 F11 named "corrupt"): a bound store with the page at offset 2 * 4096 destroyed, the WAL checkpointed
   // first. MEASURED: the damage is caught BEFORE readStoreAnswered, by measureStoreFacts' peekStoreId (its read of the db's own
   // meta.store_id, the binding read), which fails: store-unmeasured, never store-read-failed (that word is
@@ -320,7 +480,7 @@ describe('ccrc history status (Linux)', () => {
     expect(r.code, r.stderr).toBe(0);
     const e = r.env;
     expect(e.v).toBe(1);
-    expect([e.user_version, e.code_version, e.migration]).toEqual([1, 1, 'none']);
+    expect([e.user_version, e.code_version, e.migration]).toEqual([SCHEMA_VERSION, SCHEMA_VERSION, 'none']);
     expect(typeof e.last_tick_ms).toBe('number');
     expect(e.bytes_behind_last3.length).toBeGreaterThanOrEqual(1);
     expect(e.bytes_behind_last3.length).toBeLessThanOrEqual(3);
@@ -335,6 +495,7 @@ describe('ccrc history status (Linux)', () => {
     expect(e.journal.outbox).toBe(0);
     expect(e.journal.other_store_dirs).toEqual([]);
     expect(e.op).toEqual({ verb: 'import', pid: dead, alive: false, start_ms: 1700000000000 });
+    expect(e.pass, 'D-5016: no pass marker, no pass fact (the key is always present, additive)').toBeNull();
     expect(e.history_off).toBe(true);
     expect(typeof e.shim_mtime_ms).toBe('number');
     expect(e.recovering).toBeNull();
@@ -356,15 +517,19 @@ describe('ccrc history status (Linux)', () => {
     expect(r.stdout.split('\n')[0]).toMatch(new RegExp(`^scope=box coverage=this-box store=${storeIdOf(box)} indexed-through=\\S+ lag=\\S+$`));
   });
 
-  it('every other verb is bad-args in W1-B1, with a usage line, and --json carries the reason', () => {
+  it('an unknown verb is bad-args with the usage on stderr, and --json carries the reason; --help prints the usage (W1-B2)', () => {
     const box = boundBox('ccrc-hist-cli-bad-');
-    const plain = status(box, { args: ['grep', 'x'] });
+    const plain = status(box, { args: ['frobnicate', 'x'] });
     expect(plain.code).toBe(2);
-    expect(plain.stderr).toMatch(/^usage: ccrc history status \[--json\]/m);
-    const json = status(box, { args: ['describe', 'L0', '--json'] });
+    expect(plain.stderr).toMatch(/^usage: ccrc history <verb> \[options\]$/m);
+    const json = status(box, { args: ['frobnicate', '--json'] });
     expect([json.code, json.env.reason]).toEqual([2, 'bad-args']);
     expectIdentity(json.env);
     expect(status(box, { args: [] }).code).toBe(2);
+    expect(status(box, { args: ['status', 'extra'] }).code).toBe(2);
+    const help = status(box, { args: ['--help'] });
+    expect(help.code).toBe(0);
+    expect(help.stdout).toMatch(/^usage: ccrc history <verb> \[options\]$/m);
   });
 
   it('the ccrc dispatch line reaches cli.mjs: `ccrc history status --json` answers as the module does, `ccrc history` alone is bad-args', () => {
@@ -481,6 +646,213 @@ describe('status health: the measured snapshot through deriveHealth (task 28)', 
     const { env } = statusOf(box);
     expect(wordsOf(env!['health']['warn'])).toContain('off');
     expect(wordsOf(env!['health']['fail'])).not.toContain('tick-stale');
+  });
+
+  // D-5016 (history-doctor-reads-a-live-pass): status measures the scheduled pass's marker (`pass: { pid, start_ms, live }`), and the
+  // health decision reads a LIVE pass as a fresh tick (started within TICK_STALE_MS) or as hung (past it). `live` is an IDENTITY test:
+  // the pid's start time (/proc/<pid>/stat field 22) and the boot id, measured now, equal the marker's.
+  describe('the pass marker (D-5016)', () => {
+    const MIN = 60_000;
+    const passFile = (box: healthHh.HistoryBox): string => healthPath.join(box.home, '.ccrc', 'history', 'pass');
+    const identityOf = (pid: number): { procStart: string; bootId: string } => {
+      const procStart = procStartOf(healthFs.readFileSync(`/proc/${pid}/stat`, 'utf8'));
+      const bootId = bootIdOf(healthFs.readFileSync('/proc/sys/kernel/random/boot_id', 'utf8'));
+      if (procStart === null || bootId === null) throw new Error('this box has no /proc identity');
+      return { procStart, bootId };
+    };
+    /** A bound store whose last tick is 40 minutes old, on a box whose shim is long placed: the tick-stale baseline. */
+    const staleBox = (prefix: string): healthHh.HistoryBox => {
+      const box = healthHh.makeHistoryBox(prefix, { role: 'fleet', shim: true });
+      ageFile(shimOf(box), 120 * MIN);
+      tickedStore(box, Date.now() - 40 * MIN);
+      const db = healthStore.openWriter(dbFile(box));       // lag measured as of now, so only the tick is old (no lag-high beside it)
+      try { healthStore.setMeta(db, 'last_zero_behind_ms', String(Date.now())); } finally { healthStore.closeWriter(db); }
+      return box;
+    };
+    const plant = (box: healthHh.HistoryBox, pid: number, ago: number, identity = identityOf(pid)): void => {
+      healthFs.mkdirSync(healthPath.dirname(passFile(box)), { recursive: true, mode: 0o700 });
+      healthFs.writeFileSync(passFile(box), formatPassMarker(pid, Date.now() - ago, identity), { mode: 0o600 });
+    };
+    const failOf = (r: { env: Envelope | null }): Array<{ word: string; detail: string }> => r.env!['health']['fail'];
+
+    it('(c) CONTROL: with no marker, a 40 min old tick is FAIL tick-stale as it always was, and pass is null', () => {
+      const box = staleBox('ccrc-history-pass-none-');
+      const r = statusOf(box);
+      expect(r.env!['pass']).toBeNull();
+      expect(wordsOf(failOf(r))).toEqual(['tick-stale']);
+      expect(failOf(r)[0]!.detail).toContain('the last tick ran 40 min ago');
+    });
+
+    it('(a) a marker whose identity measures equal (a live pass) started 7 min ago: pass.live, and the 40 min old tick is no tick-stale FAIL', () => {
+      const box = staleBox('ccrc-history-pass-fresh-');
+      plant(box, process.pid, 7 * MIN);
+      const r = statusOf(box);
+      expect(r.env!['pass']).toMatchObject({ pid: process.pid, live: true });
+      expect(r.env!['pass']['start_ms']).toBeGreaterThan(Date.now() - 8 * MIN);
+      expect(wordsOf(failOf(r))).toEqual([]);
+    });
+
+    it('(b) the same live pass started 11 min ago is FAIL tick-stale naming a pass that is still running', () => {
+      const box = staleBox('ccrc-history-pass-hung-');
+      plant(box, process.pid, 11 * MIN);
+      const r = statusOf(box);
+      expect(r.env!['pass']['live']).toBe(true);
+      expect(wordsOf(failOf(r))).toEqual(['tick-stale']);
+      expect(failOf(r)[0]!.detail).toContain(`the scheduled pass (pid ${process.pid}) started 11 min ago and is still running`);
+    });
+
+    it('(d) a dead pid, a LIVE pid with another start time (a reused pid), another boot id and a malformed marker each read as not live', () => {
+      const box = staleBox('ccrc-history-pass-notlive-');
+      const dead = spawnSync(process.execPath, ['-e', '']).pid!;              // a pid that has already exited
+      const me = identityOf(process.pid);
+      const cases: Array<[string, () => void, boolean]> = [
+        ['a dead pid with a start time it once had', () => plant(box, dead, 2 * MIN, { procStart: String(Number(me.procStart) + 1), bootId: me.bootId }), false],
+        ['a live pid recorded with a start time one tick off', () => plant(box, process.pid, 2 * MIN, { procStart: String(Number(me.procStart) + 1), bootId: me.bootId }), false],
+        ['a live pid recorded under another boot id', () => plant(box, process.pid, 2 * MIN, { procStart: me.procStart, bootId: '0b1c2d3e-4f5a-4b6c-8d7e-9f0a1b2c3d4e' }), false],
+        ['CONTROL: the same live pid, recorded as measured', () => plant(box, process.pid, 2 * MIN), true],
+      ];
+      for (const [what, arrange, live] of cases) {
+        arrange();
+        const r = statusOf(box);
+        expect(r.env!['pass'], what).toMatchObject({ pid: expect.any(Number), live });
+        expect(wordsOf(failOf(r)), what).toEqual(live ? [] : ['tick-stale']);
+        if (!live) expect(failOf(r)[0]!.detail, what).not.toContain('still running');
+      }
+      for (const junk of ['', 'garbage\n', `${process.pid} 1 2\n`, `import ${process.pid} ${Date.now()}\n`]) {
+        healthFs.writeFileSync(passFile(box), junk, { mode: 0o600 });
+        const r = statusOf(box);
+        expect(r.env!['pass'], JSON.stringify(junk)).toBeNull();
+        expect(wordsOf(failOf(r)), JSON.stringify(junk)).toEqual(['tick-stale']);
+      }
+      healthFs.rmSync(passFile(box));
+      healthCp.execFileSync('mkfifo', [passFile(box)]);                        // a FIFO is never waited on, and names no pass
+      const fifo = statusOf(box, ['--json'], { preloads: [], env: {}, timeoutMs: 8_000 });
+      expect(fifo.env!['pass']).toBeNull();
+      expect(wordsOf(failOf(fifo))).toEqual(['tick-stale']);
+    });
+
+    it('(d) a marker a KILLED pass left reads live while its process stands and not live once it is killed', async () => {
+      const box = staleBox('ccrc-history-pass-killed-');
+      const child = healthCp.spawn(process.execPath, ['-e', 'setTimeout(() => {}, 60000)'], { stdio: 'ignore' });
+      try {
+        await new Promise<void>((resolve, reject) => { child.once('spawn', () => resolve()); child.once('error', reject); });
+        plant(box, child.pid!, 2 * MIN);
+        expect(statusOf(box).env!['pass']).toMatchObject({ pid: child.pid, live: true });
+        const gone = new Promise<void>((resolve) => child.once('exit', () => resolve()));
+        child.kill('SIGKILL');
+        await gone;
+        const r = statusOf(box);
+        expect(r.env!['pass']).toMatchObject({ pid: child.pid, live: false });
+        expect(wordsOf(failOf(r))).toEqual(['tick-stale']);
+      } finally { if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL'); }
+    });
+
+    // D-5026 (batch A2, item 4): status reads the marker, then measures its pid's identity. A pass that writes no tick (held, migrated) and
+    // ends through its `finally` between the two reads must not read as a dead marker started after the last tick. The faults preload
+    // removes the marker at the identity measure's own read (HISTORY_TEST_UNLINK_ON_PROC_STAT), once.
+    it('(D-5026) a marker removed between status\'s read of it and its identity measure is no marker (pass null, no death FAIL); one that stays is still a death', () => {
+      const box = healthHh.makeHistoryBox('ccrc-history-passgone-', { role: 'fleet', shim: true });
+      ageFile(shimOf(box), 120 * MIN);
+      tickedStore(box, Date.now() - 5 * MIN);                                   // a fresh tick: only a death can FAIL
+      const dead = spawnSync(process.execPath, ['-e', '']).pid!;                // a pid that has already exited: its identity measures nothing
+      const me = identityOf(process.pid);
+      const arrange = (): void => plant(box, dead, 2 * MIN, { procStart: me.procStart, bootId: me.bootId });
+      arrange();
+      const stays = statusOf(box);
+      expect(stays.env!['pass'], 'CONTROL: no preload, the marker is still there: a dead one, started after the last tick').toMatchObject({ pid: dead, live: false });
+      expect(wordsOf(failOf(stays))).toEqual(['tick-stale']);
+      expect(failOf(stays)[0]!.detail).toContain('ended without writing a tick');
+      arrange();
+      const gone = statusOf(box, ['--json'], { preloads: [healthHh.PRELOADS.faults], env: { HISTORY_TEST_UNLINK_ON_PROC_STAT: passFile(box) } });
+      expect(healthFs.existsSync(passFile(box)), 'the seam removed the marker at the identity measure').toBe(false);
+      expect(gone.env!['pass'], 'the pass ended through its finally: no marker').toBeNull();
+      expect(wordsOf(failOf(gone))).toEqual([]);
+    });
+
+    // D-5026 (batch A3): the other arm of status's second read. When the marker is there again with DIFFERENT text, another pass wrote
+    // its own marker in the gap: status parses that text and measures its identity once, and reports what that measure says (live, not
+    // live, or no marker when it does not parse). It is never `pass: null` for a marker that is there and measures live. The faults
+    // preload replaces the marker at the identity measure's own read (HISTORY_TEST_SWAP_ON_PROC_STAT, the text in ..._TEXT), once.
+    it('(D-5026) a marker REPLACED between status\'s read of it and its identity measure is measured once and reported as that measure says: a new live pass reads live (no death FAIL), a new dead one reads dead, a malformed one is no marker', () => {
+      const box = healthHh.makeHistoryBox('ccrc-history-passswap-', { role: 'fleet', shim: true });
+      ageFile(shimOf(box), 120 * MIN);
+      tickedStore(box, Date.now() - 5 * MIN);                                   // a fresh tick: only a death can FAIL
+      const dead = spawnSync(process.execPath, ['-e', '']).pid!;                // a pid that has already exited: its identity measures nothing
+      const dead2 = spawnSync(process.execPath, ['-e', '']).pid!;               // another one, for the replacement that is dead too
+      const me = identityOf(process.pid);
+      const arrange = (): void => plant(box, dead, 2 * MIN, { procStart: me.procStart, bootId: me.bootId });
+      const swapped = (text: string): { code: number | null; stdout: string; env: Envelope | null } =>
+        statusOf(box, ['--json'], { preloads: [healthHh.PRELOADS.faults], env: { HISTORY_TEST_SWAP_ON_PROC_STAT: passFile(box), HISTORY_TEST_SWAP_ON_PROC_STAT_TEXT: text } });
+
+      arrange();
+      const liveStart = Date.now() - 1 * MIN;
+      const liveText = formatPassMarker(process.pid, liveStart, me);
+      const live = swapped(liveText);
+      expect(healthFs.readFileSync(passFile(box), 'utf8'), 'the seam replaced the marker at the identity measure').toBe(liveText);
+      expect(live.env!['pass'], 'a new pass wrote its own marker in the gap: it is reported live, not as no pass at all').toMatchObject({ pid: process.pid, live: true });
+      expect(live.env!['pass']['start_ms'], 'the replacement\'s start, not the dead marker\'s').toBe(liveStart);
+      expect(wordsOf(failOf(live)), 'a live pass is no death').toEqual([]);
+
+      arrange();
+      const deadText = formatPassMarker(dead2, Date.now() - 1 * MIN, me);
+      const another = swapped(deadText);
+      expect(another.env!['pass'], 'the replacement\'s own measure says not live, and that stands (no loop)').toMatchObject({ pid: dead2, live: false });
+      expect(wordsOf(failOf(another))).toEqual(['tick-stale']);
+      expect(failOf(another)[0]!.detail).toContain('ended without writing a tick');
+
+      arrange();
+      const junk = swapped('garbage\n');
+      expect(junk.env!['pass'], 'a replacement that is not in the grammar is no marker').toBeNull();
+      expect(wordsOf(failOf(junk))).toEqual([]);
+    });
+
+    // D-5026 (history-pass-death-record; fix round 2, review 462 F1): `status` reads the record a pass left when it found a pass that
+    // ended without its tick (`pass_died`: the parsed record, null only when absent). One that is there and cannot be read is
+    // 'unmeasured' and reaches doctor as status-unreadable (the no-overloaded-null rule), never as "no death".
+    const diedFile = (box: healthHh.HistoryBox): string => healthPath.join(box.home, '.ccrc', 'history', 'pass-died');
+    const plantDied = (box: healthHh.HistoryBox, startMsAgo: number, count = 1): void => {
+      healthFs.mkdirSync(healthPath.dirname(diedFile(box)), { recursive: true, mode: 0o700 });
+      healthFs.writeFileSync(diedFile(box), `${JSON.stringify({ pid: 4242, start_ms: Date.now() - startMsAgo, found_ms: Date.now() - startMsAgo + 2 * MIN, count })}\n`, { mode: 0o600 });
+    };
+    it('(D-5026) an open death record beside a young LIVE pass is FAIL tick-stale naming the death: status gives pass_died, the live pass holds nothing back', () => {
+      const box = staleBox('ccrc-history-passdied-open-');
+      plant(box, process.pid, 0.5 * MIN);
+      expect(wordsOf(failOf(statusOf(box))), 'CONTROL: a live young pass alone is fresh').toEqual([]);
+      plantDied(box, 20 * MIN, 2);
+      const r = statusOf(box);
+      expect(r.env!['pass_died']).toMatchObject({ pid: 4242, count: 2 });
+      expect(wordsOf(failOf(r))).toEqual(['tick-stale']);
+      expect(failOf(r)[0]!.detail).toContain('the sweep has recorded 2 scheduled pass(es) that ended without writing a tick since its last clear');
+      expect(failOf(r)[0]!.detail).toContain('pid 4242');
+    });
+    it('(D-5026) a record whose start is at or before the last tick is closed (the removal after its tick was cut off), and an absent one is null', () => {
+      const box = staleBox('ccrc-history-passdied-closed-');
+      expect(statusOf(box).env!['pass_died'], 'absent is null').toBeNull();
+      plantDied(box, 41 * MIN);                                                 // the tick is 40 min old: this pass started before it
+      plant(box, process.pid, 0.5 * MIN);
+      const r = statusOf(box);
+      expect(r.env!['pass_died']).toMatchObject({ count: 1 });
+      expect(wordsOf(failOf(r))).toEqual([]);
+    });
+    it('(D-5026) a record that is there and cannot be read or parsed is pass_died "unmeasured" and FAIL status-unreadable naming it, never no death', () => {
+      const box = healthHh.makeHistoryBox('ccrc-history-passdied-unreadable-', { role: 'fleet', shim: true });
+      ageFile(shimOf(box), 60 * MIN);
+      tickedStore(box, Date.now());
+      expect(statusOf(box).env!['health']['pass'], 'CONTROL: a fresh tick and no record is PASS ok').toBe('ok');
+      healthFs.mkdirSync(healthPath.dirname(diedFile(box)), { recursive: true, mode: 0o700 });
+      for (const junk of ['', 'garbage\n', '{"pid":4242,"start_ms":1,"found_ms":2}\n', '{"pid":4242,"start_ms":1,"found_ms":2,"count":0}\n']) {
+        healthFs.writeFileSync(diedFile(box), junk, { mode: 0o600 });
+        const r = statusOf(box);
+        expect(r.env!['pass_died'], JSON.stringify(junk)).toBe('unmeasured');
+        expect(wordsOf(failOf(r)), JSON.stringify(junk)).toEqual(['status-unreadable']);
+        expect(failOf(r)[0]!.detail, JSON.stringify(junk)).toContain('pass-died');
+      }
+      healthFs.rmSync(diedFile(box));
+      healthFs.mkdirSync(diedFile(box), { mode: 0o700 });                                       // a planted directory is not "absent" either
+      const dir = statusOf(box);
+      expect(dir.env!['pass_died']).toBe('unmeasured');
+      expect(wordsOf(failOf(dir))).toEqual(['status-unreadable']);
+    });
   });
 
   // Task 28F item 3: a failed extras read is unmeasured, never a healthy default. The smallest seam: the breaker

@@ -93,19 +93,19 @@ function installCcrc(home: string): void {
   symlinkSync(CCRC_SRC, join(ccd, 'ccrc'));
   symlinkSync(CHECKS_SRC, join(ccd, 'ccrc-doctor-checks'));
   symlinkSync(LIB_SRC, join(ccd, 'ccrc-wrapper-shape'));
-  // The three shipped skill trees (release/rollout design §6): `_check_skills`
+  // The four shipped skill trees (release/rollout design §6): `_check_skills`
   // compares every home's installed copy against THESE, the tree the stamp
   // names — not against the `.cc-sessions` placed copy, which was stale too
   // on 2026-09-17.
-  for (const n of ['coordinator-skill', 'worker-skill', 'reviewer-skill']) {
+  for (const n of ['coordinator-skill', 'worker-skill', 'reviewer-skill', 'history-skill']) {
     symlinkSync(join(REPO, 'ccd', n), join(ccd, n));
   }
-  // …and the three INSTALLERS that ship beside them (R12). `_check_skills`'
+  // …and the four INSTALLERS that ship beside them (R12). `_check_skills`'
   // FAIL remedy now names `$HOME/ccrc/ccd/install-<role>-skill.sh` — the
   // script out of the same measured tree as the source — so a fixture that
   // planted only the skill trees could not run the remedy it prints. A real
   // box has them: `_inst_tree` rsyncs `ccd/` whole.
-  for (const n of ['install-coordinator-skill.sh', 'install-worker-skill.sh', 'install-reviewer-skill.sh']) {
+  for (const n of ['install-coordinator-skill.sh', 'install-worker-skill.sh', 'install-reviewer-skill.sh', 'install-history-skill.sh']) {
     symlinkSync(join(REPO, 'ccd', n), join(ccd, n));
   }
   // …and the HOOK installer (delegation broker wave 3, Task 14): `_check_delegation-hooks` reads the approved event
@@ -1035,9 +1035,9 @@ function runDoctor(home: string, args: string[] = ['doctor'], extraEnv: NodeJS.P
   return { code: r.status ?? -1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
 }
 
-/** The three shipped skill trees and the name each installs under in a home —
+/** The four shipped skill trees and the name each installs under in a home —
  *  `_check_skills`' subject. One list for `healthy()` and `healthyCodexBox()`. */
-const SHIPPED_SKILLS = [['coordinator-skill', 'ccrc-coordinator'], ['worker-skill', 'ccrc-worker'], ['reviewer-skill', 'ccrc-reviewer']] as const;
+const SHIPPED_SKILLS = [['coordinator-skill', 'ccrc-coordinator'], ['worker-skill', 'ccrc-worker'], ['reviewer-skill', 'ccrc-reviewer'], ['history-skill', 'ccrc-history']] as const;
 
 /** The hook installer a fixture tree carries beside the doctor file, and the approved event set as an INDEPENDENT
  *  reader of it sees it: `EVENTS_JSON` (the events that get a matcher-less managed entry) plus `PreToolUse`, the one
@@ -1320,7 +1320,7 @@ import { markGenerated } from '../../shared/mark.mjs';
 import { createServer, type Socket } from 'node:net';
 import { DatabaseSync } from 'node:sqlite';
 import { createStore } from '../../ccd/history/store.mjs';
-import { HEALTH_COUNTERS, HEALTH_META, HEALTH_WORDS, RECOVERY_STALL_TICKS, deriveHealth } from '../../ccd/history/lib.mjs';
+import { HEALTH_COUNTERS, HEALTH_META, HEALTH_WORDS, RECOVERY_STALL_TICKS, SCHEMA_VERSION, deriveHealth, historyPaths } from '../../ccd/history/lib.mjs';
 import { PRELOADS, preloadOptions } from './historyHelpers.js';
 // The PWA bundle's one fixture worker (Docs W4): `healthy()` plants it and the `docs-sw` describe at the end of
 // this file measures it. Imported here, below every line another file cites, for the block comment above's reason.
@@ -5805,7 +5805,7 @@ describe('ccrc doctor: skills — every home carries the SHIPPED skills (release
   it('passes on the healthy box, counting homes', () => {
     const home = healthy('ccrc-doctor-skills-pass-');
     const r = runDoctor(home);
-    expect(r.stdout).toMatch(/^PASS skills: 1\/1 homes carry the shipped ccrc-coordinator, ccrc-worker and ccrc-reviewer$/m);
+    expect(r.stdout).toMatch(/^PASS skills: 1\/1 homes carry the shipped ccrc-coordinator, ccrc-worker, ccrc-reviewer and ccrc-history$/m);
   });
 
   it('fails on ONE edited byte in ONE home, naming the account and the skill, and the installer runs it green again', () => {
@@ -5847,6 +5847,42 @@ describe('ccrc doctor: skills — every home carries the SHIPPED skills (release
     expect(r.stdout).toMatch(/^PASS skills:/m);
   });
 
+  it('reports ccrc-history stale when it differs, and its printed remedy runs it green again (history spec §8.9 C23)', () => {
+    const home = healthy('ccrc-doctor-skills-history-stale-');
+    const f = join(installed(home, '.claude', 'ccrc-history'), 'SKILL.md');
+    const shipped = readFileSync(f, 'utf8');
+    // An older wording a home could still carry: the literal path every command is pinned to, put back to the
+    // bare word.
+    writeFileSync(f, shipped.replace('"$HOME/.local/bin/ccrc" history', 'ccrc history'));
+    expect(readFileSync(f, 'utf8'), 'the fixture edit changed nothing').not.toBe(shipped);
+    let r = runDoctor(home);
+    expect(r.code).toBe(1);
+    expect(r.stdout).toMatch(/^FAIL skills: 1 skill\(s\) in the rostered homes differ from the shipped tree or are missing from their home: claude: ccrc-history differs$/m);
+    expect(r.stdout).toMatch(/CCRC_SKILL_SRC="\$HOME\/ccrc\/ccd\/history-skill" bash "\$HOME\/ccrc\/ccd\/install-history-skill\.sh"/);
+    // The printed command, resolved on this fixture's box: installCcrc's planted tree is `$HOME/ccrc/ccd`.
+    const rem = spawnSync(BASH,
+      [join(home, 'ccrc', 'ccd', 'install-history-skill.sh'), '--homes', join(home, '.claude')],
+      {
+        env: ghContainedEnv(home, {
+          ...process.env, HOME: home,
+          CCRC_SKILL_SRC: join(home, 'ccrc', 'ccd', 'history-skill'),
+        }),
+        encoding: 'utf8',
+      });
+    expect(rem.status, `${rem.stdout}${rem.stderr}`).toBe(0);
+    expect(readFileSync(f, 'utf8')).toBe(shipped);
+    r = runDoctor(home);
+    expect(r.stdout).toMatch(/^PASS skills: 1\/1 homes carry the shipped ccrc-coordinator, ccrc-worker, ccrc-reviewer and ccrc-history$/m);
+  }, 90_000);   // two doctor runs: a bounded but load-slow box is not a red
+
+  it('a home whose ccrc-history lacks only its MIT sidecar is stale too: diff -r -q compares the whole tree', () => {
+    const home = healthy('ccrc-doctor-skills-history-sidecar-');
+    rmSync(join(installed(home, '.claude', 'ccrc-history'), 'LICENSE.lossless-claw'));
+    const r = runDoctor(home);
+    expect(r.code).toBe(1);
+    expect(r.stdout).toMatch(/^FAIL skills: 1 skill\(s\) in the rostered homes .*: claude: ccrc-history differs$/m);
+  });
+
   it('the remedy names the override seam, not the bare installer (R10)', () => {
     // Mutation pin: a remedy that reverted to bare installer invocations
     // (no CCRC_SKILL_SRC) would converge from $HOME/.cc-sessions instead of
@@ -5859,9 +5895,10 @@ describe('ccrc doctor: skills — every home carries the SHIPPED skills (release
     expect(r.stdout).toMatch(/CCRC_SKILL_SRC="\$HOME\/ccrc\/ccd\/coordinator-skill"/);
     expect(r.stdout).toMatch(/CCRC_SKILL_SRC="\$HOME\/ccrc\/ccd\/worker-skill"/);
     expect(r.stdout).toMatch(/CCRC_SKILL_SRC="\$HOME\/ccrc\/ccd\/reviewer-skill"/);
+    expect(r.stdout).toMatch(/CCRC_SKILL_SRC="\$HOME\/ccrc\/ccd\/history-skill"/);
     // R12, the other half: the SCRIPT comes from the measured tree too, and
     // the remedy no longer sends the operator to `$HOME/.cc-sessions` for it.
-    for (const role of ['coordinator', 'worker', 'reviewer']) {
+    for (const role of ['coordinator', 'worker', 'reviewer', 'history']) {
       expect(r.stdout).toMatch(new RegExp(`bash "\\$HOME/ccrc/ccd/install-${role}-skill\\.sh"`));
     }
     expect(r.stdout).not.toMatch(/\.cc-sessions\/install-/);
@@ -5885,8 +5922,8 @@ describe('ccrc doctor: skills — every home carries the SHIPPED skills (release
     writeWrapper(home, 'acct-a', { cfgDir: '.acct-a' });
     mkdirSync(join(home, '.acct-a', 'skills'), { recursive: true });
     let r = runDoctor(home);
-    expect(r.stdout).toMatch(/^FAIL skills: 3 skill\(s\) in the rostered homes differ .*acct-a: ccrc-coordinator missing.*acct-a: ccrc-worker missing.*acct-a: ccrc-reviewer missing/m);
-    for (const [tree, name] of [['coordinator-skill', 'ccrc-coordinator'], ['worker-skill', 'ccrc-worker'], ['reviewer-skill', 'ccrc-reviewer']] as const) {
+    expect(r.stdout).toMatch(/^FAIL skills: 4 skill\(s\) in the rostered homes differ .*acct-a: ccrc-coordinator missing.*acct-a: ccrc-worker missing.*acct-a: ccrc-reviewer missing.*acct-a: ccrc-history missing/m);
+    for (const [tree, name] of [['coordinator-skill', 'ccrc-coordinator'], ['worker-skill', 'ccrc-worker'], ['reviewer-skill', 'ccrc-reviewer'], ['history-skill', 'ccrc-history']] as const) {
       cpSync(join(REPO, 'ccd', tree), installed(home, '.acct-a', name), { recursive: true });
     }
     r = runDoctor(home);
@@ -5950,6 +5987,8 @@ describe('ccrc doctor: skills — every home carries the SHIPPED skills (release
     const shipped = readFileSync(join(home, 'ccrc', 'ccd', 'reviewer-skill', 'SKILL.md'), 'utf8');
     writeFileSync(f, shipped.replace('$HOME/.cc-clips/', '$WT/.ccrc-review/'));
     rmSync(installed(home, '.claude', 'ccrc-worker'), { recursive: true });
+    // H-133: the fourth installer is cured too, so a `history` arm dropped from `_fix_skills` is a red here.
+    rmSync(installed(home, '.claude', 'ccrc-history'), { recursive: true });
     // Without --fix: the verdict stands and nothing is written.
     let r = runDoctor(home);
     expect(r.code).toBe(1);
@@ -5962,13 +6001,14 @@ describe('ccrc doctor: skills — every home carries the SHIPPED skills (release
     // and a box's PATH carries all of them.
     for (const t of ['rm', 'mkdir', 'mv', 'cp', 'date', 'basename']) linkReal(home, t);
     r = runDoctor(home, ['doctor', '--fix']);
-    expect(r.stdout).toMatch(/^FAIL skills: 2 skill\(s\) in the rostered homes/m);
+    expect(r.stdout).toMatch(/^FAIL skills: 3 skill\(s\) in the rostered homes/m);
     const skillsLines = r.stdout.split('\n').filter((l) => /^(FAIL|FIX|PASS|SKIP) skills|^  remedy/.test(l)).join('\n');
     expect(skillsLines).toMatch(/^FIX skills: re-ran the shipped tree's installers into 1 home\(s\)/m);
     expect(r.stdout).toMatch(/^PASS skills: 1\/1 homes carry the shipped/m);
     expect(r.code, r.stdout).toBe(0);
     expect(readFileSync(f, 'utf8')).toBe(shipped);
     expect(existsSync(join(installed(home, '.claude', 'ccrc-worker'), 'SKILL.md'))).toBe(true);
+    expect(existsSync(join(installed(home, '.claude', 'ccrc-history'), 'SKILL.md'))).toBe(true);
     // The summary counts the RE-measured verdict: no failed line survives.
     expect(r.stdout).toMatch(/ 0 failed$/m);
   });
@@ -5987,6 +6027,14 @@ describe('ccrc doctor: skills — every home carries the SHIPPED skills (release
     rmSync(join(home, 'ccrc', 'ccd', 'reviewer-skill'));
     const r = runDoctor(home);
     expect(r.stdout).toMatch(/^FAIL skills: the shipped tree has no .*reviewer-skill/m);
+  });
+
+  it('fails when the shipped tree lacks the history skill: the notree loop names it, not the per-home diff (H-133)', () => {
+    const home = healthy('ccrc-doctor-skills-notree-history-');
+    rmSync(join(home, 'ccrc', 'ccd', 'history-skill'), { recursive: true });
+    const r = runDoctor(home);
+    expect(r.stdout).toMatch(/^FAIL skills: the shipped tree has no .*history-skill/m);
+    expect((r.stdout.match(/^FAIL skills:/mg) ?? []).length).toBe(1);
   });
 });
 
@@ -14181,7 +14229,7 @@ describeLinux('ccrc doctor: history — a real store, state by state (O15, O28, 
     { word: 'cap-malformed', cls: 'WARN',
       plant: (home) => { withStore(home, freshTick); writeFileSync(join(home, '.ccrc', 'history-max-gb'), 'lots\n'); },
       names: (home) => [join(home, '.ccrc', 'history-max-gb')] },
-    { word: 'schema-newer', cls: 'FAIL', plant: (home) => withStore(home, (db) => { freshTick(db); db.exec('PRAGMA user_version = 2'); }) },
+    { word: 'schema-newer', cls: 'FAIL', plant: (home) => withStore(home, (db) => { freshTick(db); db.exec(`PRAGMA user_version = ${SCHEMA_VERSION + 1}`); }) },
     // O41, the doctor half: the gap guard fires on the census's counts, never on a date
     { name: 'O41: a due blob WARNs export-due, naming the count, and FAILs nothing while none is overdue', word: 'export-due', cls: 'WARN',
       plant: (home) => withStore(home, (db) => { freshTick(db); setExport(db, 3, 0); }),
@@ -14212,7 +14260,29 @@ describeLinux('ccrc doctor: history — a real store, state by state (O15, O28, 
       absent: ['FAIL history: '] },
     { name: 'DM43: a migration too long for a scheduled pass FAILs migration-needs-op, its remedy the --migrate verb', word: 'migration-needs-op', cls: 'FAIL',
       plant: (home) => withStore(home, metaOnFreshTick('migration', 'snapshot-needs-op')),
-      remedyNames: () => ['ccrc history doctor --migrate'] },
+      remedyNames: () => ['ccrc history doctor --migrate'], absent: ['interrupted'] },
+    // FIN item 4: the verdict also comes from planMigration's interrupted-attempts arm, whatever the size; status carries the count
+    // (the marker `.pre-v<code>.attempt`, read with readAttempts) so the line names that reason and never calls the estimate too long.
+    { name: 'DM43: a small store whose migration was interrupted twice FAILs migration-needs-op naming the attempts, not an estimate too long for a scheduled pass', word: 'migration-needs-op', cls: 'FAIL',
+      plant: (home) => {
+        withStore(home, metaOnFreshTick('migration', 'snapshot-needs-op'));
+        const backups = historyPaths(home).backups;
+        mkdirSync(backups, { recursive: true, mode: 0o700 });
+        writeFileSync(join(backups, `.pre-v${SCHEMA_VERSION}.attempt`), '2\n', { mode: 0o600 });
+      },
+      names: () => ['interrupted 2 times'], remedyNames: () => ['ccrc history doctor --migrate'], absent: ['too long for a scheduled pass'] },
+    // FIN2 item 2: a marker that cannot be measured counts as the cap for the verdict, and the line says so instead of printing a count.
+    ...([['a garbled', 'garbled\n'], ['an empty', '']] as const).map(([what, body]): StateCase => ({
+      name: `DM43: ${what} attempt marker FAILs migration-needs-op naming the marker as unreadable, not an interrupted count`, word: 'migration-needs-op', cls: 'FAIL',
+      plant: (home) => {
+        withStore(home, metaOnFreshTick('migration', 'snapshot-needs-op'));
+        const backups = historyPaths(home).backups;
+        mkdirSync(backups, { recursive: true, mode: 0o700 });
+        writeFileSync(join(backups, `.pre-v${SCHEMA_VERSION}.attempt`), body, { mode: 0o600 });
+      },
+      names: () => ['the attempt marker', 'could not be read, so a scheduled pass treats the migration as interrupted'], remedyNames: () => ['ccrc history doctor --migrate'],
+      absent: ['started and interrupted', 'too long for a scheduled pass'],
+    })),
     { name: 'migration-refused: a migration refused for room FAILs, its remedy a measured byte count', word: 'migration-refused', cls: 'FAIL',
       plant: (home) => withStore(home, metaOnFreshTick('migration', 'refuse-low-disk')),
       remedyNames: () => ['free space'], absent: ['undefined', 'NaN bytes'] },
@@ -14427,7 +14497,7 @@ describe('ccrc doctor: history — the relay (O15: every word, and the one rule 
   const cleanInputs = (now: number): Parameters<typeof deriveHealth>[0] => ({
     nowMs: now, storeId: SID, exit: 0, reason: null, shimMtimeMs: now - 3_600_000, lastTickMs: now - 30_000, lagS: 30,
     sizeBytes: 1_048_576, capGb: 50, capMalformed: false, capFile: '/home/u/.ccrc/history-max-gb', capturePause: '',
-    migration: 'none', userVersion: 1, codeVersion: 1, historyOff: false, recovering: null, op: null,
+    migration: 'none', userVersion: 1, codeVersion: 1, historyOff: false, recovering: null, op: null, pass: null,
     bytesBehindLast3: [0, 0, 0], fts: 'ready', modesWrong: [], rootIsSymlink: false, redactUnreadable: [],
     breakerOpen: false, rosterUnreadable: false, exportDue: 0, exportOverdue: 0, exportWriterLive: false,
     exportPausedLowDisk: false, retentionLowered: null, retentionUnmeasured: [], journalGrowth30d: 0, journalSkipped: 0, blobUndecodable: 0, drainRejected: 0, spoolDisplaced: 0, spoolBlocked: 0, spoolUnreadable: 0, spoolNotDirectory: false, spoolNodesRefused: 0,

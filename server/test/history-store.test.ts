@@ -8,30 +8,36 @@
 // no carrier, and the children are plain node.
 import { describe, it, expect } from 'vitest';
 import { spawnSync } from 'node:child_process';
+import { createHash, randomBytes } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
-import { pathToFileURL } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { syncBuiltinESMExports } from 'node:module';
 import { DatabaseSync } from 'node:sqlite';
 import { brotliCompressSync, constants as Z } from 'node:zlib';
 import { mkTmp } from './tmpHelpers.js';
-import { recordDirFsyncs, recordOpenFlags } from './historyHelpers.js';
-import { MAX_INTERRUPTED_ATTEMPTS, SCHEMA_ADDED, SCHEMA_VERSION, UUID_RE, WRITER_RE, decideStoreOpen, historyPaths } from '../../ccd/history/lib.mjs';
+import { recordDirFsyncs, recordOpenFlags, rewindStoreToV1, plantBlobs, owedIndexFacts } from './historyHelpers.js';
+import { INDEXED_PROVENANCE, BLOB_DECODE_MAX, SIDECAR_WHOLE_MAX, makePairIndex, MAX_INTERRUPTED_ATTEMPTS, SCHEMA_ADDED, SCHEMA_VERSION, UUID_RE, WRITER_RE, decideStoreOpen, historyPaths, backupNameOf, FTS_SHADOWS, ftsTablesHealthy } from '../../ccd/history/lib.mjs';
 import {
-  CODEC, MIGRATIONS, StoreError, openWriter, openReader, userVersion, probeFts5, withTx, brotli, unbrotli,
+  CODEC, MIGRATIONS, OWED_INDEX, V2_INDEXES, StoreError, openWriter, openReader, userVersion, probeFts5, withTx, brotli, unbrotli,
   measuredSize, getMeta, setMeta, bump, closeWriter, schemaOf,
   mintStoreId, mintWriter, writeFileAtomic, peekStoreId, measureStoreFacts, removeStaleTemps, removeStaleMigrationTemps, createStore,
-  finishPending, dropPending, syncWriterMirror,
-  readAttempts, clearDoneMarkers, assertAdditive, runMigration, removeEntry, readBounded, removeStaleAtomicTemps, mkdirDurable,
+  finishPending, dropPending, syncWriterMirror, createFtsTables, integrityCheck, foreignKeyRows, ftsMeasure, dropFtsTables, setCounter,
+  pruneProtected, pruneCandidates, pruneBatch, pruneDryRun, incrementalVacuum, pruneApply,
+  readAttempts, measureAttempts, clearDoneMarkers, assertAdditive, runMigration, removeEntry, readBounded, removeStaleAtomicTemps, mkdirDurable,
+  writeBackup, blobPlainText, blobPlainTextMeasured,
 } from '../../ccd/history/store.mjs';
+import { adoptStore, stageRestore, commitRestore, abortRestore } from '../../ccd/history/store.mjs';
+import { parseJournalRecord } from '../../ccd/history/lib.mjs';
 
-/** A delete-mode (rollback-journal) v1 store built by hand, the shape a
- *  `VACUUM INTO` restore leaves: no createStore, no binding files. */
+/** A delete-mode (rollback-journal) store at this build's schema, built by hand, the shape a
+ *  `VACUUM INTO` restore leaves: no createStore, no binding files. It runs every migration, as createStore does
+ *  (D-5015: v2 adds the owed-row index); `MIGRATIONS[0]` alone is the v1 schema. */
 const v1Store = (dir: string): string => {
   const p = path.join(dir, 'history.db');
   const db = new DatabaseSync(p);
   db.exec('PRAGMA auto_vacuum = INCREMENTAL');
-  db.exec(MIGRATIONS[0]!);
+  for (const m of MIGRATIONS) db.exec(m);
   db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`);
   db.close();
   return p;
@@ -325,6 +331,34 @@ describe('store.mjs: the binding', () => {
     expect(fs.existsSync(path.join(P.root, 'store.writer.tmpx'))).toBe(true);
     expect(fs.existsSync(path.join(P.backups, 'pre-v2.db.tmp.5'))).toBe(true);
     expect(fs.existsSync(path.join(P.backups, '.pre-v2.attempt.tmp.99'))).toBe(false);
+  });
+
+  // Tick-stale review T2 (D-5016): the scheduled pass's marker is written with writeFileAtomic too, so its temp is swept like the others.
+  it('a pass.tmp.<pid> a killed marker write left is swept by removeStaleAtomicTemps; the marker itself and look-alikes are not (D-5016, T2)', () => {
+    const h = home();
+    const P = historyPaths(h);
+    fs.mkdirSync(P.root, { recursive: true });
+    fs.writeFileSync(path.join(P.root, 'pass.tmp.4242'), 'x');
+    fs.writeFileSync(path.join(P.root, 'pass'), '1 2 3 4\n');
+    fs.writeFileSync(path.join(P.root, 'pass.tmp.x'), 'x');
+    fs.writeFileSync(path.join(P.root, 'passes.tmp.7'), 'x');
+    expect(removeStaleAtomicTemps(h), 'only the pass temp').toEqual(['pass.tmp.4242']);
+    expect(fs.existsSync(path.join(P.root, 'pass.tmp.4242'))).toBe(false);
+    for (const keep of ['pass', 'pass.tmp.x', 'passes.tmp.7']) expect(fs.existsSync(path.join(P.root, keep)), `CONTROL: ${keep} stays`).toBe(true);
+  });
+
+  // D-5026: the death record is written with writeFileAtomic too, so a killed write's temp is swept like the marker's.
+  it('a pass-died.tmp.<pid> a killed record write left is swept by removeStaleAtomicTemps; the record itself and look-alikes are not (D-5026)', () => {
+    const h = home();
+    const P = historyPaths(h);
+    fs.mkdirSync(P.root, { recursive: true });
+    fs.writeFileSync(path.join(P.root, 'pass-died.tmp.4242'), 'x');
+    fs.writeFileSync(path.join(P.root, 'pass-died'), '{}\n');
+    fs.writeFileSync(path.join(P.root, 'pass-died.tmp.x'), 'x');
+    fs.writeFileSync(path.join(P.root, 'pass-diedx.tmp.7'), 'x');
+    expect(removeStaleAtomicTemps(h), 'only the record\'s temp').toEqual(['pass-died.tmp.4242']);
+    expect(fs.existsSync(path.join(P.root, 'pass-died.tmp.4242'))).toBe(false);
+    for (const keep of ['pass-died', 'pass-died.tmp.x', 'pass-diedx.tmp.7']) expect(fs.existsSync(path.join(P.root, keep)), `CONTROL: ${keep} stays`).toBe(true);
   });
 
   it('mkdirDurable fsyncs every parent that gained an entry, top-down, and nothing when the directory exists (review 316 F23)', () => {
@@ -649,9 +683,10 @@ describe('store.mjs: the migration executor', () => {
   const bound = (): { h: string; db: DatabaseSync; storeId: string } => {
     const h = mkTmp('ccrc-history-mig-');
     const { storeId } = createStore(h);
+    rewindStoreToV1(historyPaths(h).dbFile);   // createStore makes this build's v2; these cases migrate a v1 through injected migrations
     return { h, db: openWriter(historyPaths(h).dbFile), storeId };
   };
-  /** A TEST-ONLY v2 and v3, passed in as data: shipped code has no v2. */
+  /** A TEST-ONLY v2 and v3, passed in as data, over the v1 DDL alone: they stand in for builds past v1 (the shipped v2 is the owed-row index). */
   const V2 = 'CREATE TABLE extra_v2 (x INTEGER); ALTER TABLE meta ADD COLUMN note TEXT;';
   const V3 = 'CREATE INDEX extra_v2_x ON extra_v2(x);';
   const TEST_MIGRATIONS = [MIGRATIONS[0]!, V2, V3];
@@ -756,6 +791,34 @@ describe('store.mjs: the migration executor', () => {
     expect(readAttempts(h, 2)).toBe(1);
     fs.writeFileSync(path.join(P.backups, '.pre-v2.attempt'), 'garbled');
     expect(readAttempts(h, 2)).toBe(2);
+  });
+
+  it('measureAttempts says which condition it was: absent, a count, or unmeasured (an unreadable, empty or garbled marker); readAttempts derives from it (FIN2)', () => {
+    const { h, db } = bound();
+    closeWriter(db);
+    const P = historyPaths(h);
+    const marker = path.join(P.backups, '.pre-v2.attempt');
+    expect(measureAttempts(h, 2), 'no backups directory: absent').toEqual({ state: 'absent', count: 0 });
+    fs.mkdirSync(P.backups, { mode: 0o700 });
+    expect(measureAttempts(h, 2), 'no marker: absent').toEqual({ state: 'absent', count: 0 });
+    const cases: Array<[string, string, { state: string; count: number }]> = [
+      ['one', '1\n', { state: 'count', count: 1 }],
+      ['zero', '0\n', { state: 'count', count: 0 }],
+      ['the cap', `${MAX_INTERRUPTED_ATTEMPTS}\n`, { state: 'count', count: MAX_INTERRUPTED_ATTEMPTS }],
+      ['garbled', 'garbled', { state: 'unmeasured', count: MAX_INTERRUPTED_ATTEMPTS }],
+      ['empty', '', { state: 'unmeasured', count: MAX_INTERRUPTED_ATTEMPTS }],
+      ['a number with a tail', '1 attempt\n', { state: 'unmeasured', count: MAX_INTERRUPTED_ATTEMPTS }],
+    ];
+    for (const [name, body, want] of cases) {
+      fs.writeFileSync(marker, body);
+      expect(measureAttempts(h, 2), name).toEqual(want);
+      expect(readAttempts(h, 2), `${name}: readAttempts is the same count`).toBe(want.count);
+    }
+    fs.rmSync(marker);
+    const real = path.join(h, 'real-attempt');
+    fs.writeFileSync(real, '1\n');
+    fs.symlinkSync(real, marker);
+    expect(measureAttempts(h, 2), 'a link is unreadable: unmeasured').toEqual({ state: 'unmeasured', count: MAX_INTERRUPTED_ATTEMPTS });
   });
 
   it('O51: a killed creation\'s temp and its -wal go together, a recycled pid starts clean, and a done marker is cleared', () => {
@@ -889,5 +952,1401 @@ describe('store.mjs: readBounded (review 316 F10, F18; D-4347 (history-planted-e
     { encoding: 'utf8', env: { PATH: process.env['PATH'] ?? '', HOME: d }, timeout: 10_000, killSignal: 'SIGTERM' });
     expect(r.status, String(r.stderr)).toBe(0);
     expect(r.stdout).toBe('{"state":"unreadable"}');
+  });
+});
+
+// ── W1-B2 Task 9: the lineage range CTE (P7) and the edge lookups — DM9 (spec 2026-10-05 §6.3, §6.7) ───────
+// On real SQLite: a condensed node's lineage is its SOURCES (the leaves it condenses, then their entries), never
+// its consumers; the walk survives a cycle (UNION); childrenOf and parentOf read the two directions by name.
+import * as v9s from 'vitest';
+import * as tmp9s from './tmpHelpers.js';
+import * as lib9s from '../../ccd/history/lib.mjs';
+import * as store9s from '../../ccd/history/store.mjs';
+import type { DatabaseSync as Db9s } from 'node:sqlite';
+
+const T9S = 'd9a00000-1111-4111-8111-111111111111';
+
+/** One family, one transcript, four entries; leaves L1 (entries 1, 2) and L2 (entries 3, 4) under parent N. */
+function lineageStore9(): { db: Db9s; l1: string; l2: string; n: string } {
+  const home = tmp9s.mkTmp('ccrc-hist-dm9-');
+  store9s.createStore(home);
+  const db = store9s.openWriter(lib9s.historyPaths(home).dbFile);
+  const l1 = lib9s.leafId('claude-a-demo', T9S, 'span-1');
+  const l2 = lib9s.leafId('claude-a-demo', T9S, 'span-2');
+  const n = lib9s.parentId([l1, l2]);
+  db.exec('BEGIN');
+  db.prepare("INSERT INTO sessions (session_pk, ccrc_id, generation, project, first_seen_ms) VALUES (1, 'claude-a-demo', '', 'demo', 1)").run();
+  db.prepare('INSERT INTO transcripts (transcript_pk, cc_session_uuid) VALUES (1, ?)').run(T9S);
+  db.prepare("INSERT INTO blobs (blob_id, sha256, codec, z, raw_len) VALUES (1, ?, 'br5', ?, 1)").run(Buffer.alloc(32, 7), Buffer.from([0]));
+  const ent = db.prepare("INSERT INTO entries (entry_id, uuid, transcript_pk, type, provenance, prov_version, struct_rank_ns, struct_file_id, blob_id, ts_ms) VALUES (?, ?, 1, 'user', 'operator', 1, 0, 0, 1, ?)");
+  for (let k = 1; k <= 4; k += 1) ent.run(k, `d9a00000-0000-4000-8000-${k.toString(16).padStart(12, '0')}`, 1000 + k);
+  const node = db.prepare("INSERT INTO nodes (node_id, session_pk, epoch_seq, transcript_pk, kind, depth, status, parser_version, created_ms) VALUES (?, 1, 1, 1, ?, ?, 'ok', 1, 1)");
+  node.run(l1, 'native_leaf', 0);
+  node.run(l2, 'native_leaf', 0);
+  node.run(n, 'condensed', 1);
+  const src = db.prepare('INSERT INTO node_sources (node_id, entry_id, ord) VALUES (?, ?, ?)');
+  src.run(l1, 1, 0); src.run(l1, 2, 1); src.run(l2, 3, 0); src.run(l2, 4, 1);
+  const kid = db.prepare('INSERT INTO node_children (node_id, child_id, ord) VALUES (?, ?, ?)');
+  kid.run(n, l1, 0); kid.run(n, l2, 1);
+  db.exec('COMMIT');
+  return { db, l1, l2, n };
+}
+
+v9s.describe('DM9: the lineage walks toward a node\'s sources, on real SQLite (W1-B2 Task 9)', () => {
+  v9s.it('a condensed node\'s lineage lists its sources\' entries; a leaf\'s lists its own; the edges read both ways', () => {
+    const { db, l1, l2, n } = lineageStore9();
+    try {
+      const of = (id: string): number[] => store9s.lineageEntries(db, id).map((r) => r.entryId).sort((a, b) => a - b);
+      v9s.expect(of(n), 'the parent condenses L1 and L2: their four entries').toEqual([1, 2, 3, 4]);
+      v9s.expect(of(l1)).toEqual([1, 2]);
+      // Rows come grouped by leaf id (code-unit order) and in each leaf's ord.
+      const byLeaf = [[l1, 0, 1001], [l1, 1, 1002], [l2, 0, 1003], [l2, 1, 1004]];
+      const expected = l1 < l2 ? byLeaf : [...byLeaf.slice(2), ...byLeaf.slice(0, 2)];
+      v9s.expect(store9s.lineageEntries(db, n).map((r) => [r.nodeId, r.ord, r.tsMs])).toEqual(expected);
+      v9s.expect(store9s.childrenOf(db, n)).toEqual([{ childId: l1, ord: 0 }, { childId: l2, ord: 1 }]);
+      v9s.expect(store9s.childrenOf(db, l1)).toEqual([]);
+      v9s.expect(store9s.parentOf(db, l1)).toBe(n);
+      v9s.expect(store9s.parentOf(db, n)).toBeNull();
+    } finally {
+      db.close();
+    }
+  });
+
+  v9s.it('a cycle in node_children ends the walk (UNION), and the lineage stays the sources\'', () => {
+    const { db, l2, n } = lineageStore9();
+    try {
+      db.prepare('INSERT INTO node_children (node_id, child_id, ord) VALUES (?, ?, 0)').run(l2, n);
+      v9s.expect(store9s.lineageEntries(db, n).map((r) => r.entryId).sort((a, b) => a - b)).toEqual([1, 2, 3, 4]);
+    } finally {
+      db.close();
+    }
+  });
+});
+
+// ── W1-B2 Task 20: prune by referrer age (spec 2026-10-05 §6.6; DM14 store half, DM15) ────────────
+describe('store.mjs: prune tombstones by referrer age (W1-B2 Task 20)', () => {
+  const DAY = 86_400_000;
+  const NOW = Date.UTC(2026, 9, 6, 12, 0, 0);
+  const CUTOFF = NOW - 90 * DAY;
+  const OLD = NOW - 200 * DAY;
+  const NEW = NOW - DAY;
+
+  /** A bound store holding one referrer arrangement per DM15 clause, planted by SQL on the writer handle.
+   *  Blob ids are assigned in this order: old-only 1, shared 2, young 3, summary 4, kept 5, boundary 6,
+   *  null-ts 7, variant-host-old 8, variant-of-old 9, variant-host-new 10, variant-of-new 11,
+   *  sidecar-unlinked 12, orphan 13, summary-no-leaf 14, sidecar-old 15 (minted last so the ids above keep their order). */
+  function planted(): { home: string; db: DatabaseSync; blob: Record<string, number>; close: () => void } {
+    const home = mkTmp('ccrc-history-prune-');
+    createStore(home);
+    const db = openWriter(historyPaths(home).dbFile);
+    const blob: Record<string, number> = {};
+    const mkBlob = (tag: string): number => {
+      const r = db.prepare("INSERT INTO blobs (sha256, codec, z, raw_len) VALUES (?, 'br5', ?, ?)")
+        .run(createHash('sha256').update(tag).digest(), brotli(Buffer.from(tag)), tag.length);
+      blob[tag] = Number(r.lastInsertRowid);
+      return blob[tag]!;
+    };
+    const tp = Number(db.prepare('INSERT INTO transcripts (cc_session_uuid) VALUES (?)')
+      .run('11111111-1111-4111-8111-111111111111').lastInsertRowid);
+    let n = 0;
+    const entry = (blobId: number, tsMs: number | null): number => {
+      n += 1;
+      return Number(db.prepare(`INSERT INTO entries (uuid, transcript_pk, type, provenance, prov_version, struct_rank_ns,
+          struct_file_id, blob_id, ts_ms) VALUES (?, ?, 'user', 'operator', 1, ?, 1, ?, ?)`)
+        .run(`e${String(n).padStart(4, '0')}`, tp, n, blobId, tsMs).lastInsertRowid);
+    };
+    const oldOnlyEntry = entry(mkBlob('old-only'), OLD);
+    const shared = mkBlob('shared');
+    entry(shared, OLD);
+    const young = entry(mkBlob('young'), NEW);
+    db.prepare('INSERT INTO sidecars (transcript_pk, name, blob_id, entry_id, first_seen_ms) VALUES (?, ?, ?, ?, ?)')
+      .run(tp, 'toolu_01shared.txt', shared, young, NEW);
+    const summary = mkBlob('summary');
+    entry(summary, OLD);
+    const sp = Number(db.prepare("INSERT INTO sessions (ccrc_id, generation, project, first_seen_ms) VALUES ('claude-a-demo', '', 'demo', 1)")
+      .run().lastInsertRowid);
+    db.prepare(`INSERT INTO nodes (node_id, session_pk, epoch_seq, transcript_pk, kind, depth, status, summary_blob_id,
+        parser_version, created_ms) VALUES ('L00000000000000000001', ?, 1, ?, 'native_leaf', 0, 'not-requested', ?, 1, 1)`)
+      .run(sp, tp, summary);
+    const kept = mkBlob('kept');
+    entry(kept, OLD);   // a kept list some old row also names: only the structure rule protects it
+    const boundaryEntry = entry(mkBlob('boundary'), OLD);
+    db.prepare('INSERT INTO boundaries (entry_id, transcript_pk, ord, kept_blob_id) VALUES (?, ?, 1, ?)').run(boundaryEntry, tp, kept);
+    entry(mkBlob('null-ts'), null);
+    const oldHost = entry(mkBlob('variant-host-old'), OLD);
+    db.prepare('INSERT INTO entry_variants (entry_id, blob_id, first_file_id, first_seen_ms) VALUES (?, ?, 1, ?)')
+      .run(oldHost, mkBlob('variant-of-old'), OLD);
+    const newHost = entry(mkBlob('variant-host-new'), NEW);
+    db.prepare('INSERT INTO entry_variants (entry_id, blob_id, first_file_id, first_seen_ms) VALUES (?, ?, 1, ?)')
+      .run(newHost, mkBlob('variant-of-new'), NEW);
+    db.prepare('INSERT INTO sidecars (transcript_pk, name, blob_id, entry_id, first_seen_ms) VALUES (?, ?, ?, NULL, ?)')
+      .run(tp, 'toolu_01unlinked.txt', mkBlob('sidecar-unlinked'), OLD);
+    mkBlob('orphan');
+    // D-4590: an old compact-summary entry whose own blob no node names yet (derivation lags a cap or floor pause)
+    const lagging = db.prepare(`INSERT INTO entries (uuid, transcript_pk, type, provenance, prov_version, struct_rank_ns,
+        struct_file_id, blob_id, ts_ms, is_compact_summary) VALUES (?, ?, 'user', 'operator', 1, ?, 1, ?, ?, 1)`);
+    n += 1;
+    lagging.run(`e${String(n).padStart(4, '0')}`, tp, n, mkBlob('summary-no-leaf'), OLD);
+    // H-41: a sidecar linked to an OLD entry — "a sidecar ages by its entry", the positive half: its blob is pruned with it
+    db.prepare('INSERT INTO sidecars (transcript_pk, name, blob_id, entry_id, first_seen_ms) VALUES (?, ?, ?, ?, ?)')
+      .run(tp, 'toolu_01old.txt', mkBlob('sidecar-old'), oldOnlyEntry, OLD);
+    return { home, db, blob, close: () => closeWriter(db) };
+  }
+  const PRUNED = ['boundary', 'old-only', 'sidecar-old', 'variant-host-old', 'variant-of-old'];
+  const KEPT = ['shared', 'young', 'summary', 'kept', 'null-ts', 'variant-host-new', 'variant-of-new', 'sidecar-unlinked', 'orphan', 'summary-no-leaf'];
+
+  it('DM15: a blob is a candidate only when every referrer is older than the cutoff; shared, NULL-time, unlinked-sidecar, unreferenced and structure blobs stay', () => {
+    const { db, blob, close } = planted();
+    try {
+      const protectedIds = pruneProtected(db);
+      expect(protectedIds.has(blob['summary-no-leaf']!), 'D-4590: a compact summary with no leaf yet is structure').toBe(true);
+      expect([...protectedIds].sort((a, b) => a - b), 'structure: the native summary, the kept list and a compact summary no leaf names yet')
+        .toEqual([blob['summary']!, blob['kept']!, blob['summary-no-leaf']!].sort((a, b) => a - b));
+      const c = pruneCandidates(db, { cutoffMs: CUTOFF, afterBlobId: 0, limit: 100, protectedIds });
+      const name = (id: number): string => Object.keys(blob).find((k) => blob[k] === id)!;
+      expect(c.blobIds.map(name).sort()).toEqual(PRUNED);
+      expect(c.more).toBe(false);
+      expect(c.exported, 'nothing is exported before W1-B4').toBe(0);
+      expect(pruneDryRun(db, CUTOFF)).toEqual({ blobs: 5, bytes: c.bytes, exported: 0 });
+    } finally { close(); }
+  });
+
+  it('D-4601 (history-prune-protects-boundary-anchors): the row a boundary\'s anchor_uuid names is structure whether or not it is flagged, so an old unflagged anchor no node names yet keeps its text; a boundary naming itself protects nothing (H-49)', () => {
+    const home = mkTmp('ccrc-history-prune-anchor-');
+    createStore(home);
+    const db = openWriter(historyPaths(home).dbFile);
+    try {
+      const blob: Record<string, number> = {};
+      const mkBlob = (tag: string): number => {
+        const r = db.prepare("INSERT INTO blobs (sha256, codec, z, raw_len) VALUES (?, 'br5', ?, ?)")
+          .run(createHash('sha256').update(tag).digest(), brotli(Buffer.from(tag)), tag.length);
+        blob[tag] = Number(r.lastInsertRowid);
+        return blob[tag]!;
+      };
+      const tp = Number(db.prepare('INSERT INTO transcripts (cc_session_uuid) VALUES (?)')
+        .run('33333333-3333-4333-8333-333333333333').lastInsertRowid);
+      let n = 0;
+      // Every entry is OLD and NOT a compact summary: only the anchor arm can protect one.
+      const entry = (uuid: string, tag: string): number => {
+        n += 1;
+        return Number(db.prepare(`INSERT INTO entries (uuid, transcript_pk, type, provenance, prov_version, struct_rank_ns,
+            struct_file_id, blob_id, ts_ms) VALUES (?, ?, 'user', 'operator', 1, ?, 1, ?, ?)`)
+          .run(uuid, tp, n, mkBlob(tag), OLD).lastInsertRowid);
+      };
+      const boundary = (entryId: number, ord: number, anchorUuid: string | null): void => {
+        db.prepare('INSERT INTO boundaries (entry_id, transcript_pk, ord, anchor_uuid) VALUES (?, ?, ?, ?)').run(entryId, tp, ord, anchorUuid);
+      };
+      const b1 = entry('boundary-1', 'boundary-one');
+      entry('anchor-1', 'anchor-text');
+      boundary(b1, 1, 'anchor-1');                       // names another, unflagged row: that row is the summary
+      const b2 = entry('boundary-2', 'boundary-two');
+      boundary(b2, 2, 'boundary-2');                     // names itself: the pick is the first compact summary AFTER it
+      const b3 = entry('boundary-3', 'boundary-three');
+      boundary(b3, 3, null);                             // names nothing
+      entry('plain', 'plain-text');
+      const protectedIds = pruneProtected(db);
+      expect([...protectedIds], 'only the anchor\'s own blob is structure').toEqual([blob['anchor-text']!]);
+      const name = (id: number): string => Object.keys(blob).find((k) => blob[k] === id)!;
+      const c = pruneCandidates(db, { cutoffMs: CUTOFF, afterBlobId: 0, limit: 100, protectedIds });
+      expect(c.blobIds.map(name).sort()).toEqual(['boundary-one', 'boundary-three', 'boundary-two', 'plain-text']);
+      expect(pruneDryRun(db, CUTOFF).blobs).toBe(4);
+      expect(pruneApply(db, { cutoffMs: CUTOFF, nowMs: NOW, batch: 2, vacuumPages: 64, between: () => {} }).blobs).toBe(4);
+      const z = (tag: string): Uint8Array | null =>
+        (db.prepare('SELECT z FROM blobs WHERE blob_id = ?').get(blob[tag]!) as { z: Uint8Array | null }).z;
+      expect(z('anchor-text'), 'the anchored summary text is never pruned').not.toBeNull();
+      for (const tag of ['boundary-one', 'boundary-two', 'boundary-three', 'plain-text']) expect(z(tag), tag).toBeNull();
+    } finally { closeWriter(db); }
+  });
+
+  it('DM14 (store half): pruneApply tombstones in bounded batches — z NULL, pruned_ms stamped, the FTS row gone, the merge step registered inside the batch — keeps every row, truncates the WAL after each batch, and calls back between batches', (ctx) => {
+    const { home, db, blob, close } = planted();
+    try {
+      if (probeFts5(db) === 'absent') ctx.skip();
+      withTx(db, 'NORMAL', () => {
+        createFtsTables(db);
+        db.prepare('INSERT INTO blobs_fts (rowid, body) VALUES (?, ?)').run(blob['old-only']!, 'oldonlyword');
+        db.prepare('INSERT INTO blobs_fts (rowid, body) VALUES (?, ?)').run(blob['shared']!, 'sharedword');
+        db.prepare('UPDATE blobs SET fts_indexed = 1 WHERE blob_id IN (?, ?)').run(blob['old-only']!, blob['shared']!);
+      });
+      const count = (t: string): number => (db.prepare(`SELECT count(*) AS n FROM ${t}`).get() as { n: number }).n;
+      const TABLES = ['entries', 'entry_variants', 'sidecars', 'nodes', 'boundaries', 'blobs'];
+      const before = TABLES.map(count);
+      // RB3: the -wal file's size at each between() call, after that batch's vacuum and checkpoint. This test holds
+      // no other connection, so a TRUNCATE checkpoint always completes and leaves the file empty.
+      const mergePending = (): number => (db.prepare("SELECT count(*) AS n FROM derivation_state WHERE step = 'fts-merge' AND completed_ms IS NULL").get() as { n: number }).n;
+      expect(mergePending(), 'CONTROL: no merge step is pending before the prune').toBe(0);
+      const wal = `${historyPaths(home).dbFile}-wal`;
+      const walSizes: number[] = [];
+      let registered = 0;
+      // batch 2: SQL pages [1,4] [5,6] [8,9] [14,15] [] — the protected 4, 5 and 14 dropped, and the fifth read is empty because the fourth page was full — so four batches tombstone.
+      const r = pruneApply(db, {
+        cutoffMs: CUTOFF, nowMs: NOW, batch: 2, vacuumPages: 64,
+        between: () => { walSizes.push(fs.statSync(wal).size); },
+        onDeleted: () => {
+          expect(() => db.exec('BEGIN'), 'registered inside the batch\'s own transaction').toThrow(/within a transaction/);
+          // The sweep's registration (derivStmts(db).pending), written here by its SQL: it must commit with the batch.
+          db.prepare(`INSERT INTO derivation_state (step, version, cursor, completed_ms) VALUES ('fts-merge', 1, NULL, NULL)
+            ON CONFLICT(step, version) DO UPDATE SET completed_ms = NULL`).run();
+          registered += 1;
+        },
+      });
+      expect(r).toEqual({ blobs: 5, bytes: expect.any(Number), fts: true });
+      expect(walSizes, 'one call after each batch that tombstoned something, the WAL truncated before each').toEqual([0, 0, 0, 0]);
+      expect(registered, 'every batch that deleted index rows registers the merge step with them').toBe(4);
+      expect(mergePending(), 'a registration written inside onDeleted committed with the batch').toBe(1);
+      const state = (tag: string): { z: Uint8Array | null; pruned_ms: number | null; fts_indexed: number } =>
+        db.prepare('SELECT z, pruned_ms, fts_indexed FROM blobs WHERE blob_id = ?').get(blob[tag]!) as never;
+      for (const tag of PRUNED) expect(state(tag), tag).toEqual({ z: null, pruned_ms: NOW, fts_indexed: 0 });
+      for (const tag of KEPT) expect(state(tag).z, tag).not.toBeNull();
+      const match = (w: string): number =>
+        (db.prepare('SELECT count(*) AS n FROM blobs_fts WHERE blobs_fts MATCH ?').get(w) as { n: number }).n;
+      expect(match('oldonlyword'), 'the tombstoned blob left the index').toBe(0);
+      expect(match('sharedword'), 'a kept blob keeps its row').toBe(1);
+      expect(TABLES.map(count), 'tombstones content, never rows').toEqual(before);
+      expect(pruneApply(db, { cutoffMs: CUTOFF, nowMs: NOW, batch: 2, vacuumPages: 64, between: () => {} }).blobs,
+        'a second pass finds nothing left').toBe(0);
+    } finally { close(); }
+  });
+
+  it('pruneApply returns the pages its batches free: the freelist is empty after it, so the store file shrinks', () => {
+    const arrange = (): { db: DatabaseSync; close: () => void } => {
+      const home = mkTmp('ccrc-history-prune-vac-');
+      createStore(home);
+      const db = openWriter(historyPaths(home).dbFile);
+      const tp = Number(db.prepare('INSERT INTO transcripts (cc_session_uuid) VALUES (?)')
+        .run('22222222-2222-4222-8222-222222222222').lastInsertRowid);
+      for (let k = 0; k < 4; k += 1) {
+        const z = randomBytes(64 * 1024);   // incompressible: each blob spans many pages
+        const b = Number(db.prepare("INSERT INTO blobs (sha256, codec, z, raw_len) VALUES (?, 'br5', ?, ?)")
+          .run(createHash('sha256').update(z).digest(), z, z.length).lastInsertRowid);
+        db.prepare(`INSERT INTO entries (uuid, transcript_pk, type, provenance, prov_version, struct_rank_ns,
+            struct_file_id, blob_id, ts_ms) VALUES (?, ?, 'user', 'operator', 1, ?, 1, ?, ?)`)
+          .run(`v${String(k)}`, tp, k + 1, b, OLD);
+      }
+      return { db, close: () => closeWriter(db) };
+    };
+    const pragma = (db: DatabaseSync, name: string): number =>
+      Number((db.prepare(`PRAGMA ${name}`).get() as Record<string, number>)[name]);
+    const a = arrange();
+    try {
+      const pages = pragma(a.db, 'page_count');
+      const r = pruneApply(a.db, { cutoffMs: CUTOFF, nowMs: NOW, batch: 500, vacuumPages: 65_536, between: () => {}, onDeleted: () => {} });
+      expect(r.blobs, 'CONTROL: the four old blobs were tombstoned').toBe(4);
+      expect(pragma(a.db, 'freelist_count'), 'the vacuum returned every freed page').toBe(0);
+      expect(pragma(a.db, 'page_count'), 'the store file shrank').toBeLessThan(pages);
+    } finally { a.close(); }
+    const b = arrange();
+    try {
+      const c = pruneCandidates(b.db, { cutoffMs: CUTOFF, afterBlobId: 0, limit: 500, protectedIds: pruneProtected(b.db) });
+      pruneBatch(b.db, { blobIds: c.blobIds, nowMs: NOW, fts: false, onDeleted: () => {} });
+      expect(pragma(b.db, 'freelist_count'), 'CONTROL: a tombstone batch alone leaves free pages, so the fixture frees pages').toBeGreaterThan(0);
+    } finally { b.close(); }
+  });
+
+  it('incrementalVacuum returns what it freed and refuses a page count that is not a positive integer', () => {
+    const { db, close } = planted();
+    try {
+      withTx(db, 'NORMAL', () => {
+        db.exec('CREATE TABLE scratch_free (x BLOB)');
+        const ins = db.prepare('INSERT INTO scratch_free (x) VALUES (?)');
+        for (let k = 0; k < 200; k += 1) ins.run(Buffer.alloc(4000, k % 251));
+        db.exec('DROP TABLE scratch_free');
+      });
+      const freelist = (): number => Number((db.prepare('PRAGMA freelist_count').get() as { freelist_count: number }).freelist_count);
+      const free = freelist();
+      expect(free, 'CONTROL: dropping the filled table left free pages').toBeGreaterThan(0);
+      expect(incrementalVacuum(db, 64)).toBe(Math.min(free, 64));
+      expect(freelist(), 'the freelist shrank by exactly what was returned').toBe(free - Math.min(free, 64));
+      expect(() => incrementalVacuum(db, 0)).toThrow(TypeError);
+    } finally { close(); }
+  });
+});
+
+// ── W1-B2 Task 22: doctor --backup's copy (spec 2026-10-05 §8.4) ─────────────────────────────────
+describe('store.mjs: writeBackup (W1-B2 Task 22)', () => {
+  it('copies to backups/<ts>.db through a dot-temp, removes every stale backup temp first, never touches a pre-v temp or an operator file, and refuses a same-second name', () => {
+    const home = mkTmp('ccrc-history-backup-');
+    createStore(home);
+    const P = historyPaths(home);
+    fs.mkdirSync(P.backups, { recursive: true, mode: 0o700 });
+    fs.writeFileSync(path.join(P.backups, '.20260101T000000Z.db.tmp'), 'partial');
+    fs.writeFileSync(path.join(P.backups, '.20260101T000000Z.db.tmp-journal'), 'partial');
+    fs.writeFileSync(path.join(P.backups, '.pre-v2.db.tmp'), 'the migration owns this one');
+    fs.writeFileSync(path.join(P.backups, '20251231T000000Z.db'), 'an operator backup');
+    const db = openWriter(P.dbFile);
+    try {
+      const nowMs = Date.UTC(2026, 9, 6, 12, 0, 0);
+      const r = writeBackup(db, home, { nowMs });
+      expect(r.name).toBe('20261006T120000Z.db');
+      expect(fs.readdirSync(P.backups).sort()).toEqual(['.pre-v2.db.tmp', '20251231T000000Z.db', '20261006T120000Z.db']);
+      expect(fs.readFileSync(path.join(P.backups, '20251231T000000Z.db'), 'utf8')).toBe('an operator backup');
+      const copy = new DatabaseSync(path.join(P.backups, r.name), { readOnly: true });
+      try {
+        expect((copy.prepare("SELECT v FROM meta WHERE k = 'store_id'").get() as { v: string }).v).toBe(getMeta(db, 'store_id'));
+        expect((copy.prepare('PRAGMA integrity_check').get() as { integrity_check: string }).integrity_check).toBe('ok');
+      } finally { copy.close(); }
+      expect(r.sizeBytes).toBe(fs.statSync(path.join(P.backups, r.name)).size);
+      expect(Number(getMeta(db, 'copy_bps')), 'every copy records its measured rate').toBe(r.copyBps);
+      expect(wordOf(() => writeBackup(db, home, { nowMs })), 'never clobbered').toBe('backup-exists');
+      expect(fs.readdirSync(P.backups).filter((n) => n.endsWith('.tmp')), 'the refused copy left no temp').toEqual(['.pre-v2.db.tmp']);
+    } finally { closeWriter(db); }
+  });
+
+  it('writeBackup fsyncs db/ when it creates backups/, before backups/ itself (review 316 F23)', () => {
+    // B1's `runMigration fsyncs db/ when it creates backups/` case, for the second creator of that directory.
+    // recordDirFsyncs is B1's (historyHelpers.ts), already imported by this file.
+    const home = mkTmp('ccrc-history-backup-f23-');
+    createStore(home);
+    const P = historyPaths(home);
+    expect(fs.existsSync(P.backups), 'createStore makes no backups/').toBe(false);
+    const db = openWriter(P.dbFile);
+    try {
+      const { dirs } = recordDirFsyncs(() => writeBackup(db, home, { nowMs: Date.UTC(2026, 9, 6, 12, 0, 0) }));
+      expect(dirs.indexOf(P.dbDir), 'db/ gained backups/ and is fsynced').toBeGreaterThanOrEqual(0);
+      expect(dirs.indexOf(P.dbDir), 'db/ before backups/').toBeLessThan(dirs.indexOf(P.backups));
+    } finally { closeWriter(db); }
+  });
+
+  it('a file that appears at the final name after the existence check is refused backup-exists by the publish, left as it was, and no temp remains (D-4721: link, not rename)', () => {
+    // The race the lstat pre-check cannot close: an operator file lands at the final name between the check and
+    // the publish. The seam makes the check answer ENOENT for that one path, so only the publish itself can refuse.
+    const home = mkTmp('ccrc-history-backup-link-');
+    createStore(home);
+    const P = historyPaths(home);
+    fs.mkdirSync(P.backups, { recursive: true, mode: 0o700 });
+    const nowMs = Date.UTC(2026, 9, 6, 12, 0, 0);
+    const finalPath = path.join(P.backups, '20261006T120000Z.db');
+    fs.writeFileSync(finalPath, 'an operator file');
+    const db = openWriter(P.dbFile);
+    const realLstat = fs.lstatSync;
+    let seamFired = 0;
+    try {
+      fs.lstatSync = ((p: fs.PathLike, ...rest: unknown[]) => {
+        if (String(p) === finalPath) { seamFired += 1; throw Object.assign(new Error('ENOENT: no such file or directory'), { code: 'ENOENT' }); }
+        return (realLstat as (...a: unknown[]) => unknown)(p, ...rest);
+      }) as typeof fs.lstatSync;
+      syncBuiltinESMExports();
+      let got: unknown = null;
+      try { writeBackup(db, home, { nowMs }); } catch (e) { got = e; } finally { fs.lstatSync = realLstat; syncBuiltinESMExports(); }
+      expect(seamFired, 'CONTROL: the pre-check consulted the seam once and was told the name was free, so only the publish can refuse').toBe(1);
+      expect(got, 'the publish refused where rename() would have replaced').toBeInstanceOf(StoreError);
+      expect((got as StoreError).word).toBe('backup-exists');
+      expect((got as StoreError).message, 'link() refused, not the pre-check ("already exists")').toMatch(/appeared while it was written$/);
+      expect(fs.readFileSync(finalPath, 'utf8'), 'the operator file is as it was').toBe('an operator file');
+      expect(fs.readdirSync(P.backups).filter((n) => n.endsWith('.tmp')), 'the refused copy left no temp').toEqual([]);
+    } finally { fs.lstatSync = realLstat; syncBuiltinESMExports(); closeWriter(db); }
+  });
+
+  it('a dangling link at the final name is refused backup-exists BEFORE the copy runs, worded "already exists" (lstat, not a link-following existsSync; H-69)', () => {
+    const home = mkTmp('ccrc-history-backup-dangling-');
+    createStore(home);
+    const P = historyPaths(home);
+    fs.mkdirSync(P.backups, { recursive: true, mode: 0o700 });
+    const nowMs = Date.UTC(2026, 9, 6, 12, 0, 0);
+    const name = backupNameOf(nowMs);
+    const finalPath = path.join(P.backups, name);
+    const target = path.join(P.backups, 'nowhere');
+    fs.symlinkSync(target, finalPath);
+    const db = openWriter(P.dbFile);
+    try {
+      const before = getMeta(db, 'copy_bps');
+      let err: unknown;
+      try { writeBackup(db, home, { nowMs }); } catch (e) { err = e; }
+      expect(err, 'a dangling link is a name that is taken').toBeInstanceOf(StoreError);
+      expect((err as StoreError).word).toBe('backup-exists');
+      expect((err as StoreError).message, 'refused by the pre-check, not after a whole copy').toMatch(/already exists$/);
+      expect(fs.readlinkSync(finalPath), 'the link is as it was').toBe(target);
+      expect(fs.existsSync(target)).toBe(false);
+      expect(fs.readdirSync(P.backups).filter((n) => n.endsWith('.tmp')), 'no copy was made, so no temp').toEqual([]);
+      expect(getMeta(db, 'copy_bps'), 'no copy was timed').toBe(before);
+    } finally { closeWriter(db); }
+  });
+});
+
+// ── W1-B2 Task 23: doctor --repair's measurements (spec 2026-10-05 §8.4; P21, P24) ─────────────────
+describe('store.mjs: the repair measurements (W1-B2 Task 23)', () => {
+  it('integrityCheck reads ok, foreignKeyRows names a planted dangling reference, and ftsMeasure and dropFtsTables see and remove both FTS tables with their own shadows', (ctx) => {
+    const home = mkTmp('ccrc-history-repair-');
+    createStore(home);
+    const db = openWriter(historyPaths(home).dbFile);
+    try {
+      if (probeFts5(db) === 'absent') ctx.skip();
+      expect(integrityCheck(db)).toEqual(['ok']);
+      expect(foreignKeyRows(db)).toEqual([]);
+      db.exec('PRAGMA foreign_keys = OFF');
+      db.prepare("INSERT INTO file_paths (path, file_id, last_seen_ms) VALUES ('/fk-test', 2147483647, 0)").run();
+      db.exec('PRAGMA foreign_keys = ON');
+      expect(foreignKeyRows(db)).toEqual([{ table: 'file_paths', rowid: 1, parent: 'ingest_files', fkid: 0 }]);
+      withTx(db, 'NORMAL', () => { createFtsTables(db); });
+      const m = ftsMeasure(db);
+      expect([...m.tables].sort()).toEqual(['blobs_fts', ...FTS_SHADOWS.blobs_fts, 'nodes_fts', ...FTS_SHADOWS.nodes_fts].sort());
+      expect(m.columns).toEqual({ blobs_fts: ['body'], nodes_fts: ['gist', 'topics', 'refs'] });
+      expect(ftsTablesHealthy(m)).toEqual({ blobs: true, nodes: true });
+      withTx(db, 'NORMAL', () => { dropFtsTables(db); });
+      expect(ftsMeasure(db).tables.size, 'both tables and every shadow are gone').toBe(0);
+      expect(ftsTablesHealthy(ftsMeasure(db))).toEqual({ blobs: false, nodes: false });
+      withTx(db, 'NORMAL', () => { dropFtsTables(db); });   // with nothing left it is a no-op, never a throw
+    } finally { closeWriter(db); }
+  });
+
+  it('dropFtsTables removes a table left at a shadow\'s name when its FTS table is gone, so createFtsTables can run (P24)', (ctx) => {
+    const home = mkTmp('ccrc-history-repair-orphan-');
+    createStore(home);
+    const db = openWriter(historyPaths(home).dbFile);
+    try {
+      if (probeFts5(db) === 'absent') ctx.skip();
+      withTx(db, 'NORMAL', () => { createFtsTables(db); });
+      db.exec('DROP TABLE blobs_fts');                       // takes its own shadows with it
+      db.exec('CREATE TABLE blobs_fts_idx (x)');             // allowed: no FTS table owns that name now
+      db.exec('SAVEPOINT control');
+      expect(() => createFtsTables(db), 'CONTROL: the orphan blocks the re-create').toThrow(/already exists/);
+      db.exec('ROLLBACK TO control');
+      db.exec('RELEASE control');
+      withTx(db, 'NORMAL', () => { dropFtsTables(db); });
+      expect(() => withTx(db, 'NORMAL', () => { createFtsTables(db); })).not.toThrow();
+      expect([...ftsMeasure(db).tables]).toContain('blobs_fts');
+    } finally { closeWriter(db); }
+  });
+});
+
+describe('store.mjs: setCounter (W1-B2 Task 23)', () => {
+  it('sets a counter to n, and 0 removes its row, which every reader reads as 0', () => {
+    const home = mkTmp('ccrc-history-setcounter-');
+    createStore(home);
+    const db = openWriter(historyPaths(home).dbFile);
+    try {
+      const n = (name: string): number | undefined => (db.prepare('SELECT n FROM counters WHERE name = ?').get(name) as { n: number } | undefined)?.n;
+      withTx(db, 'NORMAL', () => { bump(db, 'drain_rejected', 3); setCounter(db, 'spool_blocked', 2); });
+      expect([n('drain_rejected'), n('spool_blocked')]).toEqual([3, 2]);
+      withTx(db, 'NORMAL', () => { setCounter(db, 'drain_rejected', 1); setCounter(db, 'spool_blocked', 0); });
+      expect(n('drain_rejected')).toBe(1);
+      expect(n('spool_blocked'), 'a reset leaves no row').toBeUndefined();
+    } finally { closeWriter(db); }
+  });
+});
+
+// ── W1-B2 Task 24: the binding verbs' store sequences (spec §8.4 adopt, restore, rebuild; §6.2) ────────────────
+describe('store.mjs: the binding verbs\' sequences (W1-B2 Task 24)', () => {
+  const STORE_MJS = path.resolve(__dirname, '../../ccd/history/store.mjs');
+  const FAULTS_MJS = path.resolve(__dirname, 'fixtures/history/preload-faults.mjs');
+  /** One fixed bind time, so every `bound:<ms>`, recover step and `bind` record below is named exactly. */
+  const T = 1_791_000_000_000;
+  const RESTORE_BODY = 'const s = S.stageRestore(process.argv[1], process.argv[2]); '
+    + 'S.commitRestore(process.argv[1], s, { nowMs: Number(process.argv[3]) });';
+  const ADOPT_BODY = 'S.adoptStore(process.argv[1], { nowMs: Number(process.argv[2]) });';
+  const REBUILD_BODY = "S.createStore(process.argv[1], { storeId: process.argv[2], bind: { kind: 'rebuild', nowMs: Number(process.argv[3]) } });";
+  const home = (): string => mkTmp('ccrc-history-bindverb-');
+
+  /** `body` in a child that imports store.mjs as `S`, SIGKILLed by the fault preload at `kill`. The `timeout`
+   *  ends a child that hangs instead, with SIGTERM, so a hang is never read as the planned SIGKILL. */
+  const killedAt = (h: string, kill: string, body: string, args: string[]): ReturnType<typeof spawnSync> => spawnSync(
+    process.execPath,
+    ['--no-warnings', '--import', pathToFileURL(FAULTS_MJS).href, '--input-type=module', '-e',
+      `import * as S from ${JSON.stringify(pathToFileURL(STORE_MJS).href)}; ${body}`, ...args],
+    { encoding: 'utf8', env: { PATH: process.env['PATH'] ?? '', HOME: h, HISTORY_TEST_KILL: kill }, timeout: 60_000, killSignal: 'SIGTERM' },
+  );
+
+  /** A store, a `VACUUM INTO` backup of it under its own db/backups/, then the box as a loss leaves it. The DB,
+   *  its sidecars and store.writer are gone, and store.id is gone too unless `keepStoreId`. */
+  const backedUp = (h: string, name: string, keepStoreId: boolean): { storeId: string; oldWriter: string } => {
+    const { storeId, writer } = createStore(h);
+    const P = historyPaths(h);
+    const db = openWriter(P.dbFile);
+    bump(db, 'fixture_rows', 3);
+    fs.mkdirSync(P.backups, { recursive: true, mode: 0o700 });
+    db.prepare('VACUUM INTO ?').run(path.join(P.backups, name));
+    closeWriter(db);
+    for (const f of [P.dbFile, P.wal, P.shm, P.writer, ...(keepStoreId ? [] : [P.storeId])]) fs.rmSync(f, { force: true });
+    return { storeId, oldWriter: writer };
+  };
+
+  /** A backup with one page overwritten (the middle page, else the quarter page): the first candidate that
+   *  integrity_check answers as rows is used. It reports such damage as rows at the offsets chosen below (it throws at
+   *  others, so the loop checks), and meta.store_id still reads. So only the integrity check can refuse it. The candidates are
+   *  measured on Node 24.x; the node-floor leg (22.16.0, which runs this file) is the arbiter for the floor. */
+  const corruptBackup = (h: string, name: string): void => {
+    const P = historyPaths(h);
+    const db = openWriter(P.dbFile);
+    const ins = db.prepare('INSERT INTO counters (name, n) VALUES (?, ?)');
+    withTx(db, 'NORMAL', () => {
+      for (let i = 0; i < 4000; i += 1) ins.run(`fixture_counter_${String(i).padStart(5, '0')}_${'x'.repeat(60)}`, i);
+    });
+    fs.mkdirSync(P.backups, { recursive: true, mode: 0o700 });
+    const out = path.join(P.backups, name);
+    db.prepare('VACUUM INTO ?').run(out);
+    closeWriter(db);
+    const pages = Math.floor(fs.statSync(out).size / 4096);
+    const whole = fs.readFileSync(out);
+    // Some page offsets make integrity_check THROW 'database disk image is malformed' (measured, 24.14.1, at the middle
+    // page's byte 8), and a throw would hide the integrity check's own verdict from the case. So the first damage that
+    // integrity_check answers as rows, and not as the one row `ok`, is the one used.
+    const answers = (): string[] | null => {
+      const probe = new DatabaseSync(out, { readOnly: true });
+      try { return probe.prepare('PRAGMA integrity_check').all().map((r) => String(Object.values(r)[0])); } catch { return null; } finally { probe.close(); }
+    };
+    for (const [page, off] of [[Math.floor(pages / 2), 100], [Math.floor(pages / 2), 8], [Math.floor(pages / 4), 8], [Math.floor(pages / 4), 100]] as const) {
+      fs.writeFileSync(out, whole);
+      const fd = fs.openSync(out, 'r+');
+      try { fs.writeSync(fd, Buffer.alloc(200, 0xff), 0, 200, page * 4096 + off); } finally { fs.closeSync(fd); }
+      const got = answers();
+      if (got !== null && !(got.length === 1 && got[0] === 'ok')) return;
+    }
+    throw new Error('fixture: no candidate damage reads as integrity_check rows');
+  };
+
+  /** What a binding left INSIDE a DB file, read through a read-only handle. */
+  const inside = (dbFile: string): {
+    storeId: string | null; writer: string | null; journalMode: string;
+    bound: Array<Record<string, unknown>>; recover: Array<Record<string, unknown>>; binds: Array<Record<string, unknown>>;
+  } => {
+    const db = new DatabaseSync(dbFile, { readOnly: true });
+    try {
+      return {
+        storeId: getMeta(db, 'store_id'),
+        writer: getMeta(db, 'writer'),
+        journalMode: String(pragma(db, 'journal_mode')),
+        bound: db.prepare("SELECT k, v FROM meta WHERE k LIKE 'bound:%' ORDER BY k").all().map((r) => ({ ...r })),
+        recover: db.prepare("SELECT version, cursor, completed_ms FROM derivation_state WHERE step = 'recover' ORDER BY version")
+          .all().map((r) => ({ ...r })),
+        binds: db.prepare('SELECT rec FROM journal_outbox ORDER BY seq').all().flatMap((r) => {
+          const p = parseJournalRecord(String(r['rec']));
+          return p.kind === 'record' ? [{ ...p.rec }] : [];
+        }),
+      };
+    } finally {
+      db.close();
+    }
+  };
+  const bindRecord = (kind: string, writer: string, t = T): Record<string, unknown> =>
+    ({ v: 1, k: 'verdict', t, event_key: 'none', kind: 'bind', bind: kind, writer });
+
+  it('adoptStore: the bind commits inside the DB, then store.writer, then store.id; a fresh token and no recovery step', () => {
+    const h = home();
+    const P = historyPaths(h);
+    const { storeId, writer: oldWriter } = createStore(h);
+    fs.rmSync(P.storeId);
+    fs.rmSync(P.writer);
+    expect(decideStoreOpen(measureStoreFacts(h, 'fleet'))).toEqual({ act: 'refuse', word: 'store-unbound' });
+    const got = adoptStore(h, { nowMs: T });
+    expect(got.storeId).toBe(storeId);
+    expect(got.writer).toMatch(WRITER_RE);
+    expect(got.writer).not.toBe(oldWriter);
+    expect(fs.readFileSync(P.storeId, 'utf8').trim()).toBe(storeId);
+    expect(fs.readFileSync(P.writer, 'utf8').trim()).toBe(got.writer);
+    expect(mode(P.storeId)).toBe(0o600);
+    const f = inside(P.dbFile);
+    expect(f.writer).toBe(got.writer);
+    expect(f.bound).toEqual([{ k: `bound:${T}`, v: 'adopt' }]);
+    expect(f.recover, 'adopt registers no recovery step (RC16)').toEqual([]);
+    expect(f.binds).toEqual([bindRecord('adopt', got.writer)]);
+    expect(decideStoreOpen(measureStoreFacts(h, 'fleet'))).toEqual({ act: 'open' });
+  });
+
+  it('adoptStore killed right after store.id lands finds the bind already committed; killed before it, the store stays unbound and a second adopt binds it', () => {
+    const h = home();
+    const P = historyPaths(h);
+    createStore(h);
+    fs.rmSync(P.storeId);
+    fs.rmSync(P.writer);
+    // writeFileAtomic(store.id) renames `store.id.tmp.<pid>`: the first rename naming `store.id.tmp`.
+    const r = killedAt(h, 'renameSync:store.id.tmp:1:after', ADOPT_BODY, [h, String(T)]);
+    expect(r.signal, String(r.stderr)).toBe('SIGKILL');
+    expect(fs.existsSync(P.storeId)).toBe(true);
+    const f = inside(P.dbFile);
+    expect(f.bound, 'the bind committed before store.id named the store').toEqual([{ k: `bound:${T}`, v: 'adopt' }]);
+    expect(f.binds).toHaveLength(1);
+    expect(f.writer).toBe(fs.readFileSync(P.writer, 'utf8').trim());
+
+    const h2 = home();
+    const P2 = historyPaths(h2);
+    createStore(h2);
+    fs.rmSync(P2.storeId);
+    fs.rmSync(P2.writer);
+    const r2 = killedAt(h2, 'renameSync:store.id.tmp:1', ADOPT_BODY, [h2, String(T)]);
+    expect(r2.signal, String(r2.stderr)).toBe('SIGKILL');
+    expect(fs.existsSync(P2.storeId)).toBe(false);
+    expect(decideStoreOpen(measureStoreFacts(h2, 'fleet'))).toEqual({ act: 'refuse', word: 'store-unbound' });
+    const again = adoptStore(h2, { nowMs: T + 1 });
+    expect(fs.readFileSync(P2.storeId, 'utf8').trim()).toBe(again.storeId);
+    const f2 = inside(P2.dbFile);
+    expect(f2.binds).toHaveLength(2);
+    expect(f2.writer).toBe(again.writer);
+    expect(fs.readFileSync(P2.writer, 'utf8').trim()).toBe(again.writer);
+    expect(decideStoreOpen(measureStoreFacts(h2, 'fleet'))).toEqual({ act: 'open' });
+  }, 120_000);
+
+  it('restore onto a fresh box: a 0600 copy measured, then made WAL with every binding fact inside it, linked, and bound through the pending marker', () => {
+    const h = home();
+    const P = historyPaths(h);
+    const name = '20261001T000000Z.db';
+    const { storeId, oldWriter } = backedUp(h, name, false);
+    const prev = process.umask(0o002);
+    let staged: ReturnType<typeof stageRestore> | null = null;
+    let tempMode = 0;
+    let got: { storeId: string; writer: string } | null = null;
+    try {
+      staged = stageRestore(h, name);
+      tempMode = mode(staged.tempPath);
+      got = commitRestore(h, staged, { nowMs: T });
+    } finally {
+      process.umask(prev);
+    }
+    expect(tempMode, 'the copy is 0600 under any umask').toBe(0o600);
+    expect(path.basename(staged!.tempPath)).toMatch(/^\.history\.db\.restore\.[0-9]+$/);
+    expect(staged).toMatchObject({ storeId: { state: 'value', value: storeId }, userVersion: SCHEMA_VERSION, integrityOk: true });
+    expect(staged!.sizeBytes).toBe(fs.statSync(path.join(P.backups, name)).size);
+    const bound = got!;
+    expect(bound.storeId).toBe(storeId);
+    expect(bound.writer).toMatch(WRITER_RE);
+    expect(bound.writer).not.toBe(oldWriter);
+    expect(fs.readFileSync(P.storeId, 'utf8').trim()).toBe(storeId);
+    expect(fs.readFileSync(P.writer, 'utf8').trim()).toBe(bound.writer);
+    expect(fs.existsSync(P.pending)).toBe(false);
+    expect(fs.readdirSync(P.dbDir).filter((n) => n.startsWith('.history.db.restore.'))).toEqual([]);
+    expect(mode(P.dbFile)).toBe(0o600);
+    const f = inside(P.dbFile);
+    expect(f).toMatchObject({
+      storeId, writer: bound.writer, journalMode: 'wal',
+      bound: [{ k: `bound:${T}`, v: 'restore' }],
+      recover: [{ version: T, cursor: null, completed_ms: null }],
+    });
+    expect(f.binds).toEqual([bindRecord('restore', bound.writer)]);
+    expect(decideStoreOpen(measureStoreFacts(h, 'fleet'))).toEqual({ act: 'open' });
+  });
+
+  it('restore with store.id already naming the backup\'s store writes no pending marker, and a kill right after the link finds the binding and the recovery step inside history.db', () => {
+    const h = home();
+    const P = historyPaths(h);
+    const name = '20261002T000000Z.db';
+    const { storeId } = backedUp(h, name, true);
+    const r = killedAt(h, 'linkSync:.history.db.restore.:1:after', RESTORE_BODY, [h, name, String(T)]);
+    expect(r.signal, String(r.stderr)).toBe('SIGKILL');
+    expect(fs.existsSync(P.pending), 'store.id already names the store: no marker').toBe(false);
+    expect(fs.readFileSync(P.storeId, 'utf8').trim()).toBe(storeId);
+    const f = inside(P.dbFile);
+    expect(f.recover, 'the recovery step was inside the copy before it was linked').toEqual([{ version: T, cursor: null, completed_ms: null }]);
+    expect(f.bound).toEqual([{ k: `bound:${T}`, v: 'restore' }]);
+    expect(f.writer).toBe(fs.readFileSync(P.writer, 'utf8').trim());
+    expect(decideStoreOpen(measureStoreFacts(h, 'fleet'))).toEqual({ act: 'open' });
+    // The temp the kill left (a second name of the same inode) goes with the next lock-holding pass; the store stays.
+    expect(removeStaleTemps(h).some((n) => n.startsWith('.history.db.restore.'))).toBe(true);
+    expect(peekStoreId(P.dbFile)).toEqual({ state: 'value', value: storeId });
+  }, 120_000);
+
+  it('restore onto a fresh box killed between the link and the pending rename: the next pass finishes it, the recovery step already inside', () => {
+    const h = home();
+    const P = historyPaths(h);
+    const name = '20261003T000000Z.db';
+    const { storeId } = backedUp(h, name, false);
+    // The FIRST rename naming store.id.pending is the marker's own temp rename; the SECOND is the rename to store.id.
+    const r = killedAt(h, 'renameSync:store.id.pending:2', RESTORE_BODY, [h, name, String(T)]);
+    expect(r.signal, String(r.stderr)).toBe('SIGKILL');
+    expect(fs.existsSync(P.storeId)).toBe(false);
+    expect(fs.readFileSync(P.pending, 'utf8').trim()).toBe(storeId);
+    expect(decideStoreOpen(measureStoreFacts(h, 'fleet'))).toEqual({ act: 'finish-pending' });
+    const f = inside(P.dbFile);
+    expect(f.recover).toEqual([{ version: T, cursor: null, completed_ms: null }]);
+    expect(f.bound).toEqual([{ k: `bound:${T}`, v: 'restore' }]);
+  }, 120_000);
+
+  it('restore killed before the link: no history.db, a tick would refuse store-recoverable rather than create, the temp goes with the next pass, and a second restore completes', () => {
+    const h = home();
+    const P = historyPaths(h);
+    const name = '20261004T000000Z.db';
+    const { storeId } = backedUp(h, name, false);
+    const r = killedAt(h, 'linkSync:.history.db.restore.:1', RESTORE_BODY, [h, name, String(T)]);
+    expect(r.signal, String(r.stderr)).toBe('SIGKILL');
+    expect(fs.existsSync(P.dbFile)).toBe(false);
+    expect(decideStoreOpen(measureStoreFacts(h, 'fleet'))).toEqual({ act: 'refuse', word: 'store-recoverable' });
+    const removed = removeStaleTemps(h);
+    expect(removed.length).toBeGreaterThan(0);
+    expect(removed.every((n) => n.startsWith('.history.db.restore.'))).toBe(true);
+    const s2 = stageRestore(h, name);
+    commitRestore(h, s2, { nowMs: T + 1 });
+    expect(decideStoreOpen(measureStoreFacts(h, 'fleet'))).toEqual({ act: 'open' });
+    expect(fs.readFileSync(P.storeId, 'utf8').trim()).toBe(storeId);
+    expect(inside(P.dbFile).recover).toEqual([{ version: T + 1, cursor: null, completed_ms: null }]);
+  }, 120_000);
+
+  it('restore puts every journal-known redact pair into the copy before the link and starts the step +pairs; a pair the backup already holds adds nothing (spec §8.4 and §9.14)', () => {
+    const shaA = 'a1'.repeat(32);   // recorded before the backup was taken: the backup holds it
+    const shaB = 'b2'.repeat(32);   // learned after it: only the journal holds it
+    /** A store holding pair A, its VACUUM INTO backup under db/backups/, then the box as a loss leaves it. */
+    const withPairA = (h: string, name: string): void => {
+      const P = historyPaths(h);
+      createStore(h);
+      const db = openWriter(P.dbFile);
+      try {
+        db.prepare('INSERT INTO redact_hashes (len, sha256, first_seen_ms) VALUES (?, ?, ?)').run(32, Buffer.from(shaA, 'hex'), T - 10);
+        fs.mkdirSync(P.backups, { recursive: true, mode: 0o700 });
+        db.prepare('VACUUM INTO ?').run(path.join(P.backups, name));
+      } finally { closeWriter(db); }
+      for (const f of [P.dbFile, P.wal, P.shm, P.writer, P.storeId]) fs.rmSync(f, { force: true });
+    };
+    const pairsIn = (dbFile: string): Array<Record<string, unknown>> => {
+      const db = new DatabaseSync(dbFile, { readOnly: true });
+      try {
+        return db.prepare('SELECT len, lower(hex(sha256)) AS sha FROM redact_hashes ORDER BY len').all().map((r) => ({ ...r }));
+      } finally { db.close(); }
+    };
+    const PAIRS_BODY = 'const s = S.stageRestore(process.argv[1], process.argv[2]); '
+      + 'S.commitRestore(process.argv[1], s, { nowMs: Number(process.argv[3]), pairs: JSON.parse(process.argv[4]) });';
+
+    // Killed right before the link: the copy the kill leaves already holds both pairs and the +pairs cursor.
+    const h = home();
+    const P = historyPaths(h);
+    const name = '20261005T000000Z.db';
+    withPairA(h, name);
+    const both = JSON.stringify([{ len: 32, sha256: shaA, t: T - 10 }, { len: 40, sha256: shaB, t: T - 5 }]);
+    const r = killedAt(h, 'linkSync:.history.db.restore.:1', PAIRS_BODY, [h, name, String(T), both]);
+    expect(r.signal, String(r.stderr)).toBe('SIGKILL');
+    expect(fs.existsSync(P.dbFile), 'CONTROL: killed before the link').toBe(false);
+    const temps = fs.readdirSync(P.dbDir).filter((n) => /^\.history\.db\.restore\.[0-9]+$/.test(n));
+    expect(temps.length, 'CONTROL: the kill left the copy').toBe(1);
+    const copy = path.join(P.dbDir, temps[0]!);
+    expect(pairsIn(copy), 'both pairs are inside the copy before it is linked').toEqual([{ len: 32, sha: shaA }, { len: 40, sha: shaB }]);
+    expect(inside(copy).recover, 'the journal-only pair starts the step +pairs, so the reindex phase still runs')
+      .toEqual([{ version: T, cursor: 'index+pairs', completed_ms: null }]);
+
+    // Every pair the journal knows already in the backup: nothing added, and the step starts at NULL as before.
+    const h2 = home();
+    const P2 = historyPaths(h2);
+    withPairA(h2, name);
+    commitRestore(h2, stageRestore(h2, name), { nowMs: T, pairs: [{ len: 32, sha256: shaA, t: T - 10 }] });
+    expect(pairsIn(P2.dbFile)).toEqual([{ len: 32, sha: shaA }]);
+    expect(inside(P2.dbFile).recover).toEqual([{ version: T, cursor: null, completed_ms: null }]);
+    // A malformed pair is a caller's bug, refused before anything is written.
+    const h3 = home();
+    withPairA(h3, name);
+    const s3 = stageRestore(h3, name);
+    expect(() => commitRestore(h3, s3, { nowMs: T, pairs: [{ len: 40, sha256: 'not hex', t: T }] })).toThrow(TypeError);
+    expect(fs.existsSync(historyPaths(h3).dbFile), 'nothing linked').toBe(false);
+    abortRestore(s3);
+  }, 120_000);
+
+  it('restore runs the caller\'s belt hooks inside the FULL bind transaction: the check before any binding fact or pair, the stamp after the pairs; a throw links nothing (ruling R-witness-restore)', () => {
+    const shaB = 'b2'.repeat(32);   // a journal-only pair: the backup lacks it
+    const name = '20261006T000000Z.db';
+    const h = home();
+    const P = historyPaths(h);
+    backedUp(h, name, false);
+    const seen: Array<{ hook: string; pairs: number; recover: number; inTx: boolean }> = [];
+    const look = (hook: string) => (db: DatabaseSync): void => {
+      seen.push({
+        hook,
+        pairs: Number((db.prepare('SELECT count(*) AS n FROM redact_hashes').get() as { n: number }).n),
+        recover: Number((db.prepare("SELECT count(*) AS n FROM derivation_state WHERE step = 'recover'").get() as { n: number }).n),
+        inTx: (() => { try { db.exec('BEGIN'); } catch { return true; } db.exec('ROLLBACK'); return false; })(),
+      });
+    };
+    commitRestore(h, stageRestore(h, name), { nowMs: T, pairs: [{ len: 40, sha256: shaB, t: T - 5 }], belt: { check: look('check'), stamp: look('stamp') } });
+    expect(seen, 'the check sees the copy as the backup left it, the stamp sees every write, both inside the transaction').toEqual([
+      { hook: 'check', pairs: 0, recover: 0, inTx: true },
+      { hook: 'stamp', pairs: 1, recover: 1, inTx: true },
+    ]);
+    expect(inside(P.dbFile).recover, 'CONTROL: the restore committed').toEqual([{ version: T, cursor: 'index+pairs', completed_ms: null }]);
+
+    // A throw from the stamp rolls the whole bind back: nothing is linked, and the copy holds none of it.
+    const h2 = home();
+    backedUp(h2, name, false);
+    const s2 = stageRestore(h2, name);
+    expect(() => commitRestore(h2, s2, { nowMs: T, pairs: [{ len: 40, sha256: shaB, t: T - 5 }], belt: {
+      check: () => {}, stamp: () => { throw new Error('fixture: the stamp failed'); },
+    } })).toThrow('fixture: the stamp failed');
+    expect(fs.existsSync(historyPaths(h2).dbFile), 'nothing linked').toBe(false);
+    expect(inside(s2.tempPath).recover, 'the bind rolled back with the stamp').toEqual([]);
+    abortRestore(s2);
+    // A belt without both hooks is a caller's bug, refused before anything is written.
+    const h3 = home();
+    backedUp(h3, name, false);
+    const s3 = stageRestore(h3, name);
+    expect(() => commitRestore(h3, s3, { nowMs: T, belt: { check: () => {} } as never }), 'the guard\'s own words, not a native TypeError from inside the transaction').toThrow(/a belt is null or/);
+    expect(inside(s3.tempPath).bound, 'nothing written').toEqual([]);
+    expect(inside(s3.tempPath).journalMode, 'refused before the copy was made WAL').not.toBe('wal');
+    abortRestore(s3);
+  });
+
+  it('H-84: a malformed redact pair is refused naming only its index and field, never dumping its digest or length (spec §15 SE12), and a digest that is not a string is refused too', () => {
+    const shaB = 'b2'.repeat(32);
+    const name = '20261006T000000Z.db';
+    const h = home();
+    backedUp(h, name, false);
+    const staged = stageRestore(h, name);
+    const messageOf = (pairs: unknown[]): string => {
+      try { commitRestore(h, staged, { nowMs: T, pairs: pairs as never }); } catch (e) { return e instanceof TypeError ? e.message : `not a TypeError: ${String(e)}`; }
+      return 'no throw';
+    };
+    const good = { len: 32, sha256: 'a1'.repeat(32), t: T };
+    // An array of one hex string passes String() and 64-hex, and Buffer.from(array, 'hex') makes a 1-byte digest that masks nothing.
+    expect(messageOf([{ len: 40, sha256: [shaB], t: T }]), 'a digest that is not a string').toMatch(/^commitRestore: redact pair 0: sha256 is not valid$/);
+    const m = messageOf([good, { len: 40, sha256: `zz${shaB.slice(2)}`, t: T }]);
+    expect(m, 'the index and the field, nothing else').toMatch(/^commitRestore: redact pair 1: sha256 is not valid$/);
+    expect(m, 'no digest in the message').not.toContain(shaB.slice(2));
+    expect(m, 'no length in the message').not.toContain('40');
+    abortRestore(staged);
+  });
+
+  /** H-83's seams, each a SECOND connection to the copy that holds a read snapshot, so SQLite's close-time
+   *  checkpoint can neither complete nor delete the -wal (it ignores that failure). `commit` opens it right after the
+   *  COMMIT that lands on `tempPath`'s connection: an explicit PRAGMA wal_checkpoint(TRUNCATE) then answers busy
+   *  (that connection's busy_timeout is cut to 100 ms, so the refusal is measured, not waited for). `close` opens it
+   *  as that connection closes, after one more write puts frames in the -wal: only a look AFTER the close sees them. */
+  const blockCheckpoint = (tempPath: string, at: 'commit' | 'close'): { fired: () => number; stop: () => void } => {
+    const realExec = DatabaseSync.prototype.exec;
+    const realClose = DatabaseSync.prototype.close;
+    const blockers: DatabaseSync[] = [];
+    let target: DatabaseSync | null = null;
+    const hold = (): void => {
+      const reader = new DatabaseSync(tempPath);
+      reader.exec('BEGIN');
+      reader.prepare('SELECT count(*) AS n FROM meta').get();
+      blockers.push(reader);
+    };
+    DatabaseSync.prototype.exec = function (this: DatabaseSync, sql: string): void {
+      realExec.call(this, sql);
+      if (sql === 'COMMIT' && target === null && fs.existsSync(tempPath)) {
+        target = this;
+        if (at === 'commit') {
+          realExec.call(this, 'PRAGMA busy_timeout = 100');
+          hold();
+        }
+      }
+    } as typeof DatabaseSync.prototype.exec;
+    if (at === 'close') {
+      DatabaseSync.prototype.close = function (this: DatabaseSync): void {
+        if (this === target && blockers.length === 0) {
+          realExec.call(this, "INSERT INTO meta (k, v) VALUES ('h83-after-seal', 'x')");
+          hold();
+        }
+        realClose.call(this);
+      } as typeof DatabaseSync.prototype.close;
+    }
+    return {
+      fired: () => blockers.length,
+      stop: () => {
+        DatabaseSync.prototype.exec = realExec;
+        DatabaseSync.prototype.close = realClose;
+        for (const b of blockers.splice(0)) b.close();
+      },
+    };
+  };
+  const SEAMS = [['commit', /checkpoint did not complete/], ['close', /still holds frames after the close/]] as const;
+
+  it('H-83: a restore whose bind facts could not be checkpointed into the copy (before the close, or by the close) is refused, never linked: commitRestore throws and history.db does not exist', () => {
+    const name = '20261006T000000Z.db';
+    for (const [at, words] of SEAMS) {
+      const h = home();
+      const P = historyPaths(h);
+      backedUp(h, name, false);
+      const staged = stageRestore(h, name);
+      const block = blockCheckpoint(staged.tempPath, at);
+      let thrown: unknown;
+      try {
+        try { commitRestore(h, staged, { nowMs: T }); } catch (e) { thrown = e; }
+        expect(block.fired(), `${at}: CONTROL: the second connection was open`).toBe(1);
+      } finally { block.stop(); }
+      expect(thrown, `${at}: the incomplete checkpoint is refused`).toBeInstanceOf(Error);
+      expect(String((thrown as Error).message), at).toMatch(words);
+      expect(fs.existsSync(P.dbFile), `${at}: nothing linked: the facts would live in a -wal no link carries`).toBe(false);
+      abortRestore(staged);
+      expect(fs.readdirSync(P.dbDir).filter((n) => n.startsWith('.history.db.restore.')), `${at}: abort takes the -wal too`).toEqual([]);
+    }
+  });
+
+  it('H-83: a rebuild\'s creation whose bind facts could not be checkpointed into the copy (before the close, or by the close) is refused, never linked: createStore throws and history.db does not exist', () => {
+    for (const [at, words] of SEAMS) {
+      const h = home();
+      const P = historyPaths(h);
+      fs.mkdirSync(P.dbDir, { recursive: true, mode: 0o700 });
+      const block = blockCheckpoint(path.join(P.dbDir, `history.db.new.${process.pid}`), at);
+      let thrown: unknown;
+      try {
+        try { createStore(h, { storeId: mintStoreId(), bind: { kind: 'rebuild', nowMs: T } }); } catch (e) { thrown = e; }
+        expect(block.fired(), `${at}: CONTROL: the second connection was open`).toBe(1);
+      } finally { block.stop(); }
+      expect(thrown, `${at}: the incomplete checkpoint is refused`).toBeInstanceOf(Error);
+      expect(String((thrown as Error).message), at).toMatch(words);
+      expect(fs.existsSync(P.dbFile), `${at}: nothing linked`).toBe(false);
+    }
+  });
+
+  it('H-85: stageRestore applies the §8.4 name rule itself (lib\'s restoreNameOk): an in-flight dot-temp, a stray .db and an unnamed file are refused restore-refused before any copy is made', () => {
+    const h = home();
+    const P = historyPaths(h);
+    createStore(h);
+    fs.mkdirSync(P.backups, { recursive: true, mode: 0o700 });
+    const refused = ['.pre-v1.db.tmp', '.20261001T000000Z.db.tmp', 'notes.db', '20261001T000000Z.db.tmp', 'pre-v0.db'];
+    for (const name of refused) fs.writeFileSync(path.join(P.backups, name), 'this is not a store');
+    for (const name of refused) {
+      expect(wordOf(() => stageRestore(h, name)), name).toBe('restore-refused');
+    }
+    expect(fs.readdirSync(P.dbDir).filter((n) => n.startsWith('.history.db.restore.')), 'refused before the copy').toEqual([]);
+  });
+
+  it('H-87: a pair with a length that is not positive or a time that is not an integer is refused by the pair guard before the copy is touched; the copy is still 0600 under a umask that strips the owner bits (fchmod)', () => {
+    const shaB = 'b2'.repeat(32);
+    const name = '20261006T000000Z.db';
+    const h = home();
+    backedUp(h, name, false);
+    const staged = stageRestore(h, name);
+    const messageOf = (pair: unknown): string => {
+      try { commitRestore(h, staged, { nowMs: T, pairs: [pair] as never }); } catch (e) { return e instanceof TypeError ? e.message : `not a TypeError: ${String(e)}`; }
+      return 'no throw';
+    };
+    expect(messageOf({ len: 0, sha256: shaB, t: T }), 'a zero length').toBe('commitRestore: redact pair 0: len is not valid');
+    expect(messageOf({ len: -3, sha256: shaB, t: T }), 'a negative length').toBe('commitRestore: redact pair 0: len is not valid');
+    expect(messageOf({ len: 40, sha256: shaB, t: Number.NaN }), 'a time that is NaN').toBe('commitRestore: redact pair 0: t is not valid');
+    expect(inside(staged.tempPath).journalMode, 'refused before the copy was made WAL').not.toBe('wal');
+    abortRestore(staged);
+
+    // umask 0o277 strips the owner's write bit from open()'s 0600, so only the fchmod makes the copy 0600.
+    const h2 = home();
+    backedUp(h2, name, false);
+    const prev = process.umask(0o277);
+    let tempMode = 0;
+    let s2: ReturnType<typeof stageRestore> | null = null;
+    try {
+      s2 = stageRestore(h2, name);
+      tempMode = mode(s2.tempPath);
+    } finally { process.umask(prev); }
+    expect(tempMode, 'the copy is 0600 whatever the umask').toBe(0o600);
+    abortRestore(s2!);
+  });
+
+  it('H-88: abortRestore and commitRestore take only a path shaped like the restore temp (.history.db.restore.<pid>): a forged staged value is a TypeError that removes, opens and links nothing, history.db included', () => {
+    const h = home();
+    const P = historyPaths(h);
+    createStore(h);
+    const forged = { tempPath: P.dbFile, dbDir: P.dbDir, storeId: { state: 'value', value: mintStoreId() }, userVersion: SCHEMA_VERSION, integrityOk: true, sizeBytes: 0 };
+    expect(() => abortRestore(forged as never)).toThrow(TypeError);
+    expect(fs.existsSync(P.dbFile), 'history.db survives the forged abort').toBe(true);
+    expect(() => commitRestore(h, forged as never, { nowMs: T })).toThrow(TypeError);
+    expect(inside(P.dbFile).bound, 'nothing was bound into the live store').toEqual([]);
+    expect(fs.existsSync(P.pending), 'no marker was written').toBe(false);
+    for (const bad of [`${P.dbDir}/.history.db.restore.`, `${P.dbDir}/.history.db.restore.12x`, `${P.dbDir}/history.db.new.1`, `${P.dbFile}-wal`]) {
+      expect(() => abortRestore({ ...forged, tempPath: bad } as never), bad).toThrow(TypeError);
+    }
+    // H-189: the right basename in another directory is no restore temp of this home: nothing there is bound, linked or removed.
+    const other = path.join(h, 'other-dir');
+    fs.mkdirSync(other, { recursive: true });
+    const foreignTemp = path.join(other, '.history.db.restore.1');
+    fs.writeFileSync(foreignTemp, 'not this home\'s temp');
+    fs.writeFileSync(`${foreignTemp}-wal`, 'its sidecar');
+    expect(() => abortRestore({ ...forged, tempPath: foreignTemp } as never), 'abort').toThrow(TypeError);
+    expect(() => abortRestore({ ...forged, tempPath: foreignTemp, dbDir: undefined } as never), 'abort of a value that records no db/').toThrow(TypeError);
+    expect(() => commitRestore(h, { ...forged, tempPath: foreignTemp } as never, { nowMs: T }), 'commit').toThrow(TypeError);
+    expect(fs.readFileSync(foreignTemp, 'utf8'), 'the file in the other directory survives').toBe('not this home\'s temp');
+    expect(fs.existsSync(`${foreignTemp}-wal`), 'and so does its sidecar').toBe(true);
+    expect(inside(P.dbFile).bound, 'nothing was bound into the live store').toEqual([]);
+    // The real shape still passes (the temp need not exist: removal is idempotent).
+    expect(() => abortRestore({ ...forged, tempPath: `${P.dbDir}/.history.db.restore.${process.pid}` } as never)).not.toThrow();
+  });
+
+  // M23: only the FIFO rows are Linux-only (the macOS leg is advisory); this one skips on darwin like the file's others.
+  it.skipIf(process.platform === 'darwin')('H-86 (a): a FIFO at the backup name is refused restore-refused and never waited on (O_NONBLOCK), in a child with a 5 s deadline', () => {
+    const h = home();
+    const P = historyPaths(h);
+    createStore(h);
+    fs.mkdirSync(P.backups, { recursive: true, mode: 0o700 });
+    const name = '20261001T000000Z.db';
+    const mk = spawnSync('mkfifo', [path.join(P.backups, name)], { encoding: 'utf8' });
+    expect(mk.status, String(mk.stderr)).toBe(0);
+    // A child, because a stage that blocks on the FIFO would hang this process, under the operator's lock, forever.
+    const r = spawnSync(process.execPath, ['--no-warnings', '--input-type=module', '-e',
+      `import * as S from ${JSON.stringify(pathToFileURL(STORE_MJS).href)}; `
+      + 'try { S.stageRestore(process.argv[1], process.argv[2]); console.log("no throw"); } catch (e) { console.log(e instanceof S.StoreError ? e.word : "not a StoreError: " + String(e)); }',
+    h, name], { encoding: 'utf8', env: { PATH: process.env['PATH'] ?? '', HOME: h }, timeout: 5_000, killSignal: 'SIGKILL' });
+    expect(r.signal, `the stage hung on the FIFO: ${String(r.stderr)}`).toBeNull();
+    expect(String(r.stdout).trim()).toBe('restore-refused');
+    expect(fs.readdirSync(P.dbDir).filter((n) => n.startsWith('.history.db.restore.')), 'no copy was started').toEqual([]);
+  });
+
+  it('H-86 (b): a directory at the backup name is refused restore-refused by the regular-file check, before any copy is started', () => {
+    const h = home();
+    const P = historyPaths(h);
+    createStore(h);
+    fs.mkdirSync(path.join(P.backups, '20261001T000000Z.db'), { recursive: true, mode: 0o700 });
+    expect(wordOf(() => stageRestore(h, '20261001T000000Z.db'))).toBe('restore-refused');
+    expect(fs.readdirSync(P.dbDir).filter((n) => n.startsWith('.history.db.restore.')), 'no copy was started').toEqual([]);
+  });
+
+  it('H-86 (c): a temp, or any sidecar of one, already at the restore temp name is never reopened: stageRestore throws and leaves the planted file as it was', () => {
+    const name = '20261006T000000Z.db';
+    for (const suffix of ['', '-wal', '-shm', '-journal']) {
+      const h = home();
+      const P = historyPaths(h);
+      backedUp(h, name, false);
+      const planted = `${P.dbDir}/.history.db.restore.${process.pid}${suffix}`;
+      fs.writeFileSync(planted, 'a leftover');
+      let err: unknown;
+      try { stageRestore(h, name); } catch (e) { err = e; }
+      expect(err, `${suffix || 'the temp itself'}: refused`).toBeInstanceOf(Error);
+      expect(String((err as Error).message), suffix).toMatch(/a temp is never reopened/);
+      expect(fs.readFileSync(planted, 'utf8'), `${suffix || 'the temp itself'}: untouched`).toBe('a leftover');
+      expect(fs.readdirSync(P.dbDir).filter((n) => n.startsWith('.history.db.restore.')), suffix).toEqual([path.basename(planted)]);
+    }
+  });
+
+  it('stageRestore measures the copy and never trusts it: damage reads integrityOk false, a file that is no store reads its store_id unreadable, a link or a path is refused, and abortRestore takes the temp', () => {
+    const h = home();
+    const P = historyPaths(h);
+    const { storeId } = createStore(h);
+    corruptBackup(h, '20261002T000000Z.db');
+    const s = stageRestore(h, '20261002T000000Z.db');
+    expect(s.storeId, 'meta still reads: only the integrity check can refuse this copy').toEqual({ state: 'value', value: storeId });
+    expect(s.integrityOk).toBe(false);
+    abortRestore(s);
+    expect(fs.existsSync(s.tempPath)).toBe(false);
+
+    fs.writeFileSync(path.join(P.backups, 'pre-v1.db'), 'this is not a database file at all, it is text\n'.repeat(400));
+    const t = stageRestore(h, 'pre-v1.db');
+    expect(t).toMatchObject({ storeId: { state: 'unreadable' }, userVersion: null, integrityOk: false });
+    abortRestore(t);
+
+    fs.symlinkSync(path.join(P.backups, '20261002T000000Z.db'), path.join(P.backups, '20261003T000000Z.db'));
+    expect(wordOf(() => stageRestore(h, '20261003T000000Z.db')), 'a symlink is never followed (O_NOFOLLOW)').toBe('restore-refused');
+    expect(wordOf(() => stageRestore(h, '../store.id'))).toBe('restore-refused');
+    expect(fs.readdirSync(P.dbDir).filter((n) => n.startsWith('.history.db.restore.'))).toEqual([]);
+  });
+
+  it('createStore with a store_id and a rebuild bind: that id, the binding and the recovery step inside, store.id through the pending marker; none when store.id already names it; B1\'s plain creation unchanged', () => {
+    const S1 = mintStoreId();
+    const h = home();
+    const P = historyPaths(h);
+    const got = createStore(h, { storeId: S1, bind: { kind: 'rebuild', nowMs: T } });
+    expect(got.storeId).toBe(S1);
+    expect(fs.readFileSync(P.storeId, 'utf8').trim()).toBe(S1);
+    expect(fs.existsSync(P.pending)).toBe(false);
+    const f = inside(P.dbFile);
+    expect(f).toMatchObject({
+      storeId: S1, writer: got.writer, journalMode: 'wal',
+      bound: [{ k: `bound:${T}`, v: 'rebuild' }],
+      recover: [{ version: T, cursor: null, completed_ms: null }],
+    });
+    expect(f.binds).toEqual([bindRecord('rebuild', got.writer)]);
+
+    // store.id already names the store: a kill right after the link leaves no marker, and the store opens.
+    const h2 = home();
+    const P2 = historyPaths(h2);
+    fs.mkdirSync(P2.root, { recursive: true, mode: 0o700 });
+    writeFileAtomic(P2.storeId, `${S1}\n`);
+    const r = killedAt(h2, 'linkSync:history.db.new.:1:after', REBUILD_BODY, [h2, S1, String(T)]);
+    expect(r.signal, String(r.stderr)).toBe('SIGKILL');
+    expect(fs.existsSync(P2.pending)).toBe(false);
+    expect(decideStoreOpen(measureStoreFacts(h2, 'fleet'))).toEqual({ act: 'open' });
+    expect(inside(P2.dbFile).recover).toEqual([{ version: T, cursor: null, completed_ms: null }]);
+
+    // B1's first install: no bound row, no recovery step, an empty outbox.
+    const h3 = home();
+    createStore(h3);
+    expect(inside(historyPaths(h3).dbFile)).toMatchObject({ bound: [], recover: [], binds: [] });
+  }, 120_000);
+
+  it('createStore with a rebuild bind killed between the link and the pending rename: finish-pending, the recovery step already inside', () => {
+    const S1 = mintStoreId();
+    const h = home();
+    const P = historyPaths(h);
+    const r = killedAt(h, 'renameSync:store.id.pending:2', REBUILD_BODY, [h, S1, String(T)]);
+    expect(r.signal, String(r.stderr)).toBe('SIGKILL');
+    expect(fs.existsSync(P.storeId)).toBe(false);
+    expect(decideStoreOpen(measureStoreFacts(h, 'fleet'))).toEqual({ act: 'finish-pending' });
+    const f = inside(P.dbFile);
+    expect(f.storeId).toBe(S1);
+    expect(f.recover).toEqual([{ version: T, cursor: null, completed_ms: null }]);
+    expect(f.bound).toEqual([{ k: `bound:${T}`, v: 'rebuild' }]);
+  }, 120_000);
+});
+
+describe('blobPlainTextMeasured: a stored body as text, with the condition that kept it from being one (HA1 fix round 1 (g))', () => {
+  const idx = makePairIndex([]);
+  const body = (v: unknown): { z: Uint8Array; len: number } => {
+    const raw = Buffer.from(JSON.stringify(v));
+    return { z: brotli(raw), len: raw.length };
+  };
+  it('answers text, absent, oversize and undecodable apart, and an empty text is a text', () => {
+    const ok = body('the summary');
+    expect(blobPlainTextMeasured(ok.z, false, idx, ok.len)).toEqual({ state: 'text', text: 'the summary' });
+    const empty = body('');
+    expect(blobPlainTextMeasured(empty.z, false, idx, empty.len), 'an empty summary decodes: it is a text, not a damage').toEqual({ state: 'text', text: '' });
+    expect(blobPlainTextMeasured(null, false, idx, 5), 'a tombstoned blob has no bytes').toEqual({ state: 'absent', text: '' });
+    expect(blobPlainTextMeasured(ok.z, false, idx, BLOB_DECODE_MAX + 1), 'a body past the decode bound').toEqual({ state: 'oversize', text: '' });
+    expect(blobPlainTextMeasured(ok.z, true, idx, SIDECAR_WHOLE_MAX + 1), 'a sidecar past its whole-read bound').toEqual({ state: 'oversize', text: '' });
+    expect(blobPlainTextMeasured(Uint8Array.from([0, 255]), false, idx, 10), 'bytes that are no Brotli').toEqual({ state: 'undecodable', text: '' });
+    const deep = Buffer.from('['.repeat(100_000));
+    expect(blobPlainTextMeasured(brotli(deep), false, idx, deep.length), 'a body past the structure bound').toEqual({ state: 'undecodable', text: '' });
+  });
+  it('blobPlainText keeps its old meaning: the text of a text, and \'\' for every other state', () => {
+    const ok = body('the summary');
+    expect(blobPlainText(ok.z, false, idx, ok.len)).toBe('the summary');
+    expect(blobPlainText(ok.z, false, idx, BLOB_DECODE_MAX + 1)).toBe('');
+    expect(blobPlainText(null, false, idx, 5)).toBe('');
+    expect(blobPlainText(Uint8Array.from([0, 255]), false, idx, 10)).toBe('');
+    expect(blobPlainText(ok.z, true, idx, SIDECAR_WHOLE_MAX + 1)).toBe('');
+  });
+});
+
+// ── schema v2: every derived index, versioned (D-5015, D-5018, D-5019, D-5020; review 441 F1) ─────────────────────
+// A healthy pass asks "is any blob still owed an FTS row?" on every tick (sweep.mjs's ftsOwesRow). Without an index on fts_indexed that is
+// a read of the whole blobs table, which cost minutes of cold I/O on a half-gigabyte store; schema v2's partial index makes it O(index), the
+// two owed queries NAME it (INDEXED BY, behind a presence guard) so a stored statistic cannot steer them back to a scan, and the probe into
+// `entries` is covering. The two node indexes derivation used to make with an unversioned IF NOT EXISTS are made here too.
+describe('schema v2: the owed-row index, its covering probe and the node indexes (D-5015, D-5018, D-5019, D-5020)', () => {
+  interface OwedPlans { owes: string[]; backfill: string[]; owesSql: string; backfillSql: string }
+  interface FreeOk { state: 'ok'; bytes: number; fsSize: number }
+  interface OwedSweep {
+    ftsOwedPlans(db: DatabaseSync): OwedPlans; ftsOwesRow(db: DatabaseSync): boolean;
+    migrationVerdict(db: DatabaseSync, home: string, P: unknown, o: {
+      stored: number; code: number; free: FreeOk; sizeBytes: number; boundS: number | null; schemaAdded: unknown;
+    }): string;
+  }
+  const loadSweep = async (): Promise<OwedSweep> => (await import('../../ccd/history/sweep.mjs')) as unknown as OwedSweep;
+  const fresh = (): { h: string; file: string } => { const h = mkTmp('ccrc-history-v2idx-'); createStore(h); return { h, file: historyPaths(h).dbFile }; };
+  const INDEXED_BY = ' INDEXED BY blobs_unindexed';
+  /** Both owed queries' plans on a fresh writer connection (so sqlite_stat1 is read as stored), as the pass would prepare them. The
+   *  backfill's statement needs the FTS tables, as ftsStmts does. The connection is closed plainly: closeWriter's PRAGMA optimize
+   *  would write statistics of its own into the fixture. */
+  const plansOf = async (file: string): Promise<OwedPlans> => {
+    const S = await loadSweep();
+    const db = openWriter(file);
+    try {
+      if (!probeTables(db)) createFtsTables(db);
+      return S.ftsOwedPlans(db);
+    } finally { db.close(); }
+  };
+  const probeTables = (db: DatabaseSync): boolean => db.prepare("SELECT 1 FROM sqlite_master WHERE name = 'blobs_fts'").get() !== undefined;
+  const planOfSql = (file: string, sql: string, ...args: unknown[]): string[] => {
+    const db = new DatabaseSync(file, { readOnly: true });
+    try { return (db.prepare(`EXPLAIN QUERY PLAN ${sql}`).all(...(args as never[])) as Array<{ detail: string }>).map((r) => String(r.detail)); } finally { db.close(); }
+  };
+  const withDb = <T>(file: string, fn: (db: DatabaseSync) => T): T => { const db = new DatabaseSync(file); try { return fn(db); } finally { db.close(); } };
+  const usesTheIndex = (plan: string[], what: string): void => {
+    expect(plan[0], `${what}: ${plan.join(' | ')}`).toMatch(/^(SCAN|SEARCH) b USING INDEX blobs_unindexed\b/);
+    expect(plan.filter((l) => /^SCAN b\s*$/.test(l) || /^SEARCH b USING INTEGER PRIMARY KEY/.test(l)), `${what}: a full read of blobs: ${plan.join(' | ')}`).toEqual([]);
+  };
+
+  it('PIN (a): EXPLAIN QUERY PLAN of the owed check and of the backfill names the index and has no full read of blobs', async () => {
+    const { file } = fresh();
+    plantBlobs(file, { owed: 3, indexed: 3, pruned: 3 });
+    const p = await plansOf(file);
+    usesTheIndex(p.owes, 'the owed check');
+    usesTheIndex(p.backfill, 'the backfill select');
+    expect(p.owesSql, 'the owed check names the index').toContain(`FROM blobs b${INDEXED_BY} WHERE`);
+    expect(p.backfillSql, 'the backfill names the index').toContain(`FROM blobs b${INDEXED_BY}`);
+  });
+
+  it('CONTROL: the same two queries over a v1 store (no index) are the plain full read the pin refuses, so the pin is not vacuous', async () => {
+    const { file } = fresh();
+    rewindStoreToV1(file);
+    const p = await plansOf(file);
+    expect(p.owes.filter((l) => /^SCAN b\s*$/.test(l))).toEqual(['SCAN b']);
+    expect(p.backfill[0]).toMatch(/^SEARCH b USING INTEGER PRIMARY KEY/);
+  });
+
+  // The statistics PRAGMA optimize writes at a writer's close (closeWriter) are what steer the planner off an unforced partial index: at
+  // most of the blobs rows (the review put it at about 70-75%; it reproduces here at 90%), it takes `SCAN b` for the owed check and the
+  // rowid range for the backfill, both of which read every blob row, overflow chains included. The review also saw a recorded-empty
+  // (`0 0`) index flip on its fixture; that did NOT reproduce here (D-5018). These two pins run ANALYZE first, which PIN (a) does not:
+  // (a2) has a CONTROL that shows the plain form flipping under the same statistics, (a3) pins the forced plan at `0 0` and has none.
+  it('PIN (a2): at a 90% unindexed share, once ANALYZEd, both queries still plan the index; the plain form flips to the full read', async () => {
+    const { file } = fresh();
+    plantBlobs(file, { owed: 180, indexed: 20 });
+    withDb(file, (db) => db.exec('ANALYZE'));
+    const stat = withDb(file, (db) => db.prepare("SELECT stat FROM sqlite_stat1 WHERE idx = 'blobs_unindexed'").get() as { stat: string });
+    expect(stat.stat, 'the statistic records the index as 180 of 200 rows').toBe('180 1');
+    const p = await plansOf(file);
+    usesTheIndex(p.owes, 'owed check at 90%');
+    usesTheIndex(p.backfill, 'backfill at 90%');
+    const P = [...INDEXED_PROVENANCE, ...INDEXED_PROVENANCE];
+    const plainOwes = planOfSql(file, p.owesSql.replace(INDEXED_BY, ''), ...P);
+    const plainBackfill = planOfSql(file, p.backfillSql.replace(INDEXED_BY, ''), 0, ...P, 1);
+    expect(plainOwes.filter((l) => /^SCAN b\s*$/.test(l)), `CONTROL: the plain owed check flips: ${plainOwes.join(' | ')}`).toEqual(['SCAN b']);
+    expect(plainBackfill[0], `CONTROL: the plain backfill flips: ${plainBackfill.join(' | ')}`).toMatch(/^SEARCH b USING INTEGER PRIMARY KEY/);
+  });
+
+  it('PIN (a3): with the index recorded empty (`0 0`) and owed rows planted after, both queries still plan the index', async () => {
+    const { file } = fresh();
+    plantBlobs(file, { indexed: 2000 });
+    withDb(file, (db) => db.exec('ANALYZE'));
+    expect(withDb(file, (db) => (db.prepare("SELECT stat FROM sqlite_stat1 WHERE idx = 'blobs_unindexed'").get() as { stat: string }).stat), 'CONTROL: ANALYZE over the empty index records `0 0`').toBe('0 0');
+    plantBlobs(file, { owed: 5 });
+    const p = await plansOf(file);
+    usesTheIndex(p.owes, 'owed check at `0 0`');
+    usesTheIndex(p.backfill, 'backfill at `0 0`');
+  });
+
+  it('GUARD, the owed check: over a store with no owed-row index (v1, or v2 with it dropped) it answers, it does not throw "no such index"', async () => {
+    const S = await loadSweep();
+    for (const how of ['v1', 'v2-index-gone'] as const) {
+      const { file } = fresh();
+      plantBlobs(file, { owed: 2 });
+      if (how === 'v1') rewindStoreToV1(file); else withDb(file, (db) => db.exec('DROP INDEX blobs_unindexed'));
+      const db = openWriter(file);
+      try {
+        expect(() => S.ftsOwesRow(db), how).not.toThrow();
+        expect(S.ftsOwesRow(db), `${how}: the plain form answers the same question (a blob with bytes and no referrer is not eligible)`).toBe(false);
+      } finally { db.close(); }
+    }
+  });
+
+  it('GUARD, the backfill: its statement is prepared over a store with no owed-row index, in the plain form', async () => {
+    const S = await loadSweep();
+    for (const how of ['v1', 'v2-index-gone'] as const) {
+      const { file } = fresh();
+      if (how === 'v1') rewindStoreToV1(file); else withDb(file, (db) => db.exec('DROP INDEX blobs_unindexed'));
+      const db = openWriter(file);
+      try {
+        createFtsTables(db);
+        let p: OwedPlans | null = null;
+        expect(() => { p = S.ftsOwedPlans(db); }, how).not.toThrow();
+        expect(p!.backfillSql, `${how}: no INDEXED BY where there is nothing to name`).not.toContain('INDEXED BY');
+        expect(p!.owesSql, `${how}: no INDEXED BY where there is nothing to name`).not.toContain('INDEXED BY');
+      } finally { db.close(); }
+    }
+  });
+
+  // Only the owed CHECK follows the index on one handle: ftsOwesRow measures it per call. ftsStmts measures it once per handle, with the
+  // statement it prepares, and this test does not claim otherwise (D-5018): no production path migrates under a handle that has prepared
+  // ftsStmts (the scheduled pass returns right after runMigration, migrateOp returns, and every other op is refused migration-pending).
+  it('GUARD, the other way: the owed check is measured per call, so a store that gains the index (its migration) is not left on the plain form', async () => {
+    const S = await loadSweep();
+    const { file } = fresh();
+    rewindStoreToV1(file);
+    const db = openWriter(file);
+    try {
+      createFtsTables(db);
+      expect(S.ftsOwedPlans(db).owesSql).not.toContain('INDEXED BY');
+      db.exec(MIGRATIONS[1]!);
+      expect(S.ftsOwedPlans(db).owesSql, 'measured per call: the owed check now names it').toContain(INDEXED_BY);
+    } finally { db.close(); }
+  });
+
+  it('PIN (d): the owed check\'s probe into entries is COVERING (entries_blob_prov), and no other probe scans a table', async () => {
+    const { file } = fresh();
+    plantBlobs(file, { owed: 2 });
+    const p = await plansOf(file);
+    for (const [name, plan] of [['owed check', p.owes], ['backfill', p.backfill]] as const) {
+      expect(plan, `${name}: the entries probe reads the covering index alone`).toContain('SEARCH e USING COVERING INDEX entries_blob_prov (blob_id=? AND provenance=?)');
+      expect(plan, `${name}: the sidecars probe is covering too`).toContain('SEARCH s USING COVERING INDEX sidecars_blob (blob_id=?)');
+      // the variants probe is the one that is not covering (entry_variants_blob holds blob_id alone); it is read per blob, a handful of
+      // pages while entry_variants is nearly empty, and its entries row is fetched by primary key only for a blob that HAS a variant
+      expect(plan, `${name}: the variants probe`).toContain('SEARCH v USING INDEX entry_variants_blob (blob_id=?)');
+      expect(plan.filter((l) => /^SCAN /.test(l)), `${name}: the one scan is the owed index; every probe is a SEARCH`).toHaveLength(name === 'owed check' ? 1 : 0);
+    }
+  });
+
+  it('PIN (b): the index leaves out what can never be owed: N pruned tombstones and N indexed blobs, 0 owed, 0 entries; one owed blob, one entry', () => {
+    const { file } = fresh();
+    plantBlobs(file, { pruned: 40, indexed: 40 });
+    const none = owedIndexFacts(file);
+    expect(none.entries, 'a tombstone (z NULL, fts_indexed 0) is never owed, so it is not indexed; nor is an indexed blob').toBe(0);
+    expect(none.sql, 'the index has its predicate, spelled once in store.mjs').toBe('CREATE INDEX blobs_unindexed ON blobs(blob_id) WHERE fts_indexed = 0 AND z IS NOT NULL');
+    plantBlobs(file, { owed: 1 });
+    expect(owedIndexFacts(file).entries, 'CONTROL: an unindexed blob with bytes is').toBe(1);
+  });
+
+  it('PIN (b2): prune\'s tombstone leaves the index: pruneBatch on an owed blob takes it out', () => {
+    const { h, file } = fresh();
+    plantBlobs(file, { owed: 2 });
+    expect(owedIndexFacts(file).entries).toBe(2);
+    const db = openWriter(historyPaths(h).dbFile);
+    try { expect(pruneBatch(db, { blobIds: [1, 2], nowMs: 1, fts: false })).toBe(2); } finally { closeWriter(db); }
+    expect(owedIndexFacts(file).entries, 'a pruned blob keeps fts_indexed = 0 with z NULL, and the predicate leaves it out').toBe(0);
+  });
+
+  it('PIN (c): a fresh store and a migrated v1 store have the same schema, and the same user_version', () => {
+    const fresh2 = fresh();
+    // The v1 store is built from MIGRATIONS[0] alone, never through createStore, so the migration is what adds every v2 index.
+    const h = mkTmp('ccrc-history-v2idx-mig-');
+    fs.mkdirSync(historyPaths(h).backups, { recursive: true, mode: 0o700 });
+    const v1File = path.join(h, 'v1.db');
+    const old = new DatabaseSync(v1File);
+    old.exec(MIGRATIONS[0]!);
+    old.exec('PRAGMA user_version = 1');
+    const dump = (db: DatabaseSync): unknown[] => db.prepare("SELECT type, name, tbl_name, sql FROM sqlite_master WHERE name NOT LIKE 'sqlite_%' ORDER BY type, name").all();
+    const names = (rows: unknown[]): string[] => rows.map((r) => (r as { name: string }).name);
+    const before = dump(old);
+    for (const ix of V2_INDEXES) expect(names(before), `CONTROL: v1 has no ${ix}`).not.toContain(ix);
+    runMigration(old, h, { verdict: 'snapshot-then-migrate', from: 1, to: 2, migrations: MIGRATIONS });
+    expect(userVersion(old)).toBe(2);
+    const now = dump(old);
+    old.close();
+    for (const ix of V2_INDEXES) expect(names(now), `the migration made ${ix}`).toContain(ix);
+    const f = new DatabaseSync(fresh2.file, { readOnly: true });
+    try {
+      expect(userVersion(f)).toBe(SCHEMA_VERSION);
+      expect(now).toEqual(dump(f));
+    } finally { f.close(); }
+  });
+
+  it('SCHEMA_ADDED[2] is HEAVY (ruling 5012, §6.11) and adds no table or column; MIGRATIONS[1] is exactly four plain CREATE INDEXes, and V2_INDEXES lists them', () => {
+    expect(SCHEMA_ADDED[2]).toEqual({ heavy: true, tables: {} });
+    expect(MIGRATIONS).toHaveLength(2);
+    const stmts = MIGRATIONS[1]!.trim().split(';').map((x) => x.trim()).filter((x) => x !== '');
+    expect(stmts).toEqual([
+      'CREATE INDEX blobs_unindexed ON blobs(blob_id) WHERE fts_indexed = 0 AND z IS NOT NULL',
+      'CREATE INDEX entries_blob_prov ON entries(blob_id, provenance)',
+      'CREATE INDEX nodes_boundary ON nodes(boundary_entry_id)',
+      'CREATE INDEX node_children_child ON node_children(child_id)',
+    ]);
+    expect(V2_INDEXES).toEqual(['blobs_unindexed', 'entries_blob_prov', 'nodes_boundary', 'node_children_child']);
+    expect(OWED_INDEX, 'the name sweep.mjs forces is V2\'s first statement\'s').toBe(V2_INDEXES[0]);
+    expect(MIGRATIONS.some((m) => /IF NOT EXISTS/i.test(m) && /INDEX/i.test(m)), 'no unversioned index creation').toBe(false);
+  });
+
+  it('createStore builds a fresh store by running every migration in order: every v2 index is there', () => {
+    const { file } = fresh();
+    const db = new DatabaseSync(file, { readOnly: true });
+    try { expect(userVersion(db)).toBe(MIGRATIONS.length); } finally { db.close(); }
+    expect(owedIndexFacts(file).sql, 'the owed-row index is there on a store born at this build').not.toBeNull();
+    const have = withDb(file, (db) => (db.prepare("SELECT name FROM sqlite_master WHERE type = 'index'").all() as Array<{ name: string }>).map((r) => r.name));
+    for (const ix of V2_INDEXES) expect(have, ix).toContain(ix);
+  });
+
+  it('DM43 on the REAL v2 (ruling 5012): migrationVerdict reads SCHEMA_ADDED\'s heavy flag, so a v1 store of 1.5 GB + 1 byte at the default rate answers snapshot-needs-op, and one of exactly 1.5 GB (the strict half-bound) copies', async () => {
+    const S = await loadSweep();
+    const h = mkTmp('ccrc-history-v2heavy-');
+    createStore(h);
+    const db = openWriter(historyPaths(h).dbFile);
+    const TiB = 1024 ** 4;
+    const half = (600 / 2) * 10_000_000 / 2;   // CARRIER_KILL_S / 2 seconds, at DEFAULT_COPY_BPS, the estimate counted twice: 1.5 GB
+    const verdict = (sizeBytes: number, schemaAdded: unknown): string => S.migrationVerdict(db, h, null, {
+      stored: 1, code: 2, free: { state: 'ok', bytes: TiB, fsSize: 2 * TiB }, sizeBytes, boundS: 600, schemaAdded,
+    });
+    try {
+      expect(half).toBe(1_500_000_000);
+      expect(getMeta(db, 'copy_bps'), 'CONTROL: no recorded copy_bps, so the default 10 MB/s rate').toBeNull();
+      expect(verdict(half + 1, SCHEMA_ADDED), 'the real v2 is counted twice: 1.5 GB + 1 is over the half-bound').toBe('snapshot-needs-op');
+      expect(verdict(half, SCHEMA_ADDED), 'the test is strict: exactly the half-bound copies').toBe('snapshot-then-migrate');
+      expect(verdict(half - 1, SCHEMA_ADDED)).toBe('snapshot-then-migrate');
+      // CONTROL: the same sizes with v2 light (a seam, not the real entry) are counted once and copy up to 3 GB.
+      const light = { ...SCHEMA_ADDED, 2: { heavy: false, tables: {} } };
+      expect(verdict(half + 1, light), 'CONTROL: a light v2 at 1.5 GB + 1 copies').toBe('snapshot-then-migrate');
+      expect(verdict(2 * half + 1, light), 'CONTROL: and a light v2 escalates only past 3 GB').toBe('snapshot-needs-op');
+    } finally { db.close(); }
+  });
+
+  it('D-5019: entries_blob stays beside the covering index (the spec\'s DDL and B1\'s listing name it), and v2 drops nothing', () => {
+    const { file } = fresh();
+    const have = withDb(file, (db) => (db.prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'entries'").all() as Array<{ name: string }>).map((r) => r.name));
+    expect(have).toContain('entries_blob');
+    expect(have).toContain('entries_blob_prov');
+    expect(MIGRATIONS[1], 'v2 is additive: it drops no index').not.toMatch(/\bDROP\b/i);
+  });
+
+  it('D-5020: no index is made outside MIGRATIONS: ccd/history/ holds no CREATE INDEX but store.mjs\'s V1 and V2, and none with IF NOT EXISTS', () => {
+    const dir = fileURLToPath(new URL('../../ccd/history/', import.meta.url));
+    const re = /CREATE\s+(UNIQUE\s+)?INDEX\b/gi;
+    for (const name of fs.readdirSync(dir).filter((n) => /\.(mjs|mts|ts|js)$/.test(n))) {
+      const src = fs.readFileSync(path.join(dir, name), 'utf8');
+      const hits = [...src.matchAll(re)];
+      if (name === 'store.mjs') {
+        const end = src.indexOf('export const MIGRATIONS');
+        expect(end, 'store.mjs\'s MIGRATIONS line').toBeGreaterThan(0);
+        expect(hits.filter((m) => m.index! > end).map((m) => m.index), 'store.mjs: a CREATE INDEX after the migration table').toEqual([]);
+      } else {
+        expect(hits.map((m) => src.slice(Math.max(0, m.index! - 40), m.index! + 60)), `${name}: an index made outside the versioned migrations`).toEqual([]);
+      }
+      for (const m of hits) expect(src.slice(m.index!, m.index! + 90), `${name}: IF NOT EXISTS`).not.toMatch(/IF\s+NOT\s+EXISTS/i);
+    }
   });
 });

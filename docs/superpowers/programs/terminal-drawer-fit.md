@@ -2,6 +2,8 @@
 
 Spec: `docs/superpowers/specs/2026-09-14-terminal-drawer-history-and-fit-design.md`
 Plans: `docs/superpowers/plans/2026-09-14-drawer-wave{1,2,3,4}-*.md`
+Successor (2026-10-14; wave 3 superseded): spec `docs/superpowers/specs/2026-10-14-terminal-drawer-every-width-design.md`,
+plan `docs/superpowers/plans/2026-10-14-terminal-drawer-every-width-stage1.md`
 Home project: `ccrc-pwa`   Coordinator: `ccrc-pwa-brisk-mesa`   Workspace: per-wave (wave 1 spawns)
 
 **What this program is.** The console drawer gets a history a phone can read, and a window that fits
@@ -12,14 +14,45 @@ scrollback it exists to render.
 
 | # | scope | deploy class | PRs | state |
 |---|---|---|---|---|
-| 1 | the latch (pin before every attach) + the salvaged reader, with nine corrections | server | [#106](https://github.com/Synapsium-Labs/ccrc-pwa/pull/106) @ `9b472a20`, merged with main | **review complete; awaiting a non-author approval** |
-| 2 | `ccd win-size` verb + grant + the fleet-box readers standing down | **AGENT-FIRST** | — | planned |
-| 3 | the deliberate un-pin under a measured fit guard | server | — | planned |
-| 4 | whole-branch pass, README, the CLAUDE.md sentence, ledger reconcile | docs | — | planned |
+| 1 | the latch (pin before every attach) + the salvaged reader, with nine corrections | server | [#106](https://github.com/Synapsium-Labs/ccrc-pwa/pull/106), merged as `6d46bab7` | **merged 2026-09-15** |
+| 2 | `ccd win-size` verb + grant + the fleet-box readers standing down | **AGENT-FIRST** | [#117](https://github.com/Synapsium-Labs/ccrc-pwa/pull/117), merged as `7a6220f6` | **merged 2026-09-18** |
+| 3 | the deliberate un-pin under a measured fit guard | server | — | **superseded, unbuilt** (2026-10-14, operator ruling O8; D-5013): see §Successor |
+| 4 | whole-branch pass, README, the CLAUDE.md sentence, ledger reconcile | docs | — | **not run.** Its ledger reconcile for rows 1–3 is the 2026-10-14 edit above (D-5013); the rest is open, to be re-scoped against the successor |
 
-Wave 1 is independently valuable and safe with nothing after it. Wave 3 may merge in any order but
-DOES nothing until wave 2 is on the fleet box: it un-pins only through a verb gated on
-`capSupported(state,'win-size-v1')`, which answers false on no evidence.
+Wave 1 is independently valuable and safe with nothing after it. Wave 3, as planned, could merge in
+any order but would DO nothing until wave 2 was on the fleet box: it un-pinned only through a verb
+gated on `capSupported(state,'win-size-v1')`, which answers false on no evidence. (It is superseded
+and was never built; the sentence is kept as the record of its gate.)
+
+**Rows 1–2 reconciled 2026-10-14 (D-5013).** This table read "awaiting approval" and "planned" for a
+month after both waves merged: the ledger was last edited in #102, before either landed. The merge
+commits above are measured on `origin/main`.
+
+## Successor (2026-10-14)
+
+Wave 3 is superseded, unbuilt (operator ruling O8). Its replacement is
+`docs/superpowers/specs/2026-10-14-terminal-drawer-every-width-design.md` (DRAFT rev 1), written to the
+operator's requirement that the drawer work "on mobile, desktop wide etc.", and chosen as "stages 1+2
+with recommendations" on 2026-10-14.
+
+- **The idea.** The drawer attaches a tmux client exactly the window's size (220x51), so tmux never
+  pans it and no phone narrows a window. A glass too narrow for the 220-column grid at 11px gets a
+  browser-side wrapped view, with a key bar, a guarded `^C` and a native text field. A wide glass may
+  later have the window follow it, never below `READER_MIN_COLS`, behind ccd's `geom-settle-v1`.
+- **Stages.** 1 (the window-sized client, the wrapped view, the input layer; server lane), 1b (tappable
+  menu rows; server lane), 2·B0 (ccd stands down across a geometry change; AGENT-FIRST), 2·B1 (the
+  guarded follow, behind `drawer.follow`; server lane).
+- **Rulings recorded** in the spec's §12: the phone live lease deferred (O1); the grid between about
+  1482 and 1877px (O2); a 300-column follow cap (O3); stage 2 gated on B0 (O4); no type growth on wide
+  screens in stage 1 (O5); a browser spike before stage 1 lands (O6); the manual device matrix (O7); this
+  reconcile (O8).
+- **Deviation numbers:** a block of ten issued 2026-10-14. D-5005 to D-5013 are defined once, in the
+  stage-1 plan's Deviations section, and cited everywhere else. The block's tenth number (5014) is
+  unspent and deliberately not spelled as a token here, for the reason the deviation-block paragraph
+  below gives.
+- **What the old design's rulings become:** 1, 13, 14 and 15 and the mail-lane half of 4 lapse with
+  wave 3; ruling 2's "advertised verb" is re-read as the server's granted `resize-window` behind
+  `geom-settle-v1` (successor spec §3). `ccd win-size` (wave 2) stays shipped and uncalled.
 
 **Deviation block: sixteen numbers from `D-2766`** (allocated once at run-open 2026-09-14; floor now
 2782). A number is NAMED here only once it is assigned and defined in a plan — the unassigned tail
@@ -268,6 +301,9 @@ tmux 3.4 does not collect history during reflow, so the loss needs a scrolled li
 ## Decisions & deviations (why, not just what)
 
 The spec's §11 carries fifteen numbered rulings; these are the ones a reviewer most needs the *why* for.
+Since 2026-10-14 (D-5013, §Successor), the `smallest` ruling (1), the `gone` ruling (13), the
+notice rulings (14/15) and the mail-lane half of the stand-down ruling (4) below are history: they
+lapsed with wave 3. The pin, the readers' stand-down in ccd and the no-raise ruling stand.
 
 - **PR #96 is closed, not continued.** A program worker commits on its own workspace branch (worker
   clause 2), so `fix/terminal-scrollback` is off the table. Twelve of its fourteen commits are
@@ -337,6 +373,11 @@ The spec's §11 carries fifteen numbered rulings; these are the ones a reviewer 
   than read them.
 
 ## Next-wave brief
+
+**Superseded 2026-10-14.** Everything below this paragraph is the brief as it stood before wave 1
+merged, and is kept as history. The next act is the successor design's docs PR (the spec and the
+stage-1 plan, §Successor). Once the operator approves it, dispatch stage 1 per that plan; stage 1b
+follows stage 1's deploy; stage 2 gets its own plan once stage 1 is on the box.
 
 **Wave 1 is in fix round 1** (mail 1179, nine items, artifact
 `…/scratchpad/wave1-review/fix-round-1.md`). Wave 2 does not open until wave 1's PR #106 merges.

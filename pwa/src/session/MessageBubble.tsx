@@ -40,6 +40,19 @@ export function timeOf(ts: string): string {
 // card (like a tool call) — expandable when you actually want the recap.
 const COMPACTION_RE = /^\s*(?:\[[^\]]*]\s*)?This session is being continued from a previous conversation/;
 
+/** Whether this row renders as a `FoldedCard` — one collapsed row, whatever its
+ *  text — rather than as its text: a /compact recap (user- or assistant-kind),
+ *  or a `system` row carrying a BODY (more than one line) rather than a label.
+ *  The harness's own system rows (`origin`) are pills and never fold.
+ *
+ *  ONE DEFINITION for two readers: `MessageBubble` decides the fold by it, and
+ *  the chat list prices the row by it (`ChatList.tsx`'s `shapeOf`) — a recap
+ *  priced by its text was thousands of px for a 47px row. */
+export function foldsAway(event: MessageEvent): boolean {
+  if (event.kind === 'system') return event.origin === undefined && event.text.includes('\n');
+  return COMPACTION_RE.test(event.text);
+}
+
 /** The fold, now used by TWO callers: the /compact recap above, and a `system`
  *  row that carries a BODY rather than a label (see the system branch below).
  *  Both are noise to a reader driving the session and neither may be thrown
@@ -188,9 +201,8 @@ export function MessageBubble({
     // dropped. The first line becomes the label, which is the only part a pill
     // could ever have carried honestly, and the whole text is one tap away
     // VERBATIM, as text rather than Markdown.
-    const nl = event.text.indexOf('\n');
-    if (nl >= 0) {
-      const first = event.text.slice(0, nl).trim();
+    if (foldsAway(event)) {
+      const first = event.text.slice(0, event.text.indexOf('\n')).trim();
       return (
         <FoldedCard
           text={event.text}
@@ -206,7 +218,7 @@ export function MessageBubble({
   }
 
   // Compaction recap (user- or assistant-kind): fold it away by default.
-  if (COMPACTION_RE.test(event.text)) {
+  if (foldsAway(event)) {
     return <FoldedCard text={event.text} />;
   }
 

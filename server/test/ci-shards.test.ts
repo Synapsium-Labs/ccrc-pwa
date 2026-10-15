@@ -81,7 +81,7 @@ describe('durationsFromVitestJson', () => {
 describe('PROFILES', () => {
   it('matches the contract exactly', () => {
     expect(PROFILES).toEqual({
-      linux: { targetMs: 240_000, min: 1, max: 5, workers: 2, defaultMs: 5000 },
+      linux: { targetMs: 240_000, min: 1, max: 12, workers: 2, defaultMs: 5000 },
       macosSelected: { targetMs: 900_000, min: 1, max: 2, workers: 2, defaultMs: 5000, scale: 1.5 },
       macosFull: { targetMs: 900_000, min: 1, max: 4, workers: 2, defaultMs: 5000, scale: 1.5 },
       trace: { targetMs: 900_000, min: 1, max: 8, workers: 2, defaultMs: 5000, scale: 6 },

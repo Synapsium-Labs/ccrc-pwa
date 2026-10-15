@@ -30,7 +30,30 @@ describe('Tmux', () => {
   it('targets EXACTLY =cc-<id>: and sends literals with -l', async () => {
     const f = fake({});
     await new Tmux(f.run).sendLiteral('myid', 'hello');
-    expect(f.calls[0]).toEqual(['tmux', 'send-keys', '-t', '=cc-myid:', '-l', 'hello']);
+    expect(f.calls[0]).toEqual(['tmux', 'send-keys', '-t', '=cc-myid:', '-l', '--', 'hello']);
+  });
+
+  // D-5046. tmux parses a text token that starts with `-` as FLAGS. Measured on
+  // tmux 3.7c, private `-L` socket, 2026-10-15: `send-keys -l '-x probe'` exits 1
+  // (`unknown flag -x`) and `-l '- item'` exits 1 (`invalid flag -`), typing
+  // nothing; and `-l '--'` exits 0 having typed NOTHING, because the parser
+  // takes it as the end of the flags and finds no key after it. A return check
+  // can see the first two and never the third. With `--` first, all eight dash
+  // shapes measured typed verbatim, and an empty text still exits 0.
+  it('sendLiteral puts -- before text that starts with a dash (D-5046)', async () => {
+    const f = fake({});
+    const t = new Tmux(f.run);
+    await t.sendLiteral('x', '-x');
+    await t.sendLiteral('x', '- item');
+    await t.sendLiteral('x', '--');
+    expect(f.calls).toEqual([
+      ['tmux', 'send-keys', '-t', '=cc-x:', '-l', '--', '-x'],
+      ['tmux', 'send-keys', '-t', '=cc-x:', '-l', '--', '- item'],
+      ['tmux', 'send-keys', '-t', '=cc-x:', '-l', '--', '--'],
+    ]);
+    // Remote mode runs it through the agent, whose `send-keys` grant is a
+    // one-token prefix: the extra token must cross it.
+    for (const c of f.calls) expect(isExecAllowed(c[0]!, c.slice(1)), c.join(' ')).toBe(true);
   });
 
   // D-3525. A bare `cc-<id>` is a tmux SEARCH — exact name, then unique prefix,

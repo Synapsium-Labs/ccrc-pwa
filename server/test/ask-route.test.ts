@@ -148,13 +148,35 @@ describe('answerAsk', () => {
     expect(await answerAsk(d as never, 'cc-x', key, [0, 1])).toEqual({ ok: false, error: 'multiselect' });
   });
 
-  it('sends every digit then Enter for a multiSelect answer', async () => {
+  // D-5048. This route used to send every digit then Enter for a multiSelect answer, on a 2.1.222 probe that said
+  // Enter commits. Measured on 2.1.280 and 2.1.300, Enter TOGGLES the cursor row and commits nothing, so that answer
+  // came back ok:true with the wrong boxes ticked and the question still up. A multiSelect question is refused before
+  // any key; `POST /api/sessions/:id/dialog/multi` answers it from the pane.
+  it('refuses a multiSelect answer with multiselect and zero keys (D-5048)', async () => {
     const multi = { questions: [{ question: 'Pick some', multiSelect: true,
       options: [{ label: 'A' }, { label: 'B' }, { label: 'C' }] }] };
     const { keys, d } = deps({ readAsk: async () => ({ ask: multi, state: 'waiting' as const }) }, MULTI_PANE);
     const r = await answerAsk(d as never, 'cc-x', askKey(multi)!, [0, 2]);
-    expect(r).toEqual({ ok: true });
-    expect(keys).toEqual(['1', '3', 'Enter']);
+    expect(r).toEqual({ ok: false, error: 'multiselect' });
+    expect(keys).toEqual([]);
+  });
+
+  it('refuses a multiSelect answer on a REAL 2.1.280 capture, which digits then Enter would leave uncommitted (D-5048)', async () => {
+    // `cc280-multiselect.txt`, a lone multiSelect question: Logging, Metrics, Tracing, Caching, then the TUI's own
+    // "5. [ ] Type something", the unnumbered Submit row and "6. Chat about this". Before D-5048 this answered ok:true
+    // with keys 1, 3, Enter: the Enter toggled row 1 (the cursor row) back off and committed nothing (measured on the
+    // `cc280-multiselect-seq-*` captures, and on 2.1.300).
+    const features = { questions: [{ question: 'Which features do you want to enable?', multiSelect: true,
+      options: [{ label: 'Logging' }, { label: 'Metrics' }, { label: 'Tracing' }, { label: 'Caching' }] }] };
+    for (const indexes of [[0, 2], [1]]) {
+      const { keys, d } = deps(
+        { readAsk: async () => ({ ask: features, state: 'waiting' as const }) },
+        pane('cc280-multiselect.txt'),
+      );
+      expect(await answerAsk(d as never, 'cc-x', askKey(features)!, indexes), JSON.stringify(indexes))
+        .toEqual({ ok: false, error: 'multiselect' });
+      expect(keys, JSON.stringify(indexes)).toEqual([]);
+    }
   });
 
   it('refuses an approval envelope — those are the pane path', async () => {
@@ -194,13 +216,10 @@ describe('answerAsk', () => {
       expect(keys).toEqual(['2']);   // the attempt was made — it just didn't land
     });
 
-    it('stops the instant a digit fails mid multiSelect — no trailing digits, no Enter', async () => {
-      // [0,2] on a 3-option multiSelect sends '1' then '3' then 'Enter' on the
-      // happy path (see "sends every digit then Enter for a multiSelect
-      // answer" above). Here the SECOND digit ('3') fails: the honest answer
-      // is a refusal reported the instant that is known, not a best-effort
-      // finish of the sequence into a pane that may no longer be the one
-      // this answer was meant for.
+    // The two multiSelect cases that stood here (a digit failing mid-answer, and a failed commit Enter) drove a
+    // keystroke loop D-5048 no longer reaches: a multiSelect question is refused before its first digit, whatever
+    // `sendKey` would have answered. Flipped, not deleted, so the refusal is pinned with a failing `sendKey` too.
+    it('a multiSelect answer never reaches a keystroke, even where the digit would fail (D-5048)', async () => {
       const multi = { questions: [{ question: 'Pick some', multiSelect: true,
         options: [{ label: 'A' }, { label: 'B' }, { label: 'C' }] }] };
       const keys: string[] = [];
@@ -216,15 +235,11 @@ describe('answerAsk', () => {
         sleep: async () => {},
       };
       const r = await answerAsk(d as never, 'cc-x', askKey(multi)!, [0, 2]);
-      expect(r).toEqual({ ok: false, error: 'not-alive' });
-      expect(keys).toEqual(['1', '3']);   // never reached the third digit or the commit Enter
+      expect(r).toEqual({ ok: false, error: 'multiselect' });
+      expect(keys).toEqual([]);
     });
 
-    it('a failed trailing Enter on an otherwise-landed multiSelect is still a refusal', async () => {
-      // Every digit toggled successfully but the commit never landed — the
-      // menu is left ticked and unconfirmed. Reporting ok:true here would be
-      // exactly the D-2177 bug: a client that saw {ok:true} would stop
-      // retrying while the session sits `waiting` on an uncommitted selection.
+    it('a multiSelect answer never presses the old commit Enter, even where Enter would fail (D-5048)', async () => {
       const multi = { questions: [{ question: 'Pick some', multiSelect: true,
         options: [{ label: 'A' }, { label: 'B' }, { label: 'C' }] }] };
       const keys: string[] = [];
@@ -240,8 +255,8 @@ describe('answerAsk', () => {
         sleep: async () => {},
       };
       const r = await answerAsk(d as never, 'cc-x', askKey(multi)!, [0, 2]);
-      expect(r).toEqual({ ok: false, error: 'not-alive' });
-      expect(keys).toEqual(['1', '3', 'Enter']);
+      expect(r).toEqual({ ok: false, error: 'multiselect' });
+      expect(keys).toEqual([]);
     });
   });
 
@@ -393,29 +408,34 @@ describe('answerAsk', () => {
   // `DialogSheet.tsx` is what makes it reachable: it renders every multiSelect
   // option as a plain single-tap row, so the moment a later PR wires that UI
   // to /ask, a tap sends `optionIndexes: [k]`.
-  describe('a one-option multiSelect answer still commits (CRITICAL 1)', () => {
+  //
+  // D-5048 FLIPPED these. The commit that CRITICAL 1 added was a bare Enter,
+  // and on Claude Code 2.1.280 and later Enter TOGGLES the cursor row: a
+  // one-index answer ticked box k, then toggled row 1, committed nothing, and
+  // still answered ok:true. The question's kind now refuses it outright, with
+  // zero keys, whatever the index count.
+  describe('a one-option multiSelect answer is refused, not committed with Enter (CRITICAL 1, flipped by D-5048)', () => {
     const multi = { questions: [{ question: 'Pick some', multiSelect: true,
       options: [{ label: 'A' }, { label: 'B' }, { label: 'C' }] }] };
 
-    it('sends the digit AND Enter for a single-index multiSelect answer', async () => {
+    it('refuses a single-index multiSelect answer with multiselect and zero keys', async () => {
       const { keys, d } = deps({ readAsk: async () => ({ ask: multi, state: 'waiting' as const }) }, MULTI_PANE);
       const r = await answerAsk(d as never, 'cc-x', askKey(multi)!, [1]);
-      expect(r).toEqual({ ok: true });
-      expect(keys).toEqual(['2', 'Enter']);   // toggle, then commit
+      expect(r).toEqual({ ok: false, error: 'multiselect' });
+      expect(keys).toEqual([]);
     });
 
-    it("tolerates the TUI's own trailing row on the pane and still commits", async () => {
+    it("refuses it on a pane carrying the TUI's own trailing row too", async () => {
       // One-column layouts number the TUI's extra rows on after the real
       // options (`4. …`), so the pane legitimately carries MORE rows than the
       // envelope has options. The identity gate is head-anchored for exactly
-      // this reason — the same tolerance `DialogSheet.tsx`'s client-side gate
-      // has, and why it holds on real captures.
+      // this reason; the multiSelect refusal comes before it either way.
       const withExtra = MULTI_PANE.replace(
         '  3. [ ] C\n', '  3. [ ] C\n  4. [ ] Chat about this\n',
       );
       const { keys, d } = deps({ readAsk: async () => ({ ask: multi, state: 'waiting' as const }) }, withExtra);
-      expect(await answerAsk(d as never, 'cc-x', askKey(multi)!, [0])).toEqual({ ok: true });
-      expect(keys).toEqual(['1', 'Enter']);
+      expect(await answerAsk(d as never, 'cc-x', askKey(multi)!, [0])).toEqual({ ok: false, error: 'multiselect' });
+      expect(keys).toEqual([]);
     });
 
     // The single-select half of the same rule — no Enter, ever — is pinned by

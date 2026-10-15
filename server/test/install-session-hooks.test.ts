@@ -324,6 +324,13 @@ describe('every managed hook entry but SessionEnd\'s carries HOOK_TIMEOUT_S, a b
     expect(timeoutS()).toBeLessThanOrEqual(CLAUDE_CODE_DEFAULT_S);
   });
 
+  it("README's hook section states the managed timeout from HOOK_TIMEOUT_S, SessionEnd's exception and the spool append's one blocking open (W1-B2 task 33)", () => {
+    const readme = fs.readFileSync(path.resolve(__dirname, '../../README.md'), 'utf8').replace(/\s+/g, ' ');
+    expect(readme).toContain(`Every managed entry but \`SessionEnd\`'s carries \`"timeout": ${timeoutS()}\``);
+    expect(readme).toContain("`SessionEnd`'s carries none, because Claude Code runs `SessionEnd` hooks under its own 1.5 s budget");
+    expect(readme).toContain("a FIFO swapped in between that test and the append blocks the hook until Claude Code kills it at its entry's timeout");
+  });
+
   it('every event\'s managed entry but SessionEnd\'s, PreToolUse\'s included, carries timeout === HOOK_TIMEOUT_S; SessionEnd\'s and every foreign entry carry none', () => {
     runScrubbed();
     const s = JSON.parse(fs.readFileSync(cfg('.claude'), 'utf8'));
