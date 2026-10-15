@@ -659,45 +659,76 @@ describe.skipIf(process.platform === 'darwin')('the relay holds the shim\'s stde
     expect((r.stderr.match(/z/g) ?? []).length, 'every byte arrived').toBe(2_500_000);
   }, HEAVY);
 
-  // The bound pin, twice: the stream with line breaks, and the stream with none (spillErr's `cut === -1` branch).
-  // The shim writes 1,499,400 bytes of stderr, then a marker file, then waits (bounded, 120 s) for a go-file, then ends. A pipe holds
-  // 64 KiB, so the shim cannot reach its marker unless the CLI has READ at least 1,499,400 - 65,536 = 1,433,864 bytes, which is over
-  // the 1 MiB (1,048,576) cap by more than 380 KB. By then a hold that is cut at 1 MiB has written, and one that is not has written
-  // nothing: that is the spill removed, a cap of 2 MiB (more than the shim's total), and, for the no-line-break stream, a spill that
-  // gives up when it finds no line break. Nothing here depends on timing but the generous deadlines: the order is fixed by the pipe.
+  // The cap pinned exactly, from both sides (D-5022, review 462 F3, review 466 F6): spec §8.4's "bounded at 1 MiB" is 1,048,576 bytes.
+  // The argument, in numbers. The shim writes ALL its stderr, touches its marker, then waits (bounded, 120 s) for a go-file. It cannot touch
+  // the marker until the CLI has accepted every byte (a pipe holds 64 KiB, so at most the last 64 KiB are still in flight, and the CLI reads
+  // them next), and while it waits nothing else arrives. So whether any stderr reached the terminal BEFORE the go-file depends only on the
+  // cap, never on a pipe's size or on timing: a hold is spilled once its byte count is OVER the cap (`errBytes > ERR_HOLD_CAP`), and
+  //   - a stream of exactly 1,048,577 bytes ((1 << 20) + 1) is over it with its last byte: it spills before the go-file (upper side:
+  //     red for any cap of 1,048,577 or more, so `(1 << 20) + 1`, `+ 300000`, `+ 380000`, 2 MiB, no spill at all);
+  //   - a stream of exactly 1,048,576 bytes (1 << 20) is not over it: nothing reaches the terminal until the shim ends and the close
+  //     flushes it (lower side: red for any cap below 1,048,576, so `1 << 16`, `(1 << 20) - 1`, and a comparison `>=`).
+  // The lower side waits a settle window (5 s) after the marker before it calls stderr empty. The green direction does not depend on that
+  // window (a held stream stays held however long it is watched); only a mutant's red does, when the spill is written within it.
+  // Exact byte counts come from `head -c`. The lines stream is 128-byte lines, so 1 MiB is 8,192 whole lines; the stream with no line
+  // break is `z` bytes. At the seam the spill and the close together add no byte and drop none, apart from the one line break `emit` adds
+  // where a held text ends without one (spillErr's comment, cli.mjs): the lines stream, ending in a line break at 1 MiB, gets none added,
+  // and its one extra byte past the cap is a partial last line that gets its line break at the close; the stream with no line break gets
+  // exactly one, so the bytes received are the bytes written plus that one.
+  const CAP = 1 << 20;
+  const CAP_LINE = `zqx23 ${'y'.repeat(121)}`;   // 127 bytes and a line break: 128, so 1 MiB is 8,192 lines
   const CAP_BOUND = [
-    { name: 'lines', title: 'past 1 MiB the CLI writes stderr while the shim still runs, it does not hold it all until the child closes', id: 'ccrc-hist-relay-capbound-',
-      emit: (PAD: string) => `awk 'BEGIN { for (i = 1; i <= 15300; i++) printf "zqx23 cap %06d ${PAD}\\n", i }' >&2` },
-    { name: 'no line break', title: 'the same holds for a stream with no line break at all: past 1 MiB the CLI writes it while the shim still runs', id: 'ccrc-hist-relay-capbound-nb-',
-      emit: () => 'head -c 1499400 /dev/zero | tr "\\\\0" z >&2' },
+    { name: 'lines, over the cap', n: CAP + 1, spills: true, lines: true, extra: 1,
+      title: 'a stream of 1,048,577 bytes (one over the cap) with line breaks reaches stderr before the shim ends, and every byte arrives' },
+    { name: 'no line break, over the cap', n: CAP + 1, spills: true, lines: false, extra: 1,
+      title: 'a stream of 1,048,577 bytes (one over the cap) with no line break reaches stderr before the shim ends, and every byte arrives' },
+    { name: 'lines, at the cap', n: CAP, spills: false, lines: true, extra: 0,
+      title: 'a stream of exactly 1,048,576 bytes (the cap) with line breaks is still held when the shim waits, and arrives whole at the close' },
+    { name: 'no line break, at the cap', n: CAP, spills: false, lines: false, extra: 1,
+      title: 'a stream of exactly 1,048,576 bytes (the cap) with no line break is still held when the shim waits, and arrives whole at the close' },
   ] as const;
   for (const v of CAP_BOUND) {
-    it(`(e) the hold is bounded at the cap: ${v.title} (D-5022, review 462 F3; review of batch B)`, async () => {
-      const box = boundBox(v.id);
+    it(`(e) the hold is bounded at exactly 1 MiB: ${v.title} (D-5022, review 462 F3, review 466 F6)`, async () => {
+      const box = boundBox(`ccrc-hist-relay-capbound-${v.lines ? 'l' : 'nb'}${v.spills ? 'o' : 'e'}-`);
       const GO = path.join(box.home, 'go');
       const WROTE = path.join(box.home, 'wrote');
       rawShim(box, [
-        v.emit('y'.repeat(80)),
+        v.lines ? `yes ${JSON.stringify(CAP_LINE)} 2>/dev/null | head -c ${v.n} >&2` : `head -c ${v.n} /dev/zero | tr "\\\\0" z >&2`,
         `touch ${JSON.stringify(WROTE)}`,
         `for i in $(seq 1 1200); do [ -e ${JSON.stringify(GO)} ] && break; sleep 0.1; done`,
         'printf \'%s\\n\' \'{"rc":0}\'',
       ]);
       const cli = startCli(box, ['doctor', '--backup']);
-      let early = 0;
+      let early = -1;
       try {
         await until(() => fs.existsSync(WROTE), 60_000);
-        // the spill is written as the over-cap read is handled: allow a generous deadline before calling stderr empty
-        const t0 = Date.now();
-        while (cli.peek().stderr.length === 0 && Date.now() - t0 < 30_000) await new Promise((r) => setTimeout(r, 25));
+        if (v.spills) {
+          // the spill is written as the over-cap read is handled: allow a generous deadline before calling stderr empty
+          const t0 = Date.now();
+          while (cli.peek().stderr.length === 0 && Date.now() - t0 < 30_000) await new Promise((r) => setTimeout(r, 25));
+        } else {
+          await new Promise((r) => setTimeout(r, 5000));   // the settle window: a held stream stays held, only a mutant's spill shows in it
+        }
         early = cli.peek().stderr.length;
       } finally {
         fs.writeFileSync(GO, '');   // the shim ends either way
       }
       const r = await cli.done;
       expect(r.code, r.stderr.slice(0, 300)).toBe(0);
-      expect(early, 'stderr bytes reached the terminal BEFORE the shim finished: the hold is cut at the cap').toBeGreaterThan(0);
-      if (v.name === 'lines') expect(r.stderr.split('\n').filter((l) => l.startsWith('zqx23 cap ')), 'and every line still arrives').toHaveLength(15300);
-      else expect((r.stderr.match(/z/g) ?? []).length, 'and every byte still arrives').toBe(1_499_400);
+      if (v.spills) expect(early, 'stderr bytes reached the terminal BEFORE the shim finished: a stream one byte over the cap is spilled').toBeGreaterThan(0);
+      else expect(early, 'NOTHING reached the terminal before the shim finished: a stream of exactly the cap is not yet over it').toBe(0);
+      expect(Buffer.byteLength(r.stderr), 'every byte arrived, plus the one line break the seam adds where the text ends without one').toBe(v.n + v.extra);
+      if (v.lines) {
+        const lines = r.stderr.split('\n');
+        expect(lines.pop(), 'ends at a line break').toBe('');
+        const whole = Math.floor(v.n / 128);
+        expect(lines.slice(0, whole), 'the whole lines arrive whole, in a row').toEqual(Array(whole).fill(CAP_LINE));
+        // the byte past the cap is the first byte of a 8,193rd line: a partial last line, which arrives as itself
+        expect(lines.slice(whole), 'and the partial last line is only what was written').toEqual(v.n % 128 === 0 ? [] : [CAP_LINE.slice(0, v.n % 128)]);
+      } else {
+        expect(r.stderr.slice(0, -1), 'every byte arrives, and is the stream\'s own').toBe('z'.repeat(v.n));
+        expect(r.stderr.endsWith('z\n'), 'the one added line break is the last byte').toBe(true);
+      }
     }, 1.5 * HEAVY);
   }
 
