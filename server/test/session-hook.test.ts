@@ -12133,3 +12133,62 @@ describe('history card line: SessionStart(compact) serves the sweep\'s predictio
     expect(withLine.forks).toBe(without.forks);
   }, 60_000);
 });
+// ── ccrc history: the compact card's reserved room (history spec 2026-10-05 §8.6, §8.9 C38; W1-B3 task 10) ──
+// APPENDED, with NO new import line: the citation census cites this file by line. `runFull`/`hookEnv`/`home`/
+// `HOOK`/`stub`/`HELPER_ONLY`/`plantHelper`/`cardTree`/`plantSession`/`workLines`/`preCompact` are this
+// file's module-level fixture, and `HISTORY_HOOK_SCRUB` (D-5055) is the one scrub of every history hook describe.
+describe('history card reserve: the compact card renders HISTORY_CARD_MAX + 1 chars short on a history box (spec §8.6, C38)', () => {
+  const cardDir = (): string => path.join(home, '.ccrc', 'history', 'card');
+  /** PreCompact through the real arm with a stub `timeout` recording the helper's argv (the helper-argv case's idiom). */
+  const helperArgv = (env: Record<string, string> = {}): string => {
+    const tree = cardTree(); plantHelper();
+    stub('timeout', [HELPER_ONLY, 'printf \'%s\\n\' "$*" > "$HOME/timeout-argv"; shift; exec "$@"'].join('\n'));
+    const { transcript } = plantSession({ lines: workLines(tree) });
+    const r = runFull(preCompact(tree, transcript), { ...HISTORY_HOOK_SCRUB, ...env });
+    expect(r).toEqual({ stdout: '', stderr: '' });
+    return fs.readFileSync(path.join(home, 'timeout-argv'), 'utf8');
+  };
+
+  it('C38: card/ present — the helper renders at 4000 - (HISTORY_CARD_MAX + 1) = 3487', async () => {
+    const lib = await import('../../ccd/history/lib.mjs');
+    fs.mkdirSync(cardDir(), { recursive: true, mode: 0o700 });
+    expect(4000 - (lib.CARD_LINE_MAX + 1)).toBe(3487);
+    expect(helperArgv()).toContain(' --max-chars 3487 --max-files 12 ');
+  });
+
+  it('C38: card/ absent — 4000, exactly as before history', () => {
+    expect(helperArgv()).toContain(' --max-chars 4000 --max-files 12 ');
+  });
+
+  it('history-off present beside card/ — 4000', () => {
+    fs.mkdirSync(cardDir(), { recursive: true, mode: 0o700 });
+    fs.writeFileSync(path.join(home, '.ccrc', 'history-off'), '');
+    expect(helperArgv()).toContain(' --max-chars 4000 --max-files 12 ');
+  });
+
+  it.each(['999999', 'abc'])('an exported HISTORY_CARD_RESERVE=%s is reset — 4000, exit 0, silent', (value) => {
+    expect(helperArgv({ HISTORY_CARD_RESERVE: value })).toContain(' --max-chars 4000 --max-files 12 ');
+  });
+
+  itLinux('no other event pays for it: a PostToolUse with card/ present names no history path in any syscall', () => {
+    fs.mkdirSync(cardDir(), { recursive: true, mode: 0o700 });
+    const trace = path.join(home, 'reserve-trace.txt');
+    const r = spawnSync('strace', ['-f', '-o', trace, '-e', 'trace=file', 'bash', HOOK], {
+      input: JSON.stringify({ hook_event_name: 'PostToolUse', tool_name: 'Read', tool_input: {}, cwd: home }), encoding: 'utf8',
+      env: hookEnv(HISTORY_HOOK_SCRUB),
+    });
+    expect(r.status, `strace ran the hook: ${r.stderr}`).toBe(0);
+    const touched = fs.readFileSync(trace, 'utf8').split('\n').filter((l) => l.includes('/.ccrc/history/card'));
+    expect(touched, 'a PostToolUse stats the card directory').toEqual([]);
+  }, 60_000);
+
+  it('the reserve is spelled from HISTORY_CARD_MAX, reset unconditionally, and set directly above the scope reset', () => {
+    const src = fs.readFileSync(HOOK, 'utf8');
+    expect(src).toContain('    --max-chars "$(( COMPACT_CARD_MAX_CHARS - ${HISTORY_CARD_RESERVE:-0} ))" --max-files "$COMPACT_WORKSET_MAX" \\\n');
+    const reset = src.indexOf('\nHISTORY_CARD_RESERVE=0\n');
+    const set = src.indexOf('\n[[ "$event" == PreCompact ]] && [[ -d "$HISTORY_CARD_DIR" ]] && [[ ! -e "$HOME/.ccrc/history-off" ]] && HISTORY_CARD_RESERVE=$(( HISTORY_CARD_MAX + 1 ))\n');
+    expect(reset, 'no unconditional reset').toBeGreaterThan(-1);
+    expect(set, 'no PreCompact-gated set').toBeGreaterThan(reset);
+    expect(set, 'the reserve must be set before the card renders').toBeLessThan(src.indexOf('\nunset CS_SCOPE\n'));
+  });
+});

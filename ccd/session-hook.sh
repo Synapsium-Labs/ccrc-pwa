@@ -1512,7 +1512,7 @@ _hook_compact_pre() {
     --labels "$GM_CWD/graphify-out/.graphify_labels.json" \
     --set-stage "$setstage" --card-stage "$cardstage" \
     --parent-live "$CS_PARENT_LIVE" --live-agents "$CS_LIVE_N" \
-    --max-chars "$COMPACT_CARD_MAX_CHARS" --max-files "$COMPACT_WORKSET_MAX" \
+    --max-chars "$(( COMPACT_CARD_MAX_CHARS - ${HISTORY_CARD_RESERVE:-0} ))" --max-files "$COMPACT_WORKSET_MAX" \
     --built "$GM_BUILT" --fresh "$GM_FRESH" --scope "$CS_SCOPE" --at "$at" --nonce "$nonce" \
     ${CS_AGENT:+--agent "$CS_AGENT"} >/dev/null 2>&1
   helper_rc=$?
@@ -4200,6 +4200,18 @@ mv -f "$tmp" "$f" 2>/dev/null || { rm -f "$tmp"; exit 0; }
 # disk: each calls the helper under one locally resolved deadline, and the
 # state write must never wait on either. Nothing below prints — PostCompact's
 # whole output is a journal line on disk, and this file's contract is silence.
+# THE HISTORY CARD'S ROOM (ccrc history spec 2026-10-05 §8.6, W1-B3). The compact
+# card renders HISTORY_CARD_MAX + 1 chars short (`_hook_compact_pre`'s
+# `--max-chars` subtracts HISTORY_CARD_RESERVE), so the history line and its LF
+# always fit above it inside the one compact clip and never cost it its footer
+# (D-4736 (history-card-fold-and-reserve)). Only on PreCompact, and only when the sweep
+# has made card/ and history-off is absent: a box without history renders at
+# COMPACT_CARD_MAX_CHARS exactly as before. Builtin tests, the event first, so
+# no other event pays a stat. RESET FIRST, on every run (the `hcat` reset's
+# reasoning): an exported HISTORY_CARD_RESERVE must never shrink a card, and a
+# non-numeric one would abort the `$(( ))` under `set -u`.
+HISTORY_CARD_RESERVE=0
+[[ "$event" == PreCompact ]] && [[ -d "$HISTORY_CARD_DIR" ]] && [[ ! -e "$HOME/.ccrc/history-off" ]] && HISTORY_CARD_RESERVE=$(( HISTORY_CARD_MAX + 1 ))
 # `CS_SCOPE` is the compaction card's scope verdict, a plain global with no
 # initialiser. It is unset here, every run, so the history scope marker below
 # reads only a verdict THIS run reached, never one exported into the pane
