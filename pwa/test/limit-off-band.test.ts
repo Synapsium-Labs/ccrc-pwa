@@ -22,8 +22,9 @@
 // and it reds if someone silently FIXES it. A fix is welcome — it is simply
 // not something that should happen without the number being restated.
 //
-// THE FIX, WHEN IT IS WANTED. `--ink-tertiary` on the same track measures 4.32
-// at worst (ONE-DARK) and 13.58 at best — the cheapest token that clears 3:1
+// THE FIX, WHEN IT IS WANTED. `--ink-tertiary` on the same track measures 4.35
+// at worst (CATPPUCCIN-MOCHA) and 5.06 at best (TOKYO-NIGHT) since the ink
+// tiers were separated (D-5097) — the cheapest token that clears 3:1
 // everywhere. One line in `fillVariants`.
 //
 // NOT `--ink-disabled`, which is the token the name suggests and the one this
