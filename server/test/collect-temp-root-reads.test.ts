@@ -24,13 +24,15 @@ const registry = (): string => {
 };
 
 type ListingIO = Pick<FleetIO, 'lstatMeasured' | 'readdir' | 'statMeasured'>;
-/** The local io, each member replaceable, recording what was asked of which leaf. */
+/** The local io, each member replaceable, recording what was asked of which leaf. A member that is not replaced is
+ *  bound to `localIO`: `localIO.readdir` derives from `this.readdirMeasured` (as `readFile`, `readFileFrom` and `stat`
+ *  do from their measured siblings), so a detached call has no `this`, throws, and folds to a null listing. */
 const counted = (over: Partial<ListingIO> = {}) => {
   const asked: string[] = [];
   const io: ListingIO = {
-    lstatMeasured: async (p) => { asked.push(`lstat ${path.basename(p)}`); return (over.lstatMeasured ?? localIO.lstatMeasured)(p); },
-    readdir: async (p, t, s) => { asked.push(`readdir ${path.basename(p)}`); return (over.readdir ?? localIO.readdir)(p, t, s); },
-    statMeasured: async (p) => { asked.push(`stat ${path.basename(p)}`); return (over.statMeasured ?? localIO.statMeasured)(p); },
+    lstatMeasured: async (p) => { asked.push(`lstat ${path.basename(p)}`); return (over.lstatMeasured ?? localIO.lstatMeasured.bind(localIO))(p); },
+    readdir: async (p, t, s) => { asked.push(`readdir ${path.basename(p)}`); return (over.readdir ?? localIO.readdir.bind(localIO))(p, t, s); },
+    statMeasured: async (p) => { asked.push(`stat ${path.basename(p)}`); return (over.statMeasured ?? localIO.statMeasured.bind(localIO))(p); },
   };
   return { io, asked, of: (verb: string): string[] => asked.filter((a) => a.startsWith(`${verb} `)) };
 };

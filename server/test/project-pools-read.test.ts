@@ -194,8 +194,10 @@ describe('readProjectPools — the I/O cost awaited by FleetWatcher.tick', () =>
       io[member] = typeof impl === 'function'
         ? (...args: unknown[]): unknown => {
             ops.push(member);
-            // Preserve methods such as readFile that derive through `this`.
-            return (impl as (...a: unknown[]) => unknown).apply(io, args);
+            // Count only the calls the code under test makes. A member that derives through `this` (`readdir` from
+            // `readdirMeasured`, `readFile` from `readFileMeasured`) must reach the UNWRAPPED localIO, so its own
+            // derivation is not recorded as a second operation: it is one listing, not two.
+            return (impl as (...a: unknown[]) => unknown).apply(localIO, args);
           }
         : impl;
     }
