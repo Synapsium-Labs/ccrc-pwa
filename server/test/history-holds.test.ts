@@ -960,6 +960,32 @@ describe('D-5026 the pass death record', () => {
     expect(status(box).fail).toEqual([]);
   });
 
+  it('pin 9b (F4): a thrown pass writes its record BEFORE its finally removes its marker: killed right after that removal, the record stands, names this pass and the marker is gone, and status FAILs on it', () => {
+    const box = agedBox('ccrc-hist-d5026-order-');
+    // The kill lands just AFTER the finally's `unlinkSync` of the marker, the first step that follows the catch's record write. The needle
+    // `/history/pass` also matches `pass.tmp.<pid>` and `pass-died.tmp.<pid>` (writeFileAtomic removes its temp first, by `unlinkSync`), so
+    // the nth is a COUNT, measured with a logging preload and not assumed. This throwing pass's unlinks of a path holding that needle, in order:
+    //   1  writePassMarker's removeEntry(P.pass)            ENOENT (no marker for it to find)
+    //   2  writeFileAtomic's removal of pass.tmp.<pid>      ENOENT
+    //   3  writeFileAtomic's removal of pass-died.tmp.<pid> ENOENT, the catch's record write
+    //   4  removePassMarker's removeEntry(P.pass)           ok: the finally's removal, the call this case kills after
+    // The seam's `:after` kill runs only when the call returns, and calls 1-3 throw ENOENT (removeEntry swallows it), so only the 4th can fire.
+    // Under M11b (the record's write moved into the finally, after the removal) the finally's removal is the 3rd call and the record's
+    // temp removal the 4th, which throws: no kill fires, the pass ends by its rethrown error with an exit code, and the first assertion reds.
+    const r = runDriver(box, noTickSeen, [], { preloads: [PRELOADS.statfs, PRELOADS.faults], env: { HISTORY_TEST_KILL: 'unlinkSync:/history/pass:4:after' } });
+    expect(r.signal, 'the pass was killed right after its finally removed the marker (no exit code, no handler run); a pass that ends with a code did not remove it first, or not before writing the record').toBe('SIGKILL');
+    expect(r.code).toBeNull();
+    const own = ownMarker(box);
+    expect(fs.existsSync(diedFile(box)), 'the record was written before the marker went').toBe(true);
+    expect(recordOf(box)).toMatchObject({ pid: own.pid, start_ms: own.startMs, count: 1 });
+    expect(fs.existsSync(passFile(box)), 'the marker is gone: the kill came after the finally\'s removal').toBe(false);
+    const st = status(box);
+    expect(st.died).toMatchObject({ pid: own.pid, count: 1 });
+    expect(st.fail.map((i) => i.word)).toEqual(['tick-stale']);
+    expect(st.fail[0]!.detail).toContain(`pid ${own.pid}`);
+    expect(st.fail[0]!.detail).toContain('the sweep has recorded 1 scheduled pass(es) that ended without writing a tick since its last clear');
+  });
+
   it('pin 6: the record clears on the next ran pass\'s tick: after it the record is gone, a tick row exists, and no death FAIL is given', () => {
     const box = agedBox('ccrc-hist-d5026-clear-');
     plantDead(box, 4242, Date.now() - 5 * MIN);
