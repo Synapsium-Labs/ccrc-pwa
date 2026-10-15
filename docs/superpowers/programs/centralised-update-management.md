@@ -37,10 +37,10 @@ numbers; the spec wave each one implements is named beside it.
 | 13 | — (security + CI) | R16: the box token leaves `curl`'s argv in `ccd/ccrc-api` and `deploy/notify.sh` (`-K -` with a stdin `header = …` config, the idiom `ccd-pool-sync` and `ccd-update-sync` ship), and the test curl front admits exactly that; R20: the CI cleanup-hook timeout and wave 12's As-built bullet | fleet-first (the client and the hook reach every home through the install spine) | — | **MERGED** `8b0547b4` (PR #295, 2026-10-06 16:03:00 UTC, run 287 done). The merged tree is byte-identical to `git merge-tree` of the reviewed tip `77cf2367` onto `main` at `b3b5a73e` (`154cbb2c`), and `main` did not move after the review. Every Linux leg was green; the only macOS red was landing-order's. Scoped review 297 met none of the round's five classes; its five coverage and prose findings are residue R23. Was: **FIX ROUND 1 DONE** 2026-10-06 13:01 UTC at `77cf2367` (mail 3698; one commit on `ee5dd409`, 3 files, the round's only; no number spent; `main` not merged, `merge-tree` onto `b3b5a73e` clean; every Linux leg green on PR run 37465993934 and full run 37465994132). Scoped review run 297 dispatched 15:34 UTC to `ccrc-pwa-plain-cove`, after waiting out the fleet-wide daily cap (24 of 24). Both runs' only macOS red is landing-order's `session-hook-merge-deny`. After the review, #295 merges. Was: **FIX ROUND 1 SENT** 2026-10-06 12:27 UTC (mail 3690, `rulings-run287-fix1.md`) on review 294 at `ee5dd409`. Its F1, the test curl front failing open when grep cannot run, meets the bar's class 3 as written, so the bar gives the one round. A scoped review follows under the bar in the rulings, then #295 merges. Was: **IN REVIEW** 2026-10-06 11:34 UTC: wave-done at `ee5dd409`, PR #295; reserve number 4096 spent (bare: defined on the worker branch); the bar is in the 11:34 entry; review run 294 dispatched 11:35 UTC to `ccrc-pwa-quiet-harbor` (the held-out panel plus two lenses: token exposure and the front's parser; delivery, compatibility and the cleanup). Was: **DISPATCHED** 2026-10-06 10:01 UTC to `ccrc-pwa-still-ridge` (run 287; 6 items; route Opus·high / Sonnet / workflow off / compact 40; held 20 min by the fleet-wide daily cap, 24 of 24). Was: **Run 287 open, planned** 2026-10-06 06:41 UTC; re-scoped 07:07 UTC to R16 + R20 (scoping workflow `wf_286a790a-7fa`). Deviation block 4094 to 4113 (bare until defined). Plan `31f24eac` (workflow `wf_3aff815b-3ef`; readings ruled 09:30): 6 tasks; it defines D-4094 and D-4095, and the reserve is numbers 4096 to 4100 (Reading 4 spends 4096). |
 | 14 | — (R15, PWA) | the home screen shows a halt and offers Ack in place; **Update all** says why it skipped; the skew banner drops the stale `ccrc rollout` advice | server (PWA bundle) | — | **MERGED** `03afca8b` (PR #309, 2026-10-07 03:28:56 UTC, run 299 done; released as v0.0.113 at 03:29:52). The merged tree is byte-identical to `git merge-tree` of the reviewed tip `e4357fb7` onto `main` at `543777fbe` (`f8217ccd`), and `main` did not move after the review. Every Linux leg was green, and the macOS reds are other programmes'. The last scoped review, 312, met none of the round-2 bar's classes; its three coverage and prose findings are residue R27. Was: **FIX ROUND 2 DONE** 2026-10-07 02:15 UTC at `e4357fb7` (mail 3790; two commits on `c613f551`, the six admitted files; reserve number 4273 spent, bare: defined on the worker branch). Scoped review run 312 dispatched 03:13 UTC to `ccrc-pwa-swift-mesa`, after waiting out the daily cap. Was: **FIX ROUND 2 (THE LAST) SENT** 2026-10-07 01:48 UTC (mail 3788, `rulings-run299-fix2.md`) on scoped review 311 at `c613f551`. A read issued before the Ack's outcome still releases the hold (F1, class 2 then 1; F2, class 1 and 3), so the round-1 bar gives the narrow round 2. A scoped review follows; a class 1 to 3 finding after it stops the merge and goes to the operator. Was: **FIX ROUND 1 DONE** 2026-10-07 01:16 UTC at `c613f551` (mail 3785; two commits on `3f5f382c`, the round's 6 files; reserve number 4272 spent, bare: defined on the worker branch; `main` not merged, `merge-tree` onto `543777fbe` clean). Scoped review run 311 dispatched 01:33 UTC to `ccrc-pwa-plain-river`, after waiting out the daily cap. Was: **FIX ROUND 1 SENT** 2026-10-06 22:48 UTC (mail 3770, `rulings-run299-fix1.md`) on review 307 at `3f5f382c`. Its F1, an Ack sent twice against one lease after a lost answer, meets the bar's class 2 as written, so the bar gives the one round. A scoped review follows, then #309 merges. Was: **IN REVIEW** 2026-10-06 22:18 UTC: wave-done at `3f5f382c`, PR #309 (12 commits, 23 files, exactly File structure's); reserve numbers 4270 and 4271 spent (bare: defined on the worker branch); the bar is in the 22:18 entry; review run 307 dispatched 22:20 UTC to `ccrc-pwa-brisk-meadow` (the held-out panel plus two lenses: state truth and the dispatcher; what the operator sees). Was: **DISPATCHED** 2026-10-06 19:57 UTC to `ccrc-pwa-amber-harbor` (run 299; 7 items; route Opus·high / Sonnet / workflow off / compact 40), after the operator reviewed the plan ("looks good", 19:55). Was: **Planned; the shape ruled.** Plan `053cf1cb5` (workflow `wf_f9c94b88-140`; 7 tasks; it defines D-4266 to D-4269, and the reserve is numbers 4270 to 4274). The operator saw the designs and ruled "all recommended" at 2026-10-06 19:00 UTC. Was: **Run 299 open, planned** 2026-10-06 16:03 UTC, opened before run 287 closed. Deviation block 4266 to 4285 (bare until defined). |
 | 15 | — (`ccd/ccd`) | `--no-reload` for `_svc_enable`, alone | fleet-first | — | **Planned; dispatch held on three claims.** Plan `527296ffc` (workflow `wf_f9c94b88-140`; 2 tasks; it defines D-4286, and the reserve is numbers 4287 to 4291). It waits until claims 1057 (`ccd/ccd`), 1058 (`macos-platform.test.ts`) and 1055 (`ccd/ccrc`) have ended (Reading 7). Was: **Run 300 open, planned** 2026-10-06 16:07 UTC. Deviation block 4286 to 4295 (bare until defined). To plan. `ccd/ccd` is unclaimed, but open PRs #299, #301 and #303 also edit it, so whichever lands later rebases and restamps. |
-| 16 | — (sweep accounting) | `ccrc-api` placed by the install spine (wave 13's Reading 1(a): a `_inst_bins` line, its census pin, README's sentence); item 3's false "is FAILED" warning, the unit `activating` before the restart (Reading 9), the shipped stale-pid comment, the pgid clause's comment | fleet-first, an attended first move | — | gated on claim 1046 (`ccd/ccrc`, README) and on the operator's Reading 9 ruling |
-| 17 | — (verify script, Darwin helper) | R18(a) (unsearchable registry; `_reg_purge`'s order), R18(b), R10j | fleet-first, an attended first move | — | gated on claim 1046 |
-| 18 | — (backup prune) | R14(a), R10i, R8c, R10c's `deploy.sh` listing guard, R8g | fleet-first | — | gated on claim 1046 |
-| 19 | — (test containment) | `makeCcdHarness` containment parity, R14(b)'s raw-spawn census, R8f's `pathWithout` | none (tests) | — | gated on claim 1046; after wave 13 |
+| 16 | — (sweep accounting) | `ccrc-api` placed by the install spine (wave 13's Reading 1(a): a `_inst_bins` line, its census pin, README's sentence); item 3's false "is FAILED" warning, the unit `activating` before the restart (Reading 9), the shipped stale-pid comment, the pgid clause's comment | fleet-first, an attended first move | — | to plan (2026-10-15 21:41: Reading 9 ruled warn only; claim 1046 ended; `README.md` held by run 468) |
+| 17 | — (verify script, Darwin helper) | R18(a) (unsearchable registry; `_reg_purge`'s order), R18(b), R10j | fleet-first, an attended first move | — | to plan (2026-10-15 21:41) |
+| 18 | — (backup prune) | R14(a), R10i, R8c, R10c's `deploy.sh` listing guard, R8g | fleet-first | — | to plan (2026-10-15 21:41) |
+| 19 | — (test containment) | `makeCcdHarness` containment parity, R14(b)'s raw-spawn census, R8f's `pathWithout` | none (tests) | — | to plan (2026-10-15 21:41; `ccdWsHelpers.ts` held by run 308) |
 | — | — | final rollout: promote to `stable`, `ccrc rollout`, the exit criteria measured live | — | — | planned |
 
 **Order.** 2 → {3, 4} → {5, 6} → rollout. Waves 3 and 4 touch disjoint files (PWA + notifier vs `ccd/ccrc` +
@@ -1723,6 +1723,15 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
         landed.
       - STATUS: fleet and server v0.0.198, newest v0.0.198, backups fleet 181M/server 739M, disk free fleet 219G/work
         volume 179G/server 32G, no anomalies at 09:42.
+    - **2026-10-15 21:41 UTC: v0.0.199 to v0.0.201 auto-converged unattended; one poll took the newest of three.**
+      - v0.0.199 (`1d6b24a3b`, #418), v0.0.200 (`bc52c8272`, #411) and v0.0.201 (`a3cebde1b`, #419) were released at
+        13:01:26, 13:15:40 and 13:18:20, all inside one poll interval (the grid runs from the server's 09:22 restart).
+        The 13:22 poll resolved v0.0.201 alone, as designed: auto installs the newest, never each tag in turn.
+      - Fleet box: v0.0.198 to v0.0.201, 13:24:05 to 13:25:41, `phase: done`, doctor 34 passed, 6 warned, 0 failed.
+        The server box restarted onto it at 13:26:51; its doctor reads 26 passed, 0 warned, 0 failed.
+      - `box-token` PASS, generation #3 at 5 days. Two of the merges touched no file of wave 15; #411 edits `ccd/ccd`.
+      - STATUS: fleet and server v0.0.201, newest v0.0.201, backups fleet 181M/server 741M, disk free fleet 216G/work
+        volume 153G/server 32G, no anomalies at 21:41.
 
 - **2026-09-30 12:22 UTC — wave 8 opened (run 182) for the live audit's residue, and dispatched.**
   - **Planning:** two Opus scoping agents measured each defect at `a742eb6a`, and an Opus writer assembled the
@@ -3236,6 +3245,36 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
 - **2026-10-07 11:06 UTC: operator, re-deciding after the correction: "build the feature instead of manual rotation".**
   The leaked value stays live until the feature's first rotation. Design is under way (brainstorming, then an HTML spec
   for the operator's review). Its first wave is to be the smallest one that can retire the leaked value safely.
+
+- **2026-10-15 21:41 UTC: the operator: take the programme to completion. Three rulings, and the order to the end.**
+  - **The operator's words:** "ok your goal as coordinator is to take this programme to completion".
+  - **Rulings, asked and answered today:**
+    - **Reading 9 (wave 16): warn only.** A unit that was crash-looping before an update and is still down after it
+      is named by the update and by doctor. It does not fail the update. This keeps D-3984's narrowing: only units
+      active before the restart are verified.
+    - **Stable: the coordinator promotes.** When a released commit has a green `full-suite` and no before-stable item
+      is open, the coordinator fast-forwards `stable` to it and reports. Demotion stays a manual
+      `gh release edit --prerelease`. This replaces "the promotion is the operator's call" (2026-10-07 09:42).
+    - **The rehearsal's live half: the operator taps, the coordinator watches.** In a quiet window the operator taps
+      Rollback and then forward in the PWA on each node. The coordinator measures and records it read-only. The crash
+      inside the update window stays covered by the suites and is recorded as not run live. The 2026-09-30 ruling
+      stands: the coordinator moves no box.
+  - **The coordinator's default for question 2 of 2026-10-06 (attended first moves, waves 16 and 17):** auto moves
+    the boxes as for every release, and the coordinator watches the first move onto each, read-only. The health gate
+    restores a failed move (exit 4). The operator may still hold auto for either.
+  - **Corrected:** the waves table's "gated on claim 1046" for waves 16 to 19 was out of date. That claim ended. Their
+    files are now held by other runs: `README.md` by run 468, `ccd/ccrc-api` and `ccd/ccrc-doctor-checks` by run 360,
+    and `server/test/ccdWsHelpers.ts` by run 308. Wave 15 waits on claim 1370 (run 433, now `awaiting-review`) on
+    `ccd/ccd`, and on run 360's unlanded `ccd/ccd` work.
+  - **What is left, in order:**
+    1. Wave 15: re-measure its plan against `main`, then dispatch once `ccd/ccd` is free, or once its holders consent
+       to a concurrent wave that lands last.
+    2. Waves 16 to 19: plan them from a fresh measure of their residue, with Reading 9 ruled.
+    3. A PWA residue wave (R24, R26, R27) and the coordinator's docs PR (R7, R22, R24(e), R25).
+    4. The held residue, triaged: fixed in a wave, or closed as a documented limitation.
+    5. Stable: `main`'s daily full runs failed on 10-14 and 10-15 (38676520249 at `354118383`). The blockers are
+       re-measured, then the promotion.
+    6. The live exit criteria: the operator's taps above, and wave 3's phone-side checks.
 
 ## Carried constraints
 
