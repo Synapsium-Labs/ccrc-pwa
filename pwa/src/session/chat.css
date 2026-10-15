@@ -962,11 +962,22 @@ button.metachip:active {
 
 /* Answer in your own words (AskParts.tsx's `OwnWords`, D-5090: typed into the
    question's free-text row, never sent by declining the menu) + the raw "show
-   full question" view for menus whose detail the tappable rows can't hold. */
+   full question" view for menus whose detail the tappable rows can't hold.
+   `.dlg-words` is the whole region, the field and its lines or a line alone:
+   the same margin above and below, so the field sits as far from the Chat
+   row's rule under it as from the last option above it, and its 2px focus
+   ring (offset 1px) clears both; its lines follow the field at one gap. */
+.dlg-words {
+  display: grid;
+  gap: var(--sp-2);
+  margin: var(--sp-3) 0;
+}
+.dlg-words .dlg-copy {
+  margin: 0;
+}
 .dlg-reply {
   display: flex;
   gap: var(--sp-2);
-  margin-top: var(--sp-3);
 }
 .dlg-reply-input {
   flex: 1;
@@ -990,9 +1001,27 @@ button.metachip:active {
    (always dark) glass, so it is the only muted ink that survives here —
    6.41 dark / 5.77 light, against --ink-tertiary's 3.17 in light. */
 .dlg-reply-input::placeholder { color: var(--syn-comment); }
+/* Inert while a send is under way (its own, an option's, or a commit's): the
+   text stays legible in the placeholder's muted ink, which reads on the
+   always-dark well in both themes, and the frame goes dashed, so the field no
+   longer looks typeable. Safari paints a disabled field's text through
+   -webkit-text-fill-color and dims it with its own opacity; both are set so
+   every engine shows the same field. */
+.dlg-reply-input:disabled {
+  color: var(--syn-comment);
+  -webkit-text-fill-color: var(--syn-comment);
+  opacity: 1;
+  border-style: dashed;
+  cursor: default;
+}
 .dlg-reply-input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; border-color: transparent; }
+/* Send and its busy face, `Sending…`, share one grid cell (AskParts.tsx), so
+   the button is as wide as the wider face whichever shows: its width never
+   changes while busy, and neither does the field's beside it. */
 .dlg-reply-send {
   flex: none;
+  display: grid;
+  place-items: center;
   min-height: var(--tap-min);
   padding: 0 var(--sp-4);
   border: 1px solid var(--edge-subtle);
@@ -1003,7 +1032,15 @@ button.metachip:active {
   cursor: pointer;
   transition: color var(--dur-fast) var(--curve-swift), border-color var(--dur-fast) var(--curve-swift);
 }
+.dlg-reply-send > span {
+  grid-area: 1 / 1;
+}
+.dlg-reply-send > [aria-hidden='true'] {
+  visibility: hidden;
+}
 .dlg-reply-send:disabled { color: var(--ink-tertiary); cursor: default; }
+/* Busy is the answer in flight, in the ink `.opt-wait` says "answering…" in. */
+.dlg-reply-send[aria-busy='true'] { color: var(--status-busy-text); }
 .dlg-reply-send:not(:disabled):hover { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 40%, transparent); }
 .dlg-details-toggle {
   margin-top: var(--sp-3);

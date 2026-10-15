@@ -3,6 +3,8 @@
 // unparsed dialogs render raw + a terminal CTA; a stale 409 toasts and keeps
 // the sheet open on the store's dialog; scrim cancel only hides (the store
 // keeps signalling) and is refused while an answer is in flight.
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import {
@@ -1117,6 +1119,8 @@ describe('DialogSheet (hook envelope)', () => {
       const allow = screen.getByRole('button', { name: /Allow/ });
       fireEvent.click(allow);
       expect(allow).toHaveAttribute('aria-busy', 'true');
+      // A flex box drops the marker's leading space (`Allowanswering…`): the gap keeps them apart.
+      expect(allow).toHaveClass('gap-2');
     });
 
     it('Deny carries aria-busy while its own interrupt call is in flight', () => {
@@ -2500,6 +2504,79 @@ describe('one send at a time, to the row it was meant for (D-5089, D-5090, D-509
       });
       expect(multi).toHaveBeenCalledTimes(1);
     });
+  });
+});
+
+// — the own-words region and the busy commits, as laid out —
+//
+// jsdom lays nothing out, so these pin the STRUCTURE each fix rides on, and the stylesheet rules that use it; the
+// pixels are judged on a real build at phone, laptop and wide widths (plan, Task 5).
+describe('the own-words region and the busy commits keep their shape (D-5090, D-5091)', () => {
+  const css = readFileSync(path.join(import.meta.dirname, '..', 'src', 'session', 'chat.css'), 'utf8');
+  /** The declarations of the rule whose selector list is exactly `selector`. */
+  const rule = (selector: string): string => {
+    const at = css.indexOf(`\n${selector} {`);
+    expect(at, selector).toBeGreaterThan(-1);
+    return css.slice(at, css.indexOf('}', at));
+  };
+  const renderAsk = (ask: HookAsk | null, dialog: Dialog) => {
+    const store = makeStore();
+    act(() => {
+      store.getState().apply({ type: 'dialog', dialog });
+      if (ask) store.getState().apply({ type: 'ask', ask, key: null });
+    });
+    render(<DialogSheet id={SESSION_ID} store={store} onOpenTerminal={vi.fn()} />);
+    return { store };
+  };
+  const field = (): HTMLInputElement => screen.getByLabelText('Answer in your own words');
+
+  it('Send keeps its width while busy: both faces share one cell, and the one not showing is hidden', () => {
+    vi.spyOn(api, 'answerDialogText').mockReturnValue(new Promise(() => {}));
+    renderAsk(null, pane('cc300-ask-1q-open'));
+    const faces = (b: HTMLElement): string[] =>
+      [...b.querySelectorAll(':scope > span')].map((f) => `${f.textContent}${f.getAttribute('aria-hidden') === 'true' ? ':hidden' : ''}`);
+    const idle = screen.getByRole('button', { name: 'Send' });
+    expect(faces(idle)).toEqual(['Send', 'Sending…:hidden']);
+    fireEvent.change(field(), { target: { value: 'Teal' } });
+    fireEvent.click(idle);
+    const busy = screen.getByRole('button', { name: 'Sending…' });
+    expect(busy).toHaveAttribute('aria-busy', 'true');
+    expect(faces(busy)).toEqual(['Send:hidden', 'Sending…']);
+    // The cell is the button's grid; the hidden face holds its width without being seen.
+    expect(rule('.dlg-reply-send')).toMatch(/display:\s*grid/);
+    expect(rule('.dlg-reply-send > span')).toMatch(/grid-area:\s*1\s*\/\s*1/);
+    expect(rule(".dlg-reply-send > [aria-hidden='true']")).toMatch(/visibility:\s*hidden/);
+  });
+
+  it('the busy commits keep a gap between the label and answering…', () => {
+    // `Button` is a flex box, which drops the marker's leading space: `Nextanswering…` (measured, every width).
+    vi.spyOn(api, 'answerDialogMulti').mockReturnValue(new Promise(() => {}));
+    renderAsk(DRINK_FEATURES_TOOLS, pane('cc300-ask-multiselect-digit1-3'));
+    const next = screen.getByRole('button', { name: /^Next/ });
+    fireEvent.click(next);
+    expect(next).toHaveAttribute('aria-busy', 'true');
+    expect(next).toHaveClass('gap-2');
+  });
+
+  it('the own-words region spaces itself the same above and below, whatever it holds', () => {
+    // The field and its lines, and a line alone, sit in one `.dlg-words` block with equal margins, so the Chat row's
+    // rule below is as far from the field as the last option above it, and the field's focus ring clears both.
+    renderAsk(CACHING_TRACING, pane('cc300-ask-same-labels-q2'));
+    expect(field().closest('.dlg-words')).not.toBeNull();
+    fireEvent.change(field(), { target: { value: 'int x = 1;' } });
+    expect(screen.getByText(/trailing ; doesn't survive/i).closest('.dlg-words')).toBe(field().closest('.dlg-words'));
+    cleanup();
+    renderAsk(null, pane('ask-2col-chat-about'));
+    expect(screen.getByText(/no own-words row on the terminal/i).closest('.dlg-words')).not.toBeNull();
+    expect(rule('.dlg-words')).toMatch(/margin:\s*var\(--sp-3\) 0;/);
+    expect(rule('.dlg-words .dlg-copy')).toMatch(/margin:\s*0;/);
+    expect(rule('.dlg-reply')).not.toMatch(/margin/);
+  });
+
+  it('the own-words field looks disabled while it is', () => {
+    expect(rule('.dlg-reply-input:disabled')).toMatch(/color:\s*var\(--syn-comment\)/);
+    expect(rule('.dlg-reply-input:disabled')).toMatch(/border-style:\s*dashed/);
+    expect(rule('.dlg-reply-input:disabled')).toMatch(/cursor:\s*default/);
   });
 });
 

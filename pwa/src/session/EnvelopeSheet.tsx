@@ -245,6 +245,8 @@ export function EnvelopeSheet({
           <div className="dlg-actions">
             <Button
               variant="primary"
+              // A flex box drops the marker's leading space (`Allowanswering…`); the gap keeps the two apart.
+              className="gap-2"
               disabled={!canAnswer || busy}
               aria-busy={allowing || undefined}
               onClick={() => onSelectOption(1)}

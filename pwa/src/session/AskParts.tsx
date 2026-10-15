@@ -229,7 +229,9 @@ const CHAT_DECLINES = 'Declines this ask so you can talk it over in the chat.';
  * pane paints meanwhile (the typed row under a new id is this send, not other text).
  *
  * The field paints `--fs-input` (16px), so focusing it never zooms iOS Safari, and it shares one row with Send at
- * every width (`.dlg-reply`: the field flexes, Send keeps its 44px).
+ * every width (`.dlg-reply`: the field flexes, Send keeps its 44px and one width, busy or not). Everything here sits
+ * in one `.dlg-words` block, spaced the same above and below, so the field's focus ring clears the rows on both
+ * sides.
  */
 export function OwnWords({
   slot,
@@ -253,9 +255,9 @@ export function OwnWords({
   if (call !== null && busy) {
     row = call.row;
   } else if (slot.kind === 'none') {
-    return chat !== null ? <p className="dlg-copy">{noWordsRow(chat)}</p> : null;
+    return chat !== null ? <OwnWordsLine>{noWordsRow(chat)}</OwnWordsLine> : null;
   } else if (slot.kind === 'held' && !slotHolds(slot, text)) {
-    if (text.trim() === '') return <p className="dlg-copy">{ROW_HOLDS_OTHER}</p>;
+    if (text.trim() === '') return <OwnWordsLine>{ROW_HOLDS_OTHER}</OwnWordsLine>;
     taken = slotHoldsPart(slot, text) ? 'part' : 'other';
     row = slot.index;
   } else {
@@ -266,7 +268,7 @@ export function OwnWords({
   // Near the limit, how much of it the text uses; over it, why Send waits. Never a silent cut (`ownWordsHeld`).
   const count = ownWordsCount(text);
   return (
-    <>
+    <div className="dlg-words">
       <form
         className="dlg-reply"
         onSubmit={(e) => {
@@ -291,8 +293,11 @@ export function OwnWords({
           disabled={busy || locked || held !== null || taken !== null}
           aria-busy={busy || undefined}
         >
-          Send
-          {busy && <span className="opt-wait"> answering…</span>}
+          {/* Both faces share the button's one grid cell, so it is as wide as the wider face whichever shows, and
+              Send never changes width while busy (`Send answering…` once grew it by 79px and squeezed the field mid
+              word). The face not showing is aria-hidden, which chat.css also hides from sight. */}
+          <span aria-hidden={busy || undefined}>Send</span>
+          <span aria-hidden={!busy || undefined}>Sending…</span>
         </button>
       </form>
       {count !== null && <p className="dlg-copy" id={countId}>{count}</p>}
@@ -300,7 +305,17 @@ export function OwnWords({
       {taken === 'part' && <p className="dlg-copy">{WORDS_PART}</p>}
       {taken === 'other' && <p className="dlg-copy">{ROW_HOLDS_OTHER}</p>}
       {held === 'semicolon' && <p className="dlg-copy">{TRAILING_SEMICOLON}</p>}
-    </>
+    </div>
+  );
+}
+
+/** The own-words region when it is one line and no field: the same `.dlg-words` block, so it is spaced the same above
+ *  and below as the field is. */
+function OwnWordsLine({ children }: { children: ReactNode }): ReactNode {
+  return (
+    <div className="dlg-words">
+      <p className="dlg-copy">{children}</p>
+    </div>
   );
 }
 
@@ -437,6 +452,8 @@ export function MultiPick({
       <div className="dlg-actions">
         <Button
           variant="primary"
+          // A flex box drops the marker's leading space (`Nextanswering…`); the gap keeps the two apart.
+          className="gap-2"
           disabled={busy || locked || held !== null}
           aria-busy={busy || undefined}
           onClick={() => onCommit(wanted)}
