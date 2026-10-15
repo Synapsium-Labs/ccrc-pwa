@@ -818,6 +818,7 @@ Run on the deployed preview (Task 14) and again on the released build (§Deploy 
 | 375 | iPhone SE, Safari | ~41 | wrapped, key bar | A B C D E F H I J |
 | 393 | iPhone 15, Safari | ~43 | wrapped, key bar | A B C D E F H I J |
 | 360 / 412 | Android, Chrome | 39 / 45 | wrapped, key bar | A B C D E F H I J |
+| 428 / 430 | iPhone Plus or Pro Max, Safari | ~49 / ~50 | wrapped, key bar in two rows of four | A B C D E F H I J |
 | ~852 | iPhone 15 landscape, Safari | ~98 | wrapped | A B C E H |
 | 820 | iPad portrait, Safari | ~94 | wrapped | A B C D E F H I |
 | 1180 | iPad landscape, Safari (and with a hardware keyboard: P1) | ~137 | wrapped | A B C E F H I |
@@ -829,7 +830,7 @@ Run on the deployed preview (Task 14) and again on the released build (§Deploy 
 
 A cell that fails is recorded with the device, the engine and a sentence; any failure of A, D, E or H is a STOP before the PR merges.
 
-*Amended at stage close:* the four phone rows read "wrapped, field, key bar" before R-LIVE; there is no field (`phones-type-live`), and "input per the gate" at 1280 and 1440 is the off-screen terminal on every pointer. Add a 428–430 row (iPhone Plus or Pro Max, Safari): the key bar is two rows there, nothing clipped (`key-bar-wraps-when-it-does-not-fit`).
+*Amended at stage close:* the four phone rows read "wrapped, field, key bar" before R-LIVE; there is no field (`phones-type-live`), and "input per the gate" at 1280 and 1440 is the off-screen terminal on every pointer. The 428–430 row (iPhone Plus or Pro Max, Safari) is added at stage close: the widths where the bar's old 420px rule clipped `⋯`; the key bar is two rows there, nothing clipped (`key-bar-wraps-when-it-does-not-fit`).
 
 ## Stage 2: the next plan (not tasks)
 
