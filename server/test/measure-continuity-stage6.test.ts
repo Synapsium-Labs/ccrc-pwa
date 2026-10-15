@@ -19,12 +19,13 @@ beforeEach(() => { h = makeCcdHarness('ccrc-measure-continuity-s6-'); });
 afterEach(() => { h.cleanup(); });
 
 type Row = Record<string, number | string | Record<string, number>>;
+type Stage6 = { reap_class_oom: Row; inert_scopes: Row; pressure_reap_comparison?: Row };
 /** The whole stage-6 reading. XDG_RUNTIME_DIR is a fixture directory: no case reads a real box's verdict record. */
-const stage = (extra: string[] = []): { reap_class_oom: Row; inert_scopes: Row } => {
+const stage = (extra: string[] = []): Stage6 => {
   const xdg = path.join(h.home, 'xdg'); fs.mkdirSync(xdg, { recursive: true });
   const out = execFileSync('python3', [TOOL, '--home', h.home, '--stage', '6', '--journal', path.join(h.home, 'journal.json'), ...extra, '--json'],
     { encoding: 'utf8', env: { ...process.env, TZ: 'UTC', XDG_RUNTIME_DIR: xdg } });
-  return (JSON.parse(out) as { stage6: { reap_class_oom: Row; inert_scopes: Row } }).stage6;
+  return (JSON.parse(out) as { stage6: Stage6 }).stage6;
 };
 const run = (extra: string[] = []): Row => stage(extra).reap_class_oom;
 
@@ -134,9 +135,14 @@ describe('stage 6 counts what its row says (TZ=UTC, a hand-built journal)', () =
 
 describe('stage 6\'s second metric: inert dead scopes that survive a day, read off the sweep\'s verdict record now', () => {
   const UP = 100 * 86400;
-  const record = (lines: string[]): void => {
+  const tickNow = (): number => Math.floor(Date.now() / 1000);
+  const record = (lines: string[], tick = tickNow()): void => {
     const xdg = path.join(h.home, 'xdg'); fs.mkdirSync(xdg, { recursive: true });
-    fs.writeFileSync(path.join(xdg, 'ccd-scope-sweep.state'), [`# ccd-scope-sweep v1 tick=1 up=${UP} mode=shadow`, ...lines].join('\n') + '\n');
+    fs.writeFileSync(path.join(xdg, 'ccd-scope-sweep.state'), [`# ccd-scope-sweep v1 tick=${tick} up=${UP} mode=shadow`, ...lines].join('\n') + '\n');
+  };
+  const carry = (n: number, state: 'dead' | 'live' | 'unknown', first = 'none', cpu0 = 'none'): string => {
+    const why = state === 'live' ? 'parent-hop-cap' : state === 'dead' ? 'socket-tables' : 'child-cgroup';
+    return `carry ${unit(n)} state=${state} first=${first} cpu0=${cpu0} why=${why}`;
   };
   const dead = (n: number, ago: number, verdict: string): string =>
     `dead tmux-spawn-0000000${n}-0000-4000-8000-000000000000.scope first=${UP - ago} cpu0=7 verdict=${verdict} why=none server=gone procs=1 mem=1 sockets=0 youngest=1 oldest=1 age=1 pids=1`;
@@ -144,11 +150,79 @@ describe('stage 6\'s second metric: inert dead scopes that survive a day, read o
   it('counts the dead, the inert (every stop predicate held), and the inert dead a day or more', () => {
     record([dead(1, 25 * 3600, 'would-stop'), dead(2, 2 * 86400, 'held'), dead(3, 23 * 3600, 'stop-failed'), dead(4, 3 * 86400, 'report'),
       'old tmux-spawn-00000005-0000-4000-8000-000000000000.scope pid=9 age=90000 comm=bash']);
-    expect(stage().inert_scopes).toEqual({ mode: 'shadow', dead: 4, inert: 3, inert_dead_a_day_or_more: 2 });
+    expect(stage().inert_scopes).toEqual({ mode: 'shadow', dead: 4, inert: 3, inert_dead_a_day_or_more: 2,
+      carried_scopes: { dead: 0, live: 0, unknown: 0 } });
   });
 
   it('no record is `absent`, never zero', () => {
     expect(stage().inert_scopes).toEqual({ record: 'absent' });
+  });
+
+  it('carries remain visible but do not inflate dead or inert counts', () => {
+    record([dead(1, 2 * 86400, 'would-stop'), carry(2, 'live'), carry(3, 'unknown', String(UP - 7 * 3600), '7'), carry(4, 'dead')]);
+    expect(stage().inert_scopes).toEqual({ mode: 'shadow', dead: 1, inert: 1, inert_dead_a_day_or_more: 1,
+      carried_scopes: { dead: 1, live: 1, unknown: 1 } });
+  });
+  it.each(['stale', 'future'] as const)('a %s record publishes no current counts', (state) => {
+    record([dead(1, 2 * 86400, 'would-stop')], tickNow() + (state === 'future' ? 3600 : -600));
+    expect(stage().inert_scopes).toEqual({ record: state });
+  });
+  it.each([
+    'garbage',
+    carry(2, 'unknown', 'none', '7'),
+    carry(2, 'live').replace('parent-hop-cap', 'child-cgroup'),
+    dead(1, 2 * 86400, 'would-stop') + ' trailing',
+    dead(1, 2 * 86400, 'would-stop').replace('cpu0=7', 'cpu0=08'),
+  ])('a nonempty bad body never becomes partial current counts: %s', (bad) => {
+    record([dead(1, 2 * 86400, 'would-stop'), bad]);
+    expect(stage().inert_scopes).toEqual({ record: 'unreadable' });
+  });
+  it.each(['08', '99999999999999999999'])('an invalid header tick %s is unreadable', (tick) => {
+    record([]);
+    const file = path.join(h.home, 'xdg', 'ccd-scope-sweep.state');
+    fs.writeFileSync(file, `# ccd-scope-sweep v1 tick=${tick} up=${UP} mode=shadow\n`);
+    expect(stage().inert_scopes).toEqual({ record: 'unreadable' });
+  });
+});
+
+describe('the pressure comparison is B-relative and read-only', () => {
+  const windowArgs = ['--since', '2026-10-06 00:00:00', '--until', '2026-10-13 00:00:00'];
+  it.each([[0, 2, 'not-triggered'], [0, 3, 'withdraw'], [5, 7, 'not-triggered'], [5, 8, 'withdraw']] as const)(
+    'baseline %s with observed %s reports %s', (baseline, count, decision) => {
+      fs.mkdirSync(path.join(h.home, '.cc-sessions'), { recursive: true });
+      for (let n = 1; n <= count; n++) {
+        const sid = `reap-${n}`;
+        started(n, T - 7200 - n * 100); spawned(sid, T - 7197 - n * 100); oom(n, T + n);
+        session(sid, [rows.bg(T - 6000, `b${n}`), rows.turn(T - 3600)]);
+      }
+      // Unknowns do not disappear merely because a comparison was requested.
+      oom(99, T + 99);
+      flush();
+      const r = stage([...windowArgs, '--reap-baseline', String(baseline)]);
+      expect(r.pressure_reap_comparison).toEqual({ baseline_reap_class: baseline, withdraw_above: baseline + 2,
+        observed_reap_class: count, decision });
+      expect(r.reap_class_oom.unmapped).toBe(1);
+      expect(r.reap_class_oom.pane_scope_oom_stops).toBe(count + 1);
+      expect(r.reap_class_oom.reap_class).toBe(count);
+      expect(fs.existsSync(path.join(h.home, '.cc-sessions', 'scope-sweep-live'))).toBe(false);
+    },
+  );
+  it('an unreadable journal gives an unmeasured comparison, never a not-triggered zero', () => {
+    const r = stage([...windowArgs, '--reap-baseline', '5']);
+    expect(r.pressure_reap_comparison).toEqual({ baseline_reap_class: 5, withdraw_above: 7, decision: 'unmeasured' });
+    expect(r.reap_class_oom).toEqual({ journal: 'unreadable' });
+  });
+  it('without a baseline the existing stage-6 output has no comparison', () => {
+    expect(stage().pressure_reap_comparison).toBeUndefined();
+  });
+  it.each([
+    ['--reap-baseline', '-1', ...windowArgs],
+    ['--reap-baseline', 'abc', ...windowArgs],
+    ['--reap-baseline', '08', ...windowArgs],
+    ['--reap-baseline', '5'],
+    ['--reap-baseline', '5', '--since', '2026-10-06', '--until', '2026-10-07'],
+  ])('invalid or incomplete comparison arguments are refused: %s', (...args) => {
+    expect(() => stage(args)).toThrow();
   });
 });
 

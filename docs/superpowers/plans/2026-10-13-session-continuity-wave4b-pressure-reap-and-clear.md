@@ -14,7 +14,7 @@
 
 Run 308 is the existing planned work run: programme wave 4b, run wave 5. Baseline B was measured independently with the reap still enabled over `2026-10-06 23:16:00 UTC` inclusive through `2026-10-13 23:17:00 UTC` exclusive: **0 reap-class OOM stops among 34 pane-scope OOM stops**, with 5 unmapped and 4 unmeasured. The scope record was shadowed, with 9 dead scopes and 2 inert scopes; both inert scopes were at least one day old. This unblocks planning, not arming the scope sweep or restarting the fleet by hand.
 
-This is an implementation plan against `main` at `f515cdfd4b748dcd474dd33c79fc662fe78c0da3`. It is not a replay-verified prototype: the source map is verified, but the new test blocks and mutations still require red-first execution by the worker. Content anchors, not historical line numbers, locate each edit. Later main changes are measured before dispatch and on a required landing merge.
+The original source map was checked against `main` at `f515cdfd4b748dcd474dd33c79fc662fe78c0da3`. The pre-dispatch revision is anchored at `c7776b08037dadaeee832e906f99e4221afdf8d2`: the intervening continuation work materially expanded `_sync_uuid`, so Task 3 now integrates with its existing pane-admission guards and retains both follow paths. The other changed target files keep their seam contracts, with content anchors remeasured. This is not a replay-verified prototype: new test blocks and mutations still require red-first execution by the worker. Later main changes are measured before dispatch and on a required landing merge; source integration is not permission to rebase dispatched work.
 
 ## Global Constraints
 
@@ -64,7 +64,10 @@ This is an implementation plan against `main` at `f515cdfd4b748dcd474dd33c79fc66
 | `server/test/ccd-route-spawn.test.ts` | Resume/route/subagent environment composition | 2 |
 | `server/test/ccd-route-degrade.test.ts` | Degraded-route command compatibility | 2 |
 | `server/test/ccd-lifecycle-purge.test.ts` | Existing spawn spelling guard | 2 |
-| `server/test/ccd-operator-choice.test.ts` | Live rotation, marker lifecycle and shared promotion behavior | 3 |
+| `server/test/ccd-operator-choice.test.ts` | Live rotation, marker lifecycle, admitted/refused pane controls and shared promotion behavior | 3 |
+| `server/test/ccd-sync-uuid.test.ts` | Existing real pane-admission, background-worker and continuation-follow regression gate | 3 |
+| `server/test/continued-in-parity.test.ts` | Existing three-reader continuation-marker parity gate | 3 |
+| `server/test/continued-in-successor-parity.test.ts` | Existing continuation-successor parity gate | 3 |
 | `server/test/session-hook.test.ts` | S6-R11 census only if measured movement requires it | 1-3 |
 | `README.md` | Shipped behavior and named costs in the existing continuity section | 4 |
 | `docs/superpowers/specs/2026-09-23-session-continuity-design.md` | As-built annotations for the deferred clear fix and carried record representation | 4 |
@@ -171,7 +174,7 @@ This task is deliberately one acceptance unit: the sweep's new record cannot shi
 - New optional instrument argument `--reap-baseline <count>` supplies an already-frozen baseline, not a file or live baseline re-read. It requires stage 6 alone and an explicit seven-day `--since`/`--until` window. It adds a read-only `pressure_reap_comparison` section: baseline, exclusive withdrawal threshold B + 2, observed class and `decision: 'withdraw'|'not-triggered'|'unmeasured'`. `not-triggered` is not a health verdict: raw unknown counts stay beside it. It never changes spawning or removes a key.
 - `BOUNDED` retains its synchronous shell-prefix API `<seconds> <argv...>`, timeout exit 142 and whole-child-group kill. Parent and child establish the same child-owned process group before the parent arms its alarm.
 
-- [ ] **Step 1: Add sweep failure pins and migrate the carried-row assertions.**
+- [x] **Step 1: Add sweep failure pins and migrate the carried-row assertions.**
 
 In `scope-sweep.test.ts`, extend the existing `proc` options with `state?: string`, replace the hard-coded `S` in its stat line, and widen `rows` to `carry`. These are fixture helpers, not product readers:
 
@@ -319,7 +322,7 @@ describe('wave 4b residue: carries, zombies and complete record writes', () => {
 });
 ```
 
-- [ ] **Step 2: Add doctor state/remedy tests using the real suite's HOME seam.**
+- [x] **Step 2: Add doctor state/remedy tests using the real suite's HOME seam.**
 
 Inside `describeLinux('ccrc doctor: scope-sweep', ...)`, use `healthy`, `record(home, lines, ago)`, `runDoctor(home).stdout`, `lineFor`, `DEAD`, `LIVE` and `DEADLINE`. Do not introduce a process-global environment seam or call `runDoctor('scope-sweep')`.
 
@@ -392,7 +395,7 @@ it('mixed measured and carried rows keep measured advice explicitly scoped', () 
 
 Keep existing bounded-number, stale-knob, oldest=-1, Darwin/server/paused/absent and timer cases. The malformed-body wording retains `N line(s) it cannot read`, so those existing pins need no relaxation.
 
-- [ ] **Step 3: Add instrument freshness and non-zero comparison pins in the first commit.**
+- [x] **Step 3: Add instrument freshness and non-zero comparison pins in the first commit.**
 
 In the stage-6 metric describe, replace the old `tick=1` helper with a current timestamp and optional explicit tick:
 
@@ -481,7 +484,7 @@ describe('the pressure comparison is B-relative and read-only', () => {
 
 The journal's fresh-record metric is a NOW reading, not a historical-week reconstruction. This distinction is retained in the documentation and evidence.
 
-- [ ] **Step 4: Pin the parent/child process-group race with a delayed child.**
+- [x] **Step 4: Pin the parent/child process-group race with a delayed child.**
 
 Replace the existing whole-group timeout case in `ccd-limit-banner.test.ts` with this two-input version. `PERL5OPT` loads a test module before compilation of the Perl prefix. The module's pipe handshake proves the child reached the delayed branch before the parent returns from fork, and the parent records its own child's PID before the alarm can be armed. The delay is before the child's `setpgid(0, 0)` and longer than the outer bound: without parent-side group creation, the group kill misses and the outer timeout fails the case. The PID pin detects that child before it execs the FIFO command. No production timeout or suite duration is shortened.
 
@@ -556,7 +559,7 @@ BEGIN {
 
 The normal case still proves a grandchild blocked on a FIFO is killed; the delayed case independently proves the recorded direct child is reaped before it ever execs. Cleanup only targets processes whose measured argv still contains this test's unique FIFO path; no pattern kill, blocking FIFO writer or invented `boundedShell` API. Save the actual delayed-child red before changing `BOUNDED`.
 
-- [ ] **Step 5: Run every new residue owner red before product edits.**
+- [x] **Step 5: Run every new residue owner red before product edits.**
 
 From `server/`, foreground, sequentially, tool timeout at least 600000 ms:
 
@@ -569,7 +572,7 @@ From `server/`, foreground, sequentially, tool timeout at least 600000 ms:
 
 Expected reds: copied dead rows instead of carries; paused stdout; unchecked write; malformed-body stop advice; future-record PASS; missing strict/fresh/comparison instrument behavior; delayed-child timeout containment. Existing bounded-arithmetic and ordinary group-kill controls may already pass. Record actual results; do not infer one guard's red from another case failing.
 
-- [ ] **Step 6: Change sweep representation, without widening stop authority.**
+- [x] **Step 6: Change sweep representation, without widening stop authority.**
 
 Replace its previous-record declaration/parser with this bounded-clock reader. The capture snapshot precedes every helper `=~`, because those regexes overwrite `BASH_REMATCH`:
 
@@ -666,7 +669,7 @@ Retain the SAID output and final rc. Complete record replacement is not transact
 
 Update the sweep's header in its current paragraph: a carry records reason/liveness and bounded prior clocks, never a fresh dead verdict; first-ever uncertainty gets none/none; known-live hop-cap is qualified; child-cgroup liveness remains unknown because that check stays before liveness. Keep the accepted child-cgroup cost and the two-clock fail-safe explanation.
 
-- [ ] **Step 7: Make the doctor validate the whole record before choosing a remedy.**
+- [x] **Step 7: Make the doctor validate the whole record before choosing a remedy.**
 
 Within `_check_scope-sweep`, add counters `nc_dead=0 nc_live=0 nc_unknown=0`, arrays `carry_detail=()` and `found=()`, and these regex fragments beside N/M/O:
 
@@ -746,7 +749,7 @@ Replace the entire block AFTER `done < "$rec"` through the final `return 2` with
 
 Nothing in doctor stops a unit. Update its local header to describe three row kinds and the state-specific remedies; retain WARN-not-FAIL and absent/paused/server/Darwin SKIPs.
 
-- [ ] **Step 8: Make the instrument strict, fresh and baseline-relative.**
+- [x] **Step 8: Make the instrument strict, fresh and baseline-relative.**
 
 Replace S6_HDR/S6_DEAD and add the following constants beside the retained S6_IDLE/S6_DAY/S6_INERT definitions:
 
@@ -866,7 +869,7 @@ Inside `main`, add `ap.add_argument('--reap-baseline', type=reap_baseline, help=
 
 Add `'reap_baseline': a.reap_baseline` to ctx. Preserve every old CLI argument and stage registration. This is the entire new comparison interface; no undocumented `--baseline`, removal script, restart or manager action. Add the argument and read-only distinction to the instrument's own header.
 
-- [ ] **Step 9: Close the alarm race in the existing Perl prefix.**
+- [x] **Step 9: Close the alarm race in the existing Perl prefix.**
 
 Replace only the BOUNDED literal with:
 
@@ -876,7 +879,7 @@ export const BOUNDED = `perl -e 'use POSIX qw(setpgid); use Errno qw(EACCES ESRC
 
 The parent establishes the child's group while the child may still be unscheduled. POSIX `setpgid` returns an undefined value on failure and a defined value numerically equal to zero on success; do NOT test `!= 0`. Save errno immediately after the call, before a kill/wait can change it. Both arms use the same POSIX return contract. EACCES means that child already exec'd (after its own successful group setup); ESRCH means it is already gone. Any other setup failure kills/reaps only that child and refuses 125 rather than installing an alarm against an unknown group. Retain the comment's whole-group rationale and add the parent-race explanation. No new exported helper or dependency.
 
-- [ ] **Step 10: Verify already-landed text, then run residue gates green.**
+- [x] **Step 10: Verify already-landed text, then run residue gates green.**
 
 Compare the predecessor's final source, not review-305's old line numbers. Keep its landed bounded-arithmetic checks, invalid stale-knob fallback, child-cgroup/hop-cap containment, clock comment, graph-doctor fixture seam, corrected census prose and restamp instructions. Do not revive the stray blank line or the superseded source changes. Apply the shared citation-tax procedure to genuinely moved doctor/helper/test anchors.
 
@@ -922,6 +925,58 @@ A valid empty write is required to be green; merely checking a failed nonempty w
 | Remove parent setpgid or kill only direct child | Delayed-child and normal whole-group timeout cases |
 
 Each mutation runs against the source it owns in fixture-contained suites, produces an observed RED, then restores ONLY the task's bytes. Restore green and run the shared citation/mode guards again. A fresh Opus/high per-task reviewer must clear this entire residue unit before Task 2 starts. Commit subject: `fix(continuity): distinguish carried scope evidence and close wave-4 residue`. Define any justified issued departure alongside this commit; report unused numbers bare.
+
+#### Execution evidence (Task 1)
+
+Measured on the dispatched workspace branch at base `a3cebde1b`, from `server/`, foreground, `--maxWorkers=1`, fixture HOMEs only. Steps 1-10 are done. Step 11's mutation table is measured and restored below; its fresh-reviewer gate belongs to the controller and is not claimed here.
+
+**Red, before any product edit (Step 5).**
+
+| Owner | Red | What reddened |
+|---|---|---|
+| `scope-sweep.test.ts` | 32 failed, 44 passed (76) | 24 migrated carried-row cases (copied dead rows, no carry row), the no-procs `w` carry, the silent pause, the retained-clock and first-ever carries, the Z outside child, and all four record-write failures (the failed header case exited 0; the failed open and rename cases exited 1 with the old `cannot write` message). Green controls: the four malformed-clock cases, the S outside child and the valid empty record, which the old code already satisfied. |
+| `ccrc-doctor.test.ts -t scope-sweep` | 12 failed, 16 passed (28) | both unreadable-body cases, live carry PASS, the dead and unknown carry cases, all five malformed or contradictory rows, the future record and the mixed record |
+| `measure-continuity-stage6.test.ts` | 16 failed, 11 passed (27) | the widened all-counts case, carries, stale, future, five bad bodies, two invalid ticks, four baseline cases and the unreadable-journal comparison. The no-baseline control and the five argument-refusal cases were green already (argparse refuses an unknown option). |
+| `ccd-limit-banner.test.ts -t 'timed harness'` | 1 failed, 1 passed (2) | only `delayed-child`: `the recorded pre-exec child was reaped: expected true to be false`. The `normal` control passed. |
+
+**Green (Step 10).** `bash -n` on both shell files, the `ast.parse` of the instrument and `git diff --check` are clean. `scope-sweep.test.ts` 76 passed; `ccrc-doctor.test.ts -t scope-sweep` 28 passed (934 skipped); `measure-continuity-stage6.test.ts` 27 passed; `ccd-limit-banner.test.ts` + `ccd-auto-compact.test.ts` 190 passed; `single-definition.test.ts` + `ccrc-doctor-graphify.test.ts` 601 passed. Neighbours run green as well: `ownership`, `ccd-reg-get-census`, `ccd-die-containment`, `macos-platform`, `measure-continuity` (stage 1, 4, 7) and `ccd-bounded-reads`, 198 passed. Modes of the three shell and Python files are unchanged (775). `ccd/ccd` is untouched, so no restamp and no `_reg_get` census movement.
+
+**Mutations (Step 11): mutation -> observed red owner case, then restored byte for byte (sha256 of all four mutated files verified identical before and after).**
+
+| Mutation | Observed red owner |
+|---|---|
+| Copy a prior dead line instead of writing a carry | 26 of 76: every migrated carried-row case, including the live-loop case |
+| Drop first-ever uncertainty entirely | first-ever carry; no-procs-file `w` (2) |
+| Stop parsing retained carry clocks | `a retained carry clock is read back only after all predicates are measurable` (1) |
+| Accept half-pair or over-wide carry clocks (`CARRY_RE` fields widened to `[^ ]+` and the bound check removed) | `08 cpu0=7` and `none cpu0=7` (2). `99999999999999999 cpu0=7` and `123 cpu0=none` stay green: the arithmetic range check (`first > UP`, `first < born`) restarts the clock anyway, so those two rows pin nothing on their own. |
+| Lose the capture snapshot before the regex helper (snapshot taken after `_ss_prev_clock`) | 59 of 76: every case that reads a prior clock |
+| Treat a zombie as a live child | `outside child in state Z` (1) |
+| Ignore every outside child | `outside child in state S` and the `parent of a process in another cgroup` predicate case (2) |
+| Restore paused stdout | the paused case (1) |
+| Move the pause after the manager read | the paused case (1) |
+| Ignore header failure / body failure / rename failure | each only its own `a failed <header|body|rename>` case (1 each) |
+| Ignore redirection-open failure (write guard only) | the open case, ONLY with the tightened message assertion (see candidate departure 1); with the plan's original assertion this mutation measured green, 76 of 76 |
+| Ignore open failure AND rename failure | the open and rename cases (2) |
+| Return failure for the empty record | 6: `a valid empty replacement` and five cases whose scope leaves an empty record |
+| Restore malformed-body ordinary stop remedy | 7: both `unreadable body` cases and all five malformed or contradictory row cases |
+| Restore unqualified carried-live PASS | `a measured-live carry qualifies PASS` (1) |
+| Doctor ignores future tick | `a future record is neither fresh PASS nor destructive advice` (1) |
+| Instrument ignores future tick / stale tick | `a future record publishes no current counts` / `a stale record publishes no current counts` (1 each) |
+| Instrument skips malformed body rows (`continue`) | 5: the `a nonempty bad body` table (garbage, both bad carries, trailing text, leading-zero CPU) |
+| `B + 2` replaced by literal 2 | `baseline 5 with observed 7` (1) |
+| `>` replaced by `>=` | `baseline 0 with observed 2` and `baseline 5 with observed 7` (2) |
+| Unreadable journal maps to observed 0 | `an unreadable journal gives an unmeasured comparison` (1) |
+| Remove the parent-side `setpgid` | `delayed-child` only (1) |
+| Kill only the direct child | `normal` only (1): the delayed case still reaps its pre-exec child by a direct kill |
+
+**Citation tax and census (S6-R11).** `ccd/ccd` and `README.md` are untouched. Instrument from the child-reclamation predecessor plan, base `a3cebde1b`: `byFile['ccd/ccd']` stated 147, base 147, tree 147; `total` stated 202, base 202, tree 202; other keys moved: none; byFile composition entered [] left []; row array stated 55, base 55, tree 55, entered [] left []; site array stated 35, base 35, tree 35, entered [] left []. The base is consistent with every stated literal, so no census literal or README anchor moved. `session-hook.test.ts -t 'CITATION DEBT|README HAS|LOCATION INDEXES|ROW PASS|RANGE BOUND|TWO CORPUS FACTS|whole corpus'` 7 passed; the two frozen documents are unchanged from `origin/main`.
+
+**Candidate departures (to be numbered by the controller, none assigned here).**
+
+1. Open-failure pin tightened (ruled by the coordinator a test strengthening with no contract change; not numbered). The plan's `failed open` case asserted only `previous record retained`, but an open failure also fails the later `mv`, whose own message carries the same phrase, so deleting the write guard left that case green (measured: 76 of 76). The case now also asserts `cannot write verdict record` (and `cannot replace verdict record` for the rename case). Contract unchanged; cost: one assertion line pair in `scope-sweep.test.ts`.
+2. Found in review and fixed in fix round 1: the plan's reader `why` class `[a-z-]` rejected the sweep's own `dead-under-6h` and `process-started-under-6h`; now D-4316 (see `## Deviations found`). The figures above for the sweep, doctor and instrument suites were measured before that fix; after it `scope-sweep.test.ts` is 78 of 78 (two round-trip pins added), the doctor scope-sweep subset 28 and the stage-6 file 27, all green.
+
+**Concerns.** (a) `_ss_stat` now refuses a state letter outside `[A-Z]`; Linux also prints lowercase `t` (tracing stop). Such a process reads as unreadable, so a box with a traced process carries `box-stat` rather than judging: fail-safe, not unsafe, and the plan's own fixture rule. (b) The malformed-clock rows `99999999999999999 cpu0=7` and `123 cpu0=none` are not independently red under the clock-bound mutation (see table). (c) The refused-argument stage-6 cases print argparse usage to the test's stderr; the cases pass.
 
 ### Task 2: Compose the pressure variable for every supported Claude Code spawn
 
@@ -1115,20 +1170,21 @@ This is D-3925's deferred code fix, not a new parser or a change to non-Anthropi
 - Consumes: `_transcript_path <id>` resolves the transcript at the CURRENT registry UUID; `_operator_choice_read <transcript> <typed-journal>` returns the existing model/effort/drift lines; `cmd_route --session <id> --set <field=value> ...` is the only route writer.
 - Produces: `_operator_choice_promote <id> [reason]`, always rc 0, reads/promotes without creating or removing `choicekept`; the optional reason defaults to `kept across a restart`.
 - Preserves: `_operator_choice_keep <id>`, always rc 0, writes its existing marker before calling the promotion; `_operator_choice_unmark`, stop ordering, spawn journal opening and marker clearing are unchanged.
-- `_sync_uuid <id>` calls promotion only when it has a non-empty live UUID DIFFERENT from the registry UUID, and BEFORE `_reg_set <id> uuid <new-uuid>`.
+- `_sync_uuid <id>` calls promotion only when it has a non-empty pane UUID DIFFERENT from the registry UUID AND the existing `_ci_pane_parked` / `_ci_pane_refused` guards admit that rotation, BEFORE `_reg_set <id> uuid <new-uuid>`. Retain the following worker-memory clearing, `_ci_bg_follow` and `_follow_continued_in` calls. Refused or unchanged pane UUIDs do not promote; background-worker and continuation-chain writes remain outside this task's promotion seam.
 
 - [ ] **Step 1: Append failing fixture-contained live-rotation cases.**
 
-Add `spawnSync` to the existing `node:child_process` import, `BOUNDED` plus `ghContainedEnv` to the existing `ccdWsHelpers.js` import, and `import { inheritedEnv } from './gitEnvStrip.js';` beside them. The new direct child spawn spreads `inheritedEnv()`, not inherited repository-redirection variables. Use this helper inside a new `describe('live UUID rotation keeps the outgoing operator choice', ...)` in `ccd-operator-choice.test.ts`. It calls the real `_sync_uuid`; only tmux is a fixture shell function, never the live binary:
+Add `spawnSync` to the existing `node:child_process` import, `BOUNDED` plus `ghContainedEnv` to the existing `ccdWsHelpers.js` import, and `import { inheritedEnv } from './gitEnvStrip.js';` beside them. The new direct child spawn spreads `inheritedEnv()`, not inherited repository-redirection variables. Use this helper inside a new `describe('live UUID rotation keeps the outgoing operator choice', ...)` in `ccd-operator-choice.test.ts`. It calls the real `_sync_uuid`; tmux is always a fixture shell function, never the live binary. The refusal and follow-order controls below additionally substitute only the named admission verdicts and follow observers:
 
 ```ts
 const NEXT = 'deadbeef-0000-4000-8000-000000000001';
 const THIRD = 'deadbeef-0000-4000-8000-000000000002';
-const sync = (sid: string): string => {
+const sync = (sid: string, controls = ''): string => {
   const dir = path.join(h.home, '.claude', 'sessions');
   fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(path.join(dir, '424242.json'), JSON.stringify({ sessionId: sid }));
-  return h.sh(`tmux() { [[ "$1" == list-panes ]] && printf '%s\\n' 424242; return 0; };
+  return h.sh(`${controls}
+    tmux() { [[ "$1" == list-panes ]] && printf '%s\\n' 424242; return 0; };
     _sync_uuid ${ID}; printf 'rc=%s' "$?"`);
 };
 
@@ -1262,9 +1318,51 @@ it('non-Anthropic choice stays not applicable, without freezing its live UUID', 
 });
 ```
 
-Add these controls to the same describe. The direct-promotion cases pin the shared extraction separately from `_sync_uuid`'s final unconditional rc 0:
+Add these controls to the same describe. The refusal cases substitute only the two admission verdicts and follow-call observers; the existing UUID and parity suites below exercise the real guards and readers. A proposed UUID that the current guard refuses is not a live rotation, even when the outgoing transcript contains an eligible choice. The accepted case also observes that the existing worker-follow memory is cleared before either follow path. These controls preserve main's behavior rather than widening this task into fork/background UUID promotion. The direct-promotion cases pin the shared extraction separately from `_sync_uuid`'s final unconditional rc 0:
 
 ```ts
+it.each(['parked', 'superseded'] as const)(
+  '%s pane does not promote, and both follow paths still run', (kind) => {
+    seed(); record({ class: 'fable' });
+    const t = now() - 600;
+    writeTranscript([cmd(t, 'model', 'opus'), ack(t, MODEL_ACK('Opus 5.5'))]);
+    const controls = `
+      _ci_pane_parked() { return ${kind === 'parked' ? 0 : 1}; };
+      _ci_pane_refused() { return ${kind === 'superseded' ? 0 : 1}; };
+      _ci_bg_follow() { printf '%s\\n' background >> "$HOME/uuid-follow"; };
+      _follow_continued_in() { printf '%s\\n' chain >> "$HOME/uuid-follow"; };`;
+    expect(sync(NEXT, controls)).toBe('rc=0');
+    expect(h.reg(ID, 'uuid')).toBe(UUID);
+    expect(h.reg(ID, 'class')).toBe('fable');
+    expect(routeLines()).toEqual([]);
+    expect(fs.existsSync(regFile(`${ID}.choicekept`))).toBe(false);
+    expect(fs.readFileSync(path.join(h.home, 'uuid-follow'), 'utf8').trim().split('\n'))
+      .toEqual(['background', 'chain']);
+  },
+);
+
+it('accepted pane rotation clears old worker memory before both follow paths', () => {
+  seed(); record({ class: 'fable' });
+  const t = now() - 600;
+  writeTranscript([cmd(t, 'model', 'opus'), ack(t, MODEL_ACK('Opus 5.5'))]);
+  const controls = `
+    _CI_BG[${ID}]=worker; _CI_BGMISS[${ID}]=1;
+    _CI_BGSID[${ID}]=old; _CI_BGADDRS[${ID}]=old;
+    _ci_pane_parked() { return 1; }; _ci_pane_refused() { return 1; };
+    _ci_bg_follow() {
+      [[ -z "\${_CI_BG[$1]+set}" && -z "\${_CI_BGMISS[$1]+set}"
+         && -z "\${_CI_BGSID[$1]+set}" && -z "\${_CI_BGADDRS[$1]+set}" ]] &&
+        printf '%s\\n' background-cleared >> "$HOME/uuid-follow";
+    };
+    _follow_continued_in() { printf '%s\\n' chain >> "$HOME/uuid-follow"; };`;
+  expect(sync(NEXT, controls)).toBe('rc=0');
+  expect(h.reg(ID, 'uuid')).toBe(NEXT);
+  expect(h.reg(ID, 'class')).toBe('opus');
+  expect(routeLines()).toHaveLength(1);
+  expect(fs.readFileSync(path.join(h.home, 'uuid-follow'), 'utf8').trim().split('\n'))
+    .toEqual(['background-cleared', 'chain']);
+});
+
 it('missing live session JSON neither reads choice nor changes uuid', () => {
   seed(); record({ class: 'fable' });
   const t = now() - 600;
@@ -1392,13 +1490,22 @@ The existing statements from `typed=$(_reg_get "$id" typed)` through the final `
 
 No second transcript parser, no per-field route calls, no new class vocabulary and no direct route-file writes. Retain the existing comment explaining why the non-Anthropic choice is skipped and the comments on the mtime-before-drift and merged-pair checks.
 
-Replace `_sync_uuid`'s final conditional line with this length-neutral call-site edit:
+Current main has expanded `_sync_uuid`; its old baseline-sized conditional is no longer an edit target. Within the EXISTING pane-session-file block, retain the admission condition and add promotion to its UUID-write line, before that write. The resulting excerpt is:
 
 ```bash
-  if [[ -n "$sid" && "$sid" != "$(_reg_get "$id" uuid)" ]]; then _operator_choice_promote "$id" "kept before a uuid rotation"; _reg_set "$id" uuid "$sid"; fi
+    if [[ -n "$sid" && "$sid" != "$(_reg_get "$id" uuid)" ]] \
+       && ! _ci_pane_parked "$id" "$cfg" "$cfg/sessions/$pid.json" \
+       && ! _ci_pane_refused "$id" "$cfg" "$cfg/sessions/$pid.json" "$sid"; then
+      _operator_choice_promote "$id" "kept before a uuid rotation"; _reg_set "$id" uuid "$sid"
+      unset "_CI_BG[$id]" "_CI_BGMISS[$id]" "_CI_BGSID[$id]" "_CI_BGADDRS[$id]"
+    fi
+  fi
+  _ci_bg_follow "$id" "$cfg"
+  _follow_continued_in "$id" "$cfg"
+  return 0
 ```
 
-This is below the proof that a live session JSON exists and above the final `return 0`. Do not move promotion after the registry write. Correct the existing comment's `/clear, compaction` claim in place to name `/clear` only; observed compaction stays in the same transcript. Update the parser's caller comment to name shared promotion and read-back, without inventing a third parser. Above the frozen citation boundary, keep prose edits length-neutral; below it, use clear comments rather than padded line-number tricks.
+The outer pane-file check and sessionId read stay unchanged; this is an excerpt, not a replacement of the whole function. Promotion runs only after both current admission guards permit a genuine pane rotation. Do not move it above those guards or after the registry write. Keep worker-memory clearing and both follow calls exactly where they are; continuation/background-driven writes acquire no new promotion side effect. Correct the existing comment's `/clear, compaction` claim in place to name `/clear` only; observed compaction stays in the same transcript. Update the parser's caller comment to name shared promotion and read-back, without inventing a third parser. Above the frozen citation boundary, keep prose edits length-neutral; below it, use clear comments rather than padded line-number tricks.
 
 - [ ] **Step 4: Stamp, pay citation/census gates, and run the whole owning suite green.**
 
@@ -1406,6 +1513,7 @@ Run the shared generated-byte and citation procedures on the task's actual paren
 
 ```bash
 ./node_modules/.bin/vitest run test/ccd-operator-choice.test.ts --maxWorkers=1
+./node_modules/.bin/vitest run test/ccd-sync-uuid.test.ts test/continued-in-parity.test.ts test/continued-in-successor-parity.test.ts --maxWorkers=1
 ./node_modules/.bin/vitest run test/ccd-route-apply.test.ts test/ccd-route-settle.test.ts --maxWorkers=1
 ./node_modules/.bin/vitest run test/ccd-swap.test.ts test/ccd-archive.test.ts test/ccd-spawn-split.test.ts --maxWorkers=1
 ```
@@ -1424,6 +1532,10 @@ If any named neighboring file has been renamed on current main, locate its sourc
 | Remove journal matching from shared promotion | ccd-typed commands excluded during rotation |
 | Remove route-field mtime precedence | Newer route fields win during rotation |
 | Return the reader's failure rather than always 0 | Failed-reader synchronization and direct promotion rc |
+| Move promotion above the pane-admission guards | Parked/superseded pane leaves route unchanged |
+| Remove each of `_ci_pane_parked` and `_ci_pane_refused` from admission in separate trials | Matching refusal case; existing real-guard UUID suite |
+| Drop worker-follow memory clearing after accepted pane rotation | Accepted-pane case observes cleared memory before follow |
+| Drop each of `_ci_bg_follow` and `_follow_continued_in` in separate trials | Both follow-call observations; existing UUID/parity gates |
 
 Each row requires an observed RED, not a comment that a test would fail. Keep the old stop/spawn marker census and its behavior cases intact. Restore the task's original mutation bytes, restamp, and rerun the affected cases green before committing.
 
@@ -1931,6 +2043,7 @@ These belong to the worker after Tasks 1-4, before its final PR and wave-done. T
 ./node_modules/.bin/vitest run test/ccd-limit-banner.test.ts test/ccd-auto-compact.test.ts --maxWorkers=1
 ./node_modules/.bin/vitest run test/ccd-resume-flag.test.ts test/ccd-spawn-split.test.ts test/ccd-route-spawn.test.ts test/ccd-route-degrade.test.ts test/ccd-lifecycle-purge.test.ts --maxWorkers=1
 ./node_modules/.bin/vitest run test/ccd-operator-choice.test.ts test/ccd-route-apply.test.ts test/ccd-route-settle.test.ts test/ccd-swap.test.ts test/ccd-archive.test.ts --maxWorkers=1
+./node_modules/.bin/vitest run test/ccd-sync-uuid.test.ts test/continued-in-parity.test.ts test/continued-in-successor-parity.test.ts --maxWorkers=1
 ./node_modules/.bin/vitest run test/ccrc-codex-launcher.test.ts test/wrapper-generate.test.ts --maxWorkers=1
 ./node_modules/.bin/vitest run test/measure-continuity.test.ts test/measure-continuity-stage4.test.ts test/measure-continuity-stage7.test.ts --maxWorkers=1
 ./node_modules/.bin/vitest run test/ownership.test.ts test/ccd-reg-get-census.test.ts test/ccd-die-containment.test.ts test/single-definition.test.ts test/ccrc-doctor-graphify.test.ts --maxWorkers=1
@@ -1947,7 +2060,9 @@ npm run build
 
 ## Deviations found
 
-No new numbered deviation is defined by this planning commit. The issued block is 4316 through 4325; it is not an instruction to consume all ten. Task 1 discharges the carried review/worker residue and Task 3 closes the already-defined D-3925 without redefining it. During implementation, define any genuine departure here with the issued number, exact changed contract, why it was necessary, named cost and measured red/green evidence IN THE SAME COMMIT as its implementation. A plan adjustment that changes an operator ruling is not a worker's deviation to self-authorize; stop and report it for a ruling.
+The planning commit itself defined no numbered deviation; D-4316 below was defined during Task 1's implementation. The issued block is 4316 through 4325; it is not an instruction to consume all ten. Task 1 discharges the carried review/worker residue and Task 3 closes the already-defined D-3925 without redefining it. During implementation, define any genuine departure here with the issued number, exact changed contract, why it was necessary, named cost and measured red/green evidence IN THE SAME COMMIT as its implementation. A plan adjustment that changes an operator ruling is not a worker's deviation to self-authorize; stop and report it for a ruling.
+
+**D-4316 (Task 1, fix round 1).** *Contract changed:* the reason class of the sweep's `dead` row, in both readers, is widened from `[a-z-]` to `[a-z0-9-]`: the doctor's `why=([a-z0-9-]+(,[a-z0-9-]+)*)` inside `_check_scope-sweep` (capture numbering unchanged) and the instrument's `why=[a-z0-9-]+(?:,[a-z0-9-]+)*` in `S6_DEAD`; nothing else in either regex moves. Two round-trip pins are added to `scope-sweep.test.ts`: each feeds one reader the record the REAL sweep wrote in its fixture, with the reasons `dead-under-6h` and `cpu-moved,process-started-under-6h`. *Why:* the plan's literal regex rejects the sweep's own most common reasons, `dead-under-6h` and `process-started-under-6h`, which contain a digit, so every scope seen dead in its first six hours made the doctor call the whole record unsafe to read and made the instrument publish `{record: 'unreadable'}`; the spec requires the readers to interpret the sweep's record. Every earlier reader fixture used `why=none`, which is why no case caught it. *Cost:* none known; it accepts digits in reason tokens, which only the sweep writes, and no reader does arithmetic on them. *Evidence:* both new pins red under the old class (doctor: `has 2 line(s) it cannot read`; instrument: `{record: 'unreadable'}` instead of `dead: 2` counts), green after (`scope-sweep.test.ts` 78/78, `ccrc-doctor.test.ts -t scope-sweep` 28 passed, `measure-continuity-stage6.test.ts` 27/27).
 
 ## Where Things Stand
 

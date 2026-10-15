@@ -562,11 +562,55 @@ def stage4(ctx):
 #                     the stop is shadowed every inert scope survives by design:
 #                     the count is reported, and its target of 0 applies once the
 #                     operator arms the stop. An absent record is `absent`, never 0.
+#                     So is every record that is not a CURRENT, wholly readable
+#                     v1 record: a `stale` one (its tick older than S6_STALE_S), a
+#                     `future` one, or any body line no shape reads is published
+#                     as `{record: <that word>}` ALONE, never as counts or zero. A
+#                     `carry` line (a scope the tick could not measure) is counted
+#                     beside, in `carried_scopes`, and never inflates dead/inert.
+# `--reap-baseline <count>` supplies B, an already-frozen reap-class count (not a
+# file, not a live re-read), and needs `--stage 6` alone with an explicit seven-day
+# `--since`/`--until`. It adds the READ-ONLY `pressure_reap_comparison` section:
+# the baseline, the exclusive withdrawal threshold B + 2, the observed reap class
+# and `decision` (`withdraw` above B + 2, `not-triggered` at or below it,
+# `unmeasured` when the journal cannot be read). `not-triggered` is not a health
+# verdict: the raw unknown counts stay beside it, and the comparison never changes
+# spawning, removes a key or acts on anything.
 S6_IDLE = 1800
 S6_SPAWN_SLOP = 10
 S6_DAY = 86400
-S6_HDR = re.compile(r"# ccd-scope-sweep v1 tick=(\d+) up=(\d+) mode=(shadow|live)")
-S6_DEAD = re.compile(r"dead tmux-spawn-\S+\.scope first=(\d+) cpu0=\d+ verdict=([a-z-]+) ")
+S6_STALE_S = 300
+S6_NUM = r"(?:0|[1-9][0-9]{0,15})"
+S6_POS = r"(?:[1-9][0-9]{0,15})"
+S6_CPU = r"(?:0|[1-9][0-9]{0,19})"
+S6_UNIT = r"tmux-spawn-\S+\.scope"
+S6_HDR = re.compile(rf"# ccd-scope-sweep v1 tick=({S6_NUM}) up=({S6_NUM}) mode=(shadow|live)")
+S6_DEAD = re.compile(
+    rf"dead {S6_UNIT} first=(?P<first>{S6_POS}) cpu0={S6_CPU} "
+    rf"verdict=(?P<verdict>report|would-stop|held|stopped|stop-failed) "
+    rf"why=[a-z0-9-]+(?:,[a-z0-9-]+)* server=(?:gone|ccd|reused) "
+    rf"procs={S6_POS} mem=(?:{S6_NUM}|\?) sockets={S6_NUM} "
+    rf"youngest=(?:-1|{S6_NUM}) oldest=(?:-1|{S6_NUM}) age={S6_NUM} "
+    rf"pids=[1-9][0-9]*(?:,[1-9][0-9]*)*"
+)
+S6_OLD = re.compile(rf"old {S6_UNIT} pid={S6_POS} age={S6_NUM} comm=\S*")
+S6_CARRY = re.compile(
+    rf"carry {S6_UNIT} state=(?P<state>dead|live|unknown) "
+    rf"first=(?P<first>none|{S6_POS}) cpu0=(?P<cpu0>none|{S6_CPU}) "
+    r"why=(?P<why>unit-show|description|control-group|cpu|scope-start|procs|cgroup-dir|child-cgroup|server-stat|server-comm|tmux-unknown|parent-hop-cap|socket-tables|socket-fd|box-stat)"
+)
+S6_UNKNOWN_REASONS = frozenset(("unit-show", "description", "control-group", "cpu", "scope-start", "procs", "cgroup-dir", "child-cgroup", "server-stat", "server-comm", "tmux-unknown"))
+
+
+def s6_carry_valid(c):
+    if (c.group("first") == "none") != (c.group("cpu0") == "none"):
+        return False
+    state, why = c.group("state"), c.group("why")
+    return ((state == "unknown" and why in S6_UNKNOWN_REASONS)
+            or (state == "live" and why == "parent-hop-cap")
+            or (state == "dead" and why in ("socket-tables", "socket-fd", "box-stat")))
+
+
 S6_INERT = ("would-stop", "held", "stop-failed")
 S6_TS = re.compile(rb'"timestamp":"(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d)')
 S6_ROW = re.compile(rb'"type":"(?:user|assistant)"')
@@ -682,7 +726,6 @@ def s6_classify(paths, born, at):
 
 
 def s6_inert():
-    """The sweep's verdict record, read once: its dead, its inert, and its inert dead a day or more."""
     rec = os.path.join(os.environ.get("XDG_RUNTIME_DIR") or "/run/user/%d" % os.getuid(), "ccd-scope-sweep.state")
     try:
         lines = read_lines(rec)
@@ -693,21 +736,51 @@ def s6_inert():
     m = S6_HDR.fullmatch(lines[0]) if lines else None
     if not m:
         return {"record": "unreadable"}
-    up, dead, inert, day = int(m.group(2)), 0, 0, 0
+    tick, up, mode = int(m.group(1)), int(m.group(2)), m.group(3)
+    now = int(time.time())
+    if tick > now:
+        return {"record": "future"}
+    if now - tick > S6_STALE_S:
+        return {"record": "stale"}
+    dead = inert = day = 0
+    carried = {"dead": 0, "live": 0, "unknown": 0}
     for line in lines[1:]:
-        d = S6_DEAD.match(line)
-        if not d:
+        if not line:
             continue
-        dead += 1
-        if d.group(2) in S6_INERT:
-            inert += 1
-            if up - int(d.group(1)) >= S6_DAY:
-                day += 1
-    return {"mode": m.group(3), "dead": dead, "inert": inert, "inert_dead_a_day_or_more": day}
+        d = S6_DEAD.fullmatch(line)
+        if d:
+            dead += 1
+            if d.group("verdict") in S6_INERT:
+                inert += 1
+                if up - int(d.group("first")) >= S6_DAY:
+                    day += 1
+            continue
+        c = S6_CARRY.fullmatch(line)
+        if c and s6_carry_valid(c):
+            carried[c.group("state")] += 1
+            continue
+        if S6_OLD.fullmatch(line):
+            continue
+        return {"record": "unreadable"}
+    return {"mode": mode, "dead": dead, "inert": inert,
+            "inert_dead_a_day_or_more": day, "carried_scopes": carried}
+
+
+def s6_pressure_comparison(reading, baseline):
+    out = {"baseline_reap_class": baseline, "withdraw_above": baseline + 2}
+    observed = reading.get("reap_class")
+    if not isinstance(observed, int) or isinstance(observed, bool) or observed < 0:
+        return {**out, "decision": "unmeasured"}
+    return {**out, "observed_reap_class": observed,
+            "decision": "withdraw" if observed > baseline + 2 else "not-triggered"}
 
 
 def stage6(ctx):
-    return {"reap_class_oom": s6_reap(ctx), "inert_scopes": s6_inert()}
+    reading = s6_reap(ctx)
+    out = {"reap_class_oom": reading, "inert_scopes": s6_inert()}
+    if ctx.get("reap_baseline") is not None:
+        out["pressure_reap_comparison"] = s6_pressure_comparison(reading, ctx["reap_baseline"])
+    return out
 
 
 def s6_reap(ctx):
@@ -846,6 +919,12 @@ def when(s):
     raise argparse.ArgumentTypeError(f"not YYYY-MM-DD[ HH:MM[:SS]]: {s!r}")
 
 
+def reap_baseline(s):
+    if not re.fullmatch(r"0|[1-9][0-9]{0,15}", s):
+        raise argparse.ArgumentTypeError("reap baseline must be a non-negative decimal count, without leading zeroes")
+    return int(s)
+
+
 def main(argv):
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--stage", type=int, choices=sorted(STAGES), action="append")
@@ -856,13 +935,18 @@ def main(argv):
     ap.add_argument("--deployed", type=when, help="the stage's rollout time (local): splits out pairs stranded before it")
     ap.add_argument("--all-copies", action="store_true", help="read every transcript copy, not the largest per uuid")
     ap.add_argument("--journal", help="stage 6: a `journalctl --user -o json` export to read instead of running journalctl")
+    ap.add_argument("--reap-baseline", type=reap_baseline, help="stage 6 only: frozen reap-class count; read-only B+2 comparison for an explicit seven-day window")
     ap.add_argument("--json", action="store_true")
     a = ap.parse_args(argv)
+    if a.reap_baseline is not None:
+        if a.stage != [6] or a.since is None or a.until is None or a.until - a.since != 7 * 86400:
+            ap.error("--reap-baseline requires --stage 6 alone and an explicit seven-day --since/--until window")
     ctx = {
         "home": a.home,
         "swap_log": a.swap_log or os.path.join(a.home, ".cc-sessions", "swap.log"),
         "since": a.since, "until": a.until, "deployed": a.deployed,
         "all_copies": a.all_copies, "journal": a.journal,
+        "reap_baseline": a.reap_baseline,
     }
     out = {f"stage{n}": STAGES[n](ctx) for n in (a.stage or sorted(STAGES))}
     if a.json:
