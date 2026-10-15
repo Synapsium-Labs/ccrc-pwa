@@ -51,10 +51,12 @@ export interface OptionRowProps {
    *  once (a multiSelect question's boxes): `role="checkbox"` and
    *  `aria-checked` on the element `onClick` chose, so a screen reader hears a
    *  box and whether it is ticked rather than a button. With no `glyph` of the
-   *  caller's, the glyph column draws the box, `☑` or `☐`, decoration beside
-   *  the row's own name like the cursor it stands in for. Undefined ⇒ an
-   *  ordinary row, exactly as before. No class of its own: the box rides the
-   *  column every row already has, so the owned vocabulary does not grow. */
+   *  caller's, the glyph column DRAWS the box (`CheckBox`): an 18px frame,
+   *  filled with the accent and carrying a tick once ticked, dimmed with the
+   *  row when it is disabled. Decoration beside the row's own name, like the
+   *  cursor it stands in for. Undefined ⇒ an ordinary row, exactly as before.
+   *  No class of its own: the box rides the column every row already has,
+   *  marked `data-box`, so the owned vocabulary does not grow. */
   checked?: boolean;
   className?: string;
 }
@@ -80,13 +82,14 @@ export function OptionRow({
   const cls = cn('opt', onClick !== undefined && FOCUS_RING, selected && 'opt--selected', className);
   // A box is a checkbox to assistive tech too, whichever element `onClick` chose.
   const box = checked === undefined ? {} : { role: 'checkbox', 'aria-checked': checked };
-  const mark = glyph ?? (checked === undefined ? undefined : checked ? '☑' : '☐');
   const inner = (
     <>
-      {mark !== undefined && (
+      {glyph !== undefined ? (
         <span className="opt-glyph" aria-hidden="true">
-          {mark}
+          {glyph}
         </span>
+      ) : (
+        checked !== undefined && <CheckBox ticked={checked} />
       )}
       {index !== undefined && (
         <span className="opt-idx" aria-hidden="true">
@@ -129,5 +132,20 @@ export function OptionRow({
     >
       {inner}
     </button>
+  );
+}
+
+/** The box a checkbox row draws in its glyph column. DRAWN, not a character: `☑`/`☐` set in the column's 14px came out
+ *  as about 8px of ink, in the same accent ink ticked or not, so the state was a speck at every width. The frame is
+ *  18px; ticked, it fills with the accent and the tick is drawn in the ink made for the accent. Every paint is in
+ *  option-row.css (`.opt-glyph[data-box]`), so a theme recolours it and a disabled row dims it. */
+function CheckBox({ ticked }: { ticked: boolean }): ReactNode {
+  return (
+    <span className="opt-glyph" aria-hidden="true" data-box={ticked ? 'ticked' : 'clear'}>
+      <svg viewBox="0 0 18 18" width="18" height="18">
+        <rect x="1" y="1" width="16" height="16" rx="4" />
+        {ticked && <path d="M5 9.4l2.7 2.7L13.2 6.4" />}
+      </svg>
+    </span>
   );
 }
