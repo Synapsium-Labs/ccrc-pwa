@@ -1451,3 +1451,12 @@ Found mid-wave (issued from the block above, taken in order; each defined in the
 
   Commits `1f637853c`, `21fcb2343`.
 - **D-4649** — `a-truncated-pre-tool-use-leaves-identity-to-its-post` (Task 11): spec §5.2 takes a `tool_use_id` activity's identity from "the first event naming the upstream id". A Bash PreToolUse whose `listing` was dropped by truncation is skipped as a naming record, so when its PostToolUse carries a listing, the PostToolUse is the identity record. A listing-less Bash call must not become an identity candidate that holds the journal, and most Bash calls carry no worktree listing at all. Commits `1f637853c`, `21fcb2343`.
+- **D-4650** — `reconciliation-input-names-its-census-and-pairs-verdicts` (Task 12): the plan's `DelegationReconciliationInput` carries `correlations: readonly DelegationCorrelationVerdict[]` beside `census`, paired by position, and does not say which projects were censused. Two defects follow.
+  - A verdict could be applied to the wrong tree after any reordering or filtering.
+  - A held tree in a project whose census failed or was never taken read as `record-measured-absence`.
+
+  So the input now carries:
+  - `correlations: readonly { record, verdict }[]`, one pair per verdict. A pair whose record is not in `census` (matched by `project` + `adminRecord`) is `bad-row`.
+  - `censusedProjects`, plus `previousCensusedProjects` for `previousSuccessfulCensus`.
+
+  `record-measured-absence` is emitted only for a held tree whose project was censused in BOTH passes and whose record is absent from both. The caller (Task 13) builds the pairs in one expression from the census and leaves a project with no census view out of `censusedProjects`. Commit `83f53f51a`.
