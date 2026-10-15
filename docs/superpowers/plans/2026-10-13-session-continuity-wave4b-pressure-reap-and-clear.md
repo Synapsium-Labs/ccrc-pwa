@@ -1210,7 +1210,7 @@ This is D-3925's deferred code fix, not a new parser or a change to non-Anthropi
 - Preserves: `_operator_choice_keep <id>`, always rc 0, writes its existing marker before calling the promotion; `_operator_choice_unmark`, stop ordering, spawn journal opening and marker clearing are unchanged.
 - `_sync_uuid <id>` calls promotion only when it has a non-empty pane UUID DIFFERENT from the registry UUID AND the existing `_ci_pane_parked` / `_ci_pane_refused` guards admit that rotation, BEFORE `_reg_set <id> uuid <new-uuid>`. Retain the following worker-memory clearing, `_ci_bg_follow` and `_follow_continued_in` calls. Refused or unchanged pane UUIDs do not promote; background-worker and continuation-chain writes remain outside this task's promotion seam.
 
-- [ ] **Step 1: Append failing fixture-contained live-rotation cases.**
+- [x] **Step 1: Append failing fixture-contained live-rotation cases.**
 
 Add `spawnSync` to the existing `node:child_process` import, `BOUNDED` plus `ghContainedEnv` to the existing `ccdWsHelpers.js` import, and `import { inheritedEnv } from './gitEnvStrip.js';` beside them. The new direct child spawn spreads `inheritedEnv()`, not inherited repository-redirection variables. Use this helper inside a new `describe('live UUID rotation keeps the outgoing operator choice', ...)` in `ccd-operator-choice.test.ts`. It calls the real `_sync_uuid`; tmux is always a fixture shell function, never the live binary. The refusal and follow-order controls below additionally substitute only the named admission verdicts and follow observers:
 
@@ -1490,7 +1490,7 @@ it.each(['_operator_choice_promote', '_operator_choice_keep'] as const)(
 );
 ```
 
-- [ ] **Step 2: Run the live-rotation describe red, before changing ccd.**
+- [x] **Step 2: Run the live-rotation describe red, before changing ccd.**
 
 From `server/`:
 
@@ -1500,7 +1500,7 @@ From `server/`:
 
 Expected red: UUID changes, but the outgoing class/effort are not promoted. Existing failure/skip controls may already be green. Save the actual failing case names and output; no forecast case count is an execution result.
 
-- [ ] **Step 3: Extract the promotion body once; keep marker ownership at the existing keep.**
+- [x] **Step 3: Extract the promotion body once; keep marker ownership at the existing keep.**
 
 Replace the current `_operator_choice_keep` header/initial lines with this wrapper, then rename the existing remainder to `_operator_choice_promote`. Keep the existing promotion body and its authoritative history comments verbatim, except the route reason's suffix:
 
@@ -1545,7 +1545,7 @@ Current main has expanded `_sync_uuid`; its old baseline-sized conditional is no
 
 The outer pane-file check and sessionId read stay unchanged; this is an excerpt, not a replacement of the whole function. Promotion runs only after both current admission guards permit a genuine pane rotation. Do not move it above those guards or after the registry write. Keep worker-memory clearing and both follow calls exactly where they are; continuation/background-driven writes acquire no new promotion side effect. Correct the existing comment's `/clear, compaction` claim in place to name `/clear` only; observed compaction stays in the same transcript. Update the parser's caller comment to name shared promotion and read-back, without inventing a third parser. Above the frozen citation boundary, keep prose edits length-neutral; below it, use clear comments rather than padded line-number tricks.
 
-- [ ] **Step 4: Stamp, pay citation/census gates, and run the whole owning suite green.**
+- [x] **Step 4: Stamp, pay citation/census gates, and run the whole owning suite green.**
 
 Run the shared generated-byte and citation procedures on the task's actual parent/tree. Then from `server/`:
 
@@ -1558,7 +1558,7 @@ Run the shared generated-byte and citation procedures on the task's actual paren
 
 If any named neighboring file has been renamed on current main, locate its source owner and update this plan with the concrete replacement before dispatch; do not silently skip the gate.
 
-- [ ] **Step 5: Measure the mutations, restore only this task's bytes, and rerun green.**
+- [x] **Step 5: Measure the mutations, restore only this task's bytes, and rerun green.**
 
 | Mutation | Owning case that must turn red |
 |---|---|
@@ -1577,9 +1577,44 @@ If any named neighboring file has been renamed on current main, locate its sourc
 
 Each row requires an observed RED, not a comment that a test would fail. Keep the old stop/spawn marker census and its behavior cases intact. Restore the task's original mutation bytes, restamp, and rerun the affected cases green before committing.
 
-- [ ] **Step 6: Commit Task 3 alone after its fresh reviewer gate.**
+- [x] **Step 6: Commit Task 3 alone after its fresh reviewer gate.**
 
 Stage only this task's source, tests, genuinely moved census/README anchors and its measured plan evidence. Commit subject: `fix(ccd): preserve outgoing operator choice before UUID rotation`. End the commit with the mandated attribution. Do not claim the unchanged UUID or failed-reader controls prove outgoing-choice success; name the pair and two-rotation cases that actually exercise it.
+
+#### Execution evidence (Task 3)
+
+Measured on the dispatched workspace branch at base `2afc1cc00`, from `server/`, foreground, `--maxWorkers=1`, fixture HOMEs only (tmux is always a shell function; `BOUNDED` is Task 1's parent-side `setpgid` form, consumed as-is). Steps 1-5 are done; Step 6 is ticked for the commit itself, and its fresh-reviewer gate belongs to the controller and is not claimed here. The real `_sync_uuid` already had the brief's admitted-branch shape (condition, `_reg_set`, `unset`, then the two follow calls), so the insertion is the one line.
+
+**Red, before the ccd edit (Step 2).** `ccd-operator-choice.test.ts -t 'live UUID rotation'` against the base `ccd/ccd`: 12 failed, 13 passed (73 skipped). Failing cases: `reads the old transcript before changing uuid and promotes the pair once`; `two rotations then a restart read the newest transcript, not an old marker`; `a rotation does not remove or replace an existing dead-session marker`; `accepted pane rotation clears old worker memory before both follow paths`; `outgoing directory`, `outgoing drift`, `outgoing reader-failed` and `outgoing unknown-model` `does not block UUID synchronization or write a marker` (each reddens on the absent `operator-choice` swap.log line the promotion writes); and the four `_operator_choice_promote ...` direct cases (shared refusal/floor, whole incompatible pair, FIFO transcript, missing Python and failed reader), which fail because the function does not exist. The refusal controls, unchanged-UUID, missing-JSON, absent/malformed outgoing, non-Anthropic and both `_operator_choice_keep` direct cases were already green, as forecast. (An earlier red run, before two fixture corrections below, showed 13 failures.)
+
+**Edit (Step 3).** `_operator_choice_keep` is now the marker writer plus a call to the new `_operator_choice_promote "$id" "kept across a restart"`; `_operator_choice_promote <id> [reason]` carries the keep's previous body verbatim (reason suffix only changed), reading the CURRENT registry uuid's transcript and never touching `choicekept`. `_sync_uuid`'s admitted pane branch calls `_operator_choice_promote "$id" "kept before a uuid rotation"` on the line before `_reg_set "$id" uuid "$sid"`; the `unset` and both follow calls are untouched. Comments corrected in place without changing a line count: `_sync_uuid`'s `(/clear, compaction)` now names `/clear` with compaction keeping its transcript, and the parser's `ONE READER, TWO CALLERS` comment names the shared promotion.
+
+**Fixture corrections to the brief's test text (candidate departures, none numbered here).** (1) A promotion writes one swap.log `route` line PER FIELD from its single `cmd_route` call, so the brief's `routeLines()` length for a class-plus-effort pair is 2, not 1: the pair case asserts 2 (and 2 after the idempotent second sync) and the two-rotations case asserts 5 (1 class at the first rotation, 2 for the pair at the second, 2 at the restart). (2) The non-Anthropic lane's config directory is `.claude-gpt`, not `.claude`, so the `sync` helper takes an optional config directory and that case passes `.claude-gpt`; with `.claude` the case returned early at `_cfg_dir` and could not reach the promotion. (3) `ccd-die-containment.test.ts`, which the brief runs but does not list as a file to modify, pins the exact set of `die`-reaching functions: `_operator_choice_promote` and `_sync_uuid` now join `_operator_choice_keep` in that scanner's output for the reason the existing comment gives for the keep (it calls `cmd_route` in a plain `( ... )` subshell, which the scanner does not model), so the expected list and its comment gain those two names. The demotion scan and the property cases show neither can die.
+
+**Green (Step 4).** Restamped with the shared node command; `node shared/mark.mjs --check ccd/ccd` reports `ccrc-unmodified` (exit 0), `bash -n` clean, mode 775 before and after. `ccd-operator-choice` 98 passed; `ccd-sync-uuid` + `continued-in-parity` + `continued-in-successor-parity` 187 passed; `ccd-route-apply` + `ccd-route-settle` 133 passed; `ccd-swap` + `ccd-archive` + `ccd-spawn-split` 148 passed; `ownership` + `ccd-reg-get-census` + `ccd-die-containment` 29 passed. Every named neighbouring file exists under its brief name.
+
+**Mutations (Step 5): mutation -> observed red owner case(s), each restored byte for byte (`cmp` against the stamped tree, `mark --check` clean) and the affected cases rerun green.** All trials ran the live-rotation describe; the guard and follow rows also ran the existing `ccd-sync-uuid` + parity gates.
+
+| Mutation | Observed red |
+|---|---|
+| Delete the promotion from `_sync_uuid` | 8: pair promoted before UUID change, two rotations then restart, existing-marker case, accepted-pane case, outgoing directory/drift/reader-failed/unknown-model |
+| Promotion after `_reg_set ... uuid` | the same 8 |
+| `_operator_choice_keep` instead of promotion | 9: the above plus absent/malformed outgoing (a marker is written) |
+| Remove `choicekept` during rotation | 1: existing marker's bytes/mtime unchanged |
+| One `cmd_route` per field | 3: pair promoted once, and the two whole-incompatible-pair cases (keep and promote) |
+| Journal matching removed (`0 since` floor) | 1: ccd-typed commands stay excluded during rotation |
+| Route-field mtime precedence removed | 1: newer route fields win during rotation |
+| Reader failure returned as rc 1 | 1: direct promotion's `returns zero and reports missing Python and a failed reader` (the synchronisation case stays green: `_sync_uuid` does not read the promotion's rc) |
+| Promotion above the admission guards | 2: parked and superseded pane do not promote |
+| Remove `_ci_pane_parked` alone | live describe: parked case; `ccd-sync-uuid`: 4 (parked-before-read, restart-names-job, gone-job cap, gone-transcript A) |
+| Remove `_ci_pane_refused` alone | live describe: superseded case; `ccd-sync-uuid`: 12 |
+| Drop the worker-memory `unset` | live describe: accepted-pane case; `ccd-sync-uuid`: `a pane that takes the conversation back ... no flap` |
+| Drop `_ci_bg_follow` alone | live describe: accepted-pane, parked and superseded cases (3); `ccd-sync-uuid`: 6 |
+| Drop `_follow_continued_in` alone | live describe: the same 3; sync/parity gates: 33 |
+
+**Census.** `_reg_get` before: 209 calls on 178 lines; after: 209 on 178. The extraction moved the keep's two `_reg_get` calls into `_operator_choice_promote` with no change to either count, so the existing header sentence is untouched.
+
+**Citation tax (S6-R11).** Instrument from the child-reclamation predecessor plan, extracted to private scratch, run with base `2afc1cc00` and `--maxWorkers=1`: `byFile['ccd/ccd']` stated 147, base 147, tree 147; `total` stated 202, base 202, tree 202; other keys moved: none; byFile composition entered [] left []; row array stated 55, base 55, tree 55 (entered [] left []); site array stated 35, base 35, tree 35 (entered [] left []). README carries no `ccd/ccd:<line>` anchor (the historical re-pointer insists on exactly two), so it is untouched, and `session-hook.test.ts` needs no S6-R11 annotation. The frozen documents are unchanged against `origin/main`. The citation cases are green (7 passed).
 
 ### Task 4: Count direct pressure kills and document the shipped measurement contract
 

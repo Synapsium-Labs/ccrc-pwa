@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=1d25e8812a8aead69f8d96819330047710d9c3f7cc86a6569007bbaf109599c1
+# ccrc:generated 1 sha256=cd121a7d2d151509486a61a6d632e22b195c7350e491cf029afd6182a9b72ab1
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -17110,8 +17110,8 @@ _ci_held_wait() {   # id — before a supervised resume: no spawn while a live b
 }
 
 _sync_uuid() {   # id — mirror the live process's CURRENT sessionId into the registry.
-  # Claude Code rotates the active session uuid during normal operation (/clear, compaction),
-  # so a uuid pinned at start goes stale, and a later --resume of it time-travels the session
+  # Claude Code rotates the active session uuid during normal operation (/clear; compaction keeps its
+  # transcript), so a uuid pinned at start goes stale, and a later --resume of it time-travels the session
   # back to the last point that old uuid was active (observed 2026-07-02: days-to-weeks jumps).
   # The live process publishes its current sessionId at <config>/sessions/<pid>.json; keeping
   # the registry in step means resurrection resumes where the session actually was.
@@ -17197,7 +17197,7 @@ _sync_uuid() {   # id — mirror the live process's CURRENT sessionId into the r
     if [[ -n "$sid" && "$sid" != "$(_reg_get "$id" uuid)" ]] \
        && ! _ci_pane_parked "$id" "$cfg" "$cfg/sessions/$pid.json" \
        && ! _ci_pane_refused "$id" "$cfg" "$cfg/sessions/$pid.json" "$sid"; then
-      _reg_set "$id" uuid "$sid"
+      _operator_choice_promote "$id" "kept before a uuid rotation"; _reg_set "$id" uuid "$sid"
       unset "_CI_BG[$id]" "_CI_BGMISS[$id]" "_CI_BGSID[$id]" "_CI_BGADDRS[$id]"
     fi
   fi
@@ -21013,8 +21013,8 @@ _model_class_of() {   # /model value -> the record's class word | rc 1 outside t
 }
 
 _operator_choice_read() {   # transcript journal [tail-bytes] -> the transcript reader's lines; rc != 0 the reader failed (§5.7)
-  # ONE READER, TWO CALLERS: `_operator_choice_keep` (the operator's own
-  # choice, before a stop) and `_route_readback_transcript` (the read-back's
+  # ONE READER, TWO CALLERS: `_operator_choice_promote` (the operator's own
+  # choice; the keep's and a live uuid rotation's) and `_route_readback_transcript` (the read-back's
   # second witness). The caller has already proved the file a readable regular
   # file — never `grep` on a FIFO; a missing python3 fails the pipeline, which is
   # this rc. Its lines, one per kind:
@@ -21140,10 +21140,17 @@ if ran is not None:
 }
 
 _operator_choice_keep() {   # id — before a stop that a spawn follows, and at every spawn (`_spawn_start`, unless a stop's keep already read): the operator's own /model and /effort, written to the route record (§5.7). Always 0.
-  local id="$1" f typed why="" out kind val at n field want fm shown drift=0
-  local -a sets=() kinds=()
+  local id="$1"
   [[ -f "$REG/$id.uuid" ]] || return 0
   _reg_set "$id" choicekept "$(date +%s)" 2>/dev/null || true   # a keep ran since the last spawn: the supervised spawn that follows a stop's keep does not read again (`_spawn_start`, §5.7)
+  _operator_choice_promote "$id" "kept across a restart"
+  return 0
+}
+
+_operator_choice_promote() {   # id [reason] — the keep's read and route write, WITHOUT its choicekept marker (the dead-session keep owns that marker): `_operator_choice_keep` calls it, and `_sync_uuid` calls it before a live pane rotation moves the registry uuid off the transcript that holds the operator's choice. Reads the CURRENT registry uuid's transcript. Always 0.
+  local id="$1" reason="${2:-kept across a restart}" f typed why="" out kind val at n field want fm shown drift=0
+  local -a sets=() kinds=()
+  [[ -f "$REG/$id.uuid" ]] || return 0
   _is_anthropic_backend "$(_reg_get "$id" wrapper)" || return 0   # a non-Anthropic lane's /model is outside the class vocabulary: skipped, as the settle skips it (§5.7)
   typed=$(_reg_get "$id" typed)
   if ! [[ "${typed%%$'\n'*}" =~ ^[0-9]{1,12}\ since$ ]]; then
@@ -21181,7 +21188,7 @@ _operator_choice_keep() {   # id — before a stop that a spawn follows, and at 
     sets+=(--set "$field=$want"); kinds+=("$kind:$want")   # collected: the pair is checked ONCE, in one call below
   done <<<"$out"
   if (( ${#kinds[@]} )); then   # ONE call for the pair: `cmd_route` checks class against effort on the merged sets, so a haiku record that takes /model opus AND /effort high keeps both (a call per field refused the effort first)
-    ( cmd_route --session "$id" "${sets[@]}" --actor operator-session --reason "its own /${kinds[0]%%:*}${kinds[1]:+ and /${kinds[1]%%:*}}, kept across a restart" ) >/dev/null 2>&1 \
+    ( cmd_route --session "$id" "${sets[@]}" --actor operator-session --reason "its own /${kinds[0]%%:*}${kinds[1]:+ and /${kinds[1]%%:*}}, $reason" ) >/dev/null 2>&1 \
       || for kind in "${kinds[@]}"; do _operator_choice_say "$id" "/${kind%%:*} ${kind#*:} refused by the route record's own checks — the record is unchanged"; done
   fi
   return 0
