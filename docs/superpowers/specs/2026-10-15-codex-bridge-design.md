@@ -329,7 +329,7 @@ measures once it runs.
   `ccrc models <id> set-window <model> <tokens>` and removed by `clear-window`, beside `set-effort`. A value is an
   integer from 1,000 to 1,000,000. The operator sets it from a measurement; a catalogue number never sets it.
 - The windows live in a sibling file, `~/.ccrc/models/<id>.windows.json`, not in the class registry (amended at
-  acceptance, D-TBD-windows-sibling-file). The registry's parser refuses any key it does not know
+  acceptance, D-5160). The registry's parser refuses any key it does not know
   (`REGISTRY_KEYS`, `shared/models.mjs`), so a `windows` key there would make an older ccrc, after a rollback,
   refuse every lane's registry. An older ccrc never opens the sibling file, so its lanes fall back to 200k, the
   safe direction. This is the auto-advance spec's D13 reasoning, applied to one more per-lane fact.
