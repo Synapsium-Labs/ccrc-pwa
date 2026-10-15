@@ -97,7 +97,7 @@ const pairs = (T, name) => [
   // off surface by design), nowhere near the 3:1 non-text floor, and no
   // token substitution fixes that without inventing a new one — every
   // other raised+edge-subtle affordance in this file (.proj-search,
-  // .account-gauge, .notice, .acct-list .acct-row) is exempt for the same
+  // .account-gauge, .notice, the account picker's .acct-pick row) is exempt for the same
   // reason tokens.css gives hairlines: "decorative — no contrast claim".
   // The back chevron on every detail screen. @ccrc/ui's `BackButton` paints
   // --ink-secondary and grounds on body's --bg-page, through a .shell-detail /
