@@ -52,19 +52,37 @@ export function dialogTextRefusal(err: unknown): string {
 }
 
 /**
- * Why Send is held back for `text`, or null when the sheet sends it. The text sent is `text` trimmed, and:
- *  - `invalid`: the route's own rule refuses it (`isDialogText`: blank, a control character such as a Tab or a line
- *    break, or longer than `DIALOG_TEXT_MAX`), so the route would answer 400 `bad-text` without touching the pane.
- *    The field never cuts a paste at the limit (it carries no `maxLength`, which a browser enforces by dropping the
- *    tail without a word): the whole text stays, `ownWordsCount` says by how much it is over, and Send waits;
+ * Why Send is held back for `text`, or null when the sheet sends it. The text sent is `text` trimmed. Held exactly
+ * where the route's own rule refuses it (`isDialogText`, so the route would answer 400 `bad-text` without touching the
+ * pane), and for a trailing `;`; the rule's refusal is split only to say WHY, each reason being the operator's to fix
+ * differently:
+ *  - `blank`: nothing to send, once trimmed;
+ *  - `control`: a control character, such as a Tab a paste out of a table carries, or a line break (the answer is one
+ *    line). The field keeps it, drawn as a gap, so the line under the field names it (`OwnWords`);
+ *  - `long`: longer than `DIALOG_TEXT_MAX`. The field never cuts a paste at the limit (it carries no `maxLength`,
+ *    which a browser enforces by dropping the tail without a word): the whole text stays, `ownWordsCount` says by how
+ *    much it is over, and Send waits. A long text that also holds a control character is `control`, and the count
+ *    still says it is long;
  *  - `semicolon`: it ends in `;`. tmux drops a literal's trailing `;` (measured in #417), so the echo never matches,
  *    nothing is submitted, and the retry the server offers is refused (`not-free-text`): a dead end. Narrower than
  *    the route on purpose, until that is fixed at the source (pending slug `ask-sheet-trailing-semicolon`).
  */
-export function ownWordsHeld(text: string): 'invalid' | 'semicolon' | null {
+export function ownWordsHeld(text: string): 'blank' | 'control' | 'long' | 'semicolon' | null {
   const sent = text.trim();
-  if (!isDialogText(sent)) return 'invalid';
-  return sent.endsWith(';') ? 'semicolon' : null;
+  if (isDialogText(sent)) return sent.endsWith(';') ? 'semicolon' : null;
+  if (sent === '') return 'blank';
+  return holdsControl(sent) ? 'control' : 'long';
+}
+
+/** Does `sent` hold a character the route will not type? The route's own rule (`isDialogText`) is the one definition
+ *  of such a character, so it is asked here too: of the text in pieces short enough for the rule's length limit, each
+ *  led by a letter so that no piece reads as blank. A character the rule refuses in a piece, it refuses in the text. */
+function holdsControl(sent: string): boolean {
+  const piece = DIALOG_TEXT_MAX - 1;
+  for (let at = 0; at < sent.length; at += piece) {
+    if (!isDialogText(`x${sent.slice(at, at + piece)}`)) return true;
+  }
+  return false;
 }
 
 /** From how many characters the field counts them: four fifths of the route's limit, early enough to shorten an

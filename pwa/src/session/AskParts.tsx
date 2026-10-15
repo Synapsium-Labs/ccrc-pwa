@@ -221,6 +221,11 @@ const WORDS_STRANDED = 'Your answer is typed in the terminal but not sent yet �
 /** Why Send is held back for a trailing `;` (`ownWordsHeld`). */
 const TRAILING_SEMICOLON = "A trailing ; doesn't survive the trip to the terminal — leave it off, or answer there.";
 
+/** Why Send is held back for a control character (`ownWordsHeld`), which the field draws as a gap or not at all, so
+ *  the operator may not see what is wrong: said the way the count says a text is over the limit. */
+const CONTROL_CHARACTER =
+  "A tab or another control character can't be typed into the terminal's own-words row — Send waits until it's gone. Or answer in the terminal.";
+
 /** What `Chat about this` does, said on the row before the tap (measured: a rejection of the whole tool call). */
 const CHAT_DECLINES = 'Declines this ask so you can talk it over in the chat.';
 
@@ -258,6 +263,7 @@ export function OwnWords({
 }): ReactNode {
   const { text, call, onText, onSend } = words;
   const countId = useId();
+  const controlId = useId();
   const busy = wordsBusy(call);
   const row = ownWordsRow(slot, text, call);
   if (row === null) {
@@ -272,6 +278,9 @@ export function OwnWords({
   const held = ownWordsHeld(text);
   // Near the limit, how much of it the text uses; over it, why Send waits. Never a silent cut (`ownWordsHeld`).
   const count = ownWordsCount(text);
+  // The lines that say why Send waits for what is in the field describe the field, so a screen reader hears them there.
+  const describedBy = [count !== null ? countId : null, held === 'control' ? controlId : null]
+    .filter((d) => d !== null).join(' ');
   return (
     <div className="dlg-words">
       <form
@@ -290,7 +299,7 @@ export function OwnWords({
           readOnly={stranded}
           disabled={busy || locked}
           aria-label="Answer in your own words"
-          aria-describedby={count !== null ? countId : undefined}
+          aria-describedby={describedBy || undefined}
         />
         <button
           type="submit"
@@ -318,6 +327,7 @@ export function OwnWords({
         </button>
       </form>
       {count !== null && <p className="dlg-copy" id={countId}>{count}</p>}
+      {held === 'control' && <p className="dlg-copy" id={controlId}>{CONTROL_CHARACTER}</p>}
       {stranded && <p className="dlg-copy">{WORDS_STRANDED}</p>}
       {taken === 'part' && <p className="dlg-copy">{WORDS_PART}</p>}
       {taken === 'other' && <p className="dlg-copy">{ROW_HOLDS_OTHER}</p>}

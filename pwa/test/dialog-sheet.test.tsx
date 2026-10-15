@@ -8,13 +8,14 @@ import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import {
-  DIALOG_MULTI_REFUSE_CODES, DIALOG_REFUSE_CODES, DIALOG_TEXT_MAX, DIALOG_TEXT_REFUSE_CODES, type Dialog, type HookAsk,
+  DIALOG_MULTI_REFUSE_CODES, DIALOG_REFUSE_CODES, DIALOG_TEXT_MAX, DIALOG_TEXT_REFUSE_CODES, isDialogText, type Dialog,
+  type HookAsk,
 } from '../../shared/api';
 import { ToastHost } from '@ccrc/ui';
 import { api, ApiError, failedTo, sendErrorText } from '../src/lib/api';
 import {
   DIALOG_MULTI_REFUSE_TEXT, DIALOG_REFUSE_TEXT, DIALOG_TEXT_REFUSE_TEXT, STALE_UNDER_ENVELOPE, dialogMultiRefusal,
-  dialogRefusal, dialogTextRefusal,
+  dialogRefusal, dialogTextRefusal, ownWordsHeld,
 } from '../src/session/askWords';
 import { DialogSheet } from '../src/session/DialogSheet';
 import { createSessionStore } from '../src/stores/session';
@@ -1835,6 +1836,61 @@ describe('own words go through the free-text row (D-5090)', () => {
     type('int x = 1');
     expect(send()).toBeEnabled();
     expect(screen.queryByText(/trailing ; doesn't survive/i)).toBeNull();
+  });
+
+  it('a tab or another control character holds Send back, and the line under the field says why', () => {
+    // A paste out of a table carries a Tab, which a text field keeps and draws as a gap. The route refuses it
+    // (`isDialogText`: one line, no control character), so Send waits, and says so as it does over the limit, rather
+    // than sitting disabled with no word. DERIVED texts: a Tab, a C1 control, and a line separator.
+    const text = vi.spyOn(api, 'answerDialogText').mockReturnValue(new Promise(() => {}));
+    const open = pane('cc300-ask-1q-open');
+    renderAsk(null, open);
+    for (const held of ['Teal\tif there is one', 'Teal\u0085if there is one', 'Teal if there is one']) {
+      type(held);
+      expect(send(), JSON.stringify(held)).toBeDisabled();
+      const why = screen.getByText(/tab or another control character/i);
+      expect(field(), JSON.stringify(held)).toHaveAccessibleDescription(why.textContent!);
+      fireEvent.submit(field().form!);
+    }
+    expect(text, 'Send or Enter typed a control character').not.toHaveBeenCalled();
+
+    // Over the limit as well: both lines, each saying its own reason.
+    type(`Teal\t${'x'.repeat(DIALOG_TEXT_MAX)}`);
+    expect(screen.getByText(/tab or another control character/i)).toBeInTheDocument();
+    expect(screen.getByText(new RegExp(`^${DIALOG_TEXT_MAX + 5} of ${DIALOG_TEXT_MAX} characters`))).toBeInTheDocument();
+    // Past the limit, a control character is still found (the route's rule is read in pieces it can measure).
+    type(`${'x'.repeat(DIALOG_TEXT_MAX + 10)}\tTeal`);
+    expect(screen.getByText(/tab or another control character/i)).toBeInTheDocument();
+    type('x'.repeat(DIALOG_TEXT_MAX + 10));
+    expect(screen.queryByText(/tab or another control character/i), 'over the limit alone').toBeNull();
+    // A long run of spaces is no control character, wherever it falls.
+    type(`${'x'.repeat(DIALOG_TEXT_MAX - 1)}${' '.repeat(DIALOG_TEXT_MAX - 1)}Teal`);
+    expect(screen.queryByText(/tab or another control character/i), 'spaces past the limit').toBeNull();
+
+    // Blank is no control character: Send waits with nothing to say. A Tab at either end is trimmed, as the text
+    // sent is, so nothing is held.
+    type(' \t ');
+    expect(send()).toBeDisabled();
+    expect(screen.queryByText(/tab or another control character/i)).toBeNull();
+    type('\tTeal\t');
+    expect(screen.queryByText(/tab or another control character/i)).toBeNull();
+    expect(field()).not.toHaveAttribute('aria-describedby');
+    fireEvent.click(send());
+    expect(text).toHaveBeenCalledWith(SESSION_ID, open.id, 3, 'Teal');
+  });
+
+  it('ownWordsHeld holds exactly what the route refuses, and names why', () => {
+    // Each reason is the operator's to fix differently, so the route's one refusal is split only to say why.
+    expect(ownWordsHeld('  Teal  ')).toBeNull();
+    expect(ownWordsHeld(' \t ')).toBe('blank');
+    expect(ownWordsHeld('Teal\tif there is one')).toBe('control');
+    expect(ownWordsHeld('x'.repeat(DIALOG_TEXT_MAX + 1))).toBe('long');
+    expect(ownWordsHeld(`${'x'.repeat(DIALOG_TEXT_MAX + 1)}\tTeal`)).toBe('control');
+    expect(ownWordsHeld('int x = 1;')).toBe('semicolon');
+    for (const text of ['Teal', ' \t ', 'a\tb', 'a\u2028b', 'x'.repeat(DIALOG_TEXT_MAX), 'x'.repeat(DIALOG_TEXT_MAX + 1)]) {
+      const held = ownWordsHeld(text);
+      expect(held === null || held === 'semicolon', JSON.stringify(text.slice(0, 8))).toBe(isDialogText(text.trim()));
+    }
   });
 
   it('dismissal is refused while a text answer is in flight, on either sheet', () => {
