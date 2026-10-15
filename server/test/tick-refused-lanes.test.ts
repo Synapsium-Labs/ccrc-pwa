@@ -7,9 +7,9 @@
 // - the divergence census's open-run side.
 // Each case plants a fully seeded `--actor` row beside a valid one under a fixture HOME, reads the registry as `tick()`
 // reads it (`readRegistryMeasured`), and hands the lane exactly what `tick()` hands it; (A2) and (A3) then unlist it, to
-// pin that the stall lane moves none of a refused subject's clocks. That `tick()` hands each lane
-// `registryRead.refused` is pinned in `registry-refused-census.test.ts`. Fakes and fixture HOMEs only: no live fleet, no
-// real ccd, no real tmux.
+// pin that no clock starts while the id is refused, and (E) and (E') to pin that none is kept: the lane drops a refused
+// subject's clocks. That `tick()` hands each lane `registryRead.refused` is pinned in `registry-refused-census.test.ts`.
+// Fakes and fixture HOMEs only: no live fleet, no real ccd, no real tmux.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
@@ -173,12 +173,12 @@ describe('the stall lane holds a listed-but-refused id it is handed (tick-lanes-
     expect(r.touched.filter((p) => path.basename(p) === `${GOOD}.turn.json`).length).toBeGreaterThan(0);
   }, 60_000);
 
-  // The lane moves none of a refused subject's clocks: each keeps its prior value. A clock it moved while the id was
-  // refused would show once the id is UNLISTED (its `.uuid` gone, so it is in no `refused` either, and absence is read
-  // as on main: `unlisted-non-registry-id-reads-absent-on-the-tick`). The instants, one sweep per STALL_SWEEP_MS:
-  // refused from T0 to END (T0 + 62 min), past DEAD_GRACE_MS and MARKER_UNREADABLE_MS; unlisted between END and
-  // U = END + STALL_SWEEP_MS (T0 + 63 min), the first sweep that reads it absent, where its clocks start. A clock
-  // started in the refused stretch would date from T0 and fire at U.
+  // The lane drops a refused subject's clocks, so none starts during the refusal and none is kept across it. A clock
+  // that started while the id was refused would show once the id is UNLISTED (its `.uuid` gone, so it is in no
+  // `refused` either, and absence is read as on main: `unlisted-non-registry-id-reads-absent-on-the-tick`). The
+  // instants, one sweep per STALL_SWEEP_MS: refused from T0 to END (T0 + 62 min), past DEAD_GRACE_MS and
+  // MARKER_UNREADABLE_MS; unlisted between END and U = END + STALL_SWEEP_MS (T0 + 63 min), the first sweep that reads it
+  // absent, where its clocks start. A clock started in the refused stretch would date from T0 and fire at U.
   const U = END + STALL_SWEEP_MS;
   type Listed = Awaited<ReturnType<typeof tickRead>>;
   /** One sweep per STALL_SWEEP_MS from `from` to `to`, both included, handed what `tick()` hands the lane off `read`. */
@@ -239,6 +239,67 @@ describe('the stall lane holds a listed-but-refused id it is handed (tick-lanes-
     await sweepEach(r, after, U, U + MARKER_UNREADABLE_MS - STALL_SWEEP_MS);
     expect(markerPushes(r), 'no marker-unreadable push before MARKER_UNREADABLE_MS has passed since the unlisting').toEqual([]);
     // CONTROL, U + MARKER_UNREADABLE_MS (T0 + 123 min): the push arrives, so the marker clock started at U.
+    await sweepEach(r, after, U + MARKER_UNREADABLE_MS, U + MARKER_UNREADABLE_MS);
+    expect(markerPushes(r)).toHaveLength(1);
+  }, 60_000);
+
+  /** A span as the dead notice prints it, `<h>h <m>m`, floored to the minute (`stallSpan`'s form). */
+  const spanOf = (ms: number): string => `${Math.floor(ms / 3_600_000)}h ${Math.floor(ms / 60_000) % 60}m`;
+
+  // (E) pins that no clock is KEPT across a refusal (that (A2) and (A3) pin that none STARTS during one). The instants,
+  // one sweep per STALL_SWEEP_MS: unlisted at T0, one sweep, where the absent clock starts; listed and refused from
+  // T0 + STALL_SWEEP_MS to END (T0 + 62 min), past DEAD_GRACE_MS, where the lane drops that clock; unlisted again from
+  // U (T0 + 63 min). A clock kept across the refusal dates from T0 and fires at U, with "absent for 1h 3m"; dropped, it
+  // restarts at U and fires at U + DEAD_GRACE_MS (T0 + 73 min), stating `DEAD_GRACE_MS` counted from the re-unlisting.
+  it('(E) the absent clock is dropped by a refused stretch: unlisted, then refused past DEAD_GRACE_MS, then unlisted again, the dead notice comes DEAD_GRACE_MS after the re-unlisting, stating that span', async () => {
+    const r = await rig();
+    plant(r.home, GOOD);
+    for (const m of ARMS) writeFileSync(path.join(r.reg, m), '');
+    const runId = storedRun(r.coord, { state: 'working', sessionId: BAD, claimedBy: COORD });
+    const unlisted = await unlist(r);
+    await sweepEach(r, unlisted, T0, T0);
+    expect(stallMail(r.coord), 'the absent clock starts at T0, inside its grace').toEqual([]);
+    plant(r.home, BAD);
+    await sweepEach(r, await tickRead(r), T0 + STALL_SWEEP_MS, END);
+    expect(stallMail(r.coord), 'nothing while refused').toEqual([]);
+    expect(stallRows(r.coord, runId), 'and no stall: row while refused').toEqual([]);
+    const after = await unlist(r);
+    // U to U + DEAD_GRACE_MS − STALL_SWEEP_MS (T0 + 72 min): absent again, inside the grace of the re-unlisting.
+    await sweepEach(r, after, U, U + DEAD_GRACE_MS - STALL_SWEEP_MS);
+    expect(stallMail(r.coord), 'no dead notice at once after the re-unlisting: the refused stretch is no absence').toEqual([]);
+    expect(stallRows(r.coord, runId), 'and no stall: row').toEqual([]);
+    // CONTROL, U + DEAD_GRACE_MS (T0 + 73 min): the dead notice arrives, its span counted from the re-unlisting.
+    await sweepEach(r, after, U + DEAD_GRACE_MS, U + DEAD_GRACE_MS);
+    const mail = stallMail(r.coord);
+    expect(mail.map((m) => m.toId)).toEqual([COORD]);
+    expect(mail[0]!.subject).toContain(`registry row absent for ${spanOf(DEAD_GRACE_MS)}`);
+    expect(stallRows(r.coord, runId).map((d) => parseStallDetail(d))).toMatchObject([{ mode: 'live', arm: 'dead', rung: 1 }]);
+    expect(r.sent, 'a dead report goes to the coordinator, never a push').toEqual([]);
+  }, 60_000);
+
+  // (E') the same for the marker clock, whose subject is a worker or a claimant: the malformed marker is read at T0 off
+  // an unlisted id (`uuid: null`), so the clock starts; the refused stretch drops it; the push waits
+  // MARKER_UNREADABLE_MS from U (T0 + 63 min), so it comes at U + MARKER_UNREADABLE_MS (T0 + 123 min), not at U.
+  it.each([
+    { role: 'worker', sessionId: BAD, claimedBy: COORD },
+    { role: 'claimant', sessionId: GOOD, claimedBy: BAD },
+  ])("(E') the marker clock is dropped by a refused stretch: the $role id unlisted with a malformed .turn.json, then refused past MARKER_UNREADABLE_MS, then unlisted again, the push comes MARKER_UNREADABLE_MS after the re-unlisting", async ({ sessionId, claimedBy }) => {
+    const r = await rig();
+    plant(r.home, GOOD);
+    for (const m of ARMS) writeFileSync(path.join(r.reg, m), '');
+    writeFileSync(path.join(r.reg, `${BAD}.turn.json`), '{ not json');
+    storedRun(r.coord, { state: 'working', sessionId, claimedBy });
+    const unlisted = await unlist(r, [`${BAD}.turn.json`]);
+    await sweepEach(r, unlisted, T0, T0);
+    expect(markerPushes(r), 'the marker clock starts at T0, inside its window').toEqual([]);
+    plant(r.home, BAD);
+    await sweepEach(r, await tickRead(r), T0 + STALL_SWEEP_MS, END);
+    expect(markerPushes(r), 'nothing while refused').toEqual([]);
+    const after = await unlist(r, [`${BAD}.turn.json`]);
+    // U to U + MARKER_UNREADABLE_MS − STALL_SWEEP_MS (T0 + 122 min): the marker reads malformed, inside the new window.
+    await sweepEach(r, after, U, U + MARKER_UNREADABLE_MS - STALL_SWEEP_MS);
+    expect(markerPushes(r), 'no marker-unreadable push at once after the re-unlisting: the refused stretch read nothing').toEqual([]);
+    // CONTROL, U + MARKER_UNREADABLE_MS (T0 + 123 min): the push arrives, so the marker clock restarted at U.
     await sweepEach(r, after, U + MARKER_UNREADABLE_MS, U + MARKER_UNREADABLE_MS);
     expect(markerPushes(r)).toHaveLength(1);
   }, 60_000);

@@ -302,8 +302,8 @@ export interface StallTick {
   readonly records: readonly SessionRecord[];
   /** The ids this tick's listing REFUSED (`RegistryRead.refused`, path identity spec §2.3): listed, never read or built,
    *  so in no `records` and no `sessions`. A run worker or a claimant among them is held as unmeasured, never read as
-   *  absent: the lane takes no live, marker or hookstate read and composes no path or argv from it, and moves none of
-   *  its clocks (slug `tick-lanes-hold-a-refused-id`). */
+   *  absent: the lane takes no live, marker or hookstate read and composes no path or argv from it, and drops its clocks
+   *  (slug `tick-lanes-hold-a-refused-id`). */
   readonly refused: ReadonlySet<string>;
 }
 
@@ -1066,7 +1066,8 @@ export class FleetWatcher {
    *  restart re-times each one, which the spec accepts (slug `absent-worker-is-dead-after-grace` (D-3631)): when a run worker
    *  was first seen with no fleet row; when it was first seen with an `orphan` or `never-started` lifecycle; when a
    *  worker's or coordinator's turn marker was first READ `unmeasured` or `malformed` (`stallMarkClock`: an unmeasured
-   *  identity reads no marker, so it neither starts nor keeps that clock). */
+   *  identity reads no marker, so it neither starts nor keeps that clock). A subject's clocks are also dropped on a
+   *  sweep that refuses its id (`judgeStall`, `judgeStallCoordinator`). */
   private stallAbsentSince = new Map<string, number>();
   private stallDeadSince = new Map<string, number>();
   private stallMarkUnreadableSince = new Map<string, number>();
@@ -5570,7 +5571,9 @@ export class FleetWatcher {
       // every judged sweep since it was set. More than STALL_CLOCK_GAP_MS from the END of the last judged sweep to this
       // start means nobody watched in between (a disabled window, unreadable or throwing candidate reads, ticks that
       // never reached the lane), so every clock restarts here. The early returns above never stamp it: they are that
-      // unobserved time. A judged sweep's own duration is observed time, so `finally` stamps its end.
+      // unobserved time. A judged sweep's own duration is observed time, so `finally` stamps its end. A refused sweep is
+      // unobserved time for that subject too, so its clocks restart there: `judgeStall` and `judgeStallCoordinator` drop
+      // them (slug `tick-lanes-hold-a-refused-id`).
       if (this.lastStallJudgedAt !== null && now - this.lastStallJudgedAt > STALL_CLOCK_GAP_MS) this.dropStallClocks();
       judging = true;
       const workers = stallSubjects(candidates.runs);
@@ -5698,12 +5701,17 @@ export class FleetWatcher {
     const s = sessions.find((x) => x.id === id);
     // A worker id this tick's listing refused (`tick-lanes-hold-a-refused-id`) is in no `sessions`, and that is no
     // measure of absence. The lane carries the fact and decides nothing: it composes no path or argv from the id, takes
-    // no live, marker or hookstate read, and moves none of its clocks, so each keeps its prior value. L1 holds the arm.
+    // no live, marker or hookstate read, and DROPS its absent, dead and marker-unreadable clocks, because a refused sweep
+    // observes nothing about the subject: an unlisting after it starts them afresh. L1 holds the arm.
     const refused = tick.refused.has(id);
     let lr: StallLive | null = null;
     let mark: TurnMarkRead = STALL_MARK_UNREAD;
     let raw: HookStateRawRead = STALL_RAW_UNMEASURED;
-    if (!refused) {
+    if (refused) {
+      this.stallAbsentSince.delete(id);
+      this.stallDeadSince.delete(id);
+      this.stallMarkUnreadableSince.delete(id);
+    } else {
       this.stallSince(this.stallAbsentSince, id, s === undefined, now);
       this.stallSince(this.stallDeadSince, id, s !== undefined && stallDeadShaped(s.lifecycle), now);
       const ident = this.stallUuid(tick, id);
@@ -5767,11 +5775,14 @@ export class FleetWatcher {
     const id = c.sessionId;
     const s = sessions.find((x) => x.id === id);
     // A refused claimant id, as `judgeStall`'s refused worker (`tick-lanes-hold-a-refused-id`): no composed path, no
-    // live or marker read, and its marker clock keeps its prior value. Every session verdict below holds the arm.
+    // live or marker read, and its marker clock is DROPPED (a refused sweep observes nothing about the subject, so a
+    // later unlisting starts it afresh). Every session verdict below holds the arm.
     const refused = tick.refused.has(id);
     let lr: StallLive | null = null;
     let mark: TurnMarkRead = STALL_MARK_UNREAD;
-    if (!refused) {
+    if (refused) {
+      this.stallMarkUnreadableSince.delete(id);
+    } else {
       const ident = this.stallUuid(tick, id);
       lr = s === undefined ? null : await this.stallLiveRead(id, s.wrapper, tick);
       mark = await this.stallMarkRead(id, ident, lr);

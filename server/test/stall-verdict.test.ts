@@ -2027,9 +2027,8 @@ describe('dialog-cap-clock-ignores-inbound-mail (D-4040)', () => {
 
 // Path identity, fix round 2 (spec §2.3; slug `tick-lanes-hold-a-refused-id`). A run's stored worker id that the
 // registry listing refused (listed, never read or built) reaches L1 as its own `StallWorker` arm, never as absent.
-// The lane takes no live, marker or hookstate read for it and moves none of its clocks, so the clocks it carries are
-// a prior observation's: here they are set past their thresholds by hand, which no lane case can do, so these rows are
-// the ones the order mutations red.
+// The lane takes no live, marker or hookstate read for it and drops a refused subject's clocks, so only an L1 case
+// sets them: these rows set them past their thresholds by hand, and they are the ones the order mutations red.
 describe('a refused worker id holds unmeasured, ahead of step (2a) and of every later step', () => {
   const REFUSED: StallWorker = { present: 'refused' };
   const pastBoth: Partial<StallW2Facts> = {

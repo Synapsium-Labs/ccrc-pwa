@@ -483,7 +483,7 @@ export type StallWorker =
   /** A worker id the tick's registry listing REFUSED (`RegistryRead.refused`, path identity spec §2.3): listed, but never
    *  read or built, so it is in no `records` and no `sessions`. Its own arm, never `{ present: false }` plus a flag: an
    *  absent worker is the dead arm after DEAD_GRACE_MS, and a refused id was never measured absent. The lane takes no
-   *  live, marker or hookstate read and composes no path from it, and moves none of its clocks (slug
+   *  live, marker or hookstate read and composes no path from it, and drops its clocks (slug
    *  `tick-lanes-hold-a-refused-id`); it still reads the store's mail rows and run events for that id. Every verdict
    *  holds it `unmeasured`, after a run this build cannot name, EXCEPT mail-stuck's `registry-unmeasurable` clause,
    *  which still reports its held delivery past `MAIL_STUCK_MS` (`stuck-gate-precedes-holds`). */
@@ -1011,10 +1011,10 @@ export function stallVerdict(input: StallInput, now: number): StallVerdict {
  *  (1) a run this build cannot name;
  *  (1b) a worker id the registry listing refused (`StallWorker`'s `refused` arm) holds `unmeasured`, AHEAD of (2a) and
  *      of every later step. This departs from the stall-watch spec's §10 order, where (2a) comes first and "then any
- *      unmeasured input" (slug `tick-lanes-hold-a-refused-id`). The lane takes no read for that id and moves none of
- *      its clocks, so an absent, dead or marker-unreadable clock it carries is an earlier observation's, never a
- *      measurement of this subject: judged in the spec's order, it would push marker-unreadable or report the worker
- *      dead off a read nobody took;
+ *      unmeasured input" (slug `tick-lanes-hold-a-refused-id`). The lane takes no read for that id and drops that
+ *      subject's clocks, so it hands none here; a clock handed in by any other caller would be no measurement of this
+ *      subject, and judged in the spec's order it would push marker-unreadable or report the worker dead off a read
+ *      nobody took;
  *  (2) the marker-unreadable push, then a worker absent from the tick (the dead arm after DEAD_GRACE_MS), then an
  *      unmeasured fleet row, lifecycle, dispatch or re-activation;
  *  (3) lifecycle: a deliberate stop holds; an orphan or never-started pane is the dead arm after DEAD_GRACE_MS;
