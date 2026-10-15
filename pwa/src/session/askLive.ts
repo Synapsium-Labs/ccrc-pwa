@@ -222,6 +222,15 @@ export function freeTextSlot(dialog: Dialog, n: number | null): FreeTextSlot {
   return { kind: 'held', index: row.index, text: rowText(row) };
 }
 
+/** The question a free-text row belongs to, as a key: the pane's title and every row's label except the free-text
+ *  row `row` itself. Typing changes that row (its label becomes the text, and so the dialog id, which hashes the
+ *  labels), never the others, so the key holds through a text call's whole walk; a different question, or the same
+ *  title over different options, is a different key. An own-words call is keyed by it (D-5090), so a call made for one
+ *  question never says which row is the free-text row on another. */
+export function questionKey(dialog: Dialog, row: number): string {
+  return JSON.stringify([dialog.title, dialog.options.map((o) => (o.index === row ? null : o.label))]);
+}
+
 /** Does the slot hold exactly `text`, by the server's echo rule (`rowText` on both sides)? A row holding exactly the
  *  text a refused call sent is the stranded-text retry (D-5090): the route proves it and submits it without typing
  *  (D-5047's retry arm). Any other text in the row is the operator's to finish or clear in the terminal. */

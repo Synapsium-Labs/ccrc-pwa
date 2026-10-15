@@ -146,7 +146,7 @@ import {
   AskEyebrow, AskReview, ChatRow, MultiPick, OwnWords, REVIEW_TITLE, picksBusy, wordsBusy, type PickCall, type Picks,
   type Words, type WordsCall,
 } from './AskParts';
-import { chatRow, freeTextSlot, isAskReview, paneTicks, slotHolds } from './askLive';
+import { chatRow, freeTextSlot, isAskReview, paneTicks, questionKey, slotHolds } from './askLive';
 import { dialogMultiRefusal, dialogTextRefusal } from './askWords';
 import { api, ApiError } from '../lib/api';
 import { getSessionStore, type SessionStore } from '../stores/session';
@@ -161,11 +161,15 @@ const NO_PICK: { id: string | null; picked: readonly number[] | null; call: Pick
   id: null, picked: null, call: null,
 };
 
+/** Does `dialog` show the question `call` was made for (`questionKey`)? */
+const showsQuestion = (dialog: Dialog | null, call: WordsCall): dialog is Dialog =>
+  dialog !== null && questionKey(dialog, call.row) === call.question;
+
 /** Does `dialog` still show the question `call` typed into, its free-text row holding exactly `text`? That is the
  *  typed row of this very send (the stream may deliver it after the call answered), not other text, and not a new
  *  question. */
 const showsSent = (dialog: Dialog | null, call: WordsCall, text: string): boolean =>
-  dialog !== null && dialog.title === call.title && slotHolds(freeTextSlot(dialog, call.row - 1), text);
+  showsQuestion(dialog, call) && slotHolds(freeTextSlot(dialog, call.row - 1), text);
 
 /**
  * I4: is there anything accessible to actually show? Mirrors the scraped
@@ -317,7 +321,7 @@ export function DialogSheet({ id, store, onOpenTerminal, raise }: DialogSheetPro
     const current = dialog;
     const kept = own.text;
     if (current === null || locked) return;
-    const call = { row, title: current.title };
+    const call = { row, question: questionKey(current, row) };
     setOwn({ text: kept, call: { ...call, state: 'flight' } });
     try {
       await api.answerDialogText(id, current.id, row, kept.trim());
@@ -467,13 +471,15 @@ export function DialogSheet({ id, store, onOpenTerminal, raise }: DialogSheetPro
   // all — no title, no preamble, and a dialog with no accessible name.
   const question = ask?.question.trim() ?? '';
   // D-5090: the free-text row, under the question's n options. n is the transcript's option count when the server
-  // matched the question; else, after this sheet's own text call under the same question, that call's row less one
-  // (the stranded retry, which a held row needs: only the placeholder tells itself apart from an option); else
-  // unknown, and only the empty placeholder row is the slot. That row, and the `Chat about this` row, are never
-  // option rows here: own words go through `OwnWords`, and Chat is a row of its own saying what it does.
+  // matched the question; else, after this sheet's own text call, that call's row less one, but only while the pane
+  // shows the question the call was made for (`questionKey`: its title and every other row; the stranded retry needs
+  // it, since only the placeholder tells itself apart from an option); else unknown, and only the empty placeholder
+  // row is the slot. A call never speaks for another question, so a refusal that outlives its own cannot hide a later
+  // question's option or offer its placeholder as a row. That row, and the `Chat about this` row, are never option
+  // rows here: own words go through `OwnWords`, and Chat is a row of its own saying what it does.
   const n = ask !== undefined
     ? ask.options.length
-    : own.call !== null && own.call.title === shown.title ? own.call.row - 1 : null;
+    : own.call !== null && showsQuestion(shown, own.call) ? own.call.row - 1 : null;
   const slot = freeTextSlot(shown, n);
   const chat = chatRow(shown);
   const slotRow = slot.kind === 'none' ? null : slot.index;

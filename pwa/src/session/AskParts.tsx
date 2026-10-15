@@ -168,8 +168,10 @@ export function OtherQuestions({
 export interface WordsCall {
   /** The free-text row the call typed into (its printed index). */
   readonly row: number;
-  /** The pane's title when it was sent: the question the row belongs to. */
-  readonly title: string;
+  /** The question the call was made for (`questionKey` of the pane it was sent against): the call speaks for that
+   *  question only. The scraped sheet reads its free-text row from the call only while the pane shows it, so a
+   *  refused call that outlives its question never hides another question's option. */
+  readonly question: string;
   readonly state: 'flight' | 'landed' | 'refused';
 }
 

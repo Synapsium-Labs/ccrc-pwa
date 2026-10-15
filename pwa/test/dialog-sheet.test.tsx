@@ -1548,6 +1548,38 @@ describe('own words go through the free-text row (D-5090)', () => {
     expect(call).toHaveBeenLastCalledWith(SESSION_ID, stranded.id, 3, TEXT);
   });
 
+  it('a refusal belongs to its question: a later question under the same title is read from its own pane', async () => {
+    // The scraped sheet (no enrichment) learns which row is the free-text row from its own call only while the pane
+    // shows the question that call was made for. A refused call outliving it once hid a real option and offered the
+    // placeholder as a row. DERIVED: a later question titled like the refused one, with an option more.
+    const call = vi.spyOn(api, 'answerDialogText')
+      .mockRejectedValueOnce(refused('stale-dialog'))
+      .mockReturnValueOnce(new Promise(() => {}));
+    const drink = pane('cc300-ask-q2-of-2-single');
+    const { store } = renderAsk(null, drink);
+    type('water, please');
+    fireEvent.click(send());
+    await screen.findByText(DIALOG_TEXT_REFUSE_TEXT['stale-dialog']);
+
+    const later: Dialog = {
+      ...drink,
+      id: `${drink.id}-later`,
+      options: [
+        { index: 1, label: 'Tea' }, { index: 2, label: 'Coffee' }, { index: 3, label: 'Water' },
+        { index: 4, label: 'Type something.' }, { index: 5, label: 'Chat about this' },
+      ],
+    };
+    act(() => store.getState().apply({ type: 'dialog', dialog: later }));
+
+    expect(optionButton('Water'), 'a real option was hidden as the free-text row').toBeEnabled();
+    expect(screen.queryByText('Type something.'), 'the placeholder was offered as a row').toBeNull();
+    expect(screen.queryByText(/already holds other text/i)).toBeNull();
+    // "Your text is still here": the field keeps it, and Send types it into THIS question's free-text row.
+    expect(field()).toHaveValue('water, please');
+    fireEvent.click(send());
+    expect(call).toHaveBeenLastCalledWith(SESSION_ID, later.id, 4, 'water, please');
+  });
+
   it('ok clears the text, and question 2 is answerable', async () => {
     vi.spyOn(api, 'answerDialogText').mockResolvedValue(undefined);
     const q1 = pane('cc300-ask-same-labels-q1');
@@ -1583,6 +1615,24 @@ describe('own words go through the free-text row (D-5090)', () => {
 
     act(() => store.getState().apply({ type: 'dialog', dialog: pane('cc300-ask-review-same-labels') }));
     expect(screen.getByRole('button', { name: /^Submit answers/ })).toBeEnabled();
+  });
+
+  it('an answer that landed stops waiting on another question, even one whose row reads the same text', async () => {
+    // Only this send's OWN typed row keeps the sheet waiting: the same text in another question's free-text row is
+    // that question's. DERIVED: the recorded typed row (`cc300-ask-freetext-walk-3-typed`) under Caching's title.
+    vi.spyOn(api, 'answerDialogText').mockResolvedValue(undefined);
+    const { store } = renderAsk(CACHING_TRACING, pane('cc300-ask-same-labels-q2'));
+    type(TEXT);
+    fireEvent.click(send());
+    await act(async () => {});
+    expect(field()).toBeDisabled();
+
+    const caching: Dialog = { ...pane('cc300-ask-freetext-walk-3-typed'), id: 'caching-typed', title: 'Enable caching?' };
+    act(() => store.getState().apply({ type: 'dialog', dialog: caching }));
+    expect(heading('Enable caching?')).toBeInTheDocument();
+    expect(optionButton('Yes'), 'the sheet kept waiting on another question').toBeEnabled();
+    expect(noField()).toBeNull();
+    expect(screen.getByText(/already holds other text/i)).toBeInTheDocument();
   });
 
   it('an answer whose next screen arrived mid-call does not hold that screen busy', async () => {

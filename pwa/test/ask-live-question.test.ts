@@ -15,6 +15,7 @@ import {
   namedQuestion,
   paneTicks,
   questionCorresponds,
+  questionKey,
   reviewSummary,
   rowText,
   titleMatches,
@@ -324,5 +325,36 @@ describe('freeTextSlot: the free-text row under the question\'s n options (D-509
   it('rowText is the server\'s echo rule: label, then description, whitespace collapsed', () => {
     expect(rowText({ label: 'Mango' })).toBe('Mango');
     expect(rowText({ label: ' keep  it ', description: ' portable\tand  tested ' })).toBe('keep it portable and tested');
+  });
+});
+
+describe('questionKey: the question a free-text row belongs to, whatever the row holds (D-5090)', () => {
+  it('typing into the row changes the dialog id but not the question', () => {
+    const open = pane('cc300-ask-same-labels-q2');
+    const typed = pane('cc300-ask-freetext-walk-3-typed');
+    expect(typed.id).not.toBe(open.id);
+    for (const name of ['cc300-ask-freetext-walk-2-focused', 'cc300-ask-freetext-walk-3-typed',
+      'cc300-ask-freetext-walk-4-stepped-off', 'cc300-ask-freetext-walk-5-back-on-held']) {
+      expect(questionKey(pane(name), 3), name).toBe(questionKey(open, 3));
+    }
+  });
+
+  it('another question is another key, its title or any row other than the free-text one', () => {
+    expect(questionKey(pane('cc300-ask-same-labels-q1'), 3)).not.toBe(questionKey(pane('cc300-ask-same-labels-q2'), 3));
+    // DERIVED: the same title over one option more (no recording paints one): the row a refused call typed into is
+    // a real option there.
+    const drink = pane('cc300-ask-q2-of-2-single');
+    const more = screen('cc300-ask-q2-of-2-single', {
+      options: [
+        { index: 1, label: 'Tea' }, { index: 2, label: 'Coffee' }, { index: 3, label: 'Water' },
+        { index: 4, label: 'Type something.' }, { index: 5, label: 'Chat about this' },
+      ],
+    });
+    expect(questionKey(more, 3)).not.toBe(questionKey(drink, 3));
+    // DERIVED: an option relabelled under the same title.
+    const relabelled = screen('cc300-ask-q2-of-2-single', {
+      options: drink.options.map((o) => (o.index === 2 ? { ...o, label: 'Cocoa' } : o)),
+    });
+    expect(questionKey(relabelled, 3)).not.toBe(questionKey(drink, 3));
   });
 });
