@@ -19,7 +19,7 @@
 //   spikeFocus()    — describes document.activeElement.
 //   spikeTerm       — the Terminal, once created.
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { Terminal } from '@xterm/xterm';
@@ -73,7 +73,7 @@ function log(kind: string, detail: string): void {
 // the line into the transcript above the box, ^C clears it, and ESC sequences
 // (arrows, bracketed-paste markers) are skipped. Not a terminal: a picture of
 // what Claude Code's own box would show.
-const echo: { line: string; sent: string[] } = { line: '', sent: [] };
+const echo: { line: string; sent: string[]; composing: string } = { line: '', sent: [], composing: '' };
 
 function feed(bytes: string): void {
   const cps = Array.from(bytes);
@@ -335,10 +335,25 @@ function Spike(): ReactNode {
     return () => ro.disconnect();
   }, [scroller]);
 
-  // Scroll to bottom after cols change
+  // STICK TO THE BOTTOM, as the product's wrapped view does: the input box is the
+  // bottom of the screen, so a glass the keyboard shrinks, or a box the echo
+  // grows, keeps it in view. Scrolling up unsticks; scrolling back down resticks.
+  const stickRef = useRef(true);
   useEffect(() => {
-    if (scroller !== null) scroller.scrollTop = scroller.scrollHeight;
-  }, [cols, scroller]);
+    if (scroller === null) return undefined;
+    const onScroll = (): void => {
+      stickRef.current = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 8;
+    };
+    const ro = new ResizeObserver(() => {
+      if (stickRef.current) scroller.scrollTop = scroller.scrollHeight;
+    });
+    ro.observe(scroller);
+    scroller.addEventListener('scroll', onScroll, { passive: true });
+    return () => { ro.disconnect(); scroller.removeEventListener('scroll', onScroll); };
+  }, [scroller]);
+  useLayoutEffect(() => {
+    if (scroller !== null && stickRef.current) scroller.scrollTop = scroller.scrollHeight;
+  });
 
   // Create the terminal ONCE, keyed on host
   useEffect(() => {
@@ -370,8 +385,8 @@ function Spike(): ReactNode {
       log('beforeinput:xterm', ev.inputType + ' ' + esc(ev.data ?? ''));
     };
     const onCompStart = (ev: CompositionEvent): void => { log('compositionstart:xterm', esc(ev.data)); };
-    const onCompUpdate = (ev: CompositionEvent): void => { log('compositionupdate:xterm', esc(ev.data)); };
-    const onCompEnd = (ev: CompositionEvent): void => { log('compositionend:xterm', esc(ev.data)); };
+    const onCompUpdate = (ev: CompositionEvent): void => { echo.composing = ev.data; log('compositionupdate:xterm', esc(ev.data)); };
+    const onCompEnd = (ev: CompositionEvent): void => { echo.composing = ''; log('compositionend:xterm', esc(ev.data)); };
     if (ta !== undefined) {
       ta.addEventListener('beforeinput', onBeforeInput);
       ta.addEventListener('compositionstart', onCompStart);
@@ -431,9 +446,9 @@ function Spike(): ReactNode {
             whiteSpace: 'pre-wrap',
             wordBreak: 'break-all',
           }}>
-            <div>{navigator.userAgent}</div>
+            {kbInset > 0 ? null : <div>{navigator.userAgent}</div>}
             <div>{`coarse: ${String(coarse)}  inner: ${window.innerWidth}x${window.innerHeight}  term: ${PINNED_WINDOW_COLS}x${PINNED_WINDOW_ROWS + TMUX_STATUS_ROWS}  cols: ${cols}`}</div>
-            <div>{`vv: ${vv === null ? 'none' : `${vv.w}x${vv.h} top ${vv.top}`}`}</div>
+            <div>{`vv: ${vv === null ? 'none' : `${vv.w}x${vv.h} top ${vv.top}`}  kb: ${kbInset}`}</div>
           </div>
 
           {/* 3b. The glass */}
@@ -455,7 +470,7 @@ function Spike(): ReactNode {
                 whiteSpace: 'pre',
                 userSelect: 'text',
               }}
-              onClick={() => termRef.current?.focus()}
+              onClick={() => { const ta = termRef.current?.textarea; if (ta) ta.focus({ preventScroll: true }); else termRef.current?.focus(); }}
             >
               {screenRows.map((row, i) => {
                 if (row.startsWith('__SENT__')) {
