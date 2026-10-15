@@ -47,8 +47,9 @@ const prefixMatches = (a: string, b: string): boolean => {
   return x !== '' && y !== '' && (x.startsWith(y) || y.startsWith(x));
 };
 
-/** C1: does the envelope's first question describe the same live menu
- *  `dialog` is showing? `answer()` types `dialog`'s pane by INDEX, so this
+/** C1: does the envelope question `q` describe the same live menu `dialog`
+ *  is showing? `liveQuestion` asks it of EVERY question of the envelope
+ *  (D-5089), never the first alone. `answer()` types `dialog`'s pane by INDEX, so this
  *  has to be sure the envelope's copy and the pane's rows are the same
  *  question before a tap is allowed to walk it — every one of the envelope's
  *  options must line up with the pane's option at that same position (no
