@@ -1430,3 +1430,106 @@ describe("in-process: the measure's cursor, scope and transaction (spec 8.6 RV17
     }
   });
 });
+
+// ===========================================================================
+// W1-B3 Task 7: purged sessions' scope markers and card directories, collected at the scan, 7 days on (spec §9.4).
+// runDriver moves the pass clock past SCAN_INTERVAL_MS, so that pass's registry scan is due.
+// ===========================================================================
+describe("purged sessions' scope markers and card directories go 7 days on, at the scan (spec 9.4; W1-B3 Task 7)", () => {
+  skipOnDarwin();
+  const DAY = 24 * 60 * 60 * 1000;
+  const SCAN_LATER = { offsetMs: libCard.SCAN_INTERVAL_MS + 60_000 };
+  /** Sets an entry's own times (a link's, never its target's) to `ms` ago. */
+  const age = (p: string, ms: number): void => {
+    const t = (Date.now() - ms) / 1000;
+    fs.lutimesSync(p, t, t);
+  };
+  const scopeOf = (box: HistoryBox, id: string): string => path.join(box.root, 'scope', id);
+  /** A short transcript: two rows, no boundary yet, so its card predicts the epoch's first leaf. */
+  const tiny = (uuid: string, n: number): Row[] => [
+    userRow({ uuid: sidC(n), ts: new Date(T0C).toISOString(), sessionId: uuid, text: 'a request' }),
+    userRow({ uuid: sidC(n + 1), ts: new Date(T0C + 1000).toISOString(), sessionId: uuid, text: 'a follow-up' }),
+  ];
+  /** A session with its prediction written and a scope marker (as the hook would write it), all aged `days`. */
+  const seeded = (box: HistoryBox, rows: ReadonlyArray<readonly [string, string, number]>): void => {
+    rows.forEach(([id, uuid], i) => plantC(box, id, uuid, tiny(uuid, 0x7100 + 16 * i)));
+    settleC(box);
+    pokeC(box, ...rows.map(([id]) => id));
+    for (const [id, uuid, days] of rows) {
+      expect(cardOf(box, id, uuid), id).not.toBeNull();
+      fs.writeFileSync(scopeOf(box, id), `main ${uuid} ${Date.now()}\n`);
+      // D-5053 (history-card-purge-fixture-ages-record): the generation record is a file of the directory, and a directory is as old as its newest entry; the directory is aged last.
+      for (const p of [scopeOf(box, id), cardPath(box, id, uuid), path.join(box.root, 'card', id, `${uuid}.gen`), path.join(box.root, 'card', id)]) age(p, days * DAY);
+    }
+  };
+  const purge = (box: HistoryBox, id: string): void => {
+    for (const f of fs.readdirSync(box.reg).filter((n) => n.startsWith(`${id}.`))) fs.rmSync(path.join(box.reg, f));
+  };
+
+  it('registry absent and 8 days old: removed and counted; 6 days old, or still in the registry: kept; nothing at a pass whose scan is not due', () => {
+    const box = makeHistoryBox('ccrc-hist-card-purge-');
+    const fam = [['card-gone', sidC(0x71), 8], ['card-young', sidC(0x72), 6], ['card-live', sidC(0x73), 8]] as const;
+    seeded(box, fam);
+    purge(box, 'card-gone');
+    purge(box, 'card-young');
+    passC(box);
+    for (const [id] of fam) expect(fs.existsSync(scopeOf(box, id)), `${id}: this pass's scan was not due`).toBe(true);
+    expect(counters(box)['scope_files_purged']).toBeUndefined();
+    const r = runDriver(box, SCAN_LATER);
+    expect(r.code, `${r.stderr}${r.stdout}`).toBe(0);
+    expect(fs.existsSync(scopeOf(box, 'card-gone'))).toBe(false);
+    expect(fs.existsSync(path.join(box.root, 'card', 'card-gone'))).toBe(false);
+    expect(fs.existsSync(path.join(box.root, 'card', 'card-gone', `${fam[0][1]}.gen`)), 'its generation record went with its directory').toBe(false);
+    for (const [id, uuid] of fam.slice(1)) {
+      expect(fs.existsSync(scopeOf(box, id)), id).toBe(true);
+      expect(cardOf(box, id, uuid), id).not.toBeNull();
+    }
+    const c = counters(box);
+    expect([c['scope_files_purged'], c['card_files_purged']]).toEqual([1, 1]);
+  }, 240_000);
+
+  it.skipIf(process.getuid?.() === 0)('a registry entry that cannot be measured keeps the files: unmeasured is never absent', () => {
+    const box = makeHistoryBox('ccrc-hist-card-purge-eacces-');
+    const ID = 'card-unmeasured';
+    const U = sidC(0x74);
+    seeded(box, [[ID, U, 8]]);
+    fs.chmodSync(box.reg, 0o600);
+    let code: number | null = null;
+    try {
+      code = runDriver(box, SCAN_LATER).code;
+    } finally {
+      fs.chmodSync(box.reg, 0o700);
+    }
+    expect(code, 'the pass ran its scan to the end').toBe(0);
+    expect(fs.existsSync(scopeOf(box, ID))).toBe(true);
+    expect(cardOf(box, ID, U)).not.toBeNull();
+    expect(counters(box)['scope_files_purged']).toBeUndefined();
+  }, 240_000);
+
+  it('a link is unlinked and its target kept; a name failing idOk, a card directory holding a directory, and the other history directories stay', () => {
+    const box = makeHistoryBox('ccrc-hist-card-purge-shapes-');
+    passC(box);
+    const outside = path.join(box.home, 'outside');
+    fs.mkdirSync(outside);
+    fs.writeFileSync(path.join(outside, 'keep.txt'), 'target');
+    const link = scopeOf(box, 'card-link');
+    fs.symlinkSync(outside, link);
+    const bad = scopeOf(box, 'bad name');
+    fs.writeFileSync(bad, 'x');
+    const nested = path.join(box.root, 'card', 'card-nested');
+    fs.mkdirSync(path.join(nested, 'sub'), { recursive: true });
+    fs.writeFileSync(path.join(nested, 'note'), 'x');
+    for (const p of [link, bad, path.join(nested, 'note'), path.join(nested, 'sub'), nested]) age(p, 8 * DAY);
+    const listing = (d: string): string[] => (fs.existsSync(path.join(box.root, d)) ? fs.readdirSync(path.join(box.root, d)).sort() : []);
+    const journal = listing('journal');
+    const r = runDriver(box, SCAN_LATER);
+    expect(r.code, `${r.stderr}${r.stdout}`).toBe(0);
+    expect(() => fs.lstatSync(link), 'the link itself is gone').toThrow();
+    expect(fs.readdirSync(outside), 'its target is untouched').toEqual(['keep.txt']);
+    expect(fs.existsSync(bad), 'a name failing idOk is never read as a session').toBe(true);
+    expect(fs.readdirSync(nested).sort(), 'a directory this writer never makes keeps its card directory whole').toEqual(['note', 'sub']);
+    expect(listing('journal'), 'journal/ is never walked').toEqual(journal);
+    expect(fs.statSync(path.join(box.root, 'spool')).isDirectory()).toBe(true);
+    expect(counters(box)['scope_files_purged']).toBe(1);
+  }, 240_000);
+});

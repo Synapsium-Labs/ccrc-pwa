@@ -488,3 +488,79 @@ export function measureCardDelivery(db, ictx, budget) {
   }
   return out;
 }
+
+// ── Purged sessions' files (spec §9.4: history-scope-markers and history-card-files, "the files of purged sessions
+// after 7 days"; W1-B3 Task 7) ──────────────────────────────────────────────────────────────────────────────────────
+// At the periodic scan, every scope/<id> and card/<id> whose session the registry no longer names (`$REG/<id>.uuid`
+// absent; ccd's _reg_purge removes every field of the id) and whose newest write is more than PURGED_FILES_GRACE_MS
+// old is removed (lib decidePurgedEntry decides). ccd's purge leaves no time to read, so the age is the entry's own
+// newest write. D-4745 (history-purged-files-aged-by-mtime)
+// Removal never follows a link and never recurses: a link or a file is unlinked; a card directory has its links and
+// files unlinked and is removed, unless it holds a directory, which this writer never makes. Only scope/ and card/ are
+// walked, and only names that pass idOk. A failure leaves the rest for the next scan.
+
+/** `$REG/<id>.uuid` by lstat: present, absent (ENOENT), or unmeasured (any other failure). */
+function registryKind(reg, id) {
+  try {
+    lstatSync(`${reg}/${id}.uuid`);
+  } catch (e) {
+    return e && e.code === 'ENOENT' ? 'absent' : 'unmeasured';
+  }
+  return 'present';
+}
+
+/** An entry's newest write, by lstat (a link's own time): itself, and each entry of a real directory; null when any of
+ *  them cannot be measured. */
+function newestMtimeMs(p) {
+  let st;
+  try { st = lstatSync(p); } catch { return null; }
+  let newest = st.mtimeMs;
+  if (!st.isDirectory()) return newest;
+  let names;
+  try { names = readdirSync(p); } catch { return null; }
+  for (const n of names) {
+    try { newest = Math.max(newest, lstatSync(`${p}/${n}`).mtimeMs); } catch { return null; }
+  }
+  return newest;
+}
+
+/** Removes one scope marker or card directory without following a link. Answers whether it is gone. */
+function removePurgedEntry(p) {
+  try {
+    const st = lstatSync(p);
+    if (!st.isDirectory()) {
+      unlinkSync(p);
+      return true;
+    }
+    const names = readdirSync(p).sort();
+    if (names.some((n) => lstatSync(`${p}/${n}`).isDirectory())) return false;
+    for (const n of names) unlinkSync(`${p}/${n}`);
+    rmdirSync(p);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** The scan's collection of purged sessions' scope markers and card directories (§9.4), counted
+ *  `scope_files_purged` and `card_files_purged`. A registry directory that cannot be listed measures no session absent,
+ *  so then nothing is removed. */
+export function collectPurgedHistoryFiles(db, home, nowMs) {
+  const P = historyPaths(home);
+  const out = { scope: 0, card: 0 };
+  if (lstatKind(P.reg) !== 'dir') return out;
+  for (const [kind, name] of [['scope', SCOPE_DIR], ['card', CARD_DIR]]) {
+    const dir = `${P.root}/${name}`;
+    if (lstatKind(dir) !== 'dir') continue;
+    let ids;
+    try { ids = readdirSync(dir).sort(); } catch { continue; }
+    for (const id of ids) {
+      if (!idOk(id)) continue;
+      const verdict = decidePurgedEntry({ reg: registryKind(P.reg, id), newestMtimeMs: newestMtimeMs(`${dir}/${id}`), nowMs });
+      if (verdict === 'remove' && removePurgedEntry(`${dir}/${id}`)) out[kind] += 1;
+    }
+  }
+  if (out.scope > 0) bump(db, 'scope_files_purged', out.scope);
+  if (out.card > 0) bump(db, 'card_files_purged', out.card);
+  return out;
+}

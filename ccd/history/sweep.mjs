@@ -75,7 +75,7 @@ import {
   deriveNodes, reparseTargets, reparseLeaves, clearLeafCrashes, indexNodesFts, NODES_FTS_STEP, rederiveGistsFor, redactNodeFields, reparseFailClosed, rerollNodes,
   beltNodesStep,
 } from './derive.mjs';
-import { cardStep, ensureHistoryDirs, withdrawCards } from './card.mjs';
+import { cardStep, collectPurgedHistoryFiles, ensureHistoryDirs, withdrawCards } from './card.mjs';
 
 const USAGE = 'usage: sweep.mjs [--op <verb> <op-args...>] [--roster-unreadable] --secrets <file...> -- <home...>';
 
@@ -3006,8 +3006,10 @@ export async function bindingPass(home, P, op, args, deps, out) {
  *     (ruling RC2: fail closed; lib decideCardWithdraw names the reason);
  * 18. `mergeSteps`: §6.2's merge steps, which run under any pause: they free space rather than take it;
  * 19. `recordTick`: the tick's row and journal record (a paused ingest records an unmeasured lag);
- * 20. `markScan`: a due scan is marked done, unless the roster was unreadable;
- * 21. `ensureHistoryDirs`: last, below the spool/ line the next sentence names, scope/ and card/ made 0700, a link
+ * 20. `collectPurgedHistoryFiles`: at a due scan, the scope markers and card directories of purged sessions,
+ *     7 days on (card.mjs; W1-B3 Task 7);
+ * 21. `markScan`: a due scan is marked done, unless the roster was unreadable;
+ * 22. `ensureHistoryDirs`: last, below the spool/ line the next sentence names, scope/ and card/ made 0700, a link
  *     or a file there refused and counted (card.mjs; W1-B3 Task 5).
  *  Then spool/ is made unless something that is not a directory stands there (FU8) (the hook's gate is that directory, and
  *  the hook never makes it, §5.1, so a box with no bound store spools nothing) and an unreadable roster is counted, once per pass (FE4, O54); the scheduled pass runs
@@ -3107,6 +3109,8 @@ export async function tick(db, ctx) {
   mergeSteps(db, ictx, ctx.budget);
   // §9.2 step 6: the tick's row and journal record. A paused ingest records an unmeasured lag.
   recordTick(db, ictx, ing);
+  // §9.4 (W1-B3 Task 7): the scope markers and card directories of purged sessions, 7 days on, at the periodic scan.
+  if (scan) collectPurgedHistoryFiles(db, ctx.home, ctx.now());
   if (scan && !ctx.rosterUnreadable) markScan(db, ctx.now());
   // <<< history tick steps
   // FU8 (D-4347 (history-planted-entries-never-wedge)): never over a planted entry, which the drain refused and counted; a
