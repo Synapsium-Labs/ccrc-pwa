@@ -1,0 +1,262 @@
+/* ============================================================================
+   @ccrc/ui — Tailwind v4 theme bridge.
+
+   THIS FILE MAPS, IT DOES NOT DEFINE. Every entry below is `var(--token)`
+   pointing at tokens.css. Not one literal colour, size or duration lives here.
+
+   WHY `inline`. `@theme` COPIES a value into the generated utility; `@theme
+   inline` emits the var() REFERENCE. Only the reference re-resolves per theme,
+   and tokens.css re-declares the whole palette under [data-theme='light'].
+   A non-inline block would bake the dark value into `.bg-surface` and the
+   light theme would silently render dark-on-dark — the single-value-per-token
+   failure the shadcn spike measured (FAIL 3.73 LIGHT). `inline` is the fix,
+   and it is not optional.
+
+   WHY THE TOKEN FAMILIES WERE RENAMED. Tailwind v4 owns the `--text-*`,
+   `--font-*`, `--leading-*`, `--tracking-*`, `--shadow-*` and `--ease-*`
+   namespaces. tokens.css used all six. Mapping `--text-sm: var(--text-sm)`
+   emits `:root { --text-sm: var(--text-sm) }` — a circular reference, which
+   CSS drops, taking the token with it. That exact bug shipped here once
+   before (twelve self-referential aliases, see base.css's history note), so
+   the six families were renamed out of Tailwind's way instead:
+     --text-*     -> --fs-*        (font size)
+     --font-*     -> --family-*    (font stack)
+     --leading-*  -> --lh-*
+     --tracking-* -> --ls-*
+     --shadow-*   -> --elev-*
+     --ease-*     -> --curve-*
+   Families that never collided (--bg-*, --ink-*, --sp-*, --r-*, --z-*) kept
+   their names. If you add a token, check it against Tailwind's namespace list
+   FIRST — a collision here fails silently, in one theme only.
+
+   Preflight is deliberately not imported: reset.css vendors it already, and
+   importing `tailwindcss` wholesale would ship a second copy.
+   ========================================================================== */
+
+/* EVERY @import IN THIS FILE LEADS, AND CONSUMERS IMPORT THIS FILE FIRST.
+   CSS drops an @import that follows any rule. tokens.css opens with :root,
+   so importing it before this file silently discarded Tailwind's own imports
+   and the build emitted a theme with zero utilities and no error. This file
+   therefore pulls tokens.css in ITSELF, and is the single entry point. */
+
+/* THE ORDER IS ONE-WAY, AND THAT IS THE DESIGN.
+   Every ui component stylesheet declares `@layer components`, while the app's
+   own sheets (fleet.css, chat.css, shell.css) are imported UNLAYERED — and
+   unlayered beats every layer regardless of specificity. So the precedence
+   runs: app sheets (unlayered) > utilities > ui components. An app sheet beats
+   a call site's Tailwind className too — `@layer utilities` is still a layer.
+   Both arrows are deliberate. A call site can override a component through
+   `className`, which is what tailwind-merge assumes, as long as no app sheet
+   rule also claims that property. And the app can
+   always scope over a primitive (`.block-screen .btn-primary`,
+   `.update-banner-actions .btn-ghost`, chat.css's retained `.opt-inert`),
+   which several rules rely on. The consequence to know: a ui rule can NEVER
+   win against an app rule. If the design system ever needs to override the
+   app, that is not a specificity bug to fix — it is this ordering, and the
+   app rule is the one that should move. */
+@layer theme, base, components, utilities;
+
+@import 'tailwindcss/theme.css' layer(theme);
+@import 'tailwindcss/utilities.css' layer(utilities);
+@import './tokens.css';
+
+/* Tailwind's automatic source detection is rooted at THIS file's directory,
+   which holds only stylesheets. The components live two levels up, so the
+   scan has to be named. */
+@source '../**/*.{ts,tsx}';
+
+@theme inline {
+  /* --- surfaces ------------------------------------------------------ */
+  --color-page:    var(--bg-page);
+  --color-surface: var(--bg-surface);
+  --color-raised:  var(--bg-raised);
+  --color-well:    var(--bg-well);
+  --color-sheet:   var(--bg-sheet);
+  --color-scrim:   var(--scrim);
+
+  /* --- hairlines ----------------------------------------------------- */
+  --color-edge-subtle: var(--edge-subtle);
+  --color-edge-strong: var(--edge-strong);
+
+  /* --- ink ------------------------------------------------------------ */
+  --color-ink-primary:   var(--ink-primary);
+  --color-ink-secondary: var(--ink-secondary);
+  --color-ink-tertiary:  var(--ink-tertiary);
+  --color-ink-disabled:  var(--ink-disabled);
+  --color-ink-on-well:   var(--ink-on-well);
+  --color-ink-on-phosphor: var(--ink-on-accent);
+
+  /* --- accent (the phosphor) ------------------------------------------ */
+  /* THE BRAND HUE IS `phosphor`, NOT `accent`, and shadcn is the reason.
+     Every shadcn component writes `bg-accent`/`text-accent-foreground` for a
+     MUTED HOVER SURFACE; ccrc's `--accent` is the brand phosphor, a saturated
+     green that would turn every pasted dropdown's hover into a highlighter.
+     One of the two had to give up the Tailwind key, and it is cheaper here:
+     FOUR call sites in this package and none in the app, measured, against
+     every shadcn component ever pasted.
+
+     THE CSS VARIABLES DO NOT MOVE. `--accent`, `--accent-tint`,
+     `--accent-on-well` and `--ink-on-accent` are the token names twelve
+     palettes in tokens.css bind and ~200 stylesheet rules read; renaming
+     those would be a different and far larger change, and would move the
+     contrast gate. What changes is only the Tailwind KEY — the utility's
+     spelling — so the compiled colour is identical and the gate is unmoved.
+     `pwa/test/utility-pairs.test.ts` pins the primary button's pair through
+     the new spelling and says why. */
+  --color-phosphor:         var(--accent);
+  --color-phosphor-tint:    var(--accent-tint);
+  --color-phosphor-on-well: var(--accent-on-well);
+
+  /* --- session status. GLOW MEANS LIFE: busy/attention emit, the rest
+         are matte. The glow itself is a shadow utility, below. ---------- */
+  --color-status-busy:           var(--status-busy);
+  --color-status-busy-text:      var(--status-busy-text);
+  --color-status-idle:           var(--status-idle);
+  --color-status-attention:      var(--status-attention);
+  --color-status-attention-text: var(--status-attention-text);
+  --color-status-attention-tint: var(--status-attention-tint);
+  --color-status-dead:           var(--status-dead);
+  --color-status-dead-text:      var(--status-dead-text);
+  --color-status-dead-tint:      var(--status-dead-tint);
+  --color-status-dead-tint-solid: var(--status-dead-tint-solid);
+  --color-status-done:           var(--status-done);
+  --color-status-done-text:      var(--status-done-text);
+  --color-status-cleanup:        var(--status-cleanup);
+  --color-status-cleanup-text:   var(--status-cleanup-text);
+
+  /* --- account hues. Six, never glowing. `acct-active` is the one a
+         component should reach for: screens stamp [data-acct] and the
+         rebinding selectors in tokens.css do the rest. ----------------- */
+  --color-acct-active:      var(--acct-active);
+  --color-acct-active-tint: var(--acct-active-tint);
+  --color-acct-cyan:         var(--acct-cyan);
+  --color-acct-cyan-tint:    var(--acct-cyan-tint);
+  --color-acct-violet:       var(--acct-violet);
+  --color-acct-violet-tint:  var(--acct-violet-tint);
+  --color-acct-blue:         var(--acct-blue);
+  --color-acct-blue-tint:    var(--acct-blue-tint);
+  --color-acct-magenta:      var(--acct-magenta);
+  --color-acct-magenta-tint: var(--acct-magenta-tint);
+  --color-acct-amber:        var(--acct-amber);
+  --color-acct-amber-tint:   var(--acct-amber-tint);
+  --color-acct-green:        var(--acct-green);
+  --color-acct-green-tint:   var(--acct-green-tint);
+
+  /* --- limit bands: ok < 50, warn 50-75, critical > 75 ---------------- */
+  --color-limit-track:    var(--limit-track);
+  --color-limit-ok:       var(--limit-ok);
+  --color-limit-warn:     var(--limit-warn);
+  --color-limit-critical: var(--limit-critical);
+
+  /* --- wells: dark in BOTH themes, so these never flip ---------------- */
+  --color-diff-add: var(--diff-add);
+  --color-diff-del: var(--diff-del);
+  --color-syn-comment:  var(--syn-comment);
+  --color-syn-keyword:  var(--syn-keyword);
+  --color-syn-string:   var(--syn-string);
+  --color-syn-number:   var(--syn-number);
+  --color-syn-function: var(--syn-function);
+  --color-syn-type:     var(--syn-type);
+  --color-syn-tag:      var(--syn-tag);
+  --color-syn-attr:     var(--syn-attr);
+  --color-syn-punct:    var(--syn-punct);
+  --color-well-bar-bg:   var(--well-bar-bg);
+  --color-well-bar-hair: var(--well-bar-hair);
+
+  --color-pr-merged: var(--pr-merged);
+  --color-pr-dim:    var(--pr-dim);
+
+  /* --- type ----------------------------------------------------------- */
+  --font-ui:   var(--family-ui);
+  --font-mono: var(--family-mono);
+
+  --text-2xs:   var(--fs-2xs);
+  --text-xs:    var(--fs-xs);
+  --text-sm:    var(--fs-sm);
+  --text-base:  var(--fs-base);
+  --text-lg:    var(--fs-lg);
+  --text-xl:    var(--fs-xl);
+  --text-2xl:   var(--fs-2xl);
+  --text-input: var(--fs-input);
+
+  --leading-tight:  var(--lh-tight);
+  --leading-normal: var(--lh-normal);
+  --leading-mono:   var(--lh-mono);
+  --leading-prose:  var(--lh-prose);
+
+  --font-weight-regular:  var(--weight-regular);
+  --font-weight-medium:   var(--weight-medium);
+  --font-weight-semibold: var(--weight-semibold);
+
+  --tracking-caps: var(--ls-caps);
+
+  /* --- space, radius, size -------------------------------------------- */
+  --spacing-1: var(--sp-1);   --spacing-2: var(--sp-2);
+  --spacing-3: var(--sp-3);   --spacing-4: var(--sp-4);
+  --spacing-5: var(--sp-5);   --spacing-6: var(--sp-6);
+  --spacing-8: var(--sp-8);   --spacing-10: var(--sp-10);
+  --spacing-12: var(--sp-12);
+  --spacing-safe-top:    var(--safe-top);
+  --spacing-safe-bottom: var(--safe-bottom);
+  --spacing-tap:  var(--tap-min);
+  --spacing-lamp: var(--lamp-size);
+  --spacing-well-max: var(--well-max);
+
+  --radius-sm:   var(--r-sm);
+  --radius-md:   var(--r-md);
+  --radius-lg:   var(--r-lg);
+  --radius-xl:   var(--r-xl);
+  --radius-full: var(--r-full);
+
+  /* --- elevation & glow. The bloom is a shadow utility so a component
+         says `shadow-glow-busy`, not a hand-rolled box-shadow. --------- */
+  --shadow-card:  var(--elev-card);
+  --shadow-sheet: var(--elev-sheet);
+  --shadow-glow-busy:          var(--glow-busy);
+  --shadow-glow-attention:     var(--glow-attention);
+  --shadow-glow-dot-busy:      var(--glow-dot-busy);
+  --shadow-glow-dot-attention: var(--glow-dot-attention);
+
+  /* --- motion --------------------------------------------------------- */
+  --ease-swift:   var(--curve-swift);
+  --ease-spring:  var(--curve-spring);
+  --ease-breathe: var(--curve-breathe);
+
+  --animate-breathe: dot-breathe var(--breathe-period) var(--curve-breathe) infinite alternate;
+  --animate-pulse-attention: dot-breathe var(--pulse-period) var(--curve-breathe) infinite alternate;
+  --animate-shimmer: skel-shimmer var(--breathe-period) var(--curve-breathe) infinite;
+  --animate-toast-in: toast-in var(--dur-slow) var(--curve-spring);
+}
+
+/* Named durations and z-indexes are NOT Tailwind namespaces — `duration-*`
+   and `z-*` only accept bare numbers or arbitrary values, so a
+   `--duration-press` theme key generates nothing at all, silently. Declared
+   as real utilities instead, which is also what keeps the motion vocabulary
+   speakable in a className. */
+@utility duration-press { transition-duration: var(--dur-press); }
+@utility duration-fast  { transition-duration: var(--dur-fast); }
+@utility duration-base  { transition-duration: var(--dur-base); }
+@utility duration-slow  { transition-duration: var(--dur-slow); }
+@utility duration-sheet { transition-duration: var(--dur-sheet); }
+@utility duration-bar   { transition-duration: var(--dur-bar); }
+@utility duration-ping  { transition-duration: var(--dur-ping); }
+
+@utility z-header { z-index: var(--z-header); }
+@utility z-sheet  { z-index: var(--z-sheet); }
+@utility z-drawer { z-index: var(--z-drawer); }
+@utility z-toast  { z-index: var(--z-toast); }
+@utility z-block  { z-index: var(--z-block); }
+
+/* Keyframes the --animate-* entries above name. Utilities reference them;
+   they are not themselves theme values. */
+@keyframes dot-breathe {
+  from { opacity: 0.55; }
+  to   { opacity: 1; }
+}
+@keyframes skel-shimmer {
+  from { background-position: 200% 0; }
+  to   { background-position: -200% 0; }
+}
+@keyframes toast-in {
+  from { transform: translateY(var(--sp-2)); opacity: 0; }
+}

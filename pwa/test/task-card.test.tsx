@@ -11,7 +11,8 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import type { ChatEvent } from '../../shared/api';
-import { buildChatItems, ChatListInner } from '../src/session/ChatList';
+import { ChatListInner } from '../src/session/ChatList';
+import { buildChatItems } from '../src/session/chatItems';
 
 afterEach(cleanup);
 

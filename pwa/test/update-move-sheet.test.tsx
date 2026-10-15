@@ -16,7 +16,7 @@ import type { BuildInfo } from '../../shared/buildinfo';
 import { ApiError, api, apiErrorText, moveSkipText, updateErrorText } from '../src/lib/api';
 import { navigate } from '../src/lib/router';
 import { useFleetStore } from '../src/stores/fleet';
-import { ToastHost } from '../src/components/Toast';
+import { ToastHost } from '@ccrc/ui';
 import { planMove, rollbackHowText, type MoveIntent, type PlannedMove } from '../src/fleet/movePlan';
 import {
   MOVE_NOTHING_REQUESTED_TEXT, MOVE_REST_TEXT, MOVE_UNREADABLE_TEXT, MoveSendError, UpdateMoveSheet, sendMove,
@@ -552,5 +552,74 @@ describe('UpdateMoveSheet — a halted skip of a node the plan never named (R15(
     fireEvent.click(screen.getByRole('button', { name: 'Update v0.0.10' }));
     await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
     expect(screen.queryByRole('alert')).toBeNull();
+  });
+});
+
+// THE SHAPES AND ARMS NO WELL-FORMED FIXTURE REACHES. Every case above sends
+// a body the route promises and a refusal the route documents; these are what
+// a box under load and a proxy in front of it actually produce. Measured:
+// statements 69, 85, 145 and branches 229#0/229#1 of `UpdateMoveSheet.tsx`
+// uncovered with this file 38/38 green.
+describe('UpdateMoveSheet — the degrade paths', () => {
+  it('a MoveSendError wrapping something that is not an Error still has a message', () => {
+    // `api.*` can reject with a non-Error (a thrown string from a layer this
+    // sheet does not own). `super(err.message)` on it would be `undefined`,
+    // and `MoveSendError` is thrown THROUGH `sendMove`'s caller — an
+    // unhandled rejection whose message is `undefined` is the one thing that
+    // tells nobody anything.
+    const wrapped = new MoveSendError('nope', [FLEET_ID]);
+    expect(wrapped.message).toBe('move refused');
+    expect(wrapped.err).toBe('nope');
+    expect(wrapped.requested).toEqual([FLEET_ID]);
+  });
+
+  it('a 2xx whose `requested` is not an array is read as unreadable, never indexed', async () => {
+    // The sibling of the `null`-body and non-object-`skipped` cases above, and
+    // the one `asAnswer` arm they leave: a body that PARSED fine and is an
+    // object, but whose promised arrays are not arrays. `.flatMap` over it
+    // would throw inside the `.then`, which is an unhandled rejection rather
+    // than a sentence.
+    vi.spyOn(api, 'applyUpdate').mockResolvedValue(
+      { ok: true, requested: 'fleet', skipped: [] } as unknown as MoveRequestAnswer);
+    const { onClose } = mount(plan(UP));
+    fireEvent.click(screen.getByRole('button', { name: 'Update v0.0.10' }));
+    // Unreadable, so: the toast, a close, and NO claim about which node moved.
+    expect(await screen.findByText(MOVE_UNREADABLE_TEXT, { selector: '.toast' })).toBeInTheDocument();
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('a transport failure is said in the sheet, with no "Blocked by" clause invented for it', async () => {
+    // `haltedBy` reads `refusal.body`, and a `TypeError` from `fetch` has
+    // none. Returning `[]` rather than throwing is what keeps the sentence a
+    // sentence; a `Blocked by:` with nothing after it would be worse than
+    // silence.
+    vi.spyOn(api, 'applyUpdate').mockRejectedValue(new TypeError('Failed to fetch'));
+    const { onClose } = mount(plan(UP));
+    fireEvent.click(screen.getByRole('button', { name: 'Update v0.0.10' }));
+    const said = await screen.findByRole('alert');
+    expect(said.textContent).toBe(apiErrorText(new TypeError('Failed to fetch')));
+    expect(said.textContent).not.toMatch(/Blocked by/);
+    expect(onClose, 'a refusal leaves the sheet open to retry').not.toHaveBeenCalled();
+  });
+
+  it('a dismissed move whose request REFUSED re-polls nothing — nothing was written', async () => {
+    // The reject arm's generation guard, and the half the dismiss-mid-sequence
+    // case above cannot reach: that one STOPS the loop after a node was
+    // requested, so its `requested` is non-empty and the reload is right. A
+    // refusal on the FIRST node has written nothing at all, so a reload would
+    // be a re-poll for an inventory that did not change — and the refusal
+    // itself must not land on a sheet the operator has already dismissed.
+    const first = Promise.withResolvers<MoveRequestAnswer | 'unreadable'>();
+    vi.spyOn(api, 'rollbackUpdate').mockReturnValueOnce(first.promise);
+    const onDone = vi.fn();
+    render(<DismissHarness first={plan(DOWN)} onDone={onDone} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Roll back to v0.0.8' }));
+    fireEvent.click(screen.getByTestId('sheet-overlay'));
+    await act(async () => {
+      first.reject(refusal('halted'));
+      await new Promise((r) => setTimeout(r, 0));
+    });
+    expect(onDone, 'no node was requested, so there is nothing to re-poll for').not.toHaveBeenCalled();
+    expect(screen.queryByRole('alert'), "the dismissed sheet's refusal renders nothing").toBeNull();
   });
 });

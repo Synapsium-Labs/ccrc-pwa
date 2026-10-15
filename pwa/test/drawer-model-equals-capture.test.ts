@@ -18,7 +18,7 @@ import path from 'node:path';
 import { Terminal } from '@xterm/xterm';
 import { PINNED_WINDOW_COLS, PINNED_WINDOW_ROWS, TMUX_STATUS_ROWS } from '../../shared/api';
 import { SYNTHETIC_SCREENS } from './fixtures/drawer/synthetic';
-import { defaultMakeTerm } from '../src/session/TerminalDrawer';
+import { defaultMakeTerm } from '../src/session/terminalFactory';
 import { readModel, rowText, isCaret, GLASS_ANSI, cellCss, type ModelCell } from '../src/session/drawerModel';
 
 const TERM_ROWS = PINNED_WINDOW_ROWS + TMUX_STATUS_ROWS;

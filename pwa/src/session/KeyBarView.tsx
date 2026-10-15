@@ -19,6 +19,7 @@
 // holds `pwa/src` to no such pair.
 import { useRef, useState } from 'react';
 import type { ReactNode } from 'react';
+import { Keycap } from '@ccrc/ui';
 import {
   GRID_KEYS,
   KEY_CAP,
@@ -142,16 +143,14 @@ export function KeyBar(props: KeyBarProps): ReactNode {
   const [more, setMore] = useState(false);
   const { guard } = props;
   const cap = (k: KeyName): ReactNode => (
-    <button
+    <Keycap
       key={k}
-      type="button"
-      className="keycap"
       aria-label={KEY_CAP[k].label}
       onPointerDown={keepFocus}
       onClick={() => guard.send(KEY_SEQ[k])}
     >
       <span aria-hidden="true">{KEY_CAP[k].legend}</span>
-    </button>
+    </Keycap>
   );
 
   // THE CONFIRM takes the keys' place, in either view, until it is answered:
@@ -165,24 +164,21 @@ export function KeyBar(props: KeyBarProps): ReactNode {
           <span className="term-confirm-word" role="alert">
             Claude Code will exit
           </span>
-          <button
-            type="button"
-            className="keycap"
+          <Keycap
             aria-label={`Send ${KEY_CAP[k].label}`}
             onPointerDown={keepFocus}
             onClick={guard.confirm}
           >
             <span aria-hidden="true">{`send ${KEY_CAP[k].legend}`}</span>
-          </button>
-          <button
-            type="button"
-            className="keycap keycap--act"
+          </Keycap>
+          <Keycap
+            className="keycap--act"
             aria-label="Cancel"
             onPointerDown={keepFocus}
             onClick={guard.cancel}
           >
             <span aria-hidden="true">cancel</span>
-          </button>
+          </Keycap>
         </div>
         {props.action}
       </div>
@@ -218,31 +214,29 @@ export function KeyBar(props: KeyBarProps): ReactNode {
     <div className="term-keys term-keys--wrapped" role="toolbar" aria-label="Terminal keys">
       <div className="term-keys-seq">
         {PRIMARY_KEYS.map(cap)}
-        <button
-          type="button"
-          className="keycap keycap--act"
+        <Keycap
+          className="keycap--act"
           aria-label="More keys"
           aria-expanded={more}
           onPointerDown={keepFocus}
           onClick={toggleMore}
         >
           <span aria-hidden="true">⋯</span>
-        </button>
+        </Keycap>
       </div>
       {props.action}
       {more && (
         <div className="term-keys-more" role="group" aria-label="More terminal keys">
           {OVERFLOW_KEYS.map(cap)}
-          <button
-            type="button"
-            className="keycap keycap--act"
+          <Keycap
+            className="keycap--act"
             aria-label="Control"
             aria-pressed={latch.latched}
             onPointerDown={keepFocus}
             onClick={() => latch.setLatched(!latch.latched)}
           >
             <span aria-hidden="true">ctrl</span>
-          </button>
+          </Keycap>
         </div>
       )}
     </div>

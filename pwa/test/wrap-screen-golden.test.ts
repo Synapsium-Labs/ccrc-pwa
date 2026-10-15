@@ -122,10 +122,14 @@ const charWrapCount = (model: readonly ModelRow[], W: number): number =>
   model.reduce((n, row) => n + Math.max(1, Math.ceil(cellsWidth(row) / W)), 0);
 
 describe('the corpus', () => {
-  it('holds the six recorded screens, the twelve synthetic ones and the thirteen 220-wide pane captures', () => {
+  // THE PANE CAPTURES ARE A FLOOR, NOT A COUNT: they are the server's corpus
+  // (`server/test/fixtures/panes/`), which grows with the server's own work —
+  // thirteen were 220 wide when this file was written, and main's #417/#418
+  // added forty-three more. Every one of them is held to the properties below.
+  it('holds the six recorded screens, the twelve synthetic ones and at least the thirteen 220-wide pane captures', () => {
     expect(recorded.length).toBeGreaterThanOrEqual(6);
     expect(synthetic).toHaveLength(12);
-    expect(panes).toHaveLength(13);
+    expect(panes.length).toBeGreaterThanOrEqual(13);
     for (const s of [...recorded, ...synthetic]) expect(s.model, s.name).toHaveLength(PINNED_WINDOW_ROWS);
   });
 });

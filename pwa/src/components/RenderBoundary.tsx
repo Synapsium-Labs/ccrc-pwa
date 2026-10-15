@@ -13,13 +13,15 @@
 // be `undefined` or `null` (a `throw undefined` still shows the fallback). `key` is the `resetKey` the state was
 // derived for; a different one clears `failed`.
 //
-// Styles: `.render-fallback` in styles/shell.css, beside `.block-screen`; the buttons are `.btn-primary`
-// (components/primitives.css, `min-height: var(--tap-min)`). Both sheets are imported here so the root fallback,
-// which replaces the whole app, never depends on another module having loaded them.
+// Styles: `.render-fallback` in styles/shell.css, beside `.block-screen`, imported here so the root fallback, which
+// replaces the whole app, never depends on another module having loaded it. The buttons are `<Button>` from
+// @ccrc/ui (its utilities carry the `min-h-tap` floor; its hook class `.btn-primary` is what shell.css gives its
+// width back through), and those utilities ride `@ccrc/ui/styles/theme.css`, which `main.tsx` imports through
+// `styles/base.css` before the root boundary mounts.
 import { Component } from 'react';
 import type { ReactNode } from 'react';
+import { Button } from '@ccrc/ui';
 import { navigate } from '../lib/router';
-import './primitives.css';
 import '../styles/shell.css';
 
 export interface RenderBoundaryProps {
@@ -72,9 +74,9 @@ export function RootFallback({ reload = () => location.reload() }: { reload?: ()
   return (
     <div className="render-fallback render-fallback--root" role="alert">
       <p className="render-fallback-copy">ccrc could not draw this screen.</p>
-      <button type="button" className="btn-primary" onClick={() => reload()}>
+      <Button variant="primary" onClick={() => reload()}>
         Reload
-      </button>
+      </Button>
     </div>
   );
 }
@@ -84,9 +86,9 @@ export function ScreenFallback(): ReactNode {
   return (
     <div className="render-fallback" role="alert">
       <p className="render-fallback-copy">This screen could not be shown.</p>
-      <button type="button" className="btn-primary" onClick={() => navigate('/')}>
+      <Button variant="primary" onClick={() => navigate('/')}>
         Back to the fleet
-      </button>
+      </Button>
     </div>
   );
 }

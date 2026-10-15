@@ -13,7 +13,7 @@ import type { ReactNode } from 'react';
 import { BlockScreen } from './components/BlockScreen';
 import { LoginScreen } from './components/LoginScreen';
 import { RenderBoundary, ScreenFallback } from './components/RenderBoundary';
-import { ToastHost } from './components/Toast';
+import { ToastHost } from '@ccrc/ui';
 import { AccountsStrip } from './fleet/AccountsStrip';
 import { useAuthLost } from './lib/auth';
 import { navigate, useLocation } from './lib/router';

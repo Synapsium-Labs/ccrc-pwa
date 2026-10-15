@@ -28,7 +28,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render } from '@testing-library/react';
 import type { Terminal as XTerm } from '@xterm/xterm';
-import type { DrawerTerm, MakeTerm } from '../src/session/TerminalDrawer';
+import type { DrawerTerm, MakeTerm } from '../src/session/terminalFactory';
 import { PINNED_WINDOW_COLS, PINNED_WINDOW_ROWS, TMUX_STATUS_ROWS } from '../../shared/api';
 
 const made = vi.hoisted(() => ({ terms: [] as unknown[], resizes: [] as [number, number][] }));

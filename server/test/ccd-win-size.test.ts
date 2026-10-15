@@ -23,7 +23,7 @@
 // CONVENTION rather than of the table: every tmux argv in `server/src/exec.ts`
 // is a literal token array, and the wire-supplied values land as SINGLE tokens
 // (`tmuxTarget(id)` is one token, `sendLiteral`'s text is the one token after
-// `-l`). Measured on the same socket: `send-keys -t <s> -l ';'` and
+// `-l --`, D-5046). Measured on the same socket: `send-keys -t <s> -l ';'` and
 // `send-keys -t <s> -l '; set-option -g window-size manual'` both leave the
 // global at `latest`, and a `;` inside a `resize-window -x` value is refused
 // `width invalid`. A `;` only separates when it is its own argv element, and

@@ -2,7 +2,9 @@ import { describe, it, expect, afterEach, vi } from 'vitest';
 import { StrictMode } from 'react';
 import { act, cleanup, render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { RUN_STATES, SPAWN_STALL_MS, type ChildReclaimStatus, type CoordCapsView, type FleetSession, type RunSummary } from '../../shared/api';
+import { fleetSession } from './fleetFixture';
 import { RunsScreen } from '../src/screens/RunsScreen';
+import { navigate } from '../src/lib/router';
 import { CHILD_RECLAIM_CHIP_GLYPH, CROSSING_GLYPH, REVIEW_GLYPH, RUN_ORDER, RUN_WORD, childReclaimChip, childReclaimGone, childReclaimRefreshDue, childReclaimTitle, crossingNote, dispatchWindow, itemTallyLabel, programWave, programsWithOpenRun, resumeNote, runForSession, runHomeProject, runItems, runKindChip, waveLabel } from '../src/fleet/runWords';
 import { spawnChip, spawnVerdictChip } from '../src/fleet/spawnWords';
 import { api } from '../src/lib/api';
@@ -42,15 +44,7 @@ const r = (over: Partial<RunSummary> = {}): RunSummary => ({
             coordKickoffPendingSince: null }, childReclaim: null, ...over,
 });
 
-const sess = (over: Partial<FleetSession> = {}): FleetSession => ({
-  id: 'ccrc-pwa-clear-cove', wrapper: 'claude', home: 'claude', project: 'ccrc-pwa',
-  workdir: '/w', workspace: 'clear-cove', name: null, status: 'idle', statusUpdatedAt: null,
-  limits: null, dialogPending: false, version: null, model: null, effort: null, ultracode: false,
-  branch: 'ws/clear-cove', ctxPct: null, paneCols: null, tasks: null, pr: null, archivedAt: null, archivedBytes: null,
-  hookState: null, askSummary: null, subagents: null, graphQueries: null, graphGateDenials: null, held: null,
-  bucket: 'working', bucketSince: null, unmeasured: [], statusUnmeasured: false,
-  lifecycle: null, stoppedBy: null, swapBlocked: null, stranded: null, substrate: null, started: true, spawnState: null, ask: null, usage: null, boardProject: null, route: null, child: { kind: 'none' }, releasedFrom: null, ...over,
-});
+const sess = (over: Partial<FleetSession> = {}): FleetSession => (fleetSession({ id: 'ccrc-pwa-clear-cove', project: 'ccrc-pwa', workspace: 'clear-cove', branch: 'ws/clear-cove', bucket: 'working', ...over }));
 
 const makeStore = (): FleetStore => createFleetStore({
   makeSocket: () => ({ onopen: null, onmessage: null, onclose: null, onerror: null, close(): void {} }) as unknown as WebSocket,
@@ -1721,5 +1715,99 @@ describe('the board re-reads the archive when a finished child leaves the fleet 
     act(() => { store.setState({ sessions: [] }); });               // this row's left, but it is settled
     await act(async () => { await Promise.resolve(); });
     expect(loadRuns).toHaveBeenCalledTimes(1);
+  });
+});
+
+// — the board's own three doors, and two rows nothing rendered —
+describe('the board’s doors', () => {
+  it('Back goes to the fleet', () => {
+    // `navigate('/')` — the only way off this screen on a phone, and it had
+    // no case at all (an uncovered function).
+    const store = makeStore();
+    act(() => { store.setState({ runs: [r()], runsFrameSeen: true }); });
+    render(<RunsScreen loadCaps={NO_CAPS} store={store} loadRuns={async () => ({ runs: [] })} />);
+    // Navigated AWAY first, so arriving at `/` is a real change: this file's
+    // route starts at `/` and a Back that navigated nowhere would be
+    // indistinguishable from one that worked.
+    navigate('/runs');
+    expect(location.pathname).toBe('/runs');
+    fireEvent.click(screen.getByRole('button', { name: 'Back to fleet' }));
+    expect(location.pathname, 'Back navigated nowhere').toBe('/');
+  });
+
+  it('the resume sheet closes, and a hand-over re-reads the finished half', async () => {
+    // TWO CALLBACKS, ONE DOOR, and the second is the one with a reason: a
+    // reclaim rewrites `claimedBy` on EVERY run of the program, terminal ones
+    // included, and the finished half of this board has no source but the
+    // cold read. Both were uncovered functions.
+    const store = makeStore();
+    // The Resume control is gated on a coordinator this board measured DEAD
+    // (`coordPresence`), so the row needs both a dead session and a seen
+    // fleet frame — without either, the door is correctly absent.
+    act(() => {
+      store.setState({
+        runs: [r({ claimedBy: 'ccrc-pwa-coordinator' })],
+        runsFrameSeen: true,
+        fleetFrameSeen: true,
+        conn: 'open',
+        sessions: [fleetSession({ id: 'ccrc-pwa-coordinator', project: 'ccrc-pwa',
+                                  status: 'dead', bucket: 'dead', lifecycle: 'orphan' })],
+      });
+    });
+    const load = vi.fn().mockResolvedValue({ runs: [] });
+    render(<RunsScreen loadCaps={NO_CAPS} store={store} loadRuns={load} />);
+    await waitFor(() => expect(load).toHaveBeenCalledTimes(1));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Resume run 3' }));
+    expect(await screen.findByText(/claims run 3/)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId('sheet-overlay'));
+    await waitFor(() => expect(screen.queryByText(/claims run 3/)).toBeNull());
+    expect(load, 'a dismissal is not a hand-over — nothing changed to re-read')
+      .toHaveBeenCalledTimes(1);
+  });
+
+  it('the start sheet closes without starting anything', async () => {
+    const store = makeStore();
+    act(() => { store.setState({ runs: [], runsFrameSeen: true }); });
+    render(<RunsScreen loadCaps={NO_CAPS} store={store} loadRuns={async () => ({ runs: [] })} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Start a program' }));
+    expect(await screen.findByLabelText(/program slug/i)).toBeInTheDocument();
+    fireEvent.click(screen.getAllByTestId('sheet-overlay').at(-1)!);
+    await waitFor(() => expect(screen.queryByLabelText(/program slug/i)).toBeNull());
+  });
+});
+
+describe('a row whose claimant or close time the board does not have', () => {
+  it('renders a run NOBODY claims without inventing a coordinator', async () => {
+    // `run.claimedBy === null` is a real shape — a `planned` row the
+    // coordinator opened before any dispatch. Looking a null up in the
+    // session map would be looking up `undefined`.
+    const store = makeStore();
+    act(() => { store.setState({ runs: [r({ claimedBy: null, state: 'planned' })], runsFrameSeen: true }); });
+    render(<RunsScreen loadCaps={NO_CAPS} store={store} loadRuns={async () => ({ runs: [] })} />);
+    expect(screen.getByText('clear-cove')).toBeInTheDocument();
+  });
+
+  it('sorts a finished run with no close time LAST rather than first', async () => {
+    // `(runClosedAt(b) ?? 0)`, and the field it reads is `closedAt` — NOT
+    // `clearedAt`, which is the child-reclaim stamp (measured: the first
+    // version of this case set `clearedAt` and the order came out backwards,
+    // because both rows then had no close time at all). A row the archive
+    // could not date must not sort as the newest thing that happened: the
+    // finished half is read newest first, so a zero is the honest place.
+    const store = makeStore();
+    act(() => { store.setState({ runs: [], runsFrameSeen: true }); });
+    const dated = r({ id: 11, state: 'done', workspace: 'dated-one', closedAt: Date.now() - 1000 });
+    const undated = r({ id: 12, state: 'done', workspace: 'undated-one', closedAt: null });
+    render(<RunsScreen loadCaps={NO_CAPS} store={store}
+                       loadRuns={async () => ({ runs: [undated, dated] })} />);
+    await screen.findByText('dated-one');
+    // The two rows' own order in the document, read off the text nodes the
+    // board renders for each workspace.
+    const body = document.body.textContent ?? '';
+    expect(body.indexOf('dated-one'),
+      'the undated row sorted above a row that has a real close time')
+      .toBeLessThan(body.indexOf('undated-one'));
   });
 });

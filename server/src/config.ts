@@ -5,7 +5,8 @@ import { defaultCoordDbPath } from './coord/db.js';
 import { defaultSessionsPath } from './auth/sessions.js';
 import { defaultPasskeysPath } from './auth/credentials.js';
 import { parseRoster, RosterError, type Roster } from '../../shared/roster.js';
-import { isNodeRole, type NodeRole } from '../../shared/api.js';
+import { isNodeRole } from '../../shared/node-role.js';
+import type { NodeRole } from '../../shared/api.js';
 
 export type FleetMode = 'local' | 'remote';
 

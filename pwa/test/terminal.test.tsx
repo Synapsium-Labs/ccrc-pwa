@@ -6,7 +6,8 @@
 // server then restores the session's canonical window size).
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
-import { TerminalDrawer, type DrawerTerm } from '../src/session/TerminalDrawer';
+import { TerminalDrawer } from '../src/session/TerminalDrawer';
+import type { DrawerTerm } from '../src/session/terminalFactory';
 import { PINNED_WINDOW_COLS, PINNED_WINDOW_ROWS, TMUX_STATUS_ROWS } from '../../shared/api';
 
 /** What every attach dials: the window's own size plus tmux's status row. */

@@ -1,0 +1,555 @@
+<title>ccrc Design System Audit</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap">
+<style>
+  /* Instrument readout: one measured column. Score header, dimension bars,
+     evidence rows, then the queue — ordered by value per effort, which is why
+     it is numbered. Accent is the console's own default account hue, cyan. */
+  :root {
+    --bg: #f6f8f8;
+    --surface: #ffffff;
+    --surface-2: #eceff1;
+    --fg: #131a1d;
+    --fg-2: #56636b;
+    --fg-3: #879299;
+    --edge: #dce2e5;
+    --edge-strong: #c3ccd1;
+    --accent: #0b6f80;
+    --ok: #2d7a4c;
+    --warn: #8d6310;
+    --crit: #a2383a;
+    --font-ui: 'IBM Plex Sans', system-ui, -apple-system, 'Segoe UI', sans-serif;
+    --font-mono: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #0d1113;
+      --surface: #151b1e;
+      --surface-2: #1c2428;
+      --fg: #e5ebee;
+      --fg-2: #98a5ac;
+      --fg-3: #6a767d;
+      --edge: #253035;
+      --edge-strong: #35444a;
+      --accent: #46bacd;
+      --ok: #5dbf7e;
+      --warn: #d3a149;
+      --crit: #e3716c;
+      color-scheme: dark;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #0d1113;
+    --surface: #151b1e;
+    --surface-2: #1c2428;
+    --fg: #e5ebee;
+    --fg-2: #98a5ac;
+    --fg-3: #6a767d;
+    --edge: #253035;
+    --edge-strong: #35444a;
+    --accent: #46bacd;
+    --ok: #5dbf7e;
+    --warn: #d3a149;
+    --crit: #e3716c;
+    color-scheme: dark;
+  }
+
+  body {
+    background: var(--bg);
+    color: var(--fg);
+    font-family: var(--font-ui);
+    font-size: 16px;
+    line-height: 1.55;
+    -webkit-font-smoothing: antialiased;
+  }
+  .page {
+    max-width: 62rem;
+    margin: 0 auto;
+    padding-inline: 20px;
+    padding-block: 40px 72px;
+  }
+  h1, h2, h3 { text-wrap: balance; margin: 0; }
+  p { margin: 0; max-width: 64ch; }
+  a { color: var(--accent); }
+
+  .eyebrow {
+    font-family: var(--font-mono);
+    font-size: 0.6875rem;
+    font-weight: 500;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--fg-3);
+  }
+  code, .mono { font-family: var(--font-mono); font-size: 0.875em; }
+  code {
+    background: var(--surface-2);
+    padding: 0.1em 0.35em;
+    border-radius: 3px;
+    overflow-wrap: anywhere;
+  }
+
+  /* ---- masthead ---- */
+  header.mast { display: grid; gap: 14px; margin-bottom: 40px; }
+  header.mast h1 { font-size: clamp(1.75rem, 1.2rem + 2.4vw, 2.6rem); font-weight: 600; letter-spacing: -0.02em; }
+  .sub { color: var(--fg-2); font-size: 1.0625rem; }
+  .mast-meta {
+    display: flex; flex-wrap: wrap; gap: 8px 18px;
+    font-family: var(--font-mono); font-size: 0.75rem; color: var(--fg-3);
+    border-top: 1px solid var(--edge); padding-top: 12px;
+  }
+
+  /* ---- score ---- */
+  .verdict {
+    display: flex; flex-wrap: wrap; align-items: baseline; gap: 10px 20px;
+    background: var(--surface);
+    border: 1px solid var(--edge);
+    border-left: 3px solid var(--accent);
+    border-radius: 4px;
+    padding: 20px 22px;
+    margin-bottom: 34px;
+  }
+  .verdict .big {
+    font-family: var(--font-mono);
+    font-size: 2.75rem; font-weight: 600; line-height: 1;
+    font-variant-numeric: tabular-nums;
+    color: var(--fg);
+  }
+  .verdict .big span { color: var(--fg-3); font-size: 1.5rem; font-weight: 400; }
+  .verdict p { flex: 1 1 22ch; min-width: 0; color: var(--fg-2); font-size: 0.9375rem; }
+
+  section { margin-block: 44px; }
+  section > h2 {
+    font-size: 1.0625rem; font-weight: 600; letter-spacing: -0.01em;
+    padding-bottom: 8px; border-bottom: 1px solid var(--edge-strong);
+    margin-bottom: 20px;
+  }
+
+  /* ---- dimension bars ---- */
+  .dims { display: grid; gap: 2px; }
+  .dim {
+    display: grid;
+    grid-template-columns: 11.5rem 2.5rem 1fr;
+    align-items: center;
+    gap: 14px;
+    padding: 11px 0;
+    border-bottom: 1px solid var(--edge);
+  }
+  .dim-name { font-weight: 500; font-size: 0.9375rem; }
+  .dim-score {
+    font-family: var(--font-mono); font-variant-numeric: tabular-nums;
+    font-size: 1.125rem; font-weight: 600; text-align: right;
+  }
+  .dim-score[data-band="high"] { color: var(--ok); }
+  .dim-score[data-band="mid"]  { color: var(--warn); }
+  .dim-right { min-width: 0; display: grid; gap: 6px; }
+  .track { height: 5px; background: var(--surface-2); border-radius: 3px; overflow: hidden; }
+  .fill { height: 100%; border-radius: 3px; background: var(--fg-3); }
+  .fill[data-band="high"] { background: var(--ok); }
+  .fill[data-band="mid"]  { background: var(--warn); }
+  .dim-ev { font-size: 0.8125rem; color: var(--fg-2); line-height: 1.5; }
+  @media (max-width: 640px) {
+    .dim { grid-template-columns: 1fr 2.5rem; }
+    .dim-right { grid-column: 1 / -1; }
+  }
+
+  /* ---- evidence lists ---- */
+  .finds { display: grid; gap: 18px; }
+  .find {
+    display: grid; gap: 6px;
+    padding-left: 14px;
+    border-left: 2px solid var(--edge-strong);
+  }
+  .find.good { border-left-color: var(--ok); }
+  .find.bad  { border-left-color: var(--crit); }
+  .find h3 { font-size: 0.9375rem; font-weight: 600; }
+  .find p { font-size: 0.9375rem; color: var(--fg-2); }
+  .find .ev {
+    font-family: var(--font-mono); font-size: 0.75rem; color: var(--fg-3);
+    overflow-wrap: anywhere;
+  }
+
+  /* ---- queue table ---- */
+  .scroll { overflow-x: auto; }
+  table { border-collapse: collapse; width: 100%; font-size: 0.875rem; }
+  th, td { text-align: left; padding: 10px 12px 10px 0; border-bottom: 1px solid var(--edge); vertical-align: top; }
+  th {
+    font-family: var(--font-mono); font-size: 0.6875rem; font-weight: 500;
+    letter-spacing: 0.08em; text-transform: uppercase; color: var(--fg-3);
+    white-space: nowrap;
+  }
+  td.n { font-family: var(--font-mono); color: var(--fg-3); width: 2.25rem; font-variant-numeric: tabular-nums; }
+  td.what { font-weight: 500; min-width: 13rem; }
+  td.why { color: var(--fg-2); min-width: 18rem; }
+  td.size { font-family: var(--font-mono); width: 3rem; }
+  tr.done td { color: var(--fg-3); }
+  tr.done td.what { text-decoration: line-through; text-decoration-color: var(--fg-3); font-weight: 400; }
+
+  .tag {
+    display: inline-block; font-family: var(--font-mono); font-size: 0.625rem;
+    letter-spacing: 0.06em; text-transform: uppercase;
+    padding: 2px 6px; border-radius: 3px; white-space: nowrap;
+    border: 1px solid var(--edge-strong); color: var(--fg-2);
+  }
+  .tag.landed { border-color: var(--ok); color: var(--ok); }
+  .tag.blocked { border-color: var(--warn); color: var(--warn); }
+
+  /* ---- rulings ---- */
+  .ruling {
+    background: var(--surface);
+    border: 1px solid var(--edge);
+    border-top: 3px solid var(--warn);
+    border-radius: 4px;
+    padding: 20px 22px;
+    display: grid; gap: 10px;
+    margin-bottom: 16px;
+  }
+  .ruling h3 { font-size: 1rem; font-weight: 600; }
+  .ruling p { font-size: 0.9375rem; color: var(--fg-2); }
+  .ruling .cost {
+    font-family: var(--font-mono); font-size: 0.75rem; color: var(--fg-3);
+    border-top: 1px solid var(--edge); padding-top: 10px;
+  }
+
+  .settled {
+    display: grid; gap: 10px;
+    background: var(--surface-2);
+    border-radius: 4px;
+    padding: 18px 20px;
+  }
+  .settled ul { margin: 0; padding-left: 1.1rem; display: grid; gap: 6px; }
+  .settled li { font-size: 0.875rem; color: var(--fg-2); }
+
+  footer {
+    margin-top: 56px; padding-top: 16px; border-top: 1px solid var(--edge);
+    font-family: var(--font-mono); font-size: 0.75rem; color: var(--fg-3);
+    display: grid; gap: 4px;
+  }
+</style>
+
+<div class="page">
+
+  <header class="mast">
+    <div class="eyebrow">@ccrc/ui · branch design-system</div>
+    <h1>ccrc Design System Audit</h1>
+    <p class="sub">Where the design system is strong, where it is thin, and the eleven things worth doing next. All of it is now done: eight landed, one refused with a measurement, and the two that change how the app looks were ruled on and landed too.</p>
+    <div class="mast-meta">
+      <span>31 components</span>
+      <span>166 tokens</span>
+      <span>12 palettes</span>
+      <span>3456 contrast assertions</span>
+      <span>3967 tests</span>
+    </div>
+  </header>
+
+  <div class="verdict">
+    <div class="big">8.5<span>&thinsp;/&thinsp;10</span></div>
+    <p>Unusual shape for a design system: the guard layer is better than most commercial ones, and nearly every weakness is a <em>coverage</em> gap rather than a <em>correctness</em> gap. Nothing here is wrong. Several things are simply absent.</p>
+  </div>
+
+  <section>
+    <h2>Scores by dimension</h2>
+    <div class="dims">
+
+      <div class="dim">
+        <div class="dim-name">Token system</div>
+        <div class="dim-score" data-band="high">9</div>
+        <div class="dim-right">
+          <div class="track"><div class="fill" data-band="high" style="width:90%"></div></div>
+          <div class="dim-ev">166 custom properties. App CSS declares <strong>zero</strong> hardcoded colours — all 8 hex matches in <code>pwa/src/**/*.css</code> sit inside comments. 1595 <code>var(--…)</code> against 139 literal <code>px</code>.</div>
+        </div>
+      </div>
+
+      <div class="dim">
+        <div class="dim-name">Theming</div>
+        <div class="dim-score" data-band="high">9</div>
+        <div class="dim-right">
+          <div class="track"><div class="fill" data-band="high" style="width:90%"></div></div>
+          <div class="dim-ev">10 of 12 palettes generated from seeds in <code>ui/design/make-themes.mjs</code>, with <code>themes:check</code> enforced in CI. <code>dark:</code> is a derived <code>@custom-variant</code>, not a hand-kept list.</div>
+        </div>
+      </div>
+
+      <div class="dim">
+        <div class="dim-name">Testing &amp; guards</div>
+        <div class="dim-score" data-band="high">9</div>
+        <div class="dim-right">
+          <div class="track"><div class="fill" data-band="high" style="width:90%"></div></div>
+          <div class="dim-ev">Six censuses plus five design tests — 3700 lines in <code>pwa/test</code>. Every component is named by at least one. Deduction: <code>ui/</code>'s own <code>npm test</code> is <code>tsc --noEmit</code>, so the package ships no runtime test of its own.</div>
+        </div>
+      </div>
+
+      <div class="dim">
+        <div class="dim-name">Adoption</div>
+        <div class="dim-score" data-band="high">8</div>
+        <div class="dim-right">
+          <div class="track"><div class="fill" data-band="high" style="width:80%"></div></div>
+          <div class="dim-ev">70 <code>&lt;Button&gt;</code> call sites against 53 raw <code>&lt;button&gt;</code> — and all 53 are enumerated and argued in <code>control-census.test.ts</code>. Every one of the 70 app <code>.tsx</code> files imports from <code>@ccrc/ui</code>.</div>
+        </div>
+      </div>
+
+      <div class="dim">
+        <div class="dim-name">Accessibility</div>
+        <div class="dim-score" data-band="high">8</div>
+        <div class="dim-right">
+          <div class="track"><div class="fill" data-band="high" style="width:80%"></div></div>
+          <div class="dim-ev">Focus ring owned by <code>ui/src/lib/focus.ts</code>, its contrast measured in all 12 palettes. <code>tap-targets.test.tsx</code> runs 732 lines. Against that: six controls measured under the 44px floor, two at roughly 19px — and axe never runs in CI.</div>
+        </div>
+      </div>
+
+      <div class="dim">
+        <div class="dim-name">Documentation</div>
+        <div class="dim-score" data-band="mid">7</div>
+        <div class="dim-right">
+          <div class="track"><div class="fill" data-band="mid" style="width:70%"></div></div>
+          <div class="dim-ev">All 31 components have a story. <code>ui/README.md</code> runs 171 lines and the component file headers are the best prose in the repo. There is no token reference and no "which one do I reach for" index.</div>
+        </div>
+      </div>
+
+      <div class="dim">
+        <div class="dim-name">Primitive coverage</div>
+        <div class="dim-score" data-band="mid">6</div>
+        <div class="dim-right">
+          <div class="track"><div class="fill" data-band="mid" style="width:60%"></div></div>
+          <div class="dim-ev">22 primitives and 9 composites, but form coverage stops at <code>TextInput</code>. Still raw in the app: 2 <code>&lt;select&gt;</code>, 4 <code>&lt;input&gt;</code>, 2 <code>&lt;textarea&gt;</code>. The system cannot render a dropdown.</div>
+        </div>
+      </div>
+
+      <div class="dim">
+        <div class="dim-name">API ergonomics</div>
+        <div class="dim-score" data-band="mid">6</div>
+        <div class="dim-right">
+          <div class="track"><div class="fill" data-band="mid" style="width:60%"></div></div>
+          <div class="dim-ev">Only 4 of 31 components carry typed variants through cva. The other 27 vary through <code>className</code> plus about twenty exported class-string constants — a second API surface beside each component.</div>
+        </div>
+      </div>
+
+    </div>
+  </section>
+
+  <section>
+    <h2>What is genuinely good</h2>
+    <div class="finds">
+
+      <div class="find good">
+        <h3>The guard layer is the product</h3>
+        <p>Six censuses, each written <em>after</em> measuring that the previous one was blind to a real copy, each carrying a mutation table in its own header. This is the repo's "a comment is a request; a red suite is a mechanism" doctrine actually executed rather than quoted.</p>
+        <div class="ev">shape-census argues its 72% threshold from measurement — 0.80 loses <code>.program-start-door</code>, 0.65 fills with noise. literal-census was written after a scan found 17 duplicated sentences, one of them in seven files, three of which carried a comment claiming it was not a second copy.</div>
+      </div>
+
+      <div class="find good">
+        <h3>The token-to-Tailwind bridge is guarded against its own two historical failures</h3>
+        <p>Both are invisible to the contrast gate, because they are declarations rather than rules: <code>@theme</code> without <code>inline</code> bakes one palette's value, and a self-referential alias silently drops the token. Twelve of those shipped once.</p>
+        <div class="ev">pwa/test/theme-bridge.test.ts — the only thing standing between the system and a repeat.</div>
+      </div>
+
+      <div class="find good">
+        <h3>The contrast gate is real and exhaustive</h3>
+        <p>3456 assertions across 12 palettes, every text-on-ground pair scraped from both packages' stylesheets, all passing. And the stylesheets argue in token terms rather than in hex.</p>
+        <div class="ev">chat.css explains why <code>--ink-on-well</code> rather than <code>--ink-secondary</code>: 2.44:1 on the well, measured.</div>
+      </div>
+
+      <div class="find good">
+        <h3>control-census answers a question almost no design system asks</h3>
+        <p>Not "does the primitive hit 44px" but "of the 48 controls the app draws by hand, how does each one reach the thumb" — with four verified answers. The <code>UNDER</code> arm is checked in the negative, so a control that quietly gains the token reds and demands re-classification. A preserved defect does not get to keep its excuse.</p>
+        <div class="ev">30 TOKEN · 6 SELECTOR · 6 UNDER · 2 OVERLAY · 2 INLINE · 1 VARIANT</div>
+      </div>
+
+      <div class="find good">
+        <h3>TextInput refuses a size variant, and is right to</h3>
+        <p>"A <code>size=&quot;sm&quot;</code> prop here would be a loaded gun pointed at mobile." Below 16px, iOS Safari zooms the page on focus. The refusal is the feature.</p>
+        <div class="ev">ui/src/primitives/text-input.tsx — <code>--fs-input: 16px</code>, no size axis.</div>
+      </div>
+
+    </div>
+  </section>
+
+  <section>
+    <h2>Where it is thin</h2>
+    <div class="finds">
+
+      <div class="find bad">
+        <h3>The design system cannot render a dropdown</h3>
+        <p>The same control is written in two files, held in agreement by nothing but a shared class string. Settings hand-rolls radio inputs whose tap floor lives on the wrapping label; the caps dial is a third shape. There is no <code>Select</code>, no <code>Radio</code>, no <code>Checkbox</code>.</p>
+        <div class="ev">pwa/src/fleet/NewSessionSheet.tsx:92 and pwa/src/screens/FleetScreen.tsx:341 — both <code>&lt;select className="route-select"&gt;</code></div>
+      </div>
+
+      <div class="find bad">
+        <h3>fleet.css is 3287 lines</h3>
+        <p>64% of the app's CSS, and more than twice the entire design system's component CSS. The censuses stop a <em>new</em> duplicate landing; nothing shrinks what is already there. The registry of registered duplicates is, in effect, the list of what to delete next.</p>
+        <div class="ev">380 rules in fleet.css against 245 rules / 1527 lines across 13 files in ui/. shape-census currently registers 16 duplicate clusters, 8 of them app-internal.</div>
+      </div>
+
+      <div class="find bad">
+        <h3>Architecture shaped by a test's key format</h3>
+        <p>Five duplicate clusters between <code>mail-strip.css</code> and <code>task-strip.css</code> survive because hoisting them would rekey every contrast-gate entry naming the old sheet. The shape has already migrated to <code>CollapsibleStrip</code>; only the skin stays twinned. This also blocks the <code>Select</code> primitive.</p>
+        <div class="ev">The gate's rule key is <code>&lt;basename&gt; &lt;selector&gt;</code>, so moving a rule between sheets moves its key.</div>
+      </div>
+
+      <div class="find bad">
+        <h3>Nothing in CI ever renders a component</h3>
+        <p><code>ui/</code>'s test script is a typecheck. The a11y addon is installed and dev-only. Vitest runs with <code>css: false</code>, and the contrast gate scrapes stylesheets rather than computed styles — so if <code>bg-raised</code> fell out of the button variant, every quiet control in the app would render transparent and the whole suite would stay green. <code>quiet-control.test.ts</code> says so in its own header.</p>
+        <div class="ev">Storybook builds and is thrown away. ci.yml names the missing piece: a test runner and a browser, which is a real dependency decision rather than a line of yaml.</div>
+      </div>
+
+    </div>
+  </section>
+
+  <section>
+    <h2>The queue</h2>
+    <p style="margin-bottom:18px; color:var(--fg-2); font-size:0.9375rem;">Ordered by value per effort. None of these change how the app looks — and all ten are now closed: eight landed, one refused with a measurement, and the <code>why</code> column below says what each one turned out to be.</p>
+    <div class="scroll">
+      <table>
+        <thead>
+          <tr><th>#</th><th>Do</th><th>Why</th><th>Size</th><th>State</th></tr>
+        </thead>
+        <tbody>
+          <tr class="done">
+            <td class="n">1</td>
+            <td class="what">Guard the class-string constants</td>
+            <td class="why">A file importing <code>TEXT_INPUT</code> or <code>CHIP</code> onto a raw element forks the component as surely as typing <code>btn-primary</code> by hand. Ownership is derived from the export statements, so a new primitive is covered the day it lands.</td>
+            <td class="size">S</td>
+            <td><span class="tag landed">landed</span></td>
+          </tr>
+          <tr class="done">
+            <td class="n">2</td>
+            <td class="what">Name the shared glyphs</td>
+            <td class="why">Three production sites across both packages each typed <code>✉</code>. Every census is structurally blind: a one-character literal is under literal-census's 25-char floor and has no space in it.</td>
+            <td class="size">S</td>
+            <td><span class="tag landed">landed</span></td>
+          </tr>
+          <tr class="done">
+            <td class="n">3</td>
+            <td class="what">Stable contrast-gate key</td>
+            <td class="why">The key is the SELECTOR now; keyframe stops keep their file. Unique by measurement rather than by hope — the gate reports a selector two sheets declare, and both arms are mutation-pinned. Measured: 19 sheets, 926 rules, 898 distinct selectors, cross-file repeats only <code>from</code> and <code>to</code>.</td>
+            <td class="size">M</td>
+            <td><span class="tag landed">landed</span></td>
+          </tr>
+          <tr class="done">
+            <td class="n">4</td>
+            <td class="what">Fold the app-internal duplicate clusters</td>
+            <td class="why">Nine of them, each one grouped selector — the move this repo already made for <code>.abandon-sheet, .archive-conflict-sheet</code> so a shared descendant is measured once. fleet.css 3287 → 3267. One did NOT fold and now says why: <code>.proj-dir</code> and <code>.proj-ready-why</code> sit on different grounds, so one rule would be measured against a ground half of it never sits on.</td>
+            <td class="size">M</td>
+            <td><span class="tag landed">landed</span></td>
+          </tr>
+          <tr class="done">
+            <td class="n">5</td>
+            <td class="what">Select primitive</td>
+            <td class="why"><code>SELECT = cn(TEXT_INPUT, 'px-2')</code> — derived, because the first draft spelled it out and literal-census named the line it shared with the text field. The width argument stopped being a cascade trick: tailwind-merge REMOVES <code>w-full</code> rather than losing a specificity tie to it.</td>
+            <td class="size">M</td>
+            <td><span class="tag landed">landed</span></td>
+          </tr>
+          <tr class="done">
+            <td class="n">6</td>
+            <td class="what">Hoist the mail-strip / task-strip skins</td>
+            <td class="why">Four of the five clusters are one rule each in <code>collapsible-strip.css</code>. The fifth stays twinned for a reason that is not the key format: <code>.mail-strip</code> sets <code>color</code> beside its <code>background</code> to be self-grounded, which is what lets its descendants be measured at all.</td>
+            <td class="size">M</td>
+            <td><span class="tag landed">landed</span></td>
+          </tr>
+          <tr class="done">
+            <td class="n">7</td>
+            <td class="what">Radio / RadioFieldset primitive</td>
+            <td class="why">Moved whole, because every one of its five rules turned out to be LAYOUT — no colour, so no ground travelled with the shape. The tap floor is the component's now. And the focus-ring guard went red the moment it existed: <code>.settings-option input</code> had left the focus cue to the UA default for its whole life.</td>
+            <td class="size">S/M</td>
+            <td><span class="tag landed">landed</span></td>
+          </tr>
+          <tr class="done">
+            <td class="n">8</td>
+            <td class="what">Storybook test-runner and axe in CI</td>
+            <td class="why">Taken. 152 stories through headless chromium with axe on each, additive and non-required like <code>test-macos</code>. It found four things on its first run — see below.</td>
+            <td class="size">M</td>
+            <td><span class="tag landed">landed</span></td>
+          </tr>
+          <tr class="done">
+            <td class="n">9</td>
+            <td class="what">Typed variant axes for Chip and Well</td>
+            <td class="why">REFUSED, measured. Chip's three modifiers are an account alias, one screen's contrast decision (its rule carries its own 3.17:1 measurement) and a typeface — three things one word would have to mean at once. Well's five classes are per-call-site layout, not tones. Both headers now carry the measurement so the next audit does not re-open it.</td>
+            <td class="size">M</td>
+            <td><span class="tag blocked">refused</span></td>
+          </tr>
+          <tr class="done">
+            <td class="n">10</td>
+            <td class="what">Token reference page in Storybook</td>
+            <td class="why"><code>Foundations/Tokens</code> reads the CSSOM: names off the <code>:root</code> rules the browser loaded, values from <code>getComputedStyle</code>. So the toolbar works — the page IS the palette rather than a picture of one — and there is no second parser to disagree with the gate.</td>
+            <td class="size">S/M</td>
+            <td><span class="tag landed">landed</span></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section>
+    <h2>What the work found that the audit could not</h2>
+    <p style="margin-bottom:18px; color:var(--fg-2); font-size:0.9375rem;">Four defects, none of them visible to a reading of the source — which is what the audit was. Each is fixed and each has a mechanism behind it now.</p>
+
+    <div class="finds">
+      <div class="find bad">
+        <h3><code>cn</code> was eating utilities on the way to the DOM</h3>
+        <p>tailwind-merge classifies an unknown utility by PREFIX, and this theme renames two families Tailwind v4 owns — so <code>text-input</code> and <code>text-2xs</code> read as text COLOURS and <code>font-regular</code> as a font FAMILY. Seven shipped class strings lost a utility: <code>TEXT_INPUT</code> and <code>SELECT</code> rendered with <em>no ink utility at all</em>, <code>Well</code> and <code>ControlRow</code> in the UI family rather than mono. Every guard in the tree reads the class STRING, and the string was right.</p>
+        <p class="ev">The new guard reads the composed CONSTANTS, not the per-file literals, because that is the only source that can see it: <code>TEXT_INPUT</code> is five literals with comments between them, so the two colliding utilities never meet in one literal. Deleting either group from <code>cn.ts</code> is 1 red; dropping the constant source is green, which is the finding.</p>
+      </div>
+
+      <div class="find bad">
+        <h3>A scrollable <code>&lt;pre&gt;</code> no keyboard could focus</h3>
+        <p><code>Well</code> is <code>max-h-well-max</code> plus <code>overflow-y-auto</code> — it scrolls by construction — and nothing could focus it, so a keyboard could not read past the fold of a long tool output. A mouse wheel and a finger always could.</p>
+        <p class="ev">axe <code>scrollable-region-focusable</code>, through the Storybook runner, on the <code>Tall</code> story. Found the first time a browser rendered this package.</p>
+      </div>
+
+      <div class="find bad">
+        <h3>The accessibility tree was dropping <code>TypedLabel</code>'s whole purpose</h3>
+        <p>The component exists to hold a stable accessible name while the visible text animates — its header argues that at length. The name was on a roleless <code>&lt;span&gt;</code>, where ARIA forbids it, so it was being discarded: the fleet line's button announced the typing animation after all.</p>
+        <p class="ev">axe <code>aria-prohibited-attr</code>. <code>role="img"</code> is the smallest role that both permits a name and tells a screen reader to announce it instead of walking the children.</p>
+      </div>
+
+      <div class="find bad">
+        <h3>Two stories modelled the app's own call sites wrong</h3>
+        <p>A nameless <code>Keycap</code> (all six real call sites pass <code>aria-label</code>) and a <code>CoverScreen</code> dialog with no name (<code>LoginScreen</code> does it right with <code>aria-labelledby</code>). A story that renders a nameless button teaches the next call site to write one — and the design system's documentation was the thing teaching it.</p>
+        <p class="ev">axe <code>button-name</code> and <code>aria-dialog-name</code>.</p>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Two that needed your ruling — both ruled, both landed</h2>
+    <p style="margin-bottom:18px; color:var(--fg-2); font-size:0.9375rem;">Both change how the app looks, so neither was a refactor's call to make. The ruling was: do both. Four controls left the census's UNDER arm, which is down from six to two.</p>
+
+    <div class="ruling" style="border-top-color:var(--ok)">
+      <h3>V1 &nbsp;· &nbsp;Grow the two session-header meta chips to 44px &nbsp;<span class="tag landed">landed</span></h3>
+      <p>At roughly 19px visible they were the smallest controls in the app, floored to 24px for one wave — and both are live choosers, not labels. The census had already proved an overlay cannot rescue them, because it would overhang the sibling chip and an overhang between two live choosers opens the wrong one.</p>
+      <p>The floor went on <code>button.metachip</code> rather than on <code>.metachip</code>, and that is what makes it safe: <code>.metachip--branch</code> is a <code>&lt;span&gt;</code> stating the branch and keeps its 24px box. A control gets the target; a label does not.</p>
+      <div class="cost">Landed: the session header on every screen, ~20px on one meta row.</div>
+    </div>
+
+    <div class="ruling" style="border-top-color:var(--ok)">
+      <h3>V2 &nbsp;· &nbsp;Grow the seen-bucket and compaction headers to 44px &nbsp;<span class="tag landed">landed</span></h3>
+      <p>24px and roughly 29px, both argued at length in the stylesheet as deliberate WCAG&nbsp;2.5.8-only choices, and the last wave deferred them on purpose: 44 adds about 15px to <em>every</em> compaction marker in a transcript.</p>
+      <p>The ruling weighed that against the axis a thumb actually misses on — a full-width disclosure is easy to hit horizontally and was short only vertically — and against an ack that cannot be undone. Both arguments survive in the stylesheets, now as history rather than as a deferral.</p>
+      <div class="cost">Landed: every transcript, and the fleet's bucket bars.</div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Already settled — do not re-open</h2>
+    <div class="settled">
+      <p style="font-size:0.9375rem;">Each of these is a mechanism that exists, is mutation-tested, and runs in CI. Adding a second one is churn.</p>
+      <ul>
+        <li>Focus ring contrast — <code>focus-ring.test.ts</code>, all 12 palettes</li>
+        <li>Reduced motion — <code>motion-reduced.test.ts</code>; it knows <code>transition</code> does not inherit</li>
+        <li>Tap floor — <code>tap-targets.test.tsx</code> plus <code>control-census</code>, whose UNDER arm is down from six controls to two since V1 and V2</li>
+        <li>Duplicate CSS, markup and copy — <code>shape-census</code>, <code>markup-census</code>, <code>literal-census</code></li>
+        <li>Theme aliasing and palette drift — <code>theme-bridge</code>, <code>theme-catalogue</code>, <code>themes:check</code></li>
+        <li>A utility lost inside <code>cn</code> — <code>utility-pairs.test.ts</code>, over the composed constants</li>
+        <li>A selector declared by two sheets — <code>audit.mjs</code>, now that the gate's key is the selector</li>
+        <li>What a component actually RENDERS — <code>storybook-a11y</code>, 152 stories through headless chromium</li>
+        <li>RTL — deliberately not pursued. Three logical properties against about 26 physical ones, on a single-operator English console. Cost with no reader.</li>
+      </ul>
+    </div>
+  </section>
+
+  <footer>
+    <div>First measured on <span class="mono">a05de021</span>; queue, rulings and a merge of <span class="mono">main</span> worked through to <span class="mono">76a1c8a0</span>, branch <span class="mono">design-system</span>.</div>
+    <div>THIS FILE IS THE RECORD. It was a claude.ai artifact twice and was lost twice — a link is not a place to keep a decision, so it lives beside the designs it audits, in the one form that survives: <span class="mono">docs/superpowers/specs/2026-10-11-design-system-audit.html</span>, next to <span class="mono">2026-10-07-box-token-lifecycle-design.html</span>, which is here for the same reason.</div>
+    <div>Every argument on this page is also in the code it argues about — a component header, a CSS rule's comment, or a census entry. That is the copy that cannot be deleted out from under the next reader; this one is the map.</div>
+    <div>Suite 4031 passed / 138 files · 152 stories pass axe in chromium · tsc clean in both packages · contrast gate ALL 3372 PASS.</div>
+    <div>The gate's row count fell from 3456 because five rules are measured once instead of twice — the same pixels, grouped.</div>
+  </footer>
+
+</div>

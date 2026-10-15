@@ -11,15 +11,14 @@ import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
 import { substrateFault } from '../../../shared/api';
 import type { FleetSession, PrView } from '../../../shared/api';
-import { Sheet } from '../components/Sheet';
-import { QuickConfirm } from '../components/QuickConfirm';
-import { toast } from '../components/Toast';
+import { Button, QuickConfirm, Sheet, TextInput, TEXT_INPUT_INLINE, buttonVariants, toast } from '@ccrc/ui';
 import { api, apiErrorText } from '../lib/api';
 import { ArchiveConflictSheet, runOpenRuns, type ArchiveConflictRun } from '../fleet/ArchiveConflictSheet';
 import { isRunClosed } from '../fleet/runWords';
 import { useFleetStore, type FleetStore } from '../stores/fleet';
 import { checkPhrase, prSentence, tooltipSentence, UNCHECKED_PR } from './PrKeycap';
 import './chat.css';
+import { substrateFaultText } from '../fleet/substrateWords';
 
 /** The one fact every merged-and-unarchived note below opens with, spelled
  *  once because it is the same fact in all three: nothing archives on merge,
@@ -27,6 +26,27 @@ import './chat.css';
  *  way out of. What differs between the arms is only what archiving costs
  *  from here. */
 const NOT_ARCHIVED = 'Not archived — ccrc does not archive on merge.';
+
+/** The one door out of this sheet to the PR itself.
+ *
+ *  THREE BYTE-IDENTICAL COPIES, text included. Neither census caught it: the
+ *  literal half reads static `className` strings and this one is a
+ *  `buttonVariants()` CALL, and the block half's floor is three elements
+ *  while this is one. So it was found by reading — recorded here rather than
+ *  by widening a census to single elements, which would name every `<span>`
+ *  in the tree.
+ *
+ *  AN ANCHOR WEARING A BUTTON. It navigates off the app, so it is an `<a>`
+ *  with `rel="noreferrer"`; the look is the design system's ghost button, and
+ *  `control-census.test.ts`'s VARIANT arm checks that `buttonVariants()`
+ *  still carries the tap floor this anchor relies on. */
+function OpenOnGitHub({ url }: { url: string }): ReactNode {
+  return (
+    <a className={buttonVariants({ variant: 'ghost' })} href={url} target="_blank" rel="noreferrer">
+      Open on GitHub
+    </a>
+  );
+}
 
 export function PrSheet({
   session, open, onClose, onReap,
@@ -121,7 +141,7 @@ export function PrSheet({
   // derived fault per render, the chip's own string on `title`, read through
   // `substrateFault` (the live frame is cast, not revived).
   const fault = substrateFault(session);
-  const faultTitle = fault !== null ? `tmux unreachable — ${fault.text}` : undefined;
+  const faultTitle = fault === null ? undefined : substrateFaultText(fault);
 
   /** The archive door. It is NOT `act('Archiving', …)`: a `409 run-open` is not
    *  a failure the operator can act on from a toast — the refusal names WHICH
@@ -172,7 +192,7 @@ export function PrSheet({
           <p className="pr-lede">{lede}</p>
 
           {pr?.phase === 'unchecked' && (
-            <button type="button" className="btn-ghost" onClick={load} disabled={busy}>Check now</button>
+            <Button variant="ghost" onClick={load} disabled={busy}>Check now</Button>
           )}
 
           {pr?.phase === 'no-commits' && (
@@ -186,17 +206,17 @@ export function PrSheet({
                string, not a different sentence (fix round 3, P6): a `title`
                shows markdown ticks as ticks, and the "Pull request: " opener
                is already carried by the lede one line above. */
-            <button type="button" className="btn-primary" disabled title={tooltipSentence(lede)}>
+            <Button variant="primary" disabled title={tooltipSentence(lede)}>
               Open pull request
-            </button>
+            </Button>
           )}
 
           {pr?.phase === 'none' && (
             <>
               <label className="pr-label" htmlFor="pr-title">Title</label>
               {/* One field, one thumb height. */}
-              <input id="pr-title" className="pr-title-input" type="text" value={title}
-                     onChange={(e) => setTitle(e.target.value)} />
+              <TextInput id="pr-title" className={`pr-title-input ${TEXT_INPUT_INLINE}`} value={title}
+                         onChange={(e) => setTitle(e.target.value)} />
               <label className="pr-label" htmlFor="pr-body">Body preview</label>
               {/* Read-only: a multi-line editor in a bottom sheet is a bad
                   surface, and the body is fully regenerable — prose edits
@@ -224,14 +244,14 @@ export function PrSheet({
                   ccrc could not read this worktree, so it cannot say whether anything is uncommitted.
                 </p>
               )}
-              <button type="button" className="btn-primary" disabled={busy || session.status === 'busy'}
+              <Button variant="primary" disabled={busy || session.status === 'busy'}
                       onClick={() => setConfirm('open')}>
                 Open pull request
-              </button>
-              <button type="button" className="btn-ghost" disabled={busy || session.status === 'busy'}
+              </Button>
+              <Button variant="ghost" disabled={busy || session.status === 'busy'}
                       onClick={() => setConfirm('draft')}>
                 Open as draft
-              </button>
+              </Button>
             </>
           )}
 
@@ -255,13 +275,13 @@ export function PrSheet({
                 <p className="pr-check-names" data-testid="pr-check-names">{pr.checkNames.join(', ')}</p>
               )}
               {pr.url !== null && (
-                <a className="btn-ghost" href={pr.url} target="_blank" rel="noreferrer">Open on GitHub</a>
+                <OpenOnGitHub url={pr.url} />
               )}
-              <button type="button" className="btn-ghost"
+              <Button variant="ghost"
                       onClick={() => { void navigator.clipboard?.writeText(pr.url ?? ''); toast('Link copied', 'info'); }}>
                 Copy link
-              </button>
-              <button type="button" className="btn-ghost" onClick={load} disabled={busy}>Refresh</button>
+              </Button>
+              <Button variant="ghost" onClick={load} disabled={busy}>Refresh</Button>
               {/* ONE sentence, no arms. This is the branch an operator reads
                   for the WHOLE of a wave — a PR sits open for hours — so what
                   it says the merge will do has to be exact, which is why it
@@ -282,17 +302,17 @@ export function PrSheet({
           {pr?.phase === 'merged' && (
             <>
               {pr.url !== null && (
-                <a className="btn-ghost" href={pr.url} target="_blank" rel="noreferrer">Open on GitHub</a>
+                <OpenOnGitHub url={pr.url} />
               )}
               {archived ? (
                 <>
                   <p className="pr-note">Archived — session stopped; nothing deleted</p>
-                  <button type="button" className="btn-ghost" disabled={busy}
+                  <Button variant="ghost" disabled={busy}
                           onClick={() => void act('Restoring', () => api.restore(session.id))}>
                     Restore
-                  </button>
-                  <button type="button" className="btn-ghost" disabled={fault !== null}
-                          title={faultTitle} onClick={onReap}>Clean up…</button>
+                  </Button>
+                  <Button variant="ghost" disabled={fault !== null}
+                          title={faultTitle} onClick={onReap}>Clean up…</Button>
                 </>
               ) : (
                 <>
@@ -336,10 +356,10 @@ export function PrSheet({
                         ? `${NOT_ARCHIVED} Run ${claimingRun.id} (${claimingRun.program} wave ${claimingRun.wave}${claimingRun.waveOf === null ? '' : `/${claimingRun.waveOf}`}) is still open on this workspace, so Archive now will ask you to confirm before it takes the worktree out from under that run.`
                         : `${NOT_ARCHIVED} This workspace stays live until you archive it below.`}
                   </p>
-                  <button type="button" className="btn-ghost" disabled={busy || fault !== null}
+                  <Button variant="ghost" disabled={busy || fault !== null}
                           title={faultTitle} onClick={() => void archiveNow()}>
                     Archive now
-                  </button>
+                  </Button>
                 </>
               )}
             </>
@@ -356,13 +376,13 @@ export function PrSheet({
                   aria-label speaks. Deleting the second copy is the only fix
                   that makes the drift impossible rather than merely absent. */}
               {pr.url !== null && (
-                <a className="btn-ghost" href={pr.url} target="_blank" rel="noreferrer">Open on GitHub</a>
+                <OpenOnGitHub url={pr.url} />
               )}
             </>
           )}
 
           {pr?.phase === 'unknown' && (
-            <button type="button" className="btn-ghost" onClick={load} disabled={busy}>Retry</button>
+            <Button variant="ghost" onClick={load} disabled={busy}>Retry</Button>
           )}
         </div>
       </Sheet>

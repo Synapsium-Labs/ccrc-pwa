@@ -26,7 +26,7 @@ import { Terminal } from '@xterm/xterm';
 import '@xterm/xterm/css/xterm.css';
 import '../src/styles/base.css';
 import '../src/session/chat.css';
-import { Sheet } from '../src/components/Sheet';
+import { Keycap, Sheet } from '@ccrc/ui';
 import { useKeyboardInset } from '../src/lib/keyboard';
 import { useMediaQuery } from '../src/lib/useMediaQuery';
 import { PINNED_WINDOW_COLS, PINNED_WINDOW_ROWS, TMUX_STATUS_ROWS } from '../../shared/api';
@@ -525,35 +525,32 @@ function Spike(): ReactNode {
 
           {/* 3c0. The spike's own controls, OFF the key bar so the bar is the product's width */}
           <div style={{ display: 'flex', gap: 'var(--sp-2)', padding: '0 var(--sp-3)', justifyContent: 'flex-end' }}>
-            <button
-              type="button"
-              className="keycap keycap--act"
+            <Keycap
+              className="keycap--act"
               data-testid="spike-toggle-field"
               aria-pressed={fieldToggle}
               onPointerDown={(e) => e.preventDefault()}
               onClick={() => setFieldToggle((v) => !v)}
             >
               <span aria-hidden="true">field</span>
-            </button>
-            <button
-              type="button"
-              className="keycap keycap--act"
+            </Keycap>
+            <Keycap
+              className="keycap--act"
               data-testid="spike-show-log"
               aria-pressed={logShown}
               onPointerDown={(e) => e.preventDefault()}
               onClick={() => setLogShown((v) => !v)}
             >
               <span aria-hidden="true">log</span>
-            </button>
-            <button
-              type="button"
-              className="keycap keycap--act"
+            </Keycap>
+            <Keycap
+              className="keycap--act"
               data-testid="spike-clear-log"
               onPointerDown={(e) => e.preventDefault()}
               onClick={() => window.spikeClear()}
             >
               <span aria-hidden="true">clear</span>
-            </button>
+            </Keycap>
           </div>
 
           {/* 3c. The key bar */}
@@ -569,16 +566,14 @@ function Spike(): ReactNode {
               { legend: '^C', label: 'Ctrl C', seq: '\x03' },
               { legend: '⌫', label: 'Backspace', seq: '\x7f' },
             ] as const).map((k) => (
-              <button
+              <Keycap
                 key={k.label}
-                type="button"
-                className="keycap"
                 aria-label={k.label}
                 onPointerDown={(e) => e.preventDefault()}
                 onClick={() => { log('bar', esc(k.seq)); feed(k.seq); }}
               >
                 <span aria-hidden="true">{k.legend}</span>
-              </button>
+              </Keycap>
             ))}
             </div>
           </div>
@@ -656,10 +651,9 @@ function FieldRow(): ReactNode {
           resize: 'none',
         }}
       />
-      <button
-        type="button"
+      <Keycap
         data-testid="spike-type"
-        className="keycap keycap--act"
+        className="keycap--act"
         onPointerDown={(e) => e.preventDefault()}
         onClick={() => {
           const ta = ref.current;
@@ -671,7 +665,7 @@ function FieldRow(): ReactNode {
         }}
       >
         <span aria-hidden="true">Type</span>
-      </button>
+      </Keycap>
     </div>
   );
 }

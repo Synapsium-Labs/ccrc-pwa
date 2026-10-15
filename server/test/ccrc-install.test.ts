@@ -55,7 +55,7 @@
 //     does not get', a `describeDarwin` block whose body STILL RUNS on Linux
 //   - `converged` — 'ccrc install: linger, the account dirs, the hooks and
 //     the wrappers'
-//   - `skillBox` — 'ccrc install: all three skills reach every rostered
+//   - `skillBox` — 'ccrc install: all four skills reach every rostered
 //     account'
 // So a mutation of any containment line these runs depend on reaches a real
 // `ccrc install` the moment the file is imported, whatever `-t` says. That
@@ -66,7 +66,7 @@
 // recorder. Measure containment pins through `ccrc-uninstall.test.ts`'s
 // harness-level cases instead, which build envs and call checks and never a
 // verb (Task 11 review fix round 3).
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, beforeAll } from 'vitest';
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import * as pty from 'node-pty';
 import {
@@ -77,7 +77,7 @@ import {
 import path, { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createHash, randomBytes } from 'node:crypto';
-import { mkTmp } from './tmpHelpers.js';
+import { mkTmp, removeTmpFixturesEachTest } from './tmpHelpers.js';
 import { DEFAULT_TEST_ROSTER } from './helpers.js';
 import { renderCcdEntry } from './ccdWsHelpers.js';
 import { ccrcContainedEnv } from './ccrcContainment.js';
@@ -100,6 +100,11 @@ import {
 } from './codexLaneFixture.js';
 import { docsProbeProgram } from './docsHelperPy.js';
 import { DOCS_INDEX_READY } from './docsIndexFixtures.js';
+
+// R20a's cure (review 462's S1): each case's homes go when the case ends, so the file's one end-of-file sweep
+// (tmpHelpers' afterAll) is left only what collection time and a describe's beforeAll made. The two lazy fleet
+// installs below make their homes in a beforeAll for that reason.
+removeTmpFixturesEachTest();
 
 /** The two python3 invocations ccd's Docs front makes when the closing
  *  doctor's `docs` check runs the installed ccd (Docs W1a): the floor probe,
@@ -2299,7 +2304,7 @@ describe('ccrc install: the executables and files it installs', () => {
       [join(home, '.cc-sessions', 'install-session-hooks.sh'),
         placed(home, 'ccd', 'install-session-hooks.sh'), 0o755],
       [join(home, '.cc-sessions', 'notify.sh'), placed(home, 'deploy', 'notify.sh'), 0o755],
-      // The three skill installers (worker-skill Task 4, reviewer-skill
+      // The four skill installers (worker-skill Task 4, reviewer-skill
       // Task 10) are the same kind of artifact as the hooks installer beside
       // them — a script the box EXECUTES — and land through the same
       // `_inst_atomic`. 0755 is not decoration here: `_inst_skills` runs each
@@ -2312,6 +2317,9 @@ describe('ccrc install: the executables and files it installs', () => {
         placed(home, 'ccd', 'install-worker-skill.sh'), 0o755],
       [join(home, '.cc-sessions', 'install-reviewer-skill.sh'),
         placed(home, 'ccd', 'install-reviewer-skill.sh'), 0o755],
+      // ccrc history W1-B2: the fourth roster-reading skill installer, through the same `_inst_atomic`.
+      [join(home, '.cc-sessions', 'install-history-skill.sh'),
+        placed(home, 'ccd', 'install-history-skill.sh'), 0o755],
       // graphify Task 3: `_inst_graphify_skill` stages this beside the other
       // two, through the same `_inst_atomic`, right after `_inst_skills`.
       [join(home, '.cc-sessions', 'install-graphify-skill.sh'),
@@ -2355,11 +2363,12 @@ describe('ccrc install: the executables and files it installs', () => {
       join(home, '.cc-sessions', 'session-hook.sh'),
       join(home, '.cc-sessions', 'install-session-hooks.sh'),
       join(home, '.cc-sessions', 'notify.sh'),
-      // The three skill installers `_inst_skills` stages beside them, through
+      // The four skill installers `_inst_skills` stages beside them, through
       // the same `_inst_atomic` (worker-skill Task 4, reviewer-skill Task 10).
       join(home, '.cc-sessions', 'install-coordinator-skill.sh'),
       join(home, '.cc-sessions', 'install-worker-skill.sh'),
       join(home, '.cc-sessions', 'install-reviewer-skill.sh'),
+      join(home, '.cc-sessions', 'install-history-skill.sh'),
       // graphify Task 3: staged beside them, through the same `_inst_atomic`.
       join(home, '.cc-sessions', 'install-graphify-skill.sh'),
       join(home, '.tmux.conf'),
@@ -4846,8 +4855,12 @@ describeDarwin('ccrc install --role fleet: the agent job, and the one this box m
   // `curl … | bash` stdin is the installer script and a read there would take
   // a line of shell as this fleet's bearer token.
   let once: Promise<{ home: string; r: Result }> | null = null;
+  // Every case reads this one home, so it is made in a beforeAll, before the first case's mark:
+  // removeTmpFixturesEachTest leaves it to the end-of-file sweep.
+  let launchdHome = '';
+  beforeAll(() => { launchdHome = freshBox('ccrc-install-fleet-launchd-'); }, 60_000);
   const box = (): Promise<{ home: string; r: Result }> => (once ??= (async () => {
-    const home = freshBox('ccrc-install-fleet-launchd-');
+    const home = launchdHome;
     const r = await runInstallTty(home, ['install', '--role', 'fleet'], [FLEET_URL, FLEET_TOKEN]);
     return { home, r };
   })());
@@ -5171,7 +5184,7 @@ describe('ccrc install: linger, the account dirs, the hooks and the wrappers', (
   });
 });
 
-describe('ccrc install: all three skills reach every rostered account', () => {
+describe('ccrc install: all four skills reach every rostered account', () => {
   // ── THE ASYMMETRY THIS STEP CLOSES ──────────────────────────────────────
   // `deploy/deploy.sh agent <host>` has shipped the coordinator skill to the
   // fleet host since Build 7 and now ships the worker and reviewer skills
@@ -5202,18 +5215,23 @@ describe('ccrc install: all three skills reach every rostered account', () => {
     expect(skillBox.r.stdout).toMatch(/^install: skills: /m);
   });
 
-  it('lands ALL THREE skills in every account config dir the roster names', () => {
+  it('lands ALL FOUR skills in every account config dir the roster names', () => {
     const { home } = skillBox;
     for (const d of ROSTER_DIRS) {
       for (const [name, src] of [
         ['ccrc-coordinator', 'coordinator-skill'], ['ccrc-worker', 'worker-skill'],
-        ['ccrc-reviewer', 'reviewer-skill'],
+        ['ccrc-reviewer', 'reviewer-skill'], ['ccrc-history', 'history-skill'],
       ] as const) {
         const md = join(home, d, 'skills', name, 'SKILL.md');
         expect(existsSync(md), `${d}: ${name} never reached this home`).toBe(true);
         expect(readFileSync(md), `${d}: ${name} is not the shipped skill`)
           .toEqual(readFileSync(placed(home, 'ccd', src, 'SKILL.md')));
       }
+      // …and ccrc-history's MIT notice travelled with it (ccrc history spec §12): its installer refuses a source
+      // without the sidecar, and `cp -a` is what carries it into each home.
+      expect(readFileSync(join(home, d, 'skills', 'ccrc-history', 'LICENSE.lossless-claw')),
+        `${d}: ccrc-history arrived without its LICENSE.lossless-claw`)
+        .toEqual(readFileSync(placed(home, 'ccd', 'history-skill', 'LICENSE.lossless-claw')));
       // …and the coordinator's tree arrived WHOLE, not as its first file. Its
       // own installer refuses a partial source by name, so this is the
       // assertion that says the refusal never had to fire — and the worker
@@ -5228,12 +5246,12 @@ describe('ccrc install: all three skills reach every rostered account', () => {
   it('stages each skill tree under ~/.cc-sessions, where the fleet deploy puts it', () => {
     // ONE PATH FOR BOTH LANES. `deploy.sh` rsyncs each tree to
     // `~/.cc-sessions/<name>` and runs the installer against that copy; this
-    // verb places the same three directories at the same three paths from the
+    // verb places the same four directories at the same four paths from the
     // tree it just put at `~/ccrc`. A box therefore looks the same afterwards
     // whichever lane converged it — which is what makes the installers' own
     // `CCRC_SKILL_SRC` default correct on a self-installed box.
     const { home } = skillBox;
-    for (const name of ['coordinator-skill', 'worker-skill', 'reviewer-skill']) {
+    for (const name of ['coordinator-skill', 'worker-skill', 'reviewer-skill', 'history-skill']) {
       const staged = join(home, '.cc-sessions', name);
       expect(existsSync(staged), `${name} was never staged in ~/.cc-sessions`).toBe(true);
       expect(readFileSync(join(staged, 'SKILL.md')))
@@ -5291,9 +5309,12 @@ describe('ccrc install: all three skills reach every rostered account', () => {
       join(home, '.claude', 'skills', 'ccrc-coordinator', 'references', 'wave-lifecycle.md'),
       join(home, '.claude', 'skills', 'ccrc-worker', 'SKILL.md'),
       join(home, '.claude', 'skills', 'ccrc-reviewer', 'SKILL.md'),
+      join(home, '.claude', 'skills', 'ccrc-history', 'SKILL.md'),
+      join(home, '.claude', 'skills', 'ccrc-history', 'LICENSE.lossless-claw'),
       join(home, '.cc-sessions', 'coordinator-skill', 'SKILL.md'),
       join(home, '.cc-sessions', 'worker-skill', 'SKILL.md'),
       join(home, '.cc-sessions', 'reviewer-skill', 'SKILL.md'),
+      join(home, '.cc-sessions', 'history-skill', 'SKILL.md'),
     ];
     const before = watched.map((p) => [statSync(p).ino, mtime(p)]);
     const r = runInstall(home);
@@ -5870,15 +5891,17 @@ describe('ccrc install: running the WHOLE verb twice', () => {
       join(home, '.cc-sessions', 'install-coordinator-skill.sh'),
       join(home, '.cc-sessions', 'install-worker-skill.sh'),
       join(home, '.cc-sessions', 'install-reviewer-skill.sh'),
+      join(home, '.cc-sessions', 'install-history-skill.sh'),
       // graphify Task 3: staged beside them, through the same `_inst_atomic`.
       join(home, '.cc-sessions', 'install-graphify-skill.sh'),
-      // …and the three staged skill TREES, which are not `_inst_atomic`
+      // …and the four staged skill TREES, which are not `_inst_atomic`
       // destinations at all: `_inst_tree_copy` converges a directory, and the
       // file inside it is what a re-run must not rewrite (worker-skill Task 4,
       // reviewer-skill Task 10).
       join(home, '.cc-sessions', 'coordinator-skill', 'SKILL.md'),
       join(home, '.cc-sessions', 'worker-skill', 'SKILL.md'),
       join(home, '.cc-sessions', 'reviewer-skill', 'SKILL.md'),
+      join(home, '.cc-sessions', 'history-skill', 'SKILL.md'),
       join(home, '.tmux.conf'),
       join(home, '.claude', 'statusline-command.sh'),
       // THE JOB FILES THIS PLATFORM ACTUALLY HAS. `UNIT_FILES` is systemd's
@@ -6009,8 +6032,12 @@ describe('ccrc install --role: the fleet lane (Stage 4, Task 5)', () => {
    *  never runs) until the guard fires the moment the loop unblocks. First
    *  `await` starts the run, inside a test, where the loop is free. */
   let fleetRun: Promise<{ home: string; r: Result }> | undefined;
+  // Every case reads this one home, so it is made in a beforeAll, before the first case's mark:
+  // removeTmpFixturesEachTest leaves it to the end-of-file sweep. The install itself still starts lazily, in a case.
+  let fleetHome = '';
+  beforeAll(() => { fleetHome = freshBox('ccrc-install-role-fleet-'); }, 60_000);
   const fleet = (): Promise<{ home: string; r: Result }> => (fleetRun ??= (async () => {
-    const home = freshBox('ccrc-install-role-fleet-');
+    const home = fleetHome;
     const r = await runInstallTty(home, ['install', '--role', 'fleet'], [FLEET_URL, FLEET_TOKEN]);
     return { home, r };
   })());
@@ -6359,11 +6386,13 @@ describe('install.sh: the bootstrap that hands off to ccrc install', () => {
     const root = installFixtureTree(home);
     copyFileSync(join(REPO, 'install.sh'), join(root, 'install.sh'));
     chmodSync(join(root, 'install.sh'), 0o755);
-    // `TREE_FILES` carries nothing under `pwa/` — nothing `ccrc install`
-    // itself reads resolves there. install.sh's `cd "$ROOT/pwa"` does, so the
-    // directory has to exist for the (stubbed) `npm ci`/`npm run build` calls
-    // to run at all; its contents are never read, since npm is a recorder.
+    // `TREE_FILES` carries nothing under `pwa/` or `ui/` — nothing `ccrc
+    // install` itself reads resolves there. install.sh's `cd "$ROOT/pwa"` and
+    // `cd "$ROOT/ui"` do, so the directories have to exist for the (stubbed)
+    // `npm ci`/`npm run build` calls to run at all; their contents are never
+    // read, since npm is a recorder.
     mkdirSync(join(root, 'pwa'), { recursive: true });
+    mkdirSync(join(root, 'ui'), { recursive: true });
     // The recorder REPLACES the copy `installFixtureTree` already placed at
     // `<root>/ccd/ccrc` (from TREE_FILES) — proof that install.sh resolves
     // `ccd/ccrc` relative to ITSELF (`$ROOT`, from its own `BASH_SOURCE`)
@@ -6392,12 +6421,16 @@ describe('install.sh: the bootstrap that hands off to ccrc install', () => {
     const r = spawnSync(BASH, [join(root, 'install.sh')], { env, encoding: 'utf8' });
     expect(r.status ?? -1, r.stderr ?? '').toBe(0);
 
-    // The build order install.sh's pinned code spells: ci in server, then
-    // ci+build in pwa, then build in server, then ci+build in agent (D-1159 —
-    // the agent joined because `ccrc install` refuses without its dist for
-    // every role but `server`, and until it did, a fleet-role install from
-    // source restarted a live fleet's agent onto a tree with no entry point).
+    // The build order install.sh's pinned code spells: ci in server, then ci
+    // in ui (installed, never built — pwa builds @ccrc/ui from SOURCE, whose
+    // imports resolve from ui/node_modules alone, so a fresh checkout's PWA
+    // build fails without it: PR #346's release-lane blocker), then ci+build
+    // in pwa, then build in server, then ci+build in agent (D-1159 — the
+    // agent joined because `ccrc install` refuses without its dist for every
+    // role but `server`, and until it did, a fleet-role install from source
+    // restarted a live fleet's agent onto a tree with no entry point).
     expect(read(join(home, 'npm-argv')).trim().split('\n')).toEqual([
+      'ci --no-audit --no-fund',
       'ci --no-audit --no-fund',
       'ci --no-audit --no-fund',
       'run build',
@@ -6407,6 +6440,7 @@ describe('install.sh: the bootstrap that hands off to ccrc install', () => {
     ]);
     expect(read(join(home, 'npm-cwd')).trim().split('\n')).toEqual([
       join(root, 'server'),
+      join(root, 'ui'),
       join(root, 'pwa'),
       join(root, 'pwa'),
       join(root, 'server'),
@@ -8342,6 +8376,11 @@ describeLinux('ccrc install: a timer systemd refuses is a COUNTED degraded step 
  *  W4, spec 2026-10-01 §7.2), by the live-shape case on the W4 tree: the three
  *  maps each gained `"docs-sw": "SKIP"` (the `--role fleet` box records
  *  `CCRC_ROLE=fleet` and serves no PWA bundle) and nothing else moved.
+ *  RE-MEASURED again when doctor gained its `transcripts` check (#189, the
+ *  forked-session continued-in chain), by the live-shape case on Linux CI on
+ *  that PR's merged tree: the three maps each gained `"transcripts": "PASS"`
+ *  (the fresh fleet box's registry holds no row reading a superseded
+ *  transcript) and nothing else moved.
  *  It is a golden: nothing re-measures
  *  it, so a merge-up that moves a doctor check's class on the live shape reds
  *  the live-shape case until Step 3 is re-run on a disposable copy of the new
@@ -8403,6 +8442,7 @@ const BASE_LIVE_SHAPE: LiveShapeMeasure = {
         "timeout": "PASS",
         "tmux": "PASS",
         "tmux_skew": "PASS",
+        "transcripts": "PASS",
         "update-exposure": "SKIP",
         "update-sync": "WARN",
         "wrappers": "PASS"
@@ -8455,6 +8495,7 @@ const BASE_LIVE_SHAPE: LiveShapeMeasure = {
         "timeout": "PASS",
         "tmux": "PASS",
         "tmux_skew": "PASS",
+        "transcripts": "PASS",
         "update-exposure": "SKIP",
         "update-sync": "WARN",
         "wrappers": "PASS"
@@ -8577,6 +8618,7 @@ const BASE_LIVE_SHAPE: LiveShapeMeasure = {
       "timeout": "PASS",
       "tmux": "PASS",
       "tmux_skew": "PASS",
+        "transcripts": "PASS",
       "update-exposure": "SKIP",
       "update-sync": "WARN",
       "wrappers": "PASS"

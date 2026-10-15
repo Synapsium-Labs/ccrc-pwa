@@ -1,0 +1,50 @@
+
+
+⏺ User declined to answer questions
+  ⎿  · Which pets do you like? (Cats / Dogs / Fish)
+     · Which size? (Small / Large)
+     · Which mode? (Fast / Safe)
+
+✻ Baked for 1s · done 3:20
+
+❯ Call AskUserQuestion exactly once with TWO single-select questions. Q1: header "Fruit", question "Which fruit?", options Apple, Pear. Q2: header "Drink", question "Which drink?", options Tea, Coffee. Short
+  descriptions. Afterwards reply with the raw answers only.
+
+⏺ User declined to answer questions
+  ⎿  · Which fruit? (Apple / Pear)
+     · Which drink? (Tea / Coffee)
+
+✻ Churned for 1s · done 3:21
+
+❯ Call AskUserQuestion exactly once with ONE question: header "Tools", question "Which tools?", multiSelect true, options Hammer, Saw, Drill, short descriptions. Afterwards reply with the raw answers only.
+
+⏺ User answered Claude's questions:
+  ⎿  · Which tools? → Hammer, Drill
+
+⏺ "Which tools?"="Hammer, Drill"
+
+✻ Churned for 2s · done 3:21
+
+❯ Call AskUserQuestion exactly once with ONE question: header "Tools", question "Which tools?", multiSelect true, options Hammer, Saw, Drill, short descriptions. Afterwards reply with the raw answers only.
+
+⏺ User declined to answer questions
+  ⎿  · Which tools? (Hammer / Saw / Drill)
+
+✻ Cogitated for 1s · done 3:21
+
+❯ Call AskUserQuestion exactly once with TWO single-select questions. Q1: header "Fruit", question "Which fruit?", options Apple, Pear. Q2: header "Drink", question "Which drink?", options Tea, Coffee. Short
+  descriptions. Afterwards reply with the raw answers only.
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+←  ☐ Fruit  ☐ Drink  ✔ Submit  →
+
+Which fruit?
+
+  1. Apple
+     Crisp and sweet.
+  2. Pear
+     Soft and juicy.
+❯ 3. Mango
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  4. Chat about this
+
+Enter to select · Tab/Arrow keys to navigate · ctrl+g to edit in Vim · Esc to cancel

@@ -22,7 +22,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, renderHook, screen } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { Terminal } from '@xterm/xterm';
-import { TerminalDrawer, type DrawerTerm } from '../src/session/TerminalDrawer';
+import { TerminalDrawer } from '../src/session/TerminalDrawer';
+import type { DrawerTerm } from '../src/session/terminalFactory';
 import { atBlock, declValue, ruleIn } from './cssRule';
 import {
   GRID_KEYS,
@@ -37,6 +38,7 @@ import {
   type KeyName,
 } from '../src/session/keyBar';
 import { KeyBar, useCtrlLatch, useExitGuard, useKeyInput } from '../src/session/KeyBarView';
+import { KEYCAP, Keycap } from '@ccrc/ui';
 import { readModel, rowText } from '../src/session/drawerModel';
 import { PINNED_WINDOW_COLS, PINNED_WINDOW_ROWS, TMUX_STATUS_ROWS } from '../../shared/api';
 import { SYNTHETIC_SCREENS } from './fixtures/drawer/synthetic';
@@ -101,10 +103,12 @@ function Grid({
   return <KeyBar view="grid" guard={guard} action={action} />;
 }
 
+/** The drawer's history door, as the drawer builds it: a `Keycap`, so it wears
+ *  the same floor as every key beside it. */
 const door = (
-  <button type="button" className="keycap keycap--act" aria-label="Scroll back">
+  <Keycap className="keycap--act" aria-label="Scroll back">
     hist
-  </button>
+  </Keycap>
 );
 
 // — fakes —
@@ -570,23 +574,33 @@ describe('below 420px the bar is two rows, never a strip', () => {
     expect(declValue(ruleIn(chatCss, '.term-keys-more'), 'flex')).toBe('1 0 100%');
   });
 
+  // THE FLOOR IS @ccrc/ui's `Keycap`, NOT A chat.css RULE (#419). `KEYCAP`
+  // carries `min-w-tap min-h-tap`, which resolve through theme.css's
+  // `--spacing-tap: var(--tap-min)` (pinned by `theme-bridge.test.ts`), and
+  // `.term-keys .keycap` keeps only the well's ground — so the claim is read off
+  // the composed class string, and the render half proves every cap wears it.
   it('every key is a --tap-min target in both views', () => {
-    const base = ruleIn(chatCss, '.term-keys .keycap');
-    expect(declValue(base, 'min-width')).toBe('var(--tap-min)');
-    expect(declValue(base, 'min-height')).toBe('var(--tap-min)');
+    expect(KEYCAP).toContain('min-w-tap');
+    expect(KEYCAP).toContain('min-h-tap');
+    expect(KEYCAP).not.toContain('44px');
+    const floor = (b: Element): void => {
+      expect(b.classList.contains('keycap')).toBe(true);
+      expect(b.classList.contains('min-w-tap')).toBe(true);
+      expect(b.classList.contains('min-h-tap')).toBe(true);
+    };
 
     const send = vi.fn<(d: string) => void>();
     const { rerender } = render(<Grid send={send} action={door} />);
     const grid = screen.getByRole('toolbar', { name: 'Terminal keys' });
     for (const b of grid.querySelectorAll('button')) {
-      expect(b.classList.contains('keycap')).toBe(true);
+      floor(b);
       expect(b.closest('.term-keys')).toBe(grid);
     }
     rerender(<Wrapped send={send} action={door} />);
     fireEvent.click(screen.getByRole('button', { name: 'More keys' }));
     const wrapped = screen.getByRole('toolbar', { name: 'Terminal keys' });
     for (const b of wrapped.querySelectorAll('button')) {
-      expect(b.classList.contains('keycap')).toBe(true);
+      floor(b);
       expect(b.closest('.term-keys')).toBe(wrapped);
     }
   });
@@ -594,13 +608,19 @@ describe('below 420px the bar is two rows, never a strip', () => {
 
 describe('one table of key bytes', () => {
   const SESSION_DIR = path.join(import.meta.dirname, '..', 'src', 'session');
-  /** Every way a key byte can be spelled in TS source. */
+  /** Every way a key byte can be spelled in TS source.
+   *
+   *  NUL IS NOT ONE. No key KEY_SEQ holds is NUL, and the session code spells
+   *  it as a composite map-key separator (`ChatList.tsx`'s and `itemHeight.ts`'s
+   *  `${a}\u0000${b}` keys, from main's #191), which reads nothing into a pane.
+   *  So the escape spellings below start at \x01; every byte KEY_SEQ does hold
+   *  (ESC, \r, \t, \x02–\x04, \x0f, \x12, \x14, \x15, DEL) is still caught. */
   const ESC_SPELLING = /\\x1b|\\u001b|\\u\{1b\}/i; // Esc, every arrow, ⇧tab, PgUp, PgDn
   const BARE_LITERAL = /(['"`])\\[rt]\1/; // Enter or Tab as a bare literal
   const KEY_BYTE_SPELLINGS: readonly RegExp[] = [
     ESC_SPELLING,
-    /\\x[01][0-9a-f]|\\x7f/i, // a C0 control or DEL by \x: the ^ keys, Backspace
-    /\\u00[01][0-9a-f]|\\u007f|\\u\{[01]?[0-9a-f]\}|\\u\{7f\}/i, // the same by \u
+    /\\x0[1-9a-f]|\\x1[0-9a-f]|\\x7f/i, // a C0 control (not NUL) or DEL by \x: the ^ keys, Backspace
+    /\\u000[1-9a-f]|\\u001[0-9a-f]|\\u007f|\\u\{0?[1-9a-f]\}|\\u\{1[0-9a-f]\}|\\u\{7f\}/i, // the same by \u
     BARE_LITERAL,
     /[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/, // a raw control byte pasted into the source
   ];
@@ -640,6 +660,7 @@ describe('one table of key bytes', () => {
     expect(found, 'a key byte spelled outside KEY_SEQ').toEqual([]);
     const names = scanned.map((f) => path.relative(SESSION_DIR, f));
     expect(names).toContain('TerminalDrawer.tsx');
+    expect(names).toContain('terminalFactory.ts');   // the xterm factory, since #419's split
     expect(names).toContain('KeyBarView.tsx');
   });
 

@@ -7,7 +7,7 @@ and **follows a session across account/wrapper swaps**
 (the thing claude.ai's own app can't do). Weigh every feature by the loop it serves:
 spec → plan → subagent execution with per-PR review lenses + whole-branch pass → coordinated multi-wave programs.
 
-**`README.md` (~6000 lines) is the canonical system overview. This file is only the non-obvious operational rules
+**`README.md` (~6200 lines) is the canonical system overview. This file is only the non-obvious operational rules
 — read the README for anything below in depth.** Deep design lives in `docs/superpowers/specs/` (esp.
 `2026-08-10-architecture-ddd-clean-solid.md`, `2026-08-07-build7-fleet-coordination-design.md`).
 
@@ -104,12 +104,22 @@ real values: `deploy/reference-fleet.md` (gitignored).
   retention passes it is that text's only copy.
 
 ## Build / test / deploy
-**No root `package.json`, no root runner.** Four packages, each `"type":"module"`, run cd'd in:
-`server/` `agent/` `pwa/` `shared/` (`shared/` is not a real package — its bare `"type":"module"` marker is
+**No root `package.json`, no root runner.** FIVE packages, each `"type":"module"`, run cd'd in:
+`server/` `agent/` `pwa/` `ui/` `shared/` (`shared/` is not a real package — its bare `"type":"module"` marker is
 load-bearing: without it tsc emits CommonJS into `dist/shared/` and the server dies on startup).
+**`ui/` is `@ccrc/ui`, the design system**, consumed by `pwa` as SOURCE (`exports['.']` points at `src/index.ts`),
+so pwa's own `tsc --noEmit` typechecks it transitively and pwa's suite is where its tests live — `ui/` has no
+vitest and `npm test` there is `tsc --noEmit` over its own tsconfig (which adds `.storybook` and the stories).
+It rides the `test (pwa)` CI leg rather than taking a matrix value, because `test (agent)`/`test (pwa)` are
+required BY NAME. Its `npm run build` emits `dist/` for ONE reader, the /design-sync converter — nothing in
+pwa resolves it. Its palettes are GENERATED: `npm run themes` writes the `[data-theme]` blocks in
+`src/styles/tokens.css` from the seeds in `design/make-themes.mjs`, and `npm run themes:check` (CI, and
+`pwa/test/theme-catalogue.test.ts`) fails if the committed block is not what those seeds produce — so a
+generated value is never hand-edited, and the contrast gate rules on the result either way.
 
     cd server && npm ci && npm run test    # vitest run — hermetic
     cd agent  && npm ci && npm run test
+    cd ui     && npm ci                    # BEFORE pwa: pwa reads ui SOURCE, resolved from ui/node_modules only
     cd pwa    && npm ci && npm run test
 - **Single suite: `./node_modules/.bin/vitest run test/foo.test.ts` from inside the package. NEVER bare
   `npx vitest`** — it resolves a global copy with no jsdom and falsely reports "no tests".

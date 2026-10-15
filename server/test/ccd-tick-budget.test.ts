@@ -41,17 +41,62 @@ import {
  *    Task 5 (`_cfg_dir_to`, an exact memo): -1 fork on the two leaving fixtures.
  *  The merged figures below are the dump of this suite on the merged tree, never
  *  a sum of the three. Lowered only by a change that measures the new figure and
- *  states it in its PR's departure. */
+ *  states it in its PR's departure.
+ *
+ *  RAISED BY #189 (the forked-session continued-in chain): +4 forks / +1 exec on EVERY fixture,
+ *  measured on the merged tree. ON THESE FIXTURES that is not the walk's quiescence stat, which
+ *  they never reach: no fixture plants a `workdir` field, so `_ci_bg_follow` (D-4945) costs
+ *  nothing and `_follow_continued_in` (D-4935) stops before its stat. The four forks are
+ *  `_follow_continued_in`'s per-tick `uuid` re-read (`$(_reg_get …)`: a subshell and `cat`, 2
+ *  forks and the 1 exec) and a FAILING `$(_ci_addrs …)` for a row with no workdir (a subshell and
+ *  its own `$(_reg_get … workdir)`, 2 forks, no exec; a failure is not memoized, so it repeats
+ *  every tick). #189's real steady cost on a row WITH a workdir — the uuid re-read plus the
+ *  size/mtime `stat` pair on a quiescent transcript — is NOT YET COUNTED by this harness (no
+ *  fixture plants a workdir, and `stat` is not a passthrough shim); counting and trimming it is
+ *  the tick-diet spec's stage 2(c) (§7.2). A deliberate feature cost, stated rather than hidden.
+ *
+ *  LOWERED BY W2 Task 8 (D-4962, `_limit_json_num`'s fast core; macOS, bash 5.3): each limits parse
+ *  keeps its `$( )` until Task 9 but loses its `grep|head|grep`, 3 forks and 3 execs, so every
+ *  fixture falls by 3 x its parses per steady tick, forks and execs together. Before -> after:
+ *    idle-home 167/73 -> 140/46 (9 parses) · busy 164/72 -> 137/45 (9) · narrow 75/28 (none) ·
+ *    away-over-ceiling 193/91 -> 148/46 (15) · hard-blocked 406/218 -> 244/56 (54) ·
+ *    cooldown 97/36 (none) · fable 156/65 -> 138/47 (6) · leaving 391/224 -> 223/56 (56) ·
+ *    fable-leaving 375/211 -> 225/61 (50).
+ *
+ *  LOWERED BY W2 Task 10 (D-4962, `_share_pct_to`'s memo; macOS, bash 5.3): `_share_pct` runs
+ *  python3 once per distinct wrapper inside one `_swap_target` call. The `fable-leaving` fixture
+ *  reads home's share twice (stay gate, then the candidate loop), so one python3 invocation is
+ *  removed: -2 forks / -1 exec on that fixture only. Before -> after:
+ *    idle-home 140/46 -> 140/46 · busy 137/45 -> 137/45 · narrow 75/28 -> 75/28 ·
+ *    away-over-ceiling 148/46 -> 148/46 · hard-blocked 244/56 -> 244/56 ·
+ *    cooldown 97/36 -> 97/36 · fable 138/47 -> 138/47 · leaving 223/56 -> 223/56 ·
+ *    fable-leaving 225/61 -> 223/60.
+ *
+ *  LOWERED BY W2 Task 9 (D-4962, `_limit_field_to` and its three callers; macOS, bash 5.3; measured on top of
+ *  Task 10): on the domain each `_limit_field` call loses its own `$( )` and its three `$(_limit_json_num …)`
+ *  captures, 4 forks and no exec, so every fixture falls by 4 x its `_limit_field` calls per steady tick, its
+ *  execs unchanged. Before -> after:
+ *    idle-home 140/46 -> 128/46 (3 calls) · busy 137/45 -> 125/45 (3) · narrow 75/28 (none) ·
+ *    away-over-ceiling 148/46 -> 128/46 (5) · hard-blocked 244/56 -> 172/56 (18) · cooldown 97/36 (none) ·
+ *    fable 138/47 -> 130/47 (2) · leaving 223/56 -> 151/56 (18) · fable-leaving 223/60 -> 159/60 (16).
+ *
+ *  RE-MEASURED AT W2 CLOSE (Task 11) on the merged tree, Tasks 8, 10 and 9 together: macOS, bash 5.3, and Linux,
+ *  bash 5.2 with GNU grep 3.8, print the same table, ticks 1-4 included. The figures below are that dump, never
+ *  the sum of the three blocks above (which agree with it). W2 against W1 + #189, forks/execs per steady tick:
+ *    idle-home 167/73 -> 128/46 · busy 164/72 -> 125/45 · narrow 75/28 (=) · away-over-ceiling 193/91 -> 128/46 ·
+ *    hard-blocked 406/218 -> 172/56 · cooldown 97/36 (=) · fable 156/65 -> 130/47 · leaving 391/224 -> 151/56 ·
+ *    fable-leaving 375/211 -> 159/60.
+ */
 const TICK_BUDGET: Record<FixtureName, { forks: number; execs: number }> = {
-  'idle-home': { forks: 163, execs: 72 },
-  busy: { forks: 160, execs: 71 },
-  narrow: { forks: 71, execs: 27 },
-  'away-over-ceiling': { forks: 189, execs: 90 },
-  'hard-blocked': { forks: 402, execs: 217 },
-  cooldown: { forks: 93, execs: 35 },
-  fable: { forks: 152, execs: 64 },
-  leaving: { forks: 387, execs: 223 },
-  'fable-leaving': { forks: 371, execs: 210 },
+  'idle-home': { forks: 128, execs: 46 },
+  busy: { forks: 125, execs: 45 },
+  narrow: { forks: 75, execs: 28 },
+  'away-over-ceiling': { forks: 128, execs: 46 },
+  'hard-blocked': { forks: 172, execs: 56 },
+  cooldown: { forks: 97, execs: 36 },
+  fable: { forks: 130, execs: 47 },
+  leaving: { forks: 151, execs: 56 },
+  'fable-leaving': { forks: 159, execs: 60 },
 };
 
 /** `_plat_timeout`'s `-k` probe, per tick inside the loop. On `main` at

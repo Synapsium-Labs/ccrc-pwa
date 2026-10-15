@@ -38,11 +38,11 @@ afterEach(() => { fs.rmSync(home, { recursive: true, force: true }); });
 
 /** The env every hook spawn in this file shares (B3M19: one definition, so a variable added here reaches `run`, `runFull`
  *  and the spool describe's `runSpoolBounded` alike): the fixture HOME, a PATH that finds the fixture's tmux, the pane, the
- *  session id, the pid and the generation. `env` overrides it: each test adds or breaks its own legs there, never in a
- *  second copy of this literal. */
+ *  session id, the pid, the generation and a BLANK job dir (D-4953: `forkedEnv` at the end of this file says why). `env`
+ *  overrides it: each test adds or breaks its own legs there, never in a second copy of this literal. */
 const hookEnv = (env: Record<string, string> = {}): NodeJS.ProcessEnv => ({
   ...process.env, HOME: home, PATH: `${path.join(home, 'bin')}:${process.env['PATH'] ?? ''}`,
-  TMUX_PANE: '%1', CLAUDE_CODE_SESSION_ID: 'uuid-1', CLAUDE_PID: '4242', CCRC_SESSION_GENERATION: GENERATION, ...env,
+  TMUX_PANE: '%1', CLAUDE_CODE_SESSION_ID: 'uuid-1', CLAUDE_PID: '4242', CCRC_SESSION_GENERATION: GENERATION, CLAUDE_JOB_DIR: '', ...env,
 });
 /** Run the hook with a payload; env overrides let each test break one leg.
  *  Returns the hook's STDOUT, which is empty on every event but SessionStart
@@ -658,6 +658,79 @@ describe('the fleet gate and failure polarity', () => {
     };
     const ratio = median(mainTimes) / median(cheapTimes);   // ratio-row-reads-the-median (D-3704) (above)
     expect(ratio).toBeLessThan(4.2);
+  });
+});
+
+// ── The fork fallback: attribution with no pane at all ─────────────────────
+// Claude Code can fork a live session into a daemon-hosted background PTY with
+// no TMUX and no TMUX_PANE. The pane path stays first and unchanged; this is
+// the second source, read only with no pane AND the job marker (D-4953).
+describe('a session with no pane', () => {
+  const REG = (): string => path.join(home, '.cc-sessions');
+  const hookstate = (id: string): unknown =>
+    JSON.parse(fs.readFileSync(path.join(REG(), `${id}.hookstate.json`), 'utf8'));
+  const planted = (id: string, uuid: string): void =>
+    fs.writeFileSync(path.join(REG(), `${id}.uuid`), uuid);
+
+  it('writes hookstate when the registry names its session id as its own', () => {
+    planted('demo-quiet-basin', 'uuid-1');
+    run({ hook_event_name: 'UserPromptSubmit' }, forkedEnv());
+    expect(hookstate('demo-quiet-basin')).toMatchObject({ sessionId: 'uuid-1', state: 'working' });
+  });
+
+  // The guard, stated in the other direction. This is what the TMUX_PANE check
+  // was protecting: a Claude session on this box that ccd does not own must
+  // still be attributed to nobody.
+  it('writes nothing when no registry row names its session id', () => {
+    planted('demo-quiet-basin', 'uuid-someone-else');
+    run({ hook_event_name: 'UserPromptSubmit' }, forkedEnv());
+    // NOT just the named row: attribute-on-CLAUDE_CODE_SESSION_ID-alone (drop
+    // the registry match) would leave `demo-quiet-basin.hookstate.json`
+    // absent while still writing SOME row's state file, named after the raw
+    // session id itself — a stranger attributed to a wrong row instead of to
+    // nobody. Scanning the whole registry for any `.hookstate.json` at all is
+    // what actually pins "attribution stays POSITIVE and measured" rather
+    // than merely "this one row stays untouched".
+    const wroteAnyHookstate = fs.readdirSync(REG()).some((n) => n.endsWith('.hookstate.json'));
+    expect(wroteAnyHookstate, 'no row anywhere was attributed').toBe(false);
+  });
+
+  it('matches a registry uuid file that carries a trailing newline — which every real one does', () => {
+    // Whole-branch review, F8: this loop now reads each row with `read -r var
+    // < file` instead of `$(cat file)`, to stop forking ~21 times per hook
+    // event on the hot path of exactly the forked sessions it serves. The one
+    // real behavioural risk of that substitution is the newline: a command
+    // substitution strips trailing newlines, and `ccd`'s own writers end every
+    // registry field with one, so a reader that kept the newline would match
+    // NOTHING on a real box while this suite — whose `planted` writes no
+    // newline — stayed green. `read -r` strips it too, and this pins that.
+    fs.writeFileSync(path.join(REG(), 'demo-quiet-basin.uuid'), 'uuid-1\n');
+    run({ hook_event_name: 'UserPromptSubmit' }, forkedEnv());
+    expect(hookstate('demo-quiet-basin')).toMatchObject({ sessionId: 'uuid-1', state: 'working' });
+  });
+
+  it('writes nothing when it has no session id to be attributed by, even beside an EMPTY row', () => {
+    planted('demo-quiet-basin', 'uuid-1'); planted('ghost', '');   // '' == '' is the match the `-n` guard refuses
+    run({ hook_event_name: 'UserPromptSubmit' }, { ...forkedEnv(), CLAUDE_CODE_SESSION_ID: '' });
+    expect(fs.readdirSync(REG()).some((n) => n.endsWith('.hookstate.json')), 'no row anywhere was attributed').toBe(false);
+  });
+
+  it('still prefers the pane when there is one', () => {
+    // Two rows: the pane names one, the session id matches the OTHER. The pane
+    // wins, so the fallback can never quietly re-attribute a live session.
+    planted('demo-quiet-basin', 'uuid-pane');
+    planted('other-row', 'uuid-1');
+    run({ hook_event_name: 'UserPromptSubmit' });
+    expect(fs.existsSync(path.join(REG(), 'demo-quiet-basin.hookstate.json'))).toBe(true);
+    expect(fs.existsSync(path.join(REG(), 'other-row.hookstate.json'))).toBe(false);
+  });
+
+  it('is silent on both streams, and exits 0, with no pane and no match', () => {
+    // The file's own header contract. `runFull` is this suite's stdout+stderr
+    // runner, which asserts exit 0 once (see its own comment) rather than the
+    // implicit throw-on-nonzero-exit `run` relies on.
+    expect(runFull({ hook_event_name: 'UserPromptSubmit' }, forkedEnv()))
+      .toMatchObject({ stdout: '', stderr: '' });
   });
 });
 
@@ -8353,6 +8426,9 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
       // `reclaim-pause-v1` line), the two length-neutral comment edits and the
       // docs block below every corpus anchor. Both corpus documents are main's,
       // so nothing was re-pointed. S6-R11, no D-number.
+      // 147 -> 146 on the forked-session-transcript review round (2026-10-13): the review fixes' ccd/ccd insertions slid
+      // lines under frozen anchors; measured from the merged tree's dump, never retyped. S6-R11, no D-number.
+      // 146 -> 147: RE-MEASURED on the forked-session-transcript review round 2 + tick diet W1 merge (2026-10-14), dumped from the merged tree and never retyped. S6-R11, no D-number.
       'ccd/ccd': 147,
       'ccd/session-hook.sh': 21,
       'ccd/compact-card.mjs': 4,
@@ -8367,6 +8443,16 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
       //   `:629`): `plan:3330 deploy/deploy.sh:629` now holds a comment that names `install_atomic`, a token its
       //   clause quotes, so the audit anchors it by coincidence. Still stale in fact, still frozen.
       'deploy/deploy.sh': 3,
+      // `deploy/build-release.sh` 0 -> 1, A NEW ENTRY, at the design-system wave's release-lane fix (review
+      //   blocker 1). `( cd "$ROOT/ui" && npm ci --no-audit --no-fund )` and the comment that argues it go in ABOVE
+      //   the release pathspec, +13 lines, so `plan:3326 deploy/build-release.sh:103-104` (Task 10's `- NOT
+      //   modified` clause, which quotes `install.sh shared ccd deploy`) now lands on two build-check lines; the
+      //   pathspec it quotes stands at `:116-117`, byte-identical to `origin/main`'s `:103-104`. Frozen like the rest
+      //   of that paragraph, so it is parked here rather than repaired. Measured by `cite-remeasure.py` against
+      //   `origin/main` at `3210b434` with `--files README.md,deploy/build-release.sh,deploy/deploy.sh,install.sh,
+      //   server/test/single-definition.test.ts`: `stated - base None tree 1`, the only key that moved. Nothing
+      //   left. S6-R11, no D-number.
+      'deploy/build-release.sh': 1,
       // `ccd/ccrc` 5 -> 4, RE-MEASURED on the centralised-update-management
       // branch (Tasks 9-13, part B): `ccd/ccrc` grew 12,559 -> 12,851 lines
       // (+292, `wc -l`) and NEITHER corpus document changed (spec and plan
@@ -8544,7 +8630,33 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
       // measured rather than fixed. UP needs no argument beyond the numbers,
       // and this is the standing rule S6-R11 applied to two more instances its
       // own list could not name: no rule changed, so no D-number.
-      'server/test/single-definition.test.ts': 8,
+      // RE-MEASURED at the design-system wave (base `5c922c86` = origin/main,
+      // tip = this branch), BY THE INSTRUMENT: `cite-remeasure.py` with
+      // `--files server/test/single-definition.test.ts` prints
+      // `stated 8  base 8  tree 13`, total `197 -> 202`, five ENTERED and
+      // nothing LEFT, every other key equal at both trees, and the row and
+      // site arrays unmoved (54 and 35 at both).
+      // ALL FIVE ARE ONE SINGLE-LINE SHIFT, measured rather than assumed: this
+      // branch adds ONE import line (`componentFamily` from `./sourceScan.js`)
+      // at the top of the cited file, and the two anchors the frozen documents
+      // name below it each move by exactly one — main's `:32-37` is the tip's
+      // `:33-38`, main's `:1319-1323` is the tip's `:1320-1324`, byte for byte
+      // at both trees. Entered: `plan:2747 :32-37`, `plan:3236 :32-37`,
+      // `plan:3236 :1319-1323`, `spec:1347 :32-37`, `spec:1347 :1319-1323`.
+      // BOTH CORPUS DOCUMENTS ARE BYTE-IDENTICAL to origin/main at this tree,
+      // and so is README (`git diff --quiet origin/main HEAD --` on each), so
+      // nothing was re-pointed, nothing is repairable here and no rule
+      // changed — the standing S6-R11 case, UP, which needs no argument beyond
+      // the numbers. Task 11 still owns the debt. No D-number.
+      //
+      // THE NEW GUARD THIS WAVE ADDS TO THAT FILE SITS AT ITS END for this
+      // reason: appended, it shifts no anchor at all. The five above are the
+      // import line's, and the import is what a shared helper costs.
+      // RE-MEASURED on the merge of `origin/main` at `adf8d4b2`: base 8, tree
+      // 13, the same five sites ENTERED and nothing LEFT. Main's new blocks in
+      // that file are appended below every frozen anchor, and this branch's
+      // block stays last.
+      'server/test/single-definition.test.ts': 13,
     });
     // THE HEADLINE, AS A MECHANISM (r3 B-M3). The prose above used to carry a
     // number of its own, and it went stale against this very map. Now the
@@ -8663,8 +8775,33 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
     // moved (argued beside the map, above the `'ccd/ccd'` entry).
     // 197 -> 197 on the merge of `origin/main` at `77c11245` into docs W1: stated 197, base 197, tree 197,
     // measured by `cite-remeasure.py` against `origin/main`; no key moved (argued beside the map).
-    // 197 -> 196 at box-token-lifecycle wave 2 B7: `'deploy/deploy.sh'` 4 -> 3 and nothing else moved (argued beside the map).
-    expect(total, 'the narrated headline is the sum of the census, and this is it').toBe(196);
+    // 197 -> 202 at the design-system wave: the five the
+    // `single-definition.test.ts` entry above accounts for, each a one-line
+    // shift under a frozen anchor, measured by `cite-remeasure.py` against
+    // `origin/main` (`total stated 197  base 197  tree 202`); no other key
+    // moved.
+    // 202 -> 201 on the merge of `origin/main` at `562ef658` into the
+    // design-system wave: main's own `197 -> 196` moved ONE key in the other
+    // direction (`'deploy/deploy.sh'` 4 -> 3, argued beside the map), and the
+    // two deltas are disjoint — this branch's five are all in
+    // `single-definition.test.ts`, main's one is in `deploy/deploy.sh`. The
+    // headline is the SUM of the merged map, which is the point of it being a
+    // mechanism rather than a second number: 202 - 1.
+    // 196 -> 195 on the forked-session-transcript review round (2026-10-13): `ccd/ccd` 147 -> 146 and nothing else moved. Derived from the census (S6-R11).
+    // 195 -> 196: RE-MEASURED on the forked-session-transcript review round 2 + tick diet W1 merge (2026-10-14), dumped from the merged tree and never retyped. S6-R11, no D-number.
+    // 201 on the merge of `origin/main` at `adf8d4b2` (whose own headline is the 196 the two lines above
+    // reach) into the design-system wave, RE-MEASURED rather than summed: `cite-remeasure.py` against
+    // `origin/main` with `--files server/test/single-definition.test.ts` prints `total stated 201  base 196
+    // tree 201`. Base is main's map key for key; the five that enter are this branch's one import line in
+    // `single-definition.test.ts` (8 -> 13, the same five sites as above), nothing left, and no other key
+    // moved — main's `ccd/ccd` 147 -> 146 -> 147 nets to zero. Row and site arrays unmoved (55 and 35).
+    // Both corpus documents and README are byte-identical to `origin/main`. S6-R11, no D-number.
+    // 201 -> 202 at the design-system wave's release-lane fix, on the merge of `origin/main` at `3210b434`:
+    // `cite-remeasure.py` against `origin/main` prints `total stated 201  base 196  tree 202`. The 196 -> 201 is
+    // the five `single-definition.test.ts` sites argued above, unchanged; the one more is
+    // `deploy/build-release.sh` 0 -> 1 (argued beside the map). Row and site arrays unmoved (55 and 35). Both
+    // corpus documents are byte-identical to `origin/main`. S6-R11, no D-number.
+    expect(total, 'the narrated headline is the sum of the census, and this is it').toBe(202);
     // AND EVERY FAILING CITATION POINTS INTO A FILE THIS TASK REWROTE — the
     // claim that makes the census a statement about Task 9 rather than about
     // the documents' own quality. A stale citation into an untouched file is a
@@ -8692,7 +8829,11 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
       // MEASURED rather than assumed: this wave's Task 1 rewrote it, `23 0`
       // against `origin/main` in one hunk at `:378`. Named because the work
       // rewrote the file — the claim this list makes is unchanged.
-      'server/test/single-definition.test.ts'];
+      'server/test/single-definition.test.ts',
+      // `deploy/build-release.sh`, on the same ground and MEASURED rather than assumed: the design-system wave's
+      // release-lane fix rewrote it, `13 0` against `origin/main` in one hunk above the pathspec. Named because
+      // the work rewrote the file — the claim this list makes is unchanged.
+      'deploy/build-release.sh'];
     expect([...new Set(r.failures.map((f) => f.file))].filter((f) => !TOUCHED.includes(f)),
       'a stale citation into a file this task never touched').toEqual([]);
   });
@@ -8847,8 +8988,21 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
     // **Files:** 19 -> 18. Left: `ccd/ccd:3940-3951` (`plan:2747`), a coincidental pass on the shift, not a
     // repaired anchor. Nothing entered. Measured by diffing the dumped failure sets of the two trees, never
     // retyped. No D-number.
+    // RE-MEASURED at the design-system wave (base `5c922c86` = origin/main, tip = this branch). **Files:**
+    // 18 -> 19. Entered: `server/test/single-definition.test.ts:32-37`, the `plan:2747` reference whose
+    // clause quotes that range — one of the five the census entry above accounts for, and the same single
+    // cause: ONE import line (`componentFamily`) added at the top of the cited file shifts the range by one
+    // (main's `:32-37` is the tip's `:33-38`, byte for byte). Nothing left. The `:1319-1323` pair that
+    // entered the census is NOT in this set — those two citations are not **Files:** references. Both corpus
+    // documents and README are byte-identical to origin/main, measured, so nothing was re-pointed.
+    // Measured by `cite-remeasure.py` against `origin/main`, never retyped. No D-number.
     expect(set, 'a **Files:** reference stopped naming what its clause quotes — re-measure (D-2849)')
       .toEqual([
+        // RE-MEASURED on the merge of `origin/main` (at the forked-session-transcript review, 2026-10-13) into
+        // the forked-session-transcript branch, dumped from the merged tree and never retyped. ONE ENTERS,
+        // `ccd/ccd:13020` (spec:100's `_rt_prc` cite, whose referent sits at `:14910`): the branch's `_munge_wd`
+        // and `_sync_uuid` insertions (+19 above it) slid a blank comment line under the anchor. FACT TWO holds
+        // (the line fails outright rather than passing on a short token). Nothing re-pointed; S6-R11, no D-number.
         // RE-MEASURED at the tree this ships in (fix round 4). The citation
         // RE-POINT LEFT THIS WAVE — both corpus documents are byte-identical to
         // `origin/main`, so no anchor of this branch's ships. What moved these
@@ -8860,6 +9014,11 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         'ccd/compact-card.mjs:726-728',
         'ccd/compact-card.mjs:726',
         'ccd/ccd:6478',
+        // `ccd/ccd:13020` LEFT this set on the `dcac4691` merge — the same
+        // coincidence class: the merge moved `ccd/ccd` under a stale anchor
+        // and a line carrying a token the clause quotes now stands there. The
+        // citation still does not name its referent. Re-measured, not picked
+        // (S6-R11).
         'ccd/ccd:13020',
         'ccd/ccd:19131',
         // ENTERS on the fourth merge (`ad3d2fbc`), and it is the mirror of the
@@ -8874,6 +9033,9 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         'ccd/ccd:1330-1333',
         'ccd/session-hook.sh:1098',
         'ccd/session-hook.sh:1175-1177',
+        // ENTERS at the design-system wave, on this branch's one added import
+        // line in the cited file — see the note above this assertion.
+        'server/test/single-definition.test.ts:32-37',
         'deploy/deploy.sh:560',
         // LEFT at box-token-lifecycle wave 2 B7 (removed `ship_secret` from deploy.sh): `deploy/deploy.sh:629` now holds
         // a comment naming `install_atomic`, which its clause quotes. Coincidence, not repair; see D2849_INVISIBLE_SINCE_PR136.
@@ -8882,6 +9044,10 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         'ccd/ccrc:5217',
         'ccd/ccrc:6531',
         'ccd/ccrc:7129-7130',
+        // ENTERS at the design-system wave's release-lane fix: the ui install and its comment, +13 lines above
+        // the release pathspec, take this `- NOT modified` reference off the lines it quotes (see the census
+        // entry). Measured by `cite-remeasure.py` against `origin/main` at `3210b434`. S6-R11, no D-number.
+        'deploy/build-release.sh:103-104',
       ]);
     // D-2849's OWN FIVE (its 2026-09-17 append), named rather than counted, so a set
     // that keeps its length while losing one of them still reds.
@@ -9305,6 +9471,12 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
     // two trees, never retyped. No D-number.
     expect(r.failures.map(refKey), 'a `|` row stopped naming what the ROW quotes — re-measure')
       .toEqual([
+        // RE-MEASURED on the forked-session-transcript review round 2 + tick diet W1 merge (2026-10-14), dumped from the merged tree and never retyped. S6-R11, no D-number.
+        // RE-MEASURED on the forked-session-transcript review round (2026-10-13), dumped from the merged
+        // tree and never retyped: the review fixes' ccd/ccd insertions moved which rows fail. S6-R11.
+        // RE-MEASURED on the same merge (forked-session-transcript, 2026-10-13), dumped from the merged tree,
+        // never retyped: the branch's +19 lines above these anchors moved which rows fail, against main's set.
+        // Each entry/exit is a coincidence of the shift, not a repair; Task 11 still owns the debt. S6-R11.
         // RE-DERIVED on the merge with `f06abdce` (round 7). Both sides of that
         // merge carried a set measured on a tree that no longer exists — this
         // branch's, and main's own CCR-10/D-2994 re-measure — so NEITHER was taken
@@ -9536,6 +9708,7 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         'ccd/ccd:8654',
         'ccd/ccd:8673',
         'ccd/ccd:13573-13575',
+        'ccd/ccd:11665-11670',
         'ccd/session-hook.sh:795',
         'ccd/session-hook.sh:796',
         'ccd/ccd:2874',
@@ -9544,7 +9717,7 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         'ccd/ccd:2455',
         'ccd/ccd:2793',
         'ccd/session-hook.sh:802',
-        'ccd/ccd:5725',
+        'ccd/ccd:6771',
         'ccd/ccd:4642-4653',
         'ccd/ccd:5828-5830',
         'ccd/ccd:5819-5823',
@@ -9610,6 +9783,11 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
     // above. Measured by diffing the dumped failure sets of the three trees, never retyped. No D-number.
     expect(r.failures.map(site).filter((k) => seen.has(k)),
       'the rows this pass reads that another pass already reaches').toEqual([
+        // RE-MEASURED on the forked-session-transcript review round 2 + tick diet W1 merge (2026-10-14), dumped from the merged tree and never retyped. S6-R11, no D-number.
+        // RE-MEASURED on the forked-session-transcript review round (2026-10-13), from the same run as the
+        // row-pass set above, dumped and never retyped. S6-R11, no D-number.
+        // RE-MEASURED on the forked-session-transcript merge (2026-10-13), from the same run as the
+        // row-pass set above, dumped and never retyped. S6-R11, no D-number.
       // RE-MEASURED at the tree this ships in (fix round 4). The citation
       // RE-POINT LEFT THIS WAVE — both corpus documents are byte-identical to
       // `origin/main`, so no anchor of this branch's ships. What moved these
@@ -9755,7 +9933,7 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         'spec:2220 ccd/ccd:2874',
         'spec:2220 ccd/ccd:2874',
         'spec:2220 ccd/session-hook.sh:993',
-        'spec:2222 ccd/ccd:5725',
+        'spec:2222 ccd/ccd:6771',
       ]);
   });
 
@@ -10226,8 +10404,41 @@ describe('history spool: the hook enqueues one fenced, text-free line (spec §5.
   };
   const PARTIAL = '{"v":1,"ev":"Sto';
   /** FR3c/FR3d (review 351 F1): a subscript that is not an integer literal, `@` or `*`, on a `name[…]` or as a
-   *  compound-assignment key. Both S1 pins read it: the string case on the block's text, forkForms on its whole source. */
+   *  compound-assignment key. Both S1 pins read it: the string pin's subscript arm on the block's text, forkForms on its
+   *  whole source. Its key arm reads a key only to the key's first `]`, so a key that holds brackets of its own
+   *  (`x=([y[0]]=1)`) is not read: it is on the stopping line in forkForms' header (review 353 F1). */
   const SUBSCRIPT_FORK = /(?<![\w$])[A-Za-z_][A-Za-z0-9_]*\[(?!-?\d+\]|[@*]\])|[(\s]\[(?!-?\d+\]|[@*]\])[^\]\n]*\]\+?=/;
+  /** The commands the S1 string pin refuses by name: each runs a program, so it forks on the hot path. */
+  const S1_EXTERNAL = /(?<![\w-])(jq|cat|date|mkdir|mv|cp|ln|rm|touch|tee|awk|sed|grep|head|tail|tr|cut|stat|readlink|realpath|dirname|basename|env|timeout|flock|node|python3?|tmux|command|eval|exec|source)(?![\w-])/;
+  /** The spool block's code as both S1 pins read it: every `#`-led line dropped. */
+  const s1Code = (block: string): string => block.split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
+  /** FR4 (review 353 F2): the S1 string pin, one labelled arm per form it refuses. Each arm answers the first text it
+   *  refuses, or null. The string case runs every arm on the block; STRING_ROWS (below INERT) plants a ROWS form for each
+   *  arm and expects that arm to name it, so an arm deleted here reds its planted rows.
+   *  FR3a (review 351 F1): arithmetic evaluates a variable's text, so `a[$(…)]` in a name forks there. An operand of
+   *  `(( ))` is an integer literal or `${#name}`; a substring offset or length is an integer literal; a subscript is an
+   *  integer literal, `@` or `*`, and so is a compound-assignment key that holds no bracket of its own; no `-eq` family,
+   *  no `$[`, no `let` and no integer attribute. The S1 stopping line (the forms neither pin chases) and its known
+   *  fail-closed costs are in forkForms' header. */
+  const S1_STRING_ARMS: ReadonlyArray<readonly [string, (code: string) => string | null]> = [
+    ['a command substitution in the spool block', (code) => (code.includes('$(') ? '$(' : null)],
+    ['a backtick in the spool block', (code) => (code.includes('`') ? '`' : null)],
+    ['a sha program in the spool block', (code) => (code.includes('sha') ? 'sha' : null)],
+    // FR2a (review 344 F1): no `@` inside a `${…}`. `${X@P}` runs prompt expansion, and so command substitution: a fork.
+    ['a ${…@…} transformation in the spool block (@P forks)', (code) => code.match(/\$\{[^}]*@/)?.[0] ?? null],
+    ['a (( )) operand that is not an integer literal or ${#name} (review 351 F1)', (code) => [...code.matchAll(/\(\(([\s\S]*?)\)\)/g)]
+      .map((x) => x[1]!)
+      .find((x) => /[^\s0-9+\-*/%<>=!&|^~?:,()]/.test(x.replace(/\$\{#[A-Za-z_][A-Za-z0-9_]*\}/g, '0'))) ?? null],
+    ['an arithmetic test operator (review 351 F1)', (code) => code.match(/(?<![\w-])-(?:eq|ne|lt|le|gt|ge)(?![\w-])/)?.[0] ?? null],
+    ['a ${name:offset:length} whose offset or length is not a literal (review 351 F1)',
+      (code) => code.match(/\$\{[!#]?(?:[A-Za-z_]\w*|\d+|[@*#?$!-])(?:\[[^\]\n]*\])?:(?![-=?+])(?!\s*-?\d+(?::\s*-?\d+)?\})/)?.[0] ?? null],
+    ['a subscript that is not a literal, @ or *: on a name[…] in a ${…}, an assignment, or a name read, printf -v or [[ -v ]] takes (the whole word quoted or not), or as a compound-assignment key (review 351 F1)',
+      (code) => code.match(SUBSCRIPT_FORK)?.[0] ?? null],
+    ['a $[ ] arithmetic expansion in the spool block (review 351 F1)', (code) => (code.includes('$[') ? '$[' : null)],
+    ['let and an integer attribute evaluate arithmetic (review 351 F1)',
+      (code) => code.match(/(?<![\w-])(?:let|declare|typeset|local|readonly)(?![\w-])/)?.[0] ?? null],
+    ['an external command in the spool block forks on the hot path', (code) => code.match(S1_EXTERNAL)?.[0] ?? null],
+  ];
 
   it('S1: the block is builtins only — no $(, backtick, jq, sha, cat or other external — and sits below the turn marker, above the StopFailure exit', () => {
     const src = fs.readFileSync(HOOK, 'utf8');
@@ -10239,34 +10450,10 @@ describe('history spool: the hook enqueues one fenced, text-free line (spec §5.
     expect(end).toBeGreaterThan(start);
     expect(start, 'the block must sit below the turn marker').toBeGreaterThan(src.indexOf('_hook_turn_mark "$tmkind" || true; fi'));
     expect(end, 'the block must sit above the StopFailure exit').toBeLessThan(src.indexOf('[[ -n "$stopfail$sessend" ]] && exit 0'));
-    const code = src.slice(start, end).split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
+    const code = s1Code(src.slice(start, end));
     expect(code, 'the slice holds no write: the markers moved off the block').toContain(`printf '\\n%s\\n' "$_hs"`);
-    expect(code).not.toContain('$(');
-    expect(code).not.toContain('`');
-    expect(code).not.toContain('sha');
-    // FR2a (review 344 F1): no `@` inside a `${…}`. `${X@P}` runs prompt expansion, and so command substitution: a fork.
-    expect(code.match(/\$\{[^}]*@/)?.[0] ?? null, 'a ${…@…} transformation in the spool block (@P forks)').toBeNull();
-    // FR3a (review 351 F1): arithmetic evaluates a variable's text, so `a[$(…)]` in a name forks there. An operand of `(( ))` is an
-    // integer literal or `${#name}`; a substring offset or length, a subscript, or a compound-assignment key is an integer literal (a
-    // subscript may also be `@` or `*`); any `$[` is named. The S1 stopping line (the forms neither pin chases) is in forkForms'
-    // header.
-    const arith = [...code.matchAll(/\(\(([\s\S]*?)\)\)/g)]
-      .map((x) => x[1]!)
-      .filter((x) => /[^\s0-9+\-*/%<>=!&|^~?:,()]/.test(x.replace(/\$\{#[A-Za-z_][A-Za-z0-9_]*\}/g, '0')));
-    expect(arith, 'a (( )) operand that is not an integer literal or ${#name} (review 351 F1)').toEqual([]);
-    expect(code.match(/(?<![\w-])-(?:eq|ne|lt|le|gt|ge)(?![\w-])/)?.[0] ?? null, 'an arithmetic test operator (review 351 F1)').toBeNull();
-    expect(
-      code.match(/\$\{[!#]?(?:[A-Za-z_]\w*|\d+|[@*#?$!-])(?:\[[^\]\n]*\])?:(?![-=?+])(?!\s*-?\d+(?::\s*-?\d+)?\})/)?.[0] ?? null,
-      'a ${name:offset:length} whose offset or length is not a literal (review 351 F1)',
-    ).toBeNull();
-    expect(
-      code.match(SUBSCRIPT_FORK)?.[0] ?? null,
-      'a subscript that is not a literal, @ or *: on a name[…] in a ${…}, an assignment, or a name read, printf -v or [[ -v ]] takes (the whole word quoted or not), or as a compound-assignment key (review 351 F1)',
-    ).toBeNull();
-    expect(code, 'a $[ ] arithmetic expansion in the spool block (review 351 F1)').not.toContain('$[');
-    expect(code.match(/(?<![\w-])(?:let|declare|typeset|local|readonly)(?![\w-])/)?.[0] ?? null, 'let and an integer attribute evaluate arithmetic (review 351 F1)').toBeNull();
-    const external = /(?<![\w-])(jq|cat|date|mkdir|mv|cp|ln|rm|touch|tee|awk|sed|grep|head|tail|tr|cut|stat|readlink|realpath|dirname|basename|env|timeout|flock|node|python3?|tmux|command|eval|exec|source)(?![\w-])/;
-    expect(code.match(external)?.[0] ?? null, 'an external command in the spool block forks on the hot path').toBeNull();
+    // FR4 (review 353 F2): every arm of the string pin, each under its own label. STRING_ROWS plants a form for each arm.
+    for (const [arm, check] of S1_STRING_ARMS) expect(check(code), arm).toBeNull();
   });
 
   it('S2: a subagent payload (agent_id) writes no line', () => {
@@ -10355,12 +10542,20 @@ describe('history spool: the hook enqueues one fenced, text-free line (spec §5.
     expect(l!.rec).not.toHaveProperty('trig');
   });
 
-  it('S11: a SessionStart whose source is x"y, fork, or absent writes no line at all', () => {
+  it('S11: a SessionStart whose source is x"y or absent writes no line at all; fork (ruled Q16, W1-B2) writes one carrying src, and reg when .uuid holds a uuid', async () => {
     plantSpool();
     run({ hook_event_name: 'SessionStart', source: 'x"y', session_id: SID }, SCRUB);
-    run({ hook_event_name: 'SessionStart', source: 'fork', session_id: SID }, SCRUB);
     run({ hook_event_name: 'SessionStart', session_id: SID }, SCRUB);
     expect(fs.existsSync(spoolFile())).toBe(false);
+    const uuidFile = path.join(home, '.cc-sessions', `${ID}.uuid`);
+    fs.writeFileSync(uuidFile, `${SID}\n`);
+    run({ hook_event_name: 'SessionStart', source: 'fork', session_id: SID }, SCRUB);
+    fs.rmSync(uuidFile);
+    run({ hook_event_name: 'SessionStart', source: 'fork', session_id: SID }, SCRUB);
+    const [a, b] = await parsed();
+    expect(a!.rec).toMatchObject({ ev: 'SessionStart', src: 'fork', sid: SID, reg: SID });
+    expect(b!.rec).toMatchObject({ ev: 'SessionStart', src: 'fork', sid: SID });
+    expect(b!.rec).not.toHaveProperty('reg');
   });
 
   it('S11: a session_id that is not a lowercase UUID drops sid from a Stop line, never the line; a SessionStart, whose grammar requires sid, writes no line at all', async () => {
@@ -10393,13 +10588,12 @@ describe('history spool: the hook enqueues one fenced, text-free line (spec §5.
     expect(readState().state).toBe('done');
   });
 
-  it('S14: SessionStart(compact) and (fork) write no line; startup, resume and clear write one each, each carrying src', async () => {
+  it('S14: SessionStart(compact) writes no line; startup, resume, clear and fork (ruled Q16, W1-B2) write one each, each carrying src', async () => {
     plantSpool();
     run({ hook_event_name: 'SessionStart', source: 'compact', session_id: SID }, SCRUB);
-    run({ hook_event_name: 'SessionStart', source: 'fork', session_id: SID }, SCRUB);
     expect(fs.existsSync(spoolFile())).toBe(false);
-    for (const source of ['startup', 'resume', 'clear']) run({ hook_event_name: 'SessionStart', source, session_id: SID }, SCRUB);
-    expect((await parsed()).map((l) => [l.ordinal, l.rec?.['src']])).toEqual([[1, 'startup'], [2, 'resume'], [3, 'clear']]);
+    for (const source of ['startup', 'resume', 'clear', 'fork']) run({ hook_event_name: 'SessionStart', source, session_id: SID }, SCRUB);
+    expect((await parsed()).map((l) => [l.ordinal, l.rec?.['src']])).toEqual([[1, 'startup'], [2, 'resume'], [3, 'clear'], [4, 'fork']]);
   });
 
   it('S17: the line is fenced — after a torn partial the next line stands alone, at the ordinal an unfenced file gives it', async () => {
@@ -10552,16 +10746,23 @@ describe('history spool: the hook enqueues one fenced, text-free line (spec §5.
    *  `$(( ))` that is not an integer literal or `${#name}`; any `$[ ]`; a `${name:offset:length}` whose offset or length
    *  is not an integer literal; a subscript that is not an integer literal, `@` or `*`, on a `name[…]` anywhere (a
    *  `${…}`, an assignment, or a name `read`, `printf -v` or `[[ -v ]]` takes, the whole word quoted or not) or as a key
-   *  in a compound assignment (`x=([v]=1)`); and the `-eq -ne -lt -le -gt -ge` operators of `[[ ]]`. An indexed array's
-   *  subscript is arithmetic, so a variable holding `a[$(…)]` forks there; an associative one is not, but the scan
-   *  cannot tell them apart and names both.
+   *  that holds no bracket of its own in a compound assignment (`x=([v]=1)`); and the `-eq -ne -lt -le -gt -ge`
+   *  operators of `[[ ]]`. An indexed array's subscript is arithmetic, so a variable holding `a[$(…)]` forks there; an
+   *  associative one is not, but the scan cannot tell them apart and names both.
    *  Not chased (the S1 stopping line, review 351 F1), each a deliberate spelling the spool block does not use: ${!x}
    *  indirection; [[ -v $v ]], and printf -v "$v" or read -r "$v", with a dynamic name, which forks when the name holds
    *  a[$(…)]; a dynamic name with a variable subscript there ($x[v], ${x}[v]), which forks through its subscript
    *  whatever the name holds; a name split from its `[` by a quote, a backslash or a line continuation (x"[v]", x'[v]',
    *  x\[v\], x\<newline>[v]), which bash joins before the subscript is read; an assignment, printf -v or read into
-   *  bash's own integer variables (RANDOM, SRANDOM, OPTIND, HISTCMD); and text on a `#`-led line inside a quoted string
-   *  that spans lines, which the comment filter drops before either pin reads it.
+   *  bash's own integer variables (RANDOM, SRANDOM, OPTIND, HISTCMD); text on a `#`-led line inside a quoted string
+   *  that spans lines, which the comment filter drops before either pin reads it; and (review 353 F1) a
+   *  compound-assignment key that holds brackets of its own (x=([y[0]]=1), x=([${y[0]}]=1), x=(["${y[0]}"]=1)), which
+   *  the key arm reads only to its first `]` and which forks when y[0] holds a[$(…)]. forkForms names those three only
+   *  by accident, as a subshell (step 4 reads the `(` of any `name=(`), and the string pin not at all.
+   *  Known fail-closed costs of the line (review 353 F5): both pins name some spellings that fork nothing, under a label
+   *  that misleads. A bracket class after a letter, in `[[ … =~ … ]]` or in a case pattern (^cc[a-z]+$, a[bc])), is named
+   *  "subscript"; an empty substring offset (${x::3}) is named "substring offset"; and, by ruling (4043), the -eq family
+   *  is named "arithmetic test operator" even on ${#name} ([[ ${#x} -le 224 ]]: write (( ${#x} <= 224 )) instead).
    *  [] = builtins only. Conservative by construction, outside the stopping line above: what it cannot classify is
    *  reported, never passed. */
   const forkForms = (code: string, allowed: ReadonlySet<string>): string[] => {
@@ -10604,10 +10805,11 @@ describe('history spool: the hook enqueues one fenced, text-free line (spec §5.
     const src = code.split('\n').filter((l) => !/^\s*#/.test(l)).join('\n').replace(/\\\n/g, ' ');
     // FR3c (review 351 F1): a subscript that is not an integer literal, `@` or `*` — on a `name[…]` anywhere (a `${…}`, an
     // assignment, or a name `read`, `printf -v` or `[[ -v ]]` takes, the whole word quoted or not) or as a compound-assignment key
-    // (`x=([v]=1)`, FR3d) — is named on the whole source, before step 1 masks quoted text: an indexed array evaluates it as
-    // arithmetic (an associative one does not, and is named too). The `$` in the lookbehind skips an unbraced `$x[v]`, which in an
-    // expansion or an assignment is `$x` and literal text; as a name `[[ -v ]]`, `read` or `printf -v` takes, it is a dynamic name
-    // with a subscript, which is on the stopping line, as is a name split from its `[` (forkForms' header).
+    // that holds no bracket of its own (`x=([v]=1)`, FR3d; one that does is on the stopping line, review 353 F1) — is named on
+    // the whole source, before step 1 masks quoted text: an indexed array evaluates it as arithmetic (an associative one does not,
+    // and is named too). The `$` in the lookbehind skips an unbraced `$x[v]`, which in an expansion or an assignment is `$x` and
+    // literal text; as a name `[[ -v ]]`, `read` or `printf -v` takes, it is a dynamic name with a subscript, which is on the
+    // stopping line, as is a name split from its `[` (forkForms' header).
     if (SUBSCRIPT_FORK.test(src)) found.push('subscript');
     // 1. Mask quoted text and ${...}, recording any substitution inside them ("$(…)" still forks).
     let out = '';
@@ -10763,6 +10965,9 @@ describe('history spool: the hook enqueues one fenced, text-free line (spec §5.
     // Fix-round-3 whole-round review (#1/#5): a compound assignment's key is a subscript, and bash evaluates it as arithmetic.
     ['a compound array assignment with a variable key', T, "_hs+='}'; _hs_x=([_hs_g]=1)", 'subscript'],
     ['an appended compound assignment with a spaced variable key', T, "_hs+='}'; _hs_x+=( [_hs_g]=1 )", 'subscript'],
+    // FR4 (review 353 F2): a form for the string pin's sha arm and one for its integer-attribute arm, which STRING_ROWS plants.
+    ['a sha program', T, "_hs+='}'; sha256sum x", 'command sha256sum'],
+    ['an integer attribute', T, "_hs+='}'; local -i _hs_x=_hs_g", 'command local'],
   ];
   /** Text bash never expands, which the scanner must not name: a substitution inside plain single quotes. */
   const INERT: Array<[string, string, string]> = [
@@ -10816,6 +11021,78 @@ describe('history spool: the hook enqueues one fenced, text-free line (spec §5.
     const allowed = new Set<string>([...SPOOL_BUILTINS, ...SPOOL_FUNCS]);
     expect(block).toContain(anchor);
     expect(forkForms(block.replace(anchor, replacement), allowed)).toEqual([]);
+  });
+
+  // ── review 353 F2: the S1 string pin over ROWS — each of its arms has a planted form it must name ──
+  /** FR4: a ROWS label and the string-pin arm that must name that form planted in the block. A ROWS form missing here is
+   *  one no string arm reads (a subshell, a pipeline, a background job, a coproc, a here-string, a process substitution,
+   *  a command word its external list does not hold), or one it reads only by accident: forkForms alone names those. */
+  const ARITH = 'a (( )) operand that is not an integer literal or ${#name} (review 351 F1)';
+  const SUBSTRING = 'a ${name:offset:length} whose offset or length is not a literal (review 351 F1)';
+  const SUBSCRIPT = 'a subscript that is not a literal, @ or *: on a name[…] in a ${…}, an assignment, or a name read, printf -v or [[ -v ]] takes (the whole word quoted or not), or as a compound-assignment key (review 351 F1)';
+  const STRING_ROWS: Array<[string, string]> = [
+    ['a command substitution', 'a command substitution in the spool block'],
+    ['a substitution inside ${}', 'a command substitution in the spool block'],
+    ['a substitution in single quotes inside ${} inside double quotes', 'a command substitution in the spool block'],
+    ['a subshell inside $( (', 'a command substitution in the spool block'],
+    ['a substitution spelled $((', 'a command substitution in the spool block'],
+    ['a substitution spelled $(( inside double quotes', 'a command substitution in the spool block'],
+    ['a backtick', 'a backtick in the spool block'],
+    ['a backtick in single quotes inside ${} inside double quotes', 'a backtick in the spool block'],
+    ['a sha program', 'a sha program in the spool block'],
+    ['an @P transformation inside double quotes', 'a ${…@…} transformation in the spool block (@P forks)'],
+    ['an @P transformation outside double quotes', 'a ${…@…} transformation in the spool block (@P forks)'],
+    ['an @P transformation nested in a ${} default word', 'a ${…@…} transformation in the spool block (@P forks)'],
+    ['an @P transformation in single quotes inside ${} inside double quotes', 'a ${…@…} transformation in the spool block (@P forks)'],
+    ['an @P transformation of a subscripted name', 'a ${…@…} transformation in the spool block (@P forks)'],
+    ['an @Q transformation', 'a ${…@…} transformation in the spool block (@P forks)'],
+    ['bare-name arithmetic', ARITH],
+    ['a bare name beside ${#name} in the bound', ARITH],
+    ['a ++ on a name (the old INERT row: it forks when the name holds a subscript)', ARITH],
+    ['a $name operand in $(( ))', ARITH],
+    ['a bare name in $(( )) inside double quotes', ARITH],
+    ['a bare name in $(( )) inside [[ ]]', ARITH],
+    ['an -eq test', 'an arithmetic test operator (review 351 F1)'],
+    ['a -gt test on a quoted operand', 'an arithmetic test operator (review 351 F1)'],
+    ['a variable substring offset', SUBSTRING],
+    ['a variable substring offset inside double quotes', SUBSTRING],
+    ['a variable substring length', SUBSTRING],
+    ['a $ special parameter with a variable substring offset', SUBSTRING],
+    ['a ? special parameter with a variable substring offset', SUBSTRING],
+    ['a - special parameter with a variable substring offset', SUBSTRING],
+    ['a variable subscript', SUBSCRIPT],
+    ['a $name subscript', SUBSCRIPT],
+    ['an indexed assignment with a variable subscript', SUBSCRIPT],
+    ['read into a variable subscript', SUBSCRIPT],
+    ['printf -v into a variable subscript', SUBSCRIPT],
+    ['printf -v into a single-quoted variable subscript', SUBSCRIPT],
+    ['a [[ -v ]] test of a variable subscript', SUBSCRIPT],
+    ['a [[ -v ]] test of a double-quoted variable subscript', SUBSCRIPT],
+    ['a compound array assignment with a variable key', SUBSCRIPT],
+    ['an appended compound assignment with a spaced variable key', SUBSCRIPT],
+    ['a $[ ] arithmetic expansion', 'a $[ ] arithmetic expansion in the spool block (review 351 F1)'],
+    ['a $[ ] arithmetic expansion inside double quotes', 'a $[ ] arithmetic expansion in the spool block (review 351 F1)'],
+    ['a let', 'let and an integer attribute evaluate arithmetic (review 351 F1)'],
+    ['an integer attribute', 'let and an integer attribute evaluate arithmetic (review 351 F1)'],
+    ['an external program', 'an external command in the spool block forks on the hot path'],
+    ['a program as an if condition', 'an external command in the spool block forks on the hot path'],
+    ['a program in a case arm on the case line', 'an external command in the spool block forks on the hot path'],
+  ];
+
+  it.each(STRING_ROWS)('S1 (string, review 353 F2): %s planted in the spool block is caught by the string pin: %s', (label, arm) => {
+    const row = ROWS.find((r) => r[0] === label);
+    expect(row, `no ROWS row is labelled ${label}`).toBeDefined();
+    const [, anchor, replacement] = row!;
+    const block = spoolBlock(fs.readFileSync(HOOK, 'utf8'));
+    expect(block).toContain(anchor);
+    const code = s1Code(block.replace(anchor, replacement));
+    expect(S1_STRING_ARMS.filter(([, check]) => check(code) !== null).map(([name]) => name)).toContain(arm);
+  });
+
+  it('S1 (string, review 353 F2): every arm has a planted row, so each arm is caught by the string pin rows', () => {
+    const arms = S1_STRING_ARMS.map(([name]) => name);
+    expect(new Set(arms).size, 'two string-pin arms share a label').toBe(arms.length);
+    expect([...new Set(STRING_ROWS.map(([, arm]) => arm))].sort(), 'an arm with no planted row, or a row naming no arm').toEqual([...arms].sort());
   });
 
   it('F37: EPOCHREALTIME is read once: a clock that moves between the test and the slice writes no ts or the tested reading, never a mix', async () => {
@@ -10900,5 +11177,200 @@ describe('history spool: the hook enqueues one fenced, text-free line (spec §5.
     expect(block).toContain('HOOK_TIMEOUT_S');
     expect(block).toContain('D-4418');
     expect(fs.readFileSync(path.resolve(__dirname, '../../ccd/install-session-hooks.sh'), 'utf8')).toMatch(/^HOOK_TIMEOUT_S=\d+$/m);
+  });
+});
+
+// ── D-4953 / D-4954: who may take the pane-less fallback, and how it reads a row ──
+// APPENDED, never inserted: this file's citation audit cites it by line. The
+// cases of 'a session with no pane' above run through `forkedEnv`; the cases
+// that pin the two gates and the reader live here.
+
+/** A FORKED session's hook environment: no pane, and the job directory Claude Code hands every background job it
+ *  hosts — the fallback's second gate (D-4953). MEASURED on 2.1.296, not read off its launcher: a hook run by a
+ *  process carrying the background-job identity (`CLAUDE_CODE_SESSION_KIND=bg`, `CLAUDE_BG_BACKEND=daemon`,
+ *  `CLAUDE_BG_SOURCE`, `CLAUDE_JOB_DIR`) sees `CLAUDE_JOB_DIR` and none of the other three, because Claude Code builds
+ *  a hook's environment from a copy scrubbed of its background-identity list. The hook tests the value for presence
+ *  only, so the directory need not exist. `hookEnv` BLANKS it rather than inheriting it: a suite run from inside a
+ *  forked job inherits a real one, and every "a stranger is nobody's" case would quietly test a fork instead.
+ *  A FUNCTION DECLARATION, hoisted, so the describe above can call it from here. */
+function forkedEnv(): Record<string, string> {
+  return { TMUX_PANE: '', CLAUDE_JOB_DIR: path.join(home, '.claude', 'jobs', 'ab12cd34') };
+}
+
+describe('the pane-less fallback: forked sessions only (D-4953), every row read safely (D-4954)', () => {
+  const reg = (...p: string[]): string => path.join(home, '.cc-sessions', ...p);
+  const row = (id: string, uuid: string): void => fs.writeFileSync(reg(`${id}.uuid`), uuid);
+  /** Every row the hook attributed an event to, by its hookstate file — the whole registry, never one named row. */
+  const attributed = (): string[] => fs.readdirSync(reg()).filter((n) => n.endsWith('.hookstate.json')).sort();
+  /** The hook with a wall-clock bound (the spool describe's `runSpoolBounded`, for this describe's env): a hook blocked
+   *  in open(2) is killed, never left to hang the suite. `unset` REMOVES variables, which `env` cannot: a blank variable
+   *  and an unset one are different inputs under the hook's `set -u`. */
+  const runBounded = (payload: object, env: Record<string, string>, unset: string[] = []): ReturnType<typeof spawnSync> => {
+    const e = hookEnv(env);
+    for (const k of unset) delete e[k];
+    return spawnSync('bash', [HOOK], { input: JSON.stringify(payload), encoding: 'utf8', timeout: 10_000, killSignal: 'SIGKILL', env: e });
+  };
+
+  // THE STRANGER THE FALLBACK MUST NOT ADOPT (H2). A plain `claude --resume
+  // <uuid>` keeps the resumed id and its hooks carry it as
+  // CLAUDE_CODE_SESSION_ID (measured on 2.1.296), so a hand-run resume of a
+  // live row, outside tmux, matched that row and wrote SessionStart(resume)
+  // 'done' with the row's own uuid: state the server reads as current while
+  // the row's real pane is mid-turn.
+  it('a Claude session outside tmux that resumes a registry uuid is still nobody\'s', () => {
+    row('demo-quiet-basin', 'uuid-1\n');
+    expect(runFull({ hook_event_name: 'SessionStart', source: 'resume', session_id: 'uuid-1' }, { TMUX_PANE: '' }))
+      .toMatchObject({ stdout: '', stderr: '' });
+    expect(fs.readdirSync(reg()).sort()).toEqual(['demo-quiet-basin.generation', 'demo-quiet-basin.uuid']);
+  });
+
+  // The fleet gate's 'a foreign tmux session name' case, WITH the row it was
+  // missing: without one, it passed because the fallback had nothing to match.
+  it('a tmux session not named cc-* writes nothing, even beside a row that names its session id', () => {
+    fs.writeFileSync(path.join(home, 'bin', 'tmux'), '#!/bin/sh\necho "main"\n', { mode: 0o755 });
+    row('demo-quiet-basin', 'uuid-1\n');
+    run({ hook_event_name: 'Stop' });
+    expect(attributed()).toEqual([]);
+  });
+
+  // THE PANE IS THE PANE'S QUESTION: a process with a pane is answered by the
+  // pane or by nobody, even when it also carries the job marker. This is the
+  // case that isolates the `elif` from the job-marker conjunct.
+  it('a process in a tmux session not named cc-* is never attributed by its session id, job marker or not', () => {
+    fs.writeFileSync(path.join(home, 'bin', 'tmux'), '#!/bin/sh\necho "main"\n', { mode: 0o755 });
+    row('demo-quiet-basin', 'uuid-1\n');
+    run({ hook_event_name: 'UserPromptSubmit' }, { ...forkedEnv(), TMUX_PANE: '%3' });
+    expect(attributed()).toEqual([]);
+  });
+
+  // UNSET IS NOT BLANK (H4). Under `set -u`, a comparison that expands an
+  // unset CLAUDE_CODE_SESSION_ID kills the hook with "unbound variable" and
+  // exit 1. The blank-id case is 'a session with no pane' above.
+  it('the session id UNSET: exit 0, silent on both streams, nobody attributed', () => {
+    row('demo-quiet-basin', 'uuid-1\n');
+    row('ghost', '');
+    const r = runBounded({ hook_event_name: 'UserPromptSubmit' }, forkedEnv(), ['CLAUDE_CODE_SESSION_ID']);
+    expect(r.signal).toBeNull();
+    expect(r.status, 'the hook contract: exit 0 on every path').toBe(0);
+    expect({ stdout: r.stdout, stderr: r.stderr }).toEqual({ stdout: '', stderr: '' });
+    expect(attributed()).toEqual([]);
+  });
+
+  // ── D-4954. The walk opens EVERY row, not just this session's own, so one
+  // bad node anywhere used to reach every event of every forked session. The
+  // `a`/`b`-prefixed names sort before the matching row: the walk meets the
+  // bad node first and must pass it to attribute at all.
+
+  it.skipIf(process.getuid?.() === 0)('a row it cannot read is passed in silence, and the walk goes on to the match', () => {
+    row('a-row', 'uuid-other\n');
+    fs.chmodSync(reg('a-row.uuid'), 0o000);
+    row('demo-quiet-basin', 'uuid-1\n');
+    expect(runFull({ hook_event_name: 'UserPromptSubmit' }, forkedEnv())).toMatchObject({ stdout: '', stderr: '' });
+    expect(attributed()).toEqual(['demo-quiet-basin.hookstate.json']);
+  });
+
+  // THE RACE ITSELF, made deterministic (H3's own scenario: a row unlinked
+  // between the walk's test and its open). A DEBUG trap deletes the row just
+  // before each `read -r` runs (functrace on, so a reader moved into a
+  // function is still reached): the row passes `-f` and is gone at open(2).
+  // Where the open's failure is sent then decides whether bash's "No such
+  // file or directory" reaches the hook's stderr — the braces (D-1691). The
+  // mode-000 case above pins the same braces from the other side: a `-r`
+  // could hide that row, and no `-r` can see this one.
+  it('a row unlinked between its test and its open is passed in silence', () => {
+    row('a-row', 'uuid-other\n');
+    row('demo-quiet-basin', 'uuid-1\n');
+    const trap = path.join(home, 'unlink-race.bash');
+    fs.writeFileSync(trap, 'set -o functrace\ntrap \'case $BASH_COMMAND in *"read -r"*) rm -f "$RACE_ROW" ;; esac\' DEBUG\n');
+    expect(runFull({ hook_event_name: 'UserPromptSubmit' }, { ...forkedEnv(), BASH_ENV: trap, RACE_ROW: reg('a-row.uuid') }))
+      .toMatchObject({ stdout: '', stderr: '' });
+    expect(fs.existsSync(reg('a-row.uuid')), 'the trap fired: the row is gone').toBe(false);
+    expect(attributed()).toEqual(['demo-quiet-basin.hookstate.json']);
+  });
+
+  // THE BOUND: one row costs at most CCRC_ID_MAX characters, whatever it
+  // holds. Not visible in anything the hook writes, so a DEBUG trap records
+  // the length of the value each comparison is about to test. Coupled to the
+  // walk's variable name on purpose: a rename that drops the bound must red.
+  it('reads at most CCRC_ID_MAX characters of a row, however long it is', () => {
+    row('a-long', 'x'.repeat(300));
+    row('demo-quiet-basin', 'uuid-1\n');
+    const lens = path.join(home, 'lens.txt');
+    const trap = path.join(home, 'len-probe.bash');
+    fs.writeFileSync(trap, 'trap \'case $BASH_COMMAND in *"\\"\\$ruuid\\" =="*) printf "%s\\n" "${#ruuid}" >> "$LEN_LOG" ;; esac\' DEBUG\n');
+    run({ hook_event_name: 'UserPromptSubmit' }, { ...forkedEnv(), BASH_ENV: trap, LEN_LOG: lens });
+    const max = Number(/^CCRC_ID_MAX=(\d+)$/m.exec(fs.readFileSync(HOOK, 'utf8'))![1]);
+    expect(fs.readFileSync(lens, 'utf8').trim().split('\n').map(Number)).toEqual([max, 'uuid-1'.length]);
+    expect(attributed()).toEqual(['demo-quiet-basin.hookstate.json']);
+  });
+
+  it('a FIFO at a registry row never blocks the hook: exit 0, silent, the match still found', () => {
+    execFileSync('mkfifo', [reg('aaa-junk.uuid')]);
+    row('demo-quiet-basin', 'uuid-1\n');
+    const r = runBounded({ hook_event_name: 'PreToolUse', tool_name: 'Read' }, forkedEnv());
+    expect(r.signal, 'killed at the bound: the hook blocked in open(2)').toBeNull();
+    expect(r.status).toBe(0);
+    expect(r.stderr).toBe('');
+    expect(attributed()).toEqual(['demo-quiet-basin.hookstate.json']);
+    expect(fs.lstatSync(reg('aaa-junk.uuid')).isFIFO()).toBe(true);
+  }, 30_000);
+
+  it('a row that is a symlink to a character device is never read: exit 0, silent, the match still found', () => {
+    fs.symlinkSync('/dev/zero', reg('bbb-dev.uuid'));
+    row('demo-quiet-basin', 'uuid-1\n');
+    const r = runBounded({ hook_event_name: 'PreToolUse', tool_name: 'Read' }, forkedEnv());
+    expect(r.signal, 'killed at the bound: the hook read an endless device').toBeNull();
+    expect(r.status).toBe(0);
+    expect(r.stderr).toBe('');
+    expect(attributed()).toEqual(['demo-quiet-basin.hookstate.json']);
+  }, 30_000);
+
+  // THE ONE STRANGER THE MARKER LETS THROUGH, written where the gate is.
+  // CLAUDE_JOB_DIR is INHERITED: Claude Code's child-environment builder keeps
+  // it, so a `claude --resume <registry uuid>` started from a forked session's
+  // own shell reaches the fallback with the inputs a fork's own hook has. The
+  // first case of 'a session with no pane' IS that run as far as the hook can
+  // see, so no case can tell them apart, and what is left to drift is the
+  // prose: the header once said a stranger "exits 0 exactly as it did before
+  // the fallback existed" with no exception. Both halves are pinned: the claim
+  // carries its condition, and the block names the inheritance and both
+  // spellings of the stranger.
+  it('the identity block names the stranger the job marker lets through: a process a forked session starts (D-4953)', () => {
+    const src = fs.readFileSync(HOOK, 'utf8');
+    const start = src.indexOf('# TWO SOURCES FOR ONE QUESTION');
+    const end = src.indexOf('elif [[ -n "${CLAUDE_JOB_DIR:-}"');
+    expect(start, 'the block\'s first line').toBeGreaterThan(-1);
+    expect(end, 'the fallback\'s gate, after the block').toBeGreaterThan(start);
+    const prose = src.slice(start, end).replace(/\n#[ \t]*/g, ' ').replace(/\s+/g, ' ');
+    expect(prose).toMatch(/does not carry CLAUDE_JOB_DIR exits 0 exactly as it did before the fallback existed/);
+    expect(prose).toMatch(/CLAUDE_JOB_DIR is INHERITED/);
+    expect(prose).toMatch(/claude --resume <registry uuid>` run from a forked session's own shell/);
+    // ...and the uuid-less spelling of the same stranger (#189 re-review): a
+    // bare `claude --continue` there resumes the newest transcript in that
+    // directory, which is usually the fork's own.
+    expect(prose).toMatch(/a bare `claude --continue` there/);
+  });
+});
+
+// ── ccrc history (spec 2026-10-05 §8.1, §8.9 C17). END-APPENDED, with no import line, because this file is in
+// the citation corpus. A session recalls by running `"$HOME/.local/bin/ccrc" history grep …`, and the search gate
+// must not treat that as a code search. GRAPH_SEARCH_RE anchors on the command's first word, which here is a
+// quoted path, so this pins a property the regex already has: it reds only if a later edit loosens the anchor.
+describe('ccrc history: the recall CLI is not search-gated (spec 2026-10-05 §8.9 C17)', () => {
+  it('a PreToolUse Bash call to "$HOME/.local/bin/ccrc" history grep prints no deny, in a tree where a bare grep is denied', () => {
+    const tree = gatedTree();
+    // The positive control first, in the same armed tree. A plain grep IS denied here, so the silence below is
+    // the gate declining this command, not a gate that never armed.
+    const j = oneLine(run(pre('Bash', { command: 'grep -rn assembleFleet server/src' }, tree)));
+    expect(j.hookSpecificOutput.permissionDecision).toBe('deny');
+    expect(readState().graphGateDenials).toBe(1);
+    for (const command of [
+      '"$HOME/.local/bin/ccrc" history grep x',
+      '$HOME/.local/bin/ccrc history grep \'"connection refused"\'',
+      '"$HOME/.local/bin/ccrc" history grep --regex \'a|b\' --json',
+    ]) {
+      expect(run(pre('Bash', { command }, tree)), `the search gate denied a recall: ${command}`).toBe('');
+    }
+    expect(readState().graphGateDenials, 'a recall call was counted as a denial').toBe(1);
   });
 });

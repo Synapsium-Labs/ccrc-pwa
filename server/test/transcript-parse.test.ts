@@ -57,7 +57,7 @@ describe('resolveTranscript — the symlink-munge mismatch it was born fixing', 
       const real = transcriptPath(cfg, realDir, 'u-1');
       plant(real);
       expect(await at(cfg, linkDir, 'u-1')).toEqual(
-        { kind: 'found', path: real, rung: 'live-resolved', account: null });
+        { kind: 'found', path: real, rung: 'live-resolved', account: null, uuid: 'u-1' });
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
 
@@ -531,5 +531,216 @@ describe('a harness-written user record is not the operator speaking', () => {
   it('an empty record still produces nothing', () => {
     expect(parseTranscriptLine(rec('   ', { isMeta: true }))).toEqual([]);
     expect(parseTranscriptLine(rec([{ type: 'text', text: '  ' }], { isMeta: true }))).toEqual([]);
+  });
+});
+
+/**
+ * D-4950. A message the operator sends while the session is busy is, on current
+ * Claude Code, usually ABSORBED MID-TURN: the transcript gets a
+ * `queue-operation` enqueue, a `queue-operation` remove with
+ * `reason:"absorbed_mid_turn"`, and this `attachment` record — and never a
+ * `type:"user"` record at all. The record below is the measured shape (every
+ * key, in Claude Code's own order) with neutral text and ids.
+ */
+describe('an absorbed mid-turn message is the operator speaking (D-4950)', () => {
+  const PROMPT = 'also check the retention policy';
+  const TS_Q = '2026-10-01T02:47:23.054Z';
+  const queued = (attachment: Record<string, unknown>, extra: Record<string, unknown> = {}): string => JSON.stringify({
+    parentUuid: 'p-1', isSidechain: false,
+    attachment: {
+      type: 'queued_command', prompt: PROMPT, source_uuid: 's-1', commandMode: 'prompt',
+      origin: { kind: 'human' }, timestamp: TS_Q, humanTurn: true, ...attachment,
+    },
+    type: 'attachment', uuid: 'q-1', timestamp: TS_Q,
+    rendered: [{ content: `<system-reminder>\nThe user sent a new message while you were working:\n${PROMPT}\n\n</system-reminder>` }],
+    renderedRole: 'system', session_id: 'sess-a', userType: 'external', entrypoint: 'cli',
+    cwd: '/work/project-a', sessionId: 'sess-a', version: '2.1.285', gitBranch: 'ws/lane-a',
+    ...extra,
+  });
+
+  it('parses to ONE user event carrying the prompt verbatim, the record\'s own uuid and timestamp', () => {
+    expect(parseTranscriptLine(queued({}))).toEqual([{ kind: 'user', uuid: 'q-1', ts: TS_Q, text: PROMPT }]);
+  });
+
+  it('reads the record without `humanTurn` the same way — older builds never wrote it', () => {
+    expect(parseTranscriptLine(queued({ humanTurn: undefined }))).toEqual([
+      { kind: 'user', uuid: 'q-1', ts: TS_Q, text: PROMPT },
+    ]);
+  });
+
+  it('a queued task notification is not the operator — it stays dropped, in both measured shapes', () => {
+    const notif = '<task-notification>\n<task-id>t1</task-id>\n<status>completed</status>\n</task-notification>';
+    expect(parseTranscriptLine(queued({ prompt: notif, commandMode: 'task-notification', origin: undefined }))).toEqual([]);
+    expect(parseTranscriptLine(queued({
+      prompt: notif, commandMode: 'task-notification', origin: { kind: 'task-notification', producer: 'session-task' },
+    }))).toEqual([]);
+  });
+
+  it('a message from a PEER agent is not the operator, though its mode is `prompt`', () => {
+    expect(parseTranscriptLine(queued({ origin: { kind: 'peer', from: 'agent-a', body: PROMPT } }))).toEqual([]);
+  });
+
+  it('a human\'s queued item in another mode (`bash`) is not prose the operator sent', () => {
+    expect(parseTranscriptLine(queued({ prompt: 'ls -la', commandMode: 'bash' }))).toEqual([]);
+  });
+
+  it('an empty or non-string prompt produces nothing, and never throws', () => {
+    expect(parseTranscriptLine(queued({ prompt: '   ' }))).toEqual([]);
+    expect(parseTranscriptLine(queued({ prompt: 42 }))).toEqual([]);
+    expect(parseTranscriptLine(queued({ origin: null }))).toEqual([]);
+    expect(parseTranscriptLine(JSON.stringify({ type: 'attachment', uuid: 'q-2', timestamp: TS_Q, attachment: null }))).toEqual([]);
+  });
+
+  it('every other attachment, and the queue-operation records around it, stay dropped', () => {
+    // The TYPE decides first: the same speaker and mode fields under another
+    // attachment type are not this record, however much they look like it.
+    expect(parseTranscriptLine(queued({ type: 'queued_command_preview' }))).toEqual([]);
+    expect(parseTranscriptLine(JSON.stringify({
+      type: 'attachment', uuid: 'q-3', timestamp: TS_Q, attachment: { type: 'edited_text_file', filename: 'a.ts' },
+    }))).toEqual([]);
+    expect(parseTranscriptLine(JSON.stringify({
+      type: 'queue-operation', operation: 'remove', reason: 'absorbed_mid_turn', timestamp: TS_Q, sessionId: 'sess-a',
+    }))).toEqual([]);
+  });
+
+  it('a sidechain\'s absorbed message is a subagent\'s, not the operator\'s', () => {
+    expect(parseTranscriptLine(queued({}, { isSidechain: true }))).toEqual([]);
+  });
+
+  it('the text is byte for byte what a user record of the same message reads as — nothing trimmed', () => {
+    // The PWA matches this text against `composePrompt`'s output byte for
+    // byte, and a string user record's text is its content verbatim. The two
+    // paths describe the same kind of message and have to agree: a trim here
+    // would leave an indented or newline-ended message's bubble unmatched.
+    const raw = '  indented first line\n\n- a bullet\n';
+    expect(parseTranscriptLine(JSON.stringify({
+      type: 'user', uuid: 'u-1', timestamp: TS_Q, message: { role: 'user', content: raw },
+    }))).toEqual([{ kind: 'user', uuid: 'u-1', ts: TS_Q, text: raw }]);
+    expect(parseTranscriptLine(queued({ prompt: raw }))).toEqual([{ kind: 'user', uuid: 'q-1', ts: TS_Q, text: raw }]);
+  });
+});
+import { continuationOf, continuationInTail, finishedTurnDecides, tailRecordOf, CONTINUATION_TAIL_BYTES } from '../src/transcript/parse.js';
+
+const OLD = 'a'.repeat(36);
+const NEW = 'b'.repeat(36);
+
+describe('continuationOf', () => {
+  const marker = (from: string, to: string): string =>
+    JSON.stringify({ type: 'continued-in', sessionId: from, continuedInSessionId: to });
+
+  it('answers the successor uuid for the session that wrote the line', () => {
+    expect(continuationOf(marker(OLD, NEW), OLD)).toBe(NEW);
+  });
+
+  it('answers null for every other record type', () => {
+    expect(continuationOf(JSON.stringify({ type: 'user', message: {} }), OLD)).toBeNull();
+  });
+
+  // Review Focus 1: a line caught mid-write is not a marker and is not a throw.
+  it('answers null for a half-written line rather than throwing', () => {
+    expect(continuationOf(marker(OLD, NEW).slice(0, 40), OLD)).toBeNull();
+    expect(continuationOf('', OLD)).toBeNull();
+    expect(continuationOf('{', OLD)).toBeNull();
+  });
+
+  it('refuses a marker another session wrote', () => {
+    expect(continuationOf(marker('c'.repeat(36), NEW), OLD)).toBeNull();
+  });
+
+  // absence-permits: a record with no sessionId is still that file's marker.
+  it('accepts a marker that names no sessionId', () => {
+    expect(continuationOf(JSON.stringify({ type: 'continued-in', continuedInSessionId: NEW }), OLD))
+      .toBe(NEW);
+  });
+
+  it('refuses a successor that is not a uuid, and refuses itself', () => {
+    expect(continuationOf(marker(OLD, 'nope'), OLD)).toBeNull();
+    expect(continuationOf(marker(OLD, OLD), OLD)).toBeNull();
+  });
+
+  // Review Focus 4: the window is the contract, so the constant is the contract.
+  it('declares a tail window big enough for a marker line', () => {
+    expect(CONTINUATION_TAIL_BYTES).toBeGreaterThanOrEqual(marker(OLD, NEW).length * 4);
+  });
+});
+
+// D-4940. The whole fixture table lives in `continued-in-parity.test.ts`, run
+// by all three readers; these pin the three answers of the per-line classifier
+// the TypeScript reader is built from.
+describe('tailRecordOf / continuationInTail (D-4940)', () => {
+  const line = (o: unknown): string => JSON.stringify(o);
+  const marker = line({ type: 'continued-in', sessionId: OLD, continuedInSessionId: NEW });
+
+  it('classifies a line three ways: a successor, a deciding stop, or a skip', () => {
+    expect(tailRecordOf(marker, OLD)).toEqual({ kind: 'successor', to: NEW });
+    expect(tailRecordOf(line({ type: 'user', message: { content: 'x' } }), OLD)).toEqual({ kind: 'stop' });
+    expect(tailRecordOf(line({ type: 'assistant', message: { content: [], stop_reason: 'end_turn' } }), OLD)).toEqual({ kind: 'stop' });
+    expect(tailRecordOf(line({ type: 'continued-in', sessionId: 'c'.repeat(36), continuedInSessionId: NEW }), OLD)).toEqual({ kind: 'stop' });
+    expect(tailRecordOf(line({ type: 'last-prompt', lastPrompt: 'x' }), OLD)).toEqual({ kind: 'skip' });
+    expect(tailRecordOf(marker.slice(0, 30), OLD)).toEqual({ kind: 'skip' });
+  });
+
+  it('a top-level record decides; a marker-shaped object nested inside one never does', () => {
+    const nested = line({ message: { content: [{ type: 'tool_use', input: { type: 'continued-in', continuedInSessionId: NEW } }], stop_reason: 'tool_use' }, type: 'assistant', sessionId: OLD });
+    expect(tailRecordOf(nested, OLD)).toEqual({ kind: 'stop' });
+    const inMeta = line({ type: 'attachment', attachment: { type: 'continued-in', continuedInSessionId: NEW }, sessionId: OLD });
+    expect(tailRecordOf(inMeta, OLD)).toEqual({ kind: 'skip' });
+  });
+
+  it('a user/assistant record decides only when Claude Code calls it a finished turn (D-4940)', () => {
+    // Claude Code 2.1.296's own reader steps over the rest, so stopping at
+    // them declined a follow it makes. Its assistant test, then its prompt test.
+    const skip = { kind: 'skip' }, stop = { kind: 'stop' };
+    expect(tailRecordOf(line({ type: 'assistant', message: { content: [], stop_reason: null } }), OLD)).toEqual(skip);
+    expect(tailRecordOf(line({ type: 'assistant', message: { content: [] } }), OLD)).toEqual(skip);
+    expect(tailRecordOf(line({ type: 'assistant', isApiErrorMessage: true, message: { stop_reason: 'end_turn' } }), OLD)).toEqual(skip);
+    expect(tailRecordOf(line({ type: 'assistant', isApiErrorMessage: false, message: { stop_reason: 'end_turn' } }), OLD)).toEqual(stop);
+    expect(tailRecordOf(line({ type: 'user', message: { content: [{ type: 'text', text: '[Request interrupted by user]' }] } }), OLD)).toEqual(skip);
+    expect(tailRecordOf(line({ type: 'user', message: { content: [{ type: 'tool_result', content: 'ok' }, { type: 'text', text: 'and this' }] } }), OLD)).toEqual(skip);
+    expect(tailRecordOf(line({ type: 'user', isMeta: true, message: { content: 'x' } }), OLD)).toEqual(skip);
+    expect(tailRecordOf(line({ type: 'user', message: { content: '<local-command-stdout>done</local-command-stdout>' } }), OLD)).toEqual(skip);
+    expect(tailRecordOf(line({ type: 'user', message: { content: '[Request interrupted by user] <bash-input>ls</bash-input>' } }), OLD)).toEqual(stop);
+  });
+
+  it('presence of a sessionId must be this file\'s own: null refuses, absence permits', () => {
+    expect(continuationOf(line({ type: 'continued-in', sessionId: null, continuedInSessionId: NEW }), OLD)).toBeNull();
+    expect(continuationOf(line({ type: 'continued-in', continuedInSessionId: NEW }), OLD)).toBe(NEW);
+  });
+
+  it('scans newest first, stepping over metadata and stopping at a conversational record', () => {
+    const meta = line({ type: 'ai-title', aiTitle: 't' });
+    const turn = line({ type: 'user', message: { content: 'x' } });
+    expect(continuationInTail(`${turn}\n${marker}\n${meta}\n`, OLD)).toBe(NEW);
+    expect(continuationInTail(`${marker}\n${turn}\n${meta}\n`, OLD)).toBeNull();
+    expect(continuationInTail('', OLD)).toBeNull();
+  });
+
+  it('finishedTurnDecides: only a FINISHED TURN as the newest deciding line says "resumed" — never a window ' +
+     'with no deciding line, never a marker the rule refuses (D-4946, #189 re-review)', () => {
+    // `continuationInTail` answers null for all three; only the first is what
+    // Claude Code's own reader stops at with "not continued". The stream
+    // un-follows a fork on this answer, not on that null.
+    const meta = line({ type: 'ai-title', aiTitle: 't' });
+    const turn = line({ type: 'user', message: { content: 'x' } });
+    const done = line({ type: 'assistant', message: { content: [], stop_reason: 'end_turn' } });
+    const streaming = line({ type: 'assistant', message: { content: [], stop_reason: null } });
+    const foreign = line({ type: 'continued-in', sessionId: 'c'.repeat(36), continuedInSessionId: NEW });
+    const toSelf = line({ type: 'continued-in', sessionId: OLD, continuedInSessionId: OLD });
+    const nested = line({ message: { content: [{ type: 'tool_use', input: { type: 'continued-in', continuedInSessionId: NEW } }], stop_reason: 'tool_use' }, type: 'assistant', sessionId: OLD });
+    // A finished turn after the marker, metadata or not after it.
+    expect(finishedTurnDecides(`${marker}\n${turn}\n${meta}\n`, OLD)).toBe(true);
+    expect(finishedTurnDecides(`${marker}\n${streaming}\n${done}\n${streaming}\n`, OLD)).toBe(true);
+    // F1: an assistant record carrying a marker-shaped tool input is a turn.
+    expect(finishedTurnDecides(`${marker}\n${nested}\n`, OLD)).toBe(true);
+    // The marker itself is newest: continued.
+    expect(finishedTurnDecides(`${turn}\n${marker}\n${meta}\n`, OLD)).toBe(false);
+    // A marker the rule refuses decides "no successor" — but it is no turn.
+    expect(finishedTurnDecides(`${turn}\n${foreign}\n`, OLD)).toBe(false);
+    expect(finishedTurnDecides(`${turn}\n${toSelf}\n`, OLD)).toBe(false);
+    // Nothing decides: metadata only, a cut line, a turn still streaming, empty.
+    expect(finishedTurnDecides(`${meta}\n${meta}\n`, OLD)).toBe(false);
+    expect(finishedTurnDecides(`${turn.slice(5)}\n${meta}\n`, OLD)).toBe(false);
+    expect(finishedTurnDecides(`${streaming}\n`, OLD)).toBe(false);
+    expect(finishedTurnDecides('', OLD)).toBe(false);
   });
 });
