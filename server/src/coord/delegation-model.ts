@@ -284,6 +284,28 @@ export interface DelegationLeaseCreationRequest {
   firstObservedAt: string;
 }
 
+/**
+ * One admin record of the worktree census (spec §5.5), as correlation reads it: the plan's fixed shape, declared here beside the other
+ * pure delegation types because the census ADAPTER (`gitref.ts`) is IO and a pure module must not import it. Task 10 builds these from
+ * the real census. Three fields are pinned FOLDS of a failed read (wave 1, D-4008): `locked` is `false` when its stat failed,
+ * `baseAgreesFirstLog` is `null` when `logs/HEAD` could not be read, and a `canonicalPath` of `null` is an unreadable `gitdir`
+ * read as an absent one. None of them is positive evidence of anything, and correlation treats each so.
+ */
+export interface DelegationCensusRecord {
+  project: string;
+  adminRecord: string;
+  canonicalPath: string | null;
+  headBranch: string | null;
+  headSha: string | null;
+  claudeBase: string | null;
+  locked: boolean;
+  baseAgreesFirstLog: boolean | null;
+  // The plan's three words, in an order that keeps the absent/unreadable READ vocabulary single-defined in shared/agent-protocol.ts
+  // (this is a census record's own three-valued state, not that read result).
+  state: 'absent' | 'present' | 'unreadable';
+  diagnostic: string | null;
+}
+
 /** A checkpoint with nothing in it: no anchor, no row, no mapping. */
 export function emptyDelegationCheckpoint(): DelegationCheckpointV1 {
   return {

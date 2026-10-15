@@ -32,6 +32,7 @@ import {
   DELEGATION_PARENTAGE_STATES,
   DELEGATION_WORKSPACE_STATES,
   type DelegationActivityNaturalKey,
+  type DelegationActivitySourceKind,
   type DelegationEventEnvelopeV1,
 } from '../../../shared/api.js';
 import {
@@ -473,39 +474,58 @@ export function validateDelegationCheckpoint(cp: DelegationCheckpointV1, leaseFa
   if (leaseFacts !== null) assertLeaseJournalProof(cp, leaseFacts);
 }
 
-// ── Naming: which upstream agents an evidence event speaks of ────────────────────────────────────────────────────────
+// ── Naming: which upstream activities an evidence event speaks of ───────────────────────────────────────────────────
 
-/** An agent ID an event names, and what the event means for it. */
-export interface DelegationNamedAgent {
-  agentId: string;
-  /** A QUALIFYING JOIN (spec §5.2): an Agent launch response or a SubagentStart naming it. A bare `agent_id` is not one. */
+/** An upstream thing an event names, and what the event means for it. */
+export interface DelegationNamedUpstream {
+  sourceKind: DelegationActivitySourceKind;
+  /**
+   * `agent`: the agent ID. `workflow`: the RUN id (a worker's own upstream ID is `<runId>-<index>`, and the index comes only from the
+   * worker's meta, so a run record names the run and opens no worker). `bash-worktree`: the Bash call's `tool_use_id`.
+   */
+  upstreamId: string;
+  /**
+   * A QUALIFYING JOIN (spec §5.2): an Agent launch response or a SubagentStart naming an agent, or a Bash call that carries a worktree
+   * listing. A bare `agent_id` is not one, and a Workflow run record never is (a worker opens on its meta).
+   */
   join: boolean;
-  /** The event ends it: a SubagentStop naming it, or a launch response that reports `completed`. */
+  /** The event ends it: a SubagentStop naming an agent, a launch response that reports `completed`, or a Bash PostToolUse. */
   ends: boolean;
 }
 
 /**
- * The agent IDs an evidence event names. The common `agentId` field names the emitter (a tool event inside a subagent, a
- * SubagentStart, a SubagentStop); `launch.agentId` on an Agent/Task PostToolUse names the agent that call launched. Only
- * SubagentStart and a launch response QUALIFY; a bare occurrence is evidence that attaches once a join is known, and an unpaired
- * stop opens nothing. (Workflow and raw-worktree activities are Task 11's: they do not appear here.)
+ * The upstream IDs an evidence event names. For agents, the common `agentId` field names the emitter (a tool event inside a subagent,
+ * a SubagentStart, a SubagentStop) and `launch.agentId` on an Agent/Task PostToolUse names the agent that call launched; only
+ * SubagentStart and a launch response QUALIFY, a bare occurrence is evidence that attaches once a join is known, and an unpaired stop
+ * opens nothing. A Workflow PostToolUse launch names its RUN (never a join: the worker index is the meta's). A Bash PreToolUse or
+ * PostToolUse names its tool call, and is a join only when it carries a `listing` (the hook writes one only for a command that
+ * mentions a worktree). Nothing else names anything: a ToolSearch, a parent Stop and a SessionEnd open no activity, whatever order
+ * they arrive in.
  */
-export function namedAgentsOf(event: DelegationEventEnvelopeV1): DelegationNamedAgent[] {
-  const found = new Map<string, DelegationNamedAgent>();
-  const note = (agentId: unknown, join: boolean, ends: boolean): void => {
-    if (typeof agentId !== 'string' || agentId === '') return;
-    const prior = found.get(agentId);
-    found.set(agentId, { agentId, join: join || (prior?.join ?? false), ends: ends || (prior?.ends ?? false) });
+export function namedAgentsOf(event: DelegationEventEnvelopeV1): DelegationNamedUpstream[] {
+  const found = new Map<string, DelegationNamedUpstream>();
+  const note = (sourceKind: DelegationActivitySourceKind, upstreamId: unknown, join: boolean, ends: boolean): void => {
+    if (typeof upstreamId !== 'string' || upstreamId === '') return;
+    const id = JSON.stringify([sourceKind, upstreamId]);
+    const prior = found.get(id);
+    found.set(id, { sourceKind, upstreamId, join: join || (prior?.join ?? false), ends: ends || (prior?.ends ?? false) });
   };
-  note(event.agentId, event.eventKind === 'SubagentStart', event.eventKind === 'SubagentStop');
+  note('agent', event.agentId, event.eventKind === 'SubagentStart', event.eventKind === 'SubagentStop');
   if (event.eventKind === 'PostToolUse' && (event.toolName === 'Agent' || event.toolName === 'Task')) {
     const launch = event.launch;
-    if (typeof launch === 'object' && launch !== null) note(launch.agentId, true, launch.status === 'completed');
+    if (typeof launch === 'object' && launch !== null) note('agent', launch.agentId, true, launch.status === 'completed');
+  }
+  if (event.eventKind === 'PostToolUse' && event.toolName === 'Workflow') {
+    const launch = event.launch;
+    if (typeof launch === 'object' && launch !== null) note('workflow', launch.runId, false, launch.status === 'completed');
+  }
+  if ((event.eventKind === 'PreToolUse' || event.eventKind === 'PostToolUse') && event.toolName === 'Bash') {
+    note('bash-worktree', event.toolUseId, Array.isArray(event.listing), event.eventKind === 'PostToolUse');
   }
   return [...found.values()];
 }
 
-/** An agent no qualifying join has yet opened: the earliest retained record naming it is its identity record (spec §5.2). */
+/** An upstream thing no qualifying join has yet opened (a Workflow RUN never is opened itself; its workers are): the earliest retained record naming it is its identity record (spec §5.2). */
 export interface DelegationActivityCandidate {
   key: DelegationActivityNaturalKey;
   /** The accepted `journalId` of the earliest retained record that named it (NEVER the envelope's `eventId`). */
@@ -691,7 +711,7 @@ export class DelegationCheckpointBuilder {
   private foldEvidence(record: DelegationJournalRecordV1, e: DelegationEventEnvelopeV1, replay: boolean): void {
     if (replay) this.touchSession(e);
     for (const na of namedAgentsOf(e)) {
-      const key: DelegationActivityNaturalKey = { parentId: e.sessionId, parentIncarnation: e.parentIncarnation, sourceKind: 'agent', upstreamId: na.agentId };
+      const key: DelegationActivityNaturalKey = { parentId: e.sessionId, parentIncarnation: e.parentIncarnation, sourceKind: na.sourceKind, upstreamId: na.upstreamId };
       const encoded = encodeDelegationNaturalKey(key);
       // THE MAPPING IS READ FIRST (O4). A key the checkpoint holds keeps its ID whatever the journal still retains.
       const mapped = Object.hasOwn(this.mapping, encoded) ? this.mapping[encoded] : undefined;
@@ -699,19 +719,22 @@ export class DelegationCheckpointBuilder {
         if (replay) this.touchActivity(mapped, e, na);
         continue;
       }
+      // A Bash call with no listing mentions no worktree: it is not evidence of anything and must not hold the journal (every Bash call
+      // has a tool_use_id). It still ENDS the activity its listing-carrying twin opened, which the mapping branch above handles.
+      if (na.sourceKind === 'bash-worktree' && !na.join) continue;
       const prior = this.candidates.get(encoded);
       const candidate: DelegationActivityCandidate = prior === undefined
         ? { key, journalId: record.journalId, sequence: record.sequence, observedAt: e.observedAt, lastObservedAt: e.observedAt, endedAt: na.ends ? e.observedAt : null }
         : { ...prior, lastObservedAt: maxInstant(prior.lastObservedAt, e.observedAt), endedAt: prior.endedAt ?? (na.ends ? e.observedAt : null) };
       if (!na.join) { this.candidates.set(encoded, candidate); continue; }
       if (!replay) {
-        refuse('fold-refused', `agent ${na.agentId} of (${e.sessionId}, ${e.parentIncarnation}) has a qualifying join at sequence ${record.sequence}, inside the applied journal, but the checkpoint holds no activity for it`);
+        refuse('fold-refused', `${na.sourceKind} ${na.upstreamId} of (${e.sessionId}, ${e.parentIncarnation}) has a qualifying join at sequence ${record.sequence}, inside the applied journal, but the checkpoint holds no activity for it`);
       }
       this.openFromCandidate(candidate, encoded);
     }
   }
 
-  private touchActivity(activityId: string, e: DelegationEventEnvelopeV1, na: DelegationNamedAgent): void {
+  private touchActivity(activityId: string, e: DelegationEventEnvelopeV1, na: DelegationNamedUpstream): void {
     const a = this.activities.get(activityId);
     if (a === undefined) return refuse('fold-refused', `the mapping names activity ${activityId}, which has no row`);
     const ends = na.ends && a.executionState !== 'ended';
@@ -729,7 +752,7 @@ export class DelegationCheckpointBuilder {
     this.mapping = { ...allocated.checkpoint.activityIdsByNaturalKey };
     const ended = c.endedAt !== null;
     this.activities.set(allocated.activityId, {
-      activityId: allocated.activityId, parentId: c.key.parentId, parentIncarnation: c.key.parentIncarnation, sourceKind: 'agent',
+      activityId: allocated.activityId, parentId: c.key.parentId, parentIncarnation: c.key.parentIncarnation, sourceKind: c.key.sourceKind,
       upstreamId: c.key.upstreamId, identityJournalId: c.journalId, displayName: null, executionState: ended ? 'ended' : 'active',
       openedAt: c.observedAt, endedAt: ended && c.endedAt !== null ? maxInstant(c.endedAt, c.observedAt) : null, lastEventAt: c.lastObservedAt,
     });
@@ -751,6 +774,24 @@ export class DelegationCheckpointBuilder {
     const candidate = this.candidates.get(encoded);
     if (candidate === undefined) return { kind: 'waiting-for-evidence' };
     return { kind: 'opened', activityId: this.openFromCandidate(candidate, encoded) };
+  }
+
+  /**
+   * Opens a Workflow WORKER's activity on a POSITIVE WORKFLOW META read, the sibling of `openFromMeta`. The worker's upstream ID is
+   * `<runId>-<workerIndex>`: the run comes from the launch record, the index only from the meta. The identity record is the earliest
+   * retained record naming the RUN (so every worker of a run shares one), a meta read alone chooses none and waits, and a worker that
+   * the checkpoint already holds keeps its ID. The run's own candidate is NOT consumed: its other workers still need it. A parent
+   * `Stop` is not an input here at all (amendment `parent-stop-does-not-bound-workflow-start`). Like `openFromMeta`, the new ID exists
+   * only in this builder and must not escape until a checkpoint holding it has been atomically replaced (O1).
+   */
+  openWorkflowWorkerFromMeta(parentId: string, parentIncarnation: string, runId: string, workerIndex: number): DelegationMetaOpenResult {
+    const worker: DelegationActivityNaturalKey = { parentId, parentIncarnation, sourceKind: 'workflow', upstreamId: `${runId}-${workerIndex}` };
+    const encoded = encodeDelegationNaturalKey(worker);
+    const mapped = Object.hasOwn(this.mapping, encoded) ? this.mapping[encoded] : undefined;
+    if (mapped !== undefined) return { kind: 'already-open', activityId: mapped };
+    const run = this.candidates.get(encodeDelegationNaturalKey({ parentId, parentIncarnation, sourceKind: 'workflow', upstreamId: runId }));
+    if (run === undefined) return { kind: 'waiting-for-evidence' };
+    return { kind: 'opened', activityId: this.openFromCandidate({ ...run, key: worker }, encoded) };
   }
 
   private foldLease(record: DelegationJournalRecordV1, e: Extract<DelegationJournalEntryV1, { kind: 'lease-created' }>): void {
