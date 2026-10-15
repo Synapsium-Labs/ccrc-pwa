@@ -129,9 +129,10 @@ export function attachHistoryPane(
     // since it shipped (`refit`, in the attach effect); this is the same pair,
     // for the layer that exists to be read.
     //
-    // No grid comparison here, unlike the live one: there is no resize frame to
-    // send and nothing downstream to spare, so a fit that changes nothing is
-    // cheaper than the bookkeeping to avoid it.
+    // A REAL FIT, unlike the live one's type-only refit: this terminal has no
+    // pty behind it, so its grid is free to follow the glass, and there is no
+    // frame to send and nothing downstream to spare. A fit that changes
+    // nothing is cheaper than the bookkeeping to avoid it.
     const refitHistory = (): void => { term.fit(); };
     window.addEventListener('resize', refitHistory);
     window.visualViewport?.addEventListener('resize', refitHistory);

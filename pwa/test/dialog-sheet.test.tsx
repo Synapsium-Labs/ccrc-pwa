@@ -3,13 +3,33 @@
 // unparsed dialogs render raw + a terminal CTA; a stale 409 toasts and keeps
 // the sheet open on the store's dialog; scrim cancel only hides (the store
 // keeps signalling) and is refused while an answer is in flight.
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
-import type { Dialog, HookAsk } from '../../shared/api';
+import {
+  DIALOG_MULTI_REFUSE_CODES, DIALOG_REFUSE_CODES, DIALOG_TEXT_MAX, DIALOG_TEXT_REFUSE_CODES, isDialogText, type Dialog,
+  type HookAsk,
+} from '../../shared/api';
 import { ToastHost } from '@ccrc/ui';
-import { api, ApiError } from '../src/lib/api';
+import { api, ApiError, failedTo, sendErrorText } from '../src/lib/api';
+import {
+  DIALOG_MULTI_REFUSE_TEXT, DIALOG_REFUSE_TEXT, DIALOG_TEXT_REFUSE_TEXT, STALE_UNDER_ENVELOPE, dialogMultiRefusal,
+  dialogRefusal, dialogTextRefusal, ownWordsHeld,
+} from '../src/session/askWords';
 import { DialogSheet } from '../src/session/DialogSheet';
 import { createSessionStore } from '../src/stores/session';
+import { atBlock, declValue, effectiveValue, norm, ruleIn, selectorsOf } from './cssRule';
+import {
+  CACHING_TRACING,
+  COLOUR_FEATURES,
+  DRINK_FEATURES_TOOLS,
+  FOUR_Q,
+  FRUIT_DRINK,
+  PETS_SIZE_MODE,
+  TOOLS_SIZES,
+  pane,
+} from './askPanes';
 
 afterEach(() => {
   cleanup();
@@ -27,7 +47,8 @@ const fakeSocket = (): WebSocket =>
     close(): void {},
   }) as unknown as WebSocket;
 
-const SESSION_ID = 'claude:OpenClawHetzner';
+// Neutral, as every session id in this public repository is (D-5089's task renamed it).
+const SESSION_ID = 'lane-a:project-a';
 
 const parsedDialog = (patch: Partial<Dialog> = {}): Dialog => ({
   id: 'd-abc',
@@ -120,6 +141,8 @@ describe('DialogSheet (parsed)', () => {
     expect(
       await screen.findByText('That question changed — showing the latest'),
     ).toBeInTheDocument();
+    // News, not a failure: a plain toast (a status), never the error variant (an alert).
+    expect(screen.getByText('That question changed — showing the latest')).toHaveAttribute('role', 'status');
 
     // Sheet stays open showing the store's dialog; rows are tappable again.
     expect(
@@ -399,15 +422,17 @@ describe('DialogSheet (enriched by Dialog.ask)', () => {
       'Ship as-is, alert + runbook',
       'Chat about this',
     ]);
-    // Row 4 is the TUI's own escape hatch: no counterpart, so no description…
+    // Row 4 is the TUI's own escape hatch: no counterpart in the transcript, so
+    // none of its copy. D-5090: it carries the sheet's own sentence instead, what
+    // a tap on it does (it declines the whole ask), never a transcript description…
     expect(rows.map((r) => r.querySelector('.opt-desc')?.textContent ?? null)).toEqual([
       'Inherit the last seen rate.',
       'Emit only complete rows.',
       'Change nothing; watch it.',
-      null,
+      'Declines this ask so you can talk it over in the chat.',
     ]);
     // …and nothing folded under it either.
-    expect(document.querySelector('.opts')?.lastElementChild).toBe(rows[3]);
+    expect(rows[3]!.parentElement?.lastElementChild).toBe(rows[3]);
   });
 
   it('does not carry one question’s collapsed preview over to the next', () => {
@@ -443,78 +468,6 @@ describe('DialogSheet (enriched by Dialog.ask)', () => {
     expect(screen.queryByText('Revised fix')).not.toBeInTheDocument();
     expect(screen.queryByText('Inherit the last seen rate.')).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /preview/i })).not.toBeInTheDocument();
-  });
-});
-
-// — answering in your own words —
-//
-// A menu owns the terminal's keyboard, so free text cannot simply be typed at
-// the pane: the server refuses with dialog-open (see sendPrompt's hasMenu
-// guard). The sheet must instead take the TUI's own "Chat about this" row,
-// wait for the menu to clear, and only then send.
-describe('DialogSheet free-text reply', () => {
-  const withChatRow = () =>
-    parsedDialog({
-      options: [
-        { index: 1, label: 'Forward-fill per class (Recommended)' },
-        { index: 2, label: 'Require completeness, Anthropic only' },
-        { index: 3, label: 'Chat about this' },
-      ],
-    });
-
-  it('selects "Chat about this" first, then sends the text once the menu clears', async () => {
-    const answer = vi.spyOn(api, 'answerDialog').mockResolvedValue(undefined as never);
-    const prompt = vi.fn().mockResolvedValue(undefined);
-    const store = createSessionStore(SESSION_ID, { makeSocket: fakeSocket, api: { prompt } });
-    const dialog = withChatRow();
-    act(() => store.getState().apply({ type: 'dialog', dialog }));
-    render(
-      <>
-        <DialogSheet id={SESSION_ID} store={store} />
-        <ToastHost />
-      </>,
-    );
-
-    fireEvent.change(screen.getByLabelText('Answer in your own words'), {
-      target: { value: 'none of these — the rates table is the wrong layer' },
-    });
-    fireEvent.click(screen.getByRole('button', { name: 'Send' }));
-
-    // The escape hatch is taken by its own index, not by guessing.
-    await vi.waitFor(() => expect(answer).toHaveBeenCalledWith(SESSION_ID, 'd-abc', 3));
-    // Nothing is typed while the menu is still up.
-    expect(prompt).not.toHaveBeenCalled();
-
-    act(() => store.getState().apply({ type: 'dialog_cleared' }));
-    await vi.waitFor(() =>
-      expect(prompt).toHaveBeenCalledWith(
-        SESSION_ID,
-        'none of these — the rates table is the wrong layer',
-        { replaceDraft: undefined },
-      ),
-    );
-  });
-
-  it('says so rather than failing silently when the question offers no free-text row', async () => {
-    const answer = vi.spyOn(api, 'answerDialog').mockResolvedValue(undefined as never);
-    const prompt = vi.fn().mockResolvedValue(undefined);
-    const store = createSessionStore(SESSION_ID, { makeSocket: fakeSocket, api: { prompt } });
-    act(() => store.getState().apply({ type: 'dialog', dialog: parsedDialog() }));
-    render(
-      <>
-        <DialogSheet id={SESSION_ID} store={store} />
-        <ToastHost />
-      </>,
-    );
-
-    fireEvent.change(screen.getByLabelText('Answer in your own words'), {
-      target: { value: 'something else entirely' },
-    });
-    fireEvent.click(screen.getByRole('button', { name: 'Send' }));
-
-    expect(await screen.findByText(/no free-text option/i)).toBeInTheDocument();
-    expect(answer).not.toHaveBeenCalled();
-    expect(prompt).not.toHaveBeenCalled();
   });
 });
 
@@ -750,8 +703,10 @@ describe('DialogSheet (hook envelope)', () => {
     expect(go).toBeDisabled();
     fireEvent.click(go);
     expect(spy).not.toHaveBeenCalled();
+    // D-5089: the pane's title names the question, so the sheet says what it is rather than that it cannot be
+    // matched (D-5091 turns this into boxes where the pane carries `Dialog.multi`).
     const copy = document.querySelector('.ask-envelope .dlg-copy')!;
-    expect(copy.textContent).toMatch(/more than one answer/i);
+    expect(copy.textContent).toMatch(/several answers/i);
     expect(copy.textContent).toMatch(/terminal pane/i);
     expect(copy.textContent).not.toMatch(/catch up/i);
   });
@@ -1103,23 +1058,24 @@ describe('DialogSheet (hook envelope)', () => {
     });
 
     it('I3: a read-only rest-question row carries the muted treatment attribute', () => {
+      // D-5089: the rest are listed one row per QUESTION (its number and text), not by their options.
       renderWithAsk(TWO_QUESTIONS, envDialog());
-      const euRow = screen.getByText('EU').closest('.opt');
-      expect(euRow).toHaveAttribute('aria-disabled', 'true');
+      const row = screen.getByText('Second: which region?').closest('.opt');
+      expect(row).toHaveAttribute('aria-disabled', 'true');
     });
   });
 
-  // — fix round 1, (I2): only questions[0] is tappable —
-  it('with more than one question, only the first is tappable — the rest render read-only', () => {
+  // — fix round 1, (I2), as D-5089 left it: the question the PANE is painting is the tappable one. With question 1 on
+  // the pane that is question 1, and question 2 waits read-only (the control for "the envelope follows the pane").
+  it('question 1 on the pane: question 1 is tappable, question 2 waits read-only', () => {
     const spy = vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise(() => {}));
     renderWithAsk(TWO_QUESTIONS, envDialog());
 
-    // The second question's copy is on screen…
+    // The second question is on screen…
     expect(screen.getByText('Second: which region?')).toBeInTheDocument();
-    expect(screen.getByText('EU')).toBeInTheDocument();
     // …but not as a button: no accidental "digit 1 answers the wrong question".
-    expect(screen.queryByRole('button', { name: 'EU' })).not.toBeInTheDocument();
-    expect(screen.getByText('EU').closest('button')).toBeNull();
+    expect(screen.queryByRole('button', { name: /Second: which region\?/ })).not.toBeInTheDocument();
+    expect(screen.getByText('Second: which region?').closest('button')).toBeNull();
 
     fireEvent.click(screen.getByRole('button', { name: 'Prod' }));
     expect(spy).toHaveBeenCalledWith(SESSION_ID, 'd-abc', 2);
@@ -1168,6 +1124,8 @@ describe('DialogSheet (hook envelope)', () => {
       const allow = screen.getByRole('button', { name: /Allow/ });
       fireEvent.click(allow);
       expect(allow).toHaveAttribute('aria-busy', 'true');
+      // A flex box drops the marker's leading space (`Allowanswering…`): the gap keeps them apart.
+      expect(allow).toHaveClass('gap-2');
     });
 
     it('Deny carries aria-busy while its own interrupt call is in flight', () => {
@@ -1181,86 +1139,1704 @@ describe('DialogSheet (hook envelope)', () => {
   });
 });
 
-// — the free-text path's two failures, and the one disclosure nothing opened —
-describe('the free-text reply when the menu does NOT clear', () => {
-  const withChatRow = () =>
-    parsedDialog({
-      options: [
-        { index: 1, label: 'Forward-fill per class (Recommended)' },
-        { index: 2, label: 'Chat about this' },
+// — the envelope follows the pane (D-5089) —
+//
+// Plan docs/superpowers/plans/2026-10-15-ask-sheet-half.md, Task 2. The hook writes every question of an ask at once
+// and keeps the envelope until the tool call ends, while the pane paints one question at a time, then the review
+// screen. The sheet answers the question the PANE is painting (`askLive.ts`'s `liveQuestion`), lists the others
+// read-only, offers the review's own two rows, and says plainly what it cannot answer. When the envelope ages out
+// (`ask_cleared`) the scraped sheet takes over the same pane with the same behaviour.
+//
+// Every screen is a recorded Claude Code 2.1.300 one (`askPanes.ts`, kept equal to `parseDialog` by
+// server/test/dialog.test.ts), named by its fixture; an envelope no recording shows is DERIVED and says so.
+describe('the envelope follows the pane (D-5089)', () => {
+  const renderAsk = (ask: HookAsk, dialog: Dialog | null) => {
+    const store = makeStore();
+    act(() => {
+      if (dialog) store.getState().apply({ type: 'dialog', dialog });
+      store.getState().apply({ type: 'ask', ask, key: null });
+    });
+    render(
+      <>
+        <DialogSheet id={SESSION_ID} store={store} onOpenTerminal={vi.fn()} />
+        <ToastHost />
+      </>,
+    );
+    return { store };
+  };
+  const heading = (name: string): HTMLElement => screen.getByRole('heading', { name });
+  const pending = (): ReturnType<typeof vi.spyOn> =>
+    vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise(() => {}));
+  const CANCEL_SAYS = 'Declines every question in this ask — nothing you answered is sent.';
+  /** The one option BUTTON whose label is exactly `label` (a read-only row is a div, and is not one). By label, not
+   *  by accessible name: the name runs the label into its description (`NoLeave tracing off`), and `/^No/` also
+   *  matches the terminal CTA's `Not now`. */
+  const optionButton = (label: string): HTMLButtonElement => {
+    const buttons = screen.getAllByText(label, { selector: '.opt-label' })
+      .map((l) => l.closest('button'))
+      .filter((b): b is HTMLButtonElement => b !== null);
+    expect(buttons, `option buttons reading ${label}`).toHaveLength(1);
+    return buttons[0]!;
+  };
+
+  it('question 2 on the pane: the sheet shows question 2, and Tea answers pane row 1', () => {
+    const spy = pending();
+    const q2 = pane('cc300-ask-q2-of-2-single');
+    expect(q2.id.startsWith('591e0a9e')).toBe(true);
+    renderAsk(FRUIT_DRINK, q2);
+
+    expect(heading('Which drink?')).toBeInTheDocument();
+    const tea = screen.getByRole('button', { name: /^Tea/ });
+    expect(tea).toBeEnabled();
+    fireEvent.click(tea);
+    expect(spy).toHaveBeenCalledWith(SESSION_ID, q2.id, 1);
+  });
+
+  it('same labels: No under Enable tracing? answers the tracing pane', () => {
+    const spy = pending();
+    const q1 = pane('cc300-ask-same-labels-q1');
+    const q2 = pane('cc300-ask-same-labels-q2');
+    expect(q2.id.startsWith('38f07f99')).toBe(true);
+    const { store } = renderAsk(CACHING_TRACING, q1);
+    expect(heading('Enable caching?')).toBeInTheDocument();
+
+    // Caching answered in the terminal: the pane paints Tracing under the same two labels.
+    act(() => store.getState().apply({ type: 'dialog', dialog: q2 }));
+    expect(heading('Enable tracing?')).toBeInTheDocument();
+    fireEvent.click(optionButton('No'));
+    expect(spy).toHaveBeenCalledWith(SESSION_ID, q2.id, 2);
+  });
+
+  it('progress reads 2 of 2, and the other question is listed read-only', () => {
+    renderAsk(FRUIT_DRINK, pane('cc300-ask-q2-of-2-single'));
+
+    expect(screen.getByText('2 of 2')).toBeInTheDocument();
+    // The eyebrow carries the shown question's header chip; the other question's rides its own row.
+    expect(document.querySelector('.sheet-eyebrow .dlg-header-chip')).toHaveTextContent('Drink');
+    expect(screen.getByText('other questions in this ask')).toBeInTheDocument();
+    const fruit = screen.getByText('Which fruit?').closest('.opt');
+    expect(fruit).not.toBeNull();
+    expect(fruit).toHaveAttribute('aria-disabled', 'true');
+    expect(screen.queryByRole('button', { name: /Which fruit\?/ })).toBeNull();
+    expect(screen.queryByText(/answer these in the terminal/i)).toBeNull();
+  });
+
+  it('no question live or named: the eyebrow claims no position', () => {
+    // The fallback display is question 1, read-only behind the CTA; it is not the question the pane is painting, so
+    // "1 of 2" would be a guess. `FRUIT_DRINK` over another ask's pane (`cc300-ask-1q-open`, Red/Blue), and with no pane.
+    const { store } = renderAsk(FRUIT_DRINK, pane('cc300-ask-1q-open'));
+    expect(heading('Which fruit?')).toBeInTheDocument();
+    expect(screen.getByText(/can't be matched/)).toBeInTheDocument();
+    expect(document.querySelector('.sheet-eyebrow')?.textContent).not.toMatch(/\d+ of \d+/);
+    act(() => store.getState().apply({ type: 'dialog_cleared' }));
+    expect(document.querySelector('.sheet-eyebrow')?.textContent).not.toMatch(/\d+ of \d+/);
+    // The control: the pane paints question 2, and the sheet says so.
+    act(() => store.getState().apply({ type: 'dialog', dialog: pane('cc300-ask-q2-of-2-single') }));
+    expect(screen.getByText('2 of 2')).toBeInTheDocument();
+  });
+
+  it('a tie the title cannot break stays read-only behind the terminal CTA', () => {
+    const spy = pending();
+    // DERIVED: both questions read Yes/No, and the pane's title (`Enable tracing?`) is a suffix of both.
+    const both: HookAsk = {
+      questions: [
+        { question: 'Enable tracing?', header: 'Tracing', multiSelect: false, options: CACHING_TRACING.questions[1]!.options },
+        { question: 'Really enable tracing?', header: 'Really', multiSelect: false, options: CACHING_TRACING.questions[1]!.options },
       ],
+    };
+    renderAsk(both, pane('cc300-ask-same-labels-q2'));
+
+    for (const label of ['Yes', 'No']) expect(optionButton(label)).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Open terminal to answer' })).toBeInTheDocument();
+    fireEvent.click(optionButton('No'));
+    expect(spy).not.toHaveBeenCalled();
+  });
+
+  it('the review screen: Submit answers answers row 1, and the pane\'s summary shows with its warning', () => {
+    const spy = pending();
+    const review = pane('cc300-ask-review-skipped');
+    expect(review.id.startsWith('3679f837')).toBe(true);
+    renderAsk(PETS_SIZE_MODE, review);
+
+    expect(heading('Review your answers')).toBeInTheDocument();
+    expect(screen.getByText(/⚠ You have not answered all questions/)).toBeInTheDocument();
+    expect(screen.getByText(/→ Dogs/)).toBeInTheDocument();
+    // The review is the whole ask's: no question is "the other one" here.
+    expect(screen.queryByText('other questions in this ask')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: /^Submit answers/ }));
+    expect(spy).toHaveBeenCalledWith(SESSION_ID, review.id, 1);
+  });
+
+  it('Cancel says it declines every question, and answers row 2', () => {
+    // Measured (`cc300-ask-review-cancelled`): Cancel rejects the whole tool call, every answer discarded.
+    const spy = pending();
+    const review = pane('cc300-ask-review-same-labels');
+    renderAsk(CACHING_TRACING, review);
+
+    const cancel = screen.getByRole('button', { name: /^Cancel/ });
+    expect(cancel).toHaveTextContent(CANCEL_SAYS);
+    fireEvent.click(cancel);
+    expect(spy).toHaveBeenCalledWith(SESSION_ID, review.id, 2);
+  });
+
+  it('a review taller than the parser\'s 20-row climb is still the review', () => {
+    const review = pane('cc300-ask-review-4q-long');
+    // The climb cut the first answer out of `body`, so a summary read from it would lose it.
+    expect(review.body).not.toMatch(/→ Postgres/);
+    renderAsk(FOUR_Q, review);
+
+    expect(screen.getByRole('button', { name: /^Submit answers/ })).toBeEnabled();
+    expect(screen.getByText(/→ Postgres/)).toBeInTheDocument();
+  });
+
+  it('a multiSelect question on the pane is named honestly', () => {
+    // DERIVED (D-5091): the recorded screen without its `Dialog.multi`, as a pane with no commit row on screen reads
+    // (the 2.1.222 shape). With `multi` the question is answered as boxes ("multiSelect boxes (D-5091)" below).
+    const shape = pane('cc300-ask-multiselect-next-open');
+    delete shape.multi;
+    renderAsk(DRINK_FEATURES_TOOLS, shape);
+
+    expect(heading('Which features do you want?')).toBeInTheDocument();
+    expect(screen.getByText('2 of 3')).toBeInTheDocument();
+    const copy = document.querySelector('.ask-envelope .dlg-copy')!;
+    expect(copy.textContent).toMatch(/several answers/i);
+    expect(copy.textContent).toMatch(/terminal pane/i);
+    expect(screen.queryByText(/catch up/i)).toBeNull();
+    // No box answers by one tap, and none is offered without `Dialog.multi` to answer it through.
+    expect(screen.getByRole('button', { name: /^Logging/ })).toBeDisabled();
+    expect(screen.queryAllByRole('checkbox')).toHaveLength(0);
+    expect(screen.getByRole('button', { name: 'Open terminal to answer' })).toBeInTheDocument();
+  });
+
+  describe('the hand-off: ask_cleared hands the same pane to the scraped sheet', () => {
+    it('ask_cleared while question 2 is live: the scraped sheet shows question 2 and answers the same row', () => {
+      const spy = pending();
+      const q2 = pane('cc300-ask-q2-of-2-single');
+      const { store } = renderAsk(FRUIT_DRINK, q2);
+      act(() => store.getState().apply({ type: 'ask_cleared' }));
+
+      expect(document.querySelector('[data-source="hook"]')).toBeNull();
+      expect(heading('Which drink?')).toBeInTheDocument();
+      // The pane marks the active tab by colour only, so the scraped sheet cannot say which of N this is.
+      expect(screen.queryByText(/^\d+ of \d+$/)).toBeNull();
+      fireEvent.click(screen.getByRole('button', { name: /^Tea/ }));
+      expect(spy).toHaveBeenCalledWith(SESSION_ID, q2.id, 1);
     });
 
-  it('says the question is still up, and types NOTHING into the pane', async () => {
-    // The escape hatch is a two-step: take the "Chat about this" row, WAIT for
-    // the menu to go, then type. The server refuses to type into a session
-    // with a menu up (`dialog-open`), so sending anyway would be a request
-    // that fails — and the reader would have lost their text to it. Measured
-    // through the poll itself (CLEAR_TRIES × CLEAR_POLL_MS) with a store whose
-    // dialog never clears.
-    vi.useFakeTimers();
-    try {
-      const answer = vi.spyOn(api, 'answerDialog').mockResolvedValue(undefined as never);
-      const prompt = vi.fn().mockResolvedValue(undefined);
-      const store = createSessionStore(SESSION_ID, { makeSocket: fakeSocket, api: { prompt } });
-      act(() => store.getState().apply({ type: 'dialog', dialog: withChatRow() }));
-      render(<><DialogSheet id={SESSION_ID} store={store} /><ToastHost /></>);
+    it('ask_cleared while the review is live: the scraped sheet titles Review your answers and offers Submit answers', () => {
+      const spy = pending();
+      const review = pane('cc300-ask-review-same-labels');
+      const { store } = renderAsk(CACHING_TRACING, review);
+      act(() => store.getState().apply({ type: 'ask_cleared' }));
 
-      fireEvent.change(screen.getByLabelText('Answer in your own words'),
-        { target: { value: 'the rates table is the wrong layer' } });
-      fireEvent.click(screen.getByRole('button', { name: 'Send' }));
-      await vi.waitFor(() => expect(answer).toHaveBeenCalled());
+      expect(document.querySelector('[data-source="hook"]')).toBeNull();
+      expect(heading('Review your answers')).toBeInTheDocument();
+      expect(screen.getByText(/→ - only in staging, sampled 10%/)).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /^Cancel/ })).toHaveTextContent(CANCEL_SAYS);
+      fireEvent.click(screen.getByRole('button', { name: /^Submit answers/ }));
+      expect(spy).toHaveBeenCalledWith(SESSION_ID, review.id, 1);
+    });
 
-      // Exactly past the last poll (CLEAR_TRIES × CLEAR_POLL_MS = 8 s), and
-      // no further: a toast dismisses itself on a timer of its own, so
-      // advancing "plenty" would run the refusal off the screen before the
-      // assertion reads it (measured — 30 s left nothing to find).
-      await act(async () => { await vi.advanceTimersByTimeAsync(8_400); });
+    it('the scraped sheet reads the question off the pane, never the raw tab row', () => {
+      // Without the transcript's copy (`Dialog.ask`), the scraped sheet titles the pane's question and lists what else
+      // the pane painted above it. The tab row (`← ☒ Fruit ☐ Drink ✔ Submit →`) is the ask's chrome, and the question
+      // was painted twice (title and preamble).
+      const { store } = renderAsk(FRUIT_DRINK, pane('cc300-ask-q2-of-2-single'));
+      act(() => store.getState().apply({ type: 'ask_cleared' }));
+      expect(heading('Which drink?')).toBeInTheDocument();
+      expect(document.querySelector('.dlg-body'), 'a preamble that only repeats the question').toBeNull();
+      expect(screen.queryByText(/←/)).toBeNull();
+      cleanup();
 
-      expect(screen.getByText(/answer it in the terminal/)).toBeInTheDocument();
-      expect(prompt, 'the text was typed into a session with a menu up').not.toHaveBeenCalled();
-    } finally {
-      vi.useRealTimers();
+      // A question too long for one row: the pane's title is its LAST row under a `│ ` bar, and the rows above it are
+      // the rest of the question. The sheet titles the whole question, bars gone.
+      const wrapped = renderAsk(FOUR_Q, pane('cc300-ask-wrapped-question'));
+      act(() => wrapped.store.getState().apply({ type: 'ask_cleared' }));
+      expect(heading(FOUR_Q.questions[1]!.question)).toBeInTheDocument();
+      expect(document.querySelector('.dlg-body')).toBeNull();
+      expect(screen.queryByText(/│/)).toBeNull();
+      cleanup();
+
+      // A one-question ask paints its header above the question: that stays, the question is not repeated.
+      renderWithDialog(pane('ask-2col-chat-about'));
+      expect(document.querySelector('.dlg-body')?.textContent).toBe('Revised fix');
+    });
+
+    // `ask_cleared` while a multiSelect question is live: D-5091's hand-off case ("multiSelect boxes (D-5091)" below)
+    // answers it with the same boxes, where this one once only named it.
+
+    it('a hidden envelope stays hidden when ask_cleared hands off the same pane question, and a new question opens it', () => {
+      const { store } = renderAsk(FRUIT_DRINK, pane('cc300-ask-q2-of-2-single'));
+      fireEvent.click(screen.getByTestId('sheet-overlay'));
+      expect(screen.queryByRole('heading', { name: 'Which drink?' })).toBeNull();
+
+      act(() => store.getState().apply({ type: 'ask_cleared' }));
+      expect(screen.queryByRole('heading', { name: 'Which drink?' }), 'the waved-away question popped back').toBeNull();
+
+      // Back to question 1 on the pane (a new dialog id): something new to answer, so the sheet opens.
+      act(() => store.getState().apply({ type: 'dialog', dialog: pane('cc300-ask-freetext-held') }));
+      expect(heading('Which fruit?')).toBeInTheDocument();
+    });
+
+    it('the transcript\'s raise re-opens a question hidden across the hand-off', () => {
+      // D-286's nonce clears every dismissal, the hand-off's carried dialog id included: the transcript's Answer means
+      // "open it", whichever sheet now holds the question.
+      const store = makeStore();
+      act(() => {
+        store.getState().apply({ type: 'dialog', dialog: pane('cc300-ask-q2-of-2-single') });
+        store.getState().apply({ type: 'ask', ask: FRUIT_DRINK, key: null });
+      });
+      const { rerender } = render(<DialogSheet id={SESSION_ID} store={store} raise={0} />);
+      fireEvent.click(screen.getByTestId('sheet-overlay'));
+      act(() => store.getState().apply({ type: 'ask_cleared' }));
+      expect(screen.queryByRole('heading', { name: 'Which drink?' })).toBeNull();
+
+      rerender(<DialogSheet id={SESSION_ID} store={store} raise={1} />);
+      expect(heading('Which drink?')).toBeInTheDocument();
+    });
+  });
+});
+
+// — own words, through the free-text row (D-5090) —
+//
+// AskUserQuestion paints a free-text row under a question's n options: `n+1. Type something.` while it is empty, the
+// typed text once typed. Own words answer the question THROUGH that row (`api.answerDialogText`, D-5047), which types
+// only once the pane proves focus and presses Enter only once it proves the echo. They are never sent by pressing
+// `Chat about this`, which declines the WHOLE ask, and never as a new prompt (the deleted `respond()`, diagnosis root
+// cause 5). The in-flight state belongs to the CALL: typing changes the dialog's id (it hashes the labels, and the
+// row's label becomes the text), so the stream can deliver the typed row while the call is still running.
+//
+// Every screen is a recorded Claude Code 2.1.300 one (`askPanes.ts`), named by its fixture; a shape no recording shows
+// is DERIVED and says so.
+describe('own words go through the free-text row (D-5090)', () => {
+  /** The recorded walk's own words (`cc300-ask-freetext-walk-3-typed` paints them in row 3 of `Enable tracing?`). */
+  const TEXT = '- only in staging, sampled 10%';
+  const CHAT_SAYS = 'Declines this ask so you can talk it over in the chat.';
+  const renderAsk = (ask: HookAsk | null, dialog: Dialog | null) => {
+    const prompt = vi.fn().mockResolvedValue(undefined);
+    const store = createSessionStore(SESSION_ID, { makeSocket: fakeSocket, api: { prompt } });
+    act(() => {
+      if (dialog) store.getState().apply({ type: 'dialog', dialog });
+      if (ask) store.getState().apply({ type: 'ask', ask, key: null });
+    });
+    render(
+      <>
+        <DialogSheet id={SESSION_ID} store={store} onOpenTerminal={vi.fn()} />
+        <ToastHost />
+      </>,
+    );
+    return { store, prompt };
+  };
+  const field = (): HTMLInputElement => screen.getByLabelText('Answer in your own words');
+  const noField = (): HTMLElement | null => screen.queryByLabelText('Answer in your own words');
+  const send = (): HTMLButtonElement => screen.getByRole('button', { name: /^Send/ });
+  const type = (text: string): void => {
+    fireEvent.change(field(), { target: { value: text } });
+  };
+  const heading = (name: string): HTMLElement => screen.getByRole('heading', { name });
+  /** The one option BUTTON whose label is exactly `label` (see the D-5089 describe's helper of the same name). */
+  const optionButton = (label: string): HTMLButtonElement => {
+    const buttons = screen.getAllByText(label, { selector: '.opt-label' })
+      .map((l) => l.closest('button'))
+      .filter((b): b is HTMLButtonElement => b !== null);
+    expect(buttons, `option buttons reading ${label}`).toHaveLength(1);
+    return buttons[0]!;
+  };
+  /** A call the test settles by hand. */
+  const deferred = () => {
+    let resolve!: () => void;
+    let reject!: (err: unknown) => void;
+    const promise = new Promise<void>((res, rej) => {
+      resolve = res;
+      reject = rej;
+    });
+    return { promise, resolve, reject };
+  };
+  const refused = (code: string) => new ApiError(409, { ok: false, error: code });
+
+  it('envelope: an empty Type something. row at n+1 offers Answer in your own words, and Send calls answerDialogText', () => {
+    const text = vi.spyOn(api, 'answerDialogText').mockReturnValue(new Promise(() => {}));
+    const option = vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise(() => {}));
+    const q2 = pane('cc300-ask-same-labels-q2');
+    expect(q2.id.startsWith('38f07f99')).toBe(true);
+    const { prompt } = renderAsk(CACHING_TRACING, q2);
+    expect(document.querySelector('[data-source="hook"]')).not.toBeNull();
+
+    type(TEXT);
+    fireEvent.click(send());
+    // Row 3 is the pane's `Type something.`, under the question's two options.
+    expect(text).toHaveBeenCalledWith(SESSION_ID, q2.id, 3, TEXT);
+    expect(option, 'own words pressed a row').not.toHaveBeenCalled();
+    expect(prompt, 'own words were sent as a new prompt').not.toHaveBeenCalled();
+  });
+
+  it('envelope: the pane\'s Chat about this row is offered after the own words, and says it declines the ask', () => {
+    const option = vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise(() => {}));
+    const q2 = pane('cc300-ask-same-labels-q2');
+    renderAsk(CACHING_TRACING, q2);
+
+    const chat = screen.getByRole('button', { name: /^Chat about this/ });
+    expect(chat).toHaveTextContent(CHAT_SAYS);
+    expect(field().compareDocumentPosition(chat) & Node.DOCUMENT_POSITION_FOLLOWING, 'Chat sits after the field')
+      .toBeTruthy();
+    fireEvent.click(chat);
+    expect(option).toHaveBeenCalledWith(SESSION_ID, q2.id, 4);
+  });
+
+  it('scraped: Type something. is not a tappable row', () => {
+    // `COLOUR_ONE`'s pane with no envelope: the scraped sheet alone. Enter on the empty row rejects the whole ask.
+    renderAsk(null, pane('cc300-ask-1q-open'));
+
+    expect(screen.queryByRole('button', { name: /Type something/ })).toBeNull();
+    expect(screen.queryByText('Type something.')).toBeNull();
+    expect(field()).toBeEnabled();
+    expect(screen.getByRole('button', { name: /^Red/ })).toBeEnabled();
+  });
+
+  it('scraped: own words answer the question through the Type something. row', () => {
+    const text = vi.spyOn(api, 'answerDialogText').mockReturnValue(new Promise(() => {}));
+    const option = vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise(() => {}));
+    const open = pane('cc300-ask-1q-open');
+    expect(open.id.startsWith('ac059b8e')).toBe(true);
+    const { prompt } = renderAsk(null, open);
+
+    type('Teal, if there is one');
+    fireEvent.click(send());
+    expect(text).toHaveBeenCalledWith(SESSION_ID, open.id, 3, 'Teal, if there is one');
+    expect(option, 'own words pressed Chat about this (row 4), declining the ask').not.toHaveBeenCalled();
+    expect(prompt).not.toHaveBeenCalled();
+  });
+
+  it('the two-column layout has no own-words row: one line, no field, and the Chat row says what it does', () => {
+    const option = vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise(() => {}));
+    const twoCol = pane('ask-2col-chat-about');
+    renderAsk(null, twoCol);
+
+    expect(noField()).toBeNull();
+    expect(screen.getByText(/no own-words row on the terminal/i)).toBeInTheDocument();
+    const chat = screen.getByRole('button', { name: /^Chat about this/ });
+    expect(chat).toHaveTextContent(CHAT_SAYS);
+    fireEvent.click(chat);
+    expect(option).toHaveBeenCalledWith(SESSION_ID, twoCol.id, 4);
+  });
+
+  it('a row holding other text: one line, no field', () => {
+    // `Mango` was typed in the terminal: typing more would append to it, so the route refuses `not-free-text`.
+    renderAsk(FRUIT_DRINK, pane('cc300-ask-freetext-held'));
+
+    expect(heading('Which fruit?')).toBeInTheDocument();
+    expect(screen.getByText(/already holds other text/i)).toBeInTheDocument();
+    expect(noField()).toBeNull();
+    expect(screen.queryByRole('button', { name: /^Mango/ })).toBeNull();
+  });
+
+  it('the text and the busy state belong to the call: a frame with the typed label arriving mid-call changes neither', () => {
+    const call = deferred();
+    vi.spyOn(api, 'answerDialogText').mockReturnValue(call.promise);
+    const q2 = pane('cc300-ask-same-labels-q2');
+    const { store } = renderAsk(CACHING_TRACING, q2);
+    type(TEXT);
+    fireEvent.click(send());
+
+    // The stream delivers the typed row, under a new id, before the call answers: first a capture taken while tmux
+    // was still typing (DERIVED from `cc300-ask-freetext-walk-3-typed`: the row holds the text's first 22 characters,
+    // and the id, which hashes the labels, differs), then the recorded one holding the whole text.
+    const typed = pane('cc300-ask-freetext-walk-3-typed');
+    expect(typed.id).not.toBe(q2.id);
+    const partial: Dialog = {
+      ...typed,
+      id: `${typed.id}-partial`,
+      options: typed.options.map((o) => (o.index === 3 ? { ...o, label: TEXT.slice(0, 22) } : o)),
+    };
+    for (const frame of [partial, typed]) {
+      act(() => store.getState().apply({ type: 'dialog', dialog: frame }));
+
+      expect(field(), frame.id).toHaveValue(TEXT);
+      expect(field()).toBeDisabled();
+      expect(send()).toBeDisabled();
+      expect(send()).toHaveAttribute('aria-busy', 'true');
+      expect(screen.queryByText(/already holds other text/i), 'the sheet read its own send as other text').toBeNull();
+      expect(optionButton('Yes')).toBeDisabled();
     }
   });
 
-  it('a refusal on the way in is said in the sheet’s own words, and the box is re-enabled', async () => {
-    // The `catch` and its `finally`: a 502 on the escape-hatch answer must not
-    // leave the sheet reading "answering…" forever, because the one control
-    // the reader has left is the row they would tap again.
-    const answer = vi.spyOn(api, 'answerDialog')
-      .mockRejectedValue(new ApiError(502, { ok: false, stderr: 'tmux: no server running' }));
-    const store = createSessionStore(SESSION_ID, { makeSocket: fakeSocket, api: { prompt: vi.fn() } });
-    act(() => store.getState().apply({ type: 'dialog', dialog: withChatRow() }));
-    render(<><DialogSheet id={SESSION_ID} store={store} /><ToastHost /></>);
-
-    fireEvent.change(screen.getByLabelText('Answer in your own words'), { target: { value: 'wait' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Send' }));
-
-    expect(await screen.findByText(/tmux: no server running/)).toBeInTheDocument();
-    expect(answer).toHaveBeenCalled();
-    // The `finally` clears `answering`, so the ROWS are tappable again — which
-    // is the claim. Send itself stays disabled, and correctly: `respond` has
-    // already emptied the box, and an empty box has nothing to send (measured,
-    // because the first version of this case asserted the button).
-    await vi.waitFor(() =>
-      expect(screen.getByRole('button', { name: /Chat about this/ })).not.toBeDisabled());
+  it('a send under way stays on screen when the pane stops matching mid-call', () => {
+    // The envelope reads its free-text row only while the question is live; a capture of another screen mid-call
+    // (DERIVED sequence: `cc300-ask-1q-open`, another ask's pane) must not take the operator's text and busy Send away.
+    vi.spyOn(api, 'answerDialogText').mockReturnValue(new Promise(() => {}));
+    const { store } = renderAsk(CACHING_TRACING, pane('cc300-ask-same-labels-q2'));
+    type(TEXT);
+    fireEvent.click(send());
+    act(() => store.getState().apply({ type: 'dialog', dialog: pane('cc300-ask-1q-open') }));
+    expect(document.querySelector('[data-source="hook"]')).not.toBeNull();
+    expect(field()).toHaveValue(TEXT);
+    expect(field()).toBeDisabled();
+    expect(send()).toHaveAttribute('aria-busy', 'true');
   });
 
-  it('an empty box sends nothing at all', async () => {
-    // Trimmed, so whitespace is empty too — and the button is disabled for
-    // the same condition, which is why deleting the handler's own guard
-    // leaves all 61 green: the click never reaches it. Defence in depth, and
-    // what this case pins is the OUTCOME the two share, so the day the button
-    // stops being gated the escape hatch is not taken by an untouched box.
-    const answer = vi.spyOn(api, 'answerDialog').mockResolvedValue(undefined as never);
-    const store = createSessionStore(SESSION_ID, { makeSocket: fakeSocket, api: { prompt: vi.fn() } });
-    act(() => store.getState().apply({ type: 'dialog', dialog: withChatRow() }));
-    render(<><DialogSheet id={SESSION_ID} store={store} /><ToastHost /></>);
+  it('a refused text answer keeps what was typed and says why', async () => {
+    // The scraped sheet (`cc300-ask-same-labels-q2`, no envelope): the old reply emptied the box before its call.
+    vi.spyOn(api, 'answerDialogText').mockRejectedValue(refused('echo-failed'));
+    vi.spyOn(api, 'answerDialog').mockRejectedValue(refused('stale-dialog'));
+    renderAsk(null, pane('cc300-ask-same-labels-q2'));
+    type(TEXT);
+    fireEvent.click(send());
+    expect(field(), 'the box was emptied before the call').toHaveValue(TEXT);
 
-    fireEvent.change(screen.getByLabelText('Answer in your own words'), { target: { value: '   ' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Send' }));
-    expect(answer, 'an empty reply took the escape hatch').not.toHaveBeenCalled();
+    expect(await screen.findByText(DIALOG_TEXT_REFUSE_TEXT['echo-failed'])).toBeInTheDocument();
+    expect(field()).toHaveValue(TEXT);
+    expect(field()).toBeEnabled();
+  });
+
+  it('stranded text: when the row holds exactly the kept text, Send submits it under the new id', async () => {
+    const call = vi.spyOn(api, 'answerDialogText')
+      .mockRejectedValueOnce(refused('echo-failed'))
+      .mockReturnValueOnce(new Promise(() => {}));
+    const q2 = pane('cc300-ask-same-labels-q2');
+    const { store } = renderAsk(CACHING_TRACING, q2);
+    type(TEXT);
+    fireEvent.click(send());
+    await screen.findByText(DIALOG_TEXT_REFUSE_TEXT['echo-failed']);
+
+    // The text was left in the row; the pane's cursor has stepped off it (a new id: the label is the text now).
+    const stranded = pane('cc300-ask-freetext-walk-4-stepped-off');
+    expect(stranded.id.startsWith('7a3fff18')).toBe(true);
+    act(() => store.getState().apply({ type: 'dialog', dialog: stranded }));
+
+    expect(screen.getByText(/typed in the terminal but not sent yet/i)).toBeInTheDocument();
+    expect(screen.queryByText(/already holds other text/i)).toBeNull();
+    expect(field()).toHaveValue(TEXT);
+    fireEvent.click(send());
+    expect(call).toHaveBeenLastCalledWith(SESSION_ID, stranded.id, 3, TEXT);
+  });
+
+  it('a refusal belongs to its question: a later question under the same title is read from its own pane', async () => {
+    // The scraped sheet (no enrichment) learns which row is the free-text row from its own call only while the pane
+    // shows the question that call was made for. A refused call outliving it once hid a real option and offered the
+    // placeholder as a row. DERIVED: a later question titled like the refused one, with an option more.
+    const call = vi.spyOn(api, 'answerDialogText')
+      .mockRejectedValueOnce(refused('stale-dialog'))
+      .mockReturnValueOnce(new Promise(() => {}));
+    const drink = pane('cc300-ask-q2-of-2-single');
+    const { store } = renderAsk(null, drink);
+    type('water, please');
+    fireEvent.click(send());
+    await screen.findByText(DIALOG_TEXT_REFUSE_TEXT['stale-dialog']);
+
+    const later: Dialog = {
+      ...drink,
+      id: `${drink.id}-later`,
+      options: [
+        { index: 1, label: 'Tea' }, { index: 2, label: 'Coffee' }, { index: 3, label: 'Water' },
+        { index: 4, label: 'Type something.' }, { index: 5, label: 'Chat about this' },
+      ],
+    };
+    act(() => store.getState().apply({ type: 'dialog', dialog: later }));
+
+    expect(optionButton('Water'), 'a real option was hidden as the free-text row').toBeEnabled();
+    expect(screen.queryByText('Type something.'), 'the placeholder was offered as a row').toBeNull();
+    expect(screen.queryByText(/already holds other text/i)).toBeNull();
+    // "Your text is still here": the field keeps it, and Send types it into THIS question's free-text row.
+    expect(field()).toHaveValue('water, please');
+    fireEvent.click(send());
+    expect(call).toHaveBeenLastCalledWith(SESSION_ID, later.id, 4, 'water, please');
+  });
+
+  it('after echo-failed with only part of the text in the row, the text stays in view, and Send types it once the row is cleared', async () => {
+    // The toast must promise only what the sheet then offers: a row holding PART of the text is not the stranded
+    // retry (the route refuses it, `not-free-text`), so the sheet keeps the text in view, says to clear the row in the
+    // terminal, and Send types the whole text into the row once it is empty again. Both sheets: the scraped one reads
+    // the row from its own call. DERIVED: the recorded typed row (`cc300-ask-freetext-walk-3-typed`) holding the
+    // text's first 22 characters, as a capture taken while tmux was typing shows it.
+    for (const ask of [CACHING_TRACING, null]) {
+      const call = vi.spyOn(api, 'answerDialogText')
+        .mockRejectedValueOnce(refused('echo-failed'))
+        .mockReturnValueOnce(new Promise(() => {}));
+      const q2 = pane('cc300-ask-same-labels-q2');
+      const { store } = renderAsk(ask, q2);
+      const where = ask === null ? 'scraped' : 'envelope';
+      type(TEXT);
+      fireEvent.click(send());
+      const said = await screen.findByText(DIALOG_TEXT_REFUSE_TEXT['echo-failed']);
+      expect(said.textContent, where).toMatch(/still here/i);
+      expect(said.textContent, `${where}: the toast promised a retry the route refuses`).not.toMatch(/submits what/i);
+
+      const typed = pane('cc300-ask-freetext-walk-3-typed');
+      const partial: Dialog = {
+        ...typed,
+        id: `${typed.id}-partial`,
+        options: typed.options.map((o) => (o.index === 3 ? { ...o, label: TEXT.slice(0, 22) } : o)),
+      };
+      act(() => store.getState().apply({ type: 'dialog', dialog: partial }));
+      expect(field(), `${where}: the operator's text was hidden`).toHaveValue(TEXT);
+      expect(send(), where).toBeDisabled();
+      expect(screen.getByText(/holds only part of your answer/i), where).toBeInTheDocument();
+      expect(screen.queryByText(/already holds other text/i), where).toBeNull();
+      // Not the stranded retry: Send would not submit what the row holds, and the text is the operator's to edit.
+      expect(screen.queryByText(/typed in the terminal but not sent yet/i), where).toBeNull();
+      expect(field(), where).not.toHaveAttribute('readonly');
+      expect(screen.queryByText(TEXT.slice(0, 22), { selector: '.opt-label' }), where).toBeNull();
+      fireEvent.submit(field().form!);
+      expect(call, `${where}: the partial row was sent into`).toHaveBeenCalledTimes(1);
+
+      // Cleared in the terminal: the placeholder again, and Send types the whole text.
+      act(() => store.getState().apply({ type: 'dialog', dialog: q2 }));
+      expect(send(), where).toBeEnabled();
+      fireEvent.click(send());
+      expect(call, where).toHaveBeenLastCalledWith(SESSION_ID, q2.id, 3, TEXT);
+      cleanup();
+      vi.restoreAllMocks();
+    }
+  });
+
+  it('text typed here stays in view when the terminal row fills with other text', () => {
+    // Not sent yet: the operator typed in the field, then text was typed into the row in the terminal (DERIVED: the
+    // recorded typed row holding other words). The field keeps the operator's text, Send waits, and the line says why.
+    const text = vi.spyOn(api, 'answerDialogText').mockReturnValue(new Promise(() => {}));
+    const { store } = renderAsk(CACHING_TRACING, pane('cc300-ask-same-labels-q2'));
+    type('only in production');
+    const typed = pane('cc300-ask-freetext-walk-3-typed');
+    act(() => store.getState().apply({ type: 'dialog', dialog: {
+      ...typed, id: 'other-words', options: typed.options.map((o) => (o.index === 3 ? { ...o, label: 'never' } : o)),
+    } }));
+    expect(field()).toHaveValue('only in production');
+    expect(send()).toBeDisabled();
+    expect(screen.getByText(/already holds other text/i)).toBeInTheDocument();
+    fireEvent.submit(field().form!);
+    expect(text).not.toHaveBeenCalled();
+  });
+
+  it('ok clears the text, and question 2 is answerable', async () => {
+    vi.spyOn(api, 'answerDialogText').mockResolvedValue(undefined);
+    const q1 = pane('cc300-ask-same-labels-q1');
+    const { store } = renderAsk(CACHING_TRACING, q1);
+    type('only in production');
+    fireEvent.click(send());
+    await act(async () => {});
+
+    // Caching answered: the pane paints Tracing.
+    act(() => store.getState().apply({ type: 'dialog', dialog: pane('cc300-ask-same-labels-q2') }));
+    expect(heading('Enable tracing?')).toBeInTheDocument();
+    expect(field()).toHaveValue('');
+    expect(field()).toBeEnabled();
+    expect(optionButton('Yes')).toBeEnabled();
+    expect(optionButton('No')).toBeEnabled();
+  });
+
+  it('an answer that landed waits for the pane to move on, through a late frame of the typed row', async () => {
+    // Like a tapped option: the sheet stays busy after ok until the pane paints the next screen. A capture of the
+    // typed row taken before Enter can arrive after the call answered; it is this send, not other text.
+    vi.spyOn(api, 'answerDialogText').mockResolvedValue(undefined);
+    const { store } = renderAsk(CACHING_TRACING, pane('cc300-ask-same-labels-q2'));
+    type(TEXT);
+    fireEvent.click(send());
+    await act(async () => {});
+    expect(field()).toBeDisabled();
+    expect(optionButton('Yes')).toBeDisabled();
+
+    act(() => store.getState().apply({ type: 'dialog', dialog: pane('cc300-ask-freetext-walk-3-typed') }));
+    expect(field()).toHaveValue(TEXT);
+    expect(field()).toBeDisabled();
+    expect(screen.queryByText(/already holds other text/i)).toBeNull();
+
+    act(() => store.getState().apply({ type: 'dialog', dialog: pane('cc300-ask-review-same-labels') }));
+    expect(screen.getByRole('button', { name: /^Submit answers/ })).toBeEnabled();
+  });
+
+  it('an answer that landed stops waiting on another question, even one whose row reads the same text', async () => {
+    // Only this send's OWN typed row keeps the sheet waiting: the same text in another question's free-text row is
+    // that question's. DERIVED: the recorded typed row (`cc300-ask-freetext-walk-3-typed`) under Caching's title.
+    vi.spyOn(api, 'answerDialogText').mockResolvedValue(undefined);
+    const { store } = renderAsk(CACHING_TRACING, pane('cc300-ask-same-labels-q2'));
+    type(TEXT);
+    fireEvent.click(send());
+    await act(async () => {});
+    expect(field()).toBeDisabled();
+
+    const caching: Dialog = { ...pane('cc300-ask-freetext-walk-3-typed'), id: 'caching-typed', title: 'Enable caching?' };
+    act(() => store.getState().apply({ type: 'dialog', dialog: caching }));
+    expect(heading('Enable caching?')).toBeInTheDocument();
+    expect(optionButton('Yes'), 'the sheet kept waiting on another question').toBeEnabled();
+    expect(noField()).toBeNull();
+    expect(screen.getByText(/already holds other text/i)).toBeInTheDocument();
+  });
+
+  it('an answer whose next screen arrived mid-call does not hold that screen busy', async () => {
+    const call = deferred();
+    vi.spyOn(api, 'answerDialogText').mockReturnValue(call.promise);
+    const { store } = renderAsk(CACHING_TRACING, pane('cc300-ask-same-labels-q2'));
+    type(TEXT);
+    fireEvent.click(send());
+    // Enter landed and the stream painted the review before the call's answer came back.
+    act(() => store.getState().apply({ type: 'dialog', dialog: pane('cc300-ask-review-same-labels') }));
+    await act(async () => call.resolve());
+
+    expect(screen.getByRole('button', { name: /^Submit answers/ })).toBeEnabled();
+  });
+
+  it('Send is enabled exactly where the route would type', () => {
+    renderAsk(null, pane('cc300-ask-1q-open'));
+    for (const text of ['   ', 'one\ttwo', 'x'.repeat(DIALOG_TEXT_MAX + 1)]) {
+      type(text);
+      expect(send(), JSON.stringify(text.slice(0, 12))).toBeDisabled();
+    }
+    type('x'.repeat(DIALOG_TEXT_MAX));
+    expect(send()).toBeEnabled();
+  });
+
+  it('a paste over the limit is kept whole, counted, and held back with a sentence', () => {
+    // The field once carried maxLength, so a browser cut a long paste at the limit and Send sent the first part,
+    // silently. A realistic paste: a reviewer's notes, well over the route's limit.
+    const paste = Array.from({ length: 14 }, (_, i) =>
+      `Point ${i + 1}: keep the migration behind a flag, run it on staging first, and roll back on any checksum mismatch.`,
+    ).join(' ');
+    expect(paste.length).toBeGreaterThan(DIALOG_TEXT_MAX + 400);
+    const text = vi.spyOn(api, 'answerDialogText').mockReturnValue(new Promise(() => {}));
+    const open = pane('cc300-ask-1q-open');
+    renderAsk(null, open);
+    expect(field(), 'a browser would cut the paste at the limit').not.toHaveAttribute('maxlength');
+
+    type(paste);
+    expect(field()).toHaveValue(paste);
+    expect(send()).toBeDisabled();
+    const over = screen.getByText(new RegExp(`^${paste.length} of ${DIALOG_TEXT_MAX} characters`));
+    expect(over.textContent).toMatch(/at most 1000/);
+    expect(field()).toHaveAccessibleDescription(over.textContent!);
+    fireEvent.submit(field().form!);
+    expect(text, 'a paste over the limit was sent').not.toHaveBeenCalled();
+
+    // Shortened to the limit: counted, and sent whole.
+    const fits = paste.slice(0, DIALOG_TEXT_MAX);
+    type(fits);
+    expect(screen.getByText(`${DIALOG_TEXT_MAX} of ${DIALOG_TEXT_MAX} characters.`)).toBeInTheDocument();
+    expect(send()).toBeEnabled();
+    fireEvent.click(send());
+    expect(text).toHaveBeenCalledWith(SESSION_ID, open.id, 3, fits.trim());
+  });
+
+  it('the counter shows only near the limit', () => {
+    renderAsk(null, pane('cc300-ask-1q-open'));
+    type('x'.repeat(799));
+    expect(screen.queryByText(/ of 1000 characters/)).toBeNull();
+    type('x'.repeat(800));
+    expect(screen.getByText('800 of 1000 characters.')).toBeInTheDocument();
+    // Counted as sent, trimmed: the route's rule reads what it receives.
+    type(`   ${'x'.repeat(799)}   `);
+    expect(screen.queryByText(/ of 1000 characters/)).toBeNull();
+    type(`  ${'x'.repeat(DIALOG_TEXT_MAX)}  `);
+    expect(send()).toBeEnabled();
+  });
+
+  it('a trailing ; disables Send and says why', () => {
+    // tmux drops a literal's trailing `;` (measured in #417): the echo would fail and the retry would be refused.
+    renderAsk(null, pane('cc300-ask-1q-open'));
+    type('int x = 1;');
+    expect(send()).toBeDisabled();
+    expect(screen.getByText(/trailing ; doesn't survive/i)).toBeInTheDocument();
+    type('int x = 1');
+    expect(send()).toBeEnabled();
+    expect(screen.queryByText(/trailing ; doesn't survive/i)).toBeNull();
+  });
+
+  it('a tab or another control character holds Send back, and the line under the field says why', () => {
+    // A paste out of a table carries a Tab, which a text field keeps and draws as a gap. The route refuses it
+    // (`isDialogText`: one line, no control character), so Send waits, and says so as it does over the limit, rather
+    // than sitting disabled with no word. DERIVED texts: a Tab, a C1 control, and a line separator.
+    const text = vi.spyOn(api, 'answerDialogText').mockReturnValue(new Promise(() => {}));
+    const open = pane('cc300-ask-1q-open');
+    renderAsk(null, open);
+    for (const held of ['Teal\tif there is one', 'Teal\u0085if there is one', 'Teal if there is one']) {
+      type(held);
+      expect(send(), JSON.stringify(held)).toBeDisabled();
+      const why = screen.getByText(/tab or another control character/i);
+      expect(field(), JSON.stringify(held)).toHaveAccessibleDescription(why.textContent!);
+      fireEvent.submit(field().form!);
+    }
+    expect(text, 'Send or Enter typed a control character').not.toHaveBeenCalled();
+
+    // Over the limit as well: both lines, each saying its own reason.
+    type(`Teal\t${'x'.repeat(DIALOG_TEXT_MAX)}`);
+    expect(screen.getByText(/tab or another control character/i)).toBeInTheDocument();
+    expect(screen.getByText(new RegExp(`^${DIALOG_TEXT_MAX + 5} of ${DIALOG_TEXT_MAX} characters`))).toBeInTheDocument();
+    // Past the limit, a control character is still found (the route's rule is read in pieces it can measure).
+    type(`${'x'.repeat(DIALOG_TEXT_MAX + 10)}\tTeal`);
+    expect(screen.getByText(/tab or another control character/i)).toBeInTheDocument();
+    type('x'.repeat(DIALOG_TEXT_MAX + 10));
+    expect(screen.queryByText(/tab or another control character/i), 'over the limit alone').toBeNull();
+    // A long run of spaces is no control character, wherever it falls.
+    type(`${'x'.repeat(DIALOG_TEXT_MAX - 1)}${' '.repeat(DIALOG_TEXT_MAX - 1)}Teal`);
+    expect(screen.queryByText(/tab or another control character/i), 'spaces past the limit').toBeNull();
+
+    // Blank is no control character: Send waits with nothing to say. A Tab at either end is trimmed, as the text
+    // sent is, so nothing is held.
+    type(' \t ');
+    expect(send()).toBeDisabled();
+    expect(screen.queryByText(/tab or another control character/i)).toBeNull();
+    type('\tTeal\t');
+    expect(screen.queryByText(/tab or another control character/i)).toBeNull();
+    expect(field()).not.toHaveAttribute('aria-describedby');
+    fireEvent.click(send());
+    expect(text).toHaveBeenCalledWith(SESSION_ID, open.id, 3, 'Teal');
+  });
+
+  it('ownWordsHeld holds exactly what the route refuses, and names why', () => {
+    // Each reason is the operator's to fix differently, so the route's one refusal is split only to say why.
+    expect(ownWordsHeld('  Teal  ')).toBeNull();
+    expect(ownWordsHeld(' \t ')).toBe('blank');
+    expect(ownWordsHeld('Teal\tif there is one')).toBe('control');
+    expect(ownWordsHeld('x'.repeat(DIALOG_TEXT_MAX + 1))).toBe('long');
+    expect(ownWordsHeld(`${'x'.repeat(DIALOG_TEXT_MAX + 1)}\tTeal`)).toBe('control');
+    expect(ownWordsHeld('int x = 1;')).toBe('semicolon');
+    for (const text of ['Teal', ' \t ', 'a\tb', 'a\u2028b', 'x'.repeat(DIALOG_TEXT_MAX), 'x'.repeat(DIALOG_TEXT_MAX + 1)]) {
+      const held = ownWordsHeld(text);
+      expect(held === null || held === 'semicolon', JSON.stringify(text.slice(0, 8))).toBe(isDialogText(text.trim()));
+    }
+  });
+
+  it('dismissal is refused while a text answer is in flight, on either sheet', () => {
+    vi.spyOn(api, 'answerDialogText').mockReturnValue(new Promise(() => {}));
+    const { store } = renderAsk(CACHING_TRACING, pane('cc300-ask-same-labels-q2'));
+    type(TEXT);
+    fireEvent.click(send());
+
+    fireEvent.click(screen.getByTestId('sheet-overlay'));
+    expect(heading('Enable tracing?'), 'the envelope sheet hid mid-call').toBeInTheDocument();
+    act(() => store.getState().apply({ type: 'ask_cleared' }));
+    fireEvent.click(screen.getByTestId('sheet-overlay'));
+    expect(heading('Enable tracing?'), 'the scraped sheet hid mid-call').toBeInTheDocument();
+  });
+
+  describe('the hand-off: ask_cleared hands the same text and call to the scraped sheet', () => {
+    it('ask_cleared mid-call: the scraped sheet shows the same text and busy state, and ok clears it', async () => {
+      const call = deferred();
+      vi.spyOn(api, 'answerDialogText').mockReturnValue(call.promise);
+      const { store } = renderAsk(CACHING_TRACING, pane('cc300-ask-same-labels-q2'));
+      type(TEXT);
+      fireEvent.click(send());
+      act(() => {
+        store.getState().apply({ type: 'ask_cleared' });
+        store.getState().apply({ type: 'dialog', dialog: pane('cc300-ask-freetext-walk-3-typed') });
+      });
+
+      expect(document.querySelector('[data-source="hook"]')).toBeNull();
+      expect(field()).toHaveValue(TEXT);
+      expect(field()).toBeDisabled();
+      expect(send()).toHaveAttribute('aria-busy', 'true');
+      // The typed row is this send's own row, never an option to tap.
+      expect(screen.queryByText(TEXT, { selector: '.opt-label' })).toBeNull();
+
+      await act(async () => call.resolve());
+      // The next question (a new screen): its field starts empty.
+      act(() => store.getState().apply({ type: 'dialog', dialog: pane('cc300-ask-same-labels-q1') }));
+      expect(field()).toHaveValue('');
+      expect(field()).toBeEnabled();
+    });
+
+    it('after a refusal, the scraped sheet offers the same stranded retry', async () => {
+      // The scraped reading carries no transcript enrichment, so only this sheet's own call says which row is the
+      // free-text row once it holds text.
+      const call = vi.spyOn(api, 'answerDialogText')
+        .mockRejectedValueOnce(refused('echo-failed'))
+        .mockReturnValueOnce(new Promise(() => {}));
+      const { store } = renderAsk(CACHING_TRACING, pane('cc300-ask-same-labels-q2'));
+      type(TEXT);
+      fireEvent.click(send());
+      await screen.findByText(DIALOG_TEXT_REFUSE_TEXT['echo-failed']);
+      const stranded = pane('cc300-ask-freetext-walk-4-stepped-off');
+      act(() => {
+        store.getState().apply({ type: 'ask_cleared' });
+        store.getState().apply({ type: 'dialog', dialog: stranded });
+      });
+
+      expect(document.querySelector('[data-source="hook"]')).toBeNull();
+      expect(screen.getByText(/typed in the terminal but not sent yet/i)).toBeInTheDocument();
+      expect(screen.queryByText(TEXT, { selector: '.opt-label' }), 'the stranded row is offered as an option').toBeNull();
+      fireEvent.click(send());
+      expect(call).toHaveBeenLastCalledWith(SESSION_ID, stranded.id, 3, TEXT);
+    });
+  });
+
+  it('every DialogTextRefuseCode has its sentence', () => {
+    for (const code of DIALOG_TEXT_REFUSE_CODES) {
+      expect(DIALOG_TEXT_REFUSE_TEXT[code], code).toEqual(expect.any(String));
+      expect(DIALOG_TEXT_REFUSE_TEXT[code], code).not.toBe('');
+      expect(dialogTextRefusal(new ApiError(code === 'bad-text' ? 400 : 409, { ok: false, error: code })), code)
+        .toBe(DIALOG_TEXT_REFUSE_TEXT[code]);
+    }
+    expect(new Set(Object.values(DIALOG_TEXT_REFUSE_TEXT)).size, 'two codes share a sentence')
+      .toBe(DIALOG_TEXT_REFUSE_CODES.length);
+    // `not-alive` is the composer's own sentence, read, never spelled again.
+    expect(DIALOG_TEXT_REFUSE_TEXT['not-alive']).toBe(sendErrorText('not-alive'));
+    const other = new ApiError(502, { ok: false, stderr: 'tmux: no server running' });
+    expect(dialogTextRefusal(other)).toBe(failedTo('answer', other));
+  });
+});
+
+// — multiSelect questions, as boxes (D-5091) —
+//
+// A multiSelect AskUserQuestion question paints `[ ]` boxes, a `Type something` row and an unnumbered `Next` row
+// (`Submit` on the last question). `parseDialog` keeps it `parsed: false` and reads it into `Dialog.multi` (D-5048), and
+// `POST /dialog/multi` answers it with the WHOLE set of boxes to leave ticked, never a toggle: it sends a digit only for
+// each box that differs, proves the ticks, then commits with Tab. The sheet renders the boxes as checkbox rows, seeded
+// from the pane's ticks and following them until the operator touches one, and Next sends the set. The commit's
+// in-flight state lives in `DialogSheet`, keyed to the call, so the hand-off on `ask_cleared` carries it.
+//
+// Every screen is a recorded Claude Code 2.1.300 one (`askPanes.ts`), named by its fixture; a shape no recording shows
+// is DERIVED and says so.
+describe('multiSelect boxes (D-5091)', () => {
+  const renderAsk = (ask: HookAsk | null, dialog: Dialog | null) => {
+    const store = makeStore();
+    act(() => {
+      if (dialog) store.getState().apply({ type: 'dialog', dialog });
+      if (ask) store.getState().apply({ type: 'ask', ask, key: null });
+    });
+    render(
+      <>
+        <DialogSheet id={SESSION_ID} store={store} onOpenTerminal={vi.fn()} />
+        <ToastHost />
+      </>,
+    );
+    return { store };
+  };
+  const heading = (name: string): HTMLElement => screen.getByRole('heading', { name });
+  /** The box whose label starts `label` (its accessible name runs on into its description). */
+  const box = (label: string): HTMLElement => screen.getByRole('checkbox', { name: new RegExp(`^${label}`) });
+  const ticks = (): string[] =>
+    screen.getAllByRole('checkbox').filter((b) => b.getAttribute('aria-checked') === 'true')
+      .map((b) => b.querySelector('.opt-label')!.textContent!);
+  const commit = (name: 'Next' | 'Review answers'): HTMLButtonElement =>
+    screen.getByRole('button', { name: new RegExp(`^${name}`) });
+  const show = (store: ReturnType<typeof makeStore>, dialog: Dialog): void => {
+    act(() => store.getState().apply({ type: 'dialog', dialog }));
+  };
+  const refused = (code: string) => new ApiError(409, { ok: false, error: code });
+  const deferred = () => {
+    let resolve!: () => void;
+    const promise = new Promise<void>((res) => {
+      resolve = res;
+    });
+    return { promise, resolve };
+  };
+
+  it('a live multiSelect question renders its boxes with the pane\'s ticks', () => {
+    const digit1 = pane('cc300-ask-multiselect-digit1');
+    expect(digit1.id.startsWith('ddbca498')).toBe(true);
+    renderAsk(DRINK_FEATURES_TOOLS, digit1);
+
+    expect(document.querySelector('[data-source="hook"]')).not.toBeNull();
+    expect(heading('Which features do you want?')).toBeInTheDocument();
+    expect(screen.getByText('2 of 3')).toBeInTheDocument();
+    expect(screen.getAllByRole('checkbox')).toHaveLength(3);
+    expect(box('Logging')).toHaveAttribute('aria-checked', 'true');
+    expect(box('Metrics')).toHaveAttribute('aria-checked', 'false');
+    expect(box('Tracing')).toHaveAttribute('aria-checked', 'false');
+    expect(box('Metrics')).toBeEnabled();
+    // Answerable here, so neither the several-answers line nor the terminal CTA.
+    expect(screen.queryByText(/several answers/i)).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Open terminal to answer' })).toBeNull();
+    // Free text inside a multiSelect question is the terminal's (D-5048 refuses it in v1).
+    expect(screen.getByText(/own words on a pick-several question go in the terminal/i)).toBeInTheDocument();
+  });
+
+  it('Next sends the whole wanted set', () => {
+    const multi = vi.spyOn(api, 'answerDialogMulti').mockReturnValue(new Promise(() => {}));
+    const option = vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise(() => {}));
+    const digit1 = pane('cc300-ask-multiselect-digit1');
+    renderAsk(DRINK_FEATURES_TOOLS, digit1);
+
+    fireEvent.click(box('Tracing'));
+    expect(box('Tracing')).toHaveAttribute('aria-checked', 'true');
+    expect(multi, 'a tap on a box sent something').not.toHaveBeenCalled();
+    fireEvent.click(commit('Next'));
+    expect(multi).toHaveBeenCalledWith(SESSION_ID, digit1.id, [1, 3]);
+    expect(option, 'a box was answered as a single-select row').not.toHaveBeenCalled();
+  });
+
+  it('boxes ticked here follow the pane\'s, in tap order', () => {
+    const multi = vi.spyOn(api, 'answerDialogMulti').mockReturnValue(new Promise(() => {}));
+    const tools = pane('cc300-ask-multiselect-tools-open');
+    renderAsk(TOOLS_SIZES, tools);
+    fireEvent.click(box('Drill'));
+    fireEvent.click(box('Hammer'));
+    fireEvent.click(commit('Next'));
+    // The answer lists new ticks in the order they land (measured, `cc300-ask-review-tick-order`).
+    expect(multi).toHaveBeenLastCalledWith(SESSION_ID, tools.id, [3, 1]);
+  });
+
+  it('a box ticked on the pane keeps its place, even unticked and ticked again here', () => {
+    const multi = vi.spyOn(api, 'answerDialogMulti').mockReturnValue(new Promise(() => {}));
+    const digit1 = pane('cc300-ask-multiselect-digit1');
+    renderAsk(DRINK_FEATURES_TOOLS, digit1);
+    fireEvent.click(box('Tracing'));
+    fireEvent.click(box('Logging'));
+    fireEvent.click(box('Logging'));
+    fireEvent.click(commit('Next'));
+    // Logging is ticked on the pane, so no digit is sent for it and the answer lists it where it already is.
+    expect(multi).toHaveBeenLastCalledWith(SESSION_ID, digit1.id, [1, 3]);
+  });
+
+  it('an empty set cannot be sent', () => {
+    renderAsk(DRINK_FEATURES_TOOLS, pane('cc300-ask-multiselect-next-open'));
+    expect(commit('Next')).toBeDisabled();
+    fireEvent.click(box('Metrics'));
+    expect(commit('Next')).toBeEnabled();
+    fireEvent.click(box('Metrics'));
+    expect(commit('Next'), 'an empty set: Tab would skip the question, which is no answer').toBeDisabled();
+  });
+
+  it('the last question\'s commit reads Review answers', () => {
+    const multi = vi.spyOn(api, 'answerDialogMulti').mockReturnValue(new Promise(() => {}));
+    const last = pane('cc300-ask-multiselect-submit-open');
+    renderAsk(DRINK_FEATURES_TOOLS, last);
+    expect(heading('Which tools?')).toBeInTheDocument();
+    expect(screen.getByText('3 of 3')).toBeInTheDocument();
+    // The pane's row reads Submit, but Tab from the last question lands on the review (measured: `-submit-open`, then
+    // `cc300-ask-review-multiselect`), where Submit answers is the real submit.
+    expect(screen.queryByRole('button', { name: /^Next/ })).toBeNull();
+    expect(screen.queryByRole('button', { name: /^Submit/ })).toBeNull();
+    fireEvent.click(box('Saw'));
+    fireEvent.click(commit('Review answers'));
+    expect(multi).toHaveBeenCalledWith(SESSION_ID, last.id, [2]);
+  });
+
+  it('a ticked free-text box: one line, Next disabled', () => {
+    renderAsk(COLOUR_FEATURES, pane('cc300-ask-multiselect-freetext-ticked'));
+    expect(ticks()).toEqual(['Logging', 'Tracing']);
+    expect(screen.getByText(/own-words box is ticked on this question/i)).toBeInTheDocument();
+    expect(commit('Review answers')).toBeDisabled();
+  });
+
+  it('the cursor off the options: one line, Next disabled', () => {
+    const { store } = renderAsk(DRINK_FEATURES_TOOLS, pane('cc300-ask-multiselect-on-freetext'));
+    expect(screen.getByText(/cursor is on the own-words row/i)).toBeInTheDocument();
+    expect(commit('Next')).toBeDisabled();
+
+    show(store, pane('cc300-ask-multiselect-next-focused'));
+    expect(screen.getByText(/cursor is on the Next row/i)).toBeInTheDocument();
+    expect(commit('Next')).toBeDisabled();
+
+    // Back on an option (`-row3`, cursor 3): nothing to say, and Next sends.
+    show(store, pane('cc300-ask-multiselect-row3'));
+    expect(screen.queryByText(/cursor is on the/i)).toBeNull();
+    expect(commit('Next')).toBeEnabled();
+  });
+
+  it('ticks made in the terminal reach an untouched sheet', () => {
+    const { store } = renderAsk(DRINK_FEATURES_TOOLS, pane('cc300-ask-multiselect-digit1'));
+    expect(ticks()).toEqual(['Logging']);
+    // The same question (same id) repainted with Tracing ticked in the terminal: the stream re-sends an unparsed dialog
+    // on every repaint.
+    show(store, pane('cc300-ask-multiselect-digit1-3'));
+    expect(ticks()).toEqual(['Logging', 'Tracing']);
+  });
+
+  it('a touched sheet keeps its own set across a repaint', () => {
+    const multi = vi.spyOn(api, 'answerDialogMulti').mockReturnValue(new Promise(() => {}));
+    const { store } = renderAsk(DRINK_FEATURES_TOOLS, pane('cc300-ask-multiselect-digit1'));
+    fireEvent.click(box('Metrics'));
+    show(store, pane('cc300-ask-multiselect-digit1-3'));
+    expect(ticks()).toEqual(['Logging', 'Metrics']);
+    fireEvent.click(commit('Next'));
+    // The whole set: the server unticks Tracing and ticks Metrics.
+    expect(multi).toHaveBeenLastCalledWith(SESSION_ID, pane('cc300-ask-multiselect-digit1-3').id, [1, 2]);
+  });
+
+  it('a refusal says why and re-enables the boxes, and Next sends the same set again', async () => {
+    const multi = vi.spyOn(api, 'answerDialogMulti')
+      .mockRejectedValueOnce(refused('ticks-failed'))
+      .mockReturnValueOnce(new Promise(() => {}));
+    // Untouched: Next commits the pane's own ticks (`-digit1-3`, Logging and Tracing).
+    const both = pane('cc300-ask-multiselect-digit1-3');
+    const { store } = renderAsk(DRINK_FEATURES_TOOLS, both);
+    fireEvent.click(commit('Next'));
+
+    expect(await screen.findByText(DIALOG_MULTI_REFUSE_TEXT['ticks-failed'])).toBeInTheDocument();
+    expect(box('Metrics')).toBeEnabled();
+    expect(commit('Next')).toBeEnabled();
+    // The failed attempt may leave the boxes part toggled (D-5048): `-digit1`, Tracing gone. The set sent stays the
+    // operator's, so the retry sends it again and the server sends only the digits still needed.
+    show(store, pane('cc300-ask-multiselect-digit1'));
+    expect(ticks()).toEqual(['Logging', 'Tracing']);
+    fireEvent.click(commit('Next'));
+    expect(multi).toHaveBeenLastCalledWith(SESSION_ID, both.id, [1, 3]);
+  });
+
+  it('every DialogMultiRefuseCode has its sentence', () => {
+    for (const code of DIALOG_MULTI_REFUSE_CODES) {
+      expect(DIALOG_MULTI_REFUSE_TEXT[code], code).toEqual(expect.any(String));
+      expect(DIALOG_MULTI_REFUSE_TEXT[code], code).not.toBe('');
+      expect(dialogMultiRefusal(new ApiError(code === 'bad-indexes' ? 400 : 409, { ok: false, error: code })), code)
+        .toBe(DIALOG_MULTI_REFUSE_TEXT[code]);
+    }
+    expect(new Set(Object.values(DIALOG_MULTI_REFUSE_TEXT)).size, 'two codes share a sentence')
+      .toBe(DIALOG_MULTI_REFUSE_CODES.length);
+    expect(DIALOG_MULTI_REFUSE_TEXT['not-alive']).toBe(sendErrorText('not-alive'));
+    const other = new ApiError(502, { ok: false, stderr: 'tmux: no server running' });
+    expect(dialogMultiRefusal(other)).toBe(failedTo('answer', other));
+  });
+
+  it('a one-question multiSelect envelope answers through the boxes', () => {
+    const multi = vi.spyOn(api, 'answerDialogMulti').mockReturnValue(new Promise(() => {}));
+    // DERIVED: `Which tools?` asked alone (the recorded ask has it first of two).
+    const alone: HookAsk = { questions: [TOOLS_SIZES.questions[0]!] };
+    const tools = pane('cc300-ask-multiselect-tools-open');
+    renderAsk(alone, tools);
+    expect(document.querySelector('[data-source="hook"]')).not.toBeNull();
+    expect(screen.queryByText(/^\d+ of \d+$/)).toBeNull();
+    fireEvent.click(box('Saw'));
+    fireEvent.click(commit('Next'));
+    expect(multi).toHaveBeenCalledWith(SESSION_ID, tools.id, [2]);
+  });
+
+  it('a multiSelect question with no Dialog.multi keeps the honest terminal copy and offers no box', () => {
+    // The 2.1.222 shape (`multiselect`): no commit row, so no `Dialog.multi`, and its keys were never measured. DERIVED
+    // envelope: that recording's prompt line is not captured, so its one question is read off the screen.
+    const multi = vi.spyOn(api, 'answerDialogMulti').mockReturnValue(new Promise(() => {}));
+    const old = pane('multiselect');
+    expect(old.multi).toBeUndefined();
+    renderAsk({ questions: [{ question: 'Select the tools to allow', header: 'Tools', multiSelect: true,
+      options: [{ label: 'Bash' }, { label: 'Edit' }, { label: 'WebFetch' }] }] }, old);
+
+    expect(screen.queryAllByRole('checkbox')).toHaveLength(0);
+    expect(screen.getByText(/several answers/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^Edit/ })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Open terminal to answer' })).toBeInTheDocument();
+    expect(multi).not.toHaveBeenCalled();
+  });
+
+  it('the boxes and Next are disabled, and dismissal refused, while the commit is in flight', async () => {
+    const call = deferred();
+    vi.spyOn(api, 'answerDialogMulti').mockReturnValue(call.promise);
+    const option = vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise(() => {}));
+    const { store } = renderAsk(DRINK_FEATURES_TOOLS, pane('cc300-ask-multiselect-digit1'));
+    fireEvent.click(box('Tracing'));
+    fireEvent.click(commit('Next'));
+
+    const busy = (): void => {
+      for (const b of screen.getAllByRole('checkbox')) expect(b, b.textContent!).toBeDisabled();
+      expect(commit('Next')).toBeDisabled();
+      expect(commit('Next')).toHaveAttribute('aria-busy', 'true');
+      expect(ticks(), 'the sheet stopped showing the set it sent').toEqual(['Logging', 'Tracing']);
+    };
+    busy();
+    // The pane repaints under the same id while the server ticks: still the set sent, still busy.
+    show(store, pane('cc300-ask-multiselect-digit1'));
+    busy();
+    fireEvent.click(screen.getByTestId('sheet-overlay'));
+    expect(heading('Which features do you want?'), 'the envelope sheet hid mid-commit').toBeInTheDocument();
+
+    // ask_cleared mid-commit: the scraped sheet carries the same set and the same call.
+    act(() => store.getState().apply({ type: 'ask_cleared' }));
+    expect(document.querySelector('[data-source="hook"]')).toBeNull();
+    busy();
+    fireEvent.click(screen.getByTestId('sheet-overlay'));
+    expect(heading('Which features do you want?'), 'the scraped sheet hid mid-commit').toBeInTheDocument();
+
+    // Ok: like a tapped option, the sheet waits for the pane to move on.
+    await act(async () => call.resolve());
+    busy();
+    // The next question (a new id): its own boxes, from its own pane, ready.
+    show(store, pane('cc300-ask-multiselect-submit-open'));
+    expect(heading('Which tools?')).toBeInTheDocument();
+    expect(ticks()).toEqual([]);
+    expect(box('Saw')).toBeEnabled();
+    expect(option).not.toHaveBeenCalled();
+  });
+
+  it('a commit whose next screen arrived mid-call does not hold that screen busy', async () => {
+    const call = deferred();
+    vi.spyOn(api, 'answerDialogMulti').mockReturnValue(call.promise);
+    const { store } = renderAsk(DRINK_FEATURES_TOOLS, pane('cc300-ask-multiselect-digit1-3'));
+    fireEvent.click(commit('Next'));
+    show(store, pane('cc300-ask-multiselect-submit-open'));
+    // Until the call answers, one call at a time: the next question's boxes wait, and show the PANE's ticks, never the
+    // set committed to the question before (Hammer and Drill share its digits 1 and 3).
+    expect(heading('Which tools?')).toBeInTheDocument();
+    expect(box('Saw')).toBeDisabled();
+    expect(ticks()).toEqual([]);
+    await act(async () => call.resolve());
+    expect(heading('Which tools?')).toBeInTheDocument();
+    expect(box('Saw')).toBeEnabled();
+    fireEvent.click(box('Saw'));
+    expect(commit('Review answers')).toBeEnabled();
+  });
+
+  it('a single-select screen arriving mid-commit waits too, its own-words field included', () => {
+    // DERIVED sequence: the recorded multiSelect question, then a recorded single-select screen (`cc300-ask-1q-open`)
+    // before the commit answers. One call at a time, on the scraped sheet as on the envelope's.
+    vi.spyOn(api, 'answerDialogMulti').mockReturnValue(new Promise(() => {}));
+    const { store } = renderAsk(null, pane('cc300-ask-multiselect-digit1-3'));
+    fireEvent.click(commit('Next'));
+    show(store, pane('cc300-ask-1q-open'));
+    expect(heading('Which colour?')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^Red/ })).toBeDisabled();
+    expect(screen.getByLabelText('Answer in your own words')).toBeDisabled();
+  });
+
+  describe('the hand-off: ask_cleared hands the same question to the scraped sheet', () => {
+    it('the scraped sheet answers a multiSelect question with the same boxes', () => {
+      const multi = vi.spyOn(api, 'answerDialogMulti').mockReturnValue(new Promise(() => {}));
+      const digit1 = pane('cc300-ask-multiselect-digit1');
+      const { store } = renderAsk(DRINK_FEATURES_TOOLS, digit1);
+      act(() => store.getState().apply({ type: 'ask_cleared' }));
+
+      expect(document.querySelector('[data-source="hook"]')).toBeNull();
+      expect(heading('Which features do you want?')).toBeInTheDocument();
+      expect(ticks()).toEqual(['Logging']);
+      expect(screen.queryByText(/doesn't fit tappable options/i)).toBeNull();
+      expect(screen.queryByRole('button', { name: 'Open terminal to answer' })).toBeNull();
+      fireEvent.click(box('Tracing'));
+      fireEvent.click(commit('Next'));
+      expect(multi).toHaveBeenCalledWith(SESSION_ID, digit1.id, [1, 3]);
+    });
+
+    it('a wrapped multiSelect question is titled whole on the scraped sheet', () => {
+      // DERIVED: the recorded boxes under a question too long for one row (the pane's title is its last row).
+      const digit1 = pane('cc300-ask-multiselect-digit1');
+      renderAsk(null, {
+        ...digit1,
+        title: '│ do you want switched on for the staging cluster?',
+        body: `${digit1.body!.split('\n')[0]}\n\n│ Which of the observability features\n│ do you want switched on for the staging cluster?`,
+      });
+      expect(heading('Which of the observability features do you want switched on for the staging cluster?')).toBeInTheDocument();
+      expect(screen.getAllByRole('checkbox')).toHaveLength(3);
+    });
+
+    it('a set touched on the envelope sheet survives the hand-off', () => {
+      const multi = vi.spyOn(api, 'answerDialogMulti').mockReturnValue(new Promise(() => {}));
+      const tools = pane('cc300-ask-multiselect-tools-open');
+      const { store } = renderAsk(TOOLS_SIZES, tools);
+      fireEvent.click(box('Drill'));
+      fireEvent.click(box('Hammer'));
+      act(() => store.getState().apply({ type: 'ask_cleared' }));
+      expect(ticks()).toEqual(['Hammer', 'Drill']);
+      fireEvent.click(commit('Next'));
+      expect(multi).toHaveBeenCalledWith(SESSION_ID, tools.id, [3, 1]);
+    });
+  });
+});
+
+// — one send at a time, to the row it was meant for —
+//
+// `Chat about this` and the review's `Cancel` each decline the WHOLE ask, so neither may be tapped while another send
+// is still landing: an own-words answer (D-5090) or a multiSelect commit (D-5091), whose next screen can reach the
+// sheet before the call answers. Both sheets: the envelope's, and the scraped one that takes over on `ask_cleared`.
+// The handlers hold the same rule at the source, for two taps handled before React commits the first one's state.
+// And the guards that keep a send on its own row: own words only under the live question, the review told before any
+// question, the form holding back what Send holds back, the stranded retry's text fixed, the text sent trimmed, and
+// the scraped sheet's free-text row read from the transcript's option count.
+describe('one send at a time, to the row it was meant for (D-5089, D-5090, D-5091)', () => {
+  const TEXT = '- only in staging, sampled 10%';
+  const renderAsk = (ask: HookAsk | null, dialog: Dialog | null) => {
+    const store = makeStore();
+    act(() => {
+      if (dialog) store.getState().apply({ type: 'dialog', dialog });
+      if (ask) store.getState().apply({ type: 'ask', ask, key: null });
+    });
+    render(
+      <>
+        <DialogSheet id={SESSION_ID} store={store} onOpenTerminal={vi.fn()} />
+        <ToastHost />
+      </>,
+    );
+    return { store };
+  };
+  const show = (store: ReturnType<typeof makeStore>, dialog: Dialog): void => {
+    act(() => store.getState().apply({ type: 'dialog', dialog }));
+  };
+  const field = (): HTMLInputElement => screen.getByLabelText('Answer in your own words');
+  const noField = (): HTMLElement | null => screen.queryByLabelText('Answer in your own words');
+  const send = (): HTMLButtonElement => screen.getByRole('button', { name: /^Send/ });
+  const chat = (): HTMLButtonElement => screen.getByRole('button', { name: /^Chat about this/ });
+  const box = (label: string): HTMLElement => screen.getByRole('checkbox', { name: new RegExp(`^${label}`) });
+  const commit = (name: 'Next' | 'Review answers'): HTMLButtonElement =>
+    screen.getByRole('button', { name: new RegExp(`^${name}`) });
+  const reviewRows = (): HTMLButtonElement[] => [
+    screen.getByRole('button', { name: /^Submit answers/ }),
+    screen.getByRole('button', { name: /^Cancel/ }),
+  ];
+  const optionButton = (label: string): HTMLButtonElement => {
+    const buttons = screen.getAllByText(label, { selector: '.opt-label' })
+      .map((l) => l.closest('button'))
+      .filter((b): b is HTMLButtonElement => b !== null);
+    expect(buttons, `option buttons reading ${label}`).toHaveLength(1);
+    return buttons[0]!;
+  };
+  /** Taps the rows that decline the ask and proves nothing was sent. */
+  const declineRowsWait = (spy: ReturnType<typeof vi.spyOn>, rows: HTMLButtonElement[], where: string): void => {
+    for (const row of rows) {
+      expect(row, `${where}: ${row.textContent}`).toBeDisabled();
+      fireEvent.click(row);
+    }
+    expect(spy, `${where}: a row that declines the ask was sent`).not.toHaveBeenCalled();
+  };
+
+  it('Chat about this waits while own words are being sent, on both sheets', () => {
+    vi.spyOn(api, 'answerDialogText').mockReturnValue(new Promise(() => {}));
+    const option = vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise(() => {}));
+    const { store } = renderAsk(CACHING_TRACING, pane('cc300-ask-same-labels-q2'));
+    fireEvent.change(field(), { target: { value: TEXT } });
+    fireEvent.click(send());
+    declineRowsWait(option, [chat()], 'envelope');
+
+    act(() => store.getState().apply({ type: 'ask_cleared' }));
+    expect(document.querySelector('[data-source="hook"]')).toBeNull();
+    declineRowsWait(option, [chat()], 'scraped');
+  });
+
+  it('Chat about this waits while a multiSelect commit is under way, on both sheets', () => {
+    // The commit's next screen (question 1 of the same ask, `cc300-ask-q2-of-2-single`'s Which drink?, as the pane
+    // paints it after a ← back) reaches the sheet before the commit answers. DERIVED sequence of recorded screens.
+    vi.spyOn(api, 'answerDialogMulti').mockReturnValue(new Promise(() => {}));
+    const option = vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise(() => {}));
+    const envelope = renderAsk(DRINK_FEATURES_TOOLS, pane('cc300-ask-multiselect-digit1-3'));
+    fireEvent.click(commit('Next'));
+    show(envelope.store, pane('cc300-ask-q2-of-2-single'));
+    expect(screen.getByRole('heading', { name: 'Which drink?' })).toBeInTheDocument();
+    expect(document.querySelector('[data-source="hook"]')).not.toBeNull();
+    declineRowsWait(option, [chat()], 'envelope');
+    cleanup();
+
+    const scraped = renderAsk(null, pane('cc300-ask-multiselect-digit1-3'));
+    fireEvent.click(commit('Next'));
+    show(scraped.store, pane('cc300-ask-q2-of-2-single'));
+    declineRowsWait(option, [chat()], 'scraped');
+  });
+
+  it('the review\'s Submit and Cancel wait while own words are being sent, on both sheets', () => {
+    // Enter landed and the stream painted the review before the text call answered.
+    vi.spyOn(api, 'answerDialogText').mockReturnValue(new Promise(() => {}));
+    const option = vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise(() => {}));
+    const envelope = renderAsk(CACHING_TRACING, pane('cc300-ask-same-labels-q2'));
+    fireEvent.change(field(), { target: { value: TEXT } });
+    fireEvent.click(send());
+    show(envelope.store, pane('cc300-ask-review-same-labels'));
+    expect(document.querySelector('[data-source="hook"]')).not.toBeNull();
+    declineRowsWait(option, reviewRows(), 'envelope');
+    cleanup();
+
+    const scraped = renderAsk(null, pane('cc300-ask-same-labels-q2'));
+    fireEvent.change(field(), { target: { value: TEXT } });
+    fireEvent.click(send());
+    show(scraped.store, pane('cc300-ask-review-same-labels'));
+    declineRowsWait(option, reviewRows(), 'scraped');
+  });
+
+  it('the review\'s Submit and Cancel wait while a multiSelect commit is under way, on both sheets', () => {
+    // The last question's commit lands on the review (measured: `-submit-open`, then `cc300-ask-review-multiselect`).
+    vi.spyOn(api, 'answerDialogMulti').mockReturnValue(new Promise(() => {}));
+    const option = vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise(() => {}));
+    const envelope = renderAsk(DRINK_FEATURES_TOOLS, pane('cc300-ask-multiselect-submit-open'));
+    fireEvent.click(box('Saw'));
+    fireEvent.click(commit('Review answers'));
+    show(envelope.store, pane('cc300-ask-review-multiselect'));
+    expect(document.querySelector('[data-source="hook"]')).not.toBeNull();
+    declineRowsWait(option, reviewRows(), 'envelope');
+    cleanup();
+
+    const scraped = renderAsk(null, pane('cc300-ask-multiselect-submit-open'));
+    fireEvent.click(box('Saw'));
+    fireEvent.click(commit('Review answers'));
+    show(scraped.store, pane('cc300-ask-review-multiselect'));
+    declineRowsWait(option, reviewRows(), 'scraped');
+  });
+
+  it('the own-words field and Send wait while a tapped option\'s answer is under way, on both sheets', () => {
+    // The text typed before the tap stays in view, inert: the field disabled, and Send and Enter held, so the field
+    // never looks live under an answer that may already be landing.
+    const option = vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise(() => {}));
+    const text = vi.spyOn(api, 'answerDialogText').mockReturnValue(new Promise(() => {}));
+    const sheets: [string, HookAsk | null, Dialog, string][] = [
+      ['envelope', CACHING_TRACING, pane('cc300-ask-same-labels-q2'), 'No'],
+      ['scraped', null, pane('cc300-ask-1q-open'), 'Blue'],
+    ];
+    for (const [where, ask, dialog, label] of sheets) {
+      renderAsk(ask, dialog);
+      fireEvent.change(field(), { target: { value: TEXT } });
+      expect(send(), `${where}: Send before the tap`).toBeEnabled();
+      fireEvent.click(optionButton(label));
+      expect(option, where).toHaveBeenCalledTimes(1);
+      expect(field(), `${where}: the field under an option's answer`).toBeDisabled();
+      expect(field(), where).toHaveValue(TEXT);
+      expect(send(), `${where}: Send under an option's answer`).toBeDisabled();
+      fireEvent.submit(field().form!);
+      expect(text, `${where}: own words sent under an option's answer`).not.toHaveBeenCalled();
+      cleanup();
+      option.mockClear();
+    }
+  });
+
+  it('own words and Chat are offered only under the question the pane is painting', () => {
+    // A tie the title cannot break (DERIVED: both questions Yes/No, the title a suffix of both): no question is live.
+    const both: HookAsk = {
+      questions: [
+        { question: 'Enable tracing?', header: 'Tracing', multiSelect: false, options: CACHING_TRACING.questions[1]!.options },
+        { question: 'Really enable tracing?', header: 'Really', multiSelect: false, options: CACHING_TRACING.questions[1]!.options },
+      ],
+    };
+    renderAsk(both, pane('cc300-ask-same-labels-q2'));
+    expect(noField()).toBeNull();
+    expect(screen.queryByRole('button', { name: /^Chat about this/ })).toBeNull();
+    cleanup();
+    // A pane on another ask entirely (`cc300-ask-1q-open` under `FRUIT_DRINK`).
+    renderAsk(FRUIT_DRINK, pane('cc300-ask-1q-open'));
+    expect(noField()).toBeNull();
+    expect(screen.queryByRole('button', { name: /^Chat about this/ })).toBeNull();
+  });
+
+  it('a question whose labels read like the review\'s rows never takes the review screen', () => {
+    // DERIVED envelope: `Ship it?` offers Submit and Cancel, which prefix-match the review's two rows. The review is
+    // told first (its body ends with the ready line), so its rows stay the review's.
+    const option = vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise(() => {}));
+    const review = pane('cc300-ask-review-same-labels');
+    renderAsk({
+      questions: [
+        { question: 'Ship it?', header: 'Ship', multiSelect: false, options: [{ label: 'Submit' }, { label: 'Cancel' }] },
+        CACHING_TRACING.questions[0]!,
+      ],
+    }, review);
+    expect(screen.getByRole('heading', { name: 'Review your answers' })).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'Ship it?' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: /^Cancel/ }));
+    expect(option).toHaveBeenCalledWith(SESSION_ID, review.id, 2);
+  });
+
+  it('the own-words form never submits what Send holds back (Enter in the field)', () => {
+    const text = vi.spyOn(api, 'answerDialogText').mockReturnValue(new Promise(() => {}));
+    renderAsk(null, pane('cc300-ask-1q-open'));
+    for (const held of ['int x = 1;', 'one\ttwo', '   ']) {
+      fireEvent.change(field(), { target: { value: held } });
+      expect(send(), JSON.stringify(held)).toBeDisabled();
+      fireEvent.submit(field().form!);
+    }
+    expect(text, 'Enter sent what Send holds back').not.toHaveBeenCalled();
+  });
+
+  it('the stranded retry\'s field is read-only: the row accepts exactly that text', async () => {
+    const call = vi.spyOn(api, 'answerDialogText')
+      .mockRejectedValueOnce(new ApiError(409, { ok: false, error: 'echo-failed' }))
+      .mockReturnValueOnce(new Promise(() => {}));
+    const { store } = renderAsk(CACHING_TRACING, pane('cc300-ask-same-labels-q2'));
+    fireEvent.change(field(), { target: { value: TEXT } });
+    fireEvent.click(send());
+    await screen.findByText(DIALOG_TEXT_REFUSE_TEXT['echo-failed']);
+    show(store, pane('cc300-ask-freetext-walk-4-stepped-off'));
+    expect(screen.getByText(/typed in the terminal but not sent yet/i)).toBeInTheDocument();
+    expect(field(), 'an edit would turn the retry into a dead end').toHaveAttribute('readonly');
+    fireEvent.click(send());
+    expect(call).toHaveBeenCalledTimes(2);
+  });
+
+  it('own words are sent trimmed: the route\'s rule is read on what it receives', () => {
+    const text = vi.spyOn(api, 'answerDialogText').mockReturnValue(new Promise(() => {}));
+    const open = pane('cc300-ask-1q-open');
+    renderAsk(null, open);
+    fireEvent.change(field(), { target: { value: '   Teal, if there is one  ' } });
+    fireEvent.click(send());
+    expect(text).toHaveBeenCalledWith(SESSION_ID, open.id, 3, 'Teal, if there is one');
+  });
+
+  it('the scraped sheet reads the free-text row from the transcript\'s option count', () => {
+    // `cc300-ask-freetext-held` enriched as the server enriches a matched question (`Dialog.ask`): row 3, `Mango`, is
+    // text typed in the terminal, never an option to tap, and no field is offered over it.
+    const held: Dialog = {
+      ...pane('cc300-ask-freetext-held'),
+      ask: { question: 'Which fruit?', header: 'Fruit', multiSelect: false, options: [{ label: 'Apple' }, { label: 'Pear' }] },
+    };
+    renderAsk(null, held);
+    expect(screen.queryByText('Mango', { selector: '.opt-label' })).toBeNull();
+    expect(screen.getByText(/already holds other text/i)).toBeInTheDocument();
+    expect(noField()).toBeNull();
+  });
+
+  describe('two taps handled before the sheet re-renders still send once', () => {
+    // React commits a tap's state after the handler returns, so a second tap handled in the same tick finds every row
+    // still enabled. The handlers hold the lock themselves (`DialogSheet`'s `sending`), at the moment a send starts.
+    it('an option, then Chat about this', () => {
+      const option = vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise(() => {}));
+      const q2 = pane('cc300-ask-same-labels-q2');
+      renderAsk(CACHING_TRACING, q2);
+      const yes = optionButton('Yes');
+      const decline = chat();
+      act(() => {
+        fireEvent.click(yes);
+        fireEvent.click(decline);
+      });
+      expect(option).toHaveBeenCalledTimes(1);
+      expect(option).toHaveBeenCalledWith(SESSION_ID, q2.id, 1);
+    });
+
+    it('own words, sent twice', () => {
+      const text = vi.spyOn(api, 'answerDialogText').mockReturnValue(new Promise(() => {}));
+      renderAsk(null, pane('cc300-ask-1q-open'));
+      fireEvent.change(field(), { target: { value: 'Teal' } });
+      const button = send();
+      act(() => {
+        fireEvent.click(button);
+        fireEvent.click(button);
+      });
+      expect(text).toHaveBeenCalledTimes(1);
+    });
+
+    it('own words, then Chat about this', () => {
+      const text = vi.spyOn(api, 'answerDialogText').mockReturnValue(new Promise(() => {}));
+      const option = vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise(() => {}));
+      renderAsk(null, pane('cc300-ask-1q-open'));
+      fireEvent.change(field(), { target: { value: 'Teal' } });
+      const button = send();
+      const decline = chat();
+      act(() => {
+        fireEvent.click(button);
+        fireEvent.click(decline);
+      });
+      expect(text).toHaveBeenCalledTimes(1);
+      expect(option, 'Chat declined the ask under a send').not.toHaveBeenCalled();
+    });
+
+    it('a multiSelect commit, sent twice', () => {
+      const multi = vi.spyOn(api, 'answerDialogMulti').mockReturnValue(new Promise(() => {}));
+      renderAsk(DRINK_FEATURES_TOOLS, pane('cc300-ask-multiselect-digit1-3'));
+      const next = commit('Next');
+      act(() => {
+        fireEvent.click(next);
+        fireEvent.click(next);
+      });
+      expect(multi).toHaveBeenCalledTimes(1);
+    });
+  });
+});
+
+// — the own-words region and the busy commits, as laid out —
+//
+// jsdom lays nothing out, so these pin the STRUCTURE each fix rides on, and the stylesheet rules that use it; the
+// pixels are judged on a real build at phone, laptop and wide widths (plan, Task 5).
+describe('the own-words region and the busy commits keep their shape (D-5090, D-5091)', () => {
+  const css = readFileSync(path.join(import.meta.dirname, '..', 'src', 'session', 'chat.css'), 'utf8');
+  /** The declarations of the rule whose selector list is exactly `selector`. */
+  const rule = (selector: string): string => {
+    const at = css.indexOf(`\n${selector} {`);
+    expect(at, selector).toBeGreaterThan(-1);
+    return css.slice(at, css.indexOf('}', at));
+  };
+  const renderAsk = (ask: HookAsk | null, dialog: Dialog) => {
+    const store = makeStore();
+    act(() => {
+      store.getState().apply({ type: 'dialog', dialog });
+      if (ask) store.getState().apply({ type: 'ask', ask, key: null });
+    });
+    render(<DialogSheet id={SESSION_ID} store={store} onOpenTerminal={vi.fn()} />);
+    return { store };
+  };
+  const field = (): HTMLInputElement => screen.getByLabelText('Answer in your own words');
+
+  /** What a face of Send DRAWS: its text outside `.sr-only` (which is announced, never seen), and a `•` per dot. */
+  const drawn = (face: Element): string =>
+    [...face.childNodes].map((n) => {
+      if (!(n instanceof HTMLElement)) return n.textContent ?? '';
+      if (n.classList.contains('sr-only')) return '';
+      return n.tagName === 'I' ? '•' : drawn(n);
+    }).join('');
+  const faces = (b: HTMLElement): string[] =>
+    [...b.querySelectorAll(':scope > span')].map((f) => `${drawn(f)}${f.getAttribute('aria-hidden') === 'true' ? ':hidden' : ''}`);
+
+  it('Send keeps its width while busy: both faces share one cell, the one not showing is hidden, and busy draws no word', () => {
+    vi.spyOn(api, 'answerDialogText').mockReturnValue(new Promise(() => {}));
+    renderAsk(null, pane('cc300-ask-1q-open'));
+    const idle = screen.getByRole('button', { name: 'Send' });
+    expect(faces(idle)).toEqual(['Send', ':hidden']);
+    fireEvent.change(field(), { target: { value: 'Teal' } });
+    fireEvent.click(idle);
+    // Busy is named `Sending…` for a screen reader and drawn as the chat's three working dots, which are narrower than
+    // the word `Send` (`Sending…` as a drawn word made Send 96px and clipped the field's placeholder at 360 and 375).
+    const busy = screen.getByRole('button', { name: 'Sending…' });
+    expect(busy).toHaveAttribute('aria-busy', 'true');
+    expect(faces(busy)).toEqual(['Send:hidden', '•••']);
+    // The cell is the button's grid; the hidden face holds its width without being seen.
+    expect(rule('.dlg-reply-send')).toMatch(/display:\s*grid/);
+    expect(rule('.dlg-reply-send > span')).toMatch(/grid-area:\s*1\s*\/\s*1/);
+    expect(rule(".dlg-reply-send > [aria-hidden='true']")).toMatch(/visibility:\s*hidden/);
+    // One motion, one definition: the dots are the chat's working dots (`.msg-working-dots`), in Send's busy ink, and
+    // they hold still for a reader who asked for reduced motion.
+    expect(selectorsOf(css, '.dlg-reply-wait i')).toContain('.msg-working-dots i');
+    expect(selectorsOf(css, '.dlg-reply-wait')).toContain('.msg-working-dots');
+    expect(effectiveValue(css, '.dlg-reply-wait i', 'background')).toBe('currentColor');
+    expect(norm(atBlock(css, '@media (prefers-reduced-motion: reduce)'))).toContain('.dlg-reply-wait i');
+  });
+
+  // The phone floor's arithmetic. At 360 the own-words field must hold its whole placeholder, and Send, busy or not, is
+  // only as wide as its idle word. jsdom measures no text, so the two strings' widths are MEASURED (Chromium, on a build
+  // of this branch, in the font chat.css gives each: system-ui, on the measuring machine the macOS face, which runs
+  // wider than Android's Roboto), and every other length is read from the stylesheets. A string or a font changed
+  // here is a width to measure again.
+  const MEASURED_PX: Readonly<Record<string, number>> = {
+    '…or answer in your own words': 218.5, // `.dlg-reply-input`: 16px (`--fs-input`), weight 400
+    Send: 31.6, // `.dlg-reply-send`: 13px (`--fs-sm`), weight 500
+  };
+  const PHONE_FLOOR = 360;
+  const UI = path.join(import.meta.dirname, '..', '..', 'ui', 'src');
+  const tokens = readFileSync(path.join(UI, 'styles', 'tokens.css'), 'utf8');
+  /** A length in px: `12px`, or a token (`var(--sp-3)`) read from tokens.css. */
+  const px = (value: string | undefined): number => {
+    const token = /^var\((--[\w-]+)\)$/.exec(value ?? '')?.[1];
+    const raw = token !== undefined
+      ? new RegExp(`${token}:\\s*([\\d.]+)px`).exec(tokens)?.[1]
+      : /^([\d.]+)px$/.exec(value ?? '')?.[1];
+    expect(raw, `a length in px: ${value}`).toBeDefined();
+    return Number(raw);
+  };
+  /** The value of `prop` in the first rule naming `selector`, split into its words (a `var(…)` is one word). */
+  const words = (selector: string, prop: string): string[] => {
+    const value = declValue(ruleIn(css, selector), prop);
+    expect(value, `${selector} { ${prop} }`).not.toBeNull();
+    return value!.match(/var\([^)]*\)|[^\s()]+/g) ?? [];
+  };
+
+  it('at the phone floor the field holds its whole placeholder beside Send, idle and busy', () => {
+    vi.spyOn(api, 'answerDialogText').mockReturnValue(new Promise(() => {}));
+    renderAsk(null, pane('cc300-ask-1q-open'));
+    const placeholder = field().placeholder;
+    expect(MEASURED_PX[placeholder], `measure "${placeholder}" again`).toBeDefined();
+    const idle = screen.getByRole('button', { name: 'Send' });
+    const [word] = faces(idle);
+    expect(MEASURED_PX[word!], `measure "${word}" again`).toBeDefined();
+    fireEvent.change(field(), { target: { value: 'Teal' } });
+    fireEvent.click(idle);
+    const [, busyDrawn] = faces(screen.getByRole('button', { name: 'Sending…' }));
+    expect(busyDrawn, 'the busy face draws dots and nothing else').toMatch(/^•+$/);
+    const dots = busyDrawn!.length;
+    // The fonts the two widths were measured in.
+    expect(declValue(ruleIn(css, '.dlg-reply-input'), 'font')).toBe(norm('var(--weight-regular) var(--fs-input) / 1.3 var(--family-ui)'));
+    expect(declValue(ruleIn(css, '.dlg-reply-send'), 'font')).toBe(norm('var(--weight-medium) var(--fs-sm) / 1 var(--family-ui)'));
+
+    // The sheet's gutter: every sheet but the full one pads `px-4`, which theme.css maps to `--sp-4`.
+    const sheet = readFileSync(path.join(UI, 'primitives', 'sheet.tsx'), 'utf8');
+    expect(sheet).toMatch(/'z-sheet [^']*\bpx-4\b/);
+    expect(readFileSync(path.join(UI, 'styles', 'theme.css'), 'utf8')).toMatch(/--spacing-4:\s*var\(--sp-4\)/);
+    const gutter = px('var(--sp-4)');
+    // Send: its inline padding and border around the wider of its faces. The busy face draws dots only.
+    const busyFace = dots * px(words('.dlg-reply-wait i', 'width')[0]) + (dots - 1) * px(words('.dlg-reply-wait', 'gap')[0]);
+    expect(busyFace, 'the busy face is no wider than the word Send').toBeLessThanOrEqual(MEASURED_PX[word!]!);
+    const send = 2 * px(words('.dlg-reply-send', 'padding')[1]) + 2 * px(words('.dlg-reply-send', 'border')[0])
+      + Math.max(MEASURED_PX[word!]!, busyFace);
+    // The field flexes into what is left of the row, and its text box is that less its own padding and border.
+    const fieldWidth = PHONE_FLOOR - 2 * gutter - px(words('.dlg-reply', 'gap')[0]) - send;
+    const textBox = fieldWidth - 2 * px(words('.dlg-reply-input', 'padding')[1]) - 2 * px(words('.dlg-reply-input', 'border')[0]);
+    expect(textBox, `${placeholder} at ${PHONE_FLOOR}px`).toBeGreaterThanOrEqual(MEASURED_PX[placeholder]!);
+  });
+
+  it('the busy commits keep a gap between the label and answering…', () => {
+    // `Button` is a flex box, which drops the marker's leading space: `Nextanswering…` (measured, every width).
+    vi.spyOn(api, 'answerDialogMulti').mockReturnValue(new Promise(() => {}));
+    renderAsk(DRINK_FEATURES_TOOLS, pane('cc300-ask-multiselect-digit1-3'));
+    const next = screen.getByRole('button', { name: /^Next/ });
+    fireEvent.click(next);
+    expect(next).toHaveAttribute('aria-busy', 'true');
+    expect(next).toHaveClass('gap-2');
+  });
+
+  it('the own-words region spaces itself the same above and below, whatever it holds', () => {
+    // The field and its lines, and a line alone, sit in one `.dlg-words` block with equal margins, so the Chat row's
+    // rule below is as far from the field as the last option above it, and the field's focus ring clears both.
+    renderAsk(CACHING_TRACING, pane('cc300-ask-same-labels-q2'));
+    expect(field().closest('.dlg-words')).not.toBeNull();
+    fireEvent.change(field(), { target: { value: 'int x = 1;' } });
+    expect(screen.getByText(/trailing ; doesn't survive/i).closest('.dlg-words')).toBe(field().closest('.dlg-words'));
+    cleanup();
+    renderAsk(null, pane('ask-2col-chat-about'));
+    expect(screen.getByText(/no own-words row on the terminal/i).closest('.dlg-words')).not.toBeNull();
+    expect(rule('.dlg-words')).toMatch(/margin:\s*var\(--sp-3\) 0;/);
+    expect(rule('.dlg-words .dlg-copy')).toMatch(/margin:\s*0;/);
+    expect(rule('.dlg-reply')).not.toMatch(/margin/);
+  });
+
+  it('the one-line notes under the boxes sit as far below the last box as the own-words region does', () => {
+    // Measured flush (0px) under the last box's rule at every width before this rule; the notes follow `.opts`
+    // directly, on both sheets, which is the structure the rule selects on.
+    for (const ask of [DRINK_FEATURES_TOOLS, null]) {
+      renderAsk(ask, pane('cc300-ask-multiselect-next-focused'));
+      const notes = [...document.querySelectorAll('.dlg-copy')];
+      expect(notes.map((n) => n.textContent), String(ask !== null)).toEqual([
+        expect.stringMatching(/cursor is on the Next row/),
+        expect.stringMatching(/^Own words on a pick-several question/),
+      ]);
+      expect(notes[0]!.previousElementSibling).toHaveClass('opts');
+      cleanup();
+    }
+    const gap = declValue(ruleIn(css, '.opts + .dlg-copy'), 'margin-top');
+    expect(gap).toBe('var(--sp-3)');
+    expect(declValue(ruleIn(css, '.dlg-words'), 'margin')).toBe(norm(`${gap} 0`));
+  });
+
+  it('the own-words field looks disabled while it is', () => {
+    expect(rule('.dlg-reply-input:disabled')).toMatch(/color:\s*var\(--syn-comment\)/);
+    expect(rule('.dlg-reply-input:disabled')).toMatch(/border-style:\s*dashed/);
+    expect(rule('.dlg-reply-input:disabled')).toMatch(/cursor:\s*default/);
+  });
+});
+
+// — what a refused tap and the foot line say (plan, Task 5) —
+//
+// `answer()` once toasted every 409 alike ("That question changed — showing the latest"), whatever the route refused;
+// #417's `answerDialog` refuses by code (`DialogRefuseCode`), and each code now has its own sentence. And the foot line
+// offered own words under menus that offer no field.
+describe('a refused tap, and the foot line, say what is true (D-5089, D-5090, D-5091)', () => {
+  const refused = (code: string) => new ApiError(409, { ok: false, error: code });
+
+  it('answer()\'s refusals say what happened, by code', async () => {
+    for (const code of ['free-text-row', 'unparsed-dialog', 'walk-failed', 'not-alive'] as const) {
+      vi.spyOn(api, 'answerDialog').mockRejectedValueOnce(refused(code));
+      renderWithDialog(parsedDialog());
+      fireEvent.click(screen.getByRole('button', { name: 'Big-bang cutover' }));
+      expect(await screen.findByText(DIALOG_REFUSE_TEXT[code]), code).toBeInTheDocument();
+      // A refusal is a failure, announced at once (an error toast is an alert); only a stale dialog is news.
+      expect(screen.getByText(DIALOG_REFUSE_TEXT[code]), code).toHaveAttribute('role', 'alert');
+      expect(screen.queryByText('That question changed — showing the latest'), code).toBeNull();
+      expect(screen.getByRole('button', { name: 'Big-bang cutover' }), code).toBeEnabled();
+      cleanup();
+    }
+  });
+
+  it('every DialogRefuseCode has its sentence, and stale-dialog keeps its two', () => {
+    for (const code of DIALOG_REFUSE_CODES) {
+      expect(DIALOG_REFUSE_TEXT[code], code).toEqual(expect.any(String));
+      expect(DIALOG_REFUSE_TEXT[code], code).not.toBe('');
+      expect(dialogRefusal(refused(code), false), code).toBe(DIALOG_REFUSE_TEXT[code]);
+    }
+    expect(new Set(Object.values(DIALOG_REFUSE_TEXT)).size, 'two codes share a sentence').toBe(DIALOG_REFUSE_CODES.length);
+    expect(DIALOG_REFUSE_TEXT['not-alive']).toBe(sendErrorText('not-alive'));
+    // N1: under the envelope a refused tap changes nothing on screen, so "showing the latest" would be false there.
+    expect(dialogRefusal(refused('stale-dialog'), true)).toBe(STALE_UNDER_ENVELOPE);
+    expect(dialogRefusal(refused('walk-failed'), true)).toBe(DIALOG_REFUSE_TEXT['walk-failed']);
+    const other = new ApiError(502, { ok: false, stderr: 'tmux: no server running' });
+    expect(dialogRefusal(other, false)).toBe(failedTo('answer', other));
+  });
+
+  it('the foot line names own words only where the field is offered', () => {
+    const foot = (): string | null | undefined => document.querySelector('.sheet-foot')?.textContent;
+    renderWithDialog(pane('cc300-ask-1q-open'));
+    expect(screen.getByLabelText('Answer in your own words')).toBeInTheDocument();
+    expect(foot()).toBe('tap an option, or answer in your own words');
+    cleanup();
+    // The two-column layout paints no own-words row.
+    renderWithDialog(pane('ask-2col-chat-about'));
+    expect(screen.queryByLabelText('Answer in your own words')).toBeNull();
+    expect(foot()).toBe('tap an option');
+    cleanup();
+    // A permission prompt is no AskUserQuestion (DERIVED: Yes / Yes, and don't ask again / No).
+    renderWithDialog(parsedDialog({
+      title: 'Do you want to proceed?',
+      options: [{ index: 1, label: 'Yes' }, { index: 2, label: "Yes, and don't ask again" }, { index: 3, label: 'No' }],
+    }));
+    expect(screen.queryByLabelText('Answer in your own words')).toBeNull();
+    expect(foot()).toBe('tap an option');
+    cleanup();
+    // A row holding text typed in the terminal, matched by the transcript (`Dialog.ask`): a line, no field.
+    renderWithDialog({
+      ...pane('cc300-ask-freetext-held'),
+      ask: { question: 'Which fruit?', header: 'Fruit', multiSelect: false, options: [{ label: 'Apple' }, { label: 'Pear' }] },
+    });
+    expect(screen.queryByLabelText('Answer in your own words')).toBeNull();
+    expect(foot()).toBe('tap an option');
   });
 });
 

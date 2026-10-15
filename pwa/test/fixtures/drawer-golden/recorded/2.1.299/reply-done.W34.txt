@@ -1,0 +1,41 @@
+
+  ▐▛███▛█   Claude Code v2.1.299
+ ▝▜██████▀  Sonnet 4.5 · API Usage
+ Billing
+  ▝▝   ▝▝   /rig/project-a
+
+ ❯ Summarise what project-a does,
+   and what it should do next.
+
+ ● project-a is a small TypeScript
+   module with one export: the
+   greet function in src/app.ts
+   takes a name and returns a
+   greeting string built from it,
+   with no state and no side
+   effects, so it is safe to call
+   from anywhere and trivial to
+   test. The next step is a
+   farewell function beside it that
+   mirrors greet exactly, followed
+   by one test file that covers the
+   pair, so the module keeps a
+   single shape that any reader can
+   take in at a glance.
+
+   - greet: returns a greeting for
+     a name
+   - farewell: will return a
+     farewell for a name
+
+   Both functions stay pure.
+
+ ✻ Cogitated for 0s · done 12:00 PM
+
+──
+ ❯ Next, add a farewell function
+   beside greet in src/app.ts.
+   Then cover both functions with
+   one small test file.
+──
+   ⏸ manual mode on
