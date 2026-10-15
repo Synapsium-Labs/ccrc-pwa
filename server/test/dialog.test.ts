@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { hasMenu, parseDialog, paneOptionRows, paneState, turnRunning } from '../src/pane/dialog.js';
+import { editHintShown, freeTextRow, hasMenu, parseDialog, paneOptionRows, paneState, turnRunning } from '../src/pane/dialog.js';
 import { FleetWatcher } from '../src/watch.js';
 import { Bus } from '../src/bus.js';
 import { Tmux, type Runner } from '../src/exec.js';
@@ -944,6 +944,378 @@ describe('parseDialog on real 2.1.280 menus', () => {
   });
 });
 
+// Real Claude Code 2.1.300 AskUserQuestion screens, recorded 2026-10-15 in a
+// throwaway local tmux server (its own socket, a 220x50 window as the fleet
+// runs, `capture-pane -p` as `Tmux.capture` reads; the `-100col` pair at
+// 100x40) and scrubbed of the work-dir path. CHARACTERIZATION pins: what
+// `parseDialog` and `paneOptionRows` read TODAY on each screen of a
+// multi-question ask, its free-text row, its review screen and a multiSelect
+// question. The ask server-half plan
+// (`docs/superpowers/plans/2026-10-15-ask-server-half.md`) builds its guards on
+// these readings. D-5048 changed the multiSelect pins on purpose (it parses
+// those menus now); the rest say what the parser does, not what it should do.
+// D-5048's own recordings (a digit unticking a box, a revisit, the tick order)
+// were made the same way the same day.
+describe('2.1.300 AskUserQuestion (recorded)', () => {
+  /** The two rows Claude Code paints after a single-select question's own options. */
+  const ASK_TAIL = ['Type something.', 'Chat about this'];
+  /** The footer line ("Enter to select · … · Esc to cancel"), the last one on screen. */
+  const footerOf = (pane: string): string =>
+    pane.split('\n').filter((l) => l.includes('Enter to select')).at(-1) ?? '';
+  /** Claude Code's edit hint, painted while the free-text input holds focus. */
+  const hinted = (pane: string): boolean => footerOf(pane).includes('to edit in');
+
+  describe('question screens', () => {
+    it('titles every question screen with its question and puts the empty free-text row at n+1, Chat about this at n+2', () => {
+      for (const [f, title, labels] of [
+        ['cc300-ask-q1-of-2.txt', 'Which colour do you prefer?', ['Red', 'Green', 'Blue']],
+        ['cc300-ask-q2-of-2-single.txt', 'Which drink?', ['Tea', 'Coffee']],
+        ['cc300-ask-same-labels-q1.txt', 'Enable caching?', ['Yes', 'No']],
+        ['cc300-ask-same-labels-q2.txt', 'Enable tracing?', ['Yes', 'No']],
+        ['cc300-ask-4q-100col.txt', 'Which database engine?', ['Postgres', 'SQLite']],
+        ['cc300-ask-1q-open.txt', 'Which colour?', ['Red', 'Blue']],
+        // Markdown in a question is NOT rendered: the backticks and asterisks
+        // reach the screen, and the title, verbatim.
+        ['cc300-ask-markdown-question.txt', 'Should the `ledger` table use **Postgres** or SQLite?', ['Postgres', 'SQLite']],
+      ] as const) {
+        const pane = fixture(f);
+        const d = parseDialog(pane)!;
+        expect(d.parsed, f).toBe(true);
+        expect(d.title, f).toBe(title);
+        expect(d.options.map((o) => o.label), f).toEqual([...labels, ...ASK_TAIL]);
+        expect(d.options.map((o) => o.index), f).toEqual([...labels, ...ASK_TAIL].map((_, i) => i + 1));
+        expect(d.selectedIndex, f).toBe(1);
+        expect(hinted(pane), f).toBe(false);
+      }
+    });
+
+    it('a multi-question screen opens its body with the tab row; a lone question paints none', () => {
+      expect(parseDialog(fixture('cc300-ask-same-labels-q2.txt'))!.body)
+        .toBe('←  ☒ Caching  ☐ Tracing  ✔ Submit  →\n\nEnable tracing?');
+      expect(parseDialog(fixture('cc300-ask-1q-open.txt'))!.body).toBe('Colour\n\nWhich colour?');
+      // Single-question and multi-question footers differ.
+      expect(footerOf(fixture('cc300-ask-1q-open.txt'))).toContain('↑/↓ to navigate');
+      expect(footerOf(fixture('cc300-ask-same-labels-q2.txt'))).toContain('Tab/Arrow keys to navigate');
+    });
+
+    it('two questions with the same labels differ only by their title, and so by their id', () => {
+      const q1 = parseDialog(fixture('cc300-ask-same-labels-q1.txt'))!;
+      const q2 = parseDialog(fixture('cc300-ask-same-labels-q2.txt'))!;
+      expect(q2.options.map((o) => o.label)).toEqual(q1.options.map((o) => o.label));
+      expect(q2.title).not.toBe(q1.title);
+      expect(q2.id).not.toBe(q1.id);
+    });
+
+    it('a question too long for one row wraps under a │ bar, and the title is its LAST row, bar kept', () => {
+      // The envelope's question ends "…must land before any writer that relies
+      // on it?"; the title is a suffix of it only once the "│ " is stripped.
+      const d = parseDialog(fixture('cc300-ask-wrapped-question.txt'))!;
+      expect(d.parsed).toBe(true);
+      expect(d.title).toBe('│ must land before any writer that relies on it?');
+      expect(d.body).toContain('\n│ When the new release is ready, in which order should the two machines be updated,');
+      expect(d.options.map((o) => o.label)).toEqual(['First machine first', 'Second machine first', ...ASK_TAIL]);
+    });
+  });
+
+  describe('the free-text row', () => {
+    it('reached by a Down walk: focused with the edit hint, typed, stepped off and back, its text kept', () => {
+      const open = fixture('cc300-ask-same-labels-q2.txt');
+      const seq = ['cc300-ask-freetext-walk-1-down.txt', 'cc300-ask-freetext-walk-2-focused.txt',
+        'cc300-ask-freetext-walk-3-typed.txt', 'cc300-ask-freetext-walk-4-stepped-off.txt',
+        'cc300-ask-freetext-walk-5-back-on-held.txt'].map(fixture);
+      const [down, focused, typed, off, back] = seq.map((p) => parseDialog(p)!);
+      const o = parseDialog(open)!;
+      expect([o, down, focused, typed, off, back].map((d) => d!.selectedIndex)).toEqual([1, 2, 3, 3, 2, 3]);
+      expect([open, ...seq].map(hinted)).toEqual([false, false, true, true, false, true]);
+      // The walk onto the empty row changes nothing the id hashes …
+      expect(focused!.id).toBe(o.id);
+      expect(focused!.options[2]!.label).toBe('Type something.');
+      // … typing replaces the row's label, so the id CHANGES, and the title stays.
+      expect(typed!.options[2]!.label).toBe('- only in staging, sampled 10%');
+      expect(typed!.id).not.toBe(o.id);
+      expect(typed!.title).toBe('Enable tracing?');
+      // The text survives stepping off the row, and the id with it.
+      expect(off!.options[2]!.label).toBe('- only in staging, sampled 10%');
+      expect([off!.id, back!.id]).toEqual([typed!.id, typed!.id]);
+      // Enter on the held row answered the question: the review lists the text.
+      expect(parseDialog(fixture('cc300-ask-review-same-labels.txt'))!.body)
+        .toContain('Enable tracing?\n   → - only in staging, sampled 10%');
+    });
+
+    it('a 1000-character answer: the title survives the 50-row capture, and label + description is the text', () => {
+      // Focused (by digit n+1) under the wrapped question, before typing.
+      const open = parseDialog(fixture('cc300-ask-wrapped-question.txt'))!;
+      const focusedPane = fixture('cc300-ask-wrapped-question-focused.txt');
+      const focused = parseDialog(focusedPane)!;
+      expect([focused.selectedIndex, focused.options[2]!.label, hinted(focusedPane)]).toEqual([3, 'Type something.', true]);
+      expect(focused.id).toBe(open.id);
+      const d = parseDialog(fixture('cc300-ask-freetext-1000.txt'))!;
+      expect(d.title).toBe('│ must land before any writer that relies on it?');
+      expect(d.selectedIndex).toBe(3);
+      const row = d.options[2]!;
+      // The first screen row is the label; the four wrapped rows are its "description".
+      expect(row.label).toBe(
+        'Sentence 01 of answer A: keep the schema portable and test it nightly. Sentence 02 of answer A: keep the schema portable and test it nightly. Sentence 03 of answer A: keep the schema portable and test it nightly.',
+      );
+      expect(row.description).toMatch(/^Sentence 04 of answer A: .* END-A$/);
+      expect(`${row.label} ${row.description}`).toHaveLength(1000);
+      expect(d.options[3]!.label).toBe('Chat about this');
+    });
+
+    it('a row that holds text replaces the placeholder: no "Type something." row is left on screen', () => {
+      const pane = fixture('cc300-ask-freetext-held.txt');
+      const d = parseDialog(pane)!;
+      expect(d.options.map((o) => o.label)).toEqual(['Apple', 'Pear', 'Mango', 'Chat about this']);
+      expect(d.selectedIndex).toBe(3);
+      expect(hinted(pane)).toBe(true);
+    });
+
+    it('the edit hint outlives the free-text row: walking THROUGH it leaves the hint on the row below', () => {
+      // So the hint alone never proves the cursor is on the input row.
+      const pane = fixture('cc300-ask-1q-walk-through-to-chat.txt');
+      const d = parseDialog(pane)!;
+      expect(d.selectedIndex).toBe(4);
+      expect(d.options[3]!.label).toBe('Chat about this');
+      expect(hinted(pane)).toBe(true);
+    });
+  });
+
+  describe('the review screen', () => {
+    it('reads as Submit answers / Cancel, titled by the tab row, its body from "Review your answers" to "Ready to submit"', () => {
+      for (const [f, tabs] of [
+        ['cc300-ask-review-same-labels.txt', '←  ☒ Caching  ☒ Tracing  ✔ Submit  →'],
+        ['cc300-ask-review-skipped.txt', '←  ☒ Pets  ☐ Size  ☒ Mode  ✔ Submit  →'],
+        ['cc300-ask-review-1q-multiselect.txt', '←  ☒ Tools  ✔ Submit  →'],
+        ['cc300-ask-review-multiselect.txt', '←  ☒ Drink  ☒ Features  ☒ Tools  ✔ Submit  →'],
+        ['cc300-ask-review-4q-100col.txt', '←  ☒ Database  ☒ Deployment  ☒ Monitoring  ☒ Licensing  ✔ Submit  →'],
+      ] as const) {
+        const pane = fixture(f);
+        const d = parseDialog(pane)!;
+        expect(d.parsed, f).toBe(true);
+        expect(d.options.map((o) => o.label), f).toEqual(['Submit answers', 'Cancel']);
+        expect(d.selectedIndex, f).toBe(1);
+        expect(d.title, f).toBe(tabs);
+        expect(d.body, f).toMatch(/^Review your answers\n[^]*\nReady to submit your answers\?$/);
+        expect(footerOf(pane), f).toBe(''); // the review paints no footer
+      }
+      expect(parseDialog(fixture('cc300-ask-review-skipped.txt'))!.body).toContain('⚠ You have not answered all questions');
+      expect(parseDialog(fixture('cc300-ask-review-multiselect.txt'))!.body)
+        .toContain('Which features do you want?\n   → Logging, Tracing');
+    });
+
+    it('Cancel is row 2, the cursor on it keeps the id, and after it no menu is left: the whole ask was declined', () => {
+      const review = parseDialog(fixture('cc300-ask-review-same-labels.txt'))!;
+      const onCancel = parseDialog(fixture('cc300-ask-review-cancel-focused.txt'))!;
+      expect(onCancel.selectedIndex).toBe(2);
+      expect(onCancel.id).toBe(review.id);
+      const after = fixture('cc300-ask-review-cancelled.txt');
+      expect(hasMenu(after)).toBe(false);
+      expect(parseDialog(after)).toBeNull();
+      expect(after).toContain('User declined to answer questions');
+    });
+
+    it('a review taller than the 20-row header climb loses its title and its heading (pinned as-is)', () => {
+      // Four questions, three answered with 600 to 1000 characters: 25 rows
+      // between the tab row and "Ready to submit". `header()` climbs at most 20.
+      const d = parseDialog(fixture('cc300-ask-review-4q-long.txt'))!;
+      expect(d.options.map((o) => o.label)).toEqual(['Submit answers', 'Cancel']);
+      expect(d.title).toMatch(/^│ ● When the new release is ready, in which order/);
+      expect(d.body).not.toContain('Review your answers');
+      expect(d.body).toMatch(/\nReady to submit your answers\?$/);
+    });
+  });
+
+  // D-5048 parses these menus: a `checked` flag on `OptionRow`, and an additive `Dialog.multi` carrying the options
+  // with their ticks, the free-text row, the unnumbered Next/Submit row and the cursor. `parsed` stays false, so a
+  // cached older PWA keeps its raw view and its terminal door and never offers a box as a one-tap answer. These pins
+  // were the Record step's as-is readings, changed here on purpose.
+  describe('a multiSelect question (D-5048)', () => {
+    const FEATURES = ['cc300-ask-multiselect-next-open.txt', 'cc300-ask-multiselect-digit1.txt',
+      'cc300-ask-multiselect-digit1-3.txt', 'cc300-ask-multiselect-on-freetext.txt',
+      'cc300-ask-multiselect-next-focused.txt', 'cc300-ask-multiselect-row3.txt'];
+    const multiOf = (f: string) => {
+      const m = parseDialog(fixture(f))!.multi;
+      expect(m, `${f} carries no multi`).toBeDefined();
+      return m!;
+    };
+    const ticks = (f: string): boolean[] => multiOf(f).options.map((o) => o.checked);
+
+    it('stays unparsed, titled with its question, one id however its boxes are ticked or its cursor moves', () => {
+      const ds = FEATURES.map((f) => parseDialog(fixture(f))!);
+      for (const [i, d] of ds.entries()) {
+        expect(d.parsed, FEATURES[i]).toBe(false);
+        expect(d.options, FEATURES[i]).toEqual([]);
+        expect(d.title, FEATURES[i]).toBe('Which features do you want?');
+        expect(d.multi, FEATURES[i]).toBeDefined();
+      }
+      expect(new Set(ds.map((d) => d.id)).size).toBe(1);
+      expect(new Set(ds.map((d) => d.raw)).size).toBe(FEATURES.length);
+    });
+
+    it('paneOptionRows reads each box\'s tick into checked, and still skips the unnumbered Next row', () => {
+      const open = fixture('cc300-ask-multiselect-next-open.txt');
+      const ticked = fixture('cc300-ask-multiselect-digit1-3.txt');
+      const rows = paneOptionRows(open);
+      expect(rows.map((r) => r.label)).toEqual(['Logging', 'Metrics', 'Tracing', 'Type something', 'Chat about this']);
+      expect(rows.map((r) => r.checkbox)).toEqual([true, true, true, true, false]);
+      expect(rows.map((r) => r.checked)).toEqual([false, false, false, false, false]);
+      expect(Object.keys(rows[0]!).sort()).toEqual(['checkbox', 'checked', 'index', 'label', 'line', 'selected']);
+      expect(open).toMatch(/\n {5}Next\n/);
+      // Digits 1 and 3 ticked two boxes, and the reader now tells; labels and boxes are unchanged.
+      expect(ticked).toContain('1. [✔] Logging');
+      expect(ticked).toContain('3. [✔] Tracing');
+      expect(paneOptionRows(ticked).map((r) => r.checked)).toEqual([true, false, true, false, false]);
+      expect(paneOptionRows(ticked).map(({ label, checkbox }) => ({ label, checkbox })))
+        .toEqual(rows.map(({ label, checkbox }) => ({ label, checkbox })));
+      // A single-select row paints no box, so it is never checked.
+      expect(paneOptionRows(fixture('cc300-ask-q1-of-2.txt')).map((r) => r.checked)).toEqual([false, false, false, false, false]);
+    });
+
+    it('parseDialog reads the question into multi: its options and ticks, the free-text row, the commit row, the cursor', () => {
+      const FEAT = [
+        { index: 1, label: 'Logging', description: 'Record application events' },
+        { index: 2, label: 'Metrics', description: 'Collect numeric measurements' },
+        { index: 3, label: 'Tracing', description: 'Follow requests across calls' },
+      ];
+      const TOOLS = [
+        { index: 1, label: 'Hammer', description: 'Striking tool for driving nails and breaking things apart' },
+        { index: 2, label: 'Saw', description: 'Cutting tool for wood, pipe, and other stock' },
+        { index: 3, label: 'Drill', description: 'Rotary tool for boring holes and driving screws' },
+      ];
+      const with_ = (opts: typeof FEAT, checked: boolean[]) => opts.map((o, i) => ({ ...o, checked: checked[i]! }));
+      const empty = (index: number) => ({ index, label: 'Type something', checked: false });
+      for (const [f, options, freeText, commit, cursor] of [
+        ['cc300-ask-multiselect-next-open.txt', with_(FEAT, [false, false, false]), empty(4), 'Next', 1],
+        ['cc300-ask-multiselect-digit1.txt', with_(FEAT, [true, false, false]), empty(4), 'Next', 1],
+        ['cc300-ask-multiselect-digit1-3.txt', with_(FEAT, [true, false, true]), empty(4), 'Next', 1],
+        ['cc300-ask-multiselect-row3.txt', with_(FEAT, [true, false, true]), empty(4), 'Next', 3],
+        ['cc300-ask-multiselect-on-freetext.txt', with_(FEAT, [true, false, true]), empty(4), 'Next', 4],
+        ['cc300-ask-multiselect-next-focused.txt', with_(FEAT, [true, false, true]), empty(4), 'Next', 'commit'],
+        // A digit typed into the focused free-text row: the row holds "2", ticked, and the backstop still names it.
+        ['cc300-ask-multiselect-digit-typed-on-freetext.txt', with_(FEAT, [true, false, true]),
+          { index: 4, label: '2', checked: true }, 'Next', 4],
+        ['cc300-ask-multiselect-tools-open.txt', with_(TOOLS, [false, false, false]), empty(4), 'Next', 1],
+        ['cc300-ask-multiselect-tools-revisit.txt', with_(TOOLS, [false, true, true]), empty(4), 'Next', 1],
+        ['cc300-ask-multiselect-tools-revisit-digit2-1.txt', with_(TOOLS, [true, false, true]), empty(4), 'Next', 1],
+        ['cc300-ask-multiselect-sizes-large.txt', [
+          { index: 1, label: 'Small', description: 'Compact version suited to tight spaces and light tasks', checked: false },
+          { index: 2, label: 'Large', description: 'Full-size version for heavier-duty work', checked: true },
+        ], empty(3), 'Submit', 1],
+        // The last question paints Submit where the others paint Next.
+        ['cc300-ask-multiselect-submit-digit2-3.txt', [
+          { index: 1, label: 'Hammer', description: 'For driving nails', checked: false },
+          { index: 2, label: 'Saw', description: 'For cutting material', checked: true },
+          { index: 3, label: 'Drill', description: 'For boring holes', checked: true },
+        ], empty(4), 'Submit', 1],
+        // The free-text box ticked by digit 4 with the cursor on row 1 (an earlier 2.1.300 probe).
+        ['cc300-ask-multiselect-freetext-ticked.txt', [
+          { index: 1, label: 'Logging', description: 'Record events and messages from the app.', checked: true },
+          { index: 2, label: 'Metrics', description: 'Collect numeric measurements over time.', checked: false },
+          { index: 3, label: 'Tracing', description: 'Follow requests across components.', checked: true },
+        ], { index: 4, label: 'Type something', checked: true }, 'Submit', 1],
+        ['cc300-ask-multiselect-walk-to-next.txt', [
+          { index: 1, label: 'Cats', description: 'Feline companions', checked: true },
+          { index: 2, label: 'Dogs', description: 'Canine companions', checked: false },
+        ], empty(3), 'Next', 'commit'],
+        // 2.1.280 paints the same shape.
+        ['cc280-multiselect-toggled.txt', [
+          { index: 1, label: 'Logging', description: 'Structured request logs.', checked: false },
+          { index: 2, label: 'Metrics', description: 'Prometheus counters.', checked: true },
+          { index: 3, label: 'Tracing', description: 'OpenTelemetry spans.', checked: false },
+          { index: 4, label: 'Caching', description: 'An LRU in front of reads.', checked: false },
+        ], empty(5), 'Submit', 2],
+      ] as const) {
+        expect(parseDialog(fixture(f))!.multi, f).toEqual({ options, freeText, commit, cursor });
+      }
+    });
+
+    it('the cursor: on the free-text row it is row 4 with the edit hint; on the Next row no numbered row holds it, hint kept', () => {
+      const onText = fixture('cc300-ask-multiselect-on-freetext.txt');
+      expect(paneOptionRows(onText).filter((r) => r.selected).map((r) => r.index)).toEqual([4]);
+      expect(multiOf('cc300-ask-multiselect-on-freetext.txt').cursor).toBe(4);
+      expect(hinted(onText)).toBe(true);
+      for (const f of ['cc300-ask-multiselect-next-focused.txt', 'cc300-ask-multiselect-walk-to-next.txt']) {
+        const pane = fixture(f);
+        expect(paneOptionRows(pane).some((r) => r.selected), f).toBe(false);
+        expect(pane, f).toMatch(/\n❯ {4}Next\n/);
+        expect(multiOf(f).cursor, f).toBe('commit');
+        expect(hinted(pane), f).toBe(true);
+      }
+      // Back on an option row the hint is gone (Tab commits from here).
+      const row3 = fixture('cc300-ask-multiselect-row3.txt');
+      expect(paneOptionRows(row3).filter((r) => r.selected).map((r) => r.index)).toEqual([3]);
+      expect(multiOf('cc300-ask-multiselect-row3.txt').cursor).toBe(3);
+      expect(hinted(row3)).toBe(false);
+    });
+
+    it('a digit with the cursor on the free-text row is TYPED into it, which ticks it and changes the id', () => {
+      const before = parseDialog(fixture('cc300-ask-multiselect-on-freetext.txt'))!;
+      const pane = fixture('cc300-ask-multiselect-digit-typed-on-freetext.txt');
+      expect(pane).toContain('4. [✔] 2');
+      expect(paneOptionRows(pane)[3]!.label).toBe('2');
+      expect(paneOptionRows(pane)[3]!.checked).toBe(true);
+      expect(parseDialog(pane)!.id).not.toBe(before.id);
+      expect(before.multi!.freeText).toEqual({ index: 4, label: 'Type something', checked: false });
+      expect(parseDialog(pane)!.multi!.freeText).toEqual({ index: 4, label: '2', checked: true });
+    });
+
+    it("the last question's extra row reads Submit, and a committed question moves the screen on", () => {
+      const submit = fixture('cc300-ask-multiselect-submit-open.txt');
+      const d = parseDialog(submit)!;
+      expect(d.parsed).toBe(false);
+      expect(d.title).toBe('Which tools?');
+      expect(submit).toMatch(/\n {5}Submit\n/);
+      expect(d.multi!.commit).toBe('Submit');
+      expect(parseDialog(fixture('cc300-ask-multiselect-submit-digit2-3.txt'))!.id).toBe(d.id);
+      // Enter on a Next row committed the question (the walk-to-next screen's
+      // own Tab did not), and the next question is on screen.
+      expect(parseDialog(fixture('cc300-ask-multiselect-next-enter.txt'))!.title).toBe('Which sizes?');
+    });
+
+    it('a digit UNticks a ticked box, and the cursor stays (recorded)', () => {
+      // Digits 1 and 2 ticked Hammer and Saw; digit 1 again unticked Hammer. One id throughout.
+      expect(ticks('cc300-ask-multiselect-tools-digit1-2.txt')).toEqual([true, true, false]);
+      expect(ticks('cc300-ask-multiselect-tools-untick1.txt')).toEqual([false, true, false]);
+      expect(multiOf('cc300-ask-multiselect-tools-untick1.txt').cursor).toBe(1);
+      expect(parseDialog(fixture('cc300-ask-multiselect-tools-untick1.txt'))!.id)
+        .toBe(parseDialog(fixture('cc300-ask-multiselect-tools-digit1-2.txt'))!.id);
+    });
+
+    it('a revisit keeps the ticks with the cursor on row 1, and the answer lists the boxes in the order they were ticked', () => {
+      // Saw and Drill ticked, Tab, then Left back: the revisit repaints the screen Tab left. There digit 2 unticked Saw
+      // and digit 1 ticked Hammer; the review reads "Drill, Hammer" (Drill was ticked first), as the transcript did.
+      expect(ticks('cc300-ask-multiselect-tools-revisit.txt')).toEqual([false, true, true]);
+      expect(ticks('cc300-ask-multiselect-tools-revisit-digit2-1.txt')).toEqual([true, false, true]);
+      const review = parseDialog(fixture('cc300-ask-review-tick-order.txt'))!;
+      expect(review.options.map((o) => o.label)).toEqual(['Submit answers', 'Cancel']);
+      expect(review.body).toContain('Which tools?\n   → Drill, Hammer');
+      expect(review.body).toContain('Which sizes?\n   → Large');
+    });
+
+    it('multi rides a multiSelect question only, and only one that paints its Next/Submit row', () => {
+      for (const f of ['cc300-ask-q1-of-2.txt', 'cc300-ask-freetext-held.txt', 'cc300-ask-review-tick-order.txt',
+        'ask-2col-chat-about.txt', 'cc280-permission.txt']) {
+        expect(parseDialog(fixture(f))!.multi, f).toBeUndefined();
+      }
+      // The 2.1.222 shape ("Space to select · Enter to confirm") has checkboxes but no commit row: its commit was
+      // measured as Enter then, and Tab there never was. Still unparsed, with no multi.
+      const old = parseDialog(fixture('multiselect.txt'))!;
+      expect(old.parsed).toBe(false);
+      expect(old.multi).toBeUndefined();
+    });
+
+    it('no multi when the boxes are not the menu\'s first rows (DERIVED: row 1 paints no box)', () => {
+      // Still a multi-select by its boxes, so still unparsed; but a numbered row above them is no measured layout, and
+      // reading the rest as the options would hand a digit to a row nobody has seen it toggle.
+      const pane = fixture('cc300-ask-multiselect-digit1.txt');
+      expect(pane).toContain('❯ 1. [✔] Logging');
+      const d = parseDialog(pane.replace('❯ 1. [✔] Logging', '❯ 1. Logging'))!;
+      expect(d.parsed).toBe(false);
+      expect(d.multi).toBeUndefined();
+    });
+  });
+});
+
 // Worker stall watch §4.1 (wave 1): `turnRunning` is BUSY_RE exported, the
 // first production reader of that constant. Its caller is `sendPrompt`'s
 // `refuseIfTurnRunning`, which hands it the pane's LAST 8 ROWS only; send.test.ts
@@ -997,5 +1369,111 @@ describe('BUSY_RE: the tolerant spinner-row anchor (worker stall watch §5.1, M3
   ])('%s is not a running turn', (_name, pane) => {
     expect(turnRunning(pane)).toBe(false);
     expect(paneState(pane)).not.toBe('busy');
+  });
+});
+
+// D-5045 (plan docs/superpowers/plans/2026-10-15-ask-server-half.md, Task 1). `freeTextRow` names the row of an
+// AskUserQuestion menu that takes free text, which `answerDialog` refuses: Enter on it while it is empty rejects the
+// whole ask. It reads the placeholder label (`shared/ask-menu.ts`) and, failing that, the structural backstop: the
+// numbered row directly above the rule that precedes a NUMBERED "Chat about this". This census holds both against
+// every recorded screen in `fixtures/panes/`, with the placeholder's row read off the screen by its own pattern below
+// rather than by the function under test.
+describe('freeTextRow (D-5045)', () => {
+  const PANES = readdirSync(panesDir).filter((f) => f.endsWith('.txt')).sort();
+  /** A numbered row painting the placeholder: single-select `n. Type something.`, multiSelect `n. [ ] Type something`. */
+  const PLACEHOLDER_ROW = /^\s*(?:❯\s*)?(\d+)\.\s+(?:\[.\]\s*)?Type something\.?\s*$/m;
+
+  it('names the placeholder row on every recorded screen that paints one, and still names it once re-worded', () => {
+    let seen = 0;
+    for (const f of PANES) {
+      const pane = fixture(f);
+      const m = PLACEHOLDER_ROW.exec(pane);
+      if (!m) continue;
+      seen++;
+      expect(freeTextRow(pane), f).toBe(Number(m[1]));
+      // The backstop alone: the same screen with the placeholder re-worded, as the bundle's own `label: "Other"` could be.
+      const reworded = pane.replace(m[0], m[0].replace(/Type something\.?/, 'Other'));
+      expect(reworded, `${f}: the re-wording changed nothing`).not.toBe(pane);
+      expect(freeTextRow(reworded), `${f}, re-worded`).toBe(Number(m[1]));
+    }
+    // 2.1.280 and 2.1.300, single-select and multiSelect, 100 to 220 columns.
+    expect(seen, 'the census found too few screens to mean anything').toBeGreaterThanOrEqual(30);
+  });
+
+  it.each([
+    ['cc300-ask-freetext-held.txt', 3],
+    ['cc300-ask-freetext-walk-3-typed.txt', 3],
+    ['cc300-ask-freetext-walk-4-stepped-off.txt', 3],
+    ['cc300-ask-freetext-walk-5-back-on-held.txt', 3],
+    ['cc300-ask-freetext-1000.txt', 3],
+    ['cc300-ask-multiselect-digit-typed-on-freetext.txt', 4],
+  ])('names the row a typed answer holds, where no placeholder is left on screen (%s)', (name, row) => {
+    const pane = fixture(name);
+    expect(PLACEHOLDER_ROW.test(pane), `${name} still paints the placeholder`).toBe(false);
+    expect(freeTextRow(pane)).toBe(row);
+  });
+
+  it.each(['ask-2col-chat-about.txt', 'ask-2col-partial-redraw.txt'])(
+    'names nothing on the two-column layout, which has no free-text row and an unnumbered Chat row (%s)',
+    (name) => {
+      const pane = fixture(name);
+      expect(pane).toContain('Chat about this');
+      expect(freeTextRow(pane)).toBeNull();
+    },
+  );
+
+  it('the backstop needs the rule: a numbered Chat row with no rule above it names nothing (DERIVED)', () => {
+    // `cc300-ask-same-labels-q2.txt` with its placeholder re-worded (so only the backstop could name row 3) and the rule
+    // between row 3 and Chat removed. Then nothing says row 3 is the TUI's input row rather than a real option.
+    const q2 = fixture('cc300-ask-same-labels-q2.txt');
+    const reworded = q2.replace('3. Type something.', '3. Other');
+    expect(freeTextRow(reworded), 'the re-worded screen, rule kept').toBe(3);
+    const lines = reworded.split('\n');
+    const chat = lines.findIndex((l) => l.includes('4. Chat about this'));
+    expect(lines[chat - 1]!.trim()[0], 'the row above Chat is the rule').toBe('─');
+    lines.splice(chat - 1, 1);
+    expect(freeTextRow(lines.join('\n'))).toBeNull();
+  });
+
+  it('names nothing on any recorded screen that paints neither row', () => {
+    const others = PANES.filter((f) => !/Type something|Chat about this/.test(fixture(f)));
+    expect(others.length, 'too few non-ask screens to mean anything').toBeGreaterThanOrEqual(25);
+    expect(others.filter((f) => freeTextRow(fixture(f)) !== null)).toEqual([]);
+  });
+});
+
+// D-5047 (plan docs/superpowers/plans/2026-10-15-ask-server-half.md, Task 3). The free-text route types nothing until
+// the menu's footer shows the external-editor hint. Only the FOOTER counts: the same words in a row or in chat above the
+// menu say nothing about where the cursor is.
+describe('editHintShown (D-5047)', () => {
+  /** A DERIVED pane: `from` must be on the recorded screen, or the derivation silently tests the original. */
+  const derive = (pane: string, from: string, to: string): string => {
+    expect(pane, `the derivation's anchor "${from}" is not on the screen`).toContain(from);
+    return pane.replace(from, to);
+  };
+
+  it('reads the footer the recorded screens paint: on with the cursor on the free-text row, off before the walk', () => {
+    expect(editHintShown(fixture('cc300-ask-freetext-walk-2-focused.txt'))).toBe(true);
+    expect(editHintShown(fixture('cc300-ask-freetext-walk-5-back-on-held.txt'))).toBe(true);
+    expect(editHintShown(fixture('cc300-ask-same-labels-q2.txt'))).toBe(false);
+    expect(editHintShown(fixture('cc300-ask-freetext-walk-4-stepped-off.txt'))).toBe(false);
+    // The hint outlives the row: still painted with the cursor on Chat about this, which is why it never proves focus
+    // alone.
+    expect(editHintShown(fixture('cc300-ask-1q-walk-through-to-chat.txt'))).toBe(true);
+    // The review screen paints no footer at all.
+    expect(editHintShown(fixture('cc300-ask-review-same-labels.txt'))).toBe(false);
+  });
+
+  it('the words in a held row are not the footer (DERIVED: the row holds "how to edit in place", cursor off it)', () => {
+    const pane = derive(fixture('cc300-ask-freetext-walk-4-stepped-off.txt'),
+      '3. - only in staging, sampled 10%', '3. how to edit in place');
+    expect(parseDialog(pane)!.options[2]!.label).toBe('how to edit in place');
+    expect(editHintShown(pane)).toBe(false);
+  });
+
+  it('the words in chat above the menu are not the footer (DERIVED: the prompt echo mentions the chord)', () => {
+    const pane = derive(fixture('cc300-ask-same-labels-q2.txt'),
+      'Afterwards reply with the raw answers only.', 'Press ctrl+g to edit in Vim if you like.');
+    expect(editHintShown(pane)).toBe(false);
   });
 });

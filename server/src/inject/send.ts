@@ -1,7 +1,11 @@
 import type { Tmux } from '../exec.js';
-import { autoContinueArmed, hasMenu, parseDialog, turnRunning } from '../pane/dialog.js';
+import { autoContinueArmed, editHintShown, freeTextRow, hasMenu, parseDialog, turnRunning } from '../pane/dialog.js';
 import type { KeyedQueue } from './queue.js';
-import { composePrompt, MAIL_ENVELOPE_FENCE } from '../../../shared/api.js';
+import {
+  composePrompt, isDialogMultiIndexes, isDialogText, MAIL_ENVELOPE_FENCE,
+  type Dialog, type DialogMultiRefuseCode, type DialogRefuseCode, type DialogTextRefuseCode,
+} from '../../../shared/api.js';
+import { FREE_TEXT_PLACEHOLDER_RE } from '../../../shared/ask-menu.js';
 
 export interface SendDeps {
   tmux: Tmux;
@@ -41,7 +45,12 @@ export type SendResult =
         // ("esc to interrupt"), and nothing was pressed. This is reachable only
         // when the caller opted in via `refuseIfTurnRunning`; see that option's
         // own docstring.
-        | 'turn-running';
+        | 'turn-running'
+        // D-5046. tmux refused one line's literal send, so the loop stopped
+        // there and pressed no Enter. Not `not-alive`: the session may be
+        // alive, with the lines typed before it still in its box. Before this
+        // the refusal was ignored and the message submitted without the line.
+        | 'type-failed';
       draft?: string;
       pane?: string;
       /**
@@ -753,9 +762,18 @@ export function sendPrompt(
         if (cleared.state === 'residue') return { ok: false, error: 'draft-clear-failed', draft: cleared.draft };
       }
     }
+    // D-5046: every line's send is CHECKED, and the first refusal stops the
+    // loop before another key. The echo proof below reads the first line's
+    // needle only, so a line tmux refused used to leave a hole in the middle
+    // of the message while the echo still matched and Enter still went: the
+    // session got the message without that line, and the caller got `ok`.
+    // What was typed so far stays in the box. The attachment lane's failed-echo
+    // clear below is NOT run on this arm: with `--` in place, what is left to
+    // make tmux refuse a literal is the session or the link failing (inferred,
+    // not measured), and a clear would meet the same failure.
     for (let i = 0; i < parts.length; i++) {
       if (i > 0) await d.tmux.sendKey(id, 'M-Enter');
-      await d.tmux.sendLiteral(id, parts[i]!);
+      if (!(await d.tmux.sendLiteral(id, parts[i]!))) return { ok: false, error: 'type-failed' };
     }
 
     // Wait for the box to echo what we typed. This POLLS rather than taking one
@@ -1140,39 +1158,263 @@ export function submitEnter(
   });
 }
 
+/** `answerDialog`'s answer. The refusals are `DialogRefuseCode` (`shared/api.ts`), where each is described. */
+export type DialogResult = { ok: true } | { ok: false; error: DialogRefuseCode };
+
 /**
  * Answer a pane menu dialog by walking the ❯ marker to `optionIndex` and
  * confirming. Refuses when the on-screen dialog no longer matches `dialogId`
  * (stale) and never presses Enter unless the re-captured pane proves the
  * marker landed on the requested option.
+ *
+ * Never on an AskUserQuestion's free-text row (D-5045): Enter there while it
+ * is empty rejects the WHOLE ask, every answered question with it, and a row
+ * that holds text would be submitted as an answer the caller never typed here.
+ * `freeTextRow` is asked twice. First on the screen the request was checked
+ * against, before any key. Then on the screen the walk landed on, before
+ * Enter, because the pane can move on between the two captures and put the
+ * free-text row under the requested index. `walk-failed` cannot see that: the
+ * cursor IS on that index. Walking THROUGH the row to "Chat about this" stays
+ * allowed. Up and Down never select or submit, and Enter on Chat after such a
+ * walk was measured to give Chat's own outcome.
+ *
+ * Never on an unparsed menu (`unparsed-dialog`), checked on both screens: its `selectedIndex` is a constant 1 that
+ * proves nothing about the cursor. A multiSelect question is one (D-5048 keeps it `parsed: false`, its rows on
+ * `Dialog.multi`), and Enter there toggles a box, ticks the empty free-text box, or commits the question from
+ * Next/Submit, measured on 2.1.300. `/dialog/multi` answers it.
  */
 export function answerDialog(
   d: SendDeps,
   id: string,
   dialogId: string,
   optionIndex: number,
-): Promise<{ ok: true } | { ok: false; error: 'not-alive' | 'stale-dialog' | 'walk-failed' }> {
+): Promise<DialogResult> {
   const sleep = d.sleep ?? defaultSleep;
-  return d.queue.run(id, async (): Promise<{ ok: true } | { ok: false; error: 'not-alive' | 'stale-dialog' | 'walk-failed' }> => {
+  return d.queue.run(id, async (): Promise<DialogResult> => {
     const pane = await d.tmux.capture(id);
     if (pane === null) return { ok: false, error: 'not-alive' };
 
     const dialog = parseDialog(pane);
     if (!dialog || dialog.id !== dialogId) return { ok: false, error: 'stale-dialog' };
+    if (freeTextRow(pane) === optionIndex) return { ok: false, error: 'free-text-row' };
+    if (!dialog.parsed) return { ok: false, error: 'unparsed-dialog' };
 
-    const delta = optionIndex - dialog.selectedIndex;
-    const key = delta > 0 ? 'Down' : 'Up';
-    for (let i = 0; i < Math.abs(delta); i++) {
-      await d.tmux.sendKey(id, key);
-      await sleep(150);
-    }
+    await walkCursor(d, id, dialog.selectedIndex, optionIndex, sleep);
 
     const after = await d.tmux.capture(id);
     const landed = after === null ? null : parseDialog(after);
-    if (!landed || landed.selectedIndex !== optionIndex) return { ok: false, error: 'walk-failed' };
+    if (after === null || !landed) return { ok: false, error: 'walk-failed' };
+    if (!landed.parsed) return { ok: false, error: 'unparsed-dialog' };
+    if (landed.selectedIndex !== optionIndex) return { ok: false, error: 'walk-failed' };
+    if (freeTextRow(after) === optionIndex) return { ok: false, error: 'free-text-row' };
 
     await d.tmux.sendKey(id, 'Enter');
     return { ok: true };
+  });
+}
+
+/** The pause after each walk key, so the TUI has repainted the cursor before the next key or the landing capture. */
+const WALK_STEP_MS = 150;
+
+/**
+ * Walk a menu's ❯ cursor from row `from` to row `to`: one Down (or Up) per row, with a pause after each. Up and Down
+ * only move the cursor. They never select, submit or type, which is why a walk is safe across any row, the free-text
+ * row included. The one walk `answerDialog` and `answerDialogText` (D-5047) both send. Each caller re-captures
+ * afterwards and proves where the cursor landed before it presses anything else.
+ */
+async function walkCursor(
+  d: SendDeps, id: string, from: number, to: number, sleep: (ms: number) => Promise<void>,
+): Promise<void> {
+  const delta = to - from;
+  const key = delta > 0 ? 'Down' : 'Up';
+  for (let i = 0; i < Math.abs(delta); i++) {
+    await d.tmux.sendKey(id, key);
+    await sleep(WALK_STEP_MS);
+  }
+}
+
+/** `answerDialogText`'s answer. The refusals are `DialogTextRefuseCode` (`shared/api.ts`), where each is described. */
+export type DialogTextResult = { ok: true } | { ok: false; error: DialogTextRefuseCode };
+
+/** Whitespace runs collapsed and the ends trimmed: how a row's text and the caller's text are compared. The pane keeps
+ *  no run: `leftCol` cuts a label at two spaces, and a wrapped answer's rows are joined back with one space. */
+const collapse = (s: string): string => s.replace(/\s+/g, ' ').trim();
+
+/** What a parsed menu row shows: its label, then its description. A typed answer longer than one screen row is read
+ *  as its first row (the label) and the rest (the description), so the two together are the whole text (measured
+ *  exact for a 1000-character answer, `cc300-ask-freetext-1000.txt`). */
+const rowText = (row: Dialog['options'][number]): string =>
+  collapse(row.description === undefined ? row.label : `${row.label} ${row.description}`);
+
+/**
+ * Type `text` into an AskUserQuestion's free-text ("Type something.") row and submit it as the answer (D-5047,
+ * `POST /api/sessions/:id/dialog/text`). Enter on that row while it is EMPTY rejects the WHOLE ask and discards every
+ * question already answered (measured on Claude Code 2.1.300 and 2.1.291), so each step is proved on a fresh capture:
+ *
+ *  1. `isDialogText` (`shared/api.ts`) or `bad-text`, before the pane is touched.
+ *  2. The menu is the one the caller was shown (`stale-dialog`), and the row is its free-text row (`freeTextRow`), read
+ *     off a parsed menu (`not-free-text`). An unparsed multiSelect question has no parsed rows, so free text inside a
+ *     multiSelect is refused here (not in v1). The row is either the empty placeholder, which is typed into, or it
+ *     already holds exactly this text, the retry arm below. Any other text in it is `not-free-text`: typing appends.
+ *  3. The walk (`walkCursor`, shared with `answerDialog`).
+ *  4. FOCUS: a capture shows the same title, the cursor on the row, the row still as step 2 read it, and the footer's
+ *     edit hint (`editHintShown`). Measured: the hint outlives the row after a walk through it, so it never proves
+ *     focus alone. Otherwise `focus-failed`, with nothing typed.
+ *  5. The text, after tmux's `--` (D-5046). A literal send tmux refuses is `echo-failed`, with no Enter.
+ *  6. ECHO, polled as `sendPrompt` polls its own: a capture shows the same title, the cursor still on the row, and the
+ *     row holding exactly the text. The dialog id is NOT compared: typing changes it, since it hashes the labels and
+ *     the row's label is now the text. A row that still reads as the placeholder proves nothing, even when the text
+ *     is those very words. Otherwise `echo-failed`, and NO Enter.
+ *  7. Enter.
+ *
+ * The retry arm: a send that typed but never proved its echo leaves the text in the row. Measured: the text survives
+ * stepping off and back on, the hint returns on the held row, and Enter there submits the text. So a row that holds
+ * exactly this text is walked to and proved at step 4 (which then proves the echo too), and submitted without typing.
+ */
+export function answerDialogText(
+  d: SendDeps,
+  id: string,
+  dialogId: string,
+  optionIndex: number,
+  text: string,
+): Promise<DialogTextResult> {
+  if (!isDialogText(text)) return Promise.resolve({ ok: false, error: 'bad-text' });
+  const sleep = d.sleep ?? defaultSleep;
+  const want = collapse(text);
+  return d.queue.run(id, async (): Promise<DialogTextResult> => {
+    const pane = await d.tmux.capture(id);
+    if (pane === null) return { ok: false, error: 'not-alive' };
+
+    const dialog = parseDialog(pane);
+    if (!dialog || dialog.id !== dialogId) return { ok: false, error: 'stale-dialog' };
+    const row = dialog.options.find((o) => o.index === optionIndex);
+    if (row === undefined || freeTextRow(pane) !== optionIndex) return { ok: false, error: 'not-free-text' };
+    const held = !FREE_TEXT_PLACEHOLDER_RE.test(row.label);
+    if (held && rowText(row) !== want) return { ok: false, error: 'not-free-text' };
+
+    /** Is `screen` this request's row: the same title, the cursor on it, and holding what this arm needs? */
+    const onRow = (screen: Dialog | null, holds: 'empty' | 'text'): boolean => {
+      if (screen === null || screen.title !== dialog.title || screen.selectedIndex !== optionIndex) return false;
+      const at = screen.options.find((o) => o.index === optionIndex);
+      if (at === undefined) return false;
+      const placeholder = FREE_TEXT_PLACEHOLDER_RE.test(at.label);
+      return holds === 'empty' ? placeholder : !placeholder && rowText(at) === want;
+    };
+
+    await walkCursor(d, id, dialog.selectedIndex, optionIndex, sleep);
+
+    const after = await d.tmux.capture(id);
+    if (after === null || !onRow(parseDialog(after), held ? 'text' : 'empty') || !editHintShown(after)) {
+      return { ok: false, error: 'focus-failed' };
+    }
+
+    if (!held) {
+      if (!(await d.tmux.sendLiteral(id, text))) return { ok: false, error: 'echo-failed' };
+      let echoed = false;
+      for (let i = 0; i < ECHO_TRIES && !echoed; i++) {
+        await sleep(ECHO_POLL_MS);
+        const seen = await d.tmux.capture(id);
+        echoed = seen !== null && onRow(parseDialog(seen), 'text');
+      }
+      if (!echoed) return { ok: false, error: 'echo-failed' };
+    }
+
+    await d.tmux.sendKey(id, 'Enter');
+    return { ok: true };
+  });
+}
+
+/** `answerDialogMulti`'s answer. The refusals are `DialogMultiRefuseCode` (`shared/api.ts`), where each is described. */
+export type DialogMultiResult = { ok: true } | { ok: false; error: DialogMultiRefuseCode };
+
+/**
+ * Answer a multiSelect AskUserQuestion question (D-5048, `POST /api/sessions/:id/dialog/multi`): leave exactly the
+ * boxes `optionIndexes` names ticked, then commit the question. Measured on Claude Code 2.1.300 (2.1.280 agrees):
+ *  - a digit k toggles box k, ticking or unticking it, and the cursor does not move;
+ *  - Enter TOGGLES the cursor row and commits nothing, which is why `answerAsk` refuses this question;
+ *  - Tab from an option row commits the ticks and moves on, to the next question or the review screen;
+ *  - with the cursor on the free-text row a digit is TYPED into it, and Tab on the `Next` row after a walk through the
+ *    free-text row was swallowed, the screen byte-identical;
+ *  - the answer lists the boxes in the order they were ticked, and a revisited question keeps its ticks.
+ *
+ * So, each step on a fresh capture:
+ *  1. `isDialogMultiIndexes` (`shared/api.ts`) or `bad-indexes`, before the pane is touched.
+ *  2. The menu is the one the caller was shown (`stale-dialog`; the id holds across ticks and cursor moves), and it is
+ *     a multiSelect question `parseDialog` reads into `Dialog.multi` (`not-multiselect`).
+ *  3. Every index is one of the question's own options (`not-an-option`): never the free-text row, which v1 does not
+ *     answer, nor `Chat about this`.
+ *  4. The free-text box is clear (`free-text-ticked`), since Tab would commit it with the options.
+ *  5. The cursor rests on an option row and the footer shows no edit hint (`cursor-not-on-option`). Nothing walks it
+ *     there: on the free-text row a digit is typed, and below it Tab was swallowed.
+ *  6. A digit for each box whose tick differs from the wanted set: those to untick first, in screen order, then those
+ *     to tick, in the order asked, so the answer lists them that way after any box already ticked.
+ *  7. TICKS, polled as `sendPrompt` polls its echo: a capture shows the same dialog id, exactly the wanted boxes
+ *     ticked, the free-text box clear, the cursor on the row it was on, and no edit hint. Else `ticks-failed`, NO Tab.
+ *  8. Tab.
+ *  9. MOVED, polled the same way: a capture shows a menu under another TITLE, the next question or the review screen
+ *     (a multiSelect question is always followed by one of them). Not the id: text typed into the free-text row
+ *     changes the id under the same title, and that is no commit. Else `commit-failed`.
+ *
+ * Every proof is a capture, never a key's exit code: a digit that did not land fails step 7, a Tab that did not land
+ * fails step 9.
+ */
+export function answerDialogMulti(
+  d: SendDeps,
+  id: string,
+  dialogId: string,
+  optionIndexes: readonly number[],
+): Promise<DialogMultiResult> {
+  if (!isDialogMultiIndexes(optionIndexes)) return Promise.resolve({ ok: false, error: 'bad-indexes' });
+  const sleep = d.sleep ?? defaultSleep;
+  const want = new Set(optionIndexes);
+  return d.queue.run(id, async (): Promise<DialogMultiResult> => {
+    const pane = await d.tmux.capture(id);
+    if (pane === null) return { ok: false, error: 'not-alive' };
+
+    const dialog = parseDialog(pane);
+    if (!dialog || dialog.id !== dialogId) return { ok: false, error: 'stale-dialog' };
+    const multi = dialog.multi;
+    if (multi === undefined) return { ok: false, error: 'not-multiselect' };
+    const option = (i: number) => multi.options.find((o) => o.index === i);
+    if (optionIndexes.some((i) => option(i) === undefined)) return { ok: false, error: 'not-an-option' };
+    if (multi.freeText?.checked === true) return { ok: false, error: 'free-text-ticked' };
+    const cursor = multi.cursor;
+    if (typeof cursor !== 'number' || option(cursor) === undefined || editHintShown(pane)) {
+      return { ok: false, error: 'cursor-not-on-option' };
+    }
+
+    const untick = multi.options.filter((o) => o.checked && !want.has(o.index)).map((o) => o.index);
+    const tick = optionIndexes.filter((i) => !option(i)!.checked);
+    for (const k of [...untick, ...tick]) {
+      await d.tmux.sendKey(id, String(k));
+      await sleep(WALK_STEP_MS);
+    }
+
+    /** Does `screen` show this question with exactly the wanted ticks, the cursor where it was, and no hint? */
+    const ticked = (screen: string | null): boolean => {
+      if (screen === null || editHintShown(screen)) return false;
+      const now = parseDialog(screen);
+      if (now === null || now.id !== dialogId || now.multi === undefined) return false;
+      return now.multi.cursor === cursor && now.multi.freeText?.checked !== true &&
+        now.multi.options.every((o) => o.checked === want.has(o.index));
+    };
+    let proved = false;
+    for (let i = 0; i < ECHO_TRIES && !proved; i++) {
+      await sleep(ECHO_POLL_MS);
+      proved = ticked(await d.tmux.capture(id));
+    }
+    if (!proved) return { ok: false, error: 'ticks-failed' };
+
+    await d.tmux.sendKey(id, 'Tab');
+
+    let moved = false;
+    for (let i = 0; i < ECHO_TRIES && !moved; i++) {
+      await sleep(ECHO_POLL_MS);
+      const seen = await d.tmux.capture(id);
+      const next = seen === null ? null : parseDialog(seen);
+      moved = next !== null && next.title !== dialog.title;
+    }
+    return moved ? { ok: true } : { ok: false, error: 'commit-failed' };
   });
 }
 

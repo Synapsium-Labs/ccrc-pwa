@@ -1,0 +1,50 @@
+     answer A: keep the schema portable and test it nightly. Sentence 07 of answer A: keep the schema portable and test it nightly. Sentence 08 of answer A: keep the schema portable and test it nightly. Sentence 09 of
+     answer A: keep the schema portable and test it nightly. Sentence 10 of answer A: keep the schema portable and test it nightly. Sentence 11 of answer A: keep the schema portable and test it nightly. Sentence 12 of
+     answer A: keep the schema portable and test it nightly. Sentence 13 of answer A: keep the schema portable and test it nightly. Sentence 14 of answer A: keep the schema portable and test it nightly.. END-A
+     · Any notes for the reviewer? → Sentence 01 of answer B: keep the schema portable and test it nightly. Sentence 02 of answer B: keep the schema portable and test it nightly. Sentence 03 of answer B: keep the schema
+     portable and test it nightly. Sentence 04 of answer B: keep the schema portable and test it nightly. Sentence 05 of answer B: keep the schema portable and test it nightly. Sentence 06 of answer B: keep the schema
+     portable and test it nightly. Sentence 07 of answer B: keep the schema portable and test it nightly. Sentence 08 of answer B: keep the schema portable and test it nightly. Sentence 09 of answer B: keep the schema
+     portable and test it nightly. Sentence 10 of answer B: keep the schema portable and test it nightly. Sentence 11 of answer B: keep the schema portable and test it nightly. Sentence 12 of answer B: keep the schema
+     portable and test it nightly. Sentence 13 of answer B: keep the schema portable and test it nightly. Sentence 14 of answer B: keep the schema portable and test it nightly.. END-B
+     · Which region? → Sentence 01 of answer C: keep the schema portable and test it nightly. Sentence 02 of answer C: keep the schema portable and test it nightly. Sentence 03 of answer C: keep the schema portable and
+     test it nightly. Sentence 04 of answer C: keep the schema portable and test it nightly. Sentence 05 of answer C: keep the schema portable and test it nightly. Sentence 06 of answer C: keep the schema portable and
+     test it nightly. Sentence 07 of answer C: keep the schema portable and test it nightly. Sentence 08 of answer C: keep the schema portable and test it nightly. Sentence 09 of answer C: k END-C
+
+⏺ - Engine: Postgres
+  - Order: Sentence 01 of answer A: keep the schema portable and test it nightly. Sentence 02 of answer A: keep the schema portable and test it nightly. Sentence 03 of answer A: keep the schema portable and test it
+    nightly. Sentence 04 of answer A: keep the schema portable and test it nightly. Sentence 05 of answer A: keep the schema portable and test it nightly. Sentence 06 of answer A: keep the schema portable and test it
+    nightly. Sentence 07 of answer A: keep the schema portable and test it nightly. Sentence 08 of answer A: keep the schema portable and test it nightly. Sentence 09 of answer A: keep the schema portable and test it
+    nightly. Sentence 10 of answer A: keep the schema portable and test it nightly. Sentence 11 of answer A: keep the schema portable and test it nightly. Sentence 12 of answer A: keep the schema portable and test it
+    nightly. Sentence 13 of answer A: keep the schema portable and test it nightly. Sentence 14 of answer A: keep the schema portable and test it nightly.. END-A
+  - Notes: Sentence 01 of answer B: keep the schema portable and test it nightly. Sentence 02 of answer B: keep the schema portable and test it nightly. Sentence 03 of answer B: keep the schema portable and test it
+    nightly. Sentence 04 of answer B: keep the schema portable and test it nightly. Sentence 05 of answer B: keep the schema portable and test it nightly. Sentence 06 of answer B: keep the schema portable and test it
+    nightly. Sentence 07 of answer B: keep the schema portable and test it nightly. Sentence 08 of answer B: keep the schema portable and test it nightly. Sentence 09 of answer B: keep the schema portable and test it
+    nightly. Sentence 10 of answer B: keep the schema portable and test it nightly. Sentence 11 of answer B: keep the schema portable and test it nightly. Sentence 12 of answer B: keep the schema portable and test it
+    nightly. Sentence 13 of answer B: keep the schema portable and test it nightly. Sentence 14 of answer B: keep the schema portable and test it nightly.. END-B
+  - Region: Sentence 01 of answer C: keep the schema portable and test it nightly. Sentence 02 of answer C: keep the schema portable and test it nightly. Sentence 03 of answer C: keep the schema portable and test it
+    nightly. Sentence 04 of answer C: keep the schema portable and test it nightly. Sentence 05 of answer C: keep the schema portable and test it nightly. Sentence 06 of answer C: keep the schema portable and test it
+    nightly. Sentence 07 of answer C: keep the schema portable and test it nightly. Sentence 08 of answer C: keep the schema portable and test it nightly. Sentence 09 of answer C: k END-C
+
+  The Region answer came back cut off mid-word ("k END-C"), so it may be incomplete.
+
+✻ Cogitated for 7s · done 4:05
+
+❯ Call AskUserQuestion exactly once with THREE questions, short descriptions on every option. Q1 header "Drink" question "Which drink?" multiSelect false, options Tea, Coffee. Q2 header "Features" question "Which
+  features do you want?" multiSelect true, options Logging, Metrics, Tracing. Q3 header "Tools" question "Which tools?" multiSelect true, options Hammer, Saw, Drill. Afterwards reply with the raw answers only.
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+←  ☒ Drink  ☒ Features  ☒ Tools  ✔ Submit  →
+
+Which tools?
+
+❯ 1. [ ] Hammer
+         For driving nails
+  2. [✔] Saw
+         For cutting material
+  3. [✔] Drill
+         For boring holes
+  4. [ ] Type something
+     Submit
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  5. Chat about this
+
+Enter to select · Tab/Arrow keys to navigate · Esc to cancel

@@ -507,7 +507,7 @@ export function normalizeSummary(raw) {
 
 /** A numbered heading as the corpus spells them: optional `#`s, optional
  *  `**`, `<n>.`, a title, an optional colon, optional closing `**`. */
-const HEADING_RE = /^[ \t]*(?:#{1,6}[ \t]*)?(?:\*\*)?[ \t]*\d+\.[ \t]+([^\n]*?)[ \t]*:?[ \t]*(?:\*\*)?[ \t]*$/gm;
+export const HEADING_RE = /^[ \t]*(?:#{1,6}[ \t]*)?(?:\*\*)?[ \t]*\d+\.[ \t]+([^\n]*?)[ \t]*:?[ \t]*(?:\*\*)?[ \t]*$/gm;
 
 /** Markdown backtick fences begin at a line start with at most three spaces.
  *  An opener may carry an info string; a close must be at least as wide as its
@@ -519,7 +519,7 @@ const FENCE_CLOSE_RE = /^(?: {0,3})(\x60{3,})[ \t\r]*$/;
 /** JS string-offset ranges covered by Markdown fenced code blocks. The line
  *  scanner visits each line once; an unmatched opener covers EOF. A numbered-
  *  looking line inside one range is code content, not document structure. */
-function fencedRanges(text) {
+export function fencedRanges(text) {
   const ranges = [];
   let start = -1, width = 0, closed = 0, lineStart = 0;
   while (lineStart <= text.length) {

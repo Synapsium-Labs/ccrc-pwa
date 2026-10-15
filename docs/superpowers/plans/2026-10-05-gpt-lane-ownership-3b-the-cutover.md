@@ -6703,6 +6703,21 @@ Each number below was issued by the allocator (`POST /api/ledger/deviations`, th
 
 **Part B execution-ledger slugs** (minted only when they fire, during the runbook): `runtime-built-before-the-roster-flip`, `lane-without-a-registry-inits-after-the-flip`, `both-foreign-usage-timers-retired-per-lane` (carried from Plan 3a), and `second-lane-first-accepts-z4-refusals` (fires only if the operator rules R-O1 = lane 2 first).
 
+### Part B execution ledger
+
+Each number below was issued by the allocator (`POST /api/ledger/deviations`, through `ccrc-api ledger allocate`) on 2026-10-09, in one issue of ten, at Task B6 Step 6. They pair with the execution slugs in the order the runbook recorded them, and each is defined once, here.
+
+- **D-4665** (B2) — `runtime-built-before-the-roster-flip`: ccrc's codex runtime generation was built and probe-accepted in a step of its own (B2), on the fleet box, before either lane's window and while no roster row was codex-kind. Spec §15.3's per-lane list has no such step. The generation stayed inert, read by nothing, until the first flip.
+- **D-4666** (B1, B3, B4) — `second-lane-first-accepts-z4-refusals`: under R-O1's lane-2-first order, from lane 2's flip until lane 1's, Z4 would refuse any hourly refresh whose render of the still-external lane would change. The between-lanes gate read such refusals as expected (criterion 8), not as lane failures. As measured, the gate's twenty timer runs refused none, because that lane's catalogue did not change.
+- **D-4667** (B3) — `lane-without-a-registry-inits-after-the-flip`: the lane that had no class registry had one created by `ccrc models <lane-id> init codex` after its roster row became codex-kind (B3 Step 11). Spec §15.3's per-lane list does not name that step.
+- **D-4668** (B4, B5) — `first-soak-gate-closed-on-operator-waiver`: the first lane's B4 gate closed on the operator's waiver at about 20 hours of R8's 24-hour minimum, so that the second lane's window could open. At that point every criterion read PASS or EXPECTED, and only the clock was unmet. Re-sampled at Task B5 Step 7, the same gate passed at 45 hours on its own clock.
+- **D-4669** (B3) — `park-mid-turn-on-operator-ruling`: one session on the second lane was parked before a measured idle point (Step 3), and swapped back onto the lane mid-turn at un-park (Step 18). Each move was the operator's named decision, and each cut the session's in-flight turn and background shells, departing from R-O2's park and un-park at a measured idle point.
+- **D-4670** (B4) — `soak-401-pattern-matched-hex-ids`: criterion 5's gateway-401 count, `(^|[^0-9])401([^0-9]|$)`, matched `401` inside hex call ids in a tier log and read ROLLBACK, although no auth-shaped line existed. The operator ruled it a false positive. For the rest of both gates, the sampler's pattern required a character that is neither a letter, a digit nor `_` on both sides of `401`. The B4 Step 1 script text above still carries the original pattern.
+- **D-4671** (B3) — `both-foreign-usage-timers-retired-per-lane`: spec §15.3's "retire the fixed usage timer" was carried out per lane. Each lane's own foreign usage publisher, the per-lane instance timer at the first window and the flat timer at the second, was disabled in that lane's own window (B3 Step 7), so two timers were retired, one per window.
+- **D-4672** (B6) — `server-roster-mirrored-whole-not-exec-blocks`: R-O5 named a mirror of the two lanes' exec blocks into the server box's roster. Critic #14's census found the two rosters also differed in five generated rows: the fleet box spelled `exec.provider` explicitly where the server box left it absent, which parses as `anthropic`, so the meaning was the same. The operator ruled that the fleet box's roster be copied whole, after the shipped `parseRoster` validated it in a scratch HOME.
+- **D-4673** (B4) — `soak-doctor-baseline-amended-by-name`: criterion 4's `<doctor-baseline>` is Task B1's doctor class table. During the first soak, a release added a doctor check whose WARN stopped the gate, and the operator accepted that one WARN by name. From then on, both gates read a copy of the table plus that WARN, and Task B1's own file was left unchanged.
+- **D-4674** (B6) — `update-projection-none-read-as-standing`: B6 Step 3 expects `ccrc update --check` to read `projection=ok`. Both boxes read `projection=none`, the same value Task B1 recorded before either flip, so it was read as the boxes' standing shape rather than as a stop. The operator confirmed the update screen in the PWA.
+
 ## Appendix: the controller rulings this plan cites
 
 The drafting rulings (S1–S2, A-1–A-8, B-1–B-10, F1–F6) and the reconciliation rulings (N1–N4, R1–R18) were settled in the controller's scratch before this plan was assembled; every task above already states the ruling it applies. The ones a reader needs to evaluate the plan:
@@ -6713,3 +6728,34 @@ The drafting rulings (S1–S2, A-1–A-8, B-1–B-10, F1–F6) and the reconcili
 - **No unit Environment is ever read (R3); `~/.cc-sessions` is read, never written (R2).**
 - **Never roll out by hand (ruling 2026-09-30); the update pause is the operator's (B-6).**
 - **Drafting-time incident (R15):** one drafter ran `ccrc version` against the real HOME once while measuring. It is a pure read and changed nothing; recorded here because the drafting rules forbade it.
+
+## Part B execution record
+
+This record states the execution's shape only: no real id, port, path, host, model id or email. The box-local verification record holds the evidence.
+
+- **Order.** R-O1 ruled lane 2 first. Lane 2's window ran on 2026-10-06 and lane 1's on 2026-10-07. Each window paused auto-update and restored it afterwards.
+- **Lane 2.**
+  - Its one session was parked and un-parked, and its first turn on the lane completed.
+  - Its B4 gate opened on 2026-10-06 and closed on 2026-10-07 on the operator's waiver at about 20 hours (D-4668).
+  - Re-sampled, it passed at 45 hours (Task B5 Step 7) and again at 71 hours (Task B6 Step 1).
+- **Lane 1.**
+  - Its two sessions were parked and un-parked, one of them mid-turn on the operator's ruling (D-4669).
+  - Its B4 gate opened on 2026-10-07 and passed at 24 hours on 2026-10-08. One sample read ROLLBACK on a false 401 count (D-4670).
+  - At Task B6 Step 1, its only open criterion was one session whose last turn the provider refused on content grounds. The provider's message reached the session as a server error, and the operator read it as no lane failure.
+- **Landings.** Several dev releases landed during each soak. Every landing re-measured the runtime, measured the tiers and kept each lane's usage instance.
+- **Z4.** No refresh was refused while lane 1 was still external (D-4666).
+- **The external path.** It was retired from the fleet box's roster at Task B5 Step 6, and the box-global render has not been rewritten since.
+- **R-O4.** The frozen settings keys were unchanged on both lanes at close-out.
+- **Server-box mirror.** The fleet box's roster was copied whole (D-4672). The server reads it at its next start, which is its next auto-update.
+- **R-O7.** The launcher snapshot was taken, byte-equal to the live file and unchanged since Task B1.
+- **R-O9.** Plan 4's soak clock started on 2026-10-09. Each lane's full weekly window ends no sooner than about 2026-10-21.
+- **Plan defects found by execution.** These are follow-up tickets, not departures. The controller worked around each one to the step's evident intent.
+  - The Part B blocks call `ccrc` and `ccd` bare, and a fleet session's PATH lacks `~/.local/bin`.
+  - One B3 block reads a variable it never sets.
+  - B3's closing step appends to the flipped-lanes value that Step 9(c) has already updated, which would double the entry.
+  - B3 Step 19's `journalctl --since` is given the compact window stamp, which journalctl cannot parse, so its count read 0 by accident.
+  - The census compares session counts, not membership, so a changed session set with the same count passes.
+  - The runbook does not name the PWA's update-setting labels, which led to one mis-pick.
+  - B4 criterion 6 cannot tell a provider content refusal from a lane failure.
+  - The turn marker's `err` stays set after a later completed turn, so it reads stale until a `clear`.
+  - `ccrc channel` reads `state=none`, and `ccrc update --check` reads `projection=none`, on both boxes (D-4674).

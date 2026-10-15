@@ -8,7 +8,7 @@
 # reads select's outputs:
 #   pull_request        selected — the server tests the change can affect
 #                       (a measured dependency map, .github/ci/select-tests.mjs),
-#                       sharded; agent, pwa, build-pwa and probe-macos in full.
+#                       sharded; agent, pwa, build-pwa, probe-macos in full (no macOS tests).
 #   merge_group         selected — a merge-queue run runs what a pull request
 #                       runs (operator ruling 2026-09-28), the pipeline check
 #                       included, in a concurrency group of its own; no macOS
@@ -269,7 +269,7 @@ jobs:
     runs-on: ubuntu-latest
     # A deadline, not the default. Without this key a wedged job runs for
     # GitHub's 360 minutes before anyone learns it wedged. Each shard is
-    # packed to about four minutes (a file longer than that gets a shard of
+    # packed to about four minutes, up to 12 shards (a longer file gets one of
     # its own), and the whole unsharded server leg measured 18.5 min at the
     # median (21.5 max, 2026-09-23) — so 30 is a deadline even for a shard
     # that received the entire suite. Pinned — key AND ceiling — by
@@ -491,11 +491,11 @@ jobs:
   test-macos:
     name: test-macos ${{ matrix.shard }}/${{ matrix.total }}
     needs: select
-    # Never on a merge-queue run (landing-order stage 2): non-required, so the
-    # queue does not wait for it, but every entry would still take the
-    # organisation's scarce macOS slots. `probe-macos` keeps a queue run out by
-    # its own event allow-list.
-    if: github.event_name != 'merge_group' && needs.select.outputs.macos_count != '0' && (needs.select.outputs.tests == 'selected' || needs.select.outputs.tests == 'full')
+    # Never on a merge-queue run (landing-order stage 2) NOR on a pull request
+    # (amendment 2026-10-15, design §16): non-required, so nothing waited for it,
+    # yet its red was read as the PR's. The daily, dispatched and stable-gate
+    # full runs keep it (ruling 6). `probe-macos` has its own allow-list.
+    if: github.event_name != 'merge_group' && github.event_name != 'pull_request' && needs.select.outputs.macos_count != '0' && (needs.select.outputs.tests == 'selected' || needs.select.outputs.tests == 'full')
     runs-on: macos-latest
     # 55, not the 30 of a Linux shard, and the number is the measurement
     # rather than a round multiple of one run. Six green unsharded legs
@@ -734,7 +734,13 @@ jobs:
           test/history-holds.test.ts
           test/history-op.test.ts
           test/history-cli.test.ts
+          test/history-parser.test.ts
+          test/history-recall.test.ts
+          test/history-maint.test.ts
+          test/history-recover.test.ts
           test/measure-history.test.ts
+          test/history-derive.test.ts
+          test/history-skill.test.ts
           EOF
           CCRC_TEST_LIST="$RUNNER_TEMP/tests.txt" ./node_modules/.bin/vitest run --config vitest.select.config.ts
 
@@ -952,11 +958,11 @@ jobs:
   # `verdict` output when it called this file itself.
   full-suite:
     needs: [select, server, server-shard, server-typecheck, test, build-pwa, test-macos, node-floor]
-    # Never on a merge-queue run: a queue run skips test-macos, and one that
-    # fell back to `full` would read that skip as a red leg (landing-order
-    # stage 2; a queue run is never the stable gate's evidence anyway —
-    # main-artifact.mjs trusts no merge_group run).
-    if: always() && github.event_name != 'merge_group' && needs.select.outputs.tests == 'full'
+    # Never on a merge-queue run or a pull request: both skip test-macos, and a
+    # run that fell back to `full` would read that skip as a red leg (landing-
+    # order stage 2; amendment 2026-10-15). Neither is ever the stable gate's
+    # evidence: main-artifact.mjs trusts no merge_group or pull_request run.
+    if: always() && github.event_name != 'merge_group' && github.event_name != 'pull_request' && needs.select.outputs.tests == 'full'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:

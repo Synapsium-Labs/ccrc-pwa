@@ -1,0 +1,50 @@
+
+ ▐▛███▛█   Claude Code v2.1.300
+▝▜██████▀  Haiku 5.5 · Claude Max
+ ▝▝   ▝▝   <projects-root>/project-a
+
+⚠ Safe mode: all customizations are disabled (CLAUDE.md, skills, plugins, hooks, MCP, agents, and more)
+  Restart without --safe-mode to re-enable
+
+▎ [✻] [✻] [✻] · Share Claude Code and earn $10 in usage credits · /passes
+
+❯ Call AskUserQuestion exactly once with TWO questions, short descriptions on every option. Q1 header "Tools" question "Which tools?" multiSelect true, options Hammer, Saw, Drill. Q2 header "Sizes" question "Which
+  sizes?" multiSelect true, options Small, Large. Afterwards reply with the raw answers only.
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+←  ☒ Tools  ☒ Sizes  ✔ Submit  →
+
+Review your answers
+
+ ● Which tools?
+   → Drill, Hammer
+ ● Which sizes?
+   → Large
+
+Ready to submit your answers?
+
+❯ 1. Submit answers
+  2. Cancel
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
