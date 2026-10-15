@@ -67,6 +67,35 @@ function log(kind: string, detail: string): void {
   for (const fn of subscribers) fn();
 }
 
+// ── The echo (a pretend Claude Code, so the operator SEES what they type) ──
+// Every byte the page would send to the session is fed here as well. A printable
+// character joins the input line, DEL takes the last character off, \r submits
+// the line into the transcript above the box, ^C clears it, and ESC sequences
+// (arrows, bracketed-paste markers) are skipped. Not a terminal: a picture of
+// what Claude Code's own box would show.
+const echo: { line: string; sent: string[] } = { line: '', sent: [] };
+
+function feed(bytes: string): void {
+  const cps = Array.from(bytes);
+  for (let i = 0; i < cps.length; i++) {
+    const ch = cps[i]!;
+    if (ch === '\x1b') {
+      // skip ESC [ params final, ESC O x, or a lone ESC
+      const nx = cps[i + 1];
+      if (nx === '[') { i += 2; while (i < cps.length && !/[@-~]/.test(cps[i]!)) i++; }
+      else if (nx === 'O') i += 2;
+      continue;
+    }
+    if (ch === '\r') { echo.sent.push(echo.line); if (echo.sent.length > 6) echo.sent.shift(); echo.line = ''; continue; }
+    if (ch === '\x7f' || ch === '\b') { echo.line = Array.from(echo.line).slice(0, -1).join(''); continue; }
+    if (ch === '\x03') { echo.line = ''; continue; }
+    if (ch === '\n') { echo.line += ' '; continue; }
+    if (ch.charCodeAt(0) < 0x20) continue;
+    echo.line += ch;
+  }
+  for (const fn of subscribers) fn();
+}
+
 window.spikeLog = [];
 window.spikeClear = (): void => {
   window.spikeLog.length = 0;
@@ -189,6 +218,9 @@ function buildScreenRows(cols: number): string[] {
   // Blank
   rows.push('');
 
+  // What the operator submitted, as Claude Code echoes a sent prompt
+  rows.push('__SENT__' + String(cols));
+
   // Input box with caret
   const inputW = Math.min(cols, 76);
   const inputTop = '╭' + '─'.repeat(inputW - 2) + '╮';
@@ -225,7 +257,9 @@ function Spike(): ReactNode {
   const [scroller, setScroller] = useState<HTMLDivElement | null>(null);
   const probeRef = useRef<HTMLSpanElement | null>(null);
 
-  const fieldShown = coarse || fieldToggle;
+  // The live path (tap the box, type into xterm's own textarea, as the drawer on
+  // main does today) is under test now, so the separate field is opt-in.
+  const fieldShown = fieldToggle;
 
   // Subscribe to log changes for re-render
   useEffect(() => {
@@ -325,7 +359,7 @@ function Spike(): ReactNode {
     term.open(host);
     term.write('\x1b[?2004h'); // bracketed paste on, as Claude Code turns it on
     term.write('spike: off-screen xterm, typed keys are logged below\r\n');
-    term.onData((d) => log('data', esc(d)));
+    term.onData((d) => { log('data', esc(d)); feed(d); });
     window.spikeTerm = term;
     termRef.current = term;
     log('term', `${term.cols}x${term.rows}`);
@@ -424,12 +458,36 @@ function Spike(): ReactNode {
               onClick={() => termRef.current?.focus()}
             >
               {screenRows.map((row, i) => {
+                if (row.startsWith('__SENT__')) {
+                  const w = Math.max(8, Number(row.slice('__SENT__'.length)));
+                  return echo.sent.flatMap((line, j) => {
+                    const cps = Array.from('> ' + line);
+                    const out: ReactNode[] = [];
+                    for (let k = 0; k < Math.max(1, cps.length); k += w - 1) {
+                      out.push(<div key={`s${i}-${j}-${k}`} style={{ opacity: 0.7 }}>{cps.slice(k, k + w - 1).join('')}</div>);
+                    }
+                    out.push(<div key={`s${i}-${j}-gap`}>{' '}</div>);
+                    return out;
+                  });
+                }
                 if (row.startsWith('__CARET__')) {
                   const w = Number(row.slice('__CARET__'.length));
-                  const padAfter = w - 6; // "│ ❯ " (4) + caret (1) + padding + "│" (1) = w
-                  return (
-                    <div key={i}>{'│ ❯ '}<span data-testid="spike-caret" style={{ background: caretColor, color: caretBg }}>{' '}</span>{' '.repeat(Math.max(0, padAfter)) + '│'}</div>
-                  );
+                  const inner = Math.max(1, w - 5); // "│ ❯ " (4) … "│" (1)
+                  const cps = Array.from(echo.line);
+                  const chunks: string[] = [];
+                  for (let k = 0; k < cps.length; k += inner) chunks.push(cps.slice(k, k + inner).join(''));
+                  if (chunks.length === 0 || Array.from(chunks[chunks.length - 1]!).length === inner) chunks.push('');
+                  return chunks.map((c, j) => {
+                    const last = j === chunks.length - 1;
+                    const pad = inner - Array.from(c).length - (last ? 1 : 0);
+                    return (
+                      <div key={`c${i}-${j}`}>
+                        {(j === 0 ? '│ ❯ ' : '│   ') + c}
+                        {last ? <span data-testid="spike-caret" style={{ background: caretColor, color: caretBg }}>{' '}</span> : null}
+                        {' '.repeat(Math.max(0, pad)) + '│'}
+                      </div>
+                    );
+                  });
                 }
                 return <div key={i}>{row}</div>;
               })}
@@ -450,31 +508,8 @@ function Spike(): ReactNode {
             />
           </div>
 
-          {/* 3c. The key bar */}
-          <div className="term-keys" role="toolbar" aria-label="Terminal keys">
-            {/* The sequence keys scroll inside .term-keys-seq, as in the product drawer,
-                so a phone-width bar never widens the glass. */}
-            <div className="term-keys-seq">
-            {([
-              { legend: 'esc', label: 'Escape', seq: '\x1b' },
-              { legend: '↑', label: 'Arrow up', seq: '\x1b[A' },
-              { legend: '↓', label: 'Arrow down', seq: '\x1b[B' },
-              { legend: '⏎', label: 'Enter', seq: '\r' },
-              { legend: '^C', label: 'Ctrl C', seq: '\x03' },
-              { legend: '⌫', label: 'Backspace', seq: '\x7f' },
-            ] as const).map((k) => (
-              <button
-                key={k.label}
-                type="button"
-                className="keycap"
-                aria-label={k.label}
-                onPointerDown={(e) => e.preventDefault()}
-                onClick={() => log('bar', esc(k.seq))}
-              >
-                <span aria-hidden="true">{k.legend}</span>
-              </button>
-            ))}
-            </div>
+          {/* 3c0. The spike's own controls, OFF the key bar so the bar is the product's width */}
+          <div style={{ display: 'flex', gap: 'var(--sp-2)', padding: '0 var(--sp-3)', justifyContent: 'flex-end' }}>
             <button
               type="button"
               className="keycap keycap--act"
@@ -504,6 +539,33 @@ function Spike(): ReactNode {
             >
               <span aria-hidden="true">clear</span>
             </button>
+          </div>
+
+          {/* 3c. The key bar */}
+          <div className="term-keys" role="toolbar" aria-label="Terminal keys">
+            {/* The sequence keys scroll inside .term-keys-seq, as in the product drawer,
+                so a phone-width bar never widens the glass. */}
+            <div className="term-keys-seq">
+            {([
+              { legend: 'esc', label: 'Escape', seq: '\x1b' },
+              { legend: '↑', label: 'Arrow up', seq: '\x1b[A' },
+              { legend: '↓', label: 'Arrow down', seq: '\x1b[B' },
+              { legend: '⏎', label: 'Enter', seq: '\r' },
+              { legend: '^C', label: 'Ctrl C', seq: '\x03' },
+              { legend: '⌫', label: 'Backspace', seq: '\x7f' },
+            ] as const).map((k) => (
+              <button
+                key={k.label}
+                type="button"
+                className="keycap"
+                aria-label={k.label}
+                onPointerDown={(e) => e.preventDefault()}
+                onClick={() => { log('bar', esc(k.seq)); feed(k.seq); }}
+              >
+                <span aria-hidden="true">{k.legend}</span>
+              </button>
+            ))}
+            </div>
           </div>
 
           {/* 3d. The field row */}
@@ -588,6 +650,7 @@ function FieldRow(): ReactNode {
           const ta = ref.current;
           if (ta !== null) {
             log('type', esc(ta.value));
+            feed(ta.value);
             ta.value = '';
           }
         }}
