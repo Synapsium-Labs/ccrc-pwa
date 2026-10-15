@@ -219,6 +219,12 @@ describe('the card prediction and the card file decision (spec 8.6, 6.1, 6.3; W1
       ['a no-epoch skip, with a file', value(`${lineOf(leaf)}\n`), { act: 'skip', reason: 'no-epoch' }, true, { act: 'delete', consumed: false }],
       ['a fork skip over a file that is no card line', value('free text\n'), { act: 'skip', reason: 'fork-qualified', plainLeafId: next }, true, { act: 'delete', consumed: false }],
       ['a skip, with none', absent, { act: 'skip', reason: 'no-epoch' }, true, { act: 'none', consumed: false }],
+      // Card-like near misses are no card line (cardLeafOf is the positive grammar, not the prefix): replaced at
+      // end-of-file, removed otherwise, never kept and never a consumption. Each reads as a card line, or throws, if the
+      // grammar is loosened to the prefix or to the leaf's start.
+      ['a card-like line with a node and no leaf grammar, off end-of-file', value('History: node Lzzzz\n'), now, false, { act: 'delete', consumed: false }],
+      ['a card line cut short after its leaf, off end-of-file', value(`${lineOf(leaf).slice(0, 'History: node L000000… (this compaction)'.length)}\n`), now, false, { act: 'delete', consumed: false }],
+      ['a card line with trailing words, the leaf moved, off end-of-file', value(`${lineOf(leaf)} and more\n`), moved, false, { act: 'delete', consumed: false }],
     ];
     for (const [name, current, prediction, atEof, want] of rows) {
       expect(libCard.decideCardFile({ current, prediction, atEof }), name).toEqual(want);
@@ -1542,6 +1548,24 @@ describe("purged sessions' scope markers and card directories go 7 days on, at t
     expect(fs.existsSync(scopeOf(box, ID))).toBe(true);
     expect(cardOf(box, ID, U)).not.toBeNull();
     expect(counters(box)['scope_files_purged']).toBeUndefined();
+  }, 240_000);
+
+  it('no registry directory measures no session absent: an aged scope marker and card directory are both kept and nothing is counted', () => {
+    const box = makeHistoryBox('ccrc-hist-card-purge-noreg-');
+    passC(box);
+    const scope = scopeOf(box, 'card-noreg');
+    const card = path.join(box.root, 'card', 'card-noreg');
+    fs.writeFileSync(scope, 'main x 1\n');
+    fs.mkdirSync(card, { recursive: true });
+    fs.writeFileSync(path.join(card, 'note'), 'x');
+    for (const p of [scope, path.join(card, 'note'), card]) age(p, 8 * DAY);
+    fs.rmSync(box.reg, { recursive: true, force: true });
+    const r = runDriver(box, SCAN_LATER);
+    expect(r.code, `${r.stderr}${r.stdout}`).toBe(0);
+    expect(fs.existsSync(scope), 'the marker stands').toBe(true);
+    expect(fs.existsSync(card), 'the card directory stands').toBe(true);
+    const c = counters(box);
+    expect([c['scope_files_purged'], c['card_files_purged']]).toEqual([undefined, undefined]);
   }, 240_000);
 
   it('a link is unlinked and its target kept; a name failing idOk, a card directory holding a directory, and the other history directories stay', () => {

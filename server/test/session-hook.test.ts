@@ -11947,7 +11947,7 @@ describe('history card line: SessionStart(compact) serves the sweep\'s predictio
   const NBSP_G = `${String.fromCharCode(0xa0)}${GENERATION}\n`;
   const BOM_G = `${String.fromCharCode(0xfeff)}${GENERATION}\n`;
   type Reg = 'G' | 'G2' | 'absent' | 'unreadable' | 'symlink-G' | 'junk';
-  type Off = 'absent' | 'G' | 'G-padded' | 'G-wide' | 'G-nbsp' | 'G-bom' | 'G2' | 'empty' | 'unreadable' | 'dir' | 'symlink-G' | 'unsearchable' | 'parent-file';
+  type Off = 'absent' | 'G' | 'G-padded' | 'G-wide' | 'G-nbsp' | 'G-bom' | 'G2' | 'empty' | 'unreadable' | 'dir' | 'symlink-G' | 'unsearchable' | 'parent-file' | 'G2-tabcr';
   type Rec = 'G' | 'G2' | 'legacy' | 'absent' | 'junk' | 'symlink-G';
   /** B1's Presence, as a type-only import expression: this file gains no import line (the census cites it by line). */
   type Pres = import('../../ccd/history/lib.mjs').Presence<string>;
@@ -11961,6 +11961,9 @@ describe('history card line: SessionStart(compact) serves the sweep\'s predictio
     ['a no-break space before the resolved generation G', GENERATION, 'G', 'G-nbsp', 'G'],
     ['a byte-order mark before the resolved generation G', GENERATION, 'G', 'G-bom', 'G'],
     ['recall-off names another generation (stale)', GENERATION, 'G', 'G2', 'G'],
+    // The hook's ASCII trim strips both ends and every one of tab, CR, LF, VT and FF: a stale value inside tab, space and CR
+    // is still stale (the CLI trims it to G2 and recalls); a trim that misses one end or one character withholds instead.
+    ['another generation inside tab, space and CR whitespace (stale)', GENERATION, 'G', 'G2-tabcr', 'G'],
     ['an empty recall-off file beside a generation', GENERATION, 'G', 'empty', 'G'],
     ['an unreadable recall-off file', GENERATION, 'G', 'unreadable', 'G'],
     ['a directory at recall-off/<id>', GENERATION, 'G', 'dir', 'G'],
@@ -12012,6 +12015,7 @@ describe('history card line: SessionStart(compact) serves the sweep\'s predictio
     if (offKind === 'G-nbsp') fs.writeFileSync(off, NBSP_G);
     if (offKind === 'G-bom') fs.writeFileSync(off, BOM_G);
     if (offKind === 'G2') fs.writeFileSync(off, `${G2}\n`);
+    if (offKind === 'G2-tabcr') fs.writeFileSync(off, `\t${G2} \r\n`);
     if (offKind === 'empty') fs.writeFileSync(off, '');
     if (offKind === 'unreadable') { fs.writeFileSync(off, `${G2}\n`); fs.chmodSync(off, 0o000); }
     if (offKind === 'dir') fs.mkdirSync(off);
@@ -12048,7 +12052,7 @@ describe('history card line: SessionStart(compact) serves the sweep\'s predictio
     const file: Pres = offKind === 'absent' ? { state: 'absent' }
       : offKind === 'G' || offKind === 'G-padded' || offKind === 'G-wide' || offKind === 'G-nbsp' || offKind === 'G-bom'
         ? { state: 'value', value: GENERATION }
-        : offKind === 'G2' ? { state: 'value', value: G2 }
+        : offKind === 'G2' || offKind === 'G2-tabcr' ? { state: 'value', value: G2 }
           : offKind === 'empty' ? { state: 'value', value: '' } : { state: 'unreadable' };
     const generation = cliGeneration(envGen, regGen, recKind);
     // An absent or unreadable file needs no generation (B2 readContext's offNow): decided now, whatever it is.
