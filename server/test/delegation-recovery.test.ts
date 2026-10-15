@@ -1899,6 +1899,94 @@ describe('O4 guard on the checkpoint-only door (fix round 1, I1): a change canno
   });
 });
 
+// ── fix round 2, N1: a change is handed a copy ───────────────────────────────────────────────────────────────────────
+
+describe('a checkpoint-only change is handed a COPY, so editing its argument in place cannot get past the guards (fix round 2, N1)', () => {
+  async function withXAndLease() {
+    const h = harness();
+    const dur = await h.open();
+    const built = await dur.applyAccepted(batch([sessionStart(1), bareTool(2, X), subagentStart(3, X), sessionStart(4, { sessionId: 'lane-b-demo' })]));
+    const act = built.openedActivities[0]!;
+    await dur.createLease({
+      activityId: act.activityId, parentId: PARENT, parentIncarnation: INC, project: 'project-a', adminRecord: 'wt-1', canonicalPath: '/work/project-a/wt-1',
+      creationBase: null, sourceKind: 'agent', correlationJournalIds: [], firstObservedAt: T(40),
+    });
+    return { h, dur, enc: encodeDelegationNaturalKey(keyOf(X)) };
+  }
+  type InPlace = (cp: DelegationCheckpointV1, enc: string) => DelegationCheckpointV1;
+  const otherId = deriveDelegationActivityId(keyOf(X), eid(99));
+  // Each change edits its ARGUMENT and returns it. Against a change handed the very object the guards compare it with, the before/after
+  // comparison is the object against itself and every guard passes.
+  const table: Array<[string, InPlace]> = [
+    ['drops the activities and their map, in place', (cp) => { Object.assign(cp, { activities: [], activityIdsByNaturalKey: {} }); return cp; }],
+    ['edits an activity\'s identity column (openedAt), in place', (cp) => { Object.assign(cp.activities[0]!, { openedAt: T(3) }); return cp; }],
+    ['re-maps the natural-key map, in place', (cp, enc) => { (cp.activityIdsByNaturalKey as Record<string, string>)[enc] = otherId; return cp; }],
+    ['removes a session by splicing the list, in place', (cp) => { (cp.sessions as unknown as unknown[]).splice(1); return cp; }],
+    ['alters a lease (parentageState), in place', (cp) => { Object.assign(cp.leases[0]!, { parentageState: 'unmeasured' }); return cp; }],
+  ];
+  for (const [name, change] of table) {
+    it(`refuses a change that ${name}; nothing is written and the live state is untouched`, async () => {
+      const { h, dur, enc } = await withXAndLease();
+      const disk = readDisk(h.dir);
+      const live = dur.state().checkpoint;
+      const snapshot = JSON.stringify({ a: live.activities, m: live.activityIdsByNaturalKey, s: live.sessions.map((x) => x.sessionId), l: live.leases, n: live.lineage });
+      h.log.length = 0;
+      await expect(dur.applyCheckpointChange((cp) => change(cp, enc))).rejects.toMatchObject({ code: 'change-refused' });
+      expect(h.log, 'nothing was written').toEqual([]);
+      expect(readDisk(h.dir)).toEqual(disk);
+      expect(dur.failure()).toBeNull();
+      // A refused change must not have reached the applier's own rows through the argument: the next application builds from them.
+      await dur.applyAccepted(batch([sessionStart(9)]));
+      const after = dur.state().checkpoint;
+      expect(JSON.stringify({ a: after.activities, m: after.activityIdsByNaturalKey, s: after.sessions.map((x) => x.sessionId), l: after.leases, n: after.lineage })).toBe(snapshot);
+    });
+  }
+
+  it('still accepts a change that edits a non-identity column of its argument in place and returns it', async () => {
+    const { dur, enc } = await withXAndLease();
+    const out = await dur.applyCheckpointChange((cp) => { Object.assign(cp.activities[0]!, { displayName: 'reviewer' }); return cp; });
+    expect(out.durable).toBe(true);
+    expect(activityOf(dur.state().checkpoint, X)).toMatchObject({ displayName: 'reviewer' });
+    expect(Object.keys(dur.state().checkpoint.activityIdsByNaturalKey)).toEqual([enc]);
+  });
+});
+
+// ── fix round 2, N2: the evidence count is proved before step 1 and adopted without a throw ─────────────────────────────
+
+describe('the evidence count cannot reject an application that is already durable (fix round 2, N2)', () => {
+  it('assertExtendedBy refuses a batch that does not extend the index strictly upward; extend adopts one that does', () => {
+    const index = new DelegationEvidenceIndex();
+    index.add(2);
+    index.add(5);
+    for (const bad of [[5], [4], [1], [6, 6], [6, 7, 7], [7, 6]]) {
+      expect(failureCode(() => index.assertExtendedBy(bad)), JSON.stringify(bad)).toBe('fold-refused');
+    }
+    expect(index.total).toBe(2);                                 // a refused batch changed nothing
+    expect(failureCode(() => index.assertExtendedBy([]))).toBe('accepted');
+    expect(failureCode(() => index.assertExtendedBy([6, 9, 10]))).toBe('accepted');
+    index.extend([6, 9, 10]);
+    expect(index.total).toBe(5);
+    expect(index.countAtOrBelow(9)).toBe(4);
+    expect(failureCode(() => index.add(10))).toBe('fold-refused');          // recovery's one-at-a-time add keeps its refusal
+  });
+
+  it('an index that runs ahead of the journal refuses the application BEFORE step 1: nothing is written and nothing is poisoned', async () => {
+    const h = harness();
+    const dur = await h.open();
+    await dur.applyAccepted(batch([sessionStart(1)]));
+    const disk = readDisk(h.dir);
+    // The bug this invariant exists to catch: the applier's count of the journal is ahead of the journal.
+    (dur as unknown as { evidence: DelegationEvidenceIndex }).evidence.add(500);
+    h.log.length = 0;
+    await expect(dur.applyAccepted(batch([sessionStart(2)]))).rejects.toMatchObject({ code: 'fold-refused' });
+    expect(h.log, 'nothing was written').toEqual([]);
+    expect(readDisk(h.dir)).toEqual(disk);
+    expect(dur.failure()).toBeNull();
+    expect(dur.pruningEnabled()).toBe(true);
+    expect(dur.state().checkpoint.appliedJournalSequence).toBe(1);
+  });
+});
+
 // ── SQLite as repairable output (R20) ────────────────────────────────────────────────────────────────────────────────
 
 describe('SQLite is repaired from the checkpoint and the journal (ruling R20)', () => {

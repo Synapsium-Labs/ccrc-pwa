@@ -865,9 +865,24 @@ export class DelegationEvidenceIndex implements DelegationEvidenceCounts {
   get total(): number { return this.sequences.length; }
   /** Sequences arrive strictly increasing (the chain has already proved it); anything else is a bug and is refused. */
   add(sequence: number): void {
-    const last = this.sequences[this.sequences.length - 1];
-    if (last !== undefined && sequence <= last) refuse('fold-refused', `evidence sequence ${sequence} does not follow ${last}`);
+    this.assertExtendedBy([sequence]);
     this.sequences.push(sequence);
+  }
+  /**
+   * Refuses (`fold-refused`) a batch that does not extend the index strictly upward, and changes nothing. The applier calls it BEFORE
+   * step 1, so the one thing that can go wrong with its live count goes wrong while nothing has been written; `extend` then adopts the
+   * same batch after the durable point and cannot throw.
+   */
+  assertExtendedBy(sequences: readonly number[]): void {
+    let last = this.sequences[this.sequences.length - 1];
+    for (const sequence of sequences) {
+      if (last !== undefined && sequence <= last) refuse('fold-refused', `evidence sequence ${sequence} does not follow ${last}`);
+      last = sequence;
+    }
+  }
+  /** Adopts a batch `assertExtendedBy` has accepted. It cannot throw: it is called after the application is durable. */
+  extend(sequences: readonly number[]): void {
+    for (const sequence of sequences) this.sequences.push(sequence);
   }
   countAtOrBelow(sequence: number): number {
     let lo = 0;
@@ -1455,7 +1470,10 @@ export class DelegationDurability {
         items: [],
         mutate: (b) => {
           const before = b.build(this.current.checkpoint.revision);
-          const after = change(before);
+          // The change is handed a COPY. `before` is what every guard below compares against, and its rows are the very objects the
+          // builder (and the last durable checkpoint) hold: a change that edited its argument in place and returned it would otherwise
+          // compare the argument with itself, pass every guard, and, refused or not, have rewritten the applier's own rows.
+          const after = change(structuredClone(before));
           const pos = b.appliedPosition();
           if (after.appliedJournalSequence !== pos.sequence || after.appliedJournalId !== pos.journalId || after.appliedJournalDigest !== pos.digest) {
             refuse('change-refused', 'a checkpoint-only change cannot move the applied journal position: only a journal append does');
@@ -1600,6 +1618,12 @@ export class DelegationDurability {
     verifyDecodable?: boolean;
   }): Promise<DelegationApplyOutcome> {
     const plan = planDelegationJournalAppend({ head: this.head, eventIds: this.eventIds, leases: this.builder.leaseView(), items: args.items });
+    // What `evidence` MEANS: the count of evidence records the retained JOURNAL holds, so the repair can set SQLite's (count, max)
+    // against it. It therefore changes when the journal does, with `eventIds` and `head`, after the durable point, and never before
+    // (a count of records not yet written would be a count of nothing). Its one invariant (strictly increasing) is proved HERE, before
+    // step 1, where a refusal costs nothing, so that adopting it afterwards cannot throw out of an application that is already durable.
+    const evidenceSequences = plan.records.filter((r) => r.entry.kind === 'evidence-accepted').map((r) => r.sequence);
+    this.evidence.assertExtendedBy(evidenceSequences);
     const next = this.builder.clone();
     for (const record of plan.records) next.foldRecord(record);
     args.mutate?.(next);
@@ -1631,11 +1655,8 @@ export class DelegationDurability {
     this.current = { checkpoint, phase: 'ready' };
     const last = plan.records[plan.records.length - 1];
     if (last !== undefined) this.head = { sequence: last.sequence, journalId: last.journalId, digest: last.digest };
-    for (const r of plan.records) {
-      if (r.entry.kind !== 'evidence-accepted') continue;
-      this.eventIds.add(r.entry.event.eventId);
-      this.evidence.add(r.sequence);
-    }
+    for (const r of plan.records) if (r.entry.kind === 'evidence-accepted') this.eventIds.add(r.entry.event.eventId);
+    this.evidence.extend(evidenceSequences);
     const rows = plan.records.filter((r) => r.entry.kind === 'evidence-accepted').map(delegationEventRowOfRecord);
     const projection: DelegationApplyOutcome['projection'] = args.project === false ? { status: 'unprojected' } : await this.projectLocked(checkpoint, rows);
     return {
