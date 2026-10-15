@@ -33,7 +33,8 @@ import {
 } from './keyBar';
 
 /** The one-shot `ctrl` latch. The drawer owns it, so that the bar's `ctrl` cap and
- *  the text field (a later task) share one latch. */
+ *  the letter typed next into xterm's textarea (the drawer's `beforeinput` and
+ *  keydown listeners on the host) share one latch. */
 export interface CtrlLatch {
   readonly latched: boolean;
   /** The bar's `ctrl` cap: latch, or unlatch without sending anything. */
@@ -135,8 +136,8 @@ export type KeyBarProps =
   | { view: 'grid'; guard: ExitGuard; action?: ReactNode }
   | { view: 'wrapped'; guard: ExitGuard; latch: CtrlLatch; action?: ReactNode };
 
-/** Keep focus where it is (the terminal, or the text field): a tap on a cap must
- *  not take it, or a phone's keyboard closes under the reader's thumb. */
+/** Keep focus where it is (xterm's textarea): a tap on a cap must not take it,
+ *  or a phone's keyboard closes under the reader's thumb. */
 const keepFocus = (e: { preventDefault(): void }): void => e.preventDefault();
 
 export function KeyBar(props: KeyBarProps): ReactNode {

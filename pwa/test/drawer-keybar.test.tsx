@@ -5,7 +5,8 @@
 // (c) the two bars: the grid view's strip (the old keys, then ^C) and the
 //     wrapped view's `esc ↑ ↓ ⏎ ^C ⌫ ⋯` with the row `⋯` opens, the history
 //     door beside both and never inside a row of keys;
-// (d) the one-shot `ctrl` latch, which the text field of a later task feeds;
+// (d) the one-shot `ctrl` latch, which the drawer feeds the next letter typed
+//     into xterm's textarea (Task 12; `drawer-paste.test.tsx`);
 // (e) below 420px the bar wraps, read from chat.css as text (jsdom applies no
 //     stylesheet), and every key is a --tap-min target;
 // (f) single definition: no key byte is spelled under `pwa/src/session/`
@@ -61,8 +62,9 @@ const legends = (el: Element): string[] =>
 const noScreen = (): readonly string[] => [];
 
 /** The wrapped bar wired as the drawer wires it: `useKeyInput`, so the latch
- *  sends through the same guard as the caps. The stand-in letters are the text
- *  field's (a later task) offer of one typed character to the latch. */
+ *  sends through the same guard as the caps. The stand-in letters stand for the
+ *  drawer offering the latch one letter typed into xterm's textarea (Task 12;
+ *  the real path is pinned in `drawer-paste.test.tsx`). */
 function Wrapped({
   send,
   action,
@@ -662,6 +664,7 @@ describe('one table of key bytes', () => {
     expect(names).toContain('TerminalDrawer.tsx');
     expect(names).toContain('terminalFactory.ts');   // the xterm factory, since #419's split
     expect(names).toContain('KeyBarView.tsx');
+    expect(names).toContain('typedFrame.ts');   // frames a paste with keyBar.ts's markers (Task 12)
   });
 
   it('liveness: the scanner really matches keyBar.ts', () => {

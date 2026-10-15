@@ -33,6 +33,14 @@ export const KEY_SEQ: Readonly<Record<KeyName, string>> = {
   ctrlB: '\x02',
 };
 
+/** Bracketed paste's two markers (CSI 200~ and CSI 201~, the bytes xterm's own
+ *  `bracketTextForPaste` wraps a paste in): what a pane reads as "the text
+ *  between was pasted, not typed". Bytes a pane receives, so they live here
+ *  beside the keys' and `typedFrame.ts`, which frames a paste in them, spells
+ *  none (D-5007). */
+export const PASTE_OPEN = '\x1b[200~';
+export const PASTE_CLOSE = '\x1b[201~';
+
 /** Each key's mono keycap legend (DIRECTION) and the name assistive tech reads. */
 export const KEY_CAP: Readonly<Record<KeyName, { legend: string; label: string }>> = {
   esc: { legend: 'esc', label: 'Escape' },

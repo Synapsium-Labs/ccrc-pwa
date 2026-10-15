@@ -3,7 +3,9 @@
 // real xterm attached to the session's tmux window over `/ws/pty/:id`. Raw
 // utf8 frames stream into term.write; keystrokes — and the mobile quick-key
 // bar's control sequences — flow back as {type:'input'} frames, and nothing
-// else ever does. The attach dials the window's own size plus tmux's status
+// else ever does. A paste is taken before xterm sees it and goes back as
+// `typedFrame(text)`, sanitised, so a clipboard cannot end its own brackets
+// (D-5007). The attach dials the window's own size plus tmux's status
 // row, 220x51, at every glass width, and the terminal is pinned there (D-5005,
 // spec 2026-10-14 §5.1): a client exactly the window's size is one tmux has
 // nothing to pan and nothing to fill, so the glass changes the type size and
@@ -26,7 +28,7 @@
 // arrow keys aimed at the pane — so the wheel is swallowed here and scrolls the
 // pane's own history instead, read over `GET /api/sessions/:id/pane/history`
 // (tmux `capture-pane`, which mutates nothing on the box).
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import {
   ATTACH, defaultMakeTerm, historyFailureSentence,
@@ -48,6 +50,7 @@ import {
   type DrawerViewKind, type StorageLike,
 } from './drawerView';
 import { KeyBar, useKeyInput } from './KeyBarView';
+import { inputLetter, keyLetter, typedFrame } from './typedFrame';
 import { WrappedView } from './WrappedView';
 import './chat.css';
 
@@ -299,10 +302,17 @@ export function TerminalDrawer({
    *  because the exit notice it looks for appears after the first Ctrl-C. */
   const screenNow = (): readonly string[] => termRef.current?.model().map(rowText) ?? [];
   /** The bar's TAPS go through the ^C/^D guard, the latch's included (D-5007).
-   *  Keys typed into the terminal do not: `term.onData` is `typed`, bare, so a
+   *  Keys typed into the terminal do not: `term.onData` reaches `typed` with
+   *  nothing but the latch's one-letter drop in between (in the attach), so a
    *  physical Ctrl-C reaches the session exactly as it always has. */
   const keys = useKeyInput(typed, screenNow);
   const cancelHeldKey = keys.guard.cancel;
+  /** The latch as the textarea's listeners see it. They are installed once per
+   *  attach, and the bar's latch is a new object every render. */
+  const latchRef = useRef(keys.latch);
+  useLayoutEffect(() => {
+    latchRef.current = keys.latch;
+  });
 
   useEffect(() => {
     if (!open || host === null) return undefined;
@@ -414,7 +424,71 @@ export function TerminalDrawer({
       if (connRef.current !== 'open') setAttempt((a) => a + 1);
     });
 
-    term.onData(typed);
+    /**
+     * THE LATCH'S LETTER (D-5007, plan Task 12; operator ruling R-LIVE,
+     * 2026-10-15). With the bar's `ctrl` latched, the next ASCII letter typed
+     * into the terminal is sent as its control code, through the ^C/^D guard
+     * (`latch.take` sends through it), and the letter itself is not typed.
+     * Where the letter arrives decides how it is stopped:
+     *
+     * - A PHONE'S KEYBOARD hands it over as a `beforeinput` on xterm's textarea
+     *   (`inputLetter`). An `insertText` is cancelled, so it never reaches the
+     *   textarea or xterm. The letter that OPENS a composition (Gboard composes
+     *   every word) comes as an `insertCompositionText`, which a browser does
+     *   not let be cancelled: xterm will still send that composition when it
+     *   ends, so the next chunk it sends is dropped if it is the letter. One
+     *   chunk: the drop is spent on it either way, and never waits to eat a
+     *   letter typed later.
+     * - A KEYBOARD THAT REPORTS REAL KEYS (a physical one; an on-screen one not
+     *   composing) never fires a `beforeinput` for a letter: xterm sends it at
+     *   keydown and cancels the event (`keyLetter`). So the keydown is taken
+     *   here first and stopped, before xterm's own listener on its textarea.
+     *
+     * Both listeners are on the HOST, in the capture phase: the only place that
+     * runs before xterm's listeners on its own textarea. Unlatched, neither
+     * touches anything, and typing reaches the socket exactly as xterm sends it.
+     */
+    let dropOnce: string | null = null;
+    term.onData((data) => {
+      if (dropOnce !== null) {
+        const drop = data === dropOnce;
+        dropOnce = null;
+        if (drop) return;
+      }
+      typed(data);
+    });
+    const onBeforeInput = (ev: InputEvent): void => {
+      const letter = inputLetter(ev.inputType, ev.data);
+      if (letter === null || !latchRef.current.take(letter)) return;
+      ev.preventDefault();
+      if (!ev.defaultPrevented) dropOnce = letter;
+    };
+    const onKeyDown = (ev: KeyboardEvent): void => {
+      const letter = keyLetter(ev);
+      if (letter === null || !latchRef.current.take(letter)) return;
+      ev.preventDefault();
+      ev.stopPropagation();
+    };
+    /**
+     * THE PASTE GUARD (D-5007, plan Refinement 11; P3 ruled yes: both views).
+     * xterm 6.0.0's own paste brackets the clipboard's text without removing an
+     * end marker inside it, so a clipboard holding `\e[201~` would close the
+     * brackets early and TYPE what follows, Enter included. Every paste in the
+     * host is taken here, in the capture phase, because xterm's own handler on
+     * its textarea stops the event there: a listener that waited for it to
+     * bubble would never run. The browser inserts nothing, xterm never sees it,
+     * and the text goes out as `typedFrame(text)`: sanitised, and bracketed
+     * exactly as xterm would bracket it when it holds a newline.
+     */
+    const onPaste = (ev: ClipboardEvent): void => {
+      ev.preventDefault();
+      ev.stopPropagation();
+      const data = typedFrame(ev.clipboardData?.getData('text/plain') ?? '');
+      if (data !== '') typed(data);
+    };
+    host.addEventListener('beforeinput', onBeforeInput, true);
+    host.addEventListener('keydown', onKeyDown, true);
+    host.addEventListener('paste', onPaste, true);
 
     // THE WHEEL IS NOT AN ARROW KEY. `tmux attach` puts this client on the
     // ALTERNATE screen (every attach starts ESC[?1049h, measured off a real
@@ -474,6 +548,9 @@ export function TerminalDrawer({
       window.removeEventListener('resize', refit);
       window.visualViewport?.removeEventListener('resize', refit);
       host.removeEventListener('scroll', onHostScroll);
+      host.removeEventListener('beforeinput', onBeforeInput, true);
+      host.removeEventListener('keydown', onKeyDown, true);
+      host.removeEventListener('paste', onPaste, true);
       detachReach();
       unsubAuth();
       refitRef.current = null;
@@ -497,6 +574,9 @@ export function TerminalDrawer({
       // So is a ^C held for a confirm: it was asked about the screen this
       // attach showed, and must not be sent into the next one on a stale Send.
       cancelHeldKey();
+      // And so is a latch: it was set against this attach's screen, and the
+      // next attach starts unlatched, as it starts with nothing held.
+      latchRef.current.setLatched(false);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- sendFrame reads refs only
   }, [open, host, attempt, id, makeSocket, makeTerm]);
@@ -527,6 +607,16 @@ export function TerminalDrawer({
     const raf = requestAnimationFrame(() => refitRef.current?.());
     return () => cancelAnimationFrame(raf);
   }, [kbInset, open, clipped, view, paused, notClaude]);
+
+  // A LATCH THE VIEW NO LONGER SHOWS IS CLEARED. The `ctrl` cap lives on the
+  // wrapped view's overflow row and the grid's strip has none, while the
+  // latch's listeners serve the host in both views: carried into the grid, a
+  // latch would turn the reader's next letter into a control code with nothing
+  // on the glass to say so. Closing the row that holds the cap unlatches it for
+  // the same reason (`KeyBar`).
+  useEffect(() => {
+    if (view !== 'wrapped') latchRef.current.setLatched(false);
+  }, [view]);
 
   /**
    * THE CHIPS, in the drawer's header and not on the glass (D-5005).
