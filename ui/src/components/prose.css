@@ -305,7 +305,19 @@
     background: var(--well-bar-bg);
     border-bottom: 1px solid var(--well-bar-hair);
   }
+  /* THE BAR'S TWO LABELS WEAR THE EYEBROW HERE, as declarations rather than
+     as the `EYEBROW` utilities. Chat's code block is rendered by the app's
+     CodeBlock (lib/markdown.tsx) with these two classes and nothing else, and
+     the native-docs-reader W4 goldens (pwa/test/golden/markdown/*.html) pin
+     that markup byte for byte — `EYEBROW` in the JSX would rewrite the class
+     attribute of every code block in them. So the look stays with the hook
+     class, in the eyebrow's own tokens: mono, 2xs, medium, line-height 1,
+     uppercase, caps tracking. The `font` shorthand resets italic and the
+     numeric variant on the way past, which is what EYEBROW's two resets do. */
   .code-block-lang {
+    font: var(--weight-medium) var(--fs-2xs) / 1 var(--family-mono);
+    letter-spacing: var(--ls-caps);
+    text-transform: uppercase;
     color: var(--syn-comment);
   }
   .code-block-copy {
@@ -314,6 +326,9 @@
     border-radius: var(--r-sm);
     background: transparent;
     color: var(--ink-on-well);
+    font: var(--weight-medium) var(--fs-2xs) / 1 var(--family-mono);
+    letter-spacing: var(--ls-caps);
+    text-transform: uppercase;
     padding: var(--sp-1) var(--sp-2);
     min-height: var(--sp-8);
     cursor: pointer;
@@ -323,8 +338,8 @@
   /* --accent-on-well, not --accent: this label sits on the code well's bar, which
      is dark in BOTH themes, and the light-theme --accent (#0E7B3F) is tuned for
      paper — it read 3.03:1 here, under the 4.5 floor this 11px uppercase mono
-     text needs. [data-copied] is not a hover-only state: MessageBubble.tsx holds
-     it for 1600ms after every copy, and it is the state that renders "Copied". */
+     text needs. [data-copied] is not a hover-only state: CodeBlock (lib/markdown.tsx)
+     holds it for 1600ms after every copy; it is the state that renders "Copied". */
   .code-block-copy:hover, .code-block-copy[data-copied] {
     color: var(--accent-on-well);
     border-color: color-mix(in srgb, var(--accent-on-well) 40%, transparent);

@@ -12,8 +12,8 @@ import { ClaimDoor } from './door.js';
 import { NODE_ID_RE } from '../coord/store.js';
 import {
   DRIVER_TICK_MS, FAILURES_FOR_BANNER, ROTATE_NOW_MIN_INTERVAL_MS, STALL_ALERT_MS, TOKEN_FILE_REREAD_MS, applySyncResult,
-  backoffMs, extendedGraceState, handedOutState, nextAction, owe, mintedState, phaseOf, promotedState, rotationGate,
-  oweForRetiredPresentation, pendingExitOpen, retiringDigests, retiringLanded, retiringRecorded, stagedState, type BoxTokenState, type GateInput, type GateVerdict, type GenerationObservation, type SyncResult, type WriteRecord,
+  backoffMs, extendedGraceState, handedOutState, nextAction, nextScheduledAt, owe, mintedState, phaseOf, promotedState, rotationGate,
+  clampRetiredStamp, oweForRetiredPresentation, pendingExitOpen, retiringDigests, retiringLanded, retiringRecorded, stagedState, type BoxTokenState, type GateInput, type GateVerdict, type GenerationObservation, type StageWhy, type SyncResult, type WriteRecord,
 } from './policy.js';
 import type { BothRoleWriter, GateRowsSource, GenerationReader, TokenStore, TokenSyncLink } from './ports.js';
 import type { BoxTokenHolder, HolderSlots } from '../coord/token.js';
@@ -50,6 +50,12 @@ export class BoxTokenDriver implements TokenRouteDriver {
   private backoffUntil: number | null = null;
   private lastReadySeen: number | null = null;
   private rotateRequested = false;
+  // 4558: the weekly schedule's own backoff, memory only like every in-flight fact here (never persisted, so
+  // box-token.json stays byte-compatible with the previous build). A fresh agent ready does NOT clear it (runTick's
+  // reset clears the normal backoff only); any promotion does, and a restart starts it again.
+  private scheduledGen: string | null = null;           // the generation a `scheduled` stage wrote, until its send answers
+  private scheduleMisses = 0;                           // scheduled attempts in a row that did not complete
+  private scheduleBackoffUntil: number | null = null;
   /** A send or a promotion is running (D-4413): the only in-flight state "Rotate now" may call `joined` on. */
   private busy = 0;
   private lastRotateStart = Number.NEGATIVE_INFINITY;
@@ -82,6 +88,9 @@ export class BoxTokenDriver implements TokenRouteDriver {
   // owed flag is what survives a restart).
   private retiredSeen = 0;
   private retiredOwedAt: number | null = null;
+  // 4552: the retired count `noteCounters` last stamped against; a count above it is a new presentation, so a restart's
+  // 1-to-0 count change is never one.
+  private retiredStampSeen = 0;
   // D-4410: a retired digest whose append keeps failing is warned about once while it stands.
   private retiringWarned = false;
   private retiredUnreadableWarned = false;
@@ -220,6 +229,7 @@ export class BoxTokenDriver implements TokenRouteDriver {
       retiredRefused: s?.retiredRefusedAt != null,
       lastBootRecovery: s?.lastBootRecovery ?? null,
       role: this.deps.env.role,
+      nextRotationAt: holds && s !== null ? nextScheduledAt(s, now) : null,   // 4557: the scheduled-miss backoff (4558) is not reflected
     };
   }
 
@@ -234,7 +244,7 @@ export class BoxTokenDriver implements TokenRouteDriver {
     await this.loadPrevious();
     await this.settleRetiring();
     await this.drainDoorAlerts();
-    await this.noteCounters();
+    await this.noteCounters(this.now());
     await this.noteRetiredPresentations(this.now());
     await this.reread(this.now());
     this.noteUnaccounted(this.now());
@@ -248,7 +258,8 @@ export class BoxTokenDriver implements TokenRouteDriver {
     for (let step = 0; step < MAX_STEPS; step++) {
       const now = this.now();
       const a = nextAction({ state: this.state, gate: this.gate(now), generation: obs,
-        rotateRequested: this.rotateRequested, backoffUntil: this.backoffUntil, now, retireHeld });
+        rotateRequested: this.rotateRequested, backoffUntil: this.backoffUntil, now, retireHeld,
+        scheduleBackoffUntil: this.scheduleBackoffUntil });
       if (a.kind !== 'hold') await this.setHold(null);
       switch (a.kind) {
         case 'none': case 'backoff': return;
@@ -317,7 +328,7 @@ export class BoxTokenDriver implements TokenRouteDriver {
     return true;
   }
 
-  private async stage(why: OwedReason | 'rotate-now', now: number): Promise<boolean> {
+  private async stage(why: StageWhy, now: number): Promise<boolean> {
     const store = this.deps.store;
     const id = store.mintGenerationId();
     const v = store.mintValue();
@@ -334,13 +345,15 @@ export class BoxTokenDriver implements TokenRouteDriver {
       this.rotateRequested = false;
       this.backoffUntil = now + backoffMs(s.failures + 1);
       this.warn(`ccrc-server: box token: could not stage a generation (${errno(e)}); retrying with backoff`);
+      if (why === 'scheduled') this.noteScheduleMiss('not staged');   // after the line that names the cause, still before the commit
       await this.commit({ ...s, failures: s.failures + 1, lastFailure: 'mint-failed' });
       return false;
     }
-    if (why !== 'rotate-now') s = owe(s, why);
+    if (why !== 'rotate-now' && why !== 'scheduled') s = owe(s, why);   // 4556: a derived trigger owes nothing; an older build reads the state unchanged
     this.rotateRequested = false;
     this.backoffUntil = null;   // a stage that worked proves the disk: a bypassed backoff was spent on this value (F3c)
     this.state = s;
+    if (why === 'scheduled') this.scheduledGen = id;
     this.pend.set(id, v);
     this.pushSlots();                 // the check accepts G from staging (spec §5)
     await this.commit(s);
@@ -369,8 +382,21 @@ export class BoxTokenDriver implements TokenRouteDriver {
       this.warn(`ccrc-server: box token: sync failed (${out.state.lastFailure}); attempt ${out.state.failures}, retrying with backoff`);
     }
     if (r.kind === 'synced') this.backoffUntil = null;
+    // Before the commit, which can throw on the same fault (F3(b)): memory and a warn line only.
+    if (id === this.scheduledGen) {
+      this.scheduledGen = null;
+      if (out.promote === null) this.noteScheduleMiss(r.kind);   // 4558: any answer that promotes nothing is a miss
+    }
     await this.commit(this.mustState());
     if (out.promote !== null) await this.promote(out.promote, 'op-result');
+  }
+
+  /** 4558: a scheduled attempt did not complete; the schedule waits the normal ladder's next step (never an owed
+   *  rotation or a press, which never reach this). Prints the answer's kind and the attempt, never a value. */
+  private noteScheduleMiss(word: string): void {
+    this.scheduleMisses++;
+    this.scheduleBackoffUntil = this.now() + backoffMs(this.scheduleMisses);
+    this.warn(`ccrc-server: box token: the scheduled rotation did not complete (${word}); the schedule retries with backoff (attempt ${this.scheduleMisses})`);
   }
 
   /** Spec §5 promotion, in its order; each step is safe to run again. */
@@ -453,6 +479,7 @@ export class BoxTokenDriver implements TokenRouteDriver {
     this.pend.delete(id);
     this.presentedPending.delete(id);
     this.state = next;
+    this.scheduledGen = null; this.scheduleMisses = 0; this.scheduleBackoffUntil = null;   // 4558: a promotion by any route (op result, generation read, own-write) ends the schedule's miss run
     // The base is taken in the same synchronous step as the swap, BEFORE it: the new current is accepted from
     // `pushSlots`, so a presentation of it during the commit below must count (D-4409).
     this.presentedBase = this.deps.holder.counters().matched.current;
@@ -575,11 +602,13 @@ export class BoxTokenDriver implements TokenRouteDriver {
     const total = this.deps.holder.counters().retired;
     const fresh = total - this.retiredSeen;
     this.retiredSeen = total;
-    if (this.state === null || fresh <= 0) return;
+    if (this.state === null) return;
     const next = oweForRetiredPresentation({ state: this.state, fresh, lastOwedAt: this.retiredOwedAt, now });
     if (next === null) return;
     this.retiredOwedAt = now;
-    this.warn('ccrc-server: box token: a retired value was presented on a box-token lane; a forward rotation is owed (retired-presented)');
+    this.warn(fresh > 0
+      ? 'ccrc-server: box token: a retired value was presented on a box-token lane; a forward rotation is owed (retired-presented)'
+      : 'ccrc-server: box token: a retired presentation is still unanswered; a forward rotation is owed (retired-presented)');
     await this.commit(next);
   }
 
@@ -667,7 +696,7 @@ export class BoxTokenDriver implements TokenRouteDriver {
     if (drop.length > 0 || misbound) await this.commit(this.mustState());
   }
 
-  private async noteCounters(): Promise<void> {
+  private async noteCounters(now: number): Promise<void> {
     const s = this.state;
     if (s === null) return;
     this.attributePending();
@@ -676,8 +705,18 @@ export class BoxTokenDriver implements TokenRouteDriver {
     if (s.previous !== null && !s.previous.currentPresented && c.matched.current > this.presentedBase) {
       next = { ...next, previous: { ...s.previous, currentPresented: true } };
     }
-    if (s.counters.previousPresented !== c.matched.previous || s.counters.retiredPresented !== c.retired) {
-      next = { ...next, counters: { previousPresented: c.matched.previous, retiredPresented: c.retired } };
+    // 4552: the stamp is the driver's clock at the tick that first saw the latest retired presentation. It survives a
+    // restart (the count does not), and a state written before 4552 with a count is unanswered, never clear.
+    // A stored stamp later than this clock is written down by policy's `clampRetiredStamp` (review 383 F2).
+    const known = 'retiredPresentedAt' in s.counters;
+    const clamped = clampRetiredStamp(s.counters.retiredPresentedAt, s.lastRotationAt, now);
+    const at = c.retired > this.retiredStampSeen ? now
+      : known ? clamped
+      : s.counters.retiredPresented > 0 ? now : null;   // 4552: a pre-4552 count is unanswered, never clear
+    this.retiredStampSeen = c.retired;
+    if (s.counters.previousPresented !== c.matched.previous || s.counters.retiredPresented !== c.retired
+      || !known || s.counters.retiredPresentedAt !== at) {
+      next = { ...next, counters: { previousPresented: c.matched.previous, retiredPresented: c.retired, retiredPresentedAt: at } };
     }
     if (next !== s) await this.commit(next);
   }

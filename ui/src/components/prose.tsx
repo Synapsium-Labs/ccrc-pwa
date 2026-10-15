@@ -30,6 +30,11 @@ export interface ProseProps extends HTMLAttributes<HTMLDivElement> {
   children: ReactNode;
 }
 
+/** The call site's class LEADS and the hook class follows: an opened recap is
+ *  `compaction-body msg-assist`, the order chat's byte-identical Markdown
+ *  goldens pin (`pwa/test/golden/markdown/recap-opened.html`). `PROSE` is no
+ *  utility, so tailwind-merge has nothing to resolve between the two and the
+ *  order is the only thing this choice decides. */
 export function Prose({ className, children, ...props }: ProseProps): ReactNode {
-  return <div className={cn(PROSE, className)} {...props}>{children}</div>;
+  return <div className={cn(className, PROSE)} {...props}>{children}</div>;
 }

@@ -126,6 +126,10 @@ describe('the reviewer skill: its contract', () => {
       .map((l) => l.slice(0, l.indexOf(':')))).toEqual(['name', 'description']);
     expect(frontmatter.toLowerCase()).toContain(
       'never use it to rule on a wave — a reviewer that sends work back or allocates a deviation has become a coordinator with no ledger');
+    // #361: a subagent working in a worker's, reviewer's or coordinator's workspace meets this
+    // skill's own trigger word for word, so the description excludes it in so many words.
+    expect(frontmatter.toLowerCase()).toContain(
+      'never use it inside a subagent — a review lens agent, or any session started by another session\'s agent tool or a workflow agent() call, is a subagent and returns its findings to its parent without sending mail.');
   });
 
   it('states the review-done mail shape the close route re-measures', () => {

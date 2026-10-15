@@ -814,7 +814,7 @@ describe('apiErrorText and the code translators that compose with it', () => {
 
   it('does not shadow any code the SEND translator owns either', () => {
     for (const code of ['dialog-open', 'enter-ignored', 'verify-failed',
-      'draft-clear-failed', 'not-alive', 'auto-continue-armed', 'turn-running']) {
+      'draft-clear-failed', 'not-alive', 'auto-continue-armed', 'turn-running', 'box-unreadable']) {
       expect(apiErrorText(asError(409, { ok: false, error: code })), code).toBe(code);
       expect(sendErrorText(apiErrorText(asError(409, { ok: false, error: code }))), code)
         .not.toBe(code);
@@ -824,6 +824,19 @@ describe('apiErrorText and the code translators that compose with it', () => {
 
 // TASK 410 — `verify-failed`'s sentence was false twice after this build.
 describe('send-failure copy', () => {
+  it("box-unreadable names the ONE remedy the app cannot perform itself", () => {
+    // Every other send failure is answerable from the PWA — answer the dialog,
+    // replace the draft, tap Send it, retry. This one is not: the box has grown
+    // taller than the capture window, and nothing typed from here can shrink it
+    // (before the server-side refusal, every attempt made it taller). So the
+    // sentence has to carry the terminal, and it is the only one that may.
+    expect(sendErrorText('box-unreadable')).toMatch(/terminal/i);
+    expect(sendErrorText('box-unreadable')).not.toBe('box-unreadable');
+    // `submitEnter`'s own refusal is a different question with the same remedy.
+    expect(submitErrorText('box-unreadable')).toMatch(/terminal/i);
+    expect(submitErrorText('box-unreadable')).not.toBe('box-unreadable');
+  });
+
   it("verify-failed's sentence stops sending the operator to a terminal", () => {
     // The old copy was "The session never showed the text — open the terminal
     // to check." Both halves stopped being right: the ordinary path now

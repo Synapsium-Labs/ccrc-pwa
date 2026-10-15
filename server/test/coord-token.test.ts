@@ -183,6 +183,26 @@ describe('deploy/notify.sh carries the token the way the server expects it', () 
     expect(notifySh, 'the token is back on curl\'s argv').not.toMatch(/-H\s+"x-ccrc-mail-token/);
   });
 
+  it('refuses the shipped placeholder, and its literal is PLACEHOLDER_TOKEN (ledger 12:00 residue 5)', () => {
+    // The literal in the script is a copy of the authority in coord/token.ts.
+    // Reading it from the file text and comparing it keeps the copy honest
+    // without a second one in this test.
+    const m = /^\[ "\$tok" != '([^'\n]*)' \] \|\| exit 0\n/m.exec(notifySh);
+    expect(m, 'notify.sh has no placeholder guard line').not.toBeNull();
+    expect(m![1]).toBe(PLACEHOLDER_TOKEN);
+  });
+
+  it('doctor\'s fleet reader holds the same placeholder literal (R.1, run 377)', () => {
+    // `ccd/ccrc-doctor-checks` reads a fleet token file whose value line is the shipped placeholder as
+    // `fleet-token-unusable`. Its literal is a copy of the authority in coord/token.ts, held the way notify.sh's
+    // is: read from the file text and compared, never a second copy typed here.
+    const doctor = readFileSync(path.join(repoRoot, 'ccd', 'ccrc-doctor-checks'), 'utf8');
+    const m = /^_BT_PLACEHOLDER='([^'\n]*)'$/m.exec(doctor);
+    expect(m, 'ccrc-doctor-checks has no _BT_PLACEHOLDER line').not.toBeNull();
+    expect(m![1]).toBe(PLACEHOLDER_TOKEN);
+    expect(doctor.match(/^_BT_PLACEHOLDER=/gm)).toHaveLength(1);
+  });
+
   it('starts with set +x +a, then umask 077, before any other statement (spec 4.9)', () => {
     // The first two lines of code after the shebang and before the first
     // comment, the shape ccd-pool-sync and ccd-update-sync carry: a token
@@ -243,6 +263,11 @@ describe('deploy/notify.sh carries the token the way the server expects it', () 
       ['hex + trailing newline', `${HEX}\n`],
       ['hex + trailing space', `${HEX} `],
       ['CRLF', `${HEX}\r\n`],
+      // R.2 (review 375 F1): `extractToken` trims with `String.prototype.trim`, which strips these too.
+      ['a BOM before the value', `\uFEFF${HEX}\n`],
+      ['a no-break space either side of the value', `\u00A0${HEX}\u00A0\n`],
+      ['a line of no-break spaces before the value line', `\u00A0\n${HEX}\n`],
+      ['a BOM before a #-comment line', `\uFEFF# a comment\n${HEX}\n`],
       // Interior whitespace, not just the edges — the exact fixture that
       // discriminates "strip everywhere" (both sides, post-fix) from "strip
       // the edges only" (the server's pre-fix `.trim()`): an edges-only

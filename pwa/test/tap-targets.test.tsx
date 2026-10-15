@@ -38,6 +38,7 @@ import {
 import { PrKeycap } from '../src/session/PrKeycap';
 import { PrSheet } from '../src/session/PrSheet';
 import { ReapSheet } from '../src/session/ReapSheet';
+import { RootFallback, ScreenFallback } from '../src/components/RenderBoundary';
 
 const read = (...seg: string[]): string =>
   readFileSync(path.join(import.meta.dirname, '..', 'src', ...seg), 'utf8');
@@ -758,5 +759,41 @@ describe('the tap floor is spelled as the token', () => {
     // replaced literals were spelling.
     const tokens = SHEETS.find(([n]) => n.endsWith('tokens.css'))?.[1] ?? '';
     expect(tokens).toMatch(/--tap-min:\s*44px/);
+  });
+});
+
+// — native Docs reader, W4 Task 8: the two RenderBoundary fallbacks' buttons (Reload, Back to the fleet) —
+//
+// Both are @ccrc/ui's `<Button variant="primary">`, whose own utilities carry the floor (`min-h-tap`, resolved
+// through theme.css's `--spacing-tap: var(--tap-min)`, which `theme-bridge.test.ts` pins); there is no
+// `primitives.css` rule left to scrape. `.render-fallback .btn-primary` (styles/shell.css) gives the width back
+// through the hook class and must not lower the height. The render half is unchanged: the hook class and the floor
+// are on both real buttons, inside `.render-fallback`.
+
+describe('.render-fallback .btn-primary — the boundary fallbacks’ Reload and Back to the fleet', () => {
+  const PRIMARY = buttonVariants({ variant: 'primary' });
+  const shellCss = read('styles', 'shell.css');
+
+  it('is at least one tap tall, off the shared token, and the fallback rule does not lower it', () => {
+    expect(PRIMARY).toContain('min-h-tap');
+    expect(PRIMARY).not.toContain('44px');
+    const local = ruleIn(shellCss, '.render-fallback .btn-primary');
+    expect(declValue(local, 'min-height')).toBeNull();
+    expect(declValue(local, 'height')).toBeNull();
+    expect(declValue(local, 'max-height')).toBeNull();
+  });
+
+  it('is the class both rendered fallback buttons actually carry, inside .render-fallback', () => {
+    render(<RootFallback reload={() => {}} />);
+    const reload = screen.getByRole('button', { name: 'Reload' });
+    expect(reload).toHaveClass('btn-primary');
+    expect(reload, 'the tap floor did not reach the rendered button').toHaveClass('min-h-tap');
+    expect(reload.closest('.render-fallback')).not.toBeNull();
+    cleanup();
+    render(<ScreenFallback />);
+    const back = screen.getByRole('button', { name: 'Back to the fleet' });
+    expect(back).toHaveClass('btn-primary');
+    expect(back, 'the tap floor did not reach the rendered button').toHaveClass('min-h-tap');
+    expect(back.closest('.render-fallback')).not.toBeNull();
   });
 });

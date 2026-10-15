@@ -12,8 +12,9 @@ import {
   CLAIM_CODE_TTL_MS, TOKEN_SYNC_OP, isTokenVerbMissing,
   type TokenSyncOpError, type TokenTransport,
 } from '../../../shared/agent-protocol.js';
-import type {
-  BoxTokenPhase, GenerationRead, OwedReason, TokenFileProblem, TokenHold, TokenOrigin,
+import {
+  TOKEN_ROTATION_INTERVAL_MS,
+  type BoxTokenPhase, type GenerationRead, type OwedReason, type TokenFileProblem, type TokenHold, type TokenOrigin,
 } from '../../../shared/box-token.js';
 
 // ── timings (spec §5.1) ──────────────────────────────────────────────────────
@@ -40,8 +41,8 @@ export const ROTATE_NOW_MIN_INTERVAL_MS = 60_000;
 /** The driver's run-time re-read of the server's token files, at the readiness sweep's cadence (spec 4.2; watch.ts's
  *  READINESS_SWEEP_MS is 600 s, which this ring cannot import). Added at plan assembly. */
 export const TOKEN_FILE_REREAD_MS = 10 * 60_000;
-/** A rotation owed and not completed this long raises the console's stall alert (BoxTokenView.stalled): wave 1's
- *  doctor reports the state as SKIP, which no exit code counts. Added at plan assembly. */
+/** A rotation owed and not completed this long raises the console's stall alert (BoxTokenView.stalled): doctor's
+ *  box-token WARN reports the same state, and this alert backs it on the console. Added at plan assembly. */
 export const STALL_ALERT_MS = 24 * 60 * 60_000;
 
 // ── persisted state (`<dir>/box-token.json`, 0600, no secret) ────────────────
@@ -68,7 +69,11 @@ export interface BoxTokenState {
   failures: number; lastFailure: string | null;
   hold: TokenHold | null; holdNode: string | null;
   lastSync: { at: number; word: string; transport: TokenTransport | 'unmeasured' } | null;
-  counters: { previousPresented: number; retiredPresented: number };
+  /** `retiredPresented` is the retired presentations counted since the server started. `retiredPresentedAt` (4552) has
+   *  three readings and every reader branches on presence first: ABSENT is a state written before 4552 (a count with no
+   *  stamp is unanswered, never clear); `null` is no retired presentation recorded; a number is the driver's `now()` on
+   *  the tick that first saw the latest presentation, and it survives a restart (the count does not). */
+  counters: { previousPresented: number; retiredPresented: number; retiredPresentedAt?: number | null };
   retiredRefusedAt: number | null;
   mintFailedAt: number | null;
   lastBootRecovery: { at: number; source: 'pending' | 'previous' } | null;
@@ -94,7 +99,7 @@ export function mintedState(now: number, write: WriteRecord, prior: BoxTokenStat
     pending: prior?.pending ?? [], previous: prior?.previous ?? null, promoting: null, recovering: null,
     fleetConfirmed: null, nextSeq: seq + 1, lastRotationAt: prior?.lastRotationAt ?? null,
     failures: 0, lastFailure: null, hold: null, holdNode: null, lastSync: prior?.lastSync ?? null,
-    counters: prior?.counters ?? { previousPresented: 0, retiredPresented: 0 },
+    counters: prior?.counters ?? { previousPresented: 0, retiredPresented: 0, retiredPresentedAt: null },
     retiredRefusedAt: prior?.retiredRefusedAt ?? null, mintFailedAt: null,
     lastBootRecovery: prior?.lastBootRecovery ?? null,
     ...(prior?.retiring ? { retiring: prior.retiring } : {}),   // D-4410: a digest awaiting its append survives a re-mint
@@ -110,7 +115,7 @@ export function adoptedState(now: number, prior: BoxTokenState | null): BoxToken
     pending: prior?.pending ?? [], previous: prior?.previous ?? null, promoting: null, recovering: null,
     fleetConfirmed: null, nextSeq: seq + 1, lastRotationAt: prior?.lastRotationAt ?? null,
     failures: 0, lastFailure: null, hold: null, holdNode: null, lastSync: prior?.lastSync ?? null,
-    counters: prior?.counters ?? { previousPresented: 0, retiredPresented: 0 },
+    counters: prior?.counters ?? { previousPresented: 0, retiredPresented: 0, retiredPresentedAt: null },
     retiredRefusedAt: prior?.retiredRefusedAt ?? null, mintFailedAt: null,
     lastBootRecovery: prior?.lastBootRecovery ?? null,
     ...(prior?.retiring ? { retiring: prior.retiring } : {}),   // D-4410: a digest awaiting its append survives a re-mint
@@ -146,15 +151,37 @@ export function foreignUnderUnusableRetired(i: { retiredUnusable: boolean; state
 }
 
 // ── D-4412: a retired value presented on a box-token lane owes one forward rotation, bounded ────────────────
-/** `fresh` is the retired presentations the holder counted since the driver last asked. The state returned owes a
- *  rotation for the word `retired-presented`, or null when nothing new is owed: no new presentation; a rotation
+/** 4552: a retired presentation is unanswered while its stamp is newer than the last completed rotation (or no rotation
+ *  has completed). A `null` or absent stamp is never unanswered here: the driver stamps a pre-4552 count itself. */
+export function retiredUnanswered(s: BoxTokenState): boolean {
+  const at = s.counters.retiredPresentedAt;
+  return typeof at === 'number' && (s.lastRotationAt === null || at > s.lastRotationAt);
+}
+
+/** 4552 (review 383 F2): a stored `retiredPresentedAt` later than the driver's clock (a clock stepped back across a
+ *  restart) could never be answered, because a rotation stamps `lastRotationAt` with that same clock. It is written
+ *  down: an UNANSWERED stamp (after the last rotation, or no rotation yet) goes to `max(now, lastRotationAt + 1)`, so it
+ *  stays unanswered and is never cleared; an ANSWERED one goes to `now` and stays answered, since
+ *  `now < stored <= lastRotationAt`. A stamp not ahead of the clock, or `null`, is returned as it is. An absent stamp is
+ *  not this function's to read: the driver stamps a pre-4552 count itself, so `undefined` comes back `null`. */
+export function clampRetiredStamp(stored: number | null | undefined, lastRotationAt: number | null, now: number): number | null {
+  if (typeof stored !== 'number') return null;
+  if (stored <= now) return stored;
+  const unanswered = lastRotationAt === null || stored > lastRotationAt;
+  return unanswered ? Math.max(now, lastRotationAt === null ? now : lastRotationAt + 1) : now;
+}
+
+/** The input is `fresh`, the retired presentations the holder counted since the driver last asked, or a presentation
+ *  still unanswered (`retiredUnanswered`: 4552, so one made inside the bound below is owed once the bound passes). The
+ *  state returned owes a rotation for the word `retired-presented`, or null when nothing is owed: neither a new nor an
+ *  unanswered presentation; a rotation
  *  already owed, staged, handed out or promoting; or one already owed for this word within `HOLD_REPROBE_MS`. "Or
  *  running" needs no input of its own: the driver asks only between ticks, and ticks are single-flight, so a send or
  *  a promotion that runs has already left its mark in `pending` or `promoting` (review 352, F9). The server cannot tell
  *  the fleet from the holder of the leaked value, so this bound is the protection: the gate, the one-rotation-at-a-time rule and the backoff then apply as to every rotation. */
 export function oweForRetiredPresentation(i: { state: BoxTokenState; fresh: number; lastOwedAt: number | null; now: number }): BoxTokenState | null {
   const s = i.state;
-  if (i.fresh <= 0 || s.rotationOwed || s.pending.length > 0 || s.promoting !== null) return null;
+  if ((i.fresh <= 0 && !retiredUnanswered(s)) || s.rotationOwed || s.pending.length > 0 || s.promoting !== null) return null;
   if (i.lastOwedAt !== null && i.now - i.lastOwedAt < HOLD_REPROBE_MS) return null;
   return owe(s, 'retired-presented');
 }
@@ -289,13 +316,15 @@ export type SyncResult =
   | { kind: 'synced'; generation: string; transport: TokenTransport | 'unmeasured' }
   | { kind: 'refused'; word: TokenSyncOpError; detail: string | null }
   | { kind: 'predates-op' } | { kind: 'unsent' } | { kind: 'lost'; why: 'timeout' | 'disconnected' | 'aborted' };
+/** Why a rotation is staged: an owed word, or one of the two derived triggers that owe nothing (a press, the schedule). */
+export type StageWhy = OwedReason | 'rotate-now' | 'scheduled';
 /** `why` on `stage` is an addition to the contract's shape: the driver records it as `owedWhy`, and it must not
  *  derive it itself. */
 export type DriverAction =
   | { kind: 'none' }
   | { kind: 'hold'; hold: TokenHold; node: string | null }
   | { kind: 'retry-mint' }
-  | { kind: 'stage'; why: OwedReason | 'rotate-now' }
+  | { kind: 'stage'; why: StageWhy }
   | { kind: 'send'; generation: string; nodeId: string }
   | { kind: 'promote'; generation: string; via: 'op-result' | 'generation-read' | 'own-write' }
   | { kind: 'retire'; why: 'grace' | 'hard-bound' }
@@ -321,6 +350,22 @@ export function backoffMs(failures: number): number {
   return Math.min(BACKOFF_MIN_MS * 2 ** Math.min(failures - 1, 30), BACKOFF_MAX_MS);
 }
 
+// ── the weekly schedule (spec §5.1 "Schedule (wave 2)"; 4556) ────────────────
+/** What the schedule counts from: the last confirmed promotion, else when the current value was minted or adopted
+ *  (a both box that never promoted would otherwise never rotate). */
+export function scheduleAnchor(s: BoxTokenState): number { return s.lastRotationAt ?? s.current.since; }
+/** Due a full interval after the anchor. An anchor AHEAD of the clock waits (bounded by the skew, so 4552's clamp rows
+ *  hold), unless it is more than one interval ahead: no clock step explains that, and waiting it out would hold the
+ *  schedule past two intervals. Derived on every call, never persisted (R4). */
+export function scheduleDue(s: BoxTokenState, now: number): boolean {
+  const a = scheduleAnchor(s);
+  return now - a >= TOKEN_ROTATION_INTERVAL_MS || a - now > TOKEN_ROTATION_INTERVAL_MS;
+}
+/** When the schedule is next due: `now` when it is due already, else the anchor plus the interval. */
+export function nextScheduledAt(s: BoxTokenState, now: number): number {
+  return scheduleDue(s, now) ? now : scheduleAnchor(s) + TOKEN_ROTATION_INTERVAL_MS;
+}
+
 /** `state` may be null: a boot whose mint failed with no history has none (an addition to the contract's
  *  non-null parameter). */
 export function nextAction(i: { state: BoxTokenState | null; gate: GateVerdict; generation: GenerationObservation | null;
@@ -330,7 +375,10 @@ export function nextAction(i: { state: BoxTokenState | null; gate: GateVerdict; 
    *  NOT unblock the promote path: a generation read that confirms a pending generation still selects `promote`, ahead of
    *  every arm below it, and `promote` returns held while the file will not read. The ticks loop there until the file
    *  reads, with no forward rotation started and nothing dropped. */
-  retireHeld?: boolean }): DriverAction {
+  retireHeld?: boolean;
+  /** 4558: the weekly schedule's own backoff, after a scheduled attempt that did not complete. Read for the
+   *  `scheduled` why ONLY: an owed rotation and a press keep spec §5.1's rule. Absent or null: none stands. */
+  scheduleBackoffUntil?: number | null }): DriverAction {
   const { state, gate, now } = i;
   if (state === null || (!gate.open && gate.hold === 'mint-failed')) return { kind: 'retry-mint' };
   if (state.promoting !== null) return { kind: 'promote', generation: state.promoting.id, via: 'op-result' };
@@ -366,13 +414,14 @@ export function nextAction(i: { state: BoxTokenState | null; gate: GateVerdict; 
   const behind = i.generation !== null && state.current.id !== null && state.pending.length === 0
     && (state.lastRotationAt === null || i.generation.measuredAt > state.lastRotationAt)
     && (i.generation.read.kind === 'absent' || (i.generation.read.kind === 'id' && i.generation.read.id !== state.current.id));
-  const why: OwedReason | 'rotate-now' | null = state.rotationOwed ? (state.owedWhy ?? 'adopted')
-    : overdue ? 'confirm-deadline' : behind ? 'fleet-behind' : i.rotateRequested ? 'rotate-now' : null;
+  const why: StageWhy | null = state.rotationOwed ? (state.owedWhy ?? 'adopted')
+    : overdue ? 'confirm-deadline' : behind ? 'fleet-behind' : i.rotateRequested ? 'rotate-now' : scheduleDue(state, now) ? 'scheduled' : null;
   if (why === null) return { kind: 'none' };
   if (!gate.open) return { kind: 'hold', hold: gate.hold, node: gate.node };
   // D-4413: never a fourth pending value, whatever the gate said (the gate counts handed-out values, this counts all).
   if (state.pending.length >= PENDING_HARD_CAP) return { kind: 'hold', hold: 'pending-cap', node: null };
   if (i.backoffUntil !== null && now < i.backoffUntil && !i.rotateRequested) return { kind: 'backoff', until: i.backoffUntil };
+  if (why === 'scheduled' && i.scheduleBackoffUntil != null && now < i.scheduleBackoffUntil) return { kind: 'backoff', until: i.scheduleBackoffUntil };
   return { kind: 'stage', why };
 }
 

@@ -274,15 +274,29 @@ const CONTROLS: Record<string, string> = {
     + 'its base, which this census checks rather than trusts. An anchor, not a '
     + 'button, because it navigates to GitHub; the styling is the button\'s.',
   'session/MessageBubble.tsx <a> (none)':
-    'INLINE. Links inside a sentence — react-markdown\'s `a` mapping and the '
-    + 'bare-URL splitter. WCAG 2.2 SC 2.5.8 exempts a target that is "in a '
-    + 'sentence or block of text", and it has to: giving a link in prose a '
-    + '44px box would reflow the prose around every link.',
+    'INLINE. Links inside a sentence — the bare-URL splitter in a user turn. '
+    + 'WCAG 2.2 SC 2.5.8 exempts a target that is "in a sentence or block of '
+    + 'text", and it has to: giving a link in prose a 44px box would reflow '
+    + 'the prose around every link.',
+  'lib/markdown.tsx <a> (none)':
+    'INLINE. The same exemption for react-markdown\'s `a` mapping, which moved '
+    + 'here with the rest of chat\'s component map (native Docs reader W4), and '
+    + 'for the plain link a refused image source renders as instead.',
   'session/MessageBubble.tsx <a> msg-img-link':
     'INLINE, with a different reason: the anchor wraps an IMAGE and '
     + '`.msg-img-link` is `height: auto`, so the target is whatever the image '
     + 'measures. An attachment thumbnail is already far above the floor; a '
     + 'min-height here would letterbox a wide one.',
+  'lib/markdown.tsx <a> msg-img-link':
+    'INLINE, the same reason: the image a Markdown link or image draws, in '
+    + 'chat\'s component map since W4. The target is the image.',
+  'session/MessageBubble.tsx <a> msg-attach-doc':
+    'UNDER, 34.5px in its one-line state: `--sp-2` (8px) above and below '
+    + '`--fs-2xs` (11px) at `--lh-normal`, plus its 1px border. A sent '
+    + 'DOCUMENT\'s name chip (#152), drawn in the shape of `.msg-attach-gone` '
+    + 'beside it on purpose. Above SC 2.5.8\'s 24 and as wide as its grid '
+    + 'column, so it is short only vertically; growing it is a visual change '
+    + 'to a shape main shipped, and that is a ruling, not a reconcile.',
   'session/PrSheet.tsx <textarea> pr-body-preview':
     'UNDER, 40px in its one-line state: `--sp-2` (8px) around '
     + '`--fs-input` at `--lh-normal`. It is a BODY PREVIEW — `max-height: '
@@ -327,7 +341,7 @@ const CONTROLS: Record<string, string> = {
     'SELECTOR .pending-actions button. The same rule, and chat.css says so in '
     + 'its own words: it inherits min-height from `.pending-actions button`, so '
     + 'the tap target is the shared token.',
-  'session/MessageBubble.tsx <button> code-block-copy':
+  'lib/markdown.tsx <button> code-block-copy':
     'UNDER `--tap-min` and ABOVE the WCAG floor: 32px by `--sp-8`, declared '
     + 'in `ui/src/components/prose.css`, against SC 2.5.8\'s 24. A deliberate '
     + 'token rather than an oversight. Left as it is this wave for the reason '
@@ -461,11 +475,13 @@ describe('hand-drawn controls', () => {
     // direction is a design change". The two that remain are the ones whose
     // argument is not about safety: `.code-block-copy` at 32px, because a 44px
     // bar is a different code block, and `.dlg-later` at 40px in its one-line
-    // state.
+    // state. THREE since main's #152 arrived in the reconcile: the sent
+    // document's name chip, `.msg-attach-doc`, at 34.5px — recorded with its
+    // number and left for a ruling rather than grown in a merge.
     expect(
       Object.values(CONTROLS).filter((v) => v.startsWith('UNDER')).length,
       'the UNDER arm still records every control below the floor',
-    ).toBe(2);
+    ).toBe(3);
   });
 
 

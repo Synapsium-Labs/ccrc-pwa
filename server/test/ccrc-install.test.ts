@@ -76,7 +76,7 @@ import {
 } from 'node:fs';
 import path, { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { createHash } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { mkTmp } from './tmpHelpers.js';
 import { DEFAULT_TEST_ROSTER } from './helpers.js';
 import { renderCcdEntry } from './ccdWsHelpers.js';
@@ -86,6 +86,8 @@ import { describeLinux, describeDarwin, itLinux, itDarwin, python3ProgramArm, IS
 import { PKG_DESCRIPTION, skillMd } from './graphifySkillFixture.js';
 import { TREE_STUBS, installFixtureTree, installVersionedTree, keepDigest, rsyncRecorder } from './installTreeFixture.js';
 import { verifyMarker } from '../../shared/mark.mjs';
+import { FLEET_TOKEN_FILE_COMMENT } from '../../shared/box-token.js';
+import { NODE_FILES } from '../../shared/agent-protocol.js';
 import {
   plantFakeRuntime, codexRoster, plantSystemd, killLaneProcesses, spawnListener, adoptPlantedSystemd,
   assertSpineFrontContained, spineSystemctlArms, spineSystemdRun, SPINE_CONTAINMENT_PROBE, managerCalls,
@@ -146,6 +148,20 @@ const RSYNC = realPath('rsync');
  *  pin spawns this directly, bypassing the fixture PATH, so its parent argv
  *  is genuinely `python3 <path>/ccrc update`, not the fixture's poison. */
 const PYTHON3 = realPath('python3');
+
+/** The box-token doctor check's two JSON readers (`_BT_PY_STATE`, `_BT_PY_FLEET` in `ccd/ccrc-doctor-checks`), read
+ *  from the shipped file so the stub's `python3 -I -c` arm is an EXACT-text allow-list: those two programs, and only
+ *  those, go to the real interpreter, because a refused `python3` makes them read `state-unreadable` and
+ *  `sync-unreadable` (a FAIL once the arms are on). A third program, or an edited one, still reaches the refusal. */
+const BT_PY_ARM = ((): string => {
+  const src = readFileSync(join(REPO, 'ccd', 'ccrc-doctor-checks'), 'utf8');
+  const progs = ['_BT_PY_STATE', '_BT_PY_FLEET'].map((n) => {
+    const m = new RegExp(`^${n}='([^']*)'$`, 'm').exec(src);
+    if (!m) throw new Error(`ccd/ccrc-doctor-checks no longer holds ${n}='…' in the shape this stub reads`);
+    return `'${m[1]}'`;
+  });
+  return `if [ "$1" = "-I" ] && [ "$2" = "-c" ]; then case "$3" in ${progs.join('|')}) exec '${PYTHON3}' "$@" ;; esac; fi`;
+})();
 
 /** `<home>/checkout` — the shipped tree this box installs FROM. */
 const treeRoot = (home: string): string => join(home, 'checkout');
@@ -685,10 +701,15 @@ function ccrcEnv(home: string, omit: string[] = []): NodeJS.ProcessEnv {
   // matched, m-runtime-probe HR11) gets either the TEMPLATE a test planted
   // (`fixture-runtime-template` names its directory — copied whole, minus
   // any stamp or pip report, so the builder writes its own) or the VACUOUS
-  // python above. Nothing else changes: graphify's venv takes the arm below.
+  // python above. Either way the venv has a `lib/python3.12/site-packages`, as
+  // a real one does, so the builder's `patch` stage (spec §22.2, D-4859) passes
+  // and the probe is what answers. Nothing else changes: graphify's venv takes
+  // the arm below.
   writeFileSync(join(home, 'fixture-vacuous-python'), VACUOUS_RUNTIME_PYTHON, { mode: 0o755 });
   plant('python3', [
     '#!/bin/sh',
+    // The box-token doctor readers, ahead of the argv log (their program text is not an argv a case asserts on).
+    BT_PY_ARM,
     'printf \'%s\\n\' "$*" >> "$HOME/python3-argv"',
     'if [ "$1" = "-m" ] && [ "$2" = "venv" ] && [ -n "$3" ]; then',
     '  case "$3" in',
@@ -700,7 +721,7 @@ function ccrcEnv(home: string, omit: string[] = []): NodeJS.ProcessEnv {
     '        cp -R "$tpl/." "$3/" || exit 1',
     '        rm -f "$3/.ccrc-runtime.json" "$3/.ccrc-pip-report.json"',
     '      else',
-    '        mkdir -p "$3/bin" && cp "$HOME/fixture-vacuous-python" "$3/bin/python" && chmod 755 "$3/bin/python" || exit 1',
+    '        mkdir -p "$3/bin" "$3/lib/python3.12/site-packages" && cp "$HOME/fixture-vacuous-python" "$3/bin/python" && chmod 755 "$3/bin/python" || exit 1',
     '      fi',
     '      exit 0 ;;',
     '  esac',
@@ -5329,7 +5350,7 @@ describe('ccrc install: the landing block, and doctor as the last word', () => {
     expect(r.stdout).toMatch(/^PASS tmux_skew: client 9\.9, running server 9\.9 — versions agree$/m);
   });
 
-  it('ends with doctor, and a box that passes every check exits 0', () => {
+  it('ends with doctor, and a fresh box ends green: 0 warned (D-139), 0 failed, exit 0', () => {
     const home = freshBox('ccrc-install-doctor-ok-');
     const r = runInstall(home);
     expect(r.code, r.stderr).toBe(0);
@@ -5351,9 +5372,17 @@ describe('ccrc install: the landing block, and doctor as the last word', () => {
     // this verb could have avoided: `linger` has no counterpart on a platform
     // where a LaunchAgent lives and dies with the login session. `0 failed` is
     // the part that means "this install worked", and it holds on both.
+    // The box-token arming (row 2a, 4553) keeps that: a fresh BOTH-role install has neither the server's token and state
+    // files nor a fleet token file, and `box-token` reads PASS with its sentence (operator, D-139 over Decision 2 (a),
+    // 2026-10-12): no value has been minted here yet and the server mints one at boot, or its log says why that mint
+    // failed (a failed first mint leaves the same disk as a fresh box, so the sentence names it, review 391 F3). Only a
+    // box that once held a value and lost it is a FAIL. So the count is `0 warned` again (the one `linger` warn on macOS), and `0 failed`.
     const warned = process.platform === 'darwin' ? 1 : 0;
     expect(r.stdout).toMatch(new RegExp(
       `^summary: \\d+ checks \\(\\d+ skipped\\), \\d+ verdicts — \\d+ passed, ${warned} warned, 0 failed$`, 'm'));
+    expect(r.stdout, 'box-token reads PASS on a fresh box, naming the fact').toMatch(
+      /^PASS box-token: server: token-absent — .* no value has been minted here yet, and the server mints one at boot, or its log says why that mint failed; fleet: fleet-token-absent — .* no value has been handed to this box yet, and the server's next rotation hands one$/m);
+    expect(r.stdout.split('\n').filter((l) => /^WARN /.test(l)).filter((l) => !l.startsWith('WARN linger: '))).toEqual([]);
     // …and the gate check really RAN and really found the box uncredentialed:
     // `0 warned` must not be reachable by the check having vanished.
     expect(r.stdout).toMatch(/^PASS auth: no passphrase file at .*nothing is gated/m);
@@ -6996,6 +7025,9 @@ function plantRuntimeTemplate(home: string, opts: { verdict: 'pass' | `fail:${st
   const f = join(home, 'fixture-runtime');
   const tpl = join(f, 'gen-template');
   mkdirSync(join(tpl, 'bin'), { recursive: true });
+  // A real venv's site-packages: the builder's `patch` stage writes ccrc's
+  // LiteLLM patch there before the probe (spec §22.2, D-4859).
+  mkdirSync(join(tpl, 'lib', 'python3.12', 'site-packages'), { recursive: true });
   writeFileSync(join(tpl, 'bin', 'python'), runtimeTemplatePython(f, realPy()), { mode: 0o755 });
   // Task 5's stand-in LiteLLM (ruling R29), never a second fake. Its knobs and
   // its `litellm-<port>.json` evidence live in `<home>/fake-procs`, the one
@@ -7954,12 +7986,17 @@ describe('ccrc install: the codex runtime step on a real spine (Plan 2b-2 Task 1
     const builder = read(join(home, '.local', 'bin', 'ccgpt-runtime'));
     const requirement = /^LITELLM_REQUIREMENT='([^']+)'/m.exec(builder)?.[1];
     expect(requirement, 'ccgpt-runtime declares no LITELLM_REQUIREMENT').toBeDefined();
-    const probe = spawnSync(join(home, '.local', 'bin', 'ccgpt-runtime'), ['probe-source'],
-      { env: { ...process.env, HOME: home } });
+    // One env for both spawns: ccrc-containment's census allows this suite exactly
+    // three bare parent envs, each a ccgpt-runtime spawn.
+    const rtEnv = { ...process.env, HOME: home };
+    const probe = spawnSync(join(home, '.local', 'bin', 'ccgpt-runtime'), ['probe-source'], { env: rtEnv });
     expect(probe.status).toBe(0);
+    const patch = spawnSync(join(home, '.local', 'bin', 'ccgpt-runtime'), ['patch-source'], { env: rtEnv });
+    expect(patch.status).toBe(0);
     const stamp = JSON.parse(read(join(gen, '.ccrc-runtime.json'))) as Record<string, unknown>;
     expect(stamp['requirement']).toBe(requirement);
-    expect(stamp['probeSha256']).toBe(createHash('sha256').update(probe.stdout).digest('hex'));
+    // The probe's bytes, then the LiteLLM patch's (spec §22.2, D-4859).
+    expect(stamp['probeSha256']).toBe(createHash('sha256').update(probe.stdout).update(patch.stdout).digest('hex'));
     expect(stamp['litellm']).toBe('1.101.0');
     // Ruling R33 against the REAL builder: the building line names the
     // requirement the placed builder declares (the step reads that same line),
@@ -8287,6 +8324,29 @@ describeLinux('ccrc install: a timer systemd refuses is a COUNTED degraded step 
  *  three maps each gained `"box-token": "SKIP"` (wave 1 reports a box with no token
  *  subject, and every state that will be a FAIL or WARN once armed, as SKIP; the live
  *  shape's own word was not read off the case) and nothing else moved.
+ *  RE-MEASURED once more when doctor's `box-token` arms went on (row 2a), by Step 3's
+ *  case on a disposable copy of the tip (the copy's own `liveBox`, which now holds the
+ *  fleet side part B leaves on every live fleet box: the fleet token file, the
+ *  generation file and the proved sync report, plus the upstream account's setup-token
+ *  file once `~/.cc-secrets` exists): the three maps each moved `"box-token"` from `SKIP`
+ *  to `PASS` and `"credentials"` from `SKIP` to `PASS` (the second only because that
+ *  directory now exists, which ends `credentials`' fresh-box SKIP), nothing else; both
+ *  refreshes, all three codes and every other class are equal. A box without the fleet
+ *  files is a fresh box, `box-token` PASS with its sentence (D-139, below), and its own case
+ *  below keeps that measured. RE-MEASURED once more in fix round 1, after the operator's D-139
+ *  ruling moved the never-handed state from WARN to PASS: on a disposable copy of the tip
+ *  outside any git repo, by a MEASURE-only case that builds `liveBox()` itself, with the old
+ *  literal re-serialised byte-identical first, and nothing moved (the live shape holds the
+ *  fleet files, so it never was a never-handed box): zero differing lines.
+ *  RE-MEASURED again when doctor gained its `docs-sw` check (native Docs reader
+ *  W4, spec 2026-10-01 §7.2), by the live-shape case on the W4 tree: the three
+ *  maps each gained `"docs-sw": "SKIP"` (the `--role fleet` box records
+ *  `CCRC_ROLE=fleet` and serves no PWA bundle) and nothing else moved.
+ *  RE-MEASURED again when doctor gained its `transcripts` check (#189, the
+ *  forked-session continued-in chain), by the live-shape case on Linux CI on
+ *  that PR's merged tree: the three maps each gained `"transcripts": "PASS"`
+ *  (the fresh fleet box's registry holds no row reading a superseded
+ *  transcript) and nothing else moved.
  *  It is a golden: nothing re-measures
  *  it, so a merge-up that moves a doctor check's class on the live shape reds
  *  the live-shape case until Step 3 is re-run on a disposable copy of the new
@@ -8306,15 +8366,16 @@ const BASE_LIVE_SHAPE: LiveShapeMeasure = {
       "classes": {
         "accounts": "PASS",
         "auth": "SKIP",
-        "box-token": "SKIP",
+        "box-token": "PASS",
         "build": "PASS",
         "caddy": "SKIP",
         "caddyfile": "SKIP",
         "cert": "SKIP",
         "config": "PASS",
-        "credentials": "SKIP",
+        "credentials": "PASS",
         "disk": "PASS",
         "docs": "PASS",
+        "docs-sw": "SKIP",
         "exposure": "SKIP",
         "fleet": "SKIP",
         "flock": "PASS",
@@ -8347,6 +8408,7 @@ const BASE_LIVE_SHAPE: LiveShapeMeasure = {
         "timeout": "PASS",
         "tmux": "PASS",
         "tmux_skew": "PASS",
+        "transcripts": "PASS",
         "update-exposure": "SKIP",
         "update-sync": "WARN",
         "wrappers": "PASS"
@@ -8357,15 +8419,16 @@ const BASE_LIVE_SHAPE: LiveShapeMeasure = {
       "classes": {
         "accounts": "PASS",
         "auth": "SKIP",
-        "box-token": "SKIP",
+        "box-token": "PASS",
         "build": "PASS",
         "caddy": "SKIP",
         "caddyfile": "SKIP",
         "cert": "SKIP",
         "config": "PASS",
-        "credentials": "SKIP",
+        "credentials": "PASS",
         "disk": "PASS",
         "docs": "PASS",
+        "docs-sw": "SKIP",
         "exposure": "SKIP",
         "fleet": "SKIP",
         "flock": "PASS",
@@ -8398,6 +8461,7 @@ const BASE_LIVE_SHAPE: LiveShapeMeasure = {
         "timeout": "PASS",
         "tmux": "PASS",
         "tmux_skew": "PASS",
+        "transcripts": "PASS",
         "update-exposure": "SKIP",
         "update-sync": "WARN",
         "wrappers": "PASS"
@@ -8478,15 +8542,16 @@ const BASE_LIVE_SHAPE: LiveShapeMeasure = {
     "classes": {
       "accounts": "PASS",
       "auth": "SKIP",
-      "box-token": "SKIP",
+      "box-token": "PASS",
       "build": "PASS",
       "caddy": "SKIP",
       "caddyfile": "SKIP",
       "cert": "SKIP",
       "config": "PASS",
-      "credentials": "SKIP",
+      "credentials": "PASS",
       "disk": "PASS",
       "docs": "PASS",
+      "docs-sw": "SKIP",
       "exposure": "SKIP",
       "fleet": "SKIP",
       "flock": "PASS",
@@ -8519,6 +8584,7 @@ const BASE_LIVE_SHAPE: LiveShapeMeasure = {
       "timeout": "PASS",
       "tmux": "PASS",
       "tmux_skew": "PASS",
+        "transcripts": "PASS",
       "update-exposure": "SKIP",
       "update-sync": "WARN",
       "wrappers": "PASS"
@@ -8564,13 +8630,35 @@ const usageRow = (): string =>
  *  reason: with no stamp `_inst_installed` writes no record), and its agent env
  *  is present so `--role fleet` never prompts. The runtime template is planted
  *  so that a later flip can build; with no codex lane it is never used. Step 3's
- *  MEASURE case builds its box with exactly these calls. */
-function liveBox(prefix: string, opts: { systemd?: boolean } = {}): string {
+ *  MEASURE case builds its box with exactly these calls.
+ *
+ *  Since the box-token arming (row 2a) the box also holds what part B leaves on
+ *  every live fleet box (a live box is not a fresh one, and a fleet box that once
+ *  held a value and lost it would FAIL): the fleet token file (0600: the comment
+ *  line, then a runtime-random 64-hex value, so no fixture value is a literal here),
+ *  the generation file (16 hex) and the proved sync report. `{ fleetFiles: false }`
+ *  is the fresh box, which reads PASS with its sentence (a box never handed a value,
+ *  D-139), and the fresh-fleet case below keeps that class measured. */
+function liveBox(prefix: string, opts: { systemd?: boolean; fleetFiles?: boolean } = {}): string {
   const home = freshBox(prefix);
   gitInit(treeRoot(home));
   mkdirSync(join(home, '.ccrc'), { recursive: true });
   writeFileSync(join(home, '.ccrc', 'agent.env'),
     'CCRC_SERVER_URL=http://127.0.0.1:7788\nCCRC_AGENT_TOKEN=fixture-not-a-real-token\n');
+  if (opts.fleetFiles !== false) {
+    mkdirSync(join(home, '.cc-secrets'), { recursive: true, mode: 0o700 });
+    // The directory's existence is what ends `credentials`' fresh-box SKIP ("no $HOME/.cc-secrets directory"): a box that
+    // holds the fleet token file is provisioned, and the roster's one upstream account then owes its own setup-token file
+    // (a runtime-random value, never a literal), exactly as a live fleet box holds it.
+    writeFileSync(join(home, '.cc-secrets', 'claude-oauth.env'),
+      `CLAUDE_CODE_OAUTH_TOKEN=${randomBytes(32).toString('hex')}\n`, { mode: 0o600 });
+    writeFileSync(join(home, '.cc-secrets', 'ccrc-mail.token'),
+      `${FLEET_TOKEN_FILE_COMMENT}\n${randomBytes(32).toString('hex')}\n`, { mode: 0o600 });
+    const generation = randomBytes(8).toString('hex');
+    writeFileSync(join(home, '.ccrc', NODE_FILES.tokenGeneration), `${generation}\n`, { mode: 0o600 });
+    writeFileSync(join(home, '.ccrc', 'token-sync.json'),
+      JSON.stringify({ v: 1, at: epochS() - 3600, result: 'synced', generation, transport: 'https', proof: 'proved' }), { mode: 0o600 });
+  }
   plantLiveShape(home, (argv) => runInstall(home, argv, REHEARSAL_ENV, { from: REPO_CCRC }));
   plantRuntimeTemplate(home, { verdict: 'pass', version: '1.101.0' });
   if (opts.systemd === true) plantSystemd(home, { userManager: true });
@@ -8647,6 +8735,24 @@ describeLinux('Plan 3a Task 10 — the cutover rehearsal', () => {
       expect(o.probeCalls.map((c) => c.env['CHATGPT_TOKEN_DIR']),
         'the base did not probe the external lane through its default token directory').toEqual(['~/.handoff/chatgpt-auth']);
     }
+  });
+
+  it('a fresh fleet box (the live shape without the fleet token file, generation file and sync report) keeps box-token measured: PASS with its sentence and no remedy (D-139), and the install exits 0 (4553)', () => {
+    const home = liveBox('ccrc-rehearsal-fresh-', { fleetFiles: false });
+    homes.push(home);
+    const r = runInstall(home, ['install', '--role', 'fleet'], REHEARSAL_ENV);
+    expect(r.code, `a fresh box's install:\n${r.stdout}\n${r.stderr}`).toBe(0);
+    expect(r.stdout).toMatch(/^PASS box-token: fleet: fleet-token-absent — .* no value has been handed to this box yet, and the server's next rotation hands one$/m);
+    expect(r.stdout).not.toMatch(/box-token: .*(no-generation|never-synced)/);
+    // The fleet-token-absent FAIL's remedy is the one line that must not appear. Doctor prints `  remedy: …` (`_dr_fail`), so
+    // the live half of the pattern is the second one; the CONTROL line shows it matches that remedy's text.
+    const CARD_REMEDY = /remedy:[^\n]*Box token card/;
+    expect("  remedy: the server writes it at its next rotation (Rotate now on the console's Box token card)").toMatch(CARD_REMEDY);
+    expect(r.stdout).not.toMatch(CARD_REMEDY);
+    expect(r.stdout).not.toMatch(/^FAIL /m);
+    expect(doctorClasses(r.stdout), 'only credentials differs from the live shape').toEqual({
+      ...BASE_LIVE_SHAPE.install[0]!.classes, credentials: 'SKIP', codex: 'SKIP',
+    });
   });
 
   it('live shape: two installs, both hourly refreshes, doctor and uninstall do exactly what the base did, and init codex on an external lane refuses (rulings Z1, Z3, Z7)', async () => {

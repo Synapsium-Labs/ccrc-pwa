@@ -27,6 +27,9 @@ umask 077
 #   - 2 a usage error; 1 an environment this verb cannot run in (no curl, no
 #     python3, no agent.env, no CCRC_SERVER_URL, no node id). Neither writes
 #     the report: neither has a word.
+# The report (~/.ccrc/token-sync.json) is doctor's alone: the agent never reads
+# it. Its optional `held` key (4555) changes no exit code, stdout line or
+# stderr line.
 # No sentence carries a value, a code, a hash of either, a URL or an absolute
 # home path: the agent relays the first stderr line to the server (at most 200
 # characters). The server reads that `detail` only to detect `verb-missing`
@@ -116,6 +119,7 @@ CALL_MAX_TIME=15
 R_GEN=''        # the generation id the claim answered
 R_TRANSPORT=''  # http | https
 R_PROOF=''      # proved | proof-failed | proof-unmeasured
+# `held` (4555) is not here: `_ts_report` writes it, never a caller, and only when R_GEN is empty.
 
 # This run's temps, removed on every exit.
 T_RESP='' T_TOKEN='' T_GEN='' T_REPORT=''
@@ -151,19 +155,48 @@ _ts_rename() {
   python3 -I -c 'import os, sys; os.rename(sys.argv[1], sys.argv[2])' "$1" "$2" 2>/dev/null
 }
 
+# `_ts_held` — 4555: the generation this box holds while a run that wrote nothing refuses; sets the caller's `held`
+# (empty when none): the generation file's first line, else the previous report's `generation`, else its `held`.
+# Bash only (the two bad-code refusals run before the python3 check); bounded reads of regular files only (a link
+# or a FIFO is skipped, never opened); stderr silenced before each open; nothing printed, so a refusal's exit code,
+# first stderr line and empty stdout stay what they were. The shape is GEN_RE's, unanchored.
+_ts_held() {
+  local line='' hex="${GEN_RE#^}" re=''
+  hex="${hex%\$}"
+  held=''
+  if [ -f "$GEN_FILE" ] && [ ! -L "$GEN_FILE" ] && [ -r "$GEN_FILE" ]; then
+    IFS= read -r -n 64 line 2>/dev/null < "$GEN_FILE" || :
+    if [[ "$line" =~ $GEN_RE ]]; then held="$line"; return 0; fi
+  fi
+  line=''
+  if [ -f "$REPORT" ] && [ ! -L "$REPORT" ] && [ -r "$REPORT" ]; then
+    IFS= read -r -n 1024 line 2>/dev/null < "$REPORT" || :
+    re="\"generation\":\"(${hex})\""
+    if [[ "$line" =~ $re ]]; then held="${BASH_REMATCH[1]}"; return 0; fi
+    re="\"held\":\"(${hex})\""
+    if [[ "$line" =~ $re ]]; then held="${BASH_REMATCH[1]}"; return 0; fi
+  fi
+  return 0
+}
+
 # `_ts_report <result>` — ~/.ccrc/token-sync.json, by temp and rename. Every
 # field is a word, an id or a number this file validated, so printf is exact.
+# The keys: v, at, result, generation, transport, proof, and an OPTIONAL `held`
+# (4555): written only by a run whose R_GEN is empty, only when `_ts_held` finds
+# a generation this box holds, and never as null.
 # A report that cannot be written is said on stderr AFTER the verb's own line
 # and never changes the exit code.
 _ts_report() {
-  local result="$1" at gen='null' transport='null' proof='null'
+  local result="$1" at gen='null' transport='null' proof='null' held='' carry=''
   at="$(date +%s)"
   [ -n "$R_GEN" ] && gen="\"$R_GEN\""
   [ -n "$R_TRANSPORT" ] && transport="\"$R_TRANSPORT\""
   [ -n "$R_PROOF" ] && proof="\"$R_PROOF\""
+  [ -n "$R_GEN" ] || _ts_held
+  [ -n "$held" ] && carry=",\"held\":\"$held\""
   if [ -d "$CCRC_DIR" ] && T_REPORT="$(mktemp "$CCRC_DIR/${TMP_PREFIX}XXXXXX" 2>/dev/null)" \
-    && printf '{"v":1,"at":%s,"result":"%s","generation":%s,"transport":%s,"proof":%s}\n' \
-      "$at" "$result" "$gen" "$transport" "$proof" > "$T_REPORT" \
+    && printf '{"v":1,"at":%s,"result":"%s","generation":%s,"transport":%s,"proof":%s%s}\n' \
+      "$at" "$result" "$gen" "$transport" "$proof" "$carry" > "$T_REPORT" \
     && _ts_rename "$T_REPORT" "$REPORT"; then
     T_REPORT=''
     return 0
@@ -278,6 +311,13 @@ if not isinstance(value, str) or re.fullmatch(value_re, value) is None:
     out("bad", "the value is not 64 lowercase hex")
 if not isinstance(gen, str) or re.fullmatch(gen_re, gen) is None:
     out("bad", "the generation is not 16 lowercase hex")
+# This guard is lexical: abspath normalises the two strings and resolves no link, so it compares where the paths
+# are WRITTEN, not where they land. That suffices because the caller builds both from ONE literal $SECRETS prefix
+# (the temp file by mktemp under $SECRETS, the destination as $SECRETS/ccrc-mail.token), so they share a directory
+# by construction, link or no link. The guard exists to refuse a caller that ever stops doing that: a temp file in
+# another directory may sit on another filesystem, where rename is not atomic (it fails with EXDEV). A link at the destination itself is refused just below, by lexists and islink.
+if os.path.dirname(os.path.abspath(tmp)) != os.path.dirname(os.path.abspath(dest)):
+    out("fail", "the temp file is not beside the token file")
 preamble = comment + "\n"
 try:
     if os.path.lexists(dest):

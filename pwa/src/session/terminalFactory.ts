@@ -15,6 +15,7 @@
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import '@xterm/xterm/css/xterm.css';
+import { BASE_CONSOLE_FONT_PX } from './consoleFit';
 
 /** The slice of xterm the drawer drives — injectable so tests can script it. */
 export interface DrawerTerm {
@@ -25,6 +26,22 @@ export interface DrawerTerm {
   onWheel(cb: (ev: WheelEvent) => boolean): void;
   /** Fit the grid to the host element; returns the measured cols/rows. */
   fit(): { cols: number; rows: number };
+  /**
+   * The grid the host WOULD show at this type size (CSS px), measured by the
+   * terminal itself, or null when the host cannot be measured.
+   *
+   * IT DOES NOT RESIZE THE LIVE GRID, and that is its whole contract. tmux
+   * attaches this client on the alternate screen, where shrinking the grid
+   * drops rows and clamps the cursor and growing it back restores neither, so
+   * a measurement taken by resizing damages the screen it measures. The
+   * terminal's own type size is put back before it returns.
+   */
+  propose(px: number): { cols: number; rows: number } | null;
+  /** Render at this type size (CSS px) and fit, once; returns the grid. A fit
+   *  that lands on the grid the terminal already has leaves the buffer alone.
+   *  The drawer shrinks the type so the whole pinned tmux window lands on the
+   *  glass; see `consoleFit`. */
+  setFontSize(px: number): { cols: number; rows: number };
   focus(): void;
   dispose(): void;
 }
@@ -41,6 +58,10 @@ export interface HistoryTerm {
    *  the reader is then sitting at the bottom with the bottom latch unarmed. */
   write(data: string, done?: () => void): void;
   fit(): { cols: number; rows: number };
+  /** Render at this type size and refit: the live pane's size changed while
+   *  the history was up, and the layer follows it. Optional, so a terminal
+   *  that cannot offer it keeps the size it was built at. */
+  setFontSize?(px: number): void;
   /** One row's height in CSS pixels, or 0 when it cannot be measured yet — the
    *  drag needs it to turn a finger's travel into lines, and 0 means "do not
    *  guess", not "zero". */
@@ -152,7 +173,13 @@ export function historyFailureSentence(error: string, detail?: string): string {
     : error;
 }
 
-export type MakeHistoryTerm = (host: HTMLElement, lines: number, pane?: HistoryPane) => HistoryTerm;
+/** `fontSize` is the size the LIVE pane settled on after its fit. The two
+ *  terminals sit one over the other and a reader moves between them with one
+ *  key, so a history rendered at a different size reads as the console having
+ *  changed rather than the layer having. Optional and last, so a test that
+ *  scripts this factory keeps working without knowing about it. */
+export type MakeHistoryTerm =
+  (host: HTMLElement, lines: number, pane?: HistoryPane, fontSize?: number) => HistoryTerm;
 
 /** A token's resolved value at attach time — xterm paints to canvas and
  *  cannot read CSS custom properties itself. `undefined` (token missing)
@@ -164,8 +191,10 @@ const tokenValue = (name: string): string | undefined => {
 
 /** Voice and glass from the tokens: the mono face, well background, on-well
  *  ink, phosphor cursor. --bg-well stays dark under [data-theme='light'], so
- *  the terminal is dark regardless of theme. 14px is the plan-fixed terminal
- *  size (xterm takes a number). Spelled once, worn by both terminals — the
+ *  the terminal is dark regardless of theme. Both terminals start at the base
+ *  size (xterm takes a number); the drawer may then shrink the live one so the
+ *  whole tmux window fits, and the history one follows it (`consoleFit`).
+ *  Spelled once, worn by both terminals — the
  *  live one and the history one have to read as the same glass or scrolling
  *  back would look like leaving the session. */
 const glass = () => ({
@@ -177,7 +206,7 @@ const glass = () => ({
   // resolves to '', so the old name would silently fall through to the generic
   // `monospace` here and the terminal would quietly lose its token stack.
   fontFamily: tokenValue('--family-mono') ?? 'monospace',
-  fontSize: 14,
+  fontSize: BASE_CONSOLE_FONT_PX,
   theme: {
     background: tokenValue('--bg-well'),
     foreground: tokenValue('--ink-on-well'),
@@ -286,6 +315,31 @@ export const defaultMakeTerm: MakeTerm = (host) => {
     },
     onWheel: (cb) => term.attachCustomWheelEventHandler(cb),
     fit: fitter(term, fit),
+    // MEASURED, NOT RESIZED. xterm 6.0.0 re-measures its cell synchronously
+    // when the type size changes (CharSizeService measures on the option
+    // change and RenderService hands the new cell to the renderer in the same
+    // tick), so `proposeDimensions` reads the new size's grid at once, and it
+    // never touches the buffer. `fit()` would: it resizes whenever the grid
+    // differs. The size is put back before returning, which re-renders the
+    // rows but does not move them.
+    propose: (px) => {
+      const was = term.options.fontSize;
+      if (was !== px) term.options.fontSize = px;
+      try {
+        const dims = fit.proposeDimensions();
+        return dims !== undefined && Number.isFinite(dims.cols) && Number.isFinite(dims.rows)
+          ? { cols: dims.cols, rows: dims.rows }
+          : null;
+      } catch {
+        return null;   // host not measurable yet
+      } finally {
+        if (was !== px) term.options.fontSize = was;
+      }
+    },
+    setFontSize: (px) => {
+      if (term.options.fontSize !== px) term.options.fontSize = px;
+      return fitter(term, fit)();
+    },
     focus: () => term.focus(),
     dispose: () => term.dispose(),
   };
@@ -294,9 +348,10 @@ export const defaultMakeTerm: MakeTerm = (host) => {
 /** The history terminal: the same glass, no cursor, no keyboard, and a real
  *  scrollback — this one is in the NORMAL buffer, so the wheel scrolls it and a
  *  touch-drag scrolls it, exactly as a console does. */
-export const defaultMakeHistoryTerm: MakeHistoryTerm = (host, lines, pane) => {
+export const defaultMakeHistoryTerm: MakeHistoryTerm = (host, lines, pane, fontSize) => {
   const term = new Terminal({
     ...glass(),
+    ...(fontSize === undefined ? {} : { fontSize }),
     cursorBlink: false,
     disableStdin: true,
     // ZERO, EXPLICITLY, because a measurement leans on it: the call site below
@@ -346,6 +401,11 @@ export const defaultMakeHistoryTerm: MakeHistoryTerm = (host, lines, pane) => {
   return {
     write: (d, done) => term.write(d, done),
     fit: sized,
+    setFontSize: (px) => {
+      if (term.options.fontSize === px) return;
+      term.options.fontSize = px;
+      sized();
+    },
     // THE ROW HEIGHT, BY IDENTITY RATHER THAN BY ESTIMATE. The DOM renderer
     // sets `.xterm-screen`'s height to `css.cell.height * rows` exactly, so
     // dividing it back out IS xterm's own cell height — no private API, and no

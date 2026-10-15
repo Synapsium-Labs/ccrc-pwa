@@ -2,9 +2,14 @@
 
 Spec: `docs/superpowers/specs/2026-10-05-stall-watch-settings-design.md` (rev 3.2, approved 2026-10-05 17:46 UTC)
 Plans: `docs/superpowers/plans/2026-10-05-stall-watch-settings-w1-server.md` (wave 1),
-`docs/superpowers/plans/2026-10-05-stall-watch-settings-w2-pwa.md` (wave 2)
+`docs/superpowers/plans/2026-10-05-stall-watch-settings-w2-pwa.md` (wave 2),
+`docs/superpowers/plans/2026-10-12-stall-watch-settings-w3-hidden-ask.md` (wave 3; it landed with the wave's PR, R38),
+`docs/superpowers/plans/2026-10-14-stall-watch-settings-w4-residue.md` (wave 4; it lands with the wave's PR, R52)
 Home project: `ccrc-pwa`   Coordinator: `ccrc-pwa-calm-harbor`   Workspace: **a fresh child per wave**
 Predecessor: `stall-watch`, complete (its ledger's R38).
+**Status: complete** (R54, 2026-10-14). Wave 1 merged as `7f7bf4afc` (#320), wave 2 as `6e4524164` (#322), wave 3 as
+`f515cdfd4` (#362), the ledger to R51 as `ac60e373f` (#394), and wave 4, R51's follow-up list in one PR, as
+`b953aefa4` (#399).
 
 **What this program is.** The Settings page gains a **Stall watch** section with one arming ladder and one quiet
 time.
@@ -23,8 +28,10 @@ time.
 
 | # | scope | deploy class | PRs | state |
 |---|---|---|---|---|
-| 1 | server: L0 wire types and texts; L1 `stallsettings.ts` (ladder, resolver, write effect and key, counts, busy clock); `stall.ts` (quiet time, backoff ceiling, busy clock bound); the migration and store methods; both sweeps through one never-throwing resolution; `GET`/`POST /api/coord/stall-watch` and their censuses; README, `CLAUDE.md` and the parent spec | server | — | planned |
-| 2 | the Settings section: API client and hook; a multi-line `QuickConfirm`; `StallWatchSection`; the Notifications label rename; README | server (it serves the PWA) | — | planned; dispatched after wave 1 merges |
+| 1 | server: L0 wire types and texts; L1 `stallsettings.ts` (ladder, resolver, write effect and key, counts, busy clock); `stall.ts` (quiet time, backoff ceiling, busy clock bound); the migration and store methods; both sweeps through one never-throwing resolution; `GET`/`POST /api/coord/stall-watch` and their censuses; README, `CLAUDE.md` and the parent spec | server | #320 | merged `7f7bf4afc` 2026-10-07 (v0.0.119); run 295 closed `done` (R20) |
+| 2 | the Settings section: API client and hook; a multi-line `QuickConfirm`; `StallWatchSection`; the Notifications label rename; README; wave 1's review residue | server (it serves the PWA) | #322 | merged `6e4524164` 2026-10-12; run 322 closed `done`, `final:true` (R37) |
+| 3 | finding 4063's two fixes: a subagent's tool event keeps the main thread's `waiting` and its ask (`ccd/session-hook.sh`, D-4039); the dialog cap's clock ignores inbound mail (`stall.ts`, D-4040) | both (hook on the fleet box, `stall.ts` on the server) | #362 | merged `f515cdfd4` 2026-10-13 (v0.0.177); run 394 closed `done`, `final:true` (R51) |
+| 4 | R51's follow-up list (a)-(h): the fractional-stamp cases and the hook's words; the merge-deny jq floor; the bounded POST slice; a save that confirms nothing reads unconfirmed (D-4045); one duration formatter in L0; stale comments and README; the R37 list; the W3 plan's words and rewrap | server (it serves the PWA); the hook's edits are comments | #399 | merged `b953aefa4` 2026-10-14 (v0.0.180); run 437 closed `done`, `final:true` (R54) |
 
 ## Decisions & deviations
 
@@ -62,11 +69,1229 @@ time.
   - The worker extracts one task brief at a time (subagent-driven development), so a task never needs the whole plan
     in context.
   - Revisit at wave-done if the wave's evidence says the chain outgrew one context.
+- **R5 (2026-10-06 11:39)**, run 260's shared claims do not block W1's start.
+  - PR #285 merged as `4e7cf095f`; all of its checks passed. Run 295 is open in `planned` state, and the programme's
+    deviation block is not allocated again.
+  - Run 260 still holds `shared/api.ts`, `server/src/coord/store.ts`, `server/src/watch.ts`,
+    `server/src/coord/routes.ts` and related tests for child-reclamation W5. The W1 plan names this exact overlap and
+    says it does not block the start: the worker takes the full all-or-nothing claim, reports the expected 409, and
+    works only uncontested paths until the coordinator sequences the shared paths after release.
+  - Preserve the seven-item wave. The child-reclamation coordinator was notified by mail 3674; no early release was
+    asked. Any same-sentence co-edit still stops for a coordinator ruling under the plan's overtaken-PR rule.
+- **R6 (2026-10-06 11:47)**, dispatch waits at the measured concurrency cap.
+  - The first dispatch of run 295 was refused `cap-concurrency`, with `limit: 7` and `running: 7`. The server spawned
+    and held nothing; the run remains planned, with its seven-item brief and route ready to resend unchanged.
+  - Wait for one active run to leave `dispatched`, `working` or `unknown`, then retry run 295 once. Do not open a
+    replacement run, change routing, split the wave or bypass the cap.
+- **R7 (2026-10-06 11:50)**, child-reclamation W6 and this wave proceed without ordering each other.
+  - The child-reclamation coordinator's mail 3675 names its planned run 291 and merged plan #293 (`26e3318b`). That
+    wave also edits `shared/api.ts` additively and makes a small mirror-clock/frame edit in `server/src/watch.ts`;
+    it does not edit `server/src/coord/store.ts` or `server/src/coord/routes.ts`.
+  - Once run 260 releases its claims, both waves may proceed. Edits stay in their own regions; whichever PR lands
+    second merges current `main` (never rebases), resolves only structural adjacency, and re-runs `single-definition`,
+    `typecheck-tests`, the `session-hook` citation cases and `deviation-refs`. A same-sentence edit still returns for
+    a coordinator ruling under R5 rather than being resolved mechanically.
+- **R8 (2026-10-06 11:54)**, the one cap retry reached the rolling daily gate.
+  - The retry first confirmed run 295 was still planned, run 260's overlapping claims were still live, and
+    `origin/main` `b3b5a73ed` still carried 16 migrations. Dispatch was then refused `cap-daily`, with `limit: 24`
+    and `used: 24`.
+  - The server again spawned and held nothing; run 295 remains planned with no workspace, branch or queued brief.
+    Do not poll, retry again, open another run or alter routing. Resume from this run after the rolling budget ages out.
+- **R9 (2026-10-06 12:37)**, the operator-directed resume still met the rolling daily gate.
+  - `ccrc-api whoami` proved this pane is the programme coordinator `ccrc-pwa-calm-harbor`. Run 295 remained planned,
+    `origin/main` remained `b3b5a73ed` with 16 migrations, and run 260 still held the expected overlapping claims.
+  - The unchanged seven-item brief and R4 route were dispatched once. The server refused `cap-daily` with `limit: 24`
+    and `used: 24`, creating no worker, workspace, branch, hold or queued brief. Leave run 295 planned and make no
+    replacement, split, routing change or further retry until there is a real indication that the rolling budget cleared.
+- **R10 (2026-10-07 09:58)**, wave 1 is dispatched.
+  - A complete `runs list --closed 1` snapshot at 09:56 measured 19 of 24 rolling dispatches and 3 active runs. Run 295
+    was this programme's only open run, still planned and untouched.
+  - `ccrc-api whoami` proved this pane is `ccrc-pwa-calm-harbor`. `origin/main` `58de9f969` still carries 16
+    migrations, so slot 17 stays free, and the W1 plan blob is unchanged.
+  - Claims: run 260's are gone. Of the W1 claim set, run 291 (child-reclamation W6, claim 1070) holds `shared/api.ts`
+    and `server/src/watch.ts`, as R7 foresaw, and run 302 (ccrc-history W2 B1, claim 1072) holds `README.md` and
+    `CLAUDE.md`, which only Task 7 edits. The brief's claim rule covers both holders: the worker reports the 409 with
+    its holder and paths, works only uncontested paths, and the coordinator sequences each release.
+  - The unchanged seven-item brief and R4 route went out once. The server spawned `ccrc-pwa-swift-meadow` (workspace
+    `swift-meadow`, branch `ws/swift-meadow`): `adopted` false, `spawnState` null, `skillState` present, brief queued.
+    The run reads `dispatched` with 0 of 7 items. The registry shows the route applied as `class=opus effort=high
+    subagent=sonnet workflow=off` with compact 40, and the hold `program:stall-watch-settings wave:1/2 run:295`.
+- **R11 (2026-10-07 10:03)**, the claim 409: one regioned co-edit is asked for, and everything else waits.
+  - The worker's mail 3809: the full 28-path claim was refused, as R10 expected. It holds claim 1074 on the other 24
+    paths, keeps the four contested ones declared, and edits nothing contested. Task 1 begins with `shared/api.ts`, so
+    the chain cannot start while claim 1070 holds it.
+  - Measured: run 291 still needs both paths. Its remaining Tasks 8, 10, 11 and 12 modify `shared/api.ts`, where its
+    edits sit at `LifecycleMeas`, mid-file, and its Task 12 modifies `server/src/watch.ts`. Claim 1070 can run to
+    16:54 UTC. Run 302's claim 1072 says that wave is down to its confirmation suite and PR, and only W1's Task 7 needs
+    `README.md` and `CLAUDE.md`.
+  - Ruling: claims stay exclusive by default, and a lapse is not a release. The worker takes a contested path only on
+    this coordinator's confirmation. Mail 3813 asks run 291's coordinator to consent to one co-edit: W1 appends its new
+    block at the very end of `shared/api.ts`, changes no line above it, and lands under R7's merge rule. On consent,
+    Task 1 starts under that limit; on a refusal, it waits for claim 1070's release. `server/src/watch.ts` (Task 5)
+    and `README.md`/`CLAUDE.md` (Task 7) are not in the request; they are re-read when W1 reaches them. The worker
+    has this as mail 3814.
+  - Why: R7 already lets both waves proceed in their own regions, and a block appended at the end of the file cannot
+    textually meet 291's mid-file edits. Cost if wrong: one structural merge in `shared/api.ts` at the second landing.
+- **R12 (2026-10-07 10:05)**, Task 1 starts under the consented co-edit.
+  - Run 291's coordinator answered yes in mail 3815, under exactly R11's limits. It measured run 291's own edits to
+    `shared/api.ts` at its tip `e5effb842` as interior only: `CoordStatus` near :3813, `LcRefusalToken` and
+    `LC_REFUSAL_WORD`, and `LifecycleMeas` near :7640. If W1's block cites `shared/api.ts` lines and wave 6 lands
+    first, re-pointing them is W1's.
+  - Checked against the merged W1 plan: only Task 1 edits `shared/api.ts`, as one hunk appended after the last line and
+    never inserted above it, so the consent covers W1's whole use of the path.
+  - Mail 3817 tells the worker that this confirmation, not a claim, licenses that one path. `server/src/watch.ts`
+    (Task 5) and `README.md`/`CLAUDE.md` (Task 7) still wait for their claims' release, and the wave-done names
+    mail 3815 and R12 in its claim state.
+- **R13 (2026-10-07 11:33)**, two more regioned co-edits are asked for, and Task 5 waits on them.
+  - The worker's mail 3828: Tasks 1-4 are committed on `ws/swift-meadow` at `6e5b469f2`, each task-reviewed and with
+    its mutation table red as planned; the migration took slot 17 (16 entries at `origin/main` `282e79e44`). At
+    Task 5, `server/src/watch.ts` is still under claim 1070 and `README.md`/`CLAUDE.md` under claim 1072. Task 6
+    builds on Task 5 and also edits `CLAUDE.md`, so the chain cannot be reordered around them.
+  - Measured on `282e79e44`, with W1's regions taken from `proto/sws-w1` (the plan's own code):
+    - `watch.ts`: run 291's Task 12 edits the `./coord/childReclaim.js` import (:84-88), `currentChildMarks` (:1594),
+      `tick()`'s `childMarks` assignment (:1762) and `emitCoord` (:2155). W1 edits three import lines (:19, :40,
+      :56-66) plus one new import after :66, the stall-sweep constants (:205-207), fields after `stallWarned`
+      (:894), `sweepStalls` (:4113 on) and `sweepMail` (:4869 on). The nearest pair is about 18 lines apart.
+    - Docs: run 302 inserts one bullet after `CLAUDE.md`:78 and edits `README.md` :494, :1104 and :5069, plus a block
+      appended at its end. W1 edits `CLAUDE.md` :257, :280 and :304 on, and the README's stall-watch section (about
+      :3900-4360). The nearest pairs are about 180 and 700 lines apart.
+  - Ruling: ask each holder's coordinator for a co-edit limited to W1's measured regions, on R11's terms. Mail 3830
+    asks run 291's coordinator for `watch.ts`. Mail 3831 asks run 302's coordinator for `README.md` and `CLAUDE.md`,
+    and a release before W1 reaches Task 6 answers it as well. The worker stays stopped and is not mailed until an
+    answer arrives. A refusal means W1 waits for that claim's release.
+- **R14 (2026-10-07 11:35)**, Task 5 starts under the `watch.ts` co-edit, and Task 6 still waits.
+  - Run 291's coordinator answered yes in mail 3832, for exactly W1's listed regions and on 3815's terms. At run
+    291's tip `899e4f12a`, wave 6 has not edited `watch.ts` yet, and its plan touches only Task 12's four sites.
+  - Mail 3834 gives the worker the regions line by line and names wave 6's four sites as untouchable. If the plan's
+    Task 5 code needs a line in one of them, the worker stops and reports.
+  - Task 6 cannot be split around `CLAUDE.md`: `box-token-census.test.ts` checks the session-gated-writes sentence
+    against the new route in the same commit. The worker finishes Task 5 and stops before Task 6 until mail 3831 is
+    answered or claim 1072 is released.
+- **R15 (2026-10-07 12:09)**, Tasks 6 and 7 proceed under the docs co-edit, and no contested path remains.
+  - Run 302's coordinator answered yes in mail 3836, for exactly W1's listed regions. It says run 302's one remaining
+    pre-PR change touches neither file.
+  - Checked against the merged W1 plan: Task 7's nine README edits sit in the mail-gate paragraph (strict's runbook
+    included), the stall-watch paragraph and the wave-2 runbook, about :3903-4352 on `282e79e44`. Its `CLAUDE.md`
+    edits sit at :257, about :280 (Task 6) and :304 on. The prototype's `CLAUDE.md`:10 size-claim hunk is stale:
+    the plan edits no size claim, because #283 already made it.
+  - Mail 3837 gives the worker those limits and run 302's untouchable regions, and lets Tasks 6 and 7 follow Task 5
+    without a further stop. The second landing re-runs the README citation instrument.
+- **R16 (2026-10-07 14:53)**, all seven tasks are implemented, and wave-done waits inside a turn.
+  - The worker's mail 3856 is a status, not a wave-done. All seven tasks are task-reviewed on Opus, and the final
+    whole-branch review found 0 Critical and 0 Important. `ws/swift-meadow` is pushed at `ccd3eced1` as PR #320, and
+    full CI run 37639105813 started at 14:43.
+  - Claims: run 302 released claim 1072 (mail 3840), and the worker took `README.md` and `CLAUDE.md` as claim 1076.
+    Claim 1074 holds the other 24 paths. `shared/api.ts` and `watch.ts` stay licensed co-edits under R12 and R14.
+  - The worker's turn marker read `done` at 14:51:50 while CI ran. That is the shape that stranded a finished wave for
+    20 hours before: a CI result wakes no session. Mail 3857 tells it to wait inside a turn with a backgrounded
+    `gh run watch --exit-status`, then send wave-done in that turn, naming any failing leg rather than waiting on a
+    fix.
+  - `judgeStall`'s signature and its `StallInput` literal (about :4187-4216 on `origin/main`) are outside R14's
+    literal list but inside none of wave 6's four sites, and the plan requires them. Accepted. The omission was in
+    this coordinator's list in mail 3830, not in the worker's reading. Mail 3858 tells run 291's coordinator so, and
+    `git merge-tree` against `ws/amber-river` at `899e4f12a` is clean.
+- **R17 (2026-10-07 15:11)**, wave 1's wave-done is verified, and review run 319 is dispatched.
+  - Mail 3861 is the wave-done, with fingerprint `ccd3eced1b17` (tip and handoff commit) and PR #320 `open`. It is
+    copied to `.superpowers/sdd/stall-watch-settings/w1-wave-done.md`, and the worker's SDD workspace (`progress.md`
+    and every `mut-*.out`) to `w1-child-evidence/`, before any reclaim.
+  - Re-measured: the origin tip, the worker's checkout and PR #320's head all read `ccd3eced1`; the tree is clean and
+    the PR mergeable. Run 295 advanced to `working`, then to `awaiting-review`, on the worker's fingerprint
+    unchanged; the server's own re-measurement accepted it.
+  - The suite signal reads `green`, and it is accepted. On full run 37639105813 every Linux leg is green, and the one
+    red is `test-macos` 4/4 (two rows of `ccd-docs-tree.test.ts`, a file this wave does not touch, green on Linux in
+    isolation). macOS legs gate nothing. PR #320's own required `test (server)` is green.
+  - Review run 319 opened with the programme's own title, so the programme keeps its name. It was dispatched once to
+    `ccrc-pwa-bright-hollow` (`skillState` present) with route `class=opus effort=high subagent=sonnet workflow=on`
+    and compact 40, so the reviewer can run the panel as a Workflow. The brief
+    (`.superpowers/sdd/stall-watch-settings/w1-review-brief.md`) names the held-out panel, the whole-branch pass
+    (deploy inertness, layering, never-throwing resolution, the censuses, slot 17, the three co-edit regions and the
+    worker's three departure slugs), every suite, the carried constraints and the fifteen ledgered numbers. The
+    report goes to the reviewer's `~/.cc-clips/`, per reviewer clause 7.
+  - The worker's three items for ruling wait for the review report: (a) the parked plan-mandated duplication, (b) the
+    docs saying "Settings" before wave 2 builds the section, and (c) the migration slot re-measured before merge.
+- **R18 (2026-10-07 15:21)**, the operator authorizes PR #320's merge "when ready".
+  - The operator said "merge when ready". Ready means all of these, measured at merge time, not remembered:
+    - Review run 319's report is accepted by its close, and it leaves no confirmed or unexamined critical or important
+      finding unresolved. A finding that is fixed returns through a fix round, a fresh wave-done and a scoped review
+      of the new tip before it counts.
+    - The head being merged is the run's verified `handoffCommit`, and PR #320's required checks are green on it.
+      macOS legs gate nothing.
+    - Slot 17 is still free on current `origin/main`. If another merge took it, the migration moves up in a fix round
+      before merge, and no applied migration is edited.
+    - If run 291's wave 6 lands first, W1 merges current `main` without rebasing and re-runs the R7 guards first.
+  - Merge with `gh pr merge 320 --admin --squash --match-head-commit <handoffCommit>`, after measuring whether `main`
+    requires the merge queue. The squash subject must not carry the PR title's deviation-number range.
+  - Not authorized by this ruling: `ccrc rollout` or `ccrc update` by hand. The release lane carries the merge, and
+    deployment is verified read-only afterwards: the migration applied, the seed still `follow`, and
+    `GET /api/coord/stall-watch` answering.
+  - After the merge, wave 2's run opens before run 295 closes.
+- **R19 (2026-10-07 16:15)**, review 319 is accepted, and wave 1 is ready to merge.
+  - Review run 319 (`ccrc-pwa-bright-hollow`, mail 3870) reviewed `ccd3eced1` with the held-out panel: 30 agents, 0
+    errors. The reproduce lens first came back empty, so the reviewer re-ran it with a checked list: 28 claims, 26
+    reproduce. Five minor findings survived the refute pass: correctness 3 (F1-F3), spec 1 (F4) and reproduce 1
+    (F5). None is critical or important. The whole-branch pass found nothing: inert on deploy, layering,
+    never-throwing, the session-only censuses, slot 17 free, no hunk in run 291's or run 302's regions, and
+    `merge-tree` clean against both and against `origin/main`. The close accepted `{reviewedTip, report}`: `done`,
+    `released`. The report is copied to `.superpowers/sdd/stall-watch-settings/w1-review-319-report.md`.
+  - F4: none of the plan's five unnumbered candidates needs a number, because none departs from behaviour the spec
+    prescribes.
+    - The derived `StallStored` keeps the `absent`/`unreadable` pair defined once (`single-definition`).
+    - `stallSettingsAfter`'s `at` keeps L1 free of a clock.
+    - `stallBoxHeld` is the L1 reader the spec's files-only Follow reading needs.
+    - The prose suite is an added guard.
+    - The M16b pin lives beside the route whose SQL it scans, and still goes red as §14 asks (M16b-1, M16b-2 and
+      M16b-3 measured). §14 names the guard and its mutation; the file it lives in is the plan's choice.
+  - The worker's three slugs (`kebab-union-fourteenth`, `t6-gate-numeral-red-order`, `t6-m16b3-two-reds`) are
+    plan-hint drift. The reviewer re-measured M16-9 and M16b-3, and none needs a number.
+  - Residue, parked and carried to wave 2's brief as one declared item: F1 (the L0 text block's header overstates
+    its duration rule), F2 (the unread `StallResolution.levelSource`), F3 (a `coord-db` message that misnames its
+    red), F5 (`stallResolveNow`'s "nothing else reads the row") and the worker's parked plan-mandated duplication.
+    Each is behaviour-neutral. If wave 2 cannot take their paths, they ride a small follow-up after both land.
+  - The README, `CLAUDE.md` and the parent spec say "chosen in Settings" before wave 2 builds the section. Accepted,
+    because the plan prescribes this prose and each sentence names `POST /api/coord/stall-watch`. Until wave 2
+    deploys, a choice can be made only through that session-gated door. Wave 2 is dispatched right after this merge.
+    Promoting a wave-1-only build to `stable` is the operator's call; the coordinator advises against it until wave 2
+    merges.
+  - The README citation instrument reads `15 passed | 320 skipped (335)` at both the base and the tip, so the wave
+    did not move it. The carried `7 passed | 328 skipped` was stale: `main` gained citation rows after the plan was
+    measured. The worker's wave-done repeated that figure, and it does not reproduce. The carried constraint below
+    now says "unchanged by a wave", as measured.
+  - R18's bar is met. The review leaves no critical or important finding open. PR #320's head is the verified
+    `handoffCommit` `ccd3eced1`, and its required checks pass. The failing checks are `test-macos` 1/2 and 2/2 only,
+    and macOS legs gate nothing. `origin/main` `282e79e44` still carries 16 migrations, so slot 17 is free. Run 291's
+    wave 6 has not landed. `main` requires no merge queue.
+- **R20 (2026-10-07 16:20)**, wave 1 is merged and closed, and wave 2 is dispatched.
+  - Run 295 advanced to `merging` on its fingerprint. PR #320 merged at 16:15:45 as `7f7bf4afc`, with
+    `--admin --squash --match-head-commit ccd3eced1` and a subject without the title's number range. `main` now
+    carries 17 migrations, and the release lane published prerelease v0.0.119 at 16:16:47. Nothing was rolled out by
+    hand.
+  - Wave 2's run 322 opened before run 295 closed, without a `sessionId`, because wave 1's child was spent. Run 295's
+    close needs `final` as a boolean: `{fingerprint, final:false}` answered `done`, `released`, `childReclaim` queued.
+    The first try omitted `final` and was refused `bad-request` with no detail. Its evidence was copied first (R17).
+  - Routing for wave 2 stays R4's, on wave 1's evidence: suite green on the first full run, the final review clean,
+    and the seven-task chain fit one context.
+  - Wave 2 declares five items: its plan's four tasks, then wave 1's review residue. R19's residue is narrowed to
+    F1, F2, F3 and F5, the stale `stallArmingOf` comment in `sweepStalls`, and an equality pin for
+    `stallResolveNow`'s fallback arming, as wave 1's final review suggested. The plan-mandated duplications stand as
+    accepted residue: the view's double `effective` literal (D-4038), the third feed-row block in `routes.ts`, and
+    `stallFaultReason`'s copy.
+  - The residue touches `shared/api.ts` and `watch.ts`, still under run 291's claim 1070, in wave 1's own lines only.
+    Mail 3871 asks run 291's coordinator for that co-edit. Item 5 runs last, and the worker waits for this
+    coordinator's confirmation before it touches either file.
+  - The plan's operator questions. (1) README :967's "the phone-push bell for this browser" becomes "the push bell for
+    this browser": the operator's 2026-10-05 directive (no device distinction) already rules it. (2)
+    `UNCONFIRMED_TEXT`'s "Saved —" is left as it is and put to the operator.
+  - Run 322 was dispatched once to `ccrc-pwa-calm-basin` (`adopted` false, `skillState` present, 0 of 5 items).
+    `ws/calm-basin` sits at `7f7bf4afc`, 0 commits ahead or behind, and the registry shows R4's route, compact 40 and
+    the hold `program:stall-watch-settings wave:2/2 run:322`. Daily usage stood at 21 of 24, with 5 active runs.
+  - Deploy verification is pending: this fleet box still reported v0.0.118 at 16:20. Once the updater moves the
+    boxes, the read-only checks are the server's `/health` version (a server that answers has applied migration 17,
+    since a failed migration refuses to start) and the fleet box's `ccrc version`.
+- **R21 (2026-10-07 16:22)**, wave 2's residue co-edit is confirmed.
+  - Run 291's coordinator answered yes in mail 3872, for exactly mail 3871's lines on `7f7bf4afc`: `shared/api.ts`
+    :9251 inside wave 1's block, and `watch.ts`'s `StallResolution` (:215-218), `sweepStalls`' outer catch comment
+    (:4207-4208), and `stallResolveNow`'s docstring and two returns (:4219-4251). It measured run 291's tip
+    `9bdcb0d2a`, which now carries its Task 12, as clean in `merge-tree` against `main`, with no hunk near those lines.
+  - Mail 3874 tells the worker that this confirmation licenses those lines, so item 5 runs without a stop. Any
+    other line in either file is a stop-and-report.
+- **R22 (2026-10-07 19:29)**, wave 2's wave-done is verified, and its review dispatch waits at the daily cap.
+  - Mail 3916 is the wave-done: fingerprint `505ffbff4425` (tip and handoff commit), PR #322 `open`, suite `green`,
+    all five items done. Item 5 stayed inside R21's lines and kept `StallResolution.levelSource` pinned on both arms,
+    because spec §9 prescribes the field. The final whole-branch review found no Critical or Important finding. The
+    mail is copied to `w2-wave-done.md`, and the worker's SDD workspace to `w2-child-evidence/`, before any reclaim.
+  - Re-measured: the origin tip, the clean worker checkout and PR #322's head all read `505ffbff4`. `main` has not
+    moved from `7f7bf4afc`, the PR is mergeable, its required checks are green (macOS still pending), and `schema.ts`
+    is untouched. Run 322 advanced to `working`, then to `awaiting-review`, on the worker's fingerprint unchanged.
+  - Review run 330 opened with the programme's title. Its brief (`w2-review-brief.md`) names the held-out panel, a
+    whole-branch pass (no browser copy, no client-side ladder policy, the poll, D-4035, D-4036, `QuickConfirm`'s
+    single-string callers, wording, lane discipline, the six departure slugs), every suite and the carried
+    constraints. Its dispatch was refused `cap-daily`, `limit` 24 and `used` 24, spawning nothing. A snapshot sorted
+    by `dispatchedAt` puts the next age-out at 19:57:43 (run 299). One session-only wake at 19:58 resends the same
+    payload once.
+  - Correction to R19. The plan's README citation instrument is `session-hook.test.ts -t 'CITATION DEBT|README
+    HAS|LOCATION INDEXES|ROW PASS|RANGE BOUND|TWO CORPUS|whole corpus'`, and it reads `7 passed | 328 skipped`, which
+    both workers reported. Review 319's brief gave the reviewer `-t 'census|citation'` instead, a broader filter that
+    reads `15 passed | 320 skipped`. The mistake was this coordinator's. R19's "does not reproduce" was wrong, and the
+    carried constraint below is restored with the exact command.
+  - Wave 2's six departure slugs, the worker's question on `coord-db`'s slot match, its parked residue and the
+    plan's operator question 2 wait for the review report.
+- **R23 (2026-10-07 19:58)**, review run 330 is dispatched.
+  - At 19:58 run 330 was still the planned review of run 322, run 322 was still `awaiting-review`, and
+    `origin/ws/calm-basin` was still at `505ffbff4`. The unchanged payload went out once and was accepted. The
+    reviewer is `ccrc-pwa-quiet-mesa` (`adopted` false, `skillState` present, brief queued), and its route
+    (`workflow=on`) lets it run the panel as a Workflow.
+  - The worker's mail 3921: CI run 37671873640 finished with every required check green. Both macOS legs are red in
+    docs-reader suites (`ccd-docs-index`, `ccd-docs-tree`) that this wave does not touch, and they gate nothing.
+  - The fleet box reported v0.0.119 (`7f7bf4afc`, wave 1) at 19:30, so the updater has moved it. The server box's
+    `/health` stays unverified here: it is reachable only by raw HTTP, which this session does not use.
+- **R24 (2026-10-07 20:27)**, review 330 is accepted, and wave 2 goes back for one fix round.
+  - Review run 330 (`ccrc-pwa-quiet-mesa`, mail 3926) reviewed `505ffbff4` with the held-out panel. The reproduce
+    lens came back empty, so the reviewer re-ran it with a checked list: 32 claims, 30 reproduced. Nine findings were
+    confirmed, one was refuted 2/3, and the reviewer added F10 from the whole-branch pass. By lens: correctness 4
+    (F1 important, F2-F4 minor), spec 4 (F5-F8), reproduce 1 (F9), whole-branch 1 (F10). Every suite is green, the
+    citation instrument reads `7 passed | 328 skipped (335)`, lane discipline holds, and `merge-tree` is clean
+    against `main`, `ws/amber-river` and `ws/soft-delta`. The close accepted `{reviewedTip, report}`, and the report
+    is copied to `w2-review-330-report.md`.
+  - F1 (important): a write that never got an answer toasts `UNCONFIRMED_TEXT`, "Saved — …". This is the plan's
+    operator question 2, now rated important. Ruling: give that arm its own honest line, which does not say "Saved"
+    and says the change was not confirmed; the re-read that follows is unchanged. The line goes in wave 1's L0
+    stall-watch block, now that run 291 has released claim 1070. The 2xx-but-unreadable arm keeps `UNCONFIRMED_TEXT`.
+    The operator sees the wording before the merge and may overrule it.
+  - F10, wire-guard tolerance: dropping a present but malformed `next` or `filesExceed`, and rendering the rest, is
+    accepted. A skewed or buggy server's malformed optional block should cost only that block, as a malformed
+    `counts` element already does under §13, not blank the whole section. Since §13 says a failed read, this is a
+    numbered departure, `malformed-optional-block-is-dropped`. Its number comes from this programme's wave 2
+    reserve: it is named to the worker by mail, defined in the W2 plan's Deviations section and cited at the guard
+    in this fix round, and not written here until that definition is on `main`. The malformed-`fallback` arm stays
+    as §13 has it: the whole answer fails.
+  - F5 and F6: the ledger's record suffices. Item 5 is behaviour-neutral scope this coordinator declared (R20,
+    R21), not a spec departure. README :967's "push bell" applies the operator's 2026-10-05 directive. No plan entry
+    is added for either.
+  - Fixed in the round: F2 (keep the defensive branch, and retitle its test as an off-wire shape that cites
+    D-4037), F3 (a stored quiet time equal to the built-in selects the built-in option), F4 (qualify the section
+    header, and break the `SettingsScreen` import cycle if no pinned citation moves), F7 (the README pin's header
+    docstring, and the D-4036 entry's "Pinned by" text in the W2 plan, amended by this ruling), F8 (cite
+    `notifications-label-says-push (D-4036)` at the label), F9 (a refusal detail never renders blank). The worker's
+    question is approved: `coord-db`'s slot-17 row matches `CREATE TABLE stall_settings`, so a later legitimate
+    `ALTER` does not trip it.
+  - The six departure slugs. `quiet-range-bounds-the-select`, `unanswered-write-reads-unconfirmed`,
+    `quiet-select-shows-no-unanswered-value` and `readme-section-sentence-pinned-to-l0` implement the spec in forms
+    it does not spell out, and need no number. `levelSource-kept-per-spec-9` is no departure. The tolerant half of
+    `malformed-fallback-refuses-the-answer` becomes `malformed-optional-block-is-dropped`, numbered above.
+  - Residue that stands: the README pin's own copy of the PWA device-word list, `quietText` duplicating the
+    server's `stallQuietWords`, the spec's touch-only wording ("never the tap", "stops a finger"), and the
+    commit-subject slip on `1a728b248` (the panel refuted it 2/3).
+  - Next: run 322 back to `working`, then a `fix-round` mail. The fix round ends in a fresh wave-done, a new review
+    run for the new tip, and then the operator's merge decision.
+- **R25 (2026-10-07 21:33)**, fix round 1's wave-done is verified, and its review waits at the cap.
+  - Mail 3933 claims `7253060da`. Re-measured: `origin/ws/calm-basin`, the workspace `HEAD` and PR #322's head all
+    read `7253060da`, the workspace is clean, and the PR is open. The nine commits since `505ffbff4` touch ten files.
+    `server/src` is unchanged, the one `shared/api.ts` hunk is a new key inside wave 1's stall-watch block, and
+    `merge-tree` against `origin/main` (`8c446eab0`) is clean. The server took the fingerprint, and run 322 is
+    `awaiting-review`. Every required CI check on run 37687688296 is green; the macOS legs were still running and
+    gate nothing. The child's evidence is copied to `w2-fix1-child-evidence/`.
+  - F1's line, for the operator before the merge: "Not confirmed — the server did not answer; the screen will
+    re-check." Operator question 2 now covers only the 2xx-but-unreadable arm's "Saved —".
+  - The worker also corrected the plan's prose on two candidate entries, a residue bullet and operator question 2,
+    to match what ships, and offered to revert it. It is kept, because a plan that describes the old behaviour would
+    mislead. The review checks only whether the corrections are accurate.
+  - The worker's three observations go to the review. One is caused by R24's shape for F3: with 7 200 000 stored,
+    the built-in option is already selected, so resetting to `default` takes two changes. The other two: the
+    device-word scan does not read `settingsText.ts`, and `coord-db` matches one spelling of the DDL.
+  - Review run 333 is open (planned) for the new tip. Its brief is `w2-fix1-review-brief.md`: the held-out panel on
+    `505ffbff4..<tip>`, R24's nine items, the whole-wave properties, the suites and the citation instrument. The
+    rolling daily cap reads 24 of 24, and its next age-out is 22:20:17 (run 307), so one session-only wake at 22:21
+    sends the payload once.
+- **R26 (2026-10-08 03:13)**, review run 333 is dispatched.
+  - The unchanged payload went out at 03:13:42 and was accepted. The reviewer is `ccrc-pwa-amber-meadow` (`adopted`
+    false, `skillState` present, brief queued). Its registry route reads opus, high effort, sonnet subagents,
+    workflow on and compact 40, so it can run the panel as a Workflow. Before the send, run 333 was still
+    `planned`, run 322 was still `awaiting-review`, and `origin/ws/calm-basin` was still `7253060da`.
+  - Three earlier sends were refused `cap-daily` and spawned nothing. Each time, another programme took the freed
+    slot first:
+    - at 22:21, child-reclamation's review run 335, at 22:20:33;
+    - at 22:28, workspace-lifecycle's run 314, at 22:28:10;
+    - at 01:34, native-docs-reader's review run 336, at 01:34:16.
+  - A timed background attempt for 01:33:21 was killed by the session's memory-pressure reaper while it slept, and
+    it sent nothing. The send that landed waited only seconds after a wake on the age-out minute (run 312, 03:13:12).
+  - Next: `review-done`, then this session advances run 333 to `working`, closes it with the reviewer's
+    `{reviewedTip, report}`, and rules. After that it asks the operator about merging PR #322.
+- **R27 (2026-10-08 03:35)**, review 333 is accepted, and wave 2 goes back for a second fix round.
+  - Review run 333 (`ccrc-pwa-amber-meadow`, mail 3968) reviewed `7253060da` with the held-out panel (Workflow
+    `wf_4f19a26c-003`): 42 agents, no lens unverified, 11 confirmed, 2 refuted 3/3. They merge into seven
+    findings: F1 and F2 important, F3 to F7 minor.
+    - R24's nine items are addressed as ruled. Every mutation row the worker reported re-measured exactly.
+    - Every suite is green. The one PWA red, `contrast.test.ts`, passed twice in isolation, so it is load.
+    - The citation instrument reads `7 passed | 328 skipped (335)`, and `deviation-refs` 31.
+    - Lanes are clean, and `merge-tree` is clean against `origin/main`, `ws/amber-river` and `ws/soft-delta`.
+    - Run 333 closed `done` and released. The report is copied to `w2-review-333-report.md`.
+  - F1 (important): R24's shape for F3 was wrong, and this ruling replaces it. A stored 7 200 000 is a choice
+    pinned at that number, not the built-in: the server reports it as `chosen`, a `default` write over it is a real
+    change, and only NULL follows the built-in. Selecting the built-in option for it shows "Built-in" beside a quiet
+    line that says "chosen here". It also turns a one-write reset into two, and it would hide a pin if a later build
+    moved the built-in. Ruling: when the stored number equals the built-in, the select shows it as its own option,
+    labelled with the quiet line's wording (`chosenHere` over `quietText`, no new string). Picking Built-in from there
+    is then one change that writes `default`. The comment and the candidate entry are corrected, and a row pins the
+    one-write reset.
+  - F2 (important): `STALL_CONFIRM_TEXT.unanswered` is a key that spec §12's enumeration of that object does not
+    list, and three plan lines still say W2 adds no L0 string. Adding a key outside a list the spec enumerates is a
+    departure, not a silence, so it takes a number from this programme's wave 2 reserve. That number is
+    `unanswered-write-has-its-own-l0-line`, named to the worker by mail and defined in the W2 plan in this round. It
+    is cited at the key and at the section's use, and it is not written here until that definition is on `main`.
+    The three plan lines are amended to say the fix round adds one L0 key. The neighbouring candidate
+    `unanswered-write-reads-unconfirmed` keeps only its unnumbered half, reading a network failure as unconfirmed
+    rather than as a refusal.
+  - F3 (minor): the docstring's reading is accepted. The `HTTP <status>` fallback fills the server-answer detail
+    slot, as `apiErrorText`'s own `request failed (<status>)` floor already does; it is not section copy. The plan's
+    Task 1 sentence "No new string is added" is amended to say so, and it takes no number.
+  - F4 (minor): the `coord-db` needle `CREATE TABLE stall_settings` prefix-matches `stall_settings_new`, which is
+    SQLite's table-rebuild idiom, so a legitimate later migration would trip the row R24 meant to spare. The needle
+    must stop at the table name, with the reviewer's mutation (an appended `stall_settings_new` create-and-drop) as a
+    row measured green on the count and frozen rows. The existing second-`CREATE` row must stay red.
+  - F5 (minor): the plan prose that still contradicts what ships is amended in place:
+    - Task 1 at ≈:403-406 and Task 3's notes at ≈:1756-1758, both on the network arm.
+    - The Goal, Global Constraints and "Deliberately unchanged" lines on `shared/` and `server/src`. They are made
+      true of the whole wave: Tasks 1 to 4 add no L0 string, the fix round adds one key, and item 5's comment and
+      test edits are coordinator scope (R20, R21).
+    - The File Structure table gains `pwa/src/screens/settingsText.ts`, `shared/api.ts` and item 5's two test files.
+    - README's "phone-push bell", under "Deliberately unchanged" and as the first operator question, is already
+      reworded and pinned: it is marked as settled by the operator's 2026-10-05 directive.
+  - The worker's second observation is taken: the device-word scan also reads `settingsText.ts`, the module meant to
+    hold text the Settings sections share. One line in the scan's list, with a mutation row.
+  - F6 and F7: no change.
+    - F6: spec §13's `SettingsScreen.tsx ≈:72` is an unpinned approximate anchor in a spec outside this wave's lanes,
+      and anchors are snapshots.
+    - F7: an overstated commit subject on `8b66f4616`. History is not rewritten.
+  - F1's line for the operator stands as "Not confirmed — the server did not answer; the screen will re-check."
+  - Next: run 322 is back at `working` (fingerprint `7253060da`), and the `fix-round` mail goes out. The round ends
+    in a fresh wave-done, a new review run for the new tip, and then the operator's merge decision.
+- **R28 (2026-10-08 04:27)**, fix round 2's wave-done is verified, and its review waits at the cap.
+  - Mail 3970 claims `6cef2ae46`. Re-measured:
+    - `origin/ws/calm-basin`, the workspace `HEAD` and PR #322's head all read `6cef2ae46`, the workspace is clean,
+      and the PR is open.
+    - The seven commits since `7253060da` touch five files. `server/src` is unchanged, and the one `shared/api.ts`
+      hunk is a two-line comment inside wave 1's stall-watch block.
+    - `merge-tree` is clean against `origin/main` (`3c33d3218`) and against `ws/swift-cove` (workspace-lifecycle run
+      314, to which the worker waived regions by mail 3944).
+    - The server took the fingerprint, and run 322 is `awaiting-review`.
+    - Every required CI check on run 37725973446 is green.
+    - The child's evidence is copied to `w2-fix2-child-evidence/`.
+  - Claims: claim 1083 lapsed at its 8-hour cap. The worker released 1087 and holds claim 1101 over this round's
+    paths.
+  - The worker's notes go to the review. The pinned option sits right after Built-in, a position R27 did not set.
+    Mutation rows X40 and X48 still quote first-cut code lines.
+  - Review run 338 is open (planned). Its brief is `w2-fix2-review-brief.md`: the panel on `7253060da..<tip>`,
+    R27's six items, the whole-wave properties, lanes (now including `ws/swift-cove`), the suites and the citation
+    instrument. The cap reads 24 of 24, and the next age-out is 05:02:17 (run 313).
+  - Three sends lost a freed slot within seconds (R26), so a session-only wake at 05:02 starts a timed background
+    attempt 2 s after the age-out. The attempt re-checks the preconditions first and sends once.
+  - Dispatched (05:02). The preconditions held at 05:02:04 (338 `planned`, 322 `awaiting-review`, tip
+    `6cef2ae46`). The send went out at the age-out and was accepted, its answer arriving at 05:02:36. The reviewer is
+    `ccrc-pwa-warm-mesa` (`adopted` false, `skillState` present, brief queued), and its registry route reads opus,
+    high effort, sonnet subagents, workflow on and compact 40. Next: `review-done`, then this session advances run
+    338 to `working`, closes it, and rules. After that it asks the operator about merging PR #322.
+- **R29 (2026-10-08 05:23)**, review 338 is accepted, and wave 2 goes back for a third fix round.
+  - Review run 338 (`ccrc-pwa-warm-mesa`, mail 3980) reviewed `6cef2ae46` with the held-out panel (Workflow
+    `wf_fb8b0b1b-451`): 30 agents, no lens unverified, 8 confirmed and 1 refuted. Merged, that is seven findings:
+    F1 and F3 important, the rest minor.
+    - R27's six items are addressed, F5 with residue. Every mutation row re-measured as reported.
+    - Every suite is green; four PWA reds under panel load were green in isolation.
+    - The citation instrument reads `7 passed | 328 skipped (335)`.
+    - `merge-tree` is clean against `origin/main`, `ws/amber-river`, `ws/soft-delta` and `ws/swift-cove`.
+    - Run 338 closed `done` and released. The report is copied to `w2-review-338-report.md`.
+  - Before ruling on F1 and F2, this session put both proposed rulings to three Opus·high refuters (Workflow
+    `wf_ffbcfd62-d2b`, a spec lens, a user-screen lens and a consistency lens). None refuted either ruling. Their
+    output is saved to `r29-refute-workflow.json`.
+  - F1 (important): spec §13 item 4 says the select offers Built-in and every step except the built-in's "so the
+    built-in value appears once". A pinned 7 200 000 shown as its own option puts that value in the select twice.
+    The spec is not silent there, so this is a numbered departure, `pinned-built-in-value-is-its-own-option`, from
+    the wave 2 reserve. It is named to the worker by mail, defined in the W2 plan, and cited at the pinned-option arm
+    and at `quietChoices`' docstring. It is not written here until that definition is on `main`. The candidate
+    `quiet-select-shows-no-unanswered-value` loses that half. The spec-faithful alternative is to select nothing for
+    a pinned 7 200 000, which would hide a real pinned choice; it is rejected for that reason.
+  - F2 (minor): the pinned option is labelled `chosenHere`, but under a fallback or an unreadable level the server
+    sends `quiet.source` `default`. The screen then shows "2 h (built-in)" over a selected "2 h (chosen here)".
+    - Ruling: the pinned option is labelled exactly as `quietChoices` labels every step, plain `quietText`, and it
+      sits at its step's numeric place. It is the missing step, shown back for the stored case.
+    - A step label never claims a source; the quiet line above it alone says where the effective value comes from,
+      as it already does for a stored 3 h under a fallback.
+    - This supersedes R27's label clause ("labelled with the quiet line's wording"). Every other part of R27's F1
+      stands.
+    - Rows pin the label under `source` `chosen` and `default`, and the position. Each is measured red under its
+      mutation, as numbered X rows in the plan's own table.
+  - F3 (important): `unanswered-write-has-its-own-l0-line`'s "Pinned by" cites mutation rows X48 and X60, whose quoted code and failing-row title no
+    longer exist. They are re-measured against what ships and corrected in place.
+  - F4 (minor): fix round 2's pinned-option guard has no row in the plan's mutation table. Fix round 2's mutations
+    and this round's are added to Task 3's table as numbered X rows.
+  - F5 (minor): the plan's Deviations lead sentence says the two fix-round numbers did not come from the 17:47 call.
+    The reviewer read the allocator: they were issued in this programme's 17:47 block as reserve and assigned later,
+    by R24 and R27. The sentence is reworded to say so, naming no range.
+  - F6 and F7 (minor), in place:
+    - the "row 5" that is the README pin's sixth row;
+    - `stall-settings-readme`'s line and row counts;
+    - a one-line note that the File Structure table's line and row counts are first-cut figures, with the shipped
+      files governing;
+    - the second operator question's last sentence, now false;
+    - the Tech Stack's Node floor, to `>=22.16.0` as the engines say;
+    - "W1's L0 block is complete", qualified to Tasks 1 to 4.
+  - The round is bounded: the worker fixes exactly these, and the next review is scoped to this round's diff and the
+    passages it edits.
+  - Next: run 322 is back at `working` (fingerprint `6cef2ae46`), and the `fix-round` mail goes out.
+- **R30 (2026-10-08 06:14)**, fix round 3's wave-done is verified, and its review waits at the cap.
+  - Mail 3982 claims `451854d1d` and reports `suite: red`, `failure: unclear`.
+    - The first whole-PWA run timed out in eight files while the worker's own re-review ran mutations alongside it.
+    - Each of those files passed alone, a clean re-run at `451854d1d` was green (108 files, 3520 tests), and CI's
+      `test (pwa)` on run 37734778375 is green.
+    - The worker's clause 15 keeps the first run's signal. This session reads it as load, not code; the review
+      re-runs the suite alone.
+  - Re-measured:
+    - `origin/ws/calm-basin`, the workspace `HEAD` and PR #322's head all read `451854d1d`, and the workspace is
+      clean.
+    - Every CI check is green except the advisory macOS legs, which were still running.
+    - The six commits touch only `StallWatchSection.tsx`, `settings-screen.test.tsx` and the W2 plan.
+    - `merge-tree` is clean against `origin/main`, `ws/swift-cove`, `ws/amber-river` and `ws/soft-delta`.
+    - The server took the fingerprint, and run 322 is `awaiting-review`.
+    - The child's evidence is copied to `w2-fix3-child-evidence/`. Claim 1101 is held.
+  - Review run 340 is open (planned). Its brief, `w2-fix3-review-brief.md`, is bounded as R29 said: the panel on
+    `6cef2ae46..<tip>`, R29's six items, and the passages this round edits. Untouched first-cut plan prose is
+    residue, never a finding. The whole wave gets only the property and lane checks.
+  - The cap reads 24 of 24, and the next age-out is 08:47:32 (run 306). A session-only wake at 08:47 starts the
+    timed attempt, which re-checks the preconditions and sends once at 08:47:34.
+  - The 08:47 attempt was refused `cap-daily` and spawned nothing. Native-docs-reader's review run 337 reached the
+    dispatch route first.
+    - Dispatches are serialised, and the cap check runs a few seconds before `dispatchStartedAt` is stamped. Mine
+      queued behind 337's spawn and was then checked at 24 of 24.
+    - `capsUsage` counts `dispatchedAt > now - 24 h` (`server/src/coord/store.ts` `capsUsage`), so the age-out was
+      measured right. Only the whole-second target, which fired one second late, lost the race.
+  - Dispatched (09:58). The retry slept to the millisecond, run 295's age-out plus 250 ms. The preconditions held at
+    09:58:19 (340 `planned`, 322 `awaiting-review`, tip `451854d1d`). It was accepted, its answer arriving at
+    09:58:44. The reviewer is `ccrc-pwa-keen-mesa` (`adopted` false, `skillState` present, brief queued), and its
+    registry route reads opus, high effort, sonnet subagents, workflow on and compact 40. Next: `review-done`, then
+    close run 340 and rule. After that this session asks the operator about merging PR #322.
+- **R31 (2026-10-08 10:21)**, review 340 is accepted, and wave 2 is ready for the operator's merge decision.
+  - Review run 340 (`ccrc-pwa-keen-mesa`, mail 3994) reviewed `451854d1d`, bounded as R29 said. The held-out panel
+    (Workflow `wf_ac4564ff-3dc`) ran 24 agents with no lens unverified: 5 confirmed, 2 refuted.
+    - R29's six items all hold. X48, X60 and X61 to X66 re-measured out of tree and match the plan.
+    - Every suite is green. The whole PWA suite, run alone, reads 108 files and 3520 tests. The citation instrument
+      reads `7 passed | 328 skipped (335)`.
+    - Lanes are empty, and `merge-tree` is clean against `origin/main` (`852c04512`), `ws/amber-river`,
+      `ws/soft-delta` and `ws/swift-cove`.
+    - Run 340 closed `done` and released. The report is copied to `w2-review-340-report.md`.
+  - Its one finding, F1, is minor prose: Task 3's mutation table header says "out of 183" over a footer that says
+    "All are counted out of 187". It is accepted as residue, not sent back: it needs no ruling, changes no
+    behaviour, and another round would cost a review and a cap slot for one sentence in a plan document.
+  - Residue that stands, each a first-cut snapshot in the plan or a test title, none behaviour:
+    - X37 and X38's failing counts at 187;
+    - X41 and X43's old test title;
+    - X59's drifted anchor;
+    - Task 4's "5 failed (5)";
+    - the source-`default` row's title saying "under a fallback" over a fixture with none (N2). Its asserted
+      property holds either way, and X65 reds it.
+    These are left for a later plan-hygiene pass. The shipped files govern, as the plan's own first-cut note says.
+  - PR #322 at `451854d1d`: every CI check is green except `test-macos 2/2`, which is advisory and gates nothing.
+  - Operator decisions before the merge:
+    - F1's line (R24) for a write with no answer: "Not confirmed — the server did not answer; the screen will
+      re-check."
+    - Operator question 2, now only for the 2xx-but-unreadable arm: "Saved — the server's answer could not be read;
+      the screen will re-check."
+    - Merge PR #322, by `--admin --squash --match-head-commit 451854d1dc0e7d70aef392e509f7d108688cd633`.
+  - After the merge: run 322 closes with `final:true`, the programme's last close. Then this session checks the
+    deploy read-only and opens a docs PR for this ledger, writing the three fix-round numbers only once their
+    definitions are on `main`.
+- **R32 (2026-10-09 00:53)**, cross-programme finding 4063: a worker's ask was invisible, and the stall watch's
+  dialog cap kept being pushed back.
+  - Child-reclamation's coordinator (`ccrc-pwa-calm-mesa`, mail 4063) reported that worker
+    `ccrc-pwa-clear-summit` (run 347; Claude Code 2.1.294, `bypassPermissions`) has been parked on an
+    AskUserQuestion since 2026-10-08 21:28:43Z. There is no ask row, the hookstate reads `working` with a null ask,
+    and no stall signal or mail went out.
+  - This session ran a read-only forensic workflow (`wf_3df2ac3d-c0a`; three Opus·high lenses: transcript
+    timeline, hook and ask path, stall watch). Its output is saved to `finding-4063-forensics.json`. All three
+    lenses support one cause.
+    - The hook. `ccd/session-hook.sh` parses a subagent's `agent_id` into `paid` but checks it only for the turn
+      marker. Every PreToolUse or PostToolUse writes `state=working, ask=null` over the session's hookstate,
+      whoever sent it.
+    - The timeline. A background subagent launched 29 s before the ask made its first tool call 3.1 s after it,
+      then 57 more until its SubagentStop at 21:39:30, which carried the clobbered state forward.
+    - The control. `ccrc-pwa-bright-river`, on the same version and mode with no subagent running, recorded
+      `waiting` with its questions through PermissionRequest.
+    - The server. It mints an ask row only on the first pane tick that sees a new menu (`watch.ts` ≈:6567), so an
+      ask clobbered within about 3 s is never recovered.
+  - The stall watch's part, which is this lineage's.
+    - With no ask, the case falls to the dialog hold (2b). The design means 2a, where a pending AskUserQuestion is
+      legitimate and goes to the asks lane.
+    - The dialog cap's quiet clock counts the newest mail sent to the worker even when the gate cannot deliver it,
+      and a `waiting` pane is never delivered to. The coordinator's mails 4055 and 4060 each restarted the 2 h
+      clock, so it falls due at 2026-10-09 01:29:13Z.
+    - At the box's arming (`stall-watch-live` without `stall-watch-escalate`, level Check), the dialog cap records
+      only a shadow row and pushes nothing. A stuck dialog reaches no human unless the operator chooses Alert or
+      above.
+    - `runs signals` carries no stall fields, so its silence was never evidence that no stall row exists.
+  - Owners, as this session reads them. None of the fixes is in this programme's scope, and none is implemented
+    here.
+    - (1) The hook: subagent events (non-empty `paid`) must not change the main thread's state or ask, carrying
+      them forward as SubagentStart and SubagentStop already do. The test is main AskUserQuestion, then a Bash with
+      `agent_id`, then SubagentStop, still `waiting` with the questions. It belongs to the ask lane's owner.
+    - (2) The dialog cap times a `waiting` dialog from the live stamp, or counts only delivered mail. It belongs to
+      the stall watch: a follow-up to this lineage.
+    - (3) Arming stays the operator's.
+  - Routed: a reply to `ccrc-pwa-calm-mesa`, and a report to the operator, who decides whether (1) and (2) open as
+    a programme.
+- **R33 (2026-10-12 10:14)**, the operator approves the merge of PR #322, and wave 2 absorbs `main` first.
+  - The operator: "yes to 322 merge". They asked for this session's recommendation on the two wordings. The wordings
+    are still the operator's to decide; the recommendation is in the reply, and the answer will be recorded here.
+  - Re-measured before merging:
+    - PR #322's head is still `451854d1d`, and run 322 is still `awaiting-review`.
+    - `origin/main` has moved 30 commits to `28e8dc1b2`. Six files are touched on both sides, and `merge-tree` now
+      conflicts in two: `README.md`'s Settings paragraph and `SettingsScreen.tsx`'s header comment.
+    - Both conflicts are prose. Box-token lifecycle wave 1 part B (#341) added a Box token card to the same screen
+      and paragraph.
+    - The other four auto-merge, but `main` also carries box-token wave 1 part A's migration. So the suites must
+      re-run on the merge result, and nothing merges at `451854d1d`.
+  - Ruling: one absorb round (mail 4295).
+    - The worker merges `origin/main`, never rebasing. Its header comment names Updates, the Box token card,
+      Notifications and Stall watch. README keeps `main`'s card text verbatim, the push-bell wording and the Stall
+      watch sentence.
+    - The worker measures the migration slots and the citation counts at `origin/main` and on the merge result,
+      re-runs every suite, and changes nothing else.
+    - A short scoped review of the merge follows, then the merge with `--match-head-commit` at the new tip, under
+      the operator's approval.
+  - `README.md` is under workspace-lifecycle run 358's claim 1172 (`ccrc-pwa-plain-ridge`). Its edits sit at
+    ≈:3545 to ≈:3810, far from the Settings paragraph. Consent for the one-paragraph co-edit was asked of
+    `ccrc-pwa-quiet-river` (mail 4294), and the worker commits that hunk only after this session confirms it.
+  - Run 322 is back at `working` (fingerprint `451854d1d`).
+  - Consent (10:19). `ccrc-pwa-quiet-river` consents (mail 4296) to the merge resolution of README.md's Settings
+    paragraph only, while claim 1172 stands, and to no other path under claims 1171, 1172 or 1174. Its ordering
+    note: run 358 merges `main` before its own handoff, so whichever of #322 and #351 lands second absorbs the other.
+    This session confirmed the licence to the worker (mail 4299).
+- **R34 (2026-10-12 11:36)**, the absorb is verified, and its review is dispatched.
+  - Mail 4306 claims merge commit `39c42f503`, whose parents are `451854d1d` and `origin/main` `28e8dc1b2`; it was
+    a plain merge with no rebase.
+    - Both conflicts are resolved as ruled. The header names Updates, the Box token card, Notifications and Stall
+      watch. README keeps `main`'s card text verbatim, with "push bell" and the Stall watch sentence; it is one hunk
+      against `main`.
+    - The merge forced one test change: `stall-settings-readme`'s second anchor now uses `main`'s Notifications
+      sentence. Reverting to "phone-push" still reds the device row (measured).
+    - `schema.ts` is byte-identical to `main`'s.
+    - The citation instrument reads `7 passed | 443 skipped` on both `main` and the merge. The carried 7|328 was
+      `main`'s count when the wave began, not a property of this wave.
+    - `suite: red` is load again. The first whole-PWA run, at load average 90 to 135, had 6 timeouts in 2 files,
+      both green alone. `main` itself showed 35 such reds at the same load. CI's `test (pwa)` is green.
+  - Re-measured:
+    - `origin/ws/calm-basin`, the workspace `HEAD` and PR #322's head all read `39c42f503`, the workspace is clean,
+      and the PR is `MERGEABLE`.
+    - Every required CI check is green; only the macOS legs were still running.
+    - `merge-tree` against current `main` is clean.
+    - The net change against `main` is the same 16 files, with `server/src` holding item 5's `watch.ts` comments
+      only.
+    - The server took the fingerprint, and run 322 is `awaiting-review`.
+    - The evidence is copied to `w2-absorb-child-evidence/`.
+  - Claims: the worker holds claims 1180 and 1181, and README under claim 1172 is licensed.
+  - Review run 390 is dispatched to `ccrc-pwa-brisk-basin` (the cap read 13 of 24), with the registry route opus,
+    high effort, sonnet subagents, workflow on and compact 40. Its brief is `w2-absorb-review-brief.md`: the panel
+    on `28e8dc1b2..<tip>`, scoped to the merge, the forced anchor and any meaning `main` changed, with what review
+    340 accepted kept as residue.
+  - The worker raised two `main` comments for the reviewer: the box-token comment's "a third section", and the
+    ONE-poll comment naming only Updates and Notifications.
+  - Next: `review-done`, then the merge with `--match-head-commit` at the reviewed tip, under the operator's R33
+    approval.
+- **R35 (2026-10-12 12:23)**, review 390 is accepted, and one last bounded round fixes its prose and test hygiene.
+  - Review run 390 (`ccrc-pwa-brisk-basin`, mail 4313) reviewed `39c42f503`, scoped to the merge, with the held-out
+    panel: 54 agents, no lens unverified, 15 confirmed and 2 refuted, collapsing to five findings.
+    - None is a behaviour defect.
+    - The suites are green; the PWA reds were load timeouts that passed alone.
+    - The citation instrument agrees with `main` at `7 passed | 443 skipped`.
+    - `watch.ts`, `coord-db`, `schema.ts` and `pwa/src/lib/api.ts` came through the merge with no finding.
+    - Run 390 closed `done` and released. The report is copied to `w2-review-390-report.md`.
+  - F1, ruled: README's "Settings has a third section, **Stall watch**" is false once `main`'s Box token card
+    renders as its own section with its own heading. The sentence takes `main`'s own idiom, "then has a further
+    section", which carries no ordinal to keep true; `main` made the same change when it added the card. The README
+    pin's anchor and header follow it. This stays inside the licensed Settings paragraph.
+  - F2: the placement test asserts only the loading state. It gains a case with a landed updates view that pins
+    the four headings in order.
+  - F3: the screen's map comments are made true of four sections:
+    - the ONE-poll comment names its three readers;
+    - `StallWatchSection.tsx`'s "third" and "the other two" are corrected;
+    - the banner comment says "above every section".
+    `main`'s own "a third section" for the card stays; the panel refuted it, because it counts in file order.
+  - F4, ruled: `box-token-card.test.tsx` now makes a live fetch of `/api/coord/stall-watch`, because this wave
+    mounts a fetching section into the screen that test mounts. The wave caused it, so the wave fixes it. Its `mount`
+    spies `api.stallWatch` and nothing else changes. The file is unclaimed and the worker claims it first.
+  - F5: a snapshot note beside the plan's mutation row L (`main`'s anchor, "1 failed") and in its absorb section.
+    It takes no number.
+  - R1, taken into the round: the stall-watch block's lead in `shared/api.ts` no longer stands at the end of the
+    file. The placement sentence is corrected; it is a comment inside wave 1's block, and `shared/api.ts` is claimed
+    first.
+  - The bound: this is the last round. Its review is scoped to this round's diff, and anything it leaves goes to a
+    follow-up after the merge. Run 322 is back at `working` (fingerprint `39c42f503`), with mail 4314.
+- **R36 (2026-10-12 13:09)**, the last round is verified, and its review is dispatched.
+  - Mail 4325 claims `21b754fd0`, eight commits over eight files. They are F1 to F5, R1, and two of the worker's
+    re-review corrections (M1, M2).
+    - The worker measured each mutation as R35 asked. Without box-token-card's spy, 30 live fetches recur across
+      its 61 cases.
+    - `suite: red` is load once more: 23 timeouts in 13 files, none of them touched by the round, each green alone.
+      CI's `test (pwa)` is green.
+    - The worker's own scoped Opus re-review approved the round, with four notes (N1 to N4) for the follow-up.
+  - Re-measured:
+    - `origin/ws/calm-basin`, the workspace `HEAD` and PR #322's head all read `21b754fd0`, the workspace is clean,
+      and the PR is `MERGEABLE`.
+    - Only the advisory macOS legs were pending.
+    - `main` is unmoved at `28e8dc1b2`, and `merge-tree` is clean.
+    - `server/src` is untouched.
+    - The server took the fingerprint, and run 322 is `awaiting-review`.
+    - The evidence is copied to `w2-final-child-evidence/`. Claims 1180, 1181 and 1182 are held, and README is
+      licensed.
+  - Review run 392 is dispatched to `ccrc-pwa-keen-hollow` (the cap read 14 of 24), with the registry route opus,
+    high effort, sonnet subagents, workflow on and compact 40. Its brief is `w2-final-review-brief.md`, scoped to
+    `39c42f503..<tip>` with everything else kept as residue.
+  - Next: `review-done`. Then this session merges with `--match-head-commit` at the reviewed tip, under the
+    operator's R33 approval, unless the review finds a behaviour defect.
+- **R37 (2026-10-12 14:15)**, wave 2 is merged, and the programme is complete.
+  - Review run 392 (`ccrc-pwa-keen-hollow`, mail 4333) reviewed `21b754fd0`, scoped to R35's round, with the held-out
+    panel: 36 agents, no lens unverified, 8 confirmed and 3 refuted, all minor.
+    - All six R35 items are done as ruled, each re-measured by mutation.
+    - "None of them changes behaviour in shipped code."
+    - Its one in-scope finding, F1, is a comment: `box-token-card.test.tsx:52-53` says no mount issues a live fetch,
+      while `main`'s exposure banner still fetches `/api/auth/status`.
+    - Lanes are clean, and the citation instrument agrees with `main` at `7 passed | 443 skipped`.
+    - Run 392 closed `done`. The report is copied to `w2-review-392-report.md`.
+  - The merge. PR #322 merged at 2026-10-12 14:13:18Z as `6e4524164`, by `--admin --squash --match-head-commit
+    21b754fd0`, under the operator's R33 approval. Before it:
+    - the head equalled the reviewed tip, and `merge-tree` was clean against `main` `28e8dc1b2`;
+    - every required check was green, and only the advisory macOS legs failed;
+    - the PR was `MERGEABLE`, and `BLOCKED` was covered by `--admin`;
+    - no commit message carried a D-number range.
+  - Run 322 closed `done` with `final:true`, released, with `childReclaim` queued. The worker's workspace evidence
+    was copied first to `w2-final-child-evidence-close/`. Both work runs, 295 and 322, are `done`.
+  - The wave's three fix-round numbers are now defined on `main`, in the W2 plan's Deviations:
+    - D-4042, `malformed-optional-block-is-dropped` (R24);
+    - D-4043, `unanswered-write-has-its-own-l0-line` (R27);
+    - D-4044, `pinned-built-in-value-is-its-own-option` (R29).
+    The reserve number 4045, and W1's 4039, 4040 and 4041, were never assigned.
+  - The two wordings. This session recommended keeping both. The operator approved the merge and gave no other
+    wording, so both ship as they stand:
+    - a write with no answer says "Not confirmed — the server did not answer; the screen will re-check.";
+    - an unreadable 2xx keeps the Settings screen's shared "Saved — the server's answer could not be read; the
+      screen will re-check.".
+    Either may change in a follow-up. The second is shared by two older Settings writes.
+  - Release: the release workflow for `6e4524164` started at 14:13:21, and v0.0.149 is the latest published. The
+    fleet box reads v0.0.149 (`28e8dc1b2`). The updater moves the boxes; this session never rolls out by hand.
+  - Follow-up, none of it behaviour and none of it blocking:
+    - Comments:
+      - `box-token-card.test.tsx`'s header and :52-53 overclaim no live fetch; the remaining `/api/auth/status`
+        fetch comes from `main`'s banner, in the box-token lane;
+      - `MAIL_REPLAY_MS`'s docstring still says it stands at the end of `shared/api.ts`.
+    - W2 plan snapshots:
+      - X37 and X38's counts, X41 and X43's old title (X43 now reds 27), and X59's anchor;
+      - Task 4's "5 failed (5)", and post-merge step 3's "third section", read as "after Notifications";
+      - the File Structure rows for `box-token-card.test.tsx` and the `shared/api.ts` lead;
+      - row L's runner, which is outside the tree by design.
+    - Tests:
+      - the source-`default` row's title says "under a fallback" over a fixture with none;
+      - the README pin repeats the PWA's device-word list;
+      - "fourth heading" holds only once the poll lands.
+    - Code: `quietText` duplicates the server's `stallQuietWords`.
+    - Finding 4063 (R32), the larger follow-up:
+      - (1) the session hook must not let a subagent's tool events overwrite the main thread's `waiting` and ask,
+        which belongs to the ask lane's owner;
+      - (2) the stall watch's dialog-cap clock must not count undelivered mail, which is a stall-watch follow-up;
+      - (3) arming stays the operator's.
+  - Next: this ledger lands on `main` by a docs PR from this branch, after `main` is merged in (its plan taken as
+    `main` has it). Then the deploy is checked read-only once v0.0.150 is published.
+
+- **R38 (2026-10-12 14:41)**, the operator keeps finding 4063's two fixes in this programme as wave 3, and the
+  ledger to R37 is merged.
+  - The operator, 2026-10-12 14:30: "no keep the two fixes in this programme. can we get on with work now?", then
+    "merge 356 when green". The two fixes are R32's owners 1 and 2: the hook's subagent overwrite of the main
+    thread's ask, and the dialog cap's clock. Owner 3, arming, stays the operator's.
+  - #356 merged at 14:34:05Z as `da1373cf6`, by `--admin --squash --match-head-commit f7baf646e`. Every required
+    check was green, `test (server)` included; the macOS legs were still running and gate nothing. The first attempt
+    answered "Base branch was modified": `main` had moved by #355, another programme's docs only, and `merge-tree`
+    stayed clean, so the same pinned merge was retried. `main` was merged into this branch afterwards (`b6e675657`).
+  - Ruling: wave 3 is two tasks in `docs/superpowers/plans/2026-10-12-stall-watch-settings-w3-hidden-ask.md`, and
+    the plan rides in the wave's PR, its first commit, rather than in a docs PR first — because the operator asked to
+    get on with the work, and the held-out panel reviews plan and code together at wave-done. Cost if wrong: a plan
+    defect the review finds costs a fix round, never a merged defect.
+  - Ruling, task 1's shape: a subagent's PreToolUse or PostToolUse that finds the hookstate `waiting` keeps
+    `waiting`, its ask and `interrupted`, beside the SubagentStart/SubagentStop carry, below `:2900` (D-3615). Only
+    `waiting` is carried: after the main Stop, background work keeps writing `working`, as the card, the dispatch
+    busy check and the operator read it today. The stamp and the event still move, because the `delegates` hold and
+    the frozen arm read them. The ask row cannot be minted twice: `detectDialogs` mints once per pane dialog id.
+    Cost if wrong: a dismissed dialog with no main-thread event stays `waiting` under background work until the next
+    main-thread event, which is also what happens today with no subagent.
+  - Ruling, task 2's shape: the dialog cap times its quiet from the latest of its live stamp, the worker's own last
+    mail and the dispatch, dropping the inbound term; the limit cap keeps the shared clock. Spec §10 step 2b already
+    says no mail can land on `waiting`, and the gate delivers only on `idle` or `shell`. Mail that does land
+    re-stamps the live word, so a `dialogPending` under an idle word loses nothing. Cost if wrong: one operator push
+    up to 2 h earlier for that dialog, never mail.
+  - Numbers: D-4039 `subagent-tool-event-keeps-the-waiting-ask` and D-4040 `dialog-cap-clock-ignores-inbound-mail`,
+    from this programme's 17:47 block, both unused on `main` (measured on `da1373cf6`). The block's last two reserve
+    numbers stay unassigned, for a fix round's departure by ruling.
+  - Claims at 14:31: 1188 (run 354) holds `server/test/session-hook.test.ts`, and 1172 (run 358) holds `README.md`,
+    `server/src/watch.ts` and `server/src/coord/store.ts`. Neither fix needs them: task 1's tests go in a new
+    `server/test/session-hook-subagent-ask.test.ts`, as the turn marker's did, and README is left alone. A README
+    sentence that turns false is named in the wave-done and routed.
+  - Scope: the R37 residue list stays out; the operator named the two fixes.
+  - Routing is unchanged from wave 2: Opus high for the main loop, Sonnet high for implementers, Opus high for each
+    task's reviewer, Haiku for scouts, workflows off, compact at 40.
+  - Dispatch: the concurrency cap stood at 7 of 7 at 14:40 (runs 354, 358, 367, 372, 373, 389, 391) and the daily
+    cap at 15 of 24. Wave 3 opened as run 394, and a bounded waiter dispatched it when a slot freed: 14:51:54, to the
+    fresh child `ccrc-pwa-bright-cove`, brief queued, worker skill present. The brief is
+    `.superpowers/sdd/stall-watch-settings/w3-wave-brief.md`; the plan is blob `5d9622c25` at `3da7ea0e5`.
+  - Deploy class: both. The updater moves the fleet box first, which this wave needs, since the server reads what
+    the hook writes. This session never rolls out by hand.
+
+- **R39 (2026-10-12 18:19)**, wave 3's wave-done is verified, and its review is dispatched.
+  - Wave-done, mail 4366 from `ccrc-pwa-bright-cove` (after the fleet's 15:48Z out-of-memory crash, which
+    lapsed its claim 1192; re-taken as 1194). `suite: unrun`: no full server suite on a memory-tight box; per-file
+    tables green, both `tsc` clean, the citation instrument `7 passed | 443 skipped` before and after.
+  - Re-measured: branch tip = PR #362's head = `efb4842b7`, PR open and `MERGEABLE`, `merge-tree` clean against
+    `main` `da1373cf6` (unmoved). The first commit `e0c7418c0` carries the plan blob `5d9622c25` unchanged. Twelve
+    commits, five files. The server accepted the fingerprint: run 394 `dispatched` → `working` → `awaiting-review`,
+    and its three items settled `done` (1720-1722).
+  - The worker's departure, `carry-only-a-main-thread-wait`, recorded inside D-4039 with no number: a subagent's own
+    PermissionRequest writes an additive hookstate key `waitBy:"subagent"`, so its dialog is not carried after the
+    subagent's next tool event. It narrows R38's "only `waiting` is carried" to a main-thread wait, which R38's own
+    shape got wrong: an approved subagent dialog would have stayed `waiting` until the next main-thread event. Not
+    ruled yet; the review weighs it.
+  - The worker's named follow-ups: a carried `waiting` moves `updatedAt` per subagent tool call, so `ask-moved`
+    refusals on a coordinator's answer and a re-firing unseen badge; and a one-hook-run race. R38 kept the stamp
+    moving for the `delegates` hold and the frozen arm, which may not be reachable under a `waiting` word. Not ruled
+    yet; the review measures every reader of the stamp.
+  - Review run 397 dispatched 18:19:26 to the fresh `ccrc-pwa-soft-prairie`, with the held-out panel and eight
+    checks; brief `.superpowers/sdd/stall-watch-settings/w3-review-brief.md`, route Opus high, Sonnet subagents,
+    workflow on, compact 40. Caps at 18:18: 5 of 7 active, 12 of 24 in the day. The worker's evidence is copied to
+    `w3-child-evidence/` (25 files).
+
+- **R40 (2026-10-12 19:43)**, review 397 is accepted, and wave 3 gets one fix round: a carried wait keeps its stamp.
+  - Review run 397 (`ccrc-pwa-soft-prairie`, mail 4387) reviewed `efb4842b7` with the held-out panel. Five
+    findings, none class (a). The mutation rows (M1-M13, M4-M6) reproduce, suites are green apart from the
+    session-hook compaction-ratio load flake (red at the base too), and the citation instrument agrees with `main`.
+    Closed `done`; report copied to `w3-review-397-report.md`. PR #362's CI is green on every required leg at the
+    tip (mail 4369); one macOS leg failed outside the wave's files.
+  - Before ruling, a verification workflow (`wf_a05201ff-3c4`: three Opus measurers, each challenged by a Sonnet
+    refuter; output `w3-f3-verify-workflow.json`) tested the ruling's premises.
+    - The `ask-moved` window fails safe: nothing is typed, the row stays answerable, retries converge, and the 120 s
+      grace release backs it. The operator's route never refuses, but when its CAS loses the feed record is lost.
+    - "Nothing worse than the base but the named costs" does NOT hold. Beyond F1 and F3:
+      - a new race: a main answer write landing inside a subagent hook run is overwritten by a carried `waiting`;
+      - the dialog cap can push more than once in F1's stale case;
+      - a later hookless dialog (sandbox, elicitation) is minted as an ask from the STALE question and offered
+        stale answer buttons. `answerAsk`'s menu check refuses any press, so no wrong keystroke is possible.
+    - A narrow variant needs no claimed file. On a carried write, keep the prior `updatedAt`, add an `aliveAt`
+      stamp, and let `hookstate.ts`'s single age cut read both. The review's own wait-start shape would need
+      `watch.ts` (claim 1197, run 358).
+  - Ruling: fix round 1, on the same PR.
+    1. `a-carried-wait-keeps-its-stamp`, a reserve number assigned by this ruling. Every subagent-originated write over a
+       main-thread wait keeps `updatedAt` and `event` and writes `aliveAt`. The carry is decided from one fresh read
+       at the carry point, which narrows the race. The age cut reads max(`updatedAt`, `aliveAt`), and an absent or
+       malformed `aliveAt` is ignored. Files: the hook and its test (claim 1194) plus `server/src/hookstate.ts` and
+       `server/test/hookstate.test.ts` (unclaimed).
+       - Why: it removes F3's badge re-fire, the `ask-moved` window, the operator's lost feed record and the
+         uncapped `ask` reroute of a hookless dialog, with no claimed file.
+       - Cost if wrong: during update skew an older server ages a carried wait at its start + 30 min, and the frozen
+         arm can fire up to 30 min earlier after the aged read expires.
+    2. F2: fold the SubagentStart/SubagentStop reads into one `jq` fork.
+    3. F1 and its wider consequences: words in D-4039's "Cost if wrong". An age bound on the carry is rejected,
+       because it would bring finding 4063 back for a long real wait. A reader-side bound needs claimed files and
+       stays a follow-up.
+    4. F4 and F5: words. Review Focus 2 is corrected.
+  - Not merging as is. The three new cells (the race, repeat pushes, stale minting) are user-visible, and item 1
+    removes or narrows each at the cost of four small files.
+
+- **R41 (2026-10-12 20:40)**, wave 3's fix round 1 is verified, and its scoped review is dispatched.
+  - Run 394's move back to `working` was refused `cap-concurrency` (7 of 7) at 19:47. A bounded waiter moved it at
+    20:14:08; the worker had the fix-round mail (4394) and a correction (4395) and worked meanwhile.
+  - Wave-done, mail 4407 from `ccrc-pwa-bright-cove`. `suite: unrun`, no full suite; per-file tables green,
+    `session-hook.test.ts` 450/450 alone, both `tsc` clean, citation instrument identical.
+    - Item 1: the carry keeps `updatedAt` and `event`, writes `aliveAt`, and is decided from one fresh read. The age
+      cut reads the later of `updatedAt` and `aliveAt`, and `HookState` is unchanged. The race's main-write-first
+      variant now ends `working` (pinned). The read-to-`mv` variant and the erase direction are named residuals.
+    - Item 2: SubagentStart/SubagentStop forks 7 (base), 8, now 6. A subagent tool event over `waiting` pays +1.
+    - Items 3 and 4: words, as ruled.
+    - Two of the new mutation rows cannot red; the worker calls them unreachable redundant checks.
+    - The worker routes, unedited: README :5413-5417 ("a write older than 30 minutes") is now imprecise under
+      claim 1197; plan lines outside the round's permitted edits read stale (:53, :46-47, the Task 1 snippet).
+  - Re-measured: tip = PR #362's head = `24e4eebc6`, `merge-tree` clean against `main` `2d1835188`, eight commits
+    in five files since `efb4842b7`. The server accepted the fingerprint: run 394 `awaiting-review`. CI was running.
+  - Review run 402 dispatched 20:40:32 to the fresh `ccrc-pwa-brisk-prairie`, scoped to the round with ten checks,
+    the panel, and whole-wave properties; brief `.superpowers/sdd/stall-watch-settings/w3-fr1-review-brief.md`.
+
+- **R42 (2026-10-12 21:23)**, fix round 1's wave-done is withdrawn: two CI reds the round caused.
+  - Mail 4413 from `ccrc-pwa-bright-cove`: PR #362's CI run 38305507333 has two red server shards at `24e4eebc6`, both
+    from this round, in files missing from its local list.
+    - `test/ask-instance-guard.test.ts` pins the spurious `ask-moved` that D-2403 documents: a SubagentStop
+      re-stamping an open dialog.
+    - `test/session-hook-merge-deny.test.ts`'s jq-program census floor reads 51 against 52, because of the fork fold.
+  - Ruling (mail 4414):
+    - Invert the first to pin the fix, keeping a control that a main-thread write still moves the stamp, and record
+      in D-4041 that it supersedes D-2403's bump for a main-thread wait only. The restamp pair stays.
+    - Scope `freshAskAt`'s D-2403 docstring in `server/src/registry.ts`, in words.
+    - Re-measure the floor and state its composition.
+    - Re-gate every server test that reads the hook's text or the hookstate.
+  - Run 394 cannot go back to `working` while review run 402 is open (`review-in-flight`). Review 402 reads
+    `24e4eebc6` and is left to finish. Once its report lands:
+    - close it `failed` if the worker's push made it stale, and do not rule on it;
+    - advance run 394 `working`, then `awaiting-review` on the new fingerprint;
+    - open a fresh review run scoped to the new commits. It takes 402's report as input and re-verifies its
+      findings at the new tip.
+
+- **R43 (2026-10-12 21:32)**, review 402 is accepted, and wave 3 gets fix round 2.
+  - Review run 402 (`ccrc-pwa-brisk-prairie`, mail 4415) read `24e4eebc6` with the panel (39 agents, none
+    unverified): 7 confirmed findings, 4 refuted. The worker had not pushed, so the reviewed tip was live and the
+    close was accepted. Report copied to `w3-review-402-report.md`. The round closes review 397's F3 at all three
+    readers and the race's first variant; every S/N/A/M row reproduces; the citation instrument agrees with `main`.
+    F1 and F2 are the two CI reds already ruled (R42).
+  - Rulings (fix round 2, mail 4416, which extends 4414):
+    - Update skew is accepted as named, not removed. The default moves (`ccrc rollout`, the PWA's apply, the
+      automatic moves) are fleet-first, so every ordinary move opens a window bounded by the update lag, and
+      unbounded if the server's move halts. Inside it, a carried wait reads no-state at its start + 30 min. The
+      plan header loses "fleet-first is the order this wave needs", and the entry names `--server-first` for a hand
+      rollout.
+      - Why: splitting the PR to ship the reader first costs a second release and review. The window needs a
+        carried wait older than 30 min during an update, and its worst reader (the dispatch busy check) also needs
+        a dispatch aimed at that worker.
+      - Cost if wrong: one `/clear` dispatched into a worker parked on a question.
+    - F3 routing: `store.ts`'s `restampAsk` docstring and `watch.ts` :7409-7413 (claim 1197, run 358) still
+      describe the old re-stamp as current. Recorded in D-4041's Not done and added to the follow-up list;
+      `asks-mint.test.ts`, unclaimed, is scoped in this round.
+    - Code: remove dead check N3 (the regex is the rule); make F6's vacuous test iteration real. N4 stays, named as
+      positional.
+    - Words: F5's event fallback, F7, D-4039's missing session-verdict and `turnStall` consequences, the M4 line's
+      qualifier, plan :53 and :46-47. Task 1's snippet is not rewritten; a note says D-4041 supersedes it.
+
+- **R44 (2026-10-12 23:10)**, fix round 2 is verified, and its merge review is dispatched.
+  - 22:32, mail 4422: the worker paused its 57-file re-gate at 16 files. The fleet box had about 4-6 GiB available
+    at load 100-141, and Claude Code's memory reaper had stopped a run.
+  - Ruling (mail 4424): push, and let PR CI gate every file it runs, since CI runs on a quiet box. Run locally,
+    alone, only a list file CI did not select, and only with 8 GiB or more available; otherwise name it unrun.
+    - Why: the box went out of memory at 15:48Z, and CI is the arbiter for a file it ran.
+    - Cost if wrong: a file CI skipped stays unmeasured until the reviewer or the daily full run reaches it.
+  - Wave-done, mail 4430: tip = PR #362's head = `3a28932a7`, `merge-tree` clean against `main` `2d1835188`.
+    - Done: every item of 4414 and of 4416 (A-H). An in-round independent review's F1-F6 are all addressed.
+    - Mutation rows: N3 removed; N1 re-measured at 2 failed with the real `'waitingx'` case; S11 new (4 of 6
+      ask-instance-guard cases).
+    - CI run 38317359692 passed every required leg (502 server files) and ran 53 of the 57; `ask-route` passed
+      locally. `compact-card`, `divergence` and `transcript-parse` are unrun (memory).
+    - The citation instrument, both `tsc` and `bash -n` are clean.
+  - Re-measured, and the server accepted the fingerprint: run 394 `awaiting-review`.
+  - Review run 403 dispatched 23:09:50 to `ccrc-pwa-swift-mesa`, scoped to `24e4eebc6..3a28932a7` (seven commits,
+    seven files), with local suites gated on free memory; brief `.superpowers/sdd/stall-watch-settings/w3-fr2-review-brief.md`.
+
+- **R45 (2026-10-12 23:42)**, review 403 is accepted, and one last wording-only round precedes the merge.
+  - Review run 403 (`ccrc-pwa-swift-mesa`, mail 4433) read `3a28932a7`, the live tip, with the panel (33 agents,
+    none unverified). Closed `done`; report copied to `w3-review-403-report.md`.
+    - Confirmed: 4414's items and 4416's A-H are done as ruled; the merge-deny floor's composition (52, then 54,
+      then 51) is true; every mutation row reproduces; every suite is green; the citation instrument equals
+      `main`'s.
+    - The three unrun files read nothing the wave changed.
+    - The whole wave does what R38 and R40 asked, measured end to end.
+  - Findings: F1-F6, all minor and wording only:
+    - the hook's "exponent form" is false below 1e17;
+    - the plan's CAS-across-a-tool-event pin claim;
+    - the S11 re-measure sentence;
+    - a test header naming a span of six numbers, where only D-2403 and D-2404 were measured;
+    - the H comment for a multi-line corrupt value;
+    - the fresh read's self-contradicting "a jq that fails prints nothing".
+  - Ruling on F7: the stamp rule keeps a fractional `updatedAt` as its floor, and exponent literals below 1e17,
+    unchanged since `24e4eebc6`. Accepted.
+    - Why: the hook writes integer milliseconds only, so a fractional stamp means a foreign or corrupt file, and
+      keeping its floor moves the stamp by under 1 ms.
+    - The three overclaiming sentences are fixed: the hook comment, plan :500-501 and :472, and the test title
+      `session-hook-subagent-ask.test.ts:220`, with every plan row citing that title.
+    - Cost if wrong: none to behaviour; a corrupt stamp rounds down.
+  - Ruling: fix round 3, wording only (mail 4434; run 394 back at `working`). The code diff may touch only comments and one test
+    title. The words are in shipped comments and a test header, so they are fixed before merge, not parked. This is
+    the last round: any further wording finding goes to the post-merge residue list.
+    - Parked: the long lines (style), and README :5413-5417 (claim 1204, run 398; follow-up list).
+- **R46 (2026-10-13 00:24)**, fix round 3 is verified at `5aa5dbadb`, and scoped review run 404 is dispatched.
+  - Wave-done mail 4439 (`ccrc-pwa-bright-cove`): three commits, `4e0b91515`, `392e14ba2` and `5aa5dbadb`, all
+    words. Re-measured: the tip equals PR #362's head; merge-tree with `origin/main` `2d1835188` is clean; PR CI run
+    38324108522 passed every required leg (macOS pending, advisory). Run 394 advanced to `awaiting-review`.
+  - Measured here: `git diff 3a28932a7..5aa5dbadb -- ccd server` changes only comments and the one renamed title.
+  - Substitution, named by the worker: R45's "1e17 and above" is false. On this box's jq-1.7, 1e16, 2e16 and
+    9999999999999999 print in exponent form, while 1.01e17 prints in full, so no size cut describes the rule. The
+    hook now says which values print that way follows jq's number formatting, and the test title says "printed by
+    jq in exponent form". Accepted, pending review 404's own measurement; R45's "below 1e17" in F7's ruling reads
+    as "printed in full by jq". Behaviour is unchanged either way.
+  - The worker ran three re-runs below the 8 GiB floor and named it. CI ran those files at the tip, and CI is the
+    arbiter.
+  - Review run 404 (`ccrc-pwa-calm-hollow`) reads `3a28932a7..5aa5dbadb` with the panel. It checks that the
+    diff is words only, items 1-7, the jq table behind item 1, the renamed title's plan rows and counts, and the
+    wave's ledger properties.
+- **R47 (2026-10-13 00:35)**, review 404 is accepted; wave 3 is ready to merge at `5aa5dbadb`, the operator's call.
+  - Review run 404 (`ccrc-pwa-calm-hollow`, mail 4441) read `5aa5dbadb`, the live tip, with the panel (42 agents,
+    none unverified). Closed `done`; report copied to `w3-review-404-report.md`.
+    - Confirmed: the code diff is comments and the one title only; items 1-7 of mail 4434 are done; every suite
+      is green at the tip; the citation instrument equals `main`'s (`7 passed | 443 skipped`); D-4039, D-4040 and
+      D-4041 are each defined once; the 33 mutation rows keep their counts, and N2 reds with the new title.
+    - Item 1's substitution is correct by the reviewer's own jq-1.7 table: 1e16 is refused and 1.01e17 is kept.
+      R46 stands.
+  - Findings F1-F4, all words, each surviving its refuters:
+    - F1: the plan's D-4041 "Pinned by" bullet (:503) says the fractional floor is pinned. No case plants a
+      fractional stamp; removing the floor leaves the suite green.
+    - F2: the renamed title (`session-hook-subagent-ask.test.ts:220`) and its five plan rows name the same
+      unasserted floor.
+    - F3: "a fractional value keeps its floor" (hook :3792, plan :473) is false for a negative one: -0.5 floors to
+      -1 and is refused.
+    - F4: plan :368-369 and :521-522 say the rows kept identical titles across two measurements; the title was
+      renamed after both.
+  - Ruling: F1-F4 go to the post-merge residue list, as R45 ruled for any further wording finding. No fifth round.
+    - Why: behaviour is accepted and measured end to end (reviews 403 and 404). Each finding overstates what a
+      test pins, or scopes a sentence loosely; none changes what the hook does.
+    - Ruling on F2: the follow-up keeps the words and adds the case, rather than dropping the words. It plants a
+      non-negative fractional `updatedAt` (kept as its floor) and -0.5 (refused), so F1's bullet and F2's title
+      become true, and F3's sentence says "a non-negative fractional value". F4 gets one sentence naming the
+      rename.
+    - Cost if wrong: until the follow-up lands, one test title and one plan bullet claim a pin that does not
+      exist. The behaviour they describe is correct.
+  - Noted for the record, not a finding: in R45 item 4, D-2404 is the correction of the bump's mechanism, not the
+    bump itself. The test header's words are the ruling's; the follow-up may tighten them.
+  - Next: the operator merges #362 (`--admin --squash --match-head-commit 5aa5dbadb`). Then run 394 closes `done`
+    as the final wave, and the residue list goes to the programme's close.
+- **R48 (2026-10-13 18:26)**, #362 conflicts with `main`; fix round 4 absorbs it, and changes nothing else.
+  - Re-measured before the merge: `main` moved 72 commits, from `2d1835188` to `0d0ea5921`. Merge-tree with
+    `ws/bright-cove` at `5aa5dbadb` now conflicts in `ccd/session-hook.sh`. #392 (the role-skill deny)
+    added a block at the same insertion point as wave 3's carry block, after the merge deny. The two blocks are
+    independent: the deny sets the deny envelope on a subagent's `Skill` call, and the carry decides the
+    hookstate write.
+  - Ruling: fix round 4, merge only (mail 4636; run 394 back at `working`). The worker merges `main` with no
+    rebase, keeps both blocks whole with `main`'s first, and stops on any other conflict.
+    - It proves the PR's own change is unchanged: the `+`/`-` lines of `git diff da1373cf6 5aa5dbadb` equal those
+      of `git diff origin/main HEAD`.
+    - It measures the two blocks together once, in a fixture HOME, and commits no test: a subagent's
+      `ccrc-worker` Skill call over a main-thread wait is denied, and the wait keeps its ask and stamp.
+    - It re-runs both blocks' suites, the citation instrument against the new `main`, and the ledger guards.
+  - Claims: wave 3's claims lapsed at their hard cap while #362 waited for its merge. Run 354's claim 1250 now
+    holds `ccd/session-hook.sh`, scoped to its history-spool block. The two workers agreed terms in mail 4468:
+    each edits only its own lines, and whoever lands second merges `main` and keeps the other's lines. This merge
+    is within those terms. FYI to run 354's coordinator: mail 4637.
+  - Review: a scoped review of the merge commit follows the wave-done, then the merge goes back to the operator.
+    Review 404's F1-F4 stay on the residue list (R47); this round does not touch them.
+  - Residue added: `server/test/stall-settings-route.test.ts:588-595` slices the stall-settings POST handler from
+    its registration to the next registration. Since #384 that slice runs on into the collector switch's helpers,
+    so a census over it can count or miss a call that is not the POST's (mail 4635, review 415's class (c),
+    record-only). The follow-up bounds the slice to the handler's body, as `single-definition.test.ts`'s own slice
+    does since #384.
+- **R49 (2026-10-13 18:48)**, fix round 4 is verified at `50bdec086`, and scoped review run 422 is dispatched.
+  - Wave-done mail 4638 (`ccrc-pwa-bright-cove`). Re-measured here:
+    - `50bdec086` is PR #362's head, a merge of `5aa5dbadb` and `origin/main` `0d0ea5921`;
+    - merge-tree with `main` is clean;
+    - the `+`/`-` lines of `git diff da1373cf6 5aa5dbadb` and `git diff origin/main 50bdec086` are identical;
+    - `5aa5dbadb..50bdec086` adds 68 lines to the hook and nothing else of wave 3's;
+    - PR CI run 38447456900 passed every required leg (macOS pending, advisory).
+    Run 394 advanced to `awaiting-review`.
+  - The worker's fixture check of the two blocks together passes: a subagent's `ccrc-worker` Skill call over a
+    main-thread wait prints the deny, and the wait keeps its ask, `updatedAt` and `event`, with `aliveAt` written.
+  - Claims: the worker holds claim 1258 for 9 of the PR's 11 paths. Two are refused as overlapping:
+    `ccd/session-hook.sh` (claim 1250, run 354; the worker proceeded under 4468's terms, as R48 directed) and
+    `server/src/registry.ts` (claim 1242, run 399). The merge leaves `registry.ts` as both parents have it, and
+    the PR's change there is comment lines in `freshAskAt`'s docstring. FYI to run 399's coordinator: mail 4639.
+  - Review run 422 (`ccrc-pwa-brisk-river`) reads `5aa5dbadb..50bdec086` with the panel. It checks the
+    resolution, the line-equality proof, the two blocks' interaction (with a fixture reproduction), what else
+    the merge brought in that wave 3 reads, and the wave's ledger properties.
+  - Residue added (mail 4642, from review 415's ruling pass, record-only): `stallWriteRefusal`
+    (`pwa/src/fleet/useStallWatchView.ts` ≈:192) reads every `ApiError` that is not a confirm as `refused`, and
+    `StallWatchSection.tsx` (≈:318-324) then says "Nothing was changed". That is false for a gateway 502/504 after
+    the POST reached the server, and for a 500 thrown after the store committed: the write may have landed. Wave
+    2 built it as the spec (2026-10-05 :1321) and its plan prescribe.
+    - Ruling for the follow-up: do what run 400 does for the collector switch. `refused` only when the body's
+      `error` is a known refusal code; any other `ApiError` reads `unconfirmed` ("may or may not have been saved"),
+      with the server's detail when there is one. Amend the spec's line in the same follow-up.
+    - Why now, not before #362: wave 3 does not touch the PWA, and the fix changes a prescribed behaviour, so it
+      gets its own red-first test and review.
+    - Cost if wrong: until the follow-up, a failed save can say "Nothing was changed" when it was in fact saved.
+      Re-reading the section shows the true level.
+- **R50 (2026-10-13 19:04)**, review 422 is accepted; wave 3 is ready to merge at `50bdec086`, the operator's call.
+  - Review run 422 (`ccrc-pwa-brisk-river`, mail 4650) read `50bdec086`, the live tip, with the panel (15 agents,
+    all three lenses verified). Closed `done`; report and its fixture matrix copied to `w3-review-422-*`.
+    - Confirmed: the resolution is byte-exact in R48's order; the PR's own change is unchanged; the deny and the
+      carry do not affect each other across an 11-row fixture matrix and a preset deny; `main` changed nothing
+      else wave 3 reads; D-4039, D-4040 and D-4041 are each defined once; the citation output equals `main`'s.
+      Every named suite is green at the tip.
+  - Finding F1: the jq-program floor in `session-hook-merge-deny.test.ts:843` is still 51 ("51 after D-4041"), and
+    the merged hook has 52 programs, so one deleted jq call passes. The plan's D-4041 note (:518-520) has the same
+    count. The slack came from `main`, not the merge: #392 added a program and left `main` at 53 against a floor of
+    52, and the test file merged cleanly to wave 3's version.
+  - Ruling: F1 goes to the post-merge residue list, with review 404's F1-F4. No fifth round.
+    - Why: merging #362 leaves `main` exactly as loose as it already is (one program over its floor), and the fix
+      is a guard change that would need its own round and review.
+    - The follow-up raises the floor to 52, adds the role-skill deny's program to the composition comment (naming
+      #392), measures the mutation red before and after, and updates the plan note.
+    - Cost if wrong: until the follow-up, one deleted jq call in the hook passes this scan, as on `main` since
+      #392.
+  - Refuted and kept for the record only: wave 3's "~650 lines up" comment is now about 704 lines; no committed
+    test combines the role-skill deny with a seeded main-thread wait.
+  - Re-measured at 19:04: the head is unchanged; merge-tree with `main` `0d0ea5921` is clean; every required leg
+    of PR CI run 38447456900 passes (macOS pending, advisory).
+  - Next: the operator merges #362 (`--admin --squash --match-head-commit 50bdec086`). Then run 394 closes `done`
+    as the final wave, and the residue list goes to the programme's close.
+- **R51 (2026-10-13 23:25)**, wave 3 is merged, and the programme is complete.
+  - The operator, 2026-10-13 23:22: "merge it you have my go ahead". PR #362 merged at 23:23:43Z as `f515cdfd4`,
+    by `--admin --squash --match-head-commit 50bdec086`. Before it:
+    - the head equalled review 422's tip, `50bdec086`;
+    - `main` had moved two commits since R50, to `bedcb26fb`: #393 (docs) and #351 (workspace lifecycle wave 6).
+      Neither changes a file #362 changes. #351's `watch.ts` hunks are in the archived-expiry and dead-coordinator
+      lanes, not the stall, ask or hold paths wave 3 reads. `merge-tree` was clean, so the branch landed as it was;
+    - every required check was green, and only the advisory macOS legs failed;
+    - the PR was `MERGEABLE`, and `BLOCKED` was covered by `--admin`.
+  - Run 394 closed `done` with `final:true`, released, with `childReclaim` queued. The worker's workspace evidence
+    was copied first to `w3-final-child-evidence-close/`. The programme has no open run, and neither this session
+    nor run 394 holds a claim.
+  - Wave 3's numbers are now defined on `main`, in the W3 plan's Deviations:
+    - D-4039, `subagent-tool-event-keeps-the-waiting-ask`;
+    - D-4040, `dialog-cap-clock-ignores-inbound-mail`;
+    - D-4041, `a-carried-wait-keeps-its-stamp`.
+  - Release: the release workflow for `f515cdfd4` succeeded, and v0.0.177 was published at 23:24:59Z as a
+    prerelease. The updater moves the boxes, fleet box first; this session never rolls out by hand. Arming stays the
+    operator's: the deploy changes no level.
+  - The follow-up list. None of it blocks, and only (d) changes behaviour:
+    - (a) Review 404's F1-F4 (R47). Add the fractional-stamp case: a non-negative fractional `updatedAt` is kept as
+      its floor, and -0.5 is refused. That makes the plan's "Pinned by" bullet and the renamed test title true. Say
+      "a non-negative fractional value" in the hook comment and at plan :473. Add one sentence naming the title
+      rename at plan :368-369 and :521-522.
+    - (b) Review 422's F1 (R50). Raise the jq-program floor in `session-hook-merge-deny.test.ts` to 52, and name
+      #392's program in its composition comment. Measure the mutation red before and after, and update the plan's
+      D-4041 note.
+    - (c) Bound the POST handler slice in `stall-settings-route.test.ts:588-595` to the handler's body (R48, mail
+      4635).
+    - (d) The stall-watch save's refusal fold (R49, mail 4642). Read a failure as `refused` only on a known refusal
+      code; any other `ApiError` reads `unconfirmed`. Amend the spec's :1321 to match. This changes what the
+      screen says, so it gets a red-first test and a review.
+    - (e) Two comments still describe the old re-stamp as current (R43's F3, D-4041's Not done): `restampAsk`'s
+      docstring in `store.ts`, and the `SAME DIALOG, STILL PAINTED (D-2403)` comment in `watch.ts` (≈:7741 on
+      `f515cdfd4`).
+    - (f) README :5413-5417's "a write older than 30 minutes" is imprecise for a carried wait (R41, R45).
+    - (g) Wording only:
+      - the long plan lines;
+      - the plan lines fix round 1 left stale (:53, :46-47, the Task 1 snippet);
+      - the D-2404 words in the `ask-instance-guard.test.ts` header (R47's note);
+      - the "~650 lines up" comment, now about 704 (R50).
+    - (h) R37's follow-up list, unchanged.
+    - Finding 4063's owner 3, arming, stays the operator's.
+  - Next: this ledger lands on `main` by a docs PR from this branch, after `main` is merged in (the W3 plan taken as
+    `main` has it). The follow-up list goes to the operator as a proposed residue wave; whether and when it runs is
+    the operator's call.
+- **R52 (2026-10-14 00:07)**, the operator opens wave 4: every follow-up in one PR, merged by this session once
+  reviewed and green.
+  - The operator, 2026-10-13 23:48: "do all the follow-ups in a single PR", then "push and merge it once you've
+    reviewed it and merge when green".
+    - This session read the second message as covering ledger PR #394 too, which it had asked about in those words.
+      #394 merged at 23:52:30Z as `ac60e373f`, by `--admin --squash --match-head-commit f796f96b4`, with every
+      required check green (macOS still running, advisory). `main` was then merged back into this branch.
+  - Ruling: wave 4 is R51's list (a)-(h), in `docs/superpowers/plans/2026-10-14-stall-watch-settings-w4-residue.md`:
+    eight tasks, one fresh child, one PR. The plan rides in the PR's first commit, as R38 ruled for wave 3.
+    - At wave-done: re-measure, advance, then a review run with the held-out panel over plan and code.
+    - On the review's acceptance with every required check green, this session merges with `--admin --squash
+      --match-head-commit <the reviewed tip>`, under the operator's go-ahead. Arming stays the operator's.
+  - Research: five read-only Opus readers measured every item at `f515cdfd4` (evidence `w4-facts.json`), and the
+    rulings are in `w4-rulings.md`. The ones that shape the plan:
+    - One new L0 file, `shared/stall-watch.ts`, holds the duration formatter, the save's refusal codes and the new
+      unconfirmed line. `shared/api.ts` gets only a comment: run 400 holds it, and #384 also appends at its foot.
+    - The save that confirms nothing defines D-4045, `an-answer-without-a-refusal-code-reads-unconfirmed`. It is the
+      programme's one reserve number.
+    - The refusal list is the POST route's own three codes, as #384's collector list is.
+    - The W3 plan's rewrap is the last task, and this ledger's line citations into that plan are dated snapshots.
+    - Why: one PR, as asked, with every code edit kept off the lines other runs are changing.
+    - Cost if wrong: a held file's merge needs a manual resolution, or a plan line a ruling cites moves.
+  - Claims: runs 354 and 400 hold ten of the wave's files. Every edit in them was measured clear of the holder's own
+    changes.
+    - The code edits are in three files run 400 holds: `useStallWatchView.ts`, `settings-screen.test.tsx` and
+      `single-definition.test.ts`. The rest are comments or one sentence.
+    - Consent is asked under 4468's terms: mail 4715 to run 400's coordinator, and mail 4716 to run 354's.
+    - The worker edits a held path only after this session relays that holder's answer. The plan orders those paths
+      late.
+  - Route: unchanged from wave 3. A spec'd plan of small, independent tasks fits one context, so:
+    - the main loop runs on Opus · high;
+    - implementers run on Sonnet · high, and per-task reviewers on Opus · high;
+    - scouts run on Haiku;
+    - workflows are off, and compact is at 40.
+  - Ruling 1 amended (00:35): the new unconfirmed line is `STALL_CONFIRM_TEXT.unconfirmed` in `shared/api.ts`, not a
+    constant in `shared/stall-watch.ts`, because the P6 device-word row reads only `shared/api.ts`'s exports, and
+    widening P6 would edit beside #384's own P6 hunk. It replaces a comment line, so the line count is unchanged.
+    Asked of run 400's coordinator by mail 4745.
+  - Pre-flight: three Opus lenses and a Sonnet refuter per major finding reviewed the plan before dispatch. Five
+    major findings survived, and all 14 findings were applied. The one blocker was a README replacement that would
+    have deleted half a sentence.
+  - Consents, all on 4468's terms, none naming a line to keep off: run 400's coordinator by mails 4717 and 4747
+    (which also names #397, editing `shared/api.ts` about 55 lines below), and run 354's by mail 4719.
+  - Dispatched (01:03): run 437 to the fresh child `ccrc-pwa-keen-meadow`, with nine items and the route above.
+    Plan at `b0e53b110` (blob `4550cadf7`); brief `.superpowers/sdd/stall-watch-settings/w4-wave-brief.md`.
+- **R53 (2026-10-14 03:11)**, wave 4's wave-done is verified, and review run 438 reads it.
+  - Wave-done, mail 4776 (03:08): tip `ca2040c8b`, PR #399, all eight tasks and the whole-wave checks done. Each task
+    passed its own Opus review, and the final whole-branch review passed after one docs-only fix commit. The report is
+    copied to `w4-child-evidence/`.
+    - The worker marks the suite red. Server shard 1 of 8 had one red, boot.test.ts's "does not delay listen" timing,
+      which the worker also measured failing on a clean `main` under load. Shard 2's two reds were a known load flake
+      and an artifact of the archive copy. The box was too loaded to run shards 3 to 8.
+    - The citation instrument reads 7 passed, 443 skipped, before and after. Line counts are unchanged in the hook,
+      `shared/api.ts`, README, `store.ts` and `watch.ts`.
+    - Departures, by slug: `spec-14-follows-the-new-l0-file`, `server-full-suite-left-to-ci-at-load-48`,
+      `measured-rows-as-list-items`, `jf2-split-in-two-rows`. No number other than D-4045 is written.
+  - Re-measured, not taken from the mail:
+    - the remote branch, the workspace's HEAD and PR #399's head all read `ca2040c8b`, with a clean tree;
+    - `main` is still `162c91491`, and the PR is mergeable;
+    - every required check is green, including `test (server)` over five shards, agent, pwa, build-pwa, node floor
+      and typecheck. `test-macos 2/2` is red and advisory;
+    - the plan's first commit `dca1566ac` holds blob `4550cadf7`;
+    - the 23 changed files are claim 1279's 14 paths plus the 9 held paths the consents cover. `routes.ts` and
+      `session-hook.test.ts` are untouched.
+  - Run 437 advanced to `working`, then to `awaiting-review`, on that fingerprint. Review run 438 (`kind:'review'`,
+    `reviews:437`) was opened and dispatched to `ccrc-pwa-plain-prairie` with the held-out panel named. Its route is
+    Opus · high, Sonnet subagents, workflows on, compact at 40. Brief: `w4-review-brief.md`. It covers:
+    - D-4045 in both directions, with the gaps the worker accepted;
+    - the L0 file and the single formatter's texts;
+    - the bounded slice;
+    - the hook and the held-path edits under 4468's terms, plus merge-tree against `main` and #384;
+    - the docs and the departure;
+    - the mutation rows;
+    - the suites, and PR CI for the shards the worker could not run.
+- **R54 (2026-10-14 04:01)**, review 438 accepts wave 4. It is merged, and the programme is complete.
+  - Review 438 (mail 4785, report copied to `w4-review-438-report.md`) read tip `ca2040c8b`.
+    - Panel workflow `wf_c68a27b8-a2f`: three Opus lenses with three Sonnet refuters per finding, 21 agents, none
+      errored. Five findings were confirmed (two the same defect), one refuted, and no lens went unverified.
+    - Four findings, all minor, none in shipped behaviour.
+    - The fold is correct in both directions. Ruling 3's gaps (the gate's 401 and 403, a 404, Fastify's own 400 and
+      413) are no defect, since the re-read ends every one of them true.
+    - The one formatter changes no value `isStallQuietMs` admits. Off the grid, the server's old text differed
+      where the remainder rounds to 60 minutes: "60 min" now reads "1 h".
+    - All 20 mutation rows reproduce at the tip. BS1 now reds 3, not 2, because Task 4's census came after it was
+      measured.
+    - `merge-tree` against `main` is clean. #384's three conflicts are its own against `main`.
+    - Every briefed suite is green. CI ran all 577 selected server files green, `boot.test.ts` included, so the
+      worker's local red there was the box's load.
+  - Rulings on the findings. None needs a fix round:
+    - F1, `pwa/test/box-token-card.test.tsx:52-53`: the docstring says "no mount here issues a live fetch", which
+      the new header contradicts, and #384's rewrite of those lines keeps the words.
+      - Ruling: the lines are #384's, so it is #384's to narrow. Mail 4786 to run 400's coordinator suggests "so
+        neither section's route issues a live fetch". If #384 lands without it, it is a residue item.
+      - Why: editing those lines now would break consent 4468's terms and conflict with #384.
+      - Cost if wrong: one false comment in a test file until someone narrows it.
+    - F2, `server/test/single-definition.test.ts:4162`: the plan's placement of Task 5's describe moved every later
+      line down by 21. Two specs of other programmes cite lines below it.
+      - Ruling: keep the placement. The plan chose it to stay off the file's foot, where #384 and #397 both append,
+        and the file's own rule ("nothing above this point may move", :4085-4087) holds.
+      - The two citations were re-measured at `b953aefa4`, and each owner was told by mail:
+        - path identity's spec :520 cites :5638-5668, which now begins at :5659 (mail 4786, run 400's
+          coordinator);
+        - the box-token lifecycle spec :957 cites :4774-4780, whose comment now begins at :4798 (mail 4787, run
+          410's coordinator).
+      - Why: those specs are outside this programme's claim, and a line citation is a snapshot. No test reads
+        either one, and the citation instrument is unchanged.
+      - Cost if wrong: a reader of either spec lands 21 lines early until it is re-pointed.
+    - F3: the departure `spec-14-follows-the-new-l0-file` is accepted and recorded here, since the plan's
+      Deviations section does not carry it. The commit `ca2040c8b` made three spec edits the plan did not list:
+      §12's placement sentence, and §14 items 4 and 5. Without them §14 would be false at the tip, and ruling 9
+      ("amend the spec") covers them. The invariant-4 heading stays as written; the review found no defect in it.
+    - F4: the plan's wrapped "Red-first run" measured row is joined into one line in this ledger's docs PR. The
+      words are unchanged, measured with whitespace collapsed.
+    - The worker's other departures are accepted as named: `server-full-suite-left-to-ci-at-load-48` (CI covered
+      it), `measured-rows-as-list-items` and `jf2-split-in-two-rows`.
+  - The merge, under the operator's go-ahead (R52). Before it:
+    - the head equalled the reviewed tip, `ca2040c8b`;
+    - `main` was still `162c91491`, and `merge-tree` was clean;
+    - every required check was green, and only the advisory macOS legs failed, in child-reclaim and docs-tree
+      files this wave never touched;
+    - the PR was `MERGEABLE`, and `BLOCKED` was covered by `--admin`.
+    - The worker's workspace evidence was copied first to `w4-child-evidence/`.
+    - PR #399 merged at 03:59:31Z as `b953aefa4`, by `gh pr merge 399 --admin --squash --match-head-commit
+      ca2040c8b`.
+  - Review run 438 closed `done` on its own `{reviewedTip, report}`. Run 437 closed `done` with `final:true`,
+    released, with `childReclaim` queued, and claim 1279 is gone. The programme has no open run.
+  - D-4045, `an-answer-without-a-refusal-code-reads-unconfirmed`, is defined on `main` in the W4 plan's Deviations.
+    It was the programme's one reserve number, so no number of this programme is left unissued.
+  - Release: `release-main` succeeded for `b953aefa4`, and v0.0.180 was published at 04:00:25Z as a prerelease. The
+    updater moves the boxes; this session never rolls out by hand. Arming stays the operator's.
+  - #384 and #397 now land second under consent 4468: each merges `main` and keeps wave 4's lines (mail 4786).
+  - Residue: F1, if #384 lands without the narrowed words. Finding 4063's owner 3, arming, stays the operator's.
+    Nothing else is open.
+  - Next: this ledger lands on `main` by a docs PR from this branch, which has `main` merged in.
 
 ## Carried constraints (reviewers get these)
 
 - Mutation-table discipline: every guard ships with a row measured red when it is removed, before and after.
-- The README citation instrument stays at `7 passed | 328 skipped`; README and `CLAUDE.md` edits are made in place.
+- The README citation instrument (`session-hook.test.ts -t 'CITATION DEBT|README HAS|LOCATION INDEXES|ROW PASS|RANGE
+  BOUND|TWO CORPUS|whole corpus'`) agrees with `main`'s own count: `7 passed | 328 skipped (335)` when the wave began
+  (R22), `7 passed | 443 skipped` on `28e8dc1b2` (R34). README and `CLAUDE.md` edits are made in place.
 - `stall.ts` and `stallsettings.ts` stay L1: pure, and spelling no marker name. No marker gains a writer
   (`single-definition.test.ts`).
 - The migration slot is measured, never assumed: 17 at `77f8d63a5`. Slots are a cross-branch namespace; whichever
@@ -79,14 +1304,36 @@ time.
 
 ## Next-wave brief
 
-- **Wave 1:** `docs/superpowers/plans/2026-10-05-stall-watch-settings-w1-server.md`, all seven tasks, on a fresh child
-  of `ccrc-pwa`.
-  - Read the plan by its commit sha on `main`.
-  - Dispatch only after the docs PR carrying the spec, both plans and this ledger is merged (the plan's
-    Preconditions 1 and 2).
-  - Before dispatch: re-read claims, re-measure the migration slot, and check the child-reclamation W5 overlap the
-    plan names.
+- **Wave 1:** run 295, `docs/superpowers/plans/2026-10-05-stall-watch-settings-w1-server.md`, all seven tasks,
+  on a fresh child of `ccrc-pwa`.
+  - Read the plan at merged commit `4e7cf095f` (plan blob `30994b7702d2b8627c2cf9e64bf5b66d94eb50c9`).
+  - The docs prerequisite is satisfied: PR #285 merged on 2026-10-06 11:33 UTC with every CI check green.
+  - Re-read claims at dispatch. Run 260's known overlap does not block the start: follow R5 and the plan's claim
+    precondition, work only uncontested paths after the expected all-or-nothing 409, and sequence the shared paths
+    when they release. A different holder gets the same treatment; do not split the seven-task wave.
+  - The migration count on `origin/main` at `b3b5a73ed` remains 16, so W1's planned migration is still slot 17;
+    re-measure it immediately before dispatch and again before merge.
   - Execution: `superpowers:subagent-driven-development` with `superpowers:test-driven-development`, with routing per
     R4.
-- **Wave 2:** `docs/superpowers/plans/2026-10-05-stall-watch-settings-w2-pwa.md`, dispatched after wave 1's PR is
-  proven merged.
+  - Done: merged as `7f7bf4afc` (#320), and run 295 closed (R20).
+- **Wave 2:** run 322, `docs/superpowers/plans/2026-10-05-stall-watch-settings-w2-pwa.md`, all four tasks plus wave
+  1's review residue, on the fresh child `ccrc-pwa-calm-basin`. Its brief is
+  `.superpowers/sdd/stall-watch-settings/w2-wave-brief.md` (R20).
+  - Item 5 touches `shared/api.ts` and `watch.ts` only in the lines run 291's coordinator consented to (mail 3872),
+    as confirmed in R21 (mail 3874).
+  - At wave-done: re-measure, advance, then a review run with the held-out panel. The merge is the operator's call.
+    Wave 2 is the last wave, so its close carries `final:true`.
+  - Done: merged as `6e4524164` (#322), and run 322 closed `done` with `final:true` (R37).
+- **Wave 3:** `docs/superpowers/plans/2026-10-12-stall-watch-settings-w3-hidden-ask.md`, both tasks, on a fresh child
+  of `ccrc-pwa` (R38). The plan's first commit takes it unchanged from this branch.
+  - Do not edit `server/test/session-hook.test.ts` (claim 1188), `README.md`, `watch.ts` or `store.ts` (claim 1172).
+  - At wave-done: re-measure, advance, then a review run with the held-out panel over plan and code. The merge is the
+    operator's call. Wave 3 is the last wave, so its close carries `final:true`.
+  - Done: run 394, merged as `f515cdfd4` (#362), and closed `done` with `final:true` (R51).
+- **Wave 4:** `docs/superpowers/plans/2026-10-14-stall-watch-settings-w4-residue.md`, all eight tasks, on a fresh
+  child of `ccrc-pwa` (R52). The plan's first commit takes it unchanged from this branch.
+  - Held paths (runs 354 and 400) are edited only after this session relays each holder's agreement.
+  - At wave-done: re-measure, advance, then a review run with the held-out panel over plan and code. On acceptance,
+    with every required check green, this session merges under the operator's go-ahead. Wave 4 is the last wave, so
+    its close carries `final:true`.
+  - Done: run 437, merged as `b953aefa4` (#399), and closed `done` with `final:true` (R54).

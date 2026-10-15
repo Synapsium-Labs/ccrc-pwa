@@ -8,6 +8,14 @@
 // the reader reaches the bottom. No state, no toast, no request. A function
 // with a teardown, which is what the effect's body always was.
 //
+// AND THE CONSOLE FIT (#190) WIDENED THAT SEAM BY ONE FACT EACH WAY, said here
+// so the paragraph above does not go on claiming three. IN: the type size the
+// live pane settled on, which this layer is built at. OUT: a handle on this
+// layer's terminal, held by the drawer while the layer is up, because the
+// drawer's own refit (`fitToWindow`) is what moves the live type size and the
+// history has to move with it. Both are values the drawer already holds in
+// refs; still no state, no toast, no request.
+//
 // MEASURED BEFORE MOVED, because this file has been judged cohesive and been
 // wrong once: the previous wave left `TerminalDrawer` whole on that judgment
 // and then found the xterm factory inside it. Here the grep is the argument —
@@ -19,7 +27,7 @@
 // re-render, so the deceleration every list on the device gets for free has to
 // be spelled. The four numbers it takes are below, with what each one answers.
 import {
-  defaultMakeHistoryTerm, type HistoryPane, type MakeHistoryTerm,
+  defaultMakeHistoryTerm, type HistoryPane, type HistoryTerm, type MakeHistoryTerm,
 } from './terminalFactory';
 
 const WHEEL_LINES = 3;
@@ -68,14 +76,27 @@ export interface HistoryShowing {
 
 /** Build the history terminal on `host`, wire every gesture to it, and hand
  *  back the teardown. `onLive` is the one thing it asks of its caller: the
- *  reader has scrolled back to the bottom and wants the live pane again. */
+ *  reader has scrolled back to the bottom and wants the live pane again.
+ *
+ *  `fontSize` is the size the LIVE pane settled on after its fit, and the layer
+ *  is built at it (`MakeHistoryTerm`). `held` is where the drawer keeps this
+ *  layer's terminal while it is up, so the live pane's next fit can move this
+ *  layer's type size with its own; the teardown empties it, but only while it
+ *  still holds THIS terminal. */
 export function attachHistoryPane(
   histHost: HTMLElement,
   hist: HistoryShowing,
   makeHistoryTerm: MakeHistoryTerm | undefined,
   onLive: () => void,
+  fontSize: number,
+  held: { current: HistoryTerm | null },
 ): () => void {
-    const term = (makeHistoryTerm ?? defaultMakeHistoryTerm)(histHost, hist.lines, hist.pane);
+    const term = (makeHistoryTerm ?? defaultMakeHistoryTerm)(
+      histHost, hist.lines, hist.pane, fontSize,
+    );
+    // Held so the live pane's next fit can move this layer's type size with
+    // its own (`fitToWindow`); this layer's own refit below only re-fits.
+    held.current = term;
     // THE LATCH, AND THE READER'S OWN GESTURE IS WHY IT EXISTS. xterm's
     // `write(data, done)` parses ASYNCHRONOUSLY, so `done` can land after this
     // effect has been torn down and has called `dispose()` — and `scrollLines`
@@ -383,6 +404,7 @@ export function attachHistoryPane(
       // when its check is removed. Do not add a test for this line's position; no
       // test can distinguish the two orderings.
       alive = false;
+      if (held.current === term) held.current = null;
       term.dispose();
     };
 }

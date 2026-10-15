@@ -19,7 +19,10 @@ import type { StallObservationRow, StallSettingsPatch, StallSettingsRead } from 
 // The coordination fence's claim shape is declared by its CONSUMER, the L1
 // sweep file's `childReclaimCoordinated` (the same port rule as above); the
 // read below implements it.
-import type { ChildReclaimCoordinatorClaim } from '../childReclaimSweep.js';
+import {
+  CHILD_RECLAIM_LEAF_FAILED_TOKENS, type ChildReclaimCoordinatorClaim, type ChildReclaimLeafEndRow,
+  type ChildReclaimLeafSourceRow,
+} from '../childReclaimSweep.js';
 // Type-only: ties `AUTO_CONTINUE_ARMED_LAST_ERROR` below to the send adapter's
 // own refusal word, so a rename there is a compile error here, not a silent miss.
 import type { SendResult } from '../inject/send.js';
@@ -40,7 +43,8 @@ import {
 } from './rundefs.js';
 import { reviveDec, reviveMeas, reviveObs, type JournalRow } from './journalparse.js';
 import {
-  DEAD_COORDINATOR_JOURNAL_ACTS, type DeadAnchor, type DeadCoordinatorJournalRow,
+  DEAD_COORDINATOR_BREAKER_HELD_HEAD, DEAD_COORDINATOR_JOURNAL_ACTS, deadCoordinatorBreakerHeldDetail,
+  splitDeadCoordinatorBreakerHeld, type DeadAnchor, type DeadCoordinatorBreakerMember, type DeadCoordinatorJournalRow,
 } from '../deadCoordinator.js';
 import {
   CLAIM_HARD_CAP_MS, CLAIM_LEASE_MS, DONE_AUTHORITY_CODES,
@@ -51,7 +55,7 @@ import {
   // design 2026-09-20 §6/§7 (W2): the release catalogue's tag guard and channel vocabulary.
   isReleaseTag, isUpdateChannel,
   // design 2026-09-20 §6/§8/§10 (W2): the node inventory's vocabularies and the lease's two lists.
-  BUSY_UPDATE_STATES, isInstallState, isNodeOs, isNodeRole, isProvenanceState, isRequestKind, isStampRead,
+  BUSY_UPDATE_STATES, isInstallState, isNodeOs, isProvenanceState, isRequestKind, isStampRead,
   isUpdatePhase, isUpdateState, PROVENANCE_DETAIL_PREFIX, SETTLED_UPDATE_STATES, validCapWords,
   // fix round 1, D-3213: the floor/previous read-state vocabulary beside `highestVersion`/`previousVersion`.
   isTagFileRead,
@@ -73,12 +77,12 @@ import {
   parseWaveDoneSignals,
   PROGRAM_KICKOFF_SUBJECT,
   RUN_HOLD_NUMBER_MAX,
-  IDLE_RUN_STATES, transitionsFor, TERMINAL_DELIVERY_STATES, TERMINAL_RUN_STATES,
+  IDLE_RUN_STATES, transitionsFor, TERMINAL_DELIVERY_STATES, TERMINAL_RUN_STATES, TMPROOT_ID_MAX_CHARS,
   WAVE_DONE_SUBJECT,
   type AskState,
   type ClaimConflict, type ClaimState, type ClaimSummary,
   type CoordCaps, type DeviationAllocation, type DeviationAllocState,
-  type LifecycleAct, type LifecycleGap, type LifecycleGapReason,
+  type LifecycleAct, type LifecycleGap, type LifecycleGapReason, type LifecycleOutcome,
   type MailDeliveryState, type MailGate,
   type MailKind, type MailRejectCode, type MailSummary, type MirroredLifecycleEvent,
   type NotifyEvent, type PeerDeliverable, type ProgramState,
@@ -91,7 +95,7 @@ import {
   type SettledUpdateState, type StampRead, type TagFileRead, type UpdatePhase, type UpdateState,
   type AutoMode, type NotifyMode,
   type WorkItemState,
-} from '../../../shared/api.js';
+} from '../../../shared/api.js'; import { isNodeRole } from '../../../shared/node-role.js';
 
 /** One entry in `$REG/<id>.prhistory` (ccd/ccd:2252-2253). Re-declared as a TYPE
  *  here rather than parsed twice: `coord/prhistory.ts` owns the reader. */
@@ -880,6 +884,41 @@ const persistedInt = (text: string, column: string): PersistedInt => {
     : { ok: false, detail: `${column} is not a positive safe integer` };
 };
 
+/** A held-set detail (`deadCoordinatorBreakerHeldDetail`'s encoding, the `run_events` record's and the typed state's
+ *  snapshot alike) read back into members, ALL-OR-FAILURE: a text `splitDeadCoordinatorBreakerHeld` refuses, or an
+ *  instant this process cannot prove (`persistedInt`, D-2545's rule), is a failure, never a smaller set. */
+const parseBreakerHeld = (detail: string):
+  { ok: true; members: DeadCoordinatorBreakerMember[] } | { ok: false; detail: string } => {
+  const parts = splitDeadCoordinatorBreakerHeld(detail);
+  if (parts === null) return { ok: false, detail: 'the breaker held-set row is malformed' };
+  const members: DeadCoordinatorBreakerMember[] = [];
+  for (const p of parts) {
+    const ats: number[] = [];
+    for (const text of p.texts) {
+      const at = persistedInt(text, 'breaker held firstDeadAt');
+      if (!at.ok) return { ok: false, detail: at.detail };
+      ats.push(at.value);
+    }
+    members.push({ id: p.id, firstDeadAt: ats[0]!, ...(ats.length > 1 ? { instants: ats } : {}), ...(p.fallback ? { fallback: true as const } : {}) });
+  }
+  return { ok: true, members };
+};
+
+/** What the breaker's typed state row still carries as its snapshot (`deadCoordinatorBreakerState`'s `dirty` arm): the
+ *  members of the last landed snapshot, `none` before any landed, or a text it cannot read. Three answers, never folded. */
+export type DeadCoordinatorBreakerSnapshot =
+  | { readonly kind: 'none' }
+  | { readonly kind: 'members'; readonly members: readonly DeadCoordinatorBreakerMember[] }
+  | { readonly kind: 'unreadable'; readonly detail: string };
+
+/** `deadCoordinatorBreakerState`'s answer (D-4857). */
+export type DeadCoordinatorBreakerStateRead =
+  | { readonly kind: 'clean'; readonly generation: number; readonly held: readonly DeadCoordinatorBreakerMember[]; readonly writtenAt: number }
+  | { readonly kind: 'sealed'; readonly generation: number; readonly held: readonly DeadCoordinatorBreakerMember[]; readonly writtenAt: number }
+  | { readonly kind: 'dirty'; readonly generation: number; readonly snapshot: DeadCoordinatorBreakerSnapshot }
+  | { readonly kind: 'absent' }
+  | { readonly kind: 'unreadable'; readonly detail: string };
+
 /** `setStallSettings`' answer: written, with the read before and the read after (equal on a no-op), or a conflict
  *  carrying the read it found and wrote nothing over. */
 export type StallSettingsWrite =
@@ -1472,7 +1511,7 @@ class IntentJournalFault extends Error {
  *  note, which is exactly the "hand-written" case this function throws on.
  *
  *  THE LENGTH BOUND. A candidate longer than
- *  `CHILD_RECLAIM_MAX_SESSION_ID_CHARS` (255) is never returned, and the
+ *  `TMPROOT_ID_MAX_CHARS` (255) is never returned, and the
  *  search stops at the first occurrence past that offset. Safe because a
  *  session id is a FILENAME component — the registry holds `<id>.uuid`, and
  *  no filesystem this runs on takes a component over 255 bytes, which no
@@ -1487,7 +1526,7 @@ class IntentJournalFault extends Error {
  *  sweep pass and every close. The bound makes the work per row
  *  proportional to 255, not to the row. `null` still means "no ` -> ` at
  *  all"; a row whose every candidate is too long parses to `[]`. */
-const CHILD_RECLAIM_MAX_SESSION_ID_CHARS = 255;
+/* The bound is L0's `TMPROOT_ID_MAX_CHARS` (spec §5.10), the one temp-root id cap, imported above. */
 function childReclaimDisplacedCandidates(detail: string): string[] | null {
   const prefix = 'reclaim:';
   if (!detail.startsWith(prefix)) return null;
@@ -1495,7 +1534,7 @@ function childReclaimDisplacedCandidates(detail: string): string[] | null {
   const first = body.indexOf(' -> ');
   if (first === -1) return null;
   const out: string[] = [];
-  for (let i = first; i !== -1 && i <= CHILD_RECLAIM_MAX_SESSION_ID_CHARS; i = body.indexOf(' -> ', i + 1)) {
+  for (let i = first; i !== -1 && i <= TMPROOT_ID_MAX_CHARS; i = body.indexOf(' -> ', i + 1)) {
     out.push(body.slice(0, i));
   }
   return out;
@@ -1509,7 +1548,7 @@ function childReclaimDisplacedCandidates(detail: string): string[] | null {
  *  included, and the writer's own separator is always one of them. It searches
  *  from the END (`lastIndexOf`, resuming one character before each hit), so the
  *  suffixes come shortest first, and it stops at the first one longer than
- *  `CHILD_RECLAIM_MAX_SESSION_ID_CHARS` — every later one is longer still, and
+ *  `TMPROOT_ID_MAX_CHARS` — every later one is longer still, and
  *  no session id can be (that bound's own docstring, above). The extra readings
  *  over-protect, which is the fail-shut direction. */
 function childReclaimDisplacedHeirCandidates(detail: string): string[] | null {
@@ -1519,11 +1558,32 @@ function childReclaimDisplacedHeirCandidates(detail: string): string[] | null {
   const last = body.lastIndexOf(' -> ');
   if (last === -1) return null;
   const out: string[] = [];
-  for (let i = last; i !== -1 && body.length - (i + 4) <= CHILD_RECLAIM_MAX_SESSION_ID_CHARS;
+  for (let i = last; i !== -1 && body.length - (i + 4) <= TMPROOT_ID_MAX_CHARS;
     i = i === 0 ? -1 : body.lastIndexOf(' -> ', i - 1)) {
     out.push(body.slice(i + 4));
   }
   return out;
+}
+
+/** The acts the birth read returns (spec §5.7: a creation is placed, or it is doubt). `create` opens a generation,
+ *  and `purge` is the one removal. Every removal of a row ends in ccd's `_reg_purge`, which journals `purge done`
+ *  BEFORE it unlinks the row's files, and that line carries the row's `meas.uuid`. `collect` never purges: it
+ *  removes the leftover temp root of a row that is already gone. So it is not here, by construction. The
+ *  runtime list derives from the map. */
+export type LifecycleBirthAct = Extract<LifecycleAct, 'create' | 'purge'>;
+const LIFECYCLE_BIRTH_ACT: Readonly<Record<LifecycleBirthAct, true>> = { create: true, purge: true };
+const LIFECYCLE_BIRTH_ACTS = Object.keys(LIFECYCLE_BIRTH_ACT) as LifecycleBirthAct[];
+const isLifecycleBirthAct = (v: string): v is LifecycleBirthAct =>
+  Object.prototype.hasOwnProperty.call(LIFECYCLE_BIRTH_ACT, v);
+
+/** One row of the birth read: a `done` `create` or `done` `purge` of one session. `id` is the mirror's own row id
+ *  (ingest order, never ccd's clock). `at` is ccd's clock. `uuid` is the line's `meas.uuid`, or null when the
+ *  line carried none. */
+export interface LifecycleBirthEvent {
+  readonly id: number;
+  readonly act: LifecycleBirthAct;
+  readonly at: number | null;
+  readonly uuid: string | null;
 }
 
 /**
@@ -3308,7 +3368,9 @@ export class CoordStore {
     return { ok: true, anchors };
   }
 
-  /** Write one claimant's anchor — the lane's crashed pass. One statement, an upsert keyed by the claimant. */
+  /** Write one claimant's anchor — the lane's crashed pass. One statement, an upsert keyed by the claimant, and NO
+   *  transaction of its own: the lane writes anchors only inside `commitDeadCoordinatorBreakerState`, with the breaker's
+   *  exact snapshot and its state turning clean (D-4857). */
   setDeadAnchor(claimantId: string, a: DeadAnchor): void {
     this.db.prepare(
       'INSERT INTO dead_claimants (claimantId, firstDeadAt, lastDeadAt) VALUES (?, ?, ?) ' +
@@ -3317,9 +3379,205 @@ export class CoordStore {
   }
 
   /** Delete one claimant's anchor — an alive, unmeasurable or non-crash answer, or a claimant that left the
-   *  population. Deleting a row that is not there is a no-op. */
+   *  population. Deleting a row that is not there is a no-op. Like `setDeadAnchor`, the lane calls it only inside
+   *  `commitDeadCoordinatorBreakerState` (D-4857): a delete never lands without the snapshot that still holds it. */
   deleteDeadAnchor(claimantId: string): void {
     this.db.prepare('DELETE FROM dead_claimants WHERE claimantId = ?').run(claimantId);
+  }
+
+  /** The RECORD of the dead-coordinator breaker's held set (review 381, F1; since D-4857 the typed state,
+   *  `deadCoordinatorBreakerState`, is the authority and this row records each change of it) — the stall watch's
+   *  "Durable dedupe" shape: ONE `run_events` observation row, `fromState = toState` = the carrier run's current state (so
+   *  `pushNewRuns` skips it), `causedBy` `operator`, `detail` `deadCoordinatorBreakerHeldDetail`'s encoding. NO dedupe
+   *  on `(runId, detail)`: a held set can recur after a clear, and the LATEST row is the truth
+   *  (`deadCoordinatorBreakerHeldLatest`). The carrier is ANY existing run, whatever its state — the detail carries the
+   *  whole set. Ids are percent-escaped and the encoding is total (a lone surrogate included, D-4857), so every claimant
+   *  id is carried. `run-gone` is an absent run; `invalid` is a set no pass builds (an instant that is not a positive safe
+   *  integer, or two members with one id): nothing is written then. NO transaction of its own: the lane writes this row
+   *  only inside `commitDeadCoordinatorBreakerState`, so it is a RECORD of the typed state's snapshot, never the truth
+   *  itself. Synchronous, like every write on this store. */
+  recordDeadCoordinatorBreakerHeld(
+    runId: number, held: readonly DeadCoordinatorBreakerMember[], at: number,
+  ): { recorded: true; eventId: number } | { recorded: false; why: 'run-gone' | 'invalid' } {
+    const detail = deadCoordinatorBreakerHeldDetail(held);
+    if (detail === null) return { recorded: false, why: 'invalid' };
+    const run = this.db.prepare('SELECT state FROM runs WHERE id = ?').get(runId) as { state: string } | undefined;
+    if (run === undefined) return { recorded: false, why: 'run-gone' };
+    const res = this.db.prepare(
+      'INSERT INTO run_events (runId, at, fromState, toState, causedBy, detail) VALUES (?, ?, ?, ?, ?, ?)',
+    ).run(runId, at, run.state, run.state, 'operator', detail);
+    return { recorded: true, eventId: Number(res.lastInsertRowid) };
+  }
+
+  /** The LATEST held-set row (`ORDER BY id DESC LIMIT 1` over the head): the members and the run that carries it. No row
+   *  at all is `{ ok: true, held: [], runId: null }`; a row this build cannot parse, or whose integers it cannot prove
+   *  (`persistedInt`, D-2545's rule), is `{ ok: false }` — ALL-OR-FAILURE like `deadAnchors`, never an empty set and
+   *  never an older row's. Since D-4857 the lane reads it only beside the typed state: for the run an empty set is written
+   *  on (its `runId`, readable or not), and, under a state that is not clean, for the members, instants and flags it still
+   *  carries, which the conservative seed keeps. The unreadable answer carries the row it could not read, `eventId`
+   *  (`null` for a read that threw before any row was found) and the `runId` it sits on (`null` when none, or when the run
+   *  id itself cannot be proved). A member the fallback held carries a
+   *  `*` after its complete `+` list of instants and reads back `fallback: true`. NO RELEASED BUILD READS THIS RECORD AT ALL (the build that
+   *  first had a reader, before the flag, never shipped), so a rollback to a released build starts with no hold: the
+   *  restart hole, failing OPEN — the spec's §12 says to disarm the lane before rolling back. A thrown statement is
+   *  `{ ok: false }` too. */
+  deadCoordinatorBreakerHeldLatest():
+    { ok: true; held: DeadCoordinatorBreakerMember[]; runId: number | null }
+    | { ok: false; detail: string; eventId: number | null; runId: number | null } {
+    let eventId: number | null = null;
+    let runId: number | null = null;
+    try {
+      const row = this.db.prepare(
+        'SELECT CAST(id AS TEXT) AS idText, CAST(runId AS TEXT) AS runText, CAST(detail AS TEXT) AS detail FROM run_events ' +
+        "WHERE causedBy = 'operator' AND substr(detail, 1, ?) = ? ORDER BY id DESC LIMIT 1",
+      ).get(DEAD_COORDINATOR_BREAKER_HELD_HEAD.length, DEAD_COORDINATOR_BREAKER_HELD_HEAD) as
+        { idText: string; runText: string; detail: string } | undefined;
+      if (row === undefined) return { ok: true, held: [], runId: null };
+      const ev = persistedInt(row.idText, 'run_events id');
+      if (ev.ok) eventId = ev.value;
+      const run = persistedInt(row.runText, 'run_events runId');
+      if (!run.ok) return { ok: false, detail: run.detail, eventId, runId };
+      runId = run.value;
+      const parsed = parseBreakerHeld(row.detail);
+      if (!parsed.ok) return { ok: false, detail: parsed.detail, eventId, runId };
+      return { ok: true, held: parsed.members, runId: run.value };
+    } catch (err) {
+      return { ok: false, detail: err instanceof Error ? err.message : String(err), eventId, runId };
+    }
+  }
+
+  /** THE BREAKER'S TYPED STATE (`dead_coordinator_breaker_state`, migration 19; the operator's ruling 4286, D-4857):
+   *  the one row, as the lane reads it at its first pass. FIVE answers, never folded:
+   *   - `sealed` (D-4916): the server's shutdown handler wrote it over a `clean` state, and `held` is that state's EXACT
+   *     snapshot, written at `writtenAt` (the write-time clock) in the one transaction that also wrote every anchor change
+   *     that pass made. ONLY this answer is seeded as it reads;
+   *   - `clean`: the last commit (or the first pass's unseal) landed, and `held` is the exact snapshot. A start that finds
+   *     it did not end through a clean shutdown (a kill, a crash, a stop that outlived its timeout), so it seeds
+   *     conservatively, keeping what it reads;
+   *   - `dirty`: a pass marked the state before changing anchors and its commit has not landed (or a process died
+   *     between the two). `snapshot` is what the row still carries — the last landed one, `none` before any landed, or
+   *     `unreadable` — and the lane keeps whatever of it it can read;
+   *   - `absent`: no row: a database no lane of this release has written yet (the deploy that creates the table);
+   *   - `unreadable`: a row this build cannot read — an integer it cannot prove, a state word it does not know, a clean
+   *     row with no readable snapshot — or a read that threw.
+   *  The last four (clean, dirty, absent, unreadable) FAIL SHUT the same way (the lane flags every claimant the pass does
+   *  not release and holds them only when two or more stand unreleased), and keep their own words. Nothing is cleared by comparing timestamps. Synchronous, like every read on this store. */
+  deadCoordinatorBreakerState(): DeadCoordinatorBreakerStateRead {
+    try {
+      const row = this.db.prepare(
+        'SELECT CAST(generation AS TEXT) AS genText, CAST(state AS TEXT) AS state, CAST(held AS TEXT) AS held, ' +
+        'CAST(writtenAt AS TEXT) AS atText FROM dead_coordinator_breaker_state WHERE id = 1',
+      ).get() as { genText: string | null; state: string | null; held: string | null; atText: string | null } | undefined;
+      if (row === undefined) return { kind: 'absent' };
+      const gen = persistedInt(row.genText ?? '', 'breaker state generation');
+      if (!gen.ok) return { kind: 'unreadable', detail: gen.detail };
+      const at = persistedInt(row.atText ?? '', 'breaker state writtenAt');
+      if (!at.ok) return { kind: 'unreadable', detail: at.detail };
+      const parsed = row.held === null ? null : parseBreakerHeld(row.held);
+      const snapshot: DeadCoordinatorBreakerSnapshot = parsed === null ? { kind: 'none' }
+        : parsed.ok ? { kind: 'members', members: parsed.members } : { kind: 'unreadable', detail: parsed.detail };
+      if (row.state === 'dirty') return { kind: 'dirty', generation: gen.value, snapshot };
+      if (row.state !== 'clean' && row.state !== 'sealed') return { kind: 'unreadable', detail: 'the breaker state word is not one this build knows' };
+      if (snapshot.kind !== 'members') {
+        return { kind: 'unreadable', detail: snapshot.kind === 'none' ? 'a clean breaker state carries no snapshot' : snapshot.detail };
+      }
+      return { kind: row.state, generation: gen.value, held: snapshot.members, writtenAt: at.value };
+    } catch (err) {
+      return { kind: 'unreadable', detail: err instanceof Error ? err.message : String(err) };
+    }
+  }
+
+  /** SEAL THE BREAKER'S STATE (D-4916, the operator's choice of 2026-10-13, "Seal on clean shutdown"): ONE statement, one
+   *  generation-checked write that turns a `clean` row into `sealed` over the SAME snapshot (`held` and `writtenAt` are
+   *  untouched) with the generation moved on. It writes nothing unless the row reads `clean` at exactly `generation`: a
+   *  dirty, sealed, absent or foreign-moved row refuses it. The caller (`FleetWatcher.sealDeadCoordinatorBreaker`)
+   *  decides WHETHER to seal; this only never seals what it did not see clean. */
+  sealDeadCoordinatorBreakerState(generation: number): { ok: true; generation: number } | { ok: false; detail: string } {
+    return this.moveBreakerState('clean', 'sealed', generation);
+  }
+
+  /** UNSEAL THE BREAKER'S STATE (D-4916): the mirror of the seal. The lane's first pass of a process that read `sealed`
+   *  writes `clean` back, generation-checked over the same snapshot, so a process that dies later leaves a state no start
+   *  trusts. Writes nothing unless the row reads `sealed` at exactly `generation`. */
+  unsealDeadCoordinatorBreakerState(generation: number): { ok: true; generation: number } | { ok: false; detail: string } {
+    return this.moveBreakerState('sealed', 'clean', generation);
+  }
+
+  private moveBreakerState(from: 'clean' | 'sealed', to: 'clean' | 'sealed', generation: number): { ok: true; generation: number } | { ok: false; detail: string } {
+    try {
+      const row = this.db.prepare(
+        `UPDATE dead_coordinator_breaker_state SET state = '${to}', generation = generation + 1 ` +
+        `WHERE id = 1 AND state = '${from}' AND generation = ? AND held IS NOT NULL RETURNING CAST(generation AS TEXT) AS genText`,
+      ).get(generation) as { genText: string } | undefined;
+      if (row === undefined) return { ok: false, detail: `the breaker state is not ${from} at generation ${generation}` };
+      const gen = persistedInt(row.genText, 'breaker state generation');
+      return gen.ok ? { ok: true, generation: gen.value } : { ok: false, detail: gen.detail };
+    } catch (err) {
+      return { ok: false, detail: err instanceof Error ? err.message : String(err) };
+    }
+  }
+
+  /** MARK THE BREAKER'S STATE DIRTY (D-4857), ALONE, before the lane changes any anchor: ONE statement, its own
+   *  transaction, so it is durable when it returns. It creates the row (generation 1, no snapshot) or moves the
+   *  generation on and keeps the snapshot it carries. Its answer is the generation the commit must find, or a failure —
+   *  and on a failure the lane changes no anchor and acts on nothing that pass. A malformed generation is overwritten
+   *  by a dirty one, which fails shut. */
+  markDeadCoordinatorBreakerDirty(at: number): { ok: true; generation: number } | { ok: false; detail: string } {
+    try {
+      const row = this.db.prepare(
+        "INSERT INTO dead_coordinator_breaker_state (id, generation, state, held, writtenAt) VALUES (1, 1, 'dirty', NULL, ?) " +
+        "ON CONFLICT(id) DO UPDATE SET generation = CAST(generation AS INTEGER) + 1, state = 'dirty', writtenAt = excluded.writtenAt " +
+        'RETURNING CAST(generation AS TEXT) AS genText',
+      ).get(at) as { genText: string } | undefined;
+      const gen = persistedInt(row?.genText ?? '', 'breaker state generation');
+      return gen.ok ? { ok: true, generation: gen.value } : { ok: false, detail: gen.detail };
+    } catch (err) {
+      return { ok: false, detail: err instanceof Error ? err.message : String(err) };
+    }
+  }
+
+  /** THE COMMIT (D-4857): in ONE synchronous `BEGIN IMMEDIATE` transaction, the breaker's EXACT held snapshot, every
+   *  anchor change of the pass (`upserts`, then the staged `deletes`) and the state turned `clean` with the generation
+   *  moved on — and, when `record` names carrier runs and one still exists, the `run_events` record of the set
+   *  (`recordDeadCoordinatorBreakerHeld`; the first carrier that exists takes it, and with none the table alone carries
+   *  the snapshot). It commits only over the dirty mark it was handed: the row must read `dirty` at `generation`, so a
+   *  mark it did not make (another writer's) refuses it. ANY failure — that refusal, a set no pass builds, a statement
+   *  that throws, a COMMIT that throws — rolls the whole of it back: no anchor moved, the snapshot and the run_events
+   *  record as they were, the state still dirty. Only `{ ok: true }` lets the lane update what it knows was committed,
+   *  or act. */
+  commitDeadCoordinatorBreakerState(c: {
+    readonly generation: number;
+    readonly upserts: readonly (readonly [string, DeadAnchor])[];
+    readonly deletes: readonly string[];
+    readonly held: readonly DeadCoordinatorBreakerMember[];
+    readonly at: number;
+    readonly record: readonly number[] | null;
+  }): { ok: true; generation: number; recordedOn: number | null } | { ok: false; detail: string } {
+    const detail = deadCoordinatorBreakerHeldDetail(c.held);
+    if (detail === null) return { ok: false, detail: 'the held set is not one a pass builds' };
+    try {
+      return tx(this.db, () => {
+        const row = this.db.prepare(
+          'SELECT CAST(generation AS TEXT) AS genText, CAST(state AS TEXT) AS state FROM dead_coordinator_breaker_state WHERE id = 1',
+        ).get() as { genText: string | null; state: string | null } | undefined;
+        if (row === undefined || row.state !== 'dirty' || row.genText !== String(c.generation)) {
+          throw new Error('the breaker state is not the dirty mark this pass made');
+        }
+        this.db.prepare(
+          "UPDATE dead_coordinator_breaker_state SET generation = ?, state = 'clean', held = ?, writtenAt = ? WHERE id = 1",
+        ).run(c.generation + 1, detail, c.at);
+        for (const [id, a] of c.upserts) this.setDeadAnchor(id, a);
+        let recordedOn: number | null = null;
+        for (const runId of c.record ?? []) {
+          const w = this.recordDeadCoordinatorBreakerHeld(runId, c.held, c.at);
+          if (w.recorded) { recordedOn = runId; break; }
+        }
+        for (const id of c.deletes) this.deleteDeadAnchor(id);
+        return { ok: true as const, generation: c.generation + 1, recordedOn };
+      });
+    } catch (err) {
+      return { ok: false, detail: err instanceof Error ? err.message : String(err) };
+    }
   }
 
   /** Per session id, the LATEST instant it held a coordinator's chair. This is
@@ -3403,7 +3661,7 @@ export class CoordStore {
     // `DISTINCT`: `reclaimProgram` writes one identical row (one `at` for the
     // act) per run of the programme it moves, so N runs would otherwise parse
     // the same text N times; the candidate length bound is the parsers' own
-    // (`CHILD_RECLAIM_MAX_SESSION_ID_CHARS`, whose docstring states why dropping
+    // (`TMPROOT_ID_MAX_CHARS`, whose docstring states why dropping
     // a longer one is safe). There is no SQL `MAX`: each row's instant is
     // proven before the fold compares it.
     const displacements = this.db.prepare(
@@ -5767,20 +6025,20 @@ export class CoordStore {
     return rows.map((r) => CoordStore.reviveLifecycleRow(r));
   }
 
-  /** One session's `create` rows ALONE, oldest-first, UNCAPPED by
-   *  `LIFECYCLE_PAGE_MAX` (child-reclamation wave 4, spec §5.1's birth fence):
-   *  a failing child's ordinary window (`lifecycleFor`, 500 rows) scrolls past
-   *  its own opening `create` in days of retried refusals, and the run-id fence
-   *  needs that row for the LIFE of the workspace, not for as long as it fits
-   *  a page. Bounded to one ACT: `lifecycle_by_session` is `(sessionId, id)`,
-   *  so this still walks every row of the session (filtering `act` after the
-   *  index narrows to the session) rather than a narrower index on `act`
-   *  itself — a cost bound on the SESSION, not the whole table, and never
-   *  the oldest `create` either, which would skip every recycled slug
-   *  (spec §5.6): `childReclaimGeneration`, this read's one caller, is what
-   *  narrows "every create this session ever had" down to the CURRENT
-   *  generation's own opening row. Same column set, same reviver, as
-   *  `lifecycleFor` — `reviveLifecycleRow` is the one definition both share. */
+  /** One session's `create` rows ALONE, oldest-first, UNCAPPED by `LIFECYCLE_PAGE_MAX` (child-reclamation wave 4,
+   *  spec §5.9).
+   *  - Why uncapped: a failing child's ordinary window (`lifecycleFor`, 500 rows) scrolls past its own opening
+   *    `create` in days of retried refusals, and the attention list's generation needs that row for the LIFE
+   *    of the workspace.
+   *  - Its one caller is the sweep's attention rows (`childReclaimAttentionGenerationRows`), which merge it into
+   *    the window. The birth reads `lifecycleBirthEventsFor` instead, which adds the `purge` rows
+   *    (spec §5.7).
+   *  - Cost: bounded to one ACT. `lifecycle_by_session` is `(sessionId, id)`, so this still walks every row of
+   *    the session (it filters `act` after the index narrows to the session), not a narrower index on `act`.
+   *    The bound is on the SESSION, never the whole table.
+   *  - It never answers the oldest `create`, which would skip every recycled slug (spec §5.7).
+   *    `childReclaimGeneration` cuts "every create this session ever had" down to the CURRENT generation.
+   *  - Same column set and same reviver as `lifecycleFor`: `reviveLifecycleRow` is the one definition both share. */
   lifecycleCreatesFor(sessionId: string): MirroredLifecycleEvent[] {
     const c = CoordStore.LC_COLS;
     const act: LifecycleAct = 'create';
@@ -5794,6 +6052,36 @@ export class CoordStore {
       obsJson: string | null; decJson: string | null; measJson: string | null; raw: string;
     }[];
     return rows.map((r) => CoordStore.reviveLifecycleRow(r));
+  }
+
+  /** THE ONE SPELLING of `lifecycleBirthEventsFor`'s statement. It is public so that its test reads the text this
+   *  method runs: the hint is present, and the plan seeks. `INDEXED BY lifecycle_by_session` is
+   *  `childReclaimEventsSql`'s idiom: the table is never pruned, so this read costs one session's own history. */
+  static readonly LIFECYCLE_BIRTH_EVENTS_SQL =
+    'SELECT id, act, at, measJson FROM lifecycle_events INDEXED BY lifecycle_by_session ' +
+    `WHERE sessionId = ? AND act IN (${placeholders(LIFECYCLE_BIRTH_ACTS.length)}) AND outcome = ? ` +
+    'ORDER BY id ASC';
+
+  /** The birth's rows for one session (spec §5.7): every `done` `create` and every `done` `purge`, oldest
+   *  first by the mirror's own `id`.
+   *  - UNCAPPED, like `lifecycleCreatesFor` and for its reason: the opening create must stay findable for the
+   *    life of the workspace.
+   *  - A refused or intent row of either act is not returned. A refused ws-add minted nothing, and an intent
+   *    without its done never completed.
+   *  - It decides nothing. Which create opens the generation, and which purge follows it, is
+   *    `childReclaimBornAt`'s decision.
+   *  - It throws when the statement returns an act it never asked for. Every caller already reads a throw as
+   *    unreadable. */
+  lifecycleBirthEventsFor(sessionId: string): readonly LifecycleBirthEvent[] {
+    const done: LifecycleOutcome = 'done';
+    const rows = this.db.prepare(CoordStore.LIFECYCLE_BIRTH_EVENTS_SQL).all(sessionId, ...LIFECYCLE_BIRTH_ACTS, done) as
+      { id: number; act: string; at: number | null; measJson: string | null }[];
+    return rows.map((r) => {
+      if (!isLifecycleBirthAct(r.act)) {
+        throw new Error(`lifecycleBirthEventsFor: the statement returned act ${JSON.stringify(r.act)}, which it never asks for`);
+      }
+      return { id: r.id, act: r.act, at: r.at, uuid: reviveMeas(jsonOrNull(r.measJson))?.uuid ?? null };
+    });
   }
 
   /** The reviver `lifecycleFor` and `lifecycleCreatesFor` share, extracted so
@@ -5911,6 +6199,71 @@ export class CoordStore {
       .all(...ids, ...CoordStore.CHILD_RECLAIM_EVENT_ACTS) as unknown as Parameters<typeof CoordStore.reviveLifecycleRow>[0][];
     for (const r of rows) {
       if (r.sessionId !== null) out.get(r.sessionId)?.push(CoordStore.reviveLifecycleRow(r));
+    }
+    return out;
+  }
+
+  /** THE ONE SPELLING of `lifecycleReclaimRowsSince`'s statement, public so its test runs EXPLAIN over the
+   *  text this method runs. `INDEXED BY lifecycle_by_at`, `recentProvenance`'s idiom and its reason: the
+   *  table is NEVER PRUNED, and the planner prefers a scan that orders by `id` for free over a seek plus a
+   *  sort. `at >= ?` also excludes an undated row, which the horizon cannot place. */
+  static lifecycleReclaimRowsSinceSql(): string {
+    return `SELECT ${CoordStore.LC_COLS} FROM lifecycle_events INDEXED BY lifecycle_by_at ` +
+      'WHERE at >= ? AND act = ? AND sessionId IS NOT NULL ' +
+      `AND (outcome = ? OR (outcome = ? AND refusal IN (${placeholders(CHILD_RECLAIM_LEAF_FAILED_TOKENS.length)}))) ` +
+      'AND (measJson IS NOT NULL OR truncated = 1) ORDER BY id';
+  }
+
+  /**
+   * The kept-leaf item's SOURCE (child-reclamation spec §5.6, §5.9): every `reclaim` row ccd dated at or
+   * after `atMs` that may carry the two kept-leaf keys. These are a `done`, or a failure whose token is one
+   * of `CHILD_RECLAIM_LEAF_FAILED_TOKENS` (the act completed, then only the purge failed), carrying a `meas`
+   * or cut to fit. ONE statement, bounded by the window and never by the table. Oldest first, by this
+   * table's own `id`.
+   *
+   * Nothing is decided here: which row of an id stands, what it kept and what ends it are L1's
+   * (`childReclaimLeafKept`). Each row keeps `meas` and `truncated` exactly as the mirror holds them, so a
+   * cut line and a line with nothing measured never collapse into one value.
+   */
+  lifecycleReclaimRowsSince(atMs: number): ChildReclaimLeafSourceRow[] {
+    const act: LifecycleAct = 'reclaim';
+    const done: LifecycleOutcome = 'done';
+    const failed: LifecycleOutcome = 'failed';
+    const rows = this.db.prepare(CoordStore.lifecycleReclaimRowsSinceSql())
+      .all(atMs, act, done, failed, ...CHILD_RECLAIM_LEAF_FAILED_TOKENS) as unknown as
+        ({ id: number } & Parameters<typeof CoordStore.reviveLifecycleRow>[0])[];
+    return rows.flatMap((r) => {
+      // The WHERE excludes both; the row type cannot know it.
+      if (r.sessionId === null || r.at === null) return [];
+      const e = CoordStore.reviveLifecycleRow(r);
+      return [{ id: r.id, sessionId: r.sessionId, at: r.at, outcome: e.outcome, refusal: e.refusal,
+        truncated: e.truncated, meas: e.meas, detail: e.detail }];
+    });
+  }
+
+  /** THE ONE SPELLING of `lifecycleLeafEndsFor`'s statement. `INDEXED BY lifecycle_by_session`, as
+   *  `childReclaimEventsSql` is: the cost is bounded by the asked sessions' own histories. */
+  static lifecycleLeafEndsSql(sessions: number): string {
+    return 'SELECT id, sessionId, act, at FROM lifecycle_events INDEXED BY lifecycle_by_session ' +
+      `WHERE sessionId IN (${placeholders(sessions)}) AND act IN (?, ?) AND outcome = ? ORDER BY sessionId, id`;
+  }
+
+  /** What may END a kept-leaf item (spec §5.9): each asked id's `done` `create` and `collect` rows, oldest
+   *  first, with the mirror's id and ccd's nullable `at`. ONE statement whatever the id count. EVERY asked
+   *  id gets an entry, `[]` included (`childReclaimEvents`' rule). Whether a row FOLLOWS an item's source,
+   *  and whether a create is placed, are L1's. */
+  lifecycleLeafEndsFor(sessionIds: readonly string[]): Map<string, ChildReclaimLeafEndRow[]> {
+    const ids = [...new Set(sessionIds)];
+    const out = new Map<string, ChildReclaimLeafEndRow[]>(ids.map((id) => [id, []]));
+    if (ids.length === 0) return out;
+    const create: ChildReclaimLeafEndRow['act'] = 'create';
+    const collect: ChildReclaimLeafEndRow['act'] = 'collect';
+    const done: LifecycleOutcome = 'done';
+    const rows = this.db.prepare(CoordStore.lifecycleLeafEndsSql(ids.length))
+      .all(...ids, create, collect, done) as { id: number; sessionId: string; act: string; at: number | null }[];
+    for (const r of rows) {
+      const act = r.act === create ? create : r.act === collect ? collect : null;
+      if (act !== null) out.get(r.sessionId)?.push({ id: r.id, act, at: r.at });
     }
     return out;
   }
@@ -6924,18 +7277,18 @@ export class CoordStore {
    *  `askKey` hashes CONTENT, so a child looping over identical questions
    *  mints the same key twice and `updatedAt` is what tells instance 1 from
    *  instance 2. What it does not say is that `updatedAt` moves for reasons
-   *  that have nothing to do with the dialog: `ccd/session-hook.sh` stamps it
-   *  unconditionally on EVERY write, and its `SubagentStart`/`SubagentStop`
-   *  arm re-reads `.ask` straight back off the file (`:1227` — D-2404: it is
-   *  that re-read, NOT the `:1233` ask-clear exemption two reviewers named,
-   *  since `state` is `waiting` on this path and the clear never applies) and
-   *  restores `prev_state`, so a subagent event on a session blocked at a dialog
-   *  rewrites the identical envelope under a fresh number. Nothing re-stamped
-   *  the row, so ONE such bump refused every parent answer for the row's
-   *  whole life and the lane degraded, silently and greenly, to the
-   *  pre-feature behaviour it was built to replace. Measured across the seam
-   *  in `server/test/ask-instance-guard.test.ts` — the real hook writing, the
-   *  real CAS refusing, with the control that says the bump is why.
+   *  that have nothing to do with the dialog: `ccd/session-hook.sh` stamped it
+   *  on EVERY write, and its `SubagentStart`/`SubagentStop` arm re-read `.ask`
+   *  straight back off the file (`:1227` then — D-2404: that re-read, NOT the
+   *  `:1233` ask-clear exemption two reviewers named, since `state` is `waiting`
+   *  on this path) and restored `prev_state`, so a subagent event on a session
+   *  blocked at a dialog rewrote the identical envelope under a fresh number.
+   *  Since D-4041 a MAIN-thread wait keeps its `updatedAt` and gains `aliveAt`,
+   *  so that bump survives only for a wait a SUBAGENT raised (`waitBy:"subagent"`,
+   *  not carried) and for any other bump. Nothing re-stamped the row, so ONE
+   *  such bump refused every parent answer for the row's whole life and the lane
+   *  degraded, silently and greenly, to the pre-feature behaviour. Measured in
+   *  `server/test/ask-instance-guard.test.ts` (its last describe: the stamp that still moves).
    *
    *  WHY THIS IS NOT A WEAKENING. The `WHERE` demands both witnesses the
    *  guard actually cares about: `dialogId` — the sha1 of the menu painted in

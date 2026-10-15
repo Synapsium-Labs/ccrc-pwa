@@ -254,6 +254,10 @@ describe('the worker skill: its contract', () => {
     expect(fm.toLowerCase()).toContain(
       'never use it to coordinate a program — a worker that starts dispatching ' +
       'has become a coordinator without a ledger');
+    // #361: a subagent working in a worker's, reviewer's or coordinator's workspace meets this
+    // skill's own trigger word for word, so the description excludes it in so many words.
+    expect(fm.toLowerCase()).toContain(
+      'never use it inside a subagent — a session started by another session\'s agent tool or a workflow agent() call is a subagent, whatever its brief names, and returns its report to its parent without acking, claiming or sending mail.');
   });
 });
 

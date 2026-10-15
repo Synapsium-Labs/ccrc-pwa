@@ -1,13 +1,13 @@
 // Pasting screenshots into the composer — ⌘⇧4 then ⌘V, the desktop path that
 // skips the filesystem and the file picker entirely. It shares the tray's own
 // pipeline (useStagedImages: downscale → api.upload → a chip appears), so this
-// covers only what paste itself adds: spotting every image on the clipboard
-// (plural — a paste can carry more than one), naming each so the server
-// admits it, and leaving ordinary text pastes completely untouched.
+// covers only what paste itself adds: spotting every attachable file on the
+// clipboard (plural — a paste can carry more than one), naming each so the
+// server admits it, and leaving ordinary text pastes completely untouched.
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { Composer } from '../src/session/Composer';
-import { clipboardImages, namedClipboardImage } from '../src/session/useAttachImage';
+import { clipboardFiles, namedUpload } from '../src/session/useAttachImage';
 import { api } from '../src/lib/api';
 
 afterEach(() => {
@@ -31,35 +31,55 @@ const clipboard = (files: File[], text = ''): DataTransfer =>
 const shot = (type = 'image/png', name = 'image.png') =>
   new File([new Uint8Array(64)], name, { type });
 
-describe('clipboardImages', () => {
+describe('clipboardFiles', () => {
   it('finds every image among clipboard items, and ignores text-only pastes', () => {
-    expect(clipboardImages(clipboard([shot()])).map((f) => f.type)).toEqual(['image/png']);
-    expect(clipboardImages(clipboard([], 'just some text'))).toEqual([]);
-    expect(clipboardImages(null)).toEqual([]);
+    expect(clipboardFiles(clipboard([shot()])).map((f: File) => f.type)).toEqual(['image/png']);
+    expect(clipboardFiles(clipboard([], 'just some text'))).toEqual([]);
+    expect(clipboardFiles(null)).toEqual([]);
   });
 
   it('returns every image when several are pasted at once, in clipboard order', () => {
-    const files = clipboardImages(
+    const files = clipboardFiles(
       clipboard([shot('image/png', 'a.png'), shot('image/jpeg', 'b.jpg')]),
     );
-    expect(files.map((f) => f.name)).toEqual(['a.png', 'b.jpg']);
+    expect(files.map((f: File) => f.name)).toEqual(['a.png', 'b.jpg']);
+  });
+
+  // A file copied in Finder/Explorer and pasted arrives as a clipboard FILE with
+  // its real name — and, for a document, routinely with no type at all. The old
+  // `type.startsWith('image/')` filter dropped those two cases silently.
+  it('takes a pasted document by its name, even with no type on it', () => {
+    const files = clipboardFiles(clipboard([shot('', 'spec.md'), shot('', 'notes.rtf')]));
+    expect(files.map((f: File) => f.name)).toEqual(['spec.md', 'notes.rtf']);
+  });
+
+  it('still ignores a pasted file of a kind nothing here admits', () => {
+    expect(clipboardFiles(clipboard([shot('application/zip', 'bundle.zip')]))).toEqual([]);
   });
 });
 
-describe('namedClipboardImage', () => {
+describe('namedUpload', () => {
   it('names an unnamed clipboard file by its real type — the server admits by extension', () => {
-    // Safari hands over an empty name; the upload route matches /\.(png|jpe?g|webp)$/.
-    const named = namedClipboardImage(shot('image/jpeg', ''), 1700000000000);
+    // Safari hands over an empty name; the upload route matches on the extension.
+    const named = namedUpload(shot('image/jpeg', ''), 1700000000000);
     expect(named?.name).toBe('pasted-1700000000000.jpg');
     expect(named?.type).toBe('image/jpeg');
   });
 
   it('keeps a name that already carries an accepted extension', () => {
-    expect(namedClipboardImage(shot('image/png', 'Screenshot.png'), 1)?.name).toBe('Screenshot.png');
+    expect(namedUpload(shot('image/png', 'Screenshot.png'), 1)?.name).toBe('Screenshot.png');
+  });
+
+  // The name is what the server gates on, so a document keeps its own — that
+  // name is also the stem that reaches the prompt, and it is the only thing
+  // saying which of four staged documents this one is.
+  it('keeps a document name untouched rather than inventing a pasted-<ts> one', () => {
+    expect(namedUpload(shot('text/markdown', 'design-notes.md'), 1)?.name).toBe('design-notes.md');
+    expect(namedUpload(shot('', 'report.pdf'), 1)?.name).toBe('report.pdf');
   });
 
   it('refuses a type the server would reject rather than mislabelling it', () => {
-    expect(namedClipboardImage(shot('image/gif', 'anim.gif'), 1)).toBeNull();
+    expect(namedUpload(shot('image/gif', 'anim.gif'), 1)).toBeNull();
   });
 });
 

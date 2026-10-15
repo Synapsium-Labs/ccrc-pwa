@@ -3,6 +3,13 @@
 // language; confirming closes the sheet (callers surface progress/failure via
 // toast). Cancel and scrim both just close.
 //
+// `consequence` is one line or several: a list renders one paragraph per line,
+// in order, so the stall watch's sheet, built from the server's write effect,
+// says each thing the write turns on or off on its own line (spec 2026-10-05
+// §13, `confirm-on-stage-diff` (D-4034)). Every string caller is unchanged.
+// Each line is its own `QC_CONSEQUENCE` paragraph, margin included — the
+// spacing the one-line sheet always had, once per line.
+//
 // `qc-consequence` and `qc-actions` are structural hooks, not styling — see
 // button.tsx's note. Callers and tests reach the confirm button through
 // `.qc-actions .btn-primary`, because the opener button behind the sheet
@@ -35,7 +42,7 @@ export const QC_ACTIONS = 'qc-actions grid gap-2';
 
 export interface QuickConfirmProps {
   title: string;
-  consequence: string;
+  consequence: string | string[];
   confirmLabel: string;
   onConfirm: () => void;
   open: boolean;
@@ -50,9 +57,14 @@ export function QuickConfirm({
   open,
   onClose,
 }: QuickConfirmProps): ReactNode {
+  const lines = typeof consequence === 'string' ? [consequence] : consequence;
   return (
     <Sheet open={open} onClose={onClose} title={title}>
-      <p className={QC_CONSEQUENCE}>{consequence}</p>
+      {lines.map((line, i) => (
+        <p key={i} className={QC_CONSEQUENCE}>
+          {line}
+        </p>
+      ))}
       <div className={QC_ACTIONS}>
         <Button
           onClick={() => {

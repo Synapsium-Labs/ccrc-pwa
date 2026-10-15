@@ -157,6 +157,25 @@ function spawnSucceeded(r: DeadCoordinatorJournalRow): boolean {
   return typeof meas === 'object' && meas !== null && (meas as { rc?: unknown }).rc === '0';
 }
 
+/** The newest `spawn` row that recorded `rc` 0, in journal order (`rows` already sorted by generation), with its index. */
+function newestSuccessfulSpawn(rows: readonly DeadCoordinatorJournalRow[]): { index: number; row: DeadCoordinatorJournalRow } | null {
+  for (let i = rows.length - 1; i >= 0; i -= 1) {
+    const r = rows[i]!;
+    if (r.act === 'spawn' && r.outcome === 'done' && spawnSucceeded(r)) return { index: i, row: r };
+  }
+  return null;
+}
+
+/** The instant (ms) of the claimant's newest SUCCESSFUL spawn, by the same selector `deadCoordinatorJournal` reads its
+ *  "last start" with, or `null` (no such row, a row with no instant, or a generation this reader cannot place). It is the
+ *  second kind of evidence of a later life (`deadCoordinatorNewEpisode`, D-4827); the caller reads it only for a claimant
+ *  the journal clause called crashed, so the journal was trusted. */
+export function deadCoordinatorJournalSpawnedAt(mirrorRows: readonly DeadCoordinatorJournalRow[]): number | null {
+  if (mirrorRows.some((r) => !GEN_DIGITS.test(r.gen))) return null;
+  const found = newestSuccessfulSpawn([...mirrorRows].sort((a, b) => compareGenerations(a.gen, b.gen)));
+  return found === null ? null : found.row.at;
+}
+
 /** THE ONE READER of the journal clause. "Since its last successful start" is since the newest `spawn` row that
  *  recorded `rc` 0: `start` and `ensure` are journaled at the TOP of their verbs, before any pane exists, so a revive
  *  that FAILED journals them too — the case the clause exists for (a person stopped it, a later revive failed and
@@ -179,12 +198,9 @@ export function deadCoordinatorJournal(
     return { kind: 'unreadable', detail: `a journal row names a generation that cannot be placed ("${unplaced.gen}")` };
   }
   const rows = [...mirrorRows].sort((a, b) => compareGenerations(a.gen, b.gen));
-  let from = 0;
-  let start: DeadCoordinatorJournalRow | null = null;
-  for (let i = rows.length - 1; i >= 0; i -= 1) {
-    const r = rows[i]!;
-    if (r.act === 'spawn' && r.outcome === 'done' && spawnSucceeded(r)) { from = i + 1; start = r; break; }
-  }
+  const found = newestSuccessfulSpawn(rows);
+  const from = found === null ? 0 : found.index + 1;
+  const start: DeadCoordinatorJournalRow | null = found === null ? null : found.row;
   const lost = journalLossSince(start, trust);
   if (lost !== null) return { kind: 'unreadable', detail: lost };
   if (rows.length === 0) return hasHistory ? { kind: 'quiet', started: false } : { kind: 'no-history' };
@@ -260,6 +276,32 @@ export function deadAnchorNext(prev: DeadAnchor | null, nowMs: number): DeadAnch
   return { firstDeadAt: prev.firstDeadAt, lastDeadAt: nowMs };
 }
 
+/** A NEW EPISODE (D-4825, D-4827; the returning-id seam): the claimant is crashed this pass, and EVIDENCE of a later life
+ *  is later than its durable anchor's `firstDeadAt` and not after now — so what is crashed now is a later death, not the
+ *  one the anchor counts. Two kinds of evidence, either enough: (1) its supervisor's heartbeat (`supervisedAt`, epoch
+ *  SECONDS), which is SUPERVISION evidence — `cmd_supervise` re-stamps it every 30 s and at every supervisor start,
+ *  `cmd_swap` while a carry runs — so a restart of a supervisor also shows; (2) the trusted journal's newest SUCCESSFUL
+ *  `spawn` (rc 0, already selected by `deadCoordinatorJournal`, `spawnedAtMs`), which covers the unsupervised fallbacks of
+ *  a successful spawn that stamp no heartbeat. The lane then starts a FRESH anchor at this crash, as for a first crash
+ *  (`deadAnchorNext(null, now)`), and the breaker adds that instant to every instant it remembers. A lane that saw the
+ *  claimant alive in between would have deleted the anchor and anchored afresh; one that skipped that pass, or was
+ *  restarting, did not, and keeps the old episode's instant — which this makes the same. Stateless: the evidence and the
+ *  anchor are both durable or read, so it survives a restart, and once the fresh anchor is written neither piece of
+ *  evidence is later than it, so it fires once per later life. The hour then counts from the fresh anchor, exactly as for
+ *  a first crash. A heartbeat that classifies the claimant crashed is already outside the 120-second fresh window, so the
+ *  new anchor is that delay, plus up to a cadence or the skipped passes, later than the stamp: it never shortens the old
+ *  hour. Not covered, and not claimed: a later life that left neither a heartbeat nor a journaled successful spawn, and, in
+ *  remote mode, evidence stamped by a fleet clock running behind the server's (it can only hide a return, never invent
+ *  one). Both values are read as the existing timestamp handling reads them: a future, non-positive or unsafe one is no
+ *  evidence. */
+export function deadCoordinatorNewEpisode(
+  prev: DeadAnchor | null, supervisedAtS: number | null, nowMs: number, spawnedAtMs: number | null = null,
+): boolean {
+  if (prev === null) return false;
+  const later = (ms: number | null): boolean => ms !== null && Number.isSafeInteger(ms) && ms > 0 && ms <= nowMs && ms > prev.firstDeadAt;
+  return later(supervisedAtS !== null && Number.isSafeInteger(supervisedAtS) ? supervisedAtS * 1000 : null) || later(spawnedAtMs);
+}
+
 /** SINCE WHEN the claimant has been dead, for the hour: `max(firstDeadAt, .supervised's stamp)`. The stamp may only
  *  RAISE the anchor, never lower it: it freezes whenever a session runs unsupervised (a unit crash-looped to FAILED, a
  *  darwin bootout), so a pane that died later would read `orphan` with a days-old stamp. An absent, unparseable or
@@ -286,8 +328,8 @@ export const deadCoordinatorDue = (since: number, crashedPasses: number, nowMs: 
  *
  *  IT REMEMBERS (the departure `breaker-remembers-its-cluster`). A cluster member that reads unmeasurable for one pass
  *  loses its durable anchor (ruling E) and is re-anchored later, so a breaker recomputed from the anchors alone would
- *  let one transient doubt dissolve the cluster for good. `members` carries each held claimant's ORIGINAL first-dead
- *  instant; the lane hands them back on the next pass and releases a member only on an answer that is evidence — alive,
+ *  let one transient doubt dissolve the cluster for good. `members` carries each held claimant's accumulated first-dead
+ *  instants (every one it has held or been anchored at); the lane hands them back on the next pass and releases a member only on an answer that is evidence — alive,
  *  stopped, a deliberate act — or when it leaves the population. */
 export type DeadCoordinatorBreaker =
   | { readonly tripped: false }
@@ -299,29 +341,138 @@ export type DeadCoordinatorBreaker =
       /** For `unmeasurable`: what the pass could not measure. */
       readonly detail?: string };
 
-export interface DeadCoordinatorBreakerMember { readonly id: string; readonly firstDeadAt: number }
+export interface DeadCoordinatorBreakerMember {
+  readonly id: string;
+  readonly firstDeadAt: number;
+  /** Every anchor instant a HELD member has carried while held (review 384, F1-N1), ascending and without repeats, the
+   *  first of them `firstDeadAt`. Absent when it carries one. `crashed` entries never have it. */
+  readonly instants?: readonly number[];
+  /** A member the FALLBACK seed holds (review 382, R2) — the lane could not read its record of the hold, so it holds every
+   *  claimant the pass does not release. Absent on every ordinary member, never `false`. See `deadCoordinatorBreaker`. */
+  readonly fallback?: true;
+}
 
-/** `crashed`: this pass's crashed claimants with their durable `firstDeadAt`. `held`: the members the last trip held
- *  that no answer has released since, with their remembered instants (they win over a re-anchored one). `unmeasurable`:
- *  the ids this pass could not measure, of `measured` asked. `fleetDoubt`: a fleet-wide fact this pass measured — tmux
- *  did not answer — or `null`. A fleet-wide doubt trips it whatever the count: one claimant whose row is gone still
- *  reads crashed while tmux is down for every other, and that pass is exactly the box fault the breaker exists for. So
- *  does a pass that could measure none of two or more claimants. */
+/** `crashed`: this pass's crashed claimants with their durable `firstDeadAt` (the CURRENT anchor). `held`: the members the
+ *  last trip held that no answer has released since, with every instant they carry. `unmeasurable`: the ids this pass
+ *  could not measure, of `measured` asked. `fleetDoubt`: a fleet-wide fact this pass measured — tmux did not answer — or
+ *  `null`. A fleet-wide doubt trips it whatever the count: one claimant whose row is gone still reads crashed while tmux
+ *  is down for every other, and that pass is exactly the box fault the breaker exists for. So does a pass that could
+ *  measure none of two or more claimants.
+ *
+ *  THE CLUSTERING IS MONOTONE (review 384, F1). Each entry is an id, and it carries a SET of instants — every instant it
+ *  carried while held, plus its current anchor when it is crashed and anchored this pass — and a flag. No instant
+ *  replaces another and none is dropped while the member stays held. Two DISTINCT entries cluster when ANY instant of one
+ *  is within the window of ANY instant of the other; an id's own instants never cluster it with itself. A sorted sweep
+ *  over the (id, instant) points, comparing consecutive points of different ids, finds exactly the clustered ids: on a
+ *  within-window run from a point of A to a point of B, the first change of id leaves A beside a consecutive different-id
+ *  point and the last change lands on B beside one. Members are the clustered ids, and a member's instants for the next
+ *  pass are those it carried plus this pass's anchor (so they grow by one per re-anchor while it is held — an
+ *  unmeasurable episode, a gap, a backward clock step, a later life (D-4825, D-4827) — with no bound of their own, and
+ *  the record grows with them); its `firstDeadAt` is the earliest. The anchor itself stays
+ *  durable in `dead_claimants`.
+ *
+ *  A held member FLAGGED `fallback` (review 382, R2) is a WILDCARD: it clusters with every other entry, whatever the
+ *  instants. When at least two entries stand and one is flagged, the breaker trips with EVERY entry as a member, and
+ *  EVERY member of that trip carries the flag (review 382, N1) — a claimant that crashed while the hold stood included,
+ *  on the clustered and the unmeasurable arm alike, since both build `members` the same way.
+ *
+ *  THE PROPERTY (about this function). Let L and L' be two inputs of one pass such that every (id, instant) pair of L, and
+ *  every flag, is also in L'. Then every id L clusters, L' clusters: a wildcard in L' clusters every id of L', and
+ *  without one, adding a point P between two consecutive points a and b of different ids within the window leaves a
+ *  consecutive different-id pair within the window beside P (P's id is a's, b's, or another's, and each case keeps both
+ *  ids paired), so no id unclusters; adding an id, an instant or a flag therefore never untrips the clustered arm and
+ *  never drops a member. The unmeasurable arm names `unmeasurable ∪ crashed ∪ members`, and its trigger (`fleetDoubt`,
+ *  `allUnmeasurable`) reads only the pass's own measurements, so the superset stays a superset there too.
+ *  ANCHORS AND RELEASES ARE PASS-SAMPLED: an anchor is the instant of its lane's own pass (`deadAnchorNext(…, at)`), up to
+ *  one cadence after the crash, and evidence that releases a hold (alive, stopped, deliberate) is seen only at a pass; a
+ *  restarted process passes on its own grid, as does any lane started at another moment. Two lanes therefore anchor one
+ *  crash up to a cadence apart, can release a member at different passes, and a pair near the window's edge can cluster in
+ *  one and not in the other; the lane with more passes may act sooner. That is inherent to pass sampling, was true before
+ *  this, and is not argued away: what follows is claimed ONLY FOR THE PASSES AND EVIDENCE BOTH LANES SHARE. The pure
+ *  property above, a statement about this function's inputs, does not depend on it.
+ *  WHAT IT GIVES A RESTARTED LANE R against an unrestarted one U, UNDER TWO ASSUMPTIONS. (A1) Both lanes' passes fall at
+ *  the same moments, so they hold the same anchor instants for a claimant's current episode and see, and release on, the
+ *  same evidence (not true across a restart that moves the pass grid, nor across a gap longer than the episode gap, which
+ *  re-anchors every crashed coordinator: the spec's residuals name both, and this does not argue about either). (A2) R's
+ *  population differs from U's only by claimants U has ended and R has not yet: R's reset run of crashed passes delays its
+ *  act, whereas its lost backoff makes it act SOONER, and that is a path of its own: if U backs off a stuck claimant P
+ *  while R, its backoff lost, ends P, U keeps P as an extra entry that can cluster with a new crash, so R can end a third
+ *  claimant Q that U holds. THE HYPOTHESIS: every id U holds, R holds with at least U's instants, or flagged. At the seed
+ *  it holds, because of how U writes (D-4857, D-4916): U marks its typed state dirty, alone, before it changes any anchor,
+ *  and turns it clean only in the one transaction that writes its exact held snapshot with every anchor change; a commit
+ *  that fails leaves the state dirty, and a mark that fails leaves it as the last landed write left it (clean or dirty,
+ *  never sealed) while U's hold moves on (its anchor changes pending). A start trusts a stored snapshot ONLY when the state reads `sealed`, which the server's shutdown handler
+ *  writes over a durably clean state with nothing pending, and the first pass of every process unseals it before it can
+ *  change anything: so a snapshot older than a lost hold is never trusted, whatever failed, and a restart finds either a
+ *  sealed state, which is U's exact hold, or one it seeds conservatively. Over a sealed state R seeds U's own snapshot
+ *  (and flags every claimant whose anchor began after it, D-4826: since every anchor change of this release commits with
+ *  its snapshot, only an older build's); over a clean (unsealed), dirty, absent or unreadable one the conservative seed
+ *  flags every claimant the pass does not release, beside every member, instant and flag it can still read, a superset
+ *  of anything U holds (a held member is always unreleased and in the population), and takes no durable anchor as
+ *  continuing, so every crashed claimant's hour restarts at that pass. The seed HOLDS only when two or more claimants
+ *  stand unreleased (the wildcard needs two entries: a single one holds nothing and only has its hour restarted, a delay),
+ *  and a flagged pair dissolves when evidence releases one of the two. Residual (7) of D-4857, a restart after a mark that
+ *  failed, is closed by the seal (D-4916). The one case no durable design can close is a process none of whose writes
+ *  lands, from its first pass to its death: it leaves no trace, so the next start trusts the older seal; that is the floor,
+ *  not an accepted risk of the class mail 4266 measured. The cost of the design is an unclean exit (a kill, an OOM kill, a
+ *  crash, a stop that outlives systemd's timeout), which starts conservatively as above. Each step: both see the same anchors and release the same members on the
+ *  same evidence (alive, stopped, deliberate, left the population), so R's entries are a superset of U's as (id, instant)
+ *  pairs and flags; by the property R trips whenever U does, with members ⊇ U's; and each member's next instants are its
+ *  held instants plus this pass's anchor on both sides, so R's remain ⊇ U's (or R's is flagged, and every member of a
+ *  flagged trip is). So, for the passes and evidence both lanes share, and outside the paths named here, U's breaker
+ *  standing implies R's stands. A claimant that U ended and that RETURNS (a new spawn, a new run) while R still holds its
+ *  old episode is covered by `deadCoordinatorNewEpisode` (D-4825, D-4827): a supervisor heartbeat (supervision evidence)
+ *  or a journaled successful spawn is later than R's durable anchor, so R anchors it afresh at its next crash, as U, which
+ *  deleted the anchor, does — R then carries U's new instant beside every one it remembers. That rests on one of the two:
+ *  a return that leaves neither is not seen, in remote mode a fleet clock behind the server's can hide one, and this does
+ *  not claim to cover them, nor claim that no other corner exists. The class mail 4266 measured — a held instant that
+ *  lived in memory alone because held-set writes failed while anchor writes landed, its anchor then deleted by a doubt
+ *  before the restart — is CLOSED by the typed state (D-4857), not by D-4826's recovery: no anchor change lands without
+ *  the snapshot that holds it, a failed commit leaves the state dirty, and every id has a spelling. The cost is paid only
+ *  on an unclean exit and on the first pass after the deploy that creates the table; while the breaker's writes keep
+ *  failing, nothing acts. A server clock that steps backwards across a restart can make a
+ *  later anchor read earlier than the snapshot. The all-unmeasurable arm diverges as measured: R's extra claimant can be measured while all of
+ *  U's are not, so R does not trip there, but every other claimant is as unmeasured in R as in U, so R can act there only
+ *  on the claimant U already ended. The cost of the accumulation is more holding: a member held at an old instant that
+ *  crashes anew also clusters near its new instant, a held member's instants and its record grow by one per re-anchor
+ *  while it is held, and while a flagged member stands a coordinator that crashes is swept into the hold and flagged
+ *  itself, until evidence releases it or fewer than two entries stand. */
 export function deadCoordinatorBreaker(
   crashed: readonly DeadCoordinatorBreakerMember[], held: readonly DeadCoordinatorBreakerMember[],
   unmeasurable: readonly string[], measured: number, fleetDoubt: string | null, nowMs: number,
 ): DeadCoordinatorBreaker {
-  const firstDead = new Map(crashed.map((c) => [c.id, c.firstDeadAt]));
-  for (const h of held) firstDead.set(h.id, h.firstDeadAt);
-  const byTime = [...firstDead].map(([id, at]) => ({ id, firstDeadAt: at }))
-    .sort((a, b) => a.firstDeadAt - b.firstDeadAt || (a.id < b.id ? -1 : 1));
+  const anchor = new Map(crashed.map((c) => [c.id, c.firstDeadAt]));
+  const carried = new Map(held.map((h) => [h.id, [h.firstDeadAt, ...(h.instants ?? [])]]));
+  const flagged = new Set(held.filter((h) => h.fallback === true).map((h) => h.id));
+  const ids = [...new Set([...anchor.keys(), ...carried.keys()])];
+  // Every instant of an id, ascending, no repeats: what it carried while held, then this pass's anchor.
+  const instantsOf = (id: string): number[] => {
+    const all = [...(carried.get(id) ?? [])];
+    const a = anchor.get(id);
+    if (a !== undefined) all.push(a);
+    return [...new Set(all)].sort((x, y) => x - y);
+  };
+  const points: { id: string; at: number }[] = [];
+  for (const id of ids) for (const at of instantsOf(id)) points.push({ id, at });
+  points.sort((a, b) => a.at - b.at || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+  // A trip a flagged entry took part in flags EVERY member (review 382, N1).
+  const wild = ids.length >= 2 && flagged.size > 0;
   const clustered = new Set<string>();
-  for (let i = 1; i < byTime.length; i += 1) {
-    if (byTime[i]!.firstDeadAt - byTime[i - 1]!.firstDeadAt <= DEAD_COORDINATOR_BREAKER_WINDOW_MS) {
-      clustered.add(byTime[i - 1]!.id); clustered.add(byTime[i]!.id);
+  if (wild) {
+    for (const id of ids) clustered.add(id);
+  } else {
+    for (let i = 1; i < points.length; i += 1) {
+      const a = points[i - 1]!; const b = points[i]!;
+      if (a.id !== b.id && b.at - a.at <= DEAD_COORDINATOR_BREAKER_WINDOW_MS) { clustered.add(a.id); clustered.add(b.id); }
     }
   }
-  const members = byTime.filter((c) => clustered.has(c.id));
+  const members: DeadCoordinatorBreakerMember[] = ids.filter((id) => clustered.has(id))
+    .map((id) => {
+      const all = instantsOf(id);
+      return { id, firstDeadAt: all[0]!, ...(all.length > 1 ? { instants: all } : {}) };
+    })
+    .sort((a, b) => a.firstDeadAt - b.firstDeadAt || (a.id < b.id ? -1 : 1))
+    .map((m) => (wild ? { ...m, fallback: true as const } : m));
   const allUnmeasurable = measured >= 2 && unmeasurable.length === measured;
   if (fleetDoubt !== null || allUnmeasurable) {
     const named = [...new Set([...unmeasurable, ...crashed.map((c) => c.id), ...members.map((c) => c.id)])].sort();
@@ -338,6 +489,145 @@ export function deadCoordinatorBreaker(
 /** The breaker's key, for "write its feed row only when it CHANGES". */
 export const deadCoordinatorBreakerKey = (b: DeadCoordinatorBreaker): string | null =>
   b.tripped ? `${b.why}:${b.claimants.join(',')}` : null;
+
+// ── the breaker's hold, made durable (review 381, F1) ─────────────────────────
+
+/** The head of the breaker's held-set detail: the typed state's exact snapshot (`dead_coordinator_breaker_state.held`,
+ *  D-4857) and the `run_events` observation row that records each change of it (the stall watch's "Durable dedupe"
+ *  shape: `fromState = toState`, so nothing pushes it) carry the same text. After the head: the members as
+ *  `id@firstDeadAt` (several instants `+`-joined, review 384, F1-N1; a fallback member, review 382, R2, with a `*` after the list), comma-joined, ids ascending; an EMPTY list is the hold cleared. `parseStallDetail` reads any detail
+ *  with other than four colon-separated parts as null, and this one has two, so the stall count never sees it. */
+export const DEAD_COORDINATOR_BREAKER_HELD_HEAD = 'dead-coordinator-breaker-held:';
+
+/** THE ID IS PERCENT-ESCAPED, AND THE ENCODING IS TOTAL (review 381, part A review item 2; operator ruling 4286, item 6):
+ *  every string has exactly one spelling, and every spelling reads back as the string it was written from. Per UTF-16
+ *  code unit, left to right: one of `[A-Za-z0-9._-]` stays as it is; a LONE surrogate (one with no partner beside it) is
+ *  `%u` and four UPPERCASE hex digits; anything else — a whole character, a surrogate pair taken together — is its
+ *  UTF-8 bytes, each `%` and two UPPERCASE hex digits, `%` itself included. So no claimant id can break the separators
+ *  (`@`, `,`, the head's `:`), a leading U+FEFF reads back (review 382, R1), and a lone surrogate, which UTF-8 cannot
+ *  carry, has a spelling of its own: a valid held set always has a record (`claimedBy` is not shape-checked at
+ *  `POST /api/runs`). `%u` cannot be read as a byte escape: `u` is not a hex digit. The empty id is the empty string.
+ *  Ids ascend by the DECODED string's code units, on write and on read alike. */
+const BREAKER_HELD_SAFE = /^[A-Za-z0-9._-]*$/;
+/** A fallback member's mark, after the complete `+` list of its instants (review 382, R2): `id@<t1+t2…>*`. `*` is outside the escaped-id alphabet
+ *  and is not a digit, so it can never be part of an id or an instant. No released build reads this record at all (the
+ *  build that first had a reader, before the mark, never shipped), so a rollback to a released build starts with no hold,
+ *  failing open: the spec's §12 says to disarm the lane before rolling back. */
+const BREAKER_HELD_FALLBACK_MARK = '*';
+/** Several instants of one member (review 384, F1-N1): `id@t1+t2+t3`, ascending, no repeats; the mark, if any, after the
+ *  whole list. `+` is outside the escaped-id alphabet and is not a digit. A row with one instant is the old spelling. */
+const BREAKER_HELD_INSTANT_JOIN = '+';
+const BREAKER_HELD_ESCAPED = /^(?:[A-Za-z0-9._-]|%[0-9A-F]{2}|%u[0-9A-F]{4})*$/;
+
+const isHighSurrogate = (c: number): boolean => c >= 0xD800 && c <= 0xDBFF;
+const isLowSurrogate = (c: number): boolean => c >= 0xDC00 && c <= 0xDFFF;
+const utf8Escaped = (text: string): string =>
+  [...new TextEncoder().encode(text)].map((b) => `%${b.toString(16).toUpperCase().padStart(2, '0')}`).join('');
+
+const escapeBreakerHeldId = (id: string): string => {
+  if (BREAKER_HELD_SAFE.test(id)) return id;
+  let out = '';
+  for (let i = 0; i < id.length; i += 1) {
+    const c = id.charCodeAt(i);
+    if (isHighSurrogate(c) && i + 1 < id.length && isLowSurrogate(id.charCodeAt(i + 1))) {
+      out += utf8Escaped(id.slice(i, i + 2));
+      i += 1;
+    } else if (isHighSurrogate(c) || isLowSurrogate(c)) {
+      out += `%u${c.toString(16).toUpperCase().padStart(4, '0')}`;
+    } else {
+      const ch = id[i]!;
+      out += /^[A-Za-z0-9._-]$/.test(ch) ? ch : utf8Escaped(ch);
+    }
+  }
+  return out;
+};
+
+/** The id an escaped text spells, or `null` for anything that is not exactly what `escapeBreakerHeldId` writes: a
+ *  character outside the alphabet, a lowercase or short escape, bytes that are not UTF-8, a `%u` escape of a code unit
+ *  that is not a surrogate, or any other spelling of a string that has one (the decode must re-encode to the same text:
+ *  two `%u` halves of a valid pair, an escape of a character that is written plain). */
+const unescapeBreakerHeldId = (text: string): string | null => {
+  if (!BREAKER_HELD_ESCAPED.test(text)) return null;
+  // `ignoreBOM: true` keeps a LEADING U+FEFF as part of the id — the default strips it, and an id that begins with one
+  // would be written and then read as unreadable (review 382, R1).
+  const decoder = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true });
+  let id = '';
+  let bytes: number[] = [];
+  const flush = (): boolean => {
+    if (bytes.length === 0) return true;
+    try { id += decoder.decode(Uint8Array.from(bytes)); } catch { return false; }
+    bytes = [];
+    return true;
+  };
+  for (let i = 0; i < text.length; i += 1) {
+    if (text[i] === '%' && text[i + 1] === 'u') {
+      const unit = parseInt(text.slice(i + 2, i + 6), 16);
+      if (!(isHighSurrogate(unit) || isLowSurrogate(unit)) || !flush()) return null;
+      id += String.fromCharCode(unit);
+      i += 5;
+    } else if (text[i] === '%') {
+      bytes.push(parseInt(text.slice(i + 1, i + 3), 16));
+      i += 2;
+    } else {
+      if (!flush()) return null;
+      id += text[i];
+    }
+  }
+  if (!flush()) return null;
+  return escapeBreakerHeldId(id) === text ? id : null;
+};
+
+/** The held set's detail, or `null` when the set is not one a pass builds: an instant that is not a positive safe
+ *  integer, or two members with one id. Every id has a spelling (the encoding is total), so a valid set always has
+ *  one. */
+export function deadCoordinatorBreakerHeldDetail(members: readonly DeadCoordinatorBreakerMember[]): string | null {
+  const sorted = [...members].sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+  const parts: string[] = [];
+  for (let i = 0; i < sorted.length; i += 1) {
+    const m = sorted[i]!;
+    const id = escapeBreakerHeldId(m.id);
+    const ats = [...new Set([m.firstDeadAt, ...(m.instants ?? [])])].sort((x, y) => x - y);
+    if (ats.some((at) => !Number.isSafeInteger(at) || at < 1)) return null;
+    if (i > 0 && sorted[i - 1]!.id === m.id) return null;
+    parts.push(`${id}@${ats.join(BREAKER_HELD_INSTANT_JOIN)}${m.fallback === true ? BREAKER_HELD_FALLBACK_MARK : ''}`);
+  }
+  return `${DEAD_COORDINATOR_BREAKER_HELD_HEAD}${parts.join(',')}`;
+}
+
+/** A held-set detail split into its members' DECODED ids and UNPROVEN instant texts, strictly: the head, then nothing or
+ *  `escapedId@digits` — several instants `+`-joined, strictly ascending, and a `*` after the list marking a fallback member — joined by commas with decoded ids strictly ascending. Anything else — a malformed escape included —
+ *  is `null`: a malformed row, which the store reads as a failed read, never as a smaller set. The store proves each
+ *  instant (`persistedInt`). */
+export function splitDeadCoordinatorBreakerHeld(detail: string): { id: string; texts: string[]; fallback: boolean }[] | null {
+  if (!detail.startsWith(DEAD_COORDINATOR_BREAKER_HELD_HEAD)) return null;
+  const body = detail.slice(DEAD_COORDINATOR_BREAKER_HELD_HEAD.length);
+  if (body === '') return [];
+  const out: { id: string; texts: string[]; fallback: boolean }[] = [];
+  for (const part of body.split(',')) {
+    const at = part.split('@');
+    if (at.length !== 2) return null;
+    const [escaped, marked] = at as [string, string];
+    const fallback = marked.endsWith(BREAKER_HELD_FALLBACK_MARK);
+    const list = fallback ? marked.slice(0, -BREAKER_HELD_FALLBACK_MARK.length) : marked;
+    const texts = list.split(BREAKER_HELD_INSTANT_JOIN);
+    const id = unescapeBreakerHeldId(escaped);
+    if (id === null || !texts.every((t) => /^[1-9][0-9]*$/.test(t))) return null;
+    // Strictly ascending: canonical positive decimals compare by length, then by text.
+    for (let k = 1; k < texts.length; k += 1) {
+      const p = texts[k - 1]!; const q = texts[k]!;
+      if (!(p.length < q.length || (p.length === q.length && p < q))) return null;
+    }
+    if (out.length > 0 && !(out[out.length - 1]!.id < id)) return null;
+    out.push({ id, texts, fallback });
+  }
+  return out;
+}
+
+/** The held set's key, for "write its record only when it CHANGES": the encoded detail itself (its sorted, escaped,
+ *  unambiguous spelling), or — for a set with no spelling — the JSON of the sorted members. */
+export const deadCoordinatorBreakerHeldKey = (members: readonly DeadCoordinatorBreakerMember[]): string =>
+  deadCoordinatorBreakerHeldDetail(members)
+  ?? JSON.stringify([...members].sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0)));
 
 // ── the act's answer, and the lane's memory ──────────────────────────────────
 
@@ -412,7 +702,16 @@ export type DeadCoordinatorReport =
        *  a worker). With no `runs` and no `error` this IS the report: an act a revive cut short. */
       readonly after?: DeadCoordinatorProgress };
 
-/** The lane's memory of one claimant — IN MEMORY ONLY (the anchor is the durable half): a restart can only delay. */
+/** The lane's memory of one claimant — IN MEMORY ONLY (the anchor is the durable half). A restart drops the run of
+ *  crashed passes, which DELAYS an act, and the backoff (`nextAskAt`, `attempts`), which can bring an abandon back
+ *  SOONER after a stuck or thrown act (review 381, F10). The breaker's hold is not in this entry: it survives a restart in
+ *  the typed state (review 381, F1; D-4857), which a pass marks dirty before it changes any anchor and turns clean only
+ *  with the exact snapshot, and a start trusts it only when a clean shutdown sealed it (D-4916), so a restart finds either a
+ *  sealed state, the exact last hold, or a state it seeds conservatively (clean but not sealed, dirty, absent or
+ *  unreadable); §12's residual (7), a restart after a dirty mark that failed, is CLOSED by the seal. The conservative seed
+ *  flags every claimant the pass does not release, holds them only when two or more stand unreleased, and restarts every
+ *  crashed claimant's hour (review 382, R2; review of D-4857). The lane composes no act on a pass whose commit did not land, so the
+ *  durable state never lags an act; the act is still behind the claimant's re-measure before and after the fleet act. */
 export interface DeadCoordinatorEntry {
   /** Consecutive passes that measured it crashed. */
   readonly crashedPasses: number;
@@ -636,6 +935,60 @@ export function deadCoordinatorBreakerSentence(b: Extract<DeadCoordinatorBreaker
  *  held, outlive the in-memory list (spec §9's stage-4 row: "breaker trips … reported"). */
 export function deadCoordinatorBreakerFeedRow(b: Extract<DeadCoordinatorBreaker, { tripped: true }>): { readonly title: string; readonly body: string } {
   return { title: 'dead coordinator: breaker tripped', body: `${deadCoordinatorBreakerSentence(b)} (holding since ${iso(b.since)})` };
+}
+
+/** WHY the lane's first pass seeds its hold conservatively (D-4857; review 382, R2; D-4916): its typed breaker state is
+ *  `absent` (no lane of this release has written it — the deploy that creates the table), `dirty` (a pass marked it
+ *  before changing anchors and its commit did not land), `unsealed` (it reads `clean`, but no clean shutdown sealed it: the
+ *  last server ended by a kill, a crash or a stop that outlived its timeout, and a start trusts ONLY `sealed`) or
+ *  `unreadable` (`reason`: a bounded string, never the row's content). Four causes, four sets of words, one rule: flag
+ *  every claimant the pass does not release; the breaker holds them only when two or more stand unreleased. */
+export type DeadCoordinatorSeedCause =
+  | { readonly kind: 'absent' }
+  | { readonly kind: 'dirty'; readonly generation: number }
+  | { readonly kind: 'unsealed'; readonly generation: number }
+  | { readonly kind: 'unreadable'; readonly reason: string };
+
+/** The answer of `FleetWatcher.sealDeadCoordinatorBreaker` (D-4916): sealed, or WHY it wrote nothing. `no-store`: no
+ *  coordination store. `pass-in-flight`: a pass still ran after the bound. `no-landed-write`: this process has written
+ *  nothing to the state, so it has nothing to vouch for. `already-sealed`. `changes-pending`: an anchor change no commit has
+ *  landed. `not-durably-clean`: the state is not known clean. `key-mismatch`: the held set is not the one the last commit
+ *  wrote. `write-failed`: the seal's statement was refused or threw. */
+export type DeadCoordinatorSealResult =
+  | { readonly sealed: true; readonly generation: number }
+  | { readonly sealed: false; readonly reason: 'no-store' | 'pass-in-flight' | 'no-landed-write' | 'already-sealed' | 'changes-pending' | 'not-durably-clean' | 'key-mismatch' | 'write-failed' };
+
+/** The feed row for a pass that seeded its hold conservatively: written once, by the pass that seeds, through
+ *  `recordRows` — a record, never a push, and no new attention kind. `held` is who the breaker held that pass as members;
+ *  `tripped` is whether it tripped at all (review 382, N3: the words key on the breaker, not on `held` — a trip on a
+ *  fleet-wide doubt has no members). `landed` is whether that pass's record was written: the words never claim a write
+ *  that failed. */
+export function deadCoordinatorBreakerSeedFeedRow(
+  cause: DeadCoordinatorSeedCause, held: readonly string[], tripped: boolean, landed: boolean,
+): { readonly title: string; readonly body: string } {
+  const [title, lead] = cause.kind === 'absent'
+    ? ['dead coordinator: no breaker state yet',
+      'The lane has no breaker state yet (the deploy that creates its table, or a database no lane of this release has written), ']
+    : cause.kind === 'dirty'
+      ? ['dead coordinator: breaker state left dirty',
+        `The lane found its breaker state left dirty (generation ${cause.generation}: a pass marked it before changing anchors, and its commit did not land), `]
+      : cause.kind === 'unsealed'
+        ? ['dead coordinator: breaker state not sealed',
+          `The lane found its breaker state clean but not sealed (generation ${cause.generation}: the last server did not end through a clean shutdown, and a start trusts only a sealed state), `]
+        : ['dead coordinator: breaker record unreadable',
+          `The lane could not read its record of the breaker's hold (the breaker state row: ${cause.reason}), `];
+  const record = cause.kind === 'absent' ? 'the first record' : 'a fresh record';
+  const tail = 'Every crashed coordinator\'s hour restarts at this pass. '
+    + (landed ? `It wrote ${record}.` : `It could not write ${record} yet, and ends nothing until one is written.`);
+  const none = 'so it held every coordinator this pass did not see alive, stopped or put down on purpose, but fewer than two stood, so no cluster formed';
+  return { title,
+    body: held.length > 0
+      ? `${lead}so it held every coordinator this pass did not see alive, stopped or put down on purpose (${held.join(', ')}), `
+        + 'each flagged: a flagged coordinator clusters with any other crashed or held coordinator until evidence releases it, '
+        + `so while one stands a coordinator that crashes is swept into the hold and flagged itself. ${tail}`
+      : tripped
+        ? `${lead}${none}, but the breaker tripped on a fleet-wide doubt, which holds the lane this pass. ${tail}`
+        : `${lead}${none} and nothing was held. ${tail}` };
 }
 
 /** THE ATTENTION LIST, from the lane's memory alone, the breaker's item first. */

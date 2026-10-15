@@ -12,10 +12,11 @@ import { useEffect, useLayoutEffect, useRef } from 'react';
 import type { ReactNode } from 'react';
 import { BlockScreen } from './components/BlockScreen';
 import { LoginScreen } from './components/LoginScreen';
+import { RenderBoundary, ScreenFallback } from './components/RenderBoundary';
 import { ToastHost } from '@ccrc/ui';
 import { AccountsStrip } from './fleet/AccountsStrip';
 import { useAuthLost } from './lib/auth';
-import { navigate, usePath } from './lib/router';
+import { navigate, useLocation } from './lib/router';
 import { useMediaQuery } from './lib/useMediaQuery';
 import { AccountsScreen } from './screens/AccountsScreen';
 import { ArchiveScreen } from './screens/ArchiveScreen';
@@ -30,7 +31,7 @@ import './styles/shell.css';
 export { navigate } from './lib/router';
 
 export function App(): ReactNode {
-  const path = usePath();
+  const { path, search } = useLocation();
   useEffect(() => {
     // The fleet stream is the app's heartbeat: connect once at the shell so
     // deep links to /s/:id (or /archive) still get live names, limits and
@@ -96,8 +97,8 @@ export function App(): ReactNode {
   // platform's definition of a layout effect. That one is REASONED: jsdom does
   // no layout and paints nothing, so no test in this package can observe a
   // frame, and a real-browser runner is not on this branch.
-  // `popstate` (back/forward) goes through `usePath`, so it is covered by the
-  // same dependency.
+  // `popstate` (back/forward) goes through `useLocation`, so it is covered by
+  // the same dependencies; a change of the search alone is a new page too.
   //
   // THE SIDEBAR IS DELIBERATELY LEFT ALONE. `.shell-nav` has always been
   // scrollable, and its content does NOT swap per route — it is the same fleet
@@ -110,7 +111,36 @@ export function App(): ReactNode {
     // Null only if the shell has not mounted; on mobile the document scrolls
     // rather than this pane, so the write is a harmless no-op there.
     if (pane !== null) pane.scrollTop = 0;
-  }, [path]);
+  }, [path, search]);
+  // THE DETAIL LADDER, behind its own RenderBoundary (design 2026-10-01
+  // section 4.12). Rendered INSIDE `.shell-detail` below, so a screen that
+  // throws while rendering shows "This screen could not be shown." in the pane
+  // while `.shell-nav`, the login overlay, the block screen and the toasts,
+  // all outside it, stay mounted. Its reset key is `path + search`, so any
+  // navigation draws the ladder again; it is not a React `key`, so it never
+  // remounts a screen and the pane reset above stays the shell's.
+  const ladder = sessionId ? (
+    // key remounts per session so per-session UI state (terminal drawer,
+    // pickers) never leaks across a sidebar switch.
+    <SessionScreen key={sessionId} id={sessionId} />
+  ) : archive ? (
+    <ArchiveScreen sessions={sessions} onOpen={(id) => navigate(`/s/${id}`)} />
+  ) : accounts ? (
+    <AccountsScreen />
+  ) : mail ? (
+    <MailScreen />
+  ) : runs ? (
+    <RunsScreen />
+  ) : settings ? (
+    <SettingsScreen />
+  ) : (
+    <div className="shell-placeholder">
+      <p className="shell-placeholder-mark" aria-hidden="true">
+        ❯
+      </p>
+      <p className="shell-placeholder-copy">Select a session</p>
+    </div>
+  );
   return (
     <>
       {authLost && <LoginScreen />}
@@ -133,28 +163,7 @@ export function App(): ReactNode {
           />
         </aside>
         <section className="shell-detail" ref={detail}>
-          {sessionId ? (
-            // key remounts per session so per-session UI state (terminal drawer,
-            // pickers) never leaks across a sidebar switch.
-            <SessionScreen key={sessionId} id={sessionId} />
-          ) : archive ? (
-            <ArchiveScreen sessions={sessions} onOpen={(id) => navigate(`/s/${id}`)} />
-          ) : accounts ? (
-            <AccountsScreen />
-          ) : mail ? (
-            <MailScreen />
-          ) : runs ? (
-            <RunsScreen />
-          ) : settings ? (
-            <SettingsScreen />
-          ) : (
-            <div className="shell-placeholder">
-              <p className="shell-placeholder-mark" aria-hidden="true">
-                ❯
-              </p>
-              <p className="shell-placeholder-copy">Select a session</p>
-            </div>
-          )}
+          <RenderBoundary where="detail" resetKey={path + search} fallback={() => <ScreenFallback />}>{ladder}</RenderBoundary>
         </section>
       </div>
       <ToastHost />

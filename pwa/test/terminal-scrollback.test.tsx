@@ -137,6 +137,8 @@ const fakeTermFactory = () => {
         wheelHandlers.push(cb);
       },
       fit: () => ({ ...grid }),
+      propose: () => ({ ...grid }),
+      setFontSize: () => ({ ...grid }),
       focus: () => {},
       dispose,
     };

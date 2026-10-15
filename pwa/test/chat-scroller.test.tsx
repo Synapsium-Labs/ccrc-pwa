@@ -22,7 +22,7 @@ interface Captured {
   computeItemKey: (i: number) => string | number;
   followOutput: (atBottom: boolean) => 'smooth' | false;
   atBottomStateChange: (atBottom: boolean) => void;
-  initialTopMostItemIndex: number;
+  initialTopMostItemIndex: number | { index: 'LAST'; align: 'end' };
   alignToBottom: boolean;
 }
 
@@ -68,6 +68,16 @@ const mount = (events: ChatEvent[]) => {
 
 const THREE = [assistant('a', 'first'), assistant('b', 'second'), assistant('c', 'third')];
 
+/** Virtuoso's own way to say "start at the bottom" (#191's `OPEN_AT_NEWEST`). */
+const LAST = { index: 'LAST', align: 'end' };
+
+/** The reader's own hand on the list. For a second after it opens the list is
+ *  SETTLING (#191): leaving the bottom then is the list's own doing — rows
+ *  measuring taller than priced — and a reader who was at the newest turn is
+ *  put back rather than shown the pill. A wheel, a touch or a key ends that at
+ *  once, which is how a real reader leaves the bottom in the first second. */
+const readerScrolls = (): void => { fireEvent.wheel(screen.getByTestId('virtuoso')); };
+
 describe('what ChatList tells the scroller', () => {
   it('follows new output ONLY while the reader is at the bottom', () => {
     // `'smooth'` scrolls to the newest line; `false` leaves the view alone.
@@ -81,21 +91,23 @@ describe('what ChatList tells the scroller', () => {
 
   it('opens on the LAST item, and keeps the list bottom-aligned', () => {
     // A transcript is read from the end. Opening at index 0 would show the
-    // oldest line of a thousand.
-    // Derived from `totalCount`, not written as a number: `buildChatItems`
-    // inserts its own rows (a day divider), so three events are not three
-    // items — measured, and the reason this reads the count back.
+    // oldest line of a thousand. Since #191 the opening is virtuoso's own
+    // `'LAST'` with `align: 'end'` rather than a computed index — the number
+    // it replaced said "put the last item at the TOP" and leaned on
+    // `alignToBottom` to undo it — so it holds however many rows
+    // `buildChatItems` inserts of its own (a day divider).
     const p = mount(THREE);
     expect(p.totalCount).toBeGreaterThan(THREE.length - 1);
-    expect(p.initialTopMostItemIndex).toBe(p.totalCount - 1);
+    expect(p.initialTopMostItemIndex).toEqual(LAST);
     expect(p.alignToBottom).toBe(true);
   });
 
-  it('opens at 0 for an EMPTY transcript rather than at -1', () => {
-    // `Math.max(0, length - 1)`. An index of -1 is not a position, and the
-    // empty case is the one every fresh session starts in.
+  it('opens at the bottom for an EMPTY transcript, never at an index of -1', () => {
+    // The case every fresh session starts in. `Math.max(0, length - 1)` was
+    // the guard while the opening was a number; `'LAST'` names no index at
+    // all, so there is no -1 for an empty list to compute.
     const p = mount([]);
-    expect(p.initialTopMostItemIndex).toBe(0);
+    expect(p.initialTopMostItemIndex).toEqual(LAST);
     expect(p.totalCount).toBe(0);
   });
 
@@ -127,6 +139,7 @@ describe('Jump to latest', () => {
 
   it('appears once they have left, and scrolls to the newest line', () => {
     const p = mount(THREE);
+    readerScrolls();
     act(() => { p.atBottomStateChange(false); });
     const pill = screen.getByRole('button', { name: /jump to latest/i });
 
@@ -137,6 +150,7 @@ describe('Jump to latest', () => {
 
   it('goes away again when they come back', () => {
     const p = mount(THREE);
+    readerScrolls();
     act(() => { p.atBottomStateChange(false); });
     expect(screen.getByRole('button', { name: /jump to latest/i })).toBeInTheDocument();
     act(() => { p.atBottomStateChange(true); });

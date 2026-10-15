@@ -2,232 +2,16 @@
 // right-aligned raised bubbles with a mono receipt. Assistant turns are
 // output: full-width flush prose with rendered markdown (code blocks in dark
 // wells that scroll inside the bubble). System events are centered dividers.
-import Markdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
-import type { Components } from 'react-markdown';
-import React, { useCallback, useState, type ReactNode } from 'react';
-import { EYEBROW, Prose } from '@ccrc/ui';
-import hljs from 'highlight.js/lib/core';
-import bash from 'highlight.js/lib/languages/bash';
-import typescript from 'highlight.js/lib/languages/typescript';
-import javascript from 'highlight.js/lib/languages/javascript';
-import json from 'highlight.js/lib/languages/json';
-import python from 'highlight.js/lib/languages/python';
-import css from 'highlight.js/lib/languages/css';
-import xml from 'highlight.js/lib/languages/xml'; // html / svg
-import yaml from 'highlight.js/lib/languages/yaml';
-import markdown from 'highlight.js/lib/languages/markdown';
-import diff from 'highlight.js/lib/languages/diff';
-import sql from 'highlight.js/lib/languages/sql';
-import dockerfile from 'highlight.js/lib/languages/dockerfile';
-import rust from 'highlight.js/lib/languages/rust';
-import go from 'highlight.js/lib/languages/go';
+import { useState, type ReactNode } from 'react';
+import { Prose } from '@ccrc/ui';
 import type { ChatEvent } from '../../../shared/api';
-import { splitClipPaths } from '../../../shared/api';
+import { isImageClip, splitClipPaths } from '../../../shared/api';
 import { clipUrl } from '../lib/api';
 import { resetClock } from '../lib/clock';
+import { ChatMarkdown, openExternal } from '../lib/markdown';
 import './chat.css';
 
 export type MessageEvent = Extract<ChatEvent, { kind: 'user' | 'assistant' | 'system' }>;
-
-const IMG_EXT = /\.(png|jpe?g|gif|webp|svg|avif|bmp)(\?|#|$)/i;
-const isImageUrl = (href: string | undefined): href is string => href !== undefined && IMG_EXT.test(href);
-
-/** Absolute, scheme-qualified URL — a bare "example.com" would otherwise resolve
- *  same-origin and get swallowed by the PWA's navigation fallback. */
-function absolute(href: string): string {
-  if (/^https?:\/\//i.test(href)) return href;
-  if (/^[a-z][\w+.-]*:/i.test(href)) return href; // mailto:, tel:, …
-  return `https://${href}`;
-}
-
-/** Open in a real new browser tab/instance. A plain target=_blank in a
- *  standalone PWA is unreliable (the app window itself can navigate, and the
- *  service worker's navigateFallback then serves index.html — the "back to the
- *  landing page" symptom), so force a fresh context via window.open. */
-function openExternal(e: React.MouseEvent, href: string | undefined): void {
-  if (!href) return;
-  e.preventDefault();
-  window.open(absolute(href), '_blank', 'noopener,noreferrer');
-}
-
-for (const [name, def] of Object.entries({
-  bash, typescript, javascript, json, python, css, xml,
-  yaml, markdown, diff, sql, dockerfile, rust, go,
-})) hljs.registerLanguage(name, def);
-hljs.registerAliases(['zsh', 'shell'], { languageName: 'bash' });
-hljs.registerAliases(['tsx'], { languageName: 'typescript' });
-hljs.registerAliases(['html', 'svg'], { languageName: 'xml' });
-
-const LANG_LABEL: Record<string, string> = {
-  bash: 'bash', sh: 'shell', shell: 'shell', zsh: 'zsh',
-  typescript: 'TypeScript', ts: 'TypeScript', tsx: 'TSX',
-  javascript: 'JavaScript', js: 'JavaScript', jsx: 'JSX',
-  json: 'JSON', python: 'Python', py: 'Python', css: 'CSS',
-  xml: 'XML', html: 'HTML', yaml: 'YAML', yml: 'YAML',
-  markdown: 'Markdown', md: 'Markdown', diff: 'diff', sql: 'SQL',
-  dockerfile: 'Dockerfile', rust: 'Rust', go: 'Go',
-};
-
-/** Flatten a react-markdown child tree to source text (for copy + highlight). */
-function nodeText(n: ReactNode): string {
-  if (n == null || typeof n === 'boolean') return '';
-  if (typeof n === 'string' || typeof n === 'number') return String(n);
-  if (Array.isArray(n)) return n.map(nodeText).join('');
-  if (React.isValidElement(n)) return nodeText((n.props as { children?: ReactNode }).children);
-  return '';
-}
-
-/** GitHub-style alert blockquotes → callout divs. remark-gfm does NOT do this. */
-const ALERT_RE = /^\[!(NOTE|TIP|IMPORTANT|WARNING|CAUTION)\]/i;
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-function remarkAlerts() {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const tag = (node: any): void => {
-    const p = node.children?.[0];
-    if (!p || p.type !== 'paragraph') return;
-    const lead = p.children?.[0];
-    if (!lead || lead.type !== 'text') return;
-    const m = ALERT_RE.exec(lead.value);
-    if (!m) return;
-    lead.value = lead.value.slice(m[0].length).replace(/^[^\S\n]*\n?/, '');
-    if (lead.value === '') {
-      p.children.shift();
-      if (p.children.length === 0) node.children.shift();
-    }
-    node.data = { hName: 'div', hProperties: { className: ['callout'], 'data-callout': m[1]!.toLowerCase() } };
-  };
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const walk = (node: any): void => {
-    if (node.type === 'blockquote') tag(node);
-    if (node.children) for (const c of node.children) walk(c);
-  };
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  return (tree: any): void => walk(tree);
-}
-
-/** Keystroke-shaped inline code → real <kbd> caps (`Cmd+K`, `Esc`). */
-const NAMED_KEY =
-  /^(?:Ctrl|Control|Cmd|Command|⌘|Alt|Option|⌥|Opt|Shift|⇧|Win|Super|Meta|Fn|Esc|Escape|Enter|Return|↵|⏎|Tab|⇥|Space|Spacebar|Backspace|⌫|Delete|Del|Insert|Ins|Home|End|PageUp|PgUp|PageDown|PgDn|Up|Down|Left|Right|↑|↓|←|→|F(?:[1-9]|1[0-2]))$/;
-const SINGLE = /^[\p{L}\p{N}`~!@#$%^&*()\-_=+[\]{};:'",.<>/?\\|]$/u;
-function keystrokeParts(raw: string): string[] | null {
-  const parts = raw.trim().split(/\s*\+\s*/);
-  const ok = (p: string): boolean => NAMED_KEY.test(p) || SINGLE.test(p);
-  if (parts.length > 1) return parts.every(ok) ? parts : null;
-  return NAMED_KEY.test(parts[0]!) ? parts : null; // bare single chars stay chips
-}
-
-/** Fenced code: language label + copy bar over a syntax-highlighted well.
- *  The bar is a SIBLING above the scrolling <pre>, never an overlay. */
-function CodeBlock({ children }: { children?: ReactNode }): ReactNode {
-  const [copied, setCopied] = useState(false);
-  const codeEl = React.Children.toArray(children).find(React.isValidElement) as
-    | React.ReactElement<{ className?: string; children?: ReactNode }>
-    | undefined;
-  const lang = (/language-([\w-]+)/.exec(codeEl?.props.className ?? '')?.[1] ?? '').toLowerCase();
-  const label = LANG_LABEL[lang] ?? (lang || 'text');
-  const raw = nodeText(children).replace(/\n$/, '');
-  const html = lang && hljs.getLanguage(lang)
-    ? hljs.highlight(raw, { language: lang, ignoreIllegals: true }).value // sync, never throws
-    : null;
-  const onCopy = useCallback(() => {
-    void navigator.clipboard?.writeText(raw).then(() => {
-      setCopied(true);
-      window.setTimeout(() => setCopied(false), 1600);
-    });
-  }, [raw]);
-  return (
-    <div className="code-block">
-      <div className="code-block-bar">
-        <span className={`code-block-lang ${EYEBROW}`}>{label}</span>
-        <button type="button" className={`code-block-copy ${EYEBROW}`} onClick={onCopy}
-                aria-label="Copy code" data-copied={copied || undefined}>
-          <span aria-live="polite">{copied ? 'Copied' : 'Copy'}</span>
-        </button>
-      </div>
-      <pre>
-        {html != null
-          ? <code className="hljs" dangerouslySetInnerHTML={{ __html: html }} />
-          : <code className="hljs">{raw}</code>}
-      </pre>
-    </div>
-  );
-}
-
-/** Wrap tables so the scroller is a div (enables the edge-fade affordance). */
-function TableWrap({ children }: { children?: ReactNode }): ReactNode {
-  return <div className="md-table-wrap"><table>{children}</table></div>;
-}
-
-/** An image, as a link that opens it full-size outside the app.
- *
- *  TWO MARKDOWN RENDERERS, ONE BLOCK: `a` reaches it when a link's href IS an
- *  image, `img` when the markdown wrote an image directly, and the two had
- *  the same two elements with the same four attributes each. It is two
- *  elements, so the markup census's block half (floor: three) could not see
- *  it, and the classes are one word each, so its literal half could not
- *  either — the leaf half added in the same commit is what named it.
- *
- *  `src={href}` in both arms. The `img` renderer used to pass its raw `src`
- *  while computing `href` for the anchor from the same value, so a non-string
- *  `src` would have reached the `<img>` and not the `<a>`; react-markdown
- *  types it `string | undefined`, and an `<img>` handed anything else was
- *  already broken, so one value for both is the honest shape. */
-function ImageLink({ href, alt }: { href: string | undefined; alt: string }): ReactNode {
-  return (
-    <a href={href} target="_blank" rel="noopener noreferrer" className="msg-img-link"
-       onClick={(e) => openExternal(e, href)}>
-      <img src={href} alt={alt} loading="lazy" className="msg-img" />
-    </a>
-  );
-}
-
-
-/** Open in the external browser (a bare `<a>` in a standalone PWA would try to
- *  navigate the app itself), and render image URLs inline as tap-to-open images. */
-const mdComponents: Components = {
-  a({ href, children }) {
-    if (isImageUrl(href)) {
-      const name = href.split('/').pop()?.split(/[?#]/)[0] || 'image';
-      return (
-        <ImageLink href={href} alt={name} />
-      );
-    }
-    return (
-      <a href={href} target="_blank" rel="noopener noreferrer" onClick={(e) => openExternal(e, href)}>
-        {children}
-      </a>
-    );
-  },
-  img({ src, alt }) {
-    const href = typeof src === 'string' ? src : undefined;
-    return (
-      <ImageLink href={href} alt={alt ?? ''} />
-    );
-  },
-  code({ className, children }) {
-    const text = String(children ?? '');
-    if (/language-/.test(className ?? '') || text.includes('\n')) {
-      return <code className={className}>{children}</code>; // block code → left to CodeBlock
-    }
-    const keys = keystrokeParts(text);
-    if (keys) {
-      return (
-        <span className="kbd-combo">
-          {keys.map((k, i) => (
-            <React.Fragment key={i}>
-              {i > 0 && <span className="kbd-plus">+</span>}
-              <kbd>{k}</kbd>
-            </React.Fragment>
-          ))}
-        </span>
-      );
-    }
-    return <code className="md-code">{children}</code>;
-  },
-  pre: ({ children }) => <CodeBlock>{children}</CodeBlock>,
-  table: ({ children }) => <TableWrap>{children}</TableWrap>,
-};
 
 const URL_SPLIT = /(https?:\/\/[^\s]+)/g;
 const isUrl = (s: string): boolean => /^https?:\/\//.test(s);
@@ -256,6 +40,19 @@ export function timeOf(ts: string): string {
 // block that's noise to a reader driving the session. Collapse it to a quiet
 // card (like a tool call) — expandable when you actually want the recap.
 const COMPACTION_RE = /^\s*(?:\[[^\]]*]\s*)?This session is being continued from a previous conversation/;
+
+/** Whether this row renders as a `FoldedCard` — one collapsed row, whatever its
+ *  text — rather than as its text: a /compact recap (user- or assistant-kind),
+ *  or a `system` row carrying a BODY (more than one line) rather than a label.
+ *  The harness's own system rows (`origin`) are pills and never fold.
+ *
+ *  ONE DEFINITION for two readers: `MessageBubble` decides the fold by it, and
+ *  the chat list prices the row by it (`ChatList.tsx`'s `shapeOf`) — a recap
+ *  priced by its text was thousands of px for a 47px row. */
+export function foldsAway(event: MessageEvent): boolean {
+  if (event.kind === 'system') return event.origin === undefined && event.text.includes('\n');
+  return COMPACTION_RE.test(event.text);
+}
 
 /** The fold, now used by TWO callers: the /compact recap above, and a `system`
  *  row that carries a BODY rather than a label (see the system branch below).
@@ -306,7 +103,7 @@ function FoldedCard({
         ? <pre className="compaction-body compaction-raw">{text}</pre>
         : (
           <Prose className="compaction-body">
-            <Markdown remarkPlugins={[remarkGfm, remarkAlerts]} components={mdComponents}>{text}</Markdown>
+            <ChatMarkdown text={text} />
           </Prose>
         ))}
     </div>
@@ -314,7 +111,11 @@ function FoldedCard({
 }
 
 /** Sent attachments. A clip deleted off disk must degrade to its name, never
- *  to a broken-image box. */
+ *  to a broken-image box — and a DOCUMENT must never be asked to be an image in
+ *  the first place. `<img src="…/clip-x.md">` reaches the same `msg-attach-gone`
+ *  fallback, but only by failing to decode a file that is perfectly fine, so a
+ *  clip present on disk would render as "deleted". The extension decides, before
+ *  any request goes out. */
 function ClipThumbs({ id, paths }: { id: string; paths: string[] }): ReactNode {
   const [broken, setBroken] = useState<Set<string>>(new Set());
   return (
@@ -323,6 +124,18 @@ function ClipThumbs({ id, paths }: { id: string; paths: string[] }): ReactNode {
         const name = p.slice(p.lastIndexOf('/') + 1);
         if (broken.has(p)) return <span key={p} className="msg-attach-gone">{name}</span>;
         const href = clipUrl(id, name);
+        if (!isImageClip(name)) {
+          return (
+            <a
+              key={p}
+              href={href}
+              className="msg-attach-doc"
+              onClick={(e) => openExternal(e, href)}
+            >
+              {name}
+            </a>
+          );
+        }
         return (
           <a key={p} href={href} className="msg-img-link" onClick={(e) => openExternal(e, href)}>
             <img
@@ -389,9 +202,8 @@ export function MessageBubble({
     // dropped. The first line becomes the label, which is the only part a pill
     // could ever have carried honestly, and the whole text is one tap away
     // VERBATIM, as text rather than Markdown.
-    const nl = event.text.indexOf('\n');
-    if (nl >= 0) {
-      const first = event.text.slice(0, nl).trim();
+    if (foldsAway(event)) {
+      const first = event.text.slice(0, event.text.indexOf('\n')).trim();
       return (
         <FoldedCard
           text={event.text}
@@ -407,7 +219,7 @@ export function MessageBubble({
   }
 
   // Compaction recap (user- or assistant-kind): fold it away by default.
-  if (COMPACTION_RE.test(event.text)) {
+  if (foldsAway(event)) {
     return <FoldedCard text={event.text} />;
   }
 
@@ -427,7 +239,7 @@ export function MessageBubble({
 
   return (
     <Prose>
-      <Markdown remarkPlugins={[remarkGfm, remarkAlerts]} components={mdComponents}>{event.text}</Markdown>
+      <ChatMarkdown text={event.text} />
       {streaming && <span className="stream-caret" aria-hidden="true" />}
     </Prose>
   );

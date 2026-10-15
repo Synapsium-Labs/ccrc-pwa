@@ -543,9 +543,22 @@ button.metachip:active {
    SEVENTY-SIX RULES LEFT FOR `@ccrc/ui`'s prose.css, verbatim and in one
    piece: nothing outside them named `msg-assist`, `code-block`,
    `md-table-wrap` or `hljs`, so the move could not change a cascade. The
-   component is `<Prose>`; MessageBubble still owns the react-markdown
-   component map, because WHICH element a token becomes is this app's
-   business and how it LOOKS is the design system's. */
+   component is `<Prose>`; the app still owns the react-markdown component
+   map (lib/markdown.tsx, where CodeBlock and ChatMarkdown live now),
+   because WHICH element a token becomes is this app's business and how it
+   LOOKS is the design system's. The plain-text rule below is the one app
+   rule since that names `msg-assist`, and only to place its own element. */
+
+/* PLAIN TEXT — a message chat did not format (lib/markdown.tsx's MsgPlain: the pre-scan refused it, or the worker
+   path answered something other than a tree). Inside an assistant turn it sits in prose's `pre` well
+   (@ccrc/ui prose.css `.msg-assist pre`), which paints its ground and ink, so no colour here: it only grows to the
+   whole message and wraps instead of scrolling. `max-height` is placement, the one property this sheet lifts off
+   that well; this sheet is unlayered, so it wins over the layered prose rule as it did on specificity before the
+   move. MsgPlain is the app's own element, which is why its rules live here and not in prose.css. The note under
+   it is one quiet line; its ground is .chat's --bg-page (registered in design/audit.mjs INHERITED_GROUNDS). */
+.msg-plain { white-space: pre-wrap; overflow-wrap: anywhere; }
+.msg-assist .msg-plain { max-height: none; }
+.msg-plain-note { color: var(--ink-secondary); font-size: var(--fs-xs); }
 
 /* COMPACTION CARD — a /compact recap ("This session is being continued…")
    folded to a quiet, expandable card so it doesn't bury the conversation. */
@@ -1103,6 +1116,20 @@ button.metachip:active {
   flex-direction: column;
   gap: var(--sp-2);
 }
+/* The drawer's header line: the session on the left and, while the window is
+   wider than the glass, the clip notice on the right. It wraps as two whole
+   pieces, so on a narrow phone the notice takes a line of its own instead of
+   breaking mid-word, and the drawer refits for the height it took. It wears
+   the header's own colour and type; nothing here paints. */
+.term-eyebrow {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: var(--sp-1) var(--sp-3);
+}
+.term-clip {
+  white-space: nowrap;
+}
 .term-screen {
   position: relative;
   flex: 1;
@@ -1398,6 +1425,23 @@ button.metachip:active {
   border-radius: var(--r-md);
   padding: var(--sp-2) var(--sp-3);
   overflow-wrap: anywhere;
+}
+/* A sent DOCUMENT: its name, as a tappable chip. Deliberately the shape of
+   .msg-attach-gone above, and deliberately not its treatment — solid border,
+   --ink-on-well (15.52 / 13.98) rather than dashed and muted, because this file
+   is present and readable, not a degradation. Self-grounded for the same reason
+   .msg-attach-gone is: nothing above it in the bubble paints a colour the
+   auditor could measure this against. */
+.msg-attach-doc {
+  display: block;
+  font: var(--weight-regular) var(--fs-2xs) / var(--lh-normal) var(--family-mono);
+  color: var(--ink-on-well);
+  background: var(--bg-well);
+  border: 1px solid var(--edge-subtle);
+  border-radius: var(--r-md);
+  padding: var(--sp-2) var(--sp-3);
+  overflow-wrap: anywhere;
+  text-decoration: none;
 }
 
 /* Desktop drop target. */

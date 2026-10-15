@@ -2,10 +2,10 @@
 // WebSocket streams; every WRITE goes through here. Each function throws
 // ApiError { status, body } on non-2xx — callers branch on status/body
 // (e.g. 409 { error: 'draft-present', draft } from prompt).
-import type { AccountsResponse, AckAnswer, ApplyUpdateBody, AutoMode, CatalogueState, CatchUp, ClaimSummary, CoordCaps, CoordCapsView, FleetHealth, FleetSession, IntentWriteAnswer, LifecycleQueryResult, LoginRequest, MoveRequestAnswer, MoveSkipWhy, NotifyEvent, NotifyMode, PaneHistoryReply, PasskeyAssertFinish, PasskeyAssertStart, PasskeyListResponse, PasskeyRegisterFinish, PasskeyRegisterStart, ProjectPoolWire, ProjectRow, PrView, ReapResult, RollbackUpdateBody, RouteField, RouteFields, RunSummary, SlashCommand, StagedClip, UpdateChannel, UpdateRouteError, UpdatesView, WsAudit } from '../../../shared/api';
+import type { AccountsResponse, AckAnswer, ApplyUpdateBody, AutoMode, CatalogueState, CatchUp, ClaimSummary, CoordCaps, CoordCapsView, FleetHealth, FleetSession, IntentWriteAnswer, LifecycleQueryResult, LoginRequest, MoveRequestAnswer, MoveSkipWhy, NotifyEvent, NotifyMode, PaneHistoryReply, PasskeyAssertFinish, PasskeyAssertStart, PasskeyListResponse, PasskeyRegisterFinish, PasskeyRegisterStart, ProjectPoolWire, ProjectRow, PrView, ReapResult, RollbackUpdateBody, RouteField, RouteFields, RunSummary, SlashCommand, StagedClip, StallWatchRequest, StallWatchView, UpdateChannel, UpdateRouteError, UpdatesView, WsAudit } from '../../../shared/api';
 import { raiseAuthLostFrom } from './auth';
 import { ARCHIVE_REFUSALS, isArchiveRefusal, type ArchiveAnswer, type ArchiveBody, type ArchiveRefusal } from '../../../shared/api';
-import { isNodeRole } from '../../../shared/api';
+import { isNodeRole } from '../../../shared/node-role';
 import { TOKEN_TRANSPORTS } from '../../../shared/agent-protocol';
 import {
   BOX_TOKEN_PHASES, OWED_REASONS, TOKEN_FILE_PROBLEMS, TOKEN_HOLDS, TOKEN_ORIGINS, TOKEN_ROTATE_PATH, type BoxTokenView,
@@ -51,6 +51,14 @@ const SEND_ERROR_TEXT: Record<string, string> = {
   // all, versus it came back and then would not go).
   'verify-failed': 'Typed it, but the session never echoed it back.',
   'draft-clear-failed': "Couldn't clear the existing draft — open the terminal.",
+  // The box is TALLER THAN THE PANE, so its `❯` row has scrolled out of the
+  // capture the server reads and nothing in the box can be read at all
+  // (`send.ts`'s `box-unreadable`, measured on a live session 2026-09-18).
+  // This sentence has to name the remedy, because it is the one failure the
+  // PWA genuinely cannot fix from here: nothing typed from this app can shrink
+  // that draft — every attempt used to make it taller. The operator clears the
+  // box in the terminal (Ctrl-C once), and sends work again immediately.
+  'box-unreadable': 'The session’s input box is too full to read — clear it in the terminal (Ctrl-C once), then send again.',
   'not-alive': 'That session is not running.',
   // D-2368/D-2369: the recipient's OWN limit recovery is armed (any keystroke
   // cancels it) — only the mail lane's `holdIfAutoContinueArmed` opt-in ever
@@ -101,6 +109,9 @@ const SUBMIT_ERROR_TEXT: Record<string, string> = {
   'dialog-open': 'A question is up — answer that first.',
   'not-alive': 'That session is not running.',
   'enter-ignored': "Still not taking it — open the terminal.",
+  // `submitEnter`'s own copy of the refusal above. Same remedy, and the same
+  // reason it cannot be done from here.
+  'box-unreadable': 'The box is too full to read — clear it in the terminal (Ctrl-C once).',
 };
 
 export const submitErrorText = (code: string): string => SUBMIT_ERROR_TEXT[code] ?? code;
@@ -110,8 +121,8 @@ export const submitErrorText = (code: string): string => SUBMIT_ERROR_TEXT[code]
  *  retry can never succeed — so the chip has to say what went wrong, in words
  *  that imply what to do instead. */
 const UPLOAD_ERROR_TEXT: Record<string, string> = {
-  'too-large': 'That image is too large — 12 MB is the limit.',
-  'unsupported-type': "Can't attach that — PNG, JPEG or WebP only.",
+  'too-large': 'That file is too large — 12 MB is the limit.',
+  'unsupported-type': "Can't attach that — images, text, PDF and RTF only.",
   'bad-request': "That upload didn't arrive — try attaching it again.",
   'unknown-session': 'That session is not running.',
   'bad-session-id': 'That session is not running.',
@@ -1174,6 +1185,21 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
      *  docstring requires. */
     setCoordCaps: (next: Partial<CoordCaps>) =>
       postJsonOr<CoordCapsView | 'unreadable'>('/api/coord/caps', 'unreadable', next),
+    /** `GET /api/coord/stall-watch` (stall watch settings, design 2026-10-05 §10, §13): the Settings page's Stall
+     *  watch section reads it through `useStallWatchView`, whose `asStallWatchView` is the wire guard, so the type here
+     *  is what the server promises, not what arrived. 501 `not-configured` on a box with no coordination database, and
+     *  404 `not-found` from an older server that lacks the route; the hook reads both as not available on this server
+     *  (departure `older-server-404-reads-not-configured` (D-4035)). */
+    stallWatch: () => getJson<StallWatchView>('/api/coord/stall-watch'),
+    /** `POST /api/coord/stall-watch`: a PARTIAL, carrying only the field the operator moved, and `confirm` only when
+     *  it sends back the key a 409 `confirm-required` answered with. The server decides whether a write needs a
+     *  confirm (departure `server-decides-the-confirm` (D-4033)), so a 409 rejects with `ApiError` like every non-2xx,
+     *  and the section reads its body through `stallWriteRefusal`. Session-gated when armed, open dark; no box token.
+     *
+     *  `postJsonOr`, not `postJson`, for `setCoordCaps`' reason (D-1150): after a write, "the answer could not be
+     *  read" may well have stored the value, and is not "the request never happened". */
+    setStallWatch: (body: StallWatchRequest) =>
+      postJsonOr<StallWatchView | 'unreadable'>('/api/coord/stall-watch', 'unreadable', body),
     commands: (id: string) =>
       getJson<{ builtins: SlashCommand[]; skills: SlashCommand[] }>(`${sid(id)}/commands`),
     upload: async (id: string, file: File): Promise<StagedClip> => {

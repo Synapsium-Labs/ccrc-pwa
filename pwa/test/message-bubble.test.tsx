@@ -258,11 +258,14 @@ describe('an image URL is an image, however the author wrote it', () => {
     // The `|| 'image'` fallback, and reaching it took a measurement: a URL
     // ending in a SLASH is not an image URL at all (`IMG_EXT` anchors the
     // extension at the end or at `?`/`#`), so the only target that is read as
-    // an image and yields an empty name is one whose whole value is a
-    // fragment — `#diagram.png`, an in-page anchor named after a file. An
-    // empty alt on a tap-to-open image leaves a screen reader with a link
-    // that announces nothing at all.
-    assistant('[look](#diagram.png)');
+    // an image and yields an empty name is one whose last segment is all
+    // fragment. It has to be ABSOLUTE: chat draws an image only from an
+    // http(s) source (`isRefusedChatImageSrc`, W4's hardening), so a bare
+    // `#diagram.png` — the in-page anchor this case used to use — is now a
+    // plain link and never reaches the name at all. An empty alt on a
+    // tap-to-open image leaves a screen reader with a link that announces
+    // nothing at all.
+    assistant('[look](https://box.example.org/#diagram.png)');
     expect(document.querySelector('img.msg-img')).toHaveAttribute('alt', 'image');
   });
 

@@ -16,11 +16,12 @@
 // prove "never printed" build their search patterns from pieces).
 import { describe, it, expect } from 'vitest';
 import { spawn, spawnSync } from 'node:child_process';
-import { createHash } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import {
-  chmodSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync,
+  chmodSync, closeSync, existsSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, readlinkSync, rmSync,
+  statSync, symlinkSync, writeFileSync, constants as fsConstants,
 } from 'node:fs';
 import path, { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -111,11 +112,11 @@ const proofAnswers = (home: string, status: number): void => {
  *  `umask 022`. The 0600 modes of the files the verb leaves come from `mktemp` (which creates 0600 whatever the umask),
  *  so this run does NOT prove the verb's own `umask 077`; that guard is pinned by the static check in 'set +x first,
  *  umask 077' below (the verb's second statement). */
-function runToken(home: string, args: string[], input: string, extra: NodeJS.ProcessEnv = {}): Run {
+function runToken(home: string, args: string[], input: string, extra: NodeJS.ProcessEnv = {}, o: { timeout?: number } = {}): Run {
   const env = { ...ccrcContainedEnv(home, process.env, { managers: true, curl: 'poison' }), ...extra };
   assertNoRealTool(env, home);
   const r = spawnSync('bash', ['-c', 'umask 022; exec bash "$0" "$@"', CCRC, 'token', ...args],
-    { encoding: 'utf8', env, input });
+    { encoding: 'utf8', env, input, ...(o.timeout === undefined ? {} : { timeout: o.timeout }) });
   return { code: r.status ?? -1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
 }
 const sync = (home: string, input = `${CODE}\n`, extra: NodeJS.ProcessEnv = {}): Run =>
@@ -173,6 +174,7 @@ describe('ccrc token sync: the synced path (spec §4.5, Figure 4)', () => {
     expect(statSync(genFile(home)).mode & 0o777).toBe(0o600);
     const rep = reportOf(home)!;
     expect(rep).toEqual({ v: 1, at: expect.any(Number), result: 'synced', generation: GEN, transport: 'https', proof: 'proved' });
+    expect(read(join(home, '.ccrc', 'token-sync.json'))).toMatch(new RegExp(`^\\{"v":1,"at":\\d+,"result":"synced","generation":"${GEN}","transport":"https","proof":"proved"\\}\\n$`));
     expect(statSync(join(home, '.ccrc', 'token-sync.json')).mode & 0o777).toBe(0o600);
     // Two calls: the claim, then the proof.
     expect(calls(home)).toBe(2);
@@ -184,6 +186,7 @@ describe('ccrc token sync: the synced path (spec §4.5, Figure 4)', () => {
     const proof = callArgv(home, 2);
     expect(proof.at(-1)).toBe('https://example.invalid/api/ledger');
     expect(proof.join(' ')).toMatch(/-K - /);
+    expect(proof.join(' ')).toMatch(/--max-time 15 /);
     expect(callStdin(home, 2)).toBe(`header = "x-ccrc-mail-token: ${VALUE}"\n`);
     expect(temps(home)).toEqual([]);
     expectNoSecret(home, r);
@@ -393,6 +396,146 @@ describe('ccrc token sync: refusals — each word, its exit code, and what it le
     expectRefusal(sync(homeTo), 'proof-unmeasured');
   });
 
+  // R-f (row 1): the proof's one accepted status is exactly 400, and 401 and 400 are the only two it names. Every other
+  // status is proof-unmeasured. A guard widened to admit a neighbour of either (a 5xx other than 501, or a 4xx other than
+  // 401) is a refusal read as a proof, so each neighbour is a row of its own.
+  it.each([500, 502, 503])('proof words: a %i proof answer is proof-unmeasured, never proved', (status) => {
+    const home = box(`tok-sync-p${status}-`);
+    proofAnswers(home, status);
+    const r = sync(home);
+    expectRefusal(r, 'proof-unmeasured');
+    expect(reportOf(home)).toMatchObject({ result: 'proof-unmeasured', generation: GEN, proof: 'proof-unmeasured' });
+    expectNoSecret(home, r);
+  });
+
+  it.each([403, 404, 429])('proof words: a %i proof answer is proof-unmeasured, never proved', (status) => {
+    const home = box(`tok-sync-p${status}-`);
+    proofAnswers(home, status);
+    const r = sync(home);
+    expectRefusal(r, 'proof-unmeasured');
+    expect(reportOf(home)).toMatchObject({ result: 'proof-unmeasured', generation: GEN, proof: 'proof-unmeasured' });
+    expectNoSecret(home, r);
+  });
+
+  // R-f (row 3): the code's shape. The shell's regex admits exactly 43 base64url characters, and the writer's two
+  // fullmatch calls admit a value and a generation with nothing after the last hex digit (`$` alone would let a
+  // trailing newline through, which is what `re.match` does).
+  it('bad-code: a 44-character code, and a 43-character code with an = in it, are refused before any call', () => {
+    for (const input of [`${CODE}A\n`, `${CODE.slice(0, 42)}=\n`, `${CODE}${CODE}\n`]) {
+      const home = box('tok-sync-codeshape-');
+      const r = sync(home, input);
+      expectRefusal(r, 'bad-code');
+      expect(calls(home), JSON.stringify(input)).toBe(0);
+      expect(read(tokenFile(home))).toBe(`${PREAMBLE}${OLD}\n`);
+      expectNoSecret(home, r);
+    }
+  });
+
+  it('claim-refused: a value that ends in a newline writes nothing', () => {
+    const home = box('tok-sync-valnl-');
+    claimAnswers(home, 200, JSON.stringify({ ok: true, value: `${VALUE}\n`, generation: GEN }));
+    const r = sync(home);
+    expectRefusal(r, 'claim-refused');
+    expect(r.stderr).toContain('the value is not 64 lowercase hex');
+    expect(read(tokenFile(home))).toBe(`${PREAMBLE}${OLD}\n`);
+    expect(existsSync(genFile(home))).toBe(false);
+    expect(temps(home)).toEqual([]);
+    expectNoSecret(home, r);
+  });
+
+  it('claim-refused: a generation that ends in a newline writes nothing', () => {
+    const home = box('tok-sync-gennl-');
+    claimAnswers(home, 200, JSON.stringify({ ok: true, value: VALUE, generation: `${GEN}\n` }));
+    const r = sync(home);
+    expectRefusal(r, 'claim-refused');
+    expect(r.stderr).toContain('the generation is not 16 lowercase hex');
+    expect(read(tokenFile(home))).toBe(`${PREAMBLE}${OLD}\n`);
+    expect(existsSync(genFile(home))).toBe(false);
+    expect(temps(home)).toEqual([]);
+    expectNoSecret(home, r);
+  });
+
+  // R-f (row 5): the writer reads one byte past its cap so that an over-cap answer is told from one that fits. An answer
+  // that is valid JSON with the right shape, padded past the cap with spaces, still parses when read in full, so only the
+  // length check refuses it. (`f.read(cap + 1)` becoming `f.read()` changes only the memory the read can take, and no test
+  // can see that.)
+  it('claim-refused: an otherwise valid answer padded past 4096 bytes is refused as over the cap, and nothing is written', () => {
+    const home = box('tok-sync-overcap-');
+    const answer = JSON.stringify({ ok: true, value: VALUE, generation: GEN });
+    const padded = answer + ' '.repeat(4200 - answer.length);
+    expect(Buffer.byteLength(padded)).toBe(4200);
+    claimAnswers(home, 200, padded);
+    const r = sync(home);
+    expectRefusal(r, 'claim-refused');
+    expect(r.stderr).toContain('over 4096 bytes');
+    expect(read(tokenFile(home))).toBe(`${PREAMBLE}${OLD}\n`);
+    expect(existsSync(genFile(home))).toBe(false);
+    expect(temps(home)).toEqual([]);
+    expectNoSecret(home, r);
+  });
+
+  // R-f (row 6): the destination is judged by lstat, then as a regular file. A dangling link is not "absent" (lexists, not
+  // exists), and a FIFO is neither a link nor a regular file (a read of one blocks until a writer opens it).
+  it('write-failed: a dangling symlink at the token path is refused and left as it was', () => {
+    const home = box('tok-sync-dangling-', { token: null });
+    const target = join(home, 'nowhere.token');
+    symlinkSync(target, tokenFile(home));
+    const r = sync(home);
+    expectRefusal(r, 'write-failed');
+    expect(lstatSync(tokenFile(home)).isSymbolicLink()).toBe(true);
+    expect(readlinkSync(tokenFile(home))).toBe(target);
+    expect(existsSync(target)).toBe(false);
+    expect(existsSync(genFile(home))).toBe(false);
+    expect(temps(home)).toEqual([]);
+    expectNoSecret(home, r);
+  });
+
+  it('write-failed: a FIFO at the token path is refused and left as it was, and no reader is left blocked', () => {
+    const home = box('tok-sync-fifo-', { token: null });
+    const fifo = tokenFile(home);
+    const made = spawnSync('mkfifo', [fifo], { encoding: 'utf8' });
+    expect(made.status, made.stderr).toBe(0);
+    const before = lstatSync(fifo);
+    // `runToken` is synchronous and returns only when every holder of its stderr has exited, and a writer body that opens
+    // the FIFO for reading (the mutant) is blocked until a writer shows up, so a `finally` after the call would never run:
+    // the `timeout` kills the verb's shell, not the python it forked. So the unblock is a helper started BEFORE the call.
+    // It sleeps, then opens the FIFO with O_WRONLY|O_NONBLOCK and closes it, which frees a reader blocked on it and, with
+    // no reader, throws ENXIO (ignored). It ends on its own, and the `finally` kills it by its recorded PID if it has not.
+    const helper = spawn('python3', ['-I', '-c', [
+      'import os, sys, time',
+      'time.sleep(3)',
+      'try:',
+      '    os.close(os.open(sys.argv[1], os.O_WRONLY | os.O_NONBLOCK))',
+      'except OSError:',
+      '    pass',
+    ].join('\n'), fifo], { stdio: 'ignore' });
+    try {
+      const r = runToken(home, ['sync', '--from', 'agent'], `${CODE}\n`, {}, { timeout: 10000 });
+      expectRefusal(r, 'write-failed');
+      expect(lstatSync(fifo).isFIFO()).toBe(true);
+      expect(lstatSync(fifo).ino).toBe(before.ino);
+      expect(existsSync(genFile(home))).toBe(false);
+      expect(temps(home)).toEqual([]);
+      expectNoSecret(home, r);
+    } finally {
+      helper.kill();
+      // The same release from this side, for a reader still blocked when the helper was killed (ENXIO when there is none).
+      try { closeSync(openSync(fifo, fsConstants.O_WRONLY | fsConstants.O_NONBLOCK)); } catch { /* no reader */ }
+    }
+  }, 30000);
+
+  // R-f (row 7): the 410 is half of the code-used pair. The same word under any other status is an ordinary refusal.
+  it('claim-refused: a code-used answer under a status other than 410 is not code-used', () => {
+    const home = box('tok-sync-409-');
+    claimAnswers(home, 409, '{"ok":false,"error":"code-used"}');
+    const r = sync(home);
+    expectRefusal(r, 'claim-refused');
+    expect(r.stderr).toContain('answered 409 code-used');
+    expect(read(tokenFile(home))).toBe(`${PREAMBLE}${OLD}\n`);
+    expect(existsSync(genFile(home))).toBe(false);
+    expectNoSecret(home, r);
+  });
+
   it('no refusal path prints a secret, and every one leaves no temp', () => {
     const home = box('tok-sync-nosecret-');
     proofAnswers(home, 401);
@@ -400,6 +543,316 @@ describe('ccrc token sync: refusals — each word, its exit code, and what it le
     expectRefusal(r, 'proof-failed');
     expectNoSecret(home, r);
     expect(temps(home)).toEqual([]);
+  });
+});
+
+// ── 4555: a refusal that wrote nothing keeps the generation this box held ───────────────────────────────────────────
+// A refusal rewrites ~/.ccrc/token-sync.json with `"generation":null`, so once the token file and the generation file are
+// gone the last trace of a value this box held is gone too. 4555: a run that wrote no value (R_GEN empty) carries the
+// generation the box holds in an optional `held` key, read in bash from the generation file, else the previous report's
+// `generation`, else its `held`. Everything the agent reads stays byte for byte: the synced report, the stdout line, every
+// exit code and every first stderr line. The rows that hold what must not change are green before the fix; their reds are
+// measured under the mutants of the commit message.
+describe('ccrc token sync: a refusal that wrote nothing keeps the generation this box held (4555)', () => {
+  const itNonRoot = process.getuid && process.getuid() === 0 ? it.skip : it;
+  const REP = (h: string): string => join(h, '.ccrc', 'token-sync.json');
+  const rep = (h: string): string => read(REP(h));
+  let OTHER = randomBytes(8).toString('hex');
+  while (OTHER === GEN) OTHER = randomBytes(8).toString('hex');
+  const BAD_CODE_LINE = `${TOKEN_SYNC_STDERR_PREFIX}bad-code: the code on stdin is not 43 base64url characters; nothing was claimed\n`;
+  const SYNCED_REPORT = `{"v":1,"at":1,"result":"synced","generation":"${GEN}","transport":"https","proof":"proved"}\n`;
+
+  /** The FIFO idiom of the token-path row, timed: a helper started BEFORE the call frees a reader blocked on the FIFO after
+   *  5 s (an O_WRONLY|O_NONBLOCK open and close; ENXIO with no reader is ignored). A verb that never opens the FIFO returns
+   *  in well under a second, and one that blocks on it returns only after the helper has freed it. */
+  function withFifo(fifo: string, run: () => void): number {
+    const helper = spawn('python3', ['-I', '-c', [
+      'import os, sys, time',
+      'time.sleep(5)',
+      'try:',
+      '    os.close(os.open(sys.argv[1], os.O_WRONLY | os.O_NONBLOCK))',
+      'except OSError:',
+      '    pass',
+    ].join('\n'), fifo], { stdio: 'ignore' });
+    const t0 = Date.now();
+    try {
+      run();
+      return Date.now() - t0;
+    } finally {
+      helper.kill();
+      try { closeSync(openSync(fifo, fsConstants.O_WRONLY | fsConstants.O_NONBLOCK)); } catch { /* no reader */ }
+    }
+  }
+  const syncTimed = (home: string): Run =>
+    runToken(home, ['sync', '--from', 'agent'], 'short\n', {}, { timeout: 15000 });
+  const mkfifo = (p: string): void => {
+    const made = spawnSync('mkfifo', [p], { encoding: 'utf8' });
+    expect(made.status, made.stderr).toBe(0);
+  };
+
+  it('R1 bad-code after a sync: the report keeps the generation as held, and stderr is the one line it always was', () => {
+    const home = box('tok-held-badcode-');
+    expect(sync(home).code).toBe(0);
+    const r = sync(home, 'short\n');
+    expectRefusal(r, 'bad-code');
+    expect(r.stderr).toBe(BAD_CODE_LINE);
+    expect(reportOf(home)).toEqual({ v: 1, at: expect.any(Number), result: 'bad-code', generation: null, transport: null, proof: null, held: GEN });
+    expect(read(tokenFile(home))).toBe(`${PREAMBLE}${VALUE}\n`);
+    expect(read(genFile(home))).toBe(`${GEN}\n`);
+    expectNoSecret(home, r);
+  });
+
+  interface Case { word: keyof typeof TOKEN_SYNC_EXIT; plant: (home: string) => void; stderr: string; nonRoot?: true }
+  const CASES: Case[] = [
+    {
+      word: 'stale-client',
+      plant: (home) => writeFileSync(join(harnessBin(home), 'ccrc-api'),
+        '#!/usr/bin/env bash\ncurl -sS -m 30 -X "$method" -H "x-ccrc-mail-token: $TOKEN" "$url"\n', { mode: 0o755 }),
+      stderr: `${TOKEN_SYNC_STDERR_PREFIX}stale-client: ~/.local/bin/ccrc-api cannot be shown to keep the box token off its argv (an install before wave 13, or a file this verb cannot read); replace it before a sync — nothing was claimed\n`,
+    },
+    {
+      word: 'claim-refused',
+      plant: (home) => claimAnswers(home, 403, '{"ok":false,"error":"wrong-node"}'),
+      stderr: `${TOKEN_SYNC_STDERR_PREFIX}claim-refused: the claim door answered 403 wrong-node\n`,
+    },
+    {
+      word: 'code-used',
+      plant: (home) => claimAnswers(home, 410, '{"ok":false,"error":"code-used"}'),
+      stderr: `${TOKEN_SYNC_STDERR_PREFIX}code-used: the claim door answered 410 code-used: someone claimed this code first\n`,
+    },
+    {
+      word: 'write-failed',
+      plant: (home) => chmodSync(join(home, '.cc-secrets'), 0o500),
+      stderr: `${TOKEN_SYNC_STDERR_PREFIX}write-failed: no temp file could be made in ~/.cc-secrets; nothing was claimed\n`,
+      nonRoot: true,
+    },
+  ];
+  for (const c of CASES) {
+    (c.nonRoot ? itNonRoot : it)(`R2 ${c.word} after a sync keeps the held generation; the same refusal on a fresh box carries none, with the identical exit, stderr and empty stdout`, () => {
+      const synced = box(`tok-held-${c.word}-`);
+      const fresh = box(`tok-held-fresh-${c.word}-`);
+      expect(sync(synced).code).toBe(0);
+      try {
+        c.plant(synced);
+        c.plant(fresh);
+        const rs = sync(synced);
+        const rf = sync(fresh);
+        for (const r of [rs, rf]) {
+          expectRefusal(r, c.word);
+          expect(r.stderr).toBe(c.stderr);
+          expect(r.stdout).toBe('');
+        }
+        expect(rs.code).toBe(rf.code);
+        const fr = reportOf(fresh)!;
+        expect(fr).toEqual({ v: 1, at: expect.any(Number), result: c.word, generation: null, transport: fr['transport'], proof: null });
+        expect('held' in fr).toBe(false);
+        expect(reportOf(synced)).toEqual({ v: 1, at: expect.any(Number), result: c.word, generation: null, transport: fr['transport'], proof: null, held: GEN });
+        expectNoSecret(synced, rs);
+        expectNoSecret(fresh, rf);
+      } finally {
+        for (const h of [synced, fresh]) { try { chmodSync(join(h, '.cc-secrets'), 0o700); } catch { /* not planted */ } }
+      }
+    });
+  }
+
+  it('R3 the generation file lost, then a refusal: held comes from the previous report\'s generation', () => {
+    const home = box('tok-held-genlost-');
+    expect(sync(home).code).toBe(0);
+    rmSync(genFile(home));
+    const r = sync(home, 'short\n');
+    expectRefusal(r, 'bad-code');
+    expect(reportOf(home)).toMatchObject({ result: 'bad-code', generation: null, held: GEN });
+  });
+
+  it('R4 a chain: the second refusal carries the held the first refusal wrote', () => {
+    const home = box('tok-held-chain-');
+    expect(sync(home).code).toBe(0);
+    expect(reportOf(home)).toMatchObject({ result: 'synced', generation: GEN });
+    expectRefusal(sync(home, 'short\n'), 'bad-code');
+    expect(reportOf(home)).toMatchObject({ generation: null, held: GEN });
+    rmSync(genFile(home));
+    const r = sync(home, 'short\n');
+    expectRefusal(r, 'bad-code');
+    expect(reportOf(home)).toEqual({ v: 1, at: expect.any(Number), result: 'bad-code', generation: null, transport: null, proof: null, held: GEN });
+  });
+
+  it('R4b precedence: the generation file outranks the report', () => {
+    const home = box('tok-held-prec-');
+    expect(sync(home).code).toBe(0);
+    writeFileSync(genFile(home), `${OTHER}\n`, { mode: 0o600 });
+    const r = sync(home, 'short\n');
+    expectRefusal(r, 'bad-code');
+    expect(reportOf(home)).toMatchObject({ held: OTHER });
+    expect(rep(home)).not.toContain(GEN);
+  });
+
+  it('R5 a fresh box carries nothing, byte for byte', () => {
+    const a = box('tok-held-fresh5-');
+    expectRefusal(sync(a, 'short\n'), 'bad-code');
+    expect(rep(a)).toMatch(/^\{"v":1,"at":\d+,"result":"bad-code","generation":null,"transport":null,"proof":null\}\n$/);
+    const b = box('tok-held-fresh5b-');
+    claimAnswers(b, 403, '{"ok":false,"error":"wrong-node"}');
+    expectRefusal(sync(b), 'claim-refused');
+    expect(rep(b)).toMatch(/^\{"v":1,"at":\d+,"result":"claim-refused","generation":null,"transport":"https","proof":null\}\n$/);
+  });
+
+  it('R6 a refusal after the write carries its own generation and no held', () => {
+    const home = box('tok-held-after-');
+    expect(sync(home).code).toBe(0);
+    proofAnswers(home, 401);
+    const r = sync(home);
+    expectRefusal(r, 'proof-failed');
+    expect(reportOf(home)).toEqual({ v: 1, at: expect.any(Number), result: 'proof-failed', generation: GEN, transport: 'https', proof: 'proof-failed' });
+
+    // The generation write blocked on a box that already synced: the previous report carries a generation, and still no held.
+    const home2 = box('tok-held-after2-');
+    expect(sync(home2).code).toBe(0);
+    rmSync(genFile(home2));
+    mkdirSync(genFile(home2));
+    const r2 = sync(home2);
+    expectRefusal(r2, 'write-failed');
+    const rp = reportOf(home2)!;
+    expect(rp['generation']).toBe(GEN);
+    expect('held' in rp).toBe(false);
+  });
+
+  it('R7 a synced run after a refusal that carried held is byte for byte the synced report', () => {
+    const home = box('tok-held-resync-');
+    expect(sync(home).code).toBe(0);
+    expectRefusal(sync(home, 'short\n'), 'bad-code');
+    const r = sync(home);
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stdout).toBe(`synced ${GEN} https\n`);
+    expect(rep(home)).toMatch(new RegExp(`^\\{"v":1,"at":\\d+,"result":"synced","generation":"${GEN}","transport":"https","proof":"proved"\\}\\n$`));
+  });
+
+  describe('R8 what is not read as held at the generation path', () => {
+    it('a generation file that is not 16 hex', () => {
+      const home = box('tok-held-genxyz-');
+      writeFileSync(genFile(home), 'xyz\n', { mode: 0o600 });
+      expectRefusal(sync(home, 'short\n'), 'bad-code');
+      expect('held' in reportOf(home)!).toBe(false);
+    });
+
+    it('a symlink to a regular file holding a generation is never followed', () => {
+      const home = box('tok-held-genlink-');
+      const target = join(home, 'elsewhere.gen');
+      writeFileSync(target, `${GEN}\n`, { mode: 0o600 });
+      symlinkSync(target, genFile(home));
+      expectRefusal(sync(home, 'short\n'), 'bad-code');
+      expect('held' in reportOf(home)!).toBe(false);
+      expect(read(target)).toBe(`${GEN}\n`);
+      expect(lstatSync(genFile(home)).isSymbolicLink()).toBe(true);
+    });
+
+    it('a FIFO is never opened', () => {
+      const home = box('tok-held-genfifo-');
+      mkfifo(genFile(home));
+      const before = lstatSync(genFile(home));
+      let r: Run | undefined;
+      const ms = withFifo(genFile(home), () => { r = syncTimed(home); });
+      expectRefusal(r!, 'bad-code');
+      expect(ms).toBeLessThan(4000);
+      expect(lstatSync(genFile(home)).isFIFO()).toBe(true);
+      expect(lstatSync(genFile(home)).ino).toBe(before.ino);
+      expect('held' in reportOf(home)!).toBe(false);
+    }, 30000);
+  });
+
+  describe('R8r what is not read as held at the report path', () => {
+    it('a symlink to a synced report is never followed, and its target is untouched', () => {
+      const home = box('tok-held-replink-');
+      const target = join(home, 'elsewhere.json');
+      writeFileSync(target, SYNCED_REPORT, { mode: 0o600 });
+      symlinkSync(target, REP(home));
+      expectRefusal(sync(home, 'short\n'), 'bad-code');
+      expect('held' in reportOf(home)!).toBe(false);
+      expect(read(target)).toBe(SYNCED_REPORT);
+      expect(lstatSync(REP(home)).isSymbolicLink()).toBe(false);
+    });
+
+    it('a FIFO is never opened, and the rename replaces it with the refusal\'s report', () => {
+      const home = box('tok-held-repfifo-');
+      mkfifo(REP(home));
+      let r: Run | undefined;
+      const ms = withFifo(REP(home), () => { r = syncTimed(home); });
+      expectRefusal(r!, 'bad-code');
+      expect(ms).toBeLessThan(4000);
+      expect(lstatSync(REP(home)).isFile()).toBe(true);
+      expect('held' in reportOf(home)!).toBe(false);
+    }, 30000);
+  });
+
+  itNonRoot('R9 an unreadable generation file is skipped silently: exactly the one stderr line it always was', () => {
+    const home = box('tok-held-genperm-');
+    expect(sync(home).code).toBe(0);
+    chmodSync(genFile(home), 0o000);
+    try {
+      const r = sync(home, 'short\n');
+      expectRefusal(r, 'bad-code');
+      expect(r.stderr).toBe(BAD_CODE_LINE);
+    } finally {
+      chmodSync(genFile(home), 0o600);
+    }
+  });
+
+  itNonRoot('R9 an unreadable generation file does not hide the previous report: held comes from the report', () => {
+    const home = box('tok-held-genperm2-');
+    expect(sync(home).code).toBe(0);
+    chmodSync(genFile(home), 0o000);
+    try {
+      expectRefusal(sync(home, 'short\n'), 'bad-code');
+      expect(reportOf(home)).toMatchObject({ result: 'bad-code', generation: null, held: GEN });
+    } finally {
+      chmodSync(genFile(home), 0o600);
+    }
+  });
+
+  itNonRoot('R9r an unreadable report is skipped silently: one stderr line, and no held (nothing readable held a generation)', () => {
+    const home = box('tok-held-repperm-');
+    expect(sync(home).code).toBe(0);
+    rmSync(genFile(home));
+    const old = lstatSync(REP(home)).ino;
+    chmodSync(REP(home), 0o000);
+    try {
+      const r = sync(home, 'short\n');
+      expectRefusal(r, 'bad-code');
+      expect(r.stderr).toBe(BAD_CODE_LINE);
+      expect('held' in reportOf(home)!).toBe(false);
+    } finally {
+      if (lstatSync(REP(home)).ino === old) chmodSync(REP(home), 0o600);
+    }
+  });
+
+  // R10, the writer and the reader together (review 391 F2): the real verb syncs, then refuses; the token and generation
+  // files are lost; doctor's own check reads the report the verb wrote and says FAIL, not the never-handed PASS or a WARN.
+  it('review 391 F2 end to end: the real verb syncs, refuses, the token and generation files are lost, and doctor reads FAIL (4555)', () => {
+    const home = box('tok-held-e2e-');
+    writeFileSync(join(home, '.ccrc', 'ccrc.env'), 'CCRC_ROLE=fleet\nCCRC_FLEET=local\n', { mode: 0o600 });
+    expect(sync(home).code).toBe(0);
+    expectRefusal(sync(home, 'short\n'), 'bad-code');
+    rmSync(tokenFile(home));
+    rmSync(genFile(home));
+    const bin = join(home, 'bt-bin');
+    mkdirSync(bin, { recursive: true });
+    mkdirSync(join(home, 'tmp'), { recursive: true });
+    for (const n of ['python3', 'stat']) {
+      const found = spawnSync('bash', ['-c', `command -v ${n}`], { encoding: 'utf8' }).stdout.trim();
+      expect(found, `this box has no ${n}`).not.toBe('');
+      symlinkSync(found, join(bin, n));
+    }
+    const bashPath = spawnSync('bash', ['-c', 'command -v bash'], { encoding: 'utf8' }).stdout.trim();
+    const q = (x: string): string => `'${x.replace(/'/g, `'\\''`)}'`;
+    const script = ['set -uo pipefail', `. ${q(CCRC)}`, `. ${q(join(REPO, 'ccd', 'ccrc-doctor-checks'))}`, '_check_box-token'].join('\n');
+    const d = spawnSync(bashPath, ['-c', script], {
+      encoding: 'utf8', env: { HOME: home, PATH: bin, LC_ALL: 'C', TMPDIR: join(home, 'tmp') },
+    });
+    const out = d.stdout ?? '';
+    expect(out).toMatch(/^FAIL box-token: fleet: fleet-token-absent — /);
+    expect(out.split('\n')[0]).toContain('fleet: sync:bad-code — ');
+    expect(out).not.toContain('no value has been handed to this box yet');
+    expect(d.status).toBe(1);
+    for (const x of [out, d.stderr ?? '']) expect(x.includes(VALUE)).toBe(false);
   });
 });
 
@@ -465,6 +918,19 @@ describe('ccrc token sync: set +x first, umask 077, and the environment exits', 
       const r = runToken(home, args, `${CODE}\n`);
       expect(r.code, args.join(' ')).toBe(2);
       expect(calls(home)).toBe(0);
+    }
+  });
+});
+
+describe('ccrc token sync: the argument words are matched, not skipped', () => {
+  // R-f (row 8): `--from` is compared as a word. With only the value checked, `--form agent` would read as `--from agent`.
+  it('usage is exit 2 with no call: a first argument that is not --from, though its value is agent', () => {
+    for (const args of [['sync', '--form', 'agent'], ['sync', '-from', 'agent'], ['sync', 'agent', 'agent']]) {
+      const home = box('tok-sync-fromword-');
+      const r = runToken(home, args, `${CODE}\n`);
+      expect(r.code, `${args.join(' ')}: ${r.stderr}`).toBe(2);
+      expect(calls(home), args.join(' ')).toBe(0);
+      expect(reportOf(home), args.join(' ')).toBeNull();
     }
   });
 });
@@ -605,6 +1071,22 @@ describe('ccrc token sync: the shell spellings agree with L0 (plan Global Constr
     expect(code.filter((l) => /\bpython3 (?!-I -c\b)(?!>\/dev\/null)(?![a-z])/.test(l) && !/command -v python3/.test(l))).toEqual([]);
   });
 
+  it('the held generation is read in bash: _ts_held and _ts_report name no python3, and the verb still has three python3 -I -c lines (4555)', () => {
+    const src = verb();
+    const held = /^_ts_held\(\) \{\n([\s\S]*?)\n\}$/m.exec(src);
+    const report = /^_ts_report\(\) \{\n([\s\S]*?)\n\}$/m.exec(src);
+    expect(held, 'ccd/ccrc-token-sync has no _ts_held() { … }').not.toBeNull();
+    expect(report, 'ccd/ccrc-token-sync has no _ts_report() { … }').not.toBeNull();
+    // `_ts_report` reaches python only through `_ts_rename`, which existed before 4555.
+    expect(held![1]).not.toMatch(/python3/);
+    expect(report![1]).not.toMatch(/python3/);
+    // The shape is derived from GEN_RE (pinned to L0 above), never spelled again.
+    expect(held![1]).toContain('$GEN_RE');
+    expect(held![1]).not.toContain('{16}');
+    const code = src.split('\n').filter((l) => !l.trimStart().startsWith('#'));
+    expect(code.filter((l) => /\bpython3 -I -c\b/.test(l)).length).toBe(3);
+  });
+
   it('the agent\'s frozen argv is the verb this file answers', () => {
     expect([...tokenSyncSpawnArgv()]).toEqual(['token', 'sync', '--from', assigned(verb(), 'FROM_WORD')]);
     expect(readFileSync(CCRC, 'utf8')).toMatch(/^\s+token\)\s+cmd_token "\$@" ;;$/m);
@@ -660,12 +1142,22 @@ describe('ccrc token sync: the fleet file write is temp-then-rename, file-fsynce
 
   interface WriterLog { k: string; p?: string; a?: string; b?: string; w?: boolean }
   /** Run a writer body on a fixture claim answer; return what it did and its verdict. */
-  function runWriter(body: string): { events: WriterLog[]; dest: string; tmp: string; stdout: string; stderr: string } {
+  // `existing` is written to the destination (mode 0600) before the run, the live box's path, and `preIno` is its inode
+  // as it stood then. `tmpDir` is a directory NAME made under the run's own dir, and the temp goes there, not beside
+  // the destination.
+  function runWriter(body: string, o: { existing?: string; tmpDir?: string } = {}): {
+    events: WriterLog[]; dir: string; dest: string; tmp: string; preIno: number | null; stdout: string; stderr: string;
+  } {
     const dir = mkTmp('tok-writer-');
     const secrets = join(dir, 'secrets'); const cwd = join(dir, 'cwd');
     mkdirSync(secrets, { mode: 0o700 }); mkdirSync(cwd);
-    const dest = join(secrets, 'ccrc-mail.token'); const tmp = join(secrets, '.ccrc-token-sync.AAAAAA');
+    const dest = join(secrets, 'ccrc-mail.token');
+    let tmpHome = secrets;
+    if (o.tmpDir !== undefined) { tmpHome = join(dir, o.tmpDir); mkdirSync(tmpHome, { mode: 0o700 }); }
+    const tmp = join(tmpHome, '.ccrc-token-sync.AAAAAA');
     writeFileSync(tmp, '', { mode: 0o600 });
+    let preIno: number | null = null;
+    if (o.existing !== undefined) { writeFileSync(dest, o.existing, { mode: 0o600 }); preIno = statSync(dest).ino; }
     writeFileSync(join(dir, 'answer.json'), JSON.stringify({ ok: true, value: VALUE, generation: GEN }));
     writeFileSync(join(dir, 'wrapper.py'), WRAPPER); writeFileSync(join(dir, 'body.py'), body);
     // cwd is NOT the destination's directory, so a directory fsync aimed at the cwd is distinguishable.
@@ -673,7 +1165,7 @@ describe('ccrc token sync: the fleet file write is temp-then-rename, file-fsynce
       join(dir, 'answer.json'), dest, tmp, FLEET_TOKEN_FILE_COMMENT, TOKEN_VALUE_RE.source, GENERATION_ID_RE.source, '4096'],
     { encoding: 'utf8', cwd });
     const events = JSON.parse(readFileSync(join(dir, 'log.json'), 'utf8')) as WriterLog[];
-    return { events, dest, tmp, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
+    return { events, dir, dest, tmp, preIno, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
   }
 
   /** Every way the log departs from: write+fsync the temp, rename it onto dest, fsync dest's directory. */
@@ -706,6 +1198,27 @@ describe('ccrc token sync: the fleet file write is temp-then-rename, file-fsynce
     expect(readFileSync(w.dest, 'utf8')).toBe(`${FLEET_TOKEN_FILE_COMMENT}\n${VALUE}\n`);
     // The verb hands this very body to the isolated interpreter (so the body judged is the body that runs).
     expect(readFileSync(VERB, 'utf8')).toContain('python3 -I -c "$_TS_WRITE_PY" "$T_RESP" "$TOKEN_FILE" "$T_TOKEN"');
+  });
+
+  // R1 (review 365): `runWriter` used to create the temp and never the destination, so the writer's existing-destination
+  // branch (the one that keeps the preamble) never ran under the wrapper, and a writer that rewrote the old file in place
+  // read green. An existing destination is exactly the live box's path.
+  const EXISTING = '# a note kept from the operator\n' + FLEET_TOKEN_FILE_COMMENT + '\n' + OLD + '\n';
+  it('an existing destination (a preamble plus the old value) is replaced by rename, never rewritten in place (R1, review 365)', () => {
+    const w = runWriter(writerBody(), { existing: EXISTING });
+    expect(w.stdout, w.stderr).toBe(`ok ${GEN}\n`);
+    expect.soft(violations(w)).toEqual([]);
+    expect.soft(statSync(w.dest).ino).not.toBe(w.preIno);   // a rename gives the destination a new inode
+    const after = readFileSync(w.dest, 'utf8');
+    expect(after).toBe('# a note kept from the operator\n' + FLEET_TOKEN_FILE_COMMENT + '\n' + VALUE + '\n');
+    expect(after).not.toContain(OLD);
+  });
+
+  it('a temp that is not beside the destination is refused, and the destination is unchanged', () => {
+    const w = runWriter(writerBody(), { existing: EXISTING, tmpDir: 'elsewhere' });
+    expect(w.stdout, w.stderr).toBe('fail the temp file is not beside the token file\n');
+    expect(readFileSync(w.dest, 'utf8')).toBe(EXISTING);
+    expect(statSync(w.dest).ino).toBe(w.preIno);
   });
 
   // CONTROL: the judge is not vacuous. Each row is a mutation of the real body that the review ran against the old pin
@@ -752,7 +1265,10 @@ describe('ccrc token probe --file <path> [--url <base>] (spec §10.3)', () => {
   };
   const probe = (home: string, args: string[], extra: NodeJS.ProcessEnv = {}): Run => runToken(home, ['probe', ...args], '', extra);
 
-  for (const [status, word, rc] of [[400, 'accepted', 0], [401, 'refused', 0], [501, 'unmeasured', 1], [503, 'unmeasured', 1]] as const) {
+  // R-f (row 2): only 400 and 401 are words; every neighbour is unmeasured and exits non-zero, so a table widened to a
+  // class (4*) or given a third accepted status reds on the neighbour it swallowed.
+  for (const [status, word, rc] of [[400, 'accepted', 0], [401, 'refused', 0], [403, 'unmeasured', 1], [404, 'unmeasured', 1],
+    [429, 'unmeasured', 1], [500, 'unmeasured', 1], [501, 'unmeasured', 1], [503, 'unmeasured', 1]] as const) {
     it(`${status}: prints exactly "probe: ${status} ${word}" and exits ${rc}`, () => {
       const { home, file } = probeBox(`tok-probe-${status}-`, status);
       const r = probe(home, ['--file', file]);
@@ -761,6 +1277,7 @@ describe('ccrc token probe --file <path> [--url <base>] (spec §10.3)', () => {
       expect(calls(home)).toBe(1);
       expect(callArgv(home, 1).at(-1)).toBe('https://example.invalid/api/ledger');
       expect(callArgv(home, 1).join(' ')).toMatch(/-K - /);
+      expect(callArgv(home, 1).join(' ')).toMatch(/--max-time 15 /);
       expect(callStdin(home, 1)).toBe(`header = "x-ccrc-mail-token: ${VALUE}"\n`);
       // A probe measures; it writes no report and leaves no temp.
       expect(reportOf(home)).toBeNull();

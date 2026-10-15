@@ -22,9 +22,9 @@ never links work by a name, a path, a time or a working directory.
 | # | spec stage | scope | deploy class | depends on | PRs | state |
 |---|---|---|---|---|---|---|
 | 1 | 1 Measure | `SessionEnd` registered (captured in a `-hookcap` session, otherwise inert); the capture reducer's delegation block; the mock-API capture rig in the tree; the fixture corpus and its derived matrix; a read-only on-box census | fleet (the hook and installer reach homes through `ccrc update`); tests | — | #284 | **merged** 2026-10-06 as `22b4eabda` after reviews 277, 296 and 304 and two fix rounds; run 271 closed `done`; review 304's 13 findings carried to wave 2 as residue |
-| 2 | 1 Measure (close-out) | the real-lane cross-check (a worker runs two `-hookcap` lanes); a capture of every fleet Claude Code version the corpus lacks; review 304's residue; one re-capture script | tests and docs (the hook and installer unchanged) | 1 | #321 | **accepted at exact tip, waiting to land**: review 334 independently accepted `e183237e59f481ac85730bc06ca5cef29dea1d15`; run 306 advanced to `merging` on that exact fingerprint after run 360 opened. PR #321 remains open because GitHub reports `REVIEW_REQUIRED`; all four required checks are green, the head is unchanged and no bypass is authorized |
-| 3 | 2 Observe | exact-pane and turn-marker corrections; current-lane recapture; bounded hook spools; additive byte-safe ingestion; journal/checkpoint and one complete `delegation_*` migration; census, correlation and report-only reconciliation; checkpoint-owned health; delegation-hooks doctor; coordinator intent and clause 17 | fleet first, then server; skills/doctor | 2 | — | run 360 open at `planned` as `wave:3`, `waveOf:7`, with no inherited worker; plan and O1–O5 implementation decisions operator-approved 2026-10-09 after focused independent plan review; block 4633–4664 issued bare; dispatch waits for #321 and this approved plan to land on `main` |
-| 4 | 3 Project | the `delegation` frame; activity and lease rows in the PWA | server + pwa | 3 | — | to plan |
+| 2 | 1 Measure (close-out) | the real-lane cross-check (a worker runs two `-hookcap` lanes); a capture of every fleet Claude Code version the corpus lacks; review 304's residue; one re-capture script | tests and docs (the hook and installer unchanged) | 1 | #321 | **merged** 2026-10-13 as `4967dc495`, a plain merge of exact head `823efd3eb` (fix round 5, which absorbed `main`), adding history only; its content first reached `main` inside #340's squash `081636389` on 2026-10-10, byte-identical to `e183237e5`, the tip review 334 accepted; run 306 closed `done` |
+| 3 | 2 Observe | exact-pane and turn-marker corrections; current-lane recapture; bounded hook spools; additive byte-safe ingestion; journal/checkpoint and one complete `delegation_*` migration; census, correlation and report-only reconciliation; checkpoint-owned health; delegation-hooks doctor; coordinator intent and clause 17 | fleet first, then server; skills/doctor | 2 | — | **dispatched** 2026-10-14 00:25:04Z: run 360 to a fresh child (`ccrc-pwa-soft-delta`, branch `ws/soft-delta`) with all 16 items, from plan commit `081636389`, after every overlapping claim's holder consented (decisions below); plan and O1–O5 operator-approved 2026-10-09; block 4633–4664 |
+| 4 | 3 Project | the `delegation` frame; activity and lease rows in the PWA; a ccd prune of absent owners' spool directories (operator ruling 2026-10-14) | server + pwa, plus the fleet box for the ccd prune (order set by its plan) | 3 | — | to plan |
 | 5 | 4 Adopt | `ws-lease-mark` and carriers; read-only `ws-lease-audit`; adoption; digest mail; retain and resolve; promotion through `ws-add --base` | **AGENT-FIRST**, then server | 4 | — | to plan |
 | 6 | 5 Clean (shadow) | audit tokens for due leases; shadow rows; the shadow review | server | 5 | — | to plan |
 | 7 | 6 Clean (live) | `ws-lease-clean`; the executor taking a target record | **AGENT-FIRST**, then server | 6; CCR-15 wave 4's sweep (merged #215, live) | — | to plan |
@@ -719,6 +719,90 @@ departures found mid-wave (Tasks 4–6's rig fixes among them). Numbers not used
   evidence: two fix rounds of missed-test findings, and the round run at xhigh landed 29 of 36 cleanly.
 - **2026-10-07 — wave 2's deviation block:** ten numbers, 4364 through 4373, minted before dispatch. They are defined
   in wave 1's plan's "Deviations found", because every departure this close-out can make is from that plan.
+- **2026-10-10 (found 2026-10-12) — #340 landed before #321 and carried wave 2's content.** The ledger had #340 land
+  after #321. It was squash-merged first, as `081636389`. The coordinator had built the ledger branch on top of
+  `ws/plain-hollow`, so the branch held all 55 wave-2 commits (`e183237e5` is an ancestor of its tip, `fe0c81900`).
+  The squash therefore put wave 2's content on `main`, outside wave 2's own landing. All 24 non-ledger files wave 2
+  changed are byte-identical on `main` to `e183237e5`, the tip review 334 accepted. So nothing unreviewed landed, but
+  the landing skipped the run's own record. This was the coordinator's error. Coordinator clause 15 keeps
+  programme-ledger documents on the coordinator's own ledger PR, never inside a feature PR. A ledger branch cut from a
+  wave branch carries that wave's commits, so a ledger branch is cut from `origin/main`. This entry is the first
+  written on a branch cut that way.
+- **2026-10-12 — #321 conflicted with `main` in the ledger only.** GitHub read #321 `CONFLICTING`/`DIRTY`. `git
+  merge-tree` against `main` named one path, this file, changed on `main` only by #340. To send a fix round, run 306
+  had to go from `merging` to `working`. The cap refused that twice (`cap-concurrency`, 7 of 7 active runs, at
+  10:37Z and 10:49Z). The operator then authorised a one-shot waiter in the coordinator's session. It advanced run 306
+  at 20:35:24Z.
+  - The worker had already spent #321's one self-licensed absorption (`f7d57b16b`, 2026-10-07). Fix-round mail 4405
+    therefore named the PR ejected from the landing line at base `2d1835188` (worker clause 16, trigger 3). This
+    repository has no merge queue and no strict status-check policy, so the ejection was the coordinator's measured
+    landing check, not a queue event.
+  - Ruling: resolve the ledger by taking `main`'s version verbatim. `main`'s ledger already held 248 of the branch's
+    279 added ledger lines. The 31 it lacked were wording #340 had superseded: review 334 F2's identity timing,
+    O1–O5 in place of review 332's open questions, and the approved wave-3 plan in place of the old next-wave bullet.
+- **2026-10-12 — fix round 5's wave-done verified (mail 4411).** The worker merged `main` at `2d1835188` with `git
+  merge`. Only this file conflicted, and the worker took `main`'s version. The tip is `823efd3eb` (parents
+  `e183237e5` and `2d1835188`).
+  - Its tree equals `main`'s tree, so #321 then carried no content diff against `main`.
+  - Re-gate: 11 docs-sensitive and hook files 1236/1236, and `session-hook.test.ts` 450/450 alone. Exact-head CI run
+    38306081177 was green on every required check (664 server test files).
+  - The worker's `suite:` line stays `red`, as first reported.
+  - Run 306 advanced to `awaiting-review` on that fingerprint.
+- **2026-10-13 — operator decision: land #321 without a new review, by admin merge.** The PR changed nothing on `main`,
+  and `main`'s copy of wave 2 is byte-identical to the tip review 334 accepted. So the operator chose to skip a review
+  of the empty diff. They ruled a plain merge commit at the exact head, not the `--squash` the wave lifecycle
+  prescribes for a landing without a merge queue: the PR carried no content, so a merge commit adds only wave 2's
+  history. The PR's author is the same account the coordinator's `gh` uses, so no approval could be given. The
+  operator then instructed an admin merge, bypassing the ruleset's one-approval rule.
+  - Correction: the next-wave brief below calls `--admin` forbidden. Clause 15 forbids it only on a native-queue
+    project, and the wave lifecycle prescribes it where a repository's ruleset requires it, as this one does.
+  - Run 306 advanced to `merging`.
+  - `gh pr merge 321 --merge --admin --match-head-commit 823efd3eb…` merged it at 01:48:36Z as `4967dc495` (parents
+    `24c9da9fc` and `823efd3eb`, no content change).
+  - Run 306 closed `final:true`, `done`, `released:true`. Its workspace's reclaim is deferred to the server's sweep,
+    because the programme stays open through run 360.
+
+- **2026-10-13 — wave 3's claims settled by consent, not by waiting.** Four runs held claims that overlapped the
+  wave-3 file map: run 354, run 400, run 399 and run 410. On the operator's word, the coordinator asked each holder's
+  coordinator for region consent on the terms of R56, the region-consent ruling in the child-reclamation contract
+  §12. All four consented, each with fenced regions:
+  - mail 4690, for run 400; mail 4699 extends it to `server/src/coord/db.ts` and `server/test/asks-store.test.ts`;
+  - mail 4699, for run 399: new describe blocks only, in `server/test/fleet-health.test.ts`;
+  - mail 4691, for run 354, with one condition on meaning: Task 2 must not change the hook's `$paid`. Task 2 adds a
+    variable of its own and switches only the turn-marker reader;
+  - mail 4695, for run 410: wave 3 may add only its new `delegation-hooks` check, that check's remedies and its one
+    list entry in `ccd/ccrc-doctor-checks`, and nothing in the box-token check.
+  The brief names every consent and states the key fences. The consent texts, with every fence verbatim, reach the
+  worker in a clip file outside the repository. A 409 naming one of those runs on a consented path is the worker's
+  licence; any other 409 is a clause-11 question.
+  - The first dispatch, at 23:44Z, was refused `cap-daily` (24 of 24 in the rolling window). A one-shot waiter in
+    the coordinator's session re-ran the claim gate and dispatched at the first age-out. Run 360 went to
+    `dispatched` at 2026-10-14 00:25:04Z with all 16 items and the route below. At send, all 25 overlapping
+    claim-path pairs were licensed.
+- **2026-10-14 — path identity W1b (run 433) and wave 3 share files by mutual consent.** Run 433's coordinator
+  asked to edit `ccd/ccd` beside run 360's claim 1281 (mail 4790). The coordinator consented (4791), with fences:
+  - wave 3 owns `_reg_purge`'s GENERATION LAST unlink line (wave 3 appends the join record's unlink to it), the
+    spool directory's creation beside `_child_tmpdir` on the spawn path, and `delegation-events-v1` in `cmd_caps`;
+  - W1b owns the argument loops, the post-loop id checks, the id predicates, ws-add's id minting, `cmd_start` and
+    `cmd_enable`, the audits' entry lines and the collector. Its inserts go inside the temp-root witness block.
+  Run 433's coordinator consented in return:
+  - in mail 4793, to wave 3's Task 14 in `ccd/ccrc-doctor-checks` and to its spawn-directory pins in the existing
+    `ccd-ws-add*` tests. Task 14's `CCRC_DOCTOR_CHECKS` entry is licensed by 4695, not by 4793;
+  - in mail 4832, to three in-place edits of the `_reg_purge` unlink-count ratchet in
+    `server/test/ccd-workspaces.test.ts` (28 → 29).
+  Both sides regenerate the stamp line. Whichever lands second merges `main`, keeps both sides, re-points by content
+  and restamps `ccd/ccd`.
+- **2026-10-14 — operator ruling: wave 4 owns pruning absent owners' spool directories.** The worker found (mail 4946)
+  that a session's spool directory keeps its last 24–25 hourly buckets after the session is gone.
+  - The hook prunes only its own owner's buckets (spec §5.3, W3-M06), and nothing removes the directory of a purged
+    owner, or of one that never runs again.
+  - So the rollout line "hooks retain only their own 24-hour buckets" holds only for live owners.
+  - The coordinator ruled (mail 4947) that wave 3 adds no deletion: it corrects the wording and records the gap as a
+    deviation from its block.
+  - The operator ruled that wave 4 adds a ccd prune. It removes `$REG/delegation/spool/<id>/` only when the owner's
+    registry row is gone and the directory's newest bucket is more than 24 hours old: the same day of ingestion the
+    spec gives a live owner.
+  - That makes wave 4 a ccd change as well, so its plan sets a deploy class that includes the fleet box.
 
 ## Carried constraints
 
@@ -742,6 +826,10 @@ departures found mid-wave (Tasks 4–6's rig fixes among them). Numbers not used
   worktree-name listing alone is about 3.9 KB, which nearly fills spec §5.3's 4 KiB line. The observe stage's line
   design must measure that case: the listing is the optional field that gets dropped, and the worst case is about
   8.5 ms per call.
+- **Wave 4 owns the absent-owner spool prune** (operator ruling 2026-10-14, decisions above). Until it lands, a
+  removed owner's spool directory keeps its last 24–25 hourly buckets. Wave 4's plan must prune a directory only when
+  its owner's registry row is gone and its newest bucket is more than 24 hours old. Neither the hook nor the server
+  deletes it.
 - **What wave 2 (run 306, reviews 318, 324, 328 and 332) hands to wave 3's plan.** Its evidence is in the
   "Real-lane cross-check" section and the plan's D-numbers named below; a wave 3 plan reads these before it names a
   task:
@@ -841,7 +929,7 @@ change the spec or convert O1–O5 into prior requirements.
 
 ## Next-wave brief
 
-**Review 334 accepted wave 2 at its exact tip; it has not merged.** Reviewer `ccrc-pwa-keen-summit` accepted
+**Review 334 accepted wave 2 at its exact tip; wave 2 merged on 2026-10-13** (the decisions above record how). Reviewer `ccrc-pwa-keen-summit` accepted
 `e183237e59f481ac85730bc06ca5cef29dea1d15` in immutable report
 `.superpowers/sdd/delegation-broker-programme/review-334-e183237e.md`: 36 panel agents, 0 errors, 0 empty, 0 skipped,
 2 confirmed minor findings, 9 refuted and 0 unexamined. Review 332 F1 and F3 are closed. F1 is only an immutable
@@ -885,16 +973,23 @@ exact-head CI run 37688188835 success; the full-suite red remains explicitly unw
   `test (agent)`, `test (pwa)`, `test (server)`). The first exact-head `gh pr merge` attempt changed nothing because
   this installed gh requires an explicit method outside interactive mode. A fresh rules read then found no
   `merge_queue` rule on `main`, and GitHub reported `REVIEW_REQUIRED`, so no guessed method and no forbidden
-  `--admin` or `--squash` bypass followed. Run 306 remains at `merging` until the approval gate is satisfied.
-- Once #321 lands at that exact head, verify the accepted tip in `main`, close run 306 `final:true`, land this approved
-  plan and programme ledger through their own PR, then dispatch run 360's fresh worker from merged `main`. The worker
-  must never depend on this unmerged coordinator worktree for its plan.
+  `--admin` or `--squash` bypass followed. Run 306 stayed at `merging` until fix round 5 and the operator's
+  2026-10-13 admin-merge instruction, recorded in the decisions above.
+- Done on 2026-10-13: #321 landed as `4967dc495` and run 306 closed `final:true`. This plan and the programme ledger
+  had already reached `main` in #340 (`081636389`), and the plan is unchanged there since. Run 360's fresh worker
+  dispatches from merged `main` and must never depend on a coordinator worktree for its plan.
+- Done on 2026-10-14: run 360 dispatched (decisions above).
 
-### Run 360 dispatch package — prepared, not dispatched
+### Run 360 dispatch package — dispatched 2026-10-14
 
-This package is the durable handoff for the fresh wave-3 worker. It records preparation only: run 360 remains
-`planned`, with no worker and no items. Dispatch is forbidden until #321 has merged at its accepted head, run 306 has
-closed `final:true`, the plan/ledger PR has merged, and the claim preflight below has been remeasured and settled.
+This package is the durable handoff for the fresh wave-3 worker. It was written as preparation only, while run 360
+was `planned`, with no worker and no items. Dispatch was forbidden until #321 merged, run 306 closed `final:true`, the
+plan/ledger PR merged, and the claim preflight below was remeasured and settled. The first three were met by
+2026-10-13: #321 merged as `4967dc495`, run 306 closed `done`, and the plan is on `main` at `081636389`, which is
+the `[PLAN_COMMIT]` the brief names. Dispatch then waited for the claim preflight and a free concurrency slot.
+
+**Dispatched 2026-10-14 at 00:25:04Z** with this brief, the route and all 16 items, once every overlapping claim's
+holder had consented (decisions above). The claim snapshots below are history.
 
 - **Plan and base.** Execute all 16 tasks in
   `docs/superpowers/plans/2026-10-08-delegation-broker-wave3-observe.md` from the merged `main` commit that contains
@@ -937,6 +1032,24 @@ closed `final:true`, the plan/ledger PR has merged, and the claim preflight belo
   and release, rollout is fleet/agent first, then server, then skills/doctor verification across rostered homes;
   validate journal/checkpoint recovery and coordination snapshots before the seven-day observation clock starts. No
   hand rollout, stable promotion, marker mutation, cleanup, or PWA behavior belongs to the worker.
+
+**Claim snapshot, re-measured 2026-10-13 01:57 UTC against every task's Files block (full paths and bare file
+names).** Superseded: by dispatch, claim 1204 had ended and every remaining overlap was consented (decisions above).
+Ten claims were live. Three overlapped wave 3, and none had been consented for run 360 at that time:
+
+- Claim 1204, run 398 (`ccrc-pwa-calm-delta`), holds `ccd/ccrc-doctor-checks`, `server/test/ccrc-doctor.test.ts`
+  and `README.md`, overlapping Tasks 14 and 16.
+- Claim 1211, run 354 (`ccrc-pwa-brisk-meadow`), holds `deploy/deploy.sh`, `CLAUDE.md`,
+  `server/test/session-hook.test.ts` and `server/test/ccrc-api-closed.test.ts`, overlapping Tasks 1, 2, 5, 8 and 15.
+- Claim 1213, run 354, holds `ccd/ccrc`, `agent/test/deploy-verify.test.ts` and
+  `server/test/install-session-hooks.test.ts`, overlapping Tasks 5 and 8.
+- Claims 1205, 1208, 1209, 1210, 1212, 1214 and 1215 have no path in the wave-3 file map.
+- Claim 1197 (run 358) was live at 01:51 UTC, on `ccd/ccd`, `server/src/coord/schema.ts`,
+  `server/src/coord/store.ts`, `server/src/watch.ts` and `server/test/coord-db.test.ts` (Tasks 5, 7, 10 and 13). It
+  ended before 01:57. Run 358's PR #351 still adds the next `coord.db` migration slot, so Task 7 must re-count
+  `MIGRATIONS.length` on `origin/main` before implementation, before the PR and before merge.
+
+The 2026-10-09 snapshot below is kept as history. It is superseded.
 
 **Claim snapshot, measured 2026-10-09 immediately before this package was written.** It is evidence of current
 contention, not consent and not authorization for a later dispatch. The coordinator must re-read all active claims

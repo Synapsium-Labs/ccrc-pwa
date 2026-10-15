@@ -1,7 +1,7 @@
 /* `@layer components` — NOT unlayered; see typed-label.css for the full
    argument and ../styles/theme.css for the layer declaration. */
 @layer components {
-  /* Attachment tray — the chips ARE the confirmation that an image is attached,
+  /* Attachment tray — the chips ARE the confirmation that a file is attached,
      which is why the old "Image attached…" toast is gone. */
   .attach-tray {
     display: flex;
@@ -47,6 +47,23 @@
     animation: attach-spin var(--caret-period) linear infinite;
     z-index: 1;
   }
+  /* A document has no thumbnail, so its extension takes the picture's place.
+     Self-grounded (--ink-on-well on --bg-well) rather than left to inherit:
+     .attach-chip paints the same well but declares no colour of its own, so a
+     descendant could not be grounded against it and would ship unmeasured. */
+  .attach-doc {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 100%;
+    height: 100%;
+    padding: 0 var(--sp-1);
+    overflow: hidden;
+    color: var(--ink-on-well);
+    background: var(--bg-well);
+    font: var(--weight-medium) var(--fs-sm) / 1 var(--family-mono);
+    letter-spacing: var(--ls-caps-sm);
+  }
   .attach-strip {
     position: absolute;
     inset: auto 0 0 0;
@@ -56,6 +73,13 @@
     font: var(--weight-regular) var(--fs-2xs) / 1.2 var(--family-mono);
     font-variant-numeric: tabular-nums;
     text-align: center;
+    /* A document's strip carries its FILENAME, which has no length bound — clip
+       it to the chip rather than let it wrap the strip up over the badge. The
+       full name is on the chip's `title`. Harmless for the two short strings
+       that were here before ("uploading…", "2788×442"). */
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
   /* On a failed chip, retry replaces the strip (shares its look via the
      .attach-strip class on the same element) instead of wrapping the whole

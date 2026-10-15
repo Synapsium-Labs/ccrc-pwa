@@ -3,9 +3,9 @@
 // `boxToken` field of `GET /api/updates`, through ONE reader (`readBoxTokenView`),
 // and renders the server's own words: it decides nothing about the rotation.
 //
-// The idiom is settings-screen.test.tsx's: the full afterEach (cleanup,
-// restoreAllMocks, the route back to '/', the fleet store reset), `api` spied,
-// never a live fetch.
+// The idiom is settings-screen.test.tsx's: the full afterEach (cleanup, restoreAllMocks, the route back
+// to '/', the fleet store reset) and `api` spied. One live fetch is left: the screen's unarmed-exposure
+// banner reads GET /api/auth/status through `readAuthStatus`, a global `fetch` this file does not stub.
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import type { NodeWire, UpdatesView } from '../../shared/api';
@@ -49,9 +49,15 @@ const view = (boxToken: unknown, over: Partial<UpdatesView> = {}): UpdatesView =
   ...(boxToken === undefined ? {} : { boxToken: boxToken as BoxTokenView }),
   ...over,
 });
+/** The screen also mounts the Stall watch section, whose hook reads `api.stallWatch()`: settle it as a server without
+ *  the route (501 not-configured), so no mount here issues a live fetch. */
+const spyStallWatch = (): void => {
+  vi.spyOn(api, 'stallWatch').mockRejectedValue(new ApiError(501, { error: 'not-configured' }));
+};
 /** Mount the screen over one answer; resolves with the card's region once it has rendered. */
 const mount = async (v: UpdatesView): Promise<HTMLElement> => {
   vi.spyOn(api, 'updates').mockResolvedValue(v);
+  spyStallWatch();
   render(<><ToastHost /><SettingsScreen /></>);
   return screen.findByRole('region', { name: 'Box token' });
 };
@@ -82,6 +88,12 @@ describe('readBoxTokenView — the ONE reader of UpdatesView.boxToken', () => {
     ['a role this build does not know', { ...BT(), role: 'edge' }],
     ['a stall with a reason this build does not know', { ...BT(), stalled: { why: 'weekly', since: 5 } }],
     ['a file finding this build does not know', { ...BT(), fileProblem: { at: 5, file: 'current', word: 'stolen' } }],
+    // R-g: a word the server sends is looked up in a keyed table; a name every object inherits is not a word.
+    ['an inherited key as the fleet word', { ...BT(), fleetConfirmed: 'toString' }],
+    ['__proto__ as the fleet word', { ...BT(), fleetConfirmed: '__proto__' }],
+    ['an inherited key as a recovery source', { ...BT(), lastBootRecovery: { at: 5, source: 'constructor' } }],
+    ['an inherited key as a stall reason', { ...BT(), stalled: { why: 'toString', since: 5 } }],
+    ['an inherited key as a file slot', { ...BT(), fileProblem: { at: 5, file: 'hasOwnProperty', word: 'changed' } }],
   ])('%s reads as null — "not reported", never a made-up idle', (_w, raw) => {
     expect(readBoxTokenView(raw)).toBeNull();
   });
@@ -216,6 +228,15 @@ describe('the card words (spec 4.7)', () => {
     expect(within(bad).queryByRole('button', { name: 'Rotate now' })).toBeNull();
   });
 
+  // R-g: the literal is asserted because the screen's own constant is module-local. A `toString` fleet word must read
+  // as "not reported", and must never reach the page as the inherited function's source text.
+  it('a fleet word that is an inherited key reads as not reported, and never prints a function', async () => {
+    const card = await mount(view({ ...BT(), fleetConfirmed: 'toString' }));
+    expect(within(card).getByText('Box-token state: not reported (the server\'s answer could not be read).')).toBeInTheDocument();
+    expect(within(card).queryByRole('button', { name: 'Rotate now' })).toBeNull();
+    expect(card.textContent ?? '').not.toContain('function toString');
+  });
+
   it('survives asUpdatesView\'s rebuild: a dropped malformed node does not drop the box-token field', () => {
     vi.spyOn(console, 'warn').mockImplementation(() => {});
     const bt = BT();   // built once: BT() reads Date.now(), so a second call can differ by a millisecond
@@ -234,6 +255,7 @@ describe('Rotate now', () => {
     const updates = vi.spyOn(api, 'updates').mockResolvedValue(view(BT()));
     const rotate = vi.spyOn(api, 'rotateBoxToken')
       .mockResolvedValue({ ok: true, outcome: 'started', view: BT({ phase: 'staged' }) } satisfies RotateAnswer);
+    spyStallWatch();
     render(<><ToastHost /><SettingsScreen /></>);
     const card = await screen.findByRole('region', { name: 'Box token' });
     fireEvent.click(within(card).getByRole('button', { name: 'Rotate now' }));

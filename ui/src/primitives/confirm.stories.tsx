@@ -58,3 +58,16 @@ export const MoveAccount: Story = {
     />
   ),
 };
+
+/** Several lines: a list renders one paragraph per line, in order — the stall
+ *  watch's sheet says each thing a save turns on or off on its own line. */
+export const SeveralLines: Story = {
+  render: () => (
+    <Demo
+      title="Save the stall watch?"
+      consequence={['Checks turn on.', 'Busy delivery stops.']}
+      confirmLabel="Save"
+      onConfirm={() => {}}
+    />
+  ),
+};

@@ -3,7 +3,7 @@
 // (spec §5.2; Plan 2b-2 Task 3: D-3480, D-3481, D-3487,
 // D-3484).
 //
-// FOUR LAYERS, because no CI box has litellm and none may reach an index:
+// FIVE LAYERS, because no CI box has litellm and none may reach an index:
 //  (a) THE BUILDER'S DECISIONS — the real script, over a scripted fake runtime
 //      python planted by a fake `python3 -m venv`. pip, the probe's verdict and
 //      the version re-measure are scripted; every `-I -c` call (hash, stamp,
@@ -21,6 +21,11 @@
 //  (d) DERIVATION PINS — the probe's SHIM_OUT literal is what the SHIPPED shim
 //      makes of its RAW literal, and its DEPLOYMENT literal is what
 //      `shared/litellm.mjs` renders; stdlib python3 only.
+//  (e) THE PATCH'S MECHANICS — `patch-source` in a REAL `python3 -m venv`
+//      (its `.pth` is honoured under `-I`, and importing it imports no
+//      litellm), and its hook against an inline fake of the bridge's module
+//      written into a mkTmp tree, never into PYSTUB_DIR; stdlib python3 only.
+//      Whether it fixes the REAL bridge is layer (c)'s question.
 //
 // CONTAINMENT: every HOME is `mkTmp`; `ghContainedEnv` poisons `gh`; the fake
 // `python3` answers ONLY `-m venv <path>` (the install suite's positional
@@ -30,7 +35,7 @@ import { describe, it, expect } from 'vitest';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import {
-  cpSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, readlinkSync,
+  chmodSync, cpSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, readlinkSync,
   realpathSync, rmSync, symlinkSync, writeFileSync,
 } from 'node:fs';
 import path from 'node:path';
@@ -64,7 +69,19 @@ function probeSource(script = RUNTIME): Buffer {
   if (r.status !== 0) throw new Error(`probe-source exited ${String(r.status)}: ${r.stderr.toString()}`);
   return r.stdout;
 }
+/** `patch-source`'s stdout, as BYTES — ccrc's LiteLLM stream patch, the module a
+ *  build writes into each generation's site-packages (spec §22.2, D-4859). */
+function patchSource(script = RUNTIME): Buffer {
+  const r = spawnSync(BASH, [script, 'patch-source'], { env: { PATH: process.env.PATH ?? '/usr/bin:/bin' } });
+  if (r.status !== 0) throw new Error(`patch-source exited ${String(r.status)}: ${r.stderr.toString()}`);
+  return r.stdout;
+}
 const sha256 = (b: Buffer): string => createHash('sha256').update(b).digest('hex');
+/** What a stamp's probeSha256 hashes: the probe's bytes, then the patch's — the
+ *  bytes that ran (spec §22.2, D-4859). */
+const probeSha = (script = RUNTIME): string => sha256(Buffer.concat([probeSource(script), patchSource(script)]));
+/** The one line of the generation's `.pth`. */
+const PTH_LINE = 'import ccrc_litellm_patch\n';
 
 /** A copy of the shipped script with exactly ONE substitution. Refuses a
  *  substitution that does not apply exactly once — a mutation that silently
@@ -82,13 +99,22 @@ function variant(home: string, name: string, from: string, to: string, src = rea
  *  argv the install suite's own stub matches positionally. It copies the
  *  runtime-python template into the new venv, or, with a `venv-rc` knob,
  *  makes the directory and THEN fails, so a test can prove the builder
- *  deletes a half-made venv. */
+ *  deletes a half-made venv. Like a real venv it makes
+ *  `lib/python3.12/site-packages`, where the `patch` stage writes; the
+ *  `venv-site` knob omits it (`none`), makes a second one (`two`), or puts a
+ *  DIRECTORY where the patch module (`pyblocked`) or its `.pth` (`pthblocked`)
+ *  must go, so that write fails whoever runs the suite, root included. */
 const FAKE_PYTHON3 = [
   '#!/bin/sh',
   'printf \'%s\\n\' "$*" >> "$HOME/python3-argv"',
   'if [ "$#" -eq 3 ] && [ "$1" = -m ] && [ "$2" = venv ]; then',
   '  mkdir -p "$3/bin" || exit 1',
   '  if [ -f "$HOME/fixture-runtime/venv-rc" ]; then exit "$(cat "$HOME/fixture-runtime/venv-rc")"; fi',
+  '  site="$(cat "$HOME/fixture-runtime/venv-site" 2>/dev/null)"',
+  '  if [ "$site" != none ]; then mkdir -p "$3/lib/python3.12/site-packages" || exit 1; fi',
+  '  if [ "$site" = two ]; then mkdir -p "$3/lib/python3.11/site-packages" || exit 1; fi',
+  '  if [ "$site" = pyblocked ]; then mkdir -p "$3/lib/python3.12/site-packages/ccrc_litellm_patch.py" || exit 1; fi',
+  '  if [ "$site" = pthblocked ]; then mkdir -p "$3/lib/python3.12/site-packages/ccrc_litellm_patch.pth" || exit 1; fi',
   // `venv-nopy`: a venv command that answers 0 and leaves no interpreter.
   '  if [ -f "$HOME/fixture-runtime/venv-nopy" ]; then exit 0; fi',
   '  cp "$HOME/fixture-runtime/python" "$3/bin/python" && chmod 755 "$3/bin/python" || exit 1',
@@ -161,6 +187,14 @@ const FAKE_RUNTIME_PYTHON = [
   // The probe: argv EXACTLY `-I -`, its bytes on stdin — kept for the test.
   'if [ "$#" -eq 2 ] && [ "$1" = -I ] && [ "$2" = - ]; then',
   '  cat > "$F/probe-stdin"',
+  // What the generation's site-packages held WHEN THE PROBE RAN: the patch must
+  // already be there, or the probe tested a runtime no tier will run.
+  // `probe-rm-patch` then deletes the module, so the stamp's hash has to notice.
+  '  site="$(dirname "$0")/../lib/python3.12/site-packages"',
+  '  ls -A "$site" > "$F/probe-site" 2>/dev/null',
+  '  cat "$site/ccrc_litellm_patch.pth" > "$F/probe-pth" 2>/dev/null',
+  '  cat "$site/ccrc_litellm_patch.py" > "$F/probe-patch" 2>/dev/null',
+  '  if [ -f "$F/probe-rm-patch" ]; then rm -f "$site/ccrc_litellm_patch.py"; fi',
   '  printf \'python-vars=%s\\n\' "$(env | cut -d= -f1 | grep \'^PYTHON\' | LC_ALL=C sort | tr \'\\n\' \' \')" > "$F/probe-context"',
   '  v="$(cat "$F/verdict" 2>/dev/null)"',
   '  ver="$(cat "$F/version" 2>/dev/null)"',
@@ -209,6 +243,11 @@ interface Knobs {
   pipHang?: 'install' | 'upgrade';
   sha?: string;
   venvNoPy?: boolean;
+  /** `none`: the venv has no site-packages; `two`: it has two; `pyblocked` /
+   *  `pthblocked`: a directory stands where the patch module / its `.pth` goes. */
+  venvSite?: 'none' | 'two' | 'pyblocked' | 'pthblocked';
+  /** The probe deletes the installed patch module after it runs. */
+  probeRmPatch?: boolean;
 }
 
 function box(prefix: string, knobs: Knobs = {}, template = FAKE_RUNTIME_PYTHON): string {
@@ -240,6 +279,8 @@ function setKnobs(home: string, k: Knobs): void {
   put('pip-hang', k.pipHang);
   put('sha', k.sha);
   if (k.venvNoPy) put('venv-nopy', 1);
+  put('venv-site', k.venvSite);
+  if (k.probeRmPatch) put('probe-rm-patch', 1);
 }
 
 interface Run { code: number; stdout: string; stderr: string }
@@ -321,10 +362,10 @@ it('ships ccd/ccgpt-runtime, executable, and says so before anything below runs 
 describe.skipIf(!PY)('ccgpt-runtime: the builder\'s decisions, over a scripted runtime python', () => {
   it('refuses a verb or flag it does not know at exit 1, and writes nothing', () => {
     const home = box('ccgpt-rt-usage-');
-    for (const args of [[], ['bogus'], ['build', '--bogus'], ['build', '--force', 'x'], ['check', 'x']]) {
+    for (const args of [[], ['bogus'], ['build', '--bogus'], ['build', '--force', 'x'], ['check', 'x'], ['patch-source', 'x']]) {
       const r = run(home, args);
       expect(r.code, args.join(' ')).toBe(1);
-      expect(r.stderr, args.join(' ')).toMatch(/^usage: ccgpt-runtime build \[--force\] \| check \| python \| probe-source$/m);
+      expect(r.stderr, args.join(' ')).toMatch(/^usage: ccgpt-runtime build \[--force\] \| check \| python \| probe-source \| patch-source$/m);
     }
     expect(existsSync(path.join(home, '.ccrc'))).toBe(false);
   });
@@ -391,7 +432,7 @@ describe.skipIf(!PY)('ccgpt-runtime: the builder\'s decisions, over a scripted r
     ]);
   });
 
-  it('runs the probe as `-I -` with EXACTLY probe-source\'s bytes, and stamps their hash', () => {
+  it('runs the probe as `-I -` with EXACTLY probe-source\'s bytes, and stamps their hash after the patch\'s', () => {
     const home = box('ccgpt-rt-probe-bytes-');
     const gen = built(run(home, ['build']));
     const src = probeSource();
@@ -401,7 +442,9 @@ describe.skipIf(!PY)('ccgpt-runtime: the builder\'s decisions, over a scripted r
     const text = readFileSync(path.join(rtDir(home), gen, '.ccrc-runtime.json'), 'utf8');
     const stamp = JSON.parse(text) as Record<string, string>;
     expect(Object.keys(stamp).sort()).toEqual(STAMP_KEYS);
-    expect(stamp['probeSha256']).toBe(sha256(src));
+    // The probe's bytes, THEN the patch's: the bytes that ran (spec §22.2, D-4859).
+    expect(stamp['probeSha256']).toBe(sha256(Buffer.concat([src, patchSource()])));
+    expect(stamp['probeSha256']).not.toBe(sha256(src));
     expect(stamp['requirement']).toBe(requirement());
     expect(stamp['litellm']).toBe('1.101.0');
     expect(stamp['canary']).toBe('raw-shape-leaks-system-role=yes');
@@ -537,8 +580,45 @@ describe.skipIf(!PY)('ccgpt-runtime: the builder\'s decisions, over a scripted r
     const g2 = built(r);
     expect(r.stdout).toMatch(new RegExp(`\\(probe-moved; previous: ${g1}\\)\\n$`));
     const stamp = JSON.parse(readFileSync(path.join(rtDir(home), g2, '.ccrc-runtime.json'), 'utf8'));
-    expect(stamp.probeSha256).toBe(sha256(probeSource(moved)));
-    expect(stamp.probeSha256).not.toBe(sha256(probeSource()));
+    expect(stamp.probeSha256).toBe(probeSha(moved));
+    expect(stamp.probeSha256).not.toBe(probeSha());
+  });
+
+  // ── the patch stage: ccrc's LiteLLM stream patch (spec §22.2, D-4859) ──────
+  const sitePackages = (home: string, gen: string): string =>
+    path.join(rtDir(home), gen, 'lib', 'python3.12', 'site-packages');
+
+  it('writes ccrc\'s LiteLLM patch into the generation\'s site-packages BEFORE the probe runs: the module byte for byte, and a one-line .pth', () => {
+    const home = box('ccgpt-rt-patch-');
+    const gen = built(run(home, ['build']));
+    const site = sitePackages(home, gen);
+    expect(readdirSync(site).sort()).toEqual(['ccrc_litellm_patch.pth', 'ccrc_litellm_patch.py']);
+    expect(readFileSync(path.join(site, 'ccrc_litellm_patch.py')).equals(patchSource()),
+      'the installed module is not what patch-source prints').toBe(true);
+    expect(readFileSync(path.join(site, 'ccrc_litellm_patch.pth'), 'utf8')).toBe(PTH_LINE);
+    // ...and both were already in place when the probe ran.
+    expect(lines(home, 'fixture-runtime/probe-site').sort()).toEqual(['ccrc_litellm_patch.pth', 'ccrc_litellm_patch.py']);
+    expect(readFileSync(path.join(home, 'fixture-runtime', 'probe-pth'), 'utf8')).toBe(PTH_LINE);
+    expect(readFileSync(path.join(home, 'fixture-runtime', 'probe-patch')).equals(patchSource()),
+      'the probe ran before the patch was written').toBe(true);
+  });
+
+  it('rebuilds when the patch\'s bytes move — one comment line in it is enough', () => {
+    const home = box('ccgpt-rt-patch-moved-');
+    const g1 = built(run(home, ['build']));
+    const moved = variant(home, 'ccgpt-runtime.patch-moved',
+      '\n_TEXT_DELTA = "response.output_text.delta"\n',
+      '\n# a patch edit, nothing more\n_TEXT_DELTA = "response.output_text.delta"\n');
+    expect(probeSource(moved).equals(probeSource()), 'the edit reached the probe, not only the patch').toBe(true);
+    expect(patchSource(moved).equals(patchSource()), 'the edit never reached the patch').toBe(false);
+    expect(run(home, ['check'], moved)).toEqual({ code: 1, stdout: '', stderr: 'ccgpt-runtime: probe-moved\n' });
+    const r = run(home, ['build'], moved);
+    const g2 = built(r);
+    expect(r.stdout).toMatch(new RegExp(`\\(probe-moved; previous: ${g1}\\)\\n$`));
+    expect(readFileSync(path.join(sitePackages(home, g2), 'ccrc_litellm_patch.py')).equals(patchSource(moved))).toBe(true);
+    const stamp = JSON.parse(readFileSync(path.join(rtDir(home), g2, '.ccrc-runtime.json'), 'utf8'));
+    expect(stamp.probeSha256).toBe(probeSha(moved));
+    expect(run(home, ['check'], moved).code).toBe(0);
   });
 
   it('rebuilds a generation that no longer matches its own stamp (mutated)', () => {
@@ -555,6 +635,49 @@ describe.skipIf(!PY)('ccgpt-runtime: the builder\'s decisions, over a scripted r
     expect(run(home, ['python'])).toEqual({ code: 1, stdout: '', stderr: 'ccgpt-runtime: mutated\n' });
   });
 
+  // `check` re-reads the patch the build installed (spec §22.2, D-4859): a
+  // generation whose patch module or .pth was deleted or edited after the build
+  // runs stock LiteLLM, whatever its stamp says, so it is `mutated` and rebuilt.
+  it.each([
+    ['its patch module deleted', (site: string) => rmSync(path.join(site, 'ccrc_litellm_patch.py'))],
+    ['its patch module edited', (site: string) => writeFileSync(path.join(site, 'ccrc_litellm_patch.py'),
+      Buffer.concat([patchSource(), Buffer.from('# edited\n')]))],
+    // The shipped bytes, then a NUL: a reader that stopped at the NUL would see them equal.
+    ['its patch module carrying a NUL after the shipped bytes', (site: string) => writeFileSync(path.join(site, 'ccrc_litellm_patch.py'),
+      Buffer.concat([patchSource(), Buffer.from([0]), Buffer.from('# more\n')]))],
+    ['its .pth edited', (site: string) => writeFileSync(path.join(site, 'ccrc_litellm_patch.pth'), 'import ccrc_litellm_patch_edited\n')],
+    ['its .pth deleted', (site: string) => rmSync(path.join(site, 'ccrc_litellm_patch.pth'))],
+    // One that globs AFTER its own, so a reader of the first match alone would still find the patch.
+    ['a second site-packages beside its own', (site: string) =>
+      mkdirSync(path.join(site, '..', '..', 'python3.13', 'site-packages'), { recursive: true })],
+  ] as Array<[string, (site: string) => void]>)('check reads mutated for a generation with %s, and a build rebuilds it', (_label, edit) => {
+    const home = box('ccgpt-rt-patch-mutated-');
+    const g1 = built(run(home, ['build']));
+    expect(run(home, ['check']).code).toBe(0);
+    edit(sitePackages(home, g1));
+    expect(run(home, ['check'])).toEqual({ code: 1, stdout: '', stderr: 'ccgpt-runtime: mutated\n' });
+    const r = run(home, ['build']);
+    const g2 = built(r);
+    expect(r.stdout).toMatch(new RegExp(`\\(mutated; previous: ${g1}\\)\\n$`));
+    expect(readFileSync(path.join(sitePackages(home, g2), 'ccrc_litellm_patch.py')).equals(patchSource())).toBe(true);
+    expect(run(home, ['check']).code).toBe(0);
+  });
+
+  // A patch module `check` cannot read holds nothing: `mutated`, and QUIETLY, so the
+  // answer is still the one word doctor matches, never a bash error line before it.
+  // Root reads a mode-000 file anyway, so the case runs only where the mode binds.
+  it.skipIf(process.getuid?.() === 0)('check reads mutated, quietly, for a generation whose patch module it cannot read', () => {
+    const home = box('ccgpt-rt-patch-unreadable-');
+    const g1 = built(run(home, ['build']));
+    const mod = path.join(sitePackages(home, g1), 'ccrc_litellm_patch.py');
+    chmodSync(mod, 0o000);
+    try {
+      expect(run(home, ['check'])).toEqual({ code: 1, stdout: '', stderr: 'ccgpt-runtime: mutated\n' });
+    } finally {
+      chmodSync(mod, 0o644);
+    }
+  });
+
   // Every failure: exit 2, ONE stderr line naming the stage, nothing on stdout,
   // the half-built generation GONE and `current` exactly where it was.
   it.each([
@@ -567,6 +690,13 @@ describe.skipIf(!PY)('ccgpt-runtime: the builder\'s decisions, over a scripted r
     ['probe', { verdict: 'pass-stderr' }, /exit 0 and no 'behaviour_probe: PASS' line on stdout \(stderr: behaviour_probe: PASS .*\)/],
     ['probe', { verdict: 'pass-indented' }, /exit 0 and no 'behaviour_probe: PASS' line on stdout/],
     ['stamp', { version: null }, /the new generation passed its probe but cannot report its litellm version/],
+    ['patch', { venvSite: 'none' }, /the new venv has no site-packages to install the runtime patch into/],
+    ['patch', { venvSite: 'two' }, /the new venv has 2 site-packages directories \(lib\/python3\*\/site-packages\), not one, so the runtime patch has no one place to go/],
+    // A write that fails — the module's or the .pth's — fails the build here, at the stage that broke.
+    ['patch', { venvSite: 'pyblocked' }, /could not write the runtime patch into lib\/python3\.12\/site-packages/],
+    ['patch', { venvSite: 'pthblocked' }, /could not write the runtime patch into lib\/python3\.12\/site-packages/],
+    // The stamp hashes the patch FILE that was installed, so one gone by then cannot be stamped as having run.
+    ['stamp', { probeRmPatch: true }, /could not hash the probe that ran/],
   ] as Array<[string, Knobs, RegExp]>)('fails at %s (%o): deletes the new generation, keeps current', (stage, knobs, detail) => {
     const home = box('ccgpt-rt-fail-');
     const g1 = built(run(home, ['build']));
@@ -1106,10 +1236,35 @@ const NO_EXTRA_BODY_SITECUSTOMIZE = [
   'sys.meta_path.insert(0, _Patch())',
 ].join('\n') + '\n';
 
+/** One exact substitution in the patch source — M6, M8 and M10. */
+function mutatedPatch(from: string, to: string): Buffer {
+  const src = patchSource().toString('utf8');
+  expect(src.split(from).length - 1, `mutation anchor ${JSON.stringify(from)} must occur exactly once`).toBe(1);
+  return Buffer.from(src.replace(from, to), 'utf8');
+}
+/** A PYTHONPATH directory that carries ccrc's LiteLLM patch the way a built
+ *  generation does (spec §22.2, D-4859), whether or not the borrowed
+ *  interpreter's own site-packages carries a `ccrc_litellm_patch.pth` — a
+ *  generation built since D-4859 does. PYTHONPATH precedes site-packages on
+ *  sys.path, so such a `.pth`'s `import ccrc_litellm_patch` resolves to THIS
+ *  copy, and this directory's `sitecustomize.py` imports it for an interpreter
+ *  with no `.pth` (PYTHONPATH also precedes the stdlib's own sitecustomize, the
+ *  reason M2's works). So the copy written here is the only patch that ever
+ *  runs: an EMPTY one (M7) shadows any installed patch. `before` is
+ *  sitecustomize text run AHEAD of the import (M2's mutation), so the patch's
+ *  finder lands first on sys.meta_path and wraps whatever loader follows it. */
+function patchSite(home: string, patch: Buffer = patchSource(), before = ''): string {
+  const site = path.join(home, 'patch-site');
+  mkdirSync(site, { recursive: true });
+  writeFileSync(path.join(site, 'ccrc_litellm_patch.py'), patch);
+  writeFileSync(path.join(site, 'sitecustomize.py'), `${before}import ccrc_litellm_patch\n`);
+  return site;
+}
+
 describe.skipIf(!LITELLM_PY)('the behaviour probe against a real litellm (CCRC_TEST_LITELLM_PY)', () => {
   it('PASSes, offline, and leaves nothing behind (the control)', () => {
     const home = mkTmp('ccgpt-rt-2b-control-');
-    const r = runRealProbe(home, probeSource());
+    const r = runRealProbe(home, probeSource(), patchSite(home));
     expect(r.status, r.stdout + r.stderr).toBe(0);
     expect(r.stdout).toMatch(/^behaviour_probe: PASS litellm=\S+ raw-shape-leaks-system-role=(yes|no|unknown)$/m);
     expect(r.leftInTmp).toEqual([]);
@@ -1118,36 +1273,79 @@ describe.skipIf(!LITELLM_PY)('the behaviour probe against a real litellm (CCRC_T
 
   it('M2: a bridge that stops lifting extra_body FAILS effort-reaches-reasoning', () => {
     const home = mkTmp('ccgpt-rt-2b-m2-');
-    const site = path.join(home, 'mut-noextrabody');
-    mkdirSync(site);
-    writeFileSync(path.join(site, 'sitecustomize.py'), NO_EXTRA_BODY_SITECUSTOMIZE);
-    const r = runRealProbe(home, probeSource(), site);
+    const r = runRealProbe(home, probeSource(), patchSite(home, patchSource(), NO_EXTRA_BODY_SITECUSTOMIZE));
     expect(r.status, r.stdout + r.stderr).toBe(1);
     expect(r.stdout).toMatch(/^behaviour_probe: FAIL effort-reaches-reasoning: /m);
   }, 180_000);
 
-  it('M3: the gate fed the unfolded body FAILS a system-door assertion', () => {
+  it('M3: the gate fed the unrewritten body FAILS a system-door assertion', () => {
     const home = mkTmp('ccgpt-rt-2b-m3-');
     const r = runRealProbe(home, mutatedProbe(
-      'return await _one(SHIM_OUT), await _one(RAW)', 'return await _one(RAW), await _one(RAW)'));
+      'return await _one(SHIM_OUT), await _one(RAW)', 'return await _one(RAW), await _one(RAW)'), patchSite(home));
     expect(r.status, r.stdout + r.stderr).toBe(1);
-    expect(r.stdout).toMatch(/^behaviour_probe: FAIL (no-system-role|top-system-in-leading-turn): /m);
+    expect(r.stdout).toMatch(/^behaviour_probe: FAIL (no-system-role|top-system-in-instructions): /m);
   }, 180_000);
 
   it('M4: a deployment without mode: responses FAILS responses-endpoint, named by its path', () => {
     const home = mkTmp('ccgpt-rt-2b-m4-');
     const r = runRealProbe(home, mutatedProbe(
       'DEPLOYMENT = {"model_name": MODEL, "model_info": {"mode": "responses"},',
-      'DEPLOYMENT = {"model_name": MODEL, "model_info": {},'));
+      'DEPLOYMENT = {"model_name": MODEL, "model_info": {},'), patchSite(home));
     expect(r.status, r.stdout + r.stderr).toBe(1);
     expect(r.stdout).toMatch(/^behaviour_probe: FAIL responses-endpoint: \S*\/chat\/completions$/m);
   }, 180_000);
 
   it('M5: a probe that does not force the cost map local FAILS offline', () => {
     const home = mkTmp('ccgpt-rt-2b-m5-');
-    const r = runRealProbe(home, mutatedProbe(', LITELLM_LOCAL_MODEL_COST_MAP="True")', ')'));
+    const r = runRealProbe(home, mutatedProbe(', LITELLM_LOCAL_MODEL_COST_MAP="True")', ')'), patchSite(home));
     expect(r.status, r.stdout + r.stderr).toBe(1);
     expect(r.stdout).toMatch(/^behaviour_probe: FAIL offline: [1-9]\d* network attempt\(s\)$/m);
+  }, 180_000);
+
+  // The patch's acceptance test (spec §22.2, D-4859): the probe's three streamed
+  // scenarios against the REAL bridge, with the patch mutated or absent.
+  it('M6: a patch whose fallback fires even after the deltas streamed FAILS stream-deltas-not-duplicated', () => {
+    const home = mkTmp('ccgpt-rt-2b-m6-');
+    const r = runRealProbe(home, probeSource(), patchSite(home, mutatedPatch(
+      'if ("call", slot) in state or not isinstance(payload, str) or not payload:',
+      'if not isinstance(payload, str) or not payload:')));
+    expect(r.status, r.stdout + r.stderr).toBe(1);
+    expect(r.stdout).toMatch(/^behaviour_probe: FAIL stream-deltas-not-duplicated: /m);
+  }, 180_000);
+
+  it('M7: no patch at all FAILS stream-tool-args-kept — stock LiteLLM drops a no-delta stream\'s arguments', () => {
+    const home = mkTmp('ccgpt-rt-2b-m7-');
+    // An EMPTY patch module on PYTHONPATH, not no PYTHONPATH: it shadows any patch
+    // the borrowed interpreter's own generation installed (see `patchSite`).
+    const r = runRealProbe(home, probeSource(), patchSite(home, Buffer.alloc(0)));
+    expect(r.status, r.stdout + r.stderr).toBe(1);
+    expect(r.stdout).toMatch(/^behaviour_probe: FAIL stream-tool-args-kept: /m);
+  }, 180_000);
+
+  it('M8: a patch that fills only the first of two parallel calls FAILS stream-tool-args-kept', () => {
+    const home = mkTmp('ccgpt-rt-2b-m8-');
+    // Streamed-ness tracked per RESPONSE, not per call: once one call is filled,
+    // every later call reads as already streamed.
+    const r = runRealProbe(home, probeSource(), patchSite(home, mutatedPatch(
+      '("call", slot) in state', 'any(k[0] == "call" for k in state)')));
+    expect(r.status, r.stdout + r.stderr).toBe(1);
+    expect(r.stdout).toMatch(/^behaviour_probe: FAIL stream-tool-args-kept: /m);
+  }, 180_000);
+
+  it('M10: a patch that forgets a call\'s arguments arrived whole in its added event FAILS stream-added-args-not-duplicated', () => {
+    const home = mkTmp('ccgpt-rt-2b-m10-');
+    const r = runRealProbe(home, probeSource(), patchSite(home, mutatedPatch(
+      'state.add(("call", slot))  # the added event carried them whole', 'pass')));
+    expect(r.status, r.stdout + r.stderr).toBe(1);
+    expect(r.stdout).toMatch(/^behaviour_probe: FAIL stream-added-args-not-duplicated: /m);
+  }, 180_000);
+
+  it('M9: a streamed call the router cannot serve FAILS translate-stream — the harness, not the behaviour', () => {
+    const home = mkTmp('ccgpt-rt-2b-m9-');
+    const r = runRealProbe(home, mutatedProbe(
+      'dict(SHIM_OUT, stream=True)', 'dict(SHIM_OUT, stream=True, model="probe-no-such-model")'), patchSite(home));
+    expect(r.status, r.stdout + r.stderr).toBe(1);
+    expect(r.stdout).toMatch(/^behaviour_probe: FAIL translate-stream: /m);
   }, 180_000);
 });
 
@@ -1195,6 +1393,20 @@ const SHIM_FOLD_PY = [
   'spec.loader.exec_module(mod)',
   'raw = json.loads(sys.stdin.read())',
   'print(mod._rewrite_messages_body(json.dumps(raw).encode()).decode("utf-8"))',
+].join('\n') + '\n';
+
+/** Evaluates ONLY the probe's `_blocks` — the fold its two stream gates
+ *  compare (spec §22.2, D-4859) — over each event list on stdin. */
+const FOLD_PY = [
+  'import ast, json, sys',
+  'tree = ast.parse(open(sys.argv[1], encoding="utf-8").read())',
+  'fns = [n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "_blocks"]',
+  'if len(fns) != 1:',
+  '    print("the probe defines no single top-level _blocks", file=sys.stderr)',
+  '    sys.exit(3)',
+  'scope = {}',
+  'exec(compile(ast.Module(body=fns, type_ignores=[]), "probe-fold", "exec"), scope)',
+  'print(json.dumps([scope["_blocks"](events) for events in json.loads(sys.stdin.read())]))',
 ].join('\n') + '\n';
 
 type Json = Record<string, unknown>;
@@ -1268,8 +1480,285 @@ describe.skipIf(!PY)('the probe\'s literals are derived from what they stand for
     expect(renderedEntries(yaml)).toEqual([DEPLOYMENT]);
   });
 
+  it('the probe\'s stream fold joins each block\'s deltas in start order, and a delta outside its block is the answer', () => {
+    const home = mkTmp('ccgpt-rt-fold-');
+    const probe = path.join(home, 'probe.py');
+    writeFileSync(probe, probeSource());
+    const helper = path.join(home, 'fold.py');
+    writeFileSync(helper, FOLD_PY);
+    const start = (index: number, type: string) => ({ type: 'content_block_start', index, content_block: { type } });
+    const json = (index: number, partial_json: string) =>
+      ({ type: 'content_block_delta', index, delta: { type: 'input_json_delta', partial_json } });
+    const text = (index: number, t: string) => ({ type: 'content_block_delta', index, delta: { type: 'text_delta', text: t } });
+    const stop = (index: number) => ({ type: 'content_block_stop', index });
+    const cases = [
+      [{ type: 'message_start' }, start(0, 'tool_use'), json(0, '{"q"'), json(0, ': 1}'), stop(0),
+        start(1, 'text'), text(1, 'o'), text(1, 'k'), stop(1), { type: 'message_stop' }],
+      [start(0, 'tool_use'), json(0, '{}'), stop(0), json(0, '{}')],   // a delta after its block stopped
+      [start(0, 'text'), text(3, 'x'), stop(0)],                       // a delta for a block never started
+    ];
+    const r = runPy(helper, { home, args: [probe], stdin: JSON.stringify(cases) });
+    expect(r.status, r.stderr).toBe(0);
+    expect(JSON.parse(r.stdout)).toEqual([
+      [['tool_use', '{"q": 1}'], ['text', 'ok']],
+      [['delta-outside-its-block', 0]],
+      [['delta-outside-its-block', 3]],
+    ]);
+  });
+
   it('the probe sets drop_params because the rendered config does', () => {
     expect(readFileSync(TEMPLATE, 'utf8')).toMatch(/^\s+drop_params: true$/m);
     expect(probeSource().toString('utf8')).toMatch(/^\s+litellm\.drop_params = True\b/m);
+  });
+});
+
+// ── layer (e): the patch's mechanics, stdlib python3 only (spec §22.2, D-4859) ──
+
+/** Prints whether ccrc's patch module and any litellm module are loaded. */
+const PTH_CHECK_PY = 'import sys; print("patch=%s litellm=%s" % ("ccrc_litellm_patch" in sys.modules, '
+  + 'any(m == "litellm" or m.startswith("litellm.") for m in sys.modules)))\n';
+
+/** A stand-in for the bridge's module — written into a mkTmp tree, NEVER into
+ *  PYSTUB_DIR, which must never grow behaviour. Its `chunk_parser` only
+ *  records what it is handed, so a case reads exactly what the patch passed on. */
+const FAKE_BRIDGE_PY = [
+  'class OpenAiResponsesToChatCompletionStreamIterator:',
+  '    def __init__(self):',
+  '        self.seen = []',
+  '',
+  '    def chunk_parser(self, chunk):',
+  '        self.seen.append(chunk)',
+  '        return chunk',
+].join('\n') + '\n';
+const BRIDGE_MODULE = ['litellm', 'completion_extras', 'litellm_responses_transformation', 'transformation'];
+
+/** Drives the fake bridge through the patch, which is imported and then RELOADED
+ *  before the bridge loads (a second run of its body must not add a second
+ *  finder): a call that streamed nothing, one that streamed its arguments, one
+ *  whose added event carried them whole, a custom tool call and a message each
+ *  with and without deltas, three no-delta calls interleaved and in order (with
+ *  stderr captured per run), and the patch applied twice more. */
+const HOOK_DRIVER_PY = [
+  'import importlib, io, json, sys',
+  'import ccrc_litellm_patch',
+  'out = {"litellmAtImport": any(m == "litellm" or m.startswith("litellm.") for m in sys.modules)}',
+  'importlib.reload(ccrc_litellm_patch)',
+  'out["findersAfterReload"] = sum(type(f).__name__ == "_Finder" for f in sys.meta_path)',
+  'from litellm.completion_extras.litellm_responses_transformation import transformation as t',
+  'cls = t.OpenAiResponsesToChatCompletionStreamIterator',
+  'out["patched"] = getattr(cls, "_ccrc_done_fallback", False) is True',
+  'ARGS = json.dumps({"q": "one"})',
+  '',
+  'def fc(args):',
+  '    return {"type": "function_call", "id": "fc_0", "call_id": "call_0", "name": "probe_tool", "arguments": args}',
+  '',
+  'def run(chunks):',
+  '    it = cls()',
+  '    for c in chunks:',
+  '        it.chunk_parser(c)',
+  '    return it.seen',
+  '',
+  'def run_err(chunks):',
+  '    buf, old = io.StringIO(), sys.stderr',
+  '    sys.stderr = buf',
+  '    try:',
+  '        seen = run(chunks)',
+  '    finally:',
+  '        sys.stderr = old',
+  '    return {"seen": seen, "stderr": buf.getvalue()}',
+  '',
+  'added = {"type": "response.output_item.added", "output_index": 0, "item": fc("")}',
+  'delta = {"type": "response.function_call_arguments.delta", "item_id": "fc_0", "output_index": 0, "delta": ARGS}',
+  'done = {"type": "response.output_item.done", "output_index": 0, "item": fc(ARGS)}',
+  'out["noDelta"] = run([added, done])',
+  'out["streamed"] = run([added, delta, done])',
+  // The arguments arrived whole in the added event — in its item, or on the chunk itself.
+  'out["addedWhole"] = run([dict(added, item=fc(ARGS)), done])',
+  'out["addedOnChunk"] = run([dict(added, arguments=ARGS), done])',
+  'def ctc(inp):',
+  '    return {"type": "custom_tool_call", "id": "ctc_0", "call_id": "call_c", "name": "probe_custom", "input": inp}',
+  'c_added = {"type": "response.output_item.added", "output_index": 0, "item": ctc("")}',
+  'c_delta = {"type": "response.custom_tool_call_input.delta", "item_id": "ctc_0", "output_index": 0, "delta": "RAW INPUT"}',
+  'c_done = {"type": "response.output_item.done", "output_index": 0, "item": ctc("RAW INPUT")}',
+  'out["customNoDelta"] = run([c_added, c_done])',
+  'out["customStreamed"] = run([c_added, c_delta, c_done])',
+  'def msg(parts):',
+  '    return {"type": "message", "id": "msg_1", "role": "assistant", "content": parts}',
+  'm_added = {"type": "response.output_item.added", "output_index": 0, "item": msg([])}',
+  'm_done = {"type": "response.output_item.done", "output_index": 0, "item": msg(['
+    + '{"type": "output_text", "text": "o"}, {"type": "refusal", "refusal": "no"}, {"type": "output_text", "text": "k"}])}',
+  'm_o = {"type": "response.output_text.delta", "item_id": "msg_1", "output_index": 0, "content_index": 0, "delta": "o"}',
+  'm_k = {"type": "response.output_text.delta", "item_id": "msg_1", "output_index": 0, "content_index": 0, "delta": "k"}',
+  'out["messageNoDelta"] = run([m_added, m_done])',
+  'out["messageStreamed"] = run([m_added, m_o, m_k, m_done])',
+  'def fcn(n, args):',
+  '    return {"type": "function_call", "id": "fc_%d" % n, "call_id": "call_%d" % n, "name": "probe_tool", "arguments": args}',
+  'adds = [{"type": "response.output_item.added", "output_index": n, "item": fcn(n, "")} for n in range(3)]',
+  'dones = [{"type": "response.output_item.done", "output_index": n, "item": fcn(n, ARGS)} for n in range(3)]',
+  'out["interleaved"] = run_err(adds + dones)',
+  'out["interleavedAgain"] = run_err(adds + dones)',
+  'out["inOrder"] = run_err([c for n in range(3) for c in (adds[n], dones[n])])',
+  'first = cls.chunk_parser',
+  'ccrc_litellm_patch._apply(t)',
+  'ccrc_litellm_patch._apply(t)',
+  'out["sameParser"] = cls.chunk_parser is first',
+  'out["wrapsOriginal"] = hasattr(cls.chunk_parser, "__wrapped__") and not hasattr(cls.chunk_parser.__wrapped__, "__wrapped__")',
+  'out["noDeltaAgain"] = run([added, done])',
+  'out["finders"] = sum(type(f).__name__ == "_Finder" for f in sys.meta_path)',
+  'print(json.dumps(out))',
+].join('\n') + '\n';
+
+/** The other import order: the bridge's module is ALREADY loaded when the patch
+ *  is imported, so only the patch's sweep of `sys.modules` can reach it. */
+const HOOK_PRELOADED_PY = [
+  'import json, sys',
+  'from litellm.completion_extras.litellm_responses_transformation import transformation as t',
+  'cls = t.OpenAiResponsesToChatCompletionStreamIterator',
+  'out = {"patchedBefore": getattr(cls, "_ccrc_done_fallback", False) is True}',
+  'import ccrc_litellm_patch',
+  'out["patched"] = getattr(cls, "_ccrc_done_fallback", False) is True',
+  'ARGS = json.dumps({"q": "one"})',
+  'fc = lambda args: {"type": "function_call", "id": "fc_0", "call_id": "call_0", "name": "probe_tool", "arguments": args}',
+  'it = cls()',
+  'it.chunk_parser({"type": "response.output_item.added", "output_index": 0, "item": fc("")})',
+  'it.chunk_parser({"type": "response.output_item.done", "output_index": 0, "item": fc(ARGS)})',
+  'out["noDelta"] = it.seen',
+  'print(json.dumps(out))',
+].join('\n') + '\n';
+
+/** Writes the fake bridge's package tree and the shipped patch into a mkTmp
+ *  home, runs `driver` with both on PYTHONPATH, and parses its one JSON line. */
+function driveHook(prefix: string, driver: string): Record<string, unknown> {
+  const home = mkTmp(prefix);
+  const fake = path.join(home, 'fake-bridge');
+  let dir = fake;
+  for (const pkg of BRIDGE_MODULE.slice(0, -1)) {
+    dir = path.join(dir, pkg);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(path.join(dir, '__init__.py'), '');
+  }
+  writeFileSync(path.join(dir, `${BRIDGE_MODULE.at(-1)!}.py`), FAKE_BRIDGE_PY);
+  const patchDir = path.join(home, 'patch');
+  mkdirSync(patchDir);
+  writeFileSync(path.join(patchDir, 'ccrc_litellm_patch.py'), patchSource());
+  const file = path.join(home, 'driver.py');
+  writeFileSync(file, driver);
+  const r = runPy(file, { home, env: { PYTHONPATH: `${patchDir}${path.delimiter}${fake}` } });
+  expect(r.status, r.stderr).toBe(0);
+  expect(r.stderr).toBe('');
+  return JSON.parse(r.stdout) as Record<string, unknown>;
+}
+const HOOK_ARGS = JSON.stringify({ q: 'one' }).replace(':', ': ');
+const hookFc = (args: string, n = 0) =>
+  ({ type: 'function_call', id: `fc_${n}`, call_id: `call_${n}`, name: 'probe_tool', arguments: args });
+const hookAdded = (item: object, n = 0) => ({ type: 'response.output_item.added', output_index: n, item });
+const hookDone = (item: object, n = 0) => ({ type: 'response.output_item.done', output_index: n, item });
+const hookArgsDelta = (n = 0) =>
+  ({ type: 'response.function_call_arguments.delta', item_id: `fc_${n}`, output_index: n, delta: HOOK_ARGS });
+
+describe.skipIf(!PY)('ccrc_litellm_patch: loaded by its .pth under -I, lazily, and patching the bridge once', () => {
+  it('a real venv loads it from its .pth under -I -c, -I - and -I -m, never under -I -S, and importing it imports no litellm', (ctx) => {
+    const home = mkTmp('ccgpt-rt-pth-');
+    const venv = path.join(home, 'venv');
+    const env = { PATH: process.env.PATH ?? '/usr/bin:/bin', HOME: home };
+    // Skipped only where this python3 has no venv module at all: `--without-pip`
+    // never reaches ensurepip, so any other failure to make one is a red. A probe
+    // that timed out or was killed (status null) is a red too, never a skip.
+    const hasVenv = spawnSync(PY!, ['-c', 'import venv'], { cwd: home, env, encoding: 'utf8', timeout: 60_000 });
+    if (hasVenv.status === 1 && /No module named/.test(String(hasVenv.stderr))) { ctx.skip(); return; }
+    expect(hasVenv.status, String(hasVenv.stderr)).toBe(0);
+    const mk = spawnSync(PY!, ['-m', 'venv', '--without-pip', venv], { cwd: home, env, encoding: 'utf8', timeout: 60_000 });
+    expect(mk.status, String(mk.stderr)).toBe(0);
+    const lib = path.join(venv, 'lib');
+    const sites = readdirSync(lib).filter((n) => n.startsWith('python3'))
+      .map((n) => path.join(lib, n, 'site-packages')).filter((d) => existsSync(d));
+    expect(sites, 'the venv has not exactly one lib/python3*/site-packages').toHaveLength(1);
+    const site = sites[0]!;
+    writeFileSync(path.join(site, 'ccrc_litellm_patch.py'), patchSource());
+    writeFileSync(path.join(site, 'ccrc_litellm_patch.pth'), PTH_LINE);
+    writeFileSync(path.join(site, 'ccrc_pth_check.py'), PTH_CHECK_PY);
+    // An importable litellm, so a patch that imported it at startup would show.
+    mkdirSync(path.join(site, 'litellm'));
+    writeFileSync(path.join(site, 'litellm', '__init__.py'), '');
+    const py = path.join(venv, 'bin', 'python');
+    const go = (args: string[], input?: string) =>
+      spawnSync(py, args, { cwd: home, env, input, encoding: 'utf8', timeout: 60_000 });
+    const shapes: Array<[string, string[], string | undefined]> = [
+      ['-I -c', ['-I', '-c', PTH_CHECK_PY], undefined],
+      ['-I -', ['-I', '-'], PTH_CHECK_PY],
+      ['-I -m', ['-I', '-m', 'ccrc_pth_check'], undefined],
+    ];
+    for (const [label, args, input] of shapes) {
+      const r = go(args, input);
+      expect(r.status, `${label}: ${r.stderr}`).toBe(0);
+      expect(r.stdout, label).toBe('patch=True litellm=False\n');
+      expect(r.stderr, label).toBe('');
+    }
+    // The negative control: `-S` skips site.py, so no .pth runs.
+    const s = go(['-I', '-S', '-c', PTH_CHECK_PY]);
+    expect(s.status, s.stderr).toBe(0);
+    expect(s.stdout).toBe('patch=False litellm=False\n');
+  });
+
+  it('hands a no-delta call\'s finished arguments to the bridge as one delta, leaves a streamed call alone, and applies once', () => {
+    const out = driveHook('ccgpt-rt-hook-', HOOK_DRIVER_PY);
+    const added = hookAdded(hookFc(''));
+    const delta = hookArgsDelta();
+    const done = hookDone(hookFc(HOOK_ARGS));
+    expect(out['litellmAtImport'], 'importing the patch imported litellm').toBe(false);
+    // A second run of the module body (a reload) recognises the first run's finder.
+    expect(out['findersAfterReload'], 'a reload of the patch added a second finder').toBe(1);
+    expect(out['patched'], 'the bridge\'s class was not patched when its module loaded').toBe(true);
+    // The finished item, handed on as the one delta a streamed call would have sent.
+    expect(out['noDelta']).toEqual([added, delta]);
+    // A call whose arguments streamed: its done event passes through untouched.
+    expect(out['streamed']).toEqual([added, delta, done]);
+    expect(out['sameParser'], 'applying the patch again replaced chunk_parser').toBe(true);
+    expect(out['wrapsOriginal'], 'chunk_parser wraps a wrapper').toBe(true);
+    expect(out['noDeltaAgain']).toEqual([added, delta]);
+    expect(out['finders']).toBe(1);
+  });
+
+  it('leaves a call whose arguments arrived whole in its added event alone — in its item or on the chunk — so nothing is sent twice', () => {
+    const out = driveHook('ccgpt-rt-hook-added-', HOOK_DRIVER_PY);
+    const done = hookDone(hookFc(HOOK_ARGS));
+    expect(out['addedWhole']).toEqual([hookAdded(hookFc(HOOK_ARGS)), done]);
+    expect(out['addedOnChunk']).toEqual([{ ...hookAdded(hookFc('')), arguments: HOOK_ARGS }, done]);
+  });
+
+  it('hands a no-delta custom tool call its input, and a no-delta message its joined output_text, as one delta each, and leaves streamed ones alone', () => {
+    const out = driveHook('ccgpt-rt-hook-arms-', HOOK_DRIVER_PY);
+    const ctc = (input: string) => ({ type: 'custom_tool_call', id: 'ctc_0', call_id: 'call_c', name: 'probe_custom', input });
+    const cDelta = { type: 'response.custom_tool_call_input.delta', item_id: 'ctc_0', output_index: 0, delta: 'RAW INPUT' };
+    expect(out['customNoDelta']).toEqual([hookAdded(ctc('')), cDelta]);
+    expect(out['customStreamed']).toEqual([hookAdded(ctc('')), cDelta, hookDone(ctc('RAW INPUT'))]);
+    const msg = (content: object[]) => ({ type: 'message', id: 'msg_1', role: 'assistant', content });
+    const mDone = hookDone(msg([{ type: 'output_text', text: 'o' }, { type: 'refusal', refusal: 'no' }, { type: 'output_text', text: 'k' }]));
+    const text = (delta: string) => ({ type: 'response.output_text.delta', item_id: 'msg_1', output_index: 0, content_index: 0, delta });
+    // The item's output_text parts joined in order; a part of any other type adds nothing.
+    expect(out['messageNoDelta']).toEqual([hookAdded(msg([])), text('ok')]);
+    expect(out['messageStreamed']).toEqual([hookAdded(msg([])), text('o'), text('k'), mDone]);
+  });
+
+  it('says once on stderr when a no-delta call finishes after a later item was added, and hands its arguments on unchanged; an in-order stream says nothing', () => {
+    const out = driveHook('ccgpt-rt-hook-interleaved-', HOOK_DRIVER_PY);
+    const adds = [0, 1, 2].map((n) => hookAdded(hookFc('', n), n));
+    const deltas = [0, 1, 2].map((n) => hookArgsDelta(n));
+    const interleaved = out['interleaved'] as { seen: unknown[]; stderr: string };
+    const inOrder = out['inOrder'] as { seen: unknown[]; stderr: string };
+    // The synthesized deltas are exactly what an in-order stream gets: only stderr differs.
+    expect(interleaved.seen).toEqual([...adds, ...deltas]);
+    expect(interleaved.stderr).toMatch(/^ccrc_litellm_patch: interleaved no-delta items[^\n]*\n$/);
+    // Once per STREAM, not once per process: a second broken stream, on a new iterator, says so again.
+    expect((out['interleavedAgain'] as { stderr: string }).stderr).toMatch(/^ccrc_litellm_patch: interleaved no-delta items[^\n]*\n$/);
+    expect(inOrder.seen).toEqual([adds[0], deltas[0], adds[1], deltas[1], adds[2], deltas[2]]);
+    expect(inOrder.stderr).toBe('');
+  });
+
+  it('patches the bridge\'s class when its module was already imported before the patch', () => {
+    const out = driveHook('ccgpt-rt-hook-preloaded-', HOOK_PRELOADED_PY);
+    expect(out['patchedBefore']).toBe(false);
+    expect(out['patched'], 'a bridge module loaded before the patch was never patched').toBe(true);
+    expect(out['noDelta']).toEqual([hookAdded(hookFc('')), hookArgsDelta()]);
   });
 });
