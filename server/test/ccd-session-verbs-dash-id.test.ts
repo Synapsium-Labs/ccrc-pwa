@@ -64,13 +64,14 @@ const DECS: readonly { readonly surface: string; readonly reason: boolean }[] =
 
 /** A workspace row complete enough to reach each verb's body (the shape of `ccd-actor-flags.test.ts`'s
  *  `seedWorkspace`, its directory on disk included), planted with node:fs so that its id may spell a flag. */
-const plantWorkspace = (id: string, hold: string | null): void => {
+const plantWorkspace = (id: string, hold: string | null, extra: Readonly<Record<string, string>> = {}): void => {
   const slug = id.replace(/^-+/, 'dash-');
   const workdir = path.join(h.home, 'worktrees', 'demo', slug);
   mkdirSync(workdir, { recursive: true });
   plantRow(h.home, id, {
     project: 'demo', workspace: slug, workdir, branch: `ws/${slug}`, wrapper: 'claude',
     ...(hold === null ? {} : { hold }),
+    ...extra,
   });
 };
 
@@ -280,5 +281,85 @@ describe('the identity arms narrow nothing else (path-identity spec §2.4)', () 
     expect(docOf(ren.stdout))
       .toEqual({ refused: 'bad-args', detail: 'usage: ccd ws-rename --session <id> --branch <name>', paths: [] });
     expect(h.reg(REAL, 'hold')).toBeNull();
+  });
+});
+
+// A LONE TRAILING KEY AFTER THE VERB'S FULL ARGV (path-identity spec §2.4, R17). Each loop's identity arm appends a
+// key that has no value after it to the residue as it stands, so the verb's exact-arity rule still sees one token
+// too many and refuses with the verb's own usage words. The arm's `else lc_args+=("$1"); shift; fi` half is what the
+// rows above never reach: a two-token argv such as `--session <id> --session` is refused on arity whether the arm
+// keeps the lone key or drops it, at ws-hold and ws-rename, whose arity rule wants four tokens. So every row here
+// spells the verb's whole valid argv first and the lone key LAST. Dropping the key from the residue (`else shift; fi`)
+// turns each row into the valid call it would otherwise be, and the verb acts: it releases the hold, takes a hold,
+// archives or restores the row, or renames the branch. The assertions are the verb's own answer, and that nothing
+// it would have changed moved.
+describe('a lone trailing key after the full argv answers the verb\'s usage line (path-identity spec §2.4)', () => {
+  const USAGE_RELEASE = 'ccd: usage: ccd ws-release --session <id>';
+  const USAGE_ARCHIVE = 'ccd: usage: ccd ws-archive --session <id>';
+  const USAGE_RESTORE = 'ccd: usage: ccd ws-restore --session <id>';
+  const USAGE_HOLD = 'ccd: usage: ccd ws-hold --session <id> --reason <text>';
+  const USAGE_RENAME = 'usage: ccd ws-rename --session <id> --branch <name>';
+
+  it('ws-release --session <id> --session answers the usage line at rc 1, and the hold stands', () => {
+    plantWorkspace(REAL, HOLD_REASON);
+    const r = run(`${REL_STUBS} cmd_ws_release --session ${REAL} --session`);
+    expect(r.code, r.stdout).toBe(1);
+    expect(r.stdout).not.toContain('released');
+    expect(r.stderr.trim()).toBe(USAGE_RELEASE);
+    expect(h.reg(REAL, 'hold'), 'the hold was released').toBe(HOLD_REASON);
+    expect(eventsOf(h.home, 'release')).toEqual([]);
+    expectDecoysUntouched();
+  });
+
+  it('ws-archive --session <id> --session answers the usage line at rc 1, and the row is not archived', () => {
+    plantWorkspace(REAL, null);
+    const r = run(`${ARCHIVE_STUBS} cmd_ws_archive --session ${REAL} --session`);
+    expect(r.code, r.stdout).toBe(1);
+    expect(r.stderr.trim()).toBe(USAGE_ARCHIVE);
+    expect(h.reg(REAL, 'archived'), 'the row was archived').toBeNull();
+    expect(eventsOf(h.home, 'archive')).toEqual([]);
+    expectDecoysUntouched();
+  });
+
+  it('ws-restore --session <id> --session is refused bad-args through _lc_refuse at rc 1, and the row stays archived', () => {
+    const ARCHIVED_AT = '1787000000';
+    plantWorkspace(REAL, null, { archived: ARCHIVED_AT });
+    const r = run(`${RESTORE_STUBS} cmd_ws_restore --session ${REAL} --session`);
+    expect(r.code, r.stdout).toBe(1);
+    expect(r.stderr.trim()).toBe(USAGE_RESTORE);
+    expect(refusalsOf(h.home)).toEqual([{ act: 'restore', token: 'bad-args' }]);
+    const asked = eventsOf(h.home, 'restore');
+    expect(asked.map((e) => String(e['id']))).toEqual([REAL]);
+    expect(asked.map((e) => String(e['detail']))).toEqual([USAGE_RESTORE.replace(/^ccd: /, '')]);
+    expect(h.reg(REAL, 'archived'), 'the archived row was restored').toBe(ARCHIVED_AT);
+    expect(reapLocks(h.home), 'a reap lock was opened before the refusal').toEqual([]);
+    expectDecoysUntouched();
+  });
+
+  it.each([
+    ['--session <id> --reason r --session', `--session ${REAL} --reason r --session`],
+    ['--session <id> --reason r --reason', `--session ${REAL} --reason r --reason`],
+  ])('ws-hold %s answers the usage line at rc 1, and no hold is taken', (_name, argv) => {
+    plantWorkspace(REAL, null);
+    const r = run(`${HOLD_STUBS} cmd_ws_hold ${argv}`);
+    expect(r.code, r.stdout).toBe(1);
+    expect(r.stdout).not.toContain('held');
+    expect(r.stderr.trim()).toBe(USAGE_HOLD);
+    expect(h.reg(REAL, 'hold'), 'a hold was taken').toBeNull();
+    expect(eventsOf(h.home, 'hold')).toEqual([]);
+    expectDecoysUntouched();
+  });
+
+  it.each([
+    ['--session <id> --branch b --session', `--session ${REAL} --branch b --session`],
+    ['--session <id> --branch b --branch', `--session ${REAL} --branch b --branch`],
+  ])('ws-rename %s answers {"refused":"bad-args"} with the usage line at exit 0, and the branch is unchanged', (_name, argv) => {
+    plantWorkspace(REAL, null);
+    const before = regListing(h.home);
+    const r = run(`${RENAME_STUBS} cmd_ws_rename ${argv}`);
+    expect(r.code, r.stderr).toBe(0);
+    expect(docOf(r.stdout)).toEqual({ refused: 'bad-args', detail: USAGE_RENAME, paths: [] });
+    expect(h.reg(REAL, 'branch'), 'the branch was renamed').toBe(`ws/${REAL}`);
+    expect(regListing(h.home)).toEqual(before);
   });
 });
