@@ -27,10 +27,10 @@
 | After | Phones (320–430) | Tablets (768–1024) | Laptops (1180–1481) | 1482–1877 | ≥1878 |
 |---|---|---|---|---|---|
 | `main` | pans at 14px | pans | pans | grid at 11–13.9px | grid at 14px, tmux `·` filler past 220x50 |
-| Stage 1 | wrapped at 14px, key bar with a guarded `^C`, native text field | wrapped | wrapped; physical keys per Task 1's gate | grid (O2) | grid at 14px, CSS margin, no filler |
+| Stage 1 | wrapped at 14px, key bar with a guarded `^C`, live typing into the terminal (as today) | wrapped | wrapped; physical keys per Task 1's gate | grid (O2) | grid at 14px, CSS margin, no filler |
 | Stage 1b | + tappable menu rows | + taps | + taps | unchanged | unchanged |
 
-**Architecture.** One `@xterm/xterm` `Terminal`, pinned at 220x51, is the model for both views. The grid view opens it into the visible host at `consoleFit`'s type size. The wrapped view leaves it un-opened (coarse pointer) or opens it into the same host moved off-screen (fine pointer, if Task 1 passes), reads its buffer through `readModel`, and renders `wrapScreen`'s visual rows as DOM text. Every decision is a pure function in `pwa/src/session/` (`drawerView.ts`, `drawerModel.ts`, `wrapScreen.ts`, `keyBar.ts`, `menuTap.ts`), tested without a DOM. `TerminalDrawer.tsx` wires them and decides nothing itself.
+**Architecture.** One `@xterm/xterm` `Terminal`, pinned at 220x51, is the model for both views. The grid view opens it into the visible host at `consoleFit`'s type size. The wrapped view opens it into the same host moved off-screen, on every pointer (operator ruling R-LIVE, 2026-10-15), reads its buffer through `readModel`, and renders `wrapScreen`'s visual rows as DOM text. Every decision is a pure function in `pwa/src/session/` (`drawerView.ts`, `drawerModel.ts`, `wrapScreen.ts`, `keyBar.ts`, `menuTap.ts`), tested without a DOM. `TerminalDrawer.tsx` wires them and decides nothing itself.
 
 **Tech stack:** TypeScript (ESM); React 19; `@xterm/xterm` 6.0.0 and `@xterm/addon-fit` 0.11.0 in the PWA, tested under jsdom 28 with `@testing-library/react` 16; vitest 4; node-pty 1.1 and a real tmux on private `-L` sockets in one server suite; Vite's dev server for the spike harness. Node ≥ 22.16.0.
 
@@ -67,7 +67,7 @@ None of these changes what the spec promises. Each is a mechanism the spec leave
 7. **F1's carriers stay.** `pane-history-route.test.ts` holds `server/src/server.ts`, `pwa/src/session/TerminalDrawer.tsx` (in `historyScrollback`'s docstring) and `server/src/exec.ts` to F1's measurement (`MEASURED`), and its reach test holds `shared/api.ts`. No rewrite here removes the `resize-window -x 43 … 1853 … history_size … 9460` paragraph from any of them.
 8. **Tests that pin a resize frame are inverted, not deleted.** `terminal.test.tsx`'s "a refit that changes the grid sends {type:"resize"}", `terminal-scrollback.test.tsx`'s resize-frame case (≈:556–562), and every `clientGrid` read in `console-window-fit.test.tsx` and `console-window-fit-xterm.test.tsx` assert the opposite after Task 4. D-5005 is exactly that reversal.
 9. **`DrawerTerm.fit()` goes.** `fitToWindow`'s two fallbacks to `t.fit()` (a host with no layout, and an unmeasurable glass) become "keep the current view", `chooseView`'s `null` arm.
-10. **Where `TermInput` appears.** Spec §5.4 says the field is "shown by default on a coarse pointer" and that the grid view is "unchanged". Read together: the field belongs to the wrapped view (default on a coarse pointer, and on a fine one only if Task 1's gate fails). The grid view keeps xterm's own textarea and today's quick keys, plus a guarded `^C`.
+10. **Phones type live; there is no separate field (operator ruling R-LIVE, 2026-10-15).** Spec §5.2 left the terminal un-opened on a coarse pointer and §5.4 gave the phone a native field (`TermInput`) with a **Type** button. On the operator's phone the two-box flow (the field, then Claude Code's own box) read as broken, and the drawer on `main` already types live: a tap focuses xterm's textarea and the phone keyboard types straight into the session. Measured on the spike (Android, Gboard; Task 1's S6 re-run), live typing through the off-screen terminal's textarea works for typing, autocorrect and swipe, dictation, backspace and Enter once the keyboard is counted once (`keyboard-counted-once`, shipped ahead as its own PR). So the wrapped view opens the terminal off-screen on every pointer, a tap on it focuses xterm's textarea (`focus({ preventScroll: true })`), and `TermInput` is not built. The grid view is unchanged.
 11. **The wrapped view's paste needs a guard of its own.** On a fine pointer the off-screen xterm takes the keyboard, and with it the clipboard. xterm 6.0.0's `paste()` (`src/browser/Clipboard.ts`) brackets text without removing an end marker inside it, so a paste there would break I5. Task 12 takes the paste at the host's capture phase and frames it as the field does. The grid view's paste is P3.
 
 ## Global Constraints
@@ -95,7 +95,7 @@ Every task's requirements include this section. `CLAUDE.md` is the authority; th
 2. **The model and the server reading different screens.** 1b's taps are safe only because the model's 50 rows ARE `capture-pane -p`'s rows (W6). Task 7 measures that on every recorded fixture.
 3. **A key chosen from the wrapped geometry.** Invariant I5: what is sent is sanitised literal text, a named key, or a menu delta from the 220-column model. A visual-row index must never become an arrow count, and a description row is never a tap target.
 4. **A false menu, or an Enter on the wrong row.** A reply quoting `1. …`/`2. …` is not a menu: taps need the store's `dialog` AND a selected row in the model. **Select ⏎** sends `\r` only while the model's cursor rests on the tapped option (Task 16).
-5. **Paste as keystrokes.** `\e[201~` inside pasted text must never reach a frame, through the field (Task 12) or through the off-screen terminal (Refinement 11).
+5. **Paste as keystrokes.** `\e[201~` inside pasted text must never reach a frame, through the off-screen terminal's paste (Task 12, Refinement 11).
 6. **Storage that throws.** Private windows, previews and thumbnail capture throw on `localStorage`; the view chip must still render and choose (Task 9).
 7. **Fixture residue.** A recorded byte stream is the likeliest place for a path, a hostname or a clock to slip into a public tree (Task 6).
 
@@ -121,13 +121,13 @@ Every task's requirements include this section. `CLAUDE.md` is the authority; th
 | `pwa/test/drawer-model-equals-capture.test.ts` | **Create** | W6 on every recorded fixture; the model on every synthetic one | 7 |
 | `pwa/src/session/wrapScreen.ts` | **Create** | pure: the structure-aware re-join and wrap | 8 |
 | `pwa/test/wrap-screen-golden.test.ts`, `pwa/test/fixtures/drawer-golden/**` | **Create** | properties (a)–(g), the row-count bound, goldens | 8 |
-| `pwa/src/session/drawerView.ts` | **Create** | pure: `chooseView`, the override's read and write, `wrapWidth`, `wrappedInput` | 9 |
+| `pwa/src/session/drawerView.ts` | **Create** | pure: `chooseView`, the override's read and write, `wrapWidth` | 9 |
 | `pwa/src/session/WrappedView.tsx` | **Create** | renders visual rows; sticky bottom; selection freeze; the chips | 9 |
 | `pwa/test/drawer-view.test.tsx` | **Create** | the chooser, the chips, storage that throws, the two views, the host's two positions | 9 |
 | `pwa/src/session/keyBar.ts` | **Create** | pure: `KEY_SEQ` and the key lists, `ctrlCode`, `exitNoticeShowing`, `sanitizeTyped`, `typedFrame` | 10–12 |
 | `pwa/src/session/KeyBar.tsx` | **Create** | the primary row, the `⋯` overflow, the ctrl latch, the guarded `^C`/`^D` | 10, 11 |
 | `pwa/test/drawer-keybar.test.tsx` | **Create** | sequences, overflow, latch, guard, wrap | 10, 11 |
-| `pwa/src/session/TermInput.tsx` | **Create** | the native field and its **Type** button | 12 |
+| `pwa/src/session/typedFrame.ts` | **Create** | pure: `sanitizeTyped` and `typedFrame`, the paste guard's framing (operator ruling R-LIVE, 2026-10-15: `TermInput` is not built) | 12 |
 | `pwa/test/drawer-terminput.test.tsx` | **Create** | framing, sanitising, the latch, IME, the paste guard | 12 |
 | `pwa/src/session/chat.css` | Modify | the host's two positions; the bar's two-row wrap below 420px; wrapped-view, chip and field styles | 4, 9, 10, 12 |
 | `pwa/src/session/consoleFit.ts` | Modify (header comment only) | where the type fit hands over to the wrapped view | 13 |
@@ -174,7 +174,7 @@ The orchestrator reviews every handed-off diff before it lands.
 | 9 Views, chooser, chips | 1 | **1's gate**, 4, 7, 8 | **band 3** | Focus, hosts, the spike's outcome |
 | 10 Key bar and ctrl latch | 1 | 4 | band 2 (its CSS band 1) | Byte table and layout |
 | 11 The `^C`/`^D` guard | 1 | 7, 10 | **band 3** | A guard |
-| 12 `TermInput`, sanitising, the paste guard | 1 | 10; **1's gate** for its default | **band 3** | Untrusted input to a live session |
+| 12 sanitising and the paste guard (`TermInput` dropped, operator ruling R-LIVE, 2026-10-15) | 1 | 10 | **band 3** | Untrusted input to a live session |
 | 13 Stale comments | 1 | 4, 9 | band 1 | Exact replacement text |
 | 14 Stage 1 close | 1 | 1–13 | suites band 1; preview re-check and matrix **the operator's**; PR text native | — |
 | 15 Parsers to `shared/` | 1b | stage 1 deployed | band 1 | A verbatim move |
@@ -225,10 +225,9 @@ export interface StorageLike { getItem(k: string): string | null; setItem(k: str
 export function readViewOverride(store: () => StorageLike): DrawerViewKind | null;          // any throw, any other value → null
 export function writeViewOverride(store: () => StorageLike, v: DrawerViewKind | null): void; // any throw → no-op
 export function wrapWidth(glassPx: number, cellPx: number, gutterPx: number): number;        // floored, never below 1
-export type WrappedInput = 'xterm' | 'field';
 /** Written once by Task 9 from Task 1's gate: what types in the wrapped view on a fine pointer. */
-export const FINE_POINTER_INPUT: WrappedInput;
-export function wrappedInput(coarse: boolean): WrappedInput;   // coarse → 'field'; fine → FINE_POINTER_INPUT
+// R-LIVE (2026-10-15): no WrappedInput / FINE_POINTER_INPUT / wrappedInput. The wrapped view types through xterm on every pointer.
+
 
 // pwa/src/session/drawerModel.ts (Task 7)
 export interface CellStyle {
@@ -584,24 +583,25 @@ The harness touches no session, socket or server. Nothing it does reaches a pane
   - `chooseView` answers `grid` for `{clipped: false}`, `wrapped` for `{clipped: true}`, `current` for `null`, and the override when one is set;
   - `readViewOverride` answers `null` when the store getter throws, when `getItem` throws, and for any value other than `grid` or `wrapped`; `writeViewOverride` swallows a throwing `setItem` or `removeItem`;
   - `wrapWidth` floors and is never below 1;
-  - `wrappedInput(true)` is `'field'`; `wrappedInput(false)` is `FINE_POINTER_INPUT`, and a test pins `FINE_POINTER_INPUT` to the value §Spike log records, citing the gate.
+  - (operator ruling R-LIVE, 2026-10-15: no `wrappedInput`; the wrapped view types through xterm on every pointer.)
 - [ ] **Step 2: Red, the drawer** (jsdom, fakes):
   - at a glass where the fake's `propose` fits 220 at 11.7px, the grid is shown, the host is in the visible position, and the type is 11.7px;
-  - at a phone glass with a coarse pointer, the wrapped view is shown and the terminal was never opened;
-  - at a 1280 glass with a fine pointer and `FINE_POINTER_INPUT = 'xterm'`, the wrapped view is shown and the terminal was opened into the host in its off-screen position, which keeps the glass's width and height and is neither `display:none` nor `visibility:hidden` (Task 1 proved the focus itself);
+  - at a phone glass with a coarse pointer, the wrapped view is shown and the terminal was opened into the host in its off-screen position (operator ruling R-LIVE, 2026-10-15); a tap on the wrapped view focuses xterm's textarea with `preventScroll` (spy on `focus`), and typed `onData` reaches the socket as one input frame;
+  - at a 1280 glass with a fine pointer, the wrapped view is shown and the terminal was opened into the host in its off-screen position, which keeps the glass's width and height and is neither `display:none` nor `visibility:hidden` (Task 1 proved the focus itself);
   - the chip flips the view, the choice survives a remount, and with a `localStorage` that throws on every access the chip still flips the view for the session and nothing throws;
   - the grid forced on a glass it does not fit renders at `consoleFit`'s `fontSize`, the host scrolls sideways, and the chip reads `grid · scrolls`;
-  - the wrapped view drops the status row, sticks to the bottom, stops sticking once scrolled up, anchors on the caret row (else the `❯` row), freezes behind a `paused` chip while a selection lies inside it, and resumes when it is cleared;
+  - the wrapped view drops the status row, sticks to the bottom (also when the glass shrinks, as it does when the phone keyboard opens), stops sticking once scrolled up, anchors on the caret row (else the `❯` row), freezes behind a `paused` chip while a selection lies inside it, and resumes when it is cleared;
   - after 2 s with no `❯` (U+276F) in the model (`not-claude`), a chip offers the grid; a `❯` arriving clears it; the chip changes nothing that is sent;
   - the `pans` notice is gone, and its screen-reader text moves to the chip (an `aria-label` naming the view and why);
+  - while a composition is open on xterm's textarea (`compositionstart` … `compositionend`), the wrapped view shows its text after the caret row's text, marked as provisional, and clears it at `compositionend`; nothing is sent mid-composition (xterm's own behaviour). Measured on the spike: without this, Gboard's word-in-progress was invisible until the word was committed;
   - P4: with focus on xterm's textarea (either view), a physical Escape sends `\e` once and `onClose` is not called; with focus on another control in the sheet, Escape calls `onClose` once. A sheet without the prop dismisses on Escape as today.
 - [ ] **Step 3: Green.**
   - `colsAt(px)`: `term.propose(px)?.cols` when the terminal is open (the host keeps the glass's box in both positions, so `propose` measures the same glass), else `wrapWidth(glassPx, cell14 × px / 14, gutter)` from a hidden monospace probe span measured at 14px.
-  - `refit` runs `consoleFit(colsAt, PINNED_WINDOW_COLS)`, then `chooseView`. A grid verdict opens the terminal into the host (once), moves the host to the visible position and calls `setFontSize(fit.fontSize)`. A wrapped verdict moves the host off-screen, and opens the terminal there only when `wrappedInput(coarse)` is `'xterm'`.
+  - `refit` runs `consoleFit(colsAt, PINNED_WINDOW_COLS)`, then `chooseView`. A grid verdict opens the terminal into the host (once), moves the host to the visible position and calls `setFontSize(fit.fontSize)`. A wrapped verdict moves the host off-screen and opens the terminal there (once), on every pointer.
   - `WrappedView` subscribes to `onParsed`, coalesces to `requestAnimationFrame`, runs `wrapScreen(term.model(), W, term.cols)` with W from `wrapWidth` at 14px, and renders keyed rows (key = kind, source row, text and style run), so an unchanged row does not re-render. Cells render as text through `cellCss`. Rules render as a CSS rule in the source colour, table rows scroll sideways on their own, right rows align right.
-  - On a fine pointer with `'xterm'`, clicking the wrapped view focuses the terminal, so physical keys reach `onData`. With `'field'`, `TermInput` (Task 12) is shown on every pointer.
+  - A click or tap on the wrapped view focuses xterm's textarea with `focus({ preventScroll: true })`, on every pointer, so physical keys and the phone keyboard reach `onData` (operator ruling R-LIVE, 2026-10-15). The composition preview reads `compositionupdate`'s `data`.
   - The history layer is reached from the wrapped view only through the `hist` key; the drag gestures belong to the DOM scroller.
-  - P4: `Sheet` forwards an optional `onEscapeKeyDown` to `Drawer.Content`; `TerminalDrawer` passes one that calls `preventDefault()` while `document.activeElement` is xterm's textarea or `TermInput` (Task 12). Radix still lets the keydown through, so xterm's own handler sends the `\e`.
+  - P4: `Sheet` forwards an optional `onEscapeKeyDown` to `Drawer.Content`; `TerminalDrawer` passes one that calls `preventDefault()` while `document.activeElement` is xterm's textarea. Radix still lets the keydown through, so xterm's own handler sends the `\e`.
 - [ ] **Step 4: Mutation table:**
 
   | Mutant | Expected |
@@ -615,6 +615,9 @@ The harness touches no session, socket or server. Nothing it does reaches a pane
   | the not-Claude chip keyed on `hasMenu`-like text instead of `❯` | the `numbered-reply` case RED (a `❯` box is there, so no chip) |
   | the Escape handler always calls `preventDefault()` | P4's focus-elsewhere case RED (the sheet no longer closes) |
   | the Escape handler dropped | P4's xterm case RED (`onClose` called) |
+  | the coarse-pointer wrapped view leaves the terminal un-opened | the coarse-pointer case RED (no focus target) |
+  | the tap focuses without `preventScroll` | the coarse-pointer case RED |
+  | the composition preview never cleared at `compositionend` | the composition case RED |
 
 - [ ] **Step 5: Commit** `feat(drawer): a grid where 220 fits, a wrapped view where it does not (D-5005, D-5006)`.
 
@@ -626,7 +629,7 @@ The harness touches no session, socket or server. Nothing it does reaches a pane
   - `KEY_SEQ`, asserted by value: the arrows, `tab`, `shiftTab`, `esc` and `enter` equal today's `QUICK_KEYS` bytes exactly; `ctrlC` `\x03`, `ctrlD` `\x04`, `backspace` `\x7f`, `pgUp` `\e[5~`, `pgDn` `\e[6~`, `ctrlU` `\x15`, `ctrlO` `\x0f`, `ctrlR` `\x12`, `ctrlT` `\x14`, `ctrlB` `\x02`, `space` ` `.
   - `ctrlCode`: `a` → `\x01`, `Z` → `\x1a`, `1` → `null`, `é` → `null`, `ab` → `null`.
   - The wrapped view's primary row reads `esc ↑ ↓ ⏎ ^C ⌫ ⋯`; `⋯` toggles the overflow row `← → tab ⇧tab space PgUp PgDn ^U ^O ^R ^T ^B ctrl`; the `hist`/`live` toggle stays beside the bar. The grid view's strip is `GRID_KEYS`: today's keys, then `^C`.
-  - Tapping `ctrl` latches it (`aria-pressed`); the next letter from `TermInput` (Task 12) sends its control code at once and unlatches; a second tap on `ctrl` unlatches without sending.
+  - Tapping `ctrl` latches it (`aria-pressed`); the next ASCII letter typed into the terminal sends its control code at once and unlatches; a second tap on `ctrl` unlatches without sending. The letter is taken from xterm's textarea (Task 12 wires it, operator ruling R-LIVE, 2026-10-15).
   - Every key has an accessible label, as `QUICK_KEYS`' labels do today, and is a `--tap-min` target. Keys are inert until the socket is open, as today, and keep focus where it is (`onPointerDown` → `preventDefault`).
   - Below 420px the bar renders as two rows with no horizontal overflow: the class is asserted in jsdom, and a CSS-reading case (as `pr-keycap-css.test.ts` reads `chat.css`) asserts the `max-width: 420px` rule that wraps `.term-keys`.
 - [ ] **Step 2: Green.** Implement. `single-definition`: no key byte is spelled outside `KEY_SEQ` in `pwa/src/session/`.
@@ -662,35 +665,32 @@ The harness touches no session, socket or server. Nothing it does reaches a pane
 
 - [ ] **Step 4: Commit** `feat(drawer): ^C asks before it would exit Claude Code (D-5007)`.
 
-### Task 12: `TermInput` — the native field, bracketed paste, sanitising and the paste guard (D-5007)
+### Task 12: Sanitising, the paste guard and the latch's letter (D-5007; `TermInput` dropped, operator ruling R-LIVE, 2026-10-15)
 
-**Routing:** band 3 (untrusted input into a live session; this PR's security lens reads it first). Steps 1–3 need only Task 10; Step 4's default input path waits for Task 1's gate. **Files:** create `pwa/src/session/TermInput.tsx` and `pwa/test/drawer-terminput.test.tsx`; modify `keyBar.ts`, `TerminalDrawer.tsx` and `chat.css`.
+**Routing:** band 3 (untrusted input into a live session; this PR's security lens reads it first). Needs Task 10. **Files:** create `pwa/src/session/typedFrame.ts` and `pwa/test/drawer-paste.test.tsx`; modify `keyBar.ts` and `TerminalDrawer.tsx`.
 
 - [ ] **Step 1: Red, the framing** (pure):
   - `sanitizeTyped` removes `\x00`–`\x08`, `\x0b`–`\x1f`, `\x7f` and every ESC, so both `\e[200~` and `\e[201~` lose their introducer and cannot frame; it keeps `\t` and `\n`;
-  - `typedFrame(text)`: `\r\n` and lone `\r` become `\n`; then `sanitizeTyped`; then, if a `\n` remains, `\e[200~` + the text with each `\n` as `\r` + `\e[201~`, which is how xterm 6.0.0's own `paste()` frames a paste (`prepareTextForTerminal`), so a field and a desktop paste type the same bytes; otherwise the text literally;
+  - `typedFrame(text)`: `\r\n` and lone `\r` become `\n`; then `sanitizeTyped`; then, if a `\n` remains, `\e[200~` + the text with each `\n` as `\r` + `\e[201~`, which is how xterm 6.0.0's own `paste()` frames a paste (`prepareTextForTerminal`), so a guarded paste types the bytes xterm's own would, minus the markers; otherwise the text literally;
   - cases: `typedFrame('hello')` is `hello`; `typedFrame('a\nb')` is `\e[200~a\rb\e[201~`; `typedFrame('a\r\nb')` equals it; `typedFrame('a\e[201~\rrm -rf x')` contains exactly one `\e[201~`, at its end.
-- [ ] **Step 2: Red, the field** (jsdom):
-  - it is a real `<textarea>` (autocorrect, dictation and IME are the browser's);
-  - **Type** sends `typedFrame(value)` as ONE input frame and clears the field; it never sends `\r` of its own; `⏎` is the bar's key;
-  - with `ctrl` latched, the next `beforeinput` of type `insertText` carrying one ASCII letter is not inserted and its control code is sent at once (S8 decides whether Android needs a `keydown` fallback; record it here);
-  - nothing is sent mid-composition (`compositionstart` … `compositionend`);
-  - P4: a physical Escape in the field (outside a composition) sends `\e` once, leaves the field's text as it was, and does not close the drawer (Task 9's handler counts the field as the terminal's focus).
+- [ ] **Step 2: Red, the latch's letter** (jsdom):
+  - with `ctrl` latched, the next `beforeinput` on xterm's textarea of type `insertText` or `insertCompositionText` whose data begins with an ASCII letter is prevented, its control code is sent at once as one input frame, and the latch clears; the composition that letter opened sends nothing when it ends (the drawer drops the next `onData` chunk equal to that letter, once);
+  - with `ctrl` not latched, `beforeinput` is never prevented and typed text reaches the socket exactly as xterm sends it;
+  - S8 (Android, Gboard) decides whether a `keydown` fallback is needed; record it in §Spike log before this step merges.
 - [ ] **Step 3: Red, the paste guard** (Refinement 11): with the terminal open in the wrapped view, a `paste` event dispatched on xterm's textarea is taken at the host's capture phase: `preventDefault`, propagation stopped, and its text sent as `typedFrame(text)`. xterm's own `onData` does not fire for it, and a pasted `\e[201~` never reaches a frame.
-- [ ] **Step 4: Green.** Implement. The field sits above the bar and stays visible with the keyboard up (`useKeyboardInset`, as the bar does today, and as Task 1's S6 measured). It is shown in the wrapped view on a coarse pointer, and on every pointer when `FINE_POINTER_INPUT` is `'field'`. The paste guard is installed on the host while the wrapped view shows an open terminal; the grid view's paste is unchanged unless P3 is ruled yes, in which case the same listener stays installed in both views.
+- [ ] **Step 4: Green.** Implement. The paste guard is installed on the host while the terminal is open, in both views (P3 ruled yes). The latch's listener is on xterm's textarea, installed once when the terminal opens.
 - [ ] **Step 5: Mutation table:**
 
   | Mutant | Expected |
   |---|---|
   | `sanitizeTyped` keeps ESC | the `\e[201~` case RED |
   | bracketed paste for single-line text too | the `hello` case RED |
-  | **Type** appends `\r` | RED |
-  | newlines sent as `\n` inside the brackets | the `a\nb` case RED |
+    | newlines sent as `\n` inside the brackets | the `a\nb` case RED |
   | the paste guard registered in the bubble phase | the paste-guard case RED (xterm's handler stops propagation first) |
   | the latch reads `keydown` only | the `beforeinput` case RED |
-  | the field's Escape not sent | P4's field case RED |
+  | the latch prevents `beforeinput` while unlatched | the not-latched case RED |
 
-- [ ] **Step 6: Commit** `feat(drawer): a native field that types into the box, and a paste that cannot end its own brackets (D-5007)`.
+- [ ] **Step 6: Commit** `feat(drawer): a paste that cannot end its own brackets, and a ctrl latch over the phone keyboard (D-5007)`.
 
 ### Task 13: The stale comments (D-5013)
 
@@ -712,7 +712,7 @@ The harness touches no session, socket or server. Nothing it does reaches a pane
 - [ ] **Step 1: Suites.** `pwa`: the full suite, then `npm run build` clean (CI's `build-pwa`). `server`: `drawer-status-rows`, `drawer-window-sized-client`, `drawer-fixtures-clean`, `pty`, `remote-pty`, `pane-history-route`, `capsupported`, `single-definition`, `deviation-refs` (after `git fetch origin main`), `dtbd`, `topology-clean`.
 - [ ] **Step 2: The preview re-check** (spec §10's "preview build"). On a preview of this PR's build (the operator's choice of path; `deploy/deploy.sh` is the documented fallback for an unreleased tree), re-run Task 1's rows S1, S4 and S6 against the real drawer on a live session. A result that differs from the harness's is a STOP for a coordinator ruling.
 - [ ] **Step 3: The device matrix** (§Acceptance, operator ruling O7). Record each cell in the PR body.
-- [ ] **Step 4: README.** The drawer paragraph: the 220x51 client, the two views and the chip, the key bar with its guarded `^C`, the field, and the paste guard. One paragraph, citing the spec.
+- [ ] **Step 4: README.** The drawer paragraph: the 220x51 client, the two views and the chip, the key bar with its guarded `^C`, live typing on every device, and the paste guard. One paragraph, citing the spec.
 - [ ] **Step 5: The PR.** Title `feat(drawer): every width — a window-sized client and a wrapped view (stage 1)`. Body: the spec's link; D-5005, D-5006, D-5007 and D-5013; each task's mutation table as measured; the spike's outcome and gate; the W=45 row counts beside W10's; the device matrix. Deploy class: server lane.
 - [ ] **Step 6: Wave-done.** The branch, the handoff commit, `git rev-parse HEAD` against the workspace branch tip (equal), the suites, and every departure by slug.
 
@@ -793,7 +793,7 @@ Run on the deployed preview (Task 14) and again on the released build (§Deploy 
 - **B.** The expected view; the chip flips it, and the flip survives a reload.
 - **C.** The box (the caret row) is on screen when the drawer opens, with the soft keyboard up, and after a rotation.
 - **D.** `^C` with a draft clears it. A second `^C` asks "Claude Code will exit"; **Cancel** sends nothing.
-- **E.** A two-line answer typed in the field lands as two lines and is not submitted until `⏎`. On a fine pointer, the same answer typed per Task 1's gate.
+- **E.** Typed live on the phone (Gboard: typing, autocorrect, swipe, dictation, backspace, Enter), the text appears in Claude Code's box as it is typed (the word in progress shown provisionally) and is submitted only by Enter or `⏎`; with the keyboard up, the box and the bar stay above the keyboard. On a fine pointer, the same with a physical keyboard.
 - **F.** Two lines of the wrapped view selected and copied (long-press on touch); updates pause while selected and resume after.
 - **G.** A physical keyboard: ASCII, the arrows, Esc, Tab, Shift-Tab, Enter and Ctrl-C each reach the session once.
 - **H.** The window stays 220x50: the console's `paneCols` for the session reads 220 throughout, and a wide glass shows a margin, never tmux's `·` filler.
@@ -823,7 +823,7 @@ Written once stage 1 is on the box (spec §10). It cites D-5009 to D-5012, defin
 - **Entry conditions:** stage 1 and 1b deployed and measured; spec §10's step 0 census (read-only, operator-run); the tick diet's W4 status (if its memo, D-4964, has landed, B0's geometry field goes into the memo's observation; if not, W4's plan is told the field exists).
 - **B0** (AGENT-FIRST, `ccd/ccd` only; D-5009): `_pane_measurable`'s geometry read and per-process memory, a change standing down the rest of its supervisor tick, and first sight proceeding; the re-measure inside `_route_type_model`, `_route_type_effort` and every iteration of `_accept_first_run_prompts`; `pane-settling` in `_pane_narrow_note` and `KS_WHY`; `geom-settle-v1` in `cmd_caps`; `ccd-geom-settle.test.ts`, the `ccd-route-apply` case, the tick budget unchanged. It also takes Refinement 6's three `ccd/ccd` comments.
 - **B1** (server lane; D-5010, D-5011, D-5012): `server/src/pane/fit.ts`, `sizer.ts` and `drawer.ts`; the settle hold on `Deps.queue`; the route-apply door's `settled(id)` wait; `FleetWatcher.detectDialogs`' carry-forward and re-key; binary grid frames; the ping; the boot sweep; `CCRC_DRAWER_FOLLOW`; the PWA's band and grid-frame handling, with the live terminal at `scrollback: 0`; spec §6.7's wire vocabulary; `console-window-fit.test.tsx` reading the frame. The route rewrite also validates `:id` before it reaches `resizeWindow` or the pty (the item Refinement 6 found orphaned), and updates `agent/src/whitelist.ts`'s `win-size` note to say so; that note is in the agent's package, so the stage-2 plan names the lane it rides. Merged with the flag off.
-- **Carried from this plan:** `FINE_POINTER_INPUT`'s value (a follower is a grid client, so a fine pointer at 120 columns or more stops needing the off-screen terminal); a wrapped client on a following window wraps `window.cols` (Task 9's `srcCols` is already the terminal's own `cols`, never the constant).
+- **Carried from this plan:** the off-screen terminal is the wrapped view's input on every pointer (operator ruling R-LIVE, 2026-10-15; a follower is a grid client, so a glass at 120 columns or more stops needing it); a wrapped client on a following window wraps `window.cols` (Task 9's `srcCols` is already the terminal's own `cols`, never the constant).
 
 ## Deploy and measure
 
@@ -842,14 +842,14 @@ Written once stage 1 is on the box (spec §10). It cites D-5009 to D-5012, defin
 
 ## Open decisions (each with a recommendation)
 
-- **P1. A touch device with a hardware keyboard** (an iPad with a keyboard reports a coarse pointer). The wrapped view gives it the field, where Esc and the arrows from the keyboard do not reach the session. **Recommendation:** accept for stage 1: the key bar carries those keys, and stage 2 puts a glass of 120 columns or more on the grid, where xterm takes the keyboard. Task 1's S7 records what happens, and a result that makes the field unusable reopens this.
+- **P1. A touch device with a hardware keyboard.** RESOLVED by operator ruling R-LIVE, 2026-10-15: the wrapped view types through xterm on every pointer, so a hardware keyboard's Esc and arrows reach the session as they do on a desktop. S7 stays unrun (no such device).
 - **P2. Commit the spike harness?** **Recommendation: yes,** under `pwa/spike/`, outside `tsconfig`'s include and the build's input, so an xterm upgrade can re-run S1–S8 by opening one page. With no, it is deleted before Task 14 and the spike log records its sha256.
 - **P3. The grid view's paste.** xterm 6.0.0 brackets a paste without removing an end marker inside it, which is true of the drawer on `main` today. **Recommendation: yes,** keep Task 12's capture-phase guard installed in both views, so the drawer has one paste path and I5's sanitising covers the grid too. With no, the grid's paste stays xterm's own, as spec §5.4's "unchanged" reads.
-- **P4. A physical Escape in the drawer. RULED 2026-10-15 (the operator): Escape goes to Claude Code and never closes the drawer while the terminal has focus.** Task 1 found it in every engine: Radix's DismissableLayer (under vaul's sheet) catches Escape on `document` in the capture phase, so a physical Esc sent `\e` to the session AND closed the drawer. The sheet's dismissal is cancelled (`onEscapeKeyDown` → `preventDefault`) while focus is on xterm's textarea or `TermInput`, and the key still reaches the session; with focus anywhere else in the sheet, Escape closes it as before. The drawer still closes by its grabber, a scrim tap and the swipe. Built in Task 9 (the sheet and xterm) and Task 12 (the field sends `\e` itself). This narrows P1: from a hardware keyboard, Esc reaches the session from the field as well; the arrows still do not. Slug for the stage-close allocation: `esc-stays-in-the-terminal`.
+- **P4. A physical Escape in the drawer. RULED 2026-10-15 (the operator): Escape goes to Claude Code and never closes the drawer while the terminal has focus.** Task 1 found it in every engine: Radix's DismissableLayer (under vaul's sheet) catches Escape on `document` in the capture phase, so a physical Esc sent `\e` to the session AND closed the drawer. The sheet's dismissal is cancelled (`onEscapeKeyDown` → `preventDefault`) while focus is on xterm's textarea, and the key still reaches the session; with focus anywhere else in the sheet, Escape closes it as before. The drawer still closes by its grabber, a scrim tap and the swipe. Built in Task 9. Slug for the stage-close allocation: `esc-stays-in-the-terminal`.
 
 ## Spike log (the coordinator fills this; workers never edit it)
 
-Records: each device's log for S1–S8, the gate's rulings G1–G3, and the value Task 9 writes for `FINE_POINTER_INPUT`.
+Records: each device's log for S1–S8 and the gate's rulings G1–G3.
 
 **Automated rows (2026-10-14).**
 
@@ -874,7 +874,14 @@ Harness: `pwa/spike/drawer-input.{html,tsx}` at `fdc9c04c` (branch `drawer1-task
 
 **The Escape finding is ruled (P4, 2026-10-15):** Escape goes to Claude Code and never closes the drawer while the terminal has focus.
 
-**Pending:** S6 and S8 on the operator's Android phone (Chrome, Gboard), which G3 waits on; S2 is optional, at the operator's Mac. S3 does not apply (the operator types through no IME), and S7 has no device (no iPad). G1–G3 are recorded once S6 is in.
+**S6, Android (the operator's phone; Chrome 155 engine, Gboard), 2026-10-15.**
+- *First run (the two-box design):* typed text showed nowhere the operator expected. The field and Claude Code's own box read as two input boxes, and the key bar overflowed sideways because the spike's own buttons sat on it (a spike defect).
+- *Second run (live typing through the off-screen xterm, as `main` types today):* with the keyboard up the glass collapsed to zero rows and the input box left the screen. Cause: the keyboard counted twice, once by vaul's `repositionInputs` (it shrinks the panel while a textarea has focus) and once by the drawer's `useKeyboardInset` padding. The same defect is live on `main`'s drawer; fixed ahead of this stage as its own PR (`Sheet` passes `repositionInputs={!full}`; slug `keyboard-counted-once`).
+- *Third run (fixed; the spike sticks to the bottom and previews the word being composed):* typing, autocorrect and swipe, dictation, backspace (Gboard's and the bar's) and Enter (Gboard's and the bar's) all work, in the operator's words "MUCH better".
+
+**G1:** S1, S4 and S5 pass in all three desktop engines; with R-LIVE there is no `'field'` alternative left to choose. **G2:** S3 does not apply (the operator types through no IME). **G3:** S6 failed twice and passes on the third run; the layout rulings are R-LIVE and `keyboard-counted-once`. **Rulings:** R-LIVE (live typing on every pointer, `TermInput` not built) and P4 (Escape), both the operator's, 2026-10-15.
+
+**Pending:** S8 (Gboard's `beforeinput` for one letter) for Task 12's latch, and the optional S2 at the operator's Mac. S7 has no device (no iPad).
 
 ## Deploy log (the coordinator fills this; workers never edit it)
 
@@ -899,3 +906,8 @@ Harness: `pwa/spike/drawer-input.{html,tsx}` at `fdc9c04c` (branch `drawer1-task
 ### Found while executing stages 1 and 1b
 
 A worker never allocates. Name a departure by slug in the wave-done; the coordinator allocates through `POST /api/ledger/deviations` and defines it here.
+
+NEEDS-NUMBER (allocated at stage close):
+- `phones-type-live` — R-LIVE (operator, 2026-10-15): the wrapped view opens the terminal off-screen on every pointer and types through xterm's textarea; `TermInput`, `wrappedInput` and `FINE_POINTER_INPUT` are not built; the wrapped view previews an open IME composition; the ctrl latch reads xterm's textarea. Departs spec §5.2 ("on a coarse pointer the terminal is never opened") and §5.4 (`TermInput`).
+- `keyboard-counted-once` — measured on the spike (Android): vaul's `repositionInputs` and the drawer's `useKeyboardInset` both subtracted the keyboard, collapsing the glass; `Sheet` passes `repositionInputs={!full}`. Shipped ahead of this stage as its own PR.
+- `esc-stays-in-the-terminal` — P4.
