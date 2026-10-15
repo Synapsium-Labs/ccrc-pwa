@@ -960,8 +960,9 @@ button.metachip:active {
   padding-top: var(--sp-3);
 }
 
-/* Answer in your own words (declines the menu, sends the text) + the raw
-   "show full question" view for menus whose detail the tappable rows can't hold. */
+/* Answer in your own words (AskParts.tsx's `OwnWords`, D-5090: typed into the
+   question's free-text row, never sent by declining the menu) + the raw "show
+   full question" view for menus whose detail the tappable rows can't hold. */
 .dlg-reply {
   display: flex;
   gap: var(--sp-2);
@@ -980,7 +981,9 @@ button.metachip:active {
      on a #141715 well — 1.09:1, i.e. black on black. What you have typed is
      invisible. --ink-on-well reads 15.52 / 13.98. */
   color: var(--ink-on-well);
-  font: var(--weight-regular) var(--fs-base) / 1.3 var(--family-ui);
+  /* `--fs-input` (16px), not `--fs-base`: iOS Safari zooms the viewport on
+     focus below 16px, and this field is the phone's own-words path (D-5090). */
+  font: var(--weight-regular) var(--fs-input) / 1.3 var(--family-ui);
 }
 /* --syn-comment, not --ink-tertiary: the syntax palette is declared once in
    :root and never re-declared for light precisely because it renders on the

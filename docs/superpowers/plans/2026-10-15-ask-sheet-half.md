@@ -4,7 +4,7 @@
 
 **Branch:** `fix/ask-sheet-half`, cut from `origin/main` `a3cebde1`, which carries the server half (#417, plan `2026-10-15-ask-server-half.md`, D-5045 to D-5048) and the design system `@ccrc/ui` (#419).
 
-**Status:** rev 3 (2026-10-15). Tasks 0 to 2 done. Tasks 3 to 5 open. Task 1 also landed `freeTextSlot` and `rowText` (the brief put the free-text row reader in the pure module's task), so Task 3 consumes them. Task 2 also names a multiSelect question on the SCRAPED sheet (item 13 below), so the hand-off keeps D-5089's honest copy, and pins the `raise` nonce clearing the hand-off's carried dialog id (item 14).
+**Status:** rev 4 (2026-10-15). Tasks 0 to 3 done. Tasks 4 and 5 open. Task 3's as-built notes follow its mutation table. Task 1 also landed `freeTextSlot` and `rowText` (the brief put the free-text row reader in the pure module's task), so Task 3 consumes them. Task 2 also names a multiSelect question on the SCRAPED sheet (item 13 below), so the hand-off keeps D-5089's honest copy, and pins the `raise` nonce clearing the hand-off's carried dialog id (item 14).
 
 **Operator rulings this plan builds on** (2026-10-15):
 - **AskUserQuestion only.** The own-text rows of permission and plan prompts are the next effort. The approval branch of `EnvelopeSheet` is not touched.
@@ -265,7 +265,7 @@ jsdom has no layout, so these are judged on a real build (Task 5's acceptance ma
   - `echo-failed`: "Typed it, but the terminal never showed it back, so it wasn't sent. Send again submits what's there."
 - `.dlg-reply-input` paints `--fs-input` (16px): iOS Safari zooms on focus below 16px, and this field is now the free-text path on a phone.
 
-- [ ] **Step 1: Red.** `dialog-sheet.test.tsx`, describe "own words go through the free-text row (D-5090)"; `ask-live-question.test.ts`, describe "freeTextSlot":
+- [x] **Step 1: Red.** `dialog-sheet.test.tsx`, describe "own words go through the free-text row (D-5090)"; `ask-live-question.test.ts`, describe "freeTextSlot":
   1. "envelope: an empty Type something. row at n+1 offers Answer in your own words, and Send calls answerDialogText": `CACHING_TRACING` + `-same-labels-q2`, text `- only in staging, sampled 10%`: `answerDialogText(SID, '38f07f99…', 3, text)`; `answerDialog` and the store's prompt never called. RED: the envelope has no field.
   2. "scraped: Type something. is not a tappable row" (`COLOUR_ONE`'s pane `-1q-open`, no envelope). RED.
   3. Rewrite of `:465`, "scraped: own words answer the question through the Type something. row": `answerDialogText(SID, 'ac059b8e…', 3, text)`; `answerDialog(…, 4)` and prompt never called. RED.
@@ -283,8 +283,8 @@ jsdom has no layout, so these are judged on a real build (Task 5's acceptance ma
   15. `freeTextSlot` on `-same-labels-q2` (empty 3), `-freetext-held` (held `Mango`), `-walk-3-typed` (held), `ask-2col-chat-about` with n 3 (none), `-freetext-1000` (held, `rowText` exactly the 1000-character text), and with n unknown on `-1q-open` (empty 3). Landed green in Task 1 (`ask-live-question.test.ts`, describe `freeTextSlot`), with its mutants run there.
   16. `single-definition.test.ts`: the Chat holders expectation set to `['shared/ask-menu.ts']`. RED until `CHAT_ABOUT_RE` is deleted.
   - Deleted with `respond()`: describe "the free-text reply when the menu does NOT clear" (`:1185-1265`), superseded by 7, 10 and 12.
-- [ ] **Step 2: Green** as above.
-- [ ] **Step 3: Mutation table, run.**
+- [x] **Step 2: Green** as above.
+- [x] **Step 3: Mutation table, run.**
 
   | Mutant | RED |
   |---|---|
@@ -303,8 +303,21 @@ jsdom has no layout, so these are judged on a real build (Task 5's acceptance ma
   | `CHAT_ABOUT_RE` kept in `DialogSheet.tsx` | 16 |
   | the placeholder spelled again in `pwa/src` | single-definition's placeholder holders |
 
-- [ ] **Step 4: Gates:** pwa `dialog-sheet`, `ask-live-question`, `ask-live`, `chat`, `primitives`, `session-screen-refusals`, `control-census`, `markup-census`, `shape-census`, `literal-census`, `contrast` (`.dlg-reply-input` stays measured on the well), `tap-targets`, `design-system-boundary`, tsc; server `single-definition`, `deviation-refs`, `dtbd`, `topology-clean`.
-- [ ] **Step 5: Commit** `fix(ask-sheet): own words answer through the free-text row, kept until the call proves them; respond() and its Chat path deleted (D-5090)`.
+  Run (each mutant against the whole `dialog-sheet.test.tsx`, or the suite named, then restored from a copy): every row red on its named cases. Extra reds: Send through Chat also reds 7, 8, 9, 13, the landed late-frame case and the scraped stranded case; the text emptied also reds 6, 8, 13 and the scraped stranded case; the call reset on an id change also reds 8, the landed late-frame case and the scraped stranded case; the slot's row left tappable also reds 13 and the scraped stranded case; the stranded retry read as other text also reds the landed late-frame case and the scraped stranded case; the call held by the envelope (applied as a reset when the envelope goes away) also reds 12 and the scraped stranded case; `close()` ignoring the call was run on each sheet (`EnvelopeSheet`'s `busy`, `DialogSheet`'s `close`), each red on 12. A sentence dropped is TS2741 in `askWords.ts`. Rows added in the task, each red only on its own case: the settle check dropped (a send whose next screen arrived mid-call holds it busy), a landed send ending on any new frame (the late typed row read as other text), the scraped sheet's n from its own call dropped (the scraped stranded case, and 13), the Chat row's sentence removed (the envelope Chat case, 4, and `:399`'s rewrite), and the slot re-read during a send (6, through its DERIVED partial-echo frame).
+
+  As built:
+  - **After ok the send waits for the pane, as a tapped option does.** `WordsCall.state` is `flight`, then `landed` on ok (the field keeps the text, disabled, Send busy, rows disabled, dismissal refused) until the next dialog id, which clears text and call; a later frame that is this send's own typed row (same title, the row holding exactly the text) does not end it. At settle, a store that already shows another screen (the next question or the review reached it before the call's answer) is not held: the text clears at once. "Ok clears the text" therefore lands on the next screen, not on the response, so the typed row is never read as "other text" in between. A swallowed Enter after a proved echo leaves the sheet busy, as `answer()` does today.
+  - **One call at a time, no sequence number.** Every Send and row is disabled while a send is under way, so no second call can start and no settle can be stale; a sequence number would guard nothing.
+  - **The text sent is trimmed**, and Send is gated on `isDialogText` of the trimmed text (`askWords.ts`'s `ownWordsHeld`, which also holds the trailing-`;` rule).
+  - **The stranded field is read-only**: the row accepts exactly that text and no other, so an edit could only turn the retry into a dead end.
+  - **The scraped sheet's n**: the transcript's option count when the server matched the question; else, after the sheet's own call under the same title, that call's row less one; else only the empty placeholder is the slot. A row holding text the sheet did not send, on a pane the transcript could not match, therefore stays a tappable row there, which the server refuses (`free-text-row`).
+  - **The none line names the Chat row by the label the pane paints**, never spelled in `pwa/src`, so the Chat rule keeps its one home; it renders only where the pane paints that row (a menu that is not an AskUserQuestion shows no own-words region at all).
+  - **`ChatRow`** is its own `.opts` group after the own-words region, in both sheets; the scraped one carries the cursor glyph, the envelope's does not (its rows never do). `:399` ("enriches by position") now reads the Chat row's sentence as its description.
+  - Send wears `answering…` (the Allow button's marker) while busy; the control census key moved to `session/AskParts.tsx <button> dlg-reply-send`.
+  - Cases added beyond the list: the envelope's Chat row (after the field, says it declines, answers row 4); a landed send through a late typed-row frame; a send whose next screen arrived mid-call; the scraped sheet's stranded retry after `ask_cleared`. Item 12 covers both sheets; item 6 adds a DERIVED partial-echo frame before the recorded one.
+
+- [x] **Step 4: Gates:** pwa `dialog-sheet`, `ask-live-question`, `ask-live`, `chat`, `primitives`, `session-screen-refusals`, `control-census`, `markup-census`, `shape-census`, `literal-census`, `contrast` (`.dlg-reply-input` stays measured on the well), `tap-targets`, `design-system-boundary`, tsc; server `single-definition`, `deviation-refs`, `dtbd`, `topology-clean`.
+- [x] **Step 5: Commit** `fix(ask-sheet): own words answer through the free-text row, kept until the call proves them; respond() and its Chat path deleted (D-5090)`.
 
 **Per width:** at 360 the field and Send share one row, Send 44px; focusing the field on iOS Safari does not zoom; with the soft keyboard up the field stays visible; the stranded, held and no-row lines wrap; a 1000-character answer in the field scrolls inside it, never the page.
 

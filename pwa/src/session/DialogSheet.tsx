@@ -39,7 +39,8 @@
 // Those two are the only paths that can reach a live pane menu without typing
 // into it: `sendPrompt` refuses outright while one is up (send.ts's `hasMenu`
 // guard), so a permission confirm — which IS a menu — cannot be answered by
-// sending literal text the way a free-text reply is.
+// sending literal text. D-5090: neither is an AskUserQuestion's own-words
+// answer, which goes through the question's free-text row (see below).
 //
 // Fix round 1 (review of the above): the envelope was failing CLOSED in
 // exactly the scrape-failure mode it exists to cover. Four corrections, all
@@ -115,21 +116,41 @@
 // ask the operator waved away does not pop back when `ask_cleared` hands the
 // same pane question over 30 minutes in. A new question has a new id and
 // opens; the `raise` nonce clears both slots.
+//
+// D-5090 (plan docs/superpowers/plans/2026-10-15-ask-sheet-half.md, Task 3):
+// own words answer an AskUserQuestion THROUGH its free-text row
+// (`api.answerDialogText`, D-5047), in both sheets (`AskParts.tsx`'s
+// `OwnWords`). The reply this file used to send pressed the pane's `Chat about
+// this` row, which declines the WHOLE ask, then typed the text as a new prompt
+// while Claude carried on, and emptied the box before trying; it is deleted,
+// with the rule it matched that row by. The scraped sheet no longer offers the
+// empty `Type something.` row as a tap (Enter on it rejects the whole ask). The
+// own-words text and its call live HERE, keyed to the call and never to
+// `dialog.id`, which the typing itself changes: so the stream's frame of the
+// typed row cannot reset a send mid-call, and an `ask_cleared` mid-call hands
+// the same text and call to the scraped sheet.
 import { Fragment, useEffect, useId, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import type { Dialog, HookAsk } from '../../../shared/api';
 import { EYEBROW, OptionRow, Sheet, Well, toast } from '@ccrc/ui';
 import { EnvelopeSheet, TerminalCta } from './EnvelopeSheet';
-import { AskEyebrow, AskReview, REVIEW_TITLE, SEVERAL_ANSWERS } from './AskParts';
-import { isAskReview } from './askLive';
-import { api, ApiError, failedTo } from '../lib/api';
+import {
+  AskEyebrow, AskReview, ChatRow, OwnWords, REVIEW_TITLE, SEVERAL_ANSWERS, wordsBusy, type Words, type WordsCall,
+} from './AskParts';
+import { chatRow, freeTextSlot, isAskReview, slotHolds } from './askLive';
+import { dialogTextRefusal } from './askWords';
+import { api, ApiError } from '../lib/api';
 import { getSessionStore, type SessionStore } from '../stores/session';
 import './chat.css';
 
-/** The TUI's free-text escape hatch, however it happens to be worded. */
-const CHAT_ABOUT_RE = /chat about this/i;
-const CLEAR_POLL_MS = 400;
-const CLEAR_TRIES = 20; // ~8 s — the stream polls the pane every 2 s
+/** No own-words text, and no call. */
+const NO_WORDS: { text: string; call: WordsCall | null } = { text: '', call: null };
+
+/** Does `dialog` still show the question `call` typed into, its free-text row holding exactly `text`? That is the
+ *  typed row of this very send (the stream may deliver it after the call answered), not other text, and not a new
+ *  question. */
+const showsSent = (dialog: Dialog | null, call: WordsCall, text: string): boolean =>
+  dialog !== null && dialog.title === call.title && slotHolds(freeTextSlot(dialog, call.row - 1), text);
 
 /**
  * I4: is there anything accessible to actually show? Mirrors the scraped
@@ -189,8 +210,9 @@ export function DialogSheet({ id, store, onOpenTerminal, raise }: DialogSheetPro
   // ever equals, so without this the hand-off on `ask_cleared` re-opened the
   // very question the operator had just waved away.
   const [dismissedDialogId, setDismissedDialogId] = useState<string | null>(null);
-  // Free-form reply (answer in your own words) + the raw "full question" view.
-  const [reply, setReply] = useState('');
+  // D-5090: the own-words text and its call, one value so the two change together (see `WordsCall`).
+  const [own, setOwn] = useState(NO_WORDS);
+  // The raw "full question" view.
   const [details, setDetails] = useState(false);
 
   // Remember the last dialog so the sheet has content to animate out with
@@ -200,10 +222,19 @@ export function DialogSheet({ id, store, onOpenTerminal, raise }: DialogSheetPro
   const shown = dialog ?? lastRef.current;
 
   // A new question (or a cleared one) invalidates the in-flight marker.
+  // D-5090: and ends an own-words answer that LANDED, the same way, unless the new frame is that send's own typed row
+  // (captured before its Enter, delivered after its ok). A call still in FLIGHT is never touched here: the typing
+  // changes the id mid-call.
   const dialogId = dialog?.id ?? null;
   useEffect(() => {
     setAnswering(null);
+    setOwn((o) => (o.call?.state === 'landed' && !showsSent(dialog, o.call, o.text) ? NO_WORDS : o));
+    // `dialog` is read at the id it belongs to; a repaint under the same id is not a new screen.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dialogId]);
+
+  // Anything in flight: an option's answer, or an own-words send. Either refuses another send and the dismissal.
+  const locked = answering !== null || wordsBusy(own.call);
 
   // D-286: the transcript asked for this sheet back. Clearing the dismissal
   // is the WHOLE effect — the sheet then opens on exactly the envelope the
@@ -224,12 +255,12 @@ export function DialogSheet({ id, store, onOpenTerminal, raise }: DialogSheetPro
   const close = (): void => {
     // Non-dismissable while an answer is in flight — the open sheet is the
     // only honest record that the tap is still landing.
-    if (answering !== null) return;
+    if (locked) return;
     hide();
   };
 
   const answer = async (optionIndex: number): Promise<void> => {
-    if (dialog === null || answering !== null) return;
+    if (dialog === null || locked) return;
     setAnswering(optionIndex);
     try {
       await api.answerDialog(id, dialog.id, optionIndex);
@@ -257,43 +288,32 @@ export function DialogSheet({ id, store, onOpenTerminal, raise }: DialogSheetPro
     }
   };
 
-  /** Wait for the stream to confirm the menu is gone (its poll is ~2 s). */
-  const dialogCleared = async (): Promise<boolean> => {
-    for (let i = 0; i < CLEAR_TRIES; i++) {
-      if (useStore.getState().dialog === null) return true;
-      await new Promise((r) => setTimeout(r, CLEAR_POLL_MS));
-    }
-    return useStore.getState().dialog === null;
-  };
-
-  // Answer in your own words. While a menu is up it owns the keyboard — there
-  // is no input box, and the server refuses to type into one (dialog-open). The
-  // TUI's own escape hatch is its "Chat about this" row, which drops the
-  // session into free text: take that first, wait for the menu to go, then send.
-  const respond = async (): Promise<void> => {
-    const text = reply.trim();
+  // D-5090: own words, into the free-text row printed `row`. The text is kept in the field through the call and on
+  // any refusal (which says why); only an ok lets it go, once the pane has moved on. One call at a time: every Send is
+  // disabled while one is under way.
+  const sendWords = async (row: number): Promise<void> => {
     const current = dialog;
-    if (text === '' || answering !== null || current === null) return;
-    const chat = current.options.find((o) => CHAT_ABOUT_RE.test(o.label));
-    if (!chat) {
-      toast("This question has no free-text option — pick one, or use the terminal", 'error');
-      return;
-    }
-    setReply('');
-    setAnswering(chat.index);
+    const kept = own.text;
+    if (current === null || locked) return;
+    const call = { row, title: current.title };
+    setOwn({ text: kept, call: { ...call, state: 'flight' } });
     try {
-      await api.answerDialog(id, current.id, chat.index);
-      if (!(await dialogCleared())) {
-        toast("The question is still up — answer it in the terminal", 'error');
-        return;
-      }
-      hide();
-      await useStore.getState().send(text);
+      await api.answerDialogText(id, current.id, row, kept.trim());
+      // Landed. Like a tapped option, the sheet stays busy until the pane moves on — unless it already has: the next
+      // screen can reach the store before the call's answer does, and must not be held busy by it.
+      const now = useStore.getState().dialog;
+      const waiting = now !== null && (now.id === current.id || showsSent(now, { ...call, state: 'landed' }, kept));
+      setOwn(waiting ? { text: kept, call: { ...call, state: 'landed' } } : NO_WORDS);
     } catch (err) {
-      toast(failedTo('send', err), 'error');
-    } finally {
-      setAnswering(null);
+      setOwn({ text: kept, call: { ...call, state: 'refused' } });
+      toast(dialogTextRefusal(err), 'error');
     }
+  };
+  const words: Words = {
+    text: own.text,
+    call: own.call,
+    onText: (text) => setOwn((o) => ({ ...o, text })),
+    onSend: (row) => void sendWords(row),
   };
 
   // The hook envelope wins DISPLAY the moment it is USABLE — see the file
@@ -315,6 +335,7 @@ export function DialogSheet({ id, store, onOpenTerminal, raise }: DialogSheetPro
         ask={hookAsk}
         dialog={dialog}
         answering={answering}
+        words={words}
         open={askKey !== dismissedKey}
         onHide={() => {
           setDismissedKey(askKey);
@@ -367,7 +388,7 @@ export function DialogSheet({ id, store, onOpenTerminal, raise }: DialogSheetPro
   if (isAskReview(shown)) {
     return (
       <Sheet open={open} onClose={close} eyebrow={<AskEyebrow />} title={REVIEW_TITLE}>
-        <AskReview dialog={shown} answering={answering} onAnswer={(k) => void answer(k)} />
+        <AskReview dialog={shown} answering={answering} locked={locked} onAnswer={(k) => void answer(k)} />
       </Sheet>
     );
   }
@@ -379,6 +400,18 @@ export function DialogSheet({ id, store, onOpenTerminal, raise }: DialogSheetPro
   // would keep the empty string and leave the sheet with no question on it at
   // all — no title, no preamble, and a dialog with no accessible name.
   const question = ask?.question.trim() ?? '';
+  // D-5090: the free-text row, under the question's n options. n is the transcript's option count when the server
+  // matched the question; else, after this sheet's own text call under the same question, that call's row less one
+  // (the stranded retry, which a held row needs: only the placeholder tells itself apart from an option); else
+  // unknown, and only the empty placeholder row is the slot. That row, and the `Chat about this` row, are never
+  // option rows here: own words go through `OwnWords`, and Chat is a row of its own saying what it does.
+  const n = ask !== undefined
+    ? ask.options.length
+    : own.call !== null && own.call.title === shown.title ? own.call.row - 1 : null;
+  const slot = freeTextSlot(shown, n);
+  const chat = chatRow(shown);
+  const slotRow = slot.kind === 'none' ? null : slot.index;
+  const rows = shown.options.filter((o) => o.index !== slotRow && o.index !== chat?.index);
   return (
     <Sheet
       open={open}
@@ -393,7 +426,7 @@ export function DialogSheet({ id, store, onOpenTerminal, raise }: DialogSheetPro
         <p className="dlg-body">{shown.body}</p>
       )}
       <div className="opts">
-        {shown.options.map((o) => {
+        {rows.map((o) => {
           const selected = o.index === shown.selectedIndex;
           const waiting = answering === o.index;
           // By POSITION, never by matching text: the keystroke is o.index
@@ -416,7 +449,7 @@ export function DialogSheet({ id, store, onOpenTerminal, raise }: DialogSheetPro
                 index={o.index}
                 label={label}
                 sublabel={description}
-                disabled={answering !== null}
+                disabled={locked}
                 busy={waiting}
                 onClick={() => void answer(o.index)}
                 // The optimistic "answering…" is this package's marker, not the
@@ -433,31 +466,17 @@ export function DialogSheet({ id, store, onOpenTerminal, raise }: DialogSheetPro
         })}
       </div>
 
-      {/* Answer in your own words — declines the menu and sends your text. */}
-      <form
-        className="dlg-reply"
-        onSubmit={(e) => {
-          e.preventDefault();
-          void respond();
-        }}
-      >
-        <input
-          className="dlg-reply-input"
-          type="text"
-          value={reply}
-          onChange={(e) => setReply(e.target.value)}
-          placeholder="…or answer in your own words"
-          disabled={answering !== null}
-          aria-label="Answer in your own words"
+      {/* Answer in your own words, through the free-text row (D-5090), in that row's place. */}
+      <OwnWords slot={slot} chat={chat?.label ?? null} words={words} locked={answering !== null} />
+      {chat && (
+        <ChatRow
+          row={chat}
+          selectedIndex={shown.selectedIndex}
+          answering={answering}
+          disabled={locked}
+          onAnswer={(k) => void answer(k)}
         />
-        <button
-          type="submit"
-          className="dlg-reply-send"
-          disabled={answering !== null || reply.trim() === ''}
-        >
-          Send
-        </button>
-      </form>
+      )}
 
       {/* Some menus render a side-box of detail the tappable rows can't carry —
           the raw view shows the whole question exactly as the terminal does. */}

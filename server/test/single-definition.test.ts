@@ -5808,11 +5808,11 @@ describe('the free-text row\'s placeholder is spelled once, in shared/ask-menu.t
     expect(holders(PLACEHOLDER)).toEqual(['shared/ask-menu.ts']);
   });
 
-  it('the Chat row is spelled in shared/ask-menu.ts, and in the sheet\'s older unanchored copy, which the sheet half deletes', () => {
-    // `DialogSheet.tsx`'s `CHAT_ABOUT_RE` drives the "answer in your own words" path that answers Chat about this and
-    // declines the whole ask (diagnosis root cause 5). This branch makes no sheet change (operator ruling 2026-10-15),
-    // so that copy stays named here until the sheet half removes it — and turns this list into the one home alone.
-    expect(holders(CHAT)).toEqual(['pwa/src/session/DialogSheet.tsx', 'shared/ask-menu.ts']);
+  it('the Chat row is spelled in shared/ask-menu.ts and nowhere else: the sheet half deleted its older copy (D-5090)', () => {
+    // `DialogSheet.tsx`'s `CHAT_ABOUT_RE` drove the "answer in your own words" path that answered Chat about this and
+    // declined the whole ask (diagnosis root cause 5). The sheet half deleted it with `respond()` (D-5090): own words go
+    // through the free-text row, and the sheet reads the Chat row through `CHAT_ABOUT_ROW_RE`, as every reader does.
+    expect(holders(CHAT)).toEqual(['shared/ask-menu.ts']);
   });
 
   it('the guard reads the L0 rules: pane/dialog.ts imports and tests both, and answerDialog asks freeTextRow', () => {

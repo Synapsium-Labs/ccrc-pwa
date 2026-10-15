@@ -1,7 +1,7 @@
 // What a live AskUserQuestion pane is showing, read for the sheet (D-5089, plan
 // docs/superpowers/plans/2026-10-15-ask-sheet-half.md, Task 1): which of the envelope's questions the pane is painting,
-// the one its title names when labels cannot say, the review screen an ask ends on and its summary, and the free-text
-// row under a question's options.
+// the one its title names when labels cannot say, the review screen an ask ends on and its summary, the free-text
+// row under a question's options, and the `Chat about this` row under that.
 //
 // PURE: it imports `shared/api`'s types and `shared/ask-menu`'s rules, and nothing else; no React, no store. Both
 // sheets read it (the envelope's and the scraped one), so the two cannot disagree about what is on screen.
@@ -200,4 +200,17 @@ export function freeTextSlot(dialog: Dialog, n: number | null): FreeTextSlot {
   if (row === undefined || CHAT_ABOUT_ROW_RE.test(row.label)) return { kind: 'none' };
   if (FREE_TEXT_PLACEHOLDER_RE.test(row.label)) return { kind: 'empty', index: row.index };
   return { kind: 'held', index: row.index, text: rowText(row) };
+}
+
+/** Does the slot hold exactly `text`, by the server's echo rule (`rowText` on both sides)? A row holding exactly the
+ *  text a refused call sent is the stranded-text retry (D-5090): the route proves it and submits it without typing
+ *  (D-5047's retry arm). Any other text in the row is the operator's to finish or clear in the terminal. */
+export function slotHolds(slot: FreeTextSlot, text: string): boolean {
+  return slot.kind === 'held' && slot.text === rowText({ label: text });
+}
+
+/** The `Chat about this` row of a parsed pane (`CHAT_ABOUT_ROW_RE`), or undefined. A tap on it declines the WHOLE ask
+ *  so the user can talk it over (measured), which both sheets say on the row itself (D-5090). */
+export function chatRow(dialog: Dialog): Dialog['options'][number] | undefined {
+  return dialog.parsed ? dialog.options.find((o) => CHAT_ABOUT_ROW_RE.test(o.label)) : undefined;
 }

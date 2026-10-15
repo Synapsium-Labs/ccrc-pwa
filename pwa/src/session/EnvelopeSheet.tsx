@@ -22,8 +22,10 @@ import { Button, OptionRow, Sheet, toast } from '@ccrc/ui';
 import { api, ApiError, failedTo } from '../lib/api';
 // C1's correspondence check lives in `askLive.ts` (D-5089), beside the rules that choose which question is live:
 // `liveQuestion` applies it to EVERY question of the envelope, and the title only breaks a tie.
-import { isAskReview, liveQuestion, namedQuestion } from './askLive';
-import { AskEyebrow, AskReview, OtherQuestions, REVIEW_TITLE, SEVERAL_ANSWERS } from './AskParts';
+import { chatRow, freeTextSlot, isAskReview, liveQuestion, namedQuestion } from './askLive';
+import {
+  AskEyebrow, AskReview, ChatRow, OtherQuestions, OwnWords, REVIEW_TITLE, SEVERAL_ANSWERS, wordsBusy, type Words,
+} from './AskParts';
 import './chat.css';
 
 /** The way out of a question this app cannot render: open the terminal, or
@@ -81,6 +83,7 @@ export function EnvelopeSheet({
   ask,
   dialog,
   answering,
+  words,
   open,
   onHide,
   onSelectOption,
@@ -95,6 +98,9 @@ export function EnvelopeSheet({
   /** The scraped flow's in-flight option index — shared so a numbered-option
    *  tap here disables the same way a scraped one does. */
   answering: number | null;
+  /** D-5090: the own-words text and its call. Held by the PARENT, never here, so an `ask_cleared` mid-call hands the
+   *  same text and call to the scraped sheet when this one unmounts. */
+  words: Words;
   open: boolean;
   onHide: () => void;
   onSelectOption: (optionIndex: number) => void;
@@ -107,7 +113,9 @@ export function EnvelopeSheet({
   // honest record that a tap is still landing — same rule the scraped sheet's
   // `close` follows for `answering` alone).
   const [denying, setDenying] = useState(false);
-  const busy = answering !== null || denying;
+  // D-5090: an own-words send is a send too, and refuses the others and the dismissal while it is under way.
+  const sendingWords = wordsBusy(words.call);
+  const busy = answering !== null || denying || sendingWords;
   // D-5089: WHICH question, before anything about it. The hook writes every question of an ask at once and keeps the
   // envelope until the tool call ends, while the pane paints one question at a time and then the review screen. So
   // the sheet answers the question the PANE is painting (`liveQuestion`: labels first, a unique correspondence winning
@@ -260,7 +268,7 @@ export function EnvelopeSheet({
     return (
       <Sheet open={open} onClose={close} eyebrow={<AskEyebrow />} title={REVIEW_TITLE}>
         <div data-source="hook" className="ask-envelope">
-          <AskReview dialog={review} answering={answering} onAnswer={onSelectOption} />
+          <AskReview dialog={review} answering={answering} locked={sendingWords} onAnswer={onSelectOption} />
         </div>
       </Sheet>
     );
@@ -273,6 +281,11 @@ export function EnvelopeSheet({
   // sheet has no way to route safely; each becomes tappable when the pane paints it.
   const q = ask.questions[shown]!; // isUsableAsk (the caller's guard) proves question 1 exists
   const count = ask.questions.length;
+  // D-5090: the live question's free-text row, at n + 1 under its n options, and the pane's `Chat about this` row. Read
+  // only while the question IS the live menu: an unmatched one is answered in the terminal (the CTA above says so).
+  const pane = live !== null && dialog !== null ? dialog : null;
+  const slot = pane !== null ? freeTextSlot(pane, q.options.length) : { kind: 'none' as const };
+  const chat = pane !== null ? chatRow(pane) : undefined;
   const eyebrow = (
     <AskEyebrow header={q.header} progress={count > 1 ? { n: shown + 1, of: count } : undefined} />
   );
@@ -327,7 +340,7 @@ export function EnvelopeSheet({
                 index={idx}
                 label={o.label}
                 sublabel={o.description}
-                disabled={!canAnswer || answering !== null}
+                disabled={!canAnswer || answering !== null || sendingWords}
                 busy={waiting}
                 onClick={() => onSelectOption(idx)}
                 marker={waiting ? <span className="opt-wait">answering…</span> : undefined}
@@ -335,6 +348,14 @@ export function EnvelopeSheet({
             );
           })}
         </div>
+        {/* Own words, through the pane's free-text row (D-5090), then the pane's Chat row, saying what it does. A send
+            under way stays on screen even if the pane stops matching mid-call. */}
+        {(pane !== null || sendingWords) && (
+          <OwnWords slot={slot} chat={chat?.label ?? null} words={words} locked={answering !== null} />
+        )}
+        {chat && (
+          <ChatRow row={chat} answering={answering} disabled={busy} onAnswer={onSelectOption} />
+        )}
         {terminalCta}
         <OtherQuestions questions={ask.questions} shown={shown} />
       </div>

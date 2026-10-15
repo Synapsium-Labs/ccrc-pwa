@@ -5,9 +5,10 @@
 // keeps signalling) and is refused while an answer is in flight.
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
-import type { Dialog, HookAsk } from '../../shared/api';
+import { DIALOG_TEXT_MAX, DIALOG_TEXT_REFUSE_CODES, type Dialog, type HookAsk } from '../../shared/api';
 import { ToastHost } from '@ccrc/ui';
-import { api, ApiError } from '../src/lib/api';
+import { api, ApiError, failedTo, sendErrorText } from '../src/lib/api';
+import { DIALOG_TEXT_REFUSE_TEXT, dialogTextRefusal } from '../src/session/askWords';
 import { DialogSheet } from '../src/session/DialogSheet';
 import { createSessionStore } from '../src/stores/session';
 import {
@@ -408,15 +409,17 @@ describe('DialogSheet (enriched by Dialog.ask)', () => {
       'Ship as-is, alert + runbook',
       'Chat about this',
     ]);
-    // Row 4 is the TUI's own escape hatch: no counterpart, so no description…
+    // Row 4 is the TUI's own escape hatch: no counterpart in the transcript, so
+    // none of its copy. D-5090: it carries the sheet's own sentence instead, what
+    // a tap on it does (it declines the whole ask), never a transcript description…
     expect(rows.map((r) => r.querySelector('.opt-desc')?.textContent ?? null)).toEqual([
       'Inherit the last seen rate.',
       'Emit only complete rows.',
       'Change nothing; watch it.',
-      null,
+      'Declines this ask so you can talk it over in the chat.',
     ]);
     // …and nothing folded under it either.
-    expect(document.querySelector('.opts')?.lastElementChild).toBe(rows[3]);
+    expect(rows[3]!.parentElement?.lastElementChild).toBe(rows[3]);
   });
 
   it('does not carry one question’s collapsed preview over to the next', () => {
@@ -452,78 +455,6 @@ describe('DialogSheet (enriched by Dialog.ask)', () => {
     expect(screen.queryByText('Revised fix')).not.toBeInTheDocument();
     expect(screen.queryByText('Inherit the last seen rate.')).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /preview/i })).not.toBeInTheDocument();
-  });
-});
-
-// — answering in your own words —
-//
-// A menu owns the terminal's keyboard, so free text cannot simply be typed at
-// the pane: the server refuses with dialog-open (see sendPrompt's hasMenu
-// guard). The sheet must instead take the TUI's own "Chat about this" row,
-// wait for the menu to clear, and only then send.
-describe('DialogSheet free-text reply', () => {
-  const withChatRow = () =>
-    parsedDialog({
-      options: [
-        { index: 1, label: 'Forward-fill per class (Recommended)' },
-        { index: 2, label: 'Require completeness, Anthropic only' },
-        { index: 3, label: 'Chat about this' },
-      ],
-    });
-
-  it('selects "Chat about this" first, then sends the text once the menu clears', async () => {
-    const answer = vi.spyOn(api, 'answerDialog').mockResolvedValue(undefined as never);
-    const prompt = vi.fn().mockResolvedValue(undefined);
-    const store = createSessionStore(SESSION_ID, { makeSocket: fakeSocket, api: { prompt } });
-    const dialog = withChatRow();
-    act(() => store.getState().apply({ type: 'dialog', dialog }));
-    render(
-      <>
-        <DialogSheet id={SESSION_ID} store={store} />
-        <ToastHost />
-      </>,
-    );
-
-    fireEvent.change(screen.getByLabelText('Answer in your own words'), {
-      target: { value: 'none of these — the rates table is the wrong layer' },
-    });
-    fireEvent.click(screen.getByRole('button', { name: 'Send' }));
-
-    // The escape hatch is taken by its own index, not by guessing.
-    await vi.waitFor(() => expect(answer).toHaveBeenCalledWith(SESSION_ID, 'd-abc', 3));
-    // Nothing is typed while the menu is still up.
-    expect(prompt).not.toHaveBeenCalled();
-
-    act(() => store.getState().apply({ type: 'dialog_cleared' }));
-    await vi.waitFor(() =>
-      expect(prompt).toHaveBeenCalledWith(
-        SESSION_ID,
-        'none of these — the rates table is the wrong layer',
-        { replaceDraft: undefined },
-      ),
-    );
-  });
-
-  it('says so rather than failing silently when the question offers no free-text row', async () => {
-    const answer = vi.spyOn(api, 'answerDialog').mockResolvedValue(undefined as never);
-    const prompt = vi.fn().mockResolvedValue(undefined);
-    const store = createSessionStore(SESSION_ID, { makeSocket: fakeSocket, api: { prompt } });
-    act(() => store.getState().apply({ type: 'dialog', dialog: parsedDialog() }));
-    render(
-      <>
-        <DialogSheet id={SESSION_ID} store={store} />
-        <ToastHost />
-      </>,
-    );
-
-    fireEvent.change(screen.getByLabelText('Answer in your own words'), {
-      target: { value: 'something else entirely' },
-    });
-    fireEvent.click(screen.getByRole('button', { name: 'Send' }));
-
-    expect(await screen.findByText(/no free-text option/i)).toBeInTheDocument();
-    expect(answer).not.toHaveBeenCalled();
-    expect(prompt).not.toHaveBeenCalled();
   });
 });
 
@@ -1415,86 +1346,352 @@ describe('the envelope follows the pane (D-5089)', () => {
   });
 });
 
-// — the free-text path's two failures, and the one disclosure nothing opened —
-describe('the free-text reply when the menu does NOT clear', () => {
-  const withChatRow = () =>
-    parsedDialog({
-      options: [
-        { index: 1, label: 'Forward-fill per class (Recommended)' },
-        { index: 2, label: 'Chat about this' },
-      ],
+// — own words, through the free-text row (D-5090) —
+//
+// AskUserQuestion paints a free-text row under a question's n options: `n+1. Type something.` while it is empty, the
+// typed text once typed. Own words answer the question THROUGH that row (`api.answerDialogText`, D-5047), which types
+// only once the pane proves focus and presses Enter only once it proves the echo. They are never sent by pressing
+// `Chat about this`, which declines the WHOLE ask, and never as a new prompt (the deleted `respond()`, diagnosis root
+// cause 5). The in-flight state belongs to the CALL: typing changes the dialog's id (it hashes the labels, and the
+// row's label becomes the text), so the stream can deliver the typed row while the call is still running.
+//
+// Every screen is a recorded Claude Code 2.1.300 one (`askPanes.ts`), named by its fixture; a shape no recording shows
+// is DERIVED and says so.
+describe('own words go through the free-text row (D-5090)', () => {
+  /** The recorded walk's own words (`cc300-ask-freetext-walk-3-typed` paints them in row 3 of `Enable tracing?`). */
+  const TEXT = '- only in staging, sampled 10%';
+  const CHAT_SAYS = 'Declines this ask so you can talk it over in the chat.';
+  const renderAsk = (ask: HookAsk | null, dialog: Dialog | null) => {
+    const prompt = vi.fn().mockResolvedValue(undefined);
+    const store = createSessionStore(SESSION_ID, { makeSocket: fakeSocket, api: { prompt } });
+    act(() => {
+      if (dialog) store.getState().apply({ type: 'dialog', dialog });
+      if (ask) store.getState().apply({ type: 'ask', ask, key: null });
     });
+    render(
+      <>
+        <DialogSheet id={SESSION_ID} store={store} onOpenTerminal={vi.fn()} />
+        <ToastHost />
+      </>,
+    );
+    return { store, prompt };
+  };
+  const field = (): HTMLInputElement => screen.getByLabelText('Answer in your own words');
+  const noField = (): HTMLElement | null => screen.queryByLabelText('Answer in your own words');
+  const send = (): HTMLButtonElement => screen.getByRole('button', { name: /^Send/ });
+  const type = (text: string): void => {
+    fireEvent.change(field(), { target: { value: text } });
+  };
+  const heading = (name: string): HTMLElement => screen.getByRole('heading', { name });
+  /** The one option BUTTON whose label is exactly `label` (see the D-5089 describe's helper of the same name). */
+  const optionButton = (label: string): HTMLButtonElement => {
+    const buttons = screen.getAllByText(label, { selector: '.opt-label' })
+      .map((l) => l.closest('button'))
+      .filter((b): b is HTMLButtonElement => b !== null);
+    expect(buttons, `option buttons reading ${label}`).toHaveLength(1);
+    return buttons[0]!;
+  };
+  /** A call the test settles by hand. */
+  const deferred = () => {
+    let resolve!: () => void;
+    let reject!: (err: unknown) => void;
+    const promise = new Promise<void>((res, rej) => {
+      resolve = res;
+      reject = rej;
+    });
+    return { promise, resolve, reject };
+  };
+  const refused = (code: string) => new ApiError(409, { ok: false, error: code });
 
-  it('says the question is still up, and types NOTHING into the pane', async () => {
-    // The escape hatch is a two-step: take the "Chat about this" row, WAIT for
-    // the menu to go, then type. The server refuses to type into a session
-    // with a menu up (`dialog-open`), so sending anyway would be a request
-    // that fails — and the reader would have lost their text to it. Measured
-    // through the poll itself (CLEAR_TRIES × CLEAR_POLL_MS) with a store whose
-    // dialog never clears.
-    vi.useFakeTimers();
-    try {
-      const answer = vi.spyOn(api, 'answerDialog').mockResolvedValue(undefined as never);
-      const prompt = vi.fn().mockResolvedValue(undefined);
-      const store = createSessionStore(SESSION_ID, { makeSocket: fakeSocket, api: { prompt } });
-      act(() => store.getState().apply({ type: 'dialog', dialog: withChatRow() }));
-      render(<><DialogSheet id={SESSION_ID} store={store} /><ToastHost /></>);
+  it('envelope: an empty Type something. row at n+1 offers Answer in your own words, and Send calls answerDialogText', () => {
+    const text = vi.spyOn(api, 'answerDialogText').mockReturnValue(new Promise(() => {}));
+    const option = vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise(() => {}));
+    const q2 = pane('cc300-ask-same-labels-q2');
+    expect(q2.id.startsWith('38f07f99')).toBe(true);
+    const { prompt } = renderAsk(CACHING_TRACING, q2);
+    expect(document.querySelector('[data-source="hook"]')).not.toBeNull();
 
-      fireEvent.change(screen.getByLabelText('Answer in your own words'),
-        { target: { value: 'the rates table is the wrong layer' } });
-      fireEvent.click(screen.getByRole('button', { name: 'Send' }));
-      await vi.waitFor(() => expect(answer).toHaveBeenCalled());
+    type(TEXT);
+    fireEvent.click(send());
+    // Row 3 is the pane's `Type something.`, under the question's two options.
+    expect(text).toHaveBeenCalledWith(SESSION_ID, q2.id, 3, TEXT);
+    expect(option, 'own words pressed a row').not.toHaveBeenCalled();
+    expect(prompt, 'own words were sent as a new prompt').not.toHaveBeenCalled();
+  });
 
-      // Exactly past the last poll (CLEAR_TRIES × CLEAR_POLL_MS = 8 s), and
-      // no further: a toast dismisses itself on a timer of its own, so
-      // advancing "plenty" would run the refusal off the screen before the
-      // assertion reads it (measured — 30 s left nothing to find).
-      await act(async () => { await vi.advanceTimersByTimeAsync(8_400); });
+  it('envelope: the pane\'s Chat about this row is offered after the own words, and says it declines the ask', () => {
+    const option = vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise(() => {}));
+    const q2 = pane('cc300-ask-same-labels-q2');
+    renderAsk(CACHING_TRACING, q2);
 
-      expect(screen.getByText(/answer it in the terminal/)).toBeInTheDocument();
-      expect(prompt, 'the text was typed into a session with a menu up').not.toHaveBeenCalled();
-    } finally {
-      vi.useRealTimers();
+    const chat = screen.getByRole('button', { name: /^Chat about this/ });
+    expect(chat).toHaveTextContent(CHAT_SAYS);
+    expect(field().compareDocumentPosition(chat) & Node.DOCUMENT_POSITION_FOLLOWING, 'Chat sits after the field')
+      .toBeTruthy();
+    fireEvent.click(chat);
+    expect(option).toHaveBeenCalledWith(SESSION_ID, q2.id, 4);
+  });
+
+  it('scraped: Type something. is not a tappable row', () => {
+    // `COLOUR_ONE`'s pane with no envelope: the scraped sheet alone. Enter on the empty row rejects the whole ask.
+    renderAsk(null, pane('cc300-ask-1q-open'));
+
+    expect(screen.queryByRole('button', { name: /Type something/ })).toBeNull();
+    expect(screen.queryByText('Type something.')).toBeNull();
+    expect(field()).toBeEnabled();
+    expect(screen.getByRole('button', { name: /^Red/ })).toBeEnabled();
+  });
+
+  it('scraped: own words answer the question through the Type something. row', () => {
+    const text = vi.spyOn(api, 'answerDialogText').mockReturnValue(new Promise(() => {}));
+    const option = vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise(() => {}));
+    const open = pane('cc300-ask-1q-open');
+    expect(open.id.startsWith('ac059b8e')).toBe(true);
+    const { prompt } = renderAsk(null, open);
+
+    type('Teal, if there is one');
+    fireEvent.click(send());
+    expect(text).toHaveBeenCalledWith(SESSION_ID, open.id, 3, 'Teal, if there is one');
+    expect(option, 'own words pressed Chat about this (row 4), declining the ask').not.toHaveBeenCalled();
+    expect(prompt).not.toHaveBeenCalled();
+  });
+
+  it('the two-column layout has no own-words row: one line, no field, and the Chat row says what it does', () => {
+    const option = vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise(() => {}));
+    const twoCol = pane('ask-2col-chat-about');
+    renderAsk(null, twoCol);
+
+    expect(noField()).toBeNull();
+    expect(screen.getByText(/no own-words row on the terminal/i)).toBeInTheDocument();
+    const chat = screen.getByRole('button', { name: /^Chat about this/ });
+    expect(chat).toHaveTextContent(CHAT_SAYS);
+    fireEvent.click(chat);
+    expect(option).toHaveBeenCalledWith(SESSION_ID, twoCol.id, 4);
+  });
+
+  it('a row holding other text: one line, no field', () => {
+    // `Mango` was typed in the terminal: typing more would append to it, so the route refuses `not-free-text`.
+    renderAsk(FRUIT_DRINK, pane('cc300-ask-freetext-held'));
+
+    expect(heading('Which fruit?')).toBeInTheDocument();
+    expect(screen.getByText(/already holds other text/i)).toBeInTheDocument();
+    expect(noField()).toBeNull();
+    expect(screen.queryByRole('button', { name: /^Mango/ })).toBeNull();
+  });
+
+  it('the text and the busy state belong to the call: a frame with the typed label arriving mid-call changes neither', () => {
+    const call = deferred();
+    vi.spyOn(api, 'answerDialogText').mockReturnValue(call.promise);
+    const q2 = pane('cc300-ask-same-labels-q2');
+    const { store } = renderAsk(CACHING_TRACING, q2);
+    type(TEXT);
+    fireEvent.click(send());
+
+    // The stream delivers the typed row, under a new id, before the call answers: first a capture taken while tmux
+    // was still typing (DERIVED from `cc300-ask-freetext-walk-3-typed`: the row holds the text's first 22 characters,
+    // and the id, which hashes the labels, differs), then the recorded one holding the whole text.
+    const typed = pane('cc300-ask-freetext-walk-3-typed');
+    expect(typed.id).not.toBe(q2.id);
+    const partial: Dialog = {
+      ...typed,
+      id: `${typed.id}-partial`,
+      options: typed.options.map((o) => (o.index === 3 ? { ...o, label: TEXT.slice(0, 22) } : o)),
+    };
+    for (const frame of [partial, typed]) {
+      act(() => store.getState().apply({ type: 'dialog', dialog: frame }));
+
+      expect(field(), frame.id).toHaveValue(TEXT);
+      expect(field()).toBeDisabled();
+      expect(send()).toBeDisabled();
+      expect(send()).toHaveAttribute('aria-busy', 'true');
+      expect(screen.queryByText(/already holds other text/i), 'the sheet read its own send as other text').toBeNull();
+      expect(optionButton('Yes')).toBeDisabled();
     }
   });
 
-  it('a refusal on the way in is said in the sheet’s own words, and the box is re-enabled', async () => {
-    // The `catch` and its `finally`: a 502 on the escape-hatch answer must not
-    // leave the sheet reading "answering…" forever, because the one control
-    // the reader has left is the row they would tap again.
-    const answer = vi.spyOn(api, 'answerDialog')
-      .mockRejectedValue(new ApiError(502, { ok: false, stderr: 'tmux: no server running' }));
-    const store = createSessionStore(SESSION_ID, { makeSocket: fakeSocket, api: { prompt: vi.fn() } });
-    act(() => store.getState().apply({ type: 'dialog', dialog: withChatRow() }));
-    render(<><DialogSheet id={SESSION_ID} store={store} /><ToastHost /></>);
+  it('a refused text answer keeps what was typed and says why', async () => {
+    // The scraped sheet (`cc300-ask-same-labels-q2`, no envelope): the old reply emptied the box before its call.
+    vi.spyOn(api, 'answerDialogText').mockRejectedValue(refused('echo-failed'));
+    vi.spyOn(api, 'answerDialog').mockRejectedValue(refused('stale-dialog'));
+    renderAsk(null, pane('cc300-ask-same-labels-q2'));
+    type(TEXT);
+    fireEvent.click(send());
+    expect(field(), 'the box was emptied before the call').toHaveValue(TEXT);
 
-    fireEvent.change(screen.getByLabelText('Answer in your own words'), { target: { value: 'wait' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Send' }));
-
-    expect(await screen.findByText(/tmux: no server running/)).toBeInTheDocument();
-    expect(answer).toHaveBeenCalled();
-    // The `finally` clears `answering`, so the ROWS are tappable again — which
-    // is the claim. Send itself stays disabled, and correctly: `respond` has
-    // already emptied the box, and an empty box has nothing to send (measured,
-    // because the first version of this case asserted the button).
-    await vi.waitFor(() =>
-      expect(screen.getByRole('button', { name: /Chat about this/ })).not.toBeDisabled());
+    expect(await screen.findByText(DIALOG_TEXT_REFUSE_TEXT['echo-failed'])).toBeInTheDocument();
+    expect(field()).toHaveValue(TEXT);
+    expect(field()).toBeEnabled();
   });
 
-  it('an empty box sends nothing at all', async () => {
-    // Trimmed, so whitespace is empty too — and the button is disabled for
-    // the same condition, which is why deleting the handler's own guard
-    // leaves all 61 green: the click never reaches it. Defence in depth, and
-    // what this case pins is the OUTCOME the two share, so the day the button
-    // stops being gated the escape hatch is not taken by an untouched box.
-    const answer = vi.spyOn(api, 'answerDialog').mockResolvedValue(undefined as never);
-    const store = createSessionStore(SESSION_ID, { makeSocket: fakeSocket, api: { prompt: vi.fn() } });
-    act(() => store.getState().apply({ type: 'dialog', dialog: withChatRow() }));
-    render(<><DialogSheet id={SESSION_ID} store={store} /><ToastHost /></>);
+  it('stranded text: when the row holds exactly the kept text, Send submits it under the new id', async () => {
+    const call = vi.spyOn(api, 'answerDialogText')
+      .mockRejectedValueOnce(refused('echo-failed'))
+      .mockReturnValueOnce(new Promise(() => {}));
+    const q2 = pane('cc300-ask-same-labels-q2');
+    const { store } = renderAsk(CACHING_TRACING, q2);
+    type(TEXT);
+    fireEvent.click(send());
+    await screen.findByText(DIALOG_TEXT_REFUSE_TEXT['echo-failed']);
 
-    fireEvent.change(screen.getByLabelText('Answer in your own words'), { target: { value: '   ' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Send' }));
-    expect(answer, 'an empty reply took the escape hatch').not.toHaveBeenCalled();
+    // The text was left in the row; the pane's cursor has stepped off it (a new id: the label is the text now).
+    const stranded = pane('cc300-ask-freetext-walk-4-stepped-off');
+    expect(stranded.id.startsWith('7a3fff18')).toBe(true);
+    act(() => store.getState().apply({ type: 'dialog', dialog: stranded }));
+
+    expect(screen.getByText(/typed in the terminal but not sent yet/i)).toBeInTheDocument();
+    expect(screen.queryByText(/already holds other text/i)).toBeNull();
+    expect(field()).toHaveValue(TEXT);
+    fireEvent.click(send());
+    expect(call).toHaveBeenLastCalledWith(SESSION_ID, stranded.id, 3, TEXT);
+  });
+
+  it('ok clears the text, and question 2 is answerable', async () => {
+    vi.spyOn(api, 'answerDialogText').mockResolvedValue(undefined);
+    const q1 = pane('cc300-ask-same-labels-q1');
+    const { store } = renderAsk(CACHING_TRACING, q1);
+    type('only in production');
+    fireEvent.click(send());
+    await act(async () => {});
+
+    // Caching answered: the pane paints Tracing.
+    act(() => store.getState().apply({ type: 'dialog', dialog: pane('cc300-ask-same-labels-q2') }));
+    expect(heading('Enable tracing?')).toBeInTheDocument();
+    expect(field()).toHaveValue('');
+    expect(field()).toBeEnabled();
+    expect(optionButton('Yes')).toBeEnabled();
+    expect(optionButton('No')).toBeEnabled();
+  });
+
+  it('an answer that landed waits for the pane to move on, through a late frame of the typed row', async () => {
+    // Like a tapped option: the sheet stays busy after ok until the pane paints the next screen. A capture of the
+    // typed row taken before Enter can arrive after the call answered; it is this send, not other text.
+    vi.spyOn(api, 'answerDialogText').mockResolvedValue(undefined);
+    const { store } = renderAsk(CACHING_TRACING, pane('cc300-ask-same-labels-q2'));
+    type(TEXT);
+    fireEvent.click(send());
+    await act(async () => {});
+    expect(field()).toBeDisabled();
+    expect(optionButton('Yes')).toBeDisabled();
+
+    act(() => store.getState().apply({ type: 'dialog', dialog: pane('cc300-ask-freetext-walk-3-typed') }));
+    expect(field()).toHaveValue(TEXT);
+    expect(field()).toBeDisabled();
+    expect(screen.queryByText(/already holds other text/i)).toBeNull();
+
+    act(() => store.getState().apply({ type: 'dialog', dialog: pane('cc300-ask-review-same-labels') }));
+    expect(screen.getByRole('button', { name: /^Submit answers/ })).toBeEnabled();
+  });
+
+  it('an answer whose next screen arrived mid-call does not hold that screen busy', async () => {
+    const call = deferred();
+    vi.spyOn(api, 'answerDialogText').mockReturnValue(call.promise);
+    const { store } = renderAsk(CACHING_TRACING, pane('cc300-ask-same-labels-q2'));
+    type(TEXT);
+    fireEvent.click(send());
+    // Enter landed and the stream painted the review before the call's answer came back.
+    act(() => store.getState().apply({ type: 'dialog', dialog: pane('cc300-ask-review-same-labels') }));
+    await act(async () => call.resolve());
+
+    expect(screen.getByRole('button', { name: /^Submit answers/ })).toBeEnabled();
+  });
+
+  it('Send is enabled exactly where the route would type', () => {
+    renderAsk(null, pane('cc300-ask-1q-open'));
+    for (const text of ['   ', 'one\ttwo', 'x'.repeat(DIALOG_TEXT_MAX + 1)]) {
+      type(text);
+      expect(send(), JSON.stringify(text.slice(0, 12))).toBeDisabled();
+    }
+    type('x'.repeat(DIALOG_TEXT_MAX));
+    expect(send()).toBeEnabled();
+  });
+
+  it('a trailing ; disables Send and says why', () => {
+    // tmux drops a literal's trailing `;` (measured in #417): the echo would fail and the retry would be refused.
+    renderAsk(null, pane('cc300-ask-1q-open'));
+    type('int x = 1;');
+    expect(send()).toBeDisabled();
+    expect(screen.getByText(/trailing ; doesn't survive/i)).toBeInTheDocument();
+    type('int x = 1');
+    expect(send()).toBeEnabled();
+    expect(screen.queryByText(/trailing ; doesn't survive/i)).toBeNull();
+  });
+
+  it('dismissal is refused while a text answer is in flight, on either sheet', () => {
+    vi.spyOn(api, 'answerDialogText').mockReturnValue(new Promise(() => {}));
+    const { store } = renderAsk(CACHING_TRACING, pane('cc300-ask-same-labels-q2'));
+    type(TEXT);
+    fireEvent.click(send());
+
+    fireEvent.click(screen.getByTestId('sheet-overlay'));
+    expect(heading('Enable tracing?'), 'the envelope sheet hid mid-call').toBeInTheDocument();
+    act(() => store.getState().apply({ type: 'ask_cleared' }));
+    fireEvent.click(screen.getByTestId('sheet-overlay'));
+    expect(heading('Enable tracing?'), 'the scraped sheet hid mid-call').toBeInTheDocument();
+  });
+
+  describe('the hand-off: ask_cleared hands the same text and call to the scraped sheet', () => {
+    it('ask_cleared mid-call: the scraped sheet shows the same text and busy state, and ok clears it', async () => {
+      const call = deferred();
+      vi.spyOn(api, 'answerDialogText').mockReturnValue(call.promise);
+      const { store } = renderAsk(CACHING_TRACING, pane('cc300-ask-same-labels-q2'));
+      type(TEXT);
+      fireEvent.click(send());
+      act(() => {
+        store.getState().apply({ type: 'ask_cleared' });
+        store.getState().apply({ type: 'dialog', dialog: pane('cc300-ask-freetext-walk-3-typed') });
+      });
+
+      expect(document.querySelector('[data-source="hook"]')).toBeNull();
+      expect(field()).toHaveValue(TEXT);
+      expect(field()).toBeDisabled();
+      expect(send()).toHaveAttribute('aria-busy', 'true');
+      // The typed row is this send's own row, never an option to tap.
+      expect(screen.queryByText(TEXT, { selector: '.opt-label' })).toBeNull();
+
+      await act(async () => call.resolve());
+      // The next question (a new screen): its field starts empty.
+      act(() => store.getState().apply({ type: 'dialog', dialog: pane('cc300-ask-same-labels-q1') }));
+      expect(field()).toHaveValue('');
+      expect(field()).toBeEnabled();
+    });
+
+    it('after a refusal, the scraped sheet offers the same stranded retry', async () => {
+      // The scraped reading carries no transcript enrichment, so only this sheet's own call says which row is the
+      // free-text row once it holds text.
+      const call = vi.spyOn(api, 'answerDialogText')
+        .mockRejectedValueOnce(refused('echo-failed'))
+        .mockReturnValueOnce(new Promise(() => {}));
+      const { store } = renderAsk(CACHING_TRACING, pane('cc300-ask-same-labels-q2'));
+      type(TEXT);
+      fireEvent.click(send());
+      await screen.findByText(DIALOG_TEXT_REFUSE_TEXT['echo-failed']);
+      const stranded = pane('cc300-ask-freetext-walk-4-stepped-off');
+      act(() => {
+        store.getState().apply({ type: 'ask_cleared' });
+        store.getState().apply({ type: 'dialog', dialog: stranded });
+      });
+
+      expect(document.querySelector('[data-source="hook"]')).toBeNull();
+      expect(screen.getByText(/typed in the terminal but not sent yet/i)).toBeInTheDocument();
+      expect(screen.queryByText(TEXT, { selector: '.opt-label' }), 'the stranded row is offered as an option').toBeNull();
+      fireEvent.click(send());
+      expect(call).toHaveBeenLastCalledWith(SESSION_ID, stranded.id, 3, TEXT);
+    });
+  });
+
+  it('every DialogTextRefuseCode has its sentence', () => {
+    for (const code of DIALOG_TEXT_REFUSE_CODES) {
+      expect(DIALOG_TEXT_REFUSE_TEXT[code], code).toEqual(expect.any(String));
+      expect(DIALOG_TEXT_REFUSE_TEXT[code], code).not.toBe('');
+      expect(dialogTextRefusal(new ApiError(code === 'bad-text' ? 400 : 409, { ok: false, error: code })), code)
+        .toBe(DIALOG_TEXT_REFUSE_TEXT[code]);
+    }
+    expect(new Set(Object.values(DIALOG_TEXT_REFUSE_TEXT)).size, 'two codes share a sentence')
+      .toBe(DIALOG_TEXT_REFUSE_CODES.length);
+    // `not-alive` is the composer's own sentence, read, never spelled again.
+    expect(DIALOG_TEXT_REFUSE_TEXT['not-alive']).toBe(sendErrorText('not-alive'));
+    const other = new ApiError(502, { ok: false, stderr: 'tmux: no server running' });
+    expect(dialogTextRefusal(other)).toBe(failedTo('answer', other));
   });
 });
 
