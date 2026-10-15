@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=c4c35e3b5fb9142f72bbc424c50dc60c0fda7f2180ebe2f4b2e72e32e271690f
+# ccrc:generated 1 sha256=13cf94bc3ae3b440063189b8267eb97ca80e3120eb465b0a9028a9441ae3baac
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -35838,7 +35838,7 @@ cmd_ws_collect() {   # ccd ws-collect --expect <token> --session <id> [--surface
   # comes BEFORE the pause, which is read under the lock: nothing moves either way.
   if ! _ws_collect_prelock "$id"; then
     if [[ "${REAP_VERDICT-}" == unmeasured ]]; then
-      _ws_reclaim_fail "$id" "" probe-unmeasured "$(_ws_leaf_why_line "no lock was taken, and nothing was moved or removed: ${REAP_DETAIL-}")"
+      _ws_reclaim_fail "$id" "" probe-unmeasured "$(_ws_leaf_why_line "${REAP_DETAIL-}; no lock was taken, and nothing was moved or removed")"
       return 1
     fi
     _ws_collect_refused "$id" "" "${REAP_VERDICT-}" "no lock was taken: ${REAP_DETAIL-}" "$lc_surface" "$lc_actor" "$lc_reason"

@@ -14,8 +14,8 @@ import { makePrHarness, type PrHarness } from './ccdPrHelpers.js';
 import { CCD } from './ccdWsHelpers.js';
 import { eventsOf, readJournal, refusalsOf } from './lifecycleHelpers.js';
 import {
-  AGED, COL_ID, PAUSE, type Answer, collectAudit, collectOf, identityOf, lockOf, makeOrphan, plantRecord, recName,
-  recordFor, recordLine, recordsDir, regDir, verdictOf, witnessOf,
+  AGED, COL_ID, PAUSE, type Answer, collectAudit, collectOf, identityOf, lockOf, makeOrphan, moveIntoSlot, plantRecord,
+  recName, recordFor, recordLine, recordsDir, regDir, verdictOf, witnessOf,
 } from './collectFixture.js';
 import { WRONG_TOKEN, collectVerb, docOf } from './wsCollectFixture.js';
 
@@ -272,9 +272,44 @@ describe.skipIf(!LINUX)('the collector opens the reap lock only after an advisor
       expect(r.code, r.stdout + r.stderr).toBe(1);
       const doc = docOf(r.stdout);
       expect(doc['failed']).toBe('probe-unmeasured');
-      expect(doc['detail']).toBe(`no lock was taken, and nothing was moved or removed: ${NODASH} names no project and slug,`
-        + ' so whether its slug is free cannot be asked');
+      expect(doc['detail'], 'the locked evaluation’s detail first, the no-lock clause after it')
+        .toBe(`${NODASH} names no project and slug, so whether its slug is free cannot be asked;`
+          + ' no lock was taken, and nothing was moved or removed');
       expect(locked(NODASH)).toBe(false);
+    }, 60_000);
+
+    it('a resume record whose slot cannot be derived keeps "was never derived" whole: the detail first, then the no-lock clause', () => {
+      // THE RESUME'S SHAPE: a crashed run's slot holds the leaf, and its record names it. The reader's rc 3 (the
+      // physical ~/.cc-tmp stops resolving) is stubbed as `ccd-ws-collect-resume.test.ts` stubs it, so the pass
+      // answers unmeasured `quarantine` in the locked evaluation's words, before any lock. `_ws_leaf_why_line` cuts the
+      // verb's line at 300 bytes. The stub's why is padded by a length the case computes from its OWN record path, so
+      // the operative clause ends between byte 248 and byte 300 of the detail-first line at any TMPDIR: the 53-byte
+      // clause "no lock was taken, and nothing was moved or removed" ahead of the detail would push it past the cut.
+      const { leaf } = makeOrphan(h);
+      const ident = identityOf(leaf);
+      const slot = moveIntoSlot(h);
+      const rec = plantRecord(h, recName(), recordLine(recordFor(ident)));
+      const STUB = 'stub: ~/.cc-tmp cannot be resolved';
+      /** The detail-first line through its operative clause, as `_ws_leaf_why_line` spells it ("—" reads "-"). */
+      const head = (why: string): string => `${why} - the slot of ${rec} was never derived`;
+      const why = STUB + '_'.repeat(Math.max(0, 274 - Buffer.byteLength(head(STUB))));
+      const end = Buffer.byteLength(head(why));
+      expect(end, `the clause ends inside the window (a ${Buffer.byteLength(rec)}-byte record path)`).toBeGreaterThanOrEqual(248);
+      expect(end, `the clause ends inside the window (a ${Buffer.byteLength(rec)}-byte record path)`).toBeLessThanOrEqual(300);
+      const unresolved = `_ws_collect_record_read() { [[ -e "$1" ]] || return 1; _WS_QPATH_WHY='${why}'; return 3; };`;
+      const r = collectVerb(h, WRONG_TOKEN, { id: COL_ID, pre: unresolved });
+      expect(r.code, r.stdout + r.stderr).toBe(1);
+      const doc = docOf(r.stdout);
+      expect(doc['failed']).toBe('probe-unmeasured');
+      const detail = String(doc['detail']);
+      expect(detail, 'the operative clause survives the cut').toContain('was never derived');
+      expect(detail.startsWith(head(why)), `the locked evaluation's detail comes first: ${detail}`).toBe(true);
+      expect(detail.endsWith('…'), 'the line was cut, after the operative clause').toBe(true);
+      expect(eventsOf(h.home, 'collect').at(-1), 'one detail, journaled as printed')
+        .toMatchObject({ outcome: 'failed', refusal: 'probe-unmeasured', detail });
+      expect(locked(), 'no lock was taken').toBe(false);
+      expect(identityOf(path.join(slot, 'leaf')).ino, 'the slot’s leaf, untouched').toBe(ident.ino);
+      expect(fs.readFileSync(rec, 'utf8'), 'the record stands as it was').toBe(recordLine(recordFor(ident)));
     }, 60_000);
   });
 });
