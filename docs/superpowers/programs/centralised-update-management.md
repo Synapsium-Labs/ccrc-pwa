@@ -1696,6 +1696,33 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
         still `dispatched`, and its `ccd/ccd` work has not landed.
       - STATUS: fleet and server v0.0.195, newest v0.0.195, backups fleet 180M/server 733M, disk free fleet 220G/work
         volume 187G/server 32G, no anomalies at 06:42.
+    - **2026-10-15 09:42 UTC: v0.0.196, v0.0.197 and v0.0.198 auto-converged unattended. The history migration ran at
+      the operator's request, and the third fleet run was the first clean one since v0.0.194.**
+      - **v0.0.196** (`377ede61d`, #414), released 08:29:28. The fleet box installed from 08:38:27 to 08:41:14, about
+        a minute after a poll falls due on the grid from the server's 06:37:17 restart. Its run exited 3 on two FAILs,
+        `history: migration-needs-op` and `history: lag-high` (7745 seconds). The server followed from 08:42:15 to
+        08:42:38, clean.
+      - **The migration.** The operator asked the coordinator to run `ccrc history doctor --migrate` for them. It ran
+        from 09:09:24 to 09:11:04 as a transient user unit outside the coordinator's session, with a memory cap and
+        the highest OOM score, so a kill would take the migration and not a live session. The store went from schema
+        v1 to v2, behind a 1.55 GB snapshot that is kept, at 21.6 MB/s, exit 0. Capture resumed: the backlog of about
+        63 MB drained to zero by 09:15:21. While the text index is backfilled the scheduled passes run long (9 minutes
+        7 seconds, then 5:34, 4:14 and 3:55), each under the 10-minute kill. This was the operator's act through the
+        coordinator, not the update mechanism's. The hourly check still runs no mutating verb of its own.
+      - **v0.0.197** (`3210b434d`, #417), released 08:57:12. The fleet box installed from 09:13:46 to 09:16:17, about a
+        minute after the 09:12:24 poll on the grid from the 08:42:24 restart. Its run exited 3 on `history: lag-high`
+        alone (9844 seconds), with the backlog still draining. The server followed from 09:16:54 to 09:17:16, clean.
+      - **v0.0.198** (`cb72ca064`, #416), released 09:12:51, 27 seconds after that poll. The server's restart at
+        09:17:03 polled on its first tick. The fleet box ran from 09:18:09 to 09:21:45 with its doctor clean (33
+        passed, 8 warned, 0 failed), and the server followed from 09:22:19 to 09:22:45. Both reports read `phase:
+        done` and `from: pwa` (defect A).
+      - Both boxes read `box-token` PASS, the server's generation #3 still 4 days old. Fleet doctor at 09:43: 33
+        passed, 8 warned, 0 failed, with `history: ok`. Server: 26 passed, 0 warned, 0 failed.
+      - None of the three merges touched wave 15's files. Wave 15 (run 300) is still held, by claim 1370 (run 433,
+        `working`; it replaced 1352) on `ccd/ccd`. Run 360 is still `dispatched`, and its `ccd/ccd` work has not
+        landed.
+      - STATUS: fleet and server v0.0.198, newest v0.0.198, backups fleet 181M/server 739M, disk free fleet 219G/work
+        volume 179G/server 32G, no anomalies at 09:42.
 
 - **2026-09-30 12:22 UTC — wave 8 opened (run 182) for the live audit's residue, and dispatched.**
   - **Planning:** two Opus scoping agents measured each defect at `a742eb6a`, and an Opus writer assembled the
