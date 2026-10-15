@@ -7,14 +7,19 @@ Read `README.md` for what ccrc is, `CLAUDE.md` for the operational rules that ar
 obvious from the code, and `docs/superpowers/specs/` for why a subsystem has the shape it
 has — before changing it.
 
-## The layout: four directories, three runnable, no root runner
+## The layout: five directories, three runnable, no root runner
 
 There is **no root `package.json`**. Three packages, each `"type": "module"`, each run
 from inside its own directory:
 
     cd server && npm ci && npm test
     cd agent  && npm ci && npm test
+    cd ui     && npm ci                # before pwa, always
     cd pwa    && npm ci && npm test
+
+`ui/` is `@ccrc/ui`, the design system, and pwa builds it from source (`file:../ui`). Its
+imports resolve from `ui/node_modules` alone, so install `ui` before anything typechecks,
+tests or bundles `pwa`; without it every pwa suite fails at import.
 
 `shared/` is not a real package — it carries a bare `"type": "module"` marker, and that
 marker is load-bearing: without it `tsc` emits CommonJS into `dist/shared/` and the server

@@ -6359,11 +6359,13 @@ describe('install.sh: the bootstrap that hands off to ccrc install', () => {
     const root = installFixtureTree(home);
     copyFileSync(join(REPO, 'install.sh'), join(root, 'install.sh'));
     chmodSync(join(root, 'install.sh'), 0o755);
-    // `TREE_FILES` carries nothing under `pwa/` — nothing `ccrc install`
-    // itself reads resolves there. install.sh's `cd "$ROOT/pwa"` does, so the
-    // directory has to exist for the (stubbed) `npm ci`/`npm run build` calls
-    // to run at all; its contents are never read, since npm is a recorder.
+    // `TREE_FILES` carries nothing under `pwa/` or `ui/` — nothing `ccrc
+    // install` itself reads resolves there. install.sh's `cd "$ROOT/pwa"` and
+    // `cd "$ROOT/ui"` do, so the directories have to exist for the (stubbed)
+    // `npm ci`/`npm run build` calls to run at all; their contents are never
+    // read, since npm is a recorder.
     mkdirSync(join(root, 'pwa'), { recursive: true });
+    mkdirSync(join(root, 'ui'), { recursive: true });
     // The recorder REPLACES the copy `installFixtureTree` already placed at
     // `<root>/ccd/ccrc` (from TREE_FILES) — proof that install.sh resolves
     // `ccd/ccrc` relative to ITSELF (`$ROOT`, from its own `BASH_SOURCE`)
@@ -6392,12 +6394,16 @@ describe('install.sh: the bootstrap that hands off to ccrc install', () => {
     const r = spawnSync(BASH, [join(root, 'install.sh')], { env, encoding: 'utf8' });
     expect(r.status ?? -1, r.stderr ?? '').toBe(0);
 
-    // The build order install.sh's pinned code spells: ci in server, then
-    // ci+build in pwa, then build in server, then ci+build in agent (D-1159 —
-    // the agent joined because `ccrc install` refuses without its dist for
-    // every role but `server`, and until it did, a fleet-role install from
-    // source restarted a live fleet's agent onto a tree with no entry point).
+    // The build order install.sh's pinned code spells: ci in server, then ci
+    // in ui (installed, never built — pwa builds @ccrc/ui from SOURCE, whose
+    // imports resolve from ui/node_modules alone, so a fresh checkout's PWA
+    // build fails without it: PR #346's release-lane blocker), then ci+build
+    // in pwa, then build in server, then ci+build in agent (D-1159 — the
+    // agent joined because `ccrc install` refuses without its dist for every
+    // role but `server`, and until it did, a fleet-role install from source
+    // restarted a live fleet's agent onto a tree with no entry point).
     expect(read(join(home, 'npm-argv')).trim().split('\n')).toEqual([
+      'ci --no-audit --no-fund',
       'ci --no-audit --no-fund',
       'ci --no-audit --no-fund',
       'run build',
@@ -6407,6 +6413,7 @@ describe('install.sh: the bootstrap that hands off to ccrc install', () => {
     ]);
     expect(read(join(home, 'npm-cwd')).trim().split('\n')).toEqual([
       join(root, 'server'),
+      join(root, 'ui'),
       join(root, 'pwa'),
       join(root, 'pwa'),
       join(root, 'server'),

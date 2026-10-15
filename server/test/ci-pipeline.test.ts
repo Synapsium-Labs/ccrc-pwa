@@ -18,7 +18,7 @@
 
 import { describe, it, expect } from 'vitest';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import path, { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mkTmp } from './tmpHelpers.js';
@@ -172,20 +172,106 @@ describe('ci.yml: the required checks cannot go missing (design 2026-09-23 §4.2
   // THREE PLACES needed it and only one had it, which is the shape of bug a
   // census catches and a comment does not. A developer box hides it
   // completely: `ui/node_modules` is already there.
+  //
+  // DERIVED, not listed: every workflow and every composite action is read,
+  // so a fourth workflow that installs pwa is in the census the day it lands
+  // (the release workflows install nothing themselves — build-release.sh
+  // does, and the script census below holds it).
   it('every CI install of pwa is accompanied by an install of ui', () => {
     const installsPwa = (b: string): boolean =>
       /^ {6,8}working-directory: pwa$/m.test(b) && /npm ci/.test(b);
     const installsUi = (b: string): boolean =>
       /^ {6,8}working-directory: ui$/m.test(b) && /npm ci/.test(b);
 
-    const missing: string[] = [];
-    for (const [id, body] of jobs(read(CI))) {
-      if (installsPwa(body) && !installsUi(body)) missing.push(`ci.yml ${id}`);
-    }
-    const deps = read(DEPS);
-    if (installsPwa(deps) && !installsUi(deps)) missing.push('server-deps');
+    const workflows = readdirSync(join(REPO, '.github', 'workflows'))
+      .filter((f) => /\.ya?ml$/.test(f)).sort();
+    expect(workflows, 'the workflow scan went vacuous').toContain('ci.yml');
+    const actions = readdirSync(join(REPO, '.github', 'actions'))
+      .map((d) => `.github/actions/${d}/action.yml`)
+      .filter((f) => existsSync(join(REPO, f)));
+    expect(actions, 'the composite-action scan went vacuous').toContain(DEPS);
 
+    const missing: string[] = [];
+    let pwaInstalls = 0;
+    for (const wf of workflows) {
+      for (const [id, body] of jobs(read(`.github/workflows/${wf}`))) {
+        if (!installsPwa(body)) continue;
+        pwaInstalls += 1;
+        if (!installsUi(body)) missing.push(`${wf} ${id}`);
+      }
+    }
+    for (const action of actions) {
+      const body = read(action);
+      if (!installsPwa(body)) continue;
+      pwaInstalls += 1;
+      if (!installsUi(body)) missing.push(action);
+    }
+
+    // ci.yml's build-pwa and server-deps, at least (the matrix `test` job
+    // installs `${{ matrix.package }}`, which this matcher cannot see — the
+    // ordering test below holds that one): a census that finds no pwa install
+    // at all is measuring nothing.
+    expect(pwaInstalls, 'found no CI install of pwa — the matcher drifted from the YAML').toBeGreaterThanOrEqual(2);
     expect(missing, 'pwa reads ui SOURCE — install ui in the same job, before anything typechecks or bundles pwa')
+      .toEqual([]);
+  });
+
+  // THE SAME RULE FOR EVERY SCRIPT THAT BUILDS pwa OUTSIDE CI — the omission
+  // PR #346 actually shipped. The census above read the YAML and nothing
+  // else, so it was green while `deploy/build-release.sh` (the release
+  // builder both release workflows call), `deploy/deploy.sh`'s server lane
+  // and `install.sh`'s checkout mode all ran `npm ci` in pwa with no ui
+  // beside it: a clean release machine failed pwa's `tsc --noEmit && vite
+  // build` on ui's first bare import, and every merge's prerelease stalled.
+  //
+  // Derived: every TRACKED shell script (a `.sh`, or a `#!` naming sh/bash) is
+  // read, so a fifth script that installs pwa is in the census on arrival.
+  // For each line that installs pwa (`cd <…>pwa && npm ci|install`), the ui
+  // install (`cd <…>ui && npm ci`) must come EARLIER IN THE SAME LANE: the
+  // backward walk stops, red, at a function header or at an `else`/`elif`/
+  // `fi` LESS indented than the pwa line — the boundary of the branch that
+  // holds it, so a ui install sitting in deploy.sh's agent lane cannot answer
+  // for the server lane's pwa build. A nested if/fi between the two, at the
+  // pwa line's own depth or deeper, is not a boundary.
+  it('every SCRIPT that installs pwa installs ui first, in the same lane — the release builder, deploy.sh, install.sh', () => {
+    const PWA = /\bcd\s+["']?(?:\$\{?ROOT\}?\/|\.\.\/|~\/[\w.-]+\/)?pwa["']?\s*&&\s*npm\s+(?:ci|install|i)\b/;
+    const UI = /\bcd\s+["']?(?:\$\{?ROOT\}?\/|\.\.\/|~\/[\w.-]+\/)?ui["']?\s*&&\s*npm\s+ci\b/;
+    const indent = (l: string): number => /^\s*/.exec(l)![0].length;
+    const isComment = (l: string): boolean => /^\s*#/.test(l);
+
+    const tracked = execFileSync('git', ['ls-files', '-z'], { cwd: REPO, encoding: 'utf8' })
+      .split('\0').filter(Boolean);
+    const scripts = tracked.filter((f) => {
+      if (f.endsWith('.sh')) return true;
+      if (/\.(?:[cm]?[jt]sx?|json|md|ya?ml|css|html|svg|png|py)$/.test(f)) return false;
+      const abs = join(REPO, f);
+      if (!existsSync(abs) || !statSync(abs).isFile()) return false;
+      const head = readFileSync(abs, 'utf8').slice(0, 64);
+      return /^#!.*\b(?:ba)?sh\b/.test(head);
+    });
+
+    const withPwa: string[] = [];
+    const missing: string[] = [];
+    for (const f of scripts) {
+      const lines = read(f).split('\n');
+      lines.forEach((l, i) => {
+        if (isComment(l) || !PWA.test(l)) return;
+        if (!withPwa.includes(f)) withPwa.push(f);
+        const depth = indent(l);
+        for (let j = i - 1; j >= 0; j -= 1) {
+          const p = lines[j]!;
+          if (p.trim() === '' || isComment(p)) continue;
+          if (UI.test(p)) return;
+          if (/^\s*(?:function\s+)?[\w-]+\s*\(\)\s*\{?\s*$/.test(p)) break;
+          if (/^\s*(?:else|elif\b|fi\b)/.test(p) && indent(p) < depth) break;
+        }
+        missing.push(`${f}:${i + 1}`);
+      });
+    }
+
+    expect(withPwa, 'the script scan went vacuous — the three known pwa builders were not found')
+      .toEqual(expect.arrayContaining(['deploy/build-release.sh', 'deploy/deploy.sh', 'install.sh']));
+    expect(missing, 'pwa reads ui SOURCE — `cd ui && npm ci` must precede this pwa install, in the same lane')
       .toEqual([]);
   });
 

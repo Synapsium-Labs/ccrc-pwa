@@ -1,9 +1,9 @@
 # Dependency updates for a repo that has no root package.json.
 #
 # The layout is the whole reason this file is not the two-line default:
-# `server/`, `agent/` and `pwa/` each carry their OWN package-lock.json and are
-# installed independently (`cd server && npm ci`), so Dependabot needs one
-# `directory` per package. Point it at `/` alone and it finds nothing and says
+# `server/`, `agent/`, `pwa/` and `ui/` each carry their OWN package-lock.json
+# and are installed independently (`cd server && npm ci`), so Dependabot needs
+# one `directory` per package. Point it at `/` alone and it finds nothing and says
 # nothing — a silent no-op that looks exactly like "no updates available".
 #
 # `shared/` is deliberately ABSENT. It has a package.json but no lockfile and no
@@ -56,6 +56,22 @@ updates:
       prefix-development: chore(deps-dev)
     groups:
       pwa-minor-patch:
+        patterns: ['*']
+        update-types: [minor, patch]
+
+  # ui/ (@ccrc/ui, the design system) is not runnable on its own, but it has
+  # its own lockfile and pwa builds it from SOURCE — ui's dependencies resolve
+  # from ui/node_modules, so they are bundled into the PWA and age like pwa's.
+  - package-ecosystem: npm
+    directory: /ui
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: chore(deps)
+      prefix-development: chore(deps-dev)
+    groups:
+      ui-minor-patch:
         patterns: ['*']
         update-types: [minor, patch]
 

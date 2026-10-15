@@ -119,6 +119,7 @@ generated value is never hand-edited, and the contrast gate rules on the result 
 
     cd server && npm ci && npm run test    # vitest run — hermetic
     cd agent  && npm ci && npm run test
+    cd ui     && npm ci                    # BEFORE pwa: pwa reads ui SOURCE, resolved from ui/node_modules only
     cd pwa    && npm ci && npm run test
 - **Single suite: `./node_modules/.bin/vitest run test/foo.test.ts` from inside the package. NEVER bare
   `npx vitest`** — it resolves a global copy with no jsdom and falsely reports "no tests".
