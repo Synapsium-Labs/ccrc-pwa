@@ -3027,6 +3027,14 @@ case "$event" in
   SubagentStart|SubagentStop) state="" ;;   # subagent-set update only
   *) exit 0 ;;
 esac
+# THE HISTORY SCOPE MARKER, FAIL-CLOSED (ccrc history spec 2026-10-05 §5.1,
+# W1-B3): a main-thread PreCompact empties this id's existing marker HERE, before
+# any exit below can run, and the `history-scope` block after the compaction
+# card's call writes only a decided verdict. So a hookstate write or a jq that
+# fails, or a verdict nobody reached, leaves an EMPTY marker, never an older
+# fresh `main` one for a subagent (spec §5.1, "The early truncation").
+# Builtins only; no file is made; only a regular non-link file in a non-link scope/.
+[[ "$event" == PreCompact && -z "$paid" ]] && [[ -f "$HOME/.ccrc/history/scope/$id" && ! -L "$HOME/.ccrc/history/scope/$id" && ! -L "$HOME/.ccrc/history/scope" ]] && { : > "$HOME/.ccrc/history/scope/$id"; } 2>/dev/null
 # THE CAPTURE ARM (worker stall watch §5.1's first task; capture-arm-keyed-on-hookcap (D-3612),
 # capture-arm-is-permanent (D-3613), capture-file-carries-a-meta-line (D-3669)). Only a session whose
 # ccd id ends `-hookcap` pays more than this one test. Every registered event that
@@ -4063,6 +4071,80 @@ mv -f "$tmp" "$f" 2>/dev/null || { rm -f "$tmp"; exit 0; }
 # disk: each calls the helper under one locally resolved deadline, and the
 # state write must never wait on either. Nothing below prints — PostCompact's
 # whole output is a journal line on disk, and this file's contract is silence.
+# `CS_SCOPE` is the compaction card's scope verdict, a plain global with no
+# initialiser. It is unset here, every run, so the history scope marker below
+# reads only a verdict THIS run reached, never one exported into the pane
+# (the `hcat` reset's reasoning).
+unset CS_SCOPE
 if [[ "$event" == PreCompact  ]]; then _hook_compact_pre  || true; fi
+# >>> history-scope (spec 2026-10-05 §5.1)
+# THE PRECOMPACT SCOPE MARKER (ccrc history spec 2026-10-05 §5.1, W1-B3):
+# ~/.ccrc/history/scope/<id> holds one line, `<scope> <psid> <ms>` (at most 64
+# bytes), which the SessionStart(compact) history card reads so its line reaches
+# a MAIN compaction only. A compacting subagent fires this hook with the
+# parent's session_id and no agent key, so this word is the one thing that
+# keeps the card line out of a subagent's context
+# (D-4747 (history-card-main-scope-only)).
+#
+# HERE, after `_hook_compact_pre`, because the card's verdict is reused
+# (D-4746 (history-scope-marker-after-card)). `CS_SCOPE` has no initialiser and this
+# file is `set -u`, so it is read only as `${CS_SCOPE+x}` / `${CS_SCOPE-}`:
+#   set, non-empty: the card's scope step ran, and its word is the marker's,
+#                   the card's overlap `ambiguous` included;
+#   set, empty:     scope answered rc 1, and nothing may be said;
+#   unset:          the card returned before scoping (compact-card-off, or a
+#                   failed payload read), so this block parses the payload and
+#                   runs `_hook_compact_scope` itself: the plain scope rule
+#                   decides, independent of compact-card-off.
+# `CS_SCOPE` is unset directly above the card's call, so a value exported into
+# the pane can never stand in for a verdict this run did not reach.
+#
+# AN UNDECIDED VERDICT WRITES NOTHING, AND THE MARKER IS ALREADY EMPTY: the
+# line directly below the event `case` emptied this id's existing marker on
+# this main-thread PreCompact, before any exit above could run
+# (spec §5.1, "The early truncation"). So a fresh `main` line an
+# earlier compaction of this psid wrote can never serve this one.
+#
+# GATES, builtins first and before any fork: PreCompact, the main thread
+# (`$paid`), the scope directory the sweep made, a real directory and never a
+# symlink (the hook never mkdirs; only db/ may link out of the history root),
+# and history-off absent. Then the id's bound (SPOOL_ID_MAX, as the spool block's;
+# `.` and `..` need no test of their own, since under scope/ they name
+# directories, which no write can open) and a lowercase-UUID psid (the card file
+# is keyed on it).
+#
+# A REGULAR FILE OR NOTHING, as the spool block's append (its D-4418 rule;
+# spec §5.1): the line DIRECTLY above the write
+# refuses a symlink, dangling or not, a FIFO and any other node, so a FIFO that
+# stands at scope/<id> when the test runs never blocks the `>` open. The tests
+# are builtin, here and on the early line below the event `case`, and bash has
+# no O_NOFOLLOW or O_NONBLOCK redirection, so what is left is a node swapped in
+# AFTER the test: it is opened, a link followed, a FIFO blocking until Claude
+# Code kills the hook (install-session-hooks.sh HOOK_TIMEOUT_S).
+#
+# PreCompact is off the hot path, so past the gates this block may
+# fork (one jq on the unset arm, the scope rule's finds, the clock). Every
+# redirection is under `{ …; } 2>/dev/null`, so nothing reaches stdout or
+# stderr, the unset arm's process-substitution read included
+# (D-5054 (history-scope-marker-hardening)). A hookstate write or a jq compose
+# that fails exits above, after the early line emptied any older marker, so it
+# leaves an empty marker or none: the fail-closed direction.
+_hook_history_scope() {   # -> scope/<id> = "<scope> <psid> <ms>" when decided; silent
+  local f="$HOME/.ccrc/history/scope/$id" scope="" ms="" tp="" trig=""
+  (( ${#id} <= 224 )) || return 0
+  [[ "$psid" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]] || return 0
+  if [[ -z "${CS_SCOPE+x}" ]]; then
+    { { read -r tp; read -r trig; } < <(jq -r '(.transcript_path // "" | tostring), (.trigger // "auto" | tostring)' <<<"$payload" 2>/dev/null); } 2>/dev/null
+    _hook_compact_scope "$tp" "$trig" || true
+  fi
+  scope="${CS_SCOPE-}"
+  [[ -n "$scope" ]] || return 0
+  ms=$(_hook_epoch_ms)
+  [[ ! -L "$f" && ( -f "$f" || ! -e "$f" ) ]] || return 0
+  { printf '%s %s %s\n' "$scope" "$psid" "$ms" > "$f"; } 2>/dev/null
+  return 0
+}
+if [[ "$event" == PreCompact && -z "$paid" ]] && [[ -d "$HOME/.ccrc/history/scope" && ! -L "$HOME/.ccrc/history/scope" ]] && [[ ! -e "$HOME/.ccrc/history-off" ]]; then _hook_history_scope || true; fi
+# <<< history-scope
 if [[ "$event" == PostCompact ]]; then _hook_compact_post || true; fi
 exit 0

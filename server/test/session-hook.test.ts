@@ -11296,3 +11296,339 @@ describe('ccrc history: the recall CLI is not search-gated (spec 2026-10-05 §8.
     expect(readState().graphGateDenials, 'a recall call was counted as a denial').toBe(1);
   });
 });
+// ── ccrc history: the PreCompact scope marker (history spec 2026-10-05 §5.1, §5.5 S16; W1-B3 task 8) ──
+// APPENDED, with NO new import line: the citation census cites this file by line.
+// `runFull`/`hookEnv`/`home`/`preCompact`/`plantSession`/`setFile`/`tl`/`LIVE`/`DEAD`/`GENERATION` are
+// this file's module-level fixture (a fixture HOME, a stub tmux answering
+// cc-demo-quiet-basin, the row's 36-byte generation file).
+// D-5055 (history-hook-test-scrub-once): ONE scrub for every history hook describe below, spec §10.1: the operator's own
+// session must not reach the hook through `hookEnv`'s `...process.env`, so `CCRC_RECALL_*` and `HISTORY_TEST_*` are blanked.
+const HISTORY_HOOK_SCRUB: Record<string, string> = {
+  TMUX: '', CLAUDE_CONFIG_DIR: '', CLAUDECODE: '',
+  ...Object.fromEntries(Object.keys(process.env).filter((k) => k.startsWith('CCRC_RECALL_') || k.startsWith('HISTORY_TEST_')).map((k) => [k, ''])),
+};
+describe('history scope marker: PreCompact records whose context is compacting (spec §5.1, S16)', () => {
+  const SID = '7d0c3f5e-1a2b-4c3d-8e9f-0a1b2c3d4e5f';
+  const ID = 'demo-quiet-basin';
+  const histDir = (...p: string[]): string => path.join(home, '.ccrc', 'history', ...p);
+  const scopeDir = (): string => histDir('scope');
+  const marker = (id = ID): string => histDir('scope', id);
+  const plantScope = (): void => { fs.mkdirSync(scopeDir(), { recursive: true, mode: 0o700 }); };
+  const cardOff = (): void => {
+    fs.mkdirSync(path.join(home, '.ccrc'), { recursive: true });
+    fs.writeFileSync(path.join(home, '.ccrc', 'compact-card-off'), '');
+  };
+  const historyOff = (): void => {
+    fs.mkdirSync(path.join(home, '.ccrc'), { recursive: true });
+    fs.writeFileSync(path.join(home, '.ccrc', 'history-off'), '');
+  };
+  /** PreCompact with this describe's UUID session id: the module's `preCompact` hard-codes `sess-1`. */
+  const pre = (transcript: string, trigger = 'manual', extra: object = {}): object =>
+    ({ ...preCompact(home, transcript, trigger), session_id: SID, ...extra });
+  /** The marker's three fields, asserted to be one line of at most 64 bytes. */
+  const read = (id = ID): { scope: string; sid: string; ms: number } => {
+    const raw = fs.readFileSync(marker(id), 'utf8');
+    expect(Buffer.byteLength(raw), 'the marker is at most 64 bytes').toBeLessThanOrEqual(64);
+    expect(raw.endsWith('\n') && raw.indexOf('\n') === raw.length - 1, 'one line').toBe(true);
+    const [scope, sid, ms] = raw.trimEnd().split(' ');
+    return { scope: scope!, sid: sid!, ms: Number(ms) };
+  };
+  /** Re-point the stub tmux at an id of exactly `n` characters. */
+  const longId = (n: number): string => {
+    const id = 'a'.repeat(n);
+    fs.writeFileSync(path.join(home, 'bin', 'tmux'), `#!/bin/sh\necho "cc-${id}"\n`, { mode: 0o755 });
+    fs.writeFileSync(path.join(home, '.cc-sessions', `${id}.generation`), GENERATION);
+    return id;
+  };
+
+  it('S16: with no scope/ directory there is no marker, nothing is created, and stdout and stderr are both empty', () => {
+    const { transcript } = plantSession({ sid: SID, lines: [tl.user('x')] });
+    expect(runFull(pre(transcript), HISTORY_HOOK_SCRUB)).toEqual({ stdout: '', stderr: '' });
+    expect(fs.existsSync(histDir()), 'the hook never mkdirs').toBe(false);
+  });
+
+  // The case above cannot see the gate on scope/: without it, the block's write into a missing directory fails
+  // silently and leaves the same nothing behind. What the gate saves is the block's forks, so this case counts them
+  // against the same run under history-off, whose own gate stops the block. compact-card-off keeps the card from
+  // scoping, so CS_SCOPE stays unset and the block, past its gate, would run its own jq, scope and clock.
+  itLinux('S16: with no scope/ directory the gate forks nothing: the same forks as the run under history-off', () => {
+    cardOff();
+    const { transcript } = plantSession({ sid: SID, lines: [tl.user('x')] });
+    const forks = (): number => {
+      const trace = path.join(home, 'scope-trace.txt');
+      const r = spawnSync('strace', ['-f', '-o', trace, '-e', 'trace=clone,clone3,fork,vfork', 'bash', HOOK], {
+        input: JSON.stringify(pre(transcript)), encoding: 'utf8', env: hookEnv(HISTORY_HOOK_SCRUB),
+      });
+      expect(r.status, `strace ran the hook: ${r.stderr}`).toBe(0);
+      const lines = fs.readFileSync(trace, 'utf8').split('\n').filter((l) => l !== '');
+      fs.rmSync(trace);
+      const root = /^(\d+)\s/.exec(lines[0] ?? '')?.[1];
+      expect(root, 'strace traced a fork').toBeDefined();
+      return lines.filter((l) => new RegExp(`^${root}\\s+(?:clone3?|v?fork)\\(`).test(l)).length;
+    };
+    forks();                                              // WARM-UP: a first run may make state no later run repeats
+    const open = forks();
+    historyOff();
+    expect(open, 'the block forked although scope/ is absent').toBe(forks());
+    expect(fs.existsSync(histDir()), 'the hook never mkdirs').toBe(false);
+  }, 60_000);
+
+  it('S16: under compact-card-off a manual compaction is scoped by the marker itself — main <psid> <ms>', () => {
+    plantScope(); cardOff();
+    const { transcript } = plantSession({ sid: SID, lines: [tl.user('x')] });
+    const before = Date.now();
+    expect(runFull(pre(transcript), HISTORY_HOOK_SCRUB)).toEqual({ stdout: '', stderr: '' });
+    const m = read();
+    expect([m.scope, m.sid]).toEqual(['main', SID]);
+    expect(m.ms).toBeGreaterThanOrEqual(before - 1000);
+    expect(m.ms).toBeLessThanOrEqual(Date.now() + 1000);
+  });
+
+  it('S16: the card\'s own verdict is reused — an unconsumed set inside the window makes it ambiguous', () => {
+    plantScope();
+    const { transcript } = plantSession({ sid: SID, lines: [tl.user('x')] });
+    fs.writeFileSync(setFile(), '{}\n');                 // a young canonical set: the card's overlap check
+    expect(runFull(pre(transcript), HISTORY_HOOK_SCRUB)).toEqual({ stdout: '', stderr: '' });
+    expect(read().scope).toBe('ambiguous');
+  });
+
+  it('S16: one live subagent beside a quiet parent is scoped subagent, on the card\'s path and under compact-card-off alike', () => {
+    plantScope();
+    const { transcript } = plantSession({ sid: SID, lines: [tl.user('x')], parentAge: DEAD,
+      subagents: [{ id: 'a1', lines: [tl.user('y')], age: LIVE }] });
+    runFull(pre(transcript, 'auto'), HISTORY_HOOK_SCRUB);
+    expect(read().scope).toBe('subagent');
+    fs.rmSync(marker());
+    cardOff();
+    runFull(pre(transcript, 'auto'), HISTORY_HOOK_SCRUB);
+    expect(read().scope).toBe('subagent');
+  });
+
+  it('S16: scope rc 1 (no readable transcript) writes no marker', () => {
+    plantScope();
+    expect(runFull(pre(path.join(home, 'missing.jsonl')), HISTORY_HOOK_SCRUB)).toEqual({ stdout: '', stderr: '' });
+    expect(fs.existsSync(marker())).toBe(false);
+    cardOff();                                            // the unset arm's own scope run answers rc 1 too
+    expect(runFull(pre(path.join(home, 'missing.jsonl')), HISTORY_HOOK_SCRUB)).toEqual({ stdout: '', stderr: '' });
+    expect(fs.existsSync(marker())).toBe(false);
+  });
+
+  it('an undecided verdict empties a fresh main marker this psid left, and creates nothing where none was', () => {
+    plantScope();
+    fs.writeFileSync(marker(), `main ${SID} ${Date.now()}\n`);
+    expect(runFull(pre(path.join(home, 'missing.jsonl')), HISTORY_HOOK_SCRUB)).toEqual({ stdout: '', stderr: '' });
+    expect(fs.readFileSync(marker(), 'utf8'), 'the earlier main marker survived an undecided compaction').toBe('');
+  });
+
+  it.skipIf(process.getuid?.() === 0)('S16: a hookstate write that fails leaves no marker and still exits 0, silent', () => {
+    plantScope(); cardOff();
+    const { transcript } = plantSession({ sid: SID, lines: [tl.user('x')] });
+    const reg = path.join(home, '.cc-sessions');
+    fs.chmodSync(reg, 0o500);                             // root writes through 0500, so root skips this
+    try {
+      expect(runFull(pre(transcript), HISTORY_HOOK_SCRUB)).toEqual({ stdout: '', stderr: '' });
+    } finally {
+      fs.chmodSync(reg, 0o700);
+    }
+    expect(fs.existsSync(marker()), 'a marker landed although the hookstate write failed').toBe(false);
+  });
+
+  it.skipIf(process.getuid?.() === 0)('a hookstate write that fails empties an older fresh main marker, so a following SessionStart(compact) serves no line', async () => {
+    const lib = await import('../../ccd/history/lib.mjs');
+    plantScope(); cardOff();
+    fs.writeFileSync(marker(), `main ${SID} ${Date.now()}\n`);  // an earlier main compaction's, still fresh
+    fs.mkdirSync(histDir('card', ID), { recursive: true, mode: 0o700 });
+    fs.writeFileSync(histDir('card', ID, `${SID}.txt`), `${lib.cardLine({ leaf: 'L03a9c1', parent: null })}\n`, { mode: 0o600 });
+    const { transcript } = plantSession({ sid: SID, lines: [tl.user('x')] });
+    const reg = path.join(home, '.cc-sessions');
+    fs.chmodSync(reg, 0o500);                             // the hookstate write fails, and the tail exits there
+    try {
+      expect(runFull(pre(transcript), HISTORY_HOOK_SCRUB)).toEqual({ stdout: '', stderr: '' });
+    } finally {
+      fs.chmodSync(reg, 0o700);
+    }
+    expect(fs.readFileSync(marker(), 'utf8'), 'the older main marker survived a PreCompact that exited at its hookstate write').toBe('');
+    // Once Task 9's reader exists, this is the end-to-end form: an emptied marker serves no line.
+    const r = runFull({ hook_event_name: 'SessionStart', source: 'compact', cwd: home, transcript_path: path.join(home, 't.jsonl'),
+      session_id: SID, prompt_id: 'p1', model: 'claude-opus-5' }, HISTORY_HOOK_SCRUB);
+    expect(r.stdout.includes('History: node '), 'a line served from an emptied marker').toBe(false);
+  });
+
+  it('S16: a CS_SCOPE exported into the pane is never read as this run\'s verdict', () => {
+    plantScope(); cardOff();
+    const { transcript } = plantSession({ sid: SID, lines: [tl.user('x')], parentAge: DEAD,
+      subagents: [{ id: 'a1', lines: [tl.user('y')], age: LIVE }] });
+    runFull(pre(transcript, 'auto'), { ...HISTORY_HOOK_SCRUB, CS_SCOPE: 'main' });
+    expect(read().scope).toBe('subagent');
+  });
+
+  it('S2 (marker half): a payload with agent_id writes no marker', () => {
+    plantScope(); cardOff();
+    const { transcript } = plantSession({ sid: SID, lines: [tl.user('x')] });
+    runFull(pre(transcript, 'manual', { agent_id: 'agent-7' }), HISTORY_HOOK_SCRUB);
+    expect(fs.existsSync(marker())).toBe(false);
+  });
+
+  // D-5054 (history-scope-marker-hardening): the early truncation's main-thread and event tests each need a case that
+  // reds without them. The block's own gate refuses an agent_id payload and a non-PreCompact event too, so only a
+  // marker that was ALREADY there can tell the early line's tests from the block's.
+  it('D-5054: a PreCompact whose payload carries an agent_id leaves a fresh main marker byte for byte intact', () => {
+    plantScope(); cardOff();
+    const fresh = `main ${SID} ${Date.now()}\n`;
+    fs.writeFileSync(marker(), fresh);
+    const { transcript } = plantSession({ sid: SID, lines: [tl.user('x')] });
+    expect(runFull(pre(transcript, 'manual', { agent_id: 'agent-7' }), HISTORY_HOOK_SCRUB)).toEqual({ stdout: '', stderr: '' });
+    expect(fs.readFileSync(marker(), 'utf8'), 'a subagent thread emptied the main thread\'s marker').toBe(fresh);
+  });
+
+  it('D-5054: a later main-thread event after a main PreCompact leaves the fresh marker intact', () => {
+    plantScope(); cardOff();
+    const { transcript } = plantSession({ sid: SID, lines: [tl.user('x')] });
+    runFull(pre(transcript), HISTORY_HOOK_SCRUB);
+    const written = fs.readFileSync(marker(), 'utf8');
+    expect(read().scope, 'the PreCompact wrote the marker this case then leaves to a Stop').toBe('main');
+    expect(runFull({ hook_event_name: 'Stop', session_id: SID }, HISTORY_HOOK_SCRUB)).toEqual({ stdout: '', stderr: '' });
+    expect(fs.readFileSync(marker(), 'utf8'), 'an event that is not a PreCompact emptied the marker').toBe(written);
+  });
+
+  it('S3 (marker half): history-off present writes no marker', () => {
+    plantScope(); cardOff(); historyOff();
+    const { transcript } = plantSession({ sid: SID, lines: [tl.user('x')] });
+    expect(runFull(pre(transcript), HISTORY_HOOK_SCRUB)).toEqual({ stdout: '', stderr: '' });
+    expect(fs.existsSync(marker())).toBe(false);
+  });
+
+  it('S8 (marker half): under history-off a PreCompact writes no marker while a SessionStart(clear) still spools its epoch line', () => {
+    plantScope(); cardOff(); historyOff();
+    fs.mkdirSync(histDir('spool'), { recursive: true, mode: 0o700 });
+    const { transcript } = plantSession({ sid: SID, lines: [tl.user('x')] });
+    runFull(pre(transcript), HISTORY_HOOK_SCRUB);
+    expect(fs.existsSync(marker())).toBe(false);
+    runFull({ hook_event_name: 'SessionStart', source: 'clear', session_id: SID }, HISTORY_HOOK_SCRUB);
+    expect(fs.readFileSync(histDir('spool', `${ID}.jsonl`), 'utf8')).toContain('"ev":"SessionStart"');
+  });
+
+  it('the id bound is SPOOL_ID_MAX: a 224-char id is marked, a 225-char id is not', async () => {
+    const lib = await import('../../ccd/history/lib.mjs');
+    plantScope(); cardOff();
+    const { transcript } = plantSession({ sid: SID, lines: [tl.user('x')] });
+    const fits = longId(lib.SPOOL_ID_MAX);
+    runFull(pre(transcript), HISTORY_HOOK_SCRUB);
+    expect(read(fits).scope).toBe('main');
+    const over = longId(lib.SPOOL_ID_MAX + 1);
+    runFull(pre(transcript), HISTORY_HOOK_SCRUB);
+    expect(fs.existsSync(marker(over))).toBe(false);
+  });
+
+  it('an id of . or .. names a directory, so no marker can land and nothing outside scope/ changes', () => {
+    plantScope(); cardOff();
+    const { transcript } = plantSession({ sid: SID, lines: [tl.user('x')] });
+    for (const id of ['.', '..']) {
+      fs.writeFileSync(path.join(home, 'bin', 'tmux'), `#!/bin/sh\necho "cc-${id}"\n`, { mode: 0o755 });
+      expect(runFull(pre(transcript), HISTORY_HOOK_SCRUB)).toEqual({ stdout: '', stderr: '' });
+    }
+    expect(fs.readdirSync(scopeDir())).toEqual([]);
+    expect(fs.readdirSync(histDir()).sort()).toEqual(['scope']);
+  });
+
+  it('a session_id that is not a lowercase UUID writes no marker', () => {
+    plantScope(); cardOff();
+    const { transcript } = plantSession({ sid: SID, lines: [tl.user('x')] });
+    runFull(pre(transcript, 'manual', { session_id: 'sess-1' }), HISTORY_HOOK_SCRUB);
+    expect(fs.existsSync(marker())).toBe(false);
+  });
+
+  it('a symlink where the marker goes is left alone, and its target is never written', () => {
+    plantScope(); cardOff();
+    const target = path.join(home, 'elsewhere.txt');
+    fs.writeFileSync(target, 'keep\n');
+    fs.symlinkSync(target, marker());
+    const { transcript } = plantSession({ sid: SID, lines: [tl.user('x')] });
+    expect(runFull(pre(transcript), HISTORY_HOOK_SCRUB)).toEqual({ stdout: '', stderr: '' });
+    expect(fs.readFileSync(target, 'utf8')).toBe('keep\n');
+    expect(fs.lstatSync(marker()).isSymbolicLink()).toBe(true);
+  });
+
+  // B1's F24 rows, for the marker (spec §5.1 and S16; B1's D-4418 rule, ruled R-B3-fifo). A
+  // FIFO already standing at scope/<id> passes a test that keeps only `! -L`, and the `>` open then blocks with no
+  // reader, so the run is bounded: a blocked hook is killed at the deadline, never left to hang the suite.
+  const runBounded = (payload: object): ReturnType<typeof spawnSync> => spawnSync('bash', [HOOK], {
+    input: JSON.stringify(payload), encoding: 'utf8', timeout: 10_000, killSignal: 'SIGKILL', env: hookEnv(HISTORY_HOOK_SCRUB),
+  });
+
+  it('a FIFO where the marker goes writes no marker and never blocks: exit 0, silent, the FIFO left as it was', () => {
+    plantScope(); cardOff();
+    execFileSync('mkfifo', [marker()]);
+    const { transcript } = plantSession({ sid: SID, lines: [tl.user('x')] });
+    const r = runBounded(pre(transcript));
+    expect(r.signal, 'the hook blocked opening the FIFO and was killed at the deadline').toBeNull();
+    expect(r.status).toBe(0);
+    expect(r.stdout).toBe('');
+    expect(r.stderr).toBe('');
+    expect(fs.lstatSync(marker()).isFIFO()).toBe(true);
+  }, 30_000);
+
+  it('a symlinked scope/ is neither written nor truncated through', () => {
+    fs.mkdirSync(histDir(), { recursive: true, mode: 0o700 });
+    const elsewhere = path.join(home, 'elsewhere');
+    fs.mkdirSync(elsewhere, { mode: 0o700 });
+    fs.symlinkSync(elsewhere, scopeDir());
+    cardOff();
+    const { transcript } = plantSession({ sid: SID, lines: [tl.user('x')] });
+    expect(runFull(pre(transcript), HISTORY_HOOK_SCRUB)).toEqual({ stdout: '', stderr: '' });
+    expect(fs.readdirSync(elsewhere), 'the block wrote a marker through a symlinked scope/').toEqual([]);
+    fs.writeFileSync(path.join(elsewhere, ID), 'keep\n');
+    expect(runFull(pre(transcript), HISTORY_HOOK_SCRUB)).toEqual({ stdout: '', stderr: '' });
+    expect(fs.readFileSync(path.join(elsewhere, ID), 'utf8'), 'a file behind a symlinked scope/ was truncated or overwritten').toBe('keep\n');
+  });
+
+  it('CONTROL: an existing regular marker is replaced by this run\'s decided verdict', () => {
+    plantScope(); cardOff();
+    fs.writeFileSync(marker(), `subagent ${SID} ${Date.now() - 60_000}\n`);
+    const { transcript } = plantSession({ sid: SID, lines: [tl.user('x')] });
+    expect(runFull(pre(transcript), HISTORY_HOOK_SCRUB)).toEqual({ stdout: '', stderr: '' });
+    expect([read().scope, read().sid]).toEqual(['main', SID]);
+  });
+
+  it('the block sits after the card\'s call and before PostCompact\'s, and its gate forks nothing', () => {
+    const src = fs.readFileSync(HOOK, 'utf8');
+    const open = src.indexOf('# >>> history-scope (spec 2026-10-05 §5.1)');
+    const close = src.indexOf('# <<< history-scope');
+    const preCall = src.indexOf('if [[ "$event" == PreCompact  ]]; then _hook_compact_pre  || true; fi');
+    expect(open, 'no history-scope block').toBeGreaterThan(-1);
+    expect(src.indexOf('# >>> history-scope', open + 1), 'two history-scope blocks').toBe(-1);
+    expect(open, 'the marker must follow the card, whose verdict it reuses').toBeGreaterThan(preCall);
+    expect(close).toBeLessThan(src.indexOf('if [[ "$event" == PostCompact ]]; then _hook_compact_post || true; fi'));
+    expect(src.split('\n').filter((l) => l === 'unset CS_SCOPE'), 'CS_SCOPE is unset once').toHaveLength(1);
+    expect(src, 'unset directly above the card\'s call').toContain(
+      'unset CS_SCOPE\nif [[ "$event" == PreCompact  ]]; then _hook_compact_pre  || true; fi');
+    const gate = src.slice(open, close).split('\n').find((l) => l.startsWith('if [[ "$event" == PreCompact && -z "$paid" ]]'));
+    expect(gate, 'the gate line').toBeDefined();
+    expect(gate!.slice(0, gate!.indexOf('; then')), 'the gate forks').not.toMatch(/\$\(|`/);
+    // The early invalidation: below the event case, above every tail exit, builtin-only.
+    const early = src.split('\n').filter((l) => l.startsWith('[[ "$event" == PreCompact && -z "$paid" ]] && [[ -f '));
+    expect(early, 'one early invalidation line').toHaveLength(1);
+    const at = src.indexOf(`\n${early[0]!}\n`);
+    expect(at, 'below the event case').toBeGreaterThan(src.indexOf('\nesac\n'));
+    expect(at, 'above the hookstate compose and every exit after it').toBeLessThan(src.indexOf('\nout=$(jq -cn'));
+    expect(early[0], 'the invalidation forks').not.toMatch(/\$\(|`/);
+    // B1's S1 form (its FR2a): a `${…@…}` transformation forks too, since `@P` runs prompt expansion and so command
+    // substitution. The early line, the gate and `_hook_history_scope`'s body spell none (past the gates the body may
+    // fork, but only by the forms its comment names: one jq, the scope rule, the clock).
+    const fnAt = src.indexOf('\n_hook_history_scope() {');
+    expect(fnAt, 'no _hook_history_scope definition').toBeGreaterThan(-1);
+    const fnCode = src.slice(fnAt, src.indexOf('\n}\n', fnAt)).split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
+    expect(`${early[0]!}\n${gate!}\n${fnCode}`.match(/\$\{[^}]*@/)?.[0] ?? null, 'a ${…@…} transformation in the marker lines (@P forks)').toBeNull();
+    // B1's D-4418 rule (spec §5.1): the type test is the line DIRECTLY above the write,
+    // so nothing but builtins runs between the test and the `>`; the gate and the early line refuse a symlinked scope/.
+    const fnLines = fnCode.split('\n');
+    const w = fnLines.findIndex((l) => l.includes('> "$f"; } 2>/dev/null'));
+    expect(w, 'no marker write').toBeGreaterThan(0);
+    expect(fnLines[w - 1]!.trim(), 'the regular-file test sits directly above the write, builtins only')
+      .toBe('[[ ! -L "$f" && ( -f "$f" || ! -e "$f" ) ]] || return 0');
+    // Either spelling of the directory: Task 9 re-points these lines to its HISTORY_SCOPE_DIR constant.
+    const notLinkedScope = /&& ! -L "(?:\$HOME\/\.ccrc\/history\/scope|\$HISTORY_SCOPE_DIR)" \]\]/;
+    expect(gate, 'the gate refuses a symlinked scope/').toMatch(notLinkedScope);
+    expect(early[0], 'the early line refuses a symlinked scope/').toMatch(notLinkedScope);
+  });
+});
