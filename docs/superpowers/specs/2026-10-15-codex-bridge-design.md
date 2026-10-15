@@ -1,6 +1,6 @@
 # The Codex bridge: a ccrc-owned path from Claude Code to a ChatGPT plan
 
-**Spec** · 2026-10-15 · Status: Draft, for review · Owner: ccrc · Linear: none · Related:
+**Spec** · 2026-10-15 · Status: Accepted 2026-10-15 · Owner: ccrc · Linear: none · Related:
 `docs/superpowers/specs/2026-09-20-gpt-lane-ownership-design.md` (amended here),
 `docs/superpowers/specs/2026-09-08-model-class-registry-design.md` (amended here),
 `docs/superpowers/specs/2026-10-13-model-class-auto-advance-design.md`
@@ -16,8 +16,8 @@ speaks the Responses API the way the Codex CLI does. It targets the **official S
 with today's backend route as the fallback, and **one auth library** owns every credential. The same spec raises
 the lanes' context window from a fixed 200k to a **measured** one: every model the lanes use accepted about 511k
 on 2026-10-15. The operator approved the design in eight sections in conversation on 2026-10-15 (D1 to D17).
-Writing it down surfaced ten gaps, each answered here as a **Proposed** decision, D18 to D27, for the operator to
-rule on with this text.
+Writing it down surfaced ten gaps, answered here as D18 to D27, and the operator accepted the written spec with
+them on 2026-10-15.
 
 ## 1. Context
 
@@ -325,9 +325,14 @@ measures once it runs.
 
 **The measured-window rule** amends the model-class-registry spec's eighth key (§4):
 
-- Each lane's registry may record a **measured window per model**, set by a new
+- Each lane may record a **measured window per model**, set by a new
   `ccrc models <id> set-window <model> <tokens>` and removed by `clear-window`, beside `set-effort`. A value is an
   integer from 1,000 to 1,000,000. The operator sets it from a measurement; a catalogue number never sets it.
+- The windows live in a sibling file, `~/.ccrc/models/<id>.windows.json`, not in the class registry (amended at
+  acceptance, D-TBD-windows-sibling-file). The registry's parser refuses any key it does not know
+  (`REGISTRY_KEYS`, `shared/models.mjs`), so a `windows` key there would make an older ccrc, after a rollback,
+  refuse every lane's registry. An older ccrc never opens the sibling file, so its lanes fall back to 200k, the
+  safe direction. This is the auto-advance spec's D13 reasoning, applied to one more per-lane fact.
 - The lane's `CLAUDE_CODE_MAX_CONTEXT_TOKENS` is the **smallest** measured window among the models the lane's
   classes name, rounded down to 1k and capped at 1,000,000. Claude Code applies the one value to every model in
   the session, subagents and quick tasks included, so the smallest is the only safe one.
@@ -389,7 +394,7 @@ names none of its error codes, so Codex cannot warn about it.
 ## 3. Decisions
 
 D1 to D17 were ruled by the operator in conversation on 2026-10-15. D18 to D27 are gaps that writing this text
-surfaced; each is Proposed until the operator rules.
+surfaced; the operator accepted them with the written spec on 2026-10-15.
 
 | # | Decision | Options considered | Chosen, and why | Status |
 |---|---|---|---|---|
@@ -410,22 +415,22 @@ surfaced; each is Proposed until the operator rules.
 | D15 | Credentials | keep LiteLLM's auth; one library | One library owns every credential; the "never reads" rule becomes "exactly one library reads and writes" | Agreed |
 | D16 | Context room and rollout | the §2.7 and §2.8 text; lane-a first | As written, lane-b first | Agreed |
 | D17 | Drift watch and testing | alert-only canary; canary may flip | As written; during the soak a red canary may flip its lane back | Agreed |
-| D18 | Where the code lives | grow one file; new package; a separate program | The shim gains a `direct` mode, and the new code lives in a stdlib package beside it, so `litellm` mode keeps today's code path exactly | Proposed |
-| D19 | Port, key and unit | new port and unit; reuse the shim's | Reuse the shim's port, gateway key and unit in both modes, so `ccrc-codex` and `ANTHROPIC_BASE_URL` do not change | Proposed |
-| D20 | Roster fields | one combined field; two fields | `exec.bridge` (`litellm` when absent) and `exec.upstream` (`backend` when absent), additive, one reader each | Proposed |
-| D21 | Pinned rule's home | the server; ccd | ccd decides at every placement, swap and swap-follow, with the reason word `siwc-pinned`; the server forecasts and refuses with the same word | Proposed |
-| D22 | Consent | a roster flag; a recorded stamp | `ccrc codex consent <id>` records who and when in the lane's status file; without it an `siwc` lane answers 403 and the doctor fails | Proposed |
-| D23 | Reasoning store format | flat files; sqlite | Stdlib sqlite, mode 0600, keyed per §2.5, 14 days, oldest-first eviction past 256 MB | Proposed |
-| D24 | `count_tokens` | a fixed ratio; calibrated | A running bytes-to-tokens ratio per route and model, seeded at 3.5 bytes per token, rounded up, so an estimate errs towards compacting early | Proposed |
-| D25 | Automatic lowering | manual only; lower to the refused size; lower below it | A refusal at size R sets that model's window to R × 0.9, rounded down to 1k, through the hourly models refresh; never raises | Proposed |
-| D26 | The canary's flip | alert only; flip | During the soak only, the canary runs `ccrc codex switch <id> litellm` itself and records why in the status file | Proposed |
-| D27 | Identity on the backend route | `ccrc`; the Codex CLI's | Send `originator: ccrc`. If the first live step shows the backend refusing it, that lane stays on `litellm` until the operator rules | Proposed |
+| D18 | Where the code lives | grow one file; new package; a separate program | The shim gains a `direct` mode, and the new code lives in a stdlib package beside it, so `litellm` mode keeps today's code path exactly | Agreed |
+| D19 | Port, key and unit | new port and unit; reuse the shim's | Reuse the shim's port, gateway key and unit in both modes, so `ccrc-codex` and `ANTHROPIC_BASE_URL` do not change | Agreed |
+| D20 | Roster fields | one combined field; two fields | `exec.bridge` (`litellm` when absent) and `exec.upstream` (`backend` when absent), additive, one reader each | Agreed |
+| D21 | Pinned rule's home | the server; ccd | ccd decides at every placement, swap and swap-follow, with the reason word `siwc-pinned`; the server forecasts and refuses with the same word | Agreed |
+| D22 | Consent | a roster flag; a recorded stamp | `ccrc codex consent <id>` records who and when in the lane's status file; without it an `siwc` lane answers 403 and the doctor fails | Agreed |
+| D23 | Reasoning store format | flat files; sqlite | Stdlib sqlite, mode 0600, keyed per §2.5, 14 days, oldest-first eviction past 256 MB | Agreed |
+| D24 | `count_tokens` | a fixed ratio; calibrated | A running bytes-to-tokens ratio per route and model, seeded at 3.5 bytes per token, rounded up, so an estimate errs towards compacting early | Agreed |
+| D25 | Automatic lowering | manual only; lower to the refused size; lower below it | A refusal at size R sets that model's window to R × 0.9, rounded down to 1k, through the hourly models refresh; never raises | Agreed |
+| D26 | The canary's flip | alert only; flip | During the soak only, the canary runs `ccrc codex switch <id> litellm` itself and records why in the status file | Agreed |
+| D27 | Identity on the backend route | `ccrc`; the Codex CLI's | Send `originator: ccrc`. If the first live step shows the backend refusing it, that lane stays on `litellm` until the operator rules | Agreed |
 
 ## 4. What this amends
 
 - **The model-class-registry spec, §6.1, the eighth key.** `min(catalogue.context, 200000)` becomes the
-  measured-window rule of §2.7. Its premise, a 196k wall, is withdrawn (§1.2). The registry file gains an optional
-  per-model `windows` map, and `ccrc models` gains `set-window` and `clear-window`. The comments in
+  measured-window rule of §2.7. Its premise, a 196k wall, is withdrawn (§1.2). Each lane gains an optional sibling file of
+  per-model windows (§2.7), and `ccrc models` gains `set-window` and `clear-window`. The comments in
   `shared/modelenv.mjs` that repeat the old premise are rewritten.
 - **The GPT-lane ownership spec, §6 (the proxy).** The shim gains `direct` mode (D18, D19).
 - **The same spec, §9 and §21.7 to §21.8 (who reads an OAuth file).** "ccrc never reads credential contents"
@@ -469,12 +474,13 @@ Every guard ships with a test that goes red when the guard is removed or weakene
 
 - D1 to D17, ruled by the operator in conversation on 2026-10-15, section by section.
 - The window probe (D7) ran on 2026-10-15 with the operator's go: four models, about 511k each, no refusal.
+- The written spec, with D18 to D27, accepted by the operator on 2026-10-15. At acceptance, the measured windows
+  moved from the class registry to a sibling file (§2.7).
 
 ### Waiting on you
 
-- The Proposed decisions D18 to D27.
 - The trial sign-in, which decides whether Stage 3 can start and which account its lane uses.
-- Review of this text. The plans follow it, one per stage, starting with Stage 0's measured windows.
+- Review of each stage's plan, starting with Stage 0's measured windows.
 
 ### Later
 
