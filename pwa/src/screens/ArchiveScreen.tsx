@@ -4,6 +4,7 @@
 // number in this UI that argues for a cleanup, which is why it comes from the
 // manifest ws-archive measured on the box rather than from an estimate here.
 import type { ReactNode } from 'react';
+import { BareRow } from '@ccrc/ui';
 import type { FleetSession } from '../../../shared/api';
 import '../fleet/fleet.css';
 
@@ -81,7 +82,7 @@ export function ArchiveScreen({
           printing a total that quietly counts an unread size as zero. */}
       <p className="archive-total">{`${count} archived · `}<span className="archive-total-bytes">{archivedSizeText(summary)}</span></p>
       {rows.map((s) => (
-        <button key={s.id} type="button" className="archive-row"
+        <BareRow key={s.id} className="archive-row"
                 aria-label={`workspace ${s.workspace ?? s.id} in ${s.project}`
                   + (s.held !== null ? `, held: ${s.held}` : '')}
                 onClick={() => onOpen(s.id)}>
@@ -106,7 +107,7 @@ export function ArchiveScreen({
             )}
           </span>
           <span className="archive-size">{s.archivedBytes === null ? '—' : humanBytes(s.archivedBytes)}</span>
-        </button>
+        </BareRow>
       ))}
     </div>
   );

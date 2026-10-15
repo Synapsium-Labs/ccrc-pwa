@@ -567,13 +567,13 @@ describe('install.sh: the checkout hand-off strips an ambient CCRC_UPDATE_VERIFI
   // The same rule as the release arm's case, on the other `exec`: a checkout
   // install verified nothing, so it must be recorded unsigned whatever the
   // caller's shell exported. The fixture is the thinnest checkout that
-  // reaches the hand-off — the three directories install.sh `cd`s into, the
+  // reaches the hand-off — the four directories install.sh `cd`s into, the
   // npm recorder, the REAL node for the floor read, and a `ccd/ccrc` that
   // records what it was handed.
   it('an ambient CCRC_UPDATE_VERIFIED=1 is gone by the time ccd/ccrc install runs', () => {
     const home = mkTmp('install-sh-checkout-verified-');
     const root = fixtureRoot(home, REAL_FLOOR_RANGE);
-    for (const d of ['pwa', 'agent', 'ccd']) mkdirSync(join(root, d), { recursive: true });
+    for (const d of ['ui', 'pwa', 'agent', 'ccd']) mkdirSync(join(root, d), { recursive: true });
     writeFileSync(join(root, 'ccd', 'ccrc'), [
       '#!/bin/sh',
       'printf \'%s\\n\' "$*" > "$HOME/ccrc-argv"',

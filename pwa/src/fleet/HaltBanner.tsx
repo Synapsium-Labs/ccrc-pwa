@@ -22,6 +22,7 @@
 import { useState } from 'react';
 import type { ReactNode } from 'react';
 import type { NodeWire, ReleaseWire, UpdatesView } from '../../../shared/api';
+import { Button } from '@ccrc/ui';
 import { canAck, sendAck } from './updateAck';
 import type { AckOutcome } from './updateAck';
 import { haltLine, haltingNodes } from './updateHalt';
@@ -79,15 +80,16 @@ function HaltRow({ node: n, releases, seq, onAcked }: {
   return (
     <li className="halt-banner-node" data-node-id={n.nodeId}>
       <span className="halt-banner-node-text">{haltLine(n)}</span>
-      <button
-        type="button"
-        className="btn-primary"
+      <Button
+        variant="primary"
+        size="fit"
+        className="flex-none"
         aria-label={`${label} ${n.label}`}
         disabled={!canAck(n, releases) || acking || held}
         onClick={ack}
       >
         {label}
-      </button>
+      </Button>
     </li>
   );
 }

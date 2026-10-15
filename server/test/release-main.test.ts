@@ -44,6 +44,8 @@ const FILES: Record<string, string> = {
   'server/package.json': '{ "name": "s" }\n', 'server/package-lock.json': '{}\n',
   'agent/package.json': '{ "name": "a" }\n', 'agent/package-lock.json': '{}\n',
   'pwa/package.json': '{ "name": "p" }\n', 'pwa/package-lock.json': '{}\n',
+  // build-release.sh installs ui before pwa (pwa builds @ccrc/ui from source).
+  'ui/package.json': '{ "name": "u" }\n', 'ui/package-lock.json': '{}\n',
 };
 
 /** `<home>/repo` with one commit, `<home>/origin.git` bare and added as

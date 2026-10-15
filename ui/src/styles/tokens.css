@@ -1,0 +1,1127 @@
+/* ============================================================================
+   ccrc — "Phosphor & Ink" design tokens
+   Adopted direction: refined terminal heritage. Dark-first; [data-theme='light']
+   is a true light theme (paper terminal), not an inversion.
+
+   Governing rule of the palette: GLOW MEANS LIFE. Only living states (busy,
+   attention) are allowed to emit light — never an account. Dead and idle are
+   matte. Account identity runs six hues (shared/roster.ts's HUES: cyan /
+   violet / blue / magenta / amber / green — a free-form runtime roster, Stage
+   2a, can outgrow the original four "cool half of the wheel" hues, so the
+   palette grew to match rather than clipping a sixth account's colour to a
+   collision). amber/green necessarily share a hue FAMILY with
+   --status-attention/--status-busy; what keeps an account from reading as
+   session state is the same discipline the original four already relied on —
+   never glow, and a flatter, pastel tone against the status pair's vivid one
+   — not merely which 90° wedge the hue sits in.
+
+   Contrast: every value verified with WCAG 2.1 relative-luminance math
+   (design/contrast-check.mjs, all pass). Ratios quoted in comments are
+   computed, not estimated. Text roles target AA 4.5:1; non-text UI roles
+   (dots, bar fills, focus ring) target 3:1 per WCAG 1.4.11.
+
+   The gate PARSES this file and every stylesheet under src/ — it does not
+   carry a copy of these hexes and it does not work from a list of pairs
+   somebody remembered to write down. Both of those shapes shipped live AA
+   failures under a green gate (a 2.44:1 text pair nobody had listed, and an
+   `opacity` fade the pair list could not see even in principle). A count of
+   pairs is deliberately not quoted here: this comment said "74 pairs" while
+   the gate measured 94, which is the same drift in miniature.
+   ========================================================================== */
+
+:root {
+  /* ------------------------------------------------------------------ *
+   *  COLOR — dark theme (default)                                       *
+   * ------------------------------------------------------------------ */
+
+  /* Background layers: green-cast graphite, stepping lighter as surfaces
+     rise. --bg-well is DARKER than the page — terminal wells are cut into
+     the interface, not laid on top of it. */
+  --bg-page:    #0B0D0C;  /* app background */
+  --bg-surface: #141715;  /* cards, tool cards, headers */
+  --bg-raised:  #1C201D;  /* chips, input bar, user bubble, keycaps */
+  --bg-well:    #070808;  /* terminal drawer, code blocks, lamp floors — the glass */
+  --bg-sheet:   #181C19;  /* bottom sheets, dialogs */
+  --scrim:      rgba(4, 6, 5, 0.62);   /* behind sheets/drawer */
+
+  /* Hairlines. Decorative — no contrast claim. */
+  --edge-subtle: #262B27;
+  --edge-strong: #39403A;
+
+  /* Text. "Ink" is warm off-white with the same green cast as the glass. */
+  /* --ink-primary is deliberately also a BACKGROUND: the selected fleet row reverses out
+     (.sess-line--active, fleet.css), filling with this and inking with --bg-page. Not a mistake. */
+  --ink-primary:   #ECF0EC;  /* 15.68:1 on surface, 14.32:1 on raised — AAA */
+  --ink-secondary: #ADB6AE;  /* 8.67:1 on surface, 7.91:1 on raised */
+  --ink-tertiary:  #8B948C;  /* timestamps, meta: 5.77:1 surface, 5.27:1 raised */
+  --ink-disabled:  #5C655D;  /* intentionally sub-AA; disabled only (WCAG-exempt) */
+  --ink-on-well:   #DEE4DE;  /* terminal/code text: 15.52:1 on well */
+  --ink-on-accent: #082312;  /* text on phosphor buttons: 8.87:1 on accent */
+
+  /* Interactive accent = the phosphor. Send button, links, focus ring,
+     the ❯ preselect cursor. Same hue family as busy — intentionally:
+     "acting" and "working" share a color story. */
+  --accent:      #45D67E;   /* focus ring 10.37:1 vs page (needs 3:1) */
+  --accent-tint: #12291B;   /* preselected row bg; primary ink on it 13.43:1 */
+
+  /* Session status. busy/attention glow; idle/dead are matte.
+     Dots also sit on --bg-well lamp floors: all ≥ 3:1 there too (verified). */
+  --status-busy:           #45D67E;  /* dot: 9.61:1 vs surface (needs 3:1) */
+  --status-busy-text:      #57E08B;  /* "working…" label: 10.70:1 vs surface */
+  --status-idle:           #7C867D;  /* matte dot: 4.78:1 vs surface (needs 3:1) */
+  --status-attention:      #F2B84B;  /* P3-phosphor amber dot: 10.09:1 vs surface */
+  --status-attention-text: #F2B84B;  /* 8.52:1 on attention-tint, 10.09:1 on surface */
+  --status-attention-tint: #2E2413;  /* "waiting on you" badge bg */
+  --status-dead:           #E06A55;  /* matte dot, never glows: 5.47:1 vs surface */
+  --status-dead-text:      #E8836F;  /* "exited · 3h ago — chat is read-only": 6.80:1 vs surface */
+  --status-dead-tint:      rgba(224, 106, 85, 0.12);  /* EXIT badge pill; dead-text on it 5.89:1 over surface */
+  /* The SAME 12% wash, pre-composited onto a card. --status-dead-tint is
+     translucent and tokens.css prices it over --bg-surface, so a banner that
+     floats on --bg-page lets a darker ground through and the text pair falls
+     to 4.44 in light. Three surfaces needed the corrected value and each of
+     them wrote the color-mix() out in full, which duplicated this token's own
+     definition with nothing binding the 12% or the hue to it — the same drift
+     class as a hand-typed palette. Declared once, in :root only: --status-dead
+     and --bg-surface are both re-declared for the light theme, so var()
+     resolves this per theme the way the browser does. design/audit.mjs pins
+     it against --status-dead-tint composited over --bg-surface, so retuning
+     one and not the other fails the gate. */
+  --status-dead-tint-solid: color-mix(in srgb, var(--status-dead) 12%, var(--bg-surface));
+
+  /* PR keycap (Task 15). --pr-merged ALIASES --acct-violet rather than
+     repeating its hex: a literal single hex here (#C7A7F4, dark-only) reads
+     8.06:1 on dark --bg-raised but only 1.75:1 on LIGHT's --bg-raised — well
+     under the 3:1 non-text floor — because it never gets a light-theme
+     override. Aliasing the already-themed, already contrast-proven account
+     token fixes both themes with no new literal colour to drift.
+     --pr-dim aliases --ink-tertiary for the same reason: its own name says
+     "== --ink-tertiary", so a second hardcoded copy is exactly the kind of
+     duplicate this file's own account-hue mechanism (--acct-active,
+     below) exists to avoid. */
+  --pr-merged: var(--acct-violet);    /* violet, filled — merged: DARK 8.06:1, LIGHT 5.93:1 vs --bg-raised */
+  --pr-dim:    var(--ink-tertiary);   /* the "nothing to say" dot */
+
+  /* Two more buckets (Build 2, attention UX): `done` and `cleanup`. Neither is
+     a LIVING state — nothing is running — so neither glows: matte, same
+     family as --status-idle above. The two-glyph rule (StatusDot: ✓ done,
+     ♻ cleanup, ○ idle/archived) is what tells them apart now; colour
+     deliberately does not, which is exactly the "done and idle are both
+     not-amber-not-busy" fusion that rule exists to end.
+     `cleanup` was tried as --pr-merged (the SAME violet the PR keycap already
+     uses for "merged") and MEASURED unsafe: --acct-violet's light value is
+     tuned for --bg-raised only (5.93:1 there) and reads 2.60:1 on the
+     light-theme lamp well, under the dots' shared 3:1 floor — this dot,
+     unlike the keycap's, sits on --bg-well in .sess-lamp. Reusing violet would
+     also have put a STATUS token on an ACCOUNT hue, the exact collision
+     tokens.css's own governing rule reserves the cool half of the wheel
+     against. Aliased to --status-idle instead: already proven on both
+     --bg-surface and --bg-well in both themes, and retuning either bucket
+     later is a one-line change here, not a new palette entry. */
+  --status-done:           var(--status-idle);
+  --status-done-text:      var(--ink-secondary);
+  --status-cleanup:        var(--status-idle);
+  --status-cleanup-text:   var(--ink-secondary);
+
+  /* Account accents — chip text on chip tint. Six hues (shared/roster.ts's
+     HUES): cyan/violet/blue/magenta live in the cool half of the wheel
+     (~190/265/222/330), 40°+ apart, so none of them collides with status
+     green/amber/red. amber/green (Stage 2a Task 7 — a free-form roster can
+     assign more than four accounts a hue, so the palette had to grow past
+     "cool half only") DO share a hue family with --status-attention/
+     --status-busy, and that is deliberate rather than an oversight: every
+     account hue here is a PASTEL, desaturated tone (~65-80% dark-theme
+     lightness) against the status pair's vivid, saturated glow — the same
+     tonal split that already keeps cyan/violet/blue/magenta from reading as
+     "state" even though nothing stopped THEM sharing a status hue either.
+     Only a living session state glows (box-shadow bloom); an account chip
+     never does, in either family. Chips always carry the account name in
+     mono; color is the secondary cue. */
+  --acct-cyan:         #6FD6EA;  /* cyan    — 8.95:1 on its tint */
+  --acct-cyan-tint:    #0E2A31;
+  --acct-violet:       #C7A7F4;  /* violet  — 7.90:1 on its tint */
+  --acct-violet-tint:  #241C38;
+  --acct-blue:         #96B4F4;  /* blue    — 7.57:1 on its tint */
+  --acct-blue-tint:    #16233B;
+  --acct-magenta:      #F0A3C8;  /* magenta — 8.11:1 on its tint */
+  --acct-magenta-tint: #331B28;
+  --acct-amber:        #E8CB73;  /* amber   — 8.69:1 on its tint (measured: node design/contrast-check.mjs) */
+  --acct-amber-tint:   #352C13;
+  --acct-green:        #70D2AE;  /* green   — 7.73:1 on its tint (measured: node design/contrast-check.mjs) */
+  --acct-green-tint:   #183027;
+
+  /* One-variable account accent: screens stamp data-acct at their root and
+     components style chips/headers against --acct-active only (rebinding
+     selectors at the bottom of this file). The glow never rebinds — glow is
+     green/amber; account hues never emit light. */
+  --acct-active:      var(--acct-cyan);
+  --acct-active-tint: var(--acct-cyan-tint);
+
+  /* Limits bar. Bands follow the operator's model-routing policy:
+     ok < 50%, warn 50–75% ("prefer handoff"), critical > 75% ("hand off
+     everything spec-able") — an amber gauge is actionable, not decorative.
+     When a bar crosses into critical, the card narrates the consequence
+     ("5h limit near — will move to claude") in --status-dead-text. */
+  --limit-track:    #242A25;
+  --limit-ok:       #45D67E;  /* 7.80:1 vs track (needs 3:1) */
+  --limit-warn:     #F2B84B;  /* 8.19:1 vs track */
+  --limit-critical: #E06A55;  /* 4.44:1 vs track */
+
+  /* Diff accents inside wells only (tool-card results, terminal). */
+  --diff-add: #57E08B;  /* 11.88:1 on well */
+  --diff-del: #F08A78;  /*  8.22:1 on well */
+
+  /* ------------------------------------------------------------------ *
+   *  CODE WELLS — syntax spans + chrome. Wells are dark in BOTH themes, *
+   *  so defined once, never overridden in light. Palette reuses the     *
+   *  app's own dark hues so code reads as native "Phosphor & Ink".      *
+   * ------------------------------------------------------------------ */
+  --syn-comment:  #8B948C;   /* muted — also the code-well language label */
+  --syn-keyword:  #C7A7F4;   /* violet */
+  --syn-string:   #57E08B;   /* phosphor green (== --diff-add) */
+  --syn-number:   #F2B84B;   /* amber */
+  --syn-function: #6FD6EA;   /* cyan */
+  --syn-type:     #96B4F4;   /* blue */
+  --syn-tag:      #F0A3C8;   /* magenta */
+  --syn-attr:     #6FD6EA;   /* cyan */
+  --syn-punct:    #ADB6AE;   /* neutral light */
+  --syn-deleted:  var(--diff-del);
+  --syn-inserted: var(--diff-add);
+  --well-bar-bg:   color-mix(in srgb, var(--ink-on-well) 5%,  var(--bg-well));
+  --well-bar-hair: color-mix(in srgb, var(--ink-on-well) 12%, var(--bg-well));
+  /* The accent as it must be spelled ON a well. --accent flips with the theme
+     and the light one (#0E7B3F) is tuned for paper: on the well bar it reads
+     3.03:1, which is how the code block's COPY / COPIED label shipped below the
+     4.5 floor for 11px text. Wells are dark in both themes, so the well accent
+     is the dark one in both themes — same rule as the syntax palette above. */
+  --accent-on-well: #45D67E;  /* 10.67:1 on the well, 9.91:1 on the well bar */
+
+  /* ------------------------------------------------------------------ *
+   *  TYPE                                                               *
+   * ------------------------------------------------------------------ */
+
+  /* Rule of voice: mono is anything the machine says or is (paths, ids,
+     account names, tool names, limits, timestamps, keycaps, code); sans is
+     anything a human reads as prose (chat, buttons, dialog copy).
+     Any mono value that updates in place (elapsed clocks, percentages,
+     durations) also gets font-variant-numeric: tabular-nums — readouts
+     must never jitter sideways. */
+  --family-ui:   system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --family-mono: ui-monospace, "SF Mono", "Cascadia Code", "JetBrains Mono", Menlo, Consolas, "Roboto Mono", "Liberation Mono", monospace;
+
+  --fs-2xs:  11px;   /* eyebrows, limit labels, keycap legends */
+  --fs-xs:   12px;   /* timestamps, tool-card meta */
+  --fs-sm:   13px;   /* chips, tool summaries, mono code */
+  --fs-base: 15px;   /* chat body, buttons, dialog options */
+  --fs-lg:   17px;   /* card titles (mono), sheet titles */
+  --fs-xl:   20px;   /* screen titles */
+  --fs-2xl:  24px;   /* fleet heading */
+  --fs-input: 16px;  /* ≥16px so iOS Safari never zoom-jumps */
+
+  --lh-tight:  1.25;
+  --lh-normal: 1.5;
+  --lh-mono:   1.55;
+  --lh-prose:  1.6;    /* long-form assistant prose — looser than mono, distinct from code */
+
+  --weight-regular:  400;
+  --weight-medium:   500;
+  --weight-semibold: 600;
+
+  --ls-caps: 0.08em;  /* uppercase mono eyebrows/labels */
+  /* The LIGHTER caps tracking — half of --ls-caps. Found by the shape census
+     reading both packages: `0.04em` was written out SEVEN times in four
+     stylesheets (the mail card's and strip's `-kind` labels, the login title,
+     the passkeys sub-eyebrow) and named nowhere, so the one value the design
+     system actually has two of had a token for one of them. Same number, so
+     nothing moves; what changes is that the eighth consumer has somewhere to
+     take it from. */
+  --ls-caps-sm: 0.04em;
+
+  /* ------------------------------------------------------------------ *
+   *  SPACE, RADIUS, TOUCH, SIZE                                         *
+   * ------------------------------------------------------------------ */
+  --sp-1: 4px;   --sp-2: 8px;   --sp-3: 12px;  --sp-4: 16px;
+  --sp-5: 20px;  --sp-6: 24px;  --sp-8: 32px;  --sp-10: 40px;  --sp-12: 48px;
+
+  /* Safe areas (notch / home bar), promoted to tokens so padding rules can
+     compose them: padding-bottom: calc(var(--sp-3) + var(--safe-bottom)). */
+  --safe-top:    env(safe-area-inset-top, 0px);
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+
+  /* Live composer height, published by SessionScreen. The 0px default is
+     load-bearing: an unset var() inside calc() invalidates the whole
+     declaration, which would cost the fleet screen its toast offset entirely. */
+  --composer-h: 0px;
+
+  --r-sm:   6px;    /* inline code, keycaps, badges */
+  --r-md:   10px;   /* tool cards, buttons, wells */
+  --r-lg:   16px;   /* session cards, chat bubbles */
+  --r-xl:   22px;   /* sheet & drawer top corners */
+  --r-full: 999px;  /* dots, pills, grabber */
+
+  --tap-min:   44px;   /* minimum touch target (spec acceptance criterion) */
+  --lamp-size: 18px;   /* status-dot lamp bezel: --bg-well floor + inset ring */
+  --well-max:  240px;  /* tool-output wells cap here and scroll internally */
+  --measure-prose: 72ch;   /* assistant prose caps here; pre/table/img opt out. Inert <640px. */
+
+  /* ------------------------------------------------------------------ *
+   *  ELEVATION & GLOW                                                   *
+   * ------------------------------------------------------------------ */
+  /* Dark theme depth comes from layer + hairline, barely from shadow. */
+  --elev-card:  0 1px 2px rgba(0, 0, 0, 0.3);
+  --elev-sheet: 0 -8px 40px rgba(0, 0, 0, 0.55);
+
+  /* The signature: phosphor bloom. Two tight rings + one wide soft halo.
+     Apply to a pseudo-element and animate ITS opacity (compositor-cheap),
+     never the box-shadow itself. */
+  --glow-busy:
+    0 0 0 1px   rgba(69, 214, 126, 0.30),
+    0 0 18px    rgba(69, 214, 126, 0.16),
+    0 0 44px    rgba(69, 214, 126, 0.07);
+  --glow-attention:
+    0 0 0 1px   rgba(242, 184, 75, 0.32),
+    0 0 18px    rgba(242, 184, 75, 0.16),
+    0 0 44px    rgba(242, 184, 75, 0.07);
+  --glow-dot-busy:      0 0 8px rgba(69, 214, 126, 0.55);
+  --glow-dot-attention: 0 0 8px rgba(242, 184, 75, 0.55);
+
+  /* ------------------------------------------------------------------ *
+   *  MOTION                                                             *
+   * ------------------------------------------------------------------ */
+  --dur-press: 120ms;   /* pressed states, key taps */
+  --dur-fast:  180ms;   /* fades, color shifts, stream chunk fade-in */
+  --dur-base:  240ms;   /* tool-card expand, dot state pop */
+  --dur-slow:  320ms;   /* card→chat shared element, sheet exit */
+  --dur-sheet: 420ms;   /* sheet & drawer entrance */
+  --dur-bar:   600ms;   /* limit-bar width changes */
+  --dur-ping:  300ms;   /* one-shot expanding ring on dot state change */
+
+  --curve-swift:  cubic-bezier(0.2, 0, 0, 1);        /* everyday exits/moves */
+  --curve-spring: cubic-bezier(0.32, 1.25, 0.46, 1); /* sheets: small overshoot */
+  --curve-breathe: ease-in-out;
+
+  --breathe-period: 2600ms;  /* busy glow inhale/exhale (alternate) */
+  --pulse-period:   1300ms;  /* attention pulse — twice the urgency of busy */
+  --caret-period:   1100ms;  /* streaming block-caret blink, steps(2) */
+
+  /* ------------------------------------------------------------------ *
+   *  Z-INDEX                                                            *
+   * ------------------------------------------------------------------ */
+  --z-header: 10;
+  --z-sheet:  40;
+  --z-drawer: 50;
+  --z-toast:  60;
+  --z-block:  100;  /* BlockScreen — above the toast too; nothing outranks it */
+
+  color-scheme: dark;
+}
+
+/* ==========================================================================
+   LIGHT THEME — the paper terminal. Warm gray-green paper, true white cards,
+   ink darkened for AA. The wells STAY DARK: terminals keep their glass in
+   light mode (like every serious IDE), which also keeps the phosphor
+   identity present in daylight.
+   ========================================================================== */
+[data-theme='light'] {
+  --bg-page:    #F4F6F3;
+  --bg-surface: #FFFFFF;
+  --bg-raised:  #EAEEEA;
+  --bg-well:    #141715;  /* deliberately dark in light theme */
+  --bg-sheet:   #FFFFFF;
+  --scrim:      rgba(20, 26, 22, 0.42);
+
+  --edge-subtle: #DDE2DC;
+  --edge-strong: #C3CAC2;
+
+  /* Also a BACKGROUND here, same as in dark: .sess-line--active fills with it, inks with
+     --bg-page. The pair flips together, so the inversion is maximal in both themes. */
+  --ink-primary:   #1A201B;  /* 16.58:1 on surface, 14.15:1 on raised */
+  --ink-secondary: #4E5850;  /* 7.41:1 on surface, 6.32:1 on raised */
+  --ink-tertiary:  #5F6962;  /* 5.70:1 on surface, 4.86:1 on raised */
+  --ink-disabled:  #98A29A;  /* disabled only (WCAG-exempt) */
+  --ink-on-well:   #DEE4DE;  /* 13.98:1 on the (still dark) well */
+  --ink-on-accent: #FFFFFF;  /* 5.35:1 on light accent */
+
+  --accent:      #0E7B3F;   /* focus ring 4.92:1 vs page (needs 3:1) */
+  --accent-tint: #DFF2E5;   /* primary ink on it: 14.19:1 */
+
+  --status-busy:           #178A48;  /* dot 4.41:1 vs surface, 4.10:1 vs lamp well */
+  --status-busy-text:      #106E39;  /* 6.34:1 vs surface */
+  --status-idle:           #6C766E;  /* 4.71:1 vs surface, 3.83:1 vs lamp well */
+  --status-attention:      #B27400;  /* dot 3.90:1 vs surface, 4.64:1 vs lamp well */
+  --status-attention-text: #8A5A0A;  /* 4.94:1 on tint, 5.92:1 on surface */
+  --status-attention-tint: #F7E9CF;
+  --status-dead:           #B2402C;  /* dot 5.73:1 vs surface, 3.15:1 vs lamp well */
+  --status-dead-text:      #B2402C;  /* 5.73:1 vs surface */
+  --status-dead-tint:      rgba(178, 64, 44, 0.12);  /* dead-text on it 4.81:1 over surface */
+
+  --acct-cyan:         #0A6377;  /* 5.80:1 on its tint */
+  --acct-cyan-tint:    #DAF0F6;
+  --acct-violet:       #6D3FB4;  /* 5.73:1 on its tint */
+  --acct-violet-tint:  #EDE6FA;
+  --acct-blue:         #2F55B8;  /* 5.60:1 on its tint */
+  --acct-blue-tint:    #E3EAFA;
+  --acct-magenta:      #A62667;  /* 5.59:1 on its tint */
+  --acct-magenta-tint: #FAE3EE;
+  --acct-amber:        #7C5C03;  /* 5.74:1 on its tint (measured: node design/contrast-check.mjs) */
+  --acct-amber-tint:   #FAF6EB;
+  --acct-green:        #09714B;  /* 5.50:1 on its tint (measured: node design/contrast-check.mjs) */
+  --acct-green-tint:   #E7F8F2;
+
+  --limit-track:    #E3E7E2;
+  --limit-ok:       #178A48;  /* 3.52:1 vs track (needs 3:1) */
+  --limit-warn:     #B27400;  /* 3.12:1 vs track */
+  --limit-critical: #B2402C;  /* 4.59:1 vs track */
+
+  /* Diff accents render inside dark wells in BOTH themes. */
+  --diff-add: #57E08B;  /* 10.70:1 on light-theme well */
+  --diff-del: #F08A78;  /*  7.40:1 on light-theme well */
+
+  /* Light theme earns real shadows; glow dims to a halo (a lamp in daylight). */
+  --elev-card:  0 1px 3px rgba(26, 32, 27, 0.10), 0 1px 2px rgba(26, 32, 27, 0.06);
+  --elev-sheet: 0 -8px 40px rgba(26, 32, 27, 0.22);
+
+  --glow-busy:
+    0 0 0 1px   rgba(23, 138, 72, 0.35),
+    0 0 16px    rgba(23, 138, 72, 0.18),
+    0 0 40px    rgba(23, 138, 72, 0.08);
+  --glow-attention:
+    0 0 0 1px   rgba(178, 116, 0, 0.35),
+    0 0 16px    rgba(178, 116, 0, 0.18),
+    0 0 40px    rgba(178, 116, 0, 0.08);
+  --glow-dot-busy:      0 0 7px rgba(23, 138, 72, 0.45);
+  --glow-dot-attention: 0 0 7px rgba(178, 116, 0, 0.45);
+
+  color-scheme: light;
+}
+
+/* === GENERATED THEMES — do not edit by hand (ui/design/make-themes.mjs) === */
+/* 10 palettes, each DERIVED from a seed in ui/design/make-themes.mjs
+   and fitted against THAT FILE'S OWN floors before it was written here. The
+   authority is still pwa/design/contrast-check.mjs, which measures these values
+   afterwards and has caught the generator being wrong — the two statements of
+   the contract are separate, and the gate is the one that rules. Edit the SEED and re-run; editing a value below
+   is overwritten on the next run and is not measured by anything in between.
+
+   Phosphor & Ink is NOT here: it is :root (dark) and [data-theme='light'], the
+   hand-tuned original, and it stays the default. A theme is an override block,
+   so every token a block omits falls through to :root — which is why the
+   generator emits a COMPLETE palette rather than a diff. */
+[data-theme='nord'] {
+  /* Nord */
+  --bg-page:                 #2E3440;
+  --bg-surface:              #3B4252;
+  --bg-raised:               #434C5E;
+  --bg-sheet:                #3B4252;
+  --bg-well:                 #242933;
+  --scrim:                   rgba(4, 6, 5, 0.62);
+  --edge-subtle:             #505A6C;
+  --edge-strong:             #5F697C;
+  --ink-primary:             #ECEFF4;
+  --ink-secondary:           #ECEFF4;
+  --ink-tertiary:            #ECEFF4;
+  --ink-disabled:            #BEC1C6;
+  --ink-on-well:             #ECEFF4;
+  --accent:                  #92CADA;
+  --ink-on-accent:           #07140C;
+  --accent-tint:             #3E4D5D;
+  --accent-on-well:          #88C0D0;
+  --status-busy:             #A3BE8C;
+  --status-busy-text:        #AFCB98;
+  --status-idle:             #95A0B6;
+  --status-attention:        #EBCB8B;
+  --status-attention-tint:   #5B5B5C;
+  --status-attention-text:   #F6D595;
+  --status-dead:             #E6848C;
+  --status-dead-tint:        color-mix(in srgb, #BF616A 12%, transparent);
+  --status-dead-tint-solid:  #4B4655;
+  --status-dead-text:        #FDABB0;
+  --status-done:             #8FBCBB;
+  --status-done-text:        #9DCAC9;
+  --status-cleanup:          #95A0B6;
+  --status-cleanup-text:     #B6C2D9;
+  --acct-cyan-tint:          #495969;
+  --acct-cyan:               #A4DDED;
+  --acct-violet-tint:        #515062;
+  --acct-violet:             #E7BFDF;
+  --acct-blue-tint:          #485366;
+  --acct-blue:               #AFD0F2;
+  --acct-magenta-tint:       #515062;
+  --acct-magenta:            #E7BFDF;
+  --acct-amber-tint:         #564E57;
+  --acct-amber:              #FDBAA4;
+  --acct-green-tint:         #4E585C;
+  --acct-green:              #BFDAA7;
+  --limit-track:             #4B5467;
+  --limit-ok:                #A3BE8C;
+  --limit-warn:              #EBCB8B;
+  --limit-critical:          #F28E96;
+  --diff-add:                #A3BE8C;
+  --diff-del:                #ED8A92;
+  --elev-card:               0 1px 2px rgba(0, 0, 0, 0.40), 0 2px 8px rgba(0, 0, 0, 0.28);
+  --elev-sheet:              0 -8px 40px rgba(0, 0, 0, 0.55);
+  --glow-busy:               
+    0 0 0 1px   rgba(163, 190, 140, 0.35),
+    0 0 16px    rgba(163, 190, 140, 0.18),
+    0 0 40px    rgba(163, 190, 140, 0.08);
+  --glow-attention:          
+    0 0 0 1px   rgba(235, 203, 139, 0.35),
+    0 0 16px    rgba(235, 203, 139, 0.18),
+    0 0 40px    rgba(235, 203, 139, 0.08);
+  --glow-dot-busy:           0 0 7px rgba(163, 190, 140, 0.45);
+  --glow-dot-attention:      0 0 7px rgba(235, 203, 139, 0.45);
+  --syn-comment:             #9AA39B;
+  color-scheme:              dark;
+}
+
+[data-theme='tokyo-night'] {
+  /* Tokyo Night */
+  --bg-page:                 #1A1B26;
+  --bg-surface:              #24283B;
+  --bg-raised:               #292E42;
+  --bg-sheet:                #24283B;
+  --bg-well:                 #16161E;
+  --scrim:                   rgba(4, 6, 5, 0.62);
+  --edge-subtle:             #353B50;
+  --edge-strong:             #484D63;
+  --ink-primary:             #C0CAF5;
+  --ink-secondary:           #C0CAF5;
+  --ink-tertiary:            #C0CAF5;
+  --ink-disabled:            #949EC7;
+  --ink-on-well:             #C0CAF5;
+  --accent:                  #7AA2F7;
+  --ink-on-accent:           #07140C;
+  --accent-tint:             #2B3551;
+  --accent-on-well:          #7AA2F7;
+  --status-busy:             #9ECE6A;
+  --status-busy-text:        #9ECE6A;
+  --status-idle:             #7882AE;
+  --status-attention:        #E0AF68;
+  --status-attention-tint:   #464043;
+  --status-attention-text:   #E0AF68;
+  --status-dead:             #F7768E;
+  --status-dead-tint:        color-mix(in srgb, #F7768E 12%, transparent);
+  --status-dead-tint-solid:  #3D3145;
+  --status-dead-text:        #FB7A92;
+  --status-done:             #73DACA;
+  --status-done-text:        #73DACA;
+  --status-cleanup:          #7882AE;
+  --status-cleanup-text:     #959FCD;
+  --acct-cyan-tint:          #34465E;
+  --acct-cyan:               #7DCFFF;
+  --acct-violet-tint:        #3F3D5D;
+  --acct-violet:             #C3A2FF;
+  --acct-blue-tint:          #333E5D;
+  --acct-blue:               #8AAFFE;
+  --acct-magenta-tint:       #4B3D42;
+  --acct-magenta:            #FF9E64;
+  --acct-amber-tint:         #464043;
+  --acct-amber:              #E0AF68;
+  --acct-green-tint:         #3A4643;
+  --acct-green:              #9ECE6A;
+  --limit-track:             #30364A;
+  --limit-ok:                #9ECE6A;
+  --limit-warn:              #E0AF68;
+  --limit-critical:          #F7768E;
+  --diff-add:                #9ECE6A;
+  --diff-del:                #F7768E;
+  --elev-card:               0 1px 2px rgba(0, 0, 0, 0.40), 0 2px 8px rgba(0, 0, 0, 0.28);
+  --elev-sheet:              0 -8px 40px rgba(0, 0, 0, 0.55);
+  --glow-busy:               
+    0 0 0 1px   rgba(158, 206, 106, 0.35),
+    0 0 16px    rgba(158, 206, 106, 0.18),
+    0 0 40px    rgba(158, 206, 106, 0.08);
+  --glow-attention:          
+    0 0 0 1px   rgba(224, 175, 104, 0.35),
+    0 0 16px    rgba(224, 175, 104, 0.18),
+    0 0 40px    rgba(224, 175, 104, 0.08);
+  --glow-dot-busy:           0 0 7px rgba(158, 206, 106, 0.45);
+  --glow-dot-attention:      0 0 7px rgba(224, 175, 104, 0.45);
+  --syn-comment:             #8B948C;
+  color-scheme:              dark;
+}
+
+[data-theme='dracula'] {
+  /* Dracula */
+  --bg-page:                 #282A36;
+  --bg-surface:              #343746;
+  --bg-raised:               #44475A;
+  --bg-sheet:                #343746;
+  --bg-well:                 #1E1F29;
+  --scrim:                   rgba(4, 6, 5, 0.62);
+  --edge-subtle:             #515568;
+  --edge-strong:             #65687D;
+  --ink-primary:             #F8F8F2;
+  --ink-secondary:           #F8F8F2;
+  --ink-tertiary:            #F8F8F2;
+  --ink-disabled:            #CACAC4;
+  --ink-on-well:             #F8F8F2;
+  --accent:                  #CDAEFD;
+  --ink-on-accent:           #07140C;
+  --accent-tint:             #48465E;
+  --accent-on-well:          #BD93F9;
+  --status-busy:             #50FA7B;
+  --status-busy-text:        #50FA7B;
+  --status-idle:             #8596CB;
+  --status-attention:        #F1FA8C;
+  --status-attention-tint:   #565A53;
+  --status-attention-text:   #F1FA8C;
+  --status-dead:             #FE6360;
+  --status-dead-tint:        color-mix(in srgb, #FF5555 12%, transparent);
+  --status-dead-tint-solid:  #4C3B48;
+  --status-dead-text:        #FE9790;
+  --status-done:             #8BE9FD;
+  --status-done-text:        #8BE9FD;
+  --status-cleanup:          #8596CB;
+  --status-cleanup-text:     #A9BCF2;
+  --acct-cyan-tint:          #445767;
+  --acct-cyan:               #8BE9FD;
+  --acct-violet-tint:        #4D4866;
+  --acct-violet:             #D1B4FF;
+  --acct-blue-tint:          #3C4257;
+  --acct-blue:               #A2B4EA;
+  --acct-magenta-tint:       #59435D;
+  --acct-magenta:            #FDA5D4;
+  --acct-amber-tint:         #594E4D;
+  --acct-amber:              #FEBC78;
+  --acct-green-tint:         #395A50;
+  --acct-green:              #50FA7B;
+  --limit-track:             #4C4F62;
+  --limit-ok:                #50FA7B;
+  --limit-warn:              #F1FA8C;
+  --limit-critical:          #FE7E78;
+  --diff-add:                #50FA7B;
+  --diff-del:                #FE716C;
+  --elev-card:               0 1px 2px rgba(0, 0, 0, 0.40), 0 2px 8px rgba(0, 0, 0, 0.28);
+  --elev-sheet:              0 -8px 40px rgba(0, 0, 0, 0.55);
+  --glow-busy:               
+    0 0 0 1px   rgba(80, 250, 123, 0.35),
+    0 0 16px    rgba(80, 250, 123, 0.18),
+    0 0 40px    rgba(80, 250, 123, 0.08);
+  --glow-attention:          
+    0 0 0 1px   rgba(241, 250, 140, 0.35),
+    0 0 16px    rgba(241, 250, 140, 0.18),
+    0 0 40px    rgba(241, 250, 140, 0.08);
+  --glow-dot-busy:           0 0 7px rgba(80, 250, 123, 0.45);
+  --glow-dot-attention:      0 0 7px rgba(241, 250, 140, 0.45);
+  --syn-comment:             #909991;
+  color-scheme:              dark;
+}
+
+[data-theme='catppuccin-mocha'] {
+  /* Catppuccin Mocha */
+  --bg-page:                 #1E1E2E;
+  --bg-surface:              #313244;
+  --bg-raised:               #45475A;
+  --bg-sheet:                #313244;
+  --bg-well:                 #181825;
+  --scrim:                   rgba(4, 6, 5, 0.62);
+  --edge-subtle:             #525568;
+  --edge-strong:             #57596E;
+  --ink-primary:             #D1DAF8;
+  --ink-secondary:           #CDD6F4;
+  --ink-tertiary:            #CDD6F4;
+  --ink-disabled:            #A1A9C6;
+  --ink-on-well:             #CDD6F4;
+  --accent:                  #96BEFF;
+  --ink-on-accent:           #07140C;
+  --accent-tint:             #404761;
+  --accent-on-well:          #89B4FA;
+  --status-busy:             #A6E3A1;
+  --status-busy-text:        #A6E3A1;
+  --status-idle:             #9296AD;
+  --status-attention:        #F9E2AF;
+  --status-attention-tint:   #555257;
+  --status-attention-text:   #F9E2AF;
+  --status-dead:             #F38BA8;
+  --status-dead-tint:        color-mix(in srgb, #F38BA8 12%, transparent);
+  --status-dead-tint-solid:  #483D50;
+  --status-dead-text:        #FD94B1;
+  --status-done:             #94E2D5;
+  --status-done-text:        #94E2D5;
+  --status-cleanup:          #9296AD;
+  --status-cleanup-text:     #B7BBD4;
+  --acct-cyan-tint:          #415162;
+  --acct-cyan:               #89DCEB;
+  --acct-violet-tint:        #4D4764;
+  --acct-violet:             #D4B2FD;
+  --acct-blue-tint:          #414965;
+  --acct-blue:               #9BC1FF;
+  --acct-magenta-tint:       #544C61;
+  --acct-magenta:            #F5C2E7;
+  --acct-amber-tint:         #554950;
+  --acct-amber:              #FAB387;
+  --acct-green-tint:         #465255;
+  --acct-green:              #A6E3A1;
+  --limit-track:             #4D4F62;
+  --limit-ok:                #A6E3A1;
+  --limit-warn:              #F9E2AF;
+  --limit-critical:          #F38BA8;
+  --diff-add:                #A6E3A1;
+  --diff-del:                #F38BA8;
+  --elev-card:               0 1px 2px rgba(0, 0, 0, 0.40), 0 2px 8px rgba(0, 0, 0, 0.28);
+  --elev-sheet:              0 -8px 40px rgba(0, 0, 0, 0.55);
+  --glow-busy:               
+    0 0 0 1px   rgba(166, 227, 161, 0.35),
+    0 0 16px    rgba(166, 227, 161, 0.18),
+    0 0 40px    rgba(166, 227, 161, 0.08);
+  --glow-attention:          
+    0 0 0 1px   rgba(249, 226, 175, 0.35),
+    0 0 16px    rgba(249, 226, 175, 0.18),
+    0 0 40px    rgba(249, 226, 175, 0.08);
+  --glow-dot-busy:           0 0 7px rgba(166, 227, 161, 0.45);
+  --glow-dot-attention:      0 0 7px rgba(249, 226, 175, 0.45);
+  --syn-comment:             #8B948C;
+  color-scheme:              dark;
+}
+
+[data-theme='gruvbox-dark'] {
+  /* Gruvbox Dark */
+  --bg-page:                 #282828;
+  --bg-surface:              #3C3836;
+  --bg-raised:               #504945;
+  --bg-sheet:                #3C3836;
+  --bg-well:                 #1D2021;
+  --scrim:                   rgba(4, 6, 5, 0.62);
+  --edge-subtle:             #5E5753;
+  --edge-strong:             #645C59;
+  --ink-primary:             #ECDCB3;
+  --ink-secondary:           #EBDBB2;
+  --ink-tertiary:            #EBDBB2;
+  --ink-disabled:            #BEAE86;
+  --ink-on-well:             #EBDBB2;
+  --accent:                  #C3C737;
+  --ink-on-accent:           #07140C;
+  --accent-tint:             #4F4C33;
+  --accent-on-well:          #B8BB26;
+  --status-busy:             #B8BB26;
+  --status-busy-text:        #C3C737;
+  --status-idle:             #A5978C;
+  --status-attention:        #FABD2F;
+  --status-attention-tint:   #5E5035;
+  --status-attention-text:   #FEC135;
+  --status-dead:             #FE6C57;
+  --status-dead-tint:        color-mix(in srgb, #FB4934 12%, transparent);
+  --status-dead-tint-solid:  #533A36;
+  --status-dead-text:        #FD9A89;
+  --status-done:             #8EC07C;
+  --status-done-text:        #9ACD88;
+  --status-cleanup:          #A5978C;
+  --status-cleanup-text:     #CBBDB1;
+  --acct-cyan-tint:          #4B5043;
+  --acct-cyan:               #A1D38E;
+  --acct-violet-tint:        #574648;
+  --acct-violet:             #F9A9BE;
+  --acct-blue-tint:          #494C48;
+  --acct-blue:               #A5C8BB;
+  --acct-magenta-tint:       #574648;
+  --acct-magenta:            #F9A9BE;
+  --acct-amber-tint:         #5F4531;
+  --acct-amber:              #FFAD7B;
+  --acct-green-tint:         #525033;
+  --acct-green:              #CACD40;
+  --limit-track:             #58514D;
+  --limit-ok:                #B8BB26;
+  --limit-warn:              #FABD2F;
+  --limit-critical:          #FD8673;
+  --diff-add:                #B8BB26;
+  --diff-del:                #FD725E;
+  --elev-card:               0 1px 2px rgba(0, 0, 0, 0.40), 0 2px 8px rgba(0, 0, 0, 0.28);
+  --elev-sheet:              0 -8px 40px rgba(0, 0, 0, 0.55);
+  --glow-busy:               
+    0 0 0 1px   rgba(184, 187, 38, 0.35),
+    0 0 16px    rgba(184, 187, 38, 0.18),
+    0 0 40px    rgba(184, 187, 38, 0.08);
+  --glow-attention:          
+    0 0 0 1px   rgba(250, 189, 47, 0.35),
+    0 0 16px    rgba(250, 189, 47, 0.18),
+    0 0 40px    rgba(250, 189, 47, 0.08);
+  --glow-dot-busy:           0 0 7px rgba(184, 187, 38, 0.45);
+  --glow-dot-attention:      0 0 7px rgba(250, 189, 47, 0.45);
+  --syn-comment:             #8D968E;
+  color-scheme:              dark;
+}
+
+[data-theme='one-dark'] {
+  /* One Dark */
+  --bg-page:                 #282C34;
+  --bg-surface:              #31353F;
+  --bg-raised:               #3E4451;
+  --bg-sheet:                #31353F;
+  --bg-well:                 #21252B;
+  --scrim:                   rgba(4, 6, 5, 0.62);
+  --edge-subtle:             #4B515F;
+  --edge-strong:             #3C424F;
+  --ink-primary:             #CCD3E1;
+  --ink-secondary:           #BFC6D4;
+  --ink-tertiary:            #B1B8C5;
+  --ink-disabled:            #868D99;
+  --ink-on-well:             #ABB2BF;
+  --accent:                  #6FBDFE;
+  --ink-on-accent:           #07140C;
+  --accent-tint:             #354557;
+  --accent-on-well:          #61AFEF;
+  --status-busy:             #98C379;
+  --status-busy-text:        #98C379;
+  --status-idle:             #8A92A0;
+  --status-attention:        #E5C07B;
+  --status-attention-tint:   #514E4A;
+  --status-attention-text:   #E6C17C;
+  --status-dead:             #E16D76;
+  --status-dead-tint:        color-mix(in srgb, #E06C75 12%, transparent);
+  --status-dead-tint-solid:  #463C45;
+  --status-dead-text:        #FF9197;
+  --status-done:             #56B6C2;
+  --status-done-text:        #65C4D0;
+  --status-cleanup:          #8A92A0;
+  --status-cleanup-text:     #AFB7C6;
+  --acct-cyan-tint:          #384C57;
+  --acct-cyan:               #6DCCD8;
+  --acct-violet-tint:        #4C415B;
+  --acct-violet:             #E79EFC;
+  --acct-blue-tint:          #3A4B5F;
+  --acct-blue:               #81C4FE;
+  --acct-magenta-tint:       #4C415B;
+  --acct-magenta:            #E79EFC;
+  --acct-amber-tint:         #4E4746;
+  --acct-amber:              #EAB27D;
+  --acct-green-tint:         #444F49;
+  --acct-green:              #A4D085;
+  --limit-track:             #464C59;
+  --limit-ok:                #98C379;
+  --limit-warn:              #E5C07B;
+  --limit-critical:          #F27C84;
+  --diff-add:                #98C379;
+  --diff-del:                #F57F87;
+  --elev-card:               0 1px 2px rgba(0, 0, 0, 0.40), 0 2px 8px rgba(0, 0, 0, 0.28);
+  --elev-sheet:              0 -8px 40px rgba(0, 0, 0, 0.55);
+  --glow-busy:               
+    0 0 0 1px   rgba(152, 195, 121, 0.35),
+    0 0 16px    rgba(152, 195, 121, 0.18),
+    0 0 40px    rgba(152, 195, 121, 0.08);
+  --glow-attention:          
+    0 0 0 1px   rgba(229, 192, 123, 0.35),
+    0 0 16px    rgba(229, 192, 123, 0.18),
+    0 0 40px    rgba(229, 192, 123, 0.08);
+  --glow-dot-busy:           0 0 7px rgba(152, 195, 121, 0.45);
+  --glow-dot-attention:      0 0 7px rgba(229, 192, 123, 0.45);
+  --syn-comment:             #919A92;
+  color-scheme:              dark;
+}
+
+[data-theme='solarized-dark'] {
+  /* Solarized Dark */
+  --bg-page:                 #002B36;
+  --bg-surface:              #073642;
+  --bg-raised:               #0E4653;
+  --bg-sheet:                #073642;
+  --bg-well:                 #001F27;
+  --scrim:                   rgba(4, 6, 5, 0.62);
+  --edge-subtle:             #1F5461;
+  --edge-strong:             #000003;
+  --ink-primary:             #C1D0D0;
+  --ink-secondary:           #B4C3C3;
+  --ink-tertiary:            #A7B5B5;
+  --ink-disabled:            #7D8A8A;
+  --ink-on-well:             #94A2A2;
+  --accent:                  #63B7FB;
+  --ink-on-accent:           #07140C;
+  --accent-tint:             #0D4459;
+  --accent-on-well:          #3596DE;
+  --status-busy:             #859900;
+  --status-busy-text:        #A6BB3D;
+  --status-idle:             #799098;
+  --status-attention:        #B58900;
+  --status-attention-tint:   #264536;
+  --status-attention-text:   #D7A93B;
+  --status-dead:             #FF564D;
+  --status-dead-tint:        color-mix(in srgb, #DC322F 12%, transparent);
+  --status-dead-tint-solid:  #213640;
+  --status-dead-text:        #FE8C80;
+  --status-done:             #2AA198;
+  --status-done-text:        #53C2B8;
+  --status-cleanup:          #799098;
+  --status-cleanup-text:     #9EB5BD;
+  --acct-cyan-tint:          #0D4951;
+  --acct-cyan:               #56C5BB;
+  --acct-violet-tint:        #194159;
+  --acct-violet:             #9EA6FE;
+  --acct-blue-tint:          #0D455C;
+  --acct-blue:               #63B7FB;
+  --acct-magenta-tint:       #2C364E;
+  --acct-magenta:            #FF74AF;
+  --acct-amber-tint:         #2A3A3A;
+  --acct-amber:              #FC8258;
+  --acct-green-tint:         #1E4836;
+  --acct-green:              #A6BB3D;
+  --limit-track:             #194E5B;
+  --limit-ok:                #90A41D;
+  --limit-warn:              #C1941D;
+  --limit-critical:          #FD6A5F;
+  --diff-add:                #8EA31B;
+  --diff-del:                #FD6A5F;
+  --elev-card:               0 1px 2px rgba(0, 0, 0, 0.40), 0 2px 8px rgba(0, 0, 0, 0.28);
+  --elev-sheet:              0 -8px 40px rgba(0, 0, 0, 0.55);
+  --glow-busy:               
+    0 0 0 1px   rgba(133, 153, 0, 0.35),
+    0 0 16px    rgba(133, 153, 0, 0.18),
+    0 0 40px    rgba(133, 153, 0, 0.08);
+  --glow-attention:          
+    0 0 0 1px   rgba(181, 137, 0, 0.35),
+    0 0 16px    rgba(181, 137, 0, 0.18),
+    0 0 40px    rgba(181, 137, 0, 0.08);
+  --glow-dot-busy:           0 0 7px rgba(133, 153, 0, 0.45);
+  --glow-dot-attention:      0 0 7px rgba(181, 137, 0, 0.45);
+  --syn-comment:             #8B948C;
+  color-scheme:              dark;
+}
+
+[data-theme='github-light'] {
+  /* GitHub Light */
+  --bg-page:                 #FFFFFF;
+  --bg-surface:              #FFFFFF;
+  --bg-raised:               #F6F8FA;
+  --bg-sheet:                #FFFFFF;
+  --bg-well:                 #24292F;
+  --scrim:                   rgba(20, 26, 22, 0.42);
+  --edge-subtle:             #E5E7E9;
+  --edge-strong:             #CFD0D2;
+  --ink-primary:             #1F2328;
+  --ink-secondary:           #1F2328;
+  --ink-tertiary:            #1F2328;
+  --ink-disabled:            #42474C;
+  --ink-on-well:             #A8ADB4;
+  --accent:                  #0969DA;
+  --ink-on-accent:           #FFFFFF;
+  --accent-tint:             #F2F8FF;
+  --accent-on-well:          #589DFF;
+  --status-busy:             #23853D;
+  --status-busy-text:        #136F2E;
+  --status-idle:             #6D757E;
+  --status-attention:        #9D6906;
+  --status-attention-tint:   #E9DEC7;
+  --status-attention-text:   #7F560B;
+  --status-dead:             #DB3138;
+  --status-dead-tint:        color-mix(in srgb, #CF222E 12%, transparent);
+  --status-dead-tint-solid:  #F9E4E6;
+  --status-dead-text:        #C61427;
+  --status-done:             #23853D;
+  --status-done-text:        #136F2E;
+  --status-cleanup:          #6D757E;
+  --status-cleanup-text:     #585F68;
+  --acct-cyan-tint:          #DBEAEB;
+  --acct-cyan:               #000003;
+  --acct-violet-tint:        #EBE3FA;
+  --acct-violet:             #7743D1;
+  --acct-blue-tint:          #D8E7F9;
+  --acct-blue:               #0B5FC5;
+  --acct-magenta-tint:       #F5DFEC;
+  --acct-magenta:            #B0297C;
+  --acct-amber-tint:         #EFE7D6;
+  --acct-amber:              #875B0B;
+  --acct-green-tint:         #DAEBDF;
+  --acct-green:              #00732B;
+  --limit-track:             #ECEEF0;
+  --limit-ok:                #1A7F37;
+  --limit-warn:              #9A6700;
+  --limit-critical:          #CF222E;
+  --diff-add:                #5DBA6E;
+  --diff-del:                #FF807A;
+  --elev-card:               0 1px 3px rgba(26, 32, 27, 0.10), 0 1px 2px rgba(26, 32, 27, 0.06);
+  --elev-sheet:              0 -8px 40px rgba(26, 32, 27, 0.22);
+  --glow-busy:               
+    0 0 0 1px   rgba(35, 133, 61, 0.35),
+    0 0 16px    rgba(35, 133, 61, 0.18),
+    0 0 40px    rgba(35, 133, 61, 0.08);
+  --glow-attention:          
+    0 0 0 1px   rgba(157, 105, 6, 0.35),
+    0 0 16px    rgba(157, 105, 6, 0.18),
+    0 0 40px    rgba(157, 105, 6, 0.08);
+  --glow-dot-busy:           0 0 7px rgba(35, 133, 61, 0.45);
+  --glow-dot-attention:      0 0 7px rgba(157, 105, 6, 0.45);
+  --syn-comment:             #959E96;
+  color-scheme:              light;
+}
+
+[data-theme='solarized-light'] {
+  /* Solarized Light */
+  --bg-page:                 #FDF6E3;
+  --bg-surface:              #FFFBF0;
+  --bg-raised:               #EEE8D5;
+  --bg-sheet:                #FFFBF0;
+  --bg-well:                 #002B36;
+  --scrim:                   rgba(20, 26, 22, 0.42);
+  --edge-subtle:             #DED8C5;
+  --edge-strong:             #F6F0DD;
+  --ink-primary:             #3F545B;
+  --ink-secondary:           #465C63;
+  --ink-tertiary:            #51676E;
+  --ink-disabled:            #799098;
+  --ink-on-well:             #98AFB7;
+  --accent:                  #0768A3;
+  --ink-on-accent:           #FFFFFF;
+  --accent-tint:             #DFE9E8;
+  --accent-on-well:          #40A0E9;
+  --status-busy:             #708101;
+  --status-busy-text:        #566305;
+  --status-idle:             #6D7A7A;
+  --status-attention:        #997302;
+  --status-attention-tint:   #EFE2BB;
+  --status-attention-text:   #755804;
+  --status-dead:             #DC322F;
+  --status-dead-tint:        color-mix(in srgb, #DC322F 12%, transparent);
+  --status-dead-tint-solid:  #FBE3D9;
+  --status-dead-text:        #C6131A;
+  --status-done:             #1A8981;
+  --status-done-text:        #000001;
+  --status-cleanup:          #6D7A7A;
+  --status-cleanup-text:     #525F5F;
+  --acct-cyan-tint:          #DDEDE2;
+  --acct-cyan:               #000001;
+  --acct-violet-tint:        #E7E5E9;
+  --acct-violet:             #575AAB;
+  --acct-blue-tint:          #DCE9EB;
+  --acct-blue:               #0768A3;
+  --acct-magenta-tint:       #F8DBDE;
+  --acct-magenta:            #B8136C;
+  --acct-amber-tint:         #F7DFCD;
+  --acct-amber:              #AD3A04;
+  --acct-green-tint:         #EBEBCA;
+  --acct-green:              #5C6A04;
+  --limit-track:             #E4DECB;
+  --limit-ok:                #6F7F11;
+  --limit-warn:              #967312;
+  --limit-critical:          #DC322F;
+  --diff-add:                #99AE2D;
+  --diff-del:                #FE7F73;
+  --elev-card:               0 1px 3px rgba(26, 32, 27, 0.10), 0 1px 2px rgba(26, 32, 27, 0.06);
+  --elev-sheet:              0 -8px 40px rgba(26, 32, 27, 0.22);
+  --glow-busy:               
+    0 0 0 1px   rgba(112, 129, 1, 0.35),
+    0 0 16px    rgba(112, 129, 1, 0.18),
+    0 0 40px    rgba(112, 129, 1, 0.08);
+  --glow-attention:          
+    0 0 0 1px   rgba(153, 115, 2, 0.35),
+    0 0 16px    rgba(153, 115, 2, 0.18),
+    0 0 40px    rgba(153, 115, 2, 0.08);
+  --glow-dot-busy:           0 0 7px rgba(112, 129, 1, 0.45);
+  --glow-dot-attention:      0 0 7px rgba(153, 115, 2, 0.45);
+  --syn-comment:             #929B93;
+  color-scheme:              light;
+}
+
+[data-theme='catppuccin-latte'] {
+  /* Catppuccin Latte */
+  --bg-page:                 #EFF1F5;
+  --bg-surface:              #FFFFFF;
+  --bg-raised:               #E6E9EF;
+  --bg-sheet:                #FFFFFF;
+  --bg-well:                 #1E1E2E;
+  --scrim:                   rgba(20, 26, 22, 0.42);
+  --edge-subtle:             #D6D9DE;
+  --edge-strong:             #C4C7CD;
+  --ink-primary:             #4C4F69;
+  --ink-secondary:           #4C4F69;
+  --ink-tertiary:            #4C4F69;
+  --ink-disabled:            #737793;
+  --ink-on-well:             #9EA2C0;
+  --accent:                  #0F59E7;
+  --ink-on-accent:           #FFFFFF;
+  --accent-tint:             #E0EBFF;
+  --accent-on-well:          #5890FC;
+  --status-busy:             #2E9014;
+  --status-busy-text:        #20700B;
+  --status-idle:             #777A8B;
+  --status-attention:        #AF6E11;
+  --status-attention-tint:   #F8E6CD;
+  --status-attention-text:   #895402;
+  --status-dead:             #D5163B;
+  --status-dead-tint:        color-mix(in srgb, #D20F39 12%, transparent);
+  --status-dead-tint-solid:  #FAE2E7;
+  --status-dead-text:        #C31A38;
+  --status-done:             #068C93;
+  --status-done-text:        #000003;
+  --status-cleanup:          #777A8B;
+  --status-cleanup-text:     #5A5D6D;
+  --acct-cyan-tint:          #DAEEEF;
+  --acct-cyan:               #000003;
+  --acct-violet-tint:        #ECDFFC;
+  --acct-violet:             #802DE5;
+  --acct-blue-tint:          #DBE7FD;
+  --acct-blue:               #0C56E4;
+  --acct-magenta-tint:       #FCE9F7;
+  --acct-magenta:            #AA3B90;
+  --acct-amber-tint:         #FFE6D8;
+  --acct-amber:              #B04204;
+  --acct-green-tint:         #E0F0DD;
+  --acct-green:              #22760B;
+  --limit-track:             #DCDFE5;
+  --limit-ok:                #288B09;
+  --limit-warn:              #AB6A08;
+  --limit-critical:          #D20F39;
+  --diff-add:                #53B23F;
+  --diff-del:                #FD7077;
+  --elev-card:               0 1px 3px rgba(26, 32, 27, 0.10), 0 1px 2px rgba(26, 32, 27, 0.06);
+  --elev-sheet:              0 -8px 40px rgba(26, 32, 27, 0.22);
+  --glow-busy:               
+    0 0 0 1px   rgba(46, 144, 20, 0.35),
+    0 0 16px    rgba(46, 144, 20, 0.18),
+    0 0 40px    rgba(46, 144, 20, 0.08);
+  --glow-attention:          
+    0 0 0 1px   rgba(175, 110, 17, 0.35),
+    0 0 16px    rgba(175, 110, 17, 0.18),
+    0 0 40px    rgba(175, 110, 17, 0.08);
+  --glow-dot-busy:           0 0 7px rgba(46, 144, 20, 0.45);
+  --glow-dot-attention:      0 0 7px rgba(175, 110, 17, 0.45);
+  --syn-comment:             #8B948C;
+  color-scheme:              light;
+}
+
+/* The dark: variant, derived from the same seeds — see the note above
+   LIGHT_IDS in ui/design/make-themes.mjs for why it is generated and not
+   written by hand. :root is DARK here, so this is a list of the exceptions. */
+@custom-variant dark (&:where(:root:not([data-theme='light']):not([data-theme='github-light']):not([data-theme='solarized-light']):not([data-theme='catppuccin-latte']) *));
+/* === END GENERATED THEMES === */
+
+/* ==========================================================================
+   ACCOUNT REBINDING — the --acct-active mechanism. Screens stamp data-acct on
+   their root; everything account-tinted inside reads --acct-active only.
+   Because substitution happens at these elements, the light theme's account
+   values flow through automatically.
+   ========================================================================== */
+[data-acct='cyan']    { --acct-active: var(--acct-cyan);    --acct-active-tint: var(--acct-cyan-tint); }
+[data-acct='violet']  { --acct-active: var(--acct-violet);  --acct-active-tint: var(--acct-violet-tint); }
+[data-acct='blue']    { --acct-active: var(--acct-blue);    --acct-active-tint: var(--acct-blue-tint); }
+[data-acct='magenta'] { --acct-active: var(--acct-magenta); --acct-active-tint: var(--acct-magenta-tint); }
+[data-acct='amber']   { --acct-active: var(--acct-amber);   --acct-active-tint: var(--acct-amber-tint); }
+[data-acct='green']   { --acct-active: var(--acct-green);   --acct-active-tint: var(--acct-green-tint); }
+/* Fix round 1, finding 4: `data-acct='unknown'` is `SessionScreen`'s own
+   fallback for a hue `accountHue` could not resolve — the roster has not
+   arrived yet, or the wrapper genuinely is not in it. Without a rule here,
+   the `[data-acct]` match fails entirely and `--acct-active` is left at
+   `:root`'s default (cyan) — a real hue that reads as "this is the claude
+   account" rather than "unknown". Rebound to the same neutral ink/raised
+   pair `.chip--archived` above and `accountColorVar`'s own hue-less fallback
+   already use, both already gated at 4.5+ in both themes. */
+[data-acct='unknown'] { --acct-active: var(--ink-tertiary); --acct-active-tint: var(--bg-raised); }
+
+/* ==========================================================================
+   REDUCED MOTION — glow freezes at mid-intensity, springs become fades,
+   the caret stops blinking, the ping never fires. Nothing disappears;
+   nothing moves.
+   ========================================================================== */
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --dur-press: 1ms;
+    --dur-fast:  1ms;
+    --dur-base:  1ms;
+    --dur-slow:  1ms;
+    --dur-sheet: 1ms;
+    --dur-bar:   1ms;
+    --dur-ping:  1ms;
+    /* --breathe/pulse/caret-period stay untouched on purpose: a 0s
+       infinite-alternate loop strobes rather than stops. Consumers must
+       instead disable those animations outright (animation: none) and pin
+       glow/caret opacity at mid-intensity — see the reduced-motion block in
+       design/mockup.html (and later base.css) for the canonical pattern. */
+  }
+}

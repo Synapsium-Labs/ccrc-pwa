@@ -3,6 +3,7 @@
 // output: full-width flush prose with rendered markdown (code blocks in dark
 // wells that scroll inside the bubble). System events are centered dividers.
 import { useState, type ReactNode } from 'react';
+import { Prose } from '@ccrc/ui';
 import type { ChatEvent } from '../../../shared/api';
 import { isImageClip, splitClipPaths } from '../../../shared/api';
 import { clipUrl } from '../lib/api';
@@ -101,9 +102,9 @@ function FoldedCard({
       {open && (raw
         ? <pre className="compaction-body compaction-raw">{text}</pre>
         : (
-          <div className="compaction-body msg-assist">
+          <Prose className="compaction-body">
             <ChatMarkdown text={text} />
-          </div>
+          </Prose>
         ))}
     </div>
   );
@@ -237,9 +238,9 @@ export function MessageBubble({
   }
 
   return (
-    <div className="msg-assist">
+    <Prose>
       <ChatMarkdown text={event.text} />
       {streaming && <span className="stream-caret" aria-hidden="true" />}
-    </div>
+    </Prose>
   );
 }

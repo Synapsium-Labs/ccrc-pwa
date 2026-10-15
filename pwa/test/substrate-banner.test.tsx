@@ -10,6 +10,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { act, cleanup, render, screen } from '@testing-library/react';
 import type { FleetSession } from '../../shared/api';
+import { fleetSession } from './fleetFixture';
 import { SubstrateBanner } from '../src/fleet/SubstrateBanner';
 import { FleetScreen } from '../src/screens/FleetScreen';
 import { createFleetStore, type FleetStore } from '../src/stores/fleet';
@@ -28,16 +29,7 @@ const makeStore = (): FleetStore => createFleetStore({
  *  is `running` OR `restarting`: during the fault the SERVER's own probe
  *  reads unknown, so every faulted row classifies `restarting` on the wire —
  *  the wire-true fixtures below say so). Each test opts rows out explicitly. */
-const s = (over: Partial<FleetSession> = {}): FleetSession => ({
-  id: 'demo-quiet-basin', wrapper: 'claude', home: 'claude', project: 'demo', workdir: '/w',
-  workspace: 'quiet-basin', name: null, status: 'busy', statusUpdatedAt: null, limits: null,
-  dialogPending: false, version: null, model: null, effort: null, ultracode: false,
-  branch: 'ws/quiet-basin', ctxPct: null, paneCols: null, tasks: null, pr: null, archivedAt: null,
-  archivedBytes: null, hookState: null, askSummary: null, subagents: null, graphQueries: null, graphGateDenials: null, held: null,
-  bucket: 'working', bucketSince: null, unmeasured: [], statusUnmeasured: false,
-  lifecycle: 'running', stoppedBy: null, swapBlocked: null, stranded: null, substrate: null, started: true,
-  spawnState: null, ask: null, usage: null, boardProject: null, route: null, child: { kind: 'none' }, releasedFrom: null, ...over,
-});
+const s = (over: Partial<FleetSession> = {}): FleetSession => (fleetSession({ workspace: 'quiet-basin', status: 'busy', branch: 'ws/quiet-basin', bucket: 'working', lifecycle: 'running', ...over }));
 
 const FAULT = { at: 1755620112000, text: 'protocol version mismatch' } as const;
 

@@ -1191,6 +1191,10 @@ else
   # shipped a stale bundle twice. Build the PWA HERE, in this run, and refuse
   # to ship a bundle this run did not produce.
   RUN_START="$(date +%s)"
+  # ui FIRST: pwa builds @ccrc/ui from SOURCE (`file:../ui`), and ui's imports
+  # resolve from ui/node_modules alone — a fresh clone without it fails the
+  # build below (build-release.sh says why at length).
+  (cd ui && npm ci --no-audit --no-fund)
   (cd pwa && npm ci && npm run build)
   [ -f server/dist-pwa/index.html ] \
     || { echo "deploy: PWA build produced no server/dist-pwa/index.html" >&2; exit 1; }

@@ -6,8 +6,8 @@
 // the next) and the item key for every other kind. `ChatListInner` and the virtualised `ChatList` share
 // `ChatItemView`, so this one mount covers both; the cases render `ChatListInner` (Virtuoso cannot measure in jsdom).
 //
-// `MessageBubble` is the real one except for a text carrying THROW_MARK; `ToolCard` always throws. Both mocks are
-// per-file, which is why this is its own file.
+// `MessageBubble` is the real one except for a text carrying THROW_MARK; `ToolCard` (from @ccrc/ui) always throws.
+// Both mocks are per-file, which is why this is its own file.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { MockInstance } from 'vitest';
 import type { ComponentProps, ReactNode } from 'react';
@@ -27,8 +27,11 @@ vi.mock('../src/session/MessageBubble', async (importOriginal) => {
   };
 });
 
-vi.mock('../src/session/ToolCard', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('../src/session/ToolCard')>();
+// ToolCard lives in @ccrc/ui now, so the mock moved with it — a PARTIAL mock via `importOriginal`, because ChatList
+// takes MailCard, TaskCard and PROSE from the same package and RenderBoundary its Button: a wholesale factory would
+// blank all of them, and a mock of the old path would be inert (ToolCard would never throw).
+vi.mock('@ccrc/ui', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@ccrc/ui')>();
   return {
     ...actual,
     ToolCard: (): never => {
