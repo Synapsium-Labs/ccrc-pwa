@@ -15,12 +15,12 @@
 // D-5091 (Task 4) adds a multiSelect question's boxes (`MultiPick`), which both sheets render in place of the option
 // rows when the pane carries `Dialog.multi`. Their state, the operator's set and the commit's call, lives in
 // `DialogSheet` for the same reason.
-import type { ReactNode } from 'react';
-import { DIALOG_TEXT_MAX, type Dialog, type DialogMulti, type HookAskQuestion } from '../../../shared/api';
+import { useId, type ReactNode } from 'react';
+import type { Dialog, DialogMulti, HookAskQuestion } from '../../../shared/api';
 import { Button, EYEBROW, OptionRow } from '@ccrc/ui';
 import { commitsToReview, paneTicks, reviewSummary, slotHolds, wantedTicks, type FreeTextSlot } from './askLive';
 import {
-  MULTI_FREE_TEXT_TICKED, cursorOffOptions, cursorPlace, multiHeld, ownWordsHeld,
+  MULTI_FREE_TEXT_TICKED, cursorOffOptions, cursorPlace, multiHeld, ownWordsCount, ownWordsHeld,
 } from './askWords';
 import './chat.css';
 
@@ -235,6 +235,7 @@ export function OwnWords({
   locked: boolean;
 }): ReactNode {
   const { text, call, onText, onSend } = words;
+  const countId = useId();
   const busy = wordsBusy(call);
   let row: number;
   if (call !== null && busy) {
@@ -248,6 +249,8 @@ export function OwnWords({
   }
   const stranded = !busy && slot.kind === 'held';
   const held = ownWordsHeld(text);
+  // Near the limit, how much of it the text uses; over it, why Send waits. Never a silent cut (`ownWordsHeld`).
+  const count = ownWordsCount(text);
   return (
     <>
       <form
@@ -263,10 +266,10 @@ export function OwnWords({
           value={text}
           onChange={(e) => onText(e.target.value)}
           placeholder="…or answer in your own words"
-          maxLength={DIALOG_TEXT_MAX}
           readOnly={stranded}
           disabled={busy || locked}
           aria-label="Answer in your own words"
+          aria-describedby={count !== null ? countId : undefined}
         />
         <button
           type="submit"
@@ -278,6 +281,7 @@ export function OwnWords({
           {busy && <span className="opt-wait"> answering…</span>}
         </button>
       </form>
+      {count !== null && <p className="dlg-copy" id={countId}>{count}</p>}
       {stranded && <p className="dlg-copy">{WORDS_STRANDED}</p>}
       {held === 'semicolon' && <p className="dlg-copy">{TRAILING_SEMICOLON}</p>}
     </>

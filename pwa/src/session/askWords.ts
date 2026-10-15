@@ -43,7 +43,9 @@ export function dialogTextRefusal(err: unknown): string {
 /**
  * Why Send is held back for `text`, or null when the sheet sends it. The text sent is `text` trimmed, and:
  *  - `invalid`: the route's own rule refuses it (`isDialogText`: blank, a control character such as a Tab or a line
- *    break, or longer than `DIALOG_TEXT_MAX`), so the route would answer 400 `bad-text` without touching the pane;
+ *    break, or longer than `DIALOG_TEXT_MAX`), so the route would answer 400 `bad-text` without touching the pane.
+ *    The field never cuts a paste at the limit (it carries no `maxLength`, which a browser enforces by dropping the
+ *    tail without a word): the whole text stays, `ownWordsCount` says by how much it is over, and Send waits;
  *  - `semicolon`: it ends in `;`. tmux drops a literal's trailing `;` (measured in #417), so the echo never matches,
  *    nothing is submitted, and the retry the server offers is refused (`not-free-text`): a dead end. Narrower than
  *    the route on purpose, until that is fixed at the source (pending slug `ask-sheet-trailing-semicolon`).
@@ -52,6 +54,21 @@ export function ownWordsHeld(text: string): 'invalid' | 'semicolon' | null {
   const sent = text.trim();
   if (!isDialogText(sent)) return 'invalid';
   return sent.endsWith(';') ? 'semicolon' : null;
+}
+
+/** From how many characters the field counts them: four fifths of the route's limit, early enough to shorten an
+ *  answer before Send waits, late enough that a short answer never shows a number. */
+export const OWN_WORDS_COUNT_FROM = Math.round(DIALOG_TEXT_MAX * 0.8);
+
+/** The own-words field's count, from `OWN_WORDS_COUNT_FROM` characters of the text sent (trimmed, counted as the
+ *  route's rule counts): how much of the limit it uses, and once over it, why Send waits. Null below. */
+export function ownWordsCount(text: string): string | null {
+  const n = text.trim().length;
+  if (n < OWN_WORDS_COUNT_FROM) return null;
+  const count = `${n} of ${DIALOG_TEXT_MAX} characters`;
+  return n > DIALOG_TEXT_MAX
+    ? `${count} — the terminal's own-words row takes at most ${DIALOG_TEXT_MAX}, so Send waits until it's shorter. Or answer in the terminal.`
+    : `${count}.`;
 }
 
 /** The free-text box of a multiSelect question is ticked (typing into its row ticks it), so Tab would commit it with the

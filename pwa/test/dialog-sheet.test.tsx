@@ -1672,6 +1672,49 @@ describe('own words go through the free-text row (D-5090)', () => {
     expect(send()).toBeEnabled();
   });
 
+  it('a paste over the limit is kept whole, counted, and held back with a sentence', () => {
+    // The field once carried maxLength, so a browser cut a long paste at the limit and Send sent the first part,
+    // silently. A realistic paste: a reviewer's notes, well over the route's limit.
+    const paste = Array.from({ length: 14 }, (_, i) =>
+      `Point ${i + 1}: keep the migration behind a flag, run it on staging first, and roll back on any checksum mismatch.`,
+    ).join(' ');
+    expect(paste.length).toBeGreaterThan(DIALOG_TEXT_MAX + 400);
+    const text = vi.spyOn(api, 'answerDialogText').mockReturnValue(new Promise(() => {}));
+    const open = pane('cc300-ask-1q-open');
+    renderAsk(null, open);
+    expect(field(), 'a browser would cut the paste at the limit').not.toHaveAttribute('maxlength');
+
+    type(paste);
+    expect(field()).toHaveValue(paste);
+    expect(send()).toBeDisabled();
+    const over = screen.getByText(new RegExp(`^${paste.length} of ${DIALOG_TEXT_MAX} characters`));
+    expect(over.textContent).toMatch(/at most 1000/);
+    expect(field()).toHaveAccessibleDescription(over.textContent!);
+    fireEvent.submit(field().form!);
+    expect(text, 'a paste over the limit was sent').not.toHaveBeenCalled();
+
+    // Shortened to the limit: counted, and sent whole.
+    const fits = paste.slice(0, DIALOG_TEXT_MAX);
+    type(fits);
+    expect(screen.getByText(`${DIALOG_TEXT_MAX} of ${DIALOG_TEXT_MAX} characters.`)).toBeInTheDocument();
+    expect(send()).toBeEnabled();
+    fireEvent.click(send());
+    expect(text).toHaveBeenCalledWith(SESSION_ID, open.id, 3, fits.trim());
+  });
+
+  it('the counter shows only near the limit', () => {
+    renderAsk(null, pane('cc300-ask-1q-open'));
+    type('x'.repeat(799));
+    expect(screen.queryByText(/ of 1000 characters/)).toBeNull();
+    type('x'.repeat(800));
+    expect(screen.getByText('800 of 1000 characters.')).toBeInTheDocument();
+    // Counted as sent, trimmed: the route's rule reads what it receives.
+    type(`   ${'x'.repeat(799)}   `);
+    expect(screen.queryByText(/ of 1000 characters/)).toBeNull();
+    type(`  ${'x'.repeat(DIALOG_TEXT_MAX)}  `);
+    expect(send()).toBeEnabled();
+  });
+
   it('a trailing ; disables Send and says why', () => {
     // tmux drops a literal's trailing `;` (measured in #417): the echo would fail and the retry would be refused.
     renderAsk(null, pane('cc300-ask-1q-open'));
