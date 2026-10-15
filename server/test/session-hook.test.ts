@@ -8443,6 +8443,16 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
       //   `:629`): `plan:3330 deploy/deploy.sh:629` now holds a comment that names `install_atomic`, a token its
       //   clause quotes, so the audit anchors it by coincidence. Still stale in fact, still frozen.
       'deploy/deploy.sh': 3,
+      // `deploy/build-release.sh` 0 -> 1, A NEW ENTRY, at the design-system wave's release-lane fix (review
+      //   blocker 1). `( cd "$ROOT/ui" && npm ci --no-audit --no-fund )` and the comment that argues it go in ABOVE
+      //   the release pathspec, +13 lines, so `plan:3326 deploy/build-release.sh:103-104` (Task 10's `- NOT
+      //   modified` clause, which quotes `install.sh shared ccd deploy`) now lands on two build-check lines; the
+      //   pathspec it quotes stands at `:116-117`, byte-identical to `origin/main`'s `:103-104`. Frozen like the rest
+      //   of that paragraph, so it is parked here rather than repaired. Measured by `cite-remeasure.py` against
+      //   `origin/main` at `3210b434` with `--files README.md,deploy/build-release.sh,deploy/deploy.sh,install.sh,
+      //   server/test/single-definition.test.ts`: `stated - base None tree 1`, the only key that moved. Nothing
+      //   left. S6-R11, no D-number.
+      'deploy/build-release.sh': 1,
       // `ccd/ccrc` 5 -> 4, RE-MEASURED on the centralised-update-management
       // branch (Tasks 9-13, part B): `ccd/ccrc` grew 12,559 -> 12,851 lines
       // (+292, `wc -l`) and NEITHER corpus document changed (spec and plan
@@ -8786,7 +8796,12 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
     // `single-definition.test.ts` (8 -> 13, the same five sites as above), nothing left, and no other key
     // moved — main's `ccd/ccd` 147 -> 146 -> 147 nets to zero. Row and site arrays unmoved (55 and 35).
     // Both corpus documents and README are byte-identical to `origin/main`. S6-R11, no D-number.
-    expect(total, 'the narrated headline is the sum of the census, and this is it').toBe(201);
+    // 201 -> 202 at the design-system wave's release-lane fix, on the merge of `origin/main` at `3210b434`:
+    // `cite-remeasure.py` against `origin/main` prints `total stated 201  base 196  tree 202`. The 196 -> 201 is
+    // the five `single-definition.test.ts` sites argued above, unchanged; the one more is
+    // `deploy/build-release.sh` 0 -> 1 (argued beside the map). Row and site arrays unmoved (55 and 35). Both
+    // corpus documents are byte-identical to `origin/main`. S6-R11, no D-number.
+    expect(total, 'the narrated headline is the sum of the census, and this is it').toBe(202);
     // AND EVERY FAILING CITATION POINTS INTO A FILE THIS TASK REWROTE — the
     // claim that makes the census a statement about Task 9 rather than about
     // the documents' own quality. A stale citation into an untouched file is a
@@ -8814,7 +8829,11 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
       // MEASURED rather than assumed: this wave's Task 1 rewrote it, `23 0`
       // against `origin/main` in one hunk at `:378`. Named because the work
       // rewrote the file — the claim this list makes is unchanged.
-      'server/test/single-definition.test.ts'];
+      'server/test/single-definition.test.ts',
+      // `deploy/build-release.sh`, on the same ground and MEASURED rather than assumed: the design-system wave's
+      // release-lane fix rewrote it, `13 0` against `origin/main` in one hunk above the pathspec. Named because
+      // the work rewrote the file — the claim this list makes is unchanged.
+      'deploy/build-release.sh'];
     expect([...new Set(r.failures.map((f) => f.file))].filter((f) => !TOUCHED.includes(f)),
       'a stale citation into a file this task never touched').toEqual([]);
   });
@@ -9025,6 +9044,10 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         'ccd/ccrc:5217',
         'ccd/ccrc:6531',
         'ccd/ccrc:7129-7130',
+        // ENTERS at the design-system wave's release-lane fix: the ui install and its comment, +13 lines above
+        // the release pathspec, take this `- NOT modified` reference off the lines it quotes (see the census
+        // entry). Measured by `cite-remeasure.py` against `origin/main` at `3210b434`. S6-R11, no D-number.
+        'deploy/build-release.sh:103-104',
       ]);
     // D-2849's OWN FIVE (its 2026-09-17 append), named rather than counted, so a set
     // that keeps its length while losing one of them still reds.
