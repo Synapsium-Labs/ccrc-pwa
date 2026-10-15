@@ -3768,10 +3768,12 @@ comments and test titles cite the spec, never this contract.
 - `prelock-no-lock-clause-follows-the-detail`: the verb's pre-lock unmeasured answer puts the locked detail first and
   the no-lock clause after it. The refused site keeps its own prefix, unchanged. A cut at the 300-byte reason cap
   takes the clause first, and reaches the detail only when the detail alone passes the cap. The record reader's rc-3
-  answer (the quarantine arm) always passes the cap, because its detail alone is at least 318 bytes. So the live rc-3
-  pre-lock line is that detail cut at 300 bytes plus "…", with no clause, and the absent `.reap-<id>.lock` is the
-  evidence. The answers with short details carry the clause whole. The pin pads a stub reason into the window where
-  the clause is what gets cut, a window the live rc-3 line never reaches.
+  answer (the quarantine arm) carries the record path, and the `~/.cc-tmp` path when that cannot be resolved, so its
+  detail grows with HOME. Under the suites' fixture HOMEs it is at least 318 bytes, and the line is that detail cut at
+  300 bytes plus "…", with no clause. Under a short HOME, an unenterable or unusable `~/.cc-tmp` can leave the detail
+  under 300 bytes, and the clause is then cut, or whole when the detail is 247 bytes or fewer. Either way the absent
+  `.reap-<id>.lock` is the evidence. The answers with short details carry the clause whole. The pin pads a stub reason
+  into the window where the clause is what gets cut.
 
 **The proof (spec §2.8 and §8).**
 - `dash-parity-in-its-own-file`: the real-binary proof is `ccdargv-dash-id-parity.test.ts`. `ccdargv-dec-parity.test.ts`
@@ -3875,7 +3877,8 @@ its draft claims) and are defined in the plan's Task 12 deviation entry only.
   audit document reports it as the locked resume does.
 - Task 9, measured later: `prelock-prefix-cuts-the-rc3-detail` and `archived-expiry-census-fourth-collect-failed-site`.
   The plan's STOP for the resume suite's rc-3 case fired: under a `TMPDIR` of 67 and of 81 characters, the no-lock
-  prefix pushed the pre-lock detail past the 300-byte reason cap, which a run at about 47 characters had not shown.
+  prefix pushed the detail's operative clause ("was never derived") past the 300-byte reason cap, which a run at about
+  47 characters had not shown.
   The repair is `prelock-no-lock-clause-follows-the-detail`, above. And Task 9's pre-lock unmeasured failure is a
   fourth `cmd_ws_collect failed probe-unmeasured` site, so the archived-expiry census of failed and refused sites
   went red until fix round 1 added it, under the coordinator's licence.

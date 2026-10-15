@@ -293,10 +293,10 @@ describe('the identity arms narrow nothing else (path-identity spec §2.4)', () 
 // turns each row into the valid call it would otherwise be, and the verb acts: it releases the hold, takes a hold,
 // archives or restores the row, or renames the branch. The assertions are the verb's own answer, and that nothing
 // it would have changed moved. The two ws-rename rows run on a real worktree that ws-add made, so each proves the
-// lone-key refusal and the branch unmoved, both in the registry and in the worktree's HEAD. Their document and
-// registry-branch assertions are soft, so under that mutant the rename is done, and both branch assertions run and
-// red. Their registry listing only guards against a name added or removed: the mutant renames in place, so it cannot
-// red that.
+// lone-key refusal and the branch unmoved, both in the registry and in the worktree's HEAD. Under that mutant the
+// rename is done; their document and registry-branch assertions are soft, so both branch assertions still run, and
+// both red. Their registry listing only guards against a name added or removed: the mutant renames in place, so it
+// cannot red that.
 describe('a lone trailing key after the full argv answers the verb\'s usage line (path-identity spec §2.4)', () => {
   const USAGE_RELEASE = 'ccd: usage: ccd ws-release --session <id>';
   const USAGE_ARCHIVE = 'ccd: usage: ccd ws-archive --session <id>';
