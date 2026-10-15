@@ -108,12 +108,18 @@ export const DOCS_HIGHLIGHT_SCAN_PAGE_MAX_CHARS = 393216;
  *  load 57, 64 KiB blocks): `<a>` in lines 652 ms, `</a>` 452, `<a/>` 419, against 242 to 356 for the plateau shapes
  *  of `yaml`, `json`, `typescript` and `javascript`; growth linear from 8 to 128 KiB. The most markdown code on a real
  *  Docs page is 33 KiB, so no real fence goes plain (the operator's answer to ask 41).
- *  WHAT THE BOUNDS LEAVE (2026-10-14), measured end to end through `detachUrls` and `CodeBlock`, each page beside a
- *  plateau page of eight 64 KiB `yaml` or `json` blocks timed in the same run (2.4 to 2.5 s at load about 47): 48 blocks
- *  of 8 KiB of `<a>` lines cost 2.6 s in `typescript` and 3.0 s in `javascript`; 96 blocks of 4 KiB of `r#"` in `rust`
- *  1.5 s; the markdown budget's two worst blocks 0.5 to 0.6 s; xml's `<script>` shapes, eight 64 KiB blocks, under
- *  0.1 s. The three budgets are summed apart, so the worst crafted page holds both the scan budget and the markdown
- *  budget: 3.4 s, about 1.4 times the plateau page, against spec 4.9's 0.25 s for a page. Chat has no page budget: a
+ *  WHAT THE BOUNDS LEAVE, measured end to end through `detachUrls` and `CodeBlock` on pages that fill each budget
+ *  exactly with every block highlighted (2026-10-15: a block of 8 191 or 65 535 characters, as the budgets count the
+ *  newline the parse keeps; review 460 F4 and F5 found the earlier pages one block short), each page beside a plateau
+ *  page of eight 65 535-character `yaml` or `json` blocks timed in the same run (three interleaved rounds, best of 3,
+ *  load 17 to 157): the plateau page 1.7 to 2.2 s; 48 blocks of `<a>` lines 2.3 to 3.1 s in `typescript` or
+ *  `javascript`; the markdown budget's two blocks of `<a>` lines 0.78 to 0.94 s (`</a>` 0.60 to 0.75; the reviewer
+ *  measured 1.0 to 1.5). Measured on 2026-10-14 and not re-measured: 96 blocks of 4 KiB of `r#"` in `rust` 1.5 s (95 of
+ *  them highlighted, the same newline), and xml's `<script>` shapes, eight 64 KiB blocks, under 0.1 s. The three
+ *  budgets are summed apart, so the accepted crafted page holds both the scan budget and the markdown budget (48
+ *  `typescript` or `javascript` blocks and two `markdown` blocks): 3.2 to 3.5 s here and 3.75 to 4.37 s in the
+ *  reviewer's three runs, 1.6 to 1.9 times the plateau page timed beside it, against spec 4.9's 0.25 s for a page; the
+ *  coordinator accepted it as residue, and the shapes below cost more. Chat has no page budget: a
  *  message bounds each block (a 64 KiB markdown block of `<a>` lines about 650 ms, an 8 KiB `typescript` block about 75), never their
  *  sum. What the sweeps covered: 474 one- and two-character units one per line (the line bound); 28 shapes of
  *  whitespace across lines (the whitespace bound); every registered grammar over about 80 units of two to four
