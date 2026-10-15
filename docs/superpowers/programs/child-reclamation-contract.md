@@ -3773,7 +3773,11 @@ comments and test titles cite the spec, never this contract.
   300 bytes plus "…", with no clause. Under a short HOME, an unenterable or unusable `~/.cc-tmp` can leave the detail
   under 300 bytes, and the clause is then cut, or whole when the detail is 247 bytes or fewer. Either way the absent
   `.reap-<id>.lock` is the evidence. The answers with short details carry the clause whole. The pin pads a stub reason
-  into the window where the clause is what gets cut.
+  so that the detail's own operative words, "was never derived", end between byte 248 and byte 300 of the line, where
+  the no-lock clause placed first would push them past the cut. Its detail passes the cap, so its line is that detail
+  cut after those words, with no clause. No case pins the window from 248 to 299 bytes, where the clause itself is
+  cut. The cut there is `_ws_leaf_why_line`'s, whose 300-byte position `ccd-ws-collect-reprove.test.ts` pins by
+  comparing whole lines.
 
 **The proof (spec §2.8 and §8).**
 - `dash-parity-in-its-own-file`: the real-binary proof is `ccdargv-dash-id-parity.test.ts`. `ccdargv-dec-parity.test.ts`
