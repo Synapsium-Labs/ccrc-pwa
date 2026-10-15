@@ -9,7 +9,7 @@
 // Nothing here reads or writes the live ~/.ccrc, a registry or an account home.
 import { describe, it, expect } from 'vitest';
 import * as libCard from '../../ccd/history/lib.mjs';
-import { compactionSequence, userRow, type Row } from './historyFixtures.js';
+import { compactionSequence, sessionStartAttachment, userRow, type Row } from './historyFixtures.js';
 import type { DatabaseSync } from 'node:sqlite';
 import { createHash } from 'node:crypto';
 import { mkTmp } from './tmpHelpers.js';
@@ -1159,4 +1159,274 @@ describe('the sweep writes and consumes card/<id>/<uuid>.txt at end-of-file (spe
     for (const r of runs) expect(leavesC(box, r.uuid), `CONTROL: ${r.id}'s boundary was ingested`).toHaveLength(1);
     expect(consumedC(box)).toEqual({ 'card_consumed:other': 1, 'card_consumed:main': 1, 'card_consumed:unknown': 1 });
   }, 240_000);
+});
+
+// ===========================================================================
+// W1-B3 Task 6: card delivery measured from the transcript (spec §8.6 RV17, §10.7 W1-e).
+// ===========================================================================
+/** The measure's cursor, ('card-measure', 1): the highest nodes.rowid it has decided. */
+const measureCursor = (box: HistoryBox): string | null =>
+  qC<{ cursor: string | null }>(box, "SELECT cursor FROM derivation_state WHERE step = 'card-measure' AND version = 1")[0]?.cursor ?? null;
+const topLeafRow = (box: HistoryBox): number =>
+  Number(qC<{ r: number }>(box, 'SELECT max(rowid) AS r FROM nodes WHERE depth = 0')[0]!.r);
+const STANDING = 'Graph: fixture graph card. Hold: none.';
+const COMPACT_CARD = 'Compaction card (fixture): the files touched before the compaction.';
+
+/** A sequence's rows with the SessionStart attachment carrying `text` spliced in right after summary k. */
+function withAttachment(s: SeqC, k: number, text: string, uuid: string, sessionId: string): Row[] {
+  const at = s.rows.findIndex((r) => r['uuid'] === s.summaryUuids[k]);
+  const ts = new Date(Date.parse(String(s.rows[at]!['timestamp'])) + 500).toISOString();
+  return [...s.rows.slice(0, at + 1), sessionStartAttachment({ uuid, ts, sessionId, text }), ...s.rows.slice(at + 1)];
+}
+
+describe("card delivery is measured from the transcript's SessionStart attachment (spec 8.6 RV17, 10.7 W1-e; W1-B3 Task 6)", () => {
+  skipOnDarwin();
+
+  it('an attachment naming the derived leaf counts card_served, one naming another leaf card_id_mismatch, none at all nothing; each by producer', () => {
+    const box = makeHistoryBox('ccrc-hist-card-measure-');
+    const runs = [
+      { id: 'card-served', uuid: sidC(0xe1), seed: 0xe1 },
+      { id: 'card-mismatch', uuid: sidC(0xe2), seed: 0xe2 },
+      { id: 'card-none', uuid: sidC(0xe3), seed: 0xe3 },
+    ].map((r) => ({ ...r, s: compactionSequence({ n: 1, trigger: 'manual', seed: r.seed, sessionId: r.uuid, startMs: T0C }) }));
+    const paths = runs.map((r) => plantC(box, r.id, r.uuid, r.s.rows.slice(0, cutBefore(r.s, 0))));
+    settleC(box);
+    pokeC(box, ...runs.map((r) => r.id));
+    const [served, mismatch] = runs;
+    const line = cardOf(box, served!.id, served!.uuid)!.replace(/\n$/, '');
+    const leafM = libCard.leafId(mismatch!.id, mismatch!.uuid, firstUuidC(mismatch!.s));
+    const other = libCard.cardLine({ leaf: `L${leafM[1] === 'f' ? '0' : 'f'}${leafM.slice(2, 7)}` });
+    // The served line sits mid-line, after the standing cards, as _hook_emit_context joins them with one space.
+    const texts = [`${STANDING} ${line}\n${COMPACT_CARD}`, `${other}\n${COMPACT_CARD}`, COMPACT_CARD];
+    runs.forEach((r, i) => {
+      appendRows(paths[i]!, withAttachment(r.s, 0, texts[i]!, sidC(0xea0 + i), r.uuid).slice(cutBefore(r.s, 0)));
+    });
+    pokeC(box, ...runs.map((r) => r.id));
+    derivedC(box); // D-5058: the hinted pass ingested the boundaries; their leaves come one plain pass later
+    for (const r of runs) expect(leavesC(box, r.uuid), r.id).toEqual([libCard.leafId(r.id, r.uuid, firstUuidC(r.s))]);
+    const c = counters(box);
+    expect(Object.fromEntries(Object.entries(c).filter(([k]) => /^card_(served|id_mismatch):/.test(k))))
+      .toEqual({ 'card_served:anthropic': 1, 'card_id_mismatch:anthropic': 1 });
+    expect(measureCursor(box), 'every leaf decided: the none window closed at end-of-file past the grace').toBe(String(topLeafRow(box)));
+  }, 240_000);
+
+  it('an open window holds the cursor, and a leaf behind it waits with it; each is then counted once, and 40 rows close a window with no line', () => {
+    const box = makeHistoryBox('ccrc-hist-card-window-');
+    const [A, UA] = ['card-wait-a', sidC(0xe4)];
+    const [B, UB] = ['card-wait-b', sidC(0xe5)];
+    const [C, UC] = ['card-wait-c', sidC(0xe6)];
+    // A: compacted a minute ago, no attachment yet, a few rows after the boundary: its window is open. A is planted
+    // BEFORE its boundary: B1's first pass is a registry scan that maps every registry-named session (a confirmed
+    // `import` epoch) and ingests its transcript in that same tick, and the derivation after the ingest mints a leaf
+    // for any boundary already stored, so a transcript planted whole would have its leaf before the measure's first
+    // pass, and the cursor would start past it.
+    const sa = compactionSequence({ n: 1, trigger: 'manual', seed: 0xe4, sessionId: UA, startMs: Date.now() - 60_000 });
+    const pa = plantC(box, A, UA, sa.rows.slice(0, cutBefore(sa, 0)));
+    settleC(box);
+    expect(measureCursor(box), "the first pass started at the empty store's top").toBe('0');
+    appendRows(pa, sa.rows.slice(cutBefore(sa, 0)));
+    pokeC(box, A);
+    derivedC(box); // D-5058: A's leaf comes one plain pass after the hinted pass that ingested its boundary
+    const [leafA] = leavesC(box, UA);
+    expect(leafA).toBe(libCard.leafId(A, UA, firstUuidC(sa)));
+    expect(measureCursor(box), "A's open window holds it").toBe('0');
+    // B: served, but derived after A.
+    const sb = compactionSequence({ n: 1, trigger: 'manual', seed: 0xe5, sessionId: UB, startMs: T0C });
+    const pb = plantC(box, B, UB, sb.rows.slice(0, cutBefore(sb, 0)));
+    settleC(box);
+    pokeC(box, B);
+    const lineB = cardOf(box, B, UB)!.replace(/\n$/, '');
+    appendRows(pb, withAttachment(sb, 0, lineB, sidC(0xeb5), UB).slice(cutBefore(sb, 0)));
+    pokeC(box, B);
+    derivedC(box); // D-5058: B's leaf, likewise
+    expect(leavesC(box, UB)).toHaveLength(1);
+    expect(counters(box)['card_served:anthropic'], "B waits behind A's open window").toBeUndefined();
+    expect(measureCursor(box)).toBe('0');
+    // A's attachment arrives: A is decided, then B, each once.
+    appendRows(pa, [sessionStartAttachment({
+      uuid: sidC(0xea4), ts: new Date().toISOString(), sessionId: UA, text: libCard.cardLine({ leaf: leafA!.slice(0, 7) }),
+    })]);
+    pokeC(box, A);
+    expect(counters(box)['card_served:anthropic'], 'A, then B').toBe(2);
+    const top = topLeafRow(box);
+    expect(measureCursor(box)).toBe(String(top));
+    // C: open, with no line; 40 more rows close it, and nothing is counted.
+    const sc = compactionSequence({ n: 1, trigger: 'manual', seed: 0xe6, sessionId: UC, startMs: Date.now() - 60_000 });
+    const pc = plantC(box, C, UC, sc.rows);
+    settleC(box);
+    expect(leavesC(box, UC)).toHaveLength(1);
+    expect(measureCursor(box), "C's window is open").toBe(String(top));
+    appendRows(pc, Array.from({ length: libCard.CARD_MEASURE_ROWS }, (_, i) => userRow({
+      uuid: sidC(0xec000 + i), ts: new Date().toISOString(), sessionId: UC, text: `row ${i}`,
+    })));
+    pokeC(box, C);
+    expect(measureCursor(box)).toBe(String(topLeafRow(box)));
+    expect(counters(box)['card_served:anthropic']).toBe(2);
+  }, 240_000);
+});
+
+// In-process, against a store built by hand: a case can put a leaf on a subagent transcript, fail the cursor's write,
+// mark a copy gone, or age a leaf. B2's epochFixture9 shape, with attachment and assistant rows.
+interface Card6 {
+  measureCardDelivery(db: DatabaseSync, ictx: object, budget: object): { measured: number; served: number; mismatch: number; waiting: number };
+}
+interface Sweep6 {
+  makeIngestCtx(home: string, homes: string[], nowMs: number, ids: unknown): Record<string, unknown>;
+  newBudget(): object;
+}
+const card6 = async (): Promise<Card6> => (await import('../../ccd/history/card.mjs')) as unknown as Card6;
+const sweep6 = async (): Promise<Sweep6> => (await import('../../ccd/history/sweep.mjs')) as unknown as Sweep6;
+const E6 = 'd6e00000-1111-4111-8111-111111111111';
+interface Store6 {
+  home: string;
+  db: DatabaseSync;
+  leaf(k: number, o: { transcript: 1 | 2; serve: boolean; createdMs?: number }): string;
+  attach(k: number, o: { transcript: 1 | 2; text: string; rawLen?: number }): void;
+}
+
+/** One family and one confirmed epoch; its main transcript (pk 1, file 1) and a subagent transcript of the same uuid
+ *  (pk 2, agent 'agent-x', file 2), both live and read to their end now. leaf(k) puts boundary k at line 100k of its
+ *  transcript's file, a minute old (inside the raw-leaf grace, so end-of-file alone closes no window), and a leaf over
+ *  it; with `serve`, the SessionStart attachment naming that leaf at 100k+1 and an assistant row at 100k+2.
+ *  attach(k) puts one more hook_additional_context attachment carrying `text` at 100k+3, its blob's raw_len set to
+ *  `rawLen` when one is given (the stored body itself stays small, so only the declared size differs). */
+function store6(): Store6 {
+  const home = mkTmp('ccrc-hist-card-measure6-');
+  createStore(home);
+  const db = openWriter(libCard.historyPaths(home).dbFile);
+  const now = Date.now();
+  db.prepare("INSERT INTO sessions (session_pk, ccrc_id, generation, project, first_seen_ms) VALUES (1, 'card-measure', '', 'demo', 1)").run();
+  db.prepare("INSERT INTO epochs (session_pk, seq, cc_session_uuid, cause, declared_by, confirmed_ms) VALUES (1, 1, ?, 'startup', 'hook', 1)").run(E6);
+  db.prepare("INSERT INTO transcripts (transcript_pk, cc_session_uuid, agent_id) VALUES (1, ?, ''), (2, ?, 'agent-x')").run(E6, E6);
+  db.prepare("INSERT INTO ingest_files (file_id, dev, ino, transcript_pk, status, eof_ms, parser_version) VALUES (1, 1, 6001, 1, 'live', ?, 1), (2, 1, 6002, 2, 'live', ?, 1)").run(now, now);
+  const blob = db.prepare("INSERT INTO blobs (sha256, codec, z, raw_len) VALUES (?, 'br5', ?, ?)");
+  const ent = db.prepare(`INSERT INTO entries (entry_id, uuid, transcript_pk, type, subtype, model, provenance, prov_version,
+    struct_rank_ns, struct_file_id, blob_id, ts_ms) VALUES (?, ?, ?, ?, ?, ?, 'harness', 1, 0, 0, ?, ?)`);
+  const member = db.prepare('INSERT INTO memberships (file_id, entry_id, line) VALUES (?, ?, ?)');
+  let entry = 0;
+  const row = (t: number, line: number, type: string, subtype: string | null, model: string | null, body: unknown): number => {
+    entry += 1;
+    const raw = Buffer.from(JSON.stringify(body));
+    const b = Number(blob.run(createHash('sha256').update(raw).digest(), brotli(raw), raw.length).lastInsertRowid);
+    ent.run(entry, `d6e00000-0000-4000-8000-${entry.toString(16).padStart(12, '0')}`, t, type, subtype, model, b, now - 60_000 + line);
+    member.run(t, entry, line);
+    return entry;
+  };
+  const leaf = (k: number, o: { transcript: 1 | 2; serve: boolean; createdMs?: number }): string => {
+    const t = o.transcript;
+    const id = libCard.leafId('card-measure', E6, `span-${t}-${k}`);
+    const b = row(t, 100 * k, 'system', 'compact_boundary', null, { boundary: k, t });
+    db.prepare('INSERT INTO boundaries (entry_id, transcript_pk, ord) VALUES (?, ?, ?)').run(b, t, k);
+    if (o.serve) {
+      row(t, 100 * k + 1, 'attachment', null, null, { type: 'hook_additional_context', content: [libCard.cardLine({ leaf: id.slice(0, 7) })], k, t });
+      row(t, 100 * k + 2, 'assistant', null, 'claude-fixture-4', { answer: k, t });
+    }
+    db.prepare(`INSERT INTO nodes (node_id, session_pk, epoch_seq, transcript_pk, kind, depth, status, boundary_entry_id,
+      parser_version, created_ms) VALUES (?, 1, 1, ?, 'native_leaf', 0, 'not-requested', ?, 1, ?)`).run(id, t, b, o.createdMs ?? now);
+    return id;
+  };
+  const attach = (k: number, o: { transcript: 1 | 2; text: string; rawLen?: number }): void => {
+    const e = row(o.transcript, 100 * k + 3, 'attachment', null, null, { type: 'hook_additional_context', content: [o.text], k, extra: true });
+    if (o.rawLen !== undefined) {
+      db.prepare('UPDATE blobs SET raw_len = ? WHERE blob_id = (SELECT blob_id FROM entries WHERE entry_id = ?)').run(o.rawLen, e);
+    }
+  };
+  return { home, db, leaf, attach };
+}
+
+describe("in-process: the measure's cursor, scope and transaction (spec 8.6 RV17, 10.7 W1-e; W1-B3 Task 6)", () => {
+  const run6 = async (fx: Store6): Promise<ReturnType<Card6['measureCardDelivery']>> => {
+    const C = await card6();
+    const S = await sweep6();
+    return C.measureCardDelivery(fx.db, S.makeIngestCtx(fx.home, [], Date.now(), null), S.newBudget());
+  };
+  const counters6 = (db: DatabaseSync): Record<string, number> => Object.fromEntries(
+    (db.prepare("SELECT name, n FROM counters WHERE name LIKE 'card%' ORDER BY name").all() as Array<{ name: string; n: number }>)
+      .map((r) => [r.name, Number(r.n)]));
+  const cursor6 = (db: DatabaseSync): string | null =>
+    (db.prepare("SELECT cursor FROM derivation_state WHERE step = 'card-measure' AND version = 1").get() as { cursor: string | null } | undefined)?.cursor ?? null;
+
+  it('the first measuring pass reads no leaf that already exists: it starts the cursor at the newest node; a leaf derived after it is measured', async () => {
+    const fx = store6();
+    try {
+      fx.leaf(1, { transcript: 1, serve: true });
+      expect(await run6(fx)).toMatchObject({ measured: 0 });
+      expect(cursor6(fx.db)).toBe('1');
+      expect(await run6(fx)).toMatchObject({ measured: 0 });
+      fx.leaf(2, { transcript: 1, serve: true });
+      expect(await run6(fx)).toMatchObject({ measured: 1, served: 1 });
+      expect(counters6(fx.db)).toEqual({ 'card_served:anthropic': 1 });
+    } finally {
+      fx.db.close();
+    }
+  });
+
+  it('a leaf of a subagent transcript is never measured, whatever its window holds', async () => {
+    const fx = store6();
+    try {
+      await run6(fx);
+      fx.leaf(1, { transcript: 1, serve: true });
+      fx.leaf(2, { transcript: 2, serve: true });
+      expect(await run6(fx)).toMatchObject({ measured: 1, served: 1 });
+      expect(counters6(fx.db)).toEqual({ 'card_served:anthropic': 1 });
+    } finally {
+      fx.db.close();
+    }
+  });
+
+  it('the count and the cursor commit together: a cursor write that fails leaves no count, and the retry counts once', async () => {
+    const fx = store6();
+    try {
+      await run6(fx);
+      fx.leaf(1, { transcript: 1, serve: true });
+      fx.db.exec(`CREATE TRIGGER card_measure_fail_i BEFORE INSERT ON derivation_state WHEN NEW.step = 'card-measure'
+        BEGIN SELECT RAISE(ABORT, 'injected cursor failure'); END`);
+      fx.db.exec(`CREATE TRIGGER card_measure_fail_u BEFORE UPDATE ON derivation_state WHEN NEW.step = 'card-measure'
+        BEGIN SELECT RAISE(ABORT, 'injected cursor failure'); END`);
+      await expect(run6(fx)).rejects.toThrow(/injected cursor failure/);
+      expect(counters6(fx.db)).toEqual({});
+      expect(cursor6(fx.db)).toBe('0');
+      fx.db.exec('DROP TRIGGER card_measure_fail_i; DROP TRIGGER card_measure_fail_u;');
+      expect(await run6(fx)).toMatchObject({ measured: 1, served: 1 });
+      expect(await run6(fx)).toMatchObject({ measured: 0 });
+      expect(counters6(fx.db)).toEqual({ 'card_served:anthropic': 1 });
+    } finally {
+      fx.db.close();
+    }
+  });
+
+  it('a window cannot wedge the walk: a copy no longer live decides at once, and so does a leaf past CARD_MEASURE_MAX_WAIT_MS; a young open one waits', async () => {
+    const fx = store6();
+    try {
+      await run6(fx);
+      fx.leaf(1, { transcript: 1, serve: false });
+      expect(await run6(fx), 'young, live, short of 40 rows, no next boundary: it waits').toMatchObject({ measured: 0, waiting: 1 });
+      expect(cursor6(fx.db)).toBe('0');
+      fx.db.prepare("UPDATE ingest_files SET status = 'gone' WHERE file_id = 1").run();
+      expect(await run6(fx), 'its copy gone: decided, nothing counted').toMatchObject({ measured: 1, waiting: 0 });
+      fx.db.prepare("UPDATE ingest_files SET status = 'live' WHERE file_id = 1").run();
+      fx.leaf(2, { transcript: 1, serve: false, createdMs: Date.now() - libCard.CARD_MEASURE_MAX_WAIT_MS - 1000 });
+      expect(await run6(fx), 'past the wait bound: decided').toMatchObject({ measured: 1, waiting: 0 });
+      expect(counters6(fx.db)).toEqual({});
+    } finally {
+      fx.db.close();
+    }
+  });
+
+  it('an attachment body past CARD_ATTACHMENT_MAX_BYTES is never decoded, so even a History line in one counts nothing; CONTROL: the same row within the bound is read', async () => {
+    const fx = store6();
+    try {
+      await run6(fx);
+      // Each leaf is past the wait bound, so its window is closed while its copy stays live and is read.
+      const old = Date.now() - libCard.CARD_MEASURE_MAX_WAIT_MS - 1000;
+      fx.leaf(1, { transcript: 1, serve: false, createdMs: old });
+      fx.attach(1, { transcript: 1, text: libCard.cardLine({ leaf: 'Lffffff' }), rawLen: libCard.CARD_ATTACHMENT_MAX_BYTES + 1 });
+      expect(await run6(fx), 'decided with the large body unread').toMatchObject({ measured: 1, mismatch: 0 });
+      fx.leaf(2, { transcript: 1, serve: false, createdMs: old });
+      fx.attach(2, { transcript: 1, text: libCard.cardLine({ leaf: 'Lffffff' }) });
+      expect(await run6(fx), 'CONTROL: within the bound the line is read, and names another leaf').toMatchObject({ measured: 1, mismatch: 1 });
+    } finally {
+      fx.db.close();
+    }
+  });
 });

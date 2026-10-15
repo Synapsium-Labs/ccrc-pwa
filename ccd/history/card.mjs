@@ -331,7 +331,7 @@ export function consumeAndWriteCards(db, ictx, budget) {
  *  past history-off; a pass that does not run it withdraws every prediction instead (withdrawCards, below). */
 export function cardStep(db, ictx, budget) {
   if (ictx.historyOff()) return { measure: null, cards: null };
-  const measure = null;
+  const measure = measureCardDelivery(db, ictx, budget);
   const cards = consumeAndWriteCards(db, ictx, budget);
   return { measure, cards };
 }
@@ -364,4 +364,127 @@ export function withdrawCards(db, home, pass, out) {
   if (n > 0 && db !== null) bump(db, `card_withdrawn:${d.reason}`, n);
   if (n > 0 && db === null) out(`history-sweep: card_withdrawn:${d.reason} ${n}`);
   return n;
+}
+
+// ── Card delivery, measured from the transcript (spec §8.6 "Delivery is measured, not receipted", RV17; §10.7 W1-e;
+// W1-B3 Task 6) ─────────────────────────────────────────────────────────────────────────────────────────────────────
+// The hook writes no receipt. After a compaction Claude Code records what the SessionStart(compact) hook printed as a
+// `hook_additional_context` attachment a few rows after the boundary (M: 75 of 75 within 40 rows). For every new leaf of
+// a main transcript this reads that window in the leaf's holding copy (derive.mjs holdingCopyOf) and folds lib's
+// verdict, counted under the boundary's producer (the first real assistant row after it, B1's producerOf):
+//   card_served:<backend>       a History line there names this leaf;
+//   card_id_mismatch:<backend>  History lines there name only other leaves;
+//   nothing                     the window closed with no History line.
+// Cursor ('card-measure', 1): the highest nodes.rowid decided. The first pass sets it to the newest node there is, so a
+// leaf derived before this build is never read as unserved. A window still open stops the walk: no leaf is decided past
+// an undecided one, so each is counted once. A count and the cursor commit in one transaction.
+// D-4737 (history-card-measured-from-transcript) D-4739 (history-card-measure-window) D-4196
+const CARD_MEASURE_STEP = 'card-measure';
+const CARD_MEASURE_VERSION = 1;
+const MEASURE_STMTS = new WeakMap();
+
+function measureStmts(db) {
+  let s = MEASURE_STMTS.get(db);
+  if (s !== undefined) return s;
+  s = {
+    top: db.prepare('SELECT max(rowid) AS r FROM nodes'),
+    leaves: db.prepare(`SELECT n.rowid AS rid, n.node_id AS node_id, n.boundary_entry_id AS boundary_entry_id,
+        n.transcript_pk AS transcript_pk, n.created_ms AS created_ms
+      FROM nodes n JOIN transcripts t ON t.transcript_pk = n.transcript_pk
+      WHERE n.rowid > ? AND n.depth = 0 AND n.boundary_entry_id IS NOT NULL AND t.agent_id = ''
+      ORDER BY n.rowid`),
+    status: db.prepare('SELECT status FROM ingest_files WHERE file_id = ?'),
+    lineOf: db.prepare('SELECT line FROM memberships WHERE file_id = ? AND entry_id = ?'),
+    stampAt: db.prepare(`SELECT e.ts_ms AS ts_ms FROM memberships m JOIN entries e ON e.entry_id = m.entry_id
+      WHERE m.file_id = ? AND m.line <= ? AND e.ts_ms IS NOT NULL ORDER BY m.line DESC LIMIT 1`),
+    window: db.prepare(`SELECT e.type AS type, e.blob_id AS blob_id,
+        CASE WHEN b.entry_id IS NULL THEN 0 ELSE 1 END AS is_boundary
+      FROM memberships m JOIN entries e ON e.entry_id = m.entry_id LEFT JOIN boundaries b ON b.entry_id = e.entry_id
+      WHERE m.file_id = ? AND m.line > ? ORDER BY m.line LIMIT ?`),
+    blobZ: db.prepare('SELECT z, raw_len FROM blobs WHERE blob_id = ?'),
+    modelsAfter: db.prepare(`SELECT e.model AS model FROM memberships m JOIN entries e ON e.entry_id = m.entry_id
+      WHERE m.file_id = ? AND m.line > ? AND e.type = 'assistant' ORDER BY m.line`),
+  };
+  MEASURE_STMTS.set(db, s);
+  return s;
+}
+
+/** An attachment row's stored body (its `attachment` object, B1's blobBodyOf), or null for a tombstone, a body that
+ *  is not JSON, or a body whose raw_len is over CARD_ATTACHMENT_MAX_BYTES, which is skipped unread: a SessionStart
+ *  attachment never comes near that bound, and a re-attached file of many MiB is not decompressed only to read its
+ *  `type`. The compressed bytes of a body read count against the run's byte budget, as derivation's reads do. The
+ *  decode is bounded by the blob's own stored raw_len, as B1's unbrotli requires (it throws a TypeError without a
+ *  bound, and a RangeError for a body that decodes past it): either throw reads as no body here. */
+function attachmentOf(s, blobId, budget) {
+  const r = s.blobZ.get(blobId);
+  if (r === undefined || r.z === null || Number(r.raw_len) > CARD_ATTACHMENT_MAX_BYTES) return null;
+  budget.bytes += r.z.length;
+  try { return JSON.parse(unbrotli(r.z, Number(r.raw_len)).toString('utf8')); } catch { return null; }
+}
+
+/** The boundary's producer: B1's producerOf over the assistant rows after it, read lazily, in its copy's order. */
+function producerAfter(s, fileId, line) {
+  function* models() {
+    for (const r of s.modelsAfter.iterate(fileId, line)) yield r.model;
+  }
+  return producerOf(models());
+}
+
+/** One leaf's delivery verdict, and the backend it is counted under when it is counted. */
+function deliveryOf(db, s, ictx, n, budget) {
+  const holding = holdingCopyOf(db, { entry_id: n.boundary_entry_id, transcript_pk: n.transcript_pk });
+  const at = holding === null ? undefined : s.lineOf.get(holding.file_id, n.boundary_entry_id);
+  const ids = [];
+  let live = false;
+  let rowsSeen = 0;
+  let nextBoundary = false;
+  let eofAfter = false;
+  let line = null;
+  if (holding !== null && at !== undefined) {
+    line = Number(at.line);
+    live = holding.source_key === '' && s.status.get(holding.file_id)?.status === 'live';
+    for (const r of s.window.all(holding.file_id, line, CARD_MEASURE_ROWS)) {
+      if (r.is_boundary === 1) {
+        nextBoundary = true;
+        break;
+      }
+      rowsSeen += 1;
+      if (r.type === 'attachment') ids.push(...cardIdsIn(attachmentOf(s, r.blob_id, budget)));
+    }
+    const stamp = s.stampAt.get(holding.file_id, line);
+    eofAfter = eofAfterBoundary({
+      eofMs: holding.eof_ms === null ? null : Number(holding.eof_ms), boundaryTsMs: stamp === undefined ? null : Number(stamp.ts_ms),
+    });
+  }
+  const windowComplete = cardWindowComplete({ live, rowsSeen, nextBoundary, eofAfter, waitedMs: ictx.nowMs - Number(n.created_ms) });
+  const verdict = decideCardDelivery({ ids, leafId: n.node_id, windowComplete });
+  const backend = verdict === 'served' || verdict === 'mismatch' ? producerAfter(s, holding.file_id, line) : null;
+  return { verdict, backend };
+}
+
+/** Every new leaf of a main transcript, in rowid order, within the run's budget (§9.2 step 6: before the card files
+ *  are written). Returns what it decided this pass. */
+export function measureCardDelivery(db, ictx, budget) {
+  const s = measureStmts(db);
+  const out = { measured: 0, served: 0, mismatch: 0, waiting: 0 };
+  const step = getStep(db, CARD_MEASURE_STEP, CARD_MEASURE_VERSION);
+  if (step === null || step.cursor === null) {
+    const top = s.top.get().r;
+    withTx(db, 'NORMAL', () => { setStep(db, CARD_MEASURE_STEP, CARD_MEASURE_VERSION, String(top === null ? 0 : Number(top)), null); });
+    return out;
+  }
+  for (const n of s.leaves.all(Number(step.cursor))) {
+    if (!ictx.budgetLeft(budget)) break;
+    const w = deliveryOf(db, s, ictx, n, budget);
+    if (w.verdict === 'wait') { out.waiting += 1; break; }
+    withTx(db, 'NORMAL', () => {
+      if (w.verdict === 'served') bump(db, `card_served:${w.backend}`);
+      if (w.verdict === 'mismatch') bump(db, `card_id_mismatch:${w.backend}`);
+      setStep(db, CARD_MEASURE_STEP, CARD_MEASURE_VERSION, String(Number(n.rid)), null);
+    });
+    out.measured += 1;
+    if (w.verdict === 'served') out.served += 1;
+    if (w.verdict === 'mismatch') out.mismatch += 1;
+  }
+  return out;
 }
