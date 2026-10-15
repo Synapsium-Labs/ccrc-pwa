@@ -62,6 +62,7 @@ jobs:
             server/package-lock.json
             agent/package-lock.json
             pwa/package-lock.json
+            ui/package-lock.json
 
       # Arm 1: refuses dirty/tagged, derives, tags LOCALLY, builds. Nothing
       # reaches origin here.

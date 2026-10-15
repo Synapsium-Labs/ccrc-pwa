@@ -1,0 +1,265 @@
+/* `@layer components` — NOT unlayered; see typed-label.css for the full
+   argument and ../styles/theme.css for the layer declaration. */
+@layer components {
+  /* ------------------------------------------------------------------ *
+   *  Tool card — the machine's work, filed neatly.                      *
+   * ------------------------------------------------------------------ */
+  .toolcard {
+    background: var(--bg-surface);
+    border: 1px solid var(--edge-subtle);
+    border-radius: var(--r-md);
+    overflow: hidden;
+  }
+  .tool-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    width: 100%;
+    min-height: var(--tap-min);
+    padding: 0 var(--sp-3);
+    border: none;
+    background: none;
+    text-align: left;
+    cursor: pointer;
+    color: inherit;
+  }
+  .tool-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: var(--r-full);
+    flex: none;
+  }
+  .tool-dot--ok {
+    background: var(--status-busy);
+  }
+  .tool-dot--err {
+    background: var(--status-dead);
+  }
+  .tool-dot--run {
+    background: var(--status-busy);
+    box-shadow: var(--glow-dot-busy);
+    animation: tool-breathe var(--breathe-period) var(--curve-breathe) infinite alternate;
+  }
+  /* `@keyframes tool-breathe` is NOT here. It has a second consumer that
+     stayed in the app — the terminal drawer's "attaching" word
+     (`.term-overlay--connecting .term-overlay-word`) — so it is a shared
+     family, and copying it would be a second definition of one motion.
+     It lives in pwa/src/session/chat.css beside that consumer, which is why
+     this dot holds still in a story that loads only the design system.
+     Reported rather than moved. (Contrast `attach-spin`, which DID get its
+     own file here: both of ITS consumers migrated.) */
+  .tool-name {
+    flex: none;
+    font: var(--weight-medium) var(--fs-sm) / 1 var(--family-mono);
+    color: var(--ink-primary);
+  }
+  .tool-sum {
+    flex: 1;
+    min-width: 0;
+    font: var(--weight-regular) var(--fs-xs) / 1 var(--family-mono);
+    color: var(--ink-tertiary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .tool-dur {
+    flex: none;
+    font: var(--weight-regular) var(--fs-xs) / 1 var(--family-mono);
+    font-variant-numeric: tabular-nums;
+    color: var(--ink-tertiary);
+  }
+  .tool-chev {
+    flex: none;
+    font: var(--weight-regular) var(--fs-xs) / 1 var(--family-mono);
+    color: var(--ink-tertiary);
+    transition: transform var(--dur-base) var(--curve-swift);
+  }
+  .tool-row[aria-expanded='true'] .tool-chev {
+    transform: rotate(90deg);
+  }
+  .tool-body-wrap {
+    overflow: hidden;
+  }
+  .tool-body {
+    border-top: 1px solid var(--edge-subtle);
+    padding: var(--sp-3);
+    display: grid;
+    gap: var(--sp-2);
+  }
+  .tool-eyebrow {
+    color: var(--ink-tertiary);
+  }
+  .tool-meta {
+    display: flex;
+    align-items: center;
+    gap: var(--sp-2);
+    font: var(--weight-regular) var(--fs-2xs) / 1.5 var(--family-mono);
+    font-variant-numeric: tabular-nums;
+    color: var(--ink-tertiary);
+  }
+  /* The truncation cue (Build 4 Task 16) — sits directly under the well whose
+     text it describes, so "what was cut" is read against the fragment rather
+     than as a property of the card. STILL: a truncation note is a record, so no
+     glow, no animation, no box-shadow. */
+  .tool-cut {
+    margin-top: calc(var(--sp-1) * -1);
+    font: var(--weight-regular) var(--fs-2xs) / 1.5 var(--family-mono);
+    font-variant-numeric: tabular-nums;
+    color: var(--ink-tertiary);
+  }
+  .exit-badge {
+    font: var(--weight-semibold) var(--fs-2xs) / 1 var(--family-mono);
+    letter-spacing: var(--ls-caps);
+    color: var(--status-dead-text);
+    background: var(--status-dead-tint);
+    padding: 3px 7px;
+    border-radius: var(--r-sm);
+  }
+
+  /* ------------------------------------------------------------------ *
+   *  Asked question — the one tool call that is prose, not machine work. *
+   *  One block per question the ask put: glyph + question, then that     *
+   *  question's own answer beneath it as a phosphor-tinted chip. An ask  *
+   *  that came back with no answer gets a tappable outcome row instead,  *
+   *  in the failure tokens — see .tool-ask-out.                          *
+   * ------------------------------------------------------------------ */
+  .tool-ask {
+    display: grid;
+    gap: var(--sp-2);
+    padding: 10px var(--sp-3);
+    background: var(--bg-surface);
+    border: 1px solid var(--edge-subtle);
+    border-radius: var(--r-md);
+  }
+  .tool-ask-qa {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    gap: var(--sp-1) var(--sp-2);
+  }
+  .tool-ask-glyph {
+    font-size: var(--fs-sm);
+    line-height: var(--lh-normal);
+  }
+  .tool-ask-q {
+    font: var(--weight-medium) var(--fs-base) / var(--lh-normal) var(--family-ui);
+    color: var(--ink-primary);
+    overflow-wrap: anywhere;
+  }
+  .tool-ask-a {
+    grid-column: 2;
+    justify-self: start;
+    max-width: 100%;
+    padding: 3px var(--sp-2);
+    border-radius: var(--r-sm);
+    /* accent-tint / ink-primary is a gated pair in both themes (13.43:1 dark,
+       14.19:1 light) — the answer reads as the choice that was made. Only a
+       parsed answer is ever painted with it. */
+    background: var(--accent-tint);
+    color: var(--ink-primary);
+    font: var(--weight-regular) var(--fs-sm) / var(--lh-mono) var(--family-mono);
+    overflow-wrap: anywhere;
+    /* Only the reader's own words land here now (the longest real one is 480
+       chars of typed reply), but the chip caps and scrolls like a well rather
+       than growing without limit. */
+    max-height: var(--well-max);
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+  /* No answer came back — declined, interrupted, timed out. The result text is
+     the harness briefing the model (the decline preamble alone runs past 1 kB,
+     newlines and all), so it stays behind a tap in a --well-max well rather than
+     unrolling down the transcript, and it is never tinted as a choice. */
+  .tool-ask-out {
+    display: grid;
+    border-top: 1px solid var(--edge-subtle);
+  }
+  .tool-ask-outrow {
+    display: flex;
+    align-items: center;
+    gap: var(--sp-2);
+    width: 100%;
+    min-height: var(--tap-min);
+    padding: 0;
+    border: none;
+    background: none;
+    text-align: left;
+    cursor: pointer;
+    color: inherit;
+  }
+  .tool-ask-outlabel {
+    flex: 1;
+    min-width: 0;
+    color: var(--ink-tertiary);
+  }
+  .tool-ask-outrow[aria-expanded='true'] .tool-chev {
+    transform: rotate(90deg);
+  }
+  .tool-ask-well {
+    margin-bottom: var(--sp-2);
+  }
+
+  /* ------------------------------------------------------------------ *
+   *  The ask card's state row (Build 4 Task 18, spec §2.3).             *
+   * ------------------------------------------------------------------ *
+   * NO-GLOW GOVERNANCE WITH ONE NAMED EXCEPTION — the
+   * `MAIL_REJECT_CODES`-excludes-`undeliverable` idiom. `.ask-live` is the
+   * ONE rule under this prefix permitted a live cue, because it is the one
+   * state that IS live: the agent is blocked on this question right now.
+   * `.ask-unanswered` is a record of something that never happened and goes
+   * still, and `ask-live.test.tsx` scans every `.ask-` rule to keep the
+   * exception exactly one rule wide. */
+  .ask-state {
+    display: flex;
+    align-items: center;
+    gap: var(--sp-2);
+    margin: var(--sp-1) 0 0;
+    font: var(--weight-regular) var(--fs-2xs) / 1 var(--family-mono);
+    letter-spacing: var(--ls-caps);
+    text-transform: uppercase;
+  }
+  .ask-state .ask-glyph {
+    flex: none;
+  }
+  .ask-state.ask-live {
+    color: var(--status-attention-text);
+    /* The one live cue in this stylesheet, and the reason it is allowed: a
+       question the agent is blocked on is a LIVING state, not a record. */
+    text-shadow: var(--glow-attention);
+  }
+  .ask-state.ask-unanswered {
+    color: var(--ink-tertiary);
+  }
+  /* NOT a send. This button raises `EnvelopeSheet` — the one hardened answer
+     path — and does nothing else; see ToolCard.tsx's own comment at the
+     control. A real target, so it clears the tap floor. */
+  .ask-answer {
+    margin-left: auto;
+    min-height: var(--tap-min);
+    padding: 0 var(--sp-3);
+    border: 1px solid var(--edge-strong);
+    border-radius: var(--r-full);
+    background: var(--bg-raised);
+    color: var(--ink-primary);
+    font: var(--weight-medium) var(--fs-xs) / 1 var(--family-ui);
+    letter-spacing: normal;
+    text-transform: none;
+    cursor: pointer;
+  }
+  .ask-answer:active {
+    background: var(--bg-surface);
+  }
+
+  /* Reduced motion — the loop stops outright and the opacity is pinned.
+     `.tool-chev` was one member of chat.css's grouped `transition: none`
+     list: a GROUP, not an ancestor scope, so each member stands alone and
+     this one travels with its component. */
+  @media (prefers-reduced-motion: reduce) {
+    .tool-dot--run {
+      animation: none;
+      opacity: 0.8;
+    }
+    .tool-chev {
+      transition: none;
+    }
+  }
+}

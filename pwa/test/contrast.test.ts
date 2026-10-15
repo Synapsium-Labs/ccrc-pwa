@@ -84,7 +84,13 @@ afterEach(removeTmpFixtures);
  *  stylesheet, at the same relative paths (audit.mjs resolves the package root
  *  from import.meta.url, so the copy audits ITSELF, not the real tree). */
 function gateTree(): string {
-  const dir = mkTmp('contrast-');
+  // TWO packages now: the tokens and the primitives' styling live in @ccrc/ui,
+  // and stylesheets() spells those '../ui/src/...'. Joined onto a flat temp dir
+  // that climbs OUT of the fixture, so the copy has to reproduce the real
+  // sibling layout — <tmp>/pwa beside <tmp>/ui — and the gate runs in <tmp>/pwa
+  // exactly as it runs in the real tree.
+  const parent = mkTmp('contrast-');
+  const dir = path.join(parent, 'pwa');
   mkdirSync(path.join(dir, 'design'), { recursive: true });
   for (const f of ['audit.mjs', 'contrast-check.mjs']) {
     cpSync(path.join(ROOT, 'design', f), path.join(dir, 'design', f));
@@ -117,22 +123,9 @@ function runGate(dir: string = ROOT): { status: number | null; stdout: string } 
 // D-2689 freezes identities from this green audit run. A blind spot may disappear,
 // but an added identity must be measured or explicitly registered before it ships.
 const GRANDFATHERED_UNCOVERED = new Set([
-  'primitives.css .dot--busy',
-  'primitives.css .dot--attention',
-  'primitives.css .dot--idle',
-  'primitives.css .dot--dead',
-  'primitives.css .dot--done',
-  'primitives.css .dot--cleanup',
-  'primitives.css .limit-row',
-  'primitives.css .sheet-panel--full .sheet-eyebrow',
-  'primitives.css .sheet-eyebrow',
-  'primitives.css .sheet-title',
-  'primitives.css .qc-consequence',
-  'primitives.css .toast--error::before',
-  'primitives.css .toast-action',
-  'fleet.css .wordmark',
-  'fleet.css .wordmark::before',
-  'fleet.css .fleet-count',
+  '.wordmark',
+  '.wordmark::before',
+  '.fleet-count',
   // `.pool-epoch-lag` (Task 9) is REGISTERED in INHERITED_GROUNDS
   // (design/audit.mjs), not grandfathered here — review round 1, C2: an
   // earlier version of this file admitted it here on the mistaken claim that
@@ -145,247 +138,270 @@ const GRANDFATHERED_UNCOVERED = new Set([
   // must be measured or explicitly registered before it ships." `.fleet-count`
   // itself stays grandfathered as pre-existing debt, not a licence to add a
   // second one beside it.
-  'fleet.css .notice-x',
-  'fleet.css .notice-x:active',
-  'fleet.css .status-line--busy',
-  'fleet.css .status-line--idle',
-  'fleet.css .status-line--attention',
-  'fleet.css .status-line--dead',
-  'fleet.css .first-run-mark',
-  'fleet.css .first-run-title',
-  'fleet.css .first-run-copy',
-  'fleet.css .sheet-copy',
-  'fleet.css .acct-gauge',
-  'fleet.css .acct-unknown',
-  'fleet.css .acct-condemned',
-  'fleet.css .acct-none',
-  'fleet.css .acct-chev',
-  'fleet.css .acct-change',
-  'fleet.css .acct-change:active',
-  'fleet.css .proj-glyph',
-  'fleet.css .proj-name',
-  'fleet.css .proj-dir',
-  'fleet.css .proj-none, .proj-error',
-  'fleet.css .proj-error',
-  'fleet.css .accounts-strip-empty',
-  'fleet.css .acct-win',
-  'fleet.css .acct-pct',
-  'fleet.css .acct-reset',
-  'fleet.css .sess-meta',
-  'fleet.css .sess-meta > *:not(:first-child)::before',
-  'fleet.css .sess-state--waiting',
-  'fleet.css .sess-state--working',
-  'fleet.css .sess-state--exited',
-  'fleet.css .sess-subagent-row',
-  'fleet.css .sess-ctxpressure',
-  'fleet.css .sess-ctxpressure[data-wedge]',
-  'fleet.css .sess-warn',
-  'fleet.css .sess-unmeasured',
-  'fleet.css .sess-substrate',
-  'fleet.css .sess-held, .sess-lifecycle, .sess-swapblocked, .sess-ask-state',
-  'fleet.css .sess-acct-away',
-  'fleet.css .sess-ask',
-  'fleet.css .sess-sheet-note',
-  'fleet.css .sess-hold-error',
-  'fleet.css .proj-card-chevron',
-  'fleet.css .proj-card-count',
-  'fleet.css .proj-card-attn',
-  'fleet.css .proj-card-busy',
-  'fleet.css .proj-card-pin[data-mixed]',
-  'fleet.css .proj-nest-bracket',
-  'fleet.css .proj-pending',
-  'fleet.css .proj-pending-glyph',
-  'fleet.css .proj-pending-meta > *:not(:first-child)::before',
-  'fleet.css .proj-pending-program',
-  'fleet.css .proj-pending-elapsed',
-  'fleet.css .proj-archived-toggle',
-  'fleet.css .fleet-archived-row',
-  'fleet.css .archive-total',
-  'fleet.css .archive-row',
-  'fleet.css .archive-project',
-  'fleet.css .archive-size',
-  'fleet.css .archive-empty',
-  'fleet.css .accounts-back',
-  'fleet.css .accounts-back:active',
-  'fleet.css .accounts-title',
-  'fleet.css .accounts-projection',
-  'fleet.css .accounts-disabled-note',
-  'fleet.css .accounts-fresh',
-  'fleet.css .accounts-session',
-  'fleet.css .mail-badge',
-  'fleet.css .mail-badge:active',
-  'fleet.css .mail-badge[data-unread=\'true\']',
-  'fleet.css .accounts-door',
-  'fleet.css .accounts-door:active',
-  'fleet.css .mail-back',
-  'fleet.css .mail-back:active',
-  'fleet.css .mail-title',
-  'fleet.css .mail-note',
-  'fleet.css .mail-dropped',
-  'fleet.css .mail-empty',
-  'fleet.css .fleet-runs-row',
-  'fleet.css .runs-back',
-  'fleet.css .runs-back:active',
-  'fleet.css .runs-title',
-  'fleet.css .runs-empty',
-  'fleet.css .runs-wave',
-  'fleet.css .hotfiles-chevron',
-  'fleet.css .hotfiles-holder',
-  'fleet.css .hotfiles-expiry',
-  'fleet.css .hotfiles-intent',
-  'fleet.css .hotfiles-path',
-  'chat.css .chat-back',
-  'chat.css .chat-back:active',
-  'chat.css .chat-title',
-  'chat.css .chat-crumb-sep',
-  'chat.css .chat-crumb',
-  'chat.css .chat .status-line--busy',
-  'chat.css .chat .status-line--idle',
-  'chat.css .chat .status-line--attention',
-  'chat.css .chat .status-line--dead',
-  'chat.css .metachip--model',
-  'chat.css .metachip--branch',
-  'chat.css .keycap--pr[data-phase=\'unchecked\'] .pr-dot',
-  'chat.css .keycap--pr[data-phase=\'none\'] .pr-dot',
-  'chat.css .keycap--pr[data-phase=\'merged\'] .pr-dot',
-  'chat.css .keycap--pr[data-phase=\'closed\']',
-  'chat.css .keycap--pr[data-phase=\'unknown\'] .pr-dot',
-  'chat.css .keycap--pr[data-checks=\'pass\'] .pr-dot',
-  'chat.css .keycap--pr[data-checks=\'fail\'] .pr-dot',
-  'chat.css .keycap--pr[data-checks=\'pending\'] .pr-dot',
-  'chat.css .pr-lede',
-  'chat.css .pr-facts',
-  'chat.css .pr-warn',
-  'chat.css .pr-check-names',
-  'chat.css .pr-label',
-  'chat.css .pr-title',
-  'chat.css .pr-checkline',
-  'chat.css .pr-note',
-  'chat.css .reap-rows dt',
-  'chat.css .reap-rows dd',
-  'chat.css .reap-note',
-  'chat.css .reap-refusal',
-  'chat.css .reap-sensitive',
-  'chat.css .reap-size',
-  'chat.css .reap-ignored',
-  'chat.css .reap-children-list',
-  'chat.css .menu-item',
-  'chat.css .menu-hint',
-  'chat.css .menu-item--danger .menu-label',
-  'chat.css .task-head',
-  'chat.css .task-mark',
-  'chat.css .task-mark--running',
-  'chat.css .task-chevron',
-  'chat.css .task-summary',
-  'chat.css .task-line',
-  'chat.css .task-glyph',
-  'chat.css .task-row--in_progress .task-glyph',
-  'chat.css .task-row--completed .task-subject',
-  'chat.css .task-row--completed .task-glyph',
-  'chat.css .task-detail',
-  'chat.css .task-fold',
-  'chat.css .task-fold:active',
-  'chat.css .ts-divider',
-  'chat.css .sys-divider--restart',
-  'chat.css .sys-divider--stalled',
-  'chat.css .sys-divider--limit',
-  'chat.css .msg-receipt',
-  'chat.css .msg-receipt--ok b',
-  'chat.css .msg-receipt--failed',
-  'chat.css .pending-error',
-  'chat.css .pending-actions .pending-retry',
-  'chat.css .msg-assist',
-  'chat.css .msg-assist h1, .msg-assist h2, .msg-assist h3, .msg-assist h4',
-  'chat.css .msg-assist h4',
-  'chat.css .msg-assist strong',
-  'chat.css .msg-assist ul, .msg-assist ol',
-  'chat.css .msg-assist li::marker',
-  'chat.css .msg-assist .task-list-item input[type=\'checkbox\']:checked::after',
-  'chat.css .msg-assist .task-list-item:has(input:checked)',
-  'chat.css .msg-assist a',
-  'chat.css .msg-assist .kbd-plus',
-  'chat.css .msg-assist .hljs-comment, .msg-assist .hljs-quote',
-  'chat.css .msg-assist .hljs-keyword, .msg-assist .hljs-selector-tag, .msg-assist .hljs-section, .msg-assist .hljs-literal',
-  'chat.css .msg-assist .hljs-string, .msg-assist .hljs-regexp',
-  'chat.css .msg-assist .hljs-number, .msg-assist .hljs-symbol, .msg-assist .hljs-bullet',
-  'chat.css .msg-assist .hljs-title, .msg-assist .hljs-title.function_, .msg-assist .hljs-function .hljs-title',
-  'chat.css .msg-assist .hljs-type, .msg-assist .hljs-built_in, .msg-assist .hljs-title.class_, .msg-assist .hljs-class .hljs-title',
-  'chat.css .msg-assist .hljs-attr, .msg-assist .hljs-attribute, .msg-assist .hljs-property, .msg-assist .hljs-variable, .msg-assist .hljs-template-variable, .msg-assist .hljs-selector-class, .msg-assist .hljs-selector-id',
-  'chat.css .msg-assist .hljs-tag',
-  'chat.css .msg-assist .hljs-tag .hljs-name, .msg-assist .hljs-name',
-  'chat.css .msg-assist .hljs-meta',
-  'chat.css .msg-assist .hljs-deletion',
-  'chat.css .msg-assist .hljs-addition',
-  'chat.css .msg-assist .hljs-link',
-  'chat.css .compaction-glyph',
-  'chat.css .compaction-hint',
-  'chat.css .compaction-head:hover .compaction-hint',
-  'chat.css .msg-working',
-  'chat.css .msg-working-glyph',
-  'chat.css .tool-name',
-  'chat.css .tool-sum',
-  'chat.css .tool-dur',
-  'chat.css .tool-chev',
-  'chat.css .tool-eyebrow',
-  'chat.css .tool-meta',
-  'chat.css .tool-cut',
-  'chat.css .tool-ask-q',
-  'chat.css .tool-ask-outlabel',
-  'chat.css .ask-state.ask-live',
-  'chat.css .ask-state.ask-unanswered',
-  'chat.css .prompt-glyph',
-  'chat.css .composer-input',
-  'chat.css .composer-input::placeholder',
-  'chat.css .attach-btn',
-  'chat.css .attach-btn:disabled',
-  'chat.css .attach-btn[aria-busy=\'true\']',
-  'chat.css .composer[data-disabled=\'true\'] .prompt-glyph',
-  'chat.css .composer[data-disabled=\'true\'] .composer-input::placeholder',
-  'chat.css .draft-copy',
-  'chat.css .draft-cancel',
-  'chat.css .draft-cancel:active',
-  'chat.css .opt',
-  'chat.css .opt:disabled:not([aria-busy=\'true\']), .opt[aria-disabled=\'true\']',
-  'chat.css .opt:disabled:not([aria-busy=\'true\']) .opt-glyph, .opt:disabled:not([aria-busy=\'true\']) .opt-idx, .opt:disabled:not([aria-busy=\'true\']) .opt-enter, .opt[aria-disabled=\'true\'] .opt-glyph, .opt[aria-disabled=\'true\'] .opt-idx, .opt[aria-disabled=\'true\'] .opt-enter',
-  'chat.css .opt-glyph',
-  'chat.css .opt-idx',
-  'chat.css .opt-desc',
-  'chat.css .opt-preview-toggle',
-  'chat.css .dlg-body',
-  'chat.css .opt-enter',
-  'chat.css .opt-wait',
-  'chat.css .sheet-foot',
-  'chat.css .dlg-details-toggle',
-  'chat.css .dlg-details-toggle:hover',
-  'chat.css .dlg-copy',
-  'chat.css .dlg-later',
-  'chat.css .dlg-later:active',
-  'chat.css .ask-envelope-more-heading',
-  'chat.css .chat-empty-mark',
-  'chat.css .chat-empty-title',
-  'chat.css .chat-empty-copy',
-  'chat.css .term-overlay-word',
-  'chat.css .term-overlay-word--lost',
-  'chat.css .term-retry',
-  'chat.css .slash-name',
-  'chat.css .slash-badge',
-  'chat.css .slash-desc',
-  'chat.css .history-when',
-  'chat.css .history-act',
-  'chat.css .history-verb',
-  'chat.css .history-outcome',
-  'chat.css .history-obs, .history-dec',
-  'chat.css .history-corr',
-  'chat.css .history-refusal',
-  'chat.css .history-row--gap, .history-gap',
-  'chat.css .history-loading, .history-empty, .history-error',
-  'shell.css .shell-accounts .acct-win',
-  'shell.css .shell-accounts .acct-pct',
-  'shell.css .shell-accounts .acct-reset',
-  'shell.css .shell-placeholder-mark',
-  'shell.css .shell-placeholder-copy',
+  '.notice-x',
+  '.notice-x:active',
+  '.status-line--busy',
+  '.status-line--idle',
+  '.status-line--attention',
+  '.status-line--dead',
+  '.first-run-mark',
+  '.first-run-title',
+  '.first-run-copy',
+  '.sheet-copy',
+  '.acct-gauge',
+  '.acct-unknown',
+  '.acct-condemned',
+  '.acct-none, .proj-none, .proj-error',
+  '.acct-chev',
+  '.acct-change',
+  '.acct-change:active',
+  '.proj-glyph',
+  '.proj-name',
+  '.proj-dir',
+  '.proj-error',
+  '.accounts-strip-empty',
+  '.acct-win',
+  '.acct-pct',
+  '.acct-reset',
+  '.sess-meta',
+  '.sess-meta > *:not(:first-child)::before',
+  '.sess-state--waiting',
+  '.sess-state--working',
+  '.sess-state--exited',
+  '.sess-subagent-row',
+  '.sess-ctxpressure',
+  '.sess-ctxpressure[data-wedge]',
+  '.sess-warn',
+  '.sess-unmeasured',
+  '.sess-substrate',
+  '.sess-held, .sess-lifecycle, .sess-swapblocked, .sess-ask-state',
+  '.sess-acct-away',
+  '.sess-ask',
+  '.sess-sheet-note',
+  '.sess-hold-error',
+  '.proj-card-chevron',
+  '.proj-card-count',
+  '.proj-card-attn',
+  '.proj-card-busy',
+  '.proj-card-pin[data-mixed]',
+  '.proj-nest-bracket',
+  '.proj-pending',
+  '.proj-pending-glyph',
+  '.proj-pending-meta > *:not(:first-child)::before',
+  '.proj-pending-program',
+  '.proj-pending-elapsed',
+  '.fleet-archived-row, .fleet-runs-row',
+  '.archive-total',
+  '.archive-row',
+  '.archive-project',
+  '.archive-size',
+  '.archive-empty',
+  '.accounts-title',
+  '.accounts-projection',
+  '.accounts-disabled-note',
+  '.accounts-fresh',
+  '.accounts-session',
+  '.mail-badge',
+  '.mail-badge:active',
+  '.mail-badge[data-unread=\'true\']',
+  '.mail-title',
+  '.mail-note',
+  '.mail-dropped',
+  '.mail-empty',
+  '.runs-title',
+  '.runs-empty',
+  '.runs-wave',
+  '.hotfiles-chevron',
+  '.hotfiles-holder',
+  '.hotfiles-expiry',
+  '.hotfiles-intent',
+  '.chat-title',
+  '.chat-crumb-sep',
+  '.chat-crumb',
+  '.chat .status-line--busy',
+  '.chat .status-line--idle',
+  '.chat .status-line--attention',
+  '.chat .status-line--dead',
+  '.metachip--model',
+  '.metachip--branch',
+  '.keycap--pr[data-phase=\'unchecked\'] .pr-dot',
+  '.keycap--pr[data-phase=\'none\'] .pr-dot',
+  '.keycap--pr[data-phase=\'merged\'] .pr-dot',
+  '.keycap--pr[data-phase=\'closed\']',
+  '.keycap--pr[data-phase=\'unknown\'] .pr-dot',
+  '.keycap--pr[data-checks=\'pass\'] .pr-dot',
+  '.keycap--pr[data-checks=\'fail\'] .pr-dot',
+  '.keycap--pr[data-checks=\'pending\'] .pr-dot',
+  '.pr-lede',
+  '.pr-facts',
+  '.pr-warn',
+  '.pr-check-names',
+  '.pr-label',
+  '.pr-title',
+  '.pr-checkline',
+  '.pr-note',
+  '.reap-rows dt',
+  '.reap-rows dd',
+  '.reap-note',
+  '.reap-refusal',
+  '.reap-sensitive',
+  '.reap-children-list',
+  '.menu-item',
+  '.menu-hint',
+  '.menu-item--danger .menu-label',
+  '.task-head',
+  '.task-mark',
+  '.task-mark--running',
+  '.task-chevron',
+  '.task-summary',
+  '.task-line',
+  '.task-glyph',
+  '.task-row--in_progress .task-glyph',
+  '.task-row--completed .task-subject',
+  '.task-row--completed .task-glyph',
+  '.task-detail',
+  '.task-fold',
+  '.task-fold:active',
+  '.ts-divider',
+  '.sys-divider--restart',
+  '.sys-divider--stalled',
+  '.sys-divider--limit',
+  '.msg-receipt',
+  '.msg-receipt--ok b',
+  '.msg-receipt--failed',
+  '.pending-error',
+  '.pending-actions .pending-retry',
+  '.msg-assist',
+  '.msg-assist h1, .msg-assist h2, .msg-assist h3, .msg-assist h4',
+  '.msg-assist h4',
+  '.msg-assist strong',
+  '.msg-assist ul, .msg-assist ol',
+  '.msg-assist li::marker',
+  '.msg-assist .task-list-item input[type=\'checkbox\']:checked::after',
+  '.msg-assist .task-list-item:has(input:checked)',
+  '.msg-assist a',
+  '.msg-assist .kbd-plus',
+  '.msg-assist .hljs-comment, .msg-assist .hljs-quote',
+  '.msg-assist .hljs-keyword, .msg-assist .hljs-selector-tag, .msg-assist .hljs-section, .msg-assist .hljs-literal',
+  '.msg-assist .hljs-string, .msg-assist .hljs-regexp',
+  '.msg-assist .hljs-number, .msg-assist .hljs-symbol, .msg-assist .hljs-bullet',
+  '.msg-assist .hljs-title, .msg-assist .hljs-title.function_, .msg-assist .hljs-function .hljs-title',
+  '.msg-assist .hljs-type, .msg-assist .hljs-built_in, .msg-assist .hljs-title.class_, .msg-assist .hljs-class .hljs-title',
+  '.msg-assist .hljs-attr, .msg-assist .hljs-attribute, .msg-assist .hljs-property, .msg-assist .hljs-variable, .msg-assist .hljs-template-variable, .msg-assist .hljs-selector-class, .msg-assist .hljs-selector-id',
+  '.msg-assist .hljs-tag',
+  '.msg-assist .hljs-tag .hljs-name, .msg-assist .hljs-name',
+  '.msg-assist .hljs-meta',
+  '.msg-assist .hljs-deletion',
+  '.msg-assist .hljs-addition',
+  '.msg-assist .hljs-link',
+  '.compaction-glyph',
+  '.compaction-hint',
+  '.compaction-head:hover .compaction-hint',
+  '.msg-working',
+  '.msg-working-glyph',
+  '.tool-name',
+  '.tool-sum',
+  '.tool-dur',
+  '.tool-chev',
+  '.tool-eyebrow',
+  '.tool-meta',
+  '.tool-cut',
+  '.tool-ask-q',
+  '.tool-ask-outlabel',
+  '.ask-state.ask-live',
+  '.ask-state.ask-unanswered',
+  '.prompt-glyph',
+  '.composer-input',
+  // The vendored preflight's own placeholder default (@ccrc/ui's reset.css),
+  // caught by THIS guard the first time both halves met: main introduced the
+  // grandfathered-census check, wave 1 introduced the stylesheet. It is
+  // unmeasurable by construction rather than by neglect — the selector is BARE
+  // `::placeholder`, so there is no host to recover a ground from, and the
+  // colour is `color-mix(in oklab, currentcolor 50%, transparent)`, i.e. a
+  // derivative of whatever ink its host already carries. The app's only real
+  // placeholder, `.composer-input::placeholder`, is listed on its own right
+  // below and measured where it actually renders.
+  '::placeholder',
+  '.composer-input::placeholder',
+  '.attach-btn',
+  '.attach-btn:disabled',
+  '.attach-btn[aria-busy=\'true\']',
+  '.composer[data-disabled=\'true\'] .prompt-glyph',
+  '.composer[data-disabled=\'true\'] .composer-input::placeholder',
+  '.draft-copy, .dlg-copy',
+  '.draft-cancel, .dlg-later',
+  '.draft-cancel:active, .dlg-later:active',
+  '.opt',
+  '.opt:disabled:not([aria-busy=\'true\']), .opt[aria-disabled=\'true\']',
+  '.opt:disabled:not([aria-busy=\'true\']) .opt-glyph, .opt:disabled:not([aria-busy=\'true\']) .opt-idx, .opt:disabled:not([aria-busy=\'true\']) .opt-enter, .opt[aria-disabled=\'true\'] .opt-glyph, .opt[aria-disabled=\'true\'] .opt-idx, .opt[aria-disabled=\'true\'] .opt-enter',
+  '.opt-glyph',
+  '.opt-idx',
+  '.opt-desc',
+  '.opt-preview-toggle',
+  '.dlg-body',
+  '.opt-enter',
+  '.opt-wait',
+  '.sheet-foot',
+  '.dlg-details-toggle',
+  '.dlg-details-toggle:hover',
+  '.ask-envelope-more-heading',
+  '.chat-empty-mark',
+  '.chat-empty-title',
+  '.chat-empty-copy',
+  '.term-overlay-word',
+  '.term-overlay-word--lost',
+  '.term-retry',
+  '.slash-name',
+  '.slash-badge',
+  '.slash-desc',
+  '.history-when',
+  '.history-act',
+  '.history-verb',
+  '.history-outcome',
+  '.history-obs, .history-dec',
+  '.history-corr',
+  '.history-refusal',
+  '.history-row--gap, .history-gap',
+  '.history-loading, .history-empty, .history-error',
+  '.shell-accounts .acct-win',
+  '.shell-accounts .acct-pct',
+  '.shell-accounts .acct-reset',
+  '.shell-placeholder-mark',
+  '.shell-placeholder-copy',
 ]);
 const report = audit(ROOT);
+
+/** How many palettes the auditor measured.
+ *
+ *  DERIVED, never typed. Sixteen assertions in this file said `toHaveLength(2)`
+ *  meaning "measured in every theme", which was the same sentence as "measured
+ *  in dark and light" right up until the moment it wasn't. Adding ten palettes
+ *  turned all sixteen red while the thing they check — that a rule is grounded
+ *  in EVERY palette rather than slipping into the uncovered census — had not
+ *  changed at all. A count that tracks the palettes says what was meant. */
+// NO FALLBACK. A `byName === undefined ? 2 : …` default here would silently
+// drop sixteen assertions from "every palette" back to "two" the moment the
+// auditor's shape changed — which is the exact failure this constant was
+// introduced to fix, re-armed as a convenience. Reading through throws if the
+// shape goes, and throwing is the correct outcome.
+const THEME_COUNT = Object.keys(report.themes.byName).length + 1; // + :root, which has no block
+
+/** The rows measured for ONE rule, one per palette.
+ *
+ *  A row's label is `<PALETTE> <key><context suffix>`, and the key is the
+ *  SELECTOR alone now (`ruleKey`, design/audit.mjs). `endsWith(key)` used to
+ *  be an identity because the file prefix made it one; it is not any more —
+ *  `.acct-pool` is a suffix of `.sheet-panel .acct-pool` too, and the first
+ *  assertion to meet the shorter key counted 24 rows where it wanted 12. No
+ *  palette name contains a space, so the leading one is dropped and the
+ *  remainder compared WHOLE.
+ *
+ *  `\s+`, not one space: `DARK ` and `LIGHT` are PADDED to a common width for
+ *  the gate's printed column, so two of the twelve rows carry a second space
+ *  and an `indexOf(' ')` split left them starting with it — 10 rows where the
+ *  assertion wanted 12, which is how this was measured. */
+const rowsFor = (key: string): typeof report.measured =>
+  report.measured.filter((m) => m.label.replace(/^\S+\s+/, '') === key);
 const { DARK, LIGHT } = loadThemes(ROOT);
 const THEMES: readonly (readonly [string, Record<string, string>])[] = [
   ['DARK ', DARK],
@@ -446,14 +462,14 @@ describe('the gate fails a mutated tree', () => {
   it('a token in tokens.css is retuned below the floor', () => {
     // Proves the gate PARSES tokens.css rather than carrying a copy of it:
     // there is no hex in design/ left to mutate.
-    expectFail('src/styles/tokens.css', (s) => s.replace('--ink-primary:   #ECF0EC', '--ink-primary:   #151815'));
+    expectFail('../ui/src/styles/tokens.css', (s) => s.replace('--ink-primary:   #ECF0EC', '--ink-primary:   #151815'));
   });
 
   it('a rule takes the finding-1 shape (paper ink on the dark well)', () => {
     // gates #1, the BLOCKER: --ink-secondary on --bg-well is 2.44 in light.
     const o = expectFail('src/session/chat.css', (s) =>
       s.replace('.pr-check-names { color: var(--status-dead-text);', '.pr-check-names { color: var(--ink-secondary); background: var(--bg-well);'));
-    expect(o).toMatch(/FAIL.*LIGHT chat\.css \.pr-check-names/);
+    expect(o).toMatch(/FAIL.*LIGHT \.pr-check-names/);
   });
 
   it('the finding-1 shape is hidden in src/styles/base.css', () => {
@@ -461,7 +477,7 @@ describe('the gate fails a mutated tree', () => {
     // rule with this exact shape passed green. Stylesheets are DISCOVERED now.
     const o = expectFail('src/styles/base.css', (s) =>
       s.replace('::selection {', '.base-mutant { color: var(--ink-secondary); background: var(--bg-well); }\n::selection {'));
-    expect(o).toMatch(/FAIL.*LIGHT base\.css \.base-mutant/);
+    expect(o).toMatch(/FAIL.*LIGHT \.base-mutant/);
   });
 
   it('a markdown CALLOUT VARIANT rebinds its tint to the well', () => {
@@ -469,23 +485,23 @@ describe('the gate fails a mutated tree', () => {
     // five variants set no `color`, so a hand-written DECLARED_PAIRS list was
     // the only thing measuring them and it was a literal copy. Now the base
     // rule is re-measured once per variant.
-    const o = expectFail('src/session/chat.css', (s) =>
+    const o = expectFail('../ui/src/components/prose.css', (s) =>
       s.replace(
         "[data-callout='warning']   { --callout-hue: var(--status-attention-text); --callout-tint: var(--status-attention-tint); }",
         "[data-callout='warning']   { --callout-hue: var(--status-attention-text); --callout-tint: var(--bg-well); }",
       ));
-    expect(o).toMatch(/FAIL.*LIGHT chat\.css \.msg-assist \.callout \[as .*warning/);
+    expect(o).toMatch(/FAIL.*LIGHT \.msg-assist \.callout \[as .*warning/);
   });
 
   it("a callout variant's label hue is made invisible against its own tint", () => {
     // The second half of P1: `--callout-hue: var(--status-attention-tint)`
     // paints the ::before label the same colour as the panel behind it (1.00).
-    const o = expectFail('src/session/chat.css', (s) =>
+    const o = expectFail('../ui/src/components/prose.css', (s) =>
       s.replace(
         "[data-callout='warning']   { --callout-hue: var(--status-attention-text);",
         "[data-callout='warning']   { --callout-hue: var(--status-attention-tint);",
       ));
-    expect(o).toMatch(/FAIL.*chat\.css \.msg-assist \.callout::before \[as .*warning/);
+    expect(o).toMatch(/FAIL.*\.msg-assist \.callout::before \[as .*warning/);
   });
 
   // ── the three spellings that forged the "unforgeable" claim ───────────────
@@ -517,9 +533,9 @@ describe('the gate fails a mutated tree', () => {
       ".callout[data-callout='rogue'] { --callout-tint: var(--bg-well); }",
     ],
   ])('a callout variant %s still cannot hide the well', (_n, rule) => {
-    const o = expectFail('src/session/chat.css', forge(rule));
-    expect(o).toMatch(/FAIL\s+2\.44 .*LIGHT chat\.css \.msg-assist \.callout \[as /);
-    expect(o).toMatch(/FAIL\s+2\.44 .*LIGHT chat\.css \.msg-assist \.callout::before \[as /);
+    const o = expectFail('../ui/src/components/prose.css', forge(rule));
+    expect(o).toMatch(/FAIL\s+2\.44 .*LIGHT \.msg-assist \.callout \[as /);
+    expect(o).toMatch(/FAIL\s+2\.44 .*LIGHT \.msg-assist \.callout::before \[as /);
   });
 
   it('a callout variant hides the well from ANOTHER stylesheet', () => {
@@ -528,16 +544,16 @@ describe('the gate fails a mutated tree', () => {
     // file a custom property was rebound in.
     const o = expectFail('src/fleet/fleet.css', (s) =>
       `${s}\n.msg-assist .callout[data-callout='crossfile'] { --callout-tint: var(--bg-well); }\n`);
-    expect(o).toMatch(/FAIL\s+2\.44 .*LIGHT chat\.css \.msg-assist \.callout \[as fleet\.css /);
+    expect(o).toMatch(/FAIL\s+2\.44 .*LIGHT \.msg-assist \.callout \[as \.msg-assist \.callout\[data-callout='crossfile'\]\]/);
   });
 
   it("a pseudo-element spells its host differently from the rule that paints it", () => {
     // The same string comparison, one function down: the ::before host was
     // looked up by exact `file selector` key, so a pseudo hanging off a
     // differently-spelled host was silently unmeasured.
-    const o = expectFail('src/session/chat.css', (s) =>
+    const o = expectFail('../ui/src/components/prose.css', (s) =>
       `${s}\n.msg-assist .md-body .callout::before { color: var(--callout-tint); }\n`);
-    expect(o).toMatch(/FAIL\s+1\.00 .*chat\.css \.msg-assist \.md-body \.callout::before/);
+    expect(o).toMatch(/FAIL\s+1\.00 .*\.msg-assist \.md-body \.callout::before/);
   });
 
   // ── the value the browser paints, not the first one written ───────────────
@@ -549,22 +565,22 @@ describe('the gate fails a mutated tree', () => {
     [
       'a duplicated `background` — the second one is what paints',
       '.e7-mutant { color: var(--ink-secondary); background: var(--bg-surface); background: var(--bg-well); }',
-      /FAIL\s+2\.44 .*LIGHT chat\.css \.e7-mutant/,
+      /FAIL\s+2\.44 .*LIGHT \.e7-mutant/,
     ],
     [
       'a duplicated `color` — the second one is what paints',
       '.e7b-mutant { background: var(--bg-well); color: var(--ink-on-well); color: var(--ink-secondary); }',
-      /FAIL\s+2\.44 .*LIGHT chat\.css \.e7b-mutant/,
+      /FAIL\s+2\.44 .*LIGHT \.e7b-mutant/,
     ],
     [
       'a duplicated `opacity` — the second one is what fades',
       '.e10-mutant { opacity: 1; opacity: 0.72; }',
-      /unregistered fade chat\.css \.e10-mutant 0\.72/,
+      /unregistered fade \.e10-mutant 0\.72/,
     ],
     [
       '`background: none` reset, then a `background-color` longhand',
       '.e1-mutant { color: var(--ink-secondary); background: none; background-color: var(--bg-well); }',
-      /FAIL\s+2\.44 .*LIGHT chat\.css \.e1-mutant/,
+      /FAIL\s+2\.44 .*LIGHT \.e1-mutant/,
     ],
   ])('the gate measures %s', (_n, rule, want) => {
     expect(expectFail('src/session/chat.css', (s) => `${s}\n${rule}\n`)).toMatch(want);
@@ -589,43 +605,43 @@ describe('the gate fails a mutated tree', () => {
       'overrides `color` on a :hover of a self-grounded rule',
       'src/session/chat.css',
       '.pr-body-preview:hover { color: var(--ink-secondary); }',
-      /FAIL\s+2\.44 .*LIGHT chat\.css \.pr-body-preview \[as \.pr-body-preview:hover\]/,
+      /FAIL\s+2\.44 .*LIGHT \.pr-body-preview \[as \.pr-body-preview:hover\]/,
     ],
     [
       'overrides `color` from ANOTHER stylesheet',
       'src/fleet/fleet.css',
       ".pr-body-preview[data-x] { color: var(--ink-secondary); }",
-      /FAIL\s+2\.44 .*LIGHT chat\.css \.pr-body-preview \[as fleet\.css \.pr-body-preview\[data-x\]\]/,
+      /FAIL\s+2\.44 .*LIGHT \.pr-body-preview \[as \.pr-body-preview\[data-x\]\]/,
     ],
     [
       'swaps only the GROUND under an inherited ink',
       'src/session/chat.css',
       '.metachip.is-rogue { background: var(--bg-well); }',
-      /FAIL\s+2\.44 .*LIGHT chat\.css \.metachip \[as \.metachip\.is-rogue\]/,
+      /FAIL\s+2\.44 .*LIGHT \.metachip \[as \.metachip\.is-rogue\]/,
     ],
     [
       'restates the WHOLE selector a second time, colour only',
       'src/session/chat.css',
       '.pr-body-preview { color: var(--ink-secondary); }',
-      /FAIL\s+2\.44 .*LIGHT chat\.css \.pr-body-preview \[as \.pr-body-preview\]/,
+      /FAIL\s+2\.44 .*LIGHT \.pr-body-preview \[as \.pr-body-preview\]/,
     ],
     [
       'restates the whole selector a second time, ground only',
       'src/session/chat.css',
       '.metachip { background: var(--bg-well); }',
-      /FAIL\s+2\.44 .*LIGHT chat\.css \.metachip \[as \.metachip\]/,
+      /FAIL\s+2\.44 .*LIGHT \.metachip \[as \.metachip\]/,
     ],
     [
       'splits the ink and the ground across two rules with the SAME qualifier',
       'src/session/chat.css',
       '.metachip:hover { color: var(--ink-secondary); }\n.metachip:hover { background: var(--bg-well); }',
-      /FAIL\s+2\.44 .*LIGHT chat\.css \.metachip \[as \.metachip:hover \+ \.metachip:hover\]/,
+      /FAIL\s+2\.44 .*LIGHT \.metachip \[as \.metachip:hover \+ \.metachip:hover\]/,
     ],
     [
       'is a DESCENDANT of a self-grounded rule its own selector names',
-      'src/session/chat.css',
+      '../ui/src/components/prose.css',
       '.msg-assist pre .rogue { color: var(--ink-secondary); }',
-      /FAIL\s+2\.44 .*LIGHT chat\.css \.msg-assist pre \.rogue \[in chat\.css \.msg-assist pre\]/,
+      /FAIL\s+2\.44 .*LIGHT \.msg-assist pre \.rogue \[in \.msg-assist pre\]/,
     ],
   ])('a rule that %s cannot hide the well', (_n, rel, rule, want) => {
     expect(expectFail(rel as string, (s) => `${s}\n${rule}\n`)).toMatch(want);
@@ -634,10 +650,10 @@ describe('the gate fails a mutated tree', () => {
   it('the live rule the MAJOR was found in is measured, in both themes', () => {
     // Not a mutation — a pin on the live tree, because the defect was that
     // NOTHING measured this rule. Both rows must exist and both must clear 4.5:
-    // the label is --text-2xs (11px) uppercase mono, so it is body text.
+    // the label is --fs-2xs (11px) uppercase mono, so it is body text.
     const rows = report.measured.filter((m) =>
-      m.label.includes('chat.css .code-block-copy [as .code-block-copy:hover, .code-block-copy[data-copied]]'));
-    expect(rows).toHaveLength(2);
+      m.label.includes('.code-block-copy [as .code-block-copy:hover, .code-block-copy[data-copied]]'));
+    expect(rows).toHaveLength(THEME_COUNT);
     for (const r of rows) {
       expect(r.floor).toBe(4.5);
       expect(r.detail).toContain('var(--accent-on-well)');
@@ -649,10 +665,10 @@ describe('the gate fails a mutated tree', () => {
     // The bind between the fix and the gate: --accent flips with the theme and
     // the light one is tuned for paper, so on the well bar it is 3.03. If
     // anybody "simplifies" this token away, the gate says so.
-    const o = expectFail('src/session/chat.css', (s) =>
-      s.replace('color: var(--accent-on-well);\n  border-color: color-mix(in srgb, var(--accent-on-well) 40%, transparent);',
-        'color: var(--accent);\n  border-color: color-mix(in srgb, var(--accent) 40%, transparent);'));
-    expect(o).toMatch(/FAIL\s+3\.0\d .*LIGHT chat\.css \.code-block-copy \[as \.code-block-copy:hover/);
+    const o = expectFail('../ui/src/components/prose.css', (s) =>
+      s.replace('color: var(--accent-on-well);\n    border-color: color-mix(in srgb, var(--accent-on-well) 40%, transparent);',
+        'color: var(--accent);\n    border-color: color-mix(in srgb, var(--accent) 40%, transparent);'));
+    expect(o).toMatch(/FAIL\s+3\.0\d .*LIGHT \.code-block-copy \[as \.code-block-copy:hover/);
   });
 
   // ── background-image: read, or fail loudly. Never skipped ─────────────────
@@ -684,17 +700,17 @@ describe('the gate fails a mutated tree', () => {
     [
       'the blocker shape in UPPERCASE',
       '.forge-upper { COLOR: var(--ink-secondary); BACKGROUND: var(--bg-well); }',
-      /FAIL\s+2\.44 .*LIGHT chat\.css \.forge-upper/,
+      /FAIL\s+2\.44 .*LIGHT \.forge-upper/,
     ],
     [
       'the blocker shape in MiXeD case, longhand background',
       '.forge-mixed { CoLoR: var(--ink-secondary); Background-Color: var(--bg-well); }',
-      /FAIL\s+2\.44 .*LIGHT chat\.css \.forge-mixed/,
+      /FAIL\s+2\.44 .*LIGHT \.forge-mixed/,
     ],
     [
       'an element fade spelled OPACITY',
       '.forge-op { OPACITY: 0.4; }',
-      /unregistered fade chat\.css \.forge-op 0\.4/,
+      /unregistered fade \.forge-op 0\.4/,
     ],
     [
       'a whole animation spelled @KEYFRAMES with an UPPERCASE stop',
@@ -720,7 +736,7 @@ describe('the gate fails a mutated tree', () => {
   it('a new element fade is added with no contrast decision', () => {
     const o = expectFail('src/session/chat.css', (s) =>
       s.replace('.pr-check-names {', '.sess-meta-mutant { opacity: 0.72; }\n.pr-check-names {'));
-    expect(o).toMatch(/unregistered fade chat\.css \.sess-meta-mutant 0\.72/);
+    expect(o).toMatch(/unregistered fade \.sess-meta-mutant 0\.72/);
   });
 
   it('the same fade is spelled `opacity: 72%`', () => {
@@ -728,28 +744,33 @@ describe('the gate fails a mutated tree', () => {
     // NaN out of the fade set, so this shipped unregistered and unmeasured.
     const o = expectFail('src/session/chat.css', (s) =>
       s.replace('.pr-check-names {', '.sess-meta-mutant { opacity: 72%; }\n.pr-check-names {'));
-    expect(o).toMatch(/unregistered fade chat\.css \.sess-meta-mutant 0\.72/);
+    expect(o).toMatch(/unregistered fade \.sess-meta-mutant 0\.72/);
   });
 
   it('the same fade is spelled `opacity: 0.72 !important`', () => {
     // Same NaN hole; `!important` is already used in this audited file set.
     const o = expectFail('src/session/chat.css', (s) =>
       s.replace('.pr-check-names {', '.sess-meta-mutant { opacity: 0.72 !important; }\n.pr-check-names {'));
-    expect(o).toMatch(/unregistered fade chat\.css \.sess-meta-mutant 0\.72/);
+    expect(o).toMatch(/unregistered fade \.sess-meta-mutant 0\.72/);
   });
 
   it('a registered fade is deepened past the floor of a pair it composites', () => {
-    const o = expectFail('src/components/primitives.css', (s) =>
-      s.replace('    opacity: 0.85;', '    opacity: 0.7;'));
-    expect(o).toMatch(/unregistered fade primitives\.css/);
+    // Retargeted in wave 2: this mutated legacy.css's 0.85 dot fade, and that
+    // file retired when its rules became utilities. The mechanism is unchanged
+    // — deepen a REGISTERED fade and the registry no longer vouches for the
+    // measured value, so it reads as unregistered — so the case moves to the
+    // one registered fade left in the audited set rather than being dropped.
+    const o = expectFail('src/session/chat.css', (s) =>
+      s.replace('  opacity: 0.6;\n  cursor: default;', '  opacity: 0.4;\n  cursor: default;'));
+    expect(o).toMatch(/unregistered fade \.pending-actions \.pending-send-it:disabled 0\.4/);
   });
 
   it('an unregistered @keyframes opacity trough is introduced', () => {
     // The list of troughs was hand-typed and already wrong (dot-breathe 0.55
     // was missing from it), so the list is discovered and checked.
-    const o = expectFail('src/components/primitives.css', (s) =>
+    const o = expectFail('../ui/src/styles/theme.css', (s) =>
       s.replace('@keyframes skel-shimmer {', '@keyframes mutant-fade { from { opacity: 0.2; } to { opacity: 1; } }\n@keyframes skel-shimmer {'));
-    expect(o).toMatch(/unregistered keyframe trough primitives\.css mutant-fade 0\.2/);
+    expect(o).toMatch(/unregistered keyframe trough theme\.css mutant-fade 0\.2/);
   });
 
   // ── the branches that say "the auditor could not measure this" ────────────
@@ -762,13 +783,13 @@ describe('the gate fails a mutated tree', () => {
   // that is the direction nothing was checking.
   it('an `opacity` the auditor cannot read as a number is a FAILURE, not a skip', () => {
     const o = expectFail('src/session/chat.css', (s) => `${s}\n.e11-mutant { opacity: var(--x-fade); }\n`);
-    expect(o).toMatch(/chat\.css \.e11-mutant: opacity "var\(--x-fade\)" is not a static value/);
+    expect(o).toMatch(/\.e11-mutant: opacity "var\(--x-fade\)" is not a static value/);
   });
 
   it('a @keyframes stop the auditor cannot read as a number is a FAILURE, not a skip', () => {
-    const o = expectFail('src/components/primitives.css', (s) =>
+    const o = expectFail('../ui/src/styles/theme.css', (s) =>
       s.replace('@keyframes skel-shimmer {', '@keyframes mutant-var { from { opacity: var(--x); } to { opacity: 1; } }\n@keyframes skel-shimmer {'));
-    expect(o).toMatch(/@keyframes primitives\.css mutant-var has an opacity stop that is not a static value/);
+    expect(o).toMatch(/@keyframes theme\.css mutant-var has an opacity stop that is not a static value/);
   });
 
   it('a translucent background with no GROUNDS entry is a FAILURE, not a skip', () => {
@@ -777,14 +798,14 @@ describe('the gate fails a mutated tree', () => {
     // Skipping such a rule is how a translucent tint ships unmeasured.
     const o = expectFail('src/session/chat.css', (s) =>
       `${s}\n.e12-mutant { color: var(--ink-primary); background: color-mix(in srgb, var(--bg-well) 50%, transparent); }\n`);
-    expect(o).toMatch(/chat\.css \.e12-mutant: background .* is translucent and has no GROUNDS entry/);
+    expect(o).toMatch(/\.e12-mutant: background .* is translucent and has no GROUNDS entry/);
   });
 
   it('a KEYFRAME_TROUGHS entry left behind by a renamed animation is a FAILURE', () => {
     // The stale direction for OPACITY_REGISTRY was pinned; the stale direction
     // for KEYFRAME_TROUGHS was not, so `keyframes: []` passed the whole suite.
-    const o = expectFail('src/session/chat.css', (s) => s.replace('@keyframes attach-spin {', '@keyframes attach-spin-2 {'));
-    expect(o).toMatch(/stale keyframes registry entry: chat\.css attach-spin 1/);
+    const o = expectFail('src/session/chat.css', (s) => s.replace('@keyframes tool-breathe {', '@keyframes tool-breathe-2 {'));
+    expect(o).toMatch(/stale keyframes registry entry: chat\.css tool-breathe 0\.55/);
   });
 
   // The same sweep, run over EVERY failure branch in audit.mjs rather than the
@@ -794,9 +815,9 @@ describe('the gate fails a mutated tree', () => {
   it('a PSEUDO-ELEMENT painting with a colour the auditor cannot resolve is a FAILURE', () => {
     // The colour of the ::before label, replaced — not prepended: declOf reads
     // the LAST declaration now, so a prepended one would be overwritten.
-    const o = expectFail('src/session/chat.css', (s) =>
-      s.replace('  color: var(--callout-hue);\n', '  color: var(--no-such-token);\n'));
-    expect(o).toMatch(/chat\.css \.msg-assist \.callout::before.*unknown custom property --no-such-token/);
+    const o = expectFail('../ui/src/components/prose.css', (s) =>
+      s.replace('    color: var(--callout-hue);\n', '    color: var(--no-such-token);\n'));
+    expect(o).toMatch(/\.msg-assist \.callout::before.*unknown custom property --no-such-token/);
   });
 
   it('an INHERITED_GROUNDS entry whose rule was renamed away is a FAILURE', () => {
@@ -805,8 +826,8 @@ describe('the gate fails a mutated tree', () => {
         '.proj-archived-body .sess-line:not(.sess-line--active) .sess-label-renamed {'));
     // Two branches, one mutation: the hand-written ground names a rule that is
     // gone, and the registry key is stale.
-    expect(o).toMatch(/stale INHERITED_GROUNDS entry: no rule fleet\.css \.proj-archived-body/);
-    expect(o).toMatch(/stale inherited registry entry: fleet\.css \.proj-archived-body/);
+    expect(o).toMatch(/stale INHERITED_GROUNDS entry: no rule \.proj-archived-body/);
+    expect(o).toMatch(/stale inherited registry entry: \.proj-archived-body/);
   });
 
   it('an INHERITED_GROUNDS rule that stops setting a colour of its own is a FAILURE', () => {
@@ -816,14 +837,14 @@ describe('the gate fails a mutated tree', () => {
     const o = expectFail('src/fleet/fleet.css', (s) =>
       s.replace('.proj-archived-body .sess-line:not(.sess-line--active) .sess-label {\n  color: var(--ink-secondary);',
         '.proj-archived-body .sess-line:not(.sess-line--active) .sess-label {\n  color: inherit;'));
-    expect(o).toMatch(/INHERITED_GROUNDS fleet\.css \.proj-archived-body.* sets no colour of its own/);
+    expect(o).toMatch(/INHERITED_GROUNDS \.proj-archived-body.* sets no colour of its own/);
   });
 
   it('an INHERITED_GROUNDS rule painting with an unresolvable colour is a FAILURE', () => {
     const o = expectFail('src/fleet/fleet.css', (s) =>
       s.replace('.proj-archived-body .sess-line:not(.sess-line--active) .sess-label {\n  color: var(--ink-secondary);',
         '.proj-archived-body .sess-line:not(.sess-line--active) .sess-label {\n  color: var(--no-such-token);'));
-    expect(o).toMatch(/fleet\.css \.proj-archived-body.*unknown custom property --no-such-token/);
+    expect(o).toMatch(/\.proj-archived-body.*unknown custom property --no-such-token/);
   });
 
   it('an OPACITY_REGISTRY pair the auditor cannot resolve is a FAILURE', () => {
@@ -831,17 +852,17 @@ describe('the gate fails a mutated tree', () => {
     // gate tree carries its own copy of the auditor, which is the point.
     const o = expectFail('design/audit.mjs', (s) =>
       s.replace("[['running tool dot on a card', 'var(--status-busy)'", "[['running tool dot on a card', 'var(--no-such-token)'"));
-    expect(o).toMatch(/chat\.css \.tool-dot--run 0\.8 — running tool dot on a card: unknown custom property/);
+    expect(o).toMatch(/\.tool-dot--run 0\.8 — running tool dot on a card: unknown custom property/);
   });
 
   it('a GROUNDS entry whose rule stopped being self-grounded is a FAILURE', () => {
-    const o = expectFail('src/session/chat.css', (s) => s.replace('.code-block-copy {\n', '.code-block-copy-renamed {\n'));
-    expect(o).toMatch(/stale grounds registry entry: chat\.css \.code-block-copy /);
+    const o = expectFail('../ui/src/components/prose.css', (s) => s.replace('.code-block-copy {\n', '.code-block-copy-renamed {\n'));
+    expect(o).toMatch(/stale grounds registry entry: \.code-block-copy /);
   });
 
   it('a SELF_GROUNDED_EXEMPT entry left behind by a renamed rule is a FAILURE', () => {
     const o = expectFail('src/session/chat.css', (s) => s.replace('.send-btn:disabled {\n', '.send-btn-renamed:disabled {\n'));
-    expect(o).toMatch(/stale exempt registry entry: chat\.css \.send-btn:disabled /);
+    expect(o).toMatch(/stale exempt registry entry: \.send-btn:disabled /);
   });
 
   it('a rule paints with a colour the auditor cannot resolve', () => {
@@ -856,7 +877,7 @@ describe('the gate fails a mutated tree', () => {
     // verify2-css P5: the 12% wash used to be written out in three stylesheets
     // and five test rows. Now tokens.css owns it and this pin binds the two
     // spellings of it together.
-    const o = expectFail('src/styles/tokens.css', (s) =>
+    const o = expectFail('../ui/src/styles/tokens.css', (s) =>
       s.replace('--status-dead-tint-solid: color-mix(in srgb, var(--status-dead) 12%, var(--bg-surface))',
         '--status-dead-tint-solid: color-mix(in srgb, var(--status-dead) 20%, var(--bg-surface))'));
     expect(o).toMatch(/dead-tint-solid/);
@@ -864,7 +885,7 @@ describe('the gate fails a mutated tree', () => {
 
   it('a registry entry is left behind pointing at a rule that is gone', () => {
     const o = expectFail('src/fleet/fleet.css', (s) => s.replace('.bell:disabled {\n  opacity: 0.35;', '.bell:disabled {\n  opacity: 1;'));
-    expect(o).toMatch(/stale opacity registry entry: fleet\.css \.bell:disabled 0\.35/);
+    expect(o).toMatch(/stale opacity registry entry: \.bell:disabled 0\.35/);
   });
 
   // The pin for the /tmp leak: the removal has to be observable from the NEXT
@@ -879,7 +900,7 @@ describe('the gate fails a mutated tree', () => {
 
 // ── labelled token pairs the design system promises ─────────────────────────
 describe('token pairs the gate must keep measuring', () => {
-  // 11px text (--text-2xs) is body text, not a UI glyph: 4.5, not 3:1.
+  // 11px text (--fs-2xs) is body text, not a UI glyph: 4.5, not 3:1.
   it.each([
     'DARK  ask header chip / accent-tint',
     'LIGHT ask header chip / accent-tint',
@@ -1079,7 +1100,7 @@ describe('the auditor itself', () => {
   it('finds both theme blocks however the selectors are cased', () => {
     // blockBody used indexOf, so `:ROOT` — a selector browsers match — read as
     // "no :root block" and threw at gate time.
-    const tokens = readFileSync(path.join(ROOT, 'src/styles/tokens.css'), 'utf8')
+    const tokens = readFileSync(path.join(ROOT, '../ui/src/styles/tokens.css'), 'utf8')
       .replace(/\/\*[\s\S]*?\*\//g, '');
     expect(blockBody(tokens.replace(':root {', ':ROOT {'), ':root')).toBe(blockBody(tokens, ':root'));
   });
@@ -1106,14 +1127,42 @@ describe('every stylesheet under src/ is audited', () => {
     // verify2-css P3: src/styles/base.css was missing from a hardcoded SHEETS
     // array, which exempted it from BOTH audits while the array looked
     // complete. A list of files is the same drift class as a list of colours.
-    expect(report.sheets).toEqual([
-      'src/components/primitives.css',
+    // Both packages: the app's own stylesheets AND @ccrc/ui's. A gate that
+    // walked only this package would measure the app against a palette it
+    // could not see — the same "fresh unbound copy" failure, reached by moving
+    // a directory instead of pasting a table.
+    //
+    // THE TWO HALVES ARE PINNED DIFFERENTLY, ON PURPOSE.
+    //
+    // The APP's stylesheets are a CLOSED set — four files, and a fifth is an
+    // architectural event worth a test edit. They stay an exact literal.
+    //
+    // @ccrc/ui's are OPEN: the design system gains a stylesheet every time it
+    // gains a component, because each component's CSS is colocated with it.
+    // Appending a filename here per component would convert a discovered set
+    // back into a hand-kept list — the exact drift class the comment above
+    // describes, arrived at one well-meant edit at a time. So this half is
+    // RE-DERIVED from an independent walk of ui/src: a walk that disagrees
+    // with the auditor's own discovery still reds, and a stylesheet the
+    // auditor somehow skipped is still caught, but a NEW component costs no
+    // edit here.
+    const uiCss = (dir: string): string[] =>
+      readdirSync(dir, { withFileTypes: true }).flatMap((e) =>
+        e.isDirectory()
+          ? uiCss(path.join(dir, e.name))
+          : e.name.endsWith('.css')
+            ? [path.relative(ROOT, path.join(dir, e.name)).split(path.sep).join('/')]
+            : [],
+      );
+    const APP_SHEETS = [
       'src/fleet/fleet.css',
       'src/session/chat.css',
       'src/styles/base.css',
       'src/styles/shell.css',
-      'src/styles/tokens.css',
-    ]);
+    ];
+    const expected = [...uiCss(path.join(ROOT, '..', 'ui', 'src')), ...APP_SHEETS].sort();
+    expect(expected.length).toBeGreaterThan(APP_SHEETS.length); // the walk found ui at all
+    expect(report.sheets).toEqual(expected);
   });
 
   it.each(stylesheets(ROOT))('parses rules out of %s', (rel) => {
@@ -1125,7 +1174,20 @@ describe('every stylesheet under src/ is audited', () => {
     // vacuously green — the exact shape of a fake gate.
     expect(report.counts.rules).toBeGreaterThanOrEqual(400);
     expect(report.counts.selfGrounded).toBeGreaterThanOrEqual(50);
-    expect(report.counts.pseudo).toBeGreaterThanOrEqual(3);
+    // ROUTE 3 IS SHRINKING, and that is a migration outcome rather than a
+    // parser fault. This floor was 3 while `.sess-hold-input::placeholder` and
+    // `.proj-search::placeholder` existed; both left when those fields became
+    // @ccrc/ui's `TextInput`, whose placeholder ink is now the utility
+    // `placeholder:text-ink-tertiary` — measured, but by
+    // `utility-pairs.test.ts`, not by this parser. Lowered to the honest 2
+    // rather than padded, for the reason the wave-2 plan gives about the gate's
+    // own total: a drop is the correct outcome, not a regression to paper over.
+    //
+    // The anti-vacuity job this line does is nearly spent, though: the three
+    // ::placeholder rules left are chat.css's, and when the composer migrates
+    // this count reaches 1. The assertions above and below are what will still
+    // catch a parser that matches nothing.
+    expect(report.counts.pseudo).toBeGreaterThanOrEqual(2);
     expect(report.measured.length).toBeGreaterThanOrEqual(120);
   });
 
@@ -1163,6 +1225,26 @@ describe('every stylesheet under src/ is audited', () => {
       const additions = report.uncovered.filter((key) => !GRANDFATHERED_UNCOVERED.has(key));
       expect(additions).toEqual([]);
       expect(report.uncovered.length).toBeLessThanOrEqual(GRANDFATHERED_UNCOVERED.size);
+    });
+
+    it('grandfathers nothing that is no longer uncovered', () => {
+      // THE REGISTRY HAD NO STALE CHECK, AND IT DRIFTED.
+      //
+      // The two assertions above are subset-only and budget-only: a key that
+      // stops matching any rule is caught by NEITHER, it just sits there
+      // raising the allowance. Measured when the composite migration started:
+      // THIRTEEN entries named `primitives.css`, a stylesheet retired two
+      // waves earlier and absent from the tree — so the budget was thirteen
+      // wider than the census it was meant to bound, and thirteen genuinely
+      // new blind spots could have entered under it without a word.
+      //
+      // Every other registry in this gate already reds on a stale entry
+      // (audit.mjs:1075 is the archetype). This one was the exception, which
+      // is exactly why it was the one that rotted. Moving a rule between
+      // stylesheets rewrites its key, so a migration mints these in bulk —
+      // which is what makes this the guard that had to ship WITH that work.
+      const stale = [...GRANDFATHERED_UNCOVERED].filter((key) => !report.uncovered.includes(key));
+      expect(stale).toEqual([]);
     });
 
     it('contains no rule whose ground the selector itself gives away', () => {
@@ -1204,12 +1286,12 @@ describe('every stylesheet under src/ is audited', () => {
     // is behind them — not --bg-well, which the GROUNDS entry used to claim and
     // which flattered every ratio here.
     for (const sel of ['.code-block-copy', '.code-block-lang']) {
-      const rows = report.measured.filter((m) => m.label.endsWith(`chat.css ${sel}`));
-      expect(rows.map((m) => m.label), sel).toHaveLength(2);
+      const rows = rowsFor(sel);
+      expect(rows.map((m) => m.label), sel).toHaveLength(THEME_COUNT);
       for (const r of rows) expect(r.ratio, r.label).toBeGreaterThanOrEqual(4.5);
     }
-    expect(GROUNDS['chat.css .code-block-copy']?.under).toEqual(['var(--well-bar-bg)']);
-    expect(INHERITED_GROUNDS['chat.css .code-block-lang']?.under).toEqual(['var(--well-bar-bg)']);
+    expect(GROUNDS['.code-block-copy']?.under).toEqual(['var(--well-bar-bg)']);
+    expect(INHERITED_GROUNDS['.code-block-lang']?.under).toEqual(['var(--well-bar-bg)']);
   });
 
   it('clears its floor on every pair, in both themes', () => {
@@ -1272,7 +1354,7 @@ describe('every hand-typed copy of a tokens.css colour is bound to it', () => {
     'design/contrast-check.mjs': 'one hex inside a prose comment explaining why a pair takes attention-TEXT and not the dot hue; no colour is typed into the gate itself (palette() looks every one up by token)',
     'test/contrast.test.ts': 'the hand-computed arithmetic controls this file exists to carry, each already asserted against resolveColor',
     'test/fleet-css.test.ts': 'one hex inside a prose comment about --accent and --status-busy sharing a value',
-    'src/session/TerminalDrawer.tsx': 'the xterm 16-colour ANSI palette. The four that matter (background, foreground, cursor, cursorAccent) already come from tokenValue(); the ANSI 16 are a separate table that reuses seven brand hues and adds eight bright variants that are not tokens. Reported, not bound — the file is outside the css lane',
+    'src/session/terminalFactory.ts': 'the xterm 16-colour ANSI palette. The four that matter (background, foreground, cursor, cursorAccent) already come from tokenValue(); the ANSI 16 are a separate table that reuses seven brand hues and adds eight bright variants that are not tokens. Reported, not bound — the file is outside the css lane',
   };
 
   const walk = (dir: string, out: string[] = []): string[] => {
@@ -1313,6 +1395,12 @@ describe('every hand-typed copy of a tokens.css colour is bound to it', () => {
     const dark = (DARK['--bg-page'] as string).toUpperCase();
     const light = (LIGHT['--bg-page'] as string).toUpperCase();
     const meta = [...html.matchAll(/<meta name="theme-color"([^>]*)>/g)].map((m) => m[1]);
+    // TWO <meta> tags, not two themes — this count is the markup's, and it
+    // does not move when a palette is added. index.html carries only the two
+    // Phosphor backgrounds on purpose (see the pre-paint comment there): a
+    // pinned third-party palette shows one frame of Phosphor's ground rather
+    // than eleven more bound literals in a file that paints before any
+    // stylesheet has loaded.
     expect(meta).toHaveLength(2);
     expect(hexes(meta[0] as string)).toEqual([dark]);
     expect((meta[1] as string).includes('prefers-color-scheme: light')).toBe(true);
@@ -1386,7 +1474,7 @@ describe('every markdown callout variant is measured from the stylesheet', () =>
     const rows = report.measured.filter(
       (m) => m.label.includes('.msg-assist .callout [as') && m.label.includes(`'${v}'`),
     );
-    expect(rows.map((m) => m.label)).toHaveLength(2);
+    expect(rows.map((m) => m.label)).toHaveLength(THEME_COUNT);
     for (const row of rows) expect(row.ok, `${row.label} ${row.ratio.toFixed(2)}`).toBe(true);
   });
 
@@ -1394,7 +1482,7 @@ describe('every markdown callout variant is measured from the stylesheet', () =>
     const rows = report.measured.filter(
       (m) => m.label.includes('.msg-assist .callout::before [as') && m.label.includes(`'${v}'`),
     );
-    expect(rows.map((m) => m.label)).toHaveLength(2);
+    expect(rows.map((m) => m.label)).toHaveLength(THEME_COUNT);
     for (const row of rows) expect(row.ok, `${row.label} ${row.ratio.toFixed(2)}`).toBe(true);
   });
 
@@ -1402,7 +1490,7 @@ describe('every markdown callout variant is measured from the stylesheet', () =>
     // The bind: every variant's --callout-tint is read off the rule. If a
     // variant is added, the base rule is re-measured through it with no
     // registration anywhere.
-    const rules = rulesOf(ROOT, 'src/session/chat.css');
+    const rules = rulesOf(ROOT, '../ui/src/components/prose.css');
     const variants = rules.filter((r) => /^\.msg-assist \.callout\[data-callout='\w+'\]$/.test(r.selector));
     expect(variants.map((r) => r.selector)).toHaveLength(VARIANTS.length);
     for (const r of variants) {
@@ -1423,9 +1511,12 @@ describe('every markdown callout variant is measured from the stylesheet', () =>
       .filter((r) => r.selector !== '.msg-assist .callout' && declOf(r.body, '--callout-tint') !== null);
     expect(rebinders.map(ruleKey)).toHaveLength(VARIANTS.length);
     for (const r of rebinders) {
-      const as = r.file === 'chat.css' ? r.selector : ruleKey(r);
+      // A variant names itself by its selector wherever it lives — the gate's
+      // key stopped carrying a file, so the callout's own sheet is no longer
+      // a special case here.
+      const as = ruleKey(r);
       expect(
-        report.measured.some((m) => m.label.endsWith(`chat.css .msg-assist .callout [as ${as}]`)),
+        report.measured.some((m) => m.label.endsWith(`.msg-assist .callout [as ${as}]`)),
         `no measured context for ${ruleKey(r)}`,
       ).toBe(true);
     }
@@ -1540,7 +1631,7 @@ describe('every static opacity is registered and composited', () => {
         "    knownBelowFloor: 'the escape hatch this round claims to have deleted',",
       ));
     const r = runGate(dir);
-    expect(r.stdout).toMatch(/OPACITY_REGISTRY chat\.css \.tool-dot--run 0\.8 is \{knownBelowFloor\}/);
+    expect(r.stdout).toMatch(/OPACITY_REGISTRY \.tool-dot--run 0\.8 is \{knownBelowFloor\}/);
     expect(r.stdout).toMatch(/^FAIL/m);
     expect(r.status).not.toBe(0);
   });
@@ -1583,7 +1674,7 @@ describe('every @keyframes opacity trough is registered', () => {
     // working-dot .25, tool-breathe .55, task-breathe .55" and shipped that as
     // the complete set. dot-breathe 0.55 — the status lamps, the most visible
     // animation in the app — was missing from it. The set is discovered now.
-    expect(report.troughs.map((t) => t.key)).toContain('primitives.css dot-breathe 0.55');
+    expect(report.troughs.map((t) => t.key)).toContain('theme.css dot-breathe 0.55');
   });
 
   it('states the reduced-motion steady state for each looping trough', () => {
@@ -1594,12 +1685,12 @@ describe('every @keyframes opacity trough is registered', () => {
 // ── a spot check the maths cannot fake ──────────────────────────────────────
 describe('the three well-trap rules the blocker was found in', () => {
   it.each([
-    ['chat.css', '.pr-body-preview'],
-    ['chat.css', '.dlg-reply-input'],
-    ['chat.css', '.msg-attach-gone'],
-  ])('%s %s is measured against the well it paints itself on', (file, selector) => {
-    const rows = report.measured.filter((m) => m.label.endsWith(`${file} ${selector}`));
-    expect(rows).toHaveLength(2);
+    '.pr-body-preview',
+    '.dlg-reply-input',
+    '.msg-attach-gone',
+  ])('%s is measured against the well it paints itself on', (selector) => {
+    const rows = rowsFor(selector);
+    expect(rows).toHaveLength(THEME_COUNT);
     for (const row of rows) {
       expect(row.detail).toContain('var(--bg-well)');
       expect(row.ratio).toBeGreaterThanOrEqual(4.5);
@@ -1619,13 +1710,13 @@ describe('the three well-trap rules the blocker was found in', () => {
 // ── account-pool project-card cells ─────────────────────────────────────────
 describe('the pool chip and stranded count are measured, not left in the blind spot', () => {
   it.each([
-    ['fleet.css .proj-card-pool', 'var(--ink-tertiary)'],
-    ["fleet.css .proj-card-pool[data-pool='untagged'], .proj-card-pool[data-pool='malformed'], .proj-card-pool[data-pool='unreadable'], .proj-card-pool[data-pool='unrecognised']", 'var(--status-attention-text)'],
-    ['fleet.css .proj-card-stranded', 'var(--status-attention-text)'],
+    ['.proj-card-pool', 'var(--ink-tertiary)'],
+    [".proj-card-pool[data-pool='untagged'], .proj-card-pool[data-pool='malformed'], .proj-card-pool[data-pool='unreadable'], .proj-card-pool[data-pool='unrecognised']", 'var(--status-attention-text)'],
+    ['.proj-card-stranded', 'var(--status-attention-text)'],
   ])('%s is grounded on the project card', (key, ink) => {
     expect(INHERITED_GROUNDS[key]?.under).toEqual(['var(--bg-surface)']);
-    const rows = report.measured.filter((m) => m.label.endsWith(key));
-    expect(rows, key).toHaveLength(2);
+    const rows = rowsFor(key);
+    expect(rows, key).toHaveLength(THEME_COUNT);
     for (const row of rows) {
       expect(row.detail, row.label).toContain(ink);
       expect(row.ratio, row.label).toBeGreaterThanOrEqual(4.5);
@@ -1636,12 +1727,12 @@ describe('the pool chip and stranded count are measured, not left in the blind s
 // ── account-pool picker cells ────────────────────────────────────────────────
 describe('the account-pool picker colours are measured, not left in the blind spot', () => {
   it.each([
-    ['fleet.css .acct-pool', 'var(--ink-tertiary)'],
-    ['fleet.css .acct-disclosure', 'var(--ink-secondary)'],
-    ['fleet.css .pool-note', 'var(--ink-tertiary)'],
+    ['.acct-pool', 'var(--ink-tertiary)'],
+    ['.acct-disclosure', 'var(--ink-secondary)'],
+    ['.pool-note', 'var(--ink-tertiary)'],
   ])('%s is grounded on the sheet it sits in', (key, ink) => {
-    const rows = report.measured.filter((m) => m.label.endsWith(key));
-    expect(rows, key).toHaveLength(2);
+    const rows = rowsFor(key);
+    expect(rows, key).toHaveLength(THEME_COUNT);
     expect(report.uncovered, key).not.toContain(key);
     expect(INHERITED_GROUNDS[key]?.under).toEqual(['var(--bg-sheet)']);
     for (const row of rows) {
@@ -1654,13 +1745,13 @@ describe('the account-pool picker colours are measured, not left in the blind sp
     // A selected project row replaces the sheet ground. Compare the registry
     // with THIS selector's declaration, not a generic CSS parse, so either side
     // changing independently fails rather than pricing an obsolete surface.
-    const key = 'fleet.css .proj-row--selected .acct-pool';
+    const key = '.proj-row--selected .acct-pool';
     const selectedRow = rulesOf(ROOT, 'src/fleet/fleet.css')
       .find((rule) => rule.selector === '.proj-row--selected');
     expect(selectedRow).toBeDefined();
     expect(INHERITED_GROUNDS[key]?.under).toEqual([bgOf(selectedRow?.body ?? '')]);
-    const rows = report.measured.filter((m) => m.label.endsWith(key));
-    expect(rows, key).toHaveLength(2);
+    const rows = rowsFor(key);
+    expect(rows, key).toHaveLength(THEME_COUNT);
     expect(report.uncovered, key).not.toContain(key);
     for (const row of rows) {
       expect(row.detail, row.label).toContain('var(--ink-tertiary)');
@@ -1681,13 +1772,13 @@ describe('the account-pool picker colours are measured, not left in the blind sp
 // leaving a rule unmeasured.
 describe('the Task 9 fleet-head, sheet, and account-chip colours are measured, not left in the blind spot', () => {
   it.each([
-    ['fleet.css .pool-new-label', 'var(--ink-tertiary)', 'var(--bg-sheet)'],
-    ['fleet.css .pool-epoch-lag', 'var(--ink-tertiary)', 'var(--bg-page)'],
-    ["fleet.css .acct-pool-chip[data-pool='untagged']", 'var(--ink-tertiary)', 'var(--bg-surface)'],
-    ["fleet.css .acct-pool-chip[data-pool='stale']", 'var(--status-attention-text)', 'var(--bg-surface)'],
+    ['.pool-new-label', 'var(--ink-tertiary)', 'var(--bg-sheet)'],
+    ['.pool-epoch-lag', 'var(--ink-tertiary)', 'var(--bg-page)'],
+    [".acct-pool-chip[data-pool='untagged']", 'var(--ink-tertiary)', 'var(--bg-surface)'],
+    [".acct-pool-chip[data-pool='stale']", 'var(--status-attention-text)', 'var(--bg-surface)'],
   ])('%s is grounded, not grandfathered', (key, ink, ground) => {
-    const rows = report.measured.filter((m) => m.label.endsWith(key));
-    expect(rows, key).toHaveLength(2);
+    const rows = rowsFor(key);
+    expect(rows, key).toHaveLength(THEME_COUNT);
     expect(report.uncovered, key).not.toContain(key);
     expect(GRANDFATHERED_UNCOVERED, key).not.toContain(key);
     expect(INHERITED_GROUNDS[key]?.under).toEqual([ground]);
@@ -1701,10 +1792,10 @@ describe('the Task 9 fleet-head, sheet, and account-chip colours are measured, n
 // ── account-pool session-row cells ──────────────────────────────────────────
 describe('the pool session cells are measured, not left in the blind spot', () => {
   it.each(['.sess-stranded', '.sess-offpool'])('%s clears both themes on the ordinary row', (selector) => {
-    const key = `fleet.css ${selector}`;
+    const key = selector;
     expect(INHERITED_GROUNDS[key]?.under).toEqual(['var(--bg-surface)']);
-    const rows = report.measured.filter((m) => m.label.endsWith(key));
-    expect(rows, key).toHaveLength(2);
+    const rows = rowsFor(key);
+    expect(rows, key).toHaveLength(THEME_COUNT);
     expect(report.uncovered, key).not.toContain(key);
     for (const row of rows) {
       expect(row.detail, row.label).toContain('var(--status-attention-text)');
@@ -1727,9 +1818,9 @@ describe('the spawn chip is measured, not left in the blind spot', () => {
     // UNCOVERED census — their ground is DOM knowledge a parser cannot recover —
     // so a new coloured cell beside them would silently join them there. The
     // INHERITED_GROUNDS entry is what makes it MEASURED.
-    expect(INHERITED_GROUNDS['fleet.css .sess-spawn']?.under).toEqual(['var(--bg-surface)']);
-    const rows = report.measured.filter((m) => m.label.endsWith('fleet.css .sess-spawn'));
-    expect(rows).toHaveLength(2);           // dark and light
+    expect(INHERITED_GROUNDS['.sess-spawn']?.under).toEqual(['var(--bg-surface)']);
+    const rows = rowsFor('.sess-spawn');
+    expect(rows).toHaveLength(THEME_COUNT);
     for (const row of rows) expect(row.ratio, row.label).toBeGreaterThanOrEqual(4.5);
   });
 
@@ -1740,10 +1831,10 @@ describe('the spawn chip is measured, not left in the blind spot', () => {
     // either, so without its own entry that half stays in the census while the
     // base half is measured — the worst of both, because the report then LOOKS
     // like the cell is covered.
-    const key = "fleet.css .sess-spawn[data-spawn='expired'], .sess-spawn[data-spawn='unrecognised'], .sess-spawn[data-spawn='narrow-widened']";
+    const key = ".sess-spawn[data-spawn='expired'], .sess-spawn[data-spawn='unrecognised'], .sess-spawn[data-spawn='narrow-widened']";
     expect(INHERITED_GROUNDS[key]?.under).toEqual(['var(--bg-surface)']);
-    const rows = report.measured.filter((m) => m.label.endsWith(key));
-    expect(rows).toHaveLength(2);
+    const rows = rowsFor(key);
+    expect(rows).toHaveLength(THEME_COUNT);
     for (const row of rows) expect(row.ratio, row.label).toBeGreaterThanOrEqual(4.5);
   });
 });
@@ -1751,10 +1842,10 @@ describe('the spawn chip is measured, not left in the blind spot', () => {
 // ── F3's program-ready badge (program-leverage wave 3) ─────────────────────
 describe("the program-ready badge is measured, not left in the blind spot", () => {
   it.each([
-    ['fleet.css .sheet-panel .proj-ready', 'var(--ink-tertiary)'],
-    ["fleet.css .sheet-panel .proj-ready[data-verdict='ready']", 'var(--status-busy-text)'],
-    ["fleet.css .sheet-panel .proj-ready[data-verdict='blocked']", 'var(--status-dead-text)'],
-    ['fleet.css .sheet-panel .proj-ready-why', 'var(--ink-tertiary)'],
+    ['.sheet-panel .proj-ready', 'var(--ink-tertiary)'],
+    [".sheet-panel .proj-ready[data-verdict='ready']", 'var(--status-busy-text)'],
+    [".sheet-panel .proj-ready[data-verdict='blocked']", 'var(--status-dead-text)'],
+    ['.sheet-panel .proj-ready-why', 'var(--ink-tertiary)'],
   ])('%s is grounded on the sheet it sits in', (key, ink) => {
     // The badge sits inside `.sheet-panel`, which paints
     // `background: var(--bg-sheet)`. Its selector NAMES that ancestor — which
@@ -1770,8 +1861,8 @@ describe("the program-ready badge is measured, not left in the blind spot", () =
     // the report LOOKING covered — the trap the spawn-chip variant entry above
     // spells out.
     expect(INHERITED_GROUNDS[key]?.under).toEqual(['var(--bg-sheet)']);
-    const rows = report.measured.filter((m) => m.label.endsWith(key));
-    expect(rows, key).toHaveLength(2);                    // dark and light
+    const rows = rowsFor(key);
+    expect(rows, key).toHaveLength(THEME_COUNT);
     for (const row of rows) {
       expect(row.detail, row.label).toContain(ink);
       expect(row.ratio, row.label).toBeGreaterThanOrEqual(4.5);
@@ -1782,8 +1873,8 @@ describe("the program-ready badge is measured, not left in the blind spot", () =
 // ── D-161's two new coloured children on the sign-in card ───────────────────
 describe("the sign-in block's ink is measured, not asserted in a comment", () => {
   it.each([
-    ['fleet.css .auth-block-title', 'var(--ink-primary)'],
-    ['fleet.css .auth-block-sub', 'var(--ink-tertiary)'],
+    ['.auth-block-title', 'var(--ink-primary)'],
+    ['.auth-block-sub', 'var(--ink-tertiary)'],
   ])('%s is grounded on the card it sits in', (key, ink) => {
     // Both are children of `.auth-block`, which sets
     // `background: var(--bg-surface)` two rules up in the SAME stylesheet — and
@@ -1793,24 +1884,31 @@ describe("the sign-in block's ink is measured, not asserted in a comment", () =>
     // the thing this file exists to make impossible. Same shape, and the same
     // fix, as the spawn chip above.
     expect(INHERITED_GROUNDS[key]?.under).toEqual(['var(--bg-surface)']);
-    const rows = report.measured.filter((m) => m.label.endsWith(key));
-    expect(rows, key).toHaveLength(2);                    // dark and light
+    const rows = rowsFor(key);
+    expect(rows, key).toHaveLength(THEME_COUNT);
     for (const row of rows) {
       expect(row.detail, row.label).toContain(ink);
       expect(row.ratio, row.label).toBeGreaterThanOrEqual(4.5);
     }
   });
 
-  it('leaves the header door in the census, because its ground is genuinely two', () => {
-    // NOT an oversight, and stated here so the next reader does not "fix" it:
-    // `.fleet-head` paints nothing, so `.accounts-door` sits on the page on a
-    // phone and on `.shell-nav`'s --bg-surface in the desktop sidebar, while an
-    // INHERITED_GROUNDS entry is a layer STACK and cannot say "either of these".
-    // Its `.mail-badge`/`.bell` neighbours are in the census for the same
-    // reason. The pair clears AA on BOTH candidate grounds (fleet.css carries
-    // the four numbers), so the census line is the whole cost.
-    expect(INHERITED_GROUNDS['fleet.css .accounts-door']).toBeUndefined();
-    expect(report.uncovered).toContain('fleet.css .accounts-door');
+  it('covers the header door on BOTH its grounds, which is why it left the census', () => {
+    // THIS USED TO ASSERT THE OPPOSITE, and the reason it flipped is the point.
+    // `.fleet-head` paints nothing, so a door sat on --bg-page on a phone and
+    // on `.shell-nav`'s --bg-surface in the desktop sidebar. An
+    // INHERITED_GROUNDS entry is a layer STACK and cannot say "either of
+    // these", so `.settings-door` was registered on one ground and
+    // `.accounts-door` was left in the frozen census as debt — the census line
+    // WAS the whole cost, as the old comment here said.
+    //
+    // Both doors are @ccrc/ui's `Door` now, and the token contract has no DOM
+    // chain to choose: design/contrast-check.mjs carries all four pairs
+    // outright. So the rules are gone from both the registry and the census,
+    // and the coverage went UP — `.accounts-door`'s ground was never measured
+    // by this gate before.
+    expect(INHERITED_GROUNDS['.accounts-door']).toBeUndefined();
+    expect(INHERITED_GROUNDS['.settings-door']).toBeUndefined();
+    expect(report.uncovered).not.toContain('.accounts-door');
     for (const ground of ['var(--bg-page)', 'var(--bg-surface)']) {
       for (const theme of [DARK, LIGHT]) {
         expect(ratio('var(--ink-secondary)', [ground], theme)).toBeGreaterThanOrEqual(4.5);
@@ -1835,7 +1933,9 @@ describe('the resume door is measured, not left in the blind spot', () => {
     // and would have read 6 after. The negative lookahead keeps `:active` (the
     // row this pin exists to catch) and drops the neighbour.
     const rows = report.measured.filter((m) => /\.run-row \.run-resume(?![\w-])/.test(m.label));
-    expect(rows).toHaveLength(4);            // base + :active, dark and light
+    // base + :active, in EVERY palette — two rules, not two themes, is the
+    // part of this count that is this rule's own.
+    expect(rows).toHaveLength(2 * THEME_COUNT);
     for (const row of rows) {
       expect(row.detail, row.label).toContain('on var(--bg-surface)');
       expect(row.ratio, row.label).toBeGreaterThanOrEqual(4.5);
@@ -1864,16 +1964,12 @@ describe('the /settings shell and its door are measured, not left in the blind s
   };
 
   it.each([
-    ['fleet.css .settings-back'],
-    ['fleet.css .settings-back:active'],
-    ['fleet.css .settings-title'],
-    ['fleet.css .settings-door'],
-    ['fleet.css .settings-door:active'],
+    ['.settings-title'],
   ])('%s is registered on the page and measured in both themes', (key) => {
     expect(INHERITED_GROUNDS[key]?.under).toEqual(['var(--bg-page)']);
     expect(report.uncovered).not.toContain(key);
-    const rows = report.measured.filter((m) => m.label.endsWith(key));
-    expect(rows, key).toHaveLength(2);                    // dark and light
+    const rows = rowsFor(key);
+    expect(rows, key).toHaveLength(THEME_COUNT);
     for (const row of rows) {
       expect(row.detail, row.label).toContain(`${inkOf(key)} on var(--bg-page)`);
       expect(row.ratio, row.label).toBeGreaterThanOrEqual(4.5);
@@ -1881,8 +1977,6 @@ describe('the /settings shell and its door are measured, not left in the blind s
   });
 
   it.each([
-    ['fleet.css .settings-door'],
-    ['fleet.css .settings-door:active'],
   ])('%s also clears AA on the desktop sidebar it sits on', (key) => {
     // Measured at d759c914 with this task's rules: --ink-secondary 8.67 dark /
     // 7.41 light, --ink-primary 15.68 / 16.58 on --bg-surface.
@@ -1902,9 +1996,13 @@ describe('the /settings shell and its door are measured, not left in the blind s
 // the app shell's --bg-page instead, so this checks THAT ground clears AA
 // too, off the rule's own declared ink (a retint re-measures both).
 describe('.build-line/.build-line-side--warn/.build-line-next also clear AA on the mobile ground they fall through to', () => {
-  const fleetRules = rulesOf(ROOT, 'src/fleet/fleet.css');
+  // The rules moved to @ccrc/ui with their component; the GROUNDS keys moved
+  // with them, and so must this scrape — a rule key is `<sheet> <selector>`,
+  // so a component migration rewrites it. `rulesOf` walks into the
+  // `@layer components` wrapper, so the three rules parse out unchanged.
+  const buildLineRules = rulesOf(ROOT, '../ui/src/components/build-line.css');
   const inkOf = (key: string): string => {
-    const rule = fleetRules.find((r) => ruleKey(r) === key);
+    const rule = buildLineRules.find((r) => ruleKey(r) === key);
     expect(rule, key).toBeDefined();
     const ink = declOf((rule as { body: string }).body, 'color');
     expect(ink, key).not.toBeNull();
@@ -1912,9 +2010,9 @@ describe('.build-line/.build-line-side--warn/.build-line-next also clear AA on t
   };
 
   it.each([
-    ['fleet.css .build-line'],
-    ['fleet.css .build-line-side--warn'],
-    ['fleet.css .build-line-next'],
+    ['.build-line'],
+    ['.build-line-side--warn'],
+    ['.build-line-next'],
   ])('%s also clears AA on the mobile ground (--bg-page)', (key) => {
     // Measured: --ink-tertiary 6.23 dark / 5.25 light (.build-line);
     // --status-attention-text 10.89 dark / 5.45 light (the other two).
@@ -1930,11 +2028,14 @@ describe('the child-of-run label is measured, not left in the blind spot (wave 5
     // Same shape as .sess-spawn/.sess-repo: a .sess-meta cell whose selector
     // names no painted ancestor, so without its INHERITED_GROUNDS entry it
     // would join the uncovered census, which new rules may not do.
-    const key = 'fleet.css .sess-child';
+    const key = '.sess-child';
     expect(INHERITED_GROUNDS[key]?.under).toEqual(['var(--bg-surface)']);
     expect(report.uncovered).not.toContain(key);
-    const rows = report.measured.filter((m) => m.label.endsWith(key));
-    expect(rows, key).toHaveLength(2);           // dark and light
+    const rows = rowsFor(key);
+    // THEME_COUNT, not 2: this branch's audit measures every palette in the
+    // catalogue, not only DARK and LIGHT — the same count its siblings
+    // .sess-spawn and .sess-repo are held to a few describes above.
+    expect(rows, key).toHaveLength(THEME_COUNT);
     for (const row of rows) expect(row.ratio, row.label).toBeGreaterThanOrEqual(4.5);
   });
 });

@@ -96,6 +96,7 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
+import { componentFamily } from './sourceScan.js';
 import { fileURLToPath } from 'node:url';
 // The path to the ccd script is spelled in exactly ONE file in this tree and
 // `single-definition.test.ts` enforces it — import the constant, never re-spell
@@ -566,7 +567,9 @@ describe('README: what a retag does, and when (spec §5.5.4, §5.8, §5.7, §5.1
     expect(s, 'a hold defers a retag; the paragraph must say so').toMatch(/held|hold/);
     expect(s, 'the visible waiting state is the one an operator can act on').toContain('data-offpool');
     // Grounded in the PWA cell that renders it.
-    expect(read('pwa/src/fleet/SessionLine.tsx'),
+    // The row is `SessionLine` AND its meta line (`SessionMeta.tsx`), which is
+    // where this cell sits — read the family, not a path (`componentFamily`).
+    expect(componentFamily(root, 'pwa/src/fleet/SessionLine.tsx'),
       'the PWA no longer marks an off-pool row — the README describes a cell that is gone')
       .toContain('data-offpool');
   });

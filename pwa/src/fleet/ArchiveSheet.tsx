@@ -27,14 +27,15 @@ import {
   ARCHIVE_REFUSALS, ARCHIVE_STOP_ONLY, TERMINAL_RUN_STATES, archiveInterrupts, inArchivedFold, isArchiveRefusal,
   substrateFault, type ArchiveRefusal, type FleetSession,
 } from '../../../shared/api';
-import { Sheet } from '../components/Sheet';
-import { toast } from '../components/Toast';
+import { Button, QC_ACTIONS, QC_CONSEQUENCE, Sheet, toast } from '@ccrc/ui';
 import { ARCHIVE_REFUSAL_TEXT, ApiError, api, apiErrorText, archivePartial } from '../lib/api';
 import { useFleetStore, type FleetStore } from '../stores/fleet';
 import {
-  CLAIMED_CONSEQUENCE, claimedSentence, isArchiveConflictRun, runPhrase, type ArchiveConflictRun,
+  CLAIMED_CONSEQUENCE, CLAIMED_TITLE, claimedSentence, isArchiveConflictRun, runPhrase,
+  type ArchiveConflictRun,
 } from './ArchiveConflictSheet';
 import './fleet.css';
+import { substrateFaultText } from './substrateWords';
 
 /** Whether a session is already put away, so its menu and its actions sheet offer Restore where every other session
  *  offers Archive (spec §5.2). Every row the Archived fold holds (`inArchivedFold`, the ONE predicate — never
@@ -149,7 +150,7 @@ export function ArchiveSheet({
     // re-read at the moment of firing and the refusal named rather than swallowed.
     const fault = substrateFault(session);
     if (fault !== null) {
-      setError(`tmux unreachable — ${fault.text}`);
+      setError(substrateFaultText(fault));
       return;
     }
     const mine = gen.current;
@@ -220,23 +221,23 @@ export function ArchiveSheet({
   switch (ask.kind) {
     case 'confirm':
       title = workspace ? 'Archive this workspace?' : 'Archive this session?';
-      body = <p className="qc-consequence">{workspace
+      body = <p className={QC_CONSEQUENCE}>{workspace
         ? 'It goes offline and folds into Archived. Restore brings it back; once automatic cleanup is on, it is cleaned up seven days after its archive.'
         : 'It goes offline and folds into Archived. Restore starts it again. It is never deleted.'}</p>;
       primary = { label: 'Archive', next: consent };
       break;
     case 'busy':
       title = "It's working. Archive anyway?";
-      body = <p className="qc-consequence">The turn in progress is lost.</p>;
+      body = <p className={QC_CONSEQUENCE}>The turn in progress is lost.</p>;
       primary = { label: 'Archive anyway', next: { ...consent, interrupt: true } };
       break;
     case 'programme':
       title = `It has ${ask.runs.length} open ${ask.runs.length === 1 ? 'run' : 'runs'}. End its programme too?`;
       body = (
         <>
-          <p className="qc-consequence">Its workers will be cleaned up.</p>
-          <p className="qc-consequence">{`${ask.runs.map(runPhrase).join('; ')}.`}</p>
-          <p className="qc-consequence">
+          <p className={QC_CONSEQUENCE}>Its workers will be cleaned up.</p>
+          <p className={QC_CONSEQUENCE}>{`${ask.runs.map(runPhrase).join('; ')}.`}</p>
+          <p className={QC_CONSEQUENCE}>
             To pause a programme instead, use the coordinator pause switch on the Runs screen — archiving its
             coordinator does not pause it.
           </p>
@@ -245,23 +246,23 @@ export function ArchiveSheet({
       primary = { label: 'End programme and archive', next: { ...consent, programme: true } };
       break;
     case 'claimed':
-      title = 'This workspace is claimed';
+      title = CLAIMED_TITLE;
       body = (
         <>
-          <p className="qc-consequence">{claimedSentence(ask.runs.length > 0 ? ask.runs : null)}</p>
-          <p className="qc-consequence">{CLAIMED_CONSEQUENCE}</p>
+          <p className={QC_CONSEQUENCE}>{claimedSentence(ask.runs.length > 0 ? ask.runs : null)}</p>
+          <p className={QC_CONSEQUENCE}>{CLAIMED_CONSEQUENCE}</p>
         </>
       );
       primary = { label: 'Archive anyway', next: { ...consent, force: true } };
       break;
     case 'refused':
       title = "Couldn't archive";
-      body = <p className="qc-consequence">{ask.text}</p>;
+      body = <p className={QC_CONSEQUENCE}>{ask.text}</p>;
       primary = null;
       break;
     case 'partly':
       title = 'The programme was only partly ended';
-      body = <p className="qc-consequence">{ask.text}</p>;
+      body = <p className={QC_CONSEQUENCE}>{ask.text}</p>;
       primary = null;
       break;
   }
@@ -270,32 +271,32 @@ export function ArchiveSheet({
     <Sheet open onClose={onClose} title={title} eyebrow={session.project}>
       <div className="archive-conflict-sheet">
         {ended.length > 0 && (
-          <p className="qc-consequence">{`Its programme was ended first: ${ended.map(runPhrase).join('; ')}.`}</p>
+          <p className={QC_CONSEQUENCE}>{`Its programme was ended first: ${ended.map(runPhrase).join('; ')}.`}</p>
         )}
         {body}
         {/* After a `stopOnlyClass` refusal: what "Stop only" does, or where it is. */}
         {stopOnly && (
-          <p className="qc-consequence">Stop only takes it offline without archiving it: it stays on the board, stopped.</p>
+          <p className={QC_CONSEQUENCE}>Stop only takes it offline without archiving it: it stays on the board, stopped.</p>
         )}
         {stopOnlyClass && !stopOnly && (
-          <p className="qc-consequence">Stop only is in this session's actions sheet on the board.</p>
+          <p className={QC_CONSEQUENCE}>Stop only is in this session's actions sheet on the board.</p>
         )}
-        <div className="qc-actions">
+        <div className={QC_ACTIONS}>
           {primary !== null && (
-            <button type="button" className="btn-primary" disabled={busy} onClick={() => send(primary!.next)}>
+            <Button variant="primary" disabled={busy} onClick={() => send(primary!.next)}>
               {busy ? 'Archiving…' : primary.label}
-            </button>
+            </Button>
           )}
           {stopOnly && (
-            <button type="button" className="btn-primary" disabled={stopFault !== null}
-                    title={stopFault !== null ? `tmux unreachable — ${stopFault.text}` : undefined}
+            <Button variant="primary" disabled={stopFault !== null}
+                    title={stopFault === null ? undefined : substrateFaultText(stopFault)}
                     onClick={() => { onStopOnly!(sid); onClose(); }}>
               Stop only
-            </button>
+            </Button>
           )}
-          <button type="button" className="btn-ghost" disabled={busy} onClick={onClose}>
+          <Button variant="ghost" disabled={busy} onClick={onClose}>
             {primary === null && !stopOnly ? 'Close' : 'Cancel'}
-          </button>
+          </Button>
         </div>
         {error !== null && <p className="abandon-error">{error}</p>}
       </div>

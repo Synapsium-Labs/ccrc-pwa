@@ -39,6 +39,17 @@
 //   `declare -F tmux` -> `false`                -> row (e)
 //   `local CCD_TICK_CTX=1` -> `export …`        -> row (d)
 //   the `local` moved above the pre-flight     -> row (b)
+//
+// TASK 10 MUTATION ROWS (D-4962, tick-diet spec §6.3): `_share_pct_to`'s memo
+// lives and dies with one `_swap_target` call. Each row is measured on the
+// working tree:
+//   delete `; local CCD_SHARE_MEMO_ON=1; local -A CCD_SHARE_MEMO=()` from
+//     `_swap_target`, and add a global memo at top level               -> seam (b)
+//   drop the `CCD_SHARE_MEMO_ON` test from `_share_pct_to`              -> seam (c)
+//   delete the `_swap_target` memo line and add nothing                 -> seam (a)
+//   store the value with rc 0 in the memo                               -> seam (d)
+//   drop ` && -n "$2"` from the store line's condition                 -> seam (e)
+//   drop ` && -n "$2"` from the lookup condition only                  -> seam (e)
 import { describe, it, expect, afterAll } from 'vitest';
 import { spawnSync, type SpawnSyncReturns } from 'node:child_process';
 import fs from 'node:fs';
@@ -228,5 +239,134 @@ describe('the tick context: dynamically scoped, after the pre-flight, never expo
 
   it('(d) a child `bash -c` run from a tick helper does not: the variable is never exported', () => {
     expect(stubbed('timeout').log.filter((l) => l.startsWith('child '))).toEqual(['child unset']);
+  }, 120_000);
+});
+
+describe('`_share_pct`\'s memo lives and dies with one `_swap_target` call (D-4962, tick-diet spec §6.3, plan Task 10)', () => {
+  const ID = 'claude-a-tick';
+  const python3Counter = [
+    'python3() {',
+    '  printf \'%s\\n\' "$3" >> "$HOME/seam-py"',
+    '  command python3 "$@"',
+    '}',
+  ].join('\n');
+  const wrapServiceable = [
+    '__src=$(declare -f _serviceable)',
+    'eval "__real_serviceable${__src#_serviceable}"',
+    '_serviceable() {',
+    '  printf \'%s %s\\n\' "$1" "${2-}" >> "$HOME/seam-svc"',
+    '  __real_serviceable "$@"',
+    '}',
+  ].join('\n');
+
+  it('(a) one `_swap_target` call reads each wrapper\'s share at most once, and `_serviceable` asks about home more than once', () => {
+    const h = harness();
+    plantFixture(h.home, ID, 'fable-leaving');
+    const snippet = [
+      python3Counter,
+      wrapServiceable,
+      `_swap_target "${ID}" claude-b claude-a "" 0 > "$HOME/ans1"`,
+      'echo "rc=$?" >> "$HOME/ans1"',
+    ].join('\n');
+    const r = run(h.home, snippet);
+    expect(r.status, r.stderr ?? '').toBe(0);
+    const svc = lines(path.join(h.home, 'seam-svc'));
+    const py = lines(path.join(h.home, 'seam-py'));
+    expect(svc.filter((l) => l === 'claude-a fable').length, 'non-vacuity: home was not asked about twice').toBeGreaterThanOrEqual(2);
+    expect(py, 'each wrapper was read at most once').toEqual([...new Set(py)]);
+    expect(py).toContain('claude-a');
+    const ans = lines(path.join(h.home, 'ans1'));
+    expect(ans, 'the answer was empty or rc was wrong').toHaveLength(2);
+    expect(ans[1]).toBe('rc=0');
+    expect(ans[0]).not.toBe('claude-a');
+    expect(ans[0]).not.toBe('claude-b');
+  }, 120_000);
+
+  it('(b) two `_swap_target` calls in one shell read the sweep anew after it is rewritten', () => {
+    const h = harness();
+    plantFixture(h.home, ID, 'fable-leaving');
+    const snippet = [
+      python3Counter,
+      `_swap_target "${ID}" claude-b claude-a "" 0 > "$HOME/ans1"`,
+      'echo "rc=$?" >> "$HOME/ans1"',
+      `command python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); d["perAccount"]["claude-a"]["fableShare"]["estimate"]=0.12; json.dump(d, open(sys.argv[1],"w"))' "$REG/usage/sweep/latest.json"`,
+      `_swap_target "${ID}" claude-b claude-a "" 0 > "$HOME/ans2"`,
+      'echo "rc=$?" >> "$HOME/ans2"',
+    ].join('\n');
+    const r = run(h.home, snippet);
+    expect(r.status, r.stderr ?? '').toBe(0);
+    const ans1 = lines(path.join(h.home, 'ans1'));
+    const ans2 = lines(path.join(h.home, 'ans2'));
+    expect(ans1[1]).toBe('rc=0');
+    expect(ans2[1]).toBe('rc=0');
+    expect(ans1[0]).not.toBe('claude-a');
+    expect(ans1[0]).not.toBe('claude-b');
+    expect(ans2[0]).toBe('claude-a');
+    expect(ans1[0]).not.toBe(ans2[0]);
+    const py = lines(path.join(h.home, 'seam-py'));
+    expect(py.filter((l) => l === 'claude-a').length).toBe(2);
+  }, 120_000);
+
+  it('(c) outside `_swap_target`, two `_serviceable` calls and two `_class_gate` calls each run `python3` twice', () => {
+    const h = harness();
+    plantFixture(h.home, ID, 'fable-leaving');
+    const snippet = [
+      python3Counter,
+      `{ _serviceable claude-a fable; __r=$?; echo; echo "rc=$__r"; } > "$HOME/s1"`,
+      `{ _serviceable claude-a fable; __r=$?; echo; echo "rc=$__r"; } > "$HOME/s2"`,
+      `{ _class_gate claude-a fable; __r=$?; echo; echo "rc=$__r"; } > "$HOME/s3"`,
+      `{ _class_gate claude-a fable; __r=$?; echo; echo "rc=$__r"; } > "$HOME/s4"`,
+    ].join('\n');
+    const r = run(h.home, snippet);
+    expect(r.status, r.stderr ?? '').toBe(0);
+    for (const f of ['s1', 's2']) {
+      const got = lines(path.join(h.home, f));
+      expect(got).toEqual(['50', 'rc=1']);
+    }
+    for (const f of ['s3', 's4']) {
+      const got = lines(path.join(h.home, f));
+      expect(got).toEqual(['rc=1']);
+    }
+    const py = lines(path.join(h.home, 'seam-py'));
+    expect(py.filter((l) => l === 'claude-a').length).toBe(4);
+  }, 120_000);
+
+  const rcCases: { name: string; setup: string; stub?: string; want: string; rc: number }[] = [
+    { name: 'stale sweep', setup: `command python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); d["finishedAt"]="2020-01-01T00:00:00Z"; json.dump(d, open(sys.argv[1],"w"))' "$REG/usage/sweep/latest.json"`, want: 'stale', rc: 2 },
+    { name: 'python3 rc 127', setup: '', stub: 'python3() { printf \'%s\\n\' "$3" >> "$HOME/seam-py"; return 127; }', want: 'no-figure', rc: 2 },
+    { name: 'python3 rc 126', setup: '', stub: 'python3() { printf \'%s\\n\' "$3" >> "$HOME/seam-py"; return 126; }', want: 'no-figure', rc: 2 },
+    { name: 'python3 rc 137', setup: '', stub: 'python3() { printf \'%s\\n\' "$3" >> "$HOME/seam-py"; return 137; }', want: 'no-figure', rc: 2 },
+    { name: 'fresh 0.5 sweep', setup: '', want: '50', rc: 1 },
+  ];
+  it.each(rcCases)('(d) the memo carries rc $rc through a repeat: $name', ({ setup, stub, want, rc }) => {
+    const h = harness();
+    plantFixture(h.home, ID, 'fable-leaving');
+    // The setup runs BEFORE the counter, so a stale sweep's rewrite is not counted.
+    const snippet = [
+      setup,
+      stub ?? python3Counter,
+      '__memo_scope() { local CCD_SHARE_MEMO_ON=1; local -A CCD_SHARE_MEMO=(); { _serviceable claude-a fable; __r=$?; echo; echo "rc=$__r"; } > "$HOME/d1"; { _serviceable claude-a fable; __r=$?; echo; echo "rc=$__r"; } > "$HOME/d2"; }',
+      '__memo_scope',
+    ].join('\n');
+    const r = run(h.home, snippet);
+    expect(r.status, r.stderr ?? '').toBe(0);
+    const d1 = lines(path.join(h.home, 'd1'));
+    const d2 = lines(path.join(h.home, 'd2'));
+    expect(d1).toEqual([want, `rc=${rc}`]);
+    expect(d2).toEqual([want, `rc=${rc}`]);
+    // NON-VACUITY: the second answer came from the memo, so the reader ran once.
+    expect(lines(path.join(h.home, 'seam-py')), 'the repeat was not served from the memo').toEqual(['claude-a']);
+  }, 120_000);
+
+  it('(e) the empty-wrapper departure (D-5042): the shell survives and both calls run', () => {
+    const h = harness();
+    const snippet = [
+      '__memo_scope() { local CCD_SHARE_MEMO_ON=1; local -A CCD_SHARE_MEMO=(); _share_pct_to v ""; echo "rc=$? v=[$v]"; _share_pct_to v ""; echo "rc=$? v=[$v]"; echo survived; }',
+      '__memo_scope',
+    ].join('\n');
+    const r = run(h.home, snippet);
+    expect(r.status, r.stderr ?? '').toBe(0);
+    expect((r.stdout ?? '').split('\n').filter(Boolean)).toEqual(['rc=1 v=[]', 'rc=1 v=[]', 'survived']);
+    expect(r.stderr ?? '').not.toContain('bad array subscript');
   }, 120_000);
 });

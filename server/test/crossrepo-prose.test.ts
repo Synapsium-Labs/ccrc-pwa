@@ -12,6 +12,7 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
+import { componentFamily } from './sourceScan.js';
 import { fileURLToPath } from 'node:url';
 import { IDLE_RUN_STATES, RUN_REFUSE_CODES, TERMINAL_RUN_STATES } from '../../shared/api.js';
 
@@ -184,7 +185,9 @@ describe('README: cross-repo programmes', () => {
   });
 
   it("names the board's three cues, grounded in the PWA files that render them", () => {
-    const runsScreen = read('pwa/src/screens/RunsScreen.tsx');
+    // The board is a screen AND its row (`RunRow.tsx`), so this reads the
+    // family rather than a path — see `componentFamily`.
+    const runsScreen = componentFamily(REPO, 'pwa/src/screens/RunsScreen.tsx');
     const card = read('pwa/src/fleet/ProjectCard.tsx');
     expect(runsScreen, 'the runs screen carries no `run-project` — wave 2 has not landed')
       .toContain('run-project');

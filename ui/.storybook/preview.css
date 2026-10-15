@@ -1,0 +1,20 @@
+/* Storybook's style entry, and it MUST mirror `pwa/src/styles/base.css`.
+ *
+ * The reset is imported `layer(base)` rather than plainly, and that is the
+ * whole point of this file existing. A plain `import '../src/styles/reset.css'`
+ * from preview.ts loads the vendored Tailwind preflight UNLAYERED, and
+ * unlayered rules beat every cascade layer — so preflight's
+ * `button { background-color: transparent }` and its `border-radius: 0` won
+ * over `@layer utilities`'s `.bg-accent` and `.rounded-md`, and every story
+ * rendered its buttons with no fill and square corners while `min-h-tap`,
+ * `text-base` and `font-ui` (which preflight does not touch) applied normally.
+ *
+ * That is not a Storybook quirk to work around here — it is the app's own load
+ * order, and the divergence is what made the bug invisible. Keep these two
+ * lines identical in shape to base.css's first two.
+ *
+ * theme.css leads because it carries Tailwind's own `@import`s, and a CSS
+ * `@import` that follows any rule is dropped — silently, on the flattened
+ * result. */
+@import '../src/styles/theme.css';
+@import '../src/styles/reset.css' layer(base);

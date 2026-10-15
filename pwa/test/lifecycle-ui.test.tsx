@@ -11,12 +11,14 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { AccountUsage, FleetSession } from '../../shared/api';
-import { ToastHost } from '../src/components/Toast';
+import { fleetSession as baseSession } from './fleetFixture';
+import { ToastHost } from '@ccrc/ui';
 import { api, ApiError } from '../src/lib/api';
 import { createFleetStore, type FleetStore } from '../src/stores/fleet';
 import { createSessionStore } from '../src/stores/session';
 import { NewSessionSheet } from '../src/fleet/NewSessionSheet';
-import { SwapSheet, pickableWrappers } from '../src/fleet/SwapSheet';
+import { SwapSheet } from '../src/fleet/SwapSheet';
+import { pickableWrappers } from '../src/fleet/accountPicker';
 import { SessionScreen } from '../src/screens/SessionScreen';
 import { TEST_ROSTER } from './rosterFixture';
 
@@ -38,28 +40,23 @@ const fakeSocket = (): WebSocket =>
     close(): void {},
   }) as unknown as WebSocket;
 
-const fleetSession = (patch: Partial<FleetSession> = {}): FleetSession => ({
-  id: 'claude:OpenClawHetzner',
-  wrapper: 'claude',
-  // An ACCOUNT ID, not a path. `assembleFleet` writes `r.home ?? idHomeWrapper(...)`
-  // (server/src/fleet.ts) and every reader treats it as a wrapper id — SwapSheet
-  // now turns it into an account LABEL, which the old `/home/rc` here would have
-  // rendered verbatim into the sheet copy. A fixture that encodes the wrong
-  // assumption reads as coverage while measuring nothing.
-  home: 'claude',
-  project: 'OpenClawHetzner',
-  workdir: '/root/projects/OpenClawHetzner',
-  workspace: null,
-  name: null,
-  status: 'idle',
-  statusUpdatedAt: Date.now() - 2 * MIN,
-  limits: { five: 62, seven: 71 },
-  dialogPending: false, model: null, effort: null, ultracode: false, branch: null, ctxPct: null, paneCols: null, tasks: null, pr: null, archivedAt: null, archivedBytes: null,
-  hookState: null, askSummary: null, subagents: null, graphQueries: null, graphGateDenials: null, held: null, bucket: 'idle', bucketSince: null, unmeasured: [], statusUnmeasured: false,
-  lifecycle: null, stoppedBy: null, swapBlocked: null, stranded: null, substrate: null, started: true, spawnState: null, ask: null, usage: null, boardProject: null, route: null, child: { kind: 'none' }, releasedFrom: null,
-  version: null,
-  ...patch,
-});
+const fleetSession = (patch: Partial<FleetSession> = {}): FleetSession =>
+  baseSession({
+    id: 'claude:OpenClawHetzner',
+    // An ACCOUNT ID, not a path. `assembleFleet` writes `r.home ?? idHomeWrapper(...)`
+    // (server/src/fleet.ts) and every reader treats it as a wrapper id — SwapSheet
+    // now turns it into an account LABEL, which a `/home/rc` here would have
+    // rendered verbatim into the sheet copy. A fixture that encodes the wrong
+    // assumption reads as coverage while measuring nothing. (The shared fixture's
+    // own default is `'claude'` for the same reason; this restates it because
+    // this file is where the mistake was made.)
+    home: 'claude',
+    project: 'OpenClawHetzner',
+    workdir: '/root/projects/OpenClawHetzner',
+    statusUpdatedAt: Date.now() - 2 * MIN,
+    limits: { five: 62, seven: 71 },
+    ...patch,
+  });
 
 /** Fleet store seeded with two live sessions: claude (62/71) and claude2
  *  (8/22, the least loaded); claude-corp and gpt have no live session. */

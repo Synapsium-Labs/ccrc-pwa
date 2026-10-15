@@ -12,8 +12,8 @@
 // comes from `isImageClip` on its NAME, the same answer the server and the
 // bubble reach, rather than from a `File.type` the OS may not have set.
 import { useEffect, useRef, useState } from 'react';
+import { toast, type StagedImage } from '@ccrc/ui';
 import { CLIP_DOC_EXTS, hasClipExt, isImageClip } from '../../../shared/api';
-import { toast } from '../components/Toast';
 import { api, apiErrorText, uploadErrorText } from '../lib/api';
 
 /** PNGs under this size upload untouched — lossless screenshots stay lossless. */
@@ -35,6 +35,10 @@ const EXT_FOR_TYPE: Record<string, string> = {
  * "open the gallery", and no extension list would — while documents go in as
  * EXTENSIONS, because the type a phone reports for a .md or .rtf is unreliable
  * and the server gates on the extension anyway.
+ *
+ * Derived HERE and handed to `@ccrc/ui`'s `AttachButton` as its `accept` prop:
+ * the design system may not take a value from shared/, so the one derivation
+ * stays on the app side of the boundary, next to the list it reads.
  */
 export const ATTACH_ACCEPT = ['image/*', ...CLIP_DOC_EXTS.map((e) => `.${e}`)].join(',');
 
@@ -113,20 +117,6 @@ export function clipboardFiles(data: DataTransfer | null): File[] {
 }
 
 export const MAX_IMAGES = 4;
-
-export interface StagedImage {
-  key: string;
-  file: File;
-  /** Object URL behind the chip's thumbnail — IMAGES ONLY. A document has no
-   *  preview to draw, and minting a URL nobody renders is a leak waiting for
-   *  someone to forget the matching revoke. Absent means "draw the doc chip". */
-  previewUrl?: string;
-  state: 'uploading' | 'staged' | 'failed';
-  path?: string;
-  width?: number;
-  height?: number;
-  error?: string;
-}
 
 export interface StagedImages {
   images: StagedImage[];

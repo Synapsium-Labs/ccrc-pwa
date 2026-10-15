@@ -7,12 +7,11 @@
 import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { repoLabel, substrateFault, type RouteField } from '../../../shared/api';
-import { Skeleton } from '../components/Skeleton';
-import { toast } from '../components/Toast';
+import { ATTENTION_DOT, Button, MailStrip, Skeleton, TaskStrip, toast } from '@ccrc/ui';
 import { SwapSheet } from '../fleet/SwapSheet';
 import { ArchiveSheet, restoreSession } from '../fleet/ArchiveSheet';
 import { accountHue, accountLabel } from '../lib/accounts';
-import { api, ApiError, apiErrorText } from '../lib/api';
+import { api, ApiError, failedTo } from '../lib/api';
 import { useKeyboardInset } from '../lib/keyboard';
 import { navigate } from '../lib/router';
 import { ack } from '../lib/seen';
@@ -21,14 +20,15 @@ import { getSessionStore, type SessionStore } from '../stores/session';
 import { ChatList } from '../session/ChatList';
 import { Composer } from '../session/Composer';
 import { DialogSheet } from '../session/DialogSheet';
-import { MailStrip } from '../session/MailStrip';
 import { PickSheet } from '../session/PickSheet';
 import { ReapSheet } from '../session/ReapSheet';
+import { useQueuedRoute } from '../session/useQueuedRoute';
+import { routeView } from '../session/routeView';
+import { substrateFaultTitle } from '../fleet/substrateWords';
 import { SessionHeader } from '../session/SessionHeader';
 import { HistoryTab } from '../session/HistoryTab';
-import { TaskStrip } from '../session/TaskStrip';
 import { TerminalDrawer } from '../session/TerminalDrawer';
-import { modelOptions, effortOptions, modelReadbackFor, effortIsKnown, type PickOption } from '../lib/models';
+import { modelOptions, effortOptions, type PickOption } from '../lib/models';
 import '../session/chat.css';
 
 /** Keyboard discipline: the bottom inset the on-screen keyboard covers. The
@@ -91,38 +91,11 @@ export function SessionScreen({
   const [reapOpen, setReapOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
   const composerRef = useRef<HTMLDivElement>(null);
-  // A routing write in flight, until the fleet frame reads it back — or 60s
-  // pass with no confirmation (routing spec §5.3, slice 4, Task 5). `readback`
-  // rides along so the read-back effect below never has to re-derive the
-  // option list that produced this write.
-  const [queued, setQueued] = useState<{ field: RouteField; value: string; readback: string } | null>(null);
-  const queuedTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const clearQueuedTimer = (): void => {
-    if (queuedTimer.current !== null) {
-      clearTimeout(queuedTimer.current);
-      queuedTimer.current = null;
-    }
-  };
-  useEffect(() => clearQueuedTimer, []);
-
-  // The read-back half: a fleet frame that agrees with a queued write clears
-  // it (and the timeout that would otherwise clear it at 60s with the
-  // unconfirmed toast). `effort` compares the live level directly (or
-  // `live.ultracode` for the `ultracode` value, since that is a separate
-  // boolean on the wire, not an effort string); `class` compares the queued
-  // row's `readback` key against the live model string the same loose way
-  // `modelOptions`' own `active` highlight already does.
-  useEffect(() => {
-    if (queued === null) return;
-    const agrees = queued.field === 'effort'
-      ? (queued.value === 'ultracode' ? live?.ultracode === true : live?.effort === queued.value)
-      : (live?.model ?? '').toLowerCase().includes(queued.readback);
-    if (agrees) {
-      clearQueuedTimer();
-      setQueued(null);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [queued, live?.effort, live?.ultracode, live?.model]);
+  // A routing write in flight, until the fleet frame reads it back — the
+  // badge, its 60s timer and every carve-out that cancels it live in
+  // `useQueuedRoute`. `live` is read below; `routeInfo` is read further down,
+  // so the hook takes the same question in its own words.
+  const queued = useQueuedRoute(live, (live?.route ?? null) !== null);
 
   useEffect(() => {
     // Session sockets live with the screen: resume rides `?since=` on return.
@@ -184,116 +157,19 @@ export function SessionScreen({
   // older ccd, or a session it has never routed) leaves every line here
   // inert and `queuedField` below falls through to exactly today's
   // behaviour — S6-R4's "nothing changes" contract.
+  // Everything the ROUTING RECORD says, read once (`routeView`): the two
+  // intended values, the two inert lanes, the two unreadable fields, and the
+  // wire's own queued verdict. Pure, and ~95 lines of branch-by-branch
+  // reasoning that had nothing to do with rendering.
   const routeInfo = live?.route ?? null;
-  const classIntended = routeInfo?.fields.class ?? null;
-  const effortIntended = routeInfo?.fields.effort ?? null;
-  const classInert = routeInfo?.inert.includes('class') ?? false;
-  const effortInert = routeInfo?.inert.includes('effort') ?? false;
-  // Fix round 2, finding 1 (ruling S6-R5): a field named in `route.unreadable`
-  // is UNKNOWN, not "never routed" — its own read failed this pass, so it is
-  // ALSO absent from `route.fields` (never both). `classIntended`/
-  // `effortIntended` above are already `null` for it, same as a genuinely
-  // never-routed field, but that would otherwise fall back to the loose
-  // live-pane match (`modelOptions`/`effortOptions`'s own `intended === null`
-  // branch) and light a row anyway — a claim this read never established.
-  // `RoutingOverride.unreadable` below forces no active row for exactly this
-  // field, on top of the queued badge already skipping it for having no
-  // `intended` to compare.
-  //
-  // Whole-branch review, fix wave #5: `routeInfo.unreadable` is REQUIRED on
-  // a freshly-assembled `FleetSession.route` and on anything that has been
-  // through `reviveRoute` (the persisted-snapshot path), but the live
-  // `fleet` WS frame is never revived — `stores/fleet.ts`'s `asFleetMsg`
-  // casts the raw frame straight to `FleetMsg` — so a frame from an older
-  // server that predates this key arrives with `route` non-null and
-  // `route.unreadable` genuinely `undefined`. `routeInfo?.unreadable`
-  // alone still throws on `.includes` in that case; read it tolerantly
-  // ONCE here, the one place either field below is derived from it.
-  const routeUnreadable = routeInfo?.unreadable ?? [];
-  const classUnreadable = routeUnreadable.includes('class');
-  const effortUnreadable = routeUnreadable.includes('effort');
-  // Fix wave #4: `pick()` decides the local-timer carve-out from `routeInfo`
-  // at TAP TIME — a tap on a session that had never been routed yet
-  // (`route: null`) arms the 60s "not confirmed" toast below, same as
-  // always. Once the FIRST routing record for this session lands on any
-  // later fleet frame, `queuedField` below hands the badge to the wire for
-  // good, but nothing disarmed that already-running local timer — left
-  // alone it still fires 60s after the tap and pops a false "not confirmed"
-  // toast for a write the wire has since taken over entirely. This clears
-  // both the moment `routeInfo` stops being null.
-  useEffect(() => {
-    if (routeInfo === null) return;
-    clearQueuedTimer();
-    setQueued(null);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [routeInfo !== null]);
-  // The intended value's readback vs. the live read-back: `live.effort`
-  // directly for effort (`ultracode` is its own boolean, not an effort
-  // string — the same split `pick`'s own read-back effect already makes),
-  // the model display name for class, reusing `modelOptions`' own loose
-  // comparison through `modelReadbackFor`. An INERT field is never
-  // "queued" — ccd will not apply it on this lane, so there is nothing for a
-  // badge to wait on (`PickSheet` marks its row `inertOnThisLane` instead).
-  //
-  // Fix round 1, finding 1: two more conditions never light this badge,
-  // mirroring the pre-existing LOCAL-write carve-out below (`pick`'s own
-  // "neither value leaves a mark the pane can read back" comment) instead of
-  // leaving the wire path with none of it:
-  //   - `effort: 'auto'` / `class: 'default'` are ccd's absent-equivalents
-  //     (`ccd/ccd:16189-16192`'s `_route_apply_now` types NOTHING for
-  //     `auto` — "the live level stands" — so `live.effort` can never read
-  //     back `auto`, and a wrapper's own default has no distinguishing
-  //     model string `default` could ever match). Both AGREE unconditionally.
-  //   - an intended value that names no row on THIS wrapper's own option
-  //     list (`effortIsKnown` false, or `modelReadbackFor` null) is a word
-  //     ccd itself will never confirm here — a rejected/stale/foreign-build
-  //     registry value (the registry read behind `route` is deliberately
-  //     unvalidated). Nothing on this pane can ever read it back, so it is
-  //     UNMEASURABLE, not queued forever: no picker row highlights it either
-  //     (`activeFor`/`modelOptions`'s exact-match `active` finds no row),
-  //     so a permanent badge next to no active row is doubly wrong.
-  const wireQueuedField: RouteField | null = routeInfo === null ? null : (() => {
-    if (effortIntended !== null && !effortInert && effortIntended !== 'auto' && effortIsKnown(wrapper, effortIntended)) {
-      // Fix wave #2: `xhigh` and `ultracode` share the SAME wire value —
-      // `live.effort: 'xhigh'` — with `ultracode` distinguished only by the
-      // separate `live.ultracode` boolean (`effortOptions`'s own
-      // `activeFor`, models.ts:151-153, already carries this guard for the
-      // picker rows). Without it, an intended `xhigh` reads a live
-      // ultracode pane's `effort: 'xhigh'` as agreement and never queues —
-      // an unapplied `xhigh` write silently reporting itself confirmed.
-      const agrees = effortIntended === 'ultracode'
-        ? live?.ultracode === true
-        : effortIntended === 'xhigh'
-          ? live?.effort === 'xhigh' && live?.ultracode !== true
-          : live?.effort === effortIntended;
-      if (!agrees) return 'effort';
-    }
-    if (classIntended !== null && !classInert && classIntended !== 'default') {
-      const readback = modelReadbackFor(wrapper, classIntended);
-      const liveModel = (live?.model ?? '').toLowerCase();
-      // Fix wave #3: a degraded session (`routeInfo.degraded` names the
-      // class ccd is actually SERVING because no candidate lane could
-      // serve the intended one, spec §5.4) can never read the intended
-      // class back on `live.model` while the degrade stands — ccd's own
-      // `_route_wanted` types the SERVED class, not the intended one, into
-      // the pane. Without also agreeing on the served class, the badge
-      // never clears for as long as the degrade lasts, even though ccd is
-      // doing exactly what it can and the intended row already carries its
-      // own `degradedTo` note (`PickSheet`, whole-branch review M1).
-      const degradedClass = routeInfo?.degraded ?? null;
-      const degradedReadback = degradedClass !== null ? modelReadbackFor(wrapper, degradedClass) : null;
-      const agrees = readback !== null && (
-        liveModel.includes(readback)
-        || (degradedReadback !== null && liveModel.includes(degradedReadback))
-      );
-      if (readback !== null && !agrees) return 'class';
-    }
-    return null;
-  })();
+  const route = routeView(live, wrapper);
+  const { classIntended, effortIntended, classInert, effortInert,
+          classUnreadable, effortUnreadable } = route;
   // Exclusively one source or the other, never both: with `route` present the
   // wire is the sole answer (a stale local write must not re-light a badge
   // the wire already cleared); with `route: null`, today's local state.
-  const queuedField: RouteField | null = routeInfo !== null ? wireQueuedField : (queued?.field ?? null);
+  const queuedField: RouteField | null =
+    routeInfo !== null ? route.wireQueuedField : queued.field;
   // A direct roster lookup, not a re-parse of a colour-token NAME: this used
   // to derive `data-acct` by stripping `--acct-` off `accountColorVar`'s
   // return value, which worked only for a wrapper whose colour happened to be
@@ -340,9 +216,10 @@ export function SessionScreen({
   // pane nobody can measure. Read through `substrateFault`, never
   // `live.substrate`: the live frame is cast, not revived, so an older
   // server's row lacks the key at runtime. `faultTitle` is SessionLine's
-  // chip's own `tmux unreachable — <reason>` string, never a second copy.
+  // chip's own `tmux unreachable — <reason>` string — `substrateFaultText`
+  // now, which is what this comment claimed for seven copies of it.
   const fault = live === null ? null : substrateFault(live);
-  const faultTitle = fault !== null ? `tmux unreachable — ${fault.text}` : undefined;
+  const faultTitle = live === null ? undefined : substrateFaultTitle(live);
 
   const restart = async (): Promise<void> => {
     if (restarting) return;
@@ -380,7 +257,7 @@ export function SessionScreen({
   const changeEffort = (): void => setPicker('effort');
   const pick = async (o: PickOption): Promise<void> => {
     setPicker(null);
-    clearQueuedTimer();
+    queued.clear();
     // Fix round 2, finding 2: once `route` rides the wire (`routeInfo !==
     // null`), it is the WHOLE STORY for this field — `queuedField` above
     // already derives straight from it, never from this local `queued`
@@ -404,13 +281,7 @@ export function SessionScreen({
     // leading `clearQueuedTimer()` always cancels a PRIOR pick's real timer,
     // never a not-yet-installed one, so a fast second tap can no longer leak
     // the first pick's handle.
-    if (routeInfo === null) {
-      setQueued({ field: o.route.field, value: o.route.value, readback: o.readback });
-      queuedTimer.current = setTimeout(() => {
-        setQueued(null);
-        toast('Routing queued; the pane has not confirmed it yet');
-      }, 60_000);
-    }
+    if (routeInfo === null) queued.arm(o.route.field, o.route.value, o.readback);
     try {
       await api.route(id, o.route.field, o.route.value);
       // Neither value leaves a mark the pane can read back — `auto` clears no
@@ -422,13 +293,11 @@ export function SessionScreen({
       // `routeInfo !== null` never armed one in the first place.
       if ((o.route.field === 'effort' && o.route.value === 'auto')
           || (o.route.field === 'class' && o.route.value === 'default')) {
-        clearQueuedTimer();
-        setQueued(null);
+        queued.clear();
       }
     } catch (err) {
-      clearQueuedTimer();
-      setQueued(null);
-      toast(`Couldn't apply that — ${apiErrorText(err)}`, 'error');
+      queued.clear();
+      toast(failedTo('apply that', err), 'error');
     }
   };
 
@@ -440,7 +309,7 @@ export function SessionScreen({
     try {
       await restoreSession(live);
     } catch (err) {
-      toast(`Couldn't restore — ${apiErrorText(err)}`, 'error');
+      toast(failedTo('restore', err), 'error');
     }
   };
 
@@ -472,7 +341,7 @@ export function SessionScreen({
       />
 
       {conn === 'down' && (
-        <div className="chat-banner chat-banner--offline" role="status">
+        <div className={`chat-banner chat-banner--offline ${ATTENTION_DOT}`} role="status">
           Reconnecting…
         </div>
       )}
@@ -518,24 +387,25 @@ export function SessionScreen({
               : "Can't read the fleet host right now"}
           </span>
           <span className="banner-path">{missingFile ?? file ?? ''}</span>
-          <button type="button" className="btn-ghost" onClick={openTerminal}>
+          <Button variant="ghost" size="fit" onClick={openTerminal}>
             Open terminal
-          </button>
+          </Button>
         </div>
       )}
 
       {dead && (
         <div className="chat-banner chat-banner--dead" role="status">
           <span className="banner-copy">Not running — the chat is read-only.</span>
-          <button
-            type="button"
-            className="btn-ghost"
+          <Button
+            variant="ghost"
+            size="fit"
+            className="flex-none"
             onClick={() => void restart()}
             disabled={restarting || fault !== null}
             title={faultTitle}
           >
             {restarting ? 'Restarting…' : 'Restart session'}
-          </button>
+          </Button>
         </div>
       )}
 
