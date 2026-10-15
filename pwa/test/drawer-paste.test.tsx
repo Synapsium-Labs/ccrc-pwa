@@ -29,7 +29,8 @@
 //   the stage-1 verifier, in both views). Each now opens a window, and a chunk
 //   xterm sends inside it goes as `insertedFrame` says: one key's bytes as they
 //   are (`oneKey`), anything longer as `typedFrame` frames a paste. Outside a
-//   window nothing is touched: a key, and a reply the terminal sends of its own.
+//   window nothing is touched: a key, and a reply the terminal sends of its own;
+//   every window closes, and a real key opens none.
 //   RED FIRST, 2026-10-15: against stubs (`oneKey` true for one character,
 //   `insertedFrame` the identity), 9 of the 13 new cases failed; the four that
 //   passed are negatives such stubs cannot fail (two pure ones: text is not one
@@ -78,6 +79,13 @@
 //   oneKey lets the paste markers through .............. the markers case, and the lone-marker case
 //   oneKey takes any chunk that starts with ESC ........ the not-one-key case
 //   oneKey takes one character only .................... every key the bar sends, and 3 more
+// and for the window's end (the stage-1 verifier's mutants, GREEN before the
+// window-closes cases: the one negative painted its query before any
+// insertion). RUN 2026-10-15 on an isolated copy, the same way; every row RED:
+//   no window ever closes (its decrement dropped) ...... the four window-closes cases
+//   an input event's window never closes ............... the two insertText window-closes cases
+//   a keyCode-229 keydown's window never closes ........ the two 229 window-closes cases
+//   every keydown opens a window, a real key's too ..... the real-key case
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, createEvent, fireEvent, render, screen } from '@testing-library/react';
 import type { Terminal as XTerm } from '@xterm/xterm';
@@ -250,6 +258,11 @@ describe('the letter a latched ctrl takes from a beforeinput', () => {
 /** What a keyboard's clipboard chip, a suggestion or an IME can hand xterm's
  *  textarea as ONE insertion: an end marker, then a line that would submit. */
 const HOSTILE_INSERT = 'a\x1b[201~\rrm -rf x\r';
+/** DECRQSS for the scroll margins: a query xterm answers of its own, with a
+ *  DCS string that is no key's shape. */
+const DCS_QUERY = '\x1bP$qr\x1b\\';
+/** xterm's answer, as it sends it: ESC intact, never framed as text. */
+const DCS_REPLY = /^\x1bP1\$r[0-9;]*r\x1b\\$/;
 
 describe('one key\'s bytes', () => {
   it('every key the bar sends is one key', () => {
@@ -679,9 +692,51 @@ describe('text a keyboard inserts cannot end a bracketed paste or submit a line'
     const d = mount('grid');
     // DECRQSS for the scroll margins: xterm answers with a DCS string, which is
     // no key's shape, on the socket as tmux asked for it.
-    await d.paint('\x1bP$qr\x1b\\');
+    await d.paint(DCS_QUERY);
     const replies = d.ws.inputs();
     expect(replies).toHaveLength(1);
-    expect(replies[0]).toMatch(/^\x1bP1\$r[0-9;]*r\x1b\\$/);
+    expect(replies[0]).toMatch(DCS_REPLY);
+  });
+
+  // THE WINDOW CLOSES. On a phone every keystroke the keyboard inserts opens
+  // one, so a window that stayed open after the first would frame every later
+  // reply the terminal sends of its own (a DCS or OSC report tmux asked for) as
+  // typed text, its ESC stripped, into Claude Code's box. The case above paints
+  // its query before any insertion, so it cannot see that; these insert first,
+  // let the window's two task turns pass, then paint the query (the stage-1
+  // verifier's mutant, every window left open, was GREEN before them).
+  it.each(['wrapped', 'grid'] as const)('%s view: the window an insertText opened closes, and a reply after it is untouched', async (view) => {
+    const d = mount(view);
+    inputOn(d.ta, 'hello');
+    await tick();
+    await d.paint(DCS_QUERY);
+    const sent = d.ws.inputs();
+    expect(sent[0], 'the insertion itself').toBe('hello');
+    expect(sent).toHaveLength(2);
+    expect(sent[1], 'a reply after the insertion was framed as typed text: its window never closed').toMatch(DCS_REPLY);
+  });
+
+  it.each(['wrapped', 'grid'] as const)('%s view: the window a keyCode-229 keydown opened closes once its diff is read', async (view) => {
+    const d = mount(view);
+    act(() => { fireEvent.keyDown(d.ta, { key: 'Unidentified', keyCode: 229 }); });
+    d.ta.value += 'hello';
+    await tick();
+    await d.paint(DCS_QUERY);
+    const sent = d.ws.inputs();
+    expect(sent[0], 'the diff xterm read after the 229 keydown').toBe('hello');
+    expect(sent).toHaveLength(2);
+    expect(sent[1], 'a reply after the 229 insertion was framed as typed text: its window never closed').toMatch(DCS_REPLY);
+  });
+
+  it('a real key opens no window: a reply that lands while the key is still being sent is untouched', async () => {
+    const d = mount('grid');
+    // xterm 6.0.0 sends an unmodified letter at keydown; the reply below is
+    // parsed within the same two task turns a window would last.
+    realKey(d.ta, 'a');
+    await d.paint(DCS_QUERY);
+    const sent = d.ws.inputs();
+    expect(sent[0]).toBe('a');
+    expect(sent).toHaveLength(2);
+    expect(sent[1], 'a keydown that is no insertion opened a window, and the reply was framed').toMatch(DCS_REPLY);
   });
 });

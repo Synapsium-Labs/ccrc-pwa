@@ -63,6 +63,14 @@
 //   P4 keeps Escape for any textarea (host.contains) ..... the history-layer Escape case
 //   no focus when the socket opens ....................... the takes-the-keyboard case
 //   focus at attach, before the socket opens ............. the takes-the-keyboard case
+//
+// THE DEVICE'S OWN OVERRIDE COMES BACK WITH THE CLOSE. The stage-1 verifier's
+// mutant (closing puts back no override) was GREEN before the
+// device-has-its-own-override case: every offer case started with nothing
+// stored, where "no override" and "the device's own" read the same. RUN
+// 2026-10-15 on an isolated copy, the same way, both RED:
+//   closing puts back no override, not the device's ...... the device-has-its-own-override case
+//   closing puts nothing back ............................. that case, and taken-closed-reopened
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -874,6 +882,32 @@ describe('the not-Claude offer lasts only while the drawer is open', () => {
     reopen(view, t, store);
     expect(wrapOf(view), 'closing threw away a choice the reader made with the chip').toBeNull();
     expect(viewChipEl()).toHaveTextContent(/^grid/);
+  });
+
+  it('a device that has its own override gets it back when the drawer closes, not the glass\'s choice', async () => {
+    // The cases above start with nothing stored, so "put back what the offer
+    // stood in for" and "put back no override" read the same there. Here the
+    // two differ: a glass the grid fits (1546px), held to the wrapped view by
+    // the device's stored choice. The offer takes the grid for this drawer
+    // only; when it closes, the device's own `wrapped` must come back. With no
+    // override put back, the glass would choose the grid against the reader's
+    // stored choice, and the store would still say `wrapped`.
+    vi.useFakeTimers({ shouldAdvanceTime: true, toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+    glass.width = 1546;
+    const store = memStore();
+    store.map.set(VIEW_OVERRIDE_KEY, 'wrapped');
+    const t = fakeTerm();
+    const { view } = mount(t, () => store);
+    expect(wrapOf(view), 'the stored override did not hold a grid-wide glass to the wrapped view').not.toBeNull();
+    await takeOffer(t);
+    expect(wrapOf(view), 'the offer did not show the grid').toBeNull();
+
+    reopen(view, t, store);
+    await t.paint(screenNamed('busy').stream);
+    expect(wrapOf(view), 'closing put back no override: the glass chose the grid over the device\'s own choice')
+      .not.toBeNull();
+    expect(viewChipEl()).toHaveTextContent(/^wrapped/);
+    expect(store.map.get(VIEW_OVERRIDE_KEY), 'the offer touched the stored choice').toBe('wrapped');
   });
 });
 

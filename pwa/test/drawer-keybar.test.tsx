@@ -8,6 +8,7 @@
 // (d) the one-shot `ctrl` latch, which the drawer feeds the next letter typed
 //     into xterm's textarea (Task 12; `drawer-paste.test.tsx`);
 // (e) the bar wraps when it does not fit, at any width, never at a breakpoint
+//     and never under any at-rule
 //     (`key-bar-wraps-when-it-does-not-fit`): two even halves, and the row `⋯`
 //     opens in four groups, read from chat.css as text (jsdom applies no
 //     stylesheet) and checked by arithmetic from the tokens at 320–1280px; the
@@ -45,6 +46,18 @@
 //   confirm: send stretches again (flex: none removed) ........ the same case
 //   confirm: the sentence grows ............................... the same case
 //   confirm: the choices wrap apart ........................... the same case
+// and for the guard's reach (RUN 2026-10-15 on an isolated copy, the same way;
+// every row RED). The first three were GREEN under the scan this replaced,
+// which read only @media and @container preludes naming `width` (the first is
+// the stage-1 verifier's mutant):
+//   the wrap moved under @container (inline-size < 421px) ..... the no-at-rule case and the wraps case
+//   the wrap moved under @supports (display: flex) ............. the same two
+//   the wrap moved under @media screen { @container (…) } ...... the same two
+//   the wrap moved into an @container nested in .term-keys .... the same two, and 23 more (RED before too:
+//                                                                  the nested rule no longer reads)
+//   the at-rule walk keeps top-level at-rules only ............. the walk-is-live case
+//   the walk keeps only preludes that name a width ............. the walk-is-live case
+//   nothing is blanked (the unconditional view is the text) .... the walk-is-live case
 import { readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -53,7 +66,7 @@ import type { ReactNode } from 'react';
 import { Terminal } from '@xterm/xterm';
 import { TerminalDrawer } from '../src/session/TerminalDrawer';
 import type { DrawerTerm } from '../src/session/terminalFactory';
-import { atBlock, declValue, declaredValues, ruleIn, stripComments } from './cssRule';
+import { declValue, declaredValues, ruleIn, stripComments } from './cssRule';
 import {
   GRID_KEYS,
   GUARDED_KEYS,
@@ -681,24 +694,99 @@ const oneLinePx = (m: BarModel): number =>
   2 * m.pad + m.widths.reduce((a, b) => a + b, 0) + m.gap * (m.widths.length - 1);
 
 describe('the bar wraps when it does not fit, at any width (key-bar-wraps-when-it-does-not-fit)', () => {
-  /** Every at-rule in chat.css conditioned on a width: a media query or a
-   *  container query naming `width`. */
-  const widthBlocks = (): string[] => {
-    const out: string[] = [];
-    const re = /@(media|container)([^{]*)\{/g;
-    for (let m = re.exec(chatCss); m !== null; m = re.exec(chatCss)) {
-      if (/width/.test(m[2] ?? '')) out.push(atBlock(chatCss, `@${m[1]}${m[2]!.trimEnd()}`));
+  /** The bar's own classes: a rule for any of them is a rule for the bar. */
+  const BAR = /\.term-(keys|confirm)/;
+
+  /**
+   * Every at-rule block in `css` that holds rules or declarations, NESTED ONES
+   * INCLUDED, whatever its prelude: a media or a container query on any
+   * feature (`width`, `inline-size`, an aspect ratio), `@supports`, `@layer`,
+   * or an at-rule nested inside a style rule. Each comes with the prelude of
+   * the block it sits in (`''` at the top level) and its range in the text.
+   * `@keyframes` is left out: its blocks are percentages, never a selector.
+   *
+   * WHY ANY PRELUDE: the guard this replaces scanned only `@media`/`@container`
+   * preludes that named `width`, and `declaredValues` counts a declaration
+   * inside an at-rule like any other. So the wrap moved under
+   * `@container (inline-size < 421px)` (or `@supports`, or a media query
+   * holding a container query) kept every case green, though with no
+   * container-type ancestor such a bar never wraps and 421–438px clips `⋯`
+   * again (the stage-1 verifier's mutant, measured GREEN before this).
+   */
+  const atRules = (css: string): { prelude: string; within: string; body: string; start: number; end: number }[] => {
+    const scan = css.replace(/\/\*[\s\S]*?\*\//g, (c) => c.replace(/[^\n]/g, ' '));
+    const out: { prelude: string; within: string; body: string; start: number; end: number }[] = [];
+    const open: { prelude: string; start: number; brace: number }[] = [];
+    let from = 0;
+    for (let i = 0; i < scan.length; i += 1) {
+      const ch = scan[i];
+      if (ch === '{') {
+        open.push({ prelude: scan.slice(from, i).trim(), start: from, brace: i });
+        from = i + 1;
+      } else if (ch === '}') {
+        const block = open.pop();
+        from = i + 1;
+        if (block === undefined || !block.prelude.startsWith('@')) continue;
+        if (/^@(-\w+-)?keyframes\b/.test(block.prelude)) continue;
+        out.push({
+          prelude: block.prelude,
+          within: open.at(-1)?.prelude ?? '',
+          body: css.slice(block.brace + 1, i),
+          start: block.start,
+          end: i + 1,
+        });
+      } else if (ch === ';') {
+        from = i + 1;
+      }
     }
     return out;
   };
 
-  it('no width breakpoint touches the bar: nothing in chat.css wraps it at a width it names', () => {
-    for (const block of widthBlocks()) {
-      expect(block, 'a width-conditioned rule styles the key bar').not.toMatch(/\.term-(keys|confirm)/);
+  /** `css` with every at-rule blanked, prelude, braces and body (newlines
+   *  kept): the rules that hold at every width, on every engine, with no
+   *  condition at all. */
+  const unconditional = (css: string): string => {
+    let text = css;
+    for (const r of atRules(css)) {
+      text = text.slice(0, r.start) + text.slice(r.start, r.end).replace(/[^\n]/g, ' ') + text.slice(r.end);
+    }
+    return text;
+  };
+
+  it('the at-rule walk is live: it finds a top-level, a nested and an in-rule at-rule, and blanks each', () => {
+    const fixture = [
+      '.a { x: 1; @container (inline-size < 9px) { y: 2; } }',
+      '@supports (a: b) { .b { z: 3; } }',
+      '@media screen { @container (inline-size > 0) { .c { w: 4; } } }',
+      '@keyframes k { 40% { v: 5; } }',
+    ].join('\n');
+    expect(atRules(fixture).map((r) => [r.within, r.prelude])).toEqual([
+      ['.a', '@container (inline-size < 9px)'],
+      ['', '@supports (a: b)'],
+      ['@media screen', '@container (inline-size > 0)'],
+      ['', '@media screen'],
+    ]);
+    const kept = unconditional(fixture);
+    expect(declaredValues(kept, '.a', 'x')).toEqual(['1']);
+    for (const p of ['y', 'z', 'w']) expect(kept, `${p} survived the blanking`).not.toMatch(new RegExp(`\\b${p}:`));
+    expect(atRules(chatCss).length, 'the walk found no at-rule in chat.css: it is not reading it').toBeGreaterThan(0);
+  });
+
+  it('no at-rule touches the bar: nothing in chat.css styles it under a condition, whatever the condition names', () => {
+    for (const r of atRules(chatCss)) {
+      expect(`${r.within} ${r.prelude} { ${r.body} }`, `${r.prelude} styles the key bar under a condition`)
+        .not.toMatch(BAR);
     }
   });
 
   it('the bar wraps at every width, its halves wrap rather than scroll, and nothing in it stretches across lines', () => {
+    // UNCONDITIONALLY: declared outside every at-rule, so no query, support
+    // test or layer can switch the wrap off, and no width can turn it on late.
+    const always = unconditional(chatCss);
+    expect(declaredValues(always, '.term-keys', 'flex-wrap'), 'the bar wraps only under a condition').toEqual(['wrap']);
+    expect(declaredValues(always, '.term-keys', 'align-items')).toEqual(['center']);
+    expect(declaredValues(always, '.term-keys-seq', 'flex-wrap'), 'a half wraps only under a condition').toEqual(['wrap']);
+    // And nothing anywhere, conditional or not, says otherwise.
     expect(declaredValues(chatCss, '.term-keys', 'flex-wrap')).toEqual(['wrap']);
     expect(declaredValues(chatCss, '.term-keys', 'align-items')).toEqual(['center']);
     expect(declaredValues(chatCss, '.term-keys-seq', 'flex-wrap')).toEqual(['wrap']);
