@@ -24,7 +24,8 @@ import { api, ApiError, failedTo } from '../lib/api';
 // `liveQuestion` applies it to EVERY question of the envelope, and the title only breaks a tie.
 import { chatRow, freeTextSlot, isAskReview, liveQuestion, namedQuestion } from './askLive';
 import {
-  AskEyebrow, AskReview, ChatRow, OtherQuestions, OwnWords, REVIEW_TITLE, SEVERAL_ANSWERS, wordsBusy, type Words,
+  AskEyebrow, AskReview, ChatRow, MultiPick, OtherQuestions, OwnWords, REVIEW_TITLE, SEVERAL_ANSWERS, picksBusy,
+  wordsBusy, type Picks, type Words,
 } from './AskParts';
 import './chat.css';
 
@@ -84,6 +85,7 @@ export function EnvelopeSheet({
   dialog,
   answering,
   words,
+  picks,
   open,
   onHide,
   onSelectOption,
@@ -101,6 +103,8 @@ export function EnvelopeSheet({
   /** D-5090: the own-words text and its call. Held by the PARENT, never here, so an `ask_cleared` mid-call hands the
    *  same text and call to the scraped sheet when this one unmounts. */
   words: Words;
+  /** D-5091: a multiSelect question's set and its commit, held by the PARENT for the same reason as `words`. */
+  picks: Picks;
   open: boolean;
   onHide: () => void;
   onSelectOption: (optionIndex: number) => void;
@@ -113,9 +117,11 @@ export function EnvelopeSheet({
   // honest record that a tap is still landing — same rule the scraped sheet's
   // `close` follows for `answering` alone).
   const [denying, setDenying] = useState(false);
-  // D-5090: an own-words send is a send too, and refuses the others and the dismissal while it is under way.
+  // D-5090: an own-words send is a send too, and refuses the others and the dismissal while it is under way. So is a
+  // multiSelect commit (D-5091).
   const sendingWords = wordsBusy(words.call);
-  const busy = answering !== null || denying || sendingWords;
+  const picking = picksBusy(picks.call);
+  const busy = answering !== null || denying || sendingWords || picking;
   // D-5089: WHICH question, before anything about it. The hook writes every question of an ask at once and keeps the
   // envelope until the tool call ends, while the pane paints one question at a time and then the review screen. So
   // the sheet answers the question the PANE is painting (`liveQuestion`: labels first, a unique correspondence winning
@@ -146,8 +152,10 @@ export function EnvelopeSheet({
   const noOptions = questions !== null && questions.questions[shown]!.options.length === 0;
   // A multi-select question, by the envelope's own JSON, that the pane's title names. No single tap answers one:
   // `answerDialog` walks the cursor and presses Enter, and on Claude Code 2.1.280 and later Enter on a multi-select
-  // row TICKS that box and submits nothing (measured on real captures). `liveQuestion` never offers one as a
-  // candidate, so it can only be NAMED, and the copy then says what it is rather than that it cannot be matched.
+  // row TICKS that box and submits nothing (measured on real captures). D-5091: where the pane carries `Dialog.multi`,
+  // `liveQuestion` takes it as a candidate through its boxes, and the sheet answers it with boxes (`MultiPick`). A
+  // pane without it (the 2.1.222 shape) is never a candidate, so the question can only be NAMED, and the copy then
+  // says what it is rather than that it cannot be matched.
   // `=== true` because a hook payload that omitted the field must not read as multi-select either way.
   const severalAnswers = questions !== null && named !== null && live === null
     && questions.questions[named]!.multiSelect === true;
@@ -268,7 +276,12 @@ export function EnvelopeSheet({
     return (
       <Sheet open={open} onClose={close} eyebrow={<AskEyebrow />} title={REVIEW_TITLE}>
         <div data-source="hook" className="ask-envelope">
-          <AskReview dialog={review} answering={answering} locked={sendingWords} onAnswer={onSelectOption} />
+          <AskReview
+            dialog={review}
+            answering={answering}
+            locked={sendingWords || picking}
+            onAnswer={onSelectOption}
+          />
         </div>
       </Sheet>
     );
@@ -286,6 +299,10 @@ export function EnvelopeSheet({
   const pane = live !== null && dialog !== null ? dialog : null;
   const slot = pane !== null ? freeTextSlot(pane, q.options.length) : { kind: 'none' as const };
   const chat = pane !== null ? chatRow(pane) : undefined;
+  // D-5091: the live question's boxes, when it is a multiSelect one the pane carries as `Dialog.multi`. They take the
+  // option rows' place; such a question has no own-words region here (its free text is the terminal's in v1) and no
+  // Chat row (`Dialog.multi` carries none).
+  const boxes = pane?.multi;
   const eyebrow = (
     <AskEyebrow header={q.header} progress={count > 1 ? { n: shown + 1, of: count } : undefined} />
   );
@@ -321,40 +338,55 @@ export function EnvelopeSheet({
                 : "This can't be matched to what's on the terminal pane yet — answer it there, or wait for it to catch up."}
           </p>
         )}
-        {/* A multiSelect question renders the same plain rows as a
-            single-select one, and they are never tappable: answerDialog walks
-            to ONE option index and presses Enter, and Enter on a multi-select
-            row ticks it. Two gates keep it that way, and either alone does:
-            `liveQuestion` never takes a multiSelect question as a candidate
-            (the envelope's own flag), and the pane parse — `parseDialog`
-            answers { parsed: false } for a multi-select, by its footer on
-            older builds and by the checkboxes on its rows on 2.1.280, and an
-            unparsed dialog never corresponds. */}
-        <div className="opts">
-          {q.options.map((o, oi) => {
-            const idx = oi + 1;
-            const waiting = answering === idx;
-            return (
-              <OptionRow
-                key={`${shown}:${oi}`}
-                index={idx}
-                label={o.label}
-                sublabel={o.description}
-                disabled={!canAnswer || answering !== null || sendingWords}
-                busy={waiting}
-                onClick={() => onSelectOption(idx)}
-                marker={waiting ? <span className="opt-wait">answering…</span> : undefined}
-              />
-            );
-          })}
-        </div>
-        {/* Own words, through the pane's free-text row (D-5090), then the pane's Chat row, saying what it does. A send
-            under way stays on screen even if the pane stops matching mid-call. */}
-        {(pane !== null || sendingWords) && (
-          <OwnWords slot={slot} chat={chat?.label ?? null} words={words} locked={answering !== null} />
-        )}
-        {chat && (
-          <ChatRow row={chat} answering={answering} disabled={busy} onAnswer={onSelectOption} />
+        {/* A multiSelect question is never answered by one tap: answerDialog
+            walks to ONE option index and presses Enter, and Enter on a
+            multi-select row ticks it. D-5091 answers it with boxes where the
+            pane carries `Dialog.multi`: the WHOLE set at once, through the
+            digits `/dialog/multi` sends (`MultiPick`). Otherwise it renders the
+            same plain rows as a single-select one, never tappable, and two
+            gates keep it that way, either alone enough: `questionCorresponds`
+            takes a multiSelect question only through `Dialog.multi` (the
+            envelope's own flag against the pane's), and `parseDialog` answers
+            { parsed: false } for a multi-select, by its footer on older builds
+            and by the checkboxes on its rows on 2.1.280, and an unparsed
+            dialog without `multi` never corresponds. */}
+        {pane !== null && boxes !== undefined ? (
+          <MultiPick
+            multi={boxes}
+            dialogId={pane.id}
+            copy={q.options}
+            picks={picks}
+            locked={answering !== null || sendingWords}
+          />
+        ) : (
+          <>
+            <div className="opts">
+              {q.options.map((o, oi) => {
+                const idx = oi + 1;
+                const waiting = answering === idx;
+                return (
+                  <OptionRow
+                    key={`${shown}:${oi}`}
+                    index={idx}
+                    label={o.label}
+                    sublabel={o.description}
+                    disabled={!canAnswer || answering !== null || sendingWords || picking}
+                    busy={waiting}
+                    onClick={() => onSelectOption(idx)}
+                    marker={waiting ? <span className="opt-wait">answering…</span> : undefined}
+                  />
+                );
+              })}
+            </div>
+            {/* Own words, through the pane's free-text row (D-5090), then the pane's Chat row, saying what it does. A
+                send under way stays on screen even if the pane stops matching mid-call. */}
+            {(pane !== null || sendingWords) && (
+              <OwnWords slot={slot} chat={chat?.label ?? null} words={words} locked={answering !== null || picking} />
+            )}
+            {chat && (
+              <ChatRow row={chat} answering={answering} disabled={busy} onAnswer={onSelectOption} />
+            )}
+          </>
         )}
         {terminalCta}
         <OtherQuestions questions={ask.questions} shown={shown} />

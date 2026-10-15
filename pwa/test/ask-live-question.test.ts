@@ -13,9 +13,12 @@ import {
   isAskReview,
   liveQuestion,
   namedQuestion,
+  paneTicks,
+  questionCorresponds,
   reviewSummary,
   rowText,
   titleMatches,
+  wantedTicks,
 } from '../src/session/askLive';
 import {
   CACHING_TRACING,
@@ -23,6 +26,7 @@ import {
   DRINK_FEATURES_TOOLS,
   FOUR_Q,
   FRUIT_DRINK,
+  TOOLS_SIZES,
   pane,
   type AskEnvelope,
 } from './askPanes';
@@ -89,7 +93,12 @@ describe('liveQuestion: which question the pane is painting (D-5089)', () => {
   });
 
   it('an unparsed dialog never corresponds', () => {
-    expect(liveQuestion(DRINK_FEATURES_TOOLS, pane('cc300-ask-multiselect-next-open'))).toBeNull();
+    // The 2.1.222 multiSelect shape (`multiselect`): unparsed, and no `Dialog.multi` (no commit row on screen). DERIVED
+    // envelope: that recording's prompt line is not captured, so its one question is read off the screen.
+    const tools: AskEnvelope = { questions: [{ question: 'Select the tools to allow', multiSelect: true,
+      options: [{ label: 'Bash' }, { label: 'Edit' }, { label: 'WebFetch' }] }] };
+    expect(pane('multiselect').multi).toBeUndefined();
+    expect(liveQuestion(tools, pane('multiselect'))).toBeNull();
     // DERIVED: a recorded menu marked unparsed (a capture mid-redraw parses this way) keeps its rows and still never
     // corresponds: its rows are not per-position labels to type by.
     expect(liveQuestion(CACHING_TRACING, screen('cc300-ask-same-labels-q2', { parsed: false }))).toBeNull();
@@ -105,6 +114,47 @@ describe('liveQuestion: which question the pane is painting (D-5089)', () => {
     // DERIVED: Drink marked multiSelect. One tap would tick a box, never answer it.
     const multi = derive(FRUIT_DRINK, (qs) => { qs[1]!.multiSelect = true; });
     expect(liveQuestion(multi, pane('cc300-ask-q2-of-2-single'))).toBeNull();
+  });
+
+  it('a multiSelect question corresponds through Dialog.multi, and never through a parsed menu (D-5091)', () => {
+    // The boxes are the question's own options, so labels decide as they do for rows.
+    expect(liveQuestion(DRINK_FEATURES_TOOLS, pane('cc300-ask-multiselect-next-open'))).toBe(1);
+    expect(liveQuestion(DRINK_FEATURES_TOOLS, pane('cc300-ask-multiselect-digit1-3'))).toBe(1);
+    expect(liveQuestion(DRINK_FEATURES_TOOLS, pane('cc300-ask-multiselect-submit-open'))).toBe(2);
+    expect(liveQuestion(TOOLS_SIZES, pane('cc300-ask-multiselect-tools-open'))).toBe(0);
+    expect(liveQuestion(TOOLS_SIZES, pane('cc300-ask-multiselect-sizes-large'))).toBe(1);
+    expect(questionCorresponds(DRINK_FEATURES_TOOLS.questions[1]!, pane('cc300-ask-multiselect-next-open'))).toBe(true);
+    // DERIVED: the envelope calls Features single-select. The pane says otherwise, and a tap on a box answers nothing.
+    const single = derive(DRINK_FEATURES_TOOLS, (qs) => { qs[1]!.multiSelect = false; });
+    expect(liveQuestion(single, pane('cc300-ask-multiselect-next-open'))).toBeNull();
+    // DERIVED: an envelope question listing two of the pane's three boxes is another question. A box is the whole
+    // question's, so the count must be equal, not merely covered (a parsed menu's rows run on past the options).
+    const fewer = derive(DRINK_FEATURES_TOOLS, (qs) => { qs[1]!.options = qs[1]!.options.slice(0, 2); });
+    expect(liveQuestion(fewer, pane('cc300-ask-multiselect-next-open'))).toBeNull();
+    // DERIVED: a box label that disagrees at its position.
+    const swapped = derive(DRINK_FEATURES_TOOLS, (qs) => { qs[1]!.options.reverse(); });
+    expect(liveQuestion(swapped, pane('cc300-ask-multiselect-next-open'))).toBeNull();
+  });
+});
+
+describe('paneTicks and wantedTicks: the set a multiSelect commit sends (D-5091)', () => {
+  it('paneTicks reads the ticked boxes in screen order', () => {
+    expect(paneTicks(pane('cc300-ask-multiselect-next-open').multi!)).toEqual([]);
+    expect(paneTicks(pane('cc300-ask-multiselect-digit1-3').multi!)).toEqual([1, 3]);
+    expect(paneTicks(pane('cc300-ask-multiselect-tools-revisit-digit2-1').multi!)).toEqual([1, 3]);
+  });
+
+  it('new ticks follow in the order they were tapped', () => {
+    expect(wantedTicks(pane('cc300-ask-multiselect-tools-open').multi!, [3, 1])).toEqual([3, 1]);
+  });
+
+  it('a box already ticked on the pane keeps its place: it is never re-sent, so it never moves', () => {
+    // `-digit1` has Logging ticked. Tracing tapped, then Logging unticked and ticked again: the pane still shows
+    // Logging ticked, the server sends no digit for it, and the answer lists it where it already was.
+    const multi = pane('cc300-ask-multiselect-digit1').multi!;
+    expect(wantedTicks(multi, [3, 1])).toEqual([1, 3]);
+    // A box the pane shows ticked but the set leaves out is unticked, so it is not listed at all.
+    expect(wantedTicks(multi, [2])).toEqual([2]);
   });
 });
 

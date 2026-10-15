@@ -10,6 +10,8 @@
 //   `freeTextRow`) uses to find that row when its label reads differently.
 // - `EDIT_HINT_RE` (D-5047): the footer's external-editor chord, painted while the free-text row holds focus.
 // - `COMMIT_ROW_RE` (D-5048): the unnumbered row under a multiSelect question's boxes that commits the question.
+// - `COMMIT_LAST_RE` (D-5091, plan docs/superpowers/plans/2026-10-15-ask-sheet-half.md): that row's word on the question
+//   that comes last, read by the sheet (`pwa/src/session/askLive.ts`).
 // - `REVIEW_READY_RE`, `REVIEW_SUBMIT_ROW_RE`, `REVIEW_CANCEL_ROW_RE`, `REVIEW_HEADING_RE` (D-5089, plan
 //   docs/superpowers/plans/2026-10-15-ask-sheet-half.md): the review screen a multi-question or multiSelect ask ends on,
 //   read by the sheet (`pwa/src/session/askLive.ts`).
@@ -46,6 +48,12 @@ export const EDIT_HINT_RE = /to edit in/;
  *  from an option row, and refuses while the cursor rests here, where Tab after a walk through the free-text row was
  *  swallowed. */
 export const COMMIT_ROW_RE = /^(?:next|submit)$/i;
+
+/** The commit row's word on the question that comes last (`Dialog.multi.commit`). Tab from it does not submit the ask:
+ *  it lands on the review screen, whose `Submit answers` does (measured on 2.1.300: `cc300-ask-multiselect-submit-open`,
+ *  then `cc300-ask-review-multiselect`). The sheet names its commit after where it lands (D-5091). Tested against the
+ *  row's word as `Dialog.multi.commit` carries it. */
+export const COMMIT_LAST_RE = /^submit$/i;
 
 // The review screen (D-5089). Claude Code paints it after the last question of an ask that has more than one question
 // or a multiSelect one: the tab row, `Review your answers`, a `⚠ You have not answered all questions` line when one was

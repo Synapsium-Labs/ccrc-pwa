@@ -5,18 +5,24 @@
 // keeps signalling) and is refused while an answer is in flight.
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
-import { DIALOG_TEXT_MAX, DIALOG_TEXT_REFUSE_CODES, type Dialog, type HookAsk } from '../../shared/api';
+import {
+  DIALOG_MULTI_REFUSE_CODES, DIALOG_TEXT_MAX, DIALOG_TEXT_REFUSE_CODES, type Dialog, type HookAsk,
+} from '../../shared/api';
 import { ToastHost } from '@ccrc/ui';
 import { api, ApiError, failedTo, sendErrorText } from '../src/lib/api';
-import { DIALOG_TEXT_REFUSE_TEXT, dialogTextRefusal } from '../src/session/askWords';
+import {
+  DIALOG_MULTI_REFUSE_TEXT, DIALOG_TEXT_REFUSE_TEXT, dialogMultiRefusal, dialogTextRefusal,
+} from '../src/session/askWords';
 import { DialogSheet } from '../src/session/DialogSheet';
 import { createSessionStore } from '../src/stores/session';
 import {
   CACHING_TRACING,
+  COLOUR_FEATURES,
   DRINK_FEATURES_TOOLS,
   FOUR_Q,
   FRUIT_DRINK,
   PETS_SIZE_MODE,
+  TOOLS_SIZES,
   pane,
 } from './askPanes';
 
@@ -1261,7 +1267,11 @@ describe('the envelope follows the pane (D-5089)', () => {
   });
 
   it('a multiSelect question on the pane is named honestly', () => {
-    renderAsk(DRINK_FEATURES_TOOLS, pane('cc300-ask-multiselect-next-open'));
+    // DERIVED (D-5091): the recorded screen without its `Dialog.multi`, as a pane with no commit row on screen reads
+    // (the 2.1.222 shape). With `multi` the question is answered as boxes ("multiSelect boxes (D-5091)" below).
+    const shape = pane('cc300-ask-multiselect-next-open');
+    delete shape.multi;
+    renderAsk(DRINK_FEATURES_TOOLS, shape);
 
     expect(heading('Which features do you want?')).toBeInTheDocument();
     expect(screen.getByText('2 of 3')).toBeInTheDocument();
@@ -1269,8 +1279,9 @@ describe('the envelope follows the pane (D-5089)', () => {
     expect(copy.textContent).toMatch(/several answers/i);
     expect(copy.textContent).toMatch(/terminal pane/i);
     expect(screen.queryByText(/catch up/i)).toBeNull();
-    // No box answers by one tap (D-5091 turns these into boxes).
+    // No box answers by one tap, and none is offered without `Dialog.multi` to answer it through.
     expect(screen.getByRole('button', { name: /^Logging/ })).toBeDisabled();
+    expect(screen.queryAllByRole('checkbox')).toHaveLength(0);
     expect(screen.getByRole('button', { name: 'Open terminal to answer' })).toBeInTheDocument();
   });
 
@@ -1303,16 +1314,8 @@ describe('the envelope follows the pane (D-5089)', () => {
       expect(spy).toHaveBeenCalledWith(SESSION_ID, review.id, 1);
     });
 
-    it('ask_cleared while a multiSelect question is live: the scraped sheet names it the same way', () => {
-      const { store } = renderAsk(DRINK_FEATURES_TOOLS, pane('cc300-ask-multiselect-next-open'));
-      act(() => store.getState().apply({ type: 'ask_cleared' }));
-
-      expect(document.querySelector('[data-source="hook"]')).toBeNull();
-      expect(heading('Which features do you want?')).toBeInTheDocument();
-      expect(screen.getByText(/several answers/i)).toBeInTheDocument();
-      expect(screen.queryByText(/doesn't fit tappable options/i)).toBeNull();
-      expect(screen.getByRole('button', { name: 'Open terminal to answer' })).toBeInTheDocument();
-    });
+    // `ask_cleared` while a multiSelect question is live: D-5091's hand-off case ("multiSelect boxes (D-5091)" below)
+    // answers it with the same boxes, where this one once only named it.
 
     it('a hidden envelope stays hidden when ask_cleared hands off the same pane question, and a new question opens it', () => {
       const { store } = renderAsk(FRUIT_DRINK, pane('cc300-ask-q2-of-2-single'));
@@ -1692,6 +1695,338 @@ describe('own words go through the free-text row (D-5090)', () => {
     expect(DIALOG_TEXT_REFUSE_TEXT['not-alive']).toBe(sendErrorText('not-alive'));
     const other = new ApiError(502, { ok: false, stderr: 'tmux: no server running' });
     expect(dialogTextRefusal(other)).toBe(failedTo('answer', other));
+  });
+});
+
+// — multiSelect questions, as boxes (D-5091) —
+//
+// A multiSelect AskUserQuestion question paints `[ ]` boxes, a `Type something` row and an unnumbered `Next` row
+// (`Submit` on the last question). `parseDialog` keeps it `parsed: false` and reads it into `Dialog.multi` (D-5048), and
+// `POST /dialog/multi` answers it with the WHOLE set of boxes to leave ticked, never a toggle: it sends a digit only for
+// each box that differs, proves the ticks, then commits with Tab. The sheet renders the boxes as checkbox rows, seeded
+// from the pane's ticks and following them until the operator touches one, and Next sends the set. The commit's
+// in-flight state lives in `DialogSheet`, keyed to the call, so the hand-off on `ask_cleared` carries it.
+//
+// Every screen is a recorded Claude Code 2.1.300 one (`askPanes.ts`), named by its fixture; a shape no recording shows
+// is DERIVED and says so.
+describe('multiSelect boxes (D-5091)', () => {
+  const renderAsk = (ask: HookAsk | null, dialog: Dialog | null) => {
+    const store = makeStore();
+    act(() => {
+      if (dialog) store.getState().apply({ type: 'dialog', dialog });
+      if (ask) store.getState().apply({ type: 'ask', ask, key: null });
+    });
+    render(
+      <>
+        <DialogSheet id={SESSION_ID} store={store} onOpenTerminal={vi.fn()} />
+        <ToastHost />
+      </>,
+    );
+    return { store };
+  };
+  const heading = (name: string): HTMLElement => screen.getByRole('heading', { name });
+  /** The box whose label starts `label` (its accessible name runs on into its description). */
+  const box = (label: string): HTMLElement => screen.getByRole('checkbox', { name: new RegExp(`^${label}`) });
+  const ticks = (): string[] =>
+    screen.getAllByRole('checkbox').filter((b) => b.getAttribute('aria-checked') === 'true')
+      .map((b) => b.querySelector('.opt-label')!.textContent!);
+  const commit = (name: 'Next' | 'Review answers'): HTMLButtonElement =>
+    screen.getByRole('button', { name: new RegExp(`^${name}`) });
+  const show = (store: ReturnType<typeof makeStore>, dialog: Dialog): void => {
+    act(() => store.getState().apply({ type: 'dialog', dialog }));
+  };
+  const refused = (code: string) => new ApiError(409, { ok: false, error: code });
+  const deferred = () => {
+    let resolve!: () => void;
+    const promise = new Promise<void>((res) => {
+      resolve = res;
+    });
+    return { promise, resolve };
+  };
+
+  it('a live multiSelect question renders its boxes with the pane\'s ticks', () => {
+    const digit1 = pane('cc300-ask-multiselect-digit1');
+    expect(digit1.id.startsWith('ddbca498')).toBe(true);
+    renderAsk(DRINK_FEATURES_TOOLS, digit1);
+
+    expect(document.querySelector('[data-source="hook"]')).not.toBeNull();
+    expect(heading('Which features do you want?')).toBeInTheDocument();
+    expect(screen.getByText('2 of 3')).toBeInTheDocument();
+    expect(screen.getAllByRole('checkbox')).toHaveLength(3);
+    expect(box('Logging')).toHaveAttribute('aria-checked', 'true');
+    expect(box('Metrics')).toHaveAttribute('aria-checked', 'false');
+    expect(box('Tracing')).toHaveAttribute('aria-checked', 'false');
+    expect(box('Metrics')).toBeEnabled();
+    // Answerable here, so neither the several-answers line nor the terminal CTA.
+    expect(screen.queryByText(/several answers/i)).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Open terminal to answer' })).toBeNull();
+    // Free text inside a multiSelect question is the terminal's (D-5048 refuses it in v1).
+    expect(screen.getByText(/own words on a pick-several question go in the terminal/i)).toBeInTheDocument();
+  });
+
+  it('Next sends the whole wanted set', () => {
+    const multi = vi.spyOn(api, 'answerDialogMulti').mockReturnValue(new Promise(() => {}));
+    const option = vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise(() => {}));
+    const digit1 = pane('cc300-ask-multiselect-digit1');
+    renderAsk(DRINK_FEATURES_TOOLS, digit1);
+
+    fireEvent.click(box('Tracing'));
+    expect(box('Tracing')).toHaveAttribute('aria-checked', 'true');
+    expect(multi, 'a tap on a box sent something').not.toHaveBeenCalled();
+    fireEvent.click(commit('Next'));
+    expect(multi).toHaveBeenCalledWith(SESSION_ID, digit1.id, [1, 3]);
+    expect(option, 'a box was answered as a single-select row').not.toHaveBeenCalled();
+  });
+
+  it('boxes ticked here follow the pane\'s, in tap order', () => {
+    const multi = vi.spyOn(api, 'answerDialogMulti').mockReturnValue(new Promise(() => {}));
+    const tools = pane('cc300-ask-multiselect-tools-open');
+    renderAsk(TOOLS_SIZES, tools);
+    fireEvent.click(box('Drill'));
+    fireEvent.click(box('Hammer'));
+    fireEvent.click(commit('Next'));
+    // The answer lists new ticks in the order they land (measured, `cc300-ask-review-tick-order`).
+    expect(multi).toHaveBeenLastCalledWith(SESSION_ID, tools.id, [3, 1]);
+  });
+
+  it('a box ticked on the pane keeps its place, even unticked and ticked again here', () => {
+    const multi = vi.spyOn(api, 'answerDialogMulti').mockReturnValue(new Promise(() => {}));
+    const digit1 = pane('cc300-ask-multiselect-digit1');
+    renderAsk(DRINK_FEATURES_TOOLS, digit1);
+    fireEvent.click(box('Tracing'));
+    fireEvent.click(box('Logging'));
+    fireEvent.click(box('Logging'));
+    fireEvent.click(commit('Next'));
+    // Logging is ticked on the pane, so no digit is sent for it and the answer lists it where it already is.
+    expect(multi).toHaveBeenLastCalledWith(SESSION_ID, digit1.id, [1, 3]);
+  });
+
+  it('an empty set cannot be sent', () => {
+    renderAsk(DRINK_FEATURES_TOOLS, pane('cc300-ask-multiselect-next-open'));
+    expect(commit('Next')).toBeDisabled();
+    fireEvent.click(box('Metrics'));
+    expect(commit('Next')).toBeEnabled();
+    fireEvent.click(box('Metrics'));
+    expect(commit('Next'), 'an empty set: Tab would skip the question, which is no answer').toBeDisabled();
+  });
+
+  it('the last question\'s commit reads Review answers', () => {
+    const multi = vi.spyOn(api, 'answerDialogMulti').mockReturnValue(new Promise(() => {}));
+    const last = pane('cc300-ask-multiselect-submit-open');
+    renderAsk(DRINK_FEATURES_TOOLS, last);
+    expect(heading('Which tools?')).toBeInTheDocument();
+    expect(screen.getByText('3 of 3')).toBeInTheDocument();
+    // The pane's row reads Submit, but Tab from the last question lands on the review (measured: `-submit-open`, then
+    // `cc300-ask-review-multiselect`), where Submit answers is the real submit.
+    expect(screen.queryByRole('button', { name: /^Next/ })).toBeNull();
+    expect(screen.queryByRole('button', { name: /^Submit/ })).toBeNull();
+    fireEvent.click(box('Saw'));
+    fireEvent.click(commit('Review answers'));
+    expect(multi).toHaveBeenCalledWith(SESSION_ID, last.id, [2]);
+  });
+
+  it('a ticked free-text box: one line, Next disabled', () => {
+    renderAsk(COLOUR_FEATURES, pane('cc300-ask-multiselect-freetext-ticked'));
+    expect(ticks()).toEqual(['Logging', 'Tracing']);
+    expect(screen.getByText(/own-words box is ticked on this question/i)).toBeInTheDocument();
+    expect(commit('Review answers')).toBeDisabled();
+  });
+
+  it('the cursor off the options: one line, Next disabled', () => {
+    const { store } = renderAsk(DRINK_FEATURES_TOOLS, pane('cc300-ask-multiselect-on-freetext'));
+    expect(screen.getByText(/cursor is on the own-words row/i)).toBeInTheDocument();
+    expect(commit('Next')).toBeDisabled();
+
+    show(store, pane('cc300-ask-multiselect-next-focused'));
+    expect(screen.getByText(/cursor is on the Next row/i)).toBeInTheDocument();
+    expect(commit('Next')).toBeDisabled();
+
+    // Back on an option (`-row3`, cursor 3): nothing to say, and Next sends.
+    show(store, pane('cc300-ask-multiselect-row3'));
+    expect(screen.queryByText(/cursor is on the/i)).toBeNull();
+    expect(commit('Next')).toBeEnabled();
+  });
+
+  it('ticks made in the terminal reach an untouched sheet', () => {
+    const { store } = renderAsk(DRINK_FEATURES_TOOLS, pane('cc300-ask-multiselect-digit1'));
+    expect(ticks()).toEqual(['Logging']);
+    // The same question (same id) repainted with Tracing ticked in the terminal: the stream re-sends an unparsed dialog
+    // on every repaint.
+    show(store, pane('cc300-ask-multiselect-digit1-3'));
+    expect(ticks()).toEqual(['Logging', 'Tracing']);
+  });
+
+  it('a touched sheet keeps its own set across a repaint', () => {
+    const multi = vi.spyOn(api, 'answerDialogMulti').mockReturnValue(new Promise(() => {}));
+    const { store } = renderAsk(DRINK_FEATURES_TOOLS, pane('cc300-ask-multiselect-digit1'));
+    fireEvent.click(box('Metrics'));
+    show(store, pane('cc300-ask-multiselect-digit1-3'));
+    expect(ticks()).toEqual(['Logging', 'Metrics']);
+    fireEvent.click(commit('Next'));
+    // The whole set: the server unticks Tracing and ticks Metrics.
+    expect(multi).toHaveBeenLastCalledWith(SESSION_ID, pane('cc300-ask-multiselect-digit1-3').id, [1, 2]);
+  });
+
+  it('a refusal says why and re-enables the boxes, and Next sends the same set again', async () => {
+    const multi = vi.spyOn(api, 'answerDialogMulti')
+      .mockRejectedValueOnce(refused('ticks-failed'))
+      .mockReturnValueOnce(new Promise(() => {}));
+    // Untouched: Next commits the pane's own ticks (`-digit1-3`, Logging and Tracing).
+    const both = pane('cc300-ask-multiselect-digit1-3');
+    const { store } = renderAsk(DRINK_FEATURES_TOOLS, both);
+    fireEvent.click(commit('Next'));
+
+    expect(await screen.findByText(DIALOG_MULTI_REFUSE_TEXT['ticks-failed'])).toBeInTheDocument();
+    expect(box('Metrics')).toBeEnabled();
+    expect(commit('Next')).toBeEnabled();
+    // The failed attempt may leave the boxes part toggled (D-5048): `-digit1`, Tracing gone. The set sent stays the
+    // operator's, so the retry sends it again and the server sends only the digits still needed.
+    show(store, pane('cc300-ask-multiselect-digit1'));
+    expect(ticks()).toEqual(['Logging', 'Tracing']);
+    fireEvent.click(commit('Next'));
+    expect(multi).toHaveBeenLastCalledWith(SESSION_ID, both.id, [1, 3]);
+  });
+
+  it('every DialogMultiRefuseCode has its sentence', () => {
+    for (const code of DIALOG_MULTI_REFUSE_CODES) {
+      expect(DIALOG_MULTI_REFUSE_TEXT[code], code).toEqual(expect.any(String));
+      expect(DIALOG_MULTI_REFUSE_TEXT[code], code).not.toBe('');
+      expect(dialogMultiRefusal(new ApiError(code === 'bad-indexes' ? 400 : 409, { ok: false, error: code })), code)
+        .toBe(DIALOG_MULTI_REFUSE_TEXT[code]);
+    }
+    expect(new Set(Object.values(DIALOG_MULTI_REFUSE_TEXT)).size, 'two codes share a sentence')
+      .toBe(DIALOG_MULTI_REFUSE_CODES.length);
+    expect(DIALOG_MULTI_REFUSE_TEXT['not-alive']).toBe(sendErrorText('not-alive'));
+    const other = new ApiError(502, { ok: false, stderr: 'tmux: no server running' });
+    expect(dialogMultiRefusal(other)).toBe(failedTo('answer', other));
+  });
+
+  it('a one-question multiSelect envelope answers through the boxes', () => {
+    const multi = vi.spyOn(api, 'answerDialogMulti').mockReturnValue(new Promise(() => {}));
+    // DERIVED: `Which tools?` asked alone (the recorded ask has it first of two).
+    const alone: HookAsk = { questions: [TOOLS_SIZES.questions[0]!] };
+    const tools = pane('cc300-ask-multiselect-tools-open');
+    renderAsk(alone, tools);
+    expect(document.querySelector('[data-source="hook"]')).not.toBeNull();
+    expect(screen.queryByText(/^\d+ of \d+$/)).toBeNull();
+    fireEvent.click(box('Saw'));
+    fireEvent.click(commit('Next'));
+    expect(multi).toHaveBeenCalledWith(SESSION_ID, tools.id, [2]);
+  });
+
+  it('a multiSelect question with no Dialog.multi keeps the honest terminal copy and offers no box', () => {
+    // The 2.1.222 shape (`multiselect`): no commit row, so no `Dialog.multi`, and its keys were never measured. DERIVED
+    // envelope: that recording's prompt line is not captured, so its one question is read off the screen.
+    const multi = vi.spyOn(api, 'answerDialogMulti').mockReturnValue(new Promise(() => {}));
+    const old = pane('multiselect');
+    expect(old.multi).toBeUndefined();
+    renderAsk({ questions: [{ question: 'Select the tools to allow', header: 'Tools', multiSelect: true,
+      options: [{ label: 'Bash' }, { label: 'Edit' }, { label: 'WebFetch' }] }] }, old);
+
+    expect(screen.queryAllByRole('checkbox')).toHaveLength(0);
+    expect(screen.getByText(/several answers/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^Edit/ })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Open terminal to answer' })).toBeInTheDocument();
+    expect(multi).not.toHaveBeenCalled();
+  });
+
+  it('the boxes and Next are disabled, and dismissal refused, while the commit is in flight', async () => {
+    const call = deferred();
+    vi.spyOn(api, 'answerDialogMulti').mockReturnValue(call.promise);
+    const option = vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise(() => {}));
+    const { store } = renderAsk(DRINK_FEATURES_TOOLS, pane('cc300-ask-multiselect-digit1'));
+    fireEvent.click(box('Tracing'));
+    fireEvent.click(commit('Next'));
+
+    const busy = (): void => {
+      for (const b of screen.getAllByRole('checkbox')) expect(b, b.textContent!).toBeDisabled();
+      expect(commit('Next')).toBeDisabled();
+      expect(commit('Next')).toHaveAttribute('aria-busy', 'true');
+      expect(ticks(), 'the sheet stopped showing the set it sent').toEqual(['Logging', 'Tracing']);
+    };
+    busy();
+    // The pane repaints under the same id while the server ticks: still the set sent, still busy.
+    show(store, pane('cc300-ask-multiselect-digit1'));
+    busy();
+    fireEvent.click(screen.getByTestId('sheet-overlay'));
+    expect(heading('Which features do you want?'), 'the envelope sheet hid mid-commit').toBeInTheDocument();
+
+    // ask_cleared mid-commit: the scraped sheet carries the same set and the same call.
+    act(() => store.getState().apply({ type: 'ask_cleared' }));
+    expect(document.querySelector('[data-source="hook"]')).toBeNull();
+    busy();
+    fireEvent.click(screen.getByTestId('sheet-overlay'));
+    expect(heading('Which features do you want?'), 'the scraped sheet hid mid-commit').toBeInTheDocument();
+
+    // Ok: like a tapped option, the sheet waits for the pane to move on.
+    await act(async () => call.resolve());
+    busy();
+    // The next question (a new id): its own boxes, from its own pane, ready.
+    show(store, pane('cc300-ask-multiselect-submit-open'));
+    expect(heading('Which tools?')).toBeInTheDocument();
+    expect(ticks()).toEqual([]);
+    expect(box('Saw')).toBeEnabled();
+    expect(option).not.toHaveBeenCalled();
+  });
+
+  it('a commit whose next screen arrived mid-call does not hold that screen busy', async () => {
+    const call = deferred();
+    vi.spyOn(api, 'answerDialogMulti').mockReturnValue(call.promise);
+    const { store } = renderAsk(DRINK_FEATURES_TOOLS, pane('cc300-ask-multiselect-digit1-3'));
+    fireEvent.click(commit('Next'));
+    show(store, pane('cc300-ask-multiselect-submit-open'));
+    // Until the call answers, one call at a time: the next question's boxes wait, and show the PANE's ticks, never the
+    // set committed to the question before (Hammer and Drill share its digits 1 and 3).
+    expect(heading('Which tools?')).toBeInTheDocument();
+    expect(box('Saw')).toBeDisabled();
+    expect(ticks()).toEqual([]);
+    await act(async () => call.resolve());
+    expect(heading('Which tools?')).toBeInTheDocument();
+    expect(box('Saw')).toBeEnabled();
+    fireEvent.click(box('Saw'));
+    expect(commit('Review answers')).toBeEnabled();
+  });
+
+  it('a single-select screen arriving mid-commit waits too, its own-words field included', () => {
+    // DERIVED sequence: the recorded multiSelect question, then a recorded single-select screen (`cc300-ask-1q-open`)
+    // before the commit answers. One call at a time, on the scraped sheet as on the envelope's.
+    vi.spyOn(api, 'answerDialogMulti').mockReturnValue(new Promise(() => {}));
+    const { store } = renderAsk(null, pane('cc300-ask-multiselect-digit1-3'));
+    fireEvent.click(commit('Next'));
+    show(store, pane('cc300-ask-1q-open'));
+    expect(heading('Which colour?')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^Red/ })).toBeDisabled();
+    expect(screen.getByLabelText('Answer in your own words')).toBeDisabled();
+  });
+
+  describe('the hand-off: ask_cleared hands the same question to the scraped sheet', () => {
+    it('the scraped sheet answers a multiSelect question with the same boxes', () => {
+      const multi = vi.spyOn(api, 'answerDialogMulti').mockReturnValue(new Promise(() => {}));
+      const digit1 = pane('cc300-ask-multiselect-digit1');
+      const { store } = renderAsk(DRINK_FEATURES_TOOLS, digit1);
+      act(() => store.getState().apply({ type: 'ask_cleared' }));
+
+      expect(document.querySelector('[data-source="hook"]')).toBeNull();
+      expect(heading('Which features do you want?')).toBeInTheDocument();
+      expect(ticks()).toEqual(['Logging']);
+      expect(screen.queryByText(/doesn't fit tappable options/i)).toBeNull();
+      expect(screen.queryByRole('button', { name: 'Open terminal to answer' })).toBeNull();
+      fireEvent.click(box('Tracing'));
+      fireEvent.click(commit('Next'));
+      expect(multi).toHaveBeenCalledWith(SESSION_ID, digit1.id, [1, 3]);
+    });
+
+    it('a set touched on the envelope sheet survives the hand-off', () => {
+      const multi = vi.spyOn(api, 'answerDialogMulti').mockReturnValue(new Promise(() => {}));
+      const tools = pane('cc300-ask-multiselect-tools-open');
+      const { store } = renderAsk(TOOLS_SIZES, tools);
+      fireEvent.click(box('Drill'));
+      fireEvent.click(box('Hammer'));
+      act(() => store.getState().apply({ type: 'ask_cleared' }));
+      expect(ticks()).toEqual(['Hammer', 'Drill']);
+      fireEvent.click(commit('Next'));
+      expect(multi).toHaveBeenCalledWith(SESSION_ID, tools.id, [3, 1]);
+    });
   });
 });
 

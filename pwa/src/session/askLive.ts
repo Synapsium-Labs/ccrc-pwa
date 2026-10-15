@@ -14,10 +14,14 @@
 // - the free-text row is row n+1 under a question's n options, `Type something.` while empty, the text once typed;
 //   the two-column preview layout paints none, and `Chat about this` sits where it would be;
 // - the review screen is told by its body's last line and its two rows, never its first line: a review taller than
-//   `parseDialog`'s 20-row climb loses its heading and its title (`cc300-ask-review-4q-long`).
-import type { Dialog, HookAskQuestion } from '../../../shared/api';
+//   `parseDialog`'s 20-row climb loses its heading and its title (`cc300-ask-review-4q-long`);
+// - a multiSelect question's boxes are its own options, read into `Dialog.multi` (D-5048), and the answer lists the
+//   boxes in the order they became ticked (`cc300-ask-review-tick-order`); the last question's commit row reads
+//   `Submit` and lands on the review (D-5091).
+import type { Dialog, DialogMulti, HookAskQuestion } from '../../../shared/api';
 import {
   CHAT_ABOUT_ROW_RE,
+  COMMIT_LAST_RE,
   FREE_TEXT_PLACEHOLDER_RE,
   REVIEW_CANCEL_ROW_RE,
   REVIEW_HEADING_RE,
@@ -55,9 +59,24 @@ const prefixMatches = (a: string, b: string): boolean => {
  *  older builds, by its row checkboxes on 2.1.280; so does a capture taken
  *  mid-redraw), so treating it as a match would answer a tap
  *  by sending a stray arrow-key walk into a pane that isn't the numbered
- *  menu it looks like. */
+ *  menu it looks like.
+ *
+ *  D-5091: except through `Dialog.multi`, the one unparsed menu whose rows WERE
+ *  read per position (D-5048): a multiSelect question's boxes, answered by
+ *  their digits through `/dialog/multi`, never by a walk. The kinds must agree:
+ *  a `multiSelect` question corresponds only to a pane carrying `multi`, and
+ *  any other question only to a parsed menu, so a box is never answered by one
+ *  tap and a row never by a set of ticks. Against the boxes the count must be
+ *  EQUAL, not merely covered: they are the question's own options, where a
+ *  parsed menu's rows run on past them (the free-text row, `Chat about this`). */
 export function questionCorresponds(q: HookAskQuestion, dialog: Dialog | null): boolean {
-  if (dialog === null || !dialog.parsed) return false;
+  if (dialog === null) return false;
+  if (q.multiSelect === true || dialog.multi !== undefined) {
+    const boxes = dialog.multi?.options;
+    if (q.multiSelect !== true || boxes === undefined || boxes.length !== q.options.length) return false;
+    return q.options.every((o, i) => prefixMatches(boxes[i]!.label, o.label));
+  }
+  if (!dialog.parsed) return false;
   if (dialog.options.length < q.options.length) return false;
   return q.options.every((o, i) => prefixMatches(dialog.options[i]!.label, o.label));
 }
@@ -85,12 +104,13 @@ export function titleMatches(question: string, title: string): boolean {
  * and anything else is null. No candidate is null. A one-question envelope therefore keeps the labels-only rule.
  *
  * Never a candidate: a question listing no options (`every` over none is vacuously true, so it would match any parsed
- * pane), and a `multiSelect` one, against which one tap would tick a box and answer nothing.
+ * pane). A `multiSelect` one is a candidate only against the boxes of `Dialog.multi` (D-5091), never against a parsed
+ * menu, where one tap would tick a box and answer nothing (`questionCorresponds` holds both rules).
  */
 export function liveQuestion(ask: AskQuestions, dialog: Dialog | null): number | null {
   const candidates = ask.questions
     .map((q, i) => ({ q, i }))
-    .filter(({ q }) => q.options.length > 0 && q.multiSelect !== true && questionCorresponds(q, dialog));
+    .filter(({ q }) => q.options.length > 0 && questionCorresponds(q, dialog));
   if (candidates.length === 1) return candidates[0]!.i;
   if (candidates.length === 0 || dialog === null) return null;
   const named = candidates.filter(({ q }) => titleMatches(q.question, dialog.title));
@@ -213,4 +233,28 @@ export function slotHolds(slot: FreeTextSlot, text: string): boolean {
  *  so the user can talk it over (measured), which both sheets say on the row itself (D-5090). */
 export function chatRow(dialog: Dialog): Dialog['options'][number] | undefined {
   return dialog.parsed ? dialog.options.find((o) => CHAT_ABOUT_ROW_RE.test(o.label)) : undefined;
+}
+
+/** The boxes the pane shows ticked on a multiSelect question, by their digits, in screen order (D-5091). */
+export function paneTicks(multi: DialogMulti): number[] {
+  return multi.options.filter((o) => o.checked).map((o) => o.index);
+}
+
+/**
+ * The set a multiSelect commit sends (`api.answerDialogMulti`, D-5048), ordered as the answer will list it: `ticked` is
+ * the operator's set, in the order its boxes were ticked. The answer lists boxes in the order they became ticked
+ * (measured, `cc300-ask-review-tick-order`), and the route sends a digit only for a box whose tick differs on the pane,
+ * new ticks in the order asked. So a box the pane already shows ticked is never re-sent and keeps its place (screen
+ * order here, which is all the pane tells), whatever happened to it on the sheet meanwhile, and the boxes ticked from
+ * the sheet follow in tap order. A box the pane shows ticked and `ticked` leaves out is unticked, and not listed.
+ */
+export function wantedTicks(multi: DialogMulti, ticked: readonly number[]): number[] {
+  const onPane = paneTicks(multi);
+  return [...onPane.filter((k) => ticked.includes(k)), ...ticked.filter((k) => !onPane.includes(k))];
+}
+
+/** Is this the ask's last question, whose commit lands on the review screen rather than the next question
+ *  (`COMMIT_LAST_RE` on the commit row's word)? */
+export function commitsToReview(multi: DialogMulti): boolean {
+  return COMMIT_LAST_RE.test(multi.commit.trim());
 }

@@ -11,19 +11,26 @@
 // D-5090 (Task 3) adds the own-words region (`OwnWords`) and the `Chat about this` row (`ChatRow`), which both sheets
 // render under the live question's options. The own-words STATE is not here: it lives in `DialogSheet`, keyed to the
 // call, so a hand-off mid-call (`ask_cleared`) carries the same text and the same call to the scraped sheet.
+//
+// D-5091 (Task 4) adds a multiSelect question's boxes (`MultiPick`), which both sheets render in place of the option
+// rows when the pane carries `Dialog.multi`. Their state, the operator's set and the commit's call, lives in
+// `DialogSheet` for the same reason.
 import type { ReactNode } from 'react';
-import { DIALOG_TEXT_MAX, type Dialog, type HookAskQuestion } from '../../../shared/api';
-import { EYEBROW, OptionRow } from '@ccrc/ui';
-import { reviewSummary, slotHolds, type FreeTextSlot } from './askLive';
-import { ownWordsHeld } from './askWords';
+import { DIALOG_TEXT_MAX, type Dialog, type DialogMulti, type HookAskQuestion } from '../../../shared/api';
+import { Button, EYEBROW, OptionRow } from '@ccrc/ui';
+import { commitsToReview, paneTicks, reviewSummary, slotHolds, wantedTicks, type FreeTextSlot } from './askLive';
+import {
+  MULTI_FREE_TEXT_TICKED, cursorOffOptions, cursorPlace, multiHeld, ownWordsHeld,
+} from './askWords';
 import './chat.css';
 
 /** The sheet's title on the review screen an ask ends on (the pane's own heading, which a tall review scrolls off). */
 export const REVIEW_TITLE = 'Review your answers';
 
 /** A multiSelect question the sheet can name (its title) but not answer: one tap ticks a box and answers nothing.
- *  D-5091 turns it into boxes where the pane carries `Dialog.multi`; this stays for a pane that does not. Every
- *  multiSelect question is followed by another question or by the review (measured), and both come back here. */
+ *  D-5091 answers it with boxes where the pane carries `Dialog.multi` (`MultiPick`); this stays for a pane that does
+ *  not (the 2.1.222 shape, no commit row on screen, whose keys were never measured). Every multiSelect question is
+ *  followed by another question or by the review (measured), and both come back here. */
 export const SEVERAL_ANSWERS =
   'This one takes several answers, so pick them on the terminal pane. The next question, or the review, comes back here.';
 
@@ -311,5 +318,111 @@ export function ChatRow({
         enter={!waiting && selected ? '↵' : undefined}
       />
     </div>
+  );
+}
+
+/**
+ * A multiSelect commit's call (D-5091), as the sheet keeps it: keyed to the CALL, as an own-words send is, so neither a
+ * repaint of the boxes the server is ticking nor an `ask_cleared` mid-call changes anything about it.
+ *  - `flight`: the call is running;
+ *  - `landed`: it answered ok, and the sheet waits for the pane to move on, as a tapped option does (`answer`).
+ * A refusal ends the call, and the set it sent stays the operator's (`Picks.picked`), so trying again sends it again.
+ */
+export interface PickCall {
+  /** The question the set was committed to: its dialog id, which names the question, never its ticks (D-5048). */
+  readonly dialogId: string;
+  /** The set sent, in the order sent. The boxes show it until the pane moves on. */
+  readonly wanted: readonly number[];
+  readonly state: 'flight' | 'landed';
+}
+
+/** The boxes' state and their commit, held by `DialogSheet` and handed to whichever sheet is showing. */
+export interface Picks {
+  /** The operator's set for the live question, in the order the boxes were ticked here; null while no box has been
+   *  touched on the sheet, when the boxes follow the pane's ticks (ticks made in the terminal show). */
+  readonly picked: readonly number[] | null;
+  readonly call: PickCall | null;
+  /** Tick or untick the box printed `index`. */
+  readonly onToggle: (index: number) => void;
+  /** Commit `wanted`, the WHOLE set to leave ticked (`api.answerDialogMulti`). */
+  readonly onCommit: (wanted: readonly number[]) => void;
+}
+
+/** Is a multiSelect commit under way (running, or answered and waiting for the pane to move on)? While it is, no row may
+ *  start another send and the sheet may not be dismissed. */
+export const picksBusy = (call: PickCall | null): boolean => call !== null;
+
+/** Free text inside a multiSelect question is not answered from the sheet in v1 (D-5048 refuses it). */
+const MULTI_OWN_WORDS = 'Own words on a pick-several question go in the terminal.';
+
+/**
+ * A multiSelect question's boxes (D-5091), where the pane carries `Dialog.multi`: one checkbox row per box, then the
+ * commit. A tap on a box changes only the sheet; the commit sends the WHOLE set at once (`api.answerDialogMulti`,
+ * D-5048), which ticks and unticks on the pane only the boxes that differ, proves the ticks, and commits.
+ *  - The boxes follow the pane's ticks until the operator touches one here (`Picks.picked`); from then the sheet's set
+ *    stands until the question changes. While a commit is under way they show the set it sent.
+ *  - The commit reads `Next`, or `Review answers` on the last question, where Tab lands on the review screen
+ *    (`commitsToReview`). It is held back where the route would refuse (`multiHeld`): no box ticked, the free-text box
+ *    ticked, or the cursor off the boxes; each of the last two says so in one line.
+ *  - Free text inside such a question is the terminal's, said in one line where the pane paints the row.
+ *
+ * Rows are `@ccrc/ui`'s `OptionRow` with `checked` (role `checkbox`, 52px and up at every width); the commit is the
+ * sheet's full-width primary `Button` in `.dlg-actions`, as every sheet's main action is.
+ */
+export function MultiPick({
+  multi,
+  dialogId,
+  copy,
+  picks,
+  locked,
+}: {
+  multi: DialogMulti;
+  /** The live dialog's id: a call committed to another question shows nothing of its set here. */
+  dialogId: string;
+  /** The envelope's copy for the boxes, by position (`questionCorresponds` matched them one for one); the pane's own
+   *  labels and descriptions otherwise. */
+  copy?: HookAskQuestion['options'];
+  picks: Picks;
+  /** Another send is in flight (an option's answer, or own words). */
+  locked: boolean;
+}): ReactNode {
+  const { picked, call, onToggle, onCommit } = picks;
+  const busy = picksBusy(call);
+  const ticked = call !== null && call.dialogId === dialogId ? call.wanted : (picked ?? paneTicks(multi));
+  const wanted = wantedTicks(multi, ticked);
+  const held = busy ? null : multiHeld(multi, wanted);
+  return (
+    <>
+      <div className="opts">
+        {multi.options.map((o, k) => {
+          const c = copy?.[k];
+          return (
+            <OptionRow
+              key={`${dialogId}:${o.index}`}
+              checked={ticked.includes(o.index)}
+              index={o.index}
+              label={c?.label ?? o.label}
+              sublabel={c?.description || o.description}
+              disabled={busy || locked}
+              onClick={() => onToggle(o.index)}
+            />
+          );
+        })}
+      </div>
+      {held === 'free-text' && <p className="dlg-copy">{MULTI_FREE_TEXT_TICKED}</p>}
+      {held === 'cursor' && <p className="dlg-copy">{cursorOffOptions(cursorPlace(multi))}</p>}
+      {multi.freeText !== null && <p className="dlg-copy">{MULTI_OWN_WORDS}</p>}
+      <div className="dlg-actions">
+        <Button
+          variant="primary"
+          disabled={busy || locked || held !== null}
+          aria-busy={busy || undefined}
+          onClick={() => onCommit(wanted)}
+        >
+          {commitsToReview(multi) ? 'Review answers' : 'Next'}
+          {busy && <span className="opt-wait"> answering…</span>}
+        </Button>
+      </div>
+    </>
   );
 }

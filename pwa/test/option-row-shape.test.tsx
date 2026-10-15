@@ -61,3 +61,47 @@ describe('the trailing slot holds one mark', () => {
     expect(document.querySelector('.opt-enter')?.textContent).toBe('●');
   });
 });
+
+// D-5091 (plan docs/superpowers/plans/2026-10-15-ask-sheet-half.md, Task 4): a multiSelect AskUserQuestion question is
+// answered as boxes, and a box is still the design system's row. `checked` defined makes the row a checkbox, for a
+// screen reader as much as for the eye: the role and its state on the element itself, and the box drawn in the glyph
+// column as decoration (the column is aria-hidden, as the cursor is).
+describe('checked makes the row a checkbox: role, aria-checked, and the box in the glyph column', () => {
+  it('a ticked row with a handler is a checkbox button, checked, with the ticked box in the glyph column', () => {
+    render(<OptionRow label="Logging" index={1} checked onClick={() => {}} />);
+    const el = screen.getByRole('checkbox', { name: /Logging/ });
+    expect(el.tagName).toBe('BUTTON');
+    expect(el).toHaveAttribute('aria-checked', 'true');
+    const glyph = el.querySelector('.opt-glyph');
+    expect(glyph?.textContent).toBe('☑');
+    expect(glyph).toHaveAttribute('aria-hidden', 'true');
+  });
+
+  it('an unticked row is a checkbox too, unchecked, with the empty box', () => {
+    render(<OptionRow label="Metrics" index={2} checked={false} onClick={() => {}} />);
+    const el = screen.getByRole('checkbox', { name: /Metrics/ });
+    expect(el).toHaveAttribute('aria-checked', 'false');
+    expect(el.querySelector('.opt-glyph')?.textContent).toBe('☐');
+  });
+
+  it('a read-only box is a non-interactive div that still says whether it is ticked', () => {
+    render(<OptionRow label="Tracing" checked disabled />);
+    const el = screen.getByRole('checkbox', { name: /Tracing/ });
+    expect(el.tagName).toBe('DIV');
+    expect(el).toHaveAttribute('aria-checked', 'true');
+    expect(el).toHaveAttribute('aria-disabled', 'true');
+  });
+
+  it('a glyph the caller passes keeps the column', () => {
+    render(<OptionRow label="Hammer" glyph="❯" checked onClick={() => {}} />);
+    expect(screen.getByRole('checkbox', { name: /Hammer/ }).querySelector('.opt-glyph')?.textContent).toBe('❯');
+  });
+
+  it('CONTROL: without checked the row is no checkbox and draws no box', () => {
+    render(<OptionRow label="Allow once" onClick={() => {}} />);
+    expect(screen.queryByRole('checkbox')).toBeNull();
+    const el = screen.getByRole('button', { name: /allow once/i });
+    expect(el.hasAttribute('aria-checked')).toBe(false);
+    expect(el.querySelector('.opt-glyph')).toBeNull();
+  });
+});

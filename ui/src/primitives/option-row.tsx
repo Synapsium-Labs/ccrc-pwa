@@ -47,6 +47,15 @@ export interface OptionRowProps {
   onClick?: () => void;
   disabled?: boolean;
   busy?: boolean;
+  /** Defined ⇒ the row is a CHECKBOX, one of several that may be ticked at
+   *  once (a multiSelect question's boxes): `role="checkbox"` and
+   *  `aria-checked` on the element `onClick` chose, so a screen reader hears a
+   *  box and whether it is ticked rather than a button. With no `glyph` of the
+   *  caller's, the glyph column draws the box, `☑` or `☐`, decoration beside
+   *  the row's own name like the cursor it stands in for. Undefined ⇒ an
+   *  ordinary row, exactly as before. No class of its own: the box rides the
+   *  column every row already has, so the owned vocabulary does not grow. */
+  checked?: boolean;
   className?: string;
 }
 
@@ -62,17 +71,21 @@ export function OptionRow({
   onClick,
   disabled,
   busy,
+  checked,
   className,
 }: OptionRowProps): ReactNode {
   // The ring rides the row only when it IS a control — `onClick` absent
   // means a plain <div>, and a div that cannot be focused must not carry
   // focus utilities that would never fire.
   const cls = cn('opt', onClick !== undefined && FOCUS_RING, selected && 'opt--selected', className);
+  // A box is a checkbox to assistive tech too, whichever element `onClick` chose.
+  const box = checked === undefined ? {} : { role: 'checkbox', 'aria-checked': checked };
+  const mark = glyph ?? (checked === undefined ? undefined : checked ? '☑' : '☐');
   const inner = (
     <>
-      {glyph !== undefined && (
+      {mark !== undefined && (
         <span className="opt-glyph" aria-hidden="true">
-          {glyph}
+          {mark}
         </span>
       )}
       {index !== undefined && (
@@ -100,7 +113,7 @@ export function OptionRow({
   );
   if (!onClick) {
     return (
-      <div className={cls} aria-disabled={disabled || undefined} aria-busy={busy || undefined}>
+      <div className={cls} {...box} aria-disabled={disabled || undefined} aria-busy={busy || undefined}>
         {inner}
       </div>
     );
@@ -109,6 +122,7 @@ export function OptionRow({
     <button
       type="button"
       className={cls}
+      {...box}
       disabled={disabled}
       aria-busy={busy || undefined}
       onClick={onClick}

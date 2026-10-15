@@ -129,22 +129,37 @@
 // `dialog.id`, which the typing itself changes: so the stream's frame of the
 // typed row cannot reset a send mid-call, and an `ask_cleared` mid-call hands
 // the same text and call to the scraped sheet.
+//
+// D-5091 (Task 4): a multiSelect question the pane carries as `Dialog.multi`
+// is answered as boxes, in both sheets (`AskParts.tsx`'s `MultiPick`): the
+// commit sends the whole set through `api.answerDialogMulti` (D-5048). The
+// operator's set and the commit's call live HERE too, for the same two
+// reasons: the boxes repaint under the same id while the server ticks them,
+// and an `ask_cleared` mid-commit hands the same set and call to the scraped
+// sheet.
 import { Fragment, useEffect, useId, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import type { Dialog, HookAsk } from '../../../shared/api';
 import { EYEBROW, OptionRow, Sheet, Well, toast } from '@ccrc/ui';
 import { EnvelopeSheet, TerminalCta } from './EnvelopeSheet';
 import {
-  AskEyebrow, AskReview, ChatRow, OwnWords, REVIEW_TITLE, SEVERAL_ANSWERS, wordsBusy, type Words, type WordsCall,
+  AskEyebrow, AskReview, ChatRow, MultiPick, OwnWords, REVIEW_TITLE, picksBusy, wordsBusy, type PickCall, type Picks,
+  type Words, type WordsCall,
 } from './AskParts';
-import { chatRow, freeTextSlot, isAskReview, slotHolds } from './askLive';
-import { dialogTextRefusal } from './askWords';
+import { chatRow, freeTextSlot, isAskReview, paneTicks, slotHolds } from './askLive';
+import { dialogMultiRefusal, dialogTextRefusal } from './askWords';
 import { api, ApiError } from '../lib/api';
 import { getSessionStore, type SessionStore } from '../stores/session';
 import './chat.css';
 
 /** No own-words text, and no call. */
 const NO_WORDS: { text: string; call: WordsCall | null } = { text: '', call: null };
+
+/** No box touched, and no commit. `id` is the question (dialog id) `picked` belongs to: a set is never carried from
+ *  one question to another. */
+const NO_PICK: { id: string | null; picked: readonly number[] | null; call: PickCall | null } = {
+  id: null, picked: null, call: null,
+};
 
 /** Does `dialog` still show the question `call` typed into, its free-text row holding exactly `text`? That is the
  *  typed row of this very send (the stream may deliver it after the call answered), not other text, and not a new
@@ -212,6 +227,8 @@ export function DialogSheet({ id, store, onOpenTerminal, raise }: DialogSheetPro
   const [dismissedDialogId, setDismissedDialogId] = useState<string | null>(null);
   // D-5090: the own-words text and its call, one value so the two change together (see `WordsCall`).
   const [own, setOwn] = useState(NO_WORDS);
+  // D-5091: a multiSelect question's set and its commit, one value for the same reason (see `PickCall`).
+  const [pick, setPick] = useState(NO_PICK);
   // The raw "full question" view.
   const [details, setDetails] = useState(false);
 
@@ -226,15 +243,20 @@ export function DialogSheet({ id, store, onOpenTerminal, raise }: DialogSheetPro
   // (captured before its Enter, delivered after its ok). A call still in FLIGHT is never touched here: the typing
   // changes the id mid-call.
   const dialogId = dialog?.id ?? null;
+  // D-5091: and ends a multiSelect commit that landed, and forgets the set touched on the last question; a commit
+  // still in FLIGHT keeps its call (the screen it moved on to can arrive before the call's answer), and its settle
+  // decides.
   useEffect(() => {
     setAnswering(null);
     setOwn((o) => (o.call?.state === 'landed' && !showsSent(dialog, o.call, o.text) ? NO_WORDS : o));
+    setPick((p) => (p.call?.state === 'flight' ? p : NO_PICK));
     // `dialog` is read at the id it belongs to; a repaint under the same id is not a new screen.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dialogId]);
 
-  // Anything in flight: an option's answer, or an own-words send. Either refuses another send and the dismissal.
-  const locked = answering !== null || wordsBusy(own.call);
+  // Anything in flight: an option's answer, an own-words send or a multiSelect commit. Each refuses another send and
+  // the dismissal.
+  const locked = answering !== null || wordsBusy(own.call) || picksBusy(pick.call);
 
   // D-286: the transcript asked for this sheet back. Clearing the dismissal
   // is the WHOLE effect — the sheet then opens on exactly the envelope the
@@ -316,6 +338,43 @@ export function DialogSheet({ id, store, onOpenTerminal, raise }: DialogSheetPro
     onSend: (row) => void sendWords(row),
   };
 
+  // D-5091: tick or untick a box on the sheet. The first touch seeds the set from the pane's ticks, so the operator
+  // edits what the pane shows; from then the sheet's set stands until the question changes.
+  const toggle = (index: number): void => {
+    const current = dialog;
+    if (current === null || current.multi === undefined || locked) return;
+    const seed = paneTicks(current.multi);
+    setPick((p) => {
+      const base = p.id === current.id && p.picked !== null ? p.picked : seed;
+      const picked = base.includes(index) ? base.filter((k) => k !== index) : [...base, index];
+      return { ...p, id: current.id, picked };
+    });
+  };
+
+  // D-5091: commit the WHOLE set (`wanted`, ordered as the answer will list it). Like a tapped option, the sheet stays
+  // busy after ok until the pane moves on, unless it already has; a refusal says why and leaves the set sent as the
+  // operator's, so trying again sends it again (the server presses only what is still needed).
+  const commitPicks = async (wanted: readonly number[]): Promise<void> => {
+    const current = dialog;
+    if (current === null || locked) return;
+    const call: PickCall = { dialogId: current.id, wanted, state: 'flight' };
+    setPick((p) => ({ ...p, call }));
+    try {
+      await api.answerDialogMulti(id, current.id, wanted);
+      const waiting = useStore.getState().dialog?.id === current.id;
+      setPick(waiting ? { id: current.id, picked: wanted, call: { ...call, state: 'landed' } } : NO_PICK);
+    } catch (err) {
+      setPick({ id: current.id, picked: wanted, call: null });
+      toast(dialogMultiRefusal(err), 'error');
+    }
+  };
+  const picks: Picks = {
+    picked: dialog !== null && pick.id === dialog.id ? pick.picked : null,
+    call: pick.call,
+    onToggle: toggle,
+    onCommit: (wanted) => void commitPicks(wanted),
+  };
+
   // The hook envelope wins DISPLAY the moment it is USABLE — see the file
   // header (fix round 1's I4). It can be non-null while `shown` is still null
   // (the envelope arrived first), so this has to come before the
@@ -336,6 +395,7 @@ export function DialogSheet({ id, store, onOpenTerminal, raise }: DialogSheetPro
         dialog={dialog}
         answering={answering}
         words={words}
+        picks={picks}
         open={askKey !== dismissedKey}
         onHide={() => {
           setDismissedKey(askKey);
@@ -349,25 +409,31 @@ export function DialogSheet({ id, store, onOpenTerminal, raise }: DialogSheetPro
 
   if (shown === null) return null;
 
-  if (!shown.parsed) {
-    // D-5089: a multiSelect question the server read as one (`Dialog.multi`)
-    // is NAMED, as the envelope sheet names it, so the hand-off on
-    // `ask_cleared` changes nothing the operator reads: its title, the same
-    // sentence, and the pane's boxes in the raw well. D-5091 answers it with
-    // boxes. Any other unparsed pane keeps the generic dead end, and so does
-    // one whose title came back blank (a sheet with no accessible name).
-    const multi = shown.multi !== undefined && shown.title.trim() !== '';
+  // D-5091: a multiSelect question the server read as one (`Dialog.multi`) is
+  // answered with the same boxes the envelope sheet offers (`MultiPick`), so
+  // the hand-off on `ask_cleared` changes nothing the operator reads or can
+  // do: its title, its boxes, the same set and the same commit. (D-5089 only
+  // named it here, with the envelope's several-answers line.) One whose title
+  // came back blank keeps the generic dead end below: a sheet with no
+  // accessible name.
+  if (!shown.parsed && shown.multi !== undefined && shown.title.trim() !== '') {
     return (
-      <Sheet
-        open={open}
-        onClose={close}
-        eyebrow={<AskEyebrow />}
-        title={multi ? shown.title : 'Answer this one in the terminal'}
-      >
+      <Sheet open={open} onClose={close} eyebrow={<AskEyebrow header={shown.ask?.header} />} title={shown.title}>
+        <MultiPick
+          multi={shown.multi}
+          dialogId={shown.id}
+          picks={picks}
+          locked={answering !== null || wordsBusy(own.call)}
+        />
+      </Sheet>
+    );
+  }
+
+  if (!shown.parsed) {
+    return (
+      <Sheet open={open} onClose={close} eyebrow={<AskEyebrow />} title="Answer this one in the terminal">
         <p className="dlg-copy">
-          {multi
-            ? SEVERAL_ANSWERS
-            : "This question doesn't fit tappable options. Answer it in the terminal — the session picks up from there."}
+          This question doesn't fit tappable options. Answer it in the terminal — the session picks up from there.
         </p>
         <Well className="dlg-raw">{shown.raw}</Well>
         <TerminalCta
@@ -466,8 +532,14 @@ export function DialogSheet({ id, store, onOpenTerminal, raise }: DialogSheetPro
         })}
       </div>
 
-      {/* Answer in your own words, through the free-text row (D-5090), in that row's place. */}
-      <OwnWords slot={slot} chat={chat?.label ?? null} words={words} locked={answering !== null} />
+      {/* Answer in your own words, through the free-text row (D-5090), in that row's place. A multiSelect commit still
+          running (D-5091) locks it as an option's answer does. */}
+      <OwnWords
+        slot={slot}
+        chat={chat?.label ?? null}
+        words={words}
+        locked={answering !== null || picksBusy(pick.call)}
+      />
       {chat && (
         <ChatRow
           row={chat}
