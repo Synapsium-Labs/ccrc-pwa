@@ -159,9 +159,9 @@ export const DOCS_HIGHLIGHT_SCAN_PAGE_MAX_CHARS = 393216;
  *  budget with every block highlighted, 10.6 s. Chat has no page budget: one crafted markdown block about 4.5 s, one
  *  yaml block about 1.1 to 1.4 s. Real documents are unaffected: the most markdown code on a page Docs formats is
  *  24 056 characters, its largest markdown block 17 042. Four reviews in a row each found a shape the sweeps before
- *  them had not tried, so more crafted shapes probably exist. The operator ruled the remedy on 2026-10-15: a dedicated
- *  wave moves highlighting off the main thread, into the parse worker with a deadline, before part 2; part 1 adds no
- *  bound and no value for these shapes. */
+ *  them had not tried, so more crafted shapes probably exist. The remedy: a dedicated wave (W5h) moves highlighting off
+ *  the main thread into its own highlight worker, with a per-block deadline; Share runs in parallel with it, and Export
+ *  waits for it (operator, 2026-10-15). Part 1 adds no bound and no value for these shapes. */
 export const DOCS_HIGHLIGHT_MARKDOWN_PAGE_MAX_CHARS = 131072;
 /** The longest inline code span that can be a keystroke chord (W5 bound r11); a longer one is plain inline code,
  *  never trimmed or split. The longest chord of named keys is about 40 characters. */
