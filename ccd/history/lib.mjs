@@ -3574,8 +3574,12 @@ export function deriveHealth(h) {
     : null;
   // D-5027 (history-held-pass-is-fresh-for-tick-stale): a held pass that ended within TICK_STALE_MS (and not past PASS_FUTURE_SLACK_MS
   // in the future, the same step-back guard) ran and ended as designed. It answers for the tick-stale FAIL ONLY: the held node shows its
-  // own FAIL (migration-needs-op, migration-refused, schema-newer), and not a second one that points at the timer. It is not a tick:
-  // tickFresh, catching-up, lag-unmeasured and lag-high do not read it.
+  // own FAIL (migration-needs-op, migration-refused), and not a second one that points at the timer. It is not a tick:
+  // tickFresh, catching-up, lag-unmeasured and lag-high do not read it, so lag-high joins 30 minutes (LAG_FAIL_MS) after the last
+  // zero-behind tick (capture is paused while the hold stands, so the lag is real). schema-newer is NOT covered (review 466 F1): a
+  // scheduled pass on a newer store is refused at openStore, before the held arm, and leaves through holdPass, which opens no
+  // database and stamps nothing (DM17: no write on a newer store), so tick-stale keeps standing beside schema-newer; planRun's
+  // refuse-newer arm is defensive on a scheduled pass.
   const heldFresh = h.heldPassMs !== null && h.heldPassMs !== undefined
     && h.nowMs - h.heldPassMs <= TICK_STALE_MS && h.heldPassMs - h.nowMs <= PASS_FUTURE_SLACK_MS;
 

@@ -575,19 +575,38 @@ describe('DM43: no copy a scheduled pass cannot finish', () => {
 // points at the timer. The held arm now stamps meta `held_pass_ms`; deriveHealth reads one that ended within TICK_STALE_MS as fresh for
 // that FAIL only.
 describe('D-5027: a held pass is fresh for tick-stale', () => {
-  const heldBox = (prefix: string): HistoryBox => {
+  // Ages the tick rows AND meta last_zero_behind_ms together, as a real node's clock does (recordTick writes both in one step, so the lag
+  // mark is never newer than the last tick; review 466 F2). Both are read back to prove the fixture aged what it claims.
+  const ageBox = (box: HistoryBox, minutes: number): void => {
+    const db = new DatabaseSync(paths(box).db);
+    try {
+      db.prepare('UPDATE ticks SET ts_ms = ts_ms - ?').run(minutes * MIN);
+      const zero = db.prepare("SELECT v FROM meta WHERE k = 'last_zero_behind_ms'").get() as { v: string } | undefined;
+      expect(zero, 'the first pass wrote last_zero_behind_ms').toBeDefined();
+      db.prepare("UPDATE meta SET v = ? WHERE k = 'last_zero_behind_ms'").run(String(Number(zero!.v) - minutes * MIN));
+    } finally { db.close(); }
+  };
+  // A bound box whose store is over the line for the V2 seam (copy_bps 100) and whose tick rows and lag mark are aged `minutes`.
+  const agedHeldBox = (prefix: string, minutes: number): HistoryBox => {
     const box = boundBox(prefix);
     const db = new DatabaseSync(paths(box).db);
     try {
       db.prepare("INSERT INTO meta (k, v) VALUES ('copy_bps', '100') ON CONFLICT (k) DO UPDATE SET v = excluded.v").run();
-      db.prepare('UPDATE ticks SET ts_ms = ts_ms - ?').run(30 * MIN);              // the tick rows aged past 10 min
     } finally { db.close(); }
+    ageBox(box, minutes);
+    return box;
+  };
+  const heldPasses = (box: HistoryBox): void => {
     const held = (): void => {
       const r = runDriver(box, { extraMigrations: [V2] });
       expect(r.code, r.stderr).toBe(0);
       expect(r.stdout).toMatch(/^history-sweep: migration-needs-op$/m);
     };
     held(); held();                                                                // two held passes
+  };
+  const heldBox = (prefix: string, minutes = 20): HistoryBox => {
+    const box = agedHeldBox(prefix, minutes);
+    heldPasses(box);
     return box;
   };
   const verdict = (box: HistoryBox): Array<{ word: string; detail: string }> => {
@@ -600,13 +619,38 @@ describe('D-5027: a held pass is fresh for tick-stale', () => {
     try { db.prepare('INSERT INTO meta (k, v) VALUES (?, ?) ON CONFLICT (k) DO UPDATE SET v = excluded.v').run(k, v); } finally { db.close(); }
   };
 
-  it('pin 8: two held passes over the line, the tick rows aged past 10 min: migration-needs-op and NO tick-stale; the held pass added no ticks row', () => {
-    const box = heldBox('ccrc-hist-d5027-fresh-');
-    const ticks = countOf(box, 'ticks');
+  it('pin 8: two held passes over the line, the tick rows and the lag mark aged 20 min (past 10, under 30): migration-needs-op ALONE; the held passes added no ticks row (counted before they ran)', () => {
+    const box = agedHeldBox('ccrc-hist-d5027-fresh-', 20);
+    const ticksBefore = countOf(box, 'ticks');                                     // F5 (review 466): counted BEFORE the held passes run
+    expect(ticksBefore, 'the fixture has a ticks row to age').toBeGreaterThan(0);
+    heldPasses(box);
     expect(Number(metaOf(box, 'held_pass_ms')), 'the held arm stamped its end').toBeGreaterThan(Date.now() - 5 * MIN);
     const fail = verdict(box);
     expect(fail.map((i) => i.word)).toEqual(['migration-needs-op']);
-    expect(countOf(box, 'ticks')).toBe(ticks);
+    expect(countOf(box, 'ticks'), 'the held passes added no ticks row').toBe(ticksBefore);
+  });
+
+  it('F2 (review 466): past 30 min from the last zero-behind tick a held node also FAILs lag-high (capture is paused, the lag is real), and still no tick-stale', () => {
+    const box = heldBox('ccrc-hist-d5027-lag-', 35);
+    const fail = verdict(box);
+    expect(fail.map((i) => i.word).sort()).toEqual(['lag-high', 'migration-needs-op']);
+    expect(fail.find((i) => i.word === 'lag-high')!.detail).toContain('over 1800 s');
+  });
+
+  it('F1 (review 466): a store newer than this build is refused at openStore, before the held arm: schema-newer, exit 5, NO held_pass_ms, so tick-stale stands beside schema-newer', () => {
+    const box = boundBox('ccrc-hist-d5027-newer-');
+    // The seam's two migrations take the store to user_version 3, past this build's SCHEMA_VERSION (D-5015: 2).
+    expect(runDriver(box, { extraMigrations: [V2, V3] }, ['--op', 'migrate']).code).toBe(0);
+    ageBox(box, 20);                                                               // past TICK_STALE_MS, under the 30-min lag bound
+    for (let i = 0; i < 2; i++) {
+      const r = runShim(box);
+      expect(r.stdout, r.stderr).toMatch(/^history-sweep: schema-newer$/m);
+      expect(r.code, r.stderr).toBe(5);
+    }
+    expect(q<{ n: number }>(box, "SELECT count(*) AS n FROM meta WHERE k = 'held_pass_ms'")[0]!.n, 'a newer store is never stamped (DM17: no write)').toBe(0);
+    const fail = verdict(box);
+    expect(fail.map((i) => i.word).sort()).toEqual(['schema-newer', 'tick-stale']);
+    expect(fail.find((i) => i.word === 'tick-stale')!.detail).toContain('the last tick ran');
   });
 
   it('pin 9: the same with the held passes aged past TICK_STALE_MS too: tick-stale beside migration-needs-op, as before', () => {
@@ -626,12 +670,7 @@ describe('D-5027: a held pass is fresh for tick-stale', () => {
   });
 
   it('an open D-5026 death is NOT closed by a held pass: only a tick clears the record, and the death FAIL stands beside the hold\'s own', () => {
-    const box = boundBox('ccrc-hist-d5027-death-');
-    const db = new DatabaseSync(paths(box).db);
-    try {
-      db.prepare("INSERT INTO meta (k, v) VALUES ('copy_bps', '100') ON CONFLICT (k) DO UPDATE SET v = excluded.v").run();
-      db.prepare('UPDATE ticks SET ts_ms = ts_ms - ?').run(30 * MIN);
-    } finally { db.close(); }
+    const box = agedHeldBox('ccrc-hist-d5027-death-', 25);                          // the record's start (20 min ago) is after the last tick (25 min ago)
     const died = path.join(paths(box).root, 'pass-died');
     const record = `${JSON.stringify({ pid: 4242, start_ms: Date.now() - 20 * MIN, found_ms: Date.now() - 18 * MIN, count: 1 })}\n`;
     fs.writeFileSync(died, record, { mode: 0o600 });
