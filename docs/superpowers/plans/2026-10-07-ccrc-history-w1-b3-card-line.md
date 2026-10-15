@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (- [ ]) syntax for tracking.
 
-**Goal:** Ship W1-B3 "card line" of the ccrc history spec (rev 3.5, §8.6) as ONE PR on `main`, after B1 ("capture") and B2 ("recall") merge. After a compaction of a session's main thread, its SessionStart(compact) context gains one grammar-gated line that names the leaf the compaction is about to become:
+**Goal:** Ship W1-B3 "card line" of the ccrc history spec (rev 3.6, §8.6) as ONE PR on `main`, after B1 ("capture") and B2 ("recall") merge. After a compaction of a session's main thread, its SessionStart(compact) context gains one grammar-gated line that names the leaf the compaction is about to become:
 
 `History: node L03a9c1… (this compaction) · parent N7c1e2f… · ~/.local/bin/ccrc history describe L03a9c1`
 
@@ -12,7 +12,9 @@ The line is built from four pieces:
 - a 513-character reserve in the compact card's render on a box with history;
 - the sweep's per-session predictions, `card/<id>/<uuid>.txt`: written at end-of-file, deleted when the boundary that consumed them is ingested, and their delivery measured from the transcript (W1-e).
 
-B3 also carries the one README `:2900` re-anchor and the S6-R11 census re-measure that pays for the hook insertion above it, the two lifecycle rows, `measure-history.py`'s W1-e query, and a short README paragraph. It cannot precede B2: the line names `ccrc history describe`.
+B3 also carries the one README re-anchor (spec §10.5's `:2900`; README cites `:3012` at de0ab03e1) and the S6-R11 census re-measure that pays for the hook insertion above it, the two lifecycle rows, `measure-history.py`'s W1-e query, and a short README paragraph. It cannot precede B2: the line names `ccrc history describe`.
+
+Re-measured 2026-10-15 against B2's merged code (de0ab03e1): 340 anchors checked, 30 mismatches, amended in place; the plan defines no new departure for them.
 
 **Architecture:** Fleet-side only. There is no wire, server, PWA, `ccd/ccd`, `ccd/ccrc`, `compact-card.mjs`, doctor, coord.db or schema change; no new hook event arm, no new `--op` verb, no `WRITING_FORMS` entry and no `historyPaths` key. Ring membership is a property of a file's imports.
 
@@ -35,10 +37,10 @@ B3 also carries the one README `:2900` re-anchor and the S6-R11 census re-measur
   - `collectPurgedHistoryFiles(db, home, nowMs)`.
 - `ccd/history/sweep.mjs` gains one import and seven call sites, all above the R1 entry guard:
   - `cardStep(db, ictx, ctx.budget)`, directly below B2's `deriveNodes` line and under the same ingest/not-paused gate, with `withdrawCards` directly below it over the tick's facts (its pause, its per-chunk floor stop, an ingest an unreadable roster skipped, the budget read before the card step);
-  - `withdrawCards` on the three other ways a pass ends: in `holdPass` (no DB open: the count goes on the pass's outcome line), below `scheduledPass`'s `held` line, and below its `planRun` line for every arm that is not `run` (the migrate, recover and hold arms);
+  - `withdrawCards` on the three other ways a pass ends: in `holdPass` (no DB open: the count goes on the pass's outcome line); in `scheduledPassBody` (B2's D-5016 moved the body out of `scheduledPass`, which keeps only the off and server-role exits, the pass marker and the catch that records a death), directly below its `out('history-sweep: held');` line (the writer-token hold) and directly below its `const run = planRun(...)` line, gated on `run.arm !== 'run'` (the migrate, recover and hold arms). Both sites run inside the pass marker's span, so a throw out of `withdrawCards` is recorded by `scheduledPass`'s catch as a death (D-5026); the hold arm's `setMeta(db, HEALTH_META.heldPassMs, …)` stamp (D-5027) stays the last write of that arm, below its journal half;
   - `ensureHistoryDirs(db, ctx.home)`, unconditionally, directly below B1's spool-directory line `if (dirKind(ctx.paths.spool) !== 'other') mkdirDurable(ctx.paths.spool);`;
   - `if (scan) collectPurgedHistoryFiles(db, ctx.home, ctx.now())`, directly above B1's `markScan` line.
-  `makeIngestCtx`'s object also gains `readRegPresence`. `tick`'s doc comment gains one numbered item for each new step the body calls with `db` (`cardStep`, `withdrawCards`, `collectPurgedHistoryFiles`, `ensureHistoryDirs`), in body order, because B1's `history-sweep.test.ts` reads that list against the body (its review 316 F39 describe). The recover arm (`recoverPass`) never ticks, so no card is written or consumed while a recovery step runs; the pass that takes that arm withdraws every prediction first.
+  `makeIngestCtx`'s object also gains `readRegPresence`. `tick`'s doc comment gains one numbered item for each new step the body calls with `db` (`cardStep`, `withdrawCards`, `collectPurgedHistoryFiles`, `ensureHistoryDirs`), in body order, because B1's `history-sweep.test.ts` reads that list against the body (its review 316 F39 describe). The recover arm (`recoverPass`) never calls `tick()`, so it runs no card step (it still writes a ticks row through `recordTick`, which since B2's D-5026 also clears `pass-died`): no card is written or consumed while a recovery step runs; the pass that takes that arm withdraws every prediction first.
 
 *The hook, `ccd/session-hook.sh`* (bash; enqueue-only contract):
 - **Above `state="" ask_json=`**, the ONE sanctioned insertion above README's anchor (D-4748 (`history-card-reader-above-the-arm`); Task 9): `HISTORY_CARD_MAX=512`, `HISTORY_CARD_RE='<the spec grammar>'`, `HISTORY_SCOPE_DIR`, `HISTORY_CARD_DIR` and `_hook_history_card`. The reader is builtin-only and forks nothing. Its checks run in this order:
@@ -68,7 +70,7 @@ B3 also carries the one README `:2900` re-anchor and the S6-R11 census re-measur
 - vitest in `server/`; Python 3 for the read-only `deploy/measure-history.py` query and the scratch mutation and census tools;
 - GitHub Actions: the `node-floor` leg's heredoc gains `test/history-card.test.ts`.
 
-**Spec:** `docs/superpowers/specs/2026-10-05-ccrc-history-lossless-dag-design.md`, rev 3.5. Rev 3.5's changes (W1-B1's corrections and the substring belt, §17) add pins to B1 and B2 only (§10.5), none to B3. Rev 3.4 was rev 3.3 plus the operator's rulings on Q15–Q19 and on prune at low disk (§15.1):
+**Spec:** `docs/superpowers/specs/2026-10-05-ccrc-history-lossless-dag-design.md`, rev 3.6 (rev 3.5 plus B2's in-place edits to §5.2's root files, §6.2's rollback witness, §6.8/§6.11's schema v2, §8.4's relay and §9.4's `history-store-id` row, and rev 3.6's §8.3 token values, §8.4 `--regex` cost and §9.6 freshness). None of these touches B3's sections (§5.1, §5.3, §8.6, §9.2 step 6, §9.4's B3 rows, §10.5's B3 bullet). Rev 3.5's changes (W1-B1's corrections and the substring belt, §17) add pins to B1 and B2 only (§10.5), none to B3. Rev 3.4 was rev 3.3 plus the operator's rulings on Q15–Q19 and on prune at low disk (§15.1):
 - §10.5: B3's contents and pins; §10.6: the sequencing; §10.7: the acceptance (W1-e, W1-h);
 - §8.6: the card line; §5.1 and §5.3: the scope marker; §8.9: the C pins; §5.5: the S pins;
 - §9.4: the lifecycle rows; §9.7: recall-off; §13: the cross-cutting invariants; §16: the slugs;
@@ -82,7 +84,7 @@ B3 also carries the one README `:2900` re-anchor and the S6-R11 census re-measur
 - **Files B1 or B2 created are anchored by content, never by line.** These are `ccd/history/{lib,store,sweep,cli,derive}.mjs`, `lib.d.mts`, `server/test/history*.test.ts`, `historyHelpers.ts`, `historyFixtures.ts`, `deploy/measure-history.py` and its test. An anchor is a function, const or marker name, a quoted line, or "above the entry guard".
 - **Pre-existing files were measured at `f7e51156f`**, a few also at origin/main `9a255a746`, and each anchor says which. Re-anchor every one by its quoted content at B3's base.
 - **B1's and B2's merged code may differ from their plan text.** Read it before editing it. Every task's Step 1 measures its anchors and stops on a difference.
-- **Other programmes' PRs touch the same files.** #248 (landing order W3), #299 (session continuity W4) and #284 (delegation broker W1, which appends `sessend=""` to the hook's state line) are merged: origin/main `9a255a746` carries them, and so does B3's base. The anchors quoted "at origin/main 9a255a746" were measured on that tree. #189 (stale) rewrites the identity block beside the reader's insertion: whichever of #189 and B3 lands second rebases by content, and B3's census runs on B3's own base.
+- **Other programmes' PRs touch the same files.** #248 (landing order W3), #299 (session continuity W4) and #284 (delegation broker W1, which appends `sessend=""` to the hook's state line) are merged: origin/main `9a255a746` carries them, and so does B3's base. The anchors quoted "at origin/main 9a255a746" were measured on that tree. #189 (the fork chain, which rewrote the identity block beside the reader's insertion) is merged too and is an ancestor of de0ab03e1, so it is on B3's base; B3's census runs on B3's own base.
 
 **PR:** B3 is one PR. It merges after B2 and in either order with B4 (B1's D-4246 (`history-w1b-three-prs`)). It edits `.github/workflows/ci.yml` (Task 1's node-floor line), so its CI selects the full suite; the coordinator dispatches the full run. The rollout, the W1-e reading and the W1-h check are coordinator or operator steps named in the PR body (Task 14), never the worker's.
 
@@ -102,6 +104,7 @@ B3 also carries the one README `:2900` re-anchor and the S6-R11 census re-measur
   - the reserve's env hygiene and its PreCompact gate: Task 10;
   - the W1-e query: Task 13.
 - Not B3's: C68's CLI half (B2); O39, O40, O43 and O44's segment case (B4); C59's steer clause and the PreCompact print (W3).
+- Not B3's either: the follow-ups B2's merged departures mark 'on B3's list' (D-5017, D-5021, D-5022, D-5024, D-5026 residual (i), D-5027's lag-high remedy). The coordinator moved them to hardening wave 5h on 2026-10-15 (programme ledger, 'Owed from B2'), so B3 changes no schema and no doctor check.
 
 **Operator rulings (spec §15.1, rev 3.4, 2026-10-07; binding).** The operator ruled Q15–Q19 and prune at low disk. B3 implements each as ruled:
 - **Q15 yes** (the export's due rule reads each row's own copies, `EXPORT_REDUCERS.perCopy`, the default from B2): no B3 effect. B3 computes no due rule; the census, doctor and B4's export pass read the default B2 sets.
@@ -129,7 +132,7 @@ B3 also carries the one README `:2900` re-anchor and the S6-R11 census re-measur
   - README gains a short card-line paragraph (Task 14; D-4753 (`history-readme-card-paragraph`)). CLAUDE.md's README figure is re-measured in that commit, and changed only if README crosses it (Task 14 Step 3).
   - The reserve stays at 513, as C38 pins, although the longest valid line is 145 chars (Task 10).
   - The card spells `~/.local/bin/ccrc`, as §8.6's grammar requires (Task 1). Spec rev 3.3 corrected §16's B2's D-4682 (`history-skill-literal-path`) row to agree with §8.6 (the card line `~/.local/bin/ccrc`, the skill `$HOME/.local/bin/ccrc`), so no erratum is left. B2's `HISTORY_CMD` keeps its own spelling.
-- **RC2: fail closed** (D-4740 (`history-card-withdrawn-when-not-ticking`), NEW). Every scheduled pass that runs but does not run the card step withdraws every `card/<id>/<uuid>.txt`: lstat-checked, unlink only, never through a link, counted `card_withdrawn:<reason>` with one reason word per path. The paths are the ruling's (a cap pause, a floor pause, a per-chunk floor stop, a budget already spent before the card step, the recover arm, and a held, refused or unbound store) and, under its "every path", the three others a scheduled pass can take without a card step over a caught-up ingest: an ingest an unreadable roster skipped, the migrate arm, and an unreachable store. A hold with no DB open records the count on its outcome line, because nothing is counted there (IV2). Which state withdraws is lib's L1 decision, `decideCardWithdraw` (Task 3); `card.mjs` and `sweep.mjs` only measure and act (Task 5). In `consumeAndWriteCards` the budget is checked only before a WRITE, never before the consume/delete decision (Task 5). A dead timer stays a named residual in the PR body (Task 14).
+- **RC2: fail closed** (D-4740 (`history-card-withdrawn-when-not-ticking`), NEW). Every scheduled pass that ends normally without the card step withdraws every `card/<id>/<uuid>.txt`: lstat-checked, unlink only, never through a link, counted `card_withdrawn:<reason>` with one reason word per path. The paths are the ruling's (a cap pause, a floor pause, a per-chunk floor stop, a budget already spent before the card step, the recover arm, and a held, refused or unbound store) and, under its "every path", the three others a scheduled pass can take without a card step over a caught-up ingest: an ingest an unreadable roster skipped, the migrate arm, and an unreachable store. A hold with no DB open records the count on its outcome line, because nothing is counted there (IV2). Which state withdraws is lib's L1 decision, `decideCardWithdraw` (Task 3); `card.mjs` and `sweep.mjs` only measure and act (Task 5). In `consumeAndWriteCards` the budget is checked only before a WRITE, never before the consume/delete decision (Task 5). A dead timer stays a named residual in the PR body (Task 14), and so does the pass that never reaches either: a scheduled pass that ends before its card step, whether killed (the carrier's 10-minute kill, the OOM killer, a SIGKILL) or ended by a throw (B2's D-5016 and D-5026), neither consumes nor withdraws, so a second compaction in that window is served the last prediction (counted `card_id_mismatch` once derivation resumes); doctor FAILs `tick-stale` naming the death until a later pass ticks, unless history is off or an operator pass is live.
 - **RC3: classify each consumption by scope** (D-4738 (`history-card-consumed-counter`)). When a consumption is counted, `card.mjs` reads `scope/<id>` read-only, never through a link, and lib's `decideConsumedScope` folds it as `card_consumed:main` (the marker reads `main <uuid> <ms>`, ms not after the consumed boundary's ts and within `COMPACT_CARD_MAX_AGE` of it), `card_consumed:other` (`subagent` or `ambiguous` in that window) or `card_consumed:unknown` (anything else: overwritten, emptied, unreadable) (Tasks 3 and 5). W1-e's `served_share = served / (main + unknown)`, with `other` and `unknown` reported beside it; the mismatch share stays over served plus mismatch (Task 13).
 - **RC4: recall-off parity, fail closed** (D-4749 (`history-card-recall-off-unreadable-off`)). The hook's recall-off reader treats a read that filled its read window (`CCRC_ID_MAX` characters, untrimmed) as OFF, the side that withholds the line. The parity table gains the row "130 spaces followed by the resolved generation G" (the CLI answers exit 8, the hook serves no line) and its mutant. The reader block grows, and Task 9's census measurement and expected numbers carry its new length (Task 9).
 
@@ -169,7 +172,7 @@ B3 also carries the one README `:2900` re-anchor and the S6-R11 census re-measur
   - The tail resets `HISTORY_CARD_RESERVE` and unsets `CS_SCOPE` before either is read, so neither can come from a pane's environment (the `hcat=""` precedent).
 - **Citation corpus and S6-R11.**
   - B3 pays the census once, in Task 9. The hook insertion, the `:2893` edit, the README re-point and the dated census paragraph land in ONE commit, gated on the census guard's rc read green in a separate call.
-  - README's quoted `ccd/session-hook.sh:2900` is re-pointed by content BEFORE the census is measured. With README stale, the census reads 22 for the hook and reds the README case (measured).
+  - README's quoted `ccd/session-hook.sh:<n>` (`:3012` at de0ab03e1; spec §10.5's `:2900`) is re-pointed by content BEFORE the census is measured. With README stale, the census reads 22 for the hook and reds the README case (measured).
   - The instrument is the landing-order wave-1 plan's `cite-remeasure.py`, run with an ABSOLUTE scratch dir and `--files` naming every cited file the step edited. Its default swaps only `ccd/ccd` and README, and its base leg then reads red.
   - Expect `stated = base = tree` for every key, at the values the instrument prints as `stated` at B3's base (B1's and B2's merges, and other programmes', can move them, so this plan quotes no number; trust the instrument's own `stated`), with `ENTERED []` and `LEFT []`. Never `--write`.
   - The frozen corpus documents (`specs/2026-09-09-graphify-compaction-card-design.md`, `plans/2026-09-10-graphify-compaction-card-plan-a.md`) stay byte-identical.
@@ -179,7 +182,7 @@ B3 also carries the one README `:2900` re-anchor and the S6-R11 census re-measur
   - RB2: display prefixes of at least 6 hex.
   - RB4: fan-in runs per holding copy and per epoch. The card's parent prediction reads the same slot lists (exported from `derive.mjs`) and runs `planFanIn` itself.
   - RB5: a parser crash is recorded, not retried. A crashed boundary has no leaf, so its delivery is never measured (a known undercount).
-  - RB6 and RB12–RB14: B3 adds no `WRITING_FORMS` entry and no `--op` verb, so the `GT_FORMS` and recovering-forms CONTROLs stay untouched. Nothing on the recover arm writes or consumes cards, because `recoverPass` never ticks; the pass that takes the arm withdraws every prediction before it (ruling RC2).
+  - RB6 and RB12–RB14: B3 adds no `WRITING_FORMS` entry and no `--op` verb, so the `GT_FORMS` and recovering-forms CONTROLs stay untouched. Nothing on the recover arm writes or consumes cards, because `recoverPass` never calls `tick()` (it still writes a ticks row through `recordTick`, which since B2's D-5026 also clears `pass-died`); the pass that takes the arm withdraws every prediction before it (ruling RC2).
   - Prune is reachability-gated, never floor-gated (`history-prune-not-floor-gated`, ruled by the operator 2026-10-07, spec rev 3.4), and B3 does not touch it.
 - **B2's fork spooling (ruled Q16) binds too.** A SessionStart(fork) writes a spool line and chains a `fork` epoch, or confirms the existing one for the same sid. B3 reads no epoch cause and edits no spool-block line; its fork pins are Task 5's spooled-fork case and Task 9's fork row.
 - **Single definition.**
@@ -212,13 +215,13 @@ These are the inputs most likely to break the plan's synthetic fixtures. Each on
    - Ruled RC1, now spec §5.1's "The early truncation" (rev 3.5) and S16's rev 3.5 rows: cited, not a departure.
 2. **Two compactions of one session land between two ticks, the boundary that consumed a prediction is ingested on a pass that ends short of end-of-file or of its budget, or a pass cannot run the card step at all**, so the end-of-file-gated writer cannot rewrite the file.
    - Expected: the consumer runs on every tick that runs the card step, whatever the end-of-file state and whatever budget is left: the budget bounds a write, never the consume/delete decision (ruling RC2). As soon as the store holds a boundary whose span start moved past the file's predicted leaf, the file is deleted (counted `card_consumed:<scope>`); it is rewritten only at end-of-file, and only while the run's budget is left. A second SessionStart after that ingest finds no file and serves nothing. A second compaction before the ingest serves the stale line, which the delivery measure counts as `card_id_mismatch`, never as `card_served`.
-   - A scheduled pass that runs but does not run the card step withdraws every prediction instead, counted `card_withdrawn:<reason>` (ruling RC2: fail closed): a cap or floor pause, a per-chunk floor stop, an ingest an unreadable roster skipped, a budget already spent before the card step (after the step's consume/delete has run), the recover or migrate arm, and a held, refused, unbound or unreachable store. A second compaction in any of those states finds no file and serves nothing.
+   - A scheduled pass that ends normally without the card step withdraws every prediction instead, counted `card_withdrawn:<reason>` (ruling RC2: fail closed): a cap or floor pause, a per-chunk floor stop, an ingest an unreadable roster skipped, a budget already spent before the card step (after the step's consume/delete has run), the recover or migrate arm, and a held, refused, unbound or unreachable store. A second compaction in any of those states finds no file and serves nothing.
    - Owning tasks:
      - **Task 5**: `the end-of-file gate: a torn last line holds the write; a boundary ingested on a pass that ends short of end-of-file consumes and deletes the prediction` (mutants `8.6 Timing: a consumed prediction kept until end-of-file` and `… written short of end-of-file`); `a floor pause withdraws every prediction …` (mutants `RC2: the tick withdraws nothing` and `RC2: a withdrawal through a linked card/<id>`); `a registered recovery step withdraws the card …` (mutant `RC2: the recover, migrate and hold arms withdraw nothing`); `a budget spent before the card step: the consume and delete still run …` (mutants `RC2: the budget gates the consume and delete` and `RC2: a write past the budget`); `a hold withdraws too …` (mutants `RC2: a held pass withdraws nothing`, `RC2: a hold with no DB withdraws nothing`, `RC2: a withdrawal on a hold with no DB left unrecorded` and `RC2: a withdrawal through a linked card/`); and every case that writes a prediction (mutant `RC2: a tick that ran its card step withdraws anyway`);
      - **Task 2**: `decideCardFile`'s table rows `the leaf moved, off end-of-file` (delete, consumed) and `the leaf moved, at end-of-file` (write, consumed);
      - **Task 3**: `decideCardWithdraw` names a reason for every pass that runs no card step …, one row per path;
      - **Task 6**: `an attachment naming the derived leaf counts card_served, one naming another leaf card_id_mismatch, none at all nothing; each by producer`.
-   - Residuals, named in the PR body's fixed `### Known W1-e distortions` list (Task 14): two compactions inside one tick; and a pass that never runs (the sweep's timer dead) or meets the store's write lock (busy, which only a test injects), which neither consumes nor withdraws, so a second compaction in that state is served the last prediction.
+   - Residuals, named in the PR body's fixed `### Known W1-e distortions` list (Task 14): two compactions inside one tick; and a pass that never runs (the sweep's timer dead) or meets the store's write lock (busy, which only a test injects), which neither consumes nor withdraws, so a second compaction in that state is served the last prediction; and a scheduled pass that ends before its card step, whether killed (the carrier's 10-minute kill, the OOM killer, a SIGKILL) or ended by a throw (B2's D-5016 and D-5026), neither consumes nor withdraws, so a second compaction in that window is served the last prediction (counted `card_id_mismatch` once derivation resumes); doctor FAILs `tick-stale` naming the death until a later pass ticks, unless history is off or an operator pass is live.
 3. **Standing cards (graph, hold, ccrc) are present on the compaction's SessionStart.** `_hook_emit_context` joins the standing text and the compact subject with ONE space at the `:97` clip, so in the transcript attachment the History line follows the standing text on the same physical line. C18's "first line" holds only inside the compact positional.
    - Expected: the delivery measure finds `History: node L……` anywhere in the attachment's string leaves (`cardIdsIn` is unanchored) and counts `card_served`. The compact positional's first line is still the History line.
    - Owning tasks:
@@ -258,11 +261,11 @@ These are the inputs most likely to break the plan's synthetic fixtures. Each on
 | `ccd/history/lib.d.mts` | modify | One hand-written declaration per new export, plus `CardBoundary`, `CardSlot`, `CardPredictionInputs`, `CardPrediction`, `CardBoundaryAt`, `CardConsumedScope`, `CardWithdrawReason` and `CardPassFacts`; reuses B1's `Presence` | types | 1, 2, 3 |
 | `ccd/history/derive.mjs` | modify | Behaviour-neutral extraction: `deriveEpochParents`' slot loop becomes the exported `epochCopySlots`; `holdingCopyOf` wraps the private `holdingCopy` | L4 | 4 |
 | `ccd/history/card.mjs` | create | `ensureHistoryDirs`; `consumeAndWriteCards` (predict, consume, write `card/<id>/<uuid>.txt` temp-then-rename 0600, with its generation record `card/<id>/<uuid>.gen` written first (ruling R-recalloff-parity), one file per id, end-of-file-gated writes that the budget bounds, each consumption counted by its compaction's scope marker); `withdrawCards` (every prediction unlinked on a pass that runs no card step); `measureCardDelivery` (derivation step `card-measure`, version 1); `cardStep`; `collectPurgedHistoryFiles`. No entry guard. Spec §6.4's `card.mjs` row (W1-B3) gives its ring and imports, and its `sweep.mjs` row admits the `./card.mjs` import | L4 | 5, 6, 7 |
-| `ccd/history/sweep.mjs` | modify | One import from `card.mjs`; `makeIngestCtx` hands `readRegPresence`; in `tick`, `cardStep` below `deriveNodes` with `withdrawCards` below it, `ensureHistoryDirs` below B1's spool-directory line (`if (dirKind(ctx.paths.spool) !== 'other') mkdirDurable(ctx.paths.spool);`), and the collector above `markScan`; `tick`'s doc comment gains a numbered item per new step (B1's F39 list); `withdrawCards` in `holdPass`, on `scheduledPass`'s `held` path and below its `planRun` line. All above the R1 guard | L4 | 5, 7 |
+| `ccd/history/sweep.mjs` | modify | One import from `card.mjs`; `makeIngestCtx` hands `readRegPresence`; in `tick`, `cardStep` below `deriveNodes` with `withdrawCards` below it, `ensureHistoryDirs` below B1's spool-directory line (`if (dirKind(ctx.paths.spool) !== 'other') mkdirDurable(ctx.paths.spool);`), and the collector above `markScan`; `tick`'s doc comment gains a numbered item per new step (B1's F39 list); `withdrawCards` in `holdPass`, on `scheduledPassBody`'s `held` path and below its `planRun` line (B2's D-5016 split `scheduledPass` into the pass-marker wrapper and `scheduledPassBody`). All above the R1 guard | L4 | 5, 7 |
 | `ccd/session-hook.sh` | modify | Above `state="" ask_json=`: the four constants and `_hook_history_card`. In place: the compact guard's call and `:1515`'s reserve. Tail: the scope marker's early invalidation directly below `esac`, the reserve's reset and gated set, `unset CS_SCOPE`, the `history-scope` block; the turn-marker note and B1's spool-block sentence reworded | hook (bash) | 8, 9, 10 |
 | `README.md` | modify | Task 9: the quoted emitter call's `ccd/session-hook.sh:<n>` re-pointed by content, line-neutral. Task 14: an 8-line card-line paragraph in B2's history section, with no `file:N` token | docs (citation corpus) | 9, 14 |
 | `CLAUDE.md` | modify, only if needed | The `README.md (~N lines)` figure, re-measured by the round-to-100 rule | docs | 14 |
-| `shared/lifecycle.ts` | modify | The `history-scope-markers` and `history-card-files` rows, before the closing `];` | L0 | 12 |
+| `shared/lifecycle.ts` | modify | The `history-scope-markers` and `history-card-files` rows, directly below B2's `history-backups` row (above #316's `server-test-run-dirs` row and the closing `];`) | L0 | 12 |
 | `server/test/lifecycle.test.ts` | modify | `HISTORY_LANDED` gains `'B3'`; two `declares …` cases and one case binding the rows' numbers to lib | test | 12 |
 | `server/test/history-card.test.ts` | create | The pure lib cases (on darwin too), the withdrawal and scope-fold tables among them; the slot-list cases; the sweep cases for the writer, consumer, parity, end-of-file gate, modes, registry, the withdrawal on each pass that runs no card step, the consumption's scope, delivery counters and window, and the collector (each sweep describe skips on darwin) | test | 1–7 |
 | `server/test/history-lib.test.ts` | modify | In place, one row in B1's ring census `RINGS`: `'card.mjs'` (L4, forbidding `node:sqlite`, `./sweep.mjs` and `./cli.mjs`), because `every ccd/history/*.mjs has a ring` compares the directory with `RINGS` exactly | test | 5 |
@@ -1263,6 +1266,7 @@ describe('card delivery, scope, withdrawal, window and purge decisions (spec 8.6
       ['the migrate arm', { arm: 'migrate' }, 'migrating'],
       ['a writer token still to come', { arm: 'hold', word: 'held' }, 'held'],
       ['a migration held for room', { arm: 'hold', word: 'migration-refused' }, 'held'],
+      ['a migration that waits on the operator (doctor --migrate)', { arm: 'hold', word: 'migration-needs-op' }, 'held'],
       ['a volume that did not answer', { arm: 'hold', word: 'store-unreachable' }, 'unreachable'],
       ['a store.id naming another store', { arm: 'hold', word: 'store-mismatch' }, 'refused'],
       ['a newer schema', { arm: 'hold', word: 'schema-newer' }, 'refused'],
@@ -1581,7 +1585,7 @@ git commit -m "feat(history): card delivery, delivery-window, consumption-scope,
 
 **Files:**
 - Modify: `ccd/history/derive.mjs` (B2-created, L4, no entry guard, no `.d.mts`):
-  - in place: the body of `function deriveEpochParents(db, ictx, sessionPk, epochSeq) {` (B2 Task 9) loses its slot-building loop to a call of the new `epochCopySlots`;
+  - in place: the body of `function deriveEpochParents(db, ictx, sessionPk, epochSeq, top, budget) {` (B2 Task 9, as merged at de0ab03e1) loses its slot-building loop, with its per-boundary budget stop and its captured-top bound, to a call of the new `epochCopySlots`;
   - append, at the END of the file: `export function epochCopySlots(...)` and `export function holdingCopyOf(...)`.
 - Modify: `server/test/history-card.test.ts`: four import lines directly below the file's last top-of-file `import` line, and one module-scope block plus one describe at the end of the file.
 - Scratch, gitignored: `.superpowers/sdd/history-w1-b3/scratch/mutants-task4.json`.
@@ -1589,10 +1593,10 @@ git commit -m "feat(history): card delivery, delivery-window, consumption-scope,
 **Interfaces:**
 - Consumes (B2 `derive.mjs`, module-private, read in the MERGED file before editing):
   - `stmts(db)` (Task 8: `files`, `member`, …), `holdingCopy(s, pass, b)` (Task 8: lib `pickHoldingCopy` over the transcript's measured files; `pass` needs `{ files: Map }`, `b` needs `{ entry_id, transcript_pk }`; answers `{ file_id, eof_ms, source_key }` or null);
-  - `parentStmts(db)` (Task 9: `epochTranscripts`, `bounds`, `leafAt`), `fanInLevels(db, ictx, level0)`, `deriveEpochParents`, the exported `deriveParents(db, ictx, budget): number`.
+  - `parentStmts(db)` (Task 9: `maxRow`, `epochTranscripts`, `bounds`, `leafAt(entry_id, top)`, whose SQL bounds `rowid <= ?`), `fanInLevels(db, ictx, level0, budget): { made, complete }`, `deriveEpochParents(db, ictx, sessionPk, epochSeq, top, budget): { made, complete }`, module-private `parentsBudgetLeft(budget)` (takes a budget object, never null), the exported `deriveParents(db, ictx, budget): number` (it captures `top` from `maxRow` at its start and passes `top` and `budget` down).
   - B1/B2 `store.mjs`: `createStore(home, opts?)`, `openWriter(dbPath)`, `closeWriter(db)`, `brotli(buf)`; B1 `sweep.mjs`: `newBudget(now?, limits?)`; B1 `lib.mjs`: `makePairIndex([])`, `historyPaths`, `leafId`, `parentId`; B2 lib `planFanIn`, `FAN_IN`; `server/test/tmpHelpers.ts` `mkTmp(prefix)`.
 - Produces (`derive.mjs`):
-  - `export function epochCopySlots(db: DatabaseSync, sessionPk: number, epochSeq: number): Map<number, Array<string | null>>`: one epoch's level-0 slot lists, keyed by holding `file_id`, each in `boundaries.ord` order (a leaf's id, or null while the boundary has none). deriveEpochParents now reads it.
+  - `export function epochCopySlots(db: DatabaseSync, sessionPk: number, epochSeq: number, top?: number | null, budget?: object | null): Map<number, Array<string | null>> | null`: one epoch's level-0 slot lists, keyed by holding `file_id`, each in `boundaries.ord` order (a leaf's id at a row no later than `top`, or null while the boundary has none). `top` defaults to the store's current `max(rowid)` of `nodes`; with a `budget` it stops at the first boundary the budget is spent before, as B2's loop did. It answers null only when a budget is passed and spent. deriveEpochParents now reads it with both bounds; card.mjs (Task 5) passes neither, so it never sees null.
   - `export function holdingCopyOf(db: DatabaseSync, b: { entry_id: number; transcript_pk: number }): { file_id: number; eof_ms: number | null; source_key: string } | null`: the holding copy of one boundary, by the same `holdingCopy`, over a fresh file cache.
   - `history-card.test.ts` module scope: `Derive4`, `derive4()`, `sweep4()`, `E4`, `uid4`, `forkStore4(n, holders)`.
 - Later consumers: Task 5 (`epochCopySlots` for the parent prediction), Task 6 (`holdingCopyOf` for the delivery window).
@@ -1605,12 +1609,12 @@ git commit -m "feat(history): card delivery, delivery-window, consumption-scope,
 - [ ] **Step 1: Read the merged function, and run B2's suites before the edit.** From the repository root:
 
 ```bash
-sed -n "$(grep -n '^function deriveEpochParents(db, ictx, sessionPk, epochSeq) {$' ccd/history/derive.mjs | cut -d: -f1),/^}$/p" ccd/history/derive.mjs
-grep -c '^function holdingCopy(s, pass, b) {$\|^function parentStmts(db) {$\|^function fanInLevels(db, ictx, level0) {$' ccd/history/derive.mjs   # 3
+sed -n "$(grep -n '^function deriveEpochParents(db, ictx, sessionPk, epochSeq, top, budget) {$' ccd/history/derive.mjs | cut -d: -f1),/^}$/p" ccd/history/derive.mjs
+grep -c '^function holdingCopy(s, pass, b) {$\|^function parentStmts(db) {$\|^function fanInLevels(db, ictx, level0, budget) {$' ccd/history/derive.mjs   # 3
 grep -c '^export function epochCopySlots(\|^export function holdingCopyOf(' ccd/history/derive.mjs                                          # 0
 ```
 
-Expected: the function prints as B2 Task 9 wrote it (below, Step 4's "before"), and the counts are `3` and `0`. If the merged body differs from that text, keep the merged body exactly and move only its slot-building loop (the statements that fill the `copies` Map) into `epochCopySlots`; report the difference in the task report. Then, in the foreground with a timeout of at least 600000 ms:
+Expected: the function prints as B2 merged it at de0ab03e1 (below, Step 5's "before"), and the counts are `3` and `0`. If the merged body differs from that text, keep the merged body exactly and move only its slot-building loop (the statements that fill the `copies` Map) into `epochCopySlots`; report the difference in the task report. Then, in the foreground with a timeout of at least 600000 ms:
 
 ```bash
 (cd server && ./node_modules/.bin/vitest run test/history-derive.test.ts)
@@ -1733,35 +1737,45 @@ Expected: 2 failed, each with `d.epochCopySlots is not a function`.
 - [ ] **Step 5: Extract the slot builder.** In `ccd/history/derive.mjs`, replace B2 Task 9's function (the "before")
 
 ```js
-function deriveEpochParents(db, ictx, sessionPk, epochSeq) {
+function deriveEpochParents(db, ictx, sessionPk, epochSeq, top, budget) {
   const s = parentStmts(db);
   const ds = stmts(db);
   const pass = { files: new Map() };
   const copies = new Map();   // holding file_id → its level-0 slots, in ord
   for (const t of s.epochTranscripts.all(sessionPk, epochSeq)) {
     for (const b of s.bounds.all(t.transcript_pk)) {
+      if (!parentsBudgetLeft(budget)) return { made: 0, complete: false };
       const holding = holdingCopy(ds, pass, b);
       if (holding === null) continue;
       const copyKey = holding.file_id;
       if (!copies.has(copyKey)) copies.set(copyKey, []);
-      const leaf = s.leafAt.get(b.entry_id);
+      const leaf = s.leafAt.get(b.entry_id, top);
       copies.get(copyKey).push(leaf === undefined ? null : leaf.node_id);
     }
   }
   let made = 0;
-  for (const key of [...copies.keys()].sort((x, y) => Number(x) - Number(y))) made += fanInLevels(db, ictx, copies.get(key));
-  return made;
+  for (const key of [...copies.keys()].sort((x, y) => Number(x) - Number(y))) {
+    const r = fanInLevels(db, ictx, copies.get(key), budget);
+    made += r.made;
+    if (!r.complete) return { made, complete: false };
+  }
+  return { made, complete: true };
 }
 ```
 
-with (the "after"; its doc comment above it is kept as it is):
+with (the "after"; its doc comment above it is kept as it is; B2's budget stop, its captured-top bound and its `{ made, complete }` return are kept, the first two now inside `epochCopySlots`):
 
 ```js
-function deriveEpochParents(db, ictx, sessionPk, epochSeq) {
-  const copies = epochCopySlots(db, sessionPk, epochSeq);
+function deriveEpochParents(db, ictx, sessionPk, epochSeq, top, budget) {
+  const copies = epochCopySlots(db, sessionPk, epochSeq, top, budget);
+  if (copies === null) return { made: 0, complete: false };
   let made = 0;
-  for (const key of [...copies.keys()].sort((x, y) => Number(x) - Number(y))) made += fanInLevels(db, ictx, copies.get(key));
-  return made;
+  for (const key of [...copies.keys()].sort((x, y) => Number(x) - Number(y))) {
+    const r = fanInLevels(db, ictx, copies.get(key), budget);
+    made += r.made;
+    if (!r.complete) return { made, complete: false };
+  }
+  return { made, complete: true };
 }
 ```
 
@@ -1777,19 +1791,25 @@ Then append to the END of `ccd/history/derive.mjs`:
 /** One epoch's level-0 slot lists, one per HOLDING COPY: each boundary of the epoch's main transcripts, in `ord`,
  *  joins the list of the file holdingCopy picks for it (a live file first, then the smallest file_id, among the
  *  files that hold it), as its leaf's id or null while it has none. A boundary no file holds joins no list. Keys are
- *  the files' `file_id`s as the store answers them. */
-export function epochCopySlots(db, sessionPk, epochSeq) {
+ *  the files' `file_id`s as the store answers them.
+ *  - `top`: a leaf counts only at a nodes rowid no later than it (deriveParents passes the top it captured at its
+ *    start); null reads the store's current max(rowid), so a caller with no captured top sees every leaf.
+ *  - `budget`: checked before every boundary, as B2's loop did; null checks none. Answers null only when a budget
+ *    is passed and spent, so deriveEpochParents stays resumable; card.mjs passes neither and never sees null. */
+export function epochCopySlots(db, sessionPk, epochSeq, top = null, budget = null) {
   const s = parentStmts(db);
   const ds = stmts(db);
+  const bound = top === null ? Number(s.maxRow.get().r ?? 0) : top;
   const pass = { files: new Map() };
   const copies = new Map();   // holding file_id → its level-0 slots, in ord
   for (const t of s.epochTranscripts.all(sessionPk, epochSeq)) {
     for (const b of s.bounds.all(t.transcript_pk)) {
+      if (budget !== null && !parentsBudgetLeft(budget)) return null;
       const holding = holdingCopy(ds, pass, b);
       if (holding === null) continue;
       const copyKey = holding.file_id;
       if (!copies.has(copyKey)) copies.set(copyKey, []);
-      const leaf = s.leafAt.get(b.entry_id);
+      const leaf = s.leafAt.get(b.entry_id, bound);
       copies.get(copyKey).push(leaf === undefined ? null : leaf.node_id);
     }
   }
@@ -1803,7 +1823,7 @@ export function holdingCopyOf(db, b) {
 }
 ```
 
-Check, from the repository root: `grep -c '^export function epochCopySlots(db, sessionPk, epochSeq) {$\|^export function holdingCopyOf(db, b) {$' ccd/history/derive.mjs` prints `2`; `grep -c 'const copyKey = holding.file_id;' ccd/history/derive.mjs` prints `1` (the loop exists once, in `epochCopySlots`); `node --check ccd/history/derive.mjs` prints nothing.
+Check, from the repository root: `grep -c '^export function epochCopySlots(db, sessionPk, epochSeq, top = null, budget = null) {$\|^export function holdingCopyOf(db, b) {$' ccd/history/derive.mjs` prints `2`; `grep -c 'const copyKey = holding.file_id;' ccd/history/derive.mjs` prints `1` (the loop exists once, in `epochCopySlots`); `node --check ccd/history/derive.mjs` prints nothing.
 
 - [ ] **Step 6: Run the new cases, then B2's suites unchanged, and the typecheck.** In the foreground, with a timeout of at least 600000 ms, each line as its own call:
 
@@ -1849,22 +1869,22 @@ git commit -m "refactor(history): export derive.mjs's holding copy and per-copy 
 - Create: `ccd/history/card.mjs` (L4; no entry guard, no `.d.mts`; imported only by `sweep.mjs`).
 - Modify: `ccd/history/sweep.mjs` (B1-created, B2-extended; every edit by content, all above the entry guard `if (process.argv[1] && import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href) {`):
   - one import line directly below the import statement whose last line ends `from './derive.mjs';` (B2 Tasks 8, 21 and 23 grow that statement's name list; anchor on its last line);
-  - in place, in `makeIngestCtx`: the return object's tail `fts: false, admitFile, budgetLeft, isBusy };` (B2 Task 8) gains `readRegPresence`, and one sentence joins its doc comment;
+  - in place, in `makeIngestCtx`: the return object's tail `admitFile, budgetLeft, isBusy };` (B2 Task 8; B2 put `pendingReceiptState` between `fts: false` and `admitFile`, so the anchor starts at `admitFile`) gains `readRegPresence`, and one sentence joins its doc comment;
   - in `tick`, one comment and three lines directly below B2 Task 8's line `  if (ctx.ingest && !(ing !== null && ing.paused)) deriveNodes(db, ictx, ctx.budget);`, inside the `// >>> history tick steps` … `// <<< history tick steps` markers: the tick's facts for the withdrawal, the card step, and the withdrawal;
   - in `tick`, one line directly below B1's spool-directory line `  if (dirKind(ctx.paths.spool) !== 'other') mkdirDurable(ctx.paths.spool);` (below the `// <<< history tick steps` marker and its FU8 comment, above `  if (ctx.parsed.rosterUnreadable) bump(db, 'roster_unreadable');`);
   - in `tick`'s doc comment (the `/**` directly above `export async function tick(db, ctx) {`), three numbered items: `cardStep` and `withdrawCards` directly below B2's `deriveNodes` item, and `ensureHistoryDirs` below the last item (`markScan`, or B4's `exportStep` if B4 merged first; the body calls `ensureHistoryDirs` last on either base), every item renumbered in order. B1's `history-sweep.test.ts` describe `tick()'s docstring names its steps in the order the body runs them (review 316 F39)` requires every `name(db` call in the body to be a numbered item, in body order;
   - in `holdPass` (B1 Task 24), one line directly above its `  return holdExit(word);` (two-space indent, the only such line);
-  - in `scheduledPass` (B1 Task 24), one line directly below `      out('history-sweep: held');` (the writer-token hold), and a comment and one line directly below the line that begins `    const run = planRun({ historyOff: false, store: { act: 'open' },` (four-space indent; B2 Task 25 ends it `recovering: isRecovering(db) });`, and `importRoom`'s own two-space, multi-line `planRun({` call is not it).
+  - in `scheduledPassBody` (B1 Task 24's `scheduledPass`, whose body B2's D-5016 split out into `scheduledPassBody(parsed, deps, out, P, now, role)`; `scheduledPass` keeps only the off and server-role exits and the pass marker), one line directly below `      out('history-sweep: held');` (the writer-token hold), and a comment and one line directly below the line that begins `    const run = planRun({ historyOff: false, store: { act: 'open' },` (four-space indent; B2 Task 25 ends it `recovering: isRecovering(db) });`, and `importRoom`'s own two-space, multi-line `planRun({` call is not it).
 - Modify: `server/test/history-card.test.ts`: one import line edited in place and three added below the last top-of-file import; one module-scope helper block and one describe at the end of the file.
 - Modify: `server/test/history-lib.test.ts` (B1-created, B2-extended), in place, one line and no import: B1's ring census `RINGS` gains `'card.mjs'`. Its case `every ccd/history/*.mjs has a ring` compares `readdirSync(ccd/history)`'s `.mjs` names with `Object.keys(RINGS)` exactly, so `card.mjs` reds it until the row lands, and no `card.mjs` fix can green it (B2 Task 8 adds `derive.mjs` the same way).
 - Scratch, gitignored: `.superpowers/sdd/history-w1-b3/scratch/mutants-task5.json`.
 
 **Interfaces:**
 - Consumes:
-  - B1 `sweep.mjs`: `tick(db, ctx)` and its markers; `makeIngestCtx(home, homes, nowMs, ids, floorProbe?)`, whose object carries `home`, `nowMs` (the tick's start, the value `recordExamined` writes into `ingest_files.eof_ms` for every file this tick left at end-of-file: `eof_ms = coalesce(?, eof_ms)` with `f.atEof ? ctx.nowMs : null`), `historyOff()`, and after B2 Task 8 `admitFile`, `budgetLeft(budget)`, `isBusy(e)`; the exported `readRegPresence(path): Presence<string>` (type-checked before open: a FIFO is never opened; trims the value).
+  - B1 `sweep.mjs`: `tick(db, ctx)` and its markers; `makeIngestCtx(home, homes, nowMs, ids, floorProbe?)`, whose object carries `home`, `nowMs` (the tick's start, the value `recordExamined` writes into `ingest_files.eof_ms` for every file this tick left at end-of-file: `eof_ms = coalesce(?, eof_ms)` with `f.atEof ? ctx.nowMs : null`), `historyOff()`, and after B2 Task 8 `admitFile`, `budgetLeft(budget)`, `isBusy(e)`; the exported `readRegPresence(path): Presence<string>` (opened O_NONBLOCK and fstat-checked: a FIFO is never waited on and answers unreadable; it follows a link, as registry reads do; it trims the value).
   - B1 `store.mjs`: `bump`, `writeFileAtomic(path, text, mode)` (temp in the same directory, `fchmod`, fsync, rename, fsync of the directory); B2 `store.mjs`: `parentOf(db, nodeId)`, `getStep`, `setStep`; B1 `unbrotli`, `withTx`.
-  - Task 4: `epochCopySlots(db, sessionPk, epochSeq)`, `holdingCopyOf(db, b)`. Tasks 1-3: `CARD_DIR`, `SCOPE_DIR`, `CARD_LINE_MAX`, `CARD_MEASURE_ROWS`, `CARD_ATTACHMENT_MAX_BYTES`, `cardDirOf`, `cardFileOf`, `scopeMarkerOf`, `predictedSpanStart`, `planCardPrediction`, `decideCardFile`, `cardIdsIn`, `cardWindowComplete`, `decideCardDelivery`, `decidePurgedEntry`, `consumedBoundaryTs`, `decideConsumedScope`, `decideCardWithdraw`. B1/B2 lib: `UUID_RE`, `idOk`, `historyPaths`, `leafId`, `eofAfterBoundary`, `producerOf`.
-  - B1 `sweep.mjs` (Task 24): `holdPass(home, P, word, now, out)` (a hold with no DB open: the journal half, the word, its exit); `scheduledPass`, its writer-token hold `out('history-sweep: held')`, and its `planRun` line, whose `run.arm` is `run`, `migrate`, `hold` or, after B2 Task 25, `recover`, with `run.holdWord`; `passCtx`'s `pause` (planRun's `'at-cap' | 'low-disk' | null`) and `out`; `budgetLeft(budget)`; `ingestTick`'s `paused` (the per-chunk floor stopped the ingest) and its `null` when an unreadable roster skips it. B2 Task 25: the `run.arm === 'recover'` branch, which returns `recoverPass(…)`.
+  - Task 4: `epochCopySlots(db, sessionPk, epochSeq)` (the 3-argument form: no captured top and no budget, so it never answers null), `holdingCopyOf(db, b)`. Tasks 1-3: `CARD_DIR`, `SCOPE_DIR`, `CARD_LINE_MAX`, `CARD_MEASURE_ROWS`, `CARD_ATTACHMENT_MAX_BYTES`, `cardDirOf`, `cardFileOf`, `scopeMarkerOf`, `predictedSpanStart`, `planCardPrediction`, `decideCardFile`, `cardIdsIn`, `cardWindowComplete`, `decideCardDelivery`, `decidePurgedEntry`, `consumedBoundaryTs`, `decideConsumedScope`, `decideCardWithdraw`. B1/B2 lib: `UUID_RE`, `idOk`, `historyPaths`, `leafId`, `eofAfterBoundary`, `producerOf`.
+  - B1 `sweep.mjs` (Task 24): `holdPass(home, P, word, now, out)` (a hold with no DB open: the journal half, the word, its exit); `scheduledPassBody` (B2's D-5016 split of `scheduledPass`), its writer-token hold `out('history-sweep: held')`, and its `planRun` line, whose `run.arm` is `run`, `migrate`, `hold` or, after B2 Task 25, `recover`, with `run.holdWord`; `passCtx`'s `pause` (planRun's `'at-cap' | 'low-disk' | null`) and `out`; `budgetLeft(budget)`; `ingestTick`'s `paused` (the per-chunk floor stopped the ingest) and its `null` when an unreadable roster skips it. B2 Task 25: the `run.arm === 'recover'` branch, which returns `recoverPass(…)`.
   - Test helpers: B1 `historyHelpers.ts` `makeHistoryBox(prefix, { role? })`, `runSweep(box, args?, { env? })`, `runDriver(box, deps)` (B2 Task 25's `budgetBytes` among its deps), `plantSession`, `plantTranscript`, `spoolLine`, `openStoreRO`, `counters`, `skipOnDarwin`, `type HistoryBox`; the statfs preload's `HISTORY_TEST_STATFS=<bavail>:<size>` (every spawn carries the preload); B1 lib `floorThreshold(fsSizeBytes)` and `historyPaths(home).writer` and `.storeId`; B2 `recoverRow(box)`; B1/B2 `historyFixtures.ts` `compactionSequence`, `userRow`, `type Row`.
 - Produces:
   - `card.mjs`: `export function ensureHistoryDirs(db: DatabaseSync, home: string): { scope: 'made' | 'present' | 'refused'; card: 'made' | 'present' | 'refused' }`; `export function consumeAndWriteCards(db, ictx, budget): { written: number; consumed: number; deleted: number }`; `export function cardStep(db, ictx, budget): { measure: object | null; cards: object | null }` (Task 6 fills `measure`); `export function withdrawCards(db: DatabaseSync | null, home: string, pass: CardPassFacts, out: (line: string) => void): number`.
@@ -1877,24 +1897,24 @@ git commit -m "refactor(history): export derive.mjs's holding copy and per-copy 
 
 **Spec:**
 - §6.4's `card.mjs` row (W1-B3): this task creates `ccd/history/card.mjs`, an L4 module importing `node:fs`, `./lib.mjs`, `./store.mjs` and `./derive.mjs` only (never `node:sqlite`, `./sweep.mjs` or `./cli.mjs`, as its `RINGS` row pins), and `sweep.mjs` gains one import, `./card.mjs`, which §6.4's `sweep.mjs` row admits as `{ cardStep, collectPurgedHistoryFiles, ensureHistoryDirs, withdrawCards }` (this task imports `{ cardStep, ensureHistoryDirs, withdrawCards }`, Steps 5 and 6; Task 7 adds the collector). `card.mjs` keeps the card's measure, its writes and its collector out of a module that is already the writer's whole tick, as B2's `derive.mjs` keeps derivation out; every decision is still lib's, and the sweep still runs every step, so §9.2's order and §9.4's writer hold through it.
-- §8.6 Timing: the file is written only when the transcript's cursor is at end-of-file, and deleted when the indexer ingests the boundary that consumed it; §9.2 step 6 (derive; measure delivery; then write `card/` files temp-then-rename; under the tick's budget, never on the recover arm, which never ticks); §5.1 S4 (the hook never makes a directory); §5.2; §9.6 (card files 0600, history directories 0700); §9.4 `history-card-files`; §5.1 (the scope marker the consumption's scope is read from); §9.3 and §9.14 (the pauses and holds a withdrawal follows).
-- Rulings: RC2 (fail closed: every pass that runs no card step withdraws every prediction; the budget bounds a write, never the consume/delete decision) and RC3 (each consumption counted by the scope marker its compaction left).
+- §8.6 Timing: the file is written only when the transcript's cursor is at end-of-file, and deleted when the indexer ingests the boundary that consumed it; §9.2 step 6 (derive; measure delivery; then write `card/` files temp-then-rename; under the tick's budget, never on the recover arm, which never calls `tick()`); §5.1 S4 (the hook never makes a directory); §5.2; §9.6 (card files 0600, history directories 0700); §9.4 `history-card-files`; §5.1 (the scope marker the consumption's scope is read from); §9.3 and §9.14 (the pauses and holds a withdrawal follows).
+- Rulings: RC2 (fail closed: every pass that ends normally without the card step withdraws every prediction, a pass killed or thrown before it being a named residual; the budget bounds a write, never the consume/delete decision) and RC3 (each consumption counted by the scope marker its compaction left).
 - Pins: this task's plan pins (parity with derivation for the first compaction, the 8th leaf and the newest condensed fallback; a not-final slot names no parent; the fork skip, and a consumption just before one still counted; a spooled fork's epoch predicted from the parent's boundary its copy holds, its prediction replacing the parent's (ruled Q16); the end-of-file gate with a consumption off end-of-file; the file's text, mode, one-per-id and the symlink refusal; registry-named sessions only; a write failure counted, never fatal, and leaving no temp (a CONTROL on B1's `writeFileAtomic`, which removes its own temp on a failure before the rename); a failed cleanup counted apart from the write; a generation record that was due and could not be written or removed takes the kept prediction with it, at end-of-file and off it (coordinator ruling R-recalloff-keep); the two directories made 0700 by a bound store's first tick and by nothing else; a consumption counted `main`, `other` or `unknown` by its compaction's marker, never through a link; every prediction withdrawn, never through a link, under a floor pause, on the recover arm, under a spent budget after the consume and delete ran, on a writer-token hold and on a refused store with no DB open).
 - Departures:
   - B1's D-4224 (`history-tick-order`) (the card step's place: after the leaves and parents, under their gate).
-  - D-4741 (`history-card-dirs-made-by-sweep`) (NEW): the spec says the hook never makes `scope/`, which it writes, and never says who does; the sweep makes both directories at every bound store's tick, so the hook's marker and the render reserve arm within one tick of `ccrc update` and never on a box without history.
+  - D-4741 (`history-card-dirs-made-by-sweep`) (NEW): the spec says the hook never makes `scope/`, which it writes, and never says who does; the sweep makes both directories at every bound store's tick, so the hook's marker and the render reserve arm within one tick of `ccrc update` on a store at the code's schema version (a store held at `migration-needs-op` or `migration-refused` arms at the first tick after the migration completes) and never on a box without history.
   - D-4742 (`history-card-one-file-per-id`) (NEW): §9.4 bounds the row "≤512 B per session"; writing a new uuid's prediction removes the id's other `<uuid>.txt` (a `/clear`'d or forked session's), rather than leaving it until purge.
   - D-4743 (`history-card-registry-names-the-session`) (NEW): a prediction is written only for the uuid `$REG/<id>.uuid` names. The periodic scan reads every known transcript to its end each 30 minutes, so end-of-file alone would write a file for every session the store ever saw; the hook serves only the pane's own uuid, which the registry names. A file the registry no longer names is still consumed and deleted.
   - D-4744 (`history-card-newest-live-copy`) (NEW): the prediction reads the transcript's live copy written last (newest `mtime_ns`, then the larger `file_id`, §6.1's newest-copy rule), the one Claude Code appends the next boundary to; the spec names "the transcript's cursor" in the singular.
   - D-4738 (`history-card-consumed-counter`) (NEW, ruled RC3): each prediction a boundary of the main transcript consumed, a fork skip's included (Task 2), is counted `card_consumed:<scope>`. The scope is lib's `decideConsumedScope` over the scope marker the compaction's PreCompact left, read read-only and never through a link, and the consumed boundary's time (lib `consumedBoundaryTs`): `main`, `other` (the hook scoped it `subagent` or `ambiguous`, so it could never carry a line) or `unknown`. A subagent's own compaction lands in its own transcript and is never counted. W1-e's served share is over `main` and `unknown` (Task 13).
-  - D-4740 (`history-card-withdrawn-when-not-ticking`) (NEW, ruled RC2): a scheduled pass that runs but does not run the card step over a caught-up ingest withdraws every `card/<id>/<uuid>.txt`, counted `card_withdrawn:<reason>` (lib `decideCardWithdraw` decides; this task measures and unlinks). In `consumeAndWriteCards` the budget is checked only before a write.
+  - D-4740 (`history-card-withdrawn-when-not-ticking`) (NEW, ruled RC2): a scheduled pass that ends normally without the card step over a caught-up ingest withdraws every `card/<id>/<uuid>.txt`, counted `card_withdrawn:<reason>` (lib `decideCardWithdraw` decides; this task measures and unlinks). In `consumeAndWriteCards` the budget is checked only before a write.
   - B2's D-4734 (`history-fork-spooled`) (B2-defined, ruled Q16): consumed by the spooled-fork case only. No B3 code reads an epoch's cause.
 - Coordinator ruling R-recalloff-parity (spec §9.7, §8.2, C68): the sweep, which can read the store, records beside each prediction the generation the CLI resolves for the id when neither the env nor the registry names one, by the CLI's own rule, so the hook can agree with the CLI there. The record is the ruling's own mechanism, not a departure; spec §8.6, §9.4's `history-card-files` row and §9.7 carry it once the coordinator folds the ruling into the spec.
 - Coordinator ruling R-recalloff-keep (the final check's R2; spec §8.6's "It never leaves a stale record beside a standing prediction"): when the record was due (`write` or `delete`) and that act fails, `oneCard`'s catch unlinks `<uuid>.txt` too, counted `card_unrecorded_removed`. The ruling names the `keep` arm; this task applies it to the `write` arm over an existing prediction as well, the same hazard (Step 5's notes).
 
 **Choices this task makes:**
 - **The record's query is spelled here, and pinned against the CLI's.** `card.mjs` may not import `recall.mjs` (§6.4's `card.mjs` row: lib, store, `derive.mjs`, `node:fs`), so `cardStmts`' `newestFamily` spells B2's `NEWEST_FAMILY_SQL` order (`merged_into IS NULL`, `first_seen_ms DESC, session_pk DESC`). The case `the generation record: …` compares the record with B2's exported `familiesOf` over the same store at three states (the planted family, a newer family, a legacy newest family), so a drift between the two spellings reds a case rather than splitting the eval's arms. A restore or rebuild that swaps the store between ticks leaves the record as stale as the prediction beside it until the next card step; both are rewritten there.
-- **The card step's place in the tick** (B1's D-4224 (`history-tick-order`)): `cardStep` runs directly after B2's `deriveNodes`, under the same ingest-and-not-paused gate, with `withdrawCards` below it; `ensureHistoryDirs` runs last, below B1's spool-directory line. None of them runs on the recover arm, which never ticks: that pass withdraws every prediction before it runs (Step 6 item 7).
+- **The card step's place in the tick** (B1's D-4224 (`history-tick-order`)): `cardStep` runs directly after B2's `deriveNodes`, under the same ingest-and-not-paused gate, with `withdrawCards` below it; `ensureHistoryDirs` runs last, below B1's spool-directory line. None of them runs on the recover arm, which never calls `tick()` (it still writes a ticks row through `recordTick`, which since B2's D-5026 also clears `pass-died`): that pass withdraws every prediction before it runs (Step 6 item 7).
 - **Spooled forks (ruled Q16) need no code here, and one case pins them.**
   - `cardStmts`' `epochOf` reads any confirmed epoch of an unmerged family, whatever its `cause` or `declared_by` (derive.mjs's own rule). So a `fork` epoch is predicted for exactly as a startup, clear or import epoch is, from the drain that confirms it (B2's fork line, observed at the rename as a resume line is) rather than from the 30-minute registry scan B1 left forks to.
   - The registry gate (D-4743 (`history-card-registry-names-the-session`)) follows `.uuid`, which `_sync_uuid` moves to the fork's sid. One file per id (D-4742 (`history-card-one-file-per-id`)) then removes the parent's prediction, as after a `/clear`.
@@ -1907,7 +1927,7 @@ git commit -m "refactor(history): export derive.mjs's holding copy and per-copy 
 ```bash
 grep -c "^  if (ctx.ingest && !(ing !== null && ing.paused)) deriveNodes(db, ictx, ctx.budget);$" ccd/history/sweep.mjs   # 1
 grep -c "^  if (dirKind(ctx.paths.spool) !== 'other') mkdirDurable(ctx.paths.spool);$" ccd/history/sweep.mjs             # 1
-grep -c "fts: false, admitFile, budgetLeft, isBusy };" ccd/history/sweep.mjs                                               # 1
+grep -c "admitFile, budgetLeft, isBusy };" ccd/history/sweep.mjs                                                          # 1
 grep -c "^export function readRegPresence(path) {$" ccd/history/sweep.mjs                                                   # 1
 grep -n "from './derive.mjs';$" ccd/history/sweep.mjs                                                                       # one line
 grep -c 'import.meta.url === pathToFileURL' ccd/history/sweep.mjs                                                           # 1
@@ -1924,7 +1944,7 @@ grep -c "^    'derive.mjs': { ring: 'L4'" server/test/history-lib.test.ts       
 grep -c "^    'card.mjs':" server/test/history-lib.test.ts                                                                # 0
 ```
 
-Expected: `1`, `1`, `1`, `1`, exactly one line number, `1`, `1`, `ABSENT`, then `1` five times, then `1`, `1`, `1` and `0`. The second `1` is B1's spool-directory line (FU8: it makes `spool/` only when what stands there is not `'other'`), which `ensureHistoryDirs` goes below; the new line stays unconditional, whatever stands at `spool/`. The `1` after the guard's count is `writeFileAtomic`'s temp name, `<path>.tmp.<pid>`, which `removeOtherCards`' pattern matches for a writer killed mid-write (B1's `writeFileAtomic` removes its own temp on any failure before the rename, so `oneCard` unlinks none); a `0` there means B1 merged another name: spell `removeOtherCards`' pattern to match it, and report it. The five after `ABSENT` are the withdrawal's anchors: `holdPass`'s return, the writer-token hold's outcome line, `scheduledPass`'s `planRun` line, B2's recover arm (which the `planRun` line's withdrawal must precede), and the tick's `ing` line (`null` when an unreadable roster skips the ingest). The last four: `tick`'s doc comment carries a `deriveNodes` item and a `markScan` item (B1's F39 case already requires B2's `deriveNodes(db` call to be listed, so a `0` for it means B2 merged with that case red: stop and report it), B2's `derive.mjs` row is in `RINGS`, and no `card.mjs` row is yet. Any other difference: B1 or B2 merged a different spelling. Read the merged `tick` and its doc comment, `makeIngestCtx`, `holdPass`, `scheduledPass` and `RINGS`, re-anchor on the merged lines that do the same thing, and report the difference.
+Expected: `1`, `1`, `1`, `1`, exactly one line number, `1`, `1`, `ABSENT`, then `1` five times, then `1`, `1`, `1` and `0`. The second `1` is B1's spool-directory line (FU8: it makes `spool/` only when what stands there is not `'other'`), which `ensureHistoryDirs` goes below; the new line stays unconditional, whatever stands at `spool/`. The `1` after the guard's count is `writeFileAtomic`'s temp name, `<path>.tmp.<pid>`, which `removeOtherCards`' pattern matches for a writer killed mid-write (B1's `writeFileAtomic` removes its own temp on any failure before the rename, so `oneCard` unlinks none); a `0` there means B1 merged another name: spell `removeOtherCards`' pattern to match it, and report it. The five after `ABSENT` are the withdrawal's anchors: `holdPass`'s return, the writer-token hold's outcome line, `scheduledPassBody`'s `planRun` line, B2's recover arm (which the `planRun` line's withdrawal must precede), and the tick's `ing` line (`null` when an unreadable roster skips the ingest). The last four: `tick`'s doc comment carries a `deriveNodes` item and a `markScan` item (B1's F39 case already requires B2's `deriveNodes(db` call to be listed, so a `0` for it means B2 merged with that case red: stop and report it), B2's `derive.mjs` row is in `RINGS`, and no `card.mjs` row is yet. Any other difference: B1 or B2 merged a different spelling. Read the merged `tick` and its doc comment, `makeIngestCtx`, `holdPass`, `scheduledPass` and `scheduledPassBody` and `RINGS`, re-anchor on the merged lines that do the same thing, and report the difference.
 
 - [ ] **Step 2: Edit the test file's imports.** In `server/test/history-card.test.ts`, replace the line `import { compactionSequence } from './historyFixtures.js';` with:
 
@@ -2573,7 +2593,7 @@ Notes:
 - `claude` and `claude-a` are the default test roster's two account ids (`server/test/helpers.ts` `DEFAULT_TEST_ROSTER`): fixture names, not real ones.
 - The fork case relies on derivation's own behaviour (B2's DM37): copy A's second boundary takes the plain id of the span after `pre`'s head, so copy B's next boundary would be fork-qualified.
 - The spooled-fork case relies on B2 Task 34, the fork spooling (ruled Q16, DM48's in-pane shape; B2's D-4734 (`history-fork-spooled`)): B2's `parseSpoolLine` accepts `src:"fork"` with `reg`, and `decideEpochLine` takes the line through the resume path, so a line whose `reg` is the parent's uuid confirms by the `.uuid` observed at the rename. Its transcript copies the parent's rows verbatim. B1's modules read no row's `sessionId` (none spells it, measured on B1's branch at plan time), so each copied row is one entry with a membership in each file, and the parent's boundary keeps the parent's `boundaries.transcript_pk`. The fork is in the parent's family (same id, same generation), so `familyC` holds the parent's leaf too and the display prefixes are over both.
-- The recovery case writes the `('recover', <ms>)` row exactly as B2's `registerRecovery` does (that helper is module-local to `history-recover.test.ts`). The loop runs at most five passes, each a recover-arm pass that never ticks (B2 Task 25: `recoverPass` never calls `tick`). The first of them withdraws the prediction (ruling RC2), so every later one finds none and counts nothing.
+- The recovery case writes the `('recover', <ms>)` row exactly as B2's `registerRecovery` does (that helper is module-local to `history-recover.test.ts`). The loop runs at most five passes, each a recover-arm pass that never calls `tick()` (B2 Task 25: `recoverPass` never calls `tick`; it still writes a ticks row through `recordTick`, which since B2's D-5026 also clears `pass-died`). The first of them withdraws the prediction (ruling RC2), so every later one finds none and counts nothing.
 - The floor case plants the low-disk pause through the statfs preload every spawned pass carries (`HISTORY_TEST_STATFS=<bavail>:<size>`, `bavail` 4 KiB under lib's own `floorThreshold`): B1's `holds` cases plant it the same way.
 - The budget case passes `budgetBytes: 1` through `runDriver` (B2 Task 25's `deps.budget`, never an environment variable). The ingest checks the budget before each chunk, so A's one chunk of new rows is read and the budget is spent after it; B is not hinted and has no new bytes, so its copy is not at end-of-file this tick.
 - The hold case's first pass is B1's writer-token hold (`store.writer` gone: the DB opens, `ids` is null, the pass prints `held` and exits 0); its second is B1's `store-mismatch`, a refusal before any DB opens (exit 5), whose outcome lines are the hold's whole record (IV2).
@@ -2924,7 +2944,7 @@ export function consumeAndWriteCards(db, ictx, budget) {
 }
 
 /** The card's part of the tick (§9.2 step 6: measure delivery, then write card/ files). tick calls it under the
- *  derivation's gate, so it never runs on the recover arm (recoverPass never ticks), under a cap or floor pause, or
+ *  derivation's gate, so it never runs on the recover arm (recoverPass never calls tick), under a cap or floor pause, or
  *  past history-off; a pass that does not run it withdraws every prediction instead (withdrawCards, below). */
 export function cardStep(db, ictx, budget) {
   if (ictx.historyOff()) return { measure: null, cards: null };
@@ -2969,7 +2989,7 @@ Notes:
 - `card.mjs` reads no `process.env` (B1's allow-list pin over `ccd/history/*.mjs` holds), declares none of the O14 vocabularies, spells no `/history-off` (history-off reaches it as `ictx.historyOff()`), never spells `.ccrc/history/db`, and has no `SELECT *`.
 - The temp name `<file>.tmp.<pid>` is B1's `writeFileAtomic`'s own (`const tmp = `${path}.tmp.${process.pid}`;` in `store.mjs`), and so is its cleanup: `writeFileAtomic` removes any entry at that name first, and in its `finally` removes the temp on every failure before the rename (its doc comment: "a failure before the rename removes the temp"). So `oneCard`'s catch unlinks no temp: a second unlink of it there would be a guard nothing can trip. The one unlink the catch does make is the prediction's own, when its record was due and failed (coordinator ruling R-recalloff-keep, the next note). A temp that a KILLED writer left, which no `finally` reaches, is matched by `removeOtherCards`' `\.tmp\.[0-9]+` arm and unlinked at the id's next write. Step 1 measures the name.
 - A record that was due and failed takes the prediction on disk with it (coordinator ruling R-recalloff-keep, the final check's R2). `decideCardGenFile` answers `write` or `delete` only while a prediction stands (`decideCardFile`'s `keep` or `write`), so `recorded` is false exactly when that record act, or the `mkdir` before it, threw. The prediction a `keep` leaves, or the older one a `write` was to replace, would otherwise stand beside a stale record, against Task 2's contract (a stale record never stands beside a prediction), and the hook would compare `recall-off/<id>` with the old generation on every tick until the boundary consumed it. The finding's trigger is ENOSPC on the home volume, where the floor probe measures `db/` and §9.3 lets `db/` live on another volume; an unlink succeeds under ENOSPC and EDQUOT. The ruling names the `keep` arm; the `write` arm over an existing file is the same hazard (the gen-record case's newer family, had its record write failed, leaves the older line beside the older record), so this one test covers both. An absent prediction fails the unlink with ENOENT, uncounted, which is why no `current.state` test precedes it: such a test would change no outcome. The case `a record that cannot be written or removed beside a kept prediction …` measures both of the record's acts, and the mutant `R-recalloff-keep: a kept prediction left beside a failed record` reds it.
-- A busy store throws out of `bump` or `writeFileAtomic`'s neighbours exactly as it does out of `deriveNodes`: the sweep is the only writer under its lock, so busy is a test's injection, and the pass handles it where it handles derivation's. A tick that meets the lock returns before the card step and before its withdrawal; that residual is named in the PR body (Task 14).
+- A busy store throws out of `bump` or `writeFileAtomic`'s neighbours exactly as it does out of `deriveNodes`: the sweep is the only writer under its lock, so busy is a test's injection, and the pass handles it where it handles derivation's. A tick that meets the lock returns before the card step and before its withdrawal; that residual is named in the PR body (Task 14). So is the other: a scheduled pass that ends before its card step, whether killed (the carrier's 10-minute kill, the OOM killer, a SIGKILL) or ended by a throw (B2's D-5016 and D-5026), neither consumes nor withdraws, so a second compaction in that window is served the last prediction (counted `card_id_mismatch` once derivation resumes); doctor FAILs `tick-stale` naming the death until a later pass ticks, unless history is off or an operator pass is live. A non-busy throw out of the card step ends the pass as a recorded death (D-5026) and leaves predictions standing, as a throw out of `deriveNodes` does.
 - Ruling RC2 says "lstat-checked" for the withdrawal, and ruling RC3 "lstat-typed, never following a link" for the scope read. The withdrawal lstats the two directories a link could be walked through, `card/` and each `card/<id>`, and only unlinks the names under them: an unlink removes a link itself and refuses a directory, so a per-name lstat could change no answer, and this plan does not spell a guard nothing can trip. Both directory checks have mutants (Step 8: `RC2: a withdrawal through a linked card/` and `… through a linked card/<id>`). The scope read uses `readCard`, whose `O_NOFOLLOW | O_NONBLOCK` open refuses a link and whose `fstat` refuses anything but a regular file: the type an lstat gives, without the race between an lstat and a later open. One guard, not two, so its mutant reds (Step 8, `RC3: a scope marker read through a link`).
 - A withdrawal's outcome line on a hold with no DB open is `history-sweep: card_withdrawn:<reason> <n>`, printed only when something was withdrawn, after the hold's own word (and `journal-unwritable`, when that line is printed). The shim reads no stdout, and no B1 or B2 case plants a card file before a hold, so no existing outcome assertion meets the line.
 
@@ -2980,7 +3000,7 @@ Notes:
 import { cardStep, ensureHistoryDirs, withdrawCards } from './card.mjs';
 ```
 
-  2. In `makeIngestCtx`, replace `fts: false, admitFile, budgetLeft, isBusy };` with `fts: false, admitFile, budgetLeft, isBusy, readRegPresence };`, and add this sentence at the end of its doc comment: `readRegPresence is handed to card.mjs the same way: it names the sessions a card may be written for (W1-B3 Task 5).`
+  2. In `makeIngestCtx`, replace `admitFile, budgetLeft, isBusy };` with `admitFile, budgetLeft, isBusy, readRegPresence };` (B2's `pendingReceiptState` sits between `fts: false` and `admitFile`), and add this sentence at the end of its doc comment: `readRegPresence is handed to card.mjs the same way: it names the sessions a card may be written for (W1-B3 Task 5).`
   3. In `tick`, directly below the line `  if (ctx.ingest && !(ing !== null && ing.paused)) deriveNodes(db, ictx, ctx.budget);`, add:
 
 ```js
@@ -3056,13 +3076,13 @@ Expected: `tick doc comment: 21 steps, ensureHistoryDirs at 21, below markScan` 
   withdrawCards(null, home, { arm: 'hold', word }, out);   // W1-B3 (ruling RC2): no DB is open, so the count is a line
 ```
 
-  6. In `scheduledPass`, directly below the line `      out('history-sweep: held');`, add:
+  6. In `scheduledPassBody`, directly below the line `      out('history-sweep: held');`, add:
 
 ```js
       withdrawCards(db, home, { arm: 'hold', word: 'held' }, out);   // W1-B3 (ruling RC2)
 ```
 
-  7. In `scheduledPass`, directly below the line that begins `    const run = planRun({ historyOff: false, store: { act: 'open' },`, add:
+  7. In `scheduledPassBody`, directly below the line that begins `    const run = planRun({ historyOff: false, store: { act: 'open' },`, add the lines below. B2's D-5016 moved the body of the pass out of `scheduledPass` into `scheduledPassBody(parsed, deps, out, P, now, role)`; `scheduledPass` keeps only the off and server-role exits and the pass marker. Both sites (this one and item 6's) run inside the marker's span, so a throw out of `withdrawCards` reaches `scheduledPass`'s catch and is recorded as `pass-died` (D-5026). On the hold arm, `withdrawCards` lands directly below the `planRun` line, above the arm's `runJournalHalf`, so the D-5027 `held_pass_ms` `setMeta` stays the last write of the arm.
 
 ```js
     // W1-B3 (ruling RC2, fail closed): the migrate, recover and hold arms never reach the card step, so each withdraws
@@ -3082,7 +3102,7 @@ Expected: `tick doc comment: 21 steps, ensureHistoryDirs at 21, below markScan` 
 
 ```bash
 grep -c "^import { cardStep, ensureHistoryDirs, withdrawCards } from './card.mjs';$" ccd/history/sweep.mjs     # 1
-grep -c 'fts: false, admitFile, budgetLeft, isBusy, readRegPresence };' ccd/history/sweep.mjs                  # 1
+grep -c 'admitFile, budgetLeft, isBusy, readRegPresence };' ccd/history/sweep.mjs                             # 1
 grep -c '^  if (ctx.ingest && !(ing !== null && ing.paused)) cardStep(db, ictx, ctx.budget);$' ccd/history/sweep.mjs   # 1
 grep -c '^  withdrawCards(db, ctx.home, cardPass, ctx.out);$' ccd/history/sweep.mjs                            # 1
 grep -c '^  ensureHistoryDirs(db, ctx.home);$' ccd/history/sweep.mjs                                           # 1
@@ -3965,7 +3985,7 @@ function newestMtimeMs(p) {
 }
 
 /** Removes one scope marker or card directory without following a link. Answers whether it is gone. */
-function removeEntry(p) {
+function removePurgedEntry(p) {
   try {
     const st = lstatSync(p);
     if (!st.isDirectory()) {
@@ -3997,7 +4017,7 @@ export function collectPurgedHistoryFiles(db, home, nowMs) {
     for (const id of ids) {
       if (!idOk(id)) continue;
       const verdict = decidePurgedEntry({ reg: registryKind(P.reg, id), newestMtimeMs: newestMtimeMs(`${dir}/${id}`), nowMs });
-      if (verdict === 'remove' && removeEntry(`${dir}/${id}`)) out[kind] += 1;
+      if (verdict === 'remove' && removePurgedEntry(`${dir}/${id}`)) out[kind] += 1;
     }
   }
   if (out.scope > 0) bump(db, 'scope_files_purged', out.scope);
@@ -4125,7 +4145,7 @@ git commit -m "feat(history): collect purged sessions' scope markers and card di
   - directly below it, and above `if [[ "$event" == PostCompact ]]; then _hook_compact_post || true; fi`: the block that runs from `# >>> history-scope (spec 2026-10-05 §5.1)` to `# <<< history-scope`.
   - The comment above both stays verbatim. It begins `# The two compaction arms run LAST, after the` (`:3622-3625` at f7e51156f), and its "Nothing below prints" stays true: the new block prints nothing.
   - Every added line is below README's anchor and below every spec and plan anchor into the hook (the highest is `:2472`), so no citation moves. Step 7 measures that.
-- Test: `server/test/session-hook.test.ts`. Append one describe after the file's last line, which is after B1's `history spool` describe and B2's C17 describe. Add no import line: the census cites this file by line, up to `:7056`.
+- Test: `server/test/session-hook.test.ts`. Append one describe after the file's last line, which is after B1's `history spool` describe and B2's C17 describe. Add no import line: the census cites this file by line, up to `:7070` at de0ab03e1 (plan-a's `:7057-7070`).
 - Scratch (gitignored under `.superpowers/`, never committed): `.superpowers/sdd/history-w1-b3/scratch/`, holding `mutate.py`, `mutants-t8.py`, `cite-remeasure.py`, `cite-run.sh`, `keep/` and `keep-cite/`.
 
 **Interfaces:**
@@ -4852,7 +4872,7 @@ CS_SCOPE is unset before the card's call. Tail only: the S6-R11
 census does not move."
 ```
 
-### Task 9: Hook: `_hook_history_card` above the arm, the `:2893` call, README's `:2900` re-anchor, and the one S6-R11 census re-measure
+### Task 9: Hook: `_hook_history_card` above the arm, the `:2893` call, README's emitter-call re-anchor (`:3012` at de0ab03e1), and the one S6-R11 census re-measure
 
 **Files:**
 - Modify: `ccd/session-hook.sh`:
@@ -4862,10 +4882,10 @@ census does not move."
   - The turn-marker note's last line is extended and gains five lines after it. That line is the only one matching `^# that line \(marker-logic-in-the-tail \(D-[0-9]+\)\)\.$` (`:2945` at f7e51156f, `:2946` at origin/main); this plan quotes it as a pattern because it writes no deviation number. The note's existing text, its deviation number included, stays verbatim.
   - In B1's history-spool block, the comment line `# it is in the tail because nothing new may land above :2900.` is reworded into two lines.
   - All of the last three edits are below README's anchor.
-- Modify: `README.md`, in place and line-neutral: the line number in `` (`ccd/session-hook.sh:2900`) ``, inside the sentence that quotes `` `_hook_emit_context "$CARD" "$CARD_COMPACT"` ``. It is `:4703` at f7e51156f and `:4722` at origin/main, and B2's README rows move it again. README's other two hook anchors in that sentence (`:97`, `:103-105`) lie in `_hook_emit_context`, above the insertion, and do not move.
+- Modify: `README.md`, in place and line-neutral: the line number in `` (`ccd/session-hook.sh:<n>`) `` (`:3012` at de0ab03e1, README.md:4998), inside the sentence that quotes `` `_hook_emit_context "$CARD" "$CARD_COMPACT"` ``. That sentence is `:4703` at f7e51156f, `:4722` at origin/main 9a255a746 and `:4998` at de0ab03e1. README's other two hook anchors in that sentence (`:97`, `:103-105`) lie in `_hook_emit_context`, above the insertion, and do not move.
 - Modify: `server/test/session-hook.test.ts`:
   - one describe appended after the file's last line, which is Task 8's describe;
-  - the dated S6-R11 paragraph, comments only. It goes directly above the byFile map's `      'ccd/ccd': <n>,` entry (`:8356` at f7e51156f), plus one line directly above `    expect(total, 'the narrated headline is the sum of the census, and this is it').toBe(<n>);` (`:8663`). Both sit below `:7056`, the highest line of this file the corpus cites.
+  - the dated S6-R11 paragraph, comments only. It goes directly above the byFile map's `      'ccd/ccd': <n>,` entry (`:8356` at f7e51156f), plus one line directly above `    expect(total, 'the narrated headline is the sum of the census, and this is it').toBe(<n>);` (`:8663`). Both sit below `:7070` (de0ab03e1; plan-a's `:7057-7070`), the highest line of this file the corpus cites.
 
 **Interfaces:**
 - Consumes, from the hook:
@@ -5623,7 +5643,7 @@ grep -cF '$HOME/.ccrc/history/scope' ccd/session-hook.sh
 
 Expected: `in-place edits applied`, `hook-syntax-ok`, `1` (the grammar holds a literal `…`, not an escape), `123`, and `1`: the one constant, `HISTORY_SCOPE_DIR="$HOME/.ccrc/history/scope"`, is now the only line that spells it.
 
-- [ ] **Step 5: Re-point README's anchor by content.** README is repaired, never counted. Do it before Step 8 measures: with README stale, the census reads `ccd/session-hook.sh` 22 and `total` 198 (README's stale `:2900` counts as a failing reference into the hook), and the README case reds with `a README anchor stopped naming what its own sentence quotes: expected [ 'ccd/session-hook.sh:2900' ] to deeply equal []`. Both were measured. The hook has a second, comment-line mention of the call (`:2053` at f7e51156f), so the lookup skips comment lines. From the repository root:
+- [ ] **Step 5: Re-point README's anchor by content.** README is repaired, never counted. Do it before Step 8 measures: with README stale, the census reads `ccd/session-hook.sh` 22 and `total` 197 at de0ab03e1 (base 21 and 196; README's stale `:3012` counts as one failing reference into the hook), and the README case reds with `a README anchor stopped naming what its own sentence quotes: expected [ 'ccd/session-hook.sh:3012' ] to deeply equal []`. These two figures are the base plus one, not a fresh measurement (the plan's earlier 22 and 198 were measured at f7e51156f, where the base was 21 and 197 and README carried `:2900`); Step 8's measurement is the authority. The lookup skips comment lines defensively; at de0ab03e1 the quoted call appears once, at `:3012`. From the repository root:
 
 ```bash
 python3 - <<'PYEOF'
@@ -5644,7 +5664,7 @@ PYEOF
 git diff --stat README.md
 ```
 
-Expected: one line, `README: ccd/session-hook.sh:<old> -> :<old + 123>`, where `<old>` is the number README carried at this task's base. Then `1 file changed, 1 insertion(+), 1 deletion(-)`: README keeps its length, so `CLAUDE.md`'s README figure does not move.
+Expected: one line, `README: ccd/session-hook.sh:<old> -> :<old + 123>`, where `<old>` is the number README carried at this task's base: `README: ccd/session-hook.sh:3012 -> :3135` at de0ab03e1. Then `1 file changed, 1 insertion(+), 1 deletion(-)`: README keeps its length, so `CLAUDE.md`'s README figure does not move.
 
 - [ ] **Step 6: Run the cases and see them pass.** In the foreground:
 
@@ -5874,7 +5894,7 @@ Expected: the instrument unchanged, `7 passed`, and `corpus-frozen`.
 
 ```bash
 (cd server && ./node_modules/.bin/vitest run test/session-hook.test.ts test/install-session-hooks.test.ts test/macos-platform.test.ts test/compact-card-ship.test.ts test/compact-card.test.ts)
-(cd server && ./node_modules/.bin/vitest run test/session-hook-turnmark.test.ts test/session-hook-merge-deny.test.ts test/session-hook-sync-advisory.test.ts test/hookstate.test.ts test/ci-testmap.test.ts)
+(cd server && ./node_modules/.bin/vitest run test/session-hook-turnmark.test.ts test/session-hook-merge-deny.test.ts test/session-hook-sync-advisory.test.ts test/hookstate.test.ts test/ci-testmap.test.ts test/session-hook-role-skill-deny.test.ts test/session-hook-subagent-ask.test.ts)
 (cd server && ./node_modules/.bin/vitest run test/pools-prose.test.ts test/readme-holds.test.ts test/oss-metadata.test.ts test/topology-clean.test.ts test/readme-roster-mirror.test.ts test/source-bytes.test.ts)
 ```
 
@@ -6185,7 +6205,7 @@ before. Builtin tests, the event first; census unmoved."
 grep -c "^describe('ccrc history: every vocabulary is declared once, in lib.mjs, and bound to its uses" server/test/single-definition.test.ts
 grep -c 'const VOCABS = \[' server/test/single-definition.test.ts
 grep -cF "CARD_PREFIX is declared (its hook half lands in B3)" server/test/single-definition.test.ts
-grep -cF "'EXPAND_LABEL'] as const;" server/test/single-definition.test.ts
+grep -cF "'REDACT_SOURCES_META'] as const;" server/test/single-definition.test.ts
 grep -c "ccrc history card line" server/test/single-definition.test.ts
 node --input-type=module -e "const l = await import('./ccd/history/lib.mjs'); for (const n of ['CARD_LINE_PATTERN','CARD_LINE_MAX','CARD_DIR','SCOPE_DIR','CARD_DESCRIBE_CMD','CARD_MEASURE_ROWS','CARD_MEASURE_MAX_WAIT_MS','CARD_ATTACHMENT_MAX_BYTES','PURGED_FILES_GRACE_MS','SCOPE_MARKER_MAX_AGE_MS','CARD_CONSUMED_SCOPES','CARD_WITHDRAW_REASONS','RECALL_OFF_DIR','HISTORY_ROOT_REL']) console.log(n, typeof l[n]);"
 grep -cx 'COMPACT_CARD_MAX_AGE=1200' ccd/session-hook.sh
@@ -6193,7 +6213,7 @@ grep -cx 'COMPACT_CARD_MAX_AGE=1200' ccd/session-hook.sh
 
 Expected:
 - `1`, `1`, `1`;
-- `1`: B2's list ends with `'EXPAND_LABEL'`. A `0` means the array closes on another name; Step 2's edit does not depend on it;
+- `1`: B2 Task 7A's belt words (`'BELT_COUNTERS', 'BELT_META', 'BELT_NODES_STEP', 'REDACT_SOURCES_META'`, below its `// W1-B2 Task 7A` comment) close the list, so the W1-B3 comment and names follow that group. A `0` means the array closes on another name; Step 2's edit does not depend on it;
 - `0`;
 - fourteen lines: `CARD_LINE_PATTERN string`, `CARD_LINE_MAX number`, `CARD_DIR string`, `SCOPE_DIR string`, `CARD_DESCRIBE_CMD string`, `CARD_MEASURE_ROWS number`, `CARD_MEASURE_MAX_WAIT_MS number`, `CARD_ATTACHMENT_MAX_BYTES number`, `PURGED_FILES_GRACE_MS number`, `SCOPE_MARKER_MAX_AGE_MS number`, `CARD_CONSUMED_SCOPES object`, `CARD_WITHDRAW_REASONS object`, `RECALL_OFF_DIR string`, `HISTORY_ROOT_REL string`. An `undefined` means the task that owns that name spelled it differently: fix it in that task's file and its `lib.d.mts` line, never here;
 - `1`: the compact card's age, one line, as the binding case reads it.
@@ -6388,9 +6408,9 @@ census unmoved."
 ### Task 12: Lifecycle rows `history-scope-markers` and `history-card-files` (O17's B3 half)
 
 **Files:**
-- Modify: `shared/lifecycle.ts`. Insert two rows immediately before the closing `];` of `export const LIFECYCLE: readonly LifecycleClass[] = [`.
-  - That `];` is the only line of the file that is exactly `];`. At f7e51156f it is `:45`. At origin/main 9a255a746 it is `:53`, below #299's `scope-sweep-verdicts` row.
-  - B1 and B2 append their history rows directly above it. So the new rows land after the last history row: B2's `history-backups`, or B4's `history-export` if B4 merged first. The last line of B2's row reads:
+- Modify: `shared/lifecycle.ts`. Insert two rows directly below the last line of B2's `history-backups` row in `export const LIFECYCLE: readonly LifecycleClass[] = [`, keeping the history block contiguous.
+  - The array's closing `];` is the only line of the file that is exactly `];` (`:45` at f7e51156f, `:53` at origin/main 9a255a746, `:91` at de0ab03e1). It is not the anchor: #316's `server-test-run-dirs` row (`:83-90` at de0ab03e1, its comment included) now sits between B2's `history-backups` row and that `];`.
+  - So the new rows land after the last history row: B2's `history-backups` (`:79-82` at de0ab03e1), or B4's `history-export` if B4 merged first (then directly below that row's last line). The last line of B2's row (`:82` at de0ab03e1) reads:
 
 ```ts
     ruling: 'operator-made by `ccrc history doctor --backup`; remove by hand (the next --backup removes a stale .tmp first)' },
@@ -6398,7 +6418,7 @@ census unmoved."
 
 - Modify: `server/test/lifecycle.test.ts`:
   - in place, B1's `const HISTORY_LANDED: readonly HistoryPr[] = [` line;
-  - insert three cases immediately before the closing `});` of `describe('shared/lifecycle.ts — the policy §4(a) manifest', () => {`. That describe opens at `:993` at both f7e51156f and origin/main, and its closing `});` is the file's last line (`:1039` and `:1049`). B1's history block and B2's `history-backups` case sit directly above that `});`, and B4's `history-export` case does too if B4 merged first.
+  - insert three cases immediately before the closing `});` of the `'shared/lifecycle.ts — the policy §4(a) manifest'` describe. Find it as the first line after that describe's opening that is exactly `});` (the describe opens at `:994` and closes at `:1190` at de0ab03e1; `HISTORY_LANDED` is at `:1064`, inside it). It is NOT the file's last line: the `docs W2 — ccdEnding` describe follows it (`:1192-1224`). Directly above it sits #316's `server-test-run-dirs` case (`:1178-1189`), below B2's `history-backups` case (`:1165-1176`), and B4's `history-export` case if B4 merged first. Cases placed in the ccdEnding describe would never be selected by Step 3's and Step 6's `-t 'policy'`, and the expected REDs would never show.
 - Test: `server/test/lifecycle.test.ts`.
 
 **Interfaces:**
@@ -6515,7 +6535,7 @@ Any other answer means a base this plan was not written against. Stop and report
   - `the B3 rows' numbers…`: `shared/lifecycle.ts declares no history-scope-markers class: expected undefined to be truthy`.
   - B1's `'every history class names its creators and its tier'` stays green, over the rows that exist.
 
-- [ ] **Step 4: Add the two rows.** In `shared/lifecycle.ts`, insert immediately before the closing `];`:
+- [ ] **Step 4: Add the two rows.** In `shared/lifecycle.ts`, insert directly below the last line of B2's `history-backups` row (the line quoted in Files, `:82` at de0ab03e1; below B4's `history-export` row instead if B4 merged first), keeping the history block contiguous. #316's `server-test-run-dirs` row stays between the new rows and the closing `];`, so Step 1's `grep -cx '\];'` still prints 1:
 
 ```ts
   // ccrc history, W1-B3 (spec 2026-10-05 §9.4): the card line's two rolling classes. The hook rewrites a session's
@@ -6836,11 +6856,11 @@ W1-c and W1-f in the report."
 
 **Files:**
 - Modify: `README.md`. Add a new paragraph inside B2's section, which is headed exactly ``### Session history: lossless recall (`ccrc history`)``. Anchor by content:
-  - The paragraph goes after the line `whole exit table and tells a session when to recall.`, which ends B2's "Every answer opens with a header…" paragraph.
+  - The paragraph goes after the line that is exactly `when to recall.` (`README.md:5299` at de0ab03e1), which ends B2's "Every answer opens with a header…" paragraph. B2 merged that paragraph with other line breaks than its plan's, so the plan's earlier anchor `whole exit table and tells a session when to recall.` is no line of README; its next non-blank line is `**Box verbs and operator verbs.**` (`:5301`).
   - It goes before the blank line above the line that begins `**Box verbs and operator verbs.**`.
   - Step 1 measures that both lines occur exactly once.
   - This section lies below README's quoted hook call (Task 9's re-pointed `ccd/session-hook.sh:<n>`), so the insertion moves no citation of any other file.
-- Modify, only when Step 3's measurement calls for it: `CLAUDE.md:10`, its `README.md (~N lines)` figure, in place. At f7e51156f the line begins ``**`README.md` (~5700 lines) is the canonical system overview.``; at origin/main 9a255a746 it says `~5800`.
+- Modify, only when Step 3's measurement calls for it: `CLAUDE.md:10`, its `README.md (~N lines)` figure, in place. At f7e51156f the line begins ``**`README.md` (~5700 lines) is the canonical system overview.``; at origin/main 9a255a746 it says `~5800`; at de0ab03e1 `~6200`. Measured at de0ab03e1: B = 6192, so B + 9 = 6201, which rounds to 6200 = N, and CLAUDE.md stays untouched.
 - Create (gitignored scratch, not committed): `.superpowers/sdd/history-w1-b3/pr-body.md`.
 - Test: the suites and checks in Steps 4 and 6 to 10.
 
@@ -6874,7 +6894,7 @@ W1-c and W1-f in the report."
 wc -l < README.md
 sed -n 10p CLAUDE.md | grep -oE 'README\.md` \(~[0-9,]+ lines\)'
 grep -c '^### Session history: lossless recall (`ccrc history`)$' README.md
-grep -cx 'whole exit table and tells a session when to recall\.' README.md
+grep -cx 'when to recall\.' README.md
 grep -c '^\*\*Box verbs and operator verbs\.\*\*' README.md
 grep -c '^\*\*The card line\.\*\*' README.md
 ```
@@ -6886,7 +6906,7 @@ Expected:
 
 A `0` in place of a `1` means B2's section was reworded at merge. Find its paragraph about the exit table by reading the section, insert after it, and record the anchor you used in the PR body.
 
-- [ ] **Step 2: Insert the paragraph.** After the line `whole exit table and tells a session when to recall.`, insert one blank line and then exactly these eight lines. The blank line that already precedes `**Box verbs and operator verbs.**` stays below them.
+- [ ] **Step 2: Insert the paragraph.** After the line that is exactly `when to recall.`, insert one blank line and then exactly these eight lines. The blank line that already precedes `**Box verbs and operator verbs.**` stays below them.
 
 ```markdown
 **The card line.** After a compaction of a session's main thread, its `SessionStart` context gains one
@@ -7037,7 +7057,7 @@ Expected, in order:
 (cd server && ./node_modules/.bin/vitest run test/history-maint.test.ts)
 (cd server && ./node_modules/.bin/vitest run test/history-store.test.ts test/history-cli.test.ts test/measure-history.test.ts)
 (cd server && ./node_modules/.bin/vitest run test/session-hook.test.ts)
-(cd server && ./node_modules/.bin/vitest run test/session-hook-turnmark.test.ts test/session-hook-merge-deny.test.ts test/session-hook-sync-advisory.test.ts test/install-session-hooks.test.ts test/macos-platform.test.ts test/compact-card.test.ts test/compact-card-ship.test.ts)
+(cd server && ./node_modules/.bin/vitest run test/session-hook-turnmark.test.ts test/session-hook-merge-deny.test.ts test/session-hook-sync-advisory.test.ts test/install-session-hooks.test.ts test/macos-platform.test.ts test/compact-card.test.ts test/compact-card-ship.test.ts test/session-hook-role-skill-deny.test.ts test/session-hook-subagent-ask.test.ts)
 (cd server && ./node_modules/.bin/vitest run test/single-definition.test.ts test/lifecycle.test.ts test/ci-pipeline.test.ts test/source-bytes.test.ts)
 (cd server && ./node_modules/.bin/vitest run test/pools-prose.test.ts test/readme-holds.test.ts test/oss-metadata.test.ts test/topology-clean.test.ts test/readme-roster-mirror.test.ts)
 (cd server && ./node_modules/.bin/vitest run test/ccrc-doctor.test.ts)
@@ -7095,7 +7115,7 @@ Expected: green. A red means a deviation number is defined in two plans. Report 
 ```markdown
 ## ccrc history W1-B3 "card line"
 
-Spec: `docs/superpowers/specs/2026-10-05-ccrc-history-lossless-dag-design.md` (rev 3.5), §10.5's B3 bullet.
+Spec: `docs/superpowers/specs/2026-10-05-ccrc-history-lossless-dag-design.md` (rev 3.6), §10.5's B3 bullet.
 Plan: the B3 plan this wave's brief names.
 
 The card-line PR of W1 Part B, on top of B1 ("capture") and B2 ("recall"):
@@ -7113,7 +7133,7 @@ The card-line PR of W1 Part B, on top of B1 ("capture") and B2 ("recall"):
   (`card/<id>/<uuid>.txt`, 0600, only once it has read the transcript to its end, and only while the run's
   budget is left), deletes it when a later boundary consumes it and counts that consumption by the scope marker
   its compaction left (`card_consumed:main`, `:other`, `:unknown`), withdraws every prediction on a pass that
-  runs no card step (`card_withdrawn:<reason>`: fail closed), measures delivery from the post-boundary
+  ends normally without the card step (`card_withdrawn:<reason>`: fail closed), measures delivery from the post-boundary
   SessionStart attachment (`card_served`, `card_id_mismatch`), and collects purged sessions' files after 7 days;
 - README's hook anchor re-pointed by content, and the S6-R11 census re-measured for the whole PR (no key moved); the
   `history-scope-markers` and `history-card-files` lifecycle rows; `measure-history.py`'s W1-e query; a short
@@ -7121,6 +7141,10 @@ The card-line PR of W1 Part B, on top of B1 ("capture") and B2 ("recall"):
 
 No wire, server, PWA, `ccd/ccd`, `compact-card.mjs` or doctor change; no new hook event arm and no new `--op` verb.
 B3 follows B2; B3 and B4 merge in either order.
+
+Not B3's either: the follow-ups B2's merged departures mark 'on B3's list' (D-5017, D-5021, D-5022, D-5024, D-5026
+residual (i), D-5027's lag-high remedy). The coordinator moved them to hardening wave 5h on 2026-10-15 (programme
+ledger, 'Owed from B2'), so B3 changes no schema and no doctor check.
 
 ### Pins
 
@@ -7142,13 +7166,17 @@ Read W1-e (step 7 below) with these in hand. None is fixed in this PR.
   denominator: it can only lower the share. A large `consumed_unknown` says the markers were not readable.
 - **Two compactions of one session between two ticks.** The second SessionStart is served the first's stale line,
   counted `card_id_mismatch`.
-- **No pass, no consumption and no withdrawal.** Every scheduled pass that runs but does not run the card step
+- **No pass, no consumption and no withdrawal.** Every scheduled pass that ends normally without the card step
   withdraws every prediction (ruling RC2: a cap or floor pause, a per-chunk floor stop, an ingest an unreadable
   roster skipped, a budget spent before the step, the recover or migrate arm, a held, refused, unbound or
   unreachable store), so a compaction in those states is served nothing. Named residuals: with the sweep's timer
   dead no pass runs at all, and a pass that meets the store's write lock (busy, which only a test injects: the
   sweep is the only writer under its lock) returns before both; in either, a second compaction is served the last
-  prediction (counted `card_id_mismatch` once derivation resumes). An `--op` pass neither ticks nor withdraws; the
+  prediction (counted `card_id_mismatch` once derivation resumes). And a scheduled pass that ends before its card
+  step, whether killed (the carrier's 10-minute kill, the OOM killer, a SIGKILL) or ended by a throw (B2's D-5016
+  and D-5026), neither consumes nor withdraws, so a second compaction in that window is served the last prediction
+  (counted `card_id_mismatch` once derivation resumes); doctor FAILs `tick-stale` naming the death until a later
+  pass ticks, unless history is off or an operator pass is live. An `--op` pass neither ticks nor withdraws; the
   next scheduled pass decides. A compaction while the predictions are withdrawn carries no line and is not
   counted consumed: its indexer was not caught up, which W1-e excludes.
 - **A crashed boundary is never measured.** A boundary whose parse crashed before its leaf was written (RB5's
@@ -7188,11 +7216,11 @@ Read W1-e (step 7 below) with these in hand. None is fixed in this PR.
      `history-card-files-creator-through-card`; `history-readme-card-paragraph`, with CLAUDE.md's README figure
      re-measured; the reserve stays 513 (C38); the card spells `~/.local/bin/ccrc`, and spec rev 3.3's §16
      `history-skill-literal-path` row now agrees with §8.6, so no erratum is left.
-   - RC2, fail closed (`history-card-withdrawn-when-not-ticking`): every scheduled pass that runs but does not run
+   - RC2, fail closed (`history-card-withdrawn-when-not-ticking`): every scheduled pass that ends normally without
      the card step withdraws every `card/<id>/<uuid>.txt`, lstat-checked, unlink only, never through a link,
      counted `card_withdrawn:<reason>` (a hold with no DB open prints the count on its outcome line). lib's
-     `decideCardWithdraw` decides; the budget bounds a write, never the consume/delete decision. The dead timer
-     is a named residual (the third distortion above).
+     `decideCardWithdraw` decides; the budget bounds a write, never the consume/delete decision. The dead timer,
+     and a pass killed or thrown before its card step, are named residuals (the third distortion above).
    - RC3, classify (`history-card-consumed-counter`): each consumption is counted `card_consumed:main`, `:other`
      or `:unknown` by the scope marker its compaction left; `served_share = served / (main + unknown)`, with
      `other` and `unknown` reported beside it; the mismatch share stays over served plus mismatch.
@@ -7226,32 +7254,40 @@ Read W1-e (step 7 below) with these in hand. None is fixed in this PR.
      transcript in the tree; the first W1-e reading (step 7 below) is its check. And `$REG/<id>.generation`,
      ccd's own 36-byte file, keeps `_ct_read`'s 128-character read, which RC4 did not rule: a `.generation` that
      a hand edit pads past character 128 reads as no generation in the hook, where the CLI reads the generation.
-4. **Programme ledgers.** README's hook anchor is no longer `:2900`. The rule other programmes quote ("nothing new
+4. **Programme ledgers.** README's hook anchor (spec §8.6's `:2900`, `:3012` at B2's merge) is no longer a fixed
+   number. The rule other programmes quote ("nothing new
    above `:2900`") now reads: nothing new above the line that reads `if _hook_emit_context "$CARD" "$CARD_COMPACT"`,
    found by content. B3 is its one sanctioned insertion (`history-card-reader-above-the-arm`). A wave that
    inserts lines above that line pays the S6-R11 census again; a line-neutral edit there does not.
 5. **Merge order.**
-   - #248 (landing order W3), #299 (session continuity W4) and #284 (delegation broker W1) are already on this
-     PR's base. #189 rewrites the identity block beside the reader's insertion: whichever of #189 and B3 lands
-     second rebases by content and re-measures the S6-R11 census on its own tree.
-   - CLAUDE.md's README figure is a conflict hot spot. Re-measure it on the second PR's tree.
+   - #248 (landing order W3), #299 (session continuity W4), #284 (delegation broker W1) and #189 (the fork chain,
+     which rewrote the identity block beside the reader's insertion) are already on this PR's base.
+   - CLAUDE.md's README figure is a conflict hot spot. Re-measure it on the tree of whichever of B3 and B4 merges second.
    - If B4 lands after B3, it appends `'B4'` to `HISTORY_LANDED` after `'B3'`, and its row goes below B3's.
 
 ### Operator steps (none of them arms anything)
 
-6. **Arming.** Once a session-hosting node runs a release that carries this PR, its first scheduled tick creates
-   `~/.ccrc/history/scope/` and `~/.ccrc/history/card/` (0700), and the hook half goes live with them. Confirm
-   with existence checks only: `ls -ld ~/.ccrc/history/scope ~/.ccrc/history/card`. A node with
-   `~/.ccrc/history-off` stays unarmed.
+6. **Arming.** Precondition: the node's store is at schema v2, i.e. B2's operator act is done (`ccrc history
+   doctor --migrate`, run from a terminal outside any session). A store over about 1.5 GB holds at
+   `migration-needs-op` (B2's D-5015), a store short of room holds at `migration-refused`, and a held pass runs no
+   tick, so it makes neither directory and withdraws every prediction. A small store migrates on the first pass
+   (the migrate arm also runs no tick), so it arms one pass later. Once the node runs a release that carries this
+   PR and `ccrc doctor` shows neither `migration-needs-op` nor `migration-refused`, its first scheduled pass that
+   runs the tick creates `~/.ccrc/history/scope/` and `~/.ccrc/history/card/` (0700), and the hook half goes live
+   with them. Confirm with existence checks only: `ls -ld ~/.ccrc/history/scope ~/.ccrc/history/card`. A node
+   with `~/.ccrc/history-off` stays unarmed.
 7. **W1-e.** After about a week of post-install compactions, run `python3 deploy/measure-history.py` on each node,
    read-only, as the store's own user. Its `w1e.served_share` must be at least 0.95, and its
    `w1e.mismatch_share` at most 0.02. A `null` share means nothing was measured yet, never a pass. Read it only
-   over a window in which `ccrc doctor` showed no capture pause and the sweep's timer ran, and in which no
-   restore or rebuild completed; a `served_share` above 1 means one did, and voids the reading. Record
+   over a window that starts after the node's v2 migration, in which `ccrc doctor` showed no capture pause, no
+   migration hold (`migration-needs-op` or `migration-refused`) and no `tick-stale` FAIL (a stale tick or a
+   recorded pass death), and the sweep's timer ran, and in which no restore or rebuild completed; a
+   `served_share` above 1 means one did, and voids the reading. Record
    `consumed_main`, `consumed_other` and `consumed_unknown` beside the two shares: the served share is over
    main and unknown, and a large unknown count (markers not readable) makes it conservative, as the distortions
    list describes. Record the numbers per node on this PR or in the programme ledger.
-8. **W1-h, the card half.** On one gateway-lane session (whichever launch kind is live), the post-compaction
+8. **W1-h, the card half.** With the same precondition as step 6 (the node's store at schema v2, no migration
+   hold, and the node armed), on one gateway-lane session (whichever launch kind is live), the post-compaction
    SessionStart context of a main-thread compaction carries the `History:` line, and
    `"$HOME/.local/bin/ccrc" history describe <its L prefix>` exits 0 once the sweep has indexed that compaction.
 9. **Kill switch.** `~/.ccrc/history-off` silences both the marker and the line. There is no new switch.
@@ -7284,8 +7320,8 @@ Every departure this plan takes from the spec is listed once below, in the order
 - **D-4737** — `history-card-measured-from-transcript` (Tasks 2, 3, 6, 9, 13): Card delivery is measured from the transcript; no card receipt (§8.6). This plan defines it first.
 - **D-4738** — `history-card-consumed-counter` (Tasks 2, 3, 5, 13): NEW departure (no spec §16 row), ruled RC3. The spec names only `card_served` and `card_id_mismatch`, and "with a caught-up indexer" cannot be measured without a record of the prediction. Each prediction a later boundary of the main transcript consumed, one deleted on a fork skip included, is counted `card_consumed:<scope>`: `main` when the scope marker its compaction's PreCompact left reads `main <uuid> <ms>` with the ms not after the consumed boundary's time and within `COMPACT_CARD_MAX_AGE` of it, `other` for `subagent` or `ambiguous` in that window, `unknown` otherwise (overwritten, emptied, unreadable). `card.mjs` reads `scope/<id>` read-only, never through a link; lib's `decideConsumedScope` folds it. W1-e's `served_share = served / (main + unknown)`, with `other` and `unknown` reported beside it.
 - **D-4739** — `history-card-measure-window` (Tasks 3, 6): NEW departure (no spec §16 row), ruled RC1 (accepted). §8.6 reads delivery from "the post-boundary SessionStart attachment" and names no window. A leaf is decided within `CARD_MEASURE_ROWS` (40) rows after its boundary in its holding copy, or at the next boundary, or once that copy is read to its end `RAW_LEAF_GRACE_MS` past the boundary, or once the copy is no longer live, or `CARD_MEASURE_MAX_WAIT_MS` (24 h) after the leaf was derived. Leaves derived before the measure's first pass are never measured, so pre-B3 leaves never read as unserved. An attachment body over `CARD_ATTACHMENT_MAX_BYTES` (1 MiB, by its stored `raw_len`) counts as a window row and is skipped unread.
-- **D-4740** — `history-card-withdrawn-when-not-ticking` (Tasks 3, 5, 12): NEW departure (no spec §16 row), ruled RC2. §8.6 deletes a prediction only when the boundary that consumed it is ingested, and says nothing of a pass that cannot ingest it, which would leave a stale line for the next compaction. So every scheduled pass that runs but does not run the card step over a caught-up ingest (a cap or floor pause, a per-chunk floor stop, an ingest an unreadable roster skipped, a budget already spent before the card step, the recover or migrate arm, a held, refused, unbound or unreachable store) withdraws every `card/<id>/<uuid>.txt`: lstat-checked, unlink only, never through a link, counted `card_withdrawn:<reason>`, or, on a hold with no DB open, printed on the pass's outcome line. lib's `decideCardWithdraw` decides; `card.mjs` and `sweep.mjs` measure and act. The budget bounds a write, never the consume/delete decision. A dead timer is a named residual.
-- **D-4741** — `history-card-dirs-made-by-sweep` (Task 5): NEW departure (no spec §16 row), ruled RC1 (accepted). The spec says the hook never makes `scope/`, which it writes, and names no creator for it or for `card/`. So the sweep makes both (0700) at every bound store's tick: the marker and the reserve arm within one tick of an update, and never on a box without history.
+- **D-4740** — `history-card-withdrawn-when-not-ticking` (Tasks 3, 5, 12): NEW departure (no spec §16 row), ruled RC2. §8.6 deletes a prediction only when the boundary that consumed it is ingested, and says nothing of a pass that cannot ingest it, which would leave a stale line for the next compaction. So every scheduled pass that ends normally without the card step over a caught-up ingest (a cap or floor pause, a per-chunk floor stop, an ingest an unreadable roster skipped, a budget already spent before the card step, the recover or migrate arm, a held, refused, unbound or unreachable store) withdraws every `card/<id>/<uuid>.txt`: lstat-checked, unlink only, never through a link, counted `card_withdrawn:<reason>`, or, on a hold with no DB open, printed on the pass's outcome line. lib's `decideCardWithdraw` decides; `card.mjs` and `sweep.mjs` measure and act. The budget bounds a write, never the consume/delete decision. A dead timer is a named residual, and so is a pass killed or ended by a throw before its card step (B2's D-5026 records it, and doctor FAILs `tick-stale` until a later pass ticks).
+- **D-4741** — `history-card-dirs-made-by-sweep` (Task 5): NEW departure (no spec §16 row), ruled RC1 (accepted). The spec says the hook never makes `scope/`, which it writes, and names no creator for it or for `card/`. So the sweep makes both (0700) at every bound store's tick: the marker and the reserve arm within one tick of an update on a store at the code's schema version (a store held at `migration-needs-op` or `migration-refused` arms at the first tick after the migration completes), and never on a box without history.
 - **D-4742** — `history-card-one-file-per-id` (Tasks 5, 12): NEW departure (no spec §16 row), ruled RC1 (accepted). §8.6 deletes a prediction only on consumption. Writing a new uuid's prediction also removes the id's other `<uuid>.txt` (a `/clear`ed or forked session's), so §9.4's "≤512 B per session" holds without waiting for the 7-day purge.
 - **D-4743** — `history-card-registry-names-the-session` (Tasks 5, 7): NEW departure (no spec §16 row), ruled RC1 (accepted). A prediction is written only for the uuid `$REG/<id>.uuid` names. The 30-minute scan reads every known transcript to its end, so end-of-file alone would write a file for every session the store ever saw. A file the registry no longer names is still consumed and deleted.
 - **D-4744** — `history-card-newest-live-copy` (Task 5): NEW departure (no spec §16 row), ruled RC1 (accepted). §8.6 names "the transcript's cursor" in the singular. With several live copies (after a swap carry), the prediction reads the copy written last (newest `mtime_ns`, then the larger `file_id`), the one Claude Code appends the next boundary to. A wrong guess is counted as a mismatch, never served silently.

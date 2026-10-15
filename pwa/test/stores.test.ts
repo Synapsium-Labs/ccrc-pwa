@@ -827,6 +827,29 @@ describe('the echo that clears a pending', () => {
     expect(store.getState().pending).toEqual([]);
   });
 
+  // — D-5087: a message Claude Code collapsed into a paste chip echoes WRAPPED —
+  // The transcript records a chip-submitted message inside `<pasted_content id="…">` tags, with blank lines around it
+  // (measured on Claude Code 2.1.300: 1058 characters back for a 1000-character send). Now that the server submits our
+  // own chip, the send answers ok, and an exact-only comparison kept its bubble "sending" for ten minutes beside the
+  // real turn.
+  it('a paste-chip echo, wrapped in <pasted_content> with blank lines around it, clears the pending', async () => {
+    const store = make('e5c');
+    const long = 'alpha bravo charlie '.repeat(50).trim();
+    await store.getState().send(long);
+    const echo = `\n\n<pasted_content id="adc2">\n${long}\n</pasted_content id="adc2">\n`;
+    store.getState().apply({ type: 'events', uuid: 'u1', offset: 50, events: [userAt('c1', echo, T1)] });
+    expect(store.getState().pending).toEqual([]);
+  });
+
+  it('a wrapped echo of DIFFERENT text does not clear it: only whitespace and the wrapper are forgiven', async () => {
+    const store = make('e5d');
+    const long = 'alpha bravo charlie '.repeat(50).trim();
+    await store.getState().send(long);
+    const echo = `<pasted_content id="adc2">\n${long}X\n</pasted_content id="adc2">`;
+    store.getState().apply({ type: 'events', uuid: 'u1', offset: 50, events: [userAt('c1', echo, T1)] });
+    expect(store.getState().pending).toHaveLength(1);
+  });
+
   // — D-4952: a replay is not an echo —
 
   it('a backlog that replays history the operator already saw does not clear the message they just sent', async () => {

@@ -676,8 +676,11 @@ describe('sendPrompt', () => {
     );
     expect(res).toMatchObject({ ok: false, error: 'verify-failed', draft: '[Pasted text #1]' });
     expect((res as { submittable?: boolean }).submittable).toBe(true);
-    // Still a REFUSAL: the machine does not press Enter on a box it could not
-    // read. The operator taps Send it, and `submitEnter` proves the row.
+    // Still a REFUSAL, because this text is far under the 800 characters a
+    // read needs before Claude Code collapses it, so the chip cannot be what we
+    // typed (`ownPasteChip`'s collapse floor). The operator taps Send it, and
+    // `submitEnter` proves the row. A chip the server CAN prove is its own is
+    // submitted without the tap: `send-paste-chip.test.ts`.
     expect(sendKeysCalls(calls).some((c) => c[c.length - 1] === 'Enter')).toBe(false);
     expect(cuPresses(calls)).toBe(0);
   });
