@@ -1460,3 +1460,25 @@ Found mid-wave (issued from the block above, taken in order; each defined in the
   - `censusedProjects`, plus `previousCensusedProjects` for `previousSuccessfulCensus`.
 
   `record-measured-absence` is emitted only for a held tree whose project was censused in BOTH passes and whose record is absent from both. The caller (Task 13) builds the pairs in one expression from the census and leaves a project with no census view out of `censusedProjects`. Commit `83f53f51a`.
+- **D-4651** — `a-missing-spool-dir-is-a-warn-until-the-next-spawn` (Task 14): the plan and Task 14's context classify a missing owner spool directory as a defect, with a remedy pointing at supported ccrc operations. But ccd creates `$REG/delegation/spool/<id>/` only at spawn (`_spawn_start`), and a supervisor restart leaves a live pane alone (`KillMode=process`; `cmd_ensure`'s `_alive` arm). So right after the rollout, every running session predates the directory. A FAIL there would turn every fleet-box `ccrc update` into exit 3 (D-3114), with no remedy that works.
+
+  So `delegation-hooks` answers **WARN** for a running session whose owner directory is absent. The detail says the session is not yet observed and its directory arrives at its next spawn. The remedy says:
+  - nothing is lost by waiting;
+  - to observe it now, run `ccd stop <id>` then `ccd start <id>`, which resumes the conversation but ends an in-flight turn.
+
+  Every other defect stays **FAIL**, and a WARN never hides a FAIL. The FAIL cases are:
+  - a directory that exists but is unreadable;
+  - a spool root that is a symlink or unsearchable, even with no session running;
+  - a missing or unreadable registration;
+  - an unreadable roster or home.
+
+  Doctor creates no spool directory. W3-M74's row for this input pins WARN, and mutants to PASS and to FAIL both go red. Task 13's health arithmetic keeps an hour from a session with no owner directory UNMEASURED, never measured-empty.
+
+  Basis (coordinator mail 5157):
+  - spec §9's doctor bullet does not fix the class;
+  - the plan's Rollout step 3 requires "unavailable, not healthy", which WARN meets;
+  - spec §5.3 creates the directory only at spawn, and the hook skips when it is missing;
+  - the D-3114 exit-3 hazard;
+  - no O1–O5 decision is touched.
+
+  Commits `e8ce55f27` (doctor) and `739735f38` (health).
