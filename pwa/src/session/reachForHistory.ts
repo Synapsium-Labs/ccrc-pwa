@@ -1,8 +1,11 @@
-// THE DOOR A FINGER CAN OPEN. A phone has no wheel, and on the live terminal
-// glass there is nothing to scroll anyway — tmux attaches the client on the
-// alternate screen, where xterm keeps no scrollback — so the key bar was the
-// only way into the console history. The gesture still has one obvious meaning,
-// and it is the wheel's: reach for what is above the screen.
+// THE DOOR A FINGER CAN OPEN. A phone has no wheel, and the live terminal has
+// no scrollback of its own to scroll — tmux attaches the client on the
+// alternate screen, where xterm keeps none; the host's own scroll (D-5005)
+// reaches only the pinned grid's rows on a glass shorter than them — so the
+// key bar was the only way into the console history. The gesture still has
+// one obvious meaning, and it is the wheel's: reach for what is above the
+// screen. The gesture belongs to the grid: the wrapped view moves this host
+// off-screen, so there the `hist` key is the only door.
 //
 // Eighty-odd lines of pointer-and-touch arbitration, lifted out of
 // `TerminalDrawer`'s 225-line attach effect, where they sat between the socket

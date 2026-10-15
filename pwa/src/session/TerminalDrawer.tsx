@@ -415,9 +415,9 @@ export function TerminalDrawer({
     // The gate runs at UPGRADE time, so an open pty survives an auth-lost
     // episode raised anywhere else — a REST 401, or the fleet socket's own
     // probe. Unconditionally bumping `attempt` would close a live terminal and
-    // re-attach it for nothing the moment the operator signed back in, and the
-    // server restores the session's canonical tmux window size on the way past,
-    // so the reader would watch their pane resize for no reason. This is
+    // re-attach it for nothing the moment the operator signed back in: the
+    // reader would watch their pane drop to `attaching…` and repaint for no
+    // reason, and lose a ^C held for a confirm and a latched `ctrl`. This is
     // `ReconnectingSocket.nudge()`'s own early return (`ws.ts`: inert unless
     // started AND down), which the two paths were asymmetric on.
     const unsubAuth = onAuthRegained(() => {

@@ -212,8 +212,11 @@ const tokenValue = (name: string): string | undefined => {
 /** Voice and glass from the tokens: the mono face, well background, on-well
  *  ink, phosphor cursor. --bg-well stays dark under [data-theme='light'], so
  *  the terminal is dark regardless of theme. Both terminals start at the base
- *  size (xterm takes a number); the drawer may then shrink the live one so the
- *  whole tmux window fits, and the history one follows it (`consoleFit`).
+ *  size (xterm takes a number). The live one's grid never moves (it is pinned
+ *  at the window's size, D-5005); the drawer may shrink its TYPE, down to the
+ *  floor, so the grid view shows all 220 columns, and the history one follows
+ *  it (`consoleFit`). Where even the floor cannot, the live one stays at the
+ *  base size off-screen and the wrapped view shows its screen.
  *  Spelled once, worn by both terminals — the
  *  live one and the history one have to read as the same glass or scrolling
  *  back would look like leaving the session. */

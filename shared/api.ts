@@ -8668,8 +8668,9 @@ export const TMUX_STATUS_ROWS = 1;
  * numbers at attach predict — nothing scrolls into history while a full-screen
  * app holds the pane (F9, measured: 1852 -> 11359 in one step at alt-exit).
  *
- * Wave 3 reads `limit`, `width` and `height` off THIS probe and adds no second
- * reader — one reader per field is the wire rule.
+ * Stage 2 of the 2026-10-14 drawer design reads `limit`, `width` and `height`
+ * off THIS probe (its fit target) and adds no second reader — one reader per
+ * field is the wire rule.
  */
 export type PaneProbe =
   | { ok: true; history: number; limit: number; width: number; height: number; alternate: boolean }
@@ -8695,8 +8696,9 @@ export type PaneProbe =
  * THE PROBE'S FINER VOCABULARY IS ADAPTER-LOCAL AND DOES NOT REACH THE WIRE.
  * `PaneProbe` tells `unreadable` from `unparseable` because the adapter must not
  * narrow a distinction it received, but nothing here carries that pair: the
- * probe exists to SIZE the capture and, from wave 3, to feed the fit floor —
- * both server-side, where all four arms are intact. So the CAPTURE alone decides
+ * probe exists to SIZE the capture and, from stage 2 of the 2026-10-14 drawer
+ * design, to feed its fit target (`PaneProbe`, above) — both server-side, where
+ * all four arms are intact. So the CAPTURE alone decides
  * this reply's status, and a probe that failed while the capture succeeded is a
  * 200 with the three measured fields simply absent. Absent is the whole of what
  * the client is told, and it is enough: the drawer's behaviour on a failed probe

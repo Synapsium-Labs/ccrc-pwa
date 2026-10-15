@@ -3495,8 +3495,9 @@ describe('ROUTE_WRITABLE_FIELDS — one list, one home (routing spec §5.3, slic
 
 describe('the pane read is declared once, in L0', () => {
   // PANE_HISTORY_LINES is echoed back to the PWA in every history response and
-  // will be read by wave 3's fit floor beside READER_MIN_COLS and
-  // STALL_BUDGET_LINES. A second copy is a second number to keep in step.
+  // will be read by stage 2's fit target (spec 2026-10-14 §6.2) beside
+  // READER_MIN_COLS and STALL_BUDGET_LINES. A second copy is a second number
+  // to keep in step.
   it('PANE_HISTORY_LINES is defined in shared/api.ts and nowhere else', () => {
     const holders = ALL.filter((f) => /^\s*export const PANE_HISTORY_LINES\b/m.test(readFileSync(f, 'utf8'))).map(rel);
     expect(holders).toEqual(['shared/api.ts']);

@@ -1926,8 +1926,8 @@ describe('a failed read says why, in a sentence', () => {
 
   it('an unrouted token is still made readable, and is not mistaken for a sentence', () => {
     // The fallthrough cannot tell "already a sentence" from "a token nobody
-    // taught this function", so it decides by SHAPE. A future wire token added
-    // in wave 3 must not reach a reader as a bare slug.
+    // taught this function", so it decides by SHAPE. A wire token added later
+    // must not reach a reader as a bare slug.
     expect(historyFailureSentence('some-future-token'))
       .toBe('could not read this pane — the box answered some-future-token');
     // ...while the success path's real sentences pass through untouched.
