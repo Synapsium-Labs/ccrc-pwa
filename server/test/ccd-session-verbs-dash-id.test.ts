@@ -16,7 +16,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdirSync } from 'node:fs';
 import path from 'node:path';
-import { makeCcdHarness, type CcdHarness } from './ccdWsHelpers.js';
+import { WS_ADD, makeCcdHarness, type CcdHarness } from './ccdWsHelpers.js';
 import { decOf, eventsOf, readJournal, refusalsOf } from './lifecycleHelpers.js';
 import { DECOY_IDS, plantRow, reapLocks, regListing, type DashId } from './dashIdFixture.js';
 
@@ -292,7 +292,11 @@ describe('the identity arms narrow nothing else (path-identity spec §2.4)', () 
 // spells the verb's whole valid argv first and the lone key LAST. Dropping the key from the residue (`else shift; fi`)
 // turns each row into the valid call it would otherwise be, and the verb acts: it releases the hold, takes a hold,
 // archives or restores the row, or renames the branch. The assertions are the verb's own answer, and that nothing
-// it would have changed moved.
+// it would have changed moved. The two ws-rename rows run on a real worktree that ws-add made, so each proves the
+// lone-key refusal and the branch unmoved, both in the registry and in the worktree's HEAD. Their document and
+// registry-branch assertions are soft, so under that mutant the rename is done, and both branch assertions run and
+// red. Their registry listing only guards against a name added or removed: the mutant renames in place, so it cannot
+// red that.
 describe('a lone trailing key after the full argv answers the verb\'s usage line (path-identity spec §2.4)', () => {
   const USAGE_RELEASE = 'ccd: usage: ccd ws-release --session <id>';
   const USAGE_ARCHIVE = 'ccd: usage: ccd ws-archive --session <id>';
@@ -354,12 +358,17 @@ describe('a lone trailing key after the full argv answers the verb\'s usage line
     ['--session <id> --branch b --session', `--session ${REAL} --branch b --session`],
     ['--session <id> --branch b --branch', `--session ${REAL} --branch b --branch`],
   ])('ws-rename %s answers {"refused":"bad-args"} with the usage line at exit 0, and the branch is unchanged', (_name, argv) => {
-    plantWorkspace(REAL, null);
+    h.makeRepo('demo');
+    h.sh(`${WS_ADD} CCD_WS_SLUG=quiet-basin cmd_ws_add demo`);
+    const wt = h.reg(REAL, 'workdir');
+    expect(wt, 'ws-add made the row').not.toBeNull();
     const before = regListing(h.home);
     const r = run(`${RENAME_STUBS} cmd_ws_rename ${argv}`);
     expect(r.code, r.stderr).toBe(0);
-    expect(docOf(r.stdout)).toEqual({ refused: 'bad-args', detail: USAGE_RENAME, paths: [] });
-    expect(h.reg(REAL, 'branch'), 'the branch was renamed').toBe(`ws/${REAL}`);
-    expect(regListing(h.home)).toEqual(before);
+    expect.soft(docOf(r.stdout)).toEqual({ refused: 'bad-args', detail: USAGE_RENAME, paths: [] });
+    expect.soft(h.reg(REAL, 'branch'), 'the branch was renamed').toBe('ws/quiet-basin');
+    expect(h.sh(`git -C '${wt!}' rev-parse --abbrev-ref HEAD`).trim(), "the worktree's branch was renamed")
+      .toBe('ws/quiet-basin');
+    expect(regListing(h.home), 'no registry name was added or removed').toEqual(before);
   });
 });
