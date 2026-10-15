@@ -9,8 +9,13 @@
 // never a bare send, so no cap can reach the session around it. The guard's
 // decision is the pure `exitNoticeShowing`; the send under it is the drawer's,
 // which is inert until the socket is open. The drawer's own action cap (the
-// history door) is rendered beside the keys through `action`, never inside the
-// strip that scrolls.
+// history door) is rendered beside the keys through `action`, never inside a
+// half of them.
+//
+// THE BAR WRAPS WHEN IT DOES NOT FIT, AT ANY WIDTH (D-5007, amended by
+// `key-bar-wraps-when-it-does-not-fit`): the keys are two halves, broken where
+// `barBreak` says, and the browser puts them on one line or two by the space the
+// bar actually has. No width is named anywhere (chat.css, `.term-keys`).
 //
 // NAMED KeyBarView, NOT KeyBar: its pure half is `keyBar.ts`, and two modules
 // whose names differ only in case are one file on a case-insensitive disk (the
@@ -26,6 +31,7 @@ import {
   KEY_SEQ,
   OVERFLOW_KEYS,
   PRIMARY_KEYS,
+  barBreak,
   ctrlCode,
   exitNoticeShowing,
   guardedKey,
@@ -186,20 +192,41 @@ export function KeyBar(props: KeyBarProps): ReactNode {
     );
   }
 
+  /**
+   * THE TWO HALVES. `keys` and then the bar's own caps — `toggle` (the wrapped
+   * view's `⋯`) and the history door — break where `barBreak` says: the first
+   * half takes the larger share of the KEYS, and the second the rest, then
+   * `toggle`, then (beside it, in the tail, never inside the half) the door. So
+   * a bar too wide for its glass is two even lines, never `⋯` or the door alone
+   * on a line.
+   *
+   * Each grows by its caps that STRETCH (`flex: 1 0 auto` on a key; `⋯` and
+   * the door keep their width), so on a wide glass every key cap is the same
+   * width whichever half it is in.
+   */
+  const halves = (keys: readonly KeyName[], toggle: ReactNode): ReactNode => {
+    const trailing = (toggle === null ? 0 : 1) + (props.action === undefined ? 0 : 1);
+    const cut = barBreak(keys.length + trailing);
+    const first = keys.slice(0, cut);
+    const second = keys.slice(cut);
+    return (
+      <>
+        <div className="term-keys-seq" style={{ flexGrow: first.length }}>{first.map(cap)}</div>
+        <div className="term-keys-tail" style={{ flexGrow: second.length }}>
+          <div className="term-keys-seq">
+            {second.map(cap)}
+            {toggle}
+          </div>
+          {props.action}
+        </div>
+      </>
+    );
+  };
+
   if (props.view === 'grid') {
     return (
       <div className="term-keys term-keys--grid" role="toolbar" aria-label="Terminal keys">
-        {/* The sequence caps are the half allowed to scroll away. MEASURED:
-            ten caps at --tap-min plus nine gaps and this bar's padding come to
-            10x44 + 9x8 + 2x12 = 536px before a legend is laid out,
-            and `.sheet-panel--full` drops the drawer's side padding to zero
-            — so on a 390px phone the tenth cap starts at x=480, entirely off
-            the right edge. Survivable while every cap was a key the phone's
-            own keyboard also lacked; not survivable once the strip holds the
-            only door touch has to the console history. Below 420px the strip
-            wraps onto a second row instead of scrolling (chat.css, D-5007). */}
-        <div className="term-keys-seq">{GRID_KEYS.map(cap)}</div>
-        {props.action}
+        {halves(GRID_KEYS, null)}
       </div>
     );
   }
@@ -213,8 +240,8 @@ export function KeyBar(props: KeyBarProps): ReactNode {
   };
   return (
     <div className="term-keys term-keys--wrapped" role="toolbar" aria-label="Terminal keys">
-      <div className="term-keys-seq">
-        {PRIMARY_KEYS.map(cap)}
+      {halves(
+        PRIMARY_KEYS,
         <Keycap
           className="keycap--act"
           aria-label="More keys"
@@ -223,9 +250,8 @@ export function KeyBar(props: KeyBarProps): ReactNode {
           onClick={toggleMore}
         >
           <span aria-hidden="true">⋯</span>
-        </Keycap>
-      </div>
-      {props.action}
+        </Keycap>,
+      )}
       {more && (
         <div className="term-keys-more" role="group" aria-label="More terminal keys">
           {OVERFLOW_KEYS.map(cap)}

@@ -239,12 +239,18 @@ const REGISTERED: Record<string, string> = {
     + 'tree. The terminal drawer\'s ^C confirm (the consequence, then `send ^C` '
     + 'and `cancel`, in the key bar\'s place) joined it in stage 1 of the '
     + 'every-width drawer; it shares the layout glue and nothing it means.',
-  'fleet.css .child-reclaim-banner .child-reclaim-item + fleet.css .settings-node-head':
+  'chat.css .term-keys-seq + fleet.css .child-reclaim-banner .child-reclaim-item':
     'DIFFERENT THINGS. Four declarations of wrapping flex with a min-width '
     + 'floor — the same idiom as the actions rows above, in a different part '
     + 'of the tree. The theme picker\'s head (a palette name and its swatch on '
     + 'one line) joined the idiom when the swatch moved beside the name, and '
-    + 'now clusters with the terminal confirm\'s entry instead.',
+    + 'now clusters with the terminal confirm\'s entry instead. The terminal '
+    + 'key bar\'s half joined it when the bar stopped scrolling its keys and '
+    + 'wraps them where they do not fit (`key-bar-wraps-when-it-does-not-fit`); '
+    + 'chat.css sorts first, so the half seeds this cluster and the settings '
+    + 'node head this entry used to pair the banner item with now clusters '
+    + 'with nothing. A half of a key bar and a line of a reclaim banner share '
+    + 'the layout glue and nothing they mean.',
   'fleet.css .proj-dir + fleet.css .sheet-panel .proj-ready-why':
     'DIFFERENT THINGS, and measurably so: DIFFERENT GROUNDS. '
     + 'Both sit in column 2 of a grid in mono `--fs-2xs`, and the overlap is '

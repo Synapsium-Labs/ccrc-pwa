@@ -1259,8 +1259,7 @@ button.metachip:active {
 /* xterm's own viewport is the scroller here, not this element — and it is the
    first one in this app that ever scrolls, which is why nothing has styled it
    before. Contained so a flick past the oldest line drags the history and not
-   the sheet behind it (`.chat-scroller` and `.term-keys-seq` take the same
-   precaution). */
+   the sheet behind it (`.chat-scroller` takes the same precaution). */
 .term-history .xterm-viewport {
   overscroll-behavior: contain;
 }
@@ -1317,36 +1316,50 @@ button.metachip:active {
 /* Quick-key bar — mono keycaps for the phone keyboard's missing keys
    (DIRECTION: raised 6px-radius caps, 44px targets, 120ms press-compress).
    Cut from the well's own ink, not --bg-raised, so the caps read as keys
-   set into the glass in both themes. */
+   set into the glass in both themes.
+
+   THE BAR WRAPS WHEN IT DOES NOT FIT, AT ANY WIDTH (D-5007, amended by
+   `key-bar-wraps-when-it-does-not-fit`). Its keys are two halves (`barBreak`
+   in keyBar.ts): the wrapped view's `esc ↑ ↓ ⏎` and `^C ⌫ ⋯` with the history
+   door, the grid's `esc ↑ ↓ ← →` and `tab ⇧tab ⏎ ^C` with the door. Where both
+   fit on one line they share it; where they do not, each takes a line of its
+   own, at whatever width that happens — the browser measures the space the bar
+   actually has, and nothing here names a width. It used to wrap below a fixed
+   420px, by a sum that came to 432px while the wrapped bar needs 439px (its
+   eight caps at 44px, the door's `hist` at 51px, seven gaps and this padding),
+   so from 421 to 438px (the iPhone Plus and Pro Max widths) it stayed one row
+   and clipped `⋯`, the only door to the overflow row. Centred on the cross
+   axis, so nothing in it stretches down a second line. */
 .term-keys {
   flex: none;
   display: flex;
+  flex-wrap: wrap;
+  align-items: center;
   gap: var(--sp-2);
   padding: 0 var(--sp-3);
 }
-/* The keys scroll; the action beside them does not. MEASURED: ten caps at
-   --tap-min, nine gaps and this padding come to 536px against a 390px phone,
-   and `.sheet-panel--full` zeroes the drawer's side padding — so this strip
-   has always overflowed. That was survivable while everything in it was a key
-   the phone's keyboard also lacks; it stops being survivable once the strip
-   carries the only door touch has to the console history. Below 420px the
-   strip wraps instead (the media rule after the history door's rules, D-5007). */
+/* A half. It grows by its keys (inline: the count of its caps that stretch), so
+   on a wide glass every key cap stretches by the same amount. It wraps its own
+   caps only on a glass narrower than any phone, and it never scrolls them: a
+   strip that scrolls is how a cap ends up off the edge — the history door was,
+   on a 390px phone, before it left the strip, and `⋯` was at 430px. */
 .term-keys-seq {
-  flex: 1;
+  flex: 1 1 auto;
   min-width: 0;
   display: flex;
+  flex-wrap: wrap;
   gap: var(--sp-2);
-  overflow-x: auto;
-  overscroll-behavior: contain;
-  /* NO GUTTER. A desktop scroll container reserves a classic scrollbar track
-     INSIDE itself, which made this half taller than the action cap beside it —
-     the two caps sat at different heights, measured on a desktop browser. A
-     phone paints an overlay scrollbar and loses nothing here, and the strip is
-     dragged rather than aimed at in either place. */
-  scrollbar-width: none;
 }
-.term-keys-seq::-webkit-scrollbar {
-  display: none;
+/* The second half and the history door, on ONE line: the door is as tall as
+   the keys beside it, never a slab down two rows, and it never wraps off onto
+   a line of its own. The door is beside the keys, never inside a half: it is
+   an action, not a key (`terminal-scrollback.test.tsx`). */
+.term-keys-tail {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
 }
 /* The ground only — see `.chat-head .keycap`. Every colour here is a
    `color-mix` over `--ink-on-well`, which is exactly why it did not travel
@@ -1384,13 +1397,9 @@ button.metachip:active {
   background: var(--ink-on-well);
   border-color: var(--ink-on-well);
 }
-/* The wrapped view's bar (D-5007, spec 2026-10-14 §5.4). The row `⋯` opens is a
-   row of its own under the primary keys and the history door, so this bar wraps
-   at every width, and the keys in that row wrap rather than scroll. */
-.term-keys--wrapped {
-  flex-wrap: wrap;
-  row-gap: var(--sp-2);
-}
+/* The row `⋯` opens (D-5007, spec 2026-10-14 §5.4): a line of its own under
+   the primary keys and the history door, its keys wrapping rather than
+   scrolling. */
 .term-keys-more {
   flex: 1 0 100%;
   display: flex;
@@ -1417,20 +1426,6 @@ button.metachip:active {
   letter-spacing: var(--ls-caps);
   color: var(--ink-on-well);
   background: var(--bg-well);
-}
-/* BELOW 420px THE BAR IS TWO ROWS, NEVER A STRIP (D-5007). The wrapped view's
-   primary row and the history door come to 8x44 + 7x8 + 2x12 = 432px, so on a
-   phone a strip would scroll a key off the right edge; here the caps wrap onto a
-   second row instead, in either view. */
-@media (max-width: 420px) {
-  .term-keys {
-    flex-wrap: wrap;
-    row-gap: var(--sp-2);
-  }
-  .term-keys-seq {
-    flex-wrap: wrap;
-    overflow-x: visible;
-  }
 }
 
 /* ------------------------------------------------------------------ *

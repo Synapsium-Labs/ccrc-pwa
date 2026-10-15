@@ -7,8 +7,10 @@
 //     door beside both and never inside a row of keys;
 // (d) the one-shot `ctrl` latch, which the drawer feeds the next letter typed
 //     into xterm's textarea (Task 12; `drawer-paste.test.tsx`);
-// (e) below 420px the bar wraps, read from chat.css as text (jsdom applies no
-//     stylesheet), and every key is a --tap-min target;
+// (e) the bar wraps when it does not fit, at any width, never at a breakpoint
+//     (`key-bar-wraps-when-it-does-not-fit`): two even halves, read from
+//     chat.css as text (jsdom applies no stylesheet) and checked by arithmetic
+//     from the tokens at 360–460px; and every key is a --tap-min target;
 // (f) single definition: no key byte is spelled under `pwa/src/session/`
 //     outside `keyBar.ts`, and the scan is proved live on that file;
 // (g) no two modules under `pwa/src` differ only in case, which is why the
@@ -25,7 +27,7 @@ import type { ReactNode } from 'react';
 import { Terminal } from '@xterm/xterm';
 import { TerminalDrawer } from '../src/session/TerminalDrawer';
 import type { DrawerTerm } from '../src/session/terminalFactory';
-import { atBlock, declValue, ruleIn } from './cssRule';
+import { atBlock, declValue, declaredValues, ruleIn } from './cssRule';
 import {
   GRID_KEYS,
   GUARDED_KEYS,
@@ -33,6 +35,7 @@ import {
   KEY_SEQ,
   OVERFLOW_KEYS,
   PRIMARY_KEYS,
+  barBreak,
   ctrlCode,
   exitNoticeShowing,
   guardedKey,
@@ -57,6 +60,9 @@ const chatCss = readFileSync(
 
 const legends = (el: Element): string[] =>
   Array.from(el.querySelectorAll('button')).map((b) => b.textContent ?? '');
+/** The bar's key caps, both halves, in order (the history door is in neither). */
+const seqLegends = (toolbar: Element): string[] =>
+  Array.from(toolbar.querySelectorAll('.term-keys-seq')).flatMap(legends);
 
 /** The screen a bar's guard reads: none, unless a case hands one in. */
 const noScreen = (): readonly string[] => [];
@@ -307,7 +313,7 @@ describe('the wrapped view bar', () => {
     const toolbar = screen.getByRole('toolbar', { name: 'Terminal keys' });
     expect(toolbar.classList.contains('term-keys')).toBe(true);
     expect(toolbar.classList.contains('term-keys--wrapped')).toBe(true);
-    expect(legends(toolbar.querySelector('.term-keys-seq')!)).toEqual([
+    expect(seqLegends(toolbar)).toEqual([
       'esc',
       '↑',
       '↓',
@@ -476,7 +482,7 @@ describe('the grid view strip', () => {
     const toolbar = screen.getByRole('toolbar', { name: 'Terminal keys' });
     expect(toolbar.classList.contains('term-keys')).toBe(true);
     expect(toolbar.classList.contains('term-keys--grid')).toBe(true);
-    expect(legends(toolbar.querySelector('.term-keys-seq')!)).toEqual([
+    expect(seqLegends(toolbar)).toEqual([
       'esc',
       '↑',
       '↓',
@@ -524,7 +530,7 @@ describe('the drawer renders the grid strip', () => {
       />,
     );
     const toolbar = screen.getByRole('toolbar', { name: 'Terminal keys' });
-    expect(legends(toolbar.querySelector('.term-keys-seq')!)).toEqual([
+    expect(seqLegends(toolbar)).toEqual([
       'esc',
       '↑',
       '↓',
@@ -562,18 +568,187 @@ describe('the drawer renders the grid strip', () => {
   });
 });
 
-describe('below 420px the bar is two rows, never a strip', () => {
-  it('has a 420px media rule that wraps the bar and stops scrolling the sequence', () => {
-    const narrow = atBlock(chatCss, '@media (max-width: 420px)');
-    expect(declValue(ruleIn(narrow, '.term-keys'), 'flex-wrap')).toBe('wrap');
-    expect(declValue(ruleIn(narrow, '.term-keys-seq'), 'flex-wrap')).toBe('wrap');
-    expect(declValue(ruleIn(narrow, '.term-keys-seq'), 'overflow-x')).toBe('visible');
+// THE BAR WRAPS WHEN IT DOES NOT FIT, AT ANY WIDTH (`key-bar-wraps-when-it-does-not-fit`).
+//
+// It used to wrap below a fixed 420px, by a sum its own comment got wrong: the
+// wrapped bar and its history door need 439px, so from 421 to 438px (the
+// iPhone Plus and Pro Max widths) it stayed one row and clipped `⋯`, the only
+// door to the overflow row. Now nothing in chat.css names a width for the bar:
+// it is two halves, which share one line where they fit and take a line each
+// where they do not, and the arithmetic below — read from the tokens and the
+// rendered bar — pins which, at the widths that matter.
+//
+// The model of a cap: the larger of `--tap-min` and its legend in the mono face
+// at `--fs-xs` (an advance of 0.6em, SF Mono's and Menlo's, plus `--ls-caps`
+// per character) with the bar's cap padding and a 1px border each side.
+// Measured in Chromium on the built bar: one-glyph caps 44px, `hist` 51px,
+// `cancel` 67px — the model gives 44, 51 and 67.
+const tokensCss = readFileSync(
+  path.join(import.meta.dirname, '..', '..', 'ui', 'src', 'styles', 'tokens.css'),
+  'utf8',
+);
+/** A length token's value, in px (an `em` one times `--fs-xs`, its only use here). */
+const tokenPx = (name: string): number => {
+  const m = new RegExp(`${name}:\\s*([0-9.]+)(px|em)`).exec(tokensCss);
+  if (m === null) throw new Error(`tokens.css has no ${name}`);
+  return m[2] === 'em' ? Number(m[1]) * tokenPx('--fs-xs') : Number(m[1]);
+};
+/** `var(--x)` as px; `0 var(--x)` as its second (inline) value. */
+const varPx = (decl: string | null): number => {
+  const m = /var\((--[a-z0-9-]+)\)$/.exec(decl ?? '');
+  if (m === null) throw new Error(`not a single token: ${decl}`);
+  return tokenPx(m[1]!);
+};
+const MONO_ADVANCE_EM = 0.6;
+const BORDER_PX = 1;
+const capPx = (legend: string): number => {
+  const pad = varPx(declValue(ruleIn(chatCss, '.term-keys .keycap'), 'padding'));
+  const perChar = MONO_ADVANCE_EM * tokenPx('--fs-xs') + tokenPx('--ls-caps');
+  return Math.max(tokenPx('--tap-min'), Math.ceil([...legend].length * perChar + 2 * pad + 2 * BORDER_PX));
+};
+
+interface BarModel {
+  /** The bar's own side padding, each side. */
+  pad: number;
+  /** Each flex item of the bar, as the caps on it, in order. */
+  items: string[][];
+  /** Each item's max-content width. */
+  widths: number[];
+  gap: number;
+}
+/** The bar as rendered (the halves and the caps in each) with the widths the
+ *  model gives them. `.term-keys-more` is a line of its own and is left out. */
+function barModel(toolbar: Element): BarModel {
+  const gap = varPx(declValue(ruleIn(chatCss, '.term-keys'), 'gap'));
+  const pad = varPx(declValue(ruleIn(chatCss, '.term-keys'), 'padding'));
+  const items: string[][] = [];
+  const widths: number[] = [];
+  for (const el of Array.from(toolbar.children)) {
+    if (el.classList.contains('term-keys-more')) continue;
+    const caps = el.matches('button') ? [el.textContent ?? ''] : legends(el);
+    items.push(caps);
+    widths.push(caps.reduce((w, c) => w + capPx(c), 0) + gap * Math.max(0, caps.length - 1));
+  }
+  return { pad, items, widths, gap };
+}
+/** Flex-wrap's line breaking over the bar's items at a glass `widthPx` wide:
+ *  each line the items it holds, and the width they take. */
+function lines(m: BarModel, widthPx: number): { caps: string[]; px: number }[] {
+  const inner = widthPx - 2 * m.pad;
+  const out: { caps: string[]; px: number }[] = [];
+  m.items.forEach((caps, i) => {
+    const w = m.widths[i]!;
+    const last = out.at(-1);
+    if (last !== undefined && last.px + m.gap + w <= inner) {
+      last.caps.push(...caps);
+      last.px += m.gap + w;
+    } else {
+      out.push({ caps: [...caps], px: w });
+    }
+  });
+  return out;
+}
+const oneLinePx = (m: BarModel): number =>
+  2 * m.pad + m.widths.reduce((a, b) => a + b, 0) + m.gap * (m.widths.length - 1);
+
+describe('the bar wraps when it does not fit, at any width (key-bar-wraps-when-it-does-not-fit)', () => {
+  /** Every at-rule in chat.css conditioned on a width: a media query or a
+   *  container query naming `width`. */
+  const widthBlocks = (): string[] => {
+    const out: string[] = [];
+    const re = /@(media|container)([^{]*)\{/g;
+    for (let m = re.exec(chatCss); m !== null; m = re.exec(chatCss)) {
+      if (/width/.test(m[2] ?? '')) out.push(atBlock(chatCss, `@${m[1]}${m[2]!.trimEnd()}`));
+    }
+    return out;
+  };
+
+  it('no width breakpoint touches the bar: nothing in chat.css wraps it at a width it names', () => {
+    for (const block of widthBlocks()) {
+      expect(block, 'a width-conditioned rule styles the key bar').not.toMatch(/\.term-(keys|confirm)/);
+    }
   });
 
-  it('the wrapped view and its overflow row are flex-wrapped', () => {
-    expect(declValue(ruleIn(chatCss, '.term-keys--wrapped'), 'flex-wrap')).toBe('wrap');
-    expect(declValue(ruleIn(chatCss, '.term-keys-more'), 'flex-wrap')).toBe('wrap');
+  it('the bar wraps at every width, its halves wrap rather than scroll, and nothing in it stretches across lines', () => {
+    expect(declaredValues(chatCss, '.term-keys', 'flex-wrap')).toEqual(['wrap']);
+    expect(declaredValues(chatCss, '.term-keys', 'align-items')).toEqual(['center']);
+    expect(declaredValues(chatCss, '.term-keys-seq', 'flex-wrap')).toEqual(['wrap']);
+    for (const v of declaredValues(chatCss, '.term-keys-seq', 'overflow-x')) {
+      expect(v, 'the keys became a strip that scrolls a cap off the edge again').not.toMatch(/auto|scroll/);
+    }
+    // The tail is ONE line: the door sits beside the second half's keys and is
+    // as tall as they are, never a slab down two rows.
+    expect(declaredValues(chatCss, '.term-keys-tail', 'flex-wrap')).not.toContain('wrap');
+    expect(declaredValues(chatCss, '.term-keys-tail', 'align-items')).toEqual(['center']);
+  });
+
+  it('the row ⋯ opens is a line of its own, and its keys wrap rather than scroll', () => {
     expect(declValue(ruleIn(chatCss, '.term-keys-more'), 'flex')).toBe('1 0 100%');
+    expect(declValue(ruleIn(chatCss, '.term-keys-more'), 'flex-wrap')).toBe('wrap');
+  });
+
+  it('barBreak: the first line takes the larger half, so neither line is ever one cap', () => {
+    expect(barBreak(8)).toBe(4);
+    expect(barBreak(10)).toBe(5);
+    expect(barBreak(7)).toBe(4);
+    expect(barBreak(2)).toBe(1);
+  });
+
+  it('wrapped: two halves, esc ↑ ↓ ⏎ and ^C ⌫ ⋯ with the history door, each growing by its stretching caps', () => {
+    render(<Wrapped send={vi.fn()} action={door} />);
+    const toolbar = screen.getByRole('toolbar', { name: 'Terminal keys' });
+    const halves = Array.from(toolbar.querySelectorAll('.term-keys-seq')) as HTMLElement[];
+    expect(halves.map(legends)).toEqual([['esc', '↑', '↓', '⏎'], ['^C', '⌫', '⋯']]);
+    const tail = toolbar.querySelector<HTMLElement>('.term-keys-tail')!;
+    expect(tail.parentElement).toBe(toolbar);
+    expect(legends(tail)).toEqual(['^C', '⌫', '⋯', 'hist']);
+    // `⋯` and the door are actions that keep their width (`flex: none`), so the
+    // tail grows by its two keys and the first half by its four: every cap that
+    // stretches on a wide glass stretches by the same amount.
+    expect(halves[0]!.style.flexGrow).toBe('4');
+    expect(tail.style.flexGrow).toBe('2');
+  });
+
+  it('grid: two halves, esc ↑ ↓ ← → and tab ⇧tab ⏎ ^C with the history door', () => {
+    render(<Grid send={vi.fn()} action={door} />);
+    const toolbar = screen.getByRole('toolbar', { name: 'Terminal keys' });
+    const halves = Array.from(toolbar.querySelectorAll('.term-keys-seq')) as HTMLElement[];
+    expect(halves.map(legends)).toEqual([['esc', '↑', '↓', '←', '→'], ['tab', '⇧tab', '⏎', '^C']]);
+    expect(legends(toolbar.querySelector('.term-keys-tail')!)).toEqual(['tab', '⇧tab', '⏎', '^C', 'hist']);
+    expect(halves[0]!.style.flexGrow).toBe('5');
+    expect(toolbar.querySelector<HTMLElement>('.term-keys-tail')!.style.flexGrow).toBe('4');
+  });
+
+  it('the arithmetic: the wrapped bar needs 439px on one line, so a 420px breakpoint clipped 421–438', () => {
+    render(<Wrapped send={vi.fn()} action={door} />);
+    const m = barModel(screen.getByRole('toolbar', { name: 'Terminal keys' }));
+    expect(capPx('hist'), 'the model no longer gives the measured door').toBe(51);
+    expect(capPx('cancel'), 'the model no longer gives the measured cancel').toBe(67);
+    expect(oneLinePx(m)).toBe(439);
+  });
+
+  it.each([
+    [360, 2], [390, 2], [414, 2], [430, 2], [438, 2], [460, 1],
+  ])('wrapped at %ipx: %i line(s), nothing clipped, ⋯ never alone', (px, n) => {
+    render(<Wrapped send={vi.fn()} action={door} />);
+    const m = barModel(screen.getByRole('toolbar', { name: 'Terminal keys' }));
+    const ls = lines(m, px);
+    expect(ls.map((l) => l.caps.length), `${px}px`).toHaveLength(n);
+    for (const l of ls) expect(l.px, `a line clips at ${px}px: ${l.caps.join(' ')}`).toBeLessThanOrEqual(px - 2 * m.pad);
+    const withMore = ls.find((l) => l.caps.includes('⋯'))!;
+    expect(withMore.caps, '⋯ spends a line on itself').toEqual(expect.arrayContaining(['^C', '⌫', '⋯', 'hist']));
+    for (const l of ls) expect(l.caps.length, `a lone cap on a line at ${px}px`).toBeGreaterThan(1);
+  });
+
+  it.each([
+    [360, 2], [390, 2], [414, 2], [430, 2], [438, 2], [460, 2], [560, 1],
+  ])('a grid forced at %ipx: %i line(s), nothing clipped (it scrolled esc and ^C away from 421 to 559)', (px, n) => {
+    render(<Grid send={vi.fn()} action={door} />);
+    const m = barModel(screen.getByRole('toolbar', { name: 'Terminal keys' }));
+    const ls = lines(m, px);
+    expect(ls, `${px}px`).toHaveLength(n);
+    for (const l of ls) expect(l.px, `a line clips at ${px}px: ${l.caps.join(' ')}`).toBeLessThanOrEqual(px - 2 * m.pad);
+    expect(oneLinePx(m)).toBe(550);
   });
 
   // THE FLOOR IS @ccrc/ui's `Keycap`, NOT A chat.css RULE (#419). `KEYCAP`

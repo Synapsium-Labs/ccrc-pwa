@@ -684,13 +684,14 @@ export function TerminalDrawer({
   };
 
   /*
-   * THE HISTORY DOOR, beside the key bar and never inside its strip.
+   * THE HISTORY DOOR, beside the bar's keys and never one of them.
    *
    * A phone has no wheel, and MEASURED against the real Terminal, a touch drag
    * over xterm emits nothing to the pty in either buffer — so touch has no
    * gesture to fix and no gesture that opens this. This key IS its door, which
-   * is why `KeyBar` renders it OUTSIDE the scroller: the one affordance touch has
-   * must never be the thing that scrolled off the edge.
+   * is why `KeyBar` renders it in the bar's tail, OUTSIDE both halves of keys,
+   * and why the bar wraps where it does not fit rather than scrolling: the one
+   * affordance touch has must never be the thing that went off the edge.
    *
    * An ACTION, not a sequence — outside KEY_SEQ so that table goes on meaning
    * "bytes the pane receives". The legend is a word rather than a glyph for the

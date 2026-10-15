@@ -123,3 +123,16 @@ export function exitNoticeShowing(rows: readonly string[]): boolean {
   while (end > 0 && rows[end - 1]!.trim() === '') end--;
   return rows.slice(Math.max(0, end - EXIT_NOTICE_ROWS), end).some((r) => EXIT_NOTICE.test(r));
 }
+
+/**
+ * Where a bar of `caps` caps breaks when one line cannot hold it: the first
+ * line takes the larger half, `ceil(caps / 2)`, and the second the rest, so a
+ * two-line bar is two even halves and never a lone cap on a line of its own
+ * (`key-bar-wraps-when-it-does-not-fit`). The wrapped bar's eight (its six keys,
+ * `⋯` and the history door) break 4 + 4; the grid's ten (its nine keys and the
+ * door) 5 + 5. WHETHER it breaks is the browser's, measured against the space
+ * the bar actually has: nothing names a width for it (chat.css, `.term-keys`).
+ */
+export function barBreak(caps: number): number {
+  return Math.ceil(caps / 2);
+}

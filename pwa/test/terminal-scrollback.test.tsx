@@ -688,19 +688,22 @@ describe('a read that fails says WHICH failure', () => {
 // door touch has, and the two things that can silently take it away are its
 // place in the DOM and one CSS declaration.
 describe('the console history has a door a thumb can reach', () => {
-  it('the scroll-back key is NOT inside the strip that scrolls away', () => {
-    // ARITHMETIC, not taste. `.term-keys-seq` is `overflow-x: auto` and its
-    // eight caps measure 8x44 + 7x8 = 408px before a legend is laid out; add
-    // this bar's 2x12 padding and a ninth cap starts at x=428. A 390px phone
-    // — `.sheet-panel--full` zeroes the drawer's side padding, so that is the
-    // whole width — never shows it. Put this button back in the scroller and
-    // the only affordance touch has is off-screen at rest.
+  it('the scroll-back key is NOT inside a half of the keys', () => {
+    // ARITHMETIC, not taste. When this key sat in the strip of keys, the strip
+    // was `overflow-x: auto` and its eight caps measured 8x44 + 7x8 = 408px
+    // before a legend was laid out; with the bar's 2x12 padding a ninth cap
+    // started at x=428, off a 390px phone (`.sheet-panel--full` zeroes the
+    // drawer's side padding, so that is the whole width). The keys no longer
+    // scroll — the bar wraps where it does not fit
+    // (`key-bar-wraps-when-it-does-not-fit`, `drawer-keybar.test.tsx`) — and
+    // this key stays beside them, in the bar's tail, as an action and not a
+    // key: the one affordance touch has is never laid out as one of them.
     render(<TerminalDrawer id={ID} open onClose={() => {}} makeSocket={makeSocket} />);
     const door = screen.getByRole('button', { name: 'Scroll back' });
     expect(door.closest('.term-keys-seq'), 'the history door scrolls off the edge with the keys').toBeNull();
     expect(door.closest('.term-keys'), 'the history door left the key bar entirely').not.toBeNull();
-    // …and every sequence cap DID stay in the scroller, so this is a split and
-    // not a bar that stopped scrolling.
+    // …and every sequence cap DID stay in a half, so this is a split and not
+    // a bar that lost its keys.
     const esc = screen.getByRole('button', { name: 'Escape' });
     expect(esc.closest('.term-keys-seq')).not.toBeNull();
   });
