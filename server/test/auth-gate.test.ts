@@ -220,7 +220,9 @@ describe('the scanner is looking at something', () => {
     // precisely the state this whole file exists to make impossible. Adding a
     // route is now a deliberate act that edits these three numbers, with a
     // reviewer looking at them.
-    expect(scanRoutes('server.ts').length).toBe(51);
+    // 52 since D-5047's `POST /api/sessions/:id/dialog/text`, the free-text row's own route beside `/dialog`.
+    // 53 since D-5048's `POST /api/sessions/:id/dialog/multi`, a multiSelect question's own route beside it.
+    expect(scanRoutes('server.ts').length).toBe(53);
     // 22 since `GET /api/runs/:id/items` — the READ half of the settle route,
     // which keys on item ids that nothing else published.
     // 23 since `POST /api/runs/:id/reclaim` — the fourth ungated operator door,
@@ -351,6 +353,10 @@ describe('the scanner is looking at something', () => {
     // two more in `coord/routes.ts`: 51 + 35 + 7 + 2 + 4 = 99. Both are HTTP routes
     // and neither is EXEMPT, so the HTTP count is now 96, the gated count 63, and
     // the exempt-HTTP count stays 33.
+    // 98 since D-5047's `POST /api/sessions/:id/dialog/text` (session-gated like `/dialog`, NOT EXEMPT, no box token):
+    // 52 + 33 + 7 + 2 + 4 = 98, the HTTP half 94 -> 95, the gated count 61 -> 62, the exempt-HTTP count still 33.
+    // 99 since D-5048's `POST /api/sessions/:id/dialog/multi` (session-gated like `/dialog`, NOT EXEMPT, no box token):
+    // 53 + 33 + 7 + 2 + 4 = 99, the HTTP half 95 -> 96, the gated count 62 -> 63, the exempt-HTTP count still 33.
     expect(ROUTES.length).toBe(99);
     // …and the three partitions add up: the websockets plus the HTTP half.
     expect(ROUTES.filter(isWs).length + ROUTES.filter((r) => !isWs(r)).length).toBe(ROUTES.length);

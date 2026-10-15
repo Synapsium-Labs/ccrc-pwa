@@ -298,8 +298,17 @@ export class Tmux {
       detail: msg !== '' ? msg : `tmux exited ${r.code} with no message`,
     };
   }
+  /** D-5046: `--` before the text, always. tmux parses a text token that starts
+   *  with `-` as FLAGS. Measured on tmux 3.7c, private `-L` socket, 2026-10-15:
+   *  `-l '-x probe'` exits 1 (`unknown flag -x`) and `-l '- item'` exits 1
+   *  (`invalid flag -`), typing nothing; and `-l '--'` exits 0 having typed
+   *  NOTHING, since the parser takes it as the end of the flags, so no caller's
+   *  return check could see that drop. After `--` every dash shape measured
+   *  was typed verbatim, an empty text still exits 0, and a missing session
+   *  still exits 1. The text stays ONE argv token, so the agent's `send-keys`
+   *  prefix grant admits it and nothing on the wire adds a token of its own. */
   async sendLiteral(id: string, text: string): Promise<boolean> {
-    return (await this.run('tmux', ['send-keys', '-t', tmuxTarget(id), '-l', text])).code === 0;
+    return (await this.run('tmux', ['send-keys', '-t', tmuxTarget(id), '-l', '--', text])).code === 0;
   }
   async sendKey(id: string, key: string): Promise<boolean> {
     return (await this.run('tmux', ['send-keys', '-t', tmuxTarget(id), key])).code === 0;

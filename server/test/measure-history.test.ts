@@ -12,6 +12,7 @@ import { fileURLToPath } from 'node:url';
 import { DatabaseSync } from 'node:sqlite';
 import { mkTmp } from './tmpHelpers.js';
 import { createStore } from '../../ccd/history/store.mjs';
+import { SCHEMA_VERSION } from '../../ccd/history/lib.mjs';
 import { makeHistoryBox, runSweep, spoolLine, plantSession, openStoreRO, scrubbedEnv } from './historyHelpers.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
@@ -182,7 +183,7 @@ describe('measure-history.py: the named queries over planted rows (O52)', () => 
     const rep = report(['--db', f.db, '--now', String(NOW)]);
     expect(Object.keys(rep)[0], 'the report is not headed by its store id').toBe('store_id');
     expect(rep.store_id).toBe(f.storeId);
-    expect(rep.user_version).toBe(1);
+    expect(rep.user_version, 'the planted store is made by createStore, so it is at the code\'s schema version').toBe(SCHEMA_VERSION);
     expect(rep.counters).toEqual({ raw_only: 3, 'variants_sanitize:anthropic': 2, 'variants_sanitize:other': 1 });
     expect(rep.w1b_lag_p95_ms).toBe(20_000);   // 21 lags 1000..21000 with files_behind 0 in the week: rank ceil(0.95 * 21) = 20
     expect(rep.w1c_duplicate_entries).toBe(0);

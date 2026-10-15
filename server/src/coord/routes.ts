@@ -3876,11 +3876,12 @@ export function registerCoordRoutes(
    * ever touches the pane. A refused press (`answerAsk` returning
    * `ok:false`) rolls back with `untakeAsk`, NOT `releaseAsk`: a refusal
    * here means no digit was pressed and the question is still live and
-   * still pre-emptible — not because every one of `answerAsk`'s twelve
-   * pre-send guards plus its two post-send `sendKey` checks (D-2177)
-   * precedes the loop, but because a row here only ever exists for a
-   * SINGLE-SELECT ask (`askActions` returns null on `multiSelect`, the sole
-   * eligibility gate `hold` checks before minting one — D-2173), which
+   * still pre-emptible — not because every one of `answerAsk`'s thirteen
+   * pre-send guards (D-5048 added the multiSelect refusal) plus its
+   * post-send `sendKey` check (D-2177) precedes the loop, but because a row
+   * here only ever exists for a SINGLE-SELECT ask (`askActions` returns null
+   * on `multiSelect`, the sole eligibility gate `hold` checks before minting
+   * one — D-2173), which
    * makes exactly one `sendKey` call and no Enter — see `untakeAsk`'s own
    * docstring (`store.ts`) for the full argument. `releaseAsk`'s CAS source
    * is `'held'`, and this row sits in `'answering'`, so it cannot even

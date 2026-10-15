@@ -72,3 +72,8 @@ export interface Measurement {
 }
 export function measureCommand(raw: string, set: CompactSet | null, trigger: 'auto' | 'manual'): Measurement;
 export function readSetForMeasure(setPath: string | undefined): CompactSet | null;
+/** The card's numbered-heading rule and its fenced-code ranges, exported for
+ *  ccrc history's native gist (spec 2026-10-05 §7.4 item 8), which takes them
+ *  as an injected kit: history's lib.mjs never imports this file. */
+export const HEADING_RE: RegExp;
+export function fencedRanges(text: string): { ranges: Array<[number, number]>; closed: number };

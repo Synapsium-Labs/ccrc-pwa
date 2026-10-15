@@ -61,9 +61,9 @@ export const LIFECYCLE: readonly LifecycleClass[] = [
     creators: ['ccd/history/sweep.mjs'],
     collector: 'ccd-history-sweep (keeps the newest: an older pre-v*.db is removed once a newer one is renamed into place; a stale .tmp is removed before the next try; the marker is removed when its migration commits, or by any pass at version >= N)',
     bound: 'the newest snapshot', tier: 'one store size, from the first migration on; the marker <64 B', ruling: null },
-  { name: 'history-store-id', root: '~/.ccrc/history/store.id, store.writer, store.id.pending while a binding is in flight, and op while an --op pass runs', pattern: 'O',
-    creators: ['ccd/history/sweep.mjs'], collector: null, bound: 'store lifetime', tier: '<64 B each',
-    ruling: 'kept with the store; removed only with it (the writer renames or removes a pending marker itself; an --op pass removes op on exit, and the next pass removes a dead pid\'s op)' },
+  { name: 'history-store-id', root: '~/.ccrc/history/store.id, store.writer, store.id.pending while a binding is in flight, op while an --op pass runs, pass while a scheduled pass runs (B2, D-5016), and pass-died while a recorded death stands, until a pass commits a tick (B2, D-5026)', pattern: 'O',
+    creators: ['ccd/history/sweep.mjs'], collector: null, bound: 'store lifetime', tier: '<64 B each, but pass (a marker line of about 70 B, at most 87 B) and pass-died (one JSON line of about 76 B, at most 100 B): <128 B each',
+    ruling: 'kept with the store; removed only with it (the writer renames or removes a pending marker itself; an --op pass removes op on exit, and the next pass removes a dead pid\'s op; a scheduled pass removes its own pass in its finally, the next pass records a killed pass\'s leftover in pass-died and overwrites the marker, and the first pass that commits a tick removes pass-died)' },
   { name: 'history-spool', root: '~/.ccrc/history/spool/, with .draining/ holding each draining file and its .obs observation sidecar', pattern: 'R',
     creators: ['ccd/session-hook.sh', 'ccd/history/cli.mjs', 'ccd/history/sweep.mjs'],
     collector: 'ccd-history-sweep (two-phase drain; each drained file\'s lines and verdicts journaled and fsynced before it and its sidecar are unlinked; held, journaled once, while the DB cannot be written)',
@@ -75,6 +75,11 @@ export const LIFECYCLE: readonly LifecycleClass[] = [
   { name: 'history-switches', root: '~/.ccrc/history-off, ~/.ccrc/history-max-gb', pattern: 'O',
     creators: ['operator shell'], collector: null, bound: 'until removed', tier: '<64 B each',
     ruling: 'touched by hand; persists until removed (no writer in the tree, pinned by single-definition.test.ts)' },
+  // ccrc history, W1-B2 (spec 2026-10-05 §9.4): the operator's own snapshots (`doctor --backup`).
+  { name: 'history-backups', root: '~/.ccrc/history/db/backups/<ts>.db, and its .<ts>.db.tmp while one is written', pattern: 'O',
+    creators: ['ccd/history/sweep.mjs (--op backup)'], collector: null,
+    bound: 'until removed by hand', tier: 'one store size per backup',
+    ruling: 'operator-made by `ccrc history doctor --backup`; remove by hand (the next --backup removes a stale .tmp first)' },
   // #316: the server suite's one temp parent per vitest run, every fixture inside it. Ephemeral (E): its creator
   // collects it, and a later run collects one whose owner was SIGKILLed, once its socket refuses and it is quiet.
   // The window is named, not numbered: RUN_QUIET_S lives once, in the .mjs, which L0 cannot import.
