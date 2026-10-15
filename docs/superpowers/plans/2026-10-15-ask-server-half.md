@@ -4,7 +4,7 @@
 
 **Branch:** `fix/ask-server-half`, cut from `origin/main` `35411838`.
 
-**Status:** rev 1 (2026-10-15). Tasks 0 to 2 done; Tasks 3 and 4 open.
+**Status:** rev 1 (2026-10-15). Tasks 0 to 3 done; Task 4 open.
 
 **Operator rulings this plan builds on** (2026-10-15):
 - This branch is the **server half only**: `server/`, `shared/`, and the client functions for the new routes in `pwa/src/lib/api.ts`. It makes **no change to `DialogSheet` or any sheet UI**. Those changes follow PR #346 (§Out of scope).
@@ -76,6 +76,7 @@ The operator reports that only the **first** question of a multi-question AskUse
 - Cancel declines **every** question, so its copy must say so.
 - An empty "Type something." row is never a tap target. Own words go through `POST /api/sessions/:id/dialog/text`.
 - A typed row's dialog id changes **while the text call is still in flight**, so the input's state is keyed to the call, not to `dialog.id`.
+- `isDialogText` (`shared/api.ts`) is the route's own text rule, so the sheet can disable Send on exactly what the route would refuse `bad-text`. After `echo-failed` the text may be left in the row. The same text, sent again under the dialog id the stream then shows, submits it without typing.
 
 ---
 
@@ -174,42 +175,63 @@ The operator reports that only the **first** question of a multi-question AskUse
 - [x] **Step 4: Gates:** `exec`, `send`, `routes`, `deliverability-parity`, `mail-sweep`, plus the suites that drive a send through a fake tmux (`dispatch-route`, `dispatch-adopt`, `dispatch-child-argv`, `dispatch-skillstate`, `kickoff-route`, `run-routes`, `stall-sweep`, `asks-routes`, `asks-sweep`, `child-reclaim-refusals`, `push-copy`, `sessionws`, `fleetws`, `ask-route`, `submit-route`), `whitelist-subset`, `remote-runner`, the four ledger/hygiene suites, the `ccd-tmux-anchor` D-5046 case, and tsc. `typecheck-tests` fails the same three cases with the same 727 error lines as at this branch's Task 1 head: all from `agent/` (no `agent/node_modules` in this worktree), none from `server/test` or `server/src`.
 - [x] **Step 5: Commit** `fix(tmux): literal text after --, and a failed literal send refuses before Enter (D-5046)`.
 
-### Task 3: `POST /api/sessions/:id/dialog/text` (D-5047)
+### Task 3: `POST /api/sessions/:id/dialog/text` (D-5047) (done)
 
-**Routing:** band 3. **Depends on:** Task 1 (`freeTextRow`) and Task 2 (`--`). **Files:** `server/src/inject/send.ts` (`answerDialogText`, plus the walk extracted from `answerDialog` into one helper), `server/src/server.ts` (the route, and the `knownId` census claim from 18 (14 POST) to 19 (15 POST)), `shared/api.ts` (the `DialogTextRefuseCode` union and map, and `DIALOG_TEXT_MAX = 1000`), `pwa/src/lib/api.ts` (`answerDialogText`), `README.md` (a row in the table beside `POST /api/sessions/:id/dialog`), `server/test/answer-text.test.ts` (new) and `server/test/routes.test.ts`.
+**Routing:** band 3. **Depends on:** Task 1 (`freeTextRow`) and Task 2 (`--`). **Files:** created `server/test/answer-text.test.ts`. Modified `server/src/inject/send.ts` (`answerDialogText`, and `walkCursor`, the walk taken out of `answerDialog` so both send the one walk), `server/src/pane/dialog.ts` (`editHintShown`), `server/src/server.ts` (the route, and the `knownId` census claim from 18 (14 POST) to 19 (15 POST)), `server/src/auth/gate.ts` (its route count), `shared/api.ts` (`DIALOG_TEXT_MAX = 1000`, `isDialogText`, and the `DialogTextRefuseCode` union and map, appended at the foot), `shared/ask-menu.ts` (`EDIT_HINT_RE`), `pwa/src/lib/api.ts` (`answerDialogText`), `README.md` (a row beside `/dialog`), and the tests `routes.test.ts`, `dialog.test.ts`, `single-definition.test.ts` and `auth-gate.test.ts`.
 
-- [ ] **Step 1: Red** (`answer-text.test.ts`; `answer.test.ts`'s scripted-capture `fakeTmux`; recorded fixtures):
-  - **Happy walk:** captures `cc300-ask-same-labels-q2.txt`, `-freetext-walk-2-focused.txt`, `-freetext-walk-3-typed.txt`, with text `- only in staging, sampled 10%`. The keys are exactly Down, Down, `-l -- <text>`, Enter. The test asserts that the typed capture's dialog id differs from the open one, and the route still proves the echo.
-  - **Already focused:** the first capture is `walk-2-focused`, and no walk keys are sent.
-  - **1000 characters:** `cc300-ask-wrapped-question.txt`, `-wrapped-question-focused.txt`, `-freetext-1000.txt`, with the text rebuilt from that fixture as `label + ' ' + description`. Ok, and one literal of exactly 1000 characters.
-  - **Retry onto a held row:** captures `walk-4-stepped-off`, then `walk-5-back-on-held`, with the same text. The keys are Down and Enter, and **no** literal.
-  - **Refusals with zero keys:** `stale-dialog`; `not-free-text` for an ordinary option and for a row holding *different* text (`cc300-ask-freetext-held.txt`); multiSelect (`cc300-ask-multiselect-on-freetext.txt`).
-  - **focus-failed, no literal and no Enter:** the walk did not land (captures open, open), or the cursor is on the row but the footer has no hint. The hint is never sufficient by itself: a pane like `cc300-ask-1q-walk-through-to-chat.txt`, with the hint but the cursor on Chat, is refused.
-  - **echo-failed, no Enter (the critical one):** the post-type capture still shows the placeholder, or shows other text, or a different title.
-  - **Route level:** 400 `bad-text` for `''`, `'   '`, `'a\nb'`, `'\x1b[31m'`, and 1001 characters. 404 for an unknown session. The census in `routes.test.ts` is RED until the route is listed (19/15).
-- [ ] **Step 2: Green.** `answerDialogText(d, id, dialogId, optionIndex, text)` runs inside `d.queue.run`:
-  1. Validate the text: trimmed non-empty, one line, no C0 control and no DEL, at most `DIALOG_TEXT_MAX`. Otherwise refuse `bad-text`; the route answers 400.
-  2. Capture and `parseDialog`; refuse `not-alive`, or `stale-dialog` when the id differs.
-  3. Check `optionIndex === freeTextRow(pane)`, else `not-free-text`. A row that already holds **exactly** this text (`label + ' ' + description`, whitespace collapsed, equals the text) goes to the retry arm. A row holding other text is `not-free-text`.
-  4. Walk with the shared helper; no keys when the cursor is already there.
-  5. Re-capture and PROVE FOCUS: the same title, `selectedIndex === optionIndex`, the row still the empty placeholder (or, on the retry arm, still exactly the text), and the footer matching `/to edit in/`. Otherwise refuse `focus-failed` with no further key.
-  6. Type with `sendLiteral` (skipped on the retry arm).
-  7. Sleep, re-capture and PROVE ECHO: the same title (never the same id, since typing changes it), and the row's `label + ' ' + description` with whitespace collapsed equals the text with whitespace collapsed. Otherwise refuse `echo-failed` and press no Enter.
+- [x] **Step 1: Red.** `answer-text.test.ts` (39 cases; `answer.test.ts`'s scripted-capture fake, with a `failLiteral` option; recorded fixtures by name; `SID = 'lane-a:project-a'`). 38 were seen red as `answerDialogText is not a function`, the 1000-character case first on `DIALOG_TEXT_MAX` being undefined. The review-`Cancel` case was added after the implementation, so its red is the mutation table's `freeTextRow` row. The cases:
+  - **Happy walk:** `cc300-ask-same-labels-q2.txt`, `-freetext-walk-2-focused.txt`, `-freetext-walk-3-typed.txt`, with the text `- only in staging, sampled 10%`. The keys are exactly Down, Down, `-l -- <text>`, Enter. The test also asserts that the typed screen's id differs from the open one and its title does not.
+  - **Already focused:** no walk keys. **A slow render:** the echo capture shows the empty row once, then the text; ok.
+  - **1000 characters:** `cc300-ask-wrapped-question.txt`, `-wrapped-question-focused.txt`, `-freetext-1000.txt`, the text rebuilt as `label + ' ' + description` (exactly 1000; the label alone is shorter). One literal of 1000 characters.
+  - **Retry onto a held row:** `walk-4-stepped-off` then `walk-5-back-on-held`: Down, Enter, no literal. With the cursor already on it: one Enter.
+  - **Refused with zero keys:** `stale-dialog` (a wrong id, and no menu); `not-alive`; `not-free-text` for `No`, for `Chat about this`, for a row holding other text (`cc300-ask-freetext-held.txt`, `Mango`), for the multiSelect `[ ] Type something` row (`-multiselect-on-freetext`), for the review screen, and for the review's `Cancel` with the text `Cancel` (its text equals the answer, and it is still not the free-text row).
+  - **`bad-text` with no capture and no key:** empty, blank, two lines, CRLF, an Escape sequence, a Tab, ctrl+g, DEL, an 8-bit CSI, U+2028, and 1001 characters.
+  - **`focus-failed`, no literal and no Enter:** the walk did not land; the cursor on the row but no hint (DERIVED); the hint with the cursor on Chat (`cc300-ask-1q-walk-through-to-chat.txt`); the pane moved on to another question (`-same-labels-q1` then Q2 focused); the empty row filled during the walk; a retry whose held row reads empty on the landing; the capture after the walk failed.
+  - **`echo-failed`, no Enter:** the text never showed; the row holds the text without a trailing `;` the request carried (what tmux does to a literal ending in `;`); the title changed (DERIVED); the cursor left the row (`walk-4-stepped-off` as the echo); the text `Type something.` itself; tmux refused the literal send.
+  - `routes.test.ts`: the census RED until the route was listed (19/15); the route's 200 with its exact keys; 400 `bad-text` for five texts before any capture or key; 400 `bad-request` for four malformed bodies; 409 `not-free-text`; 404 in the unknown-session loop. The 200, 400s and 409 were red as 404.
+  - `single-definition.test.ts`, describe "the free-text row's edit hint is spelled once, in shared/ask-menu.ts (D-5047)": red on the missing rule and import.
+  - `dialog.test.ts`, describe "editHintShown (D-5047)": the footer reading on six recorded screens, and two DERIVED screens with the words in a held row and in chat above the menu. Written after the function, so its red is the mutation table's whole-screen row.
+- [x] **Step 2: Green.** `answerDialogText(d, id, dialogId, optionIndex, text)`:
+  1. `isDialogText` or `bad-text`, before the queue and before any capture.
+  2. In `d.queue.run`: capture and `parseDialog`; `not-alive`, or `stale-dialog` when the id differs.
+  3. The row is the parsed menu's row at `optionIndex` and `freeTextRow(pane) === optionIndex`, else `not-free-text`. An unparsed multiSelect has no parsed rows, so it is refused here. The row is the empty placeholder (typing arm), or holds exactly the text (`label + ' ' + description`, whitespace collapsed, the retry arm). Any other text is `not-free-text`.
+  4. `walkCursor` (one Down or Up per row, 150 ms after each), the walk `answerDialog` now sends too.
+  5. FOCUS on one capture: the same **title**, the cursor on the row, the row as step 3 read it, and `editHintShown` (the hint on the footer line only). Else `focus-failed`.
+  6. Typing arm only: `sendLiteral` (after `--`). A refused literal send is `echo-failed`.
+  7. ECHO, polled like `sendPrompt`'s (`ECHO_TRIES` captures, `ECHO_POLL_MS` apart): the same title, the cursor still on the row, the row not reading as the placeholder, and its text equal to the text. Else `echo-failed`, no Enter. On the retry arm, the focus capture already proved all of this.
   8. Enter.
-- [ ] **Step 3: Mutation table:**
 
-  | Mutant | Expected RED |
+  The route answers `bad-text` as 400 and the other refusals as 409, and `bad-request` (400) for a missing or mistyped field. `auth-gate.test.ts` counts the new route (`server.ts` 51 to 52, the scanned total 97 to 98, the HTTP half 94 to 95); `gate.ts`'s docstring count moves with it.
+
+  Choices made inside the definition, for the coordinator to confirm: the echo is **polled** (the definition says re-capture; a 1000-character render can lag, and `sendPrompt` polls for the same reason). `bad-text` also refuses the C1 range (U+009B is an 8-bit CSI) and U+2028/U+2029 (line breaks), besides C0 and DEL. The cap counts UTF-16 code units; wide characters were not measured. A text that reads as the placeholder (`Type something.`) types and then fails its echo, since no capture can tell it from the empty row. The hint rule has one L0 home, `EDIT_HINT_RE` in `shared/ask-menu.ts`, which D-5048 reads through the same `editHintShown`.
+- [x] **Step 3: Mutation table, run.** A script applied each mutant to the uncommitted change, ran the named suites, recorded the failing tests, and restored the file, compared byte for byte.
+
+  | Mutant | RED (the named tests) |
   |---|---|
-  | Enter sent without the echo proof | echo-failed |
-  | the focus proof dropped | focus-failed (walk not landed) |
-  | the focus proof reads the hint alone | the hint-on-Chat case |
-  | the placeholder check dropped (types onto `Mango`) | the different-text case |
-  | the echo proof compares the dialog id | the happy walk |
-  | the retry arm types again | the retry case (no literal) |
-  | the 1000 cap off by one | the 1001 case |
+  | Enter sent without the echo proof | the five echo-failed cases (never showed, `;` dropped, title changed, cursor left, placeholder text) |
+  | the focus proof dropped | all seven focus-failed cases |
+  | the focus proof reads the hint alone | hint on Chat; moved to another question; row filled during the walk; retry onto a row now empty |
+  | the different-text check dropped (types onto `Mango`) | "a row holding DIFFERENT text" |
+  | the row proof compares the dialog id, not the title | the happy walk, already focused, 1000 characters, the slow render, and the route's 200 |
+  | the retry arm types again | both retry cases |
+  | the cap off by one, over (1001 accepted) | the 1001 case, and the route's 400 loop |
+  | the cap off by one, under (1000 refused) | the 1000-character case |
+  | the row text reads the label only | the 1000-character case |
+  | the row proof drops the cursor check | hint on Chat; the cursor left the row before Enter |
+  | the echo accepts a row reading as the placeholder | the `Type something.` text case |
+  | the row proof drops the title check | moved to another question; the title changed under the typing |
+  | the retry arm's focus does not re-prove the held text | "a retry whose held row is EMPTY by the time the walk lands" (Enter on the empty row) |
+  | the echo captured once, not polled | the slow render |
+  | the literal send's answer ignored | "tmux refuses the literal send" |
+  | the `freeTextRow` target check dropped | the review's `Cancel` |
+  | the control-character rule dropped | eight `bad-text` cases, and the route's 400 loop |
+  | the blank rule reads untrimmed text | the blank case, and the route's 400 loop |
+  | the route answers `bad-text` as 409 | the route's 400 loop |
+  | `editHintShown` reads the whole screen | both DERIVED `editHintShown` cases |
+  | the hint rule spelled again in `server/src` | "the hint is spelled on a code line in shared/ask-menu.ts and nowhere else" |
 
-- [ ] **Step 4: Gates:** `answer-text`, `answer`, `routes`, `send`, the four ledger/hygiene suites, and tsc.
-- [ ] **Step 5: Commit** `feat(answer): POST /dialog/text types an answer into the free-text row, proved focused and echoed before Enter (D-5047)`.
+- [x] **Step 4: Gates:** `answer-text`, `answer`, `routes`, `send`, `dialog`, `exec`, `auth-gate`, `auth-routes`, `box-token-census`, `coord-routes-single-file`, `docs-budget`, `docs-parity`, `docs-source`, `verb-gate`, `pane-history-route`, `sessionws`, `push-copy`, `ask-route`, `whitelist-subset`, the other route scanners, `single-definition`, `deviation-refs` (against `origin/main` `35411838`), `dtbd` and `topology-clean` (with the new file tracked), and tsc for `server/` and `pwa/`. `typecheck-tests` fails the same three cases with the same 727 error lines as at Task 2's head, none from `server/`, `shared/` or `pwa/src`.
+- [x] **Step 5: Commit** `feat(answer): POST /dialog/text types an answer into the free-text row, proved focused and echoed before Enter (D-5047)`.
 
 ### Task 4: multiSelect (D-5048)
 
@@ -266,7 +288,7 @@ The operator reports that only the **first** question of a multi-question AskUse
 
 - `answerdialog-unparsed`: `answerDialog` should refuse a `parsed:false` dialog before any key. Measured: on an unparsed multiSelect it presses Enter (a toggle) and answers `ok:true` for index 1, and sends walk keys before `walk-failed` for any other index. Task 4 keeps multiSelect `parsed:false`, so it does not close this.
 - `whitelist-literal-comment`: `agent/src/whitelist.ts`'s note says `sendLiteral`'s text sits "in the one slot after `-l`". After D-5046 it is the slot after `--`. That is a comment-only edit, outside this branch's ruled scope.
-- `send-literal-trailing-semicolon` (measured during Task 2, out of D-5046's scope): tmux reads an argv token that ENDS in `;` as a command separator, so `send-keys -l -- 'int x = 1;'` exits 0 and types `int x = 1`, dropping the `;`. A token ending in `\;` loses the backslash instead (`esc\;` types `esc;`). `--` changes neither, measured with and without it on tmux 3.7c. `sendPrompt` sends each line as one token, so any composer line that ends in `;` (a line of code) reaches the session without its last character, `ok:true`, and the echo proof sees it only when that `;` falls inside the first line's 24-character needle. A fix needs its own measurement, for example escaping a trailing `;`, and how a text that really ends in `\;` then survives.
+- `send-literal-trailing-semicolon` (measured during Task 2, out of D-5046's scope): tmux reads an argv token that ENDS in `;` as a command separator, so `send-keys -l -- 'int x = 1;'` exits 0 and types `int x = 1`, dropping the `;`. A token ending in `\;` loses the backslash instead (`esc\;` types `esc;`). `--` changes neither, measured with and without it on tmux 3.7c. `sendPrompt` sends each line as one token, so any composer line that ends in `;` (a line of code) reaches the session without its last character, `ok:true`, and the echo proof sees it only when that `;` falls inside the first line's 24-character needle. A fix needs its own measurement, for example escaping a trailing `;`, and how a text that really ends in `\;` then survives. D-5047's free-text route meets the same drop and fails shut: its echo proof compares the whole text, so an answer ending in `;` is refused `echo-failed` with no Enter, and the row is left holding the text without its `;` (pinned in `answer-text.test.ts`). A retry with the same text is then `not-free-text`, so that answer can only be finished in the terminal.
 
 ## Deviations found
 

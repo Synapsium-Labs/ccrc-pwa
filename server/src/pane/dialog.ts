@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import type { Dialog } from '../../../shared/api.js';
-import { CHAT_ABOUT_ROW_RE, FREE_TEXT_PLACEHOLDER_RE } from '../../../shared/ask-menu.js';
+import { CHAT_ABOUT_ROW_RE, EDIT_HINT_RE, FREE_TEXT_PLACEHOLDER_RE } from '../../../shared/ask-menu.js';
 import { promptBoxShowing } from './statusline.js';
 
 /**
@@ -264,6 +264,19 @@ export function freeTextRow(pane: string): number | null {
   const above = rows.at(-2);
   if (!chat || !above || !CHAT_ABOUT_ROW_RE.test(chat.label)) return null;
   return pane.split('\n').slice(above.line + 1, chat.line).some(isRule) ? above.index : null;
+}
+
+/**
+ * Does the menu's footer offer the external-editor chord (`EDIT_HINT_RE`, `shared/ask-menu.ts`)? Claude Code paints it
+ * while the cursor is on an AskUserQuestion's free-text row, and D-5047's focus proof needs it before typing. Read off
+ * the footer only (the first `Enter to select` line below the menu's last numbered row), so the same words typed into
+ * a row or said in chat above the menu never count. It is never proof of focus alone: the hint outlives the row.
+ */
+export function editHintShown(pane: string): boolean {
+  const last = paneOptionRows(pane).at(-1);
+  if (!last) return false;
+  const footer = pane.split('\n').find((l, i) => i > last.line && MENU_RE.test(l));
+  return footer !== undefined && EDIT_HINT_RE.test(footer);
 }
 
 /**

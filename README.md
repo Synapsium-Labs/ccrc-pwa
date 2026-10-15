@@ -2862,11 +2862,12 @@ shows `answering…`, and the sheet closes only when the server reports the menu
 and the sheet redraws from the current menu. Dismissing it only hides it — the row keeps saying `waiting`, and
 **Answer** in the transcript raises it again.
 
-Three routes act on what the pane already shows, each with its own named refusals:
+Four routes act on what the pane already shows, each with its own named refusals:
 
 | Route | What it does | Gate |
 | --- | --- | --- |
 | `POST /api/sessions/:id/dialog` | answers a **pane** menu by walking the `❯` marker | refuses a stale dialog id; never presses Enter unless the re-captured pane proves the marker landed; refuses an AskUserQuestion's free-text row (`free-text-row`) before any key, and again on the screen the walk lands on, before Enter, because Enter on the empty row rejects the whole ask (D-5045) |
+| `POST /api/sessions/:id/dialog/text` | answers an **AskUserQuestion** in your own words: walks to its free-text row, types the text after tmux's `--`, then presses Enter (D-5047) | `400 bad-text` for a blank, multi-line, control-character or over-1000-character text, before any capture; refuses a stale dialog id and any row but the free-text one (`not-free-text`, also for a row holding other text); types nothing until a capture shows the same title, the cursor on the still-empty row and the footer's `to edit in` hint (`focus-failed`); presses Enter only once a capture shows the cursor still on the row and the row holding exactly the text (`echo-failed`, no Enter). Typing changes the dialog id. A retry with the same text onto a row that already holds it types nothing and submits it |
 | `POST /api/sessions/:id/ask` | answers a **hook-reported** question by option index | re-reads the current envelope and refuses unless a content digest still matches, the pane still shows that exact menu, and the question is single |
 | `POST /api/sessions/:id/submit` | presses **one** Enter on a box that already holds text | refuses unless the box matches the text the caller expected; one Enter, never a retry loop |
 

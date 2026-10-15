@@ -22,3 +22,11 @@ export const FREE_TEXT_PLACEHOLDER_RE = /^type something\.?$/i;
  *  rejection of the tool call, not an answer. The two-column preview layout paints it UNNUMBERED, with no free-text
  *  row above it. */
 export const CHAT_ABOUT_ROW_RE = /^chat about this$/i;
+
+/** The external-editor chord the menu's footer offers while the cursor is on a free-text row: `ctrl+g to edit in Vim`
+ *  (the editor's name varies, so only the phrase is matched). D-5047's focus proof needs it before typing, as one of
+ *  four facts and never alone: measured on 2.1.300, the hint OUTLIVES the row, so after a walk through the free-text
+ *  row it is still painted with the cursor on `Chat about this` or on a multiSelect `Next` row. It also depends on an
+ *  external editor resolving in the session's environment, so a box where none does never paints it, and the
+ *  free-text route then refuses `focus-failed` every time. */
+export const EDIT_HINT_RE = /to edit in/;

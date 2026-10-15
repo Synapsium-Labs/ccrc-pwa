@@ -9857,3 +9857,43 @@ const DIALOG_REFUSE_CODE_MAP: Readonly<Record<DialogRefuseCode, true>> = {
 };
 export const DIALOG_REFUSE_CODES: readonly DialogRefuseCode[] =
   Object.keys(DIALOG_REFUSE_CODE_MAP) as DialogRefuseCode[];
+
+/** The longest answer `POST /api/sessions/:id/dialog/text` types (D-5047), in UTF-16 code units (`String.length`).
+ *  Measured on Claude Code 2.1.300 at 220x50: a 1000-character single-line answer, sent as one literal, arrived byte for
+ *  byte, painted as 5 rows with the question still inside the 50-row capture, so its echo could be proved. Nothing
+ *  longer was measured. A taller row can push the question out of the capture, and then no echo proves anything. */
+export const DIALOG_TEXT_MAX = 1000;
+
+/** A character the free-text route will not type. A control character types a KEY into the row, not text: the C0
+ *  range (newline, Tab, Escape, and ctrl+g, which opens the external editor), DEL, and the C1 range, whose U+009B is an
+ *  8-bit CSI. U+2028 and U+2029 are line breaks, and the answer is one line. */
+const DIALOG_TEXT_CONTROL_RE = /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/;
+
+/** Will `POST /api/sessions/:id/dialog/text` type `text` (D-5047)? Not blank once trimmed, one line, no control
+ *  character, at most `DIALOG_TEXT_MAX`. The route answers 400 `bad-text` otherwise, before it captures the pane. */
+export function isDialogText(text: string): boolean {
+  return text.trim() !== '' && text.length <= DIALOG_TEXT_MAX && !DIALOG_TEXT_CONTROL_RE.test(text);
+}
+
+/** Every refusal `POST /api/sessions/:id/dialog/text` answers with (`answerDialogText`, `server/src/inject/send.ts`,
+ *  D-5047). `bad-text` is a 400; the rest are 409s. Spelled once, as a total table's keys, and the list derived.
+ *  - `bad-text`: `isDialogText` refuses the text. Nothing was captured or pressed.
+ *  - `not-alive`: the pane could not be captured.
+ *  - `stale-dialog`: no menu is on screen, or not the one the caller was shown. Typing changes a dialog's id (it hashes
+ *    the labels, and the row's label becomes the text), so a retry names the id the stream shows after the typing.
+ *  - `not-free-text`: the requested row is not a single-select AskUserQuestion's free-text row, or it already holds
+ *    text other than this text (typing would append to it). A row holding exactly this text is not refused: the route
+ *    proves it and presses Enter without typing, which recovers a send that typed but never proved its echo.
+ *  - `focus-failed`: after the walk, a capture did not show the same title, the cursor on the row, the row still empty
+ *    (or still holding exactly this text), and the footer's edit hint. Nothing was typed.
+ *  - `echo-failed`: the text was sent, but no capture showed the same title, the cursor still on the row, and the row
+ *    holding exactly this text. Enter was NOT pressed, because Enter on an empty free-text row rejects the whole ask.
+ *    The text may be left in the row, and a retry with the same text submits it. */
+export type DialogTextRefuseCode =
+  'bad-text' | 'not-alive' | 'stale-dialog' | 'not-free-text' | 'focus-failed' | 'echo-failed';
+const DIALOG_TEXT_REFUSE_CODE_MAP: Readonly<Record<DialogTextRefuseCode, true>> = {
+  'bad-text': true, 'not-alive': true, 'stale-dialog': true, 'not-free-text': true, 'focus-failed': true,
+  'echo-failed': true,
+};
+export const DIALOG_TEXT_REFUSE_CODES: readonly DialogTextRefuseCode[] =
+  Object.keys(DIALOG_TEXT_REFUSE_CODE_MAP) as DialogTextRefuseCode[];

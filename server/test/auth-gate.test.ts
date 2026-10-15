@@ -220,7 +220,8 @@ describe('the scanner is looking at something', () => {
     // precisely the state this whole file exists to make impossible. Adding a
     // route is now a deliberate act that edits these three numbers, with a
     // reviewer looking at them.
-    expect(scanRoutes('server.ts').length).toBe(51);
+    // 52 since D-5047's `POST /api/sessions/:id/dialog/text`, the free-text row's own route beside `/dialog`.
+    expect(scanRoutes('server.ts').length).toBe(52);
     // 22 since `GET /api/runs/:id/items` — the READ half of the settle route,
     // which keys on item ids that nothing else published.
     // 23 since `POST /api/runs/:id/reclaim` — the fourth ungated operator door,
@@ -345,7 +346,9 @@ describe('the scanner is looking at something', () => {
     // 97 with both, re-derived on the merge of the two: 51 + 33 + 7 + 2 + 4 = 97.
     // The docs four are HTTP routes and none is EXEMPT, so the HTTP count moves
     // 90 -> 94, the gated count 57 -> 61, and the exempt-HTTP count stays 33.
-    expect(ROUTES.length).toBe(97);
+    // 98 since D-5047's `POST /api/sessions/:id/dialog/text` (session-gated like `/dialog`, NOT EXEMPT, no box token):
+    // 52 + 33 + 7 + 2 + 4 = 98, the HTTP half 94 -> 95, the gated count 61 -> 62, the exempt-HTTP count still 33.
+    expect(ROUTES.length).toBe(98);
     // …and the three partitions add up: the websockets plus the HTTP half.
     expect(ROUTES.filter(isWs).length + ROUTES.filter((r) => !isWs(r)).length).toBe(ROUTES.length);
     // DERIVED, not the literal 68 (D-1242's family, extended — F7). `WS_ROUTES`
@@ -490,7 +493,7 @@ describe('the scanner is COMPLETE — measured against Fastify\'s own route tabl
     const w = await openApp(); app = w.app;
     const real = realRouteTable(app);
     expect([...real].filter((r) => r.startsWith('UNPARSED'))).toEqual([]);
-    // 97 scanned + the static wildcard when the bundle is built.
+    // 98 scanned + the static wildcard when the bundle is built.
     // (59 stood here across several waves; the account-pools merge is where
     // it was finally re-measured, not where it went stale.)
     expect(real.size).toBe(ROUTES.length + (HAS_PWA ? 1 : 0));
@@ -949,7 +952,7 @@ describe('with CCRC_AUTH off — the shipped default', () => {
   });
 
   it('the gate changes the status of EXACTLY the gated routes, and of nothing else', async () => {
-    // THE PROPERTY, in one loop over all 94 HTTP routes, with THREE probes each:
+    // THE PROPERTY, in one loop over all 95 HTTP routes, with THREE probes each:
     // dark, armed-anonymous, and armed-with-a-live-session. Comparing dark
     // against AUTHENTICATED is what makes this a real status assertion for the
     // gated routes too (review R1) — the earlier version asserted only
@@ -1013,7 +1016,7 @@ describe('with CCRC_AUTH off — the shipped default', () => {
           }
 
           // 3. Armed WITH a live session: identical to dark, for every route that
-          //    is not itself flag-aware — the assertion that covers all 94 HTTP routes, not the 33 exempt.
+          //    is not itself flag-aware — the assertion that covers all 95 HTTP routes, not the 33 exempt.
           //    (Both counts are derived and checked against this very sentence at the
           //    bottom of this file. They read fifty-five and fifteen for several builds
           //    after the tree had grown past both — D-1223.)

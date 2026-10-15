@@ -38,7 +38,7 @@ import { Bus, type Notice } from './bus.js';
 import type { FleetWatcher } from './watch.js';
 import { SessionStream, parseSince } from './sessionws.js';
 import { KeyedQueue } from './inject/queue.js';
-import { sendPrompt, answerDialog, interrupt, submitEnter, type SendDeps } from './inject/send.js';
+import { sendPrompt, answerDialog, answerDialogText, interrupt, submitEnter, type SendDeps } from './inject/send.js';
 import { answerAsk, type AskDeps } from './inject/ask.js';
 import { freshAskAt, measuredIdentity, readRegistry, readSessionRecord } from './registry.js';
 import type { SessionRecord } from './registry.js';
@@ -1899,7 +1899,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   // `sendDeps`/`askDeps` themselves are built ABOVE, ahead of
   // `registerCoordRoutes` — see that call site's own comment.
   //
-  // C0.2: `knownId` gates 18 request-id routes (14 POST, 4 GET — every one of
+  // C0.2: `knownId` gates 19 request-id routes (15 POST, 4 GET — every one of
   // them a per-request check, not a periodic sweep) plus the constructed-id
   // revival probe below, and previously called `readRegistry` — a 24-session
   // fleet's baseline is 745 agent-WS operations [registry-read-census:fleet]
@@ -2105,6 +2105,25 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     }
     const res = await answerDialog(sendDeps, id, body.dialogId, body.optionIndex);
     return res.ok ? res : reply.code(409).send(res);
+  });
+
+  /**
+   * D-5047: type an answer into an AskUserQuestion's free-text row ("Type something.") and submit it, proved focused
+   * before typing and echoed before Enter (`answerDialogText`, `inject/send.ts`). A NEW route, deliberately not a
+   * `text` field on `/dialog` above: an older server would ignore that field, walk onto the empty row and press Enter,
+   * which rejects the whole ask. An older server answers this route 404 instead. `bad-text` (`isDialogText`,
+   * `shared/api.ts`) is the caller's to fix, so it is a 400 like a malformed body; every other refusal is a 409.
+   */
+  app.post('/api/sessions/:id/dialog/text', async (req, reply) => {
+    const { id } = req.params as { id: string };
+    if (!(await knownId(id))) return reply.code(404).send({ ok: false, error: 'unknown-session' });
+    const body = (req.body ?? {}) as { dialogId?: unknown; optionIndex?: unknown; text?: unknown };
+    if (typeof body.dialogId !== 'string' || typeof body.optionIndex !== 'number' || typeof body.text !== 'string') {
+      return reply.code(400).send({ ok: false, error: 'bad-request' });
+    }
+    const res = await answerDialogText(sendDeps, id, body.dialogId, body.optionIndex, body.text);
+    if (res.ok) return res;
+    return reply.code(res.error === 'bad-text' ? 400 : 409).send(res);
   });
 
   /**

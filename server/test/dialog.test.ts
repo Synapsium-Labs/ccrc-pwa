@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { freeTextRow, hasMenu, parseDialog, paneOptionRows, paneState, turnRunning } from '../src/pane/dialog.js';
+import { editHintShown, freeTextRow, hasMenu, parseDialog, paneOptionRows, paneState, turnRunning } from '../src/pane/dialog.js';
 import { FleetWatcher } from '../src/watch.js';
 import { Bus } from '../src/bus.js';
 import { Tmux, type Runner } from '../src/exec.js';
@@ -1317,5 +1317,41 @@ describe('freeTextRow (D-5045)', () => {
     const others = PANES.filter((f) => !/Type something|Chat about this/.test(fixture(f)));
     expect(others.length, 'too few non-ask screens to mean anything').toBeGreaterThanOrEqual(25);
     expect(others.filter((f) => freeTextRow(fixture(f)) !== null)).toEqual([]);
+  });
+});
+
+// D-5047 (plan docs/superpowers/plans/2026-10-15-ask-server-half.md, Task 3). The free-text route types nothing until
+// the menu's footer shows the external-editor hint. Only the FOOTER counts: the same words in a row or in chat above the
+// menu say nothing about where the cursor is.
+describe('editHintShown (D-5047)', () => {
+  /** A DERIVED pane: `from` must be on the recorded screen, or the derivation silently tests the original. */
+  const derive = (pane: string, from: string, to: string): string => {
+    expect(pane, `the derivation's anchor "${from}" is not on the screen`).toContain(from);
+    return pane.replace(from, to);
+  };
+
+  it('reads the footer the recorded screens paint: on with the cursor on the free-text row, off before the walk', () => {
+    expect(editHintShown(fixture('cc300-ask-freetext-walk-2-focused.txt'))).toBe(true);
+    expect(editHintShown(fixture('cc300-ask-freetext-walk-5-back-on-held.txt'))).toBe(true);
+    expect(editHintShown(fixture('cc300-ask-same-labels-q2.txt'))).toBe(false);
+    expect(editHintShown(fixture('cc300-ask-freetext-walk-4-stepped-off.txt'))).toBe(false);
+    // The hint outlives the row: still painted with the cursor on Chat about this, which is why it never proves focus
+    // alone.
+    expect(editHintShown(fixture('cc300-ask-1q-walk-through-to-chat.txt'))).toBe(true);
+    // The review screen paints no footer at all.
+    expect(editHintShown(fixture('cc300-ask-review-same-labels.txt'))).toBe(false);
+  });
+
+  it('the words in a held row are not the footer (DERIVED: the row holds "how to edit in place", cursor off it)', () => {
+    const pane = derive(fixture('cc300-ask-freetext-walk-4-stepped-off.txt'),
+      '3. - only in staging, sampled 10%', '3. how to edit in place');
+    expect(parseDialog(pane)!.options[2]!.label).toBe('how to edit in place');
+    expect(editHintShown(pane)).toBe(false);
+  });
+
+  it('the words in chat above the menu are not the footer (DERIVED: the prompt echo mentions the chord)', () => {
+    const pane = derive(fixture('cc300-ask-same-labels-q2.txt'),
+      'Afterwards reply with the raw answers only.', 'Press ctrl+g to edit in Vim if you like.');
+    expect(editHintShown(pane)).toBe(false);
   });
 });

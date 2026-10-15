@@ -5769,3 +5769,29 @@ describe('the free-text row\'s placeholder is spelled once, in shared/ask-menu.t
     expect(readFileSync(path.join(ccrcRoot, 'shared/ask-menu.ts'), 'utf8')).not.toMatch(/^\s*import\b|\brequire\s*\(/m);
   });
 });
+
+// D-5047 (plan docs/superpowers/plans/2026-10-15-ask-server-half.md, Task 3). APPENDED, as the D-5045 block above. The
+// free-text route types nothing until the menu's footer shows the external-editor hint ("ctrl+g to edit in Vim"), which
+// Claude Code paints while the cursor is on a free-text row. The hint is ONE rule, in `shared/ask-menu.ts`, read through
+// `pane/dialog.ts`'s `editHintShown`; D-5048's multiSelect route reads the same predicate. A second spelling that
+// drifts would let one route type into a row the other calls unfocused. Code lines only (`stallCode`).
+describe('the free-text row\'s edit hint is spelled once, in shared/ask-menu.ts (D-5047)', () => {
+  const HINT = /to\s+edit\s+in/i;
+  const holders = (): string[] => ALL.filter((f) => HINT.test(stallCode(f))).map(rel).sort();
+
+  it('CONTROL: the pattern sees a regex literal, and passes over comment lines', () => {
+    expect(HINT.test('const HINT = /to edit in/;')).toBe(true);
+    expect(stallCodeText('// the footer gains "ctrl+g to edit in Vim"\nconst x = 1;')).not.toMatch(HINT);
+  });
+
+  it('the hint is spelled on a code line in shared/ask-menu.ts and nowhere else', () => {
+    expect(holders()).toEqual(['shared/ask-menu.ts']);
+  });
+
+  it('the focus proof reads it: pane/dialog.ts imports and tests the L0 rule, and answerDialogText asks editHintShown', () => {
+    const dialog = stallCode(path.join(ccrcRoot, 'server/src/pane/dialog.ts'));
+    expect(dialog).toMatch(/import\s*\{[^}]*\bEDIT_HINT_RE\b[^}]*\}\s*from\s*'(?:\.\.\/)+shared\/ask-menu\.js'/);
+    expect(dialog).toMatch(/\bEDIT_HINT_RE\.test\(/);
+    expect(stallCode(path.join(ccrcRoot, 'server/src/inject/send.ts'))).toMatch(/\beditHintShown\s*\(/);
+  });
+});
