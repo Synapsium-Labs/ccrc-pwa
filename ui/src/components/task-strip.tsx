@@ -85,6 +85,8 @@ export function TaskStrip({ tasks }: { tasks: TaskItem[] }): ReactNode {
     <CollapsibleStrip
       root="task-strip"
       part="task"
+      // 32px, the height `.task-head` had on main (see `headFloor` on CollapsibleStrip).
+      headFloor="compact"
       label="Task list"
       mark="✳"
       markClass={running ? 'task-mark--running' : undefined}

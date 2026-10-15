@@ -2325,18 +2325,19 @@ describe('SettingsScreen — stall watch: the section (design 2026-10-05 §13)',
   it('LOADING state (api.updates never resolves, so no Box token card): Stall watch comes after Notifications, titled Stall watch', async () => {
     await mount(swView());
     const headings = screen.getAllByRole('heading', { level: 2 }).map((h) => h.textContent);
-    // The Appearance section (the theme picker) heads the screen and reads no poll, so it renders in every state.
-    expect(headings).toEqual(['Appearance', 'Updates', 'Notifications', STALL_SECTION_TEXT.title]);
+    // The Appearance section (the theme picker) reads no poll, so it renders in every state — AFTER Updates
+    // (operator's ruling, 2026-10-15): at the top, its ~850px pushed the operational sections below a phone's fold.
+    expect(headings).toEqual(['Updates', 'Appearance', 'Notifications', STALL_SECTION_TEXT.title]);
   });
 
-  it('LANDED state (api.updates answered, so the Box token card renders): the order is Appearance, Updates, Box token, Notifications, Stall watch', async () => {
+  it('LANDED state (api.updates answered, so the Box token card renders): the order is Updates, Appearance, Box token, Notifications, Stall watch', async () => {
     vi.spyOn(api, 'updates').mockResolvedValue(t7View());
     vi.spyOn(api, 'stallWatch').mockResolvedValue(swView());
     render(<SettingsScreen />);
     await screen.findByRole('heading', { name: 'Box token', level: 2 });
     await levelGroup();
     const headings = screen.getAllByRole('heading', { level: 2 }).map((h) => h.textContent);
-    expect(headings).toEqual(['Appearance', 'Updates', 'Box token', 'Notifications', STALL_SECTION_TEXT.title]);
+    expect(headings).toEqual(['Updates', 'Appearance', 'Box token', 'Notifications', STALL_SECTION_TEXT.title]);
   });
 
   it('P1: pending is a skeleton, a failed first read says so, and a view renders — three states, never folded', async () => {

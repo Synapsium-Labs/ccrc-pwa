@@ -61,6 +61,9 @@ export function HotFilesStrip(): ReactNode {
     <CollapsibleStrip
       root="hotfiles"
       part="hotfiles"
+      // No floor: `.hotfiles-head` sized to its padding and line on main
+      // (`CollapsibleStrip`'s `headFloor`).
+      headFloor="content"
       label="Hot files"
       mark="✋"
       headline={liveClaims.length === 1 ? '1 hot-file claim' : `${liveClaims.length} hot-file claims`}

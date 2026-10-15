@@ -104,7 +104,8 @@
      when the window narrows, down to a 40px floor below which it stops reading as
      a gauge at all. Nothing here needs to reset a height: the 52px touch-target
      that used to leak into these rows from the account PICKER sharing the class
-     name is scoped away at its source now (`.acct-list .acct-row`, fleet.css). */
+     name is gone at its source — the picker row is `<ListRow className="acct-pick">`
+     now, and no longer wears `acct-row` at all (fleet.css). */
   .shell-accounts .acct-row {
     min-width: 0;
     grid-template-columns: auto minmax(40px, 1fr) auto auto;

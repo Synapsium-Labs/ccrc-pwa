@@ -94,7 +94,10 @@ describe('every var() under src/ resolves to a token src/ defines', () => {
       const f = path.join(dir, 'pwa/src/fleet/fleet.css');
       fs.writeFileSync(
         f,
-        fs.readFileSync(f, 'utf8').replace('var(--limit-critical)', 'var(--limit-crit, #f85149)'),
+        // The rule as main ships it: the misspelt token with its fallback. The
+        // literal this file now carries is that fallback, written plainly.
+        fs.readFileSync(f, 'utf8').replace(
+          ".acct-fill { background: #f85149; }", ".acct-fill { background: var(--limit-crit, #f85149); }"),
       );
       expect(unresolved(path.join(dir, 'pwa'))).toEqual([
         { token: '--limit-crit', where: expect.stringContaining('fleet.css:') },

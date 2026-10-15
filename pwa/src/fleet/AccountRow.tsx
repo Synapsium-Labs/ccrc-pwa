@@ -99,9 +99,15 @@ export function AccountRow({
     background: hue === undefined ? 'var(--bg-raised)' : `var(${colorVar}-tint)`,
   };
   const off = condemned(facts);
+  // `acct-pick`, NEVER `acct-row`. `.acct-row` is `AccountMeterRow`'s gauge
+  // line, an UNLAYERED grid rule in fleet.css, and unlayered app rules beat the
+  // `@layer utilities` that give ListRow its shape: wearing that name turned
+  // this row into a four-column grid (gap 5px, chip squeezed to 18px, the
+  // "suggested" pill over the account name). One class, one element —
+  // `hook-class-collision.test.ts` reds on a name worn by both.
   return (
     <ListRow
-      className="acct-row"
+      className="acct-pick"
       data-disabled={off ? 'true' : 'false'}
       onClick={() => onPick(wrapper)}
     >

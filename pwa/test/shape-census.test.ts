@@ -229,10 +229,11 @@ const REGISTERED: Record<string, string> = {
     + 'hidden, ellipsis, nowrap. A component here would be a `<span>` with a '
     + 'utility on it.',
   ['fleet.css .child-reclaim-banner .child-reclaim-item + fleet.css .settings-node-head '
-    + '+ fleet.css .settings-release-head']:
+    + '+ fleet.css .settings-release-head + fleet.css .settings-theme-head']:
     'DIFFERENT THINGS. Four declarations of wrapping flex with a min-width '
     + 'floor — the same idiom as the actions rows above, in a different part '
-    + 'of the tree.',
+    + 'of the tree. The theme picker\'s head (a palette name and its swatch on '
+    + 'one line) joined it when the swatch moved beside the name.',
   'fleet.css .proj-dir + fleet.css .sheet-panel .proj-ready-why':
     'DIFFERENT THINGS, and measurably so: DIFFERENT GROUNDS. '
     + 'Both sit in column 2 of a grid in mono `--fs-2xs`, and the overlap is '

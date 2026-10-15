@@ -33,7 +33,7 @@ import { CoordBanner } from '../src/fleet/CoordBanner';
 import { MailBadge } from '../src/fleet/MailBadge';
 import { StartProgramSheet } from '../src/fleet/StartProgramSheet';
 import {
-  BARE_ROW, CONTROL_ROW, MailStrip, SELECT, Select, TEXT_INPUT, buttonVariants,
+  BARE_ROW, CONTROL_ROW, CollapsibleStrip, MailStrip, SELECT, Select, TEXT_INPUT, buttonVariants,
 } from '@ccrc/ui';
 import { PrKeycap } from '../src/session/PrKeycap';
 import { PrSheet } from '../src/session/PrSheet';
@@ -575,45 +575,65 @@ describe('.program-start-go — the sheet’s own confirm control', () => {
 });
 
 // THE STRIP CHROME'S HEAD, ALL THREE AT ONCE — and a census rather than a
-// third named control, because naming them one at a time is how two of them
-// came to have no floor.
+// third named control, because naming them one at a time is how their heights
+// came to differ without anyone saying so.
 //
 // `CollapsibleStrip` gives MailStrip, TaskStrip and HotFilesStrip one shape,
-// and each keeps its own skin — which is cheap (no rule moved, so no gate key
-// moved) and leaves the floor re-stated three times. It had already drifted
-// when the chrome was extracted: `.mail-strip-head` floored at `--tap-min`,
-// `.task-head` at `--sp-8` (32px, under the spec criterion, on the control that
-// opens the plan) and `.hotfiles-head` at nothing at all, sizing to its content.
-// The tests above cover controls one by one, by design, so none of them was in
-// scope for any of it.
+// and each keeps its own skin. Their heads were three heights on main:
+// `.mail-strip-head` floored at `--tap-min`, `.task-head` at `--sp-8` (32px,
+// under the spec criterion, on the control that opens the plan) and
+// `.hotfiles-head` at nothing at all, sizing to its content. The extracted
+// chrome levelled all three to 44 — a visual change (+12px on the session
+// screen's task strip), which the operator ruled out of this change
+// (2026-10-15). So the difference is said out loud, as `headFloor`, and pinned
+// here per strip rather than levelled.
 //
 // Derived from one list, so a fourth strip is a one-line addition here and a
 // red suite until it is made — not a silent fourth spelling.
-describe('every strip head clears the tap floor — the whole chrome, not one control', () => {
+describe('every strip head keeps the height it had on main — the whole chrome, not one control', () => {
   const HEADS: [string, string, string][] = [
     ['mail-strip.css', '.mail-strip .mail-strip-head', mailStripCss],
     ['task-strip.css', '.task-head', readUi('components', 'task-strip.css')],
     ['fleet.css', '.hotfiles-head', fleetCss],
   ];
 
-  // THE FLOOR MOVED FROM THREE RULES TO ONE COMPONENT. All three heads
-  // declared the same ten declarations — two of them inside the design system
-  // itself — and `CollapsibleStrip` builds its head from `BARE_ROW` now. Each
-  // sheet keeps only its ink, so there is no `min-height` left to scrape; what
-  // each rule still proves is that the head's hook class reaches real markup,
-  // which is the half a constant cannot show.
-  it('floors at var(--tap-min), once, in the component all three share', () => {
+  // THE FLOOR IS CHOSEN IN ONE COMPONENT, PER STRIP. All three heads declared
+  // the same ten declarations and `CollapsibleStrip` builds its head from
+  // `BARE_ROW`, which carries `min-h-tap`; `headFloor` replaces that for the
+  // two heads that were shorter on main, and `cn` knows `min-h-tap` is a
+  // min-height, so exactly one survives. Each sheet keeps only its ink, so
+  // there is no `min-height` left in a sheet to scrape.
+  it('composes BARE_ROW, and each head wears exactly one min-height', () => {
     expect(BARE_ROW).toContain('min-h-tap');
     expect(BARE_ROW).not.toContain('44px');
     // AND THE COMPONENT ACTUALLY WEARS IT. Asserting the constant alone left
     // a measured hole: a mutation that stopped `CollapsibleStrip` composing
     // `BARE_ROW` kept every head's flex and padding, lost the floor, the
-    // left-align and the ring, and nothing went red. The constant is half the
-    // claim; this is the other half.
+    // left-align and the ring, and nothing went red.
     const strip = readFileSync(
       path.join(import.meta.dirname, '..', '..', 'ui', 'src', 'primitives', 'collapsible-strip.tsx'),
       'utf8');
     expect(strip).toMatch(/cn\(\s*BARE_ROW/);
+    const heights = { tap: 'min-h-tap', compact: 'min-h-8', content: 'min-h-0' } as const;
+    for (const [floor, cls] of Object.entries(heights)) {
+      render(
+        <CollapsibleStrip root="s" part="s" label={floor} mark="*" headline="h"
+          headFloor={floor as keyof typeof heights}>
+          {null}
+        </CollapsibleStrip>,
+      );
+      const head = screen.getByRole('region', { name: floor }).querySelector('.s-head');
+      expect([...(head?.classList ?? [])].filter((c) => c.startsWith('min-h-')), floor).toEqual([cls]);
+      cleanup();
+    }
+  });
+
+  it("each strip asks for main's height: mail 44, task 32, hot files none", () => {
+    const ui = (f: string): string => readUi('components', f);
+    expect(ui('mail-strip.tsx'), 'the mail head floors at --tap-min, the default').not.toMatch(/headFloor=/);
+    expect(ui('task-strip.tsx')).toMatch(/headFloor="compact"/);
+    expect(readFileSync(path.join(import.meta.dirname, '..', 'src', 'fleet', 'HotFilesStrip.tsx'), 'utf8'))
+      .toMatch(/headFloor="content"/);
   });
 
   for (const [sheet, selector, css] of HEADS) {

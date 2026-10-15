@@ -89,7 +89,12 @@ export function Sheet({
         <Drawer.Content
           aria-describedby={undefined}
           className={cn(
-            'sheet-panel fixed inset-x-0 bottom-0 z-sheet flex flex-col outline-none',
+            // NO z-index HERE, on purpose: each arm states its own. `z-sheet` and
+            // `z-drawer` are custom utilities cn() cannot tell apart, so both
+            // survived on the full panel and the alphabetical emit order of Tailwind
+            // let `z-sheet` (40) win — the terminal drawer sank to the level of
+            // the sheets it is meant to sit above (main: 50).
+            'sheet-panel fixed inset-x-0 bottom-0 flex flex-col outline-none',
             // vaul inlines its own transition, so retiming it to the motion
             // tokens needs the important suffix. Entrance springs (420ms
             // overshoot); exit leaves swiftly (320ms).
@@ -98,9 +103,12 @@ export function Sheet({
             full
               ? // The panel becomes the well itself: dark glass in BOTH themes,
                 // stacked above ordinary sheets. Horizontal padding drops to
-                // zero — the terminal runs to the glass edge.
-                'sheet-panel--full z-drawer h-[calc(100dvh-var(--safe-top)-var(--sp-6))] bg-well px-0 pt-2 pb-[calc(var(--sp-2)+var(--safe-bottom))]'
-              : 'max-h-[calc(100dvh-var(--sp-12)-var(--safe-top))] rounded-t-xl bg-sheet shadow-sheet px-4 pt-2 pb-[calc(var(--sp-4)+var(--safe-bottom))]',
+                // zero — the terminal runs to the glass edge. It keeps the
+                // r-xl top corners and the lift shadow of every sheet: on main,
+                // `.sheet-panel--full` only re-stated height, ground, padding
+                // and z-index over `.sheet-panel`, so it inherited both.
+                'sheet-panel--full z-drawer h-[calc(100dvh-var(--safe-top)-var(--sp-6))] rounded-t-xl bg-well shadow-sheet px-0 pt-2 pb-[calc(var(--sp-2)+var(--safe-bottom))]'
+              : 'z-sheet max-h-[calc(100dvh-var(--sp-12)-var(--safe-top))] rounded-t-xl bg-sheet shadow-sheet px-4 pt-2 pb-[calc(var(--sp-4)+var(--safe-bottom))]',
             className,
           )}
         >
@@ -114,10 +122,17 @@ export function Sheet({
               a thumb would otherwise have to find. The plain div stays for
               every other sheet, where the whole panel is still the drag target
               and the bar is only a hint. */}
+          {/* THE GROUND OF THE HANDLE IS IMPORTANT (`!`) BECAUSE THE ONE vaul
+              INJECTS IS UNLAYERED: `[data-vaul-handle]{background:#e2e2e4; …}`
+              at runtime, outside every layer, and an unlayered rule beats
+              these layered utilities — the grabber went near-white on the
+              dark glass. On main `.sheet-panel--full .sheet-grabber` won on
+              specificity; a utility can only win on importance. `mt-1` is the
+              top margin of the base grabber, which the full variant kept on main. */}
           {full
             ? <Drawer.Handle
                 aria-hidden="true"
-                className="sheet-grabber mx-auto mb-2 h-1 w-9 flex-none rounded-full bg-ink-on-well/30"
+                className="sheet-grabber mx-auto mt-1 mb-2 h-1 w-9 flex-none rounded-full bg-ink-on-well/30!"
               />
             : <div
                 aria-hidden="true"

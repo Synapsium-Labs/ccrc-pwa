@@ -20,12 +20,14 @@
 // summary line, a different rows padding and a headline that does not
 // truncate. Those are differences in what each strip IS.
 //
-// WHAT DRIFTED was the structure, and it drifted in the direction a shared
-// stylesheet would not have caught: `.task-head` has `min-height: var(--sp-8)`
-// where the other two have `var(--tap-min)`, so one of three strips had a head
-// that could fall under the tap floor. A fourth strip can no longer invent a
-// fourth chrome, and the shape now has a story of its own rather than being
-// pinned only through whichever domain strip happens to render it.
+// WHAT DIFFERS is the height of the head: `.mail-strip-head` floors at
+// `var(--tap-min)`, `.task-head` at `var(--sp-8)` and `.hotfiles-head` at
+// nothing. Two of three heads are under the tap floor. That is said out loud
+// as `headFloor` rather than levelled by the shared chrome — levelling it is a
+// visual change (+12px on the task strip of the session screen), and this
+// change ships none (operator ruling, 2026-10-15). A fourth strip can no longer
+// invent a fourth chrome, and the shape now has a story of its own rather than
+// being pinned only through whichever domain strip happens to render it.
 import { useState } from 'react';
 import './collapsible-strip.css';
 import type { ReactNode } from 'react';
@@ -69,10 +71,23 @@ export interface CollapsibleStripProps {
    *  hidden with CSS: a collapsed strip's rows are off the accessibility tree
    *  and out of the tab order, which is what every one of the three did. */
   children: ReactNode;
+  /** The minimum height of the head, AS EACH STRIP HAD IT ON MAIN. `tap`
+   *  (44px, `--tap-min`) is what `.mail-strip-head` had; `compact` (32px,
+   *  `--sp-8`) is `.task-head`; `content` (no floor — the head sizes to its
+   *  padding and line) is `.hotfiles-head`. The two short heads ARE under the tap floor,
+   *  and the shared chrome raised them once; the operator ruled this change
+   *  ships no visual change beyond the Appearance section and two defect fixes
+   *  (2026-10-15), so each strip keeps the height main gave it and the raise is its own
+   *  change. `tap` is the default because a new strip should clear the floor. */
+  headFloor?: 'tap' | 'compact' | 'content';
 }
 
+/** `headFloor` as a utility. `cn` knows `min-h-tap` is a min-height, so the
+ *  one given here REPLACES the one in `BARE_ROW` rather than sitting beside it. */
+const HEAD_FLOOR = { tap: 'min-h-tap', compact: 'min-h-8', content: 'min-h-0' } as const;
+
 export function CollapsibleStrip({
-  root, part, label, mark, markClass, headline, count, marks, summary, children,
+  root, part, label, mark, markClass, headline, count, marks, summary, children, headFloor = 'tap',
 }: CollapsibleStripProps): ReactNode {
   // Collapsed by default, in all three cases and for one reason: every strip
   // sits above the composer or the fleet list, so an open list spends height
@@ -91,8 +106,10 @@ export function CollapsibleStrip({
            had looked. `BARE_ROW` is the six those rules shared with five other
            app rows, and the four beside it are the head's own — a row of
            children with a gap, padded, which is what makes it a head rather
-           than a line. Each sheet keeps only its ink. */
-        className={cn(BARE_ROW, 'flex items-center gap-2 px-3 py-2', `${part}-head`)}
+           than a line. Each sheet keeps only its ink — and its height, which
+           is chosen by `headFloor`: the three heads were 44, 32 and content-sized on
+           main, and the shared chrome must not quietly level them. */
+        className={cn(BARE_ROW, 'flex items-center gap-2 px-3 py-2', HEAD_FLOOR[headFloor], `${part}-head`)}
         onClick={() => setOpen((o) => !o)}
         aria-expanded={open}
       >

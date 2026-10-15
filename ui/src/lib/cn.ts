@@ -39,6 +39,16 @@ const merge = extendTailwindMerge({
       // The weights. Tailwind's own are `font-normal`/`font-medium`/…; this
       // theme says `--font-weight-regular`, so `font-regular` is ours.
       'font-weight': [{ font: ['regular', 'medium', 'semibold'] }],
+      // THE TAP FLOOR AND THE NAMED LAYERS, which twMerge could not place in
+      // a group at all — so it kept BOTH halves of a conflict and let
+      // Tailwind's emit order pick. Measured twice: `cn(BARE_ROW, 'min-h-0')`
+      // kept `min-h-tap` beside `min-h-0`, and the terminal drawer carried
+      // `z-sheet` and `z-drawer` together and sank to 40 (`z-sheet` emits
+      // later). Declared, a later one replaces an earlier one, as every
+      // Tailwind-native pair already does.
+      'min-h': [{ 'min-h': ['tap'] }],
+      'min-w': [{ 'min-w': ['tap'] }],
+      z: [{ z: ['header', 'sheet', 'drawer', 'toast', 'block'] }],
     },
   },
 });

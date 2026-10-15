@@ -47,8 +47,12 @@ export interface KickoffFailure {
  *  EXPORTED, and that is the literal census's doing: the extraction left the
  *  same string in two files, and `literal-census.test.ts` red on it within the
  *  minute. One home, one spelling — `StartProgramSheet`'s own Start button
- *  imports it from here. */
-export const PROGRAM_GO = 'program-start-go text-sm enabled:active:scale-[0.98]';
+ *  imports it from here.
+ *
+ *  `leading-none` AFTER `text-sm`, because tailwind-merge drops the quiet
+ *  variant's own `leading-none` when a later `text-*` arrives, and the go
+ *  buttons were `/ 1` on main (`button-line-height.test.ts`). */
+export const PROGRAM_GO = 'program-start-go text-sm leading-none enabled:active:scale-[0.98]';
 
 export function KickoffRecovery({ failure, retrying, onRetry }: {
   /** `null` when no failure is standing, so an arm that renders this says

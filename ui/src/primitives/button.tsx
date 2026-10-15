@@ -23,10 +23,17 @@ export const buttonVariants = cva(
   {
     variants: {
       variant: {
+        /* `leading-none` beside every `text-*`: the buttons on main are `/ 1`
+           (the `.btn-primary`/`.btn-ghost` font shorthand). A bare Tailwind
+           `text-base` also sets `line-height: var(--tw-leading,
+           var(--text-base--line-height))`, the Tailwind default of 1.5 — a 15px
+           line box became 22.5px, invisible on a one-line label inside
+           `min-h-tap` and +50% per line on a wrapped one.
+           `button-line-height.test.ts` derives every Button the app renders. */
         primary:
-          'btn-primary border-0 bg-phosphor text-ink-on-phosphor text-base font-semibold disabled:bg-edge-subtle disabled:text-ink-disabled',
+          'btn-primary border-0 bg-phosphor text-ink-on-phosphor text-base leading-none font-semibold disabled:bg-edge-subtle disabled:text-ink-disabled',
         ghost:
-          'btn-ghost border border-edge-strong bg-transparent text-ink-primary text-base font-medium transition-[transform,background-color] motion-reduce:transition-none enabled:active:bg-raised disabled:text-ink-disabled disabled:border-edge-subtle',
+          'btn-ghost border border-edge-strong bg-transparent text-ink-primary text-base leading-none font-medium transition-[transform,background-color] motion-reduce:transition-none enabled:active:bg-raised disabled:text-ink-disabled disabled:border-edge-subtle',
         /** `quiet` — the raised mono control. FOUR app rules declared the same
          *  eleven declarations: `.coord-toggle`, `.child-reclaim-toggle` and
          *  `.caps-save` were byte-identical, and `.program-start-door`

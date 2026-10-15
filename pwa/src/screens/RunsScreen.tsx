@@ -301,7 +301,7 @@ export function RunsScreen({
       {/* Task 13, spec §4.4: ONE door, rendered here regardless of the
           board's own state below — a program starts before any run exists
           to show. */}
-      <Button variant="quiet" size="fit" className="program-start-door text-xs" onClick={() => setStartOpen(true)}>
+      <Button variant="quiet" size="fit" className="program-start-door text-xs leading-none" onClick={() => setStartOpen(true)}>
         Start a program
       </Button>
 

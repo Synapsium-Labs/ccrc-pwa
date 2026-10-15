@@ -167,27 +167,36 @@ function ThemeRow({ choice, current, onPick, swatch = true }: {
       bare
     >
       <span className="settings-theme-body">
-        <span className="settings-theme-name">{choice.label}</span>
+        {/* THE SWATCH RIDES THE NAME'S LINE, not the row's far edge. As the
+            row's last flex item behind a `flex: 1` body it sat at the right
+            edge of the section — about 1400px from its own name at a 1920px
+            window — so a palette and its preview read as two columns that
+            happened to share a stripe of tint. Beside the name it is that
+            palette's preview at every width, phone to wide. */}
+        <span className="settings-theme-head">
+          <span className="settings-theme-name">{choice.label}</span>
+          {/* `data-theme` on the swatch itself: tokens.css's blocks are plain
+              attribute selectors, so they resolve on ANY element, not just the
+              root. The preview is therefore the real palette rather than a
+              hand-copied approximation of it. `phosphor` carries no block — it
+              is :root — so it deliberately stamps nothing and inherits the
+              default. */}
+          {swatch && (
+            <span
+              className="settings-theme-swatch"
+              aria-hidden="true"
+              {...(choice.id === PHOSPHOR ? {} : { 'data-theme': choice.id })}
+            >
+              <i style={{ background: 'var(--bg-surface)' }} />
+              <i style={{ background: 'var(--ink-primary)' }} />
+              <i style={{ background: 'var(--accent)' }} />
+              <i style={{ background: 'var(--status-attention)' }} />
+              <i style={{ background: 'var(--status-dead)' }} />
+            </span>
+          )}
+        </span>
         <span className="settings-note">{choice.note}</span>
       </span>
-      {/* `data-theme` on the swatch itself: tokens.css's blocks are plain
-          attribute selectors, so they resolve on ANY element, not just the
-          root. The preview is therefore the real palette rather than a
-          hand-copied approximation of it. `phosphor` carries no block — it is
-          :root — so it deliberately stamps nothing and inherits the default. */}
-      {swatch && (
-        <span
-          className="settings-theme-swatch"
-          aria-hidden="true"
-          {...(choice.id === PHOSPHOR ? {} : { 'data-theme': choice.id })}
-        >
-          <i style={{ background: 'var(--bg-surface)' }} />
-          <i style={{ background: 'var(--ink-primary)' }} />
-          <i style={{ background: 'var(--accent)' }} />
-          <i style={{ background: 'var(--status-attention)' }} />
-          <i style={{ background: 'var(--status-dead)' }} />
-        </span>
-      )}
     </Radio>
   );
 }
@@ -516,8 +525,12 @@ export function SettingsScreen(): ReactNode {
         <h1 className="settings-title">Settings</h1>
       </header>
       <UnarmedExposureBanner />
-      <AppearanceSection />
+      {/* AFTER Updates, at every width (operator's ruling, 2026-10-15). Twelve
+          palettes and Follow system are about 850px of a phone's screen; at
+          the top they pushed Updates and the box-token controls — the
+          operational half of this screen — below the fold. */}
       <UpdatesSection poll={poll} now={now} />
+      <AppearanceSection />
       {poll.view !== null && <BoxTokenSection view={poll.view} now={now} reload={poll.reload} />}
       <NotificationsSection view={poll.view} reload={poll.reload} />
       <StallWatchSection />

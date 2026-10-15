@@ -15,15 +15,19 @@
 // reason it was one there — `--tap-min` is a floor to clear, not a height to
 // adopt, and a `--list-row` token would imply the two numbers move together.
 //
-// IT CLOSES A HAZARD THE SCOPING ONLY CONTAINED. `.acct-row` is TWO things in
-// this app: the picker's row, and `AccountMeterRow`'s 5h/7d gauge line, which
-// is a grid of mono micro-type. They collided once — shell.css still carries
-// the note that "the 52px touch-target that used to leak into these rows from
-// the account PICKER sharing the class name is scoped away at its source now
-// (`.acct-list .acct-row`, fleet.css)". A descendant selector contains that
-// collision; it does not remove it, and the next sheet to render a picker row
-// outside `.acct-list` re-opens it. A component cannot collide with a class
-// name at all.
+// IT CLOSES ONE DIRECTION OF A HAZARD, NOT BOTH. `.acct-row` was TWO things
+// in this app: the row of the picker, and the 5h/7d gauge line of `AccountMeterRow`,
+// which is a grid of mono micro-type. They collided once — the 52px touch
+// target leaked into the gauge lines — and the descendant selector
+// `.acct-list .acct-row` only contained that. Moving the shape in here stops
+// the ROW leaking into the gauge line. It does nothing for the other
+// direction: this shape is `@layer utilities`, an app sheet is UNLAYERED, and
+// an unlayered rule beats every layer. While the picker still wore `acct-row`
+// as its hook, the unscoped grid rule of the gauge line won on it — grid for flex,
+// gap 5px, the account chip squeezed to 18px. So a hook class handed to this
+// component must name nothing else: the picker wears `acct-pick`, and
+// `pwa/test/hook-class-collision.test.ts` reds on a class name worn both by a
+// @ccrc/ui component and by any other element.
 //
 // NO GROUND, like ControlRow and for the same reason: `background: none` was
 // one of the twelve, so neither rule ever painted. `.menu-item` keeps its own
@@ -48,8 +52,9 @@ export const LIST_ROW =
 
 export interface ListRowProps extends ButtonHTMLAttributes<HTMLButtonElement> {
   /** The hook class. Both consumers keep theirs: `.menu-item` carries the
-   *  menu's own type and ink, `.acct-row` is selected on by the swap sheet's
-   *  tests and by `[data-disabled]` rules in fleet.css. */
+   *  type and ink of the menu, `.acct-pick` names the row of the account
+   *  picker. A hook must be unique to this row — an unlayered app rule
+   *  written for another element that shares the name beats this shape. */
   className?: string;
   children: ReactNode;
 }

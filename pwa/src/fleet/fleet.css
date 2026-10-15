@@ -119,31 +119,18 @@
 }
 /* Notification toggle — a quiet bell; lit when push is on.
  *
- * THE TAP FLOOR, which this copy did not have and its twin did. The settings
- * copy below (`.settings-bell-row .bell`) declares both floors with the note
- * "the settings section's primary mobile control gets a real hit area"; the
- * SAME component in the fleet header had neither, so the bell measured about
- * 25px there (4px padding around --fs-lg at line-height 1) and 44 in
- * Settings. Two copies of one component, drifted — found by
- * `control-census.test.ts`, which is why that file reads both and not one.
- *
- * IT FITS, measured rather than hoped: the width note above `.fleet-runs-line`
- * records the head's right group at 244px of min-content with 294px available
- * at 390px, and this adds 19px to the bell for 263px. The group wraps anyway
- * (D-3303), so the escape was already there.
- *
- * `min-width` as well as `min-height`, exactly as the twin does: the glyph is
- * one character and the horizontal miss is the easier one. Layout only, no
- * colour — the twin's own comment makes the point that this needs no
- * INHERITED_GROUNDS registration, and the gate is unmoved. */
+ * UNDER THE TAP FLOOR IN THE FLEET HEADER, as on main: about 25px (4px padding
+ * around --fs-lg at line-height 1), while its twin in Settings
+ * (`.settings-bell-row .bell`) declares both floors. The census records the
+ * drift (`control-census.test.ts`). Growing this copy to 44px moves the fleet
+ * header — +19px on a right group that already wraps at phone width (D-3303)
+ * — and the operator ruled this PR ships no visual change beyond the
+ * Appearance section and two defect fixes (2026-10-15), so it is its own
+ * change. */
 .bell {
   border: none;
   background: none;
   cursor: pointer;
-  display: inline-grid;
-  place-items: center;
-  min-width: var(--tap-min);
-  min-height: var(--tap-min);
   padding: 4px;
   font-size: var(--fs-lg);
   line-height: 1;
@@ -214,16 +201,14 @@
 /* An 11px line box inside `padding: var(--sp-1) 0` measured ~19px tall — well
    under WCAG 2.2 SC 2.5.8's 24px floor — on a control whose action cannot be
    undone (there is no un-ack; `bucketSince` will not advance again until the
-   bucket changes). It went to a real 24px box for one wave, and to `--tap-min`
-   now (V2, operator's ruling).
-
-   STILL NOT THE INVISIBLE ::before OVERLAY `.sess-actions` and
-   `.proj-card-add` use to reach the floor, and this is the rule's own measured
-   argument rather than a preference: an overlay overhangs its neighbours, and
-   every neighbour here — the label, the count, the unseen pill — is INERT, so
-   an overhang would convert a near-miss that does nothing today into an
-   irreversible activation. Growing the visible box was the only safe
-   direction; the ruling is that an un-undoable ack is worth the height. */
+   bucket changes). A real 24px box, and deliberately NOT the invisible
+   ::before overlay `.sess-actions` and `.proj-card-add` use to reach
+   --tap-min: an overlay overhangs its neighbours, and every neighbour here —
+   the label, the count, the unseen pill — is inert, so an overhang would
+   convert a near-miss that does nothing today into an irreversible
+   activation. Growing the visible box is the only direction that is safe for
+   this particular button — and 24px, main's size, is where it stays: the
+   operator ruled the 44px growth back out (2026-10-15). */
 .bucket-head .bucket-head-seen {
   border: 0;
   background: none;
@@ -231,7 +216,7 @@
   font: var(--weight-medium) var(--fs-2xs) / 1 var(--family-ui);
   display: inline-grid;
   place-items: center;
-  min-height: var(--tap-min);
+  min-height: var(--sp-6);
   padding: 0 var(--sp-2);
   margin-right: calc(-1 * var(--sp-2)); /* the chip's own right padding is the gutter */
   cursor: pointer;
@@ -478,13 +463,20 @@
    with it. The picker rows are always inside `.acct-list` (SwapSheet, and
    NewSessionSheet via the same list), so scoping here fixes it at the source and
    costs the readout nothing. */
-/* `.acct-list .acct-row` is `<ListRow>`. It declared the same twelve as
-   chat.css's `.menu-item`, and the DESCENDANT selector was doing a second job
-   shell.css still describes: containing the collision with
+/* `.acct-list .acct-row` is `<ListRow>` now, worn as `acct-pick`. It declared
+   the same twelve as chat.css's `.menu-item`, and the DESCENDANT selector was
+   doing a second job shell.css still describes: containing the collision with
    `AccountMeterRow`'s own `.acct-row`, a mono gauge line that must never
-   inherit a 52px touch target. A component cannot collide with a class name,
-   so the containment is no longer needed — what is left here is the picker
-   row's own data-state rule below. */
+   inherit a 52px touch target.
+   THE COLLISION RUNS BOTH WAYS, and the component only closed one direction.
+   ListRow's shape is `@layer utilities`; `.acct-row` below is UNLAYERED, and
+   an unlayered rule beats every layer. While the picker row still wore the
+   name `acct-row`, the meter's grid won on it: grid instead of flex, gap 5px
+   instead of 12px, the account chip squeezed to 18px and the "suggested" pill
+   laid over the account name, in both pickers at every width. So the picker
+   wears its own name, `acct-pick`, which no rule here selects, and
+   `hook-class-collision.test.ts` reds on any class name a @ccrc/ui component
+   and another element both wear. */
 .acct-suggested {
   flex: none;
   font: var(--weight-medium) var(--fs-2xs) / 1 var(--family-mono);
@@ -798,14 +790,18 @@
   background: var(--limit-ok);
   transition: width var(--dur-base) var(--curve-swift);
 }
-/* --limit-critical, not --limit-crit: the band NAME is `crit` (limitBand) but
-   the token is spelled out. An undefined var() falls back silently, so the
-   misspelling shipped a hardcoded off-palette red that neither theme nor the
-   contrast gate could see — a var() fallback is invisible to design/audit.mjs
-   by construction. No fallback hexes here for the same reason: a fallback on a
-   token that exists is unreachable, and on one that does not it hides the bug. */
+/* THE CRIT FILL IS MAIN'S RENDERED RED, `#f85149`, on purpose — and it is a
+   known defect, kept. Main writes `var(--limit-crit, #f85149)`; the token is
+   spelled `--limit-critical`, so the fallback is what every build has painted,
+   identical in both themes and belonging to no palette. Spelling the token
+   right is a VISIBLE change (#E06A55 dark, #B2402C light), and the operator
+   ruled this PR ships none beyond the Appearance section and two defect fixes
+   (2026-10-15). So the value main renders is written as what it is — a literal
+   — rather than through a var() that names a token that does not exist
+   (`css-vars.test.ts` refuses that shape). The fix is one line, for its own
+   change: `background: var(--limit-critical)`. */
 .acct-meter[data-band='warn'] .acct-fill { background: var(--limit-warn); }
-.acct-meter[data-band='crit'] .acct-fill { background: var(--limit-critical); }
+.acct-meter[data-band='crit'] .acct-fill { background: #f85149; }
 .acct-meter[data-band='none'] .acct-fill { background: var(--edge-subtle); }
 .acct-pct { color: var(--ink-secondary); text-align: right; min-width: 2.6em; }
 .acct-reset { color: var(--ink-tertiary); white-space: nowrap; }
@@ -2809,9 +2805,11 @@ button.proj-card-pool::before {
   color: var(--ink-primary);
   overflow: hidden;
 }
-/* `min-height` was absent here, so this head sized to its content alone — the
-   only one of the three strip heads with no floor at all. Same chrome, same
-   criterion. */
+/* No `min-height`, as on main: this head sizes to its padding and line — the
+   only one of the three strip heads with no floor at all. Kept, and said as
+   `headFloor="content"` in HotFilesStrip.tsx: raising it is a visual change,
+   and this change ships none beyond the Appearance section and two defect
+   fixes (operator's ruling, 2026-10-15). */
 /* `<CollapsibleStrip>`'s head is `<BareRow>` now — three strip heads in three
    stylesheets declared the same ten declarations, two of them inside the
    design system itself. What stays is this one's own refusal to set a voice:
@@ -3190,6 +3188,16 @@ button.proj-card-pool::before {
   gap: 2px;
   min-width: 0;
   flex: 1;
+}
+/* The name and its swatch, on one line — the swatch is the name's preview, so
+   it sits beside it rather than at the row's far edge (1400px away at 1920).
+   Wraps under the name only if a phone cannot fit both. */
+.settings-theme-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2);
+  min-width: 0;
 }
 .settings-theme-name {
   font-family: var(--family-ui);

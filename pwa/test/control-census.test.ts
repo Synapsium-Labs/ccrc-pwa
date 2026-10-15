@@ -70,7 +70,7 @@
 //   | a `<select>`'s rule loses `--tap-min`                | 1 red  |
 //   | an INLINE prose link GAINS `--tap-min`               | 1 red  |
 //   | `buttonVariants` loses `min-h-tap`                   | 1 red  |
-//   | the bell loses its floors, entry still SELECTOR      | 1 red  |
+//   | the header bell gains a floor, entry still UNDER     | 1 red  |
 //   | an UNDER entry for a computed class drops its cite   | 1 red  |
 //   | `.metachip` gains the floor, entry still UNDER        | 2 red  |
 //
@@ -125,6 +125,21 @@ const RULES: Rule[] = [...stylesheets().matchAll(/([^{}@]+)\{([^{}]*)\}/g)]
 /** Does any rule selecting this class declare the floor token? */
 const classHasFloor = (cls: string): boolean =>
   RULES.some((r) => new RegExp(`\\.${cls}(?![\\w-])`).test(r.sel) && /--tap-min/.test(r.body));
+
+/** The same, leaving out the rules whose floor belongs to someone else (see
+ *  TWIN_FLOORS). */
+const ownClassHasFloor = (cls: string): boolean =>
+  RULES.some((r) => new RegExp(`\\.${cls}(?![\\w-])`).test(r.sel) && /--tap-min/.test(r.body)
+    && TWIN_FLOORS[r.sel] === undefined);
+
+/** Rules that floor a computed-class control's TWIN in another context — not
+ *  the control a census key names. The cite check would otherwise read the
+ *  twin's floor as the control's own and refuse an honest UNDER. */
+const TWIN_FLOORS: Record<string, string> = {
+  '.settings-bell-row .bell':
+    'NotificationBell in SETTINGS, which has both floors. The fleet header copy '
+    + 'is the one the `.bell` entry is about, and it is UNDER on main.',
+};
 
 /** Does the rule with exactly this selector declare the floor token? */
 const selectorHasFloor = (sel: string): boolean =>
@@ -306,13 +321,12 @@ const CONTROLS: Record<string, string> = {
 
   // ── the rest, argued one at a time ───────────────────────────────────────
   'fleet/NotificationBell.tsx <button> (computed)':
-    'SELECTOR .bell. It was UNDER at about 25px — 4px of padding around '
-    + '`--fs-lg` at line-height 1 — while `.settings-bell-row .bell`, the SAME '
-    + 'component in Settings, declared both floors. Two copies of one '
-    + 'component, drifted; this census found it. The header copy now carries '
-    + 'the floors too, measured to fit: the head\'s right group needs 244px of '
-    + 'min-content with 294px at 390px, this adds 19px, and the group wraps '
-    + 'anyway (D-3303).',
+    'UNDER .bell, about 25px: 4px of padding around `--fs-lg` at line-height 1 '
+    + 'in the FLEET HEADER, while `.settings-bell-row .bell`, the SAME component '
+    + 'in Settings, declares both floors. Two copies of one component, drifted; '
+    + 'this census found it. Grown to 44px once on this branch and reverted to '
+    + 'main\'s size (the operator\'s no-visual-change ruling, 2026-10-15): it '
+    + 'moves the fleet header, so it is its own change.',
   'fleet/SessionMeta.tsx <button> sess-held':
     "SELECTOR .sess-line. Inline text in the row's meta line, not a box of its "
     + 'own: what gets tapped is the ROW, and the row declares the floor. Its own '
@@ -323,13 +337,13 @@ const CONTROLS: Record<string, string> = {
     + '`fleet-css.test.ts` asserts `.sess-open` must NOT regain a `min-height`. '
     + 'It is the label LINE inside the tap surface, not the surface.',
   'fleet/BucketBar.tsx <button> bucket-head-seen':
-    'TOKEN. `.bucket-head .bucket-head-seen` declares `--tap-min` since V2 '
-    + '(operator\'s ruling). It stood at 24px by `--sp-6` for one wave with the '
-    + 'argument the stylesheet still carries: the `::before` overlay the two '
-    + 'OVERLAY entries use would overhang neighbours that are INERT, turning a '
-    + 'near-miss that does nothing today into an irreversible ack, so growing '
-    + 'the visible box was the only safe direction — and that is a visual '
-    + 'change, which is why it waited for a ruling rather than a refactor.',
+    'UNDER, 24px by `--sp-6`, and ARGUED in the stylesheet at length: WCAG 2.2 '
+    + "SC 2.5.8's floor, chosen because the `::before` overlay the two OVERLAY "
+    + 'entries use would overhang neighbours that are INERT, turning a near-miss '
+    + 'that does nothing today into an irreversible activation. The only safe '
+    + 'direction here is growing the visible box, which is a design change — '
+    + 'made once on this branch (V2) and ruled back out to main\'s size by the '
+    + 'operator (2026-10-15).',
   'session/PendingBubble.tsx <button> (none)':
     'SELECTOR .pending-actions button. The `Discard` button, with no class at '
     + 'all — and covered anyway, because the floor is on an ELEMENT selector. '
@@ -348,25 +362,27 @@ const CONTROLS: Record<string, string> = {
     + 'the operator chose that floor: the copy button sits on the code well\'s '
     + 'bar beside the language label, and a 44px bar is a different code block.',
   'session/MessageBubble.tsx <button> compaction-head':
-    'TOKEN since V2 (operator\'s ruling). It was about 29px — `--sp-2` (8px) '
-    + 'above and below `--fs-sm` (13px) at line-height 1 — which already cleared '
-    + 'SC 2.5.8\'s 24, and the last wave left it there because 44 adds about '
-    + '15px to EVERY compaction marker in a transcript. The ruling weighed that '
-    + 'against the axis a thumb actually misses on: a full-width disclosure is '
-    + 'easy to hit horizontally and was short only vertically.',
+    'UNDER `--tap-min` and ABOVE the WCAG floor: about 29px — `--sp-2` (8px) '
+    + 'above and below `--fs-sm` (13px) at line-height 1 — against SC '
+    + '2.5.8\'s 24. A full-width disclosure, so it is easy to hit horizontally '
+    + 'and short only vertically, and 44 would add about 15px to EVERY '
+    + 'compaction marker in a transcript. Grown to 44 once on this branch (V2) '
+    + 'and ruled back to main\'s size by the operator (2026-10-15).',
   'session/SessionHeader.tsx <button> (computed)':
-    'SELECTOR button.metachip. BOTH meta chips, since their classes went '
-    + 'through `metaChipTone()` — the model chip\'s used to be a literal and '
-    + 'had a key of its own here. They were always one rule and the old entry '
-    + 'said so ("on the same rule as the model chip below"); what the typed map '
-    + 'cost this census is the ability to tell two computed controls in one '
-    + 'file apart, and what it bought is that `className="metachip--modl"` '
-    + 'stopped compiling. The rule carries the floor for both. The effort chip — `metachip` or '
-    + '`metachip--ultra` — on the same rule as the model chip below, which '
-    + 'declares `--tap-min` since V1. SELECTOR rather than TOKEN for the '
-    + 'reason the arm itself enforces: the class here is COMPUTED, so there is '
-    + 'no class to look a floor up by, and the entry has to name the rule. See '
-    + 'CITES_A_RULE.',
+    'UNDER .metachip, about 19px: `padding: 3px 9px` around `--fs-2xs` (11px) '
+    + 'at line-height 1, plus a hairline. BOTH meta chips, since their classes '
+    + 'went through `metaChipTone()` — the model chip\'s used to be a literal and '
+    + 'had a key of its own here; what the typed map cost this census is the '
+    + 'ability to tell two computed controls in one file apart, and what it '
+    + 'bought is that `className="metachip--modl"` stopped compiling. The model '
+    + 'and effort chips are TAPPABLE (they open their choosers), which is what '
+    + 'makes this a floor question rather than a label — the smallest controls '
+    + 'in the app, and this census found them. Grown on this branch (24px, then '
+    + '`--tap-min` as V1) and ruled back to main\'s size by the operator '
+    + '(2026-10-15): at phone width the meta row wraps, so the growth cost the '
+    + 'session header up to 53px. An overlay stays barred: it would overhang the '
+    + 'OTHER chip, and both are live choosers. The citation is REQUIRED because '
+    + 'the class is computed: see CITES_A_RULE.',
 };
 
 /** OVERLAY entries name the pseudo-rule that reaches the floor. */
@@ -468,20 +484,18 @@ describe('hand-drawn controls', () => {
       })
       .map(([k]) => k).sort();
     expect(grown, 'this now declares --tap-min — re-register it as TOKEN').toEqual([]);
-    // SIX BEFORE V1 AND V2, TWO AFTER. The four that left are the two session
-    // meta chips (V1), the seen chip and the compaction disclosure (V2) — each
-    // an operator ruling, because growing a visible box is a visual change and
-    // every one of them had already been argued down to "the only safe
-    // direction is a design change". The two that remain are the ones whose
-    // argument is not about safety: `.code-block-copy` at 32px, because a 44px
-    // bar is a different code block, and `.dlg-later` at 40px in its one-line
-    // state. THREE since main's #152 arrived in the reconcile: the sent
-    // document's name chip, `.msg-attach-doc`, at 34.5px — recorded with its
-    // number and left for a ruling rather than grown in a merge.
+    // SEVEN: the four the operator ruled stay at main's size (2026-10-15) — the
+    // session header's meta chips (one computed key), the seen chip and the
+    // compaction disclosure, each grown to 44px once on this branch (V1/V2)
+    // and reverted — the fleet header's bell, grown and reverted under the
+    // same no-visual-change ruling, plus `.code-block-copy` at 32px, because a 44px bar is a
+    // different code block, the PR sheet's `.pr-body-preview` at 40px in its
+    // one-line state, and, since main's #152 arrived in the reconcile, the sent
+    // document's name chip `.msg-attach-doc` at 34.5px.
     expect(
       Object.values(CONTROLS).filter((v) => v.startsWith('UNDER')).length,
       'the UNDER arm still records every control below the floor',
-    ).toBe(3);
+    ).toBe(7);
   });
 
 
@@ -535,10 +549,15 @@ describe('hand-drawn controls', () => {
       if (sel === '') return true;
       const floored = selectorHasFloor(sel) || sel.split(/\s+/).every((p) => !p.startsWith('.'))
         ? selectorHasFloor(sel)
-        : classHasFloor(sel.replace(/^\./, ''));
+        : ownClassHasFloor(sel.replace(/^\./, ''));
       return v.startsWith('UNDER') ? floored : !floored;
     }).map(([k]) => k).sort();
     expect(wrong, 'the cited rule does not say what the verdict claims').toEqual([]);
+  });
+
+  it('every twin exemption is a real rule that still floors its twin', () => {
+    const stale = Object.keys(TWIN_FLOORS).filter((sel) => !selectorHasFloor(sel));
+    expect(stale, 'a TWIN_FLOORS entry no longer names a floored rule').toEqual([]);
   });
 
   it('reads the app and the stylesheets at all', () => {
