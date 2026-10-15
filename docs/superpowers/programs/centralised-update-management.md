@@ -1641,6 +1641,29 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
         and 1302 (run 360, `dispatched`) on `ccd/ccd`.
       - STATUS: fleet and server v0.0.191, newest v0.0.191, backups fleet 179M/server 720M, disk free fleet 217G/work
         volume 190G/server 32G, no anomalies at 17:42.
+    - **2026-10-15 02:42 UTC: v0.0.192, then v0.0.193, converged unattended. The first move's trigger is undetermined,
+      and the second fleet run exited 3 on the history FAIL.** No action was taken.
+      - v0.0.192 (`630288e33`, #342) was released at 01:50:24 and v0.0.193 (`adf8d4b23`, #412) at 02:27:04.
+      - **The first move.** The fleet box ran from 01:53:17 to 01:55:27, and the server followed from 01:56:57 to
+        01:57:22. Both doctors passed: fleet 34 passed, 6 warned, 0 failed; server 26 passed, 0 warned, 0 failed.
+        - The server had restarted at 16:50:01, so its polls fell due at 01:50:01 and 02:20:01. The first of those came
+          23 seconds before the release, and the fleet box started more than 3 minutes after it.
+        - A tap and a poll write the same `from: pwa` (defect A), so this move's trigger cannot be read from the
+          boxes, as with v0.0.181.
+      - **The second move.** The fleet box ran from 02:27:27 to 02:29:29, about 17 seconds after a poll falls due on
+        the grid from the server's 01:57 restart. The server followed from 02:29:59 to 02:30:25. Every report reads
+        `phase: done` and `from: pwa` (defect A).
+      - **The history FAIL.** The fleet box's second run exited 3 on one FAIL, `history: tick-stale`, the last tick 10
+        minutes old against the 10-minute bound. The box stayed on v0.0.193 (D-3114), and the server still moved. The
+        mechanism behaved as designed. The FAIL had cleared by 02:43, and no history sweep has hit its timeout since
+        15:41:55 on 2026-10-14.
+      - Both boxes read `box-token` PASS, the server's generation #3 now 4 days old. Fleet doctor at 02:43: 33 passed,
+        8 warned, 0 failed. Server: 26 passed, 0 warned, 0 failed.
+      - Wave 15 (run 300) is still held, by 1349 (run 354, `working`) on `ccd/ccrc` and by a new claim, 1352 (run 433,
+        `awaiting-review`), on `ccd/ccd`. Run 360 is still `dispatched`, and its `ccd/ccd` work has not landed.
+        Neither merge touched wave 15's files.
+      - STATUS: fleet and server v0.0.193, newest v0.0.193, backups fleet 180M/server 727M, disk free fleet 220G/work
+        volume 186G/server 32G, no anomalies at 02:42.
 
 - **2026-09-30 12:22 UTC — wave 8 opened (run 182) for the live audit's residue, and dispatched.**
   - **Planning:** two Opus scoping agents measured each defect at `a742eb6a`, and an Opus writer assembled the
