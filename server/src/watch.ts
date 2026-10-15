@@ -1079,7 +1079,8 @@ export class FleetWatcher {
    *  the prune keys on. IN MEMORY (slug `run-less-push-latches-are-in-memory` (D-3751)): a restart re-pushes a run-less orphan D
    *  rung 2, a mail-stuck, a marker-unreadable or a coordinator's failed rung 2 to the operator while it stands. A
    *  coordinator's marker-unreadable push is keyed on its first-seen time, which a restart or a clock drop (an
-   *  unobserved gap, `dropStallClocks`) re-times, so one push can go out on each side of it. Pushes only, never mail. */
+   *  unobserved gap, `dropStallClocks`, or a sweep that refuses its id) re-times, so one push can go out on each side
+   *  of it. Pushes only, never mail. */
   private stallLatch = new Map<string, string>();
   /** Warn-once keys, `<sessionId>|<what>`: a run-less shadow rung, `failed-unknown`, and the defensive r2-with-no-r1
    *  line (`applyStall`; no real input reaches it today). */
@@ -5571,9 +5572,9 @@ export class FleetWatcher {
       // every judged sweep since it was set. More than STALL_CLOCK_GAP_MS from the END of the last judged sweep to this
       // start means nobody watched in between (a disabled window, unreadable or throwing candidate reads, ticks that
       // never reached the lane), so every clock restarts here. The early returns above never stamp it: they are that
-      // unobserved time. A judged sweep's own duration is observed time, so `finally` stamps its end. A refused sweep is
-      // unobserved time for that subject too, so its clocks restart there: `judgeStall` and `judgeStallCoordinator` drop
-      // them (slug `tick-lanes-hold-a-refused-id`).
+      // unobserved time. A judged sweep's own duration is observed time, so `finally` stamps its end. A sweep that
+      // refuses a subject's id is unobserved time for that subject too, so its clocks restart there: `judgeStall` and
+      // `judgeStallCoordinator` drop them (slug `tick-lanes-hold-a-refused-id`).
       if (this.lastStallJudgedAt !== null && now - this.lastStallJudgedAt > STALL_CLOCK_GAP_MS) this.dropStallClocks();
       judging = true;
       const workers = stallSubjects(candidates.runs);

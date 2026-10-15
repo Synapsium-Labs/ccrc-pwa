@@ -1838,7 +1838,7 @@ export function stallMailStuckVerdicts(input: StallSessionInput, now: number): S
 function stallSessionMarkerInner(input: StallSessionInput, now: number): StallVerdict {
   if (input.role !== 'coordinator') return VERDICT_NONE;
   // A refused claimant id (`tick-lanes-hold-a-refused-id`): the lane read no marker for it, so there is no unreadable
-  // read to report, and a first-seen time it carries is an earlier observation's.
+  // read to report; the lane drops its first-seen time, and one handed in by any other caller measures nothing of it.
   if (input.worker.present === 'refused') return holdVerdict('unmeasured');
   if (!stallMarkUnreadable(input.mark)) return VERDICT_NONE;
   const since = input.markUnreadableSince;
