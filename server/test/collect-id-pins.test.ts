@@ -54,7 +54,7 @@ describe("the collector's two id gates (spec §2.3)", () => {
   it.each([...REFUSED_IDS])('the executor refuses %s at step 1', async (id) => {
     expect(isTmpRootId(id), 'the case is one the predicate refuses').toBe(false);
     const r = rig();
-    expect(await collectTempRoot(r.deps, { id })).toMatchObject({ kind: 'not-asked', step: 1, why: 'id-refused' });
+    expect(await collectTempRoot(r.deps, r.job(id))).toMatchObject({ kind: 'not-asked', step: 1, why: 'id-refused' });
     expect(r.attempts.filter((a) => a[0] === 'ws-audit'), 'no ws-audit').toEqual([]);
     expect(r.attempts.filter((a) => a[0] === 'ws-collect'), 'no ws-collect').toEqual([]);
     expect(r.attempts, 'no argv at all').toEqual([]);
@@ -64,7 +64,7 @@ describe("the collector's two id gates (spec §2.3)", () => {
   it.each([...EDGE_ACCEPTED_IDS])('control: the executor audits %s as itself', async (id) => {
     expect(isTmpRootId(id), 'the case is one the predicate accepts').toBe(true);
     const r = rig();
-    await collectTempRoot(r.deps, { id });
+    await collectTempRoot(r.deps, r.job(id));
     expect(r.attempts[0]).toEqual(['ws-audit', '--session', id, '--collect']);
   });
 });
