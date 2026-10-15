@@ -556,8 +556,9 @@ function pokeC(box: HistoryBox, ...ids: string[]): void {
   passC(box);
 }
 /** B2 holds a session's leaves while a spool file this tick renamed is unread (derive.mjs deriveOne, pendingReceiptState),
- *  so a boundary a Stop-hinted pass ingested gets its leaf (and its parents) on the NEXT pass: one plain pass, with no
- *  hint, so it reads no transcript to its end and writes no card. */
+ *  so a boundary a Stop-hinted pass ingested gets its leaf (and its parents) on the NEXT pass: the cases wait one plain
+ *  pass. That pass reads no transcript to its end, so it writes no card, but it can still consume or delete one
+ *  (a prediction written on the hinted pass can predate the leaf it ingested). D-5058 (history-card-predicted-under-the-receipt-hold) */
 function derivedC(box: HistoryBox): void {
   passC(box);
 }
@@ -635,13 +636,16 @@ describe('the sweep writes and consumes card/<id>/<uuid>.txt at end-of-file (spe
     expect(card).toBe(expectedCard(seven, l7, P));
     appendRows(p, s.rows.slice(cutBefore(s, 7)));
     pokeC(box, ID);
+    // B2's receipt hold has not derived l7 yet, so its slot is not final and ends the run: the card on this hinted pass
+    // names l8 with no parent (and no condensed node exists yet). D-5058 (history-card-predicted-under-the-receipt-hold)
+    const l8 = libCard.leafId(ID, U, s.headUuids[7]!);
+    expect(cardOf(box, ID, U), 'the hinted pass predates l7 and its parent: l8, parentless').toBe(expectedCard(familyC(box, ID), l8));
     derivedC(box);
     // The card written on the hinted pass predates the leaf and the parent it names next; the next hinted pass writes it.
     pokeC(box, ID);
     expect(leavesC(box, U)).toEqual([...seven, l7]);
     expect(childrenC(box, P), 'derivation minted the predicted parent over the same eight leaves').toEqual([...seven, l7]);
     expect(P.startsWith(printed(card).parent!)).toBe(true);
-    const l8 = libCard.leafId(ID, U, s.headUuids[7]!);
     expect(cardOf(box, ID, U), 'the next leaf is no 8th: the newest condensed node is named').toBe(expectedCard(familyC(box, ID), l8, P));
   }, 240_000);
 
@@ -697,20 +701,27 @@ describe('the sweep writes and consumes card/<id>/<uuid>.txt at end-of-file (spe
     const want0 = libCard.leafId(ID, U, firstUuidC(pre));
     expect(cardOf(box, ID, U), 'the first prediction, before any boundary').toBe(expectedCard([], want0));
     // A compacts at pre's boundary and again after its head; B compacts at pre's boundary only and stays the copy
-    // written last. B's next span starts at pre's head, whose plain id A's second boundary now holds.
+    // written last. B's next span starts at pre's head, whose plain id A's second boundary holds. Both boundaries must
+    // be ingested, and A's leaves derived, on ONE pass, with B's prediction still on disk: a Stop-hinted pass cannot
+    // (B2's receipt hold derives the session's leaf a pass after the ingest, and the plain pass that derives it would
+    // delete B's prediction as a fork skip, uncounted). So the ingest here is the periodic discovery scan, which needs
+    // no hint and leaves no draining file: the Stop line is drained first and the scan clock (`scan_discover_ms`) reset.
+    passC(box);
     appendRows(a, [...pre.rows.slice(cutBefore(pre, 0)), ...other.rows]);
     fs.utimesSync(a, hourAgo, hourAgo);
     appendRows(b, [...pre.rows.slice(cutBefore(pre, 0)),
       userRow({ uuid: sidC(0xbf5c), ts: new Date(T0C + 900_000).toISOString(), sessionId: U, text: 'fork b' })]);
-    pokeC(box, ID);
-    derivedC(box);
-    // The fork rule reads copy A's second leaf, which the hinted pass above could not derive yet; the next hinted pass
-    // meets it at end-of-file and skips.
-    pokeC(box, ID);
-    expect(leavesC(box, U), 'derivation minted the leaf the first card printed').toContain(want0);
-    expect(leavesC(box, U), "CONTROL: A's second boundary holds the plain id of B's next span").toContain(libCard.leafId(ID, U, pre.headUuids[0]!));
-    expect(counters(box)['card_skipped:fork-qualified'], 'CONTROL: the fixture reached the fork skip').toBeGreaterThanOrEqual(1);
+    const w = openWriter(libCard.historyPaths(box.home).dbFile);
+    try { w.prepare("DELETE FROM meta WHERE k = 'scan_discover_ms'").run(); } finally { closeWriter(w); }
+    const [written, skipped] = [counters(box)['card_written'] ?? 0, counters(box)['card_skipped:fork-qualified'] ?? 0];
+    passC(box);
+    expect(leavesC(box, U), 'derivation minted the leaf the first card printed, on the pass that ingested it').toContain(want0);
+    expect(leavesC(box, U), "CONTROL: A's second boundary holds the plain id of B's next span, derived on the same pass")
+      .toContain(libCard.leafId(ID, U, pre.headUuids[0]!));
+    expect(counters(box)['card_skipped:fork-qualified'], 'the pass met the fork skip').toBe(skipped + 1);
+    expect(counters(box)['card_written'] ?? 0, "no card written in the consumed one's place").toBe(written);
     expect(cardOf(box, ID, U), 'the consumed prediction is deleted, and none is written in its place').toBeNull();
+    expect(fs.readdirSync(path.join(box.root, 'card', ID)), 'no .txt left; the id keeps no card').not.toContain(`${U}.txt`);
     expect(consumedC(box), 'the consumption is counted though the next prediction is a skip').toEqual({ 'card_consumed:unknown': 1 });
   }, 240_000);
 

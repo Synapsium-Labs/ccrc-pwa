@@ -7184,6 +7184,13 @@ Read W1-e (step 7 below) with these in hand. None is fixed in this PR.
 - **A restore or rebuild inside the reading window voids the reading.** Re-derived leaves can be measured again with
   no matching consumption, so a `served_share` above 1 is the tell. The recover arm withdraws every prediction
   (ruling RC2), so a restore no longer adds a spurious consumption.
+- **A prediction written on a hinted pass can predate the leaf that pass ingested.** B2's receipt hold derives a
+  session's leaf one pass after the pass that ingests its boundary, and a session that spools a line every tick keeps
+  its leaves held, which widens the window. Two shapes follow. The 8th leaf's parent is not yet minted, so the card
+  falls back to the epoch's newest condensed node (spec §8.6's "otherwise" arm) and is counted served, though W1-e
+  compares leaves, not parents. In the two-copy fork shape the plain id can be predicted where the fork rule would
+  qualify it once the other copy's leaf exists, and that line is counted `card_id_mismatch`. No design change
+  (D-5058).
 - **Not a distortion, a note: B2's pasted-line path is unchanged.** The card names its own command, `describe
   L<prefix>`, a bare id. A paste that starts at `History: node` gives B2's parser the leaf. A paste of the whole
   physical line from a transcript, where the standing cards sit in front of it, names the leaf and the parent, and
@@ -7345,3 +7352,4 @@ Every departure this plan takes from the spec is listed once below, in the order
 - **D-5050** — `history-card-consumed-ts-no-epoch` (Task 3): `consumedBoundaryTs` returned early only for a file with no card line, then hashed through B1's `leafId` with a null `ccrcId`, which throws (`Hash.update(null)`), so the task's own `no epoch names the session` row could not pass. A null `ccrcId` now answers null before any hash: no epoch means no consumed boundary, and `decideConsumedScope` folds a null time to `unknown` (RC3).
 - **D-5051** — `history-scope-age-at-most` (Tasks 3, 9): Spec §8.6 says the reader serves a marker whose `<ms>` is "younger than" `COMPACT_CARD_MAX_AGE`; the plan reads "at most" in both halves (`decideConsumedScope` keeps a marker exactly 1200 s old as `main`, and the hook serves at `<=`). Kept per the plan: a 1 ms edge, the same on both sides.
 - **D-5052** — `history-card-epoch-rule-exported` (Tasks 4, 5): Task 5's brief had `card.mjs` copy derive.mjs's `epochOf` SQL (a confirmed epoch of an unmerged family, the lowest `session_pk`) to name a session's leaf ids, a second copy of the one rule that decides which epoch derivation hashes into every leaf id, free to drift from it. Task 4 instead exports `epochOfUuid(db, ccUuid)` from `derive.mjs`, answering `stmts(db).epochOf`'s row unchanged, so derivation and the card read one rule; derive's own call sites are untouched.
+- **D-5058** — `history-card-predicted-under-the-receipt-hold` (Tasks 5, 6, 7, 14): B2's receipt hold derives a session's leaf one pass after the hinted pass that ingests its boundary, so the sweep cases wait one plain pass (`derivedC`) and a prediction written on that hinted pass can predate the leaf. The 8th leaf's parent then falls back to the epoch's newest condensed node (§8.6's otherwise arm, counted served), and the two-copy fork shape can predict the plain id where the fork rule would qualify it (counted `card_id_mismatch`). No design change.
