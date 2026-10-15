@@ -1011,10 +1011,10 @@ export function stallVerdict(input: StallInput, now: number): StallVerdict {
  *  (1) a run this build cannot name;
  *  (1b) a worker id the registry listing refused (`StallWorker`'s `refused` arm) holds `unmeasured`, AHEAD of (2a) and
  *      of every later step. This departs from the stall-watch spec's §10 order, where (2a) comes first and "then any
- *      unmeasured input" (slug `tick-lanes-hold-a-refused-id`). The lane takes no read for that id and drops that
- *      subject's clocks, so it hands none here; a clock handed in by any other caller would be no measurement of this
- *      subject, and judged in the spec's order it would push marker-unreadable or report the worker dead off a read
- *      nobody took;
+ *      unmeasured input" (slug `tick-lanes-hold-a-refused-id`). The lane takes no live, marker or hookstate read for
+ *      that id, composes no path or argv from it, and drops that subject's clocks, so it hands none here; a clock
+ *      handed in by any other caller would be no measurement of this subject, and judged in the spec's order it would
+ *      push marker-unreadable or report the worker dead off a read nobody took;
  *  (2) the marker-unreadable push, then a worker absent from the tick (the dead arm after DEAD_GRACE_MS), then an
  *      unmeasured fleet row, lifecycle, dispatch or re-activation;
  *  (3) lifecycle: a deliberate stop holds; an orphan or never-started pane is the dead arm after DEAD_GRACE_MS;
@@ -1401,7 +1401,7 @@ function stallR3Cause(because: StallR3Cause, input: StallInput, coordinator: str
 /** Why the limit hold held: only facts the tick measured. */
 function stallLimitFacts(w: StallWorker): string {
   if (w.present === false) return 'the worker is absent';
-  if (w.present === 'refused') return 'the worker id is refused by the registry listing, so nothing about it was read';
+  if (w.present === 'refused') return 'the worker id is refused by the registry listing, so no live, marker or hookstate read was taken for it';
   const parts: string[] = [];
   if (w.limits === null) parts.push('limits unmeasured');
   else parts.push(`5h ${stallPercent(w.limits.five)}`, `7d ${stallPercent(w.limits.seven)}`);
@@ -1576,7 +1576,8 @@ function stallSessionHolds(input: StallSessionInput, now: number, holdDialog: bo
   if (input.role === 'worker' && r !== null
     && (!isRunState(r.state) || r.state === 'unknown' || (r.kind !== 'work' && r.kind !== 'review'))) return holdVerdict('run-unnamed');
   const w = input.worker;
-  // A refused id (`tick-lanes-hold-a-refused-id`): nothing about it was read, so it is unmeasured, never absent.
+  // A refused id (`tick-lanes-hold-a-refused-id`): no live, marker or hookstate read was taken for it and no path
+  // composed, so it is unmeasured, never absent.
   if (w.present === 'refused') return holdVerdict('unmeasured');
   if (!w.present) return holdVerdict('absent');
   const lc = w.lifecycle;

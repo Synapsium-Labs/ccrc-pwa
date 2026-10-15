@@ -130,7 +130,7 @@ afterEach(() => {
 describe('the stall lane holds a listed-but-refused id it is handed (tick-lanes-hold-a-refused-id)', () => {
   const END = T0 + Math.max(DEAD_GRACE_MS, MARKER_UNREADABLE_MS) + 2 * STALL_SWEEP_MS;
 
-  it('(A) a run whose stored worker is --actor draws no dead notice, no push and no stall row past DEAD_GRACE_MS and MARKER_UNREADABLE_MS, and nothing about it is read', async () => {
+  it('(A) a run whose stored worker is --actor draws no dead notice, no push and no stall row past DEAD_GRACE_MS and MARKER_UNREADABLE_MS, and no path or argv is composed from it', async () => {
     const r = await rig();
     plant(r.home, GOOD);
     plant(r.home, BAD);
@@ -298,7 +298,7 @@ describe('the stall lane holds a listed-but-refused id it is handed (tick-lanes-
     const after = await unlist(r, [`${BAD}.turn.json`]);
     // U to U + MARKER_UNREADABLE_MS − STALL_SWEEP_MS (T0 + 122 min): the marker reads malformed, inside the new window.
     await sweepEach(r, after, U, U + MARKER_UNREADABLE_MS - STALL_SWEEP_MS);
-    expect(markerPushes(r), 'no marker-unreadable push at once after the re-unlisting: the refused stretch read nothing').toEqual([]);
+    expect(markerPushes(r), 'no marker-unreadable push at once after the re-unlisting: the refused stretch read no marker').toEqual([]);
     // CONTROL, U + MARKER_UNREADABLE_MS (T0 + 123 min): the push arrives, so the marker clock restarted at U.
     await sweepEach(r, after, U + MARKER_UNREADABLE_MS, U + MARKER_UNREADABLE_MS);
     expect(markerPushes(r)).toHaveLength(1);
