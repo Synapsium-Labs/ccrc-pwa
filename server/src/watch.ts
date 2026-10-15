@@ -3261,9 +3261,11 @@ export class FleetWatcher {
     const fleetHeads = new Map<string, { project: string; branch: string | null }>();
     const transientlyUnread = new Set<string>();
     // The delegation lane's input, taken from THIS pass's reads: each project's census, and the registry generations of the ids the
-    // pass was handed, read here and again after the loop (R38). No second admin-directory read and no schedule of its own.
+    // pass was handed, read once as the census starts and once after it (R38). No second admin-directory read and no schedule of its
+    // own. The first round is STARTED here and AWAITED only after `settleHeads()`, and both rounds are concurrent, so none of this
+    // delivery IO stands between the census and the console's HEAD labels.
     const generationOf = (id: string) => childReclaimGenerationRead(this.deps.io, this.deps.cfg.registryDir, id);
-    const generationsBefore = await readParentGenerations(generationOf, records.map((r) => r.id));
+    const generationsBefore = readParentGenerations(generationOf, records.map((r) => r.id));
     const delegationProjects = new Map<string, WorktreeCensus>();
     for (const project of projects) {
       const census = await readWorktreeCensus(this.deps.io, this.deps.cfg.projectsRoot, project);
@@ -3316,10 +3318,6 @@ export class FleetWatcher {
         if (id !== null) fleetHeads.set(id, { project, branch: w.headBranch });
       }
     }
-    this.delegationCensus = {
-      measuredAt: now, projects: delegationProjects,
-      incarnations: await settleParentIncarnations(generationOf, generationsBefore),
-    };
     // The fleet's copy (see `headBranches`), written BEFORE any of the census's
     // own early returns below: the HEAD reads above are valid whether or not
     // the registry listing or the run read then refuses. A project that
@@ -3329,7 +3327,7 @@ export class FleetWatcher {
     // label in it back to the registry's name for a minute; a STANDING refusal
     // (`not-a-checkout`, `refused-project`) keeps nothing. NOT covered: a
     // per-worktree `gitdir`/`HEAD` read that fails inside a listing that
-    // answered — `readWorktreeRecords` reports those as a dropped record or a
+    // answered — `readWorktreeCensus`'s `read` reports those as a dropped record or a
     // null HEAD, indistinguishable from a detached one, so that row falls to
     // the registry until the next sweep.
     for (const [id, h] of this.headBranches) {
@@ -3337,6 +3335,11 @@ export class FleetWatcher {
     }
     this.headBranches = fleetHeads;
     this.settleHeads();
+    // The delegation lane's input, AFTER the console's labels are settled and BEFORE this method's own early returns below.
+    this.delegationCensus = {
+      measuredAt: now, projects: delegationProjects,
+      incarnations: await settleParentIncarnations(generationOf, await generationsBefore),
+    };
     // THE CLAIM EVIDENCE, READ AFTER THE WORKTREE EVIDENCE IT IS WEIGHED
     // AGAINST — and that ordering is the whole reason this is a second listing
     // rather than the one `tick()` already took (D-283's "one listing,

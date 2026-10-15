@@ -9,7 +9,7 @@ import { Bus } from '../src/bus.js';
 import { FleetWatcher } from '../src/watch.js';
 import { readRegistry } from '../src/registry.js';
 import {
-  readParentGenerations, readWorktreeCensus, readWorktreeRecords, settleParentIncarnations,
+  DELEGATION_CENSUS_DIAGNOSTICS, readParentGenerations, readWorktreeCensus, readWorktreeRecords, settleParentIncarnations,
 } from '../src/coord/gitref.js';
 import { childReclaimGenerationRead } from '../src/coord/childReclaim.js';
 import { localIO, type FleetIO } from '../src/io.js';
@@ -30,6 +30,13 @@ import { okRuns } from './coordReadHelpers.js';
 const ccrcRoot = path.resolve(__dirname, '../..');
 
 afterEach(() => { vi.restoreAllMocks(); });
+
+/** The census derives its legacy answers from the MEASURED reads, so a double that blanks the convenience reads must blank their
+ *  measured siblings too. */
+const UNREAD = { ok: false, reason: 'unreadable' } as const;
+const blindIO = (): FleetIO => ({
+  ...localIO, readdir: async () => null, stat: async () => null, readdirMeasured: async () => UNREAD, statMeasured: async () => UNREAD,
+});
 
 interface FixtureCfg {
   /** Omit the key entirely to get a real store; pass `undefined` EXPLICITLY to
@@ -82,9 +89,7 @@ const watcherFixture = async (cfg: FixtureCfg = {}) => {
    *  reads — `_ws_add`'s first `_reg_set` arriving mid-sweep. */
   const hooks: { onAdminReaddir: null | (() => void) } = { onAdminReaddir: null };
   const adminOf = (project: string) => path.join(project, '.git', 'worktrees');
-  const io: FleetIO = {
-    ...localIO,
-    readdir: async (p: string) => {
+  const listing = async (p: string): Promise<string[] | null> => {
       readdirs.push(p);
       if (p.includes(adminOf('')) && hooks.onAdminReaddir !== null) {
         const fire = hooks.onAdminReaddir;
@@ -95,6 +100,17 @@ const watcherFixture = async (cfg: FixtureCfg = {}) => {
       if (cfg.unreadableProject !== undefined && p.includes(adminOf(cfg.unreadableProject))) return null;
       if (cfg.unreadableRegistry === true && p === cfgObj.registryDir) return null;
       return localIO.readdir(p);
+  };
+  const io: FleetIO = {
+    ...localIO,
+    readdir: listing,
+    // The census reads the admin directory through the MEASURED listing; a failure this fixture injects is `unreadable`, and a
+    // real ENOENT stays the `absent` it is.
+    readdirMeasured: async (p: string) => {
+      const r = await listing(p);
+      if (r !== null) return { ok: true, entries: r };
+      const real = await localIO.readdirMeasured(p);
+      return real.ok ? UNREAD : real;
     },
   };
 
@@ -493,7 +509,7 @@ describe('readWorktreeRecords', () => {
     // code turned it into "this project has no linked worktrees" — the
     // strongest positive claim this function can make, minted from two failed
     // reads, for every project on the fleet at once.
-    const dropped: FleetIO = { ...localIO, readdir: async () => null, stat: async () => null };
+    const dropped: FleetIO = blindIO();
     expect(await readWorktreeRecords(dropped, mkTmp('ccrc-gitref-'), 'demo'))
       .toEqual({ ok: false, reason: 'unreachable' });
   });
@@ -536,7 +552,7 @@ describe('readWorktreeRecords', () => {
     // back over the transient one.
     const root = mkTmp('ccrc-gitref-');
     mkdirSync(path.join(root, 'demo'), { recursive: true });
-    const blind: FleetIO = { ...localIO, readdir: async () => null, stat: async () => null };
+    const blind: FleetIO = blindIO();
     expect(await readWorktreeRecords(blind, root, 'demo'))
       .toEqual({ ok: false, reason: 'unreachable' });
   });
@@ -735,7 +751,7 @@ describe('readWorktreeCensus: the delegation records off the one census', () => 
     const root = mkTmp('ccrc-census-');
     plant(root, 'quiet-basin', good({ CLAUDE_BASE: 'main\n', log: firstLog(B) }));
     expect(await only(localIO, root)).toMatchObject({
-      claudeBase: null, baseAgreesFirstLog: null, state: 'present', diagnostic: 'claudeBase:malformed',
+      claudeBase: null, baseAgreesFirstLog: null, state: 'present', diagnostic: 'claude-base-malformed',
     });
   });
 
@@ -743,7 +759,7 @@ describe('readWorktreeCensus: the delegation records off the one census', () => 
     const root = mkTmp('ccrc-census-');
     plant(root, 'quiet-basin', good({ CLAUDE_BASE: `${A}\n`, log: firstLog(B) }));
     expect(await only(failing({ read: ['quiet-basin/CLAUDE_BASE'] }), root)).toMatchObject({
-      claudeBase: null, baseAgreesFirstLog: null, state: 'present', diagnostic: 'claudeBase:unreadable',
+      claudeBase: null, baseAgreesFirstLog: null, state: 'present', diagnostic: 'claude-base-unreadable',
     });
   });
 
@@ -759,17 +775,78 @@ describe('readWorktreeCensus: the delegation records off the one census', () => 
     expect((await only(localIO, root)).canonicalPath).toBe('/data/worktrees/demo/quiet-basin');
     const rel = mkTmp('ccrc-census-');
     plant(rel, 'quiet-basin', good({ gitdir: '../../quiet-basin/.git\n' }));
-    expect(await only(localIO, rel)).toMatchObject({ canonicalPath: null, state: 'present', diagnostic: 'gitdir:relative' });
+    expect(await only(localIO, rel)).toMatchObject({ canonicalPath: null, state: 'present', diagnostic: 'gitdir-relative' });
   });
 
-  it('an ABSENT record (no gitdir at all) is a row of state absent; the legacy view still omits it', async () => {
+  // RULING R46: `git worktree add` creates the admin directory and `locked` ("initializing") BEFORE it writes `gitdir`, and writes
+  // HEAD as the null object id first. A listed directory is `absent` only in the removal race, when nothing is left in it.
+  it('a record with NOTHING left in it is ABSENT (the removal race); the legacy view still omits it', async () => {
     const root = mkTmp('ccrc-census-');
-    plant(root, 'quiet-basin', { HEAD: 'ref: refs/heads/ws/quiet-basin\n' });
+    plant(root, 'gone', {});
     plant(root, 'other', good({ gitdir: '/data/worktrees/demo/other/.git\n' }));
     const c = await readWorktreeCensus(localIO, root, 'demo');
-    const r = c.delegation?.find((x) => x.adminRecord === 'quiet-basin');
-    expect(r).toMatchObject({ state: 'absent', canonicalPath: null, diagnostic: 'gitdir:absent' });
+    expect(c.delegation?.find((x) => x.adminRecord === 'gone')).toMatchObject({
+      state: 'absent', canonicalPath: null, diagnostic: 'gitdir-absent,head-absent',
+    });
     expect(c.read).toEqual({ ok: true, records: [{ name: 'other', path: '/data/worktrees/demo/other', headBranch: 'ws/quiet-basin' }] });
+  });
+
+  it('a record BEING BORN (locked, no gitdir yet, a null-oid HEAD) is unreadable and says so, never absent', async () => {
+    const root = mkTmp('ccrc-census-');
+    plant(root, 'born', { HEAD: `${'0'.repeat(40)}\n`, locked: true });
+    expect(await only(localIO, root)).toMatchObject({
+      adminRecord: 'born', state: 'unreadable', canonicalPath: null, headSha: null, headBranch: null, locked: true,
+      diagnostic: 'gitdir-absent,head-malformed,record-initializing',
+    });
+  });
+
+  it('a gitdir ENOENT beside a HEAD that is there is not the removal race either: unreadable, not absent', async () => {
+    const root = mkTmp('ccrc-census-');
+    plant(root, 'quiet-basin', { HEAD: 'ref: refs/heads/ws/quiet-basin\n' });
+    expect(await only(localIO, root)).toMatchObject({ state: 'unreadable', diagnostic: 'gitdir-absent' });
+    // …and an unreadable lock stat cannot prove "no lock", so it cannot prove the removal race.
+    const root2 = mkTmp('ccrc-census-');
+    plant(root2, 'gone', {});
+    expect(await only(failing({ stat: ['gone/locked'] }), root2)).toMatchObject({
+      state: 'unreadable', diagnostic: 'gitdir-absent,head-absent,lock-unreadable',
+    });
+  });
+
+  it('a HEAD of forty zeros is head-malformed, never a measured detached sha', async () => {
+    const root = mkTmp('ccrc-census-');
+    plant(root, 'quiet-basin', good({ HEAD: `${'0'.repeat(40)}\n` }));
+    expect(await only(localIO, root)).toMatchObject({
+      headSha: null, headBranch: null, state: 'present', diagnostic: 'head-malformed',
+    });
+  });
+
+  it('a first log that READS but does not parse is first-log-malformed, with no base from it and nothing to agree with', async () => {
+    for (const log of ['', 'not a reflog line\n', `${ZERO} ${A.slice(1)} short\n`]) {
+      const root = mkTmp('ccrc-census-');
+      plant(root, 'quiet-basin', good({ log }));
+      expect(await only(localIO, root)).toMatchObject({
+        claudeBase: null, baseAgreesFirstLog: null, state: 'present', diagnostic: 'first-log-malformed',
+      });
+    }
+    const root = mkTmp('ccrc-census-');
+    plant(root, 'quiet-basin', good({ CLAUDE_BASE: `${A}\n`, log: 'garbage\n' }));
+    expect(await only(localIO, root)).toMatchObject({ claudeBase: A, baseAgreesFirstLog: null, diagnostic: 'first-log-malformed' });
+  });
+
+  it('every diagnostic the census emits is a member of the one declared tuple, and the tuple names nothing twice', async () => {
+    expect(new Set(DELEGATION_CENSUS_DIAGNOSTICS).size).toBe(DELEGATION_CENSUS_DIAGNOSTICS.length);
+    const root = mkTmp('ccrc-census-');
+    plant(root, 'a-malformed', good({ gitdir: '/\n', CLAUDE_BASE: 'x\n', log: 'x\n', HEAD: 'junk\n' }));
+    plant(root, 'b-relative', good({ gitdir: '../x/.git\n' }));
+    plant(root, 'c-born', { HEAD: `${'0'.repeat(40)}\n`, locked: true });
+    plant(root, 'd-gone', {});
+    plant(root, 'e-bad', good({ CLAUDE_BASE: `${A}\n`, log: firstLog(A) }));
+    const c = await readWorktreeCensus(failing({
+      read: ['e-bad/gitdir', 'e-bad/HEAD', 'e-bad/CLAUDE_BASE'], stat: ['e-bad/locked'], bytes: ['e-bad/logs/HEAD'],
+    }), root, 'demo');
+    const named = (c.delegation ?? []).flatMap((r) => (r.diagnostic ?? '').split(',')).filter((w) => w !== '');
+    expect(new Set(named).size).toBeGreaterThanOrEqual(9);
+    for (const w of named) expect(DELEGATION_CENSUS_DIAGNOSTICS, w).toContain(w);
   });
 
   it('an UNREADABLE record is retained as a row of its own beside a good one, and is NEVER read as absent', async () => {
@@ -779,7 +856,7 @@ describe('readWorktreeCensus: the delegation records off the one census', () => 
     const c = await readWorktreeCensus(failing({ read: ['broken/gitdir'] }), root, 'demo');
     expect(c.delegation?.map((r) => [r.adminRecord, r.state]).sort()).toEqual([['broken', 'unreadable'], ['quiet-basin', 'present']]);
     expect(c.delegation?.find((r) => r.adminRecord === 'broken')).toMatchObject({
-      canonicalPath: null, diagnostic: 'gitdir:unreadable',
+      canonicalPath: null, diagnostic: 'gitdir-unreadable',
     });
     // The legacy view is unchanged: the same record it always skipped.
     expect(c.read).toEqual({ ok: true, records: [{ name: 'quiet-basin', path: '/data/worktrees/demo/quiet-basin', headBranch: 'ws/quiet-basin' }] });
@@ -790,7 +867,7 @@ describe('readWorktreeCensus: the delegation records off the one census', () => 
     plant(root, 'quiet-basin', good());
     const c = await readWorktreeCensus(failing({ read: ['quiet-basin/HEAD'] }), root, 'demo');
     expect(c.delegation?.[0]).toMatchObject({
-      canonicalPath: '/data/worktrees/demo/quiet-basin', headBranch: null, headSha: null, state: 'unreadable', diagnostic: 'head:unreadable',
+      canonicalPath: '/data/worktrees/demo/quiet-basin', headBranch: null, headSha: null, state: 'unreadable', diagnostic: 'head-unreadable',
     });
     expect(c.read).toEqual({ ok: true, records: [{ name: 'quiet-basin', path: '/data/worktrees/demo/quiet-basin', headBranch: null }] });
   });
@@ -802,12 +879,12 @@ describe('readWorktreeCensus: the delegation records off the one census', () => 
     const reads: string[] = [];
     const io: FleetIO = {
       ...localIO,
-      readdir: async () => ['quiet-basin', '-flag', 'a b'],
+      readdirMeasured: async () => ({ ok: true, entries: ['quiet-basin', '-flag', 'a b'] }),
       readFileMeasured: async (p, t, s) => { reads.push(p); return localIO.readFileMeasured(p, t, s); },
     };
     const c = await readWorktreeCensus(io, root, 'demo');
     expect(c.delegation?.map((r) => [r.adminRecord, r.state, r.diagnostic])).toEqual([
-      ['quiet-basin', 'present', null], ['-flag', 'unreadable', 'name:refused'], ['a b', 'unreadable', 'name:refused'],
+      ['quiet-basin', 'present', null], ['-flag', 'unreadable', 'name-refused'], ['a b', 'unreadable', 'name-refused'],
     ]);
     expect(reads.filter((p) => p.startsWith(adminRoot) && !p.includes('quiet-basin'))).toEqual([]);
   });
@@ -819,11 +896,11 @@ describe('readWorktreeCensus: the delegation records off the one census', () => 
       name: string; io: FleetIO; fold: Record<string, unknown>; control: Record<string, unknown>;
     }> = [
       { name: 'a failed lock stat reads locked:false', io: failing({ stat: ['quiet-basin/locked'] }),
-        fold: { locked: false, diagnostic: 'lock:unreadable', state: 'present' }, control: { locked: true } },
+        fold: { locked: false, diagnostic: 'lock-unreadable', state: 'present' }, control: { locked: true } },
       { name: 'an unreadable first log reads baseAgreesFirstLog:null', io: failing({ bytes: ['logs/HEAD'] }),
-        fold: { baseAgreesFirstLog: null, diagnostic: 'firstLog:unreadable', state: 'present' }, control: { baseAgreesFirstLog: true } },
+        fold: { baseAgreesFirstLog: null, diagnostic: 'first-log-unreadable', state: 'present' }, control: { baseAgreesFirstLog: true } },
       { name: 'an unreadable gitdir reads as no canonical path', io: failing({ read: ['quiet-basin/gitdir'] }),
-        fold: { canonicalPath: null, diagnostic: 'gitdir:unreadable', state: 'unreadable' },
+        fold: { canonicalPath: null, diagnostic: 'gitdir-unreadable', state: 'unreadable' },
         control: { canonicalPath: '/data/worktrees/demo/quiet-basin' } },
     ];
     it.each(rows)('$name', async ({ io, fold, control }) => {
@@ -855,11 +932,28 @@ describe('readWorktreeCensus: the delegation records off the one census', () => 
       expect(await readWorktreeCensus(localIO, root, '..')).toEqual({ read: { ok: false, reason: 'refused-project' }, delegation: null });
       expect(await readWorktreeCensus(localIO, mkTmp('ccrc-census-'), 'demo'))
         .toEqual({ read: { ok: false, reason: 'not-a-checkout' }, delegation: null });
-      const blind: FleetIO = { ...localIO, readdir: async () => null, stat: async () => null };
+      const blind: FleetIO = blindIO();
       expect(await readWorktreeCensus(blind, root, 'demo')).toEqual({ read: { ok: false, reason: 'unreachable' }, delegation: null });
       mkdirSync(admin, { recursive: true });
-      const unlistable: FleetIO = { ...localIO, readdir: async () => null };
+      const unlistable: FleetIO = { ...localIO, readdirMeasured: async () => UNREAD };
       expect(await readWorktreeCensus(unlistable, root, 'demo')).toEqual({ read: { ok: false, reason: 'unlistable' }, delegation: null });
+    });
+
+    it('an admin directory whose MEASURED reads are unreadable is no delegation census at all, though the legacy zero stands', async () => {
+      // The legacy zero rests on convenience reads that fold a failed read to "nothing there" (it can only hide a record). The
+      // delegation zero is a claim that no record is there, and it is minted from MEASURED reads only: an EACCES on the listing, or a
+      // dropped round trip, with `.git` answering, is `null`, never `[]`.
+      const root = mkTmp('ccrc-census-');
+      mkdirSync(path.join(root, 'demo', '.git'), { recursive: true });
+      const admin = path.join(root, 'demo', '.git', 'worktrees');
+      const io: FleetIO = {
+        ...localIO,
+        readdirMeasured: async (p, t, s) => (p === admin ? UNREAD : localIO.readdirMeasured(p, t, s)),
+        statMeasured: async (p) => (p === admin ? UNREAD : localIO.statMeasured(p)),
+      };
+      expect(await readWorktreeCensus(io, root, 'demo')).toEqual({ read: { ok: true, records: [] }, delegation: null });
+      // The control: the same project, the listing proven ENOENT, is the measured zero.
+      expect(await readWorktreeCensus(localIO, root, 'demo')).toEqual({ read: { ok: true, records: [] }, delegation: [] });
     });
 
     it('readWorktreeRecords takes none of the delegation reads, and the census lists the admin directory ONCE', async () => {
@@ -868,17 +962,16 @@ describe('readWorktreeCensus: the delegation records off the one census', () => 
       const seen: string[] = [];
       const spy: FleetIO = {
         ...localIO,
-        readdir: async (p, t, s) => { seen.push(`readdir ${path.basename(p)}`); return localIO.readdir(p, t, s); },
         readdirMeasured: async (p, t, s) => { seen.push(`readdirMeasured ${path.basename(p)}`); return localIO.readdirMeasured(p, t, s); },
         readFileMeasured: async (p, t, s) => { seen.push(`read ${path.basename(p)}`); return localIO.readFileMeasured(p, t, s); },
         statMeasured: async (p) => { seen.push(`stat ${path.basename(p)}`); return localIO.statMeasured(p); },
         readFileFromBytesMeasured: async (p, o, m, t, s) => { seen.push(`bytes ${path.basename(p)}`); return localIO.readFileFromBytesMeasured(p, o, m, t, s); },
       };
       await readWorktreeRecords(spy, root, 'demo');
-      expect(seen.sort()).toEqual(['read HEAD', 'read gitdir', 'readdir worktrees']);
+      expect(seen.sort()).toEqual(['read HEAD', 'read gitdir', 'readdirMeasured worktrees']);
       seen.length = 0;
       await readWorktreeCensus(spy, root, 'demo');
-      expect(seen.sort()).toEqual(['bytes HEAD', 'read CLAUDE_BASE', 'read HEAD', 'read gitdir', 'readdir worktrees', 'stat locked']);
+      expect(seen.sort()).toEqual(['bytes HEAD', 'read CLAUDE_BASE', 'read HEAD', 'read gitdir', 'readdirMeasured worktrees', 'stat locked']);
     });
   });
 });
@@ -969,6 +1062,29 @@ describe('sweepDivergences prepares the delegation census from the one read it a
     expect(pass?.incarnations.get('demo-quiet-basin')).toEqual({ kind: 'measured', incarnation: G1 });
     // THE ONE CENSUS: git's admin directory is listed once for the project, not once for the legacy view and once for this one.
     expect(h.reads().filter((p) => p.endsWith(path.join('.git', 'worktrees')))).toHaveLength(1);
+  });
+
+  it('the console\'s HEAD labels never wait on the delegation lane\'s generation reads', async () => {
+    const h = await watcherFixture();
+    h.plantRecord('demo-quiet-basin');
+    h.plantWorktreeRecord('demo', 'quiet-basin', '/data/worktrees/demo/quiet-basin', 'ws/demo-quiet-basin');
+    const file = path.join(h.home, '.cc-sessions', 'demo-quiet-basin.generation');
+    writeFileSync(file, G1);
+    const io = h.deps.io as FleetIO;
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const real = io.readFileMeasured.bind(io);
+    io.readFileMeasured = async (p, t, s) => { if (p === file) await gate; return real(p, t, s); };
+    const done = sweep(h);
+    try {
+      // The reader is HELD OPEN, and the labels are already there.
+      await vi.waitFor(() => expect(h.watcher.currentHeadBranches().get('demo-quiet-basin')).toBe('ws/demo-quiet-basin'), { timeout: 3000 });
+      expect(h.watcher.currentDelegationCensus()).toBeNull();
+    } finally {
+      release();
+    }
+    await done;
+    expect(h.watcher.currentDelegationCensus()?.incarnations.get('demo-quiet-basin')).toEqual({ kind: 'measured', incarnation: G1 });
   });
 
   it('a generation that changes while the pass runs is unmeasured, and an unlistable project is a project with NO delegation census', async () => {
