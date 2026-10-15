@@ -228,6 +228,18 @@ export interface DelegationInsertEventsResult {
   conflicts: readonly DelegationEventRow[];
 }
 
+/**
+ * R27: a type that makes every property, array and map reachable from `T` read-only. The durable applier's `state()`, the outcomes
+ * it returns and what a checkpoint change returns ARE (or become) its live rows, so a caller that edited one in place would corrupt
+ * the applier. They are therefore typed with this, and an in-place edit through any of them is a compile error. (A read-only view
+ * stays ASSIGNABLE to the mutable row types, because TypeScript does not compare `readonly` on object properties, so passing a view
+ * on to a function that takes the plain type still compiles; what the view forbids is the write.)
+ */
+export type DeepReadonly<T> =
+  T extends readonly (infer U)[] ? readonly DeepReadonly<U>[]
+  : T extends object ? { readonly [K in keyof T]: DeepReadonly<T[K]> }
+  : T;
+
 export interface DelegationRecoveryState {
   checkpoint: DelegationCheckpointV1;
   /** The shared health type owns this pair; read from it, never re-spelled. */

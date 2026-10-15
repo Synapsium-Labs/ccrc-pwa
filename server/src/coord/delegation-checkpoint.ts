@@ -50,6 +50,7 @@ import {
   restoreOrAllocateActivityId,
   sortedProjectionRows,
   WAVE3_LEASE_SOURCE_KINDS,
+  type DeepReadonly,
   type DelegationActivityRow,
   type DelegationAttemptRow,
   type DelegationBucketCursor,
@@ -1269,15 +1270,16 @@ export interface DelegationDurableBatch {
 }
 
 export interface DelegationApplyOutcome {
-  /** The state AFTER the checkpoint replacement. Nothing in it escapes before then (O1). */
-  state: DelegationRecoveryState;
-  appended: readonly DelegationJournalRecordV1[];
-  skipped: DelegationAppendPlan['skipped'];
+  /** The state AFTER the checkpoint replacement. Nothing in it escapes before then (O1). READ-ONLY (R27): these ARE the applier's live
+   *  rows, so a caller that edited one in place would corrupt the applier. */
+  state: DeepReadonly<DelegationRecoveryState>;
+  appended: readonly DeepReadonly<DelegationJournalRecordV1>[];
+  skipped: DeepReadonly<DelegationAppendPlan['skipped']>;
   /** Activities this application opened. Exposed only once the checkpoint holding their mapping is durable. */
-  openedActivities: readonly DelegationActivityRow[];
+  openedActivities: readonly DeepReadonly<DelegationActivityRow>[];
   /** False when nothing changed and nothing was written. */
   durable: boolean;
-  projection: { status: 'projected' | 'unprojected' | 'failed'; error?: string };
+  projection: DeepReadonly<{ status: 'projected' | 'unprojected' | 'failed'; error?: string }>;
 }
 
 export type DelegationLeaseOutcome =
@@ -1292,7 +1294,7 @@ export type DelegationMetaOutcome =
 
 /** A change only the checkpoint may make: intent, attempts, positive meta, interval upkeep. It may not move the applied position,
  *  remove a session, or add or alter a lease or a lease's lineage (only the journal creates leases). */
-export type DelegationCheckpointChange = (checkpoint: DelegationCheckpointV1) => DelegationCheckpointV1;
+export type DelegationCheckpointChange = (checkpoint: DelegationCheckpointV1) => DeepReadonly<DelegationCheckpointV1>;
 
 const nowInstant = (ms: number): string => formatDelegationInstant(ms);
 
@@ -1342,7 +1344,7 @@ export class DelegationDurability {
   }
 
   /** The last DURABLE state (or the best decoded one while `reconstructing`). */
-  state(): DelegationRecoveryState { return this.current; }
+  state(): DeepReadonly<DelegationRecoveryState> { return this.current; }
   failure(): DelegationDurabilityFailure | null { return this.failureNow; }
   /** True only while the state is `ready` and nothing has failed (O2): never during reconstruction, never after a failure. */
   pruningEnabled(): boolean { return this.current.phase === 'ready' && this.failureNow === null; }
