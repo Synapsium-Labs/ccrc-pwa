@@ -14,6 +14,7 @@ documents and releases it.
 ## Waves
 
 The spec (§7.7) orders them W1 -> W2 -> W3 -> W5 -> W6 -> W7, with W1 -> W4 -> W5 in parallel.
+Since 2026-10-15 (operator), W5 runs as part 1, then W5h and Share in parallel, then Export, then W5b (RD23).
 
 | # | scope | PRs | state |
 |---|---|---|---|
@@ -21,13 +22,37 @@ The spec (§7.7) orders them W1 -> W2 -> W3 -> W5 -> W6 -> W7, with W1 -> W4 -> 
 | 2 | grants and adapter: agent grants, `DOCS_CAP` and builders, runner budgets, `server/src/docs/{policy,ports,ccdsource}.ts`, the docs ring guard | #319 | **merged** 2026-10-09 (`5a6e5d3d7`). Run 315: review 317, then three fix rounds (two defects, then the one-reader scan), a merge of `main` after ccrc-history B1 landed, and closure review 343. Run 315 closed done |
 | 3 | routes: `server/src/docs/{routes,hooks,lane,cache}.ts`, registration, dark rollout, R1/R2 | #339 | **merged** 2026-10-09 (`f4d75a741`). Run 342: review 361, one fix round, scoped re-review 364 clean. After the merge, the operator runs the dark rollout, fleet first, then R2 and R1 (§7.8). Both gate W5's merge |
 | 4 | PWA foundation: markdown extraction, `RenderBoundary`, chat hardening (U3), `docs-sw` | #381 | **merged** 2026-10-13 (`baba5c1bc`). Run 367: review 408 (12 findings, one critical: the built worker chunk could not load in a browser worker), one fix round, scoped re-review 412 (8 minor, carried to W5). Nine deviations, 4768 to 4776; 4777 to 4783 unspent. Run 367 closed done after W5's run opened |
-| 5 | Docs screen, plus Share and Export (see Decisions, 2026-10-06); plain, plus `<br>` as a line break in the docs profile (2026-10-12). Split into two runs (operator, 2026-10-13) | — | **part 1 (the Docs screen): plan written**, run 413 (planned, block 4917 to 4932). **Part 2 (Share and Export):** planned after part 1's review, dispatched after part 1 merges |
+| 5 | Docs screen, plus Share and Export (see Decisions, 2026-10-06); plain, plus `<br>` as a line break in the docs profile (2026-10-12). Split into two runs (operator, 2026-10-13). Part 2 splits again, into Share and Export (operator, 2026-10-15) | #402 (part 1) | **part 1 (the Docs screen):** run 413 (block 4917 to 4932), PR #402, not yet merged. It ships with its current bounds and carries the crafted-input freeze (operator, 2026-10-15). **Part 2, Share:** planned after part 1's review, dispatched after part 1 merges, in parallel with W5h. **Part 2, Export:** dispatched after W5h merges |
+| 5h | highlighting off the main thread: a separate highlight worker for chat, Docs pages, text leaves and Export (see Decisions, 2026-10-15). Then, in a separate commit, part 1's per-grammar caps and its scan and markdown page budgets retire | — | after W5 part 1 merges, in parallel with Share and before Export. Its spec amendment goes first |
 | 5b | parity, server half: sections `vision` and `promise`, per-doc history (`docs-log`), page key `at=<sha>` (rich-docs spec 2026-10-12) | — | after W5 (operator, 2026-10-13) |
 | 6 | mockups | — | after W5 |
 | 7 | docs and release | — | after W6 |
-| 8 | the reader frame: the shared library `docserver` mounted in a sandboxed frame with a checked bridge, the plain pipeline as fallback (proposed, rich-docs spec 2026-10-12) | — | proposed; after W5b, W6, W7 and library v1 |
+| 8 | the reader frame: the shared library `docserver` mounted in a sandboxed frame with a checked bridge, the plain pipeline as fallback (proposed, rich-docs spec 2026-10-12). It inherits W5h's highlight worker and rules on the colouring divergences W5h records (2026-10-15) | — | proposed; after W5b, W6, W7 and library v1 |
 
 ## Decisions & deviations
+- **2026-10-15: highlighting moves off the main thread in a wave of its own, W5h, and W5 part 2 splits (operator).** Five rulings. Each says what was decided, why, and what it costs if it is wrong.
+  - **(1) Part 1 ships with its current bounds.**
+    - What: W5 part 1 (#402) merges with the word, line and whitespace bounds, the per-grammar block caps for typescript/javascript and rust, the scan and markdown page budgets, and the xml subLanguage strip. It carries the crafted-input freeze: a crafted code block that passes those bounds can still hold the main thread while it is coloured. Part 1's own residual note puts a crafted page's worst case at about 3.4 s. Then a dedicated wave, W5h, moves highlighting off the main thread.
+    - Why: the bounds are tuned shape by shape, and four reviews found shapes that passed them. More tuning would not close the class. Taking `highlight.js` off the main thread does.
+    - Cost if wrong: until W5h lands, a crafted document or chat message can freeze the console for seconds while it renders.
+  - **(2) W5h is the design the review recommended, as recommended.**
+    - What: a separate highlight worker, with two singletons (`docsHighlighter` and `chatHighlighter`) in a second worker chunk. One block per job, each with its own deadline; an overrun terminates the worker and leaves only that block plain. A content-keyed highlight store per page, text leaf or chat message, which `CodeBlock` reads. A plain first frame on every code block, chat included. No main-thread fallback: with no Worker, code is plain. Whole-block colouring stays the policy, and a line-by-line retry under the library's C24 rule runs only for a block that timed out or hit the HTML cap. `highlight.js` leaves the main bundle. The one `dangerouslySetInnerHTML` stays in `lib/markdown.tsx`'s code component, behind a strict linear main-thread check of the worker's HTML. Export reads the store by peek only, waits (bounded by the page ceilings), and says in its provenance when colouring was partial or dropped.
+    - Also every graft the review listed: the worker path lands with part 1's bounds still in force, and the old bounds go in a later commit; three requests to the library programme ((a) a public `./highlight` export, (b) a `highlight: false` render option, (c) the stock xml `<script>`/`<style>` cost under C24); a scan that Export's import closure holds neither the highlight worker nor `highlight.js`; a private `highlight.js` instance in the worker, pinned to call no `addPlugin`, `configure` or `debugMode`; a content cache inside the worker; a ready handshake, so a worker's boot never counts against the first block's deadline; a detach abort for the highlighter only, with the parse runner's behaviour pinned unchanged; and per-page ceilings on worker time and timeout count.
+    - Why: of the three designs reviewed, only this one closes the freeze class by construction, because `highlight.js` is not in the main thread's import closure at all. A highlight overrun never kills a parse or turns a page plain. Whole-block colouring keeps today's colouring and the chat goldens byte for byte. C24 as the main policy would have lost colouring across lines on 59% of real fences and left 672 fences plain instead of 3.
+    - Cost if wrong: a plain first frame on every code block, colouring that depends on the device and its load, a worker respawn after each overrun, no colouring at all where there is no Worker, and a wait before Export.
+  - **(3) Part 1's caps and page budgets retire later, in a separate commit.**
+    - What: once the worker path is green and a phone measurement shows the real corpus (21 651 blocks) inside the block deadline, part 1's per-grammar caps and its scan and markdown page budgets are deleted in a commit of their own, with their mutation rows re-pointed. The xml strip, the 64 KiB block cap (`MD_HIGHLIGHT_BLOCK_MAX_CHARS`) and the 512 KiB page cap (`DOCS_HIGHLIGHT_PAGE_MAX_CHARS`) stay, re-argued as bounds on the input that crosses the worker boundary.
+    - Why: once a deadline bounds the time off the main thread, the caps protect nothing, and they leave real code uncoloured. Deleting them only after the new path is green and measured means a fault in that path never leaves code unbounded.
+    - Cost if wrong: retired too early, a fault in the worker path has no fallback bound; kept too long, real code stays uncoloured for no gain.
+  - **(4) The deadline and ceiling values are measured on the operator's phone.**
+    - What: the block deadline, the boot budget, the page ceilings and the HTML caps are measured through a measurement page behind the session gate, which the operator opens once. The design's figures (750 ms per block, 3 s of worker time and 2 timeouts per page, an HTML cap of about 4 times the input) are where measurement starts, not values.
+    - Why: every bound so far was measured on desktop or server CPUs, and the reader is a phone.
+    - Cost if wrong: a deadline set too low leaves ordinary code plain on the phone; set too high, a hostile page holds the highlight worker longer, though never the main thread.
+  - **(5) W5 part 2 splits.**
+    - What: Share runs in parallel with W5h, and only Export waits for W5h. The order is part 1, then W5h and Share in parallel, then Export, then W5b (RD23).
+    - Why: Share sends a GitHub permalink and renders no body, so it never touches highlighting. Export renders the page's code, so it must read W5h's store rather than call `highlight.js` again on the main thread.
+    - Cost if wrong: an Export built before W5h would bring the freeze back on the Export tap. Where Share and W5h touch the same files, the second to merge takes `main` and re-measures.
+  - **Where it is written.** W5h's amendment is written in place in the 2026-10-01 spec. The rich-docs spec cross-refers to it in A6, A22 and the W8 row, records the three divergences W8 must rule on (colouring policy, `highlight.js` 11.11.1 against the library's 11.12.0, and the grammar sets), and lists requests (a) to (c). No deviation number is written yet: W5h's departures are issued by the allocator.
 - **2026-10-13: W5 is split, and three more rulings (operator).**
   - W5 runs as two sequential runs, each with its own plan, PR and review:
     - Part 1 is the Docs screen (14 tasks, run 413). It merges and rolls out on the dev channel with no Share or Export.
@@ -231,7 +256,21 @@ The spec (§7.7) orders them W1 -> W2 -> W3 -> W5 -> W6 -> W7, with W1 -> W4 -> 
   - N1's docstring nits.
 - **U5:** the private vulnerability report is not filed yet. The spec's one-line mention is public since #301.
 
-## Next-wave brief (W5 part 1), for run 413
+## Next-wave brief (W5h and Share), after W5 part 1 merges
+
+Part 1 (run 413, #402) is still in flight, and its brief below stands until it merges. Then two runs dispatch in parallel (operator, 2026-10-15). Export follows W5h.
+
+- **W5h, highlighting off the main thread.**
+  - **Spec first:** the amendment to the 2026-10-01 spec, with the rich-docs spec's cross-references, merges before the plan is dispatched.
+  - **Plan:** written from the approved design, about 18 tasks: the pure grammar modules; a generic runner with a ready handshake and a detach abort; the highlight worker; the two singletons and the second chunk; the store; `CodeBlock` with the HTML check; the Docs and text-leaf wiring; chat; the scans; the hand-off to Export; the phone measurements; the separate retirement commit; the library asks.
+  - **Measurement:** the deadline and ceiling values come from a measurement page behind the session gate, which the operator opens once on the phone. The retirement commit waits for that measurement and for a green worker path.
+  - **Deviation block:** issued at run-open.
+- **W5 part 2, Share.** Its plan takes the Share half of the 2026-10-13 Share/Export amendment. It renders no body and does not touch highlighting.
+- **Then W5 part 2, Export,** after W5h merges. It reads W5h's highlight store by peek only, waits for it to settle within the page ceilings, and says in its provenance when colouring was partial or dropped.
+- **Claims:** W5h and Share are checked against each other at dispatch. The second to merge takes `main` and re-measures.
+- **Branch discipline:** commit on the workspace's own branch, never a separate feature branch.
+
+## W5 part 1's brief, for run 413 (dispatched)
 
 - **Plan:** `docs/superpowers/plans/2026-10-13-native-docs-reader-w5-part1-docs-screen.md`, Tasks 1-14. Task 13 is the held-out whole-branch review. Task 14 pushes and opens the one PR.
 - **Base:** `main` at dispatch. The plan was written at `a59685566`, so any drift in its files is replayed and named in the brief.

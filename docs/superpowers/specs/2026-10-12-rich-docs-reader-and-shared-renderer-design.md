@@ -14,6 +14,7 @@ What changes in ccrc:
 - **W4 is unchanged.** W5 stays plain, plus a real `<br>`.
 - **A new wave, W5b,** touches ccd, the server and the PWA. It adds the `vision` and `promise` sections, a read-only per-doc history verb, and a commit key `at=<sha>` in page URLs (ruled R-d).
 - **A new wave, W8,** mounts the library. The library's `render()` runs in W4's parse worker, which has a time bound. Its layout runs in a sandboxed frame. The frame has no network and talks to ccrc over one port that checks every message. If the frame fails, the W4/W5 plain pipeline draws the doc instead.
+- **A new wave, W5h,** comes before W8 (amended 2026-10-15; W5h). It moves ccrc's own code colouring off the main thread, into a separate highlight worker. That worker serves chat, the plain fallback, text leaves and Export on the plain tree, and W8 inherits it. On the reader path, the library's `render()` keeps its own colouring rule, C24. §7 (A6, A22) and §8 (the W8 row) say what W8 must rule on.
 
 Please check:
 - the items under "Waiting on you" (none since 2026-10-13);
@@ -74,6 +75,8 @@ There is no Docs UI on `main` yet. The PWA has `react-markdown`, `remark-gfm` an
 | External-link sheet | A sheet in ccrc's chrome, outside the frame, that names a link's host and opens it only on your tap |
 | Phone engine | The browser engine on the phone you read on. No lab has run on it yet. |
 | Standalone docs server | Your tailnet-only preview server, which this work retires for you |
+| Highlight worker | W5h's worker that colours ccrc's code blocks off the main thread: two singletons, `docsHighlighter` and `chatHighlighter`, in a second worker chunk, one block per job under its own deadline (amended 2026-10-15; W5h) |
+| C24 | The library's colouring rule: a fence of at most 256 characters is coloured whole and a longer one line by line; a fence with any line over 256 characters stays plain; at most 256 Ki characters are coloured per document (amended 2026-10-15; W5h) |
 
 ## 2. The three layers
 
@@ -207,7 +210,7 @@ The library uses CommonMark plus GFM on markdown-it, with raw HTML off. One allo
 | Heading ids | The standalone server's slug, pinned by the corpus, so existing `#fragment` links keep working (judgement). The library never looks up its own elements by an id that a slug or an anchor could produce. |
 | Line attributes | `data-line="a-b"` on every block. The changes view and reading position depend on it. |
 | Links | markdown-it's link check: `javascript:`, `vbscript:` and `data:text/html` stay text. In ccrc the parent checks every link again (§4.4). |
-| Highlighting | highlight.js replaces Pygments. The CSS is remapped to `hljs-*` classes. |
+| Highlighting | highlight.js replaces Pygments. The CSS is remapped to `hljs-*` classes. In ccrc this rule colours the reader path only. ccrc's own components colour code in W5h's highlight worker (A22) (amended 2026-10-15; W5h). |
 | Mermaid configuration | `securityLevel: 'strict'`. `maxTextSize` and `maxEdges` are pinned in the defaults. `secure` is extended with `themeCSS`, `themeVariables`, `fontFamily` and every other style-bearing key, so a diagram's init directive cannot inject CSS. |
 
 ### 3.5 The conformance corpus
@@ -395,7 +398,7 @@ sequenceDiagram
 - **The Mermaid gate (Agreed).** Before inlining Mermaid, the parent reads the worker's counts. A doc gets Mermaid only with at most 24 fences, at most 16 KiB per fence and at most 128 KiB in all. A fence over the per-fence cap shows as its source with a note. A doc over the count or total cap renders with every figure as source. The library's `maxTextSize` and `maxEdges` also bound each diagram (§3.4). W8 re-measures these numbers against the committed specs.
 - **Budget (Agreed).** The same formula as `DOCS_PARSE_BUDGET_MS` (base §4.9), plus a Mermaid allowance that W8 measures on your phone (E17).
 - **Contingency `reader-mermaid-on-tap`.** If E17 shows the console stops answering, this lands as a W8 fix before W8 merges. Each figure shows its source with a Render button. Mermaid runs only on that tap, one figure at a time. It mirrors base `mockup-scripts-confirm`.
-- **The fallback** is W4/W5's `DocMarkdown` on W4's parse worker, docs profile, with `<br>` as a line break. W4's foundation therefore stays load-bearing for docs as well as chat.
+- **The fallback** is W4/W5's `DocMarkdown` on W4's parse worker, docs profile, with `<br>` as a line break. W4's foundation therefore stays load-bearing for docs as well as chat. Its code blocks are coloured by W5h's highlight worker, not by `render()`, so the fallback and the reader can colour the same fence differently (A22) (amended 2026-10-15; W5h).
 
 ### 4.7 What ccrc imports, and who owns what
 
@@ -518,12 +521,12 @@ One table holds every rule this spec changes. New mutation rows are numbered M8.
 | # | Base rule | Change | Why | Rows | Status |
 |---|---|---|---|---|---|
 | A1 | §5.6.1 "No message channel in either direction" | It stays for `MockupFrame`. A new `ReaderFrame` and `docs/reader/bridge.ts` are the only holders of a port. | Parity needs write-back | M8.6 | Agreed |
-| A2a | M5.16 source scans (W6) | `postMessage(` and `.onmessage` are allowed in `lib/markdownWorker.ts` and `lib/markdownRunner.ts` only (W4 plan, refinement (w)). The base spec's M5.16 owns this carve-out: the Share/Export amendment, which rewrites M5.16, wrote it there, so M5.16 changes once. This row and M9.14 cross-refer to it (amended 2026-10-13, Share/Export). | W4's worker files would make M5.16 red the day W6 lands | M9.14 | Agreed |
-| A2b | M5.16 source scans (W8) | `<iframe` and `srcDoc` only in `MockupFrame.tsx`, `ReaderFrame.tsx` and `docs/export/buildExport.tsx`, the mockup export's wrapper. `default-src 'none'` only in `mockup/policy.ts`, `reader/policy.ts` (A5) and `docs/export/policy.ts`. Both keep the base M5.16's export allowances (amended 2026-10-13, Share/Export). In `pwa/src/docs`, `postMessage(`, `MessageChannel` and `.onmessage` only in `reader/bridge.ts`. Across all of `pwa/src`: no `addEventListener('message'`, no `window.onmessage`, and no `self.onmessage` outside `lib/markdownWorker.ts`. Library import specifiers are limited to §4.7's list. | The reader's port, and no second channel anywhere in the console | M8.10 | Agreed |
+| A2a | M5.16 source scans (W6) | `postMessage(` and `.onmessage` are allowed in `lib/markdownWorker.ts` and `lib/markdownRunner.ts` only (W4 plan, refinement (w)). The base spec's M5.16 owns this carve-out: the Share/Export amendment, which rewrites M5.16, wrote it there, so M5.16 changes once. This row and M9.14 cross-refer to it (amended 2026-10-13, Share/Export). W5h's amendment of M5.16 admits a third file, the highlight worker `lib/markdownHighlightWorker.ts`, with its own planted control (amended 2026-10-15; W5h). | W4's worker files would make M5.16 red the day W6 lands | M9.14 | Agreed |
+| A2b | M5.16 source scans (W8) | `<iframe` and `srcDoc` only in `MockupFrame.tsx`, `ReaderFrame.tsx` and `docs/export/buildExport.tsx`, the mockup export's wrapper. `default-src 'none'` only in `mockup/policy.ts`, `reader/policy.ts` (A5) and `docs/export/policy.ts`. Both keep the base M5.16's export allowances (amended 2026-10-13, Share/Export). In `pwa/src/docs`, `postMessage(`, `MessageChannel` and `.onmessage` only in `reader/bridge.ts`. Across all of `pwa/src`: no `addEventListener('message'`, no `window.onmessage`, and no `self.onmessage` outside `lib/markdownWorker.ts` and W5h's `lib/markdownHighlightWorker.ts` (amended 2026-10-15; W5h). Library import specifiers are limited to §4.7's list. | The reader's port, and no second channel anywhere in the console | M8.10 | Agreed |
 | A3 | §5.6.1 shell meta, M5.19 | The meta is unchanged: exactly `frame-src 'none'`. New rule: never add `script-src`, `default-src`, `style-src` or `font-src` to it without re-measuring. | The frame inherits and intersects the shell's policy | M8.13, M8.B6 | Agreed |
 | A4 | §5.6.5 scripts off, M5.13, M5.14 | These do not apply to the reader. The reader's tokens are exactly `['allow-scripts']`. | The library is first-party code | M8.1 | Agreed |
 | A5 | §5.6.4 `MOCKUP_CSP` | A separate `READER_CSP` with hashes only. `default-src 'none'` may appear in `reader/policy.ts` too. | A mockup widening must never reach the reader | M8.2 | Agreed |
-| A6 | §4.10 "the worker is the only time bound" | It stays true for parsing. On the reader path, the library's `render()` runs in W4's `docsRunner` as a new job kind, under `DOCS_PARSE_BUDGET_MS`, with terminate and respawn. The `ready` watchdog bounds only `enhance()` and Mermaid, and only when the frame yields; E17 measures whether it can fire on WebKit. W4's worker purity scan gains the one specifier `@synapsium-labs/docserver/render`. Chat is unchanged. | The parent cannot terminate a hung frame the way it terminates a worker | M8.11, M8.17, M8.21 | Agreed |
+| A6 | §4.10 "the worker is the only time bound" | It stays true for parsing. On the reader path, the library's `render()` runs in W4's `docsRunner` as a new job kind, under `DOCS_PARSE_BUDGET_MS`, with terminate and respawn. The `ready` watchdog bounds only `enhance()` and Mermaid, and only when the frame yields; E17 measures whether it can fire on WebKit. W4's worker purity scan gains the one specifier `@synapsium-labs/docserver/render`. Chat is unchanged. Chat is unchanged by W8 because its code colouring is already off the main thread: W5h's highlight worker colours code for chat, the plain fallback, text leaves and Export on the plain tree. It is a separate runner in a separate chunk, so a `render()` job and a highlight job never share a queue or a terminate, and W5h's highlight-worker purity row stays as W5h wrote it. On the reader path, `render()` keeps its own colouring under C24, inside `DOCS_PARSE_BUDGET_MS` (amended 2026-10-15; W5h). | The parent cannot terminate a hung frame the way it terminates a worker | M8.11, M8.17, M8.21 | Agreed |
 | A7 | §4.11 images | Reader images go through §5.6.3's planner, pin rule and budgets, as `data:`. No per-image op. | One asset rule | M5.8-M5.12 apply | Agreed |
 | A8 | §5.4, §3.8 | One sentence: the reader frame never fetches, and receives strings only | Keeps provenance whole | M8.4, M8.B2 | Agreed |
 | A9 | §3.10 "No configuration change", §7.3 | Precache `woff2`. Mermaid's directory goes in `globIgnores`. | A bundled Mermaid would quadruple the precache | M8.14 | Agreed |
@@ -539,7 +542,7 @@ One table holds every rule this spec changes. New mutation rows are numbered M8.
 | A19 | §7.7 | Waves W5b and W8 and their dependencies (§8) | Sequencing | none | Agreed |
 | A20 | §0 `features` | The rich layout, history, changes since and the version view join what carries over from the old preview | R-b | none | Agreed |
 | A21 | §7.10 M7.9 (W4's row; W4 plan, refinement (v)) | The PWA name rule gains one exception. The exact specifier `@synapsium-labs/docserver` and its subpaths may appear as an import specifier in `pwa/src`, in `pwa/package.json` and `pwa/package-lock.json`, and in the `globIgnores` entry of `pwa/vite.config.ts`. Every other occurrence, in any case, stays red. The directory needle is unchanged. It lands in W8, which edits M7.9's block in `docs-parity.test.ts` in place: the one exception to that file's append-only header, recorded in W8's plan. | R-f: the word now names the library | M8.18 | Agreed |
-| A22 | §4.10 steps 2-5; §4.11's `detachUrls`, `DocLink` and `DocImage` contract and "no heading ids are generated"; §7.5 README "rendering" bullet | These apply to the plain fallback only. On the reader path, §3.4's rules (the inline and block HTML allowlists, heading ids, `data-line`) apply inside the opaque frame, whose walls are §5.1. The parent re-resolves every link through `navigate`. A `repo` answer maps to `githubBlobUrl`, as in §4.11. W8 amends the README's "rendering" bullet. | The reader renders allowlisted markup inside the frame | M8.7, M8.B1 | Agreed |
+| A22 | §4.10 steps 2-5; §4.11's `detachUrls`, `DocLink` and `DocImage` contract and "no heading ids are generated"; §7.5 README "rendering" bullet | These apply to the plain fallback only. On the reader path, §3.4's rules (the inline and block HTML allowlists, heading ids, `data-line`) apply inside the opaque frame, whose walls are §5.1. The parent re-resolves every link through `navigate`. A `repo` answer maps to `githubBlobUrl`, as in §4.11. W8 amends the README's "rendering" bullet. Code colouring splits the same way (amended 2026-10-15; W5h). On the plain fallback, and in chat, text leaves and Export on the plain tree, it comes from W5h's highlight worker: whole-block colouring under a per-block deadline, a line-by-line retry only for a block that timed out or hit the HTML cap, a plain first frame, and the worker's HTML checked by a strict linear validator on the main thread before the one `dangerouslySetInnerHTML` in `lib/markdown.tsx`. On the reader path it comes from `render()` under C24, inside the frame. The same fence can therefore colour differently on the two paths. W8 rules on that (§8, W8 row). | The reader renders allowlisted markup inside the frame | M8.7, M8.B1 | Agreed |
 | A23 | §7.1 "No wave needs `--server-first`" | W5b is rolled `--server-first`. Every other wave stays fleet first. | With W5b after W5 (ruled 2026-10-13, RD23), G1's new slugs would reach W5's PWA before it knows them. If you rule W5b before W5, the order stays, and the reason narrows to W3's server, whose `DOC_SECTIONS` would otherwise meet two unknown slugs (§8). | M9.3 | Agreed |
 
 ### 7.1 Mutation rows: the reader frame and packaging (W8)
@@ -599,7 +602,7 @@ One table holds every rule this spec changes. New mutation rows are numbered M8.
 | M9.11 | `at=` key | Round-trips with 40 or 64 hex only. The other pin keys still give `commit-in-page`. A page at `at=` reads a committed pin at that commit. | Accept `commit=`; accept short hex |
 | M9.12 | Log budget | Runner budget > helper deadline + 2 s + 5 s (`docs-budget.test.ts`) | Shrink the runner row |
 | M9.13 | Deep history | A doc whose last change is older than the newest 100 commits in its section still lists its history | Put `-n 100` back in git's argv |
-| M9.14 | Worker carve-out (A2a, W6) | = base M5.16's worker carve-out, which owns the clause and its planted controls (amended 2026-10-13, Share/Export): `postMessage(` and `.onmessage` pass in `lib/markdownWorker.ts` and `lib/markdownRunner.ts`, and a `postMessage(` planted in any other `lib/markdown*` file, or in `pwa/src/docs`, is red. | = base M5.16 |
+| M9.14 | Worker carve-out (A2a, W6) | = base M5.16's worker carve-out, which owns the clause and its planted controls (amended 2026-10-13, Share/Export): `postMessage(` and `.onmessage` pass in `lib/markdownWorker.ts` and `lib/markdownRunner.ts`, and a `postMessage(` planted in any other `lib/markdown*` file, or in `pwa/src/docs`, is red. From W5h, they also pass in `lib/markdownHighlightWorker.ts`, which base M5.16 admits with its own planted control (amended 2026-10-15; W5h). | = base M5.16 |
 
 ## 8. Waves and sequencing
 
@@ -610,11 +613,15 @@ flowchart LR
   subgraph NDR["ccrc: native-docs-reader"]
     W1["W1 ccd reads<br/>merged"] --> W2["W2 grants<br/>merged"] --> W3["W3 routes<br/>merged"]
     W1 --> W4["W4 PWA foundation<br/>dispatched, as planned"]
-    W3 --> W5["W5 Docs screen<br/>plain plus br"]
+    W3 --> W5["W5 part 1: Docs screen<br/>plain plus br"]
     W4 --> W5
+    W5 --> W5h["W5h highlight worker<br/>off the main thread"]
+    W5 --> W5s["W5 part 2: Share"]
+    W5h --> W5e["W5 part 2: Export"]
+    W5s --> W5e
     W3 --> W5b["W5b parity<br/>ccd, server, PWA"]
-    W5 -->|"after W5, ruled<br/>(RD23)"| W5b
-    W5 --> W6["W6 mockups<br/>plus worker carve-out"] --> W7["W7 docs and release"]
+    W5e -->|"after W5, ruled<br/>(RD23)"| W5b
+    W5e --> W6["W6 mockups<br/>plus worker carve-out"] --> W7["W7 docs and release"]
     W5b --> W8["W8 reader frame"]
     W6 --> W8
     W7 --> W8
@@ -625,16 +632,17 @@ flowchart LR
   V1 --> W8
   W8 --> RET["You retire the<br/>standalone docs server"]
 ```
-*Figure 3. Read left to right. W8 needs W5b (history and the version key), W6 (the asset planner), W7 (W8 amends the README prose that W7 writes) and library v1. The edge from W5 to W5b is ruled: W5b follows W5 (RD23) (amended 2026-10-13, Share/Export). Retirement follows W8.*
+*Figure 3. Read left to right. W8 needs W5b (history and the version key), W6 (the asset planner), W7 (W8 amends the README prose that W7 writes) and library v1. The edge from W5 to W5b is ruled: W5b follows W5 (RD23) (amended 2026-10-13, Share/Export). Retirement follows W8. W5 runs as part 1, then W5h and Share in parallel, then Export, which waits for W5h; W5b follows Export (amended 2026-10-15; W5h).*
 
 | Wave | Ships | Depends on | Rows | Status |
 |---|---|---|---|---|
 | W4 | As planned: extraction, `RenderBoundary`, chat hardening, `docs-sw` | W1 | Its own. Later waves amend three of them: A16 (W5), A6 and A21 (W8). | Kept |
-| W5 | The Docs screen, plain, plus the docs-profile `<br>` (A16), plus Share and Export as already decided. It amends W4's profile-equality case. | W3, W4 | Base rows plus M9.1 | Amended |
+| W5 | The Docs screen, plain, plus the docs-profile `<br>` (A16), plus Share and Export as already decided. It amends W4's profile-equality case. It runs as part 1 (the Docs screen), then Share, then Export, which waits for W5h (amended 2026-10-15; W5h). | W3, W4; Export also W5h (amended 2026-10-15; W5h) | Base rows plus M9.1 | Amended |
+| W5h | Code colouring off the main thread: a separate highlight worker (`docsHighlighter` and `chatHighlighter`, a second worker chunk); one block per job under its own deadline, where an overrun terminates the worker and leaves only that block plain; a content-keyed highlight store per page, text leaf or chat message, read by `CodeBlock`; a plain first frame on every code block, chat included; no main-thread fallback; `highlight.js` absent from the main bundle; the one `dangerouslySetInnerHTML` kept in `lib/markdown.tsx` behind a strict linear check of the worker's HTML. Once the worker path is green and a phone measurement shows the real corpus inside the block deadline, W5 part 1's per-grammar caps and its scan and markdown page budgets retire in a separate commit. W8 inherits the worker unchanged. | W5 part 1 | Base rows, as W5h amends them | Ruled 2026-10-15 (amended 2026-10-15; W5h) |
 | W5b | G1, G4 and G6, on ccd, the server and the PWA. PWA files (with W5b after W5): `shared/docs.ts` (`DOC_SECTIONS`, the `at` page key, `parseDocsPage`, `docsPageUrl`, `docsApi.history`), `docs/docsTree.ts` (`SECTION_ORDER`), the index and project section counts, `DocsScreen` and `useDocsVisit` opening the `at=` commit, and `api.docs.history`. `ccd/ccd` is restamped. The rollout is `--server-first` (A23), and the agent restarts for the grant. | W3 and W5 (RD23, ruled (amended 2026-10-13, Share/Export)) | M9.2-M9.9, M9.11-M9.13 | Agreed; placement Ruled |
 | W6 | Mockups, plus the M5.16 worker carve-out (A2a) | W5 | Base rows plus M9.14 | Amended |
 | W7 | Docs and release, unchanged | W6 | Base rows | Kept |
-| W8 | Reader frame, bridge, `READER_CSP`, library pin, the `docsRunner` render job and its purity-scan specifier (A6), asset inlining, the Mermaid gate, fallback, G5, G7, the version menu, labs E14-E18, A21's change to M7.9, and README prose for the reader (A22). It owns the decision on what Export means on the reader path: keep Export on the plain render, with the provenance saying so, or the no-JS static variant under Later (base §4.13). Its reader copy op goes through `copyText` in `docs/share.ts`, the one clipboard writer under `pwa/src/docs` (base M4.SH7), so M8.19's check wraps that writer (amended 2026-10-13, Share/Export) | W5b, W6, W7, library v1 | M8.1-M8.22, M8.B1-B8, M9.10 | Agreed |
+| W8 | Reader frame, bridge, `READER_CSP`, library pin, the `docsRunner` render job and its purity-scan specifier (A6), asset inlining, the Mermaid gate, fallback, G5, G7, the version menu, labs E14-E18, A21's change to M7.9, and README prose for the reader (A22). It owns the decision on what Export means on the reader path: keep Export on the plain render, with the provenance saying so, or the no-JS static variant under Later (base §4.13). Its reader copy op goes through `copyText` in `docs/share.ts`, the one clipboard writer under `pwa/src/docs` (base M4.SH7), so M8.19's check wraps that writer (amended 2026-10-13, Share/Export). It inherits W5h's highlight worker unchanged: chat, the plain fallback, text leaves and Export on the plain tree keep colouring code there, and `render()` runs on `docsRunner` beside it, keeping C24. It rules on three divergences W5h leaves: (1) colouring, because the fallback colours whole blocks under a deadline and the reader colours line by line under C24, so one fence can colour two ways; (2) the `highlight.js` version, because ccrc's lock has 11.11.1, on which every W5 bound was measured, and the library pins 11.12.0 exactly, so two copies ship, one per worker chunk; (3) the grammar sets, because ccrc's 15 grammars include php, which the library lacks, and the library has ini/toml, java, shell and plaintext. It takes the library's answers to requests (a)-(c) below (amended 2026-10-15; W5h) | W5b, W6, W7, library v1 | M8.1-M8.22, M8.B1-B8, M9.10 | Agreed |
 | L1 | Scaffold, the corpus generated from today's Python renderer (golden, hostile, hostile Mermaid and clobbering cases), the markdown-it rules | none | Library CI | Agreed |
 | L2 | The layout made embeddable: options, namespaced keys, scrubbed defaults, footnote styles; a self-hosted single-file Mermaid with elkjs checked, `secure` extended and `maxTextSize`/`maxEdges` pinned; fonts with the OFL | L1 | Library CI | Agreed |
 | L3 | `frameDocument`, the frame bootstrap and click guard as hashed assets, and `host` for other viewers; v1 published with provenance and a build attestation | L2 | Library CI | Agreed |
@@ -648,6 +656,14 @@ What stays unchanged:
 - W4 ships as planned, with the plan, scope and rows it was dispatched with. W5 and W8 later amend three of those rows: W4's profile-equality case (A16, W5), its worker purity scan (A6, W8) and M7.9's block (A21, W8). A2a removes the scan conflict that W6 would have met.
 - W5's R1/R2 merge gate.
 - Release order: fleet first, except W5b, which rolls `--server-first` (A23).
+
+**Requests to the library programme (amended 2026-10-15; W5h).** W5h files three asks with the library programme. None blocks W5h or W8, and v1 may carry them.
+
+| # | Request | Why ccrc needs it |
+|---|---|---|
+| (a) | A public `./highlight` subpath that carries C24 | The library exports no highlighter today. With one, ccrc's highlight worker can swap its engine for the library's as a one-file change behind the same block wire, if W8 rules that both paths should colour alike. M8.10's import list then gains the subpath. |
+| (b) | A `highlight?: boolean` option on `render()` | Today a reader page whose colouring runs past the budget gets the whole-page timeout outcome. With `highlight: false`, the reader path can fall back to formatted but uncoloured. |
+| (c) | The stock xml grammar's embedded `<script>` and `<style>` cost under C24, with a hostile corpus case | Measured on highlight.js 11.11.1, on a loaded 16-core server: about 6.7 s and 3.0 s per 256 KiB. The first is over the 6 s parse budget for a 256 KiB document, so one such fence would time out a whole reader page. The library's hostile corpus has no xml `<script>` case. ccrc strips xml's subLanguages for this reason, and keeps the strip. |
 
 Other viewers take pinned library versions on their own schedule.
 
@@ -700,7 +716,7 @@ flowchart TB
 
 ## 10. Decisions
 
-Rows marked Ruled restate the operator's rulings: R-a to R-g, and the ruling of 2026-10-13 for RD23 (amended 2026-10-13). Rows marked Agreed are the coordinator's and need your approval. Rows marked Waiting need your ruling.
+Rows marked Ruled restate the operator's rulings: R-a to R-g, and the ruling of 2026-10-13 for RD23 (amended 2026-10-13), and the rulings of 2026-10-15 for RD33 (amended 2026-10-15; W5h). Rows marked Agreed are the coordinator's and need your approval. Rows marked Waiting need your ruling.
 
 | # | Decision | Options considered | Chosen, and why | Status |
 |---|---|---|---|---|
@@ -736,6 +752,7 @@ Rows marked Ruled restate the operator's rulings: R-a to R-g, and the ruling of 
 | RD30 | Port binding | First load only; first load plus a nonce echoed in `ready` | The nonce, because the first-load rule rests on desktop Chromium labs only | Agreed |
 | RD31 | External links from the frame | Open on the frame's tap; a parent sheet | A parent sheet that names the host and supplies the tap | Agreed |
 | RD32 | The base spec's Share/Export amendment (2026-10-13) | Edit this spec in a later revision; edit it in the same change | In the same change, each edit marked (amended 2026-10-13, Share/Export): A2a, A2b, M8.10, M9.14, G9, the W8 row, and RD23 with its §8 wording | Agreed |
+| RD33 | Where ccrc's own code colouring runs, beside the reader | On the main thread, as W5 part 1 ships; in the parse worker; in a separate highlight worker | A separate highlight worker, W5h, which W8 inherits for chat, the plain fallback, text leaves and Export on the plain tree. `render()` keeps C24 on the reader path, and W8 rules on the divergence. Each edit is marked (amended 2026-10-15; W5h). | Ruled |
 
 ## Where things stand
 
@@ -764,6 +781,7 @@ Nothing listed here now. W5b's placement was ruled on 2026-10-13: after W5 (RD23
 - Print from the reader, which needs `allow-modals` (forbidden), and Ctrl/Cmd+K clashing with ccrc shortcuts. Both come back after W8's phone pass.
 - A no-JS static variant from `frameDocument`, for the Export action, once W8 lands.
 - Index page "newest five" cards (G10), as a presentation follow-up.
+- W8's ruling on the three colouring divergences W5h leaves (policy, `highlight.js` version, grammar set), and the library's answers to requests (a)-(c) (§8) (amended 2026-10-15; W5h).
 - Any earlier plan for another viewer to own the renderer is settled outside this repo: under R-a, that viewer pins the library like any other.
 
 ---
