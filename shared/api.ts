@@ -8573,6 +8573,42 @@ export const LEDGER_TITLE_MAX_BYTES = 200;
 export const PANE_HISTORY_LINES = 2000;
 
 /**
+ * THE SIZE THE DRAWER PINS A SESSION'S TMUX WINDOW TO, and the size ccd spawns
+ * one at. One number, because two copies of it are two different answers to
+ * "how wide is this pane" and every reader downstream believes whichever it
+ * met first.
+ *
+ * WHY IT IS PINNED AT ALL (spec §5.1, F1/F14). tmux REFLOWS stored lines when a
+ * window's width changes, and the reflow is destructive at this box's
+ * `history-limit`: measured on a private socket, `resize-window -x 43` on a
+ * 220-column pane holding 1853 stored lines took `history_size` to 9460, and at
+ * `history-limit 2000` the next output shed ~600 lines that never came back.
+ * So the drawer resizes the window to THIS before attaching and back to THIS on
+ * close, and a narrow client never moves it.
+ *
+ * WHAT A CLIENT DOES WITH IT is the other half, and it is the PWA's: a client
+ * smaller than the window is not a smaller window, it is a VIEWPORT INTO one,
+ * and tmux pans that viewport to follow the cursor — so a line's beginning
+ * scrolls off the left while the reader is typing. `TerminalDrawer` answers by
+ * shrinking its type, down to a floor, until its grid is at least this wide,
+ * and says so in its header when even the floor cannot get there.
+ *
+ * THIS IS TODAY'S ANSWER, NOT THE LAST ONE. The drawer program's wave 3 lets a
+ * phone-width drawer narrow the window deliberately, under a guard that only
+ * allows a width the pane's own history can absorb. When that lands the window
+ * stops being one constant and starts being a measurement, and every reader of
+ * this value becomes a reader of that measurement. In the PWA those readers
+ * are `TerminalDrawer`'s `fitToWindow` and the clip notice it raises.
+ *
+ * `ccd/ccd` spawns with the same pair and cannot import this file (bash), so it
+ * carries its own copy — the same shape `READER_MIN_COLS` already has. Holding
+ * the two equal is a separate, AGENT-FIRST change; this file is where the
+ * number is DECLARED, and `server/src/server.ts` no longer spells it.
+ */
+export const PINNED_WINDOW_COLS = 220;
+export const PINNED_WINDOW_ROWS = 50;
+
+/**
  * ONE MEASUREMENT OF A PANE, and its failures told apart.
  *
  * Read with a single `list-panes -t cc-<id> -F '#{pane_active} #{history_size}
@@ -8835,14 +8871,14 @@ export function isStampRead(v: unknown): v is StampRead {
   return typeof v === 'string' && (STAMP_READS as readonly string[]).includes(v);
 }
 
-/** A node's role (§6 `nodes.role`): the bash spine's `CCRC_ROLE` words. A
- *  token outside the list reads `null` on the wire. */
-export type NodeRole = 'server' | 'fleet' | 'both';
-export const NODE_ROLES = ['server', 'fleet', 'both'] as const satisfies readonly NodeRole[];
-/** Use THIS, never `NODE_ROLES.includes(x as NodeRole)` — `isRunState`'s rule. */
-export function isNodeRole(v: unknown): v is NodeRole {
-  return typeof v === 'string' && (NODE_ROLES as readonly string[]).includes(v);
-}
+/** A node's role (§6 `nodes.role`) and its guard live in the L0 sibling
+ *  node-role.ts, so server/src/config.ts imports the guard without loading this
+ *  ~10k-line file at runtime. Only the TYPE comes back here (D-3021: this file
+ *  imports nothing at runtime); NODE_ROLES and isNodeRole are imported from
+ *  node-role.ts itself. Eight lines, like the definition they replace, so line
+ *  citations into this file (the README's, the compaction card's) still hold. */
+import type { NodeRole } from './node-role.js';
+export type { NodeRole } from './node-role.js';
 
 /** A node's OS, from `~/.ccrc/ccrc-caps` line 1 (`os linux|darwin`, §8).
  *  `unknown` = no caps file, or one that failed validation. */

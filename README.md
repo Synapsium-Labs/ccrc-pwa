@@ -568,7 +568,7 @@ under "Attention, notifications and answering" below.
 summary line; it exits 1 when anything FAILs (a WARN does not), which is the exit code `ccrc install`
 ends with. A `server`-role box SKIPs the checks that measure per-account or per-session state — `wrappers`,
 `skills`, `accounts`, `pools`, `memory`, `routing`, `codex`, `graphify`, `graphify-path` (D-3111),
-`timeout`, `model-default`, and `jq_regex` (no session hook runs there).
+`timeout`, `model-default`, `transcripts`, and `jq_regex` (no session hook runs there).
 
 | checks | what they measure |
 |---|---|
@@ -585,6 +585,7 @@ ends with. A `server`-role box SKIPs the checks that measure per-account or per-
 | `wrappers`, `skills`, `accounts`, `credentials` | the roster against `~/.local/bin` (Claude Code's binary included); the ccrc skills in every home; declared credential files and provider env blocks (a Codex lane's may omit `ANTHROPIC_BASE_URL`, which its launcher exports, but may not name an endpoint other than its loopback shim); a token file for every account the health probe measures |
 | `codex` | for each `exec.kind: "codex"` lane: the four GPT-lane executables in `~/.local/bin` against the shipped tree; the isolated runtime (`ccgpt-runtime check`, which trusts the build's stamp and compares the installed LiteLLM patch with `patch-source`); the roster row and its ports; `exec.authDir` and its `auth.json`, for existence and mode only; `lane.json` against the roster row and the class registry; a `codex` class registry and its haiku-class probe model; the rendered LiteLLM config against the catalogue; the two tiers (half up, foreign, unmeasurable, down under a live session, or running and not proven to run the installed bytes); and its usage timer and `~/.cc-limits` row. Lane state left under `~/.ccrc/codex/` for an id no longer `codex` is a WARN |
 | `pools`, `memory`, `routing`, `models` | project pool tags; one memory store per project; lane routing; model-catalogue freshness |
+| `transcripts` | every registry row's uuid against its transcript, read by the one `continued-in` rule `ccd` and the server share: a WARN names the sessions reading a transcript Claude Code has superseded (a supervised one clears on its next supervise tick; a stopped or archived one is followed when it is next resumed) and, apart, a session whose marker names a successor never written (it clears at that job's first line, or at the first prompt the session answers on its own transcript; the row's wrapper is named, because `<wrapper> agents` lists only that account's jobs); rows it could not measure (at neither direct spelling, unreadable, or a registry row it cannot read) are counted apart inside the PASS, never claimed clean; a FAIL when `~/.cc-sessions` is not a readable, searchable directory |
 | `pool-sync`, `update-sync` | a fleet box's two pulled projections, present and in lease |
 | `graphify`, `graphify-path` | the pinned graph engine, its skill and the sweep's last census; `graphify` on `PATH` resolving to that engine |
 | `build`, `provenance`, `fleet` | the running server's build against the stamp; whether this install was verified (never a FAIL); in remote mode, whether the two boxes agree |
@@ -2754,7 +2755,10 @@ the composer sit the session's outstanding mail and its plan (the TUI's task lis
 sends and any modifier with Enter is a newline. `/` completes Claude Code's built-in commands and the skills this
 session can see. Up to four PNG, JPEG or WebP images attach by the picker, by paste or by drag — downscaled to
 2048 px on the long edge — and are staged under `~/.cc-clips/<id>/` on the box that runs the session, where they
-stay as the transcript's thumbnails. A send shows `sending` until the transcript carries it; one that fails keeps
+stay as the transcript's thumbnails. A send shows `sending` until the transcript carries it (a message the session
+takes mid-turn, and a slash command's own echo, count), and retires on its own after ten minutes when no echo ever
+reaches the screen: a command that echoes nothing, or an echo written while the screen was not connected and then
+pushed out of the fifty events a reconnect or a fork follow replays. One that fails keeps
 its text and offers **Retry** and **Discard**; one that finds half-typed text already in the pane's input box
 does not type over it, and offers **Replace draft**, **Append anyway** or **Cancel**.
 
@@ -4985,7 +4989,7 @@ things at that moment: it builds a SECOND card — the files this context was wo
 community and dependents read out of the same graph — and it MEASURES the compaction, writing one line to a
 per-session journal. Three arms of `ccd/session-hook.sh` do it, and **none of them opens a new output
 channel**: the card rides the one `additionalContext` envelope `SessionStart` already prints — the compact
-arm calls `_hook_emit_context "$CARD" "$CARD_COMPACT"` (`ccd/session-hook.sh:2900`), which appends the second
+arm calls `_hook_emit_context "$CARD" "$CARD_COMPACT"` (`ccd/session-hook.sh:3012`), which appends the second
 subject under its own `COMPACT_CARD_MAX_CHARS` ceiling (`:97`) before the single `jq -cn` print (`:103-105`) — and `PreCompact` and
 `PostCompact` print nothing at all. `PreCompact` decides whose transcript is compacting and publishes the
 working set, `SessionStart(compact)` serves the card once beside the graph card in that one envelope, and
@@ -5614,7 +5618,7 @@ and without hook state present.
 
 ### What a row's lifecycle reads off the registry
 
-Six registry fields, each written by a single choke point so a stamp is
+Seven registry fields, each written by a single choke point so a stamp is
 never left half-true:
 
 | Field | Shape | Written by |
@@ -5625,6 +5629,7 @@ never left half-true:
 | `$REG/<id>.spawn` | `<epoch> <rc>` | `_spawn`, on EVERY verdict (0/2/3/4/5/6), success included — the one channel from a spawn inside the supervisor unit to a `ccd start` polling from another process |
 | `$REG/<id>.started` | `1` | `_reg_claim` — the one writer; nothing clears it but a row's purge, so a failed revival classifies `orphan`, never `never-started` |
 | `$REG/<id>.substrate` | `<epoch> <reason> (client <v>; server <v>)` | `_substrate_mark`, first write wins (the onset is never rewritten); removed by `_substrate_clear` on the first tick whose tmux probe finds the pane live |
+| `$REG/<id>.bgwait` | `state=open job=<job> id=<uuid> since=<epoch> wrapper=<w> sup=<pid> supst=<start>`, then `state=closed … until=<epoch> end=over` | `_ci_held_wait`'s two ends (`_ci_bgwait_open`, `_ci_bgwait_close`): the supervisor of a row whose conversation a live background job holds. `sup` and `supst` name that supervisor (its pid, and its `/proc` start time where there is one). A record is a wait only while that supervisor still runs and the heartbeat is fresh: one left `open` by a stopped or killed supervisor is not a wait, and a supervisor restarted mid-wait takes it over, keeping `since`. It is not a lifecycle input: a waiting row reads `restarting` |
 
 A heartbeat inside **120 seconds** is fresh; the supervisor re-stamps every
 **30 seconds**, so a live loop never drifts stale under its own steady
@@ -5664,6 +5669,22 @@ tooltip. When every watched row (`running` or `restarting`) reports a fault,
 the fleet board says it once: *tmux unreachable on the fleet host — N sessions
 report it (`<reason>`); sessions are still running unattached. Remedy: restart
 tmux or reboot.* Nothing restarts tmux on your behalf.
+
+**When a background job holds the conversation.** Every resume (a restart, a revival, a restore, a swap's carry)
+first follows the transcript's `continued-in` chain to the newest id that has a conversation written in it, so a
+session forked with the left arrow is resumed where it went on, never at the point it forked from. A left-arrow fork
+moves the conversation into a background job, and once its agents view is closed the pane's own process exits; the
+job's worker stays up, idle, for as long as nobody stops it. Claude Code refuses to resume a conversation a live job
+holds, and resuming the pre-fork id would start a second, divergent copy, so the supervisor does neither: it waits,
+keeps its heartbeat (the row reads `restarting`), and records the wait in `$REG/<id>.bgwait` and in swap.log
+(`bgwait` on entry, `bgwait-end` on exit). `ccd start` and `ccd ensure` say so instead of timing out, and
+`ccd ws-restore` of such a row leaves it supervised, so the wait takes over. `<wrapper> attach <job>` opens the
+conversation where it runs; `<wrapper> stop <job>` ends the job, and the row resumes it in the pane on the next
+tick. A swap of such a row is refused before any teardown, and `--force` does not move it (it would be two writers
+across accounts). The fleet board does not say why yet (the row reads `restarting`); the row's `.bgwait` and
+swap.log do. `ccrc doctor`'s `transcripts` check names a row whose marker points at a successor that was never
+written apart from a superseded one: ccd keeps such a row on its own transcript, and the first prompt it answers
+there clears the WARN.
 
 There is deliberately no reconciler daemon and no `ccd doctor`. The
 2026-08-11 incident's stop was itself deliberate — an operator killing a

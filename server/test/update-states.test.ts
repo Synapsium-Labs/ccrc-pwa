@@ -20,12 +20,12 @@ import {
   BUSY_UPDATE_STATES, SETTLED_UPDATE_STATES, UPDATE_PHASES, isUpdatePhase, IN_FLIGHT_UPDATE_PHASES,
   INSTALL_STATES, isInstallState, PROVENANCE_STATES, isProvenanceState, AUTO_MODES, isAutoMode,
   NOTIFY_MODES, isNotifyMode, REQUEST_KINDS, isRequestKind, STAMP_READS, isStampRead,
-  NODE_ROLES, isNodeRole, NODE_OSES, isNodeOs, RELEASE_TAG, isReleaseTag, CAP_WORD, MAX_CAP_WORDS,
+  NODE_OSES, isNodeOs, RELEASE_TAG, isReleaseTag, CAP_WORD, MAX_CAP_WORDS,
   validCapWords,
   type UpdateChannel, type UpdateState, type BusyUpdateState, type SettledUpdateState, type UpdatePhase,
   type InstallState, type ProvenanceState, type AutoMode, type NotifyMode, type RequestKind,
   type StampRead, type NodeRole, type NodeOs,
-} from '../../shared/api.js';
+} from '../../shared/api.js'; import { NODE_ROLES, isNodeRole } from '../../shared/node-role.js';
 import type { ReadFailure } from '../../shared/agent-protocol.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
