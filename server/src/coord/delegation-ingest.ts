@@ -377,6 +377,9 @@ export interface DelegationBucketResult {
   /** Whether the hour this read belongs to was fully observed by it. */
   interval: 'measured' | 'unmeasured';
   detail: string | null;
+  /** False for exactly the results that are not for a bucket (`input-invalid`): the adapter refuses them by name and applies
+   *  nothing. Every other result, a gap included, is applicable. Read structurally; never decided from `detail`. */
+  applicable: boolean;
 }
 
 /** What a replaced bucket's detail begins with. Words for a reader of the checkpoint ONLY: the marker nothing reads back is the
@@ -395,10 +398,17 @@ export function delegationBucketUtcHour(bucket: string): string {
 
 const isOffset = (n: unknown): n is number => typeof n === 'number' && Number.isSafeInteger(n) && n >= 0;
 
-/** What is wrong with a bucket's identity (owner, incarnation, bucket name), or null. The one statement, shared by the input check
- *  and by the adapter's refusal to apply a result whose row carries a bad identity. */
+/** What an owner (a spool directory's name) may be: non-empty, within the owner bound, and no `/` or NUL, so it cannot leave its
+ *  directory. The ONE statement: the input check, the adapter and the reader all call it, so they cannot disagree. */
+function ownerDefect(owner: unknown): string | null {
+  if (typeof owner !== 'string' || owner === '' || Buffer.byteLength(owner, 'utf8') > B.ownerIdBytes || /[/\0]/.test(owner)) return 'sessionId is not an owner';
+  return null;
+}
+
+/** What is wrong with a bucket's identity (owner, incarnation, bucket name), or null. */
 function identityDefect(id: { sessionId: unknown; parentIncarnation: unknown; bucket: unknown }): string | null {
-  if (typeof id.sessionId !== 'string' || id.sessionId === '' || Buffer.byteLength(id.sessionId, 'utf8') > B.ownerIdBytes) return 'sessionId is not an owner';
+  const owner = ownerDefect(id.sessionId);
+  if (owner !== null) return owner;
   if (typeof id.parentIncarnation !== 'string' || id.parentIncarnation === '') return 'parentIncarnation is empty';
   if (typeof id.bucket !== 'string') return 'bucket is not a YYYYMMDDHH hour';
   try { delegationBucketUtcHour(id.bucket); } catch { return 'bucket is not a YYYYMMDDHH hour'; }
@@ -430,9 +440,13 @@ function gap(
   id: { sessionId: string; parentIncarnation: string; bucket: string },
   detail: string,
   replaced = false,
+  applicable = true,
 ): DelegationBucketResult {
   const row = durableRow(state, id) ?? freshRow(id);
-  return { state, accepted: [], cursor: { ...row, intervalState: 'unmeasured', detail, replaced: row.replaced || replaced }, interval: 'unmeasured', detail };
+  // A replaced bucket keeps its replaced words on the ROW (N1), however many other gaps come after: the row's detail is what every
+  // later tick answers. This read's own reason still goes on the result, for the hour's interval.
+  const rowDetail = row.replaced && row.detail !== null ? row.detail : detail;
+  return { state, accepted: [], cursor: { ...row, intervalState: 'unmeasured', detail: rowDetail, replaced: row.replaced || replaced }, interval: 'unmeasured', detail, applicable };
 }
 
 /** Why a bucket could not be read at all. The reader's and `unreadableDelegationBucketResult`'s shared vocabulary. Server-internal
@@ -448,7 +462,7 @@ export function unreadableDelegationBucketResult(
   state: DeepReadonly<DelegationRecoveryState>,
   why: { reason: DelegationBucketUnreadableReason; detail: string },
 ): DelegationBucketResult {
-  return gap(state, id, `${why.reason}: ${why.detail}`);
+  return gap(state, id, `${why.reason}: ${why.detail}`, false, why.reason !== 'input-invalid');
 }
 
 /** Counts per refusal code, in code order, so the same bytes always read the same. */
@@ -480,7 +494,7 @@ const sha256Hex = (bytes: Uint8Array): string => createHash('sha256').update(byt
 export function ingestDelegationBucket(input: DelegationBucketInput, state: DeepReadonly<DelegationRecoveryState>): DelegationBucketResult {
   const id = { sessionId: input.sessionId, parentIncarnation: input.parentIncarnation, bucket: input.bucket };
   const defect = inputDefect(input);
-  if (defect !== null) return gap(state, id, `input-invalid: ${defect}`);
+  if (defect !== null) return gap(state, id, `input-invalid: ${defect}`, false, false);
 
   const prior = durableRow(state, id);
   if (prior !== undefined && prior.replaced) return gap(state, id, prior.detail ?? `${DELEGATION_BUCKET_REPLACED}: this bucket was replaced`);
@@ -502,7 +516,7 @@ export function ingestDelegationBucket(input: DelegationBucketInput, state: Deep
     if (input.cursor < input.lastSize) {
       return gap(state, id, `bucket-vanished-unread: the bucket is gone with ${input.lastSize - input.cursor} bytes after offset ${input.cursor} never read`);
     }
-    return { state, accepted: [], cursor: { ...durable, intervalState: 'measured', detail: null }, interval: 'measured', detail: null };
+    return { state, accepted: [], cursor: { ...durable, intervalState: 'measured', detail: null }, interval: 'measured', detail: null, applicable: true };
   }
 
   if (input.size < input.cursor || input.size < input.lastSize) {
@@ -560,6 +574,11 @@ export function ingestDelegationBucket(input: DelegationBucketInput, state: Deep
   const framedTo = input.readStart + lineStart;
   const tail = input.bytes.length - lineStart;
   const unread = input.size - (input.readStart + input.bytes.length);
+  // N2: a window that ended before the file did and framed no complete line past the anchor makes no progress, and will make none
+  // (a long refused line as the anchor can leave the window too little room). That is a gap with a reason, never "measured".
+  if (unread > 0 && complete === 0) {
+    return gap(state, id, `window-starved: ${input.bytes.length} bytes read from ${input.readStart} frame no complete line past the cursor ${input.cursor}, and ${unread} bytes beyond the window are unread`);
+  }
   const problems: string[] = [];
   if (refused > 0) problems.push(refusalSummary(refusals, refused, complete));
   // The line bound counts the LF: a tail already at one byte short of the bound can only complete into a line that is too long.
@@ -577,6 +596,7 @@ export function ingestDelegationBucket(input: DelegationBucketInput, state: Deep
     cursor: { ...id, cursor: framedTo, lastSize: input.size, lastCompleteAt, intervalState: interval, detail, anchor, replaced: false },
     interval,
     detail,
+    applicable: true,
   };
 }
 
@@ -599,6 +619,7 @@ export async function ingestAndApplyDelegationBucket(
   durability: DelegationBucketDurability,
 ): Promise<DeepReadonly<DelegationRecoveryState>> {
   const result = ingestDelegationBucket(input, state);
+  refuseInapplicable(result);
   return durability.applyBucketResult(result);
 }
 
@@ -614,10 +635,9 @@ export function delegationBucketDurabilityOf(
 ): DelegationBucketDurability {
   return {
     async applyBucketResult(result) {
-      // A result whose row carries a bad identity (the `input-invalid` gap) is never applied: the row would be refused by the
-      // checkpoint's reader anyway, and a bare RangeError from the hour arithmetic would say nothing about why (M5).
-      const defect = identityDefect(result.cursor);
-      if (defect !== null) throw new DelegationIngestError('input-invalid', `the result is not for a bucket and was not applied: ${defect}`);
+      // No `input-invalid` result is ever applied (M5): the result says so STRUCTURALLY (`applicable`), and a row with a bad identity is
+      // refused too, as a second line, so neither can reach the hour arithmetic (a bare RangeError) or the checkpoint's reader.
+      refuseInapplicable(result);
       const interval: DelegationObservationInterval = {
         sessionId: result.cursor.sessionId, parentIncarnation: result.cursor.parentIncarnation, utcHour: delegationBucketUtcHour(result.cursor.bucket),
         state: result.interval, detail: result.detail, recordedAt: formatDelegationInstant(now()),
@@ -630,6 +650,14 @@ export function delegationBucketDurabilityOf(
       return outcome.state;
     },
   };
+}
+
+/** Throws the named refusal for a result that is not for a bucket. Reads `applicable` and the row's identity; never the detail text. */
+function refuseInapplicable(result: DelegationBucketResult): void {
+  const defect = identityDefect(result.cursor);
+  if (!result.applicable || defect !== null) {
+    throw new DelegationIngestError('input-invalid', `the result is not for a bucket and was not applied${defect === null ? '' : `: ${defect}`}`);
+  }
 }
 
 /** Why ingestion refused to hand something to the durable applier. `input-invalid` is the only code: a result that is not for a bucket. */
@@ -680,7 +708,7 @@ export async function readDelegationBucket(
 ): Promise<DelegationBucketRead> {
   const bad = (reason: DelegationBucketUnreadableReason, detail: string): DelegationBucketRead => ({ ok: false, reason, detail });
   const owner = req.sessionId;
-  if (owner === '' || Buffer.byteLength(owner, 'utf8') > B.ownerIdBytes || /[/\0]/.test(owner) || !BUCKET_NAME.test(req.bucket) || !isOffset(req.cursor) || !isOffset(req.lastSize)
+  if (ownerDefect(owner) !== null || !BUCKET_NAME.test(req.bucket) || !isOffset(req.cursor) || !isOffset(req.lastSize)
       || (req.anchorStart !== null && (!isOffset(req.anchorStart) || req.anchorStart > req.cursor))) {
     return bad('input-invalid', 'the request does not name an owner, an hourly bucket and a durable coordinate');
   }
@@ -712,6 +740,8 @@ export async function readDelegationBucket(
       : bad('bucket-vanished-unread', 'the bucket was listed and is gone before it was fully read');
   }
   // Unreadable. An offset past the end of the file is what the io calls unreadable for a CUT, so measure the size before calling it a failure.
+  // An aborted request makes no further call (N3); the stat's own deadline is the io's default, a Task 13 tick-budget note.
+  if (req.signal?.aborted === true) return bad('range-unreadable', 'the byte range of the bucket could not be read, and the request was aborted');
   const stat = await io.statMeasured(file);
   if (stat.ok && stat.size < req.cursor) return inputOf({ size: stat.size, bytes: new Uint8Array(0), bucketPresent: true });
   return bad('range-unreadable', 'the byte range of the bucket could not be read');

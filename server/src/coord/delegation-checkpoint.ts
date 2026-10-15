@@ -776,7 +776,13 @@ export class DelegationCheckpointBuilder {
 
   // ── checkpoint-only state ──────────────────────────────────────────────────────────────────────────────────────────
 
-  setCursor(cursor: DelegationBucketCursor): void { this.cursors.set(cursorKeyOf(cursor), cursor); }
+  /** Sets a bucket's cursor row. `replaced` is MONOTONIC (R36): a result computed from a stale state can never write `false` over a
+   *  durable `true`, so a replaced bucket cannot be un-replaced by an overlapping tick. Where the cursor itself moves is Task 13's (M6). */
+  setCursor(cursor: DelegationBucketCursor): void {
+    const key = cursorKeyOf(cursor);
+    const wasReplaced = this.cursors.get(key)?.replaced === true;
+    this.cursors.set(key, wasReplaced && !cursor.replaced ? { ...cursor, replaced: true } : cursor);
+  }
   mergeInterval(interval: DelegationObservationInterval): void {
     const k = intervalKeyOf(interval);
     this.intervals.set(k, mergeDelegationObservationInterval(this.intervals.get(k), interval));

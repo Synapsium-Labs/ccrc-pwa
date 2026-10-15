@@ -607,6 +607,19 @@ describe('the cursor anchors the last complete line it stepped over (D-4647): ch
     expect(wrong.detail).toMatch(/^read-window-mismatch: /);
   });
 
+  it('a window starved by a long anchor line is a gap with a reason, never a stuck "measured" with the cursor unmoved (N2)', () => {
+    const garbage = enc.encode('x'.repeat(READ_FROM_MAX_BYTES - 100) + '\n');
+    const file = cat(garbage, l1);
+    const first = tick(file);
+    expect(first.cursor.cursor).toBe(garbage.length);
+    expect(first.interval).toBe('unmeasured');                       // the long line was refused
+    const second = tick(file, first.cursor);
+    expect(second.accepted).toEqual([]);
+    expect(second.interval).toBe('unmeasured');
+    expect(second.detail).toMatch(/^window-starved: /);
+    expect(second.cursor).toMatchObject({ cursor: garbage.length, replaced: false });
+  });
+
   it('a window past the read bound is re-anchored at its last complete line: a bucket larger than one read is ingested in ticks, each re-reading one line', () => {
     const per = lineOf(common('SessionStart', { source: 'startup' }));
     const count = Math.ceil(READ_FROM_MAX_BYTES / per.length) + 40;
@@ -694,6 +707,16 @@ describe('a replaced bucket STAYS replaced (R33): a structured flag the row carr
     const row = replacedRow();
     const r = unreadableDelegationBucketResult({ sessionId: OWNER, parentIncarnation: INC, bucket: BUCKET }, stateWith([row]), { reason: 'range-unreadable', detail: 'x' });
     expect(r.cursor).toMatchObject({ replaced: true, cursor: row.cursor, anchor: row.anchor });
+  });
+
+  it('a reader-level gap keeps the replaced words: replaced, then capability-unmeasured, then a clean tick still answers bucket-replaced (N1)', () => {
+    const row = replacedRow();
+    const reader = unreadableDelegationBucketResult({ sessionId: OWNER, parentIncarnation: INC, bucket: BUCKET }, stateWith([row]), { reason: 'capability-unmeasured', detail: 'x' });
+    expect(reader.cursor).toMatchObject({ replaced: true, detail: row.detail });
+    expect(reader.cursor.detail).toMatch(/^bucket-replaced/);
+    const clean = tick(cat(l1, l2), reader.cursor);
+    expect(clean.cursor).toMatchObject({ replaced: true, detail: row.detail });
+    expect(clean.detail).toMatch(/^bucket-replaced/);
   });
 
   it('the flag survives the adapter and the checkpoint: it is applied, and a restart reads it back', async () => {
@@ -1104,6 +1127,22 @@ describe('capability, transport and recovery: an unmeasured interval, never fabr
       if (read.ok) expect(ingestDelegationBucket(read.input, stateWith([row]))).toMatchObject({ interval: 'unmeasured', cursor: { replaced: true } });
     });
 
+    it('an aborted request does not stat: the range is unreadable and no second call is made (N3)', async () => {
+      let stats = 0;
+      const io: Pick<FleetIO, 'readFileFromBytesMeasured' | 'statMeasured'> = {
+        readFileFromBytesMeasured: async () => ({ ok: false, reason: 'unreadable' }),
+        statMeasured: async (): Promise<MeasuredStat> => { stats += 1; return { ok: true, mtimeMs: 1, size: 90 }; },
+      };
+      const controller = new AbortController();
+      controller.abort();
+      const aborted = await readDelegationBucket(io, req(listed(`${BUCKET}.spool`), { cursor: 300, lastSize: 300, anchorStart: 250, signal: controller.signal }));
+      expect(aborted).toMatchObject({ ok: false, reason: 'range-unreadable' });
+      expect(stats).toBe(0);
+      // and without an abort the same io still classifies the cut
+      expect(await readDelegationBucket(io, req(listed(`${BUCKET}.spool`), { cursor: 300, lastSize: 300, anchorStart: 250 }))).toMatchObject({ ok: true });
+      expect(stats).toBe(1);
+    });
+
     it('a stat that fails, or that does not show the file shorter than the cursor, leaves the range unreadable', async () => {
       for (const stat of [{ ok: false, reason: 'unreadable' }, { ok: false, reason: 'absent' }, { ok: true, mtimeMs: 1, size: 300 }, { ok: true, mtimeMs: 1, size: 9999 }] as const) {
         const io = ioAnswering({ ok: false, reason: 'unreadable' }, stat).io;
@@ -1292,6 +1331,68 @@ describe('the adapter: ingestAndApplyDelegationBucket', () => {
     expect(applied).toBe(0);
     expect(journalLines(h.dir)).toEqual([]);
     expect(h.dur.state().checkpoint.bucketCursors).toEqual([]);
+  });
+
+  describe('no input-invalid result is ever applied, whichever way it was made (M5, structural)', () => {
+    const refusedBy = async (result: DelegationBucketResult): Promise<void> => {
+      const h = await openDurability();
+      let applied = 0;
+      const counting = { applyAccepted: async (b: Parameters<DelegationDurability['applyAccepted']>[0]) => { applied += 1; return h.dur.applyAccepted(b); } };
+      const before = JSON.stringify(h.dur.state().checkpoint);
+      const err: unknown = await delegationBucketDurabilityOf(counting, h.now).applyBucketResult(result).then(() => null, (e: unknown) => e);
+      expect(err).toBeInstanceOf(DelegationIngestError);
+      expect(err).toMatchObject({ code: 'input-invalid' });
+      expect(applied).toBe(0);
+      expect(JSON.stringify(h.dur.state().checkpoint)).toBe(before);
+      expect(journalLines(h.dir)).toEqual([]);
+    };
+
+    it.each([
+      ['a negative cursor', { cursor: -1 }], ['a fractional cursor', { cursor: 1.5 }], ['a NaN last-seen size', { lastSize: Number.NaN }],
+      ['a negative size', { size: -1 }], ['a negative read start', { readStart: -1 }], ['bytes that are not a byte array', { bytes: 'text' as unknown as Uint8Array }],
+      ['an owner with a slash', { sessionId: 'a/b' }], ['an owner with a NUL', { sessionId: 'a\0b' }], ['an empty owner', { sessionId: '' }],
+    ] as const)('%s from ingestDelegationBucket is classified inapplicable and refused by the adapter', async (_label, over) => {
+      const result = ingest(l1, over as Partial<DelegationBucketInput>);
+      expect(result.applicable).toBe(false);
+      await refusedBy(result);
+    });
+
+    it('the reader\'s own refusals (an anchor after the cursor, an owner that would leave its directory) become inapplicable results the adapter refuses', async () => {
+      const io: Pick<FleetIO, 'readFileFromBytesMeasured' | 'statMeasured'> = {
+        readFileFromBytesMeasured: async () => ({ ok: true, bytes: l1, size: l1.length }), statMeasured: async (): Promise<MeasuredStat> => ({ ok: false, reason: 'unreadable' }),
+      };
+      const base = { ownerDir: '/fixture/spool/lane-a-demo', sessionId: OWNER, parentIncarnation: INC, bucket: BUCKET, cursor: 300, lastSize: 300, anchorStart: 250 as number | null, capabilityPresent: true as boolean | null, listing: { ok: true, entries: [`${BUCKET}.spool`] } as MeasuredDirectoryRead };
+      for (const over of [{ anchorStart: 301 }, { sessionId: 'a/b' }, { sessionId: 'a\0b' }, { cursor: -1 }]) {
+        const read = await readDelegationBucket(io, { ...base, ...over });
+        expect(read, JSON.stringify(over)).toMatchObject({ ok: false, reason: 'input-invalid' });
+        if (!read.ok) {
+          const result = unreadableDelegationBucketResult({ sessionId: over.sessionId ?? OWNER, parentIncarnation: INC, bucket: BUCKET }, stateWith(), read);
+          expect(result.applicable, JSON.stringify(over)).toBe(false);
+          await refusedBy(result);
+        }
+      }
+    });
+
+    it('the reader and the adapter agree on what an owner is: a slash or a NUL is refused by both, a plain owner by neither', async () => {
+      for (const sessionId of ['a/b', 'a\0b', '', 'x'.repeat(DELEGATION_SPOOL_BOUNDS.ownerIdBytes + 1)]) {
+        expect(ingest(l1, { sessionId }).applicable, sessionId).toBe(false);
+      }
+      expect(ingest(l1, { sessionId: 'lane-a-demo' }).applicable).toBe(true);
+    });
+
+    it('ingestAndApplyDelegationBucket refuses an inapplicable result itself: the durable call is never made', async () => {
+      let calls = 0;
+      const fake: DelegationBucketDurability = { applyBucketResult: async () => { calls += 1; return stateWith(); } };
+      await expect(ingestAndApplyDelegationBucket(inputOf(l1, { cursor: -1 }), stateWith(), fake)).rejects.toBeInstanceOf(DelegationIngestError);
+      expect(calls).toBe(0);
+    });
+
+    it('every other gap stays applicable: a capability, recovery or replacement gap is made durable', () => {
+      expect(ingest(l1, { capabilityPresent: null }).applicable).toBe(true);
+      expect(ingest(l1, {}, stateWith([], 'reconstructing')).applicable).toBe(true);
+      expect(ingest(l1).applicable).toBe(true);
+      expect(unreadableDelegationBucketResult({ sessionId: OWNER, parentIncarnation: INC, bucket: BUCKET }, stateWith(), { reason: 'range-unreadable', detail: 'x' }).applicable).toBe(true);
+    });
   });
 
   it('a change that KEEPS an alias to what it returned cannot edit the applier afterwards: the adopted rows are copies (M4)', async () => {

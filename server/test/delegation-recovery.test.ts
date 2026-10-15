@@ -2572,3 +2572,33 @@ describe('8B: an active restore marker refuses recovery, and only the marker\'s 
     expect(warned).toEqual(['ccrc-server: delegation recovery failed at checkpoint-decode: restore-in-progress']);
   });
 });
+
+// ── Task 9 fix round 2 (R36): the applier never clears a cursor row's `replaced` flag ──
+
+describe('Task 9 R36: a stale result can never write replaced:false over a durable replaced:true', () => {
+  const replacedRow = (cursor: number) => ({ ...cursorFor('2026101412', cursor), intervalState: 'unmeasured' as const, detail: 'bucket-replaced: size 3 is below the cursor 40', replaced: true });
+
+  it('a replaced row, then a stale result for the same bucket with replaced:false: the durable row is still replaced', async () => {
+    const h = harness();
+    const dur = await h.open();
+    await dur.applyAccepted(batch([sessionStart(1)], { cursor: replacedRow(40) }));
+    expect(dur.state().checkpoint.bucketCursors[0]).toMatchObject({ replaced: true });
+    const stale = { ...cursorFor('2026101412', 10), replaced: false };       // computed from a state older than the replacement
+    await dur.applyAccepted(batch([sessionStart(2)], { cursor: stale }));
+    const row = dur.state().checkpoint.bucketCursors.find((r) => r.bucket === '2026101412');
+    expect(row).toMatchObject({ replaced: true, cursor: 10 });                // only the flag is monotonic here; where the cursor goes is Task 13's (M6)
+    await dur.close();
+    const reopened = await h.open();
+    expect(reopened.state().checkpoint.bucketCursors.find((r) => r.bucket === '2026101412')).toMatchObject({ replaced: true });
+  });
+
+  it('another bucket is unaffected, and a row that was never replaced stays false', async () => {
+    const h = harness();
+    const dur = await h.open();
+    await dur.applyAccepted(batch([sessionStart(1)], { cursor: replacedRow(40) }));
+    await dur.applyAccepted(batch([sessionStart(2)], { cursor: cursorFor('2026101413', 5) }));
+    const rows = new Map(dur.state().checkpoint.bucketCursors.map((r) => [r.bucket, r.replaced] as const));
+    expect(rows.get('2026101412')).toBe(true);
+    expect(rows.get('2026101413')).toBe(false);
+  });
+});
