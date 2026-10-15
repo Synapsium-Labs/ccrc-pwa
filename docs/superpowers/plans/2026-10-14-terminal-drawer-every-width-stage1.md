@@ -18,6 +18,8 @@
 
 **Base:** `origin/main` `e66ca6ac` (PR #190). Code is cited by function or constant. Line numbers are hints at `e66ca6ac`, written `≈:N`. Task 0 re-grounds them by content.
 
+**Ported onto #419's layout (2026-10-15, the merge of `origin/main` at `a3cebde1` into this branch).** #419 (the `@ccrc/ui` design system, which `pwa` consumes as source) split `TerminalDrawer.tsx` into the drawer, `terminalFactory.ts` (the `DrawerTerm` seam, `MakeTerm`, `defaultMakeTerm`, `glass()`, `historyScrollback`), `historyPane.ts`, `historyRead.ts` and `reachForHistory.ts`; moved `pwa/src/components/Sheet.tsx` to `ui/src/primitives/sheet.tsx`; moved `Keycap`/`KEYCAP` into `ui`; and added the boundary guards (`design-system-boundary`, `ui-package-boundary`, the four censuses, `tap-targets`) that red when the app hand-writes a class `@ccrc/ui` owns. Tasks 0–8, 10 and 11 were ported onto that layout with no change of behaviour: the seam and the live factory (with `ATTACH`, the 220x51 grid, defined once there) are in `terminalFactory.ts`; the key bar's caps and the history door are `@ccrc/ui`'s `Keycap`; the spike harness takes `Sheet` and `Keycap` from `@ccrc/ui`; main's sheet already carries `keyboard-counted-once` (#412). The paths below, in §File Structure, §Interfaces and the remaining tasks' **Files** lines, are the post-#419 ones; done tasks keep the paths they were built against. Tasks 10 and 11 built the component as `KeyBarView.tsx`, not `KeyBar.tsx`: on a case-insensitive disk `./KeyBar` resolves to `keyBar.ts` (its header).
+
 **Deploy class:** server lane. The PWA bundle ships inside the server's release. Stage 1 adds one constant to `shared/api.ts` and rewrites three docstrings there; its only `server/src` edits are comments (Task 13). Stage 1b moves four pure parsers and one type from `server/src/pane/dialog.ts` into `shared/`, and the server re-imports them with no behaviour change. Neither stage touches the agent, ccd, a unit, a hook, a wire frame or a route.
 
 **Stage 2** (B0 in `ccd/`, AGENT-FIRST; B1 in `server/`, `pwa/` and `shared/`, behind `drawer.follow`) gets its own plan once stage 1 is on the box (§Stage 2). Its four numbers are defined here (§Deviations found), so that plan cites them and never redefines them.
@@ -36,6 +38,7 @@
 
 **HARD BOUNDARY.** This plan edits only:
 - `pwa/src/session/**`;
+- `ui/src/primitives/sheet.tsx`: Task 9's one optional prop (P4), and nothing else in `@ccrc/ui` (it was `pwa/src/components/Sheet.tsx` until #419);
 - `pwa/test/**`: new files, plus the existing drawer suites named in §File Structure;
 - `pwa/spike/**` (Task 1; committed only if P2 is ruled yes);
 - `shared/api.ts` (one constant and three docstrings) and, in 1b, the new `shared/pane-menu.ts`;
@@ -64,7 +67,7 @@ None of these changes what the spec promises. Each is a mechanism the spec leave
    - left to stage 2 with a work item attached: `agent/src/whitelist.ts`'s note on the `win-size` grant says the `/ws/pty/:id` handler validates `:id` nowhere and that "Wave 3's own plan lists validating `:id` as work it will do". With wave 3 superseded, that item has no owner. Stage 1 adds no route and leaves it; stage 2's B1 rewrites the route (`drawer.ts`) and takes it, with the note (§Stage 2).
 
    `ccdargv.ts`'s `winSize` builder note describes wave 2 accurately and stays.
-7. **F1's carriers stay.** `pane-history-route.test.ts` holds `server/src/server.ts`, `pwa/src/session/TerminalDrawer.tsx` (in `historyScrollback`'s docstring) and `server/src/exec.ts` to F1's measurement (`MEASURED`), and its reach test holds `shared/api.ts`. No rewrite here removes the `resize-window -x 43 … 1853 … history_size … 9460` paragraph from any of them.
+7. **F1's carriers stay.** `pane-history-route.test.ts` holds `server/src/server.ts`, `pwa/src/session/terminalFactory.ts` (in `historyScrollback`'s docstring; `TerminalDrawer.tsx` until #419) and `server/src/exec.ts` to F1's measurement (`MEASURED`), and its reach test holds `shared/api.ts`. No rewrite here removes the `resize-window -x 43 … 1853 … history_size … 9460` paragraph from any of them.
 8. **Tests that pin a resize frame are inverted, not deleted.** `terminal.test.tsx`'s "a refit that changes the grid sends {type:"resize"}", `terminal-scrollback.test.tsx`'s resize-frame case (≈:556–562), and every `clientGrid` read in `console-window-fit.test.tsx` and `console-window-fit-xterm.test.tsx` assert the opposite after Task 4. D-5005 is exactly that reversal.
 9. **`DrawerTerm.fit()` goes.** `fitToWindow`'s two fallbacks to `t.fit()` (a host with no layout, and an unmeasurable glass) become "keep the current view", `chooseView`'s `null` arm.
 10. **Phones type live; there is no separate field (operator ruling R-LIVE, 2026-10-15).** Spec §5.2 left the terminal un-opened on a coarse pointer and §5.4 gave the phone a native field (`TermInput`) with a **Type** button. On the operator's phone the two-box flow (the field, then Claude Code's own box) read as broken, and the drawer on `main` already types live: a tap focuses xterm's textarea and the phone keyboard types straight into the session. Measured on the spike (Android, Gboard; Task 1's S6 re-run), live typing through the off-screen terminal's textarea works for typing, autocorrect and swipe, dictation, backspace and Enter once the keyboard is counted once (`keyboard-counted-once`, shipped ahead as its own PR). So the wrapped view opens the terminal off-screen on every pointer, a tap on it focuses xterm's textarea (`focus({ preventScroll: true })`), and `TermInput` is not built. The grid view is unchanged.
@@ -103,12 +106,14 @@ Every task's requirements include this section. `CLAUDE.md` is the authority; th
 
 | File | Created / Modified | Its one responsibility | Task |
 |---|---|---|---|
-| `pwa/spike/drawer-input.html`, `drawer-input.tsx` | **Create** (committed if P2) | the O6 harness: the product's `Sheet` around an off-screen xterm, a mock wrapped view, a field, a byte log | 1 |
+| `pwa/spike/drawer-input.html`, `drawer-input.tsx` | **Create** (committed if P2) | the O6 harness: the product's `Sheet` (from `@ccrc/ui` since #419) around an off-screen xterm, a mock wrapped view, a field, a byte log | 1 |
 | `shared/api.ts` | Modify | `TMUX_STATUS_ROWS = 1`; `PINNED_WINDOW_*`'s, `PaneProbe`'s and `PaneHistoryReply`'s docstrings stop promising a wave 3 | 2, 13 |
 | `server/test/drawer-status-rows.test.ts` | **Create** | `TMUX_STATUS_ROWS` against `ccd/tmux.conf` | 2 |
 | `server/test/fixtures/drawer-stub-alt.mjs` | **Create** | a deterministic alternate-screen stub app | 3 |
 | `server/test/drawer-window-sized-client.test.ts` | **Create** | real tmux: a 220x51 client moves nothing and is never panned | 3 |
 | `pwa/src/session/TerminalDrawer.tsx` | Modify | the 220x51 attach, no resize frames, one host in two positions, the two views, the bars; decides nothing itself | 4, 9–13 |
+| `pwa/src/session/terminalFactory.ts` | Modify | split out of `TerminalDrawer.tsx` by #419: the `DrawerTerm` seam and `MakeTerm`, `ATTACH`, `defaultMakeTerm` built at 220x51 and not opened, `glass()` reading `GLASS_ANSI`, `historyScrollback` (F1) | 4, 7, 9, 12, 13 |
+| `pwa/src/session/historyPane.ts`, `reachForHistory.ts` | Modify (comments only) | split out by #419: the history layer's refit note, and vaul's touchmove note now that the live host scrolls | 4, 13 |
 | `pwa/test/drawer-window-sized.test.tsx` | **Create** | the URL, no resize frames, the pinned grid | 4 |
 | `pwa/test/console-window-fit.test.tsx`, `console-window-fit-xterm.test.tsx`, `terminal.test.tsx`, `terminal-scrollback.test.tsx` | Modify | their fakes follow the reshaped `DrawerTerm`; resize-frame assertions inverted (Refinement 8) | 4 |
 | `pwa/test/fixtures/drawer/synthetic.ts` | **Create** | twelve hand-built Claude-Code-shaped 220x50 screens as streams plus their text | 5 |
@@ -125,11 +130,12 @@ Every task's requirements include this section. `CLAUDE.md` is the authority; th
 | `pwa/src/session/WrappedView.tsx` | **Create** | renders visual rows; sticky bottom; selection freeze; the chips | 9 |
 | `pwa/test/drawer-view.test.tsx` | **Create** | the chooser, the chips, storage that throws, the two views, the host's two positions | 9 |
 | `pwa/src/session/keyBar.ts` | **Create** | pure: `KEY_SEQ` and the key lists, `ctrlCode`, `exitNoticeShowing`, `sanitizeTyped`, `typedFrame` | 10–12 |
-| `pwa/src/session/KeyBar.tsx` | **Create** | the primary row, the `⋯` overflow, the ctrl latch, the guarded `^C`/`^D` | 10, 11 |
+| `pwa/src/session/KeyBarView.tsx` | **Create** | the primary row, the `⋯` overflow, the ctrl latch, the guarded `^C`/`^D`; every cap is `@ccrc/ui`'s `Keycap` | 10, 11 |
 | `pwa/test/drawer-keybar.test.tsx` | **Create** | sequences, overflow, latch, guard, wrap | 10, 11 |
 | `pwa/src/session/typedFrame.ts` | **Create** | pure: `sanitizeTyped` and `typedFrame`, the paste guard's framing (operator ruling R-LIVE, 2026-10-15: `TermInput` is not built) | 12 |
-| `pwa/test/drawer-terminput.test.tsx` | **Create** | framing, sanitising, the latch, IME, the paste guard | 12 |
-| `pwa/src/session/chat.css` | Modify | the host's two positions; the bar's two-row wrap below 420px; wrapped-view, chip and field styles | 4, 9, 10, 12 |
+| `pwa/test/drawer-paste.test.tsx` | **Create** | framing, sanitising, the latch, IME, the paste guard | 12 |
+| `pwa/src/session/chat.css` | Modify | the host's two positions; the bar's two-row wrap below 420px; wrapped-view, chip and field styles (the caps' shape is `@ccrc/ui`'s `KEYCAP`; this sheet keeps the well's ground) | 4, 9, 10, 12 |
+| `ui/src/primitives/sheet.tsx` | Modify | an optional `onEscapeKeyDown`, passed to vaul's `Drawer.Content` (P4); was `pwa/src/components/Sheet.tsx` until #419 | 9 |
 | `pwa/src/session/consoleFit.ts` | Modify (header comment only) | where the type fit hands over to the wrapped view | 13 |
 | `server/src/server.ts`, `server/src/ccdargv.ts` | Modify (comments only) | the latch comment's stale citation and its "wave 3"; `WIN_SIZE_CAP`'s note | 13 |
 | `shared/pane-menu.ts` | **Create** (1b) | L0: `OPTION_RE`, `CHECKBOX_RE`, `leftCol`, `paneOptionRows`, `OptionRow`, moved verbatim | 15 |
@@ -189,7 +195,10 @@ The orchestrator reviews every handed-off diff before it lands.
 // shared/api.ts — beside PINNED_WINDOW_COLS / PINNED_WINDOW_ROWS (Task 2)
 export const TMUX_STATUS_ROWS = 1;
 
-// pwa/src/session/TerminalDrawer.tsx — the reshaped seam (Task 4; tests inject it)
+// pwa/src/session/terminalFactory.ts — the reshaped seam (Task 4; tests inject it).
+// It was in TerminalDrawer.tsx until #419 split the factory out; TerminalDrawer.tsx imports it.
+/** The grid every attach dials and the live terminal is pinned at, defined once (220x51). */
+export const ATTACH = { cols: PINNED_WINDOW_COLS, rows: PINNED_WINDOW_ROWS + TMUX_STATUS_ROWS } as const;
 export interface DrawerTerm {
   write(data: string): void;
   onData(cb: (data: string) => void): void;
@@ -577,7 +586,7 @@ The harness touches no session, socket or server. Nothing it does reaches a pane
 
 ### Task 9: The two views, the chooser and the chips (D-5005, D-5006) — gated on Task 1
 
-**Routing:** band 3. Starts only once Task 1's gate is recorded. **Files:** create `pwa/src/session/drawerView.ts`, `pwa/src/session/WrappedView.tsx` and `pwa/test/drawer-view.test.tsx`; modify `TerminalDrawer.tsx`, `chat.css` and `pwa/src/components/Sheet.tsx` (an optional `onEscapeKeyDown`, passed to vaul's `Drawer.Content`; P4).
+**Routing:** band 3. Starts only once Task 1's gate is recorded. **Files:** create `pwa/src/session/drawerView.ts`, `pwa/src/session/WrappedView.tsx` and `pwa/test/drawer-view.test.tsx`; modify `TerminalDrawer.tsx`, `terminalFactory.ts` (wherever a step touches the `DrawerTerm` seam or `defaultMakeTerm`), `chat.css` and `ui/src/primitives/sheet.tsx` (an optional `onEscapeKeyDown`, passed to vaul's `Drawer.Content`; P4; `pwa/src/components/Sheet.tsx` until #419).
 
 - [ ] **Step 1: Red, the chooser** (pure):
   - `chooseView` answers `grid` for `{clipped: false}`, `wrapped` for `{clipped: true}`, `current` for `null`, and the override when one is set;
@@ -667,7 +676,7 @@ The harness touches no session, socket or server. Nothing it does reaches a pane
 
 ### Task 12: Sanitising, the paste guard and the latch's letter (D-5007; `TermInput` dropped, operator ruling R-LIVE, 2026-10-15)
 
-**Routing:** band 3 (untrusted input into a live session; this PR's security lens reads it first). Needs Task 10. **Files:** create `pwa/src/session/typedFrame.ts` and `pwa/test/drawer-paste.test.tsx`; modify `keyBar.ts` and `TerminalDrawer.tsx`.
+**Routing:** band 3 (untrusted input into a live session; this PR's security lens reads it first). Needs Task 10. **Files:** create `pwa/src/session/typedFrame.ts` and `pwa/test/drawer-paste.test.tsx`; modify `keyBar.ts`, `TerminalDrawer.tsx` and `terminalFactory.ts` (wherever a step touches the `DrawerTerm` seam or `defaultMakeTerm`).
 
 - [ ] **Step 1: Red, the framing** (pure):
   - `sanitizeTyped` removes `\x00`–`\x08`, `\x0b`–`\x1f`, `\x7f` and every ESC, so both `\e[200~` and `\e[201~` lose their introducer and cannot frame; it keeps `\t` and `\n`;
@@ -694,14 +703,14 @@ The harness touches no session, socket or server. Nothing it does reaches a pane
 
 ### Task 13: The stale comments (D-5013)
 
-**Routing:** band 1. **Files:** comments only in `server/src/server.ts`, `server/src/ccdargv.ts`, `shared/api.ts`, `pwa/src/session/consoleFit.ts`, `pwa/src/session/TerminalDrawer.tsx` and `server/test/single-definition.test.ts`.
+**Routing:** band 1. **Files:** comments only in `server/src/server.ts`, `server/src/ccdargv.ts`, `shared/api.ts`, `pwa/src/session/consoleFit.ts`, `pwa/src/session/TerminalDrawer.tsx`, `pwa/src/session/terminalFactory.ts` and `server/test/single-definition.test.ts`.
 
 - [ ] **Step 1.** In the `/ws/pty/:id` latch comment, replace `` `ccd/ccd:14790` `` with `` `_spawn_start` in `ccd/ccd` ``, which is where the spawn sets `window-size latest` at `e66ca6ac` (≈:21649). Name the function, never a line.
 - [ ] **Step 2.** Replace "The deliberate un-pin is wave 3, under the fit guard, through an advertised ccd verb." with: the drawer now attaches a client the window's size (spec 2026-10-14 §5.1), so this pin repairs a window something else moved rather than being the drawer's mechanism; a wide drawer may later have the window follow it, never below `READER_MIN_COLS`, through that spec's guarded sizer (§6). Keep every measurement paragraph above it (F1's numbers: Refinement 7).
 - [ ] **Step 3.** `shared/api.ts`: in `PaneProbe`'s docstring, "Wave 3 reads `limit`, `width` and `height` off THIS probe" becomes "Stage 2 of the 2026-10-14 drawer design reads them off THIS probe (its fit target)"; in `PaneHistoryReply`'s, "from wave 3, to feed the fit floor" becomes "from that stage 2, to feed its fit target". The one-reader-per-field sentence stays.
 - [ ] **Step 4.** `server/src/ccdargv.ts`'s `WIN_SIZE_CAP` note: "wherever wave 3 gates the un-pin" and "the gate belongs at wave 3's own seam" become a statement that nothing calls `ccd win-size` (wave 3 was superseded unbuilt, spec 2026-10-14, D-5013) and that the rule stands for any caller that ever does. Do not spell the token again: `capsupported.test.ts` holds it to one spelling in `server/src`.
 - [ ] **Step 5.** `single-definition.test.ts`'s "will be read by wave 3's fit floor beside READER_MIN_COLS and STALL_BUDGET_LINES" becomes "will be read by stage 2's fit target (spec 2026-10-14 §6.2)". Comment only; no assertion moves.
-- [ ] **Step 6.** `consoleFit.ts`'s header: the type fit now decides between the grid and the wrapped view (D-5005); where even the floor cannot fit the window, the wrapped view re-wraps the screen, and tmux pans nothing because the client is the window's size. `TerminalDrawer.tsx`: rewrite every comment that describes the `pans` notice or the client grid following the glass (`fitToWindow`'s block, the clip notice, `refit`'s note). Keep `historyScrollback`'s docstring, which carries F1.
+- [ ] **Step 6.** `consoleFit.ts`'s header: the type fit now decides between the grid and the wrapped view (D-5005); where even the floor cannot fit the window, the wrapped view re-wraps the screen, and tmux pans nothing because the client is the window's size. `TerminalDrawer.tsx`: rewrite every comment that describes the `pans` notice or the client grid following the glass (`fitToWindow`'s block, the clip notice, `refit`'s note); `terminalFactory.ts`: the same in `glass()`'s docstring ("the drawer may then shrink the live one so the whole tmux window fits"). Keep `historyScrollback`'s docstring (in `terminalFactory.ts` since #419), which carries F1.
 - [ ] **Step 7: Gates.** `server`: `pane-history-route` (`FALSIFIED`, `MEASURED`, the reach test), `capsupported`, `single-definition`. `git diff -U0 server/src` shows comment lines only.
 - [ ] **Step 8: Commit** `docs(drawer): the latch comment names _spawn_start, and no comment promises a wave 3 (D-5013)`.
 
@@ -709,7 +718,7 @@ The harness touches no session, socket or server. Nothing it does reaches a pane
 
 **Routing:** suites band 1; the preview re-check and the matrix are the operator's hands; the PR text is native.
 
-- [ ] **Step 1: Suites.** `pwa`: the full suite, then `npm run build` clean (CI's `build-pwa`). `server`: `drawer-status-rows`, `drawer-window-sized-client`, `drawer-fixtures-clean`, `pty`, `remote-pty`, `pane-history-route`, `capsupported`, `single-definition`, `deviation-refs` (after `git fetch origin main`), `dtbd`, `topology-clean`.
+- [ ] **Step 1: Suites.** `pwa`: the full suite (since #419 it carries the `@ccrc/ui` boundary guards and the censuses), `tsc --noEmit -p .`, then `npm run build` clean (CI's `build-pwa`). `ui`: `tsc --noEmit` (Task 9 edits `ui/src/primitives/sheet.tsx`). `server`: `drawer-status-rows`, `drawer-window-sized-client`, `drawer-fixtures-clean`, `pty`, `remote-pty`, `pane-history-route`, `capsupported`, `single-definition`, `deviation-refs` (after `git fetch origin main`), `dtbd`, `topology-clean`.
 - [ ] **Step 2: The preview re-check** (spec §10's "preview build"). On a preview of this PR's build (the operator's choice of path; `deploy/deploy.sh` is the documented fallback for an unreleased tree), re-run Task 1's rows S1, S4 and S6 against the real drawer on a live session. A result that differs from the harness's is a STOP for a coordinator ruling.
 - [ ] **Step 3: The device matrix** (§Acceptance, operator ruling O7). Record each cell in the PR body.
 - [ ] **Step 4: README.** The drawer paragraph: the 220x51 client, the two views and the chip, the key bar with its guarded `^C`, live typing on every device, and the paste guard. One paragraph, citing the spec.
