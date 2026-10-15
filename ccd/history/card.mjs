@@ -245,7 +245,10 @@ function consumedScopeOf(s, home, id, uuid, current, copy, ccrcId) {
  *  write too, counted card_write_failed (coordinator ruling R-recalloff-parity). A record that was due (written or
  *  removed) and could not be acted on, beside a prediction already on disk, takes that prediction with it, counted
  *  card_unrecorded_removed (coordinator ruling R-recalloff-keep): an unlink succeeds where a write meets ENOSPC or
- *  EDQUOT, so no prediction stands beside a stale record until its boundary consumes it. */
+ *  EDQUOT, so no prediction stands beside a stale record until its boundary consumes it. A CONSUMED prediction whose
+ *  replacement cannot be written goes too, recorded or not (an unlink succeeds there as well), so the hook never serves
+ *  the previous compaction's leaf as this one; it is counted card_consumed once it is gone, and not while it stands (the
+ *  next tick decides it again). D-5059 (history-card-consumed-write-fails-closed) */
 function oneCard(db, s, ictx, budget, id, uuid, registered, out) {
   const { copy, ccrcId, prediction } = predict(db, s, id, uuid);
   const atEof = registered && copy !== null && copy.eof_ms !== null && Number(copy.eof_ms) === ictx.nowMs;
@@ -266,6 +269,11 @@ function oneCard(db, s, ictx, budget, id, uuid, registered, out) {
     current: dirKind === 'absent' ? { state: 'absent' } : readCard(genFile), generation: gen, card: d.act, mayWrite,
   });
   let recorded = g !== 'write' && g !== 'delete';
+  const countConsumed = () => {   // once the consumed line is gone: the write path and the failure path both end here
+    const scope = consumedScopeOf(s, ictx.home, id, uuid, current, copy, ccrcId);
+    bump(db, `card_consumed:${scope}`);
+    out.consumed += 1;
+  };
   try {
     if (dirKind === 'absent' && d.act === 'write') mkdirSync(dir, { mode: 0o700 });
     if (g === 'write') writeFileAtomic(genFile, `${gen}\n`, 0o600);
@@ -283,11 +291,16 @@ function oneCard(db, s, ictx, budget, id, uuid, registered, out) {
     // The record was due and is not acted on: the prediction on disk, if one stands (a kept one, or the one a write
     // was to replace), goes too, so the hook never compares recall-off with a stale record (R-recalloff-keep). An
     // absent prediction fails this unlink with ENOENT and is not counted.
-    if (!recorded) {
+    // A consumed prediction goes whatever the record did: its boundary is ingested, so the line names the previous
+    // compaction's leaf and must not be served as this one (§8.6 Timing). D-5059 (history-card-consumed-write-fails-closed)
+    if (!recorded || d.consumed) {
+      let gone = false;
       try {
         unlinkSync(file);
-        bump(db, 'card_unrecorded_removed');
-      } catch { /* none stands, or it cannot be removed either: the next tick decides both again */ }
+        gone = true;
+      } catch { /* none stands, or it cannot be removed either: the next tick decides both again, counting nothing now */ }
+      if (gone && !recorded) bump(db, 'card_unrecorded_removed');
+      if (gone && d.consumed) countConsumed();
     }
     return;
   }
@@ -299,11 +312,7 @@ function oneCard(db, s, ictx, budget, id, uuid, registered, out) {
     out.written += 1;
   }
   if (d.act === 'delete') out.deleted += 1;
-  if (d.consumed) {
-    const scope = consumedScopeOf(s, ictx.home, id, uuid, current, copy, ccrcId);
-    bump(db, `card_consumed:${scope}`);
-    out.consumed += 1;
-  }
+  if (d.consumed) countConsumed();
 }
 
 /** The consumer and the writer (§8.6 Timing, §9.2 step 6), over every session the registry names and every card file

@@ -18,7 +18,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import {
   makeHistoryBox, runSweep, runDriver, plantSession, plantTranscript, spoolLine, openStoreRO, counters, skipOnDarwin,
-  recoverRow, type HistoryBox,
+  recoverRow, PRELOADS, type HistoryBox,
 } from './historyHelpers.js';
 
 /** Spec §8.6's grammar, as the spec spells it. */
@@ -887,6 +887,44 @@ describe('the sweep writes and consumes card/<id>/<uuid>.txt at end-of-file (spe
     expect(cardOf(box, ID, U), 'the write landed').not.toBeNull();
     expect(counters(box)['card_cleanup_failed']).toBeGreaterThanOrEqual(1);
     expect(counters(box)['card_written'], 'the write is counted although its cleanup failed').toBe(written + 1);
+  }, 240_000);
+
+  // D-5059 (history-card-consumed-write-fails-closed): a consumed prediction whose replacement write fails goes too.
+  // The fault is the faults preload's ENOSPC on the first Buffer write to the prediction's temp (`<uuid>.txt.tmp.<pid>`):
+  // the generation record, written first, is a different name and lands, so the record is unchanged and the write is the
+  // only thing that fails. An unlink succeeds where that write met ENOSPC, which is the point.
+  it('D-5059 consumed write failure: the consumed prediction is removed, counted card_write_failed once and card_consumed once, and a further failing pass counts no second consumption', () => {
+    const box = makeHistoryBox('ccrc-hist-card-consumedfail-');
+    const [ID, U] = ['card-cfail', sidC(0xf11)];
+    const s = compactionSequence({ n: 2, trigger: 'manual', seed: 0xf11, sessionId: U, startMs: T0C });
+    const p = plantC(box, ID, U, s.rows.slice(0, cutBefore(s, 0)));
+    settleC(box);
+    pokeC(box, ID);
+    const want0 = libCard.leafId(ID, U, firstUuidC(s));
+    expect(cardOf(box, ID, U), 'CONTROL: the prediction stands').toBe(expectedCard([], want0));
+    const gen = fs.readFileSync(path.join(box.root, 'card', ID, `${U}.gen`), 'utf8');
+    const failing = (): void => {
+      spoolLine(box, ID, { v: 1, ev: 'Stop', id: ID });
+      const r = runSweep(box, [], { preloads: [PRELOADS.faults], env: { HISTORY_TEST_ENOSPC: `${U}.txt.tmp` } });
+      expect(r.code, `${r.stderr}${r.stdout}`).toBe(0);
+    };
+    const before = counters(box);
+    appendRows(p, s.rows.slice(cutBefore(s, 0), cutBefore(s, 1)));
+    failing();   // ingests boundary 0 at end-of-file: the new prediction would replace the consumed one, and cannot be written
+    const after = counters(box);
+    expect(cardOf(box, ID, U), 'the consumed line is gone, not served as the next compaction').toBeNull();
+    expect(fs.existsSync(cardPath(box, ID, U)), 'and no temp or other name stands in its place').toBe(false);
+    expect(fs.readFileSync(path.join(box.root, 'card', ID, `${U}.gen`), 'utf8'), 'the generation record is unchanged').toBe(gen);
+    expect((after['card_write_failed'] ?? 0) - (before['card_write_failed'] ?? 0)).toBe(1);
+    expect(consumedC(box)).toEqual({ 'card_consumed:unknown': 1 });
+    expect(after['card_unrecorded_removed'] ?? 0, 'the record was acted on: this is no unrecorded removal').toBe(before['card_unrecorded_removed'] ?? 0);
+    failing();   // the write still fails and nothing stands: nothing more is consumed
+    expect(cardOf(box, ID, U)).toBeNull();
+    expect(consumedC(box), 'consumed once').toEqual({ 'card_consumed:unknown': 1 });
+    derivedC(box);
+    expect(consumedC(box), 'and still once').toEqual({ 'card_consumed:unknown': 1 });
+    pokeC(box, ID);   // CONTROL: with the fault gone the next prediction is written
+    expect(cardOf(box, ID, U)).toBe(expectedCard(familyC(box, ID), libCard.leafId(ID, U, s.headUuids[0]!)));
   }, 240_000);
 
   // R-recalloff-parity (spec §9.7, §8.2, C68): when neither CCRC_SESSION_GENERATION nor $REG/<id>.generation resolves a
