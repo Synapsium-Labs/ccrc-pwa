@@ -213,72 +213,75 @@ than depended on (spec §11–§12). A replay eval (W2) decides whether W3 and W
 
 ## Next-wave brief
 
-Wave 3 (W1-B2 "recall") is run 354, and its brief is below as it will be dispatched once this ledger's docs PR
-merges (route: opus, ultracode, subagent sonnet, workflow on, compact 40). Wave 2's brief is in this file's history.
+Wave 4 (W1-B3 "card line") is run 468, and its brief is below as it will be dispatched once this ledger's docs PR
+merges (route: opus, ultracode, subagent sonnet, workflow on, compact 40). Wave 3's brief is in this file's history.
 
 ```text
-Run 354 - programme ccrc-history, wave 3: W1-B2 "recall". Coordinator: ccrc-pwa-quiet-ridge.
+Run 468 - programme ccrc-history, wave 4: W1-B3 "card line". Coordinator: ccrc-pwa-quiet-ridge.
 
 Ledger: docs/superpowers/programs/ccrc-history.md (on main).
-Plan: docs/superpowers/plans/2026-10-06-ccrc-history-w1-b2-recall.md. Read its header first: Goal, Global Constraints, Review Focus, the pin map, the file map. Then do Tasks 1-36 in order; there are 38 headings, because the lettered Tasks 7A and 7B come before Task 8.
-Spec: docs/superpowers/specs/2026-10-05-ccrc-history-lossless-dag-design.md (rev 3.5). The plan cites the sections each task needs.
-B1 is MERGED (PR #315, 69ef7102b). Its code on main is your base. Do not redo or rewrite it, except where a task edits it in place.
+Plan: docs/superpowers/plans/2026-10-07-ccrc-history-w1-b3-card-line.md. Read its header first: Goal, Architecture, Global Constraints, Review Focus, File Structure. Then do Tasks 1-14 in order.
+Spec: docs/superpowers/specs/2026-10-05-ccrc-history-lossless-dag-design.md (rev 3.6). §8.6 is the card line; the plan cites the sections each task needs.
+B2 is MERGED (PR #404, de0ab03e1). B1's and B2's code on main is your base. Do not redo or rewrite it, except where a task edits it in place.
 
 Execution skill: superpowers:subagent-driven-development.
 Commit on this workspace's own branch. Do not create or switch to a separate feature branch.
 
-What the wave ships (one PR, "B2"):
-- the recall verbs (tree, grep, describe, expand), the parser and native leaves;
-- the substring belt (7A, 7B) and windowed display redaction;
-- the operator verbs (prune, reparse, doctor --repair/--backup/--adopt/--restore/--rebuild/--migrate) and the recovery step;
-- the ccrc-history skill and its installer, README's history section;
-- fork spooling (Q16) and the per-copy export due (Q15).
-Sessions gain the skill and the CLI verbs.
+What the wave ships (one PR, "B3"):
+- after a compaction of a session's main thread, one grammar-gated line in its SessionStart(compact) context that names the leaf the compaction becomes;
+- the PreCompact scope marker, _hook_history_card and the 513-char reserve in ccd/session-hook.sh;
+- card.mjs: the sweep's predictions, written, consumed, withdrawn and measured (W1-e);
+- two lifecycle rows, measure-history.py's W1-e query, README's card paragraph.
 
-Base: main at 7c71244db or later.
-- The plan's anchors were measured on B1's merged code. Re-anchor every Modify by its content; line numbers are hints.
-- Edit citation-corpus files in place or end-append them exactly as the plan says.
+Base: main at the commit that merges this ledger, or later.
+- The plan was re-measured on B2's merged code on 2026-10-15 and amended in place. Re-anchor every Modify by its content; line numbers are hints.
+- B2 changed the sweep's shape: scheduledPass writes the pass marker and calls scheduledPassBody; a thrown pass records its death (D-5026); a held pass stamps held_pass_ms (D-5027); derive's parent step is budgeted. The card edits sit where the plan says; disturb none of B2's pins.
+- ccd/session-hook.sh moves often. Task 9's census figures are from de0ab03e1: re-measure them at your base.
+
+Not in this wave: the follow-ups B2's departures mark "on B3's list" (D-5017, D-5021, D-5022, D-5024, D-5026 residual (i), D-5027's lag-high remedy). They are hardening wave 5h's. B3 changes no schema and no doctor check.
 
 Measuring:
-- Many reds and counts in the plan are marked "predicted": no B2 code existed when it was written. Run each step and record what it actually prints.
+- Reds and counts marked "predicted" were written before the code existed. Run each step and record what it prints.
 - A red at a CONTROL is the fixture's to fix, never the guard's to weaken.
 - Every mutant must red when its guard is removed. If one cannot, that is a finding: report it.
-- Every vitest -t filter is a regex. Keep each one regex-safe, with each selecting at least one test.
+- Every vitest -t filter is a regex. Keep each regex-safe, each selecting at least one test.
+- Key-shaped fixtures are assembled at runtime (push protection refused wave 3's first push).
 
-Peers: read GET /api/claims?project=ccrc-pwa before your first edit to any existing file. Child reclamation's run 347 currently claims single-definition.test.ts, CLAUDE.md and ccd/ccd. Never edit a contested path. Agree an in-place or end-append scope by the peer protocol, or do other tasks first and mail me if nothing else is left. Whichever PR lands second merges main and keeps both sides.
+Peers: read GET /api/claims?project=ccrc-pwa before your first edit to any existing file. session-hook.sh, README.md, CLAUDE.md, shared/lifecycle.ts and single-definition.test.ts are often claimed. Never edit a contested path: agree a scope by the peer protocol, or do other tasks first and mail me if nothing else is left. Whichever PR lands second merges main (never a rebase) and keeps both sides.
 
 Live safety (on top of your skill and CLAUDE.md):
-- Never run the shim, sweep.mjs, cli.mjs, any ccrc history verb, any --op or the ccd-history-sweep unit against the live $HOME.
+- Never run the shim, sweep.mjs, cli.mjs, any ccrc history verb, any --op, the hook against a real event, or the ccd-history-sweep unit against the live $HOME.
 - Never create or touch ~/.ccrc/history. Never enable a timer. Never run ccrc update, deploy or rollout.
-- Fixture HOMEs only (historyHelpers.ts). Remove every fixture directory and every Python bytecode file your runs create.
-- Never kill processes by pattern (pkill -f, killall). Every session shares one UNIX user, so kill only PIDs or process groups you started.
+- Fixture HOMEs only (historyHelpers.ts). Remove every fixture directory and Python bytecode file your runs create.
+- Never kill processes by pattern (pkill -f, killall). Kill only PIDs or process groups you started.
 
 Suites:
 - From inside server/: ./node_modules/.bin/vitest run test/<file>.test.ts, in the foreground, with a Bash timeout of at least 600000.
-- Re-run the CLAUDE.md load flakes in isolation before calling a red real.
-- tmp-sweep's fail-closed environment case is red on this box at the base. It is not yours.
+- Re-run the CLAUDE.md load flakes in isolation before calling a red real. session-hook's strace fork-count cases are load-sensitive.
+- ccrc-install.test.ts takes about 790 s here: run it in -t slices. tmp-sweep's fail-closed environment case and boot.test.ts's bound under load are red on this box at the base. They are not yours.
 
 Departures:
-- The plan defines its own: D-4675 through D-4735, already in its Deviations found. Cite them by number.
-- For a departure you find while executing, take the next unused number from this run's block: 4587, 4588, 4589, 4590, 4591, 4592, 4593, 4594, 4595, 4596, 4597, 4598, 4599, 4600, 4601, 4602, 4603, 4604, 4605, 4606, 4607, 4608, 4609, 4610, 4611, 4612, 4613, 4614, 4615, 4616.
+- The plan defines its own: D-4736 through D-4753, in its Deviations found. Cite them by number.
+- For a departure you find while executing, take the next unused number from this run's block: 5049, 5050, 5051, 5052, 5053, 5054, 5055, 5056, 5057, 5058, 5059, 5060, 5061, 5062, 5063, 5064, 5065, 5066, 5067, 5068, 5069, 5070, 5071, 5072, 5073, 5074, 5075, 5076, 5077, 5078.
 - Define it in the plan's "## Deviations found" in the same commit that first cites it, as "- **D-<n>** — `<slug>` (Task N): <why>".
 - Never call the allocator, and never write a range.
 - Run deviation-refs after `git fetch origin main` before each push. Name every number you used in your wave-done.
 
-Not yours, and done by the operator or the coordinator after merge: merging, every rollout, the operator acts B1 still owes (linking ~/.ccrc/history/db, `--op import --apply`), and the B3/B4 waves.
+Not yours: merging, every rollout, the operator's acts (doctor --migrate, the import), and wave 5h.
 
 Before wave-done:
 - Run a whole-branch review of your own: three Opus · high lenses (correctness, spec conformance, does-it-reproduce) with refuters. Fix what it confirms.
-- Then run the full local suite once.
-Wave-done when PR B2 is open, its required checks are green (build-pwa, test (pwa), test (agent), test (server); test-macos and probe-macos are advisory), and your branch tip is the PR head. Your fingerprint is the workspace branch tip.
+- Then run every touched suite once, alone.
+Wave-done when PR B3 is open, its required checks are green (build-pwa, test (agent), test (pwa), test (server), node floor, typecheck), and your branch tip is the PR head. Your fingerprint is the workspace branch tip.
 
-Routing (clause 13; routing-matrix row "bulk work larger than one context", the same as wave 2):
+Routing (clause 13; routing-matrix row "bulk work larger than one context", as waves 2 and 3):
 - main loop: Opus, ultracode, orchestrating;
 - implementer subagents: Sonnet at effort high (never below);
 - per-task reviewer: Opus at effort high;
-- scouts: Haiku;
-- workflows on, compact threshold 40.
+- scouts: Haiku; workflows on, compact threshold 40.
 - Name the model and effort explicitly on every Agent and agent() call.
+- Every subagent and workflow prompt opens with: "You are a subagent of the run 468 worker, not the worker. Do not invoke ccrc-worker. Never run ccrc-api, mail or claims. Return your report."
+- If your session is moved to a GPT lane, mail me at once.
 - Commit after each task. If the session dies, the branch is the resume point.
 
 Questions go through the AskUserQuestion rule in your skill. I answer what the spec, the plan and the ledger already decide. Anything new goes to the operator.
