@@ -12086,7 +12086,7 @@ describe('history card line: SessionStart(compact) serves the sweep\'s predictio
     ['the newest family recorded G and an empty recall-off file reads stale', '', 'absent', 'empty', 'G'],
     ['no env or registry generation and recall-off names the recorded newest family', '', 'absent', 'G', 'G'],
     ['recall-off names G while the recorded newest family is G2', '', 'absent', 'G', 'G2'],
-    ['an unreadable .generation is no generation, the record decides', '', 'unreadable', 'G', 'G'],
+    ['an unreadable .generation is unusable: the hook withholds and the CLI answers exit 8 too', '', 'unreadable', 'G', 'G'],
     // D-5063: the record decides ONLY when .generation is absent or empty. One the hook cannot read as a UUID (linked,
     // unreadable, a full read window, any non-UUID value) is unusable, and a recall-off file that exists withholds.
     ['a symlinked .generation is unusable, recall-off names the recorded G2', '', 'symlink-G', 'G2', 'G2'],
