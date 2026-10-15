@@ -28,6 +28,7 @@ import { isDelegationCheckpointKebab } from '../src/coord/delegation-checkpoint.
 import { isDelegationIngestKebab } from '../src/coord/delegation-ingest.js';
 import { isDelegationCorrelationKebab } from '../src/coord/delegation-correlation.js';
 import { isDelegationCensusKebab } from '../src/coord/gitref.js';
+import { isDelegationPolicyKebab } from '../src/coord/delegation-policy.js';
 
 const TOKEN = 'f'.repeat(64);
 const UUID = 'a'.repeat(36);
@@ -870,15 +871,16 @@ describe('the rejection table is total, in both directions', () => {
         || isCollectExecutorKebab(tok)
         // DELEGATION BROKER, WAVE 3: the SEVENTEENTH union, checked together and never merged, on the standing rule
         // `enter-ignored` above states. The delegation modules (`delegation-model.ts`, `-journal.ts`, `-checkpoint.ts`,
-        // `-ingest.ts` and `-correlation.ts`) spell, as literals, their refusal codes, the journal's entry kinds, the pruning
+        // `-ingest.ts`, `-correlation.ts` and `-policy.ts`) spell, as literals, their refusal codes, the journal's entry kinds, the pruning
         // hold reasons, the recovery phases and failure codes, the durability edges, the line rejections, the bucket
         // unreadable reasons, the verdict kinds and every correlation reason; `gitref.ts` spells the worktree census's
-        // diagnostics. None is a mail rejection or a run refusal — no route answers with one; they ride the journal, the
-        // checkpoint, the cursor detail and a verdict. Admitted through six exported guards, each derived from its own file's
+        // diagnostics; the policy spells its six report-effect tags. None is a mail rejection or a run refusal — no route answers with one; they ride the journal, the
+        // checkpoint, the cursor detail, a verdict and an effect. Admitted through seven exported guards, each derived from its own file's
         // typed tables (or from `shared/api.ts`'s delegation vocabularies, read and never re-spelled), never NOT_CODES, for the
         // reason every union above gives.
         || isDelegationModelKebab(tok) || isDelegationJournalKebab(tok) || isDelegationCheckpointKebab(tok)
-        || isDelegationIngestKebab(tok) || isDelegationCorrelationKebab(tok) || isDelegationCensusKebab(tok),
+        || isDelegationIngestKebab(tok) || isDelegationCorrelationKebab(tok) || isDelegationCensusKebab(tok)
+        || isDelegationPolicyKebab(tok),
         `${tok} is not a declared MailRejectCode, RunRefuseCode, LifecycleGapReason, ClaimRefuseCode, SessionLifecycle, ReclaimRefuseCode, AskRefuseCode, RunRouteRefuseCode, SetAccountPoolsRefuseCode, UpdateStoreRefuseCode, child-reclaim word, stall-watch word, expiry word, stall-watch settings word, dead-coordinator word, temp-root collector word or delegation word`).toBe(true);
     }
   });
