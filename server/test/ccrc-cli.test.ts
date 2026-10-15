@@ -246,9 +246,13 @@ describe('ccrc: dispatch and usage', () => {
     expect(r.stdout).toContain('grep|describe|expand|tree');
     expect(r.stdout).toContain('import|prune|reparse');
     // A dry run of import|prune|reparse runs inside a session (decideOpGate(null) is ok); only --apply and doctor refuse.
-    expect(r.stdout).toContain('(each a dry run unless --apply)');
+    // Whitespace folded, so a clause wrapped across the help's lines reads as the sentence it is (review 462 F8).
+    const flat = r.stdout.replace(/\s+/g, ' ');
+    expect(flat).toContain('import|prune|reparse are dry runs unless --apply, and a dry run runs inside a session');
+    expect(flat).toContain('Every --apply form and every doctor flag');
+    expect(flat).toContain('for the operator alone, from a terminal outside any session; inside one it is refused');
     expect(r.stdout).not.toContain('each refuses');
-    expect(r.stdout).toContain('--repair|--migrate|--adopt|--restore|--rebuild');
+    expect(flat).toContain('--repair|--migrate|--adopt|--restore|--rebuild');
     expect(r.stdout).toContain('README,');
     expect(r.stdout.indexOf('  history   ')).toBeLessThan(r.stdout.indexOf('-h, --help'));
     expect(r.stdout).toMatch(/^ {2}watchdog {2}\(server\/both, Linux; run by ccrc-update-watchdog\.timer/m);

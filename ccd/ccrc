@@ -23793,12 +23793,14 @@ _usage_history_paragraph() {
     '            session into ~/.ccrc/history every 2 minutes, verbatim, secrets' \
     '            a session printed included; touch ~/.ccrc/history-off to pause' \
     '            it. status [--json] reports the store and its health. A' \
-    '            session recalls with grep|describe|expand|tree. The operator' \
-    '            alone, from a terminal outside any session, runs' \
-    '            import|prune|reparse (each a dry run unless --apply) and' \
-    '            doctor --backup|--repair|--migrate|--adopt|--restore|--rebuild;' \
-    '            every --apply form and every doctor flag refuses inside a' \
-    '            session. See README, "Session history: lossless recall"'
+    '            session recalls with grep|describe|expand|tree.' \
+    '            import|prune|reparse are dry runs unless --apply, and a dry' \
+    '            run runs inside a session. Every --apply form and every' \
+    '            doctor flag, such as doctor' \
+    '            --backup|--repair|--migrate|--adopt|--restore|--rebuild, is' \
+    '            for the operator alone, from a terminal outside any session;' \
+    '            inside one it is refused.' \
+    '            See README, "Session history: lossless recall"'
 }
 
 # `--purge --purge-history` with a LINKED `db/` (history spec §9.5): remove,
