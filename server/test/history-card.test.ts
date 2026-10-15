@@ -258,3 +258,146 @@ describe('the card prediction and the card file decision (spec 8.6, 6.1, 6.3; W1
     }
   });
 });
+
+// ===========================================================================
+// W1-B3 Task 3: card delivery, consumption-scope, withdrawal and purge decisions (spec §8.6 RV17, §9.4, §10.7 W1-e;
+// rulings RC2 and RC3). Pure.
+// ===========================================================================
+describe('card delivery, scope, withdrawal, window and purge decisions (spec 8.6 RV17, 9.4, 10.7 W1-e; rulings RC2, RC3; W1-B3 Task 3)', () => {
+  const ctx = (...content: unknown[]): Record<string, unknown> =>
+    ({ type: 'hook_additional_context', content, hookName: 'SessionStart:compact' });
+  const line = libCard.cardLine({ leaf: 'L03a9c1', parent: 'N7c1e2f' });
+
+  it('cardIdsIn finds the History id at a line start, after standing-card text on the same line, and inside nested string-array content', () => {
+    expect(libCard.cardIdsIn(ctx(`${line}\nCompaction card: files touched.`))).toEqual(['L03a9c1']);
+    expect(libCard.cardIdsIn(ctx(`Graph: fixture. Hold: none. ${line}\nCompaction card: files touched.`))).toEqual(['L03a9c1']);
+    expect(libCard.cardIdsIn(ctx('first', ['nested', `x ${line}`]))).toEqual(['L03a9c1']);
+    expect(libCard.cardIdsIn(ctx(`${line} ${libCard.cardLine({ leaf: 'L000001abc' })}`))).toEqual(['L000001abc', 'L03a9c1']);
+  });
+
+  it('cardIdsIn ignores a parent first, upper case, fewer than 6 hex, a longer word, another attachment type and a non-object', () => {
+    for (const text of ['History: node N7c1e2f… (this compaction)', 'History: node L03A9C1… (this compaction)',
+      'History: node L03a9c… (this compaction)', 'History: node L03a9c1x… (this compaction)']) {
+      expect(libCard.cardIdsIn(ctx(text)), text).toEqual([]);
+    }
+    expect(libCard.cardIdsIn({ type: 'todo_reminder', content: [line] })).toEqual([]);
+    for (const v of [null, line, [line], 7, undefined]) expect(libCard.cardIdsIn(v), String(v)).toEqual([]);
+  });
+
+  it('decideCardDelivery: served when an id prefixes the leaf, mismatch when ids name only others, none once the window closed empty, wait while it is open', () => {
+    const leaf = `L03a9c1${'0'.repeat(13)}`;
+    expect(libCard.decideCardDelivery({ ids: ['L03a9c1'], leafId: leaf, windowComplete: false })).toBe('served');
+    expect(libCard.decideCardDelivery({ ids: ['Lffffff', 'L03a9c1'], leafId: leaf, windowComplete: false })).toBe('served');
+    expect(libCard.decideCardDelivery({ ids: ['Lffffff'], leafId: leaf, windowComplete: false })).toBe('mismatch');
+    expect(libCard.decideCardDelivery({ ids: [], leafId: leaf, windowComplete: true })).toBe('none');
+    expect(libCard.decideCardDelivery({ ids: [], leafId: leaf, windowComplete: false })).toBe('wait');
+  });
+
+  it('cardWindowComplete: CARD_MEASURE_ROWS rows, the next boundary, the copy read to its end past the grace, a copy not live, or the wait bound closes it', () => {
+    expect(libCard.CARD_MEASURE_ROWS).toBe(40);
+    expect(libCard.CARD_MEASURE_MAX_WAIT_MS).toBe(24 * 60 * 60 * 1000);
+    expect(libCard.CARD_ATTACHMENT_MAX_BYTES).toBe(1024 * 1024);
+    const open = { live: true, rowsSeen: libCard.CARD_MEASURE_ROWS - 1, nextBoundary: false, eofAfter: false, waitedMs: 0 };
+    expect(libCard.cardWindowComplete(open)).toBe(false);
+    expect(libCard.cardWindowComplete({ ...open, rowsSeen: libCard.CARD_MEASURE_ROWS })).toBe(true);
+    expect(libCard.cardWindowComplete({ ...open, nextBoundary: true })).toBe(true);
+    expect(libCard.cardWindowComplete({ ...open, eofAfter: true })).toBe(true);
+    expect(libCard.cardWindowComplete({ ...open, live: false })).toBe(true);
+    expect(libCard.cardWindowComplete({ ...open, waitedMs: libCard.CARD_MEASURE_MAX_WAIT_MS })).toBe(true);
+    expect(libCard.cardWindowComplete({ ...open, waitedMs: libCard.CARD_MEASURE_MAX_WAIT_MS - 1 })).toBe(false);
+  });
+
+  it('decidePurgedEntry: removes only a registry-absent entry older than 7 days; present, unmeasured, young or undated is kept', () => {
+    const now = Date.UTC(2026, 9, 7);
+    const old = now - libCard.PURGED_FILES_GRACE_MS - 1;
+    const rows: Array<[string, 'present' | 'absent' | 'unmeasured', number | null, 'keep' | 'remove']> = [
+      ['absent, 7 days and 1 ms', 'absent', old, 'remove'],
+      ['absent, exactly 7 days', 'absent', now - libCard.PURGED_FILES_GRACE_MS, 'keep'],
+      ['absent, 6 days', 'absent', now - 6 * 24 * 60 * 60 * 1000, 'keep'],
+      ['present, 8 days', 'present', old, 'keep'],
+      ['unmeasured, 8 days', 'unmeasured', old, 'keep'],
+      ['absent, no time', 'absent', null, 'keep'],
+    ];
+    for (const [name, reg, newestMtimeMs, want] of rows) {
+      expect(libCard.decidePurgedEntry({ reg, newestMtimeMs, nowMs: now }), name).toBe(want);
+    }
+  });
+
+  it("decideConsumedScope folds the marker its compaction left: main inside the boundary's window, other for subagent or ambiguous there, unknown for anything else (ruling RC3)", () => {
+    const U = '0189abcd-1234-4678-9abc-0000000000c3';
+    const OTHER = '0189abcd-1234-4678-9abc-0000000000c4';
+    const B = Date.UTC(2026, 9, 7, 12);
+    const MAX = libCard.SCOPE_MARKER_MAX_AGE_MS;
+    const v = (value: string): libCard.Presence<string> => ({ state: 'value', value });
+    expect(MAX).toBe(1200 * 1000);
+    expect(libCard.CARD_CONSUMED_SCOPES).toEqual(['main', 'other', 'unknown']);
+    const rows: Array<[string, libCard.Presence<string>, number | null, libCard.CardConsumedScope]> = [
+      ['main, a second before the boundary, with its LF', v(`main ${U} ${B - 1000}\n`), B, 'main'],
+      ['main, at the boundary', v(`main ${U} ${B}`), B, 'main'],
+      ['main, exactly the max age before', v(`main ${U} ${B - MAX}`), B, 'main'],
+      ['main, older than the max age', v(`main ${U} ${B - MAX - 1}`), B, 'unknown'],
+      ['main, after the boundary (a later PreCompact overwrote it)', v(`main ${U} ${B + 1}`), B, 'unknown'],
+      ['ambiguous, a second before', v(`ambiguous ${U} ${B - 1000}`), B, 'other'],
+      ['subagent, a second before', v(`subagent ${U} ${B - 1000}`), B, 'other'],
+      ['ambiguous, after the boundary', v(`ambiguous ${U} ${B + 1}`), B, 'unknown'],
+      ['another uuid', v(`main ${OTHER} ${B - 1000}`), B, 'unknown'],
+      ['emptied by a later main PreCompact', v(''), B, 'unknown'],
+      ['a non-numeric ms', v(`main ${U} soon`), B, 'unknown'],
+      ['a word the hook never writes', v(`card ${U} ${B - 1000}`), B, 'unknown'],
+      ['a second line', v(`main ${U} ${B - 1000}\nmain ${U} ${B - 1000}\n`), B, 'unknown'],
+      ['absent', { state: 'absent' }, B, 'unknown'],
+      ['unreadable', { state: 'unreadable' }, B, 'unknown'],
+      ['no boundary time', v(`main ${U} ${B - 1000}`), null, 'unknown'],
+    ];
+    for (const [name, marker, boundaryTsMs, want] of rows) {
+      expect(libCard.decideConsumedScope({ marker, uuid: U, boundaryTsMs }), name).toBe(want);
+    }
+  });
+
+  it("consumedBoundaryTs names the boundary whose span the file printed: the first for a first-row prediction, a later one by its predecessor's head (its uuid with none); null for no card line, no epoch, or no boundary yet (ruling RC3)", () => {
+    const ID = 'demo-quiet-basin';
+    const U = '0189abcd-1234-4678-9abc-0000000000c5';
+    const bs: libCard.CardBoundaryAt[] = [
+      { uuid: 'b-1', headUuid: 'h-1', tsMs: 1000 }, { uuid: 'b-2', headUuid: null, tsMs: 2000 }, { uuid: 'b-3', headUuid: 'h-3', tsMs: 3000 },
+    ];
+    const prefixOf = (start: string): string => libCard.leafId(ID, U, start).slice(0, 7);
+    const fileOf = (start: string): libCard.Presence<string> => ({ state: 'value', value: `${libCard.cardLine({ leaf: prefixOf(start) })}\n` });
+    const at = (current: libCard.Presence<string>, ccrcId: string | null = ID): number | null =>
+      libCard.consumedBoundaryTs({ current, ccrcId, ccUuid: U, firstRowUuid: 'r-first', boundaries: bs });
+    expect(new Set(['r-first', 'h-1', 'b-2', 'h-3'].map(prefixOf)).size, 'CONTROL: the four fixture leaves differ in their first 7 characters').toBe(4);
+    expect(at(fileOf('r-first'))).toBe(1000);
+    expect(at(fileOf('h-1'))).toBe(2000);
+    expect(at(fileOf('b-2')), 'b-2 has no head: its own uuid starts the next span').toBe(3000);
+    expect(at(fileOf('h-3')), "the next compaction's prediction: no boundary consumed it yet").toBeNull();
+    expect(at({ state: 'value', value: 'free text\n' })).toBeNull();
+    expect(at({ state: 'absent' })).toBeNull();
+    expect(at(fileOf('r-first'), null), 'no epoch names the session').toBeNull();
+  });
+
+  it('decideCardWithdraw names a reason for every pass that runs no card step, and keeps the predictions only when the step ran over a caught-up ingest (ruling RC2)', () => {
+    const run = (o: { pause?: 'at-cap' | 'low-disk' | null; floorStop?: boolean; ingested?: boolean; budgetLeft?: boolean }): libCard.CardPassFacts =>
+      ({ arm: 'run', pause: null, floorStop: false, ingested: true, budgetLeft: true, ...o });
+    const rows: Array<[string, libCard.CardPassFacts, libCard.CardWithdrawReason]> = [
+      ['a cap pause', run({ pause: 'at-cap' }), 'at-cap'],
+      ['a floor pause', run({ pause: 'low-disk' }), 'low-disk'],
+      ['a per-chunk floor stop', run({ floorStop: true }), 'floor-stop'],
+      ['an ingest an unreadable roster skipped', run({ ingested: false }), 'roster-unreadable'],
+      ['a budget spent before the card step', run({ budgetLeft: false }), 'budget'],
+      ['a floor pause with the budget spent too: the pause names it', run({ pause: 'low-disk', budgetLeft: false }), 'low-disk'],
+      ['the recover arm', { arm: 'recover' }, 'recovering'],
+      ['the migrate arm', { arm: 'migrate' }, 'migrating'],
+      ['a writer token still to come', { arm: 'hold', word: 'held' }, 'held'],
+      ['a migration held for room', { arm: 'hold', word: 'migration-refused' }, 'held'],
+      ['a migration that waits on the operator (doctor --migrate)', { arm: 'hold', word: 'migration-needs-op' }, 'held'],
+      ['a volume that did not answer', { arm: 'hold', word: 'store-unreachable' }, 'unreachable'],
+      ['a store.id naming another store', { arm: 'hold', word: 'store-mismatch' }, 'refused'],
+      ['a newer schema', { arm: 'hold', word: 'schema-newer' }, 'refused'],
+      ['a DB no store.id binds', { arm: 'hold', word: 'store-unbound' }, 'unbound'],
+    ];
+    for (const [name, pass, reason] of rows) expect(libCard.decideCardWithdraw(pass), name).toEqual({ act: 'withdraw', reason });
+    expect(libCard.decideCardWithdraw(run({})), 'the card step ran over a caught-up ingest').toEqual({ act: 'keep' });
+    expect([...new Set(rows.map(([, , r]) => r))].sort(), 'every reason word is reached, and none outside the vocabulary')
+      .toEqual([...libCard.CARD_WITHDRAW_REASONS].sort());
+    expect(() => libCard.decideCardWithdraw({ arm: 'off' } as unknown as libCard.CardPassFacts)).toThrow(/^decideCardWithdraw: not a pass arm/);
+  });
+});

@@ -7898,3 +7898,161 @@ export function cardGenFileOf(home, id, uuid) {
   if (typeof uuid !== 'string' || !UUID_RE.test(uuid)) throw new TypeError(`cardGenFileOf: not a session uuid: ${JSON.stringify(uuid)}`);
   return `${cardDirOf(home, id)}/${uuid}.gen`;
 }
+
+/** The rows after a boundary, in its holding copy, that the delivery measure reads for the SessionStart attachment
+ *  (chosen: RV17 found it within 40 rows of the boundary for 75 of 75 boundaries, M). D-4739 (history-card-measure-window) */
+export const CARD_MEASURE_ROWS = 40;
+/** How long after its leaf was derived a delivery window may stay open (chosen). A copy that stops being read (its
+ *  home left the roster, its file unreadable) never closes its window any other way, and the measure's cursor waits
+ *  on the oldest open window. */
+export const CARD_MEASURE_MAX_WAIT_MS = 24 * 60 * 60 * 1000;
+/** The largest attachment body the delivery measure decodes, by the blob's stored `raw_len` (the bytes of its JSON;
+ *  chosen). The hook clips its whole SessionStart output at CARD_TOTAL_MAX_CHARS characters, a few bytes each once
+ *  JSON-escaped, so a SessionStart attachment stays far below this even beside other hooks' context. A larger body,
+ *  such as a re-attached file of many MiB, is skipped unread rather than decompressed only to read its `type`.
+ *  D-4739 (history-card-measure-window) */
+export const CARD_ATTACHMENT_MAX_BYTES = 1024 * 1024;
+
+const CARD_ID_IN_TEXT_RE = new RegExp(`${escapeRe(CARD_PREFIX)}node (L[0-9a-f]{6,20})(?![0-9A-Za-z])`, 'g');
+
+/** The leaf display prefixes a SessionStart attachment names (§8.6 RV17): every `History: node L…` in the string
+ *  leaves of a `hook_additional_context` attachment, wherever it sits in a string, because `_hook_emit_context` joins
+ *  the standing cards and the compact subject with one space. Any other attachment type, or a value that is not an
+ *  object, names none. Sorted, each once. */
+export function cardIdsIn(attachment) {
+  if (attachment === null || typeof attachment !== 'object' || Array.isArray(attachment)) return [];
+  if (attachment.type !== 'hook_additional_context') return [];
+  const ids = new Set();
+  const stack = [attachment];
+  while (stack.length > 0) {
+    const v = stack.pop();
+    if (typeof v === 'string') {
+      for (const m of v.matchAll(CARD_ID_IN_TEXT_RE)) ids.add(m[1]);
+    } else if (Array.isArray(v)) {
+      for (const x of v) stack.push(x);
+    } else if (v !== null && typeof v === 'object') {
+      for (const x of Object.values(v)) stack.push(x);
+    }
+  }
+  return [...ids].sort();
+}
+
+/** Whether a leaf's delivery window is closed, so no History line can still arrive in it: CARD_MEASURE_ROWS rows read
+ *  after its boundary; the next boundary of its copy reached; its copy read to the end at least RAW_LEAF_GRACE_MS
+ *  after the boundary (`eofAfter`, lib eofAfterBoundary); its copy no longer live (gone, retired, exported, or none);
+ *  or CARD_MEASURE_MAX_WAIT_MS since the leaf was derived. D-4739 (history-card-measure-window) */
+export function cardWindowComplete({ live, rowsSeen, nextBoundary, eofAfter, waitedMs }) {
+  return !live || nextBoundary || rowsSeen >= CARD_MEASURE_ROWS || eofAfter || waitedMs >= CARD_MEASURE_MAX_WAIT_MS;
+}
+
+/** One leaf's delivery (§8.6, W1-e): `served` when a History line in its window names a prefix of it; `mismatch`
+ *  when History lines there name only other leaves (a stale or a mispredicted card); `none` when the window closed
+ *  with no History line; `wait` while it is open. D-4737 (history-card-measured-from-transcript) */
+export function decideCardDelivery({ ids, leafId, windowComplete }) {
+  if (ids.some((p) => leafId.startsWith(p))) return 'served';
+  if (ids.length > 0) return 'mismatch';
+  return windowComplete ? 'none' : 'wait';
+}
+
+/** A purged session's scope marker or card directory (§9.4): removed once the registry no longer names the session
+ *  (`$REG/<id>.uuid` absent) and its newest write is more than PURGED_FILES_GRACE_MS old. A registry entry that
+ *  could not be measured is never read as absent, and an entry with no measured time is kept. */
+export function decidePurgedEntry({ reg, newestMtimeMs, nowMs }) {
+  if (reg !== 'absent' || newestMtimeMs === null) return 'keep';
+  return nowMs - newestMtimeMs > PURGED_FILES_GRACE_MS ? 'remove' : 'keep';
+}
+
+// ── The consumption's scope (ruling RC3) ───────────────────────────────────────────────────────────────────────────
+/** How long a PreCompact scope marker speaks for the compaction it was written at, in ms: the hook's
+ *  COMPACT_CARD_MAX_AGE (1200 s), the age within which its reader serves a `main` marker (§8.6). The hook cannot
+ *  import lib, so single-definition.test.ts binds the two (W1-B3 Task 11). D-4738 (history-card-consumed-counter) */
+export const SCOPE_MARKER_MAX_AGE_MS = 1200 * 1000;
+/** The words a consumption is counted under, `card_consumed:<word>`. W1-e's served share is over `main` and
+ *  `unknown`; `other` is reported beside it (ruling RC3). */
+export const CARD_CONSUMED_SCOPES = Object.freeze(['main', 'other', 'unknown']);
+/** The scope words the hook writes into a marker (§5.1: `_hook_compact_scope`'s verdicts). */
+const SCOPE_MARKER_WORDS = Object.freeze(['main', 'subagent', 'ambiguous']);
+
+/** A marker's one line, `<scope> <uuid> <ms>` (one trailing LF is the hook's), or null for any other text. The uuid
+ *  is compared with the consumed file's own, which passed UUID_RE before it became a path, so it needs no grammar
+ *  of its own here. */
+function parseScopeMarker(text) {
+  const m = /^([a-z]+) (\S+) ([1-9][0-9]{0,15})$/.exec(text.replace(/\n$/, ''));
+  if (m === null || !SCOPE_MARKER_WORDS.includes(m[1])) return null;
+  return { scope: m[1], uuid: m[2], ms: Number(m[3]) };
+}
+
+/** The time of the boundary that consumed a card file (ruling RC3): of one copy's boundaries, in order, the one
+ *  whose leaf, by the span rule (predictedSpanStart over the boundary before it, or the copy's first row for the
+ *  first), the file's printed leaf prefixes. Walked newest first, where the consuming boundary almost always is. Its
+ *  `tsMs`, or null when the file prints no card line or no boundary there matches. A null `ccrcId` (no epoch names
+ *  the session) answers null before any hash: no epoch means no consumed boundary, and decideConsumedScope then
+ *  folds a null time to `unknown` (RC3). D-5050 (history-card-consumed-ts-no-epoch) */
+export function consumedBoundaryTs({ current, ccrcId, ccUuid, firstRowUuid, boundaries }) {
+  const was = current.state === 'value' ? cardLeafOf(current.value.replace(/\n$/, '')) : null;
+  // D-5050: leafId hashes every part and a null ccrcId would throw, so a session with no epoch answers null here.
+  if (was === null || ccrcId === null) return null;
+  for (let k = boundaries.length - 1; k >= 0; k -= 1) {
+    const start = predictedSpanStart({ firstRowUuid, lastBoundary: k === 0 ? null : boundaries[k - 1] });
+    if (start !== null && leafId(ccrcId, ccUuid, start).startsWith(was)) return boundaries[k].tsMs;
+  }
+  return null;
+}
+
+/** The scope a consumed prediction is counted under (W1-e's denominator, ruling RC3). `marker` is scope/<id> as
+ *  read: absent, unreadable, or its text. `uuid` is the consumed file's, and `boundaryTsMs` the consumed boundary's
+ *  time, null when it is not known:
+ *    main     the marker reads `main <uuid> <ms>`, its ms not after the boundary and within SCOPE_MARKER_MAX_AGE_MS of
+ *             it: the hook scoped THIS compaction main, so a line was due;
+ *    other    it reads `subagent` or `ambiguous` for this uuid in the same window: no line was ever due;
+ *    unknown  anything else: no marker, unreadable, emptied, another uuid, or a ms outside the window (overwritten by a
+ *             later PreCompact, or older than this compaction). Unknown stays in W1-e's denominator, so it can only
+ *             lower the served share. D-4738 (history-card-consumed-counter) */
+export function decideConsumedScope({ marker, uuid, boundaryTsMs }) {
+  if (marker.state !== 'value') return 'unknown';
+  const m = parseScopeMarker(marker.value);
+  if (m === null || m.uuid !== uuid) return 'unknown';
+  const age = boundaryTsMs === null ? null : boundaryTsMs - m.ms;
+  // D-5051 (history-scope-age-at-most): a marker exactly SCOPE_MARKER_MAX_AGE_MS old still serves (spec 8.6 says "younger than").
+  if (age === null || age < 0 || age > SCOPE_MARKER_MAX_AGE_MS) return 'unknown';
+  return m.scope === 'main' ? 'main' : 'other';
+}
+
+// ── The withdrawal (ruling RC2: fail closed) ───────────────────────────────────────────────────────────────────────
+/** The words a withdrawal is counted under, `card_withdrawn:<word>`: one per way a scheduled pass can run without a
+ *  card step over a caught-up ingest. */
+export const CARD_WITHDRAW_REASONS = Object.freeze([
+  'at-cap', 'low-disk', 'floor-stop', 'roster-unreadable', 'budget', 'recovering', 'migrating', 'held', 'unreachable',
+  'refused', 'unbound',
+]);
+
+const withdrawFor = (reason) => ({ act: 'withdraw', reason });
+
+/** Whether a scheduled pass withdraws every card prediction, and under which word (ruling RC2: fail closed). A
+ *  prediction is consumed only by a card step that sees the boundary that consumed it. So a pass that runs none, or
+ *  whose ingest may have stopped short of that boundary, withdraws them all rather than leave a stale line for the
+ *  next compaction:
+ *    hold     `store-unbound` → unbound; `store-unreachable` → unreachable; any other word passOutcome answers with
+ *             EXIT.DB (a refusal that waits on the operator) → refused; the rest (held, a migration held for room or
+ *             time) → held;
+ *    migrate  → migrating;   recover → recovering;
+ *    run      a cap or floor pause → its own word (at-cap, low-disk); the per-chunk floor stopped the ingest →
+ *             floor-stop; no ingest ran (an unreadable roster) → roster-unreadable; the run's budget spent before the
+ *             card step → budget (the step still consumes and deletes; it only writes nothing); otherwise keep.
+ *  A pass that never reaches this (history-off, a server box, a pass no timer starts) withdraws nothing; the hook
+ *  serves no line under the first two. D-4740 (history-card-withdrawn-when-not-ticking) */
+export function decideCardWithdraw(p) {
+  if (p.arm === 'hold') {
+    if (p.word === 'store-unbound') return withdrawFor('unbound');
+    if (p.word === 'store-unreachable') return withdrawFor('unreachable');
+    return withdrawFor(passOutcome(p.word).exit === EXIT.DB ? 'refused' : 'held');
+  }
+  if (p.arm === 'migrate') return withdrawFor('migrating');
+  if (p.arm === 'recover') return withdrawFor('recovering');
+  if (p.arm !== 'run') throw new TypeError(`decideCardWithdraw: not a pass arm: ${JSON.stringify(p.arm)}`);
+  if (p.pause === 'at-cap' || p.pause === 'low-disk') return withdrawFor(p.pause);
+  if (p.floorStop) return withdrawFor('floor-stop');
+  if (!p.ingested) return withdrawFor('roster-unreadable');
+  if (!p.budgetLeft) return withdrawFor('budget');
+  return { act: 'keep' };
+}

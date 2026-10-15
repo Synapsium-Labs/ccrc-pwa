@@ -892,3 +892,31 @@ export function decideCardGenFile(i: {
   current: Presence<string>; generation: string; card: 'keep' | 'write' | 'delete' | 'none'; mayWrite: boolean;
 }): 'keep' | 'write' | 'delete' | 'none';
 export function cardGenFileOf(home: string, id: string, uuid: string): string;
+
+
+// --- W1-B3 Task 3: card delivery, window and purge decisions (spec §8.6 RV17, §9.4, §10.7 W1-e)
+export const CARD_MEASURE_ROWS: 40;
+export const CARD_MEASURE_MAX_WAIT_MS: number;
+export const CARD_ATTACHMENT_MAX_BYTES: number;
+export function cardIdsIn(attachment: unknown): string[];
+export function cardWindowComplete(i: { live: boolean; rowsSeen: number; nextBoundary: boolean; eofAfter: boolean; waitedMs: number }): boolean;
+export function decideCardDelivery(i: { ids: readonly string[]; leafId: string; windowComplete: boolean }): 'served' | 'mismatch' | 'none' | 'wait';
+export function decidePurgedEntry(i: { reg: 'present' | 'absent' | 'unmeasured'; newestMtimeMs: number | null; nowMs: number }): 'keep' | 'remove';
+// rulings RC3 (the consumption's scope) and RC2 (the withdrawal)
+export const SCOPE_MARKER_MAX_AGE_MS: number;
+export type CardConsumedScope = 'main' | 'other' | 'unknown';
+export const CARD_CONSUMED_SCOPES: readonly CardConsumedScope[];
+export type CardWithdrawReason =
+  | 'at-cap' | 'low-disk' | 'floor-stop' | 'roster-unreadable' | 'budget' | 'recovering' | 'migrating' | 'held'
+  | 'unreachable' | 'refused' | 'unbound';
+export const CARD_WITHDRAW_REASONS: readonly CardWithdrawReason[];
+export interface CardBoundaryAt { readonly uuid: string; readonly headUuid: string | null; readonly tsMs: number | null }
+export type CardPassFacts =
+  | { arm: 'hold'; word: string }
+  | { arm: 'migrate' | 'recover'; word?: string | null }
+  | { arm: 'run'; pause: 'at-cap' | 'low-disk' | null; floorStop: boolean; ingested: boolean; budgetLeft: boolean };
+export function consumedBoundaryTs(i: {
+  current: Presence<string>; ccrcId: string | null; ccUuid: string; firstRowUuid: string | null; boundaries: readonly CardBoundaryAt[];
+}): number | null;
+export function decideConsumedScope(i: { marker: Presence<string>; uuid: string; boundaryTsMs: number | null }): CardConsumedScope;
+export function decideCardWithdraw(p: CardPassFacts): { act: 'withdraw'; reason: CardWithdrawReason } | { act: 'keep' };
