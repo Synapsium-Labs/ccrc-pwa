@@ -5302,6 +5302,15 @@ server-role box, or a box history was never installed on). The `ccrc-history` sk
 into every rostered home beside the coordinator's, carries the whole exit table and tells a session
 when to recall.
 
+**The card line.** After a compaction of a session's main thread, its `SessionStart` context gains one
+line, directly above any compaction card, naming the leaf that compaction becomes and, when known, its parent:
+`History: node L03a9c1… (this compaction) · parent N7c1e2f… · ~/.local/bin/ccrc history describe L03a9c1`.
+The sweep writes that prediction under `~/.ccrc/history/card/` once it has read the session's transcript
+to its end, and the hook only reads it, so `describe` answers exit 3 until the sweep has indexed that
+compaction. A subagent's compaction, `~/.ccrc/history-off` and a session whose recall is switched off
+get no line. On a box with history the compaction card renders 513 characters shorter, to leave the
+line its room, and the sweep counts from each transcript whether the line arrived and named its leaf.
+
 **Box verbs and operator verbs.** `ccrc history status` reports the store, its lag, size, cap, free
 space and journal; doctor's `history` check reads it. Its `spool-planted` warning counts each node at
 `~/.ccrc/history/spool/<id>.jsonl` that is a FIFO, a link, a directory or any other non-regular node:
