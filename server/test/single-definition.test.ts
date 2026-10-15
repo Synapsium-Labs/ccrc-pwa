@@ -5944,6 +5944,12 @@ describe('ccrc history card line: the hook and lib spell one grammar, one cap an
       return m ? [m[1] ?? m[2] ?? m[3]!] : [];
     });
 
+  /** The hook spells its bracket ranges as explicit lists (D-5064: a range widens under a UTF-8 collating locale).
+   *  This maps exactly those three lists back to lib's ranges and nothing else, so a list that loses or gains a
+   *  character is no range and still differs from lib's pattern. */
+  const lists = (re: string): string =>
+    re.replaceAll('[0123456789abcdef]', '[0-9a-f]').replaceAll('[0123456789]', '[0-9]').replaceAll('[123456789]', '[1-9]');
+
   it('CONTROL: the extractor reads each quoting, and refuses an indented or commented line', () => {
     expect(assigned(["A='x y'", 'A="$HOME/z"', 'A=512'], 'A')).toEqual(['x y', '$HOME/z', '512']);
     expect(assigned(["  A='x'", "# A='x'", "AB='x'"], 'A')).toEqual([]);
@@ -5954,9 +5960,24 @@ describe('ccrc history card line: the hook and lib spell one grammar, one cap an
     const l = await lib();
     const defs = assigned(codeLines(HOOK_SH), 'HISTORY_CARD_RE');
     expect(defs, 'HISTORY_CARD_RE is assigned once, single-quoted').toHaveLength(1);
-    expect(defs[0]).toBe(l['CARD_LINE_PATTERN']);
+    expect(lists(defs[0]!)).toBe(l['CARD_LINE_PATTERN']);
     expect(defs[0]!.startsWith(`^${String(l['CARD_PREFIX'])}`)).toBe(true);
-    expect((l['CARD_LINE_RE'] as RegExp).source).toBe(new RegExp(defs[0]!).source);
+    expect((l['CARD_LINE_RE'] as RegExp).source).toBe(new RegExp(lists(defs[0]!)).source);
+  });
+
+  it('CONTROL: the list normaliser maps exactly the three lists, so a list that lost a character still differs from lib\'s ranges', () => {
+    expect(lists('[0123456789abcdef]{8}[0123456789]x[123456789]')).toBe('[0-9a-f]{8}[0-9]x[1-9]');
+    expect(lists('[012345678abcdef]')).toBe('[012345678abcdef]');
+    expect(lists('[0123456789abcdeg]')).toBe('[0123456789abcdeg]');
+    expect(lists('[0-9a-f]'), 'a range is not rewritten: it stays a range, which the reader scan refuses').toBe('[0-9a-f]');
+  });
+
+  it('the reader\'s UUID grammar is lib\'s UUID_RE (the lists, normalised), so the hook and the CLI accept one family of generations and session ids', async () => {
+    const l = await lib();
+    const lines = codeLines(HOOK_SH).filter((x) => /^\s*local uuid_re='/.test(x));
+    expect(lines, 'uuid_re is assigned once, in the reader').toHaveLength(1);
+    const re = /local uuid_re='([^']*)'/.exec(lines[0]!)![1]!;
+    expect(new RegExp(lists(re)).source).toBe((l['UUID_RE'] as RegExp).source);
   });
 
   it('`History: ` is spelled on one hook code line, the grammar\'s', () => {

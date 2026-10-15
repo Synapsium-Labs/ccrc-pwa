@@ -12246,6 +12246,65 @@ describe('history card line: SessionStart(compact) serves the sweep\'s predictio
     expect((code.match(/\$\{?EPOCHREALTIME\b/g) ?? []).length, 'EPOCHREALTIME expanded more than once').toBe(1);
   });
 
+  // D-5064 (F6 of review 476): under a UTF-8 collating locale (glibc), a bash `[0-9a-f]` or `[0-9]` range widens to take
+  // characters outside ASCII. The reader spells every class as an explicit list, with no locale switch and no fork.
+  it('the reader spells no bracket range: every class is an explicit list (D-5064)', () => {
+    const src = fs.readFileSync(HOOK, 'utf8');
+    const from = src.indexOf('\nHISTORY_CARD_MAX=512\n');
+    const code = src.slice(from, src.indexOf('\n}\n', src.indexOf('\n_hook_history_card() {', from)))
+      .split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
+    expect(from, 'the constants and the reader were found').toBeGreaterThan(-1);
+    expect(code).toContain('[0123456789abcdef]{8}');    // the scan is over the reader's own text
+    // A range is `x-y` inside one bracket expression; a trailing literal `-` (`[!0123456789abcdef-]`) is not one.
+    // A bracket expression holds no whitespace here, which keeps `[[ -e "…history-off" ]]` out of the match.
+    const range = /\[(?!\[)[^\]\s]*?[0-9A-Za-z]-[^\]\s][^\]\s]*\]/;
+    expect(code.match(range)?.[0] ?? null, 'a bracket range in the reader').toBeNull();
+    expect('[0-9a-f]{8}'.match(range)?.[0], 'CONTROL: the scan sees a range').toBe('[0-9a-f]');
+    expect('[!0123456789abcdef-]'.match(range), 'CONTROL: a trailing literal - is no range').toBeNull();
+    expect('[[ -e "$HOME/.ccrc/history-off" ]]'.match(range), 'CONTROL: a test bracket is no class').toBeNull();
+  });
+
+  /** Does bash take `ch` for a member of `class_` (a bracket range) in this locale? The hook runs the same builtin. */
+  const widens = (locale: string, class_: string, ch: string): boolean =>
+    spawnSync('bash', ['-c', `[[ $1 =~ ^${class_}$ ]]`, '_', ch], { env: { PATH: process.env.PATH ?? '', LC_ALL: locale } }).status === 0;
+  const WIDE_LOCALE = IS_DARWIN ? null : ['en_US.UTF-8', 'en_GB.UTF-8'].find((l) => widens(l, '[0-9a-f]', String.fromCharCode(0xe1))) ?? null;
+  const A_ACUTE = String.fromCharCode(0xe1);          // U+00E1, which glibc collates into [0-9a-f]
+  const ARABIC_THREE = String.fromCharCode(0x663);    // U+0663, which glibc collates into [0-9]
+  describe.skipIf(WIDE_LOCALE === null)(`under a widening UTF-8 locale (${WIDE_LOCALE}) a non-ASCII character is never a hex digit or a decimal digit`, () => {
+    const env = { LC_ALL: WIDE_LOCALE ?? 'C' };
+    it('CONTROL: the same fixture, ASCII, is served under that locale, silently', () => {
+      plantAll();
+      expect(served(start(), env)).toBe(LINE);
+    });
+
+    it('a CCRC_SESSION_GENERATION with a non-ASCII character in a hex position is no generation: the recorded one decides', () => {
+      plantAll();
+      plantParity('absent', 'G', 'G');
+      // The CLI: an env generation outside the grammar falls to the newest family (the record G), which recall-off names.
+      expect(lib.resolveGeneration({ envGen: `${A_ACUTE}${GENERATION.slice(1)}`, regGen: { state: 'absent' } }).via).toBe('newest');
+      expect(served(start(), { ...env, CCRC_SESSION_GENERATION: `${A_ACUTE}${GENERATION.slice(1)}` })).toBeNull();
+    });
+
+    it('a session id with a non-ASCII character in a hex position serves nothing, beside a marker and a card keyed on it', () => {
+      const bad = `${A_ACUTE}${SID.slice(1)}`;
+      plantDirs();
+      mark(`main ${bad} ${Date.now()}`);
+      fs.writeFileSync(cardPath(bad), `${LINE}\n`);
+      expect(served(start({ session_id: bad }), env)).toBeNull();
+    });
+
+    it('a marker ms with a non-ASCII digit serves nothing and prints nothing on stderr (no arithmetic syntax error)', () => {
+      plantAll();
+      mark(`main ${SID} 1${ARABIC_THREE}${ARABIC_THREE}`);
+      expect(served(start(), env)).toBeNull();     // `served` asserts stderr is empty
+    });
+
+    it('a card line with non-ASCII characters in its hex positions is refused by the grammar', () => {
+      plantAll(`${LINE.replace('L03a9c1', `L${A_ACUTE.repeat(6)}`)}\n`);
+      expect(served(start(), env)).toBeNull();
+    });
+  });
+
   itLinux('forks nothing at runtime: serving the line takes exactly the forks a box without history takes', () => {
     const traced = (): { forks: number; stdout: string } => {
       const trace = path.join(home, 'card-trace.txt');

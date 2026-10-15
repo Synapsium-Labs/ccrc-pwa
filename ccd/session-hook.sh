@@ -2953,11 +2953,11 @@ command -v jq >/dev/null 2>&1 || exit 0
 # SCOPE_DIR and CARD_DIR by single-definition.test.ts; the tail derives the
 # reserve from the cap (D-4750 (history-hook-card-names-once)).
 HISTORY_CARD_MAX=512
-HISTORY_CARD_RE='^History: node L[0-9a-f]{6,20}… \(this compaction\)( · parent N[0-9a-f]{6,20}…)? · ~/\.local/bin/ccrc history describe L[0-9a-f]{6,20}$'
+HISTORY_CARD_RE='^History: node L[0123456789abcdef]{6,20}… \(this compaction\)( · parent N[0123456789abcdef]{6,20}…)? · ~/\.local/bin/ccrc history describe L[0123456789abcdef]{6,20}$'
 HISTORY_SCOPE_DIR="$HOME/.ccrc/history/scope"
 HISTORY_CARD_DIR="$HOME/.ccrc/history/card"
 _hook_history_card() {   # folds the history line into CARD_COMPACT; silent; builtins only
-  local uuid_re='^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+  local uuid_re='^[0123456789abcdef]{8}-[0123456789abcdef]{4}-[0123456789abcdef]{4}-[0123456789abcdef]{4}-[0123456789abcdef]{12}$'
   local off="$HOME/.ccrc/history/recall-off/$id" gen="" via="" o="" ms="" now="" t="" s="" f="" v="" nl=$'\n' ws=$' \t\n\v\f\r'
   [[ -z "$paid" ]] || return 0
   [[ -e "$HOME/.ccrc/history-off" ]] && return 0
@@ -2986,9 +2986,9 @@ _hook_history_card() {   # folds the history line into CARD_COMPACT; silent; bui
   _ct_read "$HISTORY_SCOPE_DIR/$id" || return 0
   [[ "$CT_V" == "main $psid "* ]] || return 0
   ms="${CT_V#"main $psid "}"
-  [[ "$ms" =~ ^[1-9][0-9]{0,15}$ ]] || return 0
+  [[ "$ms" =~ ^[123456789][0123456789]{0,15}$ ]] || return 0
   t="${EPOCHREALTIME:-}"
-  [[ "$t" =~ ^[1-9][0-9]{0,11}[.,][0-9]*$ ]] || return 0
+  [[ "$t" =~ ^[123456789][0123456789]{0,11}[.,][0123456789]*$ ]] || return 0
   s="${t%%[.,]*}" f="${t#*[.,]}000"
   now=$(( s * 1000 + 10#${f:0:3} ))
   (( now >= ms && now - ms <= COMPACT_CARD_MAX_AGE * 1000 )) || return 0
