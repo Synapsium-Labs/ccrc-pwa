@@ -578,7 +578,7 @@ The harness touches no session, socket or server. Nothing it does reaches a pane
 
 ### Task 9: The two views, the chooser and the chips (D-5005, D-5006) — gated on Task 1
 
-**Routing:** band 3. Starts only once Task 1's gate is recorded. **Files:** create `pwa/src/session/drawerView.ts`, `pwa/src/session/WrappedView.tsx` and `pwa/test/drawer-view.test.tsx`; modify `TerminalDrawer.tsx` and `chat.css`.
+**Routing:** band 3. Starts only once Task 1's gate is recorded. **Files:** create `pwa/src/session/drawerView.ts`, `pwa/src/session/WrappedView.tsx` and `pwa/test/drawer-view.test.tsx`; modify `TerminalDrawer.tsx`, `chat.css` and `pwa/src/components/Sheet.tsx` (an optional `onEscapeKeyDown`, passed to vaul's `Drawer.Content`; P4).
 
 - [ ] **Step 1: Red, the chooser** (pure):
   - `chooseView` answers `grid` for `{clipped: false}`, `wrapped` for `{clipped: true}`, `current` for `null`, and the override when one is set;
@@ -593,13 +593,15 @@ The harness touches no session, socket or server. Nothing it does reaches a pane
   - the grid forced on a glass it does not fit renders at `consoleFit`'s `fontSize`, the host scrolls sideways, and the chip reads `grid · scrolls`;
   - the wrapped view drops the status row, sticks to the bottom, stops sticking once scrolled up, anchors on the caret row (else the `❯` row), freezes behind a `paused` chip while a selection lies inside it, and resumes when it is cleared;
   - after 2 s with no `❯` (U+276F) in the model (`not-claude`), a chip offers the grid; a `❯` arriving clears it; the chip changes nothing that is sent;
-  - the `pans` notice is gone, and its screen-reader text moves to the chip (an `aria-label` naming the view and why).
+  - the `pans` notice is gone, and its screen-reader text moves to the chip (an `aria-label` naming the view and why);
+  - P4: with focus on xterm's textarea (either view), a physical Escape sends `\e` once and `onClose` is not called; with focus on another control in the sheet, Escape calls `onClose` once. A sheet without the prop dismisses on Escape as today.
 - [ ] **Step 3: Green.**
   - `colsAt(px)`: `term.propose(px)?.cols` when the terminal is open (the host keeps the glass's box in both positions, so `propose` measures the same glass), else `wrapWidth(glassPx, cell14 × px / 14, gutter)` from a hidden monospace probe span measured at 14px.
   - `refit` runs `consoleFit(colsAt, PINNED_WINDOW_COLS)`, then `chooseView`. A grid verdict opens the terminal into the host (once), moves the host to the visible position and calls `setFontSize(fit.fontSize)`. A wrapped verdict moves the host off-screen, and opens the terminal there only when `wrappedInput(coarse)` is `'xterm'`.
   - `WrappedView` subscribes to `onParsed`, coalesces to `requestAnimationFrame`, runs `wrapScreen(term.model(), W, term.cols)` with W from `wrapWidth` at 14px, and renders keyed rows (key = kind, source row, text and style run), so an unchanged row does not re-render. Cells render as text through `cellCss`. Rules render as a CSS rule in the source colour, table rows scroll sideways on their own, right rows align right.
   - On a fine pointer with `'xterm'`, clicking the wrapped view focuses the terminal, so physical keys reach `onData`. With `'field'`, `TermInput` (Task 12) is shown on every pointer.
   - The history layer is reached from the wrapped view only through the `hist` key; the drag gestures belong to the DOM scroller.
+  - P4: `Sheet` forwards an optional `onEscapeKeyDown` to `Drawer.Content`; `TerminalDrawer` passes one that calls `preventDefault()` while `document.activeElement` is xterm's textarea or `TermInput` (Task 12). Radix still lets the keydown through, so xterm's own handler sends the `\e`.
 - [ ] **Step 4: Mutation table:**
 
   | Mutant | Expected |
@@ -611,6 +613,8 @@ The harness touches no session, socket or server. Nothing it does reaches a pane
   | the off-screen position is `display:none` | the host-style case RED |
   | the coarse-pointer wrapped view opens the terminal | the never-opened case RED |
   | the not-Claude chip keyed on `hasMenu`-like text instead of `❯` | the `numbered-reply` case RED (a `❯` box is there, so no chip) |
+  | the Escape handler always calls `preventDefault()` | P4's focus-elsewhere case RED (the sheet no longer closes) |
+  | the Escape handler dropped | P4's xterm case RED (`onClose` called) |
 
 - [ ] **Step 5: Commit** `feat(drawer): a grid where 220 fits, a wrapped view where it does not (D-5005, D-5006)`.
 
@@ -670,7 +674,8 @@ The harness touches no session, socket or server. Nothing it does reaches a pane
   - it is a real `<textarea>` (autocorrect, dictation and IME are the browser's);
   - **Type** sends `typedFrame(value)` as ONE input frame and clears the field; it never sends `\r` of its own; `⏎` is the bar's key;
   - with `ctrl` latched, the next `beforeinput` of type `insertText` carrying one ASCII letter is not inserted and its control code is sent at once (S8 decides whether Android needs a `keydown` fallback; record it here);
-  - nothing is sent mid-composition (`compositionstart` … `compositionend`).
+  - nothing is sent mid-composition (`compositionstart` … `compositionend`);
+  - P4: a physical Escape in the field (outside a composition) sends `\e` once, leaves the field's text as it was, and does not close the drawer (Task 9's handler counts the field as the terminal's focus).
 - [ ] **Step 3: Red, the paste guard** (Refinement 11): with the terminal open in the wrapped view, a `paste` event dispatched on xterm's textarea is taken at the host's capture phase: `preventDefault`, propagation stopped, and its text sent as `typedFrame(text)`. xterm's own `onData` does not fire for it, and a pasted `\e[201~` never reaches a frame.
 - [ ] **Step 4: Green.** Implement. The field sits above the bar and stays visible with the keyboard up (`useKeyboardInset`, as the bar does today, and as Task 1's S6 measured). It is shown in the wrapped view on a coarse pointer, and on every pointer when `FINE_POINTER_INPUT` is `'field'`. The paste guard is installed on the host while the wrapped view shows an open terminal; the grid view's paste is unchanged unless P3 is ruled yes, in which case the same listener stays installed in both views.
 - [ ] **Step 5: Mutation table:**
@@ -683,6 +688,7 @@ The harness touches no session, socket or server. Nothing it does reaches a pane
   | newlines sent as `\n` inside the brackets | the `a\nb` case RED |
   | the paste guard registered in the bubble phase | the paste-guard case RED (xterm's handler stops propagation first) |
   | the latch reads `keydown` only | the `beforeinput` case RED |
+  | the field's Escape not sent | P4's field case RED |
 
 - [ ] **Step 6: Commit** `feat(drawer): a native field that types into the box, and a paste that cannot end its own brackets (D-5007)`.
 
@@ -839,10 +845,36 @@ Written once stage 1 is on the box (spec §10). It cites D-5009 to D-5012, defin
 - **P1. A touch device with a hardware keyboard** (an iPad with a keyboard reports a coarse pointer). The wrapped view gives it the field, where Esc and the arrows from the keyboard do not reach the session. **Recommendation:** accept for stage 1: the key bar carries those keys, and stage 2 puts a glass of 120 columns or more on the grid, where xterm takes the keyboard. Task 1's S7 records what happens, and a result that makes the field unusable reopens this.
 - **P2. Commit the spike harness?** **Recommendation: yes,** under `pwa/spike/`, outside `tsconfig`'s include and the build's input, so an xterm upgrade can re-run S1–S8 by opening one page. With no, it is deleted before Task 14 and the spike log records its sha256.
 - **P3. The grid view's paste.** xterm 6.0.0 brackets a paste without removing an end marker inside it, which is true of the drawer on `main` today. **Recommendation: yes,** keep Task 12's capture-phase guard installed in both views, so the drawer has one paste path and I5's sanitising covers the grid too. With no, the grid's paste stays xterm's own, as spec §5.4's "unchanged" reads.
+- **P4. A physical Escape in the drawer. RULED 2026-10-15 (the operator): Escape goes to Claude Code and never closes the drawer while the terminal has focus.** Task 1 found it in every engine: Radix's DismissableLayer (under vaul's sheet) catches Escape on `document` in the capture phase, so a physical Esc sent `\e` to the session AND closed the drawer. The sheet's dismissal is cancelled (`onEscapeKeyDown` → `preventDefault`) while focus is on xterm's textarea or `TermInput`, and the key still reaches the session; with focus anywhere else in the sheet, Escape closes it as before. The drawer still closes by its grabber, a scrim tap and the swipe. Built in Task 9 (the sheet and xterm) and Task 12 (the field sends `\e` itself). This narrows P1: from a hardware keyboard, Esc reaches the session from the field as well; the arrows still do not. Slug for the stage-close allocation: `esc-stays-in-the-terminal`.
 
 ## Spike log (the coordinator fills this; workers never edit it)
 
-— not run yet. Records: each device's log for S1–S8, the gate's rulings G1–G3, and the value Task 9 writes for `FINE_POINTER_INPUT`.
+Records: each device's log for S1–S8, the gate's rulings G1–G3, and the value Task 9 writes for `FINE_POINTER_INPUT`.
+
+**Automated rows (2026-10-14).**
+
+Harness: `pwa/spike/drawer-input.{html,tsx}` at `fdc9c04c` (branch `drawer1-task1`), served by `vite` from `pwa/`. Driver: Playwright 1.64.1, headless, 1280x900 and 1440x900, deviceScaleFactor 1, fine pointer (`(pointer: coarse)` false in every run). In every run the terminal reported 220x51, its host's right edge was at −1280/−1440, the page had no horizontal scroll, and the console had no errors. Each S1 sequence ran twice: once with xterm's cursor at the top left, and once at row 47, col 5, the box row.
+
+| Row | Engine | 1280 | 1440 | Evidence |
+|---|---|---|---|---|
+| S1 | automated (Playwright Chromium 156.0.8078.4) | pass | pass | the bytes, one chunk per key, in order: `a b c \r \x7f \e[A \e[B \e[D \e[C \e \t \e[Z \x03 \x04`; focus stays `xterm` after every key, Tab and Shift-Tab included; page, sheet and `.term-screen` stay at [0,0] before and after; no scroll events |
+| S1 | automated (Playwright WebKit 27.2) | pass | pass | same as Chromium |
+| S1 | automated (Playwright Firefox 157.0) | pass | pass | same as Chromium |
+| S4 | automated (Playwright Chromium 156.0.8078.4) | pass | pass | a real Cmd-V, clipboard filled by `navigator.clipboard.writeText`: one `guard saw paste line one\nline two`, then no `data`; a synthetic ClipboardEvent also gives guard only |
+| S4 | automated (Playwright WebKit 27.2) | pass | pass | a real Cmd-V, clipboard filled by selecting text in the field and pressing Cmd-C: one guard line, no `data`; the synthetic event also gives guard only |
+| S4 | automated (Playwright Firefox 157.0) | pass | pass | a real Cmd-V, clipboard filled by Cmd-C in the field: one guard line, no `data`. The synthetic event's guard line was empty, because Firefox drops `clipboardData` on an untrusted ClipboardEvent. That is a fallback check only and has no effect on the row |
+| S5 | automated (Playwright Chromium 156.0.8078.4) | pass | pass | for each of the six bar keys, clicked with the mouse and then `x` typed: `bar:<bytes>` then `data:x`, and focus is `xterm` after the click |
+| S5 | automated (Playwright WebKit 27.2) | pass | pass | same as Chromium |
+| S5 | automated (Playwright Firefox 157.0) | pass | pass | same as Chromium |
+| S2 | not automated | — | — | Playwright's keyboard sends key events straight into the engine and skips macOS's text-input system, which is where `⌥e e` composes. Chromium's CDP `imeSetComposition` makes composition events up rather than going through that path, and WebKit and Firefox have nothing equivalent. Not faithful, so this row stays with the operator |
+
+**Seen in every engine (not a pass criterion):** a physical **Escape** reaches xterm (`\e` is sent) and **also** makes the Sheet call `onClose`. Radix's DismissableLayer catches Escape in the capture phase on `document`, before xterm does. The harness keeps the sheet open, but the product drawer passes `onClose` through, so a physical Esc in the drawer would send `\e` and close the drawer.
+
+**Still needs the operator's real devices:** S2 (a dead key, in all three desktop engines), S3 (IME, if the operator types through one), S6 (iPhone Safari and Android Chrome: phone layout, dictation, rotation, long-press copy), S7 (iPad with a hardware keyboard), S8 (Android Gboard `beforeinput`). The automated rows ran in Playwright's builds, not the operator's installed browsers, and headless. A spot check of S1/S4 in the real Safari would cover that gap.
+
+**The Escape finding is ruled (P4, 2026-10-15):** Escape goes to Claude Code and never closes the drawer while the terminal has focus.
+
+**Pending:** S6 and S8 on the operator's Android phone (Chrome, Gboard), which G3 waits on; S2 is optional, at the operator's Mac. S3 does not apply (the operator types through no IME), and S7 has no device (no iPad). G1–G3 are recorded once S6 is in.
 
 ## Deploy log (the coordinator fills this; workers never edit it)
 
