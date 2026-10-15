@@ -318,10 +318,12 @@ measured at the wave's tip unless it says otherwise.
      evaluation uses.
   2. Records are listed, and a listing that fails is unmeasured `records`. A record whose body parses and names the id
      lets the lock open. If records exist but none both parses and names the id, the answer is the one the locked
-     resume gives: `quarantine-kept`, or unmeasured `records` or `quarantine`. At the audit every answer of the pass
-     carries the locked evaluation's word and detail byte for byte. The verb keeps that word and detail, and adds its
-     no-lock clause after the detail of an unmeasured answer, so a cut at the reason cap falls on the clause and not
-     on the detail. It puts "no lock was taken: " before the detail of a refusal.
+     resume gives: `quarantine-kept`, or unmeasured `records` or `quarantine`. At the audit every answer that the
+     locked evaluation also gives carries its word and detail byte for byte. The two second-look answers (a record
+     or a witness that reads sound only on a second look) are the pass's own, with details of their own. The verb
+     keeps the pass's word and detail, and adds its no-lock clause after the detail of an unmeasured answer, so the
+     clause never pushes the detail toward the reason cap: a cut takes the clause first, and reaches the detail only
+     when the detail alone passes the cap. It puts "no lock was taken: " before the detail of a refusal.
   3. With no record, a witness whose body parses lets the lock open.
   4. A witness that does not parse first gets a registry peek, and the lock opens unless all three of these hold:
      `$REG/<id>.child` and `$REG/<id>.uuid` are proven absent; `$REG` can be listed; and the id's slug is free across
@@ -399,10 +401,11 @@ measured at the wave's tip unless it says otherwise.
 - `verbs-outside-sec1-keep-the-inline-regex`: ws-attic, pr-open, plain ws-audit, ws-reap, forget, `start <id>`,
   `pr-state --session <id>` and `route --session <id>` keep the inline id check they had, which admits a leading
   `-`. `ensure <id>` and `swap <id> <wrapper>` take their id with no shape check and need an existing row. Among
-  all these verbs only `route` takes any of the decision flags the server appends (`--actor` and `--reason`), and it
-  binds `--session` as a pair, so an id that spells one of them is bound literally and looked up. None of the others
-  carries the decision flags, so none can be redirected by an id that spells one, and neither `route` nor `swap`
-  redirects.
+  all these verbs the server gives only `route` any of the decision flags (`--actor` and `--reason`), and `route`
+  binds `--session` as a pair, so an id that spells one of them is bound literally and looked up. `forget` parses a
+  `--reason` of its own, which no server builder sends: an id that spells it dies on the usage line or is refused
+  `bad-args`, and never names another row. None of the other verbs parses the decision flags, so none can be
+  redirected by an id that spells one, and neither `route` nor `swap` redirects.
   The inline checks, `route`'s included (`swap` has none), run without `LC_ALL=C`, so under a widening locale they
   admit a non-ASCII id and bind it literally. Plain ws-audit audits a dash-leading id literally and acts on no
   other row (pinned).

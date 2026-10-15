@@ -3775,11 +3775,13 @@ comments and test titles cite the spec, never this contract.
 - `dot-rule-only-at-the-token-verbs`: release, archive, restore, hold, rename and stop still accept a dot-leading id.
 - `verbs-outside-sec1-keep-the-inline-regex`: ws-attic, pr-open, plain ws-audit, ws-reap, forget, `start <id>`,
   `pr-state --session <id>` and `route --session <id>` keep the id check they had; `ensure <id>` and
-  `swap <id> <wrapper>` take their id with no shape check and need an existing row. Among all these verbs only
-  `route` takes any of the decision flags the server appends (`--actor` and `--reason`), and it binds `--session` as
-  a pair, so an id that spells one of them is bound literally and looked up. None of the others carries the decision
-  flags, and neither `route` nor `swap` redirects. The inline checks, `route`'s included (`swap` has none), run
-  without `LC_ALL=C`, so under a widening locale they admit a non-ASCII id and bind it literally.
+  `swap <id> <wrapper>` take their id with no shape check and need an existing row. Among all these verbs the server
+  gives only `route` any of the decision flags (`--actor` and `--reason`), and `route` binds `--session` as a pair,
+  so an id that spells one of them is bound literally and looked up. `forget` parses a `--reason` of its own, which
+  no server builder sends: an id that spells it dies on the usage line or is refused `bad-args`, and never names
+  another row. None of the other verbs parses the decision flags, and neither `route` nor `swap` redirects. The
+  inline checks, `route`'s included (`swap` has none), run without `LC_ALL=C`, so under a widening locale they admit
+  a non-ASCII id and bind it literally.
 - `enable-one-arg-journals-an-unchecked-id`: `enable <id>` journals before any check of the id, as it did before.
 - `stripped-flag-positional-collapses-to-the-id-form`: start and enable strip `--cross-pool`, `--`,
   `--route=<f>=<v>` and the two-token `--route <v>`, and stop strips `--surface` and `--surface=`, from any position
