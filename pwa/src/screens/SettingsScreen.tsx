@@ -8,7 +8,9 @@
 // plan; fix rounds 1–2 widened several of their guards in place — see the
 // plan's `## Deviations found`, D-3315/D-3316); and Stall watch (stall watch
 // settings, design 2026-10-05 §13), which lives in its own file,
-// `StallWatchSection.tsx`, with its own read. The update plane's READING
+// `StallWatchSection.tsx`, with its own read; and Temp root collector
+// (path-identity spec 2026-10-12 §5.7), in `fleet/CollectLaneSection.tsx`,
+// with its own read too, mounted after Stall watch. The update plane's READING
 // surface — the release list, the node inventory and the twenty pure helpers
 // that turn a wire row into a sentence — moved to `screens/updates.tsx`; this
 // file composes it, beside the Appearance section (the theme picker).
@@ -33,6 +35,7 @@ import {
 } from '@ccrc/ui';
 import { NotificationBell } from '../fleet/NotificationBell';
 import { StallWatchSection } from './StallWatchSection';
+import { CollectLaneSection } from '../fleet/CollectLaneSection';
 import { UNCONFIRMED_TEXT } from './settingsText';
 import { planMove, type MoveIntent, type PlannedMove } from '../fleet/movePlan';
 import { UpdateMoveSheet } from '../fleet/UpdateMoveSheet';
@@ -512,8 +515,10 @@ export function SettingsScreen(): ReactNode {
   // sections: all three read the same answer (Tasks 7–10; the card,
   // box-token lifecycle Task B6), so they can never disagree about the fleet.
   // ONE clock for the two that show an age, Updates and the Box token card.
-  // The Stall watch section is the one with its own read, of its own
-  // endpoint, through its own hook (useStallWatchView, design 2026-10-05 §13).
+  // The Stall watch and Temp root collector sections each have their own
+  // read, of their own endpoint, through their own hook (useStallWatchView,
+  // design 2026-10-05 §13; useCollectLaneView, path-identity spec 2026-10-12
+  // §5.7). The collector comes after Stall watch, as §5.7 places it.
   const poll = useUpdatesView();
   const now = useNow(30_000);
   return (
@@ -534,6 +539,7 @@ export function SettingsScreen(): ReactNode {
       {poll.view !== null && <BoxTokenSection view={poll.view} now={now} reload={poll.reload} />}
       <NotificationsSection view={poll.view} reload={poll.reload} />
       <StallWatchSection />
+      <CollectLaneSection />
     </div>
   );
 }

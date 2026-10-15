@@ -296,9 +296,14 @@ generated value is never hand-edited, and the contrast gate rules on the result 
   than open empty**. Its synchrony is a stated concurrency invariant — **do not wrap it async** (a repository/async
   interface over `CoordStore` is explicitly rejected). It is a server-side RE-MEASUREMENT of ccd's flat files
   (registry, hold, `.prhistory`), which stay ground truth; a lost coord.db re-measures those from them, but
-  what it adds on top — mail, claims, asks, central pool edges, update intents, the stall-watch settings choice —
-  is gone without the snapshot every `ccrc update` (and `ccrc backup`) takes into `~/ccrc-backups/<ts>/`
-  (`pool-edges.log` is never replayed).
+  what it adds on top — mail, claims, asks, central pool edges, update intents, the stall-watch settings choice,
+  the collector switch — is gone without the snapshot every `ccrc update` (and `ccrc backup`) takes into
+  `~/ccrc-backups/<ts>/` (`pool-edges.log` is never replayed). The switch's `collect-lane-generation.log` is never
+  copied into a snapshot or restored with one: leave it in place, so a database restored alone never re-arms the
+  collector (one from before the switch's last change is safety-stopped). One from before the legacy collector file's
+  retirement is repaired only by a confirmed Live, which keeps its unset latch, so a standing or re-created legacy file
+  then arms the lane again, on any node, with Off refused, until a coherent, unpaused, same-epoch listing shows the
+  file absent and retires it.
 - **Zero new ccd verbs for coordination mutation** — mutations ride already-granted `CcdArgv` (a brand built at
   the call site, never table-looked-up). Exec surface is closed: `EXEC_COMMANDS = ['tmux','ccd']`.
 - **Box token gates every coordination WRITE** (`/api/mail*`, `/api/runs*`) — header `x-ccrc-mail-token`, `401`
@@ -319,12 +324,13 @@ generated value is never hand-edited, and the contrast gate rules on the result 
   update-management W4), call `checkMailToken` only after a session check; `auth/gate.ts`'s EXEMPT reasons — route by route, each
   with its own argument — are the census, not this bullet. What does need saying here are the
   coordination WRITES that carry no box token at all: `POST /api/sessions/:id/kickoff` (wave 4),
-  `POST /api/coord/caps` (wave 6), `POST /api/coord/reclaim-pause` (child-reclamation wave 4) and
-  `POST /api/coord/stall-watch` (stall-watch settings wave 1) are
+  `POST /api/coord/caps` (wave 6), `POST /api/coord/reclaim-pause` (child-reclamation wave 4),
+  `POST /api/coord/stall-watch` (stall-watch settings wave 1) and `POST /api/coord/collect-lane`
+  (child-reclamation wave 10, which also refuses `live` while sign-in is dark) are
   session-gated only — armed, they sit behind the auth gate like every other PWA-surface write. The first
   needs prose because no scanner can see it: `coord-pause-route.test.ts` reads
   `server/src/coord/routes.ts` alone, and that route is registered in `server.ts`, so a door opened outside
-  that one file is invisible to the set that pins the doors. The other three are in that file's `SESSION_ONLY`
+  that one file is invisible to the set that pins the doors. The other four are in that file's `SESSION_ONLY`
   set, and `box-token-census.test.ts` checks this sentence against it in both directions (D-1231). The update
   control plane's routes are session-only by design (the box token never writes intent — design 2026-09-20,
   decision 15): `GET /api/updates`, `POST /api/updates/intent`, `POST /api/updates/refresh`, `POST

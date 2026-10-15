@@ -454,7 +454,7 @@ export const CCD_ARGV = {
    *  `CollectToken` (`shared/api.ts`, spec §5.10), which only the collect audit's reader casts to, so a string from
    *  anywhere else does not compile here. The confirmation token LEADS (`['ws-collect','--expect']` is the grant); the
    *  dec trails, and ccd strips it before it binds a positional. Its ONE composer is the collector's executor
-   *  (`coord/collectTempRoot.ts`), behind `COLLECT_CAP`, armed only by `$REG/collect-lane-live`;
+   *  (`coord/collectTempRoot.ts`), behind `COLLECT_CAP`, armed by the switch (path-identity spec 2026-10-12 §5.2);
    *  `ws-collect-wiring.test.ts` pins that no other server source composes it. */
   wsCollect: (token: CollectToken, id: string, dec: ActorFlags | null) =>
     argv(['ws-collect', '--expect', token, '--session', id, ...decFlags(dec)]),

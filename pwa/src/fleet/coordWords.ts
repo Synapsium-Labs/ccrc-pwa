@@ -114,3 +114,7 @@ export function coordPresence(
   if (session.status === 'dead' && lifecycleIsDead(lifecycle)) return 'dead';
   return 'alive';
 }
+
+/** The marker toggle's word for a tap no `coord` frame confirmed within `COORD_CONFIRM_MS`. One spelling: the coord
+ *  banner's toggles (`useMarkerToggle`) and the Temp root collector's Pause all cleanup say it alike. */
+export const COORD_UNCONFIRMED_TEXT = 'unconfirmed — check /runs';
