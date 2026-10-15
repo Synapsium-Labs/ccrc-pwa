@@ -137,7 +137,8 @@ export const DOCS_HIGHLIGHT_SCAN_PAGE_MAX_CHARS = 393216;
  *  openers; and short operator and identifier units such as `a(`, `a<b`, `=>`, `::` and `0x`), plus up to ten two- or
  *  three-letter keywords of each grammar, each unit repeated alone in lines of 1 800 characters and one per line, at 16
  *  and 64 KiB, each one that grew confirmed on an 8 to 128 KiB curve; then, for the registered `xml` and `markdown`,
- *  the same list and 13 longer xml units (`<script>`, `<style>`, `<script><a>`, `<![CDATA[` and the like);
+ *  90 units: that list less `<a>`, and 14 xml units, 12 of them longer than four characters (`<script>`, `<style>`,
+ *  `<script><a>`, `<![CDATA[` and the like) and two of two characters (`<a` and `&#`);
  *  three-character tags in `markdown`; and the `subLanguage` embeddings (`xml`'s `<script>` and `<style>`, removed:
  *  see `markdown.tsx`; `markdown` into `xml`; `dockerfile` into `bash`, linear; `yaml` into `ruby`, not registered).
  *  NOT tried: the empty pairs `[]`, `{}` and `()` and the link opener `[](` (the shapes review 460 found growing,
