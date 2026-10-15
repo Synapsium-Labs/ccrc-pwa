@@ -100,16 +100,51 @@ export type DelegationCorrelationVerdict =
 /** The only verdict that may reach lease creation. `run-child-owned` is deliberately not assignable to it (W3-M63). */
 export type DelegationLinkedVerdict = Extract<DelegationCorrelationVerdict, { kind: 'linked' }>;
 
+/**
+ * Every reason a non-answer can carry, declared ONCE. The plan types a verdict's `reason` as `string`, and that stays; but Task 12 must
+ * branch on some of them (`ccrc-birth-wait` and `ccd-workspace-not-a-lease` are a tree being BORN, not unowned work), so the words are
+ * a closed list it imports rather than spells. Server-internal (it is not a wire word), hence here and not in `shared/api.ts`.
+ */
+export const DELEGATION_CORRELATION_REASONS = [
+  'record-unreadable',
+  'record-absent',
+  'ccd-workspace-not-a-lease',
+  'ccrc-birth-wait',
+  'canonical-path-unmeasured',
+  'rung-2-evidence-absent',
+  'same-upstream-id-in-multiple-sessions',
+  'duplicate-activity-rows',
+  'rung-2-meta-absent',
+  'meta-paths-disagree',
+  'rung-2-path-mismatch',
+  'rung-2-subagent-event-absent',
+  'activity-not-durably-open',
+  'agent-id-claimed-by-multiple-sessions',
+  'path-claimed-by-multiple-parents',
+  'ambiguous-subagent-path',
+  'parent-cwd',
+  'overlapping-listing-window',
+  'listing-window-instant-unreadable',
+  'ambiguous-listing-windows',
+  'rungs-disagree',
+  'no-correlating-evidence',
+] as const;
+export type DelegationCorrelationReason = (typeof DELEGATION_CORRELATION_REASONS)[number];
+
 // ── Small helpers ─────────────────────────────────────────────────────────────────────────────────────────────────────
 
-type Unlinked = Exclude<DelegationCorrelationVerdict, { kind: 'run-child-owned' | 'linked' }>;
+interface Unlinked {
+  kind: 'unresolved' | 'conflicting' | 'unmeasured';
+  reason: DelegationCorrelationReason;
+  evidenceJournalIds: readonly string[];
+}
 type Answer = DelegationLinkedVerdict | Unlinked;
 
 /** Evidence lists are de-duplicated and in code-unit order, so a verdict does not depend on the order evidence was handed over. */
 const ids = (list: readonly string[]): string[] => [...new Set(list)].sort();
-const unresolved = (reason: string, evidence: readonly string[] = []): Unlinked => ({ kind: 'unresolved', reason, evidenceJournalIds: ids(evidence) });
-const conflicting = (reason: string, evidence: readonly string[] = []): Unlinked => ({ kind: 'conflicting', reason, evidenceJournalIds: ids(evidence) });
-const unmeasured = (reason: string, evidence: readonly string[] = []): Unlinked => ({ kind: 'unmeasured', reason, evidenceJournalIds: ids(evidence) });
+const unresolved = (reason: DelegationCorrelationReason, evidence: readonly string[] = []): Unlinked => ({ kind: 'unresolved', reason, evidenceJournalIds: ids(evidence) });
+const conflicting = (reason: DelegationCorrelationReason, evidence: readonly string[] = []): Unlinked => ({ kind: 'conflicting', reason, evidenceJournalIds: ids(evidence) });
+const unmeasured = (reason: DelegationCorrelationReason, evidence: readonly string[] = []): Unlinked => ({ kind: 'unmeasured', reason, evidenceJournalIds: ids(evidence) });
 const linked = (activityId: string, rung: 2 | 3 | 4, evidence: readonly string[]): DelegationLinkedVerdict => ({ kind: 'linked', activityId, rung, evidenceJournalIds: ids(evidence) });
 
 /** A parent is (ccd id, registry incarnation): the same ccd id under another incarnation is another parent. */
@@ -194,9 +229,20 @@ function rung2(input: DelegationCorrelationInput, sourceKind: 'agent' | 'workflo
 
 function rung3(input: DelegationCorrelationInput, canonical: string): Answer | null {
   const hits = new Map<string, { activity: DelegationActivityRow; journalIds: string[] }>();
+  // Parents that THEMSELVES reported the path as a working directory (an event with no `agentId`). A non-isolated subagent inherits its
+  // parent's cwd on every event it emits, so a cwd the parent reported can never place a subagent (ruling R42).
+  const parentReported = new Map<string, string[]>();
   for (const { journalId, event } of input.acceptedEvidence) {
+    if (!text(event.cwd) || event.cwd !== canonical) continue;
     const agentId = event.agentId;
-    if (!text(agentId) || !text(event.cwd) || event.cwd !== canonical) continue;
+    if (!text(agentId)) {
+      const key = parentKey(event.sessionId, event.parentIncarnation);
+      parentReported.set(key, [...(parentReported.get(key) ?? []), journalId]);
+      continue;
+    }
+    // SubagentStart and SubagentStop are the host's own events about the agent and carry the parent's context on a non-isolated one:
+    // they are not "emitted from inside" it.
+    if (event.eventKind === 'SubagentStart' || event.eventKind === 'SubagentStop') continue;
     const activity = input.activities.find((a) => a.sourceKind === 'agent' && a.upstreamId === agentId && a.parentId === event.sessionId && a.parentIncarnation === event.parentIncarnation);
     if (activity === undefined) continue;                                        // an agent no qualifying join opened: evidence, not placement
     const hit = hits.get(activity.activityId) ?? { activity, journalIds: [activity.identityJournalId] };
@@ -205,6 +251,10 @@ function rung3(input: DelegationCorrelationInput, canonical: string): Answer | n
   }
   if (hits.size === 0) return null;
   const all = [...hits.values()].flatMap((h) => h.journalIds);
+  for (const { activity } of hits.values()) {
+    const reported = parentReported.get(parentKey(activity.parentId, activity.parentIncarnation));
+    if (reported !== undefined) return unresolved('parent-cwd', [...all, ...reported]);
+  }
   for (const { activity } of hits.values()) {
     if (claimsOf(input, 'agent', activity.upstreamId).parents.size > 1) return conflicting('agent-id-claimed-by-multiple-sessions', all);
   }
@@ -267,9 +317,9 @@ function rung4(input: DelegationCorrelationInput): Answer | null {
  */
 function combine(input: DelegationCorrelationInput, answers: readonly (Answer | null)[]): Answer {
   const present = answers.filter((a): a is Answer => a !== null);
-  const everything = present.flatMap((a) => a.evidenceJournalIds);
-  const conflict = present.find((a) => a.kind === 'conflicting');
-  if (conflict !== undefined) return conflicting(conflict.kind === 'conflicting' ? conflict.reason : 'conflicting', everything);
+  const everything = present.flatMap((a) => a.evidenceJournalIds);       // for a disagreement: every witness
+  const conflict = present.find((a): a is Unlinked => a.kind === 'conflicting');
+  if (conflict !== undefined) return conflicting(conflict.reason, [...conflict.evidenceJournalIds, ...present.filter((a) => a.kind === 'linked').flatMap((a) => a.evidenceJournalIds)]);
   const links = present.filter((a): a is DelegationLinkedVerdict => a.kind === 'linked');
   const [lowest] = links;
   if (lowest !== undefined) {
@@ -278,7 +328,8 @@ function combine(input: DelegationCorrelationInput, answers: readonly (Answer | 
       return a === undefined ? JSON.stringify(['missing', v.activityId]) : parentKey(a.parentId, a.parentIncarnation);
     };
     if (new Set(links.map(parentOf)).size > 1) return conflicting('rungs-disagree', everything);
-    return linked(lowest.activityId, lowest.rung, everything);
+    // The proof of a link is the links' own evidence: a non-answer beside it (a refused parent-cwd, an overlap) proves nothing.
+    return linked(lowest.activityId, lowest.rung, links.flatMap((l) => l.evidenceJournalIds));
   }
   return present[0] ?? unresolved('no-correlating-evidence');
 }

@@ -481,12 +481,13 @@ export interface DelegationNamedUpstream {
   sourceKind: DelegationActivitySourceKind;
   /**
    * `agent`: the agent ID. `workflow`: the RUN id (a worker's own upstream ID is `<runId>-<index>`, and the index comes only from the
-   * worker's meta, so a run record names the run and opens no worker). `bash-worktree`: the Bash call's `tool_use_id`.
+   * worker's meta, so the run's record opens the RUN and no worker). `bash-worktree`: the Bash call's `tool_use_id`.
    */
   upstreamId: string;
   /**
-   * A QUALIFYING JOIN (spec §5.2): an Agent launch response or a SubagentStart naming an agent, or a Bash call that carries a worktree
-   * listing. A bare `agent_id` is not one, and a Workflow run record never is (a worker opens on its meta).
+   * A QUALIFYING JOIN (spec §5.2): an Agent launch response or a SubagentStart naming an agent, a Workflow launch response naming its
+   * run (ruling R44: the run's identity is checkpoint data from then on, so it never holds the journal), or a Bash call that carries a
+   * worktree listing. A bare `agent_id` is not one.
    */
   join: boolean;
   /** The event ends it: a SubagentStop naming an agent, a launch response that reports `completed`, or a Bash PostToolUse. */
@@ -497,7 +498,8 @@ export interface DelegationNamedUpstream {
  * The upstream IDs an evidence event names. For agents, the common `agentId` field names the emitter (a tool event inside a subagent,
  * a SubagentStart, a SubagentStop) and `launch.agentId` on an Agent/Task PostToolUse names the agent that call launched; only
  * SubagentStart and a launch response QUALIFY, a bare occurrence is evidence that attaches once a join is known, and an unpaired stop
- * opens nothing. A Workflow PostToolUse launch names its RUN (never a join: the worker index is the meta's). A Bash PreToolUse or
+ * opens nothing. A Workflow PostToolUse launch response names its RUN and IS that run's join (the worker index is the meta's, so it
+ * opens the run, never a worker). A Bash PreToolUse or
  * PostToolUse names its tool call, and is a join only when it carries a `listing` (the hook writes one only for a command that
  * mentions a worktree). Nothing else names anything: a ToolSearch, a parent Stop and a SessionEnd open no activity, whatever order
  * they arrive in.
@@ -517,7 +519,7 @@ export function namedAgentsOf(event: DelegationEventEnvelopeV1): DelegationNamed
   }
   if (event.eventKind === 'PostToolUse' && event.toolName === 'Workflow') {
     const launch = event.launch;
-    if (typeof launch === 'object' && launch !== null) note('workflow', launch.runId, false, launch.status === 'completed');
+    if (typeof launch === 'object' && launch !== null) note('workflow', launch.runId, true, launch.status === 'completed');
   }
   if ((event.eventKind === 'PreToolUse' || event.eventKind === 'PostToolUse') && event.toolName === 'Bash') {
     note('bash-worktree', event.toolUseId, Array.isArray(event.listing), event.eventKind === 'PostToolUse');
@@ -721,6 +723,8 @@ export class DelegationCheckpointBuilder {
       }
       // A Bash call with no listing mentions no worktree: it is not evidence of anything and must not hold the journal (every Bash call
       // has a tool_use_id). It still ENDS the activity its listing-carrying twin opened, which the mapping branch above handles.
+      // DEVIATION D-4649 (spec §5.2 says a tool_use_id's identity is "the first event naming it"): a PreToolUse whose listing the hook
+      // dropped (`truncated`) is skipped here, so when its PostToolUse carries the listing the POST record is the identity.
       if (na.sourceKind === 'bash-worktree' && !na.join) continue;
       const prior = this.candidates.get(encoded);
       const candidate: DelegationActivityCandidate = prior === undefined
@@ -778,20 +782,31 @@ export class DelegationCheckpointBuilder {
 
   /**
    * Opens a Workflow WORKER's activity on a POSITIVE WORKFLOW META read, the sibling of `openFromMeta`. The worker's upstream ID is
-   * `<runId>-<workerIndex>`: the run comes from the launch record, the index only from the meta. The identity record is the earliest
-   * retained record naming the RUN (so every worker of a run shares one), a meta read alone chooses none and waits, and a worker that
-   * the checkpoint already holds keeps its ID. The run's own candidate is NOT consumed: its other workers still need it. A parent
-   * `Stop` is not an input here at all (amendment `parent-stop-does-not-bound-workflow-start`). Like `openFromMeta`, the new ID exists
-   * only in this builder and must not escape until a checkpoint holding it has been atomically replaced (O1).
+   * `<runId>-<workerIndex>`: the run comes from the launch response, the index only from the meta. The launch response is the RUN's
+   * qualifying join (ruling R44): it opened the run's own activity row and mapping, so the run's identity journalId is CHECKPOINT
+   * data (O4) and pruning is never held for it. Every worker takes that identity (and the run's ended state) from the run's row; a meta
+   * alone, with no run open, chooses no identity and waits. A worker the checkpoint already holds keeps its ID. The index comes from a
+   * meta file, which is untrusted content, so anything but a non-negative safe integer is refused. A parent `Stop` is not an input
+   * (amendment `parent-stop-does-not-bound-workflow-start`). Like `openFromMeta` this is a NON-DURABLE builder door: the new ID
+   * exists only in this builder and must not escape until a checkpoint holding it has been atomically replaced (O1).
    */
   openWorkflowWorkerFromMeta(parentId: string, parentIncarnation: string, runId: string, workerIndex: number): DelegationMetaOpenResult {
+    if (typeof workerIndex !== 'number' || !Number.isSafeInteger(workerIndex) || workerIndex < 0) {
+      refuse('bad-shape', `a workflow worker index is a non-negative safe integer, not ${String(workerIndex)}`);
+    }
     const worker: DelegationActivityNaturalKey = { parentId, parentIncarnation, sourceKind: 'workflow', upstreamId: `${runId}-${workerIndex}` };
     const encoded = encodeDelegationNaturalKey(worker);
     const mapped = Object.hasOwn(this.mapping, encoded) ? this.mapping[encoded] : undefined;
     if (mapped !== undefined) return { kind: 'already-open', activityId: mapped };
-    const run = this.candidates.get(encodeDelegationNaturalKey({ parentId, parentIncarnation, sourceKind: 'workflow', upstreamId: runId }));
+    const runKey = encodeDelegationNaturalKey({ parentId, parentIncarnation, sourceKind: 'workflow', upstreamId: runId });
+    const runMapped = Object.hasOwn(this.mapping, runKey) ? this.mapping[runKey] : undefined;
+    const run = runMapped === undefined ? undefined : this.activities.get(runMapped);
     if (run === undefined) return { kind: 'waiting-for-evidence' };
-    return { kind: 'opened', activityId: this.openFromCandidate({ ...run, key: worker }, encoded) };
+    return {
+      kind: 'opened',
+      activityId: this.openFromCandidate(
+        { key: worker, journalId: run.identityJournalId, sequence: 0, observedAt: run.openedAt, lastObservedAt: run.lastEventAt, endedAt: run.endedAt }, encoded),
+    };
   }
 
   private foldLease(record: DelegationJournalRecordV1, e: Extract<DelegationJournalEntryV1, { kind: 'lease-created' }>): void {
@@ -845,8 +860,9 @@ export class DelegationCheckpointBuilder {
    *   - `checkpoint-anchor`: the applied record, so the anchor can always be verified;
    *   - `open-lease`: each unreleased lease's creating record and its correlation evidence;
    *   - `open-lineage`: each open lineage edge's references (its lease's creating record and evidence, or its activity's identity record);
-   *   - `identity-candidate`: the earliest retained record naming each agent no qualifying join has opened. POSITION IS NOT COVERAGE
-   *     (W3-M17): such a record stays held although the checkpoint has applied a later sequence, until a checkpoint holds the ID.
+   *   - `identity-candidate`: the earliest retained record naming each AGENT no qualifying join has opened (a bare occurrence or an
+   *     unpaired stop). POSITION IS NOT COVERAGE (W3-M17): such a record stays held although the checkpoint has applied a later
+   *     sequence, until a checkpoint holds the ID. A Workflow run is never a candidate: its launch response is its join (R44).
    * An activity that IS mapped needs no hold: its ID survives pruning in the checkpoint (O4).
    */
   computeHolds(): DelegationPruningHold[] {

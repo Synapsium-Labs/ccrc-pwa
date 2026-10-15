@@ -18,13 +18,19 @@ import { fileURLToPath } from 'node:url';
 import type { DelegationEventEnvelopeV1 } from '../../shared/api.js';
 import {
   buildDelegationJournalRecord,
+  delegationRetentionViewOf,
+  planDelegationPruning,
 } from '../src/coord/delegation-journal.js';
 import {
   DelegationCheckpointBuilder,
+  DelegationCheckpointError,
+  decodeDelegationCheckpoint,
+  encodeDelegationCheckpoint,
   namedAgentsOf,
   recoverDelegation,
 } from '../src/coord/delegation-checkpoint.js';
 import {
+  DELEGATION_CORRELATION_REASONS,
   correlateDelegation,
   delegationLeaseSourceOfLinked,
   type DelegationCorrelationInput,
@@ -208,13 +214,28 @@ describe('join-order table (W3-M41, W3-M42, W3-M59): which record is an activity
     expect(w.cp.pruningHolds.filter((h) => h.reason === 'identity-candidate')).toEqual([]);   // the mapping now holds the ID
   });
 
-  it('a bare occurrence PRUNED before the join cannot later become identity: the join\'s own record is then the earliest retained', () => {
-    const withBare = world([bareTool(1, AGENT), subagentStart(2, AGENT)]);
-    const pruned = world([subagentStart(2, AGENT)]);                           // the bare occurrence is gone: not retained evidence
-    expect(withBare.activities[0]!.identityJournalId).toBe(withBare.records[0]!.journalId);
-    expect(pruned.activities[0]!.identityJournalId).toBe(pruned.records[0]!.journalId);
-    expect(pruned.activities[0]!.identityJournalId).not.toBe(withBare.records[0]!.journalId);
-    expect(pruned.activities[0]!.activityId).not.toBe(withBare.activities[0]!.activityId);
+  describe('a bare occurrence PRUNED before the join (through recovery from a checkpoint)', () => {
+    // sequence 1 is the bare occurrence; the checkpoint is taken at 3 with X still unjoined; the join arrives at 4.
+    const prefix = evidenceChain([bareTool(1, AGENT), sessionStart(2), sessionStart(3)]);
+    const checkpoint = recoverDelegation(null, prefix).state.checkpoint;
+    const all = evidenceChain([bareTool(1, AGENT), sessionStart(2), sessionStart(3), subagentStart(4, AGENT)]);
+    const suffix = all.slice(2);                                               // the journal now begins at the anchor (3): sequences 1 and 2 are gone
+
+    it('the checkpoint holds the bare record, so a journal that has lost it is refused, never silently re-identified', () => {
+      expect(checkpoint.pruningHolds).toContainEqual({ journalId: prefix[0]!.journalId, reason: 'identity-candidate', ownerId: encodeDelegationNaturalKey(keyOf('agent', AGENT)) });
+      const report = recoverDelegation(encodeDelegationCheckpoint(checkpoint), suffix);
+      expect(report.failure?.code).toBe('held-evidence-missing');
+      expect(report.state.phase).toBe('reconstructing');
+    });
+    it('once the bare record is genuinely no longer retained evidence (no hold), the join\'s own record is the identity, never the pruned one', () => {
+      const unheld = { ...checkpoint, pruningHolds: checkpoint.pruningHolds.filter((h) => h.reason !== 'identity-candidate') };
+      const report = recoverDelegation(encodeDelegationCheckpoint(unheld), suffix);
+      expect(report.failure).toBeNull();
+      const act = activityOf(report.state.checkpoint.activities, 'agent', AGENT)!;
+      expect(act.identityJournalId).toBe(all[3]!.journalId);                   // the join's record
+      expect(act.identityJournalId).not.toBe(all[0]!.journalId);               // never the pruned bare record
+      expect(act.activityId).not.toBe(world([bareTool(1, AGENT), sessionStart(2), sessionStart(3), subagentStart(4, AGENT)]).activities[0]!.activityId);
+    });
   });
 
   it('an unpaired SubagentStop opens NOTHING (W3-M42), however many follow, and is a candidate only', () => {
@@ -230,6 +251,8 @@ describe('join-order table (W3-M41, W3-M42, W3-M59): which record is an activity
     expect(w.activities[0]!.executionState).toBe('ended');
   });
 
+  // `Stop` is not a spool variant (the closed event union cannot carry one, and the hook never writes one), so no journal can hold it:
+  // this row pins `namedAgentsOf` alone, and the fold loop below holds the orders a Stop would have bracketed, not a Stop itself.
   it('a parent Stop is not a delegation event: it names nothing, opens nothing, and closes nothing', () => {
     const parentStop = { ...base(2), eventKind: 'Stop' } as unknown as DelegationEventEnvelopeV1;
     expect(namedAgentsOf(parentStop)).toEqual([]);
@@ -280,17 +303,17 @@ describe('join-order table (W3-M41, W3-M42, W3-M59): which record is an activity
     expect(a.kind).toBe('opened');
     expect(b.kind).toBe('opened');
     const rows = w.builder.build(1).activities;
-    expect(rows.map((r) => r.upstreamId).sort()).toEqual(['wf_run1-0', 'wf_run1-1']);
+    expect(rows.map((r) => r.upstreamId).sort()).toEqual(['wf_run1', 'wf_run1-0', 'wf_run1-1']);          // the run, then its two workers
     expect(new Set(rows.map((r) => r.identityJournalId))).toEqual(new Set([w.records[0]!.journalId]));
     expect(a.kind === 'opened' && b.kind === 'opened' && a.activityId !== b.activityId).toBe(true);
     expect(w.builder.openWorkflowWorkerFromMeta(PARENT, INC, 'wf_run1', 0)).toEqual({ kind: 'already-open', activityId: a.kind === 'opened' ? a.activityId : '' });
   });
 
-  it('a Workflow launch that reports completed ends its workers at open; a bare run record never opens a worker by itself', () => {
+  it('a Workflow launch that reports completed ends its workers at open; the launch opens the RUN and never a worker by itself', () => {
     const w = world([workflowLaunch(1, 'wf_run1', 'completed')]);
-    expect(w.activities).toEqual([]);                                          // naming a run opens no worker: the index comes from the meta
+    expect(w.activities.map((a) => [a.sourceKind, a.upstreamId, a.executionState])).toEqual([['workflow', 'wf_run1', 'ended']]);   // the run, not a worker: the index comes from the meta
     w.builder.openWorkflowWorkerFromMeta(PARENT, INC, 'wf_run1', 0);
-    expect(w.builder.build(1).activities[0]!.executionState).toBe('ended');
+    expect(activityOf(w.builder.build(1).activities, 'workflow', 'wf_run1-0')!.executionState).toBe('ended');
   });
 
   it('a Bash call that mentions no worktree opens nothing and holds nothing; one that carries a listing opens a bash-worktree activity', () => {
@@ -334,7 +357,7 @@ describe('join-order table (W3-M41, W3-M42, W3-M59): which record is an activity
     expect(namedAgentsOf(sessionEnd(1, 'clear'))).toEqual([]);
   });
 
-  it('namedAgentsOf names exactly: agents (launch/start join; stop and emitter do not), workflow runs (never a join), Bash tool calls (a join only with a listing)', () => {
+  it('namedAgentsOf names exactly: agents (launch/start join; stop and emitter do not), workflow runs (the launch response is the run join), Bash tool calls (a join only with a listing)', () => {
     expect(namedAgentsOf(agentLaunch(1, AGENT))).toEqual([{ sourceKind: 'agent', upstreamId: AGENT, join: true, ends: false }]);
     expect(namedAgentsOf(agentLaunch(1, AGENT, 'completed'))).toEqual([{ sourceKind: 'agent', upstreamId: AGENT, join: true, ends: true }]);
     expect(namedAgentsOf(subagentStart(1, AGENT))).toEqual([{ sourceKind: 'agent', upstreamId: AGENT, join: true, ends: false }]);
@@ -344,8 +367,8 @@ describe('join-order table (W3-M41, W3-M42, W3-M59): which record is an activity
       { sourceKind: 'agent', upstreamId: AGENT, join: false, ends: false },
       { sourceKind: 'bash-worktree', upstreamId: 'toolu_1', join: false, ends: true },
     ]);
-    expect(namedAgentsOf(workflowLaunch(1, 'wf_run1'))).toEqual([{ sourceKind: 'workflow', upstreamId: 'wf_run1', join: false, ends: false }]);
-    expect(namedAgentsOf(workflowLaunch(1, 'wf_run1', 'completed'))).toEqual([{ sourceKind: 'workflow', upstreamId: 'wf_run1', join: false, ends: true }]);
+    expect(namedAgentsOf(workflowLaunch(1, 'wf_run1'))).toEqual([{ sourceKind: 'workflow', upstreamId: 'wf_run1', join: true, ends: false }]);
+    expect(namedAgentsOf(workflowLaunch(1, 'wf_run1', 'completed'))).toEqual([{ sourceKind: 'workflow', upstreamId: 'wf_run1', join: true, ends: true }]);
     expect(namedAgentsOf(bashPre(1, 'toolu_b1', ['a']))).toEqual([{ sourceKind: 'bash-worktree', upstreamId: 'toolu_b1', join: true, ends: false }]);
     expect(namedAgentsOf(bashPost(1, 'toolu_b1', ['a']))).toEqual([{ sourceKind: 'bash-worktree', upstreamId: 'toolu_b1', join: true, ends: true }]);
     expect(namedAgentsOf(bashPost(1, 'toolu_b1'))).toEqual([{ sourceKind: 'bash-worktree', upstreamId: 'toolu_b1', join: false, ends: true }]);
@@ -938,6 +961,172 @@ describe('every D-4008 fold (W3-M49, the correlation half): none is positive evi
     // and the state decides even when the path is (stale-ly) present
     expect(correlateDelegation({ ...base, record: { ...base.record, state: 'unreadable' } }).kind).toBe('unmeasured');
     expect(correlateDelegation({ ...base, record: { ...base.record, state: 'absent' } }).kind).toBe('unresolved');
+  });
+});
+
+describe('rung 3 refuses a cwd the parent itself reported (ruling R42, W3-M45\'s parent-cwd arm)', () => {
+  // The measured `agent-plain` lane shape (fixtures/delegation/2.1.281/agent-plain.json): a NON-ISOLATED subagent inherits the parent's
+  // working directory on every event it emits, SubagentStart and SubagentStop included. Here the parent sits in the raw worktree.
+  const rec = rawRecord();
+  const at = { cwd: WT(RAW) };
+  const subBash = (n: number, agentId: string, kind: 'PreToolUse' | 'PostToolUse', over: Over = {}): DelegationEventEnvelopeV1 =>
+    kind === 'PreToolUse'
+      ? { ...base(n, over), eventKind: 'PreToolUse', toolName: 'Bash', toolUseId: `toolu_${n}`, agentId }
+      : { ...base(n, over), eventKind: 'PostToolUse', toolName: 'Bash', toolUseId: `toolu_${n}`, outcome: 'completed', agentId };
+  const plain = (extra: readonly DelegationEventEnvelopeV1[] = []): DelegationEventEnvelopeV1[] => [
+    sessionStart(1, at), { ...base(2, at), eventKind: 'PreToolUse', toolName: 'Agent', toolUseId: 'toolu_2', isolation: null },
+    subagentStart(3, AGENT, at, 'general-purpose'), agentLaunch(4, AGENT, 'async-launched', at),
+    subBash(5, AGENT, 'PreToolUse', at), subBash(6, AGENT, 'PostToolUse', at), subagentStop(7, AGENT, at), ...extra,
+  ];
+  it('the measured agent-plain shape is NOT a link: the answer is the closed refusal `parent-cwd`', () => {
+    const w = world(plain());
+    expect(w.activities).toHaveLength(1);                                       // the subagent IS a joined activity, which is what makes this a trap
+    const v = correlateDelegation(input({ record: rec, activities: w.activities, acceptedEvidence: w.acceptedEvidence }));
+    expect(v.kind).toBe('unresolved');
+    expect(v.kind === 'unresolved' && v.reason).toBe('parent-cwd');
+    expect(DELEGATION_CORRELATION_REASONS).toContain('parent-cwd');
+  });
+  it('with rung 4 firing for the SAME parent the verdict follows rung 4 alone: never the subagent, and the subagent\'s records are not its proof', () => {
+    const w = world(plain([bashPre(10, 'toolu_b1', ['main-wt'], at), bashPost(12, 'toolu_b1', ['main-wt', RAW], at)]));
+    const v = correlateDelegation(input({ record: rec, activities: w.activities, acceptedEvidence: w.acceptedEvidence, listingWindows: [win({ after: ['main-wt', RAW] })] }));
+    const bash = activityOf(w.activities, 'bash-worktree', 'toolu_b1')!;
+    expect(v).toEqual({ kind: 'linked', activityId: bash.activityId, rung: 4, evidenceJournalIds: sorted([w.records[7]!.journalId, w.records[8]!.journalId]) });
+  });
+  it('with rung 4 firing for ANOTHER parent the parent-cwd rung 3 does not agree with it and does not conflict with it: rung 4 stands alone', () => {
+    const w = world([...plain(), bashPre(10, 'toolu_b1', ['main-wt'], { sessionId: OTHER }), bashPost(12, 'toolu_b1', ['main-wt', RAW], { sessionId: OTHER })]);
+    const v = correlateDelegation(input({ record: rec, activities: w.activities, acceptedEvidence: w.acceptedEvidence, listingWindows: [win({ sessionId: OTHER, after: ['main-wt', RAW] })] }));
+    expect(v.kind).toBe('linked');
+    expect(v.kind === 'linked' && v.rung).toBe(4);
+    expect(v.kind === 'linked' && activityOf(w.activities, 'agent', AGENT)!.activityId).not.toBe(v.kind === 'linked' && v.activityId);
+  });
+  it('the parent\'s Agent PreToolUse alone (its cwd is the path) refuses a later subagent event at that path', () => {
+    const w = world([{ ...base(1, at), eventKind: 'PreToolUse', toolName: 'Agent', toolUseId: 'toolu_1', isolation: null }, subagentStart(2, AGENT), subBash(3, AGENT, 'PostToolUse', at)]);
+    expect(correlateDelegation(input({ record: rec, activities: w.activities, acceptedEvidence: w.acceptedEvidence })).kind).toBe('unresolved');
+  });
+  it('SubagentStart and SubagentStop at the path are not "emitted from inside" the subagent: with no other event they place nothing', () => {
+    const w = world([subagentStart(1, AGENT, at), subagentStop(2, AGENT, at)]);
+    const v = correlateDelegation(input({ record: rec, activities: w.activities, acceptedEvidence: w.acceptedEvidence }));
+    expect(v.kind).toBe('unresolved');
+    expect(v.kind === 'unresolved' && v.reason).toBe('no-correlating-evidence');
+  });
+  it('control: an ISOLATED subagent (its own cwd, the parent elsewhere) is still a rung-3 link', () => {
+    const w = world([sessionStart(1, { cwd: `/fixture/${REPO}` }), subagentStart(2, AGENT, { cwd: `/fixture/${REPO}` }), subBash(3, AGENT, 'PostToolUse', at)]);
+    const v = correlateDelegation(input({ record: rec, activities: w.activities, acceptedEvidence: w.acceptedEvidence }));
+    expect(v.kind).toBe('linked');
+    expect(v.kind === 'linked' && v.rung).toBe(3);
+  });
+  it('the veto is the PARENT\'s: another incarnation\'s or another session\'s cwd does not veto this parent\'s subagent', () => {
+    const w = world([sessionStart(1, { ...at, parentIncarnation: 'g2' }), sessionStart(2, { ...at, sessionId: OTHER }), subagentStart(3, AGENT), subBash(4, AGENT, 'PostToolUse', at)]);
+    expect(correlateDelegation(input({ record: rec, activities: w.activities, acceptedEvidence: w.acceptedEvidence })).kind).toBe('linked');
+  });
+});
+
+describe('a Workflow run\'s identity is checkpoint data, so a launch never pins pruning (ruling R44)', () => {
+  const events = [workflowLaunch(1, 'wf_run1'), sessionStart(2), sessionStart(3), sessionStart(4)];
+  const NO_FLOOR = Date.UTC(2100, 0, 1);
+  const w = world(events);
+  const runRow = activityOf(w.activities, 'workflow', 'wf_run1')!;
+
+  it('applying the launch opens the run: a mapping and a row, with the launch record as its identity', () => {
+    expect(runRow.identityJournalId).toBe(w.records[0]!.journalId);
+    expect(runRow.activityId).toBe(deriveDelegationActivityId(keyOf('workflow', 'wf_run1'), w.records[0]!.journalId));
+    expect(w.cp.activityIdsByNaturalKey[encodeDelegationNaturalKey(keyOf('workflow', 'wf_run1'))]).toBe(runRow.activityId);
+  });
+  it('no hold names the run\'s record, and the pruning plan may cut past it', () => {
+    expect(w.cp.pruningHolds.map((h) => h.reason)).toEqual(['checkpoint-anchor']);
+    const view = delegationRetentionViewOf(w.records, new Set(w.cp.pruningHolds.map((h) => h.journalId)), NO_FLOOR);
+    const plan = planDelegationPruning({ state: w.report.state, view });
+    expect(plan.prunableThroughSequence).toBe(3);                              // strictly before the anchor at 4: the launch at 1 is cuttable
+  });
+  it('a worker meta arriving after the launch record was PRUNED derives the same identity, from the checkpoint', () => {
+    const bytes = encodeDelegationCheckpoint(w.cp);
+    const pruned = recoverDelegation(bytes, w.records.slice(3));               // the journal now begins at the anchor
+    expect(pruned.failure).toBeNull();
+    const opened = pruned.facts!.builder.openWorkflowWorkerFromMeta(PARENT, INC, 'wf_run1', 1);
+    expect(opened.kind).toBe('opened');
+    const worker = activityOf(pruned.facts!.builder.build(1).activities, 'workflow', 'wf_run1-1')!;
+    expect(worker.identityJournalId).toBe(w.records[0]!.journalId);
+    w.builder.clone().openWorkflowWorkerFromMeta(PARENT, INC, 'wf_run1', 1);
+    const fresh = w.builder.clone();
+    fresh.openWorkflowWorkerFromMeta(PARENT, INC, 'wf_run1', 1);
+    expect(worker.activityId).toBe(activityOf(fresh.build(1).activities, 'workflow', 'wf_run1-1')!.activityId);
+    expect(worker.activityId).toBe(deriveDelegationActivityId(keyOf('workflow', 'wf_run1-1'), w.records[0]!.journalId));
+  });
+  it('recovery from a checkpoint plus the retained suffix restores the same run identity', () => {
+    const early = recoverDelegation(null, w.records.slice(0, 2)).state.checkpoint;           // the launch is covered; X more records follow
+    expect(activityOf(early.activities, 'workflow', 'wf_run1')!.activityId).toBe(runRow.activityId);
+    const resumed = recoverDelegation(encodeDelegationCheckpoint(early), w.records);
+    expect(resumed.failure).toBeNull();
+    expect(activityOf(resumed.state.checkpoint.activities, 'workflow', 'wf_run1')).toEqual(runRow);
+    expect(resumed.state.checkpoint.activityIdsByNaturalKey).toEqual(w.cp.activityIdsByNaturalKey);
+  });
+  it('a worker takes the run\'s ended state: the launch that reported completed ends it at open', () => {
+    const done = world([workflowLaunch(1, 'wf_run1', 'completed')]);
+    done.builder.openWorkflowWorkerFromMeta(PARENT, INC, 'wf_run1', 0);
+    expect(activityOf(done.builder.build(1).activities, 'workflow', 'wf_run1-0')!.executionState).toBe('ended');
+  });
+  it('the run row itself is not a rung-2 claimant for a worker\'s tree name', () => {
+    const WF = 'wf_run1-1';
+    const x = world([workflowLaunch(1, 'wf_run1')]);
+    x.builder.openWorkflowWorkerFromMeta(PARENT, INC, 'wf_run1', 1);
+    const v = correlateDelegation(input({
+      record: record({ adminRecord: WF, canonicalPath: WT(WF) }), activities: x.builder.build(1).activities, acceptedEvidence: x.acceptedEvidence,
+      pointMetas: [meta({ sourceKind: 'workflow', upstreamId: WF, worktreePath: WT(WF), evidenceJournalId: x.records[0]!.journalId })],
+    }));
+    expect(v.kind).toBe('linked');
+    expect(v.kind === 'linked' && v.activityId).toBe(activityOf(x.builder.build(1).activities, 'workflow', WF)!.activityId);
+  });
+});
+
+describe('openWorkflowWorkerFromMeta refuses an index a meta file cannot be trusted for (m1)', () => {
+  it.each([[Number.NaN], [-1], [1.5], [Number.POSITIVE_INFINITY], [Number.MAX_SAFE_INTEGER + 1], ['1' as unknown as number], [null as unknown as number], [undefined as unknown as number]])(
+    'index %s is refused and mints nothing', (index) => {
+      const w = world([workflowLaunch(1, 'wf_run1')]);
+      const before = w.builder.build(1);
+      let code = 'accepted';
+      try { w.builder.openWorkflowWorkerFromMeta(PARENT, INC, 'wf_run1', index); } catch (err) { code = err instanceof DelegationCheckpointError ? err.code : 'other'; }
+      expect(code).toBe('bad-shape');
+      expect(w.builder.build(1).activities).toEqual(before.activities);
+      expect(w.builder.build(1).activityIdsByNaturalKey).toEqual(before.activityIdsByNaturalKey);
+    });
+  it.each([[0], [1], [Number.MAX_SAFE_INTEGER]])('index %s is accepted', (index) => {
+    const w = world([workflowLaunch(1, 'wf_run1')]);
+    expect(w.builder.openWorkflowWorkerFromMeta(PARENT, INC, 'wf_run1', index).kind).toBe('opened');
+  });
+  it('a listing-less Bash PreToolUse is skipped, so the PostToolUse that carries the listing is the identity (D-4649)', () => {
+    const w = world([bashPre(1, 'toolu_b1'), bashPost(2, 'toolu_b1', ['main-wt', RAW])]);
+    expect(w.activities).toHaveLength(1);
+    expect(w.activities[0]!.identityJournalId).toBe(w.records[1]!.journalId);
+  });
+  it('the decoded checkpoint of a run round-trips (the run row is an ordinary activity row in checkpoint v1)', () => {
+    const w = world([workflowLaunch(1, 'wf_run1')]);
+    expect(decodeDelegationCheckpoint(encodeDelegationCheckpoint(w.cp))).toEqual(w.cp);
+  });
+});
+
+describe('the verdict reasons are one closed list (m4)', () => {
+  const file = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'src', 'coord', 'delegation-correlation.ts');
+  const src = readFileSync(file, 'utf8');
+  const emitted = new Set([...src.matchAll(/\b(?:unresolved|conflicting|unmeasured)\('([a-z0-9-]+)'/g)].map((m) => m[1]!));
+  it('every reason the module emits is in the list, and every listed reason is emitted somewhere', () => {
+    expect([...emitted].sort()).toEqual([...DELEGATION_CORRELATION_REASONS].sort());
+  });
+  it('the list has no duplicate and the two reasons Task 12 must branch on are in it', () => {
+    expect(new Set(DELEGATION_CORRELATION_REASONS).size).toBe(DELEGATION_CORRELATION_REASONS.length);
+    expect(DELEGATION_CORRELATION_REASONS).toEqual(expect.arrayContaining(['ccrc-birth-wait', 'ccd-workspace-not-a-lease']));
+  });
+  it('a verdict built by the ladder carries only listed reasons, across the refusal cases this file exercises', () => {
+    const seen = new Set<string>();
+    const { base } = agentWorld();
+    for (const over of [
+      { hasRegistryRow: true }, { birthPassesRemaining: 2 as const }, { pointMetas: [] }, { activities: [] },
+      { record: record({ state: 'unreadable' as const }) }, { record: record({ state: 'absent' as const }) }, { record: record({ canonicalPath: null }) },
+    ]) {
+      const v = correlateDelegation({ ...base, ...over });
+      if (v.kind === 'unresolved' || v.kind === 'conflicting' || v.kind === 'unmeasured') seen.add(v.reason);
+    }
+    for (const reason of seen) expect(DELEGATION_CORRELATION_REASONS as readonly string[]).toContain(reason);
+    expect(seen.size).toBeGreaterThan(4);
   });
 });
 

@@ -2753,6 +2753,13 @@ describe('one absent/unreadable read vocabulary', () => {
     expect(registry).toMatch(/import\s+type\s*\{[^}]*\bReadFailure\b[^}]*\}\s*from\s*'\.\/io\.js'/);
   });
 
+  it('is what delegation-model.ts derives a census record\'s state from, not a third copy (ruling R43)', () => {
+    const model = readFileSync(path.join(ccrcRoot, 'server/src/coord/delegation-model.ts'), 'utf8');
+    expect(model).not.toMatch(PAIR);
+    expect(model).toMatch(/state: 'present' \| ReadFailure;/);
+    expect(model).toMatch(/import\s+type\s*\{[^}]*\bReadFailure\b[^}]*\}\s*from\s*'\.\.\/\.\.\/\.\.\/shared\/agent-protocol\.js'/);
+  });
+
   it('server/src/io.ts re-exports ReadFailure rather than restating it', () => {
     const io = readFileSync(path.join(ccrcRoot, 'server/src/io.ts'), 'utf8');
     expect(io).not.toMatch(PAIR);

@@ -39,6 +39,7 @@ import {
   type DelegationParentageState,
   type DelegationWorkspaceState,
 } from '../../../shared/api.js';
+import type { ReadFailure } from '../../../shared/agent-protocol.js';
 
 // ── Durable journal and checkpoint types (the plan's vocabulary, names and shapes exact) ────────────────────────────
 
@@ -300,9 +301,8 @@ export interface DelegationCensusRecord {
   claudeBase: string | null;
   locked: boolean;
   baseAgreesFirstLog: boolean | null;
-  // The plan's three words, in an order that keeps the absent/unreadable READ vocabulary single-defined in shared/agent-protocol.ts
-  // (this is a census record's own three-valued state, not that read result).
-  state: 'absent' | 'present' | 'unreadable';
+  /** The plan's three words: the admin record read fine, or it did not (`ReadFailure`: measured absent, or unreadable). */
+  state: 'present' | ReadFailure;
   diagnostic: string | null;
 }
 

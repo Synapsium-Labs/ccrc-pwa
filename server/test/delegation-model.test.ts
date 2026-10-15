@@ -890,7 +890,7 @@ describe('the model is L1: pure, with no randomness and no IO of its own', () =>
 
   it('imports node:crypto and shared/api.ts and nothing else (no fs, no fastify, no node:sqlite, no CoordStore)', () => {
     const specs = [...code.matchAll(/^import\s[^;]*?from\s+'([^']+)';/gms)].map((m) => m[1]);
-    expect(specs.sort()).toEqual(['../../../shared/api.js', 'node:crypto']);
+    expect(specs.sort()).toEqual(['../../../shared/agent-protocol.js', '../../../shared/api.js', 'node:crypto']);
   });
 
   it('calls no source of randomness or time: the serialized journal adapter owns randomUUID, and pure policy never mints', () => {
