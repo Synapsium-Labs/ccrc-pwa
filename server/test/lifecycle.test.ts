@@ -1119,6 +1119,14 @@ describe('shared/lifecycle.ts — the policy §4(a) manifest', () => {
     expect(c!.collector).toBeNull();
     expect(c!.ruling).toContain('kept with the store; removed only with it');
     for (const f of ['store.id', 'store.writer', 'store.id.pending', 'op']) expect(c!.root).toContain(f);
+    // B2 adds two more files to the same row (D-5016's `pass`, D-5026's `pass-died`). `toContain('pass')` is already true of
+    // 'while an --op pass runs', so each is pinned by the phrase that declares it, which goes when its name is dropped.
+    expect(c!.root).toContain('pass while a scheduled pass runs');
+    expect(c!.root).toContain('pass-died while a recorded death stands, until a pass commits a tick');
+    // and how each goes: a pass removes its own marker, the next pass records a killed one, a committed tick removes the record.
+    expect(c!.ruling).toContain('a scheduled pass removes its own pass in its finally');
+    expect(c!.ruling).toContain('records a killed pass\'s leftover in pass-died and overwrites the marker');
+    expect(c!.ruling).toContain('the first pass that commits a tick removes pass-died');
   });
 
   it('declares history-spool: an R class written by the hook, the CLI and the sweep, collected by the two-phase drain', () => {
