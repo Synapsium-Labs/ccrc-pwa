@@ -5773,6 +5773,8 @@ describe('ccrc history: the hook spools exactly SPOOL_SOURCES on SessionStart (s
     const m = /case "\$src" in ([a-z|]+)\)/.exec(arms[0]!);
     expect(m, 'the arm spells its sources as one alternation').not.toBeNull();
     expect(m![1]!.split('|').sort()).toEqual([...members].sort());
+  });
+});
 
 // D-5045 (plan docs/superpowers/plans/2026-10-15-ask-server-half.md, Task 1). APPENDED, for the reason the blocks above
 // state: `session-hook.test.ts`'s citation audit cites this file by line. An AskUserQuestion's free-text row is named by
