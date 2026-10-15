@@ -25,6 +25,7 @@
 // reach it without a cycle. It is also why `GET /api/auth/status` is spelled
 // HERE rather than in `lib/api.ts`: it is the one route that must be readable
 // while everything else is being refused, and it must never itself raise.
+import { setToastSuppressor } from '@ccrc/ui';
 import { useSyncExternalStore } from 'react';
 import { isAuthVerdict, type AuthStatus, type AuthVerdict } from '../../../shared/api';
 
@@ -60,6 +61,20 @@ export function authLost(): AuthLost {
 export function isAuthLost(): boolean {
   return current.lost;
 }
+
+// A 401 is ONE event however many calls it breaks. The login screen is the
+// answer to all of them; a stack of "unauthenticated" toasts behind it is noise
+// about a fact already on screen, and an action toast would be an offer nothing
+// can accept until the operator is back in. Swallowed at the single funnel
+// rather than at ~40 catch blocks — the same argument this module makes for the
+// signal itself.
+//
+// It is INSTALLED HERE, beside the signal it reads, rather than in main.tsx:
+// the toast belongs to @ccrc/ui, which must not know what an ccrc session is,
+// and main.tsx is the one module no test ever loads — wiring the policy there
+// would leave it unexercised by the suite that checks it. Importing this module
+// at all is what arms it, and every consumer of the signal already does.
+setToastSuppressor(isAuthLost);
 
 /**
  * Raise the signal. FIRST WINS while it is up.

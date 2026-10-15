@@ -81,8 +81,21 @@ fi
 # The pwa build lands in server/dist-pwa (vite outDir), same as deploy.sh's
 # lane; the artifact checks after the builds refuse BY ARTIFACT, because a
 # green npm exit is a promise and the file on disk is a fact.
+#
+# ui/ IS INSTALLED, NEVER BUILT, AND ALWAYS BEFORE pwa. pwa consumes
+# `@ccrc/ui` as SOURCE (`"file:../ui"`, `exports['.']` → `src/index.ts`), so
+# both halves of pwa's `npm run build` (`tsc --noEmit && vite build`) read
+# `../ui/src/**` — and a bare import there resolves from ui's OWN directory,
+# never from pwa/node_modules. npm does not install the dependencies of a
+# `file:` link outside the package root; pwa's lockfile holds only the link.
+# Without this line a clean release machine fails pwa's `tsc --noEmit` with
+# "Cannot find module" for react, class-variance-authority, vaul and every
+# other ui import (measured on a clean clone: exit 2, no bundle) — and every
+# merge's prerelease would stall. ui ships nothing of its own: the bundle in server/dist-pwa is
+# the whole of it, which is why ui is absent from the tarball's set below.
 echo "build-release.sh: building $VERSION (server, PWA, agent)…"
 ( cd "$ROOT/server" && npm ci --no-audit --no-fund && npm run build )
+( cd "$ROOT/ui"     && npm ci --no-audit --no-fund )
 ( cd "$ROOT/pwa"    && npm ci --no-audit --no-fund && npm run build )
 ( cd "$ROOT/agent"  && npm ci --no-audit --no-fund && npm run build )
 [ -f "$ROOT/server/dist/server/src/index.js" ] \

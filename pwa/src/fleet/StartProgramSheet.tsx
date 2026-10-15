@@ -38,21 +38,38 @@
 //     BEFORE the tap — same posture as the projection naming the account
 //     before the tap rather than guessing — and refuses with no confirm
 //     button at all when it finds one.
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
-import type { FleetSession, ProjectRow } from '../../../shared/api';
+import type { ProjectRow } from '../../../shared/api';
 import { ledgerPath, programKickoffVerdict, shapeProgramSlug } from '../../../shared/api';
-import { Sheet } from '../components/Sheet';
-import { Skeleton } from '../components/Skeleton';
+import { Button, Sheet, TEXT_INPUT_STACKED, TextInput } from '@ccrc/ui';
+
+/** The sheet's confirm control. It was the FIFTH copy of the quiet control's
+ *  eleven declarations — `quiet-control.test.ts` found it the day the other
+ *  four were folded, which is the whole reason that census exists.
+ *
+ *  Three things ride beside the variant rather than in it, because they are
+ *  this control's and not the family's: it spans the sheet (`size` defaults
+ *  to `full`, so nothing is passed), it is a step up in size at `--fs-sm`,
+ *  and it presses to 0.98 — shallower than the family's 0.96, as its own rule
+ *  always said. */
 import { accountLabel } from '../lib/accounts';
 import { markerState } from './coordWords';
-import { ApiError, api, apiErrorText, kickoffErrorText } from '../lib/api';
-import { navigate } from '../lib/router';
+import { api } from '../lib/api';
 import { useFleetStore, type FleetStore } from '../stores/fleet';
 import { useProjectedHome } from './useProjectedHome';
 import {
   READY_GLYPH, READY_PENDING_GLYPH, missingPreconditions, readinessTitle, readinessWord,
 } from './readinessWords';
+import { ProjectPicker } from './ProjectPicker';
+import { ProjectRowShell } from './ProjectRowShell';
+import {
+  liveMainCheckoutIn, openRunVerdict, startProgramPlacement,
+  type OpenRunVerdict,
+} from './startProgramPolicy';
+import { KickoffRecovery, PROGRAM_GO } from './KickoffRecovery';
+import { useProjectList } from './useProjectList';
+import { useProgramAttempt } from './useProgramAttempt';
 import './fleet.css';
 
 
@@ -66,221 +83,6 @@ import './fleet.css';
 //
 // Review fix round 1, Minor 3, carried with them: `programKickoff` builds the
 // path by calling `ledgerPath`, never by spelling it a second time inline.
-
-/** D-291: how long the sheet waits for the freshly created session to
- *  appear in a `/ws/fleet` snapshot before giving up. Tied to the fleet
- *  watcher's own 2 s tick (`server/src/watch.ts`'s `intervalMs`) plus a
- *  generous margin — the same reasoning `coordWords.ts`'s `COORD_CONFIRM_MS`
- *  states for the pause toggle's own bounded wait, sized up because this one
- *  waits on a cold process spawn (tmux + a wrapper CLI cold start), not a
- *  marker-file flip: room for a slow box and more than one missed tick, not
- *  a timeout chasing the happy path. */
-export const START_PROGRAM_WAIT_MS = 20_000;
-
-/** A MAIN CHECKOUT of `project` — not one of its workspaces. The shared half
- *  of both arms below, and the one C1 was about: `wrapper`+`project` alone is
- *  not a main checkout, because `cmd_ws_add` writes BOTH fields onto every
- *  WORKSPACE row too, with a `_ws_least_loaded` wrapper (`ccd/ccd:3667`, called
- *  at `ccd/ccd:3887`) that
- *  `useProjectedHome` mirrors exactly (`server/src/limits.ts:96`) — so a
- *  two-field match hits live workers on a box in its normal state.
- *  `FleetSession.workspace` is server-reported and documented "null for a
- *  project's main checkout" (`shared/api.ts:35-37`), so this costs NO id
- *  arithmetic and D-291's "never recompute the id" holds unchanged. */
-const isMainCheckoutOf = (s: FleetSession, project: string): boolean =>
-  s.project === project && s.workspace === null;
-
-/** D-292 (was D-B4-19)'s arm: "is a live main checkout already running in this project?"
- *
- *  WRAPPER-INDEPENDENT, and that is a correction, not an oversight (re-review
- *  of the C1 fix). `cmd_swap` rewrites the registry's `wrapper` field and
- *  KEEPS the id (`ccd/ccd:13459`, `_reg_set "$id" wrapper "$target"`), while
- *  `cmd_start`'s collision test is `_alive "$(_id "$wrapper" "$project")"`
- *  (`ccd/ccd:12467` and `ccd/ccd:12508`) — keyed on the ID, which a swap does
- *  not move. On the
- *  live fleet 5 of 10 main checkouts already report a `wrapper` that differs
- *  from their own id prefix (an id reading `<wrapper>-<project>` whose registry
- *  row reports a DIFFERENT wrapper — the count is the evidence, the particular
- *  names were one fleet's and carried none of the argument), so a
- *  wrapper-scoped refusal MISSES a real collision: the row reports `Y`, the
- *  projection says `W`, no match, the operator taps Start, `ccd start W P`
- *  resolves `_id` to the live `W-P`, prints "already running" and exits 0 —
- *  the HTTP call SUCCEEDS, the wrapper-scoped wait never matches, and the
- *  sheet ends on "Started — the board just hasn't shown it yet" for a program
- *  that never started. A dead end, reachable on half this fleet's projects.
- *
- *  This arm cannot ask the exact question (`_alive(_id(W,P))`) without
- *  recomputing the id, which D-291 forbids. So it asks the WIDER one and
- *  accepts over-refusing: when the live main checkout is one `cmd_start` would
- *  NOT have collided with, this still refuses, and the copy says why in terms
- *  that are true either way (a second coordinator in one project is its own
- *  problem). Safe to widen: this arm renders no confirm button, it never acts
- *  — refusing more is conservative, and there is no path by which a wider
- *  match sends a kickoff anywhere. The arm that ACTS is the wrapper-scoped one
- *  below.
- *
- *  `status !== 'dead'` is on THIS arm only: `cmd_start`'s idempotency test is
- *  `_alive` (tmux has-session), whose wire mirror this is. Without it a
- *  dead-but-unreaped row refuses the sheet forever with copy false on every
- *  clause, and `ws-reap` is human-only-at-a-terminal by contract — no way out
- *  from the phone. */
-function liveMainCheckoutIn(
-  sessions: readonly FleetSession[],
-  project: string,
-): FleetSession | null {
-  return sessions.find((s) => isMainCheckoutOf(s, project) && s.status !== 'dead') ?? null;
-}
-
-/** D-291's arm: "has the session I just asked for appeared yet?"
- *
- *  WRAPPER-SCOPED, deliberately, and NOT to be widened to match the refusal
- *  above. This one ACTS — it sends the coordinator kickoff and navigates — so
- *  its question is genuinely "the session this sheet created", which is the
- *  one at the wrapper it passed to `createSession`. Dropping `s.wrapper ===
- *  wrapper` here would let a DIFFERENT live main checkout in the same project
- *  (someone else's, or a swapped one) collect this sheet's kickoff: verbatim
- *  the hijack D-292 exists to prevent, arriving through the wait instead.
- *
- *  LIVENESS + FRESHNESS, both required (coordinator review B-2). An earlier
- *  version of this docstring argued for NO liveness conjunct, on the grounds
- *  that `cmd_start` writes the registry fields before tmux is up, so
- *  "excluding a dead row would time out a wait on a session that really did
- *  start". THAT REASONING WAS WRONG and is corrected here rather than
- *  preserved: excluding a dead row does not time the wait out, it simply does
- *  not resolve on THAT tick. `checkForMatch` re-runs on every later
- *  `/ws/fleet` frame and the wait is bounded at `START_PROGRAM_WAIT_MS`, so
- *  the row resolves the moment it is reported alive. "Not resolving yet" was
- *  conflated with "timing out"; they are different facts.
- *
- *  Why liveness is needed: project + wrapper + `workspace === null` is NOT a
- *  unique key, by the same `cmd_swap` fact that widened the refusal arm
- *  (`ccd/ccd:13459` moves the wrapper, keeps the id). A main checkout
- *  `claude-ccrc-pwa` swapped to `claude2` and since DEAD is skipped by the
- *  refusal (`status !== 'dead'`), so Start is offered; the projection says
- *  `claude2`, `cmd_start` spawns a NEW `claude2-ccrc-pwa`, and the next frame
- *  carries both in registry-id sort order (`registry.ts:869`), where
- *  `'claude-'` sorts before `'claude2'` (`-` 0x2D < `2` 0x32). Without
- *  liveness `.find()` returns the DEAD swapped row — it satisfies project,
- *  `workspace === null` and `wrapper === 'claude2'` — and the kickoff goes to
- *  a dead session while the coordinator that actually started never gets its
- *  brief.
- *
- *  Why liveness ALONE is not enough: `preLive` is the set of ids that were
- *  already alive when `start()` snapshotted the store, immediately before the
- *  create. The discriminator is "this row became live as a RESULT of my
- *  create" — alive now, and either absent from that snapshot or present in it
- *  but dead. That last clause is the subtle one and is deliberate: a DEAD row
- *  with the same id that `cmd_start` will revive is a legitimate resolution
- *  (the refusal skips dead rows, so Start is offered, and `ccd start`
- *  respawns exactly that id), so freshness cannot be "an id I had not seen".
- *
- *  EXPORTED for its own unit test, deliberately. The `!preLive.has(s.id)`
- *  conjunct is unreachable through the component: `start()` refuses to run at
- *  all while `existing !== null`, and `existing` is any live main checkout in
- *  the project — so no tap can produce a snapshot that already contains a
- *  live matching row. Measured: deleting that conjunct alone left the whole
- *  integration suite green. A guard no test can see is exactly what this
- *  branch's mutation-table doctrine forbids, so rather than ship it
- *  unpinned (or delete a guard the review ordered), the predicate is pure and
- *  is tested directly. The component tests remain the primary pins for the
- *  other three conjuncts. */
-export function startedSessionFor(
-  sessions: readonly FleetSession[],
-  wrapper: string,
-  project: string,
-  preLive: ReadonlySet<string>,
-): FleetSession | null {
-  return sessions.find((s) =>
-    isMainCheckoutOf(s, project)
-    && s.wrapper === wrapper
-    && s.status !== 'dead'
-    && !preLive.has(s.id)) ?? null;
-}
-
-/** The ids alive at a given instant — `startedSessionFor`'s `preLive`
- *  snapshot. Taken from `fleet.getState()` (authoritative) rather than the
- *  render-scoped `sessions`, and taken BEFORE the create, so "was already
- *  running before I asked for anything" is a measurement and not an
- *  inference. */
-const liveIdsIn = (sessions: readonly FleetSession[]): ReadonlySet<string> =>
-  new Set(sessions.filter((s) => s.status !== 'dead').map((s) => s.id));
-
-/** `createSession`'s own refusals. 400 is a client-authored mistake (an
- *  unknown/empty project); apiErrorText's stderr-first priority already
- *  handles the 502 spawn-failure case (ccd's own words), so this only adds
- *  the one branch that needs a sentence apiErrorText cannot supply — a bare
- *  `bad-request` slug says nothing actionable. */
-function startErrorText(err: unknown): string {
-  if (err instanceof ApiError && err.status === 400) {
-    return "That project isn't known to the fleet — pick one from the list.";
-  }
-  return apiErrorText(err);
-}
-
-/** "Is a program already running in this project?" — THREE answers, and the
- *  third is why this is a function instead of a `.has()` at the call site.
- *
- *  `openRunProjects === null` is NOT MEASURED: the run board has had neither a
- *  `runs` frame nor a finished cold read. A `(openRunProjects ?? new Set()).has()`
- *  answers `false` there, which is indistinguishable from a measured empty board
- *  — the sheet would offer Start on the strength of a question nobody answered.
- *  That fold is the single failure this arm exists to prevent, so the state gets
- *  its own word and the render gets its own sentence.
- *
- *  The set carries PROJECT NAMES and nothing else, so the copy below can name
- *  the project and cannot name the program. That is a limit, not an omission: a
- *  set of names is not a run row, and naming a program would be a claim this
- *  measurement never made.
- *
- *  The match is EXACT. `RunSummary.project` is whatever string the coordinator
- *  passed to `POST /api/runs`, which validates it as a non-empty string and
- *  nothing more (`server/src/coord/routes.ts:1077-1085`); `ProjectRow.name` comes
- *  from the projects listing. Nothing joins the two but convention, so a run
- *  naming a project this picker never lists is a run this sheet cannot speak
- *  about — loosening to a prefix would refuse real projects over a lookalike.
- *
- *  EXPORTED for its own unit test, on `startedSessionFor`'s precedent above. */
-export type OpenRunVerdict = 'clear' | 'open-run' | 'unmeasured';
-
-export function openRunVerdict(
-  openRunProjects: ReadonlySet<string> | null,
-  project: string,
-): OpenRunVerdict {
-  if (openRunProjects === null) return 'unmeasured';
-  return openRunProjects.has(project) ? 'open-run' : 'clear';
-}
-
-type StartProgramPlacement =
-  | { kind: 'projected'; wrapper: string }
-  | { kind: 'pending' }
-  | { kind: 'none'; pool: string | null; source: 'project' | 'global' }
-  | { kind: 'unmeasurable' }
-  | { kind: 'pool-blind'; pool: NonNullable<ProjectRow['pool']> };
-
-/** Selects the route's project-specific forecast whenever it is present. The
- * global forecast remains valid only for old servers and measured untagged
- * projects, where the pool-aware and historical rules are the same. */
-function startProgramPlacement(
-  project: ProjectRow,
-  projected: ReturnType<typeof useProjectedHome>,
-): StartProgramPlacement {
-  if (project.placement !== undefined) {
-    if (project.placement.kind === 'projected') {
-      return { kind: 'projected', wrapper: project.placement.wrapper };
-    }
-    if (project.placement.kind === 'none') {
-      return { ...project.placement, source: 'project' };
-    }
-    return project.placement;
-  }
-
-  if (project.pool !== undefined && project.pool.state !== 'untagged') {
-    return { kind: 'pool-blind', pool: project.pool };
-  }
-  if (projected === undefined) return { kind: 'pending' };
-  if (projected === null) return { kind: 'none', pool: null, source: 'global' };
-  return { kind: 'projected', wrapper: projected.wrapper };
-}
 
 export interface StartProgramSheetProps {
   open: boolean;
@@ -352,230 +154,35 @@ export function StartProgramSheet({
   const [title, setTitle] = useState('');
   const [project, setProject] = useState<ProjectRow | null>(null);
   const [query, setQuery] = useState('');
-  const [list, setList] = useState<ProjectRow[] | null>(null);
-  const [listError, setListError] = useState<string | null>(null);
-  const [starting, setStarting] = useState(false);
-  const [timedOut, setTimedOut] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  /**
-   * A kickoff that could not be QUEUED, held until the operator does something
-   * about it (program-leverage wave 4).
-   *
-   * This is state, not a toast, and the difference is the wave's whole point.
-   * The injection this replaces failed synchronously and left nothing behind, so
-   * a transient message was all there was to say; a failed QUEUE leaves nothing
-   * behind EITHER — no mail row, no delivery, nothing the lane will retry — and
-   * unlike the injection there is now a cheap, correct act that fixes it, so the
-   * sheet has to still be offering it when the operator looks up. `Toast.tsx`
-   * also drops every toast once the 401 auth-lost signal is raised, which is
-   * exactly the failure most likely to eat a kickoff on an armed box.
-   *
-   * `sessionId` is the id `startedSessionFor` MEASURED, carried verbatim: a
-   * retry must not re-open the addressing question D-291/D-292 already settled.
-   */
-  const [kickoffFailed, setKickoffFailed] =
-    useState<{ sessionId: string; slug: string; title: string; why: string } | null>(null);
-  const [retrying, setRetrying] = useState(false);
-
   // Fetch the project list the moment the sheet opens — same idiom
   // NewSessionSheet already uses for the same call.
-  useEffect(() => {
-    if (!open) return undefined;
-    let cancelled = false;
-    setList(null);
-    setListError(null);
-    loadProjects().then(
-      (r) => { if (!cancelled) setList(r.projects); },
-      (err: unknown) => { if (!cancelled) setListError(apiErrorText(err)); },
-    );
-    return () => { cancelled = true; };
-  }, [open, loadProjects]);
+  // The project plane — a read on open, three answers, and the query's own
+  // filter — lives in `useProjectList`: it was the one part of this 770-line
+  // function that stood alone, and its `null`-vs-error distinction is what
+  // `ProjectPicker` renders three arms from.
+  const { list, listError, matching } = useProjectList(open, query, loadProjects);
 
-  // Lesson (Task 12's own review, applied here ahead of time): this sheet is
-  // mounted UNCONDITIONALLY at RunsScreen level and `open` only toggles the
-  // Sheet's own visibility — the component keeps running underneath, the
-  // same shape ReapSheet/AbandonSheet's own fix rounds already litigated. It
-  // holds async state across the D-291 wait, so closing mid-flight must
-  // retire everything outstanding: `gen` is bumped so a create/kickoff/match
-  // that resolves AFTER a close cannot write into whatever the sheet shows
-  // next, the timer is cleared so it cannot fire into a retired attempt, and
-  // the wait target is dropped so a LATER `sessions` frame cannot resurrect
-  // it. A closed sheet also forgets its own form choices, same as
-  // NewSessionSheet.
-  const gen = useRef(0);
-  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const waitRef = useRef<{ mine: number; wrapper: string; project: string; slug: string; title: string; preLive: ReadonlySet<string> } | null>(null);
-  // Review fix round 1, Important 2: the D-291 timeout and the D-292
-  // collision refusal INTERACT — neither ruling could see this alone. A
-  // timeout does not mean the create failed; it means the board hasn't
-  // shown it YET. If the session then lands a moment later, `existing`
-  // (below) finds it — and without this ref, the sheet would render the
-  // D-292 refusal ("…is already running… may be mid-task") for the
-  // session it JUST started itself, which is neither running anyone else's
-  // work nor true. `myAttemptRef` outlives the timeout (unlike `waitRef`,
-  // which `finish()` still nulls the instant a match is found, so a second
-  // `/ws/fleet` frame arriving mid-`queueKickoff()` cannot fire a duplicate
-  // kickoff) — it is cleared only on close or by a NEWER attempt overwriting
-  // it, so the false-collision suppression below holds for the entire
-  // window from a successful `createSession` through navigation, not merely
-  // while the wait is still nominally "in progress".
-  //
-  // PROJECT ONLY, no wrapper (re-review of the C1 fix). It used to hold both
-  // and compare both, which was coherent while the refusal arm was itself
-  // wrapper-scoped. Now that `liveMainCheckoutIn` is wrapper-independent the
-  // two must agree, or the suppression stops covering its own case:
-  // `cmd_swap` moves a live session's `wrapper` while keeping its id
-  // (`ccd/ccd:13459`), so a session this sheet started at `W` can be reported
-  // at `Y` on any later frame — a wrapper-comparing ownership test then fails
-  // and the sheet renders "…is already running… may be mid-task" for the
-  // session it started ITSELF. That is the Important-2 defect exactly,
-  // resurrected through the swap path.
-  //
-  // Still BOUNDED, which is the property that matters here: this is non-null
-  // only after a `createSession` for THIS project SUCCEEDED in the sheet's
-  // current lifetime, and the pre-tap refusal proved no live main checkout
-  // existed in that project a moment before — so one appearing now is
-  // overwhelmingly this sheet's own doing. It is cleared on close, overwritten
-  // by a newer attempt, and compared on `project`, so choosing a DIFFERENT
-  // project drops the suppression on the same render (pinned by its own
-  // test). And the suppression can only ever hide a WARNING: the arm that
-  // ACTS is `startedSessionFor`, still wrapper-scoped, so widening the
-  // ownership test cannot send a kickoff anywhere it would not already go.
-  const myAttemptRef = useRef<{ project: string } | null>(null);
-
-  const clearTimer = (): void => {
-    if (timerRef.current !== null) {
-      clearTimeout(timerRef.current);
-      timerRef.current = null;
-    }
-  };
-
+  // A closed sheet forgets its own form choices, same as NewSessionSheet. The
+  // attempt's own retirement — generation, timer, wait target — is
+  // `useProgramAttempt`'s, on the same `open`.
   useEffect(() => {
     if (open) return;
-    gen.current += 1;
-    clearTimer();
-    waitRef.current = null;
-    myAttemptRef.current = null;
     setSlug('');
     setTitle('');
     setProject(null);
     setQuery('');
-    setStarting(false);
-    setTimedOut(false);
-    setError(null);
-    setKickoffFailed(null);
-    setRetrying(false);
   }, [open]);
 
-  useEffect(() => () => clearTimer(), []);
-
-  // Review, M3: `timedOut` is a statement about ONE attempt's target
-  // ("started `build9-demo` in ccrc-pwa on claude; the board hasn't shown it
-  // yet"), and it used to be reset only by `start()` and by close — so
-  // picking a different project left it rendered above a Start button aimed
-  // somewhere else, claiming that target had been started when it never had.
-  // Keyed on the two facts that NAME the target: the operator's project pick
-  // and the projection's wrapper. Not `projected` itself — that object is
-  // rebuilt by the accounts poll every 20 s, which would clear an honest
-  // timeout on a tick rather than on a change. `waitRef` is deliberately NOT
-  // touched here: the wait keeps watching for the session it really did start
-  // (D-291, review fix round 1 Important 2) — only this SENTENCE, which has
-  // stopped being true of what is on screen, is withdrawn.
+  // `placementWrapper` and the project's workdir are the two facts that NAME
+  // an attempt's target; `useProgramAttempt` withdraws its `timedOut`
+  // sentence when either changes, and its own comment carries why it is keyed
+  // on these and never on `projected`.
   const placement = project === null ? null : startProgramPlacement(project, projected);
   const placementWrapper = placement?.kind === 'projected' ? placement.wrapper : undefined;
 
-  useEffect(() => {
-    setTimedOut(false);
-  }, [project?.workdir, placementWrapper]);
-
-  // Queues the kickoff and navigates — the ONLY place either happens. `w.mine`
-  // is checked again after the queue call settles: a close during that
-  // round-trip must not navigate a screen the operator is no longer looking at.
-  // The call is a QUEUE, not a keystroke (wave 4): what it resolves means the
-  // mail row exists, not that the coordinator has read anything.
-  const finish = (session: FleetSession, w: { mine: number; slug: string; title: string }): void => {
-    clearTimer();
-    waitRef.current = null;
-    void queueKickoff(session.id, { slug: w.slug, title: w.title })
-      .then(() => {
-        if (gen.current !== w.mine) return; // superseded — a later close/open owns the phase now
-        setStarting(false);
-        navigate(`/s/${encodeURIComponent(session.id)}`);
-      })
-      .catch((err: unknown) => {
-        if (gen.current !== w.mine) return; // superseded — a later close/open owns the phase now
-        setStarting(false);
-        // NOTE THE ORDER. This used to be `.catch(toast).then(navigate)`, which
-        // navigated on BOTH arms — defensible for an injection, where the
-        // session is real either way and the operator could finish the kickoff
-        // by hand from inside it. It is not defensible for a queue: nothing
-        // durable exists, so walking the operator into a session whose
-        // coordinator will never be briefed hides the one fact they need.
-        setKickoffFailed({ sessionId: session.id, slug: w.slug, title: w.title, why: kickoffErrorText(apiErrorText(err)) });
-      });
-  };
-
-  /** Re-post the kickoff for a session that is already running — the door the
-   *  durable queue makes possible for the first time.
-   *
-   *  It re-uses `kickoffFailed.sessionId` and never re-measures the fleet: the
-   *  target was chosen once by `startedSessionFor` under D-291/D-292's whole
-   *  apparatus, and a retry that re-opened that question could land the kickoff
-   *  somewhere else entirely.
-   *
-   *  GENERATION-GUARDED ON EVERY ARM (wave-4 review, MAJOR 1, D-1046). It
-   *  shipped guarding none, which was the same defect `finish()` carries two
-   *  guards against — and worse here, because this call settles later than
-   *  anything else in the file: the operator has already read a failure and
-   *  tapped a button before the round trip even starts, which is exactly when a
-   *  close is likely. A late SUCCESS navigated to the old session under
-   *  whatever the operator had opened next; a late REJECTION re-planted the
-   *  block the close had just cleared, so the next program's sheet opened
-   *  showing the previous attempt's retry door aimed at the previous attempt's
-   *  session. The `finally` is guarded too, and for a third reason: a newer
-   *  retry owns `retrying` once `gen` has moved, and clearing it from here
-   *  would re-enable a button whose call is still outstanding. */
-  const retryKickoff = async (): Promise<void> => {
-    const k = kickoffFailed;
-    if (k === null || retrying) return;
-    const mine = gen.current;
-    setRetrying(true);
-    try {
-      await queueKickoff(k.sessionId, { slug: k.slug, title: k.title });
-      if (gen.current !== mine) return; // superseded — a later close/open owns the phase now
-      setKickoffFailed(null);
-      navigate(`/s/${encodeURIComponent(k.sessionId)}`);
-    } catch (err: unknown) {
-      if (gen.current !== mine) return; // superseded — the block this would re-plant is retired
-      setKickoffFailed({ ...k, why: kickoffErrorText(apiErrorText(err)) });
-    } finally {
-      if (gen.current === mine) setRetrying(false);
-    }
-  };
-
-  const checkForMatch = (): void => {
-    const w = waitRef.current;
-    if (w === null) return;
-    // `fleet.getState()`, not the render-scoped `sessions` — this can run
-    // from inside `start()`, synchronously after `createSession` resolves,
-    // before the closure that captured `sessions` has had a chance to
-    // re-render with a fresher value.
-    const found = startedSessionFor(fleet.getState().sessions, w.wrapper, w.project, w.preLive);
-    if (found !== null) finish(found, w);
-  };
-
-  // D-291: the reactive half of the bounded wait. `sessions` is replaced
-  // wholesale on every `/ws/fleet` frame (`stores/fleet.ts`), so this fires
-  // on every fleet tick while a wait is outstanding — the moment the new
-  // session's row appears, `checkForMatch` finds it.
-  useEffect(() => {
-    checkForMatch();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sessions]);
-
-  const needle = query.trim().toLowerCase();
-  const filtered =
-    list === null ? [] : needle === '' ? list : list.filter((p) => p.name.toLowerCase().includes(needle));
+  const attempt = useProgramAttempt(open, project?.workdir, placementWrapper,
+                                    { fleet, createSession, queueKickoff });
+  const { starting, timedOut, error } = attempt;
 
   // D-292: recomputed on every render from the reactive store selector.
   // Wrapper-independent — see `liveMainCheckoutIn`'s own docstring for why a
@@ -588,13 +195,11 @@ export function StartProgramSheet({
       : null;
   // Review fix round 1, Important 2: `existing` alone cannot tell "someone
   // else's session is in the way" apart from "the session I just started
-  // has arrived" — both are `existing !== null`. `myAttemptRef` is the one
-  // fact that distinguishes them; see its own comment above for why the
-  // comparison is on `project` alone and why that stays bounded.
-  const isOwnAttempt =
-    existing !== null
-    && myAttemptRef.current !== null
-    && existing.project === myAttemptRef.current.project;
+  // has arrived" — both are `existing !== null`. The attempt's own record of
+  // what it created is the one fact that distinguishes them; `startedHere`'s
+  // docstring carries why the comparison is on `project` alone and why that
+  // stays bounded.
+  const isOwnAttempt = existing !== null && attempt.startedHere(existing.project);
 
   // Computed from `project` ALONE, and deliberately NOT written into
   // `existing`'s expression above. That one carries a `projected != null`
@@ -637,178 +242,27 @@ export function StartProgramSheet({
     // docstring refuses to ship. If a later change ever demotes either refusal
     // to a `disabled` term, BOTH need a return here.
 
-    const wrapper = placement.wrapper;
-    const projectName = project.name;
-    const mine = (gen.current += 1);
-    setStarting(true);
-    setTimedOut(false);
-    setError(null);
-    // Wave-4 review, MINOR 4 (D-1121). Same withdrawal as `timedOut`'s above,
-    // and for the same reason one line further on: `kickoffFailed` is a
-    // statement about ONE attempt's target, and a new attempt makes it a red
-    // block ABOVE a Start button aimed somewhere else. Unlike `timedOut` it
-    // carries an act — the door navigates to the previous attempt's session,
-    // stranding the create being started right now.
-    //
-    // RETIRED, NOT RE-KEYED, and this costs something: the door is the only
-    // control that can re-post for that session, so a kickoff that failed and
-    // was then walked away from is not recoverable from this sheet. That is
-    // the trade taken deliberately — the operator has the door on screen, in
-    // red, directly above the Start they are choosing to tap instead, and a
-    // second attempt is a clear statement of what they want the sheet to be
-    // about. Bumping `gen` above already retired any retry in flight (D-1046),
-    // so this cannot race one back into existence.
-    setKickoffFailed(null);
-    setRetrying(false);
-
-    // B-1: armed BEFORE the await, not after. `myAttemptRef` records the
-    // sheet's INTENT TO CREATE, not a receipt for a completed one — and the
-    // window it has to cover starts the moment `ccd` is asked, not the moment
-    // it answers. `cmd_start` writes `$REG/<id>.uuid` and the rest of the
-    // fields, THEN `_spawn`s (`ccd/ccd:12532-12534`); the server lists a session
-    // on its `.uuid` file alone (`registry.ts:869` — `started` does not gate
-    // listing, and is written after `_spawn` anyway) and reports `status:
-    // 'idle'` as soon as tmux has the id (`fleet.ts:236-237`); the watcher
-    // ticks every 2 s (`watch.ts:614`) while the HTTP call is still blocked in
-    // `_accept_first_run_prompts`/`_inject_spawn_effort`. So a frame carrying
-    // the new session arrives MANY SECONDS before `createSession` resolves.
-    // Armed after the await, `isOwnAttempt` was false for that entire window
-    // and the D-292 refusal rendered INSTEAD of the confirm fragment: the
-    // "Starting…" indicator vanished and the operator was told not to start a
-    // program they were already starting. Acting on that copy (closing the
-    // sheet) bumps `gen`, the post-await guard below returns, `waitRef` is
-    // never set — and the kickoff is never sent, leaving an un-briefed
-    // coordinator running. That is the Important-2 harm through another door.
-    const preLive = liveIdsIn(fleet.getState().sessions); // B-2, before anything is created
-    myAttemptRef.current = { project: projectName };
-
-    try {
-      await createSession({ wrapper, project: projectName, workdir: project.workdir });
-    } catch (err) {
-      if (gen.current !== mine) return; // superseded — the sheet has moved on
-      // B-1: a create that FAILED is not an outstanding attempt, and leaving
-      // the ref armed would suppress a genuine refusal for a session this
-      // sheet never started. Cleared only on this attempt's own failure —
-      // the superseded path above returns first, because a newer attempt (or
-      // a close) already owns the ref.
-      myAttemptRef.current = null;
-      setStarting(false);
-      setError(startErrorText(err));
-      return;
-    }
-    if (gen.current !== mine) return; // superseded while the create was in flight
-
-    waitRef.current = {
-      mine,
-      wrapper,
-      project: projectName,
+    // Everything below the guards is the attempt machine's
+    // (`useProgramAttempt`): the generation bump, the pre-create snapshot, the
+    // bounded wait and its timeout, the match and the kickoff. What stays here
+    // is the decision that an attempt may begin at all, and the already-resolved
+    // target it begins on — nothing this call could second-guess.
+    await attempt.begin({
+      wrapper: placement.wrapper,
+      project: project.name,
+      workdir: project.workdir,
       slug: kickoffVerdict.slug,
       title: kickoffVerdict.title,
-      preLive,
-    };
-    clearTimer();
-    timerRef.current = setTimeout(() => {
-      timerRef.current = null;
-      // Only this attempt's own timeout fires into it — a later attempt (or
-      // one already resolved) owns `waitRef` now. Review fix round 1,
-      // Important 2: `waitRef` is deliberately NOT nulled here — the wait
-      // does not give up, only the busy UI does. `checkForMatch` (below,
-      // driven by every later `/ws/fleet` frame) keeps watching for exactly
-      // this `mine`'s target, so a session that lands at t=25s after a
-      // 20s timeout still gets its kickoff sent and still navigates —
-      // "started, not shown yet" was true when it was said, and stays true
-      // rather than becoming a dead end the operator has to notice and
-      // finish by hand.
-      if (waitRef.current?.mine === mine) {
-        setStarting(false);
-        setTimedOut(true);
-      }
-    }, START_PROGRAM_WAIT_MS);
-    // Covers the case where the row landed DURING the create — common, per
-    // B-1's own timing note. It cannot bind a row that was already alive
-    // before the create: `preLive` was snapshotted above, and that is exactly
-    // the stale binding B-2 closed.
-    checkForMatch();
+    });
   };
 
-  /** The standing kickoff-failure recovery — the statement, plus the two acts
-   *  that finish it — as ONE node, rather than a run of JSX buried in the last
-   *  arm of the chain below.
-   *
-   *  Program-leverage wave 4 minted it: a standing statement with an act beside
-   *  it, not a toast (see `kickoffFailed`'s own declaration for why), and both
-   *  controls reuse classes that are already grounded and pinned
-   *  (`program-start-error`, `program-start-go`) rather than introducing a
-   *  coloured rule the contrast census has never seen.
-   *
-   *  WAVE-5 REVIEW, MINOR 6 (D-1149) is why it is a node. It lived inside the
-   *  confirm fragment, which is the LAST arm of that chain, so EVERY arm above
-   *  it retired the recovery by rendering instead of it — and one of those arms
-   *  is now driven by a prop the run board rebuilds every ~2 s
-   *  (`openRunProjects`, `screens/RunsScreen.tsx`). A run opening in this
-   *  project while a queue failure was standing therefore replaced a live retry
-   *  door and an open-anyway door with a sentence about a collision, on a poll
-   *  tick the operator never touched — and the retry door is the ONLY control
-   *  that can re-post for that session (`retryKickoff`). A recovery that
-   *  vanishes mid-recovery is worse than one never offered: nothing durable
-   *  exists to retry from anywhere else.
-   *
-   *  HOISTING, deliberately, and not the other available fix — carving the
-   *  standing-failure case out of the run arm's own condition. That one renders
-   *  the CONFIRM fragment while a failure stands, whose Start is withheld only
-   *  by `existing !== null`; and `existing` goes null the moment the operator
-   *  picks a DIFFERENT project, which is exactly the move D-1121 exists to
-   *  support. D-1130's refusal would then have to be re-derived as a sixth
-   *  `disabled` term — and, by `start()`'s own note, a matching early return —
-   *  demoting a structural no-button refusal to a disabled control for a case
-   *  that is ordinary rather than rare. This way the refusal keeps its slot,
-   *  its copy and its posture, and simply stops eating something that was never
-   *  its business.
-   *
-   *  THE CURRENT CHAIN, enumerated so this warning cannot drift behind a hand-kept
-   *  cardinal. The existing-checkout condition renders its refusal alone and
-   *  displaces recovery. The run-board condition renders its refusal together
-   *  with recovery, so it does not displace it. Measured placement `none` renders
-   *  one refusal arm and displaces recovery; its global, no-pool and named-pool
-   *  messages are semantic copy subcases, not additional syntactic arms. Measured
-   *  `unmeasurable` renders its refusal alone and displaces recovery. Old-server
-   *  `pool-blind` renders its refusal alone and displaces recovery. The final
-   *  confirmation fragment renders the ordinary confirmation together with
-   *  recovery. This list deliberately names each live condition and its effect,
-   *  so the next reader measures the chain rather than treating this fix as
-   *  having cleaned every arm.
-   *
-   *  `null` when no failure is standing, so an arm that renders it says nothing
-   *  extra in the ordinary case. */
-  const recovery = kickoffFailed === null ? null : (
-    <>
-      <p className="program-start-error">
-        {/* Wave-4 review, MINOR 3 (D-1120). This used to open
-            "<id> is running, but…", which on a 404 asserts the exact
-            fact the registry had just denied — above a retry that
-            cannot succeed. What the sheet KNOWS is that it started
-            the session and that nothing was queued for it; the
-            reason comes last, where a `why` with no trailing period
-            (the `err.message` floor) does not read as a typo. */}
-        {`Started ${kickoffFailed.sessionId}, but its kickoff could not be queued `
-          + `— nothing was sent, and it has no brief yet. ${kickoffFailed.why}`}
-      </p>
-      <button
-        type="button"
-        className="program-start-go"
-        disabled={retrying}
-        onClick={() => void retryKickoff()}
-      >
-        {retrying ? 'Queueing…' : 'Queue the kickoff again'}
-      </button>
-      <button
-        type="button"
-        className="program-start-go"
-        onClick={() => navigate(`/s/${encodeURIComponent(kickoffFailed.sessionId)}`)}
-      >
-        Open it without a brief
-      </button>
-    </>
+  // The standing recovery is its own component (`KickoffRecovery`), and its
+  // file carries the argument for why — including the half extraction cannot
+  // enforce: EVERY arm of the chain below must render it BESIDE its own
+  // refusal, never instead of it (D-1149).
+  const recovery = (
+    <KickoffRecovery failure={attempt.failure} retrying={attempt.retrying}
+                     onRetry={() => void attempt.retry()} />
   );
 
   return (
@@ -817,9 +271,8 @@ export function StartProgramSheet({
         <p className="sheet-copy">
           Slug, title, and the project it runs in — the coordinator picks up from there.
         </p>
-        <input
-          className="proj-search"
-          type="text"
+        <TextInput
+          className={TEXT_INPUT_STACKED}
           placeholder="Program slug (e.g. build4-conversation-and-controls)"
           aria-label="Program slug"
           aria-invalid={showKickoffError}
@@ -830,9 +283,8 @@ export function StartProgramSheet({
         {showKickoffError && (
           <p id="program-kickoff-error" className="program-start-error">{kickoffVerdict.detail}.</p>
         )}
-        <input
-          className="proj-search"
-          type="text"
+        <TextInput
+          className={TEXT_INPUT_STACKED}
           placeholder="Program title"
           aria-label="Program title"
           aria-invalid={title !== '' && kickoffOversize}
@@ -841,33 +293,22 @@ export function StartProgramSheet({
           onChange={(e) => setTitle(e.target.value)}
         />
 
-        <input
-          className="proj-search"
-          type="search"
-          placeholder="Search projects"
-          aria-label="Search projects"
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-        />
-        {list === null && listError === null ? (
-          <Skeleton lines={4} className="proj-skel" />
-        ) : listError !== null ? (
-          <p className="proj-error" role="alert">
-            Couldn't load the project list — {listError}
-          </p>
-        ) : (
-          <div className="proj-list">
-            {filtered.map((p) => {
+        <ProjectPicker
+          query={query}
+          onQuery={setQuery}
+          list={list}
+          listError={listError}
+          empty={matching.length === 0}
+        >
+            {matching.map((p) => {
               const selected = p.workdir === project?.workdir;
               return (
-                <button
+                <ProjectRowShell
                   key={p.workdir}
-                  type="button"
-                  className={selected ? 'proj-row proj-row--selected' : 'proj-row'}
-                  onClick={() => setProject(p)}
+                  selected={selected}
+                  name={p.name}
+                  onPick={() => setProject(p)}
                 >
-                  <span className="proj-glyph" aria-hidden="true">{selected ? '❯' : ''}</span>
-                  <span className="proj-name">{p.name}</span>
                   <span className="proj-dir">{p.workdir}</span>
                   {/* F3 — THREE arms, because the wire has three
                       (`ProjectRow` in shared/api.ts): the key ABSENT is a
@@ -899,12 +340,10 @@ export function StartProgramSheet({
                       {missingPreconditions(p.readiness).join(' · ')}
                     </span>
                   )}
-                </button>
+                </ProjectRowShell>
               );
             })}
-            {filtered.length === 0 && <p className="proj-none">No project matches "{query}"</p>}
-          </div>
-        )}
+        </ProjectPicker>
 
         {project !== null && (
           existing !== null && !isOwnAttempt ? (
@@ -1091,9 +530,9 @@ export function StartProgramSheet({
                   suppression. Reachable whenever `queueKickoff()` is slow
                   after a D-291 timeout has already set `starting` back to
                   false. */}
-              <button
-                type="button"
-                className="program-start-go"
+              <Button
+                variant="quiet"
+                className={PROGRAM_GO}
                 disabled={
                   !kickoffVerdict.ok || starting
                   || placement?.kind !== 'projected' || existing !== null
@@ -1107,7 +546,7 @@ export function StartProgramSheet({
                     : placement?.kind !== 'projected'
                       ? 'Checking placement…'
                       : `Start ${slug.trim() === '' ? '…' : slug.trim()} on ${accountLabel(roster, placement.wrapper)}`}
-              </button>
+              </Button>
             </>
           )
         )}

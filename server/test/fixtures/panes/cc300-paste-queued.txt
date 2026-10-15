@@ -1,0 +1,50 @@
+
+[38;5;174m ▐[48;5;16m▛███▛█[39m[49m   [1mClaude Code[0m [38;5;246mv2.1.300[39m
+[38;5;174m▝▜[48;5;16m█████[49m█▀[39m  [38;5;246mHaiku 5.5 · Claude Max[39m
+[38;5;174m ▝▝   ▝▝ [39m  [38;5;246m<projects-root>/project-a[39m
+
+[38;5;220m⚠[39m [38;5;220mSafe mode: all customizations are disabled (CLAUDE.md, skills, plugins, hooks, MCP, agents, and more)[39m
+  [38;5;246mRestart without --safe-mode to re-enable[39m
+
+[38;5;246m[48;5;237m❯ [38;5;231mc1000 Reply with only the word OK and use no tools. alpha bravo charlie delta echo foxtrot golf hotel india juliet kilo lima mike november oscar papa quebec romeo sierra tango uniform victor whiskey xray yankee zulu [39m
+  [38;5;231malpha bravo charlie delta echo foxtrot golf hotel india juliet kilo lima mike november oscar papa quebec romeo sierra tango uniform victor whiskey xray yankee zulu alpha bravo charlie delta echo foxtrot golf hotel [39m
+  [38;5;231mindia juliet kilo lima mike november oscar papa quebec romeo sierra tango uniform victor whiskey xray yankee zulu alpha bravo charlie delta echo foxtrot golf hotel india juliet kilo lima mike november oscar papa [39m
+  [38;5;231mquebec romeo sierra tango uniform victor whiskey xray yankee zulu alpha bravo charlie delta echo foxtrot golf hotel india juliet kilo lima mike november oscar papa quebec romeo sierra tango uniform victor whiskey xray[39m
+  [38;5;231myankee zulu alpha bravo charlie delta echo foxtrot golf hotel india juliet kilo lima mike november oscar papa quebec romeo sierra  END-c1000[39m
+
+[38;5;231m[49m⏺[39m OK
+
+[38;5;246m✻[39m [38;5;246mBaked for 1s · done 10:11[39m
+
+[38;5;246m[48;5;237m❯ [38;5;231mWrite a 600 word essay about terminal multiplexers. Use no tools.[39m
+
+[38;5;231m[49m⏺[39m Terminal multiplexers solve a problem that most developers face every day: a single terminal window is not enough to hold all the work happening at once. A typical session might include a development server, a test
+  watcher, a database shell, a log tail, and an editor, all of which need to stay open and visible. Before multiplexers, the usual answer was to open a dozen terminal windows or tabs, each one a separate process that
+  vanished the moment the window closed. Terminal multiplexers offer a different model, one in which the workspace lives on a server-side process and the terminal is merely a window onto it.
+
+  The two most widely used multiplexers are tmux and GNU Screen. Screen arrived first, in the late 1980s, and it established the core idea: a long-running process that owns pseudo-terminals and can be detached from one
+  terminal and reattached to another. tmux, written in the 2000s as a more modern alternative, kept that model but improved on its design. It offers a cleaner command language, a configuration system built around a
+  single file, splits and windows that can be arranged freely, and a scripting interface that makes it practical to build repeatable layouts. Both tools share the same essential trick: the shell processes keep running
+  whether or not anyone is watching them.
+
+  The practical value of this design is easiest to see when a connection drops. Anyone who has run a long compilation or a data migration over SSH knows the frustration of a dropped network link killing the job midway.
+  With a multiplexer, the job runs inside a session on the remote machine. If the connection fails, the session continues. The user reconnects, attaches to the existing session, and resumes exactly where they left off,
+
+[38;5;246m[48;5;237m❯ busychip Reply with only the word OK and use no tools. alpha bravo charlie delta echo foxtrot golf hotel india juliet kilo lima mike november oscar papa quebec romeo sierra tango uniform victor whiskey xray yankee [39m
+  [38;5;246mzulu alpha bravo charlie delta echo foxtrot golf hotel india juliet kilo lima mike november oscar papa quebec romeo sierra tango uniform victor whiskey xray yankee zulu alpha bravo charlie delta echo foxtrot golf [39m
+  [38;5;246mhotel india juliet kilo lima mike november oscar papa quebec romeo sierra tango uniform victor whiskey xray yankee zulu alpha bravo charlie delta echo foxtrot golf hotel india juliet kilo lima mike november oscar papa[39m
+  [38;5;246mquebec romeo sierra tango uniform victor whiskey xray yankee zulu alpha bravo charlie delta echo foxtrot golf hotel india juliet kilo lima mike november oscar papa quebec romeo sierra tango uniform victor whiskey [39m
+  [38;5;246mxray yankee zulu alpha bravo charlie delta echo foxtrot golf hotel india juliet kilo lima mike november oscar papa quebec romeo s END-busychip[39m
+[49m  [38;5;246mctrl+x ctrl+s to send now[39m
+
+
+
+
+
+
+
+
+[38;5;244m────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+[38;5;246m❯ [2m[39mPress up to edit queued messages[0m
+[38;5;244m────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+[39m  [38;5;246mpaste again to expand[39m

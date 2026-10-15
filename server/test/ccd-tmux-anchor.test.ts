@@ -283,6 +283,30 @@ describe.skipIf(NO_TMUX)(BEHAVIOURAL, () => {
       expect(await tx.capture('demo')).toContain('MARK-cc-demo');
     });
 
+    // D-5046. The only place `sendLiteral`'s `--` is measured against real tmux
+    // rather than against `send.test.ts`'s `tmuxLiteral` double, which states
+    // this same table. Without `--`, `-x probe`, `- item` and `---` exit 1
+    // typing nothing, and `--` exits 0 typing NOTHING (measured, 3.7c), so the
+    // line check below is what sees the last one: no return value can.
+    it('D-5046: a text that starts with a dash is typed verbatim, not read as flags', async () => {
+      mk('cc-demo');
+      const texts = ['-x probe', '- item', '--', '---'];
+      for (const t of texts) {
+        expect(await tx.sendLiteral('demo', t), t).toBe(true);
+        expect(await tx.sendKey('demo', 'Enter'), t).toBe(true);
+      }
+      // `cat` sits in the pane, so each line shows twice: the tty's echo, then
+      // cat's copy. Polled, so the read never races the pane's render.
+      let lines: string[] = [];
+      for (let i = 0; i < 100; i++) {
+        const h2 = await tx.captureHistory('demo', 50);
+        lines = h2.ok ? h2.text.split('\n').map((l) => l.trimEnd()) : [];
+        if (texts.every((t) => lines.filter((l) => l === t).length >= 2)) break;
+        spawnSync('sleep', ['0.05']);
+      }
+      for (const t of texts) expect(lines.filter((l) => l === t).length, t).toBe(2);
+    });
+
     it('no server: unknown / unreadable / unmeasured — never gone', async () => {
       expect(await tx.sessionVerdict('demo')).toMatchObject({ verdict: 'unknown' });
       expect(await tx.paneProbe('demo')).toMatchObject({ ok: false, reason: 'unreadable' });

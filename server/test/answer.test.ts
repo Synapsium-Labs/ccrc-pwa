@@ -1,8 +1,12 @@
 import { describe, it, expect } from 'vitest';
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { KeyedQueue } from '../src/inject/queue.js';
 import { answerDialog, interrupt, type SendDeps } from '../src/inject/send.js';
 import { parseDialog } from '../src/pane/dialog.js';
 import { Tmux, type Runner } from '../src/exec.js';
+import { tmuxTarget } from '../../shared/tmux-target.js';
 
 const noSleep = async () => {};
 
@@ -116,6 +120,159 @@ describe('answerDialog', () => {
       ['tmux', 'send-keys', '-t', '=cc-x:', 'Down'],
       ['tmux', 'send-keys', '-t', '=cc-x:', 'Enter'],
     ]);
+  });
+});
+
+// D-5045 (plan docs/superpowers/plans/2026-10-15-ask-server-half.md, Task 1). Enter on an AskUserQuestion's EMPTY
+// "Type something." row does not answer the question: it rejects the WHOLE tool call ("User declined to answer
+// questions"), and every question already answered is thrown away with it. Measured on Claude Code 2.1.300 and
+// 2.1.291. So `answerDialog` refuses that row before any key. Every pane here is a recorded 2.1.300 screen
+// (`fixtures/panes/cc300-ask-*.txt`), or one marked DERIVED with the edit it makes.
+describe('answerDialog and the free-text row (D-5045)', () => {
+  const panesDir = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures', 'panes');
+  const fixture = (name: string): string => readFileSync(path.join(panesDir, name), 'utf8');
+  const SID = 'lane-a:project-a';
+  const key = (k: string): string[] => ['tmux', 'send-keys', '-t', tmuxTarget(SID), k];
+  const idOf = (pane: string): string => parseDialog(pane)!.id;
+  /** A DERIVED pane: `from` must be on the recorded screen, or the derivation silently tests the original. */
+  const derive = (pane: string, from: string, to: string): string => {
+    expect(pane, `the derivation's anchor "${from}" is not on the screen`).toContain(from);
+    return pane.replace(from, to);
+  };
+  const Q2 = fixture('cc300-ask-same-labels-q2.txt');             // "Enable tracing?": Yes / No / Type something. / Chat
+  const Q2_FOCUSED = fixture('cc300-ask-freetext-walk-2-focused.txt'); // the same screen, cursor on row 3
+
+  it('refuses to walk onto the empty Type something. row: Enter there rejects the whole ask', async () => {
+    const { tmux, calls } = fakeTmux([Q2, Q2_FOCUSED]);
+    const res = await answerDialog(deps(tmux), SID, idOf(Q2), 3);
+    expect(res).toEqual({ ok: false, error: 'free-text-row' });
+    expect(sendKeysCalls(calls)).toEqual([]);
+  });
+
+  it('the structural backstop refuses a re-worded placeholder (DERIVED: "Type something." reads "Other")', async () => {
+    // The bundle's own row is `label: "Other"` with a variable placeholder, and an older synthetic shape painted
+    // `4. Other`: the label is one rendered string. The row directly above the rule that precedes a NUMBERED "Chat
+    // about this" is the input row whatever it says.
+    const open = derive(Q2, '3. Type something.', '3. Other');
+    const focused = derive(Q2_FOCUSED, '3. Type something.', '3. Other');
+    const { tmux, calls } = fakeTmux([open, focused]);
+    const res = await answerDialog(deps(tmux), SID, idOf(open), 3);
+    expect(res).toEqual({ ok: false, error: 'free-text-row' });
+    expect(sendKeysCalls(calls)).toEqual([]);
+  });
+
+  it('the placeholder label alone names the row when no numbered Chat row backs it (DERIVED: Chat unnumbered)', async () => {
+    const open = derive(Q2, '  4. Chat about this', '  Chat about this');
+    const focused = derive(Q2_FOCUSED, '  4. Chat about this', '  Chat about this');
+    expect(parseDialog(open)!.options.map((o) => o.label)).toEqual(['Yes', 'No', 'Type something.', 'Chat about this']);
+    const { tmux, calls } = fakeTmux([open, focused]);
+    const res = await answerDialog(deps(tmux), SID, idOf(open), 3);
+    expect(res).toEqual({ ok: false, error: 'free-text-row' });
+    expect(sendKeysCalls(calls)).toEqual([]);
+  });
+
+  it('a row that holds typed text is refused too: answerDialog never submits typed text', async () => {
+    // "Mango" was typed into Q1's free-text row; the cursor rests on it. Enter here WOULD submit "Mango" — as an
+    // answer nobody chose in the sheet. The free-text route's retry arm (D-5047) is the one path that submits it.
+    const held = fixture('cc300-ask-freetext-held.txt');
+    const { tmux, calls } = fakeTmux([held, held]);
+    const res = await answerDialog(deps(tmux), SID, idOf(held), 3);
+    expect(res).toEqual({ ok: false, error: 'free-text-row' });
+    expect(sendKeysCalls(calls)).toEqual([]);
+  });
+
+  it('a multiSelect question\'s "[ ] Type something" row is refused before any key', async () => {
+    const multi = fixture('cc300-ask-multiselect-next-open.txt');
+    const { tmux, calls } = fakeTmux([multi, multi]);
+    const res = await answerDialog(deps(tmux), SID, idOf(multi), 4);
+    expect(res).toEqual({ ok: false, error: 'free-text-row' });
+    expect(sendKeysCalls(calls)).toEqual([]);
+  });
+
+  // A multiSelect question parses `parsed: false` (its rows ride `Dialog.multi`, D-5048), so `selectedIndex` is the
+  // constant 1 and proves nothing about the cursor. Enter there does not answer: on an option row it toggles the box,
+  // on the empty "[ ] Type something" row it ticks it, and on Next/Submit it commits the question. `/dialog/multi` is
+  // the one route that answers a multiSelect question.
+  it.each([
+    ['cc300-ask-multiselect-next-open.txt', 'cursor on option 1'],
+    ['cc300-ask-multiselect-on-freetext.txt', 'cursor on the empty free-text row'],
+    ['cc300-ask-multiselect-next-focused.txt', 'cursor on Next'],
+    ['cc300-ask-multiselect-walk-to-next.txt', 'cursor on Next after walking through the free-text row'],
+  ])('a multiSelect question (%s, %s) is refused before any key: Enter there toggles or commits', async (name) => {
+    const multi = fixture(name);
+    expect(parseDialog(multi)!.parsed).toBe(false);
+    const { tmux, calls } = fakeTmux([multi, multi]);
+    const res = await answerDialog(deps(tmux), SID, idOf(multi), 1);
+    expect(res).toEqual({ ok: false, error: 'unparsed-dialog' });
+    expect(sendKeysCalls(calls)).toEqual([]);
+  });
+
+  it('a multiSelect question is refused before the WALK too: no Down is sent toward option 2', async () => {
+    // Index 1 needs no walk, so only the landing check would be seen refusing it. Index 2 needs a Down: refused here
+    // means refused on the first screen, before any key at all.
+    const multi = fixture('cc300-ask-multiselect-next-open.txt');
+    const { tmux, calls } = fakeTmux([multi, multi]);
+    const res = await answerDialog(deps(tmux), SID, idOf(multi), 2);
+    expect(res).toEqual({ ok: false, error: 'unparsed-dialog' });
+    expect(sendKeysCalls(calls)).toEqual([]);
+  });
+
+  it('the landing is looked at again: a walk that lands on a multiSelect screen never presses Enter', async () => {
+    // Row 2 is "No" on the single-select screen the request was checked against; the pane moved on to a multiSelect
+    // question before the landing capture, whose constant selectedIndex would otherwise read as "landed".
+    const multi = fixture('cc300-ask-multiselect-next-open.txt');
+    const { tmux, calls } = fakeTmux([Q2, multi]);
+    const res = await answerDialog(deps(tmux), SID, idOf(Q2), 1);
+    expect(res).toEqual({ ok: false, error: 'unparsed-dialog' });
+    expect(sendKeysCalls(calls)).toEqual([]);
+  });
+
+  it('the landing is looked at again: a walk that lands on a free-text row never presses Enter', async () => {
+    // Row 3 is "Blue" on the screen the request was checked against, and the free-text row on the screen the walk
+    // lands on: the pane moved on between the two captures. `walk-failed` cannot see it, since the cursor IS on row 3.
+    const q1 = fixture('cc300-ask-q1-of-2.txt');
+    const { tmux, calls } = fakeTmux([q1, Q2_FOCUSED]);
+    const res = await answerDialog(deps(tmux), SID, idOf(q1), 3);
+    expect(res).toEqual({ ok: false, error: 'free-text-row' });
+    expect(sendKeysCalls(calls)).toEqual([key('Down'), key('Down')]);
+  });
+
+  // ── Companions: no over-refusal ──
+
+  it('an ordinary option still answers ("No" on the same screen)', async () => {
+    const { tmux, calls } = fakeTmux([Q2, fixture('cc300-ask-freetext-walk-1-down.txt')]);
+    const res = await answerDialog(deps(tmux), SID, idOf(Q2), 2);
+    expect(res).toEqual({ ok: true });
+    expect(sendKeysCalls(calls)).toEqual([key('Down'), key('Enter')]);
+  });
+
+  it('"Chat about this" still answers: the walk passes THROUGH the free-text row, and Enter lands on Chat', async () => {
+    // Measured: Enter on Chat after a walk through the empty row gives Chat's own outcome, not the empty-row cancel.
+    const open = fixture('cc300-ask-1q-open.txt');
+    const { tmux, calls } = fakeTmux([open, fixture('cc300-ask-1q-walk-through-to-chat.txt')]);
+    const res = await answerDialog(deps(tmux), SID, idOf(open), 4);
+    expect(res).toEqual({ ok: true });
+    expect(sendKeysCalls(calls)).toEqual([key('Down'), key('Down'), key('Down'), key('Enter')]);
+  });
+
+  it('the two-column layout\'s last real option still answers: its "Chat about this" is unnumbered', async () => {
+    // That layout has no free-text row at all ("Notes: press n to add notes" instead). Its last numbered row is a
+    // real option directly above a rule and an UNNUMBERED Chat row, so a backstop that accepted that shape would
+    // refuse a real answer here.
+    const open = fixture('ask-2col-chat-about.txt');
+    const landed = derive(derive(open, '❯ 1. Forward-fill', '  1. Forward-fill'), '  3. Ship as-is', '❯ 3. Ship as-is');
+    const { tmux, calls } = fakeTmux([open, landed]);
+    const res = await answerDialog(deps(tmux), SID, idOf(open), 3);
+    expect(res).toEqual({ ok: true });
+    expect(sendKeysCalls(calls)).toEqual([key('Down'), key('Down'), key('Enter')]);
+  });
+
+  it('the review screen\'s "Submit answers" still answers', async () => {
+    const review = fixture('cc300-ask-review-same-labels.txt');
+    const { tmux, calls } = fakeTmux([review, review]);
+    const res = await answerDialog(deps(tmux), SID, idOf(review), 1);
+    expect(res).toEqual({ ok: true });
+    expect(sendKeysCalls(calls)).toEqual([key('Enter')]);
   });
 });
 

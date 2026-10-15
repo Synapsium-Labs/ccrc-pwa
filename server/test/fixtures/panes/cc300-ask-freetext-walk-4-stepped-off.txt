@@ -1,0 +1,50 @@
+
+ ▐▛███▛█   Claude Code v2.1.300
+▝▜██████▀  Haiku 5.5 · Claude Max
+ ▝▝   ▝▝   <projects-root>/project-a
+
+⚠ Safe mode: all customizations are disabled (CLAUDE.md, skills, plugins, hooks, MCP, agents, and more)
+  Restart without --safe-mode to re-enable
+
+▎ [✻] [✻] [✻] · Share Claude Code and earn $10 in usage credits · /passes
+
+❯ Call AskUserQuestion exactly once with TWO single-select questions. Q1: header "Caching", question "Enable caching?", options Yes, No. Q2: header "Tracing", question "Enable tracing?", options Yes, No. Short
+  descriptions. Afterwards reply with the raw answers only.
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+←  ☒ Caching  ☐ Tracing  ✔ Submit  →
+
+Enable tracing?
+
+  1. Yes
+     Turn tracing on
+❯ 2. No
+     Leave tracing off
+  3. - only in staging, sampled 10%
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  4. Chat about this
+
+Enter to select · Tab/Arrow keys to navigate · Esc to cancel
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

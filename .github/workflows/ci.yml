@@ -8,7 +8,7 @@
 # reads select's outputs:
 #   pull_request        selected — the server tests the change can affect
 #                       (a measured dependency map, .github/ci/select-tests.mjs),
-#                       sharded; agent, pwa, build-pwa and probe-macos in full.
+#                       sharded; agent, pwa, build-pwa, probe-macos in full (no macOS tests).
 #   merge_group         selected — a merge-queue run runs what a pull request
 #                       runs (operator ruling 2026-09-28), the pipeline check
 #                       included, in a concurrency group of its own; no macOS
@@ -269,7 +269,7 @@ jobs:
     runs-on: ubuntu-latest
     # A deadline, not the default. Without this key a wedged job runs for
     # GitHub's 360 minutes before anyone learns it wedged. Each shard is
-    # packed to about four minutes (a file longer than that gets a shard of
+    # packed to about four minutes, up to 12 shards (a longer file gets one of
     # its own), and the whole unsharded server leg measured 18.5 min at the
     # median (21.5 max, 2026-09-23) — so 30 is a deadline even for a shard
     # that received the entire suite. Pinned — key AND ceiling — by
@@ -450,6 +450,19 @@ jobs:
         working-directory: ${{ matrix.package }}
         run: npm ci
 
+      # BEFORE the suite, not after it. pwa consumes @ccrc/ui as SOURCE, so
+      # `../ui/src/**` is resolved from ITS OWN directory — Node and vite walk
+      # up from `ui/src/primitives/`, reach `ui/`, and never look inside
+      # `pwa/node_modules`. Without `ui/node_modules` present first, all 119
+      # pwa suites fail at import with "Failed to resolve import
+      # 'class-variance-authority'". Invisible on a developer box, where that
+      # directory already exists; this ordering is the only thing that proves
+      # it on a clean checkout.
+      - name: Install @ccrc/ui
+        if: env.CCRC_LEG == 'run' && matrix.package == 'pwa'
+        working-directory: ui
+        run: npm ci
+
       # Local binary, never npx: `npx vitest` resolves to a global cache copy
       # with no jsdom and falsely reports "no tests" alongside 39 errors.
       - name: Test
@@ -461,6 +474,115 @@ jobs:
         if: env.CCRC_LEG == 'run'
         working-directory: ${{ matrix.package }}
         run: ./node_modules/.bin/tsc --noEmit
+
+      # @ccrc/ui rides the pwa leg rather than taking a matrix value of its
+      # own: `test (agent)` and `test (pwa)` are required BY NAME, so the axis
+      # and its values are pinned, and a third value would mint a check name
+      # nothing is configured to require. The pwa suite already typechecks ui's
+      # SOURCE transitively (it imports it), so what is added here is what that
+      # misses — ui's own tsconfig, which also covers .storybook and the
+      # stories, and the proof that the generated palettes still match their
+      # seeds. Both are cheap; neither has a runner of its own.
+      - name: Typecheck @ccrc/ui (incl. .storybook and stories)
+        if: env.CCRC_LEG == 'run' && matrix.package == 'pwa'
+        working-directory: ui
+        run: ./node_modules/.bin/tsc --noEmit
+
+      - name: Generated palettes match their seeds
+        if: env.CCRC_LEG == 'run' && matrix.package == 'pwa'
+        working-directory: ui
+        run: npm run themes:check
+
+      # Storybook is the design system's only surface that RENDERS its
+      # components; everything else about ui is a text scrape (vitest runs with
+      # `css: false`, so nothing in this repo computes a style). Until now CI
+      # only TYPECHECKED the stories — `build-storybook` was never exercised, so
+      # it could have been broken for weeks and no leg would have said. It
+      # builds in seconds and the step costs almost nothing.
+      #
+      # This proves the stories BUILD, not that they look right. RENDERING them
+      # is the `storybook-a11y` job below — that dependency decision was taken,
+      # and this step stays because it is the cheap half and it runs on a leg
+      # that is REQUIRED by name, where that one is not.
+      - name: Storybook builds (the one surface that renders the components)
+        if: env.CCRC_LEG == 'run' && matrix.package == 'pwa'
+        working-directory: ui
+        run: npm run build-storybook
+
+  # ── the one place a component is RENDERED and MEASURED ─────────────────────
+  #
+  # Every other guard in this repo reads SOURCE. design/audit.mjs parses
+  # stylesheet rules, utility-pairs resolves class strings back to tokens, the
+  # six censuses read files, and vitest runs with `css: false` — so not one of
+  # the ~3,900 tests above can compute a style. quiet-control.test.ts states
+  # the hole in its own header: if `bg-raised` fell out of the button variant,
+  # every quiet control in the app would render transparent and the whole
+  # suite would stay green.
+  #
+  # This closes it. A real browser loads the built Storybook, renders all 152
+  # stories, and the a11y addon runs axe over each one — reading COMPUTED
+  # colour, roles and names off real elements. What it measures is what a story
+  # happens to render, which is narrower than the gate's every-rule sweep and
+  # is exactly the half the gate cannot reach.
+  #
+  # IT FOUND FOUR THINGS ON ITS FIRST RUN, which is the argument for the
+  # dependency: a scrollable `<pre>` no keyboard could focus (`Well`), an
+  # `aria-label` on a roleless `<span>` that the accessibility tree was
+  # dropping (`TypedLabel`, where holding the name still IS the component's
+  # whole purpose), and two story fixtures rendering a nameless button and an
+  # unnamed dialog — teaching the next call site to write one.
+  #
+  # ADDITIVE AND NON-REQUIRED, the `test-macos` arrangement and for the same
+  # reason: a red here blocks no pull request while the leg earns trust, and
+  # the PR page still shows it. It is deliberately NOT in `full-suite`'s
+  # `needs` yet — promote it there once it has run quiet for a while.
+  #
+  # THE SAME MODE SWITCH AS THE TEST LEGS, written as a job-level `if:`. The
+  # `test` matrix and `build-pwa` skip by STEP only because they are required
+  # by name and a skipped job never reports; this job is not required, so it
+  # skips whole, on exactly their `CCRC_LEG == 'skip'` predicate: a push to
+  # main (refresh — "no test legs") and a rebuild. And no merge-queue run,
+  # like the other advisory legs. Pinned by server/test/ci-pipeline.test.ts.
+  storybook-a11y:
+    runs-on: ubuntu-latest
+    # The browser download dominates; the run itself is ~40s for 152 stories.
+    timeout-minutes: 20
+    if: github.event_name != 'merge_group' && !((github.event_name == 'push' && !inputs.mode) || inputs.mode == 'rebuild')
+    steps:
+      # No token left behind in .git/config: everything below runs third-party
+      # npm code, and none of it has any reason to talk to GitHub.
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+      - working-directory: ui
+        run: npm ci
+      # Chromium only, and `--with-deps` because a bare runner has none of the
+      # shared libraries headless chromium links against. Every tool in this
+      # job is a LOCAL binary out of ui/package-lock.json, never `npx`: a bare
+      # `npx <tool>` that misses node_modules fetches whatever version is
+      # newest that day and runs it.
+      - working-directory: ui
+        run: ./node_modules/.bin/playwright install --with-deps chromium
+      - working-directory: ui
+        run: npm run build-storybook -- --quiet
+      # Served as static files rather than `storybook dev`: the dev server
+      # compiles on demand, so a slow first story reads as a timeout. `vite
+      # preview` is the static server already in the lock (vite is how
+      # Storybook builds), pointed at the build's output; `--host 127.0.0.1`
+      # because `localhost` may resolve to ::1 and the wait below asks
+      # 127.0.0.1. The background process outlives this step, which is what
+      # the wait is for.
+      - working-directory: ui
+        run: |
+          ./node_modules/.bin/vite preview --outDir storybook-static --host 127.0.0.1 --port 6006 --strictPort &
+          ./node_modules/.bin/wait-on tcp:127.0.0.1:6006 -t 60000
+      - working-directory: ui
+        run: npm run test-storybook -- --maxWorkers=2 --url http://127.0.0.1:6006
 
   # The Darwin arms' standing mechanism (the macOS port's review, finding 3):
   # every `describe.skipIf(!IS_DARWIN)` block and `itDarwin` case in the
@@ -491,11 +613,11 @@ jobs:
   test-macos:
     name: test-macos ${{ matrix.shard }}/${{ matrix.total }}
     needs: select
-    # Never on a merge-queue run (landing-order stage 2): non-required, so the
-    # queue does not wait for it, but every entry would still take the
-    # organisation's scarce macOS slots. `probe-macos` keeps a queue run out by
-    # its own event allow-list.
-    if: github.event_name != 'merge_group' && needs.select.outputs.macos_count != '0' && (needs.select.outputs.tests == 'selected' || needs.select.outputs.tests == 'full')
+    # Never on a merge-queue run (landing-order stage 2) NOR on a pull request
+    # (amendment 2026-10-15, design §16): non-required, so nothing waited for it,
+    # yet its red was read as the PR's. The daily, dispatched and stable-gate
+    # full runs keep it (ruling 6). `probe-macos` has its own allow-list.
+    if: github.event_name != 'merge_group' && github.event_name != 'pull_request' && needs.select.outputs.macos_count != '0' && (needs.select.outputs.tests == 'selected' || needs.select.outputs.tests == 'full')
     runs-on: macos-latest
     # 55, not the 30 of a Linux shard, and the number is the measurement
     # rather than a round multiple of one run. Six green unsharded legs
@@ -668,6 +790,12 @@ jobs:
           node-version: '22'
           cache: npm
           cache-dependency-path: pwa/package-lock.json
+      # `npm run build` is `tsc --noEmit && vite build`, and both halves read
+      # ui SOURCE through `exports['.']`. Same resolution rule as the test
+      # leg: ui's own node_modules or nothing resolves.
+      - if: env.CCRC_LEG == 'run'
+        working-directory: ui
+        run: npm ci
       - if: env.CCRC_LEG == 'run'
         working-directory: pwa
         run: npm ci && npm run build
@@ -734,7 +862,13 @@ jobs:
           test/history-holds.test.ts
           test/history-op.test.ts
           test/history-cli.test.ts
+          test/history-parser.test.ts
+          test/history-recall.test.ts
+          test/history-maint.test.ts
+          test/history-recover.test.ts
           test/measure-history.test.ts
+          test/history-derive.test.ts
+          test/history-skill.test.ts
           EOF
           CCRC_TEST_LIST="$RUNNER_TEMP/tests.txt" ./node_modules/.bin/vitest run --config vitest.select.config.ts
 
@@ -952,11 +1086,11 @@ jobs:
   # `verdict` output when it called this file itself.
   full-suite:
     needs: [select, server, server-shard, server-typecheck, test, build-pwa, test-macos, node-floor]
-    # Never on a merge-queue run: a queue run skips test-macos, and one that
-    # fell back to `full` would read that skip as a red leg (landing-order
-    # stage 2; a queue run is never the stable gate's evidence anyway —
-    # main-artifact.mjs trusts no merge_group run).
-    if: always() && github.event_name != 'merge_group' && needs.select.outputs.tests == 'full'
+    # Never on a merge-queue run or a pull request: both skip test-macos, and a
+    # run that fell back to `full` would read that skip as a red leg (landing-
+    # order stage 2; amendment 2026-10-15). Neither is ever the stable gate's
+    # evidence: main-artifact.mjs trusts no merge_group or pull_request run.
+    if: always() && github.event_name != 'merge_group' && github.event_name != 'pull_request' && needs.select.outputs.tests == 'full'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:

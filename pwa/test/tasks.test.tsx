@@ -2,7 +2,7 @@ import { afterEach, describe, it, expect } from 'vitest';
 import { act, cleanup, render, screen, fireEvent } from '@testing-library/react';
 import { SessionScreen } from '../src/screens/SessionScreen';
 import { createSessionStore } from '../src/stores/session';
-import { TaskStrip, orderTasks, summarize } from '../src/session/TaskStrip';
+import { TaskStrip, orderTasks, summarize } from '@ccrc/ui';
 import { applySessionMsg } from '../src/stores/session';
 import type { SessionSnapshot } from '../src/stores/session';
 import type { TaskItem } from '../../shared/api';

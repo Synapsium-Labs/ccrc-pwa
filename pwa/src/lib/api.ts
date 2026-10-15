@@ -50,6 +50,9 @@ const SEND_ERROR_TEXT: Record<string, string> = {
   // the same string — the two failures are different (nothing came back at
   // all, versus it came back and then would not go).
   'verify-failed': 'Typed it, but the session never echoed it back.',
+  // D-5046: tmux refused a line of the message, so nothing was submitted, but
+  // the lines before it may be sitting in the box (Retry sees them as a draft).
+  'type-failed': "Couldn't type the whole message, so it wasn't sent.",
   'draft-clear-failed': "Couldn't clear the existing draft — open the terminal.",
   // The box is TALLER THAN THE PANE, so its `❯` row has scrolled out of the
   // capture the server reads and nothing in the box can be read at all
@@ -130,6 +133,26 @@ const UPLOAD_ERROR_TEXT: Record<string, string> = {
 
 export const uploadErrorText = (code: string): string => UPLOAD_ERROR_TEXT[code] ?? code;
 
+/**
+ * THE APP'S ONE SENTENCE FOR A WRITE THAT DID NOT GO THROUGH, written out
+ * thirteen times across seven files before this.
+ *
+ * It sat under every census's floor: `literal-census` reads strings of 25+
+ * characters and `Couldn't stop — ` is sixteen, so nothing could see that the
+ * app's whole failure voice was being re-typed per call site. One reword, or
+ * one call site that said "failed to" instead, and the voice drifts with no
+ * suite between.
+ *
+ * `apiErrorText`, never `err.message`: the runCcd routes fail as
+ * 502 `{ok, stderr}` with no `error` key, so `err.message` yields the generic
+ * "request failed (502)" and ccd's own refusal never reaches anyone.
+ *
+ * The VERB is the caller's and stays at the call site — it is the one half of
+ * the sentence that is about what the operator just tried to do.
+ */
+export const failedTo = (verb: string, err: unknown): string =>
+  `Couldn't ${verb} — ${apiErrorText(err)}`;
+
 /** Origin-qualified on purpose: MessageBubble's `absolute()` turns a bare
  *  `/api/...` into `https:///api/...` (empty host), so a root-relative href
  *  would make every thumbnail tap dead. `/api/` is in navigateFallbackDenylist,
@@ -186,6 +209,23 @@ export const UNSUPPORTED_VERB_TEXT =
  * `UNSUPPORTED_VERB_TEXT` reaches a toast.
  */
 export const COORD_UNSUPPORTED_TEXT = 'the fleet host needs the newer ccd';
+
+/**
+ * The 404 both the abandon and the reclaim doors answer with: the run the tap
+ * named is not on the board any more.
+ *
+ * TWO MAPS, ONE SENTENCE. `ABANDON_COPY` and `RECLAIM_COPY` each spelled it,
+ * and the literal census is what found them — a copy inside a `Record` is
+ * invisible to a census that reads `className=` attributes or JSX trees.
+ * Those two maps stay separate and SHOULD: every other member differs, and
+ * `RECLAIM_COPY`'s own comment argues one of the differences. This is the one
+ * member they agree on, and it agrees for a reason — the same 404, about the
+ * same board, with the same remedy (wait).
+ *
+ * Lower-case and un-terminated, `COORD_UNSUPPORTED_TEXT`'s rule: both sites
+ * render it as inline refusal copy inside their own surface.
+ */
+export const UNKNOWN_RUN_TEXT = 'that run is gone — the board will catch up';
 
 /**
  * ccd's own refusal for an empty hold reason (`cmd_ws_hold`, `ccd/ccd`),
@@ -1003,6 +1043,20 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
     },
     answerDialog: (id: string, dialogId: string, optionIndex: number) =>
       post(`${sid(id)}/dialog`, { dialogId, optionIndex }),
+    /** Answer an AskUserQuestion in your own words, through its free-text ("Type something.") row (D-5047). The server
+     *  types `text` only once a capture proves the cursor on the empty row, and presses Enter only once a capture
+     *  proves the row holds exactly `text`. It refuses 400 `bad-text` for a text it will not type (`isDialogText`,
+     *  `shared/api.ts`), and 409 with a `DialogTextRefuseCode` otherwise. Typing changes the dialog's id, and a retry
+     *  with the same text, under the id the stream then shows, submits text a refused attempt left in the row. */
+    answerDialogText: (id: string, dialogId: string, optionIndex: number, text: string) =>
+      post(`${sid(id)}/dialog/text`, { dialogId, optionIndex, text }),
+    /** Answer a multiSelect AskUserQuestion question (D-5048): `optionIndexes` are the printed digits of the boxes to
+     *  leave ticked (`Dialog.multi`'s options), the whole set, never a toggle. The server sends a digit only for each
+     *  box whose tick differs on the live pane, proves the ticks on a fresh capture, then commits with Tab and proves
+     *  the screen moved on. It refuses 400 `bad-indexes` for a set it will not send (`isDialogMultiIndexes`,
+     *  `shared/api.ts`: empty, repeated, or outside 1..9), and 409 with a `DialogMultiRefuseCode` otherwise. */
+    answerDialogMulti: (id: string, dialogId: string, optionIndexes: readonly number[]) =>
+      post(`${sid(id)}/dialog/multi`, { dialogId, optionIndexes }),
     /** Answer a hook-reported question by option index. `askKey` is minted
      *  server-side and carried verbatim: the server re-reads the CURRENT
      *  envelope and refuses unless the key still matches, so this can only ever
