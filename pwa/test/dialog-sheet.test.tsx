@@ -140,6 +140,8 @@ describe('DialogSheet (parsed)', () => {
     expect(
       await screen.findByText('That question changed — showing the latest'),
     ).toBeInTheDocument();
+    // News, not a failure: a plain toast (a status), never the error variant (an alert).
+    expect(screen.getByText('That question changed — showing the latest')).toHaveAttribute('role', 'status');
 
     // Sheet stays open showing the store's dialog; rows are tappable again.
     expect(
@@ -2383,6 +2385,31 @@ describe('one send at a time, to the row it was meant for (D-5089, D-5090, D-509
     declineRowsWait(option, reviewRows(), 'scraped');
   });
 
+  it('the own-words field and Send wait while a tapped option\'s answer is under way, on both sheets', () => {
+    // The text typed before the tap stays in view, inert: the field disabled, and Send and Enter held, so the field
+    // never looks live under an answer that may already be landing.
+    const option = vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise(() => {}));
+    const text = vi.spyOn(api, 'answerDialogText').mockReturnValue(new Promise(() => {}));
+    const sheets: [string, HookAsk | null, Dialog, string][] = [
+      ['envelope', CACHING_TRACING, pane('cc300-ask-same-labels-q2'), 'No'],
+      ['scraped', null, pane('cc300-ask-1q-open'), 'Blue'],
+    ];
+    for (const [where, ask, dialog, label] of sheets) {
+      renderAsk(ask, dialog);
+      fireEvent.change(field(), { target: { value: TEXT } });
+      expect(send(), `${where}: Send before the tap`).toBeEnabled();
+      fireEvent.click(optionButton(label));
+      expect(option, where).toHaveBeenCalledTimes(1);
+      expect(field(), `${where}: the field under an option's answer`).toBeDisabled();
+      expect(field(), where).toHaveValue(TEXT);
+      expect(send(), `${where}: Send under an option's answer`).toBeDisabled();
+      fireEvent.submit(field().form!);
+      expect(text, `${where}: own words sent under an option's answer`).not.toHaveBeenCalled();
+      cleanup();
+      option.mockClear();
+    }
+  });
+
   it('own words and Chat are offered only under the question the pane is painting', () => {
     // A tie the title cannot break (DERIVED: both questions Yes/No, the title a suffix of both): no question is live.
     const both: HookAsk = {
@@ -2687,6 +2714,8 @@ describe('a refused tap, and the foot line, say what is true (D-5089, D-5090, D-
       renderWithDialog(parsedDialog());
       fireEvent.click(screen.getByRole('button', { name: 'Big-bang cutover' }));
       expect(await screen.findByText(DIALOG_REFUSE_TEXT[code]), code).toBeInTheDocument();
+      // A refusal is a failure, announced at once (an error toast is an alert); only a stale dialog is news.
+      expect(screen.getByText(DIALOG_REFUSE_TEXT[code]), code).toHaveAttribute('role', 'alert');
       expect(screen.queryByText('That question changed — showing the latest'), code).toBeNull();
       expect(screen.getByRole('button', { name: 'Big-bang cutover' }), code).toBeEnabled();
       cleanup();
