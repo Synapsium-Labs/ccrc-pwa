@@ -1006,6 +1006,32 @@ describe('Review 450 F3: the no-listing page\'s fetch note stops counting at the
     expect(noteText(container)).toBeUndefined();
     expect(container.textContent).not.toContain('again in 0s');
   });
+
+  it('review 460 F12: the page\'s 1 s clock stops at the end of its wait: no timer of its own stays pending afterwards', async () => {
+    vi.useFakeTimers();
+    const f = fakeLoaders({ tree: failedAnswer('unresolved-ref') });
+    f.refresh.mockResolvedValueOnce(tooSoon(2000)).mockResolvedValueOnce(tooSoon(4000));
+    const { container } = open('/docs/demo?ref=ws/a', f);
+    await advance(10);
+    // What is pending with no wait at all: the page's own timers, none of them the 1 s clock.
+    const idle = vi.getTimerCount();
+    fireEvent.click(screen.getByRole('button', { name: 'Fetch from origin' }));
+    await advance(10);
+    expect(noteText(container)).toMatch(/^fetched moments ago; again in [12]s$/);
+    // During the wait the clock is the one extra timer.
+    expect(vi.getTimerCount()).toBeGreaterThan(idle);
+    await advance(2100);
+    expect(f.refresh).toHaveBeenCalledTimes(2);
+    expect(noteText(container)).toMatch(/^fetched moments ago; again in [1-4]s$/);
+    expect(vi.getTimerCount()).toBeGreaterThan(idle);
+    // Past the end of the second wait by several seconds: the note is gone and so is the clock.
+    await advance(10_000);
+    expect(noteText(container)).toBeUndefined();
+    expect(vi.getTimerCount()).toBe(idle);
+    await advance(60_000);
+    expect(vi.getTimerCount()).toBe(idle);
+  });
+
 });
 
 describe('Review 439 F3: the not-contained banner describes the pin, and a Re-list through the visit clears it', () => {
