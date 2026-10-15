@@ -1165,19 +1165,59 @@ button.metachip:active {
   flex-direction: column;
   gap: var(--sp-2);
 }
-/* The drawer's header line: the session on the left and, while the window is
-   wider than the glass, the clip notice on the right. It wraps as two whole
-   pieces, so on a narrow phone the notice takes a line of its own instead of
-   breaking mid-word, and the drawer refits for the height it took. It wears
-   the header's own colour and type; nothing here paints. */
+/* The drawer's header line: the session on the left and the chips on the
+   right (the view, and while the wrapped view reports them `paused` and the
+   offer of the grid; D-5005). It wraps as whole pieces, so on a narrow phone
+   the chips take a line of their own instead of breaking mid-word, and the
+   drawer refits for the height they took. */
 .term-eyebrow {
   display: flex;
   flex-wrap: wrap;
+  align-items: center;
   justify-content: space-between;
   gap: var(--sp-1) var(--sp-3);
 }
-.term-clip {
+.term-chips {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2);
   white-space: nowrap;
+}
+/* A chip that is a control (the view's flip, the offer of the grid). The pill
+   is @ccrc/ui's `Chip`; this button around it is bare, and reaches the tap
+   floor through an invisible overlay rather than growing the header line,
+   which on a phone with its keyboard up is glass the terminal needs. The
+   overlay overhangs only the header's own space and the glass's top edge, and
+   what it triggers is a flip the same tap undoes. */
+.term-view {
+  position: relative;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+.term-view::before {
+  content: '';
+  position: absolute;
+  inset: calc((100% - var(--tap-min)) / 2) calc(-1 * var(--sp-1));
+}
+/* Its pill, in the well's own ink, with the border that says "this runs no
+   bytes into the pane" — the history door's and `⋯`'s signal (D-5007). It
+   paints its own ground, the well it sits on, so the contrast gate measures
+   the pair rather than leaving it in its uncovered census. */
+.term-view-pill {
+  color: var(--ink-on-well);
+  background: var(--bg-well);
+  border: 1px solid color-mix(in srgb, var(--ink-on-well) 40%, transparent);
+}
+/* `paused` is a state the reader is in, not a control: inverted, the engaged
+   pair the history door uses, so it reads as "on" at a glance. */
+.term-paused {
+  color: var(--bg-well);
+  background: var(--ink-on-well);
 }
 .term-screen {
   position: relative;
@@ -1188,6 +1228,105 @@ button.metachip:active {
 .term-host {
   height: 100%;
   overflow: hidden;
+}
+/* The live terminal's host, in its visible position (D-5005). The client is
+   pinned at the window's own 220x51, so a glass of another size is answered
+   HERE rather than by tmux: a taller glass leaves a margin below the grid,
+   and a shorter or narrower one scrolls this box in the browser — tmux pans
+   nothing. The drawer holds it at its bottom, where the input box is, until
+   the operator scrolls it. Contained, so a scroll past either end does not
+   drag the sheet behind it. The history layer's host stays `hidden`: its
+   drag slides the terminal inside a box that must stay put and clip. */
+.term-host--grid,
+.term-host--off {
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+/* The same host, OFF-SCREEN, for the wrapped view (D-5005; operator ruling
+   R-LIVE, 2026-10-15): translated out past the glass's left edge and nothing
+   else, so it keeps the glass's own width and height and overflow. xterm
+   therefore still measures the same glass (`propose`, so the view chooser's
+   verdict cannot flip on the move), still renders, and still takes the
+   keyboard in its textarea, which a tap on the wrapped view focuses. Never
+   `display: none` or `visibility: hidden`: either would take the textarea
+   out of focus and the measurement with it. Measured on the spike in three
+   engines: no page, sheet or glass scroll moves when it has focus. */
+.term-host--off {
+  transform: translateX(calc(-100% - 100vw));
+}
+/* The wrapped view (D-5006): the terminal's screen re-wrapped to the glass at
+   14px (its size is the drawer's constant, set inline), as text. Over the glass
+   rather than in its flow, so the off-screen host keeps its box. It scrolls on
+   its own, follows its bottom (WrappedView's own anchoring, so the browser's
+   is off), and its text is selectable. It paints the well it sits on, so the
+   contrast gate measures its ink. The whole of it is the tap that types
+   (R-LIVE): it is the glass, and never less than a tap tall even on a glass a
+   keyboard has squeezed.
+
+   IT SITS ON THE KEY BAR (spec 2026-10-14 §5.3, D-5006): a column whose first
+   row takes the slack above it, so a screen that re-wraps shorter than the
+   glass (blank runs collapse, so it often does) rests at the bottom, beside
+   the keys, as the grid and the chat do. MEASURED before this: a plain block
+   scroller put it at the top, Claude Code's box 41px above the key bar at
+   430x932 and 166px at 1440x900, and the exit notice the ^C guard reads ~520px
+   from it at 390x844. An auto margin resolves to 0 once the rows overflow, so
+   the top stays reachable by a scroll; `justify-content: flex-end` would push
+   the overflow off the top, where no scroll reaches. */
+.term-wrap {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  min-height: var(--tap-min);
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  overflow-anchor: none;
+  padding: 0 var(--sp-2);
+  font-family: var(--family-mono);
+  line-height: var(--lh-tight);
+  color: var(--ink-on-well);
+  background: var(--bg-well);
+  white-space: pre;
+  user-select: text;
+  -webkit-user-select: text;
+  cursor: text;
+}
+/* Every row keeps its line: a column would otherwise shrink rows to fit the
+   glass once they overflow it, and a table row, which scrolls sideways, has no
+   content minimum to stop it going to nothing. */
+.term-wrap-row {
+  flex-shrink: 0;
+}
+.term-wrap-row:first-child {
+  margin-top: auto;
+}
+/* A table row keeps its frame and scrolls sideways on its own, never wraps. */
+.term-wrap-row--table {
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  scrollbar-width: none;
+}
+.term-wrap-row--right {
+  text-align: right;
+}
+/* A rule is drawn as a rule, one line tall, in the colour its glyphs had. */
+.term-wrap-rule {
+  background: linear-gradient(currentColor, currentColor) center / 100% 1px no-repeat;
+}
+/* The composition in progress (a phone keyboard's word, an IME), shown at the
+   caret until it commits: provisional, so underlined and never sent. */
+.term-wrap-ime {
+  text-decoration: underline dotted;
+  text-underline-offset: 2px;
+}
+/* The cell probe W is measured with: in the view's own face, never seen. */
+.term-wrap-probe {
+  position: absolute;
+  top: 0;
+  left: 0;
+  visibility: hidden;
+  pointer-events: none;
 }
 /* The console history — the pane's own scrollback, read with capture-pane and
    laid over the live glass. Same well, same ink: scrolling back must read as
@@ -1206,8 +1345,7 @@ button.metachip:active {
 /* xterm's own viewport is the scroller here, not this element — and it is the
    first one in this app that ever scrolls, which is why nothing has styled it
    before. Contained so a flick past the oldest line drags the history and not
-   the sheet behind it (`.chat-scroller` and `.term-keys-seq` take the same
-   precaution). */
+   the sheet behind it (`.chat-scroller` takes the same precaution). */
 .term-history .xterm-viewport {
   overscroll-behavior: contain;
 }
@@ -1264,35 +1402,50 @@ button.metachip:active {
 /* Quick-key bar — mono keycaps for the phone keyboard's missing keys
    (DIRECTION: raised 6px-radius caps, 44px targets, 120ms press-compress).
    Cut from the well's own ink, not --bg-raised, so the caps read as keys
-   set into the glass in both themes. */
+   set into the glass in both themes.
+
+   THE BAR WRAPS WHEN IT DOES NOT FIT, AT ANY WIDTH (D-5007, amended by
+   D-5113). Its keys are two halves (`barBreak`
+   in keyBar.ts): the wrapped view's `esc ↑ ↓ ⏎` and `^C ⌫ ⋯` with the history
+   door, the grid's `esc ↑ ↓ ← →` and `tab ⇧tab ⏎ ^C` with the door. Where both
+   fit on one line they share it; where they do not, each takes a line of its
+   own, at whatever width that happens — the browser measures the space the bar
+   actually has, and nothing here names a width. It used to wrap below a fixed
+   420px, by a sum that came to 432px while the wrapped bar needs 439px (its
+   eight caps at 44px, the door's `hist` at 51px, seven gaps and this padding),
+   so from 421 to 438px (the iPhone Plus and Pro Max widths) it stayed one row
+   and clipped `⋯`, the only door to the overflow row. Centred on the cross
+   axis, so nothing in it stretches down a second line. */
 .term-keys {
   flex: none;
   display: flex;
+  flex-wrap: wrap;
+  align-items: center;
   gap: var(--sp-2);
   padding: 0 var(--sp-3);
 }
-/* The keys scroll; the action beside them does not. MEASURED: nine caps at
-   --tap-min, eight gaps and this padding come to 484px against a 390px phone,
-   and `.sheet-panel--full` zeroes the drawer's side padding — so this strip
-   has always overflowed. That was survivable while everything in it was a key
-   the phone's keyboard also lacks; it stops being survivable once the strip
-   carries the only door touch has to the console history. */
+/* A half. It grows by its keys (inline: the count of its caps that stretch), so
+   on a wide glass every key cap stretches by the same amount. It wraps its own
+   caps only on a glass narrower than any phone, and it never scrolls them: a
+   strip that scrolls is how a cap ends up off the edge — the history door was,
+   on a 390px phone, before it left the strip, and `⋯` was at 430px. */
 .term-keys-seq {
-  flex: 1;
+  flex: 1 1 auto;
   min-width: 0;
   display: flex;
+  flex-wrap: wrap;
   gap: var(--sp-2);
-  overflow-x: auto;
-  overscroll-behavior: contain;
-  /* NO GUTTER. A desktop scroll container reserves a classic scrollbar track
-     INSIDE itself, which made this half taller than the action cap beside it —
-     the two caps sat at different heights, measured on a desktop browser. A
-     phone paints an overlay scrollbar and loses nothing here, and the strip is
-     dragged rather than aimed at in either place. */
-  scrollbar-width: none;
 }
-.term-keys-seq::-webkit-scrollbar {
-  display: none;
+/* The second half and the history door, on ONE line: the door is as tall as
+   the keys beside it, never a slab down two rows, and it never wraps off onto
+   a line of its own. The door is beside the keys, never inside a half: it is
+   an action, not a key (`terminal-scrollback.test.tsx`). */
+.term-keys-tail {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
 }
 /* The ground only — see `.chat-head .keycap`. Every colour here is a
    `color-mix` over `--ink-on-well`, which is exactly why it did not travel
@@ -1311,7 +1464,8 @@ button.metachip:active {
 /* The history door. Cut from the same ink as the keys deliberately: --accent
    measures under the 4.5:1 a legend needs on the light theme's well, so it is
    the BORDER that says "this one runs no bytes into the pane" — the same move
-   `.term-retry` makes. Placement is load-bearing: this and `.term-keys
+   `.term-retry` makes, and the reason the wrapped view's `⋯` and `ctrl` caps
+   wear it too (D-5007): neither sends a byte of its own. Placement is load-bearing: this and `.term-keys
    .keycap` are both specificity (0,2,0), so source order is what makes `flex`
    and `border-color` win. */
 .term-keys .keycap--act {
@@ -1328,6 +1482,55 @@ button.metachip:active {
   color: var(--bg-well);
   background: var(--ink-on-well);
   border-color: var(--ink-on-well);
+}
+/* The row `⋯` opens (D-5007, spec 2026-10-14 §5.4): a line of its own under
+   the primary keys and the history door, in four groups (`quarters`) that wrap
+   whole rather than scroll, so no line is ever `ctrl` alone — it was, from 360
+   to 393px, when the thirteen caps wrapped one by one. */
+.term-keys-more {
+  flex: 1 0 100%;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+}
+/* The ^C/^D confirm (D-5007): in the keys' place while a tapped ^C or ^D is
+   held — the consequence, and right after it the two choices, `send ^C` and
+   `cancel`, side by side. It wraps rather than scrolls, so on a phone the
+   sentence keeps a line of its own and the two choices go under it together. */
+.term-confirm {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2);
+}
+/* The sentence paints its OWN ground, the well it sits on, so the contrast gate
+   measures it rather than leaving it in its uncovered census: --ink-on-well is
+   the one text token that holds on the glass in both themes. It takes its own
+   width and no more, so the choices sit beside the consequence they confirm. */
+.term-confirm-word {
+  flex: 0 1 auto;
+  font: var(--weight-medium) var(--fs-xs) / var(--lh-tight) var(--family-mono);
+  letter-spacing: var(--ls-caps);
+  color: var(--ink-on-well);
+  background: var(--bg-well);
+}
+/* The two choices: one line, together, and neither stretches. MEASURED before
+   this, `send ^C` took the bar's `flex: 1 0 auto` and stretched to 509px at
+   1280 and 829px at 1920 — the destructive choice the widest target on the
+   glass, ~760px from its sentence — and on a phone `cancel` wrapped alone onto
+   a second row. After `.term-keys .keycap`, whose specificity this matches, so
+   source order is what makes `flex: none` win. `send` wears no danger skin:
+   `@ccrc/ui` has no danger variant for a keycap or a button, and a colour
+   invented here would be measured by no gate (left for the design pass). */
+.term-confirm-choices {
+  flex: none;
+  display: flex;
+  gap: var(--sp-2);
+}
+.term-confirm-choices .keycap {
+  flex: none;
 }
 
 /* ------------------------------------------------------------------ *

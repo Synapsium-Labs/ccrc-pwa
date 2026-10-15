@@ -8615,15 +8615,16 @@ export const PANE_HISTORY_LINES = 2000;
  * smaller than the window is not a smaller window, it is a VIEWPORT INTO one,
  * and tmux pans that viewport to follow the cursor — so a line's beginning
  * scrolls off the left while the reader is typing. `TerminalDrawer` answers by
- * shrinking its type, down to a floor, until its grid is at least this wide,
- * and says so in its header when even the floor cannot get there.
+ * attaching at the window's own size, so there is nothing to pan, and shows the
+ * grid where 220 columns fit at 11px or more and a re-wrapped view where they
+ * do not.
  *
- * THIS IS TODAY'S ANSWER, NOT THE LAST ONE. The drawer program's wave 3 lets a
- * phone-width drawer narrow the window deliberately, under a guard that only
- * allows a width the pane's own history can absorb. When that lands the window
- * stops being one constant and starts being a measurement, and every reader of
- * this value becomes a reader of that measurement. In the PWA those readers
- * are `TerminalDrawer`'s `fitToWindow` and the clip notice it raises.
+ * THE WINDOW RESTS AT THIS SIZE. The drawer attaches a client exactly this size
+ * plus tmux's status row (`TMUX_STATUS_ROWS`, below), so no glass pans it (spec
+ * 2026-10-14 §5.1, D-5005). A wide glass may later have the window follow it,
+ * never below `READER_MIN_COLS`, under that spec's guarded sizer (§6, stage 2).
+ * In the PWA the readers of this value are the drawer's attach and its view
+ * chooser.
  *
  * `ccd/ccd` spawns with the same pair and cannot import this file (bash), so it
  * carries its own copy — the same shape `READER_MIN_COLS` already has. Holding
@@ -8632,6 +8633,16 @@ export const PANE_HISTORY_LINES = 2000;
  */
 export const PINNED_WINDOW_COLS = 220;
 export const PINNED_WINDOW_ROWS = 50;
+
+/**
+ * The rows tmux takes from every attached client for its status line. A client
+ * of R rows views a window of R − TMUX_STATUS_ROWS rows exactly (spec 2026-10-14
+ * W8), so a drawer that attaches at PINNED_WINDOW_ROWS + TMUX_STATUS_ROWS is the
+ * window's size and tmux has nothing to pan (W6). True while `ccd/tmux.conf`
+ * leaves tmux's default single status line; `drawer-status-rows.test.ts` reds
+ * the day it does not.
+ */
+export const TMUX_STATUS_ROWS = 1;
 
 /**
  * ONE MEASUREMENT OF A PANE, and its failures told apart.
@@ -8657,8 +8668,9 @@ export const PINNED_WINDOW_ROWS = 50;
  * numbers at attach predict — nothing scrolls into history while a full-screen
  * app holds the pane (F9, measured: 1852 -> 11359 in one step at alt-exit).
  *
- * Wave 3 reads `limit`, `width` and `height` off THIS probe and adds no second
- * reader — one reader per field is the wire rule.
+ * Stage 2 of the 2026-10-14 drawer design reads `limit`, `width` and `height`
+ * off THIS probe (its fit target) and adds no second reader — one reader per
+ * field is the wire rule.
  */
 export type PaneProbe =
   | { ok: true; history: number; limit: number; width: number; height: number; alternate: boolean }
@@ -8684,8 +8696,9 @@ export type PaneProbe =
  * THE PROBE'S FINER VOCABULARY IS ADAPTER-LOCAL AND DOES NOT REACH THE WIRE.
  * `PaneProbe` tells `unreadable` from `unparseable` because the adapter must not
  * narrow a distinction it received, but nothing here carries that pair: the
- * probe exists to SIZE the capture and, from wave 3, to feed the fit floor —
- * both server-side, where all four arms are intact. So the CAPTURE alone decides
+ * probe exists to SIZE the capture and, from stage 2 of the 2026-10-14 drawer
+ * design, to feed its fit target (`PaneProbe`, above) — both server-side, where
+ * all four arms are intact. So the CAPTURE alone decides
  * this reply's status, and a probe that failed while the capture succeeded is a
  * 200 with the three measured fields simply absent. Absent is the whole of what
  * the client is told, and it is enough: the drawer's behaviour on a failed probe

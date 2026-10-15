@@ -31,7 +31,7 @@ afterEach(() => {
   FakeSocket.instances.length = 0;
 });
 
-const ID = 'claude-a-MekWarLive';
+const ID = 'lane-a-project-a';
 const ESC = String.fromCharCode(27);
 /** What tmux sends a fresh client, measured: alternate screen + app cursor keys. */
 const TMUX_ATTACH = `${ESC}[?1049h${ESC}[?1h${ESC}=`;
@@ -126,8 +126,8 @@ const fakeTermFactory = () => {
   // — and a suite that can only drive one of them cannot state it.
   let dataCb: ((data: string) => void) | null = null;
   let grid = { cols: 48, rows: 20 };
-  const makeTerm = (host: HTMLElement): DrawerTerm => {
-    hosts.push(host);
+  const makeTerm = (): DrawerTerm => {
+    let opened = false;
     return {
       write: (d) => write(d),
       onData: (cb) => {
@@ -136,9 +136,17 @@ const fakeTermFactory = () => {
       onWheel: (cb) => {
         wheelHandlers.push(cb);
       },
-      fit: () => ({ ...grid }),
+      pin: () => {},
       propose: () => ({ ...grid }),
-      setFontSize: () => ({ ...grid }),
+      setFontSize: () => {},
+      open: (host) => {
+        hosts.push(host);
+        opened = true;
+      },
+      isOpen: () => opened,
+      model: () => [],
+      statusRow: () => [],
+      onParsed: () => () => {},
       focus: () => {},
       dispose,
     };
@@ -566,8 +574,10 @@ describe('the ways back to live', () => {
 
     expect(historyDoor(), 'a rotation closed the history the reader was in').toBeTruthy();
     expect(h.dispose, 'a rotation disposed the history the reader was in').not.toHaveBeenCalled();
-    // …and the resize itself still reached the pane, which is what a refit is for.
-    expect(lastFrame(ws)).toEqual({ type: 'resize', cols: 60, rows: 18 });
+    // INVERTED, NOT DELETED (D-5005): this read "the resize itself still
+    // reached the pane". The client is the window's size now, so a rotation
+    // changes the type and sends the pane nothing at all.
+    expect(lastFrame(ws), 'a rotation sent the pane a frame').toBeUndefined();
   });
 
   it('a re-attach drops the history, and the fresh terminal gets a fresh wheel guard', async () => {
@@ -678,19 +688,22 @@ describe('a read that fails says WHICH failure', () => {
 // door touch has, and the two things that can silently take it away are its
 // place in the DOM and one CSS declaration.
 describe('the console history has a door a thumb can reach', () => {
-  it('the scroll-back key is NOT inside the strip that scrolls away', () => {
-    // ARITHMETIC, not taste. `.term-keys-seq` is `overflow-x: auto` and its
-    // eight caps measure 8x44 + 7x8 = 408px before a legend is laid out; add
-    // this bar's 2x12 padding and a ninth cap starts at x=428. A 390px phone
-    // — `.sheet-panel--full` zeroes the drawer's side padding, so that is the
-    // whole width — never shows it. Put this button back in the scroller and
-    // the only affordance touch has is off-screen at rest.
+  it('the scroll-back key is NOT inside a half of the keys', () => {
+    // ARITHMETIC, not taste. When this key sat in the strip of keys, the strip
+    // was `overflow-x: auto` and its eight caps measured 8x44 + 7x8 = 408px
+    // before a legend was laid out; with the bar's 2x12 padding a ninth cap
+    // started at x=428, off a 390px phone (`.sheet-panel--full` zeroes the
+    // drawer's side padding, so that is the whole width). The keys no longer
+    // scroll — the bar wraps where it does not fit
+    // (D-5113, `drawer-keybar.test.tsx`) — and
+    // this key stays beside them, in the bar's tail, as an action and not a
+    // key: the one affordance touch has is never laid out as one of them.
     render(<TerminalDrawer id={ID} open onClose={() => {}} makeSocket={makeSocket} />);
     const door = screen.getByRole('button', { name: 'Scroll back' });
     expect(door.closest('.term-keys-seq'), 'the history door scrolls off the edge with the keys').toBeNull();
     expect(door.closest('.term-keys'), 'the history door left the key bar entirely').not.toBeNull();
-    // …and every sequence cap DID stay in the scroller, so this is a split and
-    // not a bar that stopped scrolling.
+    // …and every sequence cap DID stay in a half, so this is a split and not
+    // a bar that lost its keys.
     const esc = screen.getByRole('button', { name: 'Escape' });
     expect(esc.closest('.term-keys-seq')).not.toBeNull();
   });
@@ -1916,8 +1929,8 @@ describe('a failed read says why, in a sentence', () => {
 
   it('an unrouted token is still made readable, and is not mistaken for a sentence', () => {
     // The fallthrough cannot tell "already a sentence" from "a token nobody
-    // taught this function", so it decides by SHAPE. A future wire token added
-    // in wave 3 must not reach a reader as a bare slug.
+    // taught this function", so it decides by SHAPE. A wire token added later
+    // must not reach a reader as a bare slug.
     expect(historyFailureSentence('some-future-token'))
       .toBe('could not read this pane — the box answered some-future-token');
     // ...while the success path's real sentences pass through untouched.
