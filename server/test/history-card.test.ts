@@ -984,6 +984,43 @@ describe('the sweep writes and consumes card/<id>/<uuid>.txt at end-of-file (spe
     });
   }, 240_000);
 
+  // Review 476 F2(b): a consumed prediction in a card/<id> the sweep cannot write (mode 0500): the replacement write and the
+  // fallback unlink both fail, so the consumed file STANDS. The failure is counted card_write_failed on every tick, and the
+  // consumption is not counted while the file stands (the `gone &&` guard of the consumed arm), or card_consumed would
+  // grow on every tick and deflate W1-e's served share. Once the mode is restored the next end-of-file pass writes and
+  // counts the consumption exactly once.
+  it.skipIf(process.getuid?.() === 0)('F2 a consumed prediction in a card/<id> that cannot be written or unlinked stands uncounted, and the pass after the mode is restored counts it exactly once', () => {
+    const box = makeHistoryBox('ccrc-hist-card-consumed-stuck-');
+    const [ID, U] = ['card-cstuck', sidC(0xf41)];
+    const s = compactionSequence({ n: 3, trigger: 'manual', seed: 0xf41, sessionId: U, startMs: T0C });
+    const p = plantC(box, ID, U, s.rows.slice(0, cutBefore(s, 0)));
+    settleC(box);
+    pokeC(box, ID);
+    const want0 = libCard.leafId(ID, U, firstUuidC(s));
+    const line0 = expectedCard([], want0);
+    expect(cardOf(box, ID, U), 'CONTROL: the prediction stands').toBe(line0);
+    const dir = path.join(box.root, 'card', ID);
+    appendRows(p, s.rows.slice(cutBefore(s, 0), cutBefore(s, 1)));
+    fs.chmodSync(dir, 0o500);
+    try {
+      let failed = counters(box)['card_write_failed'] ?? 0;
+      for (let tick = 1; tick <= 3; tick += 1) {
+        if (tick === 1) pokeC(box, ID); else passC(box);   // the first at end-of-file, the rest not
+        expect(cardOf(box, ID, U), `tick ${tick}: the consumed line cannot be replaced or removed, so it stands`).toBe(line0);
+        expect(counters(box)['card_write_failed'] ?? 0, `tick ${tick}: the failure is counted`).toBeGreaterThan(failed);
+        failed = counters(box)['card_write_failed'] ?? 0;
+        expect(consumedC(box), `tick ${tick}: a consumption is not counted while the file stands`).toEqual({});
+      }
+    } finally {
+      fs.chmodSync(dir, 0o700);
+    }
+    pokeC(box, ID);
+    expect(consumedC(box), 'the mode restored: the consumption is counted once').toEqual({ 'card_consumed:unknown': 1 });
+    expect(cardOf(box, ID, U), 'and the next prediction is written').toBe(expectedCard(familyC(box, ID), libCard.leafId(ID, U, s.headUuids[0]!)));
+    passC(box);
+    expect(consumedC(box), 'and still once').toEqual({ 'card_consumed:unknown': 1 });
+  }, 240_000);
+
   // R-recalloff-parity (spec §9.7, §8.2, C68): when neither CCRC_SESSION_GENERATION nor $REG/<id>.generation resolves a
   // generation, B2's CLI compares recall-off/<id> with the id's newest family's generation, which only the store knows.
   // The hook reads the record this writes instead (Task 9). The expectation is B2's own familiesOf over the fixture
@@ -1038,9 +1075,13 @@ describe('the sweep writes and consumes card/<id>/<uuid>.txt at end-of-file (spe
     fs.rmSync(genPath);
     fs.mkdirSync(genPath);
     const failed = counters(box)['card_write_failed'] ?? 0;
+    const unrecorded = counters(box)['card_unrecorded_removed'] ?? 0;
     pokeC(box, ID);
     expect(counters(box)['card_write_failed'], 'the record write failed').toBe(failed + 1);
     expect(cardOf(box, ID, U), 'no prediction beside a record that could not be written').toBeNull();
+    // The prediction was already gone, so the unlink beside the failed record removed nothing: no removal is counted
+    // (review 476 F2: the `gone &&` guard of the unrecorded arm).
+    expect(counters(box)['card_unrecorded_removed'] ?? 0, 'nothing was removed beside the record, so nothing is counted').toBe(unrecorded);
   }, 240_000);
 
   // R-recalloff-keep (the final check's R2): a record that is due beside a prediction that STANDS (kept, its line
