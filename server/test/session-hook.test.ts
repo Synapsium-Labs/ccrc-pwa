@@ -12345,10 +12345,10 @@ describe('history card line: SessionStart(compact) serves the sweep\'s predictio
   });
 
   itLinux('forks nothing at runtime: serving the line takes exactly the forks a box without history takes', () => {
-    const traced = (): { forks: number; stdout: string } => {
+    const traced = (env: Record<string, string> = {}): { forks: number; stdout: string } => {
       const trace = path.join(home, 'card-trace.txt');
       const r = spawnSync('strace', ['-f', '-o', trace, '-e', 'trace=clone,clone3,fork,vfork', 'bash', HOOK], {
-        input: JSON.stringify(start()), encoding: 'utf8', env: hookEnv(HISTORY_HOOK_SCRUB),
+        input: JSON.stringify(start()), encoding: 'utf8', env: hookEnv({ ...HISTORY_HOOK_SCRUB, ...env }),
       });
       expect(r.status, `strace ran the hook: ${r.stderr}`).toBe(0);
       const lines = fs.readFileSync(trace, 'utf8').split('\n').filter((l) => l !== '');
@@ -12370,6 +12370,22 @@ describe('history card line: SessionStart(compact) serves the sweep\'s predictio
     const withLine = traced();
     expect(card(withLine.stdout).startsWith(`${LINE}\n`), 'the measured run served the line').toBe(true);
     expect(withLine.forks).toBe(without.forks);
+    // Review 479 F4: the NUL probes (`.generation`'s and the generation record's) sit behind the env generation, so a pane whose
+    // CCRC_SESSION_GENERATION is a UUID, the pane that also serves the compact card, never reaches them. They get a pair of runs
+    // of their own, with an env generation that names none (the parity rows' arm; no compact card is served then, so the line
+    // stands alone in both runs). DIRECT has no `.generation` and no recall-off file: neither probe runs. PROBED has an EMPTY
+    // `.generation` (the first probe runs, rc 1, no NUL, and the record decides), a recall-off file naming G2 and a record naming
+    // G (the second probe runs, rc 1), so o != gen and the line is served. A pipeline or a subshell in either probe costs PROBED a fork.
+    const noGen = { CCRC_SESSION_GENERATION: '' };
+    plantAll();
+    plantParity('absent', 'absent', 'G');
+    const direct = traced(noGen);
+    expect(card(direct.stdout), 'the unprobed run served the line').toBe(LINE);
+    plantAll();
+    plantParity('empty', 'G2', 'G');
+    const probed = traced(noGen);
+    expect(card(probed.stdout), 'the probed run served the line, through both NUL probes').toBe(LINE);
+    expect(probed.forks, `forks through both probes ${probed.forks}, without them ${direct.forks}`).toBe(direct.forks);
   }, 60_000);
 });
 // ── ccrc history: the compact card's reserved room (history spec 2026-10-05 §8.6, §8.9 C38; W1-B3 task 10) ──
