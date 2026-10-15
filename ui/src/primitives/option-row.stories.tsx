@@ -129,12 +129,15 @@ export const Disabled: Story = {
 };
 
 /** Boxes: a multiSelect question, where several rows may be ticked at once
- *  (`checked`). CHECK that (1) the glyph column draws `☑` on the ticked rows
- *  and `☐` on the others, legible in light AND dark, and the labels still
- *  line up; (2) the DOM says it too: each row is `role="checkbox"` with
+ *  (`checked`). CHECK that (1) the glyph column draws an 18px box: on the
+ *  ticked rows filled with the accent and ticked in the ink made for it, on
+ *  the others an empty frame in secondary ink, legible in light AND dark, and
+ *  the labels still line up; (2) the read-only row (the last) dims its frame
+ *  with its label; (3) the DOM says it too: each row is `role="checkbox"` with
  *  `aria-checked`, a button while it can be tapped and a div when it is
- *  read-only (the last row); (3) a ticked row is not tinted — the tint is the
- *  cursor's, and a box says ticked by its glyph alone. */
+ *  read-only, and the box is `aria-hidden` decoration; (4) a ticked row is not
+ *  tinted — the tint is the cursor's, and a box says ticked by its fill and
+ *  tick alone. */
 export const Checkboxes: Story = {
   render: () => (
     <div style={{ borderTop: '1px solid var(--edge-subtle)' }}>
