@@ -464,6 +464,22 @@ const slashCommandOf = (p: PendingSend): string | null => {
  *  Returns the KEYS it dropped alongside the next list — this function is pure
  *  and outside the store closure, so it cannot cancel a pending's own timer
  *  itself; the call site does that with `cleared`. */
+/** The transcript's wrapper around a message Claude Code collapsed into a paste
+ *  chip: `<pasted_content id="…">` and its closing tag (measured on Claude Code
+ *  2.1.300, with blank lines added around it). */
+const PASTED_WRAPPER = /<\/?pasted_content id="[^"]*">/g;
+
+/** Is `echoed` the transcript's record of `sent`? Exactly, or (D-5087) once the
+ *  paste-chip wrapper and ALL whitespace are removed from both: the server now
+ *  submits our own chip, and the transcript gives the text back wrapped, with
+ *  blank lines around it. Every visible character must still match. */
+function sameSent(sent: string, echoed: string): boolean {
+  if (sent === echoed) return true;
+  if (!echoed.includes('<pasted_content id="')) return false;
+  const bare = (t: string): string => t.replace(PASTED_WRAPPER, '').replace(/\s+/g, '');
+  return bare(sent) === bare(echoed);
+}
+
 function clearConfirmed(
   pending: PendingSend[], msg: SessionStreamMsg,
 ): { pending: PendingSend[]; cleared: string[] } {
@@ -472,7 +488,7 @@ function clearConfirmed(
   const cleared: string[] = [];
   for (const e of msg.events) {
     let echoes: (p: PendingSend) => boolean;
-    if (e.kind === 'user') echoes = (p) => composePrompt(p.text, pathsOf(p) ?? []) === e.text;
+    if (e.kind === 'user') echoes = (p) => sameSent(composePrompt(p.text, pathsOf(p) ?? []), e.text);
     else if (e.kind === 'system') echoes = (p) => slashCommandOf(p) === e.text;
     else continue;
     const i = next.findIndex((p) => p.state === 'sending' && isFresh(e, p) && echoes(p));
