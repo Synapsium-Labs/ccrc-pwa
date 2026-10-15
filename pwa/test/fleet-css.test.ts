@@ -132,15 +132,33 @@ describe('fleet density and alignment', () => {
     });
   });
 
-  it('has no @container query left — .sess-acct can no longer be hidden or squeezed', () => {
+  it('no @container query reaches a session row — .sess-acct can no longer be hidden or squeezed', () => {
     // The query this repeatedly guarded (first hiding .sess-acct, then
     // hiding .sess-state, then discovered to compact .sess-acct into a
     // neighbour's track) is gone along with the one-line layout it existed
-    // to rescue. .fleet-list's own container-type/-name went with it —
-    // nothing else in this file uses them.
-    expect(css).not.toContain('@container');
-    expect(css).not.toContain('container-type');
-    expect(css).not.toContain('container-name');
+    // to rescue. .fleet-list's own container-type/-name went with it.
+    //
+    // NARROWED IN TASK 13, NOT LIFTED. This said "no `@container` in the
+    // sheet at all". The fleet head now needs one — its door group compacts
+    // by the head's OWN width, which a 320px phone and the 1280 sidebar share
+    // and no viewport query can name (the narrow-head case in the wordmark's
+    // describe). What this guard exists for is the session row, so that is
+    // what it holds: the head is the ONLY container the sheet declares, and
+    // every rule inside a container block styles the head and nothing else.
+    // A `.fleet-list` container, or a container block reaching `.sess-acct`,
+    // reds here as the old blanket did (measured).
+    const scrubbed = stripComments(css);
+    const containers = [...scrubbed.matchAll(/(?:^|[;{\s])(container(?:-name|-type)?\s*:[^;}]*)/g)]
+      .map((m) => norm(m[1]!));
+    expect(containers, 'the head is the one container this sheet declares').toEqual(['container: fleet-head / inline-size']);
+    const blocks = [...scrubbed.matchAll(/@container\b[^{]*/g)].map((m) => m[0].trim());
+    expect(blocks.length, 'the narrow-head block went — re-read this guard').toBeGreaterThanOrEqual(1);
+    const reached = blocks.flatMap((prelude) =>
+      [...atBlock(css, prelude).matchAll(/([^{}]+)\{/g)]
+        .flatMap((m) => m[1]!.split(','))
+        .map((sel) => normSel(sel))
+        .filter((sel) => !/^\.fleet-head(\s|>|$)/.test(sel)));
+    expect(reached, 'a container block styles something other than the fleet head').toEqual([]);
   });
 
   it('tightens the card padding and closes the header/body gap', () => {
@@ -1446,6 +1464,53 @@ describe('the wordmark and the Accounts screen keep their voices (the audit\'s q
     // EVERY rule that targets the span is read, so a later `normal` restating
     // it cannot pass behind the first rule's back.
     expect(declaredValues(css, '.wordmark', 'white-space')).toEqual(['nowrap']);
+  });
+
+  it('a narrow head compacts rather than growing taller', () => {
+    // The price of the line above, measured in Chromium and ruled on: the
+    // wrapped wordmark was 48px wide, the unwrapped one is 68px, and the right
+    // group lost those 20px. Where the head is under about 291px — a 320px
+    // phone (288), and the desktop sidebar at 1280 (`clamp(300px, 25vw,
+    // 380px)`: 287, or 272 beside a classic scrollbar) — Mail no longer fit
+    // beside the two labelled doors, dropped onto the bell's line, and that
+    // line became a 44px one: the head went from 92 to 111px. The ruling: the
+    // head keeps its height there. Two steps, each where it is first needed:
+    // under 300px the group's column gap steps from `--sp-3` to `--sp-1`;
+    // under 280px the caret's own gap also halves. Swept 300-460 and
+    // 900-1600, both scrollbar kinds: the head is `main`'s height at every
+    // width.
+    //
+    // Measured, not recomputed — this file cannot measure a layout. What it
+    // holds is the structure that keeps the measurement true: the head is a
+    // named size container, and each step's threshold sits between the head
+    // it must reach and the next one up it must leave alone.
+    expect(declaredValues(css, '.fleet-head', 'container')).toEqual(['fleet-head / inline-size']);
+    const scrubbed = stripComments(css);
+    const blocks = [...scrubbed.matchAll(/@container\s+fleet-head\s*\(\s*max-width:\s*([\d.]+)px\s*\)/g)]
+      .map((m) => ({ prelude: m[0], max: Number(m[1]), body: atBlock(css, m[0]) }));
+    expect(blocks, 'two narrow-head steps').toHaveLength(2);
+    const step = (sel: string) => {
+      const found = blocks.filter((b) => { try { ruleIn(b.body, sel); return true; } catch { return false; } });
+      expect(found, `one step styles ${sel}`).toHaveLength(1);
+      return { max: found[0]!.max, rule: ruleIn(found[0]!.body, sel) };
+    };
+    // The gap: reaches the 288px head (a 320px phone; the 1280 sidebar is 287)
+    // and leaves the 327px one (a 360px phone, the 1440 sidebar), which the
+    // wordmark never pushed. The descendant form, for the reason the D-3303
+    // override gives: it out-specifies `.fleet-head-right`'s own `gap`.
+    const gap = step('.fleet-head > .fleet-head-right');
+    expect(gap.max, 'the 288px head must be inside the gap step').toBeGreaterThan(288);
+    expect(gap.max, 'the 327px head must stay outside it').toBeLessThan(327);
+    expect(declValue(gap.rule, 'column-gap')).toBe('var(--sp-1)');
+    // The caret: reaches the 272px head (the 1280 sidebar beside a classic
+    // scrollbar) and leaves the 288px one, where the gap alone was enough.
+    const caret = step('.fleet-head > .wordmark::before');
+    expect(caret.max, 'the 272px head must be inside the caret step').toBeGreaterThan(272);
+    expect(caret.max, 'the 288px head needs no caret step').toBeLessThanOrEqual(288);
+    expect(declValue(caret.rule, 'margin-right')).toBe('0.2em');
+    // Not the wordmark's size: a smaller face shortened its line, the
+    // baseline-aligned group rode up, and the head came out 89px, not 92.
+    expect(declaredValues(css, '.wordmark', 'font-size'), 'the wordmark keeps its one size').toEqual([]);
   });
 
   it("the Accounts screen's prose is sans and its readouts stay mono", () => {

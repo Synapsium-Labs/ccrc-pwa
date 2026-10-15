@@ -39,7 +39,9 @@ export const Filled: Story = {
 };
 
 /** The focus cue is the ring, the one every other control draws — the field
- *  no longer repaints its border as well. Tab into it to see it. */
+ *  no longer repaints its border as well, and nothing on it hides the ring
+ *  (its `outline-none` went with the border). Tab into it to see it: this
+ *  story is the ring with only this package's CSS loaded. */
 export const Focusable: Story = {
   args: { placeholder: 'Search projects', type: 'search', 'aria-label': 'Search projects' },
 };

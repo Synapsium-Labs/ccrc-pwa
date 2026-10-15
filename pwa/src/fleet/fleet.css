@@ -23,6 +23,11 @@
   align-items: baseline;
   justify-content: space-between;
   padding: var(--sp-1) var(--sp-1) 0;
+  /* A size container, so its door group can compact by the head's OWN width
+     (the narrow-head block after the D-3303 override, at the end of the
+     sheet): that width comes from a phone and from the desktop sidebar's
+     clamp alike, and no viewport query can say both. */
+  container: fleet-head / inline-size;
 }
 /* `nowrap`: the caret is `::before` and the word is the span's own text, so a
    narrow head could break the line between `❯` and `ccrc`. One unit, always. */
@@ -2882,6 +2887,31 @@ button.proj-card-pool::before {
    class chooser. No row gap: every control on the group is already a 44px
    box. */
 .fleet-head > .fleet-head-right { flex-wrap: wrap; justify-content: flex-end; row-gap: 0; }
+/* A NARROW HEAD COMPACTS RATHER THAN GROWING (Task 13, the wordmark's
+   `nowrap`). Measured in Chromium: the wrapped wordmark was 48px wide, the
+   unwrapped one is 68px, and the right group lost those 20px. Where the head
+   is under about 291px — a 320px phone (288), and the desktop sidebar at 1280
+   (`clamp(300px, 25vw, 380px)` less the fleet's gutters: 287, or 271 beside
+   a classic scrollbar) — Mail stopped fitting beside the two labelled doors
+   and dropped onto the bell's line, which then held a 44px door: the head grew
+   from 92 to 111px. Two steps, each where it is first needed:
+   - under 300px the group's column gap steps from `--sp-3` to `--sp-1`. The
+     doors' own 4px side padding keeps their labels 12px apart, and every door
+     is still a 44px box. Enough down to a 275px head.
+   - under 280px the caret's own gap halves, 0.4em to 0.2em (8px to 4px): the
+     1280 sidebar beside a classic scrollbar (a 272px head) needs the room, and
+     `main` fitted its three doors down to a 271px head, which this reaches
+     exactly. Not the wordmark's SIZE: a smaller face shortens its line, the
+     baseline-aligned group rides up, and the head came out 89px, not 92
+     (measured). The caret and the word stay one 20px unit.
+   The 327px head (a 360px phone, the 1440 sidebar) and wider keep both, since
+   the wordmark never pushed them. Pinned in fleet-css.test.ts. */
+@container fleet-head (max-width: 299.98px) {
+  .fleet-head > .fleet-head-right { column-gap: var(--sp-1); }
+}
+@container fleet-head (max-width: 279.98px) {
+  .fleet-head > .wordmark::before { margin-right: 0.2em; }
+}
 
 /* — centralised update management W3, Task 7: SettingsScreen's Updates section —
    The section is a hairline-topped block on the screen's own ground, not a

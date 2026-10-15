@@ -33,7 +33,7 @@ import { FOCUS_RING } from '../lib/focus';
  *  business rather than a variant of what an input IS. */
 export const TEXT_INPUT =
   'w-full min-h-tap rounded-md border border-edge-subtle bg-raised text-ink-primary'
-  + ' font-ui text-input font-regular leading-normal px-3 py-0 outline-none'
+  + ' font-ui text-input font-regular leading-normal px-3 py-0'
   // The placeholder ink, which is the declaration one of the three copies
   // was missing. On a field with no placeholder attribute it is inert, which
   // is why putting it on the shared base changes nothing for the login field.
@@ -47,6 +47,17 @@ export const TEXT_INPUT =
   // showed two cues at once. The ring is the cue every other control draws,
   // and `focus-ring.test.ts` holds that a field draws no second one. `SELECT`
   // is derived from this string and inherits the answer.
+  //
+  // AND NO `outline-none`, which this string carried until the border went.
+  // Tailwind compiles it to `--tw-outline-style: none`, and the ring's
+  // `focus-visible:outline-2` reads its style from that variable — so beside
+  // `outline-none` the ring resolved to NO outline. The app never showed it
+  // (base.css's unlayered ring paints over every layer); Storybook, which has
+  // only this package's CSS, showed a focused field with no cue at all.
+  // Without it the browser's own focus outline is replaced by the ring on
+  // `:focus-visible` — the only state the browser drew one in — so nothing is
+  // lost. `focus-ring.test.ts` compiles every ringed control's classes and
+  // reds on anything but the ring writing the outline.
   + ` ${FOCUS_RING}`;
 
 /** The same object, sharing a row with something else.

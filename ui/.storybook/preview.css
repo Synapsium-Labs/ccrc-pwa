@@ -18,3 +18,14 @@
  * result. */
 @import '../src/styles/theme.css';
 @import '../src/styles/reset.css' layer(base);
+
+/* The app's root defaults — base.css's `html` rule, declaration for
+ * declaration — so a story shows the browser's own controls the way the app
+ * does: a native radio or checkbox in the accent, a scrollbar thumb from the
+ * palette (D-5159). Without it the Radio stories drew the browser's blue.
+ * A second spelling of one rule, so `pwa/test/base-defaults.test.ts` binds the
+ * two: either changing alone reds. */
+html {
+  accent-color: var(--accent);
+  scrollbar-color: var(--scrollbar-thumb) transparent;
+}

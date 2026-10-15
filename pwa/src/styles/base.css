@@ -36,14 +36,17 @@ body,
    rule at the root reaches every native checkbox, radio and range, and every
    scroll container in the tree. Without it each palette's `color-scheme` left
    them in the browser's blue and the browser's grey — no palette's colours.
-   The thumb is the strong hairline every ghost control is outlined in; the
-   track is `transparent`, so a container's own ground shows through and the
-   contrast gate gains no pair. Phones keep their overlay scrollbars. Chrome
-   lets these standard properties win over `::-webkit-scrollbar`, so a strip
-   that hides its bar says `scrollbar-width: none` too (`.term-keys-seq`). */
+   The thumb is `--scrollbar-thumb`, fitted to 3:1 on every ground a scroll
+   container paints (tokens.css; D-5159) — not the strong hairline, which
+   carries no contrast claim and read 1.03 as a thumb. The track is
+   `transparent`, so a container's own ground shows through and no ground is
+   minted. Phones keep their overlay scrollbars. Chrome lets these standard
+   properties win over `::-webkit-scrollbar`, so a strip that hides its bar
+   says `scrollbar-width: none` too (`.term-keys-seq`). Storybook's
+   preview.css states this same rule, bound by base-defaults.test.ts. */
 html {
   accent-color: var(--accent);
-  scrollbar-color: var(--edge-strong) transparent;
+  scrollbar-color: var(--scrollbar-thumb) transparent;
 }
 
 body {
