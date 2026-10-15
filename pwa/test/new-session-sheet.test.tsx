@@ -333,3 +333,116 @@ describe('the optional routing row (routing slice 4, Task 6)', () => {
     )).toBeInTheDocument();
   });
 });
+
+// ── THE THREE ARMS NOTHING ASKED (measured: 11 uncovered statements) ──
+describe('NewSessionSheet — the project list that could not be read', () => {
+  it('says so, as an alert, instead of showing a skeleton for ever', async () => {
+    // `ProjectPicker` has THREE arms and its own header says so: loading is
+    // `list === null && listError === null`, and a failure is its own state.
+    // Without the second one a box whose `/api/projects` is down shows a
+    // skeleton that never resolves — the shape a reader reads as "still
+    // thinking", for ever.
+    const roster = pooled(POOLS);
+    vi.spyOn(api, 'projects').mockRejectedValue(new Error('agent link is down'));
+    vi.spyOn(api, 'accounts').mockResolvedValue({ accounts: [], projected: null, roster });
+    render(<NewSessionSheet open onClose={vi.fn()} fleet={storeWith(roster)} />);
+    fireEvent.click(await screen.findByRole('button', { name: /team·max/ }));
+    const said = await screen.findByText(/Couldn't load the project list/);
+    expect(said).toHaveAttribute('role', 'alert');
+    expect(said).toHaveTextContent('agent link is down');
+    expect(screen.queryByText(/No project matches/), 'a failed read is not an empty one').toBeNull();
+  });
+});
+
+describe('NewSessionSheet — the routing fields ride the start, and only when set', () => {
+  const startCall = async (projects: ProjectRow[]): Promise<ReturnType<typeof vi.fn>> => {
+    const createSession = vi.fn().mockResolvedValue(undefined);
+    vi.spyOn(api, 'createSession').mockImplementation(createSession);
+    await openAtStepTwo(projects);
+    fireEvent.click(await screen.findByText('demo'));
+    return createSession;
+  };
+
+  it('sends NO route at all when every field is left on its unset row', async () => {
+    // The unset row is what every build before the routing slice sent, and it
+    // must stay byte-identical: an empty `route` object would ask the
+    // coordinator to re-decide from a record that says nothing.
+    const createSession = await startCall([proj('demo', { state: 'untagged' })]);
+    fireEvent.click(screen.getByRole('button', { name: /^start demo on/i }));
+    await waitFor(() => expect(createSession).toHaveBeenCalled());
+    expect(createSession.mock.calls[0]?.[0]).not.toHaveProperty('route');
+  });
+
+  it('sends exactly the fields that were set, and nothing else', async () => {
+    // Three independent selects, one object. A field left unset must not
+    // arrive as `''` — the record would then carry a class nobody chose.
+    const createSession = await startCall([proj('demo', { state: 'untagged' })]);
+    fireEvent.change(screen.getByLabelText('Effort'), { target: { value: 'high' } });
+    fireEvent.click(screen.getByRole('button', { name: /^start demo on/i }));
+    await waitFor(() => expect(createSession).toHaveBeenCalled());
+    const body = createSession.mock.calls[0]?.[0] as { route?: Record<string, string> };
+    expect(body.route).toEqual({ effort: 'high' });
+  });
+
+  it('a change of account clears the route it had chosen for the old one', async () => {
+    // The back control resets the three selects along with the account and the
+    // project. Carried over, a class picked for one lane would ride a start on
+    // another — and the sheet gives no second chance to notice.
+    await openAtStepTwo([proj('demo', { state: 'untagged' })]);
+    fireEvent.change(await screen.findByLabelText('Effort'), { target: { value: 'high' } });
+    expect((screen.getByLabelText('Effort') as HTMLSelectElement).value).toBe('high');
+    fireEvent.click(screen.getByRole('button', { name: /change/i }));
+    fireEvent.click(await screen.findByRole('button', { name: /team·max/ }));
+    expect((await screen.findByLabelText('Effort')) as HTMLSelectElement)
+      .toHaveValue('');
+  });
+});
+
+// — the third routing field, and the order the list is already in —
+describe('the routing row’s third select, and the project order', () => {
+  it('Workflows alone posts `route: { workflow: … }` and nothing else', async () => {
+    // The one field of three with no case. Each contributes its key
+    // INDEPENDENTLY — an unset select adds nothing — so a request carrying
+    // `class` or `effort` here would be the sheet deciding something the
+    // operator left alone.
+    const create = vi.spyOn(api, 'createSession').mockResolvedValue(undefined);
+    await openAtStepTwo([proj('demo', { state: 'tagged', name: 'pool-a' })]);
+
+    fireEvent.click(await screen.findByText('demo'));
+    fireEvent.change(screen.getByLabelText('Workflows'), { target: { value: 'off' } });
+    fireEvent.click(screen.getByRole('button', { name: /^Start demo/ }));
+
+    await waitFor(() => expect(create).toHaveBeenCalledWith({
+      wrapper: 'claude', project: 'demo', workdir: '/w/demo',
+      route: { workflow: 'off' },
+    }));
+  });
+
+  it('keeps the SERVER’s order for projects this box has never run', async () => {
+    // The sort puts the recently-active first, and its `undefined === undefined`
+    // arm is what keeps everything else where the server put it. Sorting those
+    // against `-1` would be stable in V8 and arbitrary in principle; stating
+    // the arm is what makes it a decision.
+    await openAtStepTwo([
+      proj('zulu', { state: 'tagged', name: 'pool-a' }),
+      proj('alpha', { state: 'tagged', name: 'pool-a' }),
+      proj('mike', { state: 'tagged', name: 'pool-a' }),
+    ]);
+    await screen.findByText('zulu');
+    const names = [...document.querySelectorAll('.proj-name')].map((n) => n.textContent);
+    expect(names, 'the list was re-ordered for rows nothing has run').toEqual(['zulu', 'alpha', 'mike']);
+  });
+
+  it('a project behind the disclosure shows its own pool name', async () => {
+    // The disclosed rows carry the pool they belong to — that is the whole
+    // reason they are disclosed rather than hidden — and a `tagged` pool is
+    // the only state that has a name to show.
+    await openAtStepTwo([
+      proj('mine', { state: 'tagged', name: 'pool-a' }),
+      proj('theirs', { state: 'tagged', name: 'pool-b' }),
+    ]);
+    fireEvent.click(await screen.findByRole('button', { name: /other pool/i }));
+    expect(await screen.findByText('theirs')).toBeInTheDocument();
+    expect(screen.getByTitle(/pool-b/)).toBeInTheDocument();
+  });
+});

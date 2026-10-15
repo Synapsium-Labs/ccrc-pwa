@@ -38,6 +38,21 @@ function entryFor(roster: readonly RosterWire[], wrapper: string): RosterWire | 
   return roster.find((a) => a.id === wrapper);
 }
 
+/** The one warning for a roster route that answered the wrong SHAPE.
+ *
+ *  THREE POLLERS, ONE SENTENCE. `AccountsStrip`, `AccountsScreen` and the
+ *  fleet store each poll `GET /api/accounts`, and each spelled this warning
+ *  for itself — the literal census is what found that, since a `console.warn`
+ *  string is neither markup nor a rule. It is the ONLY signal a genuine
+ *  protocol break has: every consumer silently reverts to raw wrapper ids,
+ *  which reads as "nothing is wrong".
+ *
+ *  A function rather than a constant so the offending body rides along at
+ *  every site, as it already did. */
+export function warnNonArrayRoster(body: unknown): void {
+  console.warn('ccrc: GET /api/accounts answered with a non-array roster; keeping the last known one.', body);
+}
+
 /** Human label for an account, e.g. 'claude2' → 'team·alt'. Unknown wrappers
  *  fall back to the raw name — never hide an account the server reports,
  *  including in the window before the roster has arrived at all. */

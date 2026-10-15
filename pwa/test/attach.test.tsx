@@ -7,7 +7,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { api, ApiError } from '../src/lib/api';
-import { AttachButton } from '../src/session/AttachButton';
+import { AttachButton } from '@ccrc/ui';
 import { downscaleImage } from '../src/session/useAttachImage';
 import { CLIP_DOC_EXTS, CLIP_EXTS } from '../../shared/api';
 import { Composer } from '../src/session/Composer';
@@ -56,15 +56,20 @@ describe('AttachButton', () => {
   // through. Images stay a MIME pattern because that is what makes a phone
   // open the gallery; documents go in as extensions because the type a phone
   // reports for one is not something to gate on.
+  //
+  // Rendered through the COMPOSER: `@ccrc/ui` may not take a value from
+  // shared/, so the filter is the app's `ATTACH_ACCEPT`, handed to the button
+  // as its `accept` prop — and the picker a user actually opens is the one the
+  // composer renders, so that is the one these two pin.
   it('offers documents as well as images in the OS picker', () => {
-    render(<AttachButton onPick={vi.fn()} />);
+    render(<Composer onSend={vi.fn()} pending={[]} id={ID} />);
     const accept = fileInput().getAttribute('accept') ?? '';
     expect(accept).toContain('image/*');
     for (const ext of CLIP_DOC_EXTS) expect(accept.split(','), ext).toContain(`.${ext}`);
   });
 
   it('offers nothing the upload route would refuse', () => {
-    render(<AttachButton onPick={vi.fn()} />);
+    render(<Composer onSend={vi.fn()} pending={[]} id={ID} />);
     const offered = (fileInput().getAttribute('accept') ?? '').split(',')
       .filter((t) => t.startsWith('.')).map((t) => t.slice(1));
     expect(offered.filter((e) => !CLIP_EXTS.includes(e))).toEqual([]);
@@ -332,5 +337,42 @@ describe('Composer drag-and-drop', () => {
     // drag leaves the window) does clear it.
     fireEvent(composer, dragEvent('dragleave', { relatedTarget: null }));
     expect(composer).not.toHaveAttribute('data-drop');
+  });
+});
+
+// THE TWO WAYS THE CANVAS CAN REFUSE, and neither had a case (measured:
+// statements 40 and 45 of `useAttachImage.ts` uncovered). Both end the same
+// way for the reader — the chip goes to `failed` and offers Retry — but they
+// are two different facts, and a downscale that resolved with something
+// unusable instead of throwing would upload a blank image.
+describe('downscaleImage refuses rather than returning something unusable', () => {
+  it('a 2d context the browser will not give is a thrown sentence', async () => {
+    // jsdom's own answer, and a real one: a tab under memory pressure, or a
+    // canvas past the platform's area limit, returns null here. The bitmap is
+    // still released — the `finally` is what keeps a refusal from leaking the
+    // decoded image.
+    const close = vi.fn();
+    vi.stubGlobal('createImageBitmap', vi.fn(async () => ({ width: 100, height: 100, close })));
+    // No `stubCanvas()`: jsdom's unstubbed `getContext('2d')` is exactly the
+    // null this guard is written for.
+    await expect(downscaleImage(new File(['x'], 'a.png', { type: 'image/png' })))
+      .rejects.toThrow('canvas is unavailable');
+    expect(close, 'a refusal leaked the decoded bitmap').toHaveBeenCalled();
+  });
+
+  it('an encode that hands back no blob is a rejection, not a resolve with null', async () => {
+    // `toBlob`'s callback takes `Blob | null`, and the null arm is real — an
+    // out-of-memory encode. Resolving with it would put `null` into the
+    // upload, which is a request with no body rather than a failed chip.
+    const close = vi.fn();
+    vi.stubGlobal('createImageBitmap', vi.fn(async () => ({ width: 100, height: 100, close })));
+    vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(
+      { drawImage: vi.fn() } as unknown as CanvasRenderingContext2D);
+    vi.spyOn(HTMLCanvasElement.prototype, 'toBlob').mockImplementation(
+      ((cb: BlobCallback) => { cb(null); }) as unknown as typeof HTMLCanvasElement.prototype.toBlob);
+
+    await expect(downscaleImage(new File(['x'], 'a.png', { type: 'image/png' })))
+      .rejects.toThrow("couldn't encode the image");
+    expect(close).toHaveBeenCalled();
   });
 });
