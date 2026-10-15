@@ -25,7 +25,7 @@ import { DELEGATION_EVENT_KINDS, DELEGATION_SPOOL_BOUNDS, type DelegationEventEn
 import { READ_FROM_MAX_BYTES } from '../../shared/agent-protocol.js';
 import { createIo } from '../src/remote/io.js';
 import type { FleetClient } from '../src/remote/client.js';
-import { localIO, type FleetIO, type MeasuredByteRangeRead, type MeasuredDirectoryRead } from '../src/io.js';
+import { localIO, type FleetIO, type MeasuredByteRangeRead, type MeasuredDirectoryRead, type MeasuredStat } from '../src/io.js';
 import {
   emptyDelegationCheckpoint,
   type DeepReadonly,
@@ -34,6 +34,8 @@ import {
 } from '../src/coord/delegation-model.js';
 import {
   DelegationDurability,
+  decodeDelegationCheckpoint,
+  encodeDelegationCheckpoint,
   type DelegationApplyOutcome,
   type DelegationCheckpointChange,
   type DelegationDurabilityDeps,
@@ -42,6 +44,7 @@ import {
   DELEGATION_BUCKET_REPLACED,
   DELEGATION_EVENT_ID_DOMAIN,
   DELEGATION_LINE_REJECTIONS,
+  DelegationIngestError,
   delegationBucketDurabilityOf,
   delegationBucketUtcHour,
   deriveDelegationEventId,
@@ -114,18 +117,24 @@ const VARIANTS: ReadonlyArray<readonly [string, Obj, readonly string[]]> = [
 ];
 
 const cursorRow = (cursor: number, lastSize: number, over: Partial<DelegationBucketCursor> = {}): DelegationBucketCursor =>
-  ({ sessionId: OWNER, parentIncarnation: INC, bucket: BUCKET, cursor, lastSize, lastCompleteAt: null, intervalState: 'measured', detail: null, ...over });
+  ({ sessionId: OWNER, parentIncarnation: INC, bucket: BUCKET, cursor, lastSize, lastCompleteAt: null, intervalState: 'measured', detail: null, anchor: null, replaced: false, ...over });
 const stateWith = (rows: readonly DelegationBucketCursor[] = [], phase: 'ready' | 'reconstructing' = 'ready'): DelegationRecoveryState =>
   ({ checkpoint: { ...emptyDelegationCheckpoint(), bucketCursors: rows }, phase });
 const inputOf = (bytes: Uint8Array, over: Partial<DelegationBucketInput> = {}): DelegationBucketInput =>
-  ({ sessionId: OWNER, parentIncarnation: INC, bucket: BUCKET, cursor: 0, lastSize: 0, size: bytes.length, bytes, bucketPresent: true, capabilityPresent: true, ...over });
+  ({ sessionId: OWNER, parentIncarnation: INC, bucket: BUCKET, cursor: 0, lastSize: 0, size: bytes.length, bytes, readStart: over.cursor ?? 0, bucketPresent: true, capabilityPresent: true, ...over });
 const ingest = (bytes: Uint8Array, over: Partial<DelegationBucketInput> = {}, state: DelegationRecoveryState = stateWith()): DelegationBucketResult =>
   ingestDelegationBucket(inputOf(bytes, over), state);
 const eventsOf = (r: DelegationBucketResult): DelegationEventEnvelopeV1[] =>
   r.accepted.map((a) => a.entry.event as DelegationEventEnvelopeV1);
-/** The input a driver builds for its NEXT read from the cursor a result left, with `more` bytes appended to the bucket. */
-const nextRead = (prev: DelegationBucketResult, bytes: Uint8Array, size: number, over: Partial<DelegationBucketInput> = {}) =>
-  ({ input: inputOf(bytes, { cursor: prev.cursor.cursor, lastSize: prev.cursor.lastSize, size, ...over }), state: stateWith([prev.cursor]) });
+/** What the reader hands ingestion for `file`, given the durable row: its window STARTS AT THE ANCHOR when the row has one (D-4647),
+ *  else at the cursor, and holds at most one read bound. */
+const readOf = (file: Uint8Array, row: DelegationBucketCursor | undefined, over: Partial<DelegationBucketInput> = {}): DelegationBucketInput => {
+  const start = row?.anchor?.start ?? row?.cursor ?? 0;
+  return { ...inputOf(file.subarray(start, start + READ_FROM_MAX_BYTES), { cursor: row?.cursor ?? 0, lastSize: row?.lastSize ?? 0, size: file.length, readStart: start }), ...over };
+};
+/** One whole tick against `file`: the durable row (when there is one) is what the read starts from. */
+const tick = (file: Uint8Array, row?: DelegationBucketCursor, over: Partial<DelegationBucketInput> = {}, state?: DelegationRecoveryState): DelegationBucketResult =>
+  ingestDelegationBucket(readOf(file, row, over), state ?? stateWith(row === undefined ? [] : [row]));
 
 // ── Step 1: framing, offsets, and the server-derived event ID ─────────────────────────────────────────────────────────
 
@@ -172,15 +181,7 @@ describe('event-ID vectors (W3-M70): the preimage is exact, in this order and en
     expect(sha(hexVariant)).not.toBe(id());
   });
 
-  it('PID and timestamp reuse are irrelevant: the same bytes at the same coordinate are the same ID on every call, whatever else changed', () => {
-    const a = id();
-    const clock = Date.now;
-    expect(id()).toBe(a);
-    expect(id({ rawLine: RAW.slice() })).toBe(a);
-    expect(typeof clock).toBe('function');
-  });
-
-  it('concurrent appends have DISJOINT offsets, so two different lines can never collide, and identical bytes at disjoint offsets are distinct events', () => {
+  it('PID and timestamp reuse are irrelevant: identical lines (the same observedAt, the same writer) are distinct events because their offsets are disjoint, and nothing else is in the ID', () => {
     const l = lineOf(common('SessionStart', { source: 'startup' }));
     const r = ingest(cat(l, l, l));
     const ids = eventsOf(r).map((e) => e.eventId);
@@ -214,11 +215,15 @@ describe('framing: byte offsets, complete lines only', () => {
     expect([r.interval, r.detail]).toEqual(['measured', null]);
   });
 
-  it('a read that starts at a nonzero cursor offsets from that cursor', () => {
-    const state = stateWith([cursorRow(500, 500)]);
-    const r = ingest(cat(l1, l2), { cursor: 500, lastSize: 500, size: 500 + l1.length + l2.length }, state);
-    expect(eventsOf(r).map((e) => [e.startOffset, e.endOffset])).toEqual([[500, 500 + l1.length], [500 + l1.length, 500 + l1.length + l2.length]]);
-    expect(r.cursor.cursor).toBe(500 + l1.length + l2.length);
+  it('a later tick offsets from the cursor the first one left: the re-read anchor line is verified, never re-accepted, and new lines are numbered past it', () => {
+    const first = tick(l1);
+    const second = tick(cat(l1, l2, l3), first.cursor);
+    expect(eventsOf(second).map((e) => [e.eventKind, e.startOffset, e.endOffset])).toEqual([
+      ['SessionEnd', l1.length, l1.length + l2.length],
+      ['SubagentStart', l1.length + l2.length, l1.length + l2.length + l3.length],
+    ]);
+    expect(second.cursor.cursor).toBe(l1.length + l2.length + l3.length);
+    expect([second.interval, second.detail]).toEqual(['measured', null]);
   });
 
   it('offsets are BYTES: a multibyte line (two-, three- and four-byte characters) shifts every later offset by its byte length, not its character count', () => {
@@ -251,8 +256,7 @@ describe('framing: byte offsets, complete lines only', () => {
 
     it('then completion: the next read from that cursor accepts the line with the SAME ID a single full read gives it', () => {
       const first = ingest(cat(l1, l2.subarray(0, 25)));
-      const { input, state } = nextRead(first, l2, l1.length + l2.length);
-      const second = ingestDelegationBucket(input, state);
+      const second = tick(cat(l1, l2), first.cursor);
       expect(eventsOf(second)).toHaveLength(1);
       expect(second.cursor.cursor).toBe(l1.length + l2.length);
       expect([second.interval, second.detail]).toEqual(['measured', null]);
@@ -307,13 +311,15 @@ describe('framing: byte offsets, complete lines only', () => {
         inputOf(cat(l1, l2), { cursor: 100, lastSize: 100, size: 100 + l1.length + l2.length }),
         stateWith([replaced.cursor]),
       );
+      expect(replaced.cursor.replaced).toBe(true);
+      expect(regrown.cursor.replaced).toBe(true);
       expect(regrown.accepted).toEqual([]);
       expect(regrown.interval).toBe('unmeasured');
       expect(regrown.cursor).toMatchObject({ cursor: 100, lastSize: 100, intervalState: 'unmeasured' });
       expect(regrown.detail).toBe(replaced.detail);
     });
 
-    it('a read that disagrees with the accepted coordinate (changed bytes before it, or a stale cursor) is unmeasured, and the durable row is what survives', () => {
+    it('a read that does not start at the durable coordinate (a stale cursor or last-seen size) is unmeasured, and the durable row is what survives; changed BYTES are the anchor rows\' business', () => {
       const state = stateWith([cursorRow(200, 260, { lastCompleteAt: '2026-10-14T12:00:01.000Z' })]);
       for (const [label, over] of [
         ['a cursor behind the accepted one', { cursor: 0, lastSize: 260 }],
@@ -383,10 +389,12 @@ describe('framing: byte offsets, complete lines only', () => {
   });
 
   it('an idle bucket (cursor at the end of the file) is measured and leaves the row alone', () => {
-    const state = stateWith([cursorRow(300, 300, { lastCompleteAt: '2026-10-14T12:00:09.000Z' })]);
-    const r = ingest(new Uint8Array(0), { cursor: 300, lastSize: 300, size: 300 }, state);
+    const file = cat(l1, l3);
+    const first = tick(file);
+    const r = tick(file, first.cursor);
     expect([r.interval, r.detail, r.accepted]).toEqual(['measured', null, []]);
-    expect(r.cursor).toEqual(cursorRow(300, 300, { lastCompleteAt: '2026-10-14T12:00:09.000Z' }));
+    expect(r.cursor).toEqual(first.cursor);
+    expect(r.cursor.cursor).toBe(file.length);
   });
 
   it('lastCompleteAt is the latest accepted line\'s own observedAt (no pure code reads a clock) and is carried over when a read accepts nothing', () => {
@@ -463,8 +471,7 @@ describe('duplicate re-read (W3-M11): the event ID is the idempotency key', () =
 
   it('the same line framed by a different read window has the same ID (an ID is a property of the bytes and their coordinate, not of the read)', () => {
     const whole = ingest(cat(l1, l2));
-    const { input, state } = nextRead(ingest(l1), l2, l1.length + l2.length);
-    expect(eventsOf(ingestDelegationBucket(input, state))[0]!.eventId).toBe(eventsOf(whole)[1]!.eventId);
+    expect(eventsOf(tick(cat(l1, l2), tick(l1).cursor))[0]!.eventId).toBe(eventsOf(whole)[1]!.eventId);
   });
 
   it('applied twice, the journal holds each event once: the second application skips every event as a duplicate', async () => {
@@ -485,6 +492,261 @@ describe('duplicate re-read (W3-M11): the event ID is the idempotency key', () =
     expect(eventsOf(again).map((e) => e.eventId)).toEqual(eventsOf(ingest(cat(l1, l2))).map((e) => e.eventId));
     await durable.applyBucketResult(again);
     expect(journalLines(h.dir)).toHaveLength(2);
+  });
+});
+
+// ── D-4647: the cursor anchors its last complete line ───────────────────────────────────────────────────────────────────
+
+describe('the cursor anchors the last complete line it stepped over (D-4647): changed bytes before the cursor are a replacement', () => {
+  const l1 = lineOf(common('SessionStart', { source: 'startup' }));
+  const l2 = lineOf(common('SessionEnd', { reason: 'clear' }, { observedAt: '2026-10-14T12:00:05.000Z' }));
+  const l2same = lineOf(common('SessionEnd', { reason: 'clean' }, { observedAt: '2026-10-14T12:00:05.000Z' }));
+  const l3 = lineOf(common('SubagentStart', { agentId: 'agent-abc123', agentType: null }, { observedAt: '2026-10-14T12:00:09.000Z' }));
+  const l4 = lineOf(common('SubagentStop', { agentId: 'agent-abc123', agentType: null, agentTranscriptPath: null }, { observedAt: '2026-10-14T12:00:11.000Z' }));
+  const lineSha = (line: Uint8Array): string => sha(line.subarray(0, line.length - 1));
+  const nothingAccepted = (r: DelegationBucketResult): void => {
+    expect(r.accepted).toEqual([]);
+    expect(r.interval).toBe('unmeasured');
+    expect(r.cursor.replaced).toBe(true);
+  };
+
+  it('the anchor is the start offset and the SHA-256 of the last complete line, LF excluded (the same bytes the event ID hashes)', () => {
+    const r = tick(cat(l1, l2));
+    expect(r.cursor.anchor).toEqual({ start: l1.length, sha256: lineSha(l2) });
+    expect(r.cursor.replaced).toBe(false);
+    expect(tick(new Uint8Array(0), undefined, { size: 0 }).cursor.anchor).toBeNull();
+    expect(tick(l1.subarray(0, 30)).cursor.anchor, 'a torn tail anchors nothing').toBeNull();
+  });
+
+  it('a refused complete line is anchored too: the anchor always ends at the cursor', () => {
+    const garbage = enc.encode('garbage\n');
+    const r = tick(cat(l1, garbage));
+    expect(r.cursor.anchor).toEqual({ start: l1.length, sha256: sha(enc.encode('garbage')) });
+    expect(r.cursor.cursor).toBe(l1.length + garbage.length);
+    const blank = tick(cat(l1, enc.encode('\n')));
+    expect(blank.cursor.anchor).toEqual({ start: l1.length, sha256: sha(new Uint8Array(0)) });
+    expect(tick(cat(l1, enc.encode('\n'), l2), blank.cursor).interval).toBe('measured');
+  });
+
+  it('an untouched bucket that grows is measured: only the new lines are accepted, the anchor line is verified and not re-accepted, and the anchor advances', () => {
+    const first = tick(cat(l1, l2));
+    const grown = tick(cat(l1, l2, l3, l4), first.cursor);
+    expect(grown.interval).toBe('measured');
+    expect(grown.detail).toBeNull();
+    expect(eventsOf(grown).map((e) => e.eventKind)).toEqual(['SubagentStart', 'SubagentStop']);
+    expect(eventsOf(grown).map((e) => e.startOffset)).toEqual([l1.length + l2.length, l1.length + l2.length + l3.length]);
+    expect(grown.cursor).toMatchObject({ cursor: l1.length + l2.length + l3.length + l4.length, anchor: { start: l1.length + l2.length + l3.length, sha256: lineSha(l4) }, replaced: false });
+  });
+
+  it('a tick that adds nothing keeps the anchor', () => {
+    const first = tick(cat(l1, l2));
+    expect(tick(cat(l1, l2), first.cursor).cursor).toEqual(first.cursor);
+  });
+
+  it('an in-place rewrite of the last accepted line that keeps the size is a replacement: nothing is accepted', () => {
+    expect(l2same.length).toBe(l2.length);
+    const first = tick(cat(l1, l2));
+    const rewritten = tick(cat(l1, l2same, l3), first.cursor);
+    nothingAccepted(rewritten);
+    expect(rewritten.detail).toMatch(/^bucket-replaced: the last accepted line at offsets \d+\.\.\d+ no longer reads the same/);
+    expect(rewritten.cursor).toMatchObject({ cursor: first.cursor.cursor, anchor: first.cursor.anchor });
+  });
+
+  it('a cut and a regrow past the old size between two ticks is a replacement (the size alone would call it growth)', () => {
+    const first = tick(cat(l1, l2));
+    const regrown = cat(l3, l4, l3, l4);
+    expect(regrown.length).toBeGreaterThan(first.cursor.lastSize);
+    nothingAccepted(tick(regrown, first.cursor));
+  });
+
+  it('a rewrite that keeps the line\'s text but changes its terminator is a replacement: the hash alone is not the proof, the LF at the cursor is (framing check)', () => {
+    const first = tick(cat(l1, l2));
+    const noLf = cat(l1, l2.subarray(0, l2.length - 1), enc.encode(' '), l3);       // the line now runs into the next
+    nothingAccepted(tick(noLf, first.cursor));
+  });
+
+  it('a read that cannot reach the whole anchor line is a replacement', () => {
+    const first = tick(cat(l1, l2));
+    nothingAccepted(tick(cat(l1, l2), first.cursor, { bytes: l2.subarray(0, 20) }));
+    nothingAccepted(tick(cat(l1, l2), first.cursor, { bytes: new Uint8Array(0) }));
+  });
+
+  it('once an anchor fails, the bucket stays replaced: the ORIGINAL bytes coming back do not clear it', () => {
+    const first = tick(cat(l1, l2));
+    const bad = tick(cat(l1, l2same), first.cursor);
+    nothingAccepted(bad);
+    const back = tick(cat(l1, l2, l3), bad.cursor);
+    nothingAccepted(back);
+    expect(back.detail).toBe(bad.detail);
+  });
+
+  it('a change BEFORE the last line is outside what one anchor proves (a known limit, pinned so it is not mistaken for coverage)', () => {
+    const first = tick(cat(l1, l2));
+    const l1alt = lineOf(common('SessionStart', { source: 'resumed' }));
+    expect(l1alt.length).toBe(l1.length);
+    expect(sha(l1alt)).not.toBe(sha(l1));
+    const grown = tick(cat(l1alt, l2, l3), first.cursor);
+    expect(grown.interval).toBe('measured');
+    expect(eventsOf(grown).map((e) => e.eventKind)).toEqual(['SubagentStart']);
+  });
+
+  it('a row with a cursor but no anchor cannot be verified: it is a gap, and not a replacement', () => {
+    const r = ingest(l1, { cursor: 300, lastSize: 300, size: 300 + l1.length, readStart: 300 }, stateWith([cursorRow(300, 300)]));
+    expect(r.accepted).toEqual([]);
+    expect(r.interval).toBe('unmeasured');
+    expect(r.cursor).toMatchObject({ cursor: 300, replaced: false });
+    expect(r.detail).toMatch(/^cursor-unanchored: /);
+  });
+
+  it('a read whose bytes do not begin where the durable row says they must (anchor start, else cursor) is a gap, and not a replacement', () => {
+    const first = tick(cat(l1, l2));
+    const wrong = tick(cat(l1, l2, l3), first.cursor, { readStart: first.cursor.cursor });
+    expect(wrong.accepted).toEqual([]);
+    expect(wrong.interval).toBe('unmeasured');
+    expect(wrong.cursor.replaced).toBe(false);
+    expect(wrong.detail).toMatch(/^read-window-mismatch: /);
+  });
+
+  it('a window past the read bound is re-anchored at its last complete line: a bucket larger than one read is ingested in ticks, each re-reading one line', () => {
+    const per = lineOf(common('SessionStart', { source: 'startup' }));
+    const count = Math.ceil(READ_FROM_MAX_BYTES / per.length) + 40;
+    const file = cat(...Array.from({ length: count }, () => per));
+    expect(file.length).toBeGreaterThan(READ_FROM_MAX_BYTES);
+    const first = tick(file);
+    expect(first.cursor.cursor).toBeLessThanOrEqual(READ_FROM_MAX_BYTES);
+    expect(first.interval).toBe('measured');
+    expect(first.detail).toBe(`capped-read: ${file.length - READ_FROM_MAX_BYTES} bytes beyond the read window are unread`);
+    const second = tick(file, first.cursor);
+    expect(second.interval).toBe('measured');
+    expect(second.detail).toBeNull();
+    expect(eventsOf(first).length + eventsOf(second).length).toBe(count);
+    expect(second.cursor.cursor).toBe(file.length);
+    const ids = [...eventsOf(first), ...eventsOf(second)].map((e) => e.eventId);
+    expect(new Set(ids).size).toBe(count);
+  });
+});
+
+describe('a capped read names its unread remainder, apart from a torn tail (M1)', () => {
+  it('the remainder is size - cursor - bytes, and a window that ends mid-line is not called torn', () => {
+    const per = lineOf(common('SessionStart', { source: 'startup' }));
+    const file = cat(per, per, per);
+    const r = ingestDelegationBucket(inputOf(file.subarray(0, per.length + 50), { size: file.length }), stateWith());
+    expect(r.interval).toBe('measured');
+    expect(r.detail).toBe(`capped-read: ${file.length - per.length - 50} bytes beyond the read window are unread`);
+    expect(r.cursor.cursor).toBe(per.length);
+  });
+  it('a torn tail at the END of the file is still a torn tail', () => {
+    const per = lineOf(common('SessionStart', { source: 'startup' }));
+    const r = ingestDelegationBucket(inputOf(cat(per, per.subarray(0, 50))), stateWith());
+    expect(r.detail).toBe(`torn-tail: 50 unframed bytes after offset ${per.length}`);
+  });
+});
+
+describe('a replaced bucket STAYS replaced (R33): a structured flag the row carries, checked before everything else', () => {
+  const l1 = lineOf(common('SessionStart', { source: 'startup' }));
+  const l2 = lineOf(common('SessionEnd', { reason: 'clear' }, { observedAt: '2026-10-14T12:00:05.000Z' }));
+  const replacedRow = (): DelegationBucketCursor => {
+    const first = tick(cat(l1, l2));
+    const cut = tick(l1.subarray(0, 40), first.cursor);
+    expect(cut.cursor.replaced).toBe(true);
+    return cut.cursor;
+  };
+
+  it('a cut below the cursor sets replaced; the detail may say so but nothing reads the detail', () => {
+    const row = replacedRow();
+    expect(row).toMatchObject({ replaced: true, intervalState: 'unmeasured', cursor: l1.length + l2.length });
+    expect(row.detail).toMatch(/^bucket-replaced: size 40 is below the cursor /);
+    // the marker is the flag, not the words: the same row with different words is still replaced
+    const reworded = { ...row, detail: 'something else entirely' };
+    const r = tick(cat(l1, l2), reworded);
+    expect(r.accepted).toEqual([]);
+    expect(r.cursor.replaced).toBe(true);
+  });
+
+  it('replaced, then a tick whose capability is unmeasured, then a regrowth past the old size: still nothing accepted, still replaced', () => {
+    const row = replacedRow();
+    const unmeasured = tick(cat(l1, l2), row, { capabilityPresent: null });
+    expect(unmeasured.cursor.replaced).toBe(true);
+    const regrown = cat(l1, l2, l1, l2, l1);
+    const later = tick(regrown, unmeasured.cursor);
+    expect(later.accepted).toEqual([]);
+    expect(later.interval).toBe('unmeasured');
+    expect(later.cursor).toMatchObject({ replaced: true, cursor: row.cursor });
+  });
+
+  const OTHER_GAPS: ReadonlyArray<readonly [string, Partial<DelegationBucketInput>, 'reconstructing' | undefined]> = [
+    ['a capability that is absent', { capabilityPresent: false }, undefined],
+    ['a capability that is unmeasured', { capabilityPresent: null }, undefined],
+    ['a recovery that has not finished', {}, 'reconstructing'],
+    ['a read that starts somewhere else', { cursor: 0, lastSize: 0, readStart: 0 }, undefined],
+    ['a bucket that is gone', { bucketPresent: false, bytes: new Uint8Array(0), size: 0 }, undefined],
+  ];
+  it.each(OTHER_GAPS)('%s: every other gap keeps the flag, and the replaced detail is what is answered', (_label, over, phase) => {
+    const row = replacedRow();
+    const r = ingestDelegationBucket(readOf(cat(l1, l2), row, over), stateWith([row], phase ?? 'ready'));
+    expect(r.accepted).toEqual([]);
+    expect(r.interval).toBe('unmeasured');
+    expect(r.cursor.replaced).toBe(true);
+    expect(r.detail).toBe(row.detail);
+  });
+
+  it('an unreadable-read result keeps the flag too (gap() preserves it)', () => {
+    const row = replacedRow();
+    const r = unreadableDelegationBucketResult({ sessionId: OWNER, parentIncarnation: INC, bucket: BUCKET }, stateWith([row]), { reason: 'range-unreadable', detail: 'x' });
+    expect(r.cursor).toMatchObject({ replaced: true, cursor: row.cursor, anchor: row.anchor });
+  });
+
+  it('the flag survives the adapter and the checkpoint: it is applied, and a restart reads it back', async () => {
+    const h = await openDurability();
+    const durable = delegationBucketDurabilityOf(h.dur, h.now);
+    const first = tick(cat(l1, l2));
+    await durable.applyBucketResult(first);
+    const cut = tick(l1.subarray(0, 40), first.cursor);
+    await durable.applyBucketResult(cut);
+    expect(h.dur.state().checkpoint.bucketCursors[0]).toMatchObject({ replaced: true });
+    await h.dur.close();
+    const reopened = await openDurability({ dir: h.dir });
+    expect(reopened.dur.state().checkpoint.bucketCursors[0]).toMatchObject({ replaced: true, anchor: first.cursor.anchor });
+  });
+});
+
+describe('the checkpoint codec reads the anchor and the flag with its closed reader (D-4647)', () => {
+  const row = (over: Partial<DelegationBucketCursor> = {}): DelegationBucketCursor => cursorRow(100, 100, { anchor: { start: 40, sha256: 'a'.repeat(64) }, ...over });
+  const cp = (...rows: DelegationBucketCursor[]) => ({ ...emptyDelegationCheckpoint(), bucketCursors: rows });
+  const roundTrip = (c: unknown): void => { decodeDelegationCheckpoint(new TextEncoder().encode(`${JSON.stringify(c)}\n`)); };
+  const refuses = (c: unknown): void => {
+    try { roundTrip(c); } catch (err) { expect((err as { code?: string }).code).toBe('bad-shape'); return; }
+    throw new Error('the codec accepted it');
+  };
+
+  it('a row with an anchor, with no anchor, and with the flag set round-trips', () => {
+    for (const r of [row(), row({ anchor: null }), row({ replaced: true }), row({ anchor: { start: 100, sha256: 'b'.repeat(64) } })]) {
+      const c = cp(r);
+      const decoded = decodeDelegationCheckpoint(encodeDelegationCheckpoint(c));
+      expect(decoded.bucketCursors).toEqual([r]);
+    }
+  });
+  it('an anchor that starts after the cursor is refused', () => { refuses(cp(row({ anchor: { start: 101, sha256: 'a'.repeat(64) } }))); });
+  it.each([
+    ['uppercase hex', 'A'.repeat(64)], ['too short', 'a'.repeat(63)], ['too long', 'a'.repeat(65)], ['not hex', 'g'.repeat(64)], ['a number', 7],
+  ])('an anchor whose sha256 is %s is refused', (_label, sha256) => { refuses(cp(row({ anchor: { start: 40, sha256: sha256 as string } }))); });
+  it.each([
+    ['a negative start', { start: -1, sha256: 'a'.repeat(64) }], ['a fractional start', { start: 1.5, sha256: 'a'.repeat(64) }],
+    ['an extra key', { start: 1, sha256: 'a'.repeat(64), extra: 1 }], ['a missing key', { start: 1 }], ['a string', 'x'],
+  ])('an anchor with %s is refused', (_label, anchor) => { refuses(cp(row({ anchor: anchor as never }))); });
+  it('a flag that is not a boolean, or is missing, or an anchor that is missing, is refused', () => {
+    refuses(cp(row({ replaced: 'yes' as never })));
+    const { replaced: _r, ...noFlag } = row();
+    refuses(cp(noFlag as never));
+    const { anchor: _a, ...noAnchor } = row();
+    refuses(cp(noAnchor as never));
+  });
+  it('the applier refuses a cursor with a bad anchor before it writes anything', async () => {
+    const h = await openDurability();
+    const durable = delegationBucketDurabilityOf(h.dur, h.now);
+    const bad = { ...tick(lineOf(common('SessionStart', { source: 'startup' }))), cursor: row({ anchor: { start: 101, sha256: 'a'.repeat(64) } }) };
+    await expect(durable.applyBucketResult(bad)).rejects.toMatchObject({ code: 'bad-shape' });
+    expect(journalLines(h.dir)).toEqual([]);
   });
 });
 
@@ -755,13 +1017,14 @@ describe('capability, transport and recovery: an unmeasured interval, never fabr
     const owner = '/fixture/delegation/spool/lane-a-demo';
     const listed = (...names: string[]): MeasuredDirectoryRead => ({ ok: true, entries: names });
     const req = (listing: MeasuredDirectoryRead, over: Record<string, unknown> = {}) => ({
-      ownerDir: owner, sessionId: OWNER, parentIncarnation: INC, bucket: BUCKET, cursor: 0, lastSize: 0, capabilityPresent: true as boolean | null, listing, ...over,
+      ownerDir: owner, sessionId: OWNER, parentIncarnation: INC, bucket: BUCKET, cursor: 0, lastSize: 0, anchorStart: null as number | null, capabilityPresent: true as boolean | null, listing, ...over,
     });
     /** An io whose byte-range read answers `answer` and remembers what it was asked. */
-    const ioAnswering = (answer: MeasuredByteRangeRead) => {
+    const ioAnswering = (answer: MeasuredByteRangeRead, stat: MeasuredStat = { ok: false, reason: 'unreadable' }) => {
       const calls: Array<{ path: string; offset: number; maxBytes: number }> = [];
-      const io: Pick<FleetIO, 'readFileFromBytesMeasured'> = {
+      const io: Pick<FleetIO, 'readFileFromBytesMeasured' | 'statMeasured'> = {
         readFileFromBytesMeasured: async (p, offset, maxBytes) => { calls.push({ path: p, offset, maxBytes }); return answer; },
+        statMeasured: async (): Promise<MeasuredStat> => stat,
       };
       return { io, calls };
     };
@@ -806,9 +1069,46 @@ describe('capability, transport and recovery: an unmeasured interval, never fabr
       expect(read).toEqual({ ok: true, input: inputOf(new Uint8Array(0), { size: 0, bucketPresent: false }) });
     });
 
-    it('a bucket that vanished between the listing and the read (ENOENT) is absent; any other read failure is not', async () => {
-      const gone = await readDelegationBucket(ioAnswering({ ok: false, reason: 'absent' }).io, req(listed(`${BUCKET}.spool`)));
-      expect(gone).toEqual({ ok: true, input: inputOf(new Uint8Array(0), { size: 0, bucketPresent: false }) });
+    it('a bucket the listing NAMED that then answers ENOENT before it was ever fully read is a gap, never a measured empty hour (I3)', async () => {
+      const io = ioAnswering({ ok: false, reason: 'absent' }).io;
+      expect(await readDelegationBucket(io, req(listed(`${BUCKET}.spool`)))).toMatchObject({ ok: false, reason: 'bucket-vanished-unread' });
+      // and with a durable row that had read only part of it
+      expect(await readDelegationBucket(io, req(listed(`${BUCKET}.spool`), { cursor: 40, lastSize: 80, anchorStart: 0 }))).toMatchObject({ ok: false, reason: 'bucket-vanished-unread' });
+      // a row that is at zero is not proof of a fully read bucket either
+      expect(await readDelegationBucket(io, req(listed(`${BUCKET}.spool`), { cursor: 0, lastSize: 0 }))).toMatchObject({ ok: false, reason: 'bucket-vanished-unread' });
+    });
+
+    it('a listed bucket that is gone after the durable row proves it was read to its end is the hook\'s own prune: absent, and healthy', async () => {
+      const read = await readDelegationBucket(ioAnswering({ ok: false, reason: 'absent' }).io, req(listed(`${BUCKET}.spool`), { cursor: 80, lastSize: 80, anchorStart: 20 }));
+      expect(read).toEqual({ ok: true, input: inputOf(new Uint8Array(0), { cursor: 80, lastSize: 80, readStart: 20, size: 0, bucketPresent: false }) });
+    });
+
+    it('the read starts at the ANCHOR, not the cursor, and the input says where its bytes begin', async () => {
+      const { io, calls } = ioAnswering({ ok: true, bytes: l1, size: 400 });
+      const read = await readDelegationBucket(io, req(listed(`${BUCKET}.spool`), { cursor: 300, lastSize: 300, anchorStart: 300 - l1.length }));
+      expect(calls).toEqual([{ path: `${owner}/${BUCKET}.spool`, offset: 300 - l1.length, maxBytes: READ_FROM_MAX_BYTES }]);
+      expect(read).toMatchObject({ ok: true, input: { cursor: 300, lastSize: 300, readStart: 300 - l1.length, size: 400, bucketPresent: true } });
+    });
+
+    it('an anchor after the cursor is not a request', async () => {
+      const { io, calls } = ioAnswering({ ok: true, bytes: l1, size: 400 });
+      expect(await readDelegationBucket(io, req(listed(`${BUCKET}.spool`), { cursor: 300, lastSize: 300, anchorStart: 301 }))).toMatchObject({ ok: false, reason: 'input-invalid' });
+      expect(calls).toEqual([]);
+    });
+
+    it('a range the io calls unreadable is told from a CUT: when the file now measures shorter than the cursor, the input says so and ingestion classifies a replacement (I2)', async () => {
+      const io = ioAnswering({ ok: false, reason: 'unreadable' }, { ok: true, mtimeMs: 1, size: 90 }).io;
+      const read = await readDelegationBucket(io, req(listed(`${BUCKET}.spool`), { cursor: 300, lastSize: 300, anchorStart: 250 }));
+      expect(read).toEqual({ ok: true, input: inputOf(new Uint8Array(0), { cursor: 300, lastSize: 300, readStart: 250, size: 90 }) });
+      const row = cursorRow(300, 300, { anchor: { start: 250, sha256: 'a'.repeat(64) } });
+      if (read.ok) expect(ingestDelegationBucket(read.input, stateWith([row]))).toMatchObject({ interval: 'unmeasured', cursor: { replaced: true } });
+    });
+
+    it('a stat that fails, or that does not show the file shorter than the cursor, leaves the range unreadable', async () => {
+      for (const stat of [{ ok: false, reason: 'unreadable' }, { ok: false, reason: 'absent' }, { ok: true, mtimeMs: 1, size: 300 }, { ok: true, mtimeMs: 1, size: 9999 }] as const) {
+        const io = ioAnswering({ ok: false, reason: 'unreadable' }, stat).io;
+        expect(await readDelegationBucket(io, req(listed(`${BUCKET}.spool`), { cursor: 300, lastSize: 300, anchorStart: 250 })), JSON.stringify(stat)).toMatchObject({ ok: false, reason: 'range-unreadable' });
+      }
     });
 
     it('a request that is not a bucket (a bucket that is not ten digits, an owner that would leave its directory) reads nothing', async () => {
@@ -886,6 +1186,7 @@ describe('the adapter: ingestAndApplyDelegationBucket', () => {
     expect(state.checkpoint.bucketCursors).toEqual([{
       sessionId: OWNER, parentIncarnation: INC, bucket: BUCKET, cursor: l1.length + l2.length, lastSize: l1.length + l2.length,
       lastCompleteAt: '2026-10-14T12:00:05.000Z', intervalState: 'measured', detail: null,
+      anchor: { start: l1.length, sha256: sha(l2.subarray(0, l2.length - 1)) }, replaced: false,
     }]);
     expect(state.checkpoint.observationIntervals).toEqual([{ sessionId: OWNER, parentIncarnation: INC, utcHour: HOUR, state: 'measured', detail: null, recordedAt: '2026-10-14T12:30:00.000Z' }]);
     expect(state.checkpoint.appliedJournalSequence).toBe(2);
@@ -903,10 +1204,10 @@ describe('the adapter: ingestAndApplyDelegationBucket', () => {
   it('an unmeasured hour stays unmeasured when a later read of it is clean (the checkpoint\'s sticky merge), while the cursor row tells the latest read', async () => {
     const h = await openDurability();
     const durable = delegationBucketDurabilityOf(h.dur, h.now);
-    let state = await ingestAndApplyDelegationBucket(inputOf(enc.encode('garbage\n')), h.dur.state(), durable);
+    const garbage = enc.encode('garbage\n');
+    let state = await ingestAndApplyDelegationBucket(inputOf(garbage), h.dur.state(), durable);
     h.clock.ms += 60_000;
-    const row = state.checkpoint.bucketCursors[0]!;
-    state = await ingestAndApplyDelegationBucket(inputOf(l1, { cursor: row.cursor, lastSize: row.lastSize, size: row.cursor + l1.length }), state, durable);
+    state = await ingestAndApplyDelegationBucket(readOf(cat(garbage, l1), state.checkpoint.bucketCursors[0]), state, durable);
     expect(state.checkpoint.observationIntervals.map((i) => i.state)).toEqual(['unmeasured']);
     expect(state.checkpoint.bucketCursors[0]).toMatchObject({ intervalState: 'measured', detail: null });
   });
@@ -965,6 +1266,51 @@ describe('the adapter: ingestAndApplyDelegationBucket', () => {
     expect(h.dur.state().checkpoint.bucketCursors[0]!.cursor).toBe(l1.length);
   });
 
+  it('the anchor is copied too: editing the result\'s anchor afterwards does not reach the applier\'s row', async () => {
+    const h = await openDurability();
+    const result = ingest(l1);
+    await delegationBucketDurabilityOf(h.dur, h.now).applyBucketResult(result);
+    const before = structuredClone(h.dur.state().checkpoint.bucketCursors[0]!.anchor);
+    expect(before).toEqual({ start: 0, sha256: sha(l1.subarray(0, l1.length - 1)) });
+    (result.cursor.anchor as { start: number }).start = 12345;
+    expect(h.dur.state().checkpoint.bucketCursors[0]!.anchor).toEqual(before);
+  });
+
+  it('an input-invalid result is never applied: the adapter rejects it with a NAMED reason before it builds anything, not with a RangeError (M5)', async () => {
+    const h = await openDurability();
+    let applied = 0;
+    const counting = { applyAccepted: async (b: Parameters<DelegationDurability['applyAccepted']>[0]) => { applied += 1; return h.dur.applyAccepted(b); } };
+    const durable = delegationBucketDurabilityOf(counting, h.now);
+    for (const over of [{ bucket: '2026101424' }, { bucket: 'nope' }, { sessionId: '' }, { parentIncarnation: '' }] as const) {
+      const result = ingest(l1, over);
+      expect(result.detail, JSON.stringify(over)).toMatch(/^input-invalid: /);
+      const err: unknown = await durable.applyBucketResult(result).then(() => null, (e: unknown) => e);
+      expect(err, JSON.stringify(over)).toBeInstanceOf(DelegationIngestError);
+      expect(err, JSON.stringify(over)).not.toBeInstanceOf(RangeError);
+      expect(err).toMatchObject({ code: 'input-invalid' });
+    }
+    expect(applied).toBe(0);
+    expect(journalLines(h.dir)).toEqual([]);
+    expect(h.dur.state().checkpoint.bucketCursors).toEqual([]);
+  });
+
+  it('a change that KEEPS an alias to what it returned cannot edit the applier afterwards: the adopted rows are copies (M4)', async () => {
+    const h = await openDurability();
+    const interval: { sessionId: string; parentIncarnation: string; utcHour: string; state: 'measured'; detail: string | null; recordedAt: string } = { sessionId: OWNER, parentIncarnation: INC, utcHour: HOUR, state: 'measured', detail: null, recordedAt: '2026-10-14T12:31:00.000Z' };
+    const kept: { cp: ReturnType<DelegationCheckpointChange> | null } = { cp: null };
+    await h.dur.applyCheckpointChange((cp) => { const next = { ...cp, observationIntervals: [interval] }; kept.cp = next; return next; });
+    const before = JSON.stringify(h.dur.state().checkpoint);
+    expect(h.dur.state().checkpoint.observationIntervals).toHaveLength(1);
+    // the change keeps `next` (and the row inside it) and edits them after the application
+    const aliased = kept.cp!.observationIntervals[0] as unknown as { state: string; detail: string | null };
+    aliased.state = 'unmeasured';
+    aliased.detail = 'edited after the fact';
+    interval.detail = 'edited through the original too';
+    expect(JSON.stringify(h.dur.state().checkpoint)).toBe(before);
+    await h.dur.applyCheckpointChange((cp) => ({ ...cp, observationIntervals: [...cp.observationIntervals] }));
+    expect(h.dur.state().checkpoint.observationIntervals[0]).toMatchObject({ state: 'measured', detail: null });
+  });
+
   it('delegationBucketUtcHour is the hour\'s canonical start instant, and refuses a bucket that is not an hour', () => {
     expect(delegationBucketUtcHour('2026101412')).toBe(HOUR);
     expect(delegationBucketUtcHour('2026123123')).toBe('2026-12-31T23:00:00.000Z');
@@ -990,7 +1336,7 @@ describe('end to end: a fixture spool, the local byte reader, the applier', () =
       const row = h.dur.state().checkpoint.bucketCursors.find((r) => r.bucket === BUCKET);
       const read = await readDelegationBucket(localIO, {
         ownerDir, sessionId: OWNER, parentIncarnation: INC, bucket: BUCKET, cursor: row?.cursor ?? 0, lastSize: row?.lastSize ?? 0,
-        capabilityPresent: true, listing: await localIO.readdirMeasured(ownerDir),
+        anchorStart: row?.anchor?.start ?? null, capabilityPresent: true, listing: await localIO.readdirMeasured(ownerDir),
       });
       if (!read.ok) return ingestAndApplyDelegationBucket(inputOf(new Uint8Array(0)), h.dur.state(), { applyBucketResult: async () => h.dur.state() });
       return ingestAndApplyDelegationBucket(read.input, h.dur.state(), durable);
@@ -1026,7 +1372,7 @@ describe('end to end: a fixture spool, the local byte reader, the applier', () =
       const row = h.dur.state().checkpoint.bucketCursors[0];
       const read = await readDelegationBucket(localIO, {
         ownerDir, sessionId: OWNER, parentIncarnation: INC, bucket: BUCKET, cursor: row?.cursor ?? 0, lastSize: row?.lastSize ?? 0,
-        capabilityPresent: true, listing: await localIO.readdirMeasured(ownerDir),
+        anchorStart: row?.anchor?.start ?? null, capabilityPresent: true, listing: await localIO.readdirMeasured(ownerDir),
       });
       if (read.ok) return ingestAndApplyDelegationBucket(read.input, h.dur.state(), durable);
       return durable.applyBucketResult(unreadableDelegationBucketResult({ sessionId: OWNER, parentIncarnation: INC, bucket: BUCKET }, h.dur.state(), read));
@@ -1037,7 +1383,12 @@ describe('end to end: a fixture spool, the local byte reader, the applier', () =
     await run();
     expect(journalLines(h.dir)).toHaveLength(2);
     expect(h.dur.state().checkpoint.observationIntervals.map((i) => i.state)).toEqual(['unmeasured']);
-    expect(h.dur.state().checkpoint.bucketCursors[0]).toMatchObject({ cursor: a.length * 2, intervalState: 'unmeasured' });
+    expect(h.dur.state().checkpoint.bucketCursors[0]).toMatchObject({ cursor: a.length * 2, intervalState: 'unmeasured', replaced: true });
+    expect(h.dur.state().checkpoint.bucketCursors[0]!.detail).toMatch(/^bucket-replaced: /);
+    writeFileSync(file, cat(a, a, a, a));          // regrown past the old size: still the old bucket's coordinates, still nothing accepted
+    await run();
+    expect(journalLines(h.dir)).toHaveLength(2);
+    expect(h.dur.state().checkpoint.bucketCursors[0]).toMatchObject({ cursor: a.length * 2, intervalState: 'unmeasured', replaced: true });
   });
 });
 
@@ -1074,6 +1425,25 @@ describe('R27: state(), the outcomes and a checkpoint change\'s result are deep-
     void outcome.state.checkpoint.sessions.map((s) => s.sessionId);
   };
   it('the compile-only rows exist and are never run', () => { expect(typeof compileOnly).toBe('function'); });
+
+  // M3: the type is bounded, not just JSON-shaped. A function member stays a function, a Map is a ReadonlyMap and a Set a ReadonlySet.
+  type Same<A, B> = (<T>() => T extends A ? 1 : 2) extends (<T>() => T extends B ? 1 : 2) ? true : false;
+  const boundedPins = (view: DeepReadonly<{ call: (n: number) => string; map: Map<string, { a: number }>; set: Set<{ a: number }>; list: Array<{ a: number }> }>): void => {
+    const callable: string = view.call(1);                       // a function member keeps its call signature
+    const sameFn: Same<DeepReadonly<(n: number) => string>, (n: number) => string> = true;
+    const sameMap: Same<DeepReadonly<Map<string, { a: number }>>, ReadonlyMap<string, { readonly a: number }>> = true;
+    const sameSet: Same<DeepReadonly<Set<{ a: number }>>, ReadonlySet<{ readonly a: number }>> = true;
+    // @ts-expect-error a Map is read-only through the view
+    view.map.set('k', { a: 1 });
+    // @ts-expect-error and so is a row inside it
+    view.map.get('k')!.a = 2;
+    // @ts-expect-error a Set is read-only through the view
+    view.set.add({ a: 1 });
+    // @ts-expect-error a list too
+    view.list.push({ a: 1 });
+    void [callable, sameFn, sameMap, sameSet];
+  };
+  it('the bounded-type pins exist and are never run', () => { expect(typeof boundedPins).toBe('function'); });
 
   it('an adapter that receives a state and bytes mutates neither (a deep-frozen state and a copied byte array come back unchanged)', () => {
     const deepFreeze = <T>(v: T): T => {

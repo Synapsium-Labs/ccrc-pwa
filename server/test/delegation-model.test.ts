@@ -762,7 +762,7 @@ describe('the projection view — what a checkpoint looks like once projected an
     ],
     activities: [activity({ activityId: 'b'.repeat(64), upstreamId: 'agent-2' }), activity()],
     leases: [lease({ leaseId: 'z' }), lease({ leaseId: 'a' })],
-    bucketCursors: [{ sessionId: 's', parentIncarnation: 'g1', bucket: 'b', cursor: 1, lastSize: 1, lastCompleteAt: null, intervalState: 'measured', detail: null }],
+    bucketCursors: [{ sessionId: 's', parentIncarnation: 'g1', bucket: 'b', cursor: 1, lastSize: 1, lastCompleteAt: null, intervalState: 'measured', detail: null, anchor: null, replaced: false }],
     observationIntervals: [{ sessionId: 's', parentIncarnation: 'g1', utcHour: T0, state: 'measured', detail: null, recordedAt: T0 }],
     pruningHolds: [{ journalId: J, reason: 'checkpoint-anchor', ownerId: 'x' }],
   });

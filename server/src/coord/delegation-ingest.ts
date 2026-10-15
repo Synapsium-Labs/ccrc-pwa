@@ -20,8 +20,14 @@
 // THE CURSOR advances only to the end of the last COMPLETE line the read contained, and only on a read that was itself measured
 // (not on a capability, recovery, disagreement, replacement or transport gap). The durable cursor row is the authority: a read that
 // does not start at the accepted coordinate, or whose last-seen size is not the accepted one, cannot be proved to be the same bytes,
-// so it is unmeasured and the durable row survives untouched. A bucket that shrank is a REPLACEMENT and stays one: no bytes are
-// accepted at an old coordinate again, however the file regrows.
+// so it is unmeasured and the durable row survives untouched.
+//
+// THE ANCHOR (D-4647). The cursor row also holds the start offset and SHA-256 of the last complete line it stepped over, and every
+// read starts there: it re-reads that one line and proves it is still exactly one complete line with the same bytes. That is how
+// "bytes changed before an accepted offset" is detected without re-reading the bucket: an in-place rewrite, or a cut and a regrow past
+// the old size, fails the anchor. It proves the LAST line only: a change to an earlier line that keeps every later byte in place
+// is outside what one anchor shows. A bucket that fails it, or that shrank, is a REPLACEMENT and stays one (the row's `replaced`
+// flag, R33): no bytes are accepted at an old coordinate again, however the file regrows, and no other gap clears the flag.
 import { createHash } from 'node:crypto';
 import { READ_FROM_MAX_BYTES } from '../../../shared/agent-protocol.js';
 import {
@@ -333,7 +339,12 @@ export function parseDelegationSpoolLine(
 
 // ── the bucket ─────────────────────────────────────────────────────────────────────────────────────────────────────────
 
-/** One read of one owner's bucket, as the plan fixes it. `cursor` and `lastSize` are the DURABLE row's; `bytes` start at `cursor`. */
+/**
+ * One read of one owner's bucket. `cursor` and `lastSize` are the DURABLE row's. `bytes` begin at `readStart`, which is the row's
+ * ANCHOR start when it has an anchor (D-4647: the read re-reads the last line it already stepped over, to prove the bytes before
+ * the cursor are unchanged) and the cursor otherwise (zero, for a bucket with no row). `readStart` is an addition to the plan's
+ * fixed shape, so that a caller that reads from the wrong place is a gap and never a false replacement.
+ */
 export interface DelegationBucketInput {
   sessionId: string;
   parentIncarnation: string;
@@ -342,6 +353,7 @@ export interface DelegationBucketInput {
   lastSize: number;
   size: number;
   bytes: Uint8Array;
+  readStart: number;
   bucketPresent: boolean;
   capabilityPresent: boolean | null;
 }
@@ -367,7 +379,8 @@ export interface DelegationBucketResult {
   detail: string | null;
 }
 
-/** The prefix of a replaced bucket's detail. A bucket whose durable row carries it stays replaced. */
+/** What a replaced bucket's detail begins with. Words for a reader of the checkpoint ONLY: the marker nothing reads back is the
+ *  structured `replaced` flag on the cursor row (R33). */
 export const DELEGATION_BUCKET_REPLACED = 'bucket-replaced';
 
 const BUCKET_NAME = /^\d{10}$/;
@@ -382,39 +395,54 @@ export function delegationBucketUtcHour(bucket: string): string {
 
 const isOffset = (n: unknown): n is number => typeof n === 'number' && Number.isSafeInteger(n) && n >= 0;
 
+/** What is wrong with a bucket's identity (owner, incarnation, bucket name), or null. The one statement, shared by the input check
+ *  and by the adapter's refusal to apply a result whose row carries a bad identity. */
+function identityDefect(id: { sessionId: unknown; parentIncarnation: unknown; bucket: unknown }): string | null {
+  if (typeof id.sessionId !== 'string' || id.sessionId === '' || Buffer.byteLength(id.sessionId, 'utf8') > B.ownerIdBytes) return 'sessionId is not an owner';
+  if (typeof id.parentIncarnation !== 'string' || id.parentIncarnation === '') return 'parentIncarnation is empty';
+  if (typeof id.bucket !== 'string') return 'bucket is not a YYYYMMDDHH hour';
+  try { delegationBucketUtcHour(id.bucket); } catch { return 'bucket is not a YYYYMMDDHH hour'; }
+  return null;
+}
+
 /** The invalid parts of an input, named, or null when it is a bucket read. */
 function inputDefect(input: DelegationBucketInput): string | null {
-  if (typeof input.sessionId !== 'string' || input.sessionId === '' || Buffer.byteLength(input.sessionId, 'utf8') > B.ownerIdBytes) return 'sessionId is not an owner';
-  if (typeof input.parentIncarnation !== 'string' || input.parentIncarnation === '') return 'parentIncarnation is empty';
-  try { delegationBucketUtcHour(input.bucket); } catch { return 'bucket is not a YYYYMMDDHH hour'; }
-  for (const k of ['cursor', 'lastSize', 'size'] as const) if (!isOffset(input[k])) return `${k} is not a byte offset`;
+  const identity = identityDefect(input);
+  if (identity !== null) return identity;
+  for (const k of ['cursor', 'lastSize', 'size', 'readStart'] as const) if (!isOffset(input[k])) return `${k} is not a byte offset`;
   if (!(input.bytes instanceof Uint8Array)) return 'bytes is not a byte array';
   return null;
 }
 
+/** The durable row for a bucket as a COPY (the anchor object included), or undefined. */
 const durableRow = (state: DeepReadonly<DelegationRecoveryState>, id: { sessionId: string; parentIncarnation: string; bucket: string }): DelegationBucketCursor | undefined => {
   const hit = state.checkpoint.bucketCursors.find((r) => r.sessionId === id.sessionId && r.parentIncarnation === id.parentIncarnation && r.bucket === id.bucket);
-  return hit === undefined ? undefined : { ...hit };
+  return hit === undefined ? undefined : { ...hit, anchor: hit.anchor === null ? null : { ...hit.anchor } };
 };
 
-/** A read that measured nothing about this hour: the durable cursor survives untouched (or a fresh row at zero), marked unmeasured. */
+const freshRow = (id: { sessionId: string; parentIncarnation: string; bucket: string }): DelegationBucketCursor =>
+  ({ ...id, cursor: 0, lastSize: 0, lastCompleteAt: null, intervalState: 'measured', detail: null, anchor: null, replaced: false });
+
+/** A read that measured nothing about this hour: the durable row survives untouched (or a fresh row at zero), marked unmeasured. A
+ *  gap NEVER clears `replaced` (R33): the flag is copied from the row, whatever else went wrong. */
 function gap(
   state: DeepReadonly<DelegationRecoveryState>,
   id: { sessionId: string; parentIncarnation: string; bucket: string },
   detail: string,
+  replaced = false,
 ): DelegationBucketResult {
-  const prior = durableRow(state, id);
-  const row: DelegationBucketCursor = prior ?? { ...id, cursor: 0, lastSize: 0, lastCompleteAt: null, intervalState: 'measured', detail: null };
-  return { state, accepted: [], cursor: { ...row, intervalState: 'unmeasured', detail }, interval: 'unmeasured', detail };
+  const row = durableRow(state, id) ?? freshRow(id);
+  return { state, accepted: [], cursor: { ...row, intervalState: 'unmeasured', detail, replaced: row.replaced || replaced }, interval: 'unmeasured', detail };
 }
 
-/** Why a bucket could not be read at all. The reader's and `unreadableDelegationBucketResult`'s shared vocabulary. */
+/** Why a bucket could not be read at all. The reader's and `unreadableDelegationBucketResult`'s shared vocabulary. Server-internal
+ *  detail words (R34), not wire words. */
 export const DELEGATION_BUCKET_UNREADABLE_REASONS = [
-  'capability-absent', 'capability-unmeasured', 'directory-absent', 'directory-unreadable', 'range-unreadable', 'input-invalid',
+  'capability-absent', 'capability-unmeasured', 'directory-absent', 'directory-unreadable', 'range-unreadable', 'bucket-vanished-unread', 'input-invalid',
 ] as const;
 export type DelegationBucketUnreadableReason = (typeof DELEGATION_BUCKET_UNREADABLE_REASONS)[number];
 
-/** The result for a bucket whose read could not be made: unmeasured, nothing accepted, the durable cursor kept. */
+/** The result for a bucket whose read could not be made: unmeasured, nothing accepted, the durable row kept (the replaced flag too). */
 export function unreadableDelegationBucketResult(
   id: { sessionId: string; parentIncarnation: string; bucket: string },
   state: DeepReadonly<DelegationRecoveryState>,
@@ -428,54 +456,77 @@ const refusalSummary = (counts: ReadonlyMap<DelegationLineRejection, number>, re
   `${refused} of ${complete} complete lines refused: ${[...counts].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)).map(([c, n]) => `${c}=${n}`).join(', ')}`;
 
 const LF = 0x0a;
+const sha256Hex = (bytes: Uint8Array): string => createHash('sha256').update(bytes).digest('hex');
 
 /**
  * Ingests one bucket read. PURE: no IO, no clock, nothing mutated (the state and the bytes are only read).
  *
  * The order of its decisions, each answering before the next is asked:
- *   1. an input that is not a bucket read, or a recovery that has not finished, or a capability that is not present: a gap;
- *   2. a read that does not start at the durable accepted coordinate (cursor or last-seen size disagree): a gap, the durable row kept;
- *   3. a bucket already marked replaced: a gap with the same detail, however it has grown since;
- *   4. an absent bucket: healthy when everything in it was read, a gap (a vanished unread suffix) when not;
- *   5. a bucket shorter than the cursor or the last-seen size: a replacement, a gap that stays;
- *   6. more bytes than the file has past the cursor: a transport inconsistency, a gap;
- *   7. otherwise frame the COMPLETE lines, accept the valid ones with their offsets and IDs, and step the cursor over every complete
- *      line (accepted or refused) and over nothing else. Any refused complete line, or a torn tail too long to ever be a line,
- *      makes the interval a gap. A torn tail that may still complete is reported in the detail and is not a gap.
+ *   1. an input that is not a bucket read: a gap (nothing identifies a row).
+ *   2. a durable row marked `replaced`: a gap with the replaced detail, however the file has grown since (R33; checked before
+ *      everything below, so no other gap can replace it);
+ *   3. a recovery that has not finished, or a capability that is not present: a gap;
+ *   4. a read that does not start at the durable coordinate (cursor, last-seen size, or the window's start): a gap, row kept;
+ *   5. an absent bucket: healthy when everything in it was read, a gap (a vanished unread suffix) when not;
+ *   6. a bucket shorter than the cursor or the last-seen size: a REPLACEMENT (sticky);
+ *   7. a row with a cursor and no anchor, or more bytes than the file has: a gap;
+ *   8. the anchor line (D-4647) re-read from the anchor start must still be exactly one complete line with the anchor's SHA-256,
+ *      or the bucket is REPLACED (sticky): this is how "changed bytes before an accepted offset" is detected;
+ *   9. otherwise frame the COMPLETE lines after the anchor line, accept the valid ones with their offsets and IDs, step the cursor
+ *      over every complete line (accepted or refused) and nothing else, and anchor the last one. Any refused complete line, or a
+ *      torn tail too long to ever be a line, makes the interval a gap. A torn tail that may still complete is reported in the
+ *      detail and is not a gap; neither is a read capped at the read bound (its unread remainder is named).
  */
 export function ingestDelegationBucket(input: DelegationBucketInput, state: DeepReadonly<DelegationRecoveryState>): DelegationBucketResult {
   const id = { sessionId: input.sessionId, parentIncarnation: input.parentIncarnation, bucket: input.bucket };
   const defect = inputDefect(input);
   if (defect !== null) return gap(state, id, `input-invalid: ${defect}`);
+
+  const prior = durableRow(state, id);
+  if (prior !== undefined && prior.replaced) return gap(state, id, prior.detail ?? `${DELEGATION_BUCKET_REPLACED}: this bucket was replaced`);
   if (state.phase !== 'ready') return gap(state, id, 'recovery-not-ready: the observation lane is reconstructing');
   if (input.capabilityPresent === false) return gap(state, id, 'capability-absent');
   if (input.capabilityPresent === null) return gap(state, id, 'capability-unmeasured');
 
-  const prior = durableRow(state, id);
-  const durable = prior ?? { cursor: 0, lastSize: 0 };
+  const durable = prior ?? freshRow(id);
+  const expectedStart = durable.anchor?.start ?? durable.cursor;
   if (input.cursor !== durable.cursor || input.lastSize !== durable.lastSize) {
     return gap(state, id, `cursor-disagrees-with-durable-state: the read starts at ${input.cursor} (last seen ${input.lastSize}), the accepted coordinate is ${durable.cursor} (last seen ${durable.lastSize})`);
   }
-  if (prior !== undefined && prior.intervalState === 'unmeasured' && prior.detail !== null && prior.detail.startsWith(DELEGATION_BUCKET_REPLACED)) {
-    return gap(state, id, prior.detail);
+  if (input.readStart !== expectedStart) {
+    return gap(state, id, `read-window-mismatch: the bytes begin at ${input.readStart}, the durable row needs them from ${expectedStart}`);
   }
-
-  const carried: DelegationBucketCursor = prior ?? { ...id, cursor: 0, lastSize: 0, lastCompleteAt: null, intervalState: 'measured', detail: null };
 
   if (!input.bucketPresent) {
     if (input.bytes.length > 0 || input.size !== 0) return gap(state, id, 'input-inconsistent: an absent bucket carries bytes or a size');
     if (input.cursor < input.lastSize) {
       return gap(state, id, `bucket-vanished-unread: the bucket is gone with ${input.lastSize - input.cursor} bytes after offset ${input.cursor} never read`);
     }
-    return { state, accepted: [], cursor: { ...carried, intervalState: 'measured', detail: null }, interval: 'measured', detail: null };
+    return { state, accepted: [], cursor: { ...durable, intervalState: 'measured', detail: null }, interval: 'measured', detail: null };
   }
 
   if (input.size < input.cursor || input.size < input.lastSize) {
     const below = input.size < input.cursor ? `the cursor ${input.cursor}` : `the last-seen size ${input.lastSize}`;
-    return gap(state, id, `${DELEGATION_BUCKET_REPLACED}: size ${input.size} is below ${below}`);
+    return gap(state, id, `${DELEGATION_BUCKET_REPLACED}: size ${input.size} is below ${below}`, true);
   }
-  if (input.bytes.length > input.size - input.cursor) {
-    return gap(state, id, `range-inconsistent: ${input.bytes.length} bytes read from ${input.cursor} of a file of ${input.size}`);
+  if (input.cursor > 0 && durable.anchor === null) {
+    return gap(state, id, `cursor-unanchored: the durable row stands at ${input.cursor} with no anchor line to verify, so the bytes before it cannot be proved`);
+  }
+  if (input.bytes.length > input.size - input.readStart) {
+    return gap(state, id, `range-inconsistent: ${input.bytes.length} bytes read from ${input.readStart} of a file of ${input.size}`);
+  }
+
+  // D-4647: the anchor line must read back exactly as it was stepped over: one complete line ending at the cursor, and the same bytes.
+  let lineStart = 0;
+  if (durable.anchor !== null) {
+    const anchorLength = input.cursor - durable.anchor.start;
+    const intact = anchorLength >= 1 && input.bytes.length >= anchorLength
+      && input.bytes[anchorLength - 1] === LF && input.bytes.indexOf(LF) === anchorLength - 1
+      && sha256Hex(input.bytes.subarray(0, anchorLength - 1)) === durable.anchor.sha256;
+    if (!intact) {
+      return gap(state, id, `${DELEGATION_BUCKET_REPLACED}: the last accepted line at offsets ${durable.anchor.start}..${input.cursor} no longer reads the same`, true);
+    }
+    lineStart = anchorLength;
   }
 
   // Frame complete lines. A line is the bytes up to an LF; what follows the last LF is a torn tail and is never consumed.
@@ -484,12 +535,12 @@ export function ingestDelegationBucket(input: DelegationBucketInput, state: Deep
   const refusals = new Map<DelegationLineRejection, number>();
   let refused = 0;
   let complete = 0;
-  let lineStart = 0;
-  let lastCompleteAt = carried.lastCompleteAt;
-  for (let at = input.bytes.indexOf(LF); at >= 0; at = input.bytes.indexOf(LF, lineStart)) {
+  let lastCompleteAt = durable.lastCompleteAt;
+  let anchor = durable.anchor;
+  for (let at = input.bytes.indexOf(LF, lineStart); at >= 0; at = input.bytes.indexOf(LF, lineStart)) {
     const rawLine = input.bytes.subarray(lineStart, at);
-    const startOffset = input.cursor + lineStart;
-    const endOffset = input.cursor + at + 1;
+    const startOffset = input.readStart + lineStart;
+    const endOffset = input.readStart + at + 1;
     complete += 1;
     const parsed = parseDelegationSpoolLine(rawLine, owner);
     if (parsed.ok) {
@@ -502,23 +553,28 @@ export function ingestDelegationBucket(input: DelegationBucketInput, state: Deep
       refused += 1;
       refusals.set(parsed.code, (refusals.get(parsed.code) ?? 0) + 1);
     }
+    anchor = { start: startOffset, sha256: sha256Hex(rawLine) };
     lineStart = at + 1;
   }
 
+  const framedTo = input.readStart + lineStart;
   const tail = input.bytes.length - lineStart;
+  const unread = input.size - (input.readStart + input.bytes.length);
   const problems: string[] = [];
   if (refused > 0) problems.push(refusalSummary(refusals, refused, complete));
   // The line bound counts the LF: a tail already at one byte short of the bound can only complete into a line that is too long.
   const tailTooLong = tail + 1 >= B.lineBytesBelow;
-  if (tailTooLong) problems.push(`torn-tail-over-long: ${tail} bytes after offset ${input.cursor + lineStart} with no LF can never be a line`);
-  const tornNote = tail > 0 && !tailTooLong ? `torn-tail: ${tail} unframed bytes after offset ${input.cursor + lineStart}` : null;
+  if (tailTooLong) problems.push(`torn-tail-over-long: ${tail} bytes after offset ${framedTo} with no LF can never be a line`);
+  // A window that ended before the file did leaves bytes UNREAD, not torn: the next tick continues from the anchor.
+  const note = unread > 0 ? `capped-read: ${unread} bytes beyond the read window are unread`
+    : tail > 0 && !tailTooLong ? `torn-tail: ${tail} unframed bytes after offset ${framedTo}` : null;
 
   const interval = problems.length > 0 ? 'unmeasured' : 'measured';
-  const detail = problems.length > 0 ? problems.join('; ') : tornNote;
+  const detail = problems.length > 0 ? problems.join('; ') : note;
   return {
     state,
     accepted: events,
-    cursor: { ...id, cursor: input.cursor + lineStart, lastSize: input.size, lastCompleteAt, intervalState: interval, detail },
+    cursor: { ...id, cursor: framedTo, lastSize: input.size, lastCompleteAt, intervalState: interval, detail, anchor, replaced: false },
     interval,
     detail,
   };
@@ -558,18 +614,30 @@ export function delegationBucketDurabilityOf(
 ): DelegationBucketDurability {
   return {
     async applyBucketResult(result) {
+      // A result whose row carries a bad identity (the `input-invalid` gap) is never applied: the row would be refused by the
+      // checkpoint's reader anyway, and a bare RangeError from the hour arithmetic would say nothing about why (M5).
+      const defect = identityDefect(result.cursor);
+      if (defect !== null) throw new DelegationIngestError('input-invalid', `the result is not for a bucket and was not applied: ${defect}`);
       const interval: DelegationObservationInterval = {
         sessionId: result.cursor.sessionId, parentIncarnation: result.cursor.parentIncarnation, utcHour: delegationBucketUtcHour(result.cursor.bucket),
         state: result.interval, detail: result.detail, recordedAt: formatDelegationInstant(now()),
       };
       const outcome = await durable.applyAccepted({
         accepted: result.accepted.map((a) => ({ event: a.entry.event })),
-        cursor: { ...result.cursor },
+        cursor: { ...result.cursor, anchor: result.cursor.anchor === null ? null : { ...result.cursor.anchor } },
         interval,
       });
       return outcome.state;
     },
   };
+}
+
+/** Why ingestion refused to hand something to the durable applier. `input-invalid` is the only code: a result that is not for a bucket. */
+export class DelegationIngestError extends Error {
+  constructor(readonly code: 'input-invalid', detail: string) {
+    super(`${code}: ${detail}`);
+    this.name = 'DelegationIngestError';
+  }
 }
 
 export interface DelegationBucketReadRequest {
@@ -581,6 +649,8 @@ export interface DelegationBucketReadRequest {
   /** The DURABLE row's coordinate (zero and zero for a bucket the checkpoint has no row for). */
   cursor: number;
   lastSize: number;
+  /** The durable row's anchor start, or null (D-4647). The read begins HERE, to re-read the line the cursor last stepped over. */
+  anchorStart: number | null;
   capabilityPresent: boolean | null;
   /** The owner directory's listing, read once per owner by the caller. A failed listing makes every bucket of the owner unmeasured. */
   listing: MeasuredDirectoryRead;
@@ -594,17 +664,25 @@ export type DelegationBucketRead =
 
 /**
  * Turns a directory listing and (when the bucket is in it) one bounded byte-range read into a bucket input, or says WHY it could not.
- * It reads through the existing `FleetIO` byte reader only, at the largest bound, from the durable cursor. Nothing is ever
- * fabricated: a missing capability reads nothing; a failed or absent owner directory, and any range the io cannot prove (an old peer
- * that answers decoded text only, malformed base64, a length that disagrees with the size, a size below the cursor, a refusal, a
- * timeout) is `ok: false`, never an empty bucket. Only a SUCCESSFUL listing without the bucket, or a read that proved ENOENT, is an
- * absent bucket.
+ * It reads through the existing `FleetIO` only (the byte reader, and `statMeasured` to tell a cut from a failure), at the largest
+ * bound, from the durable row's anchor (else its cursor). Nothing is ever fabricated:
+ *   - a missing capability reads nothing;
+ *   - a failed or absent owner directory is `ok: false`;
+ *   - a range the io cannot prove is `range-unreadable`, EXCEPT when the file now measures SHORTER than the cursor: the io answers
+ *     `unreadable` for an offset past the size, so the reader asks `statMeasured` and, on a measured size below the cursor, hands
+ *     ingestion that size with no bytes, which it classifies as a replacement (I2);
+ *   - a listed bucket that answers ENOENT is a gap (`bucket-vanished-unread`) unless the durable row proves it was read to its end
+ *     (the hook's own prune); only a SUCCESSFUL listing without the bucket is a measured absence (I3).
  */
-export async function readDelegationBucket(io: Pick<FleetIO, 'readFileFromBytesMeasured'>, req: DelegationBucketReadRequest): Promise<DelegationBucketRead> {
+export async function readDelegationBucket(
+  io: Pick<FleetIO, 'readFileFromBytesMeasured' | 'statMeasured'>,
+  req: DelegationBucketReadRequest,
+): Promise<DelegationBucketRead> {
   const bad = (reason: DelegationBucketUnreadableReason, detail: string): DelegationBucketRead => ({ ok: false, reason, detail });
   const owner = req.sessionId;
-  if (owner === '' || Buffer.byteLength(owner, 'utf8') > B.ownerIdBytes || /[/\0]/.test(owner) || !BUCKET_NAME.test(req.bucket) || !isOffset(req.cursor) || !isOffset(req.lastSize)) {
-    return bad('input-invalid', 'the request does not name an owner and an hourly bucket');
+  if (owner === '' || Buffer.byteLength(owner, 'utf8') > B.ownerIdBytes || /[/\0]/.test(owner) || !BUCKET_NAME.test(req.bucket) || !isOffset(req.cursor) || !isOffset(req.lastSize)
+      || (req.anchorStart !== null && (!isOffset(req.anchorStart) || req.anchorStart > req.cursor))) {
+    return bad('input-invalid', 'the request does not name an owner, an hourly bucket and a durable coordinate');
   }
   if (req.capabilityPresent === false) return bad('capability-absent', 'the fleet does not offer delegation events');
   if (req.capabilityPresent === null) return bad('capability-unmeasured', 'the delegation capability could not be measured');
@@ -613,22 +691,28 @@ export async function readDelegationBucket(io: Pick<FleetIO, 'readFileFromBytesM
       ? bad('directory-absent', 'the owner spool directory does not exist')
       : bad('directory-unreadable', 'the owner spool directory could not be listed');
   }
-  const absent: DelegationBucketRead = {
+  const readStart = req.anchorStart ?? req.cursor;
+  const inputOf = (over: Pick<DelegationBucketInput, 'size' | 'bytes' | 'bucketPresent'>): DelegationBucketRead => ({
     ok: true,
     input: {
       sessionId: req.sessionId, parentIncarnation: req.parentIncarnation, bucket: req.bucket, cursor: req.cursor, lastSize: req.lastSize,
-      size: 0, bytes: new Uint8Array(0), bucketPresent: false, capabilityPresent: true,
+      readStart, capabilityPresent: true, ...over,
     },
-  };
+  });
+  const absent = inputOf({ size: 0, bytes: new Uint8Array(0), bucketPresent: false });
   const name = `${req.bucket}.spool`;
   if (!req.listing.entries.includes(name)) return absent;
-  const range = await io.readFileFromBytesMeasured(`${req.ownerDir}/${name}`, req.cursor, READ_FROM_MAX_BYTES, req.timeoutMs, req.signal);
-  if (!range.ok) return range.reason === 'absent' ? absent : bad('range-unreadable', 'the byte range of the bucket could not be read');
-  return {
-    ok: true,
-    input: {
-      sessionId: req.sessionId, parentIncarnation: req.parentIncarnation, bucket: req.bucket, cursor: req.cursor, lastSize: req.lastSize,
-      size: range.size, bytes: range.bytes, bucketPresent: true, capabilityPresent: true,
-    },
-  };
+  const file = `${req.ownerDir}/${name}`;
+  const range = await io.readFileFromBytesMeasured(file, readStart, READ_FROM_MAX_BYTES, req.timeoutMs, req.signal);
+  if (range.ok) return inputOf({ size: range.size, bytes: range.bytes, bucketPresent: true });
+  if (range.reason === 'absent') {
+    // The listing NAMED this bucket, so it existed. Gone now is a healthy prune only if everything in it was already read.
+    return req.cursor === req.lastSize && req.cursor > 0
+      ? absent
+      : bad('bucket-vanished-unread', 'the bucket was listed and is gone before it was fully read');
+  }
+  // Unreadable. An offset past the end of the file is what the io calls unreadable for a CUT, so measure the size before calling it a failure.
+  const stat = await io.statMeasured(file);
+  if (stat.ok && stat.size < req.cursor) return inputOf({ size: stat.size, bytes: new Uint8Array(0), bucketPresent: true });
+  return bad('range-unreadable', 'the byte range of the bucket could not be read');
 }

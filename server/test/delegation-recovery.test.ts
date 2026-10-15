@@ -1035,7 +1035,7 @@ function harness(opts: { dir?: string; store?: CoordStore } = {}): Harness {
 
 const batch = (events: readonly DelegationEventEnvelopeV1[], extra: { cursor?: Parameters<DelegationDurability['applyAccepted']>[0]['cursor']; interval?: Parameters<DelegationDurability['applyAccepted']>[0]['interval'] } = {}) =>
   ({ accepted: events.map((event) => ({ event })), cursor: extra.cursor ?? null, interval: extra.interval ?? null });
-const cursorFor = (bucket: string, cursor: number) => ({ sessionId: PARENT, parentIncarnation: INC, bucket, cursor, lastSize: cursor, lastCompleteAt: T(9), intervalState: 'measured' as const, detail: null });
+const cursorFor = (bucket: string, cursor: number) => ({ sessionId: PARENT, parentIncarnation: INC, bucket, cursor, lastSize: cursor, lastCompleteAt: T(9), intervalState: 'measured' as const, detail: null, anchor: cursor > 0 ? { start: 0, sha256: 'a'.repeat(64) } : null, replaced: false });
 const intervalFor = (utcHour: string, state: 'measured' | 'unmeasured', recordedAt: string) => ({ sessionId: PARENT, parentIncarnation: INC, utcHour, state, detail: null, recordedAt });
 const readDisk = (dir: string): { journal: Buffer | null; checkpoint: Buffer | null } => ({
   journal: existsSync(path.join(dir, DELEGATION_JOURNAL_FILE)) ? readFileSync(path.join(dir, DELEGATION_JOURNAL_FILE)) : null,

@@ -22,6 +22,7 @@ import path from 'node:path';
 import { mkTmp } from './tmpHelpers.js';
 import { makeCcdHarness, WIDE_PANE_IF_UP, type CcdHarness } from './ccdWsHelpers.js';
 import { DELEGATION_SPOOL_BOUNDS, type DelegationEventKind } from '../../shared/api.js';
+import { parseDelegationSpoolLine } from '../src/coord/delegation-ingest.js';
 
 const HOOK = path.resolve(__dirname, '../../ccd/session-hook.sh');
 const FIXTURES = path.resolve(__dirname, 'fixtures/delegation');
@@ -187,6 +188,8 @@ const emitted = (payload: object | string, env: Record<string, string> = {}): an
     expect(bytes(raw) + 1, `a line plus its LF is under ${B.lineBytesBelow} bytes`).toBeLessThan(B.lineBytesBelow);
     expect(() => new TextDecoder('utf-8', { fatal: true }).decode(Buffer.from(raw, 'utf8')), 'strict UTF-8').not.toThrow();
     expect(validate(JSON.parse(raw)), raw.slice(0, 300)).toEqual([]);
+    // C5: the server's own parser accepts every line the real hook wrote (a drift would make a whole owner's hours unmeasured)
+    expect(parseDelegationSpoolLine(Buffer.from(raw, 'utf8'), { sessionId: OWNER, parentIncarnation: expectGen }).ok, `the ingest parser refused: ${raw.slice(0, 300)}`).toBe(true);
   }
   return added.map((l) => JSON.parse(l));
 };

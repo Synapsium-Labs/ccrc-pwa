@@ -172,6 +172,16 @@ export interface DelegationEventRow {
  *  for the two checkpoint-only members that carry it. */
 export type DelegationIntervalState = 'measured' | 'unmeasured';
 
+/**
+ * The last complete line a bucket's cursor stepped over (accepted or refused), so the next read can prove the bytes BEFORE the
+ * cursor are the bytes already read (D-4647). `start` is that line's first byte offset, so the line ends, LF included, exactly at
+ * the cursor; `sha256` is the lowercase hex SHA-256 of the line WITHOUT its LF (the same bytes the event ID hashes).
+ */
+export interface DelegationBucketAnchor {
+  start: number;
+  sha256: string;
+}
+
 export interface DelegationBucketCursor {
   sessionId: string;
   parentIncarnation: string;
@@ -181,6 +191,12 @@ export interface DelegationBucketCursor {
   lastCompleteAt: string | null;
   intervalState: DelegationIntervalState;
   detail: string | null;
+  /** D-4647: null until the bucket's first complete line. Every later read starts here (not at `cursor`) and must find this line
+   *  unchanged, or the bucket is replaced. */
+  anchor: DelegationBucketAnchor | null;
+  /** D-4647 (R33): once true it never returns to false for this bucket coordinate. A replaced bucket accepts nothing again, however
+   *  it regrows: its bytes can no longer be told from bytes already read. */
+  replaced: boolean;
 }
 
 export interface DelegationObservationInterval {
@@ -236,7 +252,10 @@ export interface DelegationInsertEventsResult {
  * on to a function that takes the plain type still compiles; what the view forbids is the write.)
  */
 export type DeepReadonly<T> =
-  T extends readonly (infer U)[] ? readonly DeepReadonly<U>[]
+  T extends (...args: never[]) => unknown ? T                                           // a function keeps its call signature
+  : T extends ReadonlyMap<infer K, infer V> ? ReadonlyMap<DeepReadonly<K>, DeepReadonly<V>>
+  : T extends ReadonlySet<infer U> ? ReadonlySet<DeepReadonly<U>>
+  : T extends readonly (infer U)[] ? readonly DeepReadonly<U>[]
   : T extends object ? { readonly [K in keyof T]: DeepReadonly<T[K]> }
   : T;
 

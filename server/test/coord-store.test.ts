@@ -908,7 +908,7 @@ describe('CoordStore: the delegation projection (delegation broker wave 3, Task 
         lin(6, { parentId: 'lane-b-demo', leaseId: leases[2]!.leaseId, openedAt: leases[2]!.firstObservedAt }),
       ],
       bucketCursors: [{ sessionId: 'lane-a-demo', parentIncarnation: 'g1', bucket: '2026-10-14T00', cursor: 10, lastSize: 10,
-        lastCompleteAt: at(2), intervalState: 'measured', detail: null }],
+        lastCompleteAt: at(2), intervalState: 'measured', detail: null, anchor: null, replaced: false }],
       observationIntervals: [{ sessionId: 'lane-a-demo', parentIncarnation: 'g1', utcHour: at(0), state: 'measured', detail: null, recordedAt: at(1) }],
       pruningHolds: [{ journalId: jid(1), reason: 'identity-candidate', ownerId: 'x' }],
     };

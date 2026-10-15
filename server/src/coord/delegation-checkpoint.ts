@@ -160,6 +160,11 @@ class Fields {
   instN(k: string): string | null { return this.o[k] === null ? null : this.inst(k); }
   hex(k: string): string { const v = this.o[k]; return isLowerHex64(v) ? v : this.bad(k, 'is not a lowercase 64-hex SHA-256'); }
   hexN(k: string): string | null { return this.o[k] === null ? null : this.hex(k); }
+  /** A nested closed object, or null: exactly its keys, read with the same typed accessors. */
+  objectN(k: string, keys: readonly string[]): Fields | null {
+    const v = this.o[k];
+    return v === null ? null : Fields.of(v, `${this.what}.${k}`, keys);
+  }
   member<T extends string>(k: string, list: readonly T[]): T {
     const v = this.o[k];
     return isMember(list, v) ? v : this.bad(k, `is not one of ${list.join(', ')}`);
@@ -253,10 +258,16 @@ const readLineage = (v: unknown): DelegationLineageRow => {
 };
 
 const readCursor = (v: unknown): DelegationBucketCursor => {
-  const f = Fields.of(v, 'bucketCursor', ['sessionId', 'parentIncarnation', 'bucket', 'cursor', 'lastSize', 'lastCompleteAt', 'intervalState', 'detail']);
+  const f = Fields.of(v, 'bucketCursor', ['sessionId', 'parentIncarnation', 'bucket', 'cursor', 'lastSize', 'lastCompleteAt', 'intervalState', 'detail', 'anchor', 'replaced']);
+  const cursor = f.int('cursor');
+  // D-4647: the anchor is a line that ends at the cursor, so it cannot start after it.
+  const a = f.objectN('anchor', ['start', 'sha256']);
+  const anchor = a === null ? null : { start: a.int('start'), sha256: a.hex('sha256') };
+  if (anchor !== null && anchor.start > cursor) refuse('bad-shape', `bucketCursor.anchor starts at ${anchor.start}, after the cursor ${cursor}`);
   return {
-    sessionId: f.str('sessionId'), parentIncarnation: f.str('parentIncarnation'), bucket: f.str('bucket'), cursor: f.int('cursor'),
+    sessionId: f.str('sessionId'), parentIncarnation: f.str('parentIncarnation'), bucket: f.str('bucket'), cursor,
     lastSize: f.int('lastSize'), lastCompleteAt: f.instN('lastCompleteAt'), intervalState: f.member('intervalState', INTERVAL_STATES), detail: f.strN('detail'),
+    anchor, replaced: f.bool('replaced'),
   };
 };
 
@@ -774,7 +785,9 @@ export class DelegationCheckpointBuilder {
   /** Replaces the ROWS from a checkpoint a checkpoint-only change produced, keeping the applied position, the identity candidates
    *  and the lease facts (a change cannot move any of them). A candidate whose key the change mapped is no longer one. */
   replaceRows(cp: DelegationCheckpointV1): void {
-    this.adoptRows(cp);
+    // A COPY: the change that produced `cp` may still hold an alias to it, and an edit through that alias must not reach the rows
+    // the applier now owns (R27).
+    this.adoptRows(structuredClone(cp));
     for (const encoded of [...this.candidates.keys()]) if (Object.hasOwn(this.mapping, encoded)) this.candidates.delete(encoded);
   }
 
