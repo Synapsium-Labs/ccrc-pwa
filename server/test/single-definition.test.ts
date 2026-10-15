@@ -21,9 +21,9 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   AUTH_VERDICTS, PR_REASONS, isPrReason, LIFECYCLE_ACTS, LC_ACT_UNKNOWN,
-  ASK_STATES, isAskState, ASK_REFUSE_CODES, isAskRefuseCode, ROUTE_WRITABLE_FIELDS, UPDATE_CHANNELS, UPDATE_STATES, UPDATE_PHASES, INSTALL_STATES, PROVENANCE_STATES, AUTO_MODES, NOTIFY_MODES, REQUEST_KINDS, STAMP_READS, NODE_ROLES, NODE_OSES, TAG_FILE_READS,
+  ASK_STATES, isAskState, ASK_REFUSE_CODES, isAskRefuseCode, ROUTE_WRITABLE_FIELDS, UPDATE_CHANNELS, UPDATE_STATES, UPDATE_PHASES, INSTALL_STATES, PROVENANCE_STATES, AUTO_MODES, NOTIFY_MODES, REQUEST_KINDS, STAMP_READS, NODE_OSES, TAG_FILE_READS,
   SPAWN_VERDICTS,
-} from '../../shared/api.js';
+} from '../../shared/api.js'; import { NODE_ROLES } from '../../shared/node-role.js';
 import { ARCHIVE_REFUSALS } from '../../shared/api.js';
 import { PROVIDER_IDS } from '../../shared/providers.js';
 import { DEFAULT_TEST_ROSTER } from './helpers.js';
@@ -913,7 +913,7 @@ describe('store.ts docstrings that describe their own callers', () => {
 // before review", not "unforgeable".
 describe('the account roster — runtime data, no compile-time copies', () => {
   // The names to hunt for now come from `DEFAULT_TEST_ROSTER`
-  // (server/test/helpers.ts), NOT from a shipped source file — because after
+  // (server/test/helpers/roster.ts, re-exported from helpers.ts), NOT from a shipped source file — because after
   // Task 6 the roster is not defined in one. The single copy still under the
   // scanned roots (`pwa/src/lib/accounts.ts`'s transitional `PRODUCTION_ROSTER`,
   // deleted in Task 7) is the very thing this hunts for, so drawing the hunt
@@ -3521,11 +3521,14 @@ describe('the update control plane — one definition per vocabulary and wire ty
   // same second copy with one fewer keyword.
   const TYPES = [
     'UpdateChannel', 'UpdateState', 'BusyUpdateState', 'SettledUpdateState', 'UpdatePhase', 'InstallState',
-    'ProvenanceState', 'AutoMode', 'NotifyMode', 'RequestKind', 'StampRead', 'NodeRole', 'NodeOs', 'TagFileRead',
+    'ProvenanceState', 'AutoMode', 'NotifyMode', 'RequestKind', 'StampRead', 'NodeOs', 'TagFileRead',
     'CatalogueErrorReason', 'ReleaseRefusalWire', 'ReleaseWire', 'NodeRequestWire', 'NodeReportWire',
     'NodeUpdateWire', 'NodeWire', 'UpdateIntentWire', 'CatalogueState', 'UpdatesView', 'UpdateRouteError',
     'UpdateRouteRefusal', 'IntentWriteAnswer', 'AckAnswer',
   ] as const;
+  // NodeRole moved to shared/node-role.ts (a leaf module, re-exported from
+  // api.ts) so server/src/config.ts does not pull in the ~10k-line api.ts at
+  // runtime. Its single-definition assertion is separate, below.
   // The DECLARATION shape, not the bare keyword: `type <Name> [<…>] =` or
   // `interface <Name>`, `export`/`declare` optional. The bare `(?:type|
   // interface)\s+<Name>\b` form also matches an inline-type import specifier
@@ -3548,16 +3551,25 @@ describe('the update control plane — one definition per vocabulary and wire ty
     });
   }
 
+  // NodeRole lives in shared/node-role.ts (re-exported from api.ts). Same
+  // single-definition invariant, different file.
+  it('declares NodeRole exactly once, in shared/node-role.ts', () => {
+    const DEF = DEF_OF('NodeRole');
+    expect(DEF.test(`import {\n  type NodeRole,\n} from '../../../shared/api.js';`), 'import specifier').toBe(false);
+    expect(DEF.test(`type NodeRole = 'a';`), 'un-exported local declaration').toBe(true);
+    expect(ALL.filter((f) => DEF.test(readFileSync(f, 'utf8'))).map(rel)).toEqual(['shared/node-role.ts']);
+  });
+
   const VALUES = [
     'UPDATE_CHANNELS', 'UPDATE_STATES', 'BUSY_UPDATE_STATES', 'SETTLED_UPDATE_STATES', 'UPDATE_PHASES',
     'IN_FLIGHT_UPDATE_PHASES', 'INSTALL_STATES', 'PROVENANCE_STATES', 'AUTO_MODES', 'NOTIFY_MODES',
-    'REQUEST_KINDS', 'STAMP_READS', 'NODE_ROLES', 'NODE_OSES', 'TAG_FILE_READS', 'RELEASE_TAG', 'CAP_WORD', 'MAX_CAP_WORDS',
+    'REQUEST_KINDS', 'STAMP_READS', 'NODE_OSES', 'TAG_FILE_READS', 'RELEASE_TAG', 'CAP_WORD', 'MAX_CAP_WORDS',
     'FLEET_SCOPE',   // ruling R4: shared/api.ts only — store.ts (Task 6) and resolve.ts/project.ts (Task 12) import it
     'UNIX_SECONDS_MAX',   // C5, final fix wave: resolve.ts and inventory.ts both import it; neither declares its own
   ] as const;
   const GUARDS = [
     'isUpdateChannel', 'isUpdateState', 'isUpdatePhase', 'isInstallState', 'isProvenanceState', 'isAutoMode',
-    'isNotifyMode', 'isRequestKind', 'isStampRead', 'isNodeRole', 'isNodeOs', 'isTagFileRead', 'isReleaseTag', 'validCapWords',
+    'isNotifyMode', 'isRequestKind', 'isStampRead', 'isNodeOs', 'isTagFileRead', 'isReleaseTag', 'validCapWords',
   ] as const;
   it('defines every array, pattern and guard exactly once, in shared/api.ts', () => {
     for (const name of VALUES) {
@@ -3568,6 +3580,15 @@ describe('the update control plane — one definition per vocabulary and wire ty
       const DEF = new RegExp(`^\\s*(?:export\\s+)?function\\s+${name}\\b`, 'm');
       expect(ALL.filter((f) => DEF.test(readFileSync(f, 'utf8'))).map(rel), name).toEqual(['shared/api.ts']);
     }
+  });
+
+  // NODE_ROLES and isNodeRole moved to shared/node-role.ts (re-exported from
+  // api.ts). Same single-definition invariant, different file.
+  it('defines NODE_ROLES and isNodeRole exactly once, in shared/node-role.ts', () => {
+    const arrDEF = new RegExp('^\\s*(?:export\\s+)?(?:const|let|var)\\s+NODE_ROLES\\b', 'm');
+    expect(ALL.filter((f) => arrDEF.test(readFileSync(f, 'utf8'))).map(rel)).toEqual(['shared/node-role.ts']);
+    const fnDEF = new RegExp('^\\s*(?:export\\s+)?function\\s+isNodeRole\\b', 'm');
+    expect(ALL.filter((f) => fnDEF.test(readFileSync(f, 'utf8'))).map(rel)).toEqual(['shared/node-role.ts']);
   });
 
   it('StampRead is DERIVED from its array — a hand-written union restates ReadFailure\'s pair', () => {
@@ -4156,6 +4177,27 @@ describe('worker stall watch: the wave-done subject is spelled once (spec §4.2 
 
   it.each(LITERALS)("'%s' is spelled on a code line in %s alone", (lit, home) => {
     expect(ALL.filter((f) => spelling(lit).test(stallCode(f))).map(rel).sort(), `a second '${lit}'`).toEqual([home]);
+  });
+});
+
+describe('the stall watch words a duration once, in shared/stall-watch.ts (stall-watch-settings R37 follow-up)', () => {
+  // The Settings section's `quietText` and the feed body's `stallQuietWords` were two copies of one formatter, and they
+  // disagreed off the minute grid (3 570 000 ms read "1 h" in one and "60 min" in the other). The fingerprint is the
+  // formatter's last arm, the hours-and-minutes template, on a code line. KNOWN WIDTH: a copy that builds the string
+  // another way is not seen.
+  const HOURS_AND_MINUTES = /`\$\{\w+\} h \$\{\w+\} min`/;
+  it('CONTROL: the fingerprint sees the template and not another shape', () => {
+    expect(HOURS_AND_MINUTES.test('return m === 0 ? `${h} h` : `${h} h ${m} min`;')).toBe(true);
+    expect(HOURS_AND_MINUTES.test('return `${h}h${m}m`;')).toBe(false);
+  });
+  it('the template is spelled on a code line in shared/stall-watch.ts alone', () => {
+    expect(ALL.filter((f) => HOURS_AND_MINUTES.test(stallCode(f))).map(rel).sort()).toEqual(['shared/stall-watch.ts']);
+  });
+  it('the section and the feed body import it from L0', () => {
+    for (const r of ['pwa/src/screens/StallWatchSection.tsx', 'server/src/coord/stallsettings.ts']) {
+      expect(stallCode(path.join(ccrcRoot, r)), r)
+        .toMatch(/import\s*\{[^}]*\bstallDurationText\b[^}]*\}\s*from\s*'(?:\.\.\/)+shared\/stall-watch(?:\.js)?'/);
+    }
   });
 });
 
@@ -4868,8 +4910,8 @@ describe('ccrc history: the operator switches have readers only (spec 2026-10-05
   // Each switch is touched and removed BY HAND (§9.7): no line of shell or .mjs may write one. `lib.mjs`'s
   // SWITCHES is the one sanctioned definer (the stall-watch MARKERS precedent above); the hook and the shim read
   // `history-off` with a bash test. `_uninst_purge` spells its kept set as the globs `history` and `history-*`
-  // and doctor names the cap file from `status --json`, so neither is a holder. B2 adds the skill's files to
-  // this corpus with the skill. KNOWN WIDTH: a name assembled from pieces is not seen. ONE named allowance
+  // and doctor names the cap file from `status --json`, so neither is a holder. W1-B2 added the skill's text to
+  // this corpus (SKILL_TEXT below). KNOWN WIDTH: a name assembled from pieces is not seen. ONE named allowance
   // (USAGE_PROSE below, FU5) lets `ccrc --help` spell the pause path as prose; it covers one function's lines
   // and nothing else, and a split spelling is pinned by the case that reads the literal back.
   // `recall-off/<id>` is O13's seventh name and is NOT in HOLDERS: spec O13 gives it exactly one writer,
@@ -4886,7 +4928,12 @@ describe('ccrc history: the operator switches have readers only (spec 2026-10-05
     ['steer-on', ['ccd/history/lib.mjs']],
     ['headless-on', ['ccd/history/lib.mjs']],
   ];
-  const CORPUS = [...new Set([...BASH, ...ALL_MJS])];
+  /** W1-B2: the skill's text joins the corpus with the skill (spec §9.11 O13 names "every bash, .mjs or skill
+   *  line"). Every line of it is read, comment or not, as a line a model may run (`code` below reads it whole).
+   *  It names a switch path on no line at all, so even a prose mention would be a holder the rows above do not
+   *  list; it is never a listed holder, so the language the rows' write check picks for it never applies. */
+  const SKILL_TEXT = [path.join(ccrcRoot, 'ccd', 'history-skill', 'SKILL.md')];
+  const CORPUS = [...new Set([...BASH, ...ALL_MJS, ...SKILL_TEXT])];
   /** A switch is a PATH, so a line names one only as `/<name>`. The bare words are vocabulary, not files: the
    *  exit-2 reason `history-off` (REASONS, Task 3; decideOpGate's refusal, Task 6) names the CONDITION, and
    *  lib.mjs spells it as a reason word, never as the file. */
@@ -4919,6 +4966,7 @@ describe('ccrc history: the operator switches have readers only (spec 2026-10-05
   /** A file's code lines, comment lines dropped in either language. The one allowance is applied here, so the
    *  holder count and the `writes()` classifier both skip it. */
   const code = (f: string): string[] => {
+    if (SKILL_TEXT.includes(f)) return readFileSync(f, 'utf8').split('\n');
     if (!BASH.includes(f)) return stallCode(f).split('\n');
     const text = readFileSync(f, 'utf8');   // once per call: ccd/ccrc is about 24k lines
     const skip = rel(f) === USAGE_PROSE.file ? usageProse(text).allowed : new Set<number>();
@@ -4991,6 +5039,13 @@ describe('ccrc history: the operator switches have readers only (spec 2026-10-05
     for (const [name] of HOLDERS) expect(block, `SWITCHES does not name ${name}`).toContain(name);
   });
 
+  it('CONTROL (W1-B2): the skill text is in the corpus, read whole, and a write in it would be seen', () => {
+    expect(CORPUS.map(rel)).toContain('ccd/history-skill/SKILL.md');
+    expect(code(SKILL_TEXT[0]!).length, 'the skill text read as nearly empty').toBeGreaterThan(40);
+    expect(writes('touch ~/.ccrc/history-off', 'bash', 'history-off')).toBe(true);
+    expect('touch ~/.ccrc/history-off'.includes(needle('history-off'))).toBe(true);
+  });
+
   it.each(HOLDERS)('%s: named on a code line only by its declaration and its readers %j, and never written', (name, want) => {
     const holders = CORPUS.filter((f) => code(f).some((l) => l.includes(needle(name)))).map(rel).sort();
     expect(holders, `${name}: a new line names it — a writer, or a reader this design does not list`).toEqual([...want].sort());
@@ -5026,7 +5081,12 @@ describe('ccrc history: every vocabulary is declared once, in lib.mjs, and bound
   const VOCABS = ['NODE_KINDS', 'PARSE_STATUS', 'PROVENANCE', 'SPOOL_EVENTS', 'EPOCH_CAUSES', 'REFUSALS', 'ERROR_CODES',
     'COVERAGE', 'SCOPE_SOURCES', 'VARIANT_CAUSES', 'BACKENDS', 'HARNESS_TABLE', 'HARNESSES', 'JOURNAL_KINDS',
     'JOURNAL_VERDICTS', 'BIND_KINDS', 'MIGRATION_VERDICTS', 'HEALTH_WORDS', 'REASONS', 'WRITING_FORMS', 'STORE_FILES',
-    'PASS_WORDS', 'CARD_PREFIX', 'SWITCHES', 'EXIT'] as const;
+    'PASS_WORDS', 'CARD_PREFIX', 'SWITCHES', 'EXIT',
+    // W1-B2: the recall vocabularies more than one module reads (scope, search, parser, fan-in, recovery, verbs).
+    'SCOPE_KINDS', 'GREP_SORTS', 'REF_KINDS', 'FAN_IN', 'RECOVER_PHASES', 'FTS_SHADOWS', 'READ_VERBS',
+    'INDEXED_PROVENANCE', 'VERB_TABLES', 'EXPAND_LABEL',
+    // W1-B2 Task 7A (spec rev 3.5): the belt's words more than one module reads or writes.
+    'BELT_COUNTERS', 'BELT_META', 'BELT_NODES_STEP', 'REDACT_SOURCES_META'] as const;
   /** The declaration scan's corpus: the history modules and every deploy/ and shared/ `.mjs`. NOT the rest of
    *  ccd/: `ccd/compact-card.mjs` declares an `EXIT` of its own (its exit codes, a different module's). */
   const DECL_CORPUS = [...new Set([...HISTORY_MJS, ...mjsUnder(path.join(ccrcRoot, 'deploy')), ...mjsUnder(path.join(ccrcRoot, 'shared'))])];
@@ -5036,7 +5096,7 @@ describe('ccrc history: every vocabulary is declared once, in lib.mjs, and bound
   const EV_MJS = /\bev\s*:\s*['"`]([A-Za-z]+)['"`]/g;
   /** SPOOL_EVENTS members whose emitter ships in a later PR. A member found emitted while listed here reds, so
    *  the PR that adds the emitter removes its line. */
-  const PENDING_EMITTERS: Record<string, string> = { recall: 'B2 (cli.mjs read verbs)', steer: 'W3 (the steering hook)' };
+  const PENDING_EMITTERS: Record<string, string> = { steer: 'W3 (the steering hook)' };
   type Lib = Record<string, unknown>;
   const lib = async (): Promise<Lib> => (await import('../../ccd/history/lib.mjs')) as unknown as Lib;
 
@@ -5107,6 +5167,21 @@ describe('ccrc history: every vocabulary is declared once, in lib.mjs, and bound
     const spelled = [...body.matchAll(/_dr_(?:pass|warn|fail)\s+history\s+"([a-z][a-z0-9-]*):/g)].map((m) => m[1]!);
     expect(spelled.length, 'the scan matched no word in _check_history').toBeGreaterThan(0);
     expect(spelled.filter((w) => !words.includes(w))).toEqual([]);
+  });
+
+  it('the string vocabularies EXPAND_LABEL, BELT_META, BELT_NODES_STEP and REDACT_SOURCES_META are quoted once, at their declaration (H-149)', async () => {
+    // The declaration and export check above is vacuous for a primitive: a reader that spells the value (`.get('redact_sources')`)
+    // instead of naming the constant would stay green. The scan reads code lines only, comments excluded.
+    const l = await lib();
+    const esc = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    for (const name of ['EXPAND_LABEL', 'BELT_META', 'BELT_NODES_STEP', 'REDACT_SOURCES_META'] as const) {
+      const value = l[name];
+      expect(typeof value, `${name} is a string`).toBe('string');
+      const quoted = new RegExp(`['"\`]${esc(String(value))}['"\`]`);
+      const uses = HISTORY_MJS.flatMap((f) => stallCode(f).split('\n').filter((x) => quoted.test(x)).map((x) => `${rel(f)}: ${x.trim()}`));
+      expect(uses, `${name}: the value is quoted outside its declaration`).toHaveLength(1);
+      expect(uses[0], `${name}: the one quoted copy is not its declaration`).toMatch(new RegExp(`^ccd/history/lib\\.mjs: (?:export\\s+)?const\\s+${name}\\s*=`));
+    }
   });
 
   it('the literal .ccrc/history/db is spelled in ccd/history/*.mjs once, as STORE_DB_REL', async () => {
@@ -5679,6 +5754,25 @@ describe('child reclamation wave 9: the collector’s lane and executor call the
       expect(code(r), `${r} does not import it from L0`)
         .toMatch(/import\s*(?:type\s*)?\{[^}]*\bisTmpRootId\b[^}]*\}\s*from\s*'(?:\.\.\/)+shared\/api\.js'/);
     }
+  });
+});
+
+// ── ccrc history W1-B2 Task 34: the hook spools exactly SPOOL_SOURCES on SessionStart (spec 2026-10-05 §5.1, S14;
+// ruled Q16). APPENDED, with no import line, for the reason the blocks above state.
+describe('ccrc history: the hook spools exactly SPOOL_SOURCES on SessionStart (spec 2026-10-05 §5.1, S14; W1-B2, ruled Q16)', () => {
+  it('SPOOL_SOURCES is declared once, in lib.mjs, frozen and holding fork, and the spool block\'s one SessionStart arm spells exactly its members', async () => {
+    const lib = (await import('../../ccd/history/lib.mjs')) as unknown as Record<string, unknown>;
+    const members = [...(lib['SPOOL_SOURCES'] as readonly string[])];
+    expect(Object.isFrozen(lib['SPOOL_SOURCES'])).toBe(true);
+    expect(members).toContain('fork');
+    const declares = /(?:^|[\s;])(?:export\s+)?(?:const|let|var)\s+SPOOL_SOURCES\b/;
+    expect(HISTORY_MJS.filter((f) => stallCode(f).split('\n').some((l) => declares.test(l))).map(rel)).toEqual(['ccd/history/lib.mjs']);
+    const arms = codeLines(path.join(ccrcRoot, 'ccd', 'session-hook.sh'))
+      .filter((l) => /^\s*SessionStart\)/.test(l) && l.includes('case "$src" in'));
+    expect(arms, 'the spool block\'s SessionStart arm, and only it, cases on $src').toHaveLength(1);
+    const m = /case "\$src" in ([a-z|]+)\)/.exec(arms[0]!);
+    expect(m, 'the arm spells its sources as one alternation').not.toBeNull();
+    expect(m![1]!.split('|').sort()).toEqual([...members].sort());
   });
 });
 

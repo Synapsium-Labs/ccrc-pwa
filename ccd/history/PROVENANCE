@@ -44,3 +44,131 @@ upstream: src/cli/database.ts
 commit: e05d8d3
 upstream-sha256: 968f1886124603ebe9af0a1e41b97e45488433ee620f6bd2db02a983de3484a9
 changed: upstream lines 24-25, as openReader; node:sqlite imported statically; upstream's guard before the open (existsSync and statSync(...).isFile(): a missing or non-regular path refused as one CliError DATABASE_NOT_FOUND, exit 3, a symlink followed) is RETAINED as refuseUnlessPresent's refusal of every non-regular path and REPLACED in two ways: the path is lstat'd, so a symlink at the DB file is refused rather than followed (only db/ may be a link, spec §9.3), and the one not-found answer is three StoreError words, store-missing (absent), store-zero-byte (0 bytes) and store-unmeasured (not a regular file, or not measurable); upstream's CliError DATABASE_OPEN_FAILED (exit 5) around the open is REPLACED: openReader does not wrap a failing open (node:sqlite's own error leaves it) and each caller answers it in its own terms, status's readStore as exit 5 store-read-failed (review 316 F11); busy_timeout set
+
+item: pasted-line node id extraction (P28)
+ours: ccd/history/lib.mjs
+upstream: src/tools/lcm-describe-id.ts
+commit: e05d8d3
+upstream-sha256: e695a7575a24d4a4b4ba79e94a8cb82e4db0b2b0910988ce7746014fa57f7f5c
+changed: JavaScript as extractNodeId; the bare-id, reference-line, several-ids, all-zero and lowercase rules are kept; the id grammar is ccrc's node id (L or N plus 6 to 20 hex, a trailing ellipsis tolerated) instead of sum_ and file_; the reference line is the card's History line, whose structural id is the one after "History: node "
+
+
+item: FTS5 query sanitiser (P1)
+ours: ccd/history/lib.mjs
+upstream: src/store/fts5-sanitize.ts
+commit: e05d8d3
+upstream-sha256: 7bddb29f821a827325368a71a67a84072afe716ad434ade9ffc3579b03606557
+changed: JavaScript as sanitizeFtsQuery; the quoted-phrase extraction and per-token quoting are kept; a token or phrase ending in a star (inside or right after its closing quote) becomes a quoted term followed by a star, an FTS5 prefix query, where upstream kept the star inside the quotes; the 17 upstream test cases are re-derived in server/test, not copied
+
+item: snippet window and query terms (P9)
+ours: ccd/history/lib.mjs
+upstream: src/store/full-text-fallback.ts
+commit: e05d8d3
+upstream-sha256: bf4846a6a062ad5ca24b883bb42bc8d697ac068042b0ca37e02e69c727d289db
+changed: JavaScript as queryTerms and snippetWindow (upstream lines 1, 11, 19-22 and 58-84); the term normaliser, the window constants and the earliest-hit rule are kept; each term is also tried without a common ending, the search is case-insensitive in place instead of on a lowercased copy whose indices can drift, no cut splits a surrogate pair, and the CJK and LIKE paths are not ported
+
+item: regex-syntax-in-FTS detector and message (V2); output cap and snippet line (P12)
+ours: ccd/history/lib.mjs
+upstream: src/tools/lcm-grep-tool.ts
+commit: e05d8d3
+upstream-sha256: cbebf5cfd2fb025aa609192b7527680d66b4313e65dc5723979a8a09eea19ede
+changed: JavaScript without the TypeScript annotations; the detector (upstream lines 97-154) is kept line for line as regexSyntaxIn; the message becomes the hint line of plain grep's exit 2, which names --regex; P12: truncateSnippet (upstream lines 89-95) becomes snippetLine, and the running-total cap loop (lines 275-294) becomes capOutput at 20,000 characters with no truncation marker, the first block that does not fit ending the list and the caller printing a true in-scope count
+
+item: safe regex guard (P10)
+ours: ccd/history/lib.mjs
+upstream: src/store/search-regex.ts
+commit: e05d8d3
+upstream-sha256: 9dbdaba8700eb4d095e209a9415317ba6674db4131dd510735d02897756f2df0
+changed: JavaScript as guardRegex; the length bound and the nested-quantifier and quantified-alternation tests are kept as a floor; a structural rule refusing a repeated group whose body can match more than one way is added, because upstream admits (.*a){8}$; the result is a discriminated refusal (too-long, nested, invalid) instead of null
+
+item: hybrid sort over integer timestamps (P8)
+ours: ccd/history/lib.mjs
+upstream: src/store/full-text-sort.ts
+commit: e05d8d3
+upstream-sha256: 094bd7e91965bcf0479c4fccd73ac0324f9b875421dee590d0ca783d0594a64f
+changed: JavaScript as ftsOrderBy; the three-way switch and the 0.001-per-hour decay are kept; the age is hours from an integer ts_ms and a bound :now_ms parameter instead of julianday over a string (julianday of an integer is NULL), a NULL time counts as oldest, a future time ages 0, an unknown sort throws instead of defaulting to recency, and the column expression must be a name
+
+
+item: XML escaping for the untrusted recall envelope (P30)
+ours: ccd/history/lib.mjs
+upstream: src/assembler.ts
+commit: e05d8d3
+upstream-sha256: b52def52635efbd61a28f16e9cc2d79977754e370443d2a5cc2c8e4cf98ca671
+changed: JavaScript; escapeXmlAttribute and escapeXmlText (upstream lines 1120-1133) are kept as escapeXmlAttr and escapeXmlText, except that escapeXmlAttr also escapes line breaks and the line separators U+0085, U+2028 and U+2029 (so a stored id cannot forge a line); the ccrc-recall envelope and its attributes are ccrc's, and the escape runs on every recalled field after redaction and any cut
+
+item: opaque versioned cursor (P11)
+ours: ccd/history/lib.mjs
+upstream: src/cli/args.ts
+commit: e05d8d3
+upstream-sha256: 49d39b05ac4b890cf2deddc07d4290550682bd2fe716bbd42df1a3781e3af53d
+changed: JavaScript as encodeCursor and decodeCursor (upstream lines 442-464); base64url JSON holding v 1 and a resource is kept; the fields are ids and integers (one nested level) instead of a timestamp and an id, text is refused on encode and on decode, the length is bounded, and a bad cursor answers null for the caller's exit 2 instead of throwing
+
+item: large-output explorers (P17)
+ours: ccd/history/lib.mjs
+upstream: src/large-files.ts
+commit: e05d8d3
+upstream-sha256: 7353ad233195e64c034c4f77ccadad5664a30434289e59658bac35a33849c069
+changed: JavaScript; the code-extension set, the file-name extension reader, normalizeTextForLine, uniqueOrdered and the JSON, delimited and code explorers are kept; the Read line-number prefix is stripped first, the kind comes from the paired tool_use path instead of a MIME type, JSON past a size bound gets counts, and the YAML, XML, text and model-summary paths are not ported
+
+item: Expand-for-details label (V8)
+ours: ccd/history/lib.mjs
+upstream: src/summarize.ts
+commit: e05d8d3
+upstream-sha256: 86deb98017c94d1992eaa45bdfa1d1b1fcb6238192418bfa2660698ce9d21e25
+changed: the label text only (upstream line 1173), as EXPAND_LABEL: the steer grammar's topics key, which the parser reads as a field, and the skill's trigger; upstream asks its summariser to end with the line and never parses it
+
+item: directive-shaped patterns, flag only (P29)
+ours: ccd/history/lib.mjs
+upstream: src/summary-fallback.ts
+commit: e05d8d3
+upstream-sha256: 3964bc606fe439c672760f4ca98d1386030eace2313a55011967edd731d85ec9
+changed: JavaScript as directiveFlag; the pattern list and the sentence-unit split (upstream lines 12-16, 19-42 and 48) are kept and only set a flag; the omission markers, the continuation heuristic and the summary builder are not ported, and nothing is stripped
+
+item: duration parser (P15)
+ours: ccd/history/lib.mjs
+upstream: src/prune.ts
+commit: e05d8d3
+upstream-sha256: d443f116d8e13d4ef215dd645058259aa6dea1650c6653eac40417d6cf385d4f
+changed: JavaScript without the TypeScript annotations; parseDuration and its unit table (upstream lines 12-47) are kept line for line, the regex and table renamed PRUNE_DURATION_RE and PRUNE_UNIT_DAYS; ccrc adds a 30-day floor and the older-than-floor refusal around it
+
+item: foreign-key baseline diff (P21)
+ours: ccd/history/lib.mjs
+upstream: src/plugin/lcm-doctor-rollover-splits.ts
+commit: e05d8d3
+upstream-sha256: 35f872f704e92b363e7913f7fd09119adaa0f500c4365dd683e773f6c54eb95c
+changed: JavaScript; the violation key (table, rowid, parent, fkid joined with NUL) and the baseline diff (upstream lines 692-718) are kept, but the result is structured ({newViolations, preExisting}) instead of a status string parsed by prefix, and the store adapter, not this function, runs foreign_key_check
+
+item: lineage range CTE (P7)
+ours: ccd/history/store.mjs
+upstream: src/store/summary-store.ts
+commit: e05d8d3
+upstream-sha256: 835353c4442fc2c3a036e23e077bbb24816f745256aa01eb4f4a99bb6c449c1d
+changed: JavaScript; the recursive source walk of getSummaryMessageSeqRange (upstream lines 595-621) keeps UNION and the pinned CROSS JOIN order, but runs over node_children and node_sources (directional names), selects ccrc's columns and returns the rows instead of a min/max range
+
+item: FTS table self-heal checks (P24)
+ours: ccd/history/lib.mjs
+upstream: src/db/migration.ts
+commit: e05d8d3
+upstream-sha256: 0a272a2d4b29ce79954003cdb8b5db4152f8b6001401938713b2987417a856f1
+changed: JavaScript; the missing-table, missing-shadow and missing-column tests (upstream lines 1079-1127) are kept as a pure decision over measured names, but the shadow list is per table (a contentless table has no _content shadow) and the stale-schema SQL test is not carried over; the repair that acts on the answer is a resumable backfill, not an in-transaction drop, create and seed
+
+item: batched prune loop (P15)
+ours: ccd/history/store.mjs
+upstream: src/prune.ts
+commit: e05d8d3
+upstream-sha256: d443f116d8e13d4ef215dd645058259aa6dea1650c6653eac40417d6cf385d4f
+changed: JavaScript; the dry-run default and the batched BEGIN IMMEDIATE loop (upstream lines 346-384) are kept, but a batch tombstones blobs by referrer age instead of deleting conversations, the batch loop calls back between batches for the journal half, the closing VACUUM becomes a per-batch incremental vacuum, and upstream's wal_checkpoint(TRUNCATE) runs after every batch
+
+item: FTS table drop before a rebuild (P24)
+ours: ccd/history/store.mjs
+upstream: src/db/migration.ts
+commit: e05d8d3
+upstream-sha256: 0a272a2d4b29ce79954003cdb8b5db4152f8b6001401938713b2987417a856f1
+changed: JavaScript; upstream's drop sequence (lines 1134-1137: the table, then each shadow table if it exists) is kept for both tables, with the shadow names per table from lib.mjs's FTS_SHADOWS; the recreate is createFtsTables and the reseed is sweep.mjs's resumable rebuild, never an in-transaction seed
+
+item: recall-policy sentences (V7)
+ours: ccd/history-skill/SKILL.md
+upstream: src/plugin/index.ts
+commit: e05d8d3
+upstream-sha256: f22c70550b715a91156dff1f6179d5fd58711bf09c5f5091586eaa8a2b3a69df
+changed: sentences from upstream lines 354-356, 367-371, 383, 392, 396-402 and 409-416 adapted into the skill's sections 1, 2, 4, 6 and 8: lossless-claw's expand tools become the ccrc history verbs, summaries become recalled text or a compacted summary, and line 416 keeps only its first clause

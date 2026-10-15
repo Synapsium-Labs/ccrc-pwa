@@ -233,6 +233,34 @@ describe('a subagent tool event keeps the main thread waiting (D-4039)', () => {
     }
   });
 
+  it('a non-negative fractional updatedAt is kept as its floor and writes aliveAt (12.7 is kept as 12, 0.5 as 0)', () => {
+    for (const [raw, kept] of [['12.7', 12], ['0.5', 0]] as const) {
+      askViaPermission();
+      const text = fs.readFileSync(stateFile(), 'utf8').replace(/"updatedAt":\d+/, `"updatedAt":${raw}`);
+      expect(text, raw).toContain(`"updatedAt":${raw}`);
+      fs.writeFileSync(stateFile(), text);
+      const before = Date.now();
+      run({ hook_event_name: 'PostToolUse', tool_name: 'Read', tool_input: { file_path: '/x' }, ...SUB });
+      const s = readState();
+      expect(s, raw).toMatchObject({ state: 'waiting', event: 'PermissionRequest', updatedAt: kept, ask: { questions: Q.questions } });
+      expect(s['aliveAt'] as number, raw).toBeGreaterThanOrEqual(before);
+    }
+  });
+
+  it('a negative fractional updatedAt is refused: -0.5 floors to -1, so the carry keeps no stamp, takes the current event and writes no aliveAt', () => {
+    askViaPermission();
+    const text = fs.readFileSync(stateFile(), 'utf8').replace(/"updatedAt":\d+/, '"updatedAt":-0.5');
+    expect(text).toContain('"updatedAt":-0.5');
+    fs.writeFileSync(stateFile(), text);
+    const before = Date.now();
+    run({ hook_event_name: 'PostToolUse', tool_name: 'Read', tool_input: { file_path: '/x' }, ...SUB });
+    const s = readState();
+    expect(s).toMatchObject({ state: 'waiting', event: 'PostToolUse', ask: { questions: Q.questions } });
+    expect(s).not.toHaveProperty('aliveAt');
+    expect(s['updatedAt'] as number).toBeGreaterThanOrEqual(before);
+    expect(s['updatedAt'] as number).toBeLessThan(1e14);
+  });
+
   it('the kept event is cut to letters: a stored event with other characters is written without them', () => {
     askViaPermission();
     fs.writeFileSync(stateFile(), JSON.stringify({ ...readState(), updatedAt: 1, event: 'Permission Request!' }) + '\n');

@@ -2738,28 +2738,140 @@ GRAPH_NUDGE_PRE_RE="${GRAPH_NUDGE_READ_RE%\$}\""
 GRAPH_SEARCH_RE='^[[:space:]]*(cd[[:space:]]+[^;&|]+(&&|;)[[:space:]]*)?([A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*[[:space:]]+)*(rg|grep|egrep|fgrep|ugrep|ag|ack|find|fd|git[[:space:]]+grep)([[:space:]]|$)'
 
 payload=$(cat 2>/dev/null) || exit 0
-[[ -n "${TMUX_PANE:-}" ]] || exit 0
-# BOUNDED, and for a sharper reason than the statusline's (`ccd/statusline-command.sh`,
-# D-2791): this question is asked once per HOOK EVENT inside every live session on the
-# box, not once per render in one pane. `tmux display-message` talks to the tmux SERVER
-# over its socket, and a server that is SIGSTOPped, swapping, or wedged answers nothing
-# and never returns — so an unbounded call here hangs the hook, and the hook is on the
-# hot path of every tool call in ~20 sessions. The bound is the whole fleet's, not this
-# pane's.
+# TWO SOURCES FOR ONE QUESTION: which ccd session is this?
 #
-# THE PLATFORM SPELLING, copied from the statusline fix: bare `timeout` is GNU and a
-# macOS box carries Homebrew's `gtimeout`. NEITHER present means the question is SKIPPED,
-# not asked unbounded — `$tname` stays empty, the guard below exits 0, and the hook
-# writes nothing at all. That is the honest degrade for a file whose header makes exit 0
-# on every path absolute: a hook that cannot bound its own tmux call must not make it.
-hooktmo=""
-for hooktmo_bin in timeout gtimeout; do
-  if command -v "$hooktmo_bin" >/dev/null 2>&1; then hooktmo="$hooktmo_bin"; break; fi
-done
-tname=""
-[[ -n "$hooktmo" ]] && tname=$("$hooktmo" 2 tmux display-message -p '#S' 2>/dev/null)
-[[ "$tname" == cc-?* ]] || exit 0
-id="${tname#cc-}"
+# The pane is the ordinary answer and stays first. It is not the only one: a
+# session that Claude Code has FORKED into a daemon-hosted background PTY has
+# no TMUX and no TMUX_PANE at all (measured via /proc/<pid>/environ), so this
+# hook exited at once for exactly the sessions whose ask card, subagent list
+# and compaction card matter most — a real session wrote its last hookstate
+# two minutes before its fork and then nothing for three hours of active work.
+#
+# The fallback is the session's OWN id, matched against the registry, and only
+# a process with NO pane that carries the job marker Claude Code gives the
+# background jobs it hosts may take it (D-4953). The id alone is not enough: a
+# plain `claude --resume <uuid>` keeps the resumed id and its hooks carry it, so
+# a hand-run resume of a live row's uuid — outside tmux, or in a tmux session
+# not named `cc-*` — matched that row and wrote its state, which the server
+# reads as current while the row's real pane is mid-turn. With both halves,
+# attribution stays POSITIVE and measured — this hook writes for a session only
+# when the registry itself names that uuid as its own AND the process carries
+# the marker — so a stranger's Claude session on this box that does not carry
+# CLAUDE_JOB_DIR exits 0 exactly as it did before the fallback existed.
+#
+# ONE STRANGER CARRIES IT ANYWAY, because CLAUDE_JOB_DIR is INHERITED, not
+# handed to each process. Claude Code's child-environment builder keeps it (the
+# prompt it gives a forked session even says to use `$CLAUDE_JOB_DIR/tmp`), so
+# everything a forked session starts has it, and a `claude --resume <registry
+# uuid>` run from a forked session's own shell matches that row and writes its
+# state; so may a bare `claude --continue` there (it takes the newest transcript
+# in that directory, usually the fork's own). No variable tells them apart:
+# each Claude process sets its hooks' CLAUDECODE, CLAUDE_CODE_SESSION_ID,
+# CLAUDE_CODE_CHILD_SESSION and CLAUDE_PID afresh. It needs a forked session to
+# start it, so it is far narrower than the hole the marker closes (D-4953).
+#
+# What the fallback must never become is the registry's WRITER. `ccd` decides
+# the uuid (`_sync_uuid`); this only reports against it.
+id=""
+if [[ -n "${TMUX_PANE:-}" ]]; then
+  # BOUNDED, and for a sharper reason than the statusline's (`ccd/statusline-command.sh`,
+  # D-2791): this question is asked once per HOOK EVENT inside every live session on the
+  # box, not once per render in one pane. `tmux display-message` talks to the tmux SERVER
+  # over its socket, and a server that is SIGSTOPped, swapping, or wedged answers nothing
+  # and never returns — so an unbounded call here hangs the hook, and the hook is on the
+  # hot path of every tool call in ~20 sessions. The bound is the whole fleet's, not this
+  # pane's.
+  #
+  # THE PLATFORM SPELLING, copied from the statusline fix: bare `timeout` is GNU and a
+  # macOS box carries Homebrew's `gtimeout`. NEITHER present means the question is SKIPPED,
+  # not asked unbounded — `$tname` stays empty, the guard below exits 0, and the hook
+  # writes nothing at all. That is the honest degrade for a file whose header makes exit 0
+  # on every path absolute: a hook that cannot bound its own tmux call must not make it.
+  hooktmo=""
+  for hooktmo_bin in timeout gtimeout; do
+    if command -v "$hooktmo_bin" >/dev/null 2>&1; then hooktmo="$hooktmo_bin"; break; fi
+  done
+  tname=""
+  [[ -n "$hooktmo" ]] && tname=$("$hooktmo" 2 tmux display-message -p '#S' 2>/dev/null)
+  [[ "$tname" == cc-?* ]] && id="${tname#cc-}"
+# THE FALLBACK, AND ONLY FOR A FORK (D-4953). The `elif` is the no-pane half of
+# the gate: a process with a pane is answered by the pane or by nobody, and the
+# paned path never evaluates this line at all — no fork, no exec, not even the
+# test. `CLAUDE_JOB_DIR` is the other half, and the variable is MEASURED, not
+# read off the launcher. Claude Code 2.1.296 starts a background job with
+# CLAUDE_CODE_SESSION_KIND=bg, CLAUDE_BG_BACKEND=daemon, CLAUDE_BG_SOURCE and
+# CLAUDE_JOB_DIR, but builds every hook's environment from a copy that DELETES
+# its list of background-identity variables, those first three among them. A
+# hook run by a 2.1.296 process given all four sees CLAUDE_JOB_DIR and none of
+# the other three, so a gate on CLAUDE_CODE_SESSION_KIND=bg would never open and
+# this fallback would be dead for the very sessions it exists for. The value is
+# tested for presence only, never used as a path. Presence means "a forked job,
+# or a process one started": the header above names the stranger that admits.
+#
+# THE SESSION ID MUST BE NON-EMPTY, and that conjunct is a guard, not a
+# formality: an empty id equals an empty row (one whose uuid source failed),
+# and an UNSET id expanded in the comparison below kills the hook under `set -u`
+# with "unbound variable" and exit 1.
+#
+# ASK THE REGISTRY instead of the tmux server. `ccd` writes `$REG/*.uuid`
+# (`_sync_uuid`, and row creation); this loop only reads it — one small file per
+# row, and only on the forked path, so the hot (paned) path above pays nothing new.
+#
+# BUILTINS, NOT `cat`/`basename` (whole-branch review, F8). The first draft
+# forked `cat` once per registry row plus a `basename` on the match — about 21
+# forks per hook event — and this path is the hot path of exactly the FORKED
+# sessions this change exists to serve: a fork has no TMUX_PANE, so every one
+# of its tool calls arrives here. `ccrc-doctor-checks` argues the identical
+# substitution at length for its own registry walk ("`${u##*/}` / `${id%.uuid}`
+# is `basename "$u" .uuid` with no fork; `read -r var < file` is `cat file`
+# with no fork and no subshell"), and the same reasoning applies twice over
+# here, because a doctor run happens when an operator asks and this happens on
+# every tool call in every forked session on the box.
+#
+# A REGULAR ROW, READ IN SILENCE, OR NOT AT ALL (D-4954). This walk opens every row in
+# the registry, not just this session's own, so one bad node anywhere reaches
+# every event of every forked session. The first spelling tested only `-e`
+# before an unbounded `read`: a FIFO at any `*.uuid` blocked the hook in
+# open(2), and a symlink to /dev/zero read forever, each until Claude Code
+# killed the hook at HOOK_TIMEOUT_S (`install-session-hooks.sh`), on every tool
+# call. Its redirection order, `< "$u" 2>/dev/null`, also opened the row before
+# silencing stderr, so a mode-000 row, or one unlinked between the test and the
+# open, printed bash's error on the hook's stderr. Three parts, each pinned:
+#   - `-f`, `_ct_read`'s own test: it follows a symlink, so one to a device or
+#     a FIFO is refused along with the node itself.
+#   - the BRACES put the open's own failure under 2>/dev/null (D-1691), so an
+#     unreadable row, or one unlinked after `-f`, costs its comparison and
+#     nothing else. That is also why there is no `-r` beside `-f`: such a row
+#     already fails its open in silence and compares unequal, so a `-r` would
+#     be a test no mutation can red, and it could not see the unlink anyway.
+#   - `-n CCRC_ID_MAX` bounds what one row can cost, as `_ct_read`'s `-N` does.
+#     It counts characters, and `read` drops NUL bytes uncounted, so only `-f`
+#     stands between this line and /dev/zero.
+# NOT `_ct_read` itself, and that is measured: its `-N` read plus the trim cost
+# 2.9-3.4 ms per walk against 1.8-2.5 ms for this line, on a 200-row registry
+# under Linux, on the path every tool call of a forked session takes. What
+# `read` returns is compared exactly — the newline stripped, nothing trimmed —
+# so a row ccd did not write cleanly compares unequal and the hook writes
+# nothing: it fails closed. `read`'s status is deliberately not tested (it is
+# non-zero on a row with no trailing newline while still assigning), and this
+# file runs under `set -uo pipefail` and NOT `set -e`, so it ends nothing. What
+# stays is the race D-4418 names for the spool: a node swapped in AFTER `-f` is
+# still opened, because bash has no O_NONBLOCK redirection.
+elif [[ -n "${CLAUDE_JOB_DIR:-}" && -n "${CLAUDE_CODE_SESSION_ID:-}" && -d "$REG" ]]; then
+  ruuid=""
+  for u in "$REG"/*.uuid; do
+    [[ -f "$u" ]] || continue
+    ruuid=""; { IFS= read -r -n "$CCRC_ID_MAX" ruuid < "$u"; } 2>/dev/null
+    [[ "$ruuid" == "$CLAUDE_CODE_SESSION_ID" ]] || continue
+    id="${u##*/}"; id="${id%.uuid}"
+    break
+  done
+fi
+# NOT A GUARD: the regex on the next line already rejects the empty string
+# (`+` requires at least one character), so this line can never be the one
+# that reds a mutation — dropping it changes nothing measurable. Kept anyway,
+# for a reader who should not have to derive "no id" from a character class.
+[[ -n "$id" ]] || exit 0
 [[ "$id" =~ ^[A-Za-z0-9._-]+$ ]] || exit 0
 [[ -d "$REG" ]] || exit 0
 command -v jq >/dev/null 2>&1 || exit 0
@@ -3038,10 +3150,10 @@ fi
 # — the hook never creates it, so a box with no store writes nothing; the id fits
 # SPOOL_ID_MAX = 224, so `.draining/<id>.<ms>.<pid>.jsonl` fits a 255-byte name.
 # The off-switch silences Stop and PostCompact and never the SessionStart epoch
-# lines D-4252. Only startup, resume and clear are spooled D-4253: compact exited
-# in its arm, and fork and any other source write nothing D-4173. A SessionStart
+# lines D-4252. Only startup, resume, clear and fork are spooled D-4253 D-4734 (history-fork-spooled): compact
+# exited in its arm, and any other source writes nothing (as fork did in W1-B1, D-4173). A SessionStart
 # line declares its epoch's sid, which lib.mjs SPOOL_KEYS requires, so without a
-# lowercase-UUID sid none is written at all. A startup or resume line carries
+# lowercase-UUID sid none is written at all. A startup, resume or fork line carries
 # `reg`, this hook's own read of `.uuid` D-4175. No summary hash rides it D-4177.
 #
 # THE FENCE: `\n<json>\n` in one write(2) on an O_APPEND descriptor, so a short
@@ -3057,7 +3169,7 @@ if [[ -z "$paid" && -d "$HOME/.ccrc/history/spool" && ! -L "$HOME/.ccrc/history/
   case "$event" in
     Stop) [[ -e "$HOME/.ccrc/history-off" ]] || _hs='{"v":1,"ev":"Stop"' ;;
     PostCompact) [[ -e "$HOME/.ccrc/history-off" ]] || _hs='{"v":1,"ev":"PostCompact"' ;;
-    SessionStart) [[ "$psid" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]] && case "$src" in startup|resume|clear) _hs='{"v":1,"ev":"SessionStart"' ;; esac ;;
+    SessionStart) [[ "$psid" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]] && case "$src" in startup|resume|clear|fork) _hs='{"v":1,"ev":"SessionStart"' ;; esac ;;
   esac
   if [[ -n "$_hs" ]]; then
     _hs+=",\"id\":\"$id\""
@@ -3828,8 +3940,8 @@ waitby=""
 # `a-carried-wait-keeps-its-stamp` (D-4041, review 397 F3; the race is that review's artifact 2, "P1 exception 1").
 # ONE fresh `jq` read of the file at the carry point answers every question the two subagent arms below ask: its state,
 # who raised the wait, the ask, `interrupted`, and the wait's own `updatedAt` and `event`. It is a read of the file as it
-# stands NOW, not of `prev_state`, which the prefilter took ~650 lines up: a main-thread answer that lands in between
-# must not be overwritten by a `waiting` decided from the old read. Lines, not `@tsv` (see the prefilter's note above).
+# stands NOW, not of `prev_state`, which the prefilter's `read -r prev_state` took far above: a main-thread answer
+# landing in between must not be overwritten by a `waiting` decided from the old read. Lines, not `@tsv` (see its note).
 # `state` prints only when it is one of the three words this hook writes (an exact match, so a corrupt value is never
 # healed into one: `"wait\ning"` is empty here, not `waiting`); `event` is cut to letters, and `updatedAt` prints its
 # floor when it is a number. WHAT MAKES A STAMP KEEPABLE is the `^[0-9]+$` test in `_hook_keep_stamp` below, and only that
@@ -3857,8 +3969,8 @@ _hook_fresh_read() {
 # file whose `updatedAt` is negative, is not a number (null, a boolean, a string), or is a value jq prints in exponent
 # form (such as 1e16 or 1e300: which values print that way follows jq's number formatting, not a size cut) fails the
 # `^[0-9]+$` test below and keeps nothing: it is written as before, with a fresh stamp.
-# A fractional value keeps its floor: the hook writes integer milliseconds only, so one is a foreign or corrupt file,
-# and the floor moves the stamp by under 1 ms.
+# A non-negative fractional value keeps its floor (a negative one floors to a negative and fails that test): the hook
+# writes integer milliseconds only, so one is a foreign or corrupt file, and the floor moves the stamp by under 1 ms.
 w_ev="" w_upd="" w_alive=""
 _hook_keep_stamp() {
   [[ "$fr_state" == waiting && "$fr_by" != subagent && "$fr_upd" =~ ^[0-9]+$ ]] || return 0

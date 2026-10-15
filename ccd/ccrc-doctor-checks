@@ -202,6 +202,7 @@ CCRC_DOCTOR_CHECKS=(
   credentials
   pools
   pool-sync
+  transcripts
   update-sync
   graphify
   graphify-path
@@ -492,7 +493,7 @@ _check_gh() {
     "install it: see https://cli.github.com (Debian/Ubuntu: sudo apt install gh)"
 }
 _check_jq() {
-  _dr_need_bin jq "ccrc and ccrc-adopt read this box's small JSON files with it (ccrc version, accounts.json)" \
+  _dr_need_bin jq "ccrc and ccrc-adopt read this box's small JSON files with it (ccrc version, accounts.json), and ccd reads Claude Code's continued-in marker with it (D-4940)" \
     "install it: sudo apt install jq"
 }
 
@@ -3042,7 +3043,7 @@ _fix_wrappers() {
 
 # ── skills — every rostered home carries the SHIPPED skills ────────────────
 # Release/rollout design §6. Compares each home's installed
-# ccrc-coordinator/worker/reviewer against the TREE (`$BOX_TREE_DIR/ccd/
+# ccrc-coordinator/worker/reviewer/history against the TREE (`$BOX_TREE_DIR/ccd/
 # <name>-skill`), the thing the build stamp names — not against the
 # `.cc-sessions` placed copy: on 2026-09-17 both were stale while the tree
 # on the box was current, and eighteen reviewers read an old clause. Homes
@@ -3064,7 +3065,7 @@ _check_skills() {
   local tree="$BOX_TREE_DIR/ccd" name notree=""
   # EVERY missing one, in one line (R19, D-3112): the first-only probe sent an
   # operator back once per missing directory.
-  for name in coordinator-skill worker-skill reviewer-skill; do
+  for name in coordinator-skill worker-skill reviewer-skill history-skill; do
     [ -d "$tree/$name" ] || notree="$notree${notree:+, }$tree/$name"
   done
   if [ -n "$notree" ]; then
@@ -3106,7 +3107,7 @@ _check_skills() {
     dir="$HOME/$suffix"
     [ -d "$dir" ] || continue
     homes=$((homes + 1))
-    for name in coordinator-skill worker-skill reviewer-skill; do
+    for name in coordinator-skill worker-skill reviewer-skill history-skill; do
       installed="ccrc-${name%-skill}"
       if [ ! -d "$dir/skills/$installed" ]; then
         stale+=("$id: $installed missing"); continue
@@ -3119,7 +3120,7 @@ _check_skills() {
     return 3
   fi
   if [ "${#stale[@]}" -eq 0 ]; then
-    _dr_pass skills "$homes/$homes homes carry the shipped ccrc-coordinator, ccrc-worker and ccrc-reviewer"
+    _dr_pass skills "$homes/$homes homes carry the shipped ccrc-coordinator, ccrc-worker, ccrc-reviewer and ccrc-history"
     return 0
   fi
   # THE HEADLINE (R19, validated 2026-09-19, D-3112): an entry is "<id>: <skill>
@@ -3140,7 +3141,7 @@ _check_skills() {
   # `pool-name-parity.test.ts` pins. `ccrc doctor --fix` runs exactly this
   # remedy (`_fix_skills`, D-3113).
   _dr_fail skills "${#stale[@]} skill(s) in the rostered homes differ from the shipped tree or are missing from their home: $(_dr_join "${stale[@]}")" \
-    "run 'ccrc doctor --fix' (the shipped tree's installers into every rostered home), or 'ccrc update' (re-places the tree and re-runs them) — or by hand: CCRC_SKILL_SRC=\"\$HOME/ccrc/ccd/coordinator-skill\" bash \"\$HOME/ccrc/ccd/install-coordinator-skill.sh\"; CCRC_SKILL_SRC=\"\$HOME/ccrc/ccd/worker-skill\" bash \"\$HOME/ccrc/ccd/install-worker-skill.sh\"; CCRC_SKILL_SRC=\"\$HOME/ccrc/ccd/reviewer-skill\" bash \"\$HOME/ccrc/ccd/install-reviewer-skill.sh\""
+    "run 'ccrc doctor --fix' (the shipped tree's installers into every rostered home), or 'ccrc update' (re-places the tree and re-runs them) — or by hand: CCRC_SKILL_SRC=\"\$HOME/ccrc/ccd/coordinator-skill\" bash \"\$HOME/ccrc/ccd/install-coordinator-skill.sh\"; CCRC_SKILL_SRC=\"\$HOME/ccrc/ccd/worker-skill\" bash \"\$HOME/ccrc/ccd/install-worker-skill.sh\"; CCRC_SKILL_SRC=\"\$HOME/ccrc/ccd/reviewer-skill\" bash \"\$HOME/ccrc/ccd/install-reviewer-skill.sh\"; CCRC_SKILL_SRC=\"\$HOME/ccrc/ccd/history-skill\" bash \"\$HOME/ccrc/ccd/install-history-skill.sh\""
   return 1
 }
 
@@ -3174,7 +3175,7 @@ _fix_skills() {
     [ -n "$id" ] || continue
     dir="$HOME/$suffix"
     [ -d "$dir" ] || continue
-    for name in coordinator worker reviewer; do
+    for name in coordinator worker reviewer history; do
       # The interpreter running THIS file, not whatever `bash` PATH resolves to —
       # doctor runs under a contained PATH in tests and under an operator's PATH
       # on a box, and the installer is bash either way.
@@ -3959,6 +3960,403 @@ _check_pool-sync() {
   fi
 
   _dr_pass pool-sync "this box's account-pool projection ($f) is present and within its lease — the control plane is reaching it"
+}
+
+# ── transcripts: the THIRD reader of Claude Code's own `continued-in` marker ──
+# THE OPERATOR'S SIGNAL. Claude Code forks a live session into a background
+# PTY under a new sessionId and appends `{"type":"continued-in", …}` to the
+# transcript it abandons (followed by no finished turn — metadata re-stamped
+# at exit, an interruption notice and the like may come after it, D-4940).
+# `ccd`'s `_follow_continued_in`
+# walks that pointer into the registry, but the walk is gated on the file
+# going quiescent first (one hop per supervise tick — D-4935), so a
+# box whose `ccd` predates that fix, or whose supervisor has not ticked yet,
+# can sit with a registry uuid naming a transcript nobody will ever write to
+# again — the chat freezes, silently, because there is nothing to say: the
+# conversation continued and the operator is reading it. Two of fourteen live
+# sessions were in that state on 2026-09-20, one of them for eight days. This
+# check is the MEASUREMENT the whole fix is accountable to, and it must read
+# 0 stale sessions on a converged box.
+#
+# `$HOME/.cc-sessions` is spelled out, not taken from another tool's
+# variable: this file is sourced under `set -uo pipefail` by `ccrc`, which is
+# not `ccd` and holds no `$REG`. Same rule `_check_pools` states for the
+# pools directory.
+CONTINUED_IN_TAIL_BYTES=8192   # held equal to CONTINUATION_TAIL_BYTES
+# (server/src/transcript/parse.ts) and ccd/ccd's own CONTINUED_IN_TAIL_BYTES
+# by server/test/continued-in-parity.test.ts — three readers, one window.
+
+# THE RULE, NOT A COPY OF ITS LITERALS (D-4940). This is the jq program
+# ccd/ccd's `_continued_in_of` runs, byte for byte — `continued-in-parity.test.ts`
+# holds the two spellings equal and runs this reader, ccd's and the server's
+# over one table of transcripts — and the TypeScript twin (`tailRecordOf`,
+# server/src/transcript/parse.ts) is where the rule is written out in full:
+# the window's lines are read NEWEST FIRST; a top-level `continued-in` record
+# decides (a successor, or none when it is not this file's valid marker), a
+# top-level user/assistant record that Claude Code's own reader calls a
+# finished turn decides "none", and every other line — metadata Claude Code
+# re-stamps after the marker, an interruption notice, a tool result, a line
+# that does not parse, the window's cut first line — is stepped over. The old
+# reader here matched substrings anywhere on the LAST line, so a tool call
+# whose input held a marker-shaped object read as superseded while the server
+# refused it, and a real marker with a `last-prompt` line after it read as live
+# (review findings F1 and ccd-last-line-only-marker). Why the program is
+# spelled the way it is — no `first`/`any`/`all` (jq 1.6), JavaScript's
+# whitespace in code points, the surrogate rewrite — is said once, above the
+# same text in ccd/ccd. jq is already this file's JSON reader (the `build`
+# check reads the stamp with it), and `_check_jq` FAILs a box without one — on
+# which ccd's chain follow reads nothing either.
+CONTINUED_IN_JQ='def jsws: . == 9 or . == 10 or . == 11 or . == 12 or . == 13 or . == 32 or . == 160 or . == 5760
+  or (. >= 8192 and . <= 8202) or . == 8232 or . == 8233 or . == 8239 or . == 8287 or . == 12288 or . == 65279;
+def jstrim: explode as $c
+  | [range(0; $c | length) | select($c[.] | jsws | not)] as $k
+  | if $k == [] then "" else $c[$k[0]:$k[-1] + 1] | implode end;
+def tagled: explode as $c
+  | ($c | length) > 2 and $c[0] == 60 and $c[1] >= 97 and $c[1] <= 122
+  and ([range(2; $c | length) | select($c[.] as $x
+         | ($x >= 48 and $x <= 57) or ($x >= 65 and $x <= 90) or ($x >= 97 and $x <= 122) or $x == 95 or $x == 45 | not)] as $k
+       | $k != [] and ($c[$k[0]] as $x | $x == 62 or ($x | jsws)));
+def cmdname: split("<command-name>") as $s
+  | [range(1; $s | length) | $s[.:] | join("<command-name>")
+     | split("\r")[0] | split("\u2028")[0] | split("\u2029")[0] | select(contains("</command-name>"))] != [];
+def prompttext:
+  if contains("<pasted_content id=\"") then true
+  else jstrim as $n
+  | if $n == "" then false
+    elif ($n | cmdname) then false
+    elif ($n | split("<bash-input>") | length > 1 and (.[1:] | join("<bash-input>") | contains("</bash-input>"))) then true
+    elif ($n | startswith("[Request interrupted by user")) and ($n | ltrimstr("[Request interrupted by user") | contains("]")) then false
+    elif ($n | tagled) then false
+    else true end
+  end;
+def prompt: .isMeta != true and .isCompactSummary != true and (.message | type) == "object"
+  and (.message.content as $x
+       | if ($x | type) == "string" then ($x | prompttext)
+         elif ($x | type) == "array" then
+           [$x[] | select(type == "object" and .type == "tool_result")] == []
+           and [$x[] | select(type == "object" and .type == "text" and (.text | type) == "string") | select(.text | prompttext)] != []
+         else false end);
+def complete: ((has("isApiErrorMessage") | not) or .isApiErrorMessage == false)
+  and (.message | type) == "object" and (.message.stop_reason | type) == "string";
+def unsurrogate: reduce ("d", "D") as $d (.; reduce ("8", "9", "a", "b", "c", "d", "e", "f", "A", "B", "C", "D", "E", "F") as $h
+  (.; split("\\u" + $d + $h) | join("\\uff")));
+def tailrec($l):
+  ($l | contains("\"type\":\"continued-in\"")) as $m
+  | ($l | (contains("\"type\":\"user\"") or contains("\"type\":\"assistant\""))) as $t
+  | if ($m or $t) | not then "skip"
+    else [$l | try fromjson catch ($l | unsurrogate | try fromjson catch empty)]
+    | if . == [] or (.[0] | type) != "object" then "skip"
+      else .[0]
+      | if $m and .type == "continued-in" and (.continuedInSessionId | type) == "string" then
+          .continuedInSessionId as $to
+          | if ((has("sessionId") | not) or .sessionId == $u)
+               and ($to | length) == 36
+               and ([$to | explode[] | select((. == 45 or (. >= 48 and . <= 57) or (. >= 97 and . <= 102)) | not)] == [])
+               and $to != $u
+            then "+" + $to else "stop" end
+        elif $t and .type == "assistant" then (if complete then "stop" else "skip" end)
+        elif $t and .type == "user" then (if prompt then "stop" else "skip" end)
+        else "skip" end
+      end
+    end;
+[(split("\n") | reverse[]) as $l | tailrec($l) | select(. != "skip")] | (.[0] // "stop")
+| select(startswith("+")) | .[1:]
+'
+
+_DR_CI_NEXT=""   # `_dr_continued_in`'s out-parameter: the successor, on rc 0
+
+_dr_continued_in() {   # file uuid -> 0 superseded (successor in _DR_CI_NEXT), 1 not superseded, 2 NOT MEASURED
+  # THE THIRD READER OF THE MARKER. `_continued_in_of` is not callable here
+  # (this file is sourced by `ccrc`, which does not source `ccd` —
+  # task-8-brief's own constraint), so the RULE is shared as program text
+  # (`CONTINUED_IN_JQ` above) rather than as a function.
+  #
+  # THREE ANSWERS, NEVER TWO (D-4941, review finding F2). A tail read that
+  # FAILED — the file unreadable to this user, an I/O error, no `tail` or no
+  # `jq` on this PATH — used to come back as the same 1 as "read, and not
+  # superseded", so `_check_transcripts` counted a transcript nobody had read
+  # as measured and healthy. It is 2 now, and the caller counts it as not
+  # measured. `pipefail` is set inside the substitution so a failed `tail` is
+  # not hidden behind a jq that happily parsed nothing; this file is sourced
+  # under it by `ccrc`, but not by everything that sources it.
+  #
+  # The successor travels in `_DR_CI_NEXT` rather than on stdout, so the caller
+  # keeps its exit status without a second substitution (the check reads only
+  # the status; the parity test reads both).
+  local f="$1" uuid="$2" out
+  _DR_CI_NEXT=""
+  out=$(set -o pipefail
+        tail -c "$CONTINUED_IN_TAIL_BYTES" -- "$f" 2>/dev/null \
+          | jq -rRs --arg u "$uuid" "$CONTINUED_IN_JQ" 2>/dev/null) || return 2
+  [ -n "$out" ] || return 1
+  _DR_CI_NEXT="$out"
+  return 0
+}
+
+_check_transcripts() {
+  # MEASURED AND SKIPPED ARE COUNTED SEPARATELY (whole-branch review, F4), and
+  # the verdict says both. The earlier shape counted a row into `$n` the
+  # moment its uuid was read and then `continue`d past it whenever the
+  # transcript was at neither of the two DIRECT spellings — so that row was
+  # reported inside "every registry uuid names a transcript Claude Code has
+  # not superseded" while nothing had looked at it at all.
+  #
+  # AND THAT MISS IS ROUTINE, not exotic: the server's own ladder carries a
+  # uuid-glob rung and a foreign-account rung precisely because a session that
+  # has been swapped between accounts, or whose project directory was
+  # re-munged, keeps its transcript somewhere neither direct spelling names
+  # (`server/src/transcript/resolve.ts`, §5.1 rungs 5 and 6). This check
+  # deliberately does not repeat those rungs — a per-account `projects/*` scan
+  # on every doctor run is not what this file is for — so the honest answer is
+  # to say it did not look, not to fold the row into a clean count.
+  # Reassuring an operator about rows nobody measured is the same
+  # failure mode this check was already rewritten once to avoid.
+  local reg="$HOME/.cc-sessions" sh="$HOME/.ccrc/accounts.sh"
+  local u id uuid cfg wd raw rwd munged f stale="" parked="" pending="" pendwhat="" nf n=0 skipped=0 unread=0 rowbad=0 scope="" any=0 rc why remedy detail
+  local _srv_role=""
+
+  # A SERVER-ROLE BOX HOSTS NO SESSIONS (review round 3), so it SKIPs here as
+  # every other per-session check does (`_check_jq_regex`'s idiom, and the
+  # README's server-role list). Asked before the registry is looked at: a box
+  # that changed role and kept its old `~/.cc-sessions` would otherwise be told
+  # to roll a fleet box forward about rows no supervisor runs for, and a box
+  # with no registry would print the vacuous PASS that rule says is not printed.
+  [ -f "${BOX_ENV_FILE:-}" ] && [ -r "${BOX_ENV_FILE:-}" ] && _srv_role="$(_box_env_value "$BOX_ENV_FILE" CCRC_ROLE)"
+  if [ "$_srv_role" = server ]; then
+    _dr_skip transcripts "this box records CCRC_ROLE=server, so it hosts no sessions and no supervisor follows a registry here"
+    return 3
+  fi
+
+  # `$REG` UNLISTABLE IS A FAIL, in `_check_pools`' own words for the same
+  # fact: nothing under it — no session's transcript included — can be
+  # reached. Checked before anything else, so an unlistable registry never
+  # slides through as a vacuous pass.
+  #
+  # BOTH BITS, AND A DIRECTORY (D-4941, review finding F3). This guard used to
+  # test only `-x`, while the pre-scan's glob below needs `r` to list the
+  # directory at all: a registry at 0300 globbed to nothing, `any` stayed 0,
+  # and the check printed the vacuous PASS over real rows — the outcome the
+  # sentence above promises cannot happen. It is now the file's own idiom for
+  # this exact question (the routing census's registry read, the codex lane
+  # roots): present — a dangling symlink counts, it is not an absent registry —
+  # and not a directory, not readable, or not searchable.
+  #
+  # TWO REMEDIES, BECAUSE ONLY ONE OF THEM IS A MODE (D-4941). A directory with
+  # the wrong bits is fixed by `chmod`; a plain file there, or a symlink to
+  # nothing, is not — no mode turns either into a directory, so a `chmod`
+  # remedy for them was one the operator could follow to the letter and still
+  # FAIL here. The second shape is usually a half-finished move of the
+  # registry, which is why the remedy says to look before replacing anything:
+  # `ccd` recreates an EMPTY registry at that path on its next start, and an
+  # empty registry over a moved one strands every session in it.
+  if { [ -e "$reg" ] || [ -L "$reg" ]; } && { [ ! -d "$reg" ] || [ ! -r "$reg" ] || [ ! -x "$reg" ]; }; then
+    if [ -d "$reg" ]; then
+      _dr_fail transcripts "$reg is not a readable, searchable directory, so no session's transcript can be reached" \
+        "fix its mode (chmod 700 $reg) — until then nothing on this box can measure which session reads what"
+    else
+      _dr_fail transcripts "$reg is not a directory (a file, or a symlink that leads to none), so no session's transcript can be reached" \
+        "see what is at that path (ls -ld $reg): a symlink must lead to the registry directory, and anything else must be moved aside only once you know where the registry went — ccd recreates an EMPTY one there on its next start"
+    fi
+    return 1
+  fi
+
+  # A registry with nothing in it (absent — the doctor's own healthy fixture
+  # owns no `$HOME/.cc-sessions` at all — or present and empty) has nothing to
+  # measure and PASSES VACUOUSLY, in those words, never a SKIP:
+  # `_check_routing`'s own rule is that a check which skips on the doctor's
+  # healthy fixture is a check that cannot be counted. Measured FIRST, before
+  # the roster projection below is even sourced — a box with zero sessions
+  # has nothing for `_ccrc_cfg_dir` to resolve, so an unreadable roster on
+  # such a box is not this check's business either: WARNing a perfectly
+  # healthy, session-less box over a roster gap that changes nothing it
+  # measures would be the same reassuring-inversion shape `_check_pools`'
+  # own header warns against, one level over.
+  for u in "$reg"/*.uuid; do
+    [ -e "$u" ] || continue
+    any=1
+    break
+  done
+  if [ "$any" -eq 0 ]; then
+    _dr_pass transcripts "0 session(s): every registry uuid names a transcript Claude Code has not superseded"
+    return 0
+  fi
+
+  # `_ccrc_cfg_dir` is NOT in this file's scope by default — it comes from
+  # the roster projection, which `_check_routing` and the `skills` check both
+  # source before they use it, each guarding with `declare -F`. Same idiom
+  # here. An unreadable projection WARNs rather than FAILs: a broken roster
+  # is the `wrappers` check's own subject, and this check has simply not
+  # measured anything — but only once there is at least one session for it to
+  # have measured (see the pre-scan above).
+  # shellcheck disable=SC1090
+  . "$sh" 2>/dev/null
+  if ! declare -F _ccrc_cfg_dir >/dev/null 2>&1; then
+    _dr_warn transcripts "could not read the roster projection at \$HOME/.ccrc/accounts.sh, so no session's config dir can be resolved" \
+      "re-run ccrc install to regenerate it — the wrappers check owns the roster's health"
+    return 2
+  fi
+
+  local wrapper
+  for u in "$reg"/*.uuid; do
+    { [ -e "$u" ] || [ -L "$u" ]; } || continue   # the unmatched glob's literal is no row; a dangling link is one
+    # BASH BUILTINS, NOT `basename`/`cat` — this file avoids the fork for the
+    # same reason `_munge_wd` does two lines of comment down from here: a
+    # doctor run reads every registry row once, but a stranded reader is a
+    # stranded reader whether the tool it needs is `cat` or `_ccrc_cfg_dir`,
+    # and this file's own test harness runs with NOTHING on PATH but
+    # explicitly-fixtured binaries (`ccrc-doctor.test.ts`'s own header) — so a
+    # dependency on an unstubbed coreutil is a silent zero-sessions measurement
+    # in that suite, not a loud failure. `${u##*/}` / `${id%.uuid}` is
+    # `basename "$u" .uuid` with no fork; `read -r var < file` is `cat file`
+    # with no fork and no subshell.
+    id="${u##*/}"; id="${id%.uuid}"
+    # This check runs OUTSIDE ccd — it is sourced under `set -u` by things
+    # that are not `ccrc` — so it reads the row's own fields rather than
+    # calling ccd's helpers, and it asks ccd for nothing it can read itself.
+    #
+    # THE ROW'S OWN THREE FIELDS, READ THE FILE'S OWN WAY (#189 review round
+    # 2, DR1; the codex lane's D-2380 idiom, `_dr_cx_sessions`): `[ -f ]`
+    # before the open, so a FIFO or a device node — or a symlink to either —
+    # is never opened (a FIFO blocks open(2) for ever, and `ccrc install` and
+    # `ccrc update` run this doctor at their tail, the update with its lock
+    # held); and `2>/dev/null` BEFORE `<`, so a field that is unreadable or
+    # was unlinked mid-walk (`ccd forget`) prints nothing on stderr. These
+    # used `< f 2>/dev/null`, which reports the open error, with only an
+    # `[ -e ]` on the `.uuid`. A row whose own fields could not be read — or
+    # whose wrapper names no account the roster knows — is counted apart
+    # (`rowbad`), with its own reason: it is not the account-swap miss below.
+    uuid="" wrapper="" wd=""
+    if ! { [ -f "$u" ] && { IFS= read -r uuid || :; } 2>/dev/null < "$u"; } \
+       || ! { [ -f "$reg/$id.wrapper" ] && { IFS= read -r wrapper || :; } 2>/dev/null < "$reg/$id.wrapper"; } \
+       || ! { [ -f "$reg/$id.workdir" ] && { IFS= read -r wd || :; } 2>/dev/null < "$reg/$id.workdir"; } \
+       || [ -z "$uuid" ] || [ -z "$wrapper" ] || [ -z "$wd" ]; then
+      rowbad=$((rowbad + 1)); continue
+    fi
+    # EVERY `continue` FROM HERE ON IS A SKIP, counted as one. A row whose
+    # transcript could not be found is a row this check did not measure, and
+    # `$n` is incremented only where the measurement actually happens, at the
+    # bottom of the loop.
+    cfg=$(_ccrc_cfg_dir "$wrapper" 2>/dev/null) || cfg=""
+    [ -n "$cfg" ] || { rowbad=$((rowbad + 1)); continue; }
+    # BOTH SPELLINGS, RESOLVED FIRST — a cross-task hazard Task 6's own review
+    # caught: `ccd`'s readers (`_transcript_path`, `_ci_transcript_path`) try
+    # the REALPATH-resolved munge before the raw one, because Claude Code
+    # munges its PHYSICAL cwd (node's `process.cwd()` resolves symlinks)
+    # while the registry keeps the path `ccd` wrote — and on a box where
+    # `~/projects` is itself a symlink chain, the raw munge names a directory
+    # Claude Code never writes under. A doctor that tried only the raw
+    # spelling would measure a DIFFERENT FILE than the one `ccd` follows and
+    # report green while a session sat frozen — worse than not checking at
+    # all. `_ws_realpath` itself is not callable here (same out-of-scope
+    # reason as `_continued_in_of`), so `realpath -m` stands in: it resolves
+    # as much of the chain as exists and leaves any nonexistent tail literal,
+    # the same shape `_ws_realpath` guarantees; if this box has no usable
+    # `realpath`, the raw spelling is all there ever was. The munge itself is
+    # `_munge_wd`'s own bracket expression (`${1//[.\/_]/-}`), not `tr` — both
+    # `.` and `/` must stay backslash-escaped inside the bracket for the same
+    # reason `_munge_wd`'s own comment measures: unescaped, the substitution
+    # silently no-ops on this bash.
+    raw="${wd//[.\/_]/-}"
+    rwd="$(realpath -m -- "$wd" 2>/dev/null)" || rwd="$wd"
+    munged="${rwd//[.\/_]/-}"
+    f="$cfg/projects/$munged/$uuid.jsonl"
+    [ -f "$f" ] || f="$cfg/projects/$raw/$uuid.jsonl"
+    # THE SKIP THIS FINDING IS REALLY ABOUT: neither direct spelling holds a
+    # file, and this check does not walk the server's glob rungs, so it has
+    # measured nothing about this session.
+    [ -f "$f" ] || { skipped=$((skipped + 1)); continue; }
+    # A ROW IS MEASURED ONLY ONCE ITS TAIL WAS READ (D-4941, review finding
+    # F2). `$n` used to be counted here, before the read, and a failed read
+    # answered like a clean one — so an unreadable transcript (another uid's
+    # file, an I/O error, no `tail` or `jq` on this PATH) was reported inside
+    # the clean count, superseded or not. `_dr_continued_in`'s 2 is "not
+    # measured", and is counted apart from the rows found at neither spelling
+    # because the two have different explanations.
+    _dr_continued_in "$f" "$uuid"; rc=$?
+    case "$rc" in
+      0) n=$((n + 1))
+         # SUPERSEDED ONLY WHERE CCD WOULD TAKE THE HOP (#189 review round 2,
+         # DR2). ccd follows a marker only to a successor whose transcript is
+         # a file with a line in it at one of the row workdir's two spellings
+         # — the first of them that is a file, resolved first (`_ci_addrs`,
+         # `_ci_extant`, then `-s`); otherwise it keeps the row on its own
+         # transcript and waits (D-4942), and a resume does the same
+         # (D-4944). A marker whose successor was never written here — the
+         # background job failed, was killed before its first line, or was
+         # queued and never ran (2.1.296 appends the marker on the queued
+         # path too) — is therefore not a ccd that is "not following", and
+         # neither "roll the fleet box forward" nor "the next resume" clears
+         # it. It is named apart, with a remedy that can.
+         nf="$cfg/projects/$munged/$_DR_CI_NEXT.jsonl"
+         [ -f "$nf" ] || nf="$cfg/projects/$raw/$_DR_CI_NEXT.jsonl"
+         if ! { [ -f "$nf" ] && [ -s "$nf" ]; }; then
+           pending="$pending $id"; pendwhat="${pendwhat:+$pendwhat, }$id -> $_DR_CI_NEXT on $wrapper"
+         # A ROW NO SUPERVISOR TICKS (D-4941). Only a running `ccd supervise`
+         # walks the pointer, and a stopped or archived session has none, so
+         # "clears itself on the next supervise tick" can never come true for
+         # it. Its own stamps say which it is — `.stopped` by `-e`, `.archived`
+         # by `-f`, the tests ccd itself makes (`_ws_status`, `cmd_ws_archive`).
+         elif [ -e "$reg/$id.stopped" ] || [ -f "$reg/$id.archived" ]; then parked="$parked $id"
+         else stale="$stale $id"; fi ;;
+      1) n=$((n + 1)) ;;
+      *) unread=$((unread + 1)) ;;
+    esac
+  done
+  # ONE SCOPE PHRASE, SHARED BY BOTH VERDICTS, so the two can never drift into
+  # describing the same run differently. It names the rows not measured only
+  # when there are some: a fully-measured box reads exactly as it always did.
+  # Not measured is BOTH kinds — at neither spelling, and found but unread.
+  scope="$n session(s) measured"
+  if [ $((skipped + unread + rowbad)) -gt 0 ]; then scope="$scope, $((skipped + unread + rowbad)) not measured"; fi
+  if [ -n "$stale$parked$pending" ]; then
+    # THE REMEDY NAMES WHAT WILL ACTUALLY HAPPEN TO EACH ROW (D-4941). A
+    # supervised row is followed on its next supervise tick, and one that
+    # stays is a ccd that is not following; a stopped or archived row is
+    # ticked by nothing, so the earlier "roll the fleet box forward" could
+    # never clear it — ccd follows its chain when it is next resumed (D-4944),
+    # and that is all there is to say. One clause per kind present.
+    remedy=""
+    if [ -n "$stale" ]; then
+      # shellcheck disable=SC2086 -- registry basenames, ccd's `^[A-Za-z0-9._-]+$`
+      remedy="$(_dr_join $stale): a session that forked in the last few seconds is a real transient and clears itself on the next supervise tick; if it persists, this box's ccd is not following the pointer — check ccrc version and roll the fleet box forward"
+    fi
+    if [ -n "$parked" ]; then
+      # shellcheck disable=SC2086 -- registry basenames, as above
+      remedy="${remedy:+$remedy. }$(_dr_join $parked): stopped or archived, so no supervisor runs for them — ccd follows the pointer at the session's next resume, and nothing needs doing now unless this box's ccd predates that (ccrc version)"
+    fi
+    if [ -n "$pending" ]; then
+      # shellcheck disable=SC2086 -- registry basenames, as above
+      remedy="${remedy:+$remedy. }$(_dr_join $pending): ccd keeps each on its own transcript and does not follow a pointer to a conversation that was never written. If that fork's background job is still starting (\`<wrapper> agents\` lists it, with the row's wrapper named beside it above — a job lives under its own account's config dir, so another wrapper's list does not show it — or read jobs/<the successor's first 8 characters>/state.json in that wrapper's config dir), wait: this clears when its first line lands. If the job failed or is gone, the session's own transcript is still the conversation — the first prompt it answers there cancels the stale pointer (a finished turn after the marker), and this clears"
+    fi
+    detail=""
+    # shellcheck disable=SC2086 -- the ids are registry basenames, matched by
+    # ccd's own `^[A-Za-z0-9._-]+$` shape, so the split is the interface.
+    [ -n "$stale$parked" ] && detail="$(_dr_join $stale $parked) read a transcript Claude Code has superseded"
+    # shellcheck disable=SC2086 -- registry basenames, as above
+    [ -n "$pending" ] && detail="${detail:+$detail; }$(_dr_join $pending) read a transcript whose continued-in marker names a successor never written here ($pendwhat)"
+    _dr_warn transcripts "$detail ($scope)" "$remedy"
+    return 2
+  fi
+  if [ $((skipped + unread + rowbad)) -gt 0 ]; then
+    # A RUN WITH UNMEASURED ROWS MAY NOT CLAIM EVERY UUID IS HEALTHY. It
+    # passes — nothing it looked at was superseded — but the sentence says
+    # what it looked at, and says why the rest was not looked at rather than
+    # leaving the operator to read a clean count as a clean box.
+    why=""
+    if [ "$skipped" -gt 0 ]; then
+      why="$skipped at neither direct spelling here (routine after an account swap; the chat itself still finds it, through rungs this check does not walk)"
+    fi
+    if [ "$unread" -gt 0 ]; then
+      why="${why:+$why; }$unread whose transcript is there but could not be read and parsed (a permission or I/O error on the file, or no tail or jq on this PATH — the jq check owns a missing jq)"
+    fi
+    if [ "$rowbad" -gt 0 ]; then
+      why="${why:+$why; }$rowbad whose own registry row could not be read here (a .uuid, .wrapper or .workdir that is missing, empty, or not a readable regular file, or a wrapper the roster does not know — look in \$HOME/.cc-sessions)"
+    fi
+    _dr_pass transcripts "$scope: every uuid MEASURED names a transcript Claude Code has not superseded, and nothing is claimed about the other $((skipped + unread + rowbad)) — $why"
+    return 0
+  fi
+  _dr_pass transcripts "$n session(s): every registry uuid names a transcript Claude Code has not superseded"
+  return 0
 }
 
 # ── update-sync: the EFFECT the puller's own ACTIVE state cannot prove ────
@@ -7414,13 +7812,18 @@ _check_history() {
 # `OWED_REASONS`, `_BT_ORIGINS` is `TOKEN_ORIGINS` (`shared/box-token.ts`); `_BT_SYNC_ERRORS` is
 # `TOKEN_SYNC_OP_ERRORS` and `_BT_TRANSPORTS` is `TOKEN_TRANSPORTS` (`shared/agent-protocol.ts`); `_BT_FAIL_AT`
 # is `FAILURES_FOR_BANNER`, `_BT_PENDING_CAP` is `PENDING_HARD_CAP` and `_BT_TICK_MS` is `DRIVER_TICK_MS`
-# (`server/src/token/policy.ts`). `_BT_LOST_WORDS` are the rest of `BoxTokenView.lastFailure`'s vocabulary, which
-# has no L0 list of its own: `link.ts`'s non-exported `LOST_WORDS` (pinned by a text scan of that file) plus
-# `mint-failed`, the one word `link.ts` does not list (the console view's word for a failed mint). The state record
-# CAN hold it, as `lastFailure`: the driver commits `lastFailure: 'mint-failed'` on a failed stage write.
+# (`server/src/token/policy.ts`); `_BT_INTERVAL_MS` is `TOKEN_ROTATION_INTERVAL_MS` and `_BT_OVERDUE_SLACK_MS` is
+# `TOKEN_ROTATION_OVERDUE_SLACK_MS` (`shared/box-token.ts`). `_BT_LOST_WORDS` are the rest of
+# `BoxTokenView.lastFailure`'s vocabulary, which has no L0 list of its own: `link.ts`'s non-exported `LOST_WORDS`
+# (pinned by a text scan of that file) plus `mint-failed`, the one word `link.ts` does not list (the console view's
+# word for a failed mint). The state record CAN hold it, as `lastFailure`: the driver commits
+# `lastFailure: 'mint-failed'` on a failed stage write.
 # D-4551's two words are doctor-local, like `pending-overdue`: `retire-overdue:<min>` (a previous value more than
 # one driver tick past its `hardUntil`) and `retiring-unlanded:<min>` (the oldest `retiring` digest older than two
-# ticks, one tick plus one tick of slack). "In grace" is never printed past `hardUntil`.
+# ticks, one tick plus one tick of slack). "In grace" is never printed past `hardUntil`. `rotation-overdue` (4557) is
+# doctor-local too, computed from the state and never persisted, like `pending-overdue`: the weekly schedule's anchor
+# (the last promotion, else the mint of the current value) older than the interval plus its slack, with no hold standing
+# and nothing pending.
 #
 # `set +x` is the function's first statement, not the file's: this file is sourced into `ccrc`, and doctor runs
 # each check in its own `$( … )`, so it cannot leak; it writes nothing, so it sets no umask (a file-level
@@ -7452,12 +7855,14 @@ _BT_LOST_WORDS=(timeout disconnected aborted mint-failed)
 _BT_FAIL_AT=3
 _BT_PENDING_CAP=3
 _BT_TICK_MS=60000
+_BT_INTERVAL_MS=604800000
+_BT_OVERDUE_SLACK_MS=86400000
 _BT_SKIP_TAIL='; the FAIL and WARN arms are switched off (_BT_ARMS_ON=0)'
 
 # The server's state record, read strictly: any field missing or of the wrong kind is `unreadable`, never a
 # default. Prints `absent`, `unreadable`, or `ok` then `<key> <value>` lines and `finding <word> [<n>] [<node>]`.
 # argv: path, origins, holds, owed reasons, last-failure words, transports, file-problem words (each space-joined),
-# the pending cap, the driver tick in ms. Times are ms.
+# the pending cap, the driver tick in ms, the rotation interval and the overdue slack in ms. Times are ms.
 # The shape is `isBoxTokenState`'s (server/src/token/files.ts) as of D-4413/D-4414: up to PENDING_HARD_CAP
 # pending entries (argv, `_BT_PENDING_CAP`), a `recovering` key, `fileProblem` and `retiring` optional (`retiring`
 # is a list of {sha256, at} awaiting their append: only the oldest `at` is read, no digest is kept or printed).
@@ -7472,6 +7877,7 @@ def bad():
 p = sys.argv[1]
 origins, holds, owed, fails, transports, fileprobs = (set(a.split()) for a in sys.argv[2:8])
 cap, tick = int(sys.argv[8]), int(sys.argv[9])
+interval, slack = int(sys.argv[10]), int(sys.argv[11])
 now = int(time.time() * 1000)
 H16 = re.compile(r"[0-9a-f]{16}\Z")
 H64 = re.compile(r"[0-9a-f]{64}\Z")
@@ -7528,6 +7934,11 @@ say("rotated", "never" if lr is None else age(lr))
 say("rotating", 1 if (s["pending"] or s["promoting"] is not None) else 0)
 say("grace", 1 if (pv is not None and now <= pv["hardUntil"]) else 0)
 say("refused", 0 if s["retiredRefusedAt"] is None else 1)
+# 4556/4557: the anchor of the schedule is the last promotion, else the mint of the current value. A stamp ahead of
+# this clock is said (the schedule waits for it, or rotates at once when it is more than one interval ahead).
+anchor = lr if lr is not None else c["since"]
+if anchor > now:
+    say("ahead", (anchor - now) // 1000, 1 if anchor - now > interval else 0)
 if s["mintFailedAt"] is not None:
     say("finding", "mint-failed", age(s["mintFailedAt"]))
 # D-4551: a previous value past its hard bound (plus one driver tick) is still here, and a retired digest whose
@@ -7549,6 +7960,11 @@ if over:
     say("finding", "pending-overdue", max(over) // 1000)
 if s["rotationOwed"]:
     say("finding", "rotation-owed:" + s["owedWhy"])
+# 4557: no rotation for longer than the interval plus its slack, with no hold standing and nothing in flight: nothing
+# pending and nothing promoting, the same two tests as the rotating word above (a crash between the promotion discard
+# and its commit leaves promoting set with pending empty, and that is a rotation in progress, not an overdue one).
+if now - anchor > interval + slack and s["hold"] is None and not s["pending"] and s["promoting"] is None:
+    say("finding", "rotation-overdue", (now - anchor) // 1000)
 if ls is not None and ls["word"] == "proof-unmeasured" and not (f > 0 and lf == "proof-unmeasured"):
     say("finding", "proof-unmeasured", age(ls["at"]))
 if br is not None and (lr is None or lr < br["at"]):
@@ -7744,6 +8160,9 @@ _bt_find() {
     server:rotation-owed:*)
       say="a rotation is owed (${word#rotation-owed:}) and has not completed"
       fix="$card, or let the driver's next tick start it" ;;
+    server:rotation-overdue)   # 4557: doctor-local, computed from the state, never persisted
+      say="no rotation has completed for $(_bt_age "$a"), past the $(_bt_age "$((_BT_INTERVAL_MS / 1000))") schedule and its $(_bt_age "$((_BT_OVERDUE_SLACK_MS / 1000))") slack, with no hold standing and nothing in flight"
+      fix="a running server starts the scheduled rotation on its next tick unless a backoff stands: read the console's Box token card and the server's log; if the server is not running, start it (ccrc.service)" ;;
     server:proof-unmeasured)
       say="the fleet's last sync ($(_bt_age "$a") ago) wrote the value but could not prove it against this server"
       fix="run ccrc doctor on the fleet box: its box-token line names the sync's own result" ;;
@@ -7808,36 +8227,53 @@ _bt_fleet_paths() {
 }
 
 # `_bt_server_trace <dir> <own: 0|1>` — 4554: a trace beside the state file that only a server that once held a value can have, by
-# NAME only (never opened: mail-previous.token holds a value). Sets the caller's BT_TRACE to the first trace's FULL PATH,
-# `unlisted` when the directory exists and cannot be listed (a set-aside copy cannot be ruled out: fail closed), else
-# empty. A directory that does not exist holds no trace (the caller's reads already measured that ENOENT).
+# NAME only (never opened: mail-previous.token holds a value). Sets the caller's BT_TRACE to the first trace's FULL PATH, or to
+# one of two words, or leaves it empty. The order is fixed (row 3a, R18 and R19, 4554 amended): the unlisted test comes FIRST,
+# then the named traces, then on an own-write box the fleet file and the generation file, then the set-aside copies, and last,
+# on an own-write box, `unsearchable`.
+#   `unlisted`      the directory exists and cannot be listed, so a set-aside copy cannot be ruled out (fail closed). Tested
+#                   before every trace, whatever the directory or the fleet side holds: boot refuses to start on it, so
+#                   `chmod u+r` is its remedy and "restart the server" would be false even beside a named trace.
+#   `unsearchable`  (row 3a, R19) own-write only: with no other trace standing, the fleet token file's directory exists and
+#                   cannot be searched, so `-e` cannot tell whether the server wrote the fleet file there. BT_TRACE_DIR holds
+#                   that directory. Its own word and remedy (`chmod u+x`), never folded into `unlisted`: two conditions. It
+#                   is tested after the set-aside copies: a copy is a definite trace, and the word says only that none can
+#                   be told.
+#   empty           no trace; a directory that does not exist holds none (the caller's reads already measured that ENOENT).
 # On an own-write box (`own` = 1: role both, local, no agent.env marking the fleet) the SERVER wrote the fleet token file
 # and the generation file (`boot.ts` step 7, and the driver's own-write promotion), so either one existing is a trace too
 # (4554, amended by review 405 F1). By existence only: the fleet file holds a value. Never off such a box: there they are
 # the fleet agent's records, and a server-role or fleet-role box does not reach this arm with them as its own.
 _bt_server_trace() {
   local d="$1" own="${2:-0}" n f BT_FLEET_FILE BT_GEN_FILE
-  BT_TRACE=""
+  BT_TRACE=""; BT_TRACE_DIR=""
+  if [ -d "$d" ] && [ ! -r "$d" ]; then BT_TRACE=unlisted; return 0; fi
   for n in "${_BT_TRACES[@]}"; do
     if [ -e "$d/$n" ] || [ -L "$d/$n" ]; then BT_TRACE="$d/$n"; return 0; fi
   done
   if [ "$own" = 1 ]; then
     _bt_fleet_paths
-    for f in "$BT_FLEET_FILE" "$BT_GEN_FILE"; do
-      if [ -e "$f" ] || [ -L "$f" ]; then BT_TRACE="$f"; return 0; fi
-    done
+    # The fleet file first, as before (a directory that cannot be searched hides it from `-e`, so this test is false there),
+    # then the generation file, which lives outside that directory: when it stands, the history is told whatever the
+    # directory's mode. A directory that cannot be searched is its own word only after the set-aside copies (below).
+    if [ -e "$BT_FLEET_FILE" ] || [ -L "$BT_FLEET_FILE" ]; then BT_TRACE="$BT_FLEET_FILE"; return 0; fi
+    if [ -e "$BT_GEN_FILE" ] || [ -L "$BT_GEN_FILE" ]; then BT_TRACE="$BT_GEN_FILE"; return 0; fi
   fi
-  if [ -d "$d" ] && [ ! -r "$d" ]; then BT_TRACE=unlisted; return 0; fi
   for n in "${_BT_ASIDE[@]}"; do
     for f in "$d/$n"*; do
       if [ -e "$f" ] || [ -L "$f" ]; then BT_TRACE="$f"; return 0; fi
     done
   done
+  if [ "$own" = 1 ]; then
+    # Last, so a set-aside copy (a definite trace) is named before a directory that merely cannot be told (row 3a, R19).
+    f="${BT_FLEET_FILE%/*}"
+    if [ -d "$f" ] && [ ! -x "$f" ]; then BT_TRACE=unsearchable; BT_TRACE_DIR="$f"; return 0; fi
+  fi
   return 0
 }
 
 _bt_server_arm() {   # <token path> <state path> <own-write: 0|1>
-  local tok="$1" state="$2" own="${3:-0}" before="${#BT_CLASS[@]}" out="" kw w n node seq="" since="" rot="" rotating=0 grace=0 refused=0 bad=0 tai=-1 BT_TRACE=""
+  local tok="$1" state="$2" own="${3:-0}" before="${#BT_CLASS[@]}" out="" kw w n node seq="" since="" rot="" ahead="" aheaddue=0 rotating=0 grace=0 refused=0 bad=0 tai=-1 BT_TRACE="" BT_TRACE_DIR=""
   _bt_value_file "$tok"
   case "$BT_TF" in
     absent) tai="${#BT_CLASS[@]}"; _bt_find server token-absent "$tok" ;;
@@ -7851,7 +8287,7 @@ _bt_server_arm() {   # <token path> <state path> <own-write: 0|1>
   if ! command -v python3 >/dev/null 2>&1; then _bt_find server state-unreadable "$state" no-python; return 0; fi
   out="$(python3 -I -c "$_BT_PY_STATE" "$state" "${_BT_ORIGINS[*]}" "${_BT_HOLDS[*]}" "${_BT_OWED[*]}" \
     "${_BT_SYNC_ERRORS[*]} ${_BT_LOST_WORDS[*]}" "${_BT_TRANSPORTS[*]}" "${_BT_FILE_PROBLEMS[*]}" \
-    "$_BT_PENDING_CAP" "$_BT_TICK_MS" 2>/dev/null)" || out=""
+    "$_BT_PENDING_CAP" "$_BT_TICK_MS" "$_BT_INTERVAL_MS" "$_BT_OVERDUE_SLACK_MS" 2>/dev/null)" || out=""
   case "${out%%$'\n'*}" in absent) BT_SERVER_STATE=absent ;; ok) BT_SERVER_STATE=ok ;; esac   # anything else stays unreadable
   case "${out%%$'\n'*}" in
     # 4553, as D-139 rules it (operator, 2026-10-12): an absent token beside an absent state is a server that has never run
@@ -7863,9 +8299,11 @@ _bt_server_arm() {   # <token path> <state path> <own-write: 0|1>
     # set-aside copy (`_bt_server_trace`, by name only), and on an own-write box the fleet token file or the generation file
     # the server itself wrote (review 405 F1). Then the FAIL stays, its sentence names the trace, and
     # `BT_SERVER_STATE` records `trace`, so an own-write fleet arm reads no `absent` state either. A token directory that
-    # exists and cannot be listed cannot rule a set-aside copy out, so it fails closed with a sentence and remedy of its own:
-    # boot refuses to start on it (`boot.ts`, `setAsideNames`), and "restart the server" would be false there. A directory
-    # that does not exist holds no trace: a fresh server whose override directory is not created yet stays the fresh PASS.
+    # exists and cannot be listed cannot rule a set-aside copy out, so it fails closed with a sentence and remedy of its own,
+    # whatever else it or the fleet side holds (row 3a, R18): boot refuses to start on it (`boot.ts`, `setAsideNames`), and
+    # "restart the server" would be false there. On an own-write box with no generation file and no set-aside copy standing,
+    # a `~/.cc-secrets` that cannot be searched does too (`unsearchable`, remedy `chmod u+x`, row 3a, R19). A directory that
+    # does not exist holds no trace: a fresh server whose override directory is not created yet stays the fresh PASS.
     absent) if [ "$tai" -ge 0 ]; then
               _bt_server_trace "${state%/*}" "$own"
               if [ -z "$BT_TRACE" ]; then
@@ -7876,6 +8314,9 @@ _bt_server_arm() {   # <token path> <state path> <own-write: 0|1>
                 if [ "$BT_TRACE" = unlisted ]; then
                   BT_PART[tai]="server: token-absent — $tok does not exist, and neither does the server's state file, and ${state%/*} cannot be listed, so a value held here once cannot be ruled out, and the server refuses to boot until it can list it"
                   BT_FIX[tai]="give ${state%/*} its read bit (chmod u+r ${state%/*}); the server then boots and mints a value"
+                elif [ "$BT_TRACE" = unsearchable ]; then
+                  BT_PART[tai]="server: token-absent — $tok does not exist, and neither does the server's state file, and $BT_TRACE_DIR cannot be searched, so whether this box's server wrote the fleet token file there cannot be told"
+                  BT_FIX[tai]="give $BT_TRACE_DIR its search bit (chmod u+x $BT_TRACE_DIR); doctor can then tell whether this box's server held a value"
                 else
                   BT_PART[tai]="server: token-absent — $tok does not exist, and neither does the server's state file, but $BT_TRACE does: this server held a value once and lost it; the server mints a new one at its next boot, and the fleet must then be handed it"
                 fi
@@ -7890,6 +8331,7 @@ _bt_server_arm() {   # <token path> <state path> <own-write: 0|1>
       ok) ;;
       seq) _bt_num "$w" && seq="$w" ;;
       since) _bt_num "$w" && since="$w" ;;
+      ahead) if _bt_num "$w" && [[ "$n" =~ ^[01]$ ]]; then ahead="$w"; aheaddue="$n"; else bad=1; fi ;;
       rotated) { [ "$w" = never ] || _bt_num "$w"; } && rot="$w" ;;
       rotating) [ "$w" = 1 ] && rotating=1 ;;
       grace) [ "$w" = 1 ] && grace=1 ;;
@@ -7897,7 +8339,7 @@ _bt_server_arm() {   # <token path> <state path> <own-write: 0|1>
       finding)
         case "$w" in
           retired-presented) if _bt_num "$n" && { [ "$node" = - ] || _bt_num "$node"; }; then _bt_find server "$w" "$n" "$node"; else bad=1; fi ;;
-          mint-failed|pending-overdue|proof-unmeasured|recovered) _bt_num "$n" && _bt_find server "$w" "$n" || bad=1 ;;
+          mint-failed|pending-overdue|rotation-overdue|proof-unmeasured|recovered) _bt_num "$n" && _bt_find server "$w" "$n" || bad=1 ;;
           retire-overdue|retiring-unlanded) _bt_num "$n" && _bt_find server "$w:$n" "$n" || bad=1 ;;
           fleet-behind|fleet-unconfirmed) _bt_find server "$w" ;;
           file:*) if _bt_member "${w#file:}" "${_BT_FILE_PROBLEMS[@]}" && _bt_num "$n" && [[ "$node" =~ ^(current|pending|previous)$ ]]; then
@@ -7922,6 +8364,10 @@ _bt_server_arm() {   # <token path> <state path> <own-write: 0|1>
   [ "$refused" -eq 1 ] && extra=", retired value refused"      # spec 10.3's proof, once the server recorded it
   [ "$rotating" -eq 1 ] && extra="$extra, a rotation in progress"
   [ "$grace" -eq 1 ] && extra="$extra, the previous value in grace"
+  if [ -n "$ahead" ]; then
+    if [ "$aheaddue" = 1 ]; then extra="$extra, its schedule stamp $(_bt_age "$ahead") ahead of this clock (more than the interval, so the server rotates now)"
+    else extra="$extra, its schedule stamp $(_bt_age "$ahead") ahead of this clock (the weekly schedule counts its interval from that stamp)"; fi
+  fi
   BT_PART+=("server: generation #$seq, $how, fleet confirmed$extra"); BT_CLASS+=(PASS); BT_FIX+=("")
 }
 

@@ -16,7 +16,7 @@ const filesUnder = (dir: string): string[] => readdirSync(dir).flatMap((n) => {
   const p = path.join(dir, n);
   return statSync(p).isDirectory() ? filesUnder(p) : [p];
 });
-const SKILLS = ['ccd/coordinator-skill', 'ccd/worker-skill', 'ccd/reviewer-skill'];
+const SKILLS = ['ccd/coordinator-skill', 'ccd/worker-skill', 'ccd/reviewer-skill', 'ccd/history-skill'];
 
 describe('CLAUDE.md’s SAFETY bullet', () => {
   const md = flat('CLAUDE.md');

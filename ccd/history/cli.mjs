@@ -3,10 +3,10 @@
 // (`history) exec node --no-warnings "$CCRC_HERE/history/cli.mjs" "$@" ;;`; spec
 // docs/superpowers/specs/2026-10-05-ccrc-history-lossless-dag-design.md §5.1, §8).
 //
-// W1-B1 ships ONE verb, `status [--json]` (§8.4). It is a BOX verb: identity-free (§8.2; D-4249
+// `status [--json]` (§8.4) is a BOX verb: identity-free (§8.2; D-4249
 // history-box-verbs-identity-free) — it reads no TMUX_PANE, runs no tmux and derives no session id — and it
 // writes NO spool line (D-4250 history-box-verbs-no-counter-line), because doctor runs it on every `ccrc doctor`.
-// Every other verb answers exit 2 `bad-args` until W1-B2 ships the read verbs and the operator verbs.
+// W1-B2 adds the read verbs (READ_VERBS, in the dispatcher block that replaced `main`) and, from its Task 19, the operator verbs. An unknown verb answers exit 2 `bad-args` with the usage.
 //
 // Departures carried here: D-4167 (history-coverage-this-box: every answer carries store_id and coverage),
 // D-4169 (history-exit-codes-4-and-9) and D-4171 (history-reasons-by-exit) for the exit words, D-4183
@@ -28,23 +28,43 @@
 // never scans entries, blobs or memberships. Every statement it prepares besides its PRAGMAs is in
 // STATUS_SQL, which history-cli.test.ts runs through EXPLAIN QUERY PLAN against a seeded store.
 //
-// It prints no recalled text — ids, paths, counts and words only — so no output redaction applies here
-// (§8.3's layers run on recalled fields, which the read verbs of W1-B2 print).
+// status prints no recalled text: ids, paths, counts and words only. The read verbs print recalled text: each
+// field goes through redactField before any cut, and every output through the structure-aware final belt (§8.3, D-4613).
 import { existsSync, lstatSync, readdirSync, realpathSync, statSync, promises as fsp } from 'node:fs';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import {
   EXIT, COVERAGE, SCHEMA_VERSION, UUID_RE, HARNESSES, CLI_STAT_DEADLINE_MS,
   historyPaths, readBoxEnvValue, decideCliStore, CONTROL_FILE_MAX, decideStatusRead, capOf, floorThreshold, exportHorizonDays, parseOpMarker,
-  decideStatusReadFailure, RETENTION_STATE_META,
+  decideStatusReadFailure, RETENTION_STATE_META, decideGrepIndex, parsePassMarker, decidePassLive, parsePassDied,
 } from './lib.mjs';
-import { StoreError, measureStoreFacts, openReader, userVersion, measuredSize, probeFts5, readBounded } from './store.mjs';
+import { StoreError, measureStoreFacts, openReader, userVersion, measuredSize, readBounded, FTS_GATE_SQL, ftsGateFactsOn } from './store.mjs';
 // The health block's own imports (task 28). Namespace imports, so this block
 // binds no name the status code above already imported.
 import * as healthLib from './lib.mjs';
 import * as healthStore from './store.mjs';
 import * as healthFs from 'node:fs';
 import * as healthPath from 'node:path';
+
+// The read verbs' imports (W1-B2 Task 10). Names cli.mjs's earlier imports do not already bind. StoreError,
+// openReader and userVersion are already bound by B1's './store.mjs' import above, and decideStatusRead and
+// decideStatusReadFailure by B1's './lib.mjs' import: importing a binding twice is a SyntaxError.
+// loadSecrets is imported statically: B1's ring census reds on any import() in a shipped module, and sweep.mjs's
+// entry guard keys on process.argv[1], so importing it runs nothing.
+import { closeSync, constants as FS, fstatSync, openSync, readSync, writeSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import {
+  REASONS, TMUX_DEADLINE_MS, SCOPE_SOURCES, SCHEMA_ADDED, READ_VERBS, idOk, makePairIndex, redactFinalJson, redactFinalText, redactFinalLines, makeBelt, beltUnits,
+  REDACT_SOURCES_META, parseRedactSources,
+  decideIdentity, decideHarness, resolveGeneration, decideScope, parseReadArgs, decideRecallOffPreflight, paneOk,
+  decideRecallOff, recallOffPath, parseSpoolLine, SCOPE_FAMILIES_JSON_MAX,
+  readEnvelope, shownLine, nextLine,
+} from './lib.mjs';
+import { loadSecrets, procIdentityOf } from './sweep.mjs';
+import { runTree, grepVerb, describeVerb, expandVerb, familiesOf, transcriptsOf, scopeHeader } from './recall.mjs';
+import { spawn as spawnOp } from 'node:child_process';
+import { isatty as isattyOp } from 'node:tty';
+import { recoverStepAt as opRecoverStepAt, storedVersionAt as opStoredVersionAt } from './store.mjs';
 
 process.umask(0o077);
 
@@ -55,7 +75,10 @@ export const STATUS_SQL = Object.freeze({
   ticks: 'SELECT tick_id, ts_ms, lag_ms, bytes, files_behind, bytes_behind FROM ticks ORDER BY tick_id DESC LIMIT 3',
   recover: "SELECT version, cursor FROM derivation_state WHERE step = 'recover' AND completed_ms IS NULL ORDER BY version DESC LIMIT 1",
   outbox: 'SELECT count(*) AS n FROM journal_outbox',
-  ftsTable: "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'blobs_fts'",
+  // The grep gate's three statements are store.mjs's (H-163): one spelling, shared with recall.mjs's indexGate.
+  ftsTable: FTS_GATE_SQL.table,
+  ftsBackfill: FTS_GATE_SQL.backfill,
+  ftsRebuild: FTS_GATE_SQL.rebuild,
   breaker: 'SELECT count(*) AS n FROM breaker WHERE open_until_ms > ?',
   metaKey: 'SELECT v FROM meta WHERE k = ?',
 });
@@ -63,8 +86,10 @@ export const STATUS_SQL = Object.freeze({
 /** What a human reads for each non-zero exit (§8.3's table; the word itself is in `reason`). */
 const EXIT_MEANING = Object.freeze({
   [EXIT.REFUSED]: 'refused',
+  [EXIT.NOT_FOUND]: 'not found on this box (coverage=this-box)',
   [EXIT.DB]: 'store error',
   [EXIT.NOT_INDEXED]: 'not indexed yet: the first tick has not created the store, or this store has no rows yet',
+  [EXIT.RECALL_OFF]: 'recall is off for this session (the eval control arm; counted)',
   [EXIT.NO_STORE]: 'no store on this box (macOS, a server role, or never installed): stop, do not retry',
 });
 
@@ -151,7 +176,7 @@ function emptyEnvelope(P) {
     },
     retention: { lowered: null, unmeasured: [] },
     redact_unreadable: [],
-    recovering: null, op: null, history_off: false, shim_mtime_ms: null,
+    recovering: null, op: null, pass: null, pass_died: null, history_off: false, shim_mtime_ms: null,
     counters: {},
     health: { pass: null, warn: [], fail: [] },
   };
@@ -168,7 +193,7 @@ function decided(env, d) {
 function boxFacts(env, P) {
   try { env.shim_mtime_ms = Math.trunc(lstatSync(P.shim).mtimeMs); } catch { env.shim_mtime_ms = null; }
   env.history_off = existsSync(P.off);
-  // The sweep's capText rule (Task 14), spelled again because cli.mjs imports nothing from sweep.mjs: absent is
+  // The sweep's capText rule (Task 14), spelled again because cli.mjs imports only loadSecrets from sweep.mjs, statically: absent is
   // null (the default, not malformed); an unreadable file is '' — malformed, so doctor WARNs (§9.3).
   const cr = readBounded(P.cap, CONTROL_FILE_MAX, true);
   const capRead = cr.state === 'absent' ? null : cr.state === 'value' ? cr.value : '';
@@ -178,6 +203,35 @@ function boxFacts(env, P) {
   const text = readTrimmed(P.op);
   const m = text === null ? null : parseOpMarker(text);
   env.op = m === null ? null : { verb: m.verb, pid: m.pid, alive: pidAlive(m.pid), start_ms: m.startMs };
+  // D-5016 (history-doctor-reads-a-live-pass): the scheduled pass's marker. `live` is the IDENTITY test (the pid's start
+  // time and the boot id measured now equal the marker's), never `kill(pid, 0)`, which a reused pid answers; anything
+  // unmeasurable (no /proc, a dead pid, an unreadable or malformed marker) is not live, and a malformed one is no marker.
+  const pt = readTrimmed(P.pass);
+  let pm = pt === null ? null : parsePassMarker(pt);
+  let passLive = pm !== null && decidePassLive(pm, procIdentityOf(pm.pid));
+  if (pm !== null && !passLive) {
+    // D-5026: the marker was read, then the identity measured. A pass that writes no tick (held, migrated) can end in between and
+    // remove its marker through its `finally`: it would read here as a dead marker started after the last tick, one false death for
+    // this run. When the identity does not measure live, the marker is read again. Gone: the pass ended and there is no marker. The
+    // same text: still a dead marker, which is the evidence. DIFFERENT text: another pass wrote its own marker in the gap, and that
+    // text is parsed and its identity measured once, and what that measure says stands (live, not live, or no marker when it does
+    // not parse); a loop would only chase a marker that keeps changing, so the second marker's answer is the answer.
+    const again = readTrimmed(P.pass);
+    if (again !== pt) {
+      pm = again === null ? null : parsePassMarker(again);
+      passLive = pm !== null && decidePassLive(pm, procIdentityOf(pm.pid));
+    }
+  }
+  env.pass = pm === null ? null : { pid: pm.pid, start_ms: pm.startMs, live: passLive };
+  // D-5026 (history-pass-death-record): the record a pass left when it found a pass that ended without its tick. Null is ABSENT
+  // only; a record that is there and cannot be read or is not in the grammar is 'unmeasured' (as `lag` is), never null, so
+  // healthInputsOf names it in the unmeasured extras and doctor FAILs status-unreadable for it, never "no death".
+  const pd = readBounded(P.passDied, CONTROL_FILE_MAX, false);
+  if (pd.state === 'absent') env.pass_died = null;
+  else {
+    const rec = pd.state === 'value' ? parsePassDied(pd.value.trim()) : null;
+    env.pass_died = rec === null ? 'unmeasured' : { pid: rec.pid, start_ms: rec.startMs, found_ms: rec.foundMs, count: rec.count };
+  }
 }
 
 /** This store's journal (bytes, newest UTC month) and every OTHER store's directory beside it, listed and
@@ -219,13 +273,14 @@ function snapshotBytes(P) {
   try { return statSync(join(P.backups, best.n)).size; } catch { return null; }
 }
 
-/** The FTS word (§9.1): the read-only probe, then whether derivation has made the table. A probe that throws
- *  is probe-failed, never folded into absent. */
+/** The FTS word (§9.1): the three facts grep's index gate reads (recall.mjs's indexGate), through the same lib decision,
+ *  so status and grep never disagree: the read-only probe, whether derivation has made the table, the backfill row
+ *  ('fts', 1) with its completed_ms, and an open doctor --repair rebuild row. `ready` is the gate's ok; anything else is
+ *  the word grep answers exit 7 or 5 by (fts5-absent, fts-pending, probe-failed). A probe that throws is probe-failed,
+ *  never folded into absent. Only v1 columns are named (D-4604 history-status-fts-word-is-the-grep-gate). */
 function ftsWord(db) {
-  let probe;
-  try { probe = probeFts5(db); } catch { return 'probe-failed'; }
-  if (probe === 'absent') return 'fts5-absent';
-  return db.prepare(STATUS_SQL.ftsTable).get() === undefined ? 'fts-pending' : 'ready';
+  const gate = decideGrepIndex(ftsGateFactsOn(db));
+  return gate.ok ? 'ready' : gate.reason;
 }
 
 /** A bound store, read through the read-only handle. user_version is read first, and only v1 columns are
@@ -295,36 +350,52 @@ function readStoreAnswered(env, P, nowMs) {
       sqliteError: e !== null && typeof e === 'object' && e.code === 'ERR_SQLITE_ERROR',
     });
     if (d === null) throw e;
-    process.stderr.write(`ccrc history: ${d.reason}: ${e.message}\n`);
+    errLine(`ccrc history: ${d.reason}: ${e.message}`);
     decided(env, d);
   }
 }
 
-/** `status --json`'s envelope (§8.3, §8.4). The no-store answer is §8.3's table in its own order: Darwin,
- *  the recorded role, the 2 s reachability stat, then every presence input measured (an unreadable one is
- *  store-unmeasured, never absent). */
+/** What §8.3's no-store table reads, measured in the table's own order (W1-B2 Task 10: shared by status and the
+ *  read verbs, so the two never measure a store differently):
+ *   - Darwin and the recorded role first: they answer before anything else is touched;
+ *   - then the 2 s reachability stat of db/history.db; one that never settles reads unsettled, and nothing
+ *     behind it is measured;
+ *   - then every presence input (measureStoreFacts), with the shim measured beside them. */
+export async function measureReach(home) {
+  const P = historyPaths(home);
+  const darwin = process.platform === 'darwin';
+  const role = readRole(P);
+  if (darwin || role === 'server') return { darwin, role, facts: unmeasuredFacts(role), statSettled: true, shim: 'unmeasured' };
+  const stat = await settleWithin(fsp.stat(P.dbFile), CLI_STAT_DEADLINE_MS);
+  if (!stat.settled) return { darwin, role, facts: unmeasuredFacts(role), statSettled: false, shim: presence(P.shim) };
+  return { darwin, role, facts: measureStoreFacts(home, role), statSettled: true, shim: presence(P.shim) };
+}
+
+/** decideCliStore's input from a reach measurement. */
+function cliFactsOf(reach) {
+  return { ...reach.facts, darwin: reach.darwin, statSettled: reach.statSettled, shim: reach.shim };
+}
+
+/** `status --json`'s envelope (§8.3, §8.4). The no-store answer is §8.3's table over measureReach. */
 export async function statusEnvelope(home, nowMs) {
   const P = historyPaths(home);
   const env = emptyEnvelope(P);
-  const darwin = process.platform === 'darwin';
-  const role = readRole(P);
-  env.role = role;
-  if (darwin || role === 'server') {
-    return decided(env, decideCliStore({ ...unmeasuredFacts(role), darwin, statSettled: true, shim: 'unmeasured' }));
-  }
+  const reach = await measureReach(home);
+  env.role = reach.role;
+  const d = decideCliStore(cliFactsOf(reach));
+  if (reach.darwin || reach.role === 'server') return decided(env, d);
   boxFacts(env, P);
-  const stat = await settleWithin(fsp.stat(P.dbFile), CLI_STAT_DEADLINE_MS);
-  if (!stat.settled) {
+  if (!reach.statSettled) {
     const id = readTrimmed(P.storeId);
     env.store_id = id !== null && UUID_RE.test(id) ? id : null;
-    return decided(env, decideCliStore({ ...unmeasuredFacts(role), darwin, statSettled: false, shim: presence(P.shim) }));
+    return decided(env, d);
   }
-  const facts = measureStoreFacts(home, role);
+  const facts = reach.facts;
   if (facts.storeId.state === 'value') env.store_id = facts.storeId.value;
   else if (facts.dbStoreId.state === 'value') env.store_id = facts.dbStoreId.value;
-  const d = decideCliStore({ ...facts, darwin, statSettled: true, shim: presence(P.shim) });
   await freeSpace(env, P);
   env.snapshot_bytes = snapshotBytes(P);
+  // B1's answering wrapper, never bare readStore: a failed read is ONE exit-5 envelope (review 316 F11).
   if (d.read) readStoreAnswered(env, P, nowMs);
   else decided(env, d);
   journalFacts(env, P);
@@ -360,19 +431,509 @@ export function render(env) {
   return `${lines.join('\n')}\n`;
 }
 
-/** `ccrc history <verb> …`. W1-B1: `status [--json]` only. */
-export async function main(argv) {
-  const home = process.env.HOME ?? '';
-  const json = argv.includes('--json');
-  const rest = argv.filter((a) => a !== '--json');
-  if (rest.length !== 1 || rest[0] !== 'status') {
-    process.stderr.write('usage: ccrc history status [--json]   (W1-B1; the read and operator verbs arrive with W1-B2)\n');
-    if (json) process.stdout.write(`${JSON.stringify({ ...emptyEnvelope(historyPaths(home)), exit: EXIT.REFUSED, reason: 'bad-args' })}\n`);
-    return EXIT.REFUSED;
+// ── W1-B2: the verb dispatcher and the read verbs' delivery (spec §8.1–§8.4, §8.8; W1-B2 Task 10) ──────────
+//
+// `ccrc history <verb>` answers two kinds of verb (§8.2):
+//   - BOX verbs derive no identity: `status`; `recall-off`, which in B2 answers only its refusals (the verb that
+//     writes ships with W2); and, from Task 19, the operator verbs.
+//   - READ verbs (READ_VERBS) need one, from tmux. They run in this order, each step a lib decision over what
+//     this file measured:
+//     1. the argument whitelist (parseReadArgs; READ_OPTIONS is the one list per verb);
+//     2. §8.3's Darwin and recorded-role rows (decideCliStore): 9 before any identity, so a server box needs no
+//        pane;
+//     3. the identity (decideIdentity over a bounded `tmux display-message -p -t "$TMUX_PANE" '#S'`);
+//     4. the harness (decideHarness over $REG/<id>.harness: unsupported and unreadable are refusals, never 6);
+//     5. the generation (resolveGeneration: CCRC_SESSION_GENERATION, then $REG/<id>.generation, then newest);
+//     6. the rest of §8.3's table, after the 2 s reachability stat (measureReach); no DB open before it;
+//     7. the read-only open (openReader), the journal mode (decideStatusRead: not WAL is store-not-wal), and the
+//        store's own version;
+//     8. the scope (decideScope), then its families and their transcripts; merged families and unconfirmed
+//        epochs are never read;
+//     9. the pair index and its belt (redact_hashes, plus the frozen list and the declared secretsFiles the last
+//        tick recorded, read now) for output redaction (§8.3 layers 1 and 4).
+//   A failed read of the admitted store, in any step from 7 on or in the verb's own read, is ONE exit-5 answer
+//   (decideStatusReadFailure, as status gives); any other throw is a defect, exit 1.
+//   The verbs' executors are recall.mjs's. This block decides nothing: it renders, and runs the second belt (§8.3,
+//   D-4613) STRUCTURE-AWARE: redactFinalJson over a --json envelope's value before JSON.stringify serialises it,
+//   redactFinalText over human text line by line and tag by tag. No pass reads serialised structure.
+
+/** Every bad-args answer prints this on stderr. */
+const USAGE = [
+  'usage: ccrc history <verb> [options]',
+  '  read verbs (in a cc- tmux pane): tree [--depth N] | grep <words> | describe <id | pasted line> | expand <id>',
+  '    each also takes one of: --session <id> | --project | --workspace; and --json',
+  '  box verbs: status [--json]',
+  '  operator verbs: import | prune | reparse | doctor [--repair | --backup | --migrate | --adopt | --restore <file> | --rebuild [--store-id <uuid>]]',
+  '  every exit code and reason: the ccrc-history skill',
+].join('\n');
+
+/** No pairs: a refusal prints no recalled text, but every output still takes the final belt's context and shape
+ *  layers (§8.3). */
+const NO_PAIRS = makePairIndex([]);
+
+/** One stderr line carrying a thrown error's text, through redactFinalLines (D-4613 round 5: never framed, so no tag split;
+ *  D-5021: the field pass first, as the only redaction raw text gets) like every other output (§8.3, §12: the final
+ *  stdout, stderr and --json each take one more pass). A SQLite message can quote a value, and the three sites that
+ *  wrote `e.message` raw did not redact it (HA2 H-32). Every error text on stderr goes through here. `idx` is the pair
+ *  index of the read the text belongs to, where there is one (D-5023): NO_PAIRS only where no index was built. */
+function errLine(text, idx = NO_PAIRS) {
+  process.stderr.write(redactFinalLines(`${text}\n`, idx));
+}
+
+/** A thrown value's text for an internal-error line. */
+function thrownText(e) {
+  return e && e.message ? e.message : String(e);
+}
+const ABSENT = Object.freeze({ state: 'absent' });
+const UNREADABLE = Object.freeze({ state: 'unreadable' });
+/** A registry field or a recall-off file is a few dozen bytes; a read stops here. */
+const FIELD_READ_MAX = 4096;
+
+/** A small file as a Presence (§8.2; IV5: unreadable is never absent):
+ *   - ENOENT is absent;
+ *   - any other failure, a symlink (O_NOFOLLOW) or a non-regular file is unreadable;
+ *   - a value is the trimmed text of the first FIELD_READ_MAX bytes.
+ *  Callers form `p` only from an id idOk passed: no id becomes a path unchecked (slug history-id-grammar). */
+function presenceOf(p) {
+  let fd;
+  try {
+    fd = openSync(p, FS.O_RDONLY | FS.O_NOFOLLOW | FS.O_NONBLOCK);
+  } catch (e) {
+    return e !== null && typeof e === 'object' && e.code === 'ENOENT' ? ABSENT : UNREADABLE;
   }
+  try {
+    if (!fstatSync(fd).isFile()) return UNREADABLE;
+    const b = Buffer.alloc(FIELD_READ_MAX);
+    const n = readSync(fd, b, 0, b.length, 0);
+    return { state: 'value', value: b.subarray(0, n).toString('utf8').trim() };
+  } catch {
+    return UNREADABLE;
+  } finally {
+    closeSync(fd);
+  }
+}
+const regPresence = (P, id, field) => presenceOf(`${P.reg}/${id}.${field}`);
+
+/** The pane's tmux session name (§8.2; C3, C65). The call is bounded at TMUX_DEADLINE_MS and ALWAYS uses -t: a
+ *  tmux call without -t answers for "the most recent session", which is some other pane. A tmux that does not
+ *  answer in time is killed and reads unsettled. Whether the answer is an identity is decideIdentity's call. */
+export function tmuxSession(pane) {
+  const r = spawnSync('tmux', ['display-message', '-p', '-t', pane, '#S'], {
+    encoding: 'utf8', timeout: TMUX_DEADLINE_MS, killSignal: 'SIGKILL', stdio: ['ignore', 'pipe', 'ignore'],
+  });
+  return { settled: r.error === undefined && r.signal === null, status: r.status, stdout: typeof r.stdout === 'string' ? r.stdout : '' };
+}
+
+/** A read verb's answer when there is no ReadContext. `reason` rides only where §8.3 gives the exit one. `id`
+ *  and `gen` are what the counter line names; both are null before the identity resolved. */
+function refusal(exit, reason, storeId, id, gen) {
+  return { exit, ...(reason === undefined ? {} : { reason }), storeId, id, gen };
+}
+
+/** The store_id an exit-5 or exit-6 answer names (§8.3: the store-unbound remedy needs no sqlite3). */
+function refusalStoreId(reach, P) {
+  if (reach.facts.storeId.state === 'value') return reach.facts.storeId.value;
+  if (reach.facts.dbStoreId.state === 'value') return reach.facts.dbStoreId.value;
+  if (!reach.statSettled) {
+    const id = readTrimmed(P.storeId);
+    return id !== null && UUID_RE.test(id) ? id : null;
+  }
+  return null;
+}
+
+/** The output redaction's index (§8.3 layers 1 and 4). Pairs: every (len, sha256) the sweep recorded in redact_hashes,
+ *  which covers each account's declared secretsFile, plus the pairs of the files read now, so a value added since the
+ *  last tick is redacted too. The belt (W1-B2 Task 7A): the units of the frozen list's and the declared secretsFiles'
+ *  values read now; the declared paths are those the last tick recorded in meta redact_sources (Task 7B), because this
+ *  process sources no bash. The values live only in this process's memory, inside the belt (and, for --regex, the
+ *  child's stdin, Task 14): never printed, persisted or journaled. loadSecrets is the W1-B2 block's static import
+ *  (never an import(): B1's ring census refuses one in a shipped module); Task 19's operator relay reuses this index. */
+function pairIndexOf(db, home) {
+  const recorded = db.prepare('SELECT len, sha256 FROM redact_hashes').all()
+    .map((r) => ({ len: Number(r.len), sha256: Buffer.from(r.sha256).toString('hex') }));
+  const sources = db.prepare('SELECT v FROM meta WHERE k = ?').get(REDACT_SOURCES_META);
+  const loaded = loadSecrets(home, parseRedactSources(sources?.v));
+  return makePairIndex([...recorded, ...loaded.pairs], makeBelt(beltUnits(loaded.values)));
+}
+
+/** A failed read of an admitted store as a read verb's refusal (§8.3: ONE answer, exit 5, for a DB or schema error),
+ *  measured as B1's readStoreAnswered measures it and decided by lib's decideStatusReadFailure: a StoreError's word,
+ *  SQLite's own error (ERR_SQLITE_ERROR: a missing table or column, a corrupt page, an I/O error) as
+ *  store-read-failed, the error's message on stderr. Null for any other throw, a defect the caller rethrows, so it
+ *  stays exit 1 with no answer (review 316 F11's rule; B1's slug history-import-refusal-words names the word). */
+function readFailure(e, storeId, id, gen, idx = NO_PAIRS) {
+  const f = decideStatusReadFailure({
+    storeWord: e instanceof StoreError ? e.word : null,
+    sqliteError: e !== null && typeof e === 'object' && e.code === 'ERR_SQLITE_ERROR',
+  });
+  if (f === null) return null;
+  errLine(`ccrc history: ${f.reason}: ${e.message}`, idx);
+  return refusal(f.exit, f.reason, storeId, id, gen);
+}
+
+/** The argv that reproduces this scope on a next: line. */
+function scopeArgsOf(o) {
+  if (typeof o.session === 'string') return ['--session', o.session];
+  if (o.project === true) return ['--project'];
+  if (o.workspace === true) return ['--workspace'];
+  return [];
+}
+
+/** The CLI's one write (§8.1): `{v, ev:'recall', id, gen?, cmd, rc, ms, ts}`, fenced like the hook's lines.
+ *  It carries no query text and no argument (G5). `gen` rides only when it has the UUID grammar. A line the
+ *  spool grammar would reject (parseSpoolLine) is never written: the answer is null. */
+export function recallLine(i) {
+  const rec = { v: 1, ev: 'recall', id: i.id };
+  if (typeof i.gen === 'string' && UUID_RE.test(i.gen)) rec.gen = i.gen;
+  rec.cmd = i.cmd;
+  rec.rc = i.rc;
+  rec.ms = i.ms;
+  rec.ts = i.ts;
+  const line = JSON.stringify(rec);
+  return parseSpoolLine(line).ok ? line : null;
+}
+
+/** Append `\n<line>\n` to spool/<id>.jsonl in ONE write on an O_APPEND descriptor (§5.1).
+ *  It writes only into a pre-existing real spool directory and appends only to a regular file. O_NOFOLLOW and
+ *  O_NONBLOCK reject a link or a swapped FIFO; any accounting failure leaves the read answer unchanged.
+ *  The optional callbacks make the pre-open/post-open replacement and open-flag fixtures deterministic. */
+export function writeRecallLine(home, id, line, afterPrecheck = null, afterOpen = null) {
+  const P = historyPaths(home);
+  try {
+    if (!lstatSync(P.spool).isDirectory()) return;
+    const p = `${P.spool}/${id}.jsonl`;
+    let st = null;
+    try {
+      st = lstatSync(p);
+    } catch (e) {
+      if (!(e !== null && typeof e === 'object' && e.code === 'ENOENT')) return;
+    }
+    if (st !== null && !st.isFile()) return;
+    if (typeof afterPrecheck === 'function') afterPrecheck(p);
+    const flags = FS.O_WRONLY | FS.O_APPEND | FS.O_CREAT | FS.O_NOFOLLOW | FS.O_NONBLOCK;
+    const fd = openSync(p, flags, 0o600);
+    try {
+      if (typeof afterOpen === 'function') afterOpen(fd, flags);
+      if (!fstatSync(fd).isFile()) return;
+      writeSync(fd, `\n${line}\n`);
+    } finally {
+      closeSync(fd);
+    }
+  } catch {
+    // Counter accounting is deliberately best-effort.
+  }
+}
+
+/** One counter line per identity-resolved read call, whatever its exit. */
+function countRecall(home, i) {
+  if (existsSync(historyPaths(home).off)) return;
+  const line = recallLine(i);
+  if (line !== null) writeRecallLine(home, i.id, line);
+}
+
+function realOrNull(p) {
+  try {
+    return realpathSync(p);
+  } catch {
+    return null;
+  }
+}
+
+/** A defect (exit 1) thrown out of readContext after the read's identity resolved, D-5023 (fix round 1, review 441 F6): it
+ *  carries the identity and generation known at the throw, so readVerb counts the call (rc 1) as it counts every other
+ *  identity-resolved call. `cause` is the thrown value itself. */
+class ReadDefect extends Error {
+  constructor(cause, id, gen) {
+    super(thrownText(cause));
+    this.cause = cause;
+    this.id = id;
+    this.gen = gen;
+  }
+}
+
+/** The read context: every step of the order above through the scope, or the refusal that stopped it.
+ *  On success the caller owns `rc.db` and closes it. A throw that is not a failed read of the admitted store is a
+ *  defect, and once the identity resolved it leaves as a ReadDefect (D-5023). */
+export async function readContext(home, verb, parsed, nowMs = Date.now()) {
+  const seen = { id: null, gen: null };
+  try {
+    return await readContextIn(home, verb, parsed, nowMs, seen);
+  } catch (e) {
+    if (typeof seen.id === 'string') throw new ReadDefect(e, seen.id, seen.gen);
+    throw e;
+  }
+}
+
+async function readContextIn(home, verb, parsed, nowMs, seen) {
+  const P = historyPaths(home);
+  if (process.platform === 'darwin' || readRole(P) === 'server') {
+    const d = decideCliStore(cliFactsOf(await measureReach(home)));
+    return refusal(d.exit, d.reason, null, null, null);
+  }
+  const pane = process.env.TMUX_PANE ?? null;
+  const who = decideIdentity({ pane, tmux: paneOk(pane) ? tmuxSession(pane) : null });
+  if (!who.ok) return refusal(who.rc, who.reason, null, null, null);
+  const id = who.id;
+  const harness = decideHarness(regPresence(P, id, 'harness'));
+  if (!harness.ok) return refusal(harness.rc, harness.reason, null, id, null);
+  const generation = resolveGeneration({
+    envGen: process.env.CCRC_SESSION_GENERATION ?? null, regGen: regPresence(P, id, 'generation'),
+  });
+  let gen = generation.value;
+  seen.id = id;
+  seen.gen = gen;
+  const offFile = presenceOf(recallOffPath(home, id));
+  const offNow = generation.value !== null || offFile.state !== 'value';
+  if (offNow && decideRecallOff({ file: offFile, generation: generation.value ?? '' }) === 'off') {
+    return refusal(EXIT.RECALL_OFF, undefined, null, id, gen);
+  }
+  const reach = await measureReach(home);
+  const d = decideCliStore(cliFactsOf(reach));
+  if (!d.read) return refusal(d.exit, d.reason, refusalStoreId(reach, P), id, gen);
+  let db;
+  try {
+    db = openReader(P.dbFile);
+  } catch (e) {
+    const f = readFailure(e, refusalStoreId(reach, P), id, gen);
+    if (f === null) throw e;
+    return f;
+  }
+  let handed = false;
+  let storeId = refusalStoreId(reach, P);
+  try {
+    const meta = db.prepare("SELECT v FROM meta WHERE k = 'store_id'").get();
+    if (meta !== undefined) storeId = meta.v;
+    // lib's decideStatusRead decides the journal mode, as it does for status: this file only measures.
+    const mode = db.prepare('PRAGMA journal_mode').get().journal_mode;
+    const version = userVersion(db);
+    const rd = decideStatusRead({ userVersion: version, journalMode: mode, recordedMigration: undefined });
+    if (rd.reason !== undefined) return refusal(rd.exit, rd.reason, storeId, id, gen);
+    if (generation.value === null) {
+      // 'newest' is a store fact. Use its actual family generation for recall-off and counter accounting.
+      const own = familiesOf(db, { kind: 'family', id, generation: null, project: null, workdir: null, workdirReal: null });
+      const ownGen = own.length === 1 ? own[0].generation : '';
+      if (UUID_RE.test(ownGen)) { gen = ownGen; seen.gen = gen; }
+      if (!offNow && decideRecallOff({ file: offFile, generation: ownGen }) === 'off') {
+        return refusal(EXIT.RECALL_OFF, undefined, storeId, id, gen);
+      }
+    }
+    const o = parsed.opts;
+    const session = typeof o.session === 'string' ? o.session : null;
+    const scopeInputs = {
+      source: SCOPE_SOURCES[0], id, generation,
+      flags: { project: o.project === true, workspace: o.workspace === true, session },
+      reg: {
+        project: regPresence(P, id, 'project'),
+        workdir: regPresence(P, id, 'workdir'),
+        sessionProject: session === null ? null : (idOk(session) ? regPresence(P, session, 'project') : ABSENT),
+      },
+    };
+    const verdict = decideScope(scopeInputs);
+    if (!verdict.ok) return refusal(verdict.rc, verdict.reason, storeId, id, gen);
+    // --session names another id's family: read with that id's own registry generation (§8.2).
+    const famGen = session === null ? verdict.generation
+      : resolveGeneration({ envGen: null, regGen: regPresence(P, verdict.id, 'generation') }).value;
+    // The workspace match compares realpaths; a workdir that no longer resolves matches only verbatim.
+    const workdirReal = verdict.kind === 'workspace' && typeof verdict.workdir === 'string' ? realOrNull(verdict.workdir) : null;
+    const families = familiesOf(db, {
+      kind: verdict.kind, id: verdict.id, generation: famGen, project: verdict.project, workdir: verdict.workdir, workdirReal,
+    });
+    if (session === null && verdict.kind === 'family' && families.length === 1 && UUID_RE.test(families[0].generation)) {
+      gen = families[0].generation;
+      seen.gen = gen;
+    }
+    const transcriptPks = transcriptsOf(db, families.map((f) => f.sessionPk));
+    if (transcriptPks.length === 0) return refusal(EXIT.NOT_INDEXED, undefined, storeId, id, gen);
+    const rc = {
+      db, version, schema: SCHEMA_ADDED, storeId, nowMs, home, id, gen,
+      scope: {
+        kind: verdict.kind, id: verdict.id, generation: families.length === 1 ? families[0].generation : null,
+        project: verdict.project, workdir: verdict.workdir,
+        sessionPks: families.map((f) => f.sessionPk), transcriptPks, families,
+      },
+      scopeArgs: scopeArgsOf(o),
+      pairIdx: pairIndexOf(db, home),
+    };
+    handed = true;
+    return rc;
+  } catch (e) {
+    // A read of this admitted store failed (the meta read, the PRAGMA, the scope's families and transcripts, the
+    // pair index): ONE exit-5 answer, as status gives (review 316 F11). Anything else is a defect: exit 1.
+    const f = readFailure(e, storeId, id, gen);
+    if (f === null) throw e;
+    return f;
+  } finally {
+    if (!handed) db.close();
+  }
+}
+
+/** The recall.mjs runner each read verb calls. Each entry takes (rc, parsed, argv): `parsed` is parseReadArgs'
+ *  answer (the whitelist), `argv` the verb's own words, which grep and describe re-read with their own value
+ *  grammars. Tasks 12, 15 and 16 add grep, describe and expand in place. A verb not here answers bad-args before
+ *  anything is measured. */
+const READ_RUNNERS = Object.freeze({
+  tree: (rc, p) => runTree(rc, { depth: Number(p.opts.depth) }),
+  grep: (rc, p, argv) => grepVerb(rc, argv),
+  describe: (rc, p, argv) => describeVerb(rc, argv),
+  expand: (rc, p) => expandVerb(rc, p),
+});
+
+function refusalLine(exit, reason) {
+  return `exit ${exit}${reason === undefined ? '' : ` ${reason}`}: ${EXIT_MEANING[exit] ?? 'see --json'}`;
+}
+
+/** A refusal, written once: one --json envelope (store_id and coverage always), or one human line. */
+function emitRefusal(r, json, pairIdx) {
+  const text = json
+    ? JSON.stringify(redactFinalJson(readEnvelope({
+      exit: r.exit, ...(r.reason === undefined ? {} : { reason: r.reason }), storeId: r.storeId ?? null,
+      scope: null, header: null, items: [], shown: 0, total: 0, next: null,
+    }), pairIdx))
+    : redactFinalLines(refusalLine(r.exit, r.reason), pairIdx);
+  process.stdout.write(`${text}\n`);
+  return r.exit;
+}
+
+/** The --json scope object (§8.3). A widened scope names only a bounded prefix; `families_total` is complete. */
+function scopeJson(rc) {
+  return {
+    kind: rc.scope.kind, id: rc.scope.id, project: rc.scope.project,
+    families: rc.scope.families.slice(0, SCOPE_FAMILIES_JSON_MAX)
+      .map((f) => ({ ccrc_id: f.ccrcId, generation: f.generation, first_seen_ms: f.firstSeenMs })),
+    families_total: rc.scope.families.length,
+    transcripts: rc.scope.transcriptPks.length,
+  };
+}
+
+/** A verb's result. Human form: the header, the body, `shown K of N`, the next: line, the hint. --json: one
+ *  envelope. The second belt (§8.3, D-4613) is structure-aware: --json maps the envelope value through redactFinalJson before
+ *  it is serialised, the human page goes through redactFinalText line by line and tag by tag. */
+function emitResult(rc, res, json) {
+  const h = scopeHeader(rc);
+  let text;
+  if (json) {
+    text = `${JSON.stringify(redactFinalJson(readEnvelope({
+      exit: res.exit, ...(res.reason === undefined ? {} : { reason: res.reason }), storeId: rc.storeId, scope: scopeJson(rc),
+      header: { indexedThroughMs: h.indexedThroughMs, lagS: h.lagS }, items: res.items, shown: res.shown, total: res.total,
+      next: res.next === null ? null : nextLine(res.next),
+      // D-4595 (history-json-envelope-carries-hint): the human form prints res.hint below; --json carries it too.
+      ...(res.hint === undefined ? {} : { hint: res.hint }),
+    }), rc.pairIdx))}\n`;
+  } else {
+    // A runner's refusal (out-of-scope, regex-syntax, migration-pending, …) names its word under the header.
+    const lines = [res.header ?? h.line, ...(res.reason === undefined ? [] : [refusalLine(res.exit, res.reason)]),
+      ...res.blocks, shownLine(res.shown, res.total)];
+    if (res.next !== null) lines.push(nextLine(res.next));
+    if (res.hint !== undefined) lines.push(`hint: ${res.hint}`);
+    text = redactFinalText(`${lines.join('\n')}\n`, rc.pairIdx);
+  }
+  process.stdout.write(text);
+  return res.exit;
+}
+
+async function readVerb(home, verb, argv) {
+  const t0 = Date.now();
+  const parsed = parseReadArgs(verb, argv);
+  const json = parsed.ok ? parsed.opts.json === true : argv.includes('--json');
+  if (!parsed.ok) {
+    process.stderr.write(`${USAGE}\n`);
+    return emitRefusal({ exit: EXIT.REFUSED, reason: parsed.reason, storeId: null }, json, NO_PAIRS);
+  }
+  const runner = Object.hasOwn(READ_RUNNERS, verb) ? READ_RUNNERS[verb] : null;
+  if (runner === null) {
+    process.stderr.write(`ccrc history: ${verb} is not in this build\n${USAGE}\n`);
+    return emitRefusal({ exit: EXIT.REFUSED, reason: 'bad-args', storeId: null }, json, NO_PAIRS);
+  }
+  // D-5023 (history-read-defect-keeps-the-reads-index-and-counter, review 441 F6 and F11): a defect (a throw that
+  // readFailure does not map to an exit-5 answer) is answered HERE, by the call that knows the read: its internal-error
+  // line is redacted with the context's pair index and belt once the context exists, and the counter line is written
+  // in the `finally`, which a throw cannot skip, with rc 1.
+  let ctx = null;
+  let who = null;
+  let exit = EXIT.INTERNAL;
+  try {
+    try {
+      ctx = await readContext(home, verb, parsed, t0);
+    } catch (x) {
+      if (!(x instanceof ReadDefect)) throw x;
+      who = { id: x.id, gen: x.gen };
+      throw x.cause;
+    }
+    who = { id: ctx.id, gen: ctx.gen };
+    if (!('db' in ctx)) {
+      exit = emitRefusal(ctx, json, NO_PAIRS);
+    } else {
+      try {
+        let res = null;
+        let failed = null;
+        try {
+          res = runner(ctx, parsed, argv);
+          // The header reads derivation_state and ingest_files. A runner may answer without reaching either (a refusal, a
+          // not-found, describe of a depth>0 node), and then the first read of a damaged table would happen in emitResult,
+          // outside this try. Priming it here puts that SQLite error through readFailure (exit 5), not the defect arm
+          // (exit 1). scopeHeader caches per context, so emitResult reuses it (HA2 H-21; HI2 H-170).
+          scopeHeader(ctx);
+        } catch (e) {
+          const f = readFailure(e, ctx.storeId, ctx.id, ctx.gen, ctx.pairIdx);
+          if (f === null) throw e;
+          failed = f;
+        }
+        exit = failed === null ? emitResult(ctx, res, json) : emitRefusal(failed, json, ctx.pairIdx);
+      } finally {
+        ctx.db.close();
+      }
+    }
+  } catch (e) {
+    exit = EXIT.INTERNAL;
+    errLine(`ccrc history: internal error: ${thrownText(e)}`, ctx !== null && 'db' in ctx ? ctx.pairIdx : NO_PAIRS);
+    return exit;
+  } finally {
+    if (who !== null && typeof who.id === 'string') countRecall(home, { id: who.id, gen: who.gen, cmd: verb, rc: exit, ms: Date.now() - t0, ts: Date.now() });
+  }
+  return exit;
+}
+
+/** An unknown verb, or a box verb's argv off its grammar: B1's bad-args answer, the status-shaped envelope
+ *  under --json (it carries store_id and coverage). */
+function unknownVerb(home, json) {
+  process.stderr.write(`${USAGE}\n`);
+  if (json) process.stdout.write(`${JSON.stringify({ ...emptyEnvelope(historyPaths(home)), exit: EXIT.REFUSED, reason: 'bad-args' })}\n`);
+  return EXIT.REFUSED;
+}
+
+async function statusVerb(home, args) {
+  const json = args.includes('--json');
+  if (args.some((a) => a !== '--json')) return unknownVerb(home, json);
   const env = await statusWithHealth(home, Date.now());
   process.stdout.write(json ? `${JSON.stringify(env)}\n` : `${render(env)}${formatHealth(env.health).map((l) => `${l}\n`).join('')}`);
   return env.exit;
+}
+
+/** `recall-off` in B2: its refusals only (decideRecallOffPreflight). The verb writes nothing and spawns
+ *  nothing. */
+function recallOffVerb(home, args) {
+  const json = args.includes('--json');
+  const a = args.filter((x) => x !== '--json');
+  let d = decideRecallOffPreflight({ args: a, generation: null });
+  if (!d.done) d = decideRecallOffPreflight({ args: a, generation: regPresence(historyPaths(home), d.id, 'generation') });
+  if (d.reason === 'bad-args') process.stderr.write('ccrc history: recall-off writes its file from W2 (the replay eval); this build answers only its refusals\n');
+  return emitRefusal({ exit: d.exit, reason: d.reason, storeId: null }, json, NO_PAIRS);
+}
+
+/** `ccrc history <verb> …` (§8.2): help, the box verbs, the read verbs; anything else is bad-args. */
+export async function main(argv) {
+  const home = process.env.HOME ?? '';
+  const verb = argv[0] ?? '';
+  const rest = argv.slice(1);
+  if (verb === '-h' || verb === '--help' || verb === 'help') {
+    process.stdout.write(`${USAGE}\n`);
+    return EXIT.OK;
+  }
+  if (verb === 'status') return statusVerb(home, rest);
+  if (verb === 'recall-off') return recallOffVerb(home, rest);
+  if (READ_VERBS.includes(verb)) return readVerb(home, verb, rest);
+  if (verb === 'doctor' || (!verb.startsWith('--') && Object.hasOwn(OP_OF_VERB, verb))) return operatorMain(home, argv);
+  return unknownVerb(home, argv.includes('--json'));
 }
 
 // ── the health block (history spec §9.6; W1-B1 task 28) ─────────────────────
@@ -587,7 +1148,7 @@ const listOf = (v) => {
  *  status never reads one fact twice or spells it two ways. A reading that
  *  throws is named in `unmeasured` (Task 28F: absent is not unreadable). */
 function readStoreExtras(p, nowMs) {
-  const x = { breakerOpen: false, recoverUnmovedTicks: 0, exportSegmentNewer: [], exportSegmentMissing: 0, copyBps: null, unmeasured: [] };
+  const x = { breakerOpen: false, recoverUnmovedTicks: 0, exportSegmentNewer: [], exportSegmentMissing: 0, copyBps: null, heldPassMs: null, unmeasured: [] };
   let db;
   try { db = healthStore.openReader(p.dbFile); } catch { x.unmeasured.push('store'); return x; }
   // Each reading is its own try: one that fails is named in `unmeasured` and keeps its default, which
@@ -604,6 +1165,13 @@ function readStoreExtras(p, nowMs) {
     read(healthLib.HEALTH_META.recoverUnmovedTicks, () => { x.recoverUnmovedTicks = intOf(meta(healthLib.HEALTH_META.recoverUnmovedTicks)); });
     read(healthLib.HEALTH_META.exportSegmentNewer, () => { x.exportSegmentNewer = listOf(meta(healthLib.HEALTH_META.exportSegmentNewer)); });
     read(healthLib.HEALTH_META.exportSegmentMissing, () => { x.exportSegmentMissing = intOf(meta(healthLib.HEALTH_META.exportSegmentMissing)); });
+    // D-5027: absent is no held pass; a value that is not a non-negative integer is unmeasured, never "no held pass" (read names it).
+    read(healthLib.HEALTH_META.heldPassMs, () => {
+      const v = meta(healthLib.HEALTH_META.heldPassMs);
+      if (v === null) return;
+      if (!/^[0-9]{1,16}$/.test(v)) throw new Error(`${healthLib.HEALTH_META.heldPassMs} is not an integer`);
+      x.heldPassMs = Number(v);
+    });
     read('copy_bps', () => {                                            // task 13's executor
       const bps = intOf(meta('copy_bps'));
       x.copyBps = bps > 0 ? bps : null;
@@ -626,7 +1194,7 @@ async function readHealthExtras(home, env, nowMs) {
   } catch { dbPath = p.dbDir; }
   const store = env.exit === healthLib.EXIT.OK
     ? readStoreExtras(p, nowMs)
-    : { breakerOpen: false, recoverUnmovedTicks: 0, exportSegmentNewer: [], exportSegmentMissing: 0, copyBps: null, unmeasured: [] };
+    : { breakerOpen: false, recoverUnmovedTicks: 0, exportSegmentNewer: [], exportSegmentMissing: 0, copyBps: null, heldPassMs: null, unmeasured: [] };
   // FU8 (FP3): a link or a file at spool/ is measured by lstat, never followed, and no spool/.draining is read through it.
   let spoolNotDirectory = false;
   try { spoolNotDirectory = !healthFs.lstatSync(p.spool).isDirectory(); } catch { spoolNotDirectory = false; }
@@ -636,8 +1204,13 @@ async function readHealthExtras(home, env, nowMs) {
   if (refusedNodes === null) store.unmeasured.push('spool/');
   const held = env.exit === healthLib.EXIT.OK && !spoolNotDirectory ? oldestUnjournaledMs(p) : { oldest: null, unreadable: false };
   if (held.unreadable) store.unmeasured.push('spool/.draining');
+  // The interrupted attempts decide a snapshot-needs-op verdict whatever the size (planMigration), so doctor's line needs the count; absent is 0.
+  // The marker's state rides beside it: an unreadable, empty or garbled marker counts as the cap (fail closed) but was never counted.
+  const attempts = env.migration === 'snapshot-needs-op' ? healthStore.measureAttempts(home, env.code_version) : { state: 'absent', count: 0 };
   return {
     ...store,
+    migrationAttempts: attempts.count,
+    migrationAttemptsUnmeasured: attempts.state === 'unmeasured',
     modesWrong: healthLib.modesWrongOf(measureModeEntries(p, unreachable || env.reason === 'store-root-dangling')),
     rootIsSymlink,
     spoolNotDirectory,
@@ -676,6 +1249,12 @@ function healthInputsOf(env, x, nowMs) {
       ? { step: String(env.recovering.step), cursor: String(env.recovering.cursor ?? ''), cursorUnmovedTicks: x.recoverUnmovedTicks }
       : null,
     op: env.op ? { verb: env.op.verb, pid: env.op.pid, alive: env.op.alive === true } : null,
+    pass: env.pass ? { pid: env.pass.pid, startMs: env.pass.start_ms, live: env.pass.live === true } : null,
+    // D-5026: the death record, or null when there is none; an unreadable one is named in extrasUnmeasured below, never read as none.
+    passDied: env.pass_died && env.pass_died !== 'unmeasured'
+      ? { pid: env.pass_died.pid, startMs: env.pass_died.start_ms, foundMs: env.pass_died.found_ms, count: env.pass_died.count }
+      : null,
+    heldPassMs: x.heldPassMs ?? null,
     // The envelope lists the newest tick first; deriveHealth's catching-up rule reads oldest first.
     bytesBehindLast3: [...(env.bytes_behind_last3 ?? [])].map(Number).reverse(),
     fts: env.fts ?? null,
@@ -702,7 +1281,7 @@ function healthInputsOf(env, x, nowMs) {
     spoolNodesRefused: x.spoolNodesRefused,
     exportSegmentNewer: x.exportSegmentNewer,
     exportSegmentMissing: x.exportSegmentMissing,
-    extrasUnmeasured: x.unmeasured,
+    extrasUnmeasured: env.pass_died === 'unmeasured' ? [...x.unmeasured, 'pass-died'] : x.unmeasured,
     // Two measurements of one condition, either enough: the sweep's own record of a failed append on a
     // DB-open pass (Task 24's meta `journal_unwritable`, carried as `journal.unwritable` by Task 27), and
     // its consequence on disk, a held file never journaled (oldestUnjournaledMs, judged by lib.mjs's
@@ -712,6 +1291,8 @@ function healthInputsOf(env, x, nowMs) {
     freeBytes: env.free_bytes ?? null,
     thresholdBytes: env.threshold_bytes ?? null,
     copyBps: x.copyBps,
+    migrationAttempts: x.migrationAttempts,
+    migrationAttemptsUnmeasured: x.migrationAttemptsUnmeasured === true,
     backupsDb: x.backupsDb,
     journalStoreDirs: (env.journal && env.journal.other_store_dirs) ?? [],
   };
@@ -739,19 +1320,344 @@ export function formatHealth(health) {
   return out;
 }
 
+// ── THE OPERATOR DOOR (W1-B2 Task 19) ─────────────────────────────────────────────────────────────────────
+// `ccrc history import|prune|reparse …` and `ccrc history doctor --repair|--backup|--migrate|--adopt|
+// --restore <file>|--rebuild [--store-id <uuid>]` (spec §8.4 "Operator verbs" and "Speed bumps", §8.3's no-store
+// table, §5.1). A BOX verb: it derives no identity and writes no spool line. In order, each step a lib decision:
+//   1. the verb and its arguments, by parseOpVerbArgs. A refusal here spawns nothing;
+//   2. the door, by decideOpDoor over cliFactsOf(reach) (§8.3's one no-store table, decideCliStore, from store.id
+//      and the DB). macOS, a recorded server role and a box that never installed answer 9; a store with no shim
+//      answers 2 writer-absent (a plain uninstall kept the data); an unreachable or dangling store answers its 5;
+//   3. THE GATE, decideOpGate, from this process's CLAUDECODE, isatty(0), a registered recovery step with the facts
+//      its exemptions read (RB6, RB13, RB14; read only behind measureReach's settled stat) and, for an irreversible
+//      form only, the bounded
+//      `tmux display-message -p -t "$TMUX_PANE" '#S'` (Task 10's tmuxSession). The sweep runs the same gate again
+//      from its own environment (slug history-op-gate-in-sweep): decided once, executed twice;
+//   4. the shim, `~/.local/bin/ccd-history-sweep --op <op> <args…>`, as a child. stdin is inherited, so the sweep's
+//      own isatty(0) is the operator's terminal (nothing on the --op path asks whether stderr is a terminal). stdout
+//      and stderr are piped. stdout is relayed line by line as it arrives (an import's dry run can list thousands of
+//      files), each line through redactFinalLines with the read verbs' index (D-5022, review 441 F10; spec §9.8:
+//      redacted on every output). stderr is HELD and redacted as ONE text, as errLine redacts a thrown message, so a
+//      shape that spans lines (a PEM body, a JSON value on the line after its key) is masked whole; it is written when
+//      the child ends, before the CLI's own last line (opRelay's header names the endings and the cap). Its LAST stdout
+//      line, the sweep's `{"rc":…}`, is held back for
+//      decideRelay: 75 (the shim found the lock held) is exit 4 writer-busy, a well-formed result is its rc and
+//      reason, and anything else is exit 1.
+// It never runs sweep.mjs itself: the shim is the ONE lock taker (§5.1, RV13). It passes no env: the child inherits
+// this process's, so the env allow-list holds.
+// Bare `doctor` is the status health, read-only (slug history-bare-doctor-is-status-health, NEW: §8.4 lists the
+// bare form without saying what it does; those lines are what doctor's history check relays).
+
+/** A CLI operator verb, or a doctor flag, → the --op verb the sweep runs. */
+export const OP_OF_VERB = Object.freeze({
+  import: 'import', prune: 'prune', reparse: 'reparse',
+  '--repair': 'repair', '--backup': 'backup', '--migrate': 'migrate', '--adopt': 'adopt', '--restore': 'restore', '--rebuild': 'rebuild',
+});
+
+/** What a human reads for an operator verb's non-zero exit without a word of its own (§8.3). */
+const OP_EXIT_WORDS = Object.freeze({
+  [EXIT.INTERNAL]: 'internal error: the history writer gave no result this CLI could relay',
+  [EXIT.WRITER_BUSY]: 'writer-busy: another history pass holds the lock',
+  [EXIT.NO_STORE]: 'no store on this box (macOS, a server role, or never installed): stop, do not retry',
+});
+
+/** What every non-zero line an operator verb prints ends with (R-X-OPERATOR): these forms are the operator's, never the
+ *  reading session's, so a session that meets a speed bump reads whose call it is, not a precondition to work around. */
+const OP_OPERATOR_NOTE = Object.freeze({
+  [EXIT.WRITER_BUSY]: 'the operator runs it again, from a terminal outside any session, when that pass ends',
+});
+const OP_OPERATOR_NOTE_ANY = 'ccrc history\'s operator verbs are the operator\'s to run, from a terminal outside any session; a session does not retry or work around this';
+
+/** {op, opArgs} for `<verb> <rest…>`, or null. A doctor flag comes first and alone names the op; what follows it
+ *  is that op's arguments, which parseOpVerbArgs judges. */
+function opFormOf(verb, rest) {
+  if (verb === 'doctor') {
+    const flag = rest[0];
+    if (typeof flag !== 'string' || !flag.startsWith('--') || !Object.hasOwn(OP_OF_VERB, flag)) return null;
+    return { op: OP_OF_VERB[flag], opArgs: rest.slice(1) };
+  }
+  if (verb.startsWith('--') || !Object.hasOwn(OP_OF_VERB, verb)) return null;
+  return { op: OP_OF_VERB[verb], opArgs: [...rest] };
+}
+
+/** The pane an irreversible form runs in, read as the sweep reads it (§8.2, §8.4): whether to read it at all is
+ *  lib's paneReadWanted, the one rule the sweep's paneNameFor asks too; the read is Task 10's bounded tmuxSession,
+ *  always with -t. Anything else is null, and the TTY requirement still stands then. */
+function opPaneName(form) {
+  const pane = process.env.TMUX_PANE ?? '';
+  if (!healthLib.paneReadWanted(form, pane)) return null;
+  const t = tmuxSession(pane);
+  return t.settled && t.status === 0 ? t.stdout.trim() : null;
+}
+
+/** What the relay holds of the shim's stderr before it writes some (D-5022): 1 MiB of bytes. Under it the held text is
+ *  redacted as one text when the child ends. Past it, the text up to its LAST line boundary is redacted and written, and
+ *  the rest is held on. A held stretch with NO line break past the cap is written where the over-cap read ended, mid-line, and
+ *  emit adds a newline there: the seam falls at that read, not exactly at the cap, and one line break is ADDED (no byte is
+ *  dropped). The only residual is a shape that is split across that seam, which no pass on either side can see whole. */
+const ERR_HOLD_CAP = 1 << 20;
+/** How long the CLI's own signal handler waits for the held text to leave stderr before it ends the CLI anyway. */
+const SIGNAL_FLUSH_MS = 2000;
+const RELAY_SIGNALS = Object.freeze(['SIGINT', 'SIGTERM', 'SIGHUP']);
+
+/** The shim as a child: its stdout relayed line by line as it arrives, its LAST stdout line held back for the relay;
+ *  its stderr HELD and redacted as one text (D-5022, review 441 F10 and coordinator ruling 5020: a per-line redaction
+ *  cannot see a PEM body after its BEGIN line, or a JSON value on the line after its key, which errLine's whole-text
+ *  pass masks). `emit(text, true)` is the held stderr text, without its last line break (emit adds one). The held text
+ *  is bounded by ERR_HOLD_CAP, and it is written, redacted, BEFORE the CLI's own last line on every ending:
+ *    - the child exits with a code, or is killed by a signal (the child's `close`);
+ *    - the relay itself fails: a throw in a stream handler rejects the promise, after the flush, and operatorMain's
+ *      error path then writes its own line and exits 1. The text written is what had ARRIVED when the handler threw:
+ *      shim stdout and stderr arriving after the throw are not relayed (fail() takes the 'data' listeners and the close
+ *      handler off, D-5022), and the shim keeps running, unreaped, as at the base;
+ *    - the CLI receives SIGINT, SIGTERM or SIGHUP: the handler writes the held text and then raises the same signal on
+ *      this process with the default action back, so the CLI ends as it ends without the handler (killed by that signal).
+ *  The handlers are installed only while the child runs. The two streams are not ordered between themselves. A partial
+ *  last line of stdout is flushed at the child's close. */
+function opRelay(P, op, opArgs, emit) {
+  return new Promise((resolve, reject) => {
+    let done = false;
+    let detach = () => {};
+    const finish = (r) => { if (!done) { done = true; detach(); resolve(r); } };
+    let child;
+    try {
+      child = spawnOp(P.shim, ['--op', op, ...opArgs], { stdio: ['inherit', 'pipe', 'pipe'] });
+    } catch {
+      finish({ exit: EXIT.INTERNAL });
+      return;
+    }
+    let buf = '';
+    let held = null;
+    const take = (line) => {
+      if (held !== null) emit(held, false);
+      held = line;
+    };
+    let errHeld = '';
+    let errBytes = 0;
+    /** The held stderr text, all of it, redacted as one text by emit's caller. */
+    const flushErr = () => {
+      if (errHeld === '') return;
+      const text = errHeld.endsWith('\n') ? errHeld.slice(0, -1) : errHeld;
+      errHeld = '';
+      errBytes = 0;
+      emit(text, true);
+    };
+    /** Past the cap: the held text up to its last line boundary goes out, the rest stays held. With no line boundary at all the
+     *  whole of it goes out, where the over-cap read ended, mid-line, and emit's newline lands there (a seam, one break added). */
+    const spillErr = () => {
+      const cut = errHeld.lastIndexOf('\n');
+      const text = cut === -1 ? errHeld : errHeld.slice(0, cut);
+      errHeld = cut === -1 ? '' : errHeld.slice(cut + 1);
+      errBytes = Buffer.byteLength(errHeld);
+      emit(text, true);
+    };
+    // A throw in a handler is the CLI's own error path: the held text goes out first (what the throw hid is the shim's
+    // stderr, the operator's only reason), then the promise rejects into operatorMain's catch, which writes its line. After the
+    // flush the CLI stops listening BY CONSTRUCTION (D-5022): the pipes' 'data' listeners and the close handler come off, so no
+    // line the shim writes later is relayed, whatever the CLI is still waiting for (exitDrained), and the pipes keep draining
+    // (resume) so the shim, unreaped as at the base, never blocks on a full pipe.
+    const fail = (e) => {
+      if (done) return;
+      done = true;
+      detach();
+      try { flushErr(); } catch { /* the line that follows names the failure */ }
+      child.stdout.off('data', onOut);
+      child.stderr.off('data', onErr);
+      child.off('close', onClose);
+      child.stdout.resume();
+      child.stderr.resume();
+      reject(e);
+    };
+    const safe = (fn) => (...a) => { try { fn(...a); } catch (e) { fail(e); } };
+    const onOut = safe((d) => {
+      buf += d;
+      for (let i = buf.indexOf('\n'); i !== -1; i = buf.indexOf('\n')) {
+        take(buf.slice(0, i));
+        buf = buf.slice(i + 1);
+      }
+    });
+    const onErr = safe((d) => {
+      errHeld += d;
+      errBytes += Buffer.byteLength(d);
+      if (errBytes > ERR_HOLD_CAP) spillErr();
+    });
+    const onClose = safe((status, signal) => {
+      flushErr();
+      if (buf !== '') take(buf);
+      let lastLine = null;
+      if (held !== null && held.startsWith('{"rc"')) lastLine = held;
+      else if (held !== null) emit(held, false);
+      finish(healthLib.decideRelay({ status, signal, lastLine }));
+    });
+    child.stdout.setEncoding('utf8');
+    child.stdout.on('data', onOut);
+    child.stderr.setEncoding('utf8');
+    child.stderr.on('data', onErr);
+    child.on('error', safe(() => { flushErr(); finish({ exit: EXIT.INTERNAL }); }));
+    child.on('close', onClose);
+    // The CLI's own signals: write what is held, then end the CLI as the signal would have (default action, re-raised).
+    let ending = false;
+    const handlers = RELAY_SIGNALS.map((sig) => [sig, () => {
+      const raise = () => { detach(); process.kill(process.pid, sig); };
+      if (ending) { raise(); return; }
+      ending = true;
+      try { flushErr(); } catch { /* ends below either way */ }
+      const t = setTimeout(raise, SIGNAL_FLUSH_MS);
+      process.stderr.write('', () => { clearTimeout(t); raise(); });
+    }]);
+    for (const [sig, h] of handlers) process.on(sig, h);
+    detach = () => { for (const [sig, h] of handlers) process.off(sig, h); };
+  });
+}
+
+/** The relay's redaction index (§8.3, layers 1 and 4): Task 10's pairIndexOf, the read verbs' own index, so a relayed
+ *  sweep line is redacted as a recalled field is: the pairs the sweep recorded in redact_hashes, the frozen list's and
+ *  the declared secretsFiles' pairs read now (the paths from meta redact_sources), and the belt of those values. It
+ *  reads the store only where a read verb would (decideCliStore's `read`, so behind measureReach's settled stat), on
+ *  a read-only handle closed before it returns, so the shim's op never runs beside this process's reader. Where the
+ *  store cannot be read (no settled stat, no DB yet before a rebuild or a restore, or an open or a select that failed
+ *  as a StoreError or SQLite's own error), the index is the files read now with their belt, never no index; any
+ *  other throw is a defect and propagates (exit 1). */
+function relayIndexOf(home, P, reach) {
+  if (decideCliStore(cliFactsOf(reach)).read) {
+    let db = null;
+    try {
+      db = openReader(P.dbFile);
+      return pairIndexOf(db, home);
+    } catch (e) {
+      if (!(e instanceof StoreError) && !(e !== null && typeof e === 'object' && e.code === 'ERR_SQLITE_ERROR')) throw e;
+    } finally {
+      if (db !== null) db.close();
+    }
+  }
+  const files = loadSecrets(home, []);
+  return makePairIndex(files.pairs, makeBelt(beltUnits(files.values)));
+}
+
+/** One operator verb through the door. `emit(line, toStderr)` gets each line the sweep printed before its result on
+ *  stdout, and the text it printed on stderr, held and written whole (`toStderr` true; D-5022), already through
+ *  redactFinalLines with relayIndexOf's index, which is built only once the gate has passed, before the shim starts. */
+export async function runOpVerb(home, verb, rest, emit, seam = {}) {
+  const P = healthLib.historyPaths(home);
+  const map = opFormOf(verb, rest);
+  if (map === null) return { exit: EXIT.REFUSED, reason: 'bad-args' };
+  const parsed = healthLib.parseOpVerbArgs(map.op, map.opArgs);
+  if (!parsed.ok) return { exit: EXIT.REFUSED, reason: parsed.reason };
+  const reach = await measureReach(home);
+  const door = healthLib.decideOpDoor(cliFactsOf(reach));
+  if (!door.ok) return door.reason === undefined ? { exit: door.exit } : { exit: door.exit, reason: door.reason };
+  const form = healthLib.formOf(map.op, map.opArgs);
+  // RB6 (slug history-ops-refused-while-recovering): the CLI's pre-check, so a refused form spawns nothing. It opens
+  // the store read-only only behind measureReach's settled 2 s stat; an unsettled stat, or any answer but `open`,
+  // leaves the call to the sweep's half, which is authoritative. While a step is open it also carries the facts lib's
+  // recoveryExempt reads (RB13: the stored user_version against this build's; RB14: store.id's presence, as
+  // measureReach read it), so it never refuses a form the sweep would let through.
+  const recovering = form !== null && reach.statSettled && opRecoverStepAt(P.dbFile) === 'open';
+  const recovery = recovering
+    ? { storedVersion: opStoredVersionAt(P.dbFile), codeVersion: healthLib.SCHEMA_VERSION, storeId: reach.facts.storeId }
+    : {};
+  const gate = healthLib.decideOpGate(form, { claudecode: (process.env.CLAUDECODE ?? '') !== '', historyOff: healthFs.existsSync(P.off), recovering, ...recovery },
+    isattyOp(0), opPaneName(form));
+  if (!gate.ok) return { exit: gate.rc, reason: gate.reason };
+  const idx = relayIndexOf(home, P, reach);
+  seam.idx = idx;   // the caller's catch redacts its internal-error line with the index of the read that line belongs to (D-5023)
+  return opRelay(P, map.op, map.opArgs, (line, toStderr) => emit(redactFinalLines(line, idx), toStderr));
+}
+
+/** D-4600 (history-operator-door-survives-a-closed-pipe): `ccrc history import --apply | head -1` closes stdout under the
+ *  CLI, and `… --json 2>&1 >/dev/null | head -1` closes stderr, the stream the relay writes the sweep's lines to under --json
+ *  and, since D-5022, every line of the shim's own stderr, which the relay now pipes and writes there too (the pipe from
+ *  the shim is drained whatever this process's own stderr does). A write to either is an EPIPE 'error' event that, unhandled, kills the process with a
+ *  stack; the relay then stops draining the shim, whose own next write crashes it mid-op, and the operator loses the result.
+ *  The operator arm swallows EPIPE alone on BOTH streams, so the relay keeps draining, the op finishes and its exit is
+ *  relayed. Any other stream error still throws. Installed once per process.
+ *  The listener is `.on`, never `.once`, and that is load-bearing (HI2 H-199): after an EPIPE Node's stdio stream is NOT
+ *  destroyed (stdio's dummyDestroy un-destroys it), so every later write retries the syscall and emits a fresh EPIPE
+ *  (measured on Node 24.14.1: 49 events over 50 writes). A `.once` listener would swallow the first and crash on the second. */
+let stdioGuarded = false;
+function guardClosedStdio() {
+  if (stdioGuarded) return;
+  stdioGuarded = true;
+  for (const stream of [process.stdout, process.stderr]) {
+    stream.on('error', (e) => {
+      if (e && e.code === 'EPIPE') return;
+      throw e;
+    });
+  }
+}
+
+/** main's arm for `import`, `prune`, `reparse` and `doctor`: argv is main's own, the verb first, `--json` anywhere.
+ *  Under --json, stdout is the envelope alone and the sweep's lines go to stderr; every relayed line arrives here
+ *  already through redactFinalLines (runOpVerb's relayIndexOf). */
+export async function operatorMain(home, argv) {
+  guardClosedStdio();
+  const json = argv.includes('--json');
+  const rest = argv.filter((a) => a !== '--json');
+  const verb = rest[0] ?? '';
+  if (verb === 'doctor' && rest.length === 1) {
+    const env = await statusWithHealth(home, Date.now());
+    process.stdout.write(json ? `${JSON.stringify(env)}\n` : formatHealth(env.health).map((l) => `${l}\n`).join(''));
+    return env.exit;
+  }
+  const P = healthLib.historyPaths(home);
+  const emit = (line, toStderr = false) => {
+    const text = `${line}\n`;
+    if (json || toStderr) process.stderr.write(text);
+    else process.stdout.write(text);
+  };
+  // A throw out of the door that is neither a StoreError nor a SQLite error (relayIndexOf's rethrow) is a defect: exit 1.
+  // Its line names the operator like every other non-zero line of an operator verb, and goes through errLine (R-X-OPERATOR;
+  // HA2 H-37). It is the only line, so the exit-words line below is skipped.
+  let thrown = false;
+  let r;
+  // runOpVerb sets `seam.idx` once it has built the relay's index, so a throw out of a relay stream handler (which rejects into
+  // the catch below) is redacted with the index of the read its text belongs to, as D-5023 rules; before the index exists, NO_PAIRS.
+  const seam = { idx: NO_PAIRS };
+  try {
+    r = await runOpVerb(home, verb, rest.slice(1), emit, seam);
+  } catch (e) {
+    thrown = true;
+    r = { exit: EXIT.INTERNAL };
+    errLine(`ccrc history ${verb}: internal error: ${thrownText(e)}; ${OP_OPERATOR_NOTE_ANY}`, seam.idx);
+  }
+  if (json) {
+    const id = readTrimmed(P.storeId);
+    const env = healthLib.readEnvelope({
+      exit: r.exit, ...(r.reason === undefined ? {} : { reason: r.reason }),
+      storeId: id !== null && healthLib.UUID_RE.test(id) ? id : null,
+      scope: null, header: null, items: [], shown: 0, total: 0, next: null,
+    });
+    process.stdout.write(`${JSON.stringify(env)}\n`);
+  } else if (r.exit !== EXIT.OK && !thrown) {
+    const words = OP_EXIT_WORDS[r.exit] ?? `${r.exit === EXIT.REFUSED ? 'refused' : 'store error'}: ${r.reason ?? ''}`;
+    process.stderr.write(`ccrc history ${verb}: ${words}; ${OP_OPERATOR_NOTE[r.exit] ?? OP_OPERATOR_NOTE_ANY}\n`);
+  }
+  return r.exit;
+}
+
+/** End the process once BOTH piped streams have written what they hold (D-5022): an empty write's callback runs after the
+ *  stream's queue, so process.exit() cuts neither stdout's tail nor a relayed stderr of several MB. */
+function exitDrained() {
+  let pending = 2;
+  const one = () => { pending -= 1; if (pending === 0) process.exit(); };
+  process.stdout.write('', one);
+  process.stderr.write('', one);
+}
+
 if (process.argv[1] && import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href) {
   // The entry guard stays the LAST statement of cli.mjs. main() runs while this module is still evaluating (its
   // synchronous part runs at the call), so a module-level const declared below this guard would still be
   // uninitialised when main reads it: every later block (Task 28's health block) goes ABOVE it. No top-level await.
   // The code is set as process.exitCode, and process.exit() then ends the process with it, never a drained event
   // loop: a stat that never settled pins a libuv thread (above). Writing '' first lets a piped stdout flush before
-  // the exit (a pipe is asynchronous on macOS, where the Darwin row answers 9). The .catch turns a throw out of
+  // the exit (a pipe is asynchronous on macOS, where the Darwin row answers 9). Both streams are written first, not stdout
+  // alone (D-5022): a relayed stderr of several MB on a pipe lost its tail when only stdout was awaited. The .catch turns a throw out of
   // main into one stderr line and exit 1, never a raw unhandled rejection.
   main(process.argv.slice(2))
-    .then((code) => { process.exitCode = code; process.stdout.write('', () => process.exit()); })
+    .then((code) => { process.exitCode = code; exitDrained(); })
     .catch((e) => {
-      process.stderr.write(`ccrc history: internal error: ${e && e.message ? e.message : String(e)}\n`);
+      errLine(`ccrc history: internal error: ${thrownText(e)}`);
       process.exitCode = EXIT.INTERNAL;
-      process.exit();
+      exitDrained();
     });
 }

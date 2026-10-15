@@ -17,11 +17,12 @@ import { createHash } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
 import { syncBuiltinESMExports } from 'node:module';
 import * as pty from 'node-pty';
-import { WRITING_FORMS, CARRIER_KILL_S, journalRecord, floorThreshold, historyPaths } from '../../ccd/history/lib.mjs';
+import { WRITING_FORMS, CARRIER_KILL_S, SCHEMA_VERSION, journalRecord, floorThreshold, historyPaths } from '../../ccd/history/lib.mjs';
 import { createStore, openWriter, closeWriter, getMeta } from '../../ccd/history/store.mjs';
+import { exportCensus, homeOfPath, newBudget } from '../../ccd/history/sweep.mjs';
 import {
   makeHistoryBox, runSweep, runShim, runDriver, preloadOptions, plantSession, plantTranscript, spoolLine, openStoreRO,
-  counters, journalRecords, PRELOADS, PASS_DRIVER, CLI, readTxlog, writes, type TxEv, type HistoryBox, type DriverDeps,
+  counters, journalRecords, PRELOADS, PASS_DRIVER, CLI, runCli, readTxlog, writes, type TxEv, type HistoryBox, type DriverDeps,
 } from './historyHelpers.js';
 
 beforeEach((ctx) => { if (process.platform === 'darwin') ctx.skip(); });
@@ -34,6 +35,7 @@ const U3 = '33333333-3333-4333-8333-333333333333';
 const U9 = '99999999-9999-4999-8999-999999999999';
 const SLUG = '-home-u-tree-demo';
 const V2 = 'CREATE TABLE seam_v2 (x INTEGER)';
+const V3 = 'CREATE TABLE seam_v3 (x INTEGER)';
 const MIN = 60_000;
 const DAY = 86_400_000;
 
@@ -492,6 +494,22 @@ describe('DM35: only regular files under a rostered projects/ root', () => {
   }, 60_000);
 });
 
+describe('the migration seam driver (D-5015)', () => {
+  it('a seamed pass on a HOME with no store throws loudly and creates nothing; it does not pass vacuously on the real v2', () => {
+    const box = makeHistoryBox('ccrc-hist-seamtrap-', { role: 'fleet', shim: true });
+    const p = paths(box);
+    expect(fs.existsSync(p.db), 'CONTROL: the HOME holds no store').toBe(false);
+    const r = runDriver(box, { extraMigrations: [V2] });
+    expect(r.code, `${r.stdout}${r.stderr}`).not.toBe(0);
+    expect(r.stderr).toMatch(/extraMigrations needs a store already on disk/);
+    expect(fs.existsSync(p.db), 'the refused pass made no store').toBe(false);
+    // and with a store on disk the same call runs: the trap is the missing store, not the seam
+    const bound = boundBox('ccrc-hist-seamtrap2-');
+    expect(runDriver(bound, { extraMigrations: [V2] }).code).toBe(0);
+    expect(versionOf(paths(bound).db), 'the seam\'s migration ran over the rewound v1').toBe(2);
+  });
+});
+
 describe('DM43: no copy a scheduled pass cannot finish', () => {
   it('an over-bound store: the scheduled pass writes no .tmp and no snapshot and counts migration_needs_op; --op migrate snapshots, migrates and records copy_bps', () => {
     const box = boundBox('ccrc-hist-dm43-');
@@ -544,10 +562,124 @@ describe('DM43: no copy a scheduled pass cannot finish', () => {
     expect(none.code, none.stderr).toBe(0);
     expect(lastResult(none.stdout)).toEqual({ rc: 0 });
     expect(names(p.backups)).toEqual([]);
-    expect(runDriver(box, { extraMigrations: [V2] }, ['--op', 'migrate']).code).toBe(0);
+    // The seam's two migrations take the store to user_version 3, past this build's SCHEMA_VERSION (D-5015: 2).
+    expect(runDriver(box, { extraMigrations: [V2, V3] }, ['--op', 'migrate']).code).toBe(0);
     const newer = runShim(box, ['--op', 'migrate']);
     expect(newer.code).toBe(2);
     expect(lastResult(newer.stdout)).toEqual({ rc: 2, reason: 'migrate-refused' });
+  });
+});
+
+// D-5027 (history-held-pass-is-fresh-for-tick-stale; fix round 2, review 462 F2): a held pass (the migration verdicts the held arm takes:
+// migration-needs-op here) writes no ticks row, so doctor FAILed tick-stale within 10 minutes beside the hold's own FAIL, whose remedy
+// points at the timer. The held arm now stamps meta `held_pass_ms`; deriveHealth reads one that ended within TICK_STALE_MS as fresh for
+// that FAIL only.
+describe('D-5027: a held pass is fresh for tick-stale', () => {
+  // Ages the tick rows AND meta last_zero_behind_ms together, as a real node's clock does (recordTick writes both in one step, so the lag
+  // mark is never newer than the last tick; review 466 F2). Both are read back to prove the fixture aged what it claims.
+  const ageBox = (box: HistoryBox, minutes: number): void => {
+    const db = new DatabaseSync(paths(box).db);
+    try {
+      db.prepare('UPDATE ticks SET ts_ms = ts_ms - ?').run(minutes * MIN);
+      const zero = db.prepare("SELECT v FROM meta WHERE k = 'last_zero_behind_ms'").get() as { v: string } | undefined;
+      expect(zero, 'the first pass wrote last_zero_behind_ms').toBeDefined();
+      db.prepare("UPDATE meta SET v = ? WHERE k = 'last_zero_behind_ms'").run(String(Number(zero!.v) - minutes * MIN));
+    } finally { db.close(); }
+  };
+  // A bound box whose store is over the line for the V2 seam (copy_bps 100) and whose tick rows and lag mark are aged `minutes`.
+  const agedHeldBox = (prefix: string, minutes: number): HistoryBox => {
+    const box = boundBox(prefix);
+    const db = new DatabaseSync(paths(box).db);
+    try {
+      db.prepare("INSERT INTO meta (k, v) VALUES ('copy_bps', '100') ON CONFLICT (k) DO UPDATE SET v = excluded.v").run();
+    } finally { db.close(); }
+    ageBox(box, minutes);
+    return box;
+  };
+  const heldPasses = (box: HistoryBox): void => {
+    const held = (): void => {
+      const r = runDriver(box, { extraMigrations: [V2] });
+      expect(r.code, r.stderr).toBe(0);
+      expect(r.stdout).toMatch(/^history-sweep: migration-needs-op$/m);
+    };
+    held(); held();                                                                // two held passes
+  };
+  const heldBox = (prefix: string, minutes = 20): HistoryBox => {
+    const box = agedHeldBox(prefix, minutes);
+    heldPasses(box);
+    return box;
+  };
+  const verdict = (box: HistoryBox): Array<{ word: string; detail: string }> => {
+    const r = runCli(box, ['status', '--json']);
+    expect(r.code, r.stderr).toBe(0);
+    return (r.json!['health'] as { fail: Array<{ word: string; detail: string }> }).fail;
+  };
+  const setMetaRaw = (box: HistoryBox, k: string, v: string): void => {
+    const db = new DatabaseSync(paths(box).db);
+    try { db.prepare('INSERT INTO meta (k, v) VALUES (?, ?) ON CONFLICT (k) DO UPDATE SET v = excluded.v').run(k, v); } finally { db.close(); }
+  };
+
+  it('pin 8: two held passes over the line, the tick rows and the lag mark aged 20 min (past 10, under 30): migration-needs-op ALONE; the held passes added no ticks row (counted before they ran)', () => {
+    const box = agedHeldBox('ccrc-hist-d5027-fresh-', 20);
+    const ticksBefore = countOf(box, 'ticks');                                     // F5 (review 466): counted BEFORE the held passes run
+    expect(ticksBefore, 'the fixture has a ticks row to age').toBeGreaterThan(0);
+    heldPasses(box);
+    expect(Number(metaOf(box, 'held_pass_ms')), 'the held arm stamped its end').toBeGreaterThan(Date.now() - 5 * MIN);
+    const fail = verdict(box);
+    expect(fail.map((i) => i.word)).toEqual(['migration-needs-op']);
+    expect(countOf(box, 'ticks'), 'the held passes added no ticks row').toBe(ticksBefore);
+  });
+
+  it('F2 (review 466): past 30 min from the last zero-behind tick a held node also FAILs lag-high (capture is paused, the lag is real), and still no tick-stale', () => {
+    const box = heldBox('ccrc-hist-d5027-lag-', 35);
+    const fail = verdict(box);
+    expect(fail.map((i) => i.word).sort()).toEqual(['lag-high', 'migration-needs-op']);
+    expect(fail.find((i) => i.word === 'lag-high')!.detail).toContain('over 1800 s');
+  });
+
+  it('F1 (review 466): a store newer than this build is refused at openStore, before the held arm: schema-newer, exit 5, NO held_pass_ms, so tick-stale stands beside schema-newer', () => {
+    const box = boundBox('ccrc-hist-d5027-newer-');
+    // The seam's two migrations take the store to user_version 3, past this build's SCHEMA_VERSION (D-5015: 2).
+    expect(runDriver(box, { extraMigrations: [V2, V3] }, ['--op', 'migrate']).code).toBe(0);
+    ageBox(box, 20);                                                               // past TICK_STALE_MS, under the 30-min lag bound
+    for (let i = 0; i < 2; i++) {
+      const r = runShim(box);
+      expect(r.stdout, r.stderr).toMatch(/^history-sweep: schema-newer$/m);
+      expect(r.code, r.stderr).toBe(5);
+    }
+    expect(q<{ n: number }>(box, "SELECT count(*) AS n FROM meta WHERE k = 'held_pass_ms'")[0]!.n, 'a newer store is never stamped (DM17: no write)').toBe(0);
+    const fail = verdict(box);
+    expect(fail.map((i) => i.word).sort()).toEqual(['schema-newer', 'tick-stale']);
+    expect(fail.find((i) => i.word === 'tick-stale')!.detail).toContain('the last tick ran');
+  });
+
+  it('pin 9: the same with the held passes aged past TICK_STALE_MS too: tick-stale beside migration-needs-op, as before', () => {
+    const box = heldBox('ccrc-hist-d5027-aged-');
+    setMetaRaw(box, 'held_pass_ms', String(Date.now() - 11 * MIN));
+    const fail = verdict(box);
+    expect(fail.map((i) => i.word).sort()).toEqual(['migration-needs-op', 'tick-stale']);
+    expect(fail.find((i) => i.word === 'tick-stale')!.detail).toContain('the last tick ran');
+  });
+
+  it('a held_pass_ms that is not an integer is unmeasured (FAIL status-unreadable naming it), never "no held pass"', () => {
+    const box = heldBox('ccrc-hist-d5027-junk-');
+    setMetaRaw(box, 'held_pass_ms', 'soon');
+    const fail = verdict(box);
+    expect(fail.map((i) => i.word).sort()).toEqual(['migration-needs-op', 'status-unreadable', 'tick-stale']);
+    expect(fail.find((i) => i.word === 'status-unreadable')!.detail).toContain('held_pass_ms');
+  });
+
+  it('an open D-5026 death is NOT closed by a held pass: only a tick clears the record, and the death FAIL stands beside the hold\'s own', () => {
+    const box = agedHeldBox('ccrc-hist-d5027-death-', 25);                          // the record's start (20 min ago) is after the last tick (25 min ago)
+    const died = path.join(paths(box).root, 'pass-died');
+    const record = `${JSON.stringify({ pid: 4242, start_ms: Date.now() - 20 * MIN, found_ms: Date.now() - 18 * MIN, count: 1 })}\n`;
+    fs.writeFileSync(died, record, { mode: 0o600 });
+    const r = runDriver(box, { extraMigrations: [V2] });
+    expect(r.stdout).toMatch(/^history-sweep: migration-needs-op$/m);
+    expect(fs.readFileSync(died, 'utf8'), 'the held pass neither cleared nor rewrote the record').toBe(record);
+    const fail = verdict(box);
+    expect(fail.map((i) => i.word).sort()).toEqual(['migration-needs-op', 'tick-stale']);
+    expect(fail.find((i) => i.word === 'tick-stale')!.detail).toContain('ended without writing a tick');
   });
 });
 
@@ -803,7 +935,7 @@ describe('RF5a F19: the half at release runs on every --op outcome (§9.2, D-423
     { name: 'migrate-refused (a store at a newer schema)', rc: 2, reason: 'migrate-refused', journaled: true,
       arrange: (box) => {
         const db = new DatabaseSync(paths(box).db);
-        try { db.exec('PRAGMA user_version = 2'); } finally { db.close(); }
+        try { db.exec(`PRAGMA user_version = ${SCHEMA_VERSION + 1}`); } finally { db.close(); }
         return { args: ['--op', 'migrate'] };
       } },
     { name: 'flushFirst cannot append a waiting verdict (a one-shot ENOSPC at the journal)', rc: 1, journaled: true,
@@ -943,11 +1075,13 @@ describe('DI13: a migration\'s done attempt marker is cleared at both call sites
 
 // ── Task 26: the periodic census (§9.2 step 2, §9.15, W1-j, W1-k) ─────────────────────────────────
 
-describe('O38: the export\'s due rule (B1 half)', () => {
+describe('O38: the export\'s due rule, re-run under the per-copy default (B1 half; W1-B2 Task 35, ruled Q15)', () => {
   const OLD = 'a0000000-0000-4000-8000-0000000006a1';
-  /** A box whose every rostered home keeps 180 days, holding six distinct blobs whose ages are chosen
-   *  around the horizons this pin walks: 150 (180), 60 (90), 30 (60) and 0 (30). The NULL-ts row lives in
-   *  a second transcript whose file is 170 days old. The managed-settings list is the fixture's own. */
+  /** A box whose every rostered home keeps 180 days. One transcript, written now, holds six rows dated 160, 100, 45
+   *  and 10 days back, two of them sharing one blob; a second transcript holds one row with no time, its file 170
+   *  days old. Under the per-copy rule a row ages by its holding files, never by its own time (§9.15), so the file
+   *  written now holds every one of its rows back. Every fixture keeps a file's mtime at or after its rows' times,
+   *  as Claude Code writes them. The managed-settings list is the fixture's own. */
   function censusBox(prefix: string): { box: HistoryBox; MS: string[]; settings: (h: string, body: string) => void; nullFile: string; mainFile: string } {
     const box = makeHistoryBox(prefix, { role: 'fleet', shim: true });
     const settings = (h: string, body: string): void => { fs.writeFileSync(path.join(h, 'settings.json'), body); };
@@ -965,7 +1099,7 @@ describe('O38: the export\'s due rule (B1 half)', () => {
       userRow('a0000000-0000-4000-8000-0000000006a5', 'shared words', iso(160 * DAY)),
       userRow('a0000000-0000-4000-8000-0000000006a6', 'shared words', iso(10 * DAY)),
     ]);
-    // A row with no `timestamp` at all: its ts_ms is NULL, so its age is its newest holding file's mtime.
+    // A row with no `timestamp` at all: its ts_ms is NULL, and under either rule its file's mtime decides.
     const noClock = { type: 'user', uuid: 'a0000000-0000-4000-8000-0000000006a7', parentUuid: null, sessionId: U2, cwd: '/home/u/tree/demo', message: { role: 'user', content: 'no clock' } };
     const nullFile = plantTranscript(box, 'claude', SLUG, U2, [noClock]);
     const past = new Date(Date.now() - 170 * DAY);
@@ -981,25 +1115,43 @@ describe('O38: the export\'s due rule (B1 half)', () => {
     expect(r.code, r.stderr).toBe(0);
   }
   const due = (box: HistoryBox): number => Number(metaOf(box, 'export_due'));
+  /** One more ccrc id with a one-row transcript under the `claude` account, its file dated `fileDays` back; a row
+   *  with `rowDays` null has no `timestamp`. The file is never dated before its row. The next census pass maps and
+   *  ingests it (its registry scan is due by then). */
+  function plantOne(box: HistoryBox, id: string, uuid: string, rowUuid: string, text: string, rowDays: number | null, fileDays: number): string {
+    plantSession(box, id, { uuid, generation: G1, project: 'demo' });
+    const row = rowDays === null
+      ? { type: 'user', uuid: rowUuid, parentUuid: null, sessionId: uuid, cwd: '/home/u/tree/demo', message: { role: 'user', content: text } }
+      : userRow(rowUuid, text, iso(rowDays * DAY), uuid);
+    const f = plantTranscript(box, 'claude', SLUG, uuid, [row]);
+    const at = new Date(Date.now() - fileDays * DAY);
+    fs.utimesSync(f, at, at);
+    return f;
+  }
 
-  it('180 everywhere: horizon 150, so the old blob and the NULL-ts blob aged by its 170-day file are due, and nothing younger', () => {
+  it('180 everywhere: each file\'s horizon is 150 days, so only the 170-day file\'s NULL-ts row is due; the file written now holds its 160-day rows back', () => {
     const { box } = censusBox('ccrc-hist-o38a-');
     expect(metaOf(box, 'retention_min')).toBe('180');
-    expect(due(box)).toBe(2);
+    expect(due(box)).toBe(1);
     expect(metaOf(box, 'export_overdue')).toBe('0');
   });
 
-  it('a home without the key: 30, horizon 0, everything due, and retention-lowered names that home', () => {
+  it('a home without the key: 30, and retention-lowered names it; it brings forward only the rows whose files it holds', () => {
     const { box, MS, settings } = censusBox('ccrc-hist-o38b-');
-    const lowered = box.homes.find((h) => h.endsWith('.claude-a'))!;
+    const lowered = box.accountHome['claude-a']!;
+    const holder = box.accountHome['claude']!;
     settings(lowered, '{}');
     census(box, MS, 1);
     expect(metaOf(box, 'retention_min')).toBe('30');
-    expect(due(box)).toBe(6);
+    expect(due(box), 'a 30-day home that holds no file makes nothing due').toBe(1);
     expect(JSON.parse(metaOf(box, 'retention_lowered')!)).toEqual({ home: lowered, days: 30, othersMin: 180 });
-    settings(lowered, JSON.stringify({ cleanupPeriodDays: 180 }));
+    settings(holder, '{}');
     census(box, MS, 2);
-    expect(due(box)).toBe(2);
+    expect(due(box), 'the home holding both files on the 30-day default: every row, from its file\'s last write').toBe(6);
+    expect(JSON.parse(metaOf(box, 'retention_lowered')!)).toEqual({ home: holder, days: 30, othersMin: 180 });
+    for (const h of [lowered, holder]) settings(h, JSON.stringify({ cleanupPeriodDays: 180 }));
+    census(box, MS, 3);
+    expect(due(box)).toBe(1);
     expect(metaOf(box, 'retention_lowered')).toBe('');
   });
 
@@ -1014,7 +1166,7 @@ describe('O38: the export\'s due rule (B1 half)', () => {
       k += 1;
       expect(metaOf(box, `retention:${h}`), body).toBe('180');
       expect(metaOf(box, `retention_state:${h}`), body).toBe('unmeasured');
-      expect(due(box), body).toBe(2);
+      expect(due(box), body).toBe(1);
     }
     expect(counter(box, 'retention_unmeasured') - before).toBe(3);
   });
@@ -1061,23 +1213,33 @@ describe('O38: the export\'s due rule (B1 half)', () => {
 
   it('a managed-settings file with 90 under homes of 180 gives 90, and a managed-settings.d/ drop-in with 60 gives 60', () => {
     const { box, MS } = censusBox('ccrc-hist-o38e-');
-    fs.writeFileSync(MS[0]!, JSON.stringify({ cleanupPeriodDays: 90 }));
+    plantOne(box, 'claude-mid', U3, 'a0000000-0000-4000-8000-0000000006a8', 'mid file only', 100, 75);
     census(box, MS, 1);
-    expect(metaOf(box, 'retention_min')).toBe('90');
-    expect(due(box), 'horizon 60: old, mid and the NULL-ts blob').toBe(3);
-    fs.writeFileSync(path.join(MS[1]!, '50-short.json'), JSON.stringify({ cleanupPeriodDays: 60 }));
+    expect(due(box), 'horizon 150: the 75-day file waits').toBe(1);
+    fs.writeFileSync(MS[0]!, JSON.stringify({ cleanupPeriodDays: 90 }));
     census(box, MS, 2);
+    expect(metaOf(box, 'retention_min')).toBe('90');
+    expect(due(box), 'horizon 60: the 75-day file and the 170-day file').toBe(2);
+    fs.writeFileSync(path.join(MS[1]!, '50-short.json'), JSON.stringify({ cleanupPeriodDays: 60 }));
+    census(box, MS, 3);
     expect(metaOf(box, 'retention_min')).toBe('60');
-    expect(due(box), 'horizon 30: and near too').toBe(4);
+    expect(due(box), 'horizon 30: the same two; the file written now still waits').toBe(2);
   });
 
-  it('a blob with an old and a younger referrer is not due; a NULL-ts row ages by its newest holding file', () => {
+  it('a NULL-ts row ages by its holding file; a blob with a due referrer and a younger one in another transcript is not due', () => {
     const { box, MS, nullFile } = censusBox('ccrc-hist-o38f-');
-    expect(due(box), 'the shared blob is not among the two').toBe(2);
+    expect(due(box)).toBe(1);
     const now = new Date();
     fs.utimesSync(nullFile, now, now);
     census(box, MS, 1);
-    expect(due(box), 'with a fresh file the NULL-ts row is young').toBe(1);
+    expect(due(box), 'with a fresh file the NULL-ts row is young').toBe(0);
+    const past = new Date(Date.now() - 170 * DAY);
+    fs.utimesSync(nullFile, past, past);
+    census(box, MS, 2);
+    expect(due(box)).toBe(1);
+    plantOne(box, 'claude-again', U3, 'a0000000-0000-4000-8000-0000000006a9', 'no clock', 1, 0);
+    census(box, MS, 3);
+    expect(due(box), 'the same text in a transcript written now holds the shared blob back').toBe(0);
   });
 
   it('a FIFO at a rostered home\'s settings.json never blocks the census: retention_unmeasured counts, the home keeps 180 (review 316 F10)', () => {
@@ -1094,24 +1256,179 @@ describe('O38: the export\'s due rule (B1 half)', () => {
 
   it('overdue by the file clock: a due blob whose holding file is gone, or past its mtime plus its home\'s retention, FAILs; fresh files never', () => {
     const { box, MS, nullFile, mainFile } = censusBox('ccrc-hist-o38g-');
-    expect(metaOf(box, 'export_overdue'), 'due by the row clock, its files fresh').toBe('0');
+    expect(metaOf(box, 'export_overdue'), 'the NULL-ts blob is due, its file on disk and inside 180 days').toBe('0');
     fs.rmSync(mainFile);
     census(box, MS, 1);
-    expect(metaOf(box, 'export_overdue'), 'the old blob\'s only file is gone').toBe('1');
+    expect(metaOf(box, 'export_overdue'), 'a gone file has passed its date: all five of its blobs, young rows included').toBe('5');
+    expect(due(box)).toBe(6);
     const past = new Date(Date.now() - 200 * DAY);
     fs.utimesSync(nullFile, past, past);
     census(box, MS, 2);
-    expect(metaOf(box, 'export_overdue'), 'and the NULL-ts blob\'s file is past 200 > 180 days').toBe('2');
+    expect(metaOf(box, 'export_overdue'), 'and the NULL-ts blob\'s file is past 200 > 180 days').toBe('6');
   });
 
-  it('W1-k: the census records the oldest row, its row-clock due date and the file clock\'s first deletion date', () => {
-    const { box } = censusBox('ccrc-hist-o38h-');
+  it('W1-k: the census records the oldest row, the first due date by the per-copy rule, and the file clock\'s first deletion date', () => {
+    const { box, MS, nullFile } = censusBox('ccrc-hist-o38h-');
+    const now = new Date();
+    fs.utimesSync(nullFile, now, now);
+    census(box, MS, 1);
     const oldest = Number(metaOf(box, 'oldest_row_ms'));
     expect(Math.abs(oldest - (Date.now() - 160 * DAY))).toBeLessThan(10 * MIN);
-    expect(Number(metaOf(box, 'first_due_ms')) - oldest).toBe(150 * DAY);
+    const firstDue = Number(metaOf(box, 'first_due_ms'));
+    expect(Math.abs(firstDue - (Date.now() + 150 * DAY)),
+      'both files written now, plus 150 days; B1\'s row clock would say the oldest row plus 150, 10 days ago').toBeLessThan(10 * MIN);
     const firstDeletion = Number(metaOf(box, 'first_deletion_ms'));
-    expect(Math.abs(firstDeletion - (Date.now() + 10 * DAY)), 'the 170-day file plus 180 days').toBeLessThan(10 * MIN);
+    expect(Math.abs(firstDeletion - (Date.now() + 180 * DAY)), 'a file written now, plus 180 days').toBeLessThan(10 * MIN);
   });
+
+  // ── H-144 and H-145 (hardening HF): the census clauses no fixture reached ──
+  /** The store opened for writing between two passes; no pass is running while it is open. */
+  const edit = (box: HistoryBox, fn: (db: DatabaseSync) => void): void => {
+    const db = new DatabaseSync(paths(box).db);
+    try { fn(db); } finally { db.close(); }
+  };
+  /** The NULL-ts row of the 170-day file (T2), and the young row of the file written now (T1). */
+  const NULL_ROW = 'a0000000-0000-4000-8000-0000000006a7';
+  const YOUNG_ROW = 'a0000000-0000-4000-8000-0000000006a4';
+  type EntryRef = { entry_id: number; transcript_pk: number; blob_id: number };
+  const entryOf = (db: DatabaseSync, uuid: string): EntryRef =>
+    db.prepare('SELECT entry_id, transcript_pk, blob_id FROM entries WHERE uuid = ?').get(uuid) as EntryRef;
+  /** One referrer of `blob` of each kind the census reads besides `entries`, held by `holder`'s entry or transcript. */
+  const refer = (db: DatabaseSync, kind: 'entry_variants' | 'sidecars' | 'boundaries', blob: number, holder: EntryRef): void => {
+    const now = Date.now();
+    if (kind === 'entry_variants') {
+      const file = (db.prepare('SELECT file_id FROM ingest_files LIMIT 1').get() as { file_id: number }).file_id;
+      db.prepare('INSERT INTO entry_variants (entry_id, blob_id, first_file_id, first_seen_ms) VALUES (?, ?, ?, ?)').run(holder.entry_id, blob, file, now);
+    } else if (kind === 'sidecars') {
+      db.prepare('INSERT INTO sidecars (transcript_pk, name, blob_id, entry_id, first_seen_ms) VALUES (?, ?, ?, NULL, ?)').run(holder.transcript_pk, 'h144', blob, now);
+    } else {
+      db.prepare('INSERT INTO boundaries (entry_id, transcript_pk, ord, kept_blob_id) VALUES (?, ?, 0, ?)').run(holder.entry_id, holder.transcript_pk, blob);
+    }
+  };
+
+  for (const [kind, tag] of [['entry_variants', 'v'], ['sidecars', 's'], ['boundaries', 'b']] as const) {
+    it(`H-144: a blob held only by ${kind} in a due transcript is a candidate; a young holder of the same kind holds it back`, () => {
+      const { box, MS } = censusBox(`ccrc-hist-o38${tag}-`);
+      expect(due(box), 'CONTROL: the NULL-ts row of the 170-day file is the one due blob').toBe(1);
+      let blobB = 0;
+      edit(box, (db) => {
+        const old = entryOf(db, NULL_ROW);
+        blobB = old.blob_id;
+        // The row moves to a copy of its blob, so the original is held by the kind under test alone.
+        const copy = db.prepare('INSERT INTO blobs (sha256, codec, z, raw_len, fts_indexed) SELECT randomblob(32), codec, z, raw_len, fts_indexed FROM blobs WHERE blob_id = ?').run(blobB);
+        db.prepare('UPDATE entries SET blob_id = ? WHERE entry_id = ?').run(Number(copy.lastInsertRowid), old.entry_id);
+        refer(db, kind, blobB, old);
+      });
+      census(box, MS, 1);
+      expect(due(box), 'the copy through entries, and the original through the kind under test').toBe(2);
+      edit(box, (db) => { refer(db, kind, blobB, entryOf(db, YOUNG_ROW)); });
+      census(box, MS, 2);
+      expect(due(box), 'the original is also held by a row of the file written now, so only the copy stays due').toBe(1);
+    }, 90_000);
+  }
+
+  it('H-145: an exported transcript is no W1-k holder: first_due_ms moves to the next holder once the 170-day file\'s rows are exported', () => {
+    const { box, MS } = censusBox('ccrc-hist-o38x-');
+    expect(Number(metaOf(box, 'first_due_ms')), 'CONTROL: the 170-day file fell due 20 days ago').toBeLessThan(Date.now() - 10 * DAY);
+    edit(box, (db) => {
+      db.prepare('UPDATE entries SET exported_ms = ? WHERE transcript_pk = ?').run(Date.now(), entryOf(db, NULL_ROW).transcript_pk);
+    });
+    census(box, MS, 1);
+    expect(Math.abs(Number(metaOf(box, 'first_due_ms')) - (Date.now() + 150 * DAY)),
+      'the file written now, plus 150 days: the exported transcript holds nothing').toBeLessThan(10 * MIN);
+  }, 90_000);
+
+  it('H-145: a holder with no recorded file is dated by its oldest UNEXPORTED row, never by an exported one', () => {
+    const { box, MS, nullFile } = censusBox('ccrc-hist-o38y-');
+    fs.rmSync(nullFile);
+    edit(box, (db) => {
+      const held = entryOf(db, NULL_ROW);
+      const t2 = held.transcript_pk;
+      const ofT2 = 'SELECT file_id FROM ingest_files WHERE transcript_pk = ?';
+      db.prepare(`DELETE FROM memberships WHERE file_id IN (${ofT2})`).run(t2);
+      db.prepare(`DELETE FROM file_paths WHERE file_id IN (${ofT2})`).run(t2);
+      db.prepare('DELETE FROM ingest_files WHERE transcript_pk = ?').run(t2);
+      // T2 holds an unexported row from 100 days back and an exported one from 500 days back.
+      db.prepare('UPDATE entries SET ts_ms = ? WHERE entry_id = ?').run(Date.now() - 100 * DAY, held.entry_id);
+      db.prepare('UPDATE entries SET transcript_pk = ?, ts_ms = ?, exported_ms = ? WHERE uuid = ?').run(t2, Date.now() - 500 * DAY, Date.now(), YOUNG_ROW);
+    });
+    census(box, MS, 1);
+    expect(Math.abs(Number(metaOf(box, 'first_due_ms')) - (Date.now() - 100 * DAY)),
+      'the file-less holder, dated by its unexported row').toBeLessThan(10 * MIN);
+  }, 90_000);
+
+  // ── H-146 (hardening HF; D-4612 (history-export-file-home-shortest-of-containing)) ──
+  for (const shortFirst of [false, true]) {
+    it(`H-146: two homes sharing one projects tree age a shared file by the SHORTEST of them, with the ${shortFirst ? '30' : '180'}-day home listed first`, () => {
+      const base = makeHistoryBox(`ccrc-hist-o38${shortFirst ? 'q' : 'p'}-`, { role: 'fleet', shim: true });
+      const long = base.accountHome['claude']!;
+      const short = base.accountHome['claude-a']!;
+      for (const h of base.homes) fs.writeFileSync(path.join(h, 'settings.json'), JSON.stringify({ cleanupPeriodDays: h === short ? 30 : 180 }));
+      // The short home's projects/ is a link to the long home's: one tree, two rostered homes that contain it.
+      fs.rmSync(path.join(short, 'projects'), { recursive: true });
+      fs.symlinkSync(path.join(long, 'projects'), path.join(short, 'projects'));
+      const rest = base.homes.filter((h) => h !== long && h !== short);
+      const box: HistoryBox = { ...base, homes: shortFirst ? [short, long, ...rest] : [long, short, ...rest] };
+      const etc = path.join(box.home, 'etc-claude-code');
+      fs.mkdirSync(path.join(etc, 'managed-settings.d'), { recursive: true });
+      const MS = [path.join(etc, 'managed-settings.json'), path.join(etc, 'managed-settings.d')];
+      plantSession(box, ID, { uuid: U1, generation: G1, project: 'demo' });
+      const f = plantTranscript(box, 'claude', SLUG, U1, [userRow('a0000000-0000-4000-8000-0000000046c1', 'shared tree', iso(40 * DAY))]);
+      const at = new Date(Date.now() - 40 * DAY);
+      fs.utimesSync(f, at, at);
+      const r = runDriver(box, { managedSettings: MS });
+      expect(r.code, r.stderr).toBe(0);
+      expect(countOf(box, 'entries'), 'CONTROL: the row is ingested').toBe(1);
+      expect(metaOf(box, 'retention_min')).toBe('30');
+      // D-4612 also moves the W1-k first_deletion_ms date (H-213): the shared file's deletion date is its mtime plus the SHORT home's 30 days.
+      expect(Math.abs(Number(metaOf(box, 'first_deletion_ms')) - (at.getTime() + 30 * DAY)),
+        'first_deletion_ms is the file\'s mtime plus 30 days, never plus 180').toBeLessThan(MIN);
+      expect(due(box), 'the short home deletes the file at +30 days, so it is due now whichever home the roster lists first').toBe(1);
+    }, 90_000);
+  }
+
+  // ── H-214 (hardening HJ): the home roots are resolved once per pass, not once per recorded file ──
+  it('H-214: the census resolves each rostered home\'s projects/ once per pass, not once per recorded file', () => {
+    const { box, MS } = censusBox('ccrc-hist-o38r-');
+    plantOne(box, 'claude-r1', U3, 'a0000000-0000-4000-8000-0000000006b1', 'file three', 10, 10);
+    plantOne(box, 'claude-r2', '44444444-4444-4444-8444-444444444444', 'a0000000-0000-4000-8000-0000000006b2', 'file four', 10, 10);
+    plantOne(box, 'claude-r3', '55555555-5555-4555-8555-555555555555', 'a0000000-0000-4000-8000-0000000006b3', 'file five', 10, 10);
+    census(box, MS, 1);
+    const files = countOf(box, 'file_paths');
+    expect(files, 'CONTROL: five recorded files').toBeGreaterThanOrEqual(5);
+    expect(box.homes.length, 'CONTROL: more than one rostered home').toBeGreaterThan(1);
+    const roots = new Set(box.homes.map((h) => path.join(h, 'projects')));
+    const db = openWriter(paths(box).db);
+    const realReal = fs.realpathSync;
+    let resolved = 0;
+    let censusResolved = -1;
+    let firstMatch = -1;
+    try {
+      db.prepare('INSERT OR REPLACE INTO derivation_state (step, version, cursor, completed_ms) VALUES (?, 1, ?, NULL)')
+        .run('export-census', JSON.stringify({ last: 0, due: 0, overdue: 0, startMs: Date.now(), homeDays: Object.fromEntries(box.homes.map((h) => [h, 180])) }));
+      const counting = Object.assign(function realpathSync(p: unknown, ...rest: unknown[]): unknown {
+        if (typeof p === 'string' && roots.has(p)) resolved += 1;
+        return (realReal as (...a: unknown[]) => unknown)(p, ...rest);
+      }, realReal);
+      (fs as { realpathSync: unknown }).realpathSync = counting;
+      syncBuiltinESMExports();
+      expect(exportCensus(db, Date.now(), newBudget()), 'the census completes').toBe(true);
+      censusResolved = resolved;
+      // homeOfPath wants the first match: with the holding home listed first, no later home's projects/ is resolved.
+      const holder = box.accountHome['claude']!;
+      const file = q<{ path: string }>(box, 'SELECT path FROM file_paths LIMIT 1')[0]!.path;
+      resolved = 0;
+      expect(homeOfPath(file, [holder, ...box.homes.filter((h) => h !== holder)]), 'CONTROL: the holder is the first match').toBe(holder);
+      firstMatch = resolved;
+    } finally {
+      (fs as { realpathSync: unknown }).realpathSync = realReal;
+      syncBuiltinESMExports();
+      db.close();
+    }
+    expect(firstMatch, 'homeOfPath stops at the first matching home: it resolves that home\'s projects/ and no later one').toBe(1);
+    expect(censusResolved, 'each rostered home\'s projects/ is resolved a bounded number of times, never once per file').toBeLessThanOrEqual(box.homes.length);
+    expect(censusResolved, 'CONTROL: the wrapper saw the resolutions').toBeGreaterThan(0);
+  }, 90_000);
 });
 
 describe('W1-j and O34: the journal audit', () => {
@@ -1597,5 +1914,98 @@ describe('Task 26F item 6: the journal audit says when it cannot read a month fi
     expect(r.code, r.stderr).toBe(0);
     expect(counter(box, 'journal_audit_unreadable'), 'the link was refused, not read').toBe(1);
     expect(metaOf(box, 'journal_audit_ms'), 'a followed link would have let the audit finish and advance its clock').toBe(before);
+  });
+});
+
+// ── W1-B2 Task 26: a binding pass answers through the half at release (RF5a F19) ───────────────────────────────
+describe('W1-B2 Task 26: the binding branch answers through B1\'s released (RF5a F19), and the op marker leaves by removeEntry', () => {
+  /** A hook's line landing in spool/ once the pass has taken its lock-take half and made its first probe (B1's `mid`). */
+  const mid = [{ rel: '.ccrc/history/spool/claude-a-demo.jsonl', text: '\n' + JSON.stringify(startup(U1, { reg: U1 })) + '\n' }];
+  const spooled = (box: HistoryBox): string[] => names(paths(box).spool).filter((n) => n.endsWith('.jsonl'));
+
+  it('a refused adopt (store.id already names this store) still renames, observes and journals a line spooled during the pass', async () => {
+    const box = boundBox('ccrc-hist-t26-rel-a-');
+    plantSession(box, ID, { uuid: U1, generation: G1, project: 'demo' });
+    // adopt is irreversible, so its gate needs a TTY: the driver runs on a pty, as B1's operator-form rows do.
+    const op = await driverPty(box, { afterFirstStatfs: mid }, ['--op', 'adopt']);
+    expect(lastResult(op.out), op.out).toEqual({ rc: 2, reason: 'adopt-refused' });
+    expect(spooled(box), 'the release half renamed it').toEqual([]);
+    const held = draining(box);
+    expect(held, 'and holds it in .draining/').toHaveLength(1);
+    expect(names(paths(box).draining), 'observed: its .obs beside it').toContain(held[0]!.replace(/\.jsonl$/, '.obs'));
+    expect(recs(box).filter((r) => r.k === 'spool'), 'journaled under the binding the pass left').toHaveLength(1);
+  }, 60_000);
+
+  it('a bind whose journal appends all fail says journal-unwritable once and counts it once: finishBind said it, the release half does not repeat it', async () => {
+    const box = boundBox('ccrc-hist-t26-rel-b-');
+    fs.rmSync(paths(box).storeId);
+    fs.rmSync(path.join(paths(box).root, 'store.writer'));
+    const before = counter(box, 'journal_write_failed');
+    // Every open under journal/ fails once the first probe has answered: the bind record's flush (finishBind's), then
+    // the release half's append of the mid-pass line. appendJournal makes any such throw a JournalError.
+    const op = await driverPty(box, { afterFirstStatfs: mid, throwTimesAfterFirstStatfs: { fn: 'openSync', needle: '/journal/', code: 'ENOSPC', times: 1000 } },
+      ['--op', 'adopt']);
+    const out = op.out.replace(/\r/g, '');
+    expect(lastResult(out), out).toEqual({ rc: 1 });
+    expect(out.match(/^history-sweep: journal-unwritable$/gm) ?? [], out).toHaveLength(1);
+    expect(counter(box, 'journal_write_failed') - before, 'counted once, on the open store').toBe(1);
+    expect(spooled(box), 'the release half still ran').toEqual([]);
+  }, 60_000);
+
+  it('a throw out of the binding pass that is no StoreError (removeStaleTemps\' readdir of db/) answers rc 1, and the half at release still runs', async () => {
+    const box = boundBox('ccrc-hist-t26-rel-c-');
+    plantSession(box, ID, { uuid: U1, generation: G1, project: 'demo' });
+    // Once the probe has answered, the first readdirSync under db/ throws EIO: adoptArm's removeStaleTemps, the first
+    // thing it does after readRole and before decideBind, the op marker or any write. It fails loudly (B1's rule).
+    const op = await driverPty(box, { afterFirstStatfs: mid, throwTimesAfterFirstStatfs: { fn: 'readdirSync', needle: '/history/db', code: 'EIO', times: 1 } },
+      ['--op', 'adopt']);
+    const out = op.out.replace(/\r/g, '');
+    expect(lastResult(out), `CONTROL: the injected EIO reached the pass (a refused adopt answers 2): ${out}`).toEqual({ rc: 1 });
+    expect(fs.existsSync(path.join(paths(box).root, 'op')), 'no op marker: the throw came before writeOpMarker').toBe(false);
+    expect(spooled(box), 'the release half renamed the mid-pass line').toEqual([]);
+    const held = draining(box);
+    expect(held, 'and holds it in .draining/').toHaveLength(1);
+    expect(names(paths(box).draining), 'observed: its .obs beside it').toContain(held[0]!.replace(/\.jsonl$/, '.obs'));
+    expect(recs(box).filter((r) => r.k === 'spool'), 'journaled under the binding the pass left').toHaveLength(1);
+  }, 60_000);
+
+  it('sweep.mjs calls no rmSync, and adoptArm removes its op marker with removeEntry (B1\'s history-planted-entries-never-wedge)', () => {
+    const src = fs.readFileSync(new URL('../../ccd/history/sweep.mjs', import.meta.url), 'utf8');
+    expect(src.match(/\brmSync\(/g) ?? [], 'rmSync(…, { force: true }) throws EISDIR on a directory planted at a name').toEqual([]);
+    const arm = src.slice(src.indexOf('export async function adoptArm('), src.indexOf('export async function bindingPass('));
+    expect(arm, 'CONTROL: adoptArm precedes bindingPass').not.toBe('');
+    expect(arm).toMatch(/\} finally \{\n(?:\s*\/\/.*\n)*\s*removeEntry\(P\.op\);\n/);
+  });
+});
+
+// ── W1-B2 Task 35: O58 through the census (spec 2026-10-05 §9.15; ruled Q15, D-4735 (history-export-due-per-copy)) ──
+describe('O58: the per-copy due rule is the census\'s default (W1-B2 Task 35; spec §9.15, ruled Q15)', () => {
+  it('a 30-day home holding only a swap copy brings nothing forward; a row held only there is due from its file\'s last write; a long-lived file holds its old rows back', () => {
+    const box = makeHistoryBox('ccrc-hist-o58-', { role: 'fleet', shim: true });
+    const B = box.accountHome['claude-a']!;
+    for (const h of box.homes) fs.writeFileSync(path.join(h, 'settings.json'), JSON.stringify({ cleanupPeriodDays: 180 }));
+    const etc = path.join(box.home, 'etc-claude-code');
+    fs.mkdirSync(path.join(etc, 'managed-settings.d'), { recursive: true });
+    const MS = [path.join(etc, 'managed-settings.json'), path.join(etc, 'managed-settings.d')];
+    const at = (f: string, days: number): void => { const d = new Date(Date.now() - days * DAY); fs.utimesSync(f, d, d); };
+    plantSession(box, ID, { uuid: U1, generation: G1, project: 'demo' });
+    plantSession(box, 'claude-a-onlyb', { uuid: U2, generation: G1, project: 'demo' });
+    plantSession(box, 'claude-a-onlya', { uuid: U3, generation: G1, project: 'demo' });
+    // U1: a transcript in a 180-day home and its swap copy in B, both last written 100 days ago.
+    const both = [userRow('a0000000-0000-4000-8000-0000000058a1', 'held in both homes', iso(200 * DAY))];
+    at(plantTranscript(box, 'claude', SLUG, U1, both), 100);
+    at(plantTranscript(box, 'claude-a', SLUG, U1, both), 100);
+    // U2: held only in B, last written 5 days ago.
+    at(plantTranscript(box, 'claude-a', SLUG, U2, [userRow('a0000000-0000-4000-8000-0000000058a2', 'only in b', iso(6 * DAY), U2)]), 5);
+    // U3: a long-lived file in a 180-day home, appended yesterday, whose first row is 200 days old.
+    at(plantTranscript(box, 'claude', SLUG, U3, [userRow('a0000000-0000-4000-8000-0000000058a3', 'only in a, an old row', iso(200 * DAY), U3)]), 1);
+    expect(runDriver(box, { managedSettings: MS }).code).toBe(0);
+    expect(Number(metaOf(box, 'export_due')), 'every home at 180: no file is past its 150 days').toBe(0);
+    fs.writeFileSync(path.join(B, 'settings.json'), '{}');                   // B on the 30-day default
+    expect(runDriver(box, { offsetMs: 31 * MIN, managedSettings: MS }).code).toBe(0);
+    expect(metaOf(box, 'retention_min')).toBe('30');
+    expect(JSON.parse(metaOf(box, 'retention_lowered')!)).toMatchObject({ home: B, days: 30, othersMin: 180 });
+    expect(Number(metaOf(box, 'export_due')), 'only the row held in B alone: U1 waits for its 180-day copy, U3 for its file').toBe(1);
+    expect(Number(metaOf(box, 'export_overdue'))).toBe(0);
   });
 });

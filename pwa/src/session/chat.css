@@ -2326,6 +2326,20 @@ button.metachip:active {
   flex-direction: column;
   gap: var(--sp-2);
 }
+/* The drawer's header line: the session on the left and, while the window is
+   wider than the glass, the clip notice on the right. It wraps as two whole
+   pieces, so on a narrow phone the notice takes a line of its own instead of
+   breaking mid-word, and the drawer refits for the height it took. It wears
+   the header's own colour and type; nothing here paints. */
+.term-eyebrow {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: var(--sp-1) var(--sp-3);
+}
+.term-clip {
+  white-space: nowrap;
+}
 .term-screen {
   position: relative;
   flex: 1;

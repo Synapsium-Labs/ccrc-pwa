@@ -346,12 +346,17 @@ describe('the naming sweep', () => {
       ...localIO,
       stat: (p) => { if (p === f) stats += 1; return localIO.stat(p); },
       readFileFrom: (p, off) => { if (p === f) reads += 1; return localIO.readFileFrom(p, off); },
+      // The resolver's own tail read goes through the measured variant since
+      // D-4946; counted too, so the "+1 (Task 2)" below still pins it.
+      readFileFromMeasured: (p, off) => { if (p === f) reads += 1; return localIO.readFileFromMeasured(p, off); },
     };
     const w = new FleetWatcher({ ...testDeps(h.home, h.run), io }, new Bus(), 2000);
 
     await w.sweepNames();
     expect(h.calls).toHaveLength(1);
-    expect(reads).toBe(1);
+    // +1 (Task 2): `resolveTranscript`'s own one-time continuation check on
+    // `f`, paid once at the sweep's first full ladder resolution.
+    expect(reads).toBe(2);
     const statsAfterFirst = stats;
 
     // A DIFFERENT title, deriving a DIFFERENT pair — the pair-keyed guard
@@ -361,7 +366,7 @@ describe('the naming sweep', () => {
     await again(w);
     await again(w);
     expect(h.calls, 'still exactly the one call from before the refusal').toHaveLength(1);
-    expect(reads, 'a retired session earns no further tail read at all').toBe(1);
+    expect(reads, 'a retired session earns no further tail read at all').toBe(2);
     expect(stats, 'nor even the cheaper stat the tail read is gated behind').toBe(statsAfterFirst);
   });
 
@@ -692,18 +697,23 @@ describe('the naming sweep', () => {
     const io: FleetIO = {
       ...localIO,
       readFileFrom: (p, off) => { if (p === f) reads += 1; return localIO.readFileFrom(p, off); },
+      // The resolver's own tail read goes through the measured variant since
+      // D-4946; counted too, so the "+1 (Task 2)" below still pins it.
+      readFileFromMeasured: (p, off) => { if (p === f) reads += 1; return localIO.readFileFromMeasured(p, off); },
     };
     const w = new FleetWatcher({ ...testDeps(h.home, h.run), io }, new Bus(), 2000);
 
     await w.sweepNames();
-    expect(reads).toBe(1);
+    // +1 (Task 2): `resolveTranscript`'s own one-time continuation check on
+    // `f`, paid once at the sweep's first full ladder resolution.
+    expect(reads).toBe(2);
     await again(w);
     await again(w);
-    expect(reads, 'identical size AND mtime means the bytes cannot have changed').toBe(1);
+    expect(reads, 'identical size AND mtime means the bytes cannot have changed').toBe(2);
 
     writeFileSync(f, readFileSync(f, 'utf8') + USER('more') + '\n');
     await again(w);
-    expect(reads).toBe(2);
+    expect(reads).toBe(3);
   });
 
   // Review finding 1/4: the test above only ever moves size and mtime
@@ -722,18 +732,23 @@ describe('the naming sweep', () => {
       ...localIO,
       stat: (p) => (p === f ? Promise.resolve(st) : localIO.stat(p)),
       readFileFrom: (p, off) => { if (p === f) reads += 1; return localIO.readFileFrom(p, off); },
+      // The resolver's own tail read goes through the measured variant since
+      // D-4946; counted too, so the "+1 (Task 2)" below still pins it.
+      readFileFromMeasured: (p, off) => { if (p === f) reads += 1; return localIO.readFileFromMeasured(p, off); },
     };
     const w = new FleetWatcher({ ...testDeps(h.home, h.run), io }, new Bus(), 2000);
 
     await w.sweepNames();
-    expect(reads).toBe(1);
+    // +1 (Task 2): `resolveTranscript`'s own one-time continuation check on
+    // `f`, paid once at the sweep's first full ladder resolution.
+    expect(reads).toBe(2);
 
     // SAME size, mtime alone moves forward. A gate that dropped
     // `p.mtimeMs === st.mtimeMs` (kept size-only) would call this
     // "unchanged" and skip it — the in-place rewrite it exists to catch.
     st = { size: 10, mtimeMs: 2000 };
     await again(w);
-    expect(reads, 'size alone cannot prove an in-place rewrite did not happen').toBe(2);
+    expect(reads, 'size alone cannot prove an in-place rewrite did not happen').toBe(3);
   });
 
   it('re-reads a grown transcript even when the mtime lands back on the recorded value', async () => {
@@ -746,18 +761,23 @@ describe('the naming sweep', () => {
       ...localIO,
       stat: (p) => (p === f ? Promise.resolve(st) : localIO.stat(p)),
       readFileFrom: (p, off) => { if (p === f) reads += 1; return localIO.readFileFrom(p, off); },
+      // The resolver's own tail read goes through the measured variant since
+      // D-4946; counted too, so the "+1 (Task 2)" below still pins it.
+      readFileFromMeasured: (p, off) => { if (p === f) reads += 1; return localIO.readFileFromMeasured(p, off); },
     };
     const w = new FleetWatcher({ ...testDeps(h.home, h.run), io }, new Bus(), 2000);
 
     await w.sweepNames();
-    expect(reads).toBe(1);
+    // +1 (Task 2): `resolveTranscript`'s own one-time continuation check on
+    // `f`, paid once at the sweep's first full ladder resolution.
+    expect(reads).toBe(2);
 
     // SAME mtime, size alone grows. A gate that dropped `p.size === st.size`
     // (kept mtime-only) would call this "unchanged" and skip it — the exact
     // shape of an append that lands inside the same recorded millisecond.
     st = { size: 20, mtimeMs: 1000 };
     await again(w);
-    expect(reads, 'mtime alone cannot prove an append did not happen').toBe(2);
+    expect(reads, 'mtime alone cannot prove an append did not happen').toBe(3);
   });
 });
 

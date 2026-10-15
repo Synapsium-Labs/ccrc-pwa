@@ -7745,11 +7745,11 @@ export class FleetWatcher {
           // was a write that did NOT change the question on screen. Advance
           // `askAt` to match, or the next parent answer refuses `ask-moved`
           // over a bump nobody made — see `restampAsk`'s own docstring for
-          // the writer that does this (`session-hook.sh`'s subagent arm) and
-          // for why re-stamping is not a weakening. Runs BEFORE the
-          // amendment gate, and independent of it: a held ask goes stale on
-          // a subagent event whether or not its notification is being
-          // replaced.
+          // the writers that still do this (since D-4041 a subagent event over
+          // a MAIN-thread wait keeps `updatedAt`; one over a wait a subagent
+          // raised, and any other bump, still moves it) and for why
+          // re-stamping is not a weakening. Runs BEFORE the amendment gate, and
+          // independent of it, whether or not the notification is replaced.
           this.restampHeldAsk(r.id, dialog.id);
           if (notify && actions && this.actionlessAsks.get(r.id) === dialog.id) {
             // The amendment. Same question, same tag — `push-sw.js` sets

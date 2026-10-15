@@ -80,7 +80,8 @@ const scratch = (leaf: string, main: string, tag: string): void => {
 };
 
 describe('lens row #98: a sibling interrupted at `reclaim:branch`, its tree moved into C’s temp root', () => {
-  it('the sibling is resumed to completion, then C is reclaimed — the sibling’s late file still stands', () => {
+  // On Darwin the temp-root in-use probe answers `unmeasured`; the Linux run covers the `refused` verdict.
+  it.skipIf(process.platform === 'darwin')('the sibling is resumed to completion, then C is reclaimed — the sibling’s late file still stands', () => {
     const c: Child = makeChild(h);
     h.sh(`${WS_ADD} CCD_WS_SLUG=still-harbor cmd_ws_add --child ${CHILD_RUN} demo`);
     const swt = path.join(h.home, 'worktrees', 'demo', 'still-harbor');
@@ -118,7 +119,8 @@ describe('lens row #98: a sibling interrupted at `reclaim:branch`, its tree move
 });
 
 describe('a RESUMED tail asks it too, entering at artifacts', () => {
-  it('`reclaim:artifacts`: a foreign tree in the temp root is kept `refused`, and the act completes', () => {
+  // On Darwin the temp-root in-use probe answers `unmeasured`; the Linux run covers the `refused` verdict.
+  it.skipIf(process.platform === 'darwin')('`reclaim:artifacts`: a foreign tree in the temp root is kept `refused`, and the act completes', () => {
     const c = makeChild(h);
     const o = foreign();
     h.sh(`_child_tmpdir ${CHILD_ID} >/dev/null`);
@@ -159,7 +161,8 @@ describe('a RESUMED tail asks it too, entering at artifacts', () => {
     expect(measOf(doneOf('expire', EXP_ID))['clipsKept']).toBe('refused');
   }, 180_000);
 
-  it('NO MUTUAL HOLD: two children, each with its own scratch checkouts, both resumed at artifacts — both complete, both leaves gone', () => {
+  // On Darwin the temp-root in-use probe answers `unmeasured`; the Linux run covers the `refused` verdict.
+  it.skipIf(process.platform === 'darwin')('NO MUTUAL HOLD: two children, each with its own scratch checkouts, both resumed at artifacts — both complete, both leaves gone', () => {
     const c = makeChild(h);
     h.sh(`${WS_ADD} CCD_WS_SLUG=still-harbor cmd_ws_add --child ${CHILD_RUN} demo`);
     const swt = path.join(h.home, 'worktrees', 'demo', 'still-harbor');
@@ -197,7 +200,11 @@ describe('a leaf the scan cannot measure is kept `unmeasured` while the act comp
     expect(doc['tmpRootKept']).toBe('unmeasured');
     const done = doneOf('reclaim', CHILD_ID);
     expect(measOf(done)['tmpRootKept']).toBe('unmeasured');
-    expect(String(done['detail'])).toContain('could not read all of');
+    if (process.platform === 'darwin') {
+      expect(String(done['detail'])).toContain('this box is Darwin, where ccd reads no process environment');
+    } else {
+      expect(String(done['detail'])).toContain('could not read all of');
+    }
     expect(fs.existsSync(locked), 'the temp root stands').toBe(true);
     expect((fs.statSync(locked).mode & 0o777).toString(8), 'the permission pass never ran').toBe('0');
   }, 120_000);
@@ -219,7 +226,11 @@ describe('a leaf the scan cannot measure is kept `unmeasured` while the act comp
     const doc = JSON.parse(r.stdout) as Doc;
     expect(doc['reclaimed']).toBe(CHILD_ID);
     expect(doc['tmpRootKept']).toBe('unmeasured');
-    expect(String(doneOf('reclaim', CHILD_ID)['detail'])).toContain('did not finish within 1s');
+    if (process.platform === 'darwin') {
+      expect(String(doneOf('reclaim', CHILD_ID)['detail'])).toContain('this box is Darwin, where ccd reads no process environment');
+    } else {
+      expect(String(doneOf('reclaim', CHILD_ID)['detail'])).toContain('did not finish within 1s');
+    }
     expect(fs.existsSync(path.join(tmpOf(CHILD_ID), 'cdk.out')), 'the temp root stands').toBe(true);
   }, 120_000);
 });

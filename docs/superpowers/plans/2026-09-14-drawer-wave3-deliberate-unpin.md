@@ -1,5 +1,13 @@
 # Terminal drawer, wave 3 — the deliberate un-pin Implementation Plan
 
+> **Superseded, unbuilt (2026-10-14, operator ruling O8; D-5013).** Do not dispatch this plan. The
+> design that replaces it is `docs/superpowers/specs/2026-10-14-terminal-drawer-every-width-design.md`,
+> and its first plan is `docs/superpowers/plans/2026-10-14-terminal-drawer-every-width-stage1.md`. Nothing below
+> was implemented: `fitFloor`, `PaneGridFrame`, `CANONICAL_COLS`, the `auto-continue-unmeasured` token
+> and this plan's `WindowSizer` do not exist on `main`. The new design's stage 2 has a `WindowSizer` of
+> its own, with a different contract (spec 2026-10-14 §6.3). This file is kept as the record of what was
+> planned.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Let a phone-width drawer narrow a session's tmux window — but only to a width the pane's own history can absorb without shedding a line, only through the verb wave 2 put on the fleet box, and only while every reader that would type into that pane is told the pane is unmeasured rather than idle.
