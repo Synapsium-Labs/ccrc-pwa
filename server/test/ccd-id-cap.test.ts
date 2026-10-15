@@ -392,4 +392,29 @@ describe('a new id fits every name ccd derives from it (path-identity spec §2.6
     expect(eventsOf(h.home, 'enable').map((e) => e['id']), 'the id at the cap was enabled').toEqual([okId]);
     expect(supervisedStarts()).toContain(`supervised_start ${okId}`);
   }, 60_000);
+
+  it('enable <id> stays uncapped for a hand-planted row over the cap, which the two-argument form refuses', () => {
+    // The cap binds the MINT sites, and enable mints only on its two-argument form (`<wrapper> <project>` composes the
+    // id). `enable <id>` names a row that already exists, so it asks no cap: refusing it would strand a session whose
+    // row predates the cap. The `$# >= 2` guard around the cap is the whole exemption, and a `>= 1` there would
+    // cap the one-argument form too.
+    const over = 'q'.repeat(CAP - 'claude-b-'.length + 1);
+    const overId = `claude-b-${over}`;
+    expect(overId).toHaveLength(CAP + 1);
+    seedRow(overId, 'claude-b', over);
+    // The CONTROL: the same row, named by its pair, is refused with the cap's words and nothing is journaled, so
+    // the one-argument success below is the exemption's and not a cap that never binds.
+    const pair = run(`${STUBS} cmd_enable claude-b ${over}`);
+    expect(pair.code, pair.stdout).not.toBe(0);
+    expect(pair.stderr).toContain(capSentence(overId, 'choose a shorter project'));
+    expect(eventsOf(h.home, 'enable'), 'the two-argument form journaled an enable row').toEqual([]);
+    expect(supervisedStarts(), 'the two-argument form asked for a supervised start').toEqual([]);
+    // The id form: startable, journaled and supervised, with the planted row as it was.
+    const r = run(`${STUBS} cmd_enable ${overId}`);
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stderr, 'the cap answered the one-argument form').not.toContain('may be at most');
+    expect(eventsOf(h.home, 'enable').map((e) => e['id']), 'the over-cap row was enabled').toEqual([overId]);
+    expect(supervisedStarts(), 'the over-cap row was started').toContain(`supervised_start ${overId}`);
+    expect(h.reg(overId, 'uuid'), 'the planted row is left as it was').toBe(PLANTED_UUID);
+  }, 60_000);
 });
