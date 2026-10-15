@@ -1,6 +1,6 @@
 # A long paste sent from the PWA is submitted by the server — Plan note
 
-> **For agentic workers:** a short plan note, not a task plan. Two designs are named by slug, `D-TBD-paste-chip-submit` (commit 1, the brief) and `D-TBD-tall-box-echo` (commit 2, the row cap the investigations measured as the likeliest shape of the report); the coordinator allocates their numbers and replaces the slugs everywhere they appear (this file, `server/src/inject/send.ts`, `server/test/send-paste-chip.test.ts`). Until then `dtbd.test.ts` is red by design. The two commits are independent enough that commit 2 can be dropped on its own.
+> **For agentic workers:** a short plan note, not a task plan. Two designs, D-5087 (`paste-chip-submit`, commit 1) and D-5088 (`tall-box-echo`, commit 2, the row cap the investigations measured as the likeliest shape of the report), issued by the ledger on 2026-10-15 and defined once, in §Deviations found below. The two commits are independent enough that commit 2 can be dropped on its own.
 
 **Branch:** `fix/paste-chip-send`, cut from `fix/ask-server-half` (PR #417) at `43d1a3f4`, because it builds on that branch's D-5046 type loop (`--` before each literal, every line's send checked, `type-failed`).
 
@@ -21,7 +21,7 @@ On a throwaway local tmux server (`tmux -L pastechip`, killed afterwards), 220x5
 - **The row cap** (all three investigations, confirmed here at 50 rows): the box shows at most (rows - 10) / 2 rows, 20 in the fleet's 220x50 window, keeps the LAST rows in view, and draws `❯` on the first of them. A 40-line message put line 21 on the marker row (`cc300-paste-tall-40-lines.txt`); seven 500-character paragraphs put a blank separator line there (`cc300-paste-tall-paras-blank-marker.txt`). Today both are `verify-failed` with NO `submittable`, so the PWA offers only Retry and Discard, and one Enter at the terminal sends the whole text intact: the report exactly.
 - **A long first line followed by more lines** draws a chip on the marker row and our rows under it (`cc300-paste-chip-first-rows-below.txt`). In 3 of 16 python-driven tries with no pause, the M-Enter straight after the long line SUBMITTED it alone and the rest landed in a fresh box (`cc300-paste-split-first-line-sent.txt`, `cc300-paste-tall-split-first-sent.txt`); 0 of 14 with a 30 or 100 ms pause; 0 of 6 through the real `sendPrompt`.
 
-## The change (D-TBD-paste-chip-submit)
+## The change (D-5087)
 
 `sendPrompt`'s ordinary echo arm, when the needle never matched, asks `ownPasteChip` whether the box holds our whole message behind one chip. If it does, the server presses the Enter itself through `pressEnterAndConfirm`, so the chip row has to leave the box (`submitted()`), a second Enter follows a swallowed first, and two swallowed Enters answer `enter-ignored` with `submittable` and the chip as `draft`. If it does not, the arm refuses exactly as before, `submittable` included where it was set.
 
@@ -34,7 +34,7 @@ On a throwaway local tmux server (`tmux -L pastechip`, killed afterwards), 220x5
 
 What it does not prove is that Claude Code kept every character behind the chip. The tap it replaces pressed the same Enter on the same row and proved no more.
 
-## The second change (D-TBD-tall-box-echo)
+## The second change (D-5088)
 
 When `ownPasteChip` refuses, the same arm asks `ownRenderedBox` whether the box, read whole, is the rendering of what was typed. It splits the box's rows (marker row through the closing rule, blank rows included) into runs at bare chip rows, and what was typed into runs at lines over 800 characters, each run's text whitespace-free (wrapping only moves spaces). Guards, all required: the same provenance; the box closes and every chip in it is bare (`[Pasted text #N]`, nothing else on the row); EVERY CHIP IN VIEW (as many as long lines typed: a long line hidden above the window could have lost its head unseen, and the auto-submit split shows fewer chips than typed); every run after the first chip equal to ours, and the first a suffix of ours; a hidden head only in a box exactly `(rows - 10) / 2` rows tall; something in view. It answers the last 24 non-space characters in view, and the submit proof is that the box, read whole, no longer ends with them, so neither the marker row (a later or blank line) nor a human's next draft can fool it. `pressEnterAndConfirm` now withholds `submittable` when the marker row is blank, which only this arm can produce. The proof every other send uses is unchanged, now passed as `stillStartsWith(needle)`.
 
@@ -85,7 +85,9 @@ Measured end to end with the real `sendPrompt`: 1000 characters → `ok`, keys `
 - **The attachment lane** has the same row cap and its own failed-echo clear, which fires its blind floor into a tall box of our own text. Unchanged here.
 - **macOS's lost head on a line after the first**: the needle on line one still matches, so `sendPrompt` answers `ok` with about 1 KB missing (investigation). Linux was measured to 9000 characters without it. Unchanged here.
 
-## Pending a number (named by slug; the coordinator allocates)
+## Deviations found
 
-- `paste-chip-submit`: the first design above.
-- `tall-box-echo`: the second design above.
+### Issued 2026-10-15 and defined here
+
+- **D-5087** — `paste-chip-submit`: when `sendPrompt`'s echo never matched and the box holds exactly ONE paste chip that is provably ours (the box proven empty or cleared by this call before typing; the chip alone on the marker row with nothing below it; its `+M lines` equal to the newlines typed, or no count for one line; the typed text over the 800-character collapse floor), the server presses Enter itself and proves the chip row left the box. Every other shape keeps the earlier refusal, `submittable` included.
+- **D-5088** — `tall-box-echo`: when `ownPasteChip` refuses, `ownRenderedBox` reads the box whole (marker row to closing rule) and submits it when it is provably the rendering of what was typed: the same provenance, a closed box of bare chips only, every long line's chip in view, every run after the first chip equal to ours and the first run a suffix of ours, a box at exactly the measured row cap ((rows-10)/2, 20 at 220x50) whenever the head is out of view, and something in view. Its submit proof is that the box, read whole, no longer CONTAINS the tail that was in view (trailing backslashes left out, because Claude Code turns `\` + Enter into a newline), and a capture with no closing rule counts as not yet submitted; both refinements came from the branch verifier's measured false success (a message ending in `\`) and are pinned by the adversarial cases B1/B2 in `send-paste-chip.test.ts`. Known width, pinned as C1: nothing on screen distinguishes a head hidden by the row cap from a head already gone.

@@ -6,7 +6,7 @@ import { KeyedQueue } from '../src/inject/queue.js';
 import { draftOf, ownPasteChip, ownRenderedBox, sendPrompt, submitEnter } from '../src/inject/send.js';
 import { Tmux, type Runner } from '../src/exec.js';
 
-// D-TBD-paste-chip-submit (plan docs/superpowers/plans/2026-10-15-paste-chip-send.md). Claude Code collapses one
+// D-5087 (plan docs/superpowers/plans/2026-10-15-paste-chip-send.md). Claude Code collapses one
 // terminal read of more than 800 characters into a chip, `[Pasted text #N]`, and holds the text in full behind it.
 // The echo check then never sees our first 24 characters, so `sendPrompt` used to refuse `verify-failed` with
 // `submittable` and leave the operator a tap (or, as reported, a trip to the terminal) to send what was already
@@ -96,7 +96,7 @@ describe('the recorded 2.1.300 paste panes (sanity: fixture and generator agree)
   });
 });
 
-describe('sendPrompt submits a paste chip it can prove is its own (D-TBD-paste-chip-submit)', () => {
+describe('sendPrompt submits a paste chip it can prove is its own (D-5087)', () => {
   // THE OPERATOR'S CASE. One long paragraph, typed into an empty box, collapsed to one chip. Today: `verify-failed`,
   // `submittable`, no Enter, and the operator goes to the terminal to press it.
   it('one long line, one chip: presses Enter once and reports ok', async () => {
@@ -151,7 +151,7 @@ describe('sendPrompt submits a paste chip it can prove is its own (D-TBD-paste-c
   });
 });
 
-describe('every other shape keeps today\'s refusal (D-TBD-paste-chip-submit\'s guards)', () => {
+describe('every other shape keeps today\'s refusal (D-5087\'s guards)', () => {
   const refusesWithoutEnter = async (typed: string, text: string) => {
     const { tmux, calls } = phaseTmux({ start: EMPTY, typed });
     const res = await sendPrompt(deps(tmux), 'lane-a', text);
@@ -245,7 +245,7 @@ describe('ownPasteChip: the decision, guard by guard', () => {
   });
 });
 
-// ── D-TBD-tall-box-echo ────────────────────────────────────────────────────────────────────────────────────────────
+// ── D-5088 ────────────────────────────────────────────────────────────────────────────────────────────
 //
 // THE ROW CAP, which the three investigations measured as the likeliest shape of the operator's report. Claude Code
 // 2.1.300 shows at most (rows - 10) / 2 rows of its input box (20 in the fleet's 220x50 window), scrolls the box
@@ -302,7 +302,7 @@ describe('the recorded row-capped panes (sanity)', () => {
   });
 });
 
-describe('sendPrompt submits a row-capped box that is provably what it typed (D-TBD-tall-box-echo)', () => {
+describe('sendPrompt submits a row-capped box that is provably what it typed (D-5088)', () => {
   const submits = async (typed: string, text: string) => {
     const { tmux, calls } = phaseTmux({ start: EMPTY, typed });
     const res = await sendPrompt(deps(tmux), 'lane-a', text);
@@ -348,7 +348,7 @@ describe('sendPrompt submits a row-capped box that is provably what it typed (D-
   });
 });
 
-describe('a box that is not provably what we typed keeps today\'s refusal (D-TBD-tall-box-echo\'s guards)', () => {
+describe('a box that is not provably what we typed keeps today\'s refusal (D-5088\'s guards)', () => {
   const refuses = async (typed: string, text: string) => {
     const { tmux, calls } = phaseTmux({ start: EMPTY, typed });
     const res = await sendPrompt(deps(tmux), 'lane-a', text);
@@ -436,5 +436,95 @@ describe('ownRenderedBox: the decision, guard by guard', () => {
     const pane = CHIP_FIRST.replace('second line, short', ours);
     expect(draftOf(pane)).toBe('[Pasted text #48]');
     expect(ownRenderedBox(pane, [recorded(1000, 'chipfirstA'), ours, 'third line, short'], 'proven-empty')).toBeNull();
+  });
+});
+
+// THE BRANCH VERIFIER'S ADVERSARIAL CASES, kept as regressions (2026-10-15). A1-A9: a chip or a box that is NOT
+// provably ours never gets an Enter. B1/B2: the rendered-box arm's submit proof must not read "our turn left" while
+// our text is still in the box. TAIL: the window must reach the END of what was typed. C1 pins a known width.
+describe('adversarial cases (the branch verifier)', () => {
+  it('A1 a human chip left in the box: draft-present, nothing typed, no Enter', async () => {
+    const { tmux, calls } = phaseTmux({ start: CHIP, typed: CHIP });
+    const res = await sendPrompt(deps(tmux), 'lane-a', recorded(1000, 'c1000'));
+    expect(res).toMatchObject({ ok: false, error: 'draft-present' });
+    expect(keysOf(calls)).toEqual([]);
+  });
+  it('A2 a human chip left in the box, short text: draft-present', async () => {
+    const { tmux, calls } = phaseTmux({ start: CHIP, typed: CHIP });
+    expect(await sendPrompt(deps(tmux), 'lane-a', 'hello')).toMatchObject({ ok: false, error: 'draft-present' });
+    expect(keysOf(calls)).toEqual([]);
+  });
+  it('A3 a human chip on a blank-marker box row below (hasContentBelowMarker): draft-present', async () => {
+    const pane = EMPTY.replace('❯\xa0\x1b[2mTry "how do I log an error?"\x1b[0m', '❯\xa0\n  [Pasted text #1]');
+    const { tmux, calls } = phaseTmux({ start: pane, typed: CHIP });
+    expect(await sendPrompt(deps(tmux), 'lane-a', recorded(1000, 'c1000'))).toMatchObject({ ok: false, error: 'draft-present' });
+    expect(keysOf(calls)).toEqual([]);
+  });
+  it('A4 one long line typed, but the box shows our chip plus OTHER rows: no Enter', async () => {
+    const { tmux, calls } = phaseTmux({ start: EMPTY, typed: CHIP_FIRST });
+    const res = await sendPrompt(deps(tmux), 'lane-a', recorded(1000, 'chipfirstA'));
+    expect(res).toMatchObject({ ok: false, error: 'verify-failed' });
+    expect(enters(calls)).toBe(0);
+  });
+  it('A5 one long line typed, box shows three chip rows: no Enter', async () => {
+    const { tmux, calls } = phaseTmux({ start: EMPTY, typed: CHIP_ROWS });
+    expect(await sendPrompt(deps(tmux), 'lane-a', recorded(1000, 'c1000'))).toMatchObject({ ok: false, error: 'verify-failed' });
+    expect(enters(calls)).toBe(0);
+  });
+  it('A6 two long lines typed, box shows three chip rows (an extra chip): no Enter', async () => {
+    const { tmux, calls } = phaseTmux({ start: EMPTY, typed: CHIP_ROWS });
+    const text = [0, 1].map((j) => recorded(1000, `ml3L${String(j).padStart(2, '0')}`)).join('\n');
+    expect(await sendPrompt(deps(tmux), 'lane-a', text)).toMatchObject({ ok: false, error: 'verify-failed' });
+    expect(enters(calls)).toBe(0);
+  });
+  it('A7 three long lines typed, box shows two chips on ONE row: no Enter', async () => {
+    const { tmux, calls } = phaseTmux({ start: EMPTY, typed: TWO_CHIPS });
+    const text = [0, 1, 2].map((j) => recorded(1000, `z${j}`)).join('\n');
+    expect(await sendPrompt(deps(tmux), 'lane-a', text)).toMatchObject({ ok: false, error: 'verify-failed' });
+    expect(enters(calls)).toBe(0);
+  });
+  it('A8 counted chip, count off by one in either direction: no Enter', async () => {
+    for (const k of [9, 11]) {
+      const text = Array.from({ length: k }, (_, j) => recorded(90, `q${j}`)).join('\n');
+      const { tmux, calls } = phaseTmux({ start: EMPTY, typed: CHIP_LINES });
+      expect(await sendPrompt(deps(tmux), 'lane-a', text)).toMatchObject({ ok: false, error: 'verify-failed' });
+      expect(enters(calls)).toBe(0);
+    }
+  });
+  it('A9 MIXED box but we typed the long line SHORTER than the floor: no Enter', async () => {
+    const text = ['mix Reply with only OK, no tools. Header line.', recorded(700, 'mixB'), 'and a short closing line'].join('\n');
+    const { tmux, calls } = phaseTmux({ start: EMPTY, typed: CHIP_FIRST });
+    expect(await sendPrompt(deps(tmux), 'lane-a', text)).toMatchObject({ ok: false });
+    expect(enters(calls)).toBe(0);
+  });
+  // THE TRAILING BACKSLASH. Claude Code 2.1.300 turns `\` + Enter into a NEWLINE (measured): the backslash is consumed,
+  // a blank row is added, nothing is submitted. The tall arm's proof (the box no longer ENDS with the tail in view)
+  // reads that as "our turn left".
+  it('B1 a tall box whose text ends in a backslash: one Enter, box still holds the text => must NOT be ok', async () => {
+    const text = TEXT.tall40 + ' \\';
+    const typed = TALL40.replace('END-tall40L39', 'END-tall40L39 \\');
+    const afterEnter = TALL40; // the backslash consumed (a blank row would be added below, irrelevant to the squash)
+    const { tmux, calls } = phaseTmux({ start: EMPTY, typed, entered: [afterEnter] });
+    const res = await sendPrompt(deps(tmux), 'lane-a', text);
+    expect(res).toMatchObject({ ok: false, error: 'enter-ignored' });
+    expect(enters(calls)).toBe(2);
+  });
+  it('B2 a box whose closing rule is missing after Enter (text still there) is NOT read as submitted', async () => {
+    const { lines: rows, close } = boxSpan(TALL40);
+    const noRule = rows.map((l, i) => (i === close ? '' : l)).join('\n');
+    const { tmux, calls } = phaseTmux({ start: EMPTY, typed: TALL40, entered: [noRule] });
+    const res = await sendPrompt(deps(tmux), 'lane-a', TEXT.tall40);
+    expect(res).toMatchObject({ ok: false, error: 'enter-ignored' });
+    expect(enters(calls)).toBe(2);
+  });
+  // THE SHORT-LINE SPLIT (inferred, not reproduced on macOS): if the head of a tall message of SHORT lines left as its
+  // own turn, the remainder exactly fills the cap and is a suffix of ours. The arm cannot tell it from a hidden head.
+  it('TAIL the visible window must reach the END of what was typed: a box missing our last line is not ours', () => {
+    expect(ownRenderedBox(TALL40, lines(41, 80, 'tall40').split('\n'), 'proven-empty')).toBeNull();
+  });
+  // KNOWN WIDTH, pinned so a change to it is a decision: the arm cannot see above the window.
+  it('C1 the box holds ONLY lines 20..39 of a 40-line message (head already gone): indistinguishable from TALL40', () => {
+    // TALL40 IS that rendering: 20 rows, lines 20..39. Nothing on screen says lines 0..19 are above the window.
+    expect(ownRenderedBox(TALL40, TEXT.tall40.split('\n'), 'proven-empty')).not.toBeNull();
   });
 });

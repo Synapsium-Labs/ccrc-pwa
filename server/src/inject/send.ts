@@ -67,7 +67,7 @@ export type SendResult =
        *  - OUR OWN ECHOED TEXT — `enter-ignored`. The echo loop proved the box
        *    holds it; both Enters were swallowed. Earns the flag, unless the
        *    marker row is blank, which a row-capped box can show
-       *    (D-TBD-tall-box-echo): a rescue cannot name a blank row.
+       *    (D-5088): a rescue cannot name a blank row.
        *  - OUR OWN MESSAGE, COLLAPSED INTO A PASTE CHIP — the ordinary
        *    `verify-failed`. Earns the flag; see that arm for the provenance
        *    argument, and `PASTE_CHIP` for what the widget is doing.
@@ -99,7 +99,7 @@ export type SendResult =
        * the deserving one. The first three still withhold the flag.
        *
        * AND THE FOURTH NO LONGER WAITS FOR THE TAP when the server can prove the
-       * chip is its own (D-TBD-paste-chip-submit, `ownPasteChip`): it presses
+       * chip is its own (D-5087, `ownPasteChip`): it presses
        * the Enter itself, so that send answers `ok` or, Enter swallowed twice,
        * `enter-ignored` with this flag. Only a chip-led row that fails one of
        * `ownPasteChip`'s guards still reaches `verify-failed` with the flag.
@@ -290,7 +290,7 @@ async function pressEnterAndConfirm(
     // IS the message and Enter would send exactly it. See `SendResult`.
     //
     // EXCEPT ON A BLANK MARKER ROW, which only a row-capped box reaches here
-    // (D-TBD-tall-box-echo: the first row in view can be a blank line of our
+    // (D-5088: the first row in view can be a blank line of our
     // message). `submitEnter` refuses a blank row and its route a blank
     // `expect`, so a flag over `draft: ''` would be a rescue with no subject.
     // The diagnosis stays.
@@ -564,7 +564,7 @@ const PASTE_COLLAPSE_FLOOR = 800;
 
 /**
  * What `sendPrompt` PROVED about the box before its type loop, the provenance
- * half of D-TBD-paste-chip-submit. `proven-empty`: the clobber guard read an
+ * half of D-5087. `proven-empty`: the clobber guard read an
  * empty box (no marker-row text, no rows below it). `cleared-by-us`: the box
  * held something and this call's own clear emptied it (`replaceDraft`,
  * `clearMailResidue`, `ownStrandedClear`). `unproven` is the starting value, so a
@@ -573,7 +573,7 @@ const PASTE_COLLAPSE_FLOOR = 800;
 export type TypeProvenance = 'unproven' | 'proven-empty' | 'cleared-by-us';
 
 /**
- * D-TBD-paste-chip-submit. Is the box holding OUR whole message, collapsed into a
+ * D-5087. Is the box holding OUR whole message, collapsed into a
  * paste chip, so that one Enter sends exactly it? Answers the chip row (the
  * needle `submitted()` proves departure with) or `null`, and `null` keeps the
  * ordinary `verify-failed` refusal, `submittable` and all.
@@ -666,9 +666,9 @@ function boxRows(ansiPane: string): string[] | null {
 }
 
 /**
- * D-TBD-tall-box-echo. Is the box the RENDERING of what we typed, read whole?
+ * D-5088. Is the box the RENDERING of what we typed, read whole?
  * Answers the last `ECHO_NEEDLE` non-space characters in view (the tail
- * `stillEndsWith` proves departure with), or `null`, which keeps the refusal.
+ * `stillContains` proves departure with), or `null`, which keeps the refusal.
  *
  * Reached only when the echo needle never matched, and built for two measured
  * shapes the needle cannot see (Claude Code 2.1.300, 220x50):
@@ -728,14 +728,23 @@ export function ownRenderedBox(ansiPane: string, parts: readonly string[], prove
   if (seen[0] !== typed[0] && rows.length !== boxRowCap(paneRows)) return null;
   const inView = squash(rows.join(''));
   if (inView === '') return null;
-  return inView.slice(-ECHO_NEEDLE);
+  // Trailing backslashes are left out of the tail: Claude Code 2.1.300 turns `\` + Enter into a NEWLINE (measured),
+  // consuming the backslash and submitting nothing, so a tail that included it would vanish from a box still holding
+  // our whole message.
+  return inView.replace(/\\+$/, '').slice(-ECHO_NEEDLE);
 }
 
-/** `ownRenderedBox`'s submit proof: the box, read whole, still ends with the
- *  tail that was in view. False on an emptied box, on the queue hint (dim, so
- *  stripped), and on anything typed into the box after our turn left it. */
-const stillEndsWith = (tail: string): StillInBox => (pane) =>
-  squash((boxRows(pane) ?? []).join('')).endsWith(tail);
+/** `ownRenderedBox`'s submit proof: the box, read whole, still CONTAINS the tail
+ *  that was in view (anywhere, not only at its end). False on an emptied box, on
+ *  the queue hint (dim, so stripped), and on anything else typed after our turn
+ *  left. A box whose closing rule is not on the capture counts as still holding
+ *  it: a frame that cannot be read whole is not proof that the turn left. Both
+ *  found by the branch verifier: `\` + Enter adds a row instead of submitting,
+ *  and an "ends with" proof read that as gone. */
+const stillContains = (tail: string): StillInBox => (pane) => {
+  const rows = boxRows(pane);
+  return rows === null || squash(rows.join('')).includes(tail);
+};
 
 /** The exact text `dispatch.ts` types into a resumed worker's box before a
  *  wave brief (`sendPrompt(..., '/clear')`) — the one draft `ownStrandedClear`
@@ -1157,7 +1166,7 @@ export function sendPrompt(
         // The attachment path's own clear reports `dead` for exactly this and
         // returns `not-alive`; this is the same question and the same answer.
         if (lastBox === null || lastPane === null) return { ok: false, error: 'not-alive' };
-        // D-TBD-paste-chip-submit: the box holds OUR whole message behind ONE
+        // D-5087: the box holds OUR whole message behind ONE
         // paste chip, proven by `ownPasteChip`'s four guards. Then the needle
         // never matching is the widget's rendering, not a failed send, and the
         // Enter the operator would otherwise press (a tap, or at the terminal)
@@ -1168,14 +1177,14 @@ export function sendPrompt(
         // refusal below exactly as before.
         const ownChip = ownPasteChip(lastPane, parts, provenance);
         if (ownChip !== null) return pressEnterAndConfirm(d, id, sleep, stillStartsWith(ownChip.slice(0, ECHO_NEEDLE)));
-        // D-TBD-tall-box-echo: the box is the RENDERING of what we typed, read
+        // D-5088: the box is the RENDERING of what we typed, read
         // whole: a row-capped box whose marker row is a later line (or a blank
         // one), or long lines drawn as chips among our own rows. Proven by
         // `ownRenderedBox`'s guards, and submitted with the proof that OUR TAIL
         // (the last characters in view) left the box, since the marker row of a
         // row-capped box is no part of the message we can name in advance.
         const ownTail = ownRenderedBox(lastPane, parts, provenance);
-        if (ownTail !== null) return pressEnterAndConfirm(d, id, sleep, stillEndsWith(ownTail));
+        if (ownTail !== null) return pressEnterAndConfirm(d, id, sleep, stillContains(ownTail));
         // THE TEXT STAYS IN THE BOX — no clearBox, no C-u (operator ruling:
         // refuse, never destroy). That was already true; what was missing was
         // saying so. Hand back the box row, FOR DISPLAY, exactly as the
