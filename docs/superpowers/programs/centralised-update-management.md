@@ -1664,6 +1664,18 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
         Neither merge touched wave 15's files.
       - STATUS: fleet and server v0.0.193, newest v0.0.193, backups fleet 180M/server 727M, disk free fleet 220G/work
         volume 186G/server 32G, no anomalies at 02:42.
+    - **2026-10-15 03:42 UTC: v0.0.194 (`354118383`, #413) auto-converged unattended, with both runs clean.** No action
+      was taken.
+      - The release was published at 02:45:39. The fleet box ran from 03:00:34 to 03:02:27, about 22 seconds after a
+        poll falls due on the grid from the server's 02:30:12 restart. The server followed from 03:03:08 to 03:03:34.
+        Both reports read `phase: done` and `from: pwa` (defect A), with no doctor detail.
+      - Both trailing doctors passed. Fleet: 34 passed, 6 warned, 0 failed. Server: 26 passed, 0 warned, 0 failed.
+        Both read `box-token` PASS, the server's generation #3 still 4 days old.
+      - The merge touched none of wave 15's files. Wave 15 (run 300) is still held, by 1349 (run 354, now
+        `awaiting-review`) on `ccd/ccrc` and by 1352 (run 433, `awaiting-review`) on `ccd/ccd`. Run 360 is still
+        `dispatched`, and its `ccd/ccd` work has not landed.
+      - STATUS: fleet and server v0.0.194, newest v0.0.194, backups fleet 180M/server 730M, disk free fleet 220G/work
+        volume 185G/server 32G, no anomalies at 03:42.
 
 - **2026-09-30 12:22 UTC — wave 8 opened (run 182) for the live audit's residue, and dispatched.**
   - **Planning:** two Opus scoping agents measured each defect at `a742eb6a`, and an Opus writer assembled the
