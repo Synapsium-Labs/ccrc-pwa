@@ -1,0 +1,13 @@
+
+  ▐▛███▛█   Claude Code v2.1.299
+ ▝▜██████▀  Sonnet 4.5 · API Usage Billing
+  ▝▝   ▝▝   /rig/project-a
+
+ ❯ Think about the next release of project-a.
+
+ * Tomfoolering…
+
+──
+ ❯ 
+──
+   ⏸ manual mode on · esc to interrupt · ← for agents

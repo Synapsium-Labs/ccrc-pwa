@@ -1,0 +1,1102 @@
+{
+  "cc300-ask-1q-open": {
+    "id": "ac059b8ed4b293b7acedcc088fe22222866a0919",
+    "title": "Which colour?",
+    "body": "Colour\n\nWhich colour?",
+    "options": [
+      {
+        "index": 1,
+        "label": "Red",
+        "description": "A warm primary colour"
+      },
+      {
+        "index": 2,
+        "label": "Blue",
+        "description": "A cool primary colour"
+      },
+      {
+        "index": 3,
+        "label": "Type something."
+      },
+      {
+        "index": 4,
+        "label": "Chat about this"
+      }
+    ],
+    "selectedIndex": 1,
+    "parsed": true
+  },
+  "cc300-ask-q1-of-2": {
+    "id": "d6885f87bc6c79f78b0bf15583426665778a84cd",
+    "title": "Which colour do you prefer?",
+    "body": "←  ☐ Colour  ☐ Features  ✔ Submit  →\n\nWhich colour do you prefer?",
+    "options": [
+      {
+        "index": 1,
+        "label": "Red",
+        "description": "A warm, bold red tone."
+      },
+      {
+        "index": 2,
+        "label": "Green",
+        "description": "A calm, natural green tone."
+      },
+      {
+        "index": 3,
+        "label": "Blue",
+        "description": "A cool, neutral blue tone."
+      },
+      {
+        "index": 4,
+        "label": "Type something."
+      },
+      {
+        "index": 5,
+        "label": "Chat about this"
+      }
+    ],
+    "selectedIndex": 1,
+    "parsed": true
+  },
+  "cc300-ask-q2-of-2-single": {
+    "id": "591e0a9e7b56b021a5a7d27bf944d148710f10c5",
+    "title": "Which drink?",
+    "body": "←  ☒ Fruit  ☐ Drink  ✔ Submit  →\n\nWhich drink?",
+    "options": [
+      {
+        "index": 1,
+        "label": "Tea",
+        "description": "Warm and gentle."
+      },
+      {
+        "index": 2,
+        "label": "Coffee",
+        "description": "Strong and bold."
+      },
+      {
+        "index": 3,
+        "label": "Type something."
+      },
+      {
+        "index": 4,
+        "label": "Chat about this"
+      }
+    ],
+    "selectedIndex": 1,
+    "parsed": true
+  },
+  "cc300-ask-freetext-held": {
+    "id": "b6ee409f477b63a320c2339b574fd26e2fb22522",
+    "title": "Which fruit?",
+    "body": "←  ☐ Fruit  ☐ Drink  ✔ Submit  →\n\nWhich fruit?",
+    "options": [
+      {
+        "index": 1,
+        "label": "Apple",
+        "description": "Crisp and sweet."
+      },
+      {
+        "index": 2,
+        "label": "Pear",
+        "description": "Soft and juicy."
+      },
+      {
+        "index": 3,
+        "label": "Mango"
+      },
+      {
+        "index": 4,
+        "label": "Chat about this"
+      }
+    ],
+    "selectedIndex": 3,
+    "parsed": true
+  },
+  "cc300-ask-same-labels-q1": {
+    "id": "e20d5d6cb0f39934b62595c522fedf09af96488b",
+    "title": "Enable caching?",
+    "body": "←  ☐ Caching  ☐ Tracing  ✔ Submit  →\n\nEnable caching?",
+    "options": [
+      {
+        "index": 1,
+        "label": "Yes",
+        "description": "Turn caching on"
+      },
+      {
+        "index": 2,
+        "label": "No",
+        "description": "Leave caching off"
+      },
+      {
+        "index": 3,
+        "label": "Type something."
+      },
+      {
+        "index": 4,
+        "label": "Chat about this"
+      }
+    ],
+    "selectedIndex": 1,
+    "parsed": true
+  },
+  "cc300-ask-same-labels-q2": {
+    "id": "38f07f99ecbf97a1251fc0d8ad1322860ce0ba34",
+    "title": "Enable tracing?",
+    "body": "←  ☒ Caching  ☐ Tracing  ✔ Submit  →\n\nEnable tracing?",
+    "options": [
+      {
+        "index": 1,
+        "label": "Yes",
+        "description": "Turn tracing on"
+      },
+      {
+        "index": 2,
+        "label": "No",
+        "description": "Leave tracing off"
+      },
+      {
+        "index": 3,
+        "label": "Type something."
+      },
+      {
+        "index": 4,
+        "label": "Chat about this"
+      }
+    ],
+    "selectedIndex": 1,
+    "parsed": true
+  },
+  "cc300-ask-freetext-walk-2-focused": {
+    "id": "38f07f99ecbf97a1251fc0d8ad1322860ce0ba34",
+    "title": "Enable tracing?",
+    "body": "←  ☒ Caching  ☐ Tracing  ✔ Submit  →\n\nEnable tracing?",
+    "options": [
+      {
+        "index": 1,
+        "label": "Yes",
+        "description": "Turn tracing on"
+      },
+      {
+        "index": 2,
+        "label": "No",
+        "description": "Leave tracing off"
+      },
+      {
+        "index": 3,
+        "label": "Type something."
+      },
+      {
+        "index": 4,
+        "label": "Chat about this"
+      }
+    ],
+    "selectedIndex": 3,
+    "parsed": true
+  },
+  "cc300-ask-freetext-walk-3-typed": {
+    "id": "7a3fff18436c62aea3523ee52adc829bc1fdb690",
+    "title": "Enable tracing?",
+    "body": "←  ☒ Caching  ☐ Tracing  ✔ Submit  →\n\nEnable tracing?",
+    "options": [
+      {
+        "index": 1,
+        "label": "Yes",
+        "description": "Turn tracing on"
+      },
+      {
+        "index": 2,
+        "label": "No",
+        "description": "Leave tracing off"
+      },
+      {
+        "index": 3,
+        "label": "- only in staging, sampled 10%"
+      },
+      {
+        "index": 4,
+        "label": "Chat about this"
+      }
+    ],
+    "selectedIndex": 3,
+    "parsed": true
+  },
+  "cc300-ask-freetext-walk-4-stepped-off": {
+    "id": "7a3fff18436c62aea3523ee52adc829bc1fdb690",
+    "title": "Enable tracing?",
+    "body": "←  ☒ Caching  ☐ Tracing  ✔ Submit  →\n\nEnable tracing?",
+    "options": [
+      {
+        "index": 1,
+        "label": "Yes",
+        "description": "Turn tracing on"
+      },
+      {
+        "index": 2,
+        "label": "No",
+        "description": "Leave tracing off"
+      },
+      {
+        "index": 3,
+        "label": "- only in staging, sampled 10%"
+      },
+      {
+        "index": 4,
+        "label": "Chat about this"
+      }
+    ],
+    "selectedIndex": 2,
+    "parsed": true
+  },
+  "cc300-ask-freetext-walk-5-back-on-held": {
+    "id": "7a3fff18436c62aea3523ee52adc829bc1fdb690",
+    "title": "Enable tracing?",
+    "body": "←  ☒ Caching  ☐ Tracing  ✔ Submit  →\n\nEnable tracing?",
+    "options": [
+      {
+        "index": 1,
+        "label": "Yes",
+        "description": "Turn tracing on"
+      },
+      {
+        "index": 2,
+        "label": "No",
+        "description": "Leave tracing off"
+      },
+      {
+        "index": 3,
+        "label": "- only in staging, sampled 10%"
+      },
+      {
+        "index": 4,
+        "label": "Chat about this"
+      }
+    ],
+    "selectedIndex": 3,
+    "parsed": true
+  },
+  "cc300-ask-wrapped-question": {
+    "id": "bc8efe5f4d63fbd9bf980182931e208af6cd49a9",
+    "title": "│ must land before any writer that relies on it?",
+    "body": "←  ☒ Engine  ☐ Order  ☐ Notes  ☐ Region  ✔ Submit  →\n\n│ When the new release is ready, in which order should the two machines be updated, given that the second machine reads files the first machine writes and caches its settings at start-up, so a change that widens a reader\n│ must land before any writer that relies on it?",
+    "options": [
+      {
+        "index": 1,
+        "label": "First machine first",
+        "description": "Update the writer machine before the reader"
+      },
+      {
+        "index": 2,
+        "label": "Second machine first",
+        "description": "Update the reader machine before the writer"
+      },
+      {
+        "index": 3,
+        "label": "Type something."
+      },
+      {
+        "index": 4,
+        "label": "Chat about this"
+      }
+    ],
+    "selectedIndex": 1,
+    "parsed": true
+  },
+  "cc300-ask-markdown-question": {
+    "id": "21b8de09803ef2aa277d8b44f7d1d213f518ef45",
+    "title": "Should the `ledger` table use **Postgres** or SQLite?",
+    "body": "←  ☐ Engine  ☐ Order  ☐ Notes  ☐ Region  ✔ Submit  →\n\nShould the `ledger` table use **Postgres** or SQLite?",
+    "options": [
+      {
+        "index": 1,
+        "label": "Postgres",
+        "description": "Server-based relational database"
+      },
+      {
+        "index": 2,
+        "label": "SQLite",
+        "description": "Embedded single-file database"
+      },
+      {
+        "index": 3,
+        "label": "Type something."
+      },
+      {
+        "index": 4,
+        "label": "Chat about this"
+      }
+    ],
+    "selectedIndex": 1,
+    "parsed": true
+  },
+  "cc300-ask-freetext-1000": {
+    "id": "26b0d8d1153cb6c9d82696929f592cae83085fdb",
+    "title": "│ must land before any writer that relies on it?",
+    "body": "←  ☒ Engine  ☐ Order  ☐ Notes  ☐ Region  ✔ Submit  →\n\n│ When the new release is ready, in which order should the two machines be updated, given that the second machine reads files the first machine writes and caches its settings at start-up, so a change that widens a reader\n│ must land before any writer that relies on it?",
+    "options": [
+      {
+        "index": 1,
+        "label": "First machine first",
+        "description": "Update the writer machine before the reader"
+      },
+      {
+        "index": 2,
+        "label": "Second machine first",
+        "description": "Update the reader machine before the writer"
+      },
+      {
+        "index": 3,
+        "label": "Sentence 01 of answer A: keep the schema portable and test it nightly. Sentence 02 of answer A: keep the schema portable and test it nightly. Sentence 03 of answer A: keep the schema portable and test it nightly.",
+        "description": "Sentence 04 of answer A: keep the schema portable and test it nightly. Sentence 05 of answer A: keep the schema portable and test it nightly. Sentence 06 of answer A: keep the schema portable and test it nightly. Sentence 07 of answer A: keep the schema portable and test it nightly. Sentence 08 of answer A: keep the schema portable and test it nightly. Sentence 09 of answer A: keep the schema portable and test it nightly. Sentence 10 of answer A: keep the schema portable and test it nightly. Sentence 11 of answer A: keep the schema portable and test it nightly. Sentence 12 of answer A: keep the schema portable and test it nightly. Sentence 13 of answer A: keep the schema portable and test it nightly. Sentence 14 of answer A: keep the schema portable and test it nightly.. END-A"
+      },
+      {
+        "index": 4,
+        "label": "Chat about this"
+      }
+    ],
+    "selectedIndex": 3,
+    "parsed": true
+  },
+  "ask-2col-chat-about": {
+    "id": "6ffdd29b830649dff232348359f29605ef742d36",
+    "title": "Given that non-Anthropic models never publish cache-write prices, how should the partial-capture hazard be handled?",
+    "body": "Revised fix\n\nGiven that non-Anthropic models never publish cache-write prices, how should the partial-capture hazard be handled?",
+    "options": [
+      {
+        "index": 1,
+        "label": "Forward-fill per class (Recommended)"
+      },
+      {
+        "index": 2,
+        "label": "Require completeness, Anthropic only"
+      },
+      {
+        "index": 3,
+        "label": "Ship as-is, alert + runbook"
+      },
+      {
+        "index": 4,
+        "label": "Chat about this"
+      }
+    ],
+    "selectedIndex": 1,
+    "parsed": true
+  },
+  "cc300-ask-review-same-labels": {
+    "id": "54e3c714f542a348bc3ded4c92f950dd24a63ce3",
+    "title": "←  ☒ Caching  ☒ Tracing  ✔ Submit  →",
+    "body": "Review your answers\n\nEnable caching?\n   → Yes\nEnable tracing?\n   → - only in staging, sampled 10%\n\nReady to submit your answers?",
+    "options": [
+      {
+        "index": 1,
+        "label": "Submit answers"
+      },
+      {
+        "index": 2,
+        "label": "Cancel"
+      }
+    ],
+    "selectedIndex": 1,
+    "parsed": true
+  },
+  "cc300-ask-review-cancel-focused": {
+    "id": "54e3c714f542a348bc3ded4c92f950dd24a63ce3",
+    "title": "←  ☒ Caching  ☒ Tracing  ✔ Submit  →",
+    "body": "Review your answers\n\nEnable caching?\n   → Yes\nEnable tracing?\n   → - only in staging, sampled 10%\n\nReady to submit your answers?",
+    "options": [
+      {
+        "index": 1,
+        "label": "Submit answers"
+      },
+      {
+        "index": 2,
+        "label": "Cancel"
+      }
+    ],
+    "selectedIndex": 2,
+    "parsed": true
+  },
+  "cc300-ask-review-skipped": {
+    "id": "3679f83724261db1740232165cb66a439ef7e617",
+    "title": "←  ☒ Pets  ☐ Size  ☒ Mode  ✔ Submit  →",
+    "body": "Review your answers\n\n⚠ You have not answered all questions\n\nWhich pets do you like?\n   → Dogs\nWhich mode?\n   → Safe\n\nReady to submit your answers?",
+    "options": [
+      {
+        "index": 1,
+        "label": "Submit answers"
+      },
+      {
+        "index": 2,
+        "label": "Cancel"
+      }
+    ],
+    "selectedIndex": 1,
+    "parsed": true
+  },
+  "cc300-ask-review-4q-100col": {
+    "id": "b20f3d7081d63ec030d4208c704902114fdf8d6a",
+    "title": "←  ☒ Database  ☒ Deployment  ☒ Monitoring  ☒ Licensing  ✔ Submit  →",
+    "body": "Review your answers\n\nWhich database engine?\n   → Use Postgres in production but SQLite for local development and tests, because the CI runners\n   have no database service available and we want hermetic test runs; keep the schema portable,\n   avoid Postgres-only types such as jsonb operators and arrays, and add a nightly job that runs the\n   full suite against a real Postgres 16 container so drift is caught early. End of answer\n   1234567890.\nWhich deployment target?\n   → Kubernetes 2\nWhich monitoring stack?\n   → None\nWhich licence?\n   → AGPL\n\nReady to submit your answers?",
+    "options": [
+      {
+        "index": 1,
+        "label": "Submit answers"
+      },
+      {
+        "index": 2,
+        "label": "Cancel"
+      }
+    ],
+    "selectedIndex": 1,
+    "parsed": true
+  },
+  "cc300-ask-review-4q-long": {
+    "id": "d272bf3d53b4b773fc34a241980af807a44078b2",
+    "title": "│ ● When the new release is ready, in which order should the two machines be updated, given that the second machine reads files the first machine writes and caches its settings at start-up, so a change that widens a",
+    "body": "│   reader must land before any writer that relies on it?\n   → Sentence 01 of answer A: keep the schema portable and test it nightly. Sentence 02 of answer A: keep the schema portable and test it nightly. Sentence 03 of answer A: keep the schema portable and test it nightly.\n   Sentence 04 of answer A: keep the schema portable and test it nightly. Sentence 05 of answer A: keep the schema portable and test it nightly. Sentence 06 of answer A: keep the schema portable and test it nightly.\n   Sentence 07 of answer A: keep the schema portable and test it nightly. Sentence 08 of answer A: keep the schema portable and test it nightly. Sentence 09 of answer A: keep the schema portable and test it nightly.\n   Sentence 10 of answer A: keep the schema portable and test it nightly. Sentence 11 of answer A: keep the schema portable and test it nightly. Sentence 12 of answer A: keep the schema portable and test it nightly.\n   Sentence 13 of answer A: keep the schema portable and test it nightly. Sentence 14 of answer A: keep the schema portable and test it nightly.. END-A\nAny notes for the reviewer?\n   → Sentence 01 of answer B: keep the schema portable and test it nightly. Sentence 02 of answer B: keep the schema portable and test it nightly. Sentence 03 of answer B: keep the schema portable and test it nightly.\n   Sentence 04 of answer B: keep the schema portable and test it nightly. Sentence 05 of answer B: keep the schema portable and test it nightly. Sentence 06 of answer B: keep the schema portable and test it nightly.\n   Sentence 07 of answer B: keep the schema portable and test it nightly. Sentence 08 of answer B: keep the schema portable and test it nightly. Sentence 09 of answer B: keep the schema portable and test it nightly.\n   Sentence 10 of answer B: keep the schema portable and test it nightly. Sentence 11 of answer B: keep the schema portable and test it nightly. Sentence 12 of answer B: keep the schema portable and test it nightly.\n   Sentence 13 of answer B: keep the schema portable and test it nightly. Sentence 14 of answer B: keep the schema portable and test it nightly.. END-B\nWhich region?\n   → Sentence 01 of answer C: keep the schema portable and test it nightly. Sentence 02 of answer C: keep the schema portable and test it nightly. Sentence 03 of answer C: keep the schema portable and test it nightly.\n   Sentence 04 of answer C: keep the schema portable and test it nightly. Sentence 05 of answer C: keep the schema portable and test it nightly. Sentence 06 of answer C: keep the schema portable and test it nightly.\n   Sentence 07 of answer C: keep the schema portable and test it nightly. Sentence 08 of answer C: keep the schema portable and test it nightly. Sentence 09 of answer C: k END-C\n\nReady to submit your answers?",
+    "options": [
+      {
+        "index": 1,
+        "label": "Submit answers"
+      },
+      {
+        "index": 2,
+        "label": "Cancel"
+      }
+    ],
+    "selectedIndex": 1,
+    "parsed": true
+  },
+  "cc300-ask-review-multiselect": {
+    "id": "c845f664c9096f05fea7bfc29c2f2d731254fd5b",
+    "title": "←  ☒ Drink  ☒ Features  ☒ Tools  ✔ Submit  →",
+    "body": "Review your answers\n\nWhich drink?\n   → - oolong, no sugar\nWhich features do you want?\n   → Logging, Tracing\nWhich tools?\n   → Saw, Drill\n\nReady to submit your answers?",
+    "options": [
+      {
+        "index": 1,
+        "label": "Submit answers"
+      },
+      {
+        "index": 2,
+        "label": "Cancel"
+      }
+    ],
+    "selectedIndex": 1,
+    "parsed": true
+  },
+  "cc300-ask-review-1q-multiselect": {
+    "id": "ec91d883fd0538d84bbe0c8c2afd925ff4b54575",
+    "title": "←  ☒ Tools  ✔ Submit  →",
+    "body": "Review your answers\n\nWhich tools?\n   → Hammer, Drill\n\nReady to submit your answers?",
+    "options": [
+      {
+        "index": 1,
+        "label": "Submit answers"
+      },
+      {
+        "index": 2,
+        "label": "Cancel"
+      }
+    ],
+    "selectedIndex": 1,
+    "parsed": true
+  },
+  "cc300-ask-review-tick-order": {
+    "id": "3bd585b009dc64c60fa173e34ab0815adf5767f9",
+    "title": "←  ☒ Tools  ☒ Sizes  ✔ Submit  →",
+    "body": "Review your answers\n\nWhich tools?\n   → Drill, Hammer\nWhich sizes?\n   → Large\n\nReady to submit your answers?",
+    "options": [
+      {
+        "index": 1,
+        "label": "Submit answers"
+      },
+      {
+        "index": 2,
+        "label": "Cancel"
+      }
+    ],
+    "selectedIndex": 1,
+    "parsed": true
+  },
+  "cc300-ask-multiselect-next-open": {
+    "id": "ddbca498841ce16d2a6bad7495906310ed15a0c4",
+    "title": "Which features do you want?",
+    "options": [],
+    "selectedIndex": 1,
+    "parsed": false,
+    "body": "←  ☒ Drink  ☐ Features  ☐ Tools  ✔ Submit  →\n\nWhich features do you want?",
+    "multi": {
+      "options": [
+        {
+          "index": 1,
+          "label": "Logging",
+          "description": "Record application events",
+          "checked": false
+        },
+        {
+          "index": 2,
+          "label": "Metrics",
+          "description": "Collect numeric measurements",
+          "checked": false
+        },
+        {
+          "index": 3,
+          "label": "Tracing",
+          "description": "Follow requests across calls",
+          "checked": false
+        }
+      ],
+      "freeText": {
+        "index": 4,
+        "label": "Type something",
+        "checked": false
+      },
+      "commit": "Next",
+      "cursor": 1
+    }
+  },
+  "cc300-ask-multiselect-digit1": {
+    "id": "ddbca498841ce16d2a6bad7495906310ed15a0c4",
+    "title": "Which features do you want?",
+    "options": [],
+    "selectedIndex": 1,
+    "parsed": false,
+    "body": "←  ☒ Drink  ☒ Features  ☐ Tools  ✔ Submit  →\n\nWhich features do you want?",
+    "multi": {
+      "options": [
+        {
+          "index": 1,
+          "label": "Logging",
+          "description": "Record application events",
+          "checked": true
+        },
+        {
+          "index": 2,
+          "label": "Metrics",
+          "description": "Collect numeric measurements",
+          "checked": false
+        },
+        {
+          "index": 3,
+          "label": "Tracing",
+          "description": "Follow requests across calls",
+          "checked": false
+        }
+      ],
+      "freeText": {
+        "index": 4,
+        "label": "Type something",
+        "checked": false
+      },
+      "commit": "Next",
+      "cursor": 1
+    }
+  },
+  "cc300-ask-multiselect-digit1-3": {
+    "id": "ddbca498841ce16d2a6bad7495906310ed15a0c4",
+    "title": "Which features do you want?",
+    "options": [],
+    "selectedIndex": 1,
+    "parsed": false,
+    "body": "←  ☒ Drink  ☒ Features  ☐ Tools  ✔ Submit  →\n\nWhich features do you want?",
+    "multi": {
+      "options": [
+        {
+          "index": 1,
+          "label": "Logging",
+          "description": "Record application events",
+          "checked": true
+        },
+        {
+          "index": 2,
+          "label": "Metrics",
+          "description": "Collect numeric measurements",
+          "checked": false
+        },
+        {
+          "index": 3,
+          "label": "Tracing",
+          "description": "Follow requests across calls",
+          "checked": true
+        }
+      ],
+      "freeText": {
+        "index": 4,
+        "label": "Type something",
+        "checked": false
+      },
+      "commit": "Next",
+      "cursor": 1
+    }
+  },
+  "cc300-ask-multiselect-on-freetext": {
+    "id": "ddbca498841ce16d2a6bad7495906310ed15a0c4",
+    "title": "Which features do you want?",
+    "options": [],
+    "selectedIndex": 1,
+    "parsed": false,
+    "body": "←  ☒ Drink  ☒ Features  ☐ Tools  ✔ Submit  →\n\nWhich features do you want?",
+    "multi": {
+      "options": [
+        {
+          "index": 1,
+          "label": "Logging",
+          "description": "Record application events",
+          "checked": true
+        },
+        {
+          "index": 2,
+          "label": "Metrics",
+          "description": "Collect numeric measurements",
+          "checked": false
+        },
+        {
+          "index": 3,
+          "label": "Tracing",
+          "description": "Follow requests across calls",
+          "checked": true
+        }
+      ],
+      "freeText": {
+        "index": 4,
+        "label": "Type something",
+        "checked": false
+      },
+      "commit": "Next",
+      "cursor": 4
+    }
+  },
+  "cc300-ask-multiselect-next-focused": {
+    "id": "ddbca498841ce16d2a6bad7495906310ed15a0c4",
+    "title": "Which features do you want?",
+    "options": [],
+    "selectedIndex": 1,
+    "parsed": false,
+    "body": "←  ☒ Drink  ☒ Features  ☐ Tools  ✔ Submit  →\n\nWhich features do you want?",
+    "multi": {
+      "options": [
+        {
+          "index": 1,
+          "label": "Logging",
+          "description": "Record application events",
+          "checked": true
+        },
+        {
+          "index": 2,
+          "label": "Metrics",
+          "description": "Collect numeric measurements",
+          "checked": false
+        },
+        {
+          "index": 3,
+          "label": "Tracing",
+          "description": "Follow requests across calls",
+          "checked": true
+        }
+      ],
+      "freeText": {
+        "index": 4,
+        "label": "Type something",
+        "checked": false
+      },
+      "commit": "Next",
+      "cursor": "commit"
+    }
+  },
+  "cc300-ask-multiselect-row3": {
+    "id": "ddbca498841ce16d2a6bad7495906310ed15a0c4",
+    "title": "Which features do you want?",
+    "options": [],
+    "selectedIndex": 1,
+    "parsed": false,
+    "body": "←  ☒ Drink  ☒ Features  ☐ Tools  ✔ Submit  →\n\nWhich features do you want?",
+    "multi": {
+      "options": [
+        {
+          "index": 1,
+          "label": "Logging",
+          "description": "Record application events",
+          "checked": true
+        },
+        {
+          "index": 2,
+          "label": "Metrics",
+          "description": "Collect numeric measurements",
+          "checked": false
+        },
+        {
+          "index": 3,
+          "label": "Tracing",
+          "description": "Follow requests across calls",
+          "checked": true
+        }
+      ],
+      "freeText": {
+        "index": 4,
+        "label": "Type something",
+        "checked": false
+      },
+      "commit": "Next",
+      "cursor": 3
+    }
+  },
+  "cc300-ask-multiselect-freetext-ticked": {
+    "id": "ddbca498841ce16d2a6bad7495906310ed15a0c4",
+    "title": "Which features do you want?",
+    "options": [],
+    "selectedIndex": 1,
+    "parsed": false,
+    "body": "←  ☒ Colour  ☒ Features  ✔ Submit  →\n\nWhich features do you want?",
+    "multi": {
+      "options": [
+        {
+          "index": 1,
+          "label": "Logging",
+          "description": "Record events and messages from the app.",
+          "checked": true
+        },
+        {
+          "index": 2,
+          "label": "Metrics",
+          "description": "Collect numeric measurements over time.",
+          "checked": false
+        },
+        {
+          "index": 3,
+          "label": "Tracing",
+          "description": "Follow requests across components.",
+          "checked": true
+        }
+      ],
+      "freeText": {
+        "index": 4,
+        "label": "Type something",
+        "checked": true
+      },
+      "commit": "Submit",
+      "cursor": 1
+    }
+  },
+  "cc300-ask-multiselect-tools-open": {
+    "id": "f18f19479bbff9d4190cdc504fa97f5c29e3f0eb",
+    "title": "Which tools?",
+    "options": [],
+    "selectedIndex": 1,
+    "parsed": false,
+    "body": "←  ☐ Tools  ☐ Sizes  ✔ Submit  →\n\nWhich tools?",
+    "multi": {
+      "options": [
+        {
+          "index": 1,
+          "label": "Hammer",
+          "description": "Striking tool for driving nails and breaking things apart",
+          "checked": false
+        },
+        {
+          "index": 2,
+          "label": "Saw",
+          "description": "Cutting tool for wood, pipe, and other stock",
+          "checked": false
+        },
+        {
+          "index": 3,
+          "label": "Drill",
+          "description": "Rotary tool for boring holes and driving screws",
+          "checked": false
+        }
+      ],
+      "freeText": {
+        "index": 4,
+        "label": "Type something",
+        "checked": false
+      },
+      "commit": "Next",
+      "cursor": 1
+    }
+  },
+  "cc300-ask-multiselect-tools-digit1-2": {
+    "id": "f18f19479bbff9d4190cdc504fa97f5c29e3f0eb",
+    "title": "Which tools?",
+    "options": [],
+    "selectedIndex": 1,
+    "parsed": false,
+    "body": "←  ☒ Tools  ☐ Sizes  ✔ Submit  →\n\nWhich tools?",
+    "multi": {
+      "options": [
+        {
+          "index": 1,
+          "label": "Hammer",
+          "description": "Striking tool for driving nails and breaking things apart",
+          "checked": true
+        },
+        {
+          "index": 2,
+          "label": "Saw",
+          "description": "Cutting tool for wood, pipe, and other stock",
+          "checked": true
+        },
+        {
+          "index": 3,
+          "label": "Drill",
+          "description": "Rotary tool for boring holes and driving screws",
+          "checked": false
+        }
+      ],
+      "freeText": {
+        "index": 4,
+        "label": "Type something",
+        "checked": false
+      },
+      "commit": "Next",
+      "cursor": 1
+    }
+  },
+  "cc300-ask-multiselect-tools-untick1": {
+    "id": "f18f19479bbff9d4190cdc504fa97f5c29e3f0eb",
+    "title": "Which tools?",
+    "options": [],
+    "selectedIndex": 1,
+    "parsed": false,
+    "body": "←  ☒ Tools  ☐ Sizes  ✔ Submit  →\n\nWhich tools?",
+    "multi": {
+      "options": [
+        {
+          "index": 1,
+          "label": "Hammer",
+          "description": "Striking tool for driving nails and breaking things apart",
+          "checked": false
+        },
+        {
+          "index": 2,
+          "label": "Saw",
+          "description": "Cutting tool for wood, pipe, and other stock",
+          "checked": true
+        },
+        {
+          "index": 3,
+          "label": "Drill",
+          "description": "Rotary tool for boring holes and driving screws",
+          "checked": false
+        }
+      ],
+      "freeText": {
+        "index": 4,
+        "label": "Type something",
+        "checked": false
+      },
+      "commit": "Next",
+      "cursor": 1
+    }
+  },
+  "cc300-ask-multiselect-tools-revisit": {
+    "id": "f18f19479bbff9d4190cdc504fa97f5c29e3f0eb",
+    "title": "Which tools?",
+    "options": [],
+    "selectedIndex": 1,
+    "parsed": false,
+    "body": "←  ☒ Tools  ☐ Sizes  ✔ Submit  →\n\nWhich tools?",
+    "multi": {
+      "options": [
+        {
+          "index": 1,
+          "label": "Hammer",
+          "description": "Striking tool for driving nails and breaking things apart",
+          "checked": false
+        },
+        {
+          "index": 2,
+          "label": "Saw",
+          "description": "Cutting tool for wood, pipe, and other stock",
+          "checked": true
+        },
+        {
+          "index": 3,
+          "label": "Drill",
+          "description": "Rotary tool for boring holes and driving screws",
+          "checked": true
+        }
+      ],
+      "freeText": {
+        "index": 4,
+        "label": "Type something",
+        "checked": false
+      },
+      "commit": "Next",
+      "cursor": 1
+    }
+  },
+  "cc300-ask-multiselect-tools-revisit-digit2-1": {
+    "id": "f18f19479bbff9d4190cdc504fa97f5c29e3f0eb",
+    "title": "Which tools?",
+    "options": [],
+    "selectedIndex": 1,
+    "parsed": false,
+    "body": "←  ☒ Tools  ☐ Sizes  ✔ Submit  →\n\nWhich tools?",
+    "multi": {
+      "options": [
+        {
+          "index": 1,
+          "label": "Hammer",
+          "description": "Striking tool for driving nails and breaking things apart",
+          "checked": true
+        },
+        {
+          "index": 2,
+          "label": "Saw",
+          "description": "Cutting tool for wood, pipe, and other stock",
+          "checked": false
+        },
+        {
+          "index": 3,
+          "label": "Drill",
+          "description": "Rotary tool for boring holes and driving screws",
+          "checked": true
+        }
+      ],
+      "freeText": {
+        "index": 4,
+        "label": "Type something",
+        "checked": false
+      },
+      "commit": "Next",
+      "cursor": 1
+    }
+  },
+  "cc300-ask-multiselect-submit-open": {
+    "id": "f18f19479bbff9d4190cdc504fa97f5c29e3f0eb",
+    "title": "Which tools?",
+    "options": [],
+    "selectedIndex": 1,
+    "parsed": false,
+    "body": "←  ☒ Drink  ☒ Features  ☐ Tools  ✔ Submit  →\n\nWhich tools?",
+    "multi": {
+      "options": [
+        {
+          "index": 1,
+          "label": "Hammer",
+          "description": "For driving nails",
+          "checked": false
+        },
+        {
+          "index": 2,
+          "label": "Saw",
+          "description": "For cutting material",
+          "checked": false
+        },
+        {
+          "index": 3,
+          "label": "Drill",
+          "description": "For boring holes",
+          "checked": false
+        }
+      ],
+      "freeText": {
+        "index": 4,
+        "label": "Type something",
+        "checked": false
+      },
+      "commit": "Submit",
+      "cursor": 1
+    }
+  },
+  "cc300-ask-multiselect-sizes-open": {
+    "id": "2b97882b09ee17e0078396236a0a58b52c0f3adb",
+    "title": "Which sizes?",
+    "options": [],
+    "selectedIndex": 1,
+    "parsed": false,
+    "body": "←  ☒ Tools  ☐ Sizes  ✔ Submit  →\n\nWhich sizes?",
+    "multi": {
+      "options": [
+        {
+          "index": 1,
+          "label": "Small",
+          "description": "Compact version suited to tight spaces and light tasks",
+          "checked": false
+        },
+        {
+          "index": 2,
+          "label": "Large",
+          "description": "Full-size version for heavier-duty work",
+          "checked": false
+        }
+      ],
+      "freeText": {
+        "index": 3,
+        "label": "Type something",
+        "checked": false
+      },
+      "commit": "Submit",
+      "cursor": 1
+    }
+  },
+  "cc300-ask-multiselect-sizes-large": {
+    "id": "2b97882b09ee17e0078396236a0a58b52c0f3adb",
+    "title": "Which sizes?",
+    "options": [],
+    "selectedIndex": 1,
+    "parsed": false,
+    "body": "←  ☒ Tools  ☒ Sizes  ✔ Submit  →\n\nWhich sizes?",
+    "multi": {
+      "options": [
+        {
+          "index": 1,
+          "label": "Small",
+          "description": "Compact version suited to tight spaces and light tasks",
+          "checked": false
+        },
+        {
+          "index": 2,
+          "label": "Large",
+          "description": "Full-size version for heavier-duty work",
+          "checked": true
+        }
+      ],
+      "freeText": {
+        "index": 3,
+        "label": "Type something",
+        "checked": false
+      },
+      "commit": "Submit",
+      "cursor": 1
+    }
+  },
+  "cc300-ask-multiselect-walk-to-next": {
+    "id": "daa98df1845f79e658cbd24cc089204332038736",
+    "title": "Which pets?",
+    "options": [],
+    "selectedIndex": 1,
+    "parsed": false,
+    "body": "←  ☒ Pets  ☐ Sizes  ✔ Submit  →\n\nWhich pets?",
+    "multi": {
+      "options": [
+        {
+          "index": 1,
+          "label": "Cats",
+          "description": "Feline companions",
+          "checked": true
+        },
+        {
+          "index": 2,
+          "label": "Dogs",
+          "description": "Canine companions",
+          "checked": false
+        }
+      ],
+      "freeText": {
+        "index": 3,
+        "label": "Type something",
+        "checked": false
+      },
+      "commit": "Next",
+      "cursor": "commit"
+    }
+  },
+  "multiselect": {
+    "id": "5702efbe43c714250870e4a858223ab514a3128d",
+    "title": "Select the tools to allow",
+    "options": [],
+    "selectedIndex": 1,
+    "parsed": false,
+    "body": "Select the tools to allow"
+  }
+}

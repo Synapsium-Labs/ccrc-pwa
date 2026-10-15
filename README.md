@@ -2773,12 +2773,30 @@ shown as a gap. It re-reads on every open and needs the coordination database.
 ### The terminal drawer
 
 `>_` opens a real terminal on the session's own tmux pane — xterm.js over `/ws/pty/<id>` — and keystrokes go
-straight to the pane. The server pins the window at 220×50 before attaching, so a phone-width client cannot
-reflow the pane's history, and puts it back to that canonical size when the drawer closes. A quick-key bar
-supplies what a phone keyboard lacks: `esc`, the four arrows, `tab`, `⇧tab` and `⏎`. Scrolling — the wheel, or a
-drag — never sends arrow keys: it pages through the pane's own history, read with `tmux capture-pane` over
-`GET /api/sessions/:id/pane/history`, which changes nothing on the box (tmux's copy mode would wedge every
-injected prompt for as long as it lasted); scrolling back to the bottom, or **Back to live**, returns to the pane.
+straight to the pane. The server pins the window at 220×50 before attaching, so no client can reflow the pane's
+history, and puts it back to that canonical size when the drawer closes; the drawer itself attaches a client
+exactly the window's size, 220×51 with tmux's status row, at every screen width, so tmux never pans it or fills
+it and the drawer never sends a resize (spec `docs/superpowers/specs/2026-10-14-terminal-drawer-every-width-design.md`).
+The screen width chooses the view. Where 220 columns fit at 11px or more (about 1482 CSS px and up) the drawer
+shows the **grid**, the terminal itself, at the largest type up to 14px; on anything narrower — every phone and
+tablet, and most laptop screens — it shows the **wrapped** view, the same screen re-wrapped to the width as text, with
+Claude Code's rules, tables and hanging indents kept, a wide table scrolling sideways on its own, and tmux's
+status row dropped. A chip in the header names the view and flips it, remembered per device; a grid forced onto
+a screen it does not fit scrolls sideways and its chip reads `grid · scrolls`. Typing is live on every device: a
+tap on the wrapped view focuses the terminal, which it keeps off-screen, so a phone keyboard (autocorrect, swipe
+and dictation included) or a physical one types straight into the session, and a word still being composed shows
+at the caret. A key bar supplies what a phone keyboard lacks — `esc ↑ ↓ ⏎ ^C ⌫` and, behind `⋯`, `← →`, `tab`,
+`⇧tab`, `space`, `PgUp`/`PgDn`, `^U ^O ^R ^T ^B` and a one-shot `ctrl` for the next letter typed (the grid keeps
+its strip of `esc`, the arrows, `tab`, `⇧tab`, `⏎` and `^C`) — and its `^C` and `^D` ask first while Claude Code
+shows *Press Ctrl-C again to exit*; a physical Escape, while the terminal has focus, goes to Claude Code and does
+not close the drawer. A paste, in either view, is taken before xterm sees it and sent with every control
+character but tab and newline removed, so a clipboard cannot end its own bracketed paste; text a keyboard
+inserts (a clipboard chip, a suggestion, an input method's commit) is sent the same way unless it is one key's
+bytes, so it cannot end a bracketed paste or submit a line either. Scrolling up in the
+grid — the wheel, or a drag — and the bar's `hist` key in either view never send arrow keys: they page through
+the pane's own history, read with `tmux capture-pane` over `GET /api/sessions/:id/pane/history`, which changes
+nothing on the box (tmux's copy mode would wedge every injected prompt for as long as it lasted); scrolling back
+to the bottom, or **Back to live**, returns to the pane.
 
 ### Pull requests from the phone
 
@@ -2858,12 +2876,25 @@ mail and run records still land in the feed.
 
 **Answering inside the app.** A pending question raises a bottom sheet on the session screen and puts a waiting
 dot on its row and card. A menu Claude Code drew becomes large tappable rows carrying the digits the TUI answers
-to, the preselected one marked `❯`; an `AskUserQuestion` shows the full question and the option descriptions
-(only the first question of a multi-question ask is tappable); a permission prompt shows **Allow** and **Deny**
-(Deny sends Escape); a menu the server could not parse is shown raw beside **Open terminal to answer**. A tap
-shows `answering…`, and the sheet closes only when the server reports the menu gone; a stale answer is refused
-and the sheet redraws from the current menu. Dismissing it only hides it — the row keeps saying `waiting`, and
-**Answer** in the transcript raises it again.
+to, the preselected one marked `❯`; a permission prompt shows **Allow** and **Deny** (Deny sends Escape); a menu
+the server could not parse is shown raw beside **Open terminal to answer**. A tap shows `answering…`, and the
+sheet closes only when the server reports the menu gone; a refused answer says why, by the route's code. After a
+stale-question refusal the sheet drawn from the pane redraws from the current menu, while the one drawn from the
+hook's envelope, which the refusal does not change, says the answer didn't land. Dismissing it only hides it — the
+row keeps saying `waiting`, and **Answer** in the transcript raises it again.
+
+An `AskUserQuestion` shows the full question, its header and the option descriptions, and the sheet follows the
+pane through the whole ask (D-5089): the tappable question is the one the pane is painting, matched by its labels
+and, where two questions share them, by the pane's title; the sheet says which of N it is, lists the others
+read-only, and ends on the pane's review screen with **Submit answers** and a **Cancel** that says first that it
+declines every answer. Own words go through the question's own free-text row (`/dialog/text`, D-5090): the text
+stays in the field until the terminal shows the answer taken, a refusal says why and keeps it, a row left holding
+the whole text is submitted without typing it again, a paste over the 1000-character limit is counted and held
+rather than cut, a tab or another control character holds **Send** with a line saying why, and **Chat about this**
+is a row of its own that says it declines the ask. A multiSelect question is a set of checkboxes, committed whole
+with **Next** (`/dialog/multi`, D-5091). One send is under way at a time, and the rows that decline the whole ask
+wait for it. When the hook's envelope ages out, thirty minutes into an unanswered ask, the sheet carries on from the
+pane alone with the same rows, field and boxes.
 
 Five routes act on what the pane already shows, each with its own named refusals:
 

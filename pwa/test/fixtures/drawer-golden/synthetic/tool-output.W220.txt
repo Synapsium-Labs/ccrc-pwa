@@ -1,0 +1,50 @@
+ ❯ list the generated files in project-a
+
+ ● Bash(ls -la
+   src/generated/segment-01/segment-02/segment-03/segment-04/segment-05/segment-06/segment-07/segment-08/segment-09/segment-10/segment-11/segment-12/segment-13/segment-14/segment-15/segment-16/segment-17/segment-18/segmen
+   t-19/segment-20/segment-21/segment-22/segment-23/segment-24/segment-25/segment-26/index.ts)
+   ⎿  total 128
+      -rw-r--r-- 1 lane-a lane-a 12345 Jan 1 00:00
+      src/generated/segment-01/segment-02/segment-03/segment-04/segment-05/segment-06/segment-07/segment-08/segment-09/segment-10/segment-11/segment-12/segment-13/segment-14/segment-15/index.ts
+      warning: the generated tree under src/generated is deeper than the configured limit, so the watcher in project-a skips it; set watch.maxDepth in the project-a config or move the generated files closer to the root to
+      keep them under watch
+      drwxr-xr-x 3 lane-a lane-a 4096 Jan 1 00:00 src/lib
+      -rw-r--r-- 1 lane-a lane-a  892 Jan 1 00:00 test/app.test.ts
+      + export const CACHE_TTL = 300;
+      - const cache = {};
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ ❯
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+   ? for shortcuts
+

@@ -247,10 +247,20 @@ const CONTROLS: Record<string, string> = {
   'session/Composer.tsx <button> draft-cancel': 'TOKEN. The draft cancel.',
   'session/Composer.tsx <button> send-btn': 'TOKEN. Send.',
   'session/Composer.tsx <button> slash-item': 'TOKEN. A slash-command row — one of the six floors this wave converted from a literal.',
+  'session/AskParts.tsx <button> dlg-reply-send': 'TOKEN. Send, beside the own-words field (OwnWords, D-5090), which both ask sheets render.',
   'session/DialogSheet.tsx <button> dlg-details-toggle': 'TOKEN. The details disclosure.',
   'session/EnvelopeSheet.tsx <button> dlg-later': 'TOKEN. Both "Not now" rows, rendered by TerminalCta — which lives beside the envelope sheet and is imported back by the controller.',
-  'session/DialogSheet.tsx <button> dlg-reply-send': 'TOKEN. Send, beside the reply field.',
   'session/DialogSheet.tsx <button> opt-preview-toggle': 'TOKEN. The option preview disclosure.',
+  'session/TerminalDrawer.tsx <button> term-view':
+    'TOKEN, and OVERLAY below. The terminal drawer\'s header chips — the view\'s '
+    + 'flip and the offer of the grid (D-5005) — one class, two buttons. The pill '
+    + 'is @ccrc/ui\'s Chip at about 20px; growing it to 44 would take that much '
+    + 'glass from a phone whose keyboard is up, so the ::before carries the floor.',
+  'session/WrappedView.tsx <div> term-wrap':
+    'TOKEN. The terminal drawer\'s wrapped view (D-5006): a `<div onClick>` because '
+    + 'the whole glass is the tap that focuses the terminal and types (operator '
+    + 'ruling R-LIVE). It is `inset: 0` over the glass, and declares the floor so '
+    + 'a glass a keyboard squeezes never leaves it under a tap.',
 
   // ── not buttons: the seventeen the first spelling of this census missed ──
   'fleet/AccountsStrip.tsx <div> accounts-strip':
@@ -389,6 +399,7 @@ const CONTROLS: Record<string, string> = {
 const OVERLAYS: Record<string, string> = {
   'fleet/ProjectCardHead.tsx <button> proj-card-add': '.proj-card-add::before',
   'fleet/SessionLine.tsx <button> sess-actions': '.sess-actions::before',
+  'session/TerminalDrawer.tsx <button> term-view': '.term-view::before',
 };
 
 /** The TOKEN entries that reach the floor by VALUE rather than by name.

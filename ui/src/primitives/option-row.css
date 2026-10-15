@@ -37,8 +37,8 @@
     cursor: default;
   }
   /* While one row answers, its siblings recede; the answering row keeps ink.
-     I3: `.opt[aria-disabled='true']` covers the hook envelope's read-only
-     "rest" questions (DialogSheet.tsx's `.ask-envelope-more`) — plain divs,
+     I3: `.opt[aria-disabled='true']` covers an ask's read-only other
+     questions (the app's `.ask-envelope-more`, AskParts.tsx) — plain divs,
      so `:disabled` (a pseudo-class only a real form control can match) never
      fires for them, and without this they painted identically to the live
      rows above them. There's no aria-busy equivalent for a div that never
@@ -66,6 +66,49 @@
     font: var(--weight-semibold) var(--fs-base) / 1 var(--family-mono);
     color: var(--accent);
     flex: none;
+  }
+  /* The box a checkbox row draws in its glyph column (`checked`, D-5091): an
+     18px frame in secondary ink; ticked, the accent fills it and the tick is
+     the ink made for the accent, the primary button's own pair. Clear and
+     ticked differ in FILL, not just in a tick mark, so the state reads at a
+     glance at every width. A disabled row (a commit in flight) dims both
+     with the row and keeps them apart: the clear frame thins to disabled
+     ink, the ticked one fills with it. SVG paint (`fill`, `stroke`), never a
+     text `color`, so nothing here is text for the contrast gate to ground. */
+  .opt-glyph[data-box] {
+    width: 18px;
+    height: 18px;
+  }
+  .opt-glyph[data-box] svg {
+    display: block;
+  }
+  .opt-glyph[data-box] rect {
+    fill: none;
+    stroke: var(--ink-secondary);
+    stroke-width: 1.5;
+  }
+  .opt-glyph[data-box='ticked'] rect {
+    fill: var(--accent);
+    stroke: var(--accent);
+  }
+  .opt-glyph[data-box] path {
+    fill: none;
+    stroke: var(--ink-on-accent);
+    stroke-width: 2;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+  .opt:disabled:not([aria-busy='true']) .opt-glyph[data-box] rect,
+  .opt[aria-disabled='true'] .opt-glyph[data-box] rect {
+    stroke: var(--ink-disabled);
+  }
+  .opt:disabled:not([aria-busy='true']) .opt-glyph[data-box='ticked'] rect,
+  .opt[aria-disabled='true'] .opt-glyph[data-box='ticked'] rect {
+    fill: var(--ink-disabled);
+  }
+  .opt:disabled:not([aria-busy='true']) .opt-glyph[data-box] path,
+  .opt[aria-disabled='true'] .opt-glyph[data-box] path {
+    stroke: var(--bg-surface);
   }
   /* Mono index — mirrors ccd's numbered TUI menu. */
   .opt-idx {

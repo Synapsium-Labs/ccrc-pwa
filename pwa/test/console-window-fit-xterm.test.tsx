@@ -7,8 +7,9 @@
 // back only appends blank lines. So a fit that resizes the live buffer to find
 // out how many columns a size WOULD show, and then resizes it back, leaves a
 // screen tmux no longer recognises — and because the grid ends where it began,
-// no resize frame goes out and tmux never repaints it. The next keystroke's
-// echo lands rows away from the prompt.
+// nothing tells tmux to repaint it. The next keystroke's echo lands rows away
+// from the prompt. Since D-5005 the grid is pinned at the window's own size and
+// no fit moves it at all; this file holds that against the real buffer.
 //
 // The history layer is here for the same reason: whether it follows the live
 // pane's type size is a fact about the drawer's real history terminal, which a
@@ -23,6 +24,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, waitFor } from '@testing-library/react';
 import type { Terminal as XTerm } from '@xterm/xterm';
+import { PINNED_WINDOW_COLS, PINNED_WINDOW_ROWS, TMUX_STATUS_ROWS } from '../../shared/api';
+
+/** The window's own size plus tmux's status row: the grid the drawer pins. */
+const WINDOW = { cols: PINNED_WINDOW_COLS, rows: PINNED_WINDOW_ROWS + TMUX_STATUS_ROWS };
 
 const made = vi.hoisted(() => ({ terms: [] as unknown[] }));
 // The real Terminal, unchanged — only remembered, so the test can read its
@@ -123,7 +128,8 @@ describe('the type fit, against the real terminal', () => {
     act(() => { window.dispatchEvent(new Event('resize')); });
     const settled = { cols: term.cols, rows: term.rows, font: term.options.fontSize };
     expect(settled.font, 'the fit did not shrink the type at all').toBeLessThan(14);
-    expect(settled.cols, 'the shrunk type does not show the whole window').toBeGreaterThanOrEqual(220);
+    // The grid is the window's, pinned (D-5005); the fit moved the type alone.
+    expect({ cols: settled.cols, rows: settled.rows }, 'the fit moved the pinned grid').toEqual(WINDOW);
 
     // What tmux paints on attach: the alternate screen, every row numbered, and
     // the cursor parked near the bottom right, where a prompt sits.
@@ -146,6 +152,7 @@ describe('the type fit, against the real terminal', () => {
     expect({ cols: term.cols, rows: term.rows }, 'the refit did not land on the same grid')
       .toEqual({ cols: settled.cols, rows: settled.rows });
     expect(resizeFrames(ws).length, 'a same-grid refit sent a resize frame').toBe(framesBefore);
+    expect(framesBefore, 'the drawer sent a resize frame at all (D-5005)').toBe(0);
     expect(
       { x: term.buffer.active.cursorX, y: term.buffer.active.cursorY },
       'the cursor moved, so the next echo lands away from where tmux put it',
@@ -203,7 +210,11 @@ describe('the type fit, against the real terminal', () => {
 
     expect(live.options.fontSize, 'the live pane did not grow back').toBe(14);
     expect(hist.options.fontSize, 'the history stayed at the old size').toBe(14);
-    expect({ cols: hist.cols, rows: hist.rows }, 'the history layer shows another grid than the live pane')
-      .toEqual({ cols: live.cols, rows: live.rows });
+    // INVERTED, NOT DELETED (D-5005): this read "the history layer shows the
+    // live pane's grid", which held while both followed the glass. The live
+    // pane is pinned at the window's size now; the history, which re-wraps the
+    // pane's logical lines at the reader's width, still fills the glass.
+    expect({ cols: live.cols, rows: live.rows }, 'the live pane\'s grid followed the glass').toEqual(WINDOW);
+    expect(hist.cols, 'the history did not refit to the wider glass').toBeGreaterThan(PINNED_WINDOW_COLS);
   });
 });

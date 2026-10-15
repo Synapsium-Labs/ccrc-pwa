@@ -1749,7 +1749,8 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     const rows = dim(q.rows, 24);
     // THE LATCH, AND IT GOES BEFORE THE ATTACH (spec §5.1, F3, F14).
     //
-    // ccd spawns every session `window-size latest` (`ccd/ccd:14790`), and
+    // ccd spawns every session `window-size latest` (`_spawn_start` in
+    // `ccd/ccd`), and
     // tmux's own default is `latest` too — so the window follows whichever
     // client most recently typed. A phone's pty client is a full tmux client
     // (F6), so the first phone attach NARROWS the window, tmux REFLOWS the
@@ -1802,8 +1803,17 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     // NO PER-CLIENT GRID MAP rides with it (§5.1): the window is one fixed size
     // for every drawer, so a second drawer closing restores nothing anyone was
     // depending on, and the close handler's own 220x50 becomes a no-op rather
-    // than the defect PR #96's handoff was built to cure. The deliberate
-    // un-pin is wave 3, under the fit guard, through an advertised ccd verb.
+    // than the defect PR #96's handoff was built to cure.
+    //
+    // THE DRAWER NO LONGER LEANS ON THIS PIN. It attaches a client the
+    // window's own size, 220 columns by 50 rows plus tmux's status row (spec
+    // 2026-10-14 §5.1, D-5005), and a client that size moves nothing under
+    // `latest`. So the pin is no longer how a drawer keeps its own client from
+    // narrowing the window: it repairs a window something else moved, and it
+    // holds against a client that is not the window's size — an older bundle,
+    // which still dials its own grid (spec 2026-10-14 §8, I7). A wide drawer
+    // may later have the window follow it, never below `READER_MIN_COLS`,
+    // through that spec's guarded sizer (§6, stage 2).
     void deps.tmux.resizeWindow(id, PINNED_WINDOW_COLS, PINNED_WINDOW_ROWS);
     const p = spawnPty(id, cols, rows);
     const sub = p.onData((data) => socket.send(data));   // server->client: raw utf8 frames

@@ -2,11 +2,15 @@
 // across the glass. This is the search alone: the terminal's own measurement
 // comes in as a function, so the decision can be tested without xterm or a DOM.
 //
-// THE PROBLEM IT ANSWERS. The drawer's terminal is a tmux CLIENT, and a client
-// smaller than the window is not a smaller window: it is a viewport into one,
-// which tmux pans to follow the cursor. So on any glass narrower than the
-// pinned window a line's beginning scrolls off to the left while its owner is
-// still typing, and the text appears to slide sideways under the cursor.
+// WHAT IT DECIDES (D-5005, spec 2026-10-14 §5.2). The drawer's terminal is a
+// tmux client pinned at the window's own size, 220 columns by 50 rows plus
+// tmux's status row, so whatever the glass, tmux has nothing to pan and
+// nothing to fill. The glass changes only the type size and the view, and this
+// search answers both: where the window's 220 columns fit at the floor or
+// above, the drawer shows the GRID, the terminal itself, at the size found
+// here; where they do not, it shows the WRAPPED view, the same screen
+// re-wrapped to the glass as text (`wrapScreen`). `chooseView` reads the
+// verdict, and the view chip can overrule it.
 //
 // The window cannot be narrowed to meet the glass: tmux reflows stored lines on
 // a width change and the reflow is destructive at this fleet's `history-limit`
@@ -14,14 +18,17 @@
 // meets the window instead, by shrinking its type until the window's full width
 // is on screen.
 //
-// AND WHERE IT CANNOT, IT DOES NOTHING. A phone is far too narrow for 220
+// AND WHERE IT CANNOT, IT DOES NOT SHRINK. A phone is far too narrow for 220
 // columns at any size a person can read: 390 CSS px over 220 columns is 1.77 px
-// per character. If even the floor cannot fit the window, shrinking the type
-// would make it harder to read and tmux would pan anyway, so the console stays
-// at its base size, which is the console `main` shows. The caller reports the
-// clip. The other answer, widening the host and letting the reader scroll it
-// sideways, was tried and withdrawn: a terminal container does not follow a
-// caret it cannot see, so typing past the visible edge writes off-screen.
+// per character. If even the floor cannot fit the window, the answer is the
+// base size, `clipped`, and the drawer shows the wrapped view; the terminal
+// stays at the base size off-screen, where it still takes the keyboard.
+// Sideways scrolling is never the default answer: an earlier revision widened
+// the host and let the reader scroll it, and was withdrawn because a terminal
+// container does not follow a caret it cannot see, so typing past the visible
+// edge wrote off-screen. Only a grid the reader forces with the chip on a glass
+// it does not fit scrolls sideways, in the browser, and its chip says so
+// (`grid · scrolls`).
 
 /**
  * The smallest type this console will render, in CSS pixels.
@@ -50,12 +57,14 @@ export interface ConsoleFit {
   fontSize: number;
   /**
    * Whether the window still does not fit, because even the floor could not
-   * show it. The size is then the base size, and the pane is the viewport tmux
-   * pans that it is on `main`.
+   * show it. The size is then the base size, and the drawer shows the wrapped
+   * view unless the view chip forced the grid (D-5005).
    *
-   * The caller should report the clip from the grid the terminal actually
-   * settles on rather than from this flag. The two agree whenever the
-   * measurement this search was given is the one the terminal fits by.
+   * The drawer reads its view from this flag, not from the terminal's grid:
+   * the grid is pinned at the window's 220 columns whatever the glass shows,
+   * so it says nothing about the fit. The flag is a measured verdict: the
+   * search answers "fits" only for a size whose grid it measured at
+   * `wantCols` or more.
    */
   clipped: boolean;
 }
@@ -76,8 +85,9 @@ const measured = (cols: number | null): number | null =>
  * `clipped` when even `floor` falls short.
  *
  * Returns **null** when the glass cannot be measured, for example a host with
- * no layout yet. That is NOT "it already fits". The caller must keep the grid it
- * has rather than resize to a guess.
+ * no layout yet. That is NOT "it already fits". The caller must keep the type
+ * size and the view it has rather than act on a guess (`chooseView`'s `null`
+ * arm).
  *
  * EVERY ANSWER IS ANCHORED ON THE BASE SIZE. The first measurement is always
  * the base size's column count, never the size the glass happens to be at, so
