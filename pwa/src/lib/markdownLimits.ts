@@ -86,9 +86,14 @@ export const MD_HIGHLIGHT_MAX_BLANK_CHARS = 2048;
  *  Measured on highlight.js 11.11.1 (Node 24, load average 30 to 80): `'<a>'` repeated in lines of 1 800 characters
  *  costs, per KiB of block, 5.5 to 6.7 ms at 6 to 10 KiB, 10 at 16 KiB, 22 at 32 KiB and 43 at 64 KiB (2.8 s a block).
  *  The per-KiB cost is lowest near 8 KiB, so this value and `DOCS_HIGHLIGHT_SCAN_PAGE_MAX_CHARS` keep a crafted page
- *  near the plateau the other grammars leave (the operator's answer to ask 38, the values that meet it). Cost, on
- *  2026-10-14: 755 real fences of `docs/superpowers` (on 79 pages, of 8 582 that the 64 KiB cap and the page budget
- *  highlighted) are plain; chat's corpus holds one `ts` fence, of 12 characters. */
+ *  near the plateau the other grammars leave (the operator's answer to ask 38, the values that meet it). Cost,
+ *  measured through the Docs pipeline (each page parsed as Docs parses it, then `detachUrls`, `highlightBlockCap` and
+ *  the word, line and whitespace scans; 2026-10-15, at this wave's tip): 736 real fences of `docs/superpowers` are
+ *  plain, on 78 pages, of 8 508 `typescript`, `javascript` and `rust` fences the 64 KiB cap and the general page
+ *  budget highlighted (532 over this cap, 204 refused by the scan page budget alone). The one page Docs never formats
+ *  (refused as too wide) is excluded; review 460 F7 found that the 755 on 79 pages recorded before, counted by fence
+ *  pattern, included it, and that the 8 582 beside them counted `typescript` and `javascript` fences only. Chat's
+ *  corpus holds one `ts` fence, of 12 characters. */
 export const MD_HIGHLIGHT_JS_BLOCK_MAX_CHARS = 8192;
 /** The longest code block, in characters, that is highlighted in `rust` (and its aliases, and any grammar that embeds
  *  it: none today), smaller than
@@ -106,8 +111,9 @@ export const DOCS_HIGHLIGHT_SCAN_PAGE_MAX_CHARS = 393216;
  *  while a block of another grammar is never refused by it (review 450 F1). `markdown` hands every HTML tag to `xml`, a linear
  *  but high rate, so it has this budget of its own and stays out of the scan set. Measured interleaved (best of 7,
  *  load 57, 64 KiB blocks): `<a>` in lines 652 ms, `</a>` 452, `<a/>` 419, against 242 to 356 for the plateau shapes
- *  of `yaml`, `json`, `typescript` and `javascript`; growth linear from 8 to 128 KiB. The most markdown code on a real
- *  Docs page is 33 KiB, so no real fence goes plain (the operator's answer to ask 41).
+ *  of `yaml`, `json`, `typescript` and `javascript`; growth linear from 8 to 128 KiB. The most markdown code on a page
+ *  Docs formats is 24 056 characters, its largest markdown block 17 042 (review 460 F7: the 33 KiB recorded before
+ *  was on the one page Docs refuses as too wide), so no real fence goes plain (the operator's answer to ask 41).
  *  WHAT THE BOUNDS LEAVE, measured end to end through `detachUrls` and `CodeBlock` on pages that fill each budget
  *  exactly with every block highlighted (2026-10-15: a block of 8 191 or 65 535 characters, as the budgets count the
  *  newline the parse keeps; review 460 F4 and F5 found the earlier pages one block short), each page beside a plateau
