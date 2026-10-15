@@ -11947,7 +11947,7 @@ describe('history card line: SessionStart(compact) serves the sweep\'s predictio
   const NBSP_G = `${String.fromCharCode(0xa0)}${GENERATION}\n`;
   const BOM_G = `${String.fromCharCode(0xfeff)}${GENERATION}\n`;
   type Reg = 'G' | 'G2' | 'absent' | 'unreadable' | 'symlink-G' | 'junk';
-  type Off = 'absent' | 'G' | 'G-padded' | 'G-wide' | 'G-nbsp' | 'G-bom' | 'G2' | 'empty' | 'unreadable' | 'dir' | 'symlink-G';
+  type Off = 'absent' | 'G' | 'G-padded' | 'G-wide' | 'G-nbsp' | 'G-bom' | 'G2' | 'empty' | 'unreadable' | 'dir' | 'symlink-G' | 'unsearchable' | 'parent-file';
   type Rec = 'G' | 'G2' | 'legacy' | 'absent' | 'junk' | 'symlink-G';
   /** B1's Presence, as a type-only import expression: this file gains no import line (the census cites it by line). */
   type Pres = import('../../ccd/history/lib.mjs').Presence<string>;
@@ -11965,6 +11965,10 @@ describe('history card line: SessionStart(compact) serves the sweep\'s predictio
     ['an unreadable recall-off file', GENERATION, 'G', 'unreadable', 'G'],
     ['a directory at recall-off/<id>', GENERATION, 'G', 'dir', 'G'],
     ['a symlink at recall-off/<id>', GENERATION, 'G', 'symlink-G', 'G'],
+    // D-5060 (history-card-recall-off-dir-unreadable-is-off): the CLI opens recall-off/<id> and reads EACCES (the directory
+    // cannot be searched) or ENOTDIR (a file where the directory goes) as UNREADABLE, so off (exit 8); the hook agrees.
+    ['recall-off/ itself at mode 000 (cannot be searched)', GENERATION, 'G', 'unsearchable', 'G'],
+    ['a regular file where the recall-off/ directory goes', GENERATION, 'G', 'parent-file', 'G'],
     ['a malformed env generation falls back to .generation (named)', 'not-a-uuid', 'G', 'G', 'G'],
     ['a malformed env generation falls back to .generation (stale)', 'not-a-uuid', 'G', 'G2', 'G'],
     ['the env generation wins over .generation (named)', GENERATION, 'G2', 'G', 'G'],
@@ -11990,7 +11994,7 @@ describe('history card line: SessionStart(compact) serves the sweep\'s predictio
     ['the env generation wins over the record', GENERATION, 'absent', 'G2', 'G2'],
     ['the registry generation wins over the record', '', 'G', 'G2', 'G2'],
   ];
-  const parityRows = PARITY.filter(([, , r, o]) => !ROOT || (r !== 'unreadable' && o !== 'unreadable'));
+  const parityRows = PARITY.filter(([, , r, o]) => !ROOT || (r !== 'unreadable' && o !== 'unreadable' && o !== 'unsearchable'));
   const plantParity = (regKind: Reg, offKind: Off, recKind: Rec): void => {
     const genFile = reg(`${ID}.generation`);
     fs.rmSync(genFile, { force: true });
@@ -12000,7 +12004,8 @@ describe('history card line: SessionStart(compact) serves the sweep\'s predictio
     if (regKind === 'junk') fs.writeFileSync(genFile, 'not-a-generation');
     if (regKind === 'symlink-G') { fs.writeFileSync(path.join(home, 'gen-target'), GENERATION); fs.symlinkSync(path.join(home, 'gen-target'), genFile); }
     const off = histDir('recall-off', ID);
-    fs.mkdirSync(histDir('recall-off'), { recursive: true, mode: 0o700 });
+    if (offKind === 'parent-file') fs.rmSync(histDir('recall-off'), { recursive: true, force: true });
+    else fs.mkdirSync(histDir('recall-off'), { recursive: true, mode: 0o700 });
     if (offKind === 'G') fs.writeFileSync(off, `${GENERATION}\n`);
     if (offKind === 'G-padded') fs.writeFileSync(off, `  ${GENERATION}  \n\n`);
     if (offKind === 'G-wide') fs.writeFileSync(off, `${' '.repeat(130)}${GENERATION}\n`);
@@ -12011,6 +12016,9 @@ describe('history card line: SessionStart(compact) serves the sweep\'s predictio
     if (offKind === 'unreadable') { fs.writeFileSync(off, `${G2}\n`); fs.chmodSync(off, 0o000); }
     if (offKind === 'dir') fs.mkdirSync(off);
     if (offKind === 'symlink-G') { fs.writeFileSync(path.join(home, 'off-target'), `${G2}\n`); fs.symlinkSync(path.join(home, 'off-target'), off); }
+    // The file inside is a stale value, so a reader that searched the directory would serve; the mode comes last.
+    if (offKind === 'unsearchable') { fs.writeFileSync(off, `${G2}\n`); fs.chmodSync(histDir('recall-off'), 0o000); }
+    if (offKind === 'parent-file') fs.writeFileSync(histDir('recall-off'), `${G2}\n`);
     // The sweep's generation record beside the prediction (Task 5; plantAll made card/<id>/).
     const rec = histDir('card', ID, `${SID}.gen`);
     fs.rmSync(rec, { force: true });
@@ -12065,7 +12073,7 @@ describe('history card line: SessionStart(compact) serves the sweep\'s predictio
       expect(served(start(), { CCRC_SESSION_GENERATION: envGen }), `the CLI reads ${verdict}`)
         .toBe(serves(verdict) ? LINE : null);
     } finally {
-      for (const f of [reg(`${ID}.generation`), histDir('recall-off', ID)]) {
+      for (const f of [reg(`${ID}.generation`), histDir('recall-off'), histDir('recall-off', ID)]) {
         try { fs.chmodSync(f, 0o700); } catch { /* absent or a symlink */ }
       }
     }
