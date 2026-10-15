@@ -252,7 +252,7 @@ export function UpdateMoveSheet({ open, plan, onClose, onDone }: {
           </ol>
         )}
         {plan.intent.direction === 'rollback' && lines.length > 0 && (
-          <p className="qc-consequence">{rollbackHowText(plan.intent.to)}</p>
+          <p className={QC_CONSEQUENCE}>{rollbackHowText(plan.intent.to)}</p>
         )}
         <div className={QC_ACTIONS}>
           {lines.length > 0 && !answered && (

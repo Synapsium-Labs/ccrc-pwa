@@ -27,7 +27,7 @@ import {
   ARCHIVE_REFUSALS, ARCHIVE_STOP_ONLY, TERMINAL_RUN_STATES, archiveInterrupts, inArchivedFold, isArchiveRefusal,
   substrateFault, type ArchiveRefusal, type FleetSession,
 } from '../../../shared/api';
-import { Button, Sheet, toast } from '@ccrc/ui';
+import { Button, QC_ACTIONS, QC_CONSEQUENCE, Sheet, toast } from '@ccrc/ui';
 import { ARCHIVE_REFUSAL_TEXT, ApiError, api, apiErrorText, archivePartial } from '../lib/api';
 import { useFleetStore, type FleetStore } from '../stores/fleet';
 import {
@@ -221,23 +221,23 @@ export function ArchiveSheet({
   switch (ask.kind) {
     case 'confirm':
       title = workspace ? 'Archive this workspace?' : 'Archive this session?';
-      body = <p className="qc-consequence">{workspace
+      body = <p className={QC_CONSEQUENCE}>{workspace
         ? 'It goes offline and folds into Archived. Restore brings it back; once automatic cleanup is on, it is cleaned up seven days after its archive.'
         : 'It goes offline and folds into Archived. Restore starts it again. It is never deleted.'}</p>;
       primary = { label: 'Archive', next: consent };
       break;
     case 'busy':
       title = "It's working. Archive anyway?";
-      body = <p className="qc-consequence">The turn in progress is lost.</p>;
+      body = <p className={QC_CONSEQUENCE}>The turn in progress is lost.</p>;
       primary = { label: 'Archive anyway', next: { ...consent, interrupt: true } };
       break;
     case 'programme':
       title = `It has ${ask.runs.length} open ${ask.runs.length === 1 ? 'run' : 'runs'}. End its programme too?`;
       body = (
         <>
-          <p className="qc-consequence">Its workers will be cleaned up.</p>
-          <p className="qc-consequence">{`${ask.runs.map(runPhrase).join('; ')}.`}</p>
-          <p className="qc-consequence">
+          <p className={QC_CONSEQUENCE}>Its workers will be cleaned up.</p>
+          <p className={QC_CONSEQUENCE}>{`${ask.runs.map(runPhrase).join('; ')}.`}</p>
+          <p className={QC_CONSEQUENCE}>
             To pause a programme instead, use the coordinator pause switch on the Runs screen — archiving its
             coordinator does not pause it.
           </p>
@@ -249,20 +249,20 @@ export function ArchiveSheet({
       title = CLAIMED_TITLE;
       body = (
         <>
-          <p className="qc-consequence">{claimedSentence(ask.runs.length > 0 ? ask.runs : null)}</p>
-          <p className="qc-consequence">{CLAIMED_CONSEQUENCE}</p>
+          <p className={QC_CONSEQUENCE}>{claimedSentence(ask.runs.length > 0 ? ask.runs : null)}</p>
+          <p className={QC_CONSEQUENCE}>{CLAIMED_CONSEQUENCE}</p>
         </>
       );
       primary = { label: 'Archive anyway', next: { ...consent, force: true } };
       break;
     case 'refused':
       title = "Couldn't archive";
-      body = <p className="qc-consequence">{ask.text}</p>;
+      body = <p className={QC_CONSEQUENCE}>{ask.text}</p>;
       primary = null;
       break;
     case 'partly':
       title = 'The programme was only partly ended';
-      body = <p className="qc-consequence">{ask.text}</p>;
+      body = <p className={QC_CONSEQUENCE}>{ask.text}</p>;
       primary = null;
       break;
   }
@@ -271,17 +271,17 @@ export function ArchiveSheet({
     <Sheet open onClose={onClose} title={title} eyebrow={session.project}>
       <div className="archive-conflict-sheet">
         {ended.length > 0 && (
-          <p className="qc-consequence">{`Its programme was ended first: ${ended.map(runPhrase).join('; ')}.`}</p>
+          <p className={QC_CONSEQUENCE}>{`Its programme was ended first: ${ended.map(runPhrase).join('; ')}.`}</p>
         )}
         {body}
         {/* After a `stopOnlyClass` refusal: what "Stop only" does, or where it is. */}
         {stopOnly && (
-          <p className="qc-consequence">Stop only takes it offline without archiving it: it stays on the board, stopped.</p>
+          <p className={QC_CONSEQUENCE}>Stop only takes it offline without archiving it: it stays on the board, stopped.</p>
         )}
         {stopOnlyClass && !stopOnly && (
-          <p className="qc-consequence">Stop only is in this session's actions sheet on the board.</p>
+          <p className={QC_CONSEQUENCE}>Stop only is in this session's actions sheet on the board.</p>
         )}
-        <div className="qc-actions">
+        <div className={QC_ACTIONS}>
           {primary !== null && (
             <Button variant="primary" disabled={busy} onClick={() => send(primary!.next)}>
               {busy ? 'Archiving…' : primary.label}

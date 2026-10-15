@@ -115,6 +115,12 @@ export const OWNED = [
   'build-line-side--warn',                                       // BuildLine
   'task-card-status--ok', 'task-card-status--bad',               // TaskCard
   'task-mark--running',                                          // TaskStrip
+  // QuickConfirm's QC_CONSEQUENCE / QC_ACTIONS. Their LOOK is utilities, not a
+  // stylesheet rule, so an app call site that wrote the hook bare rendered
+  // unstyled: ArchiveSheet and UpdateMoveSheet did, after the branch deleted
+  // main's `.qc-consequence`/`.qc-actions` rules (the takeover's visual check
+  // caught it; no test had).
+  'qc-consequence', 'qc-actions',
 ];
 
 /** Tokens the derivation finds that are NOT vocabulary, each with the reason.
@@ -194,12 +200,20 @@ describe('the design-system boundary', () => {
     expect(ownedClassLiterals('<span className="opt-enter" />')).toEqual(['opt-enter']);
   });
 
+  it('flags a hand-written QuickConfirm hook, bare or with its utilities copied', () => {
+    expect(ownedClassLiterals('<p className="qc-consequence">x</p>')).toEqual(['qc-consequence']);
+    expect(ownedClassLiterals('<div className="qc-actions grid gap-2" />')).toEqual(['qc-actions']);
+    expect(ownedClassLiterals('<p className={QC_CONSEQUENCE}>x</p>')).toEqual([]);
+  });
+
   it('leaves the sanctioned shapes alone', () => {
     // a modifier passed to the primitive, the sheets' own hook classes, and
     // chat.css's look-alike vocabulary
     expect(ownedClassLiterals('<Skeleton className="proj-skel" />')).toEqual([]);
     expect(ownedClassLiterals('<Skeleton lines={1} className="skel--user" />')).toEqual([]);
-    expect(ownedClassLiterals('<div className="qc-actions grid gap-2" />')).toEqual([]);
+    // (Not `qc-actions`: since QC_ACTIONS is @ccrc/ui's, a hand-copied
+    // `"qc-actions grid gap-2"` is the duplicated composition it names; see the
+    // OWNED entry.)
     expect(ownedClassLiterals('<span className="pr-dot" />')).toEqual([]);
     expect(ownedClassLiterals('<div className="chat-skel" />')).toEqual([]);
     // the option row's container and the three ccrc markers it carries

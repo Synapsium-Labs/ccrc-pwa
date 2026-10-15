@@ -32,11 +32,12 @@ import { Sheet } from './sheet';
  *  copied is the composition around them, which no stylesheet guard can see
  *  because it is not in a stylesheet.
  *
- *  `ArchiveSheet` is deliberately NOT a call site. It writes `qc-consequence`
- *  and `qc-actions` bare, with no utilities at all, because its body sits in
- *  `.abandon-sheet`'s own `display: grid; gap: var(--sp-3)` and takes its
- *  spacing from there. That renders differently from a sheet that also adds
- *  `mb-5`, and it is left exactly as it is: this wave moves no pixels. */
+ *  `ArchiveSheet` and `UpdateMoveSheet` are call sites too. They once wrote
+ *  `qc-consequence` and `qc-actions` bare, on the belief that the body's grid
+ *  supplied the look; it did not. Main styled both classes in a stylesheet this
+ *  package deleted, so bare hooks rendered unstyled (ink colour, no margin,
+ *  buttons touching), caught by the takeover's per-width visual check. Both
+ *  hooks are in `design-system-boundary`'s OWNED list now. */
 export const QC_CONSEQUENCE = 'qc-consequence mb-5 text-base leading-normal text-ink-secondary';
 export const QC_ACTIONS = 'qc-actions grid gap-2';
 
