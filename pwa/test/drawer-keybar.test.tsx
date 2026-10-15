@@ -27,7 +27,7 @@ import type { ReactNode } from 'react';
 import { Terminal } from '@xterm/xterm';
 import { TerminalDrawer } from '../src/session/TerminalDrawer';
 import type { DrawerTerm } from '../src/session/terminalFactory';
-import { atBlock, declValue, declaredValues, ruleIn } from './cssRule';
+import { atBlock, declValue, declaredValues, ruleIn, stripComments } from './cssRule';
 import {
   GRID_KEYS,
   GUARDED_KEYS,
@@ -1130,6 +1130,37 @@ describe('the bar asks before ^C or ^D would exit Claude Code', () => {
     }
     // The history door stays beside it.
     expect(screen.getByRole('button', { name: 'Scroll back' }).closest('.term-confirm')).toBeNull();
+  });
+
+  it('the confirm keeps its two choices together, right after the sentence, and neither stretches', () => {
+    // MEASURED before this (the visual pass): `send ^C` took the bar's
+    // `flex: 1 0 auto` and stretched to 509px at 1280 and 829px at 1920, the
+    // destructive choice the widest target on the glass, with the sentence it
+    // confirms ~760px away; and on a phone `cancel` wrapped alone onto a second
+    // row, far from `send ^C`.
+    render(<Wrapped send={vi.fn()} action={door} screen={showing} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Control C' }));
+    const group = screen.getByRole('group', { name: 'Confirm Control C' });
+    const [word, choices, ...rest] = Array.from(group.children) as HTMLElement[];
+    expect(rest).toEqual([]);
+    expect(word!.classList.contains('term-confirm-word')).toBe(true);
+    expect(choices!.classList.contains('term-confirm-choices')).toBe(true);
+    expect(Array.from(choices!.children).map((b) => b.getAttribute('aria-label'))).toEqual(['Send Control C', 'Cancel']);
+
+    // The sentence takes its own width and no more, so the choices sit beside it.
+    const wordFlex = declaredValues(chatCss, '.term-confirm-word', 'flex');
+    expect(wordFlex.length).toBeGreaterThan(0);
+    for (const v of wordFlex) expect(v, 'the sentence grows and pushes the choices away').toMatch(/^(none|0( .*)?)$/);
+    // The two stay on one line together: a wrap there splits them again.
+    expect(declaredValues(chatCss, '.term-confirm-choices', 'display')).toEqual(['flex']);
+    expect(declaredValues(chatCss, '.term-confirm-choices', 'flex-wrap')).not.toContain('wrap');
+    // And neither cap stretches: `flex: none` on the choices' caps, AFTER the
+    // bar's `flex: 1 0 auto` (both are specificity 0,2,0, so source order rules).
+    expect(declValue(ruleIn(chatCss, '.term-confirm-choices .keycap'), 'flex')).toBe('none');
+    const stretch = stripComments(chatCss).indexOf('.term-keys .keycap {');
+    const keep = stripComments(chatCss).indexOf('.term-confirm-choices .keycap');
+    expect(stretch).toBeGreaterThan(-1);
+    expect(keep, 'the choices\' flex:none comes before the bar\'s flex and loses').toBeGreaterThan(stretch);
   });
 
   it('confirm sends once even when it is reached twice before a re-render', () => {

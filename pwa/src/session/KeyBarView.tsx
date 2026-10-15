@@ -162,7 +162,9 @@ export function KeyBar(props: KeyBarProps): ReactNode {
 
   // THE CONFIRM takes the keys' place, in either view, until it is answered:
   // a held ^C beside a live ^C cap would invite the second tap the guard is
-  // there to stop. It names the consequence; the history door stays beside it.
+  // there to stop. It names the consequence, and the two choices follow it
+  // TOGETHER, side by side and neither stretched (chat.css,
+  // `.term-confirm-choices`); the history door stays beside it.
   if (guard.held !== null) {
     const k = guard.held;
     return (
@@ -171,21 +173,23 @@ export function KeyBar(props: KeyBarProps): ReactNode {
           <span className="term-confirm-word" role="alert">
             Claude Code will exit
           </span>
-          <Keycap
-            aria-label={`Send ${KEY_CAP[k].label}`}
-            onPointerDown={keepFocus}
-            onClick={guard.confirm}
-          >
-            <span aria-hidden="true">{`send ${KEY_CAP[k].legend}`}</span>
-          </Keycap>
-          <Keycap
-            className="keycap--act"
-            aria-label="Cancel"
-            onPointerDown={keepFocus}
-            onClick={guard.cancel}
-          >
-            <span aria-hidden="true">cancel</span>
-          </Keycap>
+          <div className="term-confirm-choices">
+            <Keycap
+              aria-label={`Send ${KEY_CAP[k].label}`}
+              onPointerDown={keepFocus}
+              onClick={guard.confirm}
+            >
+              <span aria-hidden="true">{`send ${KEY_CAP[k].legend}`}</span>
+            </Keycap>
+            <Keycap
+              className="keycap--act"
+              aria-label="Cancel"
+              onPointerDown={keepFocus}
+              onClick={guard.cancel}
+            >
+              <span aria-hidden="true">cancel</span>
+            </Keycap>
+          </div>
         </div>
         {props.action}
       </div>

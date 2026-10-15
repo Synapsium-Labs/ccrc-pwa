@@ -1407,8 +1407,9 @@ button.metachip:active {
   gap: var(--sp-2);
 }
 /* The ^C/^D confirm (D-5007): in the keys' place while a tapped ^C or ^D is
-   held, the consequence first, then `send ^C` and `cancel`. It wraps rather
-   than scrolls, so on a phone the sentence keeps a line of its own. */
+   held — the consequence, and right after it the two choices, `send ^C` and
+   `cancel`, side by side. It wraps rather than scrolls, so on a phone the
+   sentence keeps a line of its own and the two choices go under it together. */
 .term-confirm {
   flex: 1;
   min-width: 0;
@@ -1419,13 +1420,30 @@ button.metachip:active {
 }
 /* The sentence paints its OWN ground, the well it sits on, so the contrast gate
    measures it rather than leaving it in its uncovered census: --ink-on-well is
-   the one text token that holds on the glass in both themes. */
+   the one text token that holds on the glass in both themes. It takes its own
+   width and no more, so the choices sit beside the consequence they confirm. */
 .term-confirm-word {
-  flex: 1 1 auto;
+  flex: 0 1 auto;
   font: var(--weight-medium) var(--fs-xs) / var(--lh-tight) var(--family-mono);
   letter-spacing: var(--ls-caps);
   color: var(--ink-on-well);
   background: var(--bg-well);
+}
+/* The two choices: one line, together, and neither stretches. MEASURED before
+   this, `send ^C` took the bar's `flex: 1 0 auto` and stretched to 509px at
+   1280 and 829px at 1920 — the destructive choice the widest target on the
+   glass, ~760px from its sentence — and on a phone `cancel` wrapped alone onto
+   a second row. After `.term-keys .keycap`, whose specificity this matches, so
+   source order is what makes `flex: none` win. `send` wears no danger skin:
+   `@ccrc/ui` has no danger variant for a keycap or a button, and a colour
+   invented here would be measured by no gate (left for the design pass). */
+.term-confirm-choices {
+  flex: none;
+  display: flex;
+  gap: var(--sp-2);
+}
+.term-confirm-choices .keycap {
+  flex: none;
 }
 
 /* ------------------------------------------------------------------ *
