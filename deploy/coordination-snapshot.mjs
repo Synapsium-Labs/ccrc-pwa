@@ -52,6 +52,17 @@ export const SERVICE_UNIT = 'ccrc.service';
 const MANIFEST_FORMAT = 'ccrc-coordination-snapshot';
 const MARKER_FORMAT = 'ccrc-coordination-restore';
 
+/** The helper itself cannot do its job (as opposed to a snapshot being bad): exit 70, never an answer about a snapshot. It has no
+ *  string `code`, so `classify` does not mistake it for a system error on a snapshot's files. */
+export class HelperFailure extends Error {
+  constructor(detail) { super(detail); this.name = 'HelperFailure'; }
+}
+
+/** Test seam: how SQLite is loaded. A test replaces `requireSqlite` to prove that "node cannot load SQLite" is a helper failure. */
+export const seams = {
+  requireSqlite: () => createRequire(import.meta.url)('node:sqlite'),
+};
+
 export class SnapError extends Error {
   /** @param {string} code @param {string} detail @param {{retryable?: boolean, exit?: number}} [opts] */
   constructor(code, detail, opts = {}) {
@@ -152,6 +163,8 @@ export function findJsonDefect(text) {
   return defect;
 }
 
+/** A reason is ONE line: CR and LF in anything interpolated from input become a space. */
+const oneLine = (t) => String(t).replace(/[\r\n]+/g, ' ');
 const sha256Hex = (text) => createHash('sha256').update(text, 'utf8').digest('hex');
 const isHex64 = (v) => typeof v === 'string' && /^[0-9a-f]{64}$/.test(v);
 const isRecord = (v) => typeof v === 'object' && v !== null && !Array.isArray(v);
@@ -536,10 +549,14 @@ export function inspectDb(p) {
     try { head = Buffer.alloc(16); nodeFs.readSync(fd, head, 0, 16, 0); } finally { nodeFs.closeSync(fd); }
   } catch (err) { return { ok: false, why: `unreadable (${err.code ?? 'error'})` }; }
   if (head.toString('latin1') !== SQLITE_MAGIC) return { ok: false, why: 'not a SQLite database (bad header)' };
+  // A node that cannot LOAD SQLite is a classifier that cannot run: a helper failure (70), not an answer that the database is bad.
+  let sqlite;
+  try { sqlite = seams.requireSqlite(); } catch (err) {
+    throw new HelperFailure(`node cannot load node:sqlite, so no coord.db can be checked (${oneLine(err instanceof Error ? err.message : String(err))})`);
+  }
   let db;
   try {
-    const { DatabaseSync } = createRequire(import.meta.url)('node:sqlite');
-    db = new DatabaseSync(p, { readOnly: true });
+    db = new sqlite.DatabaseSync(p, { readOnly: true });
     const check = db.prepare('PRAGMA quick_check').all();
     if (check.length !== 1 || check[0].quick_check !== 'ok') return { ok: false, why: 'quick_check failed' };
     const names = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all().map((r) => r.name);
@@ -792,7 +809,12 @@ function verifyV1(fs, from) {
  * `data` is true for a v1 snapshot with any member present and for a legacy one (validated, never inferred from file presence).
  * @returns {{kind: 'v1' | 'legacy' | 'none' | 'invalid', reason: string, manifest: object | null, data?: boolean}}
  */
-export function classify({ from, fs = realFs }) {
+export function classify(opts) {
+  const v = classifyRaw(opts);
+  return { ...v, reason: oneLine(v.reason) };
+}
+
+function classifyRaw({ from, fs = realFs }) {
   const st = fs.lstat(from);
   if (st === null || !st.isDirectory()) return { kind: 'invalid', reason: 'the path is not a directory', manifest: null };
   if (fs.lstat(path.join(from, MANIFEST_FILE)) !== null) {
@@ -852,7 +874,7 @@ function readMarker(fs, ccrcDir) {
     if (canonicalJson(m) !== text.slice(0, -1)) throw new Error('noncanonical');
   } catch { return refuse('marker-invalid', 'the restore marker cannot be read; nothing can say which set is live', { exit: 2 }); }
   if (!isRecord(m) || m.format !== MARKER_FORMAT || m.version !== 1 || (m.state !== 'replacing' && m.state !== 'committed')
-      || !isRecord(m.old) || !RESTORE_SET.every((n) => typeof m.old[n] === 'boolean')) {
+      || !isRecord(m.old) || !RESTORE_SET.every((n) => typeof m.old[n] === 'boolean') || !isRecord(m.placed)) {
     refuse('marker-invalid', 'the restore marker is not a version-1 marker', { exit: 2 });
   }
   return m;
@@ -878,23 +900,49 @@ function finalizeRestore(fs, ccrcDir) {
   fs.fsyncDir(ccrcDir);
 }
 
-/** Puts the OLD set back, member by member, from what the marker recorded. Safe to run again from any point. */
+/** Whether the live file at `live` is the member THIS restore placed: a regular file with the size and SHA-256 the marker recorded. */
+function isPlacedMember(fs, live, placed) {
+  if (placed === undefined) return false;
+  const st = fs.lstat(live);
+  if (st === null || !st.isFile()) return false;
+  const got = measureFile(fs, live);
+  return got !== null && got.bytes === placed.bytes && got.sha256 === placed.sha256;
+}
+
+/**
+ * Puts the OLD set back, member by member, from what the marker recorded. Safe to run again from any point. It deletes a live file
+ * ONLY when it can prove the file is the member this restore placed (the marker holds each placed member's size and SHA-256): a
+ * file at an old-absent path that is not provably ours (a unit that started, an operator) is left where it is. Returns
+ * `{left, keepStage}`: the member names it left in place, and whether an old member could not be put back (its only copy is still in
+ * the stage, so the stage and the marker must stay).
+ */
 function rollbackRestore(fs, ccrcDir, marker) {
   const stage = stageOf(ccrcDir);
+  const left = [];
+  let keepStage = false;
   for (const name of RESTORE_SET) {
     const live = path.join(ccrcDir, name);
     const aside = path.join(stage, 'old', name);
+    const ours = isPlacedMember(fs, live, marker.placed[name]);
     if (marker.old[name]) {
       if (fs.lstat(aside) !== null) {
-        fs.unlink(live);          // the new member, if it was placed
+        if (fs.lstat(live) !== null) {
+          if (!ours) { left.push(name); keepStage = true; continue; }   // something else stands where the old member must go back
+          fs.unlink(live);                                              // the new member we placed
+        }
         fs.rename(aside, live);
       }                          // else it was never set aside: the live file IS the old one
-    } else {
-      fs.unlink(live);            // old absent: whatever is there now is the new member
+    } else if (fs.lstat(live) !== null) {
+      if (ours) fs.unlink(live);  // old absent, and this is the member we placed
+      else left.push(name);       // not provably ours: leave it
     }
   }
   fs.fsyncDir(ccrcDir);
+  return { left, keepStage };
 }
+
+/** The note a failed restore or recovery adds when rollback left files alone. */
+const leftNote = (left) => `left in place, not provably placed by this restore: ${left.join(', ')}`;
 
 function requireInactive(probe) {
   const state = probe();
@@ -938,6 +986,7 @@ export function restore(opts) {
   const old = {};
   for (const name of RESTORE_SET) old[name] = fs.lstat(path.join(ccrcDir, name)) !== null;
   let published = false;
+  let moved = false;     // set immediately before the first live member is renamed into the stage
   try {
     // 4. Stage the new files beside the live ones (same filesystem, so placement is a rename), hashing as they are written.
     fs.mkdir(stage);
@@ -967,7 +1016,7 @@ export function restore(opts) {
     fs.fsyncDir(stage);
     fs.fsyncDir(ccrcDir);
     // 5. Publish the active marker. From here on, delegation recovery refuses to run until it is gone.
-    const marker = { format: MARKER_FORMAT, version: 1, state: 'replacing', startedAt: now().toISOString(), old };
+    const marker = { format: MARKER_FORMAT, version: 1, state: 'replacing', startedAt: now().toISOString(), old, placed: wanted };
     published = true;       // set BEFORE the write: a write that fails after its rename has still published the marker
     writeMarker(fs, ccrcDir, marker);
     // 5b. Ask again, now the marker is durable: a unit that started between the first probe and here would keep writing to inodes
@@ -975,7 +1024,10 @@ export function restore(opts) {
     requireInactive(probe);
     // 6. Set the old files aside, then place the new ones.
     for (const name of RESTORE_SET) {
-      if (old[name]) fs.rename(path.join(ccrcDir, name), path.join(oldDir, name));
+      if (old[name]) {
+        moved = true;
+        fs.rename(path.join(ccrcDir, name), path.join(oldDir, name));
+      }
     }
     fs.fsyncDir(oldDir);
     fs.fsyncDir(ccrcDir);
@@ -1004,7 +1056,17 @@ export function restore(opts) {
     try {
       const m = readMarker(fs, ccrcDir);
       // A marker already `committed` goes FORWARD, and that is `recover`'s: the new set is whole and in place.
-      if (m === null || m.state === 'replacing') { rollbackRestore(fs, ccrcDir, m ?? { old }); finalizeRestore(fs, ccrcDir); }
+      if (m === null || m.state === 'replacing') {
+        if (!moved) {
+          // Nothing live was touched, so there is nothing to put back and NOTHING may be deleted (a unit that started in the
+          // meantime may have created files at old-absent paths): clear the stage and the marker, that is all.
+          finalizeRestore(fs, ccrcDir);
+        } else {
+          const { left, keepStage } = rollbackRestore(fs, ccrcDir, m ?? { old, placed: wanted });
+          if (left.length > 0 && err instanceof Error) err.message = `${err.message} — ${leftNote(left)}`;
+          if (!keepStage) finalizeRestore(fs, ccrcDir);
+        }
+      }
     } catch { /* the marker stays: delegation recovery refuses to run and `recover` finishes it */ }
     throw err;
   }
@@ -1041,8 +1103,11 @@ export function recover(opts) {
   requireInactive(probe);
   if (marker === null) { finalizeRestoreStageOnly(fs, ccrcDir); return 'cleaned'; }
   if (marker.state === 'committed') { finalizeRestore(fs, ccrcDir); return 'finalized'; }
-  rollbackRestore(fs, ccrcDir, marker);
-  finalizeRestore(fs, ccrcDir);
+  const { left, keepStage } = rollbackRestore(fs, ccrcDir, marker);
+  if (!keepStage) finalizeRestore(fs, ccrcDir);
+  if (left.length > 0) {
+    throw new SnapError('rollback-left-files', `${leftNote(left)}${keepStage ? '; the stage and the marker stay until they are resolved' : ''}`);
+  }
   return 'rolled-back';
 }
 
@@ -1094,7 +1159,7 @@ export function main(argv, env = process.env, io = { out: (s) => process.stdout.
     return 70;
   } catch (err) {
     if (err instanceof SnapError) { io.err(`coordination snapshot: ${err.message}\n`); return verb === 'classify' || verb === 'validate' ? 70 : err.exit; }
-    io.err(`coordination snapshot: helper failure: ${err instanceof Error ? err.message : String(err)}\n`);
+    io.err(`coordination snapshot: helper failure: ${oneLine(err instanceof Error ? err.message : String(err))}\n`);
     return 70;
   }
 }

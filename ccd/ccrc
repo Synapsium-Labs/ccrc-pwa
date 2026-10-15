@@ -1863,7 +1863,7 @@ UPD_VERSION=""
 UPD_STAGED_SHA=""    # _upd_fetch: the extracted tree's OWN sha (review fix round 1 I3) — arm 3 compares it to old_sha to tell a same-tag REBUILD (mixed) from a same-tag REPEAT (not mixed)
 UPD_BACKUP_DIR=""
 BAK_DIRS=()        # `_bak_list`'s out-param: the timestamped backup dirs, oldest first
-BAK_KEEP_SNAP=""   # `_bak_keepset`'s out-params (wave 9 R10g): the newest earlier coord.db snapshot and the newest earlier tree backup,
+BAK_KEEP_SNAP=""   # `_bak_keepset`'s out-params (wave 9 R10g): the newest earlier valid coordination snapshot and the newest earlier tree backup,
 BAK_KEEP_TREE=""   # each chosen among the dirs the floor and this run's own path do not already protect
 BAK_KEEP_DATA=""   # `_bak_keepset`'s third out-param (D-4641): the newest earlier valid coordination snapshot that holds data
 BAK_SNAP_DATA=0    # `_bak_snap_class`'s out-params: whether a valid dir holds data, and why the classifier failed (rc 2)
@@ -22154,8 +22154,9 @@ _bak_list() {
 # expansion is already lexically sorted, which for this shape IS
 # chronological order.
 # Wave 9 R10g (D-3825, D-3826): the removal set is cut by `_bak_keepset`, the helper `_bak_gc` shares — this run's own dir,
-# every dir named at or after UPD_BAK_FLOOR (`cmd_backup` sets it before it backs up) and the newest earlier tree backup
-# and coord.db snapshot are never removed — and the prune holds ~/.ccrc/update.lock. Where `_bak_gc` WARNs and returns,
+# every dir named at or after UPD_BAK_FLOOR (`cmd_backup` sets it before it backs up), the newest earlier tree backup, the newest
+# earlier valid coordination snapshot and the newest earlier one that holds data (D-4641) are never removed — and the prune holds
+# ~/.ccrc/update.lock. Where `_bak_gc` WARNs and returns,
 # this verb says "prune skipped" and returns 0: the backup was taken, and its echo and its invalid-KEEP refusal (the two
 # `_ccrc_die`s) are unchanged. A floor that is not recorded (only a direct call reaches it) prunes nothing.
 _bak_prune() {
@@ -22264,13 +22265,20 @@ _bak_snap_class() {
     BAK_SNAP_WHY="deploy/coordination-snapshot.mjs is not in the running ccrc tree (after a rollback to a tree that predates it, backups are not pruned until the next update to one that has it)"
     return 2
   fi
-  out="$(node --no-warnings "$helper" validate --from "$d" 2>&1)" || rc=$?
-  first="${out%%$'\n'*}"; second=""
-  [ "$first" = "$out" ] || second="${out#*$'\n'}"
+  # STDOUT alone is the answer; stderr goes to a private temp file and is only ever the reason on a failure (an environment that
+  # prints a line on stderr, such as a debugger banner, must not turn a good answer into a failure).
+  local errf="" err1="" rest
+  errf="$(mktemp 2>/dev/null)" || errf=""
+  out="$(node --no-warnings "$helper" validate --from "$d" 2>"${errf:-/dev/null}")" || rc=$?
+  if [ -n "$errf" ]; then IFS= read -r err1 < "$errf" || :; rm -f -- "$errf"; fi
+  first="${out%%$'\n'*}"; second=""; rest=""
+  [ "$first" = "$out" ] || { rest="${out#*$'\n'}"; second="${rest%%$'\n'*}"; }
   case "$rc:${first%%:*}" in
     0:v1|0:legacy|1:none|2:invalid) ;;
-    *) BAK_SNAP_WHY="the classifier answered exit $rc, \"${first:0:100}\""; BAK_SNAP_WHY="${BAK_SNAP_WHY//[![:print:]]/?}"; return 2 ;;
+    *) BAK_SNAP_WHY="the classifier answered exit $rc, \"${first:0:100}\"${err1:+ (stderr: ${err1:0:100})}"; BAK_SNAP_WHY="${BAK_SNAP_WHY//[![:print:]]/?}"; return 2 ;;
   esac
+  # Line 2 exactly the data line, and nothing after it.
+  if [ "$rest" != "$second" ]; then BAK_SNAP_WHY="the classifier's answer had more than two lines"; return 2; fi
   case "$second" in
     "data: yes") BAK_SNAP_DATA=1 ;;
     "data: no") ;;

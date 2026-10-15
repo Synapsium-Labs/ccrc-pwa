@@ -1111,6 +1111,54 @@ describe('8B: classify and validate: v1, legacy, none, invalid (W3-M29, W3-M30)'
     expect(classifyCli(dir)).toMatchObject({ status: 0, stdout: 'v1\n' });
   });
 
+  it('a node that cannot LOAD SQLite is a helper failure (70), never `invalid` (R31)', () => {
+    const home = mkHome();
+    setLive(home, { journal: J3, checkpoint: CP3, db: { marker: 1 } });
+    const v1 = snapshotOf(home, '20261014-000001').dir;
+    const legacy = snapDirOf(home, '20261014-000002');
+    plantDb(path.join(legacy, 'coord.db'), { tables: ['claims'] });
+    const real = H.seams.requireSqlite;
+    H.seams.requireSqlite = () => { throw new Error('No such built-in module: node:sqlite'); };
+    try {
+      for (const dir of [v1, legacy]) {
+        const out: string[] = [];
+        const err: string[] = [];
+        expect(H.main(['validate', '--from', dir], { HOME: home }, { out: (t: string) => out.push(t), err: (t: string) => err.push(t) }), dir).toBe(70);
+        expect(out.join('')).toBe('');
+        expect(err.join('')).toMatch(/^coordination snapshot: helper failure: node cannot load node:sqlite/);
+        expect(err.join('').trimEnd().split('\n')).toHaveLength(1);
+      }
+      expect(outcome(() => H.classify({ from: legacy }))).toMatchObject({ ok: false, code: 'ERR' });
+    } finally { H.seams.requireSqlite = real; }
+    // A database that loads but does not open or pass its check is still `invalid`.
+    const bad = snapDirOf(home, '20261014-000003');
+    writeFileSync(path.join(bad, 'coord.db'), Buffer.concat([Buffer.from('SQLite format 3\u0000'), Buffer.alloc(200, 7)]));
+    expect(H.classify({ from: bad }).kind).toBe('invalid');
+  });
+
+  it('every `validate` reason is ONE line, even when it interpolates input with a line break (N2)', () => {
+    const home = mkHome();
+    const dir = snapDirOf(home);
+    // A hand-built v1 snapshot whose journal's record has a sequence that is a string holding an LF: the refusal text interpolates it.
+    const line = new TextDecoder().decode(encodeDelegationJournalRecord(RA)).trimEnd().replace('"sequence":1', '"sequence":"1\\n2"');
+    const journal = Buffer.from(`${line}\n`);
+    writeFileSync(path.join(dir, 'delegation-events.log'), journal);
+    const manifest = {
+      format: 'ccrc-coordination-snapshot', version: 1, capturedAt: '2026-10-14T12:00:00.000Z',
+      members: {
+        delegationJournal: { filename: 'delegation-events.log', present: true, bytes: journal.length, sha256: sha(journal) },
+        delegationCheckpoint: { filename: 'delegation-checkpoint.json', present: false },
+        coordDb: { filename: 'coord.db', present: false },
+      },
+      delegation: { state: 'initialized', checkpointRevision: 0, anchor: null, journal: { firstSequence: null, lastSequence: null, recordCount: 0, firstPreviousDigest: null, copiedEof: null } },
+    };
+    writeFileSync(path.join(dir, 'coordination-snapshot.json'), `${H.canonicalJson(manifest)}\n`);
+    expect(() => validateDelegationJournalBytes(journal)).toThrow(/1\n2/);      // the raw reason really does carry an LF
+    const r = classifyCli(dir, 'validate');
+    expect(r.status).toBe(2);
+    expect(r.stdout).toBe('invalid: sequence-domain: 1 2 is not a positive safe integer\ndata: no\n');
+  });
+
   it('usage and helper failures are 70, never one of the classifier answers', () => {
     expect(spawnSync(process.execPath, ['--no-warnings', HELPER_PATH, 'classify'], { encoding: 'utf8' }).status).toBe(70);
     expect(spawnSync(process.execPath, ['--no-warnings', HELPER_PATH, 'classify', '--from'], { encoding: 'utf8' }).status).toBe(70);
@@ -1202,7 +1250,110 @@ describe('8B: restore requires the service MEASURED inactive (W3-M34)', () => {
       const markerAt = log.ops.findIndex((o) => /^rename .*coordination-restore\.json\.partial -> /.test(o));
       expect(markerAt).toBeGreaterThan(-1);
       expect(log.ops.slice(0, markerAt + 1).some((o) => /^rename <root>\/\.ccrc\/(coord\.db|delegation-)/.test(o))).toBe(false);
+      // And NOWHERE in the log does a live member go into the stage's old/ directory: the re-probe comes before the set-aside loop.
+      expect(log.ops.filter((o) => /^rename .* -> <root>\/\.ccrc\/coordination-restore\.stage\/old\//.test(o)), second).toEqual([]);
     }
+  });
+
+  it('a refused re-probe DELETES NOTHING: files a just-started unit created at old-absent paths survive byte-identical (N1)', () => {
+    const f = restoreFixture();
+    rmSync(liveFile(f.home, 'coord.db-wal'));
+    rmSync(liveFile(f.home, 'delegation-events.log'));
+    const before = liveState(f.home);
+    const walBytes = 'a WAL the unit just created\n';
+    const journalBytes = 'a journal the unit just created, unlike the snapshot\'s\n';
+    let asked = 0;
+    let thrown: (Error & { code?: string; exit?: number }) | null = null;
+    try {
+      H.restore({
+        home: f.home, from: f.dir,
+        probe: () => {
+          asked++;
+          if (asked === 1) return 'inactive';
+          writeFileSync(liveFile(f.home, 'coord.db-wal'), walBytes);
+          writeFileSync(liveFile(f.home, 'delegation-events.log'), journalBytes);
+          return 'active';
+        },
+      });
+    } catch (err) { thrown = err as Error & { code?: string; exit?: number }; }
+    expect(asked).toBe(2);
+    expect(thrown).not.toBeNull();
+    expect(thrown!.code).toBe('service-not-inactive');
+    expect(thrown!.exit, 'the same exit as the first probe').toBe(2);
+    expect(thrown!.message, 'a clean refusal: nothing was left behind, so nothing is named').not.toMatch(/left in place/);
+    expect(readFileSync(liveFile(f.home, 'coord.db-wal'), 'utf8')).toBe(walBytes);
+    expect(readFileSync(liveFile(f.home, 'delegation-events.log'), 'utf8')).toBe(journalBytes);
+    // The rest of the live set is exactly what it was, and no stage or marker is left.
+    const after = liveState(f.home);
+    for (const n of ['delegation-checkpoint.json', 'coord.db-shm', 'coord.db']) expect(after[n], n).toBe(before[n]);
+    expect(dirListing(liveDir(f.home)).filter((n) => /restore/.test(n))).toEqual([]);
+  });
+
+  describe('rollback deletes only what it can prove the restore placed (R30)', () => {
+    /** A restore whose placed `victim` is replaced by foreign bytes right after it is renamed into place, so the verify fails. */
+    const foreignAfterPlacement = (f: { home: string; dir: string }, victim: string): { error: Error & { message: string }; log: FsLog } => {
+      const { fs, log } = loggedFs(f.home);
+      const base = fs.rename;
+      fs.rename = (a: string, b: string) => {
+        base(a, b);
+        if (b === liveFile(f.home, victim) && a.includes('coordination-restore.stage/new')) writeFileSync(liveFile(f.home, victim), 'foreign bytes written by someone else\n');
+      };
+      try { H.restore({ home: f.home, from: f.dir, fs, probe: inactive }); } catch (err) { return { error: err as Error, log }; }
+      throw new Error('the restore was expected to fail its verify');
+    };
+
+    it('an OLD-ABSENT member replaced by a foreign writer after placement survives, the report names it, and the rest goes back', () => {
+      const f = restoreFixture();
+      rmSync(liveFile(f.home, 'delegation-events.log'));          // old-absent, and the snapshot HAS a journal, so the restore places one
+      const oldState = liveState(f.home);
+      const { error } = foreignAfterPlacement(f, 'delegation-events.log');
+      expect(error.message).toMatch(/verify-failed: delegation-events\.log does not match the snapshot after it was placed/);
+      expect(error.message).toMatch(/left in place, not provably placed by this restore: delegation-events\.log/);
+      expect(readFileSync(liveFile(f.home, 'delegation-events.log'), 'utf8')).toBe('foreign bytes written by someone else\n');
+      const after = liveState(f.home);
+      for (const n of ['delegation-checkpoint.json', 'coord.db-wal', 'coord.db-shm', 'coord.db']) expect(after[n], n).toBe(oldState[n]);
+      expect(dirListing(liveDir(f.home)).filter((n) => /restore/.test(n)), 'old-absent leaves nothing of the old set in the stage, so it is cleaned').toEqual([]);
+    });
+
+    it('a placed member the restore DID place is still removed (a WAL/SHM-free old set): old-absent and provably ours', () => {
+      const f = restoreFixture();
+      rmSync(liveFile(f.home, 'delegation-events.log'));
+      const oldState = liveState(f.home);
+      // A verify failure on ANOTHER member (the checkpoint is replaced by foreign bytes): the journal the restore placed goes away again.
+      const { error } = foreignAfterPlacement(f, 'delegation-checkpoint.json');
+      expect(error.message).toMatch(/verify-failed/);
+      expect(existsSync(liveFile(f.home, 'delegation-events.log'))).toBe(false);
+      expect(liveState(f.home)['delegation-events.log']).toBe(oldState['delegation-events.log']);
+    });
+
+    it('an OLD-PRESENT member replaced by a foreign writer is left alone, the old copy stays in the stage, and the marker stays until it is resolved', () => {
+      const f = restoreFixture();
+      const { error } = foreignAfterPlacement(f, 'coord.db');
+      expect(error.message).toMatch(/left in place, not provably placed by this restore: coord\.db/);
+      expect(readFileSync(liveFile(f.home, 'coord.db'), 'utf8')).toBe('foreign bytes written by someone else\n');
+      expect(existsSync(liveFile(f.home, 'coordination-restore.json'))).toBe(true);
+      expect(sha(readFileSync(path.join(liveFile(f.home, 'coordination-restore.stage'), 'old', 'coord.db')))).toBe(f.oldState['coord.db']);
+      // The other members went back; `recover` reports the same thing again and changes nothing.
+      expect(liveState(f.home)['delegation-events.log']).toBe(f.oldState['delegation-events.log']);
+      expect(outcome(() => H.recover({ home: f.home, probe: inactive }))).toMatchObject({ ok: false, code: 'rollback-left-files' });
+      expect(readFileSync(liveFile(f.home, 'coord.db'), 'utf8')).toBe('foreign bytes written by someone else\n');
+      expect(sha(readFileSync(path.join(liveFile(f.home, 'coordination-restore.stage'), 'old', 'coord.db')))).toBe(f.oldState['coord.db']);
+    });
+
+    it('a WAL a unit created after placement (the snapshot has none) is not the restore\'s own: left in place and named', () => {
+      const f = restoreFixture();
+      rmSync(liveFile(f.home, 'coord.db-wal'));
+      const { fs } = loggedFs(f.home);
+      const base = fs.rename;
+      fs.rename = (a: string, b: string) => {
+        base(a, b);
+        if (b === liveFile(f.home, 'coord.db') && a.includes('coordination-restore.stage/new')) writeFileSync(liveFile(f.home, 'coord.db-wal'), 'a unit started and opened the new DB\n');
+      };
+      const r = outcome(() => H.restore({ home: f.home, from: f.dir, fs, probe: inactive }));
+      expect(r).toMatchObject({ ok: false, code: 'verify-failed' });
+      expect((r as { message: string }).message).toMatch(/left in place, not provably placed by this restore: coord\.db-wal/);
+      expect(readFileSync(liveFile(f.home, 'coord.db-wal'), 'utf8')).toBe('a unit started and opened the new DB\n');
+    });
   });
 
   describe('through the command line, with a fake systemctl on a private PATH', () => {

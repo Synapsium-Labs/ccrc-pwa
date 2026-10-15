@@ -12951,6 +12951,9 @@ describe('ccrc backup and update: the coordination snapshot callers (delegation 
       // The classifier cannot be loaded (node exits 1 with no output), or answers a well-formed word with the WRONG exit code.
       '    if { [ "$3" = classify ] || [ "$3" = validate ]; } && [ -n "$FX_CLASSIFY_EXIT1" ]; then exit 1; fi',
       '    if { [ "$3" = classify ] || [ "$3" = validate ]; } && [ -n "$FX_CLASSIFY_MISMATCH" ]; then printf "none: shim\\ndata: no\\n"; exit 0; fi',
+      // An environment that prints a line on STDERR (a debugger banner), or a classifier whose stdout has a third line.
+      '    if { [ "$3" = classify ] || [ "$3" = validate ]; } && [ -n "$FX_CLASSIFY_STDERR" ]; then echo "Debugger listening on ws://127.0.0.1:0/fixture" >&2; fi',
+      `    if { [ "$3" = classify ] || [ "$3" = validate ]; } && [ -n "$FX_CLASSIFY_EXTRA" ]; then PATH='${updateEnv(home).PATH ?? ''}'; o="$(node "$@")"; r=$?; printf '%s\\nextra: line\\n' "$o"; exit $r; fi`,
       '    if [ "$3" = capture ]; then echo "present: $(ls -A "$5" | tr "\\n" " ")" >> "$HOME/node-order"; fi',
       '    if { [ "$3" = classify ] || [ "$3" = validate ]; } && [ -n "$FX_CLASSIFY_FAIL" ]; then exit 70; fi ;;',
       'esac',
@@ -13349,6 +13352,24 @@ describe('ccrc backup and update: the coordination snapshot callers (delegation 
       expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
       expect(r.stdout).toMatch(/^backup: prune skipped — the coordination snapshot classifier failed \(the classifier answered exit 0, "none: shim"\)/m);
       expect(r.stdout).not.toMatch(/^backup: pruned/m);
+      intact(home);
+    });
+
+    it('a line on STDERR does not spoil a good answer: the shim writes one and runs the real helper, and the prune proceeds normally (N2)', () => {
+      const home = home0('ccrc-fx-8b-n2-stderr-');
+      const r = prune(home, join(REPO, 'ccd', 'ccrc'), withShim(home, { FX_CLASSIFY_STDERR: '1' }));
+      expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+      expect(r.stdout).not.toMatch(/prune skipped/);
+      expect(existsSync(join(backupRoot(home), '20250102-000000')), 'the valid snapshot is the keep').toBe(true);
+      expect(existsSync(join(backupRoot(home), '20250101-000000')), 'a plain dir is pruned').toBe(false);
+      expect(existsSync(join(backupRoot(home), '20250103-000000')), 'a plain dir is pruned').toBe(false);
+    });
+
+    it('a classifier whose stdout has a THIRD line is a failure: nothing pruned, the reason says so (N2)', () => {
+      const home = home0('ccrc-fx-8b-n2-third-');
+      const r = prune(home, join(REPO, 'ccd', 'ccrc'), withShim(home, { FX_CLASSIFY_EXTRA: '1' }));
+      expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+      expect(r.stdout).toMatch(/^backup: prune skipped — the coordination snapshot classifier failed \(the classifier's answer had more than two lines\)/m);
       intact(home);
     });
 
