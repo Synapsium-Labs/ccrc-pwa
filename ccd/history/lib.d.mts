@@ -399,6 +399,8 @@ export interface HealthInputs {
   readonly pass: null | { readonly pid: number; readonly startMs: number; readonly live: boolean };
   /** D-5026: the record a pass left when it found a pass that ended without its tick (status's `pass_died`); absent reads as null. An unreadable record is not null: it rides extrasUnmeasured. */
   readonly passDied?: PassDied | null;
+  /** D-5027: when the last held scheduled pass ended (meta `held_pass_ms`, ms); null or absent when none was recorded. An unreadable value rides extrasUnmeasured. */
+  readonly heldPassMs?: number | null;
   readonly bytesBehindLast3: readonly number[];
   readonly fts: string | null;
   readonly modesWrong: readonly ModeWrong[];
@@ -442,6 +444,7 @@ export const HEALTH_META: Readonly<{
   recoverUnmovedTicks: 'recover_unmoved_ticks';
   exportSegmentNewer: 'export_segment_newer';
   exportSegmentMissing: 'export_segment_missing';
+  heldPassMs: 'held_pass_ms';
 }>;
 export const HEALTH_COUNTERS: Readonly<{
   blobUndecodable: 'blob_undecodable';

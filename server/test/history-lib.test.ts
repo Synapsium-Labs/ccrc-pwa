@@ -4180,6 +4180,40 @@ describe('deriveHealth: every §9.6 rule as a word with its class, detail and re
       }
     });
   });
+  // D-5027 (history-held-pass-is-fresh-for-tick-stale; fix round 2, review 462 F2): a held pass ran and ended as designed, and writes no ticks row.
+  describe('D-5027 a held pass that ended recently is fresh for the tick-stale FAIL only', () => {
+    const HELD = { migration: 'snapshot-needs-op', userVersion: 1, codeVersion: 2, sizeBytes: 1_600_000_000, lastTickMs: NOW - 54 * MIN, lagS: 5 };
+    it('a held pass within TICK_STALE_MS (inclusive): the hold\'s own FAIL and no tick-stale, old tick or none; one millisecond past it, tick-stale as before', () => {
+      for (const lastTickMs of [NOW - 54 * MIN, null]) {
+        const fresh = healthLib.deriveHealth(base({ ...HELD, lastTickMs, shimMtimeMs: NOW - 60 * MIN, heldPassMs: NOW - 2 * MIN }));
+        expect(words(fresh, 'fail'), `last tick ${lastTickMs}`).toEqual(['migration-needs-op']);
+        const at = healthLib.deriveHealth(base({ ...HELD, lastTickMs, shimMtimeMs: NOW - 60 * MIN, heldPassMs: NOW - healthLib.TICK_STALE_MS }));
+        expect(words(at, 'fail'), 'inclusive, as the tick bound is').toEqual(['migration-needs-op']);
+        const past = healthLib.deriveHealth(base({ ...HELD, lastTickMs, shimMtimeMs: NOW - 60 * MIN, heldPassMs: NOW - healthLib.TICK_STALE_MS - 1 }));
+        expect(words(past, 'fail'), 'unbounded would hide a stopped timer for ever').toEqual(['tick-stale', 'migration-needs-op']);
+      }
+      expect(words(healthLib.deriveHealth(base({ ...HELD, heldPassMs: null })), 'fail')).toEqual(['tick-stale', 'migration-needs-op']);
+      expect(words(healthLib.deriveHealth(base({ ...HELD })), 'fail'), 'absent reads as no held pass').toEqual(['tick-stale', 'migration-needs-op']);
+    });
+    it('a held pass whose end lies more than PASS_FUTURE_SLACK_MS past now is not read (the clock stepped back): the old tick FAILs', () => {
+      const slack = healthLib.PASS_FUTURE_SLACK_MS;
+      expect(words(healthLib.deriveHealth(base({ ...HELD, heldPassMs: NOW + slack + 1 })), 'fail')).toEqual(['tick-stale', 'migration-needs-op']);
+      expect(words(healthLib.deriveHealth(base({ ...HELD, heldPassMs: NOW + slack })), 'fail')).toEqual(['migration-needs-op']);
+    });
+    it('it is no tick: catching-up, lag-unmeasured and lag-high do not read it', () => {
+      const falling = healthLib.deriveHealth(base({ ...HELD, bytesBehindLast3: [300, 200, 100], heldPassMs: NOW - MIN }));
+      expect(words(falling, 'warn')).not.toContain('catching-up');
+      const unmeasured = healthLib.deriveHealth(base({ ...HELD, lagS: null, heldPassMs: NOW - MIN }));
+      expect(words(unmeasured, 'warn')).not.toContain('lag-unmeasured');
+      const high = healthLib.deriveHealth(base({ ...HELD, lagS: 7200, heldPassMs: NOW - MIN }));
+      expect(words(high, 'fail'), 'lag-high is judged as it always was').toEqual(['lag-high', 'migration-needs-op']);
+    });
+    it('an open D-5026 death is not closed by a held pass', () => {
+      const r = healthLib.deriveHealth(base({ ...HELD, heldPassMs: NOW - MIN, passDied: { pid: 4242, startMs: NOW - 20 * MIN, foundMs: NOW - 18 * MIN, count: 1 } }));
+      expect(words(r, 'fail')).toEqual(['tick-stale', 'migration-needs-op']);
+      expect(r.fail[0]!.detail).toContain('ended without writing one');
+    });
+  });
   // Task 28F item 3: an input status could not read is not a healthy input (the no-overloaded-null rule).
   it('an extras read that failed is FAIL status-unreadable naming what could not be read, beside whatever else was measured', () => {
     const r = healthLib.deriveHealth(base({ extrasUnmeasured: ['breaker', 'spool/.draining'], capMalformed: true }));

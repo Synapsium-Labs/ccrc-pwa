@@ -22,7 +22,7 @@ import { createStore, openWriter, closeWriter, getMeta } from '../../ccd/history
 import { exportCensus, homeOfPath, newBudget } from '../../ccd/history/sweep.mjs';
 import {
   makeHistoryBox, runSweep, runShim, runDriver, preloadOptions, plantSession, plantTranscript, spoolLine, openStoreRO,
-  counters, journalRecords, PRELOADS, PASS_DRIVER, CLI, readTxlog, writes, type TxEv, type HistoryBox, type DriverDeps,
+  counters, journalRecords, PRELOADS, PASS_DRIVER, CLI, runCli, readTxlog, writes, type TxEv, type HistoryBox, type DriverDeps,
 } from './historyHelpers.js';
 
 beforeEach((ctx) => { if (process.platform === 'darwin') ctx.skip(); });
@@ -567,6 +567,80 @@ describe('DM43: no copy a scheduled pass cannot finish', () => {
     const newer = runShim(box, ['--op', 'migrate']);
     expect(newer.code).toBe(2);
     expect(lastResult(newer.stdout)).toEqual({ rc: 2, reason: 'migrate-refused' });
+  });
+});
+
+// D-5027 (history-held-pass-is-fresh-for-tick-stale; fix round 2, review 462 F2): a held pass (the migration verdicts the held arm takes:
+// migration-needs-op here) writes no ticks row, so doctor FAILed tick-stale within 10 minutes beside the hold's own FAIL, whose remedy
+// points at the timer. The held arm now stamps meta `held_pass_ms`; deriveHealth reads one that ended within TICK_STALE_MS as fresh for
+// that FAIL only.
+describe('D-5027: a held pass is fresh for tick-stale', () => {
+  const heldBox = (prefix: string): HistoryBox => {
+    const box = boundBox(prefix);
+    const db = new DatabaseSync(paths(box).db);
+    try {
+      db.prepare("INSERT INTO meta (k, v) VALUES ('copy_bps', '100') ON CONFLICT (k) DO UPDATE SET v = excluded.v").run();
+      db.prepare('UPDATE ticks SET ts_ms = ts_ms - ?').run(30 * MIN);              // the tick rows aged past 10 min
+    } finally { db.close(); }
+    const held = (): void => {
+      const r = runDriver(box, { extraMigrations: [V2] });
+      expect(r.code, r.stderr).toBe(0);
+      expect(r.stdout).toMatch(/^history-sweep: migration-needs-op$/m);
+    };
+    held(); held();                                                                // two held passes
+    return box;
+  };
+  const verdict = (box: HistoryBox): Array<{ word: string; detail: string }> => {
+    const r = runCli(box, ['status', '--json']);
+    expect(r.code, r.stderr).toBe(0);
+    return (r.json!['health'] as { fail: Array<{ word: string; detail: string }> }).fail;
+  };
+  const setMetaRaw = (box: HistoryBox, k: string, v: string): void => {
+    const db = new DatabaseSync(paths(box).db);
+    try { db.prepare('INSERT INTO meta (k, v) VALUES (?, ?) ON CONFLICT (k) DO UPDATE SET v = excluded.v').run(k, v); } finally { db.close(); }
+  };
+
+  it('pin 8: two held passes over the line, the tick rows aged past 10 min: migration-needs-op and NO tick-stale; the held pass added no ticks row', () => {
+    const box = heldBox('ccrc-hist-d5027-fresh-');
+    const ticks = countOf(box, 'ticks');
+    expect(Number(metaOf(box, 'held_pass_ms')), 'the held arm stamped its end').toBeGreaterThan(Date.now() - 5 * MIN);
+    const fail = verdict(box);
+    expect(fail.map((i) => i.word)).toEqual(['migration-needs-op']);
+    expect(countOf(box, 'ticks')).toBe(ticks);
+  });
+
+  it('pin 9: the same with the held passes aged past TICK_STALE_MS too: tick-stale beside migration-needs-op, as before', () => {
+    const box = heldBox('ccrc-hist-d5027-aged-');
+    setMetaRaw(box, 'held_pass_ms', String(Date.now() - 11 * MIN));
+    const fail = verdict(box);
+    expect(fail.map((i) => i.word).sort()).toEqual(['migration-needs-op', 'tick-stale']);
+    expect(fail.find((i) => i.word === 'tick-stale')!.detail).toContain('the last tick ran');
+  });
+
+  it('a held_pass_ms that is not an integer is unmeasured (FAIL status-unreadable naming it), never "no held pass"', () => {
+    const box = heldBox('ccrc-hist-d5027-junk-');
+    setMetaRaw(box, 'held_pass_ms', 'soon');
+    const fail = verdict(box);
+    expect(fail.map((i) => i.word).sort()).toEqual(['migration-needs-op', 'status-unreadable', 'tick-stale']);
+    expect(fail.find((i) => i.word === 'status-unreadable')!.detail).toContain('held_pass_ms');
+  });
+
+  it('an open D-5026 death is NOT closed by a held pass: only a tick clears the record, and the death FAIL stands beside the hold\'s own', () => {
+    const box = boundBox('ccrc-hist-d5027-death-');
+    const db = new DatabaseSync(paths(box).db);
+    try {
+      db.prepare("INSERT INTO meta (k, v) VALUES ('copy_bps', '100') ON CONFLICT (k) DO UPDATE SET v = excluded.v").run();
+      db.prepare('UPDATE ticks SET ts_ms = ts_ms - ?').run(30 * MIN);
+    } finally { db.close(); }
+    const died = path.join(paths(box).root, 'pass-died');
+    const record = `${JSON.stringify({ pid: 4242, start_ms: Date.now() - 20 * MIN, found_ms: Date.now() - 18 * MIN, count: 1 })}\n`;
+    fs.writeFileSync(died, record, { mode: 0o600 });
+    const r = runDriver(box, { extraMigrations: [V2] });
+    expect(r.stdout).toMatch(/^history-sweep: migration-needs-op$/m);
+    expect(fs.readFileSync(died, 'utf8'), 'the held pass neither cleared nor rewrote the record').toBe(record);
+    const fail = verdict(box);
+    expect(fail.map((i) => i.word).sort()).toEqual(['migration-needs-op', 'tick-stale']);
+    expect(fail.find((i) => i.word === 'tick-stale')!.detail).toContain('ended without writing one');
   });
 });
 

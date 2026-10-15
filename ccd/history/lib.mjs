@@ -3286,6 +3286,8 @@ export const HEALTH_META = Object.freeze({
   recoverUnmovedTicks: 'recover_unmoved_ticks',
   exportSegmentNewer: 'export_segment_newer',
   exportSegmentMissing: 'export_segment_missing',
+  // D-5027 (history-held-pass-is-fresh-for-tick-stale): the held arm of a scheduled pass stamps the time it ended (ms).
+  heldPassMs: 'held_pass_ms',
 });
 
 /** Counters `status` reads for a health word, spelled once for the writer (sweep.mjs), the reader (cli.mjs) and the
@@ -3552,7 +3554,7 @@ export function deriveHealth(h) {
   // clock read made after the marker's), so a record of a pass that ticked, or one left by a removal that was cut off, is closed by
   // this comparison alone. A leftover marker that is parsed, NOT live and started after the last tick is the same death with no record
   // (the pass that found it could not write one, and left the marker standing); it counts beside a record when it is another pass than
-  // the record's (a later start). Only a tick closes it.
+  // the record's (a later start). Held-pass freshness (D-5027) does not close it: only a tick does.
   const afterLastTick = (ms) => h.lastTickMs === null || ms > h.lastTickMs;
   const rec = h.passDied ?? null;
   const recOpen = rec !== null && afterLastTick(rec.startMs);
@@ -3565,6 +3567,12 @@ export function deriveHealth(h) {
       startMs: leftover !== null ? leftover.startMs : rec.startMs,
     }
     : null;
+  // D-5027 (history-held-pass-is-fresh-for-tick-stale): a held pass that ended within TICK_STALE_MS (and not past PASS_FUTURE_SLACK_MS
+  // in the future, the same step-back guard) ran and ended as designed. It answers for the tick-stale FAIL ONLY: the held node shows its
+  // own FAIL (migration-needs-op, migration-refused, schema-newer), and not a second one that points at the timer. It is not a tick:
+  // tickFresh, catching-up, lag-unmeasured and lag-high do not read it.
+  const heldFresh = h.heldPassMs !== null && h.heldPassMs !== undefined
+    && h.nowMs - h.heldPassMs <= TICK_STALE_MS && h.heldPassMs - h.nowMs <= PASS_FUTURE_SLACK_MS;
 
   // 4. the FAILs.
   if (death !== null) {
@@ -3578,6 +3586,8 @@ export function deriveHealth(h) {
       // A live pass answers for the tick: fresh above, or the hung FAIL just pushed.
     } else if (death !== null) {
       // The death FAIL above answers for the tick: no second tick-stale line.
+    } else if (heldFresh) {
+      // A held pass that ended recently answers for the tick (D-5027): the hold's own FAIL names the cause.
     } else if (tickAge === null) {
       fail.push(item('tick-stale', h.shimMtimeMs !== null
         ? `no tick has run, and the shim was placed ${minutesOf(h.nowMs - h.shimMtimeMs)} min ago`

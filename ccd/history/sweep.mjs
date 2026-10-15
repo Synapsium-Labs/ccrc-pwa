@@ -3512,6 +3512,9 @@ async function scheduledPassBody(parsed, deps, out, P, now, role) {
       const unwritable = runJournalHalf(home, ids, now);
       out(`history-sweep: ${word}`);
       noteJournalHalf(db, unwritable, now, out);
+      // D-5027 (history-held-pass-is-fresh-for-tick-stale): a held pass is a pass that ran and ended as designed. It writes no tick, so
+      // doctor would FAIL tick-stale beside the hold's own FAIL; this stamp lets deriveHealth read it as fresh for that FAIL only.
+      setMeta(db, HEALTH_META.heldPassMs, String(now()));
       return holdExit(word);
     }
     setMeta(db, 'migration', migration);
