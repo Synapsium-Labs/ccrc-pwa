@@ -85,8 +85,10 @@ export const MD_HIGHLIGHT_MAX_BLANK_CHARS = 2048;
  *  block's size on `<a>` shapes (JSX closing-tag scans) that pass the word, line and whitespace bounds (review 450 F1).
  *  Measured on highlight.js 11.11.1 (Node 24, load average 30 to 80): `'<a>'` repeated in lines of 1 800 characters
  *  costs, per KiB of block, 5.5 to 6.7 ms at 6 to 10 KiB, 10 at 16 KiB, 22 at 32 KiB and 43 at 64 KiB (2.8 s a block).
- *  The per-KiB cost is lowest near 8 KiB, so this value and `DOCS_HIGHLIGHT_SCAN_PAGE_MAX_CHARS` keep a crafted page
- *  near the plateau the other grammars leave (the operator's answer to ask 38, the values that meet it). Cost,
+ *  The per-KiB cost rises with the block's size from the smallest size measured (review 460 F8 re-measured 5.63, 6.65
+ *  and 7.97 ms a KiB at 6, 8 and 10 KiB and 9.89 at 16 KiB; this once said it was lowest near 8 KiB, which did not
+ *  reproduce). This value and `DOCS_HIGHLIGHT_SCAN_PAGE_MAX_CHARS` are the operator's answer to ask 38; what a page of
+ *  such blocks costs is stated under `DOCS_HIGHLIGHT_MARKDOWN_PAGE_MAX_CHARS`. Cost,
  *  measured through the Docs pipeline (each page parsed as Docs parses it, then `detachUrls`, `highlightBlockCap` and
  *  the word, line and whitespace scans; 2026-10-15, at this wave's tip): 736 real fences of `docs/superpowers` are
  *  plain, on 78 pages, of 8 508 `typescript`, `javascript` and `rust` fences the 64 KiB cap and the general page
