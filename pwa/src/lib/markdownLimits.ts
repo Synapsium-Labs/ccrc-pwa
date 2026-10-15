@@ -114,7 +114,7 @@ export const DOCS_HIGHLIGHT_SCAN_PAGE_MAX_CHARS = 393216;
  *  1.5 s; the markdown budget's two worst blocks 0.5 to 0.6 s; xml's `<script>` shapes, eight 64 KiB blocks, under
  *  0.1 s. The three budgets are summed apart, so the worst crafted page holds both the scan budget and the markdown
  *  budget: 3.4 s, about 1.4 times the plateau page, against spec 4.9's 0.25 s for a page. Chat has no page budget: a
- *  message bounds each block (a 64 KiB markdown block about 650 ms, an 8 KiB `typescript` block about 75), never their
+ *  message bounds each block (a 64 KiB markdown block of `<a>` lines about 650 ms, an 8 KiB `typescript` block about 75), never their
  *  sum. What the sweeps covered: 474 one- and two-character units one per line (the line bound); 28 shapes of
  *  whitespace across lines (the whitespace bound); every registered grammar over about 80 units of two to four
  *  characters (tag, bracket, string and comment openers, and up to ten of each grammar's keywords), in lines of 1 800
@@ -122,8 +122,19 @@ export const DOCS_HIGHLIGHT_SCAN_PAGE_MAX_CHARS = 393216;
  *  `markdown`; and the `subLanguage` embeddings (`xml`'s `<script>` and `<style>`, removed: see `markdown.tsx`;
  *  `markdown` into `xml`; `dockerfile` into `bash`, linear; `yaml` into `ruby`, not registered). NOT covered: units of
  *  more than four characters, mixtures of different units, nesting, and valid code shaped to defeat a grammar; a shape
- *  outside those families may still grow, in any grammar. The structural fix, highlighting off the main thread with a
- *  deadline, is carried to the operator. */
+ *  outside those families may still grow, in any grammar.
+ *  SHAPES PAST EVERY BOUND (review 460 F1 to F3, the reviewer's figures on this highlight.js, best of 3 at load about
+ *  25): `markdown` on link openers, `'[]('` or `'[[]('` repeated in lines of 2 048 characters (quadratic in the line,
+ *  linear in the block), about 0.5 s per 8 KiB block and 4.5 to 5.5 s per 64 KiB block, so the markdown budget
+ *  admits about 9 to 11 s of it on one page; `yaml` flow collections, `[]` or `{}` repeated, quadratic in the block's
+ *  size (about 1.1 to 1.4 s per 64 KiB block), only the general budget bounding a page of them (eight blocks about
+ *  7.5 s); the worst combined page found, two such markdown blocks and six such yaml blocks, exactly the general
+ *  budget with every block highlighted, 10.6 s. Chat has no page budget: one crafted markdown block about 4.5 s, one
+ *  yaml block about 1.1 to 1.4 s. Real documents are unaffected: the most markdown code on a page Docs formats is
+ *  24 056 characters, its largest markdown block 17 042. Four reviews in a row each found a shape the sweeps before
+ *  them had not tried, so more crafted shapes probably exist. The operator ruled the remedy on 2026-10-15: a dedicated
+ *  wave moves highlighting off the main thread, into the parse worker with a deadline, before part 2; part 1 adds no
+ *  bound and no value for these shapes. */
 export const DOCS_HIGHLIGHT_MARKDOWN_PAGE_MAX_CHARS = 131072;
 /** The longest inline code span that can be a keystroke chord (W5 bound r11); a longer one is plain inline code,
  *  never trimmed or split. The longest chord of named keys is about 40 characters. */
