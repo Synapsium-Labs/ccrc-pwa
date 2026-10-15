@@ -427,6 +427,7 @@ export function historyPaths(home) {
     writer: `${root}/store.writer`,
     op: `${root}/op`,
     pass: `${root}/pass`,
+    passDied: `${root}/pass-died`,
     lock: `${h}/.ccrc/history-sweep.lock`,
     off: `${h}/${SWITCHES.off}`,
     cap: `${h}/${SWITCHES.maxGb}`,
@@ -3199,6 +3200,27 @@ export function formatPassMarker(pid, startMs, identity) {
   return `${pid} ${startMs} ${identity.procStart} ${identity.bootId}\n`;
 }
 
+/** The death record's one grammar (D-5026 `history-pass-death-record`): `~/.ccrc/history/pass-died` holds ONE line of JSON,
+ *  `{"pid":<int|null>,"start_ms":<int>,"found_ms":<int>,"count":<int>}`. A scheduled pass writes it when it FINDS a pass marker
+ *  with no live pass behind it (the dead pass ended without its `finally`: the carrier's kill at 10 min, the OOM killer, a
+ *  SIGKILL), and a pass removes it once its own tick row is committed. `pid` and `start_ms` are the dead pass's own, from its
+ *  marker (`pid` null and `start_ms` an upper bound, the finder's start, when the marker could not be parsed); `found_ms` is the
+ *  finder's start; `count` is the deaths recorded since the last tick. Strict: every field present and typed, `count >= 1`,
+ *  else null. */
+export function parsePassDied(text) {
+  let v;
+  try { v = JSON.parse(text); } catch { return null; }
+  if (v === null || typeof v !== 'object' || Array.isArray(v)) return null;
+  const int = (x, min) => Number.isSafeInteger(x) && x >= min;
+  if (!(v.pid === null || int(v.pid, 1)) || !int(v.start_ms, 0) || !int(v.found_ms, 0) || !int(v.count, 1)) return null;
+  return { pid: v.pid, startMs: v.start_ms, foundMs: v.found_ms, count: v.count };
+}
+
+/** The record's text: the grammar above, newline-ended. */
+export function formatPassDied(pid, startMs, foundMs, count) {
+  return `${JSON.stringify({ pid, start_ms: startMs, found_ms: foundMs, count })}\n`;
+}
+
 /** A process's start time from the text of `/proc/<pid>/stat`: field 22, counted after the LAST `)` (the comm field in
  *  front of it may hold spaces and parentheses). A process in state `Z` (zombie) or `X` (dead) is not a running pass and
  *  answers null, as does any text that is not that shape. */
@@ -3508,6 +3530,11 @@ export function deriveHealth(h) {
   // the marker is forged): its age would be negative for as long as the step lasts, and the pass would read as fresh
   // that long. Such a pass is not read at all, so the verdict is the one a box with no live pass gets (fix round 1,
   // tick-stale review T3). `tickAge` below keeps the same weakness; it predates B2 and is left as it was.
+  // The hung arm is for a pass the kill does not end. The ending that occurs in production is another one (fix round 2, review 462
+  // F1): the carrier kills a scheduled pass at CARRIER_KILL_S (600 s, the unit's TimeoutStartSec=10min), and the marker is written
+  // after the unit starts, so a killed pass never reaches TICK_STALE_MS of marker age; the next pass, within the timer's 30 s accuracy,
+  // overwrites the marker and its fresh live marker would re-arm every hold above. D-5026 answers that: the next pass records the
+  // death (`pass-died`, `h.passDied`) before it overwrites the marker, and an OPEN death FAILs below whatever any hold says.
   const passLive = h.pass !== null && h.pass !== undefined && h.pass.live === true && h.pass.startMs - h.nowMs <= PASS_FUTURE_SLACK_MS;
   const passAge = passLive ? h.nowMs - h.pass.startMs : null;
   const passFresh = passLive && passAge <= TICK_STALE_MS;
@@ -3520,13 +3547,37 @@ export function deriveHealth(h) {
   if (lagUnmeasured) warn.push(item('lag-unmeasured', 'lag is unmeasured: not every file has reached its end once yet'));
   const stateHeld = h.historyOff || (h.recovering !== null && tickFresh) || opLive || catching || lagUnmeasured;
 
+  // D-5026 (history-pass-death-record): a pass that ended without its tick. OPEN while the record's start is after the last tick (or
+  // there is no tick): a pass that wrote its tick has a ticks row stamped at or after its marker's start (the tick is stamped with a
+  // clock read made after the marker's), so a record of a pass that ticked, or one left by a removal that was cut off, is closed by
+  // this comparison alone. A leftover marker that is parsed, NOT live and started after the last tick is the same death with no record
+  // (the pass that found it could not write one, and left the marker standing); it counts beside a record when it is another pass than
+  // the record's (a later start). Only a tick closes it.
+  const afterLastTick = (ms) => h.lastTickMs === null || ms > h.lastTickMs;
+  const rec = h.passDied ?? null;
+  const recOpen = rec !== null && afterLastTick(rec.startMs);
+  const leftover = h.pass !== null && h.pass !== undefined && h.pass.live !== true && afterLastTick(h.pass.startMs)
+    && (!recOpen || h.pass.startMs > rec.startMs) ? h.pass : null;
+  const death = recOpen || leftover !== null
+    ? {
+      count: (recOpen ? rec.count : 0) + (leftover !== null ? 1 : 0),
+      pid: leftover !== null ? leftover.pid : rec.pid,
+      startMs: leftover !== null ? leftover.startMs : rec.startMs,
+    }
+    : null;
+
   // 4. the FAILs.
+  if (death !== null) {
+    fail.push(item('tick-stale', `${death.count} scheduled pass(es) since the last tick ended without writing one (the carrier kills a pass at ${minutesOf(CARRIER_KILL_S * 1000)} min; the OOM killer or a SIGKILL also ends one); the last (pid ${death.pid === null ? 'unknown' : death.pid}) started ${Math.max(0, minutesOf(h.nowMs - death.startMs))} min ago`));
+  }
   if (passHung) {
     fail.push(item('tick-stale', `the scheduled pass (pid ${h.pass.pid}) started ${minutesOf(passAge)} min ago and is still running (hung past ${minutesOf(TICK_STALE_MS)} min)`));
   }
   if (!stateHeld) {
     if (passLive) {
       // A live pass answers for the tick: fresh above, or the hung FAIL just pushed.
+    } else if (death !== null) {
+      // The death FAIL above answers for the tick: no second tick-stale line.
     } else if (tickAge === null) {
       fail.push(item('tick-stale', h.shimMtimeMs !== null
         ? `no tick has run, and the shim was placed ${minutesOf(h.nowMs - h.shimMtimeMs)} min ago`

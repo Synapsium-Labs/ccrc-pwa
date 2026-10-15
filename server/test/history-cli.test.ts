@@ -746,6 +746,54 @@ describe('status health: the measured snapshot through deriveHealth (task 28)', 
         expect(wordsOf(failOf(r))).toEqual(['tick-stale']);
       } finally { if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL'); }
     });
+
+    // D-5026 (history-pass-death-record; fix round 2, review 462 F1): `status` reads the record a pass left when it found a pass that
+    // ended without its tick (`pass_died`: the parsed record, null only when absent). One that is there and cannot be read is
+    // 'unmeasured' and reaches doctor as status-unreadable (the no-overloaded-null rule), never as "no death".
+    const diedFile = (box: healthHh.HistoryBox): string => healthPath.join(box.home, '.ccrc', 'history', 'pass-died');
+    const plantDied = (box: healthHh.HistoryBox, startMsAgo: number, count = 1): void => {
+      healthFs.mkdirSync(healthPath.dirname(diedFile(box)), { recursive: true, mode: 0o700 });
+      healthFs.writeFileSync(diedFile(box), `${JSON.stringify({ pid: 4242, start_ms: Date.now() - startMsAgo, found_ms: Date.now() - startMsAgo + 2 * MIN, count })}\n`, { mode: 0o600 });
+    };
+    it('(D-5026) an open death record beside a young LIVE pass is FAIL tick-stale naming the death: status gives pass_died, the live pass holds nothing back', () => {
+      const box = staleBox('ccrc-history-passdied-open-');
+      plant(box, process.pid, 0.5 * MIN);
+      expect(wordsOf(failOf(statusOf(box))), 'CONTROL: a live young pass alone is fresh').toEqual([]);
+      plantDied(box, 20 * MIN, 2);
+      const r = statusOf(box);
+      expect(r.env!['pass_died']).toMatchObject({ pid: 4242, count: 2 });
+      expect(wordsOf(failOf(r))).toEqual(['tick-stale']);
+      expect(failOf(r)[0]!.detail).toContain('2 scheduled pass(es) since the last tick ended without writing one');
+      expect(failOf(r)[0]!.detail).toContain('pid 4242');
+    });
+    it('(D-5026) a record whose start is at or before the last tick is closed (the removal after its tick was cut off), and an absent one is null', () => {
+      const box = staleBox('ccrc-history-passdied-closed-');
+      expect(statusOf(box).env!['pass_died'], 'absent is null').toBeNull();
+      plantDied(box, 41 * MIN);                                                 // the tick is 40 min old: this pass started before it
+      plant(box, process.pid, 0.5 * MIN);
+      const r = statusOf(box);
+      expect(r.env!['pass_died']).toMatchObject({ count: 1 });
+      expect(wordsOf(failOf(r))).toEqual([]);
+    });
+    it('(D-5026) a record that is there and cannot be read or parsed is pass_died "unmeasured" and FAIL status-unreadable naming it, never no death', () => {
+      const box = healthHh.makeHistoryBox('ccrc-history-passdied-unreadable-', { role: 'fleet', shim: true });
+      ageFile(shimOf(box), 60 * MIN);
+      tickedStore(box, Date.now());
+      expect(statusOf(box).env!['health']['pass'], 'CONTROL: a fresh tick and no record is PASS ok').toBe('ok');
+      healthFs.mkdirSync(healthPath.dirname(diedFile(box)), { recursive: true, mode: 0o700 });
+      for (const junk of ['', 'garbage\n', '{"pid":4242,"start_ms":1,"found_ms":2}\n', '{"pid":4242,"start_ms":1,"found_ms":2,"count":0}\n']) {
+        healthFs.writeFileSync(diedFile(box), junk, { mode: 0o600 });
+        const r = statusOf(box);
+        expect(r.env!['pass_died'], JSON.stringify(junk)).toBe('unmeasured');
+        expect(wordsOf(failOf(r)), JSON.stringify(junk)).toEqual(['status-unreadable']);
+        expect(failOf(r)[0]!.detail, JSON.stringify(junk)).toContain('pass-died');
+      }
+      healthFs.rmSync(diedFile(box));
+      healthFs.mkdirSync(diedFile(box), { mode: 0o700 });                                       // a planted directory is not "absent" either
+      const dir = statusOf(box);
+      expect(dir.env!['pass_died']).toBe('unmeasured');
+      expect(wordsOf(failOf(dir))).toEqual(['status-unreadable']);
+    });
   });
 
   // Task 28F item 3: a failed extras read is unmeasured, never a healthy default. The smallest seam: the breaker

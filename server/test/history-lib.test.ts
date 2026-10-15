@@ -4078,9 +4078,16 @@ describe('deriveHealth: every §9.6 rule as a word with its class, detail and re
     const long = healthLib.deriveHealth(base({ lastTickMs: NOW - 40 * MIN, pass: { pid: 4242, startMs: NOW - 45 * MIN, live: true } }));
     expect(long.fail.map((i) => i.detail).join('\n')).toContain('started 45 min ago');
   });
-  it('D-5016 (c) CONTROL: with no live pass, an old or absent tick FAILs tick-stale in the words it always had; a pass that is not live changes nothing', () => {
-    const gone = { pid: 4242, startMs: NOW - MIN, live: false };
+  it('D-5016 (c) CONTROL: with no live pass, an old or absent tick FAILs tick-stale in the words it always had; a pass that is not live and started before the last tick changes nothing (one that started after it is D-5026\'s death)', () => {
+    const gone = { pid: 4242, startMs: NOW - 41 * MIN, live: false };
     for (const pass of [null, gone]) {
+      // A not-live marker is a death when no tick is on record (D-5026), so the no-tick case is the control's alone.
+      if (pass === gone) {
+        const old = healthLib.deriveHealth(base({ lastTickMs: NOW - 40 * MIN, pass }));
+        expect(words(old, 'fail')).toEqual(['tick-stale']);
+        expect(old.fail[0]!.detail).toContain('the last tick ran 40 min ago');
+        continue;
+      }
       const old = healthLib.deriveHealth(base({ lastTickMs: NOW - 40 * MIN, pass }));
       expect(words(old, 'fail')).toEqual(['tick-stale']);
       expect(old.fail[0]!.detail).toContain('the last tick ran 40 min ago');
@@ -4092,6 +4099,86 @@ describe('deriveHealth: every §9.6 rule as a word with its class, detail and re
     // A dead pass's old start is never "hung": not live, it is not running.
     const deadOld = healthLib.deriveHealth(base({ lastTickMs: NOW - 2 * MIN, pass: { pid: 4242, startMs: NOW - 90 * MIN, live: false } }));
     expect(words(deadOld, 'fail')).toEqual([]);
+  });
+  // D-5026 (history-pass-death-record; fix round 2, review 462 F1): the carrier kills a scheduled pass at 10 min, before its marker's age can
+  // pass TICK_STALE_MS, so D-5016's hung arm cannot fire in production; a run of killed passes each left a marker the next pass overwrote,
+  // and the next pass's fresh live marker held every freshness FAIL back (catching-up on falling evidence, lag-unmeasured on a null lag).
+  // The baseline is review 462's: the last tick 6 h old, a 6 h lag.
+  describe('D-5026 a pass that died without its tick', () => {
+    const BASE = { lastTickMs: NOW - 360 * MIN, lagS: 360 * 60 };
+    const live = (ago: number) => ({ pid: 4343, startMs: NOW - ago, live: true });
+    const died = (o: Partial<{ pid: number | null; startMs: number; foundMs: number; count: number }> = {}) =>
+      ({ pid: 4242, startMs: NOW - 40 * MIN, foundMs: NOW - 38 * MIN, count: 1, ...o });
+    it('pin 1: a killed pass, then a young live pass with falling evidence [300,200,100]: FAIL tick-stale naming the death (not WARN catching-up)', () => {
+      const r = healthLib.deriveHealth(base({ ...BASE, bytesBehindLast3: [300, 200, 100], pass: live(0.5 * MIN), passDied: died() }));
+      expect(words(r, 'fail')).toContain('tick-stale');
+      const item = r.fail.find((i) => i.word === 'tick-stale')!;
+      expect(item.detail).toContain('1 scheduled pass(es) since the last tick ended without writing one');
+      expect(item.detail).toContain('pid 4242');
+      expect(item.detail).toContain('started 40 min ago');
+      expect(item.remedy).toBe(healthLib.HEALTH_REMEDIES['tick-stale']);
+      expect(item.remedy).toContain('journalctl --user -u ccd-history-sweep');
+      expect(r.pass).toBeNull();
+    });
+    it('pin 2: the same with an unmeasured lag (lagS null): FAIL tick-stale naming the death (not WARN lag-unmeasured)', () => {
+      const r = healthLib.deriveHealth(base({ ...BASE, lagS: null, pass: live(0.5 * MIN), passDied: died({ count: 3 }) }));
+      expect(words(r, 'fail')).toContain('tick-stale');
+      expect(r.fail.find((i) => i.word === 'tick-stale')!.detail).toContain('3 scheduled pass(es) since the last tick ended without writing one');
+    });
+    it('the death FAILs whether or not a pass is live, once only (no second tick-stale for the old tick), and lag-high is judged as before', () => {
+      for (const pass of [null, live(MIN)]) {
+        const flat = healthLib.deriveHealth(base({ ...BASE, bytesBehindLast3: [100, 100, 100], pass, passDied: died() }));
+        expect(words(flat, 'fail'), `pass ${JSON.stringify(pass)}`).toEqual(['tick-stale', 'lag-high']);
+        expect(flat.fail[0]!.detail).toContain('ended without writing one');
+        const none = healthLib.deriveHealth(base({ lastTickMs: null, lagS: null, shimMtimeMs: NOW - 60 * MIN, pass, passDied: died() }));
+        expect(words(none, 'fail'), 'no tick at all: the record is open, and the no-tick line is not pushed beside it').toEqual(['tick-stale']);
+        expect(none.fail[0]!.detail).toContain('ended without writing one');
+      }
+      expect(words(healthLib.deriveHealth(base({ ...BASE, passDied: died({ pid: null }) })), 'fail')[0]).toBe('tick-stale');
+      expect(healthLib.deriveHealth(base({ ...BASE, passDied: died({ pid: null }) })).fail[0]!.detail).toContain('pid unknown');
+    });
+    it('pin 3: the healthy sequence stays fresh: a record whose start is at or before the last tick (or no record), a fresh last tick and a live young pass: no FAIL', () => {
+      const tick = NOW - 3 * MIN;
+      for (const passDied of [null, undefined, died({ startMs: tick }), died({ startMs: tick - MIN })]) {
+        const r = healthLib.deriveHealth(base({ lastTickMs: tick, pass: live(0.5 * MIN), passDied }));
+        expect(words(r, 'fail'), JSON.stringify(passDied)).toEqual([]);
+      }
+      // One millisecond after the last tick, the record is open.
+      expect(words(healthLib.deriveHealth(base({ lastTickMs: tick, pass: live(0.5 * MIN), passDied: died({ startMs: tick + 1 }) })), 'fail')).toEqual(['tick-stale']);
+    });
+    it('a leftover marker that is NOT live and started after the last tick (or with no tick) is an open death with no record: the failed-record-write case; a live or older one is not', () => {
+      const dead = (startMs: number) => ({ pid: 4242, startMs, live: false });
+      const r = healthLib.deriveHealth(base({ ...BASE, pass: dead(NOW - 3 * MIN) }));
+      expect(words(r, 'fail')).toEqual(['tick-stale', 'lag-high']);
+      expect(r.fail[0]!.detail).toContain('ended without writing one');
+      expect(r.fail[0]!.detail).toContain('pid 4242');
+      expect(healthLib.deriveHealth(base({ lastTickMs: null, lagS: null, pass: dead(NOW - 3 * MIN) })).fail[0]!.detail).toContain('ended without writing one');
+      // Not a death: its start is at or before the last tick (it ticked, then was killed in its journal half), or it is live.
+      expect(words(healthLib.deriveHealth(base({ lastTickMs: NOW - MIN, pass: dead(NOW - 2 * MIN) })), 'fail')).toEqual([]);
+      expect(words(healthLib.deriveHealth(base({ lastTickMs: NOW - MIN, pass: dead(NOW - MIN) })), 'fail')).toEqual([]);
+    });
+    it('a record and a later dead marker count as two: the marker is a pass the record does not name', () => {
+      const r = healthLib.deriveHealth(base({ ...BASE, pass: { pid: 4343, startMs: NOW - 2 * MIN, live: false }, passDied: died({ count: 1 }) }));
+      expect(r.fail[0]!.detail).toContain('2 scheduled pass(es) since the last tick');
+      expect(r.fail[0]!.detail).toContain('pid 4343');
+      expect(r.fail[0]!.detail).toContain('started 2 min ago');
+    });
+    it('the hung arm stays for a pass the kill does not end, beside an open death', () => {
+      const r = healthLib.deriveHealth(base({ ...BASE, pass: { pid: 4343, startMs: NOW - 12 * MIN, live: true }, passDied: died() }));
+      expect(r.fail.map((i) => i.detail).join('\n')).toContain('still running');
+      expect(r.fail.map((i) => i.detail).join('\n')).toContain('ended without writing one');
+    });
+    it('the record grammar: one JSON line, every field present and typed, count at least 1, else null', () => {
+      const ok = '{"pid":4242,"start_ms":1700000000000,"found_ms":1700000120000,"count":2}\n';
+      expect(healthLib.parsePassDied(ok)).toEqual({ pid: 4242, startMs: 1_700_000_000_000, foundMs: 1_700_000_120_000, count: 2 });
+      expect(healthLib.parsePassDied('{"pid":null,"start_ms":1,"found_ms":2,"count":1}')).toEqual({ pid: null, startMs: 1, foundMs: 2, count: 1 });
+      expect(healthLib.formatPassDied(4242, 1_700_000_000_000, 1_700_000_120_000, 2)).toBe(ok);
+      for (const bad of ['', 'x', '[]', 'null', '{}', '{"pid":4242,"start_ms":1,"found_ms":2}', '{"pid":0,"start_ms":1,"found_ms":2,"count":1}',
+        '{"pid":"4242","start_ms":1,"found_ms":2,"count":1}', '{"pid":4242,"start_ms":1.5,"found_ms":2,"count":1}', '{"pid":4242,"start_ms":-1,"found_ms":2,"count":1}',
+        '{"pid":4242,"start_ms":1,"found_ms":2,"count":0}', '{"pid":4242,"start_ms":1,"found_ms":"2","count":1}', '{"pid":4242,"start_ms":1,"found_ms":2,"count":1.5}']) {
+        expect(healthLib.parsePassDied(bad), JSON.stringify(bad)).toBeNull();
+      }
+    });
   });
   // Task 28F item 3: an input status could not read is not a healthy input (the no-overloaded-null rule).
   it('an extras read that failed is FAIL status-unreadable naming what could not be read, beside whatever else was measured', () => {

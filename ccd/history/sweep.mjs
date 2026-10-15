@@ -54,7 +54,7 @@ import {
   makeBelt, beltUnits, BELT_META, BELT_NODES_STEP, BELT_COUNTERS, REDACT_SOURCES_META, normalizeRedactSources, parseBeltState, formatBeltState,
   decideBelt, beltAfterGeneration, BELT_VERSION, beltWitnessMoved,
   REDERIVE_SLICE_MS, REDERIVE_SLICE_BYTES,
-  REASONS, TMUX_DEADLINE_MS, decideOpGate, formOf, parseOpMarker, formatPassMarker, procStartOf, bootIdOf, parseOpVerbArgs, BIND_KINDS, paneReadWanted,
+  REASONS, TMUX_DEADLINE_MS, decideOpGate, formOf, parseOpMarker, formatPassMarker, parsePassMarker, decidePassLive, parsePassDied, formatPassDied, procStartOf, bootIdOf, parseOpVerbArgs, BIND_KINDS, paneReadWanted,
   HARNESS_TABLE, exportDates, dueTranscriptKeys, shortestRetentionHome, planExport, retentionLowered, parseJournalRecord,
   decideRecallOff, recallOffPath, decideReparse, REPARSE_MAX_TARGETS, planCopy, STORE_DB_REL,
   diffForeignKeys, ftsTablesHealthy, FTS_REBUILD_STEP, decideCounterResets, decideIntegrity,
@@ -3363,21 +3363,73 @@ export function procIdentityOf(pid) {
   }
 }
 
+/** D-5026 (history-pass-death-record): before a scheduled pass writes its own marker it reads the one it finds. No marker is no
+ *  death (the previous pass ended through its `finally`). A marker that parses and whose pass is LIVE is no death either (it cannot
+ *  happen under the sweep lock; the pass goes on as it did). A marker with no live pass behind it is a pass that ended without its
+ *  `finally`: the carrier's kill at 10 min (the unit's TimeoutStartSec), the OOM killer, a SIGKILL. A marker that is there and cannot be
+ *  read or parsed is a death of an unknown pass (pid null; its start is bounded above by THIS pass's start). Either is recorded in
+ *  `pass-died` (pid, start, this pass's start, and the count of deaths since the last tick: the previous record's plus one when a
+ *  parseable record stands, else 1), and doctor FAILs until a pass writes a tick, which removes the record (`clearPassDied`).
+ *  Answers false only when the record could not be written: the caller then leaves the dead marker standing, which doctor reads as
+ *  the same death. */
+function recordPassDeath(P, startMs) {
+  const found = readBounded(P.pass, CONTROL_FILE_MAX, false);
+  if (found.state === 'absent') return true;
+  let pid = null;
+  let deadStartMs = startMs;
+  if (found.state === 'value') {
+    const pm = parsePassMarker(found.value.trim());
+    if (pm !== null) {
+      if (decidePassLive(pm, procIdentityOf(pm.pid))) return true;
+      pid = pm.pid;
+      deadStartMs = pm.startMs;
+    }
+  }
+  const prior = readBounded(P.passDied, CONTROL_FILE_MAX, false);
+  const was = prior.state === 'value' ? parsePassDied(prior.value.trim()) : null;
+  try {
+    writeFileAtomic(P.passDied, formatPassDied(pid, deadStartMs, startMs, was === null ? 1 : was.count + 1), 0o600);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Removed once a pass's ticks row is committed (recordTick): only a tick written by a pass that ran clears the death record. Best
+ *  effort: a leftover whose start is at or before the last tick is closed by doctor's comparison alone. A held, migrating or
+ *  refused pass writes no tick and never reaches this. */
+function clearPassDied(home) {
+  try { removeEntry(historyPaths(home).passDied); } catch { /* closed by the comparison against the last tick */ }
+}
+
 /** Written under the lock when a scheduled pass starts (D-5016 history-doctor-reads-a-live-pass): the pass's pid, its start
  *  and its identity. A pass that cannot measure its own identity (no /proc) writes none, and a write that fails (no history
  *  root yet) is skipped: the marker is evidence for doctor and never a condition of the pass, and no marker reads as no
- *  live pass, which is how the box was judged before. A stale marker is overwritten, or removed when none can be written. */
+ *  live pass, which is how the box was judged before. The marker it finds is recorded as a death first (recordPassDeath, D-5026);
+ *  a stale one is then overwritten, or removed when none can be written. Answers true when this pass owns the name (the marker
+ *  it wrote, or tried to), and false when it left the name alone: a pass whose death record could not be written leaves the dead
+ *  marker standing, so doctor still sees it. Only an owner removes the marker (removePassMarker). */
 function writePassMarker(P, nowMs) {
+  let owned = false;
   try {
-    removeEntry(P.pass);
     const identity = procIdentityOf(process.pid);
-    if (identity !== null) writeFileAtomic(P.pass, formatPassMarker(process.pid, nowMs, identity), 0o600);
+    if (identity === null) {
+      removeEntry(P.pass);
+      return false;
+    }
+    if (!recordPassDeath(P, nowMs)) return false;
+    removeEntry(P.pass);
+    owned = true;
+    writeFileAtomic(P.pass, formatPassMarker(process.pid, nowMs, identity), 0o600);
   } catch { /* evidence only: the pass goes on without it */ }
+  return owned;
 }
 
-/** Removed when the pass ends, on every exit path (scheduledPass's finally). A killed pass leaves its marker, which
- *  reads as not live (its identity no longer measures) and which the next pass overwrites. */
-function removePassMarker(P) {
+/** Removed when the pass ends, on every exit path (scheduledPass's finally), by the pass that wrote it only (`owned`): a pass
+ *  that left a dead marker standing for doctor (its death record could not be written) must not remove it (D-5026). A killed
+ *  pass leaves its marker, which reads as not live (its identity no longer measures) and which the next pass records and overwrites. */
+function removePassMarker(P, owned) {
+  if (!owned) return;
   try { removeEntry(P.pass); } catch { /* a leftover reads as not live */ }
 }
 
@@ -3394,12 +3446,13 @@ export async function scheduledPass(parsed, deps, out) {
     out('history-sweep: store-create-refused-role');
     return EXIT.OK;
   }
-  // D-5016: the pass marker stands from here, before any long step, to the pass's end.
-  writePassMarker(P, now());
+  // D-5016: the pass marker stands from here, before any long step, to the pass's end. D-5026: a marker found here is recorded as a
+  // death before it is overwritten, and a pass that could not record it leaves it standing and runs without a marker of its own.
+  const owned = writePassMarker(P, now());
   try {
     return await scheduledPassBody(parsed, deps, out, P, now, role);
   } finally {
-    removePassMarker(P);
+    removePassMarker(P, owned);
   }
 }
 
@@ -4358,6 +4411,7 @@ export function recordTick(db, ctx, ing) {
     if (behind.files === 0) setMeta(db, 'last_zero_behind_ms', String(ctx.nowMs));
     stampBeltWitness(db);   // W1-B2 Task 7B (R-rollback): the pass ends with every one of its own writes witnessed
   });
+  clearPassDied(ctx.home);   // D-5026: this pass ran and its tick row is committed; a death recorded before it is answered
   try {
     appendJournal(ctx.home, ctx.ids, [journalRecord('tick', ctx.nowMs, { lag_ms: lagMs })], ctx.nowMs);
   } catch (e) {

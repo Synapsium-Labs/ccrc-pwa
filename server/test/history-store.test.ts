@@ -347,6 +347,20 @@ describe('store.mjs: the binding', () => {
     for (const keep of ['pass', 'pass.tmp.x', 'passes.tmp.7']) expect(fs.existsSync(path.join(P.root, keep)), `CONTROL: ${keep} stays`).toBe(true);
   });
 
+  // D-5026: the death record is written with writeFileAtomic too, so a killed write's temp is swept like the marker's.
+  it('a pass-died.tmp.<pid> a killed record write left is swept by removeStaleAtomicTemps; the record itself and look-alikes are not (D-5026)', () => {
+    const h = home();
+    const P = historyPaths(h);
+    fs.mkdirSync(P.root, { recursive: true });
+    fs.writeFileSync(path.join(P.root, 'pass-died.tmp.4242'), 'x');
+    fs.writeFileSync(path.join(P.root, 'pass-died'), '{}\n');
+    fs.writeFileSync(path.join(P.root, 'pass-died.tmp.x'), 'x');
+    fs.writeFileSync(path.join(P.root, 'pass-diedx.tmp.7'), 'x');
+    expect(removeStaleAtomicTemps(h), 'only the record\'s temp').toEqual(['pass-died.tmp.4242']);
+    expect(fs.existsSync(path.join(P.root, 'pass-died.tmp.4242'))).toBe(false);
+    for (const keep of ['pass-died', 'pass-died.tmp.x', 'pass-diedx.tmp.7']) expect(fs.existsSync(path.join(P.root, keep)), `CONTROL: ${keep} stays`).toBe(true);
+  });
+
   it('mkdirDurable fsyncs every parent that gained an entry, top-down, and nothing when the directory exists (review 316 F23)', () => {
     const base = home();
     const first = recordDirFsyncs(() => mkdirDurable(`${base}/a/b/c`));

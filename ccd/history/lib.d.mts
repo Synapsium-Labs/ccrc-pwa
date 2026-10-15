@@ -121,7 +121,7 @@ export interface HistoryPaths {
   /** SQLite's rollback journal beside the DB (`history.db-journal`), not the history journal. */
   readonly journalFile: string;
   readonly backups: string; readonly storeId: string; readonly pending: string; readonly writer: string;
-  readonly op: string; readonly pass: string; readonly lock: string; readonly off: string; readonly cap: string;
+  readonly op: string; readonly pass: string; readonly passDied: string; readonly lock: string; readonly off: string; readonly cap: string;
   readonly ccrcEnv: string; readonly accountsSh: string; readonly reg: string; readonly shim: string;
 }
 export function historyPaths(home: string): HistoryPaths;
@@ -363,6 +363,10 @@ export function parseOpMarker(text: string): { verb: string; pid: number; startM
 export interface ProcIdentity { readonly procStart: string; readonly bootId: string }
 export function parsePassMarker(text: string): { pid: number; startMs: number; procStart: string; bootId: string } | null;
 export function formatPassMarker(pid: number, startMs: number, identity: ProcIdentity): string;
+/** D-5026: the death record `~/.ccrc/history/pass-died` (one JSON line), or null when it is not in that grammar. */
+export interface PassDied { readonly pid: number | null; readonly startMs: number; readonly foundMs: number; readonly count: number }
+export function parsePassDied(text: string): PassDied | null;
+export function formatPassDied(pid: number | null, startMs: number, foundMs: number, count: number): string;
 export function procStartOf(statText: string): string | null;
 export function bootIdOf(text: string): string | null;
 export function decidePassLive(marker: { procStart: string; bootId: string } | null, identityNow: ProcIdentity | null): boolean;
@@ -393,6 +397,8 @@ export interface HealthInputs {
   readonly op: null | { readonly verb: string; readonly pid: number; readonly alive: boolean };
   /** D-5016: the scheduled pass's marker as status measured it; `live` only when its identity measured equal. */
   readonly pass: null | { readonly pid: number; readonly startMs: number; readonly live: boolean };
+  /** D-5026: the record a pass left when it found a pass that ended without its tick (status's `pass_died`); absent reads as null. An unreadable record is not null: it rides extrasUnmeasured. */
+  readonly passDied?: PassDied | null;
   readonly bytesBehindLast3: readonly number[];
   readonly fts: string | null;
   readonly modesWrong: readonly ModeWrong[];

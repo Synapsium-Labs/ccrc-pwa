@@ -36,7 +36,7 @@ import { pathToFileURL } from 'node:url';
 import {
   EXIT, COVERAGE, SCHEMA_VERSION, UUID_RE, HARNESSES, CLI_STAT_DEADLINE_MS,
   historyPaths, readBoxEnvValue, decideCliStore, CONTROL_FILE_MAX, decideStatusRead, capOf, floorThreshold, exportHorizonDays, parseOpMarker,
-  decideStatusReadFailure, RETENTION_STATE_META, decideGrepIndex, parsePassMarker, decidePassLive,
+  decideStatusReadFailure, RETENTION_STATE_META, decideGrepIndex, parsePassMarker, decidePassLive, parsePassDied,
 } from './lib.mjs';
 import { StoreError, measureStoreFacts, openReader, userVersion, measuredSize, readBounded, FTS_GATE_SQL, ftsGateFactsOn } from './store.mjs';
 // The health block's own imports (task 28). Namespace imports, so this block
@@ -176,7 +176,7 @@ function emptyEnvelope(P) {
     },
     retention: { lowered: null, unmeasured: [] },
     redact_unreadable: [],
-    recovering: null, op: null, pass: null, history_off: false, shim_mtime_ms: null,
+    recovering: null, op: null, pass: null, pass_died: null, history_off: false, shim_mtime_ms: null,
     counters: {},
     health: { pass: null, warn: [], fail: [] },
   };
@@ -209,6 +209,15 @@ function boxFacts(env, P) {
   const pt = readTrimmed(P.pass);
   const pm = pt === null ? null : parsePassMarker(pt);
   env.pass = pm === null ? null : { pid: pm.pid, start_ms: pm.startMs, live: decidePassLive(pm, procIdentityOf(pm.pid)) };
+  // D-5026 (history-pass-death-record): the record a pass left when it found a pass that ended without its tick. Null is ABSENT
+  // only; a record that is there and cannot be read or is not in the grammar is 'unmeasured' (as `lag` is), never null, so
+  // healthInputsOf names it in the unmeasured extras and doctor FAILs status-unreadable for it, never "no death".
+  const pd = readBounded(P.passDied, CONTROL_FILE_MAX, false);
+  if (pd.state === 'absent') env.pass_died = null;
+  else {
+    const rec = pd.state === 'value' ? parsePassDied(pd.value.trim()) : null;
+    env.pass_died = rec === null ? 'unmeasured' : { pid: rec.pid, start_ms: rec.startMs, found_ms: rec.foundMs, count: rec.count };
+  }
 }
 
 /** This store's journal (bytes, newest UTC month) and every OTHER store's directory beside it, listed and
@@ -1220,6 +1229,10 @@ function healthInputsOf(env, x, nowMs) {
       : null,
     op: env.op ? { verb: env.op.verb, pid: env.op.pid, alive: env.op.alive === true } : null,
     pass: env.pass ? { pid: env.pass.pid, startMs: env.pass.start_ms, live: env.pass.live === true } : null,
+    // D-5026: the death record, or null when there is none; an unreadable one is named in extrasUnmeasured below, never read as none.
+    passDied: env.pass_died && env.pass_died !== 'unmeasured'
+      ? { pid: env.pass_died.pid, startMs: env.pass_died.start_ms, foundMs: env.pass_died.found_ms, count: env.pass_died.count }
+      : null,
     // The envelope lists the newest tick first; deriveHealth's catching-up rule reads oldest first.
     bytesBehindLast3: [...(env.bytes_behind_last3 ?? [])].map(Number).reverse(),
     fts: env.fts ?? null,
@@ -1246,7 +1259,7 @@ function healthInputsOf(env, x, nowMs) {
     spoolNodesRefused: x.spoolNodesRefused,
     exportSegmentNewer: x.exportSegmentNewer,
     exportSegmentMissing: x.exportSegmentMissing,
-    extrasUnmeasured: x.unmeasured,
+    extrasUnmeasured: env.pass_died === 'unmeasured' ? [...x.unmeasured, 'pass-died'] : x.unmeasured,
     // Two measurements of one condition, either enough: the sweep's own record of a failed append on a
     // DB-open pass (Task 24's meta `journal_unwritable`, carried as `journal.unwritable` by Task 27), and
     // its consequence on disk, a held file never journaled (oldestUnjournaledMs, judged by lib.mjs's
