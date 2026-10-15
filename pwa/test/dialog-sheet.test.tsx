@@ -1594,6 +1594,70 @@ describe('own words go through the free-text row (D-5090)', () => {
     expect(call).toHaveBeenLastCalledWith(SESSION_ID, later.id, 4, 'water, please');
   });
 
+  it('after echo-failed with only part of the text in the row, the text stays in view, and Send types it once the row is cleared', async () => {
+    // The toast must promise only what the sheet then offers: a row holding PART of the text is not the stranded
+    // retry (the route refuses it, `not-free-text`), so the sheet keeps the text in view, says to clear the row in the
+    // terminal, and Send types the whole text into the row once it is empty again. Both sheets: the scraped one reads
+    // the row from its own call. DERIVED: the recorded typed row (`cc300-ask-freetext-walk-3-typed`) holding the
+    // text's first 22 characters, as a capture taken while tmux was typing shows it.
+    for (const ask of [CACHING_TRACING, null]) {
+      const call = vi.spyOn(api, 'answerDialogText')
+        .mockRejectedValueOnce(refused('echo-failed'))
+        .mockReturnValueOnce(new Promise(() => {}));
+      const q2 = pane('cc300-ask-same-labels-q2');
+      const { store } = renderAsk(ask, q2);
+      const where = ask === null ? 'scraped' : 'envelope';
+      type(TEXT);
+      fireEvent.click(send());
+      const said = await screen.findByText(DIALOG_TEXT_REFUSE_TEXT['echo-failed']);
+      expect(said.textContent, where).toMatch(/still here/i);
+      expect(said.textContent, `${where}: the toast promised a retry the route refuses`).not.toMatch(/submits what/i);
+
+      const typed = pane('cc300-ask-freetext-walk-3-typed');
+      const partial: Dialog = {
+        ...typed,
+        id: `${typed.id}-partial`,
+        options: typed.options.map((o) => (o.index === 3 ? { ...o, label: TEXT.slice(0, 22) } : o)),
+      };
+      act(() => store.getState().apply({ type: 'dialog', dialog: partial }));
+      expect(field(), `${where}: the operator's text was hidden`).toHaveValue(TEXT);
+      expect(send(), where).toBeDisabled();
+      expect(screen.getByText(/holds only part of your answer/i), where).toBeInTheDocument();
+      expect(screen.queryByText(/already holds other text/i), where).toBeNull();
+      // Not the stranded retry: Send would not submit what the row holds, and the text is the operator's to edit.
+      expect(screen.queryByText(/typed in the terminal but not sent yet/i), where).toBeNull();
+      expect(field(), where).not.toHaveAttribute('readonly');
+      expect(screen.queryByText(TEXT.slice(0, 22), { selector: '.opt-label' }), where).toBeNull();
+      fireEvent.submit(field().form!);
+      expect(call, `${where}: the partial row was sent into`).toHaveBeenCalledTimes(1);
+
+      // Cleared in the terminal: the placeholder again, and Send types the whole text.
+      act(() => store.getState().apply({ type: 'dialog', dialog: q2 }));
+      expect(send(), where).toBeEnabled();
+      fireEvent.click(send());
+      expect(call, where).toHaveBeenLastCalledWith(SESSION_ID, q2.id, 3, TEXT);
+      cleanup();
+      vi.restoreAllMocks();
+    }
+  });
+
+  it('text typed here stays in view when the terminal row fills with other text', () => {
+    // Not sent yet: the operator typed in the field, then text was typed into the row in the terminal (DERIVED: the
+    // recorded typed row holding other words). The field keeps the operator's text, Send waits, and the line says why.
+    const text = vi.spyOn(api, 'answerDialogText').mockReturnValue(new Promise(() => {}));
+    const { store } = renderAsk(CACHING_TRACING, pane('cc300-ask-same-labels-q2'));
+    type('only in production');
+    const typed = pane('cc300-ask-freetext-walk-3-typed');
+    act(() => store.getState().apply({ type: 'dialog', dialog: {
+      ...typed, id: 'other-words', options: typed.options.map((o) => (o.index === 3 ? { ...o, label: 'never' } : o)),
+    } }));
+    expect(field()).toHaveValue('only in production');
+    expect(send()).toBeDisabled();
+    expect(screen.getByText(/already holds other text/i)).toBeInTheDocument();
+    fireEvent.submit(field().form!);
+    expect(text).not.toHaveBeenCalled();
+  });
+
   it('ok clears the text, and question 2 is answerable', async () => {
     vi.spyOn(api, 'answerDialogText').mockResolvedValue(undefined);
     const q1 = pane('cc300-ask-same-labels-q1');

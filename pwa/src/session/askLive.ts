@@ -238,6 +238,15 @@ export function slotHolds(slot: FreeTextSlot, text: string): boolean {
   return slot.kind === 'held' && slot.text === rowText({ label: text });
 }
 
+/** Does the slot hold only the START of `text`, by the same echo rule? A capture taken while tmux was typing, or an
+ *  echo that failed part way, leaves the row holding a prefix of the answer. The route refuses to type after it
+ *  (`not-free-text`: typing would append), so it is the terminal's to clear; once it is, Send types the whole text. */
+export function slotHoldsPart(slot: FreeTextSlot, text: string): boolean {
+  if (slot.kind !== 'held' || slot.text === '') return false;
+  const whole = rowText({ label: text });
+  return whole !== slot.text && whole.startsWith(slot.text);
+}
+
 /** The `Chat about this` row of a parsed pane (`CHAT_ABOUT_ROW_RE`), or undefined. A tap on it declines the WHOLE ask
  *  so the user can talk it over (measured), which both sheets say on the row itself (D-5090). */
 export function chatRow(dialog: Dialog): Dialog['options'][number] | undefined {

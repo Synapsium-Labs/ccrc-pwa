@@ -18,6 +18,8 @@ import {
   questionKey,
   reviewSummary,
   rowText,
+  slotHolds,
+  slotHoldsPart,
   titleMatches,
   wantedTicks,
 } from '../src/session/askLive';
@@ -330,6 +332,21 @@ describe('freeTextSlot: the free-text row under the question\'s n options (D-509
     expect(freeTextSlot(pane('cc300-ask-multiselect-next-open'), null)).toEqual({ kind: 'none' });
     // DERIVED: a recorded menu marked unparsed keeps its rows, and still offers no slot.
     expect(freeTextSlot(screen('cc300-ask-same-labels-q2', { parsed: false }), 2)).toEqual({ kind: 'none' });
+  });
+
+  it('slotHolds and slotHoldsPart: the whole kept text, or only its start', () => {
+    const typed = freeTextSlot(pane('cc300-ask-freetext-walk-3-typed'), 2);
+    const text = '- only in staging, sampled 10%';
+    expect(slotHolds(typed, text)).toBe(true);
+    expect(slotHoldsPart(typed, text), 'the whole text is not a part of it').toBe(false);
+    // The echo rule on both sides: whitespace collapsed, ends trimmed.
+    expect(slotHoldsPart(typed, `${text} and nightly`)).toBe(true);
+    expect(slotHoldsPart(typed, '-  only in staging,   sampled 10% and nightly ')).toBe(true);
+    expect(slotHoldsPart(typed, 'only in staging')).toBe(false);
+    // `Mango`, typed in the terminal, is not the start of another answer.
+    expect(slotHoldsPart(freeTextSlot(pane('cc300-ask-freetext-held'), 2), 'Apple and Mango')).toBe(false);
+    expect(slotHoldsPart(freeTextSlot(pane('cc300-ask-same-labels-q2'), 2), text), 'an empty row').toBe(false);
+    expect(slotHoldsPart({ kind: 'held', index: 3, text: '' }, text), 'an empty held text is no part').toBe(false);
   });
 
   it('rowText is the server\'s echo rule: label, then description, whitespace collapsed', () => {

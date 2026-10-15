@@ -18,7 +18,9 @@
 import { useId, type ReactNode } from 'react';
 import type { Dialog, DialogMulti, HookAskQuestion } from '../../../shared/api';
 import { Button, EYEBROW, OptionRow } from '@ccrc/ui';
-import { commitsToReview, paneTicks, reviewSummary, slotHolds, wantedTicks, type FreeTextSlot } from './askLive';
+import {
+  commitsToReview, paneTicks, reviewSummary, slotHolds, slotHoldsPart, wantedTicks, type FreeTextSlot,
+} from './askLive';
 import {
   MULTI_FREE_TEXT_TICKED, cursorOffOptions, cursorPlace, multiHeld, ownWordsCount, ownWordsHeld,
 } from './askWords';
@@ -198,6 +200,11 @@ const noWordsRow = (chat: string): string =>
 /** The free-text row already holds text the operator did not send from here: typing would append to it. */
 const ROW_HOLDS_OTHER = "The terminal's own-words row already holds other text — finish or clear it there.";
 
+/** The free-text row holds the start of the kept text: an attempt typed part of it (or the capture caught tmux part
+ *  way). The route will not type after it, so the row is the terminal's to clear; then Send types the whole text. */
+const WORDS_PART =
+  "The terminal's own-words row holds only part of your answer — clear it there, and Send types the whole of it.";
+
 /** The free-text row holds exactly the kept text: a refused attempt typed it and never pressed Enter. */
 const WORDS_STRANDED = 'Your answer is typed in the terminal but not sent yet — Send submits it.';
 
@@ -212,7 +219,10 @@ const CHAT_DECLINES = 'Declines this ask so you can talk it over in the chat.';
  *  - `empty`: the field and Send, which types the text into that row (`api.answerDialogText`, through `onSend`);
  *  - `held` with exactly the kept text: the stranded-text retry. The field keeps the text, read-only (the row holds
  *    that text and no other would be accepted), and Send submits what the terminal holds without typing it again;
- *  - `held` with other text: one line, no field;
+ *  - `held` with other text: one line saying why Send waits, and the field with the operator's own text whenever
+ *    there is any, never hidden behind the line: the start of it (an echo that failed part way) is the terminal's to
+ *    clear, anything else to finish or clear there; once the row is empty again Send types the text;
+ *  - `held` with other text and nothing typed here: the line alone;
  *  - `none`: one line pointing to `Chat about this`, when the pane has that row; nothing when it does not (a menu
  *    that is not an AskUserQuestion, whose own text rows are the next effort).
  * While a send is under way none of that is read: the field shows the text, disabled, and Send is busy, whatever the
@@ -238,16 +248,20 @@ export function OwnWords({
   const countId = useId();
   const busy = wordsBusy(call);
   let row: number;
+  // The row holds text the route would not type after: part of the operator's own, or someone else's.
+  let taken: 'part' | 'other' | null = null;
   if (call !== null && busy) {
     row = call.row;
   } else if (slot.kind === 'none') {
     return chat !== null ? <p className="dlg-copy">{noWordsRow(chat)}</p> : null;
   } else if (slot.kind === 'held' && !slotHolds(slot, text)) {
-    return <p className="dlg-copy">{ROW_HOLDS_OTHER}</p>;
+    if (text.trim() === '') return <p className="dlg-copy">{ROW_HOLDS_OTHER}</p>;
+    taken = slotHoldsPart(slot, text) ? 'part' : 'other';
+    row = slot.index;
   } else {
     row = slot.index;
   }
-  const stranded = !busy && slot.kind === 'held';
+  const stranded = !busy && slot.kind === 'held' && taken === null;
   const held = ownWordsHeld(text);
   // Near the limit, how much of it the text uses; over it, why Send waits. Never a silent cut (`ownWordsHeld`).
   const count = ownWordsCount(text);
@@ -257,7 +271,7 @@ export function OwnWords({
         className="dlg-reply"
         onSubmit={(e) => {
           e.preventDefault();
-          if (!busy && !locked && held === null) onSend(row);
+          if (!busy && !locked && held === null && taken === null) onSend(row);
         }}
       >
         <input
@@ -274,7 +288,7 @@ export function OwnWords({
         <button
           type="submit"
           className="dlg-reply-send"
-          disabled={busy || locked || held !== null}
+          disabled={busy || locked || held !== null || taken !== null}
           aria-busy={busy || undefined}
         >
           Send
@@ -283,6 +297,8 @@ export function OwnWords({
       </form>
       {count !== null && <p className="dlg-copy" id={countId}>{count}</p>}
       {stranded && <p className="dlg-copy">{WORDS_STRANDED}</p>}
+      {taken === 'part' && <p className="dlg-copy">{WORDS_PART}</p>}
+      {taken === 'other' && <p className="dlg-copy">{ROW_HOLDS_OTHER}</p>}
       {held === 'semicolon' && <p className="dlg-copy">{TRAILING_SEMICOLON}</p>}
     </>
   );

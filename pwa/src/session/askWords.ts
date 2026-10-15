@@ -13,21 +13,27 @@ import {
 } from '../../../shared/api';
 import { ApiError, failedTo, sendErrorText } from '../lib/api';
 
-/** What the sheet says when the free-text route refuses, by its code. Every refusal leaves the text in the field
- *  (D-5090: kept until a call answers ok), so none of these asks the operator to type it again. */
+/** Every own-words refusal leaves the text in the field (D-5090: kept until a call answers ok), and the sentences that
+ *  could leave the operator wondering say so in these words. */
+const TEXT_KEPT = 'Your text is still here.';
+
+/** What the sheet says when the free-text route refuses, by its code. Every refusal leaves the text in the field, so
+ *  none of these asks the operator to type it again, and none promises a next step the sheet does not then offer:
+ *  what is left to do is said on the sheet itself, under the field, from what the pane shows next. */
 export const DIALOG_TEXT_REFUSE_TEXT: Readonly<Record<DialogTextRefuseCode, string>> = {
   'bad-text': `That answer can't be typed into the terminal — one line, no tabs, at most ${DIALOG_TEXT_MAX} characters.`,
   // The composer's own sentence for the same fact, read rather than spelled again.
   'not-alive': sendErrorText('not-alive'),
-  'stale-dialog': 'That question moved on in the terminal, so nothing was typed. Your text is still here.',
+  'stale-dialog': `That question moved on in the terminal, so nothing was typed. ${TEXT_KEPT}`,
   'not-free-text': "The terminal's own-words row holds something else, so nothing was typed. Finish or clear it there.",
   // The footer's edit hint is one of the focus proofs, and a box where no external editor resolves never paints it
   // (D-5047), so a refusal that repeats is the terminal's to answer.
   'focus-failed':
     "The terminal didn't show its own-words row ready for typing, so nothing was typed. If this repeats, answer in the terminal.",
-  // The text may be left in the row, and the server's retry arm submits exactly that text without typing it again:
-  // the sheet then offers the stranded retry (`OwnWords`).
-  'echo-failed': "Typed it, but the terminal never showed it back, so it wasn't sent. Send again submits what's there.",
+  // The row may be left holding all of the text, part of it, or none. The sheet then says which, under the field
+  // (`OwnWords`): all of it is the stranded retry (the server's retry arm submits exactly that text without typing it
+  // again), part of it is the terminal's to clear first, none of it is an ordinary Send.
+  'echo-failed': `Typed it, but the terminal never showed it back, so it wasn't sent. ${TEXT_KEPT}`,
 };
 
 const isDialogTextRefuseCode = (code: string): code is DialogTextRefuseCode =>
