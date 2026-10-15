@@ -1007,10 +1007,14 @@ describe('Review 450 F3: the no-listing page\'s fetch note stops counting at the
     expect(container.textContent).not.toContain('again in 0s');
   });
 
-  it('review 460 F12: the page\'s 1 s clock stops at the end of its wait: no timer of its own stays pending afterwards', async () => {
+  it('review 460 F12: the page\'s 1 s clock stops at the end of its wait: no timer of its own is pending one tick after it', async () => {
     vi.useFakeTimers();
     const f = fakeLoaders({ tree: failedAnswer('unresolved-ref') });
-    f.refresh.mockResolvedValueOnce(tooSoon(2000)).mockResolvedValueOnce(tooSoon(4000));
+    let until = 0;
+    f.refresh.mockResolvedValueOnce(tooSoon(2000)).mockImplementationOnce(async () => {
+      until = Date.now() + 4000;
+      return tooSoon(4000);
+    });
     const { container } = open('/docs/demo?ref=ws/a', f);
     await advance(10);
     // What is pending with no wait at all: the page's own timers, none of them the 1 s clock.
@@ -1024,8 +1028,13 @@ describe('Review 450 F3: the no-listing page\'s fetch note stops counting at the
     expect(f.refresh).toHaveBeenCalledTimes(2);
     expect(noteText(container)).toMatch(/^fetched moments ago; again in [1-4]s$/);
     expect(vi.getTimerCount()).toBeGreaterThan(idle);
-    // Past the end of the second wait by several seconds: the note is gone and so is the clock.
-    await advance(10_000);
+    // The clock's first tick at or after `until` lands within one second of it and renders with the wait over, so
+    // just past that second the note is gone and so is the clock (a clock that ran on any longer stays pending here).
+    expect(until).toBeGreaterThan(0);
+    await advance(until - 1 - Date.now());
+    expect(vi.getTimerCount()).toBeGreaterThan(idle);
+    await advance(1002);
+    expect(Date.now()).toBe(until + 1001);
     expect(noteText(container)).toBeUndefined();
     expect(vi.getTimerCount()).toBe(idle);
     await advance(60_000);
