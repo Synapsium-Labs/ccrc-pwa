@@ -1419,8 +1419,9 @@ button.metachip:active {
   border-color: var(--ink-on-well);
 }
 /* The row `⋯` opens (D-5007, spec 2026-10-14 §5.4): a line of its own under
-   the primary keys and the history door, its keys wrapping rather than
-   scrolling. */
+   the primary keys and the history door, in four groups (`quarters`) that wrap
+   whole rather than scroll, so no line is ever `ctrl` alone — it was, from 360
+   to 393px, when the thirteen caps wrapped one by one. */
 .term-keys-more {
   flex: 1 0 100%;
   display: flex;

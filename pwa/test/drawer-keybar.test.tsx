@@ -38,6 +38,7 @@ import {
   barBreak,
   ctrlCode,
   exitNoticeShowing,
+  quarters,
   guardedKey,
   type KeyName,
 } from '../src/session/keyBar';
@@ -617,9 +618,11 @@ interface BarModel {
   gap: number;
 }
 /** The bar as rendered (the halves and the caps in each) with the widths the
- *  model gives them. `.term-keys-more` is a line of its own and is left out. */
+ *  model gives them. `.term-keys-more` is a line of its own and is left out;
+ *  handed the overflow row itself, the same reads its groups. */
 function barModel(toolbar: Element): BarModel {
-  const gap = varPx(declValue(ruleIn(chatCss, '.term-keys'), 'gap'));
+  const own = toolbar.classList.contains('term-keys-more') ? '.term-keys-more' : '.term-keys';
+  const gap = varPx(declValue(ruleIn(chatCss, own), 'gap'));
   const pad = varPx(declValue(ruleIn(chatCss, '.term-keys'), 'padding'));
   const items: string[][] = [];
   const widths: number[] = [];
@@ -694,6 +697,12 @@ describe('the bar wraps when it does not fit, at any width (key-bar-wraps-when-i
     expect(barBreak(2)).toBe(1);
   });
 
+  it('quarters: halves of halves, the larger first, every cap in one', () => {
+    expect(quarters(13)).toEqual([4, 3, 3, 3]);
+    expect(quarters(12)).toEqual([3, 3, 3, 3]);
+    expect(quarters(10)).toEqual([3, 2, 3, 2]);
+  });
+
   it('wrapped: two halves, esc ↑ ↓ ⏎ and ^C ⌫ ⋯ with the history door, each growing by its stretching caps', () => {
     render(<Wrapped send={vi.fn()} action={door} />);
     const toolbar = screen.getByRole('toolbar', { name: 'Terminal keys' });
@@ -738,6 +747,34 @@ describe('the bar wraps when it does not fit, at any width (key-bar-wraps-when-i
     const withMore = ls.find((l) => l.caps.includes('⋯'))!;
     expect(withMore.caps, '⋯ spends a line on itself').toEqual(expect.arrayContaining(['^C', '⌫', '⋯', 'hist']));
     for (const l of ls) expect(l.caps.length, `a lone cap on a line at ${px}px`).toBeGreaterThan(1);
+  });
+
+  it('the row ⋯ opens is four groups, so wherever it wraps no cap is left alone on a line', () => {
+    render(<Wrapped send={vi.fn()} action={door} />);
+    fireEvent.click(screen.getByRole('button', { name: 'More keys' }));
+    const more = document.querySelector('.term-keys-more')!;
+    const groups = Array.from(more.children) as HTMLElement[];
+    expect(groups.map(legends)).toEqual([
+      ['←', '→', 'tab', '⇧tab'], ['space', 'PgUp', 'PgDn'], ['^U', '^O', '^R'], ['^T', '^B', 'ctrl'],
+    ]);
+    for (const g of groups) expect(g.classList.contains('term-keys-seq')).toBe(true);
+    // Each grows by its keys; `ctrl` is an action and keeps its width.
+    expect(groups.map((g) => g.style.flexGrow)).toEqual(['4', '3', '3', '2']);
+  });
+
+  it.each([
+    [320, 4], [360, 3], [390, 3], [414, 3], [430, 2], [438, 2], [460, 2], [600, 2], [1280, 1],
+  ])('the row ⋯ opens at %ipx: %i line(s), nothing clipped, no cap alone (ctrl was, from 360 to 393)', (px, n) => {
+    render(<Wrapped send={vi.fn()} action={door} />);
+    fireEvent.click(screen.getByRole('button', { name: 'More keys' }));
+    const bar = barModel(screen.getByRole('toolbar', { name: 'Terminal keys' }));
+    const more = barModel(document.querySelector('.term-keys-more')!);
+    const ls = lines({ ...more, pad: bar.pad }, px);
+    expect(ls, `${px}px`).toHaveLength(n);
+    for (const l of ls) {
+      expect(l.px, `a line clips at ${px}px: ${l.caps.join(' ')}`).toBeLessThanOrEqual(px - 2 * bar.pad);
+      expect(l.caps.length, `a lone cap at ${px}px: ${l.caps.join(' ')}`).toBeGreaterThan(1);
+    }
   });
 
   it.each([

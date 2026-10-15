@@ -33,6 +33,7 @@ import {
   PRIMARY_KEYS,
   barBreak,
   ctrlCode,
+  quarters,
   exitNoticeShowing,
   guardedKey,
   type KeyName,
@@ -227,6 +228,21 @@ export function KeyBar(props: KeyBarProps): ReactNode {
     );
   };
 
+  /** The overflow row's caps in `quarters`, each group growing by its caps
+   *  that stretch (the `ctrl` latch keeps its width, as `⋯` does). */
+  const groups = (caps: readonly { node: ReactNode; stretches: boolean }[]): ReactNode => {
+    let at = 0;
+    return quarters(caps.length).map((n) => {
+      const g = caps.slice(at, at + n);
+      at += n;
+      return (
+        <div key={at} className="term-keys-seq" style={{ flexGrow: g.filter((c) => c.stretches).length }}>
+          {g.map((c) => c.node)}
+        </div>
+      );
+    });
+  };
+
   if (props.view === 'grid') {
     return (
       <div className="term-keys term-keys--grid" role="toolbar" aria-label="Terminal keys">
@@ -258,16 +274,24 @@ export function KeyBar(props: KeyBarProps): ReactNode {
       )}
       {more && (
         <div className="term-keys-more" role="group" aria-label="More terminal keys">
-          {OVERFLOW_KEYS.map(cap)}
-          <Keycap
-            className="keycap--act"
-            aria-label="Control"
-            aria-pressed={latch.latched}
-            onPointerDown={keepFocus}
-            onClick={() => latch.setLatched(!latch.latched)}
-          >
-            <span aria-hidden="true">ctrl</span>
-          </Keycap>
+          {groups([
+            ...OVERFLOW_KEYS.map((k) => ({ node: cap(k), stretches: true })),
+            {
+              node: (
+                <Keycap
+                  key="ctrl"
+                  className="keycap--act"
+                  aria-label="Control"
+                  aria-pressed={latch.latched}
+                  onPointerDown={keepFocus}
+                  onClick={() => latch.setLatched(!latch.latched)}
+                >
+                  <span aria-hidden="true">ctrl</span>
+                </Keycap>
+              ),
+              stretches: false,
+            },
+          ])}
         </div>
       )}
     </div>

@@ -137,6 +137,21 @@ export function barBreak(caps: number): number {
   return Math.ceil(caps / 2);
 }
 
+/**
+ * The row `⋯` opens, in four groups: `barBreak` of each half, so the thirteen
+ * caps (its twelve keys and the `ctrl` latch) are `← → tab ⇧tab`,
+ * `space PgUp PgDn`, `^U ^O ^R` and `^T ^B ctrl`. Each group wraps as a whole,
+ * so wherever the row breaks — two lines on an iPhone Pro Max, three on most
+ * phones, four at 320px — every line holds a group of three or more, never
+ * `ctrl` alone (`key-bar-wraps-when-it-does-not-fit`).
+ */
+export function quarters(caps: number): number[] {
+  const half = barBreak(caps);
+  const a = barBreak(half);
+  const b = barBreak(caps - half);
+  return [a, half - a, b, caps - half - b];
+}
+
 /** What ONE key sends, as xterm 6.0.0's `evaluateKeyboardEvent` spells it: one
  *  character; ESC and one character (Alt, or Alt with Enter, Esc or Backspace);
  *  a CSI sequence, parameters and final (the arrows, Home, End, the function and
