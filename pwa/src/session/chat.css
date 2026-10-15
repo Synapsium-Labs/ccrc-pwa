@@ -659,21 +659,29 @@ button.metachip:active {
 .msg-working-label {
   text-transform: uppercase;
 }
-.msg-working-dots {
+/* The three working dots are also the own-words Send's busy face
+   (`.dlg-reply-wait`, AskParts.tsx, D-5090): the same "in flight" mark, one
+   definition. There they paint in Send's busy ink (below, by the Send rules),
+   and they are narrower than the word Send, so a busy Send never widens. */
+.msg-working-dots,
+.dlg-reply-wait {
   display: inline-flex;
   gap: 3px;
 }
-.msg-working-dots i {
+.msg-working-dots i,
+.dlg-reply-wait i {
   width: 4px;
   height: 4px;
   border-radius: var(--r-full);
   background: var(--accent);
   animation: working-dot 1.2s ease-in-out infinite;
 }
-.msg-working-dots i:nth-child(2) {
+.msg-working-dots i:nth-child(2),
+.dlg-reply-wait i:nth-child(2) {
   animation-delay: 0.18s;
 }
-.msg-working-dots i:nth-child(3) {
+.msg-working-dots i:nth-child(3),
+.dlg-reply-wait i:nth-child(3) {
   animation-delay: 0.36s;
 }
 @keyframes working-dot {
@@ -690,7 +698,8 @@ button.metachip:active {
 }
 @media (prefers-reduced-motion: reduce) {
   .msg-working-glyph,
-  .msg-working-dots i {
+  .msg-working-dots i,
+  .dlg-reply-wait i {
     animation: none;
   }
   .msg-working-glyph {
@@ -960,12 +969,31 @@ button.metachip:active {
   padding-top: var(--sp-3);
 }
 
-/* Answer in your own words (declines the menu, sends the text) + the raw
-   "show full question" view for menus whose detail the tappable rows can't hold. */
+/* Answer in your own words (AskParts.tsx's `OwnWords`, D-5090: typed into the
+   question's free-text row, never sent by declining the menu) + the raw "show
+   full question" view for menus whose detail the tappable rows can't hold.
+   `.dlg-words` is the whole region, the field and its lines or a line alone:
+   the same margin above and below, so the field sits as far from the Chat
+   row's rule under it as from the last option above it, and its 2px focus
+   ring (offset 1px) clears both; its lines follow the field at one gap. */
+.dlg-words {
+  display: grid;
+  gap: var(--sp-2);
+  margin: var(--sp-3) 0;
+}
+.dlg-words .dlg-copy {
+  margin: 0;
+}
+/* A one-line note straight under a list of rows (a multiSelect question's
+   notes under its boxes, AskParts.tsx's `MultiPick`, D-5091) sits as far
+   below the last row's rule as the own-words region does; `.dlg-copy` has
+   only a bottom margin, so without this the note sat flush on the rule. */
+.opts + .dlg-copy {
+  margin-top: var(--sp-3);
+}
 .dlg-reply {
   display: flex;
   gap: var(--sp-2);
-  margin-top: var(--sp-3);
 }
 .dlg-reply-input {
   flex: 1;
@@ -980,16 +1008,40 @@ button.metachip:active {
      on a #141715 well — 1.09:1, i.e. black on black. What you have typed is
      invisible. --ink-on-well reads 15.52 / 13.98. */
   color: var(--ink-on-well);
-  font: var(--weight-regular) var(--fs-base) / 1.3 var(--family-ui);
+  /* `--fs-input` (16px), not `--fs-base`: iOS Safari zooms the viewport on
+     focus below 16px, and this field is the phone's own-words path (D-5090). */
+  font: var(--weight-regular) var(--fs-input) / 1.3 var(--family-ui);
 }
 /* --syn-comment, not --ink-tertiary: the syntax palette is declared once in
    :root and never re-declared for light precisely because it renders on the
    (always dark) glass, so it is the only muted ink that survives here —
    6.41 dark / 5.77 light, against --ink-tertiary's 3.17 in light. */
 .dlg-reply-input::placeholder { color: var(--syn-comment); }
+/* Inert while a send is under way (its own, an option's, or a commit's): the
+   text stays legible in the placeholder's muted ink, which reads on the
+   always-dark well in both themes, and the frame goes dashed, so the field no
+   longer looks typeable. Safari paints a disabled field's text through
+   -webkit-text-fill-color and dims it with its own opacity; both are set so
+   every engine shows the same field. */
+.dlg-reply-input:disabled {
+  color: var(--syn-comment);
+  -webkit-text-fill-color: var(--syn-comment);
+  opacity: 1;
+  border-style: dashed;
+  cursor: default;
+}
 .dlg-reply-input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; border-color: transparent; }
+/* Send and its busy face share one grid cell (AskParts.tsx), so the button is
+   as wide as the wider face whichever shows: its width never changes while
+   busy, and neither does the field's beside it. The busy face is the chat's
+   three working dots (named `Sending…` for a screen reader only), narrower
+   than the word Send, so the wider face is always the idle word and Send
+   never takes width from the field: at 360 the field's text box keeps its
+   whole placeholder (the arithmetic is pinned in dialog-sheet.test.tsx). */
 .dlg-reply-send {
   flex: none;
+  display: grid;
+  place-items: center;
   min-height: var(--tap-min);
   padding: 0 var(--sp-4);
   border: 1px solid var(--edge-subtle);
@@ -1000,7 +1052,17 @@ button.metachip:active {
   cursor: pointer;
   transition: color var(--dur-fast) var(--curve-swift), border-color var(--dur-fast) var(--curve-swift);
 }
+.dlg-reply-send > span {
+  grid-area: 1 / 1;
+}
+.dlg-reply-send > [aria-hidden='true'] {
+  visibility: hidden;
+}
 .dlg-reply-send:disabled { color: var(--ink-tertiary); cursor: default; }
+/* Busy is the answer in flight, in the ink `.opt-wait` says "answering…" in;
+   the dots take it from here rather than the chat's accent. */
+.dlg-reply-send[aria-busy='true'] { color: var(--status-busy-text); }
+.dlg-reply-wait i { background: currentColor; }
 .dlg-reply-send:not(:disabled):hover { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 40%, transparent); }
 .dlg-details-toggle {
   margin-top: var(--sp-3);
@@ -1023,16 +1085,19 @@ button.metachip:active {
   gap: var(--sp-2);
 }
 
-/* The hook envelope (EnvelopeSheet in DialogSheet.tsx) — I3: carried no
+/* The hook envelope (EnvelopeSheet.tsx) — I3: carried no
    rules of its own before this. Its children (.dlg-copy/.opts/.dlg-actions
    above) already set their own spacing, so this exists as a stable
    selector, not a source of new layout. */
 .ask-envelope {
   display: block;
 }
-/* Further questions in a multi-question envelope: read-only (only the first
-   question is ever tappable — see DialogSheet's file header). I3: before
-   this they were visually identical to the live rows above them — muted by
+/* The other questions of a multi-question ask (AskParts.tsx's
+   `OtherQuestions`): one read-only row per question, its number, text and
+   header chip. D-5089: the tappable question is the one the PANE is
+   painting, not the first, so these are the ones the pane is not showing,
+   and each becomes tappable when it is. I3: before this they were visually
+   identical to the live rows above them — muted by
    .opt[aria-disabled='true'] now, but a colour change alone is easy to
    miss, so the section also gets its own separator and label. */
 .ask-envelope-more {
