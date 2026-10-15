@@ -237,3 +237,22 @@ describe('_spawn_start carries the routing record (routing spec 2026-09-14 §5.2
     expect(h.reg('myid', 'inert')).toBeNull();
   });
 });
+
+describe('the pressure-reap key follows the execution kind, not the provider', () => {
+  it('an external Claude Code shim receives the pressure key on primary and retry without adopting Anthropic route semantics', () => {
+    gptLane(); seed('myid', 'gpt');
+    h.sh('_reg_set myid class opus; _reg_set myid effort high; _reg_set myid subagent sonnet; _reg_set myid workflow on');
+    const [primary, retry] = spawnBoth('myid');
+    for (const line of [primary!, retry!]) {
+      expect(line.match(/CLAUDE_CODE_DISABLE_BG_SHELL_PRESSURE_REAP=1/g)).toHaveLength(1);
+      expect(line.indexOf('CLAUDE_CODE_DISABLE_BG_SHELL_PRESSURE_REAP=1'))
+        .toBeLessThan(line.indexOf('/.local/bin/gpt'));
+      expect(line).toContain(`'${h.home}/.local/bin/gpt' --model opus `);
+      expect(line).not.toContain('--remote-control');
+      expect(line).not.toContain('--settings');
+      expect(line).not.toContain('--effort');
+      expect(line).not.toContain('CLAUDE_CODE_SUBAGENT_MODEL');
+    }
+    expect(h.reg('myid', 'inert')).toBe('effort,workflow,subagent');
+  });
+});

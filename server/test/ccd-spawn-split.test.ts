@@ -861,3 +861,26 @@ describe('ws-add --no-rc — the per-session rc field', () => {
     expect(news[0]).toContain('--resume');
   });
 });
+
+describe('_spawn_start: plain tmux placement (no systemd-run) forwards the pressure variable', () => {
+  it('plain tmux placement forwards the same pressure-bearing command', () => {
+    seed('myid');
+    h.sh(`sleep() { :; };
+      command() { [[ "$*" == '-v systemd-run' ]] && return 1; builtin command "$@"; };
+      tmux() {
+        printf 'tmux %s\\n' "$*" >> "$HOME/ccd-calls";
+        case "$1" in
+          list-sessions) return 1 ;;
+          new-session) : > "$HOME/pane-up" ;;
+          has-session) [[ -e "$HOME/pane-up" ]] ;;
+        esac
+        return 0;
+      };
+      _spawn_start myid new`);
+    const lines = newSessions();
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toContain('exec env COLORTERM=truecolor ');
+    expect(lines[0]).toContain('CLAUDE_CODE_DISABLE_BG_SHELL_PRESSURE_REAP=1');
+    expect(lines[0]).toContain("--session-id 'deadbeef-0000-4000-8000-000000000000' --dangerously-skip-permissions");
+  });
+});

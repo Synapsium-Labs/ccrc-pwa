@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=ca3a62cd1e810809c14e1c8517d0497e6d3359713d45a1aea78d83ab3df91d13
+# ccrc:generated 1 sha256=1d25e8812a8aead69f8d96819330047710d9c3f7cc86a6569007bbaf109599c1
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -22330,8 +22330,8 @@ _tmux_new_session() {   # argv for `tmux new-session` -> runs it, PLACING the se
 # safe value — full fidelity, per the failure direction below.
 SPAWN_FROMSWAP=0
 
-_resume_env() {   # -> one line of KEY=value assignments for `env`, switching on Claude Code's interrupted-turn resume (D-2227)
-  local out="CLAUDE_CODE_RESUME_INTERRUPTED_TURN=$RESUME_INTERRUPTED_TURN CLAUDE_CODE_RESUME_PROMPT='$RESUME_PROMPT'"
+_resume_env() {   # -> one line of `env` assignments: Claude Code's interrupted-turn resume (D-2227) and its pressure-reap opt-out
+  local out="CLAUDE_CODE_RESUME_INTERRUPTED_TURN=$RESUME_INTERRUPTED_TURN CLAUDE_CODE_RESUME_PROMPT='$RESUME_PROMPT' CLAUDE_CODE_DISABLE_BG_SHELL_PRESSURE_REAP=1"
   [[ -n "$RESUME_REDRIVE_MAX_AGE_MS" ]] && out="$out CLAUDE_CODE_RESUME_INTERRUPTED_TURN_MAX_AGE_MS=$RESUME_REDRIVE_MAX_AGE_MS"
   printf '%s' "$out"
 }

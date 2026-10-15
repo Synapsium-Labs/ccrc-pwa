@@ -903,7 +903,7 @@ Then from `server/`, sequentially:
 
 A valid empty write is required to be green; merely checking a failed nonempty write misses the empty-record regression. Restore any permission-mutated fixture in its own cleanup; never widen a permission case to read a real proc root.
 
-- [ ] **Step 11: Measure each residue mutation, restore, and review the first commit.**
+- [x] **Step 11: Measure each residue mutation, restore, and review the first commit.**
 
 | Mutation | Must-red owner |
 |---|---|
@@ -978,6 +978,8 @@ Measured on the dispatched workspace branch at base `a3cebde1b`, from `server/`,
 
 **Concerns.** (a) `_ss_stat` now refuses a state letter outside `[A-Z]`; Linux also prints lowercase `t` (tracing stop). Such a process reads as unreadable, so a box with a traced process carries `box-stat` rather than judging: fail-safe, not unsafe, and the plan's own fixture rule. (b) The malformed-clock rows `99999999999999999 cpu0=7` and `123 cpu0=none` are not independently red under the clock-bound mutation (see table). (c) The refused-argument stage-6 cases print argparse usage to the test's stderr; the cases pass.
 
+Independent Opus/high task review: one Critical (plan-mandated reader why-class) fixed in fix round 1 as D-4316; scoped re-review: all findings addressed.
+
 ### Task 2: Compose the pressure variable for every supported Claude Code spawn
 
 **Files:**
@@ -991,7 +993,7 @@ Measured on the dispatched workspace branch at base `a3cebde1b`, from `server/`,
 - Produces: the same line with exactly one `CLAUDE_CODE_DISABLE_BG_SHELL_PRESSURE_REAP=1` assignment before the wrapper executable. No new argument, return shape, setting or roster field.
 - Applicability: every currently supported launcher is Claude Code: upstream, generated wrappers, the `exec.kind=codex` wrapper through `ccrc-codex`, and approved external Claude Code shims. Provider/telemetry is not the execution target. A future native executable must use its own composition or discard this Claude Code key; introducing that target is not this wave.
 
-- [ ] **Step 1: Add independent composer and branch-presence tests.**
+- [x] **Step 1: Add independent composer and branch-presence tests.**
 
 In `ccd-resume-flag.test.ts`, use its existing `seed`, `TMUX`, `RESUME_DIES` and `newSessions` helpers. These assertions do not derive the expected variable from `_resume_env`, so a disconnected or emptied composer cannot self-confirm:
 
@@ -1084,7 +1086,7 @@ it('plain tmux placement forwards the same pressure-bearing command', () => {
 });
 ```
 
-- [ ] **Step 2: Pin generated-wrapper inheritance without changing the launcher.**
+- [x] **Step 2: Pin generated-wrapper inheritance without changing the launcher.**
 
 In `ccrc-codex-launcher.test.ts`, extend the existing `STUB_CLAUDE` recorder's `for v in ...` line to include `CLAUDE_CODE_DISABLE_BG_SHELL_PRESSURE_REAP`; record only this non-secret value, never all environment values. Keep the existing wrapper/materialiser/reverse-map integration test and add `env` to its `run` call:
 
@@ -1105,7 +1107,7 @@ expect(recText(b, 'claude.pid').trim()).toBe(String(r.pid));
 
 This exercises the REAL generated wrapper and REAL launcher through their final upstream `exec`, with a stubbed upstream executable and fixture-only tier startup. No shipped edit to `shared/wrapper.mjs` or `ccd/ccrc-codex` is needed. The existing `wrapper-generate` codex-target case remains the independent grammar pin.
 
-- [ ] **Step 3: Run the new cases red before editing the composer.**
+- [x] **Step 3: Run the new cases red before editing the composer.**
 
 From `server/`, foreground and sequentially:
 
@@ -1118,7 +1120,7 @@ From `server/`, foreground and sequentially:
 
 Expected: presence cases fail because the composer has no key; wrapper inheritance is an already-green control. Record actual results, not this forecast. The inherited-key test is not proof that ccd supplied it; only the command/composer cases prove that.
 
-- [ ] **Step 4: Change the shared composition once.**
+- [x] **Step 4: Change the shared composition once.**
 
 Replace `_resume_env`'s existing `local out` line, in place:
 
@@ -1128,7 +1130,7 @@ Replace `_resume_env`'s existing `local out` line, in place:
 
 Keep optional max-age composition and `printf` unchanged. Amend its one-line function comment in place to say it composes Claude Code resume and pressure-reap assignments. Do not edit either `exec env` call, `_tmux_new_session`, generation locking, route flags, Remote Control gating or generated wrappers. This preserves `genenv` before `COLORTERM`, the resume/route environment before the wrapper, and all argv order. It adds no `_reg_get` call.
 
-- [ ] **Step 5: Stamp and run owning/neighbor gates green.**
+- [x] **Step 5: Stamp and run owning/neighbor gates green.**
 
 Run the shared generated/mode/census/citation procedures, then from `server/`, one process at a time:
 
@@ -1140,7 +1142,7 @@ Run the shared generated/mode/census/citation procedures, then from `server/`, o
 
 The neighboring byte-exact expectations that read `_resume_env` need no copied prompt/key literal. Any unexpectedly hard-coded expected command is widened by its exact new assignment only, never by loosening `toBe` to a substring. The generation-environment spelling stays contiguous before `COLORTERM`, so the lifecycle purge guard must not be relaxed.
 
-- [ ] **Step 6: Measure these mutations and restore green.**
+- [x] **Step 6: Measure these mutations and restore green.**
 
 | Mutation | Must-red owner |
 |---|---|
@@ -1153,9 +1155,45 @@ The neighboring byte-exact expectations that read `_resume_env` need no copied p
 
 Mutations are fixture-only edits of this task's exact bytes; each must produce an observed RED. Restore the launcher after its mutation even though it is not a shipped task edit. Restamp ccd and rerun all affected cases green.
 
-- [ ] **Step 7: Commit Task 2 alone after the fresh reviewer gate.**
+- [x] **Step 7: Commit Task 2 alone after the fresh reviewer gate.**
 
 Commit subject: `fix(ccd): disable background-shell pressure reap in child spawns`. Include only composer/tests and genuinely measured citation movement, plus the in-plan evidence. Keep the first-commit residue in Task 1's commit. Do not restart sessions to make this assignment take effect.
+
+#### Execution evidence (Task 2)
+
+Measured on the dispatched workspace branch at base `5d2a8c8ba`, from `server/`, foreground, `--maxWorkers=1`, fixture HOMEs only. Steps 1-6 are done; Step 7 is ticked for the commit itself, and its fresh-reviewer gate belongs to the controller and is not claimed here.
+
+**Red, before the composer edit (Step 3).**
+
+| Owner | Red | What reddened |
+|---|---|---|
+| `ccd-resume-flag.test.ts -t pressure-reap` | 5 failed, 1 passed (12) | both composer cases (max-age empty and 3600000), the `new` and `resume` primary cases and the retry case (`Target cannot be null or undefined`: no assignment to match). The child-scope no-export control passed, as it should before any export exists. |
+| `ccd-route-spawn.test.ts -t 'external Claude Code shim'` | 1 failed (20) | the external shim case (same null match) |
+| `ccd-spawn-split.test.ts -t 'plain tmux placement'` | 1 failed (54) | `expected 'tmux new-session -d -s cc-myid -x 220...' to contain 'CLAUDE_CODE_DISABLE_BG_SHELL_PRESSURE...'` |
+| `ccrc-codex-launcher.test.ts -t 'REAL wrapper'` | 1 passed (30) | already green, as forecast: the control proves only inheritance, not that ccd supplied the key |
+
+**Edit (Step 4).** `_resume_env`'s `local out` line and its one-line comment, in place, no line added or removed; no `exec env` call, `_tmux_new_session`, route flag or wrapper touched. `shared/wrapper.mjs` and `ccd/ccrc-codex` are unchanged (sha256 verified).
+
+**Green (Step 5).** Restamped with the shared node command; `node shared/mark.mjs --check ccd/ccd` reports `ccrc-unmodified` (exit 0), `bash -n ccd/ccd` clean, mode 775 before and after. `ccd-resume-flag` + `ccd-spawn-split` 66 passed; `ccd-route-spawn` + `ccd-route-degrade` + `ccd-lifecycle-purge` 95 passed; `ccrc-codex-launcher` + `wrapper-generate` 41 passed; `ownership` + `ccd-reg-get-census` + `ccd-die-containment` 29 passed. Neighbor byte-exact expectations read `_resume_env`, so none needed widening.
+
+**Mutations (Step 6): mutation -> observed red owner case, then restored byte for byte (sha256 of `ccd/ccd`, `ccd/ccrc-codex` and `shared/wrapper.mjs` verified identical to the pre-mutation copies; ccd restamped for each ccd mutation).**
+
+| Mutation | Observed red owner |
+|---|---|
+| Remove the assignment from `_resume_env` | 7: both composer cases, `new`/`resume` primary, the retry case, the external shim case, plain tmux placement. The whole-command cases stayed green by design: their expected line is read from `_resume_env` itself. |
+| `_is_anthropic_backend` gate (assignment moved out of `_resume_env` into a gated append after `resenv=$(_resume_env)`) | the external shim case (both commands); the composer cases, because the assignment left `_resume_env`; and the byte-exact whole-command, remote-control and flag-file cases that read `_resume_env` (9 in all) |
+| Drop `$resenv` from the PRIMARY only | primary presence (`new`, `resume`, plain tmux placement), the retry case's primary line, the shim case, and the whole-command shape cases (17) |
+| Drop `$resenv` from the RETRY only | `the --session-id fallback line carries it as well`, the retry presence case, the shim case, and the retry-line whole-command cases (8) |
+| Export the key globally as well as composing it (`export` inside `_resume_env`) | `composing a child command does not export the key into ccd itself` only (1) |
+| Strip the inherited key before the launcher's final `exec` (`exec env -u ... "$cx_upbin"`, fixture-only in `ccd/ccrc-codex`) | `composes with the REAL wrapper, the REAL materialiser and the REAL reverse map` (1) |
+
+**Census.** `_reg_get` before: 209 calls on 178 lines; after: 209 on 178 (no mover, existing header sentence untouched).
+
+**Citation tax (S6-R11).** Instrument from the child-reclamation predecessor plan, extracted to private scratch, run with base `5d2a8c8ba` and `--maxWorkers=1`: `byFile['ccd/ccd']` stated 147, base 147, tree 147; `total` stated 202, base 202, tree 202; other keys moved: none; byFile composition entered [] left []; row array stated 55, base 55, tree 55 (entered [] left []); site array stated 35, base 35, tree 35 (entered [] left []). The edit changes no line count in `ccd/ccd`, so no cited line moved. README carries no `ccd/ccd:<line>` anchor at all, so the historical re-pointer (which insists on exactly two) was not applicable and README is untouched. The frozen documents are unchanged against `origin/main`. The citation cases are green (7 passed).
+
+**Candidate departures (to be numbered by the controller, none assigned here).** None. Two plan-snippet adjustments, neither changing a contract: the external-shim case reads `[primary, retry]` with non-null assertions (`primary!`, `retry!`) for the strict compiler, and each new group sits in its own top-level `describe` at the end of its file.
+
+**Concerns.** The `remove` and `_is_anthropic_backend` mutations also redden byte-exact cases that derive their expectation from `_resume_env`, so those cases are secondary owners; the independent presence cases are the primary ones.
 
 ### Task 3: Keep outgoing operator choice before a live UUID rotation
 
