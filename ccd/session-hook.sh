@@ -2966,7 +2966,7 @@ _hook_history_card() {   # folds the history line into CARD_COMPACT; silent; bui
   if [[ "${CCRC_SESSION_GENERATION:-}" =~ $uuid_re ]]; then
     gen="$CCRC_SESSION_GENERATION" via=session
   elif _ct_read "$REG/$id.generation"; [[ -e "$REG/$id.generation" || -L "$REG/$id.generation" ]]; then
-    if [[ -L "$REG/$id.generation" ]] || (( CT_RAWN >= CCRC_ID_MAX )) || { IFS= read -r -d '' -n "$CCRC_ID_MAX" x 2>/dev/null < "$REG/$id.generation" && (( ${#x} < CCRC_ID_MAX )); }; then via=bad; elif [[ "$CT_V" =~ $uuid_re ]]; then gen="$CT_V" via=registry; elif [[ -n "$CT_V" ]]; then via=bad; fi
+    if [[ -L "$REG/$id.generation" ]] || (( CT_RAWN >= CCRC_ID_MAX )) || { IFS= read -r -d '' -n "$CCRC_ID_MAX" x 2>/dev/null < "$REG/$id.generation"; }; then via=bad; elif [[ "$CT_V" =~ $uuid_re ]]; then gen="$CT_V" via=registry; elif [[ -n "$CT_V" ]]; then via=bad; fi
   fi
   [[ -L "$off" || -L "${off%/*}" || ( -e "${off%/*}" && ! ( -d "${off%/*}" && -x "${off%/*}" ) ) ]] && return 0
   if [[ -e "$off" ]]; then
@@ -2977,7 +2977,7 @@ _hook_history_card() {   # folds the history line into CARD_COMPACT; silent; bui
     [[ "$o" == *[!0123456789abcdef-]* ]] && return 0
     if [[ "$via" == bad ]]; then return 0; elif [[ -z "$via" ]]; then
       [[ -L "$HISTORY_CARD_DIR/$id/$psid.gen" ]] && return 0
-      _ct_read "$HISTORY_CARD_DIR/$id/$psid.gen" || return 0; (( CT_RAWN >= CCRC_ID_MAX )) && return 0; { IFS= read -r -d '' -n "$CCRC_ID_MAX" x 2>/dev/null < "$HISTORY_CARD_DIR/$id/$psid.gen" && (( ${#x} < CCRC_ID_MAX )); } && return 0
+      _ct_read "$HISTORY_CARD_DIR/$id/$psid.gen" || return 0; (( CT_RAWN >= CCRC_ID_MAX )) && return 0; { IFS= read -r -d '' -n "$CCRC_ID_MAX" x 2>/dev/null < "$HISTORY_CARD_DIR/$id/$psid.gen"; } && return 0
       [[ -z "$CT_V" || "$CT_V" =~ $uuid_re ]] || return 0
       gen="$CT_V"
     fi
