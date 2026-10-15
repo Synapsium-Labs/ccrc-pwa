@@ -26,7 +26,7 @@
 // (h) a glass the terminal cannot measure changes nothing: the type and the
 //     clip stay as they were, and nothing is sent (plan Refinement 9).
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { act, cleanup, fireEvent, render } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, within } from '@testing-library/react';
 import type { Terminal as XTerm } from '@xterm/xterm';
 import type { DrawerTerm, MakeTerm } from '../src/session/terminalFactory';
 import { PINNED_WINDOW_COLS, PINNED_WINDOW_ROWS, TMUX_STATUS_ROWS } from '../../shared/api';
@@ -240,7 +240,7 @@ describe('the attach dials the window\'s own size (D-5005)', () => {
     before = t.probes.length;
     glass.width = 390;
     resizeWindow();
-    expect(view.baseElement.querySelector('.term-clip'), 'the clip never changed').not.toBeNull();
+    expect(view.baseElement.querySelector('.term-wrap'), 'the clip never changed the view').not.toBeNull();
     await frame();
     refits('the clip changing', before);
     glass.width = 1700;
@@ -413,8 +413,10 @@ describe('a glass the terminal cannot measure keeps what it has (Refinement 9)',
   // applied, this file run alone, restored): null raises the clip → the first
   // case RED; null clears the clip → the second RED; null re-types to the base
   // size → both RED; null treated as a phone (base size and clip) → both RED.
+  // The clip's reading since Task 9 (D-5005): the view chip, whose name says
+  // the window is wider than the glass exactly when it is.
   const clipNotice = (view: ReturnType<typeof render>): Element | null =>
-    view.baseElement.querySelector('.term-clip');
+    within(view.baseElement).queryByRole('button', { name: /columns wide/ });
 
   it('(h) keeps a fitted type, and raises no clip it never measured', async () => {
     const t = fakeTerm();

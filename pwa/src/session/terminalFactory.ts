@@ -379,7 +379,18 @@ export const defaultMakeTerm: MakeTerm = () => {
       const sub = term.onWriteParsed(cb);
       return () => sub.dispose();
     },
-    focus: () => term.focus(),
+    // A FOCUS THAT SCROLLS NOTHING. In the wrapped view this textarea is in a
+    // host moved off-screen, and a tap on the view focuses it so the keyboard
+    // types live (operator ruling R-LIVE, 2026-10-15); a focus that scrolled
+    // it into view would drag the sheet sideways under the reader's thumb.
+    // xterm 6.0.0's own `focus()` does exactly this; it is spelled here so an
+    // upgrade that stops doing it reds `drawer-view.test.tsx` rather than
+    // moving the glass.
+    focus: () => {
+      const ta = term.textarea;
+      if (ta === undefined) term.focus();
+      else ta.focus({ preventScroll: true });
+    },
     dispose: () => term.dispose(),
   };
 };

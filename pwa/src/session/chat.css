@@ -1100,19 +1100,59 @@ button.metachip:active {
   flex-direction: column;
   gap: var(--sp-2);
 }
-/* The drawer's header line: the session on the left and, while the window is
-   wider than the glass, the clip notice on the right. It wraps as two whole
-   pieces, so on a narrow phone the notice takes a line of its own instead of
-   breaking mid-word, and the drawer refits for the height it took. It wears
-   the header's own colour and type; nothing here paints. */
+/* The drawer's header line: the session on the left and the chips on the
+   right (the view, and while the wrapped view reports them `paused` and the
+   offer of the grid; D-5005). It wraps as whole pieces, so on a narrow phone
+   the chips take a line of their own instead of breaking mid-word, and the
+   drawer refits for the height they took. */
 .term-eyebrow {
   display: flex;
   flex-wrap: wrap;
+  align-items: center;
   justify-content: space-between;
   gap: var(--sp-1) var(--sp-3);
 }
-.term-clip {
+.term-chips {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2);
   white-space: nowrap;
+}
+/* A chip that is a control (the view's flip, the offer of the grid). The pill
+   is @ccrc/ui's `Chip`; this button around it is bare, and reaches the tap
+   floor through an invisible overlay rather than growing the header line,
+   which on a phone with its keyboard up is glass the terminal needs. The
+   overlay overhangs only the header's own space and the glass's top edge, and
+   what it triggers is a flip the same tap undoes. */
+.term-view {
+  position: relative;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+.term-view::before {
+  content: '';
+  position: absolute;
+  inset: calc((100% - var(--tap-min)) / 2) calc(-1 * var(--sp-1));
+}
+/* Its pill, in the well's own ink, with the border that says "this runs no
+   bytes into the pane" — the history door's and `⋯`'s signal (D-5007). It
+   paints its own ground, the well it sits on, so the contrast gate measures
+   the pair rather than leaving it in its uncovered census. */
+.term-view-pill {
+  color: var(--ink-on-well);
+  background: var(--bg-well);
+  border: 1px solid color-mix(in srgb, var(--ink-on-well) 40%, transparent);
+}
+/* `paused` is a state the reader is in, not a control: inverted, the engaged
+   pair the history door uses, so it reads as "on" at a glance. */
+.term-paused {
+  color: var(--bg-well);
+  background: var(--ink-on-well);
 }
 .term-screen {
   position: relative;
@@ -1132,9 +1172,75 @@ button.metachip:active {
    the operator scrolls it. Contained, so a scroll past either end does not
    drag the sheet behind it. The history layer's host stays `hidden`: its
    drag slides the terminal inside a box that must stay put and clip. */
-.term-host--grid {
+.term-host--grid,
+.term-host--off {
   overflow: auto;
   overscroll-behavior: contain;
+}
+/* The same host, OFF-SCREEN, for the wrapped view (D-5005; operator ruling
+   R-LIVE, 2026-10-15): translated out past the glass's left edge and nothing
+   else, so it keeps the glass's own width and height and overflow. xterm
+   therefore still measures the same glass (`propose`, so the view chooser's
+   verdict cannot flip on the move), still renders, and still takes the
+   keyboard in its textarea, which a tap on the wrapped view focuses. Never
+   `display: none` or `visibility: hidden`: either would take the textarea
+   out of focus and the measurement with it. Measured on the spike in three
+   engines: no page, sheet or glass scroll moves when it has focus. */
+.term-host--off {
+  transform: translateX(calc(-100% - 100vw));
+}
+/* The wrapped view (D-5006): the terminal's screen re-wrapped to the glass at
+   14px (its size is the drawer's constant, set inline), as text. Over the glass
+   rather than in its flow, so the off-screen host keeps its box. It scrolls on
+   its own, follows its bottom (WrappedView's own anchoring, so the browser's
+   is off), and its text is selectable. It paints the well it sits on, so the
+   contrast gate measures its ink. The whole of it is the tap that types
+   (R-LIVE): it is the glass, and never less than a tap tall even on a glass a
+   keyboard has squeezed. */
+.term-wrap {
+  position: absolute;
+  inset: 0;
+  min-height: var(--tap-min);
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  overflow-anchor: none;
+  padding: 0 var(--sp-2);
+  font-family: var(--family-mono);
+  line-height: var(--lh-tight);
+  color: var(--ink-on-well);
+  background: var(--bg-well);
+  white-space: pre;
+  user-select: text;
+  -webkit-user-select: text;
+  cursor: text;
+}
+/* A table row keeps its frame and scrolls sideways on its own, never wraps. */
+.term-wrap-row--table {
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  scrollbar-width: none;
+}
+.term-wrap-row--right {
+  text-align: right;
+}
+/* A rule is drawn as a rule, one line tall, in the colour its glyphs had. */
+.term-wrap-rule {
+  background: linear-gradient(currentColor, currentColor) center / 100% 1px no-repeat;
+}
+/* The composition in progress (a phone keyboard's word, an IME), shown at the
+   caret until it commits: provisional, so underlined and never sent. */
+.term-wrap-ime {
+  text-decoration: underline dotted;
+  text-underline-offset: 2px;
+}
+/* The cell probe W is measured with: in the view's own face, never seen. */
+.term-wrap-probe {
+  position: absolute;
+  top: 0;
+  left: 0;
+  visibility: hidden;
+  pointer-events: none;
 }
 /* The console history — the pane's own scrollback, read with capture-pane and
    laid over the live glass. Same well, same ink: scrolling back must read as

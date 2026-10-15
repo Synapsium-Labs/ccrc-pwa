@@ -10,6 +10,17 @@
 // never the grid. Closing the drawer closes the socket, after which the
 // server restores the session's canonical tmux window size.
 //
+// TWO VIEWS OF THE ONE TERMINAL (D-5005, D-5006, spec 2026-10-14 §5.2). Where
+// the window's 220 columns fit at 11px or more the glass shows the GRID, the
+// terminal itself; everywhere else the WRAPPED view, its screen re-wrapped to
+// the glass as text (`WrappedView`). Which one is `chooseView`'s answer over the
+// type fit, beaten by a per-device chip in the header. The terminal has ONE
+// host in two positions — visible for the grid, moved off-screen for the
+// wrapped view with the glass's own box — and is opened on every pointer, so a
+// tap on the wrapped view types live into xterm's textarea (operator ruling
+// R-LIVE, 2026-10-15). This file decides nothing of that itself: it measures,
+// asks `drawerView.ts`, and places what it was told.
+//
 // THE WHEEL IS NOT PART OF THAT CONVERSATION. tmux attaches this client on the
 // alternate screen, where xterm has no scrollback and turns a wheel notch into
 // arrow keys aimed at the pane — so the wheel is swallowed here and scrolls the
@@ -24,15 +35,20 @@ import {
 import { attachHistoryPane } from './historyPane';
 import { attachReachForHistory } from './reachForHistory';
 import { histFromPane, histFromReadError, type Hist } from './historyRead';
-import { Button, Keycap, Sheet } from '@ccrc/ui';
+import { Button, Chip, Keycap, Sheet } from '@ccrc/ui';
 import { api } from '../lib/api';
 import { checkAuth, onAuthRegained } from '../lib/auth';
 import { useKeyboardInset } from '../lib/keyboard';
 import { wsUrl } from '../lib/ws';
 import { PINNED_WINDOW_COLS } from '../../../shared/api';
-import { BASE_CONSOLE_FONT_PX, consoleFit } from './consoleFit';
+import { BASE_CONSOLE_FONT_PX, consoleFit, type ConsoleFit } from './consoleFit';
 import { rowText } from './drawerModel';
+import {
+  chooseView, readViewOverride, viewChip, writeViewOverride,
+  type DrawerViewKind, type StorageLike,
+} from './drawerView';
 import { KeyBar, useKeyInput } from './KeyBarView';
+import { WrappedView } from './WrappedView';
 import './chat.css';
 
 /** Lines one wheel notch moves — xterm's own default step, and the amount the
@@ -52,6 +68,9 @@ export interface TerminalDrawerProps {
   makeSocket?: (url: string) => WebSocket; // injectable for tests
   makeTerm?: MakeTerm; // injectable for tests
   makeHistoryTerm?: MakeHistoryTerm; // injectable for tests
+  /** Where the view chip's per-device choice is kept; `localStorage` by
+   *  default. Injectable for tests, which hand it a store that throws. */
+  viewStorage?: () => StorageLike;
 }
 
 export function TerminalDrawer({
@@ -61,6 +80,7 @@ export function TerminalDrawer({
   makeSocket,
   makeTerm,
   makeHistoryTerm,
+  viewStorage,
 }: TerminalDrawerProps): ReactNode {
   const [conn, setConn] = useState<Conn>('connecting');
   // Bumped by Reconnect — re-runs the attach effect for a fresh fit + dial.
@@ -83,10 +103,33 @@ export function TerminalDrawer({
    *  the type size can move the history's with it. */
   const histTermRef = useRef<HistoryTerm | null>(null);
   /** True while the glass cannot show the window's 220 columns even at the
-   *  type's floor. tmux pans nothing — the client is the window's size — but
-   *  the host then scrolls sideways, and the reader deserves to be told why
-   *  their lines run off the right of the glass. */
+   *  type's floor: the last MEASURED fit's verdict. It chooses the wrapped view
+   *  unless the chip forced the grid, which then scrolls sideways and says so
+   *  (`grid · scrolls`). */
   const [clipped, setClipped] = useState(false);
+  /** The last measured fit, or null before one: what the view would be with
+   *  no override, which is what the chip's flip compares against. */
+  const fitRef = useRef<ConsoleFit | null>(null);
+  /** The per-device override: read once, at mount, from a store that may
+   *  throw (`readViewOverride`), and held here for this drawer whatever the
+   *  store does with a write. */
+  const store = viewStorage ?? ((): StorageLike => window.localStorage);
+  const [storedOverride] = useState(() => readViewOverride(store));
+  const overrideRef = useRef<DrawerViewKind | null>(storedOverride);
+  /** The view showing. null only until something is measured or chosen: it is
+   *  placed as the grid is (the host visible), and has no chip. */
+  const [view, setView] = useState<DrawerViewKind | null>(() => chooseView(null, storedOverride, null));
+  const viewRef = useRef<DrawerViewKind | null>(view);
+  const showView = (v: DrawerViewKind | null): void => {
+    viewRef.current = v;
+    setView(v);
+  };
+  /** The live terminal while one is attached, for the wrapped view to read. */
+  const [liveTerm, setLiveTerm] = useState<DrawerTerm | null>(null);
+  /** What the wrapped view reports: a selection holding its rows still, and
+   *  a screen that has shown no prompt glyph for two seconds. */
+  const [paused, setPaused] = useState(false);
+  const [notClaude, setNotClaude] = useState(false);
   const refitRef = useRef<(() => void) | null>(null);
   const histRef = useRef<Hist>({ at: 'live' });
   /** WHICH READ, not merely "a read is running". `reading` is a state and two
@@ -148,10 +191,12 @@ export function TerminalDrawer({
    * this fleet's `history-limit` (the measurement is in `PINNED_WINDOW_COLS`'
    * own docstring).
    *
-   * So the glass changes the TYPE SIZE and nothing else. The type shrinks, down
-   * to the floor, until all 220 columns are on screen. Where even the floor
-   * cannot fit them, a phone above all, the console stays at the base size, the
-   * host scrolls sideways, and the drawer's header says why.
+   * So the glass changes the TYPE SIZE and the VIEW, never the grid. The type
+   * shrinks, down to the floor, until all 220 columns are on screen, and the
+   * glass shows the grid. Where even the floor cannot fit them, a phone above
+   * all, the glass shows the wrapped view instead: the same screen re-wrapped
+   * to its width (D-5006). Only a grid the reader forced there with the chip
+   * scrolls sideways, and its chip says so.
    *
    * MEASURED, NEVER RESIZED. Every candidate size is measured with
    * `DrawerTerm.propose`, which does not touch the live grid, and only the chosen
@@ -176,18 +221,55 @@ export function TerminalDrawer({
     // content and animates in, so the first fit can land on an element with no
     // width at all. Taken as a measurement, it would size the type for a glass
     // that does not exist; the later fit recovers, but the reader has already
-    // seen the jump. Nothing measured means nothing changes: the type and the
-    // clip stay as they are, and the first measured fit decides.
-    if (host === null || host.clientWidth <= 0) return;
-    const want = consoleFit((px) => t.propose(px)?.cols ?? null, PINNED_WINDOW_COLS);
-    if (want === null) return;   // unmeasurable: keep what we have
-    t.setFontSize(want.fontSize);
-    fontRef.current = want.fontSize;
-    histTermRef.current?.setFontSize?.(want.fontSize);
-    // The search's own verdict, and a measured one: it answers "fits" only for
-    // a size whose grid it measured at 220 columns or more. The grid the
-    // terminal has says nothing here — it is 220 wide whatever the glass shows.
-    setClipped(want.clipped);
+    // seen the jump. Nothing measured means nothing changes: the type, the clip
+    // and the view stay as they are, and the first measured fit decides.
+    //
+    // ONE MEASUREMENT FOR BOTH POSITIONS. The host keeps the glass's own box
+    // off-screen as well as on it (`.term-host--off` only translates it), and
+    // the terminal is open in it on every pointer, so `propose` measures the
+    // same glass whichever view is showing — and a verdict cannot flip the
+    // view, re-measure a different box and flip it back.
+    const want = host === null || host.clientWidth <= 0
+      ? null
+      : consoleFit((px) => t.propose(px)?.cols ?? null, PINNED_WINDOW_COLS);
+    if (want !== null) {
+      t.setFontSize(want.fontSize);
+      fontRef.current = want.fontSize;
+      histTermRef.current?.setFontSize?.(want.fontSize);
+      // The search's own verdict, and a measured one: it answers "fits" only
+      // for a size whose grid it measured at 220 columns or more. The grid the
+      // terminal has says nothing here — it is 220 wide whatever the glass shows.
+      setClipped(want.clipped);
+      fitRef.current = want;
+    }
+    // THE VIEW IS THE CHOOSER'S (D-5005): the grid where 220 fit, the wrapped
+    // view where they do not, the override over both, and an unmeasured glass
+    // keeping what it shows.
+    showView(chooseView(want, overrideRef.current, viewRef.current));
+  };
+
+  /**
+   * THE VIEW CHIP's flip, kept per device (spec §5.2). Flipping BACK to what
+   * the glass would choose by itself clears the override rather than pinning
+   * it, so a device keeps following its glass until the reader overrules it.
+   * The write may throw away the choice (a private window); the drawer keeps
+   * it all the same, for as long as it is open.
+   */
+  const flipView = (): void => {
+    const next: DrawerViewKind = viewRef.current === 'wrapped' ? 'grid' : 'wrapped';
+    const fit = fitRef.current;
+    const ov = fit !== null && chooseView(fit, null, null) === next ? null : next;
+    overrideRef.current = ov;
+    writeViewOverride(store, ov);
+    showView(chooseView(fit, ov, viewRef.current));
+  };
+
+  /** The not-Claude chip's offer: the grid, for this drawer only. A pane in vim
+   *  is a passing state, and a device that keeps it would open every later
+   *  session in a grid it does not fit. */
+  const gridForNow = (): void => {
+    overrideRef.current = 'grid';
+    showView('grid');
   };
 
   // Frames are inert until the socket reports open — quick keys pressed
@@ -233,17 +315,29 @@ export function TerminalDrawer({
 
     const term = (makeTerm ?? defaultMakeTerm)();
     termRef.current = term;
+    setLiveTerm(term);
     // THE GRID IS THE WINDOW'S, FIRST AND ONCE (D-5005). Pinned before the
     // socket exists, so the first byte tmux sends lands in a grid of the size
     // it was told; and never again, because nothing the glass does is a reason
     // to move it.
     term.pin(ATTACH.cols, ATTACH.rows);
-    // ONE HOST, opened into once. It is always the visible position here.
+    // ONE HOST, opened into once, ON EVERY POINTER (operator ruling R-LIVE,
+    // 2026-10-15). Whichever position the view puts it in, the terminal is
+    // there before the first fit: its own `propose` is the measurement, and
+    // its textarea is what a tap on the wrapped view focuses. So the cell
+    // probe spec §5.2 gave `colsAt` for a terminal never opened has nothing to
+    // serve; the wrapped view's probe sets its width W alone.
     term.open(host);
     // A NEW TERMINAL STARTS AT THE BASE SIZE, whatever the last one settled
     // on, and nothing is known about its clip until it has been measured.
     fontRef.current = BASE_CONSOLE_FONT_PX;
     setClipped(false);
+    fitRef.current = null;
+    // AND NOTHING ABOUT ITS VIEW: the last terminal's was chosen for a glass
+    // this one has not measured (a reopened sheet's is still sliding in). The
+    // override alone stands until the first measured fit decides, which on a
+    // glass that has layout is the fit just below, in this same render.
+    showView(chooseView(null, overrideRef.current, null));
 
     /**
      * THE BOX IS AT THE BOTTOM, and so is the host's scroll. The grid's 51
@@ -395,6 +489,7 @@ export function TerminalDrawer({
         /* already closed */
       }
       termRef.current = null;
+      setLiveTerm(null);
       term.dispose();
       // A re-attach is a fresh pane read: a history captured before the drop
       // is a snapshot of a session that has moved on since.
@@ -423,39 +518,80 @@ export function TerminalDrawer({
   }, [hist, histHost, makeHistoryTerm]);
 
   // The keyboard inset changes the drawer's inner height — refit after paint,
-  // so the host keeps its bottom on the glass that is left. So can the clip
-  // notice: it sits in the header above the glass, and on a narrow phone it
-  // can take the header onto a second line.
+  // so the host keeps its bottom on the glass that is left. So can the chips:
+  // they sit in the header above the glass, and on a narrow phone they can
+  // take the header onto a second line. And a view that changed has moved the
+  // host: back on the glass, the grid keeps its bottom where the box is.
   useEffect(() => {
     if (!open) return undefined;
     const raf = requestAnimationFrame(() => refitRef.current?.());
     return () => cancelAnimationFrame(raf);
-  }, [kbInset, open, clipped]);
+  }, [kbInset, open, clipped, view, paused, notClaude]);
 
   /**
-   * THE CLIP NOTICE, in the drawer's header and not on the glass.
+   * THE CHIPS, in the drawer's header and not on the glass (D-5005).
    *
-   * A clip is a standing condition rather than an event, and on a phone it
-   * lasts the whole session. A strip laid over the live terminal would cover
-   * its top row for as long as the drawer is open, so it goes in the header
-   * line above the glass, beside the session it describes. The visible words
-   * are short enough for a 360px phone; the full sentence is the accessible
-   * name.
+   * The view chip replaced the `pans` notice: it names the view, and its
+   * accessible name says why and what a tap does. A view is a standing
+   * condition, and on a phone it lasts the whole session, so it goes in the
+   * header line beside the session it describes rather than over the glass's
+   * top row. Before anything is measured or chosen there is no view to name,
+   * and no chip.
+   *
+   * Beside it, only while the wrapped view reports them: `paused`, while a
+   * selection holds its rows still, and the offer of the grid on a screen that
+   * has shown no Claude Code prompt for two seconds (vim, less). Neither sends
+   * a byte; a tap on a chip keeps the keyboard where it is.
    */
+  const chip = view === null ? null : viewChip(view, clipped);
   const eyebrow = (
     <span className="term-eyebrow">
       <span>{`terminal · ${id}`}</span>
-      {clipped && (
-        <span
-          className="term-clip"
-          role="status"
-          aria-label={`The session window is ${PINNED_WINDOW_COLS} columns wide, wider than this screen, so the console scrolls sideways`}
-        >
-          {`window ${PINNED_WINDOW_COLS} cols · scrolls`}
-        </span>
-      )}
+      <span className="term-chips">
+        {view === 'wrapped' && paused && (
+          <Chip className="term-paused" role="status" aria-label="Updates paused while text is selected">
+            paused
+          </Chip>
+        )}
+        {view === 'wrapped' && notClaude && (
+          <button
+            type="button"
+            className="term-view"
+            aria-label="This screen shows no Claude Code prompt, so the grid may read better. Show the grid"
+            onPointerDown={(e) => e.preventDefault()}
+            onClick={gridForNow}
+          >
+            <Chip className="term-view-pill">not claude code? grid</Chip>
+          </button>
+        )}
+        {chip !== null && (
+          <button
+            type="button"
+            className="term-view"
+            aria-label={chip.label}
+            onPointerDown={(e) => e.preventDefault()}
+            onClick={flipView}
+          >
+            <Chip className="term-view-pill">{`${chip.legend} ⇄`}</Chip>
+          </button>
+        )}
+      </span>
     </span>
   );
+
+  /**
+   * P4 (operator ruling, 2026-10-15): A PHYSICAL ESCAPE GOES TO CLAUDE CODE.
+   * Radix's dismissable layer, under vaul's sheet, catches Escape on the
+   * document in the capture phase, so with nothing in the way one Esc sent
+   * `\e` to the session AND closed the drawer (measured in every engine on the
+   * spike). While xterm's textarea has focus the dismissal is cancelled; the
+   * keydown still reaches xterm, which sends the `\e`. With focus anywhere else
+   * in the sheet, Escape closes it as it always has.
+   */
+  const keepEscapeInTerminal = (e: KeyboardEvent): void => {
+    const ae = document.activeElement;
+    if (host !== null && ae instanceof HTMLTextAreaElement && host.contains(ae)) e.preventDefault();
+  };
 
   /*
    * THE HISTORY DOOR, beside the key bar and never inside its strip.
@@ -499,12 +635,30 @@ export function TerminalDrawer({
   );
 
   return (
-    <Sheet open={open} onClose={onClose} full title="Terminal" eyebrow={eyebrow}>
+    <Sheet
+      open={open} onClose={onClose} full title="Terminal" eyebrow={eyebrow}
+      onEscapeKeyDown={keepEscapeInTerminal}
+    >
       <div className="term" style={kbInset > 0 ? { paddingBottom: kbInset } : undefined}>
         <div className="term-screen">
-          {/* The live terminal's one host, in its visible position (D-5005):
-              it scrolls where the pinned grid is larger than the glass. */}
-          <div ref={setHost} className="term-host term-host--grid" />
+          {/* The live terminal's ONE host, in one of two positions (D-5005):
+              visible for the grid, where it scrolls if the pinned grid is
+              larger than the glass; off-screen for the wrapped view, keeping
+              the glass's own box, never `display: none`, so xterm still
+              measures, renders and takes the keyboard there. */}
+          <div
+            ref={setHost}
+            className={`term-host ${view === 'wrapped' ? 'term-host--off' : 'term-host--grid'}`}
+          />
+          {view === 'wrapped' && liveTerm !== null && host !== null && (
+            <WrappedView
+              term={liveTerm}
+              host={host}
+              srcCols={ATTACH.cols}
+              onPaused={setPaused}
+              onNotClaude={setNotClaude}
+            />
+          )}
           {/* The history layer sits OVER the live one rather than replacing it:
               the live terminal keeps its socket, its grid and its scroll
               position, so leaving the history is not a re-attach. */}
@@ -547,7 +701,9 @@ export function TerminalDrawer({
             </div>
           )}
         </div>
-        <KeyBar view="grid" guard={keys.guard} action={histDoor} />
+        {view === 'wrapped'
+          ? <KeyBar view="wrapped" guard={keys.guard} latch={keys.latch} action={histDoor} />
+          : <KeyBar view="grid" guard={keys.guard} action={histDoor} />}
       </div>
     </Sheet>
   );

@@ -174,9 +174,12 @@ const clientGrid = (ws: FakeSocket): Grid => {
   return { cols: Number(q.get('cols')), rows: Number(q.get('rows')) };
 };
 
-/** The clip notice, found by the name a screen reader hears. */
+/** The clip notice, found by the name a screen reader hears. Since D-5005 it
+ *  is the view chip: its name says the window is wider than the glass exactly
+ *  when the glass cannot show it (the wrapped view, or a grid forced there),
+ *  and says nothing of the kind where 220 columns fit. */
 const notice = (view: ReturnType<typeof render>): HTMLElement | null =>
-  within(view.baseElement).queryByRole('status', { name: /columns wide/ });
+  within(view.baseElement).queryByRole('button', { name: /columns wide/ });
 
 describe('the glass meets the pinned window', () => {
   it('shrinks the type until the whole window is on screen, and the client stays the window\'s size', () => {
