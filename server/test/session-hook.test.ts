@@ -12033,7 +12033,7 @@ describe('history card line: SessionStart(compact) serves the sweep\'s predictio
   // store's newest family. With no usable record the CLI's answer is the store's, which the hook cannot know:
   // a recall-off file that exists then withholds the line (fail closed), and an absent or unreadable one
   // answers as it does for the CLI whatever the generation.
-  // The one deliberate asymmetry (coordinator ruling R-recalloff-trim): the hook trims ASCII whitespace only, where
+  // A fail-closed row (coordinator ruling R-recalloff-trim, named under R-recalloff-parity): the hook trims ASCII whitespace only, where
   // B2's presenceOf decodes UTF-8 and trims with String.prototype.trim, which also strips U+00A0 and U+FEFF. So a
   // value that holds a character outside the generation grammar after the hook's trim withholds the line: the
   // `G-nbsp` and `G-bom` rows read OFF in the CLI (exit 8) and withhold here. The characters are built from their

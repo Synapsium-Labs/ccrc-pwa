@@ -2923,7 +2923,7 @@ command -v jq >/dev/null 2>&1 || exit 0
 #      chars where the CLI's is 4,096 bytes, so a read that FILLS the window is
 #      OFF before it is trimmed: a hand edit that pads the file past it withholds
 #      the line, never serves one the CLI answers exit 8 for (W2's verb writes
-#      37 bytes). The ONE deliberate asymmetry (coordinator ruling
+#      37 bytes). A named fail-closed row (coordinator ruling
 #      R-recalloff-trim): this trim takes ASCII whitespace only, in every
 #      locale, where the CLI's JS trim also strips U+00A0, U+FEFF and the
 #      Unicode spaces, so a value that still holds a character outside the
