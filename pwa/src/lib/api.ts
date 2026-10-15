@@ -50,6 +50,9 @@ const SEND_ERROR_TEXT: Record<string, string> = {
   // the same string — the two failures are different (nothing came back at
   // all, versus it came back and then would not go).
   'verify-failed': 'Typed it, but the session never echoed it back.',
+  // D-5046: tmux refused a line of the message, so nothing was submitted, but
+  // the lines before it may be sitting in the box (Retry sees them as a draft).
+  'type-failed': "Couldn't type the whole message, so it wasn't sent.",
   'draft-clear-failed': "Couldn't clear the existing draft — open the terminal.",
   // The box is TALLER THAN THE PANE, so its `❯` row has scrolled out of the
   // capture the server reads and nothing in the box can be read at all

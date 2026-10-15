@@ -1,0 +1,50 @@
+
+[38;5;174m ▐[48;5;16m▛███▛█[39m[49m   [1mClaude Code[0m [38;5;246mv2.1.300[39m
+[38;5;174m▝▜[48;5;16m█████[49m█▀[39m  [38;5;246mHaiku 5.5 · Claude Max[39m
+[38;5;174m ▝▝   ▝▝ [39m  [38;5;246m<projects-root>/project-a[39m
+
+[38;5;220m⚠[39m [38;5;220mSafe mode: all customizations are disabled (CLAUDE.md, skills, plugins, hooks, MCP, agents, and more)[39m
+  [38;5;246mRestart without --safe-mode to re-enable[39m
+
+[38;5;246m[48;5;237m❯ [38;5;231mc1000 Reply with only the word OK and use no tools. alpha bravo charlie delta echo foxtrot golf hotel india juliet kilo lima mike november oscar papa quebec romeo sierra tango uniform victor whiskey xray yankee zulu [39m
+  [38;5;231malpha bravo charlie delta echo foxtrot golf hotel india juliet kilo lima mike november oscar papa quebec romeo sierra tango uniform victor whiskey xray yankee zulu alpha bravo charlie delta echo foxtrot golf hotel [39m
+  [38;5;231mindia juliet kilo lima mike november oscar papa quebec romeo sierra tango uniform victor whiskey xray yankee zulu alpha bravo charlie delta echo foxtrot golf hotel india juliet kilo lima mike november oscar papa [39m
+  [38;5;231mquebec romeo sierra tango uniform victor whiskey xray yankee zulu alpha bravo charlie delta echo foxtrot golf hotel india juliet kilo lima mike november oscar papa quebec romeo sierra tango uniform victor whiskey xray[39m
+  [38;5;231myankee zulu alpha bravo charlie delta echo foxtrot golf hotel india juliet kilo lima mike november oscar papa quebec romeo sierra  END-c1000[39m
+
+[38;5;231m[49m⏺[39m OK
+
+[38;5;246m✻[39m [38;5;246mBaked for 1s · done 10:11[39m
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                                                                                                                                                                                                     [38;5;246mctrl+g to edit in Vim[39m
+[38;5;244m────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+[39m❯ [Pasted text #8]
+  [Pasted text #9]
+  [Pasted text #10]
+[38;5;244m────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+[39m  [38;5;246mpaste again to expand[39m
