@@ -1280,7 +1280,7 @@ describe('8B: restore requires the service MEASURED inactive (W3-M34)', () => {
     expect(thrown).not.toBeNull();
     expect(thrown!.code).toBe('service-not-inactive');
     expect(thrown!.exit, 'the same exit as the first probe').toBe(2);
-    expect(thrown!.message, 'a clean refusal: nothing was left behind, so nothing is named').not.toMatch(/left in place/);
+    expect(thrown!.message, 'a clean refusal: nothing was quarantined, so nothing is named').not.toMatch(/coordination-restore\.foreign/);
     expect(readFileSync(liveFile(f.home, 'coord.db-wal'), 'utf8')).toBe(walBytes);
     expect(readFileSync(liveFile(f.home, 'delegation-events.log'), 'utf8')).toBe(journalBytes);
     // The rest of the live set is exactly what it was, and no stage or marker is left.
@@ -1289,70 +1289,219 @@ describe('8B: restore requires the service MEASURED inactive (W3-M34)', () => {
     expect(dirListing(liveDir(f.home)).filter((n) => /restore/.test(n))).toEqual([]);
   });
 
-  describe('rollback deletes only what it can prove the restore placed (R30)', () => {
+  describe('a rollback puts the old set back WHOLE: it deletes only what it placed and quarantines every other file (R30, R35)', () => {
+    const FOREIGN = 'foreign bytes written by someone else\n';
+    const FOREIGN_WAL = 'a WAL a unit created after placement\n';
+    const foreignRoot = (home: string): string => path.join(liveDir(home), 'coordination-restore.foreign');
+    /** Every file in quarantine, as `<name>` -> bytes, across every restore id. */
+    const quarantined = (home: string): Record<string, string> => {
+      const out: Record<string, string> = {};
+      for (const id of existsSync(foreignRoot(home)) ? readdirSync(foreignRoot(home)) : []) {
+        for (const n of readdirSync(path.join(foreignRoot(home), id))) out[n] = readFileSync(path.join(foreignRoot(home), id, n), 'utf8');
+      }
+      return out;
+    };
+    const restoreLeftovers = (home: string): string[] => dirListing(liveDir(home)).filter((n) => /^coordination-restore\.(json|stage)/.test(n));
+
     /** A restore whose placed `victim` is replaced by foreign bytes right after it is renamed into place, so the verify fails. */
-    const foreignAfterPlacement = (f: { home: string; dir: string }, victim: string): { error: Error & { message: string }; log: FsLog } => {
+    const foreignAfterPlacement = (f: { home: string; dir: string }, victim: string, bytes = FOREIGN): { error: Error; log: FsLog } => {
       const { fs, log } = loggedFs(f.home);
       const base = fs.rename;
       fs.rename = (a: string, b: string) => {
         base(a, b);
-        if (b === liveFile(f.home, victim) && a.includes('coordination-restore.stage/new')) writeFileSync(liveFile(f.home, victim), 'foreign bytes written by someone else\n');
+        if (b === liveFile(f.home, victim) && a.includes('coordination-restore.stage/new')) writeFileSync(liveFile(f.home, victim), bytes);
       };
       try { H.restore({ home: f.home, from: f.dir, fs, probe: inactive }); } catch (err) { return { error: err as Error, log }; }
       throw new Error('the restore was expected to fail its verify');
     };
 
-    it('an OLD-ABSENT member replaced by a foreign writer after placement survives, the report names it, and the rest goes back', () => {
+    /** Row (a)'s scenario: an old set WITHOUT WAL/SHM; a foreign WAL appears right after `coord.db` is placed (and `coord.db` is untouched). */
+    const walScenario = (opts: { crashAt?: number; fs?: (fs: any) => any } = {}): { f: ReturnType<typeof restoreFixture>; oldState: Five; r: ReturnType<typeof outcome>; log: FsLog; fired: () => number; opsAtHook: () => number } => {
+      const f = restoreFixture();
+      rmSync(liveFile(f.home, 'coord.db-wal'));
+      rmSync(liveFile(f.home, 'coord.db-shm'));
+      const oldState = liveState(f.home);
+      const { fs, log } = loggedFs(f.home, opts.crashAt === undefined ? {} : { crashAt: opts.crashAt });
+      const base = fs.rename;
+      let fired = 0;
+      let opsAtHook = -1;
+      fs.rename = (a: string, b: string) => {
+        base(a, b);
+        if (b === liveFile(f.home, 'coord.db') && a.includes('coordination-restore.stage/new')) {
+          writeFileSync(liveFile(f.home, 'coord.db-wal'), FOREIGN_WAL);
+          fired++;
+          opsAtHook = log.mutating.length;
+        }
+      };
+      const r = outcome(() => H.restore({ home: f.home, from: f.dir, fs, probe: inactive }));
+      return { f, oldState, r, log, fired: () => fired, opsAtHook: () => opsAtHook };
+    };
+
+    it('(a) an old set without WAL/SHM: a foreign WAL beside the placed DB is quarantined byte-identical, the OLD DB comes back with no WAL or SHM, and nothing is left behind', () => {
+      const { f, oldState, r } = walScenario();
+      expect(r).toMatchObject({ ok: false, code: 'verify-failed' });
+      const message = (r as { message: string }).message;
+      expect(message).toMatch(/verify-failed: coord\.db-wal is present and the snapshot has none/);
+      expect(message).toMatch(/the old set is restored; 1 file\(s\) that this restore did not place were moved, not deleted, to ~\/\.ccrc\/coordination-restore\.foreign\/[0-9a-f]{16}\/: coord\.db-wal/);
+      expect(liveState(f.home)).toEqual(oldState);                       // the old DB, and NO WAL or SHM beside it
+      expect(existsSync(liveFile(f.home, 'coord.db-wal'))).toBe(false);
+      expect(quarantined(f.home)).toEqual({ 'coord.db-wal': FOREIGN_WAL });
+      expect(restoreLeftovers(f.home)).toEqual([]);
+    });
+
+    it('(b) an old set with a hot WAL: a foreign coord.db after placement is quarantined, and the old DB and old WAL come back TOGETHER (in-process, and through `recover` after a crash)', () => {
+      const f = restoreFixture();
+      const { error } = foreignAfterPlacement(f, 'coord.db');
+      expect(error.message).toMatch(/moved, not deleted, to ~\/\.ccrc\/coordination-restore\.foreign\/[0-9a-f]{16}\/: coord\.db$/);
+      expect(liveState(f.home)).toEqual(f.oldState);
+      expect(quarantined(f.home)).toEqual({ 'coord.db': FOREIGN });
+      expect(restoreLeftovers(f.home)).toEqual([]);
+      // The same, but the process dies right after the foreign file appears: `recover` finishes it.
+      const replaceDb = (g: { home: string }, fs: any): void => {
+        const base = fs.rename;
+        fs.rename = (x: string, y: string) => { base(x, y); if (y === liveFile(g.home, 'coord.db') && x.includes('coordination-restore.stage/new')) writeFileSync(liveFile(g.home, 'coord.db'), FOREIGN); };
+      };
+      const probe = restoreFixture();
+      const probed = loggedFs(probe.home);
+      replaceDb(probe, probed.fs);
+      outcome(() => H.restore({ home: probe.home, from: probe.dir, fs: probed.fs, probe: inactive }));
+      const after = probed.log.ops.findIndex((o) => /^rename <root>\/\.ccrc\/coordination-restore\.stage\/new\/coord\.db -> /.test(o));
+      const at = probed.log.mutating.findIndex((p) => p > after);           // the first mutating operation after the DB is placed
+      expect(at).toBeGreaterThan(5);
+      const h = restoreFixture();
+      const crashing = loggedFs(h.home, { crashAt: at });
+      replaceDb(h, crashing.fs);
+      expect(outcome(() => H.restore({ home: h.home, from: h.dir, fs: crashing.fs, probe: inactive })).ok).toBe(false);
+      const rec = outcome(() => H.recover({ home: h.home, probe: inactive }));
+      expect(rec).toMatchObject({ ok: false, code: 'rollback-quarantined' });
+      expect((rec as { message: string }).message).toMatch(/the old set is restored; 1 file\(s\) that this restore did not place were moved, not deleted, to ~\/\.ccrc\/coordination-restore\.foreign\/[0-9a-f]{16}\/: coord\.db$/);
+      expect(liveState(h.home)).toEqual(h.oldState);
+      expect(quarantined(h.home)).toEqual({ 'coord.db': FOREIGN });
+      expect(restoreLeftovers(h.home)).toEqual([]);
+      expect(H.recover({ home: h.home, probe: inactive })).toBe('none');
+    });
+
+    it('(c) an OLD-ABSENT journal replaced by a foreign writer after placement is quarantined, the old checkpoint and the rest go back, and the report names it', () => {
       const f = restoreFixture();
       rmSync(liveFile(f.home, 'delegation-events.log'));          // old-absent, and the snapshot HAS a journal, so the restore places one
       const oldState = liveState(f.home);
       const { error } = foreignAfterPlacement(f, 'delegation-events.log');
       expect(error.message).toMatch(/verify-failed: delegation-events\.log does not match the snapshot after it was placed/);
-      expect(error.message).toMatch(/left in place, not provably placed by this restore: delegation-events\.log/);
-      expect(readFileSync(liveFile(f.home, 'delegation-events.log'), 'utf8')).toBe('foreign bytes written by someone else\n');
-      const after = liveState(f.home);
-      for (const n of ['delegation-checkpoint.json', 'coord.db-wal', 'coord.db-shm', 'coord.db']) expect(after[n], n).toBe(oldState[n]);
-      expect(dirListing(liveDir(f.home)).filter((n) => /restore/.test(n)), 'old-absent leaves nothing of the old set in the stage, so it is cleaned').toEqual([]);
+      expect(error.message).toMatch(/moved, not deleted, to ~\/\.ccrc\/coordination-restore\.foreign\/[0-9a-f]{16}\/: delegation-events\.log/);
+      expect(liveState(f.home)).toEqual(oldState);                // no journal, the old checkpoint, the old DB triple
+      expect(quarantined(f.home)).toEqual({ 'delegation-events.log': FOREIGN });
+      expect(restoreLeftovers(f.home)).toEqual([]);
     });
 
-    it('a placed member the restore DID place is still removed (a WAL/SHM-free old set): old-absent and provably ours', () => {
+    it('a member the restore DID place is still DELETED (not quarantined) when it is old-absent and provably ours', () => {
       const f = restoreFixture();
       rmSync(liveFile(f.home, 'delegation-events.log'));
       const oldState = liveState(f.home);
       // A verify failure on ANOTHER member (the checkpoint is replaced by foreign bytes): the journal the restore placed goes away again.
       const { error } = foreignAfterPlacement(f, 'delegation-checkpoint.json');
       expect(error.message).toMatch(/verify-failed/);
-      expect(existsSync(liveFile(f.home, 'delegation-events.log'))).toBe(false);
-      expect(liveState(f.home)['delegation-events.log']).toBe(oldState['delegation-events.log']);
+      expect(liveState(f.home)).toEqual(oldState);
+      expect(Object.keys(quarantined(f.home))).toEqual(['delegation-checkpoint.json']);   // only the foreign file is kept, never our own
     });
 
-    it('an OLD-PRESENT member replaced by a foreign writer is left alone, the old copy stays in the stage, and the marker stays until it is resolved', () => {
+    it('(d) an OLD-PRESENT member replaced by a foreign writer is quarantined and the old copy goes back from the stage, which is then cleaned', () => {
       const f = restoreFixture();
       const { error } = foreignAfterPlacement(f, 'coord.db');
-      expect(error.message).toMatch(/left in place, not provably placed by this restore: coord\.db/);
-      expect(readFileSync(liveFile(f.home, 'coord.db'), 'utf8')).toBe('foreign bytes written by someone else\n');
-      expect(existsSync(liveFile(f.home, 'coordination-restore.json'))).toBe(true);
-      expect(sha(readFileSync(path.join(liveFile(f.home, 'coordination-restore.stage'), 'old', 'coord.db')))).toBe(f.oldState['coord.db']);
-      // The other members went back; `recover` reports the same thing again and changes nothing.
-      expect(liveState(f.home)['delegation-events.log']).toBe(f.oldState['delegation-events.log']);
-      expect(outcome(() => H.recover({ home: f.home, probe: inactive }))).toMatchObject({ ok: false, code: 'rollback-left-files' });
-      expect(readFileSync(liveFile(f.home, 'coord.db'), 'utf8')).toBe('foreign bytes written by someone else\n');
-      expect(sha(readFileSync(path.join(liveFile(f.home, 'coordination-restore.stage'), 'old', 'coord.db')))).toBe(f.oldState['coord.db']);
+      expect(error.message).toMatch(/moved, not deleted/);
+      expect(liveState(f.home)).toEqual(f.oldState);
+      expect(quarantined(f.home)).toEqual({ 'coord.db': FOREIGN });
+      expect(restoreLeftovers(f.home)).toEqual([]);
     });
 
-    it('a WAL a unit created after placement (the snapshot has none) is not the restore\'s own: left in place and named', () => {
+    it('the quarantine renames are made durable before the old member goes back: the quarantine directory, its parent and ~/.ccrc are fsynced in between', () => {
+      const { log } = walScenario();
+      const ops = log.ops;
+      const q = ops.findIndex((o) => /^rename <root>\/\.ccrc\/coord\.db-wal -> <root>\/\.ccrc\/coordination-restore\.foreign\/[0-9a-f]{16}\/coord\.db-wal$/.test(o));
+      const back = ops.findIndex((o, i) => i > q && /^rename <root>\/\.ccrc\/coordination-restore\.stage\/old\/coord\.db -> /.test(o));
+      expect(q).toBeGreaterThan(-1);
+      expect(back, 'the old DB goes back after the quarantine').toBeGreaterThan(q);
+      const between = ops.slice(q + 1, back);
+      const dirAt = between.findIndex((o) => /^fsyncDir <root>\/\.ccrc\/coordination-restore\.foreign\/[0-9a-f]{16}$/.test(o));
+      const rootAt = between.findIndex((o) => o === 'fsyncDir <root>/.ccrc/coordination-restore.foreign');
+      const ccrcAt = between.findIndex((o) => o === 'fsyncDir <root>/.ccrc');
+      expect(dirAt, between.join('\n')).toBeGreaterThan(-1);
+      expect(rootAt).toBeGreaterThan(dirAt);
+      expect(ccrcAt).toBeGreaterThan(rootAt);
+    });
+
+    it('a file is NEVER overwritten in quarantine: a second foreign file of the same name, after an interrupted pass, gets `.1`', () => {
+      const clean = walScenario();
+      const qIdx = clean.log.mutating.findIndex((p) => /^rename <root>\/\.ccrc\/coord\.db-wal -> <root>\/\.ccrc\/coordination-restore\.foreign\//.test(clean.log.ops[p]!));
+      expect(qIdx).toBeGreaterThan(-1);
+      const s1 = walScenario({ crashAt: qIdx + 1 });                          // the process dies right after the first quarantine rename
+      expect(s1.r.ok).toBe(false);
+      expect(quarantined(s1.f.home)).toEqual({ 'coord.db-wal': FOREIGN_WAL });
+      expect(existsSync(liveFile(s1.f.home, 'coord.db-wal'))).toBe(false);
+      writeFileSync(liveFile(s1.f.home, 'coord.db-wal'), 'a SECOND foreign WAL\n');   // the live path holds something else again
+      const rec = outcome(() => H.recover({ home: s1.f.home, probe: inactive }));
+      expect(rec).toMatchObject({ ok: false, code: 'rollback-quarantined' });
+      expect(quarantined(s1.f.home)).toEqual({ 'coord.db-wal': FOREIGN_WAL, 'coord.db-wal.1': 'a SECOND foreign WAL\n' });
+      expect(liveState(s1.f.home)).toEqual(s1.oldState);
+      expect(restoreLeftovers(s1.f.home)).toEqual([]);
+    });
+
+    it('a CRASH at every operation of the quarantining scenario, then `recover`: the old set is whole, the foreign WAL is in quarantine exactly once, nothing else is left', () => {
+      const clean = walScenario();
+      const total = clean.log.mutating.length;
+      expect(total).toBeGreaterThan(30);
+      for (let k = 0; k < total; k++) {
+        const s = walScenario({ crashAt: k });
+        expect(s.r.ok, `crash at ${k}`).toBe(false);
+        const rec = outcome(() => H.recover({ home: s.f.home, probe: inactive }));
+        expect(['rolled-back', 'cleaned', 'none'].includes((rec as { value?: string }).value ?? '') || (rec as { code?: string }).code === 'rollback-quarantined', `recover after a crash at ${k}: ${JSON.stringify(rec)}`).toBe(true);
+        expect(liveState(s.f.home), `crash at ${k}`).toEqual(s.oldState);
+        expect(restoreLeftovers(s.f.home), `crash at ${k}`).toEqual([]);
+        expect(quarantined(s.f.home), `crash at ${k} (foreign file written: ${s.fired()})`).toEqual(s.fired() > 0 ? { 'coord.db-wal': FOREIGN_WAL } : {});
+      }
+    }, 240_000);
+
+    it('a crash at every operation of `recover` itself, after the foreign WAL appeared: running it again converges on the same whole old set', () => {
+      const clean = walScenario();
+      const atHook = clean.opsAtHook();
+      expect(atHook).toBeGreaterThan(5);
+      const base = walScenario({ crashAt: atHook });                         // dies on the first operation after the foreign file appears
+      expect(base.r.ok).toBe(false);
+      const rec = loggedFs(base.f.home);
+      outcome(() => H.recover({ home: base.f.home, fs: rec.fs, probe: inactive }));
+      const total = rec.log.mutating.length;
+      expect(total, 'recovery has quarantine renames and fsyncs to visit').toBeGreaterThan(6);
+      for (let j = 0; j < total; j++) {
+        const s = walScenario({ crashAt: atHook });
+        const crashing = loggedFs(s.f.home, { crashAt: j });
+        expect(outcome(() => H.recover({ home: s.f.home, fs: crashing.fs, probe: inactive })).ok, `recovery crash ${j}`).toBe(false);
+        outcome(() => H.recover({ home: s.f.home, probe: inactive }));
+        expect(liveState(s.f.home), `recovery crash ${j}`).toEqual(s.oldState);
+        expect(restoreLeftovers(s.f.home), `recovery crash ${j}`).toEqual([]);
+        expect(quarantined(s.f.home), `recovery crash ${j}`).toEqual({ 'coord.db-wal': FOREIGN_WAL });
+      }
+    }, 240_000);
+
+    it('a rename into quarantine that FAILS keeps the marker and the stage, reports it, and `recover` finishes once the fault is gone', () => {
       const f = restoreFixture();
       rmSync(liveFile(f.home, 'coord.db-wal'));
+      rmSync(liveFile(f.home, 'coord.db-shm'));
+      const oldState = liveState(f.home);
       const { fs } = loggedFs(f.home);
       const base = fs.rename;
       fs.rename = (a: string, b: string) => {
+        if (b.includes('coordination-restore.foreign')) throw new Error('the quarantine rename failed');
         base(a, b);
-        if (b === liveFile(f.home, 'coord.db') && a.includes('coordination-restore.stage/new')) writeFileSync(liveFile(f.home, 'coord.db-wal'), 'a unit started and opened the new DB\n');
+        if (b === liveFile(f.home, 'coord.db') && a.includes('coordination-restore.stage/new')) writeFileSync(liveFile(f.home, 'coord.db-wal'), FOREIGN_WAL);
       };
       const r = outcome(() => H.restore({ home: f.home, from: f.dir, fs, probe: inactive }));
       expect(r).toMatchObject({ ok: false, code: 'verify-failed' });
-      expect((r as { message: string }).message).toMatch(/left in place, not provably placed by this restore: coord\.db-wal/);
-      expect(readFileSync(liveFile(f.home, 'coord.db-wal'), 'utf8')).toBe('a unit started and opened the new DB\n');
+      expect(existsSync(liveFile(f.home, 'coordination-restore.json'))).toBe(true);
+      expect(existsSync(liveFile(f.home, 'coordination-restore.stage'))).toBe(true);
+      expect(readFileSync(liveFile(f.home, 'coord.db-wal'), 'utf8')).toBe(FOREIGN_WAL);       // nothing was deleted
+      expect(outcome(() => H.recover({ home: f.home, probe: inactive }))).toMatchObject({ ok: false, code: 'rollback-quarantined' });
+      expect(liveState(f.home)).toEqual(oldState);
+      expect(quarantined(f.home)).toEqual({ 'coord.db-wal': FOREIGN_WAL });
+      expect(restoreLeftovers(f.home)).toEqual([]);
     });
   });
 

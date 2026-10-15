@@ -27,7 +27,7 @@
 // one, holds data; the retention keeps the newest such snapshot beside the newest valid one, D-4641). `restore --from <dir>`: 0 done, 1 failed (the live set is the old one, or `recover` finishes it), 2 refused
 // before any live mutation. `recover`: finishes an interrupted restore, 0 / 1 / 2 the same way. 70: usage, or the helper itself
 // failed (an exception it did not name).
-import { createHash } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import nodeFs from 'node:fs';
 import { createRequire } from 'node:module';
 import path from 'node:path';
@@ -43,6 +43,9 @@ export const MANIFEST_FILE = 'coordination-snapshot.json';
 /** Live restore bookkeeping, in the coordination directory itself. Delegation recovery refuses to run while the marker exists (the server's boot is not yet wired to it, Task 13). */
 export const RESTORE_MARKER_FILE = 'coordination-restore.json';
 export const RESTORE_STAGE_DIR = 'coordination-restore.stage';
+/** Where a rollback MOVES (never deletes) a file at a member path that is neither the restore's own placed member nor an old one:
+ *  `<this>/<restore id>/<member name>`, never overwriting (a second file of one name gets `.1`, `.2`, ...). */
+export const RESTORE_FOREIGN_DIR = 'coordination-restore.foreign';
 /** The five files a restore replaces as one set. WAL and SHM are not manifest members: a restored DB must never meet an old WAL. */
 export const RESTORE_SET = Object.freeze([JOURNAL_FILE, CHECKPOINT_FILE, `${DB_FILE}-wal`, `${DB_FILE}-shm`, DB_FILE]);
 /** Exactly five attempts, with these pauses between them. */
@@ -874,7 +877,7 @@ function readMarker(fs, ccrcDir) {
     if (canonicalJson(m) !== text.slice(0, -1)) throw new Error('noncanonical');
   } catch { return refuse('marker-invalid', 'the restore marker cannot be read; nothing can say which set is live', { exit: 2 }); }
   if (!isRecord(m) || m.format !== MARKER_FORMAT || m.version !== 1 || (m.state !== 'replacing' && m.state !== 'committed')
-      || !isRecord(m.old) || !RESTORE_SET.every((n) => typeof m.old[n] === 'boolean') || !isRecord(m.placed)) {
+      || !isRecord(m.old) || !RESTORE_SET.every((n) => typeof m.old[n] === 'boolean') || !isRecord(m.placed) || typeof m.id !== 'string' || !/^[0-9a-f]{16}$/.test(m.id)) {
     refuse('marker-invalid', 'the restore marker is not a version-1 marker', { exit: 2 });
   }
   return m;
@@ -909,40 +912,55 @@ function isPlacedMember(fs, live, placed) {
   return got !== null && got.bytes === placed.bytes && got.sha256 === placed.sha256;
 }
 
+const foreignRootOf = (ccrcDir) => path.join(ccrcDir, RESTORE_FOREIGN_DIR);
+
 /**
- * Puts the OLD set back, member by member, from what the marker recorded. Safe to run again from any point. It deletes a live file
- * ONLY when it can prove the file is the member this restore placed (the marker holds each placed member's size and SHA-256): a
- * file at an old-absent path that is not provably ours (a unit that started, an operator) is left where it is. Returns
- * `{left, keepStage}`: the member names it left in place, and whether an old member could not be put back (its only copy is still in
- * the stage, so the stage and the marker must stay).
+ * Moves the live file at a member path into `<ccrcDir>/coordination-restore.foreign/<id>/<name>` (R35). Never deletes, never
+ * overwrites: a name already taken by an earlier, interrupted pass gets `.1`, `.2`, ... The directories and the rename are made
+ * durable (the quarantine directory, its parent, then `~/.ccrc`) before the caller puts anything back at the member path.
+ */
+function quarantine(fs, ccrcDir, id, name) {
+  const root = foreignRootOf(ccrcDir);
+  const dir = path.join(root, id);
+  if (fs.lstat(root) === null) fs.mkdir(root);
+  if (fs.lstat(dir) === null) fs.mkdir(dir);
+  let dest = path.join(dir, name);
+  for (let n = 1; fs.lstat(dest) !== null; n++) dest = path.join(dir, `${name}.${n}`);
+  fs.rename(path.join(ccrcDir, name), dest);
+  fs.fsyncDir(dir);
+  fs.fsyncDir(root);
+  fs.fsyncDir(ccrcDir);
+}
+
+/**
+ * Puts the OLD set back, member by member, from what the marker recorded, so that afterwards the five members are exactly the old
+ * set: whole, never mixed (a SQLite database is never left beside a WAL that belongs to another one). Safe to run again from any
+ * point. A live file at a member path is DELETED only when it is provably the member this restore placed (the marker holds each
+ * placed member's size and SHA-256); any other file there, one that is neither ours nor old, is QUARANTINED by rename (see
+ * `quarantine`) before the old member goes back. A rename that fails throws, and the marker and stage stay.
  */
 function rollbackRestore(fs, ccrcDir, marker) {
   const stage = stageOf(ccrcDir);
-  const left = [];
-  let keepStage = false;
   for (const name of RESTORE_SET) {
     const live = path.join(ccrcDir, name);
     const aside = path.join(stage, 'old', name);
-    const ours = isPlacedMember(fs, live, marker.placed[name]);
-    if (marker.old[name]) {
-      if (fs.lstat(aside) !== null) {
-        if (fs.lstat(live) !== null) {
-          if (!ours) { left.push(name); keepStage = true; continue; }   // something else stands where the old member must go back
-          fs.unlink(live);                                              // the new member we placed
-        }
-        fs.rename(aside, live);
-      }                          // else it was never set aside: the live file IS the old one
-    } else if (fs.lstat(live) !== null) {
-      if (ours) fs.unlink(live);  // old absent, and this is the member we placed
-      else left.push(name);       // not provably ours: leave it
+    const asideThere = marker.old[name] && fs.lstat(aside) !== null;
+    if (marker.old[name] && !asideThere) continue;      // never set aside: the live file IS the old one
+    if (fs.lstat(live) !== null) {
+      if (isPlacedMember(fs, live, marker.placed[name])) fs.unlink(live);   // the member this restore placed
+      else quarantine(fs, ccrcDir, marker.id, name);                        // not ours, not old: moved aside, never deleted
     }
+    if (asideThere) fs.rename(aside, live);
   }
   fs.fsyncDir(ccrcDir);
-  return { left, keepStage };
 }
 
-/** The note a failed restore or recovery adds when rollback left files alone. */
-const leftNote = (left) => `left in place, not provably placed by this restore: ${left.join(', ')}`;
+/** What a rollback moved into quarantine, as one sentence (empty when nothing). Read from the directory, so a re-run reports it too. */
+function quarantineReport(fs, ccrcDir, id) {
+  const names = fs.readdir(path.join(foreignRootOf(ccrcDir), id)) ?? [];
+  if (names.length === 0) return '';
+  return `the old set is restored; ${names.length} file(s) that this restore did not place were moved, not deleted, to ~/.ccrc/${RESTORE_FOREIGN_DIR}/${id}/: ${[...names].sort().join(', ')}`;
+}
 
 function requireInactive(probe) {
   const state = probe();
@@ -985,6 +1003,7 @@ export function restore(opts) {
   for (const [key, filename] of Object.entries(MEMBER_KEYS)) if (manifest.members[key].present) wanted[filename] = manifest.members[key];
   const old = {};
   for (const name of RESTORE_SET) old[name] = fs.lstat(path.join(ccrcDir, name)) !== null;
+  const restoreId = randomBytes(8).toString('hex');   // names this restore's quarantine directory; recorded in the FIRST marker write
   let published = false;
   let moved = false;     // set immediately before the first live member is renamed into the stage
   try {
@@ -1016,7 +1035,7 @@ export function restore(opts) {
     fs.fsyncDir(stage);
     fs.fsyncDir(ccrcDir);
     // 5. Publish the active marker. From here on, delegation recovery refuses to run until it is gone.
-    const marker = { format: MARKER_FORMAT, version: 1, state: 'replacing', startedAt: now().toISOString(), old, placed: wanted };
+    const marker = { format: MARKER_FORMAT, version: 1, state: 'replacing', startedAt: now().toISOString(), id: restoreId, old, placed: wanted };
     published = true;       // set BEFORE the write: a write that fails after its rename has still published the marker
     writeMarker(fs, ccrcDir, marker);
     // 5b. Ask again, now the marker is durable: a unit that started between the first probe and here would keep writing to inodes
@@ -1062,9 +1081,11 @@ export function restore(opts) {
           // meantime may have created files at old-absent paths): clear the stage and the marker, that is all.
           finalizeRestore(fs, ccrcDir);
         } else {
-          const { left, keepStage } = rollbackRestore(fs, ccrcDir, m ?? { old, placed: wanted });
-          if (left.length > 0 && err instanceof Error) err.message = `${err.message} — ${leftNote(left)}`;
-          if (!keepStage) finalizeRestore(fs, ccrcDir);
+          const mk = m ?? { old, placed: wanted, id: restoreId };
+          rollbackRestore(fs, ccrcDir, mk);
+          const q = quarantineReport(fs, ccrcDir, mk.id);
+          if (q !== '' && err instanceof Error) err.message = `${err.message} — ${q}`;
+          finalizeRestore(fs, ccrcDir);
         }
       }
     } catch { /* the marker stays: delegation recovery refuses to run and `recover` finishes it */ }
@@ -1103,11 +1124,10 @@ export function recover(opts) {
   requireInactive(probe);
   if (marker === null) { finalizeRestoreStageOnly(fs, ccrcDir); return 'cleaned'; }
   if (marker.state === 'committed') { finalizeRestore(fs, ccrcDir); return 'finalized'; }
-  const { left, keepStage } = rollbackRestore(fs, ccrcDir, marker);
-  if (!keepStage) finalizeRestore(fs, ccrcDir);
-  if (left.length > 0) {
-    throw new SnapError('rollback-left-files', `${leftNote(left)}${keepStage ? '; the stage and the marker stay until they are resolved' : ''}`);
-  }
+  rollbackRestore(fs, ccrcDir, marker);
+  const q = quarantineReport(fs, ccrcDir, marker.id);
+  finalizeRestore(fs, ccrcDir);
+  if (q !== '') throw new SnapError('rollback-quarantined', q);
   return 'rolled-back';
 }
 

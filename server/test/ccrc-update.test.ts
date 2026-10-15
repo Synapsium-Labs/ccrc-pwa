@@ -13365,6 +13365,17 @@ describe('ccrc backup and update: the coordination snapshot callers (delegation 
       expect(existsSync(join(backupRoot(home), '20250103-000000')), 'a plain dir is pruned').toBe(false);
     });
 
+    it('the stderr temp file is removed on every classification: a private TMPDIR is empty afterwards (N7)', () => {
+      const home = home0('ccrc-fx-8b-n7-tmp-');
+      const priv = join(home, 'private-tmp');
+      mkdirSync(priv);
+      // The shim writes a stderr line, so the temp file carries something worth leaking; the prune classifies the v1 dir.
+      const r = prune(home, join(REPO, 'ccd', 'ccrc'), withShim(home, { FX_CLASSIFY_STDERR: '1', TMPDIR: priv }));
+      expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+      expect(nodeOrder(home).filter((l) => l === 'helper validate').length, 'the classifier ran').toBeGreaterThan(0);
+      expect(readdirSync(priv)).toEqual([]);
+    });
+
     it('a classifier whose stdout has a THIRD line is a failure: nothing pruned, the reason says so (N2)', () => {
       const home = home0('ccrc-fx-8b-n2-third-');
       const r = prune(home, join(REPO, 'ccd', 'ccrc'), withShim(home, { FX_CLASSIFY_EXTRA: '1' }));
