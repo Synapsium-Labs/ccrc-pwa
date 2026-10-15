@@ -126,6 +126,15 @@ const count = (hay: string, needle: string): number => hay.split(needle).length 
 /** Let xterm's own `setTimeout(0)` work land: a composition's commit, and the
  *  textarea diff it reads after a keyCode-229 keydown. */
 const tick = (): Promise<void> => act(async () => { await new Promise<void>((r) => { setTimeout(r, 5); }); });
+/** Let every insertion window opened so far close. A window lasts two turns of
+ *  the task queue, the second queued only when the first runs, so a fixed delay
+ *  is not enough: on a loaded machine `tick`'s 5 ms timer can fall due before
+ *  that second turn is even queued (MEASURED: a full run at load 6 framed the
+ *  reply with the window still open). Each turn here is queued only once the
+ *  one before it has run, so a window's own second turn is always ahead of it. */
+const windowsClosed = (): Promise<void> => act(async () => {
+  for (let i = 0; i < 3; i += 1) await new Promise<void>((r) => { setTimeout(r, 0); });
+});
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Step 1: the framing, pure
@@ -709,6 +718,7 @@ describe('text a keyboard inserts cannot end a bracketed paste or submit a line'
     const d = mount(view);
     inputOn(d.ta, 'hello');
     await tick();
+    await windowsClosed();
     await d.paint(DCS_QUERY);
     const sent = d.ws.inputs();
     expect(sent[0], 'the insertion itself').toBe('hello');
@@ -721,6 +731,7 @@ describe('text a keyboard inserts cannot end a bracketed paste or submit a line'
     act(() => { fireEvent.keyDown(d.ta, { key: 'Unidentified', keyCode: 229 }); });
     d.ta.value += 'hello';
     await tick();
+    await windowsClosed();
     await d.paint(DCS_QUERY);
     const sent = d.ws.inputs();
     expect(sent[0], 'the diff xterm read after the 229 keydown').toBe('hello');
