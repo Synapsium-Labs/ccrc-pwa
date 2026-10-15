@@ -69,7 +69,8 @@ const DEPARTURES = ['surface-dash-rule-at-stop-and-ws-add-only', 'dot-rule-exten
   'rename-branch-value-taken-whole', 'valueless-session-key-takes-the-next-flag-as-its-id',
   'ws-add-lock-precedes-the-cap', 'prelock-answer-precedes-in-progress',
   'dash-free-id-answers-unmeasured-registry-before-its-record',
-  'dot-leading-audit-now-exits-1-and-the-server-retries', 'census-blind-below-line-5818'];
+  'dot-leading-audit-now-exits-1-and-the-server-retries', 'census-blind-below-line-5818',
+  'prelock-no-lock-clause-follows-the-detail'];
 
 /** What each task found while building, by slug: plan-text corrections, extra pins and measured notes. The rulings
  *  file's "Found while building" list names every one. */
@@ -82,7 +83,9 @@ const FOUND_WHILE_BUILDING = ['token-verb-controls-use-a-wrong-token', 'collect-
   'reg-id-cap-under-lc-all-c-pinned', 'enable-cap-written-as-an-if',
   'child-uuid-peek-pinned-by-an-unmeasurable-child', 'other-id-record-reached-only-through-a-stubbed-reader',
   'prelock-second-look-sound-is-unmeasured', 'prelock-reads-the-witness-for-the-document',
-  'hold-and-rename-arms-are-matrix-blind', 'expire-v1-note-already-rewritten'];
+  'hold-and-rename-arms-are-matrix-blind', 'expire-v1-note-already-rewritten',
+  'merge-moves-a-stale-citation-under-a-rewritten-comment', 'prelock-prefix-cuts-the-rc3-detail',
+  'archived-expiry-census-fourth-collect-failed-site', 'superpowers-tracked-file-count-is-one'];
 
 /** The residuals that stand whatever the code says next. */
 const BASE_RESIDUALS = ['dot-rule-only-at-the-token-verbs', 'verbs-outside-sec1-keep-the-inline-regex',

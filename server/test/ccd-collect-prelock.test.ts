@@ -283,8 +283,9 @@ describe.skipIf(!LINUX)('the collector opens the reap lock only after an advisor
       // physical ~/.cc-tmp stops resolving) is stubbed as `ccd-ws-collect-resume.test.ts` stubs it, so the pass
       // answers unmeasured `quarantine` in the locked evaluation's words, before any lock. `_ws_leaf_why_line` cuts the
       // verb's line at 300 bytes. The stub's why is padded by a length the case computes from its OWN record path, so
-      // the operative clause ends between byte 248 and byte 300 of the detail-first line at any TMPDIR: the 53-byte
-      // clause "no lock was taken, and nothing was moved or removed" ahead of the detail would push it past the cut.
+      // the operative clause ends between byte 248 and byte 300 of the detail-first line while the record path is at
+      // most 233 bytes (beyond that, the window assertion reds): the 53-byte prefix "no lock was taken, and nothing
+      // was moved or removed: " ahead of the detail would push it past the cut.
       const { leaf } = makeOrphan(h);
       const ident = identityOf(leaf);
       const slot = moveIntoSlot(h);
@@ -314,7 +315,7 @@ describe.skipIf(!LINUX)('the collector opens the reap lock only after an advisor
   });
 });
 
-describe('the source: one dash-free sentence, and a pass that writes nothing (path-identity spec §2.5)', () => {
+describe('the source: one dash-free sentence, and a pass that prints, journals and locks nothing (path-identity spec §2.5)', () => {
   const src = fs.readFileSync(CCD, 'utf8');
   /** `name`'s body, from its head line to its first closing brace at column 0, or '' when it is not defined. */
   const bodyOf = (name: string): string => {

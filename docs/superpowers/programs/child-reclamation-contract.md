@@ -3671,7 +3671,9 @@ comments and test titles cite the spec, never this contract.
   tick diet's first wave, #395, merged), it was absorbed with `git merge`; the only conflict was `ccd/ccd`'s stamp
   line, which was restamped, as R56 says for a second lander. `main` moved again, and Task 13 absorbed it before the
   PR opened, a second time, as `65614d35`, of `main` at `c7776b080`. That brought code PRs #189, #190, #191, #403, #406 and #408,
-  plus docs PRs. Its one conflict was the stamp line, regenerated.
+  plus docs PRs. Its one conflict was the stamp line, regenerated. Fix round 1 absorbed `main` a third time, as
+  `7bfef06cc`, of `main` at `a3cebde1b`. That brought ten PRs: code PRs #404, #411, #412, #413 (CI and tests), #417,
+  #418 and #419, and docs PRs #342, #414 and #416. Its one conflict was `ccd/ccd`'s generated stamp line, restamped.
 - Workspace lifecycle's coordinator consented to its three `ws-expire` edits: the loop's identity pair and the verb's
   entry line, each with its short comment, and `_ws_expire_audit_contained`'s entry line. `_ws_expire_locked` and the
   EXPIRE-V1 note were not edited.
@@ -3763,6 +3765,13 @@ comments and test titles cite the spec, never this contract.
   `records`; an id with no witness is asked its population first, so a failed listing, or `not-witnessed`, answers
   before the pass. The audit document prints `records: []` for it. It is unreachable in practice: every mint composes
   `<a>-<b>`, and the entry check counted no dash-free name on either box.
+- `prelock-no-lock-clause-follows-the-detail`: the verb's pre-lock unmeasured answer puts the locked detail first and
+  the no-lock clause after it. The refused site keeps its own prefix, unchanged. A cut at the 300-byte reason cap
+  takes the clause first, and reaches the detail only when the detail alone passes the cap. The record reader's rc-3
+  answer (the quarantine arm) always passes the cap, because its detail alone is at least 318 bytes. So the live rc-3
+  pre-lock line is that detail cut at 300 bytes plus "…", with no clause, and the absent `.reap-<id>.lock` is the
+  evidence. The answers with short details carry the clause whole. The pin pads a stub reason into the window where
+  the clause is what gets cut, a window the live rc-3 line never reaches.
 
 **The proof (spec §2.8 and §8).**
 - `dash-parity-in-its-own-file`: the real-binary proof is `ccdargv-dash-id-parity.test.ts`. `ccdargv-dec-parity.test.ts`
@@ -3799,8 +3808,12 @@ comments and test titles cite the spec, never this contract.
   hand-planted row whose project spells `--surface=<w>`.
 - `hand-planted-ids-over-the-cap`: a row planted by hand above `_REG_ID_MAX` is not refused.
 - `files-outside-the-name-census`: the file the cap's census left out.
-- `history-spool-names-outside-the-census-patterns`: the history spool's own names are built from a bare id or a file
-  name that the census scanner does not match; the table holds the draining name, which is the widest of them.
+- `history-spool-names-outside-the-census-patterns`: the history store's own names are built from a bare id or a file
+  name that the census scanner does not match: the hook's `spool/<id>.jsonl`, the sweep's `.obs` sidecar, and
+  `~/.ccrc/history/recall-off/<id>` (`recallOffPath`), a bare `/<id>` that adds no bytes beyond the id. The table
+  holds the draining name, `<id>.<ms>.<pid>.jsonl`, which is still the widest of them, so the cap is unaffected. The
+  history CLI's `${P.spool}/${id}.jsonl` (`writeRecallLine`) is now matched, and counted under the `<id>.<field>`
+  family with the field `jsonl`.
 - `quarantine-record-names-outside-the-census-patterns`: the quarantine record's name and its temp, and the witness
   writer's temp, spell the id in a way the scanner does not match; each is narrower than the widest row.
 - `random-slug-decides-the-cap-near-the-boundary`: ws-add caps the id after it chooses the slug, so for a project of
@@ -3819,8 +3832,9 @@ comments and test titles cite the spec, never this contract.
   dash-leading rows still say ccd's destructive verbs read their decision flags from any position, `--session`'s value
   included. That is true only of a box on an older ccd. Carried to the next wave that edits them.
 
-**Found while building, per task.** Tasks 1, 5 and 8 recorded no slug beyond those above; Tasks 4 and 5 found the one
-census blindness named under R93.
+**Found while building, per task.** Tasks 1 and 8 recorded no slug beyond those above; Tasks 4 and 5 found the one
+census blindness named under R93. Task 12's slugs concern this record itself (the as-built prose, its prose test and
+its draft claims) and are defined in the plan's Task 12 deviation entry only.
 - Task 2: `token-verb-controls-use-a-wrong-token`, `collect-control-runs-on-linux-only` and
   `review-335-f9-needle-outgrows-the-cap-under-this-tmpdir`. Each token verb's control case sends a well-formed token
   no audit minted, so the real id binds, takes its own lock and is refused `state-changed`. ws-collect's control runs on
@@ -3838,6 +3852,11 @@ census blindness named under R93.
   ws-hold's `--actor` and `--surface` ids now die `bad session id` where they gave the usage line, and ws-rename's
   `--actor`, `--surface` and `--reason` ids answer a `bad-args` refusal whose detail is `bad session id: <id>`. The
   mutant that makes ws-hold strip `--reason` as a decision flag reds `ccd-actor-flags.test.ts`.
+- Task 5: `merge-moves-a-stale-citation-under-a-rewritten-comment`. A merge of `main` moved `_ws_project_valid` down,
+  so a stale `ccd/ccd` line citation in the compaction-card corpus came to name a line of the header comment that
+  Task 5 had re-folded, line-neutral, and the new text carried the bare token `ccd` that anchors that citation. The
+  session hook's citation debt read one less than on `main`. Fix round 1 re-folded the comment again, still
+  line-neutral, so that line carries no bare `ccd`.
 - Task 6: `ws-add-dash-test-imports-ccdargv`. The ws-add suite imports the server's argv builder and its decision type
   read-only, to compose the argv a server would send.
 - Task 7: `id-cap-census-table-measured-at-the-export`, `census-compares-normalised-shapes`,
@@ -3854,9 +3873,17 @@ census blindness named under R93.
   disk a record's name and body must agree. A judgement that reads sound on its second look met a writer between two
   reads, and answers unmeasured `records` or `witness`. The pass reads the witness even when records stand, so the
   audit document reports it as the locked resume does.
+- Task 9, measured later: `prelock-prefix-cuts-the-rc3-detail` and `archived-expiry-census-fourth-collect-failed-site`.
+  The plan's STOP for the resume suite's rc-3 case fired: under a `TMPDIR` of 67 and of 81 characters, the no-lock
+  prefix pushed the pre-lock detail past the 300-byte reason cap, which a run at about 47 characters had not shown.
+  The repair is `prelock-no-lock-clause-follows-the-detail`, above. And Task 9's pre-lock unmeasured failure is a
+  fourth `cmd_ws_collect failed probe-unmeasured` site, so the archived-expiry census of failed and refused sites
+  went red until fix round 1 added it, under the coordinator's licence.
 - Task 10: `hold-and-rename-arms-are-matrix-blind`. Deleting ws-hold's or ws-rename's identity arm leaves the
   real-binary matrix green, because arity or the post-loop `_reg_id_ok` check already refuses those rows;
   `ccd-session-verbs-dash-id.test.ts` pins both arms.
 - Task 11: `expire-v1-note-already-rewritten`. Workspace lifecycle's wave 6 had rewritten the EXPIRE-V1 note already, so
   it no longer says the lane ships inert and the stated residual the plan expected for it does not apply. The note was
   not edited.
+- Task 13: `superpowers-tracked-file-count-is-one`. The plan expected no tracked file under `.superpowers`; one is
+  tracked on `main`, from before this wave, and this wave's diff holds no `.superpowers` path.

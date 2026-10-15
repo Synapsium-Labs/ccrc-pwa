@@ -301,8 +301,11 @@ measured at the wave's tip unless it says otherwise.
   id, so `mail-pending-<generation>.token` embeds no registry id (`files-outside-the-name-census`).
 - Two sets of names are built from a bare id or a file name that the census scanner's spellings do not match, and are
   stated residuals:
-  - `history-spool-names-outside-the-census-patterns`: the hook's `spool/<id>.jsonl` and the sweep's `.obs` sidecar.
-    The table holds the draining name, `<id>.<ms>.<pid>.jsonl`, and neither of the other two is wider than it.
+  - `history-spool-names-outside-the-census-patterns`, the history store's own names: the hook's `spool/<id>.jsonl`,
+    the sweep's `.obs` sidecar, and `~/.ccrc/history/recall-off/<id>` (`recallOffPath`), a bare `/<id>` that adds no
+    bytes beyond the id. The table holds the draining name, `<id>.<ms>.<pid>.jsonl`, which is still the widest of
+    them, so the cap is unaffected. The history CLI's `${P.spool}/${id}.jsonl` (`writeRecallLine`) is now matched, and
+    counted under the `<id>.<field>` family with the field `jsonl`.
   - `quarantine-record-names-outside-the-census-patterns`: the quarantine record `tmpquarantine/<id>.<ns>.<pid>`, 28
     bytes, and the temp `.<id>.<ns>.<pid>.<pid>.<R>.tmp` its writer makes, 47 bytes, spell the id `$name`. The
     witness writer's temp, `.<id>.<pid>.<R>.tmp` at 19 bytes, is built the same way. Each is narrower than the widest
@@ -428,7 +431,8 @@ measured at the wave's tip unless it says otherwise.
 - `hand-planted-ids-over-the-cap`: a row planted by hand above `_REG_ID_MAX` is not refused. ccd never mints one.
 - `files-outside-the-name-census`: the file the cap's census left out, listed above.
 - `history-spool-names-outside-the-census-patterns` and `quarantine-record-names-outside-the-census-patterns`: the
-  names listed above, whose spelling the census scanner does not match.
+  history store's own names and the quarantine record's names, listed above, whose spelling the census scanner does
+  not match.
 - `random-slug-decides-the-cap-near-the-boundary`: ws-add caps the id after it chooses the slug. For a project of 114
   to 118 bytes given no slug, the random slug's length, 9 to 14 bytes, decides whether the add succeeds or is refused.
 - `projects-over-64-get-no-hook-card`: the cap bounds the composed id, not the project. A project longer than
