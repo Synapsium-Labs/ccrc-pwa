@@ -38,6 +38,8 @@ import {
 import {
   DelegationJsonError,
   DelegationModelError,
+  DELEGATION_JOURNAL_ENTRY_KINDS,
+  DELEGATION_PRUNING_HOLD_REASONS,
   assertDelegationCheckpointIdentity,
   assertWave3Leases,
   canonicalDelegationJson,
@@ -70,6 +72,7 @@ import {
   type DelegationSessionRow,
 } from './delegation-model.js';
 import {
+  DELEGATION_JOURNAL_ERROR_CODES,
   DELEGATION_JOURNAL_FILE,
   DelegationJournalChain,
   DelegationJournalError,
@@ -929,6 +932,10 @@ export interface DelegationRecoveryFailure {
   detail: string;
 }
 
+/** The failure codes this file mints for itself, closed. Every other `code` a failure carries is a thrown error's own (a journal,
+ *  checkpoint or model refusal), and `DELEGATION_RESTORE_IN_PROGRESS` is the restore marker's. */
+export type DelegationOwnFailureCode = 'not-recovered' | 'recovering' | 'no-facts' | 'application-failed';
+
 /** How many evidence records the retained journal holds, in all and up to a sequence. Recovery counts them while it reads, so the
  *  projection repair can tell from SQLite's `(COUNT, MAX(journalSequence))` alone whether it has anything to read the journal for. */
 export interface DelegationEvidenceCounts {
@@ -1358,10 +1365,13 @@ export interface DelegationApplyOutcome {
   projection: DeepReadonly<{ status: 'projected' | 'unprojected' | 'failed'; error?: string }>;
 }
 
+/** Why `createLease` declined to create a lease. */
+export type DelegationLeaseRefusalReason = 'canonical-path-held' | 'unmeasured-request' | 'unmeasured-activity' | 'source-kind-mismatch';
+
 export type DelegationLeaseOutcome =
   | { kind: 'created'; leaseId: string; lineageId: string; sequence: number; applied: DelegationApplyOutcome }
   | { kind: 'duplicate'; leaseId: string }
-  | { kind: 'refused'; reason: 'canonical-path-held' | 'unmeasured-request' | 'unmeasured-activity' | 'source-kind-mismatch'; detail: string; heldBy?: string };
+  | { kind: 'refused'; reason: DelegationLeaseRefusalReason; detail: string; heldBy?: string };
 
 export type DelegationMetaOutcome =
   | { kind: 'opened'; activityId: string; applied: DelegationApplyOutcome }
@@ -1398,7 +1408,7 @@ export class DelegationDurability {
   private evidence = new DelegationEvidenceIndex();
   private head: DelegationJournalPosition | null = null;
   private current: DelegationRecoveryState = { checkpoint: emptyDelegationCheckpoint(), phase: 'reconstructing' };
-  private failureNow: DelegationDurabilityFailure | null = { phase: 'checkpoint-decode', code: 'not-recovered', detail: 'recovery has not run' };
+  private failureNow: DelegationDurabilityFailure | null = { phase: 'checkpoint-decode', code: 'not-recovered' satisfies DelegationOwnFailureCode, detail: 'recovery has not run' };
   private projectionStale = false;
   /** Sessions whose SQLite events an application found in conflict with the journal's: healed by the next repair. */
   private drifted = new Map<string, { sessionId: string; incarnation: string }>();
@@ -1449,13 +1459,13 @@ export class DelegationDurability {
     return this.enqueue(async () => {
       // Pruning is disabled FROM ENTRY: the state is `reconstructing` before the first byte is read.
       this.current = { checkpoint: this.current.checkpoint, phase: 'reconstructing' };
-      this.failureNow = { phase: 'checkpoint-decode', code: 'recovering', detail: 'recovery is running' };
+      this.failureNow = { phase: 'checkpoint-decode', code: 'recovering' satisfies DelegationOwnFailureCode, detail: 'recovery is running' };
       await this.writer.close().catch(() => undefined);
       this.writer = new DelegationJournalWriter(this.port, this.journalPath, this.deps.dir);
       const report = await recoverDelegationFromFiles(this.port, this.deps.dir);
       if (report.failure !== null || report.facts === null) {
         this.current = report.state;
-        this.failureNow = report.failure ?? { phase: 'final-validate', code: 'no-facts', detail: 'recovery produced no state' };
+        this.failureNow = report.failure ?? { phase: 'final-validate', code: 'no-facts' satisfies DelegationOwnFailureCode, detail: 'recovery produced no state' };
         this.deps.warn?.(`ccrc-server: delegation recovery failed at ${this.failureNow.phase}: ${this.failureNow.code}`);
         return report;
       }
@@ -1474,7 +1484,7 @@ export class DelegationDurability {
         } catch (err) {
           // A failure inside steps 1 to 7 has already been marked by `commitLocked`; one BEFORE step 1 (the build, the encoding) has
           // not, and the replayed suffix is then unsaved: mark it here, so a recovery that could not save is never reported ready.
-          if (this.failureNow === null || this.failureNow.code === 'recovering') this.fail(err);
+          if (this.failureNow === null || this.failureNow.code === ('recovering' satisfies DelegationOwnFailureCode)) this.fail(err);
           return { ...report, state: this.current, failure: this.failureNow };
         }
       }
@@ -1678,7 +1688,7 @@ export class DelegationDurability {
   // ── the one durable application ────────────────────────────────────────────────────────────────────────────────────
 
   private fail(err: unknown): void {
-    this.failureNow = { phase: 'durable-application', code: err instanceof DelegationJournalError ? err.code : 'application-failed', detail: err instanceof Error ? err.message : String(err) };
+    this.failureNow = { phase: 'durable-application', code: err instanceof DelegationJournalError ? err.code : 'application-failed' satisfies DelegationOwnFailureCode, detail: err instanceof Error ? err.message : String(err) };
     this.current = { checkpoint: this.current.checkpoint, phase: 'reconstructing' };
     void this.writer.close().catch(() => undefined);
     this.deps.warn?.(`ccrc-server: delegation durable application failed: ${this.failureNow.detail}`);
@@ -1792,4 +1802,49 @@ export class DelegationDurability {
   async close(): Promise<void> {
     await this.enqueue(async () => { await this.writer.close(); });
   }
+}
+
+// ── The words this file spells, for the coordination scanner ─────────────────────────────────────────────────────────
+
+/** The checkpoint codec's, fold's and applier's refusals, as a TOTAL table over `DelegationCheckpointErrorCode`. */
+const DELEGATION_CHECKPOINT_ERROR_CODES: Readonly<Record<DelegationCheckpointErrorCode, true>> = {
+  bom: true, 'invalid-utf8': true, 'missing-final-lf': true, crlf: true, 'malformed-json': true, 'duplicate-key': true, noncanonical: true,
+  'bad-shape': true, 'bad-version': true, 'bad-anchor': true, unprojectable: true, 'lease-proof': true, 'fold-refused': true,
+  'change-refused': true, 'not-ready': true,
+};
+
+/** The failure codes this file mints for itself, as a TOTAL table over `DelegationOwnFailureCode`. */
+const DELEGATION_OWN_FAILURE_CODES: Readonly<Record<DelegationOwnFailureCode, true>> = {
+  'not-recovered': true, recovering: true, 'no-facts': true, 'application-failed': true,
+};
+
+/** Why `createLease` declined, as a TOTAL table over `DelegationLeaseRefusalReason`. */
+const DELEGATION_LEASE_REFUSAL_REASONS: Readonly<Record<DelegationLeaseRefusalReason, true>> = {
+  'canonical-path-held': true, 'unmeasured-request': true, 'unmeasured-activity': true, 'source-kind-mismatch': true,
+};
+
+/** The kinds of a meta-open answer (the builder's and the applier's), as a TOTAL table over both unions' `kind`. */
+const DELEGATION_META_OPEN_KINDS: Readonly<Record<DelegationMetaOpenResult['kind'] | DelegationMetaOutcome['kind'], true>> = {
+  opened: true, 'already-open': true, 'waiting-for-evidence': true,
+};
+
+/** The phase a recovery or an application failure names, as a TOTAL table over `DelegationRecoveryFailure['phase']`. */
+const DELEGATION_FAILURE_PHASES: Readonly<Record<DelegationRecoveryFailure['phase'], true>> = {
+  'checkpoint-decode': true, 'checkpoint-validate': true, 'journal-validate': true, 'identity-evidence': true, 'suffix-replay': true,
+  holds: true, 'final-validate': true, 'durable-application': true,
+};
+
+/** Every kebab word this file spells, for `mail-routes.test.ts`'s scan of `server/src/coord`: derived from the tables above, from
+ *  this file's own `as const` lists (the durability edges, the restore marker's code) and from the vocabularies it only reads: the
+ *  journal's refusals and entry kinds, the model's pruning hold reasons, and `shared/api.ts`'s source kinds, cleanup states and
+ *  cleanup populations. Never a list, so a word added to a union is admitted and a typo is not. None is a mail rejection or a run
+ *  refusal. */
+export function isDelegationCheckpointKebab(v: string): boolean {
+  const own = (o: object): boolean => Object.prototype.hasOwnProperty.call(o, v);
+  const listed = (l: readonly string[]): boolean => l.includes(v);
+  return own(DELEGATION_CHECKPOINT_ERROR_CODES) || own(DELEGATION_OWN_FAILURE_CODES) || own(DELEGATION_LEASE_REFUSAL_REASONS)
+    || own(DELEGATION_META_OPEN_KINDS) || own(DELEGATION_FAILURE_PHASES) || own(DELEGATION_JOURNAL_ERROR_CODES)
+    || own(DELEGATION_JOURNAL_ENTRY_KINDS) || own(DELEGATION_PRUNING_HOLD_REASONS)
+    || v === DELEGATION_RESTORE_IN_PROGRESS || listed(DELEGATION_DURABILITY_EDGES)
+    || listed(DELEGATION_ACTIVITY_SOURCE_KINDS) || listed(DELEGATION_CLEANUP_STATES) || listed(DELEGATION_CLEANUP_POPULATIONS);
 }

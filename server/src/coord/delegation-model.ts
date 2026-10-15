@@ -358,6 +358,39 @@ export class DelegationModelError extends Error {
   }
 }
 
+// ── The words this file spells, for the coordination scanner ─────────────────────────────────────────────────────────
+
+/** The two journal entry kinds, as a TOTAL table over `DelegationJournalEntryV1['kind']`: a kind added to the union is a compile
+ *  error here until it is named, and the journal and the checkpoint read the table rather than spell the words again. */
+export const DELEGATION_JOURNAL_ENTRY_KINDS: Readonly<Record<DelegationJournalEntryV1['kind'], true>> = {
+  'evidence-accepted': true, 'lease-created': true,
+};
+
+/** The reasons a pruning hold can carry, as a TOTAL table over `DelegationPruningHold['reason']`. */
+export const DELEGATION_PRUNING_HOLD_REASONS: Readonly<Record<DelegationPruningHold['reason'], true>> = {
+  'checkpoint-anchor': true, 'open-lease': true, 'open-lineage': true, 'identity-candidate': true,
+};
+
+/** Every refusal the model throws, as a TOTAL table over `DelegationModelRefusal`. The journal and the correlation, which throw
+ *  a few of them themselves, read this table and do not spell them again. */
+export const DELEGATION_MODEL_REFUSALS: Readonly<Record<DelegationModelRefusal, true>> = {
+  'bad-instant': true, 'unreadable-row': true, 'bad-event': true, 'event-conflict': true, 'bad-checkpoint': true, 'bad-row': true,
+  'foreign-keys-off': true, 'bad-natural-key': true, 'bad-identity-journal-id': true, 'identity-journal-id-required': true,
+  'lease-generation': true, 'lease-sequences': true, 'lease-disposition': true, 'lease-cleanup-state': true,
+  'lease-transition-field': true, 'lease-last-observed': true, 'lease-opening-lineage': true, 'lease-without-journal-entry': true,
+  'activity-id-mismatch': true, 'natural-key-map': true, 'intent-map': true, 'lease-lineage': true,
+};
+
+/** Every kebab word this file spells, for `mail-routes.test.ts`'s scan of `server/src/coord`: the model's refusals, the journal
+ *  entry kinds, the pruning hold reasons, and two words that belong to `shared/api.ts` (`bash-worktree`, a source kind, and
+ *  `not-due`, a cleanup state), read from there and never re-spelled. Derived from tables, never a list, so a word added to a
+ *  union is admitted and a typo is not. None is a mail rejection or a run refusal. */
+export function isDelegationModelKebab(v: string): boolean {
+  const own = (o: object): boolean => Object.prototype.hasOwnProperty.call(o, v);
+  return own(DELEGATION_MODEL_REFUSALS) || own(DELEGATION_JOURNAL_ENTRY_KINDS) || own(DELEGATION_PRUNING_HOLD_REASONS)
+    || (DELEGATION_ACTIVITY_SOURCE_KINDS as readonly string[]).includes(v) || (DELEGATION_CLEANUP_STATES as readonly string[]).includes(v);
+}
+
 // ── Canonical JSON (RFC 8785 over the plan's closed domain) ──────────────────────────────────────────────────────────
 
 /** A high surrogate not followed by a low one, or a low one not preceded by a high one. UTF-8 cannot carry either, and

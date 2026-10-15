@@ -22,6 +22,12 @@ import { isArchivedExpiryKebab } from '../src/archivedExpiry.js';
 import { isStallSettingsKebab } from '../src/coord/stallsettings.js';
 import { isDeadCoordinatorKebab } from '../src/deadCoordinator.js';
 import { isCollectExecutorKebab } from '../src/coord/collectTempRoot.js';
+import { isDelegationModelKebab } from '../src/coord/delegation-model.js';
+import { isDelegationJournalKebab } from '../src/coord/delegation-journal.js';
+import { isDelegationCheckpointKebab } from '../src/coord/delegation-checkpoint.js';
+import { isDelegationIngestKebab } from '../src/coord/delegation-ingest.js';
+import { isDelegationCorrelationKebab } from '../src/coord/delegation-correlation.js';
+import { isDelegationCensusKebab } from '../src/coord/gitref.js';
 
 const TOKEN = 'f'.repeat(64);
 const UUID = 'a'.repeat(36);
@@ -861,8 +867,19 @@ describe('the rejection table is total, in both directions', () => {
         // literals. None is a mail rejection or a run refusal — no route answers with one; they ride the job's outcome
         // and the lane's memory. Admitted through the exported guard, derived from that file's tables and L1's
         // `COLLECT_HOLD_WHYS`, never NOT_CODES, for the reason every union above gives.
-        || isCollectExecutorKebab(tok),
-        `${tok} is not a declared MailRejectCode, RunRefuseCode, LifecycleGapReason, ClaimRefuseCode, SessionLifecycle, ReclaimRefuseCode, AskRefuseCode, RunRouteRefuseCode, SetAccountPoolsRefuseCode, UpdateStoreRefuseCode, child-reclaim word, stall-watch word, expiry word, stall-watch settings word, dead-coordinator word or temp-root collector word`).toBe(true);
+        || isCollectExecutorKebab(tok)
+        // DELEGATION BROKER, WAVE 3: the SEVENTEENTH union, checked together and never merged, on the standing rule
+        // `enter-ignored` above states. The delegation modules (`delegation-model.ts`, `-journal.ts`, `-checkpoint.ts`,
+        // `-ingest.ts` and `-correlation.ts`) spell, as literals, their refusal codes, the journal's entry kinds, the pruning
+        // hold reasons, the recovery phases and failure codes, the durability edges, the line rejections, the bucket
+        // unreadable reasons, the verdict kinds and every correlation reason; `gitref.ts` spells the worktree census's
+        // diagnostics. None is a mail rejection or a run refusal — no route answers with one; they ride the journal, the
+        // checkpoint, the cursor detail and a verdict. Admitted through six exported guards, each derived from its own file's
+        // typed tables (or from `shared/api.ts`'s delegation vocabularies, read and never re-spelled), never NOT_CODES, for the
+        // reason every union above gives.
+        || isDelegationModelKebab(tok) || isDelegationJournalKebab(tok) || isDelegationCheckpointKebab(tok)
+        || isDelegationIngestKebab(tok) || isDelegationCorrelationKebab(tok) || isDelegationCensusKebab(tok),
+        `${tok} is not a declared MailRejectCode, RunRefuseCode, LifecycleGapReason, ClaimRefuseCode, SessionLifecycle, ReclaimRefuseCode, AskRefuseCode, RunRouteRefuseCode, SetAccountPoolsRefuseCode, UpdateStoreRefuseCode, child-reclaim word, stall-watch word, expiry word, stall-watch settings word, dead-coordinator word, temp-root collector word or delegation word`).toBe(true);
     }
   });
 });

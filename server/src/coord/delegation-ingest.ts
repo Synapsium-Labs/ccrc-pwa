@@ -39,6 +39,7 @@ import type { FleetIO, MeasuredDirectoryRead } from '../io.js';
 import type { DelegationDurableBatch } from './delegation-checkpoint.js';
 import { findDelegationJsonDefect } from './delegation-journal.js';
 import {
+  DELEGATION_JOURNAL_ENTRY_KINDS,
   formatDelegationInstant,
   parseDelegationInstant,
   type DeepReadonly,
@@ -745,4 +746,18 @@ export async function readDelegationBucket(
   const stat = await io.statMeasured(file);
   if (stat.ok && stat.size < req.cursor) return inputOf({ size: stat.size, bytes: new Uint8Array(0), bucketPresent: true });
   return bad('range-unreadable', 'the byte range of the bucket could not be read');
+}
+
+// ── The words this file spells, for the coordination scanner ─────────────────────────────────────────────────────────
+
+/** Every kebab word this file spells, for `mail-routes.test.ts`'s scan of `server/src/coord`: the line rejections, the bucket
+ *  unreadable reasons (which include `input-invalid`, the ingest error's one code), the replaced-bucket detail head, the hook's
+ *  outcome and status words, and the journal entry kind it appends, read from the model's table and never re-spelled. Derived
+ *  from this file's own `as const` lists, so a word added to one is admitted and a typo is not. None is a mail rejection or a
+ *  run refusal: a rejected line and an unreadable bucket ride the checkpoint's cursor detail, and no route answers with one. */
+export function isDelegationIngestKebab(v: string): boolean {
+  const listed = (l: readonly string[]): boolean => l.includes(v);
+  return listed(DELEGATION_LINE_REJECTIONS) || listed(DELEGATION_BUCKET_UNREADABLE_REASONS) || v === DELEGATION_BUCKET_REPLACED
+    || listed(AGENT_OUTCOMES) || listed(BASH_OUTCOMES) || listed(LAUNCH_STATUSES) || listed(NOTIFICATION_STATUSES)
+    || Object.prototype.hasOwnProperty.call(DELEGATION_JOURNAL_ENTRY_KINDS, v);
 }

@@ -33,8 +33,9 @@
 // listing window is compared to the census record's `project`, the one repository key the census carries; an `unresolved` ccd
 // workspace (registry row or `.child` without run-child agreement) and a record whose first pass is still inside the birth wait are
 // non-answers, not leases.
-import type { DelegationEventEnvelopeV1, DelegationLeaseSourceKind } from '../../../shared/api.js';
+import { DELEGATION_ACTIVITY_SOURCE_KINDS, type DelegationEventEnvelopeV1, type DelegationLeaseSourceKind } from '../../../shared/api.js';
 import {
+  DELEGATION_MODEL_REFUSALS,
   DelegationModelError,
   leaseSourceKindOfActivity,
   parseDelegationInstant,
@@ -366,4 +367,23 @@ export function delegationLeaseSourceOfLinked(verdict: DelegationLinkedVerdict, 
   const activity = activities.find((a) => a.activityId === verdict.activityId);
   if (activity === undefined) throw new DelegationModelError('bad-row', `the linked activity ${verdict.activityId} is not among the activities handed over`);
   return leaseSourceKindOfActivity(activity.sourceKind);
+}
+
+// ── The words this file spells, for the coordination scanner ─────────────────────────────────────────────────────────
+
+/** The verdict kinds, as a TOTAL table over `DelegationCorrelationVerdict['kind']`. */
+const DELEGATION_CORRELATION_VERDICT_KINDS: Readonly<Record<DelegationCorrelationVerdict['kind'], true>> = {
+  'run-child-owned': true, linked: true, unresolved: true, conflicting: true, unmeasured: true,
+};
+
+/** Every kebab word this file spells, for `mail-routes.test.ts`'s scan of `server/src/coord`: the verdict kinds, every reason a
+ *  non-answer carries (`DELEGATION_CORRELATION_REASONS`, declared once above), `bash-worktree` from `shared/api.ts`'s activity
+ *  source kinds and the model refusal it throws (`bad-row`), read from the model's table, never re-spelled. Derived from tables,
+ *  so a word added to a union is admitted and a typo is not. None is a mail rejection or a run refusal: a verdict rides the
+ *  projection and the lease request, and no route answers with one. */
+export function isDelegationCorrelationKebab(v: string): boolean {
+  return Object.prototype.hasOwnProperty.call(DELEGATION_CORRELATION_VERDICT_KINDS, v)
+    || (DELEGATION_CORRELATION_REASONS as readonly string[]).includes(v)
+    || (DELEGATION_ACTIVITY_SOURCE_KINDS as readonly string[]).includes(v)
+    || Object.prototype.hasOwnProperty.call(DELEGATION_MODEL_REFUSALS, v);
 }

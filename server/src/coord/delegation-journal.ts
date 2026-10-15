@@ -23,6 +23,8 @@ import {
 import {
   DelegationJsonError,
   DelegationModelError,
+  DELEGATION_JOURNAL_ENTRY_KINDS,
+  DELEGATION_MODEL_REFUSALS,
   canonicalDelegationJson,
   delegationSha256Hex,
   isLowerHex64,
@@ -79,6 +81,32 @@ export class DelegationJournalError extends Error {
 
 function refuse(code: DelegationJournalErrorCode, detail: string, where?: { line?: number; offset?: number }): never {
   throw new DelegationJournalError(code, detail, where);
+}
+
+// ── The words this file spells, for the coordination scanner ─────────────────────────────────────────────────────────
+
+/** Every refusal the codec, the verifier and the writer throw, as a TOTAL table over `DelegationJournalErrorCode`. The checkpoint,
+ *  which throws a few of them itself, reads this table and does not spell them again. */
+export const DELEGATION_JOURNAL_ERROR_CODES: Readonly<Record<DelegationJournalErrorCode, true>> = {
+  bom: true, crlf: true, 'blank-line': true, 'torn-tail': true, 'missing-final-lf': true, 'invalid-utf8': true, 'malformed-json': true,
+  'duplicate-key': true, 'unknown-key': true, 'bad-field': true, 'invalid-domain': true, noncanonical: true, 'sequence-domain': true,
+  'sequence-start': true, 'sequence-duplicate': true, 'sequence-descent': true, 'sequence-gap': true, 'previous-digest': true,
+  'journal-id-mismatch': true, 'digest-mismatch': true, 'anchor-sequence': true, 'anchor-journal-id': true, 'anchor-digest': true,
+  'anchor-missing': true, 'held-evidence-missing': true, 'short-write': true, 'writer-unusable': true,
+};
+
+/** Why an append plan skipped an item, as a TOTAL table over `DelegationAppendSkipReason`. */
+const DELEGATION_APPEND_SKIP_REASONS: Readonly<Record<DelegationAppendSkipReason, true>> = {
+  'duplicate-event': true, 'duplicate-lease': true, 'lease-path-held': true,
+};
+
+/** Every kebab word this file spells, for `mail-routes.test.ts`'s scan of `server/src/coord`: the codec's refusals, the append
+ *  plan's skip reasons, and the entry kinds and the model refusal (`bad-event`) it reads from the model's tables, never re-spelled.
+ *  Derived from tables, so a word added to a union is admitted and a typo is not. None is a mail rejection or a run refusal. */
+export function isDelegationJournalKebab(v: string): boolean {
+  const own = (o: object): boolean => Object.prototype.hasOwnProperty.call(o, v);
+  return own(DELEGATION_JOURNAL_ERROR_CODES) || own(DELEGATION_APPEND_SKIP_REASONS) || own(DELEGATION_JOURNAL_ENTRY_KINDS)
+    || own(DELEGATION_MODEL_REFUSALS);
 }
 
 // ── The two exact, nonrecursive preimages ─────────────────────────────────────────────────────────────────────────────

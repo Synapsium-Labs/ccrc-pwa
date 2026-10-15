@@ -321,6 +321,13 @@ export const DELEGATION_CENSUS_DIAGNOSTICS = [
 ] as const;
 export type DelegationCensusDiagnostic = (typeof DELEGATION_CENSUS_DIAGNOSTICS)[number];
 
+/** The census diagnostics' kebab words, for `mail-routes.test.ts`'s scan of `server/src/coord`: derived from
+ *  `DELEGATION_CENSUS_DIAGNOSTICS`, declared once above, so a word added to it is admitted and a typo is not. None is a mail
+ *  rejection or a run refusal: a diagnostic describes a measured record and no route answers with one. */
+export function isDelegationCensusKebab(v: string): boolean {
+  return (DELEGATION_CENSUS_DIAGNOSTICS as readonly string[]).includes(v);
+}
+
 /** The path guard for one admin record NAME, as the legacy view always applied it. */
 const ADMIN_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 /** `logs/HEAD`'s first line starts `<40 hex> <40 hex> `: the second field is the commit the worktree was created at. */
