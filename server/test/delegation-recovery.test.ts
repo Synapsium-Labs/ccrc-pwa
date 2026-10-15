@@ -59,6 +59,8 @@ import {
   DELEGATION_RECOVERY_PHASES,
   DelegationCheckpointBuilder,
   DelegationCheckpointError,
+  COORDINATION_RESTORE_MARKER_FILE,
+  DELEGATION_RESTORE_IN_PROGRESS,
   DelegationDurability,
   DelegationEvidenceIndex,
   assertDelegationCheckpointProjectable,
@@ -2316,8 +2318,9 @@ describe('no-compaction / hold table (W3-M38): holds are computed and tested, an
     const recovering = dur.recover();
     await recovering;
     recording = false;
-    // The first two reads are recovery's own (the checkpoint, then the journal): pruning was off for both.
-    expect(seen.slice(0, 2)).toEqual(['checkpoint-read:false', 'journal-read:false']);
+    // The first three reads are recovery's own (the restore marker, whose read is a `readFile` too (8B), then the checkpoint, then the
+    // journal): pruning was off for all of them.
+    expect(seen.slice(0, 3)).toEqual(['checkpoint-read:false', 'checkpoint-read:false', 'journal-read:false']);
     expect(dur.pruningEnabled()).toBe(true);
   });
 
@@ -2414,5 +2417,70 @@ describe('growth (the numbers the report quotes)', () => {
     const sizes = records.map((r) => encodeDelegationJournalRecord(r).length);
     // A minimal envelope is a few hundred bytes; Task 9's real envelopes (cwd, transcript paths, listings) add to it.
     expect(sizes.every((n) => n > 300 && n < 1200)).toBe(true);
+  });
+});
+
+// ── 8B: startup refuses an active coordination restore marker (brief Step 7; `deploy/coordination-snapshot.mjs` publishes it) ──
+
+describe('8B: an active restore marker refuses recovery, and only the marker\'s removal lets it proceed', () => {
+  const markerPath = (dir: string): string => path.join(dir, COORDINATION_RESTORE_MARKER_FILE);
+  const tree = (dir: string): string[] => readdirSync(dir).sort();
+
+  it('the marker is a closed failure: reconstructing, pruning off, the closed code, and every apply refused', async () => {
+    const h = harness();
+    writeFileSync(markerPath(h.dir), '{"format":"ccrc-coordination-restore","state":"replacing","version":1}\n');
+    const dur = await h.open();
+    expect(dur.failure()).toMatchObject({ phase: 'checkpoint-decode', code: DELEGATION_RESTORE_IN_PROGRESS });
+    expect(DELEGATION_RESTORE_IN_PROGRESS).toBe('restore-in-progress');
+    expect(dur.state().phase).toBe('reconstructing');
+    expect(dur.pruningEnabled()).toBe(false);
+    await expect(dur.applyAccepted(batch([sessionStart(1)]))).rejects.toMatchObject({ code: 'not-ready' });
+    expect(readDisk(h.dir)).toEqual({ journal: null, checkpoint: null });
+  });
+
+  it('it comes BEFORE any other reading: a healthy journal and checkpoint beside the marker are neither read nor changed, and recovery reports the marker, not them', async () => {
+    const h = harness();
+    const first = await h.open();
+    await first.applyAccepted(batch([sessionStart(1), bareTool(2, X)]));
+    await first.close();
+    const before = readDisk(h.dir);
+    expect(before.journal).not.toBeNull();
+    writeFileSync(markerPath(h.dir), 'a marker of any shape: its presence is the fact\n');
+    // Corrupt the checkpoint too: a recovery that read it first would name THAT failure.
+    writeFileSync(path.join(h.dir, DELEGATION_CHECKPOINT_FILE), 'not a checkpoint\n');
+    const dur = await h.open();
+    expect(dur.failure()).toMatchObject({ code: DELEGATION_RESTORE_IN_PROGRESS });
+    expect(dur.pruningEnabled()).toBe(false);
+    expect(readFileSync(path.join(h.dir, DELEGATION_JOURNAL_FILE))).toEqual(before.journal);
+    expect(readFileSync(path.join(h.dir, DELEGATION_CHECKPOINT_FILE), 'utf8')).toBe('not a checkpoint\n');
+    const report = await recoverDelegationFromFiles(nodeDelegationFilePort, h.dir);
+    expect(report).toMatchObject({ failure: { code: DELEGATION_RESTORE_IN_PROGRESS }, pruning: 'disabled', state: { phase: 'reconstructing' }, facts: null });
+  });
+
+  it('it never deletes the marker: recover() on the same applier still refuses, and a fixture that removes the marker then recovers ready', async () => {
+    const h = harness();
+    const first = await h.open();
+    await first.applyAccepted(batch([sessionStart(1)]));
+    await first.close();
+    writeFileSync(markerPath(h.dir), 'x\n');
+    const dur = await h.open();
+    const filesBefore = tree(h.dir);
+    expect((await dur.recover()).failure).toMatchObject({ code: DELEGATION_RESTORE_IN_PROGRESS });
+    expect(existsSync(markerPath(h.dir))).toBe(true);
+    expect(tree(h.dir)).toEqual(filesBefore);
+    rmSync(markerPath(h.dir));
+    const report = await dur.recover();
+    expect(report.failure).toBeNull();
+    expect(dur.state().phase).toBe('ready');
+    expect(dur.pruningEnabled()).toBe(true);
+    await expect(dur.applyAccepted(batch([sessionStart(2)]))).resolves.toBeDefined();
+  });
+
+  it('the failure appears in the server log line the applier warns with', async () => {
+    const h = harness();
+    writeFileSync(markerPath(h.dir), 'x\n');
+    const warned: string[] = [];
+    await h.open({ warn: (m) => warned.push(m) });
+    expect(warned).toEqual(['ccrc-server: delegation recovery failed at checkpoint-decode: restore-in-progress']);
   });
 });

@@ -53,6 +53,8 @@ import { IN_FLIGHT_UPDATE_PHASES, UPDATE_PHASES } from '../../shared/api.js';
 // Fix round 1 item 3 / review 155 C31: W2's OWN reader (never a hand copy),
 // the same import pattern `update-intent-cross-side.test.ts` already uses.
 import { reportFrom, type NodeFileRead } from '../src/update/inventory.js';
+import { emptyDelegationCheckpoint } from '../src/coord/delegation-model.js';
+import { encodeDelegationCheckpoint } from '../src/coord/delegation-checkpoint.js';
 import {
   SPINE_CONTAINMENT_PROBE, spineRunCalls, adoptPlantedSystemd, assertSpineFrontContained, spineSystemctlArms,
   spineSystemdRun, plantLiveShape, foreignSnapshot, stateCallsNaming,
@@ -10725,7 +10727,7 @@ describe('ccrc versions, and the GC that never removes a needed version (W6 Task
       let r = runVersions(home, ['--prune'], { CCRC_VERSIONS_KEEP: HUGE });
       expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(1);
       expect(r.stderr).toContain(`ccrc: versions: ${WHY(HUGE)} — nothing was pruned`);
-      expect(r.stdout).not.toMatch(/pruned/);
+      expect(r.stdout).not.toMatch(/^backup: pruned/m);
       expect(existsSync(join(home, '.ccrc', 'update.lock')), 'refused before the lock').toBe(false);
       expect(versionDirs(home)).toEqual([...NAMES].sort());
       // The plain listing lists (exit 0), names the knob and value, and marks no version prunable.
@@ -12235,7 +12237,13 @@ describe('ccrc update and rollback: ~/ccrc-backups is pruned after a completed r
   const plantDir = (home: string, name: string, opts: { coordDb?: boolean; tree?: boolean } = {}): string => {
     const dir = join(backupRoot(home), name);
     mkdirSync(dir, { recursive: true });
-    if (opts.coordDb) writeFileSync(join(dir, 'coord.db'), 'fixture coord.db snapshot\n');
+    // A REAL database since the coordination snapshot (delegation broker wave 3): the keep set asks the classifier, and a
+    // text placeholder is not a valid snapshot (`_bak_snap_class`; a bare, valid DB with no delegation table is `legacy`).
+    if (opts.coordDb) {
+      const db = new DatabaseSync(join(dir, 'coord.db'));
+      db.exec('CREATE TABLE fixture (x INTEGER); INSERT INTO fixture VALUES (42);');
+      db.close();
+    }
     if (opts.tree) mkdirSync(join(dir, 'agent-dist'), { recursive: true });
     return dir;
   };
@@ -12405,9 +12413,11 @@ describe('ccrc update and rollback: ~/ccrc-backups is pruned after a completed r
     const r = rollbackRun(home, [], { CCRC_BACKUP_KEEP: '0' });
     expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
     expect(r.stdout).not.toMatch(/^update: backup:/m);   // a flip takes no backup of its own
-    expect(existsSync(join(backupRoot(home), '20250101-000000')), 'the newest earlier coord.db snapshot').toBe(true);
+    // Since the coordination snapshot every update's backup carries a manifest, so the newer setup dir is a VALID v1 snapshot (its
+    // members absent on this box) and is the newest earlier snapshot; the planted bare-DB dir is an OLDER, legacy one and is superseded.
+    expect(existsSync(join(backupRoot(home), '20250101-000000')), 'an older legacy snapshot is superseded by the newer v1 snapshot').toBe(false);
     expect(existsSync(join(backupRoot(home), '20250102-000000'))).toBe(false);
-    expect(existsSync(join(backupRoot(home), setup2[1]!)), 'the newer setup dir carries the tree entry — the earlier tree backup').toBe(true);
+    expect(existsSync(join(backupRoot(home), setup2[1]!)), 'the newer setup dir carries the tree entry — the earlier tree backup — and a v1 manifest').toBe(true);
     expect(existsSync(join(backupRoot(home), setup2[0]!)), 'the older setup dir is not protected — nothing else keeps it').toBe(false);
     expect(r.stdout).toMatch(new RegExp(`^rollback: backups: pruned \\$HOME/ccrc-backups/${setup2[0]}`, 'm'));
     // Fix round 2, item 1: this case's own kept-version spine runs a REAL
@@ -12852,7 +12862,7 @@ describe('ccrc update and rollback: ~/ccrc-backups is pruned after a completed r
       assertNoExtras(home);
     });
 
-    it('_bak_gc and _bak_prune each call _bak_keepset, and [ -f "$d/coord.db" ] appears once in ccd/ccrc (one selection)', () => {
+    it('_bak_gc and _bak_prune each call _bak_keepset, and the snapshot test is spelled once: through _bak_snap_class, never a bare [ -f coord.db ]', () => {
       const src = readFileSync(join(REPO, 'ccd', 'ccrc'), 'utf8');
       const body = (name: string): string => {
         const m = new RegExp(`^${name}\\(\\) \\{[\\s\\S]*?\\n\\}$`, 'm').exec(src);
@@ -12862,7 +12872,8 @@ describe('ccrc update and rollback: ~/ccrc-backups is pruned after a completed r
       // A CALL (a command word at the start of a line), never a mention in a comment.
       expect(body('_bak_gc'), '_bak_gc').toMatch(/^ +_bak_keepset(\s|$)/m);
       expect(body('_bak_prune'), '_bak_prune').toMatch(/^ +_bak_keepset(\s|$)/m);
-      expect(src.split('[ -f "$d/coord.db" ]').length - 1, 'the snapshot test is spelled once').toBe(1);
+      expect(src.split('[ -f "$d/coord.db" ]').length - 1, 'a bare coord.db test would discard a sidecar-only snapshot').toBe(0);
+      expect(src.split('_bak_snap_class "$d"').length - 1, 'the classifier is asked in one place').toBe(1);
     });
   });
 
@@ -12912,6 +12923,331 @@ describe('ccrc update and rollback: ~/ccrc-backups is pruned after a completed r
     expect(existsSync(plainFile), 'the plain timestamp-named file is not a timestamped backup').toBe(true);
     expect(fileText(plainFile)).toBe(plainBefore);
   }, 60_000);   // a move onto v2.0.0 plus a rollback: 13.7-17 s alone, timed out 3 of 6 at load 30-50 (final review)
+});
+
+// ── Delegation broker wave 3, Task 8B: the coordination snapshot's callers ──────────────────────────────────────────────
+// `_upd_backup` runs `deploy/coordination-snapshot.mjs capture` LAST, `_bak_keepset` asks its classifier, and neither the backup
+// set nor arm 3 of the restore ever carries the sidecars. Every case is a fixture HOME; the helper's own rows (capture, classify,
+// restore, recover) are in `coordination-snapshot.test.ts`.
+describe('ccrc backup and update: the coordination snapshot callers (delegation broker wave 3, Task 8B)', () => {
+  const HELPER = join(REPO, 'deploy', 'coordination-snapshot.mjs');
+  const backupRoot = (home: string): string => join(home, 'ccrc-backups');
+  const CP_REV1 = encodeDelegationCheckpoint({ ...emptyDelegationCheckpoint(), revision: 1 });
+  const CP_REV2 = encodeDelegationCheckpoint({ ...emptyDelegationCheckpoint(), revision: 2 });
+  const manifestOf = (dir: string): string => join(dir, 'coordination-snapshot.json');
+
+  /** A `node` in front of the real one on PATH: it records which of the two helpers ran and, at the capture, what the backup
+   *  directory held at that moment; `FX_CLASSIFY_FAIL=1` makes the classifier fail the way a broken helper does (exit 70). */
+  const nodeShim = (home: string): string => {
+    const bin = join(home, 'shim');
+    mkdirSync(bin, { recursive: true });
+    writeFileSync(join(bin, 'node'), [
+      '#!/bin/sh',
+      'case "$2" in',
+      '  *backup-coord.mjs) echo sqlite >> "$HOME/node-order" ;;',
+      '  *coordination-snapshot.mjs)',
+      '    echo "helper $3" >> "$HOME/node-order"',
+      '    if [ "$3" = capture ]; then echo "present: $(ls -A "$5" | tr "\\n" " ")" >> "$HOME/node-order"; fi',
+      '    if [ "$3" = classify ] && [ -n "$FX_CLASSIFY_FAIL" ]; then exit 70; fi ;;',
+      'esac',
+      // On to whatever `node` the fixture box would otherwise have resolved (its verifier shim included), not the real one.
+      `PATH='${updateEnv(home).PATH ?? ''}'; exec node "$@"`,
+      '',
+    ].join('\n'), { mode: 0o755 });
+    return bin;
+  };
+  const withShim = (home: string, extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv => ({ PATH: `${nodeShim(home)}:${updateEnv(home).PATH ?? ''}`, ...extra });
+  const nodeOrder = (home: string): string[] => (existsSync(join(home, 'node-order')) ? readFileSync(join(home, 'node-order'), 'utf8').split('\n').filter(Boolean) : []);
+
+  const runBackup = (home: string, args: string[] = [], extraEnv: NodeJS.ProcessEnv = {}): Result => {
+    mkdirSync(join(home, 'tmp'), { recursive: true });
+    const env = { ...updateEnv(home), TMPDIR: join(home, 'tmp'), ...extraEnv };
+    replantDoctorStubs(home);
+    const r = spawnSync(BASH, [join(REPO, 'ccd', 'ccrc'), 'backup', ...args], { env, encoding: 'utf8' });
+    return { code: r.status ?? -1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
+  };
+  const ownDir = (r: Result): string => {
+    const m = /^backup: (\S+)/m.exec(r.stdout);
+    if (m === null) throw new Error(`no "backup:" line in:\n${r.stdout}`);
+    return m[1]!;
+  };
+  const helper = (home: string, args: string[]): Result => {
+    const r = spawnSync(process.execPath, ['--no-warnings', HELPER, ...args], { env: { HOME: home, PATH: process.env['PATH'] ?? '' }, encoding: 'utf8' });
+    return { code: r.status ?? -1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
+  };
+  const plantLiveCheckpoint = (home: string, bytes: Uint8Array = CP_REV1): void => {
+    mkdirSync(join(home, '.ccrc'), { recursive: true });
+    writeFileSync(join(home, '.ccrc', 'delegation-checkpoint.json'), bytes);
+  };
+  type Kind = 'v1-sidecars' | 'legacy-db' | 'invalid' | 'tree' | 'tree+v1' | 'plain';
+  /** One timestamped backup dir of a given kind. 'v1-sidecars' is a REAL helper capture of a checkpoint (no journal, no DB). */
+  const plantDir = (home: string, name: string, kind: Kind): string => {
+    const dir = join(backupRoot(home), name);
+    mkdirSync(dir, { recursive: true });
+    if (kind === 'v1-sidecars' || kind === 'tree+v1' || kind === 'invalid') {
+      const mini = mkTmp('ccrc-fx-snap-mini-');
+      mkdirSync(join(mini, '.ccrc'));
+      writeFileSync(join(mini, '.ccrc', 'delegation-checkpoint.json'), CP_REV1);
+      const r = helper(mini, ['capture', '--dir', dir]);
+      expect(r.code, r.stderr).toBe(0);
+    }
+    if (kind === 'invalid') {
+      // A healthy DB beside a manifest that no longer holds up: it must NOT be taken for a legacy snapshot.
+      const db = new DatabaseSync(join(dir, 'coord.db'));
+      db.exec('CREATE TABLE fixture (x INTEGER)');
+      db.close();
+      writeFileSync(manifestOf(dir), readFileSync(manifestOf(dir), 'utf8').replace('"version":1', '"version":2'));
+    }
+    if (kind === 'legacy-db') {
+      const db = new DatabaseSync(join(dir, 'coord.db'));
+      db.exec('CREATE TABLE fixture (x INTEGER)');
+      db.close();
+    }
+    if (kind === 'tree' || kind === 'tree+v1') mkdirSync(join(dir, 'agent-dist'), { recursive: true });
+    return dir;
+  };
+
+  it('`_upd_backup` order: a unique directory, the SQLite snapshot, the existing backup set, and only THEN the coordination capture, which writes the manifest last', () => {
+    const home = freshUpdateBox('ccrc-fx-8b-order-');
+    plantOldBox(home, { version: 'v1.0.0' });
+    plantCoordDb(home);
+    plantLiveCheckpoint(home);
+    const r = runBackup(home, [], withShim(home));
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    const dir = ownDir(r);
+    const order = nodeOrder(home);
+    expect(order.slice(0, 3).map((l) => l.replace(/:.*/, '')), order.join(' | ')).toEqual(['sqlite', 'helper capture', 'present']);
+    const present = order[2]!.replace(/^present: /, '').trim().split(/\s+/);
+    // At the moment of the capture the SQLite snapshot and the rest of the set were already in place, and the manifest was not.
+    expect(present).toContain('coord.db');
+    expect(present.length, `the backup set was copied before the capture: ${present.join(' ')}`).toBeGreaterThan(2);
+    expect(present).not.toContain('coordination-snapshot.json');
+    expect(present).not.toContain('delegation-checkpoint.json');
+    // Afterwards: the manifest, the checkpoint sidecar, and a snapshot that validates.
+    expect(readdirSync(dir)).toEqual(expect.arrayContaining([...present, 'coordination-snapshot.json', 'delegation-checkpoint.json']));
+    expect(helper(home, ['classify', '--from', dir])).toMatchObject({ code: 0, stdout: 'v1\n' });
+    expect(r.stdout).toMatch(/\(coord\.db snapshot, coordination sidecars and manifest, dists, ccd and its body, units — taken before anything was installed\)/);
+    expect(JSON.parse(readFileSync(manifestOf(dir), 'utf8'))).toMatchObject({
+      members: { delegationCheckpoint: { present: true }, delegationJournal: { present: false }, coordDb: { present: true } },
+      delegation: { state: 'initialized', checkpointRevision: 1 },
+    });
+  });
+
+  it('a box with nothing to snapshot still gets a manifest (a fleet box): every member absent, and the backup continues', () => {
+    const home = freshUpdateBox('ccrc-fx-8b-empty-');
+    plantOldBox(home, { version: 'v1.0.0' });
+    const r = runBackup(home);
+    expect(r.code, `stderr: ${r.stderr}`).toBe(0);
+    const m = JSON.parse(readFileSync(manifestOf(ownDir(r)), 'utf8'));
+    expect(m.delegation).toEqual({ state: 'absent', checkpointRevision: null, anchor: null, journal: null });
+    expect(m.members.coordDb.present).toBe(false);
+  });
+
+  it('continue ONLY after a durable manifest: a capture that fails stops `ccrc backup`, and stops `ccrc update` before anything is installed', () => {
+    const bad = (home: string): void => { plantLiveCheckpoint(home, new TextEncoder().encode('{"v":1}\n')); };
+    const home = freshUpdateBox('ccrc-fx-8b-fail-backup-');
+    plantOldBox(home, { version: 'v1.0.0' });
+    bad(home);
+    const r = runBackup(home);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toMatch(/^ccrc: the coordination snapshot failed — refusing to install with an incomplete backup/m);
+    expect(r.stderr).toMatch(/coordination-snapshot: bad-shape/);
+    const dirs = readdirSync(backupRoot(home));
+    expect(dirs).toHaveLength(1);
+    expect(existsSync(manifestOf(join(backupRoot(home), dirs[0]!))), 'no manifest after a failed capture').toBe(false);
+    expect(readdirSync(join(backupRoot(home), dirs[0]!)).filter((f) => /delegation|coordination/.test(f)), 'no helper-owned file is left').toEqual([]);
+
+    const home2 = freshUpdateBox('ccrc-fx-8b-fail-update-');
+    plantOldBox(home2, { version: 'v1.0.0' });
+    plantCoordDb(home2);
+    bad(home2);
+    packRelease(home2, fullTree(home2, { version: 'v2.0.0', sha: 'newsha0000000000000000000000000000000000' }), { tag: 'v2.0.0' });
+    const u = runUpdate(home2);
+    expect(u.code, `stderr: ${u.stderr}\nstdout: ${u.stdout}`).toBe(1);
+    expect(u.stderr).toMatch(/the coordination snapshot failed — refusing to install with an incomplete backup/);
+    expect(existsSync(join(home2, 'ccrc', 'server', 'OLD-MARKER')), 'the old tree must still be in place').toBe(true);
+    expect(existsSync(join(home2, 'ccrc', 'ccd', 'ccrc-doctor-checks')), 'nothing of the new tree was installed').toBe(false);
+  });
+
+  it('the backup set and its listing never carry the sidecars: no row of `_upd_backup_set` or `_upd_backup_pairs` names them', () => {
+    const home = freshUpdateBox('ccrc-fx-8b-pairs-');
+    plantOldBox(home, { version: 'v1.0.0' });
+    const pairs = sourcedCcrc(home, '_upd_backup_pairs');
+    expect(pairs.code, pairs.stderr).toBe(0);
+    expect(pairs.stdout.split('\n').filter(Boolean).length).toBeGreaterThan(8);
+    expect(pairs.stdout).not.toMatch(/delegation|coordination|coord\.db/);
+    const src = readFileSync(join(REPO, 'ccd', 'ccrc'), 'utf8');
+    const set = /^_upd_backup_set\(\) \{[\s\S]*?\n\}$/m.exec(src)![0];
+    expect(set).not.toMatch(/delegation|coordination|coord\.db/);
+  });
+
+  it('arm 3 of the restore never puts old sidecars over live ones: a record the server wrote during the update survives the revert (W3-M31)', () => {
+    const home = freshUpdateBox('ccrc-fx-8b-arm3-');
+    plantRestoreBox(home, {
+      child: 'broken',
+      onInstall: [
+        // What a running server does while an update installs: it journals and checkpoints again.
+        'printf \'a journal the server wrote during the update\\n\' > "$HOME/.ccrc/delegation-events.log"',
+        'cp "$HOME/fixture-newer-checkpoint" "$HOME/.ccrc/delegation-checkpoint.json"',
+      ],
+    });
+    plantCoordDb(home);
+    plantKillModeDropIn(home);
+    writeFileSync(join(home, 'fixture-sweep-units'), UNIT_LINES);
+    plantLiveCheckpoint(home, CP_REV1);
+    writeFileSync(join(home, 'fixture-newer-checkpoint'), CP_REV2);
+    const r = runUpdate(home);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(4);
+    expect(r.stdout).toMatch(/^update: REVERTED \(arm 3\): copied the pre-update backup back/m);
+    // The backup holds the OLD checkpoint (revision 1); the live files are what the server wrote after it, and arm 3 left them alone.
+    const backup = announcedBackupDir(r.stdout, home);
+    expect(readFileSync(join(backup, 'delegation-checkpoint.json'))).toEqual(Buffer.from(CP_REV1));
+    expect(readFileSync(join(home, '.ccrc', 'delegation-checkpoint.json'))).toEqual(Buffer.from(CP_REV2));
+    expect(readFileSync(join(home, '.ccrc', 'delegation-events.log'), 'utf8')).toBe('a journal the server wrote during the update\n');
+  });
+
+  describe('retention: four independent keep sets, decided by the classifier (W3-M28, W3-M39)', () => {
+    const backupHome = (prefix: string): string => {
+      const home = freshUpdateBox(prefix);
+      plantOldBox(home, { version: 'v1.0.0' });
+      return home;
+    };
+    const has = (home: string, name: string): boolean => existsSync(join(backupRoot(home), name));
+
+    it('a valid sidecar snapshot with NO coord.db is kept as the newest earlier snapshot (W3-M28)', () => {
+      const home = backupHome('ccrc-fx-8b-keep-sidecars-');
+      plantDir(home, '20250101-000000', 'plain');
+      plantDir(home, '20250102-000000', 'v1-sidecars');
+      expect(existsSync(join(backupRoot(home), '20250102-000000', 'coord.db'))).toBe(false);
+      plantDir(home, '20250103-000000', 'plain');
+      const r = runBackup(home, [], { CCRC_BACKUP_KEEP: '0' });
+      expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+      expect(has(home, '20250102-000000'), 'the valid sidecar snapshot').toBe(true);
+      expect(has(home, '20250101-000000')).toBe(false);
+      expect(has(home, '20250103-000000')).toBe(false);
+      expect(existsSync(ownDir(r))).toBe(true);
+    });
+
+    it('through `ccrc update`'+"'"+'s own prune (_bak_gc) too', () => {
+      const home = backupHome('ccrc-fx-8b-keep-update-');
+      packRelease(home, stubTree(home, { version: 'v2.0.0' }), { tag: 'v2.0.0' });
+      plantDir(home, '20250101-000000', 'plain');
+      plantDir(home, '20250102-000000', 'v1-sidecars');
+      plantDir(home, '20250103-000000', 'plain');
+      const r = runUpdate(home, [], { CCRC_BACKUP_KEEP: '0' });
+      expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+      expect(has(home, '20250102-000000'), 'the valid sidecar snapshot').toBe(true);
+      expect(has(home, '20250101-000000')).toBe(false);
+      expect(has(home, '20250103-000000')).toBe(false);
+    });
+
+    it('the snapshot keep and the tree keep are independent: a tree-only dir and a snapshot-only dir are BOTH kept (W3-M39)', () => {
+      const home = backupHome('ccrc-fx-8b-keep-indep-');
+      plantDir(home, '20250101-000000', 'tree');
+      plantDir(home, '20250102-000000', 'v1-sidecars');
+      plantDir(home, '20250103-000000', 'plain');
+      const r = runBackup(home, [], { CCRC_BACKUP_KEEP: '0' });
+      expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+      expect(has(home, '20250101-000000'), 'the newest earlier tree backup').toBe(true);
+      expect(has(home, '20250102-000000'), 'the newest earlier valid coordination snapshot').toBe(true);
+      expect(has(home, '20250103-000000')).toBe(false);
+    });
+
+    it('a dir that is both the newest tree backup and the newest snapshot keeps itself ONCE, and an older tree-only dir is not kept on its account', () => {
+      const home = backupHome('ccrc-fx-8b-keep-both-');
+      plantDir(home, '20250101-000000', 'tree');
+      plantDir(home, '20250102-000000', 'tree+v1');
+      const r = runBackup(home, [], { CCRC_BACKUP_KEEP: '0' });
+      expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+      expect(has(home, '20250102-000000')).toBe(true);
+      expect(has(home, '20250101-000000')).toBe(false);
+    });
+
+    it('the newest-N keep and the current operation\'s dir are also independent of both: KEEP=2 keeps the newest two timestamps whatever they hold', () => {
+      const home = backupHome('ccrc-fx-8b-keep-n-');
+      for (const n of ['20250101', '20250102', '20250103', '20250104']) plantDir(home, `${n}-000000`, 'plain');
+      plantDir(home, '20250100-000000', 'v1-sidecars');
+      plantDir(home, '20241231-000000', 'tree');
+      const r = runBackup(home, [], { CCRC_BACKUP_KEEP: '2' });
+      expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+      // Of the seven dirs (six planted + this run's), the newest two by count are this run's and 20250104; the snapshot and the tree keep add two more.
+      expect(has(home, '20250104-000000')).toBe(true);
+      expect(has(home, '20250100-000000'), 'the newest earlier valid snapshot').toBe(true);
+      expect(has(home, '20241231-000000'), 'the newest earlier tree backup').toBe(true);
+      for (const n of ['20250101', '20250102', '20250103']) expect(has(home, `${n}-000000`), n).toBe(false);
+    });
+
+    it('an INVALID manifest never counts as a snapshot, whatever healthy DB sits beside it: the older valid one is the keep', () => {
+      const home = backupHome('ccrc-fx-8b-keep-invalid-');
+      plantDir(home, '20250101-000000', 'v1-sidecars');
+      plantDir(home, '20250102-000000', 'invalid');
+      const r = runBackup(home, [], { CCRC_BACKUP_KEEP: '0' });
+      expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+      expect(has(home, '20250101-000000'), 'the older VALID snapshot').toBe(true);
+      expect(has(home, '20250102-000000'), 'an invalid snapshot is not kept as one').toBe(false);
+    });
+
+    it('a manifest-less dir with a healthy DB (legacy) is a snapshot too', () => {
+      const home = backupHome('ccrc-fx-8b-keep-legacy-');
+      plantDir(home, '20250101-000000', 'legacy-db');
+      plantDir(home, '20250102-000000', 'plain');
+      const r = runBackup(home, [], { CCRC_BACKUP_KEEP: '0' });
+      expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+      expect(has(home, '20250101-000000')).toBe(true);
+      expect(has(home, '20250102-000000')).toBe(false);
+    });
+
+    it('a classifier FAILURE deletes nothing and warns, in both pruners', () => {
+      const home = backupHome('ccrc-fx-8b-keep-fail-');
+      plantDir(home, '20250101-000000', 'plain');
+      plantDir(home, '20250102-000000', 'v1-sidecars');
+      plantDir(home, '20250103-000000', 'plain');
+      const r = runBackup(home, [], withShim(home, { CCRC_BACKUP_KEEP: '0', FX_CLASSIFY_FAIL: '1' }));
+      expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+      expect(r.stdout).toMatch(/^backup: prune skipped — the coordination snapshot classifier failed/m);
+      for (const n of ['20250101-000000', '20250102-000000', '20250103-000000']) expect(has(home, n), n).toBe(true);
+      expect(r.stdout).not.toMatch(/^backup: pruned/m);
+
+      const home2 = backupHome('ccrc-fx-8b-keep-fail-update-');
+      packRelease(home2, stubTree(home2, { version: 'v2.0.0' }), { tag: 'v2.0.0' });
+      plantDir(home2, '20250101-000000', 'plain');
+      plantDir(home2, '20250102-000000', 'v1-sidecars');
+      const u = runUpdate(home2, [], withShim(home2, { CCRC_BACKUP_KEEP: '0', FX_CLASSIFY_FAIL: '1' }));
+      expect(u.code, `stderr: ${u.stderr}\nstdout: ${u.stdout}`).toBe(0);
+      expect(u.stdout).toMatch(/^update: backups: WARN: the coordination snapshot classifier failed/m);
+      expect(has(home2, '20250101-000000')).toBe(true);
+      expect(has(home2, '20250102-000000')).toBe(true);
+    });
+
+    it('a dir with no coordination name at all is not even shown to the classifier', () => {
+      const home = backupHome('ccrc-fx-8b-keep-prefilter-');
+      plantDir(home, '20250101-000000', 'tree');
+      plantDir(home, '20250102-000000', 'plain');
+      const r = runBackup(home, [], withShim(home, { CCRC_BACKUP_KEEP: '0' }));
+      expect(r.code, `stderr: ${r.stderr}`).toBe(0);
+      const classified = nodeOrder(home).filter((l) => l === 'helper classify');
+      expect(classified, 'no dir of this fixture holds a coordination name').toEqual([]);
+    });
+  });
+
+  it('`ccrc coordination-snapshot validate|restore|recover` reaches the helper, exits with its code, and refuses bad usage with 2', () => {
+    const home = freshUpdateBox('ccrc-fx-8b-verb-');
+    plantOldBox(home, { version: 'v1.0.0' });
+    const dir = plantDir(home, '20250101-000000', 'v1-sidecars');
+    const ccrc = (args: string[], env: NodeJS.ProcessEnv = {}): Result => {
+      const r = spawnSync(BASH, [join(REPO, 'ccd', 'ccrc'), 'coordination-snapshot', ...args], { env: { ...updateEnv(home), ...env }, encoding: 'utf8' });
+      return { code: r.status ?? -1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
+    };
+    expect(ccrc(['validate', '--from', dir])).toMatchObject({ code: 0, stdout: expect.stringMatching(/^v1: a valid manifest, initialized delegation, coord\.db absent\n$/) });
+    expect(ccrc(['validate', '--from', join(backupRoot(home), '20250199-000000')]).code).toBe(2);
+    const empty = plantDir(home, '20250102-000000', 'plain');
+    expect(ccrc(['validate', '--from', empty]).code).toBe(1);
+    expect(ccrc(['recover'], { PATH: join(home, 'no-such-bin') + ':' + (updateEnv(home).PATH ?? '') }).code).toBeLessThanOrEqual(2);
+    for (const bad of [[], ['validate'], ['validate', '--from'], ['restore', dir], ['recover', 'now'], ['explode']]) {
+      expect(ccrc(bad).code, bad.join(' ')).toBe(2);
+    }
+    expect(ccrc(['--help']).stdout).toMatch(/coordination-snapshot/);
+  });
 });
 
 describe('ccrc update: the codex steps ride the staged spine (Plan 2b-2 Task 10)', () => {

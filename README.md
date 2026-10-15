@@ -1115,9 +1115,16 @@ and the answer was bad, 2 a usage error — `update` adds 3 and 4, and `rollback
 
 **The maintenance verbs.** `ccrc backup` runs update's backup step standalone (same set, same directory shape, pruned
 to the newest `CCRC_BACKUP_KEEP` (0 to 9999) timestamped dirs, default 10 — never the backup it just made, a dir named
-at or after the second it began, or the newest earlier tree backup and coord.db snapshot, and nothing at all, exit 0,
-while another ccrc run holds `~/.ccrc/update.lock`, `flock` is missing or the lock cannot be measured; hand-made
-siblings are never touched), as update and rollback do after a passed gate.
+at or after the second it began, or the newest earlier tree backup and the newest earlier valid coordination snapshot
+(each chosen on its own; `deploy/coordination-snapshot.mjs classify` decides what is valid, and a classifier failure
+prunes nothing), and nothing at all, exit 0, while another ccrc run holds `~/.ccrc/update.lock`, `flock` is missing or
+the lock cannot be measured; hand-made siblings are never touched), as update and rollback do after a passed gate.
+Each backup dir also holds the delegation journal and checkpoint (`delegation-events.log`, `delegation-checkpoint.json`)
+and the manifest that describes them with the `coord.db` snapshot (`coordination-snapshot.json`), written last, after
+every member is durable. `ccrc coordination-snapshot validate|restore|recover` classifies such a dir, replaces the live
+journal, checkpoint and `coord.db` (with its WAL and SHM) from a valid one as a single set — only with `ccrc.service`
+measured inactive — and finishes an interrupted restore from its marker; the server refuses to start while that marker
+stands. Rollback arm 3 never copies the sidecars back: they are authority a running server wrote since the backup.
 `ccrc logs [-f] [-n N]` is `journalctl --user` against this box's own unit (`ccrc.service`, or `ccrc-agent.service`
 when the recorded role is `fleet`) — on macOS it tails the LaunchAgent's `~/.ccrc/logs/<label>.log`, with `-f`/`-n`
 passed through. `ccrc uninstall` takes the box off ccrc and leaves reinstall safe: it refuses while live sessions
@@ -5333,7 +5340,8 @@ you need to reason about one.*
   generators and node halves the CLI calls (`gen-accounts.mjs`,
   `gen-wrappers.mjs`, `gen-auth-hash.mjs`, `account-op.mjs`, `models-op.mjs`,
   and the `litellm-config.template.yaml` that `ccrc models litellm` renders);
-  `backup-coord.mjs` (a `VACUUM INTO` snapshot of `coord.db`),
+  `backup-coord.mjs` (a `VACUUM INTO` snapshot of `coord.db`) and `coordination-snapshot.mjs` (the delegation
+  journal and checkpoint beside it, with a manifest),
   `verify-service.sh` and `assert-slice-policy.sh`; the read-only programme
   instruments (`measure-*.py`) and `hook-capture-reduce.mjs`;
   `notify.sh` (ccd swap hook → `/api/notify`, now firing on a swap **refusal**
@@ -5868,9 +5876,11 @@ above). Every run stamps its backups into `~/ccrc-backups/<timestamp>/`
 on the target before overwriting anything — on the fleet lane the `ccd`
 launcher and body, `notify.sh`, `session-hook.sh`, `compact-card.mjs`, the
 agent's `dist`, `ccrc-agent.service` and `claude-session@.service`; on the
-server lane the served PWA, `ccrc.service` and a `VACUUM INTO` snapshot of
+server lane the served PWA, `ccrc.service`, a `VACUUM INTO` snapshot of
 `coord.db` (`deploy/backup-coord.mjs`; a `cp` of a WAL database is a backup
-missing everything recent) — and, after a green deploy, prunes that directory
+missing everything recent) and, last and still before the `rsync`, the delegation
+journal and checkpoint with their manifest (`deploy/coordination-snapshot.mjs`;
+a failed capture aborts the deploy) — and, after a green deploy, prunes that directory
 to the newest `CCRC_BACKUP_KEEP` (default 10) timestamped backups, never a
 hand-made sibling. A backup copy that *fails* aborts the deploy before
 `rsync --delete` can destroy the state it failed to save.

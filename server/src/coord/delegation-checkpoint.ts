@@ -93,6 +93,17 @@ import {
 /** The checkpoint's file name under the coordination directory (`~/.ccrc`). */
 export const DELEGATION_CHECKPOINT_FILE = 'delegation-checkpoint.json';
 
+/**
+ * The marker a coordination restore publishes in the coordination directory while it replaces the live set
+ * (`deploy/coordination-snapshot.mjs`, which spells this name itself because it imports nothing; a test pins the two together).
+ * While it exists the files on disk may be a half-replaced mix, so recovery REFUSES to read them: the closed failure
+ * `restore-in-progress`, phase `reconstructing`, pruning disabled. `ccrc coordination-snapshot recover` finishes the restore and
+ * removes the marker; nothing here ever deletes it.
+ */
+export const COORDINATION_RESTORE_MARKER_FILE = 'coordination-restore.json';
+/** The recovery failure code for an active restore marker. */
+export const DELEGATION_RESTORE_IN_PROGRESS = 'restore-in-progress';
+
 // ── Errors ────────────────────────────────────────────────────────────────────────────────────────────────────────────
 
 export type DelegationCheckpointErrorCode =
@@ -1030,8 +1041,14 @@ export function recoverDelegationState(checkpointBytes: Uint8Array | null, retai
 // IMPURE SHELL: from here down the module reads and writes files (through the injected port), calls the injected clock and
 // randomness, and drives SQLite through the synchronous store. Nothing above does any of it.
 // ═══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
-/** Reads both files and recovers. A journal read that fails (a torn tail, an unreadable chunk) is a recovery failure. */
+/** Reads both files and recovers (an active restore marker refuses first). A journal read that fails (a torn tail, an unreadable chunk) is a recovery failure. */
 export async function recoverDelegationFromFiles(port: DelegationFilePort, dir: string): Promise<DelegationRecoveryReport> {
+  // An active restore marker comes FIRST: the files below may be half replaced, so none of them is read (a refusal, not a repair).
+  if (await port.readFile(path.join(dir, COORDINATION_RESTORE_MARKER_FILE)) !== null) {
+    const refused = new DelegationRecovery(null);
+    refused.fail('checkpoint-decode', DELEGATION_RESTORE_IN_PROGRESS, 'a coordination restore is in progress or did not finish; run `ccrc coordination-snapshot recover`');
+    return refused.finish();
+  }
   const checkpointBytes = await port.readFile(path.join(dir, DELEGATION_CHECKPOINT_FILE));
   const recovery = new DelegationRecovery(checkpointBytes);
   try {
