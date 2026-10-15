@@ -77,7 +77,7 @@
 // could still show question 1's rows enabled; a tap then walked question 2's
 // menu to question 1's index. Wrong answer, sent silently. `canAnswer` is now
 // a real correspondence check, not a null check:
-//  - Questions: `questionCorresponds` (below `isUsableAsk`) requires `dialog`
+//  - Questions: `questionCorresponds` (`askLive.ts`) requires `dialog`
 //    to be non-null, PARSED, and to have an option at every position the
 //    envelope's first question does, each one a normalized prefix-match
 //    (case/whitespace-insensitive, either side may be the truncated one —

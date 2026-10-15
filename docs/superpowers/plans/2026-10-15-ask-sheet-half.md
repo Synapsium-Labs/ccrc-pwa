@@ -4,7 +4,7 @@
 
 **Branch:** `fix/ask-sheet-half`, cut from `origin/main` `a3cebde1`, which carries the server half (#417, plan `2026-10-15-ask-server-half.md`, D-5045 to D-5048) and the design system `@ccrc/ui` (#419).
 
-**Status:** rev 1 (2026-10-15). Task 0 done. Tasks 1 to 5 open.
+**Status:** rev 2 (2026-10-15). Tasks 0 and 1 done. Tasks 2 to 5 open. Task 1 also landed `freeTextSlot` and `rowText` (the brief put the free-text row reader in the pure module's task), so Task 3 consumes them.
 
 **Operator rulings this plan builds on** (2026-10-15):
 - **AskUserQuestion only.** The own-text rows of permission and plan prompts are the next effort. The approval branch of `EnvelopeSheet` is not touched.
@@ -85,7 +85,7 @@ Readings at `a3cebde1` (ids in full in the JSON; the first 10 characters here):
 | `ask-2col-chat-about` | `6ffdd29b83` | `Given that non-Anthropic models …` | three options, then `Chat about this` (unnumbered on screen, index 4); **no free-text row** |
 | `cc300-ask-review-same-labels` / `-cancel-focused` | `54e3c714f5` (one id, cursor 1 / 2) | the tab row | `Submit answers`, `Cancel`; body from `Review your answers` to `Ready to submit your answers?` |
 | `cc300-ask-review-skipped` | `3679f83724` | the tab row | as above, body carries `⚠ You have not answered all questions` |
-| `cc300-ask-review-4q-100col` | `b20f3d7081` | the tab row | body starts mid-answer (the 20-row climb), ends with the ready line |
+| `cc300-ask-review-4q-100col` | `b20f3d7081` | the tab row | body from `Review your answers` to `Ready to submit your answers?`; its first answer wraps over five rows at 100 columns (measured in Task 1: the heading survives here, only `-4q-long` loses it) |
 | `cc300-ask-review-4q-long` | `d272bf3d53` | an ANSWER row | body has no heading; `raw` has the whole review |
 | `cc300-ask-review-multiselect` / `-1q-multiselect` / `-tick-order` | `c845f664c9` / `ec91d883fd` / `3bd585b009` | the tab row | as above |
 | `cc300-ask-multiselect-next-open`, `-digit1`, `-digit1-3`, `-on-freetext`, `-next-focused`, `-row3` | `ddbca49884` | `Which features do you want?` | `parsed:false`, `options: []`; `multi`: Logging, Metrics, Tracing (ticks none / 1 / 1,3 / 1,3 / 1,3 / 1,3), free text 4, commit `Next`, cursor 1 / 1 / 1 / 4 / `'commit'` / 3 |
@@ -152,9 +152,10 @@ jsdom has no layout, so these are judged on a real build (Task 5's acceptance ma
 - `namedQuestion(ask, dialog): number | null`: the one question whose text `titleMatches` the dialog's title, else null. It names an unparsed question (a multiSelect one) that labels cannot reach.
 - `isAskReview(dialog)`: parsed, exactly two options reading `Submit answers` and `Cancel` (`REVIEW_SUBMIT_ROW_RE`, `REVIEW_CANCEL_ROW_RE`), and the body, `trimEnd`ed, ending in `Ready to submit your answers?` (`REVIEW_READY_RE = /ready to submit your answers\?$/i`). Never keyed on the body's first line: a review taller than `header()`'s 20-row climb loses its heading and its title (`cc300-ask-review-4q-long`).
 - `reviewSummary(dialog): string[]`: read from `dialog.raw`, never `body`. The lines after the nearest tab row (`←` … `→`) or rule above the LAST ready line, up to that line; blank edges trimmed; the `Review your answers` heading dropped (it becomes the sheet title); the common leading indent removed; everything else verbatim, the `⚠` line included.
-- `shared/ask-menu.ts` gains `REVIEW_READY_RE`, `REVIEW_SUBMIT_ROW_RE = /^submit answers$/i` and `REVIEW_CANCEL_ROW_RE = /^cancel$/i`, documented as the server half documents its four (measured on the recorded review screens; `Cancel` declines every question).
+- `shared/ask-menu.ts` gains `REVIEW_READY_RE`, `REVIEW_SUBMIT_ROW_RE = /^submit answers$/i`, `REVIEW_CANCEL_ROW_RE = /^cancel$/i` and `REVIEW_HEADING_RE = /^review your answers$/i` (the heading `reviewSummary` drops, a screen fact like the others), documented as the server half documents its four (measured on the recorded review screens; `Cancel` declines every question).
+- `freeTextSlot(dialog, n)` and `rowText(o)`, as Task 3 specifies them, landed here with their tests (the brief for this task named the free-text row reader as part of the pure module).
 
-- [ ] **Step 1: Red.** `ask-live-question.test.ts` (`SID = 'lane-a:project-a'`; readings from `askPanes.ts`, fixtures by name). Each must be seen red for the reason named (first as a missing module, then per assertion once a stub exports the names):
+- [x] **Step 1: Red.** `ask-live-question.test.ts` (no session id: the module is pure and no case calls a route; readings from `askPanes.ts`, fixtures by name). Each must be seen red for the reason named (first as a missing module, then per assertion once a stub exports the names):
   - "a one-question envelope keeps the labels-only rule": `COLOUR_ONE` + `cc300-ask-1q-open` gives 0, and still 0 with the title DERIVED to read differently.
   - "a unique label correspondence wins without the title": `FRUIT_DRINK` + `cc300-ask-q2-of-2-single` gives 1; with the title DERIVED to `Which drink, today?` still 1.
   - "same labels: the title breaks the tie": `CACHING_TRACING` + `-same-labels-q1` gives 0, `-q2` gives 1.
@@ -166,9 +167,9 @@ jsdom has no layout, so these are judged on a real build (Task 5's acceptance ma
   - "isAskReview": true for `cc300-ask-review-same-labels`, `-skipped`, `-multiselect`, `-1q-multiselect`, `-4q-100col` and `-4q-long`; false for `-q1-of-2`, for a permission prompt (Yes/No, DERIVED), and for `Submit answers`/`Cancel` under a body that does not end with the ready line (DERIVED).
   - "reviewSummary reads raw": `-skipped` gives the `⚠` line, `Which pets do you like?`, `→ Dogs`, `Which mode?`, `→ Safe`, and no ready line; `-4q-long` holds `→ Postgres` and `END-C` (the body has lost the first); a raw with no tab row starts after the rule (DERIVED).
   - `dialog.test.ts`, "the sheet half's hand-built readings are parseDialog's": every entry of `pwa/test/ask-panes.json` equals `parseDialog(<fixture>)` without `raw`. Green on arrival; its red is the mutation table's.
-  - `single-definition.test.ts`, describe "the review screen's rows and last line are spelled once, in shared/ask-menu.ts (D-5089)": holders of `/ready\s+to\s+submit/i` and `/submit\s+answers/i` on code lines equal `['shared/ask-menu.ts']`, and `askLive.ts` imports the three. KNOWN WIDTH: `cancel` is common copy and is not scanned. Red on the missing rules.
-- [ ] **Step 2: Green.** The module as above. `EnvelopeSheet.tsx` imports `questionCorresponds` from it and nothing else changes on screen.
-- [ ] **Step 3: Mutation table, run.**
+  - `single-definition.test.ts`, describe "the review screen's rows and last line are spelled once, in shared/ask-menu.ts (D-5089)": holders of `/ready\s+to\s+submit/i` and `/submit\s+answers/i` on code lines equal `['shared/ask-menu.ts']`, and `askLive.ts` imports and tests the four (the heading's included). KNOWN WIDTH: `cancel` is common copy and is not scanned, nor is the heading, whose words are also the sheet's title (Task 2). Red on the missing rules.
+- [x] **Step 2: Green.** The module as above. `EnvelopeSheet.tsx` imports `questionCorresponds` from it and nothing else changes on screen.
+- [x] **Step 3: Mutation table, run.**
 
   | Mutant | RED (the named tests) |
   |---|---|
@@ -177,14 +178,14 @@ jsdom has no layout, so these are judged on a real build (Task 5's acceptance ma
   | the first title survivor taken on a tie | "a tie the title cannot break is null" |
   | the `│ ` not stripped | "a wrapped question matches by its last row" |
   | the empty-options guard dropped | "a question with no options is never a candidate" |
-  | `isAskReview` keyed on `/^review your answers/i` | `-4q-100col`, `-4q-long` |
+  | `isAskReview` keyed on `/^review your answers/i` | `-4q-long` (`-4q-100col` keeps its heading) |
   | `isAskReview` drops the two-row check | the DERIVED permission and body cases |
   | `reviewSummary` reads `body` | `-4q-long` (`→ Postgres` missing) |
   | one reading in `ask-panes.json` edited | the readings case in `dialog.test.ts` |
   | `REVIEW_READY_RE` spelled again in `askLive.ts` | the single-definition holders case |
 
-- [ ] **Step 4: Gates:** pwa `ask-live-question`, `dialog-sheet`, `ask-live`, tsc; server `dialog`, `single-definition`, `deviation-refs`, `dtbd`, `topology-clean` (new files tracked).
-- [ ] **Step 5: Commit** `feat(ask-sheet): askLive — which question the pane is painting, and the review screen read from raw (D-5089)`.
+- [x] **Step 4: Gates:** pwa `ask-live-question`, `dialog-sheet`, `ask-live`, tsc; server `dialog`, `single-definition`, `deviation-refs`, `dtbd`, `topology-clean` (new files tracked).
+- [x] **Step 5: Commit** `feat(ask-sheet): askLive — which question the pane is painting, and the review screen read from raw (D-5089)`.
 
 **Per width:** nothing renders in this task.
 
@@ -235,7 +236,7 @@ jsdom has no layout, so these are judged on a real build (Task 5's acceptance ma
 
 ### Task 3: own words through the free-text row, and `respond()` deleted (D-5090)
 
-**Routing:** band 3 (untrusted text into a live session's menu). **Depends on:** Task 2. **Files:** create `pwa/src/session/askWords.ts` (the refusal sentences). Modify `pwa/src/session/askLive.ts` (`freeTextSlot`, `rowText`), `pwa/src/session/AskParts.tsx` (`OwnWords`, `ChatRow`), `DialogSheet.tsx`, `EnvelopeSheet.tsx`, `chat.css` (`.dlg-reply-input` to `--fs-input`), `pwa/test/dialog-sheet.test.tsx`, `pwa/test/ask-live-question.test.ts`, `pwa/test/control-census.test.ts` (the Send button's key moves with the form), `server/test/single-definition.test.ts` (the Chat rule's holders).
+**Routing:** band 3 (untrusted text into a live session's menu). **Depends on:** Task 2. **Files:** create `pwa/src/session/askWords.ts` (the refusal sentences). Read `pwa/src/session/askLive.ts`'s `freeTextSlot` and `rowText` (landed in Task 1). Modify `pwa/src/session/AskParts.tsx` (`OwnWords`, `ChatRow`), `DialogSheet.tsx`, `EnvelopeSheet.tsx`, `chat.css` (`.dlg-reply-input` to `--fs-input`), `pwa/test/dialog-sheet.test.tsx`, `pwa/test/ask-live-question.test.ts`, `pwa/test/control-census.test.ts` (the Send button's key moves with the form), `server/test/single-definition.test.ts` (the Chat rule's holders).
 
 **The change:**
 - **`freeTextSlot(dialog, n)`** (`askLive.ts`): with the question's option count `n` known (the envelope's live question; `dialog.ask.options.length` on the scraped sheet; or, after this sheet's own text call, that call's row index minus one), the row at `n + 1` is `empty` when its label passes `FREE_TEXT_PLACEHOLDER_RE`, `held` with its text when it is neither that nor `CHAT_ABOUT_ROW_RE`, and `none` when it is absent or is the Chat row (the two-column layout). With `n` unknown, the slot is the row passing the placeholder rule, else `none`. `rowText(o)` is `label + ' ' + description` with whitespace collapsed: the server's echo rule (D-5047), mirrored and named as such, because a 1000-character answer paints its first screen row as the label (`cc300-ask-freetext-1000`).
@@ -272,7 +273,7 @@ jsdom has no layout, so these are judged on a real build (Task 5's acceptance ma
   12. "dismissal is refused while a text answer is in flight". RED.
   13. Hand-off, "ask_cleared mid-call: the scraped sheet shows the same text and busy state, and ok clears it". RED.
   14. "every DialogTextRefuseCode has its sentence" (over `DIALOG_TEXT_REFUSE_CODES`). RED.
-  15. `freeTextSlot` on `-same-labels-q2` (empty 3), `-freetext-held` (held `Mango`), `-walk-3-typed` (held), `ask-2col-chat-about` with n 3 (none), `-freetext-1000` (held, `rowText` exactly the 1000-character text), and with n unknown on `-1q-open` (empty 3). RED as missing.
+  15. `freeTextSlot` on `-same-labels-q2` (empty 3), `-freetext-held` (held `Mango`), `-walk-3-typed` (held), `ask-2col-chat-about` with n 3 (none), `-freetext-1000` (held, `rowText` exactly the 1000-character text), and with n unknown on `-1q-open` (empty 3). Landed green in Task 1 (`ask-live-question.test.ts`, describe `freeTextSlot`), with its mutants run there.
   16. `single-definition.test.ts`: the Chat holders expectation set to `['shared/ask-menu.ts']`. RED until `CHAT_ABOUT_RE` is deleted.
   - Deleted with `respond()`: describe "the free-text reply when the menu does NOT clear" (`:1185-1265`), superseded by 7, 10 and 12.
 - [ ] **Step 2: Green** as above.

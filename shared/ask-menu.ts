@@ -10,6 +10,9 @@
 //   `freeTextRow`) uses to find that row when its label reads differently.
 // - `EDIT_HINT_RE` (D-5047): the footer's external-editor chord, painted while the free-text row holds focus.
 // - `COMMIT_ROW_RE` (D-5048): the unnumbered row under a multiSelect question's boxes that commits the question.
+// - `REVIEW_READY_RE`, `REVIEW_SUBMIT_ROW_RE`, `REVIEW_CANCEL_ROW_RE`, `REVIEW_HEADING_RE` (D-5089, plan
+//   docs/superpowers/plans/2026-10-15-ask-sheet-half.md): the review screen a multi-question or multiSelect ask ends on,
+//   read by the sheet (`pwa/src/session/askLive.ts`).
 //
 // D-5008's stage 1b moves the pane-menu reader (`OPTION_RE`, `CHECKBOX_RE`, `leftCol`, `paneOptionRows`, `OptionRow`) to
 // `shared/pane-menu.ts`. These rules can join it there or stay here; either way they keep one home. `OptionRow` gained
@@ -43,3 +46,24 @@ export const EDIT_HINT_RE = /to edit in/;
  *  from an option row, and refuses while the cursor rests here, where Tab after a walk through the free-text row was
  *  swallowed. */
 export const COMMIT_ROW_RE = /^(?:next|submit)$/i;
+
+// The review screen (D-5089). Claude Code paints it after the last question of an ask that has more than one question
+// or a multiSelect one: the tab row, `Review your answers`, a `⚠ You have not answered all questions` line when one was
+// skipped, each answered question with its answer under it, `Ready to submit your answers?`, then `1. Submit answers`
+// and `2. Cancel`. It paints no footer. Measured on 2.1.300 (`server/test/fixtures/panes/cc300-ask-review-*.txt`).
+
+/** The review's last line above its two rows. It is how the screen is told: a review taller than `parseDialog`'s
+ *  20-row climb loses its heading and its title (`cc300-ask-review-4q-long`), never this line, which sits just above
+ *  the rows. Tested against a body or a line with its trailing space trimmed. */
+export const REVIEW_READY_RE = /ready to submit your answers\?$/i;
+
+/** The review's row 1, which submits every answer the screen lists. */
+export const REVIEW_SUBMIT_ROW_RE = /^submit answers$/i;
+
+/** The review's row 2. Measured as a rejection of the WHOLE ask ("User declined to answer questions",
+ *  `cc300-ask-review-cancelled`): nothing already answered is sent. */
+export const REVIEW_CANCEL_ROW_RE = /^cancel$/i;
+
+/** The review's heading, the first line under its tab row; gone from the capture when the review is too tall
+ *  (`cc300-ask-review-4q-long`). Tested against a trimmed line. */
+export const REVIEW_HEADING_RE = /^review your answers$/i;

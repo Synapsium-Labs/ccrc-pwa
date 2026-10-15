@@ -1,10 +1,10 @@
-// The hook-sourced ASK ENVELOPE's own sheet, and the two pure helpers that
-// decide whether it may answer.
+// The hook-sourced ASK ENVELOPE's own sheet. The pure helpers that decide
+// whether it may answer moved to `askLive.ts` (D-5089), which both sheets read.
 //
 // WHY IT IS ITS OWN FILE. `DialogSheet.tsx` was 843 lines carrying TWO
 // renderings of one question — the pane SCRAPE and this ENVELOPE — and the
 // file header there is about why both exist. This half is the envelope: the
-// sheet, its correspondence check, and the preview disclosure only it opens.
+// sheet and the preview disclosure only it opens.
 // The controller keeps the polling, the dismissal slot and the scraped
 // rendering; it imports the two things it still renders itself.
 //
@@ -17,9 +17,11 @@
 // consumers. The shape moves, the ground stays.
 import { Fragment, useState } from 'react';
 import type { ReactNode } from 'react';
-import type { Dialog, HookAsk, HookAskQuestion } from '../../../shared/api';
+import type { Dialog, HookAsk } from '../../../shared/api';
 import { Button, EYEBROW, OptionRow, Sheet, toast } from '@ccrc/ui';
 import { api, ApiError, failedTo } from '../lib/api';
+// C1's correspondence check lives in `askLive.ts` (D-5089), beside the rules that choose which question is live.
+import { questionCorresponds } from './askLive';
 import './chat.css';
 
 /** The way out of a question this app cannot render: open the terminal, or
@@ -42,38 +44,6 @@ export function TerminalCta({ onOpen, onLater }: { onOpen: () => void; onLater: 
       </button>
     </div>
   );
-}
-
-/** Mirrors server/src/transcript/ask.ts's `pairMatches`/`norm`: normalize by
- *  trim + lowercase + collapsed whitespace, then compare as prefixes, since
- *  either side may be the truncated one (leftCol cuts a scraped label at a
- *  run of two spaces or the two-column gutter). Reimplemented here — not
- *  imported — because the pwa doesn't depend on server code; keep this
- *  identical to ask.ts's rule or the two layers' notion of "the same
- *  question" drifts apart. */
-const norm = (s: string): string => s.toLowerCase().replace(/\s+/g, ' ').trim();
-const prefixMatches = (a: string, b: string): boolean => {
-  const [x, y] = [norm(a), norm(b)];
-  return x !== '' && y !== '' && (x.startsWith(y) || y.startsWith(x));
-};
-
-/** C1: does the envelope's first question describe the same live menu
- *  `dialog` is showing? `answer()` types `dialog`'s pane by INDEX, so this
- *  has to be sure the envelope's copy and the pane's rows are the same
- *  question before a tap is allowed to walk it — every one of the envelope's
- *  options must line up with the pane's option at that same position (no
- *  forgiveness the way ask.ts's `alignAsk` allows when merely deciding which
- *  question is on screen: here the index is about to be TYPED). I1: an
- *  unparsed `dialog` never corresponds — it has no reliable per-position
- *  labels to compare (a multi-select menu parses this way — by its footer on
- *  older builds, by its row checkboxes on 2.1.280; so does a capture taken
- *  mid-redraw), so treating it as a match would answer a tap
- *  by sending a stray arrow-key walk into a pane that isn't the numbered
- *  menu it looks like. */
-function questionCorresponds(q: HookAskQuestion, dialog: Dialog | null): boolean {
-  if (dialog === null || !dialog.parsed) return false;
-  if (dialog.options.length < q.options.length) return false;
-  return q.options.every((o, i) => prefixMatches(dialog.options[i]!.label, o.label));
 }
 
 /**
@@ -161,7 +131,7 @@ export function EnvelopeSheet({
   // payload that omitted the field must not read as multi-select either way.
   const multiSelect = !('approval' in ask) && ask.questions[0]!.multiSelect === true;
   // C1: a real correspondence check, not a null check — see fix round 3 in
-  // the file header and `questionCorresponds` above. Approval and questions
+  // the file header and `questionCorresponds` (`askLive.ts`). Approval and questions
   // use different rules because they answer differently: Allow always types
   // index 1, so the one thing that has to be true is that index 1 on the
   // pane reads like "Yes" (the file's longstanding assumption, now asserted
