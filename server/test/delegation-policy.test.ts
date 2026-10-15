@@ -81,8 +81,9 @@ const rawRec = (over: Partial<DelegationCensusRecord> = {}): DelegationCensusRec
 
 const agentAct = activity('agent', AGENT);
 const rawAct = activity('bash-worktree', 'toolu_b1');
-const wfAct = activity('workflow', 'wf_run1-0');
 const wfRun = activity('workflow', 'wf_run1');
+/** A workflow worker is opened from its run's meta: it shares the RUN row's identity record (`openWorkflowWorkerFromMeta`). */
+const wfAct = activity('workflow', 'wf_run1-0', { identityJournalId: wfRun.identityJournalId });
 
 const linkedV = (act: DelegationActivityRow, rung: 2 | 3 | 4, evidence: readonly string[] = [hex('ev-1')]): DelegationCorrelationVerdict =>
   ({ kind: 'linked', activityId: act.activityId, rung, evidenceJournalIds: [...evidence, act.identityJournalId] });
@@ -98,12 +99,20 @@ const recovery = (over: Partial<DelegationCheckpointV1> = {}, phase: DelegationR
   },
   phase,
 });
-const plan = (over: Partial<DelegationReconciliationInput> = {}): DelegationReconciliationInput => ({
-  now: NOW, recovery: recovery(), census: [], correlations: [], registryReadable: true, firstDeadParents: [], previousSuccessfulCensus: null, ...over,
-});
-/** One record with its verdict, the two lists aligned by index (the call's contract). */
-const one = (record: DelegationCensusRecord, verdict: DelegationCorrelationVerdict, over: Partial<DelegationReconciliationInput> = {}): DelegationReconciliationInput =>
-  plan({ census: [record], correlations: [verdict], ...over });
+type PlanOver = Partial<DelegationReconciliationInput> & { verdicts?: readonly DelegationCorrelationVerdict[] };
+/** `verdicts` is a convenience of the fixtures only: it pairs each verdict with the census record at the same index, building the
+ *  `{record, verdict}` pairs the input requires. The policy itself never pairs by position. */
+const plan = (over: PlanOver = {}): DelegationReconciliationInput => {
+  const { verdicts, ...rest } = over;
+  const census = rest.census ?? [];
+  return {
+    now: NOW, recovery: recovery(), census, correlations: (verdicts ?? []).map((verdict, i) => ({ record: census[i]!, verdict })),
+    registryReadable: true, firstDeadParents: [], previousSuccessfulCensus: null, censusedProjects: [REPO], previousCensusedProjects: [REPO], ...rest,
+  };
+};
+/** One record with its verdict. */
+const one = (record: DelegationCensusRecord, verdict: DelegationCorrelationVerdict, over: PlanOver = {}): DelegationReconciliationInput =>
+  plan({ census: [record], verdicts: [verdict], ...over });
 const kinds = (effects: readonly DelegationReportEffect[]): string[] => effects.map((e) => e.kind);
 /** Every effect but the per-pass projection repair, which every ready pass carries (see the repair rows). */
 const without = (effects: readonly DelegationReportEffect[], ...drop: DelegationReportEffect['kind'][]): DelegationReportEffect[] =>
@@ -185,6 +194,15 @@ describe('state transitions: run-child-owned (W3-M63, the policy half)', () => {
     expect(substantive(planDelegationReconciliation(one(rec({ state: 'unreadable' }), ownedV())))).toEqual([]);
     expect(substantive(planDelegationReconciliation(one(rec({ canonicalPath: null }), ownedV())))).toEqual([]);
   });
+  it('an unknown owner whose evidence names two parents\' activities reports NOTHING (no parent is guessed from evidence) (I5)', () => {
+    const theirs = activity('agent', 'zzz', { parentId: OTHER });
+    const rc = recovery({ sessions: [session(PARENT), session(OTHER)], activities: [agentAct, theirs] });
+    const stranger: DelegationCorrelationVerdict = { kind: 'run-child-owned', activityId: 'act-unknown', evidenceJournalIds: [agentAct.identityJournalId, theirs.identityJournalId] };
+    expect(substantive(planDelegationReconciliation(one(rec(), stranger, { recovery: rc })))).toEqual([]);
+  });
+  it('an owner the checkpoint holds but whose parent has no session row is not reported either', () => {
+    expect(substantive(planDelegationReconciliation(one(rec(), ownedV(), { recovery: recovery({ sessions: [] }) })))).toEqual([]);
+  });
   it('an owner the checkpoint cannot name is not reported (no parent is invented)', () => {
     const stranger: DelegationCorrelationVerdict = { kind: 'run-child-owned', activityId: 'act-unknown', evidenceJournalIds: [] };
     expect(substantive(planDelegationReconciliation(one(rec(), stranger)))).toEqual([]);
@@ -193,12 +211,12 @@ describe('state transitions: run-child-owned (W3-M63, the policy half)', () => {
 
 describe('state transitions: measured absence is two SUCCESSFUL censuses', () => {
   const held = { recovery: recovery({ leases: [lease()] }) };
-  const absence = (over: Partial<DelegationReconciliationInput>) => substantive(planDelegationReconciliation(plan({ ...held, ...over })));
+  const absence = (over: PlanOver) => substantive(planDelegationReconciliation(plan({ ...held, ...over })));
   it('a leased tree missing from this census and from the previous successful one is measured absent, at `now`', () => {
     expect(absence({ census: [], previousSuccessfulCensus: [] })).toEqual([{ kind: 'record-measured-absence', project: REPO, adminRecord: NAME, observedAt: NOW }]);
   });
   it('a record the listing measured `absent` counts the same as a record the listing does not name', () => {
-    expect(kinds(absence({ census: [rec({ state: 'absent', canonicalPath: null })], correlations: [unresolvedV('record-absent')], previousSuccessfulCensus: [rec({ state: 'absent' })] })))
+    expect(kinds(absence({ census: [rec({ state: 'absent', canonicalPath: null })], verdicts: [unresolvedV('record-absent')], previousSuccessfulCensus: [rec({ state: 'absent' })] })))
       .toEqual(['record-measured-absence']);
   });
   it('ONE successful census is not absence: no previous successful census, or a previous one that held the tree', () => {
@@ -206,10 +224,10 @@ describe('state transitions: measured absence is two SUCCESSFUL censuses', () =>
     expect(absence({ census: [], previousSuccessfulCensus: [rec()] })).toEqual([]);
   });
   it('a record that is still present is not absent', () => {
-    expect(absence({ census: [rec()], correlations: [unmeasuredV('rung-2-evidence-absent')], previousSuccessfulCensus: [] })).toEqual([]);
+    expect(absence({ census: [rec()], verdicts: [unmeasuredV('rung-2-evidence-absent')], previousSuccessfulCensus: [] })).toEqual([]);
   });
   it('an UNREADABLE record is never absence, in this census or in the previous one (including a worktree being born)', () => {
-    expect(absence({ census: [rec({ state: 'unreadable', canonicalPath: null, diagnostic: 'record-initializing' })], correlations: [unmeasuredV('record-unreadable')], previousSuccessfulCensus: [] })).toEqual([]);
+    expect(absence({ census: [rec({ state: 'unreadable', canonicalPath: null, diagnostic: 'record-initializing' })], verdicts: [unmeasuredV('record-unreadable')], previousSuccessfulCensus: [] })).toEqual([]);
     expect(absence({ census: [], previousSuccessfulCensus: [rec({ state: 'unreadable', canonicalPath: null })] })).toEqual([]);
   });
   it('only a tree the broker once held is reported absent: a record absent from two censuses that nothing names is not', () => {
@@ -220,6 +238,20 @@ describe('state transitions: measured absence is two SUCCESSFUL censuses', () =>
   });
   it('a recorded attempt keeps its tree\'s absence reportable (the unowned report must be able to clear)', () => {
     expect(kinds(absence({ recovery: recovery({ attempts: [attempt()] }), census: [], previousSuccessfulCensus: [] }))).toEqual(['record-measured-absence']);
+  });
+  it('a lease in a project the census did not cover reports no absence: only `project-a` was looked at (D-4650)', () => {
+    const inB = lease({ project: 'project-b', adminRecord: 'agent-b', canonicalPath: '/fixture/project-b/.claude/worktrees/agent-b' });
+    expect(absence({ recovery: recovery({ leases: [inB] }), census: [], previousSuccessfulCensus: [] })).toEqual([]);
+    expect(absence({ recovery: recovery({ leases: [inB] }), census: [], previousSuccessfulCensus: [], censusedProjects: ['project-b'], previousCensusedProjects: ['project-b'] }))
+      .toEqual([{ kind: 'record-measured-absence', project: 'project-b', adminRecord: 'agent-b', observedAt: NOW }]);
+  });
+  it('a project removed from configuration (in neither list) never has a tree reported absent, however long it stays gone', () => {
+    expect(absence({ census: [], previousSuccessfulCensus: [], censusedProjects: [], previousCensusedProjects: [] })).toEqual([]);
+  });
+  it('a project censused THIS pass but not in the previous successful one (or the reverse) is not absent yet', () => {
+    expect(absence({ census: [], previousSuccessfulCensus: [], censusedProjects: [REPO], previousCensusedProjects: [] })).toEqual([]);
+    expect(absence({ census: [], previousSuccessfulCensus: [], censusedProjects: [], previousCensusedProjects: [REPO] })).toEqual([]);
+    expect(absence({ census: [], previousSuccessfulCensus: [], previousCensusedProjects: null })).toEqual([]);
   });
   it('absence is projection, not removal: it carries no path, no branch, no action and no attempt', () => {
     const [e] = absence({ census: [], previousSuccessfulCensus: [] });
@@ -257,14 +289,14 @@ describe('state transitions: ended activity, paused workflow, restarting supervi
   });
   it('a PAUSED workflow (an activity still `active` or `unknown` with no end evidence) stays a worker: its tree links, nothing ends it', () => {
     for (const executionState of ['active', 'unknown'] as const) {
-      const paused = activity('workflow', 'wf_run1-0', { executionState });
-      const frozen = deepFreeze(one(rec({ adminRecord: 'wf_run1-0', canonicalPath: WT('wf_run1-0') }), linkedV(paused, 2), { recovery: recovery({ activities: [paused] }) }));
+      const paused = activity('workflow', 'wf_run1-0', { executionState, identityJournalId: wfRun.identityJournalId });
+      const frozen = deepFreeze(one(rec({ adminRecord: 'wf_run1-0', canonicalPath: WT('wf_run1-0') }), linkedV(paused, 2), { recovery: recovery({ activities: [wfRun, paused] }) }));
       const effects = substantive(planDelegationReconciliation(frozen));
       expect(kinds(effects)).toEqual(['request-linked-lease-identity']);
-      expect(frozen.recovery.checkpoint.activities[0]!.executionState).toBe(executionState);     // nothing was edited
+      expect(frozen.recovery.checkpoint.activities[1]!.executionState).toBe(executionState);     // nothing was edited
     }
   });
-  it('a RESTARTING supervisor is not a dead parent: policy calls a parent dead only when it is HANDED that measurement', () => {
+  it('policy reads no execution state: an `unknown` activity (a supervisor mid-restart) neither suspends claims nor makes a parent dead', () => {
     // Every parent the checkpoint knows is in a state a restart passes through; none is in `firstDeadParents`.
     const restarting = recovery({ sessions: [session(PARENT), session(OTHER)], activities: [agentAct, activity('agent', 'zzz', { parentId: OTHER, executionState: 'unknown' })] });
     expect(delegationCircuitBreaker({ now: NOW, registryReadable: true, firstDeadParents: [] })).toBe('clear');
@@ -278,7 +310,7 @@ describe('state transitions: registry unreadable', () => {
     const effects = planDelegationReconciliation(plan({
       ...base,
       census: [rec(), rawRec(), rawRec({ adminRecord: 'wt-own', canonicalPath: WT('wt-own') })],
-      correlations: [linkedV(agentAct, 2), unresolvedV('ambiguous-subagent-path', [agentAct.identityJournalId]), ownedV()],
+      verdicts: [linkedV(agentAct, 2), unresolvedV('ambiguous-subagent-path', [agentAct.identityJournalId]), ownedV()],
     }));
     expect(kinds(substantive(effects)).sort()).toEqual(['record-measured-absence', 'record-run-child-owned']);
     expect(kinds(effects)).not.toContain('request-linked-lease-identity');
@@ -286,7 +318,7 @@ describe('state transitions: registry unreadable', () => {
   });
   it('a readable registry with the same input requests the lease and reports the unowned tree', () => {
     const effects = planDelegationReconciliation(plan({
-      census: [rec(), rawRec()], correlations: [linkedV(agentAct, 2), unresolvedV('ambiguous-subagent-path', [agentAct.identityJournalId])],
+      census: [rec(), rawRec()], verdicts: [linkedV(agentAct, 2), unresolvedV('ambiguous-subagent-path', [agentAct.identityJournalId])],
     }));
     expect(kinds(substantive(effects))).toEqual(['request-linked-lease-identity', 'record-unowned-worktree']);
   });
@@ -379,8 +411,72 @@ describe('unowned work: what is reported, and about whom', () => {
   });
 });
 
+describe('one lease per tree (R51): a tree an unreleased lease holds is never requested again', () => {
+  const other = activity('agent', 'zzz');
+  const rc = (leases: DelegationLeaseRow[]) => recovery({ leases, activities: [agentAct, other, rawAct] });
+  it('the SAME activity\'s link on a tree it already holds requests nothing and files nothing', () => {
+    expect(substantive(planDelegationReconciliation(one(rec(), linkedV(agentAct, 2), { recovery: rc([lease({ activityId: agentAct.activityId })]) })))).toEqual([]);
+  });
+  it('ANOTHER activity\'s link on a held tree requests nothing and files ONE conflicting attempt (`rungs-disagree`) under the new verdict\'s parent', () => {
+    const effects = substantive(planDelegationReconciliation(one(rawRec(), linkedV(other, 3), {
+      recovery: rc([lease({ activityId: agentAct.activityId, adminRecord: RAW, canonicalPath: WT(RAW) })]),
+    })));
+    expect(kinds(effects)).toEqual(['record-unowned-worktree']);
+    const e = effects[0]!;
+    if (e.kind !== 'record-unowned-worktree') throw new Error('unreachable');
+    expect(e.attempt).toMatchObject({ verdict: 'conflicting', detail: 'rungs-disagree', parentId: PARENT, adminRecord: RAW, rung: null });
+  });
+  it('the tree is held by PATH too: a different admin record at the same canonical path is the same tree', () => {
+    const effects = substantive(planDelegationReconciliation(one(rawRec({ adminRecord: 'wt-renamed' }), linkedV(other, 3), {
+      recovery: rc([lease({ activityId: agentAct.activityId, adminRecord: RAW, canonicalPath: WT(RAW) })]),
+    })));
+    expect(kinds(effects)).toEqual(['record-unowned-worktree']);
+  });
+  it('the conflict is final: the next pass (which holds the attempt) files nothing more and still requests nothing', () => {
+    const first = substantive(planDelegationReconciliation(one(rawRec(), linkedV(other, 3), { recovery: rc([lease({ activityId: agentAct.activityId, adminRecord: RAW, canonicalPath: WT(RAW) })]) })))[0]!;
+    if (first.kind !== 'record-unowned-worktree') throw new Error('unreachable');
+    const next = recovery({ leases: [lease({ activityId: agentAct.activityId, adminRecord: RAW, canonicalPath: WT(RAW) })], activities: [agentAct, other], attempts: [first.attempt] });
+    expect(substantive(planDelegationReconciliation(one(rawRec(), linkedV(other, 3), { recovery: next, now: T(36060) })))).toEqual([]);
+  });
+  it('the existing lease is not touched: the held tree emits no absence, release or transition either', () => {
+    const effects = substantive(planDelegationReconciliation(one(rawRec(), linkedV(other, 3), { recovery: rc([lease({ activityId: agentAct.activityId, adminRecord: RAW, canonicalPath: WT(RAW) })]) })));
+    expect(kinds(effects)).toEqual(['record-unowned-worktree']);
+  });
+  it('a lease on ANOTHER tree does not hold this one', () => {
+    expect(kinds(substantive(planDelegationReconciliation(one(rawRec(), linkedV(other, 3), { recovery: rc([lease({ activityId: agentAct.activityId })]) }))))).toEqual(['request-linked-lease-identity']);
+  });
+});
+
+describe('run versus worker is read from the rows, never from spelling (R52)', () => {
+  const RUN = 'wf_5440bac3-123';                                   // a measured run-ID shape whose tail is all digits
+  const runRow = activity('workflow', RUN);
+  const worker = activity('workflow', `${RUN}-0`, { identityJournalId: runRow.identityJournalId });
+  const rc = recovery({ activities: [runRow, worker] });
+  it('a RUN row whose own ID ends in digits is no worker: a rung-2 link to it requests nothing', () => {
+    expect(substantive(planDelegationReconciliation(one(rec({ adminRecord: RUN, canonicalPath: WT(RUN) }), linkedV(runRow, 2), { recovery: rc })))).toEqual([]);
+  });
+  it('its WORKER (the run\'s ID plus an index, sharing its identity record) requests a lease', () => {
+    expect(requestOf(planDelegationReconciliation(one(rec({ adminRecord: `${RUN}-0`, canonicalPath: WT(`${RUN}-0`) }), linkedV(worker, 2), { recovery: rc }))))
+      .toMatchObject({ sourceKind: 'workflow', adminRecord: `${RUN}-0` });
+  });
+  it('a workflow activity that looks like a worker but shares no run\'s identity record, parent or index shape is not one', () => {
+    const noRun = recovery({ activities: [worker] });
+    const otherParent = activity('workflow', `${RUN}-0`, { identityJournalId: runRow.identityJournalId, parentId: OTHER });
+    const otherIdentity = activity('workflow', `${RUN}-0`);
+    const badIndex = activity('workflow', `${RUN}-x`, { identityJournalId: runRow.identityJournalId });
+    const leading = activity('workflow', `${RUN}-01`, { identityJournalId: runRow.identityJournalId });
+    const cases: [DelegationActivityRow, DelegationRecoveryState][] = [
+      [worker, noRun], [otherParent, recovery({ sessions: [session(PARENT), session(OTHER)], activities: [runRow, otherParent] })],
+      [otherIdentity, recovery({ activities: [runRow, otherIdentity] })], [badIndex, recovery({ activities: [runRow, badIndex] })], [leading, recovery({ activities: [runRow, leading] })],
+    ];
+    for (const [w, r] of cases) {
+      expect(substantive(planDelegationReconciliation(one(rec({ adminRecord: w.upstreamId, canonicalPath: WT(w.upstreamId) }), linkedV(w, 2), { recovery: r }))), w.upstreamId).toEqual([]);
+    }
+  });
+});
+
 describe('a listing-only Bash call and a Workflow RUN row are no worker and no owner', () => {
-  it('a bash-worktree activity beside an unresolved verdict (the call listed and created nothing) requests no lease and reports no ownership', () => {
+  it('an unresolved verdict beside a bash-worktree activity requests no lease and claims no ownership (the single-added-record delta that makes a Bash call evidence is correlation\'s, so a non-answer here proves nothing more)', () => {
     for (const v of [unresolvedV('no-correlating-evidence', [rawAct.identityJournalId]), unresolvedV('ambiguous-listing-windows', [rawAct.identityJournalId])]) {
       const effects = planDelegationReconciliation(one(rawRec(), v));
       expect(kinds(effects)).not.toContain('request-linked-lease-identity');
@@ -427,7 +523,7 @@ describe('conflict finality across passes', () => {
 describe('a recovery that is not ready decides nothing', () => {
   it('a `reconstructing` state yields no effect at all, not even absence or a repair', () => {
     const effects = planDelegationReconciliation(plan({
-      recovery: recovery({ leases: [lease()] }, 'reconstructing'), census: [rec()], correlations: [linkedV(agentAct, 2)], previousSuccessfulCensus: [],
+      recovery: recovery({ leases: [lease()] }, 'reconstructing'), census: [rec()], verdicts: [linkedV(agentAct, 2)], previousSuccessfulCensus: [],
     }));
     expect(effects).toEqual([]);
   });
@@ -445,9 +541,19 @@ describe('the projection repair is one statement of the revision the pass read',
 });
 
 describe('the call\'s contract', () => {
-  it('verdicts are index-aligned with the census: a list of another length is a defect and throws', () => {
-    expect(() => planDelegationReconciliation(plan({ census: [rec()], correlations: [] }))).toThrow(DelegationModelError);
-    expect(() => planDelegationReconciliation(plan({ census: [], correlations: [ownedV()] }))).toThrow(DelegationModelError);
+  it('a verdict is paired with its record (D-4650): a pair whose record the census does not hold is a defect and throws', () => {
+    expect(() => planDelegationReconciliation(plan({ census: [], correlations: [{ record: rec(), verdict: ownedV() }] }))).toThrow(DelegationModelError);
+    expect(() => planDelegationReconciliation(plan({ census: [rawRec()], correlations: [{ record: rec(), verdict: ownedV() }] }))).toThrow(DelegationModelError);
+    expect(() => planDelegationReconciliation(plan({ census: [rec({ project: 'project-b' })], correlations: [{ record: rec(), verdict: ownedV() }] }))).toThrow(DelegationModelError);
+  });
+  it('a census record with no verdict is allowed (it is simply not reasoned about), and pairs are matched by tree, never by position', () => {
+    expect(substantive(planDelegationReconciliation(plan({ census: [rec(), rawRec()] })))).toEqual([]);
+    const effects = substantive(planDelegationReconciliation(plan({
+      census: [rec(), rawRec()],
+      correlations: [{ record: rawRec(), verdict: unresolvedV('ambiguous-subagent-path', [agentAct.identityJournalId]) }, { record: rec(), verdict: linkedV(agentAct, 2) }],
+    })));
+    expect(effects.map((e) => (e.kind === 'request-linked-lease-identity' ? `${e.kind}:${e.request.adminRecord}` : e.kind === 'record-unowned-worktree' ? `${e.kind}:${e.attempt.adminRecord}` : e.kind)))
+      .toEqual([`record-unowned-worktree:${RAW}`, `request-linked-lease-identity:${NAME}`]);
   });
   it('a `now` that is not a canonical UTC millisecond instant throws the model\'s refusal', () => {
     expect(() => planDelegationReconciliation(plan({ now: '2026-10-14 10:00' }))).toThrow(DelegationModelError);
@@ -455,7 +561,7 @@ describe('the call\'s contract', () => {
   it('a deeply frozen input is accepted, is not changed, and gives the same answer twice', () => {
     const input = deepFreeze(structuredClone(plan({
       census: [rec(), rawRec(), rawRec({ adminRecord: 'wt-own', canonicalPath: WT('wt-own') })],
-      correlations: [linkedV(agentAct, 2), unresolvedV('ambiguous-subagent-path', [agentAct.identityJournalId]), ownedV()],
+      verdicts: [linkedV(agentAct, 2), unresolvedV('ambiguous-subagent-path', [agentAct.identityJournalId]), ownedV()],
       recovery: recovery({ leases: [lease({ adminRecord: 'agent-gone', canonicalPath: WT('agent-gone') })] }), previousSuccessfulCensus: [],
     })));
     const copy = structuredClone(input);
@@ -470,12 +576,12 @@ describe('the call\'s contract', () => {
     const e = planDelegationReconciliation(input)[0]!;
     if (e.kind !== 'request-linked-lease-identity') throw new Error('unreachable');
     (e.request.correlationJournalIds as string[]).push('x');
-    expect(input.correlations[0]!.evidenceJournalIds).not.toContain('x');
+    expect(input.correlations[0]!.verdict.evidenceJournalIds).not.toContain('x');
   });
   it('the order of the records in the census does not change what is reported about each', () => {
     const rows: [DelegationCensusRecord, DelegationCorrelationVerdict][] = [[rec(), linkedV(agentAct, 2)], [rawRec(), unresolvedV('ambiguous-subagent-path', [agentAct.identityJournalId])]];
-    const fwd = planDelegationReconciliation(plan({ census: rows.map((r) => r[0]), correlations: rows.map((r) => r[1]) }));
-    const rev = planDelegationReconciliation(plan({ census: [...rows].reverse().map((r) => r[0]), correlations: [...rows].reverse().map((r) => r[1]) }));
+    const fwd = planDelegationReconciliation(plan({ census: rows.map((r) => r[0]), verdicts: rows.map((r) => r[1]) }));
+    const rev = planDelegationReconciliation(plan({ census: [...rows].reverse().map((r) => r[0]), verdicts: [...rows].reverse().map((r) => r[1]) }));
     expect(kinds(rev).sort()).toEqual(kinds(fwd).sort());
   });
 });
@@ -502,9 +608,9 @@ const EFFECT_TAGS: readonly string[] = [
 describe('the effect census: six tags, nothing executable (W3-M53)', () => {
   const everything = (): DelegationReportEffect[] => {
     const outs: DelegationReportEffect[] = [];
-    const worlds: Partial<DelegationReconciliationInput>[] = [
+    const worlds: PlanOver[] = [
       { census: [rec(), rawRec(), rawRec({ adminRecord: 'wt-own', canonicalPath: WT('wt-own') }), rawRec({ adminRecord: 'wt-c', canonicalPath: WT('wt-c') })],
-        correlations: [linkedV(agentAct, 2), unresolvedV('ambiguous-subagent-path', [agentAct.identityJournalId]), ownedV(), conflictingV('rungs-disagree', [agentAct.identityJournalId])],
+        verdicts: [linkedV(agentAct, 2), unresolvedV('ambiguous-subagent-path', [agentAct.identityJournalId]), ownedV(), conflictingV('rungs-disagree', [agentAct.identityJournalId])],
         recovery: recovery({ leases: [lease({ adminRecord: 'agent-gone', canonicalPath: WT('agent-gone') })] }), previousSuccessfulCensus: [] },
       { registryReadable: false, firstDeadParents: [deadAt(PARENT, MIN), deadAt(OTHER, 2 * MIN)] },
     ];
@@ -616,6 +722,11 @@ describe('the circuit breaker is a report, never an action (W3-M54)', () => {
   it('a first-dead instant later than `now` (clock skew) counts as inside the window, the safe direction', () => {
     expect(breaker([deadAt(PARENT, -MIN), deadAt(OTHER, MIN)])).toBe('suspended');
   });
+  it('a first-dead instant more than one window AHEAD of `now` is clock skew: unmeasured, not a death (exactly one window ahead still counts)', () => {
+    expect(breaker([deadAt(PARENT, -10 * MIN - 1)])).toBe('unmeasured');
+    expect(breaker([deadAt(PARENT, -10 * MIN), deadAt(OTHER, -10 * MIN)])).toBe('suspended');
+    expect(breaker([deadAt(PARENT, MIN), deadAt(OTHER, -11 * MIN)])).toBe('unmeasured');
+  });
   it('an unreadable registry: suspended, however few parents are dead', () => {
     expect(breaker([], false)).toBe('suspended');
     expect(breaker([deadAt(PARENT, 20 * MIN)], false)).toBe('suspended');
@@ -636,7 +747,7 @@ describe('the circuit breaker is a report, never an action (W3-M54)', () => {
   it('a suspended pass emits the SAME closed effect list and only withholds ownership claims; nothing new appears', () => {
     const world = {
       census: [rec(), rawRec(), rawRec({ adminRecord: 'wt-own', canonicalPath: WT('wt-own') })],
-      correlations: [linkedV(agentAct, 2), unresolvedV('ambiguous-subagent-path', [agentAct.identityJournalId]), ownedV()],
+      verdicts: [linkedV(agentAct, 2), unresolvedV('ambiguous-subagent-path', [agentAct.identityJournalId]), ownedV()],
     };
     const clear = planDelegationReconciliation(plan(world));
     for (const dead of [[deadAt(PARENT, MIN), deadAt(OTHER, MIN)], [deadAt(PARENT, MIN), { parentId: OTHER, firstMeasuredDeadAt: 'bad' }]]) {
@@ -646,7 +757,7 @@ describe('the circuit breaker is a report, never an action (W3-M54)', () => {
     }
   });
   it('fresh deaths inside the window withhold lease requests and unowned reports; old deaths and a single death do not', () => {
-    const world = { census: [rec()], correlations: [linkedV(agentAct, 2)] };
+    const world = { census: [rec()], verdicts: [linkedV(agentAct, 2)] };
     expect(kinds(substantive(planDelegationReconciliation(plan({ ...world, firstDeadParents: [deadAt(PARENT, MIN)] }))))).toEqual(['request-linked-lease-identity']);
     expect(kinds(substantive(planDelegationReconciliation(plan({ ...world, firstDeadParents: [deadAt(PARENT, 11 * MIN), deadAt(OTHER, 12 * MIN)] }))))).toEqual(['request-linked-lease-identity']);
     expect(substantive(planDelegationReconciliation(plan({ ...world, firstDeadParents: [deadAt(PARENT, MIN), deadAt(OTHER, 2 * MIN)] })))).toEqual([]);
@@ -662,6 +773,10 @@ describe('the kebab guard declares the words policy spells', () => {
     for (const w of EFFECT_TAGS) expect(isDelegationPolicyKebab(w)).toBe(true);
     for (const w of DELEGATION_CORRELATION_REASONS) expect(isDelegationPolicyKebab(w)).toBe(true);
     expect(isDelegationPolicyKebab('run-child-owned')).toBe(true);
+  });
+  it('admits no word of the model or correlation vocabularies the policy does not spell (journal kinds, hold reasons, source kinds, cleanup states)', () => {
+    for (const w of ['evidence-accepted', 'lease-created', 'checkpoint-anchor', 'open-lease', 'bash-worktree', 'not-due', 'torn-tail']) expect(isDelegationPolicyKebab(w), w).toBe(false);
+    expect(isDelegationPolicyKebab('bad-row')).toBe(true);
   });
   it('does not admit an arbitrary kebab word or a near-miss of a tag', () => {
     for (const w of ['adopt-lease', 'request-linked-lease', 'record-measured-absent', 'cleanup-lease', 'not-a-delegation-word', '']) expect(isDelegationPolicyKebab(w)).toBe(false);
