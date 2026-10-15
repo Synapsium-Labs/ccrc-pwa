@@ -46,6 +46,13 @@
 // The plan's row "the coarse-pointer wrapped view opens the terminal → the
 // never-opened case RED" predates R-LIVE and contradicts it; its replacement
 // row (un-opened → no focus target) is the one run above.
+//
+// THE VIEW SITS ON THE KEY BAR (spec §5.3; the stage-1 visual pass found it at
+// the top). RED FIRST against the block scroller; rows RUN the same way, all RED:
+//   the first row takes no slack (margin-top removed) ... the sits-on-the-key-bar case
+//   bottom-anchored by justify-content: flex-end ........ the same case
+//   rows may shrink (flex-shrink removed) ................ the same case
+//   a block scroller again (display: flex removed) ....... the same case
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -648,6 +655,28 @@ describe('the wrapped view', () => {
     geo.clientHeight = 400;
     resizeWindow();
     expect(wrap.scrollTop).toBe(1600);
+  });
+
+  it('sits on the key bar when the screen is shorter than the glass, and still scrolls to its top when it is longer', () => {
+    // Spec §5.3: the view sticks to the BOTTOM. MEASURED before this (the
+    // visual pass): `wrapScreen` collapses blank runs, so a screen often
+    // re-wraps shorter than the glass, and a plain block scroller put it at
+    // the TOP — Claude Code's box and footer 41px above the key bar at
+    // 430x932, 166px at 1440x900, the exit notice the ^C guard reads ~520px
+    // away at 390x844 — with nothing to scroll, so sticking never acted.
+    // jsdom lays nothing out, so the mechanism is read from chat.css: a column
+    // whose first row takes the slack above it (`margin-top: auto`). An auto
+    // margin resolves to 0 once the rows overflow, so the top stays reachable;
+    // `justify-content: flex-end` would not (it overflows off the top, where no
+    // scroll reaches).
+    expect(declaredValues(chatCss, '.term-wrap', 'display')).toEqual(['flex']);
+    expect(declaredValues(chatCss, '.term-wrap', 'flex-direction')).toEqual(['column']);
+    expect(declaredValues(chatCss, '.term-wrap', 'justify-content')).not.toContain('flex-end');
+    expect(declaredValues(chatCss, '.term-wrap-row:first-child', 'margin-top')).toEqual(['auto']);
+    // A row never gives up its line to fit the glass: a table row scrolls
+    // sideways, which makes its own minimum height 0, so without this it would
+    // be squashed out of sight once the rows overflow.
+    expect(declaredValues(chatCss, '.term-wrap-row', 'flex-shrink')).toEqual(['0']);
   });
 
   it('anchors on the caret row, else on the ❯ row', async () => {

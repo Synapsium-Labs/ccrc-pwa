@@ -1196,10 +1196,22 @@ button.metachip:active {
    is off), and its text is selectable. It paints the well it sits on, so the
    contrast gate measures its ink. The whole of it is the tap that types
    (R-LIVE): it is the glass, and never less than a tap tall even on a glass a
-   keyboard has squeezed. */
+   keyboard has squeezed.
+
+   IT SITS ON THE KEY BAR (spec 2026-10-14 §5.3, D-5006): a column whose first
+   row takes the slack above it, so a screen that re-wraps shorter than the
+   glass (blank runs collapse, so it often does) rests at the bottom, beside
+   the keys, as the grid and the chat do. MEASURED before this: a plain block
+   scroller put it at the top, Claude Code's box 41px above the key bar at
+   430x932 and 166px at 1440x900, and the exit notice the ^C guard reads ~520px
+   from it at 390x844. An auto margin resolves to 0 once the rows overflow, so
+   the top stays reachable by a scroll; `justify-content: flex-end` would push
+   the overflow off the top, where no scroll reaches. */
 .term-wrap {
   position: absolute;
   inset: 0;
+  display: flex;
+  flex-direction: column;
   min-height: var(--tap-min);
   overflow-x: hidden;
   overflow-y: auto;
@@ -1214,6 +1226,15 @@ button.metachip:active {
   user-select: text;
   -webkit-user-select: text;
   cursor: text;
+}
+/* Every row keeps its line: a column would otherwise shrink rows to fit the
+   glass once they overflow it, and a table row, which scrolls sideways, has no
+   content minimum to stop it going to nothing. */
+.term-wrap-row {
+  flex-shrink: 0;
+}
+.term-wrap-row:first-child {
+  margin-top: auto;
 }
 /* A table row keeps its frame and scrolls sideways on its own, never wraps. */
 .term-wrap-row--table {
