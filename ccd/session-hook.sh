@@ -434,8 +434,8 @@ _hook_graph_card() {
 # treats the same as a genuinely empty field.
 #
 # A NUL byte in the file is still silently dropped — bash variables cannot
-# hold one, full stop, and no fork-free mechanism here can detect one was
-# ever there. What changes is that `read` does this WITHOUT bash's `$(<f)`
+# hold one, full stop, and _ct_read cannot tell one was there (the card reader's
+# bounded `read -d ''` probe can, D-5063). What changes is that `read` does this WITHOUT bash's `$(<f)`
 # warning (measured: zero stderr on `al\0pha`). The narrow "unsafe" divergence
 # finding 1 named — the byte-preserving server groups `al\0pha` on its own,
 # this hook groups the NUL-stripped `alpha` — is UNCHANGED and accepted:
@@ -2915,7 +2915,7 @@ command -v jq >/dev/null 2>&1 || exit 0
 #      newest family's generation, '' for a legacy family or none, which is what
 #      B2's CLI compares with then (coordinator ruling R-recalloff-parity). The record
 #      is used ONLY when `.generation` is absent or empty (D-5063): a linked, unreadable,
-#      full-window or non-UUID one is unusable, and a recall-off file that exists then
+#      full-window, NUL-holding (a bounded `read -d ''` finds it) or non-UUID one is unusable, and a recall-off file that exists then
 #      withholds the line, as with a missing, linked, unreadable or malformed record
 #      (fail closed). It is read the way B2's CLI reads it, so the card and `ccrc history`
 #      never put one family in two eval arms: a symlink, a non-file or an unreadable file
@@ -2958,7 +2958,7 @@ HISTORY_SCOPE_DIR="$HOME/.ccrc/history/scope"
 HISTORY_CARD_DIR="$HOME/.ccrc/history/card"
 _hook_history_card() {   # folds the history line into CARD_COMPACT; silent; builtins only
   local uuid_re='^[0123456789abcdef]{8}-[0123456789abcdef]{4}-[0123456789abcdef]{4}-[0123456789abcdef]{4}-[0123456789abcdef]{12}$'
-  local off="$HOME/.ccrc/history/recall-off/$id" gen="" via="" o="" ms="" now="" t="" s="" f="" v="" nl=$'\n' ws=$' \t\n\v\f\r'
+  local off="$HOME/.ccrc/history/recall-off/$id" gen="" via="" x="" o="" ms="" now="" t="" s="" f="" v="" nl=$'\n' ws=$' \t\n\v\f\r'
   [[ -z "$paid" ]] || return 0
   [[ -e "$HOME/.ccrc/history-off" ]] && return 0
   (( ${#id} <= 224 )) || return 0
@@ -2966,7 +2966,7 @@ _hook_history_card() {   # folds the history line into CARD_COMPACT; silent; bui
   if [[ "${CCRC_SESSION_GENERATION:-}" =~ $uuid_re ]]; then
     gen="$CCRC_SESSION_GENERATION" via=session
   elif _ct_read "$REG/$id.generation"; [[ -e "$REG/$id.generation" || -L "$REG/$id.generation" ]]; then
-    if [[ -L "$REG/$id.generation" ]] || (( CT_RAWN >= CCRC_ID_MAX )); then via=bad; elif [[ "$CT_V" =~ $uuid_re ]]; then gen="$CT_V" via=registry; elif [[ -n "$CT_V" ]]; then via=bad; fi
+    if [[ -L "$REG/$id.generation" ]] || (( CT_RAWN >= CCRC_ID_MAX )) || { IFS= read -r -d '' -n "$CCRC_ID_MAX" x 2>/dev/null < "$REG/$id.generation" && (( ${#x} < CCRC_ID_MAX )); }; then via=bad; elif [[ "$CT_V" =~ $uuid_re ]]; then gen="$CT_V" via=registry; elif [[ -n "$CT_V" ]]; then via=bad; fi
   fi
   [[ -L "$off" || -L "${off%/*}" || ( -e "${off%/*}" && ! ( -d "${off%/*}" && -x "${off%/*}" ) ) ]] && return 0
   if [[ -e "$off" ]]; then
@@ -2977,7 +2977,7 @@ _hook_history_card() {   # folds the history line into CARD_COMPACT; silent; bui
     [[ "$o" == *[!0123456789abcdef-]* ]] && return 0
     if [[ "$via" == bad ]]; then return 0; elif [[ -z "$via" ]]; then
       [[ -L "$HISTORY_CARD_DIR/$id/$psid.gen" ]] && return 0
-      _ct_read "$HISTORY_CARD_DIR/$id/$psid.gen" || return 0
+      _ct_read "$HISTORY_CARD_DIR/$id/$psid.gen" || return 0; { IFS= read -r -d '' -n "$CCRC_ID_MAX" x 2>/dev/null < "$HISTORY_CARD_DIR/$id/$psid.gen" && (( ${#x} < CCRC_ID_MAX )); } && return 0
       [[ -z "$CT_V" || "$CT_V" =~ $uuid_re ]] || return 0
       gen="$CT_V"
     fi

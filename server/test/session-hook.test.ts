@@ -12028,9 +12028,9 @@ describe('history card line: SessionStart(compact) serves the sweep\'s predictio
   // code points, never written as escapes or as themselves, so no write can turn them into something else.
   const NBSP_G = `${String.fromCharCode(0xa0)}${GENERATION}\n`;
   const BOM_G = `${String.fromCharCode(0xfeff)}${GENERATION}\n`;
-  type Reg = 'G' | 'G2' | 'absent' | 'unreadable' | 'symlink-G' | 'junk' | 'G-wide' | 'G-nbsp' | 'empty' | 'blank-wide' | 'G2-wide-junk' | 'dangling';
-  type Off = 'absent' | 'G' | 'G-padded' | 'G-wide' | 'G-nbsp' | 'G-bom' | 'G2' | 'empty' | 'unreadable' | 'dir' | 'symlink-G' | 'unsearchable' | 'parent-file' | 'G2-tabcr' | 'link-loop' | 'link-notdir' | 'link-000' | 'link-dangling';
-  type Rec = 'G' | 'G2' | 'legacy' | 'absent' | 'junk' | 'symlink-G';
+  type Reg = 'G-nul' | 'G2-nul' | 'G2-nul-split' | 'nul-only' | 'G' | 'G2' | 'absent' | 'unreadable' | 'symlink-G' | 'junk' | 'G-wide' | 'G-nbsp' | 'empty' | 'blank-wide' | 'G2-wide-junk' | 'dangling';
+  type Off = 'absent' | 'G' | 'G-padded' | 'G-wide' | 'G-nbsp' | 'G-bom' | 'G2' | 'empty' | 'unreadable' | 'dir' | 'symlink-G' | 'unsearchable' | 'parent-file' | 'G2-tabcr' | 'link-loop' | 'link-notdir' | 'link-000' | 'link-dangling' | 'G-nul';
+  type Rec = 'G' | 'G2' | 'legacy' | 'absent' | 'junk' | 'symlink-G' | 'G-nul';
   /** B1's Presence, as a type-only import expression: this file gains no import line (the census cites it by line). */
   type Pres = import('../../ccd/history/lib.mjs').Presence<string>;
   /** A row is an AGREE row (the hook's verdict is the CLI's) unless its sixth cell reads 'fail-closed': the hook
@@ -12094,6 +12094,18 @@ describe('history card line: SessionStart(compact) serves the sweep\'s predictio
     // padding, and falls to the newest family (the record G, which recall-off names: exit 8).
     ['a .generation holding G2 in a full read window, junk beyond it, recall-off names the recorded G', '', 'G2-wide-junk', 'G', 'G'],
     ['a dangling-link .generation is unusable, recall-off is stale (fail-closed: the CLI recalls)', '', 'dangling', 'G2', 'G', 'fail-closed'],
+    // D-5063 (C4 of fix round 1): `read -N` drops a NUL and does not count it, so a .generation holding one read as the
+    // UUID around it. The CLI keeps the NUL (presenceOf's trim does not strip U+0000), finds no UUID and resolves the
+    // newest family's generation, the record. A bounded `read -d ''` finds the NUL, and the hook withholds.
+    ['a .generation of G2 then a NUL, recall-off names the recorded G (the hook once read G2 and served)', '', 'G2-nul', 'G', 'G'],
+    ['a .generation of G then a NUL, recall-off is stale (fail-closed: the CLI recalls)', '', 'G-nul', 'G2', 'G', 'fail-closed'],
+    ['a NUL between two halves that join into a UUID, recall-off names the recorded G', '', 'G2-nul-split', 'G', 'G'],
+    ['a NUL-only .generation (once empty to the hook, so the record decided), recall-off is stale (fail-closed: the CLI recalls)', '', 'nul-only', 'G2', 'G', 'fail-closed'],
+    ['a NUL-only .generation, recall-off names the recorded G', '', 'nul-only', 'G', 'G'],
+    ['a record holding G and a NUL is no record', '', 'absent', 'G2', 'G-nul'],
+    // The safe direction, named (R-recalloff-parity): the hook drops the NUL and reads G, so it withholds; the CLI reads
+    // 'G' + NUL, which is not the generation, so recall-off is stale there and the line is served.
+    ['recall-off holds G and a NUL, the generation is G (fail-closed: the CLI recalls)', GENERATION, 'G', 'G-nul', 'G', 'fail-closed'],
     ['an empty .generation is none: the record decides (stale)', '', 'empty', 'G2', 'G'],
     ['an empty .generation is none: the record decides (named)', '', 'empty', 'G', 'G'],
     // The ruling's pin: the CLI exits 8 here, so the card line must not reach the control arm.
@@ -12111,6 +12123,7 @@ describe('history card line: SessionStart(compact) serves the sweep\'s predictio
   /** The text each Reg kind plants in $REG/<id>.generation (the CLI reads the same text through presenceOf's trim). */
   const REG_TEXT: Partial<Record<Reg, string>> = {
     G: GENERATION, G2, junk: 'not-a-generation', empty: '',
+    'G-nul': `${GENERATION}\0\n`, 'G2-nul': `${G2}\0\n`, 'G2-nul-split': `${G2.slice(0, 18)}\0${G2.slice(18)}\n`, 'nul-only': '\0',
     'G-wide': `${' '.repeat(130)}${GENERATION}\n`, 'G2-wide-junk': `${G2}${' '.repeat(100)}junk\n`, 'G-nbsp': NBSP_G, 'blank-wide': `${' '.repeat(130)}\n`,
   };
   const plantParity = (regKind: Reg, offKind: Off, recKind: Rec): void => {
@@ -12128,6 +12141,7 @@ describe('history card line: SessionStart(compact) serves the sweep\'s predictio
     if (offKind === 'G-wide') fs.writeFileSync(off, `${' '.repeat(130)}${GENERATION}\n`);
     if (offKind === 'G-nbsp') fs.writeFileSync(off, NBSP_G);
     if (offKind === 'G-bom') fs.writeFileSync(off, BOM_G);
+    if (offKind === 'G-nul') fs.writeFileSync(off, `${GENERATION}\0\n`);
     if (offKind === 'G2') fs.writeFileSync(off, `${G2}\n`);
     if (offKind === 'G2-tabcr') fs.writeFileSync(off, `\t${G2} \r\n`);
     if (offKind === 'empty') fs.writeFileSync(off, '');
@@ -12153,6 +12167,7 @@ describe('history card line: SessionStart(compact) serves the sweep\'s predictio
     fs.rmSync(rec, { force: true });
     if (recKind === 'G') fs.writeFileSync(rec, `${GENERATION}\n`);
     if (recKind === 'G2') fs.writeFileSync(rec, `${G2}\n`);
+    if (recKind === 'G-nul') fs.writeFileSync(rec, `${GENERATION}\0\n`);
     if (recKind === 'legacy') fs.writeFileSync(rec, '\n');
     if (recKind === 'junk') fs.writeFileSync(rec, 'not-a-generation\n');
     if (recKind === 'symlink-G') { fs.writeFileSync(path.join(home, 'rec-target'), `${GENERATION}\n`); fs.symlinkSync(path.join(home, 'rec-target'), rec); }
@@ -12175,6 +12190,7 @@ describe('history card line: SessionStart(compact) serves the sweep\'s predictio
     const file: Pres = offKind === 'absent' ? { state: 'absent' }
       : offKind === 'G' || offKind === 'G-padded' || offKind === 'G-wide' || offKind === 'G-nbsp' || offKind === 'G-bom'
         ? { state: 'value', value: GENERATION }
+        : offKind === 'G-nul' ? { state: 'value', value: `${GENERATION}\0` }
         : offKind === 'G2' || offKind === 'G2-tabcr' ? { state: 'value', value: G2 }
           : offKind === 'empty' ? { state: 'value', value: '' }
             : offKind === 'link-dangling' ? { state: 'absent' } : { state: 'unreadable' };
