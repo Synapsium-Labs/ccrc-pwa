@@ -6,7 +6,7 @@
 // else ever does. A paste is taken before xterm sees it and goes back as
 // `typedFrame(text)`, sanitised, so a clipboard cannot end its own brackets
 // (D-5007), and text a keyboard inserts goes the same way unless it is one key's
-// bytes (`inserted-text-is-sanitised`). The attach dials the window's own size plus tmux's status
+// bytes (D-5114). The attach dials the window's own size plus tmux's status
 // row, 220x51, at every glass width, and the terminal is pinned there (D-5005,
 // spec 2026-10-14 §5.1): a client exactly the window's size is one tmux has
 // nothing to pan and nothing to fill, so the glass changes the type size and
@@ -473,7 +473,7 @@ export function TerminalDrawer({
      */
     let dropOnce: string | null = null;
     /**
-     * WHILE THE KEYBOARD IS INSERTING TEXT (`inserted-text-is-sanitised`, I5).
+     * WHILE THE KEYBOARD IS INSERTING TEXT (D-5114, I5).
      * A keyboard inserts as well as reporting keys: an `input` event's
      * `insertText`, which xterm sends at once; a composition's commit, which it
      * reads back a task later; the textarea's growth after a keyCode-229

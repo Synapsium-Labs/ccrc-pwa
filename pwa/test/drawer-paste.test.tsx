@@ -22,7 +22,7 @@
 //   the terminal's host, in either view, is taken in the capture phase, before
 //   xterm's own handler (which stops propagation at the textarea), and sent as
 //   `typedFrame(text)`, so a pasted `\e[201~` never reaches a frame;
-// - text a keyboard INSERTS (`inserted-text-is-sanitised`): an `input` event's
+// - text a keyboard INSERTS (D-5114): an `input` event's
 //   insertText, a composition's commit and the textarea diff after a
 //   keyCode-229 keydown are no paste event, so the guard above never saw them
 //   and they reached the session raw, end marker and CRs included (measured by
@@ -67,7 +67,7 @@
 //   the latch survives the view leaving `wrapped` ...... the view-flip case
 //   the latch survives a re-attach ..................... the re-attach case
 //   typedFrame.ts spells a marker itself ............... drawer-keybar.test.tsx's "spells no key byte" scan
-// and for `inserted-text-is-sanitised` (RUN 2026-10-15, the same way; every row RED):
+// and for D-5114 (RUN 2026-10-15, the same way; every row RED):
 //   insertedFrame sends the insertion as it is ......... the three paths in both views, and the pure case
 //   insertedFrame frames every chunk, a key included .. the key-in-a-window case, and the pure twin
 //   no window for an input event ........................ the insertText cases (both views)
@@ -252,7 +252,7 @@ describe('the letter a latched ctrl takes from a beforeinput', () => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Text a keyboard INSERTS (`inserted-text-is-sanitised`), pure
+// Text a keyboard INSERTS (D-5114), pure
 // ─────────────────────────────────────────────────────────────────────────────
 
 /** What a keyboard's clipboard chip, a suggestion or an IME can hand xterm's
@@ -636,7 +636,7 @@ describe('the paste guard', () => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Text a keyboard INSERTS, in the drawer (`inserted-text-is-sanitised`)
+// Text a keyboard INSERTS, in the drawer (D-5114)
 // ─────────────────────────────────────────────────────────────────────────────
 
 /** An `input` event as a browser dispatches one for a keyboard's insertion. */

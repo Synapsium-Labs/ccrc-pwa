@@ -128,7 +128,7 @@ export function exitNoticeShowing(rows: readonly string[]): boolean {
  * Where a bar of `caps` caps breaks when one line cannot hold it: the first
  * line takes the larger half, `ceil(caps / 2)`, and the second the rest, so a
  * two-line bar is two even halves and never a lone cap on a line of its own
- * (`key-bar-wraps-when-it-does-not-fit`). The wrapped bar's eight (its six keys,
+ * (D-5113). The wrapped bar's eight (its six keys,
  * `⋯` and the history door) break 4 + 4; the grid's ten (its nine keys and the
  * door) 5 + 5. WHETHER it breaks is the browser's, measured against the space
  * the bar actually has: nothing names a width for it (chat.css, `.term-keys`).
@@ -143,7 +143,7 @@ export function barBreak(caps: number): number {
  * `space PgUp PgDn`, `^U ^O ^R` and `^T ^B ctrl`. Each group wraps as a whole,
  * so wherever the row breaks — two lines on an iPhone Pro Max, three on most
  * phones, four at 320px — every line holds a group of three or more, never
- * `ctrl` alone (`key-bar-wraps-when-it-does-not-fit`).
+ * `ctrl` alone (D-5113).
  */
 export function quarters(caps: number): number[] {
   const half = barBreak(caps);
@@ -159,7 +159,7 @@ export function quarters(caps: number): number[] {
 const ONE_KEY = /^(?:[\s\S]|\x1b[\s\S]|\x1b\[[0-?]*[ -/]*[@-~]|\x1bO[\s\S])$/u;
 
 /**
- * Whether `data` is one key's bytes (`inserted-text-is-sanitised`): what a
+ * Whether `data` is one key's bytes (D-5114): what a
  * keyboard sends for a key, whichever key it is — every KEY_SEQ entry included.
  * Never a bracketed-paste marker: no key sends one, and an insertion that is
  * nothing but `\e[201~` is exactly what must not reach a pane as a marker.

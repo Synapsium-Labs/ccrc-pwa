@@ -1340,7 +1340,7 @@ button.metachip:active {
    set into the glass in both themes.
 
    THE BAR WRAPS WHEN IT DOES NOT FIT, AT ANY WIDTH (D-5007, amended by
-   `key-bar-wraps-when-it-does-not-fit`). Its keys are two halves (`barBreak`
+   D-5113). Its keys are two halves (`barBreak`
    in keyBar.ts): the wrapped view's `esc ↑ ↓ ⏎` and `^C ⌫ ⋯` with the history
    door, the grid's `esc ↑ ↓ ← →` and `tab ⇧tab ⏎ ^C` with the door. Where both
    fit on one line they share it; where they do not, each takes a line of its

@@ -246,7 +246,7 @@ const REGISTERED: Record<string, string> = {
     + 'one line) joined the idiom when the swatch moved beside the name, and '
     + 'now clusters with the terminal confirm\'s entry instead. The terminal '
     + 'key bar\'s half joined it when the bar stopped scrolling its keys and '
-    + 'wraps them where they do not fit (`key-bar-wraps-when-it-does-not-fit`); '
+    + 'wraps them where they do not fit (D-5113); '
     + 'chat.css sorts first, so the half seeds this cluster and the settings '
     + 'node head this entry used to pair the banner item with now clusters '
     + 'with nothing. A half of a key bar and a line of a reclaim banner share '

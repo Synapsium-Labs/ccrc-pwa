@@ -13,7 +13,7 @@
 // half of them.
 //
 // THE BAR WRAPS WHEN IT DOES NOT FIT, AT ANY WIDTH (D-5007, amended by
-// `key-bar-wraps-when-it-does-not-fit`): the keys are two halves, broken where
+// D-5113): the keys are two halves, broken where
 // `barBreak` says, and the browser puts them on one line or two by the space the
 // bar actually has. No width is named anywhere (chat.css, `.term-keys`).
 //

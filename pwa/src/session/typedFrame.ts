@@ -108,7 +108,7 @@ export function keyLetter(ev: KeyLike): string | null {
 
 /**
  * What a chunk xterm sends while the keyboard is INSERTING text goes out as
- * (`inserted-text-is-sanitised`; invariant I5).
+ * (D-5114; invariant I5).
  *
  * A keyboard does not only report keys. It also inserts text into xterm's
  * textarea — an `input` event's `insertText`, a composition's commit, the

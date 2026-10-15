@@ -9,7 +9,7 @@
 //     into xterm's textarea (Task 12; `drawer-paste.test.tsx`);
 // (e) the bar wraps when it does not fit, at any width, never at a breakpoint
 //     and never under any at-rule
-//     (`key-bar-wraps-when-it-does-not-fit`): two even halves, and the row `⋯`
+//     (D-5113): two even halves, and the row `⋯`
 //     opens in four groups, read from chat.css as text (jsdom applies no
 //     stylesheet) and checked by arithmetic from the tokens at 320–1280px; the
 //     ^C confirm's two choices kept together beside its sentence; and every key
@@ -608,7 +608,7 @@ describe('the drawer renders the grid strip', () => {
   });
 });
 
-// THE BAR WRAPS WHEN IT DOES NOT FIT, AT ANY WIDTH (`key-bar-wraps-when-it-does-not-fit`).
+// THE BAR WRAPS WHEN IT DOES NOT FIT, AT ANY WIDTH (D-5113).
 //
 // It used to wrap below a fixed 420px, by a sum its own comment got wrong: the
 // wrapped bar and its history door need 439px, so from 421 to 438px (the
@@ -693,7 +693,7 @@ function lines(m: BarModel, widthPx: number): { caps: string[]; px: number }[] {
 const oneLinePx = (m: BarModel): number =>
   2 * m.pad + m.widths.reduce((a, b) => a + b, 0) + m.gap * (m.widths.length - 1);
 
-describe('the bar wraps when it does not fit, at any width (key-bar-wraps-when-it-does-not-fit)', () => {
+describe('the bar wraps when it does not fit, at any width (D-5113)', () => {
   /** The bar's own classes: a rule for any of them is a rule for the bar. */
   const BAR = /\.term-(keys|confirm)/;
 

@@ -695,7 +695,7 @@ describe('the console history has a door a thumb can reach', () => {
     // started at x=428, off a 390px phone (`.sheet-panel--full` zeroes the
     // drawer's side padding, so that is the whole width). The keys no longer
     // scroll — the bar wraps where it does not fit
-    // (`key-bar-wraps-when-it-does-not-fit`, `drawer-keybar.test.tsx`) — and
+    // (D-5113, `drawer-keybar.test.tsx`) — and
     // this key stays beside them, in the bar's tail, as an action and not a
     // key: the one affordance touch has is never laid out as one of them.
     render(<TerminalDrawer id={ID} open onClose={() => {}} makeSocket={makeSocket} />);
