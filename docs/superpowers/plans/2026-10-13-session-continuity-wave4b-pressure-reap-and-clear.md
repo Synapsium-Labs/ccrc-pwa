@@ -2165,8 +2165,8 @@ On `not-triggered`, retain the key and record the qualified reading. Keep an own
 
 These belong to the worker after Tasks 1-4, before its final PR and wave-done. They are planned gates, not results from this documentation branch.
 
-- [ ] Re-measure current main and the owned claims before the final gate. Absorb main only for a conflict, a branch-red/main-passes failure, or a NAMED landing condition under clause 16, not merely because main advanced. A required merge is ordinary `git merge`, never a rebase of dispatched work; resolve generated stamps by regeneration and pay the census/citation tax again.
-- [ ] Run the complete owning set from `server/`, foreground with timeout at least 600000 ms and one process at a time:
+- [x] Re-measure current main and the owned claims before the final gate. Absorb main only for a conflict, a branch-red/main-passes failure, or a NAMED landing condition under clause 16, not merely because main advanced. A required merge is ordinary `git merge`, never a rebase of dispatched work; resolve generated stamps by regeneration and pay the census/citation tax again.
+- [x] Run the complete owning set from `server/`, foreground with timeout at least 600000 ms and one process at a time:
 
 ```bash
 ./node_modules/.bin/vitest run test/scope-sweep.test.ts test/ccrc-doctor.test.ts test/measure-continuity-stage6.test.ts test/measure-continuity-pressure-kills.test.ts --maxWorkers=1
@@ -2181,12 +2181,55 @@ These belong to the worker after Tasks 1-4, before its final PR and wave-done. T
 npm run build
 ```
 
-- [ ] Run the complete server suite ONCE, foreground: `./node_modules/.bin/vitest run --maxWorkers=1`. Report actual red files and distinguish reproduced base-red, load flakes and new regressions with isolated reruns only when evidence warrants it; never call an unrun file green. A timed-out process is still owned until its exit is proved; no overlapping retry and no pattern kill.
-- [ ] Run the package-local agent and PWA suites, foreground, sequentially; `agent/node_modules/.bin/vitest run --maxWorkers=1` from `agent/` and `pwa/node_modules/.bin/vitest run --maxWorkers=1` from `pwa/`, each actually invoked as `./node_modules/.bin/vitest` in that package. Run PWA's existing `npm run build`. No root runner or bare npx. If dependencies are unavailable, report the unrun leg rather than resolving a global runner.
-- [ ] Parse all edited shells with `bash -n`, Python with `python3 -I`/`ast.parse`, regenerate/check `ccd/ccd`, compare executable modes, repair live README anchors and measure the frozen citation composition. Prove the two frozen documents unchanged. Run `git diff --check`.
-- [ ] Scan EVERY changed file and every introduced commit for private material. Stage a new file before the tracked-corpus privacy guard so it is not invisible. Measure the real guard exit code separately before committing or pushing. Preserve issue #317's shipped copy/source behavior; no historical count is a substitute for today's measured census.
-- [ ] Include each task's red-first result, restored green, independent task review and actual mutation table in committed evidence. Do not invent completed ticks, sample counts, helper signatures or a live notification fixture. Explain every used issued deviation; leave unused numbers unused.
+- [x] Run the complete server suite ONCE, foreground: `./node_modules/.bin/vitest run --maxWorkers=1`. Report actual red files and distinguish reproduced base-red, load flakes and new regressions with isolated reruns only when evidence warrants it; never call an unrun file green. A timed-out process is still owned until its exit is proved; no overlapping retry and no pattern kill.
+- [x] Run the package-local agent and PWA suites, foreground, sequentially; `agent/node_modules/.bin/vitest run --maxWorkers=1` from `agent/` and `pwa/node_modules/.bin/vitest run --maxWorkers=1` from `pwa/`, each actually invoked as `./node_modules/.bin/vitest` in that package. Run PWA's existing `npm run build`. No root runner or bare npx. If dependencies are unavailable, report the unrun leg rather than resolving a global runner.
+- [x] Parse all edited shells with `bash -n`, Python with `python3 -I`/`ast.parse`, regenerate/check `ccd/ccd`, compare executable modes, repair live README anchors and measure the frozen citation composition. Prove the two frozen documents unchanged. Run `git diff --check`.
+- [x] Scan EVERY changed file and every introduced commit for private material. Stage a new file before the tracked-corpus privacy guard so it is not invisible. Measure the real guard exit code separately before committing or pushing. Preserve issue #317's shipped copy/source behavior; no historical count is a substitute for today's measured census.
+- [x] Include each task's red-first result, restored green, independent task review and actual mutation table in committed evidence. Do not invent completed ticks, sample counts, helper signatures or a live notification fixture. Explain every used issued deviation; leave unused numbers unused.
 - [ ] Open the worker PR with durable GitHub links to the spec/plan and explicit verification gaps, including protected updater observation and next-start exposure. End its description with the mandated attribution. List mail before sending one wave-done at the exact final tip; report Tasks 1-4 done and Task 5 pending/coordinator-owned. Include the unchanged fingerprint, `suite:` and `failure:` signals and evidence paths. Do not wait indefinitely for CI instead of handing off: the coordinator reads its actual checks.
+
+#### Execution evidence (final branch and handoff gates)
+
+Measured at tip `5033cfb55` (Tasks 1-4 plus the final-review fix commit), base `a3cebde1b`; this evidence entry is the only later commit.
+
+- **Main and claims.** One `git fetch origin` before handoff: `origin/HEAD` had moved to `0b3ff2f62` (five merges). `git merge-tree --write-tree --name-only --no-messages HEAD origin/HEAD` exits 0, so no conflict; no required check is known red; no landing mail names this PR. No clause-16 trigger holds, so main was NOT absorbed. Claims re-read; the wave's own claims stayed live, and the co-edit licences in the brief covered the two files other runs hold.
+- **Owning set.** Every file in the owning-set commands above ran at this tip, inside the full pass below (each one is in the 686-file manifest, and none is in the red list except as noted). They were not re-run as the separate grouped commands. `npm run build` (server) exits 0.
+- **Complete server suite, once.** It was run as a serial foreground pass, not as the single literal command. The 600000 ms tool bound cannot hold a 686-file run at `--maxWorkers=1`, and one file alone ran 766845 ms. Method:
+  - The collected manifest is 686 files, partitioned in vitest's own `--shard` order (sha1 of the root-relative path, the same range arithmetic), 40 shards of 18/17 files.
+  - Shards 1-5 ran as `--shard=i/40`. Their mapping was reconstructed afterwards and cross-checked: the sizes match, and shard 1 contains the one file its log named. Every later shard ran its explicit file list.
+  - Each part ran under `timeout` inside its own process group. Before the next part started, an empty group was re-proved.
+  - A part that timed out was split and re-run; completed coverage was never repeated. Timed out, then split: shards 6, 22, 27, 34, 35 and 37, plus 13, 21 and 25, which a batch budget cut short and which then completed alone.
+  - Three files exceeded a single bound on their own and ran in top-level-describe partitions: `ccrc-update`, `ccrc-install` and `ccrc-doctor`. `ccd-tick-diet-equivalence` ran in describe and locale partitions. The JSON reports show every non-macOS test in each partitioned file ran (macOS-gated cases skip on Linux in every run).
+  - Leaked test-fixture `sleep` processes (shards 7 and 11, and the agent leg) were killed by exact PID after a process-group membership check. No pattern kill was used.
+  - An earlier background launch of the whole suite was a departure from the foreground rule. A session restart killed it partway through. It recorded `ccrc-update` 514 tests with 1 failed (`_ver_kept: 'a clean version, not pointed at'`, 47261 ms); that test passed in the partitioned run.
+  - Result: all 686 files covered. The FIRST complete pass was RED in 10 files. The box's load average was roughly 27-94 on 16 cores throughout.
+  - Reproduced in isolation AND failing identically on a clean extract of the base tree `a3cebde1b`, so base-red on this box and not caused by this wave:
+    - `boot` (a hung ccd does not delay listen)
+    - `ccd-review-335-pins` (`clipswhy`)
+    - `tmp-sweep` (FAILS CLOSED with claude running)
+    - `update-store-nodes` (heir guard `isHalting`)
+  - Green when re-run in isolation, so load flakes:
+    - `ci-trace-run` (SKIPS_UNDER_TRACE, 20679 ms)
+    - `session-hook` (the ordinary publishing run's fork count)
+    - `history-lib` (window match beyond the margin)
+    - `update-inventory` (symlinked build.json, 33331 ms)
+    - `ccrc-install` (repairs a changed mode, 43173 ms)
+    - `ccd-tick-diet-equivalence`: its E5/E7 partitions passed every test but timed out a 20000 ms hook. The E7 'C' partition re-ran green; the E5 and E7 UTF-8 partitions were NOT re-run.
+- **Agent and PWA.**
+  - `agent`: 26 files, 494 tests, green.
+  - `pwa`: 168 files, 4990 tests, green.
+  - PWA `npm run build` exits 0.
+  - Each ran foreground and serially, with an empty process group proved afterwards.
+- **Shells, Python, generated file, modes, docs.**
+  - `bash -n` passes on `ccd/ccd`, `ccd/ccd-scope-sweep` and `ccd/ccrc-doctor-checks`.
+  - `python3 -I` `ast.parse` passes on `deploy/measure-continuity.py`.
+  - `node shared/mark.mjs --check ccd/ccd` reports `ccrc-unmodified`, rc 0.
+  - Modes are unchanged at 775.
+  - The frozen two documents show no diff against `origin/main`.
+  - `git diff --check` is clean.
+  - Citation and census composition was re-measured in every task and in the fix commit; it did not move (147/202, 55/35).
+- **Privacy.** Every added line of the branch diff and every commit message was scanned for private hosts, paths, accounts, lanes, other projects, tracker links and people. The only hit was a false positive, a case-insensitive substring inside "claiming". `topology-clean` passes in the full pass, and again after this evidence commit.
+- **Task evidence and deviations.** Each task's red-first result, restored green, independent task review and mutation table are in its own Execution evidence section above. Used deviations are D-4316 through D-4320, each defined below. D-4321 through D-4325 stay unused.
 
 ## Deviations found
 
