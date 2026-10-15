@@ -115,7 +115,7 @@ const CENSUS_TOKEN =
 const ID_SPELLING = /\$\{1-\}|\$\{1\}|\$1(?![0-9])|\$\{id\}|\$id(?![A-Za-z0-9_])|\$\{sessionId\}|\$project(?![A-Za-z0-9_])/g;
 
 /** Each variable part, as the placeholder `WIDTH` measures. `_hook_write_atomic`'s `$2` is its nonce;
- *  every other `$2` is `_reg_set`'s field. */
+ *  every other `$2` is `_reg_set`'s field, and the history CLI's `regPresence` reads one as `${field}`. */
 const PLACEHOLDERS: ReadonlyArray<readonly [RegExp, string]> = [
   [/\$2(?=\.hook-write)/g, '<nonce>'],
   [/\$\$|\$\{?BASHPID\}?|\$\{pid\}/g, '<pid>'],
@@ -124,7 +124,7 @@ const PLACEHOLDERS: ReadonlyArray<readonly [RegExp, string]> = [
   [/\$ns(?![A-Za-z0-9_])/g, '<ns>'],
   [/\$nonce(?![A-Za-z0-9_])|\$COMPACT_SERVE_NONCE/g, '<nonce>'],
   [/\$\{tickMs\}/g, '<ms>'],
-  [/\$2(?![0-9])|\$\{f\}|\$f(?![A-Za-z0-9_])|\$field(?![A-Za-z0-9_])|\$\{name\}/g, '<field>'],
+  [/\$2(?![0-9])|\$\{f\}|\$f(?![A-Za-z0-9_])|\$field(?![A-Za-z0-9_])|\$\{field\}|\$\{name\}/g, '<field>'],
   [/\$base(?![A-Za-z0-9_])/g, '<base>'],
 ];
 
