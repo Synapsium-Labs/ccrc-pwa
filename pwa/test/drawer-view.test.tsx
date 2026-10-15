@@ -53,10 +53,20 @@
 //   bottom-anchored by justify-content: flex-end ........ the same case
 //   rows may shrink (flex-shrink removed) ................ the same case
 //   a block scroller again (display: flex removed) ....... the same case
+//
+// THREE CLAUSES THE STAGE-1 VERIFIER LEFT GREEN UNDER MUTATION, and the offer's
+// lifetime (it outlived the close). RED FIRST for the offer's reset; the other
+// four cases hold on the tree as built and are proved by their rows. RUN, all RED:
+//   the offer is never put back when the drawer closes .. taken-closed-reopened
+//   a chip flip does not end the offer ................... the chip-flip-survives-the-close case
+//   the offer is stored as the device's choice ........... taken-closed-reopened
+//   P4 keeps Escape for any textarea (host.contains) ..... the history-layer Escape case
+//   no focus when the socket opens ....................... the takes-the-keyboard case
+//   focus at attach, before the socket opens ............. the takes-the-keyboard case
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { Terminal as XTerm } from '@xterm/xterm';
 import { Terminal } from '@xterm/xterm';
 import { Sheet } from '@ccrc/ui';
@@ -544,6 +554,25 @@ describe('the grid where 220 columns fit, the wrapped view where they do not', (
   });
 });
 
+describe('the terminal takes the keyboard when its socket opens', () => {
+  it('focused once the session is live, never before: a physical keyboard types at once, in either view', () => {
+    for (const v of ['wrapped', 'grid'] as const) {
+      const store = memStore();
+      store.map.set(VIEW_OVERRIDE_KEY, v);
+      const t = fakeTerm();
+      const view = render(
+        <TerminalDrawer id={ID} open onClose={() => {}} makeSocket={makeSocket} makeTerm={t.makeTerm} viewStorage={() => store} />,
+      );
+      const ws = FakeSocket.instances.at(-1)!;
+      expect(t.focus, `${v}: focused before the session was live`).not.toHaveBeenCalled();
+      act(() => ws.onopen?.());
+      expect(t.focus, `${v}: the open socket left the keyboard elsewhere`).toHaveBeenCalledTimes(1);
+      expect(document.activeElement, v).toBe(t.textarea());
+      view.unmount();
+    }
+  });
+});
+
 describe('the chip', () => {
   it('flips the view, and the choice survives a remount', () => {
     glass.width = 390;
@@ -792,6 +821,62 @@ describe('the wrapped view', () => {
   });
 });
 
+describe('the not-Claude offer lasts only while the drawer is open', () => {
+  const offer = (): HTMLElement | null => screen.queryByRole('button', { name: /shows no Claude Code prompt/ });
+  /** Close the drawer and open it again: a new attach, a new terminal. */
+  const reopen = (view: ReturnType<typeof render>, t: ReturnType<typeof fakeTerm>, store: StorageLike): FakeSocket => {
+    const el = (open: boolean) => (
+      <TerminalDrawer id={ID} open={open} onClose={() => {}} makeSocket={makeSocket} makeTerm={t.makeTerm} viewStorage={() => store} />
+    );
+    view.rerender(el(false));
+    view.rerender(el(true));
+    const ws = FakeSocket.instances.at(-1)!;
+    act(() => ws.onopen?.());
+    return ws;
+  };
+  const takeOffer = async (t: ReturnType<typeof fakeTerm>): Promise<void> => {
+    await t.paint(screenNamed('not-claude').stream);
+    await act(async () => { await vi.advanceTimersByTimeAsync(NOT_CLAUDE_MS); });
+    fireEvent.click(offer()!);
+  };
+
+  it('taken, closed and reopened on Claude Code, the glass chooses again, and nothing was stored', async () => {
+    // MEASURED before this (the verifier's probe): the drawer stays mounted
+    // per session screen, so the offer's grid outlived the close, and the next
+    // open on a phone showed `grid · scrolls` over Claude Code with nothing
+    // stored to explain it.
+    vi.useFakeTimers({ shouldAdvanceTime: true, toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+    glass.width = 390;
+    const store = memStore();
+    const t = fakeTerm();
+    const { view } = mount(t, () => store);
+    await takeOffer(t);
+    expect(wrapOf(view), 'the offer did not show the grid').toBeNull();
+
+    reopen(view, t, store);
+    await t.paint(screenNamed('busy').stream);
+    expect(wrapOf(view), 'the offer outlived the drawer it was taken in').not.toBeNull();
+    expect(viewChipEl()).toHaveTextContent(/^wrapped/);
+    expect(store.map.has(VIEW_OVERRIDE_KEY), 'the offer was stored as the device\'s choice').toBe(false);
+  });
+
+  it('a chip flip after the offer is the device\'s own choice, and that one survives the close', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true, toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+    glass.width = 390;
+    const store = memStore();
+    const t = fakeTerm();
+    const { view } = mount(t, () => store);
+    await takeOffer(t);
+    fireEvent.click(viewChipEl());   // grid → wrapped: the glass's own view, so no override
+    fireEvent.click(viewChipEl());   // wrapped → grid: the device's choice, stored
+    expect(store.map.get(VIEW_OVERRIDE_KEY)).toBe('grid');
+
+    reopen(view, t, store);
+    expect(wrapOf(view), 'closing threw away a choice the reader made with the chip').toBeNull();
+    expect(viewChipEl()).toHaveTextContent(/^grid/);
+  });
+});
+
 describe('P4: a physical Escape goes to Claude Code while the terminal has focus', () => {
   const escape = (el: Element): void => {
     act(() => { fireEvent.keyDown(el, { key: 'Escape', code: 'Escape', keyCode: 27 }); });
@@ -826,6 +911,40 @@ describe('P4: a physical Escape goes to Claude Code while the terminal has focus
     escape(chip);
     expect(onClose).toHaveBeenCalledTimes(1);
     expect(ws.frames()).toEqual([]);
+  });
+
+  it('with focus in the history layer\'s own terminal, which is not the live one, Escape closes the drawer', async () => {
+    // The clause: Escape stays in the drawer only while the focused textarea
+    // is the LIVE terminal's, inside its host. The history layer is a second
+    // xterm laid over the glass, outside that host; it sends nothing to the
+    // session, so an Escape there is a reader leaving, as anywhere else.
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(
+      JSON.stringify({ ok: true, text: 'older output\nolder still\n', lines: 2000 }),
+      { status: 200, headers: { 'content-type': 'application/json' } },
+    )));
+    try {
+      const store = memStore();
+      store.map.set(VIEW_OVERRIDE_KEY, 'grid');
+      const onClose = vi.fn();
+      render(<TerminalDrawer id={ID} open onClose={onClose} makeSocket={makeSocket} viewStorage={() => store} />);
+      const ws = FakeSocket.instances.at(-1)!;
+      act(() => ws.onopen?.());
+      fireEvent.click(screen.getByRole('button', { name: 'Scroll back' }));
+      const histTa = await waitFor(() => {
+        const el = document.querySelector<HTMLTextAreaElement>('.term-history textarea');
+        if (el === null) throw new Error('the history layer has no terminal yet');
+        return el;
+      });
+      const liveHost = document.querySelector('.term-screen > .term-host')!;
+      expect(liveHost.contains(histTa), 'the history terminal is inside the live host').toBe(false);
+      act(() => histTa.focus());
+      expect(document.activeElement).toBe(histTa);
+      escape(histTa);
+      expect(onClose, 'Escape in the history layer was kept as if it were the live terminal\'s').toHaveBeenCalledTimes(1);
+      expect(ws.frames()).toEqual([]);
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
   it('a sheet without the prop dismisses on Escape as it always has', () => {

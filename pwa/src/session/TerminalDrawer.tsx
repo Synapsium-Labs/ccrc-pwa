@@ -124,6 +124,10 @@ export function TerminalDrawer({
   const store = viewStorage ?? ((): StorageLike => window.localStorage);
   const [storedOverride] = useState(() => readViewOverride(store));
   const overrideRef = useRef<DrawerViewKind | null>(storedOverride);
+  /** While the not-Claude offer's grid is standing in for the device's own
+   *  override: the override it replaced, to put back when the drawer closes.
+   *  null when no offer was taken (or a chip flip has since made a choice). */
+  const offerRef = useRef<{ device: DrawerViewKind | null } | null>(null);
   /** The view showing. null only until something is measured or chosen: it is
    *  placed as the grid is (the host visible), and has no chip. */
   const [view, setView] = useState<DrawerViewKind | null>(() => chooseView(null, storedOverride, null));
@@ -264,6 +268,9 @@ export function TerminalDrawer({
    * it all the same, for as long as it is open.
    */
   const flipView = (): void => {
+    // A flip is the device's own choice, so it ends the offer (below) rather
+    // than being undone with it when the drawer closes.
+    offerRef.current = null;
     const next: DrawerViewKind = viewRef.current === 'wrapped' ? 'grid' : 'wrapped';
     const fit = fitRef.current;
     const ov = fit !== null && chooseView(fit, null, null) === next ? null : next;
@@ -274,11 +281,22 @@ export function TerminalDrawer({
 
   /** The not-Claude chip's offer: the grid, for this drawer only. A pane in vim
    *  is a passing state, and a device that keeps it would open every later
-   *  session in a grid it does not fit. */
+   *  session in a grid it does not fit. So it is never written to the store,
+   *  and the device's own override it stood in for comes back when the drawer
+   *  closes (the effect below): the drawer stays mounted with its session's
+   *  screen, so "for this drawer" has to be put back by hand. */
   const gridForNow = (): void => {
+    offerRef.current ??= { device: overrideRef.current };
     overrideRef.current = 'grid';
     showView('grid');
   };
+  useEffect(() => {
+    if (open) return;
+    const taken = offerRef.current;
+    if (taken === null) return;
+    offerRef.current = null;
+    overrideRef.current = taken.device;
+  }, [open]);
 
   // Frames are inert until the socket reports open — quick keys pressed
   // during attach are dropped, never queued blind into a dead pipe.
