@@ -2094,6 +2094,271 @@ describe('multiSelect boxes (D-5091)', () => {
   });
 });
 
+// — one send at a time, to the row it was meant for —
+//
+// `Chat about this` and the review's `Cancel` each decline the WHOLE ask, so neither may be tapped while another send
+// is still landing: an own-words answer (D-5090) or a multiSelect commit (D-5091), whose next screen can reach the
+// sheet before the call answers. Both sheets: the envelope's, and the scraped one that takes over on `ask_cleared`.
+// The handlers hold the same rule at the source, for two taps handled before React commits the first one's state.
+// And the guards that keep a send on its own row: own words only under the live question, the review told before any
+// question, the form holding back what Send holds back, the stranded retry's text fixed, the text sent trimmed, and
+// the scraped sheet's free-text row read from the transcript's option count.
+describe('one send at a time, to the row it was meant for (D-5089, D-5090, D-5091)', () => {
+  const TEXT = '- only in staging, sampled 10%';
+  const renderAsk = (ask: HookAsk | null, dialog: Dialog | null) => {
+    const store = makeStore();
+    act(() => {
+      if (dialog) store.getState().apply({ type: 'dialog', dialog });
+      if (ask) store.getState().apply({ type: 'ask', ask, key: null });
+    });
+    render(
+      <>
+        <DialogSheet id={SESSION_ID} store={store} onOpenTerminal={vi.fn()} />
+        <ToastHost />
+      </>,
+    );
+    return { store };
+  };
+  const show = (store: ReturnType<typeof makeStore>, dialog: Dialog): void => {
+    act(() => store.getState().apply({ type: 'dialog', dialog }));
+  };
+  const field = (): HTMLInputElement => screen.getByLabelText('Answer in your own words');
+  const noField = (): HTMLElement | null => screen.queryByLabelText('Answer in your own words');
+  const send = (): HTMLButtonElement => screen.getByRole('button', { name: /^Send/ });
+  const chat = (): HTMLButtonElement => screen.getByRole('button', { name: /^Chat about this/ });
+  const box = (label: string): HTMLElement => screen.getByRole('checkbox', { name: new RegExp(`^${label}`) });
+  const commit = (name: 'Next' | 'Review answers'): HTMLButtonElement =>
+    screen.getByRole('button', { name: new RegExp(`^${name}`) });
+  const reviewRows = (): HTMLButtonElement[] => [
+    screen.getByRole('button', { name: /^Submit answers/ }),
+    screen.getByRole('button', { name: /^Cancel/ }),
+  ];
+  const optionButton = (label: string): HTMLButtonElement => {
+    const buttons = screen.getAllByText(label, { selector: '.opt-label' })
+      .map((l) => l.closest('button'))
+      .filter((b): b is HTMLButtonElement => b !== null);
+    expect(buttons, `option buttons reading ${label}`).toHaveLength(1);
+    return buttons[0]!;
+  };
+  /** Taps the rows that decline the ask and proves nothing was sent. */
+  const declineRowsWait = (spy: ReturnType<typeof vi.spyOn>, rows: HTMLButtonElement[], where: string): void => {
+    for (const row of rows) {
+      expect(row, `${where}: ${row.textContent}`).toBeDisabled();
+      fireEvent.click(row);
+    }
+    expect(spy, `${where}: a row that declines the ask was sent`).not.toHaveBeenCalled();
+  };
+
+  it('Chat about this waits while own words are being sent, on both sheets', () => {
+    vi.spyOn(api, 'answerDialogText').mockReturnValue(new Promise(() => {}));
+    const option = vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise(() => {}));
+    const { store } = renderAsk(CACHING_TRACING, pane('cc300-ask-same-labels-q2'));
+    fireEvent.change(field(), { target: { value: TEXT } });
+    fireEvent.click(send());
+    declineRowsWait(option, [chat()], 'envelope');
+
+    act(() => store.getState().apply({ type: 'ask_cleared' }));
+    expect(document.querySelector('[data-source="hook"]')).toBeNull();
+    declineRowsWait(option, [chat()], 'scraped');
+  });
+
+  it('Chat about this waits while a multiSelect commit is under way, on both sheets', () => {
+    // The commit's next screen (question 1 of the same ask, `cc300-ask-q2-of-2-single`'s Which drink?, as the pane
+    // paints it after a ← back) reaches the sheet before the commit answers. DERIVED sequence of recorded screens.
+    vi.spyOn(api, 'answerDialogMulti').mockReturnValue(new Promise(() => {}));
+    const option = vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise(() => {}));
+    const envelope = renderAsk(DRINK_FEATURES_TOOLS, pane('cc300-ask-multiselect-digit1-3'));
+    fireEvent.click(commit('Next'));
+    show(envelope.store, pane('cc300-ask-q2-of-2-single'));
+    expect(screen.getByRole('heading', { name: 'Which drink?' })).toBeInTheDocument();
+    expect(document.querySelector('[data-source="hook"]')).not.toBeNull();
+    declineRowsWait(option, [chat()], 'envelope');
+    cleanup();
+
+    const scraped = renderAsk(null, pane('cc300-ask-multiselect-digit1-3'));
+    fireEvent.click(commit('Next'));
+    show(scraped.store, pane('cc300-ask-q2-of-2-single'));
+    declineRowsWait(option, [chat()], 'scraped');
+  });
+
+  it('the review\'s Submit and Cancel wait while own words are being sent, on both sheets', () => {
+    // Enter landed and the stream painted the review before the text call answered.
+    vi.spyOn(api, 'answerDialogText').mockReturnValue(new Promise(() => {}));
+    const option = vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise(() => {}));
+    const envelope = renderAsk(CACHING_TRACING, pane('cc300-ask-same-labels-q2'));
+    fireEvent.change(field(), { target: { value: TEXT } });
+    fireEvent.click(send());
+    show(envelope.store, pane('cc300-ask-review-same-labels'));
+    expect(document.querySelector('[data-source="hook"]')).not.toBeNull();
+    declineRowsWait(option, reviewRows(), 'envelope');
+    cleanup();
+
+    const scraped = renderAsk(null, pane('cc300-ask-same-labels-q2'));
+    fireEvent.change(field(), { target: { value: TEXT } });
+    fireEvent.click(send());
+    show(scraped.store, pane('cc300-ask-review-same-labels'));
+    declineRowsWait(option, reviewRows(), 'scraped');
+  });
+
+  it('the review\'s Submit and Cancel wait while a multiSelect commit is under way, on both sheets', () => {
+    // The last question's commit lands on the review (measured: `-submit-open`, then `cc300-ask-review-multiselect`).
+    vi.spyOn(api, 'answerDialogMulti').mockReturnValue(new Promise(() => {}));
+    const option = vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise(() => {}));
+    const envelope = renderAsk(DRINK_FEATURES_TOOLS, pane('cc300-ask-multiselect-submit-open'));
+    fireEvent.click(box('Saw'));
+    fireEvent.click(commit('Review answers'));
+    show(envelope.store, pane('cc300-ask-review-multiselect'));
+    expect(document.querySelector('[data-source="hook"]')).not.toBeNull();
+    declineRowsWait(option, reviewRows(), 'envelope');
+    cleanup();
+
+    const scraped = renderAsk(null, pane('cc300-ask-multiselect-submit-open'));
+    fireEvent.click(box('Saw'));
+    fireEvent.click(commit('Review answers'));
+    show(scraped.store, pane('cc300-ask-review-multiselect'));
+    declineRowsWait(option, reviewRows(), 'scraped');
+  });
+
+  it('own words and Chat are offered only under the question the pane is painting', () => {
+    // A tie the title cannot break (DERIVED: both questions Yes/No, the title a suffix of both): no question is live.
+    const both: HookAsk = {
+      questions: [
+        { question: 'Enable tracing?', header: 'Tracing', multiSelect: false, options: CACHING_TRACING.questions[1]!.options },
+        { question: 'Really enable tracing?', header: 'Really', multiSelect: false, options: CACHING_TRACING.questions[1]!.options },
+      ],
+    };
+    renderAsk(both, pane('cc300-ask-same-labels-q2'));
+    expect(noField()).toBeNull();
+    expect(screen.queryByRole('button', { name: /^Chat about this/ })).toBeNull();
+    cleanup();
+    // A pane on another ask entirely (`cc300-ask-1q-open` under `FRUIT_DRINK`).
+    renderAsk(FRUIT_DRINK, pane('cc300-ask-1q-open'));
+    expect(noField()).toBeNull();
+    expect(screen.queryByRole('button', { name: /^Chat about this/ })).toBeNull();
+  });
+
+  it('a question whose labels read like the review\'s rows never takes the review screen', () => {
+    // DERIVED envelope: `Ship it?` offers Submit and Cancel, which prefix-match the review's two rows. The review is
+    // told first (its body ends with the ready line), so its rows stay the review's.
+    const option = vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise(() => {}));
+    const review = pane('cc300-ask-review-same-labels');
+    renderAsk({
+      questions: [
+        { question: 'Ship it?', header: 'Ship', multiSelect: false, options: [{ label: 'Submit' }, { label: 'Cancel' }] },
+        CACHING_TRACING.questions[0]!,
+      ],
+    }, review);
+    expect(screen.getByRole('heading', { name: 'Review your answers' })).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'Ship it?' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: /^Cancel/ }));
+    expect(option).toHaveBeenCalledWith(SESSION_ID, review.id, 2);
+  });
+
+  it('the own-words form never submits what Send holds back (Enter in the field)', () => {
+    const text = vi.spyOn(api, 'answerDialogText').mockReturnValue(new Promise(() => {}));
+    renderAsk(null, pane('cc300-ask-1q-open'));
+    for (const held of ['int x = 1;', 'one\ttwo', '   ']) {
+      fireEvent.change(field(), { target: { value: held } });
+      expect(send(), JSON.stringify(held)).toBeDisabled();
+      fireEvent.submit(field().form!);
+    }
+    expect(text, 'Enter sent what Send holds back').not.toHaveBeenCalled();
+  });
+
+  it('the stranded retry\'s field is read-only: the row accepts exactly that text', async () => {
+    const call = vi.spyOn(api, 'answerDialogText')
+      .mockRejectedValueOnce(new ApiError(409, { ok: false, error: 'echo-failed' }))
+      .mockReturnValueOnce(new Promise(() => {}));
+    const { store } = renderAsk(CACHING_TRACING, pane('cc300-ask-same-labels-q2'));
+    fireEvent.change(field(), { target: { value: TEXT } });
+    fireEvent.click(send());
+    await screen.findByText(DIALOG_TEXT_REFUSE_TEXT['echo-failed']);
+    show(store, pane('cc300-ask-freetext-walk-4-stepped-off'));
+    expect(screen.getByText(/typed in the terminal but not sent yet/i)).toBeInTheDocument();
+    expect(field(), 'an edit would turn the retry into a dead end').toHaveAttribute('readonly');
+    fireEvent.click(send());
+    expect(call).toHaveBeenCalledTimes(2);
+  });
+
+  it('own words are sent trimmed: the route\'s rule is read on what it receives', () => {
+    const text = vi.spyOn(api, 'answerDialogText').mockReturnValue(new Promise(() => {}));
+    const open = pane('cc300-ask-1q-open');
+    renderAsk(null, open);
+    fireEvent.change(field(), { target: { value: '   Teal, if there is one  ' } });
+    fireEvent.click(send());
+    expect(text).toHaveBeenCalledWith(SESSION_ID, open.id, 3, 'Teal, if there is one');
+  });
+
+  it('the scraped sheet reads the free-text row from the transcript\'s option count', () => {
+    // `cc300-ask-freetext-held` enriched as the server enriches a matched question (`Dialog.ask`): row 3, `Mango`, is
+    // text typed in the terminal, never an option to tap, and no field is offered over it.
+    const held: Dialog = {
+      ...pane('cc300-ask-freetext-held'),
+      ask: { question: 'Which fruit?', header: 'Fruit', multiSelect: false, options: [{ label: 'Apple' }, { label: 'Pear' }] },
+    };
+    renderAsk(null, held);
+    expect(screen.queryByText('Mango', { selector: '.opt-label' })).toBeNull();
+    expect(screen.getByText(/already holds other text/i)).toBeInTheDocument();
+    expect(noField()).toBeNull();
+  });
+
+  describe('two taps handled before the sheet re-renders still send once', () => {
+    // React commits a tap's state after the handler returns, so a second tap handled in the same tick finds every row
+    // still enabled. The handlers hold the lock themselves (`DialogSheet`'s `sending`), at the moment a send starts.
+    it('an option, then Chat about this', () => {
+      const option = vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise(() => {}));
+      const q2 = pane('cc300-ask-same-labels-q2');
+      renderAsk(CACHING_TRACING, q2);
+      const yes = optionButton('Yes');
+      const decline = chat();
+      act(() => {
+        fireEvent.click(yes);
+        fireEvent.click(decline);
+      });
+      expect(option).toHaveBeenCalledTimes(1);
+      expect(option).toHaveBeenCalledWith(SESSION_ID, q2.id, 1);
+    });
+
+    it('own words, sent twice', () => {
+      const text = vi.spyOn(api, 'answerDialogText').mockReturnValue(new Promise(() => {}));
+      renderAsk(null, pane('cc300-ask-1q-open'));
+      fireEvent.change(field(), { target: { value: 'Teal' } });
+      const button = send();
+      act(() => {
+        fireEvent.click(button);
+        fireEvent.click(button);
+      });
+      expect(text).toHaveBeenCalledTimes(1);
+    });
+
+    it('own words, then Chat about this', () => {
+      const text = vi.spyOn(api, 'answerDialogText').mockReturnValue(new Promise(() => {}));
+      const option = vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise(() => {}));
+      renderAsk(null, pane('cc300-ask-1q-open'));
+      fireEvent.change(field(), { target: { value: 'Teal' } });
+      const button = send();
+      const decline = chat();
+      act(() => {
+        fireEvent.click(button);
+        fireEvent.click(decline);
+      });
+      expect(text).toHaveBeenCalledTimes(1);
+      expect(option, 'Chat declined the ask under a send').not.toHaveBeenCalled();
+    });
+
+    it('a multiSelect commit, sent twice', () => {
+      const multi = vi.spyOn(api, 'answerDialogMulti').mockReturnValue(new Promise(() => {}));
+      renderAsk(DRINK_FEATURES_TOOLS, pane('cc300-ask-multiselect-digit1-3'));
+      const next = commit('Next');
+      act(() => {
+        fireEvent.click(next);
+        fireEvent.click(next);
+      });
+      expect(multi).toHaveBeenCalledTimes(1);
+    });
+  });
+});
+
 describe('the full question, behind its own disclosure', () => {
   it('is hidden until asked for, shows the pane’s RAW text, and hides again', () => {
     // The sheet renders the parsed question; the raw pane text is what the

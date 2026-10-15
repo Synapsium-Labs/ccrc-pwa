@@ -137,7 +137,7 @@
 // reasons: the boxes repaint under the same id while the server ticks them,
 // and an `ask_cleared` mid-commit hands the same set and call to the scraped
 // sheet.
-import { Fragment, useEffect, useId, useRef, useState } from 'react';
+import { Fragment, useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import type { Dialog, HookAsk } from '../../../shared/api';
 import { EYEBROW, OptionRow, Sheet, Well, toast } from '@ccrc/ui';
@@ -261,6 +261,19 @@ export function DialogSheet({ id, store, onOpenTerminal, raise }: DialogSheetPro
   // Anything in flight: an option's answer, an own-words send or a multiSelect commit. Each refuses another send and
   // the dismissal.
   const locked = answering !== null || wordsBusy(own.call) || picksBusy(pick.call);
+  // One send at a time, held where a send STARTS. `locked` is render state, and React commits a tap's state only after
+  // its handler returns, so a second tap handled in the same tick finds every row still enabled and `locked` still
+  // false: an option and then `Chat about this` (which declines the whole ask) would both be sent. `sending` is set the
+  // moment a send starts (`claim`) and follows `locked` again from the next render on.
+  const sending = useRef(false);
+  useLayoutEffect(() => {
+    sending.current = locked;
+  });
+  const claim = (): boolean => {
+    if (sending.current) return false;
+    sending.current = true;
+    return true;
+  };
 
   // D-286: the transcript asked for this sheet back. Clearing the dismissal
   // is the WHOLE effect — the sheet then opens on exactly the envelope the
@@ -286,7 +299,7 @@ export function DialogSheet({ id, store, onOpenTerminal, raise }: DialogSheetPro
   };
 
   const answer = async (optionIndex: number): Promise<void> => {
-    if (dialog === null || locked) return;
+    if (dialog === null || !claim()) return;
     setAnswering(optionIndex);
     try {
       await api.answerDialog(id, dialog.id, optionIndex);
@@ -320,7 +333,7 @@ export function DialogSheet({ id, store, onOpenTerminal, raise }: DialogSheetPro
   const sendWords = async (row: number): Promise<void> => {
     const current = dialog;
     const kept = own.text;
-    if (current === null || locked) return;
+    if (current === null || !claim()) return;
     const call = { row, question: questionKey(current, row) };
     setOwn({ text: kept, call: { ...call, state: 'flight' } });
     try {
@@ -346,7 +359,7 @@ export function DialogSheet({ id, store, onOpenTerminal, raise }: DialogSheetPro
   // edits what the pane shows; from then the sheet's set stands until the question changes.
   const toggle = (index: number): void => {
     const current = dialog;
-    if (current === null || current.multi === undefined || locked) return;
+    if (current === null || current.multi === undefined || sending.current) return;
     const seed = paneTicks(current.multi);
     setPick((p) => {
       const base = p.id === current.id && p.picked !== null ? p.picked : seed;
@@ -360,7 +373,7 @@ export function DialogSheet({ id, store, onOpenTerminal, raise }: DialogSheetPro
   // operator's, so trying again sends it again (the server presses only what is still needed).
   const commitPicks = async (wanted: readonly number[]): Promise<void> => {
     const current = dialog;
-    if (current === null || locked) return;
+    if (current === null || !claim()) return;
     const call: PickCall = { dialogId: current.id, wanted, state: 'flight' };
     setPick((p) => ({ ...p, call }));
     try {

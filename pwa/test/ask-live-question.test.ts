@@ -167,6 +167,13 @@ describe('titleMatches: the question ends with the pane title (D-5089)', () => {
     expect(titleMatches(order, '│ must land before any reader that relies on it?')).toBe(false);
   });
 
+  it('a title the question only contains, not ends with, names nothing', () => {
+    // A wrapped question's title is its LAST row: one of its earlier rows is not the question.
+    const order = FOUR_Q.questions[1]!.question;
+    expect(titleMatches(order, '│ machine reads files the first machine writes')).toBe(false);
+    expect(titleMatches('Enable tracing in staging?', 'Enable tracing')).toBe(false);
+  });
+
   it('an empty title names nothing', () => {
     expect(titleMatches('Which colour?', '')).toBe(false);
     expect(titleMatches('Which colour?', '│ ')).toBe(false);
@@ -221,6 +228,9 @@ describe('isAskReview: the review screen, told by its body\'s last line and its 
     const review = pane('cc300-ask-review-same-labels');
     expect(isAskReview({ ...review, options: [{ index: 1, label: 'Yes' }, { index: 2, label: 'No' }] })).toBe(false);
     expect(isAskReview({ ...review, options: [...review.options, { index: 3, label: 'Chat about this' }] })).toBe(false);
+    // Each row is read: Submit answers over another second row is not it either.
+    expect(isAskReview({ ...review, options: [review.options[0]!, { index: 2, label: 'Edit answers' }] })).toBe(false);
+    expect(isAskReview({ ...review, options: [{ index: 1, label: 'Send' }, review.options[1]!] })).toBe(false);
   });
 
   it('Submit answers and Cancel under a body that does not end with the ready line are not the review (DERIVED)', () => {
