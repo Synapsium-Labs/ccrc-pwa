@@ -1,13 +1,15 @@
 // WHAT PASTED AND LATCHED INPUT BECOMES ON THE WIRE (D-5007, spec 2026-10-14
 // §5.4; plan Task 12, revised for the operator's ruling R-LIVE, 2026-10-15).
 //
-// Two jobs, both decisions the drawer only wires:
+// Three jobs, all decisions the drawer only wires:
 // - A PASTE is untrusted text going into a live session. xterm 6.0.0's own
 //   `paste()` (`src/browser/Clipboard.ts`) brackets it without removing an end
 //   marker inside it, so a clipboard holding `\e[201~` closes the brackets
 //   early and what follows it is TYPED, Enter included (plan Refinement 11,
 //   invariant I5). The drawer takes every paste before xterm does and sends
 //   `typedFrame(text)` instead.
+// - Text a keyboard INSERTS is the same untrusted text by another door
+//   (`insertedFrame`): it is framed as a paste unless it is one key's bytes.
 // - The `ctrl` LATCH turns the next ASCII letter typed into its control code.
 //   On a phone that letter arrives as a `beforeinput` on xterm's textarea, and
 //   on a keyboard that reports real keys as a keydown xterm consumes at once;
@@ -15,7 +17,7 @@
 //
 // PURE: no React, no DOM. Every byte it puts on the wire comes from `keyBar.ts`,
 // the one table of bytes; this file spells none (`drawer-keybar.test.tsx`).
-import { KEY_SEQ, PASTE_CLOSE, PASTE_OPEN, ctrlCode } from './keyBar';
+import { KEY_SEQ, PASTE_CLOSE, PASTE_OPEN, ctrlCode, oneKey } from './keyBar';
 
 const TAB = 0x09;
 const LF = 0x0a;
@@ -102,4 +104,23 @@ const IME_KEYCODE = 229;
 export function keyLetter(ev: KeyLike): string | null {
   if (ev.ctrlKey || ev.altKey || ev.metaKey || ev.isComposing || ev.keyCode === IME_KEYCODE) return null;
   return ctrlCode(ev.key) === null ? null : ev.key;
+}
+
+/**
+ * What a chunk xterm sends while the keyboard is INSERTING text goes out as
+ * (`inserted-text-is-sanitised`; invariant I5).
+ *
+ * A keyboard does not only report keys. It also inserts text into xterm's
+ * textarea — an `input` event's `insertText`, a composition's commit, the
+ * textarea's growth after a keyCode-229 keydown — and xterm sends that text as
+ * it is, no paste event in sight. A phone keyboard's clipboard chip or a
+ * suggestion can arrive that way, so text holding `\e[201~` and CRs would reach
+ * the pane raw, each CR an Enter. So an inserted chunk that is one key's bytes
+ * (`oneKey`: a letter, Enter, an arrow) goes as it is, and anything longer goes
+ * as a paste does, `typedFrame(data)`: unchanged when it holds no control at
+ * all, sanitised and bracketed when it does, so it can neither end a bracketed
+ * paste nor submit a line.
+ */
+export function insertedFrame(data: string): string {
+  return oneKey(data) ? data : typedFrame(data);
 }

@@ -5,7 +5,8 @@
 // bar's control sequences — flow back as {type:'input'} frames, and nothing
 // else ever does. A paste is taken before xterm sees it and goes back as
 // `typedFrame(text)`, sanitised, so a clipboard cannot end its own brackets
-// (D-5007). The attach dials the window's own size plus tmux's status
+// (D-5007), and text a keyboard inserts goes the same way unless it is one key's
+// bytes (`inserted-text-is-sanitised`). The attach dials the window's own size plus tmux's status
 // row, 220x51, at every glass width, and the terminal is pinned there (D-5005,
 // spec 2026-10-14 §5.1): a client exactly the window's size is one tmux has
 // nothing to pan and nothing to fill, so the glass changes the type size and
@@ -50,7 +51,7 @@ import {
   type DrawerViewKind, type StorageLike,
 } from './drawerView';
 import { KeyBar, useKeyInput } from './KeyBarView';
-import { inputLetter, keyLetter, typedFrame } from './typedFrame';
+import { insertedFrame, inputLetter, keyLetter, typedFrame } from './typedFrame';
 import { WrappedView } from './WrappedView';
 import './chat.css';
 
@@ -58,6 +59,10 @@ import './chat.css';
  *  history view opens by so the gesture reads as a scroll rather than a jump. */
 
 type Conn = 'connecting' | 'open' | 'down';
+
+/** keyCode 229: a key an input method is handling, whose text xterm reads back
+ *  out of its textarea a task later rather than from the key. */
+const IME_KEY = 229;
 
 /** Where the reader is. `live` is the attached pane; the other three are the
  *  one history read, in its three states. They are four VALUES rather than a
@@ -449,13 +454,45 @@ export function TerminalDrawer({
      * touches anything, and typing reaches the socket exactly as xterm sends it.
      */
     let dropOnce: string | null = null;
+    /**
+     * WHILE THE KEYBOARD IS INSERTING TEXT (`inserted-text-is-sanitised`, I5).
+     * A keyboard inserts as well as reporting keys: an `input` event's
+     * `insertText`, which xterm sends at once; a composition's commit, which it
+     * reads back a task later; the textarea's growth after a keyCode-229
+     * keydown, also a task later (or at once, when a key ends a composition).
+     * None is a `paste` event, so the paste guard sees none of them, and a
+     * keyboard's clipboard chip or suggestion may well arrive by one. Each opens
+     * a window here, in the capture phase on the host — ahead of xterm's own
+     * listeners on its textarea — and what xterm sends inside it goes out as
+     * `insertedFrame` says: one key's bytes as they are, anything longer as a
+     * paste. Outside a window nothing is touched, so a key, and every reply the
+     * terminal sends of its own (a DCS or OSC report tmux asked for), reaches
+     * the session exactly as xterm sends it.
+     *
+     * TWO TURNS OF THE TASK QUEUE: xterm's own read is a `setTimeout(0)` queued
+     * by its listener, which runs after this one, so a window that closed on
+     * the first turn would close before the text it was opened for.
+     */
+    let inserting = 0;
+    const insertion = (): void => {
+      inserting += 1;
+      setTimeout(() => {
+        setTimeout(() => {
+          inserting -= 1;
+        }, 0);
+      }, 0);
+    };
+    const onInsertKeyDown = (ev: KeyboardEvent): void => {
+      if (ev.keyCode === IME_KEY || ev.isComposing) insertion();
+    };
     term.onData((data) => {
       if (dropOnce !== null) {
         const drop = data === dropOnce;
         dropOnce = null;
         if (drop) return;
       }
-      typed(data);
+      const out = inserting > 0 ? insertedFrame(data) : data;
+      if (out !== '') typed(out);
     });
     const onBeforeInput = (ev: InputEvent): void => {
       const letter = inputLetter(ev.inputType, ev.data);
@@ -489,6 +526,9 @@ export function TerminalDrawer({
     host.addEventListener('beforeinput', onBeforeInput, true);
     host.addEventListener('keydown', onKeyDown, true);
     host.addEventListener('paste', onPaste, true);
+    host.addEventListener('input', insertion, true);
+    host.addEventListener('compositionend', insertion, true);
+    host.addEventListener('keydown', onInsertKeyDown, true);
 
     // THE WHEEL IS NOT AN ARROW KEY. `tmux attach` puts this client on the
     // ALTERNATE screen (every attach starts ESC[?1049h, measured off a real
@@ -551,6 +591,9 @@ export function TerminalDrawer({
       host.removeEventListener('beforeinput', onBeforeInput, true);
       host.removeEventListener('keydown', onKeyDown, true);
       host.removeEventListener('paste', onPaste, true);
+      host.removeEventListener('input', insertion, true);
+      host.removeEventListener('compositionend', insertion, true);
+      host.removeEventListener('keydown', onInsertKeyDown, true);
       detachReach();
       unsubAuth();
       refitRef.current = null;

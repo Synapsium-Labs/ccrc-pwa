@@ -21,7 +21,20 @@
 // - the paste guard (plan Refinement 11; P3 ruled yes): a paste anywhere in
 //   the terminal's host, in either view, is taken in the capture phase, before
 //   xterm's own handler (which stops propagation at the textarea), and sent as
-//   `typedFrame(text)`, so a pasted `\e[201~` never reaches a frame.
+//   `typedFrame(text)`, so a pasted `\e[201~` never reaches a frame;
+// - text a keyboard INSERTS (`inserted-text-is-sanitised`): an `input` event's
+//   insertText, a composition's commit and the textarea diff after a
+//   keyCode-229 keydown are no paste event, so the guard above never saw them
+//   and they reached the session raw, end marker and CRs included (measured by
+//   the stage-1 verifier, in both views). Each now opens a window, and a chunk
+//   xterm sends inside it goes as `insertedFrame` says: one key's bytes as they
+//   are (`oneKey`), anything longer as `typedFrame` frames a paste. Outside a
+//   window nothing is touched: a key, and a reply the terminal sends of its own.
+//   RED FIRST, 2026-10-15: against stubs (`oneKey` true for one character,
+//   `insertedFrame` the identity), 9 of the 13 new cases failed; the four that
+//   passed are negatives such stubs cannot fail (two pure ones: text is not one
+//   key, plain text goes as it is; and the drawer's two: keys unchanged inside
+//   a window, a reply untouched outside one), each proved by a row below.
 //
 // RED FIRST, measured 2026-10-15: against the tree before Task 12's green (this
 // file, the two markers in `keyBar.ts`, `typedFrame.ts` as a stub whose
@@ -53,12 +66,24 @@
 //   the latch survives the view leaving `wrapped` ...... the view-flip case
 //   the latch survives a re-attach ..................... the re-attach case
 //   typedFrame.ts spells a marker itself ............... drawer-keybar.test.tsx's "spells no key byte" scan
+// and for `inserted-text-is-sanitised` (RUN 2026-10-15, the same way; every row RED):
+//   insertedFrame sends the insertion as it is ......... the three paths in both views, and the pure case
+//   insertedFrame frames every chunk, a key included .. the key-in-a-window case, and the pure twin
+//   no window for an input event ........................ the insertText cases (both views)
+//   no window for a composition's end .................. the composition cases (both views)
+//   no window for a keyCode-229 keydown ................ the 229 cases (both views)
+//   the window closes after one turn ................... the composition and 229 cases (xterm reads a turn later)
+//   every chunk treated as inserted (no window) ........ the reply case
+//   the window listens in the bubble phase ............. the insertText cases (xterm's handler is at the target)
+//   oneKey lets the paste markers through .............. the markers case, and the lone-marker case
+//   oneKey takes any chunk that starts with ESC ........ the not-one-key case
+//   oneKey takes one character only .................... every key the bar sends, and 3 more
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, createEvent, fireEvent, render, screen } from '@testing-library/react';
 import type { Terminal as XTerm } from '@xterm/xterm';
 import { Terminal } from '@xterm/xterm';
-import { KEY_SEQ, PASTE_CLOSE, PASTE_OPEN } from '../src/session/keyBar';
-import { inputLetter, keyLetter, sanitizeTyped, typedFrame } from '../src/session/typedFrame';
+import { KEY_SEQ, PASTE_CLOSE, PASTE_OPEN, oneKey } from '../src/session/keyBar';
+import { insertedFrame, inputLetter, keyLetter, sanitizeTyped, typedFrame } from '../src/session/typedFrame';
 import { VIEW_OVERRIDE_KEY, type StorageLike } from '../src/session/drawerView';
 import { SYNTHETIC_SCREENS } from './fixtures/drawer/synthetic';
 
@@ -215,6 +240,50 @@ describe('the letter a latched ctrl takes from a beforeinput', () => {
     for (const t of ['insertReplacementText', 'insertFromPaste', 'insertLineBreak', 'deleteContentBackward', '']) {
       expect(inputLetter(t, 'c'), t).toBeNull();
     }
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Text a keyboard INSERTS (`inserted-text-is-sanitised`), pure
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** What a keyboard's clipboard chip, a suggestion or an IME can hand xterm's
+ *  textarea as ONE insertion: an end marker, then a line that would submit. */
+const HOSTILE_INSERT = 'a\x1b[201~\rrm -rf x\r';
+
+describe('one key\'s bytes', () => {
+  it('every key the bar sends is one key', () => {
+    for (const [k, bytes] of Object.entries(KEY_SEQ)) expect(oneKey(bytes), k).toBe(true);
+  });
+
+  it('so is every shape xterm 6.0.0 sends for a key: a character, Alt and one character, CSI, SS3', () => {
+    for (const s of ['a', 'é', '🙂', '\x1bx', '\x1b\r', '\x1b\x1b', '\x1b\x7f', '\x1bOA', '\x1b[1;5C', '\x1b[3~', '\x1b[15;2~', '\x1bOP']) {
+      expect(oneKey(s), JSON.stringify(s)).toBe(true);
+    }
+  });
+
+  it('text is not, nor two keys, nor a bracketed-paste marker, which no key sends', () => {
+    for (const s of ['ab', 'hello', 'a\r', '\x1b[A\x1b[B', HOSTILE_INSERT, PASTE_OPEN, PASTE_CLOSE, '\x1bP1$r0m\x1b\\']) {
+      expect(oneKey(s), JSON.stringify(s)).toBe(false);
+    }
+  });
+});
+
+describe('insertedFrame: what an insertion is sent as', () => {
+  it('one key\'s bytes, and text with no control in it, go as they are', () => {
+    for (const s of ['c', '\r', '\x7f', '\x1b[A', 'hello world', 'héllo 日本 🙂', 'a\tb']) {
+      expect(insertedFrame(s), JSON.stringify(s)).toBe(s);
+    }
+  });
+
+  it('text carrying a control no key typed goes as a paste would: an end marker in it frames nothing, and no line submits', () => {
+    const out = insertedFrame(HOSTILE_INSERT);
+    expect(out).toBe(typedFrame(HOSTILE_INSERT));
+    expect(out.startsWith(PASTE_OPEN)).toBe(true);
+    expect(count(out, PASTE_CLOSE), 'a second end marker reached the frame').toBe(1);
+    expect(out.endsWith(PASTE_CLOSE)).toBe(true);
+    expect(insertedFrame('a\nb')).toBe(typedFrame('a\nb'));
+    expect(insertedFrame(PASTE_CLOSE), 'a lone end marker inserted is text').toBe('[201~');
   });
 });
 
@@ -545,5 +614,69 @@ describe('the paste guard', () => {
     const ev = pasteOn(d.ta, '\x1b\x03');
     expect(ev.defaultPrevented).toBe(true);
     expect(d.ws.sent).toEqual([]);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Text a keyboard INSERTS, in the drawer (`inserted-text-is-sanitised`)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** An `input` event as a browser dispatches one for a keyboard's insertion. */
+const inputOn = (ta: HTMLTextAreaElement, data: string): void => {
+  act(() => {
+    ta.dispatchEvent(new InputEvent('input', { inputType: 'insertText', data, bubbles: true, composed: true }));
+  });
+};
+
+// MEASURED before this (the verifier's probe, against the real xterm 6.0.0 the
+// drawer builds): an insertion carrying `\e[201~` and CRs reached the socket raw
+// in both views by all three paths, each CR an Enter. The paste guard saw none
+// of them, because none is a `paste` event.
+describe('text a keyboard inserts cannot end a bracketed paste or submit a line', () => {
+  it.each(['wrapped', 'grid'] as const)('%s view: an input event\'s insertText', async (view) => {
+    const d = mount(view);
+    await d.paint('\x1b[?2004h');
+    inputOn(d.ta, HOSTILE_INSERT);
+    expect(d.ws.inputs()).toEqual([typedFrame(HOSTILE_INSERT)]);
+  });
+
+  it.each(['wrapped', 'grid'] as const)('%s view: the textarea diff xterm reads after a keyCode-229 keydown', async (view) => {
+    const d = mount(view);
+    await d.paint('\x1b[?2004h');
+    act(() => { fireEvent.keyDown(d.ta, { key: 'Unidentified', keyCode: 229 }); });
+    d.ta.value += HOSTILE_INSERT;
+    await tick();
+    expect(d.ws.inputs()).toEqual([typedFrame(HOSTILE_INSERT)]);
+  });
+
+  it.each(['wrapped', 'grid'] as const)('%s view: a composition\'s commit', async (view) => {
+    const d = mount(view);
+    await d.paint('\x1b[?2004h');
+    const ime = composition(d.ta);
+    ime.start();
+    ime.type(HOSTILE_INSERT);
+    await ime.end(HOSTILE_INSERT);
+    expect(d.ws.inputs()).toEqual([typedFrame(HOSTILE_INSERT)]);
+  });
+
+  it('plain text inserted goes as it is, and a key pressed while an insertion is landing is still the key', async () => {
+    const d = mount('wrapped');
+    inputOn(d.ta, 'hello world');
+    // The insertion's window is still open: a real key keeps its bytes.
+    act(() => { fireEvent.keyDown(d.ta, { key: 'ArrowUp', code: 'ArrowUp', keyCode: 38 }); });
+    act(() => { fireEvent.keyDown(d.ta, { key: 'Escape', code: 'Escape', keyCode: 27 }); });
+    act(() => { fireEvent.keyDown(d.ta, { key: 'Enter', code: 'Enter', keyCode: 13 }); });
+    await tick();
+    expect(d.ws.inputs()).toEqual(['hello world', '\x1b[A', '\x1b', '\r']);
+  });
+
+  it('a reply the terminal sends of its own, outside any insertion, is never touched', async () => {
+    const d = mount('grid');
+    // DECRQSS for the scroll margins: xterm answers with a DCS string, which is
+    // no key's shape, on the socket as tmux asked for it.
+    await d.paint('\x1bP$qr\x1b\\');
+    const replies = d.ws.inputs();
+    expect(replies).toHaveLength(1);
+    expect(replies[0]).toMatch(/^\x1bP1\$r[0-9;]*r\x1b\\$/);
   });
 });

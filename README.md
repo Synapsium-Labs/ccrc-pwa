@@ -2790,7 +2790,9 @@ at the caret. A key bar supplies what a phone keyboard lacks — `esc ↑ ↓ �
 its strip of `esc`, the arrows, `tab`, `⇧tab`, `⏎` and `^C`) — and its `^C` and `^D` ask first while Claude Code
 shows *Press Ctrl-C again to exit*; a physical Escape, while the terminal has focus, goes to Claude Code and does
 not close the drawer. A paste, in either view, is taken before xterm sees it and sent with every control
-character but tab and newline removed, so a clipboard cannot end its own bracketed paste. Scrolling up in the
+character but tab and newline removed, so a clipboard cannot end its own bracketed paste; text a keyboard
+inserts (a clipboard chip, a suggestion, an input method's commit) is sent the same way unless it is one key's
+bytes, so it cannot end a bracketed paste or submit a line either. Scrolling up in the
 grid — the wheel, or a drag — and the bar's `hist` key in either view never send arrow keys: they page through
 the pane's own history, read with `tmux capture-pane` over `GET /api/sessions/:id/pane/history`, which changes
 nothing on the box (tmux's copy mode would wedge every injected prompt for as long as it lasted); scrolling back

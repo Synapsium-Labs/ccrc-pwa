@@ -136,3 +136,19 @@ export function exitNoticeShowing(rows: readonly string[]): boolean {
 export function barBreak(caps: number): number {
   return Math.ceil(caps / 2);
 }
+
+/** What ONE key sends, as xterm 6.0.0's `evaluateKeyboardEvent` spells it: one
+ *  character; ESC and one character (Alt, or Alt with Enter, Esc or Backspace);
+ *  a CSI sequence, parameters and final (the arrows, Home, End, the function and
+ *  editing keys, each with or without a modifier); or SS3 and one character. */
+const ONE_KEY = /^(?:[\s\S]|\x1b[\s\S]|\x1b\[[0-?]*[ -/]*[@-~]|\x1bO[\s\S])$/u;
+
+/**
+ * Whether `data` is one key's bytes (`inserted-text-is-sanitised`): what a
+ * keyboard sends for a key, whichever key it is — every KEY_SEQ entry included.
+ * Never a bracketed-paste marker: no key sends one, and an insertion that is
+ * nothing but `\e[201~` is exactly what must not reach a pane as a marker.
+ */
+export function oneKey(data: string): boolean {
+  return ONE_KEY.test(data) && data !== PASTE_OPEN && data !== PASTE_CLOSE;
+}
