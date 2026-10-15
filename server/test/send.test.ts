@@ -136,8 +136,12 @@ const LIVE_CU_FRAMES = ((): string[] => {
 function inputBox(initial: readonly string[] = [''], width = 120) {
   let lines = [...initial];
   const NBSP = '\xa0';
+  /** Every message the box handed to the session, one `lines` copy per Enter:
+   *  what was really SUBMITTED, which is what a dropped line is a fact about. */
+  const submitted: string[][] = [];
   return {
     get lines(): string[] { return [...lines]; },
+    get submitted(): string[][] { return submitted.map((m) => [...m]); },
     isEmpty: (): boolean => lines.length === 1 && lines[0] === '',
     pressCu(): void {
       const last = lines.length - 1;
@@ -147,7 +151,7 @@ function inputBox(initial: readonly string[] = [''], width = 120) {
     },
     type: (s: string): void => { lines[lines.length - 1] += s; },
     newline: (): void => { lines.push(''); },
-    submit: (): void => { lines = ['']; },
+    submit: (): void => { submitted.push([...lines]); lines = ['']; },
     /**
      * The pane the way Claude Code really draws it — shape taken from
      * LIVE_CU_FRAMES: full-width rules, the `❯` marker on the FIRST box row
@@ -180,6 +184,29 @@ function inputBox(initial: readonly string[] = [''], width = 120) {
  * empty. `Infinity` models a pane that never re-renders at all.
  */
 const SPAWN_MS = 8;   // measured order of magnitude for a `tmux` subprocess
+
+/**
+ * What tmux does with `send-keys -t <t> -l <rest…>`: which text reaches the
+ * pane, and the exit code. D-5046, MEASURED on tmux 3.7c on a private `-L`
+ * socket, 2026-10-15, with a `cat` pane echoing every key it got:
+ *  - after an explicit `--`, the next token is typed verbatim, whatever it
+ *    starts with (`-x probe`, `- item`, `-`, `--`, `---`, `-- x`, `--foo`, ''):
+ *    exit 0;
+ *  - with no `--`, a token that IS `--` ends the flags and leaves no key:
+ *    exit 0, NOTHING typed;
+ *  - with no `--`, any other token that starts with `-` and is not `-` alone is
+ *    read as flags (`unknown flag -x`, `invalid flag -`): exit 1, nothing typed;
+ *  - anything else is typed verbatim: exit 0.
+ */
+function tmuxLiteral(args: readonly string[]): { code: number; typed: string | null; stderr: string } {
+  const rest = args.slice(4);
+  if (rest[0] === '--') return { code: 0, typed: rest[1] ?? null, stderr: '' };
+  const tok = rest[0] ?? '';
+  if (tok === '--') return { code: 0, typed: null, stderr: '' };
+  if (tok.startsWith('-') && tok !== '-') return { code: 1, typed: null, stderr: `command send-keys: unknown flag ${tok.slice(0, 2)}\n` };
+  return { code: 0, typed: tok, stderr: '' };
+}
+
 function boxTmux(opts: {
   initial?: readonly string[];
   staleFrames?: number;
@@ -189,12 +216,16 @@ function boxTmux(opts: {
   overlay?: string;
   /** Capture `n` onward fails (pane died). */
   dieFrom?: number;
+  /** The `n`th literal send (1-based) fails as tmux fails one: exit 1, nothing
+   *  typed. Every other key still lands. */
+  failLiteralAt?: number;
 } = {}) {
   const box = inputBox(opts.initial, opts.width);
   const stale = opts.staleFrames ?? 0;
   const frozen = inputBox(opts.initial, opts.width).render();
   const calls: string[][] = [];
   let captures = 0;
+  let literals = 0;
   let ms = 0;
   const clock = { now: () => ms, sleep: async (n: number) => { ms += n; } };
   const run: Runner = async (cmd, args) => {
@@ -210,8 +241,14 @@ function boxTmux(opts: {
     }
     if (args[0] === 'send-keys') {
       const key = args[args.length - 1]!;
-      if (args[3] === '-l') box.type(key);
-      else if (key === 'M-Enter') box.newline();
+      if (args[3] === '-l') {
+        literals++;
+        if (literals === opts.failLiteralAt) return { code: 1, stdout: '', stderr: "can't find session: cc-x\n" };
+        const t = tmuxLiteral(args);
+        if (t.typed !== null) box.type(t.typed);
+        return { code: t.code, stdout: '', stderr: t.stderr };
+      }
+      if (key === 'M-Enter') box.newline();
       else if (key === 'C-u') box.pressCu();
       else if (key === 'Enter') box.submit();
     }
@@ -319,7 +356,7 @@ describe('sendPrompt', () => {
     const res = await sendPrompt({ tmux, queue: new KeyedQueue(), sleep: noSleep }, 'myid', 'hello world');
     expect(res).toEqual({ ok: true });
     expect(sendKeysCalls(calls)).toEqual([
-      ['tmux', 'send-keys', '-t', '=cc-myid:', '-l', 'hello world'],
+      ['tmux', 'send-keys', '-t', '=cc-myid:', '-l', '--', 'hello world'],
       ['tmux', 'send-keys', '-t', '=cc-myid:', 'Enter'],
     ]);
   });
@@ -374,7 +411,7 @@ describe('sendPrompt', () => {
     expect(res).toEqual({ ok: true });
     expect(sendKeysCalls(calls)).toEqual([
       ['tmux', 'send-keys', '-t', '=cc-x:', 'C-u'],
-      ['tmux', 'send-keys', '-t', '=cc-x:', '-l', 'new text'],
+      ['tmux', 'send-keys', '-t', '=cc-x:', '-l', '--', 'new text'],
       ['tmux', 'send-keys', '-t', '=cc-x:', 'Enter'],
     ]);
   });
@@ -400,9 +437,9 @@ describe('sendPrompt', () => {
     const res = await sendPrompt({ tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', 'a\nb');
     expect(res).toEqual({ ok: true });
     expect(sendKeysCalls(calls)).toEqual([
-      ['tmux', 'send-keys', '-t', '=cc-x:', '-l', 'a'],
+      ['tmux', 'send-keys', '-t', '=cc-x:', '-l', '--', 'a'],
       ['tmux', 'send-keys', '-t', '=cc-x:', 'M-Enter'],
-      ['tmux', 'send-keys', '-t', '=cc-x:', '-l', 'b'],
+      ['tmux', 'send-keys', '-t', '=cc-x:', '-l', '--', 'b'],
       ['tmux', 'send-keys', '-t', '=cc-x:', 'Enter'],
     ]);
   });
@@ -420,9 +457,9 @@ describe('sendPrompt', () => {
     );
     expect(res).toEqual({ ok: true });
     expect(sendKeysCalls(calls)).toEqual([
-      ['tmux', 'send-keys', '-t', '=cc-x:', '-l', 'real first line'],
+      ['tmux', 'send-keys', '-t', '=cc-x:', '-l', '--', 'real first line'],
       ['tmux', 'send-keys', '-t', '=cc-x:', 'M-Enter'],
-      ['tmux', 'send-keys', '-t', '=cc-x:', '-l', 'second line'],
+      ['tmux', 'send-keys', '-t', '=cc-x:', '-l', '--', 'second line'],
       ['tmux', 'send-keys', '-t', '=cc-x:', 'Enter'],
     ]);
   });
@@ -452,7 +489,7 @@ describe('sendPrompt', () => {
     const res = await sendPrompt({ tmux, queue: new KeyedQueue(), sleep: noSleep }, 'myid', 'hello world');
     expect(res).toEqual({ ok: true });
     expect(sendKeysCalls(calls)).toEqual([
-      ['tmux', 'send-keys', '-t', '=cc-myid:', '-l', 'hello world'],
+      ['tmux', 'send-keys', '-t', '=cc-myid:', '-l', '--', 'hello world'],
       ['tmux', 'send-keys', '-t', '=cc-myid:', 'Enter'],
     ]);
   });
@@ -469,7 +506,7 @@ describe('sendPrompt', () => {
     const res = await sendPrompt({ tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', 'hello');
     expect(res).toEqual({ ok: true });
     expect(sendKeysCalls(calls)).toEqual([
-      ['tmux', 'send-keys', '-t', '=cc-x:', '-l', 'hello'],
+      ['tmux', 'send-keys', '-t', '=cc-x:', '-l', '--', 'hello'],
       ['tmux', 'send-keys', '-t', '=cc-x:', 'Enter'],
     ]);
     // draft check must use the ANSI capture (-e), not the plain one.
@@ -513,7 +550,7 @@ describe('sendPrompt', () => {
     expect(res).toMatchObject({ ok: false, error: 'verify-failed' });
     expect((res as { pane?: string }).pane).toContain('❯');
     const sk = sendKeysCalls(calls);
-    expect(sk).toContainEqual(['tmux', 'send-keys', '-t', '=cc-x:', '-l', 'will not appear']);
+    expect(sk).toContainEqual(['tmux', 'send-keys', '-t', '=cc-x:', '-l', '--', 'will not appear']);
     expect(sk.some((c) => c[c.length - 1] === 'Enter')).toBe(false);
   });
 
@@ -973,7 +1010,7 @@ describe('sendPrompt clearMailResidue', () => {
     expect(res).toEqual({ ok: true });
     expect(sendKeysCalls(calls)).toEqual([
       ['tmux', 'send-keys', '-t', '=cc-x:', 'C-u'],
-      ['tmux', 'send-keys', '-t', '=cc-x:', '-l', 'ccrc-mail: you have new mail. List it.'],
+      ['tmux', 'send-keys', '-t', '=cc-x:', '-l', '--', 'ccrc-mail: you have new mail. List it.'],
       ['tmux', 'send-keys', '-t', '=cc-x:', 'Enter'],
     ]);
   });
@@ -1105,7 +1142,7 @@ describe('sendPrompt ownStrandedClear', () => {
     expect(res).toEqual({ ok: true });
     expect(sendKeysCalls(calls)).toEqual([
       ['tmux', 'send-keys', '-t', '=cc-x:', 'C-u'],
-      ['tmux', 'send-keys', '-t', '=cc-x:', '-l', NUDGE],
+      ['tmux', 'send-keys', '-t', '=cc-x:', '-l', '--', NUDGE],
       ['tmux', 'send-keys', '-t', '=cc-x:', 'Enter'],
     ]);
   });
@@ -1256,7 +1293,7 @@ describe('draftOf strips the dim queue hint even with an interleaved SGR code', 
     const res = await sendPrompt({ tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', 'another message');
     expect(res).toEqual({ ok: true });
     expect(sendKeysCalls(calls)).toEqual([
-      ['tmux', 'send-keys', '-t', '=cc-x:', '-l', 'another message'],
+      ['tmux', 'send-keys', '-t', '=cc-x:', '-l', '--', 'another message'],
       ['tmux', 'send-keys', '-t', '=cc-x:', 'Enter'],
     ]);
   });
@@ -1338,9 +1375,9 @@ describe('sendPrompt with attachments', () => {
     expect(res).toEqual({ ok: true });
     // Alt+Enter separates the lines; the path goes first.
     expect(sendKeysCalls(calls)).toEqual([
-      ['tmux', 'send-keys', '-t', '=cc-x:', '-l', P],
+      ['tmux', 'send-keys', '-t', '=cc-x:', '-l', '--', P],
       ['tmux', 'send-keys', '-t', '=cc-x:', 'M-Enter'],
-      ['tmux', 'send-keys', '-t', '=cc-x:', '-l', 'what is this'],
+      ['tmux', 'send-keys', '-t', '=cc-x:', '-l', '--', 'what is this'],
       ['tmux', 'send-keys', '-t', '=cc-x:', 'Enter'],
     ]);
   });
@@ -1484,7 +1521,7 @@ describe('the failed-send cleanup actually empties the box', () => {
     expect(cuPresses(calls)).toBe(5);
     expect(box.lines).toEqual(['']); // submitted
     const typed = sendKeysCalls(calls).filter((c) => c.includes('-l'));
-    expect(typed).toEqual([['tmux', 'send-keys', '-t', '=cc-x:', '-l', 'fresh text']]);
+    expect(typed).toEqual([['tmux', 'send-keys', '-t', '=cc-x:', '-l', '--', 'fresh text']]);
   });
 
   it('replaceDraft clears a 5-line draft — a pasted stack trace is not an exotic case', async () => {
@@ -1619,9 +1656,9 @@ describe('sendPrompt echo verification', () => {
     );
     expect(res).toEqual({ ok: true });
     expect(sendKeysCalls(calls)).toEqual([
-      ['tmux', 'send-keys', '-t', '=cc-x:', '-l', 'note:  '],
+      ['tmux', 'send-keys', '-t', '=cc-x:', '-l', '--', 'note:  '],
       ['tmux', 'send-keys', '-t', '=cc-x:', 'M-Enter'],
-      ['tmux', 'send-keys', '-t', '=cc-x:', '-l', 'second line'],
+      ['tmux', 'send-keys', '-t', '=cc-x:', '-l', '--', 'second line'],
       ['tmux', 'send-keys', '-t', '=cc-x:', 'Enter'],
     ]);
   });
@@ -1967,7 +2004,7 @@ describe('a box that has scrolled out of the capture window is UNMEASURED, not e
     expect(res.ok === false && res.error).toBe('box-unreadable');
     // Typed once, then stopped: no Enter into an unreadable box, and no clear.
     expect(sendKeysCalls(calls)).toEqual([
-      ['tmux', 'send-keys', '-t', '=cc-x:', '-l', 'hello world'],
+      ['tmux', 'send-keys', '-t', '=cc-x:', '-l', '--', 'hello world'],
     ]);
   });
 
@@ -2092,5 +2129,83 @@ describe('the attachment lane’s clear does not narrow an unreadable box back i
     // The blind floor did fire — that is what put us here — but nothing claims
     // the box was cleared, and no `draft` is invented from a reading of nothing.
     expect(res.ok === false && 'draft' in res).toBe(false);
+  });
+});
+
+describe('a typed line is never silently dropped (D-5046)', () => {
+  // The bug: the type loop ignored `sendLiteral`'s answer, and the echo proof
+  // reads only the FIRST line's 24-character needle. So a line tmux refused
+  // left a hole in the middle of the message, the echo still matched, Enter
+  // went, and the session received the message without that line. A composer
+  // message is where a `- item` line is ordinary. `boxTmux` answers each
+  // literal send the way tmux 3.7c measured (`tmuxLiteral`), so these
+  // assertions are about what the box SUBMITTED, not about an argv shape.
+  const SK = (...rest: string[]) => ['tmux', 'send-keys', '-t', '=cc-x:', ...rest];
+
+  it("a '- item' line is typed, not dropped", async () => {
+    const { tmux, calls, box } = boxTmux();
+    const res = await sendPrompt(
+      { tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', 'Shopping:\n- item\nlast',
+    );
+    expect(res).toEqual({ ok: true });
+    expect(box.submitted).toEqual([['Shopping:', '- item', 'last']]);
+    expect(sendKeysCalls(calls)).toEqual([
+      SK('-l', '--', 'Shopping:'),
+      SK('M-Enter'),
+      SK('-l', '--', '- item'),
+      SK('M-Enter'),
+      SK('-l', '--', 'last'),
+      SK('Enter'),
+    ]);
+  });
+
+  it("a bare '--' line is typed too — tmux drops it with exit 0, so only the -- can save it", async () => {
+    // No return check can see this one: tmux takes a lone `--` as the end of
+    // its flags, finds no key, and exits 0 (measured). Every send here
+    // succeeds whatever the argv, so without the `--` the message submits
+    // `ok` with the line gone.
+    const { tmux, box } = boxTmux();
+    const res = await sendPrompt(
+      { tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', 'above\n--\nbelow',
+    );
+    expect(res).toEqual({ ok: true });
+    expect(box.submitted).toEqual([['above', '--', 'below']]);
+  });
+
+  it("a markdown rule line '---' is typed — the exit-1 shape of the same parse", async () => {
+    const { tmux, box } = boxTmux();
+    const res = await sendPrompt(
+      { tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', 'above\n---\nbelow',
+    );
+    expect(res).toEqual({ ok: true });
+    expect(box.submitted).toEqual([['above', '---', 'below']]);
+  });
+
+  it('a literal send that fails refuses type-failed before Enter, and types nothing after it', async () => {
+    // Any tmux failure on line 2 (here the session going away between two
+    // sends). Not `not-alive`: the session may be alive with line 1 in its box,
+    // and that text is left where it is, as every refusal here leaves it.
+    const { tmux, calls, box } = boxTmux({ failLiteralAt: 2 });
+    const res = await sendPrompt(
+      { tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', 'first\nsecond\nthird',
+    );
+    expect(res).toEqual({ ok: false, error: 'type-failed' });
+    expect(box.submitted).toEqual([]);
+    expect(sendKeysCalls(calls)).toEqual([
+      SK('-l', '--', 'first'),
+      SK('M-Enter'),
+      SK('-l', '--', 'second'),
+    ]);
+    expect(box.lines).toEqual(['first', '']);
+  });
+
+  it('a one-line message whose only send fails refuses type-failed, not verify-failed', async () => {
+    const { tmux, calls, box } = boxTmux({ failLiteralAt: 1 });
+    const res = await sendPrompt(
+      { tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', 'hello',
+    );
+    expect(res).toEqual({ ok: false, error: 'type-failed' });
+    expect(sendKeysCalls(calls)).toEqual([SK('-l', '--', 'hello')]);
+    expect(box.lines).toEqual(['']);
   });
 });

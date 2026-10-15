@@ -59,7 +59,7 @@ const harness = (row: DeliverabilityRow): Harness => {
       return { code: 0, stdout: lastLiteral === '' ? emptyBox : anyEchoBox(lastLiteral), stderr: '' };
     }
     if (args[0] === 'send-keys') {
-      if (args[3] === '-l') lastLiteral = args[4] ?? '';
+      if (args[3] === '-l') lastLiteral = args[5] ?? '';   // the text sits after `--` (D-5046)
       else if (args[3] === 'Enter') lastLiteral = '';
       return { code: 0, stdout: '', stderr: '' };
     }

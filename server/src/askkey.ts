@@ -46,14 +46,13 @@ export const MAX_ASK_ACTIONS = 2;
  *    call returns, while the pane advances Q1→Q2, so nothing in the envelope
  *    can say which question is currently painted.
  *  - no options (a free-text ask) → there is no index to send.
- *  - a MULTI-SELECT question → the route would accept a one-index tap and
- *    commit it with Enter (`inject/ask.ts`'s "gated on the QUESTION's kind"
- *    branch), which narrows a question that takes several answers down to one
- *    and submits it irrevocably. That is not a refusal this function is
- *    dodging — it is an ANSWER the operator never chose to send, and a
- *    notification button has no room to say "this submits and ends the
- *    question". Multi-select is answered in the app, where the boxes are
- *    visible.
+ *  - a MULTI-SELECT question → `multiselect` (D-5048). The route used to
+ *    accept a one-index tap and send its digit then Enter, which narrowed a
+ *    question that takes several answers down to one; on Claude Code 2.1.280
+ *    and later that Enter toggled the cursor row instead of committing. It now
+ *    refuses every multiSelect question before any key. Multi-select is
+ *    answered in the app, where the boxes are visible, through
+ *    `POST /api/sessions/:id/dialog/multi`.
  *  - a BLANK option label ANYWHERE in the envelope → see below.
  *
  * A blank label poisons the WHOLE envelope, so the answer is `null`, not "ship

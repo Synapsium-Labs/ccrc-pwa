@@ -2864,15 +2864,19 @@ shows `answering…`, and the sheet closes only when the server reports the menu
 and the sheet redraws from the current menu. Dismissing it only hides it — the row keeps saying `waiting`, and
 **Answer** in the transcript raises it again.
 
-Three routes act on what the pane already shows, each with its own named refusals:
+Five routes act on what the pane already shows, each with its own named refusals:
 
 | Route | What it does | Gate |
 | --- | --- | --- |
-| `POST /api/sessions/:id/dialog` | answers a **pane** menu by walking the `❯` marker | refuses a stale dialog id; never presses Enter unless the re-captured pane proves the marker landed |
-| `POST /api/sessions/:id/ask` | answers a **hook-reported** question by option index | re-reads the current envelope and refuses unless a content digest still matches, the pane still shows that exact menu, and the question is single |
+| `POST /api/sessions/:id/dialog` | answers a **pane** menu by walking the `❯` marker | refuses a stale dialog id; never presses Enter unless the re-captured pane proves the marker landed; refuses an AskUserQuestion's free-text row (`free-text-row`) before any key, and again on the screen the walk lands on, before Enter, because Enter on the empty row rejects the whole ask (D-5045) |
+| `POST /api/sessions/:id/dialog/text` | answers an **AskUserQuestion** in your own words: walks to its free-text row, types the text after tmux's `--`, then presses Enter (D-5047) | `400 bad-text` for a blank, multi-line, control-character or over-1000-character text, before any capture; refuses a stale dialog id and any row but the free-text one (`not-free-text`, also for a row holding other text); types nothing until a capture shows the same title, the cursor on the still-empty row and the footer's `to edit in` hint (`focus-failed`); presses Enter only once a capture shows the cursor still on the row and the row holding exactly the text (`echo-failed`, no Enter). Typing changes the dialog id. A retry with the same text onto a row that already holds it types nothing and submits it |
+| `POST /api/sessions/:id/dialog/multi` | answers a **multiSelect** AskUserQuestion question: `optionIndexes` is the whole set of boxes to leave ticked; it sends a digit only for each box whose tick differs, then Tab (D-5048) | `400 bad-indexes` for an empty, repeated or out-of-1..9 set, before any capture; refuses a stale dialog id, a menu that is not a multiSelect question it can read (`not-multiselect`), an index that is not one of the question's options, the free-text row included (`not-an-option`), a ticked free-text box (`free-text-ticked`), and a cursor off the option rows or an edit hint in the footer (`cursor-not-on-option`: a digit on the free-text row is typed into it), all before any key; presses Tab only once a capture shows exactly the wanted ticks with the cursor where it was (`ticks-failed`, no Tab), and answers ok only once a capture shows the next question or the review screen (`commit-failed`) |
+| `POST /api/sessions/:id/ask` | answers a **hook-reported** question by option index | re-reads the current envelope and refuses unless a content digest still matches, the pane still shows that exact menu, and the question is single and single-select: a multiSelect question is refused `multiselect` before any key, because on Claude Code 2.1.280 and later Enter toggles the cursor row instead of committing (D-5048) |
 | `POST /api/sessions/:id/submit` | presses **one** Enter on a box that already holds text | refuses unless the box matches the text the caller expected; one Enter, never a retry loop |
 
-Ordinary input has routes of its own: `POST /api/sessions/:id/prompt` types a message, any images first staged by
+Ordinary input has routes of its own: `POST /api/sessions/:id/prompt` types a message one line at a time, each
+line after tmux's `--` so a line that starts with `-` is typed as text, and refuses `409 type-failed` before Enter
+when tmux refuses a line, rather than submitting the message without it (D-5046); any images are first staged by
 `POST /api/sessions/:id/upload` (PNG, JPEG or WebP, at most 12 MiB, under `~/.cc-clips/<id>/`);
 `POST /api/sessions/:id/interrupt` sends Escape and refuses (`409`) a session that is not alive or not busy;
 `GET /api/sessions/:id/commands` lists the slash commands the composer offers; the terminal drawer is
@@ -5002,8 +5006,8 @@ working set, `SessionStart(compact)` serves the card once beside the graph card 
 `PostCompact` measures the summary and commits the journal line. No compaction MEASUREMENT reaches the server, the wire or
 the PWA: there is no compaction field on `FleetSession`, no chip, and no hookstate cache. The one thing that
 does cross is ccd's purge refusal vocabulary — `purge-refused`, `purge-incomplete` and
-`purge-mechanism-absent` (`shared/api.ts:7929-7931`), each with an operator sentence of its own at `:7981`,
-`:7989` and `:8002`, which the session History tab renders through `lcRefusalWord`
+`purge-mechanism-absent` (`shared/api.ts:7954-7956`), each with an operator sentence of its own at `:8006`,
+`:8014` and `:8027`, which the session History tab renders through `lcRefusalWord`
 (`pwa/src/session/HistoryTab.tsx:17`, rendered at `pwa/src/session/HistoryTab.tsx:61`). The journal is the whole deliverable, and reading it is a later
 plan's job.
 
