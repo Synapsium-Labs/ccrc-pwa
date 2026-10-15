@@ -411,6 +411,21 @@ describe('write routes', () => {
     await app.close();
   });
 
+  it('POST dialog onto an AskUserQuestion\'s empty free-text row returns 409 free-text-row and sends no key (D-5045)', async () => {
+    // A recorded Claude Code 2.1.300 screen: "3. Type something." under Yes / No. Enter there would reject the whole ask.
+    const pane = readFileSync(path.join(import.meta.dirname, 'fixtures', 'panes', 'cc300-ask-same-labels-q2.txt'), 'utf8');
+    const { app, calls } = await makeApp([pane]);
+    const res = await app.inject({
+      method: 'POST',
+      url: `/api/sessions/${ID}/dialog`,
+      payload: { dialogId: parseDialog(pane)!.id, optionIndex: 3 },
+    });
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toEqual({ ok: false, error: 'free-text-row' });
+    expect(sendKeysCalls(calls)).toEqual([]);
+    await app.close();
+  });
+
   it('POST interrupt on a busy session (live status) sends Escape', async () => {
     const { app, calls } = await makeApp(['generation…\n❯ \n'], { status: 'busy' });
     const res = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/interrupt`, payload: {} });

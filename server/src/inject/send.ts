@@ -1,7 +1,7 @@
 import type { Tmux } from '../exec.js';
-import { autoContinueArmed, hasMenu, parseDialog, turnRunning } from '../pane/dialog.js';
+import { autoContinueArmed, freeTextRow, hasMenu, parseDialog, turnRunning } from '../pane/dialog.js';
 import type { KeyedQueue } from './queue.js';
-import { composePrompt, MAIL_ENVELOPE_FENCE } from '../../../shared/api.js';
+import { composePrompt, MAIL_ENVELOPE_FENCE, type DialogRefuseCode } from '../../../shared/api.js';
 
 export interface SendDeps {
   tmux: Tmux;
@@ -1140,25 +1140,40 @@ export function submitEnter(
   });
 }
 
+/** `answerDialog`'s answer. The refusals are `DialogRefuseCode` (`shared/api.ts`), where each is described. */
+export type DialogResult = { ok: true } | { ok: false; error: DialogRefuseCode };
+
 /**
  * Answer a pane menu dialog by walking the ❯ marker to `optionIndex` and
  * confirming. Refuses when the on-screen dialog no longer matches `dialogId`
  * (stale) and never presses Enter unless the re-captured pane proves the
  * marker landed on the requested option.
+ *
+ * Never on an AskUserQuestion's free-text row (D-5045): Enter there while it
+ * is empty rejects the WHOLE ask, every answered question with it, and a row
+ * that holds text would be submitted as an answer the caller never typed here.
+ * `freeTextRow` is asked twice. First on the screen the request was checked
+ * against, before any key. Then on the screen the walk landed on, before
+ * Enter, because the pane can move on between the two captures and put the
+ * free-text row under the requested index. `walk-failed` cannot see that: the
+ * cursor IS on that index. Walking THROUGH the row to "Chat about this" stays
+ * allowed. Up and Down never select or submit, and Enter on Chat after such a
+ * walk was measured to give Chat's own outcome.
  */
 export function answerDialog(
   d: SendDeps,
   id: string,
   dialogId: string,
   optionIndex: number,
-): Promise<{ ok: true } | { ok: false; error: 'not-alive' | 'stale-dialog' | 'walk-failed' }> {
+): Promise<DialogResult> {
   const sleep = d.sleep ?? defaultSleep;
-  return d.queue.run(id, async (): Promise<{ ok: true } | { ok: false; error: 'not-alive' | 'stale-dialog' | 'walk-failed' }> => {
+  return d.queue.run(id, async (): Promise<DialogResult> => {
     const pane = await d.tmux.capture(id);
     if (pane === null) return { ok: false, error: 'not-alive' };
 
     const dialog = parseDialog(pane);
     if (!dialog || dialog.id !== dialogId) return { ok: false, error: 'stale-dialog' };
+    if (freeTextRow(pane) === optionIndex) return { ok: false, error: 'free-text-row' };
 
     const delta = optionIndex - dialog.selectedIndex;
     const key = delta > 0 ? 'Down' : 'Up';
@@ -1169,7 +1184,8 @@ export function answerDialog(
 
     const after = await d.tmux.capture(id);
     const landed = after === null ? null : parseDialog(after);
-    if (!landed || landed.selectedIndex !== optionIndex) return { ok: false, error: 'walk-failed' };
+    if (after === null || !landed || landed.selectedIndex !== optionIndex) return { ok: false, error: 'walk-failed' };
+    if (freeTextRow(after) === optionIndex) return { ok: false, error: 'free-text-row' };
 
     await d.tmux.sendKey(id, 'Enter');
     return { ok: true };

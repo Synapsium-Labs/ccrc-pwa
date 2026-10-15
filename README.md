@@ -2866,7 +2866,7 @@ Three routes act on what the pane already shows, each with its own named refusal
 
 | Route | What it does | Gate |
 | --- | --- | --- |
-| `POST /api/sessions/:id/dialog` | answers a **pane** menu by walking the `❯` marker | refuses a stale dialog id; never presses Enter unless the re-captured pane proves the marker landed |
+| `POST /api/sessions/:id/dialog` | answers a **pane** menu by walking the `❯` marker | refuses a stale dialog id; never presses Enter unless the re-captured pane proves the marker landed; refuses an AskUserQuestion's free-text row (`free-text-row`) before any key, and again on the screen the walk lands on, before Enter, because Enter on the empty row rejects the whole ask (D-5045) |
 | `POST /api/sessions/:id/ask` | answers a **hook-reported** question by option index | re-reads the current envelope and refuses unless a content digest still matches, the pane still shows that exact menu, and the question is single |
 | `POST /api/sessions/:id/submit` | presses **one** Enter on a box that already holds text | refuses unless the box matches the text the caller expected; one Enter, never a retry loop |
 

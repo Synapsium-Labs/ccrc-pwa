@@ -5723,3 +5723,49 @@ describe('child reclamation wave 9: the collector’s lane and executor call the
     }
   });
 });
+
+// D-5045 (plan docs/superpowers/plans/2026-10-15-ask-server-half.md, Task 1). APPENDED, for the reason the blocks above
+// state: `session-hook.test.ts`'s citation audit cites this file by line. An AskUserQuestion's free-text row is named by
+// ONE placeholder rule, in `shared/ask-menu.ts`. `answerDialog`'s guard reads it through `pane/dialog.ts`'s
+// `freeTextRow`, and the free-text route (D-5047) and the drawer's menu taps (D-5008) are to import it, never spell it:
+// a second spelling that drifts reads the free-text row as an ordinary option, and Enter on it while it is empty
+// rejects the whole ask. The structural backstop's "Chat about this" rule shares that home. Code lines only
+// (`stallCode`): prose names both rows in quotes. KNOWN WIDTH: a spelling assembled from pieces is not seen.
+describe('the free-text row\'s placeholder is spelled once, in shared/ask-menu.ts (D-5045)', () => {
+  const PLACEHOLDER = /type\s+something/i;
+  const CHAT = /chat\s+about\s+this/i;
+  const holders = (re: RegExp): string[] => ALL.filter((f) => re.test(stallCode(f))).map(rel).sort();
+
+  it('CONTROL: the patterns see a regex literal and a string, and pass over comment lines', () => {
+    expect(PLACEHOLDER.test('const FREE = /^Type something\\.?$/i;')).toBe(true);
+    expect(PLACEHOLDER.test("if (label === 'type something') return 3;")).toBe(true);
+    expect(CHAT.test("const CHAT = /chat about this/i;")).toBe(true);
+    expect(stallCodeText('// the empty "Type something." row\n * Chat about this\nconst x = 1;')).not.toMatch(PLACEHOLDER);
+    expect(stallCodeText('// the empty "Type something." row\n * Chat about this\nconst x = 1;')).not.toMatch(CHAT);
+  });
+
+  it('the placeholder is spelled on a code line in shared/ask-menu.ts and nowhere else', () => {
+    expect(holders(PLACEHOLDER)).toEqual(['shared/ask-menu.ts']);
+  });
+
+  it('the Chat row is spelled in shared/ask-menu.ts, and in the sheet\'s older unanchored copy, which the sheet half deletes', () => {
+    // `DialogSheet.tsx`'s `CHAT_ABOUT_RE` drives the "answer in your own words" path that answers Chat about this and
+    // declines the whole ask (diagnosis root cause 5). This branch makes no sheet change (operator ruling 2026-10-15),
+    // so that copy stays named here until the sheet half removes it — and turns this list into the one home alone.
+    expect(holders(CHAT)).toEqual(['pwa/src/session/DialogSheet.tsx', 'shared/ask-menu.ts']);
+  });
+
+  it('the guard reads the L0 rules: pane/dialog.ts imports and tests both, and answerDialog asks freeTextRow', () => {
+    const dialog = stallCode(path.join(ccrcRoot, 'server/src/pane/dialog.ts'));
+    for (const name of ['FREE_TEXT_PLACEHOLDER_RE', 'CHAT_ABOUT_ROW_RE']) {
+      expect(dialog, `pane/dialog.ts does not import ${name} from L0`)
+        .toMatch(new RegExp(`import\\s*\\{[^}]*\\b${name}\\b[^}]*\\}\\s*from\\s*'(?:\\.\\./)+shared/ask-menu\\.js'`));
+      expect(dialog, `pane/dialog.ts does not test ${name}`).toMatch(new RegExp(`\\b${name}\\.test\\(`));
+    }
+    expect(stallCode(path.join(ccrcRoot, 'server/src/inject/send.ts'))).toMatch(/\bfreeTextRow\s*\(/);
+  });
+
+  it('shared/ask-menu.ts is L0: it imports nothing', () => {
+    expect(readFileSync(path.join(ccrcRoot, 'shared/ask-menu.ts'), 'utf8')).not.toMatch(/^\s*import\b|\brequire\s*\(/m);
+  });
+});

@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { hasMenu, parseDialog, paneOptionRows, paneState, turnRunning } from '../src/pane/dialog.js';
+import { freeTextRow, hasMenu, parseDialog, paneOptionRows, paneState, turnRunning } from '../src/pane/dialog.js';
 import { FleetWatcher } from '../src/watch.js';
 import { Bus } from '../src/bus.js';
 import { Tmux, type Runner } from '../src/exec.js';
@@ -1247,5 +1247,75 @@ describe('BUSY_RE: the tolerant spinner-row anchor (worker stall watch §5.1, M3
   ])('%s is not a running turn', (_name, pane) => {
     expect(turnRunning(pane)).toBe(false);
     expect(paneState(pane)).not.toBe('busy');
+  });
+});
+
+// D-5045 (plan docs/superpowers/plans/2026-10-15-ask-server-half.md, Task 1). `freeTextRow` names the row of an
+// AskUserQuestion menu that takes free text, which `answerDialog` refuses: Enter on it while it is empty rejects the
+// whole ask. It reads the placeholder label (`shared/ask-menu.ts`) and, failing that, the structural backstop: the
+// numbered row directly above the rule that precedes a NUMBERED "Chat about this". This census holds both against
+// every recorded screen in `fixtures/panes/`, with the placeholder's row read off the screen by its own pattern below
+// rather than by the function under test.
+describe('freeTextRow (D-5045)', () => {
+  const PANES = readdirSync(panesDir).filter((f) => f.endsWith('.txt')).sort();
+  /** A numbered row painting the placeholder: single-select `n. Type something.`, multiSelect `n. [ ] Type something`. */
+  const PLACEHOLDER_ROW = /^\s*(?:❯\s*)?(\d+)\.\s+(?:\[.\]\s*)?Type something\.?\s*$/m;
+
+  it('names the placeholder row on every recorded screen that paints one, and still names it once re-worded', () => {
+    let seen = 0;
+    for (const f of PANES) {
+      const pane = fixture(f);
+      const m = PLACEHOLDER_ROW.exec(pane);
+      if (!m) continue;
+      seen++;
+      expect(freeTextRow(pane), f).toBe(Number(m[1]));
+      // The backstop alone: the same screen with the placeholder re-worded, as the bundle's own `label: "Other"` could be.
+      const reworded = pane.replace(m[0], m[0].replace(/Type something\.?/, 'Other'));
+      expect(reworded, `${f}: the re-wording changed nothing`).not.toBe(pane);
+      expect(freeTextRow(reworded), `${f}, re-worded`).toBe(Number(m[1]));
+    }
+    // 2.1.280 and 2.1.300, single-select and multiSelect, 100 to 220 columns.
+    expect(seen, 'the census found too few screens to mean anything').toBeGreaterThanOrEqual(30);
+  });
+
+  it.each([
+    ['cc300-ask-freetext-held.txt', 3],
+    ['cc300-ask-freetext-walk-3-typed.txt', 3],
+    ['cc300-ask-freetext-walk-4-stepped-off.txt', 3],
+    ['cc300-ask-freetext-walk-5-back-on-held.txt', 3],
+    ['cc300-ask-freetext-1000.txt', 3],
+    ['cc300-ask-multiselect-digit-typed-on-freetext.txt', 4],
+  ])('names the row a typed answer holds, where no placeholder is left on screen (%s)', (name, row) => {
+    const pane = fixture(name);
+    expect(PLACEHOLDER_ROW.test(pane), `${name} still paints the placeholder`).toBe(false);
+    expect(freeTextRow(pane)).toBe(row);
+  });
+
+  it.each(['ask-2col-chat-about.txt', 'ask-2col-partial-redraw.txt'])(
+    'names nothing on the two-column layout, which has no free-text row and an unnumbered Chat row (%s)',
+    (name) => {
+      const pane = fixture(name);
+      expect(pane).toContain('Chat about this');
+      expect(freeTextRow(pane)).toBeNull();
+    },
+  );
+
+  it('the backstop needs the rule: a numbered Chat row with no rule above it names nothing (DERIVED)', () => {
+    // `cc300-ask-same-labels-q2.txt` with its placeholder re-worded (so only the backstop could name row 3) and the rule
+    // between row 3 and Chat removed. Then nothing says row 3 is the TUI's input row rather than a real option.
+    const q2 = fixture('cc300-ask-same-labels-q2.txt');
+    const reworded = q2.replace('3. Type something.', '3. Other');
+    expect(freeTextRow(reworded), 'the re-worded screen, rule kept').toBe(3);
+    const lines = reworded.split('\n');
+    const chat = lines.findIndex((l) => l.includes('4. Chat about this'));
+    expect(lines[chat - 1]!.trim()[0], 'the row above Chat is the rule').toBe('─');
+    lines.splice(chat - 1, 1);
+    expect(freeTextRow(lines.join('\n'))).toBeNull();
+  });
+
+  it('names nothing on any recorded screen that paints neither row', () => {
+    const others = PANES.filter((f) => !/Type something|Chat about this/.test(fixture(f)));
+    expect(others.length, 'too few non-ask screens to mean anything').toBeGreaterThanOrEqual(25);
+    expect(others.filter((f) => freeTextRow(fixture(f)) !== null)).toEqual([]);
   });
 });

@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import type { Dialog } from '../../../shared/api.js';
+import { CHAT_ABOUT_ROW_RE, FREE_TEXT_PLACEHOLDER_RE } from '../../../shared/ask-menu.js';
 import { promptBoxShowing } from './statusline.js';
 
 /**
@@ -236,6 +237,33 @@ export function paneOptionRows(pane: string): OptionRow[] {
   return runs
     .filter((r) => r.col === shallowest)
     .reduce((a, r) => (r.rows.at(-1)!.line > a.rows.at(-1)!.line ? r : a)).rows;
+}
+
+/**
+ * The printed index of an AskUserQuestion menu's free-text row, or null when the menu on screen has none (D-5045).
+ * `answerDialog` refuses this row: Enter on it while it is empty rejects the WHOLE ask and throws away every question
+ * already answered (measured on Claude Code 2.1.300 and 2.1.291).
+ *
+ * Two readings, in order:
+ *  1. The placeholder: the row whose label passes `FREE_TEXT_PLACEHOLDER_RE` (`shared/ask-menu.ts`). This covers the
+ *     single-select `Type something.` and the multiSelect `[ ] Type something`.
+ *  2. The structural backstop: when the menu's last numbered row is `Chat about this` and a rule separates it from the
+ *     row above, that row above. It still names the row when the label reads differently, both when a build words the
+ *     placeholder otherwise (the bundle's own row is `label: "Other"`) and when the row holds typed text, where no
+ *     placeholder is left on screen. `Chat about this` must be NUMBERED. The two-column preview layout paints it
+ *     unnumbered, has no free-text row at all, and its last numbered row is a real option (`ask-2col-chat-about.txt`).
+ *
+ * Every recorded 2.1.280 and 2.1.300 ask screen agrees on both readings (`dialog.test.ts`, describe "freeTextRow
+ * (D-5045)"). Like `paneOptionRows`, it says nothing about whether a menu is up, so callers pair it with a parse.
+ */
+export function freeTextRow(pane: string): number | null {
+  const rows = paneOptionRows(pane);
+  const placeholder = rows.find((r) => FREE_TEXT_PLACEHOLDER_RE.test(r.label));
+  if (placeholder) return placeholder.index;
+  const chat = rows.at(-1);
+  const above = rows.at(-2);
+  if (!chat || !above || !CHAT_ABOUT_ROW_RE.test(chat.label)) return null;
+  return pane.split('\n').slice(above.line + 1, chat.line).some(isRule) ? above.index : null;
 }
 
 /**

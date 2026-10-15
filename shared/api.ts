@@ -9840,3 +9840,20 @@ export const COLLECT_BOX_LABELS = {
 } as const;
 export type CollectBoxLine = keyof typeof COLLECT_BOX_LABELS;
 export const COLLECT_BOX_LINES: readonly CollectBoxLine[] = Object.keys(COLLECT_BOX_LABELS) as CollectBoxLine[];
+
+/** Every refusal `POST /api/sessions/:id/dialog` answers with (`answerDialog`, `server/src/inject/send.ts`), each a 409.
+ *  Spelled once, as a total table's keys, and the list derived: a code that leaves the union and stays here, or joins it
+ *  without a row here, is a compile error.
+ *  - `not-alive`: the pane could not be captured.
+ *  - `stale-dialog`: no menu is on screen, or not the one the caller was shown.
+ *  - `walk-failed`: the re-captured pane does not show the cursor on the requested row, so no Enter was sent.
+ *  - `free-text-row` (D-5045): the requested row is an AskUserQuestion's free-text row (`shared/ask-menu.ts`, read by
+ *    `freeTextRow`). Enter on it while it is empty rejects the whole ask, so it is refused before any key, and again on
+ *    the screen the walk lands on, before Enter. A row that already holds text is refused too: this route never submits
+ *    typed text. */
+export type DialogRefuseCode = 'not-alive' | 'stale-dialog' | 'walk-failed' | 'free-text-row';
+const DIALOG_REFUSE_CODE_MAP: Readonly<Record<DialogRefuseCode, true>> = {
+  'not-alive': true, 'stale-dialog': true, 'walk-failed': true, 'free-text-row': true,
+};
+export const DIALOG_REFUSE_CODES: readonly DialogRefuseCode[] =
+  Object.keys(DIALOG_REFUSE_CODE_MAP) as DialogRefuseCode[];

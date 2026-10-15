@@ -4,7 +4,7 @@
 
 **Branch:** `fix/ask-server-half`, cut from `origin/main` `35411838`.
 
-**Status:** rev 0 (2026-10-15). Task 0 done; Tasks 1 to 4 open.
+**Status:** rev 1 (2026-10-15). Tasks 0 and 1 done; Tasks 2 to 4 open.
 
 **Operator rulings this plan builds on** (2026-10-15):
 - This branch is the **server half only**: `server/`, `shared/`, and the client functions for the new routes in `pwa/src/lib/api.ts`. It makes **no change to `DialogSheet` or any sheet UI**. Those changes follow PR #346 (§Out of scope).
@@ -106,32 +106,43 @@ The operator reports that only the **first** question of a multi-question AskUse
   | multiSelect detected by footer only (the checkbox-row test removed) | 2 pins RED ("comes back unparsed…", "the last question's extra row…") |
   | `header()` climb raised from 20 to 40 rows | 1 pin RED ("a review taller than the 20-row header climb…") |
 
-### Task 1: `answerDialog` never walks onto the free-text row (D-5045)
+### Task 1: `answerDialog` never walks onto the free-text row (D-5045) (done)
 
-**Routing:** band 3 (a keystroke guard). **Files:** create `shared/ask-menu.ts`. Modify `server/src/pane/dialog.ts` (one exported reader beside `paneOptionRows`), `server/src/inject/send.ts` (`answerDialog`), `shared/api.ts` (the refusal code), `server/test/answer.test.ts` and `server/test/single-definition.test.ts`.
+**Routing:** band 3 (a keystroke guard). **Files:** created `shared/ask-menu.ts`. Modified `server/src/pane/dialog.ts` (`freeTextRow`, beside `paneOptionRows`), `server/src/inject/send.ts` (`answerDialog`), `shared/api.ts` (the `DialogRefuseCode` union and its map, appended at the foot), `README.md` (the `/dialog` row), `server/test/answer.test.ts`, `server/test/dialog.test.ts`, `server/test/routes.test.ts` and `server/test/single-definition.test.ts`.
 
-- [ ] **Step 1: Red** (`answer.test.ts`, fixtures by name, `SID = 'lane-a:project-a'`):
-  - "refuses to walk onto the empty Type something. row: Enter there rejects the whole ask". Scripted captures: `cc300-ask-same-labels-q2.txt`, then `-freetext-walk-2-focused.txt`. `optionIndex` 3. Expect `{ok:false, error:'free-text-row'}` and **zero** `send-keys` calls. Today this is `ok:true` with Down, Down, Enter: RED for the right reason.
-  - "the structural backstop refuses a re-worded placeholder". The same pane with `Type something.` rewritten (DERIVED) is refused too.
-  - "a row that holds text is refused too: answerDialog never submits typed text" (`cc300-ask-freetext-held.txt`, index 3). D-5047's retry arm is the one path that submits a held row.
-  - Companions, which must stay green: index 2 (`No`) walks and presses Enter. Index 4 (`Chat about this`) walks THROUGH the free-text row and presses Enter, which the 1q walk-through capture measured safe. The two-column `ask-2col-chat-about.txt` still answers its last real option, because its `Chat about this` is unnumbered and the backstop must not fire.
-- [ ] **Step 2: Green.**
-  - `shared/ask-menu.ts` (L0, imports nothing) holds the placeholder rule, `FREE_TEXT_PLACEHOLDER_RE = /^type something\.?$/i`. It matches the single-select `Type something.` and the multiSelect `Type something`, checkbox stripped.
-  - `dialog.ts` gains `freeTextRow(pane): number | null`. It answers the index of a row whose label passes that rule, or failing that the structural backstop: when the last of `paneOptionRows(pane)` is a **numbered** `Chat about this` with a rule line between it and the row above, that row above.
-  - `answerDialog` refuses, before any key, when `optionIndex === freeTextRow(pane)`.
-  - Register the regex's home in `single-definition.test.ts`, with a liveness case.
-- [ ] **Step 3: Mutation table:**
+- [x] **Step 1: Red** (`answer.test.ts`, describe "answerDialog and the free-text row (D-5045)", fixtures by name, `SID = 'lane-a:project-a'`). Each was seen red for the reason named:
+  - "refuses to walk onto the empty Type something. row". Captures `cc300-ask-same-labels-q2.txt`, then `-freetext-walk-2-focused.txt`, `optionIndex` 3. Expected `{ok:false, error:'free-text-row'}` and **zero** `send-keys`. It was `ok:true`, after Down, Down, Enter.
+  - "the structural backstop refuses a re-worded placeholder". The same screens with `3. Type something.` reading `3. Other` (DERIVED). It was `ok:true`.
+  - "the placeholder label alone names the row when no numbered Chat row backs it". The same screens with Chat unnumbered (DERIVED). It was `ok:true`.
+  - "a row that holds typed text is refused too" (`cc300-ask-freetext-held.txt`, index 3). It was `ok:true`: a bare Enter, which submits `Mango`.
+  - "a multiSelect question's `[ ] Type something` row is refused before any key" (`cc300-ask-multiselect-next-open.txt`, index 4). It was `walk-failed`, after three Downs.
+  - "the landing is looked at again". Captures `cc300-ask-q1-of-2.txt` (row 3 is `Blue`), then `-freetext-walk-2-focused.txt` (row 3 is the free-text row, cursor on it): the pane moved on between the two captures. Expected `free-text-row` after Down, Down, with no Enter. It was `ok:true`. `walk-failed` cannot see this, since the cursor IS on row 3.
+  - `routes.test.ts`, "POST dialog onto an AskUserQuestion's empty free-text row returns 409 free-text-row and sends no key". It was `walk-failed`, after two Downs.
+  - `dialog.test.ts`, describe "freeTextRow (D-5045)", a census over all 74 recorded screens. The placeholder row, read off the screen by the census's own pattern, is named on all 37 screens that paint one, and still named once re-worded. The typed rows are named on 6 screens where no placeholder is left. Nothing is named on the two two-column screens or on the 29 screens that paint neither row. A numbered Chat row with no rule above it names nothing (DERIVED). Red as `freeTextRow is not a function`.
+  - `single-definition.test.ts`, describe "the free-text row's placeholder is spelled once, in shared/ask-menu.ts (D-5045)". Red on the missing file and imports.
+  - Companions, green before and after: `No` (index 2) walks and presses Enter. `Chat about this` (index 4) walks THROUGH the free-text row and presses Enter (`cc300-ask-1q-open.txt`, then `-1q-walk-through-to-chat.txt`). The two-column `ask-2col-chat-about.txt` answers its last real option, index 3. The review screen's `Submit answers` answers with a bare Enter.
+- [x] **Step 2: Green.**
+  - `shared/ask-menu.ts` (L0, imports nothing) holds `FREE_TEXT_PLACEHOLDER_RE = /^type something\.?$/i` and `CHAT_ABOUT_ROW_RE = /^chat about this$/i`.
+  - `freeTextRow(pane): number | null` (`dialog.ts`) answers the row whose label passes the placeholder rule. Failing that, it applies the backstop: when the last of `paneOptionRows(pane)` is a **numbered** `Chat about this` and a rule line sits between it and the row above, it answers that row above.
+  - `answerDialog` asks `freeTextRow` twice: on the first capture, before any key; and on the landed capture, before Enter. It answers `DialogResult` (`{ok:true} | {ok:false, error: DialogRefuseCode}`). The route already turns every refusal into a 409.
+  - `single-definition.test.ts` holds both rules' home on code lines. `DialogSheet.tsx`'s older, unanchored `CHAT_ABOUT_RE` is the one other holder of the Chat rule. It drives the "answer in your own words" path through Chat, which the sheet half deletes, and that turns the list into the one home.
+  - The toast copy for `free-text-row` is the sheet half's. Today `DialogSheet`'s `answer()` handles every 409 alike.
+- [x] **Step 3: Mutation table, run.** Each mutant was applied to the uncommitted implementation, the named suites were run, and the file was restored from a copy and compared byte for byte.
 
-  | Mutant | Expected RED |
+  | Mutant | RED (the named tests) |
   |---|---|
-  | the guard deleted | the empty-row case |
-  | the label rule dropped (backstop only) | a DERIVED pane with an unnumbered Chat row and the placeholder label |
-  | the backstop dropped (label rule only) | the re-worded placeholder case |
-  | the backstop accepts an unnumbered Chat row | the two-column companion |
-  | a second spelling of the rule in `server/src` | the single-definition case |
+  | the pre-walk guard deleted | the empty-row, re-worded, Chat-unnumbered and multiSelect cases, and the route case. The held-row case stays green: the landing look refuses it with zero keys, since its walk is zero steps. |
+  | the landing look deleted | "the landing is looked at again" |
+  | the label rule dropped (backstop only) | "the placeholder label alone names the row when no numbered Chat row backs it" |
+  | the backstop dropped (label rule only) | the re-worded and held-row cases. In the census: the re-worded screens, the six typed-row screens, and the no-rule case. |
+  | the backstop accepts an unnumbered Chat row | the two-column companion, and both two-column census cases |
+  | the backstop no longer needs the rule | "the backstop needs the rule" |
+  | a second spelling of the placeholder in `server/src` | "the placeholder is spelled on a code line in shared/ask-menu.ts and nowhere else" |
+  | a second spelling of the Chat rule in `server/src` | the Chat-row holders case |
+  | `free-text-row` taken out of `DialogRefuseCode` | `tsc`: TS2322 at both refusals in `send.ts`, and TS2353 at the map |
 
-- [ ] **Step 4: Gates:** `answer`, `dialog`, `send`, `single-definition`, `deviation-refs`, `dtbd`, `topology-clean`, and tsc.
-- [ ] **Step 5: Commit** `fix(answer): answerDialog never walks onto the free-text row — Enter there rejects the whole ask (D-5045)`.
+- [x] **Step 4: Gates:** `answer`, `dialog`, `send`, `routes`, `single-definition`, `deviation-refs`, `dtbd`, `topology-clean`, and tsc. The tests-inclusive typecheck (`typecheck-tests`) reports only `../agent/src/server.ts`'s missing `ws`, because this worktree has no `agent/node_modules`. No line comes from `server/test` or `server/src`.
+- [x] **Step 5: Commit** `fix(answer): answerDialog never walks onto the free-text row — Enter there rejects the whole ask (D-5045)`.
 
 ### Task 2: `--` before literal text, and a dropped line is never silent (D-5046)
 
