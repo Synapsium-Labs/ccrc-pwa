@@ -10,7 +10,8 @@ import {
   isCollectLaneChoice,
   type CollectArmedBy, type CollectLaneConfirmRequired, type CollectLaneRefusal, type CollectLaneView,
 } from '../../../shared/api';
-import { elapsedWords } from '../lib/elapsed';
+import { elapsedWords } from '@ccrc/ui';
+import { COORD_UNCONFIRMED_TEXT } from './coordWords';
 
 export type CollectEffectiveState = CollectLaneView['effective']['state'];
 type MarkerListing = CollectLaneView['marker']['listing'];
@@ -93,7 +94,7 @@ export const COLLECT_PAUSE_TEXT = {
   stops: 'Pauses all cleanup: child reclamation, archived-workspace expiry, the dead-coordinator lane and this collector. Resume it from the cleanup row on Runs.',
   paused: 'All cleanup is paused. Resume it from the cleanup row on Runs.',
   pausing: 'pausing…',
-  unconfirmed: 'unconfirmed — check /runs',
+  unconfirmed: COORD_UNCONFIRMED_TEXT,
 } as const;
 
 /** The Live confirm sheet's fixed lines (§5.7). The node and freshness line is composed in `collectConfirmLines`. The

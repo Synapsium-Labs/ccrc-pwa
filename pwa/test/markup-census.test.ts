@@ -327,6 +327,18 @@ const REGISTERED_BLOCKS: Record<string, string> = {
     + 'move, and `QuickConfirm` — the component all of them are copying — '
     + 'renders exactly two with no busy state. A component for the pair would '
     + 'take one prop per difference and win nothing.',
+  'fieldset.{RADIO_FIELDSET}(legend.{RADIO_LEGEND},Radio)':
+    'DIFFERENT THINGS, in one attribute. Stall watch\'s level set and the Temp '
+    + 'root collector\'s choice set both hand-build the fieldset rather than take '
+    + '`RadioFieldset`. The collector does because its held Off option carries '
+    + 'ITS OWN description, `aria-describedby` on that radio alone and on no '
+    + 'other (`collect-lane-section.test.tsx` pins both halves), while '
+    + '`RadioFieldset` can describe only the whole set. Folding it would move '
+    + 'the note from the option it explains to every option in the group. '
+    + 'Stall watch\'s half is the other kind: its level set describes no single '
+    + 'option and could take `RadioFieldset` as it stands. It stays as #419 '
+    + 'wrote it, outside the collector\'s work; when it moves, this entry goes '
+    + 'stale and reds.',
 };
 
 /** The same, for copied className literals. */
@@ -351,6 +363,10 @@ const REGISTERED_LEAVES: Record<string, string> = {
     + 'the same single-declaration override, and what differs is the whole of '
     + 'what either does. A component taking a label and a handler as props '
     + 'would be `Button` with two more names. '
+    + 'The Temp root collector adds two more in a third section, *Confirm Live '
+    + 'again* and *Pause all cleanup*, each a ghost Button wearing '
+    + '`.settings-check` for the same reason, so the key now counts four '
+    + 'Buttons in three sections. '
     + 'WORTH SAYING HOW IT GOT HERE: the box-token card landed on main writing '
     + '`className="btn-ghost settings-check"` on a raw <button>, six lines from '
     + 'its own sibling that uses the component — and this branch\'s two new '

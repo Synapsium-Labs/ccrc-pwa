@@ -18,7 +18,7 @@ import {
 } from '../src/fleet/collectLaneWords';
 import { COORD_CONFIRM_MS } from '../src/fleet/coordWords';
 import { ApiError, COORD_UNSUPPORTED_TEXT, api } from '../src/lib/api';
-import { ToastHost } from '../src/components/Toast';
+import { ToastHost } from '@ccrc/ui';
 import { UNCONFIRMED_TEXT } from '../src/screens/settingsText';
 import { createFleetStore, type FleetStore } from '../src/stores/fleet';
 

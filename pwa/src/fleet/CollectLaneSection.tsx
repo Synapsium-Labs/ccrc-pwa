@@ -29,12 +29,9 @@ import {
   COLLECT_LANE_CHOICES, type CollectLaneChoice, type CollectLaneConfirmRequired, type CollectLaneRequest,
   type CollectLaneView,
 } from '../../../shared/api';
-import { QuickConfirm } from '../components/QuickConfirm';
-import { Skeleton } from '../components/Skeleton';
-import { toast } from '../components/Toast';
+import { Button, QuickConfirm, RADIO_FIELDSET, RADIO_LEGEND, Radio, Skeleton, toast, useNow } from '@ccrc/ui';
 import { api, apiErrorText } from '../lib/api';
-import { useNow } from '../lib/useNow';
-import { UNCONFIRMED_TEXT } from '../screens/settingsText';
+import { SETTINGS_AMBER_NOTE, SETTINGS_NOW_CLASS, UNCONFIRMED_TEXT } from '../screens/settingsText';
 import { useFleetStore } from '../stores/fleet';
 import { childReclaimMarker } from './childReclaimWords';
 import { inlinePauseError } from './CoordBanner';
@@ -50,11 +47,7 @@ import './fleet.css';
 // and the pause control's passing labels included, is `collectLaneWords.ts`'s (`COLLECT_SECTION_TEXT`,
 // `COLLECT_PAUSE_TEXT` and the line builders), read by its exported name and never retyped.
 
-const NOW_CLASS: Readonly<Record<'head' | 'note' | 'warn', string>> = {
-  head: 'settings-catalogue',
-  note: 'settings-note',
-  warn: 'settings-catalogue settings-catalogue--amber',
-};
+const NOW_CLASS: Readonly<Record<'head' | 'note' | 'warn', string>> = SETTINGS_NOW_CLASS;
 
 type CleanupPause = (state: 'on' | 'off') => Promise<void>;
 
@@ -170,41 +163,40 @@ function CollectLaneBody({ view, stale, poll, store, childReclaimPause }: {
 
   return (
     <>
-      {stale && <p className="settings-note settings-catalogue--amber">{COLLECT_SECTION_TEXT.stale}</p>}
+      {stale && <p className={SETTINGS_AMBER_NOTE}>{COLLECT_SECTION_TEXT.stale}</p>}
       {collectNowLines(view).map((line, i) => <p key={i} className={NOW_CLASS[line.tone]}>{line.text}</p>)}
       {view.notice !== null && <p className="settings-note" role="status">{view.notice}</p>}
       <p className="settings-note">{collectCountLine(view.attention)}</p>
-      <fieldset className="settings-fieldset" disabled={locked}>
-        <legend className="settings-legend">{COLLECT_SECTION_TEXT.legend}</legend>
+      <fieldset className={RADIO_FIELDSET} disabled={locked}>
+        <legend className={RADIO_LEGEND}>{COLLECT_SECTION_TEXT.legend}</legend>
         {COLLECT_LANE_CHOICES.map((c) => {
           const held = c === 'off' && offHeld;
           return (
-            <label key={c} className="settings-option">
-              <input
-                type="radio"
-                name="settings-collect-lane"
-                value={c}
-                checked={stored === c}
-                disabled={held}
-                aria-describedby={held && offNote !== null ? offNoteId : undefined}
-                onChange={() => choose(c)}
-              />
-              <span className="settings-option-sentence">{COLLECT_SECTION_TEXT[c]}</span>
-            </label>
+            <Radio
+              key={c}
+              name="settings-collect-lane"
+              value={c}
+              checked={stored === c}
+              disabled={held}
+              aria-describedby={held && offNote !== null ? offNoteId : undefined}
+              onChange={() => choose(c)}
+            >
+              {COLLECT_SECTION_TEXT[c]}
+            </Radio>
           );
         })}
       </fieldset>
       {offHeld && offNote !== null && <p id={offNoteId} className="settings-note">{offNote}</p>}
-      {inline !== null && <p className="settings-note settings-catalogue--amber" role="alert">{inline}</p>}
+      {inline !== null && <p className={SETTINGS_AMBER_NOTE} role="alert">{inline}</p>}
       {collectOffersReconfirm(view) && (
-        <button
-          type="button"
-          className="btn-ghost settings-check"
+        <Button
+          variant="ghost"
+          className="settings-check"
           disabled={locked}
           onClick={() => { if (!locked) write({ choice: 'live' }); }}
         >
           {COLLECT_SECTION_TEXT.reconfirm}
-        </button>
+        </Button>
       )}
       <PauseAllCleanup store={store} childReclaimPause={childReclaimPause} />
       <QuickConfirm
@@ -284,10 +276,10 @@ function PauseAllCleanup({ store, childReclaimPause }: { store: typeof useFleetS
   return (
     <>
       <p className="settings-note">{COLLECT_PAUSE_TEXT.stops}</p>
-      <button type="button" className="btn-ghost settings-check" disabled={phase === 'pausing'} onClick={onPause}>
+      <Button variant="ghost" className="settings-check" disabled={phase === 'pausing'} onClick={onPause}>
         {label}
-      </button>
-      {error !== null && <p className="settings-note settings-catalogue--amber">{error}</p>}
+      </Button>
+      {error !== null && <p className={SETTINGS_AMBER_NOTE}>{error}</p>}
     </>
   );
 }
