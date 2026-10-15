@@ -4141,7 +4141,7 @@ export async function ingestPath(db, ctx, f, budget, skipped) {
       fileId: bound.fileId, transcriptPk: bound.transcriptPk, ccUuid: f.uuid, fd: a.fd,
       size, mtimeNs: st.mtimeNs, offset: bound.action === 'resume' ? bound.offset : 0,
     }, budget);
-    if (r.crashed === true && skipped !== undefined) skipped.add(f.uuid);   // W1-B3 (D-5061): a parse crash holds the cursor before the boundary, every tick
+    if (r.crashed === true && skipped !== undefined) skipped.add(f.uuid);   // W1-B3 (D-5061): a parse crash holds the cursor before the crashing line, every tick
     return { fileId: bound.fileId, size, mtimeNs: st.mtimeNs, ...r, minNewTsMs: bound.action === 'resume' ? r.minNewTsMs : null };
   } finally {
     closeSync(a.fd);
@@ -4357,9 +4357,10 @@ export async function ingestTick(db, ctx, budget) {
   // marked done (a scan tick's files are found again at the next tick; a hint-only file at its next hint or the next
   // due scan); the tick itself, its sidecars and its row go on.
   let unreadable = false;
-  // W1-B3 (D-5061 (history-card-withdraw-on-a-skipped-copy)): the uuids whose transcript copy this tick could not read or
-  // admission refused. The card step withdraws their predictions (lib decideCardWithdraw, arm 'copy'): a copy that was
-  // not read to its end may hold the boundary that consumes the standing line.
+  // W1-B3 (D-5061 (history-card-withdraw-on-a-skipped-copy)): the uuids whose transcript copy this tick could not read,
+  // admission refused or whose parse crashed (ingestPath). The card step withdraws their predictions (lib
+  // decideCardWithdraw, arm 'copy'): a copy that was not read to its end may hold the boundary that consumes the
+  // standing line.
   const skipped = new Set();
   try {
     for (const f of files) {

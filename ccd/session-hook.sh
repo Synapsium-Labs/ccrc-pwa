@@ -2915,7 +2915,7 @@ command -v jq >/dev/null 2>&1 || exit 0
 #      newest family's generation, '' for a legacy family or none, which is what
 #      B2's CLI compares with then (coordinator ruling R-recalloff-parity). The record
 #      is used ONLY when `.generation` is absent or empty (D-5063): a linked, unreadable,
-#      full-window, NUL-holding (a bounded `read -d ''` finds it) or non-UUID one is unusable, and a recall-off file that exists then
+#      full-window, NUL-holding (a bounded `read -d ''` finds it; one after a broken UTF-8 byte fails the grammar instead) or non-UUID one is unusable, and a recall-off file that exists then
 #      withholds the line, as with a missing, linked, unreadable or malformed record
 #      (fail closed). It is read the way B2's CLI reads it, so the card and `ccrc history`
 #      never put one family in two eval arms: a symlink, a non-file or an unreadable file

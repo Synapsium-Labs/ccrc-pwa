@@ -12211,7 +12211,7 @@ describe('history card line: SessionStart(compact) serves the sweep\'s predictio
     if (generation === null) return file.state === 'value' ? 'unknown' : lib.decideRecallOff({ file, generation: GENERATION });
     return lib.decideRecallOff({ file, generation });
   };
-  /** The hook serves exactly when the CLI recalls (`none` or `stale`); `off` and `unknown` withhold. */
+  /** The CLI recalls (`none` or `stale`): the hook serves then, except on a row marked fail-closed (R-recalloff-parity); `off` and `unknown` always withhold. */
   const serves = (verdict: string): boolean => verdict === 'none' || verdict === 'stale';
 
   it('CONTROL: the parity table reaches every answer, so it cannot pass by serving always or never', () => {
