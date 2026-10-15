@@ -24,6 +24,16 @@ merged: two nodes' families with one ccrc id are two families (spec §6.9).
                           capture lag), and files_behind counts no gone or pathless row and no stale torn tail
   w1c_duplicate_entries   W1-c: uuids holding more than one entries row; 0 by the UNIQUE, reported anyway
                           because the acceptance row is this number
+  w1e                     W1-e: the card line's delivery, from the counters the sweep folds (it measures
+                          delivery from each compaction's transcript, never from a receipt):
+                          consumed_main, consumed_other and consumed_unknown are card_consumed:<scope>
+                          (a prediction a later main boundary consumed, by the scope marker its
+                          compaction left); served and mismatch are card_served:* and card_id_mismatch:*
+                          summed over their backend words; served_share = served / (consumed_main +
+                          consumed_unknown) (target >= 0.95), other reported beside it and out of the
+                          denominator, and mismatch_share = mismatch / (served + mismatch) (target
+                          <= 0.02), each null, never 0, when its denominator is 0. A reading whose
+                          window holds a restore or rebuild is void; a served_share above 1 is its tell
   w1f_grep_p95_ms         W1-f: the p95 of recall_calls.ms over verb = 'grep' rows with arm IS NULL; null if none
   w2                      null without --families; else the W2 window statistic, below
 p95 is NEAREST-RANK: the value at 1-based rank ceil(95n/100) of the sorted sample, in integer arithmetic.
@@ -184,6 +194,34 @@ def w2_statistic(db, families, start_ms, end_ms):
             'per_turn_rate': calls / turns if turns else None, 'unmeasured': unmeasured, 'by_family': by_family}
 
 
+def w1e_statistic(counters):
+    """W1-e (spec 2026-10-05 §10.7, §8.6; ruling RC3): the card line's delivery, from the counters alone. The
+    sweep counts each prediction file a later main boundary consumed as card_consumed:<scope>, by the scope marker
+    the hook wrote at that compaction's PreCompact: main (a line was due), other (subagent or ambiguous: no line
+    was ever due) or unknown (the marker overwritten, emptied or unreadable). It counts card_served:<backend> or
+    card_id_mismatch:<backend> once per leaf whose post-boundary SessionStart attachment named a node: its own
+    leaf, or another. The backend word after the colon is summed over and never read, so no model is classified
+    here (O32).
+
+    served_share = served / (main + unknown): other is out of the denominator and reported beside it, and unknown
+    stays in it, so an unreadable marker can only lower the share. The mismatch share is of the lines that
+    arrived, so a compaction whose attachment carried no line lowers the served share and leaves the mismatch
+    share alone. A reading whose window holds a restore or rebuild (a completed `recover` step) is void:
+    re-derived leaves are measured again, so a served share above 1 is the tell."""
+    def total(word):
+        return sum(n for name, n in counters.items() if name.partition(':')[0] == word)
+
+    def consumed(scope):
+        return sum(n for name, n in counters.items() if name == 'card_consumed:' + scope)
+
+    main, other, unknown = consumed('main'), consumed('other'), consumed('unknown')
+    served, mismatch = total('card_served'), total('card_id_mismatch')
+    return {'consumed_main': main, 'consumed_other': other, 'consumed_unknown': unknown,
+            'served': served, 'mismatch': mismatch,
+            'served_share': served / (main + unknown) if main + unknown else None,
+            'mismatch_share': mismatch / (served + mismatch) if served + mismatch else None}
+
+
 def main():
     home = os.path.expanduser('~')
     ap = argparse.ArgumentParser(description='the ccrc history census, read-only')
@@ -210,10 +248,12 @@ def main():
                 (now - WEEK_MS, now)).fetchall()]),
             'w1c_duplicate_entries': db.execute(
                 'SELECT count(*) FROM (SELECT uuid FROM entries GROUP BY uuid HAVING count(*) > 1)').fetchone()[0],
+            'w1e': None,   # W1-e: filled from 'counters' below the literal, in this place in the key order
             'w1f_grep_p95_ms': p95([r[0] for r in db.execute(
                 "SELECT ms FROM recall_calls WHERE verb = 'grep' AND arm IS NULL").fetchall()]),
             'w2': None,
         }
+        report['w1e'] = w1e_statistic(report['counters'])
         if a.families is not None:
             report['w2'] = w2_statistic(db, load_families(a.families, store_id), a.window_start, a.window_end)
     except sqlite3.Error as e:
