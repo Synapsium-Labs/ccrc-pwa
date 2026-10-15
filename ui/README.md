@@ -52,6 +52,17 @@ makes `@theme inline` emit a circular reference that CSS drops — silently, in
 one theme. That is why the local families are spelled `--fs-*`, `--family-*`,
 `--lh-*`, `--ls-*`, `--elev-*` and `--curve-*`.
 
+Then check the KEY, the utility's spelling, against every namespace its
+utility reads, not just its own. `text-*` reads `--color-*` as well as
+`--text-*`, `font-*` reads `--font-weight-*` as well as `--font-*`, and `w-*`
+and `max-w-*` read Tailwind's `--container-*` beside `--spacing-*`. A key two
+of them share compiles as whichever one Tailwind tries first, with no warning.
+That is why the page title's role is `text-title` and not `text-page`: `page`
+is the page ground's colour, so `text-page` paints text in it.
+`pwa/test/skin-catalogue.test.ts` compiles every key the bridge maps, and
+every key of Tailwind's own theme, through every utility that reads it, and
+reds on a key that another namespace claims, whichever side loses.
+
 ## Skins
 
 The skin is a third axis beside the palette and light/dark (D-5093):
@@ -79,12 +90,14 @@ and the contrast gate measures each palette once, for both skins.
   Refined's values (`--fs-ui`, `--fs-prose`, `--fs-meta`, `--fs-page`, the
   `--*-section` set, `--gutter`, `--row-h`, `--pad-card`, `--gap-section`,
   `--page-max`, `--page-max-wide`, `--measure-chat`). Each one chooses a step
-  from a scale, so it adds no new size. `theme.css` maps them as `text-ui`,
-  `text-prose`, `text-meta`, `text-page`, `text-section`, and as the spacing
-  keys `gutter`, `row`, `card` and `section` (`px-gutter`, `min-h-row`,
-  `p-card`, `gap-section`). `cn()` is taught every one of these names, or it
-  would delete the ink beside `text-meta`. A role sets the font size only:
-  Tailwind attaches no line height to a key it did not define.
+  from a scale, so it adds no new size. `theme.css` maps them as `text-md`
+  (the 14px scale step), `text-ui`, `text-prose`, `text-meta`, `text-title`
+  (the page title, `--fs-page`) and `text-section`, and as the spacing keys
+  `gutter`, `row`, `card` and `section` (`px-gutter`, `min-h-row`, `p-card`,
+  `gap-section`). `cn()` is taught every one of these names, or it would
+  delete the ink beside `text-meta`. A role sets the font size only: Tailwind
+  attaches no line height to a key it did not define. The page title's key is
+  `title` because `page` is already a colour (see "Adding a token").
 - **Nothing reads the roles yet.** The shared primitives adopt them in a later
   change. Until then, Instrument differs from Refined only in radii, card
   elevation and motion.

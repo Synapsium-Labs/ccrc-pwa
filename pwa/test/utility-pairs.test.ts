@@ -358,12 +358,15 @@ describe('every class string survives the merge that renders it', () => {
   // Measured with `cn.ts`'s own config on tailwind-merge 3.7.0 before it was
   // taught: `cn('text-ink-primary', 'text-meta')` returned "text-meta" — the
   // prefix rule read the role as a text COLOUR and deleted the ink — and the
-  // same for `text-ui` and `text-page`. The spacing roles failed the other
-  // way: `cn('p-4', 'p-gutter')` kept both, so a caller's role never replaced
-  // a component's step and Tailwind's emit order picked. Nothing reads a role
-  // yet (Task 14 adopts them), so these are the only places the loss shows.
+  // same for `text-ui` and the page title's role. The spacing roles failed the
+  // other way: `cn('p-4', 'p-gutter')` kept both, so a caller's role never
+  // replaced a component's step and Tailwind's emit order picked. Nothing
+  // reads a role yet (Task 14 adopts them), so these are the only places the
+  // loss shows. The page title's key is `title`, not `page`: `text-page` IS a
+  // colour (`--color-page`, the page ground), so the merge is right to read it
+  // as one (`skin-catalogue.test.ts` compiles every key to prove which).
   it('an ink survives beside every new size key', () => {
-    for (const k of ['md', 'ui', 'prose', 'meta', 'page', 'section']) {
+    for (const k of ['md', 'ui', 'prose', 'meta', 'title', 'section']) {
       expect(cn('text-ink-primary', `text-${k}`).split(/\s+/), `text-${k}`)
         .toEqual(['text-ink-primary', `text-${k}`]);
     }

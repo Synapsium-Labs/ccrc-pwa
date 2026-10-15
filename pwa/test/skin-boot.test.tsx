@@ -93,6 +93,50 @@ describe('the skin at boot', () => {
   });
 });
 
+describe('main.tsx', () => {
+  /** Boot the real `main.tsx` once, from a fresh module registry, with the
+   *  page as the pre-paint snippet left it. The mount is a stub that records
+   *  the stamp at the moment React would first render; the app itself and the
+   *  service worker are not this test's business (`main-bootstrap` has them). */
+  async function boot(stored: string | null, prestamped: string | null): Promise<string | null | undefined> {
+    let atRender: string | null | undefined;
+    vi.resetModules();
+    vi.doMock('virtual:pwa-register', () => ({ registerSW: () => {} }));
+    vi.doMock('react-dom/client', () => ({
+      createRoot: () => ({ render: () => { atRender = stamped(); }, unmount: () => {} }),
+    }));
+    vi.doMock('../src/app', () => ({ App: () => null }));
+    try {
+      document.body.innerHTML = '<div id="root"></div>';
+      localStorage.clear();
+      if (stored !== null) localStorage.setItem(SKIN_STORAGE_KEY, stored);
+      if (prestamped === null) document.documentElement.removeAttribute('data-skin');
+      else document.documentElement.setAttribute('data-skin', prestamped);
+      await import('../src/main');
+      return atRender;
+    } finally {
+      vi.doUnmock('virtual:pwa-register');
+      vi.doUnmock('react-dom/client');
+      vi.doUnmock('../src/app');
+      vi.resetModules();
+      document.body.innerHTML = '';
+    }
+  }
+
+  it('resolves the stored skin before the app first renders', async () => {
+    // WIRED, not just written: `initSkin` is correct in isolation (above), and
+    // nothing in that proves `main.tsx` calls it. Without the call, the
+    // snippet's verbatim stamp of an unknown value stays on the page — `:root`
+    // renders, while `useSkin()` answers Refined from its own state — and a
+    // page whose snippet never ran (blocked inline script) boots unstamped.
+    // Recorded AT the render, so a call moved after `render(...)` reds too.
+    const stale = 'skin-from-a-newer-build';
+    expect(await boot(stale, stale), 'an unknown stored value is corrected before render').toBe(REFINED);
+    expect(await boot(INSTRUMENT, null), 'the stored choice is stamped before render').toBe(INSTRUMENT);
+    expect(await boot(null, null), 'nothing stored is stamped refined, never left absent').toBe(REFINED);
+  });
+});
+
 describe('a choice', () => {
   function Probe(): ReactNode {
     return <span data-testid="skin">{useSkin()}</span>;

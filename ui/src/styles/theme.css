@@ -188,11 +188,21 @@
      in skins.css. Each is a NEW key, so tailwind-merge has to be taught it
      (ui/src/lib/cn.ts) or `text-meta` deletes the ink beside it. Tailwind
      attaches no companion line-height to a key it did not define, so a role
-     sets font-size only — pair it with a `leading-*` where the line matters. */
+     sets font-size only — pair it with a `leading-*` where the line matters.
+
+     A KEY IS CHECKED AGAINST EVERY NAMESPACE ITS UTILITY READS, not just its
+     own. `text-*` reads `--color-*` as well as `--text-*`, and `page` is
+     already `--color-page` (the page ground) above, so the page title's role
+     mapped as `--text-page` compiled to `color: var(--bg-page)` — invisible
+     text — and never to a size. Its key is `title`; its token keeps the name
+     `--fs-page`, as `--accent` kept its own when its key became `phosphor`.
+     pwa/test/skin-catalogue.test.ts compiles every key here, and every key
+     of Tailwind's own theme, through every utility that reads it, and reds
+     on a key another namespace claims, whichever side loses. */
   --text-ui:      var(--fs-ui);
   --text-prose:   var(--fs-prose);
   --text-meta:    var(--fs-meta);
-  --text-page:    var(--fs-page);
+  --text-title:   var(--fs-page);
   --text-section: var(--fs-section);
 
   --leading-tight:  var(--lh-tight);
