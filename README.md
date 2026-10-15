@@ -1103,6 +1103,7 @@ and the answer was bad, 2 a usage error — `update` adds 3 and 4, and `rollback
 | `status`, `version` | what this box is (its build, role, services, sessions and whether the two boxes agree); the build it runs — both read-only |
 | `update`, `rollback`, `versions`, `channel`, `rollout`, `watchdog` | this section |
 | `backup`, `logs`, `uninstall` | the maintenance verbs, below |
+| `coordination-snapshot validate\|restore\|recover` | classify a backup's coordination snapshot, restore it as one set, finish an interrupted restore; exits 0 (`v1`, `legacy`), 1 (`none`), 2 (`invalid`), 70 (usage or a helper that cannot run), below |
 | `expose duckdns\|byo\|ip\|status` | a public name and a certificate ("Exposure", above) |
 | `passwd` | set or rotate the PWA passphrase ("The session gate", below) |
 | `adopt`, `wrappers` | rediscover the roster from `~/.local/bin`; write the wrappers the roster marks generated ("Accounts", below) |
@@ -1115,16 +1116,21 @@ and the answer was bad, 2 a usage error — `update` adds 3 and 4, and `rollback
 
 **The maintenance verbs.** `ccrc backup` runs update's backup step standalone (same set, same directory shape, pruned
 to the newest `CCRC_BACKUP_KEEP` (0 to 9999) timestamped dirs, default 10 — never the backup it just made, a dir named
-at or after the second it began, or the newest earlier tree backup and the newest earlier valid coordination snapshot
-(each chosen on its own; `deploy/coordination-snapshot.mjs classify` decides what is valid, and a classifier failure
-prunes nothing), and nothing at all, exit 0, while another ccrc run holds `~/.ccrc/update.lock`, `flock` is missing or
+at or after the second it began, or the newest earlier tree backup, the newest earlier valid coordination snapshot and the
+newest earlier one that holds data (each chosen on its own, so a newer snapshot of an empty box never evicts the last one
+with data; `deploy/coordination-snapshot.mjs` decides what is valid, and a classifier that cannot run or answers out of
+its table prunes nothing and says why), and nothing at all, exit 0, while another ccrc run holds `~/.ccrc/update.lock`, `flock` is missing or
 the lock cannot be measured; hand-made siblings are never touched), as update and rollback do after a passed gate.
 Each backup dir also holds the delegation journal and checkpoint (`delegation-events.log`, `delegation-checkpoint.json`)
 and the manifest that describes them with the `coord.db` snapshot (`coordination-snapshot.json`), written last, after
 every member is durable. `ccrc coordination-snapshot validate|restore|recover` classifies such a dir, replaces the live
 journal, checkpoint and `coord.db` (with its WAL and SHM) from a valid one as a single set — only with `ccrc.service`
-measured inactive — and finishes an interrupted restore from its marker; the server refuses to start while that marker
-stands. Rollback arm 3 never copies the sidecars back: they are authority a running server wrote since the backup.
+measured inactive, asked again once its marker is durable — and finishes an interrupted restore from that marker; delegation
+recovery refuses to run while the marker stands (the server's boot is not yet wired to that refusal). Its exits are
+`validate` 0 for `v1` and `legacy`, 1 for `none`, 2 for `invalid`, and 70 for a usage error or a helper that cannot run.
+Rollback arm 3 never copies the sidecars back: they are authority a running server wrote since the backup. Capture refuses a
+journal or checkpoint that does not validate, so `ccrc backup`, `ccrc update` and the fallback deploy stop on a damaged
+journal; nothing in this release repairs or truncates it.
 `ccrc logs [-f] [-n N]` is `journalctl --user` against this box's own unit (`ccrc.service`, or `ccrc-agent.service`
 when the recorded role is `fleet`) — on macOS it tails the LaunchAgent's `~/.ccrc/logs/<label>.log`, with `-f`/`-n`
 passed through. `ccrc uninstall` takes the box off ccrc and leaves reinstall safe: it refuses while live sessions

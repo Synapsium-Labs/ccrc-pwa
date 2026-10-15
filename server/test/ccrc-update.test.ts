@@ -10727,7 +10727,7 @@ describe('ccrc versions, and the GC that never removes a needed version (W6 Task
       let r = runVersions(home, ['--prune'], { CCRC_VERSIONS_KEEP: HUGE });
       expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(1);
       expect(r.stderr).toContain(`ccrc: versions: ${WHY(HUGE)} — nothing was pruned`);
-      expect(r.stdout).not.toMatch(/^backup: pruned/m);
+      expect(r.stdout).not.toMatch(/pruned/);
       expect(existsSync(join(home, '.ccrc', 'update.lock')), 'refused before the lock').toBe(false);
       expect(versionDirs(home)).toEqual([...NAMES].sort());
       // The plain listing lists (exit 0), names the knob and value, and marks no version prunable.
@@ -12413,9 +12413,10 @@ describe('ccrc update and rollback: ~/ccrc-backups is pruned after a completed r
     const r = rollbackRun(home, [], { CCRC_BACKUP_KEEP: '0' });
     expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
     expect(r.stdout).not.toMatch(/^update: backup:/m);   // a flip takes no backup of its own
-    // Since the coordination snapshot every update's backup carries a manifest, so the newer setup dir is a VALID v1 snapshot (its
-    // members absent on this box) and is the newest earlier snapshot; the planted bare-DB dir is an OLDER, legacy one and is superseded.
-    expect(existsSync(join(backupRoot(home), '20250101-000000')), 'an older legacy snapshot is superseded by the newer v1 snapshot').toBe(false);
+    // Since the coordination snapshot every update's backup carries a manifest, so the newer setup dirs are VALID v1 snapshots (their
+    // members absent on this box). The planted bare-DB dir is OLDER and legacy, so it holds DATA and they do not: the newest
+    // data-bearing snapshot is its own keep (D-4641), and this row means again what it always meant.
+    expect(existsSync(join(backupRoot(home), '20250101-000000')), 'the newest earlier snapshot that holds data (a coord.db)').toBe(true);
     expect(existsSync(join(backupRoot(home), '20250102-000000'))).toBe(false);
     expect(existsSync(join(backupRoot(home), setup2[1]!)), 'the newer setup dir carries the tree entry — the earlier tree backup — and a v1 manifest').toBe(true);
     expect(existsSync(join(backupRoot(home), setup2[0]!)), 'the older setup dir is not protected — nothing else keeps it').toBe(false);
@@ -12947,8 +12948,11 @@ describe('ccrc backup and update: the coordination snapshot callers (delegation 
       '  *backup-coord.mjs) echo sqlite >> "$HOME/node-order" ;;',
       '  *coordination-snapshot.mjs)',
       '    echo "helper $3" >> "$HOME/node-order"',
+      // The classifier cannot be loaded (node exits 1 with no output), or answers a well-formed word with the WRONG exit code.
+      '    if { [ "$3" = classify ] || [ "$3" = validate ]; } && [ -n "$FX_CLASSIFY_EXIT1" ]; then exit 1; fi',
+      '    if { [ "$3" = classify ] || [ "$3" = validate ]; } && [ -n "$FX_CLASSIFY_MISMATCH" ]; then printf "none: shim\\ndata: no\\n"; exit 0; fi',
       '    if [ "$3" = capture ]; then echo "present: $(ls -A "$5" | tr "\\n" " ")" >> "$HOME/node-order"; fi',
-      '    if [ "$3" = classify ] && [ -n "$FX_CLASSIFY_FAIL" ]; then exit 70; fi ;;',
+      '    if { [ "$3" = classify ] || [ "$3" = validate ]; } && [ -n "$FX_CLASSIFY_FAIL" ]; then exit 70; fi ;;',
       'esac',
       // On to whatever `node` the fixture box would otherwise have resolved (its verifier shim included), not the real one.
       `PATH='${updateEnv(home).PATH ?? ''}'; exec node "$@"`,
@@ -12979,15 +12983,15 @@ describe('ccrc backup and update: the coordination snapshot callers (delegation 
     mkdirSync(join(home, '.ccrc'), { recursive: true });
     writeFileSync(join(home, '.ccrc', 'delegation-checkpoint.json'), bytes);
   };
-  type Kind = 'v1-sidecars' | 'legacy-db' | 'invalid' | 'tree' | 'tree+v1' | 'plain';
+  type Kind = 'v1-sidecars' | 'v1-empty' | 'legacy-db' | 'invalid' | 'tree' | 'tree+v1' | 'plain';
   /** One timestamped backup dir of a given kind. 'v1-sidecars' is a REAL helper capture of a checkpoint (no journal, no DB). */
   const plantDir = (home: string, name: string, kind: Kind): string => {
     const dir = join(backupRoot(home), name);
     mkdirSync(dir, { recursive: true });
-    if (kind === 'v1-sidecars' || kind === 'tree+v1' || kind === 'invalid') {
+    if (kind === 'v1-sidecars' || kind === 'v1-empty' || kind === 'tree+v1' || kind === 'invalid') {
       const mini = mkTmp('ccrc-fx-snap-mini-');
       mkdirSync(join(mini, '.ccrc'));
-      writeFileSync(join(mini, '.ccrc', 'delegation-checkpoint.json'), CP_REV1);
+      if (kind !== 'v1-empty') writeFileSync(join(mini, '.ccrc', 'delegation-checkpoint.json'), CP_REV1);
       const r = helper(mini, ['capture', '--dir', dir]);
       expect(r.code, r.stderr).toBe(0);
     }
@@ -13051,7 +13055,7 @@ describe('ccrc backup and update: the coordination snapshot callers (delegation 
     const r = runBackup(home);
     expect(r.code).toBe(1);
     expect(r.stderr).toMatch(/^ccrc: the coordination snapshot failed — refusing to install with an incomplete backup/m);
-    expect(r.stderr).toMatch(/coordination-snapshot: bad-shape/);
+    expect(r.stderr).toMatch(/coordination snapshot: bad-shape/);
     const dirs = readdirSync(backupRoot(home));
     expect(dirs).toHaveLength(1);
     expect(existsSync(manifestOf(join(backupRoot(home), dirs[0]!))), 'no manifest after a failed capture').toBe(false);
@@ -13225,28 +13229,209 @@ describe('ccrc backup and update: the coordination snapshot callers (delegation 
       plantDir(home, '20250102-000000', 'plain');
       const r = runBackup(home, [], withShim(home, { CCRC_BACKUP_KEEP: '0' }));
       expect(r.code, `stderr: ${r.stderr}`).toBe(0);
-      const classified = nodeOrder(home).filter((l) => l === 'helper classify');
+      const classified = nodeOrder(home).filter((l) => l === 'helper validate' || l === 'helper classify');
       expect(classified, 'no dir of this fixture holds a coordination name').toEqual([]);
     });
   });
 
-  it('`ccrc coordination-snapshot validate|restore|recover` reaches the helper, exits with its code, and refuses bad usage with 2', () => {
+  describe('retention: the fifth keep set, the newest valid snapshot that HOLDS DATA (D-4641)', () => {
+    const home0 = (prefix: string): string => {
+      const home = freshUpdateBox(prefix);
+      plantOldBox(home, { version: 'v1.0.0' });
+      return home;
+    };
+    const has = (home: string, name: string): boolean => existsSync(join(backupRoot(home), name));
+
+    it('an older data-bearing v1 and a newer EMPTY v1: both are kept (the empty one is the newest valid, the older one the newest with data)', () => {
+      const home = home0('ccrc-fx-8b-data-v1-');
+      plantDir(home, '20250101-000000', 'v1-sidecars');
+      plantDir(home, '20250102-000000', 'v1-empty');
+      plantDir(home, '20250103-000000', 'plain');
+      const r = runBackup(home, [], { CCRC_BACKUP_KEEP: '0' });
+      expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+      expect(has(home, '20250102-000000'), 'the newest valid snapshot, though empty').toBe(true);
+      expect(has(home, '20250101-000000'), 'the newest one that holds data').toBe(true);
+      expect(has(home, '20250103-000000')).toBe(false);
+    });
+
+    it('an older LEGACY snapshot and a newer empty v1: both are kept (P4\'s meaning), through `ccrc update`\'s own prune too', () => {
+      const home = home0('ccrc-fx-8b-data-legacy-');
+      packRelease(home, stubTree(home, { version: 'v2.0.0' }), { tag: 'v2.0.0' });
+      plantDir(home, '20250101-000000', 'legacy-db');
+      plantDir(home, '20250102-000000', 'v1-empty');
+      plantDir(home, '20250103-000000', 'plain');
+      const r = runUpdate(home, [], { CCRC_BACKUP_KEEP: '0' });
+      expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+      expect(has(home, '20250102-000000')).toBe(true);
+      expect(has(home, '20250101-000000'), 'the legacy DB is data').toBe(true);
+      expect(has(home, '20250103-000000')).toBe(false);
+    });
+
+    it('a newer data-bearing v1 and an older data-bearing v1: only the newer is kept by this set', () => {
+      const home = home0('ccrc-fx-8b-data-two-');
+      plantDir(home, '20250101-000000', 'v1-sidecars');
+      plantDir(home, '20250102-000000', 'v1-sidecars');
+      const r = runBackup(home, [], { CCRC_BACKUP_KEEP: '0' });
+      expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+      expect(has(home, '20250102-000000')).toBe(true);
+      expect(has(home, '20250101-000000')).toBe(false);
+    });
+
+    it('several empty snapshots above the data-bearing one: only the newest empty one and the data one survive, and the independent tree keep is unaffected', () => {
+      const home = home0('ccrc-fx-8b-data-many-');
+      plantDir(home, '20250100-000000', 'tree');
+      plantDir(home, '20250101-000000', 'v1-sidecars');
+      plantDir(home, '20250102-000000', 'v1-empty');
+      plantDir(home, '20250103-000000', 'v1-empty');
+      const r = runBackup(home, [], { CCRC_BACKUP_KEEP: '0' });
+      expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+      expect(has(home, '20250103-000000'), 'the newest valid').toBe(true);
+      expect(has(home, '20250101-000000'), 'the newest with data').toBe(true);
+      expect(has(home, '20250100-000000'), 'the newest tree backup').toBe(true);
+      expect(has(home, '20250102-000000'), 'an empty snapshot that is neither').toBe(false);
+    });
+
+    it('the prune message names what it kept', () => {
+      const home = home0('ccrc-fx-8b-data-msg-');
+      packRelease(home, stubTree(home, { version: 'v2.0.0' }), { tag: 'v2.0.0' });
+      plantDir(home, '20250101-000000', 'plain');
+      const r = runUpdate(home, [], { CCRC_BACKUP_KEEP: '0' });
+      expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+      expect(r.stdout).toMatch(/the newest earlier tree backup, the newest earlier valid coordination snapshot and the newest earlier one that holds data;/);
+      expect(r.stdout).not.toMatch(/the newest earlier coord\.db snapshot/);
+    });
+  });
+
+  describe('a classifier that cannot run, or answers out of its table, prunes NOTHING and says why (I1, R25)', () => {
+    const home0 = (prefix: string): string => {
+      const home = freshUpdateBox(prefix);
+      plantOldBox(home, { version: 'v1.0.0' });
+      plantDir(home, '20250101-000000', 'plain');
+      plantDir(home, '20250102-000000', 'v1-sidecars');
+      plantDir(home, '20250103-000000', 'plain');
+      return home;
+    };
+    const all = ['20250101-000000', '20250102-000000', '20250103-000000'];
+    /** `_bak_prune`, sourced from a ccrc at `ccrcPath`, over this box's backups, with every planted dir below the floor. */
+    const prune = (home: string, ccrcPath: string, env: NodeJS.ProcessEnv = {}): Result => {
+      const r = spawnSync(BASH, ['-c', '. "$1"; UPD_BAK_FLOOR=20300101-000000; UPD_BACKUP_DIR=""; CCRC_BACKUP_KEEP=0; _bak_prune', 'ccrc-under-test', ccrcPath],
+        { env: { ...updateEnv(home), ...env }, encoding: 'utf8' });
+      return { code: r.status ?? -1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
+    };
+    const intact = (home: string): void => { for (const n of all) expect(existsSync(join(backupRoot(home), n)), n).toBe(true); };
+
+    it('the helper is missing from the running tree (a rollback to a tree that predates it): prune skipped, the reason says so', () => {
+      const home = home0('ccrc-fx-8b-i1-nohelper-');
+      const tree = join(home, 'older-tree', 'ccd');
+      mkdirSync(tree, { recursive: true });
+      copyFileSync(join(REPO, 'ccd', 'ccrc'), join(tree, 'ccrc'));
+      expect(existsSync(join(home, 'older-tree', 'deploy'))).toBe(false);
+      const r = prune(home, join(tree, 'ccrc'));
+      expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+      expect(r.stdout).toMatch(/^backup: prune skipped — the coordination snapshot classifier failed \(deploy\/coordination-snapshot\.mjs is not in the running ccrc tree .*\), so nothing can say/m);
+      expect(r.stdout).toMatch(/nothing was pruned$/m);
+      expect(r.stdout).not.toMatch(/^backup: pruned/m);
+      intact(home);
+    });
+
+    it('node cannot load the helper (it exits 1 with no output): that is a FAILURE, never "none"', () => {
+      const home = home0('ccrc-fx-8b-i1-exit1-');
+      const r = prune(home, join(REPO, 'ccd', 'ccrc'), withShim(home, { FX_CLASSIFY_EXIT1: '1' }));
+      expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+      expect(r.stdout).toMatch(/^backup: prune skipped — the coordination snapshot classifier failed \(the classifier answered exit 1, ""\)/m);
+      expect(r.stdout).not.toMatch(/^backup: pruned/m);
+      intact(home);
+    });
+
+    it('a well-formed word with the wrong exit code (rc 0 and `none`) is a failure too', () => {
+      const home = home0('ccrc-fx-8b-i1-mismatch-');
+      const r = prune(home, join(REPO, 'ccd', 'ccrc'), withShim(home, { FX_CLASSIFY_MISMATCH: '1' }));
+      expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+      expect(r.stdout).toMatch(/^backup: prune skipped — the coordination snapshot classifier failed \(the classifier answered exit 0, "none: shim"\)/m);
+      expect(r.stdout).not.toMatch(/^backup: pruned/m);
+      intact(home);
+    });
+
+    it('node missing from PATH is a failure, and `ccrc update`\'s own prune warns and keeps everything on a node exiting 1', () => {
+      const home = home0('ccrc-fx-8b-i1-update-');
+      packRelease(home, stubTree(home, { version: 'v2.0.0' }), { tag: 'v2.0.0' });
+      const u = runUpdate(home, [], withShim(home, { CCRC_BACKUP_KEEP: '0', FX_CLASSIFY_EXIT1: '1' }));
+      expect(u.code, `stderr: ${u.stderr}\nstdout: ${u.stdout}`).toBe(0);
+      expect(u.stdout).toMatch(/^update: backups: WARN: the coordination snapshot classifier failed \(the classifier answered exit 1, ""\)/m);
+      intact(home);
+      const home2 = home0('ccrc-fx-8b-i1-nonode-');
+      // `command -v node` answers 1, as on a box whose PATH has no node (the rest of PATH stays, so flock and the others still resolve).
+      const r = spawnSync(BASH, ['-c', '. "$1"; command() { if [ "$1 $2" = "-v node" ]; then return 1; fi; builtin command "$@"; }; UPD_BAK_FLOOR=20300101-000000; UPD_BACKUP_DIR=""; CCRC_BACKUP_KEEP=0; _bak_prune', 'x', join(REPO, 'ccd', 'ccrc')],
+        { env: updateEnv(home2), encoding: 'utf8' });
+      expect(r.stdout).toMatch(/classifier failed \(node is not on PATH\)/);
+      intact(home2);
+    });
+  });
+
+  it('`ccrc coordination-snapshot validate|restore|recover` reaches the helper and exits with its code: 0 v1, 1 none, 2 invalid, 70 for usage (I2)', () => {
     const home = freshUpdateBox('ccrc-fx-8b-verb-');
     plantOldBox(home, { version: 'v1.0.0' });
     const dir = plantDir(home, '20250101-000000', 'v1-sidecars');
-    const ccrc = (args: string[], env: NodeJS.ProcessEnv = {}): Result => {
-      const r = spawnSync(BASH, [join(REPO, 'ccd', 'ccrc'), 'coordination-snapshot', ...args], { env: { ...updateEnv(home), ...env }, encoding: 'utf8' });
+    const ccrc = (args: string[], env: NodeJS.ProcessEnv = {}, script = join(REPO, 'ccd', 'ccrc')): Result => {
+      const r = spawnSync(BASH, [script, 'coordination-snapshot', ...args], { env: { ...updateEnv(home), ...env }, encoding: 'utf8' });
       return { code: r.status ?? -1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
     };
-    expect(ccrc(['validate', '--from', dir])).toMatchObject({ code: 0, stdout: expect.stringMatching(/^v1: a valid manifest, initialized delegation, coord\.db absent\n$/) });
+    expect(ccrc(['validate', '--from', dir])).toMatchObject({ code: 0, stdout: 'v1: a valid manifest, initialized delegation, coord.db absent\ndata: yes\n' });
     expect(ccrc(['validate', '--from', join(backupRoot(home), '20250199-000000')]).code).toBe(2);
     const empty = plantDir(home, '20250102-000000', 'plain');
-    expect(ccrc(['validate', '--from', empty]).code).toBe(1);
-    expect(ccrc(['recover'], { PATH: join(home, 'no-such-bin') + ':' + (updateEnv(home).PATH ?? '') }).code).toBeLessThanOrEqual(2);
+    expect(ccrc(['validate', '--from', empty])).toMatchObject({ code: 1, stdout: 'none: no manifest, no sidecars and no coord.db\ndata: no\n' });
+    // `recover` with nothing to recover is the helper's `none` and exits 0 (it needs no service measurement).
+    expect(ccrc(['recover'])).toMatchObject({ code: 0, stdout: 'coordination restore recovery: none\n' });
     for (const bad of [[], ['validate'], ['validate', '--from'], ['restore', dir], ['recover', 'now'], ['explode']]) {
-      expect(ccrc(bad).code, bad.join(' ')).toBe(2);
+      const r = ccrc(bad);
+      expect(r.code, bad.join(' ')).toBe(70);
+      expect(r.stderr, bad.join(' ')).toMatch(/usage: ccrc coordination-snapshot/);
     }
     expect(ccrc(['--help']).stdout).toMatch(/coordination-snapshot/);
+    // A missing helper and a missing node are 70 too, never `_ccrc_die`'s 1 (which is `none`).
+    const bare = join(home, 'bare-tree', 'ccd');
+    mkdirSync(bare, { recursive: true });
+    copyFileSync(join(REPO, 'ccd', 'ccrc'), join(bare, 'ccrc'));
+    const noHelper = ccrc(['validate', '--from', dir], {}, join(bare, 'ccrc'));
+    expect(noHelper.code).toBe(70);
+    expect(noHelper.stderr).toMatch(/the helper deploy\/coordination-snapshot\.mjs is missing from this tree/);
+    const emptyBin = join(home, 'empty-bin');
+    mkdirSync(emptyBin);
+    const noNode = spawnSync(BASH, ['-c', 'PATH="$3"; exec "$1" "$2" coordination-snapshot validate --from "$4"', 'x', BASH, join(REPO, 'ccd', 'ccrc'), emptyBin, dir], { env: updateEnv(home), encoding: 'utf8' });
+    expect(noNode.status).toBe(70);
+    expect(noNode.stderr).toMatch(/node is required by 'ccrc coordination-snapshot'/);
+  });
+
+  itLinux('restore and recover take ~/.ccrc/update.lock: another ccrc run holding it is a refusal (exit 2) that changes nothing (M2)', () => {
+    const home = freshUpdateBox('ccrc-fx-8b-verb-lock-');
+    plantOldBox(home, { version: 'v1.0.0' });
+    const dir = plantDir(home, '20250101-000000', 'v1-sidecars');
+    mkdirSync(join(home, '.ccrc'), { recursive: true });
+    const lock = join(home, '.ccrc', 'update.lock');
+    writeFileSync(lock, '');
+    const holder = spawn(FLOCK, ['-n', lock, 'sleep', '60'], { stdio: 'ignore' });
+    try {
+      // Wait (bounded) until the holder really has the lock: a fresh `flock -n` on it must fail.
+      const t0 = Date.now();
+      while (spawnSync(FLOCK, ['-n', lock, 'true']).status === 0) {
+        if (Date.now() - t0 > 5000) throw new Error('the lock holder never took the lock');
+        spawnSync('sleep', ['0.1']);
+      }
+      const run = (args: string[]): Result => {
+        const r = spawnSync(BASH, [join(REPO, 'ccd', 'ccrc'), 'coordination-snapshot', ...args], { env: updateEnv(home), encoding: 'utf8' });
+        return { code: r.status ?? -1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
+      };
+      for (const args of [['restore', '--from', dir], ['recover']]) {
+        const r = run(args);
+        expect(r.code, args.join(' ')).toBe(2);
+        expect(r.stderr, args.join(' ')).toMatch(/another ccrc run holds ~\/\.ccrc\/update\.lock — nothing was changed/);
+      }
+      expect(existsSync(join(home, '.ccrc', 'coordination-restore.json'))).toBe(false);
+      // `validate` reads only and takes no lock.
+      expect(run(['validate', '--from', dir]).code).toBe(0);
+    } finally {
+      if (holder.pid !== undefined) holder.kill('SIGKILL');   // the PID this test itself started
+    }
   });
 });
 

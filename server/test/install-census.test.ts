@@ -1965,7 +1965,12 @@ describe('the coordination snapshot helper: run from the installed tree, shipped
     for (const fn of callers) {
       expect(bodyOfFn(fn), fn).toMatch(/\$CCRC_HERE\/\.\.\/deploy\/coordination-snapshot\.mjs/);
     }
-    for (const fn of ['_upd_backup', '_bak_snap_class']) expect(bodyOfFn(fn), fn).toMatch(/node --no-warnings "\$CCRC_HERE\/\.\.\/deploy\/coordination-snapshot\.mjs"/);
+    expect(bodyOfFn('_upd_backup'), '_upd_backup').toMatch(/node --no-warnings "\$CCRC_HERE\/\.\.\/deploy\/coordination-snapshot\.mjs"/);
+    // The two that name the path once, in a variable, and run `node --no-warnings "$helper"`.
+    for (const fn of ['_bak_snap_class', 'cmd_coordination_snapshot']) {
+      expect(bodyOfFn(fn), fn).toMatch(/helper="\$CCRC_HERE\/\.\.\/deploy\/coordination-snapshot\.mjs"/);
+      expect(bodyOfFn(fn), fn).toMatch(/node --no-warnings "\$helper"/);
+    }
     expect(trackedFiles(), `${HELPER_REL} must be tracked`).toContain(HELPER_REL);
     const spec = releasePathspec();
     expect(spec.some((e) => HELPER_REL === e || HELPER_REL.startsWith(`${e}/`)), `PATHSPEC (${spec.join(' ')}) must carry ${HELPER_REL}`).toBe(true);

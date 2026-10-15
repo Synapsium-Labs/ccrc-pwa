@@ -1865,6 +1865,9 @@ UPD_BACKUP_DIR=""
 BAK_DIRS=()        # `_bak_list`'s out-param: the timestamped backup dirs, oldest first
 BAK_KEEP_SNAP=""   # `_bak_keepset`'s out-params (wave 9 R10g): the newest earlier coord.db snapshot and the newest earlier tree backup,
 BAK_KEEP_TREE=""   # each chosen among the dirs the floor and this run's own path do not already protect
+BAK_KEEP_DATA=""   # `_bak_keepset`'s third out-param (D-4641): the newest earlier valid coordination snapshot that holds data
+BAK_SNAP_DATA=0    # `_bak_snap_class`'s out-params: whether a valid dir holds data, and why the classifier failed (rc 2)
+BAK_SNAP_WHY=""
 UPD_BAK_FLOOR=""   # the second this run first held ~/.ccrc/update.lock (`_upd_lock`); `_bak_gc` keeps every dir named at or after it
 UPD_URL_DIR=""    # _upd_resolve: the release's URL space (latest/ or download/<tag>/)
 UPD_URL_DIR_SAFE=""    # _upd_resolve: same, through _upd_redact — every "fetching …"/WARN line prints THIS, never UPD_URL_DIR, so a credentialed CCRC_RELEASE_BASE_URL never reaches stdout (review 155 C17, fix round 1 item 11); the real curl calls still read UPD_URL_DIR
@@ -2226,14 +2229,16 @@ already running).
             ~/ccrc-backups/<ts>/, then prune to the
             newest \$CCRC_BACKUP_KEEP (default 10) timestamped backups — never
             this run's own or one named after it began, nor the newest earlier
-            tree backup and valid coordination snapshot; skipped while another
+            tree backup, valid coordination snapshot and valid one that holds
+            data; skipped while another
             ccrc run holds ~/.ccrc/update.lock — hand-made siblings are never touched
   coordination-snapshot
-            validate --from <~/ccrc-backups/<ts>>   classify a backup's coordination
-            snapshot (v1, legacy, none, invalid; exit 0, 0, 1, 2)
-            restore --from <dir>   replace the live journal, checkpoint and coord.db
-            (and its WAL/SHM) from a valid v1 snapshot, as one set; refuses unless
-            ccrc.service is measured inactive
+            validate --from <timestamp-directory>   classify a backup's coordination
+            snapshot (v1, legacy, none, invalid; exit 0, 0, 1, 2; usage or a helper
+            that cannot run: 70)
+            restore --from <timestamp-directory>   replace the live journal,
+            checkpoint and coord.db (and its WAL/SHM) from a valid v1 snapshot, as
+            one set; refuses unless ccrc.service is measured inactive
             recover                finish an interrupted restore from its marker
   logs      this box's service journal: journalctl --user -u ccrc.service
             (or ccrc-agent.service when ccrc.env records CCRC_ROLE=fleet).
@@ -20110,8 +20115,11 @@ _upd_backup() {
   # by one manifest, `coordination-snapshot.json`, which the helper writes only after every member is durable. They are NOT rows
   # of `_upd_backup_set`: that list is what arm 3 of `_upd_restore` copies back, and a rollback must never put old sidecars over
   # live ones (they are authority, written by a running server since the snapshot). Continue ONLY after a durable manifest.
-  node --no-warnings "$CCRC_HERE/../deploy/coordination-snapshot.mjs" capture --dir "$UPD_BACKUP_DIR" \
-    || _ccrc_die "the coordination snapshot failed — refusing to install with an incomplete backup (read coordination-snapshot.mjs's lines above)"
+  # The helper's success line is dropped (the result line below describes it); its failure text is kept, on one line, and goes
+  # through `_ccrc_die`, so it is redacted like every other message of an update-family run.
+  local cerr=""
+  cerr="$(node --no-warnings "$CCRC_HERE/../deploy/coordination-snapshot.mjs" capture --dir "$UPD_BACKUP_DIR" 2>&1 >/dev/null)" \
+    || _ccrc_die "the coordination snapshot failed — refusing to install with an incomplete backup (${cerr//$'\n'/ })"
   local shown="$UPD_BACKUP_DIR"; [ "${UPD_REDACT_ACTIVE:-0}" = 1 ] && shown="$(_upd_redact "$shown")"; echo "$say: $shown (coord.db snapshot, coordination sidecars and manifest, dists, ccd and its body, units — taken before anything was installed)"   # redacted only in an update-family run (X1's scope): `ccrc backup`'s result line stays a usable absolute path
 }
 
@@ -22058,14 +22066,18 @@ cmd_backup() {
 }
 
 # ── cmd_coordination_snapshot — validate, restore or recover a coordination snapshot (delegation broker wave 3, O3) ──
-# `ccrc coordination-snapshot validate --from <timestamp dir>` classifies a `~/ccrc-backups/<ts>/` directory by
-# `deploy/coordination-snapshot.mjs` (`v1`, `legacy`, `none`, `invalid`; exit 0, 0, 1, 2). `restore --from <dir>` replaces the
-# live delegation journal, checkpoint and coord.db (with its WAL and SHM) from a VALID v1 snapshot, as one set: it validates the
-# source first, requires ccrc.service MEASURED inactive (running and unmeasurable both refuse), stages, publishes an active
-# restore marker (the server refuses to start while it stands), replaces, and makes `COMMITTED` durable before it cleans up.
+# `ccrc coordination-snapshot validate --from <timestamp-directory>` classifies a `~/ccrc-backups/<ts>/` directory by
+# `deploy/coordination-snapshot.mjs` (`v1`, `legacy`, `none`, `invalid`; exit 0, 0, 1, 2; and a second line `data: yes|no`).
+# `restore --from <dir>` replaces the live delegation journal, checkpoint and coord.db (with its WAL and SHM) from a VALID v1
+# snapshot, as one set: it validates the source first, requires ccrc.service MEASURED inactive (running and unmeasurable both
+# refuse; asked again once the marker is durable), stages, publishes an active restore marker (delegation recovery refuses to run
+# while it stands; the server's boot is not yet wired to that refusal), replaces, and makes `COMMITTED` durable before it cleans up.
 # `recover` finishes an interrupted restore from that marker: before `COMMITTED` back to the old set, after it forward to the new.
-# The verb is a thin door: the helper is the whole implementation, and its exit code is this verb's. It is NEVER reached by
-# `ccrc update`, `ccrc rollback` or arm 3 of `_upd_restore`: a rollback does not carry the sidecars.
+# Both take ~/.ccrc/update.lock (`_ver_lock_try`) for the whole act, so `ccrc update` cannot restart the unit mid-restore.
+# The verb is a thin door: the helper is the whole implementation, and its exit code is this verb's. Its OWN refusals follow the
+# brief's table, not ccrc's house "2 is a usage error": a usage error, a missing node and a missing helper are 70 (a plain
+# `exit 70`: `_ccrc_die` is hard-wired to 1, which is `none`). It is NEVER reached by `ccrc update`, `ccrc rollback` or arm 3 of
+# `_upd_restore`: a rollback does not carry the sidecars.
 cmd_coordination_snapshot() {
   local sub="${1:-}" helper="$CCRC_HERE/../deploy/coordination-snapshot.mjs"
   case "$sub" in
@@ -22073,17 +22085,27 @@ cmd_coordination_snapshot() {
     validate|restore)
       shift
       [ $# -eq 2 ] && [ "$1" = --from ] && [ -n "$2" ] \
-        || { echo "usage: $PROG coordination-snapshot $sub --from <timestamp-directory>" >&2; exit 2; }
+        || { printf '%s\n' "usage: $PROG coordination-snapshot $sub --from <timestamp-directory>" >&2; exit 70; }
       ;;
     recover)
       shift
-      [ $# -eq 0 ] || { echo "usage: $PROG coordination-snapshot recover" >&2; exit 2; }
+      [ $# -eq 0 ] || { printf '%s\n' "usage: $PROG coordination-snapshot recover" >&2; exit 70; }
       ;;
-    *) echo "usage: $PROG coordination-snapshot {validate --from <timestamp-directory>|restore --from <timestamp-directory>|recover}" >&2; exit 2 ;;
+    *) printf '%s\n' "usage: $PROG coordination-snapshot {validate --from <timestamp-directory>|restore --from <timestamp-directory>|recover}" >&2; exit 70 ;;
   esac
   command -v node >/dev/null 2>&1 \
-    || _ccrc_die "node is required by 'ccrc coordination-snapshot' (it runs deploy/coordination-snapshot.mjs) but is not on PATH — nothing was read or changed"
-  [ -f "$helper" ] || _ccrc_die "coordination-snapshot: the helper is missing ($helper)"
+    || { printf '%s\n' "$PROG: node is required by 'ccrc coordination-snapshot' (it runs deploy/coordination-snapshot.mjs) but is not on PATH — nothing was read or changed" >&2; exit 70; }
+  [ -f "$helper" ] \
+    || { printf '%s\n' "$PROG: coordination-snapshot: the helper deploy/coordination-snapshot.mjs is missing from this tree — nothing was read or changed" >&2; exit 70; }
+  if [ "$sub" != validate ]; then
+    local lrc=0
+    _ver_lock_try || lrc=$?
+    case "$lrc" in
+      0) ;;
+      1) printf '%s\n' "$PROG: coordination-snapshot $sub: another ccrc run holds ~/.ccrc/update.lock — nothing was changed" >&2; exit 2 ;;
+      *) printf '%s\n' "$PROG: coordination-snapshot $sub: ~/.ccrc/update.lock could not be taken (no flock, or it cannot be measured) — nothing was changed" >&2; exit 2 ;;
+    esac
+  fi
   local rc=0
   node --no-warnings "$helper" "$sub" "$@" || rc=$?
   exit "$rc"
@@ -22158,7 +22180,7 @@ _bak_prune() {
   local krc=0
   _bak_keepset || krc=$?   # rc 1 cannot happen here (the floor was checked above); rc 2 is the classifier failing
   if [ "$krc" -ne 0 ]; then
-    echo "backup: prune skipped — the coordination snapshot classifier failed, so nothing can say which backup holds the newest valid snapshot; nothing was pruned"
+    echo "backup: prune skipped — the coordination snapshot classifier failed (${BAK_SNAP_WHY:-no reason given}), so nothing can say which backup holds the newest valid snapshot; nothing was pruned"
     if [ "$took" -eq 1 ]; then _upd_unlock; fi
     return 0
   fi
@@ -22167,6 +22189,7 @@ _bak_prune() {
     [ "$d" = "$UPD_BACKUP_DIR" ] && continue
     [ "$((10#${name//-/}))" -ge "$floor" ] && continue
     [ "$d" = "$BAK_KEEP_SNAP" ] && continue
+    [ "$d" = "$BAK_KEEP_DATA" ] && continue
     [ "$d" = "$BAK_KEEP_TREE" ] && continue
     rm -rf -- "${BAK_DIRS[$i]}" \
       || _ccrc_die "could not prune ${BAK_DIRS[$i]} — the newer backups above it are all intact"
@@ -22176,57 +22199,84 @@ _bak_prune() {
   return 0
 }
 
-# ── _bak_keepset — which two earlier dirs a prune keeps beyond the floor (wave 9 R10g, D-3825) ──
-# The ONE spelling of the two extra keeps' SELECTION, shared by `_bak_gc` and `_bak_prune`: which earlier coordination snapshot
-# and which earlier tree backup are kept, and the own-dir and floor pair that selection skips over. That is all that is
-# shared (fix round 1, F4). The four-line removal filter that APPLIES the keeps — own dir, floor, snapshot, tree — is
-# written twice, once in each pruner's loop, and nothing pins the two copies to each other.
-# The two extra keeps are chosen among dirs NOT already protected (below the floor, not this run's own): the protected
+# ── _bak_keepset — which three earlier dirs a prune keeps beyond the floor (wave 9 R10g, D-3825) ──
+# The ONE spelling of the extra keeps' SELECTION, shared by `_bak_gc` and `_bak_prune`: which earlier coordination snapshot,
+# which earlier snapshot that holds data, and which earlier tree backup are kept, and the own-dir and floor pair that selection
+# skips over. That is all that is shared (fix round 1, F4). The removal filter that APPLIES the keeps — own dir, floor, snapshot,
+# data snapshot, tree — is written twice, once in each pruner's loop, and nothing pins the two copies to each other.
+# The extra keeps are chosen among dirs NOT already protected (below the floor, not this run's own): the protected
 # ones are kept anyway, so picking one of them would protect nothing. They are INDEPENDENT of each other and of the newest-N keep
-# (delegation broker wave 3, O3): a dir is "the newest snapshot" by what the classifier says of its coordination snapshot, and
-# "the newest tree backup" by its `server-dist`/`agent-dist` entry, each searched on its own, so a dir kept as one is never what
-# keeps, or evicts, the other. READS BAK_DIRS (`_bak_list` first), UPD_BACKUP_DIR and
-# UPD_BAK_FLOOR; WRITES BAK_KEEP_SNAP (the newest earlier valid coordination snapshot) and BAK_KEEP_TREE (the newest earlier tree
-# backup), "" when none. rc 1 when UPD_BAK_FLOOR is not a timestamp, WITHOUT touching either out-param; rc 2 when the classifier
-# itself FAILED (`_bak_snap_class`), both out-params "" — the caller prunes NOTHING and says why. It declares its
+# (delegation broker wave 3, O3): a dir is "the newest snapshot" by what the classifier says of its coordination snapshot,
+# "the newest data-bearing snapshot" by the classifier's `data: yes` (a v1 snapshot with any member present, or a legacy one; so a
+# newer snapshot of an EMPTY box never evicts the last one that holds data, D-4641), and "the newest tree backup" by its
+# `server-dist`/`agent-dist` entry, each searched on its own, so a dir kept as one is never what keeps, or evicts, another.
+# READS BAK_DIRS (`_bak_list` first), UPD_BACKUP_DIR and UPD_BAK_FLOOR; WRITES BAK_KEEP_SNAP (the newest earlier valid coordination
+# snapshot), BAK_KEEP_DATA (the newest earlier valid one that holds data) and BAK_KEEP_TREE (the newest earlier tree backup), ""
+# when none. rc 1 when UPD_BAK_FLOOR is not a timestamp, WITHOUT touching an out-param; rc 2 when the classifier itself FAILED
+# (`_bak_snap_class`; BAK_SNAP_WHY says why), all out-params "" — the caller prunes NOTHING and says why. It declares its
 # own floor and n: the callers' locals are not its to read. Links are counted as `_bak_list` counts them (R10i, deferred).
 _bak_keepset() {
   local floor n i d name src
   [[ "$UPD_BAK_FLOOR" =~ ^[0-9]{8}-[0-9]{6}$ ]] || return 1
   floor=$((10#${UPD_BAK_FLOOR//-/})); n=${#BAK_DIRS[@]}
-  BAK_KEEP_SNAP=""; BAK_KEEP_TREE=""
+  BAK_KEEP_SNAP=""; BAK_KEEP_DATA=""; BAK_KEEP_TREE=""
   for ((i = n - 1; i >= 0; i--)); do
     d="${BAK_DIRS[$i]}"; name="${d##*/}"
     [ "$d" = "$UPD_BACKUP_DIR" ] && continue
     [ "$((10#${name//-/}))" -ge "$floor" ] && continue
-    if [ -z "$BAK_KEEP_SNAP" ]; then
+    if [ -z "$BAK_KEEP_DATA" ]; then
       src=0; _bak_snap_class "$d" || src=$?
       case "$src" in
-        0) BAK_KEEP_SNAP="$d" ;;
+        0)
+          [ -n "$BAK_KEEP_SNAP" ] || BAK_KEEP_SNAP="$d"
+          [ "$BAK_SNAP_DATA" -eq 1 ] && BAK_KEEP_DATA="$d"
+          ;;
         1) ;;
-        *) BAK_KEEP_SNAP=""; BAK_KEEP_TREE=""; return 2 ;;
+        *) BAK_KEEP_SNAP=""; BAK_KEEP_DATA=""; BAK_KEEP_TREE=""; return 2 ;;
       esac
     fi
     if [ -z "$BAK_KEEP_TREE" ] && { [ -e "$d/server-dist" ] || [ -e "$d/agent-dist" ]; }; then BAK_KEEP_TREE="$d"; fi
-    [ -n "$BAK_KEEP_SNAP" ] && [ -n "$BAK_KEEP_TREE" ] && break
+    [ -n "$BAK_KEEP_DATA" ] && [ -n "$BAK_KEEP_TREE" ] && break
   done
   return 0
 }
 
 # `_bak_snap_class <timestamp dir>` — whether a backup dir holds a VALID coordination snapshot, by `coordination-snapshot.mjs
-# classify` (delegation broker wave 3): rc 0 yes (`v1`, or `legacy`: a bare, valid coord.db from before the sidecars), rc 1 no
+# validate` (delegation broker wave 3): rc 0 yes (`v1`, or `legacy`: a bare, valid coord.db from before the sidecars), rc 1 no
 # (`none`, or `invalid`: a present manifest that does not hold up never falls back to the DB beside it), rc 2 the classifier
-# FAILED (no node, no helper, a crash) — which is not an answer, so the pruner deletes nothing. A dir holding a valid sidecar
-# snapshot and NO coord.db is a valid snapshot (the live DB was absent when it was taken): the pre-filter below looks for any of
-# the four names a snapshot is made of, never for coord.db alone.
+# FAILED — which is not an answer, so the pruner deletes nothing. It FAILS when node is not on PATH, when the helper is not in the
+# running tree, and whenever the helper's (exit code, first word) is not exactly one of `0 v1`, `0 legacy`, `1 none`, `2 invalid`
+# with a `data: yes|no` second line: a node that could not even load the helper exits 1, which must never read as "none".
+# After a rollback to a tree that predates the helper the classifier is absent, so backups are not pruned until the box next
+# updates to a tree that has it; that costs disk, never a snapshot (R25). BAK_SNAP_DATA (0|1) says whether a valid dir holds
+# data, and BAK_SNAP_WHY carries a one-line reason on rc 2. A dir holding a valid sidecar snapshot and NO coord.db is a valid
+# snapshot (the live DB was absent when it was taken): the pre-filter below looks for any of the four names a snapshot is made of,
+# never for coord.db alone.
 _bak_snap_class() {
-  local d="$1" n any=0 rc=0
+  local d="$1" n any=0 rc=0 out first second helper="$CCRC_HERE/../deploy/coordination-snapshot.mjs"
+  BAK_SNAP_DATA=0; BAK_SNAP_WHY=""
   for n in coordination-snapshot.json delegation-events.log delegation-checkpoint.json coord.db; do
     if [ -e "$d/$n" ] || [ -L "$d/$n" ]; then any=1; break; fi
   done
   [ "$any" -eq 1 ] || return 1
-  node --no-warnings "$CCRC_HERE/../deploy/coordination-snapshot.mjs" classify --from "$d" >/dev/null 2>&1 || rc=$?
-  case "$rc" in 0) return 0 ;; 1|2) return 1 ;; *) return 2 ;; esac
+  if ! command -v node >/dev/null 2>&1; then BAK_SNAP_WHY="node is not on PATH"; return 2; fi
+  if [ ! -f "$helper" ]; then
+    BAK_SNAP_WHY="deploy/coordination-snapshot.mjs is not in the running ccrc tree (after a rollback to a tree that predates it, backups are not pruned until the next update to one that has it)"
+    return 2
+  fi
+  out="$(node --no-warnings "$helper" validate --from "$d" 2>&1)" || rc=$?
+  first="${out%%$'\n'*}"; second=""
+  [ "$first" = "$out" ] || second="${out#*$'\n'}"
+  case "$rc:${first%%:*}" in
+    0:v1|0:legacy|1:none|2:invalid) ;;
+    *) BAK_SNAP_WHY="the classifier answered exit $rc, \"${first:0:100}\""; BAK_SNAP_WHY="${BAK_SNAP_WHY//[![:print:]]/?}"; return 2 ;;
+  esac
+  case "$second" in
+    "data: yes") BAK_SNAP_DATA=1 ;;
+    "data: no") ;;
+    *) BAK_SNAP_WHY="the classifier's answer carried no data line"; return 2 ;;
+  esac
+  case "$rc" in 0) return 0 ;; *) return 1 ;; esac
 }
 
 # ── _bak_gc — update's and rollback's own prune of ~/ccrc-backups (wave 8 item B) ──
@@ -22241,7 +22291,8 @@ _bak_snap_class() {
 # this run's lock second (UPD_BAK_FLOOR) — both D-3593; and, among the dirs neither of those protects, the newest tree backup (D-3594; a
 # `server-dist` or `agent-dist` entry: another run's, a deploy's, or the previous update's) and the newest VALID coordination
 # snapshot (D-3595, widened by delegation broker wave 3: `_bak_snap_class` asks `coordination-snapshot.mjs classify`, so a v1
-# snapshot with sidecars and no coord.db counts, and an invalid manifest never does). The four sets are independent. The lock was released before the sweep (design §10), so it is RE-TAKEN (D-3592) without dying: any other holder
+# snapshot with sidecars and no coord.db counts, and an invalid manifest never does) and, beside it, the newest valid snapshot that HOLDS DATA (D-4641:
+# a v1 with a member present, or a legacy one), so an empty-box snapshot never evicts the last one with data. The sets are independent. The lock was released before the sweep (design §10), so it is RE-TAKEN (D-3592) without dying: any other holder
 # means nothing is pruned.
 _bak_gc() {   # <lead word: update|rollback>
   local lead="$1" keep="${CCRC_BACKUP_KEEP:-10}"
@@ -22268,7 +22319,7 @@ _bak_gc() {   # <lead word: update|rollback>
   local krc=0
   _bak_keepset || krc=$?   # wave 9 R10g: the selection of the two extra keeps, shared with `_bak_prune`; the floor was checked above
   if [ "$krc" -ne 0 ]; then
-    echo "$lead: backups: WARN: the coordination snapshot classifier failed, so nothing can say which backup holds the newest valid snapshot — nothing pruned"
+    echo "$lead: backups: WARN: the coordination snapshot classifier failed (${BAK_SNAP_WHY:-no reason given}), so nothing can say which backup holds the newest valid snapshot — nothing pruned"
     if [ "$took" -eq 1 ]; then _upd_unlock; fi
     return 1
   fi
@@ -22277,10 +22328,11 @@ _bak_gc() {   # <lead word: update|rollback>
     [ "$d" = "$UPD_BACKUP_DIR" ] && continue   # D-3593
     [ "$((10#${name//-/}))" -ge "$floor" ] && continue   # D-3593
     [ "$d" = "$BAK_KEEP_SNAP" ] && continue
+    [ "$d" = "$BAK_KEEP_DATA" ] && continue
     [ "$d" = "$BAK_KEEP_TREE" ] && continue
     shown="$d"; case "$d" in "$HOME"/*) shown="\$HOME${d#"$HOME"}" ;; esac
     if rm -rf -- "$d" 2>/dev/null; then
-      echo "$lead: backups: pruned $shown (kept: the newest $keep timestamped backups, every one named at or after this run took its lock, this run's own, the newest earlier tree backup and the newest earlier coord.db snapshot; hand-made siblings are never touched)"
+      echo "$lead: backups: pruned $shown (kept: the newest $keep timestamped backups, every one named at or after this run took its lock, this run's own, the newest earlier tree backup, the newest earlier valid coordination snapshot and the newest earlier one that holds data; hand-made siblings are never touched)"
     else
       echo "$lead: backups: WARN: could not prune $shown — every newer backup is intact"
       rc=1

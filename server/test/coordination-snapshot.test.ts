@@ -975,12 +975,36 @@ describe('8B: classify and validate: v1, legacy, none, invalid (W3-M29, W3-M30)'
     expect(classifyCli(dir)).toMatchObject({ status: 0, stdout: 'v1\n' });
     const v = classifyCli(dir, 'validate');
     expect(v.status).toBe(0);
-    expect(v.stdout).toMatch(/^v1: a valid manifest, initialized delegation, coord\.db present\n$/);
+    expect(v.stdout).toMatch(/^v1: a valid manifest, initialized delegation, coord\.db present\ndata: yes\n$/);
     const home = mkHome();
     setLive(home, { journal: J3, checkpoint: CP3 });
     const noDb = snapshotOf(home);
     expect(noDb.manifest.members.coordDb.present).toBe(false);
     expect(classifyCli(noDb.dir)).toMatchObject({ status: 0, stdout: 'v1\n' });
+  });
+
+  it('validate\'s second line says whether the snapshot holds data: a v1 with any member present and a legacy one do; an empty v1, none and invalid do not', () => {
+    const dataOf = (dir: string): string => classifyCli(dir, 'validate').stdout.split('\n')[1]!;
+    const home = mkHome();
+    setLive(home, { journal: J3, checkpoint: CP3, db: { marker: 1 } });
+    expect(dataOf(snapshotOf(home, '20261014-000001').dir)).toBe('data: yes');
+    setLive(home, { journal: null, checkpoint: cpBytes(2, null), db: null });
+    expect(dataOf(snapshotOf(home, '20261014-000002').dir)).toBe('data: yes');                 // a sidecar alone
+    setLive(home, { journal: null, checkpoint: null, db: { marker: 3 } });
+    expect(dataOf(snapshotOf(home, '20261014-000003').dir)).toBe('data: yes');                 // a DB alone
+    setLive(home, { journal: null, checkpoint: null, db: null });
+    const empty = snapshotOf(home, '20261014-000004');
+    expect(empty.manifest.members.coordDb.present).toBe(false);
+    expect(classifyCli(empty.dir)).toMatchObject({ status: 0, stdout: 'v1\n' });
+    expect(dataOf(empty.dir)).toBe('data: no');                                                  // valid, and empty
+    const legacy = snapDirOf(home, '20261014-000005');
+    plantDb(path.join(legacy, 'coord.db'), { tables: ['claims'] });
+    expect(dataOf(legacy)).toBe('data: yes');
+    expect(dataOf(snapDirOf(home, '20261014-000006'))).toBe('data: no');                         // none
+    writeFileSync(path.join(legacy, 'coordination-snapshot.json'), '{');
+    expect(dataOf(legacy)).toBe('data: no');                                                     // invalid
+    // The four words and their exits are what they were; `data` is only ever a second line of `validate`.
+    expect(classifyCli(legacy)).toMatchObject({ status: 2, stdout: 'invalid\n' });
   });
 
   it('no manifest, no sidecars, a valid DB without delegation_* tables is legacy (exit 0)', () => {
@@ -1066,7 +1090,7 @@ describe('8B: classify and validate: v1, legacy, none, invalid (W3-M29, W3-M30)'
         tamper(dir);
         expect(H.classify({ from: dir }).kind).toBe('invalid');
         expect(classifyCli(dir)).toMatchObject({ status: 2, stdout: 'invalid\n' });
-        expect(classifyCli(dir, 'validate').stdout).toMatch(/^invalid: /);
+        expect(classifyCli(dir, 'validate').stdout).toMatch(/^invalid: .*\ndata: no\n$/);
       });
     }
     it('even a manifest that cannot be parsed at all, beside a perfectly healthy legacy DB, is invalid and never legacy', () => {
@@ -1121,6 +1145,14 @@ function restoreFixture(): { home: string; dir: string; oldState: Five; newState
   return { home, dir: path.join(home, path.relative(restoreTemplate.home, restoreTemplate.dir)), oldState: restoreTemplate.oldState, newState: restoreTemplate.newState };
 }
 const inactive = (): string => 'inactive';
+/** One clean restore on a fresh fixture: where the two marker publications sit among the mutating operations, and the whole log. */
+function cleanRestoreRun(): { total: number; replacingAt: number; committedAt: number; ops: string[] } {
+  const { home, dir } = restoreFixture();
+  const { fs, log } = loggedFs(home);
+  H.restore({ home, from: dir, fs, probe: inactive });
+  const markerRenames = log.mutating.map((p, i) => ({ i, op: log.ops[p]! })).filter((x) => /^rename .*coordination-restore\.json\.partial -> /.test(x.op));
+  return { total: log.mutating.length, replacingAt: markerRenames[0]!.i, committedAt: markerRenames[1]!.i, ops: log.ops };
+}
 const NO_MUTATION = new Set(['lstat', 'readFile', 'openRead', 'read', 'readdir']);
 
 describe('8B: restore requires the service MEASURED inactive (W3-M34)', () => {
@@ -1144,15 +1176,33 @@ describe('8B: restore requires the service MEASURED inactive (W3-M34)', () => {
     });
   }
   it('recover is held to the same rule', () => {
-    const { home, dir, newState } = restoreFixture();
-    const { fs } = loggedFs(home, { crashAt: 14 });
+    const { home, dir, oldState } = restoreFixture();
+    const { fs } = loggedFs(home, { crashAt: cleanRestoreRun().replacingAt + 3 });   // the replacing marker is durable, the old set is not yet back
     outcome(() => H.restore({ home, from: dir, fs, probe: inactive }));
     expect(existsSync(liveFile(home, 'coordination-restore.json')) || existsSync(liveFile(home, 'coordination-restore.stage'))).toBe(true);
     for (const state of ['active', 'unmeasured']) {
       expect(outcome(() => H.recover({ home, probe: () => state })), state).toMatchObject({ ok: false, code: 'service-not-inactive' });
     }
-    expect(outcome(() => H.recover({ home, probe: inactive })).ok).toBe(true);
-    expect(newState).toBeDefined();
+    expect(outcome(() => H.recover({ home, probe: inactive }))).toMatchObject({ ok: true, value: 'rolled-back' });
+    expect(liveState(home)).toEqual(oldState);
+  });
+
+  it('the service is measured AGAIN once the marker is durable: a unit that started in between refuses the restore, which puts nothing aside and clears its marker', () => {
+    for (const second of ['active', 'unmeasured']) {
+      const f = restoreFixture();
+      const answers = ['inactive', second];
+      let asked = 0;
+      const { fs, log } = loggedFs(f.home);
+      const r = outcome(() => H.restore({ home: f.home, from: f.dir, fs, probe: () => { asked++; return answers.shift() ?? 'active'; } }));
+      expect(r, second).toMatchObject({ ok: false, code: 'service-not-inactive' });
+      expect(asked, 'the probe ran twice').toBe(2);
+      expect(liveState(f.home), second).toEqual(f.oldState);
+      expect(dirListing(liveDir(f.home)).filter((n) => /restore/.test(n)), second).toEqual([]);
+      // The marker WAS published (the second probe comes after it), and no live member was renamed before the refusal.
+      const markerAt = log.ops.findIndex((o) => /^rename .*coordination-restore\.json\.partial -> /.test(o));
+      expect(markerAt).toBeGreaterThan(-1);
+      expect(log.ops.slice(0, markerAt + 1).some((o) => /^rename <root>\/\.ccrc\/(coord\.db|delegation-)/.test(o))).toBe(false);
+    }
   });
 
   describe('through the command line, with a fake systemctl on a private PATH', () => {
@@ -1190,6 +1240,18 @@ describe('8B: restore requires the service MEASURED inactive (W3-M34)', () => {
       expect(r.status).toBe(2);
       expect(r.stderr).toMatch(/could not be measured as inactive/);
       expect(liveState(home)).toEqual(oldState);
+    });
+    it('a systemctl that says inactive on the first call and active on the second refuses with exit 2 and leaves the live set alone', () => {
+      const { home, dir, oldState } = restoreFixture();
+      const b = path.join(home, 'bin2');
+      mkdirSync(b);
+      writeFileSync(path.join(b, 'systemctl'), '#!/bin/sh\nif [ -f "$HOME/probed-once" ]; then echo active; exit 0; fi\n: > "$HOME/probed-once"\necho inactive\nexit 3\n');
+      chmodSync(path.join(b, 'systemctl'), 0o755);
+      const r = restoreCli(home, dir, { PATH: b });
+      expect(r.status, r.stderr).toBe(2);
+      expect(r.stderr).toMatch(/ccrc\.service is running/);
+      expect(liveState(home)).toEqual(oldState);
+      expect(dirListing(liveDir(home)).filter((n) => /restore/.test(n))).toEqual([]);
     });
     it('probeService reads the same words', () => {
       const home = mkHome();
@@ -1336,13 +1398,7 @@ describe('8B: an absent DB is removed only by the manifest\'s explicit acknowled
 
 describe('8B: the replacement fault matrix, and the interrupted-restore table (W3-M35, W3-M37)', () => {
   // One clean run tells where the two marker publications sit among the mutating operations.
-  const clean = (() => ({ get: () => {
-    const { home, dir } = restoreFixture();
-    const { fs, log } = loggedFs(home);
-    H.restore({ home, from: dir, fs, probe: inactive });
-    const markerRenames = log.mutating.map((p, i) => ({ i, op: log.ops[p]! })).filter((x) => /^rename .*coordination-restore\.json\.partial -> /.test(x.op));
-    return { total: log.mutating.length, replacingAt: markerRenames[0]!.i, committedAt: markerRenames[1]!.i, ops: log.ops };
-  } }))();
+  const clean = { get: cleanRestoreRun };
   const isOld = (s: Five, f: { oldState: Five }): boolean => FIVE.every((n) => s[n] === f.oldState[n]);
   const isNew = (s: Five, f: { newState: Five }): boolean => FIVE.every((n) => s[n] === f.newState[n]);
   const leftovers = (home: string): string[] => dirListing(liveDir(home)).filter((n) => /restore/.test(n));

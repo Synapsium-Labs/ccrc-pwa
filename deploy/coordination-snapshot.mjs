@@ -11,15 +11,20 @@
 // coverage. It does NOT know the closed event-kind and lease-source vocabularies (those live in `shared/api.ts`, and a copy here
 // would be a second spelling of them): it checks the record GRAMMAR and the hashes, which is what makes bytes a faithful copy;
 // whether an event is one the server understands is the server's recovery, which runs again when the server starts.
+// ONE RULE IS THIS FILE'S ALONE, with no server counterpart and so no row in the differential: `suffixAfter` (the first retained
+// journal record must sit at or below the checkpoint's applied sequence plus one). It cannot fire in wave 3, which compacts
+// nothing, and it is tested on this side only.
 //
 // WHAT IT NEVER DOES. It never opens `coord.db` for writing, never follows a symlink for a member or a marker, never writes
 // outside the directory it is given (capture) or `~/.ccrc` (restore), and never touches a service: restore asks whether the
-// server is running and refuses unless it MEASURES it inactive. `backup-coord.mjs` stays the SQLite-only snapshot; this file
+// server is running and refuses unless it MEASURES it inactive, and asks again once its marker is durable. While the marker stands,
+// delegation recovery (`recoverDelegationFromFiles`) refuses to run; the server's boot is not yet wired to that refusal (Task 13). `backup-coord.mjs` stays the SQLite-only snapshot; this file
 // reads the DB snapshot it made and describes it.
 //
 // VERBS (exit codes). `capture --dir <timestamp dir>`: 0 manifest durable, 1 refused or exhausted (no manifest, no partials).
 // `classify --from <dir>` prints `v1`, `legacy`, `none` or `invalid` and exits 0, 0, 1, 2. `validate --from <dir>` is `classify`
-// with its reasons. `restore --from <dir>`: 0 done, 1 failed (the live set is the old one, or `recover` finishes it), 2 refused
+// with its reasons: line 1 is `<word>: <reason>`, line 2 is `data: yes|no` (a v1 snapshot with any member present, or a legacy
+// one, holds data; the retention keeps the newest such snapshot beside the newest valid one, D-4641). `restore --from <dir>`: 0 done, 1 failed (the live set is the old one, or `recover` finishes it), 2 refused
 // before any live mutation. `recover`: finishes an interrupted restore, 0 / 1 / 2 the same way. 70: usage, or the helper itself
 // failed (an exception it did not name).
 import { createHash } from 'node:crypto';
@@ -35,7 +40,7 @@ export const JOURNAL_FILE = 'delegation-events.log';
 export const CHECKPOINT_FILE = 'delegation-checkpoint.json';
 export const DB_FILE = 'coord.db';
 export const MANIFEST_FILE = 'coordination-snapshot.json';
-/** Live restore bookkeeping, in the coordination directory itself. The server refuses to start while the marker exists. */
+/** Live restore bookkeeping, in the coordination directory itself. Delegation recovery refuses to run while the marker exists (the server's boot is not yet wired to it, Task 13). */
 export const RESTORE_MARKER_FILE = 'coordination-restore.json';
 export const RESTORE_STAGE_DIR = 'coordination-restore.stage';
 /** The five files a restore replaces as one set. WAL and SHM are not manifest members: a restored DB must never meet an old WAL. */
@@ -784,7 +789,8 @@ function verifyV1(fs, from) {
  * Classifies a timestamp directory. `v1`: a valid manifest and everything it names. `legacy`: no manifest and no sidecars, a valid
  * coord.db with no `delegation_*` table. `none`: no coordination snapshot at all. `invalid`: anything else that claims to be
  * one. A PRESENT manifest that is invalid is `invalid` and never falls back to the DB beside it.
- * @returns {{kind: 'v1' | 'legacy' | 'none' | 'invalid', reason: string, manifest: object | null}}
+ * `data` is true for a v1 snapshot with any member present and for a legacy one (validated, never inferred from file presence).
+ * @returns {{kind: 'v1' | 'legacy' | 'none' | 'invalid', reason: string, manifest: object | null, data?: boolean}}
  */
 export function classify({ from, fs = realFs }) {
   const st = fs.lstat(from);
@@ -792,7 +798,8 @@ export function classify({ from, fs = realFs }) {
   if (fs.lstat(path.join(from, MANIFEST_FILE)) !== null) {
     try {
       const manifest = verifyV1(fs, from);
-      return { kind: 'v1', reason: `a valid manifest, ${manifest.delegation.state} delegation, coord.db ${manifest.members.coordDb.present ? 'present' : 'absent'}`, manifest };
+      const data = Object.values(manifest.members).some((m) => m.present);
+      return { kind: 'v1', reason: `a valid manifest, ${manifest.delegation.state} delegation, coord.db ${manifest.members.coordDb.present ? 'present' : 'absent'}`, manifest, data };
     } catch (err) {
       if (err instanceof SnapError) return { kind: 'invalid', reason: err.message, manifest: null };
       // A symlink where a member should be, a directory, a permission error: the snapshot cannot be read as one, which is not "none".
@@ -809,7 +816,7 @@ export function classify({ from, fs = realFs }) {
   const state = inspectDb(path.join(from, DB_FILE));
   if (!state.ok) return { kind: 'invalid', reason: `coord.db ${state.why}`, manifest: null };
   if (state.delegationTables.length > 0) return { kind: 'invalid', reason: `coord.db holds ${state.delegationTables[0]} and has no manifest`, manifest: null };
-  return { kind: 'legacy', reason: 'a valid coord.db from before the coordination sidecars', manifest: null };
+  return { kind: 'legacy', reason: 'a valid coord.db from before the coordination sidecars', manifest: null, data: true };
 }
 
 // ── The service probe ─────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -901,7 +908,7 @@ function requireInactive(probe) {
 /**
  * Replaces the live coordination set (journal, checkpoint, coord.db, its WAL and SHM) with a validated snapshot, as one unit.
  * Order: validate the source; require the service measured inactive; stage the new files beside the live ones; publish the
- * restore marker (from here the server refuses to start); set the old files aside and place the new; verify what was placed;
+ * restore marker (from here delegation recovery refuses to run), probe the service again; set the old files aside and place the new; verify what was placed;
  * make `committed` durable; clean up and remove the marker. A failure before `committed` puts the old set back; one after
  * it finishes forward. An explicit manifest `coordDb.present:false` is the ONLY thing that removes the DB, WAL and SHM without
  * replacing them.
@@ -959,10 +966,13 @@ export function restore(opts) {
     fs.fsyncDir(oldDir);
     fs.fsyncDir(stage);
     fs.fsyncDir(ccrcDir);
-    // 5. Publish the active marker. From here on, the server refuses to start until it is gone.
+    // 5. Publish the active marker. From here on, delegation recovery refuses to run until it is gone.
     const marker = { format: MARKER_FORMAT, version: 1, state: 'replacing', startedAt: now().toISOString(), old };
     published = true;       // set BEFORE the write: a write that fails after its rename has still published the marker
     writeMarker(fs, ccrcDir, marker);
+    // 5b. Ask again, now the marker is durable: a unit that started between the first probe and here would keep writing to inodes
+    // about to be set aside. Not inactive: the catch below rolls back (nothing has moved yet), clears the marker and re-throws this.
+    requireInactive(probe);
     // 6. Set the old files aside, then place the new ones.
     for (const name of RESTORE_SET) {
       if (old[name]) fs.rename(path.join(ccrcDir, name), path.join(oldDir, name));
@@ -995,7 +1005,7 @@ export function restore(opts) {
       const m = readMarker(fs, ccrcDir);
       // A marker already `committed` goes FORWARD, and that is `recover`'s: the new set is whole and in place.
       if (m === null || m.state === 'replacing') { rollbackRestore(fs, ccrcDir, m ?? { old }); finalizeRestore(fs, ccrcDir); }
-    } catch { /* the marker stays: the server refuses to start and `recover` finishes it */ }
+    } catch { /* the marker stays: delegation recovery refuses to run and `recover` finishes it */ }
     throw err;
   }
   // 9. Clean up. A failure here leaves a committed marker that `recover` finalizes.
@@ -1038,7 +1048,7 @@ export function recover(opts) {
 
 // ── The command line ───────────────────────────────────────────────────────────────────────────────────────────────────────
 
-const USAGE = 'usage: node coordination-snapshot.mjs capture --dir <timestamp dir> | classify --from <dir> | validate --from <dir> | restore --from <dir> | recover';
+const USAGE = 'usage: node coordination-snapshot.mjs capture --dir <timestamp dir> | classify --from <timestamp-directory> | validate --from <timestamp-directory> | restore --from <timestamp-directory> | recover';
 
 function argValue(argv, flag) {
   const i = argv.indexOf(flag);
@@ -1056,10 +1066,10 @@ export function main(argv, env = process.env, io = { out: (s) => process.stdout.
       if (from === null || rest.length !== 2) { io.err(`${USAGE}\n`); return 70; }
       const v = classify({ from: path.resolve(from) });
       if (verb === 'classify') io.out(`${v.kind}\n`);
-      else io.out(`${v.kind}: ${v.reason}\n`);
+      else io.out(`${v.kind}: ${v.reason}\ndata: ${v.data === true ? 'yes' : 'no'}\n`);
       return v.kind === 'v1' || v.kind === 'legacy' ? 0 : v.kind === 'none' ? 1 : 2;
     }
-    if (typeof home !== 'string' || home === '' || !path.isAbsolute(home)) { io.err('coordination-snapshot: HOME is not an absolute path\n'); return 70; }
+    if (typeof home !== 'string' || home === '' || !path.isAbsolute(home)) { io.err('coordination snapshot: HOME is not an absolute path\n'); return 70; }
     if (verb === 'capture') {
       const dir = argValue(rest, '--dir');
       if (dir === null || rest.length !== 2) { io.err(`${USAGE}\n`); return 70; }
@@ -1083,8 +1093,8 @@ export function main(argv, env = process.env, io = { out: (s) => process.stdout.
     io.err(`${USAGE}\n`);
     return 70;
   } catch (err) {
-    if (err instanceof SnapError) { io.err(`coordination-snapshot: ${err.message}\n`); return verb === 'classify' || verb === 'validate' ? 70 : err.exit; }
-    io.err(`coordination-snapshot: helper failure: ${err instanceof Error ? err.message : String(err)}\n`);
+    if (err instanceof SnapError) { io.err(`coordination snapshot: ${err.message}\n`); return verb === 'classify' || verb === 'validate' ? 70 : err.exit; }
+    io.err(`coordination snapshot: helper failure: ${err instanceof Error ? err.message : String(err)}\n`);
     return 70;
   }
 }
