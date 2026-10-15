@@ -8765,14 +8765,20 @@ _check_delegation-hooks() {
       def own: type == "object" and ((.hooks // []) | type == "array")
         and any((.hooks // [])[]?; type == "object" and ((.command // "") | tostring | contains("/session-hook.sh")));
       def managed($star): type == "array" and any(.[]?; own and (($star == null) or .matcher == $star));
+      # One word per HOOK of an entry list, not per entry (R55): "own" if its command names /session-hook.sh, else "other"
+      # (an entry with no hooks list, or a hook with no command, is "other": it is not the ccrc hook).
+      def cmds: .[]? | if type == "object" and ((.hooks // []) | type) == "array" and ((.hooks // []) | length) > 0
+        then (.hooks[] | if type == "object" and ((.command // "") | tostring | contains("/session-hook.sh")) then "own" else "other" end)
+        else "other" end;
       if length != 1 then "DOCS"
       elif (.[0] | type) != "object" then "SHAPE"
       elif ((.[0].hooks // {}) | type) != "object" then "SHAPE"
       else (.[0].hooks // {}) as $h
         | ($want[] | select(. as $e | ($h[$e] | managed(if $e == "PreToolUse" then "*" else null end)) | not) | "MISSING\t" + .),
           (("WorktreeCreate", "WorktreeRemove") as $e | ($h[$e] // []) as $a
-            | (if ($a | type) == "array" and ($a | any(.[]; own)) then "OWN\t" + $e else empty end),
-              (if ($a | type) != "array" or ($a | any(.[]; own | not)) then "FOREIGN\t" + $e else empty end))
+            | ([$a | cmds] as $c
+              | (if ($c | any(. == "own")) then "OWN\t" + $e else empty end),
+                (if ($a | type) != "array" or ($c | any(. == "other")) then "FOREIGN\t" + $e else empty end)))
       end' "$f" 2>/dev/null)"; rc=$?
     if [ "$rc" -ne 0 ]; then unread+=("$id: settings.json is not valid JSON"); continue; fi
     if [ "$out" = DOCS ]; then unread+=("$id: settings.json is empty or holds more than one JSON document"); continue; fi
@@ -8875,7 +8881,7 @@ _check_delegation-hooks() {
   fi
   if [ "${#ownworktree[@]}" -gt 0 ]; then
     _dr_fail delegation-hooks "ccrc's own session hook is registered under an event it never registers — a registered hook for WorktreeCreate or WorktreeRemove replaces Claude Code's own worktree handling: $(_dr_join "${ownworktree[@]}")" \
-      "run 'ccrc doctor --fix' (the shipped installer's sweep removes ccrc's own entry from every event, and leaves any other command registered there as it found it)"
+      "run 'ccrc doctor --fix' (it removes ccrc's own entry from every event; an entry of its own that names another command is kept, but an entry shared with ccrc's hook is not, so --fix refuses a home that has one: move the other command into an entry of its own first)"
     worst=1
   fi
   if [ "${#spool_bad[@]}" -gt 0 ]; then
@@ -8906,8 +8912,10 @@ _check_delegation-hooks() {
     s=sessions; [ "$n" -eq 1 ] && s=session
     local who="$n running sessions have no delegation spool directory yet, so they are not observed until their next spawn (a swap or a respawn)"
     [ "$n" -eq 1 ] && who="1 running session has no delegation spool directory yet, so it is not observed until its next spawn (a swap or a respawn)"
+    local how="stop and start it through ccd ('ccd stop ${spool_none[0]}', then 'ccd start ${spool_none[0]}')"
+    [ "$n" -eq 1 ] || how="stop and start each through ccd (for example 'ccd stop ${spool_none[0]}', then 'ccd start ${spool_none[0]}')"
     _dr_warn delegation-hooks "$who: $shown$more" \
-      "nothing is lost by waiting: ccd makes the directory at the next spawn. To observe the $s now, stop and start it through ccd ('ccd stop ${spool_none[0]}', then 'ccd start ${spool_none[0]}') — this resumes its conversation but ends an in-flight turn"
+      "nothing is lost by waiting: ccd makes the directory at the next spawn. To observe the $s now, $how — this resumes its conversation but ends an in-flight turn"
     [ "$worst" -eq 1 ] || worst=2
   fi
   if [ "$unasked" -gt 0 ]; then
@@ -8926,23 +8934,56 @@ _check_delegation-hooks() {
 # install-session-hooks.sh`, into every rostered home that exists on this box — the tree the check measured, never a
 # copy of its logic, so this is not a second hook installer. The installer validates before it writes, backs up what it
 # replaces, swaps managed entries only (ccrc's own hook under a Worktree event included) and leaves every foreign one (a
-# `WorktreeCreate` hook naming another command included) byte-identical;
-# a home it refuses (invalid JSON) stays a FAIL on the re-measurement, which is the verdict. It creates no spool
-# directory: that is ccd's, at spawn.
+# `WorktreeCreate` hook naming another command included) byte-identical; a home it refuses (invalid JSON) stays a FAIL on
+# the re-measurement, which is the verdict. It creates no spool directory: that is ccd's, at spawn.
+#
+# ONE HOME IT DOES NOT HAND TO THE INSTALLER (R55, coordinator 5180). The installer's sweep (`JQ_UNMANAGED`) drops a whole
+# entry when ANY hook in it names `/session-hook.sh`, so an entry that carries ccrc's hook AND another command loses the
+# other command — under every event, on `ccrc install` and `ccrc update` as well as here. This fixer is the first
+# `doctor --fix` path into that drop, and "never removes or rewrites a foreign registration" (5151) binds it: before a
+# home goes to the installer its settings.json is read for any such mixed entry, under any event. A home that has one is
+# REFUSED (its file untouched, byte for byte), the refusal names the event and the manual step, and the other homes are
+# fixed as before. A settings.json jq cannot read is left to the installer, which refuses it in its own words.
+_dh_mixed_events() {   # <settings.json> -> the events (one per line) holding an entry that mixes ccrc's hook with another command
+  jq -r '
+    (.hooks // {}) | if type == "object" then to_entries[] else empty end
+    | select(.value | type == "array")
+    | select(any(.value[]?; type == "object" and ((.hooks // []) | type) == "array"
+        and ([.hooks[]? | type == "object" and ((.command // "") | tostring | contains("/session-hook.sh"))] as $o
+          | ($o | any) and ($o | any(not)))))
+    | .key' "$1" 2>/dev/null
+}
+
 _fix_delegation-hooks() {
-  local inst="$CCRC_HERE/install-session-hooks.sh" roster="$HOME/.ccrc/accounts.json" rows id suffix dir said n=0 list=""
+  local inst="$CCRC_HERE/install-session-hooks.sh" roster="$HOME/.ccrc/accounts.json" rows id suffix dir said n=0 list="" mixed evs refused=0
   local -a dirs=()
   rows="$(_skills_roster_rows "$roster")" || { echo "FIX delegation-hooks: refused — \$HOME/.ccrc/accounts.json could not be read as a roster"; return 1; }
   while IFS=$'\t' read -r id suffix; do
     [ -n "$id" ] || continue
     dir="$HOME/$suffix"
     [ -d "$dir" ] || continue
+    if [ -f "$dir/settings.json" ] && [ -r "$dir/settings.json" ] && command -v jq >/dev/null 2>&1; then
+      mixed="$(_dh_mixed_events "$dir/settings.json")"
+      if [ -n "$mixed" ]; then
+        evs="$(_dr_join $mixed)"; evs="${evs//; /, }"
+        case "$evs" in
+          *,*) said="under each of $evs" ;;
+          *) said="under $evs" ;;
+        esac
+        echo "FIX delegation-hooks: refused — $id: $evs holds an entry that mixes ccrc's session hook with another command, and the sweep that --fix, ccrc install and ccrc update run removes the whole entry that carries ccrc's hook, other commands included; move the other command into an entry of its own $said, then re-run ccrc doctor --fix"
+        refused=1; continue
+      fi
+    fi
     dirs+=("$dir"); n=$((n + 1)); list="$list${list:+, }$id"
   done <<< "$rows"
-  [ "$n" -gt 0 ] || { echo "FIX delegation-hooks: nothing to cure — no rostered home exists on this box"; return 0; }
+  if [ "$n" -eq 0 ]; then
+    [ "$refused" -eq 1 ] && return 1
+    echo "FIX delegation-hooks: nothing to cure — no rostered home exists on this box"; return 0
+  fi
   # The interpreter running THIS file, as `_fix_skills` runs its installers.
   if ! said="$("${BASH:-bash}" "$inst" --homes "${dirs[@]}" 2>&1)"; then
     echo "FIX delegation-hooks: refused — $inst said: ${said##*$'\n'}"; return 1
   fi
   echo "FIX delegation-hooks: re-ran the shipped tree's install-session-hooks.sh into $n home(s): $list"
+  [ "$refused" -eq 0 ] || return 1
 }

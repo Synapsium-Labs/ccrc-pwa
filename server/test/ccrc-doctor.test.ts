@@ -14606,6 +14606,9 @@ describe('ccrc doctor: box-token', () => {
 // and the end-to-end case below proves the two agree by running the REAL installer into a fixture home. Doctor reads
 // the registration and never prints the file: the cases that plant a secret-looking key assert it never surfaces.
 describe('ccrc doctor: delegation-hooks', () => {
+  /** The own-hook FAIL's remedy (R55): true of what the installer's sweep does, which drops a WHOLE entry that carries ccrc's hook. */
+  const OWN_REMEDY_TEXT = "  remedy: run 'ccrc doctor --fix' (it removes ccrc's own entry from every event; an entry of its own that names another command is kept, but an entry shared with ccrc's hook is not, so --fix refuses a home that has one: move the other command into an entry of its own first)";
+  const THEIRS = (name: string) => ({ type: 'command', command: `bash "$HOME/bin/${name}.sh"` });
   const SHAPE_REMEDY_TEXT = '  remedy: fix what is named (check with: ls -l $HOME/<home>/settings.json) — this is a mode or shape problem, not a missing registration, and doctor never prints the file';
   /** `_check_delegation-hooks` alone, as `cmd_doctor` runs it (`runHistoryCheck`'s shape). */
   function runDh(home: string, extraEnv: NodeJS.ProcessEnv = {}): Result {
@@ -14889,7 +14892,7 @@ describe('ccrc doctor: delegation-hooks', () => {
 
   describe('the owner spool directory', () => {
     const REMEDY_WAIT = (id: string, what = 'session'): string =>
-      `  remedy: nothing is lost by waiting: ccd makes the directory at the next spawn. To observe the ${what} now, stop and start it through ccd ('ccd stop ${id}', then 'ccd start ${id}') — this resumes its conversation but ends an in-flight turn`;
+      `  remedy: nothing is lost by waiting: ccd makes the directory at the next spawn. To observe the ${what} now, stop and start ${what === 'session' ? 'it' : 'each'} through ccd (${what === 'session' ? '' : 'for example '}'ccd stop ${id}', then 'ccd start ${id}') — this resumes its conversation but ends an in-flight turn`;
 
     it('a RUNNING session with no owner directory is a WARN (D-4651, R53), not a FAIL: it is observed at its next spawn, and the remedy says what makes it so now', () => {
       const home = dhBox('ccrc-doctor-dh-spool-missing-');
@@ -15083,17 +15086,30 @@ describe('ccrc doctor: delegation-hooks', () => {
       const r = runDh(home);
       expect(verdicts(r)).toEqual([
         `FAIL delegation-hooks: ccrc's own session hook is registered under an event it never registers — a registered hook for WorktreeCreate or WorktreeRemove replaces Claude Code's own worktree handling: claude: ${ev}`]);
-      expect(remedyOf(r, /^FAIL /)).toBe(
-        "  remedy: run 'ccrc doctor --fix' (the shipped installer's sweep removes ccrc's own entry from every event, and leaves any other command registered there as it found it)");
+      expect(remedyOf(r, /^FAIL /)).toBe(OWN_REMEDY_TEXT);
       expect(r.code).toBe(1);
     });
 
-    it('a Worktree event holding ccrc\'s own entry AND another command is both: the FAIL for the first, the WARN for the second', () => {
+    it.each(['WorktreeCreate', 'WorktreeRemove'])('ONE %s entry holding ccrc\'s hook AND another command is both: the FAIL for the first, then the WARN for the second (R55: per hook, not per entry)', (ev) => {
       const home = dhBox('ccrc-doctor-dh-own-and-foreign-');
+      const f = join(home, '.claude', 'settings.json');
+      const j = JSON.parse(readFileSync(f, 'utf8'));
+      j.hooks[ev] = [{ hooks: [{ type: 'command', command: installerHook().command }, THEIRS('their-worktree-hook')] }];
+      writeFileSync(f, JSON.stringify(j));
+      const r = runDh(home);
+      expect(verdicts(r)).toEqual([
+        `FAIL delegation-hooks: ccrc's own session hook is registered under an event it never registers — a registered hook for WorktreeCreate or WorktreeRemove replaces Claude Code's own worktree handling: claude: ${ev}`,
+        `WARN delegation-hooks: ${ev} is registered, and ccrc never registers it — a registered hook for either event replaces Claude Code's own worktree handling: claude: ${ev}`]);
+      expect(remedyOf(r, /^FAIL /)).toBe(OWN_REMEDY_TEXT);
+      expect(r.code).toBe(1);
+    });
+
+    it('SEPARATE entries (ccrc\'s, and another command\'s) are still both, as before', () => {
+      const home = dhBox('ccrc-doctor-dh-own-and-foreign-sep-');
       plantHookRegistration(home, '.claude', { ownWorktree: ['WorktreeCreate'] });
       const f = join(home, '.claude', 'settings.json');
       const j = JSON.parse(readFileSync(f, 'utf8'));
-      j.hooks.WorktreeCreate.push({ hooks: [{ type: 'command', command: 'bash "$HOME/bin/their-worktree-hook.sh"' }] });
+      j.hooks.WorktreeCreate.push({ hooks: [THEIRS('their-worktree-hook')] });
       writeFileSync(f, JSON.stringify(j));
       const r = runDh(home);
       expect(verdicts(r).map((l) => l.split(':')[0])).toEqual(['FAIL delegation-hooks', 'WARN delegation-hooks']);
@@ -15253,6 +15269,61 @@ CCRC_DOCTOR_CHECKS=(delegation-hooks)
       expect(after.hooks.WorktreeCreate).toEqual([theirs]);
       expect(after.hooks.WorktreeRemove).toEqual(foreignBefore);
       expect(r.stdout).toMatch(/^WARN delegation-hooks: WorktreeCreate, WorktreeRemove are registered/m);
+    });
+
+    /** A home whose `event` holds ONE entry that carries ccrc's hook and another command, plus a defect that makes the check FAIL. */
+    const mixedHome = (prefix: string, event: string, also: { omit?: string[] } = {}): { home: string; f: string } => {
+      const home = dhBox(prefix);
+      for (const tool of ['cp', 'mv', 'mkdir', 'cat', 'date', 'rm', 'basename', 'cmp']) linkReal(home, tool);
+      plantHookRegistration(home, '.claude', { omit: also.omit ?? [] });
+      const f = join(home, '.claude', 'settings.json');
+      const j = JSON.parse(readFileSync(f, 'utf8'));
+      j.hooks[event] = [{ hooks: [{ type: 'command', command: installerHook().command }, THEIRS('their-shared-hook')] }];
+      writeFileSync(f, JSON.stringify(j, null, 2));
+      onlyThisCheck(home);
+      return { home, f };
+    };
+    const REFUSAL = (ev: string): RegExp => new RegExp(
+      `^FIX delegation-hooks: refused — claude: ${ev} holds an entry that mixes ccrc's session hook with another command, and the sweep that --fix, ccrc install and ccrc update run removes the whole entry that carries ccrc's hook, other commands included; move the other command into an entry of its own under ${ev}, then re-run ccrc doctor --fix$`, 'm');
+
+    it('REFUSES a home whose Worktree entry mixes ccrc\'s hook with another command: the file is byte-identical, the remedy names the event and the manual step, and the check still shows FAIL then WARN', () => {
+      const { home, f } = mixedHome('ccrc-doctor-dh-fix-mixed-worktree-', 'WorktreeCreate');
+      const before = readFileSync(f);
+      const r = runDoctor(home, ['doctor', '--fix']);
+      expect(r.stdout).toMatch(REFUSAL('WorktreeCreate'));
+      expect(Buffer.compare(readFileSync(f), before), 'the settings file changed').toBe(0);
+      const ls = r.stdout.split('\n');
+      // as measured, then as re-measured after the refused fix: FAIL then WARN both times
+      expect(ls.filter((l) => /^(FAIL|WARN) delegation-hooks: /.test(l)).map((l) => l.split(':')[0])).toEqual(
+        ['FAIL delegation-hooks', 'WARN delegation-hooks', 'FAIL delegation-hooks', 'WARN delegation-hooks']);
+      expect(r.stdout).toMatch(/^WARN delegation-hooks: WorktreeCreate is registered/m);
+      expect(r.code).toBe(1);
+      // …and the other command is still there, in the entry it was planted in.
+      expect(JSON.stringify(JSON.parse(readFileSync(f, 'utf8')).hooks.WorktreeCreate)).toContain('their-shared-hook');
+    });
+
+    it('REFUSES a home whose NON-Worktree entry mixes ccrc\'s hook with another command too (5180): byte-identical, and the remedy names that event', () => {
+      const { home, f } = mixedHome('ccrc-doctor-dh-fix-mixed-stop-', 'Stop', { omit: ['SessionEnd'] });
+      const before = readFileSync(f);
+      const r = runDoctor(home, ['doctor', '--fix']);
+      expect(r.stdout).toMatch(REFUSAL('Stop'));
+      expect(Buffer.compare(readFileSync(f), before), 'the settings file changed').toBe(0);
+      // the check is unchanged for an approved event: it names the missing registration, and nothing about the mixed entry
+      expect(r.stdout).toMatch(/^FAIL delegation-hooks: the shipped hook registration is missing from 1 rostered home: claude: SessionEnd$/m);
+      expect(r.stdout).not.toMatch(/^(FAIL|WARN) delegation-hooks: [^\n]*their-shared-hook/m);
+    });
+
+    it('refuses only the mixed home: another home is fixed as before', () => {
+      const { home, f } = mixedHome('ccrc-doctor-dh-fix-mixed-one-home-', 'PostToolUse', { omit: ['SessionEnd'] });
+      writeRoster(home, [UPSTREAM, { id: 'lane-a', exec: { kind: 'generated' }, telemetry: 'anthropic' } as RosterEntry]);
+      mkdirSync(join(home, '.lane-a'), { recursive: true });
+      const before = readFileSync(f);
+      const r = runDoctor(home, ['doctor', '--fix']);
+      expect(r.stdout).toMatch(REFUSAL('PostToolUse'));
+      expect(r.stdout).toMatch(/^FIX delegation-hooks: re-ran the shipped tree's install-session-hooks\.sh into 1 home\(s\): lane-a$/m);
+      expect(Buffer.compare(readFileSync(f), before)).toBe(0);
+      const fixed = JSON.parse(readFileSync(join(home, '.lane-a', 'settings.json'), 'utf8'));
+      expect(Object.keys(fixed.hooks).sort()).toEqual([...installerEvents()].sort());
     });
 
     it('refuses, saying so, when the roster cannot be read (the check FAILed on it first)', () => {
