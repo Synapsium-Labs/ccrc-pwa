@@ -409,9 +409,12 @@ describe('card delivery, scope, withdrawal, window and purge decisions (spec 8.6
       ['a store.id naming another store', { arm: 'hold', word: 'store-mismatch' }, 'refused'],
       ['a newer schema', { arm: 'hold', word: 'schema-newer' }, 'refused'],
       ['a DB no store.id binds', { arm: 'hold', word: 'store-unbound' }, 'unbound'],
+      ['a session whose transcript copy the pass skipped (D-5061)', { arm: 'copy', uuid: 'u-1', skipped: ['u-0', 'u-1'] }, 'copy-skipped'],
     ];
     for (const [name, pass, reason] of rows) expect(libCard.decideCardWithdraw(pass), name).toEqual({ act: 'withdraw', reason });
     expect(libCard.decideCardWithdraw(run({})), 'the card step ran over a caught-up ingest').toEqual({ act: 'keep' });
+    expect(libCard.decideCardWithdraw({ arm: 'copy', uuid: 'u-2', skipped: ['u-0', 'u-1'] }), "another session's copy was skipped: its line stands").toEqual({ act: 'keep' });
+    expect(libCard.decideCardWithdraw({ arm: 'copy', uuid: 'u-1', skipped: [] }), 'no copy was skipped').toEqual({ act: 'keep' });
     expect([...new Set(rows.map(([, , r]) => r))].sort(), 'every reason word is reached, and none outside the vocabulary')
       .toEqual([...libCard.CARD_WITHDRAW_REASONS].sort());
     expect(() => libCard.decideCardWithdraw({ arm: 'off' } as unknown as libCard.CardPassFacts)).toThrow(/^decideCardWithdraw: not a pass arm/);
@@ -931,6 +934,54 @@ describe('the sweep writes and consumes card/<id>/<uuid>.txt at end-of-file (spe
     expect(consumedC(box), 'and still once').toEqual({ 'card_consumed:unknown': 1 });
     pokeC(box, ID);   // CONTROL: with the fault gone the next prediction is written
     expect(cardOf(box, ID, U)).toBe(expectedCard(familyC(box, ID), libCard.leafId(ID, U, s.headUuids[0]!)));
+  }, 240_000);
+
+  // D-5061 (history-card-withdraw-on-a-skipped-copy), review 476 F1: a pass that cannot read ONE of a session's copies, or
+  // whose admission refuses it, did not see the boundary that copy may hold, so the standing line (compaction k's) must
+  // not be served as compaction k+1's. The boundary is appended BEFORE the copy is made unreadable, so the copy holds the
+  // consuming boundary the pass cannot read. Another session's prediction, on a copy the pass did read, stands.
+  const skippedCopyCase = (name: string, seed: number, spoil: (p: string) => () => void): void => {
+    const box = makeHistoryBox(`ccrc-hist-card-skip-${name}-`);
+    const [ID, U] = [`card-skip-${name}`, sidC(seed)];
+    const [OID, OU] = [`card-skip-${name}-other`, sidC(seed + 1)];
+    const s = compactionSequence({ n: 3, trigger: 'manual', seed, sessionId: U, startMs: T0C });
+    const p = plantC(box, ID, U, s.rows.slice(0, cutBefore(s, 0)));
+    plantC(box, OID, OU, compactionSequence({ n: 1, trigger: 'manual', seed: seed + 1, sessionId: OU, startMs: T0C }).rows);
+    settleC(box);
+    pokeC(box, ID, OID);
+    const want0 = libCard.leafId(ID, U, firstUuidC(s));
+    expect(cardOf(box, ID, U), 'CONTROL: compaction 0 is served its prediction').toBe(expectedCard([], want0));
+    const other = cardOf(box, OID, OU);
+    expect(other, "CONTROL: the other session's prediction stands").not.toBeNull();
+    appendRows(p, s.rows.slice(cutBefore(s, 0), cutBefore(s, 1)));   // compaction 0 happens: the line is consumed
+    const restore = spoil(p);
+    const withdrawn = counters(box)['card_withdrawn:copy-skipped'] ?? 0;
+    pokeC(box, ID, OID);
+    restore();
+    expect(cardOf(box, ID, U), "the copy was not read: compaction 1 is not served compaction 0's leaf").toBeNull();
+    expect(counters(box)['card_withdrawn:copy-skipped'] ?? 0, 'one prediction withdrawn, counted under the one word').toBe(withdrawn + 1);
+    expect(cardOf(box, OID, OU), "another session's prediction on a copy the pass read stands").toBe(other);
+    expect(consumedC(box), 'a withdrawal is no consumption').toEqual({});
+    pokeC(box, ID, OID);   // the copy readable again: its boundary is ingested and the next prediction written
+    derivedC(box);
+    expect(cardOf(box, ID, U), 'CONTROL: the next pass at end-of-file writes the prediction for compaction 1')
+      .toBe(expectedCard(familyC(box, ID), libCard.leafId(ID, U, s.headUuids[0]!)));
+  };
+
+  it.skipIf(process.getuid?.() === 0)("D-5061 an unreadable copy (mode 000) withdraws that session's prediction, counted card_withdrawn:copy-skipped, and no other", () => {
+    skippedCopyCase('unreadable', 0xf31, (p) => {
+      const mode = fs.statSync(p).mode & 0o777;
+      fs.chmodSync(p, 0o000);
+      return () => fs.chmodSync(p, mode);
+    });
+  }, 240_000);
+
+  it("D-5061 a copy admission refuses (a link at the transcript's name) withdraws that session's prediction, counted card_withdrawn:copy-skipped, and no other", () => {
+    skippedCopyCase('refused', 0xf33, (p) => {
+      fs.renameSync(p, `${p}.real`);
+      fs.symlinkSync(`${p}.real`, p);
+      return () => { fs.rmSync(p); fs.renameSync(`${p}.real`, p); };
+    });
   }, 240_000);
 
   // R-recalloff-parity (spec §9.7, §8.2, C68): when neither CCRC_SESSION_GENERATION nor $REG/<id>.generation resolves a

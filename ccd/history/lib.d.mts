@@ -908,13 +908,14 @@ export type CardConsumedScope = 'main' | 'other' | 'unknown';
 export const CARD_CONSUMED_SCOPES: readonly CardConsumedScope[];
 export type CardWithdrawReason =
   | 'at-cap' | 'low-disk' | 'floor-stop' | 'roster-unreadable' | 'budget' | 'recovering' | 'migrating' | 'held'
-  | 'unreachable' | 'refused' | 'unbound';
+  | 'unreachable' | 'refused' | 'unbound' | 'copy-skipped';
 export const CARD_WITHDRAW_REASONS: readonly CardWithdrawReason[];
 export interface CardBoundaryAt { readonly uuid: string; readonly headUuid: string | null; readonly tsMs: number | null }
 export type CardPassFacts =
   | { arm: 'hold'; word: string }
   | { arm: 'migrate' | 'recover'; word?: string | null }
-  | { arm: 'run'; pause: 'at-cap' | 'low-disk' | null; floorStop: boolean; ingested: boolean; budgetLeft: boolean };
+  | { arm: 'run'; pause: 'at-cap' | 'low-disk' | null; floorStop: boolean; ingested: boolean; budgetLeft: boolean }
+  | { arm: 'copy'; uuid: string; skipped: readonly string[] };
 export function consumedBoundaryTs(i: {
   current: Presence<string>; ccrcId: string | null; ccUuid: string; firstRowUuid: string | null; boundaries: readonly CardBoundaryAt[];
 }): number | null;

@@ -3003,7 +3003,9 @@ export async function bindingPass(home, P, op, args, deps, out) {
  * 16. `cardStep`: §9.2 step 6 under the derivation's gate: the card delivery measure, then the card/ predictions
  *     consumed, deleted and written (card.mjs; W1-B3 Tasks 5 and 6);
  * 17. `withdrawCards`: every card/ prediction unlinked when this tick ran no card step over a caught-up ingest
- *     (ruling RC2: fail closed; lib decideCardWithdraw names the reason);
+ *     (ruling RC2: fail closed; lib decideCardWithdraw names the reason), and, on a pass that kept the rest, the
+ *     predictions of the sessions whose transcript copy ingest skipped (a read error) or admission refused this tick
+ *     (D-5061 (history-card-withdraw-on-a-skipped-copy));
  * 18. `mergeSteps`: §6.2's merge steps, which run under any pause: they free space rather than take it;
  * 19. `recordTick`: the tick's row and journal record (a paused ingest records an unmeasured lag);
  * 20. `collectPurgedHistoryFiles`: at a due scan, the scope markers and card directories of purged sessions,
@@ -3103,7 +3105,7 @@ export async function tick(db, ctx) {
   // budget is read here, before the step. D-4224 D-4740 (history-card-withdrawn-when-not-ticking)
   const cardPass = { arm: 'run', pause: ctx.pause, floorStop: ing !== null && ing.paused, ingested: ing !== null, budgetLeft: budgetLeft(ctx.budget) };
   if (ctx.ingest && !(ing !== null && ing.paused)) cardStep(db, ictx, ctx.budget);
-  withdrawCards(db, ctx.home, cardPass, ctx.out);
+  withdrawCards(db, ctx.home, cardPass, ctx.out, ing === null ? undefined : ing.skipped);   // D-5061: and a skipped copy's session
   // §6.2's merge steps run under any pause (§9.2: only ingest pauses): they purge a late pair's deleted bytes and
   // free space rather than take it.
   mergeSteps(db, ictx, ctx.budget);
@@ -4120,10 +4122,11 @@ function markGoneIfPathless(db, path) {
  *  and ingestTick ends the tick on it. `minNewTsMs` is reported only for a file bound as
  *  `resume`: a first read or a rescan captures rows that may have waited for days before this
  *  store knew the file, which is discovery, not capture lag (Task 20's ticks.lag_ms). */
-export async function ingestPath(db, ctx, f, budget) {
+export async function ingestPath(db, ctx, f, budget, skipped) {
   const a = admitFile(f.path, f.home, ctx.homes, ctx.home);
   if (!a.ok) {
     countAdmission(db, a.why);
+    if (skipped !== undefined) skipped.add(f.uuid);   // W1-B3 (D-5061): a refused copy may hold a boundary this pass did not see
     if (a.why === 'missing') markGoneIfPathless(db, f.path);
     return null;
   }
@@ -4335,7 +4338,8 @@ function isFsError(e) {
  *  counted `file_unreadable`, the file skipped with its cursor where its last committed chunk left it, the scan not
  *  marked done, so the file is found again by the next tick that lists it (at once when it was behind or met by a
  *  scan, which then runs again; a hint-only file at its next hint or the next due scan), and the tick goes on
- *  (D-4340, history-ingest-read-error-skips-file). */
+ *  (D-4340, history-ingest-read-error-skips-file). `skipped` answers the cc uuids of the transcript copies the tick
+ *  could not read (that read error) or admission refused, which the card step's withdrawal reads (D-5061). */
 export async function ingestTick(db, ctx, budget) {
   const scan = ingestScanDue(db, ctx.nowMs);
   const { files, uuids } = candidateFiles(db, ctx, scan);
@@ -4349,18 +4353,23 @@ export async function ingestTick(db, ctx, budget) {
   // marked done (a scan tick's files are found again at the next tick; a hint-only file at its next hint or the next
   // due scan); the tick itself, its sidecars and its row go on.
   let unreadable = false;
+  // W1-B3 (D-5061 (history-card-withdraw-on-a-skipped-copy)): the uuids whose transcript copy this tick could not read or
+  // admission refused. The card step withdraws their predictions (lib decideCardWithdraw, arm 'copy'): a copy that was
+  // not read to its end may hold the boundary that consumes the standing line.
+  const skipped = new Set();
   try {
     for (const f of files) {
       if (!budgetLeft(budget) || ctx.historyOff()) { complete = false; break; }
       let r;
       try {
-        r = await ingestPath(db, ctx, f, budget);
+        r = await ingestPath(db, ctx, f, budget, skipped);
       } catch (e) {
         // One admitted file whose read or open failed (EIO, ESTALE, EACCES, ...) is counted and skipped, its cursor
         // where its last committed chunk left it. Anything the OS did not raise (a programming error, SQLite) leaves.
         if (!isFsError(e)) throw e;
         countAdmission(db, 'unreadable');
         unreadable = true;
+        skipped.add(f.uuid);
         continue;
       }
       if (r === null) continue;
@@ -4381,9 +4390,9 @@ export async function ingestTick(db, ctx, budget) {
     if (scan && complete && !unreadable) recordExamined(db, ctx, [], true);
   } catch (e) {
     if (!isBusy(e)) throw e;
-    return { busy: true, bytes, newEntries, minNewTsMs, paused };
+    return { busy: true, bytes, newEntries, minNewTsMs, paused, skipped };
   }
-  return { busy: false, bytes, newEntries, minNewTsMs, paused };
+  return { busy: false, bytes, newEntries, minNewTsMs, paused, skipped };
 }
 
 /** Launch facts an epoch missed (§2, §6.2 `epochs`; slug history-epoch-cwd-real for `cwd_real`).

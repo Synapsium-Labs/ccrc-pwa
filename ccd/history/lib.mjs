@@ -8023,7 +8023,7 @@ export function decideConsumedScope({ marker, uuid, boundaryTsMs }) {
  *  card step over a caught-up ingest. */
 export const CARD_WITHDRAW_REASONS = Object.freeze([
   'at-cap', 'low-disk', 'floor-stop', 'roster-unreadable', 'budget', 'recovering', 'migrating', 'held', 'unreachable',
-  'refused', 'unbound',
+  'refused', 'unbound', 'copy-skipped',
 ]);
 
 const withdrawFor = (reason) => ({ act: 'withdraw', reason });
@@ -8038,7 +8038,11 @@ const withdrawFor = (reason) => ({ act: 'withdraw', reason });
  *    migrate  → migrating;   recover → recovering;
  *    run      a cap or floor pause → its own word (at-cap, low-disk); the per-chunk floor stopped the ingest →
  *             floor-stop; no ingest ran (an unreadable roster) → roster-unreadable; the run's budget spent before the
- *             card step → budget (the step still consumes and deletes; it only writes nothing); otherwise keep.
+ *             card step → budget (the step still consumes and deletes; it only writes nothing); otherwise keep;
+ *    copy     one session's prediction, on a pass that kept the rest: its uuid among the transcript copies the ingest
+ *             could not read or admission refused this pass → copy-skipped (that copy may hold the boundary that
+ *             consumes the standing line, and the pass cannot see it); any other uuid keep. D-5061
+ *             (history-card-withdraw-on-a-skipped-copy)
  *  A pass that never reaches this (history-off, a server box, a pass no timer starts) withdraws nothing; the hook
  *  serves no line under the first two. D-4740 (history-card-withdrawn-when-not-ticking) */
 export function decideCardWithdraw(p) {
@@ -8049,6 +8053,7 @@ export function decideCardWithdraw(p) {
   }
   if (p.arm === 'migrate') return withdrawFor('migrating');
   if (p.arm === 'recover') return withdrawFor('recovering');
+  if (p.arm === 'copy') return p.skipped.includes(p.uuid) ? withdrawFor('copy-skipped') : { act: 'keep' };
   if (p.arm !== 'run') throw new TypeError(`decideCardWithdraw: not a pass arm: ${JSON.stringify(p.arm)}`);
   if (p.pause === 'at-cap' || p.pause === 'low-disk') return withdrawFor(p.pause);
   if (p.floorStop) return withdrawFor('floor-stop');

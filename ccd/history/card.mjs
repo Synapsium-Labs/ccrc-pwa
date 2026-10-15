@@ -356,9 +356,15 @@ export function cardStep(db, ictx, budget) {
  *  link or not a directory is never entered. Each name is then only unlinked, which removes a link itself, never its
  *  target, and refuses a directory; a name that cannot be unlinked is left for the next pass that withdraws. Counted
  *  `card_withdrawn:<reason>` on `db`; a pass with no DB open (a hold before the open, where nothing is counted: IV2)
- *  prints `history-sweep: card_withdrawn:<reason> <n>` through `out` instead, beside its own word. Answers the number
- *  withdrawn. */
-export function withdrawCards(db, home, pass, out) {
+ *  prints `history-sweep: card_withdrawn:<reason> <n>` through `out` instead, beside its own word. A run pass that kept
+ *  the rest passes `skipped` (ingestTick's uuids) and then also withdraws those sessions' predictions
+ *  (withdrawSkippedCards, below; D-5061). Answers the number withdrawn. */
+export function withdrawCards(db, home, pass, out, skipped) {
+  const n = withdrawAllCards(db, home, pass, out);
+  return n + (skipped === undefined || db === null ? 0 : withdrawSkippedCards(db, home, skipped));
+}
+
+function withdrawAllCards(db, home, pass, out) {
   const d = decideCardWithdraw(pass);
   if (d.act !== 'withdraw') return 0;
   const root = `${historyPaths(home).root}/${CARD_DIR}`;
@@ -372,6 +378,29 @@ export function withdrawCards(db, home, pass, out) {
   }
   if (n > 0 && db !== null) bump(db, `card_withdrawn:${d.reason}`, n);
   if (n > 0 && db === null) out(`history-sweep: card_withdrawn:${d.reason} ${n}`);
+  return n;
+}
+
+/** Withdraws the predictions of the sessions whose transcript copy this pass could not read (the read error of D-4340) or
+ *  admission refused, `skipped` being ingestTick's uuids: such a copy was not read to its end, so it may hold the boundary
+ *  that consumes the standing line, and the pass keeps the rest. lib's decideCardWithdraw (arm 'copy') decides per
+ *  prediction; the record beside a prediction is left as it is. Answers the number withdrawn. The lost-hint shape stays: a boundary whose hint was lost
+ *  and whose copy no pass has read waits for the 30-minute scan. D-5061 (history-card-withdraw-on-a-skipped-copy) */
+export function withdrawSkippedCards(db, home, skipped) {
+  if (skipped.size === 0) return 0;
+  const root = `${historyPaths(home).root}/${CARD_DIR}`;
+  if (lstatKind(root) !== 'dir') return 0;
+  const uuids = [...skipped];
+  let n = 0;
+  for (const { id, uuid } of cardFilesUnder(root)) {
+    const d = decideCardWithdraw({ arm: 'copy', uuid, skipped: uuids });
+    if (d.act !== 'withdraw') continue;
+    try {
+      unlinkSync(cardFileOf(home, id, uuid));
+      n += 1;
+    } catch { /* a directory under a card name, or a name already gone: left for the next pass that skips the copy */ }
+  }
+  if (n > 0) bump(db, 'card_withdrawn:copy-skipped', n);
   return n;
 }
 
