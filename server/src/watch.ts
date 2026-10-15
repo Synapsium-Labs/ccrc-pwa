@@ -49,7 +49,9 @@ import {
   queueStallNotice, queueSystemMail, survivorOf,
 } from './coord/rundefs.js';
 import { landingAsk, landingVerdict, type LandingFacts } from './coord/landing.js';
-import { readWorktreeRecords } from './coord/gitref.js';
+import {
+  readParentGenerations, readWorktreeCensus, settleParentIncarnations, type DelegationCensusPass, type WorktreeCensus,
+} from './coord/gitref.js';
 import { ccdIdForWorktree, divergences, unclaimedWorktrees, type DivergenceInput } from './divergence.js';
 import { claimExpiry, type LivenessProbe } from './coord/claims.js';
 import { measureClaimant } from './coord/reclaim.js';
@@ -767,6 +769,10 @@ export class FleetWatcher {
    *  census's per-sweep map: that retention must never reach the census,
    *  which a failed read may only ever suppress, never feed. */
   private headBranches = new Map<string, { project: string; branch: string | null }>();
+  /** What `sweepDivergences` last prepared for the delegation lane from the census it already takes (wave 3, Task 10): each
+   *  censused project's answer and the incarnation of every registry id the pass used. REPLACED whole by a pass, never merged, so a
+   *  project that was not read is never a stale one; `null` until the first pass. Nothing consumes it before the watcher lane. */
+  private delegationCensus: DelegationCensusPass | null = null;
   /** Settles the first time `headBranches` is written; the first assembly
    *  after boot waits on it, bounded (`HEADS_BOOT_WAIT_MS`). */
   private headsSettled!: Promise<void>;
@@ -1808,6 +1814,11 @@ export class FleetWatcher {
    *  its checked-out branch immediately. Same reasoning as currentPending(). */
   currentHeadBranches(): Map<string, string | null> {
     return new Map([...this.headBranches].map(([id, h]) => [id, h.branch]));
+  }
+
+  /** The delegation lane's input from the last census pass (see `delegationCensus`). */
+  currentDelegationCensus(): DelegationCensusPass | null {
+    return this.delegationCensus;
   }
 
   /** Last-swept plan progress — same reasoning as currentPending(). */
@@ -3249,8 +3260,15 @@ export class FleetWatcher {
     const headBranch = new Map<string, string | null>();
     const fleetHeads = new Map<string, { project: string; branch: string | null }>();
     const transientlyUnread = new Set<string>();
+    // The delegation lane's input, taken from THIS pass's reads: each project's census, and the registry generations of the ids the
+    // pass was handed, read here and again after the loop (R38). No second admin-directory read and no schedule of its own.
+    const generationOf = (id: string) => childReclaimGenerationRead(this.deps.io, this.deps.cfg.registryDir, id);
+    const generationsBefore = await readParentGenerations(generationOf, records.map((r) => r.id));
+    const delegationProjects = new Map<string, WorktreeCensus>();
     for (const project of projects) {
-      const read = await readWorktreeRecords(this.deps.io, this.deps.cfg.projectsRoot, project);
+      const census = await readWorktreeCensus(this.deps.io, this.deps.cfg.projectsRoot, project);
+      delegationProjects.set(project, census);
+      const read = census.read;
       // §1.7. Both refusals contribute nothing for this project — a census can
       // only ever suppress a finding here, never manufacture one — but they are
       // NAMED separately rather than collapsed, because they are different facts
@@ -3298,6 +3316,10 @@ export class FleetWatcher {
         if (id !== null) fleetHeads.set(id, { project, branch: w.headBranch });
       }
     }
+    this.delegationCensus = {
+      measuredAt: now, projects: delegationProjects,
+      incarnations: await settleParentIncarnations(generationOf, generationsBefore),
+    };
     // The fleet's copy (see `headBranches`), written BEFORE any of the census's
     // own early returns below: the HEAD reads above are valid whether or not
     // the registry listing or the run read then refuses. A project that

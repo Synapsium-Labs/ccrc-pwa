@@ -1,5 +1,7 @@
 import path from 'node:path';
-import type { FleetIO } from '../io.js';
+import type { FleetIO, ReadFailure } from '../io.js';
+import type { ChildReclaimGeneration } from '../../../shared/api.js';
+import type { DelegationCensusRecord } from './delegation-model.js';
 
 const SHA = /^[0-9a-f]{40}$/;
 /** git's own rules, narrowed hard. No leading `-`, no `..` anywhere, no
@@ -272,22 +274,63 @@ export type WorktreeRead =
 export async function readWorktreeRecords(
   io: FleetIO, projectsRoot: string, project: string,
 ): Promise<WorktreeRead> {
+  return (await censusProject(io, projectsRoot, project, false)).read;
+}
+
+/**
+ * THE SAME CENSUS, EXTENDED ADDITIVELY (delegation broker wave 3, spec §5.5): the `WorktreeRead` `readWorktreeRecords` answers,
+ * arm for arm, and — from the SAME listing of the admin directory, never a second one — one `DelegationCensusRecord` per admin
+ * record. `delegation` is `null` for every `WorktreeRead` refusal: a project that was not censused has NO delegation census, which
+ * is not an empty one (`ok: true` with `delegation: []` is the measured zero). The watcher's once-a-minute divergence sweep is the
+ * only caller; this adds no schedule and no second read of the admin directory.
+ *
+ * Per record it adds at most one bounded measured read of each of `HEAD`, `CLAUDE_BASE`, the first 128 bytes of `logs/HEAD`, a `stat`
+ * of `locked`, and the `gitdir` the legacy view already read. A record that cannot be read is KEPT as a row of its own instead of
+ * skipped (`state: 'unreadable'`, a diagnostic naming what failed), and a record whose `gitdir` is proven absent is `state:
+ * 'absent'`. Three folds are wave 1's D-4008 known limits and are pinned: a failed lock stat reads `locked: false`, an unreadable
+ * first log reads `baseAgreesFirstLog: null`, and an unreadable `gitdir` reads as no canonical path. Each carries a diagnostic, and
+ * the observe stage treats none of them as positive evidence of anything: the row an unreadable `gitdir` leaves is `unreadable`,
+ * never `absent`, so it can neither start nor feed a measured absence.
+ */
+export async function readWorktreeCensus(
+  io: FleetIO, projectsRoot: string, project: string,
+): Promise<WorktreeCensus> {
+  const c = await censusProject(io, projectsRoot, project, true);
+  return c.read.ok
+    ? { read: c.read, delegation: c.delegation ?? [] }
+    : { read: c.read, delegation: null };
+}
+
+/** `readWorktreeRecords` plus, from the same pass, what the delegation lane reads (see `readWorktreeCensus`). */
+export type WorktreeCensus =
+  | { read: Extract<WorktreeRead, { ok: true }>; delegation: DelegationCensusRecord[] }
+  | { read: Extract<WorktreeRead, { ok: false }>; delegation: null };
+
+/** The path guard for one admin record NAME, as the legacy view always applied it. */
+const ADMIN_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+/** `logs/HEAD`'s first line starts `<40 hex> <40 hex> `: the second field is the commit the worktree was created at. */
+const FIRST_LOG_BYTES = 128;
+const FIRST_LOG_SHA = /^[0-9a-f]{40} ([0-9a-f]{40}) /;
+
+async function censusProject(
+  io: FleetIO, projectsRoot: string, project: string, extended: boolean,
+): Promise<{ read: WorktreeRead; delegation: DelegationCensusRecord[] | null }> {
   // Same single-segment guard `readBranchTip` applies to `project`: the only two
   // values that mean anything but a literal directory name are `.` and `..`.
   if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(project) || project.includes('..')) {
-    return { ok: false, reason: 'refused-project' };
+    return { read: { ok: false, reason: 'refused-project' }, delegation: null };
   }
   const adminRoot = path.join(projectsRoot, project, '.git', 'worktrees');
   const names = await io.readdir(adminRoot);
   if (names === null) {
     // Present-but-unlistable, or genuinely absent? `readdir` collapses both to
     // `null` (`io.ts`), so ask the question `readdir` cannot answer.
-    if ((await io.stat(adminRoot)) !== null) return { ok: false, reason: 'unlistable' };
+    if ((await io.stat(adminRoot)) !== null) return { read: { ok: false, reason: 'unlistable' }, delegation: null };
     // …and a failed `stat` is not proof of absence either (see the docstring
     // above): claim the zero only when SOMETHING on this path answered. One
     // extra round trip, on the rare arm only.
     if ((await io.stat(path.join(projectsRoot, project, '.git'))) !== null) {
-      return { ok: true, records: [] };
+      return { read: { ok: true, records: [] }, delegation: [] };
     }
     // Keep walking UP for a positive answer, because "there is no checkout
     // here" and "I could not see" are different facts and only a rung that
@@ -297,22 +340,170 @@ export async function readWorktreeRecords(
     // fleet state: if that does not answer, nothing on this path did.
     if ((await io.stat(path.join(projectsRoot, project))) !== null
       || (await io.stat(projectsRoot)) !== null) {
-      return { ok: false, reason: 'not-a-checkout' };
+      return { read: { ok: false, reason: 'not-a-checkout' }, delegation: null };
     }
-    return { ok: false, reason: 'unreachable' };
+    return { read: { ok: false, reason: 'unreachable' }, delegation: null };
   }
   const out: WorktreeRecord[] = [];
+  const delegation: DelegationCensusRecord[] = [];
   for (const name of names) {
-    if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(name)) continue;
-    const gitdir = await io.readFile(path.join(adminRoot, name, 'gitdir'));
-    if (gitdir === null) continue;
-    // `gitdir` names the worktree's `.git` FILE; the worktree is its parent.
-    const wt = path.dirname(gitdir.trim());
-    if (wt === '' || wt === '.') continue;
-    const head = await io.readFile(path.join(adminRoot, name, 'HEAD'));
-    const m = head === null ? null : /^ref:\s*refs\/heads\/(\S+)\s*$/.exec(head.trim());
-    const branch = m?.[1] ?? null;
-    out.push({ name, path: wt, headBranch: branch !== null && BRANCH_OK.test(branch) ? branch : null });
+    if (!ADMIN_NAME.test(name)) {
+      // The legacy view skipped a name the guard refuses, silently. The delegation view keeps a row: a record this server will not
+      // read is NOT a record that is not there, and nothing of it is joined into a path.
+      if (extended) delegation.push(censusRow(project, name, 'unreadable', null, null, null, null, false, null, ['name:refused']));
+      continue;
+    }
+    const dir = path.join(adminRoot, name);
+    if (!extended) {
+      const gitdir = await io.readFileMeasured(path.join(dir, 'gitdir'));
+      if (!gitdir.ok) continue;
+      const wt = worktreeOf(gitdir.content);
+      if (wt === null) continue;
+      const head = await io.readFileMeasured(path.join(dir, 'HEAD'));
+      out.push({ name, path: wt, headBranch: head.ok ? headOf(head.content).branch : null });
+      continue;
+    }
+    // ONE round of independent reads per record, all measured, none of them a second look at the admin directory.
+    const [gitdir, head, base, log, lock] = await Promise.all([
+      io.readFileMeasured(path.join(dir, 'gitdir')),
+      io.readFileMeasured(path.join(dir, 'HEAD')),
+      io.readFileMeasured(path.join(dir, 'CLAUDE_BASE')),
+      io.readFileFromBytesMeasured(path.join(dir, 'logs', 'HEAD'), 0, FIRST_LOG_BYTES),
+      io.statMeasured(path.join(dir, 'locked')),
+    ]);
+    const diag: string[] = [];
+    // The legacy record, exactly as before: a readable `gitdir` naming a worktree, and whatever branch HEAD gave.
+    const wt = gitdir.ok ? worktreeOf(gitdir.content) : null;
+    if (wt !== null) out.push({ name, path: wt, headBranch: head.ok ? headOf(head.content).branch : null });
+
+    let canonical: string | null = null;
+    if (gitdir.ok) {
+      const t = gitdir.content.trim();
+      if (wt === null) diag.push('gitdir:malformed');
+      else if (!path.isAbsolute(t)) diag.push('gitdir:relative');
+      else canonical = wt;
+    } else diag.push(gitdir.reason === 'absent' ? 'gitdir:absent' : 'gitdir:unreadable');
+
+    let branch: string | null = null;
+    let sha: string | null = null;
+    if (head.ok) {
+      const h = headOf(head.content);
+      branch = h.branch;
+      sha = h.sha;
+      if (branch === null && sha === null) diag.push('head:malformed');
+    } else diag.push(head.reason === 'absent' ? 'head:absent' : 'head:unreadable');
+
+    let firstLog: string | null = null;
+    if (log.ok) firstLog = FIRST_LOG_SHA.exec(Buffer.from(log.bytes).toString('latin1'))?.[1] ?? null;
+    else if (log.reason === 'unreadable') diag.push('firstLog:unreadable');
+
+    // CLAUDE_BASE, else the first `logs/HEAD` line (spec §5.5). The fallback is for an ABSENT CLAUDE_BASE only: a malformed or
+    // unreadable one may be a base this process cannot see, and is never papered over with a guess.
+    let claudeBase: string | null = null;
+    let fileBase: string | null = null;
+    if (base.ok) {
+      const t = base.content.trim();
+      if (SHA.test(t)) fileBase = t;
+      else diag.push('claudeBase:malformed');
+      claudeBase = fileBase;
+    } else if (base.reason === 'absent') claudeBase = firstLog;
+    else diag.push('claudeBase:unreadable');
+    const agrees = fileBase !== null && firstLog !== null ? fileBase === firstLog : null;
+
+    // D-4008: a failed stat of `locked` reads false (named), a proven absence reads false (the ordinary case).
+    if (!lock.ok && lock.reason === 'unreadable') diag.push('lock:unreadable');
+
+    // `absent` is a PROVEN ENOENT of the `gitdir` and nothing else. A record whose `gitdir` or HEAD this process could not read is
+    // `unreadable`, kept as a row, and never folded into `absent`: only a measured absence may count toward an absence.
+    const state: DelegationCensusRecord['state'] = !gitdir.ok && gitdir.reason === 'absent' ? 'absent'
+      : (!gitdir.ok || (!head.ok && head.reason === 'unreadable')) ? 'unreadable'
+      : 'present';
+    delegation.push(censusRow(project, name, state, canonical, branch, sha, claudeBase, lock.ok, agrees, diag));
   }
-  return { ok: true, records: out };
+  return { read: { ok: true, records: out }, delegation: extended ? delegation : null };
+}
+
+function censusRow(
+  project: string, adminRecord: string, state: DelegationCensusRecord['state'], canonicalPath: string | null,
+  headBranch: string | null, headSha: string | null, claudeBase: string | null, locked: boolean,
+  baseAgreesFirstLog: boolean | null, diagnostics: readonly string[],
+): DelegationCensusRecord {
+  return {
+    project, adminRecord, canonicalPath, headBranch, headSha, claudeBase, locked, baseAgreesFirstLog, state,
+    diagnostic: diagnostics.length === 0 ? null : diagnostics.join(','),
+  };
+}
+
+/** The worktree a `gitdir` file names: its `.git` FILE's parent. `null` when that names nothing. */
+function worktreeOf(gitdirText: string): string | null {
+  const wt = path.dirname(gitdirText.trim());
+  return wt === '' || wt === '.' ? null : wt;
+}
+
+/** What HEAD says: `ref: refs/heads/<branch>` is a branch (when the path guard passes it); a bare sha is a detached HEAD. */
+function headOf(text: string): { branch: string | null; sha: string | null } {
+  const t = text.trim();
+  const m = /^ref:\s*refs\/heads\/(\S+)\s*$/.exec(t);
+  const branch = m?.[1] ?? null;
+  return {
+    branch: branch !== null && BRANCH_OK.test(branch) ? branch : null,
+    sha: SHA.test(t) ? t : null,
+  };
+}
+
+// ── The parent's incarnation (delegation broker wave 3, ruling R38) ───────────────────────────────────────────────────────────────
+
+/**
+ * A parent's incarnation, `$REG/<id>.generation`, as the census pass measured it. MEASURED only when the id read as a value before
+ * the pass used it and as the SAME value after: an absent, unreadable (the one read cannot tell a malformed file from an unreadable
+ * one) or changing generation is `unmeasured`, with the reason named.
+ */
+export type ParentIncarnation =
+  | { readonly kind: 'measured'; readonly incarnation: string }
+  | { readonly kind: 'unmeasured'; readonly reason: ReadFailure | 'changing' };
+
+/** THE ONE READ of a registry generation (`childReclaimGenerationRead`), curried over the registry and the port by the caller. */
+export type ParentGenerationRead = (id: string) => Promise<ChildReclaimGeneration>;
+
+const generationOf = async (read: ParentGenerationRead, id: string): Promise<ChildReclaimGeneration> => {
+  // A port that REJECTS is not caught by the one read; it is a read that failed, and says so.
+  try { return await read(id); } catch { return { kind: 'unreadable' }; }
+};
+
+/** The first read, taken BEFORE the pass uses the ids. */
+export async function readParentGenerations(
+  read: ParentGenerationRead, ids: Iterable<string>,
+): Promise<ReadonlyMap<string, ChildReclaimGeneration>> {
+  const out = new Map<string, ChildReclaimGeneration>();
+  for (const id of new Set(ids)) out.set(id, await generationOf(read, id));
+  return out;
+}
+
+/** The second read, AFTER the pass: only an id whose first read was a value is read again, never a whole extra scan. */
+export async function settleParentIncarnations(
+  read: ParentGenerationRead, before: ReadonlyMap<string, ChildReclaimGeneration>,
+): Promise<ReadonlyMap<string, ParentIncarnation>> {
+  const out = new Map<string, ParentIncarnation>();
+  for (const [id, first] of before) {
+    if (first.kind !== 'value') {
+      out.set(id, { kind: 'unmeasured', reason: first.kind });
+      continue;
+    }
+    const second = await generationOf(read, id);
+    out.set(id, second.kind === 'value' && second.v === first.v ? { kind: 'measured', incarnation: first.v }
+      : second.kind === 'unreadable' ? { kind: 'unmeasured', reason: 'unreadable' }
+      : { kind: 'unmeasured', reason: 'changing' });
+  }
+  return out;
+}
+
+/**
+ * What the watcher's once-a-minute census pass prepares for the delegation lane (nothing consumes it before wave 3's watcher lane):
+ * every censused project's answer, a refusal included, so a project that was not read is never mistaken for one that was empty, and
+ * the incarnation of every id the pass used.
+ */
+export interface DelegationCensusPass {
+  readonly measuredAt: number;
+  readonly projects: ReadonlyMap<string, WorktreeCensus>;
+  readonly incarnations: ReadonlyMap<string, ParentIncarnation>;
 }
