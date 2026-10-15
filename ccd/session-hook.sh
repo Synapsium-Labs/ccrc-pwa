@@ -400,9 +400,9 @@ _hook_graph_card() {
 # see "IT SETS CT_V AND NEVER PRINTS" below) AND BOUNDED — `$(<f)` read the
 # WHOLE file before the trim ever ran, so one 2 MB peer `.project` took the
 # probe from 5 ms to 759 ms and one 8 MB file to 3.3 s (fix round 1, finding
-# 2); `-N` caps the bytes this function ever holds regardless of how large the
-# file on disk is (re-measured after the fix: the same 2 MB and 8 MB files
-# both read back in ~3 ms).
+# 2); `-N` caps the bytes HELD, not scanned: those 2 MB and 8 MB files read back
+# in ~3 ms, but bash does not count the NULs it drops, so a same-user sparse NUL
+# file is scanned at its apparent size (100 MiB ~1.8 s; a fork would close it: D-5065).
 #
 # THE BOUND IS `CCRC_ID_MAX` (128), NOT `CCRC_PROJ_MAX` (64), though every
 # caller today reads either a `.project` field (bound by `CCRC_PROJ_MAX`) or a
