@@ -1,0 +1,20 @@
+{
+  "name": "busy",
+  "covers": [
+    "W6 with animatedRows: a hung turn's spinner never goes quiet, so the read stops at its cap",
+    "re-wrap (a)-(g): a spinner row and an 'esc to interrupt' footer"
+  ],
+  "model": "claude-sonnet-4-5",
+  "prompt": "Think about the next release of project-a.",
+  "marker": "esc to interrupt",
+  "entries": [
+    {
+      "match": "tools",
+      "label": "hang",
+      "hang_ms": -1
+    }
+  ],
+  "default": {
+    "text": "Done."
+  }
+}

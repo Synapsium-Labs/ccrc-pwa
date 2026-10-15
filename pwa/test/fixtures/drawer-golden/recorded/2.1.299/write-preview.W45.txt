@@ -1,0 +1,37 @@
+
+  ▐▛███▛█   Claude Code v2.1.299
+ ▝▜██████▀  Opus 5.5 · API Usage Billing
+  ▝▝   ▝▝   /rig/project-a
+
+ ❯ Write a short notes file for project-a.
+
+ ● Write(src/notes.md)
+
+──
+  Create file
+  src/notes.md
+─╌
+   1 # project-a notes
+   2
+   3 The greet function in src/app.ts returns
+     a greeting for a name.
+   4
+   5 ## Next steps
+   6
+   7 - add a farewell function beside greet
+   8 - cover both functions with a small test
+     file under test/
+   9 - document the two exports in README.md,
+     with one example each, so a reader can
+     try them without opening the source
+─╌
+  Do you want to create notes.md?
+  ❯ 1. Yes
+    2. Yes, and switch to accept edits
+       (auto-approve file edits and common
+       file commands) for this session
+       (shift+tab)
+    3. No
+
+  Esc to cancel · Tab to amend
+

@@ -1,0 +1,39 @@
+
+  ▐▛███▛█   Claude Code v2.1.299
+ ▝▜██████▀  Opus 5.5 · API Usage Billing
+  ▝▝   ▝▝   /rig/project-a
+
+ ❯ Create the build cache directory for project-a.
+
+   Creating the build cache directory for project-a and echo
+   a marker
+   ⎿  $ mkdir -p /rig/shared/project-a/build/cache/some/very/
+      long/directory/path/that/keeps/going/and/going/until/it
+      /wraps && echo the-build-cache-directory-for-project-a-
+      is-ready-and-this-marker-is-long-enough-to-wrap-the-cod
+      e-row-twice
+
+──
+  Bash command
+  Tip: auto mode handles these prompts for you — choose
+  "switch to auto mode" below
+  Create the build cache directory for project-a and echo a
+  marker
+─╌
+  │ mkdir -p /rig/shared/project-a/build/cache/some/very/long
+    /directory/path/that/keeps/going/and/going/until/it/wraps
+    && echo
+  │ the-build-cache-directory-for-project-a-is-ready-and-this
+    -marker-is-long-enough-to-wrap-the-code-row-twice
+─╌
+  Do you want to proceed?
+  ❯ 1. Yes
+    2. Yes, and always allow access to /rig/shared/project-a/
+       build/cache/some/very/long/directory/path/that/keeps/g
+       oing/and/going/until/it from this project
+    3. Yes, and switch to auto mode · auto mode handles these
+       prompts for you
+    4. No
+
+  Esc to cancel · Tab to amend
+
