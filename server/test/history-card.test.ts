@@ -10,6 +10,10 @@
 import { describe, it, expect } from 'vitest';
 import * as libCard from '../../ccd/history/lib.mjs';
 import { compactionSequence } from './historyFixtures.js';
+import type { DatabaseSync } from 'node:sqlite';
+import { createHash } from 'node:crypto';
+import { mkTmp } from './tmpHelpers.js';
+import { brotli, closeWriter, createStore, openWriter } from '../../ccd/history/store.mjs';
 
 /** Spec §8.6's grammar, as the spec spells it. */
 const SPEC_GRAMMAR = String.raw`^History: node L[0-9a-f]{6,20}… \(this compaction\)( · parent N[0-9a-f]{6,20}…)? · ~/\.local/bin/ccrc history describe L[0-9a-f]{6,20}$`;
@@ -399,5 +403,106 @@ describe('card delivery, scope, withdrawal, window and purge decisions (spec 8.6
     expect([...new Set(rows.map(([, , r]) => r))].sort(), 'every reason word is reached, and none outside the vocabulary')
       .toEqual([...libCard.CARD_WITHDRAW_REASONS].sort());
     expect(() => libCard.decideCardWithdraw({ arm: 'off' } as unknown as libCard.CardPassFacts)).toThrow(/^decideCardWithdraw: not a pass arm/);
+  });
+});
+
+// ===========================================================================
+// W1-B3 Task 4: derive.mjs's level-0 slot lists, exported unchanged (spec 6.3, ruling RB4). In-process, against a
+// store built by hand in the shape of B2's epochFixture9: one family, one confirmed epoch, one main transcript whose
+// boundaries are held by live file 1, file 2 or both.
+// ===========================================================================
+interface Derive4 {
+  epochCopySlots(db: DatabaseSync, sessionPk: number, epochSeq: number): Map<number, Array<string | null>>;
+  holdingCopyOf(db: DatabaseSync, b: { entry_id: number; transcript_pk: number }): { file_id: number; eof_ms: number | null; source_key: string } | null;
+  epochOfUuid(db: DatabaseSync, ccUuid: string): { session_pk: number; seq: number; ccrc_id: string } | null;
+  deriveParents(db: DatabaseSync, ictx: object, budget: object): number;
+}
+const derive4 = async (): Promise<Derive4> => (await import('../../ccd/history/derive.mjs')) as unknown as Derive4;
+const sweep4 = async (): Promise<{ newBudget(): object }> => (await import('../../ccd/history/sweep.mjs')) as unknown as { newBudget(): object };
+const E4 = 'd4e00000-1111-4111-8111-111111111111';
+const uid4 = (n: number): string => `d4e00000-0000-4000-8000-${n.toString(16).padStart(12, '0')}`;
+
+/** `n` boundaries in one transcript, boundary k held by the live files `holders(k)` names, each with a native leaf. */
+function forkStore4(n: number, holders: (k: number) => readonly number[]): { db: DatabaseSync; leafIds: string[] } {
+  const home = mkTmp('ccrc-hist-card-slots-');
+  createStore(home);
+  const db = openWriter(libCard.historyPaths(home).dbFile);
+  const leafIds: string[] = [];
+  db.exec('BEGIN');
+  db.prepare("INSERT INTO sessions (session_pk, ccrc_id, generation, project, first_seen_ms) VALUES (1, 'card-slots', '', 'demo', 1)").run();
+  db.prepare("INSERT INTO epochs (session_pk, seq, cc_session_uuid, cause, declared_by, confirmed_ms) VALUES (1, 1, ?, 'startup', 'hook', 1)").run(E4);
+  db.prepare('INSERT INTO transcripts (transcript_pk, cc_session_uuid) VALUES (1, ?)').run(E4);
+  const file = db.prepare("INSERT INTO ingest_files (file_id, dev, ino, transcript_pk, status, parser_version) VALUES (?, 1, ?, 1, 'live', 1)");
+  file.run(1, 4001);
+  file.run(2, 4002);
+  db.prepare("INSERT INTO blobs (blob_id, sha256, codec, z, raw_len) VALUES (1, ?, 'br5', ?, 1)").run(Buffer.alloc(32, 4), Buffer.from([0]));
+  const ent = db.prepare("INSERT INTO entries (entry_id, uuid, transcript_pk, type, subtype, provenance, prov_version, struct_rank_ns, struct_file_id, blob_id, ts_ms) VALUES (?, ?, 1, 'system', 'compact_boundary', 'harness', 1, 0, 0, 1, ?)");
+  const bnd = db.prepare('INSERT INTO boundaries (entry_id, transcript_pk, ord) VALUES (?, 1, ?)');
+  const member = db.prepare('INSERT INTO memberships (file_id, entry_id, line) VALUES (?, ?, ?)');
+  const leaf = db.prepare("INSERT INTO nodes (node_id, session_pk, epoch_seq, transcript_pk, kind, depth, status, gist, boundary_entry_id, earliest_ms, latest_ms, src_chars, desc_count, desc_chars, parser_version, created_ms) VALUES (?, 1, 1, 1, 'native_leaf', 0, 'not-requested', ?, ?, ?, ?, 100, 0, 0, 1, 1)");
+  for (let k = 1; k <= n; k += 1) {
+    ent.run(k, uid4(k), 1000 * k);
+    bnd.run(k, k);
+    for (const f of holders(k)) member.run(f, k, k);
+    const id = libCard.leafId('card-slots', E4, `span-${k}`);
+    leafIds.push(id);
+    leaf.run(id, `Leaf ${k} did part ${k}.`, k, 1000 * k, 1000 * k + 500);
+  }
+  db.exec('COMMIT');
+  return { db, leafIds };
+}
+
+/** Boundaries 1-3 in both copies (a shared head: the smaller file_id holds it), 4-9 in file 1 only, 10-17 in file 2. */
+const FORKED4 = (k: number): readonly number[] => (k <= 3 ? [1, 2] : k <= 9 ? [1] : [2]);
+
+describe('derive.mjs exports the slot lists fan-in reads, unchanged (spec 6.3, ruling RB4; W1-B3 Task 4)', () => {
+  it("epochCopySlots splits one epoch's level-0 slots per holding copy, in ord; holdingCopyOf picks a live copy, then the smaller file_id", async () => {
+    const d = await derive4();
+    const fx = forkStore4(17, FORKED4);
+    try {
+      const slots = d.epochCopySlots(fx.db, 1, 1);
+      expect([...slots.keys()].map(Number).sort((x, y) => x - y)).toEqual([1, 2]);
+      expect(slots.get(1)).toEqual(fx.leafIds.slice(0, 9));
+      expect(slots.get(2)).toEqual(fx.leafIds.slice(9));
+      expect(Number(d.holdingCopyOf(fx.db, { entry_id: 2, transcript_pk: 1 })!.file_id)).toBe(1);
+      expect(Number(d.holdingCopyOf(fx.db, { entry_id: 12, transcript_pk: 1 })!.file_id)).toBe(2);
+      expect(d.holdingCopyOf(fx.db, { entry_id: 99, transcript_pk: 1 })).toBeNull();
+    } finally {
+      fx.db.close();
+    }
+  });
+
+  it("the parents deriveParents mints are exactly parentId over planFanIn's groups of those lists: the card's prediction and fan-in read one list", async () => {
+    const d = await derive4();
+    const s = await sweep4();
+    const fx = forkStore4(17, FORKED4);
+    try {
+      const want = [...d.epochCopySlots(fx.db, 1, 1).values()].flatMap((list) => libCard.planFanIn({
+        slots: list.map((nodeId) => ({ nodeId, final: nodeId !== null, parented: false })), width: libCard.FAN_IN.leaf,
+      })).map((g) => [libCard.parentId(g), g] as const);
+      expect(want.map(([, g]) => g), 'one group per copy, never one across the fork').toEqual([fx.leafIds.slice(0, 8), fx.leafIds.slice(9, 17)]);
+      d.deriveParents(fx.db, { nowMs: 5_000, fts: false, pairIdx: libCard.makePairIndex([]) }, s.newBudget());
+      const made = (fx.db.prepare('SELECT node_id FROM nodes WHERE depth = 1 ORDER BY node_id').all() as Array<{ node_id: string }>).map((r) => r.node_id);
+      expect(made).toEqual(want.map(([id]) => id).sort());
+      for (const [id, g] of want) {
+        const kids = (fx.db.prepare('SELECT child_id FROM node_children WHERE node_id = ? ORDER BY ord').all(id) as Array<{ child_id: string }>).map((r) => r.child_id);
+        expect(kids, id).toEqual(g);
+      }
+    } finally {
+      fx.db.close();
+    }
+  });
+
+  it('epochOfUuid answers the epoch row of a confirmed uuid of an unmerged family, and null for an unknown uuid: the one epoch rule derivation and the card share (D-5052)', async () => {
+    const d = await derive4();
+    const fx = forkStore4(1, () => [1]);
+    try {
+      const row = d.epochOfUuid(fx.db, E4);
+      expect(row).not.toBeNull();
+      expect({ session_pk: Number(row!.session_pk), seq: Number(row!.seq), ccrc_id: row!.ccrc_id }).toEqual({ session_pk: 1, seq: 1, ccrc_id: 'card-slots' });
+      expect(d.epochOfUuid(fx.db, 'd4e00000-9999-4999-8999-999999999999')).toBeNull();
+    } finally {
+      fx.db.close();
+    }
   });
 });
