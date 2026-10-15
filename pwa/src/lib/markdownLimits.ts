@@ -121,14 +121,23 @@ export const DOCS_HIGHLIGHT_SCAN_PAGE_MAX_CHARS = 393216;
  *  reviewer's three runs, 1.6 to 1.9 times the plateau page timed beside it, against spec 4.9's 0.25 s for a page; the
  *  coordinator accepted it as residue, and the shapes below cost more. Chat has no page budget: a
  *  message bounds each block (a 64 KiB markdown block of `<a>` lines about 650 ms, an 8 KiB `typescript` block about 75), never their
- *  sum. What the sweeps covered: 474 one- and two-character units one per line (the line bound); 28 shapes of
- *  whitespace across lines (the whitespace bound); every registered grammar over about 80 units of two to four
- *  characters (tag, bracket, string and comment openers, and up to ten of each grammar's keywords), in lines of 1 800
- *  and one per line, at 16 and 64 KiB, each one that grew confirmed on an 8 to 128 KiB curve; three-character tags in
- *  `markdown`; and the `subLanguage` embeddings (`xml`'s `<script>` and `<style>`, removed: see `markdown.tsx`;
- *  `markdown` into `xml`; `dockerfile` into `bash`, linear; `yaml` into `ruby`, not registered). NOT covered: units of
- *  more than four characters, mixtures of different units, nesting, and valid code shaped to defeat a grammar; a shape
- *  outside those families may still grow, in any grammar.
+ *  sum. What the sweeps tried, as they were run (review 460 F6: this said "about 80 units of two to four
+ *  characters", a size class the run did not cover): 474 units of one and two characters, one per line (the line
+ *  bound); 28 shapes of whitespace across lines (the whitespace bound); every registered grammar over one fixed list
+ *  of 77 units of one to four characters (the tags `<a>`, `<ab>`, `<a `, `</a>`, `<a/>`, `<!--`, `<?`, `?>` and `<%`;
+ *  the doubled or reversed brackets `{{`, `}}`, `((`, `[[`, `)(` and `][`; string, comment, template and raw-string
+ *  openers; and short operator and identifier units such as `a(`, `a<b`, `=>`, `::` and `0x`), plus up to ten two- or
+ *  three-letter keywords of each grammar, each unit repeated alone in lines of 1 800 characters and one per line, at 16
+ *  and 64 KiB, each one that grew confirmed on an 8 to 128 KiB curve; then, for the registered `xml` and `markdown`,
+ *  the same list and 13 longer xml units (`<script>`, `<style>`, `<script><a>`, `<![CDATA[` and the like);
+ *  three-character tags in `markdown`; and the `subLanguage` embeddings (`xml`'s `<script>` and `<style>`, removed:
+ *  see `markdown.tsx`; `markdown` into `xml`; `dockerfile` into `bash`, linear; `yaml` into `ruby`, not registered).
+ *  NOT tried: the empty pairs `[]`, `{}` and `()` and the link opener `[](` (the shapes review 460 found growing,
+ *  below), every other unit outside those lists whatever its size, lines of other lengths, mixtures of different
+ *  units, nesting, and valid code shaped to defeat a grammar. Review 460's own sweep then tried `typescript`,
+ *  `javascript` and `rust` over every two- and three-character unit drawn from `<>/(){}[]"'`, the backtick, `a` and the
+ *  space, and about 250 longer units, finding nothing dearer than `<a>`, and ten more grammars over those units,
+ *  finding them linear; `markdown` and `yaml` it found growing.
  *  SHAPES PAST EVERY BOUND (review 460 F1 to F3, the reviewer's figures on this highlight.js, best of 3 at load about
  *  25): `markdown` on link openers, `'[]('` or `'[[]('` repeated in lines of 2 048 characters (quadratic in the line,
  *  linear in the block), about 0.5 s per 8 KiB block and 4.5 to 5.5 s per 64 KiB block, so the markdown budget
