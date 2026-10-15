@@ -66,7 +66,7 @@
 // recorder. Measure containment pins through `ccrc-uninstall.test.ts`'s
 // harness-level cases instead, which build envs and call checks and never a
 // verb (Task 11 review fix round 3).
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, beforeAll } from 'vitest';
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import * as pty from 'node-pty';
 import {
@@ -77,7 +77,7 @@ import {
 import path, { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createHash, randomBytes } from 'node:crypto';
-import { mkTmp } from './tmpHelpers.js';
+import { mkTmp, removeTmpFixturesEachTest } from './tmpHelpers.js';
 import { DEFAULT_TEST_ROSTER } from './helpers.js';
 import { renderCcdEntry } from './ccdWsHelpers.js';
 import { ccrcContainedEnv } from './ccrcContainment.js';
@@ -100,6 +100,11 @@ import {
 } from './codexLaneFixture.js';
 import { docsProbeProgram } from './docsHelperPy.js';
 import { DOCS_INDEX_READY } from './docsIndexFixtures.js';
+
+// R20a's cure (review 462's S1): each case's homes go when the case ends, so the file's one end-of-file sweep
+// (tmpHelpers' afterAll) is left only what collection time and a describe's beforeAll made. The two lazy fleet
+// installs below make their homes in a beforeAll for that reason.
+removeTmpFixturesEachTest();
 
 /** The two python3 invocations ccd's Docs front makes when the closing
  *  doctor's `docs` check runs the installed ccd (Docs W1a): the floor probe,
@@ -4850,8 +4855,12 @@ describeDarwin('ccrc install --role fleet: the agent job, and the one this box m
   // `curl … | bash` stdin is the installer script and a read there would take
   // a line of shell as this fleet's bearer token.
   let once: Promise<{ home: string; r: Result }> | null = null;
+  // Every case reads this one home, so it is made in a beforeAll, before the first case's mark:
+  // removeTmpFixturesEachTest leaves it to the end-of-file sweep.
+  let launchdHome = '';
+  beforeAll(() => { launchdHome = freshBox('ccrc-install-fleet-launchd-'); }, 60_000);
   const box = (): Promise<{ home: string; r: Result }> => (once ??= (async () => {
-    const home = freshBox('ccrc-install-fleet-launchd-');
+    const home = launchdHome;
     const r = await runInstallTty(home, ['install', '--role', 'fleet'], [FLEET_URL, FLEET_TOKEN]);
     return { home, r };
   })());
@@ -6023,8 +6032,12 @@ describe('ccrc install --role: the fleet lane (Stage 4, Task 5)', () => {
    *  never runs) until the guard fires the moment the loop unblocks. First
    *  `await` starts the run, inside a test, where the loop is free. */
   let fleetRun: Promise<{ home: string; r: Result }> | undefined;
+  // Every case reads this one home, so it is made in a beforeAll, before the first case's mark:
+  // removeTmpFixturesEachTest leaves it to the end-of-file sweep. The install itself still starts lazily, in a case.
+  let fleetHome = '';
+  beforeAll(() => { fleetHome = freshBox('ccrc-install-role-fleet-'); }, 60_000);
   const fleet = (): Promise<{ home: string; r: Result }> => (fleetRun ??= (async () => {
-    const home = freshBox('ccrc-install-role-fleet-');
+    const home = fleetHome;
     const r = await runInstallTty(home, ['install', '--role', 'fleet'], [FLEET_URL, FLEET_TOKEN]);
     return { home, r };
   })());
