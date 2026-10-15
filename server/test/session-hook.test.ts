@@ -12042,7 +12042,7 @@ describe('history card line: SessionStart(compact) serves the sweep\'s predictio
   const BOM_G = `${String.fromCharCode(0xfeff)}${GENERATION}\n`;
   type Reg = 'G-nul' | 'G2-nul' | 'G2-nul-split' | 'nul-only' | 'G' | 'G2' | 'absent' | 'unreadable' | 'symlink-G' | 'junk' | 'G-wide' | 'G-nbsp' | 'empty' | 'blank-wide' | 'G2-wide-junk' | 'dangling';
   type Off = 'absent' | 'G' | 'G-padded' | 'G-wide' | 'G-nbsp' | 'G-bom' | 'G2' | 'empty' | 'unreadable' | 'dir' | 'symlink-G' | 'unsearchable' | 'parent-file' | 'G2-tabcr' | 'link-loop' | 'link-notdir' | 'link-000' | 'link-dangling' | 'G-nul';
-  type Rec = 'G' | 'G2' | 'legacy' | 'absent' | 'junk' | 'symlink-G' | 'G-nul';
+  type Rec = 'G' | 'G2' | 'legacy' | 'absent' | 'junk' | 'symlink-G' | 'G-nul' | 'G-wide';
   /** B1's Presence, as a type-only import expression: this file gains no import line (the census cites it by line). */
   type Pres = import('../../ccd/history/lib.mjs').Presence<string>;
   /** A row is an AGREE row (the hook's verdict is the CLI's) unless its sixth cell reads 'fail-closed': the hook
@@ -12115,6 +12115,11 @@ describe('history card line: SessionStart(compact) serves the sweep\'s predictio
     ['a NUL-only .generation (once empty to the hook, so the record decided), recall-off is stale (fail-closed: the CLI recalls)', '', 'nul-only', 'G2', 'G', 'fail-closed'],
     ['a NUL-only .generation, recall-off names the recorded G', '', 'nul-only', 'G', 'G'],
     ['a record holding G and a NUL is no record', '', 'absent', 'G2', 'G-nul'],
+    // D-5063 (review 479 F1): a record padded past the read window is read as empty (legacy) by `_ct_read`, which holds the first
+    // CCRC_ID_MAX characters. The CLI resolves the newest family, G, and recall-off names it: exit 8. A hook that took the record
+    // for empty would compare '' with G and serve. The window check withholds, as `.generation`'s does.
+    ['a generation record padded past the read window, recall-off names G', '', 'absent', 'G', 'G-wide'],
+    ['a generation record padded past the read window, recall-off is stale (fail-closed: the CLI recalls)', '', 'absent', 'G2', 'G-wide', 'fail-closed'],
     // The safe direction, named (R-recalloff-parity): the hook drops the NUL and reads G, so it withholds; the CLI reads
     // 'G' + NUL, which is not the generation, so recall-off is stale there and the line is served.
     ['recall-off holds G and a NUL, the generation is G (fail-closed: the CLI recalls)', GENERATION, 'G', 'G-nul', 'G', 'fail-closed'],
@@ -12180,6 +12185,7 @@ describe('history card line: SessionStart(compact) serves the sweep\'s predictio
     if (recKind === 'G') fs.writeFileSync(rec, `${GENERATION}\n`);
     if (recKind === 'G2') fs.writeFileSync(rec, `${G2}\n`);
     if (recKind === 'G-nul') fs.writeFileSync(rec, `${GENERATION}\0\n`);
+    if (recKind === 'G-wide') fs.writeFileSync(rec, `${' '.repeat(130)}${GENERATION}\n`);
     if (recKind === 'legacy') fs.writeFileSync(rec, '\n');
     if (recKind === 'junk') fs.writeFileSync(rec, 'not-a-generation\n');
     if (recKind === 'symlink-G') { fs.writeFileSync(path.join(home, 'rec-target'), `${GENERATION}\n`); fs.symlinkSync(path.join(home, 'rec-target'), rec); }
@@ -12191,7 +12197,7 @@ describe('history card line: SessionStart(compact) serves the sweep\'s predictio
   const cliGeneration = (envGen: string, regGen: Pres, recKind: Rec): string | null => {
     const r = lib.resolveGeneration({ envGen, regGen });
     if (r.via !== 'newest') return r.value;
-    return recKind === 'G' ? GENERATION : recKind === 'G2' ? G2 : recKind === 'legacy' ? '' : null;
+    return recKind === 'G' || recKind === 'G-wide' ? GENERATION : recKind === 'G2' ? G2 : recKind === 'legacy' ? '' : null;
   };
   /** The CLI's reading of the same fixture (B2's presenceOf: absent, unreadable — a symlink or a non-file
    *  included — or the trimmed value), handed to B2's own decideRecallOff with the CLI's generation. `unknown`:
