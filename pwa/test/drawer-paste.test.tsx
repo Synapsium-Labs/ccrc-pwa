@@ -374,16 +374,21 @@ function mount(view: 'wrapped' | 'grid') {
   return { ...utils, ws, term, ta, host, paint, store };
 }
 
+/** A bar button by its accessible name. By attribute rather than by role: a
+ *  role query walks the whole document's accessibility tree, the real
+ *  terminal's 51 rendered rows included, and MEASURED (2026-10-15) the latch
+ *  cases spent 1–2 s each on it alone in isolation and passed vaul's and
+ *  vitest's 5 s under a loaded full run. Every bar button is a `Keycap`
+ *  named by its `aria-label`, so the attribute IS its accessible name. */
+const barButton = (name: string): HTMLButtonElement | null =>
+  document.querySelector<HTMLButtonElement>(`.term-keys button[aria-label="${name}"]`);
 /** Tap ⋯ (when its row is closed), then `ctrl`. */
 const latch = (): void => {
-  if (screen.queryByRole('button', { name: 'Control' }) === null) {
-    fireEvent.click(screen.getByRole('button', { name: 'More keys' }));
-  }
-  fireEvent.click(screen.getByRole('button', { name: 'Control' }));
-  expect(screen.getByRole('button', { name: 'Control' })).toHaveAttribute('aria-pressed', 'true');
+  if (barButton('Control') === null) fireEvent.click(barButton('More keys')!);
+  fireEvent.click(barButton('Control')!);
+  expect(barButton('Control')).toHaveAttribute('aria-pressed', 'true');
 };
-const ctrlPressed = (): string | null =>
-  screen.queryByRole('button', { name: 'Control' })?.getAttribute('aria-pressed') ?? null;
+const ctrlPressed = (): string | null => barButton('Control')?.getAttribute('aria-pressed') ?? null;
 
 /** A `beforeinput` as a browser dispatches it. A composition's is not
  *  cancelable (Input Events Level 2), and a browser will not let it be. */
@@ -537,14 +542,14 @@ describe('the latch takes its letter from xterm\'s textarea (Step 2)', () => {
     expect(beforeInput(d.ta, 'insertText', 'c').defaultPrevented).toBe(true);
     expect(d.ws.inputs(), 'the latch sent ^C past the guard').toEqual([]);
     expect(screen.getByRole('group', { name: 'Confirm Control C' })).toHaveTextContent('Claude Code will exit');
-    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    fireEvent.click(barButton('Cancel')!);
     expect(d.ws.inputs()).toEqual([]);
   });
 
   it('a latch the view no longer shows is cleared: flipped to the grid, a typed letter is a letter', () => {
     const d = mount('wrapped');
     latch();
-    fireEvent.click(screen.getByRole('button', { name: /^Wrapped view:/ }));
+    fireEvent.click(document.querySelector<HTMLButtonElement>('.term-chips button[aria-label^="Wrapped view:"]')!);
     expect(d.baseElement.querySelector('.term-wrap'), 'the chip did not flip to the grid').toBeNull();
     realKey(d.ta, 'c');
     expect(d.ws.inputs(), 'an invisible latch turned a letter into a control code').toEqual(['c']);
