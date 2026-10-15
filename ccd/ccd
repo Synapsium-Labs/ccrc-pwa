@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=13cf94bc3ae3b440063189b8267eb97ca80e3120eb465b0a9028a9441ae3baac
+# ccrc:generated 1 sha256=4114978eadd5731dceb996bf0393441367ec42e8b02792209145280c1aceaad1
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -27447,9 +27447,9 @@ cmd_enable() {   # <id>  |  <wrapper> <project> [workdir]
   local id; if [[ $# -ge 2 ]]; then id=$(_id "$1" "$2"); else id="$1"; fi
   # THE WRAPPER AND THE PROJECT ARE ASKED BEFORE ANYTHING IS JOURNALED (path-identity spec §2.4). `cmd_start`
   # refuses both, but only after the expiry gate's lock and this verb's `enable` line, which would then name an
-  # id nothing created. The wrapper check is `cmd_start`'s own, words and all; `_ws_project_valid` is the
-  # creation sites' one rule for a project: no leading dot or dash.
-  if [[ $# -ge 2 ]]; then
+  # id nothing created. Empty input gets `cmd_start`'s usage line first, never a fall-through (`-demo` would pass the
+  # cap and open a reap lock). The wrapper check is `cmd_start`'s own, words and all; `_ws_project_valid` is the creation sites' rule.
+  if [[ $# -ge 2 ]]; then [[ -n "$1" && -n "$2" ]] || die "usage: ccd start <id> | ccd start <wrapper> <project> [workdir]"
     _is_valid_wrapper "$1" || die "unknown wrapper '$1' (valid: ${CCRC_ACCOUNTS[*]})"
     _ws_project_valid "$2" || die "invalid project '$2' — allowed chars: A-Za-z0-9 . _ -, and no LEADING dot or dash"
   fi

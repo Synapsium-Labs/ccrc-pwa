@@ -127,6 +127,41 @@ done`);
     expect(eventsOf(h.home, 'enable').map((e) => e['id'])).toEqual(['claude-b-demo']);
   }, 60_000);
 
+  it('enable answers start\'s usage line for an empty wrapper or project, before it journals, locks or clears an archive', () => {
+    // Spec §2.9 promises "cmd_start's own check and words", and cmd_start's first test is the usage line. So an empty
+    // wrapper or project is answered with that line by an EXPLICIT check, never by letting it fall through: past
+    // enable's checks `enable '' demo` composes `-demo`, passes the id cap, and the expiry gate opens a permanent
+    // `.reap--demo.lock`, clears the archive and journals `unarchive` before cmd_start gets to say a word.
+    const USAGE = 'ccd: usage: ccd start <id> | ccd start <wrapper> <project> [workdir]';
+    fs.mkdirSync(path.join(h.home, 'projects', 'demo'), { recursive: true });
+    // [argv as typed, the archive marker planted for the id those words compose]
+    const FORMS: readonly (readonly [string, string])[] = [
+      [`'' demo`, '-demo'],
+      [`claude-b ''`, 'claude-b-'],
+      [`'' ''`, '-'],
+    ];
+    for (const [argv] of FORMS) {
+      // The CONTROL for the "matching start" claim: start itself answers this line for the same forms.
+      const s = shFail(`${START_STUBS} cmd_start ${argv}`);
+      expect(s.code, `start ${argv}: ${s.stdout}`).toBe(1);
+      expect(s.stderr.trim(), `start ${argv}`).toBe(USAGE);
+    }
+    for (const [, id] of FORMS) fs.writeFileSync(path.join(regDir(), `${id}.archived`), '1700000000\n');
+    for (const [argv, id] of FORMS) {
+      const r = shFail(`${START_STUBS} cmd_enable ${argv}`);
+      expect(r.code, `enable ${argv}: ${r.stdout}`).toBe(1);
+      expect(r.stderr.trim(), `enable ${argv}`).toBe(USAGE);
+      expect(fs.existsSync(path.join(regDir(), `${id}.archived`)), `enable ${argv}: the planted archive marker was cleared`)
+        .toBe(true);
+    }
+    expect(readJournal(h.home), 'a journal row was written').toEqual([]);
+    expect(reapLocks(), 'a reap lock was opened for a refused id').toEqual([]);
+    expect(startedIds(), 'a supervised start was asked for').toEqual([]);
+    // The CONTROL: a plain pair journals exactly one enable row, so the reader above can see one.
+    expect(shFail(`${START_STUBS} cmd_enable claude-b demo`).code).toBe(0);
+    expect(eventsOf(h.home, 'enable').map((e) => e['id'])).toEqual(['claude-b-demo']);
+  }, 60_000);
+
   it('project-pool refuses a dash-leading project, and nothing lands under pools/', () => {
     fs.mkdirSync(path.join(h.home, 'projects', '-lead'), { recursive: true });
     const pools = h.sh('printf %s "$POOLS_DIR"');
