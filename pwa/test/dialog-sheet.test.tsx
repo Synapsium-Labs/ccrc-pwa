@@ -18,6 +18,7 @@ import {
 } from '../src/session/askWords';
 import { DialogSheet } from '../src/session/DialogSheet';
 import { createSessionStore } from '../src/stores/session';
+import { atBlock, declValue, effectiveValue, norm, ruleIn, selectorsOf } from './cssRule';
 import {
   CACHING_TRACING,
   COLOUR_FEATURES,
@@ -2545,22 +2546,99 @@ describe('the own-words region and the busy commits keep their shape (D-5090, D-
   };
   const field = (): HTMLInputElement => screen.getByLabelText('Answer in your own words');
 
-  it('Send keeps its width while busy: both faces share one cell, and the one not showing is hidden', () => {
+  /** What a face of Send DRAWS: its text outside `.sr-only` (which is announced, never seen), and a `•` per dot. */
+  const drawn = (face: Element): string =>
+    [...face.childNodes].map((n) => {
+      if (!(n instanceof HTMLElement)) return n.textContent ?? '';
+      if (n.classList.contains('sr-only')) return '';
+      return n.tagName === 'I' ? '•' : drawn(n);
+    }).join('');
+  const faces = (b: HTMLElement): string[] =>
+    [...b.querySelectorAll(':scope > span')].map((f) => `${drawn(f)}${f.getAttribute('aria-hidden') === 'true' ? ':hidden' : ''}`);
+
+  it('Send keeps its width while busy: both faces share one cell, the one not showing is hidden, and busy draws no word', () => {
     vi.spyOn(api, 'answerDialogText').mockReturnValue(new Promise(() => {}));
     renderAsk(null, pane('cc300-ask-1q-open'));
-    const faces = (b: HTMLElement): string[] =>
-      [...b.querySelectorAll(':scope > span')].map((f) => `${f.textContent}${f.getAttribute('aria-hidden') === 'true' ? ':hidden' : ''}`);
     const idle = screen.getByRole('button', { name: 'Send' });
-    expect(faces(idle)).toEqual(['Send', 'Sending…:hidden']);
+    expect(faces(idle)).toEqual(['Send', ':hidden']);
     fireEvent.change(field(), { target: { value: 'Teal' } });
     fireEvent.click(idle);
+    // Busy is named `Sending…` for a screen reader and drawn as the chat's three working dots, which are narrower than
+    // the word `Send` (`Sending…` as a drawn word made Send 96px and clipped the field's placeholder at 360 and 375).
     const busy = screen.getByRole('button', { name: 'Sending…' });
     expect(busy).toHaveAttribute('aria-busy', 'true');
-    expect(faces(busy)).toEqual(['Send:hidden', 'Sending…']);
+    expect(faces(busy)).toEqual(['Send:hidden', '•••']);
     // The cell is the button's grid; the hidden face holds its width without being seen.
     expect(rule('.dlg-reply-send')).toMatch(/display:\s*grid/);
     expect(rule('.dlg-reply-send > span')).toMatch(/grid-area:\s*1\s*\/\s*1/);
     expect(rule(".dlg-reply-send > [aria-hidden='true']")).toMatch(/visibility:\s*hidden/);
+    // One motion, one definition: the dots are the chat's working dots (`.msg-working-dots`), in Send's busy ink, and
+    // they hold still for a reader who asked for reduced motion.
+    expect(selectorsOf(css, '.dlg-reply-wait i')).toContain('.msg-working-dots i');
+    expect(selectorsOf(css, '.dlg-reply-wait')).toContain('.msg-working-dots');
+    expect(effectiveValue(css, '.dlg-reply-wait i', 'background')).toBe('currentColor');
+    expect(norm(atBlock(css, '@media (prefers-reduced-motion: reduce)'))).toContain('.dlg-reply-wait i');
+  });
+
+  // The phone floor's arithmetic. At 360 the own-words field must hold its whole placeholder, and Send, busy or not, is
+  // only as wide as its idle word. jsdom measures no text, so the two strings' widths are MEASURED (Chromium, on a build
+  // of this branch, in the font chat.css gives each: system-ui, on the measuring machine the macOS face, which runs
+  // wider than Android's Roboto), and every other length is read from the stylesheets. A string or a font changed
+  // here is a width to measure again.
+  const MEASURED_PX: Readonly<Record<string, number>> = {
+    '…or answer in your own words': 218.5, // `.dlg-reply-input`: 16px (`--fs-input`), weight 400
+    Send: 31.6, // `.dlg-reply-send`: 13px (`--fs-sm`), weight 500
+  };
+  const PHONE_FLOOR = 360;
+  const UI = path.join(import.meta.dirname, '..', '..', 'ui', 'src');
+  const tokens = readFileSync(path.join(UI, 'styles', 'tokens.css'), 'utf8');
+  /** A length in px: `12px`, or a token (`var(--sp-3)`) read from tokens.css. */
+  const px = (value: string | undefined): number => {
+    const token = /^var\((--[\w-]+)\)$/.exec(value ?? '')?.[1];
+    const raw = token !== undefined
+      ? new RegExp(`${token}:\\s*([\\d.]+)px`).exec(tokens)?.[1]
+      : /^([\d.]+)px$/.exec(value ?? '')?.[1];
+    expect(raw, `a length in px: ${value}`).toBeDefined();
+    return Number(raw);
+  };
+  /** The value of `prop` in the first rule naming `selector`, split into its words (a `var(…)` is one word). */
+  const words = (selector: string, prop: string): string[] => {
+    const value = declValue(ruleIn(css, selector), prop);
+    expect(value, `${selector} { ${prop} }`).not.toBeNull();
+    return value!.match(/var\([^)]*\)|[^\s()]+/g) ?? [];
+  };
+
+  it('at the phone floor the field holds its whole placeholder beside Send, idle and busy', () => {
+    vi.spyOn(api, 'answerDialogText').mockReturnValue(new Promise(() => {}));
+    renderAsk(null, pane('cc300-ask-1q-open'));
+    const placeholder = field().placeholder;
+    expect(MEASURED_PX[placeholder], `measure "${placeholder}" again`).toBeDefined();
+    const idle = screen.getByRole('button', { name: 'Send' });
+    const [word] = faces(idle);
+    expect(MEASURED_PX[word!], `measure "${word}" again`).toBeDefined();
+    fireEvent.change(field(), { target: { value: 'Teal' } });
+    fireEvent.click(idle);
+    const [, busyDrawn] = faces(screen.getByRole('button', { name: 'Sending…' }));
+    expect(busyDrawn, 'the busy face draws dots and nothing else').toMatch(/^•+$/);
+    const dots = busyDrawn!.length;
+    // The fonts the two widths were measured in.
+    expect(declValue(ruleIn(css, '.dlg-reply-input'), 'font')).toBe(norm('var(--weight-regular) var(--fs-input) / 1.3 var(--family-ui)'));
+    expect(declValue(ruleIn(css, '.dlg-reply-send'), 'font')).toBe(norm('var(--weight-medium) var(--fs-sm) / 1 var(--family-ui)'));
+
+    // The sheet's gutter: every sheet but the full one pads `px-4`, which theme.css maps to `--sp-4`.
+    const sheet = readFileSync(path.join(UI, 'primitives', 'sheet.tsx'), 'utf8');
+    expect(sheet).toMatch(/'z-sheet [^']*\bpx-4\b/);
+    expect(readFileSync(path.join(UI, 'styles', 'theme.css'), 'utf8')).toMatch(/--spacing-4:\s*var\(--sp-4\)/);
+    const gutter = px('var(--sp-4)');
+    // Send: its inline padding and border around the wider of its faces. The busy face draws dots only.
+    const busyFace = dots * px(words('.dlg-reply-wait i', 'width')[0]) + (dots - 1) * px(words('.dlg-reply-wait', 'gap')[0]);
+    expect(busyFace, 'the busy face is no wider than the word Send').toBeLessThanOrEqual(MEASURED_PX[word!]!);
+    const send = 2 * px(words('.dlg-reply-send', 'padding')[1]) + 2 * px(words('.dlg-reply-send', 'border')[0])
+      + Math.max(MEASURED_PX[word!]!, busyFace);
+    // The field flexes into what is left of the row, and its text box is that less its own padding and border.
+    const fieldWidth = PHONE_FLOOR - 2 * gutter - px(words('.dlg-reply', 'gap')[0]) - send;
+    const textBox = fieldWidth - 2 * px(words('.dlg-reply-input', 'padding')[1]) - 2 * px(words('.dlg-reply-input', 'border')[0]);
+    expect(textBox, `${placeholder} at ${PHONE_FLOOR}px`).toBeGreaterThanOrEqual(MEASURED_PX[placeholder]!);
   });
 
   it('the busy commits keep a gap between the label and answering…', () => {

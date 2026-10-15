@@ -659,21 +659,29 @@ button.metachip:active {
 .msg-working-label {
   text-transform: uppercase;
 }
-.msg-working-dots {
+/* The three working dots are also the own-words Send's busy face
+   (`.dlg-reply-wait`, AskParts.tsx, D-5090): the same "in flight" mark, one
+   definition. There they paint in Send's busy ink (below, by the Send rules),
+   and they are narrower than the word Send, so a busy Send never widens. */
+.msg-working-dots,
+.dlg-reply-wait {
   display: inline-flex;
   gap: 3px;
 }
-.msg-working-dots i {
+.msg-working-dots i,
+.dlg-reply-wait i {
   width: 4px;
   height: 4px;
   border-radius: var(--r-full);
   background: var(--accent);
   animation: working-dot 1.2s ease-in-out infinite;
 }
-.msg-working-dots i:nth-child(2) {
+.msg-working-dots i:nth-child(2),
+.dlg-reply-wait i:nth-child(2) {
   animation-delay: 0.18s;
 }
-.msg-working-dots i:nth-child(3) {
+.msg-working-dots i:nth-child(3),
+.dlg-reply-wait i:nth-child(3) {
   animation-delay: 0.36s;
 }
 @keyframes working-dot {
@@ -690,7 +698,8 @@ button.metachip:active {
 }
 @media (prefers-reduced-motion: reduce) {
   .msg-working-glyph,
-  .msg-working-dots i {
+  .msg-working-dots i,
+  .dlg-reply-wait i {
     animation: none;
   }
   .msg-working-glyph {
@@ -1015,9 +1024,13 @@ button.metachip:active {
   cursor: default;
 }
 .dlg-reply-input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; border-color: transparent; }
-/* Send and its busy face, `Sending…`, share one grid cell (AskParts.tsx), so
-   the button is as wide as the wider face whichever shows: its width never
-   changes while busy, and neither does the field's beside it. */
+/* Send and its busy face share one grid cell (AskParts.tsx), so the button is
+   as wide as the wider face whichever shows: its width never changes while
+   busy, and neither does the field's beside it. The busy face is the chat's
+   three working dots (named `Sending…` for a screen reader only), narrower
+   than the word Send, so the wider face is always the idle word and Send
+   never takes width from the field: at 360 the field's text box keeps its
+   whole placeholder (the arithmetic is pinned in dialog-sheet.test.tsx). */
 .dlg-reply-send {
   flex: none;
   display: grid;
@@ -1039,8 +1052,10 @@ button.metachip:active {
   visibility: hidden;
 }
 .dlg-reply-send:disabled { color: var(--ink-tertiary); cursor: default; }
-/* Busy is the answer in flight, in the ink `.opt-wait` says "answering…" in. */
+/* Busy is the answer in flight, in the ink `.opt-wait` says "answering…" in;
+   the dots take it from here rather than the chat's accent. */
 .dlg-reply-send[aria-busy='true'] { color: var(--status-busy-text); }
+.dlg-reply-wait i { background: currentColor; }
 .dlg-reply-send:not(:disabled):hover { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 40%, transparent); }
 .dlg-details-toggle {
   margin-top: var(--sp-3);

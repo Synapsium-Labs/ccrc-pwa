@@ -300,9 +300,21 @@ export function OwnWords({
         >
           {/* Both faces share the button's one grid cell, so it is as wide as the wider face whichever shows, and
               Send never changes width while busy (`Send answering…` once grew it by 79px and squeezed the field mid
-              word). The face not showing is aria-hidden, which chat.css also hides from sight. */}
+              word). The face not showing is aria-hidden, which chat.css also hides from sight. Busy is the chat's
+              three working dots, narrower than the word Send, so Send is only as wide as its idle word: a busy face
+              drawn as `Sending…` made Send 96px and clipped the field's placeholder at 360 and 375. A screen reader
+              hears `Sending…`. */}
           <span aria-hidden={busy || undefined}>Send</span>
-          <span aria-hidden={!busy || undefined}>Sending…</span>
+          <span className="dlg-reply-wait" aria-hidden={!busy || undefined}>
+            {busy && (
+              <>
+                <i />
+                <i />
+                <i />
+              </>
+            )}
+            <span className="sr-only">Sending…</span>
+          </span>
         </button>
       </form>
       {count !== null && <p className="dlg-copy" id={countId}>{count}</p>}
