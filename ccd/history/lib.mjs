@@ -7768,3 +7768,133 @@ export function cardLine({ leaf, parent = null }) {
   if (!CARD_LINE_RE.test(line)) throw new TypeError(`cardLine: not a card line: ${JSON.stringify(line)}`);
   return line;
 }
+
+/** The boundary the next compaction will write, as planSpans is shown it: a uuid no transcript row carries. */
+const CARD_NEXT_BOUNDARY = 'card-prediction:next-boundary';
+
+/** The span start of the leaf the next compaction of one copy will become (§6.1), taken from planSpans itself so
+ *  the rule is never spelled twice: a copy of two rows, its last boundary (or, with none, its first stored row) and
+ *  a synthetic next boundary. The answer is the last boundary's head, its own uuid when it has none, or the copy's
+ *  first row; null for a copy with no rows. B2's D-4688 (history-span-per-boundary-copy) */
+export function predictedSpanStart({ firstRowUuid, lastBoundary }) {
+  const rows = [];
+  const boundaries = [];
+  if (lastBoundary !== null) {
+    rows.push({ uuid: lastBoundary.uuid, pos: 0, isBoundary: true, isSummary: false });
+    boundaries.push({ uuid: lastBoundary.uuid, headUuid: lastBoundary.headUuid, kept: new Set(), summaryUuid: null });
+  } else if (firstRowUuid !== null) {
+    rows.push({ uuid: firstRowUuid, pos: 0, isBoundary: false, isSummary: false });
+  } else {
+    return null;
+  }
+  rows.push({ uuid: CARD_NEXT_BOUNDARY, pos: 1, isBoundary: true, isSummary: false });
+  boundaries.push({ uuid: CARD_NEXT_BOUNDARY, headUuid: null, kept: new Set(), summaryUuid: null });
+  const next = planSpans({ rows, boundaries }).leaves.find((l) => l.boundaryUuid === CARD_NEXT_BOUNDARY);
+  return next === undefined ? null : next.spanStartUuid;
+}
+
+const isNodeIdOf = (kind, id) => typeof id === 'string' && HISTORY_NODE_ID_RE.test(id) && id[0] === kind;
+
+/** What the card for one session's next compaction says (§8.6), or why there is none. The sweep measures the inputs
+ *  over the copy the next boundary will be written to, within the epoch and family that copy's transcript belongs to.
+ *  - No confirmed, unmerged epoch of this id names the uuid (`ccrcId` null): skip `no-epoch`.
+ *  - The copy holds no row: skip `no-rows`.
+ *  - The plain id is already bound to another boundary: decideLeafId would qualify this leaf with a boundary uuid that
+ *    does not exist yet, so no line can name it: skip `fork-qualified` (B2's D-4689 (history-leaf-id-fork-qualified)). The skip
+ *    carries that plain id, so decideCardFile can still count a prediction the boundary before it consumed.
+ *  - Otherwise the leaf is the plain id. Its parent is the depth-1 parent planFanIn groups it into when it is the 8th
+ *    final, unparented slot of this copy's run (`predicted`, parentId over that group: grouping starts at the first
+ *    unparented slot and stops at a slot not yet final, RB4); else the epoch's newest condensed node when that is a
+ *    well-formed N id (`newest-condensed`); else none.
+ *  Both print as displayPrefixes over the family's node ids and themselves: at least NODE_ID_DISPLAY_MIN hex digits,
+ *  unique within the family the reader's default scope is (RB2). */
+export function planCardPrediction(i) {
+  if (i.ccrcId === null) return { act: 'skip', reason: 'no-epoch' };
+  const start = predictedSpanStart(i);
+  if (start === null) return { act: 'skip', reason: 'no-rows' };
+  const d = decideLeafId({
+    ccrcId: i.ccrcId, ccUuid: i.ccUuid, spanStartUuid: start, boundaryUuid: CARD_NEXT_BOUNDARY, plainBoundOther: i.plainBoundOther,
+  });
+  if (d.forked) return { act: 'skip', reason: 'fork-qualified', plainLeafId: leafId(i.ccrcId, i.ccUuid, start) };
+  const leaf = d.id;
+  const slots = [
+    ...i.slots.map((x) => ({ nodeId: x.nodeId, final: x.nodeId !== null, parented: x.parented })),
+    { nodeId: leaf, final: true, parented: false },
+  ];
+  const group = planFanIn({ slots, width: FAN_IN.leaf }).find((g) => g.includes(leaf));
+  let parent = null;
+  let parentKind = null;
+  if (group !== undefined) {
+    parent = parentId(group);
+    parentKind = 'predicted';
+  } else if (isNodeIdOf('N', i.newestCondensed)) {
+    parent = i.newestCondensed;
+    parentKind = 'newest-condensed';
+  }
+  const shown = displayPrefixes([...i.familyIds, leaf, ...(parent === null ? [] : [parent])]);
+  return {
+    act: 'write', line: cardLine({ leaf: shown.get(leaf), parent: parent === null ? null : shown.get(parent) }),
+    leafId: leaf, parentId: parent, parentKind,
+  };
+}
+
+const CARD_LEAF_RE = new RegExp(`^${escapeRe(CARD_PREFIX)}node (L[0-9a-f]{6,20})…`);
+
+/** The leaf display prefix a grammar-valid card line names, or null for any other text. */
+function cardLeafOf(text) {
+  return CARD_LINE_RE.test(text) ? CARD_LEAF_RE.exec(text)[1] : null;
+}
+
+/** What to do with one session's card file (§8.6 Timing). `current` is the file as read: absent, unreadable, or its
+ *  text (one trailing LF is the writer's and is not part of the line). A new line is written only at end-of-file; a
+ *  file whose leaf the prediction no longer names was CONSUMED by the boundary ingested since, and goes off
+ *  end-of-file rather than wait; a file that is no card line, or cannot be read, is replaced at end-of-file and
+ *  removed otherwise; a skip removes any file. A fork skip names the plain id the next leaf would have had, so a
+ *  file whose leaf no longer prefixes it was consumed too, and is counted (W1-e's denominator,
+ *  D-4738 (history-card-consumed-counter)); a no-epoch or no-rows skip names no leaf and counts nothing.
+ *    absent                      → write at end-of-file, else none;
+ *    the same line               → keep;
+ *    the same leaf, re-rendered  → write at end-of-file, else keep (its parent or prefix moved, the leaf did not);
+ *    another leaf                → consumed: write at end-of-file, else delete;
+ *    no card line, unreadable    → write at end-of-file, else delete;
+ *    a skip                      → delete; consumed when it is a fork skip whose plain id the file's leaf no
+ *                                  longer prefixes. */
+export function decideCardFile({ current, prediction, atEof }) {
+  const present = current.state !== 'absent';
+  const text = current.state === 'value' ? current.value.replace(/\n$/, '') : null;
+  const was = text === null ? null : cardLeafOf(text);
+  if (prediction.act !== 'write') {
+    const moved = was !== null && typeof prediction.plainLeafId === 'string' && !prediction.plainLeafId.startsWith(was);
+    return { act: present ? 'delete' : 'none', consumed: moved };
+  }
+  if (!present) return { act: atEof ? 'write' : 'none', consumed: false };
+  if (text === prediction.line) return { act: 'keep', consumed: false };
+  if (was === null) return { act: atEof ? 'write' : 'delete', consumed: false };
+  if (!prediction.leafId.startsWith(was)) return { act: atEof ? 'write' : 'delete', consumed: true };
+  return { act: atEof ? 'write' : 'keep', consumed: false };
+}
+
+/** The generation record beside a prediction, `card/<id>/<uuid>.gen` (spec §9.7, §8.2, C68; coordinator ruling
+ *  R-recalloff-parity). The hook cannot read the store: when neither CCRC_SESSION_GENERATION nor $REG/<id>.generation
+ *  resolves a generation, it compares recall-off/<id> with this record, which holds the generation B2's CLI resolves
+ *  then (the id's newest family's: '' for a legacy family or none), and with no usable record it withholds the line.
+ *  `card` is decideCardFile's act and `mayWrite` the write gate decideCardFile was given (end-of-file and budget).
+ *  The record's text is the generation and one LF.
+ *    a prediction stands (write or keep), the record equal      → keep;
+ *    it stands, the record absent, another or unreadable       → write when a write is allowed, else delete (none
+ *                                                                 when absent): never a stale record (fail closed);
+ *    no prediction stands (delete or none)                      → none: the hook reads the record only beside one. */
+export function decideCardGenFile({ current, generation, card, mayWrite }) {
+  if (card !== 'write' && card !== 'keep') return 'none';
+  if (current.state === 'value' && current.value === `${generation}\n`) return 'keep';
+  if (mayWrite) return 'write';
+  return current.state === 'absent' ? 'none' : 'delete';
+}
+
+/** `~/.ccrc/history/card/<id>/<uuid>.gen`: the generation record the sweep writes beside a session's prediction (see
+ *  decideCardGenFile). Checked like cardFileOf (id by idOk, uuid by UUID_RE, before any path is formed), so the
+ *  record's name is spelled once, here. D-5049 (history-card-gen-path-helper) */
+export function cardGenFileOf(home, id, uuid) {
+  if (typeof uuid !== 'string' || !UUID_RE.test(uuid)) throw new TypeError(`cardGenFileOf: not a session uuid: ${JSON.stringify(uuid)}`);
+  return `${cardDirOf(home, id)}/${uuid}.gen`;
+}

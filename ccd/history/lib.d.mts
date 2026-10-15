@@ -872,3 +872,23 @@ export function cardDirOf(home: string, id: string): string;
 export function cardFileOf(home: string, id: string, uuid: string): string;
 export function scopeMarkerOf(home: string, id: string): string;
 export function cardLine(i: { leaf: string; parent?: string | null }): string;
+
+// --- W1-B3 Task 2: the card prediction and the card file decision (spec §8.6, §6.1, §6.3)
+export interface CardBoundary { readonly uuid: string; readonly headUuid: string | null }
+export interface CardSlot { readonly nodeId: string | null; readonly parented: boolean }
+export interface CardPredictionInputs {
+  ccrcId: string | null; ccUuid: string; firstRowUuid: string | null; lastBoundary: CardBoundary | null;
+  plainBoundOther: boolean; slots: readonly CardSlot[]; newestCondensed: string | null; familyIds: readonly string[];
+}
+export type CardPrediction =
+  | { act: 'write'; line: string; leafId: string; parentId: string | null; parentKind: 'predicted' | 'newest-condensed' | null }
+  | { act: 'skip'; reason: 'fork-qualified'; plainLeafId: string }
+  | { act: 'skip'; reason: 'no-epoch' | 'no-rows' };
+export function predictedSpanStart(i: { firstRowUuid: string | null; lastBoundary: CardBoundary | null }): string | null;
+export function planCardPrediction(i: CardPredictionInputs): CardPrediction;
+export function decideCardFile(i: { current: Presence<string>; prediction: CardPrediction; atEof: boolean }):
+  { act: 'keep' | 'write' | 'delete' | 'none'; consumed: boolean };
+export function decideCardGenFile(i: {
+  current: Presence<string>; generation: string; card: 'keep' | 'write' | 'delete' | 'none'; mayWrite: boolean;
+}): 'keep' | 'write' | 'delete' | 'none';
+export function cardGenFileOf(home: string, id: string, uuid: string): string;
