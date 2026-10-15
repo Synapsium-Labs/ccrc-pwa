@@ -576,6 +576,31 @@ def stage4(ctx):
 # `unmeasured` when the journal cannot be read). `not-triggered` is not a health
 # verdict: the raw unknown counts stay beside it, and the comparison never changes
 # spawning, removes a key or acts on anything.
+# Wave 4b adds a THIRD, DIFFERENT section, `direct_pressure_kills`, read from the
+# main transcripts (`transcripts`, the stage-1 discovery): a complete
+# user-message `<task-notification>` envelope with one task id, `status` killed,
+# and a summary whose whole reason is the verified "was stopped because the
+# system is running low on memory". It counts unique (transcript uuid, task id)
+# pairs, so a repeated notification or another copy of one uuid is one task and
+# the same id in two uuids is two. The three sections are separate measurements
+# on separate time bases: `direct_pressure_kills` is Claude Code's own reap
+# notification, timed by the notification's delivery stamp (an observation, not
+# the kill instant; `--since` inclusive, `--until` exclusive; the shell may have
+# started earlier); `reap_class_oom` is the kernel pane-scope OOM stop, timed by
+# the journal; `inert_scopes` is NOW's sweep record, never windowed. Neither of
+# the first two substitutes for the other, and the comparison consumes only
+# `reap_class_oom`, never the direct count. Declared discovery limits: the
+# adapter skips stat failures silently and cannot enumerate unreadable roots,
+# the default largest-copy-per-uuid read can hide a divergent smaller copy
+# (`--all-copies` reads it; a task is still counted once), and subagent
+# transcripts are outside its pattern. A well-formed notification of the known
+# non-pressure statuses (`completed`, `failed`, `stopped`: a workflow that did not
+# finish before the previous session ended carries `stopped`) is read as not this
+# event; any OTHER status is unmeasured. A partial read (an unreadable file, a
+# malformed row, an envelope with an unreadable stamp or ambiguous fields) and
+# an absent roster are reported as such and are never a clean zero; a file's
+# hits count only once it was read to its end. The scanner and the comparison
+# only read: neither writes a marker or an environment assignment, or acts.
 S6_IDLE = 1800
 S6_SPAWN_SLOP = 10
 S6_DAY = 86400
@@ -775,9 +800,104 @@ def s6_pressure_comparison(reading, baseline):
             "decision": "withdraw" if observed > baseline + 2 else "not-triggered"}
 
 
+S6_NOTIFICATION = re.compile(r"<task-notification>\s*(.*?)\s*</task-notification>", re.S)
+S6_TASK_ID = re.compile(r"<task-id>([A-Za-z0-9_-]+)</task-id>")
+S6_STATUS = re.compile(r"<status>([^<>]*)</status>")
+S6_SUMMARY = re.compile(r"<summary>([^<>]*)</summary>", re.S)
+S6_PRESSURE_SUMMARY = re.compile(
+    r'Background command ".*" was stopped because the system is running low on memory', re.S
+)
+
+
+def s6_notification_texts(row):
+    if not isinstance(row, dict) or row.get("type") != "user":
+        return []
+    msg = row.get("message")
+    if not isinstance(msg, dict) or msg.get("role") != "user":
+        return []
+    content = msg.get("content")
+    if isinstance(content, str):
+        return [content]
+    if isinstance(content, list):
+        return [part["text"] for part in content
+                if isinstance(part, dict) and part.get("type") == "text"
+                and isinstance(part.get("text"), str)]
+    return []
+
+
+def s6_pressure_kills(ctx):
+    paths = transcripts(ctx)
+    if not paths:
+        return {"transcripts": "absent"}
+    hits = set()
+    read = unreadable = malformed = unmeasured = 0
+    for path in paths:
+        uuid = os.path.basename(path)[:-len(".jsonl")]
+        file_hits = set()
+        file_malformed = file_unmeasured = 0
+        try:
+            with open(path, "rb") as fh:
+                for raw in fh:
+                    try:
+                        row = json.loads(raw)
+                    except (ValueError, UnicodeError):
+                        file_malformed += 1
+                        continue
+                    for text in s6_notification_texts(row):
+                        text = text.strip()
+                        if not text.startswith("<task-notification>"):
+                            continue
+                        at = iso_epoch(row.get("timestamp"))
+                        # A readable timestamp outside the requested window is no event in it.
+                        if at is not None and not in_window(at, ctx):
+                            continue
+                        envelope = S6_NOTIFICATION.fullmatch(text)
+                        if not envelope:
+                            file_unmeasured += 1
+                            continue
+                        body = envelope.group(1)
+                        ids = S6_TASK_ID.findall(body)
+                        statuses = S6_STATUS.findall(body)
+                        if at is None or len(ids) != 1 or len(statuses) != 1:
+                            file_unmeasured += 1
+                            continue
+                        status = statuses[0]
+                        if status not in ("completed", "failed", "killed", "stopped"):
+                            file_unmeasured += 1
+                            continue
+                        if status != "killed":
+                            continue
+                        summaries = S6_SUMMARY.findall(body)
+                        if len(summaries) != 1:
+                            file_unmeasured += 1
+                            continue
+                        if S6_PRESSURE_SUMMARY.fullmatch(summaries[0]):
+                            file_hits.add((uuid, ids[0]))
+            read += 1
+        except OSError:
+            unreadable += 1
+            continue
+        hits.update(file_hits)
+        malformed += file_malformed
+        unmeasured += file_unmeasured
+    return {
+        "reading": "partial" if unreadable or malformed or unmeasured else "measured",
+        "killed_background_tasks": len(hits),
+        "transcript_uuids_with_kills": len({uuid for uuid, _ in hits}),
+        "transcripts_read": read,
+        "unreadable_transcripts": unreadable,
+        "malformed_rows": malformed,
+        "unmeasured_notifications": unmeasured,
+    }
+
+
 def stage6(ctx):
     reading = s6_reap(ctx)
-    out = {"reap_class_oom": reading, "inert_scopes": s6_inert()}
+    out = {
+        "reap_class_oom": reading,
+        "inert_scopes": s6_inert(),
+        "direct_pressure_kills": s6_pressure_kills(ctx),
+    }
     if ctx.get("reap_baseline") is not None:
         out["pressure_reap_comparison"] = s6_pressure_comparison(reading, ctx["reap_baseline"])
     return out
@@ -841,25 +961,30 @@ def s6_reap(ctx):
 
 # ── stage 7 (wave 3): the operator's choice survives a restart ──────────────
 # §9's stage-7 row, "restarts that revert an operator's /model", read off
-# swap.log. Before a stop that a spawn follows, ccd writes an operator's own
+# swap.log. Before a stop that a spawn follows (and, since wave 4b, before a live
+# uuid rotation), ccd writes an operator's own
 # `/model` or `/effort` to the route record (`route <id>: <field> <old> -> <new>
 # [actor=operator-session]`), or says why it could not: a value outside the
 # vocabulary, or one the record's own checks refused (`operator-choice <id>: …`).
-# Those two are the keep-time stops at which ccd KNOWS it reverted the operator's
-# choice, so they are the row. It counts STOPS (keeps), not distinct choices or restarts: a
-# `/model` ccd cannot keep is logged again at every later keep until a newer
-# command replaces it or its field is written after it (it reverts again at each).
+# Those two are the lines at which ccd KNOWS it could not keep the operator's choice.
+# Wave 4b widened where they come from: they are written by the dead-session keep
+# (a stop or revival that a spawn follows) AND by the live promotion `_sync_uuid`
+# makes before it moves the registry uuid off the transcript that holds the choice
+# (a /clear, a pane rotation). Both use one parser, floor, filter, mtime rule and
+# writer, and one log stream, so the row counts promotion writes and logged model
+# refusals, NOT measured restarts: a refused `/model` may be logged again at a
+# later promotion or keep until a newer command replaces it or its field is written
+# after it, and a live rotation need not be followed by any stop or restart.
 # The row's key, `restarts_that_reverted_an_operator_model`, keeps its wave-3 name
-# although what it counts is those keep-time STOPS. The writes are reported
-# beside the row, and so are the stops where ccd could not read at all
-# (`operator-choice <id>: unmeasured (…)`), which MAY have reverted one — never
-# folded into the row, never dropped. The field `stops_that_could_not_read_the_transcript`
-# (its name kept too) counts KEEPS that could not measure, one per such line: keeps at a spawn count,
-# so does the acknowledgement-drift line, and a refused command repeats at every
-# keep until a later operator command of its kind is acknowledged or its field is
-# written after it. Named cost: a
-# supervisor revival reads the transcript before its spawn and logs like a stop,
-# but a session on a non-Anthropic lane is skipped and leaves no line, so its
+# although what it counts is those logged refusals (outside-vocabulary plus
+# route-refused `/model` lines, from either path). The writes are reported beside
+# the row, and so are the lines where ccd could not read at all
+# (`operator-choice <id>: unmeasured (…)`), which MAY have lost one — never folded
+# into the row, never dropped. The field `stops_that_could_not_read_the_transcript`
+# keeps its name too and counts those `unmeasured` lines from both paths, one per
+# line (the acknowledgement-drift line counts as well). These are conservative
+# observation counters, not distinct commands, sessions, stops or restarts. Named
+# cost: a session on a non-Anthropic lane is skipped and leaves no line, so its
 # `/model` is never counted.
 # Self-contained, as stage 4.
 S7_WRITE = re.compile(r"(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d) route (\S+): (class|effort) .+? -> (\S+) \[actor=operator-session\]")

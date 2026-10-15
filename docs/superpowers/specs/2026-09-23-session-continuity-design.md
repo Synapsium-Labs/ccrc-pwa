@@ -10,7 +10,9 @@ and records stage 7 as planned by its wave-3 plan, 2026-10-04 · rev 8 ships sta
 until the operator arms it, BEFORE the spawn variable (which follows baseline B's week), and defines §9's stage-6
 counts as measured (wave 4, 2026-10-05) · rev 9 amends stage 1 for issue #317 (D-4500, D-4501): a link that
 `EXDEV` refused routes through a read-write mount of the whole filesystem, proved by inode, and a copy names its cause
-and its bytes (§1.2 item 1, §5.1, §8, §9; 2026-10-08) ·
+and its bytes (§1.2 item 1, §5.1, §8, §9; 2026-10-08) · rev 10 is an as-built amendment for wave 4b (2026-10-15), not a
+new operator ruling: labelled wave-4b annotations in §5.6, §5.7 and §9 record the child-scoped pressure variable, the
+carried-scope record, the direct pressure-kill metric and the live `/clear` promotion that closes D-3925 ·
 **Date:** 2026-09-23 ·
 **Branch:** `ws/enhance-ccrc-for-parallel-agents` (based on `origin/main` `bbb5e714`) ·
 **Companion:** `2026-09-23-landing-order-and-main-churn-design.md`. Its stage 5 needs this spec's stage 1; this
@@ -608,6 +610,26 @@ before one spawn — because ccd writes no spawn event for a same-rc respawn wit
 transcript for no user or assistant row in the 30 minutes before the stop and a Bash `run_in_background` start since
 the spawn with no `<task-notification>` for it. An aggregate `MemoryHigh` must never return to the slice.
 
+**As built (wave 4b, 2026-10-15; an as-built annotation of the rulings above, not a new ruling).** The variable is
+assigned in each composed child spawn's own `exec env` command, beside the resume variables, in the primary command AND
+the resume retry; there is no global export or wrapper file. Every spawn target currently supported execs Claude Code
+(an external-provider shim included), so the assignment follows the kind of executable, not the provider; no native
+target exists today, and a future one must compose its own environment or drop this key, since the key is added
+unconditionally. The sweep's report/shadow posture is unchanged. Its
+record has three row kinds: `dead`, `old` and `carry <unit> state=<dead|live|unknown> first=<n|none> cpu0=<n|none> why=<reason>`.
+A carry is this tick's inability to measure, never a fresh dead verdict: it cannot reach a stop, its bounded prior clock
+pair becomes usable only after a later tick measures every predicate, a child-cgroup carry is `unknown` (that check
+precedes liveness) and the parent-walk hop cap is the one carry known to be `live`. This supersedes the wording above that
+an unmeasurable predicate "records nothing new" and keeps its previous line. Doctor validates the whole record: a malformed,
+future or stale one asks for a new measurement, a dead or unknown carry warns without stop advice, a carry-only live record
+is a qualified PASS, and a mixed record limits stop advice to its measured dead rows; a paused sweep writes nothing (doctor reports SKIP). The
+sweep's record write is checked at each step and keeps the previous complete record if replacement fails. §9's first
+stage-6 metric is now a direct count, separate from the kernel OOM class (§9 annotation). The removal rule compares only
+the pane-scope OOM reap class with B: at exactly B + 2 it is `not-triggered` (not a health verdict) and above B + 2 it
+means withdraw, by a follow-up release that takes effect at each session's NEXT start; deploying the variable does not
+retrofit a running pane, so a reading soon after deployment mixes opted-out and not-yet-restarted sessions. The comparison
+reads only. The historical 186 and 44 measurements are not reproduced by this scanner.
+
 ### 5.7 Stage 7 — the operator's choice survives a restart (ccd)
 
 **ccd journals its own keystrokes.** `_inject_spawn_effort` and `_route_apply_now` append each `/effort` or
@@ -659,8 +681,7 @@ context, the record having no context field; a `/model` typed in a session alrea
 first post-deploy stop or respawn, is not kept at that stop (the first such stop logs `unmeasured` once when the
 transcript exists, but if a `route --apply` keystroke opened the journal first, the earlier command is dropped with
 no line); and after a rollback and a roll-forward, keystrokes the older ccd typed after a floor was opened could
-read as the operator's. Known silent costs, each with no line (drifted acknowledgement wording is not one: it logs `unmeasured`): a `/model` or `/effort` typed before a `/clear`
-(`/clear` starts a new transcript and the keep reads only the current one; deferred to a later wave); an operator
+read as the operator's. Known silent costs, each with no line (drifted acknowledgement wording is not one: it logs `unmeasured`): D-3925 is closed by wave 4b: `_sync_uuid` promotes the outgoing transcript before replacing its UUID, with no choicekept mutation; compaction does not change the transcript. The costs that remain are an operator
 command typed within `TYPED_MATCH_WINDOW` after a ccd keystroke that rotated out of the journal, and never through
 a stop since; an Anthropic-lane command typed before a round trip through a non-Anthropic lane, and never through
 a stop since (nearly empty: the outbound move is itself a swap whose keep runs on the Anthropic side); a session whose
@@ -669,6 +690,18 @@ stop or revival the wrapper reads as non-Anthropic (`_is_anthropic_backend`), so
 read, which the keep does not overwrite; a deploy-transition `/model` whose journal a `route --apply` keystroke opened first (above); and an interrupted stop (if a stop dies between its keep, which writes the marker,
 and its kill, the pane survives marked, and a later stop or revival skips its read; narrow, and closing it needs the marker
 bound to a pane instance).
+
+**As built (wave 4b, 2026-10-15; an as-built annotation, not a new ruling).** Before a pane-observed UUID rotation (a
+`/clear`), `_sync_uuid`'s admitted pane branch runs the same promotion the dead-session keep runs, on the outgoing
+transcript and before the registry UUID is replaced (background-follow and continuation-chain UUID writes do not
+promote): the same parser, journal floor, typed-command filter, route-field mtime precedence, class
+vocabulary and one combined `cmd_route` call for the pair. The marker stays the dead-session keep's: a live promotion
+neither writes nor clears `choicekept`. Unreadable, malformed or unrecognised input is logged in the existing words and never
+blocks UUID synchronisation; a non-Anthropic lane is still skipped (this is not the applicability rule of §5.6's variable).
+Because live promotions and dead keeps share one writer and one `swap.log` stream, §9's stage-7 keys, whose names are kept,
+now include live promotions: `restarts_that_reverted_an_operator_model` sums outside-vocabulary and route-refused `/model`
+lines from both paths and `stops_that_could_not_read_the_transcript` counts `unmeasured` lines from both, so neither is an
+actual restart or stop count.
 
 ## 6. Invariants kept
 
@@ -761,6 +794,18 @@ census deduplicated by run id, the post-swap outcome classifier, the pressure-ki
 Stage 1's first merges meet the backlog C9 does not backfill: 43 of the 673 return-visit pairs on the box exceed
 `CARRY_MERGE_BUDGET` and defer part of their walk. Its row is therefore reported over all carries and over carries
 whose pair was not stranded before its deploy, with deferred actions counted apart.
+
+**As built (wave 4b, 2026-10-15; an as-built annotation, not a new ruling).** Stage 6's first metric is read by
+`deploy/measure-continuity.py --stage 6` as `direct_pressure_kills`: the unique (transcript UUID, task ID) pairs whose
+complete user-message `<task-notification>` envelope carries `status` killed and the verified "was stopped because the
+system is running low on memory" summary, timed by the notification's delivery stamp (since inclusive, until exclusive;
+the task may have started earlier). It is a different measurement from the kernel pane-scope OOM class `reap_class_oom`
+(timed by the journal) and from the sweep's `inert_scopes` (read at the moment of the reading); none substitutes for
+another, and the B + 2 comparison consumes only the OOM class. Its coverage is the discovered main transcripts: the
+default largest copy per UUID can hide a divergent smaller one (`--all-copies` reads it), the adapter skips stat failures
+silently, and subagent transcripts are outside its pattern. A partial or absent read is reported, never a clean zero. The
+target stays 0 and the baseline cells above are historical: the 186 is not claimed as a replay of this scanner. Stage 7's
+keys now include live UUID promotions as the §5.7 annotation says, so its row reads as logged refusals, not restarts.
 
 Prompt text and skill clauses are requests; a stage whose metric has not moved two weeks after rollout is retired or
 redesigned.

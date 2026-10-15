@@ -1636,7 +1636,7 @@ This task completes spec section 9's FIRST stage-6 metric, carried explicitly fr
 
 **Evidence behind the fixture.** Static inspection of Claude Code 2.1.296 on 2026-10-14 traced the pressure-reap caller to its notification formatter: internal `status: killed`, `stopCause: memory_pressure`; final `<status>killed</status>`; summary `Background command "<description>" was stopped because the system is running low on memory`; optional tool-use/output-file fields; explanatory `<note>`, not a reason element. The formatter escapes ampersands and angle brackets in summary/body, not double quotes. This proves the constructed notification string, not live eventual transcript rendering. The historical `reaper/classify_kills.py` evidence pointer is not a shipped parser and was not located in this checkout; do not pretend its historical count is replay-verified by this task.
 
-- [ ] **Step 1: Add the complete fixture-contained scanner contract.**
+- [x] **Step 1: Add the complete fixture-contained scanner contract.**
 
 Create this test file. Its factory places main transcripts under the fixture HOME, never the live registry. It asks stage 6 for a fixture journal, so even these scanner-only cases never run live journalctl. Every process has a bound and inherits a Git-clean environment.
 
@@ -1774,7 +1774,7 @@ describe('direct background-shell pressure kills, not pane-scope OOM stops', () 
 
 The ordinary notification fixture has optional fields, escaped description text, and a note deliberately different from the real explanatory wording. Only the verified status/summary contract decides a pressure kill. A hand-typed user message that EXACTLY imitates a complete runtime envelope is indistinguishable here; this is a read-only observational counter, not authenticated proof that a process died. Do not add an unverified `isMeta` requirement to hide that limitation.
 
-- [ ] **Step 2: Run the new suite red before adding the scanner.**
+- [x] **Step 2: Run the new suite red before adding the scanner.**
 
 From `server/`, foreground:
 
@@ -1784,7 +1784,7 @@ From `server/`, foreground:
 
 Expected: the direct metric is absent from stage 6. Capture the actual failures. No installed Claude Code process is spawned by this suite, and no pressure condition is induced on the box.
 
-- [ ] **Step 3: Add the direct scanner without changing earlier discovery semantics.**
+- [x] **Step 3: Add the direct scanner without changing earlier discovery semantics.**
 
 Place these constants/functions beside stage 6. No XML dependency is needed: match the complete envelope and its required field cardinalities after JSON decoding. The summary is matched as escaped text; its quoted description may contain escaped markup, quotes or newlines. The low-memory suffix must be the reason, not merely text somewhere inside it.
 
@@ -1894,7 +1894,7 @@ In Task 1's `stage6`, widen the existing `out` literal only:
 
 Keep the optional `pressure_reap_comparison` block as it is; it consumes `reading` from `s6_reap`, never `killed_background_tasks`. Keep STAGES, earlier CLI options, issue #317's copy counters and existing stage outputs unchanged. No marker, environment assignment or process action is written by the scanner.
 
-- [ ] **Step 4: Document the new behavior in its existing README sections.**
+- [x] **Step 4: Document the new behavior in its existing README sections.**
 
 Make these focused edits by content, after re-reading the task-parent README:
 
@@ -1969,7 +1969,7 @@ forced fleet restart is part of this change. An aggregate slice `MemoryHigh` mus
 
 Use generic examples only. Existing live line citations are repaired by the shared citation procedure, not by padding the new prose.
 
-- [ ] **Step 5: Add labelled as-built spec annotations, preserving the approved decisions.**
+- [x] **Step 5: Add labelled as-built spec annotations, preserving the approved decisions.**
 
 Append a dated wave-4b annotation to section 5.6 after its existing named trade, with these facts: child-scoped primary/retry assignment; all currently supported spawn targets exec Claude Code; report/shadow remains; carry grammar and freshness distinctions; direct notification metric separate from kernel OOM; exclusive B + 2 comparison; next-start deployment/removal effect; discovery limits. Do not amend the historical 186/44 measurement into a claim that this scanner reproduced it.
 
@@ -1977,7 +1977,7 @@ In section 5.7, replace ONLY the `/clear` deferred-cost clause with `D-3925 is c
 
 In the instrument's stage-6 comments, state each of its three sections, their time bases, known discovery limits and the fact that comparison makes no mutation. In stage-7's comment, replace its stops-only claim with the same live-promotion overcount explanation. Do not rename old output keys or rewrite the stage-7 scanner in this task.
 
-- [ ] **Step 6: Run owning and earlier-stage compatibility gates green.**
+- [x] **Step 6: Run owning and earlier-stage compatibility gates green.**
 
 From `server/`, one foreground process at a time:
 
@@ -1988,7 +1988,7 @@ From `server/`, one foreground process at a time:
 
 Run the existing stage-1 suite, `./node_modules/.bin/vitest run test/measure-continuity.test.ts --maxWorkers=1`, too before committing. All previous keys, issue #317 counters and window semantics remain. Parse the Python with `python3 -I -c "import ast; from pathlib import Path; ast.parse(Path('deploy/measure-continuity.py').read_text())"` from the workspace root. Run `git diff --check`.
 
-- [ ] **Step 7: Mutate the direct scanner's guards, restore green, and commit after the fresh reviewer.**
+- [x] **Step 7: Mutate the direct scanner's guards, restore green, and commit after the fresh reviewer.**
 
 | Mutation | Required red fixture |
 |---|---|
@@ -2004,6 +2004,38 @@ Run the existing stage-1 suite, `./node_modules/.bin/vitest run test/measure-con
 | Silently drop malformed JSON/missing time/duplicate status | Partial-reading case |
 
 Record each actual red and restored green. No runtime kill is needed or permitted for these mutations. Commit subject: `feat(continuity): count direct pressure-kill notifications and document wave 4b`. Include only the scanner/test/docs and measured evidence; no copied runtime bundle, private evidence path or historical script enters the PR.
+
+#### Execution evidence (Task 4)
+
+Measured on the dispatched workspace branch at base `8b6a01b3a`, from `server/`, foreground, `--maxWorkers=1`, fixture HOMEs only; no runtime kill was induced and no installed Claude Code was spawned. Steps 1-6 are done; Step 7 is ticked for the mutations and the commit itself, and its fresh-reviewer gate belongs to the controller and is not claimed here.
+
+**Red (Step 2).** `measure-continuity-pressure-kills.test.ts` against the unmodified instrument: 11 failed (11), every case on `the direct metric is composed into stage 6: expected undefined to be defined`.
+
+**Green (Steps 3 and 6).** After the scanner and the one-line widening of `stage6`'s `out` literal: the new file 11 passed. `measure-continuity-pressure-kills` + `-stage6` 38 passed; `-stage7` + `-stage4` 14 passed; `measure-continuity` 7 passed. `python3 -I` `ast.parse` of the instrument exits 0 and `git diff --check` exits 0. After `git add` of the new test: `topology-clean` 55 passed (exit 0), `single-definition` 571 passed (exit 0), `deviation-refs` 31 passed (exit 0); `readme-holds`, `docs-parity`, `oss-metadata`, `dead-coordinator-prose` and `box-token-census` 162 passed.
+
+**Candidate departures from the brief's text.** None needed: the test and scanner were used verbatim, and every helper the brief names (`transcripts`, `iso_epoch`, `in_window`, `--home`, `--journal`, `--all-copies`, `makeCcdHarness`, `inheritedEnv`) exists with the shape the brief assumes. Two README anchor differences: the `revival reads.` sentence ends the first bullet of a list, so the new operator-choice paragraph is an indented continuation of that bullet; and the stage-6 paragraph's old text sat inside the paragraph after the doctor description, so the doctor paragraph (item 5) precedes the new stage-6 paragraph.
+
+**Mutations (Step 7): mutation -> observed red owner case(s), each restored byte for byte (`cmp` against the green instrument) and the file rerun 11 passed.**
+
+| Mutation | Observed red |
+|---|---|
+| Remove the direct metric from the stage-6 composition | all 11 (the direct section assertion in the shared reader) |
+| Drop the UUID from the dedupe pair | 2: the UUID/task dedupe cases (all=false, all=true) |
+| Count rows/copies, not unique pairs | 9, among them the repeated-notification and all-copies cases |
+| Remove the `status=killed` requirement | 1: the note/description/completed-notification control |
+| Search the phrase anywhere, not as the summary's whole reason | 1: the same control |
+| Parse raw JSON bytes, not decoded user content | 9, among them the escaped-JSON and the assistant/tool-result controls |
+| Require `isMeta` on every notification | 9, among them the verified-shaped row without metadata (escaped-JSON case) |
+| Make until inclusive | 1: the exact-endpoint case |
+| Make since exclusive | 1: the exact-endpoint case |
+| Fold an absent roster into a measured zero | 1: the absent case |
+| Fold a read failure into a measured read | 1: the EISDIR case |
+| Silently drop malformed JSON | 1: the partial-reading case |
+| Silently drop a duplicate-status envelope | 1: the partial-reading case |
+
+**Citation tax (S6-R11).** Instrument from the child-reclamation predecessor plan, extracted to private scratch, run with base `8b6a01b3a` and `--maxWorkers=1`: `byFile['ccd/ccd']` stated 147, base 147, tree 147; `total` stated 202, base 202, tree 202; other keys moved: none; byFile composition entered [] left []; row array stated 55, base 55, tree 55 (entered [] left []); site array stated 35, base 35, tree 35 (entered [] left []). This task edits no `ccd/ccd` line and README carries only its two `ccd/ccd` anchors, which stay valid, so nothing was re-pointed and `session-hook.test.ts` needs no S6-R11 annotation or literal change. The citation cases `CITATION DEBT|README HAS|LOCATION INDEXES|ROW PASS|RANGE BOUND|TWO CORPUS FACTS|whole corpus` are green (7 passed). The two frozen documents are unchanged against `origin/main` (exit 0). `CLAUDE.md`'s "~6200 lines" README figure still reads true (README is now 6240 lines) and no check reds on it; it is untouched.
+
+**Fix round 1 (D-4317, D-4318, two doc fixes).** D-4317: `stopped` added to the known non-killed statuses. Red before the change: the new `stopped` workflow case failed (`reading: "partial"`, `unmeasured_notifications: 1`); green after: `measure-continuity-pressure-kills` 13 passed (11 original, the `stopped` case, and the unknown-status control). D-4318 narrows the README and spec 5.7 sentences. Doc fixes: the spec 5.6 annotation no longer describes a native-executable gate (the key is added unconditionally; a future native target must compose its own environment or drop it), and the README doctor paragraph says the sweep writes nothing while paused and doctor reports SKIP (the spec's matching clause likewise). The instrument's stage-6 comment names the known non-pressure statuses. Citation instrument re-run at base `8b6a01b3a`: `byFile['ccd/ccd']` 147/147/147, total 202/202/202, no other key moved, composition and row/site arrays (55, 35) unchanged with nothing entered or left, so `session-hook.test.ts` is untouched.
 
 ### Task 5: Coordinator acceptance, updater observation and the post-variable week
 
@@ -2136,6 +2168,10 @@ npm run build
 The planning commit itself defined no numbered deviation; D-4316 below was defined during Task 1's implementation. The issued block is 4316 through 4325; it is not an instruction to consume all ten. Task 1 discharges the carried review/worker residue and Task 3 closes the already-defined D-3925 without redefining it. During implementation, define any genuine departure here with the issued number, exact changed contract, why it was necessary, named cost and measured red/green evidence IN THE SAME COMMIT as its implementation. A plan adjustment that changes an operator ruling is not a worker's deviation to self-authorize; stop and report it for a ruling.
 
 **D-4316 (Task 1, fix round 1).** *Contract changed:* the reason class of the sweep's `dead` row, in both readers, is widened from `[a-z-]` to `[a-z0-9-]`: the doctor's `why=([a-z0-9-]+(,[a-z0-9-]+)*)` inside `_check_scope-sweep` (capture numbering unchanged) and the instrument's `why=[a-z0-9-]+(?:,[a-z0-9-]+)*` in `S6_DEAD`; nothing else in either regex moves. Two round-trip pins are added to `scope-sweep.test.ts`: each feeds one reader the record the REAL sweep wrote in its fixture, with the reasons `dead-under-6h` and `cpu-moved,process-started-under-6h`. *Why:* the plan's literal regex rejects the sweep's own most common reasons, `dead-under-6h` and `process-started-under-6h`, which contain a digit, so every scope seen dead in its first six hours made the doctor call the whole record unsafe to read and made the instrument publish `{record: 'unreadable'}`; the spec requires the readers to interpret the sweep's record. Every earlier reader fixture used `why=none`, which is why no case caught it. *Cost:* none known; it accepts digits in reason tokens, which only the sweep writes, and no reader does arithmetic on them. *Evidence:* both new pins red under the old class (doctor: `has 2 line(s) it cannot read`; instrument: `{record: 'unreadable'}` instead of `dead: 2` counts), green after (`scope-sweep.test.ts` 78/78, `ccrc-doctor.test.ts -t scope-sweep` 28 passed, `measure-continuity-stage6.test.ts` 27/27).
+
+**D-4317 (Task 4, fix round 1).** *Contract changed:* the scanner's set of known non-killed notification statuses, `s6_pressure_kills` in `deploy/measure-continuity.py`, is widened from `completed`/`failed`/`killed` to include `stopped`: a well-formed envelope with `<status>stopped</status>` is read as not this event and adds no unmeasured count. Any other unknown status stays `unmeasured_notifications`. Two fixture cases are added to `measure-continuity-pressure-kills.test.ts`: a `stopped` envelope with a workflow-style summary (`Background workflow "..." (run wf_...) didn't finish before the previous session ended`) leaves the reading `measured`, and an unrelated unknown status (`exploded`) still makes it `partial` with one unmeasured notification. *Why:* real Claude Code transcripts (seen in 2.1.289 and 2.1.295) carry well-formed `stopped` notifications, so the plan's three-status set made the fleet reading routinely `partial` and Task 5's target of 0 could never be a measured zero. *Cost:* a future status word that Claude Code adds is unmeasured until named, which is the intended fail-open-to-partial direction; a `stopped` notification is never searched for a pressure reason. *Evidence:* the `stopped` case red before the change (`reading: 'partial'`, `unmeasured_notifications: 1` instead of `measured`/0), green after; the file 13 of 13.
+
+**D-4318 (Task 4, fix round 1).** *Contract changed:* two prose sentences, not code. The README operator-choice paragraph and the spec 5.7 wave-4b annotation said the promotion happens "before a live UUID change"; they now say "before a pane-observed UUID rotation (a `/clear`)", and add that background-follow and continuation-chain UUID writes do not promote. *Why:* only the admitted pane branch of `_sync_uuid` calls `_operator_choice_promote` (Task 3's contract); `_ci_bg_follow` and `_follow_continued_in` write the UUID without it, so the plan's wider sentence overstated what shipped. *Cost:* none; the code is unchanged and the described costs for those two paths were already out of scope. *Evidence:* reading `_sync_uuid`: the single promotion call sits in the admitted pane branch; no test change (documentation only), and the README/spec citation instrument measured no movement.
 
 ## Where Things Stand
 
