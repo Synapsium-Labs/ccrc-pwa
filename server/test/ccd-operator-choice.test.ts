@@ -959,6 +959,11 @@ describe('live UUID rotation keeps the outgoing operator choice', () => {
     expect(h.reg(ID, 'class')).toBe('opus');
     expect(h.reg(ID, 'effort')).toBe('high');
     expect(routeLines()).toHaveLength(2);
+    // ONE cmd_route, so one reason on both of its per-field lines, and it is the rotation's own.
+    expect(routeLines().map((l) => l.replace(/^\S+ \S+ /, ''))).toEqual([
+      `route ${ID}: effort low -> high [actor=operator-session] (its own /effort and /model, kept before a uuid rotation)`,
+      `route ${ID}: class haiku -> opus [actor=operator-session] (its own /effort and /model, kept before a uuid rotation)`,
+    ]);
     expect(fs.existsSync(regFile(`${ID}.choicekept`))).toBe(false);
     expect(sync(NEXT)).toBe('rc=0');
     expect(routeLines()).toHaveLength(2);
@@ -1201,4 +1206,144 @@ describe('live UUID rotation keeps the outgoing operator choice', () => {
       expect(fs.existsSync(regFile(`${ID}.choicekept`))).toBe(fn === '_operator_choice_keep');
     },
   );
+
+  // ── FINAL-REVIEW F1 (D-4319): a newer choice in the INCOMING transcript wins, and a promotion types nothing ──
+  // The tick that sees a `/clear` can run after the operator has already typed a
+  // `/model` or `/effort` into the NEW conversation. Those commands are newer than
+  // anything in the outgoing transcript by construction, so the outgoing one of the
+  // same kind is not promoted: promoted, it would stamp its field at wall time, later
+  // than the new command, and the next keep's "record wins when newer" would drop the
+  // operator's newest choice. No record mtime is backdated here.
+  const incoming = (lines: string[], sid = NEXT): string => {
+    const p = path.join(path.dirname(h.sh(`_transcript_path ${ID}`)), `${sid}.jsonl`);
+    fs.mkdirSync(path.dirname(p), { recursive: true });
+    fs.writeFileSync(p, lines.join('\n') + '\n');
+    return p;
+  };
+
+  it('/clear then /model sonnet before the tick: the outgoing /model opus is not promoted, and the next keep reads sonnet', () => {
+    seed(); record({ class: 'fable', effort: 'low' });
+    const t = now() - 600;
+    writeTranscript([
+      cmd(t, 'model', 'opus'), ack(t, MODEL_ACK('Opus 5.5')),
+      cmd(t + 1, 'effort', 'high'), ack(t + 1, EFFORT_ACK('high')),
+    ]);
+    incoming([cmd(now() - 5, 'model', 'sonnet'), ack(now() - 5, MODEL_ACK('Sonnet 5.5'))]);
+    expect(sync(NEXT)).toBe('rc=0');
+    expect(h.reg(ID, 'uuid')).toBe(NEXT);
+    expect(h.reg(ID, 'class')).toBe('fable');
+    expect(h.reg(ID, 'effort'), 'the kind the new conversation has not set is still promoted').toBe('high');
+    expect(routeLines()).toHaveLength(1);
+    expect(keep()).toBe('rc=0');
+    expect(h.reg(ID, 'class')).toBe('sonnet');
+    expect(h.reg(ID, 'effort')).toBe('high');
+  });
+
+  it('/clear then /effort medium before the tick: the outgoing /effort high is not promoted, and the next keep reads medium', () => {
+    seed(); record({ class: 'fable', effort: 'low' });
+    const t = now() - 600;
+    writeTranscript([
+      cmd(t, 'model', 'opus'), ack(t, MODEL_ACK('Opus 5.5')),
+      cmd(t + 1, 'effort', 'high'), ack(t + 1, EFFORT_ACK('high')),
+    ]);
+    incoming([cmd(now() - 5, 'effort', 'medium'), ack(now() - 5, EFFORT_ACK('medium'))]);
+    expect(sync(NEXT)).toBe('rc=0');
+    expect(h.reg(ID, 'class')).toBe('opus');
+    expect(h.reg(ID, 'effort')).toBe('low');
+    expect(routeLines()).toHaveLength(1);
+    expect(keep()).toBe('rc=0');
+    expect(h.reg(ID, 'class')).toBe('opus');
+    expect(h.reg(ID, 'effort')).toBe('medium');
+  });
+
+  it('an unacknowledged /model in the new conversation is still newer: the outgoing /model opus is not promoted', () => {
+    seed(); record({ class: 'fable' });
+    const t = now() - 600;
+    writeTranscript([cmd(t, 'model', 'opus'), ack(t, MODEL_ACK('Opus 5.5'))]);
+    incoming([cmd(now() - 5, 'model', 'sonnet'), ack(now() - 5, 'an unrecognised acknowledgement')]);
+    expect(sync(NEXT)).toBe('rc=0');
+    expect(h.reg(ID, 'class')).toBe('fable');
+    expect(routeLines()).toEqual([]);
+  });
+
+  it('control: ccd\'s own journalled /model in the new conversation does not hold back the outgoing choice', () => {
+    seed(); record({ class: 'fable' });
+    const t = now() - 600;
+    writeTranscript([cmd(t, 'model', 'opus'), ack(t, MODEL_ACK('Opus 5.5'))]);
+    fs.appendFileSync(regFile(`${ID}.typed`), `\n${now() - 5} model sonnet`);
+    incoming([cmd(now() - 5, 'model', 'sonnet'), ack(now() - 5, MODEL_ACK('Sonnet 5.5'))]);
+    expect(sync(NEXT)).toBe('rc=0');
+    expect(h.reg(ID, 'class')).toBe('opus');
+  });
+
+  it('control: an incoming transcript that is not a readable regular file promotes as before', () => {
+    seed(); record({ class: 'fable' });
+    const t = now() - 600;
+    writeTranscript([cmd(t, 'model', 'opus'), ack(t, MODEL_ACK('Opus 5.5'))]);
+    const dir = incoming([]); fs.rmSync(dir); fs.mkdirSync(dir);   // a directory where the new transcript should be
+    expect(sync(NEXT)).toBe('rc=0');
+    expect(h.reg(ID, 'uuid')).toBe(NEXT);
+    expect(h.reg(ID, 'class')).toBe('opus');
+  });
+
+  // THE PROMOTION TYPES NOTHING. The supervise tick runs `_route_apply_check` right
+  // after `_sync_uuid`; a promoted field the applier saw as pending against
+  // `routeapplied` was typed back into the live pane (and `/effort`, which never
+  // reads back, every time). An acknowledged command proves the pane already runs
+  // it, so the promotion records exactly what it wrote as applied. tmux RECORDS.
+  const TICK = `sleep() { :; };
+    tmux() { echo "tmux $*" >> "$HOME/tmux-calls"
+      case "$*" in *pane_active*) echo "1 200"; return 0 ;; esac
+      case "$1" in list-panes) printf '%s\\n' 424242 ;; capture-pane) printf '%s\\n' '? for shortcuts' '❯ ' ;; esac
+      return 0; };`;
+  const tick = (sid: string): string => {
+    const dir = path.join(h.home, '.claude', 'sessions');
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, '424242.json'),
+      JSON.stringify({ sessionId: sid, status: 'idle', statusUpdatedAt: Date.now() - 600_000 }));
+    return h.sh(`${TICK} _sync_uuid ${ID}; _route_apply_check ${ID}; printf 'rc=%s' "$?"`);
+  };
+  const sent = (): string[] => {
+    const f = path.join(h.home, 'tmux-calls');
+    return fs.existsSync(f) ? fs.readFileSync(f, 'utf8').split('\n').filter((l) => l.startsWith('tmux send-keys')) : [];
+  };
+
+  it.each([
+    ['model', [cmd(now() - 600, 'model', 'opus'), ack(now() - 600, MODEL_ACK('Opus 5.5'))], { class: 'opus', effort: 'low' }],
+    ['effort', [cmd(now() - 600, 'effort', 'high'), ack(now() - 600, EFFORT_ACK('high'))], { class: 'fable', effort: 'high' }],
+    ['pair', [cmd(now() - 600, 'model', 'opus'), ack(now() - 600, MODEL_ACK('Opus 5.5')),
+      cmd(now() - 599, 'effort', 'high'), ack(now() - 599, EFFORT_ACK('high'))], { class: 'opus', effort: 'high' }],
+  ] as const)('an accepted %s promotion types nothing into the live pane on the same tick', (_kind, lines, want) => {
+    seed(); record({ class: 'fable', effort: 'low' });
+    h.sh(`_reg_set ${ID} routeapplied "class=fable effort=low"`);
+    writeTranscript([...lines]);
+    expect(tick(NEXT)).toBe('rc=0');
+    expect(h.reg(ID, 'uuid')).toBe(NEXT);
+    expect(h.reg(ID, 'class')).toBe(want.class);
+    expect(h.reg(ID, 'effort')).toBe(want.effort);
+    expect(sent()).toEqual([]);
+    expect(h.sh(`_route_pending_word ${ID}`)).toBe('');
+    expect(tick(NEXT)).toBe('rc=0');
+    expect(sent()).toEqual([]);
+  });
+
+  it('control: the dead-session keep records nothing applied — the spawn that follows composes and stamps its own', () => {
+    seed(); record({ class: 'fable', effort: 'low' });
+    h.sh(`_reg_set ${ID} routeapplied "class=fable effort=low"`);
+    writeTranscript([cmd(now() - 600, 'model', 'opus'), ack(now() - 600, MODEL_ACK('Opus 5.5'))]);
+    expect(keep()).toBe('rc=0');
+    expect(h.reg(ID, 'class')).toBe('opus');
+    expect(h.reg(ID, 'routeapplied')).toBe('class=fable effort=low');
+  });
+
+  it('control: a pending field the promotion did not write is still typed on that tick', () => {
+    seed(); record({ class: 'sonnet', effort: 'low' });
+    h.sh(`_reg_set ${ID} routeapplied "class=fable effort=low"`);
+    writeTranscript([cmd(now() - 600, 'effort', 'high'), ack(now() - 600, EFFORT_ACK('high'))]);
+    tick(NEXT);
+    expect(h.reg(ID, 'effort')).toBe('high');
+    expect(h.sh(`_route_applied_get ${ID} effort`)).toBe('high');
+    expect(sent().join('\n')).toContain('/model');
+    expect(sent().join('\n')).not.toContain('/effort');
+  });
 });

@@ -850,4 +850,51 @@ describe('the real sweep\'s record is readable by the doctor and the stage-6 ins
     expect((JSON.parse(r.stdout) as { stage6: { inert_scopes: unknown } }).stage6.inert_scopes)
       .toEqual({ mode: 'shadow', dead: 2, inert: 0, inert_dead_a_day_or_more: 0, carried_scopes: { dead: 0, live: 0, unknown: 0 } });
   });
+
+  // D-4320: both readers take an `old` row's comm as one run of non-whitespace, so the writer
+  // must fold EVERY whitespace character, not only a space — a process name carrying a TAB
+  // otherwise makes the whole record unreadable to both.
+  /** A live pane scope whose one long-lived process has a TAB (and a space) in its comm. */
+  const tabRecord = (): string => {
+    const u = unitName(1); const cg = cgOf(u);
+    proc(3001, { age: 3 * 86400, comm: 'claude', cg });
+    proc(3004, { age: 3 * 86400 - 2 * HOUR, ppid: 3001, comm: 'bash\tjob x', cg });
+    scope(1, { pane: 3001, procs: [3001, 3004] });
+    livePanes(3001);
+    const r = run();
+    expect(r.code, r.err).toBe(0);
+    expect(rows('old')[`${u} pid=3004`]).toMatchObject({ comm: 'bash_job_x' });
+    expect(fs.readFileSync(STATE(), 'utf8')).not.toContain('\t');
+    return STATE();
+  };
+
+  it('a comm with a TAB is written with `_`, and the doctor reads that row as one long-lived process', () => {
+    const rec = tabRecord();
+    const src = fs.readFileSync(DOCTOR, 'utf8').split('\n');
+    const from = src.findIndex((l) => l.startsWith('_check_scope-sweep() {'));
+    const to = src.findIndex((l, i) => i > from && l === '}');
+    expect(from).toBeGreaterThan(-1);
+    const script = [
+      '_dr_pass() { echo "PASS $1: $2"; return 0; }',
+      '_dr_warn() { echo "WARN $1: $2"; echo "  remedy: $3"; return 2; }',
+      '_dr_skip() { echo "SKIP $1: $2"; return 3; }',
+      src.slice(from, to + 1).join('\n'),
+      '_check_scope-sweep',
+    ].join('\n');
+    const r = spawnSync('bash', ['-c', script], { encoding: 'utf8', timeout: 30000,
+      env: { PATH: process.env['PATH'] ?? '', HOME: fx.home, LC_ALL: 'C', CCRC_SCOPE_SWEEP_STATE: rec } });
+    expect(r.stderr).toBe('');
+    expect(r.stdout).toMatch(/^WARN scope-sweep: 0 dead pane scope\(s\) and 1 long-lived process\(es\)/);
+    expect(r.stdout).not.toContain('cannot read');
+    expect(r.stdout).toContain('bash_job_x');
+  });
+
+  it('a comm with a TAB is written with `_`, and the instrument publishes counts rather than `unreadable`', () => {
+    tabRecord();
+    const r = spawnSync('python3', ['-I', TOOL, '--home', fx.home, '--stage', '6', '--journal', path.join(fx.base, 'no-journal.json'), '--json'],
+      { encoding: 'utf8', timeout: 30000, env: { PATH: process.env['PATH'] ?? '', TZ: 'UTC', XDG_RUNTIME_DIR: fx.xdg } });
+    expect(r.status, r.stderr).toBe(0);
+    expect((JSON.parse(r.stdout) as { stage6: { inert_scopes: unknown } }).stage6.inert_scopes)
+      .toEqual({ mode: 'shadow', dead: 0, inert: 0, inert_dead_a_day_or_more: 0, carried_scopes: { dead: 0, live: 0, unknown: 0 } });
+  });
 });

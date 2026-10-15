@@ -2376,7 +2376,9 @@ operator's switch was undone by the next swap (§1.4: Opus typed by hand, Fable 
   Before a pane-observed UUID rotation (a `/clear`), `_sync_uuid` promotes the outgoing transcript's acknowledged
   operator `/model` and `/effort` through the same parser and one combined route operation, BEFORE replacing the
   registry UUID. `/clear` starts a new transcript; compaction keeps the existing transcript. Background-follow and
-  continuation-chain UUID writes do not promote. The live
+  continuation-chain UUID writes do not promote. A kind the operator already set in the new transcript (a `/model`
+  or `/effort` typed after the `/clear`, before the tick saw it) is not overwritten from the outgoing one, and the
+  fields the promotion writes are recorded applied, so it never makes ccd type into the live pane. The live
   promotion neither creates nor removes `choicekept`: that marker still means a dead session was read before
   its next spawn. A command ccd journalled is excluded, a newer route-field write wins, and unavailable or
   unrecognised input is logged without blocking UUID synchronisation. Non-Anthropic operator-choice semantics

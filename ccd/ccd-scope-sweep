@@ -357,7 +357,7 @@ while read -r u _; do
       age=$(_ss_age "$p")
       (( age >= SCOPE_SWEEP_OLD_SEC )) || continue
       c=$(_ss_comm "$p") || c='?'
-      olds+=("old $u pid=$p age=$age comm=${c// /_}")
+      olds+=("old $u pid=$p age=$age comm=${c//[[:space:]]/_}")
     done
     if (( capped )); then _ss_carry parent-hop-cap live; elif (( ${#olds[@]} )); then OUT+=("${olds[@]}"); fi   # a chain it could not walk lists nothing
     continue
