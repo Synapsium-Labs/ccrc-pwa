@@ -261,6 +261,9 @@ describe('knownId route census', () => {
       // D-5047: the free-text row's own route, NOT a `text` field on `/dialog`. An older server that ignored such a
       // field would walk onto the empty row and press Enter, rejecting the whole ask; it answers 404 to a new route.
       { method: 'POST', routePath: '/api/sessions/:id/dialog/text', args: 'id' },
+      // D-5048: a multiSelect question's own route, for the same reason: an older server answers it 404, never with a
+      // keystroke into a menu whose Enter only toggles.
+      { method: 'POST', routePath: '/api/sessions/:id/dialog/multi', args: 'id' },
       { method: 'POST', routePath: '/api/sessions/:id/ask', args: 'id' },
       { method: 'GET', routePath: '/api/sessions/:id/commands', args: 'id' },
       { method: 'POST', routePath: '/api/sessions/:id/interrupt', args: 'id' },
@@ -277,8 +280,8 @@ describe('knownId route census', () => {
       { method: 'GET', routePath: '/api/sessions/:id/workspace/audit', args: 'id' },
       { method: 'POST', routePath: '/api/sessions/:id/workspace/reap', args: 'id' },
     ]);
-    expect(requestGates).toHaveLength(19);
-    expect(requestGates.filter(({ method }) => method === 'POST')).toHaveLength(15);
+    expect(requestGates).toHaveLength(20);
+    expect(requestGates.filter(({ method }) => method === 'POST')).toHaveLength(16);
     expect(requestGates.filter(({ method }) => method === 'GET')).toHaveLength(4);
 
     const revivalProbes = calls.filter(({ args }) => args !== 'id');
@@ -501,6 +504,76 @@ describe('write routes', () => {
     await app.close();
   });
 
+  // D-5048. Recorded Claude Code 2.1.300 screens: "Which features do you want?" with Logging ticked, then with Logging
+  // and Tracing ticked (the cursor on row 1 both times), then the next question, "Which tools?", once Tab committed it.
+  const MULTI_1 = askPane('cc300-ask-multiselect-digit1.txt');
+
+  it('POST dialog/multi ticks the boxes that differ, proves the ticks, then Tab (D-5048)', async () => {
+    const { app, calls } = await makeApp([
+      MULTI_1, askPane('cc300-ask-multiselect-digit1-3.txt'), askPane('cc300-ask-multiselect-submit-open.txt'),
+    ]);
+    const res = await app.inject({
+      method: 'POST',
+      url: `/api/sessions/${ID}/dialog/multi`,
+      payload: { dialogId: parseDialog(MULTI_1)!.id, optionIndexes: [1, 3] },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ ok: true });
+    expect(sendKeysCalls(calls)).toEqual([
+      ['tmux', 'send-keys', '-t', `=cc-${ID}:`, '3'],
+      ['tmux', 'send-keys', '-t', `=cc-${ID}:`, 'Tab'],
+    ]);
+    await app.close();
+  });
+
+  it('POST dialog/multi answers 400 bad-indexes for a set it will not send, before any capture or key (D-5048)', async () => {
+    const { app, calls } = await makeApp([MULTI_1]);
+    for (const optionIndexes of [[], [1, 1], [0], [10], [1.5]]) {
+      const res = await app.inject({
+        method: 'POST',
+        url: `/api/sessions/${ID}/dialog/multi`,
+        payload: { dialogId: parseDialog(MULTI_1)!.id, optionIndexes },
+      });
+      expect(res.statusCode, JSON.stringify(optionIndexes)).toBe(400);
+      expect(res.json()).toEqual({ ok: false, error: 'bad-indexes' });
+    }
+    expect(calls.filter((c) => c[1] === 'capture-pane' || c[1] === 'send-keys')).toEqual([]);
+    await app.close();
+  });
+
+  it('POST dialog/multi answers 400 bad-request for a missing or mistyped field (D-5048)', async () => {
+    const { app, calls } = await makeApp([MULTI_1]);
+    const id = parseDialog(MULTI_1)!.id;
+    for (const payload of [
+      { dialogId: id },
+      { dialogId: id, optionIndexes: 1 },
+      { dialogId: id, optionIndexes: ['1'] },
+      { optionIndexes: [1] },
+      { dialogId: id, optionIndex: 1 },
+    ]) {
+      const res = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/dialog/multi`, payload });
+      expect(res.statusCode, JSON.stringify(payload)).toBe(400);
+      expect(res.json()).toEqual({ ok: false, error: 'bad-request' });
+    }
+    expect(sendKeysCalls(calls)).toEqual([]);
+    await app.close();
+  });
+
+  it('POST dialog/multi answers a refusal as 409 with its code, and sends no key (D-5048)', async () => {
+    // The cursor sits on "4. [ ] Type something": a digit there is typed into the row, not a tick.
+    const onText = askPane('cc300-ask-multiselect-on-freetext.txt');
+    const { app, calls } = await makeApp([onText]);
+    const res = await app.inject({
+      method: 'POST',
+      url: `/api/sessions/${ID}/dialog/multi`,
+      payload: { dialogId: parseDialog(onText)!.id, optionIndexes: [1, 3] },
+    });
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toEqual({ ok: false, error: 'cursor-not-on-option' });
+    expect(sendKeysCalls(calls)).toEqual([]);
+    await app.close();
+  });
+
   it('POST interrupt on a busy session (live status) sends Escape', async () => {
     const { app, calls } = await makeApp(['generation…\n❯ \n'], { status: 'busy' });
     const res = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/interrupt`, payload: {} });
@@ -518,12 +591,13 @@ describe('write routes', () => {
     await app.close();
   });
 
-  it('unknown session id returns 404 on all six routes', async () => {
+  it('unknown session id returns 404 on all seven routes', async () => {
     const { app } = await makeApp(['❯ \n']);
     for (const [url, payload] of [
       ['/api/sessions/nope/prompt', { text: 'hi' }],
       ['/api/sessions/nope/dialog', { dialogId: 'x', optionIndex: 1 }],
       ['/api/sessions/nope/dialog/text', { dialogId: 'x', optionIndex: 1, text: 'hi' }],
+      ['/api/sessions/nope/dialog/multi', { dialogId: 'x', optionIndexes: [1] }],
       ['/api/sessions/nope/interrupt', {}],
       ['/api/sessions/nope/ask', { askKey: 'k', optionIndexes: [0] }],
       ['/api/sessions/nope/submit', {}],

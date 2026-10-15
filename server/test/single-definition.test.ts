@@ -5795,3 +5795,32 @@ describe('the free-text row\'s edit hint is spelled once, in shared/ask-menu.ts 
     expect(stallCode(path.join(ccrcRoot, 'server/src/inject/send.ts'))).toMatch(/\beditHintShown\s*\(/);
   });
 });
+
+// D-5048 (plan docs/superpowers/plans/2026-10-15-ask-server-half.md, Task 4). APPENDED, as the blocks above. A
+// multiSelect question is read into `Dialog.multi`, and so answered by `POST /api/sessions/:id/dialog/multi`, only when
+// the unnumbered row that commits it (`Next`, or `Submit` on the last question) is on screen: that row marks the layout
+// whose keys were measured. ONE rule, `COMMIT_ROW_RE` in `shared/ask-menu.ts`, read by `pane/dialog.ts`'s `multiMenu`.
+// A second spelling that drifts would let one reader call a menu answerable that the other does not. Code lines only
+// (`stallCode`). KNOWN WIDTH: only the two words as one alternation are seen; a bare 'Next' or 'Submit' string is
+// common UI copy and is not scanned.
+describe('the multiSelect commit row is spelled once, in shared/ask-menu.ts (D-5048)', () => {
+  const COMMIT = /\bnext\s*\|\s*submit\b|\bsubmit\s*\|\s*next\b/i;
+  const holders = (): string[] => ALL.filter((f) => COMMIT.test(stallCode(f))).map(rel).sort();
+
+  it('CONTROL: the pattern sees a regex literal either way round, and passes over comment lines', () => {
+    expect(COMMIT.test('const ROW = /^(?:next|submit)$/i;')).toBe(true);
+    expect(COMMIT.test("const ROW = /^(Submit|Next)$/;")).toBe(true);
+    expect(stallCodeText('// the row reads Next|Submit\nconst x = 1;')).not.toMatch(COMMIT);
+  });
+
+  it('the commit row is spelled on a code line in shared/ask-menu.ts and nowhere else', () => {
+    expect(holders()).toEqual(['shared/ask-menu.ts']);
+  });
+
+  it('the parse reads it: pane/dialog.ts imports and tests the L0 rule, and answerDialogMulti reads Dialog.multi', () => {
+    const dialog = stallCode(path.join(ccrcRoot, 'server/src/pane/dialog.ts'));
+    expect(dialog).toMatch(/import\s*\{[^}]*\bCOMMIT_ROW_RE\b[^}]*\}\s*from\s*'(?:\.\.\/)+shared\/ask-menu\.js'/);
+    expect(dialog).toMatch(/\bCOMMIT_ROW_RE\.test\(/);
+    expect(stallCode(path.join(ccrcRoot, 'server/src/inject/send.ts'))).toMatch(/\bdialog\.multi\b/);
+  });
+});

@@ -4019,6 +4019,31 @@ export interface Dialog {
    *  transcript could be matched to it. Absent for scraped confirms (/model,
    *  /effort, permission prompts), which render exactly as they do today. */
   ask?: DialogAsk;
+  /** D-5048: a multiSelect AskUserQuestion question, read off the pane (`DialogMulti`). Present only on such a menu,
+   *  which keeps `parsed: false`, so a PWA that predates this field keeps its raw view and its terminal door and never
+   *  offers a box as a one-tap answer. ADDITIVE, absence-permits: an older server never sends it. */
+  multi?: DialogMulti;
+}
+
+/**
+ * A multiSelect AskUserQuestion question as `parseDialog` reads it off the pane (D-5048), the shape
+ * `POST /api/sessions/:id/dialog/multi` answers. Measured on Claude Code 2.1.300 (2.1.280 paints the same): rows
+ * `k. [ ] Label`, then `n+1. [ ] Type something`, then an unnumbered `Next` row (`Submit` on the last question), a
+ * rule, and `n+2. Chat about this`. A box reads `[✔]` once ticked. The dialog's id does not change as boxes are ticked
+ * or the cursor moves, so it names the question, never its ticks: a reader takes the ticks from here, fresh.
+ */
+export interface DialogMulti {
+  /** The question's own options, in screen order: the digit that toggles each (`index`), its label (box stripped), its
+   *  description, and whether its box is ticked. Never the free-text row or `Chat about this`. */
+  options: { index: number; label: string; description?: string; checked: boolean }[];
+  /** The free-text row: its printed index, its label (`Type something` while empty, else the text it holds), and
+   *  whether its box is ticked (typing ticks it). Null when the menu paints none. */
+  freeText: { index: number; label: string; checked: boolean } | null;
+  /** The unnumbered row that commits the question, as painted: `Next`, or `Submit` on the last question. */
+  commit: string;
+  /** Where the `❯` cursor rests: the printed index of a numbered row (an option, the free-text row, or
+   *  `Chat about this`), `'commit'` on the commit row, or null when no cursor is on screen. */
+  cursor: number | 'commit' | null;
 }
 
 /** One AskUserQuestion question, as `session-hook.sh` copies it VERBATIM from
@@ -9897,3 +9922,44 @@ const DIALOG_TEXT_REFUSE_CODE_MAP: Readonly<Record<DialogTextRefuseCode, true>> 
 };
 export const DIALOG_TEXT_REFUSE_CODES: readonly DialogTextRefuseCode[] =
   Object.keys(DIALOG_TEXT_REFUSE_CODE_MAP) as DialogTextRefuseCode[];
+
+/** The highest digit `POST /api/sessions/:id/dialog/multi` sends (D-5048). A box is toggled by its own digit, and an
+ *  AskUserQuestion question has at most four options, so 9 is never the binding limit. */
+const DIALOG_MULTI_MAX_INDEX = 9;
+
+/** Will `POST /api/sessions/:id/dialog/multi` send `indexes` (D-5048)? A non-empty list of distinct whole numbers, each
+ *  from 1 to 9: the printed digits of the boxes to leave ticked. Empty is refused because Tab on a question with no box
+ *  ticked skips it (measured), which is not an answer. The route answers 400 `bad-indexes` otherwise, before it captures
+ *  the pane. Whether each index is one of the question's own options is the pane's to say (409 `not-an-option`). */
+export function isDialogMultiIndexes(indexes: readonly number[]): boolean {
+  return indexes.length > 0 &&
+    new Set(indexes).size === indexes.length &&
+    indexes.every((i) => Number.isInteger(i) && i >= 1 && i <= DIALOG_MULTI_MAX_INDEX);
+}
+
+/** Every refusal `POST /api/sessions/:id/dialog/multi` answers with (`answerDialogMulti`, `server/src/inject/send.ts`,
+ *  D-5048). `bad-indexes` is a 400; the rest are 409s. Spelled once, as a total table's keys, and the list derived.
+ *  - `bad-indexes`: `isDialogMultiIndexes` refuses the set. Nothing was captured or pressed.
+ *  - `not-alive`: the pane could not be captured.
+ *  - `stale-dialog`: no menu is on screen, or not the one the caller was shown.
+ *  - `not-multiselect`: the menu is not a multiSelect question this route can read (`Dialog.multi` absent): a
+ *    single-select menu, the review screen, or a multi-select painted with no `Next`/`Submit` row.
+ *  - `not-an-option`: an index is not one of the question's own options: the free-text row (free text inside a
+ *    multiSelect question is not answered here in v1), `Chat about this`, or a row past the menu.
+ *  - `free-text-ticked`: the free-text row's box is ticked. Tab would commit it with the options, so nothing is sent.
+ *  - `cursor-not-on-option`: the cursor is not on one of the question's options, or the footer shows the edit hint.
+ *    Measured: with the cursor on the free-text row a digit is TYPED into it, and Tab on the `Next` row after a walk
+ *    through the free-text row was swallowed. Nothing was pressed.
+ *  - `ticks-failed`: digits were sent, but no capture showed the same question with exactly the wanted boxes ticked,
+ *    the free-text box clear, the cursor where it was and no edit hint. Tab was NOT pressed. Boxes may be left part
+ *    toggled; a retry with the same set sends only the digits still needed.
+ *  - `commit-failed`: Tab was pressed after the ticks were proved, but no capture showed the screen move on. */
+export type DialogMultiRefuseCode =
+  | 'bad-indexes' | 'not-alive' | 'stale-dialog' | 'not-multiselect' | 'not-an-option' | 'free-text-ticked'
+  | 'cursor-not-on-option' | 'ticks-failed' | 'commit-failed';
+const DIALOG_MULTI_REFUSE_CODE_MAP: Readonly<Record<DialogMultiRefuseCode, true>> = {
+  'bad-indexes': true, 'not-alive': true, 'stale-dialog': true, 'not-multiselect': true, 'not-an-option': true,
+  'free-text-ticked': true, 'cursor-not-on-option': true, 'ticks-failed': true, 'commit-failed': true,
+};
+export const DIALOG_MULTI_REFUSE_CODES: readonly DialogMultiRefuseCode[] =
+  Object.keys(DIALOG_MULTI_REFUSE_CODE_MAP) as DialogMultiRefuseCode[];

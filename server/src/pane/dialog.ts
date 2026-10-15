@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
-import type { Dialog } from '../../../shared/api.js';
-import { CHAT_ABOUT_ROW_RE, EDIT_HINT_RE, FREE_TEXT_PLACEHOLDER_RE } from '../../../shared/ask-menu.js';
+import type { Dialog, DialogMulti } from '../../../shared/api.js';
+import { CHAT_ABOUT_ROW_RE, COMMIT_ROW_RE, EDIT_HINT_RE, FREE_TEXT_PLACEHOLDER_RE } from '../../../shared/ask-menu.js';
 import { promptBoxShowing } from './statusline.js';
 
 /**
@@ -158,8 +158,16 @@ const CHECKBOX_RE = /^\[[ xX✔✓*]\]\s*/;
 
 /** One numbered row read off a pane menu: the digit it printed, its label
  *  (left column only — see `leftCol`), whether the ❯ cursor rests on it,
- *  whether it painted a multi-select checkbox, and the line it came from. */
-export type OptionRow = { line: number; index: number; label: string; selected: boolean; checkbox: boolean };
+ *  whether it painted a multi-select checkbox, whether that box is ticked, and
+ *  the line it came from.
+ *
+ *  `checked` (D-5048) is the box's STATE: any of `CHECKBOX_RE`'s states but the
+ *  space (`[✔]` on 2.1.280 and 2.1.300). False on a row with no box. Added before
+ *  D-5008's Task 15 moves this type verbatim to `shared/pane-menu.ts`, so that move
+ *  carries it. */
+export type OptionRow = {
+  line: number; index: number; label: string; selected: boolean; checkbox: boolean; checked: boolean;
+};
 
 /**
  * The pane's numbered menu rows, in screen order — the run whose printed
@@ -194,6 +202,9 @@ export function paneOptionRows(pane: string): OptionRow[] {
           // for what the other order costs on a two-space-aligned menu.
           label: leftCol(m[3]!.replace(CHECKBOX_RE, '')), selected: !!m[1],
           checkbox: CHECKBOX_RE.test(m[3]!),
+          // `CHECKBOX_RE` anchors `[` at the label's first character, so the
+          // box's state is the character after it: ticked unless a space.
+          checked: CHECKBOX_RE.test(m[3]!) && m[3]![1] !== ' ',
         },
       });
     }
@@ -257,13 +268,17 @@ export function paneOptionRows(pane: string): OptionRow[] {
  * (D-5045)"). Like `paneOptionRows`, it says nothing about whether a menu is up, so callers pair it with a parse.
  */
 export function freeTextRow(pane: string): number | null {
-  const rows = paneOptionRows(pane);
+  return freeTextIndex(pane.split('\n'), paneOptionRows(pane));
+}
+
+/** `freeTextRow`'s two readings over rows already read, so `parseDialog` asks the one rule without reading twice. */
+function freeTextIndex(lines: readonly string[], rows: readonly OptionRow[]): number | null {
   const placeholder = rows.find((r) => FREE_TEXT_PLACEHOLDER_RE.test(r.label));
   if (placeholder) return placeholder.index;
   const chat = rows.at(-1);
   const above = rows.at(-2);
   if (!chat || !above || !CHAT_ABOUT_ROW_RE.test(chat.label)) return null;
-  return pane.split('\n').slice(above.line + 1, chat.line).some(isRule) ? above.index : null;
+  return lines.slice(above.line + 1, chat.line).some(isRule) ? above.index : null;
 }
 
 /**
@@ -282,7 +297,9 @@ export function editHintShown(pane: string): boolean {
 /**
  * Parse a menu dialog out of a captured pane; null when no menu is present.
  * Multi-select menus and menus without ≥2 consecutive numbered options come
- * back as `{ parsed: false, raw }` — terminal-drawer territory in v1.
+ * back as `{ parsed: false, raw }` — terminal-drawer territory in v1. A
+ * multiSelect AskUserQuestion question also carries `multi` (D-5048,
+ * `multiMenu` below), which `POST /api/sessions/:id/dialog/multi` answers from.
  */
 export function parseDialog(pane: string): Dialog | null {
   // hasMenu, not paneState(pane) !== 'menu': the busy check must not veto a
@@ -316,16 +333,6 @@ export function parseDialog(pane: string): Dialog | null {
   // The footer ("Enter to select") bounds the LAST option's description.
   const footer = lines.findIndex((l, i) => i > lastLine && MENU_RE.test(l));
   const end = footer >= 0 ? footer : lines.length;
-
-  if (multiSelect) {
-    // Unparsed, but with an id from what does not change while it is being
-    // answered — its labels, box stripped, and its question — and that question
-    // as its title. `unparsed`'s id hashes the whole pane, so every box ticked
-    // and every cursor move in the terminal read as a new question and re-sent
-    // the push (and with no title, as "Claude has a question").
-    const { title, body } = header(lines, start, footer >= 0);
-    return { ...unparsed(pane), id: sha1(best.map((o) => o.label).join('\n') + title), title, body };
-  }
 
   // Newer AskUserQuestion layouts put extra selectable rows BELOW a horizontal
   // rule under the numbered list — "Chat about this" is the one that matters,
@@ -408,6 +415,22 @@ export function parseDialog(pane: string): Dialog | null {
     return { index: d.index, label, description: desc.join(' ').trim() || undefined };
   });
 
+  if (multiSelect) {
+    // Unparsed, but with an id from what does not change while it is being
+    // answered — its labels, box stripped, and its question — and that question
+    // as its title. `unparsed`'s id hashes the whole pane, so every box ticked
+    // and every cursor move in the terminal read as a new question and re-sent
+    // the push (and with no title, as "Claude has a question"). Its rows are
+    // read above like any menu's, for `multiMenu`'s labels and descriptions
+    // (D-5048); the id hashes the row reader's labels, as it always has.
+    const { title, body } = header(lines, start, footer >= 0);
+    const multi = multiMenu(lines, best, options);
+    return {
+      ...unparsed(pane), id: sha1(best.map((o) => o.label).join('\n') + title), title, body,
+      ...(multi === null ? {} : { multi }),
+    };
+  }
+
   // Unnumbered selectable rows between that rule and the footer, numbered on
   // after the real options so the arrow-walk reaches them the same way the TUI
   // does (they sit in its ↑/↓ order). "Chat about this" is the important one:
@@ -429,6 +452,50 @@ export function parseDialog(pane: string): Dialog | null {
   const { title, body } = header(lines, start, footer >= 0);
   const id = sha1(options.map((o) => o.label).join('\n') + title);
   return { id, title, body, options, selectedIndex, parsed: true, raw: pane };
+}
+
+/**
+ * A multiSelect AskUserQuestion question's own reading (D-5048), or null when the menu is not the measured shape.
+ * Measured on Claude Code 2.1.300 (2.1.280 paints the same): `k. [ ] Label` rows, then `n+1. [ ] Type something`, then
+ * an unnumbered `Next` row (`Submit` on the last question), a rule, and `n+2. Chat about this`.
+ *
+ * Null unless the boxes are the menu's first rows, unbroken, and the last non-blank row below them, before the rule,
+ * the next numbered row or the footer, is the commit row (`COMMIT_ROW_RE`). That row is the mark of the layout whose
+ * keys were measured (a digit toggles a box, Enter toggles the cursor row, Tab from an option row commits); the
+ * 2.1.222 shape paints none, and committed with Enter. The free-text row is `freeTextRow`'s, read by the same rule,
+ * and every other box is an option. Labels and descriptions come from `parseDialog`'s own reading of the rows
+ * (`parsed`), ticks and the cursor from the row reader.
+ */
+function multiMenu(
+  lines: readonly string[], rows: readonly OptionRow[], parsed: readonly Dialog['options'][number][],
+): DialogMulti | null {
+  const boxes = rows.filter((r) => r.checkbox);
+  if (boxes.length === 0 || boxes.some((r, i) => r !== rows[i])) return null;
+  let at = -1;
+  for (let i = boxes.at(-1)!.line + 1; i < lines.length; i++) {
+    const l = lines[i]!;
+    if (isRule(l) || MENU_RE.test(l) || NUMBERED_OPTION_RE.test(l)) break;
+    if (l.trim() !== '') at = i;
+  }
+  const commit = at < 0 ? '' : leftCol(lines[at]!.replace(/^\s*❯\s*/, ''));
+  if (!COMMIT_ROW_RE.test(commit)) return null;
+
+  const free = freeTextIndex(lines, rows);
+  const freeRow = boxes.find((r) => r.index === free);
+  const options = boxes.filter((r) => r !== freeRow).map((r) => {
+    const read = parsed.find((o) => o.index === r.index);
+    const description = read?.description;
+    return {
+      index: r.index, label: read?.label ?? r.label, ...(description === undefined ? {} : { description }),
+      checked: r.checked,
+    };
+  });
+  return {
+    options,
+    freeText: freeRow === undefined ? null : { index: freeRow.index, label: freeRow.label, checked: freeRow.checked },
+    commit,
+    cursor: /^\s*❯/.test(lines[at]!) ? 'commit' : rows.find((r) => r.selected)?.index ?? null,
+  };
 }
 
 /** The dialog's title and body, read upward from its first option row. */

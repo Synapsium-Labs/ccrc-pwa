@@ -2,8 +2,8 @@ import type { Tmux } from '../exec.js';
 import { autoContinueArmed, editHintShown, freeTextRow, hasMenu, parseDialog, turnRunning } from '../pane/dialog.js';
 import type { KeyedQueue } from './queue.js';
 import {
-  composePrompt, isDialogText, MAIL_ENVELOPE_FENCE,
-  type Dialog, type DialogRefuseCode, type DialogTextRefuseCode,
+  composePrompt, isDialogMultiIndexes, isDialogText, MAIL_ENVELOPE_FENCE,
+  type Dialog, type DialogMultiRefuseCode, type DialogRefuseCode, type DialogTextRefuseCode,
 } from '../../../shared/api.js';
 import { FREE_TEXT_PLACEHOLDER_RE } from '../../../shared/ask-menu.js';
 
@@ -1313,6 +1313,100 @@ export function answerDialogText(
 
     await d.tmux.sendKey(id, 'Enter');
     return { ok: true };
+  });
+}
+
+/** `answerDialogMulti`'s answer. The refusals are `DialogMultiRefuseCode` (`shared/api.ts`), where each is described. */
+export type DialogMultiResult = { ok: true } | { ok: false; error: DialogMultiRefuseCode };
+
+/**
+ * Answer a multiSelect AskUserQuestion question (D-5048, `POST /api/sessions/:id/dialog/multi`): leave exactly the
+ * boxes `optionIndexes` names ticked, then commit the question. Measured on Claude Code 2.1.300 (2.1.280 agrees):
+ *  - a digit k toggles box k, ticking or unticking it, and the cursor does not move;
+ *  - Enter TOGGLES the cursor row and commits nothing, which is why `answerAsk` refuses this question;
+ *  - Tab from an option row commits the ticks and moves on, to the next question or the review screen;
+ *  - with the cursor on the free-text row a digit is TYPED into it, and Tab on the `Next` row after a walk through the
+ *    free-text row was swallowed, the screen byte-identical;
+ *  - the answer lists the boxes in the order they were ticked, and a revisited question keeps its ticks.
+ *
+ * So, each step on a fresh capture:
+ *  1. `isDialogMultiIndexes` (`shared/api.ts`) or `bad-indexes`, before the pane is touched.
+ *  2. The menu is the one the caller was shown (`stale-dialog`; the id holds across ticks and cursor moves), and it is
+ *     a multiSelect question `parseDialog` reads into `Dialog.multi` (`not-multiselect`).
+ *  3. Every index is one of the question's own options (`not-an-option`): never the free-text row, which v1 does not
+ *     answer, nor `Chat about this`.
+ *  4. The free-text box is clear (`free-text-ticked`), since Tab would commit it with the options.
+ *  5. The cursor rests on an option row and the footer shows no edit hint (`cursor-not-on-option`). Nothing walks it
+ *     there: on the free-text row a digit is typed, and below it Tab was swallowed.
+ *  6. A digit for each box whose tick differs from the wanted set: those to untick first, in screen order, then those
+ *     to tick, in the order asked, so the answer lists them that way after any box already ticked.
+ *  7. TICKS, polled as `sendPrompt` polls its echo: a capture shows the same dialog id, exactly the wanted boxes
+ *     ticked, the free-text box clear, the cursor on the row it was on, and no edit hint. Else `ticks-failed`, NO Tab.
+ *  8. Tab.
+ *  9. MOVED, polled the same way: a capture shows a menu under another TITLE, the next question or the review screen
+ *     (a multiSelect question is always followed by one of them). Not the id: text typed into the free-text row
+ *     changes the id under the same title, and that is no commit. Else `commit-failed`.
+ *
+ * Every proof is a capture, never a key's exit code: a digit that did not land fails step 7, a Tab that did not land
+ * fails step 9.
+ */
+export function answerDialogMulti(
+  d: SendDeps,
+  id: string,
+  dialogId: string,
+  optionIndexes: readonly number[],
+): Promise<DialogMultiResult> {
+  if (!isDialogMultiIndexes(optionIndexes)) return Promise.resolve({ ok: false, error: 'bad-indexes' });
+  const sleep = d.sleep ?? defaultSleep;
+  const want = new Set(optionIndexes);
+  return d.queue.run(id, async (): Promise<DialogMultiResult> => {
+    const pane = await d.tmux.capture(id);
+    if (pane === null) return { ok: false, error: 'not-alive' };
+
+    const dialog = parseDialog(pane);
+    if (!dialog || dialog.id !== dialogId) return { ok: false, error: 'stale-dialog' };
+    const multi = dialog.multi;
+    if (multi === undefined) return { ok: false, error: 'not-multiselect' };
+    const option = (i: number) => multi.options.find((o) => o.index === i);
+    if (optionIndexes.some((i) => option(i) === undefined)) return { ok: false, error: 'not-an-option' };
+    if (multi.freeText?.checked === true) return { ok: false, error: 'free-text-ticked' };
+    const cursor = multi.cursor;
+    if (typeof cursor !== 'number' || option(cursor) === undefined || editHintShown(pane)) {
+      return { ok: false, error: 'cursor-not-on-option' };
+    }
+
+    const untick = multi.options.filter((o) => o.checked && !want.has(o.index)).map((o) => o.index);
+    const tick = optionIndexes.filter((i) => !option(i)!.checked);
+    for (const k of [...untick, ...tick]) {
+      await d.tmux.sendKey(id, String(k));
+      await sleep(WALK_STEP_MS);
+    }
+
+    /** Does `screen` show this question with exactly the wanted ticks, the cursor where it was, and no hint? */
+    const ticked = (screen: string | null): boolean => {
+      if (screen === null || editHintShown(screen)) return false;
+      const now = parseDialog(screen);
+      if (now === null || now.id !== dialogId || now.multi === undefined) return false;
+      return now.multi.cursor === cursor && now.multi.freeText?.checked !== true &&
+        now.multi.options.every((o) => o.checked === want.has(o.index));
+    };
+    let proved = false;
+    for (let i = 0; i < ECHO_TRIES && !proved; i++) {
+      await sleep(ECHO_POLL_MS);
+      proved = ticked(await d.tmux.capture(id));
+    }
+    if (!proved) return { ok: false, error: 'ticks-failed' };
+
+    await d.tmux.sendKey(id, 'Tab');
+
+    let moved = false;
+    for (let i = 0; i < ECHO_TRIES && !moved; i++) {
+      await sleep(ECHO_POLL_MS);
+      const seen = await d.tmux.capture(id);
+      const next = seen === null ? null : parseDialog(seen);
+      moved = next !== null && next.title !== dialog.title;
+    }
+    return moved ? { ok: true } : { ok: false, error: 'commit-failed' };
   });
 }
 

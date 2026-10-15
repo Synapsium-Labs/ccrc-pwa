@@ -4,7 +4,7 @@
 
 **Branch:** `fix/ask-server-half`, cut from `origin/main` `35411838`.
 
-**Status:** rev 1 (2026-10-15). Tasks 0 to 3 done; Task 4 open.
+**Status:** rev 1 (2026-10-15). Tasks 0 to 4 done.
 
 **Operator rulings this plan builds on** (2026-10-15):
 - This branch is the **server half only**: `server/`, `shared/`, and the client functions for the new routes in `pwa/src/lib/api.ts`. It makes **no change to `DialogSheet` or any sheet UI**. Those changes follow PR #346 (§Out of scope).
@@ -65,7 +65,8 @@ The operator reports that only the **first** question of a multi-question AskUse
 - **The digit `k` toggles box `k` and the cursor does not move** (`cc300-ask-multiselect-digit1.txt`, `-digit1-3.txt`). Answers come back comma-joined in **tick order**: `Logging, Tracing` and `Saw, Drill`.
 - **A digit with the cursor on the free-text row is TYPED:** `4. [✔] 2` (`cc300-ask-multiselect-digit-typed-on-freetext.txt`). That ticks the row and changes the id. BSpace restored the placeholder screen byte for byte.
 - **Tab commits from an option row with no hint,** moving to the next question or the review (`cc300-ask-multiselect-row3.txt`, then `-submit-open.txt`). **Tab on the `Next` row after a walk through the free-text row is swallowed:** the screen was byte-identical after it, in two separate asks (`cc300-ask-multiselect-next-focused.txt`, `-walk-to-next.txt`). **Enter on `Next` commits** (`cc300-ask-multiselect-next-enter.txt`). Tab on an untouched question skips it (earlier probe). A revisit keeps the ticks and resets the cursor to row 1.
-- **`parseDialog` today:** `parsed:false`, `options: []`, the question as `title`, and one id however the boxes are ticked or the cursor moves. `paneOptionRows` reports a `checkbox` flag but no tick state, the `Next`/`Submit` row is not a row, and with the cursor on `Next` no row is `selected`. These are pinned as-is, and D-5048 changes them.
+- **Recorded for Task 4** (the same way, the same day; `cc300-ask-multiselect-tools-*`, `-sizes-*`, `cc300-ask-review-tick-order.txt`): **a digit on a ticked box unticks it**, the cursor staying put (`-tools-digit1-2`, then `-tools-untick1`). **A revisit repaints the screen Tab left**, byte for byte, ticks kept and the cursor on row 1 (`-tools-revisit`). **The tick order survives a revisit:** Saw and Drill ticked, Tab, Left, then `2` (unticking Saw) and `1` (ticking Hammer), Tab, `2` on the next question, Tab: the review and the transcript read `Drill, Hammer` and `Large`. The earlier probe's `cc300-ask-multiselect-freetext-ticked.txt` is digit `n+1` ticking the EMPTY free-text box with the cursor on row 1 (no hint).
+- **`parseDialog` before D-5048:** `parsed:false`, `options: []`, the question as `title`, and one id however the boxes are ticked or the cursor moves. `paneOptionRows` reported a `checkbox` flag but no tick state, the `Next`/`Submit` row was not a row, and with the cursor on `Next` no row was `selected`. Task 4 keeps all of that and adds `OptionRow.checked` and `Dialog.multi`.
 - **`answerAsk` on 2.1.300:** `3` then Enter left rows 1 and 3 both ticked and committed nothing (earlier probe; the 2.1.280 fixtures `cc280-multiselect-seq-*` agree).
 - **`answerDialog` on a multiSelect dialog** (a scratch probe on `cc300-ask-multiselect-next-open.txt`, not committed): `optionIndex` 1 sends a bare Enter, which toggles row 1, and returns `{ok:true}`. `optionIndex` 3 sends Down, Down, then refuses `walk-failed`, because an unparsed dialog's `selectedIndex` is always 1. See §Pending a number.
 
@@ -77,6 +78,7 @@ The operator reports that only the **first** question of a multi-question AskUse
 - An empty "Type something." row is never a tap target. Own words go through `POST /api/sessions/:id/dialog/text`.
 - A typed row's dialog id changes **while the text call is still in flight**, so the input's state is keyed to the call, not to `dialog.id`.
 - `isDialogText` (`shared/api.ts`) is the route's own text rule, so the sheet can disable Send on exactly what the route would refuse `bad-text`. After `echo-failed` the text may be left in the row. The same text, sent again under the dialog id the stream then shows, submits it without typing.
+- A multiSelect question arrives as `parsed:false` with `Dialog.multi`: its options with `checked`, the free-text row, the commit row's label and the cursor. The stream re-sends an unparsed dialog whenever its screen repaints under the same id (`sessionws.ts`'s `nextDialogFrame`), so ticks made in the terminal reach the sheet. `POST /api/sessions/:id/dialog/multi` takes the WHOLE set of boxes to leave ticked, never a toggle, so a sheet showing stale ticks still sends the right answer. `isDialogMultiIndexes` (`shared/api.ts`) is the route's own set rule. The set's order is the order new boxes are ticked, which is the order the answer lists them, after any box already ticked.
 
 ---
 
@@ -233,48 +235,74 @@ The operator reports that only the **first** question of a multi-question AskUse
 - [x] **Step 4: Gates:** `answer-text`, `answer`, `routes`, `send`, `dialog`, `exec`, `auth-gate`, `auth-routes`, `box-token-census`, `coord-routes-single-file`, `docs-budget`, `docs-parity`, `docs-source`, `verb-gate`, `pane-history-route`, `sessionws`, `push-copy`, `ask-route`, `whitelist-subset`, the other route scanners, `single-definition`, `deviation-refs` (against `origin/main` `35411838`), `dtbd` and `topology-clean` (with the new file tracked), and tsc for `server/` and `pwa/`. `typecheck-tests` fails the same three cases with the same 727 error lines as at Task 2's head, none from `server/`, `shared/` or `pwa/src`.
 - [x] **Step 5: Commit** `feat(answer): POST /dialog/text types an answer into the free-text row, proved focused and echoed before Enter (D-5047)`.
 
-### Task 4: multiSelect (D-5048)
+### Task 4: multiSelect (D-5048) (done)
 
-**Routing:** band 3. **Files:** `server/src/inject/ask.ts` and its docstring (which still cites the 2.1.222 probe), `server/src/pane/dialog.ts` (`CHECKBOX_RE`'s states read into `OptionRow.checked`, and the multiSelect reading), `shared/api.ts` (the additive `Dialog.multi` field, and the `DialogMultiRefuseCode` union and map), `server/src/inject/send.ts` (`answerDialogMulti`), `server/src/server.ts` (the route, and the census from 19 (15 POST) to 20 (16 POST)), `pwa/src/lib/api.ts` (`answerDialogMulti`), `README.md`, `server/test/ask-route.test.ts`, `server/test/dialog.test.ts` (the pins marked "pinned as parsed today" change here), `server/test/answer-multi.test.ts` (new) and `server/test/routes.test.ts`.
+**Routing:** band 3. **Files:** created `server/test/answer-multi.test.ts` and nine fixtures: `cc300-ask-multiselect-tools-{open,digit1-2,untick1,revisit,revisit-digit2-1}.txt`, `-sizes-{open,large}.txt`, `cc300-ask-review-tick-order.txt` (recorded for this task, scrubbed as Task 0's were) and `cc300-ask-multiselect-freetext-ticked.txt` (the earlier probe's capture of the empty free-text box ticked by digit, scrubbed). Modified `server/src/inject/ask.ts` (the refusal, the dead commit Enter removed, and the docstring that cited only the 2.1.222 probe), `server/src/pane/dialog.ts` (`OptionRow.checked`; `multiMenu`, which fills `Dialog.multi`; `freeTextIndex`, `freeTextRow`'s rule over rows already read), `shared/ask-menu.ts` (`COMMIT_ROW_RE`), `shared/api.ts` (`Dialog.multi` and `DialogMulti`; `isDialogMultiIndexes`; the `DialogMultiRefuseCode` union and map, appended at the foot), `server/src/inject/send.ts` (`answerDialogMulti`), `server/src/server.ts` (the route; the `knownId` census claim from 19 (15 POST) to 20 (16 POST); `answerAsk`'s guard count in a comment), `server/src/auth/gate.ts` (its route count), `server/src/askkey.ts` and `server/src/coord/routes.ts` (comments that described the old multiSelect arm), `pwa/src/lib/api.ts` (`answerDialogMulti`), `README.md` (a `/dialog/multi` row, and the `/ask` row), and the tests `ask-route.test.ts`, `dialog.test.ts`, `routes.test.ts`, `auth-gate.test.ts` and `single-definition.test.ts`.
 
-**About D-5008.** The drawer's stage 1b (`docs/superpowers/plans/2026-10-14-terminal-drawer-every-width-stage1.md`, Task 15) later moves `OPTION_RE`, `CHECKBOX_RE`, `leftCol`, `paneOptionRows` and `OptionRow` verbatim to `shared/pane-menu.ts`. Adding `checked` to `OptionRow` here first is fine: Task 15 moves the type with `checked` in it. Whichever lands second merges the other textually.
+**About D-5008.** The drawer's stage 1b (`docs/superpowers/plans/2026-10-14-terminal-drawer-every-width-stage1.md`, Task 15) later moves `OPTION_RE`, `CHECKBOX_RE`, `leftCol`, `paneOptionRows` and `OptionRow` verbatim to `shared/pane-menu.ts`. `OptionRow` gained `checked` here first, which is fine: Task 15 moves the type with `checked` in it, and whichever lands second merges the other textually. `CHECKBOX_RE` itself is unchanged: `checked` reads the character after its `[` (`m[3][1] !== ' '`).
 
-- [ ] **Step 1: Red.**
-  - (a) Flip `ask-route.test.ts`'s "sends every digit then Enter for a multiSelect answer" and "a one-option multiSelect answer still commits (CRITICAL 1)" to `{ok:false, error:'multiselect'}` with zero keys. Add a case on the real `cc300-ask-multiselect-next-open.txt` with a matching envelope; today it answers ok with `['1','Enter']`.
-  - (b) `dialog.test.ts`: `paneOptionRows` reads `checked` (`cc300-ask-multiselect-digit1-3.txt` gives `[true,false,true,false]` over the four boxes). `parseDialog` still returns `parsed:false`, and carries `multi` with the option rows, the free-text index `n+1`, the commit row (`Next` or `Submit`), and the cursor (an option index, the free-text row, or the commit row, as on `cc300-ask-multiselect-next-focused.txt`).
-  - (c) `answer-multi.test.ts`:
-    - "toggles only the rows whose tick differs, proves the ticks, then Tab". From `cc300-ask-multiselect-digit1.txt`, wanting {1,3}: the keys are `3`, Tab. Captures: `digit1`, `digit1-3`, then `cc300-ask-multiselect-submit-open.txt` as the moved-on screen.
-    - "refuses with zero keys when the cursor is on the free-text row" (`-on-freetext`): the digits would be typed (`-digit-typed-on-freetext`).
-    - "refuses when the cursor is on the Next row or the edit hint shows" (`-next-focused`, `-walk-to-next`): Tab would be swallowed.
-    - "refuses an index that is the free-text row".
-    - "ticks-failed and no Tab when the re-capture's ticks differ".
-    - "commit-failed when the screen did not move after Tab".
-    - "a stale id"; "an empty set" (400: a commit with no box is a skip, not an answer).
-    - The census is RED until the route is listed (20/16).
-- [ ] **Step 2: Green.**
-  - (a) `answerAsk` refuses `q.multiSelect === true` with `multiselect` before any key. `push-sw.js` already maps that code to "This one takes more than one answer — open the session."
-  - (b) `OptionRow` gains `checked: boolean` (ticked for any non-space box state). `parseDialog` fills `Dialog.multi` for a multiSelect menu and **keeps `parsed:false`**, so a cached older PWA keeps its raw view and terminal door and never offers a box as a one-tap answer.
-  - (c) `answerDialogMulti(d, id, dialogId, optionIndexes)` runs in the queue:
-    1. Capture and parse. The id must be the same (it stays stable across ticks and cursor moves, as measured), and the dialog must be multiSelect.
-    2. The indexes must be unique, in `1..n`, at most 9, and none the free-text row.
-    3. The cursor must be on an option row `1..n` with no edit hint, else `cursor-on-input`.
-    4. Send digits only for the rows whose `checked` differs from the wanted set.
-    5. Re-capture: the same id and `checked` equal to the wanted set, else `ticks-failed` with no Tab.
-    6. Tab.
-    7. Re-capture: the screen moved on (another dialog id, or no menu), else `commit-failed`.
-- [ ] **Step 3: Mutation table:**
+- [x] **Step 1: Red.** Each was seen red for the reason named:
+  - (a) `ask-route.test.ts`. "sends every digit then Enter for a multiSelect answer" became "refuses a multiSelect answer with multiselect and zero keys"; the two D-2177 multiSelect cases (a digit failing mid-answer, a failed commit Enter) became "never reaches a keystroke" and "never presses the old commit Enter", with the same failing `sendKey`; CRITICAL 1's two cases (one index; the TUI's trailing row) were flipped. New: "refuses a multiSelect answer on a REAL 2.1.280 capture" (`cc280-multiselect.txt` with its own envelope, `[0,2]` and `[1]`). All six were red as `ok:true` (the real capture's `[0,2]` first) or `not-alive`.
+  - (b) `dialog.test.ts`, the Record step's describe "a multiSelect question (pinned as parsed today)", renamed "a multiSelect question (D-5048)". Its pins now also read `checked` (`digit1-3` gives `[true,false,true,false,false]` over the five numbered rows) and `multi`. New: a table over 15 recorded multiSelect screens (2.1.300 and 2.1.280) pinning the whole `multi` (options with labels, descriptions and ticks; the free-text row; `Next` or `Submit`; the cursor as an option, the free-text row or `'commit'`); "a digit UNticks a ticked box, and the cursor stays"; "a revisit keeps the ticks … in the order they were ticked". Eight red, on `multi` undefined or `checked` undefined. The companions "multi rides a multiSelect question only, and only one that paints its Next/Submit row" (single-select, held text, review, two-column, permission, and the 2.1.222 `multiselect.txt`) and "no multi when the boxes are not the menu's first rows" (DERIVED) were green before the change: their red is the mutation table's.
+  - (c) `answer-multi.test.ts`, 40 cases on recorded screens (`SID = 'lane-a:project-a'`, `answer-text.test.ts`'s scripted-capture fake). 35 were written first and seen red as `answerDialogMulti is not a function`:
+    - **Happy:** from `digit1` wanting {1,3}: keys `3`, Tab. The recorded revisit end to end (`tools-revisit` wanting {1,3}: `2`, `1`, Tab, onto `sizes-open`). The order asked (`[3,1]`: `3`, `1`, Tab). Nothing differs: Tab alone. The last question: `2`, Tab, onto the review. A slow render and a slow commit, both polled.
+    - **Refused with zero keys:** `stale-dialog` (a wrong id; no menu); `not-alive`; `not-multiselect` (a single-select menu, the review, the 2.1.222 shape); `not-an-option` (the free-text row 4, Chat 5, `[1,6]`); `free-text-ticked`; `cursor-not-on-option` (on the free-text row; on `Next` with the hint, two recordings; on Chat, DERIVED; on row 3 with the hint added, DERIVED).
+    - **`bad-indexes` with no capture and no key:** empty, repeated, 0, -1, 10, 1.5, NaN.
+    - **`ticks-failed`, no Tab:** the ticks never showed; the pane moved on to another question; the ticks match but the cursor sits on the free-text row; the free-text box ticked too; the capture failed.
+    - **`commit-failed`:** the screen did not move after Tab.
+  - Five more cases were added once the first mutation run left mutants alive, so their red is the table's: "another question showing the same ticks is not this one", "the cursor moved to another option row", "the edit hint appeared", "a new id under the SAME title is no commit", "no menu at all after Tab is no proof".
+  - `routes.test.ts`: the census (20/16), the route's 200 with its exact keys, 400 `bad-indexes` for five sets before any capture or key, 400 `bad-request` for five malformed bodies, 409 `cursor-not-on-option`, and 404 in the unknown-session loop. Red as 404 and on the census. `auth-gate.test.ts`'s counts (`server.ts` 52 to 53, all scanned routes 98 to 99, HTTP 95 to 96) were red until the route was registered.
+- [x] **Step 2: Green.**
+  - (a) `answerAsk` refuses `q.multiSelect === true` with `multiselect` after its index checks (so `range` and `duplicate-index` keep their own pins) and before the capture. The Enter it used to send after a multiSelect's digits is gone, unreachable. `push-sw.js` already maps `multiselect` to "This one takes more than one answer — open the session."
+  - (b) `OptionRow.checked` is a box with any state but the space. `parseDialog` now reads a multiSelect menu's rows as it reads any menu's (for their labels and descriptions) and returns early only after that, with the same id and title as before, `parsed:false`, `options: []`, plus `multi` when `multiMenu` reads one. `multiMenu` needs the boxes to be the menu's first rows, unbroken, and the last non-blank row below them, before the rule, the next numbered row or the footer, to be the commit row (`COMMIT_ROW_RE`, one home in `shared/ask-menu.ts`, registered in `single-definition.test.ts`). The free-text row is `freeTextRow`'s, by the same rule; every other box is an option. The cursor is a numbered row's index, `'commit'`, or null.
+  - (c) `answerDialogMulti(d, id, dialogId, optionIndexes)`:
+    1. `isDialogMultiIndexes` or `bad-indexes`, before the queue and before any capture.
+    2. In `d.queue.run`: capture and parse; `not-alive`; `stale-dialog` when the id differs; `not-multiselect` when `multi` is absent.
+    3. `not-an-option` unless every index is one of `multi.options`.
+    4. `free-text-ticked` when the free-text box is ticked.
+    5. `cursor-not-on-option` unless the cursor is on an option row and `editHintShown` is false. Nothing walks it.
+    6. A digit per differing box: the unticks first, in screen order, then the ticks, in the order asked. A pause after each (`WALK_STEP_MS`).
+    7. TICKS, polled (`ECHO_TRIES` captures, `ECHO_POLL_MS` apart): the same id, every option's tick equal to the wanted set, the free-text box clear, the cursor where it was, no hint. Else `ticks-failed`, no Tab.
+    8. Tab.
+    9. MOVED, polled the same way: a menu under another title. Else `commit-failed`.
 
-  | Mutant | Expected RED |
+    The route answers `bad-indexes` as 400 and the other refusals as 409, and `bad-request` (400) for a missing `dialogId` or an `optionIndexes` that is not an array of numbers.
+  - **Measured end to end.** The function itself, driven through `Tmux` with a runner pointed at a throwaway local tmux server's own `-L` socket, against a live Claude Code 2.1.300 (`--safe-mode --model haiku`, 220x50) on a two-question multiSelect ask: with the cursor walked onto the free-text row it refused `cursor-not-on-option` with zero keys; walked back up, `[3,1]` sent `3`, `1`, Tab and answered ok in 757 ms on the next question; Left back to the revisited question with Hammer and Drill ticked, `[2]` sent `1`, `3`, `2`, Tab, ok; `[2,1]` on the last question sent `2`, `1`, Tab, ok, onto the review. Submitted, the transcript read `Saw` and `Large, Small`. The server was killed afterwards and its transcript directory removed.
+  - **Choices made inside D-5048's definition, for the coordinator to confirm:** (a) the refusal names `not-multiselect`, `not-an-option`, `free-text-ticked`, `cursor-not-on-option`, `ticks-failed`, `commit-failed` and `bad-indexes` (the definition named only the conditions); (b) `multi` is read only where the `Next`/`Submit` row is painted, so the 2.1.222 shape, whose commit was Enter, is `not-multiselect`; (c) a ticked free-text box is refused before any key, since Tab would commit it; (d) the cursor must sit on an option row with no hint, so a cursor on `Chat about this` or on `Next` without the hint is refused too, unmeasured there; (e) the tick proof also needs the cursor unmoved and the hint absent; (f) the move after Tab is proved by the TITLE and needs a menu: text typed into the free-text row changes the id under the same title, and a multiSelect question is always followed by the next question or the review; (g) the order asked is the tick order; (h) the empty set is a 400, because Tab on no box skips the question.
+- [x] **Step 3: Mutation table, run.** A script applied each mutant to the uncommitted change, ran the named suites, recorded the failing tests, and restored the file, compared byte for byte. Every mutant was red.
+
+  | Mutant | RED (the named tests) |
   |---|---|
-  | `answerAsk`'s multiSelect refusal removed | the flipped (a) pins and the real-fixture case |
-  | `checked` always false | the digits-differ case (sends `1` again) |
-  | the cursor check reads the free-text row only | the Next-row case |
-  | Tab sent without the tick proof | ticks-failed |
-  | the commit check dropped | commit-failed |
-  | `parsed` set true for multiSelect | the (b) pin |
+  | `answerAsk`'s multiSelect refusal removed | all six (a) cases |
+  | `checked` always false | 19, among them the digits-differ case (sends `1` again) and the `multi` table |
+  | `checked` true for any box | 28 |
+  | `parsed` set true for multiSelect | seven parser pins, the (b) "stays unparsed" pin among them |
+  | the commit row not required | `not-multiselect` on the 2.1.222 shape; "multi rides … only one that paints its Next/Submit row" |
+  | the boxes need not be the first rows | "no multi when the boxes are not the menu's first rows" |
+  | the `not-an-option` check dropped | its three cases |
+  | the `free-text-ticked` guard dropped | its case |
+  | the cursor check reads the free-text row only | the cursor on Chat |
+  | the cursor check ignores the hint | row 3 with the hint |
+  | ticks before unticks | the recorded revisit |
+  | ticks in screen order | the order asked |
+  | a digit for every wanted box | 11, the digits-differ case first |
+  | Tab without the tick proof | the eight `ticks-failed` cases |
+  | the tick proof drops the cursor | the cursor moved to another option row |
+  | the tick proof drops the free-text box | the free-text box ticked too |
+  | the tick proof drops the id | another question showing the same ticks |
+  | the tick proof drops the hint | the hint appeared |
+  | the tick proof captured once | the slow render |
+  | the commit check dropped | the three `commit-failed` cases |
+  | the commit proved by id, not title | a new id under the same title |
+  | the commit accepts no menu | no menu at all after Tab |
+  | the commit captured once | the slow commit |
+  | the set rule accepts an empty set | its case, and the route's 400 loop |
+  | the set rule accepts a repeat | its case, and the route's 400 loop |
+  | the route answers `bad-indexes` as 409 | the route's 400 loop |
+  | the commit row spelled again in `server/src` | "the commit row is spelled on a code line in shared/ask-menu.ts and nowhere else" |
 
-- [ ] **Step 4: Gates:** `ask-route`, `answer-multi`, `dialog`, `answer`, `routes`, `sessionws` (it reads `Dialog`), the four ledger/hygiene suites, and tsc.
-- [ ] **Step 5: Commit** `fix(ask): multiSelect — answerAsk refuses it, the pane parse reads ticks, and /dialog/multi toggles, proves and commits with Tab (D-5048)`.
+- [x] **Step 4: Gates:** `ask-route`, `answer-multi`, `answer-text`, `answer`, `dialog`, `routes`, `sessionws` (it reads `Dialog`), `send`, `exec`, `auth-gate`, `auth-routes`, `box-token-census`, `coord-routes-single-file`, `coord-pause-route`, `docs-budget`, `docs-parity`, `docs-source`, `verb-gate`, `pane-history-route`, `push-copy`, `whitelist-subset`, `asks-routes`, `asks-sweep`, `hookstate`, `single-definition`, `deviation-refs` (against `origin/main`), `dtbd` and `topology-clean` (with the new files tracked), and tsc for `server/` and `pwa/`. `typecheck-tests` fails the same three cases with the same 727 error lines as at Task 3's head, all from `agent/` (no `agent/node_modules` in this worktree), none from `server/`, `shared/` or `pwa/src`.
+- [x] **Step 5: Commit** `fix(ask): multiSelect — answerAsk refuses it, the pane parse reads ticks, and /dialog/multi toggles, proves and commits with Tab (D-5048)`.
 
 ## Out of scope
 
