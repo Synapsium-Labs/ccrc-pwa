@@ -110,6 +110,65 @@ function harnessEnvelope(s: string): string | null {
 }
 
 /**
+ * D-4950. The operator's message as Claude Code records it when it ABSORBS the
+ * message mid-turn, or null when the record is anything else.
+ *
+ * A message sent to a busy session is queued in the pane, and on current Claude
+ * Code the usual fate of a queued message is not a turn of its own: the harness
+ * hands it to the model at the next tool boundary and writes three records —
+ * `{"type":"queue-operation","operation":"enqueue"}`, the same with
+ * `"operation":"remove","reason":"absorbed_mid_turn"`, and
+ *
+ *     {"type":"attachment","uuid":…,"timestamp":…,"attachment":{"type":"queued_command",
+ *      "prompt":"<the text>","commandMode":"prompt","origin":{"kind":"human"},…}}
+ *
+ * — and NO `type:"user"` record, ever. Measured 2026-10-13 over the fleet's 25
+ * most recent transcripts: 1058 enqueues, 578 dequeues and 467 removes as
+ * `absorbed_mid_turn`; the shape is in transcripts from 2.1.201 builds on, and
+ * the 2.1.296 binary still writes it. So the absorbed path is the common case,
+ * not an edge, and reading only `user` records made that message invisible
+ * twice over: the chat never showed it, and the PWA's optimistic bubble never
+ * met its echo and sat under Claude's answer to it for the whole ten-minute
+ * queued horizon before vanishing anyway.
+ *
+ * Read as a `user` event — what it IS — so the chat shows it once, at the point
+ * in the turn where the model actually received it, and the PWA's existing
+ * echo match clears the bubble with no second matcher. ONCE is measured, not
+ * assumed: over 25 recent transcripts, 44 queued `prompt` records, the only one
+ * whose text also appeared as a user record was a one-letter answer typed
+ * twice. A dequeued message is written as an ordinary user record and gets no
+ * attachment, so the two paths never describe the same message.
+ *
+ * BOTH fields decide, positively, because the queue carries more than the
+ * operator. `origin.kind` names the speaker: `human` is the pane's input box,
+ * which is where the PWA's tmux path types (a mail nudge arrives the same way,
+ * and reads here exactly as it does when it lands as a user record); the same
+ * record also arrives as `peer` (another agent's message, with mode `prompt`),
+ * `task-notification` (or no origin at all, on older builds) and further kinds
+ * the 2.1.296 binary spells (`plugin`, `channel`, `auto-continuation`, …).
+ * `commandMode` names what kind of input it was: `prompt` is prose, while the
+ * binary's queue also holds `bash`, `task-notification` and `poll-event`
+ * items — a human's `!cmd` would be the first, and is not something they SAID.
+ * No human item in any mode but `prompt` was seen in the transcripts measured.
+ * An item that fails either test is dropped exactly as every attachment was
+ * before this read existed.
+ *
+ * The text is the prompt VERBATIM, as a string user record's content is — the
+ * PWA compares it byte for byte against `composePrompt`'s output. The
+ * `rendered` member is the system-reminder the MODEL was shown, not what the
+ * operator typed, and is never read.
+ */
+function absorbedPrompt(attachment: unknown): string | null {
+  if (attachment === null || typeof attachment !== 'object') return null;
+  const a = attachment as { type?: unknown; prompt?: unknown; commandMode?: unknown; origin?: unknown };
+  if (a.type !== 'queued_command' || a.commandMode !== 'prompt') return null;
+  const origin = a.origin;
+  if (origin === null || typeof origin !== 'object' || (origin as { kind?: unknown }).kind !== 'human') return null;
+  if (typeof a.prompt !== 'string' || a.prompt.trim() === '') return null;
+  return a.prompt;
+}
+
+/**
  * Parse one transcript JSONL line into zero or more ChatEvents.
  * Defensive by contract: a malformed line returns [], never throws.
  */
@@ -131,12 +190,19 @@ export function parseTranscriptLine(line: string): ChatEvent[] {
     isApiErrorMessage?: unknown;
     error?: unknown;
     quotaLimits?: unknown;
+    attachment?: unknown;
   };
   if (env.isSidechain === true) return [];
-  if (env.type !== 'user' && env.type !== 'assistant') return [];
 
   const uuid = typeof env.uuid === 'string' ? env.uuid : '';
   const ts = typeof env.timestamp === 'string' ? env.timestamp : '';
+
+  // D-4950: the one attachment that is the operator's own message.
+  if (env.type === 'attachment') {
+    const text = absorbedPrompt(env.attachment);
+    return text === null ? [] : [{ kind: 'user', uuid, ts, text }];
+  }
+  if (env.type !== 'user' && env.type !== 'assistant') return [];
   const content = env.message?.content;
   const out: ChatEvent[] = [];
 
@@ -265,4 +331,247 @@ export function parseTranscriptLine(line: string): ChatEvent[] {
     out.push({ kind: 'assistant', uuid, ts, text: content });
   }
   return out;
+}
+
+/** How many bytes of a transcript's tail every reader of the marker examines.
+ *  Every reader of the marker uses this one window — the server here, `ccd`'s
+ *  `_sync_uuid` and `ccrc doctor`'s `transcripts` check, whose bash copies are
+ *  held equal to this number by `server/test/continued-in-parity.test.ts`.
+ *  Claude Code's own reader looks further back (64 KiB in 2.1.296), so a
+ *  marker followed by more than this many bytes of metadata is one it still
+ *  sees and these readers do not — a declined follow, never a wrong one. */
+export const CONTINUATION_TAIL_BYTES = 8192;
+
+/** A string Claude Code mints with `randomUUID`: lowercase hex and dashes,
+ *  36 of them. JavaScript's `$` (no `m` flag) is the end of the input, so a
+ *  trailing newline is refused here; the bash readers' jq says the same with a
+ *  length and a per-character test, because jq's `$` also matches before a
+ *  trailing newline. */
+const UUID_RE = /^[0-9a-f-]{36}$/;
+
+/** The three literals Claude Code's own reader tests a line for BEFORE it
+ *  parses it (2.1.296). Compact JSON only: a line spelled any other way is
+ *  skipped by Claude Code, so it is skipped here too. */
+const MARKER_LITERAL = '"type":"continued-in"';
+const USER_LITERAL = '"type":"user"';
+const ASSISTANT_LITERAL = '"type":"assistant"';
+
+/** What ONE transcript line says to the backward scan (D-4940). Three answers,
+ *  never folded: a line that DECIDES with a successor, a line that DECIDES with
+ *  none, and a line the scan steps over. */
+export type TailRecord =
+  | { readonly kind: 'successor'; readonly to: string }
+  | { readonly kind: 'stop' }
+  | { readonly kind: 'skip' };
+
+const STOP: TailRecord = { kind: 'stop' };
+const SKIP: TailRecord = { kind: 'skip' };
+
+// ── WHAT COUNTS AS A TURN (D-4940) ──────────────────────────────────────────
+// Claude Code's reader (2.1.296) stops only at a COMPLETE turn, and steps over
+// every other user/assistant record. These are its tests, copied rather than
+// paraphrased, because a record it steps over and this rule stopped at is a
+// follow declined while the conversation went on in the successor — the
+// operator's live chat dark, the same outcome review finding F1 was about,
+// from the other side. The plausible records after a marker are exactly the
+// ones it steps over: an interruption notice, a streamed assistant record
+// whose `stop_reason` is still null, a tool result, a slash command's echo.
+//
+// Its prompt test (`d8e`) first unwraps `<pasted_content id="…">` blocks
+// (`gwe`), and that unwrapping is NOT copied — its block grammar is more than
+// the jq twin can spell exactly — so a text block carrying that literal is a
+// prompt here, full stop. That is the one place this rule can stop where
+// Claude Code would step over: a declined follow, the shape every other
+// recorded divergence below takes, and never a follow Claude Code would not
+// make. A text block WITHOUT that literal is one `gwe` returns unchanged, so
+// everything else is the same test on the same string. The jq twin
+// (`CONTINUED_IN_JQ`) spells JavaScript's `trim()`/`\s` whitespace set, `\w`
+// and the three patterns below in code points, and the parity table holds it
+// to this.
+
+/** `d8e`'s three patterns, verbatim (no flags, as Claude Code compiles them). */
+const COMMAND_NAME_RE = /<command-name>(.*?)<\/command-name>/;
+const BASH_INPUT_RE = /<bash-input>([\s\S]*?)<\/bash-input>/;
+const NOT_A_PROMPT_RE = /^(?:\s*<[a-z][\w-]*[\s>]|\[Request interrupted by user[^\]]*\])/;
+const PASTED_LITERAL = '<pasted_content id="';
+
+/** An object to `typeof`. An array passes too and needs no arm of its own: a
+ *  parsed array has no `type`, `content`, `stop_reason` or `text` property, so
+ *  it reads exactly as the empty object would — where jq, which errors on
+ *  `.type` of an array, has to exclude it by name. */
+const isPlainObject = (v: unknown): v is Record<string, unknown> =>
+  typeof v === 'object' && v !== null;
+
+/** One text block, as `d8e` reads it: does it make the record a prompt? */
+function promptText(text: string): boolean {
+  if (text.includes(PASTED_LITERAL)) return true;
+  const n = text.split('\n').join(' ').trim();
+  if (n === '') return false;
+  if (COMMAND_NAME_RE.test(n)) return false;
+  if (BASH_INPUT_RE.test(n)) return true;
+  return !NOT_A_PROMPT_RE.test(n);
+}
+
+/** A user record Claude Code reads as a PROMPT: not meta, not a compact
+ *  summary, no tool result in it, and a text that says something. */
+function isPrompt(r: Record<string, unknown>): boolean {
+  if (r['isMeta'] === true || r['isCompactSummary'] === true) return false;
+  const m = r['message'];
+  if (!isPlainObject(m)) return false;
+  const c = m['content'];
+  if (typeof c === 'string') return promptText(c);
+  if (!Array.isArray(c)) return false;
+  const texts: string[] = [];
+  for (const b of c) {
+    if (!isPlainObject(b)) continue;
+    if (b['type'] === 'tool_result') return false;
+    if (b['type'] === 'text' && typeof b['text'] === 'string') texts.push(b['text']);
+  }
+  return texts.some(promptText);
+}
+
+/** An assistant record Claude Code reads as a FINISHED turn: a string
+ *  `stop_reason`, and not an API error (its schema: `isApiErrorMessage` absent
+ *  or a boolean, `message` absent or an object). */
+function isCompleteAssistant(r: Record<string, unknown>): boolean {
+  const e = r['isApiErrorMessage'];
+  if (e !== undefined && e !== false) return false;
+  const m = r['message'];
+  return isPlainObject(m) && typeof m['stop_reason'] === 'string';
+}
+
+/**
+ * What one line of a transcript's tail says about where the session continued.
+ *
+ * Claude Code forks a live session into a daemon-hosted background PTY under a
+ * new sessionId and appends to the file it abandons:
+ *
+ *     {"type":"continued-in","timestamp":"…","sessionId":"<old>","continuedInSessionId":"<new>"}
+ *
+ * THE RULE, IDENTICAL IN ALL THREE READERS (D-4940) — this function, the jq
+ * program `ccd`'s `_continued_in_of` and the doctor's `_dr_continued_in` both
+ * run (`CONTINUED_IN_JQ`), held to one answer per input by the fixture table in
+ * `server/test/continued-in-parity.test.ts`:
+ *
+ *   - THE MARKER: a line carrying the compact literal `"type":"continued-in"`
+ *     that parses as a JSON object whose OWN top-level `type` is
+ *     "continued-in" and whose `continuedInSessionId` is a string. It decides.
+ *     It names a successor only when its `sessionId` is ABSENT or is this
+ *     file's own uuid (absence permits; presence must be this file's — null,
+ *     malformed or another session's all refuse), and the successor is a uuid
+ *     that is not this file's own; otherwise it decides "no successor".
+ *   - A FINISHED TURN: a line carrying `"type":"user"` or
+ *     `"type":"assistant"` that parses as an object whose OWN top-level `type`
+ *     is one of those AND that Claude Code's own reader would stop at — an
+ *     assistant record with a string `stop_reason` that is not an API error,
+ *     or a user record that is a prompt (`isPrompt` above). The file was
+ *     written past any older marker, so it decides "no successor".
+ *   - EVERYTHING ELSE IS SKIPPED: the metadata Claude Code re-stamps after the
+ *     marker when its process exits (last-prompt, ai-title, custom-title, tag,
+ *     permission-mode, …), summary/system/attachment/queue-operation records,
+ *     a user/assistant record that is not a finished turn (an interruption
+ *     notice, a tool result, a streamed record with no `stop_reason` yet),
+ *     a line that does not parse (half-written, or the window's cut first
+ *     line — a proper suffix of a one-line JSON object never parses as an
+ *     object, so the cut needs no handling of its own), anything not an object.
+ *
+ * NEVER A SUBSTRING (review finding F1). The literal is a prefilter, as it is
+ * in Claude Code; the decision is the record's own top-level `type`. A tool
+ * call whose input holds `{"type":"continued-in","continuedInSessionId":…}`
+ * is an assistant record and stops the scan; it never names a successor.
+ * Duplicate keys resolve as `JSON.parse` and jq both resolve them: the last.
+ *
+ * WHERE CLAUDE CODE'S OWN READER DIFFERS (2.1.296, its `Txn`), each a declined
+ * follow rather than a wrong one: a text block holding a `<pasted_content>`
+ * literal is a prompt here without being unwrapped first; it checks no
+ * `sessionId`; it accepts an uppercase successor; and it looks 64 KiB back,
+ * not 8.
+ *
+ * Never throws: a parse failure is a skipped line, not a broken session.
+ */
+export function tailRecordOf(line: string, ofUuid: string): TailRecord {
+  const markerish = line.includes(MARKER_LITERAL);
+  const turnish = line.includes(USER_LITERAL) || line.includes(ASSISTANT_LITERAL);
+  if (!markerish && !turnish) return SKIP;
+  let raw: unknown;
+  try { raw = JSON.parse(line); } catch { return SKIP; }
+  if (!isPlainObject(raw)) return SKIP;
+  const r = raw;
+  const to = r['continuedInSessionId'];
+  if (markerish && r['type'] === 'continued-in' && typeof to === 'string') {
+    const authored = !Object.prototype.hasOwnProperty.call(r, 'sessionId') || r['sessionId'] === ofUuid;
+    return authored && UUID_RE.test(to) && to !== ofUuid ? { kind: 'successor', to } : STOP;
+  }
+  if (turnish && r['type'] === 'assistant') return isCompleteAssistant(r) ? STOP : SKIP;
+  if (turnish && r['type'] === 'user') return isPrompt(r) ? STOP : SKIP;
+  return SKIP;
+}
+
+/** The successor ONE line names when it is this file's own marker, or null:
+ *  `tailRecordOf`'s verdict for a single line. No live reader calls it — each
+ *  reads a window (`continuationInTail` here, `CONTINUED_IN_JQ` in ccd and the
+ *  doctor) — and its unit test pins the one-line cases (D-4940). */
+export function continuationOf(line: string, ofUuid: string): string | null {
+  const v = tailRecordOf(line, ofUuid);
+  return v.kind === 'successor' ? v.to : null;
+}
+
+/**
+ * The session a transcript CONTINUES IN, read from its tail window, or null.
+ *
+ * Lines are read NEWEST FIRST and the first that decides answers
+ * (`tailRecordOf`); a window that holds no deciding line answers null. This is
+ * the whole of the server's reading of the marker — `continuationAt`
+ * (`resolve.ts`) hands it the file's last `CONTINUATION_TAIL_BYTES`.
+ *
+ * WHY NOT THE LAST LINE (review finding, ccd-last-line-only-marker). Claude
+ * Code's own reader scans backwards and steps over records that are not a
+ * conversation, and Claude Code re-stamps session metadata when its process
+ * exits — so a valid marker can be followed by lines that are not markers.
+ * Reading only the last line called that marker absent.
+ */
+export function continuationInTail(tail: string, ofUuid: string): string | null {
+  const lines = tail.split('\n');
+  for (let i = lines.length - 1; i >= 0; i -= 1) {
+    const v = tailRecordOf(lines[i]!, ofUuid);
+    if (v.kind === 'skip') continue;
+    return v.kind === 'successor' ? v.to : null;
+  }
+  return null;
+}
+
+/**
+ * Is the newest line of `tail` that DECIDES (`tailRecordOf`) a FINISHED TURN?
+ *
+ * `continuationInTail` folds three things into one `null`: a finished turn, a
+ * marker the rule refuses (another session's, a malformed successor), and a
+ * window with no deciding line at all. Only the first says the file was
+ * written past any older marker — RESUMED — and it is exactly the line Claude
+ * Code's own reader (`Txn`, 2.1.296) stops at with "not continued". It scans
+ * the same newest lines first, and its window (the last 64 KiB) holds this
+ * one, so it reaches the same line and the same answer. For a window with no
+ * deciding line it reads on, and for a marker naming another session it
+ * names that successor (it checks no `sessionId`): either way it can still
+ * say "continued". Two differences remain. A marker whose successor is not a
+ * uuid is "not continued" there and not a turn here, so the fork is kept. A
+ * `<pasted_content>` prompt is a prompt here without being unwrapped first
+ * (the divergence this rule already records). Claude Code may step over it
+ * and still say "continued", but that record is the operator typing into the
+ * predecessor after its marker, which is a resume.
+ *
+ * The stream asks this before it un-follows a fork (D-4946); the walk never
+ * does — for following, the three stay one answer.
+ */
+export function finishedTurnDecides(tail: string, ofUuid: string): boolean {
+  const lines = tail.split('\n');
+  for (let i = lines.length - 1; i >= 0; i -= 1) {
+    const v = tailRecordOf(lines[i]!, ofUuid);
+    if (v.kind === 'skip') continue;
+    if (v.kind === 'successor') return false;
+    // A `stop` comes from one of `tailRecordOf`'s three deciding arms; only
+    // the marker arm's record has its own top-level `type` "continued-in".
+    // The line parsed there, so it parses here.
+    return (JSON.parse(lines[i]!) as Record<string, unknown>)['type'] !== 'continued-in';
+  }
+  return false;
 }

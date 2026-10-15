@@ -1,0 +1,50 @@
+
+ ▐▛███▛█   Claude Code v2.1.300
+▝▜██████▀  Haiku 5.5 · Claude Max
+ ▝▝   ▝▝   <projects-root>/project-a
+
+⚠ Safe mode: all customizations are disabled (CLAUDE.md, skills, plugins, hooks, MCP, agents, and more)
+  Restart without --safe-mode to re-enable
+
+▎ [✻] [✻] [✻] · Share Claude Code and earn $10 in usage credits · /passes
+
+❯ Call AskUserQuestion exactly once with TWO questions, short descriptions on every option. Q1 header "Tools" question "Which tools?" multiSelect true, options Hammer, Saw, Drill. Q2 header "Sizes" question "Which
+  sizes?" multiSelect true, options Small, Large. Afterwards reply with the raw answers only.
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+←  ☒ Tools  ☐ Sizes  ✔ Submit  →
+
+Which tools?
+
+❯ 1. [✔] Hammer
+         Striking tool for driving nails and breaking things apart
+  2. [ ] Saw
+         Cutting tool for wood, pipe, and other stock
+  3. [✔] Drill
+         Rotary tool for boring holes and driving screws
+  4. [ ] Type something
+     Next
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  5. Chat about this
+
+Enter to select · Tab/Arrow keys to navigate · Esc to cancel
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

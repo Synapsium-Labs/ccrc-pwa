@@ -67,7 +67,8 @@ describe('ws-expire keeps a leaf holding another session’s moved tree, and com
     expect(h.git(a.main, 'branch', '--list', EXP_BRANCH), 'its branch went').toBe('');
   }, 120_000);
 
-  it('into the archived workspace’s TEMP ROOT — kept `refused`, the file stands', () => {
+  // On Darwin the temp-root in-use probe answers `unmeasured`; the Linux run covers the `refused` verdict.
+  it.skipIf(process.platform === 'darwin')('into the archived workspace’s TEMP ROOT — kept `refused`, the file stands', () => {
     makeArchived(h);
     const o = foreign();
     const dest = path.join(tmpOf(EXP_ID), 'parked', 'still-harbor');

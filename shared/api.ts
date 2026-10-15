@@ -4019,6 +4019,31 @@ export interface Dialog {
    *  transcript could be matched to it. Absent for scraped confirms (/model,
    *  /effort, permission prompts), which render exactly as they do today. */
   ask?: DialogAsk;
+  /** D-5048: a multiSelect AskUserQuestion question, read off the pane (`DialogMulti`). Present only on such a menu,
+   *  which keeps `parsed: false`, so a PWA that predates this field keeps its raw view and its terminal door and never
+   *  offers a box as a one-tap answer. ADDITIVE, absence-permits: an older server never sends it. */
+  multi?: DialogMulti;
+}
+
+/**
+ * A multiSelect AskUserQuestion question as `parseDialog` reads it off the pane (D-5048), the shape
+ * `POST /api/sessions/:id/dialog/multi` answers. Measured on Claude Code 2.1.300 (2.1.280 paints the same): rows
+ * `k. [ ] Label`, then `n+1. [ ] Type something`, then an unnumbered `Next` row (`Submit` on the last question), a
+ * rule, and `n+2. Chat about this`. A box reads `[✔]` once ticked. The dialog's id does not change as boxes are ticked
+ * or the cursor moves, so it names the question, never its ticks: a reader takes the ticks from here, fresh.
+ */
+export interface DialogMulti {
+  /** The question's own options, in screen order: the digit that toggles each (`index`), its label (box stripped), its
+   *  description, and whether its box is ticked. Never the free-text row or `Chat about this`. */
+  options: { index: number; label: string; description?: string; checked: boolean }[];
+  /** The free-text row: its printed index, its label (`Type something` while empty, else the text it holds), and
+   *  whether its box is ticked (typing ticks it). Null when the menu paints none. */
+  freeText: { index: number; label: string; checked: boolean } | null;
+  /** The unnumbered row that commits the question, as painted: `Next`, or `Submit` on the last question. */
+  commit: string;
+  /** Where the `❯` cursor rests: the printed index of a numbered row (an option, the free-text row, or
+   *  `Chat about this`), `'commit'` on the commit row, or null when no cursor is on screen. */
+  cursor: number | 'commit' | null;
 }
 
 /** One AskUserQuestion question, as `session-hook.sh` copies it VERBATIM from
@@ -8573,6 +8598,42 @@ export const LEDGER_TITLE_MAX_BYTES = 200;
 export const PANE_HISTORY_LINES = 2000;
 
 /**
+ * THE SIZE THE DRAWER PINS A SESSION'S TMUX WINDOW TO, and the size ccd spawns
+ * one at. One number, because two copies of it are two different answers to
+ * "how wide is this pane" and every reader downstream believes whichever it
+ * met first.
+ *
+ * WHY IT IS PINNED AT ALL (spec §5.1, F1/F14). tmux REFLOWS stored lines when a
+ * window's width changes, and the reflow is destructive at this box's
+ * `history-limit`: measured on a private socket, `resize-window -x 43` on a
+ * 220-column pane holding 1853 stored lines took `history_size` to 9460, and at
+ * `history-limit 2000` the next output shed ~600 lines that never came back.
+ * So the drawer resizes the window to THIS before attaching and back to THIS on
+ * close, and a narrow client never moves it.
+ *
+ * WHAT A CLIENT DOES WITH IT is the other half, and it is the PWA's: a client
+ * smaller than the window is not a smaller window, it is a VIEWPORT INTO one,
+ * and tmux pans that viewport to follow the cursor — so a line's beginning
+ * scrolls off the left while the reader is typing. `TerminalDrawer` answers by
+ * shrinking its type, down to a floor, until its grid is at least this wide,
+ * and says so in its header when even the floor cannot get there.
+ *
+ * THIS IS TODAY'S ANSWER, NOT THE LAST ONE. The drawer program's wave 3 lets a
+ * phone-width drawer narrow the window deliberately, under a guard that only
+ * allows a width the pane's own history can absorb. When that lands the window
+ * stops being one constant and starts being a measurement, and every reader of
+ * this value becomes a reader of that measurement. In the PWA those readers
+ * are `TerminalDrawer`'s `fitToWindow` and the clip notice it raises.
+ *
+ * `ccd/ccd` spawns with the same pair and cannot import this file (bash), so it
+ * carries its own copy — the same shape `READER_MIN_COLS` already has. Holding
+ * the two equal is a separate, AGENT-FIRST change; this file is where the
+ * number is DECLARED, and `server/src/server.ts` no longer spells it.
+ */
+export const PINNED_WINDOW_COLS = 220;
+export const PINNED_WINDOW_ROWS = 50;
+
+/**
  * ONE MEASUREMENT OF A PANE, and its failures told apart.
  *
  * Read with a single `list-panes -t cc-<id> -F '#{pane_active} #{history_size}
@@ -8835,14 +8896,14 @@ export function isStampRead(v: unknown): v is StampRead {
   return typeof v === 'string' && (STAMP_READS as readonly string[]).includes(v);
 }
 
-/** A node's role (§6 `nodes.role`): the bash spine's `CCRC_ROLE` words. A
- *  token outside the list reads `null` on the wire. */
-export type NodeRole = 'server' | 'fleet' | 'both';
-export const NODE_ROLES = ['server', 'fleet', 'both'] as const satisfies readonly NodeRole[];
-/** Use THIS, never `NODE_ROLES.includes(x as NodeRole)` — `isRunState`'s rule. */
-export function isNodeRole(v: unknown): v is NodeRole {
-  return typeof v === 'string' && (NODE_ROLES as readonly string[]).includes(v);
-}
+/** A node's role (§6 `nodes.role`) and its guard live in the L0 sibling
+ *  node-role.ts, so server/src/config.ts imports the guard without loading this
+ *  ~10k-line file at runtime. Only the TYPE comes back here (D-3021: this file
+ *  imports nothing at runtime); NODE_ROLES and isNodeRole are imported from
+ *  node-role.ts itself. Eight lines, like the definition they replace, so line
+ *  citations into this file (the README's, the compaction card's) still hold. */
+import type { NodeRole } from './node-role.js';
+export type { NodeRole } from './node-role.js';
 
 /** A node's OS, from `~/.ccrc/ccrc-caps` line 1 (`os linux|darwin`, §8).
  *  `unknown` = no caps file, or one that failed validation. */
@@ -9822,3 +9883,104 @@ export const COLLECT_BOX_LABELS = {
 } as const;
 export type CollectBoxLine = keyof typeof COLLECT_BOX_LABELS;
 export const COLLECT_BOX_LINES: readonly CollectBoxLine[] = Object.keys(COLLECT_BOX_LABELS) as CollectBoxLine[];
+
+/** Every refusal `POST /api/sessions/:id/dialog` answers with (`answerDialog`, `server/src/inject/send.ts`), each a 409.
+ *  Spelled once, as a total table's keys, and the list derived: a code that leaves the union and stays here, or joins it
+ *  without a row here, is a compile error.
+ *  - `not-alive`: the pane could not be captured.
+ *  - `stale-dialog`: no menu is on screen, or not the one the caller was shown.
+ *  - `walk-failed`: the re-captured pane does not show the cursor on the requested row, so no Enter was sent.
+ *  - `free-text-row` (D-5045): the requested row is an AskUserQuestion's free-text row (`shared/ask-menu.ts`, read by
+ *    `freeTextRow`). Enter on it while it is empty rejects the whole ask, so it is refused before any key, and again on
+ *    the screen the walk lands on, before Enter. A row that already holds text is refused too: this route never submits
+ *    typed text.
+ *  - `unparsed-dialog`: the menu on screen (before the walk, or where it landed) did not parse (`parsed: false`), so
+ *    nothing proves where the cursor is. A multiSelect AskUserQuestion is one: Enter there toggles or commits rather
+ *    than answering, so it is refused with no key; `POST /api/sessions/:id/dialog/multi` answers it (D-5048). */
+export type DialogRefuseCode = 'not-alive' | 'stale-dialog' | 'walk-failed' | 'free-text-row' | 'unparsed-dialog';
+const DIALOG_REFUSE_CODE_MAP: Readonly<Record<DialogRefuseCode, true>> = {
+  'not-alive': true, 'stale-dialog': true, 'walk-failed': true, 'free-text-row': true, 'unparsed-dialog': true,
+};
+export const DIALOG_REFUSE_CODES: readonly DialogRefuseCode[] =
+  Object.keys(DIALOG_REFUSE_CODE_MAP) as DialogRefuseCode[];
+
+/** The longest answer `POST /api/sessions/:id/dialog/text` types (D-5047), in UTF-16 code units (`String.length`).
+ *  Measured on Claude Code 2.1.300 at 220x50: a 1000-character single-line answer, sent as one literal, arrived byte for
+ *  byte, painted as 5 rows with the question still inside the 50-row capture, so its echo could be proved. Nothing
+ *  longer was measured. A taller row can push the question out of the capture, and then no echo proves anything. */
+export const DIALOG_TEXT_MAX = 1000;
+
+/** A character the free-text route will not type. A control character types a KEY into the row, not text: the C0
+ *  range (newline, Tab, Escape, and ctrl+g, which opens the external editor), DEL, and the C1 range, whose U+009B is an
+ *  8-bit CSI. U+2028 and U+2029 are line breaks, and the answer is one line. */
+const DIALOG_TEXT_CONTROL_RE = /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/;
+
+/** Will `POST /api/sessions/:id/dialog/text` type `text` (D-5047)? Not blank once trimmed, one line, no control
+ *  character, at most `DIALOG_TEXT_MAX`. The route answers 400 `bad-text` otherwise, before it captures the pane. */
+export function isDialogText(text: string): boolean {
+  return text.trim() !== '' && text.length <= DIALOG_TEXT_MAX && !DIALOG_TEXT_CONTROL_RE.test(text);
+}
+
+/** Every refusal `POST /api/sessions/:id/dialog/text` answers with (`answerDialogText`, `server/src/inject/send.ts`,
+ *  D-5047). `bad-text` is a 400; the rest are 409s. Spelled once, as a total table's keys, and the list derived.
+ *  - `bad-text`: `isDialogText` refuses the text. Nothing was captured or pressed.
+ *  - `not-alive`: the pane could not be captured.
+ *  - `stale-dialog`: no menu is on screen, or not the one the caller was shown. Typing changes a dialog's id (it hashes
+ *    the labels, and the row's label becomes the text), so a retry names the id the stream shows after the typing.
+ *  - `not-free-text`: the requested row is not a single-select AskUserQuestion's free-text row, or it already holds
+ *    text other than this text (typing would append to it). A row holding exactly this text is not refused: the route
+ *    proves it and presses Enter without typing, which recovers a send that typed but never proved its echo.
+ *  - `focus-failed`: after the walk, a capture did not show the same title, the cursor on the row, the row still empty
+ *    (or still holding exactly this text), and the footer's edit hint. Nothing was typed.
+ *  - `echo-failed`: the text was sent, but no capture showed the same title, the cursor still on the row, and the row
+ *    holding exactly this text. Enter was NOT pressed, because Enter on an empty free-text row rejects the whole ask.
+ *    The text may be left in the row, and a retry with the same text submits it. */
+export type DialogTextRefuseCode =
+  'bad-text' | 'not-alive' | 'stale-dialog' | 'not-free-text' | 'focus-failed' | 'echo-failed';
+const DIALOG_TEXT_REFUSE_CODE_MAP: Readonly<Record<DialogTextRefuseCode, true>> = {
+  'bad-text': true, 'not-alive': true, 'stale-dialog': true, 'not-free-text': true, 'focus-failed': true,
+  'echo-failed': true,
+};
+export const DIALOG_TEXT_REFUSE_CODES: readonly DialogTextRefuseCode[] =
+  Object.keys(DIALOG_TEXT_REFUSE_CODE_MAP) as DialogTextRefuseCode[];
+
+/** The highest digit `POST /api/sessions/:id/dialog/multi` sends (D-5048). A box is toggled by its own digit, and an
+ *  AskUserQuestion question has at most four options, so 9 is never the binding limit. */
+const DIALOG_MULTI_MAX_INDEX = 9;
+
+/** Will `POST /api/sessions/:id/dialog/multi` send `indexes` (D-5048)? A non-empty list of distinct whole numbers, each
+ *  from 1 to 9: the printed digits of the boxes to leave ticked. Empty is refused because Tab on a question with no box
+ *  ticked skips it (measured), which is not an answer. The route answers 400 `bad-indexes` otherwise, before it captures
+ *  the pane. Whether each index is one of the question's own options is the pane's to say (409 `not-an-option`). */
+export function isDialogMultiIndexes(indexes: readonly number[]): boolean {
+  return indexes.length > 0 &&
+    new Set(indexes).size === indexes.length &&
+    indexes.every((i) => Number.isInteger(i) && i >= 1 && i <= DIALOG_MULTI_MAX_INDEX);
+}
+
+/** Every refusal `POST /api/sessions/:id/dialog/multi` answers with (`answerDialogMulti`, `server/src/inject/send.ts`,
+ *  D-5048). `bad-indexes` is a 400; the rest are 409s. Spelled once, as a total table's keys, and the list derived.
+ *  - `bad-indexes`: `isDialogMultiIndexes` refuses the set. Nothing was captured or pressed.
+ *  - `not-alive`: the pane could not be captured.
+ *  - `stale-dialog`: no menu is on screen, or not the one the caller was shown.
+ *  - `not-multiselect`: the menu is not a multiSelect question this route can read (`Dialog.multi` absent): a
+ *    single-select menu, the review screen, or a multi-select painted with no `Next`/`Submit` row.
+ *  - `not-an-option`: an index is not one of the question's own options: the free-text row (free text inside a
+ *    multiSelect question is not answered here in v1), `Chat about this`, or a row past the menu.
+ *  - `free-text-ticked`: the free-text row's box is ticked. Tab would commit it with the options, so nothing is sent.
+ *  - `cursor-not-on-option`: the cursor is not on one of the question's options, or the footer shows the edit hint.
+ *    Measured: with the cursor on the free-text row a digit is TYPED into it, and Tab on the `Next` row after a walk
+ *    through the free-text row was swallowed. Nothing was pressed.
+ *  - `ticks-failed`: digits were sent, but no capture showed the same question with exactly the wanted boxes ticked,
+ *    the free-text box clear, the cursor where it was and no edit hint. Tab was NOT pressed. Boxes may be left part
+ *    toggled; a retry with the same set sends only the digits still needed.
+ *  - `commit-failed`: Tab was pressed after the ticks were proved, but no capture showed the screen move on. */
+export type DialogMultiRefuseCode =
+  | 'bad-indexes' | 'not-alive' | 'stale-dialog' | 'not-multiselect' | 'not-an-option' | 'free-text-ticked'
+  | 'cursor-not-on-option' | 'ticks-failed' | 'commit-failed';
+const DIALOG_MULTI_REFUSE_CODE_MAP: Readonly<Record<DialogMultiRefuseCode, true>> = {
+  'bad-indexes': true, 'not-alive': true, 'stale-dialog': true, 'not-multiselect': true, 'not-an-option': true,
+  'free-text-ticked': true, 'cursor-not-on-option': true, 'ticks-failed': true, 'commit-failed': true,
+};
+export const DIALOG_MULTI_REFUSE_CODES: readonly DialogMultiRefuseCode[] =
+  Object.keys(DIALOG_MULTI_REFUSE_CODE_MAP) as DialogMultiRefuseCode[];

@@ -49,6 +49,16 @@ export function Sheet({ open, onClose, children, title, eyebrow, full }: SheetPr
       // `handleOnly` leaves exactly one place that drags the panel: the
       // grabber, which is why it becomes a real `Drawer.Handle` below.
       handleOnly={full}
+      // THE KEYBOARD IS COUNTED ONCE. vaul's `repositionInputs` shrinks the panel
+      // to the visual viewport whenever a textarea has focus, and the terminal
+      // already pads its own bottom by the keyboard's height (`useKeyboardInset`,
+      // the discipline the session screen shares). Both at once subtract the
+      // keyboard twice: measured on an Android phone (Chrome 155, a 792px layout
+      // viewport, a 444px visual one), the glass collapsed to zero rows and the
+      // input box the operator was typing into left the screen. The full variant
+      // keeps the app's inset; every other sheet keeps vaul's
+      // (`sheet-keyboard-once.test.tsx`).
+      repositionInputs={!full}
       onOpenChange={(next) => {
         if (!next) onClose();
       }}

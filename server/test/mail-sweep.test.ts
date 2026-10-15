@@ -297,7 +297,7 @@ const primedWatcher = async (
 };
 
 const literalSends = (calls: string[][]): string[] =>
-  calls.filter((a) => a[0] === 'send-keys' && a[3] === '-l').map((a) => a[4]!);
+  calls.filter((a) => a[0] === 'send-keys' && a[3] === '-l').map((a) => a[5]!);   // the text sits after `--` (D-5046)
 const keyPresses = (calls: string[][]): string[] =>
   calls.filter((a) => a[0] === 'send-keys' && a[3] !== '-l').map((a) => a[3]!);
 

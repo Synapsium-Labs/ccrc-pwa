@@ -38,7 +38,9 @@ import { Bus, type Notice } from './bus.js';
 import type { FleetWatcher } from './watch.js';
 import { SessionStream, parseSince } from './sessionws.js';
 import { KeyedQueue } from './inject/queue.js';
-import { sendPrompt, answerDialog, interrupt, submitEnter, type SendDeps } from './inject/send.js';
+import {
+  sendPrompt, answerDialog, answerDialogMulti, answerDialogText, interrupt, submitEnter, type SendDeps,
+} from './inject/send.js';
 import { answerAsk, type AskDeps } from './inject/ask.js';
 import { freshAskAt, measuredIdentity, readRegistry, readRegistryMeasured, readSessionRecord } from './registry.js';
 import type { SessionRecord } from './registry.js';
@@ -79,6 +81,7 @@ import {
 import {
   ASK_OPERATOR_PRINCIPAL, CLIP_EXT_ALT, FLEET_PROTO, FLEET_PROTO_MIN, HOLD_ROUTE_REASON_MAX_BYTES,
   PANE_HISTORY_LINES,
+  PINNED_WINDOW_COLS, PINNED_WINDOW_ROWS,
   type AccountsResponse, type AccountUsage, type AuthStatus, type CoordStatus, type Divergence,
   type FleetHealth, type FleetMsg,
   type FleetSession,
@@ -1838,7 +1841,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     // depending on, and the close handler's own 220x50 becomes a no-op rather
     // than the defect PR #96's handoff was built to cure. The deliberate
     // un-pin is wave 3, under the fit guard, through an advertised ccd verb.
-    void deps.tmux.resizeWindow(id, 220, 50);
+    void deps.tmux.resizeWindow(id, PINNED_WINDOW_COLS, PINNED_WINDOW_ROWS);
     const p = spawnPty(id, cols, rows);
     const sub = p.onData((data) => socket.send(data));   // server->client: raw utf8 frames
     socket.on('message', (raw) => {
@@ -1855,7 +1858,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       p.kill();
       // Restore the canonical size ccd spawned with — a phone-sized drawer must
       // not leave the session shrunken (wrapped panes break capture parsing).
-      void deps.tmux.resizeWindow(id, 220, 50);
+      void deps.tmux.resizeWindow(id, PINNED_WINDOW_COLS, PINNED_WINDOW_ROWS);
     });
   });
 
@@ -1935,7 +1938,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   // `sendDeps`/`askDeps` themselves are built ABOVE, ahead of
   // `registerCoordRoutes` — see that call site's own comment.
   //
-  // C0.2: `knownId` gates 18 request-id routes (14 POST, 4 GET — every one of
+  // C0.2: `knownId` gates 20 request-id routes (16 POST, 4 GET — every one of
   // them a per-request check, not a periodic sweep) plus the constructed-id
   // revival probe below, and previously called `readRegistry` — a 24-session
   // fleet's baseline is 745 agent-WS operations [registry-read-census:fleet]
@@ -2163,6 +2166,45 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   });
 
   /**
+   * D-5047: type an answer into an AskUserQuestion's free-text row ("Type something.") and submit it, proved focused
+   * before typing and echoed before Enter (`answerDialogText`, `inject/send.ts`). A NEW route, deliberately not a
+   * `text` field on `/dialog` above: an older server would ignore that field, walk onto the empty row and press Enter,
+   * which rejects the whole ask. An older server answers this route 404 instead. `bad-text` (`isDialogText`,
+   * `shared/api.ts`) is the caller's to fix, so it is a 400 like a malformed body; every other refusal is a 409.
+   */
+  app.post('/api/sessions/:id/dialog/text', async (req, reply) => {
+    const { id } = req.params as { id: string };
+    if (!(await knownId(id))) return reply.code(404).send({ ok: false, error: 'unknown-session' });
+    const body = (req.body ?? {}) as { dialogId?: unknown; optionIndex?: unknown; text?: unknown };
+    if (typeof body.dialogId !== 'string' || typeof body.optionIndex !== 'number' || typeof body.text !== 'string') {
+      return reply.code(400).send({ ok: false, error: 'bad-request' });
+    }
+    const res = await answerDialogText(sendDeps, id, body.dialogId, body.optionIndex, body.text);
+    if (res.ok) return res;
+    return reply.code(res.error === 'bad-text' ? 400 : 409).send(res);
+  });
+
+  /**
+   * D-5048: answer a multiSelect AskUserQuestion question, leaving exactly `optionIndexes` ticked and committing it
+   * with Tab, each step proved on a fresh capture (`answerDialogMulti`, `inject/send.ts`). A NEW route, like
+   * `/dialog/text`: an older server answers it 404, where a field on `/dialog` would have walked and pressed Enter,
+   * which on a multiSelect question toggles a box and commits nothing. `bad-indexes` (`isDialogMultiIndexes`,
+   * `shared/api.ts`) is the caller's to fix, so it is a 400 like a malformed body; every other refusal is a 409.
+   */
+  app.post('/api/sessions/:id/dialog/multi', async (req, reply) => {
+    const { id } = req.params as { id: string };
+    if (!(await knownId(id))) return reply.code(404).send({ ok: false, error: 'unknown-session' });
+    const body = (req.body ?? {}) as { dialogId?: unknown; optionIndexes?: unknown };
+    if (typeof body.dialogId !== 'string' || !Array.isArray(body.optionIndexes) ||
+        !body.optionIndexes.every((n) => typeof n === 'number')) {
+      return reply.code(400).send({ ok: false, error: 'bad-request' });
+    }
+    const res = await answerDialogMulti(sendDeps, id, body.dialogId, body.optionIndexes as number[]);
+    if (res.ok) return res;
+    return reply.code(res.error === 'bad-indexes' ? 400 : 409).send(res);
+  });
+
+  /**
    * Task 12 (D-2171) — this is the OPERATOR's own answer path, the ordinary
    * lock-screen route every ask goes through, PWA and pre-emption lane
    * alike. Before this task it never consulted the `asks` table at all: if
@@ -2194,9 +2236,10 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
    * is the authority this row exists to protect against being locked out
    * of, not a third party mediated by it, so losing the CAS only means this
    * request cannot claim the record; the press still goes through on its
-   * own merits (`answerAsk`'s own twelve pre-send guards plus its two
-   * post-send `sendKey` checks, D-2177, are the only refusal that still
-   * applies).
+   * own merits (`answerAsk`'s own thirteen pre-send guards plus its
+   * post-send `sendKey` check, D-2177, are the only refusal that still
+   * applies; D-5048 added the thirteenth, the multiSelect refusal, and took
+   * away the commit Enter and its check).
    */
   app.post('/api/sessions/:id/ask', async (req, reply) => {
     const { id } = req.params as { id: string };

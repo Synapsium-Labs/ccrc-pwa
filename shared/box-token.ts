@@ -40,6 +40,16 @@ export type TokenHold = (typeof TOKEN_HOLDS)[number];
 export const BOX_TOKEN_PHASES = ['unconfigured', 'idle', 'staged', 'handed-out', 'promoting', 'grace', 'held', 'failed'] as const;
 export type BoxTokenPhase = (typeof BOX_TOKEN_PHASES)[number];
 
+/** Spec §5.1 "Schedule (wave 2)", the operator's R4: a rotation is due this long after the last confirmed promotion
+ *  (or, with none yet, after the current value was minted or adopted; 4556). Declared once, generically named, so the
+ *  agent link token's rotation reuses it. `token-shared.test.ts` pins it by name and by value. A separate quantity from
+ *  `LEDGER_STALE_MS` (`shared/api.ts`) and `CHILD_RECLAIM_LEAF_KEPT_HORIZON_MS` (`server/src/childReclaimSweep.ts`),
+ *  which are also seven days. */
+export const TOKEN_ROTATION_INTERVAL_MS = 7 * 24 * 60 * 60_000;
+/** 4557: doctor's `rotation-overdue` waits this long past the interval before it WARNs, so a rotation still on its
+ *  backoff ladder (at most an hour a step) is not called overdue. A separate quantity from `STALL_ALERT_MS`. */
+export const TOKEN_ROTATION_OVERDUE_SLACK_MS = 24 * 60 * 60_000;
+
 /** The fixed comment line a fleet token file gets when none existed (both writers: the server's both-role writer and
  *  `ccrc token sync`). An existing file's own `#` and blank lines are kept instead. */
 export const FLEET_TOKEN_FILE_COMMENT = '# ccrc box token: written by ccrc and rotated by the server; do not edit or copy it';
@@ -96,6 +106,12 @@ export interface BoxTokenView {
   retiredRefused: boolean;            // the server's own proof at the last retirement
   lastBootRecovery: { at: number; source: 'pending' | 'previous' } | null;
   role: NodeRole;
+  /** 4557: when the weekly schedule is next due (ms): the anchor (the last promotion, else when the current value was
+   *  minted or adopted) plus TOKEN_ROTATION_INTERVAL_MS, or the view's own `now` when it is due already. More than one
+   *  interval after the server's own `now` means the anchor is ahead of the server's clock; the view carries no server
+   *  clock, so a reader compares against its own. Null only when this server holds no current value. Optional and
+   *  additive: an older server omits it; the console reads it in a later part. */
+  nextRotationAt?: number | null;
 }
 
 export type RotateAnswer =

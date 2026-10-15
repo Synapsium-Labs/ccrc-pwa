@@ -390,7 +390,11 @@ describe('session store optimistic send', () => {
     expect(store.getState().events).toEqual([user('a', 'ship it')]);
   });
 
-  it('clears a confirmed-by-api pending after the 5 s fallback when no event matches', async () => {
+  // Was "clears ... after the 5 s fallback" — that was the defect (task 5):
+  // a busy session cannot echo inside 5s, so the operator's own bubble
+  // vanished. The 5s mark now flips `queued`, not deletion; see the "a queued
+  // send" describe below for the retirement stage.
+  it('marks a confirmed-by-api pending queued after the 5 s fallback when no event matches', async () => {
     vi.useFakeTimers();
     const prompt = vi.fn().mockResolvedValue(undefined);
     const store = createSessionStore('s1', { api: { prompt } });
@@ -399,9 +403,10 @@ describe('session store optimistic send', () => {
     expect(store.getState().pending).toHaveLength(1);
 
     vi.advanceTimersByTime(4_999);
-    expect(store.getState().pending).toHaveLength(1);
+    expect(store.getState().pending[0]?.state).toBe('sending');
+    expect(store.getState().pending[0]?.queued).toBeUndefined();
     vi.advanceTimersByTime(1);
-    expect(store.getState().pending).toEqual([]);
+    expect(store.getState().pending[0]).toMatchObject({ state: 'sending', queued: true });
   });
 
   it('a 409 draft-present rejection marks the pending failed and captures the draft', async () => {
@@ -582,12 +587,460 @@ describe('session store optimistic send', () => {
   it('revokes the object URLs when a confirmed send expires without its echo', async () => {
     vi.mocked(URL.revokeObjectURL).mockClear();
     const prompt = vi.fn().mockResolvedValue(undefined);
-    const store = createSessionStore(ID, { api: { prompt }, confirmTimeoutMs: 5 });
+    // Both stages shortened to real-timer-friendly durations: the 5s stage
+    // that used to do this alone now only flips `queued`, so the retirement
+    // (and the URL revoke that rides with it) needs the second deadline too.
+    const store = createSessionStore(ID, { api: { prompt }, confirmTimeoutMs: 5, queuedTimeoutMs: 5 });
     await store.getState().send('hi', { attachments: [CLIP] });
 
     await vi.waitFor(() => expect(store.getState().pending).toHaveLength(0));
     expect(URL.revokeObjectURL).toHaveBeenCalledWith(CLIP.previewUrl);
   });
+});
+
+// — session store: queued sends —
+
+describe('a queued send', () => {
+  it('marks the pending queued instead of deleting it', async () => {
+    vi.useFakeTimers();
+    const prompt = vi.fn().mockResolvedValue(undefined);
+    const store = createSessionStore('s1', { api: { prompt }, confirmTimeoutMs: 50, queuedTimeoutMs: 5_000 });
+
+    await store.getState().send('hello');
+    vi.advanceTimersByTime(60);
+
+    expect(store.getState().pending).toHaveLength(1);
+    expect(store.getState().pending[0]).toMatchObject({ state: 'sending', queued: true });
+  });
+
+  it('still retires the bubble at the long deadline, revoking its object URLs', async () => {
+    vi.useFakeTimers();
+    vi.mocked(URL.revokeObjectURL).mockClear();
+    const prompt = vi.fn().mockResolvedValue(undefined);
+    const store = createSessionStore('s2', { api: { prompt }, confirmTimeoutMs: 50, queuedTimeoutMs: 5_000 });
+
+    await store.getState().send('hi', { attachments: [{ path: '/tmp/a.png', previewUrl: 'blob:a' }] });
+    vi.advanceTimersByTime(60);
+    expect(store.getState().pending).toHaveLength(1);
+
+    vi.advanceTimersByTime(5_000);
+    expect(store.getState().pending).toHaveLength(0);
+    expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:a');
+  });
+
+  it('clears a queued pending when its echo arrives in a fresh backlog', async () => {
+    vi.useFakeTimers();
+    const prompt = vi.fn().mockResolvedValue(undefined);
+    const store = createSessionStore('s3', { api: { prompt }, confirmTimeoutMs: 50, queuedTimeoutMs: 5_000 });
+
+    await store.getState().send('hello');
+    vi.advanceTimersByTime(60);
+
+    store.getState().apply({
+      type: 'backlog', uuid: 'u1', events: [user('a', 'hello')], offset: 40,
+      file: '/t/u1.jsonl', missing: false,
+    });
+    expect(store.getState().pending).toHaveLength(0);
+  });
+
+  it('cancels the long deadline when the echo lands', async () => {
+    vi.useFakeTimers();
+    const prompt = vi.fn().mockResolvedValue(undefined);
+    const store = createSessionStore('s4', { api: { prompt }, confirmTimeoutMs: 50, queuedTimeoutMs: 5_000 });
+
+    await store.getState().send('hello');
+    vi.advanceTimersByTime(60);
+
+    store.getState().apply({ type: 'events', uuid: 'u1', events: [user('a', 'hello')], offset: 40 });
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  // Review Focus 5. `resolve()` is the reachable route: it is the one re-send
+  // with no state guard, so it can act on a pending that is still `sending`.
+  // `retry()` guards `state !== 'failed'` and a queued pending is `sending`, so
+  // it is reached only after a re-send has failed — see the next test, and its
+  // own comment, for what that route actually measures.
+  it('clears the queued flag when the pending is re-sent', async () => {
+    vi.useFakeTimers();
+    const prompt = vi.fn().mockResolvedValue(undefined);
+    const store = createSessionStore('s5', { api: { prompt }, confirmTimeoutMs: 50, queuedTimeoutMs: 5_000 });
+
+    await store.getState().send('hello');
+    vi.advanceTimersByTime(60);
+    const key = store.getState().pending[0]!.key;
+    expect(store.getState().pending[0]?.queued).toBe(true);
+
+    store.getState().resolve(key, 'hello again', { replaceDraft: true });
+    expect(store.getState().pending[0]?.queued).toBeUndefined();
+  });
+
+  it('a failed pending never carries the queued flag', async () => {
+    // WHY THIS EXISTS INSTEAD OF A MUTATION ROW. `retry` resets `queued`
+    // alongside the failure fields, and that reset is UNREACHABLE: `resolve`
+    // clears the flag synchronously before its dispatch can fail, and `send`
+    // arms no timer until the api has accepted, so nothing produces a pending
+    // that is both `failed` and `queued`. Measured: deleting the reset reds
+    // nothing. So the invariant that makes the reset unnecessary is pinned
+    // here instead — if a later change makes `failed` + `queued` reachable,
+    // this goes red and the reset earns its place back.
+    vi.useFakeTimers();
+    const prompt = vi.fn()
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValueOnce(new ApiError(500, { ok: false, error: 'tmux-error' }));
+    const store = createSessionStore('s6', { api: { prompt }, confirmTimeoutMs: 50, queuedTimeoutMs: 5_000 });
+
+    // Arrange: send, advance past confirmTimeoutMs so the pending is queued,
+    // then resolve() it against an api call that rejects.
+    await store.getState().send('hello');
+    vi.advanceTimersByTime(60);
+    const key = store.getState().pending[0]!.key;
+    expect(store.getState().pending[0]?.queued).toBe(true);
+
+    store.getState().resolve(key, 'hello', { replaceDraft: true }); // this one fails
+    // `vi.waitFor`'s own internal polling assumes real timers, which this test
+    // cannot use once `vi.useFakeTimers()` is active — flush the rejection's
+    // microtask instead.
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(store.getState().pending[0]).toMatchObject({ state: 'failed' });
+    expect(store.getState().pending[0]?.queued).toBeUndefined();
+    expect(store.getState().pending.every((p) => !(p.state === 'failed' && p.queued === true))).toBe(true);
+  });
+
+  // Review finding (Critical, reproduced): a bare `timers.set` replaces the
+  // MAP ENTRY but leaves the previous cycle's `setTimeout` running. A re-send
+  // through `resolve()`/`retry()` used to arm a fresh deadline without
+  // disarming the superseded one — so the OLD deadline still fired, found the
+  // freshly re-sent pending back in `state: 'sending'`, and deleted it. The
+  // operator's message vanishes while waiting — the defect this task exists
+  // to remove, arriving through the rescue path. `arm()` fixes it by clearing
+  // whatever timer a key already held before installing the new one.
+  it('a re-send disarms the deadline its previous attempt left behind', async () => {
+    vi.useFakeTimers();
+    const prompt = vi.fn().mockResolvedValue(undefined);
+    const store = createSessionStore('s8', { api: { prompt }, confirmTimeoutMs: 50, queuedTimeoutMs: 100 });
+    await store.getState().send('hello');
+    vi.advanceTimersByTime(60);                    // queued; the long deadline is armed
+    const key = store.getState().pending[0]!.key;
+    store.getState().resolve(key, 'hello again', { replaceDraft: true });
+    await Promise.resolve();                       // let the re-dispatch settle
+    vi.advanceTimersByTime(120);                   // past the SUPERSEDED deadline
+    // The old cycle's timer must not delete a pending that is legitimately in
+    // flight again — that is the very defect this task exists to remove,
+    // arriving through the rescue path.
+    expect(store.getState().pending).toHaveLength(1);
+  });
+});
+
+// — session store: what counts as a pending's echo —
+
+describe('the echo that clears a pending', () => {
+  const userAt = (uuid: string, text: string, ts: string): ChatEvent => ({ kind: 'user', uuid, ts, text });
+  const systemAt = (uuid: string, text: string, ts: string): ChatEvent => ({ kind: 'system', uuid, ts, text });
+  const assistantAt = (uuid: string, text: string, ts: string): ChatEvent => ({ kind: 'assistant', uuid, ts, text });
+  // The BOX's clock: every transcript timestamp is written by Claude Code on
+  // the fleet box, never by the phone.
+  const T0 = '2026-07-20T10:00:00.000Z';
+  const T1 = '2026-07-20T10:00:03.000Z';
+  const backlog = (file: string, events: ChatEvent[], uuid = 'u1'): SessionStreamMsg =>
+    ({ type: 'backlog', uuid, events, offset: 40, file, missing: false });
+  const make = (id: string) => {
+    vi.useFakeTimers();
+    const prompt = vi.fn().mockResolvedValue(undefined);
+    return createSessionStore(id, { api: { prompt }, confirmTimeoutMs: 50, queuedTimeoutMs: 600_000 });
+  };
+
+  // — D-4950: the absorbed message, end to end —
+
+  it('a message absorbed mid-turn clears its bubble and shows once, where the model took it', async () => {
+    // The server now reads Claude Code's `queued_command` attachment as a user
+    // event (`transcript/parse.ts`'s `absorbedPrompt`); this is that event
+    // meeting the store, inside the busy turn it was absorbed into.
+    const store = make('e0');
+    store.getState().apply(backlog('/t/a.jsonl', [userAt('a0', 'run the suite', T0), toolUse('a1', 't1')]));
+    await store.getState().send('also check the retention policy');
+    vi.advanceTimersByTime(60);
+    expect(store.getState().pending[0]).toMatchObject({ state: 'sending', queued: true });
+
+    store.getState().apply({
+      type: 'events', uuid: 'u1', offset: 90,
+      events: [toolResult('t1', 'ok'), userAt('q1', 'also check the retention policy', T1), assistantAt('a2', 'Checked.', T1)],
+    });
+    expect(store.getState().pending).toEqual([]);
+    expect(store.getState().events.filter((e) => e.kind === 'user').map((e) => e.uuid)).toEqual(['a0', 'q1']);
+  });
+
+  // — D-4951: a slash command echoes as a SYSTEM row —
+
+  it('a slash command is cleared by its own system echo, not by the ten-minute fallback', async () => {
+    const store = make('e1');
+    await store.getState().send('/compact');
+    vi.advanceTimersByTime(60);
+    expect(store.getState().pending[0]).toMatchObject({ state: 'sending', queued: true });
+
+    store.getState().apply({ type: 'events', uuid: 'u1', offset: 50, events: [systemAt('c1', '/compact', T1)] });
+    expect(store.getState().pending).toEqual([]);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('the echo names the COMMAND, not the line — arguments never come back', async () => {
+    const store = make('e2');
+    await store.getState().send('/effort ultracode');
+    store.getState().apply({ type: 'events', uuid: 'u1', offset: 50, events: [systemAt('c1', '/effort', T1)] });
+    expect(store.getState().pending).toEqual([]);
+  });
+
+  it('/clear is cleared by the echo in the fresh transcript the rotation hands over', async () => {
+    const store = make('e3');
+    store.getState().apply(backlog('/t/a.jsonl', [userAt('a1', 'earlier', T0)]));
+    await store.getState().send('/clear');
+    vi.advanceTimersByTime(60);
+    store.getState().apply({ type: 'rotated', uuid: 'u2' });
+    store.getState().apply(backlog('/t/b.jsonl', [systemAt('c1', '/clear', T1)], 'u2'));
+    expect(store.getState().pending).toEqual([]);
+  });
+
+  it('a different command does not clear it', async () => {
+    const store = make('e4');
+    await store.getState().send('/compact');
+    store.getState().apply({ type: 'events', uuid: 'u1', offset: 50, events: [systemAt('c1', '/clear', T1)] });
+    expect(store.getState().pending).toHaveLength(1);
+  });
+
+  it('prose is never cleared by a system row, even one that says the same words', async () => {
+    // A command's stdout is a system row too, and can be one word.
+    const store = make('e5');
+    await store.getState().send('ok');
+    store.getState().apply({ type: 'events', uuid: 'u1', offset: 50, events: [systemAt('c1', 'ok', T1)] });
+    expect(store.getState().pending).toHaveLength(1);
+  });
+
+  // The command is read off the text the pane was GIVEN — `composePrompt`'s
+  // output, which the server injects — not off what the composer held.
+  it('a send with an attachment is not that command, even when its text starts with a slash', async () => {
+    // The pane is given `<clip path>\n/compact`: `/compact` is not the first
+    // word of what it received, so a `/compact` row is somebody else's.
+    const store = make('e5a');
+    await store.getState().send('/compact', { attachments: [{ path: '/p/clip-1-a1b2.png' }] });
+    store.getState().apply({ type: 'events', uuid: 'u1', offset: 50, events: [systemAt('c1', '/compact', T1)] });
+    expect(store.getState().pending).toHaveLength(1);
+  });
+
+  it('a command typed under a blank line is the command the pane ran', async () => {
+    // `composePrompt` drops leading blank lines before the text is injected,
+    // so the pane ran `/compact` and its echo is this row.
+    const store = make('e5b');
+    await store.getState().send('\n/compact');
+    store.getState().apply({ type: 'events', uuid: 'u1', offset: 50, events: [systemAt('c1', '/compact', T1)] });
+    expect(store.getState().pending).toEqual([]);
+  });
+
+  // — D-4952: a replay is not an echo —
+
+  it('a backlog that replays history the operator already saw does not clear the message they just sent', async () => {
+    const store = make('e6');
+    const history = [userAt('old-1', 'yes', T0), assistantAt('old-2', 'done', T0)];
+    store.getState().apply(backlog('/t/a.jsonl', history));
+    await store.getState().send('yes');
+    vi.advanceTimersByTime(60);
+    expect(store.getState().pending[0]).toMatchObject({ state: 'sending', queued: true });
+
+    // A reconnect re-sends the same file's window: same uuids, same times.
+    store.getState().apply(backlog('/t/a.jsonl', history));
+    expect(store.getState().pending).toHaveLength(1);
+    // The stream follows a fork to its successor, which carries the history
+    // forward. Even under NEW uuids the copy keeps its timestamps, so it is
+    // still not newer than what was on screen when the operator sent.
+    store.getState().apply(backlog('/t/b.jsonl', [userAt('new-1', 'yes', T0), assistantAt('new-2', 'done', T0)]));
+    expect(store.getState().pending).toHaveLength(1);
+
+    // The real echo lands in the successor, after the send.
+    store.getState().apply(backlog('/t/b.jsonl', [userAt('new-1', 'yes', T0), userAt('new-3', 'yes', T1)]));
+    expect(store.getState().pending).toEqual([]);
+  });
+
+  it('a replayed slash command is not its echo either', async () => {
+    const store = make('e7');
+    store.getState().apply(backlog('/t/a.jsonl', [systemAt('c0', '/compact', T0)]));
+    await store.getState().send('/compact');
+    store.getState().apply(backlog('/t/b.jsonl', [systemAt('c0', '/compact', T0)]));
+    expect(store.getState().pending).toHaveLength(1);
+  });
+
+  it('the bar is the NEWEST event on screen, not the first one or the last one', async () => {
+    // Transcript order is not time order. Claude Code writes a record with the
+    // timestamp its message already carries (the 2.1.296 chain writer spreads
+    // the record's own `timestamp`), so a resumed or copied record is appended
+    // after records stamped later than it. Here the newest time on screen sits
+    // in the middle of the window, and a replayed "yes" stamped between the
+    // first event and the newest is still history.
+    const store = make('e7a');
+    const T3 = '2026-07-20T10:00:09.000Z';
+    const T9 = '2026-07-20T10:00:27.000Z';
+    const T10 = '2026-07-20T10:00:30.000Z';
+    const history = [
+      assistantAt('h0', 'ready', T0), userAt('h1', 'yes', T3),
+      assistantAt('h2', 'done', T9), assistantAt('h3', 'resumed', T1),
+    ];
+    store.getState().apply(backlog('/t/a.jsonl', history));
+    await store.getState().send('yes');
+    store.getState().apply(backlog('/t/a.jsonl', history));
+    expect(store.getState().pending).toHaveLength(1);
+
+    store.getState().apply({ type: 'events', uuid: 'u1', offset: 90, events: [userAt('n1', 'yes', T10)] });
+    expect(store.getState().pending).toEqual([]);
+  });
+
+  // The comparison is box clock against box clock. The phone's clock never
+  // enters it, so a phone set far ahead of the box or far behind it changes
+  // nothing — a sent-at stamp taken from `Date.now()` would fail one of these
+  // two in each direction.
+  it('a phone clock far AHEAD of the box still lets a fresh echo clear', async () => {
+    const store = make('e8');
+    vi.setSystemTime(new Date('2027-03-01T00:00:00.000Z'));
+    store.getState().apply(backlog('/t/a.jsonl', [assistantAt('a1', 'ready', T0)]));
+    await store.getState().send('hello');
+    store.getState().apply({ type: 'events', uuid: 'u1', offset: 50, events: [userAt('n1', 'hello', T1)] });
+    expect(store.getState().pending).toEqual([]);
+  });
+
+  it('a phone clock far BEHIND the box still refuses a replay', async () => {
+    const store = make('e9');
+    vi.setSystemTime(new Date('2025-01-01T00:00:00.000Z'));
+    const history = [userAt('old-1', 'yes', T0)];
+    store.getState().apply(backlog('/t/a.jsonl', history));
+    await store.getState().send('yes');
+    store.getState().apply(backlog('/t/b.jsonl', history));
+    expect(store.getState().pending).toHaveLength(1);
+  });
+
+  it('a local divider is the PHONE\'s clock and never sets the bar', async () => {
+    const store = make('e10');
+    vi.setSystemTime(new Date('2027-03-01T00:00:00.000Z'));
+    store.getState().apply(backlog('/t/a.jsonl', [assistantAt('a1', 'ready', T0)]));
+    store.getState().apply({ type: 'notice', message: 'Reconnected' });
+    await store.getState().send('hello');
+    store.getState().apply({ type: 'events', uuid: 'u1', offset: 50, events: [userAt('n1', 'hello', T1)] });
+    expect(store.getState().pending).toEqual([]);
+  });
+
+  it('an event whose time does not parse never sets the bar', async () => {
+    const store = make('e11');
+    store.getState().apply(backlog('/t/a.jsonl', [userAt('x1', 'first', ''), assistantAt('a1', 'ready', T0)]));
+    await store.getState().send('hello');
+    store.getState().apply({ type: 'events', uuid: 'u1', offset: 50, events: [userAt('n1', 'hello', T1)] });
+    expect(store.getState().pending).toEqual([]);
+  });
+
+  // — D-4952 through the re-send paths: `retry` and `resolve` —
+  //
+  // A re-send carries a bar too, and it is the newest event on screen AT THE
+  // RE-SEND, never lower than the bar the pending already had. Everything the
+  // store had seen when the operator pressed Retry or Send it is history to
+  // this message, exactly as it is to a first send.
+  const T5 = '2026-07-20T10:05:00.000Z';
+  const T5b = '2026-07-20T10:05:02.000Z';
+  const T6 = '2026-07-20T10:06:00.000Z';
+  const failingOnce = (id: string, err: ApiError) => {
+    vi.useFakeTimers();
+    const prompt = vi.fn().mockRejectedValueOnce(err).mockResolvedValue(undefined);
+    return createSessionStore(id, { api: { prompt }, confirmTimeoutMs: 50, queuedTimeoutMs: 600_000 });
+  };
+  const reSend = {
+    retry: async (store: ReturnType<typeof createSessionStore>, key: string) => {
+      store.getState().retry(key);
+      await Promise.resolve();
+    },
+    resolve: async (store: ReturnType<typeof createSessionStore>, key: string) => {
+      store.getState().resolve(key, 'yes', { replaceDraft: true });
+      await Promise.resolve();
+    },
+  };
+  const failures = {
+    retry: () => new ApiError(500, { ok: false, error: 'tmux-error' }),
+    resolve: () => new ApiError(409, { ok: false, error: 'draft-present', draft: 'half-typed thought' }),
+  };
+
+  for (const via of ['retry', 'resolve'] as const) {
+    it(`a ${via}() keeps a bar: a replay of history from before the FIRST send still does not clear it`, async () => {
+      const store = failingOnce(`r-${via}-1`, failures[via]());
+      const history = [userAt('old-1', 'yes', T0), assistantAt('old-2', 'done', T0)];
+      store.getState().apply(backlog('/t/a.jsonl', history));
+      await store.getState().send('yes');
+      const key = store.getState().pending[0]!.key;
+      expect(store.getState().pending[0]!.state).toBe('failed');
+
+      await reSend[via](store, key);
+      expect(store.getState().pending[0]!.state).toBe('sending');
+      store.getState().apply(backlog('/t/a.jsonl', history));
+      expect(store.getState().pending).toHaveLength(1);
+
+      store.getState().apply({ type: 'events', uuid: 'u1', offset: 90, events: [userAt('n1', 'yes', T6)] });
+      expect(store.getState().pending).toEqual([]);
+    });
+
+    it(`a ${via}() RAISES the bar to what is on screen then: a same-text message the operator saw before re-sending is history`, async () => {
+      // The re-review's reproduction. The first attempt fails; while it sits
+      // failed, a "yes" typed in the terminal lands and is shown (a failed
+      // pending clears on nothing). The operator then re-sends. A later
+      // backlog — a fork follow, a swap repoint — replays that "yes": it is
+      // older than the re-send, so it is not this message's echo.
+      const store = failingOnce(`r-${via}-2`, failures[via]());
+      store.getState().apply(backlog('/t/a.jsonl', [assistantAt('h0', 'ready', T0)]));
+      await store.getState().send('yes');
+      const key = store.getState().pending[0]!.key;
+      store.getState().apply({
+        type: 'events', uuid: 'u1', offset: 90,
+        events: [userAt('typed', 'yes', T5), assistantAt('h1', 'ok', T5b)],
+      });
+      expect(store.getState().pending).toHaveLength(1);
+
+      await reSend[via](store, key);
+      store.getState().apply(backlog('/t/b.jsonl', [
+        assistantAt('h0', 'ready', T0), userAt('typed', 'yes', T5), assistantAt('h1', 'ok', T5b),
+      ]));
+      expect(store.getState().pending).toHaveLength(1);
+
+      store.getState().apply({ type: 'events', uuid: 'u1', offset: 120, events: [userAt('n1', 'yes', T6)] });
+      expect(store.getState().pending).toEqual([]);
+    });
+
+    it(`a ${via}() never LOWERS the bar: pressed between a rotation and its backlog, it keeps the one it had`, async () => {
+      // Right after `rotated` nothing from a transcript is on screen, so
+      // "the newest event now" is no bar at all. Taking it would drop the
+      // first send's bar and let replayed history clear the message.
+      const store = failingOnce(`r-${via}-3`, failures[via]());
+      store.getState().apply(backlog('/t/a.jsonl', [userAt('old-1', 'yes', T0), assistantAt('old-2', 'done', T1)]));
+      await store.getState().send('yes');
+      const key = store.getState().pending[0]!.key;
+      store.getState().apply({ type: 'rotated', uuid: 'u2' });
+
+      await reSend[via](store, key);
+      store.getState().apply(backlog('/t/b.jsonl', [userAt('copy-1', 'yes', T0)], 'u2'));
+      expect(store.getState().pending).toHaveLength(1);
+    });
+
+    it(`a ${via}() never LOWERS the bar onto OLDER events: a screen now holding only history below the first bar keeps that bar`, async () => {
+      // Review round 3 (RR2-PWA-2). The case above takes the "nothing from a
+      // transcript on screen" arm; this one takes the `Math.max` arm. The first
+      // send's bar is 10:06; the screen is then replaced by another file whose
+      // newest event is 10:00 (a repoint onto another copy, a rotation onto
+      // older history) and the operator re-sends. A bar REPLACED rather than
+      // raised would fall to 10:00, and a replayed "yes" stamped 10:05 —
+      // history from before the first send — would clear a re-send that has
+      // not been delivered.
+      const store = failingOnce(`r-${via}-4`, failures[via]());
+      store.getState().apply(backlog('/t/a.jsonl', [assistantAt('hi-0', 'ready', T6)]));
+      await store.getState().send('yes');
+      const key = store.getState().pending[0]!.key;
+      expect(store.getState().pending[0]!.state).toBe('failed');
+      store.getState().apply(backlog('/t/b.jsonl', [assistantAt('lo-0', 'older', T0)], 'u2'));
+
+      await reSend[via](store, key);
+      store.getState().apply(backlog('/t/b.jsonl', [assistantAt('lo-0', 'older', T0), userAt('mid-1', 'yes', T5)], 'u2'));
+      expect(store.getState().pending).toHaveLength(1);
+    });
+  }
 });
 
 // — session store: connection —

@@ -58,7 +58,7 @@ what the mode runs, and every other job reads its output.
 
 | Trigger | Mode | Runs |
 |---|---|---|
-| `pull_request` | `selected` | Server tests chosen by §6, sharded on Linux (§7); `test (agent)`, `test (pwa)`, `build-pwa` and `probe-macos` in full, as today; `test-macos` on the same selection, advisory. |
+| `pull_request` | `selected` | Server tests chosen by §6, sharded on Linux (§7); `test (agent)`, `test (pwa)`, `build-pwa` and `probe-macos` in full, as today. No `test-macos` and no `full-suite` (amended 2026-10-15, §16). |
 | `push` to `main` (a merge) | `refresh` | Linux only: re-trace the tests the merge affected and update the map (§5.4). No agent, pwa, build or macOS legs. |
 | `schedule`, daily | `full` | Every leg in full, Linux and macOS, sharded; plus a separate traced full run that rebuilds the map from scratch (§5.3). When `main`'s head already carries a green `full-suite` (§8), the selector-driven legs are skipped (§15.4). |
 | `workflow_dispatch` | input `mode`, default `full` | The manual escape hatch. |
@@ -254,7 +254,7 @@ this table, not reconstructed.
 - Files are packed longest-first onto the least-loaded shard (LPT). A single file longer than the target gets a shard
   of its own; the file itself is never split.
 - Linux shard count = the selected total divided by a per-shard target of about four minutes of wall-clock at two
-  workers, clamped to **1–5**.
+  workers, clamped to **1–12** (amended 2026-10-15 from 1–5, §16).
 - macOS: at most **2** shards on any pull request — even one that fell back to full — and **4** on a scheduled,
   dispatched or called full run, so the organisation's 5-job macOS cap still leaves room for `probe-macos` and a
   second pull request (§15.10). Each macOS shard runs **two** vitest workers; this supersedes the original one-worker
@@ -502,3 +502,25 @@ The bounded second review round (closure of the 43, plus a fresh pass over the n
     load-sensitive failure appeared. The old one-worker choice and rejected-alternative entry are therefore
     superseded. Both macOS profiles use two workers, and every profile's `workers` value travels through `Shard` and
     the matrix to the exact Vitest or trace-run command, so planning and execution cannot drift independently.
+
+## 16. Amendment 2026-10-15: macOS off pull requests, and up to 12 Linux shards
+
+Ruled by the operator on 2026-10-15 ("do all the stuff you can do for me", answering the agentic landing standard's
+list of CCRC amendments, Synapsium-Labs/horkos `docs/superpowers/specs/2026-10-14-agentic-landing-standard-design.md`
+§5, ccrc-pwa rows 1 and 3).
+
+**What changes.**
+- `test-macos` and `full-suite` no longer run on `pull_request` (§3's table). Measured over 2026-10-03..14: the
+  macOS legs failed on about 70% of PR runs, the same nine test files every time, and never gated anything, yet
+  turned every PR's rollup red. A PR's `full-suite` is never the stable gate's evidence (`main-artifact.mjs` trusts
+  only schedule, dispatch and the stable push), so on a PR it was pure cost: 0 green in 182. A PR run's wall
+  time drops from about 49 to about 15 minutes.
+- Ruling 6 (macOS is part of the full suite) is unchanged: the daily `schedule`, `workflow_dispatch` and
+  `workflow_call` (release-stable's gate) still run both legs.
+- Linux shards are clamped to **1–12**, up from 1–5 (§7.1). Every PR selected about 110 of 113 test-minutes, so the
+  planner wanted about 15 shards and the cap held it at 5, at 11–13 minutes each. Twelve shards bring the
+  required checks from about 14 to about 11 minutes. Below that, `ccrc-install.test.ts` alone (about 530 s) is the
+  floor.
+
+**Pins changed with it.** `server/test/ci-pipeline.test.ts` (full-suite's `if:`) and `server/test/ci-shards.test.ts`
+(the `linux` profile).
