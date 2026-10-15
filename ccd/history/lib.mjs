@@ -8043,8 +8043,11 @@ const withdrawFor = (reason) => ({ act: 'withdraw', reason });
  *             could not read or admission refused this pass → copy-skipped (that copy may hold the boundary that
  *             consumes the standing line, and the pass cannot see it); any other uuid keep. D-5061
  *             (history-card-withdraw-on-a-skipped-copy)
- *  A pass that never reaches this (history-off, a server box, a pass no timer starts) withdraws nothing; the hook
- *  serves no line under the first two. D-4740 (history-card-withdrawn-when-not-ticking) */
+ *  A pass that never reaches this (history-off, a server box, a pass no timer starts) withdraws nothing. The hook
+ *  serves no line under the first two only WHILE the switch stands (history-off, or a box with no store): a
+ *  prediction written before history-off survives it, and is served again once the switch is removed, until the id's
+ *  next ingest consumes or replaces it. D-5062 (history-card-served-after-history-off) D-4740
+ *  (history-card-withdrawn-when-not-ticking) */
 export function decideCardWithdraw(p) {
   if (p.arm === 'hold') {
     if (p.word === 'store-unbound') return withdrawFor('unbound');
