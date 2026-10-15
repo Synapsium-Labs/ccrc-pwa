@@ -769,6 +769,43 @@ describe('status health: the measured snapshot through deriveHealth (task 28)', 
       expect(wordsOf(failOf(gone))).toEqual([]);
     });
 
+    // D-5026 (batch A3): the other arm of status's second read. When the marker is there again with DIFFERENT text, another pass wrote
+    // its own marker in the gap: status parses that text and measures its identity once, and reports what that measure says (live, not
+    // live, or no marker when it does not parse). It is never `pass: null` for a marker that is there and measures live. The faults
+    // preload replaces the marker at the identity measure's own read (HISTORY_TEST_SWAP_ON_PROC_STAT, the text in ..._TEXT), once.
+    it('(D-5026) a marker REPLACED between status\'s read of it and its identity measure is measured once and reported as that measure says: a new live pass reads live (no death FAIL), a new dead one reads dead, a malformed one is no marker', () => {
+      const box = healthHh.makeHistoryBox('ccrc-history-passswap-', { role: 'fleet', shim: true });
+      ageFile(shimOf(box), 120 * MIN);
+      tickedStore(box, Date.now() - 5 * MIN);                                   // a fresh tick: only a death can FAIL
+      const dead = spawnSync(process.execPath, ['-e', '']).pid!;                // a pid that has already exited: its identity measures nothing
+      const dead2 = spawnSync(process.execPath, ['-e', '']).pid!;               // another one, for the replacement that is dead too
+      const me = identityOf(process.pid);
+      const arrange = (): void => plant(box, dead, 2 * MIN, { procStart: me.procStart, bootId: me.bootId });
+      const swapped = (text: string): { code: number | null; stdout: string; env: Envelope | null } =>
+        statusOf(box, ['--json'], { preloads: [healthHh.PRELOADS.faults], env: { HISTORY_TEST_SWAP_ON_PROC_STAT: passFile(box), HISTORY_TEST_SWAP_ON_PROC_STAT_TEXT: text } });
+
+      arrange();
+      const liveStart = Date.now() - 1 * MIN;
+      const liveText = formatPassMarker(process.pid, liveStart, me);
+      const live = swapped(liveText);
+      expect(healthFs.readFileSync(passFile(box), 'utf8'), 'the seam replaced the marker at the identity measure').toBe(liveText);
+      expect(live.env!['pass'], 'a new pass wrote its own marker in the gap: it is reported live, not as no pass at all').toMatchObject({ pid: process.pid, live: true });
+      expect(live.env!['pass']['start_ms'], 'the replacement\'s start, not the dead marker\'s').toBe(liveStart);
+      expect(wordsOf(failOf(live)), 'a live pass is no death').toEqual([]);
+
+      arrange();
+      const deadText = formatPassMarker(dead2, Date.now() - 1 * MIN, me);
+      const another = swapped(deadText);
+      expect(another.env!['pass'], 'the replacement\'s own measure says not live, and that stands (no loop)').toMatchObject({ pid: dead2, live: false });
+      expect(wordsOf(failOf(another))).toEqual(['tick-stale']);
+      expect(failOf(another)[0]!.detail).toContain('ended without writing a tick');
+
+      arrange();
+      const junk = swapped('garbage\n');
+      expect(junk.env!['pass'], 'a replacement that is not in the grammar is no marker').toBeNull();
+      expect(wordsOf(failOf(junk))).toEqual([]);
+    });
+
     // D-5026 (history-pass-death-record; fix round 2, review 462 F1): `status` reads the record a pass left when it found a pass that
     // ended without its tick (`pass_died`: the parsed record, null only when absent). One that is there and cannot be read is
     // 'unmeasured' and reaches doctor as status-unreadable (the no-overloaded-null rule), never as "no death".

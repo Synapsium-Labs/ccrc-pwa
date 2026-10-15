@@ -489,3 +489,26 @@ import { DatabaseSync as DatabaseSyncRcv } from 'node:sqlite';
     syncBuiltinESMExports();
   }
 }
+
+// ── W1-B2 fix round 2 batch A3 (D-5026): a pass marker replaced between status's read of it and its identity measure ─────────
+// HISTORY_TEST_SWAP_ON_PROC_STAT=<file> with HISTORY_TEST_SWAP_ON_PROC_STAT_TEXT=<text>: the first time the process reads a
+//   `/proc/<pid>/stat` (procIdentityOf's read, which status makes after it has read the pass marker), <file> is replaced first, once,
+//   by a new file holding <text> (written beside it and renamed over it, as a pass writes its marker). It is a new pass that wrote
+//   its own marker in the gap, made deterministic. Absent either variable, nothing is patched.
+{
+  const swapOnStat = process.env.HISTORY_TEST_SWAP_ON_PROC_STAT ?? '';
+  const swapText = process.env.HISTORY_TEST_SWAP_ON_PROC_STAT_TEXT;
+  if (swapOnStat !== '' && swapText !== undefined) {
+    const realReadFileSyncSwap = fs.readFileSync;
+    let spentSwap = false;
+    fs.readFileSync = function readFileSyncSwapOnStat(p, ...rest) {
+      if (!spentSwap && typeof p === 'string' && /^\/proc\/[0-9]+\/stat$/.test(p)) {
+        spentSwap = true;
+        fs.writeFileSync(`${swapOnStat}.swap`, swapText, { mode: 0o600 });
+        fs.renameSync(`${swapOnStat}.swap`, swapOnStat);
+      }
+      return realReadFileSyncSwap.call(this, p, ...rest);
+    };
+    syncBuiltinESMExports();
+  }
+}

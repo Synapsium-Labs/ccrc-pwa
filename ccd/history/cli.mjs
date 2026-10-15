@@ -209,12 +209,18 @@ function boxFacts(env, P) {
   const pt = readTrimmed(P.pass);
   let pm = pt === null ? null : parsePassMarker(pt);
   let passLive = pm !== null && decidePassLive(pm, procIdentityOf(pm.pid));
-  if (pm !== null && !passLive && readTrimmed(P.pass) !== pt) {
+  if (pm !== null && !passLive) {
     // D-5026: the marker was read, then the identity measured. A pass that writes no tick (held, migrated) can end in between and
     // remove its marker through its `finally`: it would read here as a dead marker started after the last tick, one false death for
-    // this run. When the identity does not measure live, the marker is read again; gone, or no longer the same text, the pass ended
-    // and there is no marker. Only a marker still there, unchanged, after a failed identity check is read as not live.
-    pm = null;
+    // this run. When the identity does not measure live, the marker is read again. Gone: the pass ended and there is no marker. The
+    // same text: still a dead marker, which is the evidence. DIFFERENT text: another pass wrote its own marker in the gap, and that
+    // text is parsed and its identity measured once, and what that measure says stands (live, not live, or no marker when it does
+    // not parse); a loop would only chase a marker that keeps changing, so the second marker's answer is the answer.
+    const again = readTrimmed(P.pass);
+    if (again !== pt) {
+      pm = again === null ? null : parsePassMarker(again);
+      passLive = pm !== null && decidePassLive(pm, procIdentityOf(pm.pid));
+    }
   }
   env.pass = pm === null ? null : { pid: pm.pid, start_ms: pm.startMs, live: passLive };
   // D-5026 (history-pass-death-record): the record a pass left when it found a pass that ended without its tick. Null is ABSENT

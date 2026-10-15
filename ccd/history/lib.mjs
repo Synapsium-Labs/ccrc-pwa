@@ -3541,7 +3541,7 @@ export function deriveHealth(h) {
   // F1): the carrier kills a scheduled pass at CARRIER_KILL_S (600 s, the unit's TimeoutStartSec=10min), and the marker is written
   // after the unit starts, so a killed pass never reaches TICK_STALE_MS of marker age; the next pass, within the timer's 30 s accuracy,
   // overwrites the marker and its fresh live marker would re-arm every hold above. D-5026 answers that: the next pass records the
-  // death (`pass-died`, `h.passDied`) before it overwrites the marker, and an OPEN death FAILs below whatever any hold says.
+  // death (`pass-died`, `h.passDied`) before it overwrites the marker, and an OPEN death FAILs below whatever a live pass, catching-up or lag-unmeasured say (the off switch and an operator pass hold it, as they hold every freshness FAIL).
   const passLive = h.pass !== null && h.pass !== undefined && h.pass.live === true && h.pass.startMs - h.nowMs <= PASS_FUTURE_SLACK_MS;
   const passAge = passLive ? h.nowMs - h.pass.startMs : null;
   const passFresh = passLive && passAge <= TICK_STALE_MS;
