@@ -9,11 +9,17 @@
 // Nothing here reads or writes the live ~/.ccrc, a registry or an account home.
 import { describe, it, expect } from 'vitest';
 import * as libCard from '../../ccd/history/lib.mjs';
-import { compactionSequence } from './historyFixtures.js';
+import { compactionSequence, userRow, type Row } from './historyFixtures.js';
 import type { DatabaseSync } from 'node:sqlite';
 import { createHash } from 'node:crypto';
 import { mkTmp } from './tmpHelpers.js';
 import { brotli, closeWriter, createStore, openWriter } from '../../ccd/history/store.mjs';
+import fs from 'node:fs';
+import path from 'node:path';
+import {
+  makeHistoryBox, runSweep, runDriver, plantSession, plantTranscript, spoolLine, openStoreRO, counters, skipOnDarwin,
+  recoverRow, type HistoryBox,
+} from './historyHelpers.js';
 
 /** Spec §8.6's grammar, as the spec spells it. */
 const SPEC_GRAMMAR = String.raw`^History: node L[0-9a-f]{6,20}… \(this compaction\)( · parent N[0-9a-f]{6,20}…)? · ~/\.local/bin/ccrc history describe L[0-9a-f]{6,20}$`;
@@ -505,4 +511,641 @@ describe('derive.mjs exports the slot lists fan-in reads, unchanged (spec 6.3, r
       fx.db.close();
     }
   });
+});
+
+// ===========================================================================
+// W1-B3 Tasks 5-7: the sweep's card work through REAL passes. Each box is a fixture HOME; a session is planted as
+// B2's derivation tests plant one (registry rows, a transcript in compactionSequence's measured shape, the
+// SessionStart(startup) line the hook spools), and sweep.mjs runs as the shim would. A Stop line spooled before a
+// pass hints its session, so that pass reads the transcript to its end: the end-of-file a prediction is written at.
+// ===========================================================================
+const CARD_SLUG = '-home-u-worktrees-p-card-demo';
+const CARD_GEN = '0189abcd-1234-4678-9abc-0000000000c0';
+/** A day before now: every raw-leaf grace (lib RAW_LEAF_GRACE_MS) is long past, so a boundary read to the end is final. */
+const T0C = Date.now() - 86_400_000;
+/** The filesystem the statfs seam describes for a floor-pause case, and lib's own floor over it (never retyped). */
+const FS_C = 10 * 1024 ** 3;
+const FLOOR_C = libCard.floorThreshold(FS_C);
+const sidC = (n: number): string => `0189abcd-1234-4678-9abc-${n.toString(16).padStart(12, '0')}`;
+type SeqC = ReturnType<typeof compactionSequence>;
+/** The index of boundary k in a sequence's rows: rows.slice(0, it) is the transcript just before compaction k. */
+const cutBefore = (s: SeqC, k: number): number => s.rows.findIndex((r) => r['uuid'] === s.boundaryUuids[k]);
+const firstUuidC = (s: SeqC): string => String(s.rows[0]!['uuid']);
+
+/** One session: its registry rows (generation CARD_GEN), its transcript under `account`, and the SessionStart(startup)
+ *  line whose `reg` is its sid, so the drain confirms the epoch on the line's own evidence. Returns the transcript. */
+function plantC(box: HistoryBox, id: string, uuid: string, rows: readonly Row[], account = 'claude'): string {
+  plantSession(box, id, { uuid, generation: CARD_GEN, project: 'demo', workdir: '/home/u/worktrees/p/card-demo' });
+  const p = plantTranscript(box, account, CARD_SLUG, uuid, [...rows]);
+  spoolLine(box, id, { v: 1, ev: 'SessionStart', id, sid: uuid, src: 'startup', reg: uuid, gen: CARD_GEN });
+  return p;
+}
+function passC(box: HistoryBox): void {
+  const r = runSweep(box);
+  expect(r.code, `${r.stderr}${r.stdout}`).toBe(0);
+}
+/** B2's settle: pass 1 makes the store, runs the first registry scan (each registry-named session gets a confirmed
+ *  `import` epoch and its transcript is ingested and derived in that tick) and renames the spool; pass 2 drains the
+ *  SessionStart lines; pass 3 is one more. Rows planted BEFORE a boundary leave the store empty of nodes through pass 1. */
+function settleC(box: HistoryBox): void {
+  for (let i = 0; i < 3; i += 1) passC(box);
+}
+/** A Stop line per id, then one pass: that pass reads each id's transcripts to their end. */
+function pokeC(box: HistoryBox, ...ids: string[]): void {
+  for (const id of ids) spoolLine(box, id, { v: 1, ev: 'Stop', id });
+  passC(box);
+}
+/** B2 holds a session's leaves while a spool file this tick renamed is unread (derive.mjs deriveOne, pendingReceiptState),
+ *  so a boundary a Stop-hinted pass ingested gets its leaf (and its parents) on the NEXT pass: one plain pass, with no
+ *  hint, so it reads no transcript to its end and writes no card. */
+function derivedC(box: HistoryBox): void {
+  passC(box);
+}
+function appendRows(p: string, rows: readonly Row[]): void {
+  fs.appendFileSync(p, rows.map((r) => `${JSON.stringify(r)}\n`).join(''));
+}
+const cardPath = (box: HistoryBox, id: string, uuid: string): string => path.join(box.root, 'card', id, `${uuid}.txt`);
+const cardOf = (box: HistoryBox, id: string, uuid: string): string | null =>
+  (fs.existsSync(cardPath(box, id, uuid)) ? fs.readFileSync(cardPath(box, id, uuid), 'utf8') : null);
+function qC<T>(box: HistoryBox, sql: string, ...args: (string | number)[]): T[] {
+  const db = openStoreRO(box);
+  try { return db.prepare(sql).all(...args) as unknown as T[]; } finally { db.close(); }
+}
+/** A transcript's leaves, in boundary order. */
+const leavesC = (box: HistoryBox, uuid: string): string[] => qC<{ node_id: string }>(box,
+  `SELECT n.node_id FROM nodes n JOIN boundaries b ON b.entry_id = n.boundary_entry_id
+   JOIN transcripts t ON t.transcript_pk = n.transcript_pk WHERE t.cc_session_uuid = ? AND n.depth = 0 ORDER BY b.ord`, uuid)
+  .map((r) => r.node_id);
+const childrenC = (box: HistoryBox, nodeId: string): string[] => qC<{ child_id: string }>(box,
+  'SELECT child_id FROM node_children WHERE node_id = ? ORDER BY ord', nodeId).map((r) => r.child_id);
+/** Every node of a session id's families: the set a card's display prefixes are unique within. */
+const familyC = (box: HistoryBox, id: string): string[] => qC<{ node_id: string }>(box,
+  'SELECT n.node_id FROM nodes n JOIN sessions s ON s.session_pk = n.session_pk WHERE s.ccrc_id = ?', id).map((r) => r.node_id);
+/** Every consumption counter, scoped or not (ruling RC3): a bare `card_consumed` would show here too. A case that
+ *  plants no scope marker expects `card_consumed:unknown`. */
+const consumedC = (box: HistoryBox): Record<string, number> =>
+  Object.fromEntries(Object.entries(counters(box)).filter(([k]) => k === 'card_consumed' || k.startsWith('card_consumed:')));
+/** The text a correct prediction file holds: lib's line over the family's display prefixes, and one LF. */
+const expectedCard = (family: readonly string[], leaf: string, parent: string | null = null): string => {
+  const shown = libCard.displayPrefixes([...family, leaf, ...(parent === null ? [] : [parent])]);
+  return `${libCard.cardLine({ leaf: shown.get(leaf)!, parent: parent === null ? null : shown.get(parent)! })}\n`;
+};
+/** The leaf and parent prefixes a card file prints. */
+const printed = (text: string): { leaf: string; parent: string | null } => {
+  const m = /^History: node (L[0-9a-f]{6,20})… \(this compaction\)(?: · parent (N[0-9a-f]{6,20})…)?/.exec(text);
+  if (m === null) throw new Error(`not a card line: ${text}`);
+  return { leaf: m[1]!, parent: m[2] ?? null };
+};
+
+describe('the sweep writes and consumes card/<id>/<uuid>.txt at end-of-file (spec 8.6 Timing, 9.2 step 6; W1-B3 Task 5)', () => {
+  skipOnDarwin();
+
+  it("the first compaction: the card names the epoch's first leaf and no parent; ingested, that is the leaf derivation mints, and the next prediction replaces the consumed one", () => {
+    const box = makeHistoryBox('ccrc-hist-card-first-');
+    const [ID, U] = ['card-first', sidC(0xf1)];
+    const s = compactionSequence({ n: 2, trigger: 'manual', seed: 0xf1, sessionId: U, startMs: T0C });
+    const p = plantC(box, ID, U, s.rows.slice(0, cutBefore(s, 0)));
+    settleC(box);
+    pokeC(box, ID);
+    const want0 = libCard.leafId(ID, U, firstUuidC(s));
+    const card0 = cardOf(box, ID, U);
+    expect(card0).toBe(expectedCard([], want0));
+    expect(printed(card0!).parent).toBeNull();
+    appendRows(p, s.rows.slice(cutBefore(s, 0), cutBefore(s, 1)));
+    pokeC(box, ID);
+    derivedC(box);
+    expect(leavesC(box, U)).toEqual([want0]);
+    expect(want0.startsWith(printed(card0!).leaf), 'derivation minted the leaf the card printed').toBe(true);
+    expect(consumedC(box), 'no scope marker beside it: counted unknown').toEqual({ 'card_consumed:unknown': 1 });
+    expect(cardOf(box, ID, U)).toBe(expectedCard(familyC(box, ID), libCard.leafId(ID, U, s.headUuids[0]!)));
+  }, 240_000);
+
+  it("the 8th leaf of a run: the card names its depth-1 parent, which derivation then mints over the same 8 leaves; after it, the epoch's newest condensed node", () => {
+    const box = makeHistoryBox('ccrc-hist-card-eighth-');
+    const [ID, U] = ['card-eighth', sidC(0xf2)];
+    const s = compactionSequence({ n: 8, trigger: 'auto', seed: 0xf2, sessionId: U, startMs: T0C });
+    const p = plantC(box, ID, U, s.rows.slice(0, cutBefore(s, 7)));
+    settleC(box);
+    pokeC(box, ID);
+    const seven = leavesC(box, U);
+    expect(seven).toHaveLength(7);
+    const l7 = libCard.leafId(ID, U, s.headUuids[6]!);
+    const P = libCard.parentId([...seven, l7]);
+    const card = cardOf(box, ID, U)!;
+    expect(card).toBe(expectedCard(seven, l7, P));
+    appendRows(p, s.rows.slice(cutBefore(s, 7)));
+    pokeC(box, ID);
+    derivedC(box);
+    // The card written on the hinted pass predates the leaf and the parent it names next; the next hinted pass writes it.
+    pokeC(box, ID);
+    expect(leavesC(box, U)).toEqual([...seven, l7]);
+    expect(childrenC(box, P), 'derivation minted the predicted parent over the same eight leaves').toEqual([...seven, l7]);
+    expect(P.startsWith(printed(card).parent!)).toBe(true);
+    const l8 = libCard.leafId(ID, U, s.headUuids[7]!);
+    expect(cardOf(box, ID, U), 'the next leaf is no 8th: the newest condensed node is named').toBe(expectedCard(familyC(box, ID), l8, P));
+  }, 240_000);
+
+  it('a leaf not final in the run stops the prediction: no predicted parent and, with no condensed node, no parent at all', () => {
+    const box = makeHistoryBox('ccrc-hist-card-gap-');
+    const [ID, U] = ['card-gap', sidC(0xf3)];
+    // Rows two minutes old: boundary 3, its summary row dropped, is inside the raw-leaf grace, so it has no leaf yet.
+    const s = compactionSequence({ n: 8, trigger: 'manual', seed: 0xf3, sessionId: U, startMs: Date.now() - 120_000 });
+    plantC(box, ID, U, s.rows.slice(0, cutBefore(s, 7)).filter((r) => r['uuid'] !== s.summaryUuids[3]));
+    settleC(box);
+    pokeC(box, ID);
+    const leaves = leavesC(box, U);
+    expect(leaves, 'six leaves; boundary 3 waits').toHaveLength(6);
+    expect(cardOf(box, ID, U)).toBe(expectedCard(leaves, libCard.leafId(ID, U, s.headUuids[6]!)));
+  }, 240_000);
+
+  it('a next leaf the fork rule would qualify: no card, counted card_skipped:fork-qualified; CONTROL: the same copy with no other fork gets one', () => {
+    const box = makeHistoryBox('ccrc-hist-card-fork-');
+    const [ID, U] = ['card-fork', sidC(0xf4)];
+    const pre = compactionSequence({ n: 1, trigger: 'manual', seed: 0xf4, sessionId: U, startMs: T0C });
+    const other = compactionSequence({ n: 1, trigger: 'manual', tailRows: 0, seed: 0xf5, sessionId: U, startMs: T0C + 600_000 });
+    // Copy A (the first account's home) compacted again after pre's head; copy B (the second's) did not, and is the
+    // copy written last.
+    const a = plantTranscript(box, 'claude', CARD_SLUG, U, [...pre.rows, ...other.rows]);
+    const hourAgo = (Date.now() - 3_600_000) / 1000;
+    fs.utimesSync(a, hourAgo, hourAgo);
+    plantC(box, ID, U, [...pre.rows, userRow({ uuid: sidC(0xbf4), ts: new Date(T0C + 900_000).toISOString(), sessionId: U, text: 'fork b' })], 'claude-a');
+    const [ID2, U2] = ['card-fork-control', sidC(0xf6)];
+    const pre2 = compactionSequence({ n: 1, trigger: 'manual', seed: 0xf6, sessionId: U2, startMs: T0C });
+    plantC(box, ID2, U2, pre2.rows, 'claude-a');
+    settleC(box);
+    pokeC(box, ID, ID2);
+    expect(leavesC(box, U), "copy A's second boundary holds the plain id of the span B would start next").toContain(libCard.leafId(ID, U, pre.headUuids[0]!));
+    expect(cardOf(box, ID, U)).toBeNull();
+    expect(counters(box)['card_skipped:fork-qualified']).toBeGreaterThanOrEqual(1);
+    expect(cardOf(box, ID2, U2), 'CONTROL').toBe(expectedCard(familyC(box, ID2), libCard.leafId(ID2, U2, pre2.headUuids[0]!)));
+  }, 240_000);
+
+  it('a consumed prediction whose next leaf the fork rule would qualify: deleted and still counted card_consumed', () => {
+    const box = makeHistoryBox('ccrc-hist-card-fork-consumed-');
+    const [ID, U] = ['card-fork-consumed', sidC(0xf5c)];
+    const pre = compactionSequence({ n: 1, trigger: 'manual', seed: 0xf5c, sessionId: U, startMs: T0C });
+    const other = compactionSequence({ n: 1, trigger: 'manual', tailRows: 0, seed: 0xf5d, sessionId: U, startMs: T0C + 600_000 });
+    const head = pre.rows.slice(0, cutBefore(pre, 0));
+    // Copies A (the first account's home) and B (the second's: the registry's session, written last) start equal,
+    // before pre's boundary, so B's first prediction is the epoch's first leaf, bound nowhere yet.
+    const a = plantTranscript(box, 'claude', CARD_SLUG, U, [...head]);
+    const hourAgo = (Date.now() - 3_600_000) / 1000;
+    fs.utimesSync(a, hourAgo, hourAgo);
+    const b = plantC(box, ID, U, head, 'claude-a');
+    settleC(box);
+    pokeC(box, ID);
+    const want0 = libCard.leafId(ID, U, firstUuidC(pre));
+    expect(cardOf(box, ID, U), 'the first prediction, before any boundary').toBe(expectedCard([], want0));
+    // A compacts at pre's boundary and again after its head; B compacts at pre's boundary only and stays the copy
+    // written last. B's next span starts at pre's head, whose plain id A's second boundary now holds.
+    appendRows(a, [...pre.rows.slice(cutBefore(pre, 0)), ...other.rows]);
+    fs.utimesSync(a, hourAgo, hourAgo);
+    appendRows(b, [...pre.rows.slice(cutBefore(pre, 0)),
+      userRow({ uuid: sidC(0xbf5c), ts: new Date(T0C + 900_000).toISOString(), sessionId: U, text: 'fork b' })]);
+    pokeC(box, ID);
+    derivedC(box);
+    // The fork rule reads copy A's second leaf, which the hinted pass above could not derive yet; the next hinted pass
+    // meets it at end-of-file and skips.
+    pokeC(box, ID);
+    expect(leavesC(box, U), 'derivation minted the leaf the first card printed').toContain(want0);
+    expect(leavesC(box, U), "CONTROL: A's second boundary holds the plain id of B's next span").toContain(libCard.leafId(ID, U, pre.headUuids[0]!));
+    expect(counters(box)['card_skipped:fork-qualified'], 'CONTROL: the fixture reached the fork skip').toBeGreaterThanOrEqual(1);
+    expect(cardOf(box, ID, U), 'the consumed prediction is deleted, and none is written in its place').toBeNull();
+    expect(consumedC(box), 'the consumption is counted though the next prediction is a skip').toEqual({ 'card_consumed:unknown': 1 });
+  }, 240_000);
+
+  it("a spooled fork (ruled Q16): once B2's fork line confirms the fork's epoch, its card starts at the head of the parent's boundary its copy holds, derivation mints that leaf, and the fork's prediction replaces the parent's", () => {
+    const box = makeHistoryBox('ccrc-hist-card-forked-');
+    const [ID, U, UF] = ['card-forked', sidC(0xfb1), sidC(0xfb2)];
+    const pre = compactionSequence({ n: 1, trigger: 'manual', seed: 0xfb1, sessionId: U, startMs: T0C });
+    const own = compactionSequence({ n: 1, trigger: 'manual', tailRows: 0, seed: 0xfb2, sessionId: UF, startMs: T0C + 600_000 });
+    plantC(box, ID, U, pre.rows);
+    settleC(box);
+    pokeC(box, ID);
+    expect(cardOf(box, ID, U), "CONTROL: the parent's prediction").toBe(expectedCard(familyC(box, ID), libCard.leafId(ID, U, pre.headUuids[0]!)));
+    // An in-pane /branch (spec 6.1): a fresh sid whose transcript copies the parent's rows verbatim, so each is one
+    // entry with a membership in each file, and the parent's boundary stays the parent transcript's. The hook's line
+    // carries the parent's uuid as `reg` (it fires before _sync_uuid moves .uuid), and .uuid names the fork before the
+    // sweep observes the line, so the fork epoch confirms by the observation, as a resume line would.
+    plantSession(box, ID, { uuid: UF });
+    const f = plantTranscript(box, 'claude', CARD_SLUG, UF, [...pre.rows]);
+    spoolLine(box, ID, { v: 1, ev: 'SessionStart', id: ID, sid: UF, src: 'fork', reg: U, gen: CARD_GEN });
+    settleC(box);
+    pokeC(box, ID);
+    expect(qC<{ cause: string; declared_by: string }>(box,
+      'SELECT cause, declared_by FROM epochs WHERE cc_session_uuid = ? AND confirmed_ms IS NOT NULL', UF)
+      .map((r) => `${r.cause}/${r.declared_by}`), "CONTROL: B2's fork line chained a confirmed fork epoch").toEqual(['fork/hook']);
+    const wantF = libCard.leafId(ID, UF, pre.headUuids[0]!);
+    expect(cardOf(box, ID, UF), "the fork's next leaf starts at the head of the parent's boundary its copy holds")
+      .toBe(expectedCard(familyC(box, ID), wantF));
+    expect(cardOf(box, ID, U), "one prediction per id: the parent's is removed").toBeNull();
+    expect(consumedC(box), 'a removal is no consumption').toEqual({});
+    appendRows(f, own.rows);
+    pokeC(box, ID);
+    derivedC(box);
+    expect(leavesC(box, UF), 'derivation minted the leaf the card printed').toEqual([wantF]);
+    expect(consumedC(box)).toEqual({ 'card_consumed:unknown': 1 });
+    expect(cardOf(box, ID, UF), "the fork's own boundary starts its next span")
+      .toBe(expectedCard(familyC(box, ID), libCard.leafId(ID, UF, own.headUuids[0]!)));
+  }, 240_000);
+
+  it('the end-of-file gate: a torn last line holds the write; a boundary ingested on a pass that ends short of end-of-file consumes and deletes the prediction', () => {
+    const box = makeHistoryBox('ccrc-hist-card-eof-');
+    const [ID, U] = ['card-eof', sidC(0xf7)];
+    const s = compactionSequence({ n: 3, trigger: 'manual', seed: 0xf7, sessionId: U, startMs: T0C });
+    /** One whole row's JSON with no LF after it: a line still being written. */
+    const torn = (n: number): string => JSON.stringify(userRow({ uuid: sidC(0xbf70 + n), ts: new Date(T0C + 3_600_000 + n).toISOString(), sessionId: U, text: `still being written ${n}` }));
+    const p = plantC(box, ID, U, s.rows.slice(0, cutBefore(s, 1)));
+    fs.appendFileSync(p, torn(1));
+    settleC(box);
+    pokeC(box, ID);
+    expect(leavesC(box, U), 'boundary 0 is final: its leaf exists').toHaveLength(1);
+    expect(cardOf(box, ID, U), 'never at end-of-file: no prediction').toBeNull();
+    fs.appendFileSync(p, '\n');
+    pokeC(box, ID);
+    expect(cardOf(box, ID, U)).toBe(expectedCard(familyC(box, ID), libCard.leafId(ID, U, s.headUuids[0]!)));
+    appendRows(p, s.rows.slice(cutBefore(s, 1), cutBefore(s, 2)));
+    fs.appendFileSync(p, torn(2));
+    pokeC(box, ID);
+    derivedC(box);
+    expect(leavesC(box, U)).toHaveLength(2);
+    expect(cardOf(box, ID, U), 'consumed short of end-of-file: deleted, not rewritten').toBeNull();
+    expect(consumedC(box)).toEqual({ 'card_consumed:unknown': 1 });
+    fs.appendFileSync(p, '\n');
+    pokeC(box, ID);
+    expect(cardOf(box, ID, U)).toBe(expectedCard(familyC(box, ID), libCard.leafId(ID, U, s.headUuids[1]!)));
+  }, 240_000);
+
+  it("the file: the line and one LF, 0600, in 0700 directories, one per id (a /clear's replaces the last), other names kept; a symlinked card/<id> refused and its target untouched", () => {
+    const box = makeHistoryBox('ccrc-hist-card-file-');
+    const [ID, U1, U2] = ['card-file', sidC(0xf8), sidC(0xf9)];
+    plantC(box, ID, U1, compactionSequence({ n: 1, trigger: 'manual', seed: 0xf8, sessionId: U1, startMs: T0C }).rows);
+    settleC(box);
+    pokeC(box, ID);
+    expect(cardOf(box, ID, U1)).not.toBeNull();
+    fs.writeFileSync(path.join(box.root, 'card', ID, 'notes'), "not the writer's");
+    // A /clear: the registry names the new uuid, and the hook spools the clear line.
+    const s2 = compactionSequence({ n: 1, trigger: 'manual', seed: 0xf9, sessionId: U2, startMs: T0C + 3_600_000 });
+    plantSession(box, ID, { uuid: U2 });
+    plantTranscript(box, 'claude', CARD_SLUG, U2, s2.rows);
+    spoolLine(box, ID, { v: 1, ev: 'SessionStart', id: ID, sid: U2, src: 'clear', gen: CARD_GEN });
+    settleC(box);
+    pokeC(box, ID);
+    const f = cardPath(box, ID, U2);
+    expect(fs.readFileSync(f, 'utf8')).toBe(expectedCard(familyC(box, ID), libCard.leafId(ID, U2, s2.headUuids[0]!)));
+    expect(fs.statSync(f).mode & 0o777).toBe(0o600);
+    for (const d of [path.join(box.root, 'card'), path.join(box.root, 'card', ID)]) expect(fs.statSync(d).mode & 0o777, d).toBe(0o700);
+    // U1's prediction and its generation record went with the write; U2's record stands beside its prediction.
+    expect(fs.readdirSync(path.join(box.root, 'card', ID)).sort()).toEqual([`${U2}.gen`, `${U2}.txt`, 'notes']);
+    const [ID3, U3] = ['card-link', sidC(0xfa)];
+    plantC(box, ID3, U3, compactionSequence({ n: 1, trigger: 'manual', seed: 0xfa, sessionId: U3, startMs: T0C }).rows);
+    const target = path.join(box.home, 'elsewhere');
+    fs.mkdirSync(target);
+    fs.writeFileSync(path.join(target, 'keep.txt'), 'kept');
+    fs.symlinkSync(target, path.join(box.root, 'card', ID3));
+    settleC(box);
+    pokeC(box, ID3);
+    expect(fs.readdirSync(target)).toEqual(['keep.txt']);
+    expect(fs.lstatSync(path.join(box.root, 'card', ID3)).isSymbolicLink()).toBe(true);
+    expect(counters(box)['card_dir_refused']).toBeGreaterThanOrEqual(1);
+  }, 240_000);
+
+  it('only the session the registry names gets a prediction; one it no longer names is still consumed and deleted when its boundary is ingested', () => {
+    const box = makeHistoryBox('ccrc-hist-card-reg-');
+    const [ID, U] = ['card-reg', sidC(0xfd)];
+    const s = compactionSequence({ n: 2, trigger: 'manual', seed: 0xfd, sessionId: U, startMs: T0C });
+    const p = plantC(box, ID, U, s.rows.slice(0, cutBefore(s, 1)));
+    settleC(box);
+    pokeC(box, ID);
+    expect(cardOf(box, ID, U)).toBe(expectedCard(familyC(box, ID), libCard.leafId(ID, U, s.headUuids[0]!)));
+    fs.rmSync(path.join(box.reg, `${ID}.uuid`));
+    appendRows(p, s.rows.slice(cutBefore(s, 1)));
+    pokeC(box, ID);
+    derivedC(box);
+    expect(leavesC(box, U)).toHaveLength(2);
+    expect(cardOf(box, ID, U), 'consumed, and not written again: the registry names no session').toBeNull();
+    expect(consumedC(box)).toEqual({ 'card_consumed:unknown': 1 });
+    pokeC(box, ID);
+    expect(cardOf(box, ID, U), 'still unnamed: still no prediction').toBeNull();
+    plantSession(box, ID, { uuid: U });
+    pokeC(box, ID);
+    expect(cardOf(box, ID, U)).toBe(expectedCard(familyC(box, ID), libCard.leafId(ID, U, s.headUuids[1]!)));
+  }, 240_000);
+
+  it.skipIf(process.getuid?.() === 0)('a card directory the sweep cannot write: counted card_write_failed, nothing written, and the pass still exits 0', () => {
+    const box = makeHistoryBox('ccrc-hist-card-ro-');
+    const [ID, U] = ['card-ro', sidC(0xfb)];
+    plantC(box, ID, U, compactionSequence({ n: 1, trigger: 'manual', seed: 0xfb, sessionId: U, startMs: T0C }).rows);
+    settleC(box);
+    const dir = path.join(box.root, 'card', ID);
+    // card/ exists once the sweep has ticked (Task 5's ensureHistoryDirs); made here too, so that before Task 5 the
+    // case reds at card_write_failed rather than at an ENOENT from the mkdir below.
+    fs.mkdirSync(path.join(box.root, 'card'), { recursive: true, mode: 0o700 });
+    fs.rmSync(dir, { recursive: true, force: true });
+    fs.mkdirSync(dir, { mode: 0o500 });
+    try {
+      pokeC(box, ID);
+      expect(counters(box)['card_write_failed']).toBeGreaterThanOrEqual(1);
+      expect(fs.readdirSync(dir)).toEqual([]);
+    } finally {
+      fs.chmodSync(dir, 0o700);
+    }
+  }, 240_000);
+
+  // The temp half is a CONTROL on B1's writeFileAtomic, which removes its own `<path>.tmp.<pid>` on any failure before
+  // the rename: card.mjs unlinks no temp, so no card.mjs mutant reds it. The cleanup half is card.mjs's own guard.
+  it("a card write that fails after its temp exists leaves no temp behind (CONTROL: B1's writeFileAtomic cleanup, not card.mjs); a cleanup that fails never loses the write's count", () => {
+    const box = makeHistoryBox('ccrc-hist-card-temp-');
+    const [ID, U] = ['card-temp', sidC(0xfe)];
+    plantC(box, ID, U, compactionSequence({ n: 1, trigger: 'manual', seed: 0xfe, sessionId: U, startMs: T0C }).rows);
+    settleC(box);
+    const dir = path.join(box.root, 'card', ID);
+    fs.mkdirSync(path.join(box.root, 'card'), { recursive: true, mode: 0o700 });
+    fs.rmSync(dir, { recursive: true, force: true });
+    // A directory where the prediction goes: the temp is opened and written, and its rename fails (EISDIR).
+    fs.mkdirSync(path.join(dir, `${U}.txt`), { recursive: true, mode: 0o700 });
+    pokeC(box, ID);
+    expect(counters(box)['card_write_failed']).toBeGreaterThanOrEqual(1);
+    // The generation record is written first and lands (R-recalloff-parity); the prediction's rename then fails.
+    expect(fs.readdirSync(dir).sort(), 'a failed write left its temp behind').toEqual([`${U}.gen`, `${U}.txt`]);
+    // A directory under another uuid's card name: the write lands, and removing that name fails (unlink: EISDIR).
+    fs.rmSync(path.join(dir, `${U}.txt`), { recursive: true });
+    fs.mkdirSync(path.join(dir, `${sidC(0xff)}.txt`));
+    const written = counters(box)['card_written'] ?? 0;
+    pokeC(box, ID);
+    expect(cardOf(box, ID, U), 'the write landed').not.toBeNull();
+    expect(counters(box)['card_cleanup_failed']).toBeGreaterThanOrEqual(1);
+    expect(counters(box)['card_written'], 'the write is counted although its cleanup failed').toBe(written + 1);
+  }, 240_000);
+
+  // R-recalloff-parity (spec §9.7, §8.2, C68): when neither CCRC_SESSION_GENERATION nor $REG/<id>.generation resolves a
+  // generation, B2's CLI compares recall-off/<id> with the id's newest family's generation, which only the store knows.
+  // The hook reads the record this writes instead (Task 9). The expectation is B2's own familiesOf over the fixture
+  // store, folded as B2's readContext folds it under 'newest' (`own.length === 1 ? own[0].generation : ''`), never a
+  // second spelling of the newest-family query.
+  it('the generation record: beside each prediction the sweep records the generation the CLI resolves under newest, follows a newer or a legacy newest family, and a record it cannot write holds the prediction', async () => {
+    const box = makeHistoryBox('ccrc-hist-card-gen-');
+    const [ID, U] = ['card-gen', sidC(0xf10)];
+    const s = compactionSequence({ n: 2, trigger: 'manual', seed: 0xf10, sessionId: U, startMs: T0C });
+    const p = plantC(box, ID, U, s.rows.slice(0, cutBefore(s, 1)));
+    settleC(box);
+    pokeC(box, ID);
+    const genPath = path.join(box.root, 'card', ID, `${U}.gen`);
+    const recall = (await import('../../ccd/history/recall.mjs')) as unknown as {
+      familiesOf(db: unknown, sel: object): ReadonlyArray<{ generation: string }>;
+    };
+    const cliGen = (): string => {
+      const db = openStoreRO(box);
+      try {
+        const own = recall.familiesOf(db, { kind: 'family', id: ID, generation: null, project: null, workdir: null, workdirReal: null });
+        return own.length === 1 ? own[0]!.generation : '';
+      } finally {
+        db.close();
+      }
+    };
+    const setGen = (sql: string, ...args: (string | number)[]): void => {
+      const w = openWriter(libCard.historyPaths(box.home).dbFile);
+      try { w.prepare(sql).run(...args); } finally { closeWriter(w); }
+    };
+    expect(cardOf(box, ID, U), 'CONTROL: a prediction stands').not.toBeNull();
+    expect(cliGen(), 'CONTROL: the newest family is the planted one').toBe(CARD_GEN);
+    expect(fs.readFileSync(genPath, 'utf8'), 'the record is the generation the CLI resolves, and one LF').toBe(`${cliGen()}\n`);
+    expect(fs.statSync(genPath).mode & 0o777).toBe(0o600);
+    // A newer family of the same id (the id reused under another generation): the CLI resolves it now, and so must
+    // the record, at the next write.
+    const G2 = sidC(0xf11);
+    setGen('INSERT INTO sessions (ccrc_id, generation, project, first_seen_ms) VALUES (?, ?, ?, ?)', ID, G2, 'demo', Date.now());
+    expect(cliGen(), 'CONTROL: the CLI resolves the newer family').toBe(G2);
+    appendRows(p, s.rows.slice(cutBefore(s, 1)));
+    pokeC(box, ID);
+    expect(cardOf(box, ID, U), 'CONTROL: the next prediction stands').not.toBeNull();
+    expect(fs.readFileSync(genPath, 'utf8'), 'the record follows the newest family').toBe(`${G2}\n`);
+    // A legacy newest family: the CLI compares with '', and the record is one LF; a kept prediction refreshes it.
+    const line = cardOf(box, ID, U);
+    setGen("UPDATE sessions SET generation = '' WHERE ccrc_id = ? AND generation = ?", ID, G2);
+    expect(cliGen(), 'CONTROL: the CLI resolves the legacy family').toBe('');
+    pokeC(box, ID);
+    expect(cardOf(box, ID, U), 'CONTROL: the prediction is kept, not rewritten').toBe(line);
+    expect(fs.readFileSync(genPath, 'utf8'), 'a legacy newest family is recorded as one LF').toBe('\n');
+    // A record that cannot be written (a directory at its name): the prediction is not written beside it.
+    fs.rmSync(cardPath(box, ID, U));
+    fs.rmSync(genPath);
+    fs.mkdirSync(genPath);
+    const failed = counters(box)['card_write_failed'] ?? 0;
+    pokeC(box, ID);
+    expect(counters(box)['card_write_failed'], 'the record write failed').toBe(failed + 1);
+    expect(cardOf(box, ID, U), 'no prediction beside a record that could not be written').toBeNull();
+  }, 240_000);
+
+  // R-recalloff-keep (the final check's R2): a record that is due beside a prediction that STANDS (kept, its line
+  // unchanged) and cannot be acted on takes the prediction with it. A directory at the record's name is unreadable,
+  // so the record is due: rewritten at end-of-file (writeFileAtomic's rename refuses a directory) and removed off it
+  // (unlink refuses a directory), and both fail, while the prediction's own unlink succeeds: the ENOSPC shape, where
+  // a write fails and an unlink does not. Root meets the same two refusals, so the case runs as root too. Off
+  // end-of-file is a torn last line, as in the end-of-file gate case: the pass reads to it and stops short.
+  it('a record that cannot be written or removed beside a kept prediction removes the prediction too, counted card_unrecorded_removed, at end-of-file and off it', () => {
+    const box = makeHistoryBox('ccrc-hist-card-genkeep-');
+    const [ID, U] = ['card-genkeep', sidC(0xf20)];
+    const p = plantC(box, ID, U, compactionSequence({ n: 1, trigger: 'manual', seed: 0xf20, sessionId: U, startMs: T0C }).rows);
+    settleC(box);
+    pokeC(box, ID);
+    const genPath = path.join(box.root, 'card', ID, `${U}.gen`);
+    const line = cardOf(box, ID, U);
+    expect(line, 'CONTROL: a prediction stands').not.toBeNull();
+    expect(fs.readFileSync(genPath, 'utf8'), 'CONTROL: its record stands').toBe(`${CARD_GEN}\n`);
+    const removed = (): number => counters(box)['card_unrecorded_removed'] ?? 0;
+    const failed = (): number => counters(box)['card_write_failed'] ?? 0;
+    const blockRecord = (): void => { fs.rmSync(genPath, { recursive: true, force: true }); fs.mkdirSync(genPath); };
+    // At end-of-file: the prediction is kept, and its record is due for a rewrite that fails.
+    blockRecord();
+    let [r0, f0] = [removed(), failed()];
+    pokeC(box, ID);
+    expect(failed(), 'at end-of-file: the record write failed').toBe(f0 + 1);
+    expect(cardOf(box, ID, U), 'at end-of-file: no prediction left beside the record').toBeNull();
+    expect(removed(), 'at end-of-file: counted').toBe(r0 + 1);
+    // CONTROL: the record unblocked, the same pass shape writes both back, and nothing is removed.
+    fs.rmSync(genPath, { recursive: true });
+    [r0, f0] = [removed(), failed()];
+    pokeC(box, ID);
+    expect(cardOf(box, ID, U), 'CONTROL: the prediction is written back').toBe(line);
+    expect(fs.readFileSync(genPath, 'utf8'), 'CONTROL: and its record').toBe(`${CARD_GEN}\n`);
+    expect([removed(), failed()], 'CONTROL: nothing failed, nothing removed').toEqual([r0, f0]);
+    // Off end-of-file (a torn last line): CONTROL first, a healthy record keeps both.
+    fs.appendFileSync(p, JSON.stringify(userRow({ uuid: sidC(0xbf20), ts: new Date(T0C + 3_600_000).toISOString(), sessionId: U, text: 'still being written' })));
+    pokeC(box, ID);
+    expect(cardOf(box, ID, U), 'CONTROL: off end-of-file a recorded prediction is kept').toBe(line);
+    // Then the record is due for a removal that fails.
+    blockRecord();
+    [r0, f0] = [removed(), failed()];
+    pokeC(box, ID);
+    expect(failed(), 'off end-of-file: the record removal failed').toBe(f0 + 1);
+    expect(cardOf(box, ID, U), 'off end-of-file: no prediction left beside the record').toBeNull();
+    expect(removed(), 'off end-of-file: counted').toBe(r0 + 1);
+  }, 240_000);
+
+  it('scope/ and card/ are made 0700 by a bound store\'s first tick, and by nothing else: not on a server-role box, not under history-off, not when the store is refused', () => {
+    const box = makeHistoryBox('ccrc-hist-card-dirs-');
+    passC(box);
+    for (const d of ['scope', 'card']) expect(fs.statSync(path.join(box.root, d)).mode & 0o777, d).toBe(0o700);
+    const server = makeHistoryBox('ccrc-hist-card-dirs-server-', { role: 'server' });
+    expect(runSweep(server).code).toBe(0);
+    const off = makeHistoryBox('ccrc-hist-card-dirs-off-');
+    fs.writeFileSync(path.join(off.home, '.ccrc', 'history-off'), '');
+    expect(runSweep(off).code).toBe(0);
+    const refused = makeHistoryBox('ccrc-hist-card-dirs-refused-');
+    fs.mkdirSync(refused.root, { recursive: true, mode: 0o700 });
+    fs.writeFileSync(path.join(refused.root, 'store.id'), `${sidC(0xd1)}\n`);
+    expect(runSweep(refused).code, 'store-missing is refused').not.toBe(0);
+    for (const b of [server, off, refused]) {
+      for (const d of ['scope', 'card']) expect(fs.existsSync(path.join(b.root, d)), `${b.home}: ${d}`).toBe(false);
+    }
+  }, 240_000);
+
+  it('a registered recovery step withdraws the card: the recover arm removes every prediction, counted card_withdrawn:recovering, and consumes and writes none; the tick after it writes the next', () => {
+    const box = makeHistoryBox('ccrc-hist-card-recover-');
+    const [ID, U] = ['card-recover', sidC(0xfc)];
+    const s = compactionSequence({ n: 2, trigger: 'manual', seed: 0xfc, sessionId: U, startMs: T0C });
+    const p = plantC(box, ID, U, s.rows.slice(0, cutBefore(s, 1)));
+    settleC(box);
+    pokeC(box, ID);
+    expect(cardOf(box, ID, U), 'CONTROL: a plain pass leaves the prediction in place').not.toBeNull();
+    appendRows(p, s.rows.slice(cutBefore(s, 1)));
+    // A recovery step registered on the box's store, as a restore's commit leaves one (B2's registerRecovery).
+    const db = openWriter(libCard.historyPaths(box.home).dbFile);
+    try {
+      db.prepare("INSERT INTO derivation_state (step, version, cursor, completed_ms) VALUES ('recover', ?, NULL, NULL)").run(Date.now());
+    } finally {
+      closeWriter(db);
+    }
+    let passes = 0;
+    while ((recoverRow(box)?.completed_ms ?? null) === null) {
+      passC(box);
+      passes += 1;
+      expect(passes, 'the recovery step completes within five passes').toBeLessThanOrEqual(5);
+      expect(cardOf(box, ID, U), `recovery pass ${passes}: withdrawn, never left for a second compaction`).toBeNull();
+      expect(consumedC(box), 'the recover arm consumes nothing').toEqual({});
+    }
+    expect(counters(box)['card_withdrawn:recovering'], 'one prediction, withdrawn once').toBe(1);
+    pokeC(box, ID);
+    expect(consumedC(box), 'a withdrawn prediction is never counted consumed later').toEqual({});
+    expect(cardOf(box, ID, U)).toBe(expectedCard(familyC(box, ID), libCard.leafId(ID, U, s.headUuids[1]!)));
+  }, 240_000);
+
+  it('a floor pause withdraws every prediction, counted card_withdrawn:low-disk, and never through a linked card/<id>; the next plain pass writes it again', () => {
+    const box = makeHistoryBox('ccrc-hist-card-withdraw-floor-');
+    const [ID, U] = ['card-withdraw-floor', sidC(0xf0a)];
+    plantC(box, ID, U, compactionSequence({ n: 1, trigger: 'manual', seed: 0xf0a, sessionId: U, startMs: T0C }).rows);
+    settleC(box);
+    pokeC(box, ID);
+    const before = cardOf(box, ID, U);
+    expect(before, 'CONTROL: a plain pass leaves the prediction in place').not.toBeNull();
+    // A card/<id> that is a link to a directory holding a file under a card name: never walked, never unlinked.
+    const elsewhere = path.join(box.home, 'elsewhere-card');
+    fs.mkdirSync(elsewhere);
+    fs.writeFileSync(path.join(elsewhere, `${sidC(0xf0e)}.txt`), 'not this writer\'s\n');
+    fs.symlinkSync(elsewhere, path.join(box.root, 'card', 'card-linked'));
+    const r = runSweep(box, [], { env: { HISTORY_TEST_STATFS: `${FLOOR_C - 4096}:${FS_C}` } });
+    expect(r.code, `${r.stderr}${r.stdout}`).toBe(0);
+    expect(counters(box)['capture_paused_low_disk'], 'CONTROL: the pass was a floor pause').toBeGreaterThanOrEqual(1);
+    expect(cardOf(box, ID, U), 'withdrawn under the floor pause').toBeNull();
+    expect(counters(box)['card_withdrawn:low-disk'], 'one prediction; the linked directory is never walked').toBe(1);
+    expect(fs.readdirSync(elsewhere), "the link's target is untouched").toEqual([`${sidC(0xf0e)}.txt`]);
+    expect(consumedC(box), 'a withdrawal is no consumption').toEqual({});
+    pokeC(box, ID);
+    expect(cardOf(box, ID, U), 'the next plain pass at end-of-file writes it again').toBe(before);
+  }, 240_000);
+
+  it('a budget spent before the card step: the consume and delete still run, nothing is written, and the predictions left are withdrawn, counted card_withdrawn:budget', () => {
+    const box = makeHistoryBox('ccrc-hist-card-withdraw-budget-');
+    const [A, UA] = ['card-budget-a', sidC(0xf0b)];
+    const [B, UB] = ['card-budget-b', sidC(0xf0c)];
+    const sa = compactionSequence({ n: 2, trigger: 'manual', seed: 0xf0b, sessionId: UA, startMs: T0C });
+    const pa = plantC(box, A, UA, sa.rows.slice(0, cutBefore(sa, 1)));
+    plantC(box, B, UB, compactionSequence({ n: 1, trigger: 'manual', seed: 0xf0c, sessionId: UB, startMs: T0C }).rows);
+    settleC(box);
+    pokeC(box, A, B);
+    expect(cardOf(box, A, UA), 'CONTROL: A has a prediction').not.toBeNull();
+    expect(cardOf(box, B, UB), 'CONTROL: B has a prediction').not.toBeNull();
+    const written = counters(box)['card_written'] ?? 0;
+    const boundariesOf = (uuid: string): number => qC<{ n: number }>(box,
+      'SELECT count(*) AS n FROM boundaries b JOIN transcripts t ON t.transcript_pk = b.transcript_pk WHERE t.cc_session_uuid = ?', uuid)[0]!.n;
+    expect(boundariesOf(UA)).toBe(1);
+    appendRows(pa, sa.rows.slice(cutBefore(sa, 1)));
+    spoolLine(box, A, { v: 1, ev: 'Stop', id: A });
+    // One byte of budget: the ingest checks the budget before each chunk, so A's one chunk of new rows is read, and
+    // the run's budget is spent long before the card step.
+    const r = runDriver(box, { budgetBytes: 1 });
+    expect(r.code, `${r.stderr}${r.stdout}`).toBe(0);
+    expect(boundariesOf(UA), "CONTROL: A's second boundary was ingested within the budget").toBe(2);
+    expect(cardOf(box, A, UA), "A's prediction was consumed and deleted").toBeNull();
+    expect(consumedC(box), 'the consumption is counted, never swallowed by the withdrawal').toEqual({ 'card_consumed:unknown': 1 });
+    expect(counters(box)['card_written'] ?? 0, 'no write past the budget').toBe(written);
+    expect(cardOf(box, B, UB), "B's prediction is withdrawn").toBeNull();
+    expect(counters(box)['card_withdrawn:budget'], "B's alone: A's was already consumed").toBe(1);
+  }, 240_000);
+
+  it("a hold withdraws too: a writer token gone (held, its DB open) counts card_withdrawn:held; a store.id naming another store (refused, no DB open) puts the count on the pass's outcome line; a linked card/ is never walked", () => {
+    const box = makeHistoryBox('ccrc-hist-card-withdraw-hold-');
+    const [ID, U] = ['card-withdraw-hold', sidC(0xf0d)];
+    plantC(box, ID, U, compactionSequence({ n: 1, trigger: 'manual', seed: 0xf0d, sessionId: U, startMs: T0C }).rows);
+    settleC(box);
+    pokeC(box, ID);
+    const line = cardOf(box, ID, U);
+    expect(line, 'CONTROL: a plain pass leaves the prediction in place').not.toBeNull();
+    const P = libCard.historyPaths(box.home);
+    fs.rmSync(P.writer);
+    const held = runSweep(box);
+    expect(held.code, `${held.stderr}${held.stdout}`).toBe(0);
+    expect(held.stdout, 'CONTROL: the pass held on the writer token').toContain('history-sweep: held');
+    expect(cardOf(box, ID, U), 'withdrawn by the held pass').toBeNull();
+    expect(counters(box)['card_withdrawn:held']).toBe(1);
+    // A store.id naming another store: refused before any DB opens, so nothing is counted and the outcome line says it.
+    fs.writeFileSync(cardPath(box, ID, U), line!, { mode: 0o600 });
+    fs.writeFileSync(P.storeId, `${sidC(0xd2)}\n`);
+    const refused = runSweep(box);
+    expect(refused.code, 'store-mismatch waits on the operator').toBe(5);
+    expect(refused.stdout).toContain('history-sweep: store-mismatch\n');
+    expect(refused.stdout).toContain('history-sweep: card_withdrawn:refused 1\n');
+    expect(cardOf(box, ID, U), 'withdrawn by the refused pass').toBeNull();
+    // card/ itself a link to a directory that holds a card name: the next refused pass never walks it.
+    const elsewhere = path.join(box.home, 'elsewhere-root');
+    fs.mkdirSync(path.join(elsewhere, ID), { recursive: true });
+    fs.writeFileSync(path.join(elsewhere, ID, `${U}.txt`), line!);
+    fs.rmSync(path.join(box.root, 'card'), { recursive: true });
+    fs.symlinkSync(elsewhere, path.join(box.root, 'card'));
+    const linked = runSweep(box);
+    expect(linked.code, 'CONTROL: still store-mismatch').toBe(5);
+    expect(linked.stdout, 'nothing withdrawn through a linked card/').not.toContain('card_withdrawn');
+    expect(fs.existsSync(path.join(elsewhere, ID, `${U}.txt`)), "the link's target is untouched").toBe(true);
+  }, 240_000);
+
+  it("a consumption is counted by the scope marker its compaction's PreCompact left: ambiguous as card_consumed:other, out of W1-e's denominator; main as card_consumed:main; a marker through a link as unknown", () => {
+    const box = makeHistoryBox('ccrc-hist-card-scope-');
+    const runs = [
+      { id: 'card-scope-amb', uuid: sidC(0xa1), seed: 0xa1, word: 'ambiguous', link: false },
+      { id: 'card-scope-main', uuid: sidC(0xa2), seed: 0xa2, word: 'main', link: false },
+      { id: 'card-scope-link', uuid: sidC(0xa3), seed: 0xa3, word: 'main', link: true },
+    ].map((r) => ({ ...r, s: compactionSequence({ n: 1, trigger: 'manual', seed: r.seed, sessionId: r.uuid, startMs: T0C }) }));
+    const paths = runs.map((r) => plantC(box, r.id, r.uuid, r.s.rows.slice(0, cutBefore(r.s, 0))));
+    settleC(box);
+    pokeC(box, ...runs.map((r) => r.id));
+    for (const r of runs) expect(cardOf(box, r.id, r.uuid), `CONTROL: ${r.id} has its first prediction`).not.toBeNull();
+    // What the hook's PreCompact writes a second before each boundary (Task 8's marker); the third through a link.
+    for (const r of runs) {
+      const ts = Date.parse(String(r.s.rows[cutBefore(r.s, 0)]!['timestamp']));
+      const text = `${r.word} ${r.uuid} ${ts - 1000}\n`;
+      const marker = path.join(box.root, 'scope', r.id);
+      if (r.link) {
+        fs.writeFileSync(path.join(box.home, 'marker-target'), text);
+        fs.symlinkSync(path.join(box.home, 'marker-target'), marker);
+      } else {
+        fs.writeFileSync(marker, text);
+      }
+    }
+    runs.forEach((r, i) => appendRows(paths[i]!, r.s.rows.slice(cutBefore(r.s, 0))));
+    pokeC(box, ...runs.map((r) => r.id));
+    derivedC(box);
+    for (const r of runs) expect(leavesC(box, r.uuid), `CONTROL: ${r.id}'s boundary was ingested`).toHaveLength(1);
+    expect(consumedC(box)).toEqual({ 'card_consumed:other': 1, 'card_consumed:main': 1, 'card_consumed:unknown': 1 });
+  }, 240_000);
 });

@@ -75,6 +75,7 @@ import {
   deriveNodes, reparseTargets, reparseLeaves, clearLeafCrashes, indexNodesFts, NODES_FTS_STEP, rederiveGistsFor, redactNodeFields, reparseFailClosed, rerollNodes,
   beltNodesStep,
 } from './derive.mjs';
+import { cardStep, ensureHistoryDirs, withdrawCards } from './card.mjs';
 
 const USAGE = 'usage: sweep.mjs [--op <verb> <op-args...>] [--roster-unreadable] --secrets <file...> -- <home...>';
 
@@ -2999,9 +3000,15 @@ export async function bindingPass(home, P, op, args, deps, out) {
  * 15. `deriveNodes`: the leaves from the boundaries stored so far (§9.2 step 6; W1-B2 Task 8), held with the ingest
  *     and the FTS backfill (a node grows db/, §9.3) and run after the backfill, so a new node's nodes_fts row is
  *     written in a tick whose tables exist;
- * 16. `mergeSteps`: §6.2's merge steps, which run under any pause: they free space rather than take it;
- * 17. `recordTick`: the tick's row and journal record (a paused ingest records an unmeasured lag);
- * 18. `markScan`: a due scan is marked done, unless the roster was unreadable.
+ * 16. `cardStep`: §9.2 step 6 under the derivation's gate: the card delivery measure, then the card/ predictions
+ *     consumed, deleted and written (card.mjs; W1-B3 Tasks 5 and 6);
+ * 17. `withdrawCards`: every card/ prediction unlinked when this tick ran no card step over a caught-up ingest
+ *     (ruling RC2: fail closed; lib decideCardWithdraw names the reason);
+ * 18. `mergeSteps`: §6.2's merge steps, which run under any pause: they free space rather than take it;
+ * 19. `recordTick`: the tick's row and journal record (a paused ingest records an unmeasured lag);
+ * 20. `markScan`: a due scan is marked done, unless the roster was unreadable;
+ * 21. `ensureHistoryDirs`: last, below the spool/ line the next sentence names, scope/ and card/ made 0700, a link
+ *     or a file there refused and counted (card.mjs; W1-B3 Task 5).
  *  Then spool/ is made unless something that is not a directory stands there (FU8) (the hook's gate is that directory, and
  *  the hook never makes it, §5.1, so a box with no bound store spools nothing) and an unreadable roster is counted, once per pass (FE4, O54); the scheduled pass runs
  *  `periodicCensus` after the tick. `bump` and `countOutside` are counters, not steps. */
@@ -3087,6 +3094,14 @@ export async function tick(db, ctx) {
   // narrows its bounded candidate session UUIDs; an unmeasured census holds every leaf. deriveNodes is synchronous. D-4224
   ictx.pendingReceiptState = ctx.pendingReceiptState;
   if (ctx.ingest && !(ing !== null && ing.paused)) deriveNodes(db, ictx, ctx.budget);
+  // §9.2 step 6, after the leaves and parents (W1-B3 Task 5): measure card delivery, then consume and write the
+  // card/ predictions, under the derivation's gate. A tick that does not reach the card step over a caught-up ingest
+  // (a cap or floor pause, a per-chunk floor stop, an ingest an unreadable roster skipped, a budget spent before the
+  // step) withdraws every prediction instead, fail closed: lib decideCardWithdraw names the reason (ruling RC2). The
+  // budget is read here, before the step. D-4224 D-4740 (history-card-withdrawn-when-not-ticking)
+  const cardPass = { arm: 'run', pause: ctx.pause, floorStop: ing !== null && ing.paused, ingested: ing !== null, budgetLeft: budgetLeft(ctx.budget) };
+  if (ctx.ingest && !(ing !== null && ing.paused)) cardStep(db, ictx, ctx.budget);
+  withdrawCards(db, ctx.home, cardPass, ctx.out);
   // §6.2's merge steps run under any pause (§9.2: only ingest pauses): they purge a late pair's deleted bytes and
   // free space rather than take it.
   mergeSteps(db, ictx, ctx.budget);
@@ -3097,6 +3112,7 @@ export async function tick(db, ctx) {
   // FU8 (D-4347 (history-planted-entries-never-wedge)): never over a planted entry, which the drain refused and counted; a
   // file or a dangling link there failed this mkdir on every pass (FP3).
   if (dirKind(ctx.paths.spool) !== 'other') mkdirDurable(ctx.paths.spool);
+  ensureHistoryDirs(db, ctx.home);
   if (ctx.parsed.rosterUnreadable) bump(db, 'roster_unreadable');
 }
 
@@ -3200,6 +3216,7 @@ export function holdPass(home, P, word, now, out) {
   const unwritable = runJournalHalf(home, idsFromFiles(P), now);
   out(`history-sweep: ${word}`);
   if (unwritable) out('history-sweep: journal-unwritable');
+  withdrawCards(null, home, { arm: 'hold', word }, out);   // W1-B3 (ruling RC2): no DB is open, so the count is a line
   return holdExit(word);
 }
 
@@ -3486,6 +3503,7 @@ async function scheduledPassBody(parsed, deps, out, P, now, role) {
       // drained (journal first) — the journal half observes only, until a binding writes the token.
       runJournalHalf(home, null, now);
       out('history-sweep: held');
+      withdrawCards(db, home, { arm: 'hold', word: 'held' }, out);   // W1-B3 (ruling RC2)
       return EXIT.OK;
     }
     const failedAtStart = counterOf(db, 'journal_write_failed');
@@ -3498,6 +3516,9 @@ async function scheduledPassBody(parsed, deps, out, P, now, role) {
     // D-4166 (history-cap-file): the cap is the operator file. capText (Task 14): an unreadable cap file is '' — malformed, so the default applies AND doctor WARNs (§9.3).
     const cap = capOf(capText(P.cap));
     const run = planRun({ historyOff: false, store: { act: 'open' }, free, sizeBytes, capGb: cap.gb, migration, recovering: isRecovering(db) });
+    // W1-B3 (ruling RC2, fail closed): the migrate, recover and hold arms never reach the card step, so each withdraws
+    // every prediction here, before it runs; the run arm decides in the tick, over the tick's own facts.
+    if (run.arm !== 'run') withdrawCards(db, home, { arm: run.arm, word: run.holdWord ?? 'held' }, out);
     if (run.arm === 'migrate') {
       // §6.11: a pass that migrates does nothing else but the journal half; the drain resumes next tick
       // against a store at this build's version.
@@ -4139,10 +4160,11 @@ export function floorProbeFor(dir, statfs) {
  *  binding's ids, and the injected parts a test may replace in-process: the boundary test from
  *  compact-card.mjs, the history-off probe, the parser, the free-space floor probe. pairIdx is this tick's
  *  redaction index; secretsStep's answer replaces the empty default. fts says whether this tick may index
- *  (ftsPrepare's tables). admitFile, budgetLeft and isBusy are this module's own, handed to derive.mjs, which imports nothing of the sweep (W1-B2 Task 8). */
+ *  (ftsPrepare's tables). admitFile, budgetLeft and isBusy are this module's own, handed to derive.mjs, which imports nothing of the sweep (W1-B2 Task 8).
+ *  readRegPresence is handed to card.mjs the same way: it names the sessions a card may be written for (W1-B3 Task 5). */
 export function makeIngestCtx(home, homes, nowMs, ids, floorProbe = FLOOR_ALWAYS_OK) {
   const off = historyPaths(home).off;
-  return { home, homes, nowMs, ids, isBoundaryLine, prepareLines, historyOff: () => existsSync(off), floorProbe, pairIdx: makePairIndex([]), fts: false, pendingReceiptState: { kind: 'measured', sessionUuids: new Set() }, admitFile, budgetLeft, isBusy };
+  return { home, homes, nowMs, ids, isBoundaryLine, prepareLines, historyOff: () => existsSync(off), floorProbe, pairIdx: makePairIndex([]), fts: false, pendingReceiptState: { kind: 'measured', sessionUuids: new Set() }, admitFile, budgetLeft, isBusy, readRegPresence };
 }
 
 // ---------------------------------------------------------------------------------------------
