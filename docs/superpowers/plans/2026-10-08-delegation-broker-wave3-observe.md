@@ -1419,3 +1419,27 @@ Found mid-wave (issued from the block above, taken in order; each defined in the
   - `ccrc-update`: W3-M28, 6 failed (14 after the fix round); W3-M31, 4 failed; W3-M39a–d, 2/2/2/1 failed (3/3/3/5 after the fix round); plus the fix round's mutants for the classifier pairs, exit 70, the fifth keep set and the `_upd_backup` order (capture before `_upd_backup_set`: 1 failed).
 
   This shows each row can fail. It does not show that each row failed for the intended reason before the code existed. Commits `a0c385acc`, `e07f315b6`.
+- **D-4645** — `bucket-durability-is-async` (Task 9): the plan fixes `DelegationBucketDurability.applyBucketResult(result): DelegationRecoveryState` and a synchronous `ingestAndApplyDelegationBucket`. Task 8's applier does file IO through one promise-chain queue: journal append and fsync, then the checkpoint's temp write, fsync, rename and directory fsync. So both are declared `Promise<DelegationRecoveryState>`. The pure `ingestDelegationBucket` stays synchronous and IO-free, and `CoordStore` is untouched. Commit `d101d1da9`.
+- **D-4646** — `bucket-results-carry-entries-not-records` (Task 9): this departure has five parts.
+  - **Entries, not records.** `DelegationBucketResult.accepted` carries `{entry: {kind:'evidence-accepted', event}}`, not `DelegationJournalRecordV1`. A record's sequence, `previousDigest`, `journalId`, `digest` and `acceptedAt` can be assigned only by the serialized applier under its lock: O1 lets no ID escape before durability, and no pure code reads a clock. `result.accepted[i].entry.event` reads as it would on a record.
+  - **The input state.** `DelegationBucketResult.state` is the input state, unchanged, because the next state is built under the applier's lock.
+  - **`endOffset`.** It is the offset just past the line's LF. Every journaled `eventId` now bakes that in.
+  - **Three added exports.** `readDelegationBucket`, `unreadableDelegationBucketResult` and `delegationBucketDurabilityOf` exist because `DelegationBucketInput` cannot express a failed read. Reader failures keep these reasons apart: absent, unreadable, capability absent, capability unmeasured, and vanished-unread.
+  - **`applicable`.** A required `applicable: boolean` on the result is false exactly for `input-invalid`. Both the adapter and the durability door refuse such a result before building anything, under one owner rule shared with the reader.
+
+  Commits `d101d1da9`, `9f86b3318`, `7ef520188`.
+- **D-4647** — `a-cursor-anchors-its-last-accepted-line` (Task 9): the vocabulary says "a bucket that shrinks or changes bytes before an already accepted offset is an unmeasured replacement". The fixed `DelegationBucketCursor` carries no content anchor, so it cannot detect this: a same-size rewrite in place, or a cut that regrows past the old size, reads as a clean measured read.
+  - **The anchor.** The cursor gains `anchor: {start, sha256} | null`. That is the start offset and SHA-256 (LF excluded) of the last complete line stepped over, accepted or refused, so the anchor always ends at the cursor.
+  - **The `replaced` flag.** The cursor also gains a structured, sticky `replaced: boolean`.
+  - **How a read checks it.** Every read starts at `anchor.start` (input field `readStart`, request field `anchorStart`) and re-reads that one line. It must find exactly one complete line ending at the cursor with the same hash. Otherwise the bucket is replaced: it is unmeasured and accepts nothing, from then on.
+  - **A cut below the cursor.** Both IO adapters answer a range read past the size as unreadable, so a cut below the cursor reaches ingestion through a `statMeasured` fallback.
+  - **The applier.** It ORs `replaced` with the durable row's.
+  - **Non-sticky gaps.** These keep a wrong window and an unprovable cursor apart from a replacement:
+    - `read-window-mismatch`;
+    - `cursor-unanchored`;
+    - `window-starved`.
+  - **A vanished bucket.** A listed bucket that answers ENOENT before it was read to its end is `bucket-vanished-unread`.
+  - **Known limit: earlier lines.** The anchor proves the last line only. A change to an earlier line that keeps every later byte in place is invisible; a row pins this. Such a change needs a foreign writer, because the hook appends with `O_APPEND` and prunes whole buckets.
+  - **Known limit: short refused lines.** A short refused line, such as a blank line, is weak evidence, but it falls inside an hour that is already unmeasured.
+
+  The checkpoint stays `v1`, because no cursor has shipped. Commits `9f86b3318`, `7ef520188`.
