@@ -5000,7 +5000,7 @@ things at that moment: it builds a SECOND card — the files this context was wo
 community and dependents read out of the same graph — and it MEASURES the compaction, writing one line to a
 per-session journal. Three arms of `ccd/session-hook.sh` do it, and **none of them opens a new output
 channel**: the card rides the one `additionalContext` envelope `SessionStart` already prints — the compact
-arm calls `_hook_emit_context "$CARD" "$CARD_COMPACT"` (`ccd/session-hook.sh:3012`), which appends the second
+arm calls `_hook_emit_context "$CARD" "$CARD_COMPACT"` (`ccd/session-hook.sh:3135`), which appends the second
 subject under its own `COMPACT_CARD_MAX_CHARS` ceiling (`:97`) before the single `jq -cn` print (`:103-105`) — and `PreCompact` and
 `PostCompact` print nothing at all. `PreCompact` decides whose transcript is compacting and publishes the
 working set, `SessionStart(compact)` serves the card once beside the graph card in that one envelope, and
@@ -5302,6 +5302,15 @@ stored but not searched. Exit 3 is "not found on this box" (for grep, not found 
 server-role box, or a box history was never installed on). The `ccrc-history` skill, installed
 into every rostered home beside the coordinator's, carries the whole exit table and tells a session
 when to recall.
+
+**The card line.** After a compaction of a session's main thread, its `SessionStart` context gains one
+line, directly above any compaction card, naming the leaf that compaction becomes and, when known, its parent:
+`History: node L03a9c1… (this compaction) · parent N7c1e2f… · ~/.local/bin/ccrc history describe L03a9c1`.
+The sweep writes that prediction under `~/.ccrc/history/card/` once it has read the session's transcript
+to its end, and the hook only reads it, so `describe` answers exit 3 until the sweep has indexed that
+compaction. A subagent's compaction, `~/.ccrc/history-off` and a session whose recall is switched off
+get no line. On a box with history the compaction card renders 513 characters shorter, to leave the
+line its room, and the sweep counts from each transcript whether the line arrived and named its leaf.
 
 **Box verbs and operator verbs.** `ccrc history status` reports the store, its lag, size, cap, free
 space and journal; doctor's `history` check reads it. Its `spool-planted` warning counts each node at

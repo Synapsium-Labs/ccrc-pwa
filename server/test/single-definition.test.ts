@@ -5094,7 +5094,11 @@ describe('ccrc history: every vocabulary is declared once, in lib.mjs, and bound
     'SCOPE_KINDS', 'GREP_SORTS', 'REF_KINDS', 'FAN_IN', 'RECOVER_PHASES', 'FTS_SHADOWS', 'READ_VERBS',
     'INDEXED_PROVENANCE', 'VERB_TABLES', 'EXPAND_LABEL',
     // W1-B2 Task 7A (spec rev 3.5): the belt's words more than one module reads or writes.
-    'BELT_COUNTERS', 'BELT_META', 'BELT_NODES_STEP', 'REDACT_SOURCES_META'] as const;
+    'BELT_COUNTERS', 'BELT_META', 'BELT_NODES_STEP', 'REDACT_SOURCES_META',
+    // W1-B3: every constant the card line adds to lib, declared there once (Task 11 binds the hook's spellings).
+    'CARD_LINE_PATTERN', 'CARD_LINE_MAX', 'CARD_DIR', 'SCOPE_DIR', 'CARD_DESCRIBE_CMD',
+    'CARD_MEASURE_ROWS', 'CARD_MEASURE_MAX_WAIT_MS', 'CARD_ATTACHMENT_MAX_BYTES', 'PURGED_FILES_GRACE_MS',
+    'SCOPE_MARKER_MAX_AGE_MS', 'CARD_CONSUMED_SCOPES', 'CARD_WITHDRAW_REASONS'] as const;
   /** The declaration scan's corpus: the history modules and every deploy/ and shared/ `.mjs`. NOT the rest of
    *  ccd/: `ccd/compact-card.mjs` declares an `EXIT` of its own (its exit codes, a different module's). */
   const DECL_CORPUS = [...new Set([...HISTORY_MJS, ...mjsUnder(path.join(ccrcRoot, 'deploy')), ...mjsUnder(path.join(ccrcRoot, 'shared'))])];
@@ -5200,7 +5204,7 @@ describe('ccrc history: every vocabulary is declared once, in lib.mjs, and bound
     expect(lines[0]).toMatch(/\bSTORE_DB_REL\s*=\s*['"]\.ccrc\/history\/db['"]/);
   });
 
-  it('COVERAGE is this-box, and the word is a literal in lib.mjs alone; CARD_PREFIX is declared (its hook half lands in B3)', async () => {
+  it('COVERAGE is this-box, and the word is a literal in lib.mjs alone; CARD_PREFIX is declared (its hook half: the card line describe below)', async () => {
     const l = await lib();
     expect([...(l['COVERAGE'] as readonly string[])]).toEqual(['this-box']);
     expect(HISTORY_MJS.filter((f) => /['"`]this-box['"`]/.test(stallCode(f))).map(rel)).toEqual(['ccd/history/lib.mjs']);
@@ -5922,5 +5926,90 @@ describe("one 'tmux unreachable' sentence (design-system wave)", () => {
       expect(readFileSync(path.join(ccrcRoot, f), 'utf8'), f)
         .toMatch(/substrateFaultT(ext|itle)\(/);
     }
+  });
+});
+
+// CCRC HISTORY W1-B3 (spec 2026-10-05 §8.6, §9.11 O14): the card line's HOOK HALF. APPENDED after the last
+// describe, with no import line, for the reason the blocks above state; lib is imported dynamically. The hook
+// cannot import lib.mjs (no fork on the hook's path), so it spells the grammar, the cap and the two directory
+// names once each, in bash, and this binds every one of those spellings to lib's single definition.
+describe('ccrc history card line: the hook and lib spell one grammar, one cap and one prefix (spec 2026-10-05 §8.6, O14)', () => {
+  const HOOK_SH = path.join(ccrcRoot, 'ccd', 'session-hook.sh');
+  type Lib = Record<string, unknown>;
+  const lib = async (): Promise<Lib> => (await import('../../ccd/history/lib.mjs')) as unknown as Lib;
+  /** The value of a top-level `NAME='…'` or `NAME="…"` or `NAME=<digits>` assignment, from code lines only. */
+  const assigned = (lines: readonly string[], name: string): string[] =>
+    lines.flatMap((l) => {
+      const m = new RegExp(`^${name}=(?:'([^']*)'|"([^"]*)"|([0-9]+))$`).exec(l);
+      return m ? [m[1] ?? m[2] ?? m[3]!] : [];
+    });
+
+  /** The hook spells its bracket ranges as explicit lists (D-5064: a range widens under a UTF-8 collating locale).
+   *  This maps exactly those three lists back to lib's ranges and nothing else, so a list that loses or gains a
+   *  character is no range and still differs from lib's pattern. */
+  const lists = (re: string): string =>
+    re.replaceAll('[0123456789abcdef]', '[0-9a-f]').replaceAll('[0123456789]', '[0-9]').replaceAll('[123456789]', '[1-9]');
+
+  it('CONTROL: the extractor reads each quoting, and refuses an indented or commented line', () => {
+    expect(assigned(["A='x y'", 'A="$HOME/z"', 'A=512'], 'A')).toEqual(['x y', '$HOME/z', '512']);
+    expect(assigned(["  A='x'", "# A='x'", "AB='x'"], 'A')).toEqual([]);
+    expect(codeLines(HOOK_SH).some((l) => l.startsWith('HISTORY_CARD_RE=')), 'the hook defines the grammar').toBe(true);
+  });
+
+  it('the hook\'s one HISTORY_CARD_RE literal is lib\'s CARD_LINE_PATTERN, character for character, and begins with CARD_PREFIX', async () => {
+    const l = await lib();
+    const defs = assigned(codeLines(HOOK_SH), 'HISTORY_CARD_RE');
+    expect(defs, 'HISTORY_CARD_RE is assigned once, single-quoted').toHaveLength(1);
+    expect(lists(defs[0]!)).toBe(l['CARD_LINE_PATTERN']);
+    expect(defs[0]!.startsWith(`^${String(l['CARD_PREFIX'])}`)).toBe(true);
+    expect((l['CARD_LINE_RE'] as RegExp).source).toBe(new RegExp(lists(defs[0]!)).source);
+  });
+
+  it('CONTROL: the list normaliser maps exactly the three lists, so a list that lost a character still differs from lib\'s ranges', () => {
+    expect(lists('[0123456789abcdef]{8}[0123456789]x[123456789]')).toBe('[0-9a-f]{8}[0-9]x[1-9]');
+    expect(lists('[012345678abcdef]')).toBe('[012345678abcdef]');
+    expect(lists('[0123456789abcdeg]')).toBe('[0123456789abcdeg]');
+    expect(lists('[0-9a-f]'), 'a range is not rewritten: it stays a range, which the reader scan refuses').toBe('[0-9a-f]');
+  });
+
+  it('the reader\'s UUID grammar is lib\'s UUID_RE (the lists, normalised), so the hook and the CLI accept one family of generations and session ids', async () => {
+    const l = await lib();
+    const lines = codeLines(HOOK_SH).filter((x) => /^\s*local uuid_re='/.test(x));
+    expect(lines, 'uuid_re is assigned once, in the reader').toHaveLength(1);
+    const re = /local uuid_re='([^']*)'/.exec(lines[0]!)![1]!;
+    expect(new RegExp(lists(re)).source).toBe((l['UUID_RE'] as RegExp).source);
+  });
+
+  it('`History: ` is spelled on one hook code line, the grammar\'s', () => {
+    expect(codeLines(HOOK_SH).filter((x) => x.includes('History: ')).map((x) => x.slice(0, x.indexOf('=')))).toEqual(['HISTORY_CARD_RE']);
+  });
+
+  it('HISTORY_CARD_MAX is CARD_LINE_MAX, and the read and the reserve are spelled from it, never as 512 or 513', async () => {
+    const l = await lib();
+    const code = codeLines(HOOK_SH);
+    expect(assigned(code, 'HISTORY_CARD_MAX')).toEqual([String(l['CARD_LINE_MAX'])]);
+    expect(code.filter((x) => /(?<![\w.])51[23](?![\w.])/.test(x)), 'a hand-kept 512 or 513').toEqual([`HISTORY_CARD_MAX=${String(l['CARD_LINE_MAX'])}`]);
+    const spelled = code.filter((x) => x.includes('HISTORY_CARD_MAX + 1'));
+    expect(spelled.length, 'the read and the reserve').toBe(2);
+    expect(spelled.some((x) => /\bread -r -N "\$\(\( HISTORY_CARD_MAX \+ 1 \)\)"/.test(x)), 'the read').toBe(true);
+    expect(spelled.some((x) => /HISTORY_CARD_RESERVE=\$\(\( HISTORY_CARD_MAX \+ 1 \)\)$/.test(x)), 'the reserve').toBe(true);
+  });
+
+  it('the card and scope directories are spelled once each, under HISTORY_ROOT_REL, named as lib names them', async () => {
+    const l = await lib();
+    const code = codeLines(HOOK_SH);
+    const root = String(l['HISTORY_ROOT_REL']);
+    for (const [name, dir] of [['HISTORY_CARD_DIR', l['CARD_DIR']], ['HISTORY_SCOPE_DIR', l['SCOPE_DIR']]] as const) {
+      expect(assigned(code, name), name).toEqual([`$HOME/${root}/${String(dir)}`]);
+      expect(code.filter((x) => x.includes(`${root}/${String(dir)}`)), `${root}/${String(dir)} spelled twice`).toHaveLength(1);
+    }
+    expect(code.filter((x) => x.includes(`${root}/${String(l['RECALL_OFF_DIR'])}/`)), 'the recall-off path, once').toHaveLength(1);
+  });
+
+  it("SCOPE_MARKER_MAX_AGE_MS is the hook's COMPACT_CARD_MAX_AGE in ms: the window a consumption's marker is read within is the one the reader serves within (ruling RC3)", async () => {
+    const l = await lib();
+    const age = assigned(codeLines(HOOK_SH), 'COMPACT_CARD_MAX_AGE');
+    expect(age, 'COMPACT_CARD_MAX_AGE is assigned once, in whole seconds').toHaveLength(1);
+    expect(Number(age[0]) * 1000).toBe(l['SCOPE_MARKER_MAX_AGE_MS']);
   });
 });
