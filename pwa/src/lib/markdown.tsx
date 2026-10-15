@@ -95,8 +95,14 @@ export function openExternal(e: React.MouseEvent, href: string | undefined): voi
  *  involved), and with them removed every probed shape is linear (a snapshot of 2026-10-14 on a loaded box, load average about 40: xml 167 ms per 64 KiB at most; markdown, which
  *  embeds xml, about 650 ms on its worst shape, `<a>` in lines, which is why it has a page budget of its own,
  *  `DOCS_HIGHLIGHT_MARKDOWN_PAGE_MAX_CHARS`; the claim it supports is the GROWTH, linear from 8 to 128 KiB, not the figures). What it costs: script and style contents are uncoloured (one real 375-character html fence holds
- *  `<script` or `<style>`); markup outside them is coloured as before. `xml` and `markdown` then reach no bounded
- *  grammar, so they keep the 64 KiB cap. */
+ *  `<script` or `<style>`); in an `xml` or html block, markup outside them is coloured as before. Two grammars hand
+ *  tags to `xml` with a kept continuation, so an unclosed `<script>` or `<style>` reaches past its own contents
+ *  there (review 460 F9, measured): in a `markdown` block, chat's included, every later inline tag of the block (`<a
+ *  href>`, `<b>`, after a later heading too) renders as a bare `language-xml` span with no tag, name or attribute
+ *  colour, where stock xml coloured them, until a closing `</script>` or `</style>`; in `typescript`'s JSX, the rest
+ *  of the block after an unclosed `<script>` is plain, where stock coloured it as javascript. No markdown fence of
+ *  `docs/superpowers` holds the shape, and chat's golden files are unchanged. `xml` and `markdown` then reach no
+ *  bounded grammar, so they keep the 64 KiB cap. */
 const xmlWithoutSubLanguages: LanguageFn = (h) => {
   const def = xml(h);
   const seen = new Set<object>();
