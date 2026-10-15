@@ -42,7 +42,8 @@ body,
    `transparent`, so a container's own ground shows through and no ground is
    minted. Phones keep their overlay scrollbars. Chrome lets these standard
    properties win over `::-webkit-scrollbar`, so a strip that hides its bar
-   says `scrollbar-width: none` too (`.term-keys-seq`). Storybook's
+   says so with `scrollbar-width: none` (the drawer's `.term-wrap-row--table`);
+   no `::-webkit-scrollbar` rule is left in the tree. Storybook's
    preview.css states this same rule, bound by base-defaults.test.ts. */
 html {
   accent-color: var(--accent);

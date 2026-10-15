@@ -285,7 +285,7 @@ const CONTROL_FILES = files.filter((f) => RENDERS_CONTROL.test(f.code));
 
 describe('the ring draws: nothing on a ringed control hides it or adds a second cue', () => {
   it('found carriers and control files to compile — neither half is vacuous', () => {
-    // Measured: FOCUS_RING and the seven carriers built from it, and the
+    // Measured: FOCUS_RING and the eight carriers built from it, and the
     // control-rendering files the census above counts.
     expect(CARRIERS.map(([name]) => name)).toEqual(expect.arrayContaining(
       ['FOCUS_RING', 'TEXT_INPUT', 'SELECT', 'BARE_ROW', 'LIST_ROW', 'BACK_BUTTON', 'DOOR']));
