@@ -1032,6 +1032,51 @@ describe('Review 450 F3: the no-listing page\'s fetch note stops counting at the
     expect(vi.getTimerCount()).toBe(idle);
   });
 
+  it('review 460 F13: a render at exactly the end of the wait shows no soon note and never "again in 0s"', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000_000);
+    // The page's clock ticks every second from when it was switched on: note when, so that the second answer's wait can
+    // end on one of its ticks (the render at exactly `until` is the case; a tick is the only render that can land there).
+    let phase = 0;
+    const fakeSetInterval = globalThis.setInterval;
+    globalThis.setInterval = ((fn: () => void, ms?: number) => {
+      if (ms === 1000) phase = Date.now();
+      return fakeSetInterval(fn, ms);
+    }) as typeof setInterval;
+    try {
+      const f = fakeLoaders({ tree: failedAnswer('unresolved-ref') });
+      let until = 0;
+      f.refresh.mockResolvedValueOnce(tooSoon(2000)).mockImplementationOnce(async () => {
+        const landed = Date.now();
+        // A whole number of seconds after the clock's start, at least 3 s after the answer lands.
+        const wait = 3000 + ((((phase - landed) % 1000) + 1000) % 1000);
+        until = landed + wait;
+        return tooSoon(wait);
+      });
+      const { container } = open('/docs/demo?ref=ws/a', f);
+      await advance(10);
+      fireEvent.click(screen.getByRole('button', { name: 'Fetch from origin' }));
+      await advance(10);
+      await advance(2100);
+      expect(f.refresh).toHaveBeenCalledTimes(2);
+      expect(until).toBeGreaterThan(0);
+      expect((until - phase) % 1000).toBe(0);
+      // One millisecond before the end the note still counts, at 1s.
+      await advance(until - 1 - Date.now());
+      expect(Date.now()).toBe(until - 1);
+      expect(noteText(container)).toBe('fetched moments ago; again in 1s');
+      // The clock tick that lands on exactly `until` renders with now === until: no soon note, no "again in 0s".
+      await advance(1);
+      expect(Date.now()).toBe(until);
+      expect(noteText(container)).toBeUndefined();
+      expect(container.textContent).not.toContain('again in');
+      await advance(5000);
+      expect(noteText(container)).toBeUndefined();
+      expect(container.textContent).not.toContain('again in');
+    } finally {
+      globalThis.setInterval = fakeSetInterval;
+    }
+  });
 });
 
 describe('Review 439 F3: the not-contained banner describes the pin, and a Re-list through the visit clears it', () => {
