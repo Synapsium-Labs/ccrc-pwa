@@ -350,7 +350,7 @@ release tag their only variable. The agent refuses to bind `0.0.0.0` or `::`; `C
 | `server/` | Fastify (TS ESM), one systemd user unit. Owns `~/.ccrc/coord.db` — programs and runs, mail, claims and asks, the deviation ledger, a mirror of ccd's lifecycle journal, central pool edges and the update control plane — via `node:sqlite` with WAL and migrations that refuse to start rather than open empty. |
 | `pwa/` | React + Vite installable PWA. Builds into `server/dist-pwa`, which the server serves at `/`. |
 | `agent/` | A small whitelisted exec/file/tail/pty surface over a bearer-token WebSocket. Needed only for the two-box split; local mode never touches it. |
-| `ccd/` | The bash layer: `ccd` (the fleet host's sessions), `ccrc` (install, update, doctor and every box's other lifecycle verbs), the Claude Code hook that reports each session's state and its installer, the coordinator, worker and reviewer skills, and the helpers the timers run. |
+| `ccd/` | The bash layer: `ccd` (the fleet host's sessions), `ccrc` (install, update, doctor and every box's other lifecycle verbs), the Claude Code hook that reports each session's state and its installer, the coordinator, worker, reviewer and history skills, and the helpers the timers run. |
 | `shared/` | The wire vocabulary — server↔agent and server↔PWA types — imported by the server, the agent and the PWA alike. |
 | `deploy/` | systemd units and env templates, the release builders (`build-release.sh`, `release-main.sh`, `release-stable.sh`), the provenance verifier with its vendored Sigstore root, the read-only program instruments (`measure-*.py`), and `deploy.sh`, the fallback that pushes a working tree onto an already-installed box. |
 | `install.sh` | The bootstrap: build a checkout, or fetch and verify a release, then hand off to `ccrc install`. |
@@ -447,7 +447,7 @@ or `launchctl` (macOS), and without a `python3` that runs in isolated mode (`-IS
 `tmux` and `flock` checks and wants a `python3` that actually runs (the Xcode Command Line Tools).
 Mid-install it dies by name on `rsync` (placing the tree), on `npm ci --omit=dev` (no registry, or
 on Linux no compiler for `node-pty`) and — on every role but `server` — on `python3 -m venv`/`pip`
-for the pinned graph engine and on `diff`, which all four skill installers need. Everything else is
+for the pinned graph engine and on `diff`, which all five skill installers need. Everything else is
 measured by the `ccrc doctor` run the install ends with, whose exit code is the install's. The full
 list, with the macOS additions, is "Requirements", above.
 
@@ -460,7 +460,7 @@ roster declares one `upstream`-kind account, so a fresh install writes none), an
 `ccrc doctor` — the install's own exit code is doctor's. **Green means the box is ready**; the PWA
 answers at `http://127.0.0.1:7788/`. Re-running either script converges rather than damaging an
 existing install. `rsync` and `diff` are hard by-name dependencies of `ccrc install` — `rsync` places
-the tree, and `diff` is what all four skill installers (coordinator, worker, reviewer, graphify)
+the tree, and `diff` is what all five skill installers (coordinator, worker, reviewer, history, graphify)
 compare a config dir against — with **no doctor check of their own** (`skills` only WARNs that it
 could not compare without `diff`); absent, each refuses naming the package rather than failing
 opaquely mid-copy, and a refused skill install is fatal to the whole verb. `cmp` is the third of the
@@ -479,6 +479,7 @@ way; the refusal on a missing `diff` comes from the skill installers it then run
 | `ccd-cap-scopes.timer` | all | 60 s | caps each new tmux pane scope's memory | — |
 | `ccd-pool-sync.timer`, `ccd-update-sync.timer` | fleet | 60 s | pull the account-pool and update projections from the server | — |
 | `ccrc-update-watchdog.timer` | server, both | 60 s | re-measures a self-update that died with its updater ("Releases") | — |
+| `ccd-history-sweep.timer` | fleet, both | 2 min | copies every rostered home's transcripts verbatim, secrets a session printed included, into the store `ccrc history` reads ("Session history", below) | `~/.ccrc/history-off` |
 | `ccd-graph-sweep.timer` | fleet, both | 15 min | refreshes per-tree code graphs | `~/.ccrc/graph-sweep-paused` |
 | `ccd-account-health.timer` | fleet, both | 15 min | probes each setup-token account's credential, spending no tokens | `~/.ccrc/account-health-paused` |
 | `ccd-telemetry-keepalive.timer` | fleet, both | 15 min | one minimal turn on an idle measured account (below) | `~/.ccrc/keepalive-paused` |
@@ -491,7 +492,7 @@ way; the refusal on a missing `diff` comes from the skill installers it then run
 The role's service and `ccd-cap-scopes.timer` must enable or the install fails; any other timer that
 will not enable prints the `systemctl --user enable --now` line to run, is named by its unit among the
 closing line's degraded steps (`install: done — converged with N degraded steps (…)`), and the install
-carries on. A `stable` build can predate some of these units; `ccrc version` says what a box runs. Also running on `fleet` and `both` boxes, outside the table: `ccd-history-sweep.timer` (every 2 min), which copies session text verbatim, secrets a session printed included, into `~/.ccrc/history`; its pause file is `~/.ccrc/history-off`. A rollback to a build with no `ccd/history/` leaves this timer enabled and failing every 2 minutes (the store is untouched): run `systemctl --user disable --now ccd-history-sweep.timer` on that box, as the timer unit's header says; the next install of a build with history re-enables it.
+carries on. A `stable` build can predate some of these units; `ccrc version` says what a box runs. A rollback to a build with no `ccd/history/` leaves `ccd-history-sweep.timer` enabled and failing every 2 minutes (the store is untouched): run `systemctl --user disable --now ccd-history-sweep.timer` on that box, as the timer unit's header says; the next install of a build with history re-enables it.
 `ccrc expose duckdns` adds `ccrc-ddns.timer` (every five minutes; on macOS the launchd job
 `app.ccrc.ccrc-ddns`). `deploy.sh agent` arms the fleet set minus `ccd-update-sync` and the
 `ccrc-codex-usage@<id>.timer` instances — it places that template and enables none; `ccrc install` does,
@@ -513,7 +514,7 @@ PWA's terminal drawer — and `~/.claude/statusline-command.sh` with ccrc's stat
 that copy. The hook installer points each rostered home's `statusLine` at that script only where
 none is set; a home with a status line of its own keeps it, and reports no `~/.cc-limits` telemetry
 unless that line runs ccrc's script. Beyond those two files, every rostered home gets ccrc's managed
-hook entries in its `settings.json` and four skills (`ccrc-coordinator`, `ccrc-worker`, `ccrc-reviewer`
+hook entries in its `settings.json` and five skills (`ccrc-coordinator`, `ccrc-worker`, `ccrc-reviewer`, `ccrc-history`
 and graphify's) — on a fresh box that home is your own `~/.claude`, so the skills are listed in every
 Claude Code session you start there, while the hook entries act only inside a `ccd` session's
 `cc-<id>` tmux session and exit at once anywhere else.
@@ -568,7 +569,7 @@ under "Attention, notifications and answering" below.
 summary line; it exits 1 when anything FAILs (a WARN does not), which is the exit code `ccrc install`
 ends with. A `server`-role box SKIPs the checks that measure per-account or per-session state — `wrappers`,
 `skills`, `accounts`, `pools`, `memory`, `routing`, `codex`, `graphify`, `graphify-path` (D-3111),
-`timeout`, `model-default`, `transcripts`, and `jq_regex` (no session hook runs there).
+`timeout`, `model-default`, `history`, `transcripts`, and `jq_regex` (no session hook runs there).
 
 | checks | what they measure |
 |---|---|
@@ -588,6 +589,7 @@ ends with. A `server`-role box SKIPs the checks that measure per-account or per-
 | `transcripts` | every registry row's uuid against its transcript, read by the one `continued-in` rule `ccd` and the server share: a WARN names the sessions reading a transcript Claude Code has superseded (a supervised one clears on its next supervise tick; a stopped or archived one is followed when it is next resumed) and, apart, a session whose marker names a successor never written (it clears at that job's first line, or at the first prompt the session answers on its own transcript; the row's wrapper is named, because `<wrapper> agents` lists only that account's jobs); rows it could not measure (at neither direct spelling, unreadable, or a registry row it cannot read) are counted apart inside the PASS, never claimed clean; a FAIL when `~/.cc-sessions` is not a readable, searchable directory |
 | `pool-sync`, `update-sync` | a fleet box's two pulled projections, present and in lease |
 | `graphify`, `graphify-path` | the pinned graph engine, its skill and the sweep's last census; `graphify` on `PATH` resolving to that engine |
+| `history` | on a `fleet` or `both` box with the history sweep installed (SKIP elsewhere): the last tick and the index lag, the cap and free space, the journal, the export's due and overdue counts and a recovery in progress, each WARN and FAIL with its remedy, all read from `ccrc history status --json` |
 | `build`, `provenance`, `fleet` | the running server's build against the stamp; whether this install was verified (never a FAIL); in remote mode, whether the two boxes agree |
 | `box-token` | the box token's lifecycle on each box (the server's token and state files; the fleet's copy and its last sync). The FAIL and WARN arms are on: a FAIL counts in doctor's exit code and a WARN does not. A fresh box that was never handed a value (no fleet generation file and no sync report that records a value written or carries the generation the box held, or no server state file and none of the server's traces of a value: its retired list, its previous value, a set-aside copy, or, on a box whose server writes the fleet file itself, that file or its generation file) has that finding read PASS with its sentence, never WARN or FAIL: the server mints at its first boot, and its next rotation hands the fleet one. A box that once held a value and lost it is a FAIL |
 
@@ -1136,8 +1138,8 @@ removes `~/.ccrc`'s config (roster, identity, `ccrc.env`, `build.json`, …) and
 a session's prose is not configuration) unless `--purge-memory` is also given, which extends `--purge`
 to remove it too; it likewise preserves `~/.ccrc/history` (the session-history store: verbatim session text, which Claude Code's retention may already have deleted elsewhere) and the `~/.ccrc/history-*` operator files, which only `--purge-history` (refused without `--purge`) removes, and `--purge-memory` never reaches them; never worktrees, never tmux state. It also removes graphify's skill from every rostered home,
 ccrc's `~/.local/bin/graphify` link and the Codex runtime under `~/.ccrc/runtime/codex`, and stops any Codex lane
-tier it can prove is that lane's own. It leaves, for you to remove by hand, the three ccrc skills — `skills/ccrc-coordinator`,
-`skills/ccrc-worker`, `skills/ccrc-reviewer` — in each account home, a hand-placed `~/.local/bin/ccrc-api`, and
+tier it can prove is that lane's own. It leaves, for you to remove by hand, the four ccrc skills — `skills/ccrc-coordinator`,
+`skills/ccrc-worker`, `skills/ccrc-reviewer`, `skills/ccrc-history` — in each account home, a hand-placed `~/.local/bin/ccrc-api`, and
 the `ccrc-ddns` units `ccrc expose duckdns` installed, whose timer keeps re-pointing the DNS record (after
 `--purge` removes `~/.ccrc/exposure.env` it fails every five minutes instead —
 `systemctl --user disable --now ccrc-ddns.timer` first).
@@ -1351,7 +1353,7 @@ without it neither half of ccrc runs:
 | File | Owner | Read by | Missing ⇒ |
 |---|---|---|---|
 | `~/.ccrc/accounts.json` | **you** — ccrc seeds it once and never overwrites it on its own; `ccrc account` edits it only when you run it | the server, at boot (`loadConfig` → `loadRoster`, `server/src/config.ts`) | the server **refuses to boot** (`RosterError`, naming the remedy) rather than run against a roster that is not the box's |
-| `~/.ccrc/accounts.sh` | **ccrc** — regenerated and replaced wholesale by every `ccrc install` (and so every `ccrc update`), every roster change `ccrc account` makes, and every agent deploy | `ccd` on **every invocation**; also the agent (its roster fingerprint, below), the statusline hook, the `ccrc-codex` launcher, `ccd-account-auth`, the usage, temp-dir and graph sweeps, the telemetry keepalive, `ccrc account`, doctor, and every installer (`install-session-hooks.sh`, `install-coordinator-skill.sh`, the worker, reviewer and graphify skill installers) | `ccd` dies (`ccd: no account roster at …`) and every installer `exit 1`s |
+| `~/.ccrc/accounts.sh` | **ccrc** — regenerated and replaced wholesale by every `ccrc install` (and so every `ccrc update`), every roster change `ccrc account` makes, and every agent deploy | `ccd` on **every invocation**; also the agent (its roster fingerprint, below), the statusline hook, the `ccrc-codex` launcher, `ccd-account-auth`, the usage, temp-dir, graph and history sweeps, the telemetry keepalive, `ccrc account`, doctor, and every installer (`install-session-hooks.sh`, `install-coordinator-skill.sh`, the worker, reviewer, history and graphify skill installers) | `ccd` dies (`ccd: no account roster at …`) and every installer `exit 1`s |
 
 `accounts.sh` is a pure projection of `accounts.json` — `deploy/gen-accounts.mjs`
 produces it (`CCRC_ACCOUNTS`, `CCRC_HOME_ABLE`, `CCRC_MEASURED`,
@@ -3156,7 +3158,7 @@ honest boundary — this section covers only what that one does not: the install
 lane and the skills' client, the PWA surfaces, the disaster-recovery drill, the
 Build 4 dogfood runbook, cross-repo programmes, and workspace holds.
 
-**All three skills ship to every rostered account's config dir.** The
+**All four skills ship to every rostered account's config dir.** The
 coordinator's protocol is now a trio: its worker counterpart is the
 `ccrc-worker` skill (`ccd/worker-skill/SKILL.md`, seventeen clauses pinned by
 `server/test/worker-skill.test.ts`), and its reviewer counterpart is the
@@ -3166,16 +3168,16 @@ workspace and reports — it never rules. Neither carries a `references/` of
 its own — both point at the coordinator's — so each must land *beside* it,
 never instead of it, and never first. Skills resolve per `CLAUDE_CONFIG_DIR`,
 and a session's account drifts on swap — so `ccd/install-coordinator-skill.sh`,
-`ccd/install-worker-skill.sh` and `ccd/install-reviewer-skill.sh` each install
-into *every* config dir the roster names, in that order — coordinator, then
-worker, then reviewer — the same list
-`install-session-hooks.sh` uses. There is no hooks-able subset — that concept
-existed only while the installers carried a hand-typed `homes=(…)` array; all
-four now `source` the generated `~/.ccrc/accounts.sh` and `continue` past any
-config dir that is absent, which is what makes "every account" the safe answer
-rather than a broader one. No list is trusted: `install-session-hooks.test.ts`,
-`install-coordinator-skill.test.ts`, `install-worker-skill.test.ts` and
-`install-reviewer-skill.test.ts` each RUN their installer with no
+`ccd/install-worker-skill.sh` and `ccd/install-reviewer-skill.sh` each install into *every* config dir the roster names, in that
+order — coordinator, then worker, then reviewer — the same list
+`install-session-hooks.sh` uses; the fourth, `ccd/install-history-skill.sh`, installs into the same dirs and has no place in
+that order (below). There is no hooks-able subset — that concept
+existed only while the hooks installer and the first three skill installers
+carried a hand-typed `homes=(…)` array; all five of these now `source` the generated
+`~/.ccrc/accounts.sh` and `continue` past any config dir that is absent, which is what makes
+"every account" the safe answer rather than a broader one. No list is trusted: `install-session-hooks.test.ts`,
+`install-coordinator-skill.test.ts`, `install-worker-skill.test.ts`,
+`install-reviewer-skill.test.ts` and `install-history-skill.test.ts` each RUN their installer with no
 `--homes` argv against a fixture home holding a config dir per rostered
 account, and assert every one of them was touched (the older source-text pin in
 `wrapper-roster-fixture.test.ts` went away with the array it was reading).
@@ -3185,8 +3187,12 @@ box, which hosts no sessions, skips it), idempotently, backing up anything it
 replaces; doctor's `skills` check measures every home against the shipped tree,
 and `ccrc doctor --fix` re-runs the same installers. That lane is what makes
 "place the coordinator — or a worker — like any other session" safe.
+A fourth skill, `ccrc-history` (`ccd/history-skill/`, installed by `ccd/install-history-skill.sh`),
+rides the same two lanes into the same homes and teaches a session the `ccrc history` recall verbs
+("Session history", below). It points into no other skill's tree, so it has no place in that order,
+and its MIT notice, `LICENSE.lossless-claw`, is copied into every home beside its `SKILL.md`.
 
-**None of the three is a subagent's to load, and the hook now enforces it (D-4934).** Each skill's
+**None of the three role skills (`ccrc-coordinator`, `ccrc-worker` and `ccrc-reviewer`; not `ccrc-history`) is a subagent's to load, and the hook now enforces it (D-4934).** Each skill's
 description says "Never use it inside a subagent": a session started by another session's Agent tool or a
 workflow `agent()` call returns its report to its parent, and loading one of these makes it act as the
 session instead (ack mail, take claims, send wave-done or review-done, open or dispatch runs, all under
@@ -3376,8 +3382,8 @@ program's first run:
 1. The token is on both boxes: `ls -l ~/.cc-secrets/ccrc-mail.token` on the
    fleet host and `~/.ccrc/mail.token` on the server, each `-rw-------`. Do not
    `cat` either one.
-2. `ls ~/.claude*/skills/ccrc-{coordinator,worker,reviewer}/SKILL.md` lists THREE
-   paths per rostered account config dir. All three skills are placed in every
+2. `ls ~/.claude*/skills/ccrc-{coordinator,worker,reviewer,history}/SKILL.md` lists FOUR
+   paths per rostered account config dir. All four skills are placed in every
    home, by both lanes (`deploy.sh agent <host>`, and the `_inst_skills` step
    `ccrc install` and an installing `ccrc update` run), for the same reason: a
    session is placed with no pinned account, so a swap must never land a
@@ -5000,8 +5006,8 @@ working set, `SessionStart(compact)` serves the card once beside the graph card 
 `PostCompact` measures the summary and commits the journal line. No compaction MEASUREMENT reaches the server, the wire or
 the PWA: there is no compaction field on `FleetSession`, no chip, and no hookstate cache. The one thing that
 does cross is ccd's purge refusal vocabulary — `purge-refused`, `purge-incomplete` and
-`purge-mechanism-absent` (`shared/api.ts:7929-7931`), each with an operator sentence of its own at `:7981`,
-`:7989` and `:8002`, which the session History tab renders through `lcRefusalWord`
+`purge-mechanism-absent` (`shared/api.ts:7954-7956`), each with an operator sentence of its own at `:8006`,
+`:8014` and `:8027`, which the session History tab renders through `lcRefusalWord`
 (`pwa/src/session/HistoryTab.tsx:17`, rendered at `pwa/src/session/HistoryTab.tsx:61`). The journal is the whole deliverable, and reading it is a later
 plan's job.
 
@@ -5248,6 +5254,71 @@ own that sorts after `limits.conf` (an install or update rewrites `limits.conf` 
 across two samples (a throttled scope, not merely one over its `MemoryHigh`), and its `services` check
 warns when `ccd-cap-scopes.timer` is installed and stopped.
 
+### Session history: lossless recall (`ccrc history`)
+
+Claude Code compacts a long session's context into a summary, and deletes a transcript once its
+retention (`cleanupPeriodDays`, 30 days by default) has passed, so a session that needs an exact
+command, path, SHA or error from before its last compaction has nowhere left to read it. On a Linux
+`fleet` or `both` box, `ccd-history-sweep.timer` (every two minutes) copies every rostered home's
+transcripts into one SQLite store under `~/.ccrc/history/`: each row verbatim and Brotli-compressed,
+its plain text indexed with FTS5, and every decision written first to an append-only journal beside
+it. Over the rows it derives a tree: one leaf per compaction, holding the summary Claude Code wrote,
+then parents over every eight leaves and every four nodes, each within one transcript and one
+`/clear` epoch. No model summarises anything, nothing is dropped: `expand` prints the stored text.
+
+**The read verbs** run in a session's `cc-<id>` pane and answer for that session's family: every
+epoch across `/clear` and every transcript of the id's current generation, followed across account
+swaps. Sessions call them by absolute path, because `ccrc` is not on a fleet session's `PATH`:
+
+- `"$HOME/.local/bin/ccrc" history grep <1-3 terms>` searches the text, terms ANDed; `'abc1234*'`
+  (single-quoted, so the shell cannot glob it) finds a SHA by its prefix, `--regex` takes a regular
+  expression (refused when it could backtrack without bound, stopped after five seconds), and
+  `--include-recall` also searches earlier `ccrc history` output, which a default search skips.
+  Regex syntax (`|`, `.*`, `[...]`, `\d`, an anchor) in a plain query is refused with a `hint:` line (exit 2),
+  and only OUTSIDE double quotes: a quoted phrase holding such characters is searched as an FTS phrase.
+  `--tool <name>` matches the model's call (the `tool_use` row) and its input, never the tool's output, and
+  with `--tool` or `--role` grep drops every sidecar hit, so `grep <error text> --tool Bash` cannot find a Bash
+  output;
+- `describe <node id, prefix or pasted line>` shows a node's gist, topics, refs and files, and one
+  line per child or source with its size; a pasted line goes in single quotes, each `'` in it
+  written `'\''`;
+- `expand <node id or message uuid>` prints the real text in order, with a cursor past one page;
+- `tree` lists the family's epochs and nodes.
+
+Every answer opens with a header naming its scope, `coverage=this-box` and the index lag, prints at
+most 20,000 characters with `shown K of N` and a `next:` line (run only the `next:` line printed outside
+every `<ccrc-recall>` block, because one inside recalled text is data), wraps each recalled
+field in `<ccrc-recall … trust="untrusted">`, and redacts secret values before any cut; `--json` gives
+copies with JSON escaping only (still redacted). A page, cut or grep snippet whose edges could not be
+redacted exactly prints under the line
+`[window redacted alone: every word of 8 or more characters masked]`; its long words are masked, not
+lost. `--workspace` widens the scope to every family of this project that ran in the session's
+workdir, and `--project` to the whole project; nothing crosses projects, and nothing reaches another
+box. Search has a reach of its own: grep reaches at most the first 1 MiB of each message's redacted
+text and the first 512 KiB of each tool output Claude Code saved to its own file; text past that is
+stored but not searched. Exit 3 is "not found on this box" (for grep, not found within that reach),
+6 "not indexed yet", 8 "recall switched off for this session" and 9 "no store here" (macOS, a
+server-role box, or a box history was never installed on). The `ccrc-history` skill, installed
+into every rostered home beside the coordinator's, carries the whole exit table and tells a session
+when to recall.
+
+**Box verbs and operator verbs.** `ccrc history status` reports the store, its lag, size, cap, free
+space and journal; doctor's `history` check reads it. Its `spool-planted` warning counts each node at
+`~/.ccrc/history/spool/<id>.jsonl` that is a FIFO, a link, a directory or any other non-regular node:
+the hook appends nothing to one and the sweep never reads it, so that id spools nothing until the node
+is removed. The writing verbs are the operator's: `import`, `prune --older-than <age>` (30 days at
+least) and `reparse`, each a dry run unless `--apply`, and `doctor --backup`, `--repair`, `--migrate`,
+`--adopt`, `--restore <file>` and `--rebuild`. Each runs through the sweep's shim, one writer at a time
+(exit 4 while a pass holds the lock). Every `--apply` form and every `doctor` flag refuses inside a
+session (`CLAUDECODE` set), and all but the three that bind a store refuse under `~/.ccrc/history-off`.
+`prune --apply`, `--repair`, `--adopt`, `--restore`, `--rebuild` and `import --session <id> --file
+<path> --apply` also need a terminal outside every `cc-*` pane. These are speed bumps, not walls: the
+store holds verbatim session text, secrets included, and past Claude Code's retention it is that text's
+only copy. `doctor --backup` writes `db/backups/<UTC time>.db`; `--restore <file>` puts one back,
+`--rebuild` remakes a lost store from the journal, and until the sweep has replayed it every other
+writing verb refuses (`recovering`), bar the `--migrate` an older restored store needs first and the
+`--adopt` an unbound one needs.
+
 ---
 
 *Everything below is the internals reference — the architecture and the
@@ -5312,8 +5383,8 @@ you need to reason about one.*
   session's state), `install-session-hooks.sh` (the idempotent installer that
   registers it in every wrapper home) and `compact-card.mjs` (the compaction
   card's helper, run by the hook); `statusline-command.sh` and `tmux.conf`;
-  the coordinator, worker and reviewer skills (`coordinator-skill/`,
-  `worker-skill/`, `reviewer-skill/`) with their installers, and graphify's
+  the coordinator, worker, reviewer and history skills (`coordinator-skill/`,
+  `worker-skill/`, `reviewer-skill/`, `history-skill/`) with their installers, and graphify's
   installer with its default noise list; `ccrc-api`, the closed client
   sessions reach the coordination API through; the timer-driven helpers
   (`ccd-cap-scopes`, `ccd-pool-sync`, `ccd-update-sync`, `ccd-graph-sweep`,
@@ -5436,11 +5507,23 @@ the account roster names — each account's own config dir,
 sweeping its own managed entries and leaving anything else in `settings.json`
 untouched; every write is `jq`-gated and backed up to `~/ccrc-backups/<ts>/`.
 
+One open can still wait. Where `~/.ccrc/history/spool/` exists (a `fleet` or `both` box with ccrc
+history installed), the hook also appends a text-free line to `spool/<id>.jsonl` on a few events,
+and only when builtin tests find `spool/` a real directory and that path a regular file or nothing;
+any other node there gets no line. Bash has no redirection that refuses to follow a link or to
+block, so a FIFO swapped in between that test and the append blocks the hook until Claude Code
+kills it at its entry's timeout (below), losing that one event's spool line and hookstate write; a
+link swapped in the same way is followed.
+
 The managed entry is one command, `bash "$HOME/.cc-sessions/session-hook.sh"`,
 registered under every event the hook's `case` block handles — `PreToolUse`
 (matcher `*`), `PostToolUse`, `PermissionRequest`, `UserPromptSubmit`, `Stop`,
 `StopFailure`, `SubagentStart`, `SubagentStop`, `PreCompact`, `PostCompact`,
-`SessionStart` and `SessionEnd`; `Notification` is not among them. The installer's event list
+`SessionStart` and `SessionEnd`; `Notification` is not among them. Every managed entry but
+`SessionEnd`'s carries `"timeout": 600` (the installer's `HOOK_TIMEOUT_S`, Claude Code's own default
+for a command hook, so it moves no path's fail-open point and bounds the open above); `SessionEnd`'s
+carries none, because Claude Code runs `SessionEnd` hooks under its own 1.5 s budget, which a
+configured `timeout` would raise, and the spool append never runs there. The installer's event list
 and the hook's `case` arms are one set written twice, and `server/test/install-session-hooks.test.ts` derives the
 expected one from the hook's `case` block, because they once drifted and a
 `SessionStart` arm sat dead on the fleet for months (D-306). The installer also
@@ -6103,11 +6186,11 @@ Source files carry no per-file licence headers. Every file in this repository op
 comment explaining the reasoning behind its design, and a boilerplate header on top of that
 would compete with the thing the reader is actually there for. This section is the notice.
 
-**Third-party code.** A few helpers under `ccd/history/` are derived from lossless-claw
-(Martian Engineering, MIT-licensed; Copyright (c) 2026 Josh Lehman / Martian Engineering), at
-upstream commit `e05d8d3`. MIT material may be combined into this AGPL-3.0 program as long as
-its notice travels with every copy, so the upstream licence sits byte for byte in
-`ccd/history/LICENSE.lossless-claw`, beside the code it covers, and ships in every release
-tarball. `ccd/history/PROVENANCE` names each copied item, its upstream file and what changed,
-and each copied function carries a one-line comment saying where it came from: a rationale
-comment, not a licence header.
+**Third-party code.** A few helpers under `ccd/history/`, and the recall-policy sentences of the
+`ccrc-history` skill in `ccd/history-skill/`, are derived from lossless-claw (Martian Engineering,
+MIT-licensed; Copyright (c) 2026 Josh Lehman / Martian Engineering), at upstream commit `e05d8d3`.
+MIT material may be combined into this AGPL-3.0 program as long as its notice travels with every
+copy, so the upstream licence sits byte for byte in `ccd/history/LICENSE.lossless-claw` and in
+`ccd/history-skill/LICENSE.lossless-claw`, beside the material it covers, and ships in every release
+tarball. `ccd/history/PROVENANCE` names each copied item, its upstream file and what changed, and
+each copied item carries a one-line comment saying where it came from: not a licence header.

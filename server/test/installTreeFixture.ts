@@ -224,10 +224,10 @@ export const TREE_FILES = [
   // `$CCRC_HERE/../deploy/` to measure what is (not) there. Without it in the
   // tree, that check would report a bug in ccrc on every fixture box.
   'deploy/gen-auth-hash.mjs',
-  // ── The three SKILL TREES and their three installers (worker-skill Task 4,
+  // ── The four SKILL TREES and their four installers (worker-skill Task 4,
   // reviewer-skill Task 10). `_inst_skills` places each tree into
   // `~/.cc-sessions/` and then RUNS the installer it just placed beside it,
-  // so all six are read out of the tree this fixture builds. They are
+  // so all eight are read out of the tree this fixture builds. They are
   // DIRECTORY entries for the same reason `deploy/systemd` is: the
   // coordinator skill is a SKILL.md plus a `references/` directory whose
   // contents its own installer refuses to run without, and a hand-listed
@@ -235,9 +235,11 @@ export const TREE_FILES = [
   'ccd/coordinator-skill',
   'ccd/worker-skill',
   'ccd/reviewer-skill',
+  'ccd/history-skill',
   'ccd/install-coordinator-skill.sh',
   'ccd/install-worker-skill.sh',
   'ccd/install-reviewer-skill.sh',
+  'ccd/install-history-skill.sh',
   // graphify Task 3: `_inst_graphify_skill` stages this beside the other three
   // installers, through the same `_inst_atomic`. It ships alone — no
   // `ccd/graphify-skill` tree — because its SRC is assembled from the
