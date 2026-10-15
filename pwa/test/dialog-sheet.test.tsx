@@ -2693,6 +2693,24 @@ describe('the own-words region and the busy commits keep their shape (D-5090, D-
     expect(rule('.dlg-reply')).not.toMatch(/margin/);
   });
 
+  it('the one-line notes under the boxes sit as far below the last box as the own-words region does', () => {
+    // Measured flush (0px) under the last box's rule at every width before this rule; the notes follow `.opts`
+    // directly, on both sheets, which is the structure the rule selects on.
+    for (const ask of [DRINK_FEATURES_TOOLS, null]) {
+      renderAsk(ask, pane('cc300-ask-multiselect-next-focused'));
+      const notes = [...document.querySelectorAll('.dlg-copy')];
+      expect(notes.map((n) => n.textContent), String(ask !== null)).toEqual([
+        expect.stringMatching(/cursor is on the Next row/),
+        expect.stringMatching(/^Own words on a pick-several question/),
+      ]);
+      expect(notes[0]!.previousElementSibling).toHaveClass('opts');
+      cleanup();
+    }
+    const gap = declValue(ruleIn(css, '.opts + .dlg-copy'), 'margin-top');
+    expect(gap).toBe('var(--sp-3)');
+    expect(declValue(ruleIn(css, '.dlg-words'), 'margin')).toBe(norm(`${gap} 0`));
+  });
+
   it('the own-words field looks disabled while it is', () => {
     expect(rule('.dlg-reply-input:disabled')).toMatch(/color:\s*var\(--syn-comment\)/);
     expect(rule('.dlg-reply-input:disabled')).toMatch(/border-style:\s*dashed/);

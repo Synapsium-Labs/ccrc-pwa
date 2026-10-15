@@ -984,6 +984,13 @@ button.metachip:active {
 .dlg-words .dlg-copy {
   margin: 0;
 }
+/* A one-line note straight under a list of rows (a multiSelect question's
+   notes under its boxes, AskParts.tsx's `MultiPick`, D-5091) sits as far
+   below the last row's rule as the own-words region does; `.dlg-copy` has
+   only a bottom margin, so without this the note sat flush on the rule. */
+.opts + .dlg-copy {
+  margin-top: var(--sp-3);
+}
 .dlg-reply {
   display: flex;
   gap: var(--sp-2);
