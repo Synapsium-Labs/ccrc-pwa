@@ -4,8 +4,8 @@
 import { describe, it, expect } from 'vitest';
 import {
   COLLECT_FEED_TITLE, collectFeedAnswerBody, collectFeedCollectedBody, collectFeedCueOfAct, collectFeedCueOfAudit,
-  collectFeedReadBody, collectFeedStep, collectFeedSwitchBody, collectFeedWouldCollectBody, collectFirstSighting,
-  collectWouldCollectKey, type CollectReadWhat,
+  collectFeedReadBody, collectFeedStep, collectFeedWouldCollectBody, collectFirstSighting, collectSwitchFeedBody,
+  collectWouldCollectKey, type CollectLaneNotes, type CollectReadWhat,
 } from '../src/collectLane.js';
 import {
   ACT_NO_DOCUMENT, COLLECTED, DIE, NO_DOCUMENT, T1, UNREADABLE, collectable, failedAct, refusedAct, unmeasured, verdict,
@@ -38,8 +38,9 @@ describe('the collector feed bodies (spec §5.10)', () => {
   });
 
   it('each switch flip writes one row naming the lane now live or now shadowed', () => {
-    expect(collectFeedSwitchBody(true).startsWith('the collector lane is now live')).toBe(true);
-    expect(collectFeedSwitchBody(false).startsWith('the collector lane is now shadowed')).toBe(true);
+    const notes: CollectLaneNotes = { latchDue: false, markerRecreated: false };
+    expect(collectSwitchFeedBody({ kind: 'live', armedBy: 'legacy-marker', notes }).startsWith('the collector lane is now live')).toBe(true);
+    expect(collectSwitchFeedBody({ kind: 'shadowed', why: 'off', notes }).startsWith('the collector lane is now shadowed')).toBe(true);
   });
 
   it('every ccd-sourced string reaches a body only through childReclaimDetailText: detail, paths, the leaf, a record name and an unknown word', () => {

@@ -32,7 +32,7 @@ import { useEffect, useRef, useState } from 'react';
 import { toast } from '@ccrc/ui';
 import type { MarkerState } from '../../../shared/api';
 import { apiErrorText } from '../lib/api';
-import { COORD_CONFIRM_MS } from './coordWords';
+import { COORD_CONFIRM_MS, COORD_UNCONFIRMED_TEXT } from './coordWords';
 import { inlinePauseError } from './CoordBanner';
 
 export type TogglePhase = 'idle' | 'pausing' | 'resuming' | 'unconfirmed';
@@ -117,7 +117,7 @@ export function useMarkerToggle(
     label: (resting) =>
       phase === 'pausing' ? 'pausing…'
       : phase === 'resuming' ? 'resuming…'
-      : phase === 'unconfirmed' ? 'unconfirmed — check /runs'
+      : phase === 'unconfirmed' ? COORD_UNCONFIRMED_TEXT
       : marker === 'set' ? resting.set : resting.clear,
     toggle,
   };

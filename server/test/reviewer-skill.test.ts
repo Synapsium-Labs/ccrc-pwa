@@ -8,6 +8,7 @@ import { readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { REVIEWER_KICKOFF_PREFIX } from '../src/coord/dispatch.js';
+import { COLLECT_LANE_LIVE_MARKER } from '../src/collectLane.js';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const skillDir = path.join(root, 'ccd/reviewer-skill');
@@ -221,5 +222,20 @@ describe('the reviewer skill: the report lands where the close route can read it
   // them.
   it('never names the stall-watch settings door — the worker a check is about is the session most motivated to lower the watch', () => {
     expect(skill).not.toContain('/api/coord/stall-watch');
+  });
+
+  // The collector switch is the operator's alone (path-identity spec 2026-10-12
+  // §5.6, §5.9). Settings, or the hand-touched legacy file, arms the deletion of
+  // temp roots that belong to dispatched workspaces, and a review workspace is
+  // one the server dispatched too. The skill names neither of the route's two
+  // methods, nor that file, which is read here from its definer. The bare
+  // `collect-lane` token covers the route, the file and the generation journal.
+  it('never names the collector switch or its legacy file — a reviewer told how to arm it would be told how to delete under the run it reads', () => {
+    const words = ['/api/coord/collect-lane', 'GET /api/coord/collect-lane', 'POST /api/coord/collect-lane',
+      'COLLECT_LANE_LIVE_MARKER', COLLECT_LANE_LIVE_MARKER, 'collect-lane'];
+    const named = (text: string): string[] => words.filter((w) => text.includes(w));
+    expect(named(`${skill}\nPOST /api/coord/collect-lane\n`), 'CONTROL: a mention planted in a scratch copy is seen')
+      .toEqual(['/api/coord/collect-lane', 'POST /api/coord/collect-lane', 'collect-lane']);
+    expect(named(skill)).toEqual([]);
   });
 });

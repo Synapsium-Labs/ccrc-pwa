@@ -130,8 +130,8 @@ describe('CLAUDE.md: the override and the loss list (§18)', () => {
 
   it('the coord.db bullet lists the stall-watch settings choice among what a lost database loses', () => {
     const bullet = passage('CLAUDE.md, the coord.db bullet', CLAUDE, '- `~/.ccrc/coord.db`:', '- **Zero new ccd verbs');
-    expect(bullet).toContain('mail, claims, asks, central pool edges, update intents, the stall-watch settings choice — is '
-      + 'gone without the snapshot');
+    expect(bullet).toContain('mail, claims, asks, central pool edges, update intents, the stall-watch settings choice, the '
+      + 'collector switch — is gone without the snapshot');
   });
 });
 
