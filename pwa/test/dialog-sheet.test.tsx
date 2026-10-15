@@ -1212,6 +1212,20 @@ describe('the envelope follows the pane (D-5089)', () => {
     expect(screen.queryByText(/answer these in the terminal/i)).toBeNull();
   });
 
+  it('no question live or named: the eyebrow claims no position', () => {
+    // The fallback display is question 1, read-only behind the CTA; it is not the question the pane is painting, so
+    // "1 of 2" would be a guess. `FRUIT_DRINK` over another ask's pane (`cc300-ask-1q-open`, Red/Blue), and with no pane.
+    const { store } = renderAsk(FRUIT_DRINK, pane('cc300-ask-1q-open'));
+    expect(heading('Which fruit?')).toBeInTheDocument();
+    expect(screen.getByText(/can't be matched/)).toBeInTheDocument();
+    expect(document.querySelector('.sheet-eyebrow')?.textContent).not.toMatch(/\d+ of \d+/);
+    act(() => store.getState().apply({ type: 'dialog_cleared' }));
+    expect(document.querySelector('.sheet-eyebrow')?.textContent).not.toMatch(/\d+ of \d+/);
+    // The control: the pane paints question 2, and the sheet says so.
+    act(() => store.getState().apply({ type: 'dialog', dialog: pane('cc300-ask-q2-of-2-single') }));
+    expect(screen.getByText('2 of 2')).toBeInTheDocument();
+  });
+
   it('a tie the title cannot break stays read-only behind the terminal CTA', () => {
     const spy = pending();
     // DERIVED: both questions read Yes/No, and the pane's title (`Enable tracing?`) is a suffix of both.

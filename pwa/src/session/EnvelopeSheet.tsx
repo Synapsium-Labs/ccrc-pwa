@@ -303,8 +303,11 @@ export function EnvelopeSheet({
   // option rows' place; such a question has no own-words region here (its free text is the terminal's in v1) and no
   // Chat row (`Dialog.multi` carries none).
   const boxes = pane?.multi;
+  // `n of N` only for a question the pane is painting (live) or names (its title): the fallback to question 1 is a
+  // display, not a position, and a pane on another ask entirely would make "1 of N" a guess (D-5089).
+  const placed = live ?? named;
   const eyebrow = (
-    <AskEyebrow header={q.header} progress={count > 1 ? { n: shown + 1, of: count } : undefined} />
+    <AskEyebrow header={q.header} progress={count > 1 && placed !== null ? { n: placed + 1, of: count } : undefined} />
   );
 
   return (
