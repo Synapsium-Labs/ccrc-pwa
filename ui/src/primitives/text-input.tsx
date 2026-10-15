@@ -34,14 +34,19 @@ import { FOCUS_RING } from '../lib/focus';
 export const TEXT_INPUT =
   'w-full min-h-tap rounded-md border border-edge-subtle bg-raised text-ink-primary'
   + ' font-ui text-input font-regular leading-normal px-3 py-0 outline-none'
-  // The focus cue is a border colour change, not a ring: a 44px field on a
-  // phone has no room for an offset ring, and the phosphor on the edge is the
-  // same cue every other focusable surface in this palette uses.
-  + ' focus:border-phosphor'
   // The placeholder ink, which is the declaration one of the three copies
   // was missing. On a field with no placeholder attribute it is inert, which
   // is why putting it on the shared base changes nothing for the login field.
   + ' placeholder:text-ink-tertiary'
+  // ONE FOCUS CUE, THE RING (D-5101's focus clause). The field used to say
+  // "a border colour change, not a ring" and carried both: a
+  // `focus:border-phosphor` beside this ring. In the app it drew both
+  // regardless, because base.css's unlayered blanket `:focus-visible` outline
+  // paints every focused element — so the choice the old comment recorded had
+  // already been overridden, and the sign-in screen's autofocused passphrase
+  // showed two cues at once. The ring is the cue every other control draws,
+  // and `focus-ring.test.ts` holds that a field draws no second one. `SELECT`
+  // is derived from this string and inherits the answer.
   + ` ${FOCUS_RING}`;
 
 /** The same object, sharing a row with something else.

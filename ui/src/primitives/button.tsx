@@ -54,7 +54,9 @@ export const buttonVariants = cva(
           'border border-edge-subtle bg-raised text-ink-secondary font-mono text-2xs font-medium leading-none not-italic normal-nums enabled:active:scale-[0.96]',
       },
       /** How wide. `full` is the sheet shape and the default — a sheet's
-       *  commit button spans it. `fit` is the one every OTHER row wanted:
+       *  commit button spans it. Its `px-4` is the room a WRAPPED label needs:
+       *  without it a long label on a narrow sheet ran from border to border
+       *  (the audit's quick wins). `fit` is the one every OTHER row wanted:
        *  six app rules said `width: auto; padding: 0 var(--sp-3)` in six
        *  different sheets, which is one variant written out six times.
        *
@@ -65,7 +67,7 @@ export const buttonVariants = cva(
        *  call site's business and always was (`ui-package-boundary.test.ts`),
        *  and in the JSX it is at least visible. */
       size: {
-        full: 'w-full',
+        full: 'w-full px-4',
         fit: 'w-auto px-3',
       },
     },

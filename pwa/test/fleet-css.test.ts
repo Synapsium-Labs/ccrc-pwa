@@ -1436,3 +1436,29 @@ describe('the fleet head holds one row, and the class chooser is not on it', () 
     expect(offenders).toEqual([]);
   });
 });
+
+describe('the wordmark and the Accounts screen keep their voices (the audit\'s quick wins)', () => {
+  it('the wordmark never wraps', () => {
+    // `❯` is `.wordmark::before`, and `ccrc` is the span's own text, so a
+    // narrow head could break the line between the caret and the word: a
+    // caret alone on one line and the name under it. The wordmark is the
+    // identity core's first element (spec §3.1); it is one unit or nothing.
+    // EVERY rule that targets the span is read, so a later `normal` restating
+    // it cannot pass behind the first rule's back.
+    expect(declaredValues(css, '.wordmark', 'white-space')).toEqual(['nowrap']);
+  });
+
+  it("the Accounts screen's prose is sans and its readouts stay mono", () => {
+    // The rule of voice: a sentence a person reads is set in the UI face, a
+    // value the machine reports is set in mono. "Next workspace lands on … —
+    // least-loaded" and "disabled on the fleet host" are sentences;
+    // "last reported 5m ago" is a readout beside a gauge.
+    for (const sel of ['.accounts-projection', '.accounts-disabled-note']) {
+      expect(declaredValues(css, sel, 'font-family'), `${sel} is prose`).toEqual(['var(--family-ui)']);
+      // A `font` shorthand would restate the family and pass a longhand read.
+      expect(declaredValues(css, sel, 'font'), `${sel} restates its family in a shorthand`).toEqual([]);
+    }
+    expect(declaredValues(css, '.accounts-fresh', 'font-family'), 'the freshness readout is mono')
+      .toEqual(['var(--family-mono)']);
+  });
+});

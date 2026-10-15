@@ -24,7 +24,7 @@ import { describe, expect, it } from 'vitest';
 import { readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import { loadThemes, ratio } from '../design/audit.mjs';
-import { BACK_BUTTON, BARE_ROW, DOOR, FOCUS_RING, LIST_ROW, TEXT_INPUT } from '@ccrc/ui';
+import { BACK_BUTTON, BARE_ROW, DOOR, FOCUS_RING, LIST_ROW, SELECT, TEXT_INPUT } from '@ccrc/ui';
 
 /** The ring, by any of its names. `FOCUS_RING` itself, or one of the shared
  *  class strings built from it — each of which is asserted to contain it
@@ -138,6 +138,25 @@ describe('every focusable control in @ccrc/ui carries the ring', () => {
     const rule = /:focus-visible\s*\{([^}]*)\}/.exec(BASE_CSS)?.[1] ?? '';
     expect(rule.replace(/\s+/g, ' ')).toContain('outline: 2px solid var(--accent)');
     expect(rule.replace(/\s+/g, ' ')).toContain('outline-offset: 2px');
+  });
+
+  it('a text field draws one focus cue: TEXT_INPUT carries FOCUS_RING and no `focus:border-*`', () => {
+    // D-5101's focus clause. The field drew TWO cues at once — the phosphor
+    // border (`focus:border-phosphor`) and the ring — and in the app it drew
+    // both whatever the field said, because base.css's unlayered blanket
+    // `:focus-visible` outline paints every focused element. Every other
+    // control draws the ring alone; the field now does too.
+    //
+    // By UTILITY, and any focus state: a `focus-visible:border-*` or a
+    // `focus-within:border-*` is the same second cue under another name.
+    // `SELECT` is `cn(TEXT_INPUT, 'px-2')`, so it inherits the answer, and is
+    // read here so a select-only border cannot come back either.
+    for (const [name, value] of Object.entries({ TEXT_INPUT, SELECT })) {
+      const classes = value.split(/\s+/);
+      for (const ring of FOCUS_RING.split(/\s+/)) expect(classes, `${name} lost the ring`).toContain(ring);
+      expect(classes.filter((c) => /^focus(-visible|-within)?:border-/.test(c)), `${name} draws a second cue`)
+        .toEqual([]);
+    }
   });
 
   it('clears WCAG 2.1 SC 1.4.11 (3:1) on every ground, in every palette', () => {
