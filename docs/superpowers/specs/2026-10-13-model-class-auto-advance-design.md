@@ -1,6 +1,6 @@
 # Model classes follow new releases automatically
 
-**Spec** · 2026-10-13 · Status: Draft, for review · Owner: ccrc · Linear: none · Related:
+**Spec** · 2026-10-13 · Status: Accepted 2026-10-15 · Owner: ccrc · Linear: none · Related:
 `docs/superpowers/specs/2026-09-08-model-class-registry-design.md` (amended here),
 `docs/superpowers/specs/2026-09-20-gpt-lane-ownership-design.md`
 
@@ -12,8 +12,8 @@ provider ships a newer one. This spec makes the hourly `ccrc models refresh` mov
 of its own family on its own: it sends one canary request through the lane first, keeps the previous pin, and
 honours a per-class hold. Anthropic lanes already launch on the newest model, so for them the same step derives
 what ccrc keeps by hand and moves running sessions. The operator approved the four design parts in
-conversation (D1 to D10). Writing them down surfaced gaps, and every answer to one is a **Proposed** decision,
-D11 to D22, that waits on the operator together with this text.
+conversation (D1 to D10). Writing them down surfaced gaps, answered here as D11 to D22, and the operator accepted
+the written spec with them on 2026-10-15.
 
 ## 1. Context
 
@@ -52,7 +52,7 @@ cannot carry them. Today's parser refuses any top-level key it does not know, an
 string (`REGISTRY_KEYS` and `parseRegistry`, `shared/models.mjs`). So an older ccrc, after a rollback for example,
 would refuse every lane's registry.
 
-**D13 (Proposed): a sibling file.** The four facts live in `~/.ccrc/models/<id>.advance.json`, one per lane of
+**D13 (Agreed): a sibling file.** The four facts live in `~/.ccrc/models/<id>.advance.json`, one per lane of
 either kind.
 - The class registry keeps its format, so an older ccrc keeps reading it, and an older ccrc never opens the new
   file.
@@ -70,7 +70,7 @@ either kind.
 | `previous` | The pin before the last advance, so Revert is one step (approved meaning). |
 | `history` | The last few moves: time, from, to, and how (advance, revert or hand), with the canary result. |
 
-**D21 (Proposed): one writer, and its integrity rules.** One function writes the advance file. It runs on both
+**D21 (Agreed): one writer, and its integrity rules.** One function writes the advance file. It runs on both
 kinds of lane; today's registry writer, `deploy/models-op.mjs`, refuses every operation but `show` on an
 Anthropic lane, so this is a new path for the advance file only. The advance, Revert, Hold and release, and
 `set-class` all go through it:
@@ -92,7 +92,7 @@ A class follows one family, and a family is not a class. On a Codex lane, the fa
 id, a word such as a tier name, and the class `opus` follows whichever family it was seeded with. This section
 applies to Codex lanes. Anthropic lanes take their families from Claude Code's catalogue (§2.5).
 
-- **Id grammar (D16, Proposed).** A candidate id has exactly three dash-separated parts,
+- **Id grammar (D16, Agreed).** A candidate id has exactly three dash-separated parts,
   `<vendor>-<version>-<family>`, where `<version>` is dot-separated integers. Any other id is never a candidate
   and never a seed. Judgement: the grammar is the provider's convention, not a contract, so an id that breaks it is
   ignored rather than guessed at. A class whose own pin breaks the grammar has no family and cannot advance, and
@@ -136,7 +136,7 @@ flowchart TD
 *Figure 1. One class on one Codex lane during one hourly refresh.*
 
 1. **Choose** the candidate by §2.2. If it is already the pin, nothing happens.
-2. **Check the lane is ready (D22, Proposed).** The shim answers its lane probe by itself, without asking LiteLLM
+2. **Check the lane is ready (D22, Agreed).** The shim answers its lane probe by itself, without asking LiteLLM
    (`GET /ccgpt/lane`, `ccd/ccgpt-proxy.py`), so it cannot tell when LiteLLM is starting. The step asks the
    question the refresh already asks: whether the lane's LiteLLM tier is ours and running, rather than ours and
    starting (`_codex_tier_ours`, `ccd/ccrc`). This matters because a new model's arrival re-renders the lane's
@@ -178,7 +178,7 @@ which gave this measurement:
 Judgement, from one observation each: Claude Code re-reads the `settings.json` env block when the file changes,
 so on a Codex lane the next turn is the idle point, and nothing has to be typed into the pane.
 
-**D11 (Proposed): drop the typed step if the measurement holds.** This changes the approved Codex part, in which
+**D11 (Agreed): drop the typed step if the measurement holds.** This changes the approved Codex part, in which
 ccd types `/model` into a session at an idle tick once its record shows the new pin. The plan's first task
 re-measures the next-turn pickup across several sessions on both lanes, by reading transcripts only.
 - **If it holds,** the Codex arm drops the typed step.
@@ -232,7 +232,7 @@ The home's `settings.json` belongs to Claude Code, and ccrc never writes it on a
 
 ### 2.6 PWA labels on every lane
 
-**D17 (Proposed): labels from data on both kinds of lane.** The PWA's model labels are hard-coded for both kinds
+**D17 (Agreed): labels from data on both kinds of lane.** The PWA's model labels are hard-coded for both kinds
 (`pwa/src/lib/models.ts`), so the Codex lanes' labels are stale right now.
 - A Codex lane's label comes from its registry plus the catalogue row's `label` (`CatalogueModel`,
   `shared/models.ts`).
@@ -267,7 +267,7 @@ sequenceDiagram
   Turning Hold off lets the next hour advance, canary first.
 - **The `models` agent operation.** Hold, release and revert travel as one new agent operation, the way the
   existing `update` operation carries the update tap (`agent/src/server.ts`).
-- **How the panel reads (D14, Proposed).** This changes the approved Section 4, in which the panel reads the class
+- **How the panel reads (D14, Agreed).** This changes the approved Section 4, in which the panel reads the class
   files through the agent's existing file read. That read's whitelist does not admit `~/.ccrc/models/`, so instead
   the `models` operation also answers a read-only `show`.
 - **The operation is security-sensitive.** It is a third wire-triggered spawn outside the exec whitelist, after the
@@ -287,19 +287,19 @@ sequenceDiagram
   D21's writer. A hold works by ccd launching the lane's sessions with the held model's id in the launch
   environment, which ccd owns. This is the one case in which ccrc puts a concrete model id on an Anthropic lane,
   and a test pins that it does so only while a hold stands.
-- **D19 (Proposed): a Revert or Hold reaches a running Anthropic session at its next relaunch.** The approved part
+- **D19 (Agreed): a Revert or Hold reaches a running Anthropic session at its next relaunch.** The approved part
   had it move at the next idle point. That is unreachable without writing the home's `settings.json`:
   - the `/model` picker's rows on an Anthropic lane are the class aliases, so none of them offers an older concrete
     id;
   - a `/model` typed with a name saves the account default (sourced: `ccd/ccrc-doctor-checks:7111`).
-- **D12 (Proposed): shell verbs.** The same `ccrc models <id> hold|release|revert <class>` the operation spawns are
+- **D12 (Agreed): shell verbs.** The same `ccrc models <id> hold|release|revert <class>` the operation spawns are
   documented for shell use, for a box whose console is down. The verbs exist either way, because the operation
   needs them; D12 decides only whether the README offers them to the operator.
 
 ### 2.8 What doctor reports
 
 Doctor gets four new WARNs. They are named here so that a doctor-clean gate that allow-lists WARNs by name can
-accept them before they ship. The approved design named the first three; D15 (Proposed) adds the fourth.
+accept them before they ship. The approved design named the first three; D15 (Agreed) adds the fourth.
 
 | WARN | When it fires | When it clears |
 |---|---|---|
@@ -314,8 +314,8 @@ hears about it. Failures fail shut: a pin never moves on data that cannot be rea
 ## 3. Decisions
 
 D1 to D6 were questions with options, which the operator answered. D7 to D10 are the four design parts, which the
-operator approved as presented. D11 to D22 are proposals made while writing this spec, and the operator has not
-seen them yet.
+operator approved as presented. D11 to D22 were proposed while writing this spec, and the operator accepted
+them with the written spec on 2026-10-15; D18 stays open until the measurement it names.
 
 | # | Decision | Options considered | Chosen, and why | Status |
 |---|---|---|---|---|
@@ -329,18 +329,18 @@ seen them yet.
 | D8 | The Codex advance part | - (approved as presented) | Choose, canary, re-pin through the writer, move sessions, push | Agreed |
 | D9 | The Anthropic part | - (approved as presented) | Catalogue cache, canary by real use, no `settings.json` writes | Agreed |
 | D10 | Holds, revert, panel, doctor | - (approved as presented) | The panel, an agent `models` op, three named WARNs | Agreed |
-| D11 | Codex sessions need no typed `/model` | Keep the typed step; drop it if the next-turn pickup holds | Drop it only if the plan's first task confirms §2.4 | Proposed |
-| D12 | Shell verbs documented | Taps only in the README; taps plus the verbs | Document the verbs, for a box whose console is down | Proposed |
-| D13 | Where the advance state lives | Inside the registry after a reader release; a sibling file | A sibling file, so a rollback never breaks a lane | Proposed |
-| D14 | How the panel reads | Widen the agent's file read; a `show` action on the op | `show` on the op, with no file-read widening | Proposed |
-| D15 | A WARN for a lane that cannot advance | Report nothing; a named fourth WARN | `model-advance-blocked`, named now | Proposed |
-| D16 | Id grammar | Loose parsing; exactly three parts | Exactly three parts, anything else ignored | Proposed |
-| D17 | Labels from data | Anthropic only; both kinds of lane | Both kinds, chosen by lane kind | Proposed |
+| D11 | Codex sessions need no typed `/model` | Keep the typed step; drop it if the next-turn pickup holds | Drop it only if the plan's first task confirms §2.4 | Agreed |
+| D12 | Shell verbs documented | Taps only in the README; taps plus the verbs | Document the verbs, for a box whose console is down | Agreed |
+| D13 | Where the advance state lives | Inside the registry after a reader release; a sibling file | A sibling file, so a rollback never breaks a lane | Agreed |
+| D14 | How the panel reads | Widen the agent's file read; a `show` action on the op | `show` on the op, with no file-read widening | Agreed |
+| D15 | A WARN for a lane that cannot advance | Report nothing; a named fourth WARN | `model-advance-blocked`, named now | Agreed |
+| D16 | Id grammar | Loose parsing; exactly three parts | Exactly three parts, anything else ignored | Agreed |
+| D17 | Labels from data | Anthropic only; both kinds of lane | Both kinds, chosen by lane kind | Agreed |
 | D18 | The Anthropic source for a home with no cache | A roster grouping; Claude Code's account state | Open until the Anthropic plan's first task measures the cache | Open |
-| D19 | Revert on a running Anthropic session | Next idle point; next relaunch | Next relaunch: the idle point needs a settings write | Proposed |
-| D20 | Delivery order | Both arms in one plan; Codex first, Anthropic second | Codex first, since that is where classes are stale today | Proposed |
-| D21 | One writer for the advance state | Each path writes its own; one writer with a lock | One writer, a lock, commit after materialise | Proposed |
-| D22 | When a canary counts | Any failure fails; not-ready waits silently | Not-ready waits; only a real refusal fails | Proposed |
+| D19 | Revert on a running Anthropic session | Next idle point; next relaunch | Next relaunch: the idle point needs a settings write | Agreed |
+| D20 | Delivery order | Both arms in one plan; Codex first, Anthropic second | Codex first, since that is where classes are stale today | Agreed |
+| D21 | One writer for the advance state | Each path writes its own; one writer with a lock | One writer, a lock, commit after materialise | Agreed |
+| D22 | When a canary counts | Any failure fails; not-ready waits silently | Not-ready waits; only a real refusal fails | Agreed |
 
 ## 4. What this amends
 
@@ -389,18 +389,13 @@ Each part ships with tests that go red when its guard is removed, measured, per 
 ### Agreed
 
 - D1 to D10: the design as presented in conversation on 2026-10-07. Its last part was approved on 2026-10-13.
+- The written spec, with D11 to D17 and D19 to D22, accepted by the operator on 2026-10-15.
 - The stopgap of 2026-10-13: both Codex lanes now pin the newest model of each family, until this ships.
 
 ### Waiting on you
 
-- Review of this written spec.
-- D11 to D22, the proposals. Six of them change an approved part:
-  - **D11:** drops ccd's typed `/model` on Codex lanes.
-  - **D13:** moves the four registry facts into a sibling file.
-  - **D14:** has the panel read through the op, not the agent's file read.
-  - **D15:** adds a fourth WARN to the approved three.
-  - **D18:** leaves the Anthropic source open for homes without a cache.
-  - **D19:** moves an Anthropic revert to the next relaunch, not the next idle point.
+- Review of the Codex arm's plan, which comes first (D20).
+- D18 stays open until the Anthropic arm's plan measures what writes Claude Code's catalogue cache, and when.
 
 ### Later
 
