@@ -12036,7 +12036,7 @@ describe('history card line: SessionStart(compact) serves the sweep\'s predictio
   /** A row is an AGREE row (the hook's verdict is the CLI's) unless its sixth cell reads 'fail-closed': the hook
    *  withholds where the CLI serves, the one difference R-recalloff-parity allows (it never serves where the CLI
    *  answers exit 8), named in §8.2 and §8.6 check 2. */
-  const PARITY: ReadonlyArray<readonly [string, string, Reg, Off, Rec] | readonly [string, string, Reg, Off, Rec, 'fail-closed']> = [
+  const PARITY: ReadonlyArray<readonly [string, string, Reg, Off, Rec, 'fail-closed'?]> = [
     ['no recall-off file', GENERATION, 'G', 'absent', 'G'],
     ['recall-off names this generation', GENERATION, 'G', 'G', 'G'],
     ['recall-off names it inside whitespace', GENERATION, 'G', 'G-padded', 'G'],
@@ -12106,7 +12106,8 @@ describe('history card line: SessionStart(compact) serves the sweep\'s predictio
     ['the env generation wins over the record', GENERATION, 'absent', 'G2', 'G2'],
     ['the registry generation wins over the record', '', 'G', 'G2', 'G2'],
   ];
-  const parityRows = PARITY.filter(([, , r, o]) => !ROOT || (r !== 'unreadable' && o !== 'unreadable' && o !== 'unsearchable' && o !== 'link-000'));
+  const parityRows = PARITY.filter(([, , r, o]) => !ROOT || (r !== 'unreadable' && o !== 'unreadable' && o !== 'unsearchable' && o !== 'link-000'))
+    .map(([what, env, r, o, k, kind]) => [what, env, r, o, k, kind ?? 'agree'] as const);
   /** The text each Reg kind plants in $REG/<id>.generation (the CLI reads the same text through presenceOf's trim). */
   const REG_TEXT: Partial<Record<Reg, string>> = {
     G: GENERATION, G2, junk: 'not-a-generation', empty: '',
@@ -12197,14 +12198,14 @@ describe('history card line: SessionStart(compact) serves the sweep\'s predictio
     expect([NBSP_G, BOM_G].map((t) => t.trim()), 'the CLI reads both as the generation').toEqual([GENERATION, GENERATION]);
   });
 
-  it.each(parityRows)('C19/C68 (card half), recall-off parity: %s', (_what, envGen, regKind, offKind, recKind, failClosed) => {
+  it.each(parityRows)('C19/C68 (card half), recall-off parity: %s', (_what, envGen, regKind, offKind, recKind, kind) => {
     plantAll();
     plantParity(regKind, offKind, recKind);
     try {
       const verdict = cliVerdict(envGen, regKind, offKind, recKind);
       // R-recalloff-parity: never LINE where the CLI refuses; a fail-closed row withholds where the CLI serves.
-      expect(served(start(), { CCRC_SESSION_GENERATION: envGen }), `the CLI reads ${verdict}${failClosed ? ' (fail-closed)' : ''}`)
-        .toBe(serves(verdict) && failClosed === undefined ? LINE : null);
+      expect(served(start(), { CCRC_SESSION_GENERATION: envGen }), `the CLI reads ${verdict}${kind === 'fail-closed' ? ' (fail-closed)' : ''}`)
+        .toBe(serves(verdict) && kind === 'agree' ? LINE : null);
     } finally {
       for (const f of [reg(`${ID}.generation`), histDir('recall-off'), histDir('recall-off', ID), path.join(home, 'off-root')]) {
         try { fs.chmodSync(f, 0o700); } catch { /* absent or a symlink */ }
