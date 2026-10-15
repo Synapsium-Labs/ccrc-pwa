@@ -8749,13 +8749,3 @@ Numbers are ISSUED, never chosen. Run 348's two blocks were allocated by the coo
 - **D-4787** (Task 10, plan-text corrections and extra pins) `as-built-note-carries-slugs-not-numbers` (the plan's "Write each number singly" at plan :8548 is superseded by the brief's rule that no `D-` token is written for a number main does not define, so the note names slugs only, as the contract's earlier as-built notes did), and `claude-md-readme-size-remeasured` (CLAUDE.md's "README.md (~5900 lines)" is now "(~6000 lines)", the measured 6002 rounded to the hundred, because `pools-prose.test.ts` reds on the old size; the boundary grows by that one numeral).
 
 Named, with no number: `born-at-opens-through-generation` (plan-identical, Task 5 Step 3b word for word: the birth placement keeps its own opening-create loop, and an equivalence case holds it equal to `childReclaimGeneration`'s rule), `leaf-kept-phrase-second-table` (plan-identical, the plan's own L1 table is kept beside workspace-lifecycle's, both keyed by `LeafKeptWord`) and `leaf-end-acts-spelled-twice` (a residual: the leaf-end acts are spelled twice in `store.ts`, plan-prescribed and typed).
-
-## Design
-
-**Posture:** none
-
-The server half of the reclaim lane — licence binding and generation keys. `ChildReclaimBanner` renders the result and keeps its shape.
-
-Declared retrospectively: this plan shipped before the posture convention
-reached its programme (`server/test/design-declaration.test.ts`). The guard
-asks that the question be answered, never which answer is given.

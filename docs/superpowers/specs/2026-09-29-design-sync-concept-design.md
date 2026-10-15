@@ -192,6 +192,10 @@ this replaces said the opposite and was false within hours.
 | wave 2 — call sites take the primitives, `legacy.css` retires | `b816c1ce` |
 | A — re-sync after wave 2 | `e5a40d22` |
 
+These hashes are provenance on the pull request's branch (#346). The repository only
+squash-merges, so none of them becomes an ancestor of `main`; they stay reachable through
+the pull request.
+
 **Two corrections to this document's own claims:**
 
 1. Lane C proposed a per-task `Design:` line. That did not fit — plans list tasks as
@@ -210,6 +214,12 @@ number.
 
 ## Open
 
+- **Lane C is split out, 2026-10-15.** The maintainer moved the posture convention out of
+  the design-system pull request for a ruling of its own: the guard test, the
+  coordinator-skill clause, and the `## Design` sections appended to plans that already
+  existed on `main`. This pull request carries lanes A and B. Lane C above is the design of
+  that separate change; the tree here has neither the guard nor the clause, and the next
+  bullet describes that change, not this tree.
 - **`ccd/coordinator-skill/SKILL.md` changed (`887239e1`, 18 lines) -> AGENT-FIRST.** It
   ships to the fleet host before the server. Not done: it is the operator's call, and
   separately `~/.ccrc/deploy.env` does not exist on this machine, so `deploy.sh` would

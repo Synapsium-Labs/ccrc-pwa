@@ -1,8 +1,9 @@
 # Design-system audit — close-out: every item, what delivered it, what keeps it
 
 **Date:** 2026-10-11. **Status:** CLOSED. Every item of the audit's queue is delivered — eight
-landed, one refused with the measurement that refused it — and both items that needed the
-operator's ruling were ruled and landed. Nothing in the queue is open, deferred or in progress.
+landed, one refused with the measurement that refused it. The two items that needed a ruling,
+V1 and V2, landed and were then reverted by the maintainer's ruling of 2026-10-15, so the
+session screen keeps `main`'s sizes. Nothing in the queue is open, deferred or in progress.
 
 **The audit:** `docs/superpowers/specs/2026-10-11-design-system-audit.html`, in this repo as
 HTML beside `2026-10-07-box-token-lifecycle-design.html`. It was a claude.ai artifact twice and
@@ -17,15 +18,19 @@ only in a conversation is a queue nobody can re-audit. This is the mapping, and 
 artifact of the wave.
 
 **AND IT IS CHECKED, because prose is a request.** `server/test/closeout-claims.test.ts` reads
-this file: every commit the table cites must resolve as a commit AND be an ancestor of this
-branch (a hash from someone else's branch is a citation to nowhere), every suite it names as a
-mechanism must exist (a renamed guard turns the table into a list of reassurances), the audit
-page it maps must be present, the `**Status:** CLOSED` line above must say so, and all twelve
-rows must be there — a close-out that quietly dropped one would still read as complete.
-Measured: changing one digit of one cited hash is 1 red. What that test deliberately does NOT
-judge is whether an item was a good idea or whether the mechanism named is the right one; those
-are judgements, and the line is the one `design-declaration.test.ts` draws when it checks that a
-posture was declared and never which one.
+this file: every suite it names as a mechanism must exist (a renamed guard turns the table into
+a list of reassurances), every test it cites by title, written `` `<file>` › "<title>" ``, must
+still be declared in that file and not skipped, the audit page it maps must be present, the
+`**Status:** CLOSED` line above must say so, and all twelve rows must be there — a close-out
+that quietly dropped one would still read as complete. Measured: changing one word of one cited
+title is 1 red. What that test deliberately does NOT judge is whether an item was a good idea
+or whether the mechanism named is the right one; those are judgements.
+
+**Commit hashes are provenance, not claims.** They name commits on this pull request's branch
+(#346). This repository only squash-merges, so none of them is ever an ancestor of `main`, and
+a check of their ancestry would pass on the pull request and fail on `main` for good after the
+merge. They stay reachable through the pull request; nothing checks them. Files and test titles
+survive a squash unchanged, which is why they are what the test reads.
 
 **Anchors** are this branch at `ebb216ab`; the audit was first measured at `a05de021`. Line
 numbers are not quoted — trust the shipped source's own comments over this file.
@@ -40,28 +45,25 @@ forever.
 **Posture:** none
 
 **Why:** this document is a RECORD of work already shipped and already ruled. It renders
-nothing and proposes nothing. The two items in it that changed what the operator sees — V1 and
-V2 — were not designed against a canvas and could not have been: each was a single measured
-dimension (a control's visible box, against WCAG 2.5.5's 44px and 2.5.8's 24px) with its
-trade-off already written out in the stylesheet, and what they needed was a ruling, which they
-got in conversation. A canvas would have depicted the same two numbers.
+nothing and proposes nothing. The two items in it that changed what the operator sees, V1 and
+V2, are reverted, so it describes no visual change at all.
 
 ## The queue, item by item
 
-| # | item | verdict | commit | what keeps it |
+| # | item | verdict | branch commit (provenance) | what keeps it |
 |---|---|---|---|---|
-| 1 | guard the class-string constants | landed before this wave's close | `a05de021` | `design-system-boundary.test.ts`'s `skinConstants` — ownership derived from the export statements, so a new primitive is covered the day it lands |
-| 2 | name the shared glyphs | landed before this wave's close | `a05de021` | the same guard's second surface, plus the three `*_GLYPH` exports |
-| 3 | stable contrast-gate key | LANDED | `08a35466` | `audit.mjs` reports a selector two sheets declare; `audit-refusals.test.ts` pins both arms, and deleting the loop is 1 red (measured) |
-| 4 | fold the app-internal duplicate clusters | LANDED, nine of them | `4cc91d40` | `shape-census.test.ts`, whose registry is checked in both directions — a folded cluster's entry is stale and reds |
-| 5 | `Select` primitive | LANDED | `a7b75d5d` | `fleet-css.test.ts` pins the tailwind-merge replacement where it used to pin a specificity tie; `tap-targets.test.tsx` reads the floor off `SELECT` |
-| 6 | hoist the mail-strip / task-strip skins | LANDED, four of five | `8ecd1df7` | the same census; the fifth cluster's entry now states the ground argument that keeps it twinned |
-| 7 | `Radio` / `RadioFieldset` primitive | LANDED | `cbb79f00` | `tap-targets.test.tsx` reads `min-h-tap` off `RADIO_OPTION`; `focus-ring.test.ts` counts the input |
+| 1 | guard the class-string constants | landed before this wave's close | `a05de021` | `design-system-boundary.test.ts` › "never reaches a file without the primitive it is the skin of" — ownership derived from the export statements by `skinConstants`, so a new primitive is covered the day it lands |
+| 2 | name the shared glyphs | landed before this wave's close | `a05de021` | the same guard's exemption registry, where each `*_GLYPH` export is registered as a glyph: `design-system-boundary.test.ts` › "every registered exemption carries a reason" |
+| 3 | stable contrast-gate key | LANDED | `08a35466` | `audit.mjs` reports a selector two sheets declare; `audit-refusals.test.ts` › "reports a selector two sheets declare, naming both" pins it, and deleting the loop is 1 red (measured) |
+| 4 | fold the app-internal duplicate clusters | LANDED, nine of them | `4cc91d40` | `shape-census.test.ts`, whose registry is checked in both directions — `shape-census.test.ts` › "names no shape this registry has not seen" and `shape-census.test.ts` › "carries no stale entry — a migrated shape leaves this file" |
+| 5 | `Select` primitive | LANDED | `a7b75d5d` | `fleet-css.test.ts` › "wins the width override by REPLACING it, which needs no cascade at all" pins the tailwind-merge replacement where it used to pin a specificity tie; `tap-targets.test.tsx` › "and so is every dropdown, off the same token in the same package" reads the floor off `SELECT` |
+| 6 | hoist the mail-strip / task-strip skins | LANDED, four of five | `8ecd1df7` | the same census; the fifth cluster's entry states the ground argument that keeps it twinned, and `shape-census.test.ts` › "gives every entry a reason that says which kind it is" |
+| 7 | `Radio` / `RadioFieldset` primitive | LANDED | `cbb79f00` | `settings-screen.test.tsx` › "floors every option row at the tap target, keeps a fieldset shrinkable, and tints the amber line with the attention ink" reads `min-h-tap` off `RADIO_OPTION`; `focus-ring.test.ts` › "every carrier this census accepts really does carry the ring" counts the input |
 | 8 | Storybook test-runner and axe in CI | LANDED | `8e08ec7d` | the `storybook-a11y` job — 152 stories through headless chromium, green on its first run |
 | 9 | typed variant axes for `Chip` and `Well` | **REFUSED** | `f2f42dd9` | the refusal is the deliverable: both component headers carry the measurement, so the next audit meets the answer instead of the question |
 | 10 | token reference page | LANDED | `f2f42dd9` | it reads the CSSOM, so it cannot drift from the palette it shows; `build-storybook` in CI proves it compiles |
-| V1 | the two session-header meta chips to 44px | RULED, LANDED | `6072ccfc` | `control-census.test.ts` — re-registered TOKEN/SELECTOR, and its UNDER arm's count asserts 2 |
-| V2 | the seen chip and the compaction disclosure to 44px | RULED, LANDED | `6072ccfc` | the same census, plus `fleet-css.test.ts`'s own floor assertion |
+| V1 | the two session-header meta chips to 44px | RULED, LANDED, then REVERTED | `6072ccfc` | nothing, by design: the maintainer ruled on 2026-10-15 that the session screen keeps `main`'s sizes, and the revert is part of this pull request |
+| V2 | the seen chip and the compaction disclosure to 44px | RULED, LANDED, then REVERTED | `6072ccfc` | the same ruling — `.bucket-head-seen` and `.compaction-head` keep `main`'s sizes |
 
 ### Why #9 is a delivery and not a gap
 
@@ -80,9 +82,11 @@ an app decision, so the type that catches the typo belongs in the app:
 `pwa/src/session/chipTones.ts` names the three chip tones and the four meta-chip tones as unions
 behind `chipTone()` / `metaChipTone()`, and the seven call sites in `SessionHeader` go through
 them. `markup-census.test.ts` pins both directions — every tone the map can produce must name a
-rule some stylesheet declares (a renamed rule is a silent no-op), and the map is the only place
-those strings may be typed. Nothing about the rendering changed; they are the same seven class
-strings chat.css has always skinned.
+rule some stylesheet declares (a renamed rule is a silent no-op; `markup-census.test.ts` › "every
+tone it can produce is a rule some stylesheet declares"), and the map is the only place those
+strings may be typed (`markup-census.test.ts` › "is the only place those strings are typed").
+Nothing about the rendering changed; they are the same seven class strings chat.css has always
+skinned.
 
 ## What the work found that reading the source could not
 
@@ -91,7 +95,7 @@ vitest runs with `css: false`.
 
 | defect | how it surfaced | fix | mechanism |
 |---|---|---|---|
-| `cn` dropped a utility on the way to the DOM — `TEXT_INPUT` and `SELECT` rendered with NO ink utility, `Well` and `ControlRow` in the UI family rather than mono, seven strings in all | writing `Select` and reading the merged string | `cn.ts` declares the two renamed families as their real groups | `utility-pairs.test.ts` measures the composed CONSTANTS, not the per-file literals — the only source that can see it, since `TEXT_INPUT` is five literals with comments between them |
+| `cn` dropped a utility on the way to the DOM — `TEXT_INPUT` and `SELECT` rendered with NO ink utility, `Well` and `ControlRow` in the UI family rather than mono, seven strings in all | writing `Select` and reading the merged string | `cn.ts` declares the two renamed families as their real groups | `utility-pairs.test.ts` › "loses no utility between the source and the element" measures the composed CONSTANTS, not the per-file literals — the only source that can see it, since `TEXT_INPUT` is five literals with comments between them |
 | `Well` — a scrollable `<pre>` no keyboard could focus | axe `scrollable-region-focusable`, first time a browser rendered the package | `tabIndex={0}` and the focus ring, both overridable | `storybook-a11y` |
 | `TypedLabel` — `aria-label` on a roleless `<span>`, so the accessibility tree DROPPED the stable name that is the component's whole purpose | axe `aria-prohibited-attr` | `role="img"` | `storybook-a11y` |
 | two story fixtures modelling the app's own call sites wrong — a nameless `Keycap`, an unnamed `CoverScreen` dialog | axe `button-name`, `aria-dialog-name` | the labels the real call sites already pass | `storybook-a11y` |
@@ -109,10 +113,11 @@ hand, six lines from a sibling in the same file that uses the component. Both gu
 `control-census` as an unregistered hand-drawn control, `design-system-boundary` as a class the
 primitive owns. It is `<Button variant="ghost">` now.
 
-`76a1c8a0` is the other half of the same story: `design-declaration.test.ts` is this branch's
-guard and its scope boundary is a filename date, so merging the trees asked two of main's plans
-a posture question that did not exist when they were filed. Both answered `none`, in their own
-words, appended at the end of each file so no citation anchor moves.
+`76a1c8a0` was the other half of the same story, and it is no longer in this pull request. It
+answered a design-posture question for two of main's plans, a question this branch's posture
+guard asked them. On 2026-10-15 the maintainer split that process change out of this pull
+request for its own ruling: the guard, the coordinator-skill clause and every `## Design`
+section appended to a plan that already existed on `main`. Those answers went with it.
 
 ## Verification at close
 
@@ -151,6 +156,6 @@ words, appended at the end of each file so no citation anchor moves.
    mechanism, and that the gate's row count moved for the stated reason.
 2. `cn.ts` (`a7b75d5d`). It changes what every component renders. Both declared groups are
    load-bearing — deleting either is one red — and the guard reads the composed constants.
-3. V1 and V2 (`6072ccfc`) are the only visual changes in the wave. V1's floor is on
-   `button.metachip` and NOT on `.metachip`, which is what leaves `.metachip--branch` — a span,
-   a label — at 24px. That distinction is the whole safety argument.
+3. V1 and V2 (`6072ccfc`) were the only visual changes in the wave, and both are reverted by the
+   maintainer's ruling of 2026-10-15. The thing to check is that the session header's chips, the
+   seen chip and the compaction disclosure measure what they measure on `main`.

@@ -14100,23 +14100,3 @@ Refinement (b)'s equivalent mutant, measured in the same copy: `remarkPlugins={[
 2. When the coordinator next moves the boxes (`ccrc rollout`, fleet box first), the server box's closing doctor runs `docs-sw` for the first time; on a release-lane box it PASSes on the default bundle, and a fleet box SKIPs it.
 3. On a box built by `deploy.sh` with `/docs` in `CCRC_SW_DENYLIST`, the build now refuses (spec section 7.3). The operator's one act is removing `/docs` from their own `~/.ccrc/deploy.env`; ccrc never edits it.
 4. W5's brief inherits the W5 halves above; the M5.16 carry goes to W6 and the Share/Export amendment; the prose residue goes to W7.
-
-## Design
-
-**Posture:** none
-
-**Why:** this wave's own Goal says it: "no visible change beyond crash resilience". It
-is the parse pipeline, the module worker and its runner, `renderHast`, the extraction of
-`lib/markdown.tsx` out of `MessageBubble.tsx` with chat BYTE-IDENTICAL (a golden test of
-today's output is committed before anything moves), the three `RenderBoundary` mounts and
-a router gaining `useLocation`. A design canvas would depict a screen this wave is
-measured not to have changed.
-
-The Docs screen itself is W5. That is where the question has an answer worth drawing,
-and W5's plan is where it gets asked.
-
-**Answered on the merge, not when this plan was written.** `server/test/design-declaration.test.ts`
-landed on the design-system branch after this plan was filed, and its scope boundary is a
-filename date (`2026-09-29`) rather than a list — so merging the two trees asked this plan
-a question that did not exist at the time. Appended at the end of the file on purpose: it
-shifts no line above it, so every citation anchor into this document is untouched.
