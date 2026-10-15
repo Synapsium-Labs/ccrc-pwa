@@ -91,8 +91,8 @@ export const MD_HIGHLIGHT_MAX_BLANK_CHARS = 2048;
  *  such blocks costs is stated under `DOCS_HIGHLIGHT_MARKDOWN_PAGE_MAX_CHARS`. Cost,
  *  measured through the Docs pipeline (each page parsed as Docs parses it, then `detachUrls`, `highlightBlockCap` and
  *  the word, line and whitespace scans; 2026-10-15, at this wave's tip): 736 real fences of `docs/superpowers` are
- *  plain, on 78 pages, of 8 508 `typescript`, `javascript` and `rust` fences the 64 KiB cap and the general page
- *  budget highlighted (532 over this cap, 204 refused by the scan page budget alone). The one page Docs never formats
+ *  plain, on 78 pages, of 8 508 `typescript`, `javascript` and `rust` fences the 64 KiB cap, the general page budget
+ *  and the word, line and whitespace bounds highlighted (532 over this cap, 204 refused by the scan page budget alone). The one page Docs never formats
  *  (refused as too wide) is excluded; review 460 F7 found that the 755 on 79 pages recorded before, counted by fence
  *  pattern, included it, and that the 8 582 beside them counted `typescript` and `javascript` fences only. Chat's
  *  corpus holds one `ts` fence, of 12 characters. */
@@ -127,7 +127,9 @@ export const DOCS_HIGHLIGHT_SCAN_PAGE_MAX_CHARS = 393216;
  *  budgets are summed apart, so the accepted crafted page holds both the scan budget and the markdown budget (48
  *  `typescript` or `javascript` blocks and two `markdown` blocks): 3.2 to 3.5 s here and 3.75 to 4.37 s in the
  *  reviewer's three runs, 1.6 to 1.9 times the plateau page timed beside it, against spec 4.9's 0.25 s for a page; the
- *  coordinator accepted it as residue, and the shapes below cost more. Chat has no page budget: a
+ *  coordinator accepted it as residue, and the shapes below cost more. The run here brackets the 3.4 s recorded
+ *  before; what it moves is the ratio, because the plateau page beside it measured 1.7 to 2.2 s where it had
+ *  measured 2.4 to 2.5, and only the reviewer's runs measured the page itself higher. Chat has no page budget: a
  *  message bounds each block (a 64 KiB markdown block of `<a>` lines about 650 ms, an 8 KiB `typescript` block about 75), never their
  *  sum. What the sweeps tried, as they were run (review 460 F6: this said "about 80 units of two to four
  *  characters", a size class the run did not cover): 474 units of one and two characters, one per line (the line
@@ -147,8 +149,9 @@ export const DOCS_HIGHLIGHT_SCAN_PAGE_MAX_CHARS = 393216;
  *  `javascript` and `rust` over every two- and three-character unit drawn from `<>/(){}[]"'`, the backtick, `a` and the
  *  space, and about 250 longer units, finding nothing dearer than `<a>`, and ten more grammars over those units,
  *  finding them linear; `markdown` and `yaml` it found growing.
- *  SHAPES PAST EVERY BOUND (review 460 F1 to F3, the reviewer's figures on this highlight.js, best of 3 at load about
- *  25): `markdown` on link openers, `'[]('` or `'[[]('` repeated in lines of 2 048 characters (quadratic in the line,
+ *  SHAPES PAST EVERY BOUND (review 460 F1 to F3, the reviewer's figures: a block's cost on this highlight.js, best of
+ *  3 at load about 25; a page's, end to end through `detachUrls` and `CodeBlock` in its cost lens; the 9 to 11 s for
+ *  two markdown blocks is the per-block figure doubled): `markdown` on link openers, `'[]('` or `'[[]('` repeated in lines of 2 048 characters (quadratic in the line,
  *  linear in the block), about 0.5 s per 8 KiB block and 4.5 to 5.5 s per 64 KiB block, so the markdown budget
  *  admits about 9 to 11 s of it on one page; `yaml` flow collections, `[]` or `{}` repeated, quadratic in the block's
  *  size (about 1.1 to 1.4 s per 64 KiB block), only the general budget bounding a page of them (eight blocks about
