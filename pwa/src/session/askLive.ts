@@ -175,6 +175,29 @@ export function reviewSummary(dialog: Dialog): string[] {
   return Number.isFinite(indent) && indent > 0 ? out.map((l) => l.slice(indent)) : out;
 }
 
+/**
+ * The pane's question, and what the pane painted above it, for a sheet that has no transcript copy to title it with
+ * (the scraped sheet once the envelope ages out, D-5089): `body` without the ask's chrome.
+ *  - The tab row (`←` … `→`) is dropped: it is the ask's navigation, which a capture shows without the colour that
+ *    marks the active tab.
+ *  - The question is the LAST line reading the title, and is dropped from the preamble (it is the sheet's title). A
+ *    question too long for one row is painted as rows under a `│ ` bar with the title its last row: the question is
+ *    then those rows joined, bars stripped, so the sheet titles the whole question rather than its tail.
+ *  - Everything else stays, verbatim (a one-question ask's header line, a permission prompt's command), blank edges
+ *    trimmed. A body that never paints the title keeps the title as the question and the whole body.
+ */
+export function paneQuestion(dialog: Dialog): { question: string; preamble: string } {
+  const lines = (dialog.body ?? '').split('\n').map((l) => l.trimEnd()).filter((l) => !TAB_ROW_RE.test(l.trim()));
+  const title = dialog.title.trim();
+  let at = -1;
+  for (let i = lines.length - 1; i >= 0 && at < 0; i--) if (title !== '' && lines[i]!.trim() === title) at = i;
+  if (at < 0) return { question: dialog.title, preamble: trimBlankEdges(lines).join('\n') };
+  let from = at;
+  if (WRAP_BAR_RE.test(lines[at]!)) while (from > 0 && WRAP_BAR_RE.test(lines[from - 1]!)) from--;
+  const question = lines.slice(from, at + 1).map((l) => l.replace(WRAP_BAR_RE, '').trim()).join(' ');
+  return { question, preamble: trimBlankEdges([...lines.slice(0, from), ...lines.slice(at + 1)]).join('\n') };
+}
+
 function trimBlankEdges(lines: string[]): string[] {
   let a = 0;
   let b = lines.length;

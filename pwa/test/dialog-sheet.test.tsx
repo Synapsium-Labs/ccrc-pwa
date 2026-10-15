@@ -1328,6 +1328,31 @@ describe('the envelope follows the pane (D-5089)', () => {
       expect(spy).toHaveBeenCalledWith(SESSION_ID, review.id, 1);
     });
 
+    it('the scraped sheet reads the question off the pane, never the raw tab row', () => {
+      // Without the transcript's copy (`Dialog.ask`), the scraped sheet titles the pane's question and lists what else
+      // the pane painted above it. The tab row (`← ☒ Fruit ☐ Drink ✔ Submit →`) is the ask's chrome, and the question
+      // was painted twice (title and preamble).
+      const { store } = renderAsk(FRUIT_DRINK, pane('cc300-ask-q2-of-2-single'));
+      act(() => store.getState().apply({ type: 'ask_cleared' }));
+      expect(heading('Which drink?')).toBeInTheDocument();
+      expect(document.querySelector('.dlg-body'), 'a preamble that only repeats the question').toBeNull();
+      expect(screen.queryByText(/←/)).toBeNull();
+      cleanup();
+
+      // A question too long for one row: the pane's title is its LAST row under a `│ ` bar, and the rows above it are
+      // the rest of the question. The sheet titles the whole question, bars gone.
+      const wrapped = renderAsk(FOUR_Q, pane('cc300-ask-wrapped-question'));
+      act(() => wrapped.store.getState().apply({ type: 'ask_cleared' }));
+      expect(heading(FOUR_Q.questions[1]!.question)).toBeInTheDocument();
+      expect(document.querySelector('.dlg-body')).toBeNull();
+      expect(screen.queryByText(/│/)).toBeNull();
+      cleanup();
+
+      // A one-question ask paints its header above the question: that stays, the question is not repeated.
+      renderWithDialog(pane('ask-2col-chat-about'));
+      expect(document.querySelector('.dlg-body')?.textContent).toBe('Revised fix');
+    });
+
     // `ask_cleared` while a multiSelect question is live: D-5091's hand-off case ("multiSelect boxes (D-5091)" below)
     // answers it with the same boxes, where this one once only named it.
 
@@ -2185,6 +2210,18 @@ describe('multiSelect boxes (D-5091)', () => {
       fireEvent.click(box('Tracing'));
       fireEvent.click(commit('Next'));
       expect(multi).toHaveBeenCalledWith(SESSION_ID, digit1.id, [1, 3]);
+    });
+
+    it('a wrapped multiSelect question is titled whole on the scraped sheet', () => {
+      // DERIVED: the recorded boxes under a question too long for one row (the pane's title is its last row).
+      const digit1 = pane('cc300-ask-multiselect-digit1');
+      renderAsk(null, {
+        ...digit1,
+        title: '│ do you want switched on for the staging cluster?',
+        body: `${digit1.body!.split('\n')[0]}\n\n│ Which of the observability features\n│ do you want switched on for the staging cluster?`,
+      });
+      expect(heading('Which of the observability features do you want switched on for the staging cluster?')).toBeInTheDocument();
+      expect(screen.getAllByRole('checkbox')).toHaveLength(3);
     });
 
     it('a set touched on the envelope sheet survives the hand-off', () => {

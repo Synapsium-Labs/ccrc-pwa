@@ -13,6 +13,7 @@ import {
   isAskReview,
   liveQuestion,
   namedQuestion,
+  paneQuestion,
   paneTicks,
   questionCorresponds,
   questionKey,
@@ -383,5 +384,32 @@ describe('questionKey: the question a free-text row belongs to, whatever the row
       options: drink.options.map((o) => (o.index === 2 ? { ...o, label: 'Cocoa' } : o)),
     });
     expect(questionKey(relabelled, 3)).not.toBe(questionKey(drink, 3));
+  });
+});
+
+describe('paneQuestion: the question and what the pane painted above it, without the ask\'s chrome (D-5089)', () => {
+  it('drops the tab row and the question\'s own row', () => {
+    expect(paneQuestion(pane('cc300-ask-q2-of-2-single'))).toEqual({ question: 'Which drink?', preamble: '' });
+    expect(paneQuestion(pane('cc300-ask-markdown-question')))
+      .toEqual({ question: 'Should the `ledger` table use **Postgres** or SQLite?', preamble: '' });
+  });
+
+  it('a wrapped question is its barred rows, joined, bars gone', () => {
+    expect(paneQuestion(pane('cc300-ask-wrapped-question')))
+      .toEqual({ question: FOUR_Q.questions[1]!.question, preamble: '' });
+  });
+
+  it('a one-question ask keeps its header above the question', () => {
+    expect(paneQuestion(pane('cc300-ask-1q-open'))).toEqual({ question: 'Which colour?', preamble: 'Colour' });
+    expect(paneQuestion(pane('ask-2col-chat-about')).preamble).toBe('Revised fix');
+  });
+
+  it('a body that never paints the title keeps the title and the whole body, the tab row aside (DERIVED)', () => {
+    expect(paneQuestion(screen('cc300-ask-q2-of-2-single', { title: 'Do you want to proceed?', body: 'Bash command\n\n  rm -rf build' })))
+      .toEqual({ question: 'Do you want to proceed?', preamble: 'Bash command\n\n  rm -rf build' });
+    expect(paneQuestion(screen('cc300-ask-q2-of-2-single', { body: undefined }))).toEqual({ question: 'Which drink?', preamble: '' });
+    // Only the LAST painting of the title is the question: an earlier line that reads the same is the pane's.
+    expect(paneQuestion(screen('cc300-ask-q2-of-2-single', { body: 'Which drink?\n\nFor the team call\n\nWhich drink?' })))
+      .toEqual({ question: 'Which drink?', preamble: 'Which drink?\n\nFor the team call' });
   });
 });

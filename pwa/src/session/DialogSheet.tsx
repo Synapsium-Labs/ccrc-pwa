@@ -146,7 +146,7 @@ import {
   AskEyebrow, AskReview, ChatRow, MultiPick, OwnWords, REVIEW_TITLE, picksBusy, wordsBusy, type PickCall, type Picks,
   type Words, type WordsCall,
 } from './AskParts';
-import { chatRow, freeTextSlot, isAskReview, paneTicks, questionKey, slotHolds } from './askLive';
+import { chatRow, freeTextSlot, isAskReview, paneQuestion, paneTicks, questionKey, slotHolds } from './askLive';
 import { dialogMultiRefusal, dialogTextRefusal } from './askWords';
 import { api, ApiError } from '../lib/api';
 import { getSessionStore, type SessionStore } from '../stores/session';
@@ -435,7 +435,12 @@ export function DialogSheet({ id, store, onOpenTerminal, raise }: DialogSheetPro
   // accessible name.
   if (!shown.parsed && shown.multi !== undefined && shown.title.trim() !== '') {
     return (
-      <Sheet open={open} onClose={close} eyebrow={<AskEyebrow header={shown.ask?.header} />} title={shown.title}>
+      <Sheet
+        open={open}
+        onClose={close}
+        eyebrow={<AskEyebrow header={shown.ask?.header} />}
+        title={paneQuestion(shown).question}
+      >
         <MultiPick
           multi={shown.multi}
           dialogId={shown.id}
@@ -483,6 +488,9 @@ export function DialogSheet({ id, store, onOpenTerminal, raise }: DialogSheetPro
   // would keep the empty string and leave the sheet with no question on it at
   // all — no title, no preamble, and a dialog with no accessible name.
   const question = ask?.question.trim() ?? '';
+  // D-5089: without that copy, the pane's own question and what it painted above it, never the ask's raw tab row, and
+  // never the question twice (a wrapped one titled whole, not by its last row).
+  const painted = paneQuestion(shown);
   // D-5090: the free-text row, under the question's n options. n is the transcript's option count when the server
   // matched the question; else, after this sheet's own text call, that call's row less one, but only while the pane
   // shows the question the call was made for (`questionKey`: its title and every other row; the stranded retry needs
@@ -502,13 +510,13 @@ export function DialogSheet({ id, store, onOpenTerminal, raise }: DialogSheetPro
       open={open}
       onClose={close}
       eyebrow={<AskEyebrow header={ask?.header} />}
-      title={question || shown.title}
+      title={question || painted.question}
     >
       {/* The scraped preamble is a lossy copy of the question — once the real
           one is the title it would only say it twice. Keyed off the question
           actually shown, so a blank one keeps the pane's copy. */}
-      {!question && shown.body && shown.body !== shown.title && (
-        <p className="dlg-body">{shown.body}</p>
+      {!question && painted.preamble !== '' && (
+        <p className="dlg-body">{painted.preamble}</p>
       )}
       <div className="opts">
         {rows.map((o) => {
