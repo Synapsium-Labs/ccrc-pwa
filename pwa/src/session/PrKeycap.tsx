@@ -9,6 +9,7 @@
 // A tap does exactly one thing in every state: open the sheet. No state of the
 // cap performs an action, so a misread badge can never cost anything.
 import type { ReactNode } from 'react';
+import { Keycap, elapsedShort } from '@ccrc/ui';
 import type { PrChecks, PrReason, PrState } from '../../../shared/api';
 import { UNCHECKED_PR } from '../../../shared/api';
 import { UNSUPPORTED_VERB_TEXT } from '../lib/api';
@@ -23,14 +24,10 @@ import './chat.css';
  *  one object; `server/test/single-definition.test.ts` fails on a fourth. */
 export { UNCHECKED_PR };
 
-/** '2m' | '3h' | '5d', or null under a minute. */
+/** '2m' | '3h' | '5d', or null under a minute — `elapsedShort`'s own answer
+ *  there, which is why this cap needs nothing of its own for that case. */
 function rel(then: number | null): string | null {
-  if (then === null) return null;
-  const m = Math.floor(Math.max(0, Date.now() - then) / 60_000);
-  if (m < 1) return null;
-  if (m < 60) return `${m}m`;
-  const h = Math.floor(m / 60);
-  return h < 24 ? `${h}h` : `${Math.floor(h / 24)}d`;
+  return then === null ? null : elapsedShort(Date.now() - then);
 }
 
 /** The legend on the cap: a number once we have one, `PR` otherwise. In
@@ -236,9 +233,8 @@ export function PrKeycap({ pr, onOpen }: { pr: PrState | null; onOpen: () => voi
   const state = pr ?? UNCHECKED_PR;
   const glyph = state.checks === null ? null : CHECK_GLYPH[state.checks];
   return (
-    <button
-      type="button"
-      className="keycap keycap--pr"
+    <Keycap
+      className="keycap--pr"
       data-phase={state.phase}
       data-checks={state.checks ?? undefined}
       aria-label={prSentence(state)}
@@ -247,6 +243,6 @@ export function PrKeycap({ pr, onOpen }: { pr: PrState | null; onOpen: () => voi
       <span className="pr-dot" aria-hidden="true" />
       <span className="pr-legend">{prLegend(state)}</span>
       {glyph !== null && <span className="pr-glyph" aria-hidden="true">{glyph}</span>}
-    </button>
+    </Keycap>
   );
 }

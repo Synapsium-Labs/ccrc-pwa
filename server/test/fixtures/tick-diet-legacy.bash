@@ -1,12 +1,13 @@
-# FROZEN (#387, tick-diet spec §9, plan Task 2) — the legacy bodies of the fourteen helpers the supervisor tick diet
+# FROZEN (#387, tick-diet spec §9, plan Task 2) — the legacy bodies of the sixteen helpers the supervisor tick diet
 # converts or reads through, exactly as `ccd/ccd` holds them at 0d0ea592166496be5eccb948313e381bcb2b87c8, the base every
 # tick-diet wave is measured against. `ccd-tick-diet-equivalence.test.ts` sources this file over the tree's `ccd/ccd`
 # and compares each converted helper (its stdout, stderr, rc, out-var and registry bytes) with its legacy twin here.
 #
-# THE RENAME MAP. Each function `_X` is renamed `_legacy_X`, so `_reg_get` is `_legacy_reg_get`. The fourteen are
+# THE RENAME MAP. Each function `_X` is renamed `_legacy_X`, so `_reg_get` is `_legacy_reg_get`. The sixteen are
 # `_reg_get`, `_reg_read`, `_authdead`, `_cfg_dir`, `_limit_json_num`, `_limit_field`, `_share_pct`, `_home_measured`,
-# `_route_peek`, `_route_effort_for`, `_route_applied_get`, `_route_wanted`, `_route_pending_word` and
-# `_route_apply_pending`. Every occurrence of those names below, code and comments alike, carries the prefix, so a call
+# `_route_peek`, `_route_effort_for`, `_route_applied_get`, `_route_wanted`, `_route_pending_word`,
+# `_route_apply_pending`, `_limit_score` and `_avail` (the last two vendored by W2 Task 9, for its callers' rows, by
+# the remedy below). Every occurrence of those names below, code and comments alike, carries the prefix, so a call
 # from one vendored body to another stays inside this file. Every other call (`_route_valid`, `_route_get`,
 # `_route_inert_has`, `_id_wrapper`, `_authdead_expired`, `_route_any`, `_ccrc_cfg_dir`, …) reaches the LIVE function
 # of the sourced tree.
@@ -130,12 +131,12 @@ _legacy_limit_field() {   # wrapper five|seven [maxage-secs] -> that limit %, or
   # Both rules below RETRACT a known value; neither may conjure one. gpt.json carries
   # `"five": null` with no 5h window at all, and a reset timestamp for a window nobody
   # ever measured says nothing about its value — "unknown" has to stay "" (readLimits
-  # keeps it null), or _limit_score's wholly-unknown branch becomes unreachable.
+  # keeps it null), or _legacy_limit_score's wholly-unknown branch becomes unreachable.
   reset=$(_legacy_limit_json_num "$f" "${field}ResetAt")
   if [[ -n "$val" && -n "$reset" && "$now" -ge "$reset" ]]; then
     # WAS `printf '0'`. That 0 was INFERRED from a timestamp, never observed,
     # and it entered the ranking as the best measurement on the fleet:
-    # _limit_score returned max(0,0)=0, and _ws_least_loaded's strict `<` kept
+    # _legacy_limit_score returned max(0,0)=0, and _ws_least_loaded's strict `<` kept
     # it over every account that had honestly reported. Nothing runs on the
     # account it won, so nothing ever replaced the 0 — the emptiest-looking
     # account was simply the one whose window had lapsed. Same magnet, same
@@ -144,11 +145,11 @@ _legacy_limit_field() {   # wrapper five|seven [maxage-secs] -> that limit %, or
     # perfectly healthy fleet every time a window turns over.
     #
     # The honest answer is "": this window ended and nobody has measured the new
-    # one. _avail keeps the account ELIGIBLE (see its comment — eligibility and
+    # one. _legacy_avail keeps the account ELIGIBLE (see its comment — eligibility and
     # rank are different questions, and it refuses only on a KNOWN half at the
     # ceiling), _ws_least_loaded skips it, _swap_target ranks it last at 100.
     # Availability does not change; only preference does — and that holds for a
-    # row with only ONE window ended, because _limit_score answers "" unless
+    # row with only ONE window ended, because _legacy_limit_score answers "" unless
     # both halves are measured.
     return 0
   fi
@@ -328,4 +329,130 @@ _legacy_route_apply_pending() {   # id -> 0 iff the record asks for a class or e
   _route_any "$id" || return 1
   [[ -n "$(_legacy_route_pending_word "$id")" ]] && return 0
   return 1
+}
+
+_legacy_limit_score() {   # wrapper -> account pressure = max(5h%, 7d%); "" unless BOTH windows are measured
+  # Weekly limits are as blocking as 5h ones (user directive 2026-07-05) — a target with a
+  # free 5h window but an exhausted week is NOT a good landing spot, and an account nearing
+  # its weekly cap should evacuate just like one nearing its 5h cap.
+  #
+  # EITHER HALF UNKNOWN MAKES THE ROW UNKNOWN. This was `&&` — "" only when
+  # BOTH halves were empty — with `: "${five:=0}"` substituting 0 for the
+  # missing one. That substitution is the same unknown-is-zero magnet the
+  # provenance fix removed from _legacy_limit_field, surviving through the half that
+  # was still readable: `{five: <window ended>, seven: 5}` scored 5, which made
+  # an account whose 5h state nobody had measured the emptiest-looking on the
+  # fleet, and _ws_least_loaded's strict `<` sent placement there. The score is
+  # a MAXIMUM, so one known half bounds the truth only from BELOW — it could
+  # really be 99 — and a bound from below is not a score.
+  #
+  # This is a RANK, and rank is the only thing it answers. Eligibility asks a
+  # different question and needs only that lower bound, so `_legacy_avail` reads
+  # `_legacy_limit_field` itself rather than routing through here; see its comment.
+  # Splitting the two is what let this guard tighten without stripping the gpt
+  # lane of its only exclusion — measured: with `_legacy_avail` still reading this
+  # function, gpt's real `{"five": null, "seven": 99}` went from EXCLUDED to
+  # "enabled, available" and three _codex_lane_status assertions went red.
+  #
+  # A WINDOW THE PLAN DOES NOT HAVE IS NOT AN UNMEASURED WINDOW. The guard above
+  # is right that one KNOWN half bounds a max() only from below — but that
+  # reasoning assumes the other half exists and nobody has looked at it yet. A
+  # ChatGPT/Codex Pro lane has NO 5h window at all: the backend reports
+  # `x-codex-secondary-window-minutes: 0`, and ccgpt-usage carries that through
+  # as `fiveWindowMinutes` so the two cases stop looking alike in the row (both
+  # are `five: null`). When the 5h window does not exist, the weekly figure is
+  # not half the truth — it is the WHOLE truth, and max() over the one window
+  # that exists is a real score, not a lower bound.
+  #
+  # Read the marker RAW, not through `_legacy_limit_field`: it is the row's SHAPE, not a
+  # measurement, so the rollover and age rules must not touch it.
+  #
+  # ABSENT MEANS APPLICABLE, and that is load-bearing rather than merely tidy.
+  # ccd writes a SECOND shape into this very file — the 429 exclusion
+  # `{"five":100,"seven":0,"ts":N}` — and that row carries no marker, so it falls
+  # through to the pair rule below and still scores 100. Inferring "weekly-only"
+  # per-ACCOUNT instead would score that row `seven` = 0, i.e. the emptiest
+  # account on the fleet, which is the unknown-is-zero magnet this file has
+  # already had to remove three times (_ws_least_loaded, this function's old
+  # `:="0"`, and _legacy_limit_field's inferred 0). The marker is per-ROW for that reason.
+  local five seven fivewin
+  five=$(_legacy_limit_field "$1" five 0); seven=$(_legacy_limit_field "$1" seven 0)
+  # 2>/dev/null like the sibling read at the top of this file: a lane whose row
+  # does not exist yet (a fresh box, a newly added lane before its first poll) is
+  # an ordinary state here, and `_legacy_limit_field` above answers it with a -f guard
+  # rather than a grep error on the operator's terminal.
+  fivewin=$(_legacy_limit_json_num "$LIMITS_DIR/$1.json" fiveWindowMinutes 2>/dev/null)
+  if [[ "$fivewin" == 0 ]]; then
+    [[ -z "$seven" ]] && return 0        # the one applicable window is unknown
+    printf '%s' "$seven"; return 0
+  fi
+  [[ -z "$five" || -z "$seven" ]] && return 0
+  (( seven > five )) && printf '%s' "$seven" || printf '%s' "$five"
+}
+
+_legacy_avail() {   # wrapper -> success if it has included-usage headroom (rate score under the ceiling).
+  # The monthly spend cap only gates PAID OVERAGE above 100%, so an account under the ceiling is
+  # always usable, and a spend-blocked one is already >=100% (excluded by this same rate check).
+  #
+  # UNKNOWN IS AVAILABLE HERE. It is not a score, and this is the one of the
+  # three unknown-handling sites that must stay permissive, because ELIGIBILITY
+  # and RANK are different questions and only this function answers the first.
+  #
+  #   • This function answers "may a session RUN here" — and it also answers
+  #     `_swap_target`'s two "stay" shortcuts (`_legacy_avail "$home"`, `_legacy_avail
+  #     "$cur"`). Telemetry is only written when a session renders its
+  #     statusline (see _legacy_limit_field), so an account that is merely QUIET
+  #     reports nothing at all. Reading that as blocked would evacuate every
+  #     session off a perfectly healthy home the moment it went quiet — the
+  #     mirror image of the 2026-07-27 incident _legacy_limit_field records — and
+  #     would leave a hard-blocked session with NO destination.
+  #     `ccd-login-screen.test.ts`'s "evacuates even though home carries zero
+  #     telemetry" case is exactly that rescue, run over a fleet with no
+  #     telemetry files whatsoever: it passes only while unknown is available.
+  #     AND UNKNOWN IS NO LONGER RARE. Since the provenance fix, _legacy_limit_field
+  #     answers "" for a window that has merely ENDED, not only for an account
+  #     nobody ever measured — so every account passes through unknown each time
+  #     a window turns over, on a healthy fleet. That makes this function's
+  #     permissiveness load-bearing rather than a corner case: a rolled-over
+  #     account was available because it scored 0 and is available now because
+  #     no KNOWN half sits at the ceiling — the same answer for an honest
+  #     reason, and reached without consulting a score at all (next bullet).
+  #   • Ranking is where unknown must lose, and both ranking sites now make it
+  #     lose, by the means each can afford. `_ws_least_loaded` SKIPS an
+  #     unmeasured account outright (it has a fallback for the all-unmeasured
+  #     fleet, so skipping costs nothing). `_swap_target` cannot skip — a
+  #     rescue with no destination strands a stuck session — so it ranks
+  #     unmeasured LAST instead, eligible but never preferred.
+  #   • ELIGIBILITY NEEDS ONLY A LOWER BOUND; RANK NEEDS A FULL MEASUREMENT.
+  #     That is why this function reads `_legacy_limit_field` directly instead of
+  #     asking `_legacy_limit_score`, which now answers "" whenever EITHER half is
+  #     unknown. A single KNOWN half at or above the ceiling is already PROOF
+  #     there is no headroom, whatever the other half turns out to be — so it
+  #     refuses. Nothing known says nothing, so it admits. The extension is
+  #     byte-identical to the `max(five, seven) < SWAP_CEILING` this replaced:
+  #     for a fully-measured row `max < C` is exactly "neither half >= C", for a
+  #     wholly-unknown row both spellings admit, and for a half-known row the
+  #     old `: "${five:=0}"` made the score the known half anyway. What changes
+  #     is only WHICH function it depends on, and that is the whole point: it
+  #     frees `_legacy_limit_score` to be strict about rank without taking gpt's only
+  #     exclusion with it (`{"five": null, "seven": 99}` must stay excluded, and
+  #     _codex_lane_status's entry guard is this function).
+  #
+  # An earlier version of this comment claimed the three sites could not be
+  # aligned without breaking something. That was true only of the alignment it
+  # considered, "unknown ⇒ ineligible everywhere", which does break the rescue
+  # above. Rank-last is the third option it missed, and it is what
+  # `_swap_target` does today (review round 1, finding 1). The rule the three
+  # sites now share:
+  #
+  #     unmeasured never OUTRANKS measured, and never becomes INELIGIBLE.
+  #
+  # Placement's fallback is the one deliberate exception, and it is a fallback
+  # rather than a ranking: prefer measured accounts; if NONE is measured, take
+  # the first home-able account in roster order.
+  local w="$1" five seven
+  five=$(_legacy_limit_field "$w" five 0); seven=$(_legacy_limit_field "$w" seven 0)
+  [[ -n "$five"  && "$five"  -ge "$SWAP_CEILING" ]] && return 1
+  [[ -n "$seven" && "$seven" -ge "$SWAP_CEILING" ]] && return 1
+  return 0                                                # no KNOWN half at the ceiling = assume free
 }

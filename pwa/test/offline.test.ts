@@ -5,27 +5,19 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { act, cleanup, render, screen } from '@testing-library/react';
 import { createElement } from 'react';
 import type { FleetSession } from '../../shared/api';
+import { fleetSession } from './fleetFixture';
 import { loadFleetSnapshot, saveFleetSnapshot } from '../src/lib/offline';
 import { spawnVerdictChip } from '../src/fleet/spawnWords';
 import { createFleetStore } from '../src/stores/fleet';
 import { FleetScreen } from '../src/screens/FleetScreen';
 import { TEST_ROSTER } from './rosterFixture';
 
-const session = (id: string): FleetSession => ({
-  id,
-  wrapper: 'claude',
-  home: '/home/rc',
-  project: 'OpenClawHetzner',
-  workdir: '/home/rc/projects/OpenClawHetzner',
-  workspace: null,
-  name: null,
-  status: 'idle',
-  statusUpdatedAt: null,
-  limits: { five: 10, seven: 40 },
-  dialogPending: false, model: null, effort: null, ultracode: false, branch: null, ctxPct: null, paneCols: null, tasks: null, pr: null, archivedAt: null, archivedBytes: null,
-  version: '2.1.0', hookState: null, askSummary: null, subagents: null, graphQueries: null, graphGateDenials: null, held: null, bucket: 'idle', bucketSince: null, unmeasured: [], statusUnmeasured: false,
-  lifecycle: null, stoppedBy: null, swapBlocked: null, stranded: null, substrate: null, started: true, spawnState: null, ask: null, usage: null, boardProject: null, route: null, child: { kind: 'none' }, releasedFrom: null,
-});
+const session = (id: string): FleetSession =>
+  fleetSession({
+    id, home: '/home/rc', project: 'OpenClawHetzner',
+    workdir: '/home/rc/projects/OpenClawHetzner',
+    limits: { five: 10, seven: 40 }, version: '2.1.0',
+  });
 
 /** Scripted WebSocket stand-in (same shape the store tests use). */
 class FakeSocket {

@@ -8,8 +8,10 @@ import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import type { AccountUsage, FleetSession } from '../../shared/api';
+import { fleetSession } from './fleetFixture';
+import { ToastHost } from '@ccrc/ui';
 import { AccountsScreen } from '../src/screens/AccountsScreen';
-import { api } from '../src/lib/api';
+import { ApiError, api } from '../src/lib/api';
 import { navigate } from '../src/lib/router';
 import { useFleetStore } from '../src/stores/fleet';
 import { declValue, ruleIn } from './cssRule';
@@ -25,15 +27,7 @@ const acct = (over: Partial<AccountUsage>): AccountUsage => ({
   fiveRolledOver: false, sevenRolledOver: false, disabled: false, authDead: false, ...over,
 });
 
-const sess = (over: Partial<FleetSession> = {}): FleetSession => ({
-  id: 'demo-quiet-basin', wrapper: 'claude', home: 'claude', project: 'demo', workdir: '/w',
-  workspace: 'quiet-basin', name: null, status: 'idle', statusUpdatedAt: null, limits: null,
-  dialogPending: false, version: null, model: null, effort: null, ultracode: false,
-  branch: 'ws/quiet-basin', ctxPct: null, paneCols: null, tasks: null, pr: null, archivedAt: null,
-  archivedBytes: null, hookState: null, askSummary: null, subagents: null, graphQueries: null, graphGateDenials: null, held: null,
-  bucket: 'idle', bucketSince: null, unmeasured: [], statusUnmeasured: false,
-  lifecycle: null, stoppedBy: null, swapBlocked: null, stranded: null, substrate: null, started: true, spawnState: null, ask: null, usage: null, boardProject: null, route: null, child: { kind: 'none' }, releasedFrom: null, ...over,
-});
+const sess = (over: Partial<FleetSession> = {}): FleetSession => (fleetSession({ workspace: 'quiet-basin', branch: 'ws/quiet-basin', ...over }));
 
 const stubAccounts = (
   accounts: AccountUsage[],
@@ -290,7 +284,14 @@ describe('AccountsScreen — back control', () => {
 // describes; see test/cssRule.ts for why a text scrape is the tool here.
 describe('AccountsScreen — tap targets', () => {
   it('.accounts-back is at least one tap tall, off the shared token', () => {
-    expect(declValue(ruleIn(fleetCss, '.accounts-back'), 'min-height')).toBe('var(--tap-min)');
+    // The floor is @ccrc/ui's `BackButton` now, not a rule in this stylesheet
+    // — `min-h-tap` resolves through theme.css's `--spacing-tap: var(--tap-min)`,
+    // which theme-bridge.test.ts pins. The render assertion below is the half
+    // that still proves the class reaches the element.
+    const backButton = readFileSync(
+      path.join(import.meta.dirname, '..', '..', 'ui', 'src', 'primitives', 'back-button.tsx'), 'utf8');
+    expect(backButton).toContain('min-h-tap');
+    expect(backButton).not.toContain('44px');
   });
 
   it('.accounts-back is the class the rendered back button carries', async () => {
@@ -347,5 +348,107 @@ describe('an auth-dead lane', () => {
     render(<AccountsScreen />);
     const row = (await screen.findByText('team·max')).closest('[data-disabled]') as HTMLElement;
     expect(row).toHaveAttribute('data-disabled', 'false');
+  });
+});
+
+// ── THE POOL WRITE, and the roster read that refuses to trust a shape ──
+//
+// `account-pool-chip.test.tsx` pins what the chip RENDERS. What it does when
+// tapped — and what the three answers of `setAccountPools` say — was the last
+// uncovered region of this screen (15 statements at 79.72%). Each of those
+// three is a different thing to tell the operator: it landed, it landed but
+// this box has never heard of the account, or it did not land.
+describe('AccountsScreen — tagging an account into a pool', () => {
+  // A roster WITH a pool, because `poolOptions` is roster-derived: the list
+  // offers only pools an account already belongs to (fleet.css's own note —
+  // a free-text pool with no member would strand every constrained session).
+  const POOLED = TEST_ROSTER.map((a) => (a.id === 'claude2' ? { ...a, pool: 'pool-a' } : a));
+
+  const open = async (): Promise<void> => {
+    vi.spyOn(api, 'accounts').mockResolvedValue(
+      { accounts: [acct({ wrapper: 'claude' })], projected: null, roster: POOLED });
+    render(<><AccountsScreen /><ToastHost /></>);
+    fireEvent.click(await screen.findByTestId('acct-pool-chip-claude'));
+  };
+
+  it('the chip opens the editor rather than writing anything by itself', async () => {
+    // A pool tag is a constraint on where work may be placed; a tap that
+    // toggled it would be a placement rule changed by a brush of a thumb.
+    const set = vi.spyOn(api, 'setAccountPools').mockResolvedValue({ ok: true, epoch: 7 });
+    await open();
+    expect(await screen.findByRole('dialog')).toBeInTheDocument();
+    expect(set, 'opening the editor is not a write').not.toHaveBeenCalled();
+  });
+
+  it('says which pool it landed in', async () => {
+    vi.spyOn(api, 'setAccountPools').mockResolvedValue({ ok: true, epoch: 7 });
+    await open();
+    fireEvent.click(await screen.findByRole('button', { name: /pool-a/ }));
+    expect(await screen.findByText('claude is now in pool pool-a.')).toBeInTheDocument();
+  });
+
+  it('warns when the write landed on a box whose roster has never heard of the account', async () => {
+    // `warning: 'unknown-account'` is NOT a failure: the central edge was
+    // written and will reach the fleet, but this box cannot show the account
+    // it now constrains. Said as an error because the operator's next read of
+    // this screen will not reflect what they just did.
+    vi.spyOn(api, 'setAccountPools').mockResolvedValue({ ok: true, epoch: 7, warning: 'unknown-account' });
+    await open();
+    fireEvent.click(await screen.findByRole('button', { name: /pool-a/ }));
+    expect(await screen.findByText(/does not know that account yet/)).toBeInTheDocument();
+  });
+
+  it('says why a refused write was refused, in ccd\'s own words', async () => {
+    vi.spyOn(api, 'setAccountPools').mockRejectedValue(
+      new ApiError(502, { ok: false, error: 'ccd-failed', stderr: 'pool-edges.log is unwritable' }));
+    await open();
+    fireEvent.click(await screen.findByRole('button', { name: /pool-a/ }));
+    expect(await screen.findByText(/Couldn't set the pool — .*pool-edges\.log is unwritable/))
+      .toBeInTheDocument();
+  });
+});
+
+describe('AccountsScreen — a roster that comes back the wrong shape', () => {
+  it('warns, and keeps whatever roster it already had', async () => {
+    // `Array.isArray`, not a bare trust: a route answering bare `{}` hands
+    // back `r.roster === undefined`, and a screen that assigned it would lose
+    // every label, hue and pool chip at once — which reads as a fleet that
+    // renamed itself rather than as a read that failed.
+    //
+    // ON THE FIRST POLL there is nothing to keep, and the assertion says so:
+    // the row renders under its WRAPPER ID, because no roster has ever
+    // landed. What the guard buys is the SECOND poll, measured below.
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    vi.spyOn(api, 'accounts').mockResolvedValue(
+      { accounts: [acct({ wrapper: 'claude' })], projected: null, roster: undefined as never });
+    render(<AccountsScreen />);
+    expect(await screen.findByText('claude')).toBeInTheDocument();
+    expect(warn, 'the one signal a protocol break gets').toHaveBeenCalledWith(
+      expect.stringContaining('non-array roster'), expect.anything());
+  });
+
+  it('a BAD second poll cannot undo a good first one', async () => {
+    // This is what the guard is for. The screen re-polls on an interval; one
+    // malformed answer mid-session must not strip the labels the operator has
+    // been reading for an hour.
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const accounts = vi.spyOn(api, 'accounts')
+      .mockResolvedValueOnce({ accounts: [acct({ wrapper: 'claude' })], projected: null, roster: TEST_ROSTER })
+      .mockResolvedValue({ accounts: [acct({ wrapper: 'claude' })], projected: null, roster: undefined as never });
+    // FAKE TIMERS BEFORE THE RENDER, deliberately: the interval is created in
+    // the screen's own mount effect, and a clock installed after that is a
+    // clock the already-scheduled timer does not read. Measured — the first
+    // version of this case advanced a clock the poll had never seen and the
+    // second request never fired.
+    vi.useFakeTimers();
+    render(<AccountsScreen />);
+    // One microtask flush for the mount read's own promise chain.
+    await vi.advanceTimersByTimeAsync(1);
+    await vi.waitFor(() => expect(screen.getByText('team·max')).toBeInTheDocument());
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(accounts.mock.calls.length, 'the 20s poll fired').toBeGreaterThan(1);
+    expect(screen.getByText('team·max'),
+      'the label survived a malformed answer, which is the whole of the guard').toBeInTheDocument();
+    vi.useRealTimers();
   });
 });

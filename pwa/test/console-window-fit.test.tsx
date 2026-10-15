@@ -20,9 +20,8 @@
 //   until a fit has measured its glass.
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, waitFor, within } from '@testing-library/react';
-import {
-  TerminalDrawer, type DrawerTerm, type HistoryTerm, type MakeHistoryTerm,
-} from '../src/session/TerminalDrawer';
+import { TerminalDrawer } from '../src/session/TerminalDrawer';
+import type { DrawerTerm, HistoryTerm, MakeHistoryTerm } from '../src/session/terminalFactory';
 import { BASE_CONSOLE_FONT_PX, MIN_CONSOLE_FONT_PX } from '../src/session/consoleFit';
 import { PINNED_WINDOW_COLS } from '../../shared/api';
 

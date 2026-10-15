@@ -76,7 +76,8 @@ git clone https://github.com/Synapsium-Labs/ccrc-pwa.git && cd ccrc-pwa
 bash install.sh
 ```
 
-That builds the server, the PWA and the agent, then hands off to `ccrc install`, which
+That builds the server, the PWA (installing `ui/`, the design system the PWA is built from, first)
+and the agent, then hands off to `ccrc install`, which
 seeds `~/.ccrc` (the roster, `ccrc.env`, a node id), places the tree under
 `~/ccrc-versions/` with `~/ccrc` a symlink to it, puts `ccrc` and `ccd` in
 `~/.local/bin`, installs and starts the systemd user units and timers (on macOS, one
@@ -5921,11 +5922,16 @@ synchronous `hello` frame closes that gap without doing anything yet:
 No root `package.json` and no root runner: three runnable packages — `server/`, `agent/` and `pwa/`, each
 `"type": "module"` — and `shared/`, which is not a package (its bare `"type": "module"` marker is
 load-bearing: without it `tsc` emits CommonJS into `dist/shared/` and the built server dies on startup).
+`ui/` is `@ccrc/ui`, the design system, which `pwa` consumes as SOURCE (`file:../ui`): its imports
+resolve from `ui/node_modules` and never from `pwa/node_modules`, so `cd ui && npm ci` comes before
+anything that typechecks, tests or bundles `pwa` — `install.sh`, `deploy/deploy.sh` and
+`deploy/build-release.sh` all do it in that order.
 
 ```bash
 cd agent  && npm ci && npm run test      # vitest, hermetic
+cd ../ui  && npm ci                      # BEFORE pwa: pwa builds @ccrc/ui from source
 cd ../pwa && npm ci && npm run test      # jsdom component tests
-cd ../server && npm ci && npm run test   # server last: typecheck-tests needs agent/ and pwa/ node_modules
+cd ../server && npm ci && npm run test   # server last: typecheck-tests needs agent/, ui/ and pwa/ node_modules
 ./node_modules/.bin/tsc --noEmit         # in any package — the typecheck CI runs
 npm run build                            # server/agent: tsc → dist/; pwa: tsc + vite → ../server/dist-pwa
 ```
@@ -6271,3 +6277,8 @@ copy, so the upstream licence sits byte for byte in `ccd/history/LICENSE.lossles
 `ccd/history-skill/LICENSE.lossless-claw`, beside the material it covers, and ships in every release
 tarball. `ccd/history/PROVENANCE` names each copied item, its upstream file and what changed, and
 each copied item carries a one-line comment saying where it came from: not a licence header.
+
+`ui/src/styles/reset.css` is derived from Tailwind CSS's preflight (Tailwind Labs, Inc.,
+MIT-licensed; Copyright (c) Tailwind Labs, Inc.), at tailwindcss `v4.3.3`, on the same terms:
+the upstream licence sits byte for byte beside it in `ui/src/styles/LICENSE.tailwindcss`, and
+the file's opening comment says what changed.

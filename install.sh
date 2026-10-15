@@ -167,6 +167,10 @@ if (!ok) { console.error(`install.sh: node ${cur} is below the required ${floor}
 
 echo "install.sh: building (server deps, PWA bundle, server dist)…"
 ( cd "$ROOT/server" && npm ci --no-audit --no-fund )
+# ui is installed, not built, and before pwa: pwa builds @ccrc/ui from SOURCE
+# (`file:../ui`), whose imports resolve from ui/node_modules alone, so a fresh
+# checkout fails the PWA build without it (deploy/build-release.sh says why).
+( cd "$ROOT/ui" && npm ci --no-audit --no-fund )
 ( cd "$ROOT/pwa" && npm ci --no-audit --no-fund && npm run build )
 ( cd "$ROOT/server" && npm run build )
 # D-1159: the agent is the FOURTH artifact `ccrc install` refuses without, for

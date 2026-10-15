@@ -8,6 +8,7 @@ import { applyCatchUp, loadMark } from '../lib/notifymark';
 import { mergeBySeq, reviveNotifyEvents } from '../lib/feed';
 import { requestUpdate } from '../lib/swupdate';
 import { ReconnectingSocket, wsUrl } from '../lib/ws';
+import { warnNonArrayRoster } from '../lib/accounts';
 
 export interface FleetNotice {
   id: number;
@@ -354,7 +355,7 @@ export function createFleetStore(deps: FleetStoreDeps = {}): FleetStore {
             // no other signal anywhere — every consumer just silently reverts
             // to raw wrapper ids, which reads as "nothing is wrong" (fix
             // round 1, finding 6).
-            console.warn('ccrc: GET /api/accounts answered with a non-array roster; keeping the last known one.', r);
+            warnNonArrayRoster(r);
           }).catch(() => {});
         };
         pollRoster();

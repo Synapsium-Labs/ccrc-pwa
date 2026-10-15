@@ -24,7 +24,7 @@ import { fileURLToPath } from 'node:url';
 import { CHILD_RECLAIM_TOKEN_KIND } from '../src/coord/childReclaim.js';
 import { CHILD_RECLAIM_SKIP } from '../src/childReclaimSweep.js';
 import { CHILD_RECLAIM_WORDS, LC_REFUSAL_WORD } from '../../shared/api.js';
-import { codeOnly } from './sourceScan.js';
+import { codeOnly, componentFamily } from './sourceScan.js';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const FILES = [
@@ -66,7 +66,9 @@ describe('the PWA maps no ws-reclaim token — the sentence is the server’s (s
 
   it('reads the files that render the chip, and they do render it', () => {
     expect(read('pwa/src/fleet/runWords.ts')).toContain('export const childReclaimChip');
-    expect(read('pwa/src/screens/RunsScreen.tsx')).toContain('run-child-reclaim');
+    // The board is a screen AND its row, so this reads the family rather than
+    // a path — see `componentFamily`.
+    expect(componentFamily(root, 'pwa/src/screens/RunsScreen.tsx')).toContain('run-child-reclaim');
     expect(read('pwa/src/fleet/childReclaimWords.ts')).toContain('export function childReclaimAttentionOf');
     expect(read('pwa/src/fleet/ChildReclaimBanner.tsx')).toContain('export function ChildReclaimBanner');
     expect(read('pwa/src/fleet/AbandonSheet.tsx')).toContain('export function AbandonSheet');
@@ -227,7 +229,12 @@ describe('codeOnly — one string-aware pass', () => {
 
   // The measured victims: each file's code line the two-pass strip lost.
   it.each([
-    ['pwa/src/session/AttachButton.tsx', "import { useRef } from 'react';"],
+    // Moved to @ccrc/ui with the component (`pwa/src/session/AttachButton.tsx`
+    // no longer exists). The fixture's POINT survives the move intact: line 2
+    // is still `// hidden <input type="file" accept="image/*" multiple>`, a
+    // `/*` opened inside a `//` comment, which is precisely what a naive
+    // two-pass strip swallows the rest of the file on.
+    ['ui/src/components/attach-button.tsx', "import { useRef } from 'react';"],
     ['pwa/src/lib/push.ts', 'function urlBase64ToUint8Array(base64: string): Uint8Array {'],
     ['pwa/src/fleet/AccountsStrip.tsx', 'let placeholder: string | null = null;'],
   ])('%s keeps its code past a `/*` in a `//` comment', (f, line) => {

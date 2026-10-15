@@ -12,7 +12,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { cleanup, render, screen } from '@testing-library/react';
 import type { FleetHealth, NodeWire } from '../../shared/api';
 import type { BuildInfo } from '../../shared/buildinfo';
-import { BuildLine } from '../src/fleet/BuildLine';
+import { BuildLine } from '@ccrc/ui';
 import { declValue, ruleIn } from './cssRule';
 
 afterEach(cleanup);
@@ -99,7 +99,8 @@ describe('BuildLine', () => {
     // "Amber" is a claim about the stylesheet, not the DOM (vitest runs with
     // css: false): the affix's own rule names the attention ink. The contrast
     // audit only measures a ratio, so a calm ink that clears it passes there.
-    const css = readFileSync(path.join(import.meta.dirname, '..', 'src', 'fleet', 'fleet.css'), 'utf8');
+    const css = readFileSync(
+      path.join(import.meta.dirname, '..', '..', 'ui', 'src', 'components', 'build-line.css'), 'utf8');
     expect(declValue(ruleIn(css, '.build-line-next'), 'color')).toBe('var(--status-attention-text)');
     // One side behind, one current: the affix is per node, never per line.
     rerender(<BuildLine health={remote({ build: 'skewed' })} nodes={[

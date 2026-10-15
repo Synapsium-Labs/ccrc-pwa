@@ -88,6 +88,23 @@ describe('FleetHostBanner', () => {
     render(<FleetHostBanner />);
     expect(await screen.findByText(/unreachable/i)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Reboot' })).toBeInTheDocument();
+    // THE WIDTH, which is the half this banner was missing. `Button`'s
+    // default size is `full` (`w-full`), so `flex-none` alone left the button
+    // at the row's full width — it claimed the row and collapsed the message
+    // beside it to `min-width: 0`. `size="fit"` is the axis the design system
+    // already had, and the three sibling banners all use it.
+    //
+    // ASSERTED ON THE CLASS, not on a computed width: vitest runs with
+    // `css: false`, so no test here can measure a box. The class is what the
+    // design system emits for the fitted size, and `utility-pairs`/the
+    // compiled bundle are where `w-auto` is proved to exist.
+    expect(screen.getByRole('button', { name: 'Reboot' }).className).toContain('w-auto');
+    expect(screen.getByRole('button', { name: 'Reboot' }).className).not.toContain('w-full');
+    // BOTH HALVES, because the pair is the shape and the three sibling
+    // banners all write both: `fit` sets the width to the content, and
+    // `flex-none` stops the flex row shrinking it again. Measured — with only
+    // the `w-auto` assertion, deleting `flex-none` left all 27 green.
+    expect(screen.getByRole('button', { name: 'Reboot' }).className).toContain('flex-none');
   });
 
   it('warns when the host is UP but the two boxes disagree about the roster', async () => {
@@ -277,7 +294,10 @@ describe('FleetHostBanner — the skew arm\'s remedy (R15(c))', () => {
     ({ ...inventoryNode(role, current), caps: ['detach', 'update-gate'], agentOps: role === 'fleet' ? ['update'] : null,
       desiredTag: current.version === 'v0.0.9' ? null : 'v0.0.9' });
   const autoOn: UpdateIntentWire[] = [{ scope: '*', channel: 'stable', pinnedTag: null, auto: 'stable', notify: 'off', setAt: 1, setBy: 'pwa' }];
-  const msg = (): string => document.querySelector('.fleet-host-banner-msg')?.textContent ?? '';
+  // `.banner-msg` since the warn arms took the Banner primitive: the message
+  // span is the component's, and `.fleet-host-banner-msg` names markup this
+  // screen no longer writes.
+  const msg = (): string => document.querySelector('.banner-msg')?.textContent ?? '';
 
   it('while a node halts the fleet and auto will move the box after the ack, it points at the halt, never at the terminal', () => {
     const fleet = { ...movable('fleet', FLEET_V7), update: { state: 'failed' as const, target: 'v0.0.9', startedAt: 1, detail: 'gate: unit not up' } };

@@ -5,18 +5,15 @@
 // session home the moment home has room (measured live in swap.log, both
 // directions, ~15 minutes). This suite pins the sheet SAYING SO. A control
 // that quietly undoes itself is worse than one that admits it will.
-import { readFileSync } from 'node:fs';
-import path from 'node:path';
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { AccountUsage, FleetSession, ProjectPoolsWire } from '../../shared/api';
+import { fleetSession as baseSession } from './fleetFixture';
 import { api } from '../src/lib/api';
-import { SwapSheet, leastLoaded } from '../src/fleet/SwapSheet';
+import { SwapSheet } from '../src/fleet/SwapSheet';
+import { leastLoaded } from '../src/fleet/accountPicker';
 import { createFleetStore, type FleetStore } from '../src/stores/fleet';
-import { declValue, ruleIn } from './cssRule';
 import { TEST_ROSTER } from './rosterFixture';
-
-const fleetCss = readFileSync(path.join(import.meta.dirname, '..', 'src', 'fleet', 'fleet.css'), 'utf8');
 
 afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
@@ -31,19 +28,7 @@ afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 // reason it can be turned into a label at all.
 const fakeSocket = () => ({ close: () => {}, send: () => {} }) as never;
 
-const fleetSession = (patch: Partial<FleetSession> = {}): FleetSession => ({
-  id: 'claude:OpenClawHetzner', wrapper: 'claude', home: 'claude',
-  project: 'OpenClawHetzner', workdir: '/root/projects/OpenClawHetzner',
-  workspace: null, name: null, status: 'idle', statusUpdatedAt: Date.now() - 120_000,
-  limits: { five: 62, seven: 71 },
-  dialogPending: false, model: null, effort: null, ultracode: false, branch: null,
-  ctxPct: null, paneCols: null, tasks: null, pr: null, archivedAt: null, archivedBytes: null,
-  hookState: null, askSummary: null, subagents: null, graphQueries: null, graphGateDenials: null, held: null,
-  bucket: 'idle', bucketSince: null, unmeasured: [], statusUnmeasured: false,
-  lifecycle: null, stoppedBy: null, swapBlocked: null, stranded: null, substrate: null, started: true, spawnState: null, ask: null, usage: null, boardProject: null, route: null, child: { kind: 'none' }, releasedFrom: null,
-  version: null,
-  ...patch,
-});
+const fleetSession = (patch: Partial<FleetSession> = {}): FleetSession => (baseSession({ id: 'claude:OpenClawHetzner', project: 'OpenClawHetzner', workdir: '/root/projects/OpenClawHetzner', statusUpdatedAt: Date.now() - 120_000, limits: { five: 62, seven: 71 }, ...patch }));
 
 const storeWith = (sessions: FleetSession[], roster = TEST_ROSTER): FleetStore => {
   const store = createFleetStore({ makeSocket: fakeSocket });
@@ -459,11 +444,17 @@ describe('a probe verdict costs preference, never eligibility', () => {
     expect(healthy).toHaveAttribute('data-disabled', 'false');
     expect(healthy).not.toHaveTextContent('sign-in expired');
     // The frozen numbers are still shown — the mark explains them, it does not
-    // replace them — and the CSS that greys their fill is the accounts screen's
-    // rule, restated for the picker row rather than reinvented.
+    // replace them — and their fills grey out. That was a fleet.css rule
+    // selecting `.limit-fill` through `[data-disabled]`; it is LimitBar's own
+    // `off` band now, so the claim is asserted where it is actually decided:
+    // in the rendered class list, not in a stylesheet this row may not even
+    // be under. Stronger than the rule read it replaces, which could pass with
+    // the markup never reaching the selector at all.
     expect(row).toHaveTextContent('3%');
-    expect(declValue(ruleIn(fleetCss, ".acct-list .acct-row[data-disabled='true'] .limit-fill"), 'background'))
-      .toBe('var(--edge-subtle)');
+    expect(row.querySelectorAll('.limit-fill--off')).toHaveLength(2);
+    expect(row.querySelectorAll('.limit-fill--crit, .limit-fill--warn, .limit-fill--ok'))
+      .toHaveLength(0);
+    expect(healthy.querySelectorAll('.limit-fill--off')).toHaveLength(0);
   });
 
   it('and the marked row is still TAPPABLE — the mark is the whole cost', async () => {

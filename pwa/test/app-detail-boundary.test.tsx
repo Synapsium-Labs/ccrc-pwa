@@ -12,7 +12,7 @@ import type { MockInstance } from 'vitest';
 import type { ReactNode } from 'react';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { clearAuthLost, raiseAuthLost } from '../src/lib/auth';
-import { toast } from '../src/components/Toast';
+import { toast } from '@ccrc/ui';
 import { navigate } from '../src/lib/router';
 import { useFleetStore } from '../src/stores/fleet';
 

@@ -1,3 +1,6 @@
+import { existsSync, readFileSync } from 'node:fs';
+import path from 'node:path';
+
 // The census scans' one reading of "code only": a sentence ABOUT a field is not
 // a read of it, so comments go and code stays — string literals included,
 // since a quoted token IS code.
@@ -27,3 +30,30 @@ const CODE_OR_COMMENT =
 
 export const codeOnly = (s: string): string =>
   s.replace(CODE_OR_COMMENT, (m: string, str: string | undefined) => str ?? m.replace(/[^\n]/g, ''));
+
+/** A PWA component and the local components it renders — one level of
+ *  relative `./X` imports that exist as `.tsx` beside it, joined.
+ *
+ *  WHY IT EXISTS. Three prose guards read a PWA file BY PATH and asserted it
+ *  contained a class the README describes: `run-project` and
+ *  `run-child-reclaim` in `screens/RunsScreen.tsx`, `data-offpool` in
+ *  `fleet/SessionLine.tsx`. All three went red when those screens were split
+ *  into a screen plus its row — the markup had not changed, only which file
+ *  held it. Naming a file is what broke; following what the file renders is
+ *  what does not.
+ *
+ *  ONE LEVEL is deliberate: it is the difference between "the board" and
+ *  "everything the board can reach", which on this tree is most of the app. A
+ *  split that nests deeper will red these guards again, and that is the right
+ *  outcome — a guard that silently widens to the whole app has stopped
+ *  checking where a cue is rendered. */
+export function componentFamily(root: string, rel: string): string {
+  const abs = path.join(root, rel);
+  const dir = path.dirname(abs);
+  const texts = [readFileSync(abs, 'utf8')];
+  for (const m of texts[0]!.matchAll(/from '\.\/([A-Za-z][A-Za-z0-9]*)'/g)) {
+    const sibling = path.join(dir, `${m[1] ?? ''}.tsx`);
+    if (existsSync(sibling)) texts.push(readFileSync(sibling, 'utf8'));
+  }
+  return texts.join('\n');
+}

@@ -35,9 +35,8 @@ import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { isRunState, type FleetSession, type RunSummary } from '../../../shared/api';
 import { RUN_WORD, childMarkOf } from './runWords';
-import { Sheet } from '../components/Sheet';
-import { ApiError, COORD_UNSUPPORTED_TEXT, api } from '../lib/api';
-import { toast } from '../components/Toast';
+import { Button, QC_ACTIONS, QC_CONSEQUENCE, Sheet, toast } from '@ccrc/ui';
+import { ApiError, COORD_UNSUPPORTED_TEXT, UNKNOWN_RUN_TEXT, api } from '../lib/api';
 import './fleet.css';
 
 /** The refusal vocabulary this sheet renders its OWN sentence for. A total
@@ -54,7 +53,7 @@ export const ABANDON_COPY: Record<
   'unknown-run' | 'bad-transition' | 'unsupported' | 'fleet-failed' | 'unknown',
   string
 > = {
-  'unknown-run': 'that run is gone — the board will catch up',
+  'unknown-run': UNKNOWN_RUN_TEXT,
   'bad-transition': 'this run already closed',
   // Review, M2: this used to be a byte-identical literal of `CoordBanner`'s
   // own 501 arm. One box, one skew, one sentence — see the constant's own
@@ -266,16 +265,16 @@ export function AbandonSheet({
   return (
     <Sheet open onClose={onClose} title="Abandon this run?">
       <div className="abandon-sheet">
-        <p className="qc-consequence">
+        <p className={QC_CONSEQUENCE}>
           {abandonConsequence(run, workspaceChild)}
         </p>
-        <div className="qc-actions">
-          <button type="button" className="btn-primary" disabled={busy} onClick={confirm}>
+        <div className={QC_ACTIONS}>
+          <Button variant="primary" disabled={busy} onClick={confirm}>
             {busy ? 'Abandoning…' : 'Abandon'}
-          </button>
-          <button type="button" className="btn-ghost" disabled={busy} onClick={onClose}>
+          </Button>
+          <Button variant="ghost" disabled={busy} onClick={onClose}>
             Cancel
-          </button>
+          </Button>
         </div>
         {error !== null && <p className="abandon-error">{error}</p>}
       </div>
