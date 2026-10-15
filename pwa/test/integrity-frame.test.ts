@@ -17,6 +17,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Divergence } from '../../shared/api';
 import { createFleetStore, type FleetStoreDeps } from '../src/stores/fleet';
+import { integrityView } from '../src/fleet/integrityWords';
 import { saveFleetSnapshot } from '../src/lib/offline';
 import { fleetSession } from './fleetFixture';
 
@@ -147,6 +148,40 @@ describe('the `divergence` frame', () => {
       // is not a newer measurement.
       expect(store.getState().divergenceCensus).toBe(prior);
     }
+    store.getState().disconnect();
+  });
+
+  it('a member of a kind this build cannot name is kept and counted, never dropped', () => {
+    // The plan's rule at the BOUNDARY: `asFleetMsg` checks the envelope only,
+    // and the store keeps every member as it arrived. A filter here, in the arm
+    // or in the `set`, would store a newer server's census of nothing but new
+    // kinds as `{ items: [] }`, which `integrityView` reads as clean: the false
+    // all-clear the plan's review focus 10 names. The model's own case
+    // (`integrity-words.test.ts`) feeds the model directly, so it cannot see a
+    // member lost before the model is reached.
+    const strangers: unknown[] = [
+      { kind: 'from-a-newer-server', id: 'lane-a-project-a', path: null, detail: 'a kind this build never heard of' },
+      { kind: 42, id: null, path: null, detail: 'a kind that is not a string' },
+      { id: null, path: '/w/project-a', detail: 'no kind at all' },
+      null,
+    ];
+    const store = createFleetStore(deps);
+    store.getState().connect();
+    lastSocket().open();
+
+    // Beside a member this build can name, in the frame's own order.
+    lastSocket().message(frame([drift, ...strangers]));
+    expect(store.getState().divergenceCensus).toEqual({ items: [drift, ...strangers], at: T0 });
+
+    // Nothing but strangers: still a census of four, read through the model,
+    // so the whole path from the socket to the view is pinned.
+    vi.setSystemTime(T0 + 10_000);
+    lastSocket().message(frame(strangers));
+    const census = store.getState().divergenceCensus;
+    expect(census).toEqual({ items: strangers, at: T0 + 10_000 });
+    const view = integrityView(census, T0 + 10_000);
+    expect(view.state).toBe('diverged');
+    expect(view.state === 'diverged' && view.total).toBe(strangers.length);
     store.getState().disconnect();
   });
 
