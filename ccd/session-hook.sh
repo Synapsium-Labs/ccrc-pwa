@@ -2879,6 +2879,129 @@ command -v jq >/dev/null 2>&1 || exit 0
 { read -r event; read -r psid; read -r paid; } < <(jq -r 'def keep(f): explode | map(select(f)) | implode; def alpha: (. >= 65 and . <= 90) or (. >= 97 and . <= 122); (.hook_event_name // "" | tostring | keep(alpha)), (.session_id // "" | tostring | keep(alpha or (. >= 48 and . <= 57) or . == 95 or . == 45)), (if ((.agent_id // "") | tostring | length) > 0 then "1" else "" end)' <<<"$payload" 2>/dev/null) || exit 0   # no regex builtin: every event runs it, and a jq built without Oniguruma (an optional build dependency) must not skip the write
 [[ -n "$event" ]] || exit 0
 
+# ── THE HISTORY CARD LINE (ccrc history spec 2026-10-05 §8.6, W1-B3) ─────
+# One line folded into the compact subject of SessionStart(compact)'s one
+# envelope, `History: node L…… (this compaction)[ · parent N……] ·
+# ~/.local/bin/ccrc history describe L…`, naming the leaf this compaction is
+# about to become. SessionStart(compact) runs before PostCompact and before the
+# indexer can have seen the boundary, so the line is ccd-history-sweep's
+# PREDICTION, `card/<id>/<uuid>.txt`: written only at end-of-file, deleted when
+# the boundary that consumed it is ingested. This hook only reads it, and
+# writes no receipt: delivery is measured from the transcript
+# (D-4737 (history-card-measured-from-transcript)).
+#
+# DEFINED HERE, ABOVE THE `case`: the SessionStart arm calls it, and the arm runs
+# inside the case, before the tail. This block is the ONE sanctioned insertion
+# above README's anchor into this file (the emitter call in the SessionStart
+# arm); README re-points that anchor by content (D-4748 (history-card-reader-above-the-arm)).
+#
+# BUILTINS ONLY: no command substitution and no external command, because the
+# compact card's serve lock may still be held when the arm calls this. `_ct_read`
+# is a builtin `read -N` that sets CT_V. The clock is EPOCHREALTIME, read ONCE
+# into `t` (each expansion reads the clock anew, so two reads could straddle a
+# second: the spool block's rule), and without it no line is served (never a
+# `date` fork). `$(( ))` is arithmetic, not a fork.
+#
+# THE CHECKS, in the spec's order (§8.6):
+#   1. the main thread (`$paid` empty);
+#   2. history-off absent;
+#   3. the id within SPOOL_ID_MAX, and a lowercase-UUID psid (the file's key).
+#      `.` and `..` need no test of their own: under scope/ and card/ they name
+#      directories, which `_ct_read` and `[[ -f ]]` refuse;
+#   4. recall-off/<id>, honoured only when it names THIS family's generation
+#      (B2's D-4680 (history-recall-off-generation)): CCRC_SESSION_GENERATION when it has the
+#      UUID grammar, else `$REG/<id>.generation` when it does, else the record
+#      the sweep wrote beside this prediction, card/<id>/<psid>.gen: the id's
+#      newest family's generation, '' for a legacy family or none, which is what
+#      B2's CLI compares with then (coordinator ruling R-recalloff-parity). With
+#      none of the three, or a linked, unreadable or malformed record, a
+#      recall-off file that exists withholds the line (fail closed). It is
+#      read the way B2's CLI reads it, so the card and `ccrc history` never put
+#      one family in two eval arms: a symlink, a non-file or an unreadable file
+#      is OFF (D-4749 (history-card-recall-off-unreadable-off)), and a symlinked or
+#      unreadable `.generation` names no generation. The read is CCRC_ID_MAX
+#      chars where the CLI's is 4,096 bytes, so a read that FILLS the window is
+#      OFF before it is trimmed: a hand edit that pads the file past it withholds
+#      the line, never serves one the CLI answers exit 8 for (W2's verb writes
+#      37 bytes). The ONE deliberate asymmetry (coordinator ruling
+#      R-recalloff-trim): this trim takes ASCII whitespace only, in every
+#      locale, where the CLI's JS trim also strips U+00A0, U+FEFF and the
+#      Unicode spaces, so a value that still holds a character outside the
+#      generation grammar (empty, or [0-9a-f-]) withholds the line: it may
+#      withhold where the CLI recalls, never serve where the CLI exits 8;
+#   5. the PreCompact scope marker reads `main <psid> <ms>`, the ms no older than
+#      COMPACT_CARD_MAX_AGE (at most, D-5051) and not in the future (D-4747 (history-card-main-scope-only)); the read's own `|| return 0` is defence in depth (D-5056);
+#   6. one bounded read of the card file, a regular file only (a FIFO would
+#      block the read), at most HISTORY_CARD_MAX + 1 chars, ONE trailing LF
+#      stripped. The read's bound IS the 512-char cap: the grammar admits no
+#      line over 145 chars, so a separate length test would be one no input
+#      can reach, and this file does not spell guards nothing can trip. The
+#      tests are builtin; a node swapped in after the test is opened: a link is
+#      followed, a FIFO blocks until Claude Code kills the hook
+#      (install-session-hooks.sh HOOK_TIMEOUT_S), as the spool block says;
+#   7. the grammar, one positive pattern held in a variable;
+#   8. the room: line + LF + card within COMPACT_CARD_MAX_CHARS.
+# THE FOLD puts the line on its own line ABOVE the compact card, and only when it
+# fits, so the emitter's `${2:0:$COMPACT_CARD_MAX_CHARS}` clip never cuts the
+# card's footer; the render reserves the room in the tail
+# (D-4736 (history-card-fold-and-reserve)). The LF is a variable assigned outside the
+# quotes, because `$'\n'` inside `${…:+…}` is not expanded under `bash --posix`.
+# Nothing here touches COMPACT_SERVE_NONCE, so the line alone stamps no `served`.
+#
+# The four names below are this file's one spelling of the card's cap, grammar
+# and two directories, each bound to lib.mjs's CARD_LINE_MAX, CARD_LINE_PATTERN,
+# SCOPE_DIR and CARD_DIR by single-definition.test.ts; the tail derives the
+# reserve from the cap (D-4750 (history-hook-card-names-once)).
+HISTORY_CARD_MAX=512
+HISTORY_CARD_RE='^History: node L[0-9a-f]{6,20}… \(this compaction\)( · parent N[0-9a-f]{6,20}…)? · ~/\.local/bin/ccrc history describe L[0-9a-f]{6,20}$'
+HISTORY_SCOPE_DIR="$HOME/.ccrc/history/scope"
+HISTORY_CARD_DIR="$HOME/.ccrc/history/card"
+_hook_history_card() {   # folds the history line into CARD_COMPACT; silent; builtins only
+  local uuid_re='^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+  local off="$HOME/.ccrc/history/recall-off/$id" gen="" via="" o="" ms="" now="" t="" s="" f="" v="" nl=$'\n' ws=$' \t\n\v\f\r'
+  [[ -z "$paid" ]] || return 0
+  [[ -e "$HOME/.ccrc/history-off" ]] && return 0
+  (( ${#id} <= 224 )) || return 0
+  [[ "$psid" =~ $uuid_re ]] || return 0
+  if [[ "${CCRC_SESSION_GENERATION:-}" =~ $uuid_re ]]; then
+    gen="$CCRC_SESSION_GENERATION" via=session
+  elif [[ ! -L "$REG/$id.generation" ]] && _ct_read "$REG/$id.generation" && [[ "$CT_V" =~ $uuid_re ]]; then
+    gen="$CT_V" via=registry
+  fi
+  [[ -L "$off" ]] && return 0
+  if [[ -e "$off" ]]; then
+    [[ -f "$off" && -r "$off" ]] || return 0
+    IFS= read -r -N "$CCRC_ID_MAX" o 2>/dev/null < "$off"
+    (( ${#o} < CCRC_ID_MAX )) || return 0
+    o="${o#"${o%%[!$ws]*}"}"; o="${o%"${o##*[!$ws]}"}"
+    [[ "$o" == *[!0123456789abcdef-]* ]] && return 0
+    if [[ -z "$via" ]]; then
+      [[ -L "$HISTORY_CARD_DIR/$id/$psid.gen" ]] && return 0
+      _ct_read "$HISTORY_CARD_DIR/$id/$psid.gen" || return 0
+      [[ -z "$CT_V" || "$CT_V" =~ $uuid_re ]] || return 0
+      gen="$CT_V"
+    fi
+    [[ "$o" == "$gen" ]] && return 0
+  fi
+  _ct_read "$HISTORY_SCOPE_DIR/$id" || return 0
+  [[ "$CT_V" == "main $psid "* ]] || return 0
+  ms="${CT_V#"main $psid "}"
+  [[ "$ms" =~ ^[1-9][0-9]{0,15}$ ]] || return 0
+  t="${EPOCHREALTIME:-}"
+  [[ "$t" =~ ^[1-9][0-9]{0,11}[.,][0-9]*$ ]] || return 0
+  s="${t%%[.,]*}" f="${t#*[.,]}000"
+  now=$(( s * 1000 + 10#${f:0:3} ))
+  (( now >= ms && now - ms <= COMPACT_CARD_MAX_AGE * 1000 )) || return 0
+  f="$HISTORY_CARD_DIR/$id/$psid.txt"
+  [[ -f "$f" ]] || return 0
+  IFS= read -r -N "$(( HISTORY_CARD_MAX + 1 ))" v 2>/dev/null < "$f"
+  v="${v%"$nl"}"
+  [[ "$v" =~ $HISTORY_CARD_RE ]] || return 0
+  (( ${#v} + 1 + ${#CARD_COMPACT} <= COMPACT_CARD_MAX_CHARS )) || return 0
+  CARD_COMPACT="$v${CARD_COMPACT:+$nl$CARD_COMPACT}"
+  return 0
+}
+
 state="" ask_json="null" interrupted="false" src="" gcmd="" stopfail="" bg="-1" bgk="" bgi="" err="" hts="" msid="" sessend=""
 case "$event" in
   UserPromptSubmit) state="working" ;;
@@ -3002,7 +3125,7 @@ case "$event" in
     # describes the compacted context and nothing else, so startup, resume
     # and clear never read the file. It is passed to the emitter SEPARATELY —
     # the standing three keep their clip, the card gets its own (D-1899).
-    [[ "$src" == compact ]] && { _hook_compact_card || true; }
+    [[ "$src" == compact ]] && { _hook_compact_card || true; _hook_history_card || true; }
     CARD="$CARD_GRAPH"
     [ -z "$CARD_HOLD" ] || CARD="${CARD:+$CARD }$CARD_HOLD"
     [ -z "$CARD_CCRC" ] || CARD="${CARD:+$CARD }$CARD_CCRC"
@@ -3034,7 +3157,7 @@ esac
 # fails, or a verdict nobody reached, leaves an EMPTY marker, never an older
 # fresh `main` one for a subagent (spec §5.1, "The early truncation").
 # Builtins only; no file is made; only a regular non-link file in a non-link scope/.
-[[ "$event" == PreCompact && -z "$paid" ]] && [[ -f "$HOME/.ccrc/history/scope/$id" && ! -L "$HOME/.ccrc/history/scope/$id" && ! -L "$HOME/.ccrc/history/scope" ]] && { : > "$HOME/.ccrc/history/scope/$id"; } 2>/dev/null
+[[ "$event" == PreCompact && -z "$paid" ]] && [[ -f "$HISTORY_SCOPE_DIR/$id" && ! -L "$HISTORY_SCOPE_DIR/$id" && ! -L "$HISTORY_SCOPE_DIR" ]] && { : > "$HISTORY_SCOPE_DIR/$id"; } 2>/dev/null
 # THE CAPTURE ARM (worker stall watch §5.1's first task; capture-arm-keyed-on-hookcap (D-3612),
 # capture-arm-is-permanent (D-3613), capture-file-carries-a-meta-line (D-3669)). Only a session whose
 # ccd id ends `-hookcap` pays more than this one test. Every registered event that
@@ -3063,7 +3186,12 @@ fi
 # THE TURN MARKER (worker stall watch, spec §5.1): `$REG/<id>.turn.json`, one JSON
 # line that the stall lane and the mail gate read. It is written HERE, below the
 # case, because README anchors this file at :2900 and nothing new may land above
-# that line (marker-logic-in-the-tail (D-3615)).
+# that line (marker-logic-in-the-tail (D-3615)). ONE SANCTIONED EXCEPTION since
+# ccrc history W1-B3: `_hook_history_card` and its four constants sit above the
+# `case`, because the SessionStart arm calls the function before the tail runs.
+# README's anchor moved with them and was re-pointed by content, so ":2900" here
+# reads "README's anchor": the emitter call in the SessionStart arm, found by
+# its text (D-4748 (history-card-reader-above-the-arm)). The rule itself stands.
 #
 # WHO WRITES: main-thread events only. `paid` is the payload parse's flag for a
 # non-empty `agent_id`. It is set by that one read and never re-declared, so a
@@ -3146,7 +3274,8 @@ fi
 # ccd-history-sweep drains on its next tick. HERE, below the turn marker and
 # above the StopFailure exit and the hookstate write, so neither a failed
 # hookstate write nor compact-card-off can cost the line. Like the turn marker,
-# it is in the tail because nothing new may land above :2900.
+# it is in the tail because nothing new may land above README's anchor (the
+# emitter call in the SessionStart arm, found by content).
 #
 # BUILTINS ONLY, ON THE HOT PATH: no command substitution, no jq, no fork of
 # any kind — `_ct_read` is a builtin `read -N` that sets CT_V, so it is called
@@ -4130,7 +4259,7 @@ if [[ "$event" == PreCompact  ]]; then _hook_compact_pre  || true; fi
 # that fails exits above, after the early line emptied any older marker, so it
 # leaves an empty marker or none: the fail-closed direction.
 _hook_history_scope() {   # -> scope/<id> = "<scope> <psid> <ms>" when decided; silent
-  local f="$HOME/.ccrc/history/scope/$id" scope="" ms="" tp="" trig=""
+  local f="$HISTORY_SCOPE_DIR/$id" scope="" ms="" tp="" trig=""
   (( ${#id} <= 224 )) || return 0
   [[ "$psid" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]] || return 0
   if [[ -z "${CS_SCOPE+x}" ]]; then
@@ -4144,7 +4273,7 @@ _hook_history_scope() {   # -> scope/<id> = "<scope> <psid> <ms>" when decided; 
   { printf '%s %s %s\n' "$scope" "$psid" "$ms" > "$f"; } 2>/dev/null
   return 0
 }
-if [[ "$event" == PreCompact && -z "$paid" ]] && [[ -d "$HOME/.ccrc/history/scope" && ! -L "$HOME/.ccrc/history/scope" ]] && [[ ! -e "$HOME/.ccrc/history-off" ]]; then _hook_history_scope || true; fi
+if [[ "$event" == PreCompact && -z "$paid" ]] && [[ -d "$HISTORY_SCOPE_DIR" && ! -L "$HISTORY_SCOPE_DIR" ]] && [[ ! -e "$HOME/.ccrc/history-off" ]]; then _hook_history_scope || true; fi
 # <<< history-scope
 if [[ "$event" == PostCompact ]]; then _hook_compact_post || true; fi
 exit 0

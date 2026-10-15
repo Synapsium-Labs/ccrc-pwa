@@ -8429,6 +8429,15 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
       // 147 -> 146 on the forked-session-transcript review round (2026-10-13): the review fixes' ccd/ccd insertions slid
       // lines under frozen anchors; measured from the merged tree's dump, never retyped. S6-R11, no D-number.
       // 146 -> 147: RE-MEASURED on the forked-session-transcript review round 2 + tick diet W1 merge (2026-10-14), dumped from the merged tree and never retyped. S6-R11, no D-number.
+      // 147 -> 147 at ccrc history W1-B3 (Task 9), measured 2026-10-15 by `cite-remeasure.py` with
+      // `--files ccd/session-hook.sh,README.md` against `edae0c64d`: stated = base = tree for every key,
+      // `ENTERED []`, `LEFT []`, and the row and site arrays unmoved. The hook gained one block ABOVE
+      // README's anchor (`_hook_history_card` and its four constants, 123 lines with their blank line,
+      // defined above the event `case` because the SessionStart arm calls it before the tail runs), and
+      // every spec and plan anchor into the hook sits above that block (the highest is `:2472`), so none
+      // moved. README's own anchor moved with the block, and README is repaired, never counted: its quoted
+      // emitter call was re-pointed by content before this map was measured. Every other hook edit is in
+      // place or in the tail. Both corpus documents are byte-identical to `origin/main`. S6-R11, no D-number.
       'ccd/ccd': 147,
       'ccd/session-hook.sh': 21,
       'ccd/compact-card.mjs': 4,
@@ -8742,6 +8751,7 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
     // 197 -> 196 at box-token-lifecycle wave 2 B7: `'deploy/deploy.sh'` 4 -> 3 and nothing else moved (argued beside the map).
     // 196 -> 195 on the forked-session-transcript review round (2026-10-13): `ccd/ccd` 147 -> 146 and nothing else moved. Derived from the census (S6-R11).
     // 195 -> 196: RE-MEASURED on the forked-session-transcript review round 2 + tick diet W1 merge (2026-10-14), dumped from the merged tree and never retyped. S6-R11, no D-number.
+    // 196 -> 196 at ccrc history W1-B3 (Task 9), 2026-10-15: stated, base and tree 196, no key moved (argued beside the map).
     expect(total, 'the narrated headline is the sum of the census, and this is it').toBe(196);
     // AND EVERY FAILING CITATION POINTS INTO A FILE THIS TASK REWROTE — the
     // claim that makes the census a statement about Task 9 rather than about
@@ -11631,4 +11641,495 @@ describe('history scope marker: PreCompact records whose context is compacting (
     expect(gate, 'the gate refuses a symlinked scope/').toMatch(notLinkedScope);
     expect(early[0], 'the early line refuses a symlinked scope/').toMatch(notLinkedScope);
   });
+});
+// ── ccrc history: the card line SessionStart(compact) folds into the compact subject (history spec 2026-10-05 §8.6, §8.9; W1-B3 task 9) ──
+// APPENDED, with NO new import line: the citation census cites this file by line.
+// The history lib is reached by dynamic import. `run`/`runFull`/`hookEnv`/`card`/`home`/
+// `HOOK`/`HELPER_SRC`/`GENERATION`/`setFile`/`cardFile`/`cardTree`/`plantSession`/
+// `preCompact`/`LIVE`/`DEAD`/`tl` are this file's module-level fixture.
+describe('history card line: SessionStart(compact) serves the sweep\'s prediction to a main compaction (spec §8.6)', () => {
+  const SID = '7d0c3f5e-1a2b-4c3d-8e9f-0a1b2c3d4e5f';
+  const OTHER = '9e8d7c6b-5a49-4382-a1b0-c9d8e7f6a5b4';
+  const G2 = '0189abcd-1234-5678-9abc-0123456789ff';
+  const ID = 'demo-quiet-basin';
+  const ROOT = process.getuid?.() === 0;
+  let lib: typeof import('../../ccd/history/lib.mjs');
+  let LINE = '';
+  beforeEach(async () => {
+    lib = await import('../../ccd/history/lib.mjs');
+    LINE = lib.cardLine({ leaf: 'L03a9c1', parent: 'N7c1e2f' });
+  });
+  const histDir = (...p: string[]): string => path.join(home, '.ccrc', 'history', ...p);
+  const reg = (f: string): string => path.join(home, '.cc-sessions', f);
+  /** The two directories the sweep makes (Task 5); the hook never makes them. */
+  const plantDirs = (id = ID): void => {
+    fs.mkdirSync(histDir('scope'), { recursive: true, mode: 0o700 });
+    fs.mkdirSync(histDir('card', id), { recursive: true, mode: 0o700 });
+  };
+  /** What Task 8's marker writes, planted directly: `<scope> <psid> <ms>`. */
+  const mark = (text = `main ${SID} ${Date.now()}`, id = ID): void => fs.writeFileSync(histDir('scope', id), `${text}\n`);
+  const cardPath = (sid = SID, id = ID): string => histDir('card', id, `${sid}.txt`);
+  /** The whole fixture of a servable compaction: both directories, a fresh main marker, the prediction. */
+  const plantAll = (text?: string, id = ID): void => {
+    plantDirs(id); mark(undefined, id);
+    fs.writeFileSync(cardPath(SID, id), text ?? `${LINE}\n`, { mode: 0o600 });
+  };
+  const offFile = (name: string): string => path.join(home, '.ccrc', name);
+  const touchOff = (name: string): void => {
+    fs.mkdirSync(path.join(home, '.ccrc'), { recursive: true });
+    fs.writeFileSync(offFile(name), '');
+  };
+  /** SessionStart(compact) with a UUID session id: the module's `compactStart` hard-codes `sess-1`. */
+  const start = (extra: object = {}): object =>
+    ({ hook_event_name: 'SessionStart', source: 'compact', cwd: home, transcript_path: path.join(home, 't.jsonl'),
+      session_id: SID, prompt_id: 'p1', model: 'claude-opus-5', ...extra });
+  /** The additionalContext the hook printed, or null when it printed nothing; silent stderr asserted. */
+  const served = (payload: object = start(), env: Record<string, string> = {}): string | null => {
+    const r = runFull(payload, { ...HISTORY_HOOK_SCRUB, ...env });
+    expect(r.stderr, 'the hook is silent on stderr').toBe('');
+    return r.stdout === '' ? null : card(r.stdout);
+  };
+  const hasLine = (out: string | null): boolean => out !== null && out.includes('History: node ');
+  /** A compact card pair as `_hook_compact_pre` leaves it: the shape of the describe-local `plantPair` above, whose
+   *  serve arm reads only the set's nonce. A fresh nonce per pair, because a served nonce is never served again. */
+  let pairs = 0;
+  const plantCompactCard = (text: string): void => {
+    pairs += 1;                                  // a fresh nonce per pair: a served nonce is never served again
+    const nonce = `compact-${pairs}-1-2-3`;
+    fs.writeFileSync(setFile(), JSON.stringify({ v: 1, at: 1, nonce, scope: 'main', agent: null, transcript: '/t.jsonl',
+      parentLive: null, liveAgents: 0, cwd: null, built: null, fresh: null, steered: false, files: null, stats: null }) + '\n');
+    fs.writeFileSync(cardFile(), `${nonce}\n${text}\n`);
+  };
+  /** The helper's own footer, read from its source rather than retyped. */
+  const FOOTER = (): string => /^const FOOTER = '(.*)';$/m.exec(fs.readFileSync(HELPER_SRC, 'utf8'))![1]!;
+  /** ASCII, like everything else in the synthetic card below, so its width is the same in every locale. */
+  const HEADER = 'graphify card - this context\'s working set at compaction, from graphify-out/ (built at deadbeef, fresh):';
+  /** A compact card of exactly `n` chars, shaped as `renderCard` shapes a truncated one: header, a row, the
+   *  `(+k files not shown)` line, the blast line, and the helper's footer last. All ASCII, so `n` chars are `n`
+   *  bytes and the hook's `${#…}` reads `n` under any locale; only the history line's width depends on it. */
+  const compactCardOf = (n: number): string => {
+    const row = (k: number): string => `- server/src/a.ts [touched] - symbols ${'s'.repeat(k)}`;
+    const parts = (k: number): string[] => [HEADER, row(k), '(+4 files not shown)',
+      'Blast radius: 0 files import or call something in these 5 files.', FOOTER()];
+    const text = parts(n - parts(0).join('\n').length).join('\n');
+    expect(text.length).toBe(n);
+    return text;
+  };
+  /** A BASH_ENV that strips the dynamic EPOCHREALTIME builtin and, given a value, plants a plain one. */
+  const epochEnv = (value: string | null): string => {
+    const f = path.join(home, 'epochrealtime.bash');
+    fs.writeFileSync(f, value === null ? 'unset EPOCHREALTIME\n' : `unset EPOCHREALTIME\nEPOCHREALTIME='${value}'\n`);
+    return f;
+  };
+
+  it('serves the prediction, alone, as the compact subject of a main compaction', () => {
+    plantAll();
+    expect(served()).toBe(LINE);
+  });
+
+  it('a parent-less line and a 20-hex line pass the grammar too', () => {
+    plantAll(`${lib.cardLine({ leaf: 'L03a9c1', parent: null })}\n`);
+    expect(served()).toBe(lib.cardLine({ leaf: 'L03a9c1', parent: null }));
+    const long = lib.cardLine({ leaf: `L${'0123456789abcdef0123'}`, parent: `N${'fedcba9876543210fedc'}` });
+    fs.writeFileSync(cardPath(), `${long}\n`);
+    expect(served()).toBe(long);
+  });
+
+  // THE UNIT. `${#…}` and the emitter's `${2:0:N}` count in the hook's locale: bytes under C, characters under a
+  // UTF-8 locale. The history line carries `…` and `·`, so its width is 109 bytes but 103 characters, and the
+  // fold's room test must be in the emitter's own unit or a fold could still be cut. Each case below pins a
+  // locale and measures the line in that locale's unit.
+  it('C18: a reserved 3,487-char compact card plus the line — the line first, the header second, the footer last, within 4,000, one JSON line', () => {
+    plantAll();
+    const reserved = compactCardOf(4000 - (lib.CARD_LINE_MAX + 1));
+    plantCompactCard(reserved);
+    const out = served(start(), { LC_ALL: 'C' })!;   // `card` asserts exactly one stdout line, a SessionStart envelope
+    const lines = out.split('\n');
+    expect(lines[0]).toBe(LINE);
+    expect(lines[1]).toBe(HEADER);
+    expect(lines[lines.length - 1]).toBe(FOOTER());
+    expect(out).toBe(`${LINE}\n${reserved}`);
+    expect(Buffer.byteLength(out), 'within the compact clip in its strictest unit').toBeLessThanOrEqual(4000);
+  });
+
+  it('C18: a 4,000-char card rendered before install leaves no room — no history line, the card intact', () => {
+    plantAll();
+    const full = compactCardOf(4000);
+    plantCompactCard(full);
+    expect(served(start(), { LC_ALL: 'C' })).toBe(full);
+  });
+
+  it.each([
+    ['C', (l: string) => Buffer.byteLength(l)],
+    ...(IS_DARWIN ? [] : [['C.UTF-8', (l: string) => l.length] as const]),
+  ] as const)('C18: under LC_ALL=%s the room test is inclusive — 4000 - line - 1 folds, one more does not', (locale, width) => {
+    plantAll();
+    const fits = compactCardOf(4000 - width(LINE) - 1);
+    plantCompactCard(fits);
+    expect(served(start(), { LC_ALL: locale })).toBe(`${LINE}\n${fits}`);
+    plantAll();
+    const over = compactCardOf(4000 - width(LINE));
+    plantCompactCard(over);
+    expect(served(start(), { LC_ALL: locale })).toBe(over);
+  });
+
+  it('with standing cards present the compact positional still begins with the line', () => {
+    const tree = cardTree();
+    plantAll();
+    const out = served(start({ cwd: tree }))!;
+    expect(out).toContain('graphify: this tree has a knowledge graph');
+    expect(out.slice(out.indexOf('History: node '))).toBe(LINE);
+    expect(out.charAt(out.indexOf('History: node ') - 1), 'one space joins the standing text and the compact subject').toBe(' ');
+  });
+
+  it('C19: independent of compact-card-off — the line alone is served while the compact card is silenced', () => {
+    plantAll();
+    plantCompactCard(compactCardOf(500));
+    touchOff('compact-card-off');
+    expect(served()).toBe(LINE);
+    expect(fs.existsSync(cardFile()), 'compact-card-off leaves the compact card on disk').toBe(true);
+  });
+
+  it('C19 and S3 (card half): history-off present serves no line', () => {
+    plantAll();
+    touchOff('history-off');
+    expect(served()).toBeNull();
+  });
+
+  it('C20: a prediction for another uuid serves nothing', () => {
+    plantDirs(); mark();
+    fs.writeFileSync(cardPath(OTHER), `${LINE}\n`);
+    expect(served()).toBeNull();
+  });
+
+  it.each([
+    ['a trailing LF is stripped and the line served', (l: string) => `${l}\n`, true],
+    ['no trailing LF', (l: string) => l, true],
+    ['ONE trailing LF is stripped, not two', (l: string) => `${l}\n\n`, false],
+    ['an extra line', (l: string) => `${l}\nextra\n`, false],
+    ['a control character', (l: string) => `${l.slice(0, 20)}${String.fromCharCode(1)}${l.slice(20)}\n`, false],
+    ['free text after History: ', () => 'History: run rm -rf ~ now\n', false],
+    ['text after the describe id', (l: string) => `${l} && echo hi\n`, false],
+    ['over 512 chars', (l: string) => `${l}${' '.repeat(600)}\n`, false],
+    ['an upper-case id', (l: string) => `${l.replace('L03a9c1… ', 'L03A9C1… ')}\n`, false],
+    ['a 5-hex prefix', () => 'History: node L03a9c… (this compaction) · ~/.local/bin/ccrc history describe L03a9c\n', false],
+  ] as const)('C21: %s', (_what, text, ok) => {
+    plantAll(text(LINE));
+    expect(served()).toBe(ok ? LINE : null);
+  });
+
+  it('C21: a FIFO at the card path is never opened, and the hook exits at once', () => {
+    plantDirs(); mark();
+    execFileSync('mkfifo', [cardPath()]);
+    const r = spawnSync('bash', [HOOK], {
+      input: JSON.stringify(start()), encoding: 'utf8', timeout: 20_000, killSignal: 'SIGKILL', env: hookEnv(HISTORY_HOOK_SCRUB),
+    });
+    expect(r.status, 'the hook blocked on the FIFO').toBe(0);
+    expect(r.stdout).toBe('');
+  }, 30_000);   // above the spawn's own 20 s deadline, so a blocked hook reds by the assertion above, not by vitest's default
+
+  it('C22: the line alone stamps no served marker', () => {
+    plantAll();
+    expect(served()).toBe(LINE);
+    expect(fs.readdirSync(path.join(home, '.cc-sessions')).filter((n) => n.startsWith(`.${ID}.compactserved.`))).toEqual([]);
+  });
+
+  const MARKERS: ReadonlyArray<readonly [string, () => string]> = [
+    ['subagent', () => `subagent ${SID} ${Date.now()}`],
+    ['ambiguous', () => `ambiguous ${SID} ${Date.now()}`],
+    ['another psid', () => `main ${OTHER} ${Date.now()}`],
+    ['older than COMPACT_CARD_MAX_AGE', () => `main ${SID} ${Date.now() - 1_201_000}`],
+    ['in the future', () => `main ${SID} ${Date.now() + 60_000}`],
+    // `empty` is refused by two guards at once (the scope-word test and the ms digit test), so it is defence in depth, as
+    // is the scope read's `_ct_read … || return 0`: `_ct_read` empties CT_V before it fails and the prefix test refuses an
+    // empty value, so no input can red that fallback's removal (D-5056).
+    ['empty', () => ''],
+    ['a bare ms', () => `${Date.now()}`],
+    ['a non-numeric ms', () => `main ${SID} soon`],
+  ];
+  it.each(MARKERS)('C37: a scope marker reading %s serves no line', (_what, text) => {
+    plantAll();
+    mark(text());
+    expect(served()).toBeNull();
+  });
+
+  it('C37: a marker inside the age bound serves', () => {
+    plantAll();
+    mark(`main ${SID} ${Date.now() - 1_190_000}`);
+    expect(served()).toBe(LINE);
+  });
+
+  it('C37: end to end — a main compaction serves, a subagent\'s does not (Task 8 writes the marker)', () => {
+    plantDirs();
+    fs.writeFileSync(cardPath(), `${LINE}\n`);
+    const main = plantSession({ sid: SID, lines: [tl.user('x')] });
+    runFull({ ...preCompact(home, main.transcript, 'manual'), session_id: SID }, HISTORY_HOOK_SCRUB);
+    expect(served(start({ transcript_path: main.transcript }))).toBe(LINE);
+    fs.rmSync(setFile(), { force: true });       // PostCompact's to consume; left, it reads as an overlap
+    const sub = plantSession({ sid: SID, lines: [tl.user('x')], parentAge: DEAD,
+      subagents: [{ id: 'a1', lines: [tl.user('y')], age: LIVE }] });
+    runFull({ ...preCompact(home, sub.transcript, 'auto'), session_id: SID }, HISTORY_HOOK_SCRUB);
+    expect(fs.readFileSync(histDir('scope', ID), 'utf8')).toMatch(/^subagent /);
+    expect(served(start({ transcript_path: sub.transcript }))).toBeNull();
+  });
+
+  it('S2 (card half): a SessionStart(compact) payload with agent_id serves no line', () => {
+    plantAll();
+    expect(served(start({ agent_id: 'agent-7' }))).toBeNull();
+  });
+
+  it('only a compact SessionStart serves: startup, resume, clear and fork (spooled from B2, ruled Q16) never read the prediction', () => {
+    plantAll();
+    for (const source of ['startup', 'resume', 'clear', 'fork']) expect(hasLine(served(start({ source }))), source).toBe(false);
+  });
+
+  it('S8 (card half): under history-off a SessionStart(clear) still spools its epoch line and prints no card line', () => {
+    plantAll();
+    fs.mkdirSync(histDir('spool'), { recursive: true, mode: 0o700 });
+    touchOff('history-off');
+    expect(hasLine(served(start({ source: 'clear' })))).toBe(false);
+    expect(fs.readFileSync(histDir('spool', `${ID}.jsonl`), 'utf8')).toContain('"src":"clear"');
+  });
+
+  it('the id bound is SPOOL_ID_MAX: a 224-char id is served, a 225-char id is not', () => {
+    for (const [n, ok] of [[lib.SPOOL_ID_MAX, true], [lib.SPOOL_ID_MAX + 1, false]] as const) {
+      const id = 'a'.repeat(n);
+      fs.writeFileSync(path.join(home, 'bin', 'tmux'), `#!/bin/sh\necho "cc-${id}"\n`, { mode: 0o755 });
+      plantAll(undefined, id);
+      expect(served(), `${n} chars`).toBe(ok ? LINE : null);
+    }
+  });
+
+  it('a session_id that is not a lowercase UUID serves nothing, even beside a marker and a file keyed on it', () => {
+    plantDirs();
+    mark(`main sess-1 ${Date.now()}`);
+    fs.writeFileSync(cardPath('sess-1'), `${LINE}\n`);
+    expect(served(start({ session_id: 'sess-1' }))).toBeNull();
+  });
+
+  it.each([
+    ['unset', null],
+    ['malformed', 'not-a-clock'],
+  ] as const)('EPOCHREALTIME %s serves no line and never forks a clock', (_what, value) => {
+    plantAll();
+    expect(served(start(), { BASH_ENV: epochEnv(value) })).toBeNull();
+  });
+
+  // B1's F37 shape (its spool block): each expansion of EPOCHREALTIME reads the clock anew, so the reader reads it ONCE.
+  // A DEBUG trap (`set -T` carries it into the function) hands the grammar test a valid reading, 1700000000.999999, and
+  // every other command one with no fraction, 1700000001. Read once, the reader tests and slices the no-fraction reading
+  // and serves nothing; the tested reading alone would put the marker 101 ms in the future and serve nothing either. Only
+  // a reader that tests one reading and slices another serves: its `now` takes 1700000001's digits as the fraction.
+  it('EPOCHREALTIME is read once: a clock that moves between the test and the slice serves no mis-aged line', () => {
+    plantAll();
+    mark(`main ${SID} 1700000001100`);
+    const trapFile = path.join(home, 'epochtrap.bash');
+    fs.writeFileSync(trapFile, 'set -T\nunset EPOCHREALTIME\nEPOCHREALTIME=1700000001\n'
+      + 'trap \'case $BASH_COMMAND in *"=~ ^[1-9]"*) EPOCHREALTIME=1700000000.999999 ;; *) EPOCHREALTIME=1700000001 ;; esac\' DEBUG\n');
+    expect(served(start(), { BASH_ENV: trapFile }), 'a line served on a clock no single reading gave').toBeNull();
+  });
+
+  // RECALL-OFF PARITY (spec §9.7, §8.2, C68; B2's D-4680 (history-recall-off-generation); coordinator ruling
+  // R-recalloff-parity): every row runs the hook, and its expectation is the CLI's own decision over the
+  // fixture, so the card and `ccrc history` can never put one family in two eval arms. The CLI resolves the
+  // generation as B2's readContext does: the env's, else the registry's (lib resolveGeneration), else, under
+  // 'newest', the id's newest family's ('' for a legacy family or none), which only the store knows. The hook
+  // cannot read the store, so there it reads the record the sweep writes beside the prediction,
+  // card/<id>/<psid>.gen (Task 5 pins that record against B2's familiesOf); this fixture's record IS the
+  // store's newest family. With no usable record the CLI's answer is the store's, which the hook cannot know:
+  // a recall-off file that exists then withholds the line (fail closed), and an absent or unreadable one
+  // answers as it does for the CLI whatever the generation.
+  // The one deliberate asymmetry (coordinator ruling R-recalloff-trim): the hook trims ASCII whitespace only, where
+  // B2's presenceOf decodes UTF-8 and trims with String.prototype.trim, which also strips U+00A0 and U+FEFF. So a
+  // value that holds a character outside the generation grammar after the hook's trim withholds the line: the
+  // `G-nbsp` and `G-bom` rows read OFF in the CLI (exit 8) and withhold here. The characters are built from their
+  // code points, never written as escapes or as themselves, so no write can turn them into something else.
+  const NBSP_G = `${String.fromCharCode(0xa0)}${GENERATION}\n`;
+  const BOM_G = `${String.fromCharCode(0xfeff)}${GENERATION}\n`;
+  type Reg = 'G' | 'G2' | 'absent' | 'unreadable' | 'symlink-G' | 'junk';
+  type Off = 'absent' | 'G' | 'G-padded' | 'G-wide' | 'G-nbsp' | 'G-bom' | 'G2' | 'empty' | 'unreadable' | 'dir' | 'symlink-G';
+  type Rec = 'G' | 'G2' | 'legacy' | 'absent' | 'junk' | 'symlink-G';
+  /** B1's Presence, as a type-only import expression: this file gains no import line (the census cites it by line). */
+  type Pres = import('../../ccd/history/lib.mjs').Presence<string>;
+  const PARITY: ReadonlyArray<readonly [string, string, Reg, Off, Rec]> = [
+    ['no recall-off file', GENERATION, 'G', 'absent', 'G'],
+    ['recall-off names this generation', GENERATION, 'G', 'G', 'G'],
+    ['recall-off names it inside whitespace', GENERATION, 'G', 'G-padded', 'G'],
+    // Ruling RC4: 130 spaces push the generation past the hook's CCRC_ID_MAX-char read, inside the CLI's 4,096 bytes.
+    ['130 spaces followed by the resolved generation G', GENERATION, 'G', 'G-wide', 'G'],
+    // Ruling R-recalloff-trim: the CLI's trim strips each, so it reads G and exits 8; the hook withholds.
+    ['a no-break space before the resolved generation G', GENERATION, 'G', 'G-nbsp', 'G'],
+    ['a byte-order mark before the resolved generation G', GENERATION, 'G', 'G-bom', 'G'],
+    ['recall-off names another generation (stale)', GENERATION, 'G', 'G2', 'G'],
+    ['an empty recall-off file beside a generation', GENERATION, 'G', 'empty', 'G'],
+    ['an unreadable recall-off file', GENERATION, 'G', 'unreadable', 'G'],
+    ['a directory at recall-off/<id>', GENERATION, 'G', 'dir', 'G'],
+    ['a symlink at recall-off/<id>', GENERATION, 'G', 'symlink-G', 'G'],
+    ['a malformed env generation falls back to .generation (named)', 'not-a-uuid', 'G', 'G', 'G'],
+    ['a malformed env generation falls back to .generation (stale)', 'not-a-uuid', 'G', 'G2', 'G'],
+    ['the env generation wins over .generation (named)', GENERATION, 'G2', 'G', 'G'],
+    ['the env generation wins over .generation (stale)', GENERATION, 'G2', 'G2', 'G'],
+    // R-recalloff-parity: no env or registry generation, so the CLI compares with the newest family's generation.
+    // No resolvable generation and an empty file: the CLI compares '' with '' (a legacy newest family, or a store
+    // holding no family of the id, which Task 5's record writes the same way) and exits 8; the hook agrees.
+    ['a legacy newest family recorded empty and an empty recall-off file', '', 'absent', 'empty', 'legacy'],
+    ['the newest family recorded G and an empty recall-off file reads stale', '', 'absent', 'empty', 'G'],
+    ['no env or registry generation and recall-off names the recorded newest family', '', 'absent', 'G', 'G'],
+    ['recall-off names G while the recorded newest family is G2', '', 'absent', 'G', 'G2'],
+    ['an unreadable .generation is no generation, the record decides', '', 'unreadable', 'G', 'G'],
+    ['a symlinked .generation is no generation', '', 'symlink-G', 'G', 'G2'],
+    // D-5056: a .generation that fails the UUID grammar names no generation either; the record decides (the CLI exits 8).
+    ['a malformed .generation is no generation, the record decides', '', 'junk', 'G', 'G'],
+    // The ruling's pin: the CLI exits 8 here, so the card line must not reach the control arm.
+    ['R-recalloff: an invalid env generation, an unreadable .generation, recall-off naming the recorded G', 'not-a-uuid', 'unreadable', 'G', 'G'],
+    ['R-recalloff: an invalid env generation, no .generation, recall-off naming the recorded G', 'not-a-uuid', 'absent', 'G', 'G'],
+    ['nothing recorded withholds a line beside a recall-off value', '', 'absent', 'G2', 'absent'],
+    ['nothing recorded and no recall-off file serves', '', 'absent', 'absent', 'absent'],
+    ['a symlinked record is no record', '', 'absent', 'G2', 'symlink-G'],
+    ['a malformed record is no record', '', 'absent', 'G2', 'junk'],
+    ['the env generation wins over the record', GENERATION, 'absent', 'G2', 'G2'],
+    ['the registry generation wins over the record', '', 'G', 'G2', 'G2'],
+  ];
+  const parityRows = PARITY.filter(([, , r, o]) => !ROOT || (r !== 'unreadable' && o !== 'unreadable'));
+  const plantParity = (regKind: Reg, offKind: Off, recKind: Rec): void => {
+    const genFile = reg(`${ID}.generation`);
+    fs.rmSync(genFile, { force: true });
+    if (regKind === 'G') fs.writeFileSync(genFile, GENERATION);
+    if (regKind === 'G2') fs.writeFileSync(genFile, G2);
+    if (regKind === 'unreadable') { fs.writeFileSync(genFile, GENERATION); fs.chmodSync(genFile, 0o000); }
+    if (regKind === 'junk') fs.writeFileSync(genFile, 'not-a-generation');
+    if (regKind === 'symlink-G') { fs.writeFileSync(path.join(home, 'gen-target'), GENERATION); fs.symlinkSync(path.join(home, 'gen-target'), genFile); }
+    const off = histDir('recall-off', ID);
+    fs.mkdirSync(histDir('recall-off'), { recursive: true, mode: 0o700 });
+    if (offKind === 'G') fs.writeFileSync(off, `${GENERATION}\n`);
+    if (offKind === 'G-padded') fs.writeFileSync(off, `  ${GENERATION}  \n\n`);
+    if (offKind === 'G-wide') fs.writeFileSync(off, `${' '.repeat(130)}${GENERATION}\n`);
+    if (offKind === 'G-nbsp') fs.writeFileSync(off, NBSP_G);
+    if (offKind === 'G-bom') fs.writeFileSync(off, BOM_G);
+    if (offKind === 'G2') fs.writeFileSync(off, `${G2}\n`);
+    if (offKind === 'empty') fs.writeFileSync(off, '');
+    if (offKind === 'unreadable') { fs.writeFileSync(off, `${G2}\n`); fs.chmodSync(off, 0o000); }
+    if (offKind === 'dir') fs.mkdirSync(off);
+    if (offKind === 'symlink-G') { fs.writeFileSync(path.join(home, 'off-target'), `${G2}\n`); fs.symlinkSync(path.join(home, 'off-target'), off); }
+    // The sweep's generation record beside the prediction (Task 5; plantAll made card/<id>/).
+    const rec = histDir('card', ID, `${SID}.gen`);
+    fs.rmSync(rec, { force: true });
+    if (recKind === 'G') fs.writeFileSync(rec, `${GENERATION}\n`);
+    if (recKind === 'G2') fs.writeFileSync(rec, `${G2}\n`);
+    if (recKind === 'legacy') fs.writeFileSync(rec, '\n');
+    if (recKind === 'junk') fs.writeFileSync(rec, 'not-a-generation\n');
+    if (recKind === 'symlink-G') { fs.writeFileSync(path.join(home, 'rec-target'), `${GENERATION}\n`); fs.symlinkSync(path.join(home, 'rec-target'), rec); }
+  };
+  /** The generation B2's CLI compares recall-off/<id> with over the same fixture: lib resolveGeneration's value
+   *  when it answers 'env' or 'registry'; under 'newest', the newest family's, which the record stands for
+   *  ('' for a legacy family); null when no usable record says it (the store's answer, unknown to the hook).
+   *  Never `resolveGeneration(…).value ?? ''`: B2's readContext forbids that comparison under 'newest'. */
+  const cliGeneration = (envGen: string, regGen: Pres, recKind: Rec): string | null => {
+    const r = lib.resolveGeneration({ envGen, regGen });
+    if (r.via !== 'newest') return r.value;
+    return recKind === 'G' ? GENERATION : recKind === 'G2' ? G2 : recKind === 'legacy' ? '' : null;
+  };
+  /** The CLI's reading of the same fixture (B2's presenceOf: absent, unreadable — a symlink or a non-file
+   *  included — or the trimmed value), handed to B2's own decideRecallOff with the CLI's generation. `unknown`:
+   *  a recall-off value the CLI decides against a store this fixture has none of. */
+  const cliVerdict = (envGen: string, regKind: Reg, offKind: Off, recKind: Rec): string => {
+    const regGen: Pres = regKind === 'G' ? { state: 'value', value: GENERATION }
+      : regKind === 'G2' ? { state: 'value', value: G2 }
+        : regKind === 'junk' ? { state: 'value', value: 'not-a-generation' }
+          : regKind === 'absent' ? { state: 'absent' } : { state: 'unreadable' };
+    const file: Pres = offKind === 'absent' ? { state: 'absent' }
+      : offKind === 'G' || offKind === 'G-padded' || offKind === 'G-wide' || offKind === 'G-nbsp' || offKind === 'G-bom'
+        ? { state: 'value', value: GENERATION }
+        : offKind === 'G2' ? { state: 'value', value: G2 }
+          : offKind === 'empty' ? { state: 'value', value: '' } : { state: 'unreadable' };
+    const generation = cliGeneration(envGen, regGen, recKind);
+    // An absent or unreadable file needs no generation (B2 readContext's offNow): decided now, whatever it is.
+    if (generation === null) return file.state === 'value' ? 'unknown' : lib.decideRecallOff({ file, generation: GENERATION });
+    return lib.decideRecallOff({ file, generation });
+  };
+  /** The hook serves exactly when the CLI recalls (`none` or `stale`); `off` and `unknown` withhold. */
+  const serves = (verdict: string): boolean => verdict === 'none' || verdict === 'stale';
+
+  it('CONTROL: the parity table reaches every answer, so it cannot pass by serving always or never', () => {
+    const verdicts = PARITY.map(([, env, r, o, k]) => cliVerdict(env, r, o, k));
+    expect(new Set(verdicts)).toEqual(new Set(['none', 'stale', 'off', 'unknown']));
+    // The two R-recalloff-trim rows' CLI reading: presenceOf's String.prototype.trim over the planted text.
+    expect([NBSP_G, BOM_G].map((t) => t.trim()), 'the CLI reads both as the generation').toEqual([GENERATION, GENERATION]);
+  });
+
+  it.each(parityRows)('C19/C68 (card half), recall-off parity: %s', (_what, envGen, regKind, offKind, recKind) => {
+    plantAll();
+    plantParity(regKind, offKind, recKind);
+    try {
+      const verdict = cliVerdict(envGen, regKind, offKind, recKind);
+      expect(served(start(), { CCRC_SESSION_GENERATION: envGen }), `the CLI reads ${verdict}`)
+        .toBe(serves(verdict) ? LINE : null);
+    } finally {
+      for (const f of [reg(`${ID}.generation`), histDir('recall-off', ID)]) {
+        try { fs.chmodSync(f, 0o700); } catch { /* absent or a symlink */ }
+      }
+    }
+  });
+
+  it.each([
+    ['POSIXLY_CORRECT=1', { POSIXLY_CORRECT: '1' }],
+    ['LC_ALL=C', { LC_ALL: 'C' }],
+    ...(IS_DARWIN ? [] : [['LC_ALL=C.UTF-8', { LC_ALL: 'C.UTF-8' }] as const]),
+  ] as const)('the fold puts the line on its own first line under %s', (_what, env) => {
+    plantAll();
+    plantCompactCard(compactCardOf(600));
+    const out = served(start(), env)!;
+    expect(out.split('\n').slice(0, 2)).toEqual([LINE, HEADER]);
+  });
+
+  it('_hook_history_card is defined above the case, outside it, called only beside the compact card, and spells no fork', () => {
+    const src = fs.readFileSync(HOOK, 'utf8');
+    const def = src.indexOf('\n_hook_history_card() {');
+    const kase = src.indexOf('\ncase "$event" in\n');
+    expect(def, 'no _hook_history_card definition').toBeGreaterThan(-1);
+    expect(def, 'defined after the case: the SessionStart arm would call an undefined function').toBeLessThan(kase);
+    expect(src.indexOf('\n_hook_history_card() {', def + 1), 'defined twice').toBe(-1);
+    const calls = src.split('\n').filter((l) => !l.trim().startsWith('#') && /_hook_history_card \|\| true/.test(l));
+    expect(calls).toEqual(['    [[ "$src" == compact ]] && { _hook_compact_card || true; _hook_history_card || true; }']);
+    const body = src.slice(def, src.indexOf('\n}\n', def));
+    const code = body.split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
+    // B1's S1 string pin, in its final grammar, over the reader: no `$(` (an arithmetic `$((` is not one), no backtick,
+    // no `${…@…}` transformation (its FR2a: `@P` runs prompt expansion, and so command substitution), and none of its
+    // external commands, plus `find` and `link`, which the card path could reach for.
+    expect(code, 'a command substitution forks').not.toMatch(/\$\((?!\()/);
+    expect(code).not.toContain('`');
+    expect(code.match(/\$\{[^}]*@/)?.[0] ?? null, 'a ${…@…} transformation in the reader (@P forks)').toBeNull();
+    const external = /(?<![\w-])(jq|cat|date|mkdir|mv|cp|ln|rm|touch|tee|awk|sed|grep|head|tail|tr|cut|stat|find|readlink|realpath|dirname|basename|env|timeout|flock|link|node|python3?|tmux|command|eval|exec|source)(?![\w-])/;
+    expect(code.match(external)?.[0] ?? null, 'an external command in the reader').toBeNull();
+    // B1's F37 rule: the clock is read once, so its test and its slice see one reading.
+    expect((code.match(/\$\{?EPOCHREALTIME\b/g) ?? []).length, 'EPOCHREALTIME expanded more than once').toBe(1);
+  });
+
+  itLinux('forks nothing at runtime: serving the line takes exactly the forks a box without history takes', () => {
+    const traced = (): { forks: number; stdout: string } => {
+      const trace = path.join(home, 'card-trace.txt');
+      const r = spawnSync('strace', ['-f', '-o', trace, '-e', 'trace=clone,clone3,fork,vfork', 'bash', HOOK], {
+        input: JSON.stringify(start()), encoding: 'utf8', env: hookEnv(HISTORY_HOOK_SCRUB),
+      });
+      expect(r.status, `strace ran the hook: ${r.stderr}`).toBe(0);
+      const lines = fs.readFileSync(trace, 'utf8').split('\n').filter((l) => l !== '');
+      fs.rmSync(trace);
+      const root = /^(\d+)\s/.exec(lines[0] ?? '')?.[1];
+      expect(root, 'strace traced a fork').toBeDefined();
+      // One START line per fork, complete or `<unfinished ...>`; a `resumed` line is the same fork's tail.
+      return { forks: lines.filter((l) => new RegExp(`^${root}\\s+(?:clone3?|v?fork)\\(`).test(l)).length, stdout: r.stdout };
+    };
+    // WARM-UP: the first acquisition on a fresh row mints the stable lock (mktemp + link), which no later run
+    // repeats, so one unmeasured serve comes first and the two measured runs start from the same row.
+    plantCompactCard(compactCardOf(600));
+    expect(served()).not.toBeNull();
+    plantCompactCard(compactCardOf(600));        // both runs serve a compact card: the same emit, the same marker
+    const without = traced();
+    expect(hasLine(card(without.stdout))).toBe(false);
+    plantAll();
+    plantCompactCard(compactCardOf(600));
+    const withLine = traced();
+    expect(card(withLine.stdout).startsWith(`${LINE}\n`), 'the measured run served the line').toBe(true);
+    expect(withLine.forks).toBe(without.forks);
+  }, 60_000);
 });
