@@ -36,12 +36,13 @@ numbers; the spec wave each one implements is named beside it.
 | 12 | — (wave 11's test and prose residue) | before stable: R19 (D3's GNU-only shim, F1's unpinnable filter, F2's W20 prose, F3's NEW+S10 pin, F4's S0 naming); R18(c)–(e) prose. No shipped runtime code changes | none (tests and docs) | — | **MERGED** `9221416a` (PR #291, run 282 done) 2026-10-06 06:40 UTC. The merged tree `a6c85f7c` equals `merge-tree`'s, and every branch file is byte-identical to the tested tip `7b0a5454` (`main` had moved by docs only, to `21f536a5`). Review 286 met none of the bar's seven classes; `server 4/5`'s cleanup-hook timeout re-ran green. Was: **IN REVIEW** 2026-10-06 05:57 UTC: wave-done at `7b0a5454`, PR #291; reserve number 4072 spent (bare: defined on the worker branch); the bar is in the 05:57 entry; review run 286 dispatched 05:59 UTC to `ccrc-pwa-warm-ridge` (the held-out panel plus two lenses: pins and fixtures, the truth of the prose). Was: **DISPATCHED** 2026-10-06 04:37 UTC to `ccrc-pwa-soft-delta` (run 282; 5 items; route Opus·high / Sonnet / workflow off / compact 40). Was: **Run 282 open, planned** 2026-10-06 02:38 UTC, opened before run 270 closed. Deviation block 4068 to 4087 (bare until defined). Scoped 02:45 UTC; plan `04c977cb` + `bc495fed` (drafted by workflow `wf_a11d694f-c70`: prototype, attack, revise; readings ruled 04:35). 5 tasks; it defines D-4068 to D-4071, and the reserve is numbers 4072 to 4076 (Reading 8's ruling spends 4072). |
 | 13 | — (security + CI) | R16: the box token leaves `curl`'s argv in `ccd/ccrc-api` and `deploy/notify.sh` (`-K -` with a stdin `header = …` config, the idiom `ccd-pool-sync` and `ccd-update-sync` ship), and the test curl front admits exactly that; R20: the CI cleanup-hook timeout and wave 12's As-built bullet | fleet-first (the client and the hook reach every home through the install spine) | — | **MERGED** `8b0547b4` (PR #295, 2026-10-06 16:03:00 UTC, run 287 done). The merged tree is byte-identical to `git merge-tree` of the reviewed tip `77cf2367` onto `main` at `b3b5a73e` (`154cbb2c`), and `main` did not move after the review. Every Linux leg was green; the only macOS red was landing-order's. Scoped review 297 met none of the round's five classes; its five coverage and prose findings are residue R23. Was: **FIX ROUND 1 DONE** 2026-10-06 13:01 UTC at `77cf2367` (mail 3698; one commit on `ee5dd409`, 3 files, the round's only; no number spent; `main` not merged, `merge-tree` onto `b3b5a73e` clean; every Linux leg green on PR run 37465993934 and full run 37465994132). Scoped review run 297 dispatched 15:34 UTC to `ccrc-pwa-plain-cove`, after waiting out the fleet-wide daily cap (24 of 24). Both runs' only macOS red is landing-order's `session-hook-merge-deny`. After the review, #295 merges. Was: **FIX ROUND 1 SENT** 2026-10-06 12:27 UTC (mail 3690, `rulings-run287-fix1.md`) on review 294 at `ee5dd409`. Its F1, the test curl front failing open when grep cannot run, meets the bar's class 3 as written, so the bar gives the one round. A scoped review follows under the bar in the rulings, then #295 merges. Was: **IN REVIEW** 2026-10-06 11:34 UTC: wave-done at `ee5dd409`, PR #295; reserve number 4096 spent (bare: defined on the worker branch); the bar is in the 11:34 entry; review run 294 dispatched 11:35 UTC to `ccrc-pwa-quiet-harbor` (the held-out panel plus two lenses: token exposure and the front's parser; delivery, compatibility and the cleanup). Was: **DISPATCHED** 2026-10-06 10:01 UTC to `ccrc-pwa-still-ridge` (run 287; 6 items; route Opus·high / Sonnet / workflow off / compact 40; held 20 min by the fleet-wide daily cap, 24 of 24). Was: **Run 287 open, planned** 2026-10-06 06:41 UTC; re-scoped 07:07 UTC to R16 + R20 (scoping workflow `wf_286a790a-7fa`). Deviation block 4094 to 4113 (bare until defined). Plan `31f24eac` (workflow `wf_3aff815b-3ef`; readings ruled 09:30): 6 tasks; it defines D-4094 and D-4095, and the reserve is numbers 4096 to 4100 (Reading 4 spends 4096). |
 | 14 | — (R15, PWA) | the home screen shows a halt and offers Ack in place; **Update all** says why it skipped; the skew banner drops the stale `ccrc rollout` advice | server (PWA bundle) | — | **MERGED** `03afca8b` (PR #309, 2026-10-07 03:28:56 UTC, run 299 done; released as v0.0.113 at 03:29:52). The merged tree is byte-identical to `git merge-tree` of the reviewed tip `e4357fb7` onto `main` at `543777fbe` (`f8217ccd`), and `main` did not move after the review. Every Linux leg was green, and the macOS reds are other programmes'. The last scoped review, 312, met none of the round-2 bar's classes; its three coverage and prose findings are residue R27. Was: **FIX ROUND 2 DONE** 2026-10-07 02:15 UTC at `e4357fb7` (mail 3790; two commits on `c613f551`, the six admitted files; reserve number 4273 spent, bare: defined on the worker branch). Scoped review run 312 dispatched 03:13 UTC to `ccrc-pwa-swift-mesa`, after waiting out the daily cap. Was: **FIX ROUND 2 (THE LAST) SENT** 2026-10-07 01:48 UTC (mail 3788, `rulings-run299-fix2.md`) on scoped review 311 at `c613f551`. A read issued before the Ack's outcome still releases the hold (F1, class 2 then 1; F2, class 1 and 3), so the round-1 bar gives the narrow round 2. A scoped review follows; a class 1 to 3 finding after it stops the merge and goes to the operator. Was: **FIX ROUND 1 DONE** 2026-10-07 01:16 UTC at `c613f551` (mail 3785; two commits on `3f5f382c`, the round's 6 files; reserve number 4272 spent, bare: defined on the worker branch; `main` not merged, `merge-tree` onto `543777fbe` clean). Scoped review run 311 dispatched 01:33 UTC to `ccrc-pwa-plain-river`, after waiting out the daily cap. Was: **FIX ROUND 1 SENT** 2026-10-06 22:48 UTC (mail 3770, `rulings-run299-fix1.md`) on review 307 at `3f5f382c`. Its F1, an Ack sent twice against one lease after a lost answer, meets the bar's class 2 as written, so the bar gives the one round. A scoped review follows, then #309 merges. Was: **IN REVIEW** 2026-10-06 22:18 UTC: wave-done at `3f5f382c`, PR #309 (12 commits, 23 files, exactly File structure's); reserve numbers 4270 and 4271 spent (bare: defined on the worker branch); the bar is in the 22:18 entry; review run 307 dispatched 22:20 UTC to `ccrc-pwa-brisk-meadow` (the held-out panel plus two lenses: state truth and the dispatcher; what the operator sees). Was: **DISPATCHED** 2026-10-06 19:57 UTC to `ccrc-pwa-amber-harbor` (run 299; 7 items; route Opus·high / Sonnet / workflow off / compact 40), after the operator reviewed the plan ("looks good", 19:55). Was: **Planned; the shape ruled.** Plan `053cf1cb5` (workflow `wf_f9c94b88-140`; 7 tasks; it defines D-4266 to D-4269, and the reserve is numbers 4270 to 4274). The operator saw the designs and ruled "all recommended" at 2026-10-06 19:00 UTC. Was: **Run 299 open, planned** 2026-10-06 16:03 UTC, opened before run 287 closed. Deviation block 4266 to 4285 (bare until defined). |
-| 15 | — (`ccd/ccd`) | `--no-reload` for `_svc_enable`, alone | fleet-first | — | **Planned; dispatch held on three claims.** Plan `527296ffc` (workflow `wf_f9c94b88-140`; 2 tasks; it defines D-4286, and the reserve is numbers 4287 to 4291). It waits until claims 1057 (`ccd/ccd`), 1058 (`macos-platform.test.ts`) and 1055 (`ccd/ccrc`) have ended (Reading 7). Was: **Run 300 open, planned** 2026-10-06 16:07 UTC. Deviation block 4286 to 4295 (bare until defined). To plan. `ccd/ccd` is unclaimed, but open PRs #299, #301 and #303 also edit it, so whichever lands later rebases and restamps. |
-| 16 | — (sweep accounting) | `ccrc-api` placed by the install spine (wave 13's Reading 1(a): a `_inst_bins` line, its census pin, README's sentence); item 3's false "is FAILED" warning, the unit `activating` before the restart (Reading 9), the shipped stale-pid comment, the pgid clause's comment | fleet-first, an attended first move | — | to plan (2026-10-15 21:41: Reading 9 ruled warn only; claim 1046 ended; `README.md` held by run 468) |
-| 17 | — (verify script, Darwin helper) | R18(a) (unsearchable registry; `_reg_purge`'s order), R18(b), R10j | fleet-first, an attended first move | — | to plan (2026-10-15 21:41) |
-| 18 | — (backup prune) | R14(a), R10i, R8c, R10c's `deploy.sh` listing guard, R8g | fleet-first | — | to plan (2026-10-15 21:41) |
-| 19 | — (test containment) | `makeCcdHarness` containment parity, R14(b)'s raw-spawn census, R8f's `pathWithout` | none (tests) | — | to plan (2026-10-15 21:41; `ccdWsHelpers.ts` held by run 308) |
-| — | — | final rollout: promote to `stable`, `ccrc rollout`, the exit criteria measured live | — | — | planned |
+| 15 | — (`ccd/ccd`) | `--no-reload` for `_svc_enable`, alone | fleet-first | — | **Planned; dispatch on consent** (2026-10-15 22:11): claim 1396 (run 308) holds `ccd/ccd`, claim 1423 (run 360) holds `ccd/ccrc`; Reading 7 re-ruled; lands last among the `ccd/ccd` landers; adds R25(c) and R25(a)'s code-comment half. Was: **planned; dispatch held on three claims.** Plan `527296ffc` (workflow `wf_f9c94b88-140`; 2 tasks; it defines D-4286, and the reserve is numbers 4287 to 4291). It waits until claims 1057 (`ccd/ccd`), 1058 (`macos-platform.test.ts`) and 1055 (`ccd/ccrc`) have ended (Reading 7). Was: **Run 300 open, planned** 2026-10-06 16:07 UTC. Deviation block 4286 to 4295 (bare until defined). To plan. `ccd/ccd` is unclaimed, but open PRs #299, #301 and #303 also edit it, so whichever lands later rebases and restamps. |
+| 16 | — (sweep and verify; before stable) | R18(e) (item 3's false "is FAILED" warning, the stale-pid comment), Reading 9's sweep half (warn only), the pgid clause's comment, T6-INT-W closed, R18(a), R18(b), R10j, R8c, R10c(3), R8g | fleet-first; auto moves it, the coordinator watches | — | to plan; dispatch on run 360's consent (claim 1423: `ccd/ccrc`, `deploy/deploy.sh`), land after run 360 (2026-10-15 22:11) |
+| 17 | — (install, doctor, backup prune) | `ccrc-api` placed by the install spine and removed by uninstall (README's `ccrc-api` lines), Reading 9's doctor half (WARN only), R10k, R8f, R14(a), R10i | fleet-first; auto moves it, the coordinator watches | — | waits for run 360 to land (claims 1388, 1410, 1423) and claim 1403 (run 468, #425) on README (2026-10-15 22:11) |
+| 18 | — (test containment) | `makeCcdHarness` containment parity, R14(b)'s raw-spawn census, R23(a), R23(b), R23(d) | none (tests) | — | to plan; `ccdWsHelpers.ts` held by claim 1396 (run 308); R14(b) and R23 can go first (2026-10-15 22:11) |
+| 19 | — (PWA and server residue) | R24(a), (b), (d), R26(a)-(d), R27(a), R27(b)'s test half; B5, the `update-inventory.test.ts` stable flake | server | — | to plan and dispatch now; the SettingsScreen line (claim 1392) and the `shared/api.ts` docstring (claim 1390) last or cut (2026-10-15 22:11) |
+| — | — | docs PR: R22, R24(e), R23(c), (e), R27(b)'s plan half, R27(c), R25(a), (b), README's Reading 9 clause, the closure sentences | none (docs) | — | to write; README half waits for claim 1403 (#425) (2026-10-15 22:11) |
+| — | — | final rollout: promote to `stable` (the coordinator, ruling 2026-10-15), auto convergence and a read-only `ccrc rollout --check` (no hand `ccrc rollout`, ruling 2026-09-30), the exit criteria measured live (the operator taps the rehearsal) | — | — | planned; stable waits on B1, B2, B5 and wave 16 |
 
 **Order.** 2 → {3, 4} → {5, 6} → rollout. Waves 3 and 4 touch disjoint files (PWA + notifier vs `ccd/ccrc` +
 deploy units) and both need only wave 2's interfaces, so they may run concurrently on two workspaces once wave 2
@@ -3275,6 +3276,79 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
     5. Stable: `main`'s daily full runs failed on 10-14 and 10-15 (38676520249 at `354118383`). The blockers are
        re-measured, then the promotion.
     6. The live exit criteria: the operator's taps above, and wave 3's phone-side checks.
+
+- **2026-10-15 22:11 UTC: the cut to completion. Waves 15 to 19 re-scoped, the residue placed or closed, Reading 7
+  re-ruled, and the stable path.**
+  - **How it was measured:** a workflow of 7 agents at `main` `a3cebde1b`:
+    - an Opus re-measure of wave 15's plan;
+    - two Opus censuses of the residue, node side and PWA/prose side;
+    - a Sonnet read of the stable gate, and a Sonnet read of the claims and the exit criteria;
+    - an Opus planner, then an Opus completeness critic. The critic re-read every closure of kind fixed or moot in
+      code and found none wrong. Its corrections are applied below.
+  - **Wave 15's plan still holds.** Every anchor holds by its quoted text; only line numbers moved (`ccd/ccd` grew
+    from 29868 to 39777 lines). The plan is refreshed against `main` immediately before dispatch.
+  - **Reading 7, re-ruled (the coordinator's own ruling).** Another run's unlanded work in a file holds a wave's
+    dispatch only when it has a hunk in the region the wave edits. Otherwise it sets the landing order: the wave lands
+    last among them, takes either side of the marker line, and restamps. A live claim on the file still needs its
+    holder's consent. Measured for wave 15: #410, run 360's branch and run 308's branch have no hunk in either
+    platform block (`ccd/ccd` 41-1221, `ccd/ccrc` 70-1250).
+  - **The new cut** (it replaces rows 16 to 19; the waves table carries it):
+    - **Wave 15:** `--no-reload`, with R25(c) and the code-comment half of R25(a), which become false when it merges.
+      Claim 1396 (run 308) holds `ccd/ccd` and claim 1423 (run 360) holds `ccd/ccrc`, so it dispatches on consent.
+    - **Wave 16, before stable:** the sweep and the verify script. Item 3's false "is FAILED" warning and the
+      stale-pid comment (R18(e), which review 281's ruling tied to stable), Reading 9's sweep half (warn only), the
+      pgid clause's comment, T6-INT-W closed as unpinnable, R18(a) (the `-x` test, and a re-read in the verify script
+      rather than `_reg_purge`'s order), R18(b), R10j, R8c, R10c(3) and R8g. Claim 1423 (run 360) holds `ccd/ccrc` and
+      `deploy/deploy.sh`, with hunks disjoint from these, so it dispatches on consent and lands after run 360.
+    - **Wave 17, behind run 360:** `ccrc-api` placed by the install spine and removed by uninstall (with README's
+      `ccrc-api` lines, the uninstall paragraph among them), Reading 9's doctor half (a WARN that never FAILs), R10k (a
+      refused sweep recorded as a detail word, read by the same WARN), R8f, and the backup prune's R14(a) and R10i.
+      Those two moved here because run 360's unlanded branch rewrites `_bak_list`, `_bak_prune` and `_bak_gc`. It
+      waits for run 360 to land (claims 1388, 1410, 1423) and for claim 1403 (run 468, #425) on README.
+    - **Wave 18:** test containment. `makeCcdHarness` parity, R14(b)'s raw-spawn census, R23(a), (b) and (d). Tests
+      only. Claim 1396 (run 308) holds `server/test/ccdWsHelpers.ts`; R14(b) and R23 can go first.
+    - **Wave 19, dispatchable now:** the PWA and server residue. R24(a), (b) and (d), R26(a) to (d), R27(a), R27(b)'s
+      test half, and B5, the stable flake at `server/test/update-inventory.test.ts:425` (a 50 ms budget). The
+      SettingsScreen line (claim 1392) and the `shared/api.ts` docstring (claim 1390) go last, or are cut.
+    - **The coordinator's docs PR:** R22, R24(e), R23(c) and (e), R27(b)'s plan half, R27(c), R25(b), R25(a)'s plan
+      sentence, README's Reading 9 clause, and the closure sentences below. Its README half waits for #425 (claim 1403).
+      #384 is a merge partner on README and CLAUDE.md.
+  - **Closed as fixed,** re-read in code: R1, R5 and R6 (wave 7); R7, R11, R4-2, R8i, R9-F1, F6 and F8, #214's macOS
+    reds, and R10a, b, d, e, g and h (wave 9); R12, R13 and R14(f) to (j) (waves 10 and 11); R14(d); R15 (wave 14); R16,
+    R20 and the curl front's `-K` rule (wave 13, with #403 automating the rotation); R18(c), R18(d)'s bookkeeping and
+    R19 (wave 12); and the live audit's A, B, C, D, F(1), F(2), F(4), G1 and G2 (wave 8).
+    - **Defect A** is closed: wave 8 writes each move's source (auto or requested) as an `update` feed row in
+      `coord.db`. `update.json`'s `from: pwa` is the spec's §10, by design. The monitoring notes stop calling it a
+      defect.
+  - **Closed as moot:** E (wave 8's ruling), R4-1, R8b, R9-R1, R9-F2 and R9-F4 (both boxes keep only digested versions).
+  - **Closed as documented limitations,** each with a sentence in the docs PR. This overturns the 2026-10-06 07:07
+    "held, unscheduled until each gets a design" for every item it named except R10k, which goes to wave 17:
+    - R2 (the lease on a rekey), R3(a) to (c) and the reused pid, R4-3, R8a, R8d, R8e, R10c(1) and (2), R10f, R14(e),
+      R17, R18's caller traps, R21, R24(c), R-D and R-B (wave 9's accepted residue), F(3), G3, H (box config), and the
+      dotted-id reverse maps, with question 5 of 2026-10-06.
+    - Never recovered, and closed: R8h, R9-F3, F5, F7, F9 and F10, and R14(c).
+  - **Carried constraints M1 to M7 and the trust-roots note:** read as handled by wave 4 and README's trust-roots
+    passage. The docs PR confirms each one and marks the section closed.
+  - **The final-rollout row, changed:** `ccrc rollout` becomes auto convergence plus a read-only `ccrc rollout --check`,
+    because the coordinator moves no box (2026-09-30).
+  - **The stable path.** `full-suite` needs every Linux leg, node-floor, build-pwa, typecheck and the four `test-macos`
+    shards. On 10-15's daily run (38676520249) everything else was green. Four things stand before a promotion:
+    - B1, `ccd-child-reclaim-row-generation` (two macOS cases), the child-reclamation programme's;
+    - B2, `ccd-docs-tree` row 64 (macOS), the native Docs reader's;
+    - B5, in wave 19; and wave 16, for R18(e).
+    - The coordinator mails B1 and B2 to their coordinators. The first promotion follows the first released commit with
+      a green `full-suite` after those land; the final one follows the release that carries the last wave and the docs
+      PR.
+  - **Parked until after completion:** Dependabot #367 and #368, the verifier's `@sigstore` majors. They must land
+    together, and they need node 24.15 or later on both boxes (both run 24.14.1) and an engines raise.
+  - **The live exit criteria:**
+    - The rehearsal: the operator turns auto off, taps Rollback and then forward on each node, fleet first, and turns
+      auto back on. The coordinator reads `ccrc versions`, `update.json`, `ccrc rollout --check` and the feed rows
+      before and after each move.
+    - Wave 3's phone-side banner and push, on the release after the final promotion.
+    - The fixture-only criteria, W5's fixture rehearsal among them, cited from the `full-suite` run that promotes
+      stable.
+    - The W1 spike's answer, recorded from its plan and #161.
 
 ## Carried constraints
 
