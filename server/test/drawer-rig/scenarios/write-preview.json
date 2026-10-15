@@ -1,0 +1,25 @@
+{
+  "name": "write-preview",
+  "covers": [
+    "W6: the model equals capture-pane -p on a Write preview",
+    "re-wrap (a)-(g) and the row count: numbered file lines and the prompt's options"
+  ],
+  "prompt": "Write a short notes file for project-a.",
+  "marker": "Do you want to create notes.md?",
+  "entries": [
+    {
+      "match": "tools",
+      "label": "write",
+      "tool_use": {
+        "name": "Write",
+        "input": {
+          "file_path": "/rig/project-a/src/notes.md",
+          "content": "# project-a notes\n\nThe greet function in src/app.ts returns a greeting for a name.\n\n## Next steps\n\n- add a farewell function beside greet\n- cover both functions with a small test file under test/\n- document the two exports in README.md, with one example each, so a reader can try them without opening the source\n"
+        }
+      }
+    }
+  ],
+  "default": {
+    "text": "Done."
+  }
+}
