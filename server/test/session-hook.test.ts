@@ -11998,17 +11998,29 @@ describe('history card line: SessionStart(compact) serves the sweep\'s predictio
   });
 
   // B1's F37 shape (its spool block): each expansion of EPOCHREALTIME reads the clock anew, so the reader reads it ONCE.
-  // A DEBUG trap (`set -T` carries it into the function) hands the grammar test a valid reading, 1700000000.999999, and
-  // every other command one with no fraction, 1700000001. Read once, the reader tests and slices the no-fraction reading
-  // and serves nothing; the tested reading alone would put the marker 101 ms in the future and serve nothing either. Only
-  // a reader that tests one reading and slices another serves: its `now` takes 1700000001's digits as the fraction.
+  // A DEBUG trap (`set -T` carries it into the function) hands the command whose text matches `match` a valid reading,
+  // 1700000000.999999, and every other command one with no fraction, 1700000001. The first case matches the grammar test
+  // (`=~ ^[123456789][0123456789]{0,11}`, the reader's own text since D-5064). Read once, the reader tests and slices the
+  // no-fraction reading and serves nothing; the tested reading alone would put the marker 101 ms in the future and serve
+  // nothing either. Only a reader that tests one reading and slices another serves: its `now` takes 1700000001's digits as
+  // the fraction. The CONTROL matches the one read instead (`t="${EPOCHREALTIME:-}"`): the trap's valid reading is then
+  // the reading the reader holds, and the marker 499 ms before it is served, so the trap is shown to hand it out.
+  const epochTrap = (match: string): string => {
+    const trapFile = path.join(home, 'epochtrap.bash');
+    fs.writeFileSync(trapFile, 'set -T\nunset EPOCHREALTIME\nEPOCHREALTIME=1700000001\n'
+      + `trap 'case $BASH_COMMAND in ${match}) EPOCHREALTIME=1700000000.999999 ;; *) EPOCHREALTIME=1700000001 ;; esac' DEBUG\n`);
+    return trapFile;
+  };
   it('EPOCHREALTIME is read once: a clock that moves between the test and the slice serves no mis-aged line', () => {
     plantAll();
     mark(`main ${SID} 1700000001100`);
-    const trapFile = path.join(home, 'epochtrap.bash');
-    fs.writeFileSync(trapFile, 'set -T\nunset EPOCHREALTIME\nEPOCHREALTIME=1700000001\n'
-      + 'trap \'case $BASH_COMMAND in *"=~ ^[1-9]"*) EPOCHREALTIME=1700000000.999999 ;; *) EPOCHREALTIME=1700000001 ;; esac\' DEBUG\n');
-    expect(served(start(), { BASH_ENV: trapFile }), 'a line served on a clock no single reading gave').toBeNull();
+    expect(served(start(), { BASH_ENV: epochTrap('*"=~ ^[123456789][0123456789]{0,11}"*') }), 'a line served on a clock no single reading gave').toBeNull();
+  });
+
+  it('EPOCHREALTIME is read once (CONTROL): the trap hands the valid reading to the one read, and the line is served', () => {
+    plantAll();
+    mark(`main ${SID} 1700000000500`);
+    expect(served(start(), { BASH_ENV: epochTrap('*EPOCHREALTIME*') }), 'the trap\'s valid reading was not handed out').toBe(LINE);
   });
 
   // RECALL-OFF PARITY (spec §9.7, §8.2, C68; B2's D-4680 (history-recall-off-generation); coordinator ruling
@@ -12302,7 +12314,11 @@ describe('history card line: SessionStart(compact) serves the sweep\'s predictio
       expect(served(start(), { ...env, CCRC_SESSION_GENERATION: `${A_ACUTE}${GENERATION.slice(1)}` })).toBeNull();
     });
 
-    it('a session id with a non-ASCII character in a hex position serves nothing, beside a marker and a card keyed on it', () => {
+    // CONTROL, not a pin of `uuid_re`: the payload jq filter (the `keep(alpha or (. >= 48 and . <= 57) or . == 95 or . == 45)`
+    // one that reads session_id) keeps only ASCII letters, digits, `_` and `-`, so the non-ASCII character is dropped before
+    // the reader sees it. The psid arrives ASCII and 35 characters long, which fails the grammar's length under either
+    // spelling of the class. The env-generation case above alone pins `uuid_re` against a widening locale.
+    it('CONTROL: the payload filter already makes a session id ASCII, so one with a non-ASCII character in a hex position serves nothing', () => {
       const bad = `${A_ACUTE}${SID.slice(1)}`;
       plantDirs();
       mark(`main ${bad} ${Date.now()}`);
