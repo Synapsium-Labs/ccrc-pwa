@@ -392,15 +392,17 @@ export function withdrawSkippedCards(db, home, skipped) {
   if (lstatKind(root) !== 'dir') return 0;
   const uuids = [...skipped];
   let n = 0;
+  let reason = null;   // lib's word for the last prediction withdrawn: the arm answers one word, which is counted as lib spells it
   for (const { id, uuid } of cardFilesUnder(root)) {
     const d = decideCardWithdraw({ arm: 'copy', uuid, skipped: uuids });
     if (d.act !== 'withdraw') continue;
     try {
       unlinkSync(cardFileOf(home, id, uuid));
       n += 1;
+      reason = d.reason;
     } catch { /* a directory under a card name, or a name already gone: left for the next pass that skips the copy */ }
   }
-  if (n > 0) bump(db, 'card_withdrawn:copy-skipped', n);
+  if (n > 0) bump(db, `card_withdrawn:${reason}`, n);
   return n;
 }
 

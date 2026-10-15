@@ -8020,7 +8020,8 @@ export function decideConsumedScope({ marker, uuid, boundaryTsMs }) {
 
 // ── The withdrawal (ruling RC2: fail closed) ───────────────────────────────────────────────────────────────────────
 /** The words a withdrawal is counted under, `card_withdrawn:<word>`: one per way a scheduled pass can run without a
- *  card step over a caught-up ingest. */
+ *  card step over a caught-up ingest, and one, `copy-skipped`, that is a per-session withdrawal on a pass whose card
+ *  step ran and kept the rest (D-5061). */
 export const CARD_WITHDRAW_REASONS = Object.freeze([
   'at-cap', 'low-disk', 'floor-stop', 'roster-unreadable', 'budget', 'recovering', 'migrating', 'held', 'unreachable',
   'refused', 'unbound', 'copy-skipped',
@@ -8031,7 +8032,7 @@ const withdrawFor = (reason) => ({ act: 'withdraw', reason });
 /** Whether a scheduled pass withdraws every card prediction, and under which word (ruling RC2: fail closed). A
  *  prediction is consumed only by a card step that sees the boundary that consumed it. So a pass that runs none, or
  *  whose ingest may have stopped short of that boundary, withdraws them all rather than leave a stale line for the
- *  next compaction:
+ *  next compaction (the one exception in kind is the `copy` arm, which withdraws one session's and keeps the rest):
  *    hold     `store-unbound` → unbound; `store-unreachable` → unreachable; any other word passOutcome answers with
  *             EXIT.DB (a refusal that waits on the operator) → refused; the rest (held, a migration held for room or
  *             time) → held;
@@ -8040,7 +8041,7 @@ const withdrawFor = (reason) => ({ act: 'withdraw', reason });
  *             floor-stop; no ingest ran (an unreadable roster) → roster-unreadable; the run's budget spent before the
  *             card step → budget (the step still consumes and deletes; it only writes nothing); otherwise keep;
  *    copy     one session's prediction, on a pass that kept the rest: its uuid among the transcript copies the ingest
- *             could not read or admission refused this pass → copy-skipped (that copy may hold the boundary that
+ *             could not read, admission refused or whose parse crashed this pass → copy-skipped (that copy may hold the boundary that
  *             consumes the standing line, and the pass cannot see it); any other uuid keep. D-5061
  *             (history-card-withdraw-on-a-skipped-copy)
  *  A pass that never reaches this (history-off, a server box, a pass no timer starts) withdraws nothing. The hook
