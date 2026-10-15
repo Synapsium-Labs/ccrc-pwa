@@ -18,7 +18,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import {
   makeHistoryBox, runSweep, runDriver, plantSession, plantTranscript, spoolLine, openStoreRO, counters, skipOnDarwin,
-  recoverRow, PRELOADS, type HistoryBox,
+  recoverRow, PRELOADS, type DriverDeps, type HistoryBox,
 } from './historyHelpers.js';
 
 /** Spec §8.6's grammar, as the spec spells it. */
@@ -564,6 +564,12 @@ function pokeC(box: HistoryBox, ...ids: string[]): void {
   for (const id of ids) spoolLine(box, id, { v: 1, ev: 'Stop', id });
   passC(box);
 }
+/** `pokeC`, through the run-pass driver: the same Stop lines and one pass, with `deps` injected into it (a read fault, a parser crash). */
+function pokeDrivenC(box: HistoryBox, deps: DriverDeps, ids: readonly string[]): void {
+  for (const id of ids) spoolLine(box, id, { v: 1, ev: 'Stop', id });
+  const r = runDriver(box, deps);
+  expect(r.code, `${r.stderr}${r.stdout}`).toBe(0);
+}
 /** B2 holds a session's leaves while a spool file this tick renamed is unread (derive.mjs deriveOne, pendingReceiptState),
  *  so a boundary a Stop-hinted pass ingested gets its leaf (and its parents) on the NEXT pass: the cases wait one plain
  *  pass. That pass reads no transcript to its end, so it writes no card, but it can still consume or delete one
@@ -937,10 +943,19 @@ describe('the sweep writes and consumes card/<id>/<uuid>.txt at end-of-file (spe
   }, 240_000);
 
   // D-5061 (history-card-withdraw-on-a-skipped-copy), review 476 F1: a pass that cannot read ONE of a session's copies, or
-  // whose admission refuses it, did not see the boundary that copy may hold, so the standing line (compaction k's) must
-  // not be served as compaction k+1's. The boundary is appended BEFORE the copy is made unreadable, so the copy holds the
-  // consuming boundary the pass cannot read. Another session's prediction, on a copy the pass did read, stands.
-  const skippedCopyCase = (name: string, seed: number, spoil: (p: string) => () => void): void => {
+  // whose admission refuses it, or whose parse of it crashes, did not see the boundary that copy may hold, so the standing
+  // line (compaction k's) must not be served as compaction k+1's. The boundary is appended BEFORE the copy is spoiled, so
+  // the copy holds the consuming boundary the pass cannot read. Another session's prediction, on a copy the pass did read,
+  // stands. Three feeds make a copy skipped (ingestPath's admission refusal, ingestTick's D-4340 read-error catch, ingestPath's
+  // parse crash), and each has its own case below (review 479 F2): the two ADMISSION cases spoil the file, the READ-ERROR and
+  // PARSE-CRASH cases run the same real pass through the run-pass driver with a fault injected into it (the faults preload has
+  // no read event, so run-pass.mjs carries the EIO and the crash). `restore` undoes the spoil; `fired` proves the fault ran.
+  interface SpoiledCopy {
+    restore: () => void;
+    run?: (box: HistoryBox, ids: readonly string[]) => void;
+    fired?: (after: Record<string, number>, before: Record<string, number>) => void;
+  }
+  const skippedCopyCase = (name: string, seed: number, spoil: (p: string, s: SeqC) => SpoiledCopy): void => {
     const box = makeHistoryBox(`ccrc-hist-card-skip-${name}-`);
     const [ID, U] = [`card-skip-${name}`, sidC(seed)];
     const [OID, OU] = [`card-skip-${name}-other`, sidC(seed + 1)];
@@ -954,10 +969,12 @@ describe('the sweep writes and consumes card/<id>/<uuid>.txt at end-of-file (spe
     const other = cardOf(box, OID, OU);
     expect(other, "CONTROL: the other session's prediction stands").not.toBeNull();
     appendRows(p, s.rows.slice(cutBefore(s, 0), cutBefore(s, 1)));   // compaction 0 happens: the line is consumed
-    const restore = spoil(p);
-    const withdrawn = counters(box)['card_withdrawn:copy-skipped'] ?? 0;
-    pokeC(box, ID, OID);
-    restore();
+    const spoiled = spoil(p, s);
+    const before = counters(box);
+    const withdrawn = before['card_withdrawn:copy-skipped'] ?? 0;
+    (spoiled.run ?? ((b, ids) => { pokeC(b, ...ids); }))(box, [ID, OID]);
+    spoiled.restore();
+    spoiled.fired?.(counters(box), before);
     expect(cardOf(box, ID, U), "the copy was not read: compaction 1 is not served compaction 0's leaf").toBeNull();
     expect(counters(box)['card_withdrawn:copy-skipped'] ?? 0, 'one prediction withdrawn, counted under the one word').toBe(withdrawn + 1);
     expect(cardOf(box, OID, OU), "another session's prediction on a copy the pass read stands").toBe(other);
@@ -968,19 +985,49 @@ describe('the sweep writes and consumes card/<id>/<uuid>.txt at end-of-file (spe
       .toBe(expectedCard(familyC(box, ID), libCard.leafId(ID, U, s.headUuids[0]!)));
   };
 
-  it.skipIf(process.getuid?.() === 0)("D-5061 an unreadable copy (mode 000) withdraws that session's prediction, counted card_withdrawn:copy-skipped, and no other", () => {
+  it.skipIf(process.getuid?.() === 0)("D-5061 the ADMISSION arm, EACCES at admitFile's open: an unreadable copy (mode 000) withdraws that session's prediction, counted card_withdrawn:copy-skipped, and no other", () => {
     skippedCopyCase('unreadable', 0xf31, (p) => {
       const mode = fs.statSync(p).mode & 0o777;
       fs.chmodSync(p, 0o000);
-      return () => fs.chmodSync(p, mode);
+      return { restore: () => fs.chmodSync(p, mode) };
     });
   }, 240_000);
 
-  it("D-5061 a copy admission refuses (a link at the transcript's name) withdraws that session's prediction, counted card_withdrawn:copy-skipped, and no other", () => {
+  it("D-5061 the ADMISSION arm, ELOOP and non_regular: a copy admission refuses (a link at the transcript's name) withdraws that session's prediction, counted card_withdrawn:copy-skipped, and no other", () => {
     skippedCopyCase('refused', 0xf33, (p) => {
       fs.renameSync(p, `${p}.real`);
       fs.symlinkSync(`${p}.real`, p);
-      return () => { fs.rmSync(p); fs.renameSync(`${p}.real`, p); };
+      return { restore: () => { fs.rmSync(p); fs.renameSync(`${p}.real`, p); } };
+    });
+  }, 240_000);
+
+  // Review 479 F2, D-4340's arm (ingestTick's catch, `skipped.add` after countAdmission): the copy is ADMITTED and a read of it
+  // then fails with EIO. Mode 000 fails earlier, at admitFile's open (the case above), so this one injects the read error
+  // into a real pass, as history-ingest's FR2-d case does into a tick.
+  it('D-5061 the READ-ERROR arm (D-4340): an admitted copy whose read fails with EIO withdraws that session\'s prediction, counted card_withdrawn:copy-skipped, and no other', () => {
+    skippedCopyCase('eio', 0xf35, (p) => ({
+      restore: () => undefined,
+      run: (box, ids) => { pokeDrivenC(box, { eioOnRead: path.basename(p) }, ids); },
+      fired: (after, before) => {
+        expect(after['file_unreadable'] ?? 0, 'the read error fired and was counted').toBeGreaterThan(before['file_unreadable'] ?? 0);
+      },
+    }));
+  }, 240_000);
+
+  // Review 479 F2, ingestPath's parse-crash feed (79ccc0332): the copy is admitted and read, and the parser throws on the chunk that
+  // holds compaction 1's lines, so the cursor holds before the compaction-0 boundary the chunk carries. The throw is a sha256 hash
+  // fed the text of a row after that boundary (run-pass.mjs's parserCrashOn), the one call prepareLines makes outside its own try.
+  it('D-5061 the PARSE-CRASH arm: an admitted copy whose parse crashes withdraws that session\'s prediction, counted card_withdrawn:copy-skipped, and no other', () => {
+    skippedCopyCase('crash', 0xf37, (_p, s) => {
+      const crashOn = 'Segment 1 request 0.';
+      expect(s.rows.some((r) => JSON.stringify(r).includes(crashOn)), 'the crash text is in the appended rows').toBe(true);
+      return {
+        restore: () => undefined,
+        run: (box, ids) => { pokeDrivenC(box, { parserCrashOn: crashOn }, ids); },
+        fired: (after, before) => {
+          expect(after['parser_crash'] ?? 0, 'the parser crash fired and was counted').toBeGreaterThan(before['parser_crash'] ?? 0);
+        },
+      };
     });
   }, 240_000);
 
