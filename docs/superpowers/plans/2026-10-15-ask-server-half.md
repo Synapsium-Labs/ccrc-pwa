@@ -4,7 +4,7 @@
 
 **Branch:** `fix/ask-server-half`, cut from `origin/main` `35411838`.
 
-**Status:** rev 1 (2026-10-15). Tasks 0 and 1 done; Tasks 2 to 4 open.
+**Status:** rev 1 (2026-10-15). Tasks 0 to 2 done; Tasks 3 and 4 open.
 
 **Operator rulings this plan builds on** (2026-10-15):
 - This branch is the **server half only**: `server/`, `shared/`, and the client functions for the new routes in `pwa/src/lib/api.ts`. It makes **no change to `DialogSheet` or any sheet UI**. Those changes follow PR #346 (§Out of scope).
@@ -144,21 +144,35 @@ The operator reports that only the **first** question of a multi-question AskUse
 - [x] **Step 4: Gates:** `answer`, `dialog`, `send`, `routes`, `single-definition`, `deviation-refs`, `dtbd`, `topology-clean`, and tsc. The tests-inclusive typecheck (`typecheck-tests`) reports only `../agent/src/server.ts`'s missing `ws`, because this worktree has no `agent/node_modules`. No line comes from `server/test` or `server/src`.
 - [x] **Step 5: Commit** `fix(answer): answerDialog never walks onto the free-text row — Enter there rejects the whole ask (D-5045)`.
 
-### Task 2: `--` before literal text, and a dropped line is never silent (D-5046)
+### Task 2: `--` before literal text, and a dropped line is never silent (D-5046) (done)
 
-**Routing:** band 2, with a band-1 tail: the argv pin updates are mechanical. **Files:** `server/src/exec.ts` (`sendLiteral`), `server/src/inject/send.ts` (`sendPrompt`'s type loop, `≈:756`), `server/test/exec.test.ts`, `routes.test.ts`, `send.test.ts`, `deliverability-parity.test.ts` and `mail-sweep.test.ts`.
+**Routing:** band 2, with a band-1 tail: the argv pin updates are mechanical. **Files:** modified `server/src/exec.ts` (`sendLiteral`), `server/src/inject/send.ts` (`sendPrompt`'s type loop, and `type-failed` in `SendResult`), `README.md` (the `/prompt` sentence), `server/test/exec.test.ts`, `send.test.ts`, `routes.test.ts`, `deliverability-parity.test.ts`, `mail-sweep.test.ts`, `ccd-tmux-anchor.test.ts`, and a comment in `ccd-win-size.test.ts`.
 
-- [ ] **Step 1: Red.**
-  - `exec.test.ts`, "sendLiteral puts -- before text that starts with a dash": expect `['tmux','send-keys','-t','=cc-x:','-l','--','-x']`.
-  - `send.test.ts`, "a '- item' line is typed, not dropped": a three-line prompt whose second line is `- item` gives three literal sends.
-  - `send.test.ts`, "a literal send that fails refuses before Enter": the fake runner fails the second `send-keys -l`. Expect `{ok:false, error:'type-failed'}` and no Enter. Today the failure is ignored and the message submits without that line.
-- [ ] **Step 2: Green.**
-  - `sendLiteral` sends `['send-keys','-t',target,'-l','--',text]`.
-  - `sendPrompt` checks each `sendLiteral` result and stops at the first `false`, never pressing Enter. It returns the new `SendResult` code `type-failed` (409). That is not `not-alive`, because the session may be alive with a partial message in its box.
-  - Update the 23 argv pins (`exec.test.ts` 1, `routes.test.ts` 4, `send.test.ts` 18) and the two positional readers that take the text from `args[4]`/`a[4]` (`deliverability-parity.test.ts:62`, `mail-sweep.test.ts:300`), which now read `args[5]`.
-- [ ] **Step 3: Mutation table:** `--` dropped makes the dash case RED. The result check dropped makes the type-failed case RED.
-- [ ] **Step 4: Gates:** `exec`, `send`, `routes`, `deliverability-parity`, `mail-sweep`, the four ledger/hygiene suites, and tsc.
-- [ ] **Step 5: Commit** `fix(tmux): literal text after --, and a failed literal send refuses before Enter (D-5046)`.
+**Re-measured first** (tmux 3.7c, a throwaway `-L` server running `cat` in its pane, killed afterwards). Without `--`: `-x probe`, `- item`, `---`, `-- x` and `--foo` exit 1 and type nothing; a lone `--` exits **0 and types nothing**, because the parser takes it as the end of the flags; a lone `-` types. With `--`, all eight shapes type verbatim, `''` and `' '` still exit 0, and a missing session still exits 1. So the `--` is the only thing that saves a bare `--` line, since no return check can see that drop.
+
+- [x] **Step 1: Red.** Each was seen red for the reason named:
+  - `exec.test.ts`, "sendLiteral puts -- before text that starts with a dash (D-5046)": `-x`, `- item` and `--` each give `['tmux','send-keys','-t','=cc-x:','-l','--',<text>]`, and each argv crosses the agent's `isExecAllowed`. It was red on the argv, since `--` was missing.
+  - `send.test.ts`. `boxTmux` now answers every literal send by the table above (`tmuxLiteral`), and the box records each message it submits (`box.submitted`). Its `failLiteralAt` option fails the n-th literal send with exit 1. Describe "a typed line is never silently dropped (D-5046)":
+    - "a '- item' line is typed, not dropped": `Shopping:` / `- item` / `last`. It was `ok:true`, submitting `['Shopping:', '', 'last']`.
+    - "a bare '--' line is typed too" and "a markdown rule line '---' is typed". In the first red run they were one case, `above` / `--` / `---` / `below`: `ok:true`, submitting `['above', '', '', 'below']`. They were split afterwards, so that the bare `--` case shows the exit-0 drop alone (Step 3).
+    - "a literal send that fails refuses type-failed before Enter, and types nothing after it": the second send fails. It was `ok:true` after Enter. Expected: `type-failed`, nothing submitted, no key after the failed send, and `first` left in the box.
+    - "a one-line message whose only send fails refuses type-failed, not verify-failed": it was `verify-failed`.
+  - `ccd-tmux-anchor.test.ts`, "D-5046: a text that starts with a dash is typed verbatim, not read as flags": real tmux on that suite's private socket. `-x probe`, `- item`, `--` and `---` each make `sendLiteral` answer `true`, and each lands as its own line. It pins the `tmuxLiteral` double to real tmux on every CI leg, Linux included.
+  - The 135 existing tests of `send.test.ts` all ran on the new double, and all stayed green before the change.
+- [x] **Step 2: Green.**
+  - `sendLiteral` sends `['send-keys','-t',target,'-l','--',text]`. The text is still one argv token, inside the agent's one-token `['send-keys']` prefix grant.
+  - `sendPrompt`'s type loop returns `{ok:false, error:'type-failed'}` at the first literal send that answers `false`, before any further key. The route turns it into a 409, like every other `SendResult` refusal. It is not `not-alive`: the session may be alive, with the earlier lines in its box, and they are left there. On the attachment lane, that can be a bare clip path, which that lane's failed-echo arm would have cleared. That clear is not run here, because with `--` in place a literal send fails only when the session or the link fails (inferred, not measured), and a clear would meet the same failure. The next send answers `draft-present`, showing the path. The mail lane counts `type-failed` as an ordinary failed attempt, and its nudge is one line.
+  - The 23 argv pins (`exec.test.ts` 1, `routes.test.ts` 4, `send.test.ts` 18) read `'-l', '--', <text>`. The two positional readers (`deliverability-parity.test.ts:62`, `mail-sweep.test.ts:300`) read `args[5]`. Measured: with the fix in and those two readers left at index 4, 30 tests went red.
+- [x] **Step 3: Mutation table, run.** Each mutant was applied to the uncommitted change, the named suites were run, and the file was restored from a copy and compared byte for byte.
+
+  | Mutant | RED (the named tests) |
+  |---|---|
+  | `--` dropped from `sendLiteral` | the dash argv case; the `- item` and `---` cases (now `type-failed`, loud); the bare `--` case (still `ok:true`, submitting `['above', '', 'below']`: the drop no return check sees); the 14 tests that hold `send.test.ts`'s 18 argv pins, and the exec pin; and against real tmux, the `ccd-tmux-anchor` case (`-x probe: expected false to be true`). With only `--` in that case's list it read `--: expected +0 to be 2`, so its line check sees the exit-0 drop too. |
+  | the result check dropped from the type loop | "a literal send that fails refuses type-failed…" (`ok:true`) and "a one-line message whose only send fails…" (`verify-failed`) |
+  | every result checked, but the loop keeps typing and refuses after it | "…and types nothing after it" (two more keys after the failed send) |
+
+- [x] **Step 4: Gates:** `exec`, `send`, `routes`, `deliverability-parity`, `mail-sweep`, plus the suites that drive a send through a fake tmux (`dispatch-route`, `dispatch-adopt`, `dispatch-child-argv`, `dispatch-skillstate`, `kickoff-route`, `run-routes`, `stall-sweep`, `asks-routes`, `asks-sweep`, `child-reclaim-refusals`, `push-copy`, `sessionws`, `fleetws`, `ask-route`, `submit-route`), `whitelist-subset`, `remote-runner`, the four ledger/hygiene suites, the `ccd-tmux-anchor` D-5046 case, and tsc. `typecheck-tests` fails the same three cases with the same 727 error lines as at this branch's Task 1 head: all from `agent/` (no `agent/node_modules` in this worktree), none from `server/test` or `server/src`.
+- [x] **Step 5: Commit** `fix(tmux): literal text after --, and a failed literal send refuses before Enter (D-5046)`.
 
 ### Task 3: `POST /api/sessions/:id/dialog/text` (D-5047)
 
@@ -252,6 +266,7 @@ The operator reports that only the **first** question of a multi-question AskUse
 
 - `answerdialog-unparsed`: `answerDialog` should refuse a `parsed:false` dialog before any key. Measured: on an unparsed multiSelect it presses Enter (a toggle) and answers `ok:true` for index 1, and sends walk keys before `walk-failed` for any other index. Task 4 keeps multiSelect `parsed:false`, so it does not close this.
 - `whitelist-literal-comment`: `agent/src/whitelist.ts`'s note says `sendLiteral`'s text sits "in the one slot after `-l`". After D-5046 it is the slot after `--`. That is a comment-only edit, outside this branch's ruled scope.
+- `send-literal-trailing-semicolon` (measured during Task 2, out of D-5046's scope): tmux reads an argv token that ENDS in `;` as a command separator, so `send-keys -l -- 'int x = 1;'` exits 0 and types `int x = 1`, dropping the `;`. A token ending in `\;` loses the backslash instead (`esc\;` types `esc;`). `--` changes neither, measured with and without it on tmux 3.7c. `sendPrompt` sends each line as one token, so any composer line that ends in `;` (a line of code) reaches the session without its last character, `ok:true`, and the echo proof sees it only when that `;` falls inside the first line's 24-character needle. A fix needs its own measurement, for example escaping a trailing `;`, and how a text that really ends in `\;` then survives.
 
 ## Deviations found
 

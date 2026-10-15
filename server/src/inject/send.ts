@@ -41,7 +41,12 @@ export type SendResult =
         // ("esc to interrupt"), and nothing was pressed. This is reachable only
         // when the caller opted in via `refuseIfTurnRunning`; see that option's
         // own docstring.
-        | 'turn-running';
+        | 'turn-running'
+        // D-5046. tmux refused one line's literal send, so the loop stopped
+        // there and pressed no Enter. Not `not-alive`: the session may be
+        // alive, with the lines typed before it still in its box. Before this
+        // the refusal was ignored and the message submitted without the line.
+        | 'type-failed';
       draft?: string;
       pane?: string;
       /**
@@ -753,9 +758,18 @@ export function sendPrompt(
         if (cleared.state === 'residue') return { ok: false, error: 'draft-clear-failed', draft: cleared.draft };
       }
     }
+    // D-5046: every line's send is CHECKED, and the first refusal stops the
+    // loop before another key. The echo proof below reads the first line's
+    // needle only, so a line tmux refused used to leave a hole in the middle
+    // of the message while the echo still matched and Enter still went: the
+    // session got the message without that line, and the caller got `ok`.
+    // What was typed so far stays in the box. The attachment lane's failed-echo
+    // clear below is NOT run on this arm: with `--` in place, what is left to
+    // make tmux refuse a literal is the session or the link failing (inferred,
+    // not measured), and a clear would meet the same failure.
     for (let i = 0; i < parts.length; i++) {
       if (i > 0) await d.tmux.sendKey(id, 'M-Enter');
-      await d.tmux.sendLiteral(id, parts[i]!);
+      if (!(await d.tmux.sendLiteral(id, parts[i]!))) return { ok: false, error: 'type-failed' };
     }
 
     // Wait for the box to echo what we typed. This POLLS rather than taking one

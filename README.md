@@ -2870,7 +2870,9 @@ Three routes act on what the pane already shows, each with its own named refusal
 | `POST /api/sessions/:id/ask` | answers a **hook-reported** question by option index | re-reads the current envelope and refuses unless a content digest still matches, the pane still shows that exact menu, and the question is single |
 | `POST /api/sessions/:id/submit` | presses **one** Enter on a box that already holds text | refuses unless the box matches the text the caller expected; one Enter, never a retry loop |
 
-Ordinary input has routes of its own: `POST /api/sessions/:id/prompt` types a message, any images first staged by
+Ordinary input has routes of its own: `POST /api/sessions/:id/prompt` types a message one line at a time, each
+line after tmux's `--` so a line that starts with `-` is typed as text, and refuses `409 type-failed` before Enter
+when tmux refuses a line, rather than submitting the message without it (D-5046); any images are first staged by
 `POST /api/sessions/:id/upload` (PNG, JPEG or WebP, at most 12 MiB, under `~/.cc-clips/<id>/`);
 `POST /api/sessions/:id/interrupt` sends Escape and refuses (`409`) a session that is not alive or not busy;
 `GET /api/sessions/:id/commands` lists the slash commands the composer offers; the terminal drawer is

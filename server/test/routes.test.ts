@@ -308,7 +308,7 @@ describe('write routes', () => {
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual({ ok: true });
     expect(sendKeysCalls(calls)).toEqual([
-      ['tmux', 'send-keys', '-t', `=cc-${ID}:`, '-l', 'hello'],
+      ['tmux', 'send-keys', '-t', `=cc-${ID}:`, '-l', '--', 'hello'],
       ['tmux', 'send-keys', '-t', `=cc-${ID}:`, 'Enter'],
     ]);
     await app.close();
@@ -684,9 +684,9 @@ describe('prompt route attachment handling', () => {
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual({ ok: true });
     expect(sendKeysCalls(calls)).toEqual([
-      ['tmux', 'send-keys', '-t', `=cc-${ID}:`, '-l', clip],
+      ['tmux', 'send-keys', '-t', `=cc-${ID}:`, '-l', '--', clip],
       ['tmux', 'send-keys', '-t', `=cc-${ID}:`, 'M-Enter'],
-      ['tmux', 'send-keys', '-t', `=cc-${ID}:`, '-l', 'what is this'],
+      ['tmux', 'send-keys', '-t', `=cc-${ID}:`, '-l', '--', 'what is this'],
       ['tmux', 'send-keys', '-t', `=cc-${ID}:`, 'Enter'],
     ]);
     await app.close();
@@ -706,7 +706,7 @@ describe('prompt route attachment handling', () => {
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual({ ok: true });
     expect(sendKeysCalls(calls)).toEqual([
-      ['tmux', 'send-keys', '-t', `=cc-${ID}:`, '-l', clip],
+      ['tmux', 'send-keys', '-t', `=cc-${ID}:`, '-l', '--', clip],
       ['tmux', 'send-keys', '-t', `=cc-${ID}:`, 'Enter'],
     ]);
     await app.close();
