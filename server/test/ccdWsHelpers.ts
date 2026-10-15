@@ -659,5 +659,17 @@ export function makeCcdHarness(prefix: string): CcdHarness {
  *  blocked opening a FIFO whenever a mutation removed a detector's guard —
  *  outlived every timed-out run; the fleet box's dead pane scopes held such
  *  processes for weeks (session-continuity spec §1.3, §5.6 item 3). perl now
- *  forks the child into a process group of its own and kills that group. */
-export const BOUNDED = `perl -e '$t = shift; $p = fork; die "fork: $!" unless defined $p; if (!$p) { setpgrp(0, 0); exec @ARGV; exit 127 } $SIG{ALRM} = sub { kill "KILL", -$p; waitpid($p, 0); exit 142 }; alarm $t; waitpid($p, 0); exit($? & 127 ? 128 + ($? & 127) : $? >> 8)'`;
+ *  forks the child into a process group of its own and kills that group.
+ *
+ *  THE PARENT-SIDE RACE (session-continuity wave 4b). A group the CHILD alone
+ *  creates does not exist until the child is scheduled: an alarm that fires in
+ *  that window kills `-$p`, finds no such group, and leaves the child to exec and
+ *  run on. So the parent ALSO calls `setpgid($p, $p)` before it arms the alarm;
+ *  parent and child establish the SAME child-owned group (it is never the
+ *  parent's), whichever runs first. POSIX `setpgid` returns undef on failure and a
+ *  defined value equal to 0 on success, so success is tested with `defined`, never
+ *  `!= 0`; errno is saved at once. EACCES means the child has already exec'd (after
+ *  its own successful group setup) and ESRCH that it is already gone: both leave a
+ *  group to kill or nothing to kill. Any other failure kills and reaps only that
+ *  child and exits 125 rather than arming an alarm against an unknown group. */
+export const BOUNDED = `perl -e 'use POSIX qw(setpgid); use Errno qw(EACCES ESRCH); $t = shift; $p = fork; die "fork: $!" unless defined $p; if (!$p) { exit 125 unless defined setpgid(0, 0); exec @ARGV; exit 127 } $g = setpgid($p, $p); $e = 0 + $!; if (!defined($g) && $e != EACCES && $e != ESRCH) { kill "KILL", $p; waitpid($p, 0); exit 125 } $SIG{ALRM} = sub { kill "KILL", -$p; waitpid($p, 0); exit 142 }; alarm $t; waitpid($p, 0); exit($? & 127 ? 128 + ($? & 127) : $? >> 8)'`;

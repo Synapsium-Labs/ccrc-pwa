@@ -103,3 +103,44 @@ describe('the resume flag (D-2227)', () => {
     expect(p.startsWith(literal)).toBe(true);
   });
 });
+
+describe('the pressure-reap variable is child scoped', () => {
+  it.each(['', '3600000'])('the shared composer carries it once with max-age %s', (age) => {
+    const out = h.sh(`RESUME_REDRIVE_MAX_AGE_MS='${age}'; _resume_env`);
+    expect(out.match(/CLAUDE_CODE_DISABLE_BG_SHELL_PRESSURE_REAP=1/g)).toHaveLength(1);
+    expect(out).toContain('CLAUDE_CODE_RESUME_INTERRUPTED_TURN=1');
+    expect(out).toContain("CLAUDE_CODE_RESUME_PROMPT='");
+    if (age) expect(out).toContain(`CLAUDE_CODE_RESUME_INTERRUPTED_TURN_MAX_AGE_MS=${age}`);
+    else expect(out).not.toContain('CLAUDE_CODE_RESUME_INTERRUPTED_TURN_MAX_AGE_MS');
+  });
+
+  it.each(['new', 'resume'] as const)('the %s primary command carries the variable before the wrapper', (mode) => {
+    seed();
+    h.sh(`${TMUX} rm -f "$HOME/pane-up"; _spawn_start myid ${mode}`);
+    const lines = newSessions();
+    expect(lines).toHaveLength(1);
+    const line = lines[0]!;
+    expect(line.match(/CLAUDE_CODE_DISABLE_BG_SHELL_PRESSURE_REAP=1/g)).toHaveLength(1);
+    expect(line.indexOf('CLAUDE_CODE_DISABLE_BG_SHELL_PRESSURE_REAP=1'))
+      .toBeLessThan(line.indexOf('/.local/bin/claude'));
+  });
+
+  it('the retry independently carries it, rather than relying on the failed primary', () => {
+    seed();
+    h.sh(`${RESUME_DIES} rm -f "$HOME/pane-up"; _spawn_start myid resume 2>/dev/null`);
+    const lines = newSessions();
+    expect(lines).toHaveLength(2);
+    expect(lines[0]).toContain('--resume');
+    expect(lines[1]).toContain('--session-id');
+    for (const line of lines) {
+      expect(line.match(/CLAUDE_CODE_DISABLE_BG_SHELL_PRESSURE_REAP=1/g)).toHaveLength(1);
+      expect(line.indexOf('CLAUDE_CODE_DISABLE_BG_SHELL_PRESSURE_REAP=1'))
+        .toBeLessThan(line.indexOf('/.local/bin/claude'));
+    }
+  });
+
+  it('composing a child command does not export the key into ccd itself', () => {
+    expect(h.sh(`unset CLAUDE_CODE_DISABLE_BG_SHELL_PRESSURE_REAP;
+      _resume_env >/dev/null; printf '%s' "\${CLAUDE_CODE_DISABLE_BG_SHELL_PRESSURE_REAP-unset}"`)).toBe('unset');
+  });
+});

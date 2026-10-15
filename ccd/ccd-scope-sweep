@@ -48,7 +48,9 @@
 #      network namespace (a sandbox's) is unmeasurable, never "no socket";
 #   5. no process in it is the parent of a process in another cgroup — read
 #      over every process on the box, so one whose stat cannot be read while it
-#      still exists makes this predicate unmeasurable;
+#      still exists makes this predicate unmeasurable. A ZOMBIE outside the
+#      scope (state Z) is no live child: it holds nothing and only awaits its
+#      parent's wait, so it does not block; every other outside child does;
 #   6. no live handoff record names one of its processes — Claude Code's native
 #      adopt record, if the stage-2 spike makes native handoff primary. None
 #      exists before stage 3 (the stage-3 launch record carries run and agent
@@ -71,12 +73,23 @@
 #   pid can make a cycle) makes the scope unmeasurable, never "not elsewhere".
 # A predicate it cannot measure (a value systemd does not report, a cgroup, a
 # /proc entry or a /proc/net table it cannot read) SKIPS that scope for the tick
-# and records nothing new: the scope's previous verdict line is carried
-# unchanged, and the other scopes are judged as usual. A scope seen LIVE drops
-# its entry, so its clock starts again from zero the next time it dies. THE
-# EXCEPTION: a scope carried for a child cgroup (it is checked before liveness
-# is decided) or for the parent-walk hop cap keeps its line even when it is
-# live, and gets no `old` listing; a scope with a child cgroup is never stopped.
+# and writes a `carry` row, never a dead verdict: `carry <unit> state=<dead|live|
+# unknown> first=<n|none> cpu0=<n|none> why=<reason>` records WHY this tick could
+# not measure it and what the last measured scope-level state was, plus the
+# bounded clock pair of the previous tick (first=none cpu0=none when no trusted
+# clock exists: a scope that is first seen unmeasurable has none, and none is
+# never invented). A carry is this tick's inability to measure, so it cannot
+# reach a stop in this tick; its retained clock becomes usable only after a
+# LATER tick re-measures every stop predicate, and the other scopes are judged as
+# usual. A scope seen LIVE drops its entry, so its clock starts again from zero
+# the next time it dies. THE EXCEPTIONS: a scope carried for a child cgroup (it is
+# checked before liveness is decided) or for the parent-walk hop cap keeps its row
+# even when it is live, and gets no `old` listing; a scope with a child cgroup is
+# never stopped. The hop cap is the one carry whose liveness IS known (`live`); a
+# child-cgroup carry stays `unknown` because that check precedes liveness (the
+# accepted cost: a live pane scope with a stray child cgroup reads unknown, not
+# live). The `dead` carries (socket tables, socket fds, box stats) fail on a
+# scope already judged dead. The two-clock fail-safe below is unchanged.
 #
 # THE CLOCK is boot-relative: `first=` is /proc/uptime's seconds when the scope
 # was first seen dead, so a wall-clock step (NTP, a manual `date`) moves no
@@ -98,7 +111,9 @@
 # by rename every tick: a header `# ccd-scope-sweep v1 tick=<epoch> up=<s>
 # mode=<shadow|live>`, one `dead` line per dead ccd scope (first seen, CPU
 # then, verdict, why, server, processes, memory, sockets, youngest and oldest
-# process, the scope's own age, pids), and one `old` line per process older
+# process, the scope's own age, pids), one `carry` line per scope this tick could
+# not measure (reason, liveness and bounded prior clocks, never a fresh dead
+# verdict), and one `old` line per process older
 # than a day in a LIVE pane scope that is neither the pane's own process nor
 # one of its Claude Code's MCP servers (a direct child of the pane's process
 # started within SCOPE_SWEEP_MCP_SEC of it, and that child's descendants).
@@ -106,7 +121,10 @@
 #
 # OUTPUT. Silent on an ordinary tick; one line when a scope is first seen dead,
 # first reaches `would-stop` or `held`, or is stopped. Refusals go to stderr,
-# exit 1.
+# exit 1. A paused sweep is silent (it runs every minute: a line a tick is noise).
+# The record is written whole to a temporary beside it and renamed over it: a
+# failed open, header, body or rename exits 1, says `previous record retained`
+# and leaves the prior complete record untouched (an empty body is a valid record).
 #
 # FIXTURE SEAMS, the doctor's own names: CCRC_PROC_ROOT (default /proc) and
 # CCRC_CGROUP_ROOT (default /sys/fs/cgroup); `systemctl` and `tmux` are found
@@ -136,7 +154,7 @@ DESC_RE='^tmux child pane ([1-9][0-9]*) launched by process ([1-9][0-9]*)$'
 
 _ss_die() { echo "scope-sweep: $*" >&2; exit 1; }
 
-[ -e "$PAUSE" ] && { echo "scope-sweep: paused ($PAUSE exists) — nothing measured, nothing recorded, nothing stopped"; exit 0; }
+[ -e "$PAUSE" ] && exit 0
 [ -n "${XDG_RUNTIME_DIR:-}" ] && [ -d "$XDG_RUNTIME_DIR" ] \
   || _ss_die "no-runtime-dir: \$XDG_RUNTIME_DIR is unset or not a directory, so there is nowhere to keep the verdict record and no clock can run — nothing stopped"
 STATE="$XDG_RUNTIME_DIR/ccd-scope-sweep.state"
@@ -151,18 +169,41 @@ MODE=shadow
 # The ONE read of the arming file, here and nowhere else in the tree (single-definition.test.ts).
 [ -e "$REG/scope-sweep-live" ] && MODE=live
 
-# ── the previous record: first-seen clocks, the CPU then, lines to carry ─────
-declare -A FIRST=() CPU0=() PREV=() PREVV=()
+# ── the previous record: first-seen clocks, the CPU then ──────────────────────
+# A `dead` line and a `carry` line both hand their bounded clock pair forward; only the pair, never the old
+# verdict, is read back (a carried line is never copied: it was one tick's inability to measure).
+declare -A FIRST=() CPU0=() PREVV=()
+CARRY_RE='^carry (tmux-spawn-[^[:space:]]+\.scope) state=(dead|live|unknown) first=(none|[1-9][0-9]{0,15}) cpu0=(none|0|[1-9][0-9]{0,19}) why=(unit-show|description|control-group|cpu|scope-start|procs|cgroup-dir|child-cgroup|server-stat|server-comm|tmux-unknown|parent-hop-cap|socket-tables|socket-fd|box-stat)$'
+_ss_prev_clock() {
+  local unit="$1" first="$2" cpu0="$3"
+  [[ "$first" == none && "$cpu0" == none ]] && return 0
+  [[ "$first" =~ ^[1-9][0-9]{0,15}$ && "$cpu0" =~ ^(0|[1-9][0-9]{0,19})$ ]] || return 1
+  FIRST["$unit"]="$first"; CPU0["$unit"]="$cpu0"
+  return 0
+}
+_ss_carry_pair() {
+  case "$1:$2" in
+    unknown:unit-show|unknown:description|unknown:control-group|unknown:cpu|unknown:scope-start|unknown:procs|unknown:cgroup-dir|unknown:child-cgroup|unknown:server-stat|unknown:server-comm|unknown:tmux-unknown|live:parent-hop-cap|dead:socket-tables|dead:socket-fd|dead:box-stat) return 0 ;;
+    *) return 1 ;;
+  esac
+}
 if [ -r "$STATE" ]; then
   while IFS= read -r line; do
-    [[ "$line" =~ ^dead\ (tmux-spawn-[^ ]+\.scope)\ first=([1-9][0-9]{0,15})\ cpu0=(0|[1-9][0-9]{0,19})\ verdict=([a-z-]+) ]] || continue
-    FIRST[${BASH_REMATCH[1]}]=${BASH_REMATCH[2]}; CPU0[${BASH_REMATCH[1]}]=${BASH_REMATCH[3]}
-    PREVV[${BASH_REMATCH[1]}]=${BASH_REMATCH[4]}; PREV[${BASH_REMATCH[1]}]="$line"
+    if [[ "$line" =~ ^dead\ (tmux-spawn-[^[:space:]]+\.scope)\ first=([1-9][0-9]{0,15})\ cpu0=(0|[1-9][0-9]{0,19})\ verdict=(report|would-stop|held|stopped|stop-failed)\  ]]; then
+      saved=("${BASH_REMATCH[@]}")   # snapshot first: the helper's own `=~` overwrites BASH_REMATCH
+      _ss_prev_clock "${saved[1]}" "${saved[2]}" "${saved[3]}" || continue
+      PREVV["${saved[1]}"]="${saved[4]}"
+    elif [[ "$line" =~ $CARRY_RE ]]; then
+      saved=("${BASH_REMATCH[@]}")
+      _ss_carry_pair "${saved[2]}" "${saved[5]}" || continue
+      _ss_prev_clock "${saved[1]}" "${saved[3]}" "${saved[4]}" || continue
+      PREVV["${saved[1]}"]=carry
+    fi
   done < "$STATE"
 fi
 
 # ── /proc readers: a process's start (ticks since boot), its age, its parent ──
-declare -A TICKS=() PARENT=()
+declare -A TICKS=() PARENT=() PSTATE=()
 _ss_stat() {   # pid -> TICKS[pid], PARENT[pid]; rc 1 unreadable. Fork-free: it runs per process per tick.
   local s rest
   local -a f
@@ -171,7 +212,8 @@ _ss_stat() {   # pid -> TICKS[pid], PARENT[pid]; rc 1 unreadable. Fork-free: it 
   rest="${s##*) }"                       # past `pid (comm) `: a comm may hold spaces and parentheses
   read -r -a f <<<"$rest"
   [[ "${f[1]:-}" =~ ^[0-9]+$ && "${f[19]:-}" =~ ^[0-9]+$ ]] || return 1
-  PARENT[$1]=${f[1]}; TICKS[$1]=${f[19]}
+  [[ "${f[0]:-}" =~ ^[A-Z]$ ]] || return 1
+  PSTATE[$1]=${f[0]}; PARENT[$1]=${f[1]}; TICKS[$1]=${f[19]}
   return 0
 }
 _ss_age() {                                              # seconds; the caller ran _ss_stat. A process forked after this tick's
@@ -245,30 +287,35 @@ units=$(systemctl --user list-units --no-legend --plain 'tmux-spawn-*.scope' 2>/
 OUT=() SAID=()
 STOPS=0
 declare -A P=() MINE=()
-_ss_carry() { [[ -n "${PREV[$u]+x}" ]] && OUT+=("${PREV[$u]}"); return 0; }   # unmeasurable: the old line, unchanged
+_ss_carry() {   # reason state; current loop unit, never a measured verdict
+  local why="$1" state="$2" first="${FIRST[$u]:-none}" cpu0="${CPU0[$u]:-none}"
+  _ss_carry_pair "$state" "$why" || _ss_die "internal invalid carry $why/$state"
+  OUT+=("carry $u state=$state first=$first cpu0=$cpu0 why=$why")
+  return 0
+}
 while read -r u _; do
   [[ "$u" == tmux-spawn-*.scope ]] || continue        # ONLY pane scopes: ccrc-tmux-server.scope never passes
   P=()
   while IFS='=' read -r k v; do [[ -n "$k" ]] && P[$k]="$v"; done < <(systemctl --user show "$u" -p Id -p Slice \
     -p Description -p ControlGroup -p CPUUsageNSec -p MemoryCurrent -p ActiveEnterTimestampMonotonic 2>/dev/null)
-  [[ -n "${P[Slice]:-}" ]] || { _ss_carry; continue; }  # `show` failed or the unit vanished: unmeasurable
+  [[ -n "${P[Slice]:-}" ]] || { _ss_carry unit-show unknown; continue; }  # `show` failed or the unit vanished: unmeasurable
   [[ "${P[Slice]}" == "$SLICE" ]] || continue           # outside the session slice: not the sweep's
-  [[ "${P[Description]:-}" =~ $DESC_RE ]] || { _ss_carry; continue; }   # a Description that does not parse: unmeasurable
+  [[ "${P[Description]:-}" =~ $DESC_RE ]] || { _ss_carry description unknown; continue; }   # a Description that does not parse: unmeasurable
   pane=${BASH_REMATCH[1]} server=${BASH_REMATCH[2]}
   cg="${P[ControlGroup]:-}" cpu="${P[CPUUsageNSec]:-}" mono="${P[ActiveEnterTimestampMonotonic]:-}"
   mem="${P[MemoryCurrent]:-}"; [[ "$mem" =~ ^[0-9]+$ ]] || mem='?'
-  [[ "$cg" == /*"/$u" ]] || { _ss_carry; continue; }   # the cgroup systemd names for THIS unit, or nothing is read
-  [[ "$cpu" =~ ^[0-9]+$ ]] || { _ss_carry; continue; }
-  [[ "$mono" =~ ^[1-9][0-9]*$ ]] || { _ss_carry; continue; }
+  [[ "$cg" == /*"/$u" ]] || { _ss_carry control-group unknown; continue; }   # the cgroup systemd names for THIS unit, or nothing is read
+  [[ "$cpu" =~ ^[0-9]+$ ]] || { _ss_carry cpu unknown; continue; }
+  [[ "$mono" =~ ^[1-9][0-9]*$ ]] || { _ss_carry scope-start unknown; continue; }
   procs=()
-  { mapfile -t procs < "$CGROOT$cg/cgroup.procs"; } 2>/dev/null || { _ss_carry; continue; }
-  (( ${#procs[@]} )) || { _ss_carry; continue; }
+  { mapfile -t procs < "$CGROOT$cg/cgroup.procs"; } 2>/dev/null || { _ss_carry procs unknown; continue; }
+  (( ${#procs[@]} )) || { _ss_carry procs unknown; continue; }
   # A child cgroup (any child directory, dotfiles included) holds processes none of the predicates read: unmeasurable.
-  [ -r "$CGROOT$cg" ] && [ -x "$CGROOT$cg" ] || { _ss_carry; continue; }
+  [ -r "$CGROOT$cg" ] && [ -x "$CGROOT$cg" ] || { _ss_carry cgroup-dir unknown; continue; }
   kids=0; shopt -s dotglob nullglob
   for d in "$CGROOT$cg"/*; do [ -d "$d" ] && { kids=1; break; }; done
   shopt -u dotglob nullglob
-  (( kids == 0 )) || { _ss_carry; continue; }
+  (( kids == 0 )) || { _ss_carry child-cgroup unknown; continue; }
   # WHOSE SERVER: by pid, comm, and a start EARLIER than the scope's. THE TWO CLOCKS DIFFER: the server's start is /proc
   # starttime in ticks since boot (CLOCK_BOOTTIME, which counts suspended time), the scope's `mono` is systemd's
   # ActiveEnterTimestampMonotonic (CLOCK_MONOTONIC, which does not). After a suspend an OLDER server can therefore read as
@@ -277,11 +324,11 @@ while read -r u _; do
   # elsewhere) still hold. The fleet host does not suspend.
   if [[ ! -e "$PROC/$server" ]]; then state=gone
   else
-    _ss_stat "$server" || { _ss_carry; continue; }
-    comm=$(_ss_comm "$server") || { _ss_carry; continue; }
+    _ss_stat "$server" || { _ss_carry server-stat unknown; continue; }
+    comm=$(_ss_comm "$server") || { _ss_carry server-comm unknown; continue; }
     if [[ "$comm" != "tmux: server" ]] || (( TICKS[$server] * (1000000 / TCK) >= mono )); then state=reused
     elif [[ "$server" == "$SERVER" ]]; then state=ccd
-    elif [[ -z "$SERVER" ]]; then _ss_carry; continue   # tmux answered nothing: ccd's server or another's, it cannot say
+    elif [[ -z "$SERVER" ]]; then _ss_carry tmux-unknown unknown; continue   # tmux answered nothing: ccd's server or another's, it cannot say
     else continue                                       # another LIVE tmux server's pane: never touched, never recorded
     fi
   fi
@@ -310,9 +357,9 @@ while read -r u _; do
       age=$(_ss_age "$p")
       (( age >= SCOPE_SWEEP_OLD_SEC )) || continue
       c=$(_ss_comm "$p") || c='?'
-      olds+=("old $u pid=$p age=$age comm=${c// /_}")
+      olds+=("old $u pid=$p age=$age comm=${c//[[:space:]]/_}")
     done
-    if (( capped )); then _ss_carry; elif (( ${#olds[@]} )); then OUT+=("${olds[@]}"); fi   # a chain it could not walk lists nothing
+    if (( capped )); then _ss_carry parent-hop-cap live; elif (( ${#olds[@]} )); then OUT+=("${olds[@]}"); fi   # a chain it could not walk lists nothing
     continue
   fi
   # DEAD. Every predicate measured; any one that cannot be carries the old line.
@@ -321,18 +368,19 @@ while read -r u _; do
     _ss_stat "$p" || continue   # unreadable: one that still exists makes _ss_box below unmeasurable, one that has gone has no ns/net to read
     a=$(_ss_age "$p"); (( youngest < 0 || a < youngest )) && youngest=$a; (( a > oldest )) && oldest=$a
   done
-  _ss_sockets || { _ss_carry; continue; }
-  socks=$(_ss_socket_count "${procs[@]}") || { _ss_carry; continue; }
-  _ss_box || { _ss_carry; continue; }
+  _ss_sockets || { _ss_carry socket-tables dead; continue; }
+  socks=$(_ss_socket_count "${procs[@]}") || { _ss_carry socket-fd dead; continue; }
+  _ss_box || { _ss_carry box-stat dead; continue; }
   MINE=(); for p in "${procs[@]}"; do MINE[$p]=1; done
   elsewhere=0
   for q in "${!PARENT[@]}"; do   # a child of one of its processes that its cgroup.procs does not hold lives in another cgroup
+    [[ "${PSTATE[$q]:-}" == Z ]] && continue   # a zombie is no live outside child: it holds nothing and only awaits its parent's wait
     [[ -n "${MINE[${PARENT[$q]}]+x}" && -z "${MINE[$q]+x}" ]] && elsewhere=1
   done
   born=$(( mono / 1000000 ))     # the scope's own start, seconds on the MONOTONIC clock (see WHOSE SERVER above); UP is BOOTTIME, so after a suspend born/sage skew, failing safe
   sage=$(( UP - born )); (( sage < 0 )) && sage=0   # a scope started after this tick's uptime read: 0, never a negative the doctor cannot read
-  first=${FIRST[$u]:-} cpu0=${CPU0[$u]:-}
-  if [[ -z "$first" ]] || (( first < born || first > UP )); then first=$UP cpu0=$cpu; fi   # a clock it cannot believe starts now
+  first=${FIRST[$u]:-} cpu0=${CPU0[$u]:-}; had_clock=1
+  if [[ -z "$first" ]] || (( first < born || first > UP )); then first=$UP cpu0=$cpu; had_clock=0; fi   # a clock it cannot believe starts now
   why=()
   if [[ "$state" == reused ]]; then why+=(server-pid-reused)
   else
@@ -351,13 +399,21 @@ while read -r u _; do
   fi
   w="${why[*]:-none}" pl="${procs[*]}"
   OUT+=("dead $u first=$first cpu0=$cpu0 verdict=$verdict why=${w// /,} server=$state procs=${#procs[@]} mem=$mem sockets=$socks youngest=$youngest oldest=$oldest age=$sage pids=${pl// /,}")
-  if [[ -z "${PREV[$u]+x}" ]]; then SAID+=("scope-sweep: $u is dead, its server $state, ${#procs[@]} process(es): first seen now")
+  if (( ! had_clock )); then SAID+=("scope-sweep: $u is dead, its server $state, ${#procs[@]} process(es): first seen now")
   elif [[ "$verdict" != report && "$verdict" != "${PREVV[$u]:-}" ]]; then SAID+=("scope-sweep: $u $verdict — dead $(( (UP - first) / 60 )) min, ${#procs[@]} process(es), its CPU unmoved, no socket, nothing elsewhere")
   fi
 done <<<"$units"
 
+_ss_write_record() {
+  printf '# ccd-scope-sweep v1 tick=%s up=%s mode=%s\n' "$NOW" "$UP" "$MODE" || return 1
+  if (( ${#OUT[@]} )); then printf '%s\n' "${OUT[@]}" || return 1; fi
+  return 0
+}
 tmp=$(mktemp "$STATE.XXXXXX") || _ss_die "cannot write beside $STATE"
-{ echo "# ccd-scope-sweep v1 tick=$NOW up=$UP mode=$MODE"; (( ${#OUT[@]} )) && printf '%s\n' "${OUT[@]}"; } > "$tmp"
-mv -f "$tmp" "$STATE" || { rm -f "$tmp"; _ss_die "cannot write $STATE"; }
+if ! _ss_write_record > "$tmp"; then
+  rm -f "$tmp"
+  _ss_die "cannot write verdict record; previous record retained"
+fi
+mv -f "$tmp" "$STATE" || { rm -f "$tmp"; _ss_die "cannot replace verdict record; previous record retained"; }
 (( ${#SAID[@]} )) && printf '%s\n' "${SAID[@]}"
 exit 0

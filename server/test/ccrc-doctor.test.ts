@@ -13778,6 +13778,71 @@ describeLinux('ccrc doctor: scope-sweep', () => {
     expect(lineFor(runDoctor(home, ['doctor'], { CCRC_SCOPE_SWEEP_STALE_S: 'abc' }).stdout, 'scope-sweep')).toMatch(/^PASS scope-sweep: /);
   });
 
+  it.each([false, true])('an unreadable body uses only rewrite advice, with measured dead row present=%s', (mixed) => {
+    const home = healthy('ccrc-doctor-scope-unreadable-body-');
+    record(home, [...(mixed ? [DEADLINE()] : []), 'not a sweep row']);
+    const out = runDoctor(home).stdout;
+    expect(lineFor(out, 'scope-sweep')).toMatch(/^WARN scope-sweep: .*1 line\(s\) it cannot read/);
+    expect(out).toContain('let the sweep rewrite it: systemctl --user start ccd-scope-sweep.service; then re-run doctor');
+    expect(out).not.toContain('read each before acting');
+    expect(out).not.toContain('systemctl --user stop <unit>');
+    noFail(out);
+  });
+
+  it('a measured-live carry qualifies PASS instead of claiming every live process was read', () => {
+    const home = healthy('ccrc-doctor-scope-live-carry-');
+    record(home, [`carry ${LIVE} state=live first=123 cpu0=7 why=parent-hop-cap`]);
+    const out = runDoctor(home).stdout;
+    expect(lineFor(out, 'scope-sweep')).toMatch(/^PASS scope-sweep: /);
+    expect(lineFor(out, 'scope-sweep')).toContain('excluding 1 live pane scope(s) carried unmeasured');
+    expect(out).not.toContain('read each before acting');
+  });
+
+  it.each(['dead', 'unknown'])('a %s carry warns with measurement advice, never stop advice', (state) => {
+    const home = healthy('ccrc-doctor-scope-unmeasured-carry-');
+    const why = state === 'dead' ? 'socket-tables' : 'child-cgroup';
+    record(home, [`carry ${DEAD} state=${state} first=none cpu0=none why=${why}`]);
+    const out = runDoctor(home).stdout;
+    expect(lineFor(out, 'scope-sweep')).toMatch(/^WARN scope-sweep: .*carried unmeasured/);
+    expect(out).toContain('let the sweep rewrite the measurement');
+    expect(out).not.toContain('read each before acting');
+    expect(out).not.toContain('systemctl --user stop <unit>');
+  });
+
+  it.each([
+    `carry ${DEAD} state=unknown first=none cpu0=7 why=child-cgroup`,
+    `carry ${LIVE} state=live first=123 cpu0=7 why=child-cgroup`,
+    `carry ${DEAD} state=unknown first=08 cpu0=7 why=child-cgroup`,
+    `carry ${DEAD} state=dead first=123 cpu0=7 why=not-supported`,
+    DEADLINE().replace('cpu0=7', 'cpu0=08'),
+  ])('a malformed or contradictory carry/dead row gets rewrite advice: %s', (row) => {
+    const home = healthy('ccrc-doctor-scope-bad-carry-');
+    record(home, [row]);
+    const out = runDoctor(home).stdout;
+    expect(lineFor(out, 'scope-sweep')).toMatch(/^WARN scope-sweep: .*1 line\(s\) it cannot read/);
+    expect(out).not.toContain('read each before acting');
+    noFail(out);
+  });
+
+  it('a future record is neither fresh PASS nor destructive advice', () => {
+    const home = healthy('ccrc-doctor-scope-future-');
+    record(home, [], -3600);
+    const out = runDoctor(home).stdout;
+    expect(lineFor(out, 'scope-sweep')).toMatch(/^WARN scope-sweep: .*future/);
+    expect(out).toContain('let the sweep rewrite it');
+    expect(out).not.toContain('read each before acting');
+    noFail(out);
+  });
+
+  it('mixed measured and carried rows keep measured advice explicitly scoped', () => {
+    const home = healthy('ccrc-doctor-scope-mixed-carry-');
+    record(home, [DEADLINE(), `carry ${LIVE} state=live first=none cpu0=none why=parent-hop-cap`]);
+    const out = runDoctor(home).stdout;
+    expect(lineFor(out, 'scope-sweep')).toContain('1 dead pane scope(s)');
+    expect(lineFor(out, 'scope-sweep')).toContain('carried unmeasured');
+    expect(out).toContain('stop advice applies only to the measured dead rows, never to a carry');
+  });
+
   it('services: an installed, stopped ccd-scope-sweep.timer WARNS — a reboot empties the record, so only `known` sees it', () => {
     const home = healthy('ccrc-doctor-services-scope-sweep-timer-');
     writeUnitFile(home, 'ccd-scope-sweep.timer');

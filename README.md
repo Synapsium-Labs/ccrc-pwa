@@ -2382,6 +2382,17 @@ operator's switch was undone by the next swap (§1.4: Opus typed by hand, Fable 
   restart reads once and logs at most once per kind (one `/model` line, one `/effort` line). The marker means Claude
   Code is not running: a stop whose pane kill failed on a session not proven gone removes it, so that session's next
   revival reads.
+
+  Before a pane-observed UUID rotation (a `/clear`), `_sync_uuid` promotes the outgoing transcript's acknowledged
+  operator `/model` and `/effort` through the same parser and one combined route operation, BEFORE replacing the
+  registry UUID. `/clear` starts a new transcript; compaction keeps the existing transcript. Background-follow and
+  continuation-chain UUID writes do not promote. A kind the operator already set in the new transcript (a `/model`
+  or `/effort` typed after the `/clear`, before the tick saw it) is not overwritten from the outgoing one, and the
+  fields the promotion writes are recorded applied, so it never makes ccd type into the live pane. The live
+  promotion neither creates nor removes `choicekept`: that marker still means a dead session was read before
+  its next spawn. A command ccd journalled is excluded, a newer route-field write wins, and unavailable or
+  unrecognised input is logged without blocking UUID synchronisation. Non-Anthropic operator-choice semantics
+  remain skipped; this is not the applicability rule for the pressure-reap environment variable.
 - **ccd's own keystrokes are not the operator's.** The settle's `/effort` and `route --apply` journal what they
   type in `$REG/<id>.typed` (`<epoch> <model|effort> <value>`, the last `TYPED_KEEP_ROWS=16`, purged with the
   row); a command with the same value within `TYPED_MATCH_WINDOW=60` seconds of a row is ccd's and is left alone.
@@ -2402,15 +2413,12 @@ operator's switch was undone by the next swap (§1.4: Opus typed by hand, Fable 
   refused the command — `/effort`'s `Invalid argument …`, 18 rows in the 6,794 fleet transcripts counted on
   2026-10-05; a dismissed `/effort` slider wrote no row there, no `Kept effort level as …` at all), logs `operator-choice <id>: unmeasured (…)`, once per keep. A field written after the keystroke (the PWA picker, a coordinator's
   route, this step's last write) is the later choice and wins, and is asked first, so an older command is not logged either. `python3 deploy/measure-continuity.py --stage 7`
-  counts the writes, the stops that logged a `/model` ccd could not keep, and, in
-  `stops_that_could_not_read_the_transcript`, the KEEPS that could not measure: one per `unmeasured (…)` line, so a keep at a
-  spawn counts and so does the acknowledgement-drift line (a successful read of a command with no recognised acknowledgement).
-  A refused command, and the drift line, repeat at every keep until a later operator command of its kind is
-  acknowledged or its field is written after it (a `route --set`, the PWA picker; a ccd keystroke does not clear it). The row
-  counts keep-time STOPS that a spawn may follow, not distinct choices or restarts: a `/model` the record cannot hold
-  is logged again at every later keep until a newer command replaces it, since it reverts again at each, and a
-  session stopped for good, or archived and then removed, is counted although no restart happened (an over-count by
-  design).
+  counts promotion writes and logged model refusals, not measured restarts. The existing
+  `restarts_that_reverted_an_operator_model` key is retained: it sums outside-vocabulary and route-refused
+  `/model` lines from dead-session keeps AND live UUID promotions. A refusal may repeat on a later promotion,
+  and a live rotation need not be followed by a stop or restart. `stops_that_could_not_read_the_transcript`
+  likewise retains its name but counts `unmeasured` lines from both paths. These are conservative observation
+  counters, not distinct commands, sessions, stops or restarts; non-Anthropic choices still produce no line.
 - **Skipped, and the known costs.** A session on a non-Anthropic lane is skipped, silently (`_is_anthropic_backend`,
   as the settle is), and a swap that crosses lanes moves the journal floor to the landing, so nothing typed on the
   other lane is read. `/model opus[1m]` is kept as `opus` and loses its 1M context (the record has no context
@@ -2421,8 +2429,6 @@ operator's switch was undone by the next swap (§1.4: Opus typed by hand, Fable 
   opened are unjournalled and newer than it, so they could read as the operator's.
 - **Known silent costs**, each a choice lost with no line (a command whose acknowledgement drifted is not one: it
   is logged `unmeasured`):
-  - a `/model` or `/effort` typed before a `/clear`: `/clear` starts a new transcript and the keep reads only the
-    current one (deferred to a later wave);
   - an operator command typed within `TYPED_MATCH_WINDOW` after a ccd keystroke that rotated out of the journal,
     and never through a stop since;
   - an Anthropic-lane command typed before a round trip through a non-Anthropic lane, and never through a stop
@@ -5314,11 +5320,18 @@ moved since, no process in it started in the last six hours, none holds a TCP or
 Unix socket, and none is the parent of a process in another cgroup (and no live handoff record names one of
 its processes: none exists yet). A value it cannot measure — a process in another network namespace, a
 process on the box whose parent cannot be read, a tmux that does not answer for a scope whose server still
-runs — skips the scope for that tick, its previous line carried; a scope seen live starts its clock again.
+runs — skips the scope for that tick.
 So is a scope whose cgroup holds any child cgroup or whose cgroup directory cannot be read and searched: a stop
 kills the whole cgroup subtree and the predicates read only the scope's own `cgroup.procs`, so such a scope is
 carried, never stopped (`scope-sweep-child-cgroups-are-unmeasurable`); a record's `first=` or `cpu0=` outside the
 bounds the sweep writes is not believed, and the clock starts again.
+
+An unmeasurable predicate writes a `carry` row with its reason and `state=dead|live|unknown`, plus a bounded
+prior `first`/`cpu0` pair if there is one (`none`/`none` otherwise). It is not a newly measured dead verdict
+and cannot authorize a stop this tick. A clock carried through uncertainty is reusable only after a later
+tick measures EVERY predicate again; an implausible clock starts again. Child-cgroup uncertainty is
+`unknown` because it is checked before liveness; a known-live parent-walk cap is `live`. Measured live
+scopes otherwise reset the dead clock. A zombie outside child does not block; a live outside child does.
 The clock is boot-relative (`/proc/uptime`), so a wall-clock step moves no stop. **The stop ships
 shadowed:** an inert scope is recorded `would-stop`, and `systemctl --user stop --no-block` is issued only
 while `~/.cc-sessions/scope-sweep-live` exists — nothing writes that file; the operator touches it after
@@ -5326,15 +5339,38 @@ reading the shadow verdicts. Armed, one tick stops at most three scopes and reco
 `~/.cc-sessions/scope-sweep-paused` stops everything, the shadow record included.
 
 Its verdicts live in `$XDG_RUNTIME_DIR/ccd-scope-sweep.state`, rewritten every tick (a reboot empties it,
-which restarts every clock): one `dead` line per dead ccd scope and one `old` line per process older than a
-day in a live pane scope, other than the pane's own and its Claude Code's MCP servers. `ccrc doctor`'s
+which restarts every clock): one `dead` line per dead ccd scope, one `carry` line per scope the tick could not
+measure, and one `old` line per process older than a day in a live pane scope, other than the pane's own and
+its Claude Code's MCP servers. `ccrc doctor`'s
 `scope-sweep` check reads that record and never re-derives it: it lists every dead scope — how long dead,
 the scope's own age and its oldest process's, its pids, memory, sockets and verdict — and every such
 long-lived process, warns when the record is stale, and SKIPs while the sweep is paused.
-`deploy/measure-continuity.py --stage 6` counts the OOM stops of pane scopes whose session had been idle 30
-minutes or more with a live background shell — the pressure reap's own class — beside every pane-scope OOM
-stop (the week after the sweep's deploy is its baseline), and reads off the record how many inert scopes
-have been dead a day or more.
+
+Doctor validates the whole body before giving ordinary scope advice. Malformed, future or stale records
+warn and ask for a new measurement, not a stop. Dead/unknown carries warn without destructive advice;
+a carry-only live record has a qualified PASS excluding the unmeasured scopes. Mixed records limit stop
+advice to measured dead rows. While the sweep is paused it writes nothing (doctor reports SKIP). The sweep checks temporary open, header, body and
+rename results, preserving the previous complete record if replacement fails; that is not rollback of a
+stop already accepted by an armed manager. The stop remains shadowed until the operator arms it.
+
+`deploy/measure-continuity.py --stage 6` reports three DIFFERENT measurements: direct background-shell
+pressure-kill notifications in `direct_pressure_kills` (target 0 after the spawn variable), kernel
+pane-scope OOM stops in `reap_class_oom`, and NOW's fresh sweep record in `inert_scopes`. Direct kills are
+unique transcript-UUID/task-ID pairs, deduplicated across selected copies. The default reads the largest
+discovered main transcript per UUID; `--all-copies` includes divergent smaller copies but still counts
+one task once. Discovery can miss unreadable roots/stat failures and excludes subagent transcripts;
+partial reads and absent input are reported, never claimed as a clean zero. Notification times are
+observations at delivery, not exact kill instants.
+
+The frozen baseline B is the pane-OOM reap-class count with the reap still enabled. A read-only
+`--reap-baseline B` comparison requires stage 6 alone and an explicit seven-day interval: observed
+reap-class OOMs ABOVE B + 2 means withdraw the spawn assignment through a follow-up release. At B + 2 it
+is `not-triggered`, not a health verdict; raw pane stops, unmapped and unmeasured classifications remain
+beside it. Direct pressure kills do not feed that comparison. The variable is
+`CLAUDE_CODE_DISABLE_BG_SHELL_PRESSURE_REAP=1` in ccd's child spawn environment, primary AND resume-retry,
+including an external-provider wrapper that execs Claude Code. Deploying it does not retrofit existing
+panes. Assignment and any subsequent removal take effect at each session's NEXT ordinary start; no
+forced fleet restart is part of this change. An aggregate slice `MemoryHigh` must never return.
 
 ### Memory guardrails (Linux)
 
