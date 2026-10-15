@@ -36,13 +36,18 @@ export const EXIT = Object.freeze({
 // the spec names only in prose: `bad-args`, `regex-syntax`, `regex-refused`,
 // `project-unreadable`, `store-zero-byte`, `store-schema-missing`, `store-read-failed`.
 const REASON_ROWS = [
+  // `repair-refused` and `backup-refused` (W1-B2): doctor --repair refused on integrity_check or on a NEW
+  // foreign-key violation, and doctor --backup refused for room. D-4696 (history-reasons-repair-backup)
+  // `recovering` (W1-B2, RB6): a writing --op form refused while a recovery step is registered (decideOpGate).
+  // It is doctor's WARN word too; one word in two tables, as store-unmeasured is.
+  // D-4698 (history-ops-refused-while-recovering)
   [EXIT.REFUSED, [
     'bad-args', 'regex-syntax', 'regex-refused', 'regex-timeout', 'cross-project', 'out-of-scope',
     'project-unreadable', 'headless-unarmed', 'headless-in-pane', 'headless-unlisted', 'no-identity',
     'bad-id', 'apply-in-session', 'needs-tty', 'irreversible-in-pane', 'history-off', 'span-pruned',
     'older-than-floor', 'reparse-too-many', 'workspace-unreadable', 'harness-unsupported',
     'harness-unreadable', 'generation-unreadable', 'writer-absent', 'adopt-refused', 'restore-refused',
-    'rebuild-refused', 'migrate-refused',
+    'rebuild-refused', 'migrate-refused', 'repair-refused', 'backup-refused', 'recovering',
     // `roster-unreadable` and `uuid-claimed` (Task 26F, D-4313): `--op import`'s two refusals that used to answer
     // exit 0 — the shim passed --roster-unreadable (no homes to list or admit), or an operator's --session --file
     // mapping names a uuid another family already holds confirmed. Plan-chosen words.
@@ -219,6 +224,9 @@ export const MAX_INTERRUPTED_ATTEMPTS = 2;
 export const BUSY_TIMEOUT_MS = 30_000;
 export const SHIM_GRACE_MS = 4 * 60 * 1000;         // two timer periods of the shim's mtime (§9.6)
 export const TICK_STALE_MS = 10 * 60 * 1000;
+/** How far past `nowMs` a live pass's recorded start may lie before `deriveHealth` stops reading it: a small slack for
+ *  two clocks read a moment apart, not for a clock that stepped back (tick-stale review T3). */
+export const PASS_FUTURE_SLACK_MS = 60 * 1000;
 export const LAG_FAIL_MS = 30 * 60 * 1000;
 export const RECOVERY_STALL_TICKS = 15;
 export const CATCHING_UP_TICKS = 3;
@@ -232,7 +240,9 @@ export const WRITER_RE = /^[0-9a-f]{8}$/;
 // ── vocabularies (O14: each declared here and nowhere else) ───────────────
 export const NODE_KINDS = Object.freeze(['steered_leaf', 'native_leaf', 'raw_leaf', 'condensed']);
 /** `nodes.status` (§6.2). */
-export const PARSE_STATUS = Object.freeze(['ok', 'degraded', 'invalid', 'absent', 'not-requested']);
+/** `parse-failed` (W1-B2, RB5): a leaf whose node parser threw, written with its id, span and sources and re-derived
+ *  only by reparse. D-4706 (history-parser-crash-recorded) */
+export const PARSE_STATUS = Object.freeze(['ok', 'degraded', 'invalid', 'absent', 'not-requested', 'parse-failed']);
 /** `entries.parse_state` (§6.2, §9.2 step 4). */
 export const ENTRY_PARSE_STATES = Object.freeze(['ok', 'raw-only']);
 export const PROVENANCE = Object.freeze(['operator', 'model', 'tool', 'summary', 'harness', 'ccrc-injected', 'recall-echo']);
@@ -241,8 +251,18 @@ export const SEARCHABLE_PROVENANCE = Object.freeze(['operator', 'model', 'tool']
 /** Spool line kinds: the hook writes the first three, the CLI `recall` (B2),
  *  the hook `steer` (W3). */
 export const SPOOL_EVENTS = Object.freeze(['Stop', 'PostCompact', 'SessionStart', 'recall', 'steer']);
-/** The SessionStart sources that spool (ruled Q2; fork is outside, Q16). */
-export const SPOOL_SOURCES = Object.freeze(['startup', 'resume', 'clear']);
+/** The SessionStart sources that spool (ruled Q2), and `fork` from W1-B2 (ruled Q16, D-4734 (history-fork-spooled),
+ *  reversing D-4173). A fork epoch needs no migration: `epochs.cause` is TEXT with no CHECK
+ *  in schema v1, and EPOCH_CAUSES (below) has held `fork` since W1-B1 (D-4342).
+ *  THE ROLLBACK EDGE (§6.1): a W1-B1 build's drain rejects a spooled fork line (spool_line_rejected), its journal
+ *  reader skips that line's `spool` record as malformed (journal_line_malformed; doctor WARN journal-record-skipped,
+ *  §9.14), and that fork falls back to its registry backfill. Because W1-B1 merged with `fork` in EPOCH_CAUSES, a
+ *  rolled-back build reads a fork epoch's journal `verdict` record and a waiting fork candidate's verdict as valid;
+ *  only this spool-line part remains. */
+export const SPOOL_SOURCES = Object.freeze(['startup', 'resume', 'clear', 'fork']);
+/** The non-regular nodes a planted `spool/<id>.jsonl` can be, in the one wording status's `spool-planted` detail and
+ *  README's spool paragraph both carry (H-137: history-skill.test.ts pins README against this). */
+export const SPOOL_NODE_KINDS = 'a FIFO, a link, a directory or any other non-regular node';
 /** D-4342 (history-epoch-causes-widened-for-rollback): 'fork' is vocabulary only. B1 still spools no fork (D-4173);
  *  W1-B2 does (Q16), and a box rolled back from B2 can hold a fork candidate whose verdict this build must read back. */
 export const EPOCH_CAUSES = Object.freeze(['startup', 'resume', 'clear', 'import', 'fork']);
@@ -406,6 +426,8 @@ export function historyPaths(home) {
     pending: `${root}/store.id.pending`,
     writer: `${root}/store.writer`,
     op: `${root}/op`,
+    pass: `${root}/pass`,
+    passDied: `${root}/pass-died`,
     lock: `${h}/.ccrc/history-sweep.lock`,
     off: `${h}/${SWITCHES.off}`,
     cap: `${h}/${SWITCHES.maxGb}`,
@@ -547,9 +569,9 @@ export function blobShaOfBytes(bytes) {
 // D-4176: every writer appends `\n<json>\n`, so a short
 // write leaves a partial line the next append cannot fuse with; an EMPTY line
 // takes no ordinal, so a fenced file and an unfenced one give one set of keys.
-// D-4175: `reg` rides startup and resume
-// lines only. D-4173: `src` is one of SPOOL_SOURCES, so a
-// `fork` source is a value rejection. D-4177: no key carries summary text or a
+// D-4175: `reg` rides startup, resume
+// and fork lines only (fork from W1-B2, D-4734 (history-fork-spooled), which reverses D-4173's
+// value rejection); `src` is one of SPOOL_SOURCES. D-4177: no key carries summary text or a
 // hash of it. The `recall` (B2's CLI) and `steer` (W3's
 // hook) key sets are plan-chosen; B1 drains them for the counters (O52).
 // `sid` is optional on Stop and PostCompact only. A SessionStart line exists to
@@ -629,7 +651,7 @@ export function spoolLinesOverCap(bytes) {
  *  value in its grammar. Any same-user process can write to `spool/`, so only
  *  a line that passes is ever journaled or drained. Checked in this order, and
  *  each failure answers its own word: too-long, json, not-object, keys (a
- *  missing or undeclared key, `reg` off a startup/resume line, no `ev`), then
+ *  missing or undeclared key, `reg` off a startup, resume or fork line, no `ev`), then
  *  bad-id, then value. */
 export function parseSpoolLine(raw) {
   if (typeof raw !== 'string' || Buffer.byteLength(raw, 'utf8') > SPOOL_LINE_MAX) return { ok: false, why: 'too-long' };
@@ -646,7 +668,7 @@ export function parseSpoolLine(raw) {
   const keys = Object.keys(o);
   if (!set.required.every((k) => Object.hasOwn(o, k))) return { ok: false, why: 'keys' };
   if (!keys.every((k) => set.required.includes(k) || set.optional.includes(k))) return { ok: false, why: 'keys' };
-  if (Object.hasOwn(o, 'reg') && o.src !== 'startup' && o.src !== 'resume') return { ok: false, why: 'keys' };
+  if (Object.hasOwn(o, 'reg') && o.src !== 'startup' && o.src !== 'resume' && o.src !== 'fork') return { ok: false, why: 'keys' };
   if (!idOk(o.id)) return { ok: false, why: 'bad-id' };
   for (const k of keys) {
     if (k !== 'id' && !SPOOL_VALUE[k](o[k])) return { ok: false, why: 'value' };
@@ -879,6 +901,14 @@ export function decideCliStore(f) {
   return inDb === marker ? { exit: EXIT.OK, read: true } : refuseCli('store-mismatch');
 }
 
+/** D-4599 (HI2 H-162): the ONE rule for a stored user_version no build writes: the writer creates every store at 1 or more,
+ *  so anything below 1, or no safe integer, is damage or tampering. The reader (decideStatusRead) answers it as
+ *  store-schema-missing, the writer's open (sweep's openStore) refuses it with the same word, and planMigration throws on it,
+ *  so a v0 store is never migrated from MIGRATIONS[0] (the V1 DDL, which no migration runs) over tables that exist. */
+export function storeVersionDamaged(v) {
+  return !Number.isSafeInteger(v) || v < 1;
+}
+
 /** The verdict on a store the CLI measured through its read-only handle: §8.3's
  *  `store-not-wal` refusal (exit 5, a store the writer could not put in WAL) and
  *  the migration word the envelope carries. `cli.mjs` reads `PRAGMA journal_mode`,
@@ -886,11 +916,16 @@ export function decideCliStore(f) {
  *  neither (Task 28F, ring rule: delivery measures, lib decides). A stored
  *  version newer than this build's is `refuse-newer` whatever the sweep recorded;
  *  otherwise the sweep's recorded word stands when it is a MIGRATION_VERDICTS
- *  member, and anything else is `none`. The two answers are independent. */
+ *  member, and anything else is `none`. A version below 1 is `store-schema-missing`
+ *  (D-4599). The two answers are independent. */
 export function decideStatusRead({ userVersion, journalMode, recordedMigration }) {
-  const migration = userVersion > SCHEMA_VERSION
-    ? 'refuse-newer'
-    : (MIGRATION_VERDICTS.includes(recordedMigration) ? recordedMigration : 'none');
+  const recorded = MIGRATION_VERDICTS.includes(recordedMigration) ? recordedMigration : 'none';
+  const migration = userVersion > SCHEMA_VERSION ? 'refuse-newer' : recorded;
+  // D-4599 (history-read-refuses-a-missing-schema): the writer creates every store at user_version 1 or more, so a bound
+  // store at 0 or below (or one SQLite did not answer with an integer) is damage or tampering. It is the store-damage word,
+  // not a pending migration that would name tables the reader has just read. The recorded verdict stays as the sweep
+  // wrote it: the arm answers the damage, it does not rewrite what a pass recorded (HI2 H-162).
+  if (storeVersionDamaged(userVersion)) return { exit: REASONS['store-schema-missing'], reason: 'store-schema-missing', migration: recorded };
   if (journalMode !== 'wal') return { exit: REASONS['store-not-wal'], reason: 'store-not-wal', migration };
   return { exit: EXIT.OK, migration };
 }
@@ -948,6 +983,8 @@ export function capBytes(gb) {
  *  carrier would kill. `copyBps` is `meta.copy_bps`, null before the first
  *  measured copy. D-4182 D-4180 */
 export function planMigration(i) {
+  // An executor guard, not a verdict (HI2 H-162, D-4599): openStore refuses a damaged version before any plan is made.
+  if (storeVersionDamaged(i.stored)) throw new TypeError(`planMigration: stored version ${i.stored} is below 1 or no integer`);
   if (i.stored === i.code) return 'none';
   if (i.stored > i.code) return 'refuse-newer';
   if (!planCopy({ freeBytes: i.freeBytes, thresholdBytes: i.thresholdBytes, sizeBytes: i.sizeBytes }).admit) return 'refuse-low-disk';
@@ -1056,6 +1093,27 @@ export function formOf(op, args) {
   }
 }
 
+/** RB6 with RB12-RB14 (W1-B2): whether a writing form still runs while a ('recover', ms) step is registered. Every
+ *  other form is refused `recovering` by decideOpGate's row below. D-4698 (history-ops-refused-while-recovering)
+ *  - restore and rebuild replace the step (RB6);
+ *  - W2's recall-off forms move no cursor: a privacy switch (RB12);
+ *  - migrate, only while the stored user_version is a measured value other than the code's (RB13): a restored older
+ *    backup migrates first, or it would wait on its own step, which runs only at the code's version;
+ *  - adopt, only on an unbound store, store.id absent (RB14): no pass opens such a store until it is bound.
+ *  The facts are measured by Task 19's two halves. One that was not measured never exempts (IV5): an absent or
+ *  unreadable version, no code version, or a store.id that is unreadable rather than absent keeps the refusal. */
+function recoveryExempt(op, env) {
+  switch (op) {
+    case 'restore': case 'rebuild': return true;
+    case 'recall-off': return true;
+    case 'migrate':
+      return Number.isSafeInteger(env.codeVersion) && env.storedVersion?.state === 'value'
+        && env.storedVersion.value !== env.codeVersion;
+    case 'adopt': return env.storeId?.state === 'absent';
+    default: return false;
+  }
+}
+
 function refuseGate(reason) {
   return { ok: false, rc: EXIT.REFUSED, reason };
 }
@@ -1075,6 +1133,12 @@ export function decideOpGate(form, env, isTTY, paneName) {
   if (f.irreversible && !isTTY) return refuseGate('needs-tty');
   if (f.irreversible && typeof paneName === 'string' && paneName.startsWith('cc-')) return refuseGate('irreversible-in-pane');
   if (env.historyOff && !f.binding) return refuseGate('history-off');
+  // RB6 (W1-B2): while a ('recover', ms) step is registered, a writing form is refused unless recoveryExempt (above)
+  // exempts it: restore and rebuild (RB6), W2's recall-off forms (RB12), migrate on a store whose version is not the
+  // code's (RB13), adopt on an unbound store (RB14). Task 19 measures `recovering` and those facts read-only in both
+  // halves: the CLI's pre-check spawns nothing, and the sweep's is authoritative.
+  // D-4698 (history-ops-refused-while-recovering)
+  if (env.recovering === true && !recoveryExempt(f.op, env)) return refuseGate('recovering');
   return { ok: true };
 }
 
@@ -1125,7 +1189,7 @@ export function observationOk(o) {
 }
 
 /** What the drain does with one epoch line (§6.1, §9.2 step 1).
- *  - startup/resume: confirmed on its own evidence first — its `reg` equals
+ *  - startup/resume, and fork from W1-B2 (D-4734 (history-fork-spooled)): confirmed on its own evidence first — its `reg` equals
  *    its `sid` (CT6: ccd writes `.uuid` before it spawns, so every ccd start
  *    carries it) — else the `.uuid` observed at the rename, else the first
  *    match recorded while held; otherwise it waits as a candidate. A nested
@@ -1142,7 +1206,7 @@ export function decideEpochLine(line, obs) {
   if (line.src === 'clear') {
     return { kind: 'chain', confirmedBy: observed ? 'observed' : held ? 'held-match' : null };
   }
-  if (line.src !== 'startup' && line.src !== 'resume') {
+  if (line.src !== 'startup' && line.src !== 'resume' && line.src !== 'fork') {
     throw new TypeError(`decideEpochLine: src outside SPOOL_SOURCES: ${String(line.src)}`);
   }
   if (typeof line.reg === 'string' && line.reg === line.sid) return { kind: 'confirm', by: 'reg' };
@@ -1496,7 +1560,10 @@ export const SECRET_SOURCES = Object.freeze([
   Object.freeze({ path: '.ccrc/sessions.json', sessionHashes: true }),
 ]);
 
-/** A secret file's kind by its name: `*.token` its trimmed content, `*.json`
+/** A secret file's kind by its name: `*.token` its value lines (D-4587: after
+ *  dropping blank and `#` lines, (a) the first remaining line with all whitespace
+ *  removed and (b) the remaining lines joined and trimmed, when that differs from
+ *  (a), so a value spanning two lines learns two values), `*.json`
  *  its string leaves, anything else (`*.env`, a declared `secretsFile`, which
  *  its wrapper sources as bash) an env file. */
 export function kindOfPath(p) {
@@ -1525,8 +1592,8 @@ const ENV_SECRET_NAME_RE = /(?:^|[^A-Za-z0-9])PRIVATE(?=$|[^A-Za-z0-9])/i;
  *  upstream's arms only, every one a plain regex and linear-time on any input
  *  (audited, D-4306). The JWT shape `eyJ….….…` (not upstream) is NOT in it:
  *  as a regex it backtracks quadratically on a long run of dotless `eyJ`
- *  starts, so the linear `redactJwtShapes` finds the same matches by a scan
- *  and `redactLayers` applies it after this list. D-4306 (history-redaction-shapes-linear) */
+ *  starts, so the linear `jwtSpans` finds the same matches by a scan
+ *  and `redactLayers` unions its spans with this list's. D-4306 (history-redaction-shapes-linear) */
 export const SECRET_SHAPE_RES = Object.freeze([
   /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)/g,
   /\bAKIA[0-9A-Z]{16}\b/gi,
@@ -1558,13 +1625,28 @@ function envValue(raw) {
  *  file yields each `[export ]NAME=value` line's VALUE, never its name, so a
  *  23-char key name is never redacted; `env-identifier` yields only values
  *  whose NAME matches `IDENTIFIER_RE` or `ENV_SECRET_NAME_RE` (`ccrc.env`,
- *  `agent.env`); a token file its trimmed whole content; a JSON file its
+ *  `agent.env`); a token file the value line with its whitespace removed (a) and, when it differs, the
+ *  remaining lines joined (b) (whole blank and `#` lines dropped; D-4587
+ *  (history-token-file-comments-not-values)); a JSON file its
  *  string leaves. D-4206
  *  D-4204 */
 export function extractSecretValues(text, kind) {
   if (kind === 'token') {
-    const t = text.trim();
-    return t === '' ? [] : [t];
+    // D-4587 (history-token-file-comments-not-values): a token file's blank
+    // and `#` lines are not values (ccrc's own box-token file is a `#`
+    // preamble above one value line). The values are the first remaining
+    // line with all whitespace removed (`server/src/coord/token.ts`
+    // `extractToken`'s rule) and, when it differs, the remaining lines joined
+    // and trimmed. No remaining line yields none.
+    const kept = [];
+    for (const raw of text.split('\n')) {
+      const t = raw.trim();
+      if (t !== '' && !t.startsWith('#')) kept.push(raw);
+    }
+    if (kept.length === 0) return [];
+    const first = kept[0].trim().replace(/\s+/g, '');
+    const joined = kept.join('\n').trim();
+    return joined === first ? [first] : [first, joined];
   }
   if (kind === 'json') {
     let parsed;
@@ -1655,13 +1737,13 @@ export function sessionHashPairs(jsonText) {
 
 /** The pairs, indexed by length, so the value layer hashes only runs whose
  *  length some pair has. */
-export function makePairIndex(pairs) {
+export function makePairIndex(pairs, belt = null) {
   const byLen = new Map();
   for (const p of pairs) {
     if (!byLen.has(p.len)) byLen.set(p.len, new Set());
     byLen.get(p.len).add(p.sha256);
   }
-  return { byLen };
+  return { byLen, belt };
 }
 
 /** A pair index that answers exactly as makePairIndex(pairs) and counts, in probe.hits, every value-layer match on
@@ -1676,8 +1758,8 @@ export function makePairIndex(pairs) {
  *  answered no is also no in Q. So both computations asked the same queries and got the same answers, and the stored
  *  row already equals the full redaction: it needs no rewrite. A recomputation that did record an owed hit is the
  *  row to rewrite. The test is by hash, with the redaction's own code, so it holds for a value glued to a
- *  neighbour that no quoted phrase finds, and for a pair that has no value (sessions.json's idHash). */
-export function makeProbeIndex(pairs, mark) {
+ *  neighbour that no quoted phrase finds, and for a pair that has no value (sessions.json's idHash). W1-B2 Task 7A: under `beltAll` every layer-4 and glue-window hit counts too, because both depend on the loaded values and on BELT_VERSION's code, which the argument above does not cover; and the glue windows' budget depends on the SET of registered lengths, not only on the answers, so a probe without `beltAll` is no completeness proof once a glue window can run: every re-derivation passes `beltAll: true` (Task 7B). */
+export function makeProbeIndex(pairs, mark, { belt = null, beltAll = false } = {}) {
   const all = [...pairs];
   const base = makePairIndex(all);
   const owed = makePairIndex(all.filter((p) => p.rid > mark));
@@ -1689,28 +1771,33 @@ export function makeProbeIndex(pairs, mark) {
       has: (sha) => { if (!shas.has(sha)) return false; if (os.has(sha)) probe.hits += 1; return true; },
     });
   }
-  return { byLen, probe };
+  return { byLen, probe, belt, beltAll };
 }
 
 /** meta fts_rederive's grammar, `<target> <cursor> <end>`; anything else (undefined included) is null
  *  (D-4344, history-reindex-mark-by-rederivation). */
 export function parseRederiveState(text) {
-  const m = /^([0-9]{1,15}) ([0-9]{1,15}) ([0-9]{1,15})$/.exec(text ?? '');
-  return m === null ? null : { target: Number(m[1]), cursor: Number(m[2]), end: Number(m[3]) };
+  const m = /^([0-9]{1,15}) ([0-9]{1,15}) ([0-9]{1,15})( b)?$/.exec(text ?? '');
+  return m === null ? null : { target: Number(m[1]), cursor: Number(m[2]), end: Number(m[3]), ...(m[4] === undefined ? {} : { belt: true }) };
 }
 export function formatRederiveState(s) {
-  return `${s.target} ${s.cursor} ${s.end}`;
+  return `${s.target} ${s.cursor} ${s.end}${s.belt === true ? ' b' : ''}`;
 }
 /** Whether a re-derivation generation is open: its saved target lies above the mark (D-4344,
  *  history-reindex-mark-by-rederivation). The one test of it, read by rederivePlan and phraseValues. */
 function rederiveOpen(mark, state) {
-  return state !== null && state.target > mark;
+  return state !== null && (state.target > mark || state.belt === true);
 }
 /** Continue a generation whose target lies above the mark; else start one when a pair lies above it; else nothing.
  *  A malformed state restarts from 0, which is conservative (D-4344, history-reindex-mark-by-rederivation). */
-export function rederivePlan(mark, top, maxBlobId, state) {
-  if (rederiveOpen(mark, state)) return state;
-  if (top > mark) return { target: top, cursor: 0, end: maxBlobId };
+export function rederivePlan(mark, top, maxBlobId, state, beltDue = false, restart = false) {
+  // `restart` (decideBelt's, R-version): the belt is due and the open generation carries no record of its units under
+  // this BELT_VERSION (one opened under another version, by a build without the belt, or whose record a due record
+  // cleared), so its walk is begun again rather than finished under a stamp it could not earn.
+  if (rederiveOpen(mark, state) && !restart) return state;
+  // A belt generation (§6.2 "The belt", decideBelt) re-derives every indexed blob with no new pair; it is open at its
+  // own mark until its completion writes the state without ` b`.
+  if (top > mark || beltDue) return { target: Math.max(top, mark), cursor: 0, end: maxBlobId, ...(beltDue ? { belt: true } : {}) };
   return null;
 }
 /** The values the same-tick phrase fast path searches (D-4344, history-reindex-mark-by-rederivation; review 344 F2):
@@ -1740,11 +1827,9 @@ export function phraseValues(mark, state, values, fresh) {
  *  in one segment share their tail conditions and only the first start that
  *  has a word boundary before it matters: it has the longest first segment.
  *  D-4306 (history-redaction-shapes-linear) */
-function redactJwtRun(run) {
+function jwtSpansOfRun(run, base, add) {
   let j = run.indexOf('eyJ');
-  if (j === -1) return run;
-  let out = '';
-  let copied = 0;
+  if (j === -1) return;
   let segStart = 0;
   for (;;) {
     const segEnd = run.indexOf('.', segStart);
@@ -1762,8 +1847,7 @@ function redactJwtRun(run) {
         const found = run.indexOf('.', s3Start);
         const s3End = found === -1 ? run.length : found;
         if (s3End - s3Start >= 5) {
-          out += run.slice(copied, j) + REDACTED_MARK;
-          copied = s3End;
+          add(base + j, base + s3End);
           segStart = s3End + 1;
           continue;
         }
@@ -1771,12 +1855,13 @@ function redactJwtRun(run) {
     }
     segStart = segEnd + 1;
   }
-  return copied === 0 ? run : out + run.slice(copied);
 }
 
-/** Every JWT-shaped match of `s` replaced by the mark (see `redactJwtRun`). */
-function redactJwtShapes(s) {
-  return s.replace(/[A-Za-z0-9_.-]+/g, redactJwtRun);
+/** Every JWT-shaped match of `s` as a span (see `jwtSpansOfRun`; D-4614, round 7: layer 3 contributes spans, it does
+ *  not rewrite the text). */
+function jwtSpans(s, add) {
+  const re = /[A-Za-z0-9_.-]+/g;
+  for (let m = re.exec(s); m !== null; m = re.exec(s)) jwtSpansOfRun(m[0], m.index, add);
 }
 
 /** REDACTED_MARK as regex source (D-4307: no sequence ever takes a mark's first character). */
@@ -1829,6 +1914,218 @@ export const LEAD_READINGS_MAX = 16;
  *  right before a word is not plain: it reads as a bare `ESC` and a final byte, a single shift or a DCS header. */
 const PLAIN_SEQ_RE = /^(?:\x1b\[|\x9b)[0-?]*[@-~]$|^\x1b[!-/][ -/]*[0-~]$/;
 
+/** Layer 2's rules (the context layer), one definition each, built twice: `field` is the field pass, `final` the second
+ *  belt's structure-safe form, D-4613 (history-final-belt-layer2-structure-safe) (§8.3, whole-branch review: the final
+ *  pass runs over a serialised `--json` envelope and over the human page's frame). In the final form no value class
+ *  consumes a backslash (a JSON escape is never split, so an escaped quote ends a value instead of being left bare),
+ *  a line break (`\n`, `\r`: a value never crosses a line), `<` or `>` (nor a frame tag) or `&`; the JSON-form rule's value
+ *  has no escape alternative, so an escaped quote ends it. The final form is the PER-SEGMENT primitive of the
+ *  structure-aware belt (redactFinalText, redactFinalJson): it is never run over serialised structure, so it needs no
+ *  rule about a closing quote or a closer (round 2's `]` and `}` exclusion was that, and it made the form
+ *  non-idempotent on the field pass's own marks: `TOKEN=[redacted]` read as `[redacted` and was masked again). The
+ *  field form is today's, byte for byte. */
+function contextRules(final) {
+  const stop = final ? String.raw`\\<>&` : '';
+  return Object.freeze({
+    json: new RegExp(String.raw`"([A-Za-z_][A-Za-z0-9_.-]{0,255})"(\s*:\s*)"(${final ? String.raw`[^"\\\n\r<>&]+` : String.raw`(?:[^"\\]|\\.)+`})"`, 'g'),
+    // D-4614 (history-context-rule-rescans-after-a-plain-name): the named rule is TWO patterns scanned by hand
+    // (namedSpans). `namedHead` finds `NAME=` or `NAME: ` and the optional quote; `namedValue` (sticky) takes the value
+    // from there. The value is read only for a secret NAME, so a plain name never consumes its value and the scan
+    // resumes right after the separator: a context key inside it is seen, and a run of `a=a=a=` stays linear.
+    namedHead: new RegExp(String.raw`\b([A-Za-z_][A-Za-z0-9_.-]{0,255})(=|:[ \t]+)`, 'g'),
+    // The NAME a value ends in (`namedSpans`' tail head): `NAME=` or `NAME:` at the end of a slice of at most 258 characters.
+    namedTail: new RegExp(String.raw`\b([A-Za-z_][A-Za-z0-9_.-]{0,255})(=|:)$`),
+    namedValue: new RegExp(String.raw`(["']?)([^\s"'` + '`' + String.raw`,;&${final ? String.raw`\\<>` : ''}]+)`, 'y'),
+    bearer: new RegExp(String.raw`(Authorization:[ \t]*Bearer[ \t]+)([^\s"'${stop}]+)`, 'gi'),
+    mailToken: new RegExp(String.raw`(x-ccrc-mail-token:[ \t]*)([^\s"'${stop}]+)`, 'gi'),
+    bearerSticky: new RegExp(String.raw`(Authorization:[ \t]*Bearer[ \t]+)([^\s"'${stop}]+)`, 'iy'),
+    mailTokenSticky: new RegExp(String.raw`(x-ccrc-mail-token:[ \t]*)([^\s"'${stop}]+)`, 'iy'),
+    query: new RegExp(String.raw`([?&]token=)([^&\s"'#${final ? String.raw`\\<>` : ''}]+)`, 'gi'),
+  });
+}
+const CONTEXT_RULES = Object.freeze({ field: contextRules(false), final: contextRules(true) });
+
+/** What a secret value that ends where it could hide a further head of its own rule hands on (D-4614, whole-branch fix
+ *  round 7). A rule scanned left to right and not overlapping resumes AFTER a value, so a head that STARTS inside the
+ *  value and ends at its edge or past it is never read: a named value `V…API_KEY=` is followed by the quote and value
+ *  of the head it ends in (`ACCESS_KEY: VDDSRokpmmwjAPI_KEY="VUnr…"`), `key:` is followed, after a space, by the value of
+ *  the head `key: ` (`auth=key: VrtkzAsEaKdA}SECRET='V…'`), and a header value `VaYk…authorization:` is followed by
+ *  `bearer V4Fun…`. This reads that tail head, once per value and bounded by the head's own 256-character NAME, and
+ *  returns the span of the value the head owns, or null. `kind` is 'named', 'bearer' or 'mail'. */
+function tailHead(s, R, valueStart, end, kind) {
+  const next = end < s.length ? s[end] : '';
+  if (kind === 'named') {
+    const last = s.charCodeAt(end - 1);
+    if (!(last === 0x3d || (last === 0x3a && (next === ' ' || next === '\t')))) return null;
+    const c = R.namedTail.exec(s.slice(Math.max(valueStart, end - 258), end));
+    if (c === null || !IDENTIFIER_RE.test(c[1])) return null;
+    let at = end;
+    while (s[at] === ' ' || s[at] === '\t') at += 1;
+    R.namedValue.lastIndex = at;
+    const v = R.namedValue.exec(s);
+    if (v === null || v[2] === REDACTED_MARK) return null;
+    return [at + v[1].length, at + v[0].length];
+  }
+  // The value's tail against a FULL nested head (D-4614, whole-branch fix round 8). A value holds no whitespace, so a
+  // head with no space after its colon ends INSIDE it: `Vabcauthorization:Bearer` (then ` SECRET`) and
+  // `Vabcx-ccrc-mail-token:` (then the next value, whatever follows). A Bearer head also ends the value at its bare word
+  // `authorization:` when a space or tab follows (the head's own space is the next character). The sticky rule re-runs
+  // from where the head starts and decides whether it is one.
+  const tail = s.slice(Math.max(valueStart, end - 20), end).toLowerCase();
+  let headLen = 0;
+  if (kind === 'bearer') {
+    if (tail.endsWith('authorization:bearer')) headLen = 20;
+    else if (tail.endsWith('authorization:') && (next === ' ' || next === '\t')) headLen = 14;
+  } else if (tail.endsWith('x-ccrc-mail-token:')) {
+    headLen = 18;
+  }
+  if (headLen === 0) return null;
+  const re = kind === 'bearer' ? R.bearerSticky : R.mailTokenSticky;
+  re.lastIndex = end - headLen;
+  const m = re.exec(s);
+  return m === null || m[2] === REDACTED_MARK ? null : [m.index + m[1].length, m.index + m[0].length];
+}
+
+/** `add` the value span [start, end) and each tail head's value after it (see `tailHead`); returns where the last ends. */
+function addChain(s, R, start, end, kind, add) {
+  add(start, end);
+  for (let h = tailHead(s, R, start, end, kind); h !== null; h = tailHead(s, R, start, end, kind)) {
+    [start, end] = h;
+    add(start, end);
+  }
+  return end;
+}
+
+/** Layer 2's named rule (`NAME=value`, `NAME: value`), D-4614 (history-context-rule-rescans-after-a-plain-name; whole-branch
+ *  fix rounds 5 and 7): a scan by hand that contributes the VALUE spans of the secret names to `add`, so a NAME that is not
+ *  a secret (or a value that is already the mark) does not use up its value. The scan resumes RIGHT AFTER THE SEPARATOR,
+ *  and a context key inside the value (`level=[INFO]password=x`, a CLI prefix `internal error: TOKEN=x`) is seen. A
+ *  secret NAME's value is taken, then the tail head it may end in (`addChain`), and the scan resumes after it. The rule
+ *  reads the SAME text every other rule reads (round 7): it masks nothing itself, the caller masks the union of every
+ *  rule's spans. */
+function namedSpans(s, R, add) {
+  const head = R.namedHead;
+  const val = R.namedValue;
+  head.lastIndex = 0;
+  for (let m = head.exec(s); m !== null; m = head.exec(s)) {
+    const sepEnd = m.index + m[0].length;
+    val.lastIndex = sepEnd;
+    const v = IDENTIFIER_RE.test(m[1]) ? val.exec(s) : null;
+    if (v === null || v[2] === REDACTED_MARK) {
+      head.lastIndex = sepEnd;
+      continue;
+    }
+    head.lastIndex = addChain(s, R, sepEnd + v[1].length, sepEnd + v[0].length, 'named', add);
+  }
+}
+
+/** The anchor rules' value spans (D-4614, round 7): the Bearer header, the box-token header and `?token=`. The two header
+ *  rules scan by hand so a value that ends in the next header's own word (`authorization: bearer V…authorization: bearer S`)
+ *  hands on to it (`addChain`); `?token=` cannot hide a head of its own (its value class stops at `&`). */
+function anchorSpans(s, R, add) {
+  for (const [re, kind] of [[R.bearer, 'bearer'], [R.mailToken, 'mail']]) {
+    re.lastIndex = 0;
+    for (let m = re.exec(s); m !== null; m = re.exec(s)) {
+      if (m[2] !== REDACTED_MARK) re.lastIndex = addChain(s, R, m.index + m[1].length, m.index + m[0].length, kind, add);
+    }
+  }
+  for (const m of s.matchAll(R.query)) add(m.index + m[1].length, m.index + m[0].length);
+}
+
+/** The JSON-form rule's value spans (D-4614, round 7): a scan by hand like the named rule. After a secret pair it
+ *  resumes AT the closing quote (a value that ends in an escaped quote, `"a": "x\""token": "S"`, reads as one string whose
+ *  closing quote is the next pair's opening one), and after a pair that masks nothing (a plain name, or a value already
+ *  the mark) it resumes one character in, so a pair inside that pair's value is seen (`"name": "API_KEY="v": "token": "S"`). */
+function jsonSpans(s, R, add) {
+  const json = R.json;
+  json.lastIndex = 0;
+  for (let m = json.exec(s); m !== null; m = json.exec(s)) {
+    if (IDENTIFIER_RE.test(m[1]) && m[3] !== REDACTED_MARK) {
+      const start = m.index + 1 + m[1].length + 1 + m[2].length + 1;
+      add(start, start + m[3].length);
+      json.lastIndex = m.index + m[0].length - 1;
+    } else {
+      json.lastIndex = m.index + 1;
+    }
+  }
+}
+
+/** Layer 3's spans: every `SECRET_SHAPE_RES` match and the JWT reading, whole. */
+function shapeSpans(s, add) {
+  for (const re of SECRET_SHAPE_RES) {
+    for (const m of s.matchAll(re)) add(m.index, m.index + m[0].length);
+  }
+  jwtSpans(s, add);
+}
+
+/** The JSON-form rule's SECOND reading, for the final form only (D-4614, whole-branch fix round 8). The final form's JSON
+ *  value class stops at a line break, `<`, `>`, `&` and a backslash, so `"password": "hunter2<PEM block>"` is not one
+ *  value to the first reading: the shape masks the block and `hunter2` stays printed. This reads the text with every
+ *  shape span collapsed to the mark (no line break, `<` or `&` is left inside it), runs the JSON-form scan on that, and
+ *  maps each value span it finds back to the original text, where it covers the shape spans inside it: the whole
+ *  value up to its closing quote is the mark. The field form needs no second reading (its value class crosses all of
+ *  those). `shapes` are `[start, end)` pairs of `s`, in any order. Chosen over extending a value's span in place
+ *  because it reuses `jsonSpans` unchanged (one definition of what a JSON-form value is) and cannot disagree with it.
+ *  Linear: one sort and merge of the shape spans, one copy, one scan, one binary search per span found. */
+function jsonSpansCollapsed(s, R, shapes, add) {
+  if (shapes.length === 0) return;
+  shapes.sort((x, y) => x[0] - y[0] || x[1] - y[1]);
+  const plain = []; // the plain stretches of s: [start in s, end in s, start in the collapsed reading]
+  let c = '';
+  let copied = 0;
+  let a = shapes[0][0];
+  let b = shapes[0][1];
+  for (let i = 1; i <= shapes.length; i += 1) {
+    if (i < shapes.length && shapes[i][0] <= b) {
+      if (shapes[i][1] > b) b = shapes[i][1];
+      continue;
+    }
+    plain.push([copied, a, c.length]);
+    c += s.slice(copied, a) + REDACTED_MARK;
+    copied = b;
+    if (i < shapes.length) [a, b] = shapes[i];
+  }
+  plain.push([copied, s.length, c.length]);
+  c += s.slice(copied);
+  // the original position of a position of c: the last plain stretch starting at or before it (a position at the start
+  // of a mark is the end of the stretch before it, which is where the shape starts; one just after a mark is the start
+  // of the stretch after it, which is where the shape ends)
+  const back = (p) => {
+    let lo = 0;
+    let hi = plain.length - 1;
+    while (lo < hi) {
+      const mid = (lo + hi + 1) >> 1;
+      if (plain[mid][2] <= p) lo = mid;
+      else hi = mid - 1;
+    }
+    return plain[lo][0] + (p - plain[lo][2]);
+  };
+  jsonSpans(c, R, (x, y) => {
+    if (c.slice(x, y) !== REDACTED_MARK) add(back(x), back(y));
+  });
+}
+
+/** The union of spans (D-4614, whole-branch fix round 7): `spans` holds `[start, end)` pairs of `s` in any order;
+ *  overlapping or touching pairs merge, and each maximal merged span is replaced by ONE mark. One sort and one pass. */
+function maskSpans(s, spans) {
+  if (spans.length === 0) return s;
+  spans.sort((x, y) => x[0] - y[0] || x[1] - y[1]);
+  let out = '';
+  let copied = 0;
+  let a = spans[0][0];
+  let b = spans[0][1];
+  for (let i = 1; i <= spans.length; i += 1) {
+    if (i < spans.length && spans[i][0] <= b) {
+      if (spans[i][1] > b) b = spans[i][1];
+      continue;
+    }
+    out += s.slice(copied, a) + REDACTED_MARK;
+    copied = b;
+    if (i < spans.length) [a, b] = spans[i];
+  }
+  return out + s.slice(copied);
+}
+
 /** One run through all three layers, failing closed. V8 runs these patterns
  *  by backtracking on a bounded stack, so over a run of several MiB `replace`
  *  throws `RangeError: Maximum call stack size exceeded`: measured on Node
@@ -1842,7 +2139,8 @@ const PLAIN_SEQ_RE = /^(?:\x1b\[|\x9b)[0-?]*[@-~]$|^\x1b[!-/][ -/]*[0-~]$/;
  *  layer 2, for the lead reading's candidates (D-4307; security review of
  *  2a8c791bf): they hold only `[A-Za-z0-9_.-]` and `\n`, and every layer-2
  *  pattern needs a `"`, `=`, `:`, `?` or `&`, so it can match nothing there,
- *  while on a span of short dotted words it is the costliest layer. */
+ *  while on a span of short dotted words it is the costliest layer. `context`
+ *  `'final'` runs layer 2 in redactFinal's structure-safe form (D-4613). */
 function redactRun(segment, idx, context = true) {
   try {
     return redactLayers(segment, idx, context);
@@ -1858,9 +2156,9 @@ function redactLayers(segment, idx, context) {
   // matched here: that is §8.3's chosen grammar, since a substring search
   // would hash every window of every stored length. The context and shape
   // layers are the belt there.
-  let s = segment.replace(/[A-Za-z0-9_-]+/g, (run) => {
+  const s = segment.replace(/[A-Za-z0-9_-]+/g, (run) => {
     const shas = idx.byLen.get(run.length);
-    return shas !== undefined && shas.has(sha256Hex(run)) ? REDACTED_MARK : run;
+    return shas !== undefined && shas.has(sha256Hex(run)) ? REDACTED_MARK : glueRedact(run, idx);
   });
   // Layer 2: context. The value after NAME=, NAME: or "name": " when NAME is
   // an identifier name; after a bearer header and the box-token header; and
@@ -1868,18 +2166,36 @@ function redactLayers(segment, idx, context) {
   // word boundary inside a long run of [A-Za-z0-9_.-] rescans to the run's
   // end, which is quadratic (a 2 MiB base64url blob measured 90.8 s, bounded
   // 139 ms), and one large tool_result would outlive the carrier's kill.
-  if (context) {
-    s = s.replace(/"([A-Za-z_][A-Za-z0-9_.-]{0,255})"(\s*:\s*)"((?:[^"\\]|\\.)+)"/g,
-      (all, name, sep, value) => (IDENTIFIER_RE.test(name) && value !== REDACTED_MARK ? `"${name}"${sep}"${REDACTED_MARK}"` : all));
-    s = s.replace(/\b([A-Za-z_][A-Za-z0-9_.-]{0,255})(=|:[ \t]+)(["']?)([^\s"'`,;&]+)/g,
-      (all, name, sep, quote, value) => (IDENTIFIER_RE.test(name) && value !== REDACTED_MARK ? `${name}${sep}${quote}${REDACTED_MARK}` : all));
-    s = s.replace(/(Authorization:[ \t]*Bearer[ \t]+)([^\s"']+)/gi, (all, head, value) => (value === REDACTED_MARK ? all : `${head}${REDACTED_MARK}`));
-    s = s.replace(/(x-ccrc-mail-token:[ \t]*)([^\s"']+)/gi, (all, head, value) => (value === REDACTED_MARK ? all : `${head}${REDACTED_MARK}`));
-    s = s.replace(/([?&]token=)([^&\s"'#]+)/gi, (all, head, value) => (value === REDACTED_MARK ? all : `${head}${REDACTED_MARK}`));
+  // UNION (D-4614, whole-branch fix round 7): every context rule (bearer, box-token header, `?token=`, the JSON-form
+  // rule, the named rule) and every layer-3 shape (SECRET_SHAPE_RES and the JWT reading) is matched against THIS text,
+  // layer 1's output, independently, and contributes the span of characters it would replace (a context rule its VALUE
+  // only: its name, separator, quote and header stay; the JSON-form rule the value inside the quotes; a shape its whole
+  // match). The union of the spans is masked in one pass, each maximal merged span by ONE mark. Any sequential order
+  // loses something, measured: the named rule first lets a greedy NAME value swallow a glued anchor or shape
+  // (`mode=auth: abcdefAuthorization: Bearer S`), anchors and shapes first lets a shape or anchor value swallow a glued
+  // NAME (`sk-…api_key: "V"`), so no rule may read what another has rewritten. Every pattern and value class is
+  // unchanged. A span whose text already is the mark is not a span (idempotence).
+  const R = context ? (context === 'final' ? CONTEXT_RULES.final : CONTEXT_RULES.field) : null;
+  const spans = [];
+  const add = (a, b) => {
+    if (b > a && !(b - a === REDACTED_MARK.length && s.startsWith(REDACTED_MARK, a))) spans.push([a, b]);
+  };
+  if (R !== null) {
+    anchorSpans(s, R, add);
+    jsonSpans(s, R, add);
+    namedSpans(s, R, add);
   }
-  // Layer 3: shapes.
-  for (const re of SECRET_SHAPE_RES) s = s.replace(re, REDACTED_MARK);
-  return redactJwtShapes(s);
+  if (R === CONTEXT_RULES.final) {
+    const shapes = [];
+    shapeSpans(s, (x, y) => {
+      add(x, y);
+      shapes.push([x, y]);
+    });
+    jsonSpansCollapsed(s, R, shapes, add);
+  } else {
+    shapeSpans(s, add);
+  }
+  return maskSpans(s, spans);
 }
 
 /** A byte of the `[A-Za-z0-9_.-]` span class, the JWT run class (the unit the lead reading extends and marks). */
@@ -2142,9 +2458,27 @@ function markSpansAt(plain, offsets) {
  *  mark. `ANSI_ESCAPE_RE` therefore never takes a mark's first character as
  *  any of them.
  *  D-4307 (history-redaction-csi-joined-belt, amended: review 316 F1 and M1, security reviews of ee55098c2 and 2a8c791bf) */
+/** The complete field redaction. Layer 4 allocates per-field buffers too, so its RangeError shares layers 1-3's
+ * fail-closed contract while non-RangeError defects remain visible. */
 export function redactField(text, idx) {
-  if (!ESCAPE_INTRODUCER_RE.test(text)) return redactRun(text, idx);
-  const raw = redactRun(text, idx);
+  return redactFieldIn(text, idx, true);
+}
+
+/** redactField's body, with layer 2's mode (`true` the field form, `'final'` redactFinal's structure-safe form). */
+function redactFieldIn(text, idx, context) {
+  const layered = redactLayered(text, idx, context);
+  try {
+    return beltMask(layered, idx.belt, true, beltHit(idx));
+  } catch (e) {
+    if (e instanceof RangeError) return REDACTED_MARK;
+    throw e;
+  }
+}
+
+/** redactField's three layers over its readings, before the belt: B1's redactField body, unchanged. */
+function redactLayered(text, idx, context = true) {
+  if (!ESCAPE_INTRODUCER_RE.test(text)) return redactRun(text, idx, context);
+  const raw = redactRun(text, idx, context);
   let out = '';
   let plain = '';
   let last = 0;
@@ -2153,7 +2487,7 @@ export function redactField(text, idx) {
   const carried = [];
   ANSI_ESCAPE_RE.lastIndex = 0;
   for (let m = ANSI_ESCAPE_RE.exec(raw); m !== null; m = ANSI_ESCAPE_RE.exec(raw)) {
-    const frag = redactRun(raw.slice(last, m.index), idx);
+    const frag = redactRun(raw.slice(last, m.index), idx, context);
     out += frag + m[0];
     plain += frag;
     if (frag.endsWith(REDACTED_MARK)) carried.push(plain.length);
@@ -2161,14 +2495,14 @@ export function redactField(text, idx) {
     last = m.index + m[0].length;
     sawCsi = true;
   }
-  const tail = redactRun(raw.slice(last), idx);
+  const tail = redactRun(raw.slice(last), idx, context);
   const perFragment = out + tail;
   if (!sawCsi) return perFragment;
   // `plain` is accumulated from the fragments, never rebuilt by re-matching an escape in `perFragment`: a redaction can
   // create an escape shape (a bare ESC before `[redacted]` reads as `ESC[r...`), and a re-strip would eat the mark.
   plain += tail;
   const flagged = carriedMarks(plain, carried, leadOffsets(plain, raw, leads, idx));
-  const joined = redactRun(flagged.length === 0 ? plain : markSpansAt(plain, flagged), idx);
+  const joined = redactRun(flagged.length === 0 ? plain : markSpansAt(plain, flagged), idx, context);
   return joined === plain ? perFragment : joined;
 }
 
@@ -2206,12 +2540,12 @@ function markEscapeGluedSpans(s) {
  *  backslash marked (`markEscapeGluedSpans`), so no part of a secret a further decode would separate is indexed.
  *  `idx` is required: `sidecarIndexText(…, null)` never calls this. */
 export function redactForIndex(text, idx) {
-  let t = redactField(text, idx);
+  let t = redactIndexReading(text, idx);
   let keep = t;
   for (let pass = 0; pass < INDEX_UNESCAPE_PASSES; pass += 1) {
     const u = unescapeJsonText(t);
     if (u === t) return keep;
-    t = redactField(u, idx);
+    t = redactIndexReading(u, idx);
     if (t !== u) keep = t;
   }
   return markEscapeGluedSpans(t);
@@ -2252,7 +2586,7 @@ export function sidecarIndexText(bytes, idx) {
   // are redactForIndex's (D-4343): a nested JSON level or a backslash-u-005c chain glues an escape letter onto a
   // secret one decode later, and the last redaction below reads every remaining level, keeping a deeper reading only
   // when it redacted something.
-  if (idx !== null) text = redactField(text, idx);
+  if (idx !== null) text = redactIndexReading(text, idx);
   text = unescapeJsonText(text);
   if (idx !== null) text = redactForIndex(text, idx);
   return cutIndexText(text, w.windowCut, SIDECAR_FTS_BYTES, SIDECAR_REDACT_MARGIN);
@@ -2298,12 +2632,83 @@ export function entryIndexText(text, idx) {
   return cutIndexText(redactForIndex(w.text, idx), w.windowCut, ENTRY_FTS_BYTES, ENTRY_REDACT_MARGIN);
 }
 
-/** The second belt (§8.3): the final rendered stdout, stderr or `--json`
- *  string gets the same three layers once more. It cannot replace the field
- *  pass (an escape letter glued to a run defeats it); it catches what a
- *  field pass was never given. */
+/** The second belt (§8.3), per-segment primitive: the field pass's layers once more over ONE piece of text that has no
+ *  structure of its own to protect, with layer 2 in its structure-safe final form, D-4613
+ *  (history-final-belt-layer2-structure-safe) (CONTEXT_RULES: no value class consumes a backslash, a line break, `<`,
+ *  `>` or `&`). It is idempotent on the field pass's marks (`TOKEN=[redacted]` is returned as it came). It must
+ *  NEVER be run over serialised `--json` or over a whole human page: a pass over serialised structure cannot be made
+ *  safe by value classes (the escape-stripped reading can run an ANSI-shaped span across a quote, a frame tag or a
+ *  line, rounds 1 and 2). The callers are `redactFinalJson` (every string leaf of the envelope value, in the FIELD
+ *  form) and `redactFinalText` (each line segment and each frame-tag attribute value, in this form). */
 export function redactFinal(text, idx) {
-  return redactField(text, idx);
+  return redactFieldIn(text, idx, 'final');
+}
+
+/** The final belt over a `--json` envelope, D-4613 (whole-branch fix round 3): the VALUE is deep-mapped BEFORE it is
+ *  serialised, so no pass ever reads serialised structure. Every string leaf goes through BOTH passes, `redactFinal(
+ *  redactField(leaf))` (fix round 5: a raw string has no structure to protect, so the final form is safe on it, and the
+ *  field form's value class can run through `<` or `>` and past a context key that the final form's stops still see:
+ *  `see: <a>password=x</a>`); numbers, booleans and null pass through;
+ *  object KEYS are never touched (they are field and counter names fixed in code). The caller serialises the result
+ *  with `JSON.stringify`, so the envelope's escaping is the serialiser's own and `--json` is valid whatever a leaf
+ *  holds. Residuals: a secret an object KEY would carry is not masked (no key is data); a leaf the field form cannot
+ *  mask is no worse than the field pass was. */
+export function redactFinalJson(value, idx) {
+  if (typeof value === 'string') return redactFinal(redactField(value, idx), idx);
+  if (Array.isArray(value)) return value.map((v) => redactFinalJson(v, idx));
+  if (value !== null && typeof value === 'object') {
+    return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, redactFinalJson(v, idx)]));
+  }
+  return value;
+}
+
+/** The final belt over lines the CLI never framed (an error line, a relayed operator line, a refusal line), D-4613
+ *  (whole-branch fix round 6), D-5021 (fix round 1, review 441 F2): the field pass and then ONE whole-text `redactFinal`
+ *  pass, `redactFinal(redactField(text))`, as `redactFinalJson` runs them per string leaf, with no line split and no
+ *  frame-tag split. Unframed text has no structure to protect, so nothing here needs a cut: a JSON-form pair whose value
+ *  is on the next line and a PEM block that spans lines are matched whole (round 5's per-line split lost both), and text
+ *  that merely looks like a frame tag (`<ccrc-recall TOKEN="x">`) is plain text whose context key is seen with its
+ *  quoted value. The final form's value classes never cross a line, so no rule runs a value over a break; but they
+ *  also stop at `<`, `>`, `&`, `"` and a backslash, so a secret holding one of those printed its tail (`"token": "ab<cd"`
+ *  came back unchanged). This is the only redaction such text receives, so it must mask whatever `redactField`
+ *  masks: the field pass runs first. Every caller treats its result as text for a person and never parses it (the relay
+ *  holds back and parses the sweep's `{"rc"` line from the RAW line, before any emit), so over-masking by the field
+ *  form's wider value classes costs a reader a few characters and breaks no structure. It is idempotent on the field
+ *  pass's marks. `redactFinalText` (tag-aware) stays for the human page, which recallEnvelope frames. */
+export function redactFinalLines(text, idx) {
+  return redactFinal(redactField(text, idx), idx);
+}
+
+/** A frame tag of the recalled-text envelope (recallEnvelope's opening and closing tag). escapeXmlAttr has escaped every
+ *  attribute value, so a real tag holds no raw `>` or `"` inside a value. */
+const FRAME_TAG_RE = /<\/?ccrc-recall\b[^>]*>/g;
+
+/** The final belt over human text (a page, one stderr line, one relayed line), D-4613 (whole-branch fix rounds 3 and 4): the
+ *  text is split at each `\n` (the break itself is never given to a pass) and, within a line, around frame tags; every non-tag segment
+ *  goes through `redactFinal` on its own, and so does every part of a tag: each quoted attribute value (already escaped
+ *  by `escapeXmlAttr`, so no raw quote inside) and each run of text between them, the tag's name and attribute names
+ *  included, so no character of the line escapes every pass (a forged `<ccrc-recall password: x>` in an error line or a
+ *  relayed line is masked). A real tag's names and spaces match no rule and come back unchanged. No segment spans a
+ *  line or a tag, so neither an ANSI-shaped span nor a context value can cross one: the frame lines, the tags,
+ *  `shown K of N` and the `next:` line survive whatever a field holds. A fixed point on a page built from the field
+ *  pass's output. Residual: a secret split by a line break or a tag is masked only by the field pass, which saw it
+ *  whole. */
+export function redactFinalText(text, idx) {
+  return text.split('\n').map((line) => {
+    let out = '';
+    let last = 0;
+    for (const m of line.matchAll(FRAME_TAG_RE)) {
+      out += redactFinal(line.slice(last, m.index), idx);
+      let at = 0;
+      for (const q of m[0].matchAll(/"([^"]*)"/g)) {
+        out += `${redactFinal(m[0].slice(at, q.index), idx)}"${redactFinal(q[1], idx)}"`;
+        at = q.index + q[0].length;
+      }
+      out += redactFinal(m[0].slice(at), idx);
+      last = m.index + m[0].length;
+    }
+    return out + redactFinal(line.slice(last), idx);
+  }).join('\n');
 }
 
 // ===========================================================================
@@ -2375,13 +2780,35 @@ export function shortestRetention(homeRetentionDays) {
   return v.length === 0 ? CLAUDE_CODE_DEFAULT_RETENTION_DAYS : Math.min(...v);
 }
 
-/** The reducers `planExport` may take: per candidate referrer, the retention
- *  its age is measured against. The ruled rule (Q6 e) is `shortestHome`, the
- *  node's shortest retention whatever homes hold the referrer; Q15, if ruled
- *  yes, adds a reducer reading the referrer's own files and changes no
- *  signature (rev 3.2 review, FE13). */
+/** The home a file's due date is read against when several rostered homes' `projects/` trees contain it (two homes
+ *  whose `projects/` resolve to one real tree): the one with the SHORTEST retention, the first listed on a tie, and
+ *  null when none contains it. The home that deletes the file soonest is the one the export must beat, so a roster that
+ *  lists a longer home first can no longer push the due date past the shorter home's deletion. A home with no measured
+ *  retention reads as Claude Code's 30-day default, as `fileDueMs` does.
+ *  D-4612 (history-export-file-home-shortest-of-containing) */
+export function shortestRetentionHome(containing, homeRetentionDays) {
+  let best = null;
+  let bestDays = Infinity;
+  for (const h of containing) {
+    const days = homeRetentionDays[h] ?? CLAUDE_CODE_DEFAULT_RETENTION_DAYS;
+    if (days < bestDays) { best = h; bestDays = days; }
+  }
+  return best;
+}
+
+/** The reducers `planExport` may take (§9.15). A reducer answers, for one candidate row, the time in ms since the
+ *  epoch at which it falls due: the row is due exactly when that time is before now, and `-Infinity` means nothing
+ *  holds it back. B1's reducers answered a retention in days against one row clock, which the per-copy rule cannot
+ *  be: it reads each holding file's own clock. The TypeScript type and `planExport`'s signature are B1's, unchanged
+ *  (ruled Q15, rev 3.4: one reducer, no signature change).
+ *  - `perCopy`, the default from W1-B2 (D-4735 (history-export-due-per-copy)): the latest due date over the row's holding
+ *    files on disk, each file's mtime plus its OWN home's horizon. A file gone from disk has passed its date, and a
+ *    row with no holding file on record has no clock, so is due at once. It never reads the row's own time.
+ *  - `shortestHome`, B1's default and now history: the row clock plus the horizon of the shortest retention over
+ *    every rostered home, whatever homes hold the row. Kept as a CONTROL, here and in W1-B4. */
 export const EXPORT_REDUCERS = Object.freeze({
-  shortestHome: (_candidate, homeRetentionDays) => shortestRetention(homeRetentionDays),
+  shortestHome: (c, homeRetentionDays) => rowClockMs(c) + exportHorizonDays(shortestRetention(homeRetentionDays)) * EXPORT_DAY_MS,
+  perCopy: perCopyDueMs,
 });
 
 /** The horizon: retention minus `EXPORT_MARGIN_DAYS`, floored at 0. */
@@ -2389,31 +2816,46 @@ export function exportHorizonDays(retentionDays) {
   return Math.max(0, retentionDays - EXPORT_MARGIN_DAYS);
 }
 
-/** A referrer's age (§9.15): now minus its row's `ts_ms`, or, when that is
- *  NULL, minus the mtime of the newest file holding it — deliberately the
- *  opposite of prune, where NULL is "never old": here "never" would never
- *  copy it. A referrer with no time and no holding file has no clock at all
- *  and counts as old: the export errs early, never late (plan-chosen).
- *  D-4208 */
-function referrerAgeMs(r, nowMs) {
-  if (r.tsMs !== null) return nowMs - r.tsMs;
-  if (r.files.length === 0) return Number.POSITIVE_INFINITY;
-  return nowMs - Math.max(...r.files.map((f) => f.mtimeMs));
+/** The row clock (§9.15, history since W1-B2; D-4208): the row's `ts_ms`, or, when that
+ *  is NULL, the mtime of the newest file holding it — deliberately the opposite of prune, where NULL is "never old":
+ *  here "never" would never copy it. A row with no time and no holding file has no clock at all, `-Infinity`: the
+ *  export errs early, never late (plan-chosen). `shortestHome` alone reads it. */
+function rowClockMs(c) {
+  if (c.tsMs !== null) return c.tsMs;
+  if (c.files.length === 0) return Number.NEGATIVE_INFINITY;
+  return Math.max(...c.files.map((f) => f.mtimeMs));
 }
 
-/** The export's due and overdue sets (§9.15). A blob is DUE when every
- *  referrer is older than its horizon, the retention coming from the reducer
- *  (default: the ruled `shortestHome`). It is OVERDUE — measured source loss,
- *  doctor's FAIL — when it is due and every holding file of every referrer is
- *  gone from disk or past its own deletion date by the file clock (its mtime
- *  plus its home's retention). A blob with no referrer is neither.
+/** One holding file's due date (§9.15): its mtime plus its own home's horizon; a home not measured reads as Claude
+ *  Code's 30-day default, the overdue test's own fallback. */
+function fileDueMs(f, homeRetentionDays) {
+  return f.mtimeMs + exportHorizonDays(homeRetentionDays[f.home] ?? CLAUDE_CODE_DEFAULT_RETENTION_DAYS) * EXPORT_DAY_MS;
+}
+
+/** `EXPORT_REDUCERS.perCopy` (§9.15 "A row is due"; D-4735 (history-export-due-per-copy), ruled Q15): a row is due when
+ *  every one of its holding files has passed its due date. Its holding files are B1's per-row set, its
+ *  transcript's (D-4248), which the ruling keeps. */
+function perCopyDueMs(c, homeRetentionDays) {
+  let at = Number.NEGATIVE_INFINITY;   // no holding file on disk or on record: nothing holds the row back
+  for (const f of c.files) {
+    if (!f.present) continue;   // a file gone from disk has passed its date
+    at = Math.max(at, fileDueMs(f, homeRetentionDays));
+  }
+  return at;
+}
+
+/** The export's due and overdue sets (§9.15). A blob is DUE when every referrer is: the reducer's due time is
+ *  before now (default: the per-copy rule since W1-B2). It is OVERDUE — measured source loss, doctor's FAIL — when it
+ *  is due and every holding file of every referrer is gone from disk or past its own deletion date by the file clock
+ *  (its mtime plus its home's retention). A blob with no referrer is neither. `horizonDays` stays the shortest
+ *  home's horizon, which `status` prints and the default rule no longer reads.
  *  D-4207 */
-export function planExport({ nowMs, homeRetentionDays, blobs, reducer = EXPORT_REDUCERS.shortestHome }) {
+export function planExport({ nowMs, homeRetentionDays, blobs, reducer = EXPORT_REDUCERS.perCopy }) {
   const due = [];
   const overdue = [];
   for (const blob of blobs) {
     if (blob.referrers.length === 0) continue;
-    const isDue = blob.referrers.every((r) => referrerAgeMs(r, nowMs) > exportHorizonDays(reducer(r, homeRetentionDays)) * EXPORT_DAY_MS);
+    const isDue = blob.referrers.every((r) => reducer(r, homeRetentionDays) < nowMs);
     if (!isDue) continue;
     due.push(blob.key);
     const gone = blob.referrers.every((r) => r.files.every((f) => !f.present || fileDeletionMs(f, homeRetentionDays) < nowMs));
@@ -2429,23 +2871,55 @@ function fileDeletionMs(f, homeRetentionDays) {
   return f.mtimeMs + (homeRetentionDays[f.home] ?? CLAUDE_CODE_DEFAULT_RETENTION_DAYS) * EXPORT_DAY_MS;
 }
 
+/** One W1-k holder's date (§9.15 "If B4 slips"): its due time by the reducer, or, when the reducer answers
+ *  `-Infinity` (nothing on disk holds it back: every holding file gone, or none on record), a real clock on the early
+ *  side rather than a sentinel. That is the last write any of its RECORDED files saw (a gone file keeps its recorded
+ *  mtime), since it cannot have fallen due before then; with no file on record, its oldest unexported row's time.
+ *  For the date only: the holder stays due. Null for a holder with neither, which ingest cannot make (every row
+ *  arrives through a file). */
+function holderDueDateMs(h, homeRetentionDays, reducer) {
+  const at = reducer(h, homeRetentionDays);
+  if (at !== Number.NEGATIVE_INFINITY) return at;
+  if (h.files.length > 0) return Math.max(...h.files.map((f) => f.mtimeMs));
+  return h.tsMs;
+}
+
 /** The census's W1-k dates (§9.15), decided here so the sweep only delivers them (Task 26F item 7):
- *  - `firstDueMs`: the oldest unexported row's due date by the ROW clock, its ts plus the horizon (the shortest
- *    retention over the homes, less the margin); null when no row is unexported (`oldestRowMs` null).
+ *  - `firstDueMs`: the earliest holder date (holderDueDateMs), by the reducer (default: the per-copy rule since
+ *    W1-B2), over the HOLDERS: one candidate per transcript that holds an unexported row (its oldest such row's time,
+ *    and its holding files). Rounded to a whole millisecond; null when no holder has a clock (no unexported row).
+ *    Never 0 for "due since an unknown time": that value would sit beside real dates in one field.
  *  - `firstDeletionMs`: the earliest deletion date by the FILE clock over the files still present, rounded to a
  *    whole millisecond; null when none is present. A file that is gone has no deletion date: it is already lost.
  *  `files` is every holding file the census measured, each already assigned its home. */
-export function exportDates({ homeRetentionDays, oldestRowMs, files }) {
+export function exportDates({ homeRetentionDays, holders, files, reducer = EXPORT_REDUCERS.perCopy }) {
   let first = null;
   for (const f of files) {
     if (!f.present) continue;
     const at = fileDeletionMs(f, homeRetentionDays);
     if (first === null || at < first) first = at;
   }
+  let due = null;
+  for (const h of holders) {
+    const at = holderDueDateMs(h, homeRetentionDays, reducer);
+    if (at === null) continue;
+    if (due === null || at < due) due = at;
+  }
   return {
-    firstDueMs: oldestRowMs === null ? null : oldestRowMs + exportHorizonDays(shortestRetention(homeRetentionDays)) * EXPORT_DAY_MS,
+    firstDueMs: due === null ? null : Math.round(due),
     firstDeletionMs: first === null ? null : Math.round(first),
   };
+}
+
+/** The census's candidate prefilter (§9.15; D-4735 (history-export-due-per-copy)): the keys of the transcripts whose
+ *  rows can be due now. A row's holding files are its transcript's
+ *  (D-4248), and the per-copy rule never reads a row's own time, so every row
+ *  of one transcript falls due at one instant, its transcript's; a blob none of whose referrers sits in a due
+ *  transcript cannot be due. Exact for any reducer that reads no row time; planExport still decides each blob. */
+export function dueTranscriptKeys({ nowMs, homeRetentionDays, transcripts, reducer = EXPORT_REDUCERS.perCopy }) {
+  const out = [];
+  for (const t of transcripts) if (reducer({ tsMs: null, files: t.files }, homeRetentionDays) < nowMs) out.push(t.key);
+  return out;
 }
 
 /** Doctor's `retention-lowered` input (§9.15): when the homes disagree, the
@@ -2512,7 +2986,33 @@ export const SCHEMA_ADDED = Object.freeze({
       journal_outbox: Object.freeze(['seq', 'rec']),
     }),
   }),
+  // D-5015, D-5019, D-5020: no table, no column. Its one migration (store.mjs MIGRATIONS[1]) is four index builds: the owed-row partial
+  // index on blobs, the covering entries(blob_id, provenance) index, and the two node indexes derivation used to make unversioned.
+  // `heavy: true` is coordinator ruling 5012, under §6.11's definition ("backfills or indexes a large table"): v2 indexes blobs and
+  // entries, and the builds read every blob row, so `planMigration` counts the copy twice. It was first ruled light (mail 4901), on the
+  // builds reading the very tables the pre-migration snapshot copy has just read, so that they find them in the page cache. That holds
+  // only while the cache holds the store. The builds do not write "a small share" of a healthy store: the partial index holds every blob
+  // still unindexed with bytes, about half of a real store (harness rows alone are 48-57% of real transcripts' rows), and
+  // entries_blob_prov one row per entry. MEASURED, cache held the store: a 479 MB store (review 441): copy 7.1 s, builds and commit
+  // 1.75 s; a 351 MB store here: copy 5.2-6.3 s, the whole migration 5.9-6.9 s, 351 MB read. MEASURED, cache did NOT hold it (a 657 MB
+  // store on a loaded box): copy 34-36 s, the whole migration 101-180 s, 1.46-2.25 GB read against the copy's 0.75 GB, because the
+  // partial index re-reads every blob row (fts_indexed sits after the z BLOB, so the overflow chains are walked) and entries_blob_prov
+  // scans entries. Against the default-rate estimate a first migration uses (no recorded copy_bps), that run took 1.5-2.7x the
+  // estimate counted once, which a heavy v2 doubles. The consequence is intended: a store over about 1.5 GB answers snapshot-needs-op
+  // on a scheduled pass, and the operator's `ccrc history doctor --migrate` runs it once, under --op, with no carrier kill.
+  2: Object.freeze({ heavy: true, tables: Object.freeze({}) }),
 });
+
+/** The heavy versions a migration from `stored` to `code` crosses (§6.11, ruling 5012): every version above the stored one up to the
+ *  code's whose SCHEMA_ADDED entry is `heavy`. `planMigration` doubles its copy estimate when there is one, and sweep's
+ *  `migrationVerdict` finds them by the same walk; doctor's `migration-needs-op` line calls this, so the estimate it prints is the
+ *  one the verdict used and no factor is hand-kept. An unmeasured stored version (null) crosses none: nothing is said of it. */
+export function heavyVersionsBetween(stored, code, schemaAdded = SCHEMA_ADDED) {
+  const out = [];
+  if (!Number.isInteger(stored)) return out;
+  for (let v = stored + 1; v <= code; v += 1) if (schemaAdded[v]?.heavy === true) out.push(v);
+  return out;
+}
 
 /** The schema version this code writes and reads: SCHEMA_ADDED's highest key,
  *  so a store's creation stamp, the writer's verdicts and the CLI's reads agree
@@ -2685,6 +3185,73 @@ export function parseOpMarker(text) {
   return m === null ? null : { verb: m[1], pid: Number(m[2]), startMs: Number(m[3]) };
 }
 
+/** The pass marker's one grammar (D-5016 `history-doctor-reads-a-live-pass`): `~/.ccrc/history/pass` holds
+ *  `<pid> <start_ms> <proc_start> <boot_id>`, written by a scheduled pass under the lock when it starts and removed when
+ *  it ends. `proc_start` is field 22 of `/proc/<pid>/stat` (the process's start time, in clock ticks since boot) and
+ *  `boot_id` is `/proc/sys/kernel/random/boot_id`: a reused pid has another start time, and a pid from before a reboot
+ *  another boot id, so neither can pass for the pass that wrote the marker. Anything else is null. */
+export function parsePassMarker(text) {
+  const m = /^([1-9][0-9]{0,9}) ([0-9]{1,16}) ([0-9]{1,20}) ([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\s*$/.exec(text);
+  return m === null ? null : { pid: Number(m[1]), startMs: Number(m[2]), procStart: m[3], bootId: m[4] };
+}
+
+/** The marker's text for a pass: the grammar above, newline-ended. */
+export function formatPassMarker(pid, startMs, identity) {
+  return `${pid} ${startMs} ${identity.procStart} ${identity.bootId}\n`;
+}
+
+/** The death record's one grammar (D-5026 `history-pass-death-record`): `~/.ccrc/history/pass-died` holds ONE line of JSON,
+ *  `{"pid":<int|null>,"start_ms":<int>,"found_ms":<int>,"count":<int>}`. A scheduled pass writes it when it FINDS a pass marker
+ *  with no live pass behind it (the dead pass ended without its `finally`: the carrier's kill at 10 min, the OOM killer, a
+ *  SIGKILL), and by itself when its body throws (the exception ends it without a tick row), and a pass removes it once its own tick row
+ *  is committed. `pid` and `start_ms` are the dead pass's own, from its
+ *  marker (`pid` null and `start_ms` an upper bound, the finder's start, when the marker could not be parsed); `found_ms` is the
+ *  finder's start; `count` is the deaths recorded since the record was last cleared. It normally equals the deaths since the last
+ *  tick (a pass that writes a tick clears the record), and can over-count when a record outlives a tick: a clear that was cut off,
+ *  or a death recorded for a pass that had already ticked (a throw after its tick row). The FAIL does not read it: only the record's
+ *  start against the last tick decides that. Strict: every field present and typed, `count >= 1`, else null. */
+export function parsePassDied(text) {
+  let v;
+  try { v = JSON.parse(text); } catch { return null; }
+  if (v === null || typeof v !== 'object' || Array.isArray(v)) return null;
+  const int = (x, min) => Number.isSafeInteger(x) && x >= min;
+  if (!(v.pid === null || int(v.pid, 1)) || !int(v.start_ms, 0) || !int(v.found_ms, 0) || !int(v.count, 1)) return null;
+  return { pid: v.pid, startMs: v.start_ms, foundMs: v.found_ms, count: v.count };
+}
+
+/** The record's text: the grammar above, newline-ended. */
+export function formatPassDied(pid, startMs, foundMs, count) {
+  return `${JSON.stringify({ pid, start_ms: startMs, found_ms: foundMs, count })}\n`;
+}
+
+/** A process's start time from the text of `/proc/<pid>/stat`: field 22, counted after the LAST `)` (the comm field in
+ *  front of it may hold spaces and parentheses). A process in state `Z` (zombie) or `X` (dead) is not a running pass and
+ *  answers null, as does any text that is not that shape. */
+export function procStartOf(statText) {
+  if (typeof statText !== 'string') return null;
+  const close = statText.lastIndexOf(')');
+  if (close < 0) return null;
+  const fields = statText.slice(close + 1).trim().split(/\s+/);
+  // fields[0] is field 3 (the state), so field 22 is fields[19].
+  if (fields.length < 20 || !/^[A-Za-z]$/.test(fields[0]) || fields[0] === 'Z' || fields[0] === 'X') return null;
+  return /^[0-9]{1,20}$/.test(fields[19]) ? fields[19] : null;
+}
+
+/** The boot id from the text of `/proc/sys/kernel/random/boot_id`, or null when it is not a UUID. */
+export function bootIdOf(text) {
+  if (typeof text !== 'string') return null;
+  const v = text.trim().toLowerCase();
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(v) ? v : null;
+}
+
+/** Whether a pass marker names a pass that is running now (D-5016): ONLY when the marker parsed, the pid's identity was
+ *  measured now (`identityNow` is null when it could not be: no /proc, a dead pid, a zombie, an unreadable file) and both
+ *  its start time and the boot id equal the marker's. `kill(pid, 0)` is not this test: a reused pid answers it. */
+export function decidePassLive(marker, identityNow) {
+  return marker !== null && identityNow !== null && identityNow !== undefined
+    && identityNow.procStart === marker.procStart && identityNow.bootId === marker.bootId;
+}
+
 // ── the health block: every §9.6 rule as a word (history spec §9.6) ───────────
 // `status --json` MEASURES, this function DECIDES, and doctor's `_check_history`
 // only RELAYS what it returns: the one place a verdict about this box's store
@@ -2722,11 +3289,13 @@ export const HEALTH_META = Object.freeze({
   recoverUnmovedTicks: 'recover_unmoved_ticks',
   exportSegmentNewer: 'export_segment_newer',
   exportSegmentMissing: 'export_segment_missing',
+  // D-5027 (history-held-pass-is-fresh-for-tick-stale): the held arm of a scheduled pass stamps the time it ended (ms).
+  heldPassMs: 'held_pass_ms',
 });
 
 /** Counters `status` reads for a health word, spelled once for the writer (sweep.mjs), the reader (cli.mjs) and the
  *  doctor fixtures that plant them. D-4346 (history-permanent-failures-classified). Like `blob_undecodable` and
- *  `drain_rejected`, `spool_displaced`, `spool_blocked` and `spool_unreadable` are never reset in B1 (B2's repair owns resets). */
+ *  `drain_rejected`, `spool_displaced`, `spool_blocked` and `spool_unreadable` are never reset by the pass that counts them: W1-B2's re-measure resets or raises them (decideCounterResets, D-4723 (`history-counter-resets-after-cure`)). */
 export const HEALTH_COUNTERS = Object.freeze({
   blobUndecodable: 'blob_undecodable',
   drainRejected: 'drain_rejected',
@@ -2793,7 +3362,7 @@ export const HEALTH_REMEDIES = Object.freeze({
   'lag-unmeasured': 'none needed: lag is measured once every file has reached its end once',
   'tick-stale': `read the sweep: ${SWEEP_LOG}, and systemctl --user status ccd-history-sweep.timer`,
   'lag-high': `read the sweep: ${SWEEP_LOG}; a backlog drains within each run's budget, a stuck file shows the same lag every tick`,
-  'at-cap': 'raise the cap (an integer, in GB); ccrc history prune, which frees space, arrives with W1-B2',
+  'at-cap': 'raise the cap (an integer, in GB), or the operator frees space with ccrc history prune --older-than <age> --apply, from a terminal outside any session',
   'capture-paused-low-disk': 'free space on the store\'s filesystem; capture resumes by itself above the floor',
   'mode-wrong': 'chmod each named path to the mode it wants',
   'schema-newer': 'update this box to the build that wrote the store (ccrc update); this build still reads what it knows',
@@ -2801,16 +3370,16 @@ export const HEALTH_REMEDIES = Object.freeze({
   'store-unmeasured': 'make store.id, store.id.pending, store.writer and the DB under ~/.ccrc/history readable by this user; nothing is created, adopted or restored meanwhile',
   'recovery-stalled': `read the sweep: ${SWEEP_LOG}`,
   'store-root-dangling': `mount the volume behind ~/${STORE_DB_REL}, or remove the dangling link so the next tick stores on the home filesystem`,
-  'store-missing': `ccrc history doctor --restore and --rebuild arrive with W1-B2; until then capture stays held and the journal keeps everything drained meanwhile: do not copy a backup over history.db by hand (that skips the journal replay --restore does and makes --restore refuse)`,
+  'store-missing': `the operator runs ccrc history doctor --restore <backup> or ccrc history doctor --rebuild, from a terminal outside any session (a leftover history.db-wal or history.db-shm is moved aside first); capture stays held and the journal keeps everything drained meanwhile: do not copy a backup over history.db by hand (that skips the journal replay --restore does and makes --restore refuse)`,
   'store-mismatch': 'this DB belongs to another store (its meta.store_id is not store.id): put the right DB back, or move this one aside',
-  'store-unbound': `if the store is another box's, remove the ~/${STORE_DB_REL} link or move the DB aside; if it is this box's, leave it in place: ccrc history doctor --adopt, which binds it, arrives with W1-B2 and capture stays held until then`,
+  'store-unbound': `if the store is another box's, remove the ~/${STORE_DB_REL} link or move the DB aside; if it is this box's, leave it in place and the operator runs ccrc history doctor --adopt, which binds it, from a terminal outside any session (capture stays held until then)`,
   'store-unreachable': `the store's filesystem did not answer: check the mount behind ~/${STORE_DB_REL}`,
-  'store-recoverable': 'ccrc history doctor --restore and --rebuild, which recover from what was found, arrive with W1-B2: keep that evidence until then, or move it aside to start a new store',
+  'store-recoverable': 'the operator runs ccrc history doctor --restore <backup> or ccrc history doctor --rebuild, which recover from what was found, from a terminal outside any session; or moves that evidence aside to start a new store',
   'store-wal-orphaned': 'move history.db-wal and history.db-shm (and any history.db) aside together; then let the next tick create a store, or restore one',
-  'store-zero-byte': `the DB was truncated: keep it where it is; ccrc history doctor --restore and --rebuild arrive with W1-B2, and until then capture stays held and the journal keeps everything drained meanwhile (do not copy a backup over history.db by hand: that skips the journal replay --restore does)`,
-  'store-schema-missing': `the DB has no meta.store_id, so it is not a history store this build can bind: keep all three DB files where they are; ccrc history doctor --restore and --rebuild arrive with W1-B2, and until then capture stays held and the journal keeps everything drained meanwhile (do not copy a backup over history.db by hand: that skips the journal replay --restore does)`,
+  'store-zero-byte': `the DB was truncated: ccrc history doctor --restore and --rebuild both refuse while history.db stands, so the operator moves history.db, history.db-wal and history.db-shm aside together, from a terminal outside any session, and then runs ccrc history doctor --restore <backup> or ccrc history doctor --rebuild; capture stays held and the journal keeps everything drained meanwhile (do not copy a backup over history.db by hand: that skips the journal replay --restore does)`,
+  'store-schema-missing': `the DB has no meta.store_id, so it is not a history store this build can bind: capture stays held and the journal keeps everything drained meanwhile; ccrc history doctor --restore and --rebuild both refuse while history.db is present, so the operator moves history.db, history.db-wal and history.db-shm aside together, from a terminal outside any session, and then runs ccrc history doctor --restore <backup> or ccrc history doctor --rebuild (do not copy a backup over history.db by hand: that skips the journal replay --restore does)`,
   'migration-refused': 'free space on the store\'s filesystem: the pre-migration snapshot needs a store\'s size above the floor',
-  'migration-needs-op': 'run the migration by hand, under no carrier timeout: ~/.local/bin/ccd-history-sweep --op migrate (ccrc history doctor --migrate arrives with W1-B2)',
+  'migration-needs-op': 'the operator runs ccrc history doctor --migrate, from a terminal outside any session: it runs under no carrier timeout, which a scheduled pass does not',
   'journal-unwritable': 'free space on the home filesystem, or make ~/.ccrc/history/journal writable: drained spool files are held until the journal append succeeds',
   'export-segment-newer': 'update this box to the build that wrote the segment (ccrc update)',
   'export-overdue': 'the store may be the only copy of this text: keep ~/.ccrc/history (never --purge-history), and raise cleanupPeriodDays in each home\'s settings.json (or the managed settings) so Claude Code keeps transcripts until the export writer ships (W1-B4)',
@@ -2818,7 +3387,7 @@ export const HEALTH_REMEDIES = Object.freeze({
   'fts-unavailable': 'none needed for capture; run Node >= 22.16.0 for FTS5 search',
   'cap-malformed': `write a positive integer (GB) into the cap file, or remove it for the default of ${CAP_DEFAULT_GB}`,
   'redact-source-unreadable': 'make the named secret files readable by this user; a value never yet seen in them goes unredacted meanwhile',
-  'cap-near': 'raise the cap before capture pauses at it; ccrc history prune, which frees space, arrives with W1-B2',
+  'cap-near': 'raise the cap before capture pauses at it, or the operator frees space with ccrc history prune --older-than <age> --apply, from a terminal outside any session',
   'breaker-open': `none needed: the breaker closes by itself; read the sweep for why it opened: ${SWEEP_LOG}`,
   'roster-unreadable': 'make ~/.ccrc/accounts.sh readable (ccrc install regenerates it)',
   'root-is-symlink': 'make ~/.ccrc/history a real 0700 directory: only its db/ may be a link',
@@ -2827,11 +3396,11 @@ export const HEALTH_REMEDIES = Object.freeze({
   'retention-unmeasured': 'make cleanupPeriodDays readable in the named homes\' settings.json',
   'retention-lowered': 'set cleanupPeriodDays in the named home\'s settings.json to at least the others\' value',
   'export-segment-missing': 'carry the export directory from the box the store came from, or let the rows export again',
-  'journal-record-skipped': `none needed if the journal came from a newer build; otherwise ccrc history doctor --repair arrives with W1-B2, and until then read the sweep: ${SWEEP_LOG}`,
+  'journal-record-skipped': `none needed if the journal came from a newer build; otherwise read the sweep: ${SWEEP_LOG} (no operator verb clears this count: the journal audit recounts it from the journal each time it runs)`,
   'journal-growth': `read the sweep: ${SWEEP_LOG}; the journal grows faster than twice its estimate`,
-  'blob-undecodable': `the store's copy of that text is damaged (storage corruption) and nothing repairs it in place: keep ~/.ccrc/history as it is; ccrc history doctor --repair, which detects storage corruption, arrives with W1-B2`,
+  'blob-undecodable': `the store's copy of that text is damaged (storage corruption) and nothing repairs it in place: keep ~/.ccrc/history as it is; the operator runs ccrc history doctor --repair, which checks the store's integrity and re-reads every blob to re-measure this count, from a terminal outside any session`,
   'drain-rejected': `the files are kept in ~/.ccrc/history/spool/.draining/rejected/ and their lines in the journal, and nothing in this build drains them again; the refusal is in the sweep's log: ${SWEEP_LOG}`,
-  // D-4347 (history-planted-entries-never-wedge). Never reset in B1, like drain-rejected and blob-undecodable: B2's repair owns resets.
+  // D-4347 (history-planted-entries-never-wedge). Re-measured by doctor --repair and a recovery's close, like drain-rejected and blob-undecodable (W1-B2, D-4723 (`history-counter-resets-after-cure`)).
   'spool-planted': `remove a link or file that stands at ~/.ccrc/history/spool itself (the next pass makes the directory again), any FIFO, link, directory or other non-regular node that stands at ~/.ccrc/history/spool/<id>.jsonl (that id spools again once it is gone), and the planted entries under ~/.ccrc/history/spool/.draining/ (each drain's set-asides are under planted/<tickMs>.<pid>/, and their files are kept there undrained); nothing in this build drains a displaced file again; a file the sweep cannot read stays in .draining/ with its .obs sidecar until both are readable by this user (chmod 600, or chown them) or removed, and its id's later files drain once it does; the sweep's log names each one: ${SWEEP_LOG}`,
 });
 
@@ -2846,9 +3415,9 @@ function evidenceOf(h) {
 function remedyFor(word, h) {
   switch (word) {
     case 'at-cap':
-      return `raise the cap in ${h.capFile} (an integer, in GB); capture resumes below the cap (ccrc history prune, which frees space, arrives with W1-B2)`;
+      return `raise the cap in ${h.capFile} (an integer, in GB); capture resumes below the cap; or the operator frees space with ccrc history prune --older-than <age> --apply, from a terminal outside any session`;
     case 'cap-near':
-      return `raise the cap in ${h.capFile} (an integer, in GB) before capture pauses at it (ccrc history prune, which frees space, arrives with W1-B2)`;
+      return `raise the cap in ${h.capFile} (an integer, in GB) before capture pauses at it, or the operator frees space with ccrc history prune --older-than <age> --apply, from a terminal outside any session`;
     case 'cap-malformed':
       return `write a positive integer (GB) into ${h.capFile}, or remove the file for the default of ${CAP_DEFAULT_GB}`;
     case 'capture-paused-low-disk':
@@ -2857,14 +3426,18 @@ function remedyFor(word, h) {
       return h.modesWrong.map((m) => `chmod ${m.want} ${m.path}`).join('; ');
     case 'store-root-dangling':
       return `mount the volume behind ${h.dbPath}, or remove the dangling link ~/${STORE_DB_REL} so the next tick stores on the home filesystem`;
+    case 'store-schema-missing':
+      return h.userVersion !== null
+        ? `the DB holds a store_id but its user_version is below 1, so this build will not read or migrate it as a history store: capture stays held and the journal keeps everything drained meanwhile; ccrc history doctor --restore and --rebuild both refuse while history.db is present, so the operator moves history.db, history.db-wal and history.db-shm aside together, from a terminal outside any session, and then runs ccrc history doctor --restore <backup> or ccrc history doctor --rebuild (do not copy a backup over history.db by hand: that skips the journal replay --restore does)`
+        : HEALTH_REMEDIES['store-schema-missing'];
     case 'store-missing':
       return h.backupsDb.length > 0
-        ? `ccrc history doctor --restore ${h.backupsDb[0]} and --rebuild arrive with W1-B2 (db/backups holds ${h.backupsDb.join(', ')}; keep them); until then capture stays held and the journal keeps everything drained meanwhile: do not copy a backup over history.db by hand (that skips the journal replay --restore does and makes --restore refuse)`
-        : 'ccrc history doctor --rebuild, which rebuilds from the journal, arrives with W1-B2; until then capture stays held and the journal keeps everything drained meanwhile (do not copy a backup over history.db by hand: that skips the journal replay --restore does)';
+        ? `the operator runs ccrc history doctor --restore ${h.backupsDb[0]} (db/backups holds ${h.backupsDb.join(', ')}; keep them) or ccrc history doctor --rebuild, from a terminal outside any session (a leftover history.db-wal or history.db-shm is moved aside first); capture stays held and the journal keeps everything drained meanwhile: do not copy a backup over history.db by hand (that skips the journal replay --restore does and makes --restore refuse)`
+        : 'the operator runs ccrc history doctor --rebuild, which rebuilds from the journal, from a terminal outside any session (a leftover history.db-wal or history.db-shm is moved aside first); capture stays held and the journal keeps everything drained meanwhile (do not copy a backup over history.db by hand: that skips the journal replay --restore does)';
     case 'store-unbound':
-      return `if store ${h.storeId ?? '(unknown)'} is another box's, remove the ~/${STORE_DB_REL} link or move the DB aside; if it is this box's, leave it in place: ccrc history doctor --adopt, which binds it, arrives with W1-B2 and capture stays held until then`;
+      return `if store ${h.storeId ?? '(unknown)'} is another box's, remove the ~/${STORE_DB_REL} link or move the DB aside; if it is this box's, leave it in place and the operator runs ccrc history doctor --adopt, which binds it, from a terminal outside any session (capture stays held until then)`;
     case 'store-recoverable':
-      return `ccrc history doctor --restore and --rebuild, which recover from ${evidenceOf(h)}, arrive with W1-B2: keep that evidence until then, or move it aside to start a new store`;
+      return `the operator runs ccrc history doctor --restore <backup> or ccrc history doctor --rebuild, which recover from ${evidenceOf(h)}, from a terminal outside any session; or moves that evidence aside to start a new store`;
     case 'migration-refused':
       return h.thresholdBytes !== null && h.sizeBytes !== null
         ? `free space on the filesystem holding ${h.dbPath} until more than ${h.thresholdBytes + h.sizeBytes} bytes are free (the snapshot needs the store's size above the floor)`
@@ -2893,7 +3466,11 @@ function bindingDetail(word, h) {
     case 'store-recoverable': return `store.id and history.db are absent, but ${evidenceOf(h)} says a store existed`;
     case 'store-wal-orphaned': return 'history.db-wal or history.db-shm is present without history.db';
     case 'store-zero-byte': return 'history.db is 0 bytes';
-    case 'store-schema-missing': return 'history.db is present and holds no meta.store_id';
+    case 'store-schema-missing':
+      // D-4599: the status read's v0 arm measured a user_version, so the DB holds its store_id; the binding refusal has none.
+      return h.userVersion !== null
+        ? `history.db holds meta.store_id but its user_version is ${h.userVersion}, below 1 (damage or tampering)`
+        : 'history.db is present and holds no meta.store_id';
     case 'store-unmeasured': return 'a binding file, or the DB\'s presence, could not be read';
     case 'store-not-wal': return 'the store is not in WAL mode, and the writer could not set it';
     default: return `status refused: ${word}`;
@@ -2945,9 +3522,31 @@ export function deriveHealth(h) {
   // while the last tick is fresh. Their evidence (the last three ticks rows; recover_unmoved_ticks, which grows
   // only while ticks run) stops changing when the sweep dies, so a timer dead mid-backfill would read as a WARN
   // for ever (§9.6 step 4; FE3: a RUNNING sweep in catch-up is not stale). `off` and `op-running` are an
-  // operator switch and a live marker, not tick evidence, so they hold regardless.
+  // operator switch and a live marker, not tick evidence, so they hold regardless, and they hold D-5026's death line back too
+  // (below): no scheduled pass runs under either, so nothing new can die, and the next pass after them either ticks, which clears the
+  // record, or is killed, which is recorded.
   const tickAge = h.lastTickMs === null ? null : h.nowMs - h.lastTickMs;
-  const tickFresh = tickAge !== null && tickAge <= TICK_STALE_MS;
+  // D-5016 (history-doctor-reads-a-live-pass): the ticks row is stamped with the pass START but written at its END, so a
+  // healthy pass that runs longer than the timer's period shows an old tick while it runs. A pass the marker proves
+  // LIVE (its identity measured equal; lib's decidePassLive) that started within TICK_STALE_MS is a fresh tick, for
+  // every rule that reads tickFresh: catching-up and recovering (FE3; under a live pass their evidence is the last ticks rows, which
+  // may be old, and the hold lasts at most TICK_STALE_MS from the pass's start), lag-unmeasured (a running pass has not yet
+  // reached every file's end), and the stale-tick FAIL itself. A held state also holds lag-high back, as a fresh tick does. A pass that has
+  // run past TICK_STALE_MS is hung, and FAILs below. No live pass reads as it always did.
+  // A start more than PASS_FUTURE_SLACK_MS PAST nowMs means the wall clock stepped back since the marker was written (or
+  // the marker is forged): its age would be negative for as long as the step lasts, and the pass would read as fresh
+  // that long. Such a pass is not read at all, so the verdict is the one a box with no live pass gets (fix round 1,
+  // tick-stale review T3). `tickAge` below keeps the same weakness; it predates B2 and is left as it was.
+  // The hung arm is for a pass the kill does not end. The ending that occurs in production is another one (fix round 2, review 462
+  // F1): the carrier kills a scheduled pass at CARRIER_KILL_S (600 s, the unit's TimeoutStartSec=10min), and the marker is written
+  // after the unit starts, so a killed pass never reaches TICK_STALE_MS of marker age; the next pass, within the timer's 30 s accuracy,
+  // overwrites the marker and its fresh live marker would re-arm every hold above. D-5026 answers that: the next pass records the
+  // death (`pass-died`, `h.passDied`) before it overwrites the marker, and an OPEN death FAILs below whatever a live pass, catching-up or lag-unmeasured say (the off switch and an operator pass hold it, as they hold every freshness FAIL).
+  const passLive = h.pass !== null && h.pass !== undefined && h.pass.live === true && h.pass.startMs - h.nowMs <= PASS_FUTURE_SLACK_MS;
+  const passAge = passLive ? h.nowMs - h.pass.startMs : null;
+  const passFresh = passLive && passAge <= TICK_STALE_MS;
+  const passHung = passLive && passAge > TICK_STALE_MS;
+  const tickFresh = (tickAge !== null && tickAge <= TICK_STALE_MS) || passFresh;
   const b = h.bytesBehindLast3;
   const catching = tickFresh && b.length === CATCHING_UP_TICKS && b.every((v, i) => i === 0 || b[i - 1] > v);
   if (catching) warn.push(item('catching-up', `the backlog is falling: ${b[b.length - 1]} bytes behind, from ${b[0]} ${CATCHING_UP_TICKS} ticks ago`));
@@ -2955,9 +3554,52 @@ export function deriveHealth(h) {
   if (lagUnmeasured) warn.push(item('lag-unmeasured', 'lag is unmeasured: not every file has reached its end once yet'));
   const stateHeld = h.historyOff || (h.recovering !== null && tickFresh) || opLive || catching || lagUnmeasured;
 
+  // D-5026 (history-pass-death-record): a pass that ended without its tick. OPEN while the record's start is after the last tick (or
+  // there is no tick): a pass that wrote its tick has a ticks row stamped at or after its marker's start (the tick is stamped with a
+  // clock read made after the marker's), so a record of a pass that ticked, or one left by a removal that was cut off, is closed by
+  // this comparison alone. A leftover marker that is parsed, NOT live and started after the last tick is the same death with no record
+  // (the pass that found it could not write one, and left the marker standing); it counts beside a record when it is another pass than
+  // the record's (a later start). Held-pass freshness (D-5027) does not close it: only a tick does.
+  const afterLastTick = (ms) => h.lastTickMs === null || ms > h.lastTickMs;
+  const rec = h.passDied ?? null;
+  const recOpen = rec !== null && afterLastTick(rec.startMs);
+  const leftover = h.pass !== null && h.pass !== undefined && h.pass.live !== true && afterLastTick(h.pass.startMs)
+    && (!recOpen || h.pass.startMs > rec.startMs) ? h.pass : null;
+  const death = recOpen || leftover !== null
+    ? {
+      count: (recOpen ? rec.count : 0) + (leftover !== null ? 1 : 0),
+      pid: leftover !== null ? leftover.pid : rec.pid,
+      startMs: leftover !== null ? leftover.startMs : rec.startMs,
+    }
+    : null;
+  // D-5027 (history-held-pass-is-fresh-for-tick-stale): a held pass that ended within TICK_STALE_MS (and not past PASS_FUTURE_SLACK_MS
+  // in the future, the same step-back guard) ran and ended as designed. It answers for the tick-stale FAIL ONLY: the held node shows its
+  // own FAIL (migration-needs-op, migration-refused), and not a second one that points at the timer. It is not a tick:
+  // tickFresh, catching-up, lag-unmeasured and lag-high do not read it, so lag-high joins 30 minutes (LAG_FAIL_MS) after the last
+  // zero-behind tick (capture is paused while the hold stands, so the lag is real). schema-newer is NOT covered (review 466 F1): a
+  // scheduled pass on a newer store is refused at openStore, before the held arm, and leaves through holdPass, which opens no
+  // database and stamps nothing (DM17: no write on a newer store), so tick-stale keeps standing beside schema-newer; planRun's
+  // refuse-newer arm is defensive on a scheduled pass.
+  const heldFresh = h.heldPassMs !== null && h.heldPassMs !== undefined
+    && h.nowMs - h.heldPassMs <= TICK_STALE_MS && h.heldPassMs - h.nowMs <= PASS_FUTURE_SLACK_MS;
+
   // 4. the FAILs.
+  // D-5026: the off switch and an operator pass hold the death line back, as D-4314 says they hold every freshness FAIL (no scheduled pass
+  // runs under either); a live scheduled pass, catching-up and lag-unmeasured do NOT (ruling 5049 F1).
+  if (death !== null && !h.historyOff && !opLive) {
+    fail.push(item('tick-stale', `the sweep has recorded ${death.count} scheduled pass(es) that ended without writing a tick since its last clear; the last (pid ${death.pid === null ? 'unknown' : death.pid}) started ${Math.max(0, minutesOf(h.nowMs - death.startMs))} min ago (the carrier kills a pass at ${minutesOf(CARRIER_KILL_S * 1000)} min; the OOM killer or a SIGKILL also ends one)`));
+  }
+  if (passHung) {
+    fail.push(item('tick-stale', `the scheduled pass (pid ${h.pass.pid}) started ${minutesOf(passAge)} min ago and is still running (hung past ${minutesOf(TICK_STALE_MS)} min)`));
+  }
   if (!stateHeld) {
-    if (tickAge === null) {
+    if (passLive) {
+      // A live pass answers for the tick: fresh above, or the hung FAIL just pushed.
+    } else if (death !== null) {
+      // The death FAIL above answers for the tick: no second tick-stale line.
+    } else if (heldFresh) {
+      // A held pass that ended recently answers for the tick (D-5027): the hold's own FAIL names the cause.
+    } else if (tickAge === null) {
       fail.push(item('tick-stale', h.shimMtimeMs !== null
         ? `no tick has run, and the shim was placed ${minutesOf(h.nowMs - h.shimMtimeMs)} min ago`
         : 'no tick has run'));
@@ -2978,8 +3620,24 @@ export function deriveHealth(h) {
     fail.push(item('migration-refused', `a migration to v${h.codeVersion} was refused for room: ${h.freeBytes ?? 'unmeasured'} bytes free on the filesystem holding ${h.dbPath}`));
   }
   if (h.migration === 'snapshot-needs-op') {
-    const est = Math.ceil((h.sizeBytes ?? 0) / (h.copyBps ?? DEFAULT_COPY_BPS));
-    fail.push(item('migration-needs-op', `a migration to v${h.codeVersion} needs a copy of about ${est} s, too long for a scheduled pass`));
+    // The estimate planMigration compared with half the carrier's bound: the store's size at the copy rate, counted twice when a
+    // version between the stored one and this build's is heavy (ruling 5012), so the number printed is the one that made the verdict.
+    const heavy = heavyVersionsBetween(h.userVersion, h.codeVersion);
+    const est = Math.ceil(((h.sizeBytes ?? 0) * (heavy.length > 0 ? 2 : 1)) / (h.copyBps ?? DEFAULT_COPY_BPS));
+    const why = heavy.length > 0 ? ` (the copy counted twice: ${heavy.map((v) => `v${v}`).join(' and ')} backfills or indexes a large table)` : '';
+    // planMigration answers this verdict by two arms, the interrupted attempts first (whatever the size) and the estimate past half the
+    // bound. The attempts count and its read state reach here through status (`migrationAttempts` and `migrationAttemptsUnmeasured`,
+    // read with store's measureAttempts), so the line names the arm that decided: an estimate is never called too long when the
+    // attempts decided it. An absent count reads as none.
+    const attempts = h.migrationAttempts ?? 0;
+    if (attempts >= MAX_INTERRUPTED_ATTEMPTS && h.migrationAttemptsUnmeasured === true) {
+      // The count is the cap because the marker could not be measured (readAttempts fails closed), not because two attempts were counted.
+      fail.push(item('migration-needs-op', `the attempt marker for the migration to v${h.codeVersion} could not be read, so a scheduled pass treats the migration as interrupted (it stops after ${MAX_INTERRUPTED_ATTEMPTS}), whatever the size; its copy is about ${est} s${why}`));
+    } else if (attempts >= MAX_INTERRUPTED_ATTEMPTS) {
+      fail.push(item('migration-needs-op', `a migration to v${h.codeVersion} was started and interrupted ${attempts} times (a scheduled pass stops after ${MAX_INTERRUPTED_ATTEMPTS}), whatever the size; its copy is about ${est} s${why}`));
+    } else {
+      fail.push(item('migration-needs-op', `a migration to v${h.codeVersion} needs a copy of about ${est} s${why}, too long for a scheduled pass`));
+    }
   }
   // Task 28F: an input status could not read kept its healthy default; it is named here and never judged healthy
   // (the no-overloaded-null rule). An existing word, so no HEALTH_WORDS entry is added.
@@ -3005,7 +3663,7 @@ export function deriveHealth(h) {
   if (h.exportPausedLowDisk) warn.push(item('export-paused-low-disk', 'the export is paused for room on the home filesystem'));
   if (h.retentionUnmeasured.length > 0) warn.push(item('retention-unmeasured', `the retention of ${h.retentionUnmeasured.join(', ')} could not be read; each keeps its last measured value`));
   if (h.retentionLowered !== null) {
-    warn.push(item('retention-lowered', `${h.retentionLowered.home} keeps ${h.retentionLowered.days} days, under the others' ${h.retentionLowered.othersMin}; the export horizon follows the shortest`));
+    warn.push(item('retention-lowered', `${h.retentionLowered.home} keeps ${h.retentionLowered.days} days, under the others' ${h.retentionLowered.othersMin}; rows held only in its files fall due ${exportHorizonDays(h.retentionLowered.days)} days after their file's last write (a reminder: each row is measured against its own files' homes)`));
   }
   if (h.exportSegmentMissing > 0) warn.push(item('export-segment-missing', `${h.exportSegmentMissing} export mark(s) named a segment not on this box and were cleared`));
   if (h.journalSkipped > 0) warn.push(item('journal-record-skipped', `${h.journalSkipped} journal record(s) were skipped as malformed or of an unknown kind`));
@@ -3025,10 +3683,4029 @@ export function deriveHealth(h) {
   if (h.spoolNotDirectory || h.spoolNodesRefused > 0 || h.spoolDisplaced + h.spoolBlocked + h.spoolUnreadable > 0) {
     const parts = [];
     if (h.spoolNotDirectory) parts.push('spool/ is not a real directory (a link or a file stands there), so no hook spools a line and no pass drains one while it stands');
-    if (h.spoolNodesRefused > 0) parts.push(`${h.spoolNodesRefused} node(s) at spool/<id>.jsonl are not regular files (a FIFO, a link, a directory or any other non-regular node), so the hook spools no line for that id while one stands`);
+    if (h.spoolNodesRefused > 0) parts.push(`${h.spoolNodesRefused} node(s) at spool/<id>.jsonl are not regular files (${SPOOL_NODE_KINDS}), so the hook spools no line for that id while one stands`);
     if (h.spoolDisplaced + h.spoolBlocked > 0) parts.push(`${h.spoolDisplaced} spool file(s) set aside under .draining/planted/ and ${h.spoolBlocked} skipped drain(s) of a file whose sidecar name is blocked, because of entries planted in .draining/`);
     if (h.spoolUnreadable > 0) parts.push(`${h.spoolUnreadable} skipped drain(s) of a draining file or its sidecar the sweep could not read, whose id's later files wait behind it`);
     warn.push(item('spool-planted', parts.join('; ')));
   }
   return result();
+}
+
+// ===========================================================================
+// W1-B2 recall, Task 1: identity, scope and ids (spec §8.2, §6.1, §6.9,
+// §6.10, §8.4 describe, §8.6, §9.7). The CLI measures (the bounded tmux read,
+// the registry files) and these functions decide; none reads a file, a
+// process or the environment. Every registry fact arrives as a Presence, the
+// three states the store-open table already takes, so a file that exists but
+// cannot be read is never answered as absent (rev 3.2 review, IV5).
+// ===========================================================================
+
+/** The scope a read verb answers in (§8.2, the §8.3 header). Plan-chosen
+ *  spelling of the three kinds the spec's header names. */
+export const SCOPE_KINDS = Object.freeze(['family', 'project', 'workspace']);
+
+/** The fewest hex digits a displayed node id keeps after its `L` or `N`,
+ *  chosen (§6.1). Counted in hex digits so every display prefix passes the
+ *  card's grammar gate, `L[0-9a-f]{6,20}` (§8.6). Prefixes are unique within
+ *  the scope, never across it; `--json` always prints the full id. */
+export const NODE_ID_DISPLAY_MIN = 6;
+
+/** A full node id: `L` (leaf) or `N` (parent) plus 20 hex (§6.1). */
+export const HISTORY_NODE_ID_RE = /^[LN][0-9a-f]{20}$/;
+
+/** The directory under the history root that holds the eval control arm's
+ *  per-id files (§9.7). Spelled once; the W2 verb writes it, B2 only reads. */
+export const RECALL_OFF_DIR = 'recall-off';
+
+/** `tmux display-message` prints `#S`; ccd names every session `cc-<id>`, and
+ *  the hook requires the same prefix (spec §8.2). decideOpGate's pane test
+ *  spells the prefix too, for a different decision (an irreversible form). */
+const TMUX_SESSION_PREFIX = 'cc-';
+const PANE_RE = /^%[0-9]+$/;
+
+function refuseScope(reason) {
+  return { ok: false, rc: EXIT.REFUSED, reason };
+}
+
+/** The session's id from tmux (§8.2, D-4675 (history-identity-from-tmux)). The
+ *  caller ran `tmux display-message -p -t "$TMUX_PANE" '#S'` bounded at
+ *  TMUX_DEADLINE_MS, ALWAYS with `-t`, and passes what came back; `tmux` is
+ *  null when it never ran (no valid pane). A pane that is not `%<n>`, a run
+ *  that did not settle or failed, or a name that is not `cc-<something>`
+ *  answers `no-identity`; never "the most recent session". The stripped id
+ *  then passes idOk before any path is formed from it, else `bad-id`
+ *  (D-4170). */
+export function decideIdentity({ pane, tmux }) {
+  if (typeof pane !== 'string' || !PANE_RE.test(pane)) return refuseScope('no-identity');
+  if (tmux === null || tmux.settled !== true || tmux.status !== 0 || typeof tmux.stdout !== 'string') {
+    return refuseScope('no-identity');
+  }
+  const name = tmux.stdout.replace(/\r?\n$/, '');
+  if (!name.startsWith(TMUX_SESSION_PREFIX) || name.length === TMUX_SESSION_PREFIX.length) return refuseScope('no-identity');
+  const id = name.slice(TMUX_SESSION_PREFIX.length);
+  return idOk(id) ? { ok: true, id } : refuseScope('bad-id');
+}
+
+/** The family's generation (§8.2, D-4192): the
+ *  session's `CCRC_SESSION_GENERATION` when it has the uuid grammar, else
+ *  `$REG/<id>.generation` read-only when IT has the grammar, else the id's
+ *  newest family (§8.8: an unreadable or malformed file falls back too,
+ *  because the generation only narrows a scope the id already bounds). */
+export function resolveGeneration({ envGen, regGen }) {
+  if (typeof envGen === 'string' && UUID_RE.test(envGen)) return { value: envGen, via: 'env' };
+  if (regGen.state === 'value' && UUID_RE.test(regGen.value.trim())) return { value: regGen.value.trim(), via: 'registry' };
+  return { value: null, via: 'newest' };
+}
+
+/** The harness check every read verb runs after the identity (§6.10 item 4,
+ *  D-4679 (history-harness-unsupported-refused)). `$REG/<id>.harness` absent is
+ *  Claude Code, today's only harness, which is HARNESSES' first row; a value
+ *  with no HARNESS_TABLE row is `harness-unsupported`, never "not indexed
+ *  yet"; a file that exists but cannot be read is `harness-unreadable`, never
+ *  read as the default. */
+export function decideHarness(p) {
+  if (p.state === 'absent') return { ok: true, harness: HARNESSES[0] };
+  if (p.state !== 'value') return refuseScope('harness-unreadable');
+  const v = p.value.trim();
+  return Object.hasOwn(HARNESS_TABLE, v) ? { ok: true, harness: v } : refuseScope('harness-unsupported');
+}
+
+/** A registry file's trimmed text, or null when it holds none: absent, empty,
+ *  or unreadable. A decision that treats unreadable apart asks B1's
+ *  module-private `presenceUnreadable` (beside `decideStoreOpen`) first
+ *  (IV5), so this null never stands for two things it must tell apart. */
+const presenceText = (p) => (p !== null && p.state === 'value' && p.value.trim() !== '' ? p.value.trim() : null);
+
+/** Every scope decision a read verb takes (§8.2), in one place:
+ *  - the scope source is DATA (`SCOPE_SOURCES`, D-4167):
+ *    a source outside it is refused `no-identity`, never defaulted to tmux.
+ *    W1 holds `tmux` only; W2 adds `env` with the headless seam;
+ *  - `--project` with `--workspace`, or either with `--session`, is
+ *    `bad-args`: each names a different scope;
+ *  - `--session <id>` passes idOk (`bad-id`) and must share this session's
+ *    project: a `.project` on either side that exists but cannot be read is
+ *    `project-unreadable`; otherwise both must be present and equal, so an
+ *    absent or empty one, which can never be shown equal, is
+ *    `cross-project` like a different one (§8.2). Its generation is left to
+ *    the caller (null);
+ *  - `--project` needs this session's project (`project-unreadable`, absent
+ *    or empty folded in on purpose: REASONS has no absent word, and an
+ *    absent project widens nothing; D-4677 (history-recall-all-lanes));
+ *  - `--workspace` needs this session's workdir AND project; either
+ *    unreadable, absent or empty is `workspace-unreadable`, never a wider or
+ *    narrower scope (D-4676 (history-workspace-scope));
+ *  - otherwise the family (id, generation), the generation null when the
+ *    caller must take the id's newest family. */
+export function decideScope(i) {
+  if (!SCOPE_SOURCES.includes(i.source)) return refuseScope('no-identity');
+  if (!idOk(i.id)) return refuseScope('bad-id');
+  const { project, workspace, session } = i.flags;
+  if ((project ? 1 : 0) + (workspace ? 1 : 0) + (session !== null ? 1 : 0) > 1) return refuseScope('bad-args');
+  const ownProject = presenceText(i.reg.project);
+  const verdict = (kind, o) => ({
+    ok: true, kind, source: i.source, id: i.id, generation: i.generation.value, project: ownProject, workdir: null, ...o,
+  });
+  if (session !== null) {
+    if (!idOk(session)) return refuseScope('bad-id');
+    const theirsFile = i.reg.sessionProject ?? { state: 'absent' };
+    if (presenceUnreadable(i.reg.project) || presenceUnreadable(theirsFile)) return refuseScope('project-unreadable');
+    const theirs = presenceText(theirsFile);
+    if (ownProject === null || theirs !== ownProject) return refuseScope('cross-project');
+    return verdict('family', { id: session, generation: session === i.id ? i.generation.value : null });
+  }
+  if (project) {
+    if (ownProject === null) return refuseScope('project-unreadable');
+    return verdict('project', {});
+  }
+  if (workspace) {
+    const workdir = presenceText(i.reg.workdir);
+    if (workdir === null || ownProject === null) return refuseScope('workspace-unreadable');
+    return verdict('workspace', { workdir });
+  }
+  return verdict('family', {});
+}
+
+/** The shortest prefix of each id, its letter plus at least
+ *  NODE_ID_DISPLAY_MIN hex digits, that no other id in THE SAME SET shares (§6.1: unique within the scope). The
+ *  sorted neighbours bound it: an id needs one char past its longest common
+ *  prefix with either neighbour. */
+export function displayPrefixes(ids) {
+  const sorted = [...new Set(ids)].sort();
+  const lcp = (a, b) => {
+    let n = 0;
+    while (n < a.length && n < b.length && a[n] === b[n]) n += 1;
+    return n;
+  };
+  const out = new Map();
+  sorted.forEach((id, k) => {
+    const shared = Math.max(k > 0 ? lcp(id, sorted[k - 1]) : 0, k + 1 < sorted.length ? lcp(id, sorted[k + 1]) : 0);
+    out.set(id, id.slice(0, Math.min(id.length, Math.max(1 + NODE_ID_DISPLAY_MIN, shared + 1))));
+  });
+  return out;
+}
+
+/** An id or display prefix the session typed, resolved INSIDE its scope
+ *  (§8.2, RV19; D-4678 (history-scope-on-every-verb)): exactly one in-scope match
+ *  wins even when ids outside the scope share the prefix; none inside but
+ *  some outside is `out-of-scope` (exit 2), never `not-found` (exit 3);
+ *  several inside is `ambiguous`, which the CLI answers exit 2 `bad-args`
+ *  with the candidates as a hint. */
+export function resolveScopedId({ wanted, inScope, outOfScope }) {
+  if (typeof wanted !== 'string' || !/^[LN][0-9a-f]{6,20}$/.test(wanted)) return { kind: 'bad' };
+  const hits = [...new Set(inScope.filter((id) => id.startsWith(wanted)))];
+  if (hits.length === 1) return { kind: 'ok', id: hits[0] };
+  if (hits.length > 1) return { kind: 'ambiguous', candidates: hits.sort() };
+  return outOfScope.some((id) => id.startsWith(wanted)) ? { kind: 'out-of-scope' } : { kind: 'not-found' };
+}
+
+// derived from lossless-claw src/tools/lcm-describe-id.ts @ e05d8d3, MIT, see LICENSE.lossless-claw
+const NODE_BARE_RE = /^[LN][0-9a-f]{6,20}…?$/;
+const NODE_TOKEN_RE = /(?<![A-Za-z0-9])[LN][0-9a-f]{6,20}(?![A-Za-z0-9])/g;
+const NODE_LOOSE_RE = /(?<![A-Za-z0-9])[LN][0-9A-Fa-f]{6,}(?![A-Za-z0-9])/i;
+const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+const NODE_CARD_RE = new RegExp(`^${escapeRe(CARD_PREFIX)}node (L[0-9a-f]{6,20})…?(?=\\s|$)`);
+
+/** `describe <id | pasted line>` (§8.4, §11 P28): a bare id or display
+ *  prefix (the card's trailing ellipsis tolerated), or a pasted card line,
+ *  whose structural id is the one right after `History: node ` (§8.6: the
+ *  same node is named again as the describe argument, and a parent beside
+ *  it, so counting mentions would refuse every card line). Free text is
+ *  refused rather than guessed: several distinct ids, an uppercase or
+ *  malformed one, or one id in prose each answer an error the CLI prints as
+ *  exit 2 `bad-args`. An all-zero body is never an id. The error text echoes
+ *  the input, so the CLI redacts it like any recalled field. */
+export function extractNodeId(raw) {
+  const trimmed = String(raw).trim();
+  if (NODE_BARE_RE.test(trimmed)) return validNodeId(trimmed.replace(/…$/, ''));
+  const card = NODE_CARD_RE.exec(trimmed);
+  if (card !== null) return validNodeId(card[1]);
+  const tokens = [...new Set(trimmed.match(NODE_TOKEN_RE) ?? [])];
+  if (tokens.length > 1) {
+    return { ok: false, error: `input names several node ids (${tokens.join(', ')}); give one bare id or one pasted ${CARD_PREFIX.trim()} line` };
+  }
+  const loose = NODE_LOOSE_RE.exec(trimmed)?.[0];
+  if (loose === undefined) return { ok: false, error: `not a node id: ${raw}` };
+  const checked = validNodeId(loose);
+  if (!checked.ok) return checked;
+  if (!/^[LN][0-9a-f]{6,20}$/.test(loose)) {
+    return { ok: false, error: `malformed node id: ${loose}; an id is L or N plus 6 to 20 lowercase hex` };
+  }
+  return {
+    ok: false, error: `not a node id or a card line: ${raw}`,
+    hint: `give the bare id (${loose}) or paste the whole ${CARD_PREFIX.trim()} line`,
+  };
+}
+
+function validNodeId(id) {
+  return /^[LN]0+$/.test(id) ? { ok: false, error: `a node id cannot be all zeros: ${id}` } : { ok: true, id };
+}
+
+/** `~/.ccrc/history/recall-off/<id>` (§9.7). The id passes idOk BEFORE the
+ *  path exists, so `../x` can never name a file outside the store
+ *  (D-4170, C66). */
+export function recallOffPath(home, id) {
+  if (!idOk(id)) throw new TypeError(`recallOffPath: not a session id: ${JSON.stringify(id)}`);
+  return `${historyPaths(home).root}/${RECALL_OFF_DIR}/${id}`;
+}
+
+/** Whether `recall-off/<id>` holds this family (§9.7,
+ *  D-4680 (history-recall-off-generation)). Its content is the generation it was
+ *  assigned to (`''` for a legacy family): equal to the resolved generation
+ *  is `off` (exit 8, counted); another generation is `stale` (the id was
+ *  purged and reused: recall proceeds and the drain counts
+ *  `recall_off_stale`); absent is `none`. A file that exists but cannot be
+ *  read is `off`: the id WAS assigned an arm, so answering it as the
+ *  treatment arm would mix the eval's arms, while exit 8 only withholds
+ *  recall. `generation` is the RESOLVED family's: when resolveGeneration
+ *  answers `via: 'newest'`, the caller finds the id's newest family first
+ *  and passes ITS generation: `''` only when that family is legacy or the
+ *  store holds no family of the id, never resolveGeneration's unresolved
+ *  `value ?? ''` before the family is known (§8.2, §8.8, §9.7). */
+export function decideRecallOff({ file, generation }) {
+  if (file.state === 'absent') return 'none';
+  if (file.state !== 'value') return 'off';
+  return file.value.trim() === generation ? 'off' : 'stale';
+}
+
+
+// ===========================================================================
+// W1-B2 recall, Task 2: search primitives (spec §8.4 grep, §11 V2, P1, P8,
+// P9, P10). Pure text and SQL-fragment decisions: the CLI runs the query and
+// the regex worker runs the match. Task 1's module-private `escapeRe` is
+// reused here.
+// ===========================================================================
+
+// derived from lossless-claw src/store/fts5-sanitize.ts @ e05d8d3, MIT, see LICENSE.lossless-claw
+/** The FTS5 MATCH text for plain `grep <words>` (§8.4, §11 P1). Every token
+ *  is quoted, so FTS5 operators (`OR`, `NOT`, `NEAR(`), column filters and
+ *  punctuation are literal text, and the terms are joined by spaces, which
+ *  FTS5 reads as AND. A quoted phrase stays one phrase. ccrc's change: a token
+ *  or phrase ENDING in `*` (inside or right after its closing quote) becomes
+ *  a quoted term followed by `*`, an FTS5 prefix query, so `a0860d1f*` finds a
+ *  SHA by its prefix with no trigram index; upstream kept the star inside the
+ *  quotes, where it matches nothing. Porter stems a prefix query too, so a
+ *  prefix cut inside a word's stem can miss (`runn*` does not find
+ *  `running`, measured); a hex prefix is never stemmed. An empty query is
+ *  `""`, which matches nothing and never errors. */
+export function sanitizeFtsQuery(raw) {
+  const text = String(raw);
+  const parts = [];
+  const bare = (chunk) => {
+    for (const t of chunk.split(/\s+/).filter(Boolean)) parts.push(quoteFtsTerm(t.replace(/"/g, '')));
+  };
+  const phraseRe = /"([^"]+)"(\*?)/g;
+  let last = 0;
+  for (let m = phraseRe.exec(text); m !== null; m = phraseRe.exec(text)) {
+    bare(text.slice(last, m.index));
+    const phrase = m[1].replace(/"/g, '').trim();
+    if (phrase) parts.push(quoteFtsTerm(m[2] === '*' ? `${phrase}*` : phrase));
+    last = m.index + m[0].length;
+  }
+  bare(text.slice(last));
+  return parts.length > 0 ? parts.join(' ') : '""';
+}
+
+/** One quoted FTS5 term. A trailing run of stars moves outside the quotes as
+ *  one star; a term that is nothing but stars stays a quoted literal. */
+function quoteFtsTerm(t) {
+  const m = /^([\s\S]*?[^*\s])\s*\*+$/.exec(t);
+  return m === null ? `"${t}"` : `"${m[1]}"*`;
+}
+
+// derived from lossless-claw src/store/full-text-fallback.ts @ e05d8d3, MIT, see LICENSE.lossless-claw
+const RAW_TERM_RE = /"([^"]+)"(\*?)|(\S+)/g;
+const EDGE_PUNCTUATION_RE = /^[`'"()[\]{}<>.,:;!?*_+=|\\/-]+|[`'"()[\]{}<>.,:;!?*_+=|\\/-]+$/g;
+
+function normalizeQueryTerm(raw) {
+  return typeof raw === 'string' ? stripQueryEdges(raw).toLowerCase() : '';
+}
+
+/** The edge-stripped term with its raw code points: no case conversion, normalization or other folding, which the
+ *  snippet locator leaves to its frozen unicode61 helpers (W1-B2 Task 12 breaker correction, F2). */
+function stripQueryEdges(raw) {
+  return typeof raw === 'string' ? raw.trim().replace(EDGE_PUNCTUATION_RE, '') : '';
+}
+
+/** Whether a token (or a phrase's inside) ends in the FTS5 prefix marker exactly as quoteFtsTerm reads it: a star run
+ *  after at least one character that is neither a star nor a space. */
+const PREFIX_MARKED_RE = /[^*\s]\s*\*+$/;
+
+/** The one lexer behind queryTerms and snippetTerms, the raw query's words as sanitizeFtsQuery splits them: each
+ *  normalized term with whether the query made it a prefix (a star right after a phrase's closing quote, or
+ *  ending the token or the phrase's inside, which is what sanitizeFtsQuery turns into an FTS5 prefix query),
+ *  once per (term, prefix) pair. */
+function lexQueryTerms(raw, normalize = normalizeQueryTerm) {
+  const text = String(raw);
+  const out = [];
+  const add = (term, prefix) => {
+    if (term.length > 0 && !out.some((x) => x.term === term && x.prefix === prefix)) out.push({ term, prefix });
+  };
+  for (const m of text.matchAll(RAW_TERM_RE)) {
+    const inner = m[1] ?? m[3] ?? '';
+    add(normalize(inner), m[2] === '*' || PREFIX_MARKED_RE.test(inner.replace(/"/g, '')));
+  }
+  if (out.length === 0) add(normalize(text), false);
+  return out;
+}
+
+/** The plain words of a query, lowercased, edge punctuation (a trailing `*`
+ *  included) stripped, each once: the snippet window's needles (§11 P9). */
+export function queryTerms(raw) {
+  return [...new Set(lexQueryTerms(raw).map((x) => x.term))];
+}
+
+/** queryTerms for snippet localization: the same words, each once (by raw code points: host case conversion would
+ *  turn U+104B0 into U+104D8, which unicode61 keeps apart, so every fold is left to snippetSpan), but a term the query made a prefix keeps one
+ *  terminal `*`, which snippetSpan reads as FTS5's prefix marker (W1-B2 Task 12 fix round 1, finding F1). queryTerms
+ *  strips that star for its display callers, so grep's snippet cannot be located from it. `stud` and `stud*` are
+ *  different needles and both stay. */
+export function snippetTerms(raw) {
+  return lexQueryTerms(raw, stripQueryEdges).map(({ term, prefix }) => (prefix ? `${term}*` : term));
+}
+
+// derived from lossless-claw src/tools/lcm-grep-tool.ts @ e05d8d3, MIT, see LICENSE.lossless-claw
+/** Clear regex syntax in a plain query, which would make FTS5 miss silently
+ *  (§8.4, §11 V2): grep refuses it with exit 2 `regex-syntax` and a hint,
+ *  WITHOUT querying. Conservative on purpose, not a parser: nothing inside
+ *  double quotes counts, `.` counts only before `*`, `+` or `?`, and `^` or
+ *  `$` only at a word edge. */
+export function regexSyntaxIn(pattern) {
+  let inQuote = false;
+  let escaped = false;
+  for (let index = 0; index < pattern.length; index += 1) {
+    const char = pattern[index];
+    const next = pattern[index + 1];
+    if (escaped) {
+      escaped = false;
+      if (!inQuote && char && /[bBdDsSwW]/.test(char)) return 'regex character escape';
+      continue;
+    }
+    if (char === '\\') {
+      escaped = true;
+      continue;
+    }
+    if (char === '"') {
+      inQuote = !inQuote;
+      continue;
+    }
+    if (inQuote) continue;
+    if (char === '|') return 'alternation';
+    if (char === '.' && (next === '*' || next === '+' || next === '?')) return 'wildcard';
+    if (char === '[') {
+      const closing = pattern.indexOf(']', index + 1);
+      if (closing > index + 1) return 'character class';
+    }
+    if (char === '^' && (index === 0 || /\s/.test(pattern[index - 1] ?? ''))) return 'anchor';
+    if (char === '$' && (index === pattern.length - 1 || /\s/.test(next ?? ''))) return 'anchor';
+  }
+  return null;
+}
+
+/** The `hint:` line that goes with exit 2 `regex-syntax`. The caller redacts
+ *  and escapes the echoed pattern like any field it prints. */
+export function regexSyntaxHint(pattern, syntax) {
+  return `hint: grep searches words, not a regex (${syntax}): use --regex for \`${pattern}\`, or rewrite it as 1-3 literal terms or one quoted phrase`;
+}
+
+/** The longest `--regex` pattern admitted (upstream's bound, §11 P10). */
+export const REGEX_MAX_LEN = 500;
+/** The regex worker's wall-clock kill, chosen (§8.4). */
+export const REGEX_BUDGET_MS = 5000;
+
+// derived from lossless-claw src/store/search-regex.ts @ e05d8d3, MIT, see LICENSE.lossless-claw
+const REGEX_QUANTIFIER = String.raw`(?:[+*?]|\{\d+(?:,\d*)?\})`;
+const NESTED_QUANTIFIER_RE = new RegExp(`${REGEX_QUANTIFIER}\\)${REGEX_QUANTIFIER}`);
+const QUANTIFIED_ALTERNATION_RE = /\((?:[^()\\]|\\.)*\|(?:[^()\\]|\\.)*\)(?:[+*?]|\{\d)/;
+
+/** The `--regex` guard (§8.4, §11 P10): a DISCRIMINATED refusal, never a
+ *  null that reads as "no match". `too-long` past REGEX_MAX_LEN; `invalid`
+ *  when it does not compile; `nested` for upstream's two shapes and for
+ *  ccrc's structural rule (`repeatsVariableGroup`), which refuted candidate 1
+ *  needs: upstream admits `(.*a){8}$`, which backtracks for seconds on 30
+ *  characters. A refused pattern spawns no worker. The worker compiles
+ *  `source` with no flags. */
+export function guardRegex(pattern) {
+  if (typeof pattern !== 'string') return { ok: false, why: 'invalid' };
+  if (pattern.length > REGEX_MAX_LEN) return { ok: false, why: 'too-long' };
+  try {
+    new RegExp(pattern);
+  } catch {
+    return { ok: false, why: 'invalid' };
+  }
+  if (NESTED_QUANTIFIER_RE.test(pattern) || QUANTIFIED_ALTERNATION_RE.test(pattern)) return { ok: false, why: 'nested' };
+  if (repeatsVariableGroup(pattern)) return { ok: false, why: 'nested' };
+  return { ok: true, source: pattern };
+}
+
+/** A quantifier starting at `k`, as {len, min, max}, or null. */
+function regexQuantifierAt(p, k) {
+  const c = p[k];
+  if (c === '*') return { len: 1, min: 0, max: Infinity };
+  if (c === '+') return { len: 1, min: 1, max: Infinity };
+  if (c === '?') return { len: 1, min: 0, max: 1 };
+  if (c !== '{') return null;
+  const m = /^\{(\d+)(?:(,)(\d*))?\}/.exec(p.slice(k, k + 24));
+  if (m === null) return null;
+  const min = Number(m[1]);
+  const max = m[2] === undefined ? min : m[3] === '' ? Infinity : Number(m[3]);
+  return { len: m[0].length, min, max };
+}
+
+/** ccrc's structural ReDoS rule: a group repeated more than once (a
+ *  quantifier whose maximum exceeds 1) whose body can match in more than one
+ *  way, through a variable quantifier or an alternation anywhere inside it,
+ *  nested groups included. Escapes and character classes are skipped, and a
+ *  group's own `(?:`, `(?=`, `(?<name>` prefix is not a quantifier. It
+ *  refuses some harmless patterns (`(a|b){2}`) to refuse every catastrophic
+ *  one of that shape; the refusal names `--regex` and the pattern, so the
+ *  session rewrites it. */
+function repeatsVariableGroup(p) {
+  const open = [];
+  let i = 0;
+  const skipQuantifier = (q) => {
+    i += q.len;
+    if (p[i] === '?') i += 1;
+  };
+  while (i < p.length) {
+    const c = p[i];
+    if (c === '\\') { i += 2; continue; }
+    if (c === '[') {
+      i += 1;
+      while (i < p.length && p[i] !== ']') i += p[i] === '\\' ? 2 : 1;
+      i += 1;
+      continue;
+    }
+    if (c === '(') {
+      open.push(false);
+      i += 1;
+      if (p[i] === '?') {
+        i += 1;
+        if (p[i] === '<' && p[i + 1] !== '=' && p[i + 1] !== '!') {
+          while (i < p.length && p[i] !== '>') i += 1;
+          i += 1;
+        } else {
+          i += p[i] === '<' ? 2 : 1;
+        }
+      }
+      continue;
+    }
+    if (c === '|') {
+      if (open.length > 0) open[open.length - 1] = true;
+      i += 1;
+      continue;
+    }
+    if (c === ')') {
+      const variable = open.pop() === true;
+      i += 1;
+      const q = regexQuantifierAt(p, i);
+      if (q !== null && q.max > 1 && variable) return true;
+      if (open.length > 0 && (variable || (q !== null && q.min !== q.max))) open[open.length - 1] = true;
+      if (q !== null) skipQuantifier(q);
+      continue;
+    }
+    const q = regexQuantifierAt(p, i);
+    if (q !== null) {
+      if (q.min !== q.max && open.length > 0) open[open.length - 1] = true;
+      skipQuantifier(q);
+      continue;
+    }
+    i += 1;
+  }
+  return false;
+}
+
+/** The FTS prefilter `--regex` runs before its worker (§8.4), or null for a
+ *  full scan of the scope. It must never drop a true hit, so it names only a
+ *  WHOLE-WORD literal every match contains: a top-level run of 3 or more
+ *  ASCII letters or digits, each unquantified, bounded on both sides by an
+ *  unquantified anchor (`^`, `$`), literal whitespace (` `, `\s`, `\t`,
+ *  `\n`, `\r`) or literal ASCII punctuation, in a pattern with no top-level
+ *  alternation. Those bounds are FTS5 separators, so the run is one whole
+ *  token, and an exact-token query (no star) finds it: porter stems the query
+ *  and the index alike. A prefix query (`"runn"*` misses `running`) and
+ *  `\b` (which can sit beside a non-ASCII letter FTS5 keeps in the token)
+ *  never make one. The longest such run wins; FTS5 folds case, so the
+ *  prefilter is a superset of a case-sensitive pattern. */
+export function regexPrefilter(pattern) {
+  const atoms = [];
+  for (let i = 0; i < pattern.length;) {
+    const c = pattern[i];
+    if (c === '|') return null;
+    if (c === '\\') {
+      const n = pattern[i + 1] ?? '';
+      // A named backreference is one regex atom, not the literal group name.
+      // Treating `<name>` as word characters would prefilter away its matches.
+      if (n === 'k' && pattern[i + 2] === '<') {
+        const close = pattern.indexOf('>', i + 3);
+        if (close === -1) return null;
+        atoms.push({ t: 'other' });
+        i = close + 1;
+      } else {
+        atoms.push(/[stnr]/.test(n) || /[!-/:-@[-`{-~]/.test(n) ? { t: 'sep' } : { t: 'other' });
+        i += 2;
+      }
+    } else if (c === '[') {
+      i += 1;
+      while (i < pattern.length && pattern[i] !== ']') i += pattern[i] === '\\' ? 2 : 1;
+      i += 1;
+      atoms.push({ t: 'other' });
+    } else if (c === '(') {
+      let depth = 0;
+      for (; i < pattern.length; i += 1) {
+        if (pattern[i] === '\\') { i += 1; continue; }
+        if (pattern[i] === '[') {
+          i += 1;
+          while (i < pattern.length && pattern[i] !== ']') i += pattern[i] === '\\' ? 2 : 1;
+          continue;
+        }
+        if (pattern[i] === '(') depth += 1;
+        if (pattern[i] === ')' && --depth === 0) break;
+      }
+      i += 1;
+      atoms.push({ t: 'other' });
+    } else if (regexQuantifierAt(pattern, i) !== null) {
+      const q = regexQuantifierAt(pattern, i);
+      if (atoms.length > 0) atoms[atoms.length - 1] = { t: 'other' };
+      i += q.len;
+      if (pattern[i] === '?') i += 1;
+    } else {
+      if (/[A-Za-z0-9]/.test(c)) atoms.push({ t: 'word', ch: c });
+      else if (c === '^' || c === '$' || c === ' ' || (/[!-/:-@[-`{-~]/.test(c) && c !== '.')) atoms.push({ t: 'sep' });
+      else atoms.push({ t: 'other' });
+      i += 1;
+    }
+  }
+  let best = '';
+  for (let k = 0; k < atoms.length;) {
+    if (atoms[k].t !== 'word') { k += 1; continue; }
+    let e = k;
+    while (e < atoms.length && atoms[e].t === 'word') e += 1;
+    const run = atoms.slice(k, e).map((a) => a.ch).join('');
+    const bounded = k > 0 && atoms[k - 1].t === 'sep' && e < atoms.length && atoms[e].t === 'sep';
+    if (bounded && run.length >= 3 && run.length > best.length) best = run;
+    k = e;
+  }
+  return best === '' ? null : `"${best}"`;
+}
+
+/** The sorts `grep --sort` takes (§8.4); `recency` is the default. */
+export const GREP_SORTS = Object.freeze(['recency', 'relevance', 'hybrid']);
+/** `--limit` (§8.4): at most 100; 20 when not given, chosen. */
+export const GREP_LIMIT_MAX = 100;
+export const GREP_LIMIT_DEFAULT = 20;
+/** Every grep sort ranks and pages over the top 2,000 in-scope matches; §8.4 gives the pool to hybrid only (D-4681 (history-grep-pages-end-at-rank-pool)). */
+export const RANK_POOL = 2000;
+/** The hybrid sort's age decay per hour: upstream's AGE_DECAY_RATE (§11 P8). */
+export const HYBRID_AGE_DECAY = 0.001;
+
+// derived from lossless-claw src/store/full-text-sort.ts @ e05d8d3, MIT, see LICENSE.lossless-claw
+/** The ORDER BY of a ranked grep query (§8.4, §11 P8). `rank` is FTS5's
+ *  BM25, lower is better. `hybrid` divides it by an age term in HOURS taken
+ *  from the integer `ts_ms` and the statement's bound `:now_ms` parameter:
+ *  upstream's `julianday(<ts>)` is NULL for an integer (measured, refuted
+ *  candidate 2), which silently degrades the sort to recency. A NULL
+ *  timestamp counts as the oldest, so it sorts last, never first; a
+ *  timestamp ahead of the clock ages 0. `tsExpr` is interpolated into SQL,
+ *  so only a (qualified) column name is accepted. */
+export function ftsOrderBy(sort, tsExpr) {
+  if (typeof tsExpr !== 'string' || !/^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)?$/.test(tsExpr)) {
+    throw new TypeError(`ftsOrderBy: not a column name: ${JSON.stringify(tsExpr)}`);
+  }
+  switch (sort) {
+    case 'recency':
+      return `${tsExpr} DESC`;
+    case 'relevance':
+      return `rank ASC, ${tsExpr} DESC`;
+    case 'hybrid':
+      return `(rank / (1 + (MAX(0, :now_ms - COALESCE(${tsExpr}, 0)) / 3600000.0) * ${HYBRID_AGE_DECAY})) ASC, ${tsExpr} DESC`;
+    default:
+      throw new TypeError(`ftsOrderBy: sort outside GREP_SORTS: ${String(sort)}`);
+  }
+}
+
+/** FTS5's Porter stemmer, reproduced for snippet candidate selection. The FTS
+ *  tokenizer applies unicode61 first; this function receives its lowercased
+ *  ASCII word portion, so non-ASCII words conservatively remain literal. */
+function porterStem(word) {
+  if (!/^[a-z]{3,}$/.test(word)) return word;
+  let stem = word;
+  const isVowel = (i) => 'aeiou'.includes(stem[i]) || (stem[i] === 'y' && i > 0 && !isVowel(i - 1));
+  const measure = (end = stem.length) => {
+    let pairs = 0;
+    let priorVowel = false;
+    for (let i = 0; i < end; i += 1) {
+      const currentVowel = isVowel(i);
+      if (priorVowel && !currentVowel) pairs += 1;
+      priorVowel = currentVowel;
+    }
+    return pairs;
+  };
+  const hasVowel = (end) => {
+    for (let i = 0; i < end; i += 1) if (isVowel(i)) return true;
+    return false;
+  };
+  const cvc = (end) => end >= 3 && !isVowel(end - 3) && isVowel(end - 2) && !isVowel(end - 1) && !'wxy'.includes(stem[end - 1]);
+  const ends = (suffix) => stem.endsWith(suffix);
+  const replace = (suffix, replacement) => { stem = `${stem.slice(0, -suffix.length)}${replacement}`; };
+
+  if (ends('sses')) replace('sses', 'ss');
+  else if (ends('ies')) replace('ies', 'i');
+  else if (!ends('ss') && ends('s')) replace('s', '');
+
+  if (ends('eed')) {
+    if (measure(stem.length - 3) > 0) replace('eed', 'ee');
+  } else {
+    const suffix = ends('ed') ? 'ed' : ends('ing') ? 'ing' : null;
+    if (suffix !== null && hasVowel(stem.length - suffix.length)) {
+      stem = stem.slice(0, -suffix.length);
+      if (ends('at')) replace('at', 'ate');
+      else if (ends('bl')) replace('bl', 'ble');
+      else if (ends('iz')) replace('iz', 'ize');
+      else if (stem.length >= 2 && stem.at(-1) === stem.at(-2) && !isVowel(stem.length - 1) && !'lsz'.includes(stem.at(-1))) stem = stem.slice(0, -1);
+      else if (measure() === 1 && cvc(stem.length)) stem += 'e';
+    }
+  }
+  if (ends('y') && hasVowel(stem.length - 1)) replace('y', 'i');
+
+  const step2 = {
+    a: [['ational', 'ate'], ['tional', 'tion']],
+    c: [['enci', 'ence'], ['anci', 'ance']], e: [['izer', 'ize']], g: [['logi', 'log']],
+    l: [['bli', 'ble'], ['alli', 'al'], ['entli', 'ent'], ['eli', 'e'], ['ousli', 'ous']],
+    o: [['ization', 'ize'], ['ation', 'ate'], ['ator', 'ate']],
+    s: [['alism', 'al'], ['iveness', 'ive'], ['fulness', 'ful'], ['ousness', 'ous']],
+    t: [['aliti', 'al'], ['iviti', 'ive'], ['biliti', 'ble']],
+  };
+  const step3 = {
+    a: [['ical', 'ic']], s: [['ness', '']], t: [['icate', 'ic'], ['iciti', 'ic']],
+    u: [['ful', '']], v: [['ative', '']], z: [['alize', 'al']],
+  };
+  for (const table of [step2, step3]) {
+    const rules = table[stem.at(-2)];
+    if (rules === undefined) continue;
+    for (const [suffix, replacement] of rules) {
+      if (!ends(suffix)) continue;
+      if (measure(stem.length - suffix.length) > 0) replace(suffix, replacement);
+      break;
+    }
+  }
+  for (const suffix of ['al', 'ance', 'ence', 'er', 'ic', 'able', 'ible', 'ant', 'ement', 'ment', 'ent', 'ion', 'ou', 'ism', 'ate', 'iti', 'ous', 'ive', 'ize']) {
+    if (!ends(suffix)) continue;
+    const end = stem.length - suffix.length;
+    if (measure(end) > 1 && (suffix !== 'ion' || stem[end - 1] === 's' || stem[end - 1] === 't')) stem = stem.slice(0, end);
+    break;
+  }
+  if (ends('e')) {
+    const end = stem.length - 1;
+    if (measure(end) > 1 || (measure(end) === 1 && !cvc(end))) stem = stem.slice(0, end);
+  } else if (ends('ll') && measure(stem.length - 1) > 1) {
+    stem = stem.slice(0, -1);
+  }
+  return stem;
+}
+
+/** The combining marks FTS5 unicode61 drops inside a token at remove_diacritics 1, the default B1's `porter unicode61`
+ *  tables use: U+0300-0304, U+0306-030C, U+030F, U+0311, U+031B, U+0323-0328, U+032D-032E, U+0330-0331. Measured
+ *  against node:sqlite on every code point U+0080..U+2FFFF (the case `beltFold is unicode61's own fold`); every other
+ *  mark is a boundary to unicode61, so it is one to the belt and to the snippet locator (Task 12 fix round 3, F2). The
+ *  ONE definition: beltFold, foldToken and the token scanner below all read it. */
+const isDroppedMark = (c) => (c >= 0x300 && c <= 0x304) || (c >= 0x306 && c <= 0x30c) || c === 0x30f || c === 0x311
+  || c === 0x31b || (c >= 0x323 && c <= 0x328) || c === 0x32d || c === 0x32e || c === 0x330 || c === 0x331;
+
+/** The Unicode61 policy FTS5's `porter unicode61` tables (remove_diacritics=1, the default B1 uses) apply to one code point,
+ *  FROZEN here as two generated tables, so the snippet locator reads the same token membership and the same fold as
+ *  SQLite does on every host: no `\p{L}`, `toLowerCase`, `toUpperCase`, `normalize` or any other host Unicode data is consulted
+ *  (they disagree with SQLite's table in both directions: Task 12 fix round 4, F2). Provenance: SQLite's public-domain,
+ *  machine-generated `ext/fts5/fts5_unicode2.c` (the copy read: 780 lines, sha256 b2defbe5df532c8fa646f8e4d3044f00cd59c1d3ffe715e6ca49ae7657a72308),
+ *  ported once, outside this tree, into a scratch generator and run over every non-surrogate code point U+0000..U+10FFFF.
+ *  Generation semantics: a code point is a TOKEN character iff the default tokenchars `L* N* Co` select its
+ *  `sqlite3Fts5UnicodeCategory` (the unmapped category 0 included, which is why unassigned and private-use code points tokenize),
+ *  except U+0000 (never a token) and U+FFFE / U+FFFF (the UTF-8 reader turns them into U+FFFD, a symbol); its FOLD is
+ *  `sqlite3Fts5UnicodeFold(cp, 1)`: ASCII A-Z + 32; the case-fold entries of that function (`aEntry`, `aiOff`; none above U+FFFF
+ *  but U+10400-U+10427 + 40); then, below U+10000, `fts5_remove_diacritic` in mode 1 (the simple cases only). The 25 marks
+ *  `isDroppedMark` names are not token characters (they continue one and fold to nothing). Cross-checked against runtime
+ *  node:sqlite (SQLite 3.51.2): zero mismatches in membership or folded term over all 1,112,064 non-surrogate code points,
+ *  and the test file does that again on every run, from SQLite itself, never from these arrays.
+ *  COUNTS: 1,104,042 token code points in 403 ranges; 1,218 token code points fold to a different single code point, in 532
+ *  rules (436 of them one code point); no token folds to several code points or to nothing.
+ *  INVARIANTS (the lookups' binary searches rely on them): both tables are flat, sorted ascending by their first field and
+ *  non-overlapping; TOKEN_RANGES holds [lo, hi] pairs, inclusive, each maximal over the non-surrogate code points (the surrogate block
+ *  U+D800-U+DFFF is a gap that is not a character, so a range stops at U+D7FF and the next starts at U+E000) and none touching a surrogate; FOLD_RULES holds [start, end, step, delta] quads: the rule folds start, start + step, ... up to end
+ *  to code point + delta, step >= 1, delta != 0, and every code point a rule folds is a token character. */
+const UNICODE61_TOKEN_RANGES = [
+  0x30,0x39, 0x41,0x5a, 0x61,0x7a, 0xaa,0xaa, 0xb2,0xb3, 0xb5,0xb5, 0xb9,0xba, 0xbc,0xbe,
+  0xc0,0xd6, 0xd8,0xf6, 0xf8,0x2c1, 0x2c6,0x2d1, 0x2e0,0x2e4, 0x2ec,0x2ec, 0x2ee,0x2ee, 0x370,0x374,
+  0x376,0x37d, 0x37f,0x383, 0x386,0x386, 0x388,0x3f5, 0x3f7,0x481, 0x48a,0x559, 0x560,0x588, 0x58b,0x58e,
+  0x590,0x590, 0x5c8,0x5f2, 0x5f5,0x5ff, 0x605,0x605, 0x61c,0x61d, 0x620,0x64a, 0x660,0x669, 0x66e,0x66f,
+  0x671,0x6d3, 0x6d5,0x6d5, 0x6e5,0x6e6, 0x6ee,0x6fc, 0x6ff,0x6ff, 0x70e,0x70e, 0x710,0x710, 0x712,0x72f,
+  0x74b,0x7a5, 0x7b1,0x7ea, 0x7f4,0x7f5, 0x7fa,0x815, 0x81a,0x81a, 0x824,0x824, 0x828,0x828, 0x82e,0x82f,
+  0x83f,0x858, 0x85c,0x85d, 0x85f,0x8e3, 0x8ff,0x8ff, 0x904,0x939, 0x93d,0x93d, 0x950,0x950, 0x958,0x961,
+  0x966,0x96f, 0x971,0x980, 0x984,0x9bb, 0x9bd,0x9bd, 0x9c5,0x9c6, 0x9c9,0x9ca, 0x9ce,0x9d6, 0x9d8,0x9e1,
+  0x9e4,0x9f1, 0x9f4,0x9f9, 0x9fc,0xa00, 0xa04,0xa3b, 0xa3d,0xa3d, 0xa43,0xa46, 0xa49,0xa4a, 0xa4e,0xa50,
+  0xa52,0xa6f, 0xa72,0xa74, 0xa76,0xa80, 0xa84,0xabb, 0xabd,0xabd, 0xac6,0xac6, 0xaca,0xaca, 0xace,0xae1,
+  0xae4,0xaef, 0xaf2,0xb00, 0xb04,0xb3b, 0xb3d,0xb3d, 0xb45,0xb46, 0xb49,0xb4a, 0xb4e,0xb55, 0xb58,0xb61,
+  0xb64,0xb6f, 0xb71,0xb81, 0xb83,0xbbd, 0xbc3,0xbc5, 0xbc9,0xbc9, 0xbce,0xbd6, 0xbd8,0xbf2, 0xbfb,0xc00,
+  0xc04,0xc3d, 0xc45,0xc45, 0xc49,0xc49, 0xc4e,0xc54, 0xc57,0xc61, 0xc64,0xc7e, 0xc80,0xc81, 0xc84,0xcbb,
+  0xcbd,0xcbd, 0xcc5,0xcc5, 0xcc9,0xcc9, 0xcce,0xcd4, 0xcd7,0xce1, 0xce4,0xd01, 0xd04,0xd3d, 0xd45,0xd45,
+  0xd49,0xd49, 0xd4e,0xd56, 0xd58,0xd61, 0xd64,0xd78, 0xd7a,0xd81, 0xd84,0xdc9, 0xdcb,0xdce, 0xdd5,0xdd5,
+  0xdd7,0xdd7, 0xde0,0xdf1, 0xdf5,0xe30, 0xe32,0xe33, 0xe3b,0xe3e, 0xe40,0xe46, 0xe50,0xe59, 0xe5c,0xeb0,
+  0xeb2,0xeb3, 0xeba,0xeba, 0xebd,0xec7, 0xece,0xf00, 0xf20,0xf33, 0xf40,0xf70, 0xf88,0xf8c, 0xf98,0xf98,
+  0xfbd,0xfbd, 0xfcd,0xfcd, 0xfdb,0x102a, 0x103f,0x1049, 0x1050,0x1055, 0x105a,0x105d, 0x1061,0x1061, 0x1065,0x1066,
+  0x106e,0x1070, 0x1075,0x1081, 0x108e,0x108e, 0x1090,0x1099, 0x10a0,0x10fa, 0x10fc,0x135c, 0x1369,0x138f, 0x139a,0x13ff,
+  0x1401,0x166c, 0x166f,0x167f, 0x1681,0x169a, 0x169d,0x16ea, 0x16ee,0x1711, 0x1715,0x1731, 0x1737,0x1751, 0x1754,0x1771,
+  0x1774,0x17b3, 0x17d7,0x17d7, 0x17dc,0x17dc, 0x17de,0x17ff, 0x180f,0x18a8, 0x18aa,0x191f, 0x192c,0x192f, 0x193c,0x193f,
+  0x1941,0x1943, 0x1946,0x19af, 0x19c1,0x19c7, 0x19ca,0x19dd, 0x1a00,0x1a16, 0x1a1c,0x1a1d, 0x1a20,0x1a54, 0x1a5f,0x1a5f,
+  0x1a7d,0x1a7e, 0x1a80,0x1a9f, 0x1aa7,0x1aa7, 0x1aae,0x1aff, 0x1b05,0x1b33, 0x1b45,0x1b59, 0x1b7d,0x1b7f, 0x1b83,0x1ba0,
+  0x1bae,0x1be5, 0x1bf4,0x1bfb, 0x1c00,0x1c23, 0x1c38,0x1c3a, 0x1c40,0x1c7d, 0x1c80,0x1cbf, 0x1cc8,0x1ccf, 0x1ce9,0x1cec,
+  0x1cee,0x1cf1, 0x1cf5,0x1dbf, 0x1de7,0x1dfb, 0x1e00,0x1fbc, 0x1fbe,0x1fbe, 0x1fc2,0x1fcc, 0x1fd0,0x1fdc, 0x1fe0,0x1fec,
+  0x1ff0,0x1ffc, 0x1fff,0x1fff, 0x2065,0x2069, 0x2070,0x2079, 0x207f,0x2089, 0x208f,0x209f, 0x20ba,0x20cf, 0x20f1,0x20ff,
+  0x2102,0x2102, 0x2107,0x2107, 0x210a,0x2113, 0x2115,0x2115, 0x2119,0x211d, 0x2124,0x2124, 0x2126,0x2126, 0x2128,0x2128,
+  0x212a,0x212d, 0x212f,0x2139, 0x213c,0x213f, 0x2145,0x2149, 0x214e,0x214e, 0x2150,0x218f, 0x23f4,0x23ff, 0x2427,0x243f,
+  0x244b,0x249b, 0x24ea,0x24ff, 0x2700,0x2700, 0x2776,0x2793, 0x2b4d,0x2b4f, 0x2b5a,0x2ce4, 0x2ceb,0x2cee, 0x2cf2,0x2cf8,
+  0x2cfd,0x2cfd, 0x2d00,0x2d6f, 0x2d71,0x2d7e, 0x2d80,0x2ddf, 0x2e2f,0x2e2f, 0x2e3c,0x2e7f, 0x2e9a,0x2e9a, 0x2ef4,0x2eff,
+  0x2fd6,0x2fef, 0x2ffc,0x2fff, 0x3005,0x3007, 0x3021,0x3029, 0x3031,0x3035, 0x3038,0x303c, 0x3040,0x3098, 0x309d,0x309f,
+  0x30a1,0x30fa, 0x30fc,0x318f, 0x3192,0x3195, 0x31a0,0x31bf, 0x31e4,0x31ff, 0x321f,0x3229, 0x3248,0x324f, 0x3251,0x325f,
+  0x3280,0x3289, 0x32b1,0x32bf, 0x32ff,0x32ff, 0x3400,0x4dbf, 0x4e00,0xa48f, 0xa4c7,0xa4fd, 0xa500,0xa60c, 0xa610,0xa66e,
+  0xa67f,0xa69e, 0xa6a0,0xa6ef, 0xa6f8,0xa6ff, 0xa717,0xa71f, 0xa722,0xa788, 0xa78b,0xa801, 0xa803,0xa805, 0xa807,0xa80a,
+  0xa80c,0xa822, 0xa82c,0xa835, 0xa83a,0xa873, 0xa878,0xa87f, 0xa882,0xa8b3, 0xa8c5,0xa8cd, 0xa8d0,0xa8df, 0xa8f2,0xa8f7,
+  0xa8fb,0xa925, 0xa930,0xa946, 0xa954,0xa95e, 0xa960,0xa97f, 0xa984,0xa9b2, 0xa9ce,0xa9dd, 0xa9e0,0xaa28, 0xaa37,0xaa42,
+  0xaa44,0xaa4b, 0xaa4e,0xaa5b, 0xaa60,0xaa76, 0xaa7a,0xaa7a, 0xaa7c,0xaaaf, 0xaab1,0xaab1, 0xaab5,0xaab6, 0xaab9,0xaabd,
+  0xaac0,0xaac0, 0xaac2,0xaadd, 0xaae0,0xaaea, 0xaaf2,0xaaf4, 0xaaf7,0xabe2, 0xabee,0xd7ff, 0xe000,0xfb1d, 0xfb1f,0xfb28,
+  0xfb2a,0xfbb1, 0xfbc2,0xfd3d, 0xfd40,0xfdfb, 0xfdfe,0xfdff, 0xfe1a,0xfe1f, 0xfe27,0xfe2f, 0xfe53,0xfe53, 0xfe67,0xfe67,
+  0xfe6c,0xfefe, 0xff00,0xff00, 0xff10,0xff19, 0xff21,0xff3a, 0xff41,0xff5a, 0xff66,0xffdf, 0xffe7,0xffe7, 0xffef,0xfff8,
+  0x10000,0x100ff, 0x10103,0x10136, 0x10140,0x10178, 0x1018a,0x1018f, 0x1019c,0x101cf, 0x101fe,0x1039e, 0x103a0,0x103cf, 0x103d1,0x10856,
+  0x10858,0x1091e, 0x10920,0x1093e, 0x10940,0x10a00, 0x10a04,0x10a04, 0x10a07,0x10a0b, 0x10a10,0x10a37, 0x10a3b,0x10a3e, 0x10a40,0x10a4f,
+  0x10a59,0x10a7e, 0x10a80,0x10b38, 0x10b40,0x10fff, 0x11003,0x11037, 0x1104e,0x1107f, 0x11083,0x110af, 0x110c2,0x110ff, 0x11103,0x11126,
+  0x11135,0x1113f, 0x11144,0x1117f, 0x11183,0x111b2, 0x111c1,0x111c4, 0x111c9,0x116aa, 0x116b8,0x1246f, 0x12474,0x16f50, 0x16f7f,0x16f8e,
+  0x16f93,0x1cfff, 0x1d0f6,0x1d0ff, 0x1d127,0x1d128, 0x1d1de,0x1d1ff, 0x1d246,0x1d2ff, 0x1d357,0x1d6c0, 0x1d6c2,0x1d6da, 0x1d6dc,0x1d6fa,
+  0x1d6fc,0x1d714, 0x1d716,0x1d734, 0x1d736,0x1d74e, 0x1d750,0x1d76e, 0x1d770,0x1d788, 0x1d78a,0x1d7a8, 0x1d7aa,0x1d7c2, 0x1d7c4,0x1eeef,
+  0x1eef2,0x1efff, 0x1f02c,0x1f02f, 0x1f094,0x1f09f, 0x1f0af,0x1f0b0, 0x1f0bf,0x1f0c0, 0x1f0d0,0x1f0d0, 0x1f0e0,0x1f10f, 0x1f12f,0x1f12f,
+  0x1f16c,0x1f16f, 0x1f19b,0x1f1e5, 0x1f203,0x1f20f, 0x1f23b,0x1f23f, 0x1f249,0x1f24f, 0x1f252,0x1f2ff, 0x1f321,0x1f32f, 0x1f336,0x1f336,
+  0x1f37d,0x1f37f, 0x1f394,0x1f39f, 0x1f3c5,0x1f3c5, 0x1f3cb,0x1f3df, 0x1f3f1,0x1f3ff, 0x1f43f,0x1f43f, 0x1f441,0x1f441, 0x1f4f8,0x1f4f8,
+  0x1f4fd,0x1f4ff, 0x1f53e,0x1f53f, 0x1f544,0x1f54f, 0x1f568,0x1f5fa, 0x1f641,0x1f644, 0x1f650,0x1f67f, 0x1f6c6,0x1f6ff, 0x1f774,0xe0000,
+  0xe0002,0xe001f, 0xe0080,0xe00ff, 0xe01f0,0x10ffff,
+];
+const UNICODE61_FOLD_RULES = [
+  0x41,0x5a,1,32, 0xb5,0xb5,1,775, 0xc0,0xc0,1,-95, 0xc1,0xc1,1,-96,
+  0xc2,0xc2,1,-97, 0xc3,0xc3,1,-98, 0xc4,0xc4,1,-99, 0xc5,0xc5,1,-100,
+  0xc6,0xc6,1,32, 0xc7,0xc7,1,-100, 0xc8,0xc8,1,-99, 0xc9,0xc9,1,-100,
+  0xca,0xca,1,-101, 0xcb,0xcb,1,-102, 0xcc,0xcc,1,-99, 0xcd,0xcd,1,-100,
+  0xce,0xce,1,-101, 0xcf,0xcf,1,-102, 0xd0,0xd0,1,32, 0xd1,0xd2,1,-99,
+  0xd3,0xd3,1,-100, 0xd4,0xd4,1,-101, 0xd5,0xd5,1,-102, 0xd6,0xd6,1,-103,
+  0xd8,0xd8,1,32, 0xd9,0xd9,1,-100, 0xda,0xda,1,-101, 0xdb,0xdb,1,-102,
+  0xdc,0xdc,1,-103, 0xdd,0xdd,1,-100, 0xde,0xde,1,32, 0xe0,0xe0,1,-127,
+  0xe1,0xe1,1,-128, 0xe2,0xe2,1,-129, 0xe3,0xe3,1,-130, 0xe4,0xe4,1,-131,
+  0xe5,0xe7,2,-132, 0xe8,0xe8,1,-131, 0xe9,0xe9,1,-132, 0xea,0xea,1,-133,
+  0xeb,0xeb,1,-134, 0xec,0xec,1,-131, 0xed,0xed,1,-132, 0xee,0xee,1,-133,
+  0xef,0xef,1,-134, 0xf1,0xf2,1,-131, 0xf3,0xf3,1,-132, 0xf4,0xf4,1,-133,
+  0xf5,0xf5,1,-134, 0xf6,0xf6,1,-135, 0xf9,0xf9,1,-132, 0xfa,0xfa,1,-133,
+  0xfb,0xfb,1,-134, 0xfc,0xfc,1,-135, 0xfd,0xfd,1,-132, 0xff,0xff,1,-134,
+  0x100,0x100,1,-159, 0x101,0x101,1,-160, 0x102,0x102,1,-161, 0x103,0x103,1,-162,
+  0x104,0x104,1,-163, 0x105,0x105,1,-164, 0x106,0x106,1,-163, 0x107,0x107,1,-164,
+  0x108,0x108,1,-165, 0x109,0x109,1,-166, 0x10a,0x10a,1,-167, 0x10b,0x10b,1,-168,
+  0x10c,0x10c,1,-169, 0x10d,0x10e,1,-170, 0x10f,0x10f,1,-171, 0x110,0x110,1,1,
+  0x112,0x112,1,-173, 0x113,0x113,1,-174, 0x114,0x114,1,-175, 0x115,0x115,1,-176,
+  0x116,0x116,1,-177, 0x117,0x117,1,-178, 0x118,0x118,1,-179, 0x119,0x119,1,-180,
+  0x11a,0x11a,1,-181, 0x11b,0x11b,1,-182, 0x11c,0x11c,1,-181, 0x11d,0x11d,1,-182,
+  0x11e,0x11e,1,-183, 0x11f,0x11f,1,-184, 0x120,0x120,1,-185, 0x121,0x121,1,-186,
+  0x122,0x122,1,-187, 0x123,0x124,1,-188, 0x125,0x125,1,-189, 0x126,0x126,1,1,
+  0x128,0x128,1,-191, 0x129,0x129,1,-192, 0x12a,0x12a,1,-193, 0x12b,0x12b,1,-194,
+  0x12c,0x12c,1,-195, 0x12d,0x12d,1,-196, 0x12e,0x12e,1,-197, 0x12f,0x12f,1,-198,
+  0x130,0x130,1,-199, 0x132,0x132,1,1, 0x134,0x134,1,-202, 0x135,0x136,1,-203,
+  0x137,0x137,1,-204, 0x139,0x139,1,-205, 0x13a,0x13a,1,-206, 0x13b,0x13b,1,-207,
+  0x13c,0x13c,1,-208, 0x13d,0x13d,1,-209, 0x13e,0x13e,1,-210, 0x13f,0x141,2,1,
+  0x143,0x143,1,-213, 0x144,0x144,1,-214, 0x145,0x145,1,-215, 0x146,0x146,1,-216,
+  0x147,0x147,1,-217, 0x148,0x148,1,-218, 0x14a,0x14a,1,1, 0x14c,0x14c,1,-221,
+  0x14d,0x14d,1,-222, 0x14e,0x14e,1,-223, 0x14f,0x14f,1,-224, 0x150,0x150,1,-225,
+  0x151,0x151,1,-226, 0x152,0x152,1,1, 0x154,0x154,1,-226, 0x155,0x155,1,-227,
+  0x156,0x156,1,-228, 0x157,0x157,1,-229, 0x158,0x158,1,-230, 0x159,0x15a,1,-231,
+  0x15b,0x15b,1,-232, 0x15c,0x15c,1,-233, 0x15d,0x15d,1,-234, 0x15e,0x15e,1,-235,
+  0x15f,0x15f,1,-236, 0x160,0x160,1,-237, 0x161,0x162,1,-238, 0x163,0x163,1,-239,
+  0x164,0x164,1,-240, 0x165,0x165,1,-241, 0x166,0x166,1,1, 0x168,0x168,1,-243,
+  0x169,0x169,1,-244, 0x16a,0x16a,1,-245, 0x16b,0x16b,1,-246, 0x16c,0x16c,1,-247,
+  0x16d,0x16d,1,-248, 0x16e,0x16e,1,-249, 0x16f,0x16f,1,-250, 0x170,0x170,1,-251,
+  0x171,0x171,1,-252, 0x172,0x172,1,-253, 0x173,0x173,1,-254, 0x174,0x174,1,-253,
+  0x175,0x175,1,-254, 0x176,0x176,1,-253, 0x177,0x177,1,-254, 0x178,0x179,1,-255,
+  0x17a,0x17a,1,-256, 0x17b,0x17b,1,-257, 0x17c,0x17c,1,-258, 0x17d,0x17d,1,-259,
+  0x17e,0x17e,1,-260, 0x17f,0x17f,1,-268, 0x181,0x181,1,210, 0x182,0x184,2,1,
+  0x186,0x186,1,206, 0x187,0x187,1,1, 0x189,0x18a,1,205, 0x18b,0x18b,1,1,
+  0x18e,0x18e,1,79, 0x18f,0x18f,1,202, 0x190,0x190,1,203, 0x191,0x191,1,1,
+  0x193,0x193,1,205, 0x194,0x194,1,207, 0x196,0x196,1,211, 0x197,0x197,1,209,
+  0x198,0x198,1,1, 0x19c,0x19c,1,211, 0x19d,0x19d,1,213, 0x19f,0x19f,1,214,
+  0x1a0,0x1a0,1,-305, 0x1a1,0x1a1,1,-306, 0x1a2,0x1a4,2,1, 0x1a6,0x1a6,1,218,
+  0x1a7,0x1a7,1,1, 0x1a9,0x1a9,1,218, 0x1ac,0x1ac,1,1, 0x1ae,0x1ae,1,218,
+  0x1af,0x1af,1,-314, 0x1b0,0x1b0,1,-315, 0x1b1,0x1b2,1,217, 0x1b3,0x1b5,2,1,
+  0x1b7,0x1b7,1,219, 0x1b8,0x1b8,1,1, 0x1bc,0x1bc,1,1, 0x1c4,0x1c4,1,2,
+  0x1c5,0x1c5,1,1, 0x1c7,0x1c7,1,2, 0x1c8,0x1c8,1,1, 0x1ca,0x1ca,1,2,
+  0x1cb,0x1cb,1,1, 0x1cd,0x1cd,1,-364, 0x1ce,0x1ce,1,-365, 0x1cf,0x1cf,1,-358,
+  0x1d0,0x1d0,1,-359, 0x1d1,0x1d1,1,-354, 0x1d2,0x1d2,1,-355, 0x1d3,0x1d3,1,-350,
+  0x1d4,0x1d4,1,-351, 0x1d5,0x1db,2,1, 0x1de,0x1e4,2,1, 0x1e6,0x1e6,1,-383,
+  0x1e7,0x1e7,1,-384, 0x1e8,0x1e8,1,-381, 0x1e9,0x1e9,1,-382, 0x1ea,0x1ea,1,-379,
+  0x1eb,0x1eb,1,-380, 0x1ec,0x1ee,2,1, 0x1f0,0x1f0,1,-390, 0x1f1,0x1f1,1,2,
+  0x1f2,0x1f2,1,1, 0x1f4,0x1f4,1,-397, 0x1f5,0x1f5,1,-398, 0x1f6,0x1f6,1,-97,
+  0x1f7,0x1f7,1,-56, 0x1f8,0x1f8,1,-394, 0x1f9,0x1f9,1,-395, 0x1fa,0x1fe,2,1,
+  0x200,0x200,1,-415, 0x201,0x201,1,-416, 0x202,0x202,1,-417, 0x203,0x203,1,-418,
+  0x204,0x204,1,-415, 0x205,0x205,1,-416, 0x206,0x206,1,-417, 0x207,0x207,1,-418,
+  0x208,0x208,1,-415, 0x209,0x209,1,-416, 0x20a,0x20a,1,-417, 0x20b,0x20b,1,-418,
+  0x20c,0x20c,1,-413, 0x20d,0x20d,1,-414, 0x20e,0x20e,1,-415, 0x20f,0x20f,1,-416,
+  0x210,0x210,1,-414, 0x211,0x211,1,-415, 0x212,0x212,1,-416, 0x213,0x213,1,-417,
+  0x214,0x214,1,-415, 0x215,0x215,1,-416, 0x216,0x216,1,-417, 0x217,0x217,1,-418,
+  0x218,0x218,1,-421, 0x219,0x21a,1,-422, 0x21b,0x21b,1,-423, 0x21c,0x21c,1,1,
+  0x21e,0x21e,1,-438, 0x21f,0x21f,1,-439, 0x220,0x220,1,-130, 0x222,0x224,2,1,
+  0x226,0x226,1,-453, 0x227,0x227,1,-454, 0x228,0x228,1,-451, 0x229,0x229,1,-452,
+  0x22a,0x22c,2,1, 0x22e,0x22e,1,-447, 0x22f,0x22f,1,-448, 0x230,0x230,1,1,
+  0x232,0x232,1,-441, 0x233,0x233,1,-442, 0x23a,0x23a,1,10795, 0x23b,0x23b,1,1,
+  0x23d,0x23d,1,-163, 0x23e,0x23e,1,10792, 0x241,0x241,1,1, 0x243,0x243,1,-195,
+  0x244,0x244,1,69, 0x245,0x245,1,71, 0x246,0x24e,2,1, 0x370,0x372,2,1,
+  0x376,0x376,1,1, 0x386,0x386,1,38, 0x388,0x38a,1,37, 0x38c,0x38c,1,64,
+  0x38e,0x38f,1,63, 0x391,0x3a1,1,32, 0x3a3,0x3ab,1,32, 0x3c2,0x3c2,1,1,
+  0x3cf,0x3cf,1,8, 0x3d0,0x3d0,1,-30, 0x3d1,0x3d1,1,-25, 0x3d5,0x3d5,1,-15,
+  0x3d6,0x3d6,1,-22, 0x3d8,0x3ee,2,1, 0x3f0,0x3f0,1,-54, 0x3f1,0x3f1,1,-48,
+  0x3f4,0x3f4,1,-60, 0x3f5,0x3f5,1,-64, 0x3f7,0x3f7,1,1, 0x3f9,0x3f9,1,-7,
+  0x3fa,0x3fa,1,1, 0x3fd,0x3ff,1,-130, 0x400,0x40f,1,80, 0x410,0x42f,1,32,
+  0x460,0x480,2,1, 0x48a,0x4be,2,1, 0x4c0,0x4c0,1,15, 0x4c1,0x4cd,2,1,
+  0x4d0,0x526,2,1, 0x531,0x556,1,48, 0x10a0,0x10c5,1,7264, 0x10c7,0x10c7,1,7264,
+  0x10cd,0x10cd,1,7264, 0x1e00,0x1e00,1,-7583, 0x1e01,0x1e02,1,-7584, 0x1e03,0x1e03,1,-7585,
+  0x1e04,0x1e04,1,-7586, 0x1e05,0x1e05,1,-7587, 0x1e06,0x1e06,1,-7588, 0x1e07,0x1e07,1,-7589,
+  0x1e08,0x1e08,1,1, 0x1e0a,0x1e0a,1,-7590, 0x1e0b,0x1e0b,1,-7591, 0x1e0c,0x1e0c,1,-7592,
+  0x1e0d,0x1e0d,1,-7593, 0x1e0e,0x1e0e,1,-7594, 0x1e0f,0x1e0f,1,-7595, 0x1e10,0x1e10,1,-7596,
+  0x1e11,0x1e11,1,-7597, 0x1e12,0x1e12,1,-7598, 0x1e13,0x1e13,1,-7599, 0x1e14,0x1e16,2,1,
+  0x1e18,0x1e18,1,-7603, 0x1e19,0x1e19,1,-7604, 0x1e1a,0x1e1a,1,-7605, 0x1e1b,0x1e1b,1,-7606,
+  0x1e1c,0x1e1c,1,1, 0x1e1e,0x1e1e,1,-7608, 0x1e1f,0x1e20,1,-7609, 0x1e21,0x1e22,1,-7610,
+  0x1e23,0x1e23,1,-7611, 0x1e24,0x1e24,1,-7612, 0x1e25,0x1e25,1,-7613, 0x1e26,0x1e26,1,-7614,
+  0x1e27,0x1e27,1,-7615, 0x1e28,0x1e28,1,-7616, 0x1e29,0x1e29,1,-7617, 0x1e2a,0x1e2a,1,-7618,
+  0x1e2b,0x1e2c,1,-7619, 0x1e2d,0x1e2d,1,-7620, 0x1e2e,0x1e2e,1,1, 0x1e30,0x1e30,1,-7621,
+  0x1e31,0x1e31,1,-7622, 0x1e32,0x1e32,1,-7623, 0x1e33,0x1e33,1,-7624, 0x1e34,0x1e34,1,-7625,
+  0x1e35,0x1e36,1,-7626, 0x1e37,0x1e37,1,-7627, 0x1e38,0x1e38,1,1, 0x1e3a,0x1e3a,1,-7630,
+  0x1e3b,0x1e3b,1,-7631, 0x1e3c,0x1e3c,1,-7632, 0x1e3d,0x1e3e,1,-7633, 0x1e3f,0x1e3f,1,-7634,
+  0x1e40,0x1e40,1,-7635, 0x1e41,0x1e41,1,-7636, 0x1e42,0x1e42,1,-7637, 0x1e43,0x1e44,1,-7638,
+  0x1e45,0x1e45,1,-7639, 0x1e46,0x1e46,1,-7640, 0x1e47,0x1e47,1,-7641, 0x1e48,0x1e48,1,-7642,
+  0x1e49,0x1e49,1,-7643, 0x1e4a,0x1e4a,1,-7644, 0x1e4b,0x1e4b,1,-7645, 0x1e4c,0x1e52,2,1,
+  0x1e54,0x1e54,1,-7652, 0x1e55,0x1e55,1,-7653, 0x1e56,0x1e56,1,-7654, 0x1e57,0x1e57,1,-7655,
+  0x1e58,0x1e58,1,-7654, 0x1e59,0x1e59,1,-7655, 0x1e5a,0x1e5a,1,-7656, 0x1e5b,0x1e5b,1,-7657,
+  0x1e5c,0x1e5c,1,1, 0x1e5e,0x1e5e,1,-7660, 0x1e5f,0x1e60,1,-7661, 0x1e61,0x1e61,1,-7662,
+  0x1e62,0x1e62,1,-7663, 0x1e63,0x1e63,1,-7664, 0x1e64,0x1e68,2,1, 0x1e6a,0x1e6a,1,-7670,
+  0x1e6b,0x1e6b,1,-7671, 0x1e6c,0x1e6c,1,-7672, 0x1e6d,0x1e6d,1,-7673, 0x1e6e,0x1e6e,1,-7674,
+  0x1e6f,0x1e6f,1,-7675, 0x1e70,0x1e70,1,-7676, 0x1e71,0x1e72,1,-7677, 0x1e73,0x1e73,1,-7678,
+  0x1e74,0x1e74,1,-7679, 0x1e75,0x1e75,1,-7680, 0x1e76,0x1e76,1,-7681, 0x1e77,0x1e77,1,-7682,
+  0x1e78,0x1e7a,2,1, 0x1e7c,0x1e7c,1,-7686, 0x1e7d,0x1e7d,1,-7687, 0x1e7e,0x1e7e,1,-7688,
+  0x1e7f,0x1e80,1,-7689, 0x1e81,0x1e81,1,-7690, 0x1e82,0x1e82,1,-7691, 0x1e83,0x1e83,1,-7692,
+  0x1e84,0x1e84,1,-7693, 0x1e85,0x1e85,1,-7694, 0x1e86,0x1e86,1,-7695, 0x1e87,0x1e87,1,-7696,
+  0x1e88,0x1e88,1,-7697, 0x1e89,0x1e8a,1,-7698, 0x1e8b,0x1e8b,1,-7699, 0x1e8c,0x1e8c,1,-7700,
+  0x1e8d,0x1e8e,1,-7701, 0x1e8f,0x1e90,1,-7702, 0x1e91,0x1e91,1,-7703, 0x1e92,0x1e92,1,-7704,
+  0x1e93,0x1e93,1,-7705, 0x1e94,0x1e94,1,-7706, 0x1e95,0x1e95,1,-7707, 0x1e96,0x1e96,1,-7726,
+  0x1e97,0x1e97,1,-7715, 0x1e98,0x1e98,1,-7713, 0x1e99,0x1e99,1,-7712, 0x1e9b,0x1e9b,1,-7720,
+  0x1e9e,0x1e9e,1,-7615, 0x1ea0,0x1ea0,1,-7743, 0x1ea1,0x1ea1,1,-7744, 0x1ea2,0x1ea2,1,-7745,
+  0x1ea3,0x1ea3,1,-7746, 0x1ea4,0x1eb6,2,1, 0x1eb8,0x1eb8,1,-7763, 0x1eb9,0x1eb9,1,-7764,
+  0x1eba,0x1eba,1,-7765, 0x1ebb,0x1ebb,1,-7766, 0x1ebc,0x1ebc,1,-7767, 0x1ebd,0x1ebd,1,-7768,
+  0x1ebe,0x1ec6,2,1, 0x1ec8,0x1ec8,1,-7775, 0x1ec9,0x1ec9,1,-7776, 0x1eca,0x1eca,1,-7777,
+  0x1ecb,0x1ecb,1,-7778, 0x1ecc,0x1ecc,1,-7773, 0x1ecd,0x1ecd,1,-7774, 0x1ece,0x1ece,1,-7775,
+  0x1ecf,0x1ecf,1,-7776, 0x1ed0,0x1ee2,2,1, 0x1ee4,0x1ee4,1,-7791, 0x1ee5,0x1ee5,1,-7792,
+  0x1ee6,0x1ee6,1,-7793, 0x1ee7,0x1ee7,1,-7794, 0x1ee8,0x1ef0,2,1, 0x1ef2,0x1ef2,1,-7801,
+  0x1ef3,0x1ef3,1,-7802, 0x1ef4,0x1ef4,1,-7803, 0x1ef5,0x1ef5,1,-7804, 0x1ef6,0x1ef6,1,-7805,
+  0x1ef7,0x1ef7,1,-7806, 0x1ef8,0x1ef8,1,-7807, 0x1ef9,0x1ef9,1,-7808, 0x1efa,0x1efe,2,1,
+  0x1f08,0x1f0f,1,-8, 0x1f18,0x1f1d,1,-8, 0x1f28,0x1f2f,1,-8, 0x1f38,0x1f3f,1,-8,
+  0x1f48,0x1f4d,1,-8, 0x1f59,0x1f5f,2,-8, 0x1f68,0x1f6f,1,-8, 0x1f88,0x1f8f,1,-8,
+  0x1f98,0x1f9f,1,-8, 0x1fa8,0x1faf,1,-8, 0x1fb8,0x1fb9,1,-8, 0x1fba,0x1fbb,1,-74,
+  0x1fbc,0x1fbc,1,-9, 0x1fbe,0x1fbe,1,-7173, 0x1fc8,0x1fcb,1,-86, 0x1fcc,0x1fcc,1,-9,
+  0x1fd8,0x1fd9,1,-8, 0x1fda,0x1fdb,1,-100, 0x1fe8,0x1fe9,1,-8, 0x1fea,0x1feb,1,-112,
+  0x1fec,0x1fec,1,-7, 0x1ff8,0x1ff9,1,-128, 0x1ffa,0x1ffb,1,-126, 0x1ffc,0x1ffc,1,-9,
+  0x2126,0x2126,1,-7517, 0x212a,0x212a,1,-8383, 0x212b,0x212b,1,-8394, 0x2132,0x2132,1,28,
+  0x2160,0x216f,1,16, 0x2183,0x2183,1,1, 0x2c00,0x2c2e,1,48, 0x2c60,0x2c60,1,1,
+  0x2c62,0x2c62,1,-10743, 0x2c63,0x2c63,1,-3814, 0x2c64,0x2c64,1,-10727, 0x2c67,0x2c6b,2,1,
+  0x2c6d,0x2c6d,1,-10780, 0x2c6e,0x2c6e,1,-10749, 0x2c6f,0x2c6f,1,-10783, 0x2c70,0x2c70,1,-10782,
+  0x2c72,0x2c72,1,1, 0x2c75,0x2c75,1,1, 0x2c7e,0x2c7f,1,-10815, 0x2c80,0x2ce2,2,1,
+  0x2ceb,0x2ced,2,1, 0x2cf2,0x2cf2,1,1, 0xa640,0xa66c,2,1, 0xa680,0xa696,2,1,
+  0xa722,0xa72e,2,1, 0xa732,0xa76e,2,1, 0xa779,0xa77b,2,1, 0xa77d,0xa77d,1,-35332,
+  0xa77e,0xa786,2,1, 0xa78b,0xa78b,1,1, 0xa78d,0xa78d,1,-42280, 0xa790,0xa792,2,1,
+  0xa7a0,0xa7a8,2,1, 0xa7aa,0xa7aa,1,-42308, 0xff21,0xff3a,1,32, 0x10400,0x10427,1,40,
+];
+
+/** The index of the last record of the flat `table` (`width` numbers a record, sorted by the first) that starts at or before `cp`, or -1. */
+function unicode61Seek(table, width, cp) {
+  let lo = 0;
+  let hi = table.length / width - 1;
+  let found = -1;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    if (table[mid * width] <= cp) {
+      found = mid;
+      lo = mid + 1;
+    } else hi = mid - 1;
+  }
+  return found;
+}
+
+/** Whether code point `cp` is a standalone unicode61 token character, by the frozen table (never by host Unicode properties). */
+function isUnicode61Token(cp) {
+  const at = unicode61Seek(UNICODE61_TOKEN_RANGES, 2, cp);
+  return at >= 0 && cp <= UNICODE61_TOKEN_RANGES[at * 2 + 1];
+}
+
+/** The code point unicode61 (remove_diacritics=1) folds token character `cp` to, WITHOUT context, by the frozen table. */
+function unicode61Fold(cp) {
+  const at = unicode61Seek(UNICODE61_FOLD_RULES, 4, cp) * 4;
+  return at >= 0 && cp <= UNICODE61_FOLD_RULES[at + 1] && (cp - UNICODE61_FOLD_RULES[at]) % UNICODE61_FOLD_RULES[at + 2] === 0 ? cp + UNICODE61_FOLD_RULES[at + 3] : cp;
+}
+
+/** The comparison form of one unicode61 token candidate, as FTS5's default `porter unicode61` (remove_diacritics=1)
+ *  compares it: a dropped mark removed, every other code point folded alone by the frozen table (never by the host's case or
+ *  normalization rules). It is a comparison value only: the candidate's span in the source text is never rebuilt from it
+ *  (Task 12 fix round 1, F2; round 2, F2; round 3, F2; round 4, F2). */
+function foldToken(word) {
+  let out = '';
+  for (const ch of word) {
+    const cp = ch.codePointAt(0);
+    if (!isDroppedMark(cp)) out += String.fromCodePoint(unicode61Fold(cp));
+  }
+  return out;
+}
+
+/** Unicode61 token candidates with their original code-unit spans, lazily. A candidate is OPENED only by a token character (the
+ *  frozen table) and continues over token characters and the marks unicode61 drops: a dropped mark belongs to the token it FOLLOWS,
+ *  as in FTS5, so a decomposed `e` + U+0301 is one candidate, but a mark can never open one. A leading or mark-only run of dropped
+ *  marks is skipped, no token, as runtime SQLite's highlight() measures (U+0301 then `a` hits at the `a`; Task 12 fix round 5, F2). Every
+ *  other code point, a lone surrogate included, is a boundary. Spans stay in the source's UTF-16 code units. */
+function* unicode61Words(text) {
+  let at = -1;
+  let i = 0;
+  while (i < text.length) {
+    const cp = text.codePointAt(i);
+    if (isUnicode61Token(cp)) {
+      if (at < 0) at = i;
+    } else if (at >= 0 && !isDroppedMark(cp)) {
+      yield { text: text.slice(at, i), at, end: i };
+      at = -1;
+    }
+    i += cp > 0xffff ? 2 : 1;
+  }
+  if (at >= 0) yield { text: text.slice(at), at, end: text.length };
+}
+
+/** A slice end that never splits a surrogate pair. */
+function cutBefore(s, n) {
+  if (n <= 0) return 0;
+  if (n >= s.length) return s.length;
+  const code = s.charCodeAt(n);
+  return code >= 0xdc00 && code <= 0xdfff ? n - 1 : n;
+}
+
+// derived from lossless-claw src/store/full-text-fallback.ts @ e05d8d3, MIT, see LICENSE.lossless-claw
+/** The grep snippet (§8.4, §11 P9): a window of 24 characters before and 40
+ *  after the earliest hit, `...` at a cut end; no hit gives the first 80. A
+ *  contentless FTS5 table has no snippet() (it answers NULL, measured), so
+ *  this is the only path, and the caller hands it REDACTED text (§8.3):
+ *  redact, then cut. For a longer body that text is a window around the
+ *  hit plus ENTRY_REDACT_MARGIN on each side, redacted and cut back to the
+ *  window, never the whole body (Task 12's displaySnippet, which hitSnippet
+ *  calls; snippetWindow's search is Task 12's snippetSpan; spec §8.3 and
+ *  §8.4, the plan's Global Constraints R2). Each unicode61 candidate is
+ *  compared using the same Porter stem FTS5 uses. A trailing `*` is the plain
+ *  query prefix marker and matches the candidate's pre-stem lowercased text.
+ *  The search preserves candidate spans, so case folding never drifts the
+ *  displayed window's indices. */
+export function snippetWindow(text, terms) {
+  const content = String(text);
+  const { at, len } = snippetSpan(content, terms);
+  if (at === -1) {
+    const head = content.trim();
+    return head.length <= 80 ? head : `${head.slice(0, cutBefore(head, 77)).trimEnd()}...`;
+  }
+  let start = Math.max(0, at - 24);
+  if (start > 0 && cutBefore(content, start) !== start) start -= 1;
+  const end = cutBefore(content, Math.min(content.length, at + Math.max(len, 1) + 40));
+  const prefix = start > 0 ? '...' : '';
+  const suffix = end < content.length ? '...' : '';
+  return `${prefix}${content.slice(start, end).trim()}${suffix}`;
+}
+
+/** `--since` / `--before` (§8.4), plan-chosen grammar: `<n>d`, `<n>h` or
+ *  `<n>min` before now, or an ISO-8601 date (UTC midnight) or date-time with
+ *  `Z` or an offset. A date-time without a zone would depend on the box's
+ *  timezone, and an impossible date (`2026-02-30`) would roll over, so both
+ *  are null, which the CLI answers exit 2 `bad-args`. Minutes are `min`,
+ *  never `m`, which `prune --older-than` reads as months. */
+export function parseTimeBound(s, nowMs) {
+  const t = String(s).trim();
+  const rel = /^([1-9][0-9]{0,6})(d|h|min)$/.exec(t);
+  if (rel !== null) return nowMs - Number(rel[1]) * { d: 86_400_000, h: 3_600_000, min: 60_000 }[rel[2]];
+  const m = /^(\d{4})-(\d{2})-(\d{2})(?:T\d{2}:\d{2}(?::\d{2}(?:\.\d{1,3})?)?(?:Z|[+-]\d{2}:\d{2}))?$/.exec(t);
+  if (m === null) return null;
+  const day = new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3])));
+  if (day.getUTCFullYear() !== Number(m[1]) || day.getUTCMonth() !== Number(m[2]) - 1 || day.getUTCDate() !== Number(m[3])) return null;
+  const ms = Date.parse(t);
+  return Number.isFinite(ms) ? ms : null;
+}
+
+
+// ===========================================================================
+// W1-B2 recall, Task 3: output primitives (spec §8.3, §8.4 describe and
+// expand, §11 P11, P12, P13, P17, P30). Task 2's module-private `cutBefore`
+// makes every cut here surrogate-safe. Recalled fields reach these already
+// redacted; these primitives then cut, escape, count and serialise.
+// ===========================================================================
+export const OUTPUT_CAP = 20000;
+export const EXPLORE_CUT = 2000;
+export const DESCRIBE_EXCERPT = 4000;
+export const DELEGATE_FACTOR = 3;
+export const SNIPPET_MAX = 200;
+export const EXPLORE_JSON_MAX = 4 * 1024 * 1024;
+export const HISTORY_CMD = '"$HOME/.local/bin/ccrc" history';
+export const SHIM_LOCK_HELD = 75;
+export const RECALL_SRCS = Object.freeze([...new Set([...PROVENANCE, 'node', 'summary', 'sidecar', 'unknown'])]);
+
+const REASON_EXITS = new Set(Object.values(REASONS));
+
+// derived from lossless-claw src/assembler.ts @ e05d8d3, MIT, see LICENSE.lossless-claw
+export function escapeXmlAttr(value) {
+  // Every line separator is escaped too (D-4597 (history-read-names-and-echoes-display-redacted)): a stored id holding one
+  // cannot forge a line. Beside \n and \r that is U+0085 (NEL), U+2028 and U+2029, which a reader that splits lines on
+  // Unicode separators (and JS's `^` under /m, for the last two) takes as a line start.
+  return value.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/\n/g, '&#10;').replace(/\r/g, '&#13;').replace(/\u0085/g, '&#133;').replace(/\u2028/g, '&#8232;').replace(/\u2029/g, '&#8233;');
+}
+
+export function escapeXmlText(value) {
+  return value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+/** One recalled field in its untrusted-content envelope. `family` (optional) names the family a hit belongs to under
+ *  a widened scope: `{ id, generation, firstSeenMs }`, the two strings already display strings (W1-B2 whole-branch fix
+ *  round 1, item B; spec §8.2: under --workspace each hit prints its family). Absent, the envelope is byte for byte
+ *  what it was; present, `family`, `generation` and `first-seen` sit between `role` and `trust`. */
+export function recallEnvelope({ src, id, ts, role, text, family }) {
+  const word = RECALL_SRCS.includes(src) ? src : 'unknown';
+  const when = typeof ts === 'number' && Number.isFinite(ts) && Math.abs(ts) <= 8.64e15 ? new Date(ts).toISOString() : '';
+  const fam = family === undefined ? ''
+    : ` family="${escapeXmlAttr(String(family.id))}" generation="${escapeXmlAttr(String(family.generation))}" first-seen="${escapeXmlAttr(
+      Number.isFinite(family.firstSeenMs) && Math.abs(family.firstSeenMs) <= 8.64e15 ? new Date(family.firstSeenMs).toISOString() : '')}"`;
+  return `<ccrc-recall src="${escapeXmlAttr(word)}" id="${escapeXmlAttr(String(id))}" ts="${escapeXmlAttr(when)}" role="${escapeXmlAttr(role ?? '')}"${fam} trust="untrusted">${escapeXmlText(String(text))}</ccrc-recall>`;
+}
+
+// derived from lossless-claw src/tools/lcm-grep-tool.ts @ e05d8d3, MIT, see LICENSE.lossless-claw
+export function snippetLine(text, max = SNIPPET_MAX) {
+  const single = String(text).replace(/\n/g, ' ').trim();
+  return single.length <= max ? single : `${single.slice(0, cutBefore(single, max - 3))}...`;
+}
+
+/** What a stored uuid, type, role or raw key looks like: every real one. */
+const DISPLAY_TOKEN_RE = /^[A-Za-z0-9._:/-]{1,128}$/;
+
+/** A stored identifier as ONE display string (D-4597 (history-read-names-and-echoes-display-redacted); D-4596
+ *  (history-read-fixed-fields-fit-the-cap)). A uuid, type, role or key that has the shape of every real one is returned as
+ *  it is. Anything else (a crafted transcript or an operator import can store any string) is redacted on its raw text,
+ *  folded to one line (every whitespace, control and line-separator character, U+0085 included, becomes a space), cut at
+ *  SNIPPET_MAX and quoted as a JSON string. It is NOT XML-escaped: the sink escapes it, once, for its own context
+ *  (escapeXmlText in a text line, escapeXmlAttr in an attribute, JSON.stringify in --json), so no context escapes it
+ *  twice. The output is at most 6 * SNIPPET_MAX + 2 characters: folding leaves no control character to JSON-quote at six
+ *  characters, and what is left that costs six is a surrogate half with no pair; `"` and `\` cost two. */
+export function displayToken(value, idx) {
+  const s = String(value);
+  if (DISPLAY_TOKEN_RE.test(s)) return s;
+  return JSON.stringify(snippetLine(foldOneLine(redactForDisplay(s, idx))));
+}
+
+/** One line: every run of whitespace, control and line-separator characters (the set DISPLAY_FOLD_RE names) becomes one
+ *  space. It runs AFTER redaction (§8.3: redact the raw text, fold, cut), so folding exposes nothing, and every read verb's
+ *  one-line echo (a hint, a sidecar name, a child's stderr) folds through it (D-4597). */
+export function foldOneLine(text) {
+  return String(text).replace(DISPLAY_FOLD_RE, ' ');
+}
+
+/** What displayToken folds to one space: whitespace (JS `\s`, which has U+2028 and U+2029), every C0 and C1 control
+ *  character (U+0085, NEL, is C1 and is not in `\s`) and DEL. */
+const DISPLAY_FOLD_RE = /[\s\u0000-\u001f\u007f-\u009f]+/g;
+
+export function capOutput(blocks, reserve, cap = OUTPUT_CAP) {
+  const budget = cap - reserve;
+  const kept = [];
+  let used = 0;
+  for (const block of blocks) {
+    const cost = block.length + 1;
+    if (used + cost > budget) break;
+    kept.push(block);
+    used += cost;
+  }
+  return { kept, shown: kept.length };
+}
+
+export function shownLine(shown, total) {
+  if (!Number.isSafeInteger(shown) || !Number.isSafeInteger(total) || shown < 0 || shown > total) throw new TypeError(`shownLine: shown ${String(shown)} of ${String(total)} is not a count`);
+  return `shown ${shown} of ${total}`;
+}
+
+const SHELL_SAFE_RE = /^[A-Za-z0-9_./:=@%+,-]+$/;
+export function nextLine(args) {
+  const quoted = args.map((a) => (SHELL_SAFE_RE.test(a) ? a : `'${String(a).replace(/'/g, "'\\''")}'`));
+  return `next: ${HISTORY_CMD} ${quoted.join(' ')}`;
+}
+
+export function headerLine(h) {
+  if (!SCOPE_KINDS.includes(h.kind)) throw new TypeError(`headerLine: kind outside SCOPE_KINDS: ${String(h.kind)}`);
+  const scope = h.kind === 'family' ? `family(${h.id}, ${h.transcripts} transcripts)` : `${h.kind}(${h.project}, ${h.families} families)`;
+  const through = h.indexedThroughMs === null ? 'unmeasured' : new Date(h.indexedThroughMs).toISOString();
+  const lag = h.lagS === null ? 'unmeasured' : `${h.lagS}s`;
+  return `scope=${scope} coverage=${COVERAGE[0]} indexed-through=${through} lag=${lag}`;
+}
+
+export function scopeLag({ eofMs, nowMs, recovering }) {
+  if (recovering || eofMs.length === 0) return { indexedThroughMs: null, lagS: null };
+  let oldest = Infinity;
+  for (const e of eofMs) {
+    if (typeof e !== 'number' || !Number.isFinite(e)) return { indexedThroughMs: null, lagS: null };
+    if (e < oldest) oldest = e;
+  }
+  return { indexedThroughMs: oldest, lagS: Math.max(0, Math.floor((nowMs - oldest) / 1000)) };
+}
+
+export function readEnvelope(o) {
+  if (!Object.values(EXIT).includes(o.exit)) throw new TypeError(`readEnvelope: ${String(o.exit)} is not an EXIT value`);
+  if (REASON_EXITS.has(o.exit)) {
+    if (typeof o.reason !== 'string' || !Object.hasOwn(REASONS, o.reason) || REASONS[o.reason] !== o.exit) throw new TypeError(`readEnvelope: exit ${o.exit} needs a reason word of its own code, got ${String(o.reason)}`);
+  } else if (o.reason !== undefined) {
+    throw new TypeError(`readEnvelope: exit ${o.exit} carries no reason, got ${String(o.reason)}`);
+  }
+  if (!Number.isSafeInteger(o.shown) || !Number.isSafeInteger(o.total) || o.shown < 0 || o.shown > o.total) throw new TypeError(`readEnvelope: shown ${String(o.shown)} of ${String(o.total)} is not a count`);
+  // D-4595 (history-json-envelope-carries-hint): a verb's hint rides --json as it rides the human form, so a refusal's
+  // detail (a regex child's failure, the reach line, a stale cursor) is not lost. Additive: absent when there is none.
+  if (o.hint !== undefined && typeof o.hint !== 'string') throw new TypeError(`readEnvelope: a hint is a string, got ${typeof o.hint}`);
+  return { v: 1, exit: o.exit, ...(o.reason === undefined ? {} : { reason: o.reason }), store_id: o.storeId, coverage: COVERAGE[0], scope: o.scope, indexed_through_ms: o.header === null ? null : o.header.indexedThroughMs, lag_s: o.header === null ? null : o.header.lagS, items: o.items.map((item) => ({ ...item, trust: 'untrusted' })), shown: o.shown, total: o.total, next: o.next, ...(o.hint === undefined ? {} : { hint: o.hint }) };
+}
+
+export const CURSOR_RESOURCES = Object.freeze(['grep', 'describe', 'expand']);
+const CURSOR_MAX = 2048;
+const CURSOR_TEXT_RE = /^[A-Za-z0-9._:-]{1,128}$/;
+const CURSOR_FIELDS = Object.freeze({
+  grep: Object.freeze(['v', 'resource', 'q', 'pos']),
+  describe: Object.freeze(['v', 'resource', 'node', 'off']),
+  expand: Object.freeze(['v', 'resource', 't', 'i', 'o']),
+});
+
+function cursorIdOk(v) {
+  return typeof v === 'string' && CURSOR_TEXT_RE.test(v);
+}
+
+function cursorOffsetOk(v) {
+  return Number.isSafeInteger(v) && v >= 0;
+}
+
+/** Cursor fields are resource schemas, not an extensible object. This keeps
+ *  recalled text out of both values and object keys before it reaches next:. */
+function cursorShapeOk(c) {
+  if (c === null || typeof c !== 'object' || Array.isArray(c) || c.v !== 1 || !CURSOR_RESOURCES.includes(c.resource)) return false;
+  const fields = CURSOR_FIELDS[c.resource];
+  const keys = Object.keys(c);
+  if (keys.length !== fields.length || !fields.every((field) => Object.hasOwn(c, field))) return false;
+  if (c.resource === 'grep') return cursorIdOk(c.q) && cursorOffsetOk(c.pos);
+  if (c.resource === 'describe') return cursorIdOk(c.node) && cursorOffsetOk(c.off);
+  return cursorIdOk(c.t) && cursorOffsetOk(c.i) && cursorOffsetOk(c.o);
+}
+// derived from lossless-claw src/cli/args.ts @ e05d8d3, MIT, see LICENSE.lossless-claw
+export function encodeCursor(c) {
+  if (!cursorShapeOk(c)) throw new TypeError('encodeCursor: a cursor holds v: 1, a CURSOR_RESOURCES word, and ids or integers only');
+  const s = Buffer.from(JSON.stringify(c), 'utf8').toString('base64url');
+  if (s.length > CURSOR_MAX) throw new TypeError(`encodeCursor: ${s.length} characters, over ${CURSOR_MAX}`);
+  return s;
+}
+export function decodeCursor(s, resource) {
+  if (typeof s !== 'string' || s.length === 0 || s.length > CURSOR_MAX || !/^[A-Za-z0-9_-]+$/.test(s)) return null;
+  let c;
+  try { c = JSON.parse(Buffer.from(s, 'base64url').toString('utf8')); } catch { return null; }
+  return cursorShapeOk(c) && c.resource === resource ? c : null;
+}
+
+export function decideRelay({ status, signal, lastLine }) {
+  const internal = { exit: EXIT.INTERNAL };
+  if (signal !== null) return internal;
+  if (status === SHIM_LOCK_HELD) return { exit: EXIT.WRITER_BUSY, reason: 'writer-busy' };
+  if (typeof lastLine !== 'string') return internal;
+  let r;
+  try { r = JSON.parse(lastLine); } catch { return internal; }
+  if (r === null || typeof r !== 'object' || Array.isArray(r)) return internal;
+  const keys = Object.keys(r).sort().join(',');
+  if (keys !== 'rc' && keys !== 'rc,reason') return internal;
+  if (!Object.values(EXIT).includes(r.rc) || r.rc !== status) return internal;
+  if (REASON_EXITS.has(r.rc)) return typeof r.reason === 'string' && Object.hasOwn(REASONS, r.reason) && REASONS[r.reason] === r.rc ? { exit: r.rc, reason: r.reason } : internal;
+  return r.reason === undefined ? { exit: r.rc } : internal;
+}
+
+// derived from lossless-claw src/large-files.ts @ e05d8d3, MIT, see LICENSE.lossless-claw
+const EXPLORE_CODE_EXTENSIONS = new Set(['c', 'cc', 'cpp', 'cs', 'go', 'h', 'hpp', 'java', 'js', 'jsx', 'kt', 'm', 'php', 'py', 'rb', 'rs', 'scala', 'sh', 'sql', 'swift', 'ts', 'tsx']);
+const READ_PREFIX_RE = /^\s*(\d+)(?:→|\t)/;
+export function stripReadPrefix(text) {
+  const lines = String(text).split('\n');
+  let prev = null;
+  let k = 0;
+  for (; k < lines.length; k += 1) {
+    const m = READ_PREFIX_RE.exec(lines[k]);
+    if (m === null || (prev !== null && Number(m[1]) !== prev + 1)) break;
+    prev = Number(m[1]);
+    lines[k] = lines[k].slice(m[0].length);
+  }
+  return k === 0 ? String(text) : lines.join('\n');
+}
+function fileNameExtension(fileName) {
+  if (typeof fileName !== 'string' || fileName === '') return undefined;
+  const base = fileName.trim().split(/[\\/]/).pop() ?? '';
+  const idx = base.lastIndexOf('.');
+  if (idx <= 0 || idx === base.length - 1) return undefined;
+  const ext = base.slice(idx + 1).toLowerCase();
+  return /^[a-z0-9]{1,10}$/.test(ext) ? ext : undefined;
+}
+export function exploreKindOf(path) {
+  const ext = fileNameExtension(path);
+  if (ext === 'json' || ext === 'csv' || ext === 'tsv') return ext;
+  return ext !== undefined && EXPLORE_CODE_EXTENSIONS.has(ext) ? 'code' : null;
+}
+function normalizeTextForLine(text, maxLen) {
+  const compact = text.replace(/\s+/g, ' ').trim();
+  return compact.length <= maxLen ? compact : `${compact.slice(0, cutBefore(compact, maxLen))}...`;
+}
+function uniqueOrdered(values) {
+  const seen = new Set(); const out = [];
+  for (const value of values) if (!seen.has(value)) { seen.add(value); out.push(value); }
+  return out;
+}
+function exploreJson(content) {
+  const parsed = JSON.parse(content);
+  const describe = (value, depth = 0) => {
+    if (depth >= 2) return '...';
+    if (Array.isArray(value)) { const sample = value.slice(0, 3).map((item) => describe(item, depth + 1)); return `array(len=${value.length}${sample.length > 0 ? `, sample=[${sample.join(', ')}]` : ''})`; }
+    if (!value || typeof value !== 'object') return typeof value;
+    const keys = Object.keys(value); const preview = keys.slice(0, 10).join(', ');
+    return `object(keys=${keys.length}${preview ? `: ${preview}` : ''})`;
+  };
+  return ['Structured summary (JSON):', `Top-level type: ${Array.isArray(parsed) ? 'array' : typeof parsed}.`, `Shape: ${describe(parsed)}.`].join('\n');
+}
+function parseDelimitedLine(line, delimiter) { return line.split(delimiter).map((item) => item.trim()).filter((item) => item.length > 0); }
+function exploreDelimited(content, delimiter, kind) {
+  const lines = content.split(/\r?\n/).map((line) => line.trim()).filter((line) => line.length > 0);
+  if (lines.length === 0) return `Structured summary (${kind}): no rows found.`;
+  const headers = parseDelimitedLine(lines[0], delimiter); const rowCount = Math.max(0, lines.length - 1); const firstData = lines[1] ? normalizeTextForLine(lines[1], 180) : '(no data rows)';
+  return [`Structured summary (${kind}):`, `Rows: ${rowCount.toLocaleString('en-US')}.`, `Columns (${headers.length}): ${headers.join(', ') || '(none detected)'}.`, `First row sample: ${firstData}.`].join('\n');
+}
+function exploreCode(content, fileName) {
+  const lines = content.split(/\r?\n/);
+  const imports = uniqueOrdered(lines.filter((line) => /^\s*(import\s+|from\s+\S+\s+import\s+|const\s+\w+\s*=\s*require\()/.test(line)).map((line) => normalizeTextForLine(line, 180)).slice(0, 12));
+  const signatures = uniqueOrdered(lines.map((line) => line.trim()).filter((line) => /^(export\s+)?(async\s+)?(function|class|interface|type|const\s+\w+\s*=\s*\(|def\s+\w+\(|struct\s+\w+)/.test(line)).map((line) => normalizeTextForLine(line, 200)).slice(0, 24));
+  return [`Code exploration summary${fileName ? ` (${fileName})` : ''}:`, `Lines: ${lines.length.toLocaleString('en-US')}.`, `Imports/dependencies (${imports.length}): ${imports.join(' | ') || 'none detected'}.`, `Top-level definitions (${signatures.length}): ${signatures.join(' | ') || 'none detected'}.`].join('\n');
+}
+function exploreCounts(content) { return ['Structured summary:', `Characters: ${content.length.toLocaleString('en-US')}.`, `Lines: ${content.split(/\r?\n/).length.toLocaleString('en-US')}.`].join('\n'); }
+export function explore(text, kind, fileName) {
+  const content = stripReadPrefix(String(text));
+  switch (kind) {
+    case 'json': if (content.length > EXPLORE_JSON_MAX) return exploreCounts(content); try { return exploreJson(content); } catch { return 'Structured summary (JSON): failed to parse as valid JSON.'; }
+    case 'csv': return exploreDelimited(content, ',', 'CSV');
+    case 'tsv': return exploreDelimited(content, '\t', 'TSV');
+    case 'code': return exploreCode(content, fileName);
+    default: throw new TypeError(`explore: kind outside json, csv, tsv and code: ${String(kind)}`);
+  }
+}
+export function costRow(chars, cap = OUTPUT_CAP) { return { chars, fits: chars <= cap ? 'in' : 'over' }; }
+export function pickExpandBody({ primary, variants }) {
+  for (const v of variants) {
+    if (v.cause !== 'ccd-sanitize' || variantCauseOf(primary, v.body) !== 'ccd-sanitize') continue;
+    return sanitizedSideOf(primary, v.body) === 'a' ? v.body : primary;
+  }
+  return primary;
+}
+function sanitizedSideOf(a, b) {
+  for (let i = 0; i < a.length; i += 1) {
+    if (canonicalJson(a[i]) === canonicalJson(b[i])) continue;
+    return a[i] !== null && typeof a[i] === 'object' && a[i].text === '...' ? 'a' : 'b';
+  }
+  return 'b';
+}
+
+
+// ===========================================================================
+// W1-B2 recall, Task 4: pure parser decisions over one boundary summary.
+// The card's heading utilities are injected; this L1 module never imports them.
+// Every native field is redacted before it is capped.
+// ===========================================================================
+
+// derived from lossless-claw src/summarize.ts @ e05d8d3, MIT, see LICENSE.lossless-claw
+export const EXPAND_LABEL = 'Expand for details about:';
+export const BLOCK_RE_SOURCE = String.raw`<ccrc-(leaf|node)\s+([^>\n]*)>\n?([\s\S]*?)<\/ccrc-\1>`;
+export const GIST_MAX = 1200;
+export const NATIVE_GIST_MAX = 600;
+export const GIST_MIN = 40;
+export const TOPICS_MAX = 16;
+export const TOPIC_CHARS = 80;
+export const REFS_MAX = 40;
+export const NODE_PARSER_VERSION = 1;
+export const REF_KINDS = Object.freeze(['path', 'path:symbol', 'sha', 'issue', 'd-number', 'url', 'test']);
+export const BLOCK_REASONS = Object.freeze([
+  'no-receipt', 'no-block', 'gist-short', 'carried-copy', 'id-mismatch', 'topics-missing', 'refs-missing',
+]);
+
+/** A surrogate-safe field cut that reports the cap separately from its text. */
+export function capText(text, max) {
+  const s = String(text);
+  return s.length <= max ? { text: s, capped: false } : { text: s.slice(0, cutBefore(s, max)), capped: true };
+}
+
+export function capTopics(items) {
+  const seen = new Set();
+  const topics = [];
+  let capped = false;
+  for (const raw of items) {
+    const one = capText(String(raw).replace(/\s+/g, ' ').trim(), TOPIC_CHARS);
+    if (one.text === '' || seen.has(one.text)) continue;
+    if (topics.length === TOPICS_MAX) { capped = true; break; }
+    seen.add(one.text);
+    topics.push(one.text);
+    capped ||= one.capped;
+  }
+  return { topics, capped };
+}
+
+/** Hash precisely the stored representation, including its cap normalization. */
+export function gistSha(gist) {
+  return sha256Hex(capText(String(gist).trim(), GIST_MAX).text.trimEnd());
+}
+
+const BLOCK_ATTR_RE = /([A-Za-z][A-Za-z0-9_-]*)="([^"]*)"/g;
+const BLOCK_KEY_RE = /^([a-z][a-z0-9_-]*):[ \t]?(.*)$/;
+
+function analysisRanges(s) {
+  const ranges = [];
+  let from = 0;
+  for (;;) {
+    const open = s.indexOf('<analysis>', from);
+    if (open < 0) return ranges;
+    const close = s.indexOf('</analysis>', open);
+    const end = close < 0 ? s.length : close + '</analysis>'.length;
+    ranges.push([open, end]);
+    from = end;
+  }
+}
+
+/** Parse every steer block in a row, treating lower-case unknown keys as fields. */
+export function parseBlocks(text) {
+  const s = String(text);
+  const analysis = analysisRanges(s);
+  const out = [];
+  for (const m of s.matchAll(new RegExp(BLOCK_RE_SOURCE, 'g'))) {
+    const attrs = {};
+    let attrCount = 0;
+    for (const a of m[2].matchAll(BLOCK_ATTR_RE)) { attrs[a[1]] = a[2]; attrCount += 1; }
+    if (attrCount === 0) continue;
+    const fields = { gist: null, expand: null, refs: null };
+    let current = null;
+    for (const line of m[3].split('\n')) {
+      let key = null;
+      let value = '';
+      if (line.startsWith(EXPAND_LABEL)) {
+        key = 'expand';
+        value = line.slice(EXPAND_LABEL.length);
+      } else {
+        const k = BLOCK_KEY_RE.exec(line);
+        if (k !== null) {
+          key = k[1] === 'gist' || k[1] === 'refs' ? k[1] : 'ignored';
+          value = k[2];
+        }
+      }
+      if (key !== null) {
+        current = key;
+        if (key !== 'ignored') fields[key] = value.trim();
+        continue;
+      }
+      if (current === null || current === 'ignored' || line.trim() === '') continue;
+      fields[current] = fields[current] === '' ? line.trim() : `${fields[current]}\n${line.trim()}`;
+    }
+    const refsNone = fields.refs !== null && /^none$/i.test(fields.refs);
+    out.push({
+      kind: m[1], attrs, gist: fields.gist, expand: fields.expand,
+      refs: fields.refs === null ? null : refsNone ? [] : fields.refs.split(/[\s,]+/).filter(Boolean),
+      refsNone,
+      inAnalysis: analysis.some(([a, b]) => m.index >= a && m.index < b),
+    });
+  }
+  return out;
+}
+
+export function selectBlock({ blocks, kind, computedId, generic }) {
+  const usable = blocks.filter((b) => b.kind === kind && !b.inAnalysis);
+  const exact = usable.filter((b) => (generic ? !Object.hasOwn(b.attrs, 'id') : b.attrs.id === computedId));
+  if (exact.length > 0) return { block: exact[exact.length - 1], idMismatch: false };
+  if (usable.length > 0) return { block: usable[usable.length - 1], idMismatch: true };
+  return { block: null, idMismatch: false };
+}
+
+export function blockStatus({ receipt, block, idMismatch, priorGistShas }) {
+  if (!receipt) return { status: 'not-requested', reason: 'no-receipt' };
+  if (block === null) return { status: 'absent', reason: 'no-block' };
+  if (block.gist === null || block.gist.trim().length < GIST_MIN) return { status: 'invalid', reason: 'gist-short' };
+  if (priorGistShas.has(gistSha(block.gist))) return { status: 'invalid', reason: 'carried-copy' };
+  if (idMismatch) return { status: 'degraded', reason: 'id-mismatch' };
+  if (block.expand === null || block.expand.trim() === '') return { status: 'degraded', reason: 'topics-missing' };
+  if (block.refs === null || (block.refs.length === 0 && !block.refsNone)) return { status: 'degraded', reason: 'refs-missing' };
+  return { status: 'ok', reason: null };
+}
+
+export function summaryParts(text) {
+  const s = String(text);
+  let opens = 0;
+  let last = -1;
+  for (let i = s.indexOf('<summary>'); i >= 0; i = s.indexOf('<summary>', i + 1)) {
+    opens += 1;
+    last = i;
+  }
+  return {
+    bodyStart: last < 0 ? 0 : last + '<summary>'.length,
+    opens,
+    unclosed: last >= 0 && s.indexOf('</summary>', last) < 0,
+    analysisSurvives: s.includes('<analysis>'),
+  };
+}
+
+export function summaryRowFor({ boundaryUuid, anchorUuid, rows }) {
+  if (typeof anchorUuid !== 'string' || anchorUuid === '') return { uuid: null, anchorIsBoundary: false };
+  if (anchorUuid === boundaryUuid) {
+    const at = rows.findIndex((r) => r.uuid === boundaryUuid);
+    for (let k = at < 0 ? rows.length : at + 1; k < rows.length; k += 1) {
+      if (rows[k].isCompactSummary && !rows[k].isEcho) return { uuid: rows[k].uuid, anchorIsBoundary: true };
+    }
+    return { uuid: null, anchorIsBoundary: true };
+  }
+  const row = rows.find((r) => r.uuid === anchorUuid);
+  return { uuid: row !== undefined && !row.isEcho ? row.uuid : null, anchorIsBoundary: false };
+}
+
+const GIST_PAIRS = Object.freeze({
+  current: Object.freeze(['current work', 'optional next step']),
+  completed: Object.freeze(['work completed', 'context for continuing work']),
+});
+
+/** Return numbered sections at the smallest indentation outside code fences. */
+function sectionsOf(body, kit) {
+  const flags = kit.HEADING_RE.flags.includes('g') ? kit.HEADING_RE.flags : `${kit.HEADING_RE.flags}g`;
+  const { ranges } = kit.fencedRanges(body);
+  const found = [];
+  let fence = 0;
+  for (const m of body.matchAll(new RegExp(kit.HEADING_RE.source, flags))) {
+    while (fence < ranges.length && m.index >= ranges[fence][1]) fence += 1;
+    if (fence < ranges.length && m.index >= ranges[fence][0]) continue;
+    const num = /(\d+)\./.exec(m[0]);
+    found.push({
+      start: m.index, end: m.index + m[0].length, title: m[1].trim(), num: num === null ? null : Number(num[1]),
+      indent: /^[ \t]*/.exec(m[0])[0].length,
+    });
+  }
+  const floor = found.reduce((lo, h) => Math.min(lo, h.indent), Infinity);
+  const heads = found.filter((h) => h.indent === floor);
+  return heads.map((h, k) => ({ ...h, stop: k + 1 < heads.length ? heads[k + 1].start : body.length }));
+}
+
+function lastSection(sections, body, name) {
+  for (let k = sections.length - 1; k >= 0; k -= 1) {
+    const t = sections[k].title;
+    const low = t.toLowerCase();
+    if (low === name || low.startsWith(`${name}:`)) {
+      const inline = low === name ? '' : t.slice(name.length + 1);
+      return { at: sections[k].start, label: t.slice(0, name.length), text: `${inline} ${body.slice(sections[k].end, sections[k].stop)}` };
+    }
+  }
+  return null;
+}
+
+function summaryBody(redacted, kit) {
+  const { bodyStart } = summaryParts(redacted);
+  const tail = redacted.slice(bodyStart);
+  const close = tail.lastIndexOf('</summary>');
+  if (close < 0) return tail;
+  const heads = sectionsOf(tail, kit);
+  return close > (heads.length === 0 ? -1 : heads[heads.length - 1].start) ? tail.slice(0, close) : tail;
+}
+
+function pickNativeGist(redacted, direction, kit) {
+  const body = summaryBody(redacted, kit);
+  const sections = sectionsOf(body, kit);
+  const found = (pair) => GIST_PAIRS[pair].map((name) => lastSection(sections, body, name));
+  const latest = (pair) => Math.max(-1, ...found(pair).filter((s) => s !== null).map((s) => s.at));
+  const order = direction === 'up_to' ? ['completed', 'current']
+    : direction === 'from' ? ['current', 'completed']
+      : ['current', 'completed'].sort((a, b) => latest(b) - latest(a));
+  const pair = order.find((p) => latest(p) >= 0);
+  if (pair === undefined) return null;
+  const text = found(pair).filter((s) => s !== null).map((s) => `${s.label}: ${s.text.replace(/\s+/g, ' ').trim()}`).join('\n');
+  return { text, pair };
+}
+
+export function nativeGist({ text, direction }, kit, idx) {
+  const picked = pickNativeGist(redactField(String(text), idx), direction, kit);
+  if (picked === null) return { gist: null, capped: false, pair: null };
+  const out = capText(picked.text, NATIVE_GIST_MAX);
+  return { gist: out.text, capped: out.capped, pair: picked.pair };
+}
+
+function topicItemsOf(text, kit, idx) {
+  if (text === null) return [];
+  const body = summaryBody(redactField(String(text), idx), kit);
+  const sections = sectionsOf(body, kit);
+  const { ranges } = kit.fencedRanges(body);
+  const items = [];
+  for (const num of [2, 3]) {
+    const s = [...sections].reverse().find((x) => x.num === num);
+    if (s === undefined) continue;
+    let offset = s.end;
+    for (const line of body.slice(s.end, s.stop).split('\n')) {
+      const fenced = ranges.some(([a, b]) => offset >= a && offset < b);
+      const m = /^\s*[-*+]\s+(.+)$/.exec(line);
+      if (!fenced && m !== null) items.push(m[1].replace(/\s+/g, ' ').trim());
+      offset += line.length + 1;
+    }
+  }
+  return items;
+}
+
+export function nativeTopics({ text, prevText }, kit, idx) {
+  const before = new Set(topicItemsOf(prevText, kit, idx));
+  return capTopics(topicItemsOf(text, kit, idx).filter((item) => !before.has(item)));
+}
+
+export function classifyRef(v) {
+  const s = String(v).trim();
+  if (s === '' || s.length > 512) return null;
+  if (/^https?:\/\/\S+$/.test(s)) return 'url';
+  if (/^D-[0-9]+$/.test(s)) return 'd-number';
+  if (/^#[0-9]+$/.test(s)) return 'issue';
+  if (/^[\w./-]*[\w-]\.(?:test|spec)\.[cm]?[jt]sx?$/.test(s)) return 'test';
+  if (/^[\w./-]*\.[A-Za-z][A-Za-z0-9]{0,7}:[A-Za-z_$][\w$.]*$/.test(s)) return 'path:symbol';
+  if (/^(?=[0-9a-f]*[a-f])[0-9a-f]{7,40}$/.test(s)) return 'sha';
+  if (/^[\w.-]*(?:\/[\w.-]+)+(?::[0-9]+(?:-[0-9]+)?)?$/.test(s)) return 'path';
+  if (/^[\w-]+(?:\.[\w-]+)*\.[A-Za-z][A-Za-z0-9]{0,7}(?::[0-9]+(?:-[0-9]+)?)?$/.test(s)) return 'path';
+  return null;
+}
+
+export function capRefs(refs) {
+  const seen = new Set();
+  const out = [];
+  let capped = false;
+  for (const r of refs) {
+    const key = `${r.kind}\0${r.value}`;
+    if (seen.has(key)) continue;
+    if (out.length === REFS_MAX) { capped = true; break; }
+    seen.add(key);
+    out.push({ kind: r.kind, value: r.value, origin: r.origin });
+  }
+  return { refs: out, capped };
+}
+
+// derived from lossless-claw src/summary-fallback.ts @ e05d8d3, MIT, see LICENSE.lossless-claw
+const OPTIONAL_DIRECTIVE_SCOPE_PREFIX = String.raw`(?:all\s+)?(?:of\s+)?(?:(?:the|your|my|any|these|those)\s+)?`;
+const DIRECTIVE_SCOPE = String.raw`(?:(?:previous|prior|above|earlier)(?:\s+(?:system|developer))?|(?:system|developer))`;
+const UNSCOPED_DIRECTIVE_TARGET = String.raw`(?:(?:all|any)\s+)?(?:of\s+)?(?:(?:the|your|my|these|those|current|existing|original)\s+)?(?:instructions?|prompts?|rules?)`;
+const ANSWER_DAN_OBJECT = String.raw`(?:(?:me|us)|(?:(?:(?:the|this|that|your|my|any|these|those|all|every)\s+)?(?:future\s+)?(?:users?|requests?|questions?|prompts?|messages?)))`;
+const DAN_PERSONA_DIRECTIVE_PREFIX = String.raw`(?:^\s*|^\s*[A-Za-z][A-Za-z0-9 _/-]{0,40}:\s*)`;
+const DIRECTIVE_SHAPED_PATTERNS = Object.freeze([
+  new RegExp([
+    String.raw`\b(ignore|disregard|forget|override)\s+${OPTIONAL_DIRECTIVE_SCOPE_PREFIX}${DIRECTIVE_SCOPE}\s+(instructions?|prompts?|rules?)\b`,
+    String.raw`\b(ignore|disregard|forget|override)\s+${UNSCOPED_DIRECTIVE_TARGET}\s*(?:$|[.,;:!?]|\s+(?:and|then|now|before|after|instead|to|with|from)\b)`,
+    String.raw`\byou\s+are\s+now\b`, String.raw`\bfrom\s+now\s+on\b`, String.raw`\breply\s+only\s+with\b`,
+    String.raw`\b(reveal|print|show|dump|exfiltrate|provide|give|send)\s+(?:me\s+)?(?:(?:the|your|my|any)\s+)?(system|developer)\s+prompt\b`,
+    String.raw`\bjailbreak\s+(?:mode|prompt|instructions?|the\s+model|the\s+assistant)\b`,
+  ].join('|'), 'i'),
+  /\bdan\s+mode\b/i, /\byou\s+are\s+dan\b/i,
+  new RegExp(String.raw`\banswer\s+${ANSWER_DAN_OBJECT}\s+as\s+dan\b`, 'i'),
+  new RegExp(String.raw`${DAN_PERSONA_DIRECTIVE_PREFIX}(?:act\s+as|pretend\s+to\s+be)\s+dan\b`, 'i'),
+  /\b(?:[Aa][Cc][Tt]\s+[Aa][Ss]|[Pp][Rr][Ee][Tt][Ee][Nn][Dd]\s+[Tt][Oo]\s+[Bb][Ee])\s+(?!Dan\b)[Dd][Aa][Nn]\b/,
+  /\b(?:[Ee][Nn][Aa][Bb][Ll][Ee]|[Aa][Cc][Tt][Ii][Vv][Aa][Tt][Ee]|[Uu][Nn][Ll][Oo][Cc][Kk]|[Ee][Nn][Tt][Ee][Rr]|[Ss][Tt][Aa][Rr][Tt]|[Uu][Ss][Ee])\s+(?!Dan\b)[Dd][Aa][Nn]\b/,
+]);
+
+export function directiveFlag(text) {
+  const s = String(text);
+  const units = s.match(/\n+|[^\n.!?]+[.!?]*\s*/g) ?? [s];
+  return units.some((unit) => !/^\n+$/.test(unit) && DIRECTIVE_SHAPED_PATTERNS.some((p) => p.test(unit)));
+}
+
+// ===========================================================================
+// Spans, leaf ids, readiness, fan-in and parent rollups (spec §6.1 "Span
+// rule: an exact partition" and "Two forks after one head"; §6.3; W1-B2
+// Task 5). Pure: derive.mjs (L4) reads ONE copy's rows in file order
+// (memberships.line, a byte offset) with its boundaries' metadata and hands
+// them in; nothing here reads the store. D-4687 (history-span-exact-partition)
+// D-4688 (history-span-per-boundary-copy) D-4689 (history-leaf-id-fork-qualified)
+// ===========================================================================
+
+/** The leaves one copy's boundaries make, and its live tail (§6.1).
+ *  `rows` are the copy's stored rows in any order: they are sorted by `pos`, the row's byte offset in that copy.
+ *  `boundaries` are the SAME copy's boundary rows, each with:
+ *  - `headUuid` (preservedSegment.headUuid);
+ *  - `kept` (the members of preservedMessages.allUuids; a member absent from the copy is never tested);
+ *  - `summaryUuid` (the summary row the parser chose, or null).
+ *  Leaf N covers [head(N-1), boundary(N)), an epoch's first leaf from the copy's first row, minus:
+ *  - boundary and summary rows;
+ *  - the rows of [head(N-1), boundary(N-1)) absent from kept(N-1). Leaf N-1 claimed them: compaction N-1
+ *    summarised them although they sit after its head (G12, ruled Q5);
+ *  - the rows of [head(N), boundary(N)) in kept(N). Compaction N kept them verbatim: they belong to leaf N+1.
+ *  The live tail is what no leaf covers yet: the last compaction's kept rows and every row after it.
+ *  logicalParentUuid is never an input: it names the preserved tail's END (§6.1, M). A head absent from the copy
+ *  (or, against every measurement, after its boundary) makes the boundary itself the edge, flagged `headMissing`,
+ *  and the leaf's span start still names head(N-1): ids never change. */
+export function planSpans({ rows, boundaries }) {
+  const order = [...rows].sort((a, b) => a.pos - b.pos);
+  const at = new Map(order.map((r, i) => [r.uuid, i]));
+  const summaries = new Set(boundaries.map((b) => b.summaryUuid).filter((u) => typeof u === 'string'));
+  const structural = (r) => r.isBoundary || r.isSummary || summaries.has(r.uuid);
+  const bs = boundaries.filter((b) => at.has(b.uuid)).sort((x, y) => at.get(x.uuid) - at.get(y.uuid));
+  // A boundary's preserved-tail window [head, boundary), or null when its head is not before it in this copy.
+  const windowOf = (b) => {
+    const to = at.get(b.uuid);
+    const from = typeof b.headUuid === 'string' ? at.get(b.headUuid) : undefined;
+    return from === undefined || from > to ? null : { from, to };
+  };
+  const leaves = [];
+  for (let k = 0; k < bs.length; k += 1) {
+    const b = bs[k];
+    const prev = k === 0 ? null : bs[k - 1];
+    const prevWin = prev === null ? null : windowOf(prev);
+    const own = windowOf(b);
+    // Leaf N starts at head(N-1): the rows compaction N-1 kept verbatim are its own.
+    const start = prev === null ? 0 : prevWin === null ? at.get(prev.uuid) : prevWin.from;
+    const sources = [];
+    for (let i = start; i < at.get(b.uuid); i += 1) {
+      const r = order[i];
+      if (structural(r)) continue;
+      // Leaf N-1 claimed these (G12).
+      if (prevWin !== null && i < prevWin.to && !prev.kept.has(r.uuid)) continue;
+      // Compaction N keeps these verbatim: leaf N+1's.
+      if (own !== null && i >= own.from && b.kept.has(r.uuid)) continue;
+      sources.push(r.uuid);
+    }
+    leaves.push({
+      boundaryUuid: b.uuid,
+      spanStartUuid: prev === null ? order[0].uuid : (prev.headUuid ?? prev.uuid),
+      sources,
+      headMissing: prev !== null && prevWin === null,
+    });
+  }
+  const last = bs.length === 0 ? null : bs[bs.length - 1];
+  const lastWin = last === null ? null : windowOf(last);
+  const tailFrom = last === null ? 0 : lastWin === null ? at.get(last.uuid) + 1 : lastWin.from;
+  const liveTail = [];
+  for (let i = tailFrom; i < order.length; i += 1) {
+    const r = order[i];
+    if (structural(r)) continue;
+    if (lastWin !== null && i < lastWin.to && !last.kept.has(r.uuid)) continue;
+    liveTail.push(r.uuid);
+  }
+  return { leaves, liveTail };
+}
+
+/** A leaf's id (§6.1 "Two forks after one head"). The plain id hashes (ccrc id, cc uuid, span start). When that
+ *  id is already bound to ANOTHER boundary (two forked copies each compacted after the same head), the first bound
+ *  keeps it, as "the first claim stands" does for uuids, and this boundary's leaf takes the boundary-qualified id
+ *  (`leaf_id_forked`). */
+export function decideLeafId({ ccrcId, ccUuid, spanStartUuid, boundaryUuid, plainBoundOther }) {
+  if (plainBoundOther) return { id: leafId(ccrcId, ccUuid, spanStartUuid, boundaryUuid), forked: true };
+  return { id: leafId(ccrcId, ccUuid, spanStartUuid), forked: false };
+}
+
+/** How long after a boundary's own time a file read to its end proves the boundary has no summary row coming.
+ *  Claude Code appends the summary within moments of the boundary; a tick that read in between must not make
+ *  the leaf raw for good. *Chosen*. D-4690 (history-raw-leaf-grace) */
+export const RAW_LEAF_GRACE_MS = 5 * 60 * 1000;
+
+/** Whether the file holding a boundary was read to its end late enough to say its summary row is missing. `eofMs`
+ *  is the holding file's ingest_files.eof_ms: the start of the last tick that left its cursor at end-of-file.
+ *  `boundaryTsMs` is the boundary's time; derive.mjs passes the newest stamped row before a boundary that has none
+ *  of its own. With no time known at all the answer is false: end-of-file alone is exactly the race the grace
+ *  closes, so such a boundary waits rather than going raw for good. */
+export function eofAfterBoundary({ eofMs, boundaryTsMs }) {
+  if (eofMs === null || boundaryTsMs === null) return false;
+  return eofMs >= boundaryTsMs + RAW_LEAF_GRACE_MS;
+}
+
+/** A leaf is derived once it is final (§7.4 item 1, §6.3 "only leaves whose status is final"): its summary row is
+ *  stored (native, or steered from W3), or its file shows it never will be (a raw leaf). Never earlier: a raw
+ *  leaf is never written while it could still be a native one. */
+export function leafReady({ summaryStored, fileAtEofAfterBoundary }) {
+  return summaryStored === true || fileAtEofAfterBoundary === true;
+}
+
+/** The plugin's tested fan-in (§6.3, §11 P23; the 2 is a pressure arm ccrc has no consumer for): 8 leaves make a
+ *  depth-1 parent, 4 nodes make each level above. */
+export const FAN_IN = Object.freeze({ leaf: 8, condensed: 4 });
+
+/** The groups of `width` slots that become parents now (§6.3). `slots` are ONE holding copy's nodes of one depth
+ *  within one epoch, in boundaries.ord order (RB4): fan-in never crosses a /clear epoch and a parent never mixes
+ *  forks. A slot is `nodeId: null` while its node does not exist yet (a boundary not ready), `final: false` while
+ *  it may still change, `parented` once a parent holds it.
+ *  Grouping starts at the first unparented slot and stops at the first group holding a null, non-final or
+ *  parented slot: the nodes after a gap wait for it. */
+export function planFanIn({ slots, width }) {
+  if (!Number.isSafeInteger(width) || width < 2) throw new TypeError(`planFanIn: width must be an integer of at least 2, got ${String(width)}`);
+  const groups = [];
+  let i = slots.findIndex((s) => !s.parented);
+  if (i < 0) return groups;
+  while (i + width <= slots.length) {
+    const g = slots.slice(i, i + width);
+    if (g.some((s) => s.nodeId === null || !s.final || s.parented)) break;
+    groups.push(g.map((s) => s.nodeId));
+    i += width;
+  }
+  return groups;
+}
+
+/** A gist's first sentence (§6.3): up to and including the first `.`, `!` or `?` that ends the text or is
+ *  followed by whitespace, else up to the first newline, else the whole gist; trimmed. So `v1.2` stays inside it. */
+export function firstSentence(text) {
+  const t = String(text ?? '').trim();
+  const m = /[.!?](?=\s|$)|\n/.exec(t);
+  if (m === null) return t;
+  return t.slice(0, m[0] === '\n' ? m.index : m.index + 1).trim();
+}
+
+/** A parent from its children (§6.3), deterministic and rebuildable (a W3 steered <ccrc-node> gist replaces only
+ *  the gist):
+ *  - gist: each child's first sentence, joined with a space, cut at GIST_MAX by capText; null when no child has
+ *    one (the leaves' own spelling of "no gist", never '');
+ *  - topics: the union in first-seen order through capTopics (each once, at most TOPICS_MAX of at most TOPIC_CHARS);
+ *  - refs: the union through capRefs (each (kind, value) once, the first origin kept, at most REFS_MAX);
+ *  - time: the earliest child start to the latest child end;
+ *  - srcChars: the children's; descCount: every descendant node; descChars: the descendants' gist chars.
+ *  The three caps are Task 4's, the ones a leaf is cut by, so a parent and a leaf never disagree about a cut.
+ *  A cut sets `capped`; no marker is ever inserted. D-4691 (history-node-char-counts) */
+export function parentRollup(children) {
+  const sentences = [];
+  for (const c of children) {
+    const s = typeof c.gist === 'string' ? firstSentence(c.gist) : '';
+    if (s !== '') sentences.push(s);
+  }
+  const joined = sentences.join(' ');
+  const gist = capText(joined, GIST_MAX);
+  const topics = capTopics(children.flatMap((c) => c.topics));
+  const cut = capRefs(children.flatMap((c) => c.refs));
+  let earliestMs = null;
+  let latestMs = null;
+  let srcChars = 0;
+  let descCount = 0;
+  let descChars = 0;
+  for (const c of children) {
+    if (c.earliestMs !== null && (earliestMs === null || c.earliestMs < earliestMs)) earliestMs = c.earliestMs;
+    if (c.latestMs !== null && (latestMs === null || c.latestMs > latestMs)) latestMs = c.latestMs;
+    srcChars += c.srcChars;
+    descCount += c.descCount + 1;
+    descChars += c.descChars + (typeof c.gist === 'string' ? c.gist.length : 0);
+  }
+  return {
+    gist: joined === '' ? null : gist.text, topics: topics.topics, refs: cut.refs, earliestMs, latestMs, srcChars, descCount, descChars,
+    capped: gist.capped || topics.capped || cut.capped,
+  };
+}
+
+// ===========================================================================
+// Operator-verb decisions (spec §6.6, §6.9, §8.3 "Which no-store answer",
+// §8.4; W1-B2 Task 6). Pure: the CLI's door and the sweep's --op dispatch
+// both call them, so the two doors answer the same words (C64).
+// D-4692 (history-adopt-verb) D-4693 (history-restore-verb) D-4694 (history-rebuild-verb)
+// ===========================================================================
+
+/** A restorable backup's bare name under db/backups/ (§8.4, §6.11): doctor --backup's `<ts>.db` or the
+ *  writer's `pre-v<N>.db`. A `/`, a dot-prefixed temp, a `.tmp` or any other name never matches. */
+const RESTORE_NAME_RE = /^(?:[0-9]{8}T[0-9]{6}Z|pre-v[1-9][0-9]*)\.db$/;
+
+/** argv after `--op <verb>`, read against `spec` (flag -> 'bool' | 'value'): each flag at most once, a value
+ *  flag followed by its value, anything not starting with `-` a positional. null on an unknown or repeated
+ *  flag, or a value flag with nothing after it. */
+function readOpFlags(args, spec) {
+  const flags = {};
+  const positional = [];
+  for (let i = 0; i < args.length; i += 1) {
+    const a = args[i];
+    if (!Object.hasOwn(spec, a)) {
+      if (typeof a !== 'string' || a.startsWith('-')) return null;
+      positional.push(a);
+      continue;
+    }
+    if (Object.hasOwn(flags, a)) return null;
+    if (spec[a] === 'bool') { flags[a] = true; continue; }
+    if (i + 1 >= args.length) return null;
+    i += 1;
+    flags[a] = args[i];
+  }
+  return { flags, positional };
+}
+
+/** One operator verb's argv (§8.4), as both doors read it. `import` keeps B1's grammar (`--apply`, and
+ *  `--session <id> --file <path>` both or neither, the session an idOk id and the file a `<uuid>.jsonl`).
+ *  `prune` needs `--older-than <dur>` at or above PRUNE_FLOOR_DAYS. `reparse` takes `--node <full id>` (Task 1's
+ *  HISTORY_NODE_ID_RE, the one spelling of a full node id) or `--session <id>`, never both
+ *  D-4697 (history-reparse-targets). `restore` takes one bare backup name, refused
+ *  `restore-refused` when it is not one (C57). `rebuild` takes `--store-id <uuid>`. A verb B2 does not run
+ *  (recall-off is W2's) is `bad-args`. */
+export function parseOpVerbArgs(op, args) {
+  const refuse = (reason) => ({ ok: false, reason });
+  const ok = (a) => ({ ok: true, args: Object.freeze(a) });
+  switch (op) {
+    case 'import': {
+      const r = readOpFlags(args, { '--apply': 'bool', '--session': 'value', '--file': 'value' });
+      if (r === null || r.positional.length > 0) return refuse('bad-args');
+      const session = r.flags['--session'] ?? null;
+      const file = r.flags['--file'] ?? null;
+      if ((session === null) !== (file === null)) return refuse('bad-args');
+      if (session !== null) {
+        if (!idOk(session)) return refuse('bad-id');
+        const base = file.slice(file.lastIndexOf('/') + 1);
+        if (!base.endsWith('.jsonl') || !UUID_RE.test(base.slice(0, -'.jsonl'.length))) return refuse('bad-args');
+      }
+      return ok({ op, apply: r.flags['--apply'] === true, session, file });
+    }
+    case 'migrate':
+    case 'repair':
+    case 'backup':
+    case 'adopt':
+      return args.length === 0 ? ok({ op }) : refuse('bad-args');
+    case 'prune': {
+      const r = readOpFlags(args, { '--apply': 'bool', '--older-than': 'value' });
+      if (r === null || r.positional.length > 0 || r.flags['--older-than'] === undefined) return refuse('bad-args');
+      const days = parseDuration(r.flags['--older-than']);
+      if (days === null) return refuse('bad-args');
+      if (days < PRUNE_FLOOR_DAYS) return refuse('older-than-floor');
+      return ok({ op, days, apply: r.flags['--apply'] === true });
+    }
+    case 'reparse': {
+      const r = readOpFlags(args, { '--apply': 'bool', '--node': 'value', '--session': 'value' });
+      if (r === null || r.positional.length > 0) return refuse('bad-args');
+      const node = r.flags['--node'] ?? null;
+      const session = r.flags['--session'] ?? null;
+      if (node !== null && session !== null) return refuse('bad-args');
+      if (node !== null && !HISTORY_NODE_ID_RE.test(node)) return refuse('bad-args');
+      if (session !== null && !idOk(session)) return refuse('bad-id');
+      return ok({ op, node, session, apply: r.flags['--apply'] === true });
+    }
+    case 'restore': {
+      const r = readOpFlags(args, {});
+      if (r === null || r.positional.length !== 1) return refuse('bad-args');
+      const name = r.positional[0];
+      if (!restoreNameOk(name)) return refuse('restore-refused');
+      return ok({ op, name });
+    }
+    case 'rebuild': {
+      const r = readOpFlags(args, { '--store-id': 'value' });
+      if (r === null || r.positional.length > 0) return refuse('bad-args');
+      const storeId = r.flags['--store-id'] ?? null;
+      if (storeId !== null && !UUID_RE.test(storeId)) return refuse('bad-args');
+      return ok({ op, storeId });
+    }
+    default:
+      return refuse('bad-args');
+  }
+}
+
+/** The no-store table's answers a writing verb keeps as they are: what could not be measured or reached. */
+const DOOR_UNMEASURED = Object.freeze(['store-unreachable', 'store-root-dangling', 'store-unmeasured']);
+
+/** Which no-store answer a WRITING verb gets before the CLI spawns the shim (§8.3's table, its writing-verb
+ *  row), over exactly decideCliStore's input, so "is there a store here" is decided by that one table, from
+ *  store.id and the DB, never from whether ~/.ccrc/history exists:
+ *  - macOS or a recorded server role is 9, whatever is on disk;
+ *  - a shim present goes on to decideOpGate and the shim's own pass, which decides the store rows itself;
+ *  - otherwise the table answers. Its 9 (no store.id and no DB: never installed) stays 9. Its unreachable,
+ *    dangling and unmeasured words (5) stand: an input that could not be measured is never read as absent (IV5).
+ *    Any other answer means a store exists, and a writing verb with no shim is 2 `writer-absent`, never 9 (a
+ *    plain uninstall kept the data). D-4183 */
+export function decideOpDoor(f) {
+  if (f.darwin || f.role === 'server') return { ok: false, exit: EXIT.NO_STORE };
+  if (f.shim === 'present') return { ok: true };
+  const t = decideCliStore(f);
+  if (t.exit === EXIT.NO_STORE) return { ok: false, exit: EXIT.NO_STORE };
+  if (t.exit === EXIT.DB && DOOR_UNMEASURED.includes(t.reason)) return { ok: false, exit: EXIT.DB, reason: t.reason };
+  return { ok: false, exit: EXIT.REFUSED, reason: 'writer-absent' };
+}
+
+// derived from lossless-claw src/prune.ts @ e05d8d3, MIT, see LICENSE.lossless-claw
+const PRUNE_DURATION_RE = /^(\d+)\s*(d|day|days|w|week|weeks|m|month|months|y|year|years)$/i;
+const PRUNE_UNIT_DAYS = Object.freeze({
+  d: 1, day: 1, days: 1, w: 7, week: 7, weeks: 7, m: 30, month: 30, months: 30, y: 365, year: 365, years: 365,
+});
+
+/** A human duration (`90d`, `3m`, `1y`) as days, or null when it is not one (§11 P15, upstream's grammar: a month
+ *  is 30 days, a year 365). */
+export function parseDuration(input) {
+  if (typeof input !== 'string') return null;
+  const trimmed = input.trim().toLowerCase();
+  const match = PRUNE_DURATION_RE.exec(trimmed);
+  if (!match) {
+    return null;
+  }
+  const amount = Number(match[1]);
+  const unit = match[2].toLowerCase();
+  const multiplier = PRUNE_UNIT_DAYS[unit];
+  if (multiplier == null || !Number.isFinite(amount) || amount <= 0) {
+    return null;
+  }
+  return amount * multiplier;
+}
+
+/** `prune --older-than` under this many days is refused `older-than-floor` (§6.6, *chosen*). */
+export const PRUNE_FLOOR_DAYS = 30;
+
+/** doctor --backup's file name for the UTC second `nowMs` (§8.4): `YYYYMMDDTHHMMSSZ.db`, the form `--op backup`
+ *  publishes under db/backups/ and `doctor --restore` takes. D-4695 (history-backup-preflight-and-rename) */
+export function backupNameOf(nowMs) {
+  if (!Number.isSafeInteger(nowMs) || nowMs < 0) throw new TypeError(`backupNameOf: a time in ms, got ${String(nowMs)}`);
+  const iso = new Date(nowMs).toISOString();
+  return `${iso.slice(0, 19).replace(/[-:]/g, '')}Z.db`;
+}
+
+/** Whether `name` is a bare backup name `doctor --restore` may open under db/backups/ (§8.4). */
+export function restoreNameOk(name) {
+  return typeof name === 'string' && RESTORE_NAME_RE.test(name);
+}
+
+const BIND_REFUSALS = Object.freeze({ adopt: 'adopt-refused', restore: 'restore-refused', rebuild: 'rebuild-refused' });
+
+/** The binding verbs' preconditions (§8.4, §6.9; the "which also decides the binding verbs' preconditions" arm
+ *  of the store-open decision, §6.4). `f` is the store's measured facts (B1's StoreFacts) plus what the verb
+ *  names: the code's schema version, history.db's own user_version (`storedVersion`), a --store-id, the journal
+ *  directories with whether every head in each names that directory's store, and, for restore, the backup. Before
+ *  anything kind-specific, an input that could not be measured answers 5 `store-unmeasured` (C67): store.id, its
+ *  pending marker, store.writer, db/, history.db. A db/ link to nothing answers 5 `store-root-dangling`. Then:
+ *  - adopt: history.db present with a readable meta.store_id, and store.id absent (equal is nothing to adopt,
+ *    different is two stores claiming this box), and not this box's own interrupted binding (a pending marker
+ *    naming the same store, which the next tick finishes). Last, its user_version: one that is not a measured value
+ *    is 5 `store-unmeasured`, one below 1 or no integer (storeVersionDamaged) is refused as damage (H-223, D-4599), and
+ *    one above the code's is refused before anything is written, as openStore refuses
+ *    it before its writer's open (G9; DM17 "no write"). That refusal is decided here, never in the L4 arm (RB17);
+ *  - restore: no history.db, no leftover -wal or -shm (SQLite would replay it into the restored file), a regular
+ *    backup with a readable uuid store_id, store.id absent or naming that store, the backup's user_version not
+ *    newer than the code's, not below 1 (storeVersionDamaged; H-223) and its integrity_check not failed. Before the copy, version and integrity may be
+ *    null (not measured yet), and they pass;
+ *  - rebuild: no history.db and no leftover -wal or -shm. Its store_id is store.id's; else the one journal
+ *    directory whose heads agree; else --store-id, which must name one of several. store.id's own directory, when
+ *    journal/ holds one, is read on that path too (H-218, D-4605): foreign or disagree refuse, unreadable is exit 5.
+ *    A directory with no month file (`empty`, H-227) is nothing to replay and reads as `agree` on those two paths
+ *    (the crash window between appendJournal's mkdir and its first month file leaves one); alone and unnamed, it names no store.
+ *    A --store-id disagreeing with
+ *    store.id, naming no directory, or naming one whose heads name another store is refused, with the
+ *    candidates named. The two refusals a --store-id cures (several directories unnamed, a --store-id naming no
+ *    directory) also carry `remedy: 'store-id'`, so the arm offers the flag only where it helps
+ *    (D-4606 (history-rebuild-store-id-hint-where-it-cures)). A directory whose `heads` is `foreign` holds an entry
+ *    at a month-file name that is no regular file, a measured and permanent condition: it is refused (exit 2) naming
+ *    that, and carries no remedy, where `unreadable` is exit 5 and cured by a retry or a chmod (H-178, D-4605).
+ *  D-4188 D-4185 D-4186 */
+export function decideBind(kind, f) {
+  if (!Object.hasOwn(BIND_REFUSALS, kind)) throw new TypeError(`decideBind: kind outside BIND_KINDS: ${String(kind)}`);
+  const unmeasured = (detail) => ({ ok: false, rc: EXIT.DB, reason: 'store-unmeasured', detail });
+  const refuse = (detail) => ({ ok: false, rc: EXIT.REFUSED, reason: BIND_REFUSALS[kind], detail });
+  const foreignEntry = (id) => `journal/${id}/ holds an entry at a month-file name that is no regular file (a link, socket, FIFO or directory); the operator puts the regular month file back, or removes the entry, from a terminal outside any session, and runs the rebuild again`;
+  if (f.dbDir === 'dangling') return { ok: false, rc: EXIT.DB, reason: 'store-root-dangling', detail: 'db/ is a link to nothing: recreate its target or remove the link' };
+  if (f.dbDir === 'unmeasured' || f.db === 'unmeasured') return unmeasured('db/ or history.db could not be measured');
+  if (presenceUnreadable(f.storeId)) return unmeasured('store.id exists and cannot be read');
+  if (presenceUnreadable(f.pending)) return unmeasured('store.id.pending exists and cannot be read');
+  if (presenceUnreadable(f.writer)) return unmeasured('store.writer exists and cannot be read');
+  const marker = presenceValue(f.storeId);
+  if (kind === 'adopt') {
+    if (f.db !== 'present') return refuse(f.db === 'zero-byte' ? 'history.db is 0 bytes: there is no store to adopt' : 'there is no history.db to adopt');
+    const inDb = presenceValue(f.dbStoreId);
+    if (f.dbStoreId.state === 'unreadable') return unmeasured("history.db's meta.store_id cannot be read");
+    if (inDb === null) return refuse('history.db has no readable meta.store_id');
+    if (marker !== null) return refuse(marker === inDb ? 'store.id already names this store: nothing to adopt' : `store.id names ${marker} and history.db is ${inDb}: two stores claim this box`);
+    if (presenceValue(f.pending) === inDb) return refuse("store.id.pending names this store: it is this box's own interrupted binding, which the next tick finishes");
+    const stored = presenceValue(f.storedVersion);
+    if (stored === null) return unmeasured("history.db's user_version cannot be read");
+    // H-223 (D-4599): a stored version below 1 is damage, refused here as the reader and the writer refuse it (storeVersionDamaged).
+    if (storeVersionDamaged(stored)) return refuse(`history.db's user_version ${stored} is below 1 or no integer: it is damaged and is not adopted; ccrc history doctor --restore and --rebuild both refuse while history.db stands, so the operator moves history.db, history.db-wal and history.db-shm aside together, from a terminal outside any session, and then runs ccrc history doctor --restore <backup> or ccrc history doctor --rebuild`);
+    if (stored > f.codeVersion) return refuse(`history.db is schema ${stored}; this build knows ${f.codeVersion}: adopt it with the build that wrote it`);
+    return { ok: true, storeId: inDb };
+  }
+  if (kind === 'restore') {
+    if (f.db === 'present' || f.db === 'zero-byte') return refuse("history.db is present: a live store is never overwritten; move the old store's three files aside together first");
+    if (f.wal || f.shm) return refuse("a history.db-wal or -shm is left with no history.db: SQLite would replay it into the restored file; move the old store's three files aside together");
+    const bk = f.backup;
+    if (bk === null || !bk.regular) return refuse('the backup is not a regular file under db/backups/');
+    const bkId = presenceValue(bk.storeId);
+    if (bkId === null || !UUID_RE.test(bkId)) return refuse(bk.storeId.state === 'unreadable' ? "the backup's meta.store_id cannot be read" : 'the backup has no meta.store_id');
+    if (marker !== null && marker !== bkId) return refuse(`store.id names ${marker}; the backup is ${bkId}`);
+    // H-223 (D-4599): the bind-time half of the one rule for a version below 1 (storeVersionDamaged): a backup at user_version 0 would
+    // be linked as history.db and then refused by openStore (exit 5), and restore and rebuild would both refuse the present file.
+    if (bk.userVersion !== null && storeVersionDamaged(bk.userVersion)) return refuse(`the backup's user_version ${bk.userVersion} is below 1 or no integer: it is damaged; restore another backup`);
+    if (bk.userVersion !== null && bk.userVersion > f.codeVersion) return refuse(`the backup is schema ${bk.userVersion}; this build knows ${f.codeVersion}`);
+    if (bk.integrityOk === false) return refuse("the backup's integrity_check is not ok");
+    return { ok: true, storeId: bkId };
+  }
+  if (f.db === 'present' || f.db === 'zero-byte') return refuse('history.db is present: rebuild recreates a lost database only');
+  if (f.wal || f.shm) return refuse("a history.db-wal or -shm is left with no history.db: move the old store's three files aside together");
+  if (f.journalStoreDirs.includes('(unlistable)')) return unmeasured('journal/ could not be listed');
+  const dirs = f.journalDirs;
+  const names = dirs.length === 0 ? 'none' : dirs.map((d) => d.storeId).join(', ');
+  const arg = f.storeIdArg;
+  if (arg !== null) {
+    if (marker !== null && marker !== arg) return refuse(`store.id names ${marker}; --store-id names ${arg}`);
+    const d = dirs.find((x) => x.storeId === arg);
+    if (d === undefined) return { ...refuse(`--store-id ${arg} names no journal directory (journal directories: ${names})`), remedy: 'store-id' };
+    // D-4605 (history-rebuild-unreadable-journal-is-unmeasured): a directory the sweep could not read is unmeasured (exit 5), never a refusal.
+    if (d.heads === 'unreadable') return unmeasured(`journal/${arg}/ could not be read`);
+    if (d.heads === 'foreign') return refuse(foreignEntry(arg));
+    // H-227 (D-4605 refined): `empty` (no month file) is nothing to replay, as `agree` is; only a head that names another store refuses.
+    if (d.heads !== 'agree' && d.heads !== 'empty') return refuse(`journal/${arg}/ holds head records naming another store`);
+    return { ok: true, storeId: arg };
+  }
+  if (marker !== null) {
+    // H-218 (D-4605): store.id names the store, but its own journal directory is still read, so a month file replaced by a link,
+    // FIFO or directory (foreign) or heads naming another store (disagree) refuse here as on the --store-id path, instead of
+    // being listed, counted and never read by a recovery whose redact records then go unapplied. No directory is today's ok.
+    const own = dirs.find((x) => x.storeId === marker);
+    if (own === undefined || own.heads === 'agree' || own.heads === 'empty') return { ok: true, storeId: marker };
+    if (own.heads === 'unreadable') return unmeasured(`journal/${marker}/ could not be read`);
+    if (own.heads === 'foreign') return refuse(foreignEntry(marker));
+    return refuse(`journal/${marker}/ holds head records naming another store`);
+  }
+  if (dirs.length === 0) return refuse('nothing names a store_id: no store.id and no journal directory');
+  if (dirs.length > 1) return { ...refuse(`several journal directories: name one with --store-id (journal directories: ${names})`), remedy: 'store-id' };
+  if (dirs[0].heads === 'unreadable') return unmeasured(`journal/${dirs[0].storeId}/ could not be read`);
+  if (dirs[0].heads === 'foreign') return refuse(foreignEntry(dirs[0].storeId));
+  // H-227: a lone directory with no month file names a store nothing ever journaled into, and no store.id or --store-id names it: nothing to rebuild from.
+  if (dirs[0].heads === 'empty') return refuse(`journal/${dirs[0].storeId}/ holds no month file: there is nothing to rebuild from`);
+  if (dirs[0].heads !== 'agree') return refuse(`journal/${dirs[0].storeId}/ holds head records naming another store`);
+  return { ok: true, storeId: dirs[0].storeId };
+}
+
+/** reparse's preflight (§8.4, §11 L8): more than REPARSE_MAX_TARGETS leaves is `reparse-too-many`, and any target
+ *  with a tombstoned source or summary is `span-pruned` (§6.6). Either refuses the whole run, so nothing is
+ *  rewritten. */
+export function decideReparse({ targets, prunedSpans }) {
+  if (targets > REPARSE_MAX_TARGETS) return { ok: false, reason: 'reparse-too-many' };
+  if (prunedSpans > 0) return { ok: false, reason: 'span-pruned' };
+  return { ok: true };
+}
+
+// ===========================================================================
+// Recovery and repair decisions (spec §9.14 "Recovery", "Journal replay",
+// "Only drained files replay", "Unknown records"; §9.6 recovery-stalled;
+// §8.4 doctor --repair; §11 P21, P24; W1-B2 Task 7). Pure: the sweep's
+// recovery step (Task 25) streams the journal and applies every action
+// replayStep answers, deciding nothing of its own (the tick bounds included);
+// planReplay is the same order over a whole journal in memory, which O56 pins;
+// Task 25's tests pin the executor's agreement with it over the cases they
+// name.
+// D-4699 (history-recovery-replay) D-4230
+// D-4241 D-4190
+// D-4701 (history-replay-skips-post-bind-ticks)
+// ===========================================================================
+
+/** The recovery step's phases, in order (§9.14). `index` applies the redact records and indexes drain-time
+ *  verdicts and drained files; `apply` replays the journal; `reindex` re-runs the FTS derivation when the index
+ *  pass learned a pair the store lacked. B4 inserts its export phases between `apply` and `reindex` (§9.14
+ *  "Export replay"): this list is that seam. D-4700 (history-b4-after-b2) */
+export const RECOVER_PHASES = Object.freeze(['index', 'apply', 'reindex']);
+
+/** The phases that read the journal, and so carry a journal file and position in their cursor: the first two of
+ *  RECOVER_PHASES. The sweep's executor fails these while a journal file cannot be read (D-4592), and the cursor grammar
+ *  below is built from this list, so the word is spelled once. */
+export const RECOVER_JOURNAL_PHASES = Object.freeze(['index', 'apply']);
+
+const RECOVER_JOURNAL_CURSOR_RE = new RegExp(
+  `^(${RECOVER_JOURNAL_PHASES.join('|')})(?::([0-9]{4}-(?:0[1-9]|1[0-2])\\.[0-9a-f]{8}\\.jsonl):(0|[1-9][0-9]{0,15})(?:\\/([1-9][0-9]{0,15}))?)?(\\+pairs)?$`);
+const RECOVER_REINDEX_CURSOR_RE = /^reindex(?::(0|[1-9][0-9]{0,15}))?(\+pairs)?$/;
+
+/** The recovery step's cursor as derivation_state ('recover', <bind ms>) keeps it and status prints it (§9.14):
+ *  `<phase>` at a phase's start, `index:<YYYY-MM>.<writer>.jsonl:<position>/<n>` or `apply:…` inside the journal,
+ *  `reindex:<blob_id>` inside the FTS re-derivation, then `+pairs` once the index pass learned a pair the store
+ *  lacked. It is advanced in the same transaction as the records it applies.
+ *  D-4607 (history-recover-cursor-records-group-shape): the position is a byte offset into a group of one file and an
+ *  ordinal into a merge group's merged list, so the cursor records the group's file count `n` beside it. The executor
+ *  resumes only a group whose size still equals `n`; a cursor with no `/<n>` (written before the size was kept, or
+ *  `groupSize` null or absent) restarts its group from its start. A `groupSize` that is none of null, absent or a positive safe
+ *  integer throws a TypeError (H-182): parseRecoverCursor answers null to such a text, so it would stall the step for good. */
+export function formatRecoverCursor(c) {
+  if (!RECOVER_PHASES.includes(c.phase)) throw new TypeError(`formatRecoverCursor: phase outside RECOVER_PHASES: ${String(c.phase)}`);
+  let s = c.phase;
+  // H-182 (D-4607): only a size parseRecoverCursor reads back is written, so a committed cursor is never one lib refuses.
+  const g = c.groupSize;
+  if (g !== undefined && g !== null && !(Number.isSafeInteger(g) && g >= 1)) {
+    throw new TypeError(`formatRecoverCursor: groupSize is not a positive safe integer: ${String(g)}`);
+  }
+  if (c.phase === 'reindex') {
+    if (c.blobId !== null) s += `:${c.blobId}`;
+  } else if (c.file !== null) {
+    s += `:${c.file}:${c.offset}`;
+    if (c.groupSize !== undefined && c.groupSize !== null) s += `/${c.groupSize}`;
+  }
+  return c.pairsAdded ? `${s}+pairs` : s;
+}
+
+/** The cursor back, or null when it is not one: never a guess at where to resume. A NULL column (a step just
+ *  registered by a binding verb) is the step's start. */
+export function parseRecoverCursor(s) {
+  if (s === null) return { phase: RECOVER_PHASES[0], file: null, offset: 0, blobId: null, groupSize: null, pairsAdded: false };
+  if (typeof s !== 'string') return null;
+  const j = RECOVER_JOURNAL_CURSOR_RE.exec(s);
+  if (j !== null) {
+    const offset = j[3] === undefined ? 0 : Number(j[3]);
+    if (!Number.isSafeInteger(offset)) return null;
+    const groupSize = j[4] === undefined ? null : Number(j[4]);
+    if (groupSize !== null && !Number.isSafeInteger(groupSize)) return null;
+    return { phase: j[1], file: j[2] ?? null, offset, blobId: null, groupSize, pairsAdded: j[5] !== undefined };
+  }
+  const r = RECOVER_REINDEX_CURSOR_RE.exec(s);
+  if (r !== null) {
+    const blobId = r[1] === undefined ? null : Number(r[1]);
+    if (blobId !== null && !Number.isSafeInteger(blobId)) return null;
+    return { phase: 'reindex', file: null, offset: 0, blobId, groupSize: null, pairsAdded: r[2] !== undefined };
+  }
+  return null;
+}
+
+const journalCmpText = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
+const journalCmpHead = (a, b) => (a === b ? 0 : a === null ? 1 : b === null ? -1 : a - b);
+const journalFileOrder = (a, b) => journalCmpText(a.month, b.month) || journalCmpHead(a.headT, b.headT) || journalCmpText(a.name, b.name);
+
+/** The journal files' apply order (§9.14 "Journal replay"): by the month in the name, then by the head
+ *  record's time, then by name (code-unit order, never the locale's: DM8). Files of one month whose
+ *  [headT, lastT] ranges overlap (a store run on two boxes at once, against §6.9's rule) form ONE group, which
+ *  the caller merges by record time. A file with no readable head sorts last in its month, alone. */
+export function orderJournalFiles(files) {
+  const groups = [];
+  let cur = null;
+  for (const f of [...files].sort(journalFileOrder)) {
+    const hi = f.lastT ?? f.headT;
+    if (cur !== null && cur.month === f.month && f.headT !== null && cur.hi !== null && f.headT <= cur.hi) {
+      cur.names.push(f.name);
+      if (hi !== null && hi > cur.hi) cur.hi = hi;
+      continue;
+    }
+    cur = { month: f.month, hi, names: [f.name] };
+    groups.push(cur);
+  }
+  return groups.map((g) => g.names);
+}
+
+/** The first pass over one record (§9.14): a `redact` pair, a drain-time verdict (one keyed to its spool line's
+ *  event_key) to apply at that line, or a `drained` record naming a file whose spool records may replay. */
+export function indexRecord(r) {
+  if (r.kind !== 'record') return {};
+  const rec = r.rec;
+  if (rec.k === 'redact') return { redact: { len: rec.len, sha256: rec.sha256, t: rec.t } };
+  if (rec.k !== 'verdict') return {};
+  if (rec.kind === 'drained') return { drainedFile: rec.file };
+  if (rec.kind === 'bind' || rec.event_key === 'none') return {};
+  return { verdictKey: rec.event_key };
+}
+
+/** The second pass over one record (§9.14). It never reads $REG and never re-decides: a spool record of a
+ *  drained file becomes a receipt carrying the verdicts the drain took from it, in journal order, which the
+ *  executor applies through decideEpochLine and the drain's own receipt functions; a verdict keyed to a line
+ *  waits for that line; a verdict keyed `none` (a later confirmation, a backfill mapping, an operator's import)
+ *  applies at its own position. A spool record whose file has no `drained` record is skipped: the file is still
+ *  in .draining/ with its sidecar, and the live drain decides it after the step, or B1 set it aside after journaling
+ *  it, into .draining/rejected/ or .draining/planted/<area>/, where nothing drains it; either way the lost store held
+ *  none of its lines (the executor, Task 25's undrainedFileKept, tells a kept file from a gone one). A tick at or before the newest
+ *  tick the store held when the step began (`ticksAfter`) is already there; one at or after the step's bind ms
+ *  (`ticksBefore`, when it is a number) is a recovery pass's own record, journaled after the bind
+ *  D-4701 (history-replay-skips-post-bind-ticks). A line that does not parse, or a `v` newer than
+ *  this build, counts journal_line_malformed; an unknown kind journal_record_unknown; a head naming another
+ *  store journal_head_mismatch. Nothing here throws on a record. */
+export function replayStep(state, r) {
+  if (r.kind === 'malformed' || r.kind === 'newer') return { state, actions: [{ do: 'skip', counter: 'journal_line_malformed' }] };
+  if (r.kind === 'unknown') return { state, actions: [{ do: 'skip', counter: 'journal_record_unknown' }] };
+  const rec = r.rec;
+  switch (rec.k) {
+    case 'head':
+      if (rec.store_id !== state.storeId) return { state: { ...state, file: null }, actions: [{ do: 'skip', counter: 'journal_head_mismatch' }] };
+      return { state: { ...state, file: null }, actions: [] };
+    case 'file':
+      return { state: { ...state, file: rec.name, recvMs: rec.t }, actions: [{ do: 'file', name: rec.name, t: rec.t }] };
+    case 'spool': {
+      if (state.file === null) return { state, actions: [{ do: 'skip', counter: 'journal_line_malformed' }] };
+      if (!state.drained.has(state.file)) return { state, actions: [{ do: 'skip-undrained', file: state.file }] };
+      const key = eventKey(state.file, rec.ord);
+      return { state, actions: [{ do: 'receipt', key, ord: rec.ord, rec: rec.rec, recvMs: state.recvMs, verdicts: [...(state.verdictsByKey.get(key) ?? [])] }] };
+    }
+    case 'verdict':
+      if (rec.kind === 'bind' || rec.kind === 'drained') return { state, actions: [] };
+      if (rec.event_key !== 'none') return { state, actions: [] };
+      return { state, actions: [{ do: 'verdict', rec }] };
+    case 'redact':
+      return { state, actions: [] };
+    case 'tick': {
+      const before = typeof state.ticksBefore !== 'number' || rec.t < state.ticksBefore;
+      return { state, actions: rec.t > state.ticksAfter && before ? [{ do: 'tick', t: rec.t, lagMs: rec.lag_ms }] : [] };
+    }
+    default:
+      return { state, actions: [{ do: 'skip', counter: 'journal_record_unknown' }] };
+  }
+}
+
+/** One merge group's items by their time `t`, each file's own order kept, a tie to the earlier file in the group.
+ *  `files` is one array of items per file, each item carrying a numeric `t`; the answer is the items themselves, merged.
+ *  A journal block (a `file` record and its `spool` records) shares one `t`, so a block is never split. The ONE merge
+ *  both planReplay (items `{ read, t }`) and sweep.mjs's recovery executor (items `{ raw, t }`, W1-B2 Task 25) use, so
+ *  the order O56 pins is the order the executor applies (R-T25-1). */
+export function mergeJournalByTime(files) {
+  const pos = files.map(() => 0);
+  const out = [];
+  for (;;) {
+    let pick = -1;
+    for (let f = 0; f < files.length; f += 1) {
+      if (pos[f] >= files[f].length) continue;
+      if (pick < 0 || files[f][pos[f]].t < files[pick][pos[pick]].t) pick = f;
+    }
+    if (pick < 0) return out;
+    out.push(files[pick][pos[pick]]);
+    pos[pick] += 1;
+  }
+}
+
+/** The whole replay of one store's journal, in memory (§9.14; the O56 pin). A file whose head names another
+ *  store is dropped, counted once. The rest run in orderJournalFiles' order, each group merged by record time. A
+ *  first pass indexes every redact pair (applied before anything else: "Redaction first"), every drain-time
+ *  verdict by event_key (an identical re-appended verdict once) and every drained file; the second runs
+ *  replayStep over the same stream. Duplicate receipts are left to the executor's receipt upsert. `ticksBefore`
+ *  (the step's bind ms) defaults to null, no upper tick bound. */
+export function planReplay({ storeId, files, ticksAfter, ticksBefore = null }) {
+  const skips = [];
+  const kept = [];
+  for (const f of files) {
+    const recs = [];
+    let headT = null;
+    let lastT = null;
+    let foreign = false;
+    for (const line of f.lines) {
+      if (line === '') continue;
+      const read = parseJournalRecord(line);
+      if (recs.length === 0 && read.kind === 'record' && read.rec.k === 'head') {
+        if (read.rec.store_id !== storeId) { foreign = true; break; }
+        headT = read.rec.t;
+      }
+      const t = read.kind === 'record' ? read.rec.t : (lastT ?? headT ?? 0);
+      if (read.kind === 'record') lastT = lastT === null ? t : Math.max(lastT, t);
+      recs.push({ read, t });
+    }
+    if (foreign) {
+      skips.push({ do: 'skip', counter: 'journal_head_mismatch' });
+      continue;
+    }
+    kept.push({ name: f.name, month: f.month, writer: f.writer, headT, lastT, recs });
+  }
+  const byName = new Map(kept.map((f) => [f.name, f]));
+  const stream = orderJournalFiles(kept).flatMap((g) => mergeJournalByTime(g.map((n) => byName.get(n).recs)).map((x) => x.read));
+  const redacts = [];
+  const seenPairs = new Set();
+  const seenVerdicts = new Set();
+  const verdictsByKey = new Map();
+  const drained = new Set();
+  for (const read of stream) {
+    const ix = indexRecord(read);
+    if (ix.redact !== undefined) {
+      const pair = `${ix.redact.len}:${ix.redact.sha256}`;
+      if (!seenPairs.has(pair)) {
+        seenPairs.add(pair);
+        redacts.push({ do: 'redact', ...ix.redact });
+      }
+    }
+    if (ix.drainedFile !== undefined) drained.add(ix.drainedFile);
+    if (ix.verdictKey !== undefined) {
+      const same = canonicalJson(read.rec);
+      if (!seenVerdicts.has(same)) {
+        seenVerdicts.add(same);
+        const list = verdictsByKey.get(ix.verdictKey) ?? [];
+        list.push(read.rec);
+        verdictsByKey.set(ix.verdictKey, list);
+      }
+    }
+  }
+  let state = { storeId, file: null, recvMs: 0, drained, verdictsByKey, ticksAfter, ticksBefore };
+  const applied = [];
+  for (const read of stream) {
+    const step = replayStep(state, read);
+    state = step.state;
+    applied.push(...step.actions);
+  }
+  return [...skips, ...redacts, ...applied];
+}
+
+/** The recovery step's unmoved-tick count, kept in meta HEALTH_META.recoverUnmovedTicks (§9.6: FAIL
+ *  recovery-stalled at RECOVERY_STALL_TICKS). A moved cursor resets it; a tick the floor or history-off held
+ *  leaves it; any other tick adds one. */
+export function nextUnmovedTicks({ prev, moved, held }) {
+  if (moved) return 0;
+  return held ? prev : prev + 1;
+}
+
+// derived from lossless-claw src/plugin/lcm-doctor-rollover-splits.ts @ e05d8d3, MIT, see LICENSE.lossless-claw
+const foreignKeyKey = (row) => [row.table ?? '', row.rowid ?? '', row.parent ?? '', row.fkid ?? ''].join('\0');
+
+/** doctor --repair's foreign-key proof (§8.4, P21): the violations `PRAGMA foreign_key_check` reports at the
+ *  repair's completion, against the baseline taken ONCE before its first chunk and persisted with its resumable
+ *  cursor, so a resumed repair diffs against the original baseline (RB7; Task 23 runs the check twice per repair,
+ *  never per chunk). A violation is keyed by (table, rowid, parent, fkid); one
+ *  outside the baseline is NEW, and a repair that made one is refused. No v1 table is WITHOUT ROWID, so rowid is
+ *  never NULL for a v1 row. */
+export function diffForeignKeys(baseline, current) {
+  const base = new Set(baseline.map(foreignKeyKey));
+  const newViolations = [];
+  let preExisting = 0;
+  for (const row of current) {
+    if (base.has(foreignKeyKey(row))) preExisting += 1;
+    else newViolations.push(row);
+  }
+  return { newViolations, preExisting };
+}
+
+// derived from lossless-claw src/db/migration.ts @ e05d8d3, MIT, see LICENSE.lossless-claw
+/** Each FTS table's shadow tables, listed per table (P24): the contentless blobs_fts (content='',
+ *  contentless_delete=1) has no `_content` shadow, so a list naming one for every table would read a healthy
+ *  index as broken and rebuild it on every repair. */
+export const FTS_SHADOWS = Object.freeze({
+  blobs_fts: Object.freeze(['blobs_fts_config', 'blobs_fts_data', 'blobs_fts_docsize', 'blobs_fts_idx']),
+  nodes_fts: Object.freeze(['nodes_fts_config', 'nodes_fts_content', 'nodes_fts_data', 'nodes_fts_docsize', 'nodes_fts_idx']),
+});
+/** Each FTS table's columns, as B1's FTS_DDL creates them. */
+export const FTS_COLUMNS = Object.freeze({
+  blobs_fts: Object.freeze(['body']),
+  nodes_fts: Object.freeze(['gist', 'topics', 'refs']),
+});
+
+/** Whether each FTS table is whole (§8.4 doctor --repair's self-heal, P24): the table, every shadow it should
+ *  have, and every column. The store adapter measures `tables` (sqlite_master) and `columns` (pragma_table_info);
+ *  the repair rebuilds a table this answers false for. */
+export function ftsTablesHealthy({ tables, columns }) {
+  const healthy = (t) => tables.has(t) && FTS_SHADOWS[t].every((s) => tables.has(s))
+    && FTS_COLUMNS[t].every((c) => (columns[t] ?? []).includes(c));
+  return { blobs: healthy('blobs_fts'), nodes: healthy('nodes_fts') };
+}
+
+// ===========================================================================
+// The substring belt (spec §8.3 layer 4 and layer 1's glue windows, §6.2 "The belt"; rev 3.5; W1-B2 Task 7A;
+// coordinator rulings 4019 and 4043, reviews 344 F9 and 351). Layer 1 matches a registered unit only as a whole
+// `[A-Za-z0-9_-]` run, so a unit glued to a neighbour (`ab_<v>`, `ab<v>`) or a run an escape sequence took a character
+// of (`ESC[` + `P…`) kept most of a secret as one FTS term and printed it (B1's D-4344
+// (history-reindex-mark-by-rederivation) and D-4307 (history-redaction-csi-joined-belt) name both limits). Two repairs,
+// both inside redactField so every caller has them:
+// layer 1's glue windows (by hash, so a rotated value and a sessions.json hash are covered), and layer 4, which masks
+// every stretch sharing beltWidth(unit) or more consecutive characters, folded, with a unit this process loaded.
+// ===========================================================================
+
+/** The belt's derivation version (meta fts_belt's `v`). A store whose recorded version differs, a B1 store's absent
+ *  state included, re-derives its whole index once (decideBelt, rederivePlan); a generation open across a bump is
+ *  restarted, and a completion stamps the version its walk ran under (`gv`, ruling R-version). Bump it with any change
+ *  to layer 4, to the glue windows, to beltWidth, to beltFold or to the seed rule. */
+export const BELT_VERSION = 1;
+/** The bits a matched stretch must carry in its unit's folded alphabet: SECRET_SEGMENT_MIN base64url characters'
+ *  72 bits, the bound §8.3 already sets on a segment. */
+export const BELT_BITS = 72;
+/** The widths the belt scans at, ascending; the floor is SECRET_SEGMENT_MIN, the shortest unit. */
+export const BELT_K_LADDER = Object.freeze([12, 14, 16, 18, 21]);
+/** The most grams one belt holds (about 15 MiB); a unit past it stays in layer 1 only and is counted. */
+export const BELT_GRAMS_MAX = 65536;
+/** meta key: the belt state, formatBeltState's JSON (rowids only, never a value). */
+export const BELT_META = 'fts_belt';
+/** The derivation step that re-redacts every node's stored fields when a re-derivation generation opens. */
+export const BELT_NODES_STEP = 'nodes-belt';
+/** meta key: the declared secretsFile paths the last tick read (JSON array, paths only). */
+export const REDACT_SOURCES_META = 'redact_sources';
+/** The belt's counter words (sweep.mjs writes them). */
+export const BELT_COUNTERS = Object.freeze({ overflow: 'redact_belt_overflow', generations: 'redact_belt_generations' });
+/** The glue windows one run may hash before it is replaced whole (fail closed): this plus a quarter of its length. */
+const GLUE_HASH_FLOOR = 64;
+/** The window characters one run may hash before it is replaced whole (fail closed): this plus 4 × its length, each
+ *  window charged its length before it is hashed (spec §8.3, review R69; *chosen*). A count bound alone costs
+ *  (64 + n/4) × the longest registered pair. */
+const GLUE_HASH_BYTES_FLOOR = 64 * 1024;
+
+/** A character's belt code: 1-38 for `[a-z0-9_-]` (an upper-case letter folds to its lower case), 0 for any other
+ *  ASCII character, a boundary no gram crosses. */
+const BELT_CODE = (() => {
+  const t = new Uint8Array(128);
+  let c = 1;
+  for (const ch of 'abcdefghijklmnopqrstuvwxyz0123456789_-') { t[ch.charCodeAt(0)] = c; c += 1; }
+  for (let u = 0x41; u <= 0x5a; u += 1) t[u] = t[u + 0x20];
+  return t;
+})();
+const FOLD_MEMO = new Map();
+const FOLD_MEMO_MAX = 4096;
+const isAsciiAlnum = (b) => (b >= 0x30 && b <= 0x39) || (b >= 0x41 && b <= 0x5a) || (b >= 0x61 && b <= 0x7a);
+
+/** A non-ASCII code point's belt code, exactly as FTS5 unicode61 (remove_diacritics 1) folds it inside a token
+ *  (coordinator ruling R-fold): one of the marks it drops is dropped (-1); a character whose canonical decomposition is
+ *  an ASCII letter or digit alone, or that and one dropped mark, folds to that character's code; U+017F and U+1E9B
+ *  (long s, and long s with a dot above) fold to `s`, as unicode61's case fold takes them; anything else is a
+ *  boundary (0), a letter with two marks included, which unicode61 keeps as itself. Memoised per code point
+ *  (bounded), so CJK-dense text costs one lookup a character. */
+export function beltFold(cp) {
+  const hit = FOLD_MEMO.get(cp);
+  if (hit !== undefined) return hit;
+  let c = 0;
+  if (isDroppedMark(cp)) c = -1;
+  else if (cp === 0x17f || cp === 0x1e9b) c = BELT_CODE[0x73];
+  else {
+    const d = String.fromCodePoint(cp).normalize('NFD');
+    const b = d.charCodeAt(0);
+    if (isAsciiAlnum(b) && (d.length === 1 || (d.length === 2 && isDroppedMark(d.charCodeAt(1))))) c = BELT_CODE[b];
+  }
+  if (FOLD_MEMO.size < FOLD_MEMO_MAX) FOLD_MEMO.set(cp, c);
+  return c;
+}
+
+/** The width a unit is masked at: the stretch its folded alphabet needs to carry BELT_BITS, never more than the unit,
+ *  rounded DOWN to BELT_K_LADDER (rounding down only masks more). */
+export function beltWidth(unit) {
+  const u = unit.toLowerCase();
+  let size;
+  if (/^[0-9]+$/.test(u)) size = 10;
+  else if (/^[0-9a-f]+$/.test(u)) size = 16;
+  else size = (/[0-9]/.test(u) ? 10 : 0) + (/[a-z]/.test(u) ? 26 : 0) + (u.includes('_') ? 1 : 0) + (u.includes('-') ? 1 : 0);
+  const need = size < 2 ? u.length : Math.min(u.length, Math.ceil(BELT_BITS / Math.log2(size)));
+  let w = BELT_K_LADDER[0];
+  for (const s of BELT_K_LADDER) if (s <= need) w = s;
+  return w;
+}
+
+/** Whether the gram of `unit` at `off`, `w` long, may seed a mask: at least a third of its folded characters are
+ *  distinct (a padding run seeds nothing), and it holds a digit or both an upper- and a lower-case letter. So a
+ *  snake_case, kebab-case or CONSTANT_CASE word, or the wordy part of a token (`claude-sonnet-`), seeds nothing. The
+ *  price depends on the unit's alphabet (measured, 2000 random 40-character values each, and 5.4M base64url grams):
+ *  a token's gram fails this about once in 10^4 when it is mixed-case, about once in 5 × 10^4 when it is base64url
+ *  (measured 2.07e-5), but a one-case `[a-z0-9]` token's about once in 100 and
+ *  a base32 `[A-Z2-7]` one's about once in 18. A print that holds any seeding gram is still masked to its run; a
+ *  partial print of a one-case unit's digit-free window alone is left (spec §8.3 "What it cannot see"). A value of
+ *  one-case letters only is left to layer 1 (its pair and its glue windows). */
+function beltSeeds(unit, off, w) {
+  let digit = false;
+  let lower = false;
+  let upper = false;
+  const seen = new Set();
+  for (let k = off; k < off + w; k += 1) {
+    const c = unit.charCodeAt(k);
+    if (c >= 0x30 && c <= 0x39) digit = true;
+    else if (c >= 0x61 && c <= 0x7a) lower = true;
+    else if (c >= 0x41 && c <= 0x5a) upper = true;
+    seen.add(BELT_CODE[c]);
+  }
+  if (seen.size * 3 < w) return false;
+  return digit || (lower && upper);
+}
+
+const BELT_BASE = 0x01000193;
+function beltPow(e) {
+  let r = 1;
+  for (let i = 0; i < e; i += 1) r = Math.imul(r, BELT_BASE);
+  return r;
+}
+function beltSame(a, ai, b, bi, w) {
+  for (let k = 0; k < w; k += 1) if (a[ai + k] !== b[bi + k]) return false;
+  return true;
+}
+
+/** The units the belt masks for `values`: secretUnits' rule, so layer 4, layer 1 and the late-pair search agree. */
+export function beltUnits(values) {
+  return [...new Set([...values].flatMap((v) => secretUnits(v)))];
+}
+
+/** The belt over `units` (secretUnits' runs of `[A-Za-z0-9_-]`, SECRET_SEGMENT_MIN or more). Each width holds a table
+ *  from a seeding gram's 32-bit rolling hash (high 30 bits) to the grams with it; every candidate is compared code by
+ *  code, so a collision never changes an answer. Units are taken in sorted order until BELT_GRAMS_MAX; the rest are
+ *  counted in `overflow`. Held in this process's memory only; `texts` is what the --regex child is handed. */
+export function makeBelt(units) {
+  const codesOf = [];
+  const texts = [];
+  const byWidth = new Map();
+  let grams = 0;
+  let overflow = 0;
+  for (const unit of [...new Set(units)].sort()) {
+    const w = beltWidth(unit);
+    const n = unit.length - w + 1;
+    if (n < 1 || !/^[A-Za-z0-9_-]+$/.test(unit)) continue;
+    const codes = new Uint8Array(unit.length);
+    for (let i = 0; i < unit.length; i += 1) codes[i] = BELT_CODE[unit.charCodeAt(i)];
+    const existing = byWidth.get(w);
+    const pw = existing === undefined ? beltPow(w - 1) : existing.pw;
+    const staged = [];
+    let h = 0;
+    for (let i = 0; i < unit.length; i += 1) {
+      if (i >= w) h = (h - Math.imul(codes[i - w], pw)) | 0;
+      h = (Math.imul(h, BELT_BASE) + codes[i]) | 0;
+      if (i < w - 1) continue;
+      const off = i - w + 1;
+      if (!beltSeeds(unit, off, w)) continue;
+      const key = h >>> 2;
+      const prior = existing?.table.get(key);
+      if (prior !== undefined && prior.some((g) => beltSame(codesOf[g.unit], g.off, codes, off, w))) continue;
+      if (staged.some((g) => g.key === key && beltSame(codes, g.off, codes, off, w))) continue;
+      staged.push({ key, off });
+    }
+    if (grams + staged.length > BELT_GRAMS_MAX) { overflow += 1; continue; }
+    const at = codesOf.length;
+    codesOf.push(codes);
+    texts.push(unit);
+    let t = existing;
+    if (t === undefined) {
+      t = { w, pw, table: new Map() };
+      byWidth.set(w, t);
+    }
+    for (const { key, off } of staged) {
+      const list = t.table.get(key);
+      if (list === undefined) t.table.set(key, [{ unit: at, off }]);
+      else list.push({ unit: at, off });
+    }
+    grams += staged.length;
+  }
+  return { units: codesOf, texts, widths: [...byWidth.values()].sort((a, b) => a.w - b.w), grams, overflow };
+}
+
+/** A reading of a text: a string and, per UTF-16 unit of it, the range of the text it came from (null: itself). */
+const readFrom = (r, i) => (r.from === null ? i : r.from[i]);
+const readTo = (r, i) => (r.to === null ? i + 1 : r.to[i]);
+
+/** `r` with every match of `re` (global) replaced by `fn(match)`, each replacement character mapped to the match. */
+function mapReading(r, re, fn) {
+  const parts = [];
+  const from = [];
+  const to = [];
+  let last = 0;
+  re.lastIndex = 0;
+  for (let m = re.exec(r.s); m !== null; m = re.exec(r.s)) {
+    for (let i = last; i < m.index; i += 1) { from.push(readFrom(r, i)); to.push(readTo(r, i)); }
+    parts.push(r.s.slice(last, m.index));
+    const rep = fn(m);
+    const a = readFrom(r, m.index);
+    const b = readTo(r, m.index + m[0].length - 1);
+    for (let i = 0; i < rep.length; i += 1) { from.push(a); to.push(b); }
+    parts.push(rep);
+    last = m.index + m[0].length;
+    if (m[0].length === 0) re.lastIndex += 1;
+  }
+  if (last === 0 && parts.length === 0) return r;
+  for (let i = last; i < r.s.length; i += 1) { from.push(readFrom(r, i)); to.push(readTo(r, i)); }
+  parts.push(r.s.slice(last));
+  return { s: parts.join(''), from: Int32Array.from(from), to: Int32Array.from(to) };
+}
+
+/** The bytes of one escape sequence that introduce it: a 7-bit ESC, its fill and the `[`, `P`, `N` or `O` after it
+ *  when a byte follows that, or the one 8-bit introducer. The rest (parameters, intermediates, the final byte) is what
+ *  a stray introducer may have taken from a value. */
+function introducerLen(seq) {
+  if (seq.charCodeAt(0) !== 0x1b) return 1;
+  let k = 1;
+  while (k < seq.length && SEQ_FILL_RE.test(seq[k])) k += 1;
+  return k < seq.length - 1 && '[PNO'.includes(seq[k]) ? k + 1 : k;
+}
+
+/** Scan one reading: every window equal to a seeding gram of its width adds its source range to `cover` (a difference
+ *  array over the masked text) and calls `onHit` (the re-derivation's probe). Linear per width. */
+function scanReading(r, belt, cover, onHit) {
+  const s = r.s;
+  const codes = new Uint8Array(s.length);
+  const from = new Int32Array(s.length);
+  const to = new Int32Array(s.length);
+  let n = 0;
+  for (let i = 0; i < s.length;) {
+    const u = s.charCodeAt(i);
+    let len = 1;
+    let c;
+    if (u < 0x80) c = BELT_CODE[u];
+    else {
+      const cp = s.codePointAt(i);
+      if (cp > 0xffff) len = 2;
+      c = beltFold(cp);
+    }
+    if (c >= 0) {
+      codes[n] = c;
+      if (r.from === null) { from[n] = i; to[n] = i + len; } else { from[n] = r.from[i]; to[n] = r.to[i + len - 1]; }
+      n += 1;
+    }
+    i += len;
+  }
+  for (const t of belt.widths) {
+    const w = t.w;
+    let h = 0;
+    let run = 0;
+    for (let i = 0; i < n; i += 1) {
+      const c = codes[i];
+      if (c === 0) { run = 0; h = 0; continue; }
+      if (run >= w) h = (h - Math.imul(codes[i - w], t.pw)) | 0;
+      else run += 1;
+      h = (Math.imul(h, BELT_BASE) + c) | 0;
+      if (run < w) continue;
+      const list = t.table.get(h >>> 2);
+      if (list === undefined) continue;
+      if (!list.some((x) => beltSame(belt.units[x.unit], x.off, codes, i - w + 1, w))) continue;
+      cover[from[i - w + 1]] += 1;
+      cover[to[i]] -= 1;
+      if (onHit !== null) onHit();
+    }
+  }
+}
+
+/** Layer 4 (spec §8.3): `text` with every stretch sharing a seeding gram with a unit of `belt` replaced by
+ *  REDACTED_MARK. Readings: the text, and when it holds an escape introducer, the text with every ANSI sequence removed
+ *  and the text with every sequence's introducer removed (what a stray `ESC[` took stays in place); with `decode`, the
+ *  same three of each JSON-escape decode, up to INDEX_UNESCAPE_PASSES, stopping at the first that changes nothing. Each
+ *  reading is folded (ASCII case, unicode61's diacritics, beltFold) and maps every character back to the range of
+ *  `text` it came from. The masked ranges are their union, each widened to the `[A-Za-z0-9_-]` run around it but never
+ *  over a JSON escape's letter or hex digit, then each replaced by one mark; a span that starts inside an escape takes
+ *  the whole escape, so no mark follows a bare backslash. A mark holds no unit's width of run characters, so the result
+ *  is a fixed point. Cost: at most 3 * (1 + INDEX_UNESCAPE_PASSES) readings, each scanned once per width
+ *  (BELT_K_LADDER.length at most) with an exact comparison of at most the width per hash hit, and one widening pass
+ *  that reads each character at most once (a cover inside an already widened span joins it, ruling R-linear): O(text),
+ *  pinned by the case `the widening is linear`. `onHit` (or null) is called once per matched window. */
+export function beltMask(text, belt, decode, onHit = null) {
+  if (belt === null || belt === undefined || belt.widths.length === 0 || text.length < BELT_K_LADDER[0]) return text;
+  const cover = new Int32Array(text.length + 1);
+  let r = { s: text, from: null, to: null };
+  for (let level = 0; ; level += 1) {
+    scanReading(r, belt, cover, onHit);
+    if (ESCAPE_INTRODUCER_RE.test(r.s)) {
+      scanReading(mapReading(r, ANSI_ESCAPE_RE, () => ''), belt, cover, onHit);
+      scanReading(mapReading(r, ANSI_ESCAPE_RE, (m) => m[0].slice(introducerLen(m[0]))), belt, cover, onHit);
+    }
+    if (!decode || level >= INDEX_UNESCAPE_PASSES || !r.s.includes('\\')) break;
+    const d = mapReading(r, JSON_ESCAPE_RE, (m) => (m[1] !== undefined ? JSON_ESCAPE_CHAR[m[1]] : String.fromCharCode(parseInt(m[2], 16))));
+    if (d === r || d.s === r.s) break;
+    r = d;
+  }
+  // The masked spans: each union of covered ranges, widened to the `[A-Za-z0-9_-]` run around it. The widening is
+  // linear (ruling R-linear): a cover that starts at or before the end the last span was widened to joins that span,
+  // so no character is widened over twice. (A cover inside an already widened run used to push a span of its own and
+  // rescan the rest of the run, quadratic in it.) A left widening never takes a JSON escape's letter or hex digit, and
+  // a span that starts inside an escape takes the whole escape, so no mark follows a bare backslash and a `--json`
+  // string stays valid, as REDACTED_MARK promises (finding R31).
+  const n = text.length;
+  const spans = [];
+  let depth = 0;
+  for (let i = 0; i < n; i += 1) {
+    const was = depth;
+    depth += cover[i];
+    if (depth > 0) {
+      const last = spans.length === 0 ? null : spans[spans.length - 1];
+      if (was === 0 && (last === null || i > last[1])) {
+        const floor = last === null ? 0 : last[1];
+        let s = i;
+        while (s > floor && isRunByte(text.charCodeAt(s - 1)) && jsonEscapeAt(text, s - 1) < 0) s -= 1;
+        if (last !== null && s === floor) last[1] = i + 1;
+        else spans.push([s, i + 1]);
+      } else if (i + 1 > last[1]) last[1] = i + 1;
+    } else if (was > 0) widenRun(text, spans[spans.length - 1]);
+  }
+  if (spans.length === 0) return text;
+  widenRun(text, spans[spans.length - 1]);
+  let out = '';
+  let last = 0;
+  for (const [s0, e] of spans) {
+    if (e <= last) continue;
+    const at = jsonEscapeAt(text, s0);
+    const s = at < 0 ? s0 : at;
+    out += text.slice(last, Math.max(s, last)) + REDACTED_MARK;
+    last = e;
+  }
+  return out + text.slice(last);
+}
+
+/** A span's right widening over the `[A-Za-z0-9_-]` run after it. A backslash ends it, so it never enters an escape. */
+function widenRun(text, sp) {
+  while (sp[1] < text.length && isRunByte(text.charCodeAt(sp[1]))) sp[1] += 1;
+}
+
+const isHexByte = (b) => (b >= 0x30 && b <= 0x39) || (b >= 0x41 && b <= 0x46) || (b >= 0x61 && b <= 0x66);
+
+/** The index of the backslash of the JSON escape whose letter or hex digit `text[k]` is (`\n`, `A`), or -1. A
+ *  backslash opens an escape only after an even number of backslashes (`\\n` is an escaped backslash, then a letter).
+ *  Cost: at most five characters back, and the backslash run there. */
+function jsonEscapeAt(text, k) {
+  for (let b = k - 1; b >= 0 && b >= k - 5; b -= 1) {
+    if (text.charCodeAt(b) !== 0x5c) continue;
+    let r = b;
+    while (r > 0 && text.charCodeAt(r - 1) === 0x5c) r -= 1;
+    if ((b - r) % 2 === 1) return -1;
+    if (k === b + 1) return JSON_ESCAPE_CHAR[text[k]] !== undefined || text[k] === 'u' ? b : -1;
+    if (text[b + 1] !== 'u') return -1;
+    for (let h = b + 2; h <= k; h += 1) if (!isHexByte(text.charCodeAt(h))) return -1;
+    return b;
+  }
+  return -1;
+}
+
+/** The probe callback of a re-derivation index (makeProbeIndex with beltAll): every layer-4 and glue-window hit is an
+ *  owed hit, because both depend on the loaded values and on BELT_VERSION's code, which the owed-pair argument does
+ *  not cover. Null for every other index. */
+function beltHit(idx) {
+  return idx.beltAll === true && idx.probe !== undefined ? () => { idx.probe.hits += 1; } : null;
+}
+
+/** One index reading's redaction (redactForIndex's readings, the sidecar's raw pass): the three layers, then the belt
+ *  over the literal and escape readings only. An FTS term is a run of the literal text, and redactForIndex decodes
+ *  the deeper levels itself, each through this. */
+function redactIndexReading(text, idx) {
+  return beltMask(redactLayered(text, idx), idx.belt, false, beltHit(idx));
+}
+
+const isGlueSep = (c) => c === 0x5f || c === 0x2d;
+const GLUE_SEP_RE = /[_-]/;
+
+/** `text` with each maximal union of the [start, end) pairs in `iv` (non-empty) replaced by the mark. */
+function maskIntervals(text, iv) {
+  const pairs = [];
+  for (let k = 0; k < iv.length; k += 2) pairs.push([iv[k], iv[k + 1]]);
+  pairs.sort((x, y) => x[0] - y[0] || x[1] - y[1]);
+  let out = '';
+  let at = 0;
+  let a = pairs[0][0];
+  let b = pairs[0][1];
+  for (let k = 1; k < pairs.length; k += 1) {
+    if (pairs[k][0] <= b) { b = Math.max(b, pairs[k][1]); continue; }
+    out += text.slice(at, a) + REDACTED_MARK;
+    at = b;
+    a = pairs[k][0];
+    b = pairs[k][1];
+  }
+  return out + text.slice(at, a) + REDACTED_MARK + text.slice(b);
+}
+
+/** Layer 1's glue windows (§8.3, rev 3.5): in a `[A-Za-z0-9_-]` run that is not itself a pair, every window that starts
+ *  at the run's start or at or right after a `_` or `-`, ends at the run's end or at or right before one, holds a
+ *  letter or digit, and has a length some pair has, is tested by (length, sha256) as a run is. A value glued by `_` or
+ *  `-` (which unicode61 splits off as its own terms) is matched by its pair alone, a rotated value and a sessions.json
+ *  hash included. One run takes at most GLUE_HASH_FLOOR plus a quarter of its length in hashes, and hashes at most
+ *  GLUE_HASH_BYTES_FLOOR plus 4 × its length in window characters, each window charged before it is hashed; past
+ *  either budget it is replaced whole, fail closed. One run's glue cost is then linear in its length plus a constant,
+ *  whatever the registered lengths. */
+function glueRedact(run, idx) {
+  const n = run.length;
+  if (n <= SECRET_SEGMENT_MIN || idx.byLen.size === 0 || !GLUE_SEP_RE.test(run)) return run;
+  const starts = [];
+  const isEnd = new Uint8Array(n + 1);
+  const alnum = new Int32Array(n + 1);
+  isEnd[n] = 1;
+  for (let k = 0; k < n; k += 1) {
+    const sep = isGlueSep(run.charCodeAt(k));
+    alnum[k + 1] = alnum[k] + (sep ? 0 : 1);
+    if (k === 0 || sep || isGlueSep(run.charCodeAt(k - 1))) starts.push(k);
+    if (sep) { isEnd[k] = 1; isEnd[k + 1] = 1; }
+  }
+  const hit = beltHit(idx);
+  let budget = GLUE_HASH_FLOOR + (n >>> 2);
+  let bytes = GLUE_HASH_BYTES_FLOOR + 4 * n;
+  const iv = [];
+  for (const [len, shas] of idx.byLen) {
+    if (len >= n) continue;
+    for (const i of starts) {
+      const j = i + len;
+      if (j > n) break;
+      if (isEnd[j] === 0 || alnum[j] === alnum[i]) continue;
+      budget -= 1;
+      bytes -= len;
+      if (budget < 0 || bytes < 0) {
+        if (hit !== null) hit();
+        return REDACTED_MARK;
+      }
+      if (shas.has(sha256Hex(run.slice(i, j)))) {
+        iv.push(i, j);
+        if (hit !== null) hit();
+      }
+    }
+  }
+  return iv.length === 0 ? run : maskIntervals(run, iv);
+}
+
+/** fts_belt's witness is a short JSON array (sweep's beltWitness); a longer string is no state. */
+const BELT_WITNESS_MAX = 512;
+
+/** meta fts_belt's grammar: `{"v":<int>,"rids":[<rid>…],"gen":null|[<rid>…]}`, then `"gv":<int>` exactly when `gen` is
+ *  a list (the BELT_VERSION the open generation opened under, ruling R-version), then optionally `"w":"<witness>"`
+ *  (sweep's beltWitness when a belt-aware pass last wrote the state, ruling R-rollback). Every rid is a positive
+ *  integer. Anything else (undefined included) is null, which decideBelt reads as due. */
+export function parseBeltState(text) {
+  let o;
+  try { o = JSON.parse(text ?? ''); } catch { return null; }
+  const rids = (a) => Array.isArray(a) && a.every((x) => Number.isSafeInteger(x) && x > 0);
+  if (o === null || typeof o !== 'object' || !Number.isSafeInteger(o.v) || !rids(o.rids)) return null;
+  if (o.gen === null ? o.gv !== undefined : !(rids(o.gen) && Number.isSafeInteger(o.gv))) return null;
+  if (o.w !== undefined && !(typeof o.w === 'string' && o.w.length <= BELT_WITNESS_MAX)) return null;
+  return { v: o.v, rids: [...o.rids], gen: o.gen === null ? null : [...o.gen], ...(o.gen === null ? {} : { gv: o.gv }), ...(o.w === undefined ? {} : { w: o.w }) };
+}
+/** The text parseBeltState reads back: `gv` only beside a list `gen`, `w` only when set, so the due record
+ *  `{ v: 0, rids: [], gen: null }` (Tasks 21 and 23 write it) is `{"v":0,"rids":[],"gen":null}` exactly. */
+export function formatBeltState(s) {
+  return JSON.stringify({ v: s.v, rids: s.rids, gen: s.gen, ...(s.gen === null ? {} : { gv: s.gv }), ...(s.w === undefined ? {} : { w: s.w }) });
+}
+
+/** The belt's decision for one tick (§6.2 "The belt"). `live`: the redact_hashes rowids of the units this tick's belt
+ *  holds. `rids`: the units every indexed row is known to carry the belt of, at version `v`. `gen`: the units live at
+ *  every tick of the open generation, which opened under version `gv`.
+ *  - A unit no longer live leaves `rids` and `gen`: a row indexed while its value is not loaded lacks its belt.
+ *  - Due: the version differs (a B1 store's absent state, and the `v: 0` due record, included), or a live unit at or
+ *    below the mark is not in `rids` (its file readable again). A unit above the mark is the pair generation's.
+ *  - Restart (ruling R-version): when due, an open generation whose `gen` is absent (one a build without the belt
+ *    opened, or one a due record cleared) or was recorded under another BELT_VERSION covers nothing this version can
+ *    stamp, so rederivePlan begins its walk again from cursor 0 rather than finishing one that ran partly under other
+ *    code.
+ *  `next` is the state to write, without `w` (the sweep adds it). Pure. */
+export function decideBelt(state, live, mark) {
+  if (state === null) return { due: true, restart: true, next: { v: 0, rids: [], gen: null } };
+  const L = new Set(live);
+  const keep = (a) => a.filter((r) => L.has(r));
+  const genOk = state.gen !== null && state.gv === BELT_VERSION;
+  const next = { v: state.v, rids: state.v === BELT_VERSION ? keep(state.rids) : [], gen: genOk ? keep(state.gen) : null, ...(genOk ? { gv: BELT_VERSION } : {}) };
+  const covered = new Set(next.rids);
+  const due = state.v !== BELT_VERSION || live.some((r) => r <= mark && !covered.has(r));
+  return { due, restart: due && !genOk, next };
+}
+/** The state a completed generation leaves: the units live at every one of its ticks (`gen`), at the version its walk
+ *  ran under (`gv`, which decideBelt keeps only when it is BELT_VERSION). A generation with no `gen` (one a B1 pass
+ *  opened, or one whose record a due record cleared) covers nothing new, so the belt stays due. */
+export function beltAfterGeneration(next) {
+  return next.gen === null ? { v: next.v, rids: next.rids, gen: null } : { v: next.gv, rids: [...next.gen].sort((a, b) => a - b), gen: null };
+}
+/** Whether a build that writes index rows without the belt (B1, after a rollback) wrote since a belt-aware pass last
+ *  recorded the store's witness (ruling R-rollback): `witness` (sweep's beltWitness, measured now) differs from the
+ *  state's `w`. A state with no `w` (none recorded yet, or the due record Tasks 21 and 23 write) claims nothing: it is
+ *  due already, or about to be stamped. Pure. */
+export function beltWitnessMoved(state, witness) {
+  return state !== null && state.w !== undefined && state.w !== witness;
+}
+
+/** The shared source-list bound: the sweep persists only an admitted list, and the CLI accepts only one. */
+export const REDACT_SOURCES_MAX = 256;
+
+/** Normalize source paths in stable first-seen order, then admit the bounded absolute-path list; anything else names none. */
+export function normalizeRedactSources(paths) {
+  if (!Array.isArray(paths)) return null;
+  const seen = new Set();
+  const normalized = [];
+  for (const p of paths) {
+    if (typeof p !== 'string' || !p.startsWith('/') || p.length >= 4096 || p.includes('\0')) return null;
+    if (!seen.has(p)) { seen.add(p); normalized.push(p); }
+  }
+  return normalized.length <= REDACT_SOURCES_MAX ? normalized : null;
+}
+
+/** meta redact_sources: a normalized, bounded absolute source list; malformed data names none. */
+export function parseRedactSources(text) {
+  let parsed;
+  try { parsed = JSON.parse(text ?? '[]'); } catch { return []; }
+  return normalizeRedactSources(parsed) ?? [];
+}
+
+// ===========================================================================
+// The index's escape readings for display and nodes_fts (spec §8.3 "Where it runs", §6.2 `nodes_fts`, rev 3.5;
+// W1-B2 Task 7A; B1's D-4343 and D-4419,
+// and B1's run 302 notes to B2). The belt's decoded readings find only a unit this process loaded; a value held as a
+// pair alone (a rotated value, a sessions.json hash) glued to a literal escape is separated only by redactForIndex's
+// readings. So a read verb shows a field as the index holds it, and nodes_fts indexes what blobs_fts would.
+// ===========================================================================
+
+/** The longest field redactForDisplay reads through every escape reading, in UTF-16 units: the window an entry's index
+ *  text is redacted over (B1's D-4419). */
+export const DISPLAY_READINGS_MAX = ENTRY_FTS_BYTES + ENTRY_REDACT_MARGIN;
+
+/** A recalled field as a read verb shows it, so no output shows a value the index masked (§8.3's field pass, with the
+ *  escape readings B1 gave the index).
+ *  - Up to DISPLAY_READINGS_MAX it IS redactForIndex: the field as it came, redacted, unless a deeper JSON-escape
+ *    reading removed something; then that reading is shown, decoded. A field whose escapes hide nothing is shown
+ *    exactly as redactField shows it.
+ *  - Past it (expand reads a sidecar up to SIDECAR_WHOLE_MAX), the field is redacted once, and each maximal span of
+ *    `[A-Za-z0-9_.-]` characters and backslashes that holds a backslash and a run character (the spans B1's
+ *    exhaustion rule marks) is read through redactForIndex alone and replaced by the mark when any of its readings
+ *    removed something. The cost stays linear, and a long JSON text's ordinary escapes print as they are. Residual,
+ *    past the bound only: a value only the context layer sees after a decode, with no backslash touching it.
+ *  It calls nothing but redactField and redactForIndex (whose readings are redactIndexReading's, the belt included),
+ *  so it fails closed as they do (R2). */
+export function redactForDisplay(text, idx) {
+  if (text.length <= DISPLAY_READINGS_MAX) return redactForIndex(text, idx);
+  const t = redactField(text, idx);
+  if (!t.includes('\\')) return t;
+  return t.replace(/[A-Za-z0-9_.\\-]+/g, (span) => (span.includes('\\') && /[A-Za-z0-9_-]/.test(span) && redactForIndex(span, idx) !== span ? REDACTED_MARK : span));
+}
+
+/** A node's `topics` column as a list (HA2 H-14). The writer stores a JSON array of strings; a column that is not
+ *  one reads as one topic per line. The ONE reader: derive.mjs (which writes the column) and recall.mjs (which shows
+ *  it) both import it, so a change to how the column is written is a change to one reader. */
+export function topicsOfColumn(text) {
+  if (text === null || text === undefined || text === '') return [];
+  try {
+    const v = JSON.parse(text);
+    if (Array.isArray(v)) return v.filter((x) => typeof x === 'string');
+  } catch {
+    // not JSON: one topic per line, below
+  }
+  return String(text).split('\n').map((t) => t.trim()).filter((t) => t !== '');
+}
+
+/** A nodes_fts row's three column texts (§6.2): the gist, each topic and each ref value through entryIndexText (B1's
+ *  escape readings and window, the belt included), topics and refs then joined one per line, as Tasks 8 and 9 index
+ *  them. Every nodes_fts writer calls it (Task 8's indexNode, Task 9's insertNodeFts, Task 29's redactNodeFields), so
+ *  a row is a function of its node's stored fields and the pair index's answers alone, which Task 29's node step
+ *  recomputes and compares. */
+export function nodeIndexTexts(fields, idx) {
+  const one = (s) => entryIndexText(String(s), idx);
+  return {
+    gist: fields.gist === null || fields.gist === undefined ? '' : one(fields.gist),
+    topics: (fields.topics ?? []).map(one).join('\n'),
+    refs: (fields.refs ?? []).map(one).join('\n'),
+  };
+}
+
+
+// ===========================================================================
+// Leaf helpers derive.mjs composes (spec §6.1 "The copy", §7.4 items 2-8;
+// W1-B2 Task 8). Pure.
+// ===========================================================================
+
+/** A summary row's `summarizeMetadata.direction` (§7.4 item 8): `from` or `up_to`, else null. derive.mjs reads
+ *  the row from the line it came from, because the store keeps a summary row's message only.
+ *  D-4704 (history-summary-direction-from-source-line) */
+export function directionOfSummaryRow(row) {
+  const meta = row !== null && typeof row === 'object' && !Array.isArray(row) ? row.summarizeMetadata : undefined;
+  const d = meta !== null && typeof meta === 'object' ? meta.direction : undefined;
+  return d === 'from' || d === 'up_to' ? d : null;
+}
+
+/** A selected block's stored fields (§7.4 items 3, 6, 7). The block was parsed from REDACTED text, so every cut
+ *  below lands on redacted text (§8.3, SE1):
+ *  - the gist, trimmed, cut at GIST_MAX by Task 4's capText, then trimmed at its end again: the form Task 4's
+ *    gistSha hashes, so a later block carrying this gist word for word is a carried copy even past the cap; empty
+ *    is null;
+ *  - topics: the `Expand for details about:` field split on commas, through capTopics (each once, at most
+ *    TOPICS_MAX of at most TOPIC_CHARS);
+ *  - refs: the `refs:` values classifyRef recognises, origin `model` (capRefs runs over the leaf's union).
+ *  Both cuts are surrogate-safe. A cut sets `capped`; no marker is ever inserted. */
+export function blockFields(block) {
+  const gist = capText(typeof block.gist === 'string' ? block.gist.trim() : '', GIST_MAX);
+  const topics = capTopics((typeof block.expand === 'string' ? block.expand : '').split(','));
+  const refs = [];
+  for (const v of Array.isArray(block.refs) ? block.refs : []) {
+    const kind = typeof v === 'string' ? classifyRef(v) : null;
+    if (kind !== null) refs.push({ kind, value: v, origin: 'model' });
+  }
+  const text = gist.text.trimEnd();
+  return { gist: text === '' ? null : text, topics: topics.topics, refs, capped: gist.capped || topics.capped };
+}
+
+/** The steer receipt a leaf's span carries (§7.4 item 2): the receipt naming this leaf's id, else a generic one
+ *  (leafId '') received after the previous boundary and no later than this one; null when neither. An epoch's
+ *  first leaf has no lower bound. D-4685 (history-steer-receipt) */
+export function pickReceipt(receipts, { id, afterMs, uptoMs }) {
+  const exact = receipts.find((r) => r.leafId === id);
+  if (exact !== undefined) return exact;
+  return receipts.find((r) => r.leafId === '' && (afterMs === null || r.tsMs > afterMs) && (uptoMs === null || r.tsMs <= uptoMs)) ?? null;
+}
+
+/** The copy that holds a boundary (§6.1 "The copy"): among a transcript's files that have the boundary row as a
+ *  member, a live one (source_key '') before a retired or exported one, then the smallest file_id; null when no file
+ *  holds it. derive.mjs measures `live` and `holds`; Task 9's fan-in splits its slots by this same answer.
+ *  D-4688 (history-span-per-boundary-copy) */
+export function pickHoldingCopy(files) {
+  let best = null;
+  for (const f of files) {
+    if (!f.holds) continue;
+    if (best === null || (f.live && !best.live) || (f.live === best.live && f.fileId < best.fileId)) best = f;
+  }
+  return best === null ? null : best.fileId;
+}
+
+/** A main transcript's fork counts (§6.1), from what derive.mjs measured over its LIVE copies: each copy's row
+ *  count, the rows in any of them, the rows in a copy that holds one of its leaves' boundaries, and how many copies
+ *  hold one. `unspanned` is how many rows no holding copy has: they join no leaf (none while no copy holds a leaf,
+ *  when every row is still live tail). `forked` is true when two or more live copies exist and none holds every row
+ *  (no uuid-superset). */
+export function forkCounts({ liveSizes, unionSize, coveredSize, holdingCopies }) {
+  return {
+    unspanned: holdingCopies === 0 ? 0 : Math.max(0, unionSize - coveredSize),
+    forked: liveSizes.length > 1 && !liveSizes.some((n) => n === unionSize),
+  };
+}
+
+// ── recall: the read verbs' arguments, selects by store version, recall-off's B2 refusals (W1-B2 Task 10) ──
+//
+// THE ARGUMENT WHITELIST is one table per read verb: §8.2 builds the whitelist from that one list. These are
+// exit 2 bad-args before anything is measured:
+//   - an option the table does not name;
+//   - a repeated option;
+//   - an option missing its value;
+//   - a value off its grammar.
+// `--` ends the options, so a word that starts with `--` is still searchable (`grep -- --force`; slug
+// history-read-args-terminator, NEW). Ids are not checked here: the id grammar is decideScope's (idOk), which
+// runs before any path is formed from one.
+export function paneOk(pane) { return typeof pane === 'string' && PANE_RE.test(pane); }
+
+export const TREE_DEPTH_DEFAULT = 2;
+export const TREE_DEPTH_MAX = 8;
+/** expand --around's window on each side (chosen: §8.4 names the option, not its bound). */
+export const AROUND_DEFAULT = 5;
+export const AROUND_MAX = 50;
+
+const readOpt = (kind, key, extra = {}) => Object.freeze({ kind, key, ...extra });
+/** Options every read verb takes (§8.2). `--project` and `--workspace` both given is decideScope's bad-args. */
+const COMMON_READ_OPTIONS = Object.freeze({
+  '--json': readOpt('flag', 'json'),
+  '--session': readOpt('value', 'session'),
+  '--project': readOpt('flag', 'project'),
+  '--workspace': readOpt('flag', 'workspace'),
+});
+/** The most families a `--json` scope object names (§8.3's cap; chosen). A `--project` or `--workspace` scope can
+ *  hold hundreds of families, and the envelope is part of every call's 20,000 chars: three objects keep the whole
+ *  frame near 700 chars, inside the frame reserve each paging verb holds back. `families_total` counts them all. */
+export const SCOPE_FAMILIES_JSON_MAX = 3;
+const ANY_COUNT = Number.POSITIVE_INFINITY;
+export const READ_OPTIONS = Object.freeze({
+  grep: Object.freeze({
+    options: Object.freeze({
+      ...COMMON_READ_OPTIONS,
+      '--regex': readOpt('value', 'regex'),
+      '--role': readOpt('value', 'role'),
+      '--tool': readOpt('value', 'tool'),
+      '--since': readOpt('value', 'since'),
+      '--before': readOpt('value', 'before'),
+      '--node': readOpt('value', 'node'),
+      '--sort': readOpt('enum', 'sort', { values: GREP_SORTS }),
+      '--limit': readOpt('int', 'limit', { min: 1, max: GREP_LIMIT_MAX }),
+      '--cursor': readOpt('value', 'cursor'),
+      '--include-recall': readOpt('flag', 'includeRecall'),
+    }),
+    defaults: Object.freeze({
+      regex: null, role: null, tool: null, since: null, before: null, node: null,
+      sort: GREP_SORTS[0], limit: GREP_LIMIT_DEFAULT, cursor: null, includeRecall: false,
+    }),
+    positional: Object.freeze({ min: 0, max: ANY_COUNT }),
+  }),
+  describe: Object.freeze({
+    options: Object.freeze({
+      ...COMMON_READ_OPTIONS,
+      '--full': readOpt('flag', 'full'),
+      '--cursor': readOpt('value', 'cursor'),
+      '--node': readOpt('value', 'node'),
+    }),
+    defaults: Object.freeze({ full: false, cursor: null, node: null }),
+    positional: Object.freeze({ min: 0, max: ANY_COUNT }),
+  }),
+  expand: Object.freeze({
+    options: Object.freeze({
+      ...COMMON_READ_OPTIONS,
+      '--around': readOpt('value', 'around'),
+      '--before': readOpt('int', 'before', { min: 0, max: AROUND_MAX }),
+      '--after': readOpt('int', 'after', { min: 0, max: AROUND_MAX }),
+      '--cursor': readOpt('value', 'cursor'),
+    }),
+    defaults: Object.freeze({ around: null, before: AROUND_DEFAULT, after: AROUND_DEFAULT, cursor: null }),
+    positional: Object.freeze({ min: 0, max: ANY_COUNT }),
+  }),
+  tree: Object.freeze({
+    options: Object.freeze({
+      ...COMMON_READ_OPTIONS,
+      '--depth': readOpt('int', 'depth', { min: 1, max: TREE_DEPTH_MAX }),
+    }),
+    defaults: Object.freeze({ depth: TREE_DEPTH_DEFAULT }),
+    positional: Object.freeze({ min: 0, max: 0 }),
+  }),
+});
+/** The read verbs (§8.2): derived from the whitelist, never listed twice. `touched` joins in W4. */
+export const READ_VERBS = Object.freeze(Object.keys(READ_OPTIONS));
+
+const BAD_READ_ARGS = Object.freeze({ ok: false, reason: 'bad-args' });
+
+/** A read verb's argv (after the verb) against its whitelist. Every key the verb's table names has a value in
+ *  `opts` (its default when not given), plus json, session, project and workspace. */
+export function parseReadArgs(verb, argv) {
+  if (typeof verb !== 'string' || !Object.hasOwn(READ_OPTIONS, verb) || !Array.isArray(argv)) return BAD_READ_ARGS;
+  const spec = READ_OPTIONS[verb];
+  const opts = { json: false, session: null, project: false, workspace: false, ...spec.defaults };
+  const positional = [];
+  const seen = new Set();
+  let rest = false;
+  for (let i = 0; i < argv.length; i += 1) {
+    const a = argv[i];
+    if (typeof a !== 'string') return BAD_READ_ARGS;
+    if (rest || !a.startsWith('--')) {
+      positional.push(a);
+      continue;
+    }
+    if (a === '--') {
+      rest = true;
+      continue;
+    }
+    if (!Object.hasOwn(spec.options, a) || seen.has(a)) return BAD_READ_ARGS;
+    seen.add(a);
+    const o = spec.options[a];
+    if (o.kind === 'flag') {
+      opts[o.key] = true;
+      continue;
+    }
+    const v = argv[i + 1];
+    if (typeof v !== 'string' || v === '') return BAD_READ_ARGS;
+    i += 1;
+    if (o.kind === 'value') {
+      opts[o.key] = v;
+      continue;
+    }
+    if (o.kind === 'enum') {
+      if (!o.values.includes(v)) return BAD_READ_ARGS;
+      opts[o.key] = v;
+      continue;
+    }
+    if (!/^[0-9]{1,6}$/.test(v)) return BAD_READ_ARGS;
+    const n = Number(v);
+    if (n < o.min || n > o.max) return BAD_READ_ARGS;
+    opts[o.key] = n;
+  }
+  if (positional.length < spec.positional.min || positional.length > spec.positional.max) return BAD_READ_ARGS;
+  if (verb === 'grep' && positional.length === 0 && opts.regex === null) return BAD_READ_ARGS;
+  if (verb === 'describe' && positional.length === 0 && opts.node === null) return BAD_READ_ARGS;
+  if (verb === 'expand' && positional.length === 0 && opts.around === null && opts.cursor === null) return BAD_READ_ARGS;
+  return { ok: true, verb, positional: Object.freeze(positional), opts: Object.freeze(opts) };
+}
+
+/** A select list naming only the columns the store's version has (§6.11, DM44). A column a later version added
+ *  reads `NULL AS <col>`, so a store older than the code answers with that field null and never a SQL error.
+ *  A table that version lacks throws, and so does a column no version declares (a typo, not an old store).
+ *  The verbs that need a newer table refuse first with migration-pending. */
+export function selectColumns(version, table, cols, schema = SCHEMA_ADDED, alias = null) {
+  const have = new Set();
+  const everywhere = new Set();
+  let known = false;
+  for (const [v, entry] of Object.entries(schema)) {
+    const t = entry.tables[table];
+    if (t === undefined) continue;
+    for (const c of t) everywhere.add(c);
+    if (Number(v) > version) continue;
+    known = true;
+    for (const c of t) have.add(c);
+  }
+  if (!known) throw new TypeError(`selectColumns: table ${table} is not in schema version ${version}`);
+  const q = alias === null ? '' : `${alias}.`;
+  return cols.map((c) => {
+    if (!everywhere.has(c)) throw new TypeError(`selectColumns: ${table}.${c} is in no schema version`);
+    return have.has(c) ? `${q}${c}` : `NULL AS ${c}`;
+  }).join(', ');
+}
+
+/** `recall-off` in B2 (slug history-recall-off-preflight-b2, NEW): the verb that writes recall-off/<id> ships
+ *  with W2 (§8.10), and B2 answers only its refusals, in this order:
+ *   - an argv off `<id> [--clear]` or `--clear-all` is bad-args;
+ *   - an id off ccd's grammar is bad-id, before any path is formed from it (C66);
+ *   - then the caller reads $REG/<id>.generation (`generation` null asks it to): unreadable is
+ *     generation-unreadable (C67);
+ *   - anything else is bad-args, naming W2. */
+export function decideRecallOffPreflight(i) {
+  const a = i.args;
+  const done = (reason) => ({ done: true, exit: EXIT.REFUSED, reason });
+  if (a.length === 1 && a[0] === '--clear-all') return done('bad-args');
+  const shapeOk = a.length >= 1 && a.length <= 2 && typeof a[0] === 'string' && !a[0].startsWith('--')
+    && (a.length === 1 || a[1] === '--clear');
+  if (!shapeOk) return done('bad-args');
+  if (!idOk(a[0])) return done('bad-id');
+  if (i.generation === null) return { done: false, id: a[0] };
+  if (i.generation.state === 'unreadable') return done('generation-unreadable');
+  return done('bad-args');
+}
+
+
+// ── grep: arguments and the index gate (W1-B2 Task 12; spec §8.4, §9.1) ──────────────────────────────
+
+/** What the sweep indexes and grep may search: the searchable provenances plus recall-echo. Default grep
+ *  filters to SEARCHABLE_PROVENANCE at query time; `--include-recall` widens it to this list (§8.4
+ *  "Recall echoes … are stored, excluded from default search, and found with --include-recall").
+ *  D-4712 (history-recall-echo-indexed) */
+export const INDEXED_PROVENANCE = Object.freeze([...SEARCHABLE_PROVENANCE, 'recall-echo']);
+
+/** derivation_state's FTS step (§9.1): the sweep creates and backfills the FTS tables under ('fts', 1), and
+ *  grep's index gate reads the same row. Spelled once, here. */
+export const FTS_STEP = 'fts';
+
+/** A byte count as SEARCH_REACH spells it: whole MiB, else whole KiB, else bytes. */
+export function reachSize(n) {
+  if (n % 1048576 === 0) return `${n / 1048576} MiB`;
+  if (n % 1024 === 0) return `${n / 1024} KiB`;
+  return `${n} bytes`;
+}
+
+/** How far grep reaches. Grep's exit 3 prints these words on its hint line (recall.mjs `grepNotFound`), and the skill
+ *  (section 9) and README's history section quote them verbatim (spec §6.2 and §8.4, rev 3.5). The index holds at
+ *  most an entry's first ENTRY_FTS_BYTES and a sidecar's first SIDECAR_FTS_BYTES of redacted text (B1's
+ *  history-entry-index-text-windowed and history-sidecar-redact-before-cut), and --regex scans that same text (Task 14,
+ *  spec §8.4), so no grep form finds a word past it. The sentence is built from the two
+ *  constants, so changing a window changes it, and the skill's and README's pins go red until their text follows.
+ *  "At most": the cut can fall short of the window (cutIndexText's margin and trailing-run rules), and a read verb
+ *  never decompresses a sidecar past SIDECAR_WHOLE_MAX (D-4713 (history-read-skips-oversize-sidecar)). */
+export const SEARCH_REACH = `grep reaches at most the first ${reachSize(ENTRY_FTS_BYTES)} of each message's redacted text and the first ${reachSize(SIDECAR_FTS_BYTES)} of each tool output Claude Code saved to its own file; text past that is stored but not searched`;
+
+/** grep's index gate (§9.1, §8.3 exit 7), over what the reader measured:
+ *  - a probe that THREW is 5 probe-failed, never folded into absent;
+ *  - an absent module is 7 fts5-absent;
+ *  - no blobs_fts yet, or a backfill ('fts', 1) that has not completed, is 7 fts-pending, so a partial index
+ *    never answers 3 for text the store holds but has not indexed yet.
+ *  - an open FTS_REBUILD_STEP row (doctor --repair, W1-B2 Task 23) is 7 fts-pending too: the recreated tables hold only what the rebuild has re-indexed so far.
+ *  D-4714 (history-grep-pending-until-backfilled) */
+export function decideGrepIndex({ probe, table, completed, rebuilding = false }) {
+  if (probe === 'threw') return { ok: false, exit: EXIT.DB, reason: 'probe-failed' };
+  if (probe !== 'present') return { ok: false, exit: EXIT.FTS_UNAVAILABLE, reason: 'fts5-absent' };
+  if (!table || !completed || rebuilding) return { ok: false, exit: EXIT.FTS_UNAVAILABLE, reason: 'fts-pending' };
+  return { ok: true };
+}
+
+/** grep's option grammar (§8.4), over the argv after the verb word. Every value is checked here, before any
+ *  identity or store read. The scope flags (--project, --workspace, --session <id>) are consumed and passed
+ *  over: readContext decides them (Task 10). `--` ends the options, so a word that begins with `--` can be
+ *  searched. With --regex there are no positional words and no rank to sort by (Task 14). */
+export function parseGrepArgs(argv, nowMs) {
+  const a = {
+    words: [], regex: null, role: null, tool: null, sinceMs: null, beforeMs: null, node: null,
+    sort: 'recency', limit: GREP_LIMIT_DEFAULT, cursor: null, includeRecall: false, json: false,
+  };
+  const bad = { ok: false, reason: 'bad-args' };
+  const seen = new Set();
+  for (let i = 0; i < argv.length; i += 1) {
+    const t = argv[i];
+    if (t === '--') { a.words.push(...argv.slice(i + 1)); break; }
+    if (!t.startsWith('--')) { a.words.push(t); continue; }
+    if (seen.has(t)) return bad;
+    seen.add(t);
+    if (t === '--json') { a.json = true; continue; }
+    if (t === '--include-recall') { a.includeRecall = true; continue; }
+    if (t === '--project' || t === '--workspace') continue;
+    if (i + 1 >= argv.length) return bad;
+    i += 1;
+    const v = argv[i];
+    switch (t) {
+      case '--session': break;
+      case '--regex': a.regex = v; break;
+      case '--role': if (!/^[a-z]{1,16}$/.test(v)) return bad; a.role = v; break;
+      case '--tool': if (!/^[A-Za-z0-9_.:-]{1,64}$/.test(v)) return bad; a.tool = v; break;
+      case '--since': a.sinceMs = parseTimeBound(v, nowMs); if (a.sinceMs === null) return bad; break;
+      case '--before': a.beforeMs = parseTimeBound(v, nowMs); if (a.beforeMs === null) return bad; break;
+      case '--node': a.node = v; break;
+      case '--sort': if (!GREP_SORTS.includes(v)) return bad; a.sort = v; break;
+      case '--limit': {
+        if (!/^[1-9][0-9]{0,5}$/.test(v) || Number(v) > GREP_LIMIT_MAX) return bad;
+        a.limit = Number(v);
+        break;
+      }
+      case '--cursor': a.cursor = v; break;
+      default: return bad;
+    }
+  }
+  if (a.regex === null ? a.words.length === 0 : a.words.length > 0 || a.sort !== 'recency') return bad;
+  return { ok: true, args: a };
+}
+
+// ── a window of a longer text, redacted for display (W1-B2 Task 12; coordinator rulings R-display-window, R-window2) ──
+// A read verb that shows a window of a longer text (grep's snippet, describe's excerpt and --full page, expand's cut,
+// page and outline input) redacts that window and ENTRY_REDACT_MARGIN on each side of it, never the whole text, so
+// one snippet's or one page's cost is bounded by the window, whatever the field's length: B1's D-4419
+// (`history-entry-index-text-windowed`) bound, carried to display (spec §8.3 and §8.4, rev 3.5).
+
+/** Where grep's snippet sits (§8.4, §11 P9): the earliest FTS5-compatible Porter-stem or explicit-prefix hit.
+ *  `at` is -1 when no term is found. The locator is Task 2's search, moved here so snippetWindow and
+ *  displaySnippet have one spelling and preserve raw code-unit spans. */
+export function snippetSpan(text, terms) {
+  const content = String(text);
+  let at = -1;
+  let len = 0;
+  const phraseTokens = (term) => [...unicode61Words(String(term).replace(/\*+$/, ''))].map(({ text }) => foldToken(text)).filter((t) => t.length > 0);
+  // The source's candidates, folded on demand; one folded to nothing (removed marks only) is no token, as in FTS5.
+  const source = unicode61Words(content);
+  const words = [];
+  const wordAt = (i) => {
+    while (words.length <= i) {
+      const next = source.next();
+      if (next.done) return null;
+      const folded = foldToken(next.value.text);
+      if (folded.length > 0) words.push({ ...next.value, folded });
+    }
+    return words[i];
+  };
+  for (const term of terms) {
+    const raw = String(term);
+    // FTS5 reads a terminal star as a prefix on the phrase's LAST token (`"error hand"*`), never on the first.
+    const prefix = raw.endsWith('*');
+    const needles = phraseTokens(raw);
+    if (needles.length === 0) continue;
+    const stems = needles.map(porterStem);
+    // Whether the candidate (already folded) is needle `k`. FTS5's `porter unicode61` stems the query token and the indexed
+    // token alike and applies prefix semantics to the stems, so the last needle of a prefix term is a stem-prefix test
+    // (`runn*` rejects `running`, stem run; `runs*`, stem run, finds it) and every other needle is Porter-stem equality.
+    const is = (folded, k) => (prefix && k === needles.length - 1 ? porterStem(folded).startsWith(stems[k]) : porterStem(folded) === stems[k]);
+    for (let i = 0; wordAt(i) !== null; i += 1) {
+      const first = wordAt(i);
+      if (!is(first.folded, 0)) continue;
+      let last = first;
+      let matches = true;
+      for (let offset = 1; offset < needles.length; offset += 1) {
+        const next = wordAt(i + offset);
+        if (next === null || !is(next.folded, offset)) {
+          matches = false;
+          break;
+        }
+        last = next;
+      }
+      if (!matches) continue;
+      const matchAt = first.at;
+      const matchLen = last.end - matchAt;
+      if (at === -1 || matchAt < at || (matchAt === at && matchLen > len)) {
+        at = matchAt;
+        len = matchLen;
+      }
+      // This term's first matching candidate is its earliest; later starts cannot improve the global hit.
+      break;
+    }
+  }
+  return { at, len };
+}
+
+/** The longest window redactDisplayWindow cuts from its redacted context: with ENTRY_REDACT_MARGIN on each side, the
+ *  text read is at most DISPLAY_READINGS_MAX, where redactForDisplay IS redactForIndex (Task 7A). Every caller's
+ *  window is far shorter (EXPLORE_READ_MAX, 256 KiB, is the longest); a longer one is shown inexact, unless it is the
+ *  whole text (displayWindow's step 0). */
+export const DISPLAY_WINDOW_MAX = DISPLAY_READINGS_MAX - 2 * ENTRY_REDACT_MARGIN;
+
+/** How many characters that are not a mark a window edge's cut may sit short of a margin's own reading and still
+ *  count as exact (*chosen*). A JSON escape the edge splits (`\` on one side, `n` or `u0041` on the other, once per
+ *  decode level) is decoded in the read text but stays as written in the margin read alone; measured on the
+ *  prototype, 0 left 118 of 120 such page edges inexact and 32 left none. */
+export const DISPLAY_EDGE_SLACK = 32;
+
+/** The one line an inexact window is shown under (spec §8.3; coordinator ruling R-window2). It holds no `"`, `\`,
+ *  `<`, `>` or `&`, as REDACTED_MARK holds none, so it prints as it is in every form. */
+export const DISPLAY_INEXACT_NOTE = '[window redacted alone: every word of 8 or more characters masked]';
+
+/** A mark, or a maximal span of `[A-Za-z0-9_-]` characters, backslashes and ANSI sequences: the unit an inexact
+ *  window masks (coordinator ruling on final-check W1). A mark is matched first and kept whole. Each arm opens on a
+ *  character no other arm opens on, so the scan is linear (D-4306). */
+const DISPLAY_SPAN_RE = new RegExp(`${MARK_RE_SRC}|(?:[A-Za-z0-9_\\\\-]|(?:${ANSI_ESCAPE_RE.source}))+`, 'g');
+
+/** A run of 8 or more `[A-Za-z0-9_-]` characters: a word an inexact window masks. */
+const DISPLAY_WORD_RE = /[A-Za-z0-9_-]{8,}/;
+
+/** Whether a DISPLAY_SPAN_RE span holds a word of 8 or more characters in any of the readings redactForDisplay takes:
+ *  the span with its ANSI sequences removed (B1's joined reading), then each JSON-escape decode of that, up to
+ *  INDEX_UNESCAPE_PASSES, its sequences removed again. A value printed one coloured character at a time, or as one
+ *  JSON unicode escape per character, is a word only in those readings (final-check W1: the raw text's runs were 5
+ *  characters or fewer, and 30 of a value's 48 showed). Linear in the span, once per pass. */
+function spanHoldsWord(span) {
+  let s = span.replace(ANSI_ESCAPE_RE, '');
+  if (DISPLAY_WORD_RE.test(s)) return true;
+  for (let pass = 0; pass < INDEX_UNESCAPE_PASSES; pass += 1) {
+    const u = unescapeJsonText(s);
+    if (u === s) return false;
+    s = u.replace(ANSI_ESCAPE_RE, '');
+    if (DISPLAY_WORD_RE.test(s)) return true;
+  }
+  return false;
+}
+
+/** A break between token spans: whitespace, or one of `"`, `'`, `` ` ``, `,`, `;` and `&`, the characters that end
+ *  a value in layer 2's `NAME=` form (coordinator ruling on final-check W2). */
+const TOKEN_BREAK_RE = /[\s"'`,;&]/;
+
+/** A code unit of a token span (`[^\s"'`,;&]`): a margin's far end moves off one, and a partial one that reaches the
+ *  window is dropped. Every `[A-Za-z0-9_-]` run lies inside one, and so does a `NAME=` value with `+` or `/` in it,
+ *  a dotted Bearer token or JWT, and a `?token=` value. */
+function isTokenByte(c) {
+  return !TOKEN_BREAK_RE.test(String.fromCharCode(c));
+}
+
+/** What ends an inexact window's edge drop: whitespace, or one of `"`, `'`, `` ` ``, `,` and `&`. */
+const INEXACT_EDGE_BREAK_RE = /[\s"'`,&]/;
+
+/** A code unit an inexact window's edge drop reads as part of a span: every run byte, the backslash, ESC and every
+ *  other character a colour sequence holds (`;` among its parameters), so an edge that cuts a word a sequence or an
+ *  escape split drops the window's part of it, however few of its characters are inside (final-check W1 and W3).
+ *  A superset of the readings spanHoldsWord takes, so the drop fails closed. */
+function isInexactEdgeByte(c) {
+  return !INEXACT_EDGE_BREAK_RE.test(String.fromCharCode(c));
+}
+
+/** `s` without its leading run of `pred` code units, by a forward scan (linear; B1's dropTrailingRun, mirrored). */
+function dropLeadingWhile(s, pred) {
+  let k = 0;
+  while (k < s.length && pred(s.charCodeAt(k))) k += 1;
+  return k === 0 ? s : s.slice(k);
+}
+
+/** `s` without its trailing run of `pred` code units, by a backward scan (linear, as B1's dropTrailingRun). */
+function dropTrailingWhile(s, pred) {
+  let k = s.length;
+  while (k > 0 && pred(s.charCodeAt(k - 1))) k -= 1;
+  return k === s.length ? s : s.slice(0, k);
+}
+
+/** `k` moved back off the low half of a surrogate pair, so no slice at `k` splits the pair. */
+function pairStart(t, k) {
+  if (k <= 0 || k >= t.length) return k;
+  const c = t.charCodeAt(k);
+  const p = t.charCodeAt(k - 1);
+  return c >= 0xdc00 && c <= 0xdfff && p >= 0xd800 && p <= 0xdbff ? k - 1 : k;
+}
+
+/** `s`'s length without its marks: the characters of `s` that came from text, not from a redaction. */
+function unmarkedLength(s) {
+  let n = s.length;
+  for (let k = s.indexOf(REDACTED_MARK); k !== -1; k = s.indexOf(REDACTED_MARK, k + REDACTED_MARK.length)) n -= REDACTED_MARK.length;
+  return n;
+}
+
+/** redactForDisplay's reading of `text` (at most DISPLAY_READINGS_MAX long, where redactForDisplay IS redactForIndex),
+ *  with the reading it chose: `levels` JSON-escape decodes, and `bound` when it reached INDEX_UNESCAPE_PASSES and
+ *  marked the escape-glued spans. redactForIndex's own loop, step for step, so the window knows which reading it is
+ *  cut from; Step 1's case `a whole text's window is redactForDisplay's, …` pins the two equal on every reading, through
+ *  each text's window inside a longer one (a whole text's window no longer reaches this function). */
+function displayReading(text, idx) {
+  let t = redactIndexReading(text, idx);
+  let keep = t;
+  let levels = 0;
+  for (let pass = 0; pass < INDEX_UNESCAPE_PASSES; pass += 1) {
+    const deeper = unescapeJsonText(t);
+    if (deeper === t) return { text: keep, levels, bound: false };
+    t = redactIndexReading(deeper, idx);
+    if (t !== deeper) {
+      keep = t;
+      levels = pass + 1;
+    }
+  }
+  return { text: markEscapeGluedSpans(t), levels: INDEX_UNESCAPE_PASSES, bound: true };
+}
+
+/** `text` read through exactly the reading displayReading chose for the text around it: the same decodes, each
+ *  redacted, and the escape-glued spans marked when that reading marked them. A margin read so is comparable with the
+ *  read text whichever reading the read text's content chose (finding V15: a margin read through its own choice stays
+ *  raw while the read text is shown decoded). */
+function readingAt(text, idx, levels, bound) {
+  let t = redactIndexReading(text, idx);
+  for (let pass = 0; pass < levels; pass += 1) t = redactIndexReading(unescapeJsonText(t), idx);
+  return bound ? markEscapeGluedSpans(t) : t;
+}
+
+/** A margin's reading, and the same with its ANSI sequences removed when that differs. B1's redactField returns its
+ *  joined reading, every sequence of the text removed, when that reading finds something anywhere in the text, so the
+ *  read text can drop a margin's sequences that the margin read alone keeps (finding V18). ANSI_ESCAPE_RE never takes a
+ *  mark's first character, so the removal leaves every mark whole. */
+function marginReadings(m) {
+  if (!ESCAPE_INTRODUCER_RE.test(m)) return [m];
+  const plain = m.replace(ANSI_ESCAPE_RE, '');
+  return plain === m ? [m] : [m, plain];
+}
+
+/** Where the window starts in `d`, the read text's reading, given the left margin's readings. Rank 1: the end of the
+ *  longest prefix `d` shares with one of them, when that is the whole margin. Otherwise the reading whose shared prefix
+ *  reaches furthest decides, when it is either of: rank 2, the start of the mark `d` holds where the two part, so a
+ *  match straddling the edge shows as its whole mark; rank 3, the end of the shared prefix, when what the margin has
+ *  left past it is at most DISPLAY_EDGE_SLACK characters and no mark (an escape the edge split). -1 when none holds:
+ *  the cut cannot be shown exact. */
+function windowStart(d, lefts) {
+  let best = -1;
+  let reach = -1;
+  for (const l of lefts) {
+    const n = Math.min(d.length, l.length);
+    let s = 0;
+    while (s < n && d.charCodeAt(s) === l.charCodeAt(s)) s += 1;
+    if (s === l.length) return s;
+    if (s <= reach) continue;
+    const j = d.lastIndexOf(REDACTED_MARK, s);
+    if (j !== -1 && j + REDACTED_MARK.length > s) {
+      best = j;
+      reach = s;
+    } else if (l.length - s <= DISPLAY_EDGE_SLACK && l.indexOf(REDACTED_MARK, s) === -1) {
+      best = s;
+      reach = s;
+    }
+  }
+  return best;
+}
+
+/** Where the window ends in `d`, at or past `s`, given the right margin's readings: windowStart's rule, mirrored, over
+ *  the longest shared suffix. -1 when none holds. */
+function windowEnd(d, rights, s) {
+  let best = -1;
+  let reach = -1;
+  for (const r of rights) {
+    const n = Math.min(d.length - s, r.length);
+    let k = 0;
+    while (k < n && d.charCodeAt(d.length - 1 - k) === r.charCodeAt(r.length - 1 - k)) k += 1;
+    const e = d.length - k;
+    if (k === r.length) return e;
+    if (k <= reach) continue;
+    const j = e > 0 ? d.lastIndexOf(REDACTED_MARK, e - 1) : -1;
+    if (j !== -1 && j + REDACTED_MARK.length >= e && j + REDACTED_MARK.length > s) {
+      best = j + REDACTED_MARK.length;
+      reach = k;
+    } else if (r.length - k <= DISPLAY_EDGE_SLACK && r.lastIndexOf(REDACTED_MARK, r.length - k - 1) === -1) {
+      best = e;
+      reach = k;
+    }
+  }
+  return best;
+}
+
+/** An inexact window (coordinator ruling R-window2, the fail-closed display, and the ruling on final-check W1):
+ *  `text[lo, hi)` alone, the span either window edge cuts dropped (isInexactEdgeByte, so a word joined across
+ *  sequences or escapes at the edge goes with it), through redactForDisplay, then every span (DISPLAY_SPAN_RE) that
+ *  holds a word of 8 or more characters in its own readings (spanHoldsWord) replaced by the mark. It reads the window
+ *  and the one character beyond each edge, and nothing else. */
+function inexactWindow(t, lo, hi, idx) {
+  let w = t.slice(lo, hi);
+  if (lo > 0 && isInexactEdgeByte(t.charCodeAt(lo - 1)) && isInexactEdgeByte(t.charCodeAt(lo))) w = dropLeadingWhile(w, isInexactEdgeByte);
+  if (hi < t.length && hi > 0 && isInexactEdgeByte(t.charCodeAt(hi - 1)) && isInexactEdgeByte(t.charCodeAt(hi))) w = dropTrailingWhile(w, isInexactEdgeByte);
+  return { text: redactForDisplay(w, idx).replace(DISPLAY_SPAN_RE, (s) => (s !== REDACTED_MARK && spanHoldsWord(s) ? REDACTED_MARK : s)), exact: false };
+}
+
+/** text[from, to) as a read verb shows it, and whether it was cut exactly (spec §8.3 and §8.4; coordinator rulings
+ *  R-display-window and R-window2). In order:
+ *  0. A window of the whole text (`from` at or before 0, `to` at or past its length) has no margin: it is
+ *     redactForDisplay's reading of the text, exact, whatever its length (final-check W4). Any other window longer
+ *     than DISPLAY_WINDOW_MAX is shown inexact.
+ *  1. The margins. [a, b) is the window widened by ENTRY_REDACT_MARGIN each way, each end moved off a token span
+ *     (`[^\s"'`,;&]`, isTokenByte) before anything is redacted, so the text read never starts or ends inside one: B1's
+ *     cut rule (D-4419's cutIndexText), widened from `[A-Za-z0-9_-]` runs to token spans (final-check W2), so a
+ *     `NAME=` value with `+` or `/`, a dotted Bearer token or JWT and a `?token=` value are read whole or not at all.
+ *     A token span longer than the margin stops the move at the window's edge, and that partial span is dropped from
+ *     what is shown, as B1's cut drops a trailing run. A match that is not one token span (it holds whitespace or a
+ *     break: a PEM body, a quoted value) and begins more than ENTRY_REDACT_MARGIN before the window is read only from
+ *     a break inside it: spec §8.3's residual.
+ *  2. The read text's reading. [a, b) is read through redactForDisplay's reading (displayReading), so every layer and
+ *     reading (the pairs, the belt, the context forms and their JSON-escaped form, the shapes, the escape readings,
+ *     the joined reading) sees the margins with the window. What is shown is a slice of that reading and nothing
+ *     else: a match straddling an edge was made whole there, so it shows only as its whole mark.
+ *  3. The cut back. Each margin is read alone through the SAME reading (readingAt: the decodes the read text took),
+ *     and also with its ANSI sequences removed (marginReadings). The window is what the read text leaves between the
+ *     longest prefix it shares with a left reading and the longest suffix it shares with a right one (windowStart,
+ *     windowEnd; of the readings, the one whose shared part reaches furthest). The cut is exact when that shared part
+ *     is the whole margin, or ends at a mark the read text holds there, or leaves at most DISPLAY_EDGE_SLACK
+ *     characters of an escape the edge split; and the slice then holds at
+ *     most (to - from) + 2 × DISPLAY_EDGE_SLACK characters that are not a mark, since a redaction, a decode and a
+ *     removed sequence each leave at most one character per character read.
+ *  4. Otherwise the cut cannot be shown exact (B1's redactField is not local: its joined reading returns the whole
+ *     text without its sequences), and the window is shown inexact (inexactWindow), never margin text.
+ *  Each reading reads at most (to - from) + 2 × ENTRY_REDACT_MARGIN characters, through at most
+ *  INDEX_UNESCAPE_PASSES + 1 redactions; an inexact window reads the window once more. No slice splits a surrogate
+ *  pair. `idx` is the read's pair index, with its belt (Task 7A). */
+function displayWindow(text, from, to, idx) {
+  const t = String(text);
+  const lo = pairStart(t, Math.max(0, Math.min(from, t.length)));
+  const hi = Math.max(lo, pairStart(t, Math.max(0, Math.min(to, t.length))));
+  if (lo === 0 && hi === t.length) return { text: redactForDisplay(t, idx), exact: true };
+  if (hi - lo > DISPLAY_WINDOW_MAX) return inexactWindow(t, lo, hi, idx);
+  let a = pairStart(t, Math.max(0, lo - ENTRY_REDACT_MARGIN));
+  while (a > 0 && a < lo && isTokenByte(t.charCodeAt(a - 1)) && isTokenByte(t.charCodeAt(a))) a += 1;
+  let b = pairStart(t, Math.min(t.length, hi + ENTRY_REDACT_MARGIN));
+  while (b < t.length && b > hi && isTokenByte(t.charCodeAt(b - 1)) && isTokenByte(t.charCodeAt(b))) b -= 1;
+  const leadCut = a > 0 && isTokenByte(t.charCodeAt(a - 1)) && isTokenByte(t.charCodeAt(a));
+  const tailCut = b < t.length && b > 0 && isTokenByte(t.charCodeAt(b - 1)) && isTokenByte(t.charCodeAt(b));
+  const read = displayReading(t.slice(a, b), idx);
+  const d = read.text;
+  const lefts = lo > a ? marginReadings(readingAt(t.slice(a, lo), idx, read.levels, read.bound)) : [''];
+  const rights = b > hi ? marginReadings(readingAt(t.slice(hi, b), idx, read.levels, read.bound)) : [''];
+  const s0 = windowStart(d, lefts);
+  const e0 = s0 === -1 ? -1 : windowEnd(d, rights, s0);
+  if (s0 === -1 || e0 === -1) return inexactWindow(t, lo, hi, idx);
+  const s = pairStart(d, s0);
+  const e = Math.max(s, pairStart(d, e0));
+  let out = d.slice(s, e);
+  if (leadCut) out = dropLeadingWhile(out, isTokenByte);
+  if (tailCut) out = dropTrailingWhile(out, isTokenByte);
+  if (unmarkedLength(out) > (hi - lo) + 2 * DISPLAY_EDGE_SLACK) return inexactWindow(t, lo, hi, idx);
+  return { text: out, exact: true };
+}
+
+/** text[from, to) as a read verb shows it (displayWindow): the exact cut of its redacted context, or an inexact window
+ *  under DISPLAY_INEXACT_NOTE's one line. Describe's excerpt and --full pages (Task 15) and expand's cuts, pages and
+ *  outline input (Task 16) call it; grep's snippet calls displayWindow itself. A window of the whole text
+ *  (`from` at or before 0, `to` at or past its length) has no margin, so it is always exact and IS redactForDisplay's
+ *  reading, whatever its length (displayWindow's step 0, ahead of the DISPLAY_WINDOW_MAX guard). */
+export function redactDisplayWindow(text, from, to, idx) {
+  const w = displayWindow(text, from, to, idx);
+  return w.exact ? w.text : `${DISPLAY_INEXACT_NOTE}\n${w.text}`;
+}
+
+/** How far past the snippet's hit, each way, grep's snippet reads its RAW window (*chosen*): SNIPPET_MAX, more than
+ *  snippetWindow's 24 before and 40 after, so a mark that shortens the text near the hit still leaves snippetWindow
+ *  its whole window. */
+const SNIPPET_READ = SNIPPET_MAX;
+
+/** grep's snippet over a body or sidecar of any length (§8.4, §11 P9; §8.3, rev 3.5):
+ *  the earliest hit is found in the RAW text (snippetSpan), the window around it is cut from its redacted context by
+ *  displayWindow, and snippetWindow cuts that window, `...` marking a cut at either end of the text. With no hit the
+ *  text's first 2 × SNIPPET_READ characters are read, and snippetWindow takes its first 80 of them. An inexact window
+ *  is shown with DISPLAY_INEXACT_NOTE ahead of the snippet, on the snippet's one line. */
+export function displaySnippet(text, terms, idx) {
+  const content = String(text);
+  const { at, len } = snippetSpan(content, terms);
+  const from = at === -1 ? 0 : Math.max(0, at - SNIPPET_READ);
+  const to = at === -1 ? Math.min(content.length, 2 * SNIPPET_READ) : Math.min(content.length, at + Math.max(len, 1) + SNIPPET_READ);
+  const w = displayWindow(content, from, to, idx);
+  const shown = snippetWindow(w.text, terms);
+  const prefix = from > 0 && !shown.startsWith('...') ? '...' : '';
+  const suffix = to < content.length && !shown.endsWith('...') ? '...' : '';
+  return `${w.exact ? '' : `${DISPLAY_INEXACT_NOTE} `}${prefix}${shown}${suffix}`;
+}
+
+// ── describe: arguments (W1-B2 Task 15; spec §8.4) ────────────────────────────────────────────────────
+
+/** describe's option grammar, over the argv after the verb word. The target is one of:
+ *  - a full id, a display prefix or a pasted card line. A pasted line's words are joined with one space, so an
+ *    unquoted line still reads (extractNodeId takes it apart);
+ *  - `--node <id>`.
+ *  `--full` pages the native summary, and `--cursor` continues a page, so it is valid only with --full. The scope
+ *  flags (--project, --workspace, --session <id>) are consumed and passed over, as grep's are: readContext decides
+ *  them. */
+export function parseDescribeArgs(argv) {
+  const a = { target: '', full: false, cursor: null, json: false };
+  const bad = { ok: false, reason: 'bad-args' };
+  const words = [];
+  const seen = new Set();
+  let node = null;
+  for (let i = 0; i < argv.length; i += 1) {
+    const t = argv[i];
+    if (t === '--') { words.push(...argv.slice(i + 1)); break; }
+    if (!t.startsWith('--')) { words.push(t); continue; }
+    if (seen.has(t)) return bad;
+    seen.add(t);
+    if (t === '--json') { a.json = true; continue; }
+    if (t === '--full') { a.full = true; continue; }
+    if (t === '--project' || t === '--workspace') continue;
+    if (i + 1 >= argv.length) return bad;
+    i += 1;
+    const v = argv[i];
+    if (t === '--session') continue;
+    if (t === '--node') { node = v; continue; }
+    if (t === '--cursor') { a.cursor = v; continue; }
+    return bad;
+  }
+  if ((node === null) === (words.length === 0)) return bad;
+  if (a.cursor !== null && !a.full) return bad;
+  a.target = node ?? words.join(' ');
+  return { ok: true, args: a };
+}
+
+// ── expand (W1-B2 Task 16) ─────────────────────────────────────────────────────────────────────────────
+// The decisions recall.mjs's expand delivers (spec §8.4 "expand", §8.3 "Redaction" and "Cap", §6.1 variants,
+// §11 P17): what a page costs and where a page or a cut ends, which target an argument names, whether an
+// entry is in scope, which items are cut, a cursor's validity, the delegate hint, a tool_result's paired path,
+// the ONE rendering of a row's RAW text (every window of which recall.mjs shows through Task 12's
+// redactDisplayWindow, before any cut or escape), and a cut item's outline over at most EXPLORE_READ_MAX of it.
+
+/** What one page of expand text may cost (textCost): the cap less 2,000 for the header, the item lines, the
+ *  shown and next lines and the hint (*chosen*). */
+export const PAGE_TEXT_BUDGET = OUTPUT_CAP - 2000;
+/** The cost ceiling of each half of a cut item (its first EXPLORE_CUT characters, its outline), so a cut item
+ *  fits an empty page whatever it escapes to (*chosen*). */
+export const CUT_TEXT_BUDGET = 8000;
+/** The page budget left that lets a whole item which does not fit start here as a partial, when it is not the
+ *  page's first item (*chosen*): below it the item waits to be first on the next page. */
+export const EXPAND_MIN_PARTIAL = 4000;
+
+/** One UTF-16 code unit's cost on a page: the longest form it escapes to. XML text turns `&` into `&amp;` and
+ *  `<`/`>` into 4; JSON turns `"`, `\` and \b \f \n \r \t into 2, any other control character into 6, and a
+ *  surrogate half is charged 6 too (a lone one is). So a page fits the cap in the human form and in --json
+ *  alike, and a cursor's offsets mean the same in both. */
+export function charCost(code) {
+  if (code === 0x26) return 5;
+  if (code === 0x3c || code === 0x3e) return 4;
+  if (code === 0x22 || code === 0x5c) return 2;
+  if (code < 0x20) return code === 0x08 || code === 0x09 || code === 0x0a || code === 0x0c || code === 0x0d ? 2 : 6;
+  if (code >= 0xd800 && code <= 0xdfff) return 6;
+  return 1;
+}
+
+/** The cost of text[start, end). */
+export function textCost(text, start = 0, end = text.length) {
+  let n = 0;
+  for (let i = start; i < end; i += 1) n += charCost(text.charCodeAt(i));
+  return n;
+}
+
+const isHighSurrogate = (text, k) => {
+  const c = text.charCodeAt(k);
+  return c >= 0xd800 && c <= 0xdbff;
+};
+
+/** Where a page of `text` that starts at `start` ends (exclusive) under `budget`. A page always moves (one
+ *  character, or one surrogate pair, at least) and never splits a surrogate pair. */
+export function pageEnd(text, start, budget) {
+  if (start >= text.length) return text.length;
+  let n = 0;
+  let i = start;
+  while (i < text.length) {
+    const c = charCost(text.charCodeAt(i));
+    if (n + c > budget) break;
+    n += c;
+    i += 1;
+  }
+  if (i === start) i = start + 1;
+  if (i < text.length && isHighSurrogate(text, i - 1)) i = i - 1 > start ? i - 1 : i + 1;
+  return i;
+}
+
+/** The first at most `maxChars` characters of `text` whose cost stays under `budget`, whole pairs only. */
+export function cutText(text, maxChars, budget) {
+  let n = Math.min(pageEnd(text, 0, budget), maxChars, text.length);
+  if (n > 0 && n < text.length && isHighSurrogate(text, n - 1)) n -= 1;
+  return text.slice(0, n);
+}
+
+/** A node id or its prefix (6 to 20 hex, §6.1's display minimum) — the grammar Task 12's resolveNodeInScope resolves. */
+const EXPAND_NODE_RE = /^[LN][0-9a-f]{6,20}$/;
+/** A raw-only row's key: B1's rawRowKey (`x` + 32 hex), the uuid an unparsable line is stored under. */
+const EXPAND_RAW_RE = /^x[0-9a-f]{32}$/;
+
+/** What an expand argument names. */
+export function expandTargetOf(s) {
+  if (typeof s !== 'string') return 'bad';
+  if (EXPAND_NODE_RE.test(s)) return 'node';
+  if (UUID_RE.test(s) || EXPAND_RAW_RE.test(s)) return 'entry';
+  return 'bad';
+}
+
+/** expand's arguments from Task 10's parseReadArgs answer, whose `expand` row has checked every option's grammar:
+ *  at most one target, and never a target with --around. --before/--after mean something only with --around and
+ *  are ignored otherwise. Neither target nor --around leaves a bare --cursor, which names its own target. */
+export function expandArgsOf(parsed) {
+  const pos = parsed.positional;
+  const o = parsed.opts;
+  if (pos.length > 1) return { ok: false, reason: 'bad-args' };
+  const target = pos.length === 1 ? pos[0] : null;
+  const around = typeof o.around === 'string' ? o.around : null;
+  if (target !== null && around !== null) return { ok: false, reason: 'bad-args' };
+  return {
+    ok: true,
+    args: {
+      target, around, before: Number.isSafeInteger(o.before) ? o.before : AROUND_DEFAULT,
+      after: Number.isSafeInteger(o.after) ? o.after : AROUND_DEFAULT, cursor: typeof o.cursor === 'string' ? o.cursor : null,
+    },
+  };
+}
+
+/** What a decoded expand cursor names, for `expand --cursor <c>` given alone: its key is the target, or
+ *  `around:<uuid>:<before>:<after>`. null when the key names nothing expand could resolve. */
+export function expandResumeOf(cursor) {
+  if (cursor === null || typeof cursor.t !== 'string') return null;
+  const m = /^around:([^:]+):([0-9]{1,2}):([0-9]{1,2})$/.exec(cursor.t);
+  if (m !== null) {
+    const before = Number(m[2]);
+    const after = Number(m[3]);
+    return before > AROUND_MAX || after > AROUND_MAX ? null : { target: null, around: m[1], before, after };
+  }
+  return expandTargetOf(cursor.t) === 'bad' ? null : { target: cursor.t, around: null, before: AROUND_DEFAULT, after: AROUND_DEFAULT };
+}
+
+/** An entry named by uuid: outside the scope is out-of-scope, never not-found (§8.2). */
+export function entryScopeVerdict({ found, inScope }) {
+  if (!found) return 'not-found';
+  return inScope ? 'ok' : 'out-of-scope';
+}
+
+/** Whether an item is cut to EXPLORE_CUT with an outline: a tool output or a sidecar, outside a message expansion
+ *  (which shows its row whole, paged). */
+export function expandCuts({ whole, kind, provenance }) {
+  if (whole) return false;
+  return kind === 'sidecar' || provenance === 'tool' || provenance === 'recall-echo';
+}
+
+/** A decoded expand cursor against this expansion: its key must be this target's, its item inside the list, its
+ *  offset a non-negative integer. No cursor starts at the top. */
+export function decideExpandCursor({ cursor, key, total }) {
+  if (cursor === null) return { ok: true, i: 0, o: 0 };
+  const { t, i, o } = cursor;
+  if (t !== key || !Number.isSafeInteger(i) || !Number.isSafeInteger(o) || i < 0 || o < 0 || i >= total) return { ok: false };
+  return { ok: true, i, o };
+}
+
+/** §8.4: more than DELEGATE_FACTOR times the cap is a `hint: delegate` line (cli.mjs prints `hint: ` before it). */
+export function delegateHint(chars) {
+  if (!(chars > DELEGATE_FACTOR * OUTPUT_CAP)) return null;
+  return `delegate: this expansion holds about ${Math.ceil(chars / 1000)}k characters, more than ${DELEGATE_FACTOR} times `
+    + `the ${OUTPUT_CAP / 1000}k cap; hand it to a subagent with the skill's delegation template`;
+}
+
+/** expand may decompress a blob of `rawLen` bytes in one call only up to SIDECAR_WHOLE_MAX (*chosen*): the size the
+ *  scale case measures the 1 GiB RSS bound at. B1 streams a larger sidecar into one blob; decompressed whole it
+ *  would pass that bound, and past ~512 MiB Node's string limit. Such a blob prints one fixed line instead. */
+export function expandBlobFits(rawLen) {
+  return rawLen <= SIDECAR_WHOLE_MAX;
+}
+
+/** The file a tool_use named, by its id, from an assistant row's content (P17 dispatches the outline on its
+ *  extension): `file_path` (Read, Edit, Write), `notebook_path`, then `path` (Grep, Glob). `found` tells the
+ *  paired tool_use that names no file (a Bash call: the walk up the chain stops there) from no paired tool_use in
+ *  this content (the walk goes on): two conditions, two answers. */
+export function toolUseInputPath(content, toolUseId) {
+  if (!Array.isArray(content)) return { found: false };
+  for (const b of content) {
+    if (b === null || typeof b !== 'object' || b.type !== 'tool_use' || b.id !== toolUseId) continue;
+    const input = b.input;
+    if (input === null || typeof input !== 'object') return { found: true, path: null };
+    for (const k of ['file_path', 'notebook_path', 'path']) if (typeof input[k] === 'string' && input[k] !== '') return { found: true, path: input[k] };
+    return { found: true, path: null };
+  }
+  return { found: false };
+}
+
+/** A stored row's RAW text as expand prints it: text blocks, `[tool_use <name>] <input as JSON>`, a tool_result's
+ *  content bare (so the outline reads the tool's own output), `[<type>]` for any other block. Nothing is redacted
+ *  here (spec §8.3 and §8.4; coordinator ruling R-display-window): recall.mjs shows every window of
+ *  this text through redactDisplayWindow, whose escape readings separate a value that JSON rendering glued an escape
+ *  letter onto, in a string leaf or in an object KEY, which a replacer over leaves never sees (review finding R38).
+ *  Redacting each leaf here instead would cost a whole 16 MiB leaf per page (R36, R37). */
+export function renderEntryText(body) {
+  const json = (v) => JSON.stringify(v === undefined ? null : v) ?? 'null';
+  const block = (b) => {
+    if (typeof b === 'string') return b;
+    if (b === null || typeof b !== 'object') return String(b);
+    switch (b.type) {
+      case 'text': return typeof b.text === 'string' ? b.text : '';
+      case 'tool_use': return `[tool_use ${typeof b.name === 'string' ? b.name : ''}] ${json(b.input)}`;
+      case 'tool_result':
+        if (typeof b.content === 'string') return b.content;
+        return Array.isArray(b.content) ? b.content.map(block).join('\n') : json(b.content);
+      default: return `[${typeof b.type === 'string' ? b.type : 'block'}]`;
+    }
+  };
+  if (body === null || body === undefined) return '';
+  if (typeof body === 'string') return body;
+  if (Array.isArray(body)) return body.map(block).join('\n');
+  if (typeof body === 'object') return json(body);
+  return String(body);
+}
+
+/** How much of a cut item an outline reads (*chosen*: 256 Ki characters, under EXPLORE_JSON_MAX): up to it the
+ *  explorer reads redactDisplayWindow's window of the whole item, past it the outline is counts only. An outline's
+ *  explorers read the whole text they are given, so without the bound one cut 64 MiB sidecar would be redacted
+ *  whole for its outline (spec §8.3 and §8.4). */
+export const EXPLORE_READ_MAX = 256 * 1024;
+
+/** exploreCounts(stripReadPrefix(t)) in one pass with no split: a counts-only outline must cost the item's length, not
+ *  a copy of it per line (a 64 MiB newline-dense sidecar split twice peaked at 2 GiB; spec §8.4's bound is 1 GiB).
+ *  Stripping a Read prefix removes characters inside a line, never a newline, so the line count is the raw text's. */
+function exploreCountsOnePass(t) {
+  const prefix = /[^\S\n]*(\d+)(?:→|\t)/y;   // READ_PREFIX_RE at a line start; [^\S\n] is \s without crossing the line's end
+  let stripped = 0;
+  let prev = null;
+  for (let at = 0; at <= t.length;) {
+    prefix.lastIndex = at;
+    const m = prefix.exec(t);
+    if (m === null || (prev !== null && Number(m[1]) !== prev + 1)) break;
+    prev = Number(m[1]);
+    stripped += m[0].length;
+    const nl = t.indexOf('\n', at);
+    if (nl === -1) break;
+    at = nl + 1;
+  }
+  let lines = 1;
+  for (let i = t.indexOf('\n'); i !== -1; i = t.indexOf('\n', i + 1)) lines += 1;
+  return ['Structured summary:', `Characters: ${(t.length - stripped).toLocaleString('en-US')}.`,
+    `Lines: ${lines.toLocaleString('en-US')}.`].join('\n');
+}
+
+/** A cut item's outline (§8.4, §11 P17): `explore` over the item's redacted window when the item is at most
+ *  EXPLORE_READ_MAX characters, else Task 3's counts-only summary over the raw text, computed in one pass
+ *  (exploreCountsOnePass; characters and lines: numbers, never content). The caller cuts the result to EXPLORE_CUT
+ *  and CUT_TEXT_BUDGET. */
+export function exploreOutline(text, kind, fileName, idx) {
+  const t = String(text);
+  if (t.length > EXPLORE_READ_MAX) return exploreCountsOnePass(t);
+  return explore(redactDisplayWindow(t, 0, t.length, idx), kind, fileName);
+}
+
+// ── version-aware reads (W1-B2 Task 17) ─────────────────────────────────────────────────────────────────
+// Spec §6.11 "The CLI keeps answering" (slug history-cli-reads-store-version): the CLI reads user_version first
+// and builds its named-column queries for THAT version from SCHEMA_ADDED. A column the store lacks is selected
+// as NULL (Task 10's selectColumns; a join reads a versioned() derived table in recall.mjs; a few v1-only reads — the scope's families and transcripts, eofOf, scopeHeader, tree's epochs, store.mjs's childrenOf/parentOf/LINEAGE_SQL and regex-worker.mjs — still name literal v1 columns, which every version keeps because migrations are additive), and a verb that cannot answer without a
+// newer table answers exit 5 migration-pending. Migrations are additive only, so an older store's columns are
+// always a subset (DM44); schemaAdditive is the test that refuses one that is not.
+
+/** What every read verb reads before its own statements: the scope (sessions, epochs, transcripts and the entries
+ *  that say a transcript holds rows), the header (ingest_files' end-of-file marks, derivation_state's recover step),
+ *  and cli.mjs's context (the store id in meta, the redaction index's redact_hashes). They are an inventory, not a
+ *  guard: cli.mjs's readContext reads meta, redact_hashes, sessions, epochs, transcripts and entries before any
+ *  executor's pendingFor runs (a missing one answers store-read-failed), and emitResult reads the header again
+ *  after it. A version that adds a table to this list must add its check to readContext (hardening item H-21). */
+const READ_CONTEXT_TABLES = Object.freeze(['meta', 'redact_hashes', 'sessions', 'epochs', 'transcripts', 'entries', 'ingest_files', 'derivation_state']);
+
+/** Every table each read verb's path reads (recall.mjs, the store.mjs functions it calls, and grep --regex's
+ *  child, regex-worker.mjs): the shared context above plus the verb's own statements. All are v1 tables today;
+ *  a version that adds a table a verb needs adds it here, in the same PR. blobs_fts is a virtual table the sweep
+ *  creates, not a SCHEMA_ADDED one: grep's index gate answers its absence as fts-pending. */
+export const VERB_TABLES = Object.freeze({
+  grep: Object.freeze([...READ_CONTEXT_TABLES, 'blobs', 'entry_variants', 'sidecars', 'nodes', 'node_sources', 'node_children']),
+  describe: Object.freeze([...READ_CONTEXT_TABLES, 'nodes', 'node_refs', 'node_sources', 'node_children', 'blobs', 'boundaries', 'memberships']),
+  expand: Object.freeze([...READ_CONTEXT_TABLES, 'nodes', 'node_children', 'node_sources', 'blobs', 'entry_variants', 'sidecars', 'memberships']),
+  tree: Object.freeze([...READ_CONTEXT_TABLES, 'nodes', 'node_children']),
+});
+
+/** The tables a store at `version` has: every SCHEMA_ADDED entry at or below it. A newer store has all this
+ *  build knows. */
+function tablesThrough(version, schema) {
+  const have = new Set();
+  for (const [v, entry] of Object.entries(schema)) if (Number(v) <= version) for (const t of Object.keys(entry.tables)) have.add(t);
+  return have;
+}
+
+/** The tables `verb` needs that a store at `version` lacks; [] when it can answer. */
+export function missingTablesAt(version, verb, schema = SCHEMA_ADDED, verbTables = VERB_TABLES) {
+  if (!Object.hasOwn(verbTables, verb)) throw new TypeError(`missingTablesAt: ${JSON.stringify(verb)} is not a read verb`);
+  const have = tablesThrough(version, schema);
+  return verbTables[verb].filter((t) => !have.has(t));
+}
+
+/** Whether a SCHEMA_ADDED is additive only (slug history-schema-additive-measured, NEW). Its shape: versions
+ *  1..N, each exactly {heavy, tables}, no column listed twice. Given `measured` (B1's schemaOf after each
+ *  migration, by version), each version must build exactly what SCHEMA_ADDED declares up to it: a rename or a
+ *  drop shows as a column `lost`, a column nothing declared as `undeclared`. */
+export function schemaAdditive(schema, measured) {
+  const lost = [];
+  const versions = Object.keys(schema).map(Number).sort((a, b) => a - b);
+  if (versions.some((v, i) => v !== i + 1)) lost.push('versions are not 1..N');
+  const cum = new Map();
+  const cumAt = new Map();
+  for (const v of versions) {
+    const entry = schema[v];
+    // H-164: a declared version entry that is no object is named, never thrown on (Object.keys(null) is a TypeError).
+    if (entry === null || typeof entry !== 'object' || Array.isArray(entry)) { lost.push(`v${v} is no object`); continue; }
+    const keys = Object.keys(entry).sort();
+    if (keys.join(',') !== 'heavy,tables' || typeof entry.heavy !== 'boolean') lost.push(`v${v} has keys ${keys.join(',')}`);
+    for (const [t, cols] of Object.entries(entry.tables ?? {})) {
+      if (!Array.isArray(cols)) { lost.push(`${t} at v${v} lists no array of columns`); continue; }
+      const have = cum.get(t) ?? new Set();
+      for (const c of cols) {
+        if (have.has(c)) lost.push(`${t}.${c} re-listed at v${v}`);
+        have.add(c);
+      }
+      cum.set(t, have);
+    }
+    cumAt.set(v, new Map([...cum].map(([t, set]) => [t, new Set(set)])));
+  }
+  for (const [vs, tables] of Object.entries(measured ?? {})) {
+    const v = Number(vs);
+    const want = cumAt.get(v);
+    if (want === undefined) { lost.push(`v${v} measured but not declared`); continue; }
+    // H-164: a measured version entry that is no table map is named, never thrown on (Object.entries(null) is a TypeError).
+    if (tables === null || typeof tables !== 'object' || Array.isArray(tables)) { lost.push(`v${v} measured no table map`); continue; }
+    // H-25: a measured column set that is no array is named FIRST; the lost loop then reads it as empty, so it never
+    // throws on an object or matches a string by substring.
+    for (const [t, cols] of Object.entries(tables)) if (!Array.isArray(cols)) lost.push(`${t} at v${v} lists no array of columns`);
+    const listed = (t) => (Array.isArray(tables[t]) ? tables[t] : []);
+    for (const [t, cols] of want) for (const c of cols) if (!listed(t).includes(c)) lost.push(`${t}.${c} lost at v${v}`);
+    for (const [t, cols] of Object.entries(tables)) {
+      if (!Array.isArray(cols)) continue;
+      for (const c of cols) if (!(want.get(t)?.has(c) ?? false)) lost.push(`${t}.${c} undeclared at v${v}`);
+    }
+  }
+  if (measured != null) {
+    for (const v of versions) if (!Object.hasOwn(measured, String(v))) lost.push(`v${v} declared but not measured`);
+  }
+  return lost.length === 0 ? { ok: true } : { ok: false, lost };
+}
+
+// ── the operator door's pane read (W1-B2 Task 19) ──────────────────────────────────────────────────────────
+/** Whether an --op form's gate needs the pane's tmux session name (§8.2, §8.4 speed bumps): only an irreversible
+ *  WRITING_FORMS form needs it, and only from a pane id of PANE_RE's grammar. Both doors ask this ONE rule before
+ *  their own bounded tmux read: B1's paneNameFor in the sweep, opPaneName in the CLI. */
+export function paneReadWanted(form, pane) {
+  return form !== null && Object.hasOwn(WRITING_FORMS, form) && WRITING_FORMS[form].irreversible === true
+    && typeof pane === 'string' && PANE_RE.test(pane);
+}
+
+// ── doctor --repair's rebuild step (W1-B2 Task 23; spec §8.4, §9.1) ───────────────────────────────
+
+/** derivation_state step of the resumable FTS rebuild (doctor --repair, and the recovery step's reindex phase);
+ *  its version is the ms the job started. The sweep writes it; grep's index gate reads it, so grep answers
+ *  7 fts-pending while one is open (history-grep-pending-until-backfilled). Spelled once, here. */
+export const FTS_REBUILD_STEP = 'fts-rebuild';
+
+// ── B1's health counters, re-measured after a cure (W1-B2 Task 23; D-4723 (history-counter-resets-after-cure)) ─────
+
+/** How each of B1's HEALTH_COUNTERS counts, so a re-measure knows what it may write. `item`: each standing thing once
+ *  (a blob, a set-aside file), so a standing count above the stored one raises it (a restored or rebuilt store lost
+ *  the count). `pass`: every drain that meets the condition again, so only its cure writes. Spelled once, here. */
+export const COUNTER_STANDING = Object.freeze({
+  [HEALTH_COUNTERS.blobUndecodable]: 'item',
+  [HEALTH_COUNTERS.drainRejected]: 'item',
+  [HEALTH_COUNTERS.spoolDisplaced]: 'item',
+  [HEALTH_COUNTERS.spoolBlocked]: 'pass',
+  [HEALTH_COUNTERS.spoolUnreadable]: 'pass',
+});
+
+/** What a re-measure writes (D-4723 (history-counter-resets-after-cure)). For each name in `standing` (how many of what it
+ *  counts stand now; null = unmeasured, never 0) against `counters[name]` (0 when absent): unmeasured writes nothing;
+ *  0 resets a non-zero counter to 0, because the condition is cured; an `item` counter is raised to a larger standing
+ *  count; anything else writes nothing (an item count is never lowered while any stands, and a `pass` count keeps its
+ *  history while the condition stands, the next drain counting it again). A name outside COUNTER_STANDING, or a count
+ *  that is not a non-negative integer, throws: no other counter is reset by a re-measure. */
+export function decideCounterResets(counters, standing) {
+  const writes = [];
+  for (const [name, m] of Object.entries(standing)) {
+    const kind = Object.hasOwn(COUNTER_STANDING, name) ? COUNTER_STANDING[name] : undefined;
+    if (kind === undefined) throw new TypeError(`decideCounterResets: ${name} is not one of HEALTH_COUNTERS`);
+    const have = Number(counters[name] ?? 0);
+    if (m === null) continue;
+    if (!Number.isSafeInteger(m) || m < 0) throw new TypeError(`decideCounterResets: ${name} measured ${String(m)}`);
+    if (m === 0) { if (have !== 0) writes.push({ name, n: 0 }); continue; }
+    if (kind === 'item' && m > have) writes.push({ name, n: m });
+  }
+  return writes;
+}
+
+// ── doctor --repair's integrity gate (W1-B2 Task 23 fix round 1; D-4591 (history-repair-heals-index-integrity-rows)) ──
+/** An integrity_check row that names one of the store's own FTS5 tables: FTS5's xIntegrity (SQLite 3.44+) reports a
+ *  damaged inverted index or data blob this way, and the repair's drop-and-rebuild replaces exactly those tables. */
+const INDEX_DAMAGE_RE = /(?:\bFTS5 table main\.|\bfrom table ")(?:blobs_fts|nodes_fts)\b/;
+/** What PRAGMA integrity_check's rows decide for doctor --repair: `ok` (exactly ['ok']); `index` when every row names
+ *  blobs_fts or nodes_fts (the rebuild heals them, D-4591); `store` for anything else, a mix included (no index
+ *  rebuild can fix it). Pure: the caller runs the pragma. */
+export function decideIntegrity(rows) {
+  if (rows.length === 1 && rows[0] === 'ok') return { verdict: 'ok', rows: [] };
+  const bad = rows.filter((r) => r !== 'ok');
+  if (bad.length > 0 && bad.every((r) => INDEX_DAMAGE_RE.test(r))) return { verdict: 'index', rows: bad };
+  return { verdict: 'store', rows: bad.length > 0 ? bad : rows };
 }

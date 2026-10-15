@@ -1061,7 +1061,7 @@ describe('shared/lifecycle.ts — the policy §4(a) manifest', () => {
     W3: ['history-steer-files'],
   } as const;
   type HistoryPr = keyof typeof HISTORY_ROWS_BY_PR;
-  const HISTORY_LANDED: readonly HistoryPr[] = ['B1'];
+  const HISTORY_LANDED: readonly HistoryPr[] = ['B1', 'B2'];
 
   it('the history classes are §9.4\'s thirteen, each declared by the PR its Lands-in column names, and none before it (O17)', () => {
     const all: string[] = Object.values(HISTORY_ROWS_BY_PR).flat();
@@ -1119,6 +1119,14 @@ describe('shared/lifecycle.ts — the policy §4(a) manifest', () => {
     expect(c!.collector).toBeNull();
     expect(c!.ruling).toContain('kept with the store; removed only with it');
     for (const f of ['store.id', 'store.writer', 'store.id.pending', 'op']) expect(c!.root).toContain(f);
+    // B2 adds two more files to the same row (D-5016's `pass`, D-5026's `pass-died`). `toContain('pass')` is already true of
+    // 'while an --op pass runs', so each is pinned by the phrase that declares it, which goes when its name is dropped.
+    expect(c!.root).toContain('pass while a scheduled pass runs');
+    expect(c!.root).toContain('pass-died while a recorded death stands, until a pass commits a tick');
+    // and how each goes: a pass removes its own marker, the next pass records a killed one, a committed tick removes the record.
+    expect(c!.ruling).toContain('a scheduled pass removes its own pass in its finally');
+    expect(c!.ruling).toContain('records a killed pass\'s leftover in pass-died and overwrites the marker');
+    expect(c!.ruling).toContain('the first pass that commits a tick removes pass-died');
   });
 
   it('declares history-spool: an R class written by the hook, the CLI and the sweep, collected by the two-phase drain', () => {
@@ -1152,6 +1160,19 @@ describe('shared/lifecycle.ts — the policy §4(a) manifest', () => {
     expect(c!.ruling).toContain('touched by hand; persists until removed');
     // B1's two; W2 adds headless-on and W3 the steer markers, each to this root in its own PR
     expect(c!.root).toBe('~/.ccrc/history-off, ~/.ccrc/history-max-gb');
+  });
+
+  it('declares history-backups: an operator-made O class with no collector, created by --op backup, its stale .tmp removed by the next backup', () => {
+    const c = LIFECYCLE.find((x) => x.name === 'history-backups');
+    expect(c, 'shared/lifecycle.ts declares no history-backups class').toBeTruthy();
+    expect(c!.pattern).toBe('O');
+    expect(c!.creators).toEqual(['ccd/history/sweep.mjs (--op backup)']);
+    expect(c!.collector).toBeNull();
+    expect(c!.ruling).toContain('ccrc history doctor --backup');
+    expect(c!.ruling).toContain('remove by hand');
+    expect(c!.ruling).toContain('removes a stale .tmp first');
+    expect(c!.root).toBe('~/.ccrc/history/db/backups/<ts>.db, and its .<ts>.db.tmp while one is written');
+    expect(c!.tier).toBe('one store size per backup');
   });
 
   it('declares the server suite\'s per-run temp parent, an E class its own creator collects (#316)', () => {

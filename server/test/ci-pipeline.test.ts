@@ -798,7 +798,7 @@ describe('ci.yml: the full-suite verdict and the legs it runs (design 2026-09-23
     // Never on a merge-queue run (landing-order stage 2): a queue run skips
     // test-macos, and a queue run that fell back to `full` would read that skip
     // as a red leg here (ci-merge-queue.test.ts derives the rule).
-    expect(jobKey(b, 'if')).toBe("always() && github.event_name != 'merge_group' && needs.select.outputs.tests == 'full'");
+    expect(jobKey(b, 'if')).toBe("always() && github.event_name != 'merge_group' && github.event_name != 'pull_request' && needs.select.outputs.tests == 'full'");
     // RESULTS carries exactly one `name=result` pair per need — never toJSON(needs), which carries every select
     // matrix and outgrows an environment string's 128 KB as the suite grows.
     expect(b).not.toContain('toJSON(needs)');

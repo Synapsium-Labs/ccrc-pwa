@@ -1040,6 +1040,20 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
     },
     answerDialog: (id: string, dialogId: string, optionIndex: number) =>
       post(`${sid(id)}/dialog`, { dialogId, optionIndex }),
+    /** Answer an AskUserQuestion in your own words, through its free-text ("Type something.") row (D-5047). The server
+     *  types `text` only once a capture proves the cursor on the empty row, and presses Enter only once a capture
+     *  proves the row holds exactly `text`. It refuses 400 `bad-text` for a text it will not type (`isDialogText`,
+     *  `shared/api.ts`), and 409 with a `DialogTextRefuseCode` otherwise. Typing changes the dialog's id, and a retry
+     *  with the same text, under the id the stream then shows, submits text a refused attempt left in the row. */
+    answerDialogText: (id: string, dialogId: string, optionIndex: number, text: string) =>
+      post(`${sid(id)}/dialog/text`, { dialogId, optionIndex, text }),
+    /** Answer a multiSelect AskUserQuestion question (D-5048): `optionIndexes` are the printed digits of the boxes to
+     *  leave ticked (`Dialog.multi`'s options), the whole set, never a toggle. The server sends a digit only for each
+     *  box whose tick differs on the live pane, proves the ticks on a fresh capture, then commits with Tab and proves
+     *  the screen moved on. It refuses 400 `bad-indexes` for a set it will not send (`isDialogMultiIndexes`,
+     *  `shared/api.ts`: empty, repeated, or outside 1..9), and 409 with a `DialogMultiRefuseCode` otherwise. */
+    answerDialogMulti: (id: string, dialogId: string, optionIndexes: readonly number[]) =>
+      post(`${sid(id)}/dialog/multi`, { dialogId, optionIndexes }),
     /** Answer a hook-reported question by option index. `askKey` is minted
      *  server-side and carried verbatim: the server re-reads the CURRENT
      *  envelope and refuses unless the key still matches, so this can only ever

@@ -877,9 +877,9 @@ cd ~/ccrc/agent && npm ci && npm run build \
   # means this line is never reached if the build failed.
   stamp_build
   "${SSH[@]}" "$BOX" 'bash ~/.cc-sessions/install-session-hooks.sh'
-  # The three SKILLS are the FIFTH, SIXTH and SEVENTH artifacts ccrc ships to
+  # The four SKILLS are the FIFTH to the EIGHTH artifacts ccrc ships to
   # the fleet host (ccd, notify.sh, session-hook.sh + its installer, and now
-  # these three). Each rides the same four lines for the same reasons. The
+  # these four). Each rides the same four lines for the same reasons. The
   # TREE rides rsync --delete so a reference file deleted in git is deleted
   # on the box too — a stale reference is prose a model will still follow,
   # and prose is read whole on the next open, so tree-level atomicity is not
@@ -925,10 +925,23 @@ cd ~/ccrc/agent && npm ci && npm run build \
   rsync -az --delete -e "${SSH[*]}" ccd/reviewer-skill/ "$BOX":.cc-sessions/reviewer-skill/
   install_atomic ccd/install-reviewer-skill.sh .cc-sessions/install-reviewer-skill.sh 755
   "${SSH[@]}" "$BOX" 'bash ~/.cc-sessions/install-reviewer-skill.sh'
+  # THE HISTORY SKILL SHIPS FOURTH (ccrc history spec 2026-10-05 §8.5). Unlike
+  # the worker's and the reviewer's, its SKILL.md points into no other skill's
+  # tree, so this place is a grouping, not an ordering rule: it needs only the
+  # roster its installer sources, which lands above. Its tree carries the
+  # lossless-claw MIT notice beside SKILL.md, and rsync --delete keeps the
+  # box's copy exactly the shipped tree. Like the notes above, this comment
+  # deliberately does NOT spell this skill's directory name with a trailing
+  # slash: install-history-skill.test.ts locates the rsync by the FIRST line in
+  # the arm that contains that spelling.
+  "${SSH[@]}" "$BOX" 'mkdir -p ~/.cc-sessions/history-skill'
+  rsync -az --delete -e "${SSH[*]}" ccd/history-skill/ "$BOX":.cc-sessions/history-skill/
+  install_atomic ccd/install-history-skill.sh .cc-sessions/install-history-skill.sh 755
+  "${SSH[@]}" "$BOX" 'bash ~/.cc-sessions/install-history-skill.sh'
   # graphify Task 10 (O3/O6b): the assembled-SRC skill installer, AFTER all
-  # three roster-reading skill arms above (spec §B: its SRC is the INSTALLED
+  # four roster-reading skill arms above (spec §B: its SRC is the INSTALLED
   # package, never vendored, which is what makes it a plain `install_atomic` +
-  # remote run rather than the rsync-a-tree-then-run shape its three
+  # remote run rather than the rsync-a-tree-then-run shape its four
   # neighbours need).
   #
   # R-8 (fix round, F1): GATED on ~/.ccrc/graphify.pin existing on the box —

@@ -293,6 +293,10 @@ import { DatabaseSync as DatabaseSyncF28 } from 'node:sqlite';
 //   `TypeError`  a plain TypeError, with no `code` — a programming defect in the reader, which `readStoreAnswered`
 //                (cli.mjs) must let escape as exit 1 rather than answer as a store word, or
 //   `StoreError:<word>`  a store.mjs StoreError carrying <word> (the reader's open refused), which it answers as that word.
+//   `SqliteError:<msg>`  an Error with message <msg> and code ERR_SQLITE_ERROR, as node:sqlite's own errors carry: the
+//                        message is a planted value a case looks for in stderr (HA2 H-32). <msg> holds no `@`.
+//   `Error:<msg>`        a plain Error with message <msg> and no `code`: a defect, which an operator verb must still
+//                        word as an operator line (HA2 H-37). <msg> holds no `@`.
 //   Every other statement runs for real. The substring is chosen past the binding read, so only readStore meets it.
 import { syncBuiltinESMExports as syncM30 } from 'node:module';
 import { DatabaseSync as DatabaseSyncM30 } from 'node:sqlite';
@@ -310,7 +314,9 @@ import { DatabaseSync as DatabaseSyncM30 } from 'node:sqlite';
       if (needleM30 !== '' && String(sql).includes(needleM30)) {
         if (kindM30 === 'TypeError') throw new TypeError('fixture-planted');
         if (kindM30.startsWith('StoreError:')) throw new StoreErrorM30(kindM30.slice('StoreError:'.length), 'injected store refusal (test preload)');
-        throw new Error(`preload-faults: HISTORY_TEST_THROW_PREPARE kind ${kindM30} is not TypeError or StoreError:<word>`);
+        if (kindM30.startsWith('SqliteError:')) throw Object.assign(new Error(kindM30.slice('SqliteError:'.length)), { code: 'ERR_SQLITE_ERROR' });
+        if (kindM30.startsWith('Error:')) throw new Error(kindM30.slice('Error:'.length));
+        throw new Error(`preload-faults: HISTORY_TEST_THROW_PREPARE kind ${kindM30} is not TypeError, StoreError:<word>, SqliteError:<msg> or Error:<msg>`);
       }
       return realPrepareM30.call(this, sql);
     };
@@ -343,4 +349,166 @@ if (readSwap !== '') {
     return got;
   };
   syncBuiltinESMExports();
+}
+
+// ── W1-B2 Task 21: a derive throw for one blob (RB5) ─────────────────────────────────────────────
+// HISTORY_TEST_THROW_BLOB=<blob_id>: a prepared `SELECT z FROM blobs WHERE blob_id = ?` (derive.mjs's blob read,
+//   Task 8's stmts().blobZ) throws from `get` when bound to <blob_id> and CALLED FROM derive.mjs, on every call: a
+//   leaf whose derivation reads that blob throws a plain Error, which is not busy. Other blobs read as before.
+//   B1's own blob reads in sweep.mjs (INGEST_STMTS' blobZ and derivStmts' blobZ) prepare
+//   `SELECT z, raw_len FROM blobs WHERE blob_id = ?`, a different text, so only derive.mjs's statement is wrapped; the
+//   stack check below is a second belt for a later task that reuses the text: the seam is for derive.mjs (an
+//   `--op reparse` pass, or a tick's derivation) and never makes another reader throw for that blob.
+// It patches DatabaseSync.prototype.prepare on top of whatever an earlier block installed.
+import { DatabaseSync as DatabaseSyncR21 } from 'node:sqlite';
+{
+  const throwBlobR21 = process.env.HISTORY_TEST_THROW_BLOB ?? '';
+  if (/^[0-9]+$/.test(throwBlobR21)) {
+    const protoR21 = DatabaseSyncR21.prototype;
+    const realPrepareR21 = protoR21.prepare;
+    protoR21.prepare = function prepareR21(sql) {
+      const st = realPrepareR21.call(this, sql);
+      if (String(sql) === 'SELECT z FROM blobs WHERE blob_id = ?') {
+        const realGetR21 = st.get.bind(st);
+        st.get = (...args) => {
+          if (String(args[0]) === throwBlobR21 && String(new Error().stack).includes('/ccd/history/derive.mjs')) {
+            throw new Error(`preload-faults: HISTORY_TEST_THROW_BLOB ${throwBlobR21}`);
+          }
+          return realGetR21(...args);
+        };
+      }
+      return st;
+    };
+  }
+}
+
+// ── W1-B2 Task 23: doctor --repair seams (C61) ───────────────────────────────────────────────────
+// HISTORY_TEST_FK_INJECT=<substring>: the first time a prepared statement whose SQL contains <substring> RUNS
+//   (inside a rebuild chunk's transaction), switch that connection's foreign keys to deferred
+//   (PRAGMA defer_foreign_keys, legal inside a transaction) and insert one dangling file_paths row first: a chunk
+//   that would commit a NEW violation, which fails that chunk's COMMIT (errcode 787).
+// HISTORY_TEST_FK_PLANT=<substring>: the first time a prepared statement whose SQL contains <substring> is read with
+//   `all` (the rebuild's pick, which runs OUTSIDE any transaction), commit one dangling file_paths row with foreign
+//   keys off, then turn them back on: a violation that appears after the job's baseline and before its
+//   completion, which only the completion's baseline diff can see.
+// HISTORY_TEST_INTEGRITY=<text>: `PRAGMA integrity_check` answers one row holding <text> instead of 'ok'; a <text> beginning
+//   `throw:` makes the pragma's `.all` throw an Error whose message is the rest (a vtab whose own tables are gone, D-4591); one
+//   beginning `throw-busy:` throws that Error with errcode 5 (SQLITE_BUSY), the shape sweep.mjs's isBusy reads (HB2 H-82).
+// All three patch DatabaseSync.prototype.prepare on top of whatever an earlier block installed.
+import { DatabaseSync as DatabaseSyncR23 } from 'node:sqlite';
+{
+  const fkInjectR23 = process.env.HISTORY_TEST_FK_INJECT ?? '';
+  const fkPlantR23 = process.env.HISTORY_TEST_FK_PLANT ?? '';
+  const integrityR23 = process.env.HISTORY_TEST_INTEGRITY ?? '';
+  if (fkInjectR23 !== '' || fkPlantR23 !== '' || integrityR23 !== '') {
+    const protoR23 = DatabaseSyncR23.prototype;
+    const realPrepareR23 = protoR23.prepare;
+    let injectedR23 = false;
+    let plantedR23 = false;
+    protoR23.prepare = function prepareR23(sql) {
+      const st = realPrepareR23.call(this, sql);
+      const text = String(sql);
+      const conn = this;
+      if (integrityR23 !== '' && /PRAGMA\s+integrity_check/i.test(text)) {
+        if (integrityR23.startsWith('throw-busy:')) {
+          st.all = () => { throw Object.assign(new Error(integrityR23.slice('throw-busy:'.length)), { errcode: 5 }); };
+        } else {
+          st.all = integrityR23.startsWith('throw:')
+            ? () => { throw new Error(integrityR23.slice('throw:'.length)); }
+            : () => [{ integrity_check: integrityR23 }];
+        }
+        return st;
+      }
+      if (fkInjectR23 !== '' && text.includes(fkInjectR23)) {
+        const realRunR23 = st.run.bind(st);
+        st.run = (...args) => {
+          if (!injectedR23) {
+            injectedR23 = true;
+            realPrepareR23.call(conn, 'PRAGMA defer_foreign_keys = ON').run();
+            realPrepareR23.call(conn, "INSERT INTO file_paths (path, file_id, last_seen_ms) VALUES ('/fk-inject', 2147483647, 0)").run();
+          }
+          return realRunR23(...args);
+        };
+      }
+      if (fkPlantR23 !== '' && text.includes(fkPlantR23)) {
+        const realAllR23 = st.all.bind(st);
+        st.all = (...args) => {
+          if (!plantedR23) {
+            plantedR23 = true;
+            realPrepareR23.call(conn, 'PRAGMA foreign_keys = OFF').run();
+            realPrepareR23.call(conn, "INSERT INTO file_paths (path, file_id, last_seen_ms) VALUES ('/fk-plant', 2147483645, 0)").run();
+            realPrepareR23.call(conn, 'PRAGMA foreign_keys = ON').run();
+          }
+          return realAllR23(...args);
+        };
+      }
+      return st;
+    };
+  }
+}
+
+// ── W1-B2 Task 25: a statement that throws (the recovery chunk's rollback; recovery-stalled) ─────────────────
+// HISTORY_TEST_THROW_SQL=<substring>: every prepared statement whose SQL contains <substring> throws, from run, get,
+//   all and iterate, an Error coded ERR_SQLITE_ERROR, instead of executing. Not a kill: the pass lives on, so what
+//   it does with a failed chunk (roll back, count recover_chunk_failed, keep its cursor) is observable.
+import { DatabaseSync as DatabaseSyncRcv } from 'node:sqlite';
+{
+  const throwSqlRcv = process.env.HISTORY_TEST_THROW_SQL ?? '';
+  if (throwSqlRcv !== '') {
+    const protoRcv = DatabaseSyncRcv.prototype;
+    const prepareRcv = protoRcv.prepare;
+    protoRcv.prepare = function prepareThrowRcv(sql) {
+      const st = prepareRcv.call(this, sql);
+      if (!String(sql).includes(throwSqlRcv)) return st;
+      for (const m of ['run', 'get', 'all', 'iterate']) {
+        st[m] = () => {
+          throw Object.assign(new Error(`preload-faults: injected failure in ${m} of ${throwSqlRcv}`), { code: 'ERR_SQLITE_ERROR' });
+        };
+      }
+      return st;
+    };
+  }
+}
+
+// ── W1-B2 fix round 2 batch A2 (D-5026): a pass marker removed between status's read of it and its identity measure ──────
+// HISTORY_TEST_UNLINK_ON_PROC_STAT=<file>: the first time the process reads a `/proc/<pid>/stat` (procIdentityOf's read, which
+//   status makes after it has read the pass marker), <file> is removed first, once. It is the pass that ends through its `finally`
+//   between the two reads, made deterministic. Absent, nothing is patched.
+{
+  const unlinkOnStat = process.env.HISTORY_TEST_UNLINK_ON_PROC_STAT ?? '';
+  if (unlinkOnStat !== '') {
+    const realReadFileSync = fs.readFileSync;
+    let spent = false;
+    fs.readFileSync = function readFileSyncUnlinkOnStat(p, ...rest) {
+      if (!spent && typeof p === 'string' && /^\/proc\/[0-9]+\/stat$/.test(p)) {
+        spent = true;
+        fs.rmSync(unlinkOnStat, { force: true });
+      }
+      return realReadFileSync.call(this, p, ...rest);
+    };
+    syncBuiltinESMExports();
+  }
+}
+
+// ── W1-B2 fix round 2 batch A3 (D-5026): a pass marker replaced between status's read of it and its identity measure ─────────
+// HISTORY_TEST_SWAP_ON_PROC_STAT=<file> with HISTORY_TEST_SWAP_ON_PROC_STAT_TEXT=<text>: the first time the process reads a
+//   `/proc/<pid>/stat` (procIdentityOf's read, which status makes after it has read the pass marker), <file> is replaced first, once,
+//   by a new file holding <text> (written beside it and renamed over it, as a pass writes its marker). It is a new pass that wrote
+//   its own marker in the gap, made deterministic. Absent either variable, nothing is patched.
+{
+  const swapOnStat = process.env.HISTORY_TEST_SWAP_ON_PROC_STAT ?? '';
+  const swapText = process.env.HISTORY_TEST_SWAP_ON_PROC_STAT_TEXT;
+  if (swapOnStat !== '' && swapText !== undefined) {
+    const realReadFileSyncSwap = fs.readFileSync;
+    let spentSwap = false;
+    fs.readFileSync = function readFileSyncSwapOnStat(p, ...rest) {
+      if (!spentSwap && typeof p === 'string' && /^\/proc\/[0-9]+\/stat$/.test(p)) {
+        spentSwap = true;
+        fs.writeFileSync(`${swapOnStat}.swap`, swapText, { mode: 0o600 });
+        fs.renameSync(`${swapOnStat}.swap`, swapOnStat);
+      }
+      return realReadFileSyncSwap.call(this, p, ...rest);
+    };
+    syncBuiltinESMExports();
+  }
 }

@@ -4918,8 +4918,8 @@ describe('ccrc history: the operator switches have readers only (spec 2026-10-05
   // Each switch is touched and removed BY HAND (§9.7): no line of shell or .mjs may write one. `lib.mjs`'s
   // SWITCHES is the one sanctioned definer (the stall-watch MARKERS precedent above); the hook and the shim read
   // `history-off` with a bash test. `_uninst_purge` spells its kept set as the globs `history` and `history-*`
-  // and doctor names the cap file from `status --json`, so neither is a holder. B2 adds the skill's files to
-  // this corpus with the skill. KNOWN WIDTH: a name assembled from pieces is not seen. ONE named allowance
+  // and doctor names the cap file from `status --json`, so neither is a holder. W1-B2 added the skill's text to
+  // this corpus (SKILL_TEXT below). KNOWN WIDTH: a name assembled from pieces is not seen. ONE named allowance
   // (USAGE_PROSE below, FU5) lets `ccrc --help` spell the pause path as prose; it covers one function's lines
   // and nothing else, and a split spelling is pinned by the case that reads the literal back.
   // `recall-off/<id>` is O13's seventh name and is NOT in HOLDERS: spec O13 gives it exactly one writer,
@@ -4936,7 +4936,12 @@ describe('ccrc history: the operator switches have readers only (spec 2026-10-05
     ['steer-on', ['ccd/history/lib.mjs']],
     ['headless-on', ['ccd/history/lib.mjs']],
   ];
-  const CORPUS = [...new Set([...BASH, ...ALL_MJS])];
+  /** W1-B2: the skill's text joins the corpus with the skill (spec §9.11 O13 names "every bash, .mjs or skill
+   *  line"). Every line of it is read, comment or not, as a line a model may run (`code` below reads it whole).
+   *  It names a switch path on no line at all, so even a prose mention would be a holder the rows above do not
+   *  list; it is never a listed holder, so the language the rows' write check picks for it never applies. */
+  const SKILL_TEXT = [path.join(ccrcRoot, 'ccd', 'history-skill', 'SKILL.md')];
+  const CORPUS = [...new Set([...BASH, ...ALL_MJS, ...SKILL_TEXT])];
   /** A switch is a PATH, so a line names one only as `/<name>`. The bare words are vocabulary, not files: the
    *  exit-2 reason `history-off` (REASONS, Task 3; decideOpGate's refusal, Task 6) names the CONDITION, and
    *  lib.mjs spells it as a reason word, never as the file. */
@@ -4969,6 +4974,7 @@ describe('ccrc history: the operator switches have readers only (spec 2026-10-05
   /** A file's code lines, comment lines dropped in either language. The one allowance is applied here, so the
    *  holder count and the `writes()` classifier both skip it. */
   const code = (f: string): string[] => {
+    if (SKILL_TEXT.includes(f)) return readFileSync(f, 'utf8').split('\n');
     if (!BASH.includes(f)) return stallCode(f).split('\n');
     const text = readFileSync(f, 'utf8');   // once per call: ccd/ccrc is about 24k lines
     const skip = rel(f) === USAGE_PROSE.file ? usageProse(text).allowed : new Set<number>();
@@ -5041,6 +5047,13 @@ describe('ccrc history: the operator switches have readers only (spec 2026-10-05
     for (const [name] of HOLDERS) expect(block, `SWITCHES does not name ${name}`).toContain(name);
   });
 
+  it('CONTROL (W1-B2): the skill text is in the corpus, read whole, and a write in it would be seen', () => {
+    expect(CORPUS.map(rel)).toContain('ccd/history-skill/SKILL.md');
+    expect(code(SKILL_TEXT[0]!).length, 'the skill text read as nearly empty').toBeGreaterThan(40);
+    expect(writes('touch ~/.ccrc/history-off', 'bash', 'history-off')).toBe(true);
+    expect('touch ~/.ccrc/history-off'.includes(needle('history-off'))).toBe(true);
+  });
+
   it.each(HOLDERS)('%s: named on a code line only by its declaration and its readers %j, and never written', (name, want) => {
     const holders = CORPUS.filter((f) => code(f).some((l) => l.includes(needle(name)))).map(rel).sort();
     expect(holders, `${name}: a new line names it — a writer, or a reader this design does not list`).toEqual([...want].sort());
@@ -5076,7 +5089,12 @@ describe('ccrc history: every vocabulary is declared once, in lib.mjs, and bound
   const VOCABS = ['NODE_KINDS', 'PARSE_STATUS', 'PROVENANCE', 'SPOOL_EVENTS', 'EPOCH_CAUSES', 'REFUSALS', 'ERROR_CODES',
     'COVERAGE', 'SCOPE_SOURCES', 'VARIANT_CAUSES', 'BACKENDS', 'HARNESS_TABLE', 'HARNESSES', 'JOURNAL_KINDS',
     'JOURNAL_VERDICTS', 'BIND_KINDS', 'MIGRATION_VERDICTS', 'HEALTH_WORDS', 'REASONS', 'WRITING_FORMS', 'STORE_FILES',
-    'PASS_WORDS', 'CARD_PREFIX', 'SWITCHES', 'EXIT'] as const;
+    'PASS_WORDS', 'CARD_PREFIX', 'SWITCHES', 'EXIT',
+    // W1-B2: the recall vocabularies more than one module reads (scope, search, parser, fan-in, recovery, verbs).
+    'SCOPE_KINDS', 'GREP_SORTS', 'REF_KINDS', 'FAN_IN', 'RECOVER_PHASES', 'FTS_SHADOWS', 'READ_VERBS',
+    'INDEXED_PROVENANCE', 'VERB_TABLES', 'EXPAND_LABEL',
+    // W1-B2 Task 7A (spec rev 3.5): the belt's words more than one module reads or writes.
+    'BELT_COUNTERS', 'BELT_META', 'BELT_NODES_STEP', 'REDACT_SOURCES_META'] as const;
   /** The declaration scan's corpus: the history modules and every deploy/ and shared/ `.mjs`. NOT the rest of
    *  ccd/: `ccd/compact-card.mjs` declares an `EXIT` of its own (its exit codes, a different module's). */
   const DECL_CORPUS = [...new Set([...HISTORY_MJS, ...mjsUnder(path.join(ccrcRoot, 'deploy')), ...mjsUnder(path.join(ccrcRoot, 'shared'))])];
@@ -5086,7 +5104,7 @@ describe('ccrc history: every vocabulary is declared once, in lib.mjs, and bound
   const EV_MJS = /\bev\s*:\s*['"`]([A-Za-z]+)['"`]/g;
   /** SPOOL_EVENTS members whose emitter ships in a later PR. A member found emitted while listed here reds, so
    *  the PR that adds the emitter removes its line. */
-  const PENDING_EMITTERS: Record<string, string> = { recall: 'B2 (cli.mjs read verbs)', steer: 'W3 (the steering hook)' };
+  const PENDING_EMITTERS: Record<string, string> = { steer: 'W3 (the steering hook)' };
   type Lib = Record<string, unknown>;
   const lib = async (): Promise<Lib> => (await import('../../ccd/history/lib.mjs')) as unknown as Lib;
 
@@ -5157,6 +5175,21 @@ describe('ccrc history: every vocabulary is declared once, in lib.mjs, and bound
     const spelled = [...body.matchAll(/_dr_(?:pass|warn|fail)\s+history\s+"([a-z][a-z0-9-]*):/g)].map((m) => m[1]!);
     expect(spelled.length, 'the scan matched no word in _check_history').toBeGreaterThan(0);
     expect(spelled.filter((w) => !words.includes(w))).toEqual([]);
+  });
+
+  it('the string vocabularies EXPAND_LABEL, BELT_META, BELT_NODES_STEP and REDACT_SOURCES_META are quoted once, at their declaration (H-149)', async () => {
+    // The declaration and export check above is vacuous for a primitive: a reader that spells the value (`.get('redact_sources')`)
+    // instead of naming the constant would stay green. The scan reads code lines only, comments excluded.
+    const l = await lib();
+    const esc = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    for (const name of ['EXPAND_LABEL', 'BELT_META', 'BELT_NODES_STEP', 'REDACT_SOURCES_META'] as const) {
+      const value = l[name];
+      expect(typeof value, `${name} is a string`).toBe('string');
+      const quoted = new RegExp(`['"\`]${esc(String(value))}['"\`]`);
+      const uses = HISTORY_MJS.flatMap((f) => stallCode(f).split('\n').filter((x) => quoted.test(x)).map((x) => `${rel(f)}: ${x.trim()}`));
+      expect(uses, `${name}: the value is quoted outside its declaration`).toHaveLength(1);
+      expect(uses[0], `${name}: the one quoted copy is not its declaration`).toMatch(new RegExp(`^ccd/history/lib\\.mjs: (?:export\\s+)?const\\s+${name}\\s*=`));
+    }
   });
 
   it('the literal .ccrc/history/db is spelled in ccd/history/*.mjs once, as STORE_DB_REL', async () => {
@@ -5729,6 +5762,126 @@ describe('child reclamation wave 9: the collector’s lane and executor call the
       expect(code(r), `${r} does not import it from L0`)
         .toMatch(/import\s*(?:type\s*)?\{[^}]*\bisTmpRootId\b[^}]*\}\s*from\s*'(?:\.\.\/)+shared\/api\.js'/);
     }
+  });
+});
+
+// ── ccrc history W1-B2 Task 34: the hook spools exactly SPOOL_SOURCES on SessionStart (spec 2026-10-05 §5.1, S14;
+// ruled Q16). APPENDED, with no import line, for the reason the blocks above state.
+describe('ccrc history: the hook spools exactly SPOOL_SOURCES on SessionStart (spec 2026-10-05 §5.1, S14; W1-B2, ruled Q16)', () => {
+  it('SPOOL_SOURCES is declared once, in lib.mjs, frozen and holding fork, and the spool block\'s one SessionStart arm spells exactly its members', async () => {
+    const lib = (await import('../../ccd/history/lib.mjs')) as unknown as Record<string, unknown>;
+    const members = [...(lib['SPOOL_SOURCES'] as readonly string[])];
+    expect(Object.isFrozen(lib['SPOOL_SOURCES'])).toBe(true);
+    expect(members).toContain('fork');
+    const declares = /(?:^|[\s;])(?:export\s+)?(?:const|let|var)\s+SPOOL_SOURCES\b/;
+    expect(HISTORY_MJS.filter((f) => stallCode(f).split('\n').some((l) => declares.test(l))).map(rel)).toEqual(['ccd/history/lib.mjs']);
+    const arms = codeLines(path.join(ccrcRoot, 'ccd', 'session-hook.sh'))
+      .filter((l) => /^\s*SessionStart\)/.test(l) && l.includes('case "$src" in'));
+    expect(arms, 'the spool block\'s SessionStart arm, and only it, cases on $src').toHaveLength(1);
+    const m = /case "\$src" in ([a-z|]+)\)/.exec(arms[0]!);
+    expect(m, 'the arm spells its sources as one alternation').not.toBeNull();
+    expect(m![1]!.split('|').sort()).toEqual([...members].sort());
+  });
+});
+
+// D-5045 (plan docs/superpowers/plans/2026-10-15-ask-server-half.md, Task 1). APPENDED, for the reason the blocks above
+// state: `session-hook.test.ts`'s citation audit cites this file by line. An AskUserQuestion's free-text row is named by
+// ONE placeholder rule, in `shared/ask-menu.ts`. `answerDialog`'s guard reads it through `pane/dialog.ts`'s
+// `freeTextRow`, and the free-text route (D-5047) and the drawer's menu taps (D-5008) are to import it, never spell it:
+// a second spelling that drifts reads the free-text row as an ordinary option, and Enter on it while it is empty
+// rejects the whole ask. The structural backstop's "Chat about this" rule shares that home. Code lines only
+// (`stallCode`): prose names both rows in quotes. KNOWN WIDTH: a spelling assembled from pieces is not seen.
+describe('the free-text row\'s placeholder is spelled once, in shared/ask-menu.ts (D-5045)', () => {
+  const PLACEHOLDER = /type\s+something/i;
+  const CHAT = /chat\s+about\s+this/i;
+  const holders = (re: RegExp): string[] => ALL.filter((f) => re.test(stallCode(f))).map(rel).sort();
+
+  it('CONTROL: the patterns see a regex literal and a string, and pass over comment lines', () => {
+    expect(PLACEHOLDER.test('const FREE = /^Type something\\.?$/i;')).toBe(true);
+    expect(PLACEHOLDER.test("if (label === 'type something') return 3;")).toBe(true);
+    expect(CHAT.test("const CHAT = /chat about this/i;")).toBe(true);
+    expect(stallCodeText('// the empty "Type something." row\n * Chat about this\nconst x = 1;')).not.toMatch(PLACEHOLDER);
+    expect(stallCodeText('// the empty "Type something." row\n * Chat about this\nconst x = 1;')).not.toMatch(CHAT);
+  });
+
+  it('the placeholder is spelled on a code line in shared/ask-menu.ts and nowhere else', () => {
+    expect(holders(PLACEHOLDER)).toEqual(['shared/ask-menu.ts']);
+  });
+
+  it('the Chat row is spelled in shared/ask-menu.ts, and in the sheet\'s older unanchored copy, which the sheet half deletes', () => {
+    // `DialogSheet.tsx`'s `CHAT_ABOUT_RE` drives the "answer in your own words" path that answers Chat about this and
+    // declines the whole ask (diagnosis root cause 5). This branch makes no sheet change (operator ruling 2026-10-15),
+    // so that copy stays named here until the sheet half removes it — and turns this list into the one home alone.
+    expect(holders(CHAT)).toEqual(['pwa/src/session/DialogSheet.tsx', 'shared/ask-menu.ts']);
+  });
+
+  it('the guard reads the L0 rules: pane/dialog.ts imports and tests both, and answerDialog asks freeTextRow', () => {
+    const dialog = stallCode(path.join(ccrcRoot, 'server/src/pane/dialog.ts'));
+    for (const name of ['FREE_TEXT_PLACEHOLDER_RE', 'CHAT_ABOUT_ROW_RE']) {
+      expect(dialog, `pane/dialog.ts does not import ${name} from L0`)
+        .toMatch(new RegExp(`import\\s*\\{[^}]*\\b${name}\\b[^}]*\\}\\s*from\\s*'(?:\\.\\./)+shared/ask-menu\\.js'`));
+      expect(dialog, `pane/dialog.ts does not test ${name}`).toMatch(new RegExp(`\\b${name}\\.test\\(`));
+    }
+    expect(stallCode(path.join(ccrcRoot, 'server/src/inject/send.ts'))).toMatch(/\bfreeTextRow\s*\(/);
+  });
+
+  it('shared/ask-menu.ts is L0: it imports nothing', () => {
+    expect(readFileSync(path.join(ccrcRoot, 'shared/ask-menu.ts'), 'utf8')).not.toMatch(/^\s*import\b|\brequire\s*\(/m);
+  });
+});
+
+// D-5047 (plan docs/superpowers/plans/2026-10-15-ask-server-half.md, Task 3). APPENDED, as the D-5045 block above. The
+// free-text route types nothing until the menu's footer shows the external-editor hint ("ctrl+g to edit in Vim"), which
+// Claude Code paints while the cursor is on a free-text row. The hint is ONE rule, in `shared/ask-menu.ts`, read through
+// `pane/dialog.ts`'s `editHintShown`; D-5048's multiSelect route reads the same predicate. A second spelling that
+// drifts would let one route type into a row the other calls unfocused. Code lines only (`stallCode`).
+describe('the free-text row\'s edit hint is spelled once, in shared/ask-menu.ts (D-5047)', () => {
+  const HINT = /to\s+edit\s+in/i;
+  const holders = (): string[] => ALL.filter((f) => HINT.test(stallCode(f))).map(rel).sort();
+
+  it('CONTROL: the pattern sees a regex literal, and passes over comment lines', () => {
+    expect(HINT.test('const HINT = /to edit in/;')).toBe(true);
+    expect(stallCodeText('// the footer gains "ctrl+g to edit in Vim"\nconst x = 1;')).not.toMatch(HINT);
+  });
+
+  it('the hint is spelled on a code line in shared/ask-menu.ts and nowhere else', () => {
+    expect(holders()).toEqual(['shared/ask-menu.ts']);
+  });
+
+  it('the focus proof reads it: pane/dialog.ts imports and tests the L0 rule, and answerDialogText asks editHintShown', () => {
+    const dialog = stallCode(path.join(ccrcRoot, 'server/src/pane/dialog.ts'));
+    expect(dialog).toMatch(/import\s*\{[^}]*\bEDIT_HINT_RE\b[^}]*\}\s*from\s*'(?:\.\.\/)+shared\/ask-menu\.js'/);
+    expect(dialog).toMatch(/\bEDIT_HINT_RE\.test\(/);
+    expect(stallCode(path.join(ccrcRoot, 'server/src/inject/send.ts'))).toMatch(/\beditHintShown\s*\(/);
+  });
+});
+
+// D-5048 (plan docs/superpowers/plans/2026-10-15-ask-server-half.md, Task 4). APPENDED, as the blocks above. A
+// multiSelect question is read into `Dialog.multi`, and so answered by `POST /api/sessions/:id/dialog/multi`, only when
+// the unnumbered row that commits it (`Next`, or `Submit` on the last question) is on screen: that row marks the layout
+// whose keys were measured. ONE rule, `COMMIT_ROW_RE` in `shared/ask-menu.ts`, read by `pane/dialog.ts`'s `multiMenu`.
+// A second spelling that drifts would let one reader call a menu answerable that the other does not. Code lines only
+// (`stallCode`). KNOWN WIDTH: only the two words as one alternation are seen; a bare 'Next' or 'Submit' string is
+// common UI copy and is not scanned.
+describe('the multiSelect commit row is spelled once, in shared/ask-menu.ts (D-5048)', () => {
+  const COMMIT = /\bnext\s*\|\s*submit\b|\bsubmit\s*\|\s*next\b/i;
+  const holders = (): string[] => ALL.filter((f) => COMMIT.test(stallCode(f))).map(rel).sort();
+
+  it('CONTROL: the pattern sees a regex literal either way round, and passes over comment lines', () => {
+    expect(COMMIT.test('const ROW = /^(?:next|submit)$/i;')).toBe(true);
+    expect(COMMIT.test("const ROW = /^(Submit|Next)$/;")).toBe(true);
+    expect(stallCodeText('// the row reads Next|Submit\nconst x = 1;')).not.toMatch(COMMIT);
+  });
+
+  it('the commit row is spelled on a code line in shared/ask-menu.ts and nowhere else', () => {
+    expect(holders()).toEqual(['shared/ask-menu.ts']);
+  });
+
+  it('the parse reads it: pane/dialog.ts imports and tests the L0 rule, and answerDialogMulti reads Dialog.multi', () => {
+    const dialog = stallCode(path.join(ccrcRoot, 'server/src/pane/dialog.ts'));
+    expect(dialog).toMatch(/import\s*\{[^}]*\bCOMMIT_ROW_RE\b[^}]*\}\s*from\s*'(?:\.\.\/)+shared\/ask-menu\.js'/);
+    expect(dialog).toMatch(/\bCOMMIT_ROW_RE\.test\(/);
+    expect(stallCode(path.join(ccrcRoot, 'server/src/inject/send.ts'))).toMatch(/\bdialog\.multi\b/);
   });
 });
 
