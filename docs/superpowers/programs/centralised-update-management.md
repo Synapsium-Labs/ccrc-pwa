@@ -1676,6 +1676,26 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
         `dispatched`, and its `ccd/ccd` work has not landed.
       - STATUS: fleet and server v0.0.194, newest v0.0.194, backups fleet 180M/server 730M, disk free fleet 220G/work
         volume 185G/server 32G, no anomalies at 03:42.
+    - **2026-10-15 06:42 UTC: v0.0.195 (`de0ab03e1`, #404, history B2) auto-converged unattended. The fleet run exited 3
+      on a new history FAIL that only the operator can clear.** No action was taken.
+      - The release was published at 06:16:37. The fleet box ran from 06:34:34 to 06:36:08, about a minute after a
+        poll falls due on the grid from the server's 03:03:21 restart. The server followed from 06:37:05 to 06:37:30,
+        and its doctor passed (26 passed, 0 warned, 0 failed). Both reports read `phase: done` and `from: pwa`
+        (defect A).
+      - **The FAIL.** The fleet box's trailing doctor failed on one line, `history: migration-needs-op`: the store needs
+        a migration to v2, a copy of about 319 seconds, too long for a scheduled pass. Its remedy is
+        `ccrc history doctor --migrate`, run by the operator from a terminal outside any session. The box stayed on
+        v0.0.195 (D-3114), and the server still moved, so the update mechanism behaved as designed.
+      - **What it costs until then.** Since the install, every 2-minute history sweep ends at once with
+        `history-sweep: migration-needs-op`, so this box captures no new session text. Every later fleet update will
+        exit 3 on the same line. The history programme named this step for after its deploy, and it owns it.
+      - Fleet doctor at 06:43: 32 passed, 7 warned, 1 failed. Both boxes read `box-token` PASS, the server's
+        generation #3 still 4 days old.
+      - #404 ended claim 1349 and changed `ccd/ccrc` (21 lines added, 13 removed), so wave 15's plan has one more move
+        to re-measure. Wave 15 (run 300) is still held by 1352 (run 433, `awaiting-review`) on `ccd/ccd`. Run 360 is
+        still `dispatched`, and its `ccd/ccd` work has not landed.
+      - STATUS: fleet and server v0.0.195, newest v0.0.195, backups fleet 180M/server 733M, disk free fleet 220G/work
+        volume 187G/server 32G, no anomalies at 06:42.
 
 - **2026-09-30 12:22 UTC — wave 8 opened (run 182) for the live audit's residue, and dispatched.**
   - **Planning:** two Opus scoping agents measured each defect at `a742eb6a`, and an Opus writer assembled the
