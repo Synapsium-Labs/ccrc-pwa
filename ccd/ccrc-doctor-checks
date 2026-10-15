@@ -8631,20 +8631,26 @@ _check_docs-sw() {
 # nothing in this check, or in what it reports, decides anything.
 #
 # WHAT IS MEASURED, in the order it is reported. FAIL, each with its own remedy because each is a different action:
-#   1. a registration that could not be READ (a settings.json that is unreadable, not JSON, not a regular file, or whose
-#      `hooks` is not an object; a home that exists and cannot be searched). Never read as absence: "I could not look" and
-#      "it is not there" are fixed differently (a mode, versus the installer), and folding them is the overloaded null.
+#   1. a registration that could not be READ (a settings.json that is unreadable, not JSON, EMPTY or holding more than one
+#      JSON document, not a regular file, or whose `hooks` is not an object; a home that exists and cannot be searched).
+#      Never read as absence, and an empty file never as a registration: "I could not look" and "it is not there" are
+#      fixed differently (a mode, versus the installer), and folding them is the overloaded null.
 #   2. a registration that is MISSING: a home (one that exists on this box) with no settings.json, or with an approved
 #      event that has no managed entry. Remedy: `ccrc doctor --fix` (`_fix_delegation-hooks`, below), which re-runs the
-#      SHIPPED installer and is not a second installer of its own.
-#   3. an owner spool directory that cannot be USED: the registry, the spool root or an owner's directory is a link or
-#      not a readable, searchable directory (ccd and the hook both refuse a link). Never read as missing.
-#   4. a LIVE session whose owner directory is MISSING: its hook finds nothing and records nothing. Remedy: restart its
-#      supervision through ccrc, because ccd makes the directory at every spawn and doctor never does.
-# WARN: a foreign `WorktreeCreate`/`WorktreeRemove` registration (ccrc never registers either: a registered hook for
+#      SHIPPED installer and is not a second installer of its own. Also here: ccrc's OWN hook (`/session-hook.sh`)
+#      registered under `WorktreeCreate`/`WorktreeRemove`, which ccrc never registers; the installer's sweep removes it.
+#   3. an owner spool directory that cannot be USED: the registry, or the spool root (a link, or not a readable and
+#      searchable directory: reported whether or not a session is running, because ccd refuses it at the next spawn), or
+#      the owner directory of a running session (ccd and the hook both refuse a link). Never read as missing.
+# WARN: (a) a foreign `WorktreeCreate`/`WorktreeRemove` registration (ccrc never registers either: a registered hook for
 # either REPLACES Claude Code's own worktree handling, spec 2026-10-04 §3.1; the remedy is manual and doctor deletes
-# nothing), and a session the service manager would not answer for (its directory was not measured). A FAIL is never
-# hidden behind a WARN: both print, FAIL lines first, and the return code is the worst class printed.
+# nothing); (b) a RUNNING session whose owner spool directory is absent (D-4651): ccd makes it only at a spawn
+# (`_spawn_start`), and a supervisor restart leaves a live pane alone (`KillMode=process`), so every session whose pane
+# predates this code has none until its next real spawn, the census backstops the evidence meanwhile, and nothing is
+# lost by waiting. The remedy says so, and names the one operation that observes it now: stop and start the session
+# through ccd, which resumes its conversation but ends an in-flight turn; (c) a session the service manager would not
+# answer for (its directory was not measured). A FAIL is never hidden behind a WARN: both print, FAIL lines first, and
+# the return code is the worst class printed.
 # SKIP: a `server`-role box (D-3111: it hosts no sessions and converges nothing per account), a box with no roster
 # (`wrappers` owns that), and a box none of whose rostered homes exist here (the installer `continue`s past those too).
 #
@@ -8655,7 +8661,8 @@ _check_docs-sw() {
 # REAL installer into a fixture home and expects PASS is the mechanism that keeps the two from drifting. `$CCRC_HERE`
 # is where the doctor file itself sits, which is the shipped tree's `ccd/` on a box (`_inst_tree` rsyncs it whole).
 #
-# THE REGISTRATION IS READ WITH jq, ONCE PER HOME, AND NEVER PRINTED. The "managed" test is the installer's own
+# THE REGISTRATION IS READ WITH jq (-s: slurped, so an empty file or two documents are counted, never passed over), ONCE
+# PER HOME, AND NEVER PRINTED. The "managed" test is the installer's own
 # (`contains("/session-hook.sh")` on a hook's command), spelled again because a doctor run cannot import it; PreToolUse
 # must carry matcher `*`, because an entry for one tool name does not reach the delegation tools. The settings file's
 # other keys (an `env` block can hold a token) and the hook commands never reach an output line: the lines name homes
@@ -8736,9 +8743,8 @@ _check_delegation-hooks() {
   done <<< "$wl"
   want_json="[$want_json]"
 
-  local id suffix dir f homes=0 out line kind name why
-  local -a unread=() missing=() foreign=() spool_bad=() spool_none=() spool_unasked=()
-  local spool_root_live=0
+  local id suffix dir f homes=0 out line kind name why said why_not=""
+  local -a unread=() missing=() ownworktree=() foreign=() spool_bad=() spool_none=() spool_unasked=()
   while IFS=$'\t' read -r id suffix; do
     [ -n "$id" ] || continue
     dir="$HOME/$suffix"
@@ -8755,28 +8761,32 @@ _check_delegation-hooks() {
     fi
     if [ ! -f "$f" ]; then unread+=("$id: settings.json is not a regular file"); continue; fi
     if [ ! -r "$f" ]; then unread+=("$id: settings.json is not readable"); continue; fi
-    out="$(jq -r --argjson want "$want_json" '
-      def managed($star):
-        type == "array" and any(.[]?; type == "object"
-          and (($star == null) or (.matcher == $star))
-          and ((.hooks // []) | type == "array")
-          and any((.hooks // [])[]?; type == "object" and ((.command // "") | tostring | contains("/session-hook.sh"))));
-      if type != "object" then "SHAPE"
-      elif ((.hooks // {}) | type) != "object" then "SHAPE"
-      else (.hooks // {}) as $h
+    out="$(jq -rs --argjson want "$want_json" '
+      def own: type == "object" and ((.hooks // []) | type == "array")
+        and any((.hooks // [])[]?; type == "object" and ((.command // "") | tostring | contains("/session-hook.sh")));
+      def managed($star): type == "array" and any(.[]?; own and (($star == null) or .matcher == $star));
+      if length != 1 then "DOCS"
+      elif (.[0] | type) != "object" then "SHAPE"
+      elif ((.[0].hooks // {}) | type) != "object" then "SHAPE"
+      else (.[0].hooks // {}) as $h
         | ($want[] | select(. as $e | ($h[$e] | managed(if $e == "PreToolUse" then "*" else null end)) | not) | "MISSING\t" + .),
-          (("WorktreeCreate", "WorktreeRemove") | select(. as $e | ($h[$e] // []) != []) | "FOREIGN\t" + .)
+          (("WorktreeCreate", "WorktreeRemove") as $e | ($h[$e] // []) as $a
+            | (if ($a | type) == "array" and ($a | any(.[]; own)) then "OWN\t" + $e else empty end),
+              (if ($a | type) != "array" or ($a | any(.[]; own | not)) then "FOREIGN\t" + $e else empty end))
       end' "$f" 2>/dev/null)"; rc=$?
     if [ "$rc" -ne 0 ]; then unread+=("$id: settings.json is not valid JSON"); continue; fi
+    if [ "$out" = DOCS ]; then unread+=("$id: settings.json is empty or holds more than one JSON document"); continue; fi
     if [ "$out" = SHAPE ]; then unread+=("$id: settings.json does not hold hooks as an object"); continue; fi
-    local miss="" fgn=""
+    local miss="" fgn="" own=""
     while IFS=$'\t' read -r kind name; do
       case "$kind" in
         MISSING) miss="${miss:+$miss, }$name" ;;
         FOREIGN) fgn="${fgn:+$fgn }$name" ;;
+        OWN) own="${own:+$own }$name" ;;
       esac
     done <<< "$out"
     [ -z "$miss" ] || missing+=("$id: $miss")
+    [ -z "$own" ] || ownworktree+=("$id: $own")
     [ -z "$fgn" ] || foreign+=("$id: $fgn")
   done <<< "$rows"
   if [ "$homes" -eq 0 ]; then
@@ -8784,14 +8794,18 @@ _check_delegation-hooks() {
     return 3
   fi
 
-  # ── the owner spool directories: LIVE sessions only ────────────────────────
-  # A registry row whose supervisor is not running owes nothing: its directory is made at its next spawn. The manager is
-  # asked ONLY about a row whose directory is not standing (a healthy box asks it nothing), and its answer has three
-  # shapes, as `_check_routing`'s census and the codex lane's `_dr_cx_sessions` have them: live, measured not live, and
-  # NOT ASKED (the manager printed no word), which is its own WARN and never folded into either.
+  # ── the owner spool directories ─────────────────────────────────────────────
+  # The spool ROOT is measured whether or not a session runs: a root that is a link, or not a readable and searchable
+  # directory, is a defect today, because ccd refuses it at the next spawn and the session then records nothing.
+  # An OWNER directory matters only for a RUNNING session: a registry row whose supervisor is not running owes nothing
+  # (its directory is made at its next spawn). The manager is asked ONLY about rows whose directory is not standing,
+  # and in ONE call (`is-active u1 u2 ...` prints one word per unit, in order), so a box full of parked rows that
+  # predate the spool code costs one fork per run, not one per row; a box whose every directory stands asks nothing.
+  # Its answer has three shapes, as `_check_routing`'s census and the codex lane's `_dr_cx_sessions` have them: live,
+  # measured not live, and NOT ASKED (the manager printed no word), which is its own WARN and never folded into either.
   local reg="$HOME/.cc-sessions" sdir u sid rows_read=0 rows_ok=0 unasked=0 p state
   local rd="${reg/#$HOME/\$HOME}"   # the registry as the operator reads it: $HOME unexpanded (and no second path literal in this file, pool-name-parity.test.ts)
-  local spool_root_bad="" spool_root_ok=1 why_not=""
+  local spool_root_bad="" l
   if { [ -e "$reg" ] || [ -L "$reg" ]; } && { [ ! -d "$reg" ] || [ ! -r "$reg" ] || [ ! -x "$reg" ]; }; then
     spool_bad+=("$rd is not a readable, searchable directory")
   elif [ -d "$reg" ]; then
@@ -8802,39 +8816,48 @@ _check_delegation-hooks() {
       elif [ -e "$p" ] && { [ ! -d "$p" ] || [ ! -r "$p" ] || [ ! -x "$p" ]; }; then spool_root_bad="${p/#$HOME/\$HOME} is not a readable, searchable directory"
       fi
     done
-    [ -z "$spool_root_bad" ] || spool_root_ok=0
-    local -a pending=() pending_why=()
+    local -a pending=() pending_why=() units=() answers=()
     for u in "$reg"/*.uuid; do
       { [ -e "$u" ] || [ -L "$u" ]; } || continue   # the unmatched glob's literal is no row; a dangling link is one
       sid="${u##*/}"; sid="${sid%.uuid}"
       rows_read=$((rows_read + 1))
+      [ -z "$spool_root_bad" ] || continue          # the root is already one finding for every row
       sdir="$reg/delegation/spool/$sid"
-      if [ "$spool_root_ok" -eq 1 ] && [ -d "$sdir" ] && [ ! -L "$sdir" ] && [ -r "$sdir" ] && [ -x "$sdir" ]; then
+      if [ -d "$sdir" ] && [ ! -L "$sdir" ] && [ -r "$sdir" ] && [ -x "$sdir" ]; then
         rows_ok=$((rows_ok + 1)); continue
       fi
-      # Something is wrong with this row's directory; whether it MATTERS depends on the session being live.
-      if [ "$spool_root_ok" -eq 0 ]; then why_not="root"
-      elif [ -L "$sdir" ]; then why_not="owner directory is a symlink"
+      # Something is wrong with this row's directory; whether it MATTERS depends on the session being running.
+      if [ -L "$sdir" ]; then why_not="owner directory is a symlink"
       elif [ ! -e "$sdir" ]; then why_not="missing"
       else why_not="owner directory is not a readable, searchable directory"
       fi
-      pending+=("$sid"); pending_why+=("$why_not")
+      pending+=("$sid"); pending_why+=("$why_not"); units+=("claude-session@$sid.service")
     done
+    [ -z "$spool_root_bad" ] || spool_bad+=("$spool_root_bad")
+    if [ "${#pending[@]}" -gt 0 ]; then
+      if [ "${CCD_OS:-linux}" = darwin ]; then
+        for sid in "${pending[@]}"; do answers+=("$(_svc_is_active "claude-session@$sid.service")"); done
+      else
+        said="$(systemctl --user is-active "${units[@]}" 2>/dev/null)" || :
+        if [ -n "$said" ]; then
+          while IFS= read -r l; do answers+=("$l"); done <<< "$said"
+        fi
+        # One word per unit, or the question was not answered: a short answer is never read as "not running".
+        if [ "${#answers[@]}" -ne "${#pending[@]}" ]; then answers=(); for sid in "${pending[@]}"; do answers+=(""); done; fi
+      fi
+    fi
     local i
     for i in "${!pending[@]}"; do
-      sid="${pending[$i]}"; why_not="${pending_why[$i]}"
-      state="$(_svc_is_active "claude-session@$sid.service")"
+      sid="${pending[$i]}"; why_not="${pending_why[$i]}"; state="${answers[$i]}"
       case "$state" in
         active|activating|reloading|refreshing|deactivating)
           case "$why_not" in
-            root) spool_root_live=1 ;;   # one finding for the whole root, below
             missing) spool_none+=("$sid") ;;
             *) spool_bad+=("$sid: $why_not") ;;
           esac ;;
         '') unasked=$((unasked + 1)); spool_unasked+=("$sid") ;;
       esac
     done
-    [ "${spool_root_live:-0}" -eq 0 ] || spool_bad+=("$spool_root_bad")
   fi
 
   # ── report: FAILs in a fixed order, then WARNs, then the worse class is the return code ──
@@ -8850,23 +8873,14 @@ _check_delegation-hooks() {
       "run 'ccrc doctor --fix' (it re-runs the shipped tree's install-session-hooks.sh into every rostered home), or 'ccrc update' (which re-places the tree and re-runs it)"
     worst=1
   fi
+  if [ "${#ownworktree[@]}" -gt 0 ]; then
+    _dr_fail delegation-hooks "ccrc's own session hook is registered under an event it never registers — a registered hook for WorktreeCreate or WorktreeRemove replaces Claude Code's own worktree handling: $(_dr_join "${ownworktree[@]}")" \
+      "run 'ccrc doctor --fix' (the shipped installer's sweep removes ccrc's own entry from every event, and leaves any other command registered there as it found it)"
+    worst=1
+  fi
   if [ "${#spool_bad[@]}" -gt 0 ]; then
     _dr_fail delegation-hooks "the delegation spool could not be used, so it is not known to be absent: $(_dr_join "${spool_bad[@]}")" \
       "fix what is named (check with: ls -ld $rd/delegation/spool) — a link is refused by ccd and by the hook, so look before moving it; doctor never creates or removes the directory"
-    worst=1
-  fi
-  if [ "${#spool_none[@]}" -gt 0 ]; then
-    n=${#spool_none[@]}
-    local shown="" k=0 more=""
-    for sid in "${spool_none[@]}"; do
-      k=$((k + 1)); [ "$k" -le 5 ] && shown="${shown:+$shown }$sid"
-    done
-    [ "$n" -gt 5 ] && more=" (+$((n - 5)) more)"
-    s=sessions; [ "$n" -eq 1 ] && s=session
-    local who="$n running sessions have no delegation spool directory, so their hook records nothing"
-    [ "$n" -eq 1 ] && who="1 running session has no delegation spool directory, so its hook records nothing"
-    _dr_fail delegation-hooks "$who: $shown$more" \
-      "restart the supervision of the $s named, through ccrc — 'ccrc update' (its supervisor sweep restarts every claude-session@ unit, and ccd makes each owner's directory at spawn), or one session: $(_dr_restart_hint "claude-session@${spool_none[0]}.service")"
     worst=1
   fi
   if [ "${#foreign[@]}" -gt 0 ]; then
@@ -8880,6 +8894,20 @@ _check_delegation-hooks() {
       _dr_warn delegation-hooks "$kinds are registered, and ccrc never registers them — a registered hook for either event replaces Claude Code's own worktree handling: $(_dr_join "${foreign[@]}")" \
         "inspect the entries by hand in those homes' settings.json and remove them if they are not intended — doctor does not edit or delete them"
     fi
+    [ "$worst" -eq 1 ] || worst=2
+  fi
+  if [ "${#spool_none[@]}" -gt 0 ]; then
+    n=${#spool_none[@]}
+    local shown="" k=0 more=""
+    for sid in "${spool_none[@]}"; do
+      k=$((k + 1)); [ "$k" -le 5 ] && shown="${shown:+$shown }$sid"
+    done
+    [ "$n" -gt 5 ] && more=" (+$((n - 5)) more)"
+    s=sessions; [ "$n" -eq 1 ] && s=session
+    local who="$n running sessions have no delegation spool directory yet, so they are not observed until their next spawn (a swap or a respawn)"
+    [ "$n" -eq 1 ] && who="1 running session has no delegation spool directory yet, so it is not observed until its next spawn (a swap or a respawn)"
+    _dr_warn delegation-hooks "$who: $shown$more" \
+      "nothing is lost by waiting: ccd makes the directory at the next spawn. To observe the $s now, stop and start it through ccd ('ccd stop ${spool_none[0]}', then 'ccd start ${spool_none[0]}') — this resumes its conversation but ends an in-flight turn"
     [ "$worst" -eq 1 ] || worst=2
   fi
   if [ "$unasked" -gt 0 ]; then
@@ -8897,7 +8925,8 @@ _check_delegation-hooks() {
 # The cure `ccrc doctor --fix` runs for `delegation-hooks` (FAIL only, R-C8): the SHIPPED installer, `$CCRC_HERE/
 # install-session-hooks.sh`, into every rostered home that exists on this box — the tree the check measured, never a
 # copy of its logic, so this is not a second hook installer. The installer validates before it writes, backs up what it
-# replaces, swaps managed entries only and leaves every foreign one (a `WorktreeCreate` hook included) as it found it;
+# replaces, swaps managed entries only (ccrc's own hook under a Worktree event included) and leaves every foreign one (a
+# `WorktreeCreate` hook naming another command included) byte-identical;
 # a home it refuses (invalid JSON) stays a FAIL on the re-measurement, which is the verdict. It creates no spool
 # directory: that is ccd's, at spawn.
 _fix_delegation-hooks() {
