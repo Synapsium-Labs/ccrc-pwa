@@ -1,6 +1,7 @@
 // The sheet's sentences for an own-words answer that did not go through, and the sheet's own rule for which text it
 // sends (D-5090, plan docs/superpowers/plans/2026-10-15-ask-sheet-half.md, Task 3). D-5091 (Task 4) adds the same for a
-// multiSelect question's boxes: a sentence per `DialogMultiRefuseCode`, and why the commit is held back.
+// multiSelect question's boxes: a sentence per `DialogMultiRefuseCode`, and why the commit is held back. Task 5 adds a
+// tapped row's (`api.answerDialog`): a sentence per `DialogRefuseCode`, where every 409 once read alike.
 //
 // Own words answer an AskUserQuestion through its free-text row (`api.answerDialogText`, D-5047). That route refuses
 // by code (`DialogTextRefuseCode`, `shared/api.ts`), and a code is not something to show the operator: each one gets a
@@ -8,10 +9,14 @@
 // server adds is a compile error here until it has its sentence. Task 5 reconciles these with the other dialog
 // routes' tables.
 import {
-  DIALOG_MULTI_REFUSE_CODES, DIALOG_TEXT_MAX, DIALOG_TEXT_REFUSE_CODES, isDialogMultiIndexes, isDialogText,
-  type DialogMulti, type DialogMultiRefuseCode, type DialogTextRefuseCode,
+  DIALOG_MULTI_REFUSE_CODES, DIALOG_REFUSE_CODES, DIALOG_TEXT_MAX, DIALOG_TEXT_REFUSE_CODES, isDialogMultiIndexes,
+  isDialogText, type DialogMulti, type DialogMultiRefuseCode, type DialogRefuseCode, type DialogTextRefuseCode,
 } from '../../../shared/api';
 import { ApiError, failedTo, sendErrorText } from '../lib/api';
+
+/** The one fact all three dialog routes refuse with first (`stale-dialog`): the pane no longer shows the question the
+ *  sheet answered. Each table says it in these words, then what that meant for its own send. */
+const MOVED_ON = 'That question moved on in the terminal';
 
 /** Every own-words refusal leaves the text in the field (D-5090: kept until a call answers ok), and the sentences that
  *  could leave the operator wondering say so in these words. */
@@ -24,7 +29,7 @@ export const DIALOG_TEXT_REFUSE_TEXT: Readonly<Record<DialogTextRefuseCode, stri
   'bad-text': `That answer can't be typed into the terminal — one line, no tabs, at most ${DIALOG_TEXT_MAX} characters.`,
   // The composer's own sentence for the same fact, read rather than spelled again.
   'not-alive': sendErrorText('not-alive'),
-  'stale-dialog': `That question moved on in the terminal, so nothing was typed. ${TEXT_KEPT}`,
+  'stale-dialog': `${MOVED_ON}, so nothing was typed. ${TEXT_KEPT}`,
   'not-free-text': "The terminal's own-words row holds something else, so nothing was typed. Finish or clear it there.",
   // The footer's edit hint is one of the focus proofs, and a box where no external editor resolves never paints it
   // (D-5047), so a refusal that repeats is the terminal's to answer.
@@ -102,7 +107,7 @@ export const DIALOG_MULTI_REFUSE_TEXT: Readonly<Record<DialogMultiRefuseCode, st
   // The sheet never sends an empty, repeated or out-of-range set (`multiHeld`), so this is the one it could mean.
   'bad-indexes': 'Tick at least one box.',
   'not-alive': sendErrorText('not-alive'),
-  'stale-dialog': 'That question moved on in the terminal, so nothing was sent.',
+  'stale-dialog': `${MOVED_ON}, so nothing was sent.`,
   'not-multiselect': 'The terminal no longer shows this as a pick-several question, so nothing was sent.',
   'not-an-option': "One of those isn't an option on the terminal's question, so nothing was sent.",
   'free-text-ticked': MULTI_FREE_TEXT_TICKED,
@@ -136,4 +141,33 @@ export function multiHeld(multi: DialogMulti, wanted: readonly number[]): 'free-
   if (multi.freeText?.checked === true) return 'free-text';
   if (!multi.options.some((o) => o.index === multi.cursor)) return 'cursor';
   return isDialogMultiIndexes(wanted) ? null : 'empty';
+}
+
+/** What the sheet says when a tapped row's answer (`api.answerDialog`) is refused, by its code (plan, Task 5). Total
+ *  over the union, as the other two tables are. Nothing was pressed in any of these: the route refuses before Enter.
+ *  `stale-dialog` here is the SCRAPED sheet's sentence, which redraws from the store's menu right after, so "showing
+ *  the latest" is true there; under the envelope it is `STALE_UNDER_ENVELOPE` (`dialogRefusal`). */
+export const DIALOG_REFUSE_TEXT: Readonly<Record<DialogRefuseCode, string>> = {
+  'not-alive': sendErrorText('not-alive'),
+  'stale-dialog': 'That question changed — showing the latest',
+  'walk-failed': "The terminal's cursor didn't land on that row, so nothing was pressed. Try again.",
+  // The scraped sheet offers no row it knows to be the free-text one; this is a row holding text typed in the
+  // terminal on a pane the transcript could not match, which only the server could tell (D-5045).
+  'free-text-row':
+    "That row holds the question's own words, so nothing was pressed. Finish it in the terminal, or clear it there and answer here.",
+  'unparsed-dialog': "The terminal's menu couldn't be read just now, so nothing was pressed. Try again, or answer there.",
+};
+
+/** N1: the envelope sheet renders the hook's envelope, not the pane, so a refused tap there changes nothing on screen
+ *  and "showing the latest" would be false: it says what happened instead. */
+export const STALE_UNDER_ENVELOPE = `${MOVED_ON} — this answer didn't land`;
+
+const isDialogRefuseCode = (code: string): code is DialogRefuseCode =>
+  (DIALOG_REFUSE_CODES as readonly string[]).includes(code);
+
+/** The sentence for a refused tap: the route's refusal by its code (`stale-dialog` by which sheet is showing,
+ *  `underEnvelope`), else the app's one sentence for a write that did not go through. */
+export function dialogRefusal(err: unknown, underEnvelope: boolean): string {
+  if (!(err instanceof ApiError) || !isDialogRefuseCode(err.message)) return failedTo('answer', err);
+  return err.message === 'stale-dialog' && underEnvelope ? STALE_UNDER_ENVELOPE : DIALOG_REFUSE_TEXT[err.message];
 }

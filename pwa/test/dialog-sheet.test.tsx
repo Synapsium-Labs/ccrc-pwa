@@ -8,12 +8,13 @@ import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import {
-  DIALOG_MULTI_REFUSE_CODES, DIALOG_TEXT_MAX, DIALOG_TEXT_REFUSE_CODES, type Dialog, type HookAsk,
+  DIALOG_MULTI_REFUSE_CODES, DIALOG_REFUSE_CODES, DIALOG_TEXT_MAX, DIALOG_TEXT_REFUSE_CODES, type Dialog, type HookAsk,
 } from '../../shared/api';
 import { ToastHost } from '@ccrc/ui';
 import { api, ApiError, failedTo, sendErrorText } from '../src/lib/api';
 import {
-  DIALOG_MULTI_REFUSE_TEXT, DIALOG_TEXT_REFUSE_TEXT, dialogMultiRefusal, dialogTextRefusal,
+  DIALOG_MULTI_REFUSE_TEXT, DIALOG_REFUSE_TEXT, DIALOG_TEXT_REFUSE_TEXT, STALE_UNDER_ENVELOPE, dialogMultiRefusal,
+  dialogRefusal, dialogTextRefusal,
 } from '../src/session/askWords';
 import { DialogSheet } from '../src/session/DialogSheet';
 import { createSessionStore } from '../src/stores/session';
@@ -1555,6 +1556,20 @@ describe('own words go through the free-text row (D-5090)', () => {
     }
   });
 
+  it('a send under way stays on screen when the pane stops matching mid-call', () => {
+    // The envelope reads its free-text row only while the question is live; a capture of another screen mid-call
+    // (DERIVED sequence: `cc300-ask-1q-open`, another ask's pane) must not take the operator's text and busy Send away.
+    vi.spyOn(api, 'answerDialogText').mockReturnValue(new Promise(() => {}));
+    const { store } = renderAsk(CACHING_TRACING, pane('cc300-ask-same-labels-q2'));
+    type(TEXT);
+    fireEvent.click(send());
+    act(() => store.getState().apply({ type: 'dialog', dialog: pane('cc300-ask-1q-open') }));
+    expect(document.querySelector('[data-source="hook"]')).not.toBeNull();
+    expect(field()).toHaveValue(TEXT);
+    expect(field()).toBeDisabled();
+    expect(send()).toHaveAttribute('aria-busy', 'true');
+  });
+
   it('a refused text answer keeps what was typed and says why', async () => {
     // The scraped sheet (`cc300-ask-same-labels-q2`, no envelope): the old reply emptied the box before its call.
     vi.spyOn(api, 'answerDialogText').mockRejectedValue(refused('echo-failed'));
@@ -2577,6 +2592,70 @@ describe('the own-words region and the busy commits keep their shape (D-5090, D-
     expect(rule('.dlg-reply-input:disabled')).toMatch(/color:\s*var\(--syn-comment\)/);
     expect(rule('.dlg-reply-input:disabled')).toMatch(/border-style:\s*dashed/);
     expect(rule('.dlg-reply-input:disabled')).toMatch(/cursor:\s*default/);
+  });
+});
+
+// — what a refused tap and the foot line say (plan, Task 5) —
+//
+// `answer()` once toasted every 409 alike ("That question changed — showing the latest"), whatever the route refused;
+// #417's `answerDialog` refuses by code (`DialogRefuseCode`), and each code now has its own sentence. And the foot line
+// offered own words under menus that offer no field.
+describe('a refused tap, and the foot line, say what is true (D-5089, D-5090, D-5091)', () => {
+  const refused = (code: string) => new ApiError(409, { ok: false, error: code });
+
+  it('answer()\'s refusals say what happened, by code', async () => {
+    for (const code of ['free-text-row', 'unparsed-dialog', 'walk-failed', 'not-alive'] as const) {
+      vi.spyOn(api, 'answerDialog').mockRejectedValueOnce(refused(code));
+      renderWithDialog(parsedDialog());
+      fireEvent.click(screen.getByRole('button', { name: 'Big-bang cutover' }));
+      expect(await screen.findByText(DIALOG_REFUSE_TEXT[code]), code).toBeInTheDocument();
+      expect(screen.queryByText('That question changed — showing the latest'), code).toBeNull();
+      expect(screen.getByRole('button', { name: 'Big-bang cutover' }), code).toBeEnabled();
+      cleanup();
+    }
+  });
+
+  it('every DialogRefuseCode has its sentence, and stale-dialog keeps its two', () => {
+    for (const code of DIALOG_REFUSE_CODES) {
+      expect(DIALOG_REFUSE_TEXT[code], code).toEqual(expect.any(String));
+      expect(DIALOG_REFUSE_TEXT[code], code).not.toBe('');
+      expect(dialogRefusal(refused(code), false), code).toBe(DIALOG_REFUSE_TEXT[code]);
+    }
+    expect(new Set(Object.values(DIALOG_REFUSE_TEXT)).size, 'two codes share a sentence').toBe(DIALOG_REFUSE_CODES.length);
+    expect(DIALOG_REFUSE_TEXT['not-alive']).toBe(sendErrorText('not-alive'));
+    // N1: under the envelope a refused tap changes nothing on screen, so "showing the latest" would be false there.
+    expect(dialogRefusal(refused('stale-dialog'), true)).toBe(STALE_UNDER_ENVELOPE);
+    expect(dialogRefusal(refused('walk-failed'), true)).toBe(DIALOG_REFUSE_TEXT['walk-failed']);
+    const other = new ApiError(502, { ok: false, stderr: 'tmux: no server running' });
+    expect(dialogRefusal(other, false)).toBe(failedTo('answer', other));
+  });
+
+  it('the foot line names own words only where the field is offered', () => {
+    const foot = (): string | null | undefined => document.querySelector('.sheet-foot')?.textContent;
+    renderWithDialog(pane('cc300-ask-1q-open'));
+    expect(screen.getByLabelText('Answer in your own words')).toBeInTheDocument();
+    expect(foot()).toBe('tap an option, or answer in your own words');
+    cleanup();
+    // The two-column layout paints no own-words row.
+    renderWithDialog(pane('ask-2col-chat-about'));
+    expect(screen.queryByLabelText('Answer in your own words')).toBeNull();
+    expect(foot()).toBe('tap an option');
+    cleanup();
+    // A permission prompt is no AskUserQuestion (DERIVED: Yes / Yes, and don't ask again / No).
+    renderWithDialog(parsedDialog({
+      title: 'Do you want to proceed?',
+      options: [{ index: 1, label: 'Yes' }, { index: 2, label: "Yes, and don't ask again" }, { index: 3, label: 'No' }],
+    }));
+    expect(screen.queryByLabelText('Answer in your own words')).toBeNull();
+    expect(foot()).toBe('tap an option');
+    cleanup();
+    // A row holding text typed in the terminal, matched by the transcript (`Dialog.ask`): a line, no field.
+    renderWithDialog({
+      ...pane('cc300-ask-freetext-held'),
+      ask: { question: 'Which fruit?', header: 'Fruit', multiSelect: false, options: [{ label: 'Apple' }, { label: 'Pear' }] },
+    });
+    expect(screen.queryByLabelText('Answer in your own words')).toBeNull();
+    expect(foot()).toBe('tap an option');
   });
 });
 

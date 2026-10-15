@@ -143,11 +143,11 @@ import type { Dialog, HookAsk } from '../../../shared/api';
 import { EYEBROW, OptionRow, Sheet, Well, toast } from '@ccrc/ui';
 import { EnvelopeSheet, TerminalCta } from './EnvelopeSheet';
 import {
-  AskEyebrow, AskReview, ChatRow, MultiPick, OwnWords, REVIEW_TITLE, picksBusy, wordsBusy, type PickCall, type Picks,
-  type Words, type WordsCall,
+  AskEyebrow, AskReview, ChatRow, MultiPick, OwnWords, REVIEW_TITLE, ownWordsRow, picksBusy, wordsBusy,
+  type PickCall, type Picks, type Words, type WordsCall,
 } from './AskParts';
 import { chatRow, freeTextSlot, isAskReview, paneQuestion, paneTicks, questionKey, slotHolds } from './askLive';
-import { dialogMultiRefusal, dialogTextRefusal } from './askWords';
+import { dialogMultiRefusal, dialogRefusal, dialogTextRefusal } from './askWords';
 import { api, ApiError } from '../lib/api';
 import { getSessionStore, type SessionStore } from '../stores/session';
 import './chat.css';
@@ -306,24 +306,13 @@ export function DialogSheet({ id, store, onOpenTerminal, raise }: DialogSheetPro
       // Stay in "answering…" — the sheet closes when dialog_cleared lands.
     } catch (err) {
       setAnswering(null);
-      if (err instanceof ApiError && err.status === 409) {
-        // The on-screen menu moved on. The scraped sheet renders straight
-        // from `dialog`, so it re-renders with the new one right after this
-        // and "showing the latest" is literally true there — but the
-        // envelope sheet renders `hookAsk`, not `dialog`, and a 409 here
-        // changes nothing on screen: N1, that copy would read as a lie on
-        // this branch, so say what actually happened instead.
-        toast(
-          isUsableAsk(hookAsk)
-            ? "That question moved on in the terminal — this answer didn't land"
-            : 'That question changed — showing the latest',
-        );
-      } else {
-        toast(
-          `Couldn't answer — ${err instanceof Error ? err.message : String(err)}`,
-          'error',
-        );
-      }
+      // Each refusal by its code (`dialogRefusal`, plan Task 5), where every 409 once read alike. A stale dialog is
+      // news, not a failure: the scraped sheet renders straight from `dialog`, so it re-renders with the new one
+      // right after this and "showing the latest" is literally true there — but the envelope sheet renders
+      // `hookAsk`, not `dialog`, and a 409 there changes nothing on screen: N1, that copy would read as a lie on
+      // that branch, so it says what actually happened instead.
+      const stale = err instanceof ApiError && err.message === 'stale-dialog';
+      toast(dialogRefusal(err, isUsableAsk(hookAsk)), stale ? undefined : 'error');
     }
   };
 
@@ -589,7 +578,11 @@ export function DialogSheet({ id, store, onOpenTerminal, raise }: DialogSheetPro
       </button>
       {details && <Well className="dlg-raw">{shown.raw}</Well>}
 
-      <p className="sheet-foot">tap an option, or answer in your own words</p>
+      {/* Own words are named only where the field is offered (the two-column layout, a row already holding other
+          text, and a menu that is no AskUserQuestion offer none). */}
+      <p className="sheet-foot">
+        {ownWordsRow(slot, own.text, own.call) !== null ? 'tap an option, or answer in your own words' : 'tap an option'}
+      </p>
     </Sheet>
   );
 }

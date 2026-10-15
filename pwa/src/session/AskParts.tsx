@@ -191,6 +191,16 @@ export interface Words {
  *  may start another send and the sheet may not be dismissed. */
 export const wordsBusy = (call: WordsCall | null): boolean => call !== null && call.state !== 'refused';
 
+/** The free-text row the own-words FIELD types into, or null where the region offers no field (a line at most). A
+ *  send under way keeps its own row; otherwise the pane's free-text row must be there, and either empty, or holding
+ *  text with the operator's own text to keep in view (the stranded retry, part of it, or other text beside it).
+ *  `OwnWords` renders by this, and the scraped sheet's foot line names own words only where it is not null. */
+export function ownWordsRow(slot: FreeTextSlot, text: string, call: WordsCall | null): number | null {
+  if (call !== null && wordsBusy(call)) return call.row;
+  if (slot.kind === 'none') return null;
+  return slot.kind === 'empty' || slotHolds(slot, text) || text.trim() !== '' ? slot.index : null;
+}
+
 /** The pane paints no free-text row under this question: the two-column preview layout. Its Chat row is the way to
  *  talk it over, then the composer. The row is named by the label the pane paints (`chat`), never spelled here: the
  *  rule that finds it has one home (`shared/ask-menu.ts`, `single-definition.test.ts`). */
@@ -249,20 +259,15 @@ export function OwnWords({
   const { text, call, onText, onSend } = words;
   const countId = useId();
   const busy = wordsBusy(call);
-  let row: number;
-  // The row holds text the route would not type after: part of the operator's own, or someone else's.
-  let taken: 'part' | 'other' | null = null;
-  if (call !== null && busy) {
-    row = call.row;
-  } else if (slot.kind === 'none') {
+  const row = ownWordsRow(slot, text, call);
+  if (row === null) {
+    if (slot.kind === 'held') return <OwnWordsLine>{ROW_HOLDS_OTHER}</OwnWordsLine>;
     return chat !== null ? <OwnWordsLine>{noWordsRow(chat)}</OwnWordsLine> : null;
-  } else if (slot.kind === 'held' && !slotHolds(slot, text)) {
-    if (text.trim() === '') return <OwnWordsLine>{ROW_HOLDS_OTHER}</OwnWordsLine>;
-    taken = slotHoldsPart(slot, text) ? 'part' : 'other';
-    row = slot.index;
-  } else {
-    row = slot.index;
   }
+  // The row holds text the route would not type after: part of the operator's own, or someone else's.
+  const taken = busy || slot.kind !== 'held' || slotHolds(slot, text)
+    ? null
+    : slotHoldsPart(slot, text) ? 'part' : 'other';
   const stranded = !busy && slot.kind === 'held' && taken === null;
   const held = ownWordsHeld(text);
   // Near the limit, how much of it the text uses; over it, why Send waits. Never a silent cut (`ownWordsHeld`).
