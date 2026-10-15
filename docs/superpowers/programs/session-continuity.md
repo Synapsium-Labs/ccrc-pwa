@@ -23,7 +23,7 @@ the one sanctioned restart. The operator's rulings are the spec's §3 (C1–C14)
 | 2 | 4, rules 2–3 (rule 1 shipped in #207) | the dated row the waits read; the rescue wait near a five-hour reset (600 s) with its own grace; the no-room wait; spread, no-bounce, the chain wait; `$REG/<id>.rescuewait`; the stage-4 instrument rows | **AGENT-FIRST** (ccd) | — | #235 | merged 2026-10-03 (`db44b136`); run 237 closed; deploy via ccrc's updater |
 | 3 | 7 | `$REG/<id>.typed`; the operator's own `/model`/`/effort` promoted to the route record before a stop; the alias table and the `familyClassOf` port with its agreement pin; FIRST, wave 2's residue | **AGENT-FIRST** (ccd) | — | #250 | merged 2026-10-05 (`77f8d63a`); run 248 closed; deploy AGENT-FIRST via ccrc's updater |
 | 4 | 6, first part | the reap-class OOM count in the instrument (its baseline week starts at deploy); `ccd-scope-sweep` with its units, verdict record and doctor reader; the limit-banner harness leak | **AGENT-FIRST** (ccd, deploy, doctor) | wave 3 | #299 | merged 2026-10-06 (`1bb88d5e`); run 274 closed; deploy AGENT-FIRST via ccrc's updater (baseline B starts at deploy); run 274 (`ccrc-pwa-still-river`); plan #288 (`0dad0fdf`); block 4012–4021 + 4088–4093 |
-| 4b | 6, first part | `CLAUDE_CODE_DISABLE_BG_SHELL_PRESSURE_REAP=1` in the spawn environment; 3925's `/clear` fix | **AGENT-FIRST** (ccd) | wave 4 plus its one baseline week | plan #401 | baseline B complete 2026-10-13: 0 reap-class / 34 pane-scope OOM stops, 5 unmapped and 4 unmeasured; run 308 open (planned; the run's wave 5), block 4316–4325; plan published, written review pending; FIRST commit: wave 4's residue (review 305 F1(a), the PASS line, I1, …); scope sweep remains SHADOWED |
+| 4b | 6, first part | `CLAUDE_CODE_DISABLE_BG_SHELL_PRESSURE_REAP=1` in the spawn environment; 3925's `/clear` fix | **AGENT-FIRST** (ccd) | wave 4 plus its one baseline week | plan #401; reanchor #409 | baseline B complete 2026-10-13: 0 reap-class / 34 pane-scope OOM stops, 5 unmapped and 4 unmeasured; run 308 dispatched 2026-10-15 (the run's wave 5), block 4316–4325; written plan approved, worker reports final gates running; no wave-done or independent acceptance yet; Task 5 coordinator-owned; scope sweep remains SHADOWED |
 | 5 | 2 | the spike: native exit handoff under ccd; a paused workflow under a blocked parent; `OOMPolicy=continue` on a scratch pane scope | measurement — needs a scratch account from the operator | wave 1 | — | to plan |
 | 6 | 3 | graceful stop; the launch record; the manifest; the composed redrive prompt | **AGENT-FIRST** | waves 1, 5 | — | after wave 5 |
 | 7 | 4, the refusal | non-rescue swaps refuse while delegated work is in flight; `--cut-delegated`; its own 409 | **AGENT-FIRST**, then server | wave 6 | — | after wave 6 |
@@ -607,6 +607,24 @@ re-measures the citation corpus and the `_reg_get` census on the merged tree bef
   - Run 308 was freshly read planned, unbound and undispatched. Tasks 1-4 are its four worker items; Task 5
     remains coordinator-owned. Existing issued numbers 4316-4325 remain unchanged. No product tests, mutation
     trials, hand deployment, restart, arming or repository-settings act is claimed by this preparation.
+- **2026-10-15 18:19 UTC - wave 4b dispatch recorded; worker reports final gates running.**
+  - The single dispatch was accepted at 16:00 UTC for run 308, the run's wave 5, with exactly four worker
+    items (Tasks 1-4). The approved plan remains the immutable revision `3d8e5559b11ed4f8243911c08b105b39e6a1e26b`;
+    status-only documentation commit `a0debd0a0` did not change that implementation authority.
+  - The accepted response recorded `briefQueued:true`, `skillState:present`, `adopted:false`, `resumed:false`,
+    `clearedAt:null` and `spawnState:null`. The last field is unrecorded readiness, not proof of a ready pane.
+    Routing remains Opus/high with fresh native Sonnet/high implementers and Opus/high task reviewers, dependent
+    sequential execution, workflow off and compact 40. The existing issued block is 4316-4325; no new allocation.
+  - On this mail wake the server still reads `dispatched`, four declared items and none marked done. The
+    worker reports four task commits with task reviews plus a final-review fix, local head `5033cfb55`, not yet
+    pushed. This is a progress report, not a verified fingerprint, completed gate result or independent acceptance.
+  - The worker also reports launching the full server suite in the background. That departs from the foreground
+    rule; the coordinator instructed it to retain the launch/result evidence, await and measure the already-owned
+    task safely, prove it exited before the next suite, and run subsequent gates in the foreground, serially.
+    No duplicate suite, broad process kill, indefinite CI wait or assumed green result is authorized.
+  - Task 5 remains coordinator-owned and pending. No product acceptance, merge, deployment, updater-intent
+    change, restart, scope-sweep arming or repository-settings act follows from this status. Mail wakes the next
+    step; no polling or repeat dispatch.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` token appears in
   this file until a plan on the same ref defines it (`deviation-refs.test.ts`).
 
@@ -665,9 +683,10 @@ Wave 3 is merged (#250 `77f8d63a`). Wave 4 is merged (#299 `1bb88d5e`) and deplo
 is measured above: 0 reap-class among 34 pane-scope OOM stops, with 5 unmapped and 4 unmeasured; the scope-sweep
 record remains `shadow` and `$REG/scope-sweep-live` remains operator-only.
 
-Wave 4b is run 308 (planned at the latest pre-dispatch measurement; deviation numbers 4316 to 4325, written
-bare). Its plan is at `docs/superpowers/plans/2026-10-13-session-continuity-wave4b-pressure-reap-and-clear.md`;
-**written-plan review was approved on 2026-10-15**. Dispatch follows fresh source, ownership and readiness checks.
+Wave 4b is run 308 (dispatched 2026-10-15 16:00 UTC; deviation numbers 4316 to 4325, written bare). Its plan is
+at `docs/superpowers/plans/2026-10-13-session-continuity-wave4b-pressure-reap-and-clear.md`; **written-plan review
+was approved on 2026-10-15** at `3d8e5559b11ed4f8243911c08b105b39e6a1e26b`. The worker reports final gates running;
+no wave-done or independent acceptance has been received. Tasks 1-4 are its four items; Task 5 remains coordinator-owned.
 - **Its FIRST commit is wave 4's residue:** review 305 F1(a), the qualified doctor PASS line, I1, `s6_inert`'s
   staleness, the zombie child, the paused log line, baseline B's non-zero check and the per-task minors.
 - **Then it ships** `CLAUDE_CODE_DISABLE_BG_SHELL_PRESSURE_REAP=1` in the spawn environment and 3925's `/clear`
