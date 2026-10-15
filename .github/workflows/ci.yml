@@ -142,10 +142,10 @@ jobs:
     steps:
       # Full depth: the changed set is `git diff <map-sha> HEAD`, and the map's
       # commit must be present to be diffed against.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: '22'
       # A pull request that changes the pipeline runs the full suite — decided
@@ -249,7 +249,7 @@ jobs:
       # did. traced.txt is always there, so the upload never finds nothing.
       - name: Hand the map to map-build
         if: steps.select.outputs.trace != 'none'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: select-inputs
           path: |
@@ -285,11 +285,11 @@ jobs:
       # not exist; the suite is written to go RED on a missing base rather than
       # quietly measure nothing, so removing this line breaks CI loudly instead
       # of disarming the history guard in silence.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           # Above the engines floor in server/agent/pwa package.json
           # (>=22.16.0: node:sqlite stopped needing --experimental-sqlite at
@@ -346,7 +346,7 @@ jobs:
 
       - name: Keep the durations
         if: always() && needs.select.outputs.tests == 'full'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: times-${{ matrix.shard }}
           path: ${{ runner.temp }}/times.json
@@ -361,8 +361,8 @@ jobs:
     # tsc over server/src alone; about a minute. 15 carries a cold npm cache.
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: '22'
           cache: npm
@@ -395,8 +395,8 @@ jobs:
       - name: Refuse a prerequisite that did not succeed (no script involved)
         if: needs.select.result != 'success' || contains(fromJSON('["failure","cancelled"]'), needs.server-shard.result) || contains(fromJSON('["failure","cancelled"]'), needs.server-typecheck.result)
         run: exit 1
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: '22'
       - name: Verdict
@@ -433,12 +433,12 @@ jobs:
       # Full depth, as when this matrix also carried the server leg (whose
       # topology-clean needs `origin/main` — see server-shard): unchanged, so
       # the agent and pwa suites meet the tree exactly as before.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         if: env.CCRC_LEG == 'run'
         with:
           fetch-depth: 0
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         if: env.CCRC_LEG == 'run'
         with:
           node-version: '22'
@@ -551,10 +551,10 @@ jobs:
     steps:
       # No token left behind in .git/config: everything below runs third-party
       # npm code, and none of it has any reason to talk to GitHub.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: '22'
           cache: npm
@@ -640,10 +640,10 @@ jobs:
       fail-fast: false
       matrix: ${{ fromJSON(needs.select.outputs.macos_matrix) }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: '22'
           cache: npm
@@ -705,8 +705,8 @@ jobs:
     # should come back down.
     timeout-minutes: 25
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: '22'
           cache: npm
@@ -773,9 +773,9 @@ jobs:
     env:
       CCRC_LEG: ${{ ((github.event_name == 'push' && !inputs.mode) || inputs.mode == 'rebuild') && 'skip' || 'run' }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         if: env.CCRC_LEG == 'run'
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         if: env.CCRC_LEG == 'run'
         with:
           # '22' here for consistency with the server shards, not because
@@ -829,9 +829,9 @@ jobs:
     env:
       CCRC_LEG: ${{ ((github.event_name == 'push' && !inputs.mode) || inputs.mode == 'rebuild') && 'skip' || 'run' }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         if: env.CCRC_LEG == 'run'
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         if: env.CCRC_LEG == 'run'
         with:
           node-version: '22.16.0'
@@ -896,10 +896,10 @@ jobs:
     steps:
       # Full depth for the same reason as server-shard: the traced tests are
       # the real tests, topology-clean included.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: '22'
           cache: npm
@@ -922,7 +922,7 @@ jobs:
           node .github/ci/trace-run.mjs --repo "$GITHUB_WORKSPACE" --files "$RUNNER_TEMP/trace.txt" --out "$RUNNER_TEMP/records.json" --jobs "$WORKERS" --timeout 1560
       - name: Keep the records
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: records-${{ matrix.shard }}
           path: ${{ runner.temp }}/records.json
@@ -954,18 +954,18 @@ jobs:
       contents: read
       actions: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: '22'
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           pattern: records-*
           path: ${{ runner.temp }}/records
       - name: Fetch what select handed over
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: select-inputs
           path: ${{ runner.temp }}/select-inputs
@@ -1029,7 +1029,7 @@ jobs:
           fi
       - name: Keep the map as an artifact
         if: steps.cas.outputs.publish != 'false'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: testmap
           path: ${{ runner.temp }}/ci-cache/testmap.json
@@ -1055,11 +1055,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: '22'
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           pattern: times-*
           path: ${{ runner.temp }}/times
@@ -1068,7 +1068,7 @@ jobs:
           mkdir -p "$RUNNER_TEMP/ci-cache"
           node .github/ci/shards.mjs times --out "$RUNNER_TEMP/ci-cache/testtimes.json" "$RUNNER_TEMP"/times/*/times.json
       - name: Keep the durations as an artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: testtimes
           path: ${{ runner.temp }}/ci-cache/testtimes.json
@@ -1101,8 +1101,8 @@ jobs:
       - name: Refuse any leg that did not succeed (no script involved)
         if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') || contains(needs.*.result, 'skipped')
         run: exit 1
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: '22'
       # The `verdict` output is written by THIS step, once verdict.mjs exits 0:

@@ -42,7 +42,7 @@ jobs:
     outputs:
       found: ${{ steps.look.outputs.found }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       # Evidence is a RUN that spec §8 names, of THIS commit, carrying a
       # green full-suite job: ci.yml's daily or manual full run on main, or
       # an earlier gate's called run on stable (its job is `full /
@@ -99,7 +99,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           # The script names the release by `git tag --points-at HEAD`; the
           # tag must be present, not a shallow single-commit fetch.

@@ -33,14 +33,14 @@ jobs:
       id-token: write
       attestations: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           # Full depth: build-release.sh names the artifact by `git tag
           # --points-at HEAD` and refuses an untagged HEAD — the tag ref must
           # actually be present, not a shallow single-commit fetch.
           fetch-depth: 0
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           # The newest Node satisfying the engines range in server/package.json; the floor
           # itself is declared in the three package.json files and pinned by node-floor.test.ts.
