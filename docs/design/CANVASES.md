@@ -14,7 +14,9 @@ back as a brief for the next wave, never as code.
 
 ## Columns
 
-- **Canvas** — the artifact link, titled as the design is called.
+- **Canvas** — the canvas's name, as the design is called. Never its link: this
+  repository is public, and a claude.ai link is the id of a private, account-scoped
+  resource (`CLAUDE.md`'s public-repo rule). Name plus sha is enough to find it again.
 - **Covers** — which screens or components, in the product's own words.
 - **Brief** — path under `briefs/`, or `—` for a canvas made without one.
 - **Matched at** — the short sha of the commit whose `ui/src` the canvas was drawn

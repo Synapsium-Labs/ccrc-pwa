@@ -159,6 +159,28 @@ describe('ci.yml: the required checks cannot go missing (design 2026-09-23 §4.2
     }
   });
 
+  // storybook-a11y is advisory, so it skips WHOLE (a job-level `if:`) where
+  // the required legs skip step by step — but on the very predicate their
+  // `CCRC_LEG` switch reads, so a push to main runs no test leg of any kind.
+  // Derived from the `test` leg's own switch: change one predicate without the
+  // other and this goes red.
+  it('storybook-a11y skips on the required legs\' own refresh/rebuild predicate, and never on a merge-queue run', () => {
+    const m = /\n {6}CCRC_LEG: \$\{\{ \((.+)\) && 'skip' \|\| 'run' \}\}\n/.exec(job('test'));
+    expect(m, 'the test leg no longer spells its CCRC_LEG switch').not.toBeNull();
+    expect(jobKey(job('storybook-a11y'), 'if'))
+      .toBe(`github.event_name != 'merge_group' && !(${m![1]})`);
+  });
+
+  it('storybook-a11y runs only locked binaries — no npx, which fetches whatever is newest', () => {
+    const s = steps(job('storybook-a11y'));
+    expect(s.length, 'storybook-a11y parsed no steps').toBeGreaterThan(0);
+    // Comment lines are not calls: the job's own comments name `npx` to say why it is absent.
+    const code = (st: string): string => st.split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
+    for (const st of s) expect(code(st), `storybook-a11y: an npx call:\n${st}`).not.toMatch(/\bnpx\b/);
+    expect(job('storybook-a11y'), 'the checkout leaves its token in .git/config')
+      .toMatch(/^ {6}- uses: actions\/checkout@v4\n {8}with:\n {10}persist-credentials: false$/m);
+  });
+
   // WHEREVER pwa IS INSTALLED, ui MUST BE TOO (PR #346's red run).
   //
   // pwa consumes @ccrc/ui as SOURCE — `exports['.']` points at

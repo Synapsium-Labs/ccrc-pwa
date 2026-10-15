@@ -6113,3 +6113,8 @@ its notice travels with every copy, so the upstream licence sits byte for byte i
 tarball. `ccd/history/PROVENANCE` names each copied item, its upstream file and what changed,
 and each copied function carries a one-line comment saying where it came from: a rationale
 comment, not a licence header.
+
+`ui/src/styles/reset.css` is derived from Tailwind CSS's preflight (Tailwind Labs, Inc.,
+MIT-licensed; Copyright (c) Tailwind Labs, Inc.), at tailwindcss `v4.3.3`, on the same terms:
+the upstream licence sits byte for byte beside it in `ui/src/styles/LICENSE.tailwindcss`, and
+the file's opening comment says what changed.

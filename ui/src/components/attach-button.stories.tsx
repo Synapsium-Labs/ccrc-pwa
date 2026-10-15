@@ -33,7 +33,7 @@ export const Disabled: Story = { args: { disabled: true } };
  *  ships with it, so the story draws what the stylesheet still paints. */
 export const Uploading: Story = {
   render: () => (
-    <button type="button" className="attach-btn" aria-busy="true" aria-label="Attach an image">
+    <button type="button" className="attach-btn" aria-busy="true" aria-label="Attach a file">
       <span aria-hidden="true">+</span>
     </button>
   ),
@@ -48,7 +48,7 @@ export const States: Story = {
     <div className="flex items-center gap-4">
       <AttachButton onPick={() => {}} />
       <AttachButton onPick={() => {}} disabled />
-      <button type="button" className="attach-btn" aria-busy="true" aria-label="Attach an image">
+      <button type="button" className="attach-btn" aria-busy="true" aria-label="Attach a file">
         <span aria-hidden="true">+</span>
       </button>
     </div>

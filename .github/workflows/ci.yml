@@ -536,13 +536,24 @@ jobs:
   # reason: a red here blocks no pull request while the leg earns trust, and
   # the PR page still shows it. It is deliberately NOT in `full-suite`'s
   # `needs` yet — promote it there once it has run quiet for a while.
+  #
+  # THE SAME MODE SWITCH AS THE TEST LEGS, written as a job-level `if:`. The
+  # `test` matrix and `build-pwa` skip by STEP only because they are required
+  # by name and a skipped job never reports; this job is not required, so it
+  # skips whole, on exactly their `CCRC_LEG == 'skip'` predicate: a push to
+  # main (refresh — "no test legs") and a rebuild. And no merge-queue run,
+  # like the other advisory legs. Pinned by server/test/ci-pipeline.test.ts.
   storybook-a11y:
     runs-on: ubuntu-latest
     # The browser download dominates; the run itself is ~40s for 152 stories.
     timeout-minutes: 20
-    if: github.event_name != 'merge_group'
+    if: github.event_name != 'merge_group' && !((github.event_name == 'push' && !inputs.mode) || inputs.mode == 'rebuild')
     steps:
+      # No token left behind in .git/config: everything below runs third-party
+      # npm code, and none of it has any reason to talk to GitHub.
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
@@ -551,18 +562,25 @@ jobs:
       - working-directory: ui
         run: npm ci
       # Chromium only, and `--with-deps` because a bare runner has none of the
-      # shared libraries headless chromium links against.
+      # shared libraries headless chromium links against. Every tool in this
+      # job is a LOCAL binary out of ui/package-lock.json, never `npx`: a bare
+      # `npx <tool>` that misses node_modules fetches whatever version is
+      # newest that day and runs it.
       - working-directory: ui
-        run: npx playwright install --with-deps chromium
+        run: ./node_modules/.bin/playwright install --with-deps chromium
       - working-directory: ui
         run: npm run build-storybook -- --quiet
       # Served as static files rather than `storybook dev`: the dev server
-      # compiles on demand, so a slow first story reads as a timeout. The
-      # background process outlives this step, which is what the wait is for.
+      # compiles on demand, so a slow first story reads as a timeout. `vite
+      # preview` is the static server already in the lock (vite is how
+      # Storybook builds), pointed at the build's output; `--host 127.0.0.1`
+      # because `localhost` may resolve to ::1 and the wait below asks
+      # 127.0.0.1. The background process outlives this step, which is what
+      # the wait is for.
       - working-directory: ui
         run: |
-          npx --yes http-server storybook-static --port 6006 --silent &
-          npx --yes wait-on tcp:127.0.0.1:6006 -t 60000
+          ./node_modules/.bin/vite preview --outDir storybook-static --host 127.0.0.1 --port 6006 --strictPort &
+          ./node_modules/.bin/wait-on tcp:127.0.0.1:6006 -t 60000
       - working-directory: ui
         run: npm run test-storybook -- --maxWorkers=2 --url http://127.0.0.1:6006
 

@@ -11,7 +11,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 import { Composer } from '../src/session/Composer';
 import { api } from '../src/lib/api';
 
-const ID = 'claude:OpenClawHetzner';
+const ID = 'claude:project-a';
 
 const COMMANDS = {
   builtins: [

@@ -1,13 +1,13 @@
-/* ccrc — element reset.
-   Vendored from Tailwind v4's preflight (the only part of Tailwind this app
-   ever used: zero utility classes appear in any .tsx, so the framework was
-   shipping a scanner, a 3.8MB dep tree and 12 self-referential `@theme`
-   aliases to produce this file and nothing else). Kept verbatim apart from
-   the three `--theme()` calls, which were Tailwind-only syntax and now read
-   the app's own --family-ui / --family-mono tokens.
+/* ccrc — element reset. Derived from tailwindcss preflight.css @ v4.3.3, MIT,
+   see LICENSE.tailwindcss (Copyright (c) Tailwind Labs, Inc.): that notice sits
+   beside this file and travels with every copy of it. Upstream verbatim except
+   that html's and code's font-family `--theme()` calls read --family-ui and
+   --family-mono (tokens.css), their four font-feature-/font-variation-settings
+   `--theme()` lines are gone, and `::placeholder` is scoped (said where it is).
+   Copied, not imported, so the families are the app's tokens, not Tailwind's.
 
-   Load order: this first, then tokens.css, then everything else — a reset
-   must lose every cascade fight it enters. */
+   Loaded `layer(base)` (pwa base.css, .storybook/preview.css), never plainly:
+   a reset must lose every cascade fight it enters. */
 
 /*
   1. Prevent padding and border from affecting element width. (https://github.com/mozdevs/cssremedy/issues/4)

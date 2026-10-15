@@ -46,11 +46,11 @@ beforeEach(() => {
 });
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
-const ID = 'claude:OpenClawHetzner';
+const ID = 'claude:project-a';
 const fakeSocket = (): WebSocket =>
   ({ onopen: null, onmessage: null, onclose: null, onerror: null, close(): void {} }) as unknown as WebSocket;
 
-const fleetSession = (patch: Partial<FleetSession> = {}): FleetSession => (baseSession({ id: ID, project: 'OpenClawHetzner', workdir: '/root/projects/OpenClawHetzner', model: 'Sonnet 5', effort: 'medium', ...patch }));
+const fleetSession = (patch: Partial<FleetSession> = {}): FleetSession => (baseSession({ id: ID, project: 'project-a', workdir: '/w/project-a', model: 'Sonnet 5', effort: 'medium', ...patch }));
 
 /** The last render's stores, so a case can drive the session's own status —
  *  the Stop control is gated on `busy`, which is the session stream's fact,
@@ -356,8 +356,8 @@ describe('a deep link whose session the fleet has not reported yet', () => {
     // `live?.project ?? id.slice(wrapperFromId.length + 1)`. The composer's
     // placeholder says "Message <project>", and before the first frame the id
     // is the only thing that knows what that is.
-    deepLink('claude:OpenClawHetzner');
-    expect(screen.getByPlaceholderText('Message OpenClawHetzner')).toBeInTheDocument();
+    deepLink('claude:project-a');
+    expect(screen.getByPlaceholderText('Message project-a')).toBeInTheDocument();
   });
 
   it('falls back to the whole id when there is no prefix to strip', () => {

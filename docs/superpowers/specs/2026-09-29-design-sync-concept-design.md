@@ -38,8 +38,10 @@ Wave 1 bought this qualification without knowing it.
 ## Lane A — sync: the repo is the source, Claude Design is a mirror
 
 `@ccrc/ui` is the only package the sync sees. `.design-sync/config.json` is committed,
-`projectId` pinned in it, and every later re-sync is one driver run in which untouched
-components cost nothing.
+and every later re-sync is one driver run in which untouched components cost nothing.
+(Corrected 2026-10-15: this said `projectId` was pinned in the committed file. It is not.
+The repo is public and the id names a private, account-scoped resource, so it is chosen
+at sync time; `.design-sync/NOTES.md` says how.)
 
 ### The one blocker, and why the fix is cheap
 
@@ -167,7 +169,7 @@ Three properties of it are deliberate:
 ## Order of work — each step independently revertable
 
 1. `ui` build script + `tsconfig.build.json` + `.design-sync/config.json`; first sync;
-   `projectId` recorded. **On wave 1's 7 primitives**, not after wave 2: a small first
+   `projectId` recorded (outside the tree since 2026-10-15; see lane A). **On wave 1's 7 primitives**, not after wave 2: a small first
    pass surfaces every converter trap cheaply, and wave 2 then arrives as an incremental
    re-sync where verified components cost nothing.
 

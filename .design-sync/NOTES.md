@@ -2,6 +2,17 @@
 
 Repo-specific gotchas a sync run should know before it starts.
 
+## `config.json` carries no `projectId`, on purpose
+
+This repository is public, and a claude.ai Design project id is an account-scoped id
+for a private resource: the same class as the volume and tracker ids the public-repo
+rule in `CLAUDE.md` keeps out of the tree. So the committed `config.json` holds only
+what describes the package (shape, storybook, overrides, title map), and the target
+project is chosen at sync time: pass `--project <uuid>`, or pick it from the projects
+your own login can write to. If a run writes `projectId` back into `config.json`,
+drop that line before committing. A canvas link is the same kind of id, which is why
+`docs/design/CANVASES.md` records a canvas by name and commit sha, never by link.
+
 ## The package ships source; `dist/` exists only for this sync
 
 `exports['.']` points at `./src/index.ts` and must stay that way — `pwa` consumes the
