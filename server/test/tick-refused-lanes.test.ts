@@ -246,7 +246,7 @@ describe('the stall lane holds a listed-but-refused id it is handed (tick-lanes-
   /** A span as the dead notice prints it, `<h>h <m>m`, floored to the minute (`stallSpan`'s form). */
   const spanOf = (ms: number): string => `${Math.floor(ms / 3_600_000)}h ${Math.floor(ms / 60_000) % 60}m`;
 
-  // (E) pins that no clock is KEPT across a refusal (that (A2) and (A3) pin that none STARTS during one). The instants,
+  // (E) pins that no clock is KEPT across a refusal (as (A2) and (A3) pin that none STARTS during one). The instants,
   // one sweep per STALL_SWEEP_MS: unlisted at T0, one sweep, where the absent clock starts; listed and refused from
   // T0 + STALL_SWEEP_MS to END (T0 + 62 min), past DEAD_GRACE_MS, where the lane drops that clock; unlisted again from
   // U (T0 + 63 min). A clock kept across the refusal dates from T0 and fires at U, with "absent for 1h 3m"; dropped, it
