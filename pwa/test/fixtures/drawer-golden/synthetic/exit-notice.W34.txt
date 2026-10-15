@@ -1,0 +1,10 @@
+ ❯ thanks, that is all for
+   project-a
+
+ ● Glad to help.
+
+──
+ ❯
+──
+   Press Ctrl-C again to exit
+

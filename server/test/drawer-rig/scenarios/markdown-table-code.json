@@ -1,0 +1,20 @@
+{
+  "name": "markdown-table-code",
+  "covers": [
+    "W6: the model equals capture-pane -p on a reply with a table and a code block",
+    "re-wrap (a)-(g) and the row count: table rows that do not wrap, fenced code, a numbered and a nested list"
+  ],
+  "model": "claude-sonnet-4-5",
+  "prompt": "Plan the farewell function for project-a.",
+  "marker": "That keeps the module small: two pure functions, one file, one test file.",
+  "entries": [
+    {
+      "match": "tools",
+      "label": "md",
+      "text": "Here is a summary of the two functions project-a will export once the farewell function lands, with the file each one lives in and the test that covers it. The table is the plan; the code block after it is the shape of the new function.\n\n| Function | File | Returns | Covered by |\n|----------|------|---------|------------|\n| greet | src/app.ts | a greeting for a name | test/app.test.ts |\n| farewell | src/app.ts | a farewell for a name | test/app.test.ts |\n\n```ts\nexport function farewell(name: string): string {\n  return `goodbye, ${name}`;\n}\n```\n\n1. Add the function beside greet in src/app.ts.\n2. Add one test case for it in test/app.test.ts, next to the greet case, so the two read as a pair.\n   - Keep the test names parallel.\n\nThat keeps the module small: two pure functions, one file, one test file."
+    }
+  ],
+  "default": {
+    "text": "Done."
+  }
+}

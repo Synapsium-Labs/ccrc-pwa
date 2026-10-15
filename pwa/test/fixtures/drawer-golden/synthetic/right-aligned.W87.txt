@@ -1,0 +1,10 @@
+ ❯ use the medium effort preset for project-a
+
+ ● Done: project-a now uses the medium effort preset.
+
+──
+ ❯
+──
+   ? for shortcuts
+→◐ medium · /effort
+

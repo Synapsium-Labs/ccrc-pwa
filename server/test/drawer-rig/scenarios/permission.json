@@ -1,0 +1,26 @@
+{
+  "name": "permission",
+  "covers": [
+    "W6: the model equals capture-pane -p on a permission prompt",
+    "re-wrap (a)-(g) and the row count: rules, a code row wider than 220, a 4-option prompt with a long option label (W4's shape)",
+    "menu taps (1b): option lines are targets, the wrapped code row is not"
+  ],
+  "prompt": "Create the build cache directory for project-a.",
+  "marker": "Do you want to proceed?",
+  "entries": [
+    {
+      "match": "tools",
+      "label": "bash",
+      "tool_use": {
+        "name": "Bash",
+        "input": {
+          "command": "mkdir -p /rig/shared/project-a/build/cache/some/very/long/directory/path/that/keeps/going/and/going/until/it/wraps && echo the-build-cache-directory-for-project-a-is-ready-and-this-marker-is-long-enough-to-wrap-the-code-row-twice",
+          "description": "Create the build cache directory for project-a and echo a marker"
+        }
+      }
+    }
+  ],
+  "default": {
+    "text": "Done."
+  }
+}

@@ -1,8 +1,11 @@
-// THE DOOR A FINGER CAN OPEN. A phone has no wheel, and on the live terminal
-// glass there is nothing to scroll anyway — tmux attaches the client on the
-// alternate screen, where xterm keeps no scrollback — so the key bar was the
-// only way into the console history. The gesture still has one obvious meaning,
-// and it is the wheel's: reach for what is above the screen.
+// THE DOOR A FINGER CAN OPEN. A phone has no wheel, and the live terminal has
+// no scrollback of its own to scroll — tmux attaches the client on the
+// alternate screen, where xterm keeps none; the host's own scroll (D-5005)
+// reaches only the pinned grid's rows on a glass shorter than them — so the
+// key bar was the only way into the console history. The gesture still has
+// one obvious meaning, and it is the wheel's: reach for what is above the
+// screen. The gesture belongs to the grid: the wrapped view moves this host
+// off-screen, so there the `hist` key is the only door.
 //
 // Eighty-odd lines of pointer-and-touch arbitration, lifted out of
 // `TerminalDrawer`'s 225-line attach effect, where they sat between the socket
@@ -26,9 +29,11 @@ export const TOUCH_OPEN_PX = 24;
  * alone. vaul installs `preventScrollMobileSafari` while a drawer is open —
  * `document`, capture phase, `passive: false` — and it calls `preventDefault()`
  * on touchmove for any touch whose scroll parent is the document, which on this
- * glass is every touch (`.term-host` and every xterm element inside it are
- * `overflow: hidden`). Safari answers a prevented touchmove by tearing down the
- * POINTER stream for that gesture, so `pointermove` never arrives and the drag
+ * glass was every touch while `.term-host` and every xterm element inside it
+ * were `overflow: hidden`. The live host scrolls since D-5005, and vaul still
+ * prevents a touchmove that pushes a scroller past either end — and a second
+ * open sheet prevents regardless (the history layer's own note). Safari answers
+ * a prevented touchmove by tearing down the POINTER stream for that gesture, so `pointermove` never arrives and the drag
  * that opens the history could never have fired on an iPhone. It never did:
  * measured on the operator's own phone across four builds, "не реагує зовсім".
  *
