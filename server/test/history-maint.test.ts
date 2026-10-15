@@ -651,13 +651,44 @@ describe.skipIf(process.platform === 'darwin')('the relay holds the shim\'s stde
     expect(r.stderr, 'CONTROL: and its mark stands').toContain(REDACTED_MARK);
   }, 1.5 * HEAVY);
 
-  it('(e) a stderr over the cap that has no line break at all is cut where the cap fell and written, not dropped', async () => {
+  it('(e) a stderr over the cap that has no line break at all is written whole, not dropped (where the cap cuts it is the next case\'s pin)', async () => {
     const box = boundBox('ccrc-hist-relay-cap1-');
     rawShim(box, ['head -c 2500000 /dev/zero | tr "\\\\0" z >&2', 'printf \'%s\\n\' \'{"rc":0}\'']);
     const r = await startCli(box, ['doctor', '--backup']).done;
     expect(r.code, r.stderr.slice(0, 300)).toBe(0);
     expect((r.stderr.match(/z/g) ?? []).length, 'every byte arrived').toBe(2_500_000);
   }, HEAVY);
+
+  it('(e) the hold is bounded at the cap: past 1 MiB the CLI writes stderr while the shim still runs, it does not hold it all until the child closes (D-5022, review 462 F3)', async () => {
+    const box = boundBox('ccrc-hist-relay-capbound-');
+    const GO = path.join(box.home, 'go');
+    const WROTE = path.join(box.home, 'wrote');
+    const PAD = 'y'.repeat(80);
+    // About 2.4 MB on stderr (24000 lines of 100 bytes), then a marker file, then a bounded wait (120 s) for the go-file, then the result.
+    // A pipe holds 64 KiB: the shim cannot reach its marker unless the CLI has READ well over the 1 MiB cap of it, so by then an
+    // unbounded hold (the spill removed) has written nothing, and a bounded one has.
+    rawShim(box, [
+      `awk 'BEGIN { for (i = 1; i <= 24000; i++) printf "zqx23 cap %06d ${PAD}\\n", i }' >&2`,
+      `touch ${JSON.stringify(WROTE)}`,
+      `for i in $(seq 1 1200); do [ -e ${JSON.stringify(GO)} ] && break; sleep 0.1; done`,
+      'printf \'%s\\n\' \'{"rc":0}\'',
+    ]);
+    const cli = startCli(box, ['doctor', '--backup']);
+    let early = 0;
+    try {
+      await until(() => fs.existsSync(WROTE), 60_000);
+      // the spill is written as the over-cap read is handled: allow a generous deadline before calling stderr empty
+      const t0 = Date.now();
+      while (cli.peek().stderr.length === 0 && Date.now() - t0 < 30_000) await new Promise((r) => setTimeout(r, 25));
+      early = cli.peek().stderr.length;
+    } finally {
+      fs.writeFileSync(GO, '');   // the shim ends either way
+    }
+    const r = await cli.done;
+    expect(r.code, r.stderr.slice(0, 300)).toBe(0);
+    expect(early, 'stderr bytes reached the terminal BEFORE the shim finished: the hold is cut at the cap').toBeGreaterThan(0);
+    expect(r.stderr.split('\n').filter((l) => l.startsWith('zqx23 cap ')), 'and every line still arrives').toHaveLength(24000);
+  }, 1.5 * HEAVY);
 
   it('(g) several MB relayed on stderr arrive complete on a pipe: the exit waits for stderr as it waits for stdout', async () => {
     const box = boundBox('ccrc-hist-relay-drain-');

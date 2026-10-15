@@ -1564,4 +1564,48 @@ describe('F13: deriveLeaves steps its scans one row at a time under the budget, 
     expect(q<{ cursor: string }>(box, "SELECT cursor FROM derivation_state WHERE step = 'leaves' AND version = ?", NODE_PARSER_VERSION)[0]?.cursor,
       '(b) and the cursor stands at the last boundary').toBe(String(entries[N - 1]));
   }, 240_000);
+
+  it('(c) the fork scan is stepped one row at a time too: with four fork candidates and a budget that runs out after the first, only two rows are stepped, and none is materialised (review 462 F5)', async () => {
+    const S = (await import('../../ccd/history/sweep.mjs')) as unknown as {
+      makeIngestCtx(home: string, homes: string[], nowMs: number, ids: unknown): Record<string, unknown>;
+      newBudget(now?: () => number, limits?: { maxMs?: number }): unknown;
+    };
+    const D = (await import('../../ccd/history/derive.mjs')) as unknown as {
+      deriveLeaves(db: Writer, ictx: Record<string, unknown>, budget: unknown): { derived: number; waiting: number; failed: number };
+    };
+    // Four main transcripts, each with two live copies (the `HAVING count(*) > 1` rows of forkCandidates). They hold no boundary, so
+    // the todo scan has nothing to derive and the fork scan is the loop under test.
+    const CANDIDATES = 4;
+    const w = openWriter(historyPaths(box.home).dbFile);
+    try {
+      withTx(w, 'NORMAL', () => {
+        const tr = w.prepare('INSERT INTO transcripts (transcript_pk, cc_session_uuid) VALUES (?, ?)');
+        const fl = w.prepare("INSERT INTO ingest_files (dev, ino, transcript_pk, offset, status, parser_version) VALUES (1, ?, ?, ?, 'live', 1)");
+        for (let k = 1; k <= CANDIDATES; k += 1) {
+          tr.run(500 + k, `0189abcd-1234-4678-9abc-00000000f1${k}0`);
+          fl.run(7000 + 2 * k, 500 + k, 100);
+          fl.run(7001 + 2 * k, 500 + k, 100);
+        }
+      });
+    } finally { closeWriter(w); }
+    let left = Number.POSITIVE_INFINITY;
+    const now = (): number => { if (left > 0) { left -= 1; return 0; } return 3_600_000; };
+    const budget = S.newBudget(now, { maxMs: 1_000 });
+    const db = openWriter(historyPaths(box.home).dbFile);
+    try {
+      const spy = watch(db);
+      const ictx = S.makeIngestCtx(box.home, box.homes, Date.now(), null);
+      ictx['fts'] = true;
+      left = 1;
+      expect(D.deriveLeaves(spy.db, ictx, budget), 'nothing to derive').toEqual({ derived: 0, waiting: 0, failed: 0 });
+      expect(spy.all, 'neither scan was materialised with all()').toEqual({ todo: 0, forks: 0 });
+      expect(spy.iterated.forks, 'the fork scan was stepped').toBe(1);
+      expect(spy.stepped.forks, 'and only as far as the candidate that failed the budget check (1 + 1 rows, of 4)').toBe(2);
+      left = Number.POSITIVE_INFINITY;
+      const ample = watch(db);
+      D.deriveLeaves(ample.db, ictx, S.newBudget());
+      expect(ample.stepped.forks, 'CONTROL: an ample budget steps every candidate').toBe(CANDIDATES);
+      expect(ample.all, 'CONTROL: still no all()').toEqual({ todo: 0, forks: 0 });
+    } finally { closeWriter(db); }
+  }, 240_000);
 });

@@ -2482,6 +2482,17 @@ describe('redaction: values, context and shapes (spec 8.3)', () => {
     expect(libRedact.redactFinalLines('password=abc&def', idx)).toBe(`password=${M}&def`);
     expect(libRedact.redactFinalLines('Authorization: Bearer abc"def', idx)).toBe(`Authorization: Bearer ${M}"def`);
   });
+  // D-5021, review 462 F4: redactFinalLines is the field pass and THEN the final pass. The (j3) pins are satisfied by the field pass
+  // alone, so this one holds the final pass: a box-token header whose value is a PEM block glued to a tail. The field pass masks the
+  // block and leaves the tail (measured: `[redacted]TAILSECRET99`); the final pass then masks the whole run. Red when redactFinalLines drops the final pass (`return redactField(text, idx)`).
+  it('(j4) the final pass of redactFinalLines masks what the field pass leaves: a PEM block as a box-token value, glued to a tail (D-5021, review 462 F4)', () => {
+    const idx = idxOf([]);
+    // assembled at run time: the repository is public, and a key-shaped literal is what push protection reads
+    const pem = ['-----BEGIN ', 'PRIVATE KEY-----\n', 'MIIBVgIBADANBgkqhkiG9w0BAQEFAASCAUAwggE8', '\n-----END ', 'PRIVATE KEY-----'].join('');
+    const text = `x-ccrc-mail-token: ${pem}TAILSECRET99`;
+    expect(libRedact.redactField(text, idx), 'CONTROL: the field pass alone leaves the tail').toBe(`x-ccrc-mail-token: ${M}TAILSECRET99`);
+    expect(libRedact.redactFinalLines(text, idx), 'the final pass takes it').toBe(`x-ccrc-mail-token: ${M}`);
+  });
   // D-4614 (whole-branch fix round 7): layers 2 and 3 are ORDER-FREE. Every context rule and every shape matches the same text,
   // the union of their spans is masked in one pass. Round 5's order (the named rule first) and round 6's (anchors and shapes
   // first) each lost something a glued name or anchor carried; these pins hold both directions.

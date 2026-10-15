@@ -506,7 +506,7 @@ export function rawShim(box: HistoryBox, lines: string[]): void {
   fs.chmodSync(p, 0o755);
 }
 
-export interface LiveCli { pid: number; send: (sig: NodeJS.Signals) => void; done: Promise<{ code: number | null; signal: NodeJS.Signals | null; stdout: string; stderr: string }> }
+export interface LiveCli { pid: number; send: (sig: NodeJS.Signals) => void; /** What the child has written so far, before it ends. */ peek: () => { stdout: string; stderr: string }; done: Promise<{ code: number | null; signal: NodeJS.Signals | null; stdout: string; stderr: string }> }
 /** `node --no-warnings cli.mjs <args>` as a child the case can signal while it runs (runCli blocks until the child ends). It is
  *  capped like every spawn here, and `send` signals only this child, by the pid it was started with. */
 export function startCli(box: HistoryBox, args: string[], opts: SpawnOpts = {}): LiveCli {
@@ -521,7 +521,7 @@ export function startCli(box: HistoryBox, args: string[], opts: SpawnOpts = {}):
   const done = new Promise<{ code: number | null; signal: NodeJS.Signals | null; stdout: string; stderr: string }>((resolve) => {
     child.on('close', (code, signal) => { clearTimeout(cap); resolve({ code, signal, stdout, stderr }); });
   });
-  return { pid: child.pid ?? 0, send: (sig) => { child.kill(sig); }, done };
+  return { pid: child.pid ?? 0, send: (sig) => { child.kill(sig); }, peek: () => ({ stdout, stderr }), done };
 }
 
 /** Hold the shim's lock from outside, as a first concurrent pass holds it: a `flock` holder that sleeps, in its own
