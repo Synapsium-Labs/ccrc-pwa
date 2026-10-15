@@ -1,0 +1,17 @@
+/* The one indeterminate-spin keyframe the image lane uses, with TWO consumers:
+   `.attach-btn[aria-busy='true']::before` (attach-button.css) and
+   `.attach-chip[data-state='uploading']::before` (attach-tray.css). It has its
+   own file because a keyframe is global but a stylesheet is not — left in
+   either component's sheet, the OTHER component's story would render a ring
+   that does not turn, and copying it would be a second definition of one
+   motion. Each consumer still owns its OWN reduced-motion override, because
+   what they hold still at is different ink.
+
+   `@layer components` for the reason typed-label.css states at length. */
+@layer components {
+  @keyframes attach-spin {
+    to {
+      transform: rotate(1turn);
+    }
+  }
+}

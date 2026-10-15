@@ -62,7 +62,8 @@ vi.mock('react-virtuoso', async () => {
   };
 });
 
-const { ChatList, buildChatItems, shapeOf } = await import('../src/session/ChatList');
+const { ChatList, shapeOf } = await import('../src/session/ChatList');
+const { buildChatItems } = await import('../src/session/chatItems');
 const {
   FALLBACK_ITEM_HEIGHT, ROWS_KEY, TABLE_ROW_LINES, WELL_LINES, plainLines, rememberRows, rememberedRows,
 } = await import('../src/session/itemHeight');
@@ -70,7 +71,7 @@ type HeightBucket = import('../src/session/itemHeight').HeightBucket;
 type RowSample = import('../src/session/itemHeight').RowSample;
 type MeasuredRow = import('../src/session/itemHeight').MeasuredRow;
 type RowRecord = import('../src/session/itemHeight').RowRecord;
-type ChatItem = import('../src/session/ChatList').ChatItem;
+type ChatItem = import('../src/session/chatItems').ChatItem;
 
 /** The browser's side of the observer: it is told which elements to watch, and
  *  `measure()` reports a size for them, exactly as a layout pass would. */

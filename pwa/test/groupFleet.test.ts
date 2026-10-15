@@ -3,16 +3,9 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { groupFleet, inReleasedFold, releasedByProgramme } from '../src/fleet/groupFleet';
 import type { FleetSession, ReleasedFrom } from '../../shared/api';
+import { fleetSession } from './fleetFixture';
 
-const s = (over: Partial<FleetSession>): FleetSession => ({
-  id: 'x', wrapper: 'claude2', home: 'claude2', project: 'p', workdir: '/p',
-  workspace: null, name: null, status: 'idle', statusUpdatedAt: 0, limits: null,
-  dialogPending: false, version: null, model: null, effort: null,
-  ultracode: false, branch: null, ctxPct: null, paneCols: null, tasks: null, pr: null, archivedAt: null, archivedBytes: null,
-  hookState: null, askSummary: null, subagents: null, graphQueries: null, graphGateDenials: null, held: null,
-  bucket: 'idle', bucketSince: null, unmeasured: [], statusUnmeasured: false,
-  lifecycle: null, stoppedBy: null, swapBlocked: null, stranded: null, substrate: null, started: true, spawnState: null, ask: null, usage: null, boardProject: null, route: null, child: { kind: 'none' }, releasedFrom: null, ...over,
-});
+const s = (over: Partial<FleetSession>): FleetSession => (fleetSession({ id: 'x', wrapper: 'claude2', home: 'claude2', project: 'p', workdir: '/p', statusUpdatedAt: 0, ...over }));
 
 describe('groupFleet', () => {
   it('orders groups by their most urgent member, not alphabetically', () => {

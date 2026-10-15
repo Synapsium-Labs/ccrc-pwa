@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=b0d85171b80008bdbfd9d82edcc2e58bea134d6a04b7788fd012a1740be4f2a5
+# ccrc:generated 1 sha256=ca3a62cd1e810809c14e1c8517d0497e6d3359713d45a1aea78d83ab3df91d13
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -17347,7 +17347,7 @@ _limit_json_num() {   # file key -> that key's number, or "" when absent, null o
   # ccd read the lane as entirely unknown — measurably false, since this same zero-or-more
   # pattern matches a compact row identically. The producer keeps the spaced style anyway,
   # for a stricter future reader; this grep does not require it.)
-  grep -oE "\"$2\"[[:space:]]*:[[:space:]]*[0-9]+" "$1" | head -1 | grep -oE '[0-9]+$'
+  local __ljn_v __ljn_rc; _limit_json_num_to __ljn_v "$1" "$2"; __ljn_rc=$?; [[ -z "$__ljn_v" ]] || printf '%s\n' "$__ljn_v"; return "$__ljn_rc"
 }
 
 _limit_has_key() {   # file key -> success if the key is PRESENT, whatever its value.
@@ -17376,15 +17376,15 @@ _fmt_eta() {   # epoch-seconds -> "in 42m" / "in 6h" / "in 5d" (coarse on purpos
   else                     printf 'in %dd' $(( (d + 43200) / 86400 )); fi
 }
 
-_limit_field() {   # wrapper five|seven [maxage-secs] -> that limit %, or "" when unknown
+_limit_field_to() {   # var wrapper five|seven [maxage-secs] -> var = that limit %, or "" when unknown (printing form `_limit_field`: the tick-diet block, D-4962)
   # FOUR conditions answer "": no file, no value for this field, a caller that
   # demanded fresher telemetry than exists, and a value whose own window has
   # ENDED. They mean one thing to every caller — nobody has measured this
   # window — and what they must NOT mean is 0, which is a measurement.
-  local f="$LIMITS_DIR/$1.json" field="$2" maxage="${3:-0}" val ts now reset
-  [[ -f "$f" ]] || return 0
-  val=$(_limit_json_num "$f" "$field")
-  ts=$(_limit_json_num "$f" ts)
+  local __lf_out="$1"; shift; local f="$LIMITS_DIR/$1.json" field="$2" maxage="${3:-0}" val ts now reset __lf_t='' __lf_in=1 __lf_v __lf_rc; printf -v "$__lf_out" ''
+  [[ -f "$f" ]] || return 0; _limit_text_to __lf_t "$f" || __lf_in=
+  _limit_pick_to val "$__lf_in" "$__lf_t" "$f" "$field"
+  _limit_pick_to ts "$__lf_in" "$__lf_t" "$f" ts; [[ "$ts" != 0?* || -n "${__lf_raw-}" ]] || { __lf_v=$(__lf_raw=1; _limit_field "$@"); __lf_rc=$?; printf -v "$__lf_out" '%s' "$__lf_v"; return "$__lf_rc"; }
   _now_s_to now   # D-4961: the clock seam — fork-free under bash 5 ($EPOCHSECONDS)
   if [[ "$maxage" -gt 0 && ( -z "$ts" || $((now - ts)) -gt "$maxage" ) ]]; then return 0; fi
   # A reading whose own window has already reset describes a window that ENDED.
@@ -17398,7 +17398,7 @@ _limit_field() {   # wrapper five|seven [maxage-secs] -> that limit %, or "" whe
   # `"five": null` with no 5h window at all, and a reset timestamp for a window nobody
   # ever measured says nothing about its value — "unknown" has to stay "" (readLimits
   # keeps it null), or _limit_score's wholly-unknown branch becomes unreachable.
-  reset=$(_limit_json_num "$f" "${field}ResetAt")
+  _limit_pick_to reset "$__lf_in" "$__lf_t" "$f" "${field}ResetAt"
   if [[ -n "$val" && -n "$reset" && "$now" -ge "$reset" ]]; then
     # WAS `printf '0'`. That 0 was INFERRED from a timestamp, never observed,
     # and it entered the ranking as the best measurement on the fleet:
@@ -17430,7 +17430,7 @@ _limit_field() {   # wrapper five|seven [maxage-secs] -> that limit %, or "" whe
     [[ "$field" == "five"  && $((now - ts)) -gt 18000  ]] && return 0
     [[ "$field" == "seven" && $((now - ts)) -gt 604800 ]] && return 0
   fi
-  printf '%s' "$val"
+  printf -v "$__lf_out" '%s' "$val"
 }
 _limit_five() { _limit_field "$1" five "${2:-0}"; }   # back-compat shim
 
@@ -17490,7 +17490,7 @@ _serviceable() {   # wrapper class -> rc 0 servable | 1 unservable | 2 unmeasure
   [[ -z "$c" || "$c" == default ]] && return 3
   if [[ "$c" == fable ]]; then
     _is_anthropic_backend "$w" || { printf 'backend'; return 1; }
-    fig=$(_share_pct "$w"); rc=$?
+    _share_pct_to fig "$w"; rc=$?
     # EVERY NON-ZERO RC IS UNMEASURED, and the `*` arm is the whole fix (final
     # review finding 1). This named 1 and 2 ALONE, so any other exit code fell
     # through to the ceiling test below with `fig` EMPTY — and `[[ "" -ge 40 ]]`
@@ -17512,7 +17512,7 @@ _serviceable() {   # wrapper class -> rc 0 servable | 1 unservable | 2 unmeasure
     [[ "$fig" -ge "$FABLE_SHARE_CEILING_PCT" ]] && return 1
     return 0
   fi
-  fig=$(_limit_field "$w" seven)
+  _limit_field_to fig "$w" seven
   [[ -z "$fig" ]] && { printf 'no-figure'; return 2; }
   printf '%s' "$fig"
   [[ "$fig" -ge "$SWAP_CEILING" ]] && return 1
@@ -17648,7 +17648,7 @@ _limit_score() {   # wrapper -> account pressure = max(5h%, 7d%); "" unless BOTH
   # already had to remove three times (_ws_least_loaded, this function's old
   # `:="0"`, and _limit_field's inferred 0). The marker is per-ROW for that reason.
   local five seven fivewin
-  five=$(_limit_field "$1" five 0); seven=$(_limit_field "$1" seven 0)
+  _limit_field_to five "$1" five 0; _limit_field_to seven "$1" seven 0
   # 2>/dev/null like the sibling read at the top of this file: a lane whose row
   # does not exist yet (a fresh box, a newly added lane before its first poll) is
   # an ordinary state here, and `_limit_field` above answers it with a -f guard
@@ -17755,7 +17755,7 @@ _avail() {   # wrapper -> success if it has included-usage headroom (rate score 
   # rather than a ranking: prefer measured accounts; if NONE is measured, take
   # the first home-able account in roster order.
   local w="$1" five seven
-  five=$(_limit_field "$w" five 0); seven=$(_limit_field "$w" seven 0)
+  _limit_field_to five "$w" five 0; _limit_field_to seven "$w" seven 0
   [[ -n "$five"  && "$five"  -ge "$SWAP_CEILING" ]] && return 1
   [[ -n "$seven" && "$seven" -ge "$SWAP_CEILING" ]] && return 1
   return 0                                                # no KNOWN half at the ceiling = assume free
@@ -17792,7 +17792,7 @@ _swap_target() {   # id cur home [force] [hrc] -> destination on stdout; rc 0 = 
   # blocked wrapper, so home is never the blocked lane, and a forced call
   # that finds home recovered must go straight there instead of falling
   # through to the pool loop and picking some third lane.
-  local id="$1" cur="$2" home="$3" force="${4:-}" hrc="${5:-0}" cand best="" best_score=999 obest="" obest_score=999 sc
+  local id="$1" cur="$2" home="$3" force="${4:-}" hrc="${5:-0}" cand best="" best_score=999 obest="" obest_score=999 sc; local CCD_SHARE_MEMO_ON=1; local -A CCD_SHARE_MEMO=()
   # THE CLASS DIMENSION (routing spec §5.4). Read PURE — `_route_peek` writes no
   # note and no floor marker; a decision function that may return before acting
   # must not leave a trail (slice 1, fix round 2). `default` and no record are
@@ -24317,7 +24317,8 @@ cmd_ensure() {   # id — idempotent; used by systemd. arg is the id directly.
 # D-4960: prime `_plat_timeout`'s `-k` cache once in the supervisor's own shell (Task 3).
 # D-4961: the clock seam — `_now_s_to` / `_now_s` (Task 4, this block).
 # `_cfg_dir_to` (Task 5): an exact per-wrapper memo of `_cfg_dir`; it needs no number (spec §6.2).
-# D-4962: limits JSON parsed with builtins on a stated domain (W2).
+# D-4962: limits JSON parsed with builtins on a stated domain, the file read once per `_limit_field_to`
+#  call (Tasks 8, 9); `_share_pct_to`'s memo, scoped to one `_swap_target` call (Task 10). W2, this block.
 # D-4963: registry reads with builtins; the route chain through out-vars (W3).
 
 # D-4961 (tick-diet spec §6.2): var -> var = epoch seconds. `$EPOCHSECONDS` when the
@@ -24339,6 +24340,89 @@ _cfg_dir_to() {   # var wrapper -> var = `_cfg_dir wrapper`, memoised per wrappe
   [[ -n "${2-}" ]] || { printf -v "$1" '%s' "$(_cfg_dir '')"; return 0; }   # an empty key is no memo key
   [[ -n "${_CCD_CFG_DIR_MEMO[$2]+x}" ]] || _CCD_CFG_DIR_MEMO[$2]=$(_cfg_dir "$2")
   printf -v "$1" '%s' "${_CCD_CFG_DIR_MEMO[$2]}"
+}
+
+# D-4962 (tick-diet spec §6.3): `_limit_json_num`'s fast core. The legacy parse is a
+# `grep|head|grep` pipeline, 3 execs per call and 9 calls per idle tick. Here the file is
+# read ONCE with builtins and matched with `[[ =~ ]]`, but only on a stated domain, where
+# the answer provably equals the pipeline's: a regular, readable file read to EOF inside
+# 64 KiB (`read -n 65536` reaches EOF only for 65535 bytes or fewer; the cap bounds a
+# slurp where grep streamed) with no NUL, every byte printable ASCII or one of
+# `\t\n\v\f\r`. All of it runs under a scoped `LC_ALL=C`: under a UTF-8 locale bash 5.x
+# misses a NUL that follows a lead byte in `read -d ''` (D-3833, D-3979). The class is the
+# literal bytes `[ \t\v\f\r]`, so a match cannot cross a newline, as grep's per-line match
+# cannot; the leftmost match is the first in file order, and its digits are grep's
+# (`12.5` gives 12). Every other input — a NUL, a non-ASCII byte, a directory, FIFO,
+# unreadable or oversized file, a failed open — runs the legacy pipeline unchanged, in
+# the CALLER's locale (grep's `[[:space:]]` is locale-dependent), so its stdout, stderr
+# and rc come out as they always did. The pipeline's text exists once, in
+# `_limit_json_num_to`. `_limit_json_num`'s one code line prints the value with grep's
+# newline WHATEVER the rc: a match can come back with a non-zero rc, when a file over the
+# cap holds so many matches that `head -1` closes the pipe on grep (SIGPIPE, rc 141 under
+# `pipefail`), and the legacy printed its first match then too. THE ONE rc EDGE INSIDE THE
+# DOMAIN: that SIGPIPE needs no oversized file. Once grep's `-o` output outruns the pipe
+# before `head -1` exits (one key's matches: racily from about 800 with GNU grep, mostly
+# by 1,000; about 3,000 on macOS), the legacy answers its first match with rc 141, where
+# the fast core answers the same digits with rc 0. Stdout is equal, and no caller reads
+# this rc (each call site assigns a `$( )`, and `_limit_field_to` ignores its picks' rc),
+# so the domain keeps such a file; the equivalence suite's E5e row states the divergence.
+_limit_text_to() {   # var file -> rc 0: var = the file's text, INSIDE the stated domain | 3: outside it (the caller runs the pipeline)
+  local LC_ALL=C __lt_t='' __lt_ran='' __lt_rc __lt_ws=$' \t\n\v\f\r'
+  printf -v "$1" '%s' ''
+  [[ -f "$2" && -r "$2" ]] || return 3
+  { __lt_ran=1; IFS= read -r -d '' -n 65536 __lt_t; } 2>/dev/null < "$2"; __lt_rc=$?
+  [[ -n "$__lt_ran" ]] && (( __lt_rc == 1 )) || return 3     # open failed, a NUL, or the 64 KiB cap reached
+  [[ "$__lt_t" == *[!"$__lt_ws"!-~]* ]] && return 3            # a byte that is not printable ASCII or \t\n\v\f\r
+  printf -v "$1" '%s' "$__lt_t"; return 0
+}
+_limit_num_in_to() {   # var text key -> rc 0: var = the FIRST match's digits in file order | 1: none (var empty)
+  local LC_ALL=C __ln_c=$'[ \t\v\f\r]*' __ln_re                # literal bytes: a match never crosses a newline, as grep's per-line match cannot
+  __ln_re="\"$3\"${__ln_c}:${__ln_c}([0-9]+)"
+  if [[ "$2" =~ $__ln_re ]]; then printf -v "$1" '%s' "${BASH_REMATCH[1]}"; return 0; fi
+  printf -v "$1" '%s' ''; return 1
+}
+_limit_json_num_to() {   # var file key -> var and rc exactly as `v=$(_limit_json_num file key)` leaves them
+  local __lj_t __lj_v __lj_rc
+  if _limit_text_to __lj_t "$2"; then _limit_num_in_to "$1" "$__lj_t" "$3"; return; fi
+  __lj_v=$(grep -oE "\"$3\"[[:space:]]*:[[:space:]]*[0-9]+" "$2" | head -1 | grep -oE '[0-9]+$'); __lj_rc=$?   # the legacy pipeline, in the CALLER's locale
+  printf -v "$1" '%s' "$__lj_v"; return "$__lj_rc"
+}
+
+# D-4962 (tick-diet spec §6.3), W2 Task 9: `_limit_field` is renamed in place to `_limit_field_to`, which reads the
+# limits file ONCE (`_limit_text_to`) and picks the value, `ts` and `<field>ResetAt` from that one text through
+# `_limit_pick_to`, so its three keys can no longer straddle a writer's rename, and no `$( )` is left on the domain.
+# A file outside spec §6.3's domain picks each key through `_limit_json_num_to`'s pipeline, as it always did.
+# `_avail`, `_limit_score` and `_serviceable` call the `_to` form; `_limit_field`, below, is the printing form, and
+# it carries the rc. THE ONE GUARD THE MOVE NEEDS: the age rules compute `$((now - ts))`, and bash reads a number
+# with a leading zero as octal, so a `ts` of `08` is an arithmetic EXPANSION error, which aborts the shell's whole
+# top-level command (measured on bash 5.3 and 5.2). Inside `$( )` that killed one subshell and the caller read "";
+# in the caller's own shell it would end the supervisor. So a `ts` with a leading zero and more digits re-runs the
+# function inside `$( )`, the legacy containment, and leaves what `v=$(_limit_field …)` left: "" and rc 1 on the
+# abort, the octal answer otherwise. No producer writes one (epoch seconds); a hand edit or a corrupt row could.
+_limit_pick_to() {   # var in text file key -> var and rc as `_limit_json_num_to var file key`: from the text read once when in=1, else from the file
+  if [[ -n "$2" ]]; then _limit_num_in_to "$1" "$3" "$5"; else _limit_json_num_to "$1" "$4" "$5"; fi
+}
+_limit_field() { local __lfw_v __lfw_rc; _limit_field_to __lfw_v "$@"; __lfw_rc=$?; printf '%s' "$__lfw_v"; return "$__lfw_rc"; }   # the printing form (D-4962)
+
+# D-4962 (tick-diet spec §6.3): `_share_pct`'s memo. `_share_pct` runs python3 on every
+# call, and one `_swap_target` call can ask the same lane's share more than once (home's
+# stay gate, then the candidate loop). `_share_pct_to` answers a repeat from a memo that
+# holds the rc beside the value, `CCD_SHARE_MEMO[w]="rc:value"`. The memo is the pair of
+# dynamically scoped locals on `_swap_target`'s first `local` line, so it exists for exactly
+# one `_swap_target` call and every function that call runs, and dies with it. A second
+# call, or a sweep rewritten between two calls, reads afresh. Outside `_swap_target`,
+# `CCD_SHARE_MEMO_ON` is unset and every call runs `_share_pct` by name, so a test's
+# `_share_pct` or `python3` stub is honoured. An empty wrapper is no memo key: bash
+# refuses the empty subscript, and its assignment error ends the shell.
+_share_pct_to() {   # var wrapper -> var and rc as `v=$(_share_pct w); rc=$?` leaves them; memoised only inside one `_swap_target` call
+  local __sp_v __sp_rc
+  if [[ -n "${CCD_SHARE_MEMO_ON:-}" && -n "$2" && -n "${CCD_SHARE_MEMO[$2]+x}" ]]; then
+    __sp_rc="${CCD_SHARE_MEMO[$2]%%:*}"; __sp_v="${CCD_SHARE_MEMO[$2]#*:}"
+  else
+    __sp_v=$(_share_pct "$2"); __sp_rc=$?
+    [[ -n "${CCD_SHARE_MEMO_ON:-}" && -n "$2" ]] && CCD_SHARE_MEMO[$2]="$__sp_rc:$__sp_v"
+  fi
+  printf -v "$1" '%s' "$__sp_v"; return "$__sp_rc"
 }
 
 cmd_supervise() {   # systemd ExecStart: ensure then block until the session dies

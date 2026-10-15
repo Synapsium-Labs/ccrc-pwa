@@ -99,6 +99,10 @@ const FIXTURE_FILES: Record<string, string> = {
   'agent/package-lock.json': '{ "name": "ccrc-agent-fixture", "lockfileVersion": 3 }\n',
   'pwa/package.json': '{ "name": "ccrc-pwa-fixture" }\n',
   'pwa/package-lock.json': '{ "name": "ccrc-pwa-fixture", "lockfileVersion": 3 }\n',
+  // @ccrc/ui: INSTALLED by the builder (pwa reads its source), never built and
+  // never shipped — so it is a fixture input here and absent from the layout.
+  'ui/package.json': '{ "name": "@ccrc/ui" }\n',
+  'ui/package-lock.json': '{ "name": "@ccrc/ui", "lockfileVersion": 3 }\n',
 };
 
 /** `<home>/repo` — one commit holding `FIXTURE_FILES` plus the real script,
@@ -277,6 +281,22 @@ describe('build-release.sh: the tagged run — the matched set, checksummed', ()
       expect(argv).toMatch(new RegExp(`^${join(root, pkg)} ci\\b.*$`, 'm'));
       expect(argv).toMatch(new RegExp(`^${join(root, pkg)} run build$`, 'm'));
     }
+    // AND ui — installed, not built, and BEFORE pwa (PR #346's release-lane
+    // blocker). pwa builds @ccrc/ui from SOURCE, whose imports resolve from
+    // ui/node_modules alone, so a release machine that skips this line fails
+    // pwa's `tsc --noEmit && vite build` and every merge's prerelease stalls.
+    // A stub npm cannot reproduce that failure; the ORDER of the recorded
+    // calls is what it can prove.
+    const lines = argv.split('\n');
+    const uiCi = lines.findIndex((l) => l.startsWith(`${join(root, 'ui')} ci `));
+    const pwaCi = lines.findIndex((l) => l.startsWith(`${join(root, 'pwa')} ci `));
+    expect(uiCi, 'the builder never installs ui — pwa\'s build cannot resolve ui\'s imports').toBeGreaterThan(-1);
+    expect(uiCi, 'ui is installed after pwa — pwa\'s install and build ran without it').toBeLessThan(pwaCi);
+    expect(lines[uiCi], 'ui is installed exactly as the other three are').toBe(`${join(root, 'ui')} ci --no-audit --no-fund`);
+    expect(lines, 'ui ships no dist — nothing reads one, so the builder must not build it')
+      .not.toContain(`${join(root, 'ui')} run build`);
+    expect(listing.filter((e) => e.startsWith('ui/')),
+      'ui rides the PWA bundle in server/dist-pwa; its own tree is not part of the release set').toEqual([]);
   });
 
   it('sha256sum -c SHA256SUMS passes beside the tarball', () => {
@@ -593,6 +613,33 @@ describe('release-main.yml: the thin main-push workflow, pinned to its script (s
     expect(publish).toBeGreaterThan(attest);
     expect(src, 'the YAML must not build').not.toMatch(/npm ci|npm run|build-release\.sh/);
     expect(src, 'the YAML must not publish — the script owns the publish and its cleanup').not.toMatch(/gh release/);
+  });
+});
+
+describe('the release workflows key their npm cache on every lockfile the builder installs', () => {
+  // setup-node's `cache-dependency-path` is the cache KEY: a lockfile the
+  // builder installs from but the key omits is a package whose bump never
+  // invalidates the cache. Not a correctness failure on its own (npm ci
+  // verifies against the lockfile), but it is the same omission as PR #346's
+  // release-lane blocker one file over — ui added to the build, forgotten
+  // beside it — so it is DERIVED from the builder's own install lines rather
+  // than listed here a third time.
+  const installed = (): string[] => [...new Set(
+    [...readFileSync(SCRIPT, 'utf8')
+      .matchAll(/^\( cd "\$ROOT\/([a-z]+)"\s*&& npm ci\b/gm)].map((m) => m[1]!),
+  )].sort();
+
+  it('the builder\'s install scan is not vacuous', () => {
+    expect(installed()).toEqual(expect.arrayContaining(['agent', 'pwa', 'server', 'ui']));
+  });
+
+  it.each(['release.yml', 'release-main.yml'])('%s lists each one', (name) => {
+    const src = readFileSync(join(REPO, '.github', 'workflows', name), 'utf8');
+    const block = /^ {10}cache-dependency-path: \|\n((?: {12}\S.*\n)+)/m.exec(src);
+    expect(block, `${name}: no multi-line cache-dependency-path`).not.toBeNull();
+    const keyed = block![1]!.split('\n').map((l) => l.trim()).filter(Boolean).sort();
+    expect(keyed, `${name}: cache-dependency-path must name exactly the lockfiles build-release.sh installs from`)
+      .toEqual(installed().map((p) => `${p}/package-lock.json`));
   });
 });
 

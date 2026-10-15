@@ -250,7 +250,9 @@ describe('the scanner is looking at something', () => {
     // caps dial, NOT EXEMPT, carrying no box token.
     // 33 since `GET`/`POST /api/coord/stall-watch` (stall-watch settings W1):
     // SESSION_ONLY like the caps dial, NOT EXEMPT, no box token.
-    expect(scanRoutes('coord/routes.ts').length).toBe(33);
+    // 35 since `GET`/`POST /api/coord/collect-lane` (child-reclamation wave 10):
+    // SESSION_ONLY like the caps dial, NOT EXEMPT, no box token.
+    expect(scanRoutes('coord/routes.ts').length).toBe(35);
     // 5 in `update/routes.ts` (update-management W2, design 2026-09-20 §12):
     // `GET /api/updates`, `POST /api/updates/intent`, `POST /api/updates/refresh`
     // and `POST /api/updates/ack`, session-only and NOT EXEMPT, plus the
@@ -347,11 +349,17 @@ describe('the scanner is looking at something', () => {
     // 97 with both, re-derived on the merge of the two: 51 + 33 + 7 + 2 + 4 = 97.
     // The docs four are HTTP routes and none is EXEMPT, so the HTTP count moves
     // 90 -> 94, the gated count 57 -> 61, and the exempt-HTTP count stays 33.
+    // 99 since `GET`/`POST /api/coord/collect-lane` (child-reclamation wave 10) put
+    // two more in `coord/routes.ts`: 51 + 35 + 7 + 2 + 4 = 99. Both are HTTP routes
+    // and neither is EXEMPT, so the HTTP count is now 96, the gated count 63, and
+    // the exempt-HTTP count stays 33.
     // 98 since D-5047's `POST /api/sessions/:id/dialog/text` (session-gated like `/dialog`, NOT EXEMPT, no box token):
     // 52 + 33 + 7 + 2 + 4 = 98, the HTTP half 94 -> 95, the gated count 61 -> 62, the exempt-HTTP count still 33.
     // 99 since D-5048's `POST /api/sessions/:id/dialog/multi` (session-gated like `/dialog`, NOT EXEMPT, no box token):
     // 53 + 33 + 7 + 2 + 4 = 99, the HTTP half 95 -> 96, the gated count 62 -> 63, the exempt-HTTP count still 33.
-    expect(ROUTES.length).toBe(99);
+    // 101 on the merge of main into child-reclamation wave 10, re-derived on the merged tree:
+    // 53 + 35 + 7 + 2 + 4 = 101, the HTTP half 98, the gated count 65, the exempt-HTTP count still 33.
+    expect(ROUTES.length).toBe(101);
     // …and the three partitions add up: the websockets plus the HTTP half.
     expect(ROUTES.filter(isWs).length + ROUTES.filter((r) => !isWs(r)).length).toBe(ROUTES.length);
     // DERIVED, not the literal 68 (D-1242's family, extended — F7). `WS_ROUTES`
@@ -375,6 +383,7 @@ describe('the scanner is looking at something', () => {
       'POST /api/runs', 'GET /api/runs', 'GET /api/feed', 'POST /api/coord/pause',
       'POST /api/coord/reclaim-pause',
       'GET /api/coord/stall-watch', 'POST /api/coord/stall-watch',
+      'GET /api/coord/collect-lane', 'POST /api/coord/collect-lane',
       'POST /api/sessions/:id/prompt', 'GET /ws/fleet', 'GET /ws/pty/:id',
       'POST /api/auth/login', 'POST /api/auth/logout', 'GET /api/auth/status',
       // Task 8's four, which split TWO ways under the gate: the register pair is
@@ -496,7 +505,7 @@ describe('the scanner is COMPLETE — measured against Fastify\'s own route tabl
     const w = await openApp(); app = w.app;
     const real = realRouteTable(app);
     expect([...real].filter((r) => r.startsWith('UNPARSED'))).toEqual([]);
-    // 99 scanned + the static wildcard when the bundle is built.
+    // 101 scanned + the static wildcard when the bundle is built.
     // (59 stood here across several waves; the account-pools merge is where
     // it was finally re-measured, not where it went stale.)
     expect(real.size).toBe(ROUTES.length + (HAS_PWA ? 1 : 0));
@@ -955,7 +964,7 @@ describe('with CCRC_AUTH off — the shipped default', () => {
   });
 
   it('the gate changes the status of EXACTLY the gated routes, and of nothing else', async () => {
-    // THE PROPERTY, in one loop over all 96 HTTP routes, with THREE probes each:
+    // THE PROPERTY, in one loop over all 98 HTTP routes, with THREE probes each:
     // dark, armed-anonymous, and armed-with-a-live-session. Comparing dark
     // against AUTHENTICATED is what makes this a real status assertion for the
     // gated routes too (review R1) — the earlier version asserted only
@@ -1019,7 +1028,7 @@ describe('with CCRC_AUTH off — the shipped default', () => {
           }
 
           // 3. Armed WITH a live session: identical to dark, for every route that
-          //    is not itself flag-aware — the assertion that covers all 96 HTTP routes, not the 33 exempt.
+          //    is not itself flag-aware — the assertion that covers all 98 HTTP routes, not the 33 exempt.
           //    (Both counts are derived and checked against this very sentence at the
           //    bottom of this file. They read fifty-five and fifteen for several builds
           //    after the tree had grown past both — D-1223.)

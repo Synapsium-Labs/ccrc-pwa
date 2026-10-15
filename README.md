@@ -76,7 +76,8 @@ git clone https://github.com/Synapsium-Labs/ccrc-pwa.git && cd ccrc-pwa
 bash install.sh
 ```
 
-That builds the server, the PWA and the agent, then hands off to `ccrc install`, which
+That builds the server, the PWA (installing `ui/`, the design system the PWA is built from, first)
+and the agent, then hands off to `ccrc install`, which
 seeds `~/.ccrc` (the roster, `ccrc.env`, a node id), places the tree under
 `~/ccrc-versions/` with `~/ccrc` a symlink to it, puts `ccrc` and `ccd` in
 `~/.local/bin`, installs and starts the systemd user units and timers (on macOS, one
@@ -999,7 +1000,17 @@ re-sends the write with the server's key, so nothing is written until the operat
 will do. The choice is one row in `coord.db` and applies to the whole fleet. It never overrides
 `stall-watch-disabled`, `mail-disabled` or `mail-gate-strict`; a lost row, or a field of it that cannot be read,
 means the files and the built-in quiet time.
-A server without the route shows the section as not available. In remote mode the foot of the fleet screen always
+A server without the route shows the section as not available. Settings then has a further section, **Temp root
+collector** (child-reclamation wave 10), read and written through `/api/coord/collect-lane` by a poll of its own. It
+shows only what the server decided and counts nothing itself: the collector's state now (live, shadowed, stopped by
+the cleanup pause, safety-stopped, not running, or unknown fleet), what armed it (Settings, the fleet box's legacy
+file, both during the handoff, or neither), whether that file's retirement is recorded, and the would-collect and held
+counts. Live opens a confirm sheet from the server's 409, naming the fleet node, how fresh its measurement is and both
+capabilities, and **Set Live** re-sends the write with the server's key; a stored Live for another node, or a database and
+journal that disagree, offers **Confirm Live again**. Off stays disabled until the file's retirement is recorded, and
+the section offers **Pause all cleanup**, which stops child reclamation, archived-workspace expiry, the dead-coordinator
+lane and this collector; Resume stays on `/runs`. A server without the route shows "Not available on this server."
+In remote mode the foot of the fleet screen always
 carries `BuildLine`: `fleet <version> · server <version>`, read from the node inventory. A side reads
 `unversioned (<sha>)` for a stamp with no tag and adds `dirty` for a dirty tree; it is amber unless the side
 is a clean versioned release, and `—` when that node's stamp cannot be stated (never measured, unread, or the
@@ -2772,12 +2783,30 @@ shown as a gap. It re-reads on every open and needs the coordination database.
 ### The terminal drawer
 
 `>_` opens a real terminal on the session's own tmux pane — xterm.js over `/ws/pty/<id>` — and keystrokes go
-straight to the pane. The server pins the window at 220×50 before attaching, so a phone-width client cannot
-reflow the pane's history, and puts it back to that canonical size when the drawer closes. A quick-key bar
-supplies what a phone keyboard lacks: `esc`, the four arrows, `tab`, `⇧tab` and `⏎`. Scrolling — the wheel, or a
-drag — never sends arrow keys: it pages through the pane's own history, read with `tmux capture-pane` over
-`GET /api/sessions/:id/pane/history`, which changes nothing on the box (tmux's copy mode would wedge every
-injected prompt for as long as it lasted); scrolling back to the bottom, or **Back to live**, returns to the pane.
+straight to the pane. The server pins the window at 220×50 before attaching, so no client can reflow the pane's
+history, and puts it back to that canonical size when the drawer closes; the drawer itself attaches a client
+exactly the window's size, 220×51 with tmux's status row, at every screen width, so tmux never pans it or fills
+it and the drawer never sends a resize (spec `docs/superpowers/specs/2026-10-14-terminal-drawer-every-width-design.md`).
+The screen width chooses the view. Where 220 columns fit at 11px or more (about 1482 CSS px and up) the drawer
+shows the **grid**, the terminal itself, at the largest type up to 14px; on anything narrower — every phone and
+tablet, and most laptop screens — it shows the **wrapped** view, the same screen re-wrapped to the width as text, with
+Claude Code's rules, tables and hanging indents kept, a wide table scrolling sideways on its own, and tmux's
+status row dropped. A chip in the header names the view and flips it, remembered per device; a grid forced onto
+a screen it does not fit scrolls sideways and its chip reads `grid · scrolls`. Typing is live on every device: a
+tap on the wrapped view focuses the terminal, which it keeps off-screen, so a phone keyboard (autocorrect, swipe
+and dictation included) or a physical one types straight into the session, and a word still being composed shows
+at the caret. A key bar supplies what a phone keyboard lacks — `esc ↑ ↓ ⏎ ^C ⌫` and, behind `⋯`, `← →`, `tab`,
+`⇧tab`, `space`, `PgUp`/`PgDn`, `^U ^O ^R ^T ^B` and a one-shot `ctrl` for the next letter typed (the grid keeps
+its strip of `esc`, the arrows, `tab`, `⇧tab`, `⏎` and `^C`) — and its `^C` and `^D` ask first while Claude Code
+shows *Press Ctrl-C again to exit*; a physical Escape, while the terminal has focus, goes to Claude Code and does
+not close the drawer. A paste, in either view, is taken before xterm sees it and sent with every control
+character but tab and newline removed, so a clipboard cannot end its own bracketed paste; text a keyboard
+inserts (a clipboard chip, a suggestion, an input method's commit) is sent the same way unless it is one key's
+bytes, so it cannot end a bracketed paste or submit a line either. Scrolling up in the
+grid — the wheel, or a drag — and the bar's `hist` key in either view never send arrow keys: they page through
+the pane's own history, read with `tmux capture-pane` over `GET /api/sessions/:id/pane/history`, which changes
+nothing on the box (tmux's copy mode would wedge every injected prompt for as long as it lasted); scrolling back
+to the bottom, or **Back to live**, returns to the pane.
 
 ### Pull requests from the phone
 
@@ -2857,12 +2886,25 @@ mail and run records still land in the feed.
 
 **Answering inside the app.** A pending question raises a bottom sheet on the session screen and puts a waiting
 dot on its row and card. A menu Claude Code drew becomes large tappable rows carrying the digits the TUI answers
-to, the preselected one marked `❯`; an `AskUserQuestion` shows the full question and the option descriptions
-(only the first question of a multi-question ask is tappable); a permission prompt shows **Allow** and **Deny**
-(Deny sends Escape); a menu the server could not parse is shown raw beside **Open terminal to answer**. A tap
-shows `answering…`, and the sheet closes only when the server reports the menu gone; a stale answer is refused
-and the sheet redraws from the current menu. Dismissing it only hides it — the row keeps saying `waiting`, and
-**Answer** in the transcript raises it again.
+to, the preselected one marked `❯`; a permission prompt shows **Allow** and **Deny** (Deny sends Escape); a menu
+the server could not parse is shown raw beside **Open terminal to answer**. A tap shows `answering…`, and the
+sheet closes only when the server reports the menu gone; a refused answer says why, by the route's code. After a
+stale-question refusal the sheet drawn from the pane redraws from the current menu, while the one drawn from the
+hook's envelope, which the refusal does not change, says the answer didn't land. Dismissing it only hides it — the
+row keeps saying `waiting`, and **Answer** in the transcript raises it again.
+
+An `AskUserQuestion` shows the full question, its header and the option descriptions, and the sheet follows the
+pane through the whole ask (D-5089): the tappable question is the one the pane is painting, matched by its labels
+and, where two questions share them, by the pane's title; the sheet says which of N it is, lists the others
+read-only, and ends on the pane's review screen with **Submit answers** and a **Cancel** that says first that it
+declines every answer. Own words go through the question's own free-text row (`/dialog/text`, D-5090): the text
+stays in the field until the terminal shows the answer taken, a refusal says why and keeps it, a row left holding
+the whole text is submitted without typing it again, a paste over the 1000-character limit is counted and held
+rather than cut, a tab or another control character holds **Send** with a line saying why, and **Chat about this**
+is a row of its own that says it declines the ask. A multiSelect question is a set of checkboxes, committed whole
+with **Next** (`/dialog/multi`, D-5091). One send is under way at a time, and the rows that decline the whole ask
+wait for it. When the hook's envelope ages out, thirty minutes into an unanswered ask, the sheet carries on from the
+pane alone with the same rows, field and boxes.
 
 Five routes act on what the pane already shows, each with its own named refusals:
 
@@ -3847,7 +3889,8 @@ finish nor undo is kept and listed as `quarantine-kept`, and no session acts on 
 `$REG/collect-lane-live`: until the operator touches that file by hand in the registry the server reads (the fleet
 box's, through the agent, when the server runs `CCRC_FLEET=remote`; nothing in this tree writes it), the lane audits
 and records what it would collect — a feed row and an entry in the cleanup row on `/runs` — and never composes
-`ws-collect`. Removing the file shadows it again. An act job reads the file only at its last check, once its second audit has
+`ws-collect`. Wave 10 adds an arm in Settings and then retires this file (below); until that retirement, removing the file
+shadows the lane again unless Settings arms it. An act job reads the file only at its last check, once its second audit has
 licensed the act. A job that finds the file changed since the last such read writes one feed row saying which way it now stands,
 clears every id's pair and composes nothing, so the first act after a change it sees waits for two fresh audits. A change undone
 between two such reads is never seen and writes no row, and an arming writes its row only when the first id is ready to act.
@@ -3873,6 +3916,70 @@ cleanup row, and an answer that stands for the whole box is listed once.
 - you know that any process of this uid can touch `$REG/collect-lane-live`, as it can `expire-lane-live`, and that the
   lane reports a change only when an act job next reads the file, so a missing "now live" or "now shadowed" row means not
   yet seen, never unchanged.
+
+**The switch in Settings (child reclamation wave 10).** The lane now has two arms, then one. It is live when either
+holds:
+- the legacy file `$REG/collect-lane-live` stands and its retirement has not been recorded;
+- Settings (**Temp root collector**) stores exactly Live for the fleet node the server measured on its current
+  connection to the fleet box (in local mode, the server box's own node).
+
+A raised cleanup pause, a registry that cannot be listed, a connection that changed under a check, and a missing
+`collect-v1` or `reclaim-pause-v1` beat both arms. Since wave 10 the act job's last check reads the whole switch, not
+the file alone: a transition row is written only when the lane flips between live and not live (the file's retirement
+writes its own row), so a move from the file to Settings while both arm writes no row and keeps every pair. The choice
+is one row in `coord.db`, and every accepted change, the file's retirement included, first appends one generation to
+`~/.ccrc/collect-lane-generation.log`, a file the server owns and nothing else writes. The row and the journal must
+agree exactly. The untouched row with no journal is the one starting state; any other disagreement, or a journal that
+cannot be read, is safety-stopped and composes nothing. A fresh change in Settings (a confirmed Live, or Off once the
+file's retirement is recorded) repairs a journal that is ahead of or behind the row; a journal that is missing after
+use, malformed or unreadable cannot be repaired from Settings, and the server never rebuilds it from the row.
+
+A failed append undoes its own bytes. The server truncates the journal back to the length it measured before the failed
+write, or removes a file the failed write itself created, as a best effort, and reports the original error. So a failed
+write leaves the lane as it stood, and a failed Off over a stored Live leaves the collector armed; **Pause all cleanup**
+still stops it. The undo cannot cover three cases:
+- a kill or a power loss in the middle of a write can leave a torn, empty or zero-filled tail, which reads malformed;
+- a kill after the write but before the database commits, an undo that fails after a full write, a close that throws
+  after the record is durable, or a failure at the database update or commit leaves the journal one generation ahead:
+  a mismatch that a fresh confirmed change repairs, and that arms nothing;
+- an undo that itself fails after a short write, or on a file the failed write created, can leave a torn or empty
+  file; the same hand repair applies.
+
+If Settings reports the generation journal malformed after the server stopped mid-write:
+1. Raise the cleanup pause first (Pause all cleanup).
+2. On the server box, cut `~/.ccrc/collect-lane-generation.log` just after its last complete `{"generation":N}` record.
+   Remove only the bytes that follow that record, and never a complete record.
+3. If the file holds no complete record, delete it. That is valid only beside the untouched seed, which is what a crash
+   in the very first write leaves.
+4. Make a fresh confirmed change in Settings.
+5. Lower the pause.
+
+**Moving control to Settings** is one hand transition:
+1. Deploy a build with the switch.
+2. In Settings, confirm Live for the fleet node the server is connected to.
+3. Remove `$REG/collect-lane-live` by hand on the fleet box. That act is the operator's, never a session's.
+4. The next registry listing that is coherent, unpaused and on the same connection proves the file absent, and the
+   server records its retirement through the journal, with one feed row. From then on Settings alone arms the lane.
+
+The lane stays live from step 2 to step 4, so the change of source alone clears nothing. After the retirement, a
+re-created file is reported and ignored. **Off is refused before the retirement** (`409 marker-still-controls`):
+while the file still controls the lane, an older build that a rollback returns to would honour it, so Settings cannot
+turn the collector off, and the section offers **Pause all cleanup** instead. Live is refused while sign-in is dark
+(`403 sign-in-unarmed`). After an update, a stored Live arms again only once the same fleet node is measured on the
+new connection. An Off accepted after an act's `ws-collect` was handed to ccd does not stop that act; the choice
+applies from the collector's next check.
+
+**What a restore can and cannot undo.** Every `ccrc update` and `ccrc backup` snapshots `coord.db`, but no backup
+copies `collect-lane-generation.log`, and no restore, rollback or watchdog moves it: leave it in place when you put a
+`coord.db` snapshot back. A database restored alone from before the switch's last change then disagrees with the
+journal and is safety-stopped, so an older snapshot cannot arm the collector again. One case reopens that once the
+lane is repaired: a snapshot from before the legacy file's retirement was recorded. Off is refused over it, so its
+only repair is a confirmed Live, and that Live keeps the snapshot's unrecorded retirement: a standing or re-created
+`$REG/collect-lane-live` then arms the lane again, on any node, and Off is refused again, until a coherent, unpaused
+listing on the same connection shows the file absent and records its retirement once more. Before confirming Live over
+such a snapshot, make sure the legacy file is gone. A restore that rolls both files back together, a whole home or a
+whole file system, is outside this proof: after one, raise the cleanup pause and make a fresh confirmed change in
+Settings before allowing Live.
 
 **Reclaim's tail, corrected in wave 7 (it is shared with `ws-expire`).** `containment-refuted` is the failed word the
 tail prints when it proves that what it would remove is not only the child's own (another session's row or tree at,
@@ -5470,7 +5577,7 @@ implements — that list is the authority; the table below is a map:
 | `ws-archive` · `ws-restore` — `--session <id>` | fold an idle workspace out of the live fleet / back in — costs the tmux pane, deletes nothing |
 | `ws-audit --session <id>` · `ws-reap --expect <token> --session <id>` | the read-only reap preview, which mints a token; the human-confirmed removal, every guard re-proved on the box |
 | `ws-reclaim …` | the server's removal of a CHILD workspace a run minted — never run by hand or by a session |
-| `ws-collect --expect <token> --session <id>` | the server's removal of an orphaned, witnessed child TEMP ROOT, by quarantine rename — never run by hand or by a session; its audit is `ws-audit --session <id> --collect`, and the server's collector lane composes it only once the operator has armed it (`$REG/collect-lane-live`) |
+| `ws-collect --expect <token> --session <id>` | the server's removal of an orphaned, witnessed child TEMP ROOT, by quarantine rename — never run by hand or by a session; its audit is `ws-audit --session <id> --collect`, and the server's collector lane composes it only once the operator has armed it: in Settings (Temp root collector) for the connected fleet node, or by `$REG/collect-lane-live` until that file's retirement is recorded |
 | `ws-rm [--reason <text>] <id>` · `ws-gc [--prune]` | terminal-only: tear one workspace down, refusing anything it might destroy; report every worktree's state, size and idle time (`--prune` acts on each row, reclaiming or declining it) |
 | `ws-attic --session <id>` · `ws-attic --drop <id>` | list / drop the commits a removal pinned under `refs/ccrc/attic/<id>/` |
 | `coord-pause --state on\|off` · `reclaim-pause --state on\|off` · `project-pool --project <p> --pool <name>\|--clear` | raise / lower the coordinator pause; raise / lower the cleanup pause (`$REG/reclaim-paused`: child reclamation, the expiry of archived workspaces and the dead-coordinator lane); tag / untag a project's pool |
@@ -5846,11 +5953,16 @@ synchronous `hello` frame closes that gap without doing anything yet:
 No root `package.json` and no root runner: three runnable packages — `server/`, `agent/` and `pwa/`, each
 `"type": "module"` — and `shared/`, which is not a package (its bare `"type": "module"` marker is
 load-bearing: without it `tsc` emits CommonJS into `dist/shared/` and the built server dies on startup).
+`ui/` is `@ccrc/ui`, the design system, which `pwa` consumes as SOURCE (`file:../ui`): its imports
+resolve from `ui/node_modules` and never from `pwa/node_modules`, so `cd ui && npm ci` comes before
+anything that typechecks, tests or bundles `pwa` — `install.sh`, `deploy/deploy.sh` and
+`deploy/build-release.sh` all do it in that order.
 
 ```bash
 cd agent  && npm ci && npm run test      # vitest, hermetic
+cd ../ui  && npm ci                      # BEFORE pwa: pwa builds @ccrc/ui from source
 cd ../pwa && npm ci && npm run test      # jsdom component tests
-cd ../server && npm ci && npm run test   # server last: typecheck-tests needs agent/ and pwa/ node_modules
+cd ../server && npm ci && npm run test   # server last: typecheck-tests needs agent/, ui/ and pwa/ node_modules
 ./node_modules/.bin/tsc --noEmit         # in any package — the typecheck CI runs
 npm run build                            # server/agent: tsc → dist/; pwa: tsc + vite → ../server/dist-pwa
 ```
@@ -6022,7 +6134,9 @@ predates the launcher: its `ccd` is the whole Bash `ccd`, and it is the only fil
 directory also holds the unit files the lane backed up (`systemctl --user daemon-reload` after putting
 one back) and, on the server box, the `coord.db` snapshot — restore that one only with `ccrc.service`
 stopped, and only to recover data: migrations are forward-only, and an older server reads a newer
-`coord.db`.
+`coord.db`. Leave `~/.ccrc/collect-lane-generation.log` in place when you put that snapshot back: no backup copies
+it, and a `coord.db` restored alone from before the switch's last change then disagrees with it, so the temp-root
+collector stays safety-stopped until a fresh change in Settings.
 
 ## Live end-to-end tests
 
@@ -6194,3 +6308,8 @@ copy, so the upstream licence sits byte for byte in `ccd/history/LICENSE.lossles
 `ccd/history-skill/LICENSE.lossless-claw`, beside the material it covers, and ships in every release
 tarball. `ccd/history/PROVENANCE` names each copied item, its upstream file and what changed, and
 each copied item carries a one-line comment saying where it came from: not a licence header.
+
+`ui/src/styles/reset.css` is derived from Tailwind CSS's preflight (Tailwind Labs, Inc.,
+MIT-licensed; Copyright (c) Tailwind Labs, Inc.), at tailwindcss `v4.3.3`, on the same terms:
+the upstream licence sits byte for byte beside it in `ui/src/styles/LICENSE.tailwindcss`, and
+the file's opening comment says what changed.

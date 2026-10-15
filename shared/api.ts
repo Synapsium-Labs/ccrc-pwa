@@ -8615,15 +8615,16 @@ export const PANE_HISTORY_LINES = 2000;
  * smaller than the window is not a smaller window, it is a VIEWPORT INTO one,
  * and tmux pans that viewport to follow the cursor — so a line's beginning
  * scrolls off the left while the reader is typing. `TerminalDrawer` answers by
- * shrinking its type, down to a floor, until its grid is at least this wide,
- * and says so in its header when even the floor cannot get there.
+ * attaching at the window's own size, so there is nothing to pan, and shows the
+ * grid where 220 columns fit at 11px or more and a re-wrapped view where they
+ * do not.
  *
- * THIS IS TODAY'S ANSWER, NOT THE LAST ONE. The drawer program's wave 3 lets a
- * phone-width drawer narrow the window deliberately, under a guard that only
- * allows a width the pane's own history can absorb. When that lands the window
- * stops being one constant and starts being a measurement, and every reader of
- * this value becomes a reader of that measurement. In the PWA those readers
- * are `TerminalDrawer`'s `fitToWindow` and the clip notice it raises.
+ * THE WINDOW RESTS AT THIS SIZE. The drawer attaches a client exactly this size
+ * plus tmux's status row (`TMUX_STATUS_ROWS`, below), so no glass pans it (spec
+ * 2026-10-14 §5.1, D-5005). A wide glass may later have the window follow it,
+ * never below `READER_MIN_COLS`, under that spec's guarded sizer (§6, stage 2).
+ * In the PWA the readers of this value are the drawer's attach and its view
+ * chooser.
  *
  * `ccd/ccd` spawns with the same pair and cannot import this file (bash), so it
  * carries its own copy — the same shape `READER_MIN_COLS` already has. Holding
@@ -8632,6 +8633,16 @@ export const PANE_HISTORY_LINES = 2000;
  */
 export const PINNED_WINDOW_COLS = 220;
 export const PINNED_WINDOW_ROWS = 50;
+
+/**
+ * The rows tmux takes from every attached client for its status line. A client
+ * of R rows views a window of R − TMUX_STATUS_ROWS rows exactly (spec 2026-10-14
+ * W8), so a drawer that attaches at PINNED_WINDOW_ROWS + TMUX_STATUS_ROWS is the
+ * window's size and tmux has nothing to pan (W6). True while `ccd/tmux.conf`
+ * leaves tmux's default single status line; `drawer-status-rows.test.ts` reds
+ * the day it does not.
+ */
+export const TMUX_STATUS_ROWS = 1;
 
 /**
  * ONE MEASUREMENT OF A PANE, and its failures told apart.
@@ -8657,8 +8668,9 @@ export const PINNED_WINDOW_ROWS = 50;
  * numbers at attach predict — nothing scrolls into history while a full-screen
  * app holds the pane (F9, measured: 1852 -> 11359 in one step at alt-exit).
  *
- * Wave 3 reads `limit`, `width` and `height` off THIS probe and adds no second
- * reader — one reader per field is the wire rule.
+ * Stage 2 of the 2026-10-14 drawer design reads `limit`, `width` and `height`
+ * off THIS probe (its fit target) and adds no second reader — one reader per
+ * field is the wire rule.
  */
 export type PaneProbe =
   | { ok: true; history: number; limit: number; width: number; height: number; alternate: boolean }
@@ -8684,8 +8696,9 @@ export type PaneProbe =
  * THE PROBE'S FINER VOCABULARY IS ADAPTER-LOCAL AND DOES NOT REACH THE WIRE.
  * `PaneProbe` tells `unreadable` from `unparseable` because the adapter must not
  * narrow a distinction it received, but nothing here carries that pair: the
- * probe exists to SIZE the capture and, from wave 3, to feed the fit floor —
- * both server-side, where all four arms are intact. So the CAPTURE alone decides
+ * probe exists to SIZE the capture and, from stage 2 of the 2026-10-14 drawer
+ * design, to feed its fit target (`PaneProbe`, above) — both server-side, where
+ * all four arms are intact. So the CAPTURE alone decides
  * this reply's status, and a probe that failed while the capture succeeded is a
  * 200 with the three measured fields simply absent. Absent is the whole of what
  * the client is told, and it is enough: the drawer's behaviour on a failed probe
@@ -9883,6 +9896,105 @@ export const COLLECT_BOX_LABELS = {
 } as const;
 export type CollectBoxLine = keyof typeof COLLECT_BOX_LABELS;
 export const COLLECT_BOX_LINES: readonly CollectBoxLine[] = Object.keys(COLLECT_BOX_LABELS) as CollectBoxLine[];
+
+/* ── child-workspace reclamation wave 10: the collector switch in Settings (path-identity spec 2026-10-12 §5) ──────
+ * APPENDED at the foot for wave 8's and wave 9's reason above: README and the frozen spec and plan corpus cite this
+ * file by line, and an insertion above them moves every anchor under it. Declarations only; the block imports
+ * nothing. No code line here spells the fleet box's legacy switch file: its one spelling is L1's. */
+
+/** The stored choices (path-identity spec 2026-10-12 §5.2). Only an exact `live` arms the lane through Settings. Any
+ *  other stored token reads, and arms nothing. Spelled once, as a total table's keys; the runtime list is derived. */
+export type CollectLaneChoice = 'off' | 'live';
+const COLLECT_LANE_CHOICE_TABLE: Readonly<Record<CollectLaneChoice, true>> = { off: true, live: true };
+export const COLLECT_LANE_CHOICES: readonly CollectLaneChoice[] =
+  Object.keys(COLLECT_LANE_CHOICE_TABLE) as CollectLaneChoice[];
+/** The one choice guard (§5.2), for the route's body and the PWA's reader. Its body is pinned. It never uses `in` or
+ *  `MAP[v]`, because `'toString' in` any object literal is true. `toString`, `LIVE` and `shadowed` are not choices. */
+export function isCollectLaneChoice(v: unknown): v is CollectLaneChoice {
+  return typeof v === 'string' && (COLLECT_LANE_CHOICES as readonly string[]).includes(v);
+}
+
+/** What armed the lane, as the resolver measured it (§5.5, §5.7): Settings, the fleet box's legacy file, both during
+ *  the hand transition, or neither. Only a live lane is armed by anything. */
+export type CollectArmedBy = 'settings' | 'legacy-marker' | 'both' | 'neither';
+
+/** `POST /api/coord/collect-lane`'s body (§5.6). `confirm`, when present, is the key of 8 lowercase hex characters
+ *  that a 409 answered with. The route refuses any other key, and any other shape of `confirm`, with a 400. */
+export interface CollectLaneRequest { readonly choice: CollectLaneChoice; readonly confirm?: string }
+
+/** Every refusal word `POST /api/coord/collect-lane` answers with (§5.6), and the one guard that narrows to one.
+ *  Spelled once, as a total table's keys; the runtime list is derived. */
+export type CollectLaneRefusal =
+  | 'bad-request' | 'not-configured' | 'sign-in-unarmed' | 'confirm-required' | 'confirm-stale'
+  | 'marker-still-controls' | 'conflict' | 'state-unmeasurable' | 'write-failed';
+const COLLECT_LANE_REFUSAL_TABLE: Readonly<Record<CollectLaneRefusal, true>> = {
+  'bad-request': true, 'not-configured': true, 'sign-in-unarmed': true, 'confirm-required': true,
+  'confirm-stale': true, 'marker-still-controls': true, conflict: true, 'state-unmeasurable': true,
+  'write-failed': true,
+};
+export const COLLECT_LANE_REFUSALS: readonly CollectLaneRefusal[] =
+  Object.keys(COLLECT_LANE_REFUSAL_TABLE) as CollectLaneRefusal[];
+/** The refusal guard: the choice guard's `includes` form, never `in`, for the same reason. Its body is pinned. */
+export function isCollectLaneRefusal(v: unknown): v is CollectLaneRefusal {
+  return typeof v === 'string' && (COLLECT_LANE_REFUSALS as readonly string[]).includes(v);
+}
+
+/** `GET /api/coord/collect-lane`'s answer, and a 200 POST's re-read (§5.6). No field is a path.
+ *  - `stored` is the singleton row as read, and `choice` is its RAW token. An absent row never reaches a view: the
+ *    route answers 503 for it. A malformed row and an unreadable one are never folded into each other.
+ *  - `journal` is the server-owned generation journal as read. `control` is the row and the journal together (§5.2).
+ *    `mismatch` is a parseable pair, the journal ahead of or behind the row, which a fresh operator write repairs.
+ *    `unmeasurable` cannot be repaired from the route. `bootstrap` means the untouched seed beside no journal.
+ *  - `effective` is the resolver's answer (Figure 5). `armedBy` is `neither` unless `state` is `live`.
+ *  - `marker` is the legacy file as the registry listing showed it, and its retirement latch as the row holds it.
+ *  - `node` is the fleet node measured on the current connection, and how the stored node compares with it.
+ *  - `attention` holds the server's own counts. Null means no population has been measured yet. The PWA counts nothing.
+ *  - `remedy` is a bounded sentence or null. `notice` is null on a GET. On a 200 POST it is the sentence saying that
+ *    the choice applies from the collector's next check. */
+export interface CollectLaneView {
+  readonly stored:
+    | { readonly read: 'row'; readonly choice: string; readonly fleetNodeId: string | null;
+        readonly markerRetiredAt: number | null; readonly generation: number; readonly updatedAt: number }
+    | { readonly read: 'malformed' | 'unreadable' };
+  readonly journal:
+    | { readonly read: 'ok'; readonly max: number }
+    | { readonly read: 'missing' | 'malformed' | 'unreadable' | 'not-regular' };
+  readonly control:
+    | { readonly state: 'coherent'; readonly bootstrap: boolean }
+    | { readonly state: 'mismatch'; readonly journal: 'ahead' | 'behind' }
+    | { readonly state: 'unmeasurable' };
+  readonly effective: {
+    readonly state: 'live' | 'shadowed' | 'paused' | 'safety-stopped' | 'not-running' | 'unknown-fleet';
+    readonly armedBy: CollectArmedBy;
+  };
+  readonly marker: { readonly listing: 'stands' | 'absent' | 'unmeasured'; readonly latch: 'set' | 'unset' | 'unmeasured' };
+  readonly node:
+    | { readonly state: 'known'; readonly nodeId: string; readonly measuredAt: number;
+        readonly stored: 'none' | 'this' | 'other' | 'unread' }
+    | { readonly state: 'unmeasured' | 'collision'; readonly stored: 'none' | 'set' | 'unread' };
+  readonly caps: { readonly collect: boolean; readonly reclaimPause: boolean };
+  readonly attention: { readonly wouldCollect: number; readonly held: number; readonly boxLines: number } | null;
+  readonly remedy: string | null;
+  readonly notice: string | null;
+}
+
+/** The 409 confirm body (§5.6): the facts the confirm sheet names, and the key a re-POST sends back as `confirm`.
+ *  `confirm-stale` carries FRESH facts and a fresh key. The key also covers the server's boot nonce and the connection
+ *  epoch, which the wire never carries. `repair` names a journal that disagrees with the database, which a confirmed
+ *  Live repairs. */
+export interface CollectLaneConfirmRequired {
+  readonly ok: false;
+  readonly error: 'confirm-required' | 'confirm-stale';
+  readonly confirmKey: string;
+  readonly facts: {
+    readonly node: { readonly nodeId: string; readonly measuredAt: number };
+    readonly caps: { readonly collect: boolean; readonly reclaimPause: boolean };
+    readonly paused: boolean;
+    readonly marker: 'stands' | 'absent';
+    readonly repair: 'journal-ahead' | 'journal-behind' | null;
+    readonly attention: { readonly wouldCollect: number; readonly held: number; readonly boxLines: number } | null;
+  };
+}
 
 /** Every refusal `POST /api/sessions/:id/dialog` answers with (`answerDialog`, `server/src/inject/send.ts`), each a 409.
  *  Spelled once, as a total table's keys, and the list derived: a code that leaves the union and stays here, or joins it

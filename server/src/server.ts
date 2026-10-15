@@ -53,6 +53,7 @@ import type { SpawnPty } from './pty.js';
 import type { PushService } from './push.js';
 import type { NotifyLog } from './notifylog.js';
 import { Presence } from './presence.js';
+import type { FleetIdentityCell } from './fleetidentity.js';
 import type { ChildReclaimOutcome, ChildReclaimRequest } from './coord/childReclaim.js';
 import { MAIL_TOKEN_HEADER, checkMailToken, type BoxTokenHolder } from './coord/token.js';
 import { registerCoordRoutes } from './coord/routes.js';
@@ -67,6 +68,7 @@ import { buildInfoOfRow } from './update/inventory.js';
 import type { PoolEdgeLog } from './coord/pooledgelog.js';
 import type { CataloguePoller } from './update/catalogue.js';
 import type { UpdateIntentLog } from './coord/updateintentlog.js';
+import type { CollectLaneJournal } from './collectLane.js';
 import { AuthSecretUnusable, readAuthSecret, verifyPassphrase, type AuthSecret } from './auth/secret.js';
 import { ABSOLUTE_TTL_MS, SessionStore } from './auth/sessions.js';
 import { LoginRateLimiter, PASSKEY_MAX_FAILURES } from './auth/ratelimit.js';
@@ -243,6 +245,12 @@ function anonymousAssertStart(full: PasskeyAssertStart): Partial<PasskeyAssertSt
   ) as Partial<PasskeyAssertStart>;
 }
 
+/** The collector switch's composition (path-identity spec 2026-10-12 §5.2, §5.6), built once in `index.ts`: the ONE
+ *  generation journal `CoordStore.setCollectLane` appends to inside its transaction, and this process's boot nonce,
+ *  which only the switch route's confirm key reads. One object, so "no journal" has one spelling: `Deps.collectLane`
+ *  absent. */
+export interface CollectLaneDeps { readonly journal: CollectLaneJournal; readonly bootNonce: string }
+
 export interface Deps {
   cfg: CcrcConfig;
   /** The deploy's build stamp (buildinfo.ts, read once at boot from
@@ -277,6 +285,15 @@ export interface Deps {
    *  its absence is still the local/remote mode test for THIS field, even
    *  though `fleetState` itself is no longer the same tell. */
   refreshCaps?: () => Promise<void>;
+  /** The connection-bound fleet node identity (path-identity spec 2026-10-12 §5.2).
+   *  - Remote mode: the agent client's own cell (`fleet.identity`). It is invalidated on every ready and close, and
+   *    only the inventory's fleet sweep publishes into it, under the epoch it captured.
+   *  - Local mode: a cell nothing invalidates (epoch 0). The server row's own sweep publishes into it, because this
+   *    box is the fleet node.
+   *  It is optional so that the hand-built Deps in tests stay valid. A reader of an absent cell uses
+   *  `NO_FLEET_IDENTITY`, which is never known, so nothing arms through it. Production carries it in both arms
+   *  (text pins over index.ts). */
+  fleetIdentity?: FleetIdentityCell;
   /** The ONE per-session write queue for the process. Built in `index.ts` and
    *  handed to both `buildServer` and `FleetWatcher`, because the naming
    *  sweep's `ws-rename` has to serialise against `POST /workspace/reap` — and
@@ -346,6 +363,11 @@ export interface Deps {
    *  `index.ts` beside `coord`. Optional the same way `coord` is: absent, the
    *  intent route answers `501 not-configured`. */
   updateIntentLog?: UpdateIntentLog;
+  /** The collector switch's journal and boot nonce (`CollectLaneDeps`), `updateIntentLog`'s twin for the journal's
+   *  reason: the route and the collector's latch share the process's one instance. Optional the way `coord` is.
+   *  Absent: `GET` and `POST /api/coord/collect-lane` answer `501 not-configured`, and the collector reads its control
+   *  state as `journal-not-configured`, never as a missing journal, which would be the bootstrap. */
+  collectLane?: CollectLaneDeps;
   /** Design 2026-09-20 §10 (wave 5): the SERVER-role node's own move, spawned on this box with the same absolute
    *  argv the agent uses. A two-template capability, never a raw `Runner` — a runner here would give every
    *  route a way around `runCcd` (D-3397). `localUpdateSpawnFor(realRunner, cfg.home)` in
@@ -1786,7 +1808,8 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     const rows = dim(q.rows, 24);
     // THE LATCH, AND IT GOES BEFORE THE ATTACH (spec §5.1, F3, F14).
     //
-    // ccd spawns every session `window-size latest` (`ccd/ccd:14790`), and
+    // ccd spawns every session `window-size latest` (`_spawn_start` in
+    // `ccd/ccd`), and
     // tmux's own default is `latest` too — so the window follows whichever
     // client most recently typed. A phone's pty client is a full tmux client
     // (F6), so the first phone attach NARROWS the window, tmux REFLOWS the
@@ -1839,8 +1862,17 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     // NO PER-CLIENT GRID MAP rides with it (§5.1): the window is one fixed size
     // for every drawer, so a second drawer closing restores nothing anyone was
     // depending on, and the close handler's own 220x50 becomes a no-op rather
-    // than the defect PR #96's handoff was built to cure. The deliberate
-    // un-pin is wave 3, under the fit guard, through an advertised ccd verb.
+    // than the defect PR #96's handoff was built to cure.
+    //
+    // THE DRAWER NO LONGER LEANS ON THIS PIN. It attaches a client the
+    // window's own size, 220 columns by 50 rows plus tmux's status row (spec
+    // 2026-10-14 §5.1, D-5005), and a client that size moves nothing under
+    // `latest`. So the pin is no longer how a drawer keeps its own client from
+    // narrowing the window: it repairs a window something else moved, and it
+    // holds against a client that is not the window's size — an older bundle,
+    // which still dials its own grid (spec 2026-10-14 §8, I7). A wide drawer
+    // may later have the window follow it, never below `READER_MIN_COLS`,
+    // through that spec's guarded sizer (§6, stage 2).
     void deps.tmux.resizeWindow(id, PINNED_WINDOW_COLS, PINNED_WINDOW_ROWS);
     const p = spawnPty(id, cols, rows);
     const sub = p.onData((data) => socket.send(data));   // server->client: raw utf8 frames

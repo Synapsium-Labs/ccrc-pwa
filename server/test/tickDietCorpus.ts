@@ -127,12 +127,27 @@ export const LIMITS_ROWS: readonly FileRow[] = [
   reg('quoted-number', raw('{"five":"12"}')),
   reg('exponent', raw('{"five":1e3}')),
   reg('leading-zeros', raw('{"five":007}')),
+  // W2 Task 9 (D-4962; D-5041): a `ts` with a leading zero is an OCTAL constant to bash's `$(( ))`, and `08` cannot
+  // be one, so `$((now - ts))` is an expansion error that aborts the shell's top-level command. `_limit_field` ran
+  // inside `$( )`, so the legacy lost one subshell and answered ""; the in-shell `_limit_field_to` must contain it the
+  // same way.
+  reg('ts-leading-zero-89', raw('{"five":50,"seven":10,"ts":08}')),
+  reg('ts-leading-zero-octal', raw('{"five":50,"seven":10,"ts":0777}')),
+  // `[[ now -ge 08 ]]` is the conditional's own error, not an expansion: it says so on stderr and answers false.
+  reg('reset-leading-zero-89', raw(`{"five":50,"seven":10,"ts":${T},"fiveResetAt":08,"sevenResetAt":09}`)),
+  // `_avail`'s refusal (`five` at SWAP_CEILING, 98), for W2 Task 9's caller rows.
+  reg('five-at-ceiling', raw(`{"five":98,"seven":10,"ts":${T}}`)),
   reg('huge-number', raw(`{"five":${'9'.repeat(30)}}`)),
   reg('escaped-key-in-string', raw('{"note":"\\"five\\": 3","five":4}')),
   reg('key-without-value', raw('{"five":')),
   reg('size-65535', sized(65535)),
   reg('size-65536', sized(65536)),
   reg('size-64KiB-plus-1', sized(65537)),
+  // Plan Task 8's printing line (D-5039): over the cap, so the pipeline answers, and with so many matches (540 KB of
+  // `-o` output) that `head -1` closes the pipe on grep. grep dies of SIGPIPE, and under `pipefail` the legacy prints
+  // its first match WITH rc 141 (measured, macOS bash 5.3 / BSD grep and Linux bash 5.2 / GNU grep): a value and a
+  // non-zero rc together, which a printing form that returns on the rc before printing would drop.
+  reg('over-cap-many-matches', raw(`{${'"five":1,'.repeat(60000)}"ts":${T}}`)),
   shaped('absent', 'absent'),
   shaped('directory', 'directory'),
   shaped('fifo', 'fifo'),
@@ -143,6 +158,24 @@ export const LIMITS_ROWS: readonly FileRow[] = [
   shaped('symlink-devzero', 'symlink-devzero'),
   shaped('dir-unsearchable', 'parent-unsearchable', raw(COMPACT)),
 ];
+
+/** W2 Task 9's "rewrite between reads" row (plan Task 9, the one-read guard): `before` is fresh at T+30 with `five` 50;
+ *  `after` keeps `five` but its `ts` is long stale and its `fiveResetAt` has passed, so any key read from it after the
+ *  first one (the value) makes `_limit_field … five 60` answer "". Not a `FILE_ROW_SETS` set: the row plants both. */
+export const LIMITS_REWRITE: { readonly before: FileRow; readonly after: FileRow } = {
+  before: reg('rewrite-before', raw(`{"five":50,"seven":10,"ts":${T},"fiveResetAt":${T + 18000}}`)),
+  after: reg('rewrite-after', raw(`{"five":50,"seven":10,"ts":${T - 999999},"fiveResetAt":${T - 1}}`)),
+};
+
+/** The one rc edge INSIDE spec §6.3's domain (D-4962; D-5040, `limit-json-num-in-cap-sigpipe-rc`, found by the W2
+ *  verifier): 10,922 copies of `"ts":1`, 65,532 printable-ASCII bytes, under the 64 KiB cap. The legacy's `grep -o`
+ *  writes 76,454 bytes into a pipe that `head -1` stops reading after its first line, so grep dies of SIGPIPE and,
+ *  under `pipefail`, the legacy answers its first match WITH rc 141 (measured 141 in 20 of 20 runs on macOS bash 5.3
+ *  / BSD grep and on Linux bash 5.2 / GNU grep 3.8, and on bash 4.4 / GNU grep 3.12). That rc belongs to the pipe and
+ *  the scheduler, not to the bytes: with `"ts":1` copies GNU grep 3.8 reaches it racily from about 800 matches and
+ *  mostly by 1,000, macOS from about 3,000. No builtin can equal it, and the fast core answers the same digits with
+ *  rc 0. Not a `FILE_ROW_SETS` row: those rows compare rc, and this one states the divergence instead. */
+export const LIMITS_IN_CAP_SIGPIPE: FileRow = reg('in-cap-many-matches', raw('"ts":1'.repeat(10922)));
 
 /** `$REG/<id>.<field>` values (spec §9 "registry values", plan Task 13's list). `_reg_set` writes `printf '%s'`, so a
  *  real field carries no trailing newline; the newline rows are the hand-edited and older-writer shapes `$(cat)`

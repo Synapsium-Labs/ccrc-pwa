@@ -26,7 +26,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { ARCHIVE_REFUSALS, isArchiveRefusal } from '../../../shared/api';
-import { Sheet } from '../components/Sheet';
+import { Button, QC_ACTIONS, QC_CONSEQUENCE, Sheet } from '@ccrc/ui';
 import { ARCHIVE_REFUSAL_TEXT, ApiError, UNSUPPORTED_VERB_TEXT, api } from '../lib/api';
 import './fleet.css';
 
@@ -140,6 +140,12 @@ export const claimedSentence = (named: readonly ArchiveConflictRun[] | null): st
       ? `${runPhrase(named[0]!)} is still open on this workspace.`
       : `${named.map(runPhrase).join('; ')} are still open on this workspace.`;
 
+/** The sheet's own title, and the one the archive sheet gives the same
+ *  refusal when it renders it in place. TWO SURFACES, ONE CLAIM — the literal
+ *  census found the second copy, which neither the markup nor the shape
+ *  census could see: a `title=` prop takes a string, not a class. */
+export const CLAIMED_TITLE = 'This workspace is claimed';
+
 export const CLAIMED_CONSEQUENCE =
   'Archiving stops the session and puts the worktree away. Nothing is deleted, but the run loses the workspace it is working in.';
 
@@ -189,20 +195,28 @@ export function ArchiveConflictSheet({
   };
 
   return (
-    <Sheet open onClose={onClose} title="This workspace is claimed">
+    <Sheet open onClose={onClose} title={CLAIMED_TITLE}>
       <div className="archive-conflict-sheet">
-        <p className="qc-consequence">{claimedSentence(named)}</p>
-        <p className="qc-consequence">{CLAIMED_CONSEQUENCE}</p>
-        <div className="qc-actions">
-          <button type="button" className="btn-primary" disabled={busy} onClick={force}>
+        {/* MERGE NOTE: main moved both sentences behind `claimedSentence` and
+            `CLAIMED_CONSEQUENCE`, which is a single-source-of-truth win this
+            branch has no argument with — the branch had only restyled the
+            literals it replaced. Main's text, the branch's utilities. */}
+        <p className={QC_CONSEQUENCE}>
+          {claimedSentence(named)}
+        </p>
+        <p className={QC_CONSEQUENCE}>
+          {CLAIMED_CONSEQUENCE}
+        </p>
+        <div className={QC_ACTIONS}>
+          <Button variant="primary" disabled={busy} onClick={force}>
             {busy ? 'Archiving…' : 'Archive anyway'}
-          </button>
+          </Button>
           {/* Two buttons, not three — see the `onOpenRun` note on
               `ArchiveConflictSheetProps` for the affordance that was here and
               why it went. */}
-          <button type="button" className="btn-ghost" disabled={busy} onClick={onClose}>
+          <Button variant="ghost" disabled={busy} onClick={onClose}>
             Cancel
-          </button>
+          </Button>
         </div>
         {error !== null && <p className="abandon-error">{error}</p>}
       </div>
