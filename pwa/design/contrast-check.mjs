@@ -272,10 +272,12 @@ for (const [label, fg, bg, min] of ALL_PALETTES.flatMap(([n, t]) => pairs(palett
 // PASS. So the tiers are measured as a SEPARATION, in OKLab lightness (the
 // axis a reader perceives as "quieter"), signed toward the ground: tertiary
 // must sit at least 0.12 nearer the card than primary, and secondary strictly
-// between, at least 0.04 from each. The generator aims at 0.14
-// (ui/design/make-themes.mjs), the same generator-and-gate split as every
-// floor above. The maths is the generator's, restated here because this file
-// is the authority and must not import what it rules on.
+// between, at least 0.04 from each. The generator's quiet tiers aim at 0.14
+// (ui/design/make-themes.mjs), the generator-and-gate split of every floor
+// above — but primary is held to the palette's own ink (D-5155), so where the
+// aim is out of reach the band sits nearer this floor, and below it this file
+// is what says so. The maths is the generator's, restated here because this
+// file is the authority and must not import what it rules on.
 const TIER_FLOOR = 0.12;
 const TIER_STEP = 0.04;
 const linear = (c) => {

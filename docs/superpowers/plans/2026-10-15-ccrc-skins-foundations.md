@@ -1295,3 +1295,19 @@ Mark it ✓, or write the defect and its fix.
   - **The session facts (F6):** a pure model (`pwa/src/session/sessionFacts.ts`) reads `FleetSession.version` and `usage.cost` (US dollars, the statusline's `cost.total_cost_usd`) with `usage.stale`. A missing or null value is unmeasured, never `$0.00`.
   - **No wire change:** the frame and both fields already cross the wire. No new frame, field or `FLEET_PROTO` bump.
   - **Their UI halves are gated** on #402's `FleetScreen.tsx` (the integrity strip) and `SessionHeader.tsx` (version and cost). They then move into W2's status bar and inspectors. A later plan places them, citing this number.
+
+### Issued 2026-10-15 for Task 4's departures, and defined here
+
+`POST /api/ledger/deviations` issued two numbers for the departures Task 4 named by slug. One is defined here. The other, 5156 (`tier-walk-keeps-fitted-hue`), is not used and stays undefined: under the ruling D-5155 records, primary's move holds its hue and chroma, so the tertiary walk reads them from primary exactly as D-5097 says, and there is no departure left to record. It is spelled without its prefix on purpose, because `deviation-refs.test.ts` requires every tracked ref to be defined.
+
+- **D-5155** — `tier-band-from-the-quiet-tiers` (Task 4; departs from D-5097's derivation, by the coordinator's 2026-10-15 ruling that palettes keep their character): primary is never lifted to white, or to any value that erases a palette's own ink (Nord's `#ECEFF4`), so the band is opened by the quiet tiers, and primary moves last, under a stated cap.
+  - **What departs.** D-5097 lifted primary "toward 9:1 on every ground as far as the gamut allows", which carried Nord's and Gruvbox Dark's primary to pure white and Dracula's and Mocha's within a step of it; it held tertiary at 4.9 and secondary at 6.0; and the generator refused a band under ΔL 0.14.
+  - **Tertiary** walks to the last value at 4.9 or better on the same six grounds, as D-5097 says. While the band is under 0.14 it walks on, toward the gate's own 4.5, and stops as soon as the band reaches 0.14 or the floor arrives.
+  - **Primary** moves only while the band is still under the gate's 0.12, and only as far as reaching it takes: lightness alone, hue and chroma held, and at most **ΔEOK 0.02** from the ink it was fitted to. That cap is one just-noticeable difference, the JND that CSS Color 4's gamut mapping uses. A step whose chroma the gamut cannot hold ends the move, so primary is never carried to white or black.
+  - **Secondary** stays the OKLab midpoint, without D-5097's 6.0 floor, and the generator refuses it under 4.5. **0.14 is an aim, not a refusal:** where the cap leaves a palette under 0.12, the generator writes and says so, and the gate rules.
+  - **Measured** (`ui/design/make-themes.mjs`'s `inkTiers`; pinned by `pwa/test/ink-tiers.test.ts`, which replays the fit independently):
+    - Nord, Tokyo Night, Dracula and GitHub Light keep their primary exactly.
+    - Catppuccin Mocha moves ΔEOK 0.009, and Gruvbox Dark, One Dark and Solarized Dark 0.015, reaching ΔL 0.121 to 0.123.
+    - Solarized Light and Catppuccin Latte move 0.019 and still measure ΔL 0.100 and 0.105, under the gate's 0.12. On a light palette the dark ink sits low on the lightness axis, where the same contrast span is a shorter OKLab distance.
+    - Tertiary reads 4.50 to 4.54 on its worst ground in eight palettes, and 4.92 to 4.94 in Dracula and GitHub Light.
+  - **Open.** The gate's ΔL row reds for those two palettes. The narrowest exception is proposed in Task 4's PR, and not implemented, until the coordinator rules.
