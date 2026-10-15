@@ -65,7 +65,9 @@ export type SendResult =
        * meanings across the failure arms and only two of them support the claim
        * above:
        *  - OUR OWN ECHOED TEXT — `enter-ignored`. The echo loop proved the box
-       *    holds it; both Enters were swallowed. Earns the flag.
+       *    holds it; both Enters were swallowed. Earns the flag, unless the
+       *    marker row is blank, which a row-capped box can show
+       *    (D-TBD-tall-box-echo): a rescue cannot name a blank row.
        *  - OUR OWN MESSAGE, COLLAPSED INTO A PASTE CHIP — the ordinary
        *    `verify-failed`. Earns the flag; see that arm for the provenance
        *    argument, and `PASTE_CHIP` for what the widget is doing.
@@ -216,7 +218,7 @@ async function submitted(
   d: SendDeps,
   id: string,
   sleep: (ms: number) => Promise<void>,
-  needle: string,
+  still: StillInBox,
 ): Promise<boolean> {
   for (let i = 0; i < SUBMIT_TRIES; i++) {
     await sleep(SUBMIT_POLL_MS);
@@ -231,11 +233,23 @@ async function submitted(
     // window between the echo poll and this one. Skip the poll instead; if every
     // poll is blind the loop falls out below and the caller refuses.
     if (read.box === 'absent') continue;
-    const draft = read.draft;
-    if (needle === '' ? draft === '' : !draft.startsWith(needle)) return true;
+    if (!still(pane, read.draft)) return true;
   }
   return false;
 }
+
+/**
+ * What says OUR TEXT is still in the box, read from one capture that has a box
+ * (`pane`, and `draft`, its marker row). `submitted` polls it after Enter and
+ * calls the turn taken on the first capture where it is false.
+ */
+type StillInBox = (pane: string, draft: string) => boolean;
+
+/** The proof every send has used: the marker row still starts with `needle`
+ *  (the prefix the echo check proved landed), or, when `needle` is '', the
+ *  marker row is still non-empty. See `submitted`. */
+const stillStartsWith = (needle: string): StillInBox => (_pane, draft) =>
+  needle === '' ? draft !== '' : draft.startsWith(needle);
 
 /**
  * Press Enter (up to twice — the SAME one-retry-after-an-overlay budget
@@ -250,12 +264,12 @@ async function pressEnterAndConfirm(
   d: SendDeps,
   id: string,
   sleep: (ms: number) => Promise<void>,
-  needle: string,
+  still: StillInBox,
 ): Promise<SendResult> {
   await d.tmux.sendKey(id, 'Enter');
-  if (await submitted(d, id, sleep, needle)) return { ok: true };
+  if (await submitted(d, id, sleep, still)) return { ok: true };
   await d.tmux.sendKey(id, 'Enter');
-  if (await submitted(d, id, sleep, needle)) return { ok: true };
+  if (await submitted(d, id, sleep, still)) return { ok: true };
   const stuck = await d.tmux.capture(id);
   const last = draftOfMeasured(await d.tmux.captureAnsi(id) ?? '');
   // THE NAME STAYS `enter-ignored` — we pressed twice and the text never left,
@@ -274,7 +288,13 @@ async function pressEnterAndConfirm(
     pane: (stuck ?? '').slice(-PANE_TAIL),
     // We typed it, we watched it echo, and nothing has cleared it: the box row
     // IS the message and Enter would send exactly it. See `SendResult`.
-    submittable: true,
+    //
+    // EXCEPT ON A BLANK MARKER ROW, which only a row-capped box reaches here
+    // (D-TBD-tall-box-echo: the first row in view can be a blank line of our
+    // message). `submitEnter` refuses a blank row and its route a blank
+    // `expect`, so a flag over `draft: ''` would be a rescue with no subject.
+    // The diagnosis stays.
+    ...(last.draft !== '' ? { submittable: true } : {}),
   };
 }
 
@@ -600,6 +620,123 @@ export function ownPasteChip(ansiPane: string, parts: readonly string[], provena
   return read.draft;
 }
 
+/** A row that is exactly one chip with no line count: what one typed line over
+ *  `PASTE_COLLAPSE_FLOOR` draws (`cc300-paste-tall-with-chip.txt`,
+ *  `cc300-paste-chip-first-rows-below.txt`). */
+const BARE_PASTE_CHIP = /^\[Pasted text #\d+\]$/;
+/** Any chip anywhere in a row, so a shape `BARE_PASTE_CHIP` does not vouch for
+ *  (two chips, a chip with text after it, a counted chip) refuses rather than
+ *  being read as typed text. */
+const ANY_PASTE_CHIP = /\[Pasted text #\d+/;
+
+/**
+ * The most box rows Claude Code 2.1.300 shows before it scrolls the box inside
+ * itself, for a pane `paneRows` tall: (rows - 10) / 2, wrapped rows counted.
+ * Measured by the investigations at 30, 40, 50 and 70 rows (10, 15, 20, 30) and
+ * here at 50 (`cc300-paste-tall-*.txt`). The fleet pins its windows at 50 rows
+ * (`PINNED_WINDOW_ROWS`), so 20 there. A version that changes it makes a hidden
+ * head unprovable, and the send falls back to today's refusal.
+ */
+const boxRowCap = (paneRows: number): number => Math.floor((paneRows - 10) / 2);
+
+/** Whitespace removed. Claude Code wraps a long line at spaces, and a row is
+ *  read trimmed, so only the non-space characters of a line survive the
+ *  rendering in order; comparing those is comparing what was typed. */
+const squash = (s: string): string => s.replace(/\s+/g, '');
+
+/**
+ * Every row of the box, the marker row first (read as `draftOf` reads it) and
+ * then every row down to the closing rule, BLANK ROWS INCLUDED (a blank row is a
+ * blank line of the message), each with dim spans and SGR stripped and trimmed.
+ * `null` when the capture has no marker row, or no rule closes the box: a box
+ * whose bottom is not on screen cannot be read whole.
+ */
+function boxRows(ansiPane: string): string[] | null {
+  const lines = ansiPane.split('\n');
+  let marker = -1;
+  for (let i = 0; i < lines.length; i++) if (lines[i]!.replace(SGR, '').startsWith('❯')) marker = i;
+  if (marker === -1) return null;
+  const rows = [lines[marker]!.replace(DIM_SPAN, '').replace(SGR, '').slice(1).trim()];
+  for (let i = marker + 1; i < lines.length; i++) {
+    const row = lines[i]!.replace(DIM_SPAN, '').replace(SGR, '');
+    if (isRuleRow(row)) return rows;
+    rows.push(row.trim());
+  }
+  return null;
+}
+
+/**
+ * D-TBD-tall-box-echo. Is the box the RENDERING of what we typed, read whole?
+ * Answers the last `ECHO_NEEDLE` non-space characters in view (the tail
+ * `stillEndsWith` proves departure with), or `null`, which keeps the refusal.
+ *
+ * Reached only when the echo needle never matched, and built for two measured
+ * shapes the needle cannot see (Claude Code 2.1.300, 220x50):
+ *  - THE ROW CAP (`cc300-paste-tall-*.txt`). The box shows at most
+ *    `boxRowCap` rows, keeps the LAST rows in view and draws `❯` on the first
+ *    of them, so a message taller than 20 rows has a later line, or a blank
+ *    one, on the marker row. Today that is `verify-failed` with no
+ *    `submittable`, and one Enter at the terminal sent the whole text intact.
+ *  - A LONG FIRST LINE with lines below it (`cc300-paste-chip-first-rows-below.txt`):
+ *    a chip on the marker row and our own rows under it, which
+ *    `ownPasteChip`'s one-chip guard rightly refuses.
+ *
+ * The box is split into runs at its chip rows, and so is what we typed (every
+ * line over `PASTE_COLLAPSE_FLOOR` is a chip, every other line is text), the
+ * text of each run whitespace-free (`squash`). Guards, all required:
+ *  1. PROVENANCE, exactly as `ownPasteChip`'s.
+ *  2. THE BOX CLOSES, and every chip in it is a bare one (`ANY_PASTE_CHIP` on a
+ *     row that is not `BARE_PASTE_CHIP` refuses).
+ *  3. EVERY CHIP IN VIEW. As many chips on screen as lines we typed over the
+ *     floor. A long line hidden above the window could have lost its head
+ *     (measured on macOS for lines of 1023 to about 1821 characters: only the
+ *     tail is drawn, with no chip), and only a chip in view shows it did not.
+ *     It also refuses the AUTO-SUBMIT SPLIT (measured: M-Enter straight after
+ *     a long first line submitted that line alone, and the rest landed in a
+ *     fresh box), because the sent part's chip is not on screen.
+ *  4. THE TEXT MATCHES. Every run after the first chip in view equals ours;
+ *     the run before it is a SUFFIX of ours (the window may start mid-line).
+ *  5. A HIDDEN HEAD NEEDS A FULL BOX. When that first run is not the whole of
+ *     ours, the box has exactly `boxRowCap` rows for this pane's height: the
+ *     cap is the one measured reason for a head to be out of view.
+ *  6. SOMETHING IN VIEW. Not a box of blank rows.
+ *
+ * WHAT IT DOES NOT PROVE: the characters above the window, which nothing on
+ * screen shows. They are lines of 800 characters or fewer (guard 3), which are
+ * typed as text and never collapse; the echo the ordinary path accepts proves
+ * the first 24 characters of a message and nothing below them.
+ */
+export function ownRenderedBox(ansiPane: string, parts: readonly string[], provenance: TypeProvenance): string | null {
+  if (provenance === 'unproven') return null;
+  const rows = boxRows(ansiPane);
+  if (rows === null) return null;
+  const seen: string[] = [''];
+  for (const row of rows) {
+    if (BARE_PASTE_CHIP.test(row)) seen.push('');
+    else if (ANY_PASTE_CHIP.test(row)) return null;
+    else seen[seen.length - 1] += squash(row);
+  }
+  const typed: string[] = [''];
+  for (const part of parts) {
+    if (part.length > PASTE_COLLAPSE_FLOOR) typed.push('');
+    else typed[typed.length - 1] += squash(part);
+  }
+  if (seen.length !== typed.length) return null;
+  for (let i = 1; i < seen.length; i++) if (seen[i] !== typed[i]) return null;
+  if (!typed[0]!.endsWith(seen[0]!)) return null;
+  const paneRows = ansiPane.replace(/\n$/, '').split('\n').length;
+  if (seen[0] !== typed[0] && rows.length !== boxRowCap(paneRows)) return null;
+  const inView = squash(rows.join(''));
+  if (inView === '') return null;
+  return inView.slice(-ECHO_NEEDLE);
+}
+
+/** `ownRenderedBox`'s submit proof: the box, read whole, still ends with the
+ *  tail that was in view. False on an emptied box, on the queue hint (dim, so
+ *  stripped), and on anything typed into the box after our turn left it. */
+const stillEndsWith = (tail: string): StillInBox => (pane) =>
+  squash((boxRows(pane) ?? []).join('')).endsWith(tail);
+
 /** The exact text `dispatch.ts` types into a resumed worker's box before a
  *  wave brief (`sendPrompt(..., '/clear')`) — the one draft `ownStrandedClear`
  *  can ever be about. */
@@ -802,7 +939,7 @@ export function sendPrompt(
       // untouched: F2 (never type over a human mid-sentence) is unaffected,
       // because this branch only ever PRESSES ENTER, never clears or types.
       if (opts.resumeIfOwn && needle !== '' && draft.startsWith(needle) && matchesOwnDraft(pane, parts)) {
-        return pressEnterAndConfirm(d, id, sleep, needle);
+        return pressEnterAndConfirm(d, id, sleep, stillStartsWith(needle));
       }
       // `clearMailResidue`: the box holds MACHINE residue this system's OLD
       // typed-envelope lane left behind (a paste-chip collapse or a stranded
@@ -1030,7 +1167,15 @@ export function sendPrompt(
         // other shape, chips that fail a guard included, falls through to the
         // refusal below exactly as before.
         const ownChip = ownPasteChip(lastPane, parts, provenance);
-        if (ownChip !== null) return pressEnterAndConfirm(d, id, sleep, ownChip.slice(0, ECHO_NEEDLE));
+        if (ownChip !== null) return pressEnterAndConfirm(d, id, sleep, stillStartsWith(ownChip.slice(0, ECHO_NEEDLE)));
+        // D-TBD-tall-box-echo: the box is the RENDERING of what we typed, read
+        // whole: a row-capped box whose marker row is a later line (or a blank
+        // one), or long lines drawn as chips among our own rows. Proven by
+        // `ownRenderedBox`'s guards, and submitted with the proof that OUR TAIL
+        // (the last characters in view) left the box, since the marker row of a
+        // row-capped box is no part of the message we can name in advance.
+        const ownTail = ownRenderedBox(lastPane, parts, provenance);
+        if (ownTail !== null) return pressEnterAndConfirm(d, id, sleep, stillEndsWith(ownTail));
         // THE TEXT STAYS IN THE BOX — no clearBox, no C-u (operator ruling:
         // refuse, never destroy). That was already true; what was missing was
         // saying so. Hand back the box row, FOR DISPLAY, exactly as the
@@ -1042,7 +1187,9 @@ export function sendPrompt(
         // fragment, which is the one shape this flag was invented to keep a
         // rescue away from. The case that would deserve it cannot arrive here:
         // a box holding our whole message sets `echoed`. See
-        // `SendResult.submittable`.
+        // `SendResult.submittable`. (Two corrections stand below and above
+        // this paragraph: a chip-led row is the FOURTH SHAPE, and a box the two
+        // arms above can read whole as ours never reaches here at all.)
         //
         // The pane tail is a PLAIN capture, taken once, here — it is display
         // for a human, and the escape codes would only make it unreadable.
@@ -1103,7 +1250,7 @@ export function sendPrompt(
     // it landed. (`pressEnterAndConfirm` — shared with the `resumeIfOwn`
     // branch above, which presses Enter on text already sitting in the box
     // instead of reaching this point at all.)
-    return pressEnterAndConfirm(d, id, sleep, needle);
+    return pressEnterAndConfirm(d, id, sleep, stillStartsWith(needle));
   });
 }
 
@@ -1269,7 +1416,7 @@ export function submitEnter(
     // The same proof sendPrompt uses: OUR TEXT left the box, not "the box is
     // empty" — a busy session swaps the row for its queue hint instead.
     const needle = draft.slice(0, ECHO_NEEDLE);
-    return (await submitted(d, id, sleep, needle))
+    return (await submitted(d, id, sleep, stillStartsWith(needle)))
       ? { ok: true as const }
       : { ok: false, error: 'enter-ignored' as const };
   });

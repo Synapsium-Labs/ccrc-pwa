@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { KeyedQueue } from '../src/inject/queue.js';
-import { draftOf, ownPasteChip, sendPrompt, submitEnter } from '../src/inject/send.js';
+import { draftOf, ownPasteChip, ownRenderedBox, sendPrompt, submitEnter } from '../src/inject/send.js';
 import { Tmux, type Runner } from '../src/exec.js';
 
 // D-TBD-paste-chip-submit (plan docs/superpowers/plans/2026-10-15-paste-chip-send.md). Claude Code collapses one
@@ -166,11 +166,6 @@ describe('every other shape keeps today\'s refusal (D-TBD-paste-chip-submit\'s g
     expect(res).toMatchObject({ ok: false, error: 'verify-failed', draft: '[Pasted text #3][Pasted text #4]', submittable: true });
   });
 
-  it('a chip on the marker row with more box rows below it: verify-failed, submittable, no Enter', async () => {
-    const text = [0, 1, 2].map((j) => recorded(1000, `ml3L${String(j).padStart(2, '0')}`)).join('\n');
-    const res = await refusesWithoutEnter(CHIP_ROWS, text);
-    expect(res).toMatchObject({ ok: false, error: 'verify-failed', draft: '[Pasted text #8]', submittable: true });
-  });
 
   // LINE COUNT. The box states 9 newlines; we typed 2.
   it('a chip whose line count is not ours: verify-failed, submittable, no Enter', async () => {
@@ -247,5 +242,199 @@ describe('ownPasteChip: the decision, guard by guard', () => {
   it('COLLAPSE FLOOR: what we typed must be over 800 characters', () => {
     expect(ownPasteChip(CHIP, [recorded(800, 'x')], 'proven-empty')).toBeNull();
     expect(ownPasteChip(CHIP, [recorded(801, 'x')], 'proven-empty')).toBe('[Pasted text #1]');
+  });
+});
+
+// ── D-TBD-tall-box-echo ────────────────────────────────────────────────────────────────────────────────────────────
+//
+// THE ROW CAP, which the three investigations measured as the likeliest shape of the operator's report. Claude Code
+// 2.1.300 shows at most (rows - 10) / 2 rows of its input box (20 in the fleet's 220x50 window), scrolls the box
+// inside itself, keeps the LAST rows in view and draws `❯` on the first visible one. So any message taller than 20
+// rows (a few pasted paragraphs) puts a later line, or a blank separator line, on the marker row, the needle never
+// matches, and the send came back `verify-failed` with no `submittable` at all: the operator's only exit was the
+// terminal, where one Enter sent the whole text intact. And a long line above or inside such a message is a chip row.
+//
+// `ownRenderedBox` reads the WHOLE box and accepts it only when it is provably the rendering of what we typed: the
+// same provenance as the chip arm; every line over the collapse floor drawn as one bare chip row, and every such chip
+// in view (so no long line is hidden above the window, where a lost head could not be seen); the text between and
+// after the chips equal to ours (whitespace aside, which wrapping moves); the text before the first chip in view a
+// suffix of ours; and, when that suffix is not the whole of it, the box exactly as tall as the measured cap.
+
+const TALL40 = fixture('cc300-paste-tall-40-lines.txt');                  // 40 lines of 80, marker on line 21
+const PARAS7 = fixture('cc300-paste-tall-paras-blank-marker.txt');        // 7 paragraphs of 500, a blank marker row
+const PARACHIP = fixture('cc300-paste-tall-with-chip.txt');               // 7 paragraphs, the 6th a chip, in view
+const CHIP_ABOVE = fixture('cc300-paste-tall-chip-above.txt');            // 9 paragraphs, the 2nd a chip, scrolled out
+const CHIP_FIRST = fixture('cc300-paste-chip-first-rows-below.txt');      // a 1000-char line, then two short lines
+const SPLIT_FIRST = fixture('cc300-paste-split-first-line-sent.txt');     // the same, the long line auto-submitted alone
+const TALL_SPLIT = fixture('cc300-paste-tall-split-first-sent.txt');      // 9 paragraphs, the long 1st auto-submitted
+
+const lines = (k: number, w: number, tag: string): string =>
+  Array.from({ length: k }, (_, j) => recorded(w, `${tag}L${String(j).padStart(2, '0')}`)).join('\n');
+const paras = (k: number, tag: string, long: number | null): string =>
+  Array.from({ length: k }, (_, j) => recorded(j === long ? 1000 : 500, `${tag}P${j}`)).join('\n\n');
+const TEXT = {
+  tall40: lines(40, 80, 'tall40'),
+  paras7: paras(7, 'paras7', null),
+  parachip: paras(7, 'parachip', 5),
+  chipabove: paras(9, 'chipabove', 1),
+  chiptop: paras(9, 'chiptop', 0),
+  chipfirst: [recorded(1000, 'chipfirstA'), 'second line, short', 'third line, short'].join('\n'),
+  longfirst: [recorded(1000, 'longfirstA'), 'second line, short', 'third line, short'].join('\n'),
+};
+const markerRowOf = (pane: string): string => draftOf(pane);
+/** The capture's lines, the marker row's index, and the closing rule's index below it. */
+const boxSpan = (pane: string): { lines: string[]; marker: number; close: number } => {
+  const lines = pane.split('\n');
+  const plain = lines.map((l) => l.replace(SGR, ''));
+  const marker = plain.map((l) => l.startsWith('❯')).lastIndexOf(true);
+  const close = plain.findIndex((l, i) => i > marker && /^─{8,}$/.test(l.trim()));
+  return { lines, marker, close };
+};
+
+describe('the recorded row-capped panes (sanity)', () => {
+  it('the marker row is a LATER line, or blank, and never the first line', () => {
+    expect(markerRowOf(TALL40).startsWith('tall40L20 ')).toBe(true);
+    expect(markerRowOf(PARAS7)).toBe('');
+    expect(markerRowOf(CHIP_ABOVE)).toBe('');
+    expect(markerRowOf(CHIP_FIRST)).toBe('[Pasted text #48]');
+    expect(markerRowOf(SPLIT_FIRST)).toBe('second line, short');
+    expect(PARACHIP.replace(SGR, '')).toContain('  [Pasted text #11]');
+  });
+});
+
+describe('sendPrompt submits a row-capped box that is provably what it typed (D-TBD-tall-box-echo)', () => {
+  const submits = async (typed: string, text: string) => {
+    const { tmux, calls } = phaseTmux({ start: EMPTY, typed });
+    const res = await sendPrompt(deps(tmux), 'lane-a', text);
+    expect(res).toEqual({ ok: true });
+    expect(enters(calls)).toBe(1);
+    return calls;
+  };
+
+  it('40 short lines: the marker row is line 21', async () => {
+    const calls = await submits(TALL40, TEXT.tall40);
+    expect(keysOf(calls).filter((k) => k === 'M-Enter')).toHaveLength(39);
+  });
+  it('7 paragraphs: the marker row is a blank separator line', () => submits(PARAS7, TEXT.paras7));
+  it('7 paragraphs, one of them a chip in view', () => submits(PARACHIP, TEXT.parachip));
+  it('a long FIRST line drawn as a chip with our short lines below it (not row-capped at all)', () =>
+    submits(CHIP_FIRST, TEXT.chipfirst));
+  // `ownPasteChip` refuses this one (a chip with rows below it: its SINGLE CHIP unit case); this arm reads all three
+  // rows and finds a chip for each of our three long lines. The investigation measured the shape submitting exact.
+  it('three long lines, a chip on each row', () =>
+    submits(CHIP_ROWS, [0, 1, 2].map((j) => recorded(1000, `ml3L${String(j).padStart(2, '0')}`)).join('\n')));
+  it('a busy session queues it', async () => {
+    const { tmux } = phaseTmux({ start: EMPTY, typed: TALL40, entered: [QUEUED] });
+    expect(await sendPrompt(deps(tmux), 'lane-a', TEXT.tall40)).toEqual({ ok: true });
+  });
+
+  it('an Enter swallowed twice is enter-ignored; the marker row is the rescue\'s claim', async () => {
+    const { tmux, calls } = phaseTmux({ start: EMPTY, typed: TALL40, entered: [TALL40] });
+    const res = await sendPrompt(deps(tmux), 'lane-a', TEXT.tall40);
+    expect(res).toMatchObject({ ok: false, error: 'enter-ignored', draft: markerRowOf(TALL40), submittable: true });
+    expect(enters(calls)).toBe(2);
+  });
+  it('...but a BLANK marker row is no claim at all: enter-ignored with no submittable', async () => {
+    const { tmux } = phaseTmux({ start: EMPTY, typed: PARAS7, entered: [PARAS7] });
+    const res = await sendPrompt(deps(tmux), 'lane-a', TEXT.paras7);
+    expect(res).toMatchObject({ ok: false, error: 'enter-ignored', draft: '' });
+    expect((res as { submittable?: boolean }).submittable).toBeUndefined();
+  });
+  it('the proof is OUR tail leaving the box: a human typing into the emptied box is not a second Enter', async () => {
+    const human = EMPTY.replace('❯\xa0\x1b[2mTry "how do I log an error?"\x1b[0m', '❯\xa0and now the human types');
+    const { tmux, calls } = phaseTmux({ start: EMPTY, typed: TALL40, entered: [human] });
+    expect(await sendPrompt(deps(tmux), 'lane-a', TEXT.tall40)).toEqual({ ok: true });
+    expect(enters(calls)).toBe(1);
+  });
+});
+
+describe('a box that is not provably what we typed keeps today\'s refusal (D-TBD-tall-box-echo\'s guards)', () => {
+  const refuses = async (typed: string, text: string) => {
+    const { tmux, calls } = phaseTmux({ start: EMPTY, typed });
+    const res = await sendPrompt(deps(tmux), 'lane-a', text);
+    expect(res).toMatchObject({ ok: false, error: 'verify-failed', draft: markerRowOf(typed) });
+    expect(enters(calls)).toBe(0);
+    return res;
+  };
+
+  // A LONG LINE ABOVE THE WINDOW. Its chip is out of view, so nothing shows it was not lost (macOS loses the head of
+  // a 1023 to 1821-character line and draws only its tail).
+  it('a chip scrolled out above the window', () => refuses(CHIP_ABOVE, TEXT.chipabove));
+
+  // THE AUTO-SUBMIT SPLIT (measured here, 3 of 16 tries with no pause): M-Enter right after a long first line
+  // submitted that line as its own turn, and the rest was typed into a fresh box. Half the message is already sent;
+  // claiming `ok` for the rest would hide that.
+  it('the long first line already went out on its own: the rest is in the box', () => refuses(SPLIT_FIRST, TEXT.longfirst));
+  it('...and the same in a row-capped box', () => refuses(TALL_SPLIT, TEXT.chiptop));
+
+  it('a window whose rows are not our text', async () => {
+    const res = await refuses(TALL40, TEXT.tall40.replace('tall40L30 Reply', 'tall40L30 Rephrase'));
+    expect((res as { submittable?: boolean }).submittable).toBeUndefined();
+  });
+  it('our tail, but the box one row short of the measured cap', async () => {
+    // DERIVED from TALL40: the top visible row removed and `❯` moved onto the next one, so the box shows 19 rows of
+    // our tail. Not a shape the cap draws, so a head is missing for some other reason.
+    const { lines: rows, marker: i } = boxSpan(TALL40);
+    const nineteen = [...rows.slice(0, i), '', '❯ ' + rows[i + 1]!.replace(SGR, '').trim(), ...rows.slice(i + 2)].join('\n');
+    expect(markerRowOf(nineteen).startsWith('tall40L21 ')).toBe(true);
+    await refuses(nineteen, TEXT.tall40);
+  });
+  it('the macOS lost head is still refused: its chip is missing', () => refuses(LOST_HEAD, recorded(1100, 'c1100')));
+});
+
+describe('ownRenderedBox: the decision, guard by guard', () => {
+  it('answers our visible tail when every guard holds', () => {
+    expect(ownRenderedBox(TALL40, TEXT.tall40.split('\n'), 'proven-empty')!.endsWith('END-tall40L39')).toBe(true);
+    expect(ownRenderedBox(PARACHIP, TEXT.parachip.split('\n'), 'cleared-by-us')).not.toBeNull();
+  });
+  it('PROVENANCE: refuses a box nobody proved empty before typing', () => {
+    expect(ownRenderedBox(TALL40, TEXT.tall40.split('\n'), 'unproven')).toBeNull();
+  });
+  it('EVERY CHIP IN VIEW: refuses when a long line\'s chip is not on screen', () => {
+    expect(ownRenderedBox(CHIP_ABOVE, TEXT.chipabove.split('\n'), 'proven-empty')).toBeNull();
+    // ...and a chip on screen where we typed no long line
+    expect(ownRenderedBox(PARACHIP, TEXT.paras7.replace(/paras7/g, 'parachip').split('\n'), 'proven-empty')).toBeNull();
+  });
+  it('TEXT AFTER A CHIP: must equal ours', () => {
+    const text = TEXT.parachip.replace('parachipP6 Reply', 'parachipP6 Rephrase');
+    expect(ownRenderedBox(PARACHIP, text.split('\n'), 'proven-empty')).toBeNull();
+  });
+  it('TEXT BEFORE THE FIRST CHIP IN VIEW: must be a suffix of ours', () => {
+    const text = TEXT.tall40.replace('tall40L25 Reply', 'tall40L25 Rephrase');
+    expect(ownRenderedBox(TALL40, text.split('\n'), 'proven-empty')).toBeNull();
+  });
+  it('A HIDDEN HEAD NEEDS A FULL BOX: the cap is (rows - 10) / 2', () => {
+    // The same 50-row capture read as if it came from a 52-row pane: the cap would be 21, the box shows 20.
+    expect(ownRenderedBox(TALL40 + '\n\n', TEXT.tall40.split('\n'), 'proven-empty')).toBeNull();
+  });
+  it('A CHIP SHAPE IT DOES NOT VOUCH FOR anywhere in the box: two chips on a row, a counted chip', () => {
+    const twoChips = PARACHIP.replace('[Pasted text #11]', '[Pasted text #11][Pasted text #12]');
+    expect(ownRenderedBox(twoChips, TEXT.parachip.split('\n'), 'proven-empty')).toBeNull();
+    const counted = PARACHIP.replace('[Pasted text #11]', '[Pasted text #11 +3 lines]');
+    expect(ownRenderedBox(counted, TEXT.parachip.split('\n'), 'proven-empty')).toBeNull();
+  });
+  it('COLLAPSE FLOOR: a line of 800 is typed text, so a chip row over it is not ours; 801 is a chip', () => {
+    const rest = ['second line, short', 'third line, short'];
+    expect(ownRenderedBox(CHIP_FIRST, [recorded(800, 'chipfirstA'), ...rest], 'proven-empty')).toBeNull();
+    expect(ownRenderedBox(CHIP_FIRST, [recorded(801, 'chipfirstA'), ...rest], 'proven-empty')).not.toBeNull();
+  });
+  it('NOTHING VISIBLE: refuses a box of blank rows', () => {
+    const { lines: rows, marker, close } = boxSpan(TALL40);
+    const blank = [...rows.slice(0, marker), '❯\xa0', ...rows.slice(marker + 1, close).map(() => ''), ...rows.slice(close)].join('\n');
+    expect(boxSpan(blank).close - boxSpan(blank).marker).toBe(20);
+    expect(ownRenderedBox(blank, ['', '', ''], 'proven-empty')).toBeNull();
+  });
+  it('THE BOX MUST CLOSE: a box with no rule under it is not read', () => {
+    // CHIP_FIRST needs no cap (the whole message is in view), so only the missing rule can refuse it.
+    expect(ownRenderedBox(CHIP_FIRST, TEXT.chipfirst.split('\n'), 'proven-empty')).not.toBeNull();
+    const { lines: rows, close } = boxSpan(CHIP_FIRST);
+    const unclosed = rows.map((l, i) => (i >= close ? '' : l)).join('\n');
+    expect(ownRenderedBox(unclosed, TEXT.chipfirst.split('\n'), 'proven-empty')).toBeNull();
+  });
+  it('A CHIP-SHAPED LINE OF OUR OWN is not vouched for either: the box cannot tell it from a widget chip', () => {
+    const ours = '[Pasted text #3] is what the box showed';
+    const pane = CHIP_FIRST.replace('second line, short', ours);
+    expect(draftOf(pane)).toBe('[Pasted text #48]');
+    expect(ownRenderedBox(pane, [recorded(1000, 'chipfirstA'), ours, 'third line, short'], 'proven-empty')).toBeNull();
   });
 });
