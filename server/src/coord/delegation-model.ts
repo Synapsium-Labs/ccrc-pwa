@@ -1075,6 +1075,63 @@ export function deriveCoordinatorIntentByParent(sessions: readonly DelegationSes
   return Object.fromEntries(intent);
 }
 
+/** What a session can say about its own coordinator intent. Declared once: the intent route reads it, and so does its test. */
+export const COORDINATOR_INTENT_ACTIONS = ['set', 'clear'] as const;
+export type CoordinatorIntentAction = (typeof COORDINATOR_INTENT_ACTIONS)[number];
+
+export interface CoordinatorIntentRequest {
+  action: CoordinatorIntentAction;
+  sessionId: string;
+  /** The session's CURRENT registry incarnation, measured by the caller. The only row the declaration may touch. */
+  parentIncarnation: string;
+  /** A canonical instant. `set` stamps it only on a row that carries no declaration yet; `clear` ignores it. */
+  declaredAt: string;
+}
+
+/**
+ * The checkpoint a coordinator-intent declaration (Task 15) stands for. PURE: the input is never edited, the next checkpoint is
+ * built beside it, and the route hands this to the lane's own `applyCheckpointChange`, so the declaration becomes visible only
+ * once that replacement is durable.
+ *
+ * ONE ROW, THE CURRENT INCARNATION'S. A different incarnation of the same session, and every other session, come back untouched:
+ * an earlier incarnation's declaration is history that a later one neither mutates nor erases.
+ *
+ *   `set`    stamps `explicitIntentAt` with `declaredAt` unless the row already carries one (so a repeat is a no-op, not a new
+ *            instant), adds `explicit` to the effective basis in the vocabulary's own order, and makes the row effective. A
+ *            session that has not been observed yet gets a row of its own, observed (first and last) at the declaration, because
+ *            a coordinator declares before it delegates, which is before any spool event could have made one.
+ *   `clear`  removes the declaration and the `explicit` basis and NOTHING ELSE: `run-owner`, `delegation-inferred` and
+ *            `retained-lineage` stay, and so does the effective identity they give. The row stays, because wave 3 never removes a
+ *            session from the checkpoint. A clear for a session with no row creates none.
+ *
+ * `coordinatorIntentByParent` is rebuilt from the rows by `deriveCoordinatorIntentByParent`, the one statement of its key and its
+ * value, in the same checkpoint; the validator refuses a map that disagrees with the rows.
+ */
+export function declareCoordinatorIntent(
+  checkpoint: DeepReadonly<DelegationCheckpointV1>, request: CoordinatorIntentRequest,
+): DelegationCheckpointV1 {
+  parseDelegationInstant(request.declaredAt);
+  const at = checkpoint.sessions.findIndex((s) => s.sessionId === request.sessionId && s.parentIncarnation === request.parentIncarnation);
+  const found: DelegationSessionRow | null = at === -1 ? null : checkpoint.sessions[at]!;
+  const basisWith = (explicit: boolean): DelegationIntentSource[] =>
+    DELEGATION_INTENT_SOURCES.filter((source) => (source === 'explicit' ? explicit : found !== null && found.effectiveBasis.includes(source)));
+  let next: DelegationSessionRow | null;
+  if (request.action === 'set') {
+    next = found === null
+      ? {
+          sessionId: request.sessionId, parentIncarnation: request.parentIncarnation, explicitIntentAt: request.declaredAt, effective: true,
+          effectiveBasis: basisWith(true), claudeSessionIds: [], firstObservedAt: request.declaredAt, lastObservedAt: request.declaredAt,
+        }
+      : { ...found, explicitIntentAt: found.explicitIntentAt ?? request.declaredAt, effective: true, effectiveBasis: basisWith(true) };
+  } else {
+    const remaining = basisWith(false);
+    next = found === null ? null : { ...found, explicitIntentAt: null, effective: remaining.length > 0, effectiveBasis: remaining };
+  }
+  const sessions: DelegationSessionRow[] = checkpoint.sessions.map((s, i) => (i === at && next !== null ? next : s));
+  if (at === -1 && next !== null) sessions.push(next);
+  return { ...checkpoint, sessions, coordinatorIntentByParent: deriveCoordinatorIntentByParent(sessions) };
+}
+
 /**
  * Assembles the checkpoint a set of PROJECTED rows stands for. Only what the rows can say is filled in:
  *   - `activityIdsByNaturalKey` is derived from the activity rows (each carries its own natural key);

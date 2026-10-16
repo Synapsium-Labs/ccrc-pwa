@@ -22,6 +22,10 @@ import { LedgerLog, defaultLedgerLogPath } from './ledgerlog.js';
 import { toRunSummary, type ClaimEndResult, type CoordStore, type StallSettingsWrite } from './store.js';
 import { renderEnvelope } from './envelope.js';
 import { MAIL_TOKEN_HEADER, checkMailToken } from './token.js';
+import { childReclaimGenerationRead } from './childReclaim.js';
+import { DelegationCheckpointError, type DelegationDurability } from './delegation-checkpoint.js';
+import { COORDINATOR_INTENT_ACTIONS, declareCoordinatorIntent, formatDelegationInstant } from './delegation-model.js';
+import { readParentGenerations, settleParentIncarnations } from './gitref.js';
 import { NO_SESSION, type GateDecision } from '../auth/gate.js';
 import { verifyDone, type DoneClaim } from './fingerprint.js';
 import { dispatchRun, type DispatchOutcome, type DispatchRunDeps, capsMeasured } from './dispatch.js';
@@ -4060,6 +4064,99 @@ export function registerCoordRoutes(
       return reply.code(503).send({ ok: false, error: 'ask-unreadable', detail: read.detail });
     }
     return reply.code(200).send({ ok: true, asks: read.asks });
+  });
+
+  /**
+   * `POST /api/coordinators/:session/intent` — a session declares (`set`) or withdraws (`clear`) that it is about to delegate
+   * (delegation broker wave 3, Task 15; spec 2026-10-04 §5.1). IDENTITY, never a restriction: it changes no lease, carrier or
+   * cleanup state, creates no run, hold or capacity slot, and `Agent`/`Workflow` use needs no declaration.
+   *
+   * THE PATH PARAMETER IS NAMED `:session`, NOT `:id`, on purpose. Every `:id` in this file is a positive-integer resource id read
+   * through `parseCanonicalPositiveSafeInteger`, and `routes.test.ts` pins that; a ccd session id is not one. The wire path is the
+   * same either way.
+   *
+   * BOX-TOKEN GATED, and EXEMPT from the session gate like the claim lanes: its only caller is a fleet session through `ccrc-api`,
+   * which holds the token and no cookie. Not one of the ungated release valves: nothing here releases a wedge.
+   *
+   * THE ORDER IS THE DESIGN, cheapest refusal first: the lane is configured (501), the box token (401), the body is exactly
+   * `{action, byId, byUuid}` and `byId` is the session in the path (400, 403), the registry proves `byId` holds `byUuid`
+   * (the claim lanes' attribution gate), the session's CURRENT incarnation is measured (`$REG/<id>.generation`, read before and
+   * after, ruling R38), and only then the declaration is made DURABLE through the lane's own checkpoint door. Attribution is
+   * freshness, not forgery-proofness (`requireAttribution`'s own honesty): a session declares for itself, and the single UNIX
+   * user means a determined one could present a neighbour's pair.
+   *
+   * THE CHECKPOINT IS THE AUTHORITY. `applyCheckpointChange` is the serialized door of the ONE `DelegationDurability` the watcher's
+   * delegation lane opened (`watcher.delegationApplier()`); a second instance on the directory would race its journal, so this file
+   * opens none. The change rebuilds the row and `coordinatorIntentByParent` together (`declareCoordinatorIntent`), and the answer is
+   * sent only after the checkpoint is durably replaced. Nothing writes SQLite directly: the projection is the lane's repairable
+   * output, so a projection that fails is repaired once here and, if it stays broken, reported as `stale` while the declaration
+   * stands in the checkpoint. A failed application answers 503 and says nothing landed that it can confirm; `set` and `clear` are
+   * idempotent, so the retry is safe.
+   */
+  app.post('/api/coordinators/:session/intent', async (req, reply) => {
+    if (!deps.coord || watcher === undefined) return notConfigured(reply);
+    if (!requireMailToken(req, reply, 'POST /api/coordinators/:session/intent')) return;
+
+    const { session } = req.params as { session: string };
+    const raw = req.body;
+    const bad = (detail: string) => reply.code(400).send({ ok: false, error: 'bad-request', detail });
+    if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return bad('the body is a JSON object {action, byId, byUuid}');
+    const { action, byId, byUuid } = raw as Record<string, unknown>;
+    if (Object.keys(raw).sort().join(',') !== 'action,byId,byUuid') return bad('the body carries exactly action, byId and byUuid');
+    if (typeof action !== 'string' || !(COORDINATOR_INTENT_ACTIONS as readonly string[]).includes(action)) {
+      return bad(`action is one of ${COORDINATOR_INTENT_ACTIONS.join(', ')}`);
+    }
+    if (typeof byId !== 'string' || !isSessionIdShape(byId) || typeof byUuid !== 'string' || byUuid === '' || !isSessionIdShape(session)) {
+      return bad('byId and the session in the path are session ids, and byUuid is a non-empty string');
+    }
+    if (byId !== session) {
+      return reply.code(403).send({ ok: false, error: 'not-owner',
+        detail: 'byId is not the session in the path: a session declares its own intent and no other session\'s' });
+    }
+    if (!(await requireAttribution(reply, byId, byUuid, 'byUuid'))) return;
+
+    const generationOf = (id: string) => childReclaimGenerationRead(deps.io, deps.cfg.registryDir, id);
+    const incarnation = (await settleParentIncarnations(generationOf, await readParentGenerations(generationOf, [byId]))).get(byId);
+    if (incarnation === undefined || incarnation.kind !== 'measured') {
+      return reply.code(502).send({ ok: false, error: 'registry-unmeasurable',
+        detail: `the registry incarnation of ${byId} is unmeasured (${incarnation === undefined ? 'unread' : incarnation.reason}) — transient, retry` });
+    }
+
+    let durable: DelegationDurability | null = null;
+    try { durable = await watcher.delegationApplier(); } catch { durable = null; }
+    if (durable === null) {
+      return reply.code(503).send({ ok: false, error: 'not-ready', detail: 'the delegation lane has no durable applier open yet — retry' });
+    }
+    const request = { action: action as (typeof COORDINATOR_INTENT_ACTIONS)[number], sessionId: byId, parentIncarnation: incarnation.incarnation,
+      declaredAt: formatDelegationInstant(Date.now()) };
+    let applied: Awaited<ReturnType<DelegationDurability['applyCheckpointChange']>>;
+    try {
+      applied = await durable.applyCheckpointChange((checkpoint) => declareCoordinatorIntent(checkpoint, request));
+    } catch (err) {
+      console.warn(`ccrc-server: coordinator-intent: the ${request.action} for ${byId} could not be made durable ` +
+        `(${err instanceof Error ? err.message : String(err)})`);
+      const notReady = err instanceof DelegationCheckpointError && err.code === 'not-ready';
+      return reply.code(503).send({ ok: false, error: notReady ? 'not-ready' : 'application-failed',
+        detail: notReady
+          ? 'the delegation lane is recovering its checkpoint — retry'
+          : 'the declaration is not confirmed durable; set and clear are idempotent, so retry' });
+    }
+
+    // Durable now. SQLite is repairable output: a projection that failed is repaired once, and if that fails too the answer says so
+    // while the checkpoint keeps the declaration.
+    let projection: 'projected' | 'stale' | 'unchanged' = 'unchanged';
+    if (applied.durable) {
+      projection = applied.projection.status === 'projected' ? 'projected' : 'stale';
+      if (projection === 'stale') {
+        try { projection = (await durable.repairProjection()) === null ? 'stale' : 'projected'; } catch { projection = 'stale'; }
+      }
+    }
+    const mine = applied.state.checkpoint.sessions.find((s) => s.sessionId === byId && s.parentIncarnation === incarnation.incarnation);
+    return reply.code(200).send({
+      ok: true, action: request.action, session: byId, incarnation: incarnation.incarnation, changed: applied.durable,
+      explicitIntentAt: mine?.explicitIntentAt ?? null, effective: mine?.effective ?? false, effectiveBasis: mine?.effectiveBasis ?? [],
+      projection,
+    });
   });
 
   return { withAbandon, withSweepAbandon };
