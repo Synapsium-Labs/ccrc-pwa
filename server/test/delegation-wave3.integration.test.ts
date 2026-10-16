@@ -383,6 +383,31 @@ describe.skipIf(REAL_JQ === '')('1b. end to end: the real hook feeds the real la
     expect(walk(hw.reg).filter((p) => LATER_WAVE_NAME.test(p))).toEqual([]);
     expect(existsSync(path.join(hw.reg, 'delegation', 'leases'))).toBe(false);
   }, 120_000);
+
+  it('R95 (W5): every raw lease resolves from the JOURNAL FILE ALONE to the call that made it: its PreToolUse and PostToolUse records, one toolUseId, both listings', async () => {
+    const { w } = await endToEnd();
+    // the journal on disk, line by line: not the checkpoint, not SQLite
+    const records = readFileSync(path.join(w.ccrcDir, DELEGATION_JOURNAL_FILE), 'utf8').split('\n').filter((l) => l !== '')
+      .map((l) => JSON.parse(l) as { journalId: string; entry: Record<string, unknown> });
+    const byId = new Map(records.map((r) => [r.journalId, r.entry]));
+    const raw = records.filter((r) => r.entry['kind'] === 'lease-created' && r.entry['sourceKind'] === 'raw');
+    expect(raw, 'the fixture journaled a raw lease').toHaveLength(1);
+    for (const lease of raw) {
+      const ids = lease.entry['correlationJournalIds'] as string[];
+      const evidence = ids.map((id) => byId.get(id));
+      expect(evidence.every((e) => e !== undefined && e['kind'] === 'evidence-accepted'), 'every correlation id names an accepted record').toBe(true);
+      const calls = evidence.map((e) => e!['event'] as Record<string, unknown>).filter((ev) => ev['toolName'] === 'Bash');
+      const pre = calls.find((ev) => ev['eventKind'] === 'PreToolUse');
+      const post = calls.find((ev) => ev['eventKind'] === 'PostToolUse');
+      expect(pre, 'the creating call\'s PreToolUse').toBeDefined();
+      expect(post, 'the creating call\'s PostToolUse').toBeDefined();
+      expect(pre!['toolUseId']).toBe('toolu_wt1');
+      expect(post!['toolUseId'], 'one call').toBe(pre!['toolUseId']);
+      expect(pre!['sessionId']).toBe(lease.entry['parentId']);
+      expect(pre!['listing'], 'the admin records before').toEqual(['old-tree']);
+      expect(post!['listing'], 'and after: the one it added').toEqual(['old-tree', 'raw-tree']);
+    }
+  }, 120_000);
 });
 
 // ═════════════════════════════════════════════════════════════════════════════════════════════════════════════════════

@@ -1807,6 +1807,59 @@ describe('the lane remembers what it dropped (R65): a link that rests on an even
         await asked(11);
         expect(keysOf(w), 'the answer recurred: it holds no tree, and its keys go').toBe(1);
       });
+
+      it('R92 (F3): one census noted twice (a lane\'s first pass notes it at its load and again at its reconcile) counts as ONE pass of the streak', async () => {
+        const w = padded();
+        writeBucket(w, 'bad-s', BUCKET10, ...Array.from({ length: 4 }, (_, i) => tool('bad-s', 300 + i, `/w/bad/far-${i}`, `2026-10-15T10:00:0${i}.000Z`)));
+        w.watcher.setDelegationSeams(SEAMS);
+        const sessions = [sessionOf('bad-s', 'idle', 'bad'), sessionOf('demo-a')];
+        const asked = async (minute: number): Promise<void> => { another(w); await censusPass(w, NOW + minute * 60_000, { demo: [RAW], bad: 'not-a-checkout' }, sessions); };
+        await asked(0);                                                  // the lane's first pass: one census, noted twice
+        await asked(11);
+        expect(keysOf(w), 'two censuses over eleven minutes are not three: its keys are kept').toBe(1 + 4);
+        await asked(12);
+        expect(keysOf(w), 'the third census confirms it').toBe(1);
+      });
+
+      it('R93 (F4): a project ABSENT from a census resets both streaks, the R71 not-a-checkout one and the R73 unplaced one', async () => {
+        // the R71 streak: not-a-checkout, absent, then two more not-a-checkout censuses over six minutes are a run of two, not of three
+        const w = padded();
+        writeBucket(w, 'bad-s', BUCKET10, ...Array.from({ length: 4 }, (_, i) => tool('bad-s', 300 + i, `/w/bad/far-${i}`, `2026-10-15T10:00:0${i}.000Z`)));
+        w.watcher.setDelegationSeams(SEAMS);
+        const sessions = [sessionOf('bad-s', 'idle', 'bad'), sessionOf('demo-a')];
+        // (no new event on the absent pass: no prune is due there, so only the streak decides what the later prunes forget)
+        const asked = async (minute: number, bad: boolean): Promise<void> => {
+          if (bad) another(w);
+          await censusPass(w, NOW + minute * 60_000, bad ? { demo: [RAW], bad: 'not-a-checkout' } : { demo: [RAW] }, sessions);
+        };
+        await asked(0, true);
+        await asked(5, false);                                          // `bad` is absent from this census
+        expect(keysOf(w)).toBe(1 + 4);
+        await asked(10, true);
+        await asked(16, true);
+        expect(keysOf(w), 'R71: an absence broke the run').toBe(1 + 4);
+        await asked(21, true);
+        expect(keysOf(w), 'R71: three since the absence, over eleven minutes').toBe(1);
+        // the R73 unplaced streak: a transient null path, its project absent once, then two more such censuses
+        const u = world();
+        writeBucket(u, 'demo-a', BUCKET10, ...Array.from({ length: 30 }, (_, i) => tool('demo-a', 400 + i, `/w/demo/far-${i}`, `2026-10-15T10:0${Math.floor(i / 12)}:${String((i % 12) * 5).padStart(2, '0')}.000Z`)));
+        u.watcher.setDelegationSeams({ evidenceCap: 2, droppedPruneEvery: 1 });
+        const flaky = { ...RAW, adminRecord: 'flaky-tree', state: 'unreadable' as const, canonicalPath: null, diagnostic: 'gitdir-unreadable' };
+        let k = 0;
+        const flakyPass = async (minute: number, present: boolean): Promise<void> => {
+          k += 1;
+          if (present) appendBucket(u, 'demo-a', BUCKET10, tool('demo-a', 700 + k, `/w/demo/later-${k}`, `2026-10-15T10:${String(20 + k).padStart(2, '0')}:00.000Z`));
+          await censusPass(u, NOW + minute * 60_000, present ? { demo: [RAW, flaky] } : { other: [] });
+        };
+        await flakyPass(0, true);
+        await flakyPass(5, false);                                      // demo is absent from this census
+        expect(keysOf(u)).toBeGreaterThan(20);
+        await flakyPass(10, true);
+        await flakyPass(16, true);
+        expect(keysOf(u), 'R73 rule 1: an absence broke the run, so the project still holds its keys').toBeGreaterThan(20);
+        await flakyPass(21, true);
+        expect(keysOf(u), 'R73 rule 1: three since the absence, over eleven minutes').toBe(0);
+      });
     });
 
     describe('refused-project: the name is refused before anything is read, so no path in it is ever a candidate', () => {
@@ -3827,5 +3880,31 @@ describe('R90 (W3, coordinator 5512): within one hour a loss word displaces a ca
     for (let i = 0; i < 3; i++) await censusPass(w, later + i * STEP, WITH_TREE);
     expect(leasesOf(w.home), 'the hour vetoes').toEqual([]);
     expect(intervalFor(w.home, 'demo-x')!.detail, 'the loss word displaced the carve-out word').toMatch(/^hour-never-closed: listed in this hour/);
+  });
+});
+
+describe('R91 and R94: the never-listed gap, pinned as it is today, and two incarnations of one session id', () => {
+  it('R91 (W1, the never-listed part; THIS ROW PINS THE GAP): a session born and gone between two census passes, never in any census, is never read, so rung 4 STILL links across its overlapping call', async () => {
+    // Disclosed (coordinator 5512): the lane lists owners from the census only, so a spool it never listed is never read. The wave-4
+    // candidate is listing the spool root; a lane that does so turns this row red, which is intended: then flip its expectation.
+    const w = world();
+    makeOwner(w, 'demo-a');
+    await censusPass(w, at(0), BEFORE_TREE);                             // ready
+    creatorAfter(w, at(0), 'demo-gone');                                 // demo-gone was born after at(0)'s census and gone before at(1)'s
+    for (let i = 1; i < 5; i++) await censusPass(w, at(i), WITH_TREE);
+    expect(w.calls.listings, 'its spool was never listed').not.toContain('demo-gone');
+    expect(leasedOf(w), 'today: rung 4 links across the overlapping call of a session no census named').toEqual([['raw-tree', 'raw', 'demo-a']]);
+  });
+
+  it('R94 (W4): the carve-out\'s had-a-spool set is keyed by session id alone (the spool directory is per id): a cursor row or a measured hour of one incarnation makes another incarnation\'s directory-absent hour veto', () => {
+    const absent = { sessionId: 'demo-a', parentIncarnation: OTHER_INC, utcHour: HOUR10, state: 'unmeasured' as const, detail: 'directory-absent: the owner spool directory does not exist', recordedAt: '2026-10-15T10:30:00.000Z' };
+    const cursor = { sessionId: 'demo-a', parentIncarnation: INC, bucket: '2026101508', cursor: 10, lastSize: 70, lastCompleteAt: null, intervalState: 'measured' as const, detail: null, anchor: null, replaced: false };
+    const measuredHour = { ...absent, parentIncarnation: INC, utcHour: '2026-10-15T08:00:00.000Z', state: 'measured' as const, detail: null };
+    const hourWindow = expect.objectContaining({ sessionId: 'demo-a', parentIncarnation: OTHER_INC, repository: null, lost: true, startedAt: HOUR10 });
+    const of = (intervals: readonly (typeof absent | typeof measuredHour)[], cursors: readonly (typeof cursor)[]) =>
+      delegationLostWindowsOf(intervals, cursors, NOW).filter((x) => x.sessionId !== '');
+    expect(of([absent], [cursor]), 'incarnation 1 had a cursor row: incarnation 2\'s directory-absent hour vetoes').toEqual([hourWindow]);
+    expect(of([absent, measuredHour], []), 'incarnation 1 had a measured hour: the same').toEqual([hourWindow]);
+    expect(of([absent], []), 'CONTROL: no spool under any incarnation: the carve-out').toEqual([]);
   });
 });
