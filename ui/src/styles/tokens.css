@@ -122,6 +122,24 @@
   --status-cleanup:        var(--status-idle);
   --status-cleanup-text:   var(--ink-secondary);
 
+  /* The scrollbar thumb (base.css's `html` rule; D-5159). Its track is
+     `transparent`, so the thumb sits on whatever its scroll container paints:
+     the page, a surface, a raised field, a sheet, or a WELL — dark in every
+     palette, the light ones included. It owes 3:1 on all five (WCAG 1.4.11:
+     an author-set thumb is a graphical object), and --edge-strong, the
+     hairline the plan first named, owed nothing: it measured 1.03 (One Dark)
+     and 1.06 (Solarized Light), an invisible thumb. No ink clears both sides
+     of a light palette (white grounds AND a near-black well); the idle lamp's
+     matte grey does, because that is the contract the generator fits every
+     status dot to — 3:1 plus margin against surface, page, raised and the
+     well — and the gate holds Phosphor's two hand-tuned values to it. So the
+     thumb is DERIVED from it, declared once here and re-resolved by every
+     palette, never a hex tuned until the numbers pass. Matte, so it never
+     glows; grey in every palette, so it reads as chrome, not as a state.
+     Held at 3:1 on all five grounds by contrast-check.mjs's token pairs and
+     by base-defaults.test.ts. */
+  --scrollbar-thumb:       var(--status-idle);
+
   /* Account accents — chip text on chip tint. Six hues (shared/roster.ts's
      HUES): cyan/violet/blue/magenta live in the cool half of the wheel
      (~190/265/222/330), 40°+ apart, so none of them collides with status
@@ -452,9 +470,9 @@
   --edge-subtle:             #505A6C;
   --edge-strong:             #5F697C;
   --ink-primary:             #ECEFF4;
-  --ink-secondary:           #ECEFF4;
-  --ink-tertiary:            #ECEFF4;
-  --ink-disabled:            #BEC1C6;
+  --ink-secondary:           #D6D9DE;
+  --ink-tertiary:            #C1C4C8;
+  --ink-disabled:            #95989C;
   --ink-on-well:             #ECEFF4;
   --accent:                  #92CADA;
   --ink-on-accent:           #07140C;
@@ -519,9 +537,9 @@
   --edge-subtle:             #353B50;
   --edge-strong:             #484D63;
   --ink-primary:             #C0CAF5;
-  --ink-secondary:           #C0CAF5;
-  --ink-tertiary:            #C0CAF5;
-  --ink-disabled:            #949EC7;
+  --ink-secondary:           #AAB4DE;
+  --ink-tertiary:            #959FC8;
+  --ink-disabled:            #6C759C;
   --ink-on-well:             #C0CAF5;
   --accent:                  #7AA2F7;
   --ink-on-accent:           #07140C;
@@ -586,9 +604,9 @@
   --edge-subtle:             #515568;
   --edge-strong:             #65687D;
   --ink-primary:             #F8F8F2;
-  --ink-secondary:           #F8F8F2;
-  --ink-tertiary:            #F8F8F2;
-  --ink-disabled:            #CACAC4;
+  --ink-secondary:           #DCDCD6;
+  --ink-tertiary:            #C0C0BA;
+  --ink-disabled:            #94948F;
   --ink-on-well:             #F8F8F2;
   --accent:                  #CDAEFD;
   --ink-on-accent:           #07140C;
@@ -651,11 +669,11 @@
   --bg-well:                 #181825;
   --scrim:                   rgba(4, 6, 5, 0.62);
   --edge-subtle:             #525568;
-  --edge-strong:             #57596E;
-  --ink-primary:             #D1DAF8;
-  --ink-secondary:           #CDD6F4;
-  --ink-tertiary:            #CDD6F4;
-  --ink-disabled:            #A1A9C6;
+  --edge-strong:             #5C5E72;
+  --ink-primary:             #D4DDFB;
+  --ink-secondary:           #C0C9E7;
+  --ink-tertiary:            #ADB6D3;
+  --ink-disabled:            #828BA6;
   --ink-on-well:             #CDD6F4;
   --accent:                  #96BEFF;
   --ink-on-accent:           #07140C;
@@ -718,11 +736,11 @@
   --bg-well:                 #1D2021;
   --scrim:                   rgba(4, 6, 5, 0.62);
   --edge-subtle:             #5E5753;
-  --edge-strong:             #645C59;
-  --ink-primary:             #ECDCB3;
-  --ink-secondary:           #EBDBB2;
-  --ink-tertiary:            #EBDBB2;
-  --ink-disabled:            #BEAE86;
+  --edge-strong:             #68605C;
+  --ink-primary:             #F1E1B7;
+  --ink-secondary:           #DDCDA4;
+  --ink-tertiary:            #C9BA91;
+  --ink-disabled:            #9D8F67;
   --ink-on-well:             #EBDBB2;
   --accent:                  #C3C737;
   --ink-on-accent:           #07140C;
@@ -785,11 +803,11 @@
   --bg-well:                 #21252B;
   --scrim:                   rgba(4, 6, 5, 0.62);
   --edge-subtle:             #4B515F;
-  --edge-strong:             #3C424F;
-  --ink-primary:             #CCD3E1;
-  --ink-secondary:           #BFC6D4;
-  --ink-tertiary:            #B1B8C5;
-  --ink-disabled:            #868D99;
+  --edge-strong:             #555B69;
+  --ink-primary:             #D1D8E6;
+  --ink-secondary:           #BDC4D2;
+  --ink-tertiary:            #AAB1BE;
+  --ink-disabled:            #7F8692;
   --ink-on-well:             #ABB2BF;
   --accent:                  #6FBDFE;
   --ink-on-accent:           #07140C;
@@ -852,11 +870,11 @@
   --bg-well:                 #001F27;
   --scrim:                   rgba(4, 6, 5, 0.62);
   --edge-subtle:             #1F5461;
-  --edge-strong:             #000003;
-  --ink-primary:             #C1D0D0;
-  --ink-secondary:           #B4C3C3;
-  --ink-tertiary:            #A7B5B5;
-  --ink-disabled:            #7D8A8A;
+  --edge-strong:             #2A5F6C;
+  --ink-primary:             #C5D5D5;
+  --ink-secondary:           #B1C1C1;
+  --ink-tertiary:            #9EAEAE;
+  --ink-disabled:            #748383;
   --ink-on-well:             #94A2A2;
   --accent:                  #63B7FB;
   --ink-on-accent:           #07140C;
@@ -921,9 +939,9 @@
   --edge-subtle:             #E5E7E9;
   --edge-strong:             #CFD0D2;
   --ink-primary:             #1F2328;
-  --ink-secondary:           #1F2328;
-  --ink-tertiary:            #1F2328;
-  --ink-disabled:            #42474C;
+  --ink-secondary:           #3F4348;
+  --ink-tertiary:            #61656B;
+  --ink-disabled:            #8A8E94;
   --ink-on-well:             #A8ADB4;
   --accent:                  #0969DA;
   --ink-on-accent:           #FFFFFF;
@@ -986,11 +1004,11 @@
   --bg-well:                 #002B36;
   --scrim:                   rgba(20, 26, 22, 0.42);
   --edge-subtle:             #DED8C5;
-  --edge-strong:             #F6F0DD;
-  --ink-primary:             #3F545B;
-  --ink-secondary:           #465C63;
-  --ink-tertiary:            #51676E;
-  --ink-disabled:            #799098;
+  --edge-strong:             #C7C1AF;
+  --ink-primary:             #3A4F55;
+  --ink-secondary:           #475D63;
+  --ink-tertiary:            #556B72;
+  --ink-disabled:            #7D949C;
   --ink-on-well:             #98AFB7;
   --accent:                  #0768A3;
   --ink-on-accent:           #FFFFFF;
@@ -1053,11 +1071,11 @@
   --bg-well:                 #1E1E2E;
   --scrim:                   rgba(20, 26, 22, 0.42);
   --edge-subtle:             #D6D9DE;
-  --edge-strong:             #C4C7CD;
-  --ink-primary:             #4C4F69;
-  --ink-secondary:           #4C4F69;
-  --ink-tertiary:            #4C4F69;
-  --ink-disabled:            #737793;
+  --edge-strong:             #BFC2C8;
+  --ink-primary:             #474A63;
+  --ink-secondary:           #555872;
+  --ink-tertiary:            #646782;
+  --ink-disabled:            #8D90AD;
   --ink-on-well:             #9EA2C0;
   --accent:                  #0F59E7;
   --ink-on-accent:           #FFFFFF;

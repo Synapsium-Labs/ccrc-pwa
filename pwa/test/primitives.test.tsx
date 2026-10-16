@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
-import { BACK_BUTTON, BackButton, CHIP, CHIP_DOT, Chip, DOOR, Door, LimitBar, QuickConfirm, Sheet, Skeleton, StatusDot, ToastHost, toast } from '@ccrc/ui';
+import { BACK_BUTTON, BackButton, Button, CHIP, CHIP_DOT, Chip, DOOR, Door, LimitBar, QuickConfirm, Sheet, Skeleton, StatusDot, ToastHost, buttonVariants, toast } from '@ccrc/ui';
 
 // vitest runs without globals, so RTL's auto-cleanup never registers itself.
 afterEach(() => {
@@ -525,5 +525,29 @@ describe('Door', () => {
     expect(el.querySelector('[aria-hidden="true"]')).toHaveTextContent('⚙');
     // And the visible word is still there for a voice user reading the screen.
     expect(el).toHaveTextContent('Settings');
+  });
+});
+
+// — Button —
+
+describe('Button', () => {
+  it('a full-width Button carries side padding', () => {
+    // `full` is the sheet shape and the default, so it is the button a long
+    // label wraps inside: "Archive and keep the branch" on a 360px sheet. It
+    // used to set the width and nothing else, so a wrapped label ran from
+    // border to border. `fit` already carried its own `px-3`.
+    //
+    // By UTILITY, not by substring: `px-4` must be a class of its own, and the
+    // rendered element is asserted as well as the variant, because what
+    // reaches the DOM is base + variant + size through `cn`, and a merge that
+    // dropped the padding would leave the cva string looking right.
+    expect(buttonVariants({ size: 'full' }).split(/\s+/)).toContain('px-4');
+    render(<Button>Archive and keep the branch</Button>);
+    const el = screen.getByRole('button', { name: 'Archive and keep the branch' });
+    expect(el).toHaveClass('w-full');
+    expect(el).toHaveClass('px-4');
+    // The fit size keeps its own, narrower padding — the two never stack.
+    expect(buttonVariants({ size: 'fit' }).split(/\s+/)).toContain('px-3');
+    expect(buttonVariants({ size: 'fit' }).split(/\s+/)).not.toContain('px-4');
   });
 });
