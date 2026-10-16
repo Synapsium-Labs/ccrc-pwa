@@ -23,9 +23,13 @@
 //     collapsed onto primary, and one whose secondary has (each TIER row has
 //     its own forgery, so deleting or zeroing either row reds here);
 //   * the EXCEPTIONS, three times (D-5155) — the gate excepts exactly Solarized
-//     Light and Catppuccin Latte, at 0.10 and with a reason, so a third entry
-//     reds; an excepted palette that drifts below 0.10 reds; and an entry that
-//     is stale or names no palette is itself a FAIL row;
+//     Light and Catppuccin Latte, at exactly 0.10 and each with a non-blank
+//     reason, and holds every other palette to exactly 0.12 and every step to
+//     0.04, read both from the gate's own declarations and from the rows it
+//     prints, so a third entry reds and so does a floor nudged inside its
+//     rounding (0.105, 0.119); an excepted palette that drifts below 0.10
+//     reds; and an entry that is stale, names no palette or gives no reason is
+//     itself a FAIL row;
 //   * the WALK — tertiary was walked to the grounds it will actually sit on,
 //     including the two Task 9 adds (the accent tint under the selected row,
 //     and the pressed recipe), to 4.9 and past it only while the band needed;
@@ -40,6 +44,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { cpSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
+import { runInNewContext } from 'node:vm';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { loadThemes, ratio, resolveColor, stylesheets } from '../design/audit.mjs';
@@ -227,6 +232,25 @@ function forgeToken(dir: string, name: string, token: string, hex: string): void
   writeFileSync(tokens, css.slice(0, open) + block.replace(declared, `$1${hex};`) + css.slice(close));
 }
 
+/** The gate's floors as the gate DECLARES them: its own `TIER_FLOOR`,
+ *  `TIER_STEP` and `TIER_FLOOR_EXCEPTIONS` declarations, read off its source
+ *  and evaluated as JavaScript. Exact numbers, where a printed row is only as
+ *  exact as its formatting; importing the gate would run it. Each must be
+ *  declared exactly once, or this throws rather than pick one. */
+function gateDeclared(file: string): { floor: unknown; step: unknown; exceptions: unknown } {
+  const src = readFileSync(file, 'utf8');
+  const once = (re: RegExp, what: string): unknown => {
+    const hits = [...src.matchAll(re)];
+    if (hits.length !== 1) throw new Error(`the gate declares ${what} ${hits.length} times, not once`);
+    return runInNewContext(`(${hits[0]?.[1] ?? ''})`);
+  };
+  return {
+    floor: once(/^const TIER_FLOOR = ([^;\n]+);$/gm, 'TIER_FLOOR'),
+    step: once(/^const TIER_STEP = ([^;\n]+);$/gm, 'TIER_STEP'),
+    exceptions: once(/^const TIER_FLOOR_EXCEPTIONS = (\{[\s\S]*?^\});$/gm, 'TIER_FLOOR_EXCEPTIONS'),
+  };
+}
+
 const runGate = (dir: string): { status: number | null; stdout: string } => {
   const r = spawnSync(process.execPath, [path.join(dir, 'design', 'contrast-check.mjs')], { encoding: 'utf8' });
   return { status: r.status, stdout: r.stdout };
@@ -326,31 +350,44 @@ describe('the ink tiers are three inks (D-5097)', () => {
     expect(fails.filter((l) => !l.includes('TIER'))).toEqual([]);
   }, 30_000);
 
-  it('the gate excepts exactly Solarized Light and Catppuccin Latte, each at 0.10 with its reason, and holds every other palette to 0.12 (D-5155)', () => {
-    // Read off the gate's OWN output on the committed tree, so the list this
-    // case holds is the list the gate applies, not a copy of its source. A
+  it('the gate excepts exactly Solarized Light and Catppuccin Latte, each at exactly 0.10 with a reason, and holds every other palette to exactly 0.12 and every step to 0.04 (D-5155)', () => {
+    // First the floors as the gate DECLARES them, exactly. A floor nudged
+    // inside its rounding (0.105 or 0.098 for an exception, 0.119 or 0.1201
+    // for the rest, 0.035 for a step) prints the same to two decimals, so
+    // only the declared number tells it from the contract.
+    const declared = gateDeclared(path.join(ROOT, 'design', 'contrast-check.mjs'));
+    expect(declared.floor, "the gate's TIER_FLOOR").toBe(TIER_FLOOR);
+    expect(declared.step, "the gate's TIER_STEP").toBe(TIER_STEP);
+    const entries = Object.entries((declared.exceptions ?? {}) as Record<string, { floor?: unknown; why?: unknown }>);
+    expect(Object.fromEntries(entries.map(([name, e]) => [name, e.floor]))).toEqual(TIER_FLOOR_EXCEPTIONS);
+    // Each with its reason, and a reason is not blank.
+    expect(entries.filter(([, e]) => typeof e.why !== 'string' || !/\S/.test(e.why)).map(([name]) => name)).toEqual([]);
+
+    // Then the gate's OWN output on the committed tree, so the list this case
+    // holds is the list the gate applies, not only the one it declares. A
     // third entry prints a third excepted row and reds here even when its
     // palette measures under 0.12, where the gate's staleness check cannot
-    // see it.
+    // see it. The gate prints each floor exactly, so a floor applied other
+    // than as declared reds here too.
     const r = runGate(ROOT);
     const rows = r.stdout.split('\n').filter((l) => /\sTIER \S+\s+ΔL primary → tertiary/.test(l));
     const read = rows.map((l) => {
       const m = /^(PASS|FAIL)\s+-?[\d.]+\s+\(min ([\d.]+)\)\s+TIER (\S+)\s/.exec(l);
       if (m === null) throw new Error(`unparsed TIER row: ${l}`);
-      return { name: m[3] as string, min: m[2] as string, excepted: l.includes('— exception (D-5155): ') };
+      return { name: m[3] as string, min: m[2] as string, excepted: /— exception \(D-5155\): \S/.test(l) };
     });
     // One ΔL row per palette, so no palette is missing from the reading.
     const { all } = loadThemes(ROOT);
     expect(read.map((x) => x.name).sort()).toEqual(all.map(([label]) => label.trim()).sort());
-    const excepted = read.filter((x) => x.excepted || x.min !== '0.12');
+    const excepted = read.filter((x) => x.excepted || x.min !== String(TIER_FLOOR));
     expect(excepted.map((x) => `${x.name} ${x.min} ${x.excepted ? 'with' : 'without'} a reason`).sort()).toEqual(
-      Object.entries(TIER_FLOOR_EXCEPTIONS).map(([name, floor]) => `${name} ${floor.toFixed(2)} with a reason`).sort(),
+      Object.entries(TIER_FLOOR_EXCEPTIONS).map(([name, floor]) => `${name} ${floor} with a reason`).sort(),
     );
     // Only the ΔL row is excepted: every step row, the two palettes' included,
-    // keeps 0.04 and carries no reason.
+    // keeps exactly 0.04 and carries no reason.
     const steps = r.stdout.split('\n').filter((l) => /\sTIER \S+\s+step /.test(l));
     expect(steps.length).toBe(2 * all.length);
-    expect(steps.filter((l) => !/\(min 0\.04\)/.test(l) || l.includes('exception'))).toEqual([]);
+    expect(steps.filter((l) => !l.includes(`(min ${TIER_STEP})`) || l.includes('exception'))).toEqual([]);
     // And the committed tree passes them: the gate is green with the two in it.
     expect(r.stdout).not.toMatch(/^FAIL/m);
     expect(r.status).toBe(0);
@@ -380,11 +417,12 @@ describe('the ink tiers are three inks (D-5097)', () => {
     expect(r.status).not.toBe(0);
     expect(failRows(r.stdout).map((l) => /TIER (\S+)/.exec(l)?.[1]).sort()).toEqual(Object.keys(TIER_FLOOR_EXCEPTIONS).sort());
     for (const name of Object.keys(TIER_FLOOR_EXCEPTIONS)) {
-      expect(r.stdout).toMatch(new RegExp(`^FAIL\\s+0\\.09\\d\\s+\\(min 0\\.10\\)\\s+TIER ${name}\\s+ΔL primary → tertiary .*exception \\(D-5155\\)`, 'm'));
+      // `(min 0.1)`: the gate prints the floor exactly.
+      expect(r.stdout).toMatch(new RegExp(`^FAIL\\s+0\\.09\\d\\s+\\(min 0\\.1\\)\\s+TIER ${name}\\s+ΔL primary → tertiary .*exception \\(D-5155\\)`, 'm'));
     }
   }, 30_000);
 
-  it('an exception that is stale, or that names no palette, is itself a FAIL row', () => {
+  it('an exception that is stale, that names no palette, or that gives no reason, is itself a FAIL row', () => {
     // Stale: Latte's primary moved 0.02 further from the ground, so its band
     // clears 0.12 and the exception holds nothing. Darker ink on a light
     // palette only raises primary's pairs.
@@ -413,6 +451,23 @@ describe('the ink tiers are three inks (D-5097)', () => {
     expect(failRows(r2.stdout)).toEqual([
       expect.stringMatching(/^FAIL\s+0\.1\d\d\s+\(min 0\.12\)\s+TIER CATPPUCCIN-LATTE\s+ΔL primary → tertiary/),
       expect.stringMatching(/^FAIL\s+-+\s+\(tier\)\s+TIER_FLOOR_EXCEPTIONS entry CATPPUCCIN-LATE .*names no palette/),
+    ]);
+
+    // Unreasoned: Latte's own entry with its reason blanked to whitespace. Its
+    // floor still holds and its ΔL row still passes; the entry is reported.
+    const blank = gateTree();
+    const blankGate = path.join(blank, 'design', 'contrast-check.mjs');
+    const blankSrc = readFileSync(blankGate, 'utf8');
+    const latteAt = blankSrc.indexOf("'CATPPUCCIN-LATTE': {");
+    expect(latteAt, 'the gate names Latte').toBeGreaterThan(0);
+    const reason = /why: '[^']*',/.exec(blankSrc.slice(latteAt));
+    if (reason === null) throw new Error("the gate's Latte entry has no reason to blank");
+    const at = latteAt + reason.index;
+    writeFileSync(blankGate, blankSrc.slice(0, at) + "why: '  '," + blankSrc.slice(at + reason[0].length));
+    const r3 = runGate(blank);
+    expect(r3.status).not.toBe(0);
+    expect(failRows(r3.stdout)).toEqual([
+      expect.stringMatching(/^FAIL\s+-+\s+\(tier\)\s+TIER_FLOOR_EXCEPTIONS entry CATPPUCCIN-LATTE \(floor 0\.1\) gives no reason/),
     ]);
   }, 30_000);
 

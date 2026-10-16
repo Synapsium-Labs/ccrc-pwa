@@ -1329,9 +1329,9 @@ A worker never allocates: it names a departure by slug in its report, and the co
     - Solarized Light and Catppuccin Latte move 0.019 and still measure ΔL 0.100 and 0.105, under the gate's 0.12. On a light palette the dark ink sits low on the lightness axis, where the same contrast span is a shorter OKLab distance.
     - Tertiary reads 4.50 to 4.54 on its worst ground in eight palettes, and 4.92 to 4.94 in Dracula and GitHub Light.
   - **The exception (the coordinator's 2026-10-16 ruling).** Solarized Light and Catppuccin Latte are low-contrast by design, so they keep their character. The gate's ΔL floor for exactly those two palettes is their measured band rounded down, **0.10**. Every other palette keeps 0.12, and both step rows keep 0.04 everywhere.
-    - It is registered in `pwa/design/contrast-check.mjs` as `TIER_FLOOR_EXCEPTIONS`, one named entry per palette, each with its reason. Each excepted row prints `(min 0.10)` and that reason.
-    - It is two-way: an entry whose palette clears 0.12 again is stale, and an entry that names no palette is an orphan. Each is a FAIL row.
-    - `pwa/test/ink-tiers.test.ts` pins the list, read off the gate's own output, to exactly these two. A third entry reds even for a palette that measures under 0.12, because widening the exception is a ruling, not an edit. It also reds when either palette drifts below 0.10.
+    - It is registered in `pwa/design/contrast-check.mjs` as `TIER_FLOOR_EXCEPTIONS`, one named entry per palette, each with its reason. Each excepted row prints `(min 0.1)` and that reason: the gate prints every TIER floor exactly, as its pair rows print theirs, because a floor rounded to two places hides a wrong one (0.119 printed `0.12`, 0.098 and 0.104 printed `0.10`).
+    - It is two-way: an entry whose palette clears 0.12 again is stale, and an entry that names no palette is an orphan. An entry whose reason is blank gives no ruling to read. Each is a FAIL row.
+    - `pwa/test/ink-tiers.test.ts` pins the list to exactly these two, twice: off the gate's own declarations, evaluated from its source as exact numbers (0.12, 0.04, and 0.10 for each of the two, each with a non-blank reason), and off the gate's own output. A third entry reds even for a palette that measures under 0.12, because widening the exception is a ruling, not an edit, and so does a floor nudged inside its rounding, such as 0.105 or 0.119. It also reds when either palette drifts below 0.10.
 
 ### Found while executing Task 13
 

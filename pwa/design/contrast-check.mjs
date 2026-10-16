@@ -309,10 +309,12 @@ const TIER_STEP = 0.04;
  *  Only the ΔL row is excepted. Both step rows keep 0.04, and every other
  *  palette keeps 0.12. Two-way, like the audit's registries: an entry whose
  *  palette clears 0.12 again is stale, and an entry that names no palette is
- *  a typo or a leftover. Both are FAIL rows. `pwa/test/ink-tiers.test.ts`
- *  pins the list to exactly these two, so a third entry reds there even for a
- *  palette that measures under 0.12: widening the exception is a ruling, not
- *  an edit. */
+ *  a typo or a leftover. An entry with a blank reason is a ruling nobody can
+ *  read. All three are FAIL rows. `pwa/test/ink-tiers.test.ts` pins the list
+ *  to exactly these two, at exactly these floors, so a third entry reds there
+ *  even for a palette that measures under 0.12, and so does a floor nudged
+ *  inside its rounding (0.105, 0.119): widening the exception is a ruling,
+ *  not an edit. */
 const TIER_FLOOR_EXCEPTIONS = {
   'SOLARIZED-LIGHT': {
     floor: 0.10,
@@ -355,20 +357,25 @@ for (const [name, theme] of ALL_PALETTES) {
     const ok = d >= min;
     if (!ok) fail++;
     n++;
-    console.log(`${ok ? 'PASS' : 'FAIL'}  ${d.toFixed(3).padStart(6)}  (min ${min.toFixed(2)})  TIER ${name.trim()}  ${label}  ${hex(a)} → ${hex(b)}${note}`);
+    // The floor is printed EXACTLY, as the pair rows above print theirs: a
+    // floor rounded for display hides a wrong one (0.119 and 0.1201 both
+    // printed 0.12, and 0.098 and 0.104 both printed 0.10), and the tests read
+    // these rows.
+    console.log(`${ok ? 'PASS' : 'FAIL'}  ${d.toFixed(3).padStart(6)}  (min ${min})  TIER ${name.trim()}  ${label}  ${hex(a)} → ${hex(b)}${note}`);
   }
 }
-// The exceptions' own two-way check. A FAIL row each, never a PASS row: a
-// registry that is in order adds nothing to the count.
-for (const [name, { floor }] of Object.entries(TIER_FLOOR_EXCEPTIONS)) {
+// The exceptions' own two-way check, and their reasons. A FAIL row each,
+// never a PASS row: a registry that is in order adds nothing to the count.
+for (const [name, { floor, why }] of Object.entries(TIER_FLOOR_EXCEPTIONS)) {
   const d = tierBand.get(name);
   let problem = null;
   if (d === undefined) problem = `names no palette: remove it`;
   else if (d >= TIER_FLOOR) problem = `is stale: ${name} measures ${d.toFixed(3)}, which clears ${TIER_FLOOR} without it — remove it`;
+  else if (typeof why !== 'string' || !/\S/.test(why)) problem = `gives no reason: an exception is a ruling, and its row says why`;
   if (problem === null) continue;
   fail++;
   n++;
-  console.log(`FAIL  ------  (tier)  TIER_FLOOR_EXCEPTIONS entry ${name} (floor ${floor.toFixed(2)}) ${problem}`);
+  console.log(`FAIL  ------  (tier)  TIER_FLOOR_EXCEPTIONS entry ${name} (floor ${floor}) ${problem}`);
 }
 
 console.log(`\n# stylesheets — ${report.sheets.join(', ')}`);
