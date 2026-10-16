@@ -187,6 +187,17 @@ re-measures the next-turn pickup across several sessions on both lanes, by readi
   explicit go. If it works, ccd types it at the next idle tick (§2.5 item 5 gives the trigger). If neither works,
   sessions move only on relaunch, and that choice goes back to the operator.
 
+**Re-measured on 2026-10-16: it does not hold.** The same re-pin was read again from transcript metadata, across
+every session that was on a replaced model before it: four sessions, two per lane.
+- The two that were idle at the re-pin moved at their next turn.
+- One that was mid-turn kept the old model for about 15 minutes, over two more turns, then switched mid-turn with
+  no relaunch.
+- One that was mid-turn kept the old model for about 26 hours, over many turns, and moved only when it was
+  relaunched on a newer Claude Code.
+
+So the fallback applies. The Codex arm's plan has no typed step, and a running session keeps the old model until it
+picks the new one up by itself or is relaunched. The typed-`/model` measurement waits for the operator's go.
+
 `model-sessions-behind` (§2.8) is the backstop either way.
 
 ### 2.5 Anthropic lanes
@@ -329,7 +340,7 @@ them with the written spec on 2026-10-15; D18 stays open until the measurement i
 | D8 | The Codex advance part | - (approved as presented) | Choose, canary, re-pin through the writer, move sessions, push | Agreed |
 | D9 | The Anthropic part | - (approved as presented) | Catalogue cache, canary by real use, no `settings.json` writes | Agreed |
 | D10 | Holds, revert, panel, doctor | - (approved as presented) | The panel, an agent `models` op, three named WARNs | Agreed |
-| D11 | Codex sessions need no typed `/model` | Keep the typed step; drop it if the next-turn pickup holds | Drop it only if the plan's first task confirms §2.4 | Agreed |
+| D11 | Codex sessions need no typed `/model` | Keep the typed step; drop it if the next-turn pickup holds | Drop it only if the plan's first task confirms §2.4. Re-measured 2026-10-16: it did not, so the fallback applies | Agreed |
 | D12 | Shell verbs documented | Taps only in the README; taps plus the verbs | Document the verbs, for a box whose console is down | Agreed |
 | D13 | Where the advance state lives | Inside the registry after a reader release; a sibling file | A sibling file, so a rollback never breaks a lane | Agreed |
 | D14 | How the panel reads | Widen the agent's file read; a `show` action on the op | `show` on the op, with no file-read widening | Agreed |
@@ -368,8 +379,8 @@ Each part ships with tests that go red when its guard is removed, measured, per 
   - The class registry's format is byte-for-byte what an older parser accepts with an advance file beside it.
 - **The Codex advance:** a fixture home with a fake lane proxy that answers the canary with a 200, a 500, a
   refused-connect 502 and a timeout, while the LiteLLM tier reads running or starting. Only the 500 raises a WARN.
-- **Running sessions:** the plan's first task re-measures §2.4 by reading transcripts. Any step that would type into
-  a session runs on a throwaway session, with the operator's explicit go.
+- **Running sessions:** §2.4 was re-measured from transcripts on 2026-10-16 and did not hold. Any step that would
+  type into a session runs on a throwaway session, with the operator's explicit go.
 - **The Anthropic arm:**
   - Fixture caches: one, several and none.
   - The canary by real use: no move before a completed turn on the new model, and a move after one.
@@ -395,6 +406,7 @@ Each part ships with tests that go red when its guard is removed, measured, per 
 ### Waiting on you
 
 - Review of the Codex arm's plan, which comes first (D20).
+- A go for the typed-`/model` measurement on a throwaway session (§2.4, D11's fallback).
 - D18 stays open until the Anthropic arm's plan measures what writes Claude Code's catalogue cache, and when.
 
 ### Later
