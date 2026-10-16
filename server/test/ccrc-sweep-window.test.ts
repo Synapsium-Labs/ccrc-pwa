@@ -24,7 +24,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import { itLinux } from './platformFixtures.js';
 import { mkTmp } from './tmpHelpers.js';
 import {
-  BASH, CCRC_SRC, FROZEN_VERIFY_S0, FROZEN_VERIFY_S10, SWEEP_OK, makeBox, runSweep, sweepSpawn, calls, poisonFiles, report, survivors, reapSurvivors,
+  BASH, CCRC_SRC, FROZEN_VERIFY_S0, FROZEN_VERIFY_S10, FROZEN_VERIFY_S15, SWEEP_OK, makeBox, runSweep, sweepSpawn, calls, poisonFiles, report, survivors, reapSurvivors,
   type Box, type UnitPlant,
 } from './sweepFixture.js';
 
@@ -1040,6 +1040,170 @@ describe('_upd_sweep, Linux arm, with the FROZEN wave-10 script S10 (a rollback 
     noLoadState(box);
     noPoison(box);
   }, 60_000);
+});
+
+// S15 is the script every release from wave 11's purged-arm guards up to wave 16 ships (`git show 0b3ff2f62:
+// deploy/verify-service.sh`, the dispatch base of wave 16): the classifier with `ccd_id_ok` and its `LoadState` query,
+// and none of wave 16's `-x` refusal or purge re-read. The update watchdog rolls a box back UNATTENDED, and a rollback
+// pairs the sweep this tree ships with the script of the release it returns to, so that pairing is pinned here and not
+// measured once by hand (wave 16, the coordinator's Reading 6 ruling). Every P case asserts that the script the box was
+// given is S15 by its digest (`ranS15`). P7 is the differential: the same plant under S15 and under this tree's script,
+// and what the sweep can see of the two must be equal.
+describe('_upd_sweep, Linux arm, with the FROZEN pre-wave-16 script S15 (a rollback across wave 16)', () => {
+  const S15_SHA = 'efcfa3be9797212995ad6d206b997a5d6b00fa82853ba4f8a5b2775f0b6062dc';
+  const s15 = (): string => readFileSync(FROZEN_VERIFY_S15, 'utf8');
+  const ranS15 = (box: Box): void => {
+    expect(sha256(readFileSync(join(box.home, 'ccrc', 'deploy', 'verify-service.sh'), 'utf8')),
+      'the box was given S15, not this tree\'s script').toBe(S15_SHA);
+  };
+  const nLoad = (box: Box, u: string): number => calls(box).filter((l) => l.includes('LoadState') && l.endsWith(u)).length;
+  const X15 = U('x');
+
+  itLinux('P0 the frozen S15 is the dispatch base\'s script', () => {
+    const text = s15();
+    expect(sha256(text), 'the frozen S15 is no longer the released text — it is never edited; restore it from '
+      + '`git show 0b3ff2f62:deploy/verify-service.sh`').toBe(S15_SHA);
+    expect(text.split('\n').length - 1).toBe(218);
+    expect(text).toContain('ccd_id_ok');
+    expect(text).toContain('LoadState');
+    expect(text).not.toContain('STOP_WHY');
+    expect(text).not.toContain('registry_evidence');
+  }, 60_000);
+
+  itLinux('P1 healthy units pass with S15', () => {
+    const box = makeBox({ units: [stable(A, 0), stable(B, 1)], verifySrc: FROZEN_VERIFY_S15 });
+    const r = runSweep(box);
+    expect(r.code, ctx(r)).toBe(0);
+    expect(r.stdout).toContain(SWEEP_OK);
+    expect(r.stderr).not.toContain(RECHECK);
+    ranS15(box);
+    noPoison(box);
+  }, 60_000);
+
+  itLinux('P2 a stamped stop passes with S15, on its first verify', () => {
+    const box = makeBox({
+      units: [stable(A, 0), { unit: B, active: ['active', 'inactive', 'inactive'], mainPid: ['5151'] }],
+      registry: { 'demo-a.uuid': 'u1\n', 'demo-b.uuid': 'u2\n', 'demo-b.stopped': `${STAMP}\n` },
+      verifySrc: FROZEN_VERIFY_S15,
+    });
+    const r = runSweep(box);
+    expect(r.code, ctx(r)).toBe(0);
+    expect(r.stdout).toContain(stoppedLine(B, 'demo-b'));
+    expect(r.stderr).not.toContain(RECHECK);
+    ranS15(box);
+    noPoison(box);
+  }, 60_000);
+
+  itLinux('P3 a purged stop passes with S15, on its first verify, with its one LoadState query', () => {
+    const box = makeBox({
+      units: [stable(A, 0), { unit: B, active: ['inactive', 'inactive'], mainPid: [] }],
+      registry: { 'demo-a.uuid': 'u1\n', 'demo-b.generation': '1\n' },
+      verifySrc: FROZEN_VERIFY_S15,
+    });
+    const r = runSweep(box);
+    expect(r.code, ctx(r)).toBe(0);
+    expect(r.stdout).toContain(purgedLine(B, 'demo-b'));
+    expect(r.stderr).not.toContain(RECHECK);
+    expect(nLoad(box, B), 'S15, unlike S10, asks LoadState on a purged row — once').toBe(1);
+    ranS15(box);
+    noPoison(box);
+  }, 60_000);
+
+  itLinux('P4 an unstamped stop fails with S15, after its re-check', () => {
+    const box = makeBox({
+      units: [stable(A, 0), { unit: B, active: ['active', 'inactive'], mainPid: ['5151'] }],
+      registry: { 'demo-a.uuid': 'u1\n', 'demo-b.uuid': 'u2\n' },
+      verifySrc: FROZEN_VERIFY_S15,
+    });
+    const r = runSweep(box);
+    expect(r.code, ctx(r)).toBe(1);
+    expect(count(box, act(B)), 'the first verify and its re-check both ran S15').toBe(5);
+    expect(dieOf(r.stderr), ctx(r)).toBe(dieLine(1, 2, 0, B));
+    ranS15(box);
+    noPoison(box);
+  }, 60_000);
+
+  // This tree's sweep (wave 16, D-5135, D-5136) with S15: the two lines it now prints are the sweep's own, and the
+  // script a rollback returns to changes neither.
+  itLinux('P5 a unit activating before the restart and listed active after is named, never verified, never fatal (S15)', () => {
+    const box = makeBox({
+      units: [stable(A, 0), { unit: X15, active: ['activating'], mainPid: [], listed: 'active', preRestart: 'activating' }],
+      verifySrc: FROZEN_VERIFY_S15,
+    });
+    const r = runSweep(box);
+    expect(r.code, ctx(r)).toBe(0);
+    expect(count(box, act(X15)), 'a unit that was not active before the restart is never verified').toBe(0);
+    expect(r.stderr.split('\n'), ctx(r)).toContain(
+      `update: warning: ${X15} was already 'activating' before try-restart and reads 'active' after it — it is named, not `
+      + 'verified, and does not fail this update (only a supervisor that was active before the restart is verified; '
+      + `wave 16, D-5136). On the box: systemctl --user status ${X15}`);
+    expect(r.stdout).toContain(SWEEP_OK);
+    ranS15(box);
+    noPoison(box);
+  }, 60_000);
+
+  itLinux('P6 a unit active before and failed after is verified with its re-check, and fails the update (S15)', () => {
+    const box = makeBox({
+      units: [stable(A, 0), { unit: B, active: ['failed'], mainPid: [], listed: 'crash:failed', failedListed: true }],
+      verifySrc: FROZEN_VERIFY_S15,
+    });
+    const r = runSweep(box);
+    expect(r.code, ctx(r)).toBe(1);
+    expect(count(box, act(B)), 'demo-b is verified: its first call and its re-check').toBe(2);
+    expect(r.stderr, ctx(r)).not.toContain(`${B} is FAILED — try-restart skipped it and this sweep did not verify it`);
+    expect(dieOf(r.stderr), ctx(r)).toBe(dieLine(1, 2, 0, B));
+    ranS15(box);
+    noPoison(box);
+  }, 60_000);
+
+  // P7, the differential. Two boxes with one plant, S15 on one and this tree's script on the other. The sweep can see
+  // an exit code, the systemctl calls each unit's verify made, stdout and stderr; none of those may differ for a shape
+  // the script change does not touch. What it does touch — an unsearchable registry, and a purge caught between its two
+  // unlinks — cannot be planted through the sweep fixture.
+  const SHAPES: ReadonlyArray<readonly [string, () => Parameters<typeof makeBox>[0]]> = [
+    ['healthy', () => ({ units: [stable(A, 0), stable(B, 1)] })],
+    ['a stamped stop', () => ({
+      units: [stable(A, 0), { unit: B, active: ['active', 'inactive', 'inactive'], mainPid: ['5151'] }],
+      registry: { 'demo-a.uuid': 'u1\n', 'demo-b.uuid': 'u2\n', 'demo-b.stopped': `${STAMP}\n` },
+    })],
+    ['a purged stop', () => ({
+      units: [stable(A, 0), { unit: B, active: ['inactive', 'inactive'], mainPid: [] }],
+      registry: { 'demo-a.uuid': 'u1\n', 'demo-b.generation': '1\n' },
+    })],
+    ['a hand stop', () => ({
+      units: [stable(A, 0), { unit: B, active: ['active', 'inactive'], mainPid: ['5151'] }],
+      registry: { 'demo-a.uuid': 'u1\n', 'demo-b.uuid': 'u2\n' },
+    })],
+    ['a crash-looping unit (a MainPID that churns)', () => ({ units: [stable(A, 0), churn(B)] })],
+  ];
+  // The verifies run concurrently, so the ORDER in which two units' calls interleave in the log is the scheduler's and
+  // differs between two runs of one script (measured: S15 against S15 differs). What a script decides is each unit's own
+  // sequence of calls, and the sweep's own (unit-less) calls in their order, so that is what is compared: nothing is
+  // dropped, and a call added, removed or reordered within a unit still differs.
+  const byUnit = (xs: string[]): Record<string, string[]> => {
+    const g: Record<string, string[]> = {};
+    for (const l of xs) {
+      const u = /claude-session@demo-[a-z]+\.service$/.exec(l)?.[0] ?? '(sweep)';
+      (g[u] ??= []).push(l);
+    }
+    return g;
+  };
+  itLinux.each(SHAPES)('P7 the sweep sees the same from S15 and from this tree\'s script (%s)', (_label, plant) => {
+    const old = makeBox({ ...plant(), verifySrc: FROZEN_VERIFY_S15 });
+    const cur = makeBox({ ...plant() });
+    const ro = runSweep(old);
+    const rc = runSweep(cur);
+    ranS15(old);
+    expect(sha256(readFileSync(join(cur.home, 'ccrc', 'deploy', 'verify-service.sh'), 'utf8')),
+      'the second box ran this tree\'s script, not S15').not.toBe(S15_SHA);
+    expect(rc.code, `S15:\n${ctx(ro)}\nthis tree:\n${ctx(rc)}`).toBe(ro.code);
+    expect(byUnit(calls(cur)), 'the systemctl calls differ').toEqual(byUnit(calls(old)));
+    expect(rc.stdout.includes(SWEEP_OK)).toBe(ro.stdout.includes(SWEEP_OK));
+    const mentioning = (s: string): string[] => s.split('\n').filter((l) => l.includes(B));
+    expect(mentioning(rc.stderr), 'the stderr lines that name the unit differ').toEqual(mentioning(ro.stderr));
+    noPoison(old);
+    noPoison(cur);
+  }, 120_000);
 });
 
 // WAVE 16 (centralised update management; D-5135, D-5136): what the sweep SAYS about a unit that did not come back

@@ -48,6 +48,10 @@ export const FROZEN_VERIFY_S0 = join(here, 'fixtures', 'verify-service-pre-wave1
 /** S10, the verify script as v0.0.80 through v0.0.91 ship it — wave 10's, with the classifier and none of wave 11's
  *  purged-arm guards — byte for byte (`git show v0.0.91:deploy/verify-service.sh`; wave 12, R19d, D-4069). */
 export const FROZEN_VERIFY_S10 = join(here, 'fixtures', 'verify-service-pre-wave11.sh');
+/** S15, the verify script as every release from wave 11's purged-arm guards up to wave 16 ships it — the script at the
+ *  dispatch base of wave 16, byte for byte (`git show 0b3ff2f62:deploy/verify-service.sh`), frozen so that a rollback's
+ *  pairing of a newer sweep with it is pinned (wave 16, the coordinator's Reading 6 ruling). */
+export const FROZEN_VERIFY_S15 = join(here, 'fixtures', 'verify-service-pre-wave16.sh');
 
 /** What gets a poison planted by `makeBox`. `gh` is not here: `ghContainedEnv` plants it. */
 export const POISONS: readonly string[] =
