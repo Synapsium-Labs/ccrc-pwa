@@ -119,6 +119,10 @@ function collect(box: Box): { found: number[]; jobs: number[]; leaks: number[]; 
   // 3000 trials, one of them `bash v.sh`). That is the kernel's and bash's race, not the launcher's recording. So a
   // survivor is a LAUNCHER leak only when its process group is NOT one the kill-log shows TERMed (`-TERM -- -<pgid>`):
   // a job that was never recorded sits in a group nothing signalled, and still reds. Needs the `kill` shadow.
+  // NO CASE REDS WHEN THE EXCEPTION IS REMOVED, by construction (wave 16, R18(d)): dropping an exception only makes a
+  // case stricter, so only a case that planted the race above could red, and none does — the race is not plantable
+  // from here. Measured: `false && termedGroups.has(g)` left this file green in every full run (2 of 2 at `main`
+  // 518789ad0, 65 cases; 2 of 2 as wave 16 left it, 89 cases).
   const termedGroups = new Set(killLog(box).map((l) => /^-TERM -- -(\d+)$/.exec(l)?.[1]).filter((g) => g !== undefined).map(Number));
   const termed: number[] = [];
   const leaks: number[] = [];
@@ -516,8 +520,8 @@ describe('_upd_sweep, Linux arm: one shared verify window, a re-check, crash-sha
   // units the PRE-restart listing shows ACTIVE. The crash listing's loop takes a unit only if it is one of `missing`
   // (`if [ "$m" = "$cu" ]`). Every other case plants its units active before, so only this one can see that filter
   // (review 281 F1; wave 12, R19b, D-4070). Demo-b is missing, so the listing is read; demo-x is in it but was not
-  // active before, so it is neither verified nor warned about. In (b) the pre-restart listing does not show demo-x at
-  // all, and try-restart leaves such a unit alone. In (a) demo-x read `activating` before the restart, and systemd's
+  // active before, so it is never verified (in (a) it is named by wave 16's line, below). In (b) the pre-restart listing
+  // does not show demo-x at all, and try-restart leaves such a unit alone. In (a) demo-x read `activating` before the restart, and systemd's
   // try-restart DOES restart an activating unit: (a) pins the shipped choice, to verify only units that were active.
   // The operator ruled that choice on 2026-10-15 (Reading 9, "warn only"; wave 16, D-5136): such a unit, still down
   // after the restart, is NAMED by its own line and is still never verified, and never fails the update. (b) is not

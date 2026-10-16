@@ -21080,7 +21080,7 @@ _upd_sweep_launch() {
 }
 # _upd_sweep_stop <vdir> — stop the launcher of the batch in flight and wait for it, so that every job it forked has its
 # pid recorded before `_upd_sweep_kill` looks (wave 11, D-3988). The launcher's pid is `$vdir/launcher.proc`, written by
-# the sweep right after it starts the launcher and truncated right after it is reaped (a stale pid is never signalled).
+# the sweep right after it starts the launcher and truncated right after it is reaped (an INT in the few builtins between can TERM the reaped pid once).
 # It is not named `*.pid`: `_upd_sweep_kill` signals the process group of every such file.
 # It creates `$vdir/stop`; if the launcher has finished its loop (`looped`) it is only waiting for its jobs, so it is
 # TERMed; otherwise it reads the stop file at its next iteration, ends, and never waits for its jobs. BOUNDED either
