@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=f7fae3fb11905bc8806c591bed1ee62b7b27344d2f3a9f569d1e036f6341e879
+# ccrc:generated 1 sha256=d64a3cd57cfd4fbba569fe84846b0166353e16a1f220c95d576c19a0060a3486
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -3134,10 +3134,10 @@ _reg_get() { [[ -f "$REG/$1.$2" && ! -L "$REG/$1.$2" ]] || return 1; local __rg_
 # THE FOLD `_reg_get` KEEPS, AND THE READ THAT DOES NOT. `_reg_get` answers `""`
 # for a field that is ABSENT, one that is UNREADABLE and one that is EMPTY — the
 # overloaded null the ring rules forbid at a seam. It stays exactly as it is,
-# and the reason is a count rather than a preference: this file makes 209
-# invocations across 178 non-comment lines.
+# and the reason is a count rather than a preference: this file makes 201
+# invocations across 170 non-comment lines.
 #
-# THE LAST MOVE WAS the forked-session transcript's review round 2 — the held-conversation wait (`_ci_held_wait` +3, `_supervised_start` +2, `_ci_bgwait_open`/`_ci_bgwait_close` +1 each — D-4944), the +7; before it its review round 1 (`_ci_bg_follow`, `_ci_chain_end`, `_ci_resume_follow` — D-4944/D-4945), the +3; before it the forked-session transcript's continued-in walk (`_sync_uuid`, `_follow_continued_in`), the +2; before it the read-back's lane gate (`_route_readback_transcript`), the +1; before it the read-back's transcript memo (`_route_readback_transcript`), the +1; before it the return gate's unarchive (workspace lifecycle wave 3b), the +2; before it the route read-back's uuid read (`_route_readback`), the +1; before it the EXPIRE region's reads (workspace lifecycle wave 3), the +10; before that the operator-choice reads (session-continuity wave 3), the +3; before that the rescue wait's reads (session-continuity wave 2), the +3;
+# THE LAST MOVE WAS the tick diet's `_reg_get_to` conversions (D-4963), the −8 (`_session_hard_blocked` 2, `_auto_stale_check` 1, `_auto_swap_check` 2, `_auto_compact_check` 3: each hot read now fills its variable with builtins, no subshell); before it the forked-session transcript's review round 2 — the held-conversation wait (`_ci_held_wait` +3, `_supervised_start` +2, `_ci_bgwait_open`/`_ci_bgwait_close` +1 each — D-4944), the +7; before it its review round 1 (`_ci_bg_follow`, `_ci_chain_end`, `_ci_resume_follow` — D-4944/D-4945), the +3; before it the forked-session transcript's continued-in walk (`_sync_uuid`, `_follow_continued_in`), the +2; before it the read-back's lane gate (`_route_readback_transcript`), the +1; before it the read-back's transcript memo (`_route_readback_transcript`), the +1; before it the return gate's unarchive (workspace lifecycle wave 3b), the +2; before it the route read-back's uuid read (`_route_readback`), the +1; before it the EXPIRE region's reads (workspace lifecycle wave 3), the +10; before that the operator-choice reads (session-continuity wave 3), the +3; before that the rescue wait's reads (session-continuity wave 2), the +3;
 # then D-3526's carried-in verdict, the +6 (`_limit_dated`, `_limit_read`, `_never_came_up`, three in `_carried_in_note`); then the RECLAIM region's reads (CCR-15 wave 3, Task 5), `_child_tmpdir`'s and CCR-10's.
 # BEFORE THAT IT WAS ROUTING SLICE 4's, and naming it is what stops the next
 # reader hunting for a merge that did not happen: the applier and its registry
@@ -18377,9 +18377,9 @@ _session_hard_blocked() {   # id pane-text -> success iff the pane says stuck, O
   # both still reports the older, more specific detector.
   _pane_limit_banner "$pane" && { _pane_carried_in "$id" banner "$pane" && return 1; HARD_BLOCK_VIA=banner; return 0; }
   grep -q "esc to interrupt" <<<"$pane" && return 1
-  _now_s_to now; last=$(_reg_get "$id" stalepress)   # D-4961: the clock seam
+  _now_s_to now; _reg_get_to last "$id" stalepress   # D-4961: the clock seam; D-4963: a builtin read, no subshell
   [[ "$last" =~ ^[0-9]+$ && $((now - last)) -lt "$STALE_RESUME_GRACE" ]] && return 1
-  scan=$(_reg_get "$id" tscan)
+  _reg_get_to scan "$id" tscan   # D-4963: a builtin read, no subshell (tick-diet spec §6.4)
   scan_ts="${scan%% *}"; scan_verdict="${scan#* }"
   if [[ "$scan_ts" =~ ^[0-9]+$ && "$scan_verdict" =~ ^[01]$ \
         && $((now - scan_ts)) -lt "$TRANSCRIPT_ARM_INTERVAL" ]]; then
@@ -18425,7 +18425,7 @@ _auto_stale_check() {   # id — D-2360: press Enter for Claude Code when its ow
   _pane_limit_stale "$pane" || return 0
   echo "$pane" | grep -q "esc to interrupt" && return 0
   echo "$pane" | grep -q "❯" || return 0
-  _now_s_to now; last=$(_reg_get "$id" stalepress)   # D-4961: the clock seam
+  _now_s_to now; _reg_get_to last "$id" stalepress   # D-4961: the clock seam; D-4963: a builtin read, no subshell
   [[ "$last" =~ ^[0-9]+$ && $((now - last)) -lt "$STALE_PRESS_COOLDOWN" ]] && return 0
   _reg_set "$id" stalepress "$now"
   if _pane_box_has_content "$(tmux capture-pane -t "$t" -p -e 2>/dev/null)"; then
@@ -18694,7 +18694,7 @@ _auto_swap_check() {   # id — called each supervise tick. HOME-account affinit
   # so a transient failure is retried almost immediately, and a permanent one
   # is a broken row that an operator must fix — not one this tick should keep
   # making moves about.
-  wrapper=$(_reg_read "$id" wrapper); wrc=$?
+  _reg_read_to wrapper "$id" wrapper; wrc=$?   # D-4963: the same value and rc, read with builtins and no subshell
   if [[ "$wrc" -ne 0 || -z "$wrapper" ]]; then
     # THE ONE VALUE THIS TICK GENUINELY CANNOT PROCEED WITHOUT — said with the
     # measurement, as the #67 review asked, rather than assumed. `cur` is
@@ -18947,7 +18947,7 @@ _auto_swap_check() {   # id — called each supervise tick. HOME-account affinit
   # `_swap_refuse` reaches after DELETING `.lastswap`, so it is the only gate
   # holding for the whole `SWAPBLOCK_COOLDOWN`. Both clears and the pane gate's
   # deliberate silence are cases in `ccd-crosspool.test.ts` now.
-  _now_s_to now; last=$(_reg_get "$id" lastswap)   # D-4961: the clock seam
+  _now_s_to now; _reg_get_to last "$id" lastswap   # D-4961: the clock seam; D-4963: a builtin read, no subshell
   if [[ "$last" =~ ^[0-9]+$ && $((now - last)) -lt "$SWAP_COOLDOWN" ]]; then
     [[ -z "$stuck" ]] && _tick_decided "$id"
     return 0
@@ -18958,7 +18958,7 @@ _auto_swap_check() {   # id — called each supervise tick. HOME-account affinit
   # one a notify.sh call and a swap.log line. The epoch is VALIDATED as digits rather
   # than trusted: ccd runs under `set -u`, where `$(( now - garbage ))` on a hand-edited
   # or half-written field emits an unbound-variable line on every single tick.
-  blocked=$(_reg_get "$id" swapblocked); bts="${blocked%% *}"
+  _reg_get_to blocked "$id" swapblocked; bts="${blocked%% *}"   # D-4963: a builtin read, no subshell
   if [[ "$bts" =~ ^[0-9]+$ && $((now - bts)) -lt "$SWAPBLOCK_COOLDOWN" ]]; then
     [[ -z "$stuck" ]] && _tick_decided "$id"   # a refused swap is a decision too — see above
     return 0
@@ -19900,7 +19900,7 @@ _auto_compact_check() {   # id — at a clean idle turn boundary, /compact a ses
   [[ -f "$AUTOCOMPACT_DISABLE_FILE" ]] && return 0
   local id="$1" now last lastswap fromswap=0 pane pct thr wrapper t
   _now_s_to now   # D-4961: the clock seam — fork-free under bash 5 ($EPOCHSECONDS)
-  last=$(_reg_get "$id" lastcompact)
+  _reg_get_to last "$id" lastcompact   # D-4963: a builtin read, no subshell (tick-diet spec §6.4)
   [[ "$last" =~ ^[0-9]+$ && $((now - last)) -lt "$COMPACT_COOLDOWN" ]] && return 0
   # D-2014 — MEASURE the landing compaction; do not assert it. This line used to `return 0`
   # outright on the premise that "a swap landing already compacted from summary". It records a
@@ -19908,7 +19908,7 @@ _auto_compact_check() {   # id — at a clean idle turn boundary, /compact a ses
   # there is a reading to test it with. The arithmetic stays exactly where it was, on one
   # `[[ ]]` line with its `=~ ^[0-9]` guard first — `ccd-arith-containment.test.ts`'s structural
   # table pins that shape, and D-299's short-circuit is the reason it must not be split.
-  lastswap=$(_reg_get "$id" lastswap)
+  _reg_get_to lastswap "$id" lastswap   # D-4963: a builtin read, no subshell
   [[ "$lastswap" =~ ^[0-9]+$ && $((now - lastswap)) -lt "$COMPACT_COOLDOWN" ]] && fromswap=1
   # THE PANE READ AND THE IDLE READ ARE `_pane_for_keystroke`/`_idle_for_keystroke` (slice 4,
   # Task 4), the two halves of this function the applier needed word for word. The refusal words,
@@ -19989,7 +19989,7 @@ _auto_compact_check() {   # id — at a clean idle turn boundary, /compact a ses
   # `wrapper` is read again here rather than carried out of the predicate: it is the log line
   # below that wants it, and a predicate that answered a second value through a global would be
   # a wider contract than "is this pane typeable" for one string.
-  wrapper=$(_reg_get "$id" wrapper)
+  _reg_get_to wrapper "$id" wrapper   # D-4963: a builtin read, no subshell
   t=$(_tmux_t "$id")
   # Nothing is being declined any more, so the field must go — the `auto-compact` line below is
   # this tick's record, and a surviving `compactskip` beside it would claim a refusal that did

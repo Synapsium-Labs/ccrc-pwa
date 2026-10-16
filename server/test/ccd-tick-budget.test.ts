@@ -97,17 +97,31 @@ import {
  *    idle-home 128/46 -> 111/33 · busy 125/45 -> 109/33 · narrow 75/28 -> 64/17 · away-over-ceiling 128/46 -> 111/33 ·
  *    hard-blocked 172/56 -> 147/37 · cooldown 97/36 -> 82/24 · fable 130/47 -> 113/34 · leaving 151/56 -> 134/43 ·
  *    fable-leaving 159/60 -> 142/47.
+ *
+ *  LOWERED BY W3 Task 14 (D-4963, the hot sites: `_session_hard_blocked`'s `stalepress` and `tscan`,
+ *  `_auto_stale_check`'s `stalepress`, `_auto_swap_check`'s `wrapper` (`_reg_read_to`), `lastswap` and `swapblocked`,
+ *  `_auto_compact_check`'s `lastcompact`, `lastswap` and action-path `wrapper`; macOS bash 5.3 and Linux bash 5.2
+ *  print the same table, ticks 1-4 included): each converted read loses its `$( )`, 1 fork and no exec (Task 13
+ *  already took its `cat`), so forks fall by the converted reads a steady tick reaches and execs do not move. 7 where
+ *  every gate is passed; busy 5 (`esc to interrupt` returns ahead of `stalepress` and `tscan`); hard-blocked 5 (the
+ *  pane rung answers first); cooldown 4 (`lastswap`'s gate returns before `swapblocked` and the transcript); narrow 2
+ *  (only `_auto_compact_check`'s two reads sit above its `_pane_measurable`). `_auto_stale_check`'s read and the
+ *  action-path `wrapper` are reached by no fixture.
+ *  Before -> after:
+ *    idle-home 111/33 -> 104/33 · busy 109/33 -> 104/33 · narrow 64/17 -> 62/17 · away-over-ceiling 111/33 -> 104/33 ·
+ *    hard-blocked 147/37 -> 142/37 · cooldown 82/24 -> 78/24 · fable 113/34 -> 106/34 · leaving 134/43 -> 127/43 ·
+ *    fable-leaving 142/47 -> 135/47.
  */
 const TICK_BUDGET: Record<FixtureName, { forks: number; execs: number }> = {
-  'idle-home': { forks: 111, execs: 33 },
-  busy: { forks: 109, execs: 33 },
-  narrow: { forks: 64, execs: 17 },
-  'away-over-ceiling': { forks: 111, execs: 33 },
-  'hard-blocked': { forks: 147, execs: 37 },
-  cooldown: { forks: 82, execs: 24 },
-  fable: { forks: 113, execs: 34 },
-  leaving: { forks: 134, execs: 43 },
-  'fable-leaving': { forks: 142, execs: 47 },
+  'idle-home': { forks: 104, execs: 33 },
+  busy: { forks: 104, execs: 33 },
+  narrow: { forks: 62, execs: 17 },
+  'away-over-ceiling': { forks: 104, execs: 33 },
+  'hard-blocked': { forks: 142, execs: 37 },
+  cooldown: { forks: 78, execs: 24 },
+  fable: { forks: 106, execs: 34 },
+  leaving: { forks: 127, execs: 43 },
+  'fable-leaving': { forks: 135, execs: 47 },
 };
 
 /** `_plat_timeout`'s `-k` probe, per tick inside the loop. On `main` at
