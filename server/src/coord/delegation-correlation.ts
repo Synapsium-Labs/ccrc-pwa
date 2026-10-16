@@ -70,7 +70,10 @@ export interface DelegationListingWindow {
   sessionId: string;
   parentIncarnation: string;
   toolUseId: string;
-  repository: string;
+  /** The census project key of the session that ran the call, or NULL when the caller cannot name it (I-1: a session whose registry row
+   *  is gone, after a restart). A null repository is UNKNOWN, never "another repository": rung 4 treats such a window as on every
+   *  repository for its overlap and horizon tests, and never takes it as a candidate. */
+  repository: string | null;
   startedAt: string;
   endedAt: string | null;
   before: readonly string[];
@@ -284,12 +287,18 @@ export function delegationHashSetAdd(set: DelegationHashSet, text: string, cap: 
  *   - `paths`: 64-bit hashes of the working directories of the clause-(b) keys it forgot; a tree whose canonical path is one of them;
  *   - `ids`: 64-bit hashes of the agent and run ids of the clause-(a) keys it forgot; an activity whose upstream id (or run) is one of them;
  *   - `projects`: the projects whose held keys it dropped at its per-project cap; every tree of such a project;
+ *   - `prefixes` (R77, N19): the directories that ATTRIBUTED path marks to a project now lost (the nearest tree, or the project's own
+ *     checkout under the projects root); every tree at or under one, whatever repository it belongs to. A lost project's marks are
+ *     dropped, and a mark is attributed by path, so a mark that really guarded another repository's tree nested there would be dropped
+ *     with it: the prefix keeps its veto;
  *   - `lossy`: a hash set reached its cap; every rung-2 and rung-3 link.
  * A false mark only ever delays a link. What sets and clears each is the caller's (the lane's docstring, `watch.ts`).
  */
 export interface DelegationLostMarks {
   readonly lossy: boolean;
   readonly projects: ReadonlySet<string>;
+  /** R77: every tree whose canonical path is at or under one of these is covered (the lost projects' attributing prefixes). */
+  readonly prefixes: ReadonlySet<string>;
   /** The path marks, as the caller keeps them (R75: one set per project they are attributed to, and one for none); a path in ANY of
    *  them is marked. */
   readonly paths: readonly Readonly<DelegationHashSet>[];
@@ -298,14 +307,28 @@ export interface DelegationLostMarks {
 
 /** No marks: a lane that has forgotten nothing it could not prove gone. */
 export const DELEGATION_NO_MARKS: DelegationLostMarks = Object.freeze({
-  lossy: false, projects: Object.freeze(new Set<string>()) as ReadonlySet<string>, paths: Object.freeze([]) as readonly DelegationHashSet[], ids: Object.freeze(emptyDelegationHashSet()),
+  lossy: false, projects: Object.freeze(new Set<string>()) as ReadonlySet<string>, prefixes: Object.freeze(new Set<string>()) as ReadonlySet<string>,
+  paths: Object.freeze([]) as readonly DelegationHashSet[], ids: Object.freeze(emptyDelegationHashSet()),
 });
 
 /** Is this path in one of the path-mark sets? */
 const pathMarked = (m: DelegationLostMarks, path: string): boolean => m.paths.some((s) => delegationHashSetHas(s, path));
 
-/** The kinds of mark, for the caller's count of the verdicts each changed. */
-export type DelegationMarkKind = 'lossy' | 'project' | 'path' | 'id';
+/** R77: is this path at or under one of the lost projects' attributing prefixes? O(path depth). */
+function prefixCovered(m: DelegationLostMarks, path: string): boolean {
+  if (m.prefixes.size === 0) return false;
+  for (let p = path; p.length > 0;) {
+    if (m.prefixes.has(p)) return true;
+    const cut = p.lastIndexOf('/');
+    if (cut <= 0) break;
+    p = p.slice(0, cut);
+  }
+  return false;
+}
+
+/** The kinds of mark, for the caller's count of the verdicts each changed. `prefix` is a lost project's attributing prefix (R77);
+ *  `window` is a listing window whose repository the caller cannot name (I-1), which is not in the index but is counted beside it. */
+export type DelegationMarkKind = 'lossy' | 'project' | 'prefix' | 'path' | 'id' | 'window';
 
 /** The keys of one dropped event. */
 export function delegationDroppedKeyOf(event: DelegationEventEnvelopeV1): DelegationDroppedKey {
@@ -418,31 +441,51 @@ export interface DelegationPruneInput {
   lost: ReadonlySet<string>;
   /** R73 rule 3: the most keys a held-back project may keep; past it, the project is lost. */
   holdCap: number;
-  /** R75: the directory the census reads each project's checkout under (`<projectsRoot>/<project>`), or null when the caller has none.
-   *  Only attribution reads it. */
-  projectsRoot: string | null;
+  /** R75, N20: the PHYSICAL directory the census reads each project's checkout under (`<projectsRoot>/<project>`), resolved by the
+   *  caller on the box that holds it; null when the caller has none; `DELEGATION_ROOT_UNMEASURED` when the caller has one but could not
+   *  resolve it (attribution by the root then answers nothing, never the configured spelling). Only attribution reads it. */
+  projectsRoot: DelegationProjectsRoot;
 }
+
+/** N20 (coordinator 5439): a projects root the caller has but could not resolve. Not `null`, which is "no projects root": a root that
+ *  failed to resolve is retried by the caller, and in the meantime attribution by the root is UNMEASURED, so no mark is attributed by a
+ *  spelling that may not be the physical path git reports (a guess). */
+export const DELEGATION_ROOT_UNMEASURED: { readonly unmeasured: true } = Object.freeze({ unmeasured: true as const });
+export type DelegationProjectsRoot = string | null | typeof DELEGATION_ROOT_UNMEASURED;
+
+/** What a path mark is attributed to (R75), and the directory that attributed it (R77): the nearest tree's canonical path, or the
+ *  project's checkout `<projectsRoot>/<project>`. */
+export interface DelegationMarkAttribution { project: string; prefix: string }
 
 /**
  * R75: the project a path mark is attributed to, so that at its cap the caller can turn a project lost (its project mark covers every
  * tree of it) instead of raising the global flag. A directory belongs to project P when it is at or under a tree the caller lists or
  * remembers for P (the nearest such tree), or at or under P's own checkout `<projectsRoot>/<P>`, which is where the census reads P from;
- * otherwise to no project. THE ASSUMPTION, stated: a tree of ANOTHER project at a path inside P's checkout or inside one of P's trees
- * (worktrees nested across repositories) would lose the mark's veto when P is lost. Git allows that layout; nothing on a ccrc fleet makes it.
+ * otherwise to no project. A root the caller could not resolve (`DELEGATION_ROOT_UNMEASURED`) attributes nothing: the nearest-tree rule
+ * still applies (a tree's path is canonical), and a mark it does not place is attributed to no project, the safe side (N20).
+ * NESTING ACROSS REPOSITORIES (R77, N19): a tree of ANOTHER repository can sit inside P's checkout or inside one of P's trees (git allows
+ * it; nothing on a ccrc fleet makes it). A mark there is attributed to P. When P is lost its marks are dropped, so the caller keeps the
+ * PREFIX that attributed each one and, once P is lost, covers every tree at or under it (`DelegationLostMarks.prefixes`): the nested
+ * tree's veto is kept, whatever repository it belongs to.
  */
-export function delegationMarkProjectOf(path: string, projectsRoot: string | null, trees: ReadonlyMap<string, string>): string | null {
+export function delegationMarkAttributionOf(path: string, projectsRoot: DelegationProjectsRoot, trees: ReadonlyMap<string, string>): DelegationMarkAttribution | null {
   for (let p = path; p.length > 0;) {
     const owner = trees.get(p);
-    if (owner !== undefined) return owner;
+    if (owner !== undefined) return { project: owner, prefix: p };
     const cut = p.lastIndexOf('/');
     if (cut <= 0) break;
     p = p.slice(0, cut);
   }
-  if (projectsRoot === null) return null;
+  if (projectsRoot === null || typeof projectsRoot !== 'string') return null;
   const root = projectsRoot.replace(/\/+$/, '');
   if (root === '' || !path.startsWith(`${root}/`)) return null;
   const project = path.slice(root.length + 1).split('/')[0];
-  return project === undefined || project === '' ? null : project;
+  return project === undefined || project === '' ? null : { project, prefix: `${root}/${project}` };
+}
+
+/** The project alone (`delegationMarkAttributionOf`). */
+export function delegationMarkProjectOf(path: string, projectsRoot: DelegationProjectsRoot, trees: ReadonlyMap<string, string>): string | null {
+  return delegationMarkAttributionOf(path, projectsRoot, trees)?.project ?? null;
 }
 
 /** What one prune decides. The caller applies the marks BEFORE it forgets the keys (both in one synchronous step). */
@@ -450,8 +493,9 @@ export interface DelegationPrunePlan {
   /** The ids of the keys to forget. */
   forget: string[];
   /** The working directories to path-mark: of forgotten keys whose directory no tree shown gone in this census, and no lost project's
-   *  remembered tree, had; each with the project it is attributed to (`delegationMarkProjectOf`), or null. */
-  markPaths: { path: string; project: string | null }[];
+   *  remembered tree, had; each with the project it is attributed to and the prefix that attributed it (`delegationMarkAttributionOf`),
+   *  or both null. */
+  markPaths: { path: string; project: string | null; prefix: string | null }[];
   /** The agent and run ids to id-mark: the names of forgotten keys that nobody asks about yet (a name redundant by its own parent's
    *  activity row is exact, and is not marked). */
   markIds: string[];
@@ -561,7 +605,10 @@ export function planDelegationDroppedPrune(input: DelegationPruneInput): Delegat
   for (const r of measured) if (r.canonicalPath !== null) trees.set(r.canonicalPath, r.project);
   return {
     forget: forgotten.map((f) => f.id),
-    markPaths: [...markPaths].map((path) => ({ path, project: delegationMarkProjectOf(path, input.projectsRoot, trees) })),
+    markPaths: [...markPaths].map((path) => {
+      const a = delegationMarkAttributionOf(path, input.projectsRoot, trees);
+      return { path, project: a?.project ?? null, prefix: a?.prefix ?? null };
+    }),
     markIds: [...markIds], lose, held: countHeld(blocked),
   };
 }
@@ -647,13 +694,26 @@ export function delegationMarkForced(input: DelegationCorrelationInput, verdict:
   const d = input.droppedEvidence;
   if (!d.measured || verdict.kind !== 'unmeasured' || verdict.reason !== 'evidence-horizon') return null;
   const m = d.marks;
-  if (!m.lossy && m.projects.size === 0 && m.paths.every((s) => s.size === 0) && m.ids.size === 0) return null;
+  if (!m.lossy && m.projects.size === 0 && m.prefixes.size === 0 && m.paths.every((s) => s.size === 0) && m.ids.size === 0) return null;
   const without = correlateDelegation({ ...input, droppedEvidence: { ...d, marks: DELEGATION_NO_MARKS } });
   if (without.kind === 'unmeasured' && without.reason === 'evidence-horizon') return null;
   if (m.lossy) return 'lossy';
   if (m.projects.has(input.record.project)) return 'project';
+  if (input.record.canonicalPath !== null && prefixCovered(m, input.record.canonicalPath)) return 'prefix';
   if (input.record.canonicalPath !== null && pathMarked(m, input.record.canonicalPath)) return 'path';
   return 'id';
+}
+
+/**
+ * I-1: did a listing window whose repository the caller cannot name change this verdict? Such a window vetoes every candidate it
+ * overlaps (rung 4), so it is counted like a mark, apart from every other reason (`window`). False when the input holds none, for a
+ * link, and for a verdict the same input without them answers the same way.
+ */
+export function delegationUnknownWindowForced(input: DelegationCorrelationInput, verdict: DelegationCorrelationVerdict): boolean {
+  if (verdict.kind === 'linked' || verdict.kind === 'run-child-owned') return false;
+  if (!input.listingWindows.some((w) => w.repository === null)) return false;
+  const without = correlateDelegation({ ...input, listingWindows: input.listingWindows.filter((w) => w.repository !== null) });
+  return without.kind !== verdict.kind || !('reason' in without) || without.reason !== verdict.reason;
 }
 
 // ── Small helpers ─────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -767,7 +827,7 @@ function droppedPathVeto(d: MeasuredDropped, canonical: string, parent: string, 
  *  these ids? The marks are coarse on purpose: any of them makes the link `unmeasured('evidence-horizon')`. */
 function droppedMarked(d: MeasuredDropped, record: DelegationCensusRecord, canonical: string, ids: readonly string[]): boolean {
   const m = d.marks;
-  return m.lossy || m.projects.has(record.project) || pathMarked(m, canonical) || ids.some((id) => delegationHashSetHas(m.ids, id));
+  return m.lossy || m.projects.has(record.project) || prefixCovered(m, canonical) || pathMarked(m, canonical) || ids.some((id) => delegationHashSetHas(m.ids, id));
 }
 
 /** The ids a rung-2 claim on `upstreamId` can have been made under: the id itself and, for a workflow worker `wf_<run>-<n>`, the run's. */
@@ -847,17 +907,19 @@ function rung3(input: DelegationCorrelationInput, canonical: string): Answer | n
   }
   if (hits.size === 0) return null;
   const all = [...hits.values()].flatMap((h) => h.journalIds);
+  // The conflict checks run FIRST (Task 11 N1): a conflict is final, and a parent-cwd veto of one parent's hit must not turn another
+  // parent's claim on the same path into a retried `unresolved`. That only ever moves an answer toward the final, safe side.
+  for (const { activity } of hits.values()) {
+    if (claimsOf(input, 'agent', activity.upstreamId).parents.size > 1) return conflicting('agent-id-claimed-by-multiple-sessions', all);
+  }
+  const parents = new Set([...hits.values()].map((h) => parentKey(h.activity.parentId, h.activity.parentIncarnation)));
+  if (parents.size > 1) return conflicting('path-claimed-by-multiple-parents', all);
+  // One parent from here: its own cwd at the path vetoes every hit (R42), and two of its subagents on the path are ambiguous.
   for (const { activity } of hits.values()) {
     const reported = parentReported.get(parentKey(activity.parentId, activity.parentIncarnation));
     if (reported !== undefined) return unresolved('parent-cwd', [...all, ...reported]);
   }
-  for (const { activity } of hits.values()) {
-    if (claimsOf(input, 'agent', activity.upstreamId).parents.size > 1) return conflicting('agent-id-claimed-by-multiple-sessions', all);
-  }
-  if (hits.size > 1) {
-    const parents = new Set([...hits.values()].map((h) => parentKey(h.activity.parentId, h.activity.parentIncarnation)));
-    return parents.size > 1 ? conflicting('path-claimed-by-multiple-parents', all) : unresolved('ambiguous-subagent-path', all);
-  }
+  if (hits.size > 1) return unresolved('ambiguous-subagent-path', all);
   const [only] = [...hits.values()];
   if (only === undefined) return null;
   // R65: the vetoes above (`parent-cwd`, a second claimant, a second subagent on the path) are negative evidence an eviction could have
@@ -883,9 +945,18 @@ function addedExactly(window: DelegationListingWindow, adminRecord: string): boo
   return added.length === 1 && added[0] === adminRecord && removed.length === 0;
 }
 
+/** I-1: may this window be on `repository`? Its own repository, or one the caller cannot name (null: UNKNOWN, so possibly this one). */
+const mayBeOn = (w: DelegationListingWindow, repository: string): boolean => w.repository === null || w.repository === repository;
+
+/**
+ * Rung 4. A window whose repository the caller cannot name (null; I-1: a session whose registry row is gone, after a restart) is never
+ * a candidate, and it counts as a window ON EVERY repository for the overlap and the horizon tests: overlapping a candidate in time makes
+ * the tree `unresolved`, and an open-ended or early one makes it `unmeasured('evidence-horizon')`. An unknown repository therefore moves
+ * a verdict toward unresolved or unmeasured, never toward a link.
+ */
 function rung4(input: DelegationCorrelationInput): Answer | null {
   const { record } = input;
-  const candidates = input.listingWindows.filter((w) => w.repository === record.project && addedExactly(w, record.adminRecord));
+  const candidates = input.listingWindows.filter((w) => w.repository !== null && w.repository === record.project && addedExactly(w, record.adminRecord));
   if (candidates.length === 0) return null;
   try {
     const span = (w: DelegationListingWindow): [number, number] => [parseDelegationInstant(w.startedAt), w.endedAt === null ? Number.POSITIVE_INFINITY : parseDelegationInstant(w.endedAt)];
@@ -894,7 +965,7 @@ function rung4(input: DelegationCorrelationInput): Answer | null {
       const [start, end] = span(mine);
       const mineKey = parentKey(mine.sessionId, mine.parentIncarnation);
       for (const other of input.listingWindows) {
-        if (other.repository !== mine.repository || parentKey(other.sessionId, other.parentIncarnation) === mineKey) continue;
+        if (!mayBeOn(other, record.project) || parentKey(other.sessionId, other.parentIncarnation) === mineKey) continue;
         const [otherStart, otherEnd] = span(other);
         if (start <= otherEnd && otherStart <= end) return unresolved('overlapping-listing-window');
       }
@@ -921,7 +992,7 @@ function rung4(input: DelegationCorrelationInput): Answer | null {
     let reaches: boolean;
     try {
       reaches = horizon === null || Number.isNaN(horizon)
-        || input.listingWindows.some((w) => w.repository === mine.repository && (w.endedAt === null || parseDelegationInstant(w.startedAt) <= horizon))
+        || input.listingWindows.some((w) => mayBeOn(w, record.project) && (w.endedAt === null || parseDelegationInstant(w.startedAt) <= horizon))
         || parseDelegationInstant(mine.startedAt) <= horizon + DELEGATION_EVIDENCE_MARGIN_MS;
     } catch (err) {
       if (!(err instanceof DelegationModelError)) throw err;

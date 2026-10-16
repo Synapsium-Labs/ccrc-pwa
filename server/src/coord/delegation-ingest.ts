@@ -440,8 +440,9 @@ function gap(
   state: DeepReadonly<DelegationRecoveryState>,
   id: { sessionId: string; parentIncarnation: string; bucket: string },
   detail: string,
-  replaced = false,
-  applicable = true,
+  replaced: boolean,
+  /** Required (Task 9 re-review 2): a future call site must say whether its result is for a bucket at all; no default fails open. */
+  applicable: boolean,
 ): DelegationBucketResult {
   const row = durableRow(state, id) ?? freshRow(id);
   // A replaced bucket keeps its replaced words on the ROW (N1), however many other gaps come after: the row's detail is what every
@@ -477,7 +478,8 @@ const sha256Hex = (bytes: Uint8Array): string => createHash('sha256').update(byt
  * Ingests one bucket read. PURE: no IO, no clock, nothing mutated (the state and the bytes are only read).
  *
  * The order of its decisions, each answering before the next is asked:
- *   1. an input that is not a bucket read: a gap (nothing identifies a row).
+ *   1. an input that is not a bucket read: an INAPPLICABLE result (`applicable: false`, detail `input-invalid`), which both doors
+ *      refuse before any durable call (M5); nothing identifies a row, so nothing is recorded for it;
  *   2. a durable row marked `replaced`: a gap with the replaced detail, however the file has grown since (R33; checked before
  *      everything below, so no other gap can replace it);
  *   3. a recovery that has not finished, or a capability that is not present: a gap;
@@ -490,7 +492,8 @@ const sha256Hex = (bytes: Uint8Array): string => createHash('sha256').update(byt
  *   9. otherwise frame the COMPLETE lines after the anchor line, accept the valid ones with their offsets and IDs, step the cursor
  *      over every complete line (accepted or refused) and nothing else, and anchor the last one. Any refused complete line, or a
  *      torn tail too long to ever be a line, makes the interval a gap. A torn tail that may still complete is reported in the
- *      detail and is not a gap; neither is a read capped at the read bound (its unread remainder is named).
+ *      detail and is not a gap; nor is a read capped at the read bound that framed a line past the cursor (its unread remainder is
+ *      named). A capped window that frames NO complete line past the cursor is a gap (`window-starved`, N2): the cursor cannot move.
  */
 export function ingestDelegationBucket(input: DelegationBucketInput, state: DeepReadonly<DelegationRecoveryState>): DelegationBucketResult {
   const id = { sessionId: input.sessionId, parentIncarnation: input.parentIncarnation, bucket: input.bucket };
@@ -498,37 +501,37 @@ export function ingestDelegationBucket(input: DelegationBucketInput, state: Deep
   if (defect !== null) return gap(state, id, `input-invalid: ${defect}`, false, false);
 
   const prior = durableRow(state, id);
-  if (prior !== undefined && prior.replaced) return gap(state, id, prior.detail ?? `${DELEGATION_BUCKET_REPLACED}: this bucket was replaced`);
-  if (state.phase !== 'ready') return gap(state, id, 'recovery-not-ready: the observation lane is reconstructing');
-  if (input.capabilityPresent === false) return gap(state, id, 'capability-absent');
-  if (input.capabilityPresent === null) return gap(state, id, 'capability-unmeasured');
+  if (prior !== undefined && prior.replaced) return gap(state, id, prior.detail ?? `${DELEGATION_BUCKET_REPLACED}: this bucket was replaced`, false, true);
+  if (state.phase !== 'ready') return gap(state, id, 'recovery-not-ready: the observation lane is reconstructing', false, true);
+  if (input.capabilityPresent === false) return gap(state, id, 'capability-absent', false, true);
+  if (input.capabilityPresent === null) return gap(state, id, 'capability-unmeasured', false, true);
 
   const durable = prior ?? freshRow(id);
   const expectedStart = durable.anchor?.start ?? durable.cursor;
   if (input.cursor !== durable.cursor || input.lastSize !== durable.lastSize) {
-    return gap(state, id, `cursor-disagrees-with-durable-state: the read starts at ${input.cursor} (last seen ${input.lastSize}), the accepted coordinate is ${durable.cursor} (last seen ${durable.lastSize})`);
+    return gap(state, id, `cursor-disagrees-with-durable-state: the read starts at ${input.cursor} (last seen ${input.lastSize}), the accepted coordinate is ${durable.cursor} (last seen ${durable.lastSize})`, false, true);
   }
   if (input.readStart !== expectedStart) {
-    return gap(state, id, `read-window-mismatch: the bytes begin at ${input.readStart}, the durable row needs them from ${expectedStart}`);
+    return gap(state, id, `read-window-mismatch: the bytes begin at ${input.readStart}, the durable row needs them from ${expectedStart}`, false, true);
   }
 
   if (!input.bucketPresent) {
-    if (input.bytes.length > 0 || input.size !== 0) return gap(state, id, 'input-inconsistent: an absent bucket carries bytes or a size');
+    if (input.bytes.length > 0 || input.size !== 0) return gap(state, id, 'input-inconsistent: an absent bucket carries bytes or a size', false, true);
     if (input.cursor < input.lastSize) {
-      return gap(state, id, `bucket-vanished-unread: the bucket is gone with ${input.lastSize - input.cursor} bytes after offset ${input.cursor} never read`);
+      return gap(state, id, `bucket-vanished-unread: the bucket is gone with ${input.lastSize - input.cursor} bytes after offset ${input.cursor} never read`, false, true);
     }
     return { state, accepted: [], cursor: { ...durable, intervalState: 'measured', detail: null }, interval: 'measured', detail: null, applicable: true };
   }
 
   if (input.size < input.cursor || input.size < input.lastSize) {
     const below = input.size < input.cursor ? `the cursor ${input.cursor}` : `the last-seen size ${input.lastSize}`;
-    return gap(state, id, `${DELEGATION_BUCKET_REPLACED}: size ${input.size} is below ${below}`, true);
+    return gap(state, id, `${DELEGATION_BUCKET_REPLACED}: size ${input.size} is below ${below}`, true, true);
   }
   if (input.cursor > 0 && durable.anchor === null) {
-    return gap(state, id, `cursor-unanchored: the durable row stands at ${input.cursor} with no anchor line to verify, so the bytes before it cannot be proved`);
+    return gap(state, id, `cursor-unanchored: the durable row stands at ${input.cursor} with no anchor line to verify, so the bytes before it cannot be proved`, false, true);
   }
   if (input.bytes.length > input.size - input.readStart) {
-    return gap(state, id, `range-inconsistent: ${input.bytes.length} bytes read from ${input.readStart} of a file of ${input.size}`);
+    return gap(state, id, `range-inconsistent: ${input.bytes.length} bytes read from ${input.readStart} of a file of ${input.size}`, false, true);
   }
 
   // D-4647: the anchor line must read back exactly as it was stepped over: one complete line ending at the cursor, and the same bytes.
@@ -539,7 +542,7 @@ export function ingestDelegationBucket(input: DelegationBucketInput, state: Deep
       && input.bytes[anchorLength - 1] === LF && input.bytes.indexOf(LF) === anchorLength - 1
       && sha256Hex(input.bytes.subarray(0, anchorLength - 1)) === durable.anchor.sha256;
     if (!intact) {
-      return gap(state, id, `${DELEGATION_BUCKET_REPLACED}: the last accepted line at offsets ${durable.anchor.start}..${input.cursor} no longer reads the same`, true);
+      return gap(state, id, `${DELEGATION_BUCKET_REPLACED}: the last accepted line at offsets ${durable.anchor.start}..${input.cursor} no longer reads the same`, true, true);
     }
     lineStart = anchorLength;
   }
@@ -578,7 +581,7 @@ export function ingestDelegationBucket(input: DelegationBucketInput, state: Deep
   // N2: a window that ended before the file did and framed no complete line past the anchor makes no progress, and will make none
   // (a long refused line as the anchor can leave the window too little room). That is a gap with a reason, never "measured".
   if (unread > 0 && complete === 0) {
-    return gap(state, id, `window-starved: ${input.bytes.length} bytes read from ${input.readStart} frame no complete line past the cursor ${input.cursor}, and ${unread} bytes beyond the window are unread`);
+    return gap(state, id, `window-starved: ${input.bytes.length} bytes read from ${input.readStart} frame no complete line past the cursor ${input.cursor}, and ${unread} bytes beyond the window are unread`, false, true);
   }
   const problems: string[] = [];
   if (refused > 0) problems.push(refusalSummary(refusals, refused, complete));
@@ -612,7 +615,8 @@ export interface DelegationBucketDurability {
 /**
  * `ingestDelegationBucket`, then one durable application. The ONLY stateful call is `durability.applyBucketResult(result)`; nothing
  * of the result (no accepted ID, cursor or interval) is exposed to the caller before that call resolves. A rejection (a failed
- * durable step, a reconstructing applier) propagates and returns no state.
+ * durable step, a reconstructing applier) propagates and returns no state. An INAPPLICABLE result (`input-invalid`) is refused HERE,
+ * before the durable call: this throws `DelegationIngestError('input-invalid')` itself (M5), whatever durability it was handed.
  */
 export async function ingestAndApplyDelegationBucket(
   input: DelegationBucketInput,

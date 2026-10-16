@@ -1064,7 +1064,7 @@ describe('sweepDivergences prepares the delegation census from the one read it a
     expect(h.reads().filter((p) => p.endsWith(path.join('.git', 'worktrees')))).toHaveLength(1);
   });
 
-  it('the console\'s HEAD labels never wait on the delegation lane\'s generation reads', async () => {
+  it('the console\'s HEAD labels never wait on the delegation lane\'s SECOND generation round: labels written and headsSettled resolved while it is held', async () => {
     const h = await watcherFixture();
     h.plantRecord('demo-quiet-basin');
     h.plantWorktreeRecord('demo', 'quiet-basin', '/data/worktrees/demo/quiet-basin', 'ws/demo-quiet-basin');
@@ -1074,16 +1074,55 @@ describe('sweepDivergences prepares the delegation census from the one read it a
     let release!: () => void;
     const gate = new Promise<void>((resolve) => { release = resolve; });
     const real = io.readFileMeasured.bind(io);
-    io.readFileMeasured = async (p, t, s) => { if (p === file) await gate; return real(p, t, s); };
+    let reads = 0;
+    io.readFileMeasured = async (p, t, s) => { if (p === file && ++reads === 2) await gate; return real(p, t, s); };
     const done = sweep(h);
     try {
-      // The reader is HELD OPEN, and the labels are already there.
+      // The SECOND read is HELD OPEN, and the labels are already there, and so is the promise the boot assembly waits on (N1: a
+      // settle placed after the label write but behind the held read would leave it pending).
       await vi.waitFor(() => expect(h.watcher.currentHeadBranches().get('demo-quiet-basin')).toBe('ws/demo-quiet-basin'), { timeout: 3000 });
+      const settled = await Promise.race([
+        (h.watcher as unknown as { headsSettled: Promise<void> }).headsSettled.then(() => 'settled' as const),
+        new Promise<'pending'>((resolve) => { setTimeout(() => resolve('pending'), 500); }),
+      ]);
+      expect(settled).toBe('settled');
+      expect(reads).toBe(2);
       expect(h.watcher.currentDelegationCensus()).toBeNull();
     } finally {
       release();
     }
     await done;
+    expect(h.watcher.currentDelegationCensus()?.incarnations.get('demo-quiet-basin')).toEqual({ kind: 'measured', incarnation: G1 });
+  });
+
+  it('R47 (R38 exactly): the FIRST generation round completes before the census issues its first read', async () => {
+    const h = await watcherFixture();
+    h.plantRecord('demo-quiet-basin');
+    h.plantWorktreeRecord('demo', 'quiet-basin', '/data/worktrees/demo/quiet-basin', 'ws/demo-quiet-basin');
+    const file = path.join(h.home, '.cc-sessions', 'demo-quiet-basin.generation');
+    writeFileSync(file, G1);
+    const io = h.deps.io as FleetIO;
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const real = io.readFileMeasured.bind(io);
+    let reads = 0;
+    let firstDone = false;
+    io.readFileMeasured = async (p, t, s) => {
+      if (p === file && ++reads === 1) { await gate; const r = await real(p, t, s); firstDone = true; return r; }
+      return real(p, t, s);
+    };
+    const censusRead = () => h.reads().some((p) => p.endsWith(path.join('.git', 'worktrees')));
+    const done = sweep(h);
+    try {
+      await new Promise((resolve) => { setTimeout(resolve, 300); });
+      expect(reads, 'the first round was issued').toBe(1);
+      expect(censusRead(), 'no census read is issued while the first generation round is pending').toBe(false);
+    } finally {
+      release();
+    }
+    await done;
+    expect(firstDone).toBe(true);
+    expect(censusRead()).toBe(true);
     expect(h.watcher.currentDelegationCensus()?.incarnations.get('demo-quiet-basin')).toEqual({ kind: 'measured', incarnation: G1 });
   });
 

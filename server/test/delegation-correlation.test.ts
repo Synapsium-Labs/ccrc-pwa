@@ -44,6 +44,9 @@ import {
   planDelegationDroppedPrune,
   prunableDelegationDropped,
   DELEGATION_NO_MARKS,
+  DELEGATION_ROOT_UNMEASURED,
+  delegationMarkAttributionOf,
+  delegationUnknownWindowForced,
   delegationHashSetAdd,
   delegationHashSetHas,
   delegationMarkForced,
@@ -308,7 +311,7 @@ describe('join-order table (W3-M41, W3-M42, W3-M59): which record is an activity
     expect(worker.activityId).toBe(deriveDelegationActivityId(keyOf('workflow', 'wf_run1-0'), w.records[0]!.journalId));
   });
 
-  it('a Workflow worker waits for a retained record naming its RUN: a meta alone chooses no identity', () => {
+  it('a Workflow worker waits for its RUN\'s opened activity (R44: the launch opens it): a meta alone chooses no identity', () => {
     const w = world([sessionStart(1), subagentStart(2, AGENT)]);
     expect(w.builder.openWorkflowWorkerFromMeta(PARENT, INC, 'wf_run1', 0)).toEqual({ kind: 'waiting-for-evidence' });
     expect(w.builder.openWorkflowWorkerFromMeta(PARENT, INC, 'wf_run1', 0)).toEqual({ kind: 'waiting-for-evidence' });
@@ -860,6 +863,51 @@ describe('overlapping listing windows are unresolved (W3-M47)', () => {
   });
 });
 
+describe('a listing window whose repository the caller cannot name (final review I-1): it vetoes like a window on every repository', () => {
+  const rec = rawRecord();
+  const bashWorld = () => world([bashPre(10, 'toolu_b1', ['main-wt']), bashPost(12, 'toolu_b1', ['main-wt', RAW])]);
+  const decide = (windows: readonly DelegationListingWindow[], extra: Partial<DelegationCorrelationInput> = {}, w = bashWorld()) =>
+    correlateDelegation(input({ record: rec, activities: w.activities, acceptedEvidence: w.acceptedEvidence, listingWindows: windows, ...extra }));
+  const mine = win({ after: ['main-wt', RAW] });                                                      // [T10, T12]
+  const unknown = (over: Partial<DelegationListingWindow> = {}): DelegationListingWindow =>
+    win({ sessionId: OTHER, toolUseId: 'toolu_o1', repository: null, startedAt: T(11), endedAt: T(13), before: ['main-wt'], after: ['main-wt'], ...over });
+
+  it('SAFETY: overlapping a candidate in time makes the tree unresolved, as a window on the same repository would; never a link', () => {
+    const v = decide([mine, unknown()]);
+    expect(v.kind === 'unresolved' && v.reason).toBe('overlapping-listing-window');
+    expect(decide([mine, unknown({ repository: 'project-b' })]).kind, 'CONTROL: a window on ANOTHER named repository does not veto').toBe('linked');
+  });
+
+  it('SAFETY: under a horizon, an open-ended or early unknown window keeps the link unmeasured, as one on the same repository would', () => {
+    const late = (ms: number): string => formatDelegationInstant(Date.parse(T(0)) + ms);
+    const far = win({ startedAt: late(DELEGATION_EVIDENCE_MARGIN_MS + 60_000), endedAt: late(DELEGATION_EVIDENCE_MARGIN_MS + 61_000), after: ['main-wt', RAW] });
+    expect(decide([far], { evidenceHorizon: T(0) }).kind, 'CONTROL: alone, a candidate past the margin links').toBe('linked');
+    // open-ended (begun after the candidate ended, so no overlap), and one begun before the horizon
+    for (const w of [unknown({ startedAt: late(DELEGATION_EVIDENCE_MARGIN_MS + 120_000), endedAt: null, after: null }), unknown({ startedAt: T(-5), endedAt: T(-4) })]) {
+      const v = decide([far, w], { evidenceHorizon: T(0) });
+      expect(v.kind === 'unmeasured' && v.reason).toBe('evidence-horizon');
+    }
+  });
+
+  it('LIVENESS: an unknown window that does not overlap the candidate in time leaves the link possible', () => {
+    expect(decide([mine, unknown({ startedAt: T(13), endedAt: T(14) })]).kind).toBe('linked');
+  });
+
+  it('an unknown window is never a candidate: its own delta links nothing, even alone', () => {
+    const w = world([bashPre(10, 'toolu_b1', ['main-wt'], { sessionId: OTHER }), bashPost(12, 'toolu_b1', ['main-wt', RAW], { sessionId: OTHER })]);
+    const v = decide([unknown({ toolUseId: 'toolu_b1', startedAt: T(10), endedAt: T(12), after: ['main-wt', RAW] })], {}, w);
+    expect(v.kind).not.toBe('linked');
+  });
+
+  it('delegationUnknownWindowForced counts a verdict an unknown window changed, and nothing else', () => {
+    const ask = (windows: readonly DelegationListingWindow[]) => { const i = input({ record: rec, activities: bashWorld().activities, acceptedEvidence: bashWorld().acceptedEvidence, listingWindows: windows }); return delegationUnknownWindowForced(i, correlateDelegation(i)); };
+    expect(ask([mine, unknown()]), 'it held the link back').toBe(true);
+    expect(ask([mine]), 'none held').toBe(false);
+    expect(ask([mine, unknown({ startedAt: T(13), endedAt: T(14) })]), 'a link').toBe(false);
+    expect(ask([mine, unknown(), win({ sessionId: OTHER, toolUseId: 'toolu_o2', startedAt: T(11), endedAt: T(13), before: ['main-wt'], after: ['main-wt'] })]), 'a known window vetoes by itself').toBe(false);
+  });
+});
+
 describe('the two-pass ccrc-birth wait (W3-M48)', () => {
   it.each([2, 1] as const)('with %i pass(es) remaining even PERFECT rung-2 evidence is `unresolved`: the tree may be a ccd workspace being born', (n) => {
     const v = correlateDelegation(agentWorld({ birthPassesRemaining: n }).base);
@@ -1033,6 +1081,15 @@ describe('rung 3 refuses a cwd the parent itself reported (ruling R42, W3-M45\'s
     expect(v.kind).toBe('linked');
     expect(v.kind === 'linked' && v.rung).toBe(3);
   });
+  it('Task 11 N1: the conflict checks run BEFORE the veto: a vetoed parent\'s subagent and ANOTHER parent\'s isolated one at the path are a final conflict, not a retried parent-cwd', () => {
+    const elsewhere = { cwd: `/fixture/${REPO}` };
+    const w = world([
+      sessionStart(1, at), subagentStart(2, AGENT), subBash(3, AGENT, 'PostToolUse', at),
+      sessionStart(4, { ...elsewhere, sessionId: OTHER }), subagentStart(5, AGENT_2, { ...elsewhere, sessionId: OTHER }), subBash(6, AGENT_2, 'PostToolUse', { ...at, sessionId: OTHER }),
+    ]);
+    const v = correlateDelegation(input({ record: rec, activities: w.activities, acceptedEvidence: w.acceptedEvidence }));
+    expect(v.kind === 'conflicting' && v.reason).toBe('path-claimed-by-multiple-parents');
+  });
   it('the veto is the PARENT\'s: another incarnation\'s or another session\'s cwd does not veto this parent\'s subagent', () => {
     const w = world([sessionStart(1, { ...at, parentIncarnation: 'g2' }), sessionStart(2, { ...at, sessionId: OTHER }), subagentStart(3, AGENT), subBash(4, AGENT, 'PostToolUse', at)]);
     expect(correlateDelegation(input({ record: rec, activities: w.activities, acceptedEvidence: w.acceptedEvidence })).kind).toBe('linked');
@@ -1064,16 +1121,18 @@ describe('a Workflow run\'s identity is checkpoint data, so a launch never pins 
     expect(opened.kind).toBe('opened');
     const worker = activityOf(pruned.facts!.builder.build(1).activities, 'workflow', 'wf_run1-1')!;
     expect(worker.identityJournalId).toBe(w.records[0]!.journalId);
-    w.builder.clone().openWorkflowWorkerFromMeta(PARENT, INC, 'wf_run1', 1);
+    // the run row and its mapping survived the cut of the launch record: they are checkpoint data
+    expect(activityOf(pruned.state.checkpoint.activities, 'workflow', 'wf_run1')).toEqual(runRow);
+    expect(pruned.state.checkpoint.activityIdsByNaturalKey).toEqual(w.cp.activityIdsByNaturalKey);
     const fresh = w.builder.clone();
     fresh.openWorkflowWorkerFromMeta(PARENT, INC, 'wf_run1', 1);
     expect(worker.activityId).toBe(activityOf(fresh.build(1).activities, 'workflow', 'wf_run1-1')!.activityId);
     expect(worker.activityId).toBe(deriveDelegationActivityId(keyOf('workflow', 'wf_run1-1'), w.records[0]!.journalId));
   });
   it('recovery from a checkpoint plus the retained suffix restores the same run identity', () => {
-    const early = recoverDelegation(null, w.records.slice(0, 2)).state.checkpoint;           // the launch is covered; X more records follow
+    const early = recoverDelegation(null, w.records.slice(0, 2)).state.checkpoint;           // the launch is covered; two more records follow
     expect(activityOf(early.activities, 'workflow', 'wf_run1')!.activityId).toBe(runRow.activityId);
-    const resumed = recoverDelegation(encodeDelegationCheckpoint(early), w.records);
+    const resumed = recoverDelegation(encodeDelegationCheckpoint(early), w.records.slice(1));  // the journal from the checkpoint's anchor on
     expect(resumed.failure).toBeNull();
     expect(activityOf(resumed.state.checkpoint.activities, 'workflow', 'wf_run1')).toEqual(runRow);
     expect(resumed.state.checkpoint.activityIdsByNaturalKey).toEqual(w.cp.activityIdsByNaturalKey);
@@ -1600,7 +1659,7 @@ describe('dropped evidence (R65): the vetoes of rungs 2 and 3 rest on events an 
       const atGone = key({ cwd: '/fixture/gone-tree' });
       const p = planOf([far, atGone], { [REPO]: proj() }, {}, { gonePaths: new Set(['/fixture/gone-tree']) });
       expect(p.forget.sort()).toEqual([delegationDroppedKeyId(far), delegationDroppedKeyId(atGone)].sort());
-      expect(p.markPaths).toEqual([{ path: '/fixture/never-a-tree', project: null }]);
+      expect(p.markPaths).toEqual([{ path: '/fixture/never-a-tree', project: null, prefix: null }]);
       const known = { [delegationTreeKey(REPO, 'gone-tree')]: '/fixture/gone-tree' };
       expect(planOf([atGone], { [REPO]: proj() }, known).markPaths, 'a remembered tree its own measured census shows gone, in this pass').toEqual([]);
       expect(planOf([key({})], { [REPO]: proj() }).markPaths, 'no cwd, no path mark').toEqual([]);
@@ -1618,7 +1677,19 @@ describe('dropped evidence (R65): the vetoes of rungs 2 and 3 rest on events an 
         [`${ROOT}/project-a/sub/dir`, 'project-a'], [`${ROOT}/project-a`, 'project-a'], ['/fixture/elsewhere/ws/sub', 'project-b'],
         ['/fixture/elsewhere/other', null], [`${ROOT}-sibling/x`, null],
       ]));
-      expect(planOf([key({ cwd: `${ROOT}/project-a/x` })], { [REPO]: proj() }, {}, { projectsRoot: null }).markPaths, 'no root configured').toEqual([{ path: `${ROOT}/project-a/x`, project: null }]);
+      expect(planOf([key({ cwd: `${ROOT}/project-a/x` })], { [REPO]: proj() }, {}, { projectsRoot: null }).markPaths, 'no root configured').toEqual([{ path: `${ROOT}/project-a/x`, project: null, prefix: null }]);
+      // R77: each attributed mark carries the directory that attributed it (the nearest tree, or the project's checkout under the root)
+      expect(new Map(p.markPaths.map((m) => [m.path, m.prefix]))).toEqual(new Map<string, string | null>([
+        [`${ROOT}/project-a/sub/dir`, `${ROOT}/project-a`], [`${ROOT}/project-a`, `${ROOT}/project-a`], ['/fixture/elsewhere/ws/sub', '/fixture/elsewhere/ws'],
+        ['/fixture/elsewhere/other', null], [`${ROOT}-sibling/x`, null],
+      ]));
+      // N20 (coordinator 5439): a root the caller could not resolve attributes NOTHING by the root, never by its configured spelling; the
+      // nearest-tree rule still applies, because a tree's path is canonical
+      const unresolved = planOf(ks, { [REPO]: proj(), 'project-b': proj({ records: null }) }, known, { projectsRoot: DELEGATION_ROOT_UNMEASURED });
+      expect(new Map(unresolved.markPaths.map((m) => [m.path, m.project]))).toEqual(new Map<string, string | null>([
+        [`${ROOT}/project-a/sub/dir`, null], [`${ROOT}/project-a`, null], ['/fixture/elsewhere/ws/sub', 'project-b'],
+        ['/fixture/elsewhere/other', null], [`${ROOT}-sibling/x`, null],
+      ]));
     });
 
     it('R73 rule 2: a forgotten name nobody asks about yet leaves an id mark; a name made redundant by its own parent\'s row does not', () => {
@@ -1642,7 +1713,7 @@ describe('dropped evidence (R65): the vetoes of rungs 2 and 3 rest on events an 
       const over = planOf([atTree, elsewhere], { [REPO]: proj(), down }, known, { projectOfParent, holdCap: 1 });
       expect(over.lose).toEqual(['down']);
       expect(over.forget.sort()).toEqual([delegationDroppedKeyId(atTree), delegationDroppedKeyId(elsewhere)].sort());
-      expect(over.markPaths, 'the tree\'s own path is covered by the lost project; the unknown one is marked').toEqual([{ path: '/fixture/down/elsewhere', project: null }]);
+      expect(over.markPaths, 'the tree\'s own path is covered by the lost project; the unknown one is marked').toEqual([{ path: '/fixture/down/elsewhere', project: null, prefix: null }]);
       expect(over.held).toEqual(new Map());
       const already = planOf([atTree], { [REPO]: proj(), down }, known, { projectOfParent, lost: new Set(['down']) });
       expect(already.forget, 'a lost project holds nothing back and protects none of its remembered paths').toEqual([delegationDroppedKeyId(atTree)]);
@@ -1786,7 +1857,7 @@ describe('dropped evidence (R65): the vetoes of rungs 2 and 3 rest on events an 
     });
 
     it('a verdict that was not a link is unchanged by any mark', () => {
-      const all = marks({ lossy: true, projects: new Set([REPO]), paths: [setOf(C)], ids: setOf(AGENT) });
+      const all = marks({ lossy: true, projects: new Set([REPO]), prefixes: new Set([C]), paths: [setOf(C)], ids: setOf(AGENT) });
       const cases: DelegationCorrelationInput[] = [
         input({ hasRegistryRow: true }), input({ birthPassesRemaining: 2 }), agentWorld({ pointMetas: [] }).base,
         input({ record: record({ state: 'unreadable' }) }), input({ record: record({ canonicalPath: null }) }),
@@ -1806,6 +1877,28 @@ describe('dropped evidence (R65): the vetoes of rungs 2 and 3 rest on events an 
       expect(horizon(correlateDelegation(real))).toBe(true);
       expect(ask(real), 'the held key vetoes by itself: the mark changed nothing').toBeNull();
       expect(ask({ ...rung3(DELEGATION_NO_MARKS), droppedEvidence: DELEGATION_DROPPED_UNMEASURED }), 'an unmeasured index is not a mark').toBeNull();
+    });
+
+    it('R77 (N19): a lost project\'s attributing prefix covers every tree at or under it, whatever repository it is in; a tree below, beside or elsewhere is not covered', () => {
+      const up = C.slice(0, C.lastIndexOf('/'));
+      for (const prefix of [C, up, `/fixture/${REPO}`]) expect(horizon(correlateDelegation(rung3(marks({ prefixes: new Set([prefix]) })))), prefix).toBe(true);
+      for (const prefix of [WT(`agent-${AGENT}`), up]) expect(horizon(correlateDelegation(rung2(marks({ prefixes: new Set([prefix]) })))), `rung 2, ${prefix}`).toBe(true);
+      expect(correlateDelegation(rung3(marks({ prefixes: new Set([`${C}/sub`, `${C}-sibling`, '/fixture/project-b']) }))).kind).toBe('linked');
+      expect(correlateDelegation(rung4(marks({ prefixes: new Set([up]) }))).kind, 'rung 4 reads no key and no mark').toBe('linked');
+      const covered = rung3(marks({ prefixes: new Set([up]) }));
+      expect(delegationMarkForced(covered, correlateDelegation(covered)), 'counted apart from the path and project marks').toBe('prefix');
+      const both = rung3(marks({ projects: new Set([REPO]), prefixes: new Set([up]) }));
+      expect(delegationMarkForced(both, correlateDelegation(both)), 'the first of flag, project, prefix, path, id').toBe('project');
+    });
+
+    it('R77: the attribution names the prefix that attributed a mark (the nearest tree, else the checkout under a resolved root); an unresolved root attributes nothing by the root', () => {
+      const trees = new Map([['/fixture/projects/project-b/.claude/worktrees/t', 'project-b']]);
+      expect(delegationMarkAttributionOf('/fixture/projects/project-b/.claude/worktrees/t/x/y', '/fixture/projects', trees)).toEqual({ project: 'project-b', prefix: '/fixture/projects/project-b/.claude/worktrees/t' });
+      expect(delegationMarkAttributionOf('/fixture/projects/project-a/nest/raw', '/fixture/projects/', trees)).toEqual({ project: 'project-a', prefix: '/fixture/projects/project-a' });
+      expect(delegationMarkAttributionOf('/fixture/projects/project-a/nest/raw', DELEGATION_ROOT_UNMEASURED, trees), 'never the configured spelling').toBeNull();
+      expect(delegationMarkAttributionOf('/fixture/projects/project-b/.claude/worktrees/t/x', DELEGATION_ROOT_UNMEASURED, trees), 'the nearest tree still attributes')
+        .toEqual({ project: 'project-b', prefix: '/fixture/projects/project-b/.claude/worktrees/t' });
+      expect(delegationMarkAttributionOf('/elsewhere/x', '/fixture/projects', trees)).toBeNull();
     });
 
     it('a correlation input carrying marks stays plain data: it clones, and an empty one freezes', () => {

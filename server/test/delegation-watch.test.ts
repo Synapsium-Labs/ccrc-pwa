@@ -1766,7 +1766,7 @@ describe('the lane remembers what it dropped (R65): a link that rests on an even
 
     describe('R73: a restart never forgets a veto it cannot prove gone (every forget is proved, or leaves a coarser mark)', () => {
       const marksOf = (w: World) => w.watcher.delegationReport().marks;
-      const NONE = { path: 0, id: 0, project: 0, lossy: 0 };
+      const NONE = { path: 0, id: 0, project: 0, lossy: 0, prefix: 0, window: 0 };
       /** The raw tree's record read with a null path for a TRANSIENT reason: its `gitdir` read failed. */
       const flaky = (over: Partial<DelegationCensusRecord> = {}): DelegationCensusRecord => ({ ...RAW, state: 'unreadable', canonicalPath: null, diagnostic: 'gitdir-unreadable', ...over });
       /** The reviewer's P-restart: the first lane runs at cap 3, so the tree stays unmeasured and NO attempt is filed (nothing can seed its
@@ -2017,6 +2017,109 @@ describe('the lane remembers what it dropped (R65): a link that rests on an even
           for (let i = 5; i < 9; i++) await censusPass(fits, at(i), census);
           expect(marksOf(fits).lossy).toBe(false);
           expect(leasesOf(fits.home).map((l) => [l.adminRecord, l.sourceKind])).toEqual([['raw-tree', 'agent']]);
+        });
+      });
+
+      describe('R77 (N19): a lost project\'s attributing prefix keeps the veto of a tree of ANOTHER repository nested under it', () => {
+        // The reviewer's probes X1, X2, X4 and X7b. demo's tree sits at `cn`, inside another project's checkout or tree. The first lane
+        // runs at cap 3 (no attempt, nothing seeds the path); after a restart the parent's key at `cn` is forgotten with a path mark that
+        // the attribution gives to the OTHER project (shape B), which is then lost; demo returns with the tree listed.
+        const nestWorld = (cn: string): World => {
+          const w = world();
+          writeBucket(w, 'demo-a', BUCKET10,
+            tool('demo-a', 1, cn, '2026-10-15T10:01:00.000Z'), tool('demo-a', 2, cn, '2026-10-15T10:01:30.000Z'), tool('demo-a', 3, cn, '2026-10-15T10:01:45.000Z'),
+            tool('demo-a', 4, '/w/demo', '2026-10-15T10:02:00.000Z'),
+            subStart('demo-a', A1, '/w/demo', '2026-10-15T10:03:00.000Z'),
+            tool('demo-a', 5, cn, '2026-10-15T10:04:00.000Z', A1));
+          return w;
+        };
+        /** The probes' root: the first world's (a real, resolvable directory), so the attribution by the root applies. */
+        async function restartOn(cn: (root: string) => string, seams: Parameters<FleetWatcher['setDelegationSeams']>[0] = {}): Promise<{ again: World; tree: string }> {
+          const probe = world();
+          const root = probe.cfg.projectsRoot;
+          const tree = cn(root);
+          const first = nestWorld(tree);
+          first.watcher.setDelegationSeams({ evidenceCap: 3 });
+          for (let i = 0; i < 4; i++) await censusPass(first, at(i), { demo: [record('demo', 'raw-tree', { canonicalPath: tree })] });
+          expect(attemptsOf(first.home)).toEqual([]);
+          const again = world({ home: first.home });
+          (again.cfg as { projectsRoot: string }).projectsRoot = root;
+          again.watcher.setDelegationSeams({ evidenceCap: 3, droppedPruneEvery: 1, ...seams });
+          return { again, tree };
+        }
+        /** Shape B, then an R75 overflow at markCap 1 forced by one more forgotten key; then demo returns with the tree listed at `tree`. */
+        async function shapeBOverflow(cn: (root: string) => string, firstCensus: (tree: string) => Record<string, CensusView>, back: (tree: string) => Record<string, CensusView>) {
+          const { again, tree } = await restartOn(cn, { markCap: 1 });
+          await censusPass(again, at(4), firstCensus(tree), other);
+          fresh(again, 'demo-b');
+          await censusPass(again, at(5), firstCensus(tree), [...other, sessionOf('demo-b')]);
+          const lost = [...marksOf(again).lostProjects];
+          for (let i = 6; i < 10; i++) await censusPass(again, at(i), back(tree), [...other, sessionOf('demo-b')]);
+          await longAfter(again, [...other, sessionOf('demo-b')], back(tree));
+          return { again, tree, lost };
+        }
+        const demoAt = (tree: string) => ({ demo: [record('demo', 'raw-tree', { canonicalPath: tree })], other: [] });
+
+        it('X1 (SAFETY): nested in another project\'s checkout; that project lost at the cap: no lease, no attempt, an hour on, counted as `prefix`', async () => {
+          const o = await shapeBOverflow((root) => `${root}/other/nest/raw-tree`, () => ({ other: [] }), demoAt);
+          expect(o.lost, 'the project the nest is in').toEqual(['other']);
+          expect(leasesOf(o.again.home), 'a lost project dropped the veto of a tree nested in it').toEqual([]);
+          expect(attemptsOf(o.again.home)).toEqual([]);
+          expect(marksOf(o.again).lostPrefixes).toBeGreaterThanOrEqual(1);
+          expect(marksOf(o.again).forced, 'counted apart from every other mark').toEqual({ ...NONE, prefix: 1 });
+        });
+
+        it('X2: the worktrees directory inside the projects root (a pseudo-project) lost: no lease', async () => {
+          const o = await shapeBOverflow((root) => `${root}/worktrees/demo/raw-tree`, () => ({ other: [] }), demoAt);
+          expect(o.lost).toEqual(['worktrees']);
+          expect(leasesOf(o.again.home)).toEqual([]);
+          expect(attemptsOf(o.again.home)).toEqual([]);
+        });
+
+        it('X4: nested inside another project\'s LISTED tree (the nearest-tree rule), that project lost: no lease', async () => {
+          const ot = record('other', 'o-tree');
+          const o = await shapeBOverflow(() => `${ot.canonicalPath!}/nest`, () => ({ other: [ot] }),
+            (tree) => ({ demo: [record('demo', 'raw-tree', { canonicalPath: tree })], other: [ot] }));
+          expect(o.lost).toEqual(['other']);
+          expect(leasesOf(o.again.home)).toEqual([]);
+          expect(attemptsOf(o.again.home)).toEqual([]);
+        });
+
+        it('X7b: nested in another project\'s checkout, that project lost by RULE 3 at the restart load (its marks are never even made): no lease', async () => {
+          const probe = world();
+          const root = probe.cfg.projectsRoot;
+          const cn = `${root}/other/nest/raw-tree`;
+          const ao = sessionOf('a-other', 'idle', 'other');
+          const first = nestWorld(cn);
+          writeBucket(first, 'a-other', BUCKET10, tool('a-other', 700, `${root}/other/o-0`, '2026-10-15T10:00:10.000Z'), tool('a-other', 701, `${root}/other/o-1`, '2026-10-15T10:00:11.000Z'));
+          first.watcher.setDelegationSeams({ evidenceCap: 3 });
+          const rec = { demo: [record('demo', 'raw-tree', { canonicalPath: cn })], other: [] };
+          for (let i = 0; i < 4; i++) await censusPass(first, at(i), rec, [ao, sessionOf('demo-a')]);
+          const again = world({ home: first.home });
+          (again.cfg as { projectsRoot: string }).projectsRoot = root;
+          again.watcher.setDelegationSeams({ evidenceCap: 3, droppedPruneEvery: 1, projectHoldCap: 0 });
+          await censusPass(again, at(4), { other: null }, [ao]);
+          expect(marksOf(again).lostProjects).toEqual(['other']);
+          const back = { demo: [record('demo', 'raw-tree', { canonicalPath: cn })], other: null };
+          for (let i = 5; i < 9; i++) await censusPass(again, at(i), back, [ao, sessionOf('demo-b')]);
+          await longAfter(again, [ao, sessionOf('demo-b')], back);
+          expect(leasesOf(again.home)).toEqual([]);
+          expect(attemptsOf(again.home)).toEqual([]);
+          expect(marksOf(again).forced.prefix).toBe(1);
+        });
+
+        it('LIVENESS: a restart\'s load clears the prefix cover with the lost project, and the forgotten key itself vetoes again', async () => {
+          const o = await shapeBOverflow((root) => `${root}/other/nest/raw-tree`, () => ({ other: [] }), demoAt);
+          expect(marksOf(o.again).forced).toEqual({ ...NONE, prefix: 1 });
+          const restarted = world({ home: o.again.home });
+          (restarted.cfg as { projectsRoot: string }).projectsRoot = o.again.cfg.projectsRoot;
+          restarted.watcher.setDelegationSeams({ evidenceCap: 3, droppedPruneEvery: 1 });
+          for (let i = 10; i < 14; i++) await censusPass(restarted, at(i), demoAt(o.tree), [...other, sessionOf('demo-b')]);
+          expect(marksOf(restarted).lostProjects, 'cleared by the load').toEqual([]);
+          expect(marksOf(restarted).lostPrefixes).toBe(0);
+          expect(marksOf(restarted).forced, 'the key decides now').toEqual(NONE);
+          expect(keysOf(restarted), 'the parent\'s key at the listed tree\'s path, read again').toBe(1);
+          expect(leasesOf(restarted.home)).toEqual([]);
         });
       });
 
@@ -2573,4 +2676,138 @@ describe('boot refusal (R24): an active restore marker, or one that cannot be me
     expect(stderr).toContain('ccrc coordination-snapshot recover');
     expect(existsSync(path.join(home, '.ccrc', 'coord.db'))).toBe(false);
   }, 60_000);
+});
+
+// ── the final fix of wave 3 (final review I-1 and M-1; Task 13 N20) ─────────────────────────────────────────────────────
+
+describe('final review I-1: a restart never re-creates an evicted-session veto as a link', () => {
+  // `demo-a`'s call [10:05:01, 10:05:02] is inside `demo-b`'s, which created raw-tree [10:05:00, 10:05:03]: held in full, unresolved. After a
+  // restart with `demo-a` gone from the registry (a reclaimed child, a forgotten session) the lane cannot name `demo-a`'s project.
+  function overlapWorld(aWindow: readonly [string, string] = ['2026-10-15T10:05:01.000Z', '2026-10-15T10:05:02.000Z']): World {
+    const w = world();
+    writeBucket(w, 'demo-a', BUCKET10, bashPre('demo-a', 'toolu_o1', ['old-tree'], aWindow[0]), bashPost('demo-a', 'toolu_o1', ['old-tree'], aWindow[1]));
+    writeBucket(w, 'demo-b', BUCKET10,
+      bashPre('demo-b', 'toolu_wt1', ['old-tree'], '2026-10-15T10:05:00.000Z'), bashPost('demo-b', 'toolu_wt1', ['old-tree', 'raw-tree'], '2026-10-15T10:05:03.000Z'));
+    return w;
+  }
+  const census = { demo: [OLD, RAW] };
+  const both = [sessionOf('demo-a'), sessionOf('demo-b')];
+  const onlyB = [sessionOf('demo-b')];
+  /** The first lane sees both sessions and makes no lease; then `demo-a` leaves the registry and the server restarts. */
+  async function restarted(aWindow?: readonly [string, string], passes = 4): Promise<World> {
+    const first = overlapWorld(aWindow);
+    for (let i = 0; i < passes; i++) await censusPass(first, at(i), census, both);
+    expect(leasesOf(first.home), 'control: held in full, no lease').toEqual([]);
+    await first.watcher.closeDelegation();
+    return world({ home: first.home });
+  }
+
+  it('SAFETY (FINALRV-P1): the unknown session\'s window still vetoes: no lease and no attempt, pass after pass past an hour, counted as `window`', async () => {
+    const again = await restarted();
+    for (let i = 4; i < 8; i++) await censusPass(again, at(i), census, onlyB);
+    for (const minute of [70, 71, 130]) await censusPass(again, NOW + minute * 60_000, census, onlyB);
+    expect(leasesOf(again.home), 'a restart dropped the overlap veto of a session no longer in the registry').toEqual([]);
+    expect(attemptsOf(again.home)).toEqual([]);
+    expect(again.watcher.delegationReport().verdicts).toEqual({ unresolved: 2, conflicting: 0, unmeasured: 0 });
+    expect(again.watcher.delegationReport().marks.forced, 'counted apart from every other mark').toMatchObject({ window: 1, path: 0, id: 0, project: 0, lossy: 0, prefix: 0 });
+  });
+
+  it('LIVENESS: a registry row naming the session\'s project again clears it: under another project the tree links; under the same one the overlap stands', async () => {
+    const again = await restarted();
+    for (let i = 4; i < 7; i++) await censusPass(again, at(i), census, onlyB);
+    expect(leasesOf(again.home)).toEqual([]);
+    await censusPass(again, at(7), census, onlyB, [recordOf('demo-b'), recordOf('demo-a', 'demo')]);
+    expect(leasesOf(again.home), 'the same project: the full evidence\'s answer, unresolved').toEqual([]);
+    await censusPass(again, at(8), census, onlyB, [recordOf('demo-b'), recordOf('demo-a', 'other')]);
+    expect(leasesOf(again.home).map((l) => [l.adminRecord, l.parentId]), 'another project: no veto on this repository').toEqual([['raw-tree', 'demo-b']]);
+  });
+
+  it('LIVENESS: an unknown window that does not overlap the creator\'s in time leaves the link possible', async () => {
+    const again = await restarted(['2026-10-15T10:06:00.000Z', '2026-10-15T10:06:01.000Z'], 1);    // ingested; still inside the birth wait
+    for (let i = 4; i < 8; i++) await censusPass(again, at(i), census, onlyB);
+    expect(leasesOf(again.home).map((l) => [l.adminRecord, l.parentId])).toEqual([['raw-tree', 'demo-b']]);
+  });
+});
+
+describe('Task 13 N20 (coordinator 5439): the projects root is RESOLVED before the attribution compares paths', () => {
+  /** demo-a reports five directories under `dir`, none of them a tree; the slice's cap of 3 evicts two, and a measured census forgets them
+   *  with path marks. */
+  const farUnder = (w: World, dir: string, from = 0, count = 5): void => {
+    const lines = Array.from({ length: count }, (_, i) => lineOf(common('demo-a', {
+      eventKind: 'PostToolUse', toolName: 'Bash', toolUseId: `toolu_far${from + i}`, outcome: 'completed', cwd: `${dir}/far-${from + i}`,
+    }, `2026-10-15T10:0${Math.floor((from + i) / 6)}:${String(((from + i) % 6) * 5).padStart(2, '0')}.000Z`)));
+    if (existsSync(bucketFile(w, 'demo-a', BUCKET10))) appendBucket(w, 'demo-a', BUCKET10, ...lines);
+    else writeBucket(w, 'demo-a', BUCKET10, ...lines);
+  };
+
+  it('a SYMLINKED projects root (the documented layout): the marks under its physical path are attributed to their project', async () => {
+    const w = world();
+    const phys = mkTmp('ccrc-dlane-physroot-');
+    const link = path.join(mkTmp('ccrc-dlane-linkroot-'), 'projects');
+    symlinkSync(phys, link);
+    (w.cfg as { projectsRoot: string }).projectsRoot = link;
+    farUnder(w, `${phys}/demo`);
+    w.watcher.setDelegationSeams({ evidenceCap: 3, droppedPruneEvery: 1 });
+    await censusPass(w, at(0), { demo: [] });
+    const r = w.watcher.delegationReport();
+    expect(r.projectsRoot).toBe('resolved');
+    expect(r.marks.paths, 'two directories forgotten').toBe(2);
+    expect(r.marks.unattributedPaths, 'the configured (logical) spelling would attribute none of them').toBe(0);
+  });
+
+  it('a root that does not resolve: attribution by the root is UNMEASURED (never the configured spelling), and the next pass resolves it again', async () => {
+    const w = world();
+    const root = w.cfg.projectsRoot;
+    const realpath = w.io.realpath;
+    w.io.realpath = async () => null;                                       // the remote io, or a root that cannot be resolved this pass
+    farUnder(w, `${root}/demo`);
+    w.watcher.setDelegationSeams({ evidenceCap: 3, droppedPruneEvery: 1 });
+    await censusPass(w, at(0), { demo: [] });
+    let r = w.watcher.delegationReport();
+    expect(r.projectsRoot).toBe('unmeasured');
+    expect(r.marks.paths).toBe(2);
+    expect(r.marks.unattributedPaths, 'attributed to no project: never by a spelling git may not report').toBe(2);
+    w.io.realpath = realpath;
+    farUnder(w, `${root}/demo`, 5, 2);
+    await censusPass(w, at(1), { demo: [] });
+    r = w.watcher.delegationReport();
+    expect(r.projectsRoot, 'retried on the next pass').toBe('resolved');
+    expect(r.marks.paths).toBe(4);
+    expect(r.marks.unattributedPaths, 'the new marks are attributed').toBe(2);
+  });
+});
+
+describe('final review M-1: after a recovery or a failed evidence load the verdict counts are unknown, never an earlier pass\'s', () => {
+  const census = { demo: [OLD, RAW] };
+  const counts = (w: World) => { const h = w.watcher.currentDelegationHealth()!; return { breaker: h.circuitBreaker, unresolved: h.unresolved, conflicting: h.conflicting, unmeasured: h.unmeasured }; };
+  const UNKNOWN = { breaker: 'unmeasured', unresolved: 0, conflicting: 0, unmeasured: 0 };
+
+  it('an applier found failed, a recovery, then a load that fails: unmeasured with 0 throughout, until a reconcile vouches again', async () => {
+    const w = rawTreeWorld();
+    for (let i = 0; i < 4; i++) await censusPass(w, at(i), census);
+    expect(counts(w)).toEqual({ breaker: 'clear', unresolved: 1, conflicting: 0, unmeasured: 0 });
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const failed = vi.spyOn(DelegationDurability.prototype, 'failure').mockReturnValue({ code: 'journal-unreadable', detail: 'a fixture failure' } as never);
+    await censusPass(w, at(4), census);
+    expect(counts(w), 'the applier is failed: what was counted is not this state\'s').toEqual(UNKNOWN);
+    await censusPass(w, at(10), census);                                    // past the retry interval: recover() runs
+    expect(counts(w)).toEqual(UNKNOWN);
+    failed.mockRestore();
+    const visit = vi.spyOn(DelegationDurability.prototype, 'visitRetainedRecords').mockRejectedValue(new Error('journal read failed'));
+    await censusPass(w, at(11), census);
+    expect(w.watcher.delegationReport().droppedEvidence.measured).toBe(false);
+    expect(counts(w), 'the load failed: nothing is reconciled, so nothing is vouched for').toEqual(UNKNOWN);
+    visit.mockRestore();
+    await censusPass(w, at(12), census);
+    expect(counts(w), 'a reconcile vouches again').toEqual({ breaker: 'clear', unresolved: 1, conflicting: 0, unmeasured: 0 });
+  });
+
+  it('a reconcile older than three census cadences no longer vouches for its counts', async () => {
+    const w = rawTreeWorld();
+    for (let i = 0; i < 4; i++) await censusPass(w, at(i), census);
+    setNow(at(3) + 3 * STEP);
+    expect(counts(w).breaker, 'three cadences: still vouched for').toBe('clear');
+    setNow(at(3) + 3 * STEP + 1);
+    expect(counts(w)).toEqual(UNKNOWN);
+  });
 });

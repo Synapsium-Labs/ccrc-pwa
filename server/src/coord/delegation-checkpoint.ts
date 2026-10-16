@@ -538,7 +538,9 @@ export function namedAgentsOf(event: DelegationEventEnvelopeV1): DelegationNamed
   return [...found.values()];
 }
 
-/** An upstream thing no qualifying join has yet opened (a Workflow RUN never is opened itself; its workers are): the earliest retained record naming it is its identity record (spec §5.2). */
+/** An upstream thing no qualifying join has yet opened: the earliest retained record naming it is its identity record (spec §5.2). A
+ *  Workflow RUN is never one (R44: its launch response is its qualifying join, so it is opened at once), and its workers are opened
+ *  from the run's row, not from a candidate. */
 export interface DelegationActivityCandidate {
   key: DelegationActivityNaturalKey;
   /** The accepted `journalId` of the earliest retained record that named it (NEVER the envelope's `eventId`). */
@@ -761,7 +763,8 @@ export class DelegationCheckpointBuilder {
     });
   }
 
-  private openFromCandidate(c: DelegationActivityCandidate, encoded: string): string {
+  /** `c` carries no `sequence`: opening never reads it, and a worker opened from its run's row has no candidate record to take one from. */
+  private openFromCandidate(c: Omit<DelegationActivityCandidate, 'sequence'>, encoded: string): string {
     // The ID is derived from the IDENTITY RECORD's accepted journalId, through the model's mapping-first function.
     const allocated = restoreOrAllocateActivityId(c.key, c.journalId, { ...emptyDelegationCheckpoint(), activityIdsByNaturalKey: this.mapping });
     this.mapping = { ...allocated.checkpoint.activityIdsByNaturalKey };
@@ -816,7 +819,7 @@ export class DelegationCheckpointBuilder {
     return {
       kind: 'opened',
       activityId: this.openFromCandidate(
-        { key: worker, journalId: run.identityJournalId, sequence: 0, observedAt: run.openedAt, lastObservedAt: run.lastEventAt, endedAt: run.endedAt }, encoded),
+        { key: worker, journalId: run.identityJournalId, observedAt: run.openedAt, lastObservedAt: run.lastEventAt, endedAt: run.endedAt }, encoded),
     };
   }
 
@@ -844,11 +847,15 @@ export class DelegationCheckpointBuilder {
   // ── checkpoint-only state ──────────────────────────────────────────────────────────────────────────────────────────
 
   /** Sets a bucket's cursor row. `replaced` is MONOTONIC (R36): a result computed from a stale state can never write `false` over a
-   *  durable `true`, so a replaced bucket cannot be un-replaced by an overlapping tick. Where the cursor itself moves is Task 13's (M6). */
+   *  durable `true`, so a replaced bucket cannot be un-replaced by an overlapping tick. When it ORs the flag it also keeps the durable
+   *  row's DETAIL and `intervalState: 'unmeasured'` (Task 9 re-review 2, minor 1): a stale result's words (`torn-tail: ...`, or none)
+   *  would otherwise sit on a replaced row, and every later tick answers the row's detail. Where the cursor itself moves is Task 13's. */
   setCursor(cursor: DelegationBucketCursor): void {
     const key = cursorKeyOf(cursor);
-    const wasReplaced = this.cursors.get(key)?.replaced === true;
-    this.cursors.set(key, wasReplaced && !cursor.replaced ? { ...cursor, replaced: true } : cursor);
+    const prior = this.cursors.get(key);
+    this.cursors.set(key, prior !== undefined && prior.replaced && !cursor.replaced
+      ? { ...cursor, replaced: true, intervalState: 'unmeasured', detail: prior.detail }
+      : cursor);
   }
   mergeInterval(interval: DelegationObservationInterval): void {
     const k = intervalKeyOf(interval);

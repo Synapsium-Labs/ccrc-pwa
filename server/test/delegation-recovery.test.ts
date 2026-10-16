@@ -79,6 +79,7 @@ import {
   type DelegationDurabilityEdge,
   type DelegationProjectionPort,
 } from '../src/coord/delegation-checkpoint.js';
+import { unreadableDelegationBucketResult } from '../src/coord/delegation-ingest.js';
 
 // A pass-through of the journal's append planner that a test can switch to "skip everything". `createLease` calls the planner after its
 // own checks, so no real input makes the planner skip the entry it was handed; this is the only way to reach that branch (fix round 1, M6).
@@ -3131,6 +3132,23 @@ describe('Task 9 R36: a stale result can never write replaced:false over a durab
     await dur.close();
     const reopened = await h.open();
     expect(reopened.state().checkpoint.bucketCursors.find((r) => r.bucket === '2026101412')).toMatchObject({ replaced: true });
+  });
+
+  it('the OR keeps the durable replaced words and the unmeasured state: a stale torn-tail row, a reader gap, then a clean tick still answer bucket-replaced', async () => {
+    const h = harness();
+    const dur = await h.open();
+    await dur.applyAccepted(batch([sessionStart(1)], { cursor: replacedRow(40) }));
+    const stale = { ...cursorFor('2026101412', 10), replaced: false, intervalState: 'measured' as const, detail: 'torn-tail: 3 unframed bytes after offset 10' };
+    await dur.applyAccepted(batch([sessionStart(2)], { cursor: stale }));
+    const row = dur.state().checkpoint.bucketCursors.find((r) => r.bucket === '2026101412')!;
+    expect(row).toMatchObject({ replaced: true, intervalState: 'unmeasured' });
+    expect(row.detail).toMatch(/^bucket-replaced/);
+    const id = { sessionId: row.sessionId, parentIncarnation: row.parentIncarnation, bucket: row.bucket };
+    const reader = unreadableDelegationBucketResult(id, dur.state(), { reason: 'capability-unmeasured', detail: 'x' });
+    expect(reader.cursor.detail).toMatch(/^bucket-replaced/);
+    await dur.applyAccepted({ accepted: [], cursor: reader.cursor, interval: null });
+    expect(dur.state().checkpoint.bucketCursors.find((r) => r.bucket === '2026101412')!.detail).toMatch(/^bucket-replaced/);
+    await dur.close();
   });
 
   it('another bucket is unaffected, and a row that was never replaced stays false', async () => {

@@ -470,6 +470,22 @@ describe('one lease per tree (R51): a tree an unreleased lease holds is never re
     const effects = substantive(planDelegationReconciliation(one(rawRec(), linkedV(other, 3), { recovery: rc([lease({ activityId: agentAct.activityId, adminRecord: RAW, canonicalPath: WT(RAW) })]) })));
     expect(kinds(effects)).toEqual(['record-unowned-worktree']);
   });
+  it('R54 N3: the tree is held by KEY too: the same (project, admin record) at a different path is the same tree (no request, one conflict)', () => {
+    const effects = substantive(planDelegationReconciliation(one(rawRec(), linkedV(other, 3), {
+      recovery: rc([lease({ activityId: agentAct.activityId, adminRecord: RAW, canonicalPath: '/fixture/old/path' })]),
+    })));
+    expect(kinds(effects)).toEqual(['record-unowned-worktree']);
+  });
+  it('R54 N3: the conflict is filed under the NEW verdict\'s parent, never the holder\'s', () => {
+    const theirs = activity('agent', 'zzz', { parentId: OTHER });
+    const effects = substantive(planDelegationReconciliation(one(rawRec(), linkedV(theirs, 3), {
+      recovery: recovery({ sessions: [session(PARENT), session(OTHER)], activities: [agentAct, theirs, rawAct], leases: [lease({ activityId: agentAct.activityId, adminRecord: RAW, canonicalPath: WT(RAW) })] }),
+    })));
+    expect(kinds(effects)).toEqual(['record-unowned-worktree']);
+    const e = effects[0]!;
+    if (e.kind !== 'record-unowned-worktree') throw new Error('unreachable');
+    expect(e.attempt).toMatchObject({ parentId: OTHER, verdict: 'conflicting', detail: 'rungs-disagree' });
+  });
   it('a lease on ANOTHER tree does not hold this one', () => {
     expect(kinds(substantive(planDelegationReconciliation(one(rawRec(), linkedV(other, 3), { recovery: rc([lease({ activityId: agentAct.activityId })]) }))))).toEqual(['request-linked-lease-identity']);
   });
@@ -500,6 +516,11 @@ describe('run versus worker is read from the rows, never from spelling (R52)', (
     for (const [w, r] of cases) {
       expect(substantive(planDelegationReconciliation(one(rec({ adminRecord: w.upstreamId, canonicalPath: WT(w.upstreamId) }), linkedV(w, 2), { recovery: r }))), w.upstreamId).toEqual([]);
     }
+  });
+  it('R54 N3: same parent and identity but ANOTHER incarnation (its session present) is not the run\'s worker: no request', () => {
+    const otherInc = activity('workflow', `${RUN}-0`, { identityJournalId: runRow.identityJournalId, parentIncarnation: 'g2' });
+    const r = recovery({ sessions: [session(PARENT), session(PARENT, 'g2')], activities: [runRow, otherInc] });
+    expect(substantive(planDelegationReconciliation(one(rec({ adminRecord: `${RUN}-0`, canonicalPath: WT(`${RUN}-0`) }), linkedV(otherInc, 2), { recovery: r })))).toEqual([]);
   });
 });
 
@@ -573,6 +594,20 @@ describe('the call\'s contract', () => {
     expect(() => planDelegationReconciliation(plan({ census: [], correlations: [{ record: rec(), verdict: ownedV() }] }))).toThrow(DelegationModelError);
     expect(() => planDelegationReconciliation(plan({ census: [rawRec()], correlations: [{ record: rec(), verdict: ownedV() }] }))).toThrow(DelegationModelError);
     expect(() => planDelegationReconciliation(plan({ census: [rec({ project: 'project-b' })], correlations: [{ record: rec(), verdict: ownedV() }] }))).toThrow(DelegationModelError);
+  });
+  it('R54 N1: the pair contributes only its key: the plan reads the CENSUS\'s record, so a stale copy is never acted on as measured', () => {
+    const born = rec({ state: 'unreadable', canonicalPath: null, diagnostic: 'record-initializing' });
+    expect(substantive(planDelegationReconciliation(plan({ census: [born], correlations: [{ record: rec(), verdict: linkedV(agentAct, 2) }] }))), 'a tree the census reports being born').toEqual([]);
+    const moved = rec({ canonicalPath: WT('elsewhere'), claudeBase: 'other-base' });
+    const request = requestOf(planDelegationReconciliation(plan({ census: [moved], correlations: [{ record: rec(), verdict: linkedV(agentAct, 2) }] })));
+    expect(request, 'the path and base the census measured, never the pair\'s').toMatchObject({ canonicalPath: WT('elsewhere'), creationBase: 'other-base' });
+  });
+  it('R54 N2: a tree paired twice is refused, and none of its pairs is planned', () => {
+    const other = activity('agent', 'zzz');
+    const twice = plan({ census: [rawRec()], recovery: recovery({ activities: [agentAct, other, rawAct] }),
+      correlations: [{ record: rawRec(), verdict: linkedV(agentAct, 3) }, { record: rawRec(), verdict: linkedV(other, 3) }] });
+    expect(() => planDelegationReconciliation(twice)).toThrow(DelegationModelError);
+    expect(() => planDelegationReconciliation(twice)).toThrow(/paired with two verdicts/);
   });
   it('a census record with no verdict is allowed (it is simply not reasoned about), and pairs are matched by tree, never by position', () => {
     expect(substantive(planDelegationReconciliation(plan({ census: [rec(), rawRec()] })))).toEqual([]);

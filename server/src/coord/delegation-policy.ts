@@ -396,24 +396,32 @@ function planAbsences(input: DelegationReconciliationInput): DelegationReportEff
 // ── The plan ──────────────────────────────────────────────────────────────────────────────────────────────────────────
 
 /**
- * Each entry of `correlations` pairs a verdict with the census record it is about; the record must be in `census`. `census` and
+ * Each entry of `correlations` pairs a verdict with the census record it is about; the record must be in `census`, and it contributes
+ * ONLY its tree key (R54 N1): the plan reads the CENSUS's own record for that key, so a pair carrying a stale or foreign copy of a tree
+ * (another state, path or base) is never acted on as if the census had measured it. A tree key paired twice is a defect (R54 N2): it is
+ * refused (`bad-row`) and no pair is planned, because two verdicts for one tree could request two leases in one pass. `census` and
  * `previousSuccessfulCensus` must be measured successes for the projects named in `censusedProjects` and `previousCensusedProjects`:
  * a project whose census view was null is not listed, and its trees are never absent. The result lists, in order: each pair's effects
  * in the order given, then measured absences by tree, then the projection repair. A recovery that is not `ready` decides nothing.
  */
 export function planDelegationReconciliation(input: DelegationReconciliationInput): readonly DelegationReportEffect[] {
   parseDelegationInstant(input.now);
-  const censused = new Set(input.census.map((r) => treeKey(r.project, r.adminRecord)));
+  const censused = new Map<string, DelegationCensusRecord>();
+  for (const r of input.census) if (!censused.has(treeKey(r.project, r.adminRecord))) censused.set(treeKey(r.project, r.adminRecord), r);
+  const paired = new Set<string>();
   for (const { record } of input.correlations) {
-    if (!censused.has(treeKey(record.project, record.adminRecord))) {
+    const key = treeKey(record.project, record.adminRecord);
+    if (!censused.has(key)) {
       throw new DelegationModelError('bad-row', `a verdict is about ${record.project}/${record.adminRecord}, which the census does not hold`);
     }
+    if (paired.has(key)) throw new DelegationModelError('bad-row', `the tree ${record.project}/${record.adminRecord} is paired with two verdicts: none is planned`);
+    paired.add(key);
   }
   if (input.recovery.phase !== 'ready') return [];
   const ground = groundOf(input.now, input.recovery);
   const claimsAllowed = delegationCircuitBreaker(input) === 'clear';
   const effects: DelegationReportEffect[] = [];
-  for (const { record, verdict } of input.correlations) effects.push(...planRecord(ground, claimsAllowed, record, verdict));
+  for (const { record, verdict } of input.correlations) effects.push(...planRecord(ground, claimsAllowed, censused.get(treeKey(record.project, record.adminRecord))!, verdict));
   effects.push(...planAbsences(input));
   effects.push({ kind: 'repair-report-projection', checkpointRevision: input.recovery.checkpoint.revision });
   return effects;

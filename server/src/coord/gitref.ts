@@ -275,7 +275,8 @@ export type WorktreeRead =
  * it as precedent here has been false since (D-1446). This census is the last
  * reader in this file that still lets an unmeasurable `stat` read as absence, and
  * deliberately: the direction is the SUPPRESSING one — it can only hide a record,
- * never manufacture one — and `io.stat` has no measured form at these rungs. The rung walk inherits it exactly: a single dropped round
+ * never manufacture one — and this census deliberately calls the folding `stat`, not `statMeasured`, at these rungs: the direction is
+ * the suppressing one. The rung walk inherits it exactly: a single dropped round
  * trip landing on one stat and not its neighbour reads as the standing fact.
  *
  * A DETACHED HEAD gives `headBranch: null`, never a fabricated name.
@@ -290,13 +291,15 @@ export async function readWorktreeRecords(
  * THE SAME CENSUS, EXTENDED ADDITIVELY (delegation broker wave 3, spec §5.5): the `WorktreeRead` `readWorktreeRecords` answers,
  * arm for arm, and — from the SAME listing of the admin directory, never a second one — one `DelegationCensusRecord` per admin
  * record. `delegation` is `null` for every `WorktreeRead` refusal: a project that was not censused has NO delegation census, which
- * is not an empty one (`ok: true` with `delegation: []` is the measured zero). The watcher's once-a-minute divergence sweep is the
- * only caller; this adds no schedule and no second read of the admin directory.
+ * is not an empty one (`ok: true` with `delegation: []` is the measured zero). It is ALSO `null` beside an `ok: true` read whose
+ * delegation census this pass did not measure (see `WorktreeCensus`): the legacy view's zero rests on folding reads. The watcher's
+ * once-a-minute divergence sweep is the only caller; this adds no schedule and no second read of the admin directory.
  *
  * Per record it adds at most one bounded measured read of each of `HEAD`, `CLAUDE_BASE`, the first 128 bytes of `logs/HEAD`, a `stat`
  * of `locked`, and the `gitdir` the legacy view already read. A record that cannot be read is KEPT as a row of its own instead of
- * skipped (`state: 'unreadable'`, a diagnostic naming what failed), and a record whose `gitdir` is proven absent is `state:
- * 'absent'`. Three folds are wave 1's D-4008 known limits and are pinned: a failed lock stat reads `locked: false`, an unreadable
+ * skipped (`state: 'unreadable'`, a diagnostic naming what failed). A record is `state: 'absent'` only when its `gitdir`, its `HEAD`
+ * AND its `locked` are each proven absent (ENOENT; ruling R46, the removal race): a `gitdir` ENOENT alone is `unreadable` (beside a
+ * present `locked` it is a record being born, `record-initializing`). Three folds are wave 1's D-4008 known limits and are pinned: a failed lock stat reads `locked: false`, an unreadable
  * first log reads `baseAgreesFirstLog: null`, and an unreadable `gitdir` reads as no canonical path. Each carries a diagnostic, and
  * the observe stage treats none of them as positive evidence of anything: the row an unreadable `gitdir` leaves is `unreadable`,
  * never `absent`, so it can neither start nor feed a measured absence.
@@ -311,10 +314,11 @@ export async function readWorktreeCensus(
  *  whenever THIS PASS did not MEASURE a delegation census, and that includes an `ok: true` read: the legacy view's zero rests on
  *  convenience reads that fold a failed read to "nothing there" (see `WorktreeRead`), a fold argued safe only because it can hide a
  *  record, while an empty delegation census would read as a measured absence of every record. `[]` is minted from measured reads only. */
-export interface WorktreeCensus {
-  read: WorktreeRead;
-  delegation: DelegationCensusRecord[] | null;
-}
+export type WorktreeCensus =
+  /** A listing that answered: a measured delegation census, or none measured this pass. */
+  | { read: Extract<WorktreeRead, { ok: true }>; delegation: DelegationCensusRecord[] | null }
+  /** A refusal: never a delegation census (Task 10 N3: `{read: {ok: false}, delegation: []}` is unrepresentable). */
+  | { read: Extract<WorktreeRead, { ok: false }>; delegation: null };
 
 /**
  * Every diagnostic the census can put on a `DelegationCensusRecord`, declared ONCE. `diagnostic` is these words joined by `,` in the

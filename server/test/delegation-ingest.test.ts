@@ -53,6 +53,7 @@ import {
   parseDelegationSpoolLine,
   readDelegationBucket,
   unreadableDelegationBucketResult,
+  DELEGATION_BUCKET_UNREADABLE_REASONS,
   type DelegationBucketDurability,
   type DelegationBucketInput,
   type DelegationBucketResult,
@@ -1391,7 +1392,23 @@ describe('the adapter: ingestAndApplyDelegationBucket', () => {
       expect(ingest(l1, { capabilityPresent: null }).applicable).toBe(true);
       expect(ingest(l1, {}, stateWith([], 'reconstructing')).applicable).toBe(true);
       expect(ingest(l1).applicable).toBe(true);
-      expect(unreadableDelegationBucketResult({ sessionId: OWNER, parentIncarnation: INC, bucket: BUCKET }, stateWith(), { reason: 'range-unreadable', detail: 'x' }).applicable).toBe(true);
+      // every reader reason but `input-invalid`, by the list itself (a reason added to it is covered here)
+      const readerReasons = DELEGATION_BUCKET_UNREADABLE_REASONS.filter((r) => r !== 'input-invalid');
+      expect(readerReasons.length).toBe(DELEGATION_BUCKET_UNREADABLE_REASONS.length - 1);
+      for (const reason of readerReasons) {
+        expect(unreadableDelegationBucketResult({ sessionId: OWNER, parentIncarnation: INC, bucket: BUCKET }, stateWith(), { reason, detail: 'x' }).applicable, reason).toBe(true);
+      }
+      expect(unreadableDelegationBucketResult({ sessionId: OWNER, parentIncarnation: INC, bucket: BUCKET }, stateWith(), { reason: 'input-invalid', detail: 'x' }).applicable).toBe(false);
+      // a starved window, and a replacement
+      const garbage = new TextEncoder().encode('x'.repeat(READ_FROM_MAX_BYTES - 100) + '\n');
+      const first = tick(cat(garbage, l1));
+      const starved = tick(cat(garbage, l1), first.cursor);
+      expect(starved.detail).toMatch(/^window-starved: /);
+      expect(starved.applicable).toBe(true);
+      const whole = tick(cat(l1, l1));
+      const cut = tick(l1.subarray(0, 10), whole.cursor);
+      expect(cut.cursor.replaced).toBe(true);
+      expect(cut.applicable).toBe(true);
     });
   });
 
