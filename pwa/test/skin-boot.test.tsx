@@ -284,7 +284,7 @@ describe('the per-device default (D-5096)', () => {
     ['a minute of timers', () => vi.advanceTimersByTime(60_000)],
   ];
 
-  it('AUTO is resolved once per load: a device change mid-session changes nothing, whatever fires, and a reload re-resolves', () => {
+  it('AUTO is resolved once per load: a device change mid-session changes nothing, whatever fires, and a reload re-resolves', async () => {
     // O2: a skin never flips under the person using it. Under W2's
     // `SKIN_SETS[useSkin()].Shell` a live re-resolve would remount the shell
     // mid-task — which is why this departs from `initTheme`, which does follow
@@ -299,11 +299,18 @@ describe('the per-device default (D-5096)', () => {
     // after each nudge in turn, so a re-resolve from any trigger reds by name.
     // A subscription is the third way, counted at the end. Fake timers are
     // installed before the boot, so a poll the boot starts is under them.
+    // Each nudge is followed by an awaited zero-time advance, which drains the
+    // microtask queue too, so a re-stamp the handler defers (an `await`, a
+    // `queueMicrotask`) is seen as well; that is why the case is async and
+    // flips `preview` inline rather than through the synchronous `asW2Ships`.
     const device = liveDevice(true);
     vi.stubGlobal('matchMedia', device.matchMedia);
     vi.useFakeTimers();
     try {
-      asW2Ships(() => {
+      const entry = SKINS.find((x) => x.id === INSTRUMENT) as { preview: boolean };
+      const was = entry.preview;
+      entry.preview = false;
+      try {
         localStorage.removeItem(SKIN_STORAGE_KEY);
         initSkin();
         expect(stamped(), 'a desk with nothing stored boots into Instrument').toBe(INSTRUMENT);
@@ -313,6 +320,7 @@ describe('the per-device default (D-5096)', () => {
         expect(stamped(), 'the skin flipped under the person using it').toBe(INSTRUMENT);
         for (const [name, fire] of NUDGES) {
           fire();
+          await vi.advanceTimersByTimeAsync(0);
           expect(stamped(), `the skin flipped under the person using it on ${name}`).toBe(INSTRUMENT);
           expect(device.reads(), `the device was read again on ${name}`).toEqual([DEVICE_QUERY]);
         }
@@ -328,7 +336,9 @@ describe('the per-device default (D-5096)', () => {
         initSkin();
         expect(stamped(), 'a reload re-resolves').toBe(REFINED);
         expect(device.reads(), 'a reload reads the device once more').toEqual([DEVICE_QUERY, DEVICE_QUERY]);
-      });
+      } finally {
+        entry.preview = was;
+      }
     } finally {
       vi.useRealTimers();
     }
