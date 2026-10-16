@@ -15,8 +15,11 @@
 // stamp itself (`applySkin`, which ALWAYS writes the attribute — the departure
 // from `applyTheme`, which writes Phosphor by absence), the stylesheet's place
 // in `theme.css`'s import order, and Storybook's toolbar, which must take its
-// items from the catalogue rather than re-list them.
-import { describe, expect, it } from 'vitest';
+// items from the catalogue rather than re-list them. And Storybook's half of
+// D-5093's verification clause: the initial skin comes from `STORYBOOK_SKIN`
+// through the catalogue, so a build made with it runs axe over every story in
+// that skin, and the viewport presets are the widths every PR is checked at.
+import { describe, expect, it, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import path from 'node:path';
@@ -377,13 +380,28 @@ describe('Storybook', () => {
     }
   });
 
-  it('the skin decorator is wired: the selected global stamps data-skin, and refined is the initial one', async () => {
+  /** The preview module as a build made with `STORYBOOK_SKIN=<value>` sees it:
+   *  re-evaluated, because `initialGlobals` is read once, at import. Vitest's
+   *  `import.meta.env` is the process environment, so a stub reaches the same
+   *  read the vite build replaces statically. `undefined` is "not set". */
+  async function previewBuiltWith(value: string | undefined): Promise<typeof import('../../ui/.storybook/preview').default> {
+    vi.stubEnv('STORYBOOK_SKIN', value);
+    vi.resetModules();
+    try {
+      return (await import('../../ui/.storybook/preview')).default;
+    } finally {
+      vi.unstubAllEnvs();
+      vi.resetModules();
+    }
+  }
+
+  it('the skin decorator is wired: the selected global stamps data-skin, and refined is the initial one when STORYBOOK_SKIN is unset', async () => {
     // RUN, not read. The source scan above sees `applySkin(` anywhere in the
     // file, so a decorator that is written but dropped from `decorators` — or
     // never calls it — passed it while every story rendered in whatever skin
     // the page last had. This runs the preview's own decorator chain the way
     // Storybook does, with a stub story, and reads the document.
-    const { default: preview } = await import('../../ui/.storybook/preview');
+    const preview = await previewBuiltWith(undefined);
     // Each decorator is called as Storybook calls it, with only what ours
     // read: a story to render and the context's globals.
     type Decorate = (story: () => null, context: { globals: Record<string, unknown> }) => unknown;
@@ -398,5 +416,43 @@ describe('Storybook', () => {
     // A stale global (a bookmarked URL from a newer build) stamps the default.
     expect(render({ skin: 'soft-glass' })).toBe(REFINED);
     expect(render({})).toBe(REFINED);
+  });
+
+  it("Storybook's initial skin comes from STORYBOOK_SKIN, validated against SKINS", async () => {
+    // D-5093's verification clause: `STORYBOOK_SKIN=instrument npm run
+    // build-storybook` is a build whose every story opens in Instrument, so
+    // the a11y run over it is axe in that skin. Validated, because an
+    // unvalidated value stamps an attribute no block answers: every story
+    // would then render Refined while the run claimed to measure the other
+    // skin — a green that measured nothing it said it did.
+    //
+    // READ, where the value enters: `initialGlobals.skin` is the catalogue's
+    // own resolver over the variable, so no second spelling of the rule (or of
+    // a skin id — the literal case above) lives in Storybook.
+    const src = stripJs(readFileSync(path.join(UI, '.storybook', 'preview.ts'), 'utf8'));
+    expect(src).toMatch(/\binitialGlobals:\s*\{[^}]*\bskin:\s*resolveSkin\(\s*import\.meta\.env\.STORYBOOK_SKIN\s*\)/);
+    // RUN, for what the read cannot see: what each value actually becomes.
+    for (const s of SKINS) expect((await previewBuiltWith(s.id)).initialGlobals?.['skin'], s.id).toBe(s.id);
+    for (const junk of [undefined, '', 'soft-glass', 'Instrument', ' instrument']) {
+      expect((await previewBuiltWith(junk)).initialGlobals?.['skin'], String(junk)).toBe(REFINED);
+    }
+  });
+
+  it('the viewport presets are the verification widths', async () => {
+    // Spec §9: every foundations PR is checked at phone 360, 390 and 438,
+    // laptop 1280 and 1470, and wide 1920. The toolbar offers exactly those,
+    // so a primitive is checked in Storybook at the widths its PR's matrix
+    // names, and offers no preset between them (the 834 "tablet" these
+    // replaced) that no PR is asked to sign for.
+    const preview = await previewBuiltWith(undefined);
+    const options = (preview.parameters?.['viewport'] as { options?: Record<string, { styles: { width: string; height: string } }> } | undefined)?.options ?? {};
+    const px = (v: string): number => Number(/^(\d+)px$/.exec(v)?.[1] ?? Number.NaN);
+    expect(Object.values(options).map((o) => px(o.styles.width)).sort((a, b) => a - b))
+      .toEqual([360, 390, 438, 1280, 1470, 1920]);
+    expect(Object.fromEntries(Object.entries(options).map(([k, o]) => [k, `${px(o.styles.width)}x${px(o.styles.height)}`])))
+      .toEqual({
+        'phone-sm': '360x780', phone: '390x844', 'phone-lg': '438x926',
+        laptop: '1280x800', 'laptop-lg': '1470x920', wide: '1920x1080',
+      });
   });
 });
