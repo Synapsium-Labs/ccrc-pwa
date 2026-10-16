@@ -27,7 +27,9 @@
 //    every lagging node, so that every node ends on one tag (D-4271), the
 //    console's own move, followed in Settings; otherwise — and whenever the
 //    inventory has not answered, or a lease could not be read — `ccrc rollout`/
-//    `ccrc update` from a terminal.
+//    `ccrc update` from a terminal. While a later poll's failure stands
+//    (`stale`, wave 19, R24(b)) it never advises auto, and it ends with the
+//    update plane's own sentence for the last answer that landed.
 //    `'unknown'` remains silent, same rule as the two above.
 //  - POOLS UNAVAILABLE (amber): the host is up, but its ccd has no project-pool
 //    capability. No action button: the remedy is an agent-lane deploy.
@@ -40,6 +42,7 @@ import { Banner, Button, elapsedWords, QuickConfirm, toast, useNow } from '@ccrc
 import { useFleetHealth } from './useFleetHealth';
 import { remoteSides, statedOf } from '../../../shared/update-summary';
 import { SKEW_AUTO_TEXT, SKEW_HALT_THEN_AUTO_TAIL, skewHaltLead, skewRemedy } from './updateHalt';
+import { UPDATES_STALE_TEXT } from './useUpdatesView';
 import './fleet.css';
 
 const POLL_MS = 15_000;
@@ -51,8 +54,9 @@ const elapsedSince = (downSince: number, nowMs: number): string =>
   `${elapsedWords(nowMs - downSince)} ago`;
 
 export function FleetHostBanner(
-  { health: injected, nodes, intent }: {
+  { health: injected, nodes, intent, stale = false }: {
     health?: FleetHealth | null; nodes?: readonly NodeWire[] | null; intent?: readonly UpdateIntentWire[] | null;
+    stale?: boolean;
   } = {},
 ): ReactNode {
   // Polls only when nothing was injected: FleetScreen polls once for this
@@ -97,7 +101,10 @@ export function FleetHostBanner(
     };
     const sides = Array.isArray(nodes) ? remoteSides(nodes) : null;
     const fleet = sides ? ` fleet ${name(sides.fleet)} · server ${name(sides.server)}.` : '';
-    const remedy = skewRemedy(nodes, intent);
+    // Wave 19, R24(b): `stale` — a later poll failed, so the versions and the remedy are the last answer that
+    // landed. The remedy never vouches for auto then, and the arm ends with the update plane's own sentence,
+    // shown but not announced (the fleet screen's status region says it once, D-5124).
+    const remedy = skewRemedy(nodes, intent, stale);
     return (
       <Banner tone="attention" sticky>
           The two boxes run different builds.{fleet}{' '}
@@ -116,6 +123,7 @@ export function FleetHostBanner(
               box, fleet box first.
             </>
           )}
+          {stale && <span aria-hidden="true">{` ${UPDATES_STALE_TEXT}`}</span>}
       </Banner>
     );
   }

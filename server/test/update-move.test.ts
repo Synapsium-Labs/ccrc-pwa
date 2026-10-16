@@ -191,19 +191,45 @@ describe('centralised-update wave 14: the halt rule, the move predicates and the
   });
 
   it('the provenance exception to a halt is tested on a code line only where the census names it', () => {
-    // `startsWith(PROVENANCE_DETAIL_PREFIX)` is the halt rule's exception (shared/update-move.ts), the store's own JS
-    // form (`rowHalts`, coord/store.ts — residue: another programme's claim held it when wave 14 was drafted), and the
-    // inventory's refusal recorder (update/inventory.ts — a different question: is this report a verdict on the
-    // release). It pins THIS spelling only: a copy written another way (a 'provenance:' literal, `indexOf`, a bare
-    // `failed || reverted`) is not seen here.
+    // `startsWith(PROVENANCE_DETAIL_PREFIX)` is the halt rule's exception (shared/update-move.ts) and the inventory's
+    // refusal recorder (update/inventory.ts — a different question: is this report a verdict on the release). The
+    // store's own JS form (`rowHalts`, coord/store.ts) asks `isHaltingUpdate` since wave 19 (R24(d)), so it is not a
+    // holder any more. It pins THIS spelling only: a copy written another way (a 'provenance:' literal, `indexOf`, a
+    // bare `failed || reverted`) is not seen here.
     const PREFIX_TEST = /startsWith\(PROVENANCE_DETAIL_PREFIX\)/;
     expect(ALL.filter((f) => PREFIX_TEST.test(codeOnly(f))).map(rel).sort()).toEqual([
-      'server/src/coord/store.ts', 'server/src/update/inventory.ts', 'shared/update-move.ts',
+      'server/src/update/inventory.ts', 'shared/update-move.ts',
     ]);
   });
 
   it('canAck is declared in pwa/src/fleet/updateAck.ts alone — SettingsScreen re-exports it', () => {
     const re = /^\s*export function canAck\b|^\s*function canAck\b|^\s*(?:export\s+)?const canAck\b/m;
     expect(ALL.filter((f) => re.test(readFileSync(f, 'utf8'))).map(rel)).toEqual(['pwa/src/fleet/updateAck.ts']);
+  });
+});
+
+// Centralised-update wave 19 (R24(d), R26(b)): the store's JS halt and the resolver's gate read ask the L0 rules
+// rather than restating them. Behaviour is unchanged and stays pinned where it was (`update-store-nodes.test.ts`'s
+// heir-guard spread and handOffLease cases; `update-resolve.test.ts`'s autoGateBlockers cases); these pin the CALL,
+// so a revert to an inline copy reds here.
+describe('centralised-update wave 19: the store and the resolver ask the L0 rules', () => {
+  it('store.ts\'s rowHalts asks isHaltingUpdate, and spells no halt of its own', () => {
+    const src = readFileSync(path.join(here, '..', 'src', 'coord', 'store.ts'), 'utf8');
+    expect(src).toContain("import { isHaltingUpdate } from '../../../shared/update-move.js';");
+    expect(src).toContain('const rowHalts = (state: UpdateState, detail: string | null): boolean => isHaltingUpdate(state, detail);');
+    expect(src).not.toMatch(/haltedOf\(state\) !== null &&/);
+  });
+
+  it('resolve.ts\'s autoGateBlockers asks carriesUpdateGate', () => {
+    const src = readFileSync(path.join(here, '..', 'src', 'update', 'resolve.ts'), 'utf8');
+    expect(src).toContain("import { carriesUpdateGate } from '../../../shared/update-move.js';");
+    expect(src).toContain('.filter((n) => (scope === FLEET_SCOPE || n.nodeId === scope) && !carriesUpdateGate(n.caps))');
+  });
+
+  it('the gate word is tested by includes(UPDATE_GATE_CAP) on a code line only in shared/update-move.ts', () => {
+    // SettingsScreen.tsx's `autoGateMissing` asks `carriesUpdateGate` too since wave 19's claim-gated fold (R24(d)).
+    const GATE_TEST = /includes\(UPDATE_GATE_CAP\)/;
+    expect(GATE_TEST.test('n.caps.includes(UPDATE_GATE_CAP)'), 'CONTROL: the pattern sees the copy').toBe(true);
+    expect(ALL.filter((f) => GATE_TEST.test(codeOnly(f))).map(rel).sort()).toEqual(['shared/update-move.ts']);
   });
 });

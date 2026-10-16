@@ -19,13 +19,14 @@
 // poll). It renders nothing while there is no view, or no halting node. Its own class, `.halt-banner`: attention
 // amber like the skew warning, but not sticky, because the fleet-host banner owns the sticky slot. role="status"
 // like every banner on this screen, so tests find it by class.
-import { useState } from 'react';
-import type { ReactNode } from 'react';
+import { useLayoutEffect, useRef, useState } from 'react';
+import type { ReactNode, RefObject } from 'react';
 import type { NodeWire, ReleaseWire, UpdatesView } from '../../../shared/api';
 import { Button } from '@ccrc/ui';
-import { canAck, sendAck } from './updateAck';
+import { canAck, keepFocusInRow, sendAck } from './updateAck';
 import type { AckOutcome } from './updateAck';
 import { haltLine, haltingNodes } from './updateHalt';
+import { UPDATES_STALE_TEXT } from './useUpdatesView';
 import './fleet.css';
 
 /** The banner's lead sentence. */
@@ -51,17 +52,26 @@ type Hold =
   | { kind: 'acked'; lease: string }
   | { kind: 'pending'; lease: string; after: number | null; said: 'unreadable' | 'unanswered' };
 
-function HaltRow({ node: n, releases, seq, onAcked }: {
+function HaltRow({ node: n, releases, seq, onAcked, listRef }: {
   node: NodeWire; releases: readonly ReleaseWire[]; seq: number; onAcked: () => number;
+  listRef: RefObject<HTMLUListElement | null>;
 }): ReactNode {
   const [acking, setAcking] = useState(false);
   const [hold, setHold] = useState<Hold | null>(null);
+  const rowRef = useRef<HTMLLIElement>(null);
+  // Wave 19, R26(a): a clean ack returns this row to idle, so the next poll drops it. If it holds focus as it
+  // leaves, the banner's list takes it; this cleanup runs before React removes the <li>, so the test can still see it.
+  useLayoutEffect(() => {
+    const row = rowRef.current;
+    return () => { if (row !== null && row.contains(document.activeElement)) listRef.current?.focus(); };
+  }, [listRef]);
   const held = hold !== null
     && (hold.kind === 'acked' || hold.after === null ? hold.lease === leaseKey(n) : seq < hold.after);
   const shownAcked = held && (hold.kind === 'acked' || hold.said === 'unreadable');
   const label = shownAcked ? 'Acked' : 'Ack';
   const ack = (): void => {
     const sentAgainst = leaseKey(n);
+    keepFocusInRow(rowRef.current);   // the tap disables this Ack, in flight and then held (wave 19, R26(a))
     setAcking(true);
     const settle = (outcome: AckOutcome): void => {
       setAcking(false);
@@ -71,14 +81,14 @@ function HaltRow({ node: n, releases, seq, onAcked }: {
       else {
         setHold({
           kind: 'pending', lease: sentAgainst, said: outcome,
-          after: Number.isInteger(issued) && issued > 0 ? issued : null,
+          after: issued > 0 ? issued : null,
         });
       }
     };
     void sendAck(n.nodeId).then(settle, () => settle('unanswered'));   // sendAck never rejects; belt and braces
   };
   return (
-    <li className="halt-banner-node" data-node-id={n.nodeId}>
+    <li className="halt-banner-node" data-node-id={n.nodeId} ref={rowRef} tabIndex={-1}>
       <span className="halt-banner-node-text">{haltLine(n)}</span>
       <Button
         variant="primary"
@@ -94,9 +104,10 @@ function HaltRow({ node: n, releases, seq, onAcked }: {
   );
 }
 
-export function HaltBanner({ updates: view, seq, onAcked }: {
-  updates: UpdatesView | null; seq: number; onAcked: () => number;
+export function HaltBanner({ updates: view, seq, onAcked, stale = false }: {
+  updates: UpdatesView | null; seq: number; onAcked: () => number; stale?: boolean;
 }): ReactNode {
+  const listRef = useRef<HTMLUListElement>(null);
   if (view === null) return null;
   const halting = haltingNodes(view.nodes);
   if (halting.length === 0) return null;
@@ -105,8 +116,11 @@ export function HaltBanner({ updates: view, seq, onAcked }: {
   return (
     <div className="halt-banner" role="status">
       <span className="halt-banner-msg">{HALT_LEAD_TEXT}</span>
-      <ul className="halt-banner-list" aria-label="Halted nodes">
-        {halting.map((n) => <HaltRow key={n.nodeId} node={n} releases={releases} seq={seq} onAcked={onAcked} />)}
+      {/* Wave 19, R24(b): a later poll failed, so these rows are the last answer that landed. Shown, not announced:
+          the fleet screen's one status region says it (D-5124). */}
+      {stale && <span className="halt-banner-msg" aria-hidden="true">{UPDATES_STALE_TEXT}</span>}
+      <ul className="halt-banner-list" aria-label="Halted nodes" ref={listRef} tabIndex={-1}>
+        {halting.map((n) => <HaltRow key={n.nodeId} node={n} releases={releases} seq={seq} onAcked={onAcked} listRef={listRef} />)}
       </ul>
     </div>
   );
