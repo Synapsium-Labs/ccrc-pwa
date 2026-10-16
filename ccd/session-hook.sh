@@ -2924,7 +2924,7 @@ command -v jq >/dev/null 2>&1 || exit 0
 #      OFF before it is trimmed: a hand edit that pads the file past it withholds
 #      the line, never serves one the CLI answers exit 8 for (W2's verb writes
 #      37 bytes). A named fail-closed row (coordinator ruling
-#      R-recalloff-trim): this trim takes ASCII whitespace only, in every
+#      R-recalloff-trim): this trim, and the generation reads' (they test the NUL probe's raw read, never `_ct_read`'s [:space:] class, which differs between C libraries: D-5064), take ASCII whitespace only, in every
 #      locale, where the CLI's JS trim also strips U+00A0, U+FEFF and the
 #      Unicode spaces, so a value that still holds a character outside the
 #      generation grammar (empty, or [0-9a-f-]) withholds the line: it may
@@ -2966,7 +2966,7 @@ _hook_history_card() {   # folds the history line into CARD_COMPACT; silent; bui
   if [[ "${CCRC_SESSION_GENERATION:-}" =~ $uuid_re ]]; then
     gen="$CCRC_SESSION_GENERATION" via=session
   elif _ct_read "$REG/$id.generation"; [[ -e "$REG/$id.generation" || -L "$REG/$id.generation" ]]; then
-    if [[ -L "$REG/$id.generation" ]] || (( CT_RAWN >= CCRC_ID_MAX )) || { IFS= read -r -d '' -n "$CCRC_ID_MAX" x 2>/dev/null < "$REG/$id.generation"; }; then via=bad; elif [[ "$CT_V" =~ $uuid_re ]]; then gen="$CT_V" via=registry; elif [[ -n "$CT_V" ]]; then via=bad; fi
+    if [[ -L "$REG/$id.generation" ]] || (( CT_RAWN >= CCRC_ID_MAX )) || { IFS= read -r -d '' -n "$CCRC_ID_MAX" x 2>/dev/null < "$REG/$id.generation"; }; then via=bad; else x="${x#"${x%%[!$ws]*}"}"; x="${x%"${x##*[!$ws]}"}"; if [[ "$x" =~ $uuid_re ]]; then gen="$x" via=registry; elif [[ -n "$x" ]]; then via=bad; fi; fi
   fi
   [[ -L "$off" || -L "${off%/*}" || ( -e "${off%/*}" && ! ( -d "${off%/*}" && -x "${off%/*}" ) ) ]] && return 0
   if [[ -e "$off" ]]; then
@@ -2977,9 +2977,9 @@ _hook_history_card() {   # folds the history line into CARD_COMPACT; silent; bui
     [[ "$o" == *[!0123456789abcdef-]* ]] && return 0
     if [[ "$via" == bad ]]; then return 0; elif [[ -z "$via" ]]; then
       [[ -L "$HISTORY_CARD_DIR/$id/$psid.gen" ]] && return 0
-      _ct_read "$HISTORY_CARD_DIR/$id/$psid.gen" || return 0; { IFS= read -r -d '' -n "$CCRC_ID_MAX" x 2>/dev/null < "$HISTORY_CARD_DIR/$id/$psid.gen"; } && return 0
-      [[ -z "$CT_V" || "$CT_V" =~ $uuid_re ]] || return 0
-      gen="$CT_V"
+      _ct_read "$HISTORY_CARD_DIR/$id/$psid.gen" || return 0; { IFS= read -r -d '' -n "$CCRC_ID_MAX" x 2>/dev/null < "$HISTORY_CARD_DIR/$id/$psid.gen"; } && return 0; x="${x#"${x%%[!$ws]*}"}"; x="${x%"${x##*[!$ws]}"}"
+      [[ -z "$x" || "$x" =~ $uuid_re ]] || return 0
+      gen="$x"
     fi
     [[ "$o" == "$gen" ]] && return 0
   fi

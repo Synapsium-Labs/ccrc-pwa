@@ -12040,9 +12040,10 @@ describe('history card line: SessionStart(compact) serves the sweep\'s predictio
   // code points, never written as escapes or as themselves, so no write can turn them into something else.
   const NBSP_G = `${String.fromCharCode(0xa0)}${GENERATION}\n`;
   const BOM_G = `${String.fromCharCode(0xfeff)}${GENERATION}\n`;
-  type Reg = 'G-nul' | 'G2-nul' | 'G2-nul-split' | 'nul-only' | 'G' | 'G2' | 'absent' | 'unreadable' | 'symlink-G' | 'junk' | 'G-wide' | 'G-nbsp' | 'empty' | 'blank-wide' | 'G2-wide-junk' | 'dangling';
+  const EMSP_G = `${GENERATION}${String.fromCharCode(0x2003)}\n`;   // D-5064: U+2003 after G; glibc's UTF-8 [:space:] takes it
+  type Reg = 'G-lf' | 'G-ws' | 'blank-ws' | 'G-emsp' | 'G-nul' | 'G2-nul' | 'G2-nul-split' | 'nul-only' | 'G' | 'G2' | 'absent' | 'unreadable' | 'symlink-G' | 'junk' | 'G-wide' | 'G-nbsp' | 'empty' | 'blank-wide' | 'G2-wide-junk' | 'dangling';
   type Off = 'absent' | 'G' | 'G-padded' | 'G-wide' | 'G-nbsp' | 'G-bom' | 'G2' | 'empty' | 'unreadable' | 'dir' | 'symlink-G' | 'unsearchable' | 'parent-file' | 'G2-tabcr' | 'link-loop' | 'link-notdir' | 'link-000' | 'link-dangling' | 'G-nul';
-  type Rec = 'G' | 'G2' | 'legacy' | 'absent' | 'junk' | 'symlink-G' | 'G-nul' | 'G-wide';
+  type Rec = 'G-ws' | 'G-emsp' | 'G' | 'G2' | 'legacy' | 'absent' | 'junk' | 'symlink-G' | 'G-nul' | 'G-wide';
   /** B1's Presence, as a type-only import expression: this file gains no import line (the census cites it by line). */
   type Pres = import('../../ccd/history/lib.mjs').Presence<string>;
   /** A row is an AGREE row (the hook's verdict is the CLI's) unless its sixth cell reads 'fail-closed': the hook
@@ -12100,7 +12101,18 @@ describe('history card line: SessionStart(compact) serves the sweep\'s predictio
     ['a .generation padded past the read window, recall-off names G, the record G2', '', 'G-wide', 'G', 'G2'],
     ['a .generation behind a no-break space, recall-off names G, the record G2', '', 'G-nbsp', 'G', 'G2'],
     ['a .generation padded past the read window, recall-off is stale (fail-closed: the CLI recalls)', '', 'G-wide', 'G2', 'G', 'fail-closed'],
+    // D-5064 (macOS CI): this row holds on every platform. glibc's [:space:] leaves U+00A0 out and Darwin's takes it, but the
+    // reader trims the probe's raw read of ASCII whitespace only, never `_ct_read`'s class, so both read a value that is no UUID.
+    // The CLI's JS trim strips U+00A0 and reads G, so the row is fail-closed on both. The U+2003 cases below pin the widening locale.
     ['a .generation behind a no-break space, recall-off is stale (fail-closed: the CLI recalls)', '', 'G-nbsp', 'G2', 'G', 'fail-closed'],
+    // D-5064: the reader trims a generation of ASCII whitespace itself (the probe's raw read, `$ws`), both ends: padded still reads as G
+    // (the registry wins over the record, so recall-off naming the record's G2 is stale and the line serves), and a value of ASCII
+    // whitespace only is none, so the record decides.
+    ['a .generation of G then LF (the registry wins over the record)', '', 'G-lf', 'G2', 'G2'],
+    ['a .generation inside tab, space, CR and LF whitespace (the registry wins over the record)', '', 'G-ws', 'G2', 'G2'],
+    ['a generation record inside tab, space, CR and LF whitespace is the newest family G, recall-off names G', '', 'absent', 'G', 'G-ws'],
+    ['a generation record inside tab, space, CR and LF whitespace is the newest family G, recall-off is stale', '', 'absent', 'G2', 'G-ws'],
+    ['an all-ASCII-whitespace .generation is none: the record decides (stale)', '', 'blank-ws', 'G2', 'G'],
     ['a .generation of whitespace only past the read window (fail-closed: the CLI recalls)', '', 'blank-wide', 'G2', 'G', 'fail-closed'],
     // A window that FILLS is unusable even with a UUID inside it: the CLI trims all 4,096 bytes, finds junk after the
     // padding, and falls to the newest family (the record G, which recall-off names: exit 8).
@@ -12141,7 +12153,7 @@ describe('history card line: SessionStart(compact) serves the sweep\'s predictio
   const REG_TEXT: Partial<Record<Reg, string>> = {
     G: GENERATION, G2, junk: 'not-a-generation', empty: '',
     'G-nul': `${GENERATION}\0\n`, 'G2-nul': `${G2}\0\n`, 'G2-nul-split': `${G2.slice(0, 18)}\0${G2.slice(18)}\n`, 'nul-only': '\0',
-    'G-wide': `${' '.repeat(130)}${GENERATION}\n`, 'G2-wide-junk': `${G2}${' '.repeat(100)}junk\n`, 'G-nbsp': NBSP_G, 'blank-wide': `${' '.repeat(130)}\n`,
+    'G-wide': `${' '.repeat(130)}${GENERATION}\n`, 'G2-wide-junk': `${G2}${' '.repeat(100)}junk\n`, 'G-nbsp': NBSP_G, 'G-emsp': EMSP_G, 'G-lf': `${GENERATION}\n`, 'G-ws': ` \t\r${GENERATION}\v\f \r\n`, 'blank-ws': ' \t\r\n\v\f', 'blank-wide': `${' '.repeat(130)}\n`,
   };
   const plantParity = (regKind: Reg, offKind: Off, recKind: Rec): void => {
     const genFile = reg(`${ID}.generation`);
@@ -12186,6 +12198,8 @@ describe('history card line: SessionStart(compact) serves the sweep\'s predictio
     if (recKind === 'G2') fs.writeFileSync(rec, `${G2}\n`);
     if (recKind === 'G-nul') fs.writeFileSync(rec, `${GENERATION}\0\n`);
     if (recKind === 'G-wide') fs.writeFileSync(rec, `${' '.repeat(130)}${GENERATION}\n`);
+    if (recKind === 'G-emsp') fs.writeFileSync(rec, EMSP_G);
+    if (recKind === 'G-ws') fs.writeFileSync(rec, ` \t\r${GENERATION}\v\f \r\n`);
     if (recKind === 'legacy') fs.writeFileSync(rec, '\n');
     if (recKind === 'junk') fs.writeFileSync(rec, 'not-a-generation\n');
     if (recKind === 'symlink-G') { fs.writeFileSync(path.join(home, 'rec-target'), `${GENERATION}\n`); fs.symlinkSync(path.join(home, 'rec-target'), rec); }
@@ -12197,7 +12211,7 @@ describe('history card line: SessionStart(compact) serves the sweep\'s predictio
   const cliGeneration = (envGen: string, regGen: Pres, recKind: Rec): string | null => {
     const r = lib.resolveGeneration({ envGen, regGen });
     if (r.via !== 'newest') return r.value;
-    return recKind === 'G' || recKind === 'G-wide' ? GENERATION : recKind === 'G2' ? G2 : recKind === 'legacy' ? '' : null;
+    return recKind === 'G' || recKind === 'G-wide' || recKind === 'G-emsp' || recKind === 'G-ws' ? GENERATION : recKind === 'G2' ? G2 : recKind === 'legacy' ? '' : null;
   };
   /** The CLI's reading of the same fixture (B2's presenceOf: absent, unreadable — a symlink or a non-file
    *  included — or the trimmed value), handed to B2's own decideRecallOff with the CLI's generation. `unknown`:
@@ -12341,6 +12355,43 @@ describe('history card line: SessionStart(compact) serves the sweep\'s predictio
     it('a card line with non-ASCII characters in its hex positions is refused by the grammar', () => {
       plantAll(`${LINE.replace('L03a9c1', `L${A_ACUTE.repeat(6)}`)}\n`);
       expect(served(start(), env)).toBeNull();
+    });
+  });
+
+  // D-5064 (macOS CI): the reader's generation reads trim ASCII whitespace only, in every locale and on every C library. The CLI's
+  // JS trim strips U+2003, so it reads G + U+2003 as G and recalls beside a stale recall-off; the hook must withhold (a named
+  // fail-closed row, both arms). A reader that tested `_ct_read`'s CT_V would trim U+2003 wherever the locale's [:space:] holds
+  // it (glibc's UTF-8 locales do), read G and serve: these cases are red for that mutant. The finder takes the first UTF-8
+  // locale on the box whose bash really counts U+2003 a space; with none, the cases skip, never fake.
+  const spacey = (locale: string): boolean =>
+    spawnSync('bash', ['-c', '[[ $1 == [[:space:]] ]]', '_', String.fromCharCode(0x2003)], { env: { PATH: process.env.PATH ?? '', LC_ALL: locale } }).status === 0;
+  const SPACE_LOCALE = IS_DARWIN ? null : ['C.UTF-8', 'en_US.UTF-8', 'en_GB.UTF-8'].find(spacey) ?? null;
+  describe.skipIf(SPACE_LOCALE === null)(`under a UTF-8 locale whose [:space:] holds U+2003 (${SPACE_LOCALE}) a generation behind it is unusable`, () => {
+    const env = { LC_ALL: SPACE_LOCALE ?? 'C', CCRC_SESSION_GENERATION: '' };
+    it('CONTROL: the CLI reads G + U+2003 as G, so recall-off naming a stale G2 recalls', () => {
+      expect(EMSP_G.trim()).toBe(GENERATION);
+      expect(cliVerdict('', 'G-emsp', 'G2', 'G')).toBe('stale');
+      expect(cliVerdict('', 'absent', 'G2', 'G-emsp')).toBe('stale');
+    });
+
+    it('a .generation of G + U+2003 + LF, recall-off stale (fail-closed: the CLI recalls)', () => {
+      plantAll();
+      plantParity('G-emsp', 'G2', 'G');
+      expect(served(start(), env)).toBeNull();
+    });
+
+    it('a generation record of G + U+2003, no .generation, recall-off stale (fail-closed: the CLI recalls)', () => {
+      plantAll();
+      plantParity('absent', 'G2', 'G-emsp');
+      expect(served(start(), env)).toBeNull();
+    });
+
+    it('CONTROL: the same fixtures with a plain G serve the line, so the cases above withhold for the U+2003', () => {
+      plantAll();
+      plantParity('G', 'G2', 'G');
+      expect(served(start(), env)).toBe(LINE);
+      plantParity('absent', 'G2', 'G');
+      expect(served(start(), env)).toBe(LINE);
     });
   });
 
