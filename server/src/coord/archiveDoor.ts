@@ -133,8 +133,8 @@ export type TurnVerdict = 'idle' | 'busy' | 'unmeasured';
  * answer only for compact JSON: a spaced `"status": "idle"` reads `idle` here and nothing to ccd's grep, and a nested
  * `"status"` ahead of the top-level key is the one ccd's `head -1` takes — shapes no observed writer produces. Two arms
  * are the SERVER'S OWN and stricter than ccd: a missing frame row is `unmeasured` (no row is no measurement; ccd reads
- * none), and so is a live file that is PRESENT but malformed — not JSON, or no string `sessionId` — which
- * `readLiveStateMeasured` answers `no-state` while ccd's grep may still read a word from it (review 244, F3). And the
+ * none), and so is a live file that is PRESENT but malformed — not JSON (`unmeasured` there since D-5234), or no
+ * string `sessionId` (`no-state`) — from which ccd's grep may still read a word (review 244, F3). And the
  * config dir is read first for BOTH kinds of row: a main checkout whose wrapper the roster does not know is unmeasured
  * even with its pane proven gone, though `cmd_stop` reads no status at all (review 244, F2, ruled: it fails closed, and
  * "Stop only" remains). Folding these into `busy` told an operator "it is working",
@@ -163,7 +163,7 @@ const STATUS_WORD = /^[a-z_-]+$/;
  * - A main checkout: always fail-closed. Its stop refuses nothing, so this read is the only guard it has.
  * - A workspace that is to END its programme: fail-closed too, with or without `interrupt` (3881). The end is the one
  *   act that cannot be undone, and the frame's row folds what it could not measure towards rest — tmux `unknown`, an
- *   unread pid, an absent live file — so reading it here would end the programme and THEN have `ws-archive`'s
+ *   absent live file (an unread pid did too before D-5234) — so reading it here would end the programme and THEN have `ws-archive`'s
  *   fail-closed status refuse `status-unknown`. `interrupt` consents to losing a turn that was MEASURED, so a `busy`
  *   verdict proceeds with it; an `unmeasured` one is refused whatever the consents, before anything ends.
  * - A workspace archived with `interrupt`: fail-closed too, programme or not (F7, ruled by the coordinator). The stop
