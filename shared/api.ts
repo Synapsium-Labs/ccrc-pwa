@@ -10308,17 +10308,26 @@ export interface DelegationObservationHealth {
    * "unhealthy", it says no heal happened in this process. A heal is never a failure and never makes the health unmeasured by itself.
    */
   lastTailHeal?: DelegationTailHeal;
+  /**
+   * MUST 1 (coordinator 5424): the tail quarantine (`delegation-events.torn/`) could not be listed at the last boot or recovery, so
+   * whether a heal happened that no report of this process covers is UNKNOWN, never "no heal". Absent when it was listed.
+   */
+  tailQuarantineUnmeasured?: true;
 }
 
 /** A torn delegation-journal tail the server healed: a crash or a failed append left a partial last line, the server kept those bytes
  *  under `quarantinePath` and cut the journal back to its last complete record. The spool still holds what the fragment carried. */
 export interface DelegationTailHeal {
-  /** When the heal finished, as a canonical UTC millisecond instant. */
+  /** When the cut was made, as a canonical UTC millisecond instant: this process's clock as the truncate returned, or, for a heal found
+   *  in the quarantine at boot (`foundAtBoot`), the kept file's own modification time (written just before the cut). */
   at: string;
   /** How many bytes were cut off and kept. */
   bytes: number;
   /** Where the kept bytes are, on the server box. */
   quarantinePath: string;
+  /** True for a heal no report of this process made: found in the quarantine at a boot or a recovery (a process that died between its
+   *  cut and its report, or an earlier boot's). Absent for a heal this process made and reported itself. */
+  foundAtBoot?: true;
 }
 
 /** What the health projection is computed from; every field is a measurement the server already holds. */

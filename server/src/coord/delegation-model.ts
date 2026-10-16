@@ -1208,6 +1208,9 @@ export function delegationCapabilityState(ccdVerbs: readonly string[] | null | u
 export const DELEGATION_HOUR_MS = 3_600_000;
 /** Seven days of whole UTC hours. */
 export const DELEGATION_HEALTH_WINDOW_HOURS = 7 * 24;
+/** The same window in milliseconds: spec §5.3's seven-day observation window, which the soak gate reads. A quantity of its own (R81), not
+ *  the box-token rotation interval, so it never imports that. */
+export const DELEGATION_HEALTH_WINDOW_MS = DELEGATION_HEALTH_WINDOW_HOURS * DELEGATION_HOUR_MS;
 /** What the checkpoint keeps: the window and one more day, so the window never rolls onto a row that was just pruned. */
 export const DELEGATION_INTERVAL_RETENTION_HOURS = DELEGATION_HEALTH_WINDOW_HOURS + 24;
 /** How long after an hour ends a hook may still append to its bucket (it names the bucket when it starts, and writes a moment later). */
@@ -1252,7 +1255,7 @@ export interface DelegationHealthWindow {
 /** The rolling window over a set of interval rows. A row that cannot be placed makes the window incomplete, not smaller. */
 export function delegationHealthWindowOf(intervals: readonly DelegationObservationInterval[], nowMs: number): DelegationHealthWindow {
   const endMs = hourFloor(nowMs);
-  const startMs = endMs - DELEGATION_HEALTH_WINDOW_HOURS * DELEGATION_HOUR_MS;
+  const startMs = endMs - DELEGATION_HEALTH_WINDOW_MS;
   const covered = new Set<number>();
   // A session-hour is a (session, UTC hour), whatever incarnations or reasons recorded it (R60; spec §7: "session-hours with an
   // `unmeasured` interval"): any unmeasured row makes it unmeasured, so a second row for one session-hour never inflates the

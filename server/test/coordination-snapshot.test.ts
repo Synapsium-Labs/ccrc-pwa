@@ -1503,6 +1503,67 @@ describe('8B: restore requires the service MEASURED inactive (W3-M34)', () => {
       expect(quarantined(f.home)).toEqual({ 'coord.db-wal': FOREIGN_WAL });
       expect(restoreLeftovers(f.home)).toEqual([]);
     });
+
+    it('8B N9: a quarantine rename that fails for coord.db ALONE (old set with a hot WAL) never leaves the old WAL beside the foreign DB, and both verbs say the rollback is unfinished', () => {
+      const f = restoreFixture();
+      expect(existsSync(liveFile(f.home, 'coord.db-wal')), 'the old set has a hot WAL').toBe(true);
+      const oldWal = readFileSync(liveFile(f.home, 'coord.db-wal'));
+      const failDbQuarantine = (fs: any): void => {
+        const base = fs.rename;
+        fs.rename = (a: string, b: string) => {
+          if (b.includes('coordination-restore.foreign') && path.basename(a) === 'coord.db') throw new Error('EROFS: the quarantine rename failed');
+          base(a, b);
+          if (b === liveFile(f.home, 'coord.db') && a.includes('coordination-restore.stage/new')) writeFileSync(liveFile(f.home, 'coord.db'), FOREIGN);
+        };
+      };
+      const { fs } = loggedFs(f.home);
+      failDbQuarantine(fs);
+      const r = outcome(() => H.restore({ home: f.home, from: f.dir, fs, probe: inactive }));
+      expect(r).toMatchObject({ ok: false, code: 'verify-failed' });
+      expect((r as { message: string }).message).toMatch(/the rollback did not finish; the restore marker and stage stay, so delegation recovery refuses to run: run `recover`/);
+      expect(readFileSync(liveFile(f.home, 'coord.db'), 'utf8'), 'the foreign DB is still live').toBe(FOREIGN);
+      const wal = existsSync(liveFile(f.home, 'coord.db-wal')) ? readFileSync(liveFile(f.home, 'coord.db-wal')) : null;
+      expect(wal === null || !wal.equals(oldWal), 'the OLD hot WAL is not live beside the foreign DB').toBe(true);
+      expect(existsSync(liveFile(f.home, 'coordination-restore.json'))).toBe(true);
+      // `recover` while the fault stands: a NAMED refusal, exit 1, never a helper failure (70)
+      const again = loggedFs(f.home);
+      failDbQuarantine(again.fs);
+      const rec = outcome(() => H.recover({ home: f.home, fs: again.fs, probe: inactive }));
+      expect(rec).toMatchObject({ ok: false, code: 'rollback-unfinished' });
+      expect(new H.SnapError('rollback-unfinished', 'x').exit).toBe(1);
+      // and once the fault is gone, `recover` finishes: the old DB and its old WAL come back TOGETHER
+      expect(outcome(() => H.recover({ home: f.home, probe: inactive }))).toMatchObject({ ok: false, code: 'rollback-quarantined' });
+      expect(liveState(f.home)).toEqual(f.oldState);
+      expect(quarantined(f.home)).toEqual({ 'coord.db': FOREIGN });
+      expect(restoreLeftovers(f.home)).toEqual([]);
+    });
+
+    it('8B N10: EVERY quarantine rename, into a directory that already existed too, is made durable (fsyncDir of its <id> directory) before the next put-back', () => {
+      /** For each rename into quarantine, the `<id>` directory is fsynced before the next rename of anything into ~/.ccrc itself. */
+      const assertOrder = (ops: readonly string[], label: string): number => {
+        let checked = 0;
+        ops.forEach((o, i) => {
+          const m = /^rename <root>\/\.ccrc\/\S+ -> (<root>\/\.ccrc\/coordination-restore\.foreign\/[0-9a-f]{16})\/\S+$/.exec(o);
+          if (m === null) return;
+          const next = ops.findIndex((x, j) => j > i && /^rename \S+ -> <root>\/\.ccrc\/[^/]+$/.test(x));
+          const until = next === -1 ? ops.length : next;
+          expect(ops.slice(i + 1, until).includes(`fsyncDir ${m[1]}`), `${label}: ${o}`).toBe(true);
+          checked++;
+        });
+        return checked;
+      };
+      // the `.1` scenario: the second quarantine goes into an <id> directory the first pass created
+      const clean = walScenario();
+      const qIdx = clean.log.mutating.findIndex((p) => /^rename <root>\/\.ccrc\/coord\.db-wal -> <root>\/\.ccrc\/coordination-restore\.foreign\//.test(clean.log.ops[p]!));
+      const s1 = walScenario({ crashAt: qIdx + 1 });
+      writeFileSync(liveFile(s1.f.home, 'coord.db-wal'), 'a SECOND foreign WAL\n');
+      const rec = loggedFs(s1.f.home);
+      outcome(() => H.recover({ home: s1.f.home, fs: rec.fs, probe: inactive }));
+      expect(assertOrder(rec.log.ops, 'the .1 recover'), 'one quarantine into an existing directory').toBe(1);
+      expect(quarantined(s1.f.home)).toEqual({ 'coord.db-wal': FOREIGN_WAL, 'coord.db-wal.1': 'a SECOND foreign WAL\n' });
+      // and the in-process rollback of row (a)
+      expect(assertOrder(walScenario().log.ops, 'row (a)')).toBe(1);
+    });
   });
 
   describe('through the command line, with a fake systemctl on a private PATH', () => {
@@ -2046,6 +2107,12 @@ describe('8C: the server and the helper agree on what is healable (the rule, onc
     ['one byte of the next record', torn(1), realCp(RA, RB)],
     ['a checkpoint that names the LF-less record', torn(FULL.length - 1), realCp(RA, RB, RC)],
     ['a checkpoint that names a torn record', torn(40), realCp(RA, RB, RC)],
+    // R76 M4: the hold case, on both sides at once (it was pinned per side only), on a checkpoint the server's own fold builds: both meet
+    // `held-evidence-missing` after a clean scan, and both report the TAIL's code
+    ['a checkpoint that holds the LF-less record', torn(FULL.length - 1), (() => {
+      const cp = recoverDelegation(null, [RA, RB]).state.checkpoint;
+      return encodeDelegationCheckpoint({ ...cp, revision: 1, pruningHolds: [...cp.pruningHolds, { journalId: RC.journalId, reason: 'identity-candidate', ownerId: 'agent-1' }] });
+    })()],
     ['an invalid complete record then a tail', new Uint8Array([...bytesOf(RA), ...text(new TextDecoder().decode(encodeDelegationJournalRecord(RB)).replace(B.digest, '0'.repeat(64))), ...FULL.subarray(0, 40)]), null],
     ['a chain break then a tail', new Uint8Array([...bytesOf(RA, rec({ ...B, previousDigest: 'd'.repeat(64) }, EVENT_B)), ...FULL.subarray(0, 40)]), null],
     ['a gap then a tail', new Uint8Array([...bytesOf(RA, RC), ...FULL.subarray(0, 40)]), null],

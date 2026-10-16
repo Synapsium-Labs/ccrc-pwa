@@ -204,7 +204,8 @@ class Fields {
 }
 
 const INTERVAL_STATES = ['measured', 'unmeasured'] as const satisfies readonly DelegationIntervalState[];
-const HOLD_REASONS = ['checkpoint-anchor', 'open-lease', 'open-lineage', 'identity-candidate'] as const satisfies readonly DelegationPruningHold['reason'][];
+/** Derived from the model's TOTAL table (chore K review, minor 2): a new hold reason is a compile error there, and is then read here. */
+const HOLD_REASONS = Object.keys(DELEGATION_PRUNING_HOLD_REASONS) as DelegationPruningHold['reason'][];
 
 const readSession = (v: unknown): DelegationSessionRow => {
   const f = Fields.of(v, 'session', ['sessionId', 'parentIncarnation', 'explicitIntentAt', 'effective', 'effectiveBasis', 'claudeSessionIds', 'firstObservedAt', 'lastObservedAt']);
@@ -958,8 +959,9 @@ export interface DelegationRecoveryFailure {
 }
 
 /** The failure codes this file mints for itself, closed. Every other `code` a failure carries is a thrown error's own (a journal,
- *  checkpoint or model refusal), and `DELEGATION_RESTORE_IN_PROGRESS` is the restore marker's. */
-export type DelegationOwnFailureCode = 'not-recovered' | 'recovering' | 'no-facts' | 'application-failed' | 'tail-heal-failed';
+ *  checkpoint or model refusal), and `DELEGATION_RESTORE_IN_PROGRESS` is the restore marker's. `invalid` is a JSON refusal's, which
+ *  carries no code of its own (chore K review, minor 1). */
+export type DelegationOwnFailureCode = 'not-recovered' | 'recovering' | 'no-facts' | 'application-failed' | 'tail-heal-failed' | 'invalid';
 
 /** How many evidence records the retained journal holds, in all and up to a sequence. Recovery counts them while it reads, so the
  *  projection repair can tell from SQLite's `(COUNT, MAX(journalSequence))` alone whether it has anything to read the journal for. */
@@ -1075,7 +1077,7 @@ export class DelegationRecovery {
 
   private record(err: unknown): void {
     if (err instanceof DelegationCheckpointError || err instanceof DelegationModelError || err instanceof DelegationJournalError || err instanceof DelegationJsonError) {
-      this.failureNow ??= { phase: this.phase, code: 'code' in err && typeof err.code === 'string' ? err.code : 'invalid', detail: err.message };
+      this.failureNow ??= { phase: this.phase, code: 'code' in err && typeof err.code === 'string' ? err.code : 'invalid' satisfies DelegationOwnFailureCode, detail: err.message };
       return;
     }
     throw err;
@@ -1198,6 +1200,11 @@ export async function recoverDelegationFromFiles(port: DelegationFilePort, dir: 
   if (found.tail !== null && cleanScan && report.failure !== null) {
     // The complete records scanned clean but the recovery they feed refused (the checkpoint names the LF-less record, or one past the last
     // complete one, or holds one that is not retained): the tail is NOT left to cut, and it is reported as it always was, with the reason.
+    // ANY refusal here, not only the two the snapshot helper converts (`anchor-missing`, `held-evidence-missing`; R76 M4): the helper
+    // validates without the fold, so after a clean scan those two are the only refusals it can meet, while this recovery folds and can also
+    // refuse at its final validation. Either way the checkpoint does not leave the tail to cut, so the tail's code is
+    // reported; for the two refusals both sides can meet, the differential rows in `coordination-snapshot.test.ts` (a checkpoint that
+    // names the LF-less record, and one that holds it) hold both sides to the same code.
     const refusal = delegationTornTailError(found.tail.bytes);
     return { ...report, failure: { phase: 'journal-validate', code: refusal.code, detail: `${refusal.message}; the checkpoint does not leave it to cut: ${report.failure.code}: ${report.failure.detail}` } };
   }
@@ -1457,8 +1464,14 @@ export class DelegationDurability {
   private projectionStale = false;
   /** Sessions whose SQLite events an application found in conflict with the journal's: healed by the next repair. */
   private drifted = new Map<string, { sessionId: string; incarnation: string }>();
-  /** The last torn tail this process cut off and kept (D-4655): for `/api/fleet/health`. Never cleared by a later recovery. */
+  /** The last torn tail this process cut off and kept (D-4655), or the newest one the quarantine holds that no report of this process
+   *  covered (MUST 1): for `/api/fleet/health`. Never cleared by a later recovery. */
   private healed: DelegationTailHeal | null = null;
+  /** MUST 1: the quarantined tails this process has reported (on the warn line), by path. Memory only: NO durable "reported" marker, so
+   *  a new process reports the newest one again, which the ruling accepts, until an operator removes it. */
+  private readonly reportedTails = new Set<string>();
+  /** MUST 1: the quarantine could not be listed at the last boot or recovery (unknown, never "no heal"). */
+  private quarantineUnmeasured = false;
 
   private constructor(private readonly deps: DelegationDurabilityDeps) {
     this.port = deps.port ?? nodeDelegationFilePort;
@@ -1482,6 +1495,8 @@ export class DelegationDurability {
   /** The last torn journal tail this process healed, or null: when, how many bytes, and where they are kept (D-4655). A heal is a
    *  measurement, never a failure, and never makes the applier unhealthy by itself. */
   lastTailHeal(): DelegationTailHeal | null { return this.healed; }
+  /** MUST 1: true when the tail quarantine could not be listed at the last boot or recovery. */
+  tailQuarantineUnmeasured(): boolean { return this.quarantineUnmeasured; }
   /** True only while the state is `ready` and nothing has failed (O2): never during reconstruction, never after a failure. */
   pruningEnabled(): boolean { return this.current.phase === 'ready' && this.failureNow === null; }
 
@@ -1523,9 +1538,11 @@ export class DelegationDurability {
           this.current = { checkpoint: report.state.checkpoint, phase: 'reconstructing' };
           this.failureNow = { phase: 'durable-application', code: 'tail-heal-failed' satisfies DelegationOwnFailureCode, detail: err instanceof Error ? err.message : String(err) };
           this.deps.warn?.(`ccrc-server: delegation journal tail heal failed: ${this.failureNow.detail}`);
+          await this.reportQuarantineLocked();
           return { ...report, state: this.current, failure: this.failureNow, facts: null, pruning: 'disabled' };
         }
       }
+      await this.reportQuarantineLocked();
       if (report.failure !== null || report.facts === null) {
         this.current = report.state;
         this.failureNow = report.failure ?? { phase: 'final-validate', code: 'no-facts' satisfies DelegationOwnFailureCode, detail: 'recovery produced no state' };
@@ -1590,10 +1607,55 @@ export class DelegationDurability {
     await this.port.fsyncDir(path.dirname(kept));
     await this.port.fsyncDir(this.deps.dir);
     await this.port.truncate(this.journalPath, plan.offset);
+    // REPORTED AS SOON AS THE CUT RETURNS (R76 M1): the bytes are already durable in quarantine, so a fsync that fails, or a death, after
+    // this point cannot leave the heal untold. A death between the cut and this line is closed by the boot report (`reportQuarantineLocked`).
+    this.healed = { at: nowInstant(this.deps.now()), bytes: plan.bytes, quarantinePath: kept };
+    this.reportedTails.add(kept);
+    this.deps.warn?.(`ccrc-server: delegation journal: healed a torn tail at ${this.healed.at}: ${plan.bytes} byte(s) after offset ${plan.offset} cut off and kept at ${kept}`);
     await this.port.fsyncFile(this.journalPath);
     await this.port.fsyncDir(this.deps.dir);
-    this.healed = { at: nowInstant(this.deps.now()), bytes: plan.bytes, quarantinePath: kept };
-    this.deps.warn?.(`ccrc-server: delegation journal: healed a torn tail at ${this.healed.at}: ${plan.bytes} byte(s) after offset ${plan.offset} cut off and kept at ${kept}`);
+  }
+
+  /**
+   * THE BOOT REPORT (MUST 1, coordinator 5424; R76 M1 narrows the window, this closes it). At every boot and every recovery, after any
+   * heal, every quarantined tail in `delegation-events.torn/` that no report of THIS process covers is reported: one warn line each, and
+   * the newest of them (by the file's own modification time) on `lastTailHeal`, with the file's own time, size and path, unless this
+   * process has reported a later heal itself. The quarantine directory's own contents are the only evidence, and nothing is written:
+   * no "reported" marker, so each new process reports the newest one again until an operator removes it. A `*.tail.tmp` is ignored: a heal
+   * that died before its rename left the tail in the journal, and the next recovery heals it. A directory that cannot be listed, or a file
+   * that cannot be stat'ed, is UNMEASURED (`tailQuarantineUnmeasured`), never "no heal".
+   */
+  private async reportQuarantineLocked(): Promise<void> {
+    const dir = path.join(this.deps.dir, DELEGATION_TORN_DIR);
+    let names: string[] | null;
+    try { names = await this.port.listDir(dir); } catch (err) {
+      this.quarantineUnmeasured = true;
+      this.deps.warn?.(`ccrc-server: delegation journal: the tail quarantine ${dir} could not be listed, so whether a heal went unreported is unmeasured: ${err instanceof Error ? err.message : String(err)}`);
+      return;
+    }
+    this.quarantineUnmeasured = false;
+    let newest: DelegationTailHeal | null = null;
+    let newestMs = Number.NEGATIVE_INFINITY;
+    for (const name of [...(names ?? [])].sort()) {
+      if (!name.endsWith('.tail')) continue;                          // `*.tail.tmp` (a heal that died before its rename) and anything else
+      const kept = path.join(dir, name);
+      let st: { size: number; mtimeMs: number } | null;
+      try { st = await this.port.statFile(kept); } catch (err) {
+        this.quarantineUnmeasured = true;
+        this.deps.warn?.(`ccrc-server: delegation journal: the quarantined tail ${kept} could not be stat'ed, so its report is unmeasured: ${err instanceof Error ? err.message : String(err)}`);
+        continue;
+      }
+      if (st === null) continue;                                       // gone between the listing and the stat
+      const found: DelegationTailHeal = { at: nowInstant(Math.trunc(st.mtimeMs)), bytes: st.size, quarantinePath: kept, foundAtBoot: true };
+      if (!this.reportedTails.has(kept)) {
+        this.reportedTails.add(kept);
+        this.deps.warn?.(`ccrc-server: delegation journal: a quarantined torn tail no report of this process covers: ${st.size} byte(s) kept at ${kept}, cut at ${found.at}`);
+      }
+      if (st.mtimeMs > newestMs) { newestMs = st.mtimeMs; newest = found; }
+    }
+    if (newest === null) return;
+    const ownMs = this.healed === null ? Number.NEGATIVE_INFINITY : parseDelegationInstant(this.healed.at);
+    if (this.healed === null || (this.healed.quarantinePath !== newest.quarantinePath && newestMs > ownMs)) this.healed = newest;
   }
 
   /** Step 0 of the heal: the tail's bytes, read again, and proved to be the ones the plan names (nothing was appended behind them, nothing changed). */
@@ -1667,22 +1729,45 @@ export class DelegationDurability {
    *  accepted evidence, its cursor and its interval, as ONE durable application. Nothing it returns existed before the
    *  checkpoint replacement completed. */
   applyAccepted(batch: DelegationDurableBatch): Promise<DelegationApplyOutcome> {
-    return this.enqueue(async () => {
-      this.requireReady();
-      // The checkpoint-owned members are checked with the checkpoint's own readers BEFORE anything is written: a cursor or an interval
-      // recovery could not read would otherwise be made durable by an application that is otherwise perfectly valid.
+    return this.enqueue(async () => this.acceptLocked([batch]));
+  }
+
+  /**
+   * D-4658 (ruling R79, `one-durable-application-per-pass`): several buckets' results as ONE durable application, in the
+   * `applyAccepted` shape. The O5 order is unchanged: every accepted record of every batch, in the order given, is appended and fsynced
+   * (each record fsynced BEFORE the next is appended, so only the application's LAST record can ever tear, and the heal's "bytes after
+   * the last LF" rule still holds), then ONE checkpoint replacement carries every cursor and interval, then ONE projection. Per bucket
+   * nothing changes: each cursor goes through `setCursor` (so `replaced` stays sticky) and each interval through `mergeInterval`, in the
+   * order given, exactly as one `applyAccepted` per batch would leave them; events dedupe by `eventId` across the whole application, as
+   * across applications. Every member is validated BEFORE the first byte, and a failure anywhere fails the WHOLE application: nothing of
+   * it is visible, and the caller re-reads every bucket on its next pass (the eventIds dedupe what the journal already holds). A crash
+   * after k records leaves them past the checkpoint, and recovery replays them all, as it replays one.
+   */
+  applyAcceptedBatch(batches: readonly DelegationDurableBatch[]): Promise<DelegationApplyOutcome> {
+    return this.enqueue(async () => this.acceptLocked(batches));
+  }
+
+  /** The one body of `applyAccepted` and `applyAcceptedBatch`, inside the queue. */
+  private async acceptLocked(batches: readonly DelegationDurableBatch[]): Promise<DelegationApplyOutcome> {
+    this.requireReady();
+    // The checkpoint-owned members are checked with the checkpoint's own readers BEFORE anything is written: a cursor or an interval
+    // recovery could not read would otherwise be made durable by an application that is otherwise perfectly valid.
+    for (const batch of batches) {
       if (batch.cursor !== null) readCursor(batch.cursor);
       if (batch.interval !== null) readInterval(batch.interval);
-      const at = nowInstant(this.deps.now());
-      const items: DelegationAppendItem[] = batch.accepted.map((a) => ({ entry: { kind: 'evidence-accepted', event: a.event }, acceptedAt: a.acceptedAt ?? at }));
-      return this.commitLocked({
-        items,
-        mutate: (b) => {
+    }
+    const at = nowInstant(this.deps.now());
+    const items: DelegationAppendItem[] = batches.flatMap((batch) =>
+      batch.accepted.map((a): DelegationAppendItem => ({ entry: { kind: 'evidence-accepted', event: a.event }, acceptedAt: a.acceptedAt ?? at })));
+    return this.commitLocked({
+      items,
+      mutate: (b) => {
+        for (const batch of batches) {
           if (batch.cursor !== null) b.setCursor(batch.cursor);
           if (batch.interval !== null) b.mergeInterval(batch.interval);
-        },
-        force: false,
-      });
+        }
+      },
+      force: false,
     });
   }
 
@@ -1891,13 +1976,24 @@ export class DelegationDurability {
     // (a count of records not yet written would be a count of nothing). Its one invariant (strictly increasing) is proved HERE, before
     // step 1, where a refusal costs nothing, so that adopting it afterwards cannot throw out of an application that is already durable.
     const evidenceSequences = plan.records.filter((r) => r.entry.kind === 'evidence-accepted').map((r) => r.sequence);
-    this.evidence.assertExtendedBy(evidenceSequences);
+    // A refusal here is the APPLIER's own state disagreeing with its journal (the index ran ahead), not a bad input: so it fails the
+    // applier (Task 8A re-review 2), and the recovery that follows rebuilds the index from the journal, instead of refusing every later
+    // application that carries evidence for ever. Nothing has been written yet.
+    try { this.evidence.assertExtendedBy(evidenceSequences); } catch (err) { this.fail(err); throw err; }
     const next = this.builder.clone();
     for (const record of plan.records) next.foldRecord(record);
     args.mutate?.(next);
     const prior = this.current.checkpoint;
     const checkpoint = next.build(prior.revision + 1);
-    const sameAsPrior = canonicalDelegationJson({ ...checkpoint, revision: 0 }) === canonicalDelegationJson({ ...prior, revision: 0 });
+    // THE NO-OP COMPARE, and when it is skipped (D-4658, coordinator 5443 condition 4). It protects against ONE thing: writing (and
+    // projecting, and spending a revision on) an application that changed nothing, such as a re-applied bucket whose events all dedupe.
+    // It costs two whole-checkpoint canonical encodings, so it is skipped when its answer is already known: when the APPLIED JOURNAL
+    // POSITION of the built state differs from the prior's, the two states differ, so the application is not a no-op whatever else it
+    // carries. "Appends" is decided from the two MEASURED states' positions (the fold of the records the planner actually kept), never
+    // from the caller's word (the items it handed over may all dedupe away). And a skip can only ever cause a write, never suppress one:
+    // a change that replaces or removes rows without appending always runs the compare.
+    const appends = checkpoint.appliedJournalSequence !== prior.appliedJournalSequence;
+    const sameAsPrior = !appends && canonicalDelegationJson({ ...checkpoint, revision: 0 }) === canonicalDelegationJson({ ...prior, revision: 0 });
     if (plan.records.length === 0 && sameAsPrior && !args.force) {
       return { state: this.current, appended: [], skipped: plan.skipped, openedActivities: [], durable: false, projection: { status: 'unprojected' } };
     }
@@ -1995,7 +2091,7 @@ const DELEGATION_CHECKPOINT_ERROR_CODES: Readonly<Record<DelegationCheckpointErr
 
 /** The failure codes this file mints for itself, as a TOTAL table over `DelegationOwnFailureCode`. */
 const DELEGATION_OWN_FAILURE_CODES: Readonly<Record<DelegationOwnFailureCode, true>> = {
-  'not-recovered': true, recovering: true, 'no-facts': true, 'application-failed': true, 'tail-heal-failed': true,
+  'not-recovered': true, recovering: true, 'no-facts': true, 'application-failed': true, 'tail-heal-failed': true, invalid: true,
 };
 
 /** Why `createLease` declined, as a TOTAL table over `DelegationLeaseRefusalReason`. */

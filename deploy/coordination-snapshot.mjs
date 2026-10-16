@@ -29,7 +29,7 @@
 // WHAT IT NEVER DOES. It never opens `coord.db` for writing, never follows a symlink for a member or a marker, never writes
 // outside the directory it is given (capture) or `~/.ccrc` (restore), and never touches a service: restore asks whether the
 // server is running and refuses unless it MEASURES it inactive, and asks again once its marker is durable. While the marker stands,
-// delegation recovery (`recoverDelegationFromFiles`) refuses to run; the server's boot is not yet wired to that refusal (Task 13). `backup-coord.mjs` stays the SQLite-only snapshot; this file
+// delegation recovery (`recoverDelegationFromFiles`) refuses to run, and the server's boot refuses too (it exits 1 before opening coord.db, naming `recover`). `backup-coord.mjs` stays the SQLite-only snapshot; this file
 // reads the DB snapshot it made and describes it.
 //
 // VERBS (exit codes). `capture --dir <timestamp dir>`: 0 manifest durable (a tail it left out is one warning line on stderr), 1 refused or exhausted (no manifest, no partials).
@@ -51,7 +51,7 @@ export const JOURNAL_FILE = 'delegation-events.log';
 export const CHECKPOINT_FILE = 'delegation-checkpoint.json';
 export const DB_FILE = 'coord.db';
 export const MANIFEST_FILE = 'coordination-snapshot.json';
-/** Live restore bookkeeping, in the coordination directory itself. Delegation recovery refuses to run while the marker exists (the server's boot is not yet wired to it, Task 13). */
+/** Live restore bookkeeping, in the coordination directory itself. Delegation recovery refuses to run while the marker exists, and so does the server's boot (it exits 1 before opening coord.db). */
 export const RESTORE_MARKER_FILE = 'coordination-restore.json';
 export const RESTORE_STAGE_DIR = 'coordination-restore.stage';
 /** Where a rollback MOVES (never deletes) a file at a member path that is neither the restore's own placed member nor an old one:
@@ -711,7 +711,9 @@ export function capture(opts) {
     // A checkpoint with no journal is a sound state only at sequence 0; validateSidecars refuses the anchored case. What it validates is
     // the COPY, which in prefix mode holds the complete records alone: any defect of those is a refusal of its own, and a checkpoint that
     // names, or holds, a record the prefix lacks (the LF-less one, or one past the last complete) leaves the tail NOT left out: the refusal
-    // is the tail's, retryable and exhausted, as it was before the heal existed.
+    // is the tail's, retryable and exhausted, as it was before the heal existed. Only these two refusals: validating without the fold, they
+    // are the only ones this helper can meet after a clean scan. The server's recovery folds and can also refuse at its final validation;
+    // it reports ANY refusal after a clean scan under the tail's code (`recoverDelegationFromFiles`; R76 M4), so the two agree on these two.
     let verdict;
     try {
       verdict = validateSidecars(fs, { checkpointBytes: a, journalPath: journal === null ? names.journal : partials[0] });
@@ -980,15 +982,23 @@ function quarantine(fs, ccrcDir, id, name) {
   fs.fsyncDir(ccrcDir);
 }
 
+/** The order a rollback puts the asides back in: the database BEFORE its WAL and SHM (8B N9), then the delegation pair. */
+const PUT_BACK_ORDER = Object.freeze([DB_FILE, `${DB_FILE}-wal`, `${DB_FILE}-shm`, JOURNAL_FILE, CHECKPOINT_FILE]);
+
 /**
- * Puts the OLD set back, member by member, from what the marker recorded, so that afterwards the five members are exactly the old
- * set: whole, never mixed (a SQLite database is never left beside a WAL that belongs to another one). Safe to run again from any
- * point. A live file at a member path is DELETED only when it is provably the member this restore placed (the marker holds each
- * placed member's size and SHA-256); any other file there, one that is neither ours nor old, is QUARANTINED by rename (see
- * `quarantine`) before the old member goes back. A rename that fails throws, and the marker and stage stay.
+ * Puts the OLD set back from what the marker recorded, so that afterwards the five members are exactly the old set: whole, never mixed
+ * (a SQLite database is never left beside a WAL that belongs to another one). Safe to run again from any point. TWO PASSES (8B N9):
+ *   1. CLEAR every member path that is to be put back or that the restore placed: a live file is DELETED only when it is provably the
+ *      member this restore placed (the marker holds each placed member's size and SHA-256); any other file there, one that is neither
+ *      ours nor old, is QUARANTINED by rename (see `quarantine`). Nothing is put back in this pass, so a rename that fails here leaves
+ *      no old member beside a foreign one (the old hot WAL never meets a foreign DB).
+ *   2. PUT BACK every aside from the stage, the DB before its WAL and SHM (`PUT_BACK_ORDER`): renames on one filesystem, and a failure
+ *      among them leaves at worst the old DB without its old WAL, which is consistent.
+ * A rename that fails throws, and the marker and stage stay (`restore` and `recover` both say so).
  */
 function rollbackRestore(fs, ccrcDir, marker) {
   const stage = stageOf(ccrcDir);
+  const asides = [];
   for (const name of RESTORE_SET) {
     const live = path.join(ccrcDir, name);
     const aside = path.join(stage, 'old', name);
@@ -998,10 +1008,14 @@ function rollbackRestore(fs, ccrcDir, marker) {
       if (isPlacedMember(fs, live, marker.placed[name])) fs.unlink(live);   // the member this restore placed
       else quarantine(fs, ccrcDir, marker.id, name);                        // not ours, not old: moved aside, never deleted
     }
-    if (asideThere) fs.rename(aside, live);
+    if (asideThere) asides.push(name);
   }
+  for (const name of PUT_BACK_ORDER) if (asides.includes(name)) fs.rename(path.join(stage, 'old', name), path.join(ccrcDir, name));
   fs.fsyncDir(ccrcDir);
 }
+
+/** What `restore` and `recover` add when the rollback itself failed (8B N9): it is unfinished, and `recover` finishes it. */
+const ROLLBACK_UNFINISHED = 'the rollback did not finish; the restore marker and stage stay, so delegation recovery refuses to run: run `recover`';
 
 /** What a rollback moved into quarantine, as one sentence (empty when nothing). Read from the directory, so a re-run reports it too. */
 function quarantineReport(fs, ccrcDir, id) {
@@ -1136,7 +1150,10 @@ export function restore(opts) {
           finalizeRestore(fs, ccrcDir);
         }
       }
-    } catch { /* the marker stays: delegation recovery refuses to run and `recover` finishes it */ }
+    } catch (rollbackErr) {
+      // the marker stays: delegation recovery refuses to run and `recover` finishes it. Said, never swallowed (8B N9).
+      if (err instanceof Error) err.message = `${err.message} — ${ROLLBACK_UNFINISHED} (${oneLine(rollbackErr instanceof Error ? rollbackErr.message : String(rollbackErr))})`;
+    }
     throw err;
   }
   // 9. Clean up. A failure here leaves a committed marker that `recover` finalizes.
@@ -1172,7 +1189,12 @@ export function recover(opts) {
   requireInactive(probe);
   if (marker === null) { finalizeRestoreStageOnly(fs, ccrcDir); return 'cleaned'; }
   if (marker.state === 'committed') { finalizeRestore(fs, ccrcDir); return 'finalized'; }
-  rollbackRestore(fs, ccrcDir, marker);
+  try { rollbackRestore(fs, ccrcDir, marker); } catch (err) {
+    // A named refusal (exit 1), never a helper failure (8B N9): the fault is the filesystem's, and running `recover` again finishes it.
+    throw new SnapError('rollback-unfinished', `${ROLLBACK_UNFINISHED} again once the fault is gone: ${oneLine(err instanceof Error ? err.message : String(err))}`);
+  }
+  // The report is read from the quarantine directory BEFORE the marker goes (8B N12): a kill after the finalize and before the throw
+  // loses only this sentence; the files stay in `coordination-restore.foreign/<id>/`, which README names, and nothing else is lost.
   const q = quarantineReport(fs, ccrcDir, marker.id);
   finalizeRestore(fs, ccrcDir);
   if (q !== '') throw new SnapError('rollback-quarantined', q);

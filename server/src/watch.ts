@@ -57,7 +57,7 @@ import { ccdIdForWorktree, divergences, unclaimedWorktrees, type DivergenceInput
 // The delegation lane's (wave 3, Task 13) imports, in one block of their own: the pure modules it composes, and the durable applier.
 import { randomUUID } from 'node:crypto';
 import type { MeasuredDirectoryRead } from './io.js';
-import { DelegationDurability } from './coord/delegation-checkpoint.js';
+import { DelegationDurability, type DelegationDurableBatch } from './coord/delegation-checkpoint.js';
 import {
   DelegationIngestError, delegationBucketDurabilityOf, delegationBucketUtcHour, ingestAndApplyDelegationBucket, readDelegationBucket,
   unreadableDelegationBucketResult, type DelegationBucketDurability, type DelegationBucketResult,
@@ -637,8 +637,8 @@ const MAIL_REPLAY_MAX_ATTEMPTS = 20;
  *  it is gone — so treating a targeted `absent` as "not disabled" would
  *  fail OPEN exactly when the registry has vanished, the one case this
  *  kill-switch most needs to fail SHUT on. `io.readdir` still collapses
- *  every failure of its own to `null` — no measured variant exists for it —
- *  but that collapse is the point: `listing === null` means "can't tell",
+ *  every failure of its own to `null` — it is the folding read; its sibling
+ *  `readdirMeasured` is not used here — and that collapse is the point: `listing === null` means "can't tell",
  *  and "can't tell" must read as disabled, not as license to proceed
  *  because the marker itself couldn't be seen. `limits.ts:134-142` already
  *  filters unknown `<name>-disabled` markers out of `/api/accounts`, so
@@ -8488,8 +8488,12 @@ function renderAskBrief(askId: number, childId: string, question: string, option
 //   lane's copy), at most once per UTC hour and only when the planner has something to drop; that is safe only because nothing past the
 //   read horizon is ever read again.
 //
-//   NO-OP SKIP (hand-off 2). Every application rewrites the whole checkpoint, so a bucket result that accepts nothing, leaves the cursor
-//   row as it was and would not change the hour's interval makes NO durable call. The one exception is the CLOSE WRITE: once an hour
+//   ONE DURABLE APPLICATION PER PASS (D-4658, ruling R79). Every application rewrites the whole checkpoint and re-projects it, which is
+//   linear in all-time activities, so the bucket results of a pass are STAGED and applied together (`stage`, `flushPass`): one journal
+//   append run, one checkpoint replacement, one projection, in O5's order. Lane memory only (the pass's own list); no file.
+//
+//   NO-OP SKIP (hand-off 2). A bucket result that accepts nothing, leaves the cursor row as it was and would not change the hour's
+//   interval stages NOTHING, and a pass that staged nothing makes no durable call. The one exception is the CLOSE WRITE: once an hour
 //   has ended (plus the hook's margin) it is written one more time, so that its record postdates its close and the lane can tell, after
 //   a restart, an hour it saw whole from one it only saw begin.
 //
@@ -8592,6 +8596,8 @@ const DELEGATION_META_MAX_CHARS = 65_536;
 export interface DelegationLaneSeams {
   evidenceCap?: number; readEveryListedBucket?: boolean; droppedPruneEvery?: number; reconcileBeforeLoad?: boolean;
   projectHoldCap?: number; markCap?: number;
+  /** D-4658: apply each bucket result at once, as before the batching (the reference an "equal to an unbatched run" row compares with). */
+  unbatched?: boolean;
 }
 
 type LaneSession = Pick<FleetSession, 'id' | 'project' | 'status'>;
@@ -8617,6 +8623,10 @@ interface LanePass {
   sessions: readonly LaneSession[];
   records: readonly LaneRecord[];
   capability: DelegationHealthInput['capabilityState'];
+  /** D-4658: every bucket's durable batch this pass staged, applied together by `flushPass`. */
+  pending: DelegationDurableBatch[];
+  /** Hours to remember as settled once the pass's application is durable (never before: a failed one leaves them to be read again). */
+  settle: string[];
 }
 
 const laneTreeKey = delegationTreeKey;
@@ -9059,7 +9069,9 @@ class DelegationLane {
     // A torn journal tail this process healed (D-4655) rides on the member as a plain fact. It is not an input to any gate: a heal is
     // never a failure, never makes the health unhealthy, and never makes it unmeasured by itself.
     const healed = this.durable === null ? null : this.durable.lastTailHeal();
-    return healed === null ? health : { ...health, lastTailHeal: healed };
+    // MUST 1: a quarantine that could not be listed is said, never read as "no heal".
+    const unlisted = this.durable !== null && this.durable.tailQuarantineUnmeasured();
+    return { ...health, ...(healed === null ? {} : { lastTailHeal: healed }), ...(unlisted ? { tailQuarantineUnmeasured: true as const } : {}) };
   }
 
   // ── a pass ────────────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -9077,7 +9089,9 @@ class DelegationLane {
     const cut = new Promise<'cut'>((resolve) => { ac.signal.addEventListener('abort', () => resolve('cut'), { once: true }); });
     const timer = setTimeout(() => ac.abort(), DELEGATION_PASS_BUDGET_MS);
     timer.unref();
-    const pass: LanePass = { now, signal: ac.signal, census, sessions, records, capability: delegationCapabilityState(this.deps.fleetState?.ccdVerbs) };
+    const pass: LanePass = {
+      now, signal: ac.signal, census, sessions, records, capability: delegationCapabilityState(this.deps.fleetState?.ccdVerbs), pending: [], settle: [],
+    };
     const work = this.run(pass).then(() => 'done' as const);
     work.catch(() => undefined);                                         // a late rejection of a cut pass is not an unhandled one
     try {
@@ -9115,10 +9129,14 @@ class DelegationLane {
     if (pass.signal.aborted) return;
 
     for (const owner of this.ownersOf(pass, durable.state())) {
-      if (pass.signal.aborted) return;
+      if (pass.signal.aborted) break;
       try { await this.observeOwner(pass, durable, owner); }
       catch (err) { console.warn(`ccrc-server: delegation owner ${owner.id} could not be observed: ${err instanceof Error ? err.message : String(err)}`); }
     }
+    // D-4658: what the owners staged, as ONE durable application. Also after a cut: everything staged came from a read that answered
+    // before the cut (an abort check follows every read), and a fleet whose passes are always cut must still make progress. The flush
+    // is enqueued at once, so it reaches the applier's queue ahead of any later pass's.
+    await this.flushPass(pass, durable);
     if (pass.signal.aborted) return;
 
     // The upkeep: retention, and the hour that was never closed. One checkpoint-only change over the INTERVALS, and only when there is
@@ -9288,13 +9306,48 @@ class DelegationLane {
     return this.seams.readEveryListedBucket === true ? hourMs <= laneHourOf(nowMs) : delegationBucketReadable(hourMs, nowMs);
   }
 
+  /**
+   * D-4658 (ruling R79, `one-durable-application-per-pass`): a bucket's durable batch is STAGED here and applied with every other one
+   * of the pass by `flushPass`, in ONE `applyAcceptedBatch`: one journal append run (each record fsynced before the next), ONE
+   * checkpoint replacement, ONE projection, where the lane used to make one application per busy owner (each a whole-checkpoint
+   * rewrite and a whole projection, linear in all-time activities). Every bucket of a pass is ingested against the same durable state
+   * (the buckets are distinct rows, and the journal dedupes events by `eventId`), so nothing a bucket decides reads another's staged
+   * batch. Nothing staged is visible, or noted as evidence, before the application is durable (O1).
+   */
+  private async stage(pass: LanePass, durable: DelegationDurability, batch: DelegationDurableBatch): Promise<DeepReadonly<DelegationRecoveryState>> {
+    if (this.seams.unbatched === true) {
+      const out = await durable.applyAccepted(batch);
+      for (const r of out.appended) if (r.entry.kind === 'evidence-accepted') this.noteEvidence(r.journalId, r.entry.event);
+      return out.state;
+    }
+    pass.pending.push(batch);
+    return durable.state();
+  }
+
+  /** The pass's one durable application. A failure fails the whole of it: nothing of it is visible, no hour is settled, and the next
+   *  pass reads every bucket again from the durable cursors (its events dedupe against what the journal already holds). */
+  private async flushPass(pass: LanePass, durable: DelegationDurability): Promise<void> {
+    const batches = pass.pending.splice(0);
+    if (batches.length > 0) {
+      try {
+        const out = await durable.applyAcceptedBatch(batches);
+        for (const r of out.appended) if (r.entry.kind === 'evidence-accepted') this.noteEvidence(r.journalId, r.entry.event);
+      } catch (err) {
+        console.warn(`ccrc-server: the delegation pass's durable application of ${batches.length} bucket result(s) failed; the next pass reads them again: ${err instanceof Error ? err.message : String(err)}`);
+        pass.settle.length = 0;
+        return;
+      }
+    }
+    for (const k of pass.settle.splice(0)) this.settled.add(k);
+  }
+
   /** An hour recorded as a gap without a bucket to read: written once. */
   private async noteGap(pass: LanePass, durable: DelegationDurability, id: string, inc: string, hourMs: number, detail: string): Promise<void> {
     const hour = formatDelegationInstant(hourMs);
     const prior = durable.state().checkpoint.observationIntervals.find((r) => r.sessionId === id && r.parentIncarnation === inc && r.utcHour === hour);
     if (prior !== undefined && prior.state === 'unmeasured') { this.skipped += 1; return; }
     if (pass.signal.aborted) return;
-    await durable.applyAccepted({
+    await this.stage(pass, durable, {
       accepted: [], cursor: null,
       interval: { sessionId: id, parentIncarnation: inc, utcHour: hour, state: 'unmeasured', detail, recordedAt: formatDelegationInstant(Date.now()) },
     });
@@ -9321,8 +9374,8 @@ class DelegationLane {
       if (err instanceof DelegationIngestError) { console.warn(`ccrc-server: delegation bucket ${id}/${bucket} was refused: ${err.message}`); return; }
       throw err;
     }
-    // An hour read AFTER it closed, with nothing new in it, is not read again by this process.
-    if (closing && read.ok && seen.accepted === 0) this.settled.add(this.settledKey(id, inc, hourMs));
+    // An hour read AFTER it closed, with nothing new in it, is not read again by this process (once the pass's application is durable).
+    if (closing && read.ok && seen.accepted === 0) pass.settle.push(this.settledKey(id, inc, hourMs));
   }
 
   /** The durable door for one bucket result: the no-op skip, then Task 8's own adapter (taking note of what it journaled). */
@@ -9331,13 +9384,8 @@ class DelegationLane {
     seen: { accepted: number },
   ): DelegationBucketDurability {
     const hour = formatDelegationInstant(hourMs);
-    const adapter = delegationBucketDurabilityOf({
-      applyAccepted: async (batch) => {
-        const out = await durable.applyAccepted(batch);
-        for (const r of out.appended) if (r.entry.kind === 'evidence-accepted') this.noteEvidence(r.journalId, r.entry.event);
-        return out;
-      },
-    }, () => Date.now());
+    // Task 8's own adapter maps the result to its batch (and refuses an inapplicable one); the batch is STAGED for the pass (D-4658).
+    const adapter = delegationBucketDurabilityOf({ applyAccepted: async (batch) => ({ state: await this.stage(pass, durable, batch) }) }, () => Date.now());
     return {
       applyBucketResult: async (result: DelegationBucketResult) => {
         if (!result.applicable) return adapter.applyBucketResult(result);   // refused by name: a result that is not for a bucket applies nothing
@@ -9355,11 +9403,10 @@ class DelegationLane {
         }
         if (row === undefined && result.accepted.length === 0 && laneFreshCursor(result.cursor)) {
           // Nothing was read from this bucket, so there is no cursor to keep: the interval alone is the record.
-          const out = await durable.applyAccepted({
+          return this.stage(pass, durable, {
             accepted: [], cursor: null,
             interval: { sessionId: id, parentIncarnation: inc, utcHour: hour, state: result.interval, detail: result.detail, recordedAt: formatDelegationInstant(Date.now()) },
           });
-          return out.state;
         }
         return adapter.applyBucketResult(result);
       },

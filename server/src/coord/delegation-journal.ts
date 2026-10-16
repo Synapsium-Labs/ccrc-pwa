@@ -788,6 +788,11 @@ export interface DelegationFilePort {
   truncate(path: string, length: number): Promise<void>;
   /** `fsync` of an existing file by path: the journal, once the heal has cut it. */
   fsyncFile(path: string): Promise<void>;
+  /** A directory's entry names, or null when it does not exist (a proven ENOENT); any other failure THROWS (unmeasured, never "empty").
+   *  The boot report's reader of the tail quarantine (MUST 1, coordinator 5424): it reads, and writes nothing. */
+  listDir(dir: string): Promise<string[] | null>;
+  /** A file's size and modification time, or null when it does not exist (a proven ENOENT); any other failure throws. */
+  statFile(path: string): Promise<{ size: number; mtimeMs: number } | null>;
 }
 
 const isEnoent = (err: unknown): boolean => typeof err === 'object' && err !== null && (err as { code?: unknown }).code === 'ENOENT';
@@ -828,6 +833,12 @@ export const nodeDelegationFilePort: DelegationFilePort = {
   fsyncFile: async (p) => {
     const fh = await fsp.open(p, fsConstants.O_RDONLY);
     try { await fh.sync(); } finally { await fh.close(); }
+  },
+  listDir: async (dir) => {
+    try { return await fsp.readdir(dir); } catch (err) { if (isEnoent(err)) return null; throw err; }
+  },
+  statFile: async (p) => {
+    try { const st = await fsp.stat(p); return { size: st.size, mtimeMs: st.mtimeMs }; } catch (err) { if (isEnoent(err)) return null; throw err; }
   },
 };
 

@@ -657,6 +657,13 @@ describe('6. run-child agreement remains owned without a lease', () => {
     expect(cp.lineage.filter((l) => l.leaseId !== null)).toEqual([]);
     expect(w.coord.readDelegationProjection().leases).toEqual([]);
     expect(disk(w.home).journal, 'an attempt is checkpoint state: the journal gained nothing').toBe(journalBefore);
+    // R80: and after a FULL pass of the lane, whose bucket results go through D-4658's one-per-pass application (the effect applier
+    // itself is not batched): the attempt stands, and still no lease, lineage or journal entry of one exists.
+    await censusPass(w, NOW + 60_000, { demo: [] });
+    const after = disk(w.home).checkpoint!;
+    expect(after.attempts.map((a) => [a.adminRecord, a.verdict, a.rung])).toEqual([['brisk-ridge', 'linked', 1]]);
+    expect(after.leases).toEqual([]);
+    expect(disk(w.home).journal).not.toContain('"kind":"lease-created"');
   });
 });
 
@@ -777,6 +784,36 @@ function filesUnder(rel: string, ext: RegExp = /\.(ts|tsx|mjs|js|sh|md)$/): stri
 }
 /** Drops comment-only lines (TypeScript and shell), so a sentence that NAMES a later wave's door is not mistaken for the door. */
 const code = (src: string): string => src.split('\n').filter((l) => !/^\s*(\*|\/\/|\/\*|#)/.test(l)).join('\n');
+/**
+ * The text of a PWA source with its COMMENTS removed (R80 N3): `//` and `/* *\/` in ts/tsx/js, `/* *\/` in css and html. String and
+ * template literals are skipped over, so a `//` inside one (a URL) is not taken for a comment. The content scans rule on names, never on
+ * prose: "adopt" in a stylesheet's comment, or "carrier" in a code comment, is an English word on another branch, not a broker name.
+ */
+function stripComments(src: string, file: string): string {
+  const lineComments = /\.(ts|tsx|js|mjs)$/.test(file);
+  let out = '';
+  let i = 0;
+  while (i < src.length) {
+    const c = src[i]!;
+    if (c === '/' && src[i + 1] === '*') { const j = src.indexOf('*/', i + 2); i = j < 0 ? src.length : j + 2; out += ' '; continue; }
+    if (lineComments && c === '/' && src[i + 1] === '/') { while (i < src.length && src[i] !== '\n') i++; continue; }
+    if (lineComments && (c === '"' || c === "'" || c === '`')) {
+      const start = i;
+      i++;
+      while (i < src.length && src[i] !== c) { if (src[i] === '\\') i++; i++; }
+      i++;
+      out += src.slice(start, i);
+      continue;
+    }
+    out += c;
+    i++;
+  }
+  return out;
+}
+/** The PWA files that name `re` in their CODE (comments stripped), outside `allowed`. */
+const pwaWordOffenders = (files: readonly string[], text: (f: string) => string, re: RegExp, allowed: readonly string[]): string[] =>
+  files.filter((f) => re.test(stripComments(text(f), f)) && !allowed.includes(f));
+
 /** The delegation family: a name that would belong to this broker under any spelling. */
 const FAMILY = /deleg|lease|spool|carrier|journal/i;
 
@@ -795,6 +832,9 @@ const LATER_WAVE = new RegExp([
 
 // ── a small bash command extractor, for the doctor clause ───────────────────────────────────────────────────────────────────
 interface ShellCmd { word: string; args: string[] }
+/** An assignment the body makes (R80 N2): a bare one (`a=1`), a prefix on a command (`BASH_ENV=x cmd`, `prefixOf` names the command),
+ *  or an argument of `local`/`declare`/`export`/`readonly` (`local a=1`). */
+interface ShellAssign { name: string; value: string; prefixOf: string | null; declared: boolean }
 /**
  * The simple commands a bash body would run, and the files it would write: enough bash to read `ccd/ccrc-doctor-checks`'s own
  * functions, not a bash. Comments, quoted text (jq programs and messages included) and `$((...))` are skipped; `$(...)`, `<(...)` and
@@ -803,9 +843,11 @@ interface ShellCmd { word: string; args: string[] }
  * cannot read (a backtick substitution, a here-document, an unbalanced quote) throws, so an unreadable body fails the clause rather
  * than passing it. The CONTROL row below holds it to what the clause needs it to see.
  */
-function shellCommands(src: string): { cmds: ShellCmd[]; writes: string[] } {
+function shellCommands(src: string): { cmds: ShellCmd[]; writes: string[]; assigns: ShellAssign[] } {
   const cmds: ShellCmd[] = [];
   const writes: string[] = [];
+  const assigns: ShellAssign[] = [];
+  const ASSIGN = /^([A-Za-z_]\w*)[+]?=([\s\S]*)$/;
   const n = src.length;
   let i = 0;
   let caseDepth = 0;
@@ -882,8 +924,19 @@ function shellCommands(src: string): { cmds: ShellCmd[]; writes: string[] } {
       if (words[0] === 'for' || words[0] === 'select') return;
       if (words[0] === 'case') { caseDepth++; armStart = true; return; }
       let k = 0;
-      while (k < words.length && (KEYWORDS.has(words[k]!) || /^[A-Za-z_]\w*[+]?=/.test(words[k]!))) k++;
-      if (k < words.length) cmds.push({ word: words[k]!, args: words.slice(k + 1) });
+      const pre: ShellAssign[] = [];
+      while (k < words.length && (KEYWORDS.has(words[k]!) || /^[A-Za-z_]\w*[+]?=/.test(words[k]!))) {
+        const a = ASSIGN.exec(words[k]!);
+        if (a !== null) pre.push({ name: a[1]!, value: a[2]!, prefixOf: null, declared: false });
+        k++;
+      }
+      if (k < words.length) {
+        cmds.push({ word: words[k]!, args: words.slice(k + 1) });
+        for (const a of pre) assigns.push({ ...a, prefixOf: words[k]! });
+        if (/^(local|declare|export|readonly|typeset)$/.test(words[k]!)) {
+          for (const w of words.slice(k + 1)) { const a = ASSIGN.exec(w); if (a !== null) assigns.push({ name: a[1]!, value: a[2]!, prefixOf: null, declared: true }); }
+        }
+      } else assigns.push(...pre);
     };
     const flush = (): void => { if (cur.length > 0) { record(cur); cur = []; } };
     while (i < n) {
@@ -926,7 +979,7 @@ function shellCommands(src: string): { cmds: ShellCmd[]; writes: string[] } {
     flush();
   }
   parseList(false);
-  return { cmds, writes };
+  return { cmds, writes, assigns };
 }
 /** A function's body (without its header line and closing brace) from a bash file, for a function that spans lines. */
 function shellBody(file: string, name: string): string {
@@ -955,22 +1008,30 @@ describe('8. the closed scope census', () => {
     expect(ui.filter((f) => f.split('/').some((seg) => FAMILY_NAME.test(seg))), 'a PWA file named for the broker').toEqual([]);
     // CONTENT, in two parts, both measured on origin/main at 0b3ff2f62 (the merge base). Stems main never names are allowed nowhere...
     const NEVER = /delegation|disposition|\bspool|cleanup(?:Due|State|Population|Evidence|Queue|Token)|auditToken|explicitIntent|coordinatorIntent|stageGate/i;
-    expect(ui.filter((f) => NEVER.test(read(f))), 'a PWA file that names the broker').toEqual([]);
+    expect(pwaWordOffenders(ui, read, NEVER, []), 'a PWA file that names the broker').toEqual([]);
     // ...and the stems main already uses in other senses (the update lease, a roster `adopt`, CSS `retain`, a `carrier` in account copy)
     // are allowed in exactly the files main has them in. A new file that names one is a new PWA source to look at.
+    // R80 N3: re-measured with comments stripped, so each list holds the files whose CODE names the word (a comment no longer counts).
     const MAIN_HAS: ReadonlyArray<[string, RegExp, readonly string[]]> = [
-      ['lease', /\bleases?\b|\blease[A-Z]\w*/, ['pwa/src/fleet/FleetHostBanner.tsx', 'pwa/src/fleet/HaltBanner.tsx', 'pwa/src/fleet/HotFilesStrip.tsx', 'pwa/src/fleet/updateAck.ts',
-        'pwa/src/fleet/updateHalt.ts', 'pwa/src/screens/FleetScreen.tsx', 'pwa/src/screens/updates.tsx']],
-      ['adopt', /\badopt\w*/i, ['pwa/src/fleet/SessionActionsSheet.tsx', 'pwa/src/lib/notifymark.ts', 'pwa/src/lib/seen.ts', 'pwa/src/screens/FleetScreen.tsx',
-        'pwa/src/screens/SettingsScreen.tsx', 'ui/src/primitives/banner.tsx', 'ui/src/primitives/list-row.tsx', 'ui/src/styles/tokens.css']],
-      ['retain', /\bretain\w*/i, ['pwa/src/fleet/PoolSheet.tsx', 'pwa/src/fleet/SwapSheet.tsx', 'pwa/src/fleet/fleet.css', 'pwa/src/lib/notifymark.ts', 'ui/src/styles/theme.css']],
-      ['carrier', /\bcarrier\w*/i, ['pwa/src/app.tsx', 'pwa/src/fleet/AccountPoolSheet.tsx', 'pwa/src/fleet/useProjectRows.ts', 'pwa/src/lib/accounts.ts',
-        'pwa/src/screens/AccountsScreen.tsx', 'pwa/src/screens/RunsScreen.tsx', 'pwa/src/screens/useColdRuns.ts']],
+      ['lease', /\bleases?\b|\blease[A-Z]\w*/, ['pwa/src/fleet/HaltBanner.tsx', 'pwa/src/fleet/updateHalt.ts']],
+      ['adopt', /\badopt\w*/i, ['pwa/src/fleet/SessionActionsSheet.tsx', 'pwa/src/screens/SettingsScreen.tsx']],
+      ['retain', /\bretain\w*/i, []],
+      ['carrier', /\bcarrier\w*/i, ['pwa/src/fleet/AccountPoolSheet.tsx']],
       ['cleanup', /\bcleanup[A-Z]\w*/, ['pwa/src/fleet/SessionMeta.tsx']],
     ];
     for (const [stem, re, allowed] of MAIN_HAS) {
-      expect(ui.filter((f) => re.test(read(f)) && !allowed.includes(f)), `${stem}: a PWA file new to this word`).toEqual([]);
+      expect(pwaWordOffenders(ui, read, re, allowed), `${stem}: a PWA file new to this word`).toEqual([]);
     }
+    // R80 N3: a comment is prose, an identifier is a name. Measured on synthetic files, so the rule's two sides each have a row.
+    const fake: Record<string, string> = {
+      'pwa/src/x/new.ts': '// the shared primitives adopt them in a later task\nexport const n = 1;\n',
+      'ui/src/styles/new.css': '/* the primitives adopt these */\n.row { color: red; }\n',
+      'pwa/src/x/url.ts': "export const u = 'https://example.invalid//adopt';\n",
+      'pwa/src/x/id.ts': 'export const adoptRow = 1;\n',
+    };
+    const adopt = MAIN_HAS.find(([w]) => w === 'adopt')!;
+    expect(pwaWordOffenders(Object.keys(fake), (f) => fake[f]!, adopt[1], adopt[2]), 'comments are green; an identifier, or a string, is red').toEqual(
+      ['pwa/src/x/url.ts', 'pwa/src/x/id.ts']);
     // FRAMES. The union is exactly main's seven, and every arm is written inline: a named `interface DelegationRowsFrame` joined by `|`
     // would have no `{ type: '...' }` for a parse to see, so each arm is required to open with a brace.
     const api = read('shared/api.ts');
@@ -1036,6 +1097,12 @@ describe('8. the closed scope census', () => {
     // to find, so no UPDATE anywhere in the server names its target by interpolation, none sits inside a delegation method of the store, and
     // the one `DO UPDATE` of the delegation tables is the sessions upsert
     for (const f of filesUnder('server/src', /\.ts$/)) expect(code(read(f)), `${f}: an UPDATE that names its table by interpolation`).not.toMatch(/\bUPDATE\s+\$/);
+    // R80 N4: nor by CONCATENATION (`'UPDATE ' + LEASES`): the table's name is spelled, as code, only in the schema's DDL, the codec and
+    // the store's one DELETE, so any constant a statement could interpolate or concatenate would be a new spelling here.
+    const spelled = Object.fromEntries(filesUnder('server/src', /\.ts$/).map((f) => [f, (code(read(f)).match(/\bdelegation_leases\b/g) ?? []).length] as const).filter(([, k]) => k > 0));
+    expect(spelled, 'every file that spells the lease table\'s name, and how often').toEqual({
+      'server/src/coord/delegation-model.ts': 2, 'server/src/coord/schema.ts': 8, 'server/src/coord/store.ts': 1,
+    });
     const storeLines = code(read('server/src/coord/store.ts')).split('\n');
     let inMethod = '';
     const updatesInDelegationMethods: string[] = [];
@@ -1161,14 +1228,15 @@ describe('8. the closed scope census', () => {
     // 1. EVERY truncating call in the server, by spelling (`truncate`, `truncateSync`, `ftruncate`, `fsp.truncate`...). The delegation
     //    ones are the port member and its node adapter and the heal's one call; the other two files cut something that is not the broker's
     //    journal (#384's own collector journal, and a string helper), and neither names the journal (the list above).
-    const cuts = SRC.flatMap((f) => (code(read(f)).match(/[\w.]*truncate\w*\(/gi) ?? []).map((m) => `${f}: ${m}`)).sort();
-    expect(cuts).toEqual([
+    //    R80 N5: scoped to the files that can reach a file at all (they import `node:fs`, `node:fs/promises` or the delegation file port), so
+    //    a string helper named like `truncateLabel(` elsewhere in the server does not red this; one added to such a file must be listed.
+    const reachesFiles = (src: string): boolean => /from '(?:node:)?fs(?:\/promises)?'|DelegationFilePort|nodeDelegationFilePort/.test(src);
+    const cuts = SRC.filter((f) => reachesFiles(read(f))).flatMap((f) => (code(read(f)).match(/[\w.]*truncate\w*\(/gi) ?? []).map((m) => `${f}: ${m}`)).sort();
+    expect(cuts, 'every truncating call in a file that can reach a file (a new string helper there needs listing here)').toEqual([
       'server/src/coord/collectLaneJournal.ts: ftruncateSync(',
       'server/src/coord/delegation-checkpoint.ts: this.port.truncate(',
       'server/src/coord/delegation-journal.ts: fsp.truncate(',
       'server/src/coord/delegation-journal.ts: truncate(',
-      'server/src/transcript/parse.ts: truncate(',
-      'server/src/transcript/parse.ts: truncate(',
     ]);
 
     // 2. EVERY use of the journal's path in the applier, by the method that makes it. A temp-and-rename over the journal, a second cut, an
@@ -1227,6 +1295,22 @@ describe('8. the closed scope census', () => {
       'this.handle = await this.port.openAppend(this.path);',
     ]);
     expect(jr.match(/\bport\.\w+\(/g), 'every call the journal module makes on the port').toEqual(['port.openRead(', 'port.mkdirp(', 'port.openRead(', 'port.openAppend(', 'port.fsyncDir(']);
+    // R80 N1: the file name's every use INSIDE the journal module: its one declaration, and nothing else (a function here that wrote,
+    // created or truncated `${dir}/${DELEGATION_JOURNAL_FILE}` through `fsp` or the node port would need a second)
+    expect(jr.match(/^.*(?:DELEGATION_JOURNAL_FILE|delegation-events\.log).*$/gm)?.map((l) => l.trim()), 'the journal module names its file once').toEqual(
+      ["export const DELEGATION_JOURNAL_FILE = 'delegation-events.log';"]);
+    // every `fsp.` call of the module is inside the node port's own literal (the adapter), never a free function
+    const portAt = jr.indexOf('export const nodeDelegationFilePort');
+    const portEnd = jr.indexOf('\n};\n', portAt);
+    expect(portAt, 'the node port literal').toBeGreaterThan(-1);
+    expect((jr.slice(0, portAt) + jr.slice(portEnd)).match(/\bfsp\.\w+\(/g) ?? [], 'an `fsp` call outside the node port').toEqual([]);
+    // and the node port is reached, across the server, only by its declaration and the applier's default
+    const portUses = SRC.flatMap((f) => (code(read(f)).match(/^.*\bnodeDelegationFilePort\b.*$/gm) ?? []).map((l) => `${f}: ${l.trim()}`));
+    expect(portUses, 'every use of the node file port in the server').toEqual([
+      'server/src/coord/delegation-checkpoint.ts: nodeDelegationFilePort,',
+      'server/src/coord/delegation-checkpoint.ts: this.port = deps.port ?? nodeDelegationFilePort;',
+      'server/src/coord/delegation-journal.ts: export const nodeDelegationFilePort: DelegationFilePort = {',
+    ]);
 
     // 4. Outside the server: the deploy helper reads the live journal (capture) and replaces it whole from a validated snapshot (restore),
     //    and cuts nothing; the update tool only looks at the backup copies' names.
@@ -1320,6 +1404,12 @@ describe('8. the closed scope census', () => {
     expect(() => shellCommands('x=`rm f`')).toThrow(/backtick/);
     expect(() => shellCommands('cat <<EOF\nx\nEOF')).toThrow(/here-document/);
     expect(commandsOutside('echo a; rm b', { echo: true })).toEqual(['rm b']);
+    // R80 N2: assignments, bare, as a command's prefix, and as `local` arguments
+    const as = (src: string) => shellCommands(src).assigns.map((a) => `${a.prefixOf ?? (a.declared ? 'local' : 'bare')}:${a.name}=${a.value}`);
+    expect(as('inst="$CCRC_HERE/install-claude-hooks.sh"')).toEqual(['bare:inst="$CCRC_HERE/install-claude-hooks.sh"']);
+    expect(as('BASH_ENV="$HOME/x" "${BASH:-bash}" "$inst" --homes a')).toEqual(['"${BASH:-bash}":BASH_ENV="$HOME/x"']);
+    expect(as('local inst="$CCRC_HERE/i.sh" rows n=0')).toEqual(['local:inst="$CCRC_HERE/i.sh"', 'local:n=0']);
+    expect(as('while IFS= read -r e; do evarr+=("$e"); done <<< "$x"')).toEqual(['read:IFS=', 'bare:evarr=("$e")']);
   });
 
   it('doctor is read-only: the `delegation-hooks` check runs only readers, and its fixer runs ONLY the shipped installer and the readers it names', () => {
@@ -1350,6 +1440,16 @@ describe('8. the closed scope census', () => {
       "_dr_fail() { _dr_line FAIL \"$1\" \"$2\"; printf '  remedy: %s\\n' \"${3//$'\\n'/ }\"; return 1; }",
       '_dr_skip() { _dr_line SKIP "$1" "$2"; return 3; }',
     ]);
+    // ONE DEFINITION EACH (R80 N2): `shellBody` reads the first definition and bash runs the LAST, so a redefinition later in the file,
+    // or in `ccd/ccrc` (which sources the checks), would be invisible to every rule below. The three shared helpers the CHECK calls,
+    // `_box_env_value`, `_svc_is_active` and `_svc_status_hint`, are box-wide `ccd/ccrc` helpers reached only from the check, and they
+    // only read (a file, `systemctl --user is-active` or a `.svcfailed` stamp) or print; they are not pinned here by digest, because every
+    // unrelated doctor wave edits them.
+    const ccrcSrc = read('ccd/ccrc');
+    for (const fn of ['_fix_delegation-hooks', '_check_delegation-hooks', '_dh_mixed_events', '_dh_events', '_dr_join']) {
+      const defs = (checks.match(new RegExp(`^${fn}\\(\\) *\\{`, 'gm')) ?? []).length + (ccrcSrc.match(new RegExp(`^${fn}\\(\\) *\\{`, 'gm')) ?? []).length;
+      expect(defs, `${fn} is defined exactly once across ccd/ccrc-doctor-checks and ccd/ccrc`).toBe(1);
+    }
     // THE FIXER: the shipped installer, once, with exactly `--homes <dirs>`, and the readers it uses today. `install`, a second script, `rm`,
     // `eval`, `sh -c` and every redirection to a file are each outside this list.
     const fixBody = shellBody(checks, '_fix_delegation-hooks');
@@ -1362,7 +1462,20 @@ describe('8. the closed scope census', () => {
     expect(shellCommands(fixBody).cmds.filter((c) => c.word === '"${BASH:-bash}"'), 'one invocation of the installer').toHaveLength(1);
     const raw = code(fixBody);
     expect(raw.match(/"\$inst"/g), '`$inst` is used once, to run').toHaveLength(1);
-    expect(code(checks.slice(checks.indexOf('\n_fix_delegation-hooks() {'))).split('\n').slice(0, 3).join('\n')).toContain('local inst="$CCRC_HERE/install-session-hooks.sh"');
+    // R80 N2: what the fixer ASSIGNS. No command carries a prefix assignment but `IFS` on `read` (`BASH_ENV=`, `PATH=` on the installer
+    // would change what the allowed call runs); `inst` is assigned exactly once, by its `local` line, to the shipped installer (a
+    // re-point is a second assignment); and the names assigned are today's.
+    const { assigns } = shellCommands(fixBody);
+    expect(assigns.filter((a) => a.prefixOf !== null && !(a.name === 'IFS' && a.prefixOf === 'read')).map((a) => `${a.name} on ${a.prefixOf}`),
+      'a prefix assignment on a command').toEqual([]);
+    expect(assigns.filter((a) => a.name === 'inst').map((a) => `${a.declared ? 'local ' : ''}${a.name}=${a.value}`), '`inst` is assigned once, by `local`')
+      .toEqual(['local inst="$CCRC_HERE/install-session-hooks.sh"']);
+    expect([...new Set(assigns.filter((a) => a.prefixOf === null).map((a) => a.name))].sort(), 'the names the fixer assigns').toEqual(
+      ['dir', 'dirs', 'evarr', 'evs', 'inst', 'list', 'mixed', 'n', 'refused', 'roster', 'rows', 'said', 'verb'].sort());
+    // R80 N6: the `local inst=` line comes BEFORE the installer call (not necessarily first)
+    const instAt = raw.indexOf('local inst="$CCRC_HERE/install-session-hooks.sh"');
+    expect(instAt, 'the fixer names the shipped installer').toBeGreaterThan(-1);
+    expect(instAt, 'before the installer call').toBeLessThan(raw.indexOf('"${BASH:-bash}" "$inst"'));
     // it refuses a home with a mixed hook group before the installer could touch it (R55), and removes nothing itself
     expect(raw).toContain('_dh_mixed_events');
   });

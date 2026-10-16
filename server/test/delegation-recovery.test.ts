@@ -8,7 +8,7 @@
 // FIXTURE directory: nothing here reads or writes the live `~/.ccrc`.
 import { afterEach, describe, it, expect, vi } from 'vitest';
 import { createHash } from 'node:crypto';
-import { appendFileSync, cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, truncateSync, writeFileSync } from 'node:fs';
+import { appendFileSync, cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, truncateSync, utimesSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { DatabaseSync } from 'node:sqlite';
@@ -77,6 +77,7 @@ import {
   repairDelegationProjection,
   type DelegationDurabilityDeps,
   type DelegationDurabilityEdge,
+  type DelegationDurableBatch,
   type DelegationProjectionPort,
 } from '../src/coord/delegation-checkpoint.js';
 import { unreadableDelegationBucketResult } from '../src/coord/delegation-ingest.js';
@@ -566,6 +567,9 @@ function spyPort(log: string[], inner: DelegationFilePort = nodeDelegationFilePo
     truncate: async (p, length) => { log.push(`${path.basename(p) === DELEGATION_JOURNAL_FILE ? 'journal' : 'file'}.truncate:${length}`); await inner.truncate(p, length); },
     fsyncFile: async (p) => { log.push(`file.sync:${path.basename(p)}`); await inner.fsyncFile(p); },
     readFile: (p) => inner.readFile(p),
+    // MUST 1's boot report: two reads of the tail quarantine, not logged (no read is), so every write-order row is unchanged
+    listDir: (d) => inner.listDir(d),
+    statFile: (p) => inner.statFile(p),
     openRead: async (p) => {
       const h = await inner.openRead(p);
       if (h === null) return null;
@@ -1736,6 +1740,8 @@ describe('D-4655: a torn journal tail heals itself (the one named exception to t
         mkdirp: async (d) => { mutate(`mkdirp:${path.basename(d)}`); await inner.mkdirp(d); },
         readFile: async (p) => { read(`readFile:${path.basename(p)}`); return inner.readFile(p); },
         openRead: async (p) => { read(`openRead:${path.basename(p)}`); return inner.openRead(p); },
+        listDir: async (d) => { read(`listDir:${path.basename(d)}`); return inner.listDir(d); },
+        statFile: async (p) => { read(`statFile:${path.basename(p)}`); return inner.statFile(p); },
       };
       return { port, ops, count: () => n };
     }
@@ -2031,6 +2037,96 @@ describe('D-4655: a torn journal tail heals itself (the one named exception to t
       expect(torn.state().checkpoint.observationIntervals).toEqual(never.state().checkpoint.observationIntervals);
       expect(readFileSync(path.join(b.dir, DELEGATION_JOURNAL_FILE))).toEqual(readFileSync(path.join(a.dir, DELEGATION_JOURNAL_FILE)));
       expect(tornFiles(b.dir)).toHaveLength(1);
+    });
+
+    // ── MUST 1 (coordinator 5424, R76 M1): a heal is reported as soon as its cut returns, and the boot reports any heal nobody did ──
+    /** A port whose `truncate` cuts and then DIES: the kill between the cut and the report. From then on every operation of the dead
+     *  process fails, so nothing after the cut (no report, no listing) can happen in it. */
+    const dyingAfterCut = (inner: DelegationFilePort): DelegationFilePort => {
+      let dead = false;
+      const alive = <A extends unknown[], R>(f: (...a: A) => Promise<R>) => async (...a: A): Promise<R> => { if (dead) throw new SimulatedCrash('the process is dead'); return f(...a); };
+      return {
+        openAppend: alive(inner.openAppend), createTemp: alive(inner.createTemp), rename: alive(inner.rename), fsyncDir: alive(inner.fsyncDir),
+        readFile: alive(inner.readFile), openRead: alive(inner.openRead), mkdirp: alive(inner.mkdirp), fsyncFile: alive(inner.fsyncFile),
+        listDir: alive(inner.listDir), statFile: alive(inner.statFile),
+        truncate: alive(async (p: string, len: number) => { await inner.truncate(p, len); dead = true; throw new SimulatedCrash('killed after the cut'); }),
+      };
+    };
+
+    it('MUST 1: killed between the cut and the report, the NEXT boot reports the heal from the quarantine: its time, bytes and path', async () => {
+      const tail = line(2).subarray(0, 61);
+      const { dir, prefixLen } = plant({ complete: 2, tail, applied: 2 });
+      const dying = await harness({ dir }).open({ port: dyingAfterCut(nodeDelegationFilePort), warn: () => undefined });
+      expect(dying.failure()).toMatchObject({ code: 'tail-heal-failed' });
+      expect(dying.lastTailHeal(), 'the dead process reported nothing').toBeNull();
+      await dying.close();
+      expect(journalOf(dir).length, 'the cut happened').toBe(prefixLen);
+      const kept = path.join(tornDirOf(dir), nameOf(prefixLen, tail));
+      const warned: string[] = [];
+      const booted = await harness({ dir, store: new CoordStore(openCoordDb(path.join(dir, 'coord.db'))) }).open({ warn: (m) => warned.push(m) });
+      expect(booted.failure()).toBeNull();
+      const mtime = formatDelegationInstant(Math.trunc(statSync(kept).mtimeMs));
+      expect(booted.lastTailHeal()).toEqual({ at: mtime, bytes: tail.length, quarantinePath: kept, foundAtBoot: true });
+      const line0 = warned.filter((m) => m.includes(kept));
+      expect(line0).toHaveLength(1);
+      expect(line0[0]).toMatch(/^ccrc-server: /);
+      expect(line0[0]).toContain(`${tail.length} byte`);
+      expect(line0[0]).toContain(mtime);
+      expect(booted.tailQuarantineUnmeasured()).toBe(false);
+    });
+
+    it('R76 M1: the heal is recorded and told as soon as the cut returns: a fsync failing after it still leaves the heal reported', async () => {
+      const tail = line(2).subarray(0, 61);
+      const { dir, prefixLen } = plant({ complete: 2, tail, applied: 2 });
+      const warned: string[] = [];
+      const failingSync: DelegationFilePort = { ...nodeDelegationFilePort, fsyncFile: async () => { throw new Error('EIO: the journal fsync failed'); } };
+      const dur = await harness({ dir }).open({ port: failingSync, warn: (m) => warned.push(m) });
+      expect(dur.failure()).toMatchObject({ code: 'tail-heal-failed' });
+      const kept = path.join(tornDirOf(dir), nameOf(prefixLen, tail));
+      expect(dur.lastTailHeal()).toMatchObject({ bytes: tail.length, quarantinePath: kept });
+      expect(dur.lastTailHeal()!.foundAtBoot).toBeUndefined();
+      expect(warned.some((m) => m.includes('healed a torn tail') && m.includes(kept))).toBe(true);
+    });
+
+    it('MUST 1: every boot reports the newest quarantined tail again until it is removed; a leftover *.tail.tmp is ignored; no marker is written', async () => {
+      const { dir } = plant({ complete: 2, applied: 2 });
+      mkdirSync(tornDirOf(dir), { recursive: true });
+      const older = path.join(tornDirOf(dir), `10-${'a'.repeat(64)}.tail`);
+      const newer = path.join(tornDirOf(dir), `20-${'b'.repeat(64)}.tail`);
+      writeFileSync(older, 'abc');
+      writeFileSync(newer, 'defgh');
+      writeFileSync(path.join(tornDirOf(dir), `30-${'c'.repeat(64)}.tail.tmp`), 'ignored');
+      utimesSync(older, new Date(Date.UTC(2026, 9, 14, 1)), new Date(Date.UTC(2026, 9, 14, 1)));
+      utimesSync(newer, new Date(Date.UTC(2026, 9, 14, 2)), new Date(Date.UTC(2026, 9, 14, 2)));
+      const before = tornFiles(dir);
+      for (let boot = 0; boot < 2; boot++) {
+        const warned: string[] = [];
+        const dur = await harness({ dir, store: new CoordStore(openCoordDb(path.join(dir, 'coord.db'))) }).open({ warn: (m) => warned.push(m) });
+        expect(dur.lastTailHeal(), `boot ${boot}: the newest`).toEqual({ at: '2026-10-14T02:00:00.000Z', bytes: 5, quarantinePath: newer, foundAtBoot: true });
+        expect(warned.filter((m) => m.includes('quarantined torn tail')), `boot ${boot}: each one once`).toHaveLength(2);
+        expect(warned.some((m) => m.includes('.tail.tmp'))).toBe(false);
+        await dur.recover();
+        expect(warned.filter((m) => m.includes('quarantined torn tail')), `boot ${boot}: a recovery of the SAME process does not repeat them`).toHaveLength(2);
+        await dur.close();
+      }
+      expect(tornFiles(dir), 'the report wrote nothing').toEqual(before);
+      rmSync(older);
+      rmSync(newer);
+      const after = await harness({ dir, store: new CoordStore(openCoordDb(path.join(dir, 'coord.db'))) }).open({ warn: () => undefined });
+      expect(after.lastTailHeal(), 'removed by the operator: nothing to report').toBeNull();
+    });
+
+    it('MUST 1: a quarantine that cannot be listed is UNMEASURED, never "no heal"', async () => {
+      const { dir } = plant({ complete: 2, applied: 2 });
+      const warned: string[] = [];
+      const unlistable: DelegationFilePort = { ...nodeDelegationFilePort, listDir: async () => { throw Object.assign(new Error('EACCES: permission denied'), { code: 'EACCES' }); } };
+      const dur = await harness({ dir }).open({ port: unlistable, warn: (m) => warned.push(m) });
+      expect(dur.failure()).toBeNull();
+      expect(dur.tailQuarantineUnmeasured()).toBe(true);
+      expect(dur.lastTailHeal()).toBeNull();
+      expect(warned.some((m) => m.startsWith('ccrc-server: ') && m.includes('could not be listed') && m.includes('unmeasured'))).toBe(true);
+      const absent = await harness({ dir: plant({ complete: 2, applied: 2 }).dir }).open();
+      expect(absent.tailQuarantineUnmeasured(), 'no quarantine directory at all is a measured "none"').toBe(false);
     });
   });
 });
@@ -2489,9 +2585,9 @@ describe('the evidence count cannot reject an application that is already durabl
     expect(failureCode(() => index.add(10))).toBe('fold-refused');          // recovery's one-at-a-time add keeps its refusal
   });
 
-  it('an index that runs ahead of the journal refuses the application BEFORE step 1: nothing is written and nothing is poisoned', async () => {
+  it('an index that runs ahead of the journal refuses the application BEFORE step 1 and FAILS the applier, and recovery rebuilds it (8A re-review 2)', async () => {
     const h = harness();
-    const dur = await h.open();
+    const dur = await h.open({ warn: () => undefined });
     await dur.applyAccepted(batch([sessionStart(1)]));
     const disk = readDisk(h.dir);
     // The bug this invariant exists to catch: the applier's count of the journal is ahead of the journal.
@@ -2500,9 +2596,13 @@ describe('the evidence count cannot reject an application that is already durabl
     await expect(dur.applyAccepted(batch([sessionStart(2)]))).rejects.toMatchObject({ code: 'fold-refused' });
     expect(h.log, 'nothing was written').toEqual([]);
     expect(readDisk(h.dir)).toEqual(disk);
+    // the applier's own state is wrong: it is failed (reconstructing, pruning off), never left refusing every later application
+    expect(dur.failure()).toMatchObject({ phase: 'durable-application' });
+    expect(dur.pruningEnabled()).toBe(false);
+    await dur.recover();
     expect(dur.failure()).toBeNull();
-    expect(dur.pruningEnabled()).toBe(true);
     expect(dur.state().checkpoint.appliedJournalSequence).toBe(1);
+    expect((await dur.applyAccepted(batch([sessionStart(2)]))).appended.map((r) => r.sequence), 'the rebuilt index takes the next record').toEqual([2]);
   });
 });
 
@@ -3021,7 +3121,13 @@ describe('the pure/impure split is explicit, and nothing pure mints an ID or rea
         : ['../../../shared/api.js', './delegation-journal.js', './delegation-model.js', 'node:path']);
     });
     it(`${file}: no randomness and no clock anywhere in the module (they are injected)`, () => {
-      expect(strip(readFileSync(path.join(dir, file), 'utf8'))).not.toMatch(/(?<!deps\.)\brandomUUID\(|\brandomBytes\b|Math\.random|Date\.now|new Date\(|performance\.now|node:crypto/);
+      const src = strip(readFileSync(path.join(dir, file), 'utf8'));
+      expect(src).not.toMatch(/(?<!deps\.)\brandomUUID\(|\brandomBytes\b|Math\.random|Date\.now|new Date\(|performance\.now|node:crypto/);
+      // R76 M2: Web Crypto's randomness too (the heal names its quarantine file from a digest, and a digest is the ONLY Web Crypto use)
+      expect(src).not.toMatch(/getRandomValues|crypto\.randomUUID|webcrypto/);
+      expect(src.match(/globalThis\.crypto\b[^\n]*/g) ?? [], 'every Web Crypto use').toEqual(file === 'delegation-journal.ts'
+        ? ["globalThis.crypto.subtle.digest('SHA-256', new Uint8Array(bytes)));"] : []);
+      expect(src.match(/\bcrypto\./g)?.length ?? 0, 'no other crypto handle').toBe(file === 'delegation-journal.ts' ? 1 : 0);
     });
   }
   it('the lease adapter calls the INJECTED randomUUID in one place only, after the identity and path checks', () => {
@@ -3482,5 +3588,188 @@ describe('Task 13 fix 1 (M1, D-4652): visitRetainedRecords is read-only, seriali
     expect(dur.failure()).toBeNull();
     expect(readDisk(h.dir)).toEqual(before);
     await expect(dur.applyAccepted(batch([sessionStart(3)]))).resolves.toBeDefined();
+  });
+});
+
+// ── D-4658 (ruling R79): one durable application per pass, `applyAcceptedBatch` ─────────────────────────────────────────
+
+describe('D-4658: applyAcceptedBatch applies several buckets as ONE durable application, in O5 order, equal to one application each', () => {
+  const OTHER = 'lane-b-demo';
+  const cursorOf = (sessionId: string, bucket: string, cursor: number, over: { replaced?: boolean; intervalState?: 'measured' | 'unmeasured'; detail?: string | null } = {}) =>
+    ({ ...cursorFor(bucket, cursor), sessionId, ...over });
+  const intervalOf = (sessionId: string, utcHour: string, recordedAt: string) => ({ ...intervalFor(utcHour, 'measured', recordedAt), sessionId });
+  const HOUR0 = '2026-10-14T00:00:00.000Z';
+  const HOUR1 = '2026-10-14T01:00:00.000Z';
+  /** Three buckets of a pass: two owners, one with two hours; seven records in all, one opening an activity. */
+  const passBatches = (): DelegationDurableBatch[] => [
+    batch([sessionStart(1), subagentStart(2, X), bareTool(3, X)], { cursor: cursorOf(PARENT, '2026101400', 300), interval: intervalOf(PARENT, HOUR0, T(10)) }),
+    batch([sessionStart(4, { sessionId: OTHER }), bareTool(5, Y, { sessionId: OTHER })], { cursor: cursorOf(OTHER, '2026101400', 200), interval: intervalOf(OTHER, HOUR0, T(10)) }),
+    batch([bareTool(6, X), subagentStop(7, X)], { cursor: cursorOf(PARENT, '2026101401', 200), interval: intervalOf(PARENT, HOUR1, T(10)) }),
+  ];
+  /** SQLite's events, without the table's own autoincrement `id` (a repair that re-inserts renumbers it; nothing reads it). */
+  const eventsOf = (store: CoordStore) => (store as unknown as { db: DatabaseSync }).db.prepare('SELECT * FROM delegation_events ORDER BY journalSequence').all()
+    .map((r) => { const { id: _id, ...rest } = r as Record<string, unknown>; return rest; });
+  /** Everything an application can leave: the journal's bytes, the checkpoint's rows (its revision aside) and SQLite. */
+  const outcomeOf = (h: Harness, dur: DelegationDurability) => ({
+    journal: readFileSync(path.join(h.dir, DELEGATION_JOURNAL_FILE)).toString('base64'),
+    rows: withoutRevision(dur.state().checkpoint),
+    projection: canonicalDelegationJson(h.store.readDelegationProjection()),
+    events: JSON.stringify(eventsOf(h.store)),
+  });
+  /** THE REFERENCE: the same input, unbatched (one `applyAccepted` per bucket, as the lane applied before D-4658). */
+  async function unbatched() {
+    const h = harness();
+    const dur = await h.open();
+    for (const b of passBatches()) await dur.applyAccepted(b);
+    return outcomeOf(h, dur);
+  }
+  /** Reopens a crashed directory with a fresh applier (recovery), as a restart does. */
+  async function reopen(dir: string) {
+    const h = harness({ dir, store: new CoordStore(openCoordDb(path.join(dir, 'coord.db'))) });
+    return { h, dur: await h.open() };
+  }
+
+  it('O5 in order: every record written then fsynced before the next, then ONE checkpoint replacement and ONE projection', async () => {
+    const h = harness();
+    const edges: string[] = [];
+    const dur = await h.open({ onEdge: (e, w) => { if (w === 'before') edges.push(e); } });
+    edges.length = 0;
+    const out = await dur.applyAcceptedBatch(passBatches());
+    expect(out.appended).toHaveLength(7);
+    expect(edges).toEqual([
+      ...Array.from({ length: 7 }, () => ['journal-write', 'journal-fsync']).flat(),
+      'build', 'checkpoint-write', 'checkpoint-fsync', 'checkpoint-rename', 'directory-fsync', 'project',
+    ]);
+    expect(dur.state().checkpoint.bucketCursors.map((c) => [c.sessionId, c.bucket, c.cursor])).toEqual([
+      [PARENT, '2026101400', 300], [OTHER, '2026101400', 200], [PARENT, '2026101401', 200],
+    ].sort((a, b) => (JSON.stringify(a) < JSON.stringify(b) ? -1 : 1)));
+  });
+
+  it('the same input unbatched leaves the SAME journal bytes, checkpoint rows and SQLite', async () => {
+    const h = harness();
+    const dur = await h.open();
+    await dur.applyAcceptedBatch(passBatches());
+    expect(outcomeOf(h, dur)).toEqual(await unbatched());
+  });
+
+  it('a batch\'s members are validated before the first byte: one unreadable cursor refuses the WHOLE application, and nothing is written', async () => {
+    const h = harness();
+    const dur = await h.open();
+    const before = readDisk(h.dir);
+    const bad = passBatches();
+    bad[1] = { ...bad[1]!, cursor: { ...bad[1]!.cursor!, cursor: -1 } };
+    await expect(dur.applyAcceptedBatch(bad)).rejects.toThrow();
+    expect(readDisk(h.dir)).toEqual(before);
+    expect(dur.failure()).toBeNull();
+    expect(dur.state().checkpoint.appliedJournalSequence).toBe(0);
+  });
+
+  it('replaced stays sticky across a batch: a later member of the same application cannot un-replace a bucket', async () => {
+    const h = harness();
+    const dur = await h.open();
+    const replaced = cursorOf(PARENT, '2026101400', 40, { replaced: true, intervalState: 'unmeasured', detail: 'bucket-replaced: size 3 is below the cursor 40' });
+    await dur.applyAcceptedBatch([batch([sessionStart(1)], { cursor: replaced }), batch([sessionStart(2)], { cursor: cursorOf(PARENT, '2026101400', 10) })]);
+    expect(dur.state().checkpoint.bucketCursors[0]).toMatchObject({ replaced: true, intervalState: 'unmeasured' });
+    expect(dur.state().checkpoint.bucketCursors[0]!.detail).toMatch(/^bucket-replaced/);
+  });
+
+  // Coordinator 5443 condition 1: batching widens the window past the checkpoint from one record to k.
+  const crashes: ReadonlyArray<readonly [string, (e: DelegationDurabilityEdge, w: 'before' | 'after', n: { writes: number }) => boolean, number]> = [
+    ['after all seven records are appended and fsynced, before the checkpoint rename', (e, w) => e === 'checkpoint-rename' && w === 'before', 7],
+    ['between two of the batch\'s record fsyncs (two records durable, the third not yet written)', (e, w, n) => e === 'journal-write' && w === 'before' && ++n.writes === 3, 2],
+  ];
+  for (const [label, at, durable] of crashes) {
+    it(`a crash ${label}: recovery replays every record, and the next pass completes to the unbatched state`, async () => {
+      const h = harness();
+      const n = { writes: 0 };
+      const dur = await h.open({ onEdge: (e, w) => { if (at(e, w, n)) throw new SimulatedCrash(`${e}:${w}`); } });
+      await expect(dur.applyAcceptedBatch(passBatches())).rejects.toThrow(SimulatedCrash);
+      expect(dur.state().checkpoint.appliedJournalSequence, 'nothing of the application is visible').toBe(0);
+      await dur.close();
+      const again = await reopen(h.dir);
+      expect(again.dur.failure()).toBeNull();
+      expect(again.dur.state().checkpoint.appliedJournalSequence, `${durable} record(s) past the checkpoint, all replayed`).toBe(durable);
+      expect(again.dur.state().checkpoint.bucketCursors, 'cursors are checkpoint-only: the crash lost them, so the next pass re-reads').toEqual([]);
+      await again.dur.applyAcceptedBatch(passBatches());                   // the next pass: the same buckets from the same cursors
+      expect(outcomeOf(again.h, again.dur)).toEqual(await unbatched());
+    });
+  }
+
+  it('condition 3, the heal: a torn LAST record of a batch heals at recovery, and the next pass completes to the unbatched state', async () => {
+    const h = harness();
+    const dur = await h.open();
+    await dur.applyAcceptedBatch(passBatches());
+    await dur.close();
+    const jp = path.join(h.dir, DELEGATION_JOURNAL_FILE);
+    const bytes = readFileSync(jp);
+    const lines = bytes.toString('utf8').split('\n').filter((l) => l !== '');
+    const keep = lines.slice(0, 6).join('\n') + '\n';                      // six whole records, then half of the seventh: a torn tail
+    writeFileSync(jp, keep + lines[6]!.slice(0, Math.floor(lines[6]!.length / 2)));
+    writeFileSync(path.join(h.dir, DELEGATION_CHECKPOINT_FILE), '');        // the checkpoint of the batch never landed
+    rmSync(path.join(h.dir, DELEGATION_CHECKPOINT_FILE));
+    const again = await reopen(h.dir);
+    expect(again.dur.failure()).toBeNull();
+    expect(again.dur.lastTailHeal()).not.toBeNull();
+    expect(again.dur.state().checkpoint.appliedJournalSequence).toBe(6);
+    await again.dur.applyAcceptedBatch(passBatches());
+    expect(outcomeOf(again.h, again.dur)).toEqual(await unbatched());
+  });
+
+  it('condition 3, corruption: a batch with a damaged record BEFORE its last is not a torn tail; recovery fails closed and cuts nothing', async () => {
+    const h = harness();
+    const dur = await h.open();
+    await dur.applyAcceptedBatch(passBatches());
+    await dur.close();
+    const jp = path.join(h.dir, DELEGATION_JOURNAL_FILE);
+    const lines = readFileSync(jp, 'utf8').split('\n').filter((l) => l !== '');
+    const damaged = [...lines.slice(0, 3), lines[3]!.slice(0, Math.floor(lines[3]!.length / 2)), ...lines.slice(4)].join('\n') + '\n';
+    writeFileSync(jp, damaged);
+    rmSync(path.join(h.dir, DELEGATION_CHECKPOINT_FILE));
+    const again = await reopen(h.dir);
+    expect(again.dur.failure(), 'a damaged record that is not the last one is corruption').not.toBeNull();
+    expect(again.dur.lastTailHeal()).toBeNull();
+    expect(readFileSync(jp, 'utf8'), 'nothing is cut').toBe(damaged);
+  });
+
+  it('O1 (the batch door\'s own crash row): a crash at any edge exposes no activity ID and poisons the applier; recovery replays a PREFIX of the records, and the next pass completes to the unbatched state', async () => {
+    const reference = await unbatched();
+    for (const edge of DELEGATION_DURABILITY_EDGES.filter((e) => e !== 'project')) {
+      for (const when of ['before', 'after'] as const) {
+        const h = harness();
+        let hit = false;
+        const dur = await h.open({ onEdge: (e, w) => { if (!hit && e === edge && w === when) { hit = true; throw new SimulatedCrash(`${e}:${w}`); } } });
+        const exposed: string[] = [];
+        await expect(dur.applyAcceptedBatch(passBatches()).then((o) => { exposed.push(...o.openedActivities.map((a) => a.activityId)); })).rejects.toThrow(SimulatedCrash);
+        expect(exposed, `${when} ${edge}`).toEqual([]);
+        expect(dur.state().checkpoint.activities, `${when} ${edge}: nothing visible`).toEqual([]);
+        await expect(dur.applyAcceptedBatch(passBatches())).rejects.toMatchObject({ code: 'not-ready' });
+        await dur.close();
+        const again = await reopen(h.dir);
+        expect(again.dur.failure(), `${when} ${edge}`).toBeNull();
+        const k = again.dur.state().checkpoint.appliedJournalSequence;
+        expect(k >= 0 && k <= 7, `${when} ${edge}: a prefix of the batch (${k})`).toBe(true);
+        await again.dur.applyAcceptedBatch(passBatches());
+        expect(outcomeOf(again.h, again.dur), `${when} ${edge}`).toEqual(reference);
+      }
+    }
+  });
+
+  it('condition 4, the compare: a re-applied pass whose records all dedupe and whose rows are unchanged writes NOTHING; a change that removes rows without appending is written', async () => {
+    const h = harness();
+    const dur = await h.open();
+    await dur.applyAcceptedBatch(passBatches());
+    const revision = dur.state().checkpoint.revision;
+    const before = readDisk(h.dir);
+    const again = await dur.applyAcceptedBatch(passBatches());              // the caller hands seven records; the measured plan appends none
+    expect(again.durable).toBe(false);
+    expect(dur.state().checkpoint.revision).toBe(revision);
+    expect(readDisk(h.dir)).toEqual(before);
+    // a checkpoint-only change that REMOVES rows (no record appended) runs the compare and is written
+    const removed = await dur.applyCheckpointChange((cp) => ({ ...cp, observationIntervals: cp.observationIntervals.slice(1) }));
+    expect(removed.durable).toBe(true);
+    expect(dur.state().checkpoint.observationIntervals).toHaveLength(2);
+    // and a deduped re-application that changes a cursor is written too
+    const moved = passBatches().map((b, i) => (i === 0 ? { ...b, cursor: cursorOf(PARENT, '2026101400', 400) } : b));
+    expect((await dur.applyAcceptedBatch(moved)).durable).toBe(true);
   });
 });

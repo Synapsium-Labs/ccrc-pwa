@@ -34,6 +34,7 @@ import {
 import { DELEGATION_JOURNAL_FILE, DELEGATION_TORN_DIR } from '../src/coord/delegation-journal.js';
 import {
   DELEGATION_EVENTS_CAP,
+  DELEGATION_HOUR_CLOSE_MARGIN_MS,
   DELEGATION_HOUR_MS,
   DELEGATION_UNMEASURED_INCARNATION,
   canonicalDelegationJson,
@@ -202,7 +203,7 @@ const intervalFor = (home: string, owner: string, hour = HOUR10, inc = INC) =>
 function durableCalls() {
   const proto = DelegationDurability.prototype;
   return {
-    applyAccepted: vi.spyOn(proto, 'applyAccepted'),
+    applyAcceptedBatch: vi.spyOn(proto, 'applyAcceptedBatch'),
     applyCheckpointChange: vi.spyOn(proto, 'applyCheckpointChange'),
     createLease: vi.spyOn(proto, 'createLease'),
     repairProjection: vi.spyOn(proto, 'repairProjection'),
@@ -438,7 +439,7 @@ describe('ingestion is durable: journal, checkpoint, then SQLite, and a restart 
     await pass(again);
     expect(disk(first.home).journalLines).toBe(before.journalLines);
     expect(again.coord.delegationEventStats()).toEqual({ count: 2, maxSequence: 2 });
-    expect(calls.applyAccepted, 'the restarted lane re-applied a bucket it had already applied').not.toHaveBeenCalled();
+    expect(calls.applyAcceptedBatch, 'the restarted lane re-applied a bucket it had already applied').not.toHaveBeenCalled();
     expect(disk(first.home).checkpoint!.bucketCursors).toEqual(before.checkpoint!.bucketCursors);
   });
 
@@ -523,6 +524,19 @@ describe('D-4655: the lane heals a torn journal tail and the next pass reproduce
     expect(a.watcher.currentDelegationHealth()).not.toHaveProperty('lastTailHeal');
   });
 
+  it('MUST 1: a heal no report of this process covers (found in the quarantine at the lane\'s boot) is on the health, with its own time, bytes and path', async () => {
+    const w = world();
+    const torn = path.join(w.ccrcDir, DELEGATION_TORN_DIR);
+    mkdirSync(torn, { recursive: true });
+    const kept = path.join(torn, `618-${'e'.repeat(64)}.tail`);
+    writeFileSync(kept, 'x'.repeat(412));
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    await censusPass(w, at(0), { demo: [] });
+    const health = w.watcher.currentDelegationHealth()!;
+    expect(health.lastTailHeal).toMatchObject({ bytes: 412, quarantinePath: kept, foundAtBoot: true });
+    expect(health).not.toHaveProperty('tailQuarantineUnmeasured');
+  });
+
   it('a corrupt journal is NOT healed by the lane: the pass applies nothing, the journal is untouched, nothing is kept', async () => {
     const a = world();
     writeBucket(a, 'demo-a', BUCKET10, ...lines);
@@ -548,9 +562,9 @@ describe('the no-op skip (hand-off 2): a bucket result that changes nothing make
     setNow(NOW);
     setCensus(w, { demo: [] }, { 'demo-a': measured() }, NOW);
     await pass(w);
-    expect(calls.applyAccepted).toHaveBeenCalledTimes(1);
+    expect(calls.applyAcceptedBatch).toHaveBeenCalledTimes(1);
     for (let i = 1; i <= 3; i++) { setNow(NOW + i * DELEGATION_SWEEP_MS); await pass(w); }
-    expect(calls.applyAccepted, 'an unchanged bucket was applied again').toHaveBeenCalledTimes(1);
+    expect(calls.applyAcceptedBatch, 'an unchanged bucket was applied again').toHaveBeenCalledTimes(1);
   });
 
   it('an hour with no bucket is recorded once (measured, empty) and then left alone', async () => {
@@ -562,10 +576,10 @@ describe('the no-op skip (hand-off 2): a bucket result that changes nothing make
     await pass(w);
     expect(intervalFor(w.home, 'demo-a')).toMatchObject({ state: 'measured', detail: null });
     expect(disk(w.home).checkpoint!.bucketCursors, 'an empty hour needs no cursor row').toEqual([]);
-    expect(calls.applyAccepted).toHaveBeenCalledTimes(1);
+    expect(calls.applyAcceptedBatch).toHaveBeenCalledTimes(1);
     setNow(NOW + DELEGATION_SWEEP_MS);
     await pass(w);
-    expect(calls.applyAccepted).toHaveBeenCalledTimes(1);
+    expect(calls.applyAcceptedBatch).toHaveBeenCalledTimes(1);
   });
 
   it('a repeated unmeasured reason is recorded once, not once a minute', async () => {
@@ -580,7 +594,7 @@ describe('the no-op skip (hand-off 2): a bucket result that changes nothing make
     await pass(w);
     setNow(NOW + 2 * DELEGATION_SWEEP_MS);
     await pass(w);
-    expect(calls.applyAccepted).toHaveBeenCalledTimes(1);
+    expect(calls.applyAcceptedBatch).toHaveBeenCalledTimes(1);
     expect(intervalFor(w.home, 'demo-a')).toMatchObject({ state: 'unmeasured' });
   });
 
@@ -595,7 +609,7 @@ describe('the no-op skip (hand-off 2): a bucket result that changes nothing make
     const calls = durableCalls();
     setNow(NOW + DELEGATION_SWEEP_MS);
     await pass(w);
-    expect(calls.applyAccepted).toHaveBeenCalledTimes(1);
+    expect(calls.applyAcceptedBatch).toHaveBeenCalledTimes(1);
     expect(intervalFor(w.home, 'demo-a')).toMatchObject({ state: 'unmeasured', detail: expect.stringMatching(/^range-unreadable/) });
   });
 
@@ -606,23 +620,23 @@ describe('the no-op skip (hand-off 2): a bucket result that changes nothing make
     setNow(NOW);
     setCensus(w, { demo: [] }, { 'demo-a': measured() }, NOW);
     await pass(w);
-    expect(calls.applyAccepted).toHaveBeenCalledTimes(1);
+    expect(calls.applyAcceptedBatch).toHaveBeenCalledTimes(1);
     const closeAt = Date.UTC(2026, 9, 15, 11, 2, 0);
     // 11:01 is inside the close margin: the open hour 11:00 is recorded (empty), the hour 10:00 is not yet closed
     setNow(closeAt - 60_000);
     await pass(w);
-    expect(calls.applyAccepted).toHaveBeenCalledTimes(2);                      // the new hour's first row
+    expect(calls.applyAcceptedBatch).toHaveBeenCalledTimes(2);                      // the new hour's first row
     expect(intervalFor(w.home, 'demo-a')!.recordedAt).toBe(iso(NOW));
     // 11:03 is past the margin
     setNow(closeAt + 60_000);
     const readsBefore = w.calls.ranges.length;
     await pass(w);
-    expect(calls.applyAccepted).toHaveBeenCalledTimes(3);                      // the close write for hour 10
+    expect(calls.applyAcceptedBatch).toHaveBeenCalledTimes(3);                      // the close write for hour 10
     expect(Date.parse(intervalFor(w.home, 'demo-a')!.recordedAt)).toBeGreaterThanOrEqual(closeAt);
     const readsAfterClose = w.calls.ranges.length;
     expect(readsAfterClose).toBeGreaterThan(readsBefore);
     for (let i = 2; i <= 4; i++) { setNow(closeAt + i * 60_000); await pass(w); }
-    expect(calls.applyAccepted, 'a settled hour was applied again').toHaveBeenCalledTimes(3);
+    expect(calls.applyAcceptedBatch, 'a settled hour was applied again').toHaveBeenCalledTimes(3);
     expect(w.calls.ranges.slice(readsAfterClose), 'a settled hour was read again').toEqual([]);
   });
 
@@ -2563,8 +2577,8 @@ describe('currentDelegationHealth: absent until the lane has tried, then report-
 
 // ── 6. a realistic pass, measured (hand-off 2) ──────────────────────────────────────────────────────────────────────────
 
-describe('hand-off 2: one pass over a realistic fixture (20 owners, 2 buckets each)', () => {
-  it('applies each bucket once, a second pass applies nothing, and the cost is reported', async () => {
+describe('hand-off 2 and D-4658: one pass over a realistic fixture (20 owners, 2 buckets each)', () => {
+  it('applies every bucket in ONE durable application (one checkpoint replacement, one projection), a second pass applies nothing, and the cost is reported', async () => {
     const w = world();
     const owners = Array.from({ length: 20 }, (_, i) => `demo-s${String(i).padStart(2, '0')}`);
     for (const o of owners) {
@@ -2572,21 +2586,32 @@ describe('hand-off 2: one pass over a realistic fixture (20 owners, 2 buckets ea
       writeBucket(w, o, BUCKET10, ...Array.from({ length: 20 }, (_, k) => startLine(o, `2026-10-15T10:${String(10 + k).padStart(2, '0')}:00.000Z`)));
     }
     const calls = durableCalls();
+    const replaced = vi.spyOn(DelegationDurability.prototype as never as { replaceCheckpoint: (b: Uint8Array) => Promise<void> }, 'replaceCheckpoint');
+    const projected = vi.spyOn(DelegationDurability.prototype as never as { projectLocked: (...a: never[]) => Promise<unknown> }, 'projectLocked');
+    const repaired = vi.spyOn(DelegationDurability.prototype, 'repairProjection');
     setNow(NOW);
     setCensus(w, { demo: [] }, Object.fromEntries(owners.map((o) => [o, measured()])), NOW);
     const sessions = owners.map((o) => sessionOf(o));
     const t0 = performance.now();
     await pass(w, sessions);
     const firstMs = performance.now() - t0;
-    expect(calls.applyAccepted).toHaveBeenCalledTimes(40);            // one application per bucket: the hour 09:00 is closed after its margin only
+    // D-4658: ONE application per pass, carrying all 40 bucket results (the hour 09:00 is closed after its margin only); one checkpoint
+    // replacement and one projection for all of it (the pass files no attempt, and the census lists no tree). The reconcile's own
+    // `repair-report-projection` effect is a separate step, once per reconciled census, unchanged by D-4658.
+    expect(calls.applyAcceptedBatch).toHaveBeenCalledTimes(1);
+    expect(calls.applyAcceptedBatch.mock.calls[0]![0]).toHaveLength(40);
+    expect(replaced).toHaveBeenCalledTimes(1);
+    expect(projected).toHaveBeenCalledTimes(1);
+    expect(repaired).toHaveBeenCalledTimes(1);
     expect(disk(w.home).journalLines).toBe(800);
     setNow(NOW + DELEGATION_SWEEP_MS);
     const t1 = performance.now();
     await pass(w, sessions);
     const secondMs = performance.now() - t1;
-    expect(calls.applyAccepted, 'an unchanged fleet was applied again').toHaveBeenCalledTimes(40);
+    expect(calls.applyAcceptedBatch, 'an unchanged fleet was applied again').toHaveBeenCalledTimes(1);
+    expect(replaced).toHaveBeenCalledTimes(1);
     // eslint-disable-next-line no-console
-    console.info(`delegation lane tick measurement: first pass ${firstMs.toFixed(0)} ms (40 applications, 800 events), steady pass ${secondMs.toFixed(0)} ms (0 applications); checkpoint ${readFileSync(path.join(w.ccrcDir, DELEGATION_CHECKPOINT_FILE)).length} bytes`);
+    console.info(`delegation lane tick measurement: first pass ${firstMs.toFixed(0)} ms (1 application of 40 bucket results, 800 events), steady pass ${secondMs.toFixed(0)} ms (0 applications); checkpoint ${readFileSync(path.join(w.ccrcDir, DELEGATION_CHECKPOINT_FILE)).length} bytes`);
     expect(firstMs).toBeLessThan(120_000);
   }, 180_000);
 });
@@ -2809,5 +2834,147 @@ describe('final review M-1: after a recovery or a failed evidence load the verdi
     expect(counts(w).breaker, 'three cadences: still vouched for').toBe('clear');
     setNow(at(3) + 3 * STEP + 1);
     expect(counts(w)).toEqual(UNKNOWN);
+  });
+});
+
+describe('D-4658 (ruling R79): one durable application per pass, with per-bucket semantics unchanged', () => {
+  // Four owners in id order: `demo-a` (two hours), `demo-b/x` (an owner the reader refuses: `input-invalid`, never applied), `demo-c`, and
+  // `demo-d`, whose bucket is cut below its cursor on the second pass (replaced, sticky). Run twice, batched and unbatched.
+  const owners = ['demo-a', 'demo-b/x', 'demo-c', 'demo-d'];
+  const sessions = owners.map((o) => sessionOf(o));
+  function fixture(seams: Parameters<FleetWatcher['setDelegationSeams']>[0]): World {
+    const w = world();
+    w.watcher.setDelegationSeams(seams);
+    writeBucket(w, 'demo-a', BUCKET09, startLine('demo-a', '2026-10-15T09:10:00.000Z'), startLine('demo-a', '2026-10-15T09:20:00.000Z'));
+    writeBucket(w, 'demo-a', BUCKET10, startLine('demo-a', '2026-10-15T10:01:00.000Z'));
+    writeBucket(w, 'demo-c', BUCKET10, startLine('demo-c', '2026-10-15T10:02:00.000Z'), startLine('demo-c', '2026-10-15T10:03:00.000Z'));
+    writeBucket(w, 'demo-d', BUCKET10, startLine('demo-d', '2026-10-15T10:04:00.000Z'), startLine('demo-d', '2026-10-15T10:05:00.000Z'));
+    return w;
+  }
+  const passAt = async (w: World, n: number): Promise<void> => {
+    setNow(at(n));
+    setCensus(w, { demo: [] }, Object.fromEntries(owners.map((o) => [o, measured()])), at(n));
+    await pass(w, sessions);
+  };
+  async function run(seams: Parameters<FleetWatcher['setDelegationSeams']>[0], between?: (w: World) => void): Promise<World> {
+    const w = fixture(seams);
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    await passAt(w, 0);
+    writeFileSync(bucketFile(w, 'demo-d', BUCKET10), startLine('demo-d', '2026-10-15T10:04:00.000Z').slice(0, 20));   // cut below the cursor
+    appendBucket(w, 'demo-c', BUCKET10, startLine('demo-c', '2026-10-15T10:06:00.000Z'));
+    between?.(w);
+    await passAt(w, 1);
+    return w;
+  }
+  const outcome = (w: World) => {
+    const cp = disk(w.home).checkpoint!;
+    return {
+      journal: readFileSync(path.join(w.ccrcDir, DELEGATION_JOURNAL_FILE), 'utf8'),
+      rows: canonicalDelegationJson({ ...cp, revision: 0 }),
+      projection: canonicalDelegationJson(w.coord.readDelegationProjection()),
+    };
+  };
+
+  it('ROWS: batched and unbatched leave the same journal, checkpoint rows and SQLite, the input-invalid bucket and the replaced one included', async () => {
+    const batched = await run({});
+    const unbatched = await run({ unbatched: true });
+    expect(outcome(batched)).toEqual(outcome(unbatched));
+    const cp = disk(batched.home).checkpoint!;
+    expect(cp.observationIntervals.some((r) => r.sessionId === 'demo-b/x'), 'an input-invalid result is never applied').toBe(false);
+    expect(cp.bucketCursors.find((c) => c.sessionId === 'demo-d')).toMatchObject({ replaced: true });
+    expect(cp.bucketCursors.find((c) => c.sessionId === 'demo-c')!.cursor).toBe(readFileSync(bucketFile(batched, 'demo-c', BUCKET10)).length);
+  });
+
+  it('a failed application fails the WHOLE pass: nothing of it is durable, and the next pass re-reads every bucket to the same state', async () => {
+    const reference = await run({});
+    const w = fixture({});
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const real = DelegationDurability.prototype.applyAcceptedBatch;
+    const spy = vi.spyOn(DelegationDurability.prototype, 'applyAcceptedBatch').mockImplementationOnce(async () => { throw new Error('a fixture failure'); });
+    await passAt(w, 0);
+    expect(disk(w.home).journalLines, 'nothing of the failed pass is durable').toBe(0);
+    spy.mockImplementation(function (this: DelegationDurability, b) { return real.call(this, b); });
+    await passAt(w, 1);                                                    // the next pass reads the same buckets from the same cursors
+    expect(disk(w.home).journalLines, "every staged record, applied by the re-read").toBe(7);
+    writeFileSync(bucketFile(w, 'demo-d', BUCKET10), startLine('demo-d', '2026-10-15T10:04:00.000Z').slice(0, 20));
+    appendBucket(w, 'demo-c', BUCKET10, startLine('demo-c', '2026-10-15T10:06:00.000Z'));
+    await passAt(w, 2);
+    // the same records (their acceptance instants are the passes' own) and the same cursors as a run whose first pass did not fail
+    const eventsOf = (home: string) => readFileSync(path.join(home, '.ccrc', DELEGATION_JOURNAL_FILE), 'utf8').split('\n').filter((l) => l !== '')
+      .map((l) => (JSON.parse(l) as { entry: { event: { eventId: string } } }).entry.event.eventId);
+    expect(eventsOf(w.home)).toEqual(eventsOf(reference.home));
+    const coordinates = (home: string) => disk(home).checkpoint!.bucketCursors.map((c) => [c.sessionId, c.bucket, c.cursor, c.lastSize, c.replaced, c.anchor]);
+    expect(coordinates(w.home)).toEqual(coordinates(reference.home));
+  });
+
+  it('an hour is remembered as settled only once the pass\'s application is durable: a failed one leaves its close write to the next pass', async () => {
+    const w = world();
+    writeBucket(w, 'demo-a', BUCKET10, startLine('demo-a'));
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    setNow(NOW);
+    setCensus(w, { demo: [] }, { 'demo-a': measured() }, NOW);
+    await pass(w);
+    const closeAt = Date.parse(HOUR10) + DELEGATION_HOUR_MS + DELEGATION_HOUR_CLOSE_MARGIN_MS;
+    expect(Date.parse(intervalFor(w.home, 'demo-a')!.recordedAt), 'recorded while the hour was open').toBeLessThan(closeAt);
+    const real = DelegationDurability.prototype.applyAcceptedBatch;
+    const spy = vi.spyOn(DelegationDurability.prototype, 'applyAcceptedBatch').mockImplementationOnce(async () => { throw new Error('a fixture failure'); });
+    setNow(closeAt + 60_000);
+    setCensus(w, { demo: [] }, { 'demo-a': measured() }, closeAt + 60_000);
+    await pass(w);                                                         // the close write is staged, and the application fails
+    expect(Date.parse(intervalFor(w.home, 'demo-a')!.recordedAt)).toBeLessThan(closeAt);
+    spy.mockImplementation(function (this: DelegationDurability, b) { return real.call(this, b); });
+    setNow(closeAt + 60_000 + DELEGATION_SWEEP_MS);
+    setCensus(w, { demo: [] }, { 'demo-a': measured() }, closeAt + 60_000 + DELEGATION_SWEEP_MS);
+    await pass(w);
+    expect(Date.parse(intervalFor(w.home, 'demo-a')!.recordedAt), 'the next pass made the close write: the hour was not settled').toBeGreaterThanOrEqual(closeAt);
+  });
+
+  it('cursors only move forward across batched passes, and a replaced bucket stays replaced when it grows again', async () => {
+    const w = fixture({});
+    const seen: number[] = [];
+    const cursorD = () => disk(w.home).checkpoint?.bucketCursors.find((c) => c.sessionId === 'demo-d');
+    await passAt(w, 0);
+    seen.push(cursorD()!.cursor);
+    appendBucket(w, 'demo-d', BUCKET10, startLine('demo-d', '2026-10-15T10:07:00.000Z'));
+    await passAt(w, 1);
+    seen.push(cursorD()!.cursor);
+    writeFileSync(bucketFile(w, 'demo-d', BUCKET10), startLine('demo-d', '2026-10-15T10:04:00.000Z').slice(0, 20));
+    await passAt(w, 2);
+    seen.push(cursorD()!.cursor);
+    expect(cursorD()!.replaced).toBe(true);
+    writeFileSync(bucketFile(w, 'demo-d', BUCKET10), Array.from({ length: 6 }, (_, i) => startLine('demo-d', `2026-10-15T10:1${i}:00.000Z`)).join(''));
+    await passAt(w, 3);
+    seen.push(cursorD()!.cursor);
+    expect(cursorD()!.replaced, 'sticky').toBe(true);
+    for (let i = 1; i < seen.length; i++) expect(seen[i]!, `pass ${i}`).toBeGreaterThanOrEqual(seen[i - 1]!);
+  });
+});
+
+describe('how session-hours count toward spec §5.3\'s gate (coordinator 5443): measured from the code, no behaviour change', () => {
+  const hoursOf = (w: World) => { const h = w.watcher.currentDelegationHealth()!; return { measured: h.measuredSessionHours, unmeasured: h.unmeasuredSessionHours }; };
+
+  it('(a) a home with NO hook registered: ccd still made its session\'s spool directory, which holds no bucket, so the hour is MEASURED-EMPTY (in the denominator, as measured)', async () => {
+    const w = world();
+    makeOwner(w, 'demo-a');                                          // ccd makes the owner directory at spawn; no hook ever writes a bucket
+    setNow(NOW);
+    setCensus(w, { demo: [] }, { 'demo-a': measured() }, NOW);
+    await pass(w);
+    expect(intervalFor(w.home, 'demo-a'), 'measured, with no evidence: indistinguishable from a quiet session').toMatchObject({ state: 'measured', detail: null });
+    expect(disk(w.home).journalLines).toBe(0);
+    const cp = disk(w.home).checkpoint!;
+    expect(cp.observationIntervals.filter((r) => r.sessionId === 'demo-a').map((r) => r.state)).toEqual(['measured']);
+    expect(hoursOf(w).unmeasured, 'nothing about it is unmeasured').toBe(0);
+  });
+
+  it('(b) a session the lane never saw live: its spool is never read, it has no interval, and its hours are in NEITHER count (not in the denominator)', async () => {
+    const w = world();
+    writeBucket(w, 'demo-gone', BUCKET10, startLine('demo-gone'));      // born and gone while the lane was not running
+    writeBucket(w, 'demo-a', BUCKET10, startLine('demo-a'));
+    setNow(NOW);
+    setCensus(w, { demo: [] }, { 'demo-a': measured() }, NOW);
+    await pass(w, [sessionOf('demo-a')], [recordOf('demo-a'), recordOf('demo-gone')]);
+    expect(w.calls.listings, 'its owner directory is never listed').not.toContain('demo-gone');
+    expect(intervalsOf(w.home).some((r) => r.sessionId === 'demo-gone'), 'no interval at all').toBe(false);
+    expect(intervalFor(w.home, 'demo-a')).toMatchObject({ state: 'measured' });
   });
 });
