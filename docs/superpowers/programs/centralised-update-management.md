@@ -3473,6 +3473,18 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
     re-gates; the marker is never merged by hand. B2 does not wait for wave 15, which lands after #410, run 360
     and #435.
 
+- **2026-10-16 13:15 UTC: wave 16's fix round 1 is done, and run 484 waits at `awaiting-review` for run 360.**
+  - The wave-done (5478) puts PR #444 at `9c355b049`: `cd0d1d29e` fixes F3 (both D-5136 warnings now name the units
+    that are never verified, and `ccd/ccrc` stays at 24083 lines, every line in its place) and `9c355b049` fixes F4
+    (J6 kills and reaps in a `finally`). The worker reds each new wording and the old J6 by mutation, and restores.
+  - `suite: unrun`; every named file is green: deploy-verify 105, `ccrc-update`'s seven parts (506 titles), the sweep
+    window, Darwin helper, deliberate-stop and versions-warn files (109), and single-definition, typecheck-tests and
+    topology-clean (652). No D-number spent.
+  - The coordinator re-measured the branch: the tip is `9c355b049`, the two commits change four files, and it merges
+    cleanly onto `main` at `a6b2606c9`. The server accepted the advance to `awaiting-review`.
+  - **Unchanged order:** when run 360 lands, the landing mail; the worker merges `main`, re-gates and sends a fresh
+    wave-done; then one scoped review of F3, F4 and the merge; then the merge.
+
 ## Carried constraints
 
 From W1's whole-branch review (minors, not patched in W1) — each lands in the wave named:
