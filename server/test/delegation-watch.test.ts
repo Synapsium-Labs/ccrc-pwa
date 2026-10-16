@@ -2885,20 +2885,24 @@ describe('D-4658 (ruling R79): one durable application per pass, with per-bucket
     expect(cp.bucketCursors.find((c) => c.sessionId === 'demo-c')!.cursor).toBe(readFileSync(bucketFile(batched, 'demo-c', BUCKET10)).length);
   });
 
-  it('a failed application fails the WHOLE pass: nothing of it is durable, and the next pass re-reads every bucket to the same state', async () => {
+  it('R82 (c): a failure AFTER the first byte still fails the applier closed and stops the WHOLE pass; once recovered, the next pass re-reads every bucket to the same state', async () => {
     const reference = await run({});
     const w = fixture({});
-    vi.spyOn(console, 'warn').mockImplementation(() => {});
-    const real = DelegationDurability.prototype.applyAcceptedBatch;
-    const spy = vi.spyOn(DelegationDurability.prototype, 'applyAcceptedBatch').mockImplementationOnce(async () => { throw new Error('a fixture failure'); });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    // the checkpoint replacement fails once: the journal records were written (and fsynced) first, so this is after the first byte
+    vi.spyOn(DelegationDurability.prototype as never as { replaceCheckpoint: (b: Uint8Array) => Promise<void> }, 'replaceCheckpoint')
+      .mockImplementationOnce(async () => { throw new Error('EIO: a fixture fault at the checkpoint rename'); });
     await passAt(w, 0);
-    expect(disk(w.home).journalLines, 'nothing of the failed pass is durable').toBe(0);
-    spy.mockImplementation(function (this: DelegationDurability, b) { return real.call(this, b); });
-    await passAt(w, 1);                                                    // the next pass reads the same buckets from the same cursors
-    expect(disk(w.home).journalLines, "every staged record, applied by the re-read").toBe(7);
+    const durable = (await w.watcher.delegationApplier())!;
+    expect(durable.failure(), 'failed closed').not.toBeNull();
+    expect(disk(w.home).checkpoint?.bucketCursors ?? [], 'no bucket advanced: the whole pass stopped').toEqual([]);
+    expect(warn.mock.calls.some((c) => String(c[0]).includes('failed after it began writing'))).toBe(true);
+    await passAt(w, 6);                                                    // past the recovery interval: recovered, and every bucket re-read
+    expect(durable.failure()).toBeNull();
+    expect(disk(w.home).journalLines, "every staged record: the crash's own, replayed, and nothing twice").toBe(7);
     writeFileSync(bucketFile(w, 'demo-d', BUCKET10), startLine('demo-d', '2026-10-15T10:04:00.000Z').slice(0, 20));
     appendBucket(w, 'demo-c', BUCKET10, startLine('demo-c', '2026-10-15T10:06:00.000Z'));
-    await passAt(w, 2);
+    await passAt(w, 7);
     // the same records (their acceptance instants are the passes' own) and the same cursors as a run whose first pass did not fail
     const eventsOf = (home: string) => readFileSync(path.join(home, '.ccrc', DELEGATION_JOURNAL_FILE), 'utf8').split('\n').filter((l) => l !== '')
       .map((l) => (JSON.parse(l) as { entry: { event: { eventId: string } } }).entry.event.eventId);
@@ -2916,17 +2920,79 @@ describe('D-4658 (ruling R79): one durable application per pass, with per-bucket
     await pass(w);
     const closeAt = Date.parse(HOUR10) + DELEGATION_HOUR_MS + DELEGATION_HOUR_CLOSE_MARGIN_MS;
     expect(Date.parse(intervalFor(w.home, 'demo-a')!.recordedAt), 'recorded while the hour was open').toBeLessThan(closeAt);
-    const real = DelegationDurability.prototype.applyAcceptedBatch;
-    const spy = vi.spyOn(DelegationDurability.prototype, 'applyAcceptedBatch').mockImplementationOnce(async () => { throw new Error('a fixture failure'); });
+    vi.spyOn(DelegationDurability.prototype as never as { replaceCheckpoint: (b: Uint8Array) => Promise<void> }, 'replaceCheckpoint')
+      .mockImplementationOnce(async () => { throw new Error('EIO: a fixture fault at the checkpoint rename'); });
     setNow(closeAt + 60_000);
     setCensus(w, { demo: [] }, { 'demo-a': measured() }, closeAt + 60_000);
-    await pass(w);                                                         // the close write is staged, and the application fails
+    await pass(w);                                                         // the close write is staged, and the application fails closed
     expect(Date.parse(intervalFor(w.home, 'demo-a')!.recordedAt)).toBeLessThan(closeAt);
-    spy.mockImplementation(function (this: DelegationDurability, b) { return real.call(this, b); });
     setNow(closeAt + 60_000 + DELEGATION_SWEEP_MS);
     setCensus(w, { demo: [] }, { 'demo-a': measured() }, closeAt + 60_000 + DELEGATION_SWEEP_MS);
     await pass(w);
     expect(Date.parse(intervalFor(w.home, 'demo-a')!.recordedAt), 'the next pass made the close write: the hour was not settled').toBeGreaterThanOrEqual(closeAt);
+  });
+
+  /** R82: a REAL pre-write refusal for one owner's result: its cursor is handed to the real applier with an anchor past the cursor, which
+   *  the checkpoint's own `readCursor` refuses before anything is written (the applier stays ready). */
+  const poison = (owner: string) => {
+    const real = DelegationDurability.prototype.applyAcceptedBatch;
+    return vi.spyOn(DelegationDurability.prototype, 'applyAcceptedBatch').mockImplementation(function (this: DelegationDurability, batches) {
+      return real.call(this, batches.map((b) => (b.cursor !== null && b.cursor.sessionId === owner
+        ? { ...b, cursor: { ...b.cursor, anchor: { start: b.cursor.cursor + 1, sha256: 'a'.repeat(64) } } } : b)));
+    });
+  };
+  const threeOwners = (seams: Parameters<FleetWatcher['setDelegationSeams']>[0], withPoison: boolean): World => {
+    const w = world();
+    w.watcher.setDelegationSeams(seams);
+    writeBucket(w, 'demo-a', BUCKET10, startLine('demo-a', '2026-10-15T10:01:00.000Z'), startLine('demo-a', '2026-10-15T10:02:00.000Z'));
+    if (withPoison) writeBucket(w, 'demo-p', BUCKET10, startLine('demo-p', '2026-10-15T10:03:00.000Z'), startLine('demo-p', '2026-10-15T10:04:00.000Z'));
+    writeBucket(w, 'demo-c', BUCKET10, startLine('demo-c', '2026-10-15T10:05:00.000Z'), startLine('demo-c', '2026-10-15T10:06:00.000Z'));
+    return w;
+  };
+  const passOver = async (w: World, n: number, ids: readonly string[]): Promise<void> => {
+    setNow(at(n));
+    setCensus(w, { demo: [] }, Object.fromEntries(ids.map((o) => [o, measured()])), at(n));
+    await pass(w, ids.map((o) => sessionOf(o)));
+  };
+
+  it('R82 (a): a refused result among valid ones: the valid ones are durable in THAT pass, exactly as unbatched, and the refused one has its warn line, no cursor and no interval', async () => {
+    const reference = threeOwners({ unbatched: true }, false);
+    await passOver(reference, 0, ['demo-a', 'demo-c']);
+    vi.restoreAllMocks();
+    const w = threeOwners({}, true);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    poison('demo-p');
+    await passOver(w, 0, ['demo-a', 'demo-c', 'demo-p']);
+    expect((await w.watcher.delegationApplier())!.failure(), 'a refusal never fails the applier').toBeNull();
+    const cp = disk(w.home).checkpoint!;
+    expect(cp.bucketCursors.map((c) => c.sessionId).sort()).toEqual(['demo-a', 'demo-c']);
+    expect(cp.observationIntervals.some((r) => r.sessionId === 'demo-p'), 'no interval of its own').toBe(false);
+    expect(readFileSync(path.join(w.ccrcDir, DELEGATION_JOURNAL_FILE), 'utf8')).toBe(readFileSync(path.join(reference.ccrcDir, DELEGATION_JOURNAL_FILE), 'utf8'));
+    expect(canonicalDelegationJson({ ...cp, revision: 0 })).toBe(canonicalDelegationJson({ ...disk(reference.home).checkpoint!, revision: 0 }));
+    expect(canonicalDelegationJson(w.coord.readDelegationProjection())).toBe(canonicalDelegationJson(reference.coord.readDelegationProjection()));
+    const lines = warn.mock.calls.map((c) => String(c[0])).filter((m) => m.includes('refused before anything was written'));
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toMatch(/^ccrc-server: delegation bucket demo-p\/2026101510 was refused before anything was written: /);
+  });
+
+  it('R82 (b): a STANDING refusal across several passes: every other bucket keeps advancing, and the refused one costs one small application a pass, never a bisection', async () => {
+    const w = threeOwners({}, true);
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const calls = poison('demo-p');
+    const ids = ['demo-a', 'demo-c', 'demo-p'];
+    const cursorA = (): number => disk(w.home).checkpoint!.bucketCursors.find((c) => c.sessionId === 'demo-a')!.cursor;
+    await passOver(w, 0, ids);
+    const seen: number[] = [cursorA()];
+    for (let n = 1; n <= 3; n++) {
+      appendBucket(w, 'demo-a', BUCKET10, startLine('demo-a', `2026-10-15T10:1${n}:00.000Z`));
+      appendBucket(w, 'demo-p', BUCKET10, startLine('demo-p', `2026-10-15T10:1${n}:30.000Z`));
+      const before = calls.mock.calls.length;
+      await passOver(w, n, ids);
+      expect(calls.mock.calls.length - before, `pass ${n}: the standing refusal alone, then the rest as one`).toBe(2);
+      seen.push(cursorA());
+      expect(seen[n]!, `pass ${n}: demo-a advanced`).toBeGreaterThan(seen[n - 1]!);
+    }
+    expect(disk(w.home).checkpoint!.bucketCursors.some((c) => c.sessionId === 'demo-p')).toBe(false);
   });
 
   it('cursors only move forward across batched passes, and a replaced bucket stays replaced when it grows again', async () => {

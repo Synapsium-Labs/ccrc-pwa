@@ -8490,7 +8490,9 @@ function renderAskBrief(askId: number, childId: string, question: string, option
 //
 //   ONE DURABLE APPLICATION PER PASS (D-4658, ruling R79). Every application rewrites the whole checkpoint and re-projects it, which is
 //   linear in all-time activities, so the bucket results of a pass are STAGED and applied together (`stage`, `flushPass`): one journal
-//   append run, one checkpoint replacement, one projection, in O5's order. Lane memory only (the pass's own list); no file.
+//   append run, one checkpoint replacement, one projection, in O5's order. Lane memory only (the pass's own list); no file. ONE REFUSED
+//   BUCKET NEVER STOPS THE PASS (R82): a refusal before the first byte is isolated by bisection and costs that bucket alone, exactly as
+//   unbatched; a failure after the first byte still fails the applier closed and stops the pass (`flushPass`).
 //
 //   NO-OP SKIP (hand-off 2). A bucket result that accepts nothing, leaves the cursor row as it was and would not change the hour's
 //   interval stages NOTHING, and a pass that staged nothing makes no durable call. The one exception is the CLOSE WRITE: once an hour
@@ -8616,6 +8618,8 @@ interface LaneEvidenceIndex {
 }
 /** One owner to observe in a pass. `incarnation: null` is a parent whose incarnation could not be measured (`reason` says why). */
 interface LaneOwner { id: string; incarnation: string | null; reason: string; live: boolean }
+/** One staged bucket result (D-4658, R82). */
+interface LaneStaged { batch: DelegationDurableBatch; key: string; label: string }
 interface LanePass {
   now: number;
   signal: AbortSignal;
@@ -8623,8 +8627,9 @@ interface LanePass {
   sessions: readonly LaneSession[];
   records: readonly LaneRecord[];
   capability: DelegationHealthInput['capabilityState'];
-  /** D-4658: every bucket's durable batch this pass staged, applied together by `flushPass`. */
-  pending: DelegationDurableBatch[];
+  /** D-4658: every bucket's durable batch this pass staged, applied together by `flushPass`, each with its hour's settle key (the
+   *  bucket's identity for R82's isolation) and a label for its warn line. */
+  pending: LaneStaged[];
   /** Hours to remember as settled once the pass's application is durable (never before: a failed one leaves them to be read again). */
   settle: string[];
 }
@@ -8715,6 +8720,10 @@ class DelegationLane {
   private registryListed = true;
   /** Hours already read after they closed, this process: not read again. Memory only; a restart reads each once more. */
   private readonly settled = new Set<string>();
+  /** R82: the buckets (by settle key) whose result the applier refused before writing anything: applied alone on later passes, so a
+   *  standing refusal costs one small application a pass. Lane memory, this process only (no file, no SQLite); a bucket leaves it when
+   *  its result applies. Bounded by the buckets the lane reads. */
+  private readonly refusedBuckets = new Set<string>();
   private passes = 0;
   private skipped = 0;
   // evidence for correlation
@@ -9314,31 +9323,74 @@ class DelegationLane {
    * (the buckets are distinct rows, and the journal dedupes events by `eventId`), so nothing a bucket decides reads another's staged
    * batch. Nothing staged is visible, or noted as evidence, before the application is durable (O1).
    */
-  private async stage(pass: LanePass, durable: DelegationDurability, batch: DelegationDurableBatch): Promise<DeepReadonly<DelegationRecoveryState>> {
+  private async stage(
+    pass: LanePass, durable: DelegationDurability, batch: DelegationDurableBatch, key: string, label: string,
+  ): Promise<DeepReadonly<DelegationRecoveryState>> {
     if (this.seams.unbatched === true) {
       const out = await durable.applyAccepted(batch);
       for (const r of out.appended) if (r.entry.kind === 'evidence-accepted') this.noteEvidence(r.journalId, r.entry.event);
       return out.state;
     }
-    pass.pending.push(batch);
+    pass.pending.push({ batch, key, label });
     return durable.state();
   }
 
-  /** The pass's one durable application. A failure fails the whole of it: nothing of it is visible, no hour is settled, and the next
-   *  pass reads every bucket again from the durable cursors (its events dedupe against what the journal already holds). */
+  /**
+   * The pass's durable application (D-4658), with ONE REFUSED BUCKET NEVER STOPPING THE PASS (R82). Two failures are told apart by the
+   * applier's own state, never by the error's words:
+   *   - a PRE-WRITE REFUSAL: the application threw and the applier is NOT failed (`failure()` null). Nothing was written: `acceptLocked`
+   *     and `commitLocked` validate, plan, fold and build everything before the first byte. The staged list is then BISECTED, so every
+   *     other result becomes durable in this same pass, and each refusing result is refused exactly as an unbatched application would
+   *     refuse it: its own warn line, no cursor or interval, no settle key. A bucket refused once is remembered in lane memory
+   *     (`refusedBuckets`, this process only: no file, no SQLite) and is applied ALONE, first, on later passes, so a standing refusal
+   *     costs one small failed application a pass, never a bisection, and the rest go as one batch. It is forgotten when it applies.
+   *   - a FAILURE AFTER THE FIRST BYTE (or the applier's own state disagreeing with its journal): `commitLocked` has failed the applier
+   *     closed. Unchanged: the whole pass stops, nothing is settled, and the recovery that follows replays what the journal holds.
+   * WHAT CAN PRODUCE A PRE-WRITE REFUSAL TODAY: (1) the checkpoint's own readers, `readCursor` and `readInterval`, re-checking the shape
+   * of a result's cursor and interval (strings, integers, an anchor that starts at or before the cursor, instants, the interval-state
+   * words), which ingestion builds from the owner id, the bucket name, the offsets and anchor it measured and its detail text; (2) the
+   * journal's `validateEntry` over each accepted event's envelope, separate code from ingestion's line parser; (3) the fold
+   * (`foldRecord`'s chain and identity-mapping refusals), `mergeInterval` and `build()`'s checkpoint invariants and encoding. Ingestion
+   * builds every result inside those shapes, so no spool content is known to reach one; the isolation exists because the applier
+   * re-validates independently, and a disagreement (a future change on either side) must cost one bucket, not the fleet's evidence.
+   */
   private async flushPass(pass: LanePass, durable: DelegationDurability): Promise<void> {
-    const batches = pass.pending.splice(0);
-    if (batches.length > 0) {
-      try {
-        const out = await durable.applyAcceptedBatch(batches);
-        for (const r of out.appended) if (r.entry.kind === 'evidence-accepted') this.noteEvidence(r.journalId, r.entry.event);
-      } catch (err) {
-        console.warn(`ccrc-server: the delegation pass's durable application of ${batches.length} bucket result(s) failed; the next pass reads them again: ${err instanceof Error ? err.message : String(err)}`);
-        pass.settle.length = 0;
+    const staged = pass.pending.splice(0);
+    const refused = new Set<string>();
+    try {
+      // a standing refusal goes first, alone (it may apply now, and then leaves the set); every other result goes as one application
+      const standing = new Set(staged.filter((x) => this.refusedBuckets.has(x.key)).map((x) => x.key));
+      for (const e of staged.filter((x) => standing.has(x.key))) await this.applyIsolating(durable, [e], refused);
+      await this.applyIsolating(durable, staged.filter((x) => !standing.has(x.key)), refused);
+    } catch (err) {
+      console.warn(`ccrc-server: the delegation pass's durable application of ${staged.length} bucket result(s) failed after it began writing; the applier recovers and the next pass reads them again: ${err instanceof Error ? err.message : String(err)}`);
+      pass.settle.length = 0;
+      return;
+    }
+    for (const k of pass.settle.splice(0)) if (!refused.has(k)) this.settled.add(k);
+  }
+
+  /** R82: applies `entries` as one application; on a PRE-WRITE refusal, bisects until each refusing result stands alone, and refuses it
+   *  (its warn line, remembered in `refusedBuckets`); a failure after the first byte (the applier failed) is rethrown, whole. */
+  private async applyIsolating(durable: DelegationDurability, entries: readonly LaneStaged[], refused: Set<string>): Promise<void> {
+    if (entries.length === 0) return;
+    try {
+      const out = await durable.applyAcceptedBatch(entries.map((e) => e.batch));
+      for (const r of out.appended) if (r.entry.kind === 'evidence-accepted') this.noteEvidence(r.journalId, r.entry.event);
+      for (const e of entries) this.refusedBuckets.delete(e.key);
+    } catch (err) {
+      if (durable.failure() !== null) throw err;                         // after the first byte: fail closed, the whole pass stops
+      if (entries.length === 1) {
+        const [only] = entries;
+        refused.add(only!.key);
+        this.refusedBuckets.add(only!.key);
+        console.warn(`ccrc-server: delegation bucket ${only!.label} was refused before anything was written: ${err instanceof Error ? err.message : String(err)}`);
         return;
       }
+      const mid = entries.length >> 1;
+      await this.applyIsolating(durable, entries.slice(0, mid), refused);
+      await this.applyIsolating(durable, entries.slice(mid), refused);
     }
-    for (const k of pass.settle.splice(0)) this.settled.add(k);
   }
 
   /** An hour recorded as a gap without a bucket to read: written once. */
@@ -9350,7 +9402,7 @@ class DelegationLane {
     await this.stage(pass, durable, {
       accepted: [], cursor: null,
       interval: { sessionId: id, parentIncarnation: inc, utcHour: hour, state: 'unmeasured', detail, recordedAt: formatDelegationInstant(Date.now()) },
-    });
+    }, this.settledKey(id, inc, hourMs), `${id}/${laneBucketOf(hourMs)}`);
   }
 
   private async observeHour(
@@ -9385,7 +9437,9 @@ class DelegationLane {
   ): DelegationBucketDurability {
     const hour = formatDelegationInstant(hourMs);
     // Task 8's own adapter maps the result to its batch (and refuses an inapplicable one); the batch is STAGED for the pass (D-4658).
-    const adapter = delegationBucketDurabilityOf({ applyAccepted: async (batch) => ({ state: await this.stage(pass, durable, batch) }) }, () => Date.now());
+    const key = this.settledKey(id, inc, hourMs);
+    const label = `${id}/${bucket}`;
+    const adapter = delegationBucketDurabilityOf({ applyAccepted: async (batch) => ({ state: await this.stage(pass, durable, batch, key, label) }) }, () => Date.now());
     return {
       applyBucketResult: async (result: DelegationBucketResult) => {
         if (!result.applicable) return adapter.applyBucketResult(result);   // refused by name: a result that is not for a bucket applies nothing
@@ -9406,7 +9460,7 @@ class DelegationLane {
           return this.stage(pass, durable, {
             accepted: [], cursor: null,
             interval: { sessionId: id, parentIncarnation: inc, utcHour: hour, state: result.interval, detail: result.detail, recordedAt: formatDelegationInstant(Date.now()) },
-          });
+          }, key, label);
         }
         return adapter.applyBucketResult(result);
       },

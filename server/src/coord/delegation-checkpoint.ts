@@ -1740,8 +1740,11 @@ export class DelegationDurability {
    * nothing changes: each cursor goes through `setCursor` (so `replaced` stays sticky) and each interval through `mergeInterval`, in the
    * order given, exactly as one `applyAccepted` per batch would leave them; events dedupe by `eventId` across the whole application, as
    * across applications. Every member is validated BEFORE the first byte, and a failure anywhere fails the WHOLE application: nothing of
-   * it is visible, and the caller re-reads every bucket on its next pass (the eventIds dedupe what the journal already holds). A crash
-   * after k records leaves them past the checkpoint, and recovery replays them all, as it replays one.
+   * it is visible. The two failures differ in what they leave (R82): a REFUSAL before the first byte (a member's cursor or interval, an
+   * event's envelope, the fold, the build) writes nothing and leaves the applier ready (`failure()` null), so the caller may apply the
+   * other members without it; a failure AFTER the first byte fails the applier closed, and the caller re-reads every bucket once it has
+   * recovered (the eventIds dedupe what the journal already holds). A crash after k records leaves them past the checkpoint, and
+   * recovery replays them all, as it replays one.
    */
   applyAcceptedBatch(batches: readonly DelegationDurableBatch[]): Promise<DelegationApplyOutcome> {
     return this.enqueue(async () => this.acceptLocked(batches));
