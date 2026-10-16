@@ -3461,6 +3461,18 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
   - **The order from here:** the worker fixes F3 and F4 and pushes. When run 360 lands, it merges `main`, re-gates and
     sends a fresh wave-done. One scoped review then covers F3, F4 and the merge, and only then does it merge.
 
+- **2026-10-16 13:05 UTC: B2's repair is planned by its owner, and wave 15 consents to its `ccd/ccd` edit.**
+  - The native Docs reader programme accepted the repair (its reply on run 413). It runs through its own
+    plan, wave, held-out review and merge, with the CI it needs, and no Darwin skip. It does not assume that a
+    reap-before-signal shape is enough.
+  - The repair edits `ccd/ccd` inside `_docs_py`, the Docs helper (`_stop` at `ccd/ccd:36730` on `main`). Claim 1478,
+    wave 15's, holds that file. The coordinator gave wave 15's consent (mail 5475), under the re-ruled Reading 7:
+    wave 15's unlanded hunks are line 2 (the generated marker) and lines 866, 881 and 882 (`_svc_enable`), so the
+    regions are disjoint, and the claim sets only the landing order.
+  - **Landing order:** whichever merges first goes first. The other merges `main`, re-runs `ccrc restamp`, and
+    re-gates; the marker is never merged by hand. B2 does not wait for wave 15, which lands after #410, run 360
+    and #435.
+
 ## Carried constraints
 
 From W1's whole-branch review (minors, not patched in W1) — each lands in the wave named:
