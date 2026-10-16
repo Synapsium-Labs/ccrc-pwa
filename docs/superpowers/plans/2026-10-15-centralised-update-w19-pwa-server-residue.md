@@ -1624,8 +1624,8 @@ The coordinator ruled every reading as recommended, except where a line below sa
 - **Readings 11, 14 and 16:** not built here. Each becomes a residue item in the programme ledger: focus when the
   whole halt banner unmounts (11), the heir-guard case's load timeout (14), and a poll-driven disable of a focused
   Install or Update (16).
-- **D-5124:** confirmed inside the issued block. The worker's reserve is D-5125 to D-5129. The coordinator holds D-5130
-  to D-5134.
+- **D-5124:** confirmed inside the issued block. The worker's reserve is numbers 5125 to 5129, and the coordinator holds
+  5130 to 5134, both written bare until defined.
 - **The base moved.** This plan was drafted at `518789ad0`. `main` is now `0b3ff2f62`: #384 changed
   `pwa/src/screens/SettingsScreen.tsx` (+12), `pwa/test/settings-screen.test.tsx`, `pwa/test/markup-census.test.ts`
   (+16), `server/src/coord/store.ts` (+115), `server/src/update/inventory.ts` (+70, in `sweepOwn` and `sweepFleet`'s
