@@ -35,7 +35,7 @@
 // The only real binaries any fixture reaches are `bash` (spawned by absolute
 // path), the real `node` behind the version stub, and `timeout` (symlinked in
 // where a test wants the timeout path exercised).
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, beforeAll } from 'vitest';
 import { spawnSync, execFileSync } from 'node:child_process';
 import {
   writeFileSync, readFileSync, mkdirSync, symlinkSync, rmSync, chmodSync, existsSync, cpSync,
@@ -43,9 +43,9 @@ import {
 } from 'node:fs';
 import path, { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { mkTmp } from './tmpHelpers.js';
+import { mkTmp, removeTmpFixturesEachTest } from './tmpHelpers.js';
 import { ghContainedEnv, ghPoisonAt, plantPoolEpoch, seedAccountsSh } from './ccdWsHelpers.js';
-import { plantAuthHelper, plantAuthModule, fixtureSecretLine } from './authFixtures.js';
+import { plantAuthHelper, plantAuthModule, fixtureSecretLine, compiledSecretJs } from './authFixtures.js';
 // One home for the scratch-slug vocabulary (D-2375) — see scratchSlugs.ts
 // for the rule, and for why the /var/tmp control needs both spellings.
 import { SCRATCH_SLUGS, PERSISTENT_SLUGS } from './scratchSlugs.js';
@@ -58,6 +58,7 @@ import {
 } from './docsIndexFixtures.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
+
 const REPO = path.resolve(here, '..', '..');
 const CCRC_SRC = join(REPO, 'ccd', 'ccrc');
 const CHECKS_SRC = join(REPO, 'ccd', 'ccrc-doctor-checks');
@@ -81,6 +82,23 @@ const realPath = (name: string): string => {
 };
 
 interface Result { code: number; stdout: string; stderr: string }
+
+// ── fixture lifetime (R100, review 518's S1) ──────────────────────────────
+
+// Each case's homes go when the case ends, not in the file's one end-of-file sweep. That sweep (tmpHelpers' `afterAll`)
+// overran vitest's 20 s hook timeout when this file ran alone at the delegation wave's tip, after every one of its 1,036 tests
+// had passed: the class R20a cured for `ccrc-update.test.ts`. The call sits here, before the file's own root `afterEach` (the
+// codex lanes' process kill), because vitest runs after-hooks in reverse order of registration: that kill still sees its home.
+removeTmpFixturesEachTest();
+// ONE SHARED FIXTURE BREAKS UNDER THAT, and is built here instead. `authFixtures`' compiled reader (`compiledSecretJs`) is built
+// once per file into an `mkTmp` directory by whichever case first plants an auth module, and every later case copies from the
+// path it cached. Built inside a case, the directory is that case's and is gone when the case ends: the next copy fails with
+// ENOENT (measured: eleven of the twelve R98 rows). A `beforeAll` runs before the first case's mark, so the directory is left for
+// the end-of-file sweep. A failed build is not cached, so it is left to the case that needs it, which fails with the compiler's
+// own message, not every case in the file.
+beforeAll(() => {
+  try { compiledSecretJs(); } catch { /* the first case that plants an auth module builds it again and reports why it could not */ }
+}, 120_000);
 
 // ── fixture construction ──────────────────────────────────────────────────
 
@@ -14904,6 +14922,49 @@ describe('ccrc doctor: delegation-hooks', () => {
       // …and it names no raw unit restart and does not claim that the update sweep makes the directory.
       expect(r.stdout).not.toMatch(/systemctl --user restart|supervisor sweep/);
       expect(r.code).toBe(2);
+    });
+
+    // R98 (review 518's F5): `systemctl is-active` prints one word per unit, and four of them mean the unit is RUNNING in
+    // the sense that matters here, a supervisor that is coming up, going down or being reloaded and so about to spawn or
+    // respawn a session that records nothing: `activating`, `reloading`, `refreshing`, `deactivating`. They reach the same
+    // WARN (no directory yet) and FAIL (an unusable one) as `active` does; `inactive` and `failed` owe nothing. launchd answers
+    // active, inactive or failed only, so these rows are systemd's own.
+    const RUNNING_WORDS = ['active', 'activating', 'reloading', 'refreshing', 'deactivating'] as const;
+    /** A registry row whose unit the manager answers `word` for. */
+    const plantAs = (home: string, id: string, word: string): void => {
+      plantSession(home, id, { live: false, recorded: true });
+      writeFileSync(join(home, `fixture-unit-claude-session@${id}.service`), `${word}\n`);
+    };
+
+    itLinux.each(RUNNING_WORDS)('a session whose unit is %s, with no owner directory, is the same WARN (R98)', (word) => {
+      const home = dhBox(`ccrc-doctor-dh-spool-word-${word}-`);
+      plantAs(home, 'lane-a-demo', word);
+      const r = runDh(home);
+      expect(verdicts(r)).toEqual([
+        'WARN delegation-hooks: 1 running session has no delegation spool directory yet, so it is not observed until its next spawn (a swap or a respawn): lane-a-demo']);
+      expect(remedyOf(r, /^WARN /)).toBe(REMEDY_WAIT('lane-a-demo'));
+      expect(r.code).toBe(2);
+    });
+
+    itLinux.each(RUNNING_WORDS)('a session whose unit is %s, with an owner directory that is a symlink, is the same FAIL (R98)', (word) => {
+      const home = dhBox(`ccrc-doctor-dh-spool-word-link-${word}-`);
+      plantAs(home, 'lane-a-demo', word);
+      const real = join(home, 'elsewhere');
+      mkdirSync(real);
+      mkdirSync(join(home, '.cc-sessions', 'delegation', 'spool'), { recursive: true });
+      symlinkSync(real, join(home, '.cc-sessions', 'delegation', 'spool', 'lane-a-demo'));
+      const r = runDh(home);
+      expect(verdicts(r)).toEqual([
+        'FAIL delegation-hooks: the delegation spool could not be used, so it is not known to be absent: lane-a-demo: owner directory is a symlink']);
+      expect(r.code).toBe(1);
+    });
+
+    itLinux.each(['inactive', 'failed'] as const)('a session whose unit is %s owes nothing: no directory is no finding (R98: the words are a closed set, not a wildcard)', (word) => {
+      const home = dhBox(`ccrc-doctor-dh-spool-word-idle-${word}-`);
+      plantAs(home, 'lane-a-demo', word);
+      const r = runDh(home);
+      expect(verdicts(r)).toEqual([expect.stringMatching(/^PASS delegation-hooks: .*\(1 registry rows read, 0 with a directory\)$/)]);
+      expect(r.code).toBe(0);
     });
 
     it('a FAIL is never hidden behind that WARN, and the WARN never hides the FAIL: an unreadable directory beside a missing one', () => {
