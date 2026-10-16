@@ -22,6 +22,7 @@ import { FleetWatcher, CHILD_RECLAIM_STALL_MS, CHILD_RECLAIM_SWEEP_MS } from '..
 import { loadConfig } from '../src/config.js';
 import { CoordStore } from '../src/coord/store.js';
 import { openCoordDb } from '../src/coord/db.js';
+import { collectLaneJournalAt, defaultCollectLaneJournalPath } from '../src/coord/collectLaneJournal.js';
 import { RECLAIM_PAUSE_MARKER } from '../src/coord/rundefs.js';
 import { COLLECT_FEED_TITLE, COLLECT_LANE_LIVE_MARKER } from '../src/collectLane.js';
 import { NotifyLog } from '../src/notifylog.js';
@@ -31,6 +32,7 @@ import { COLLECT_BOX_LABELS, type ChildReclaimAttention, type ChildReclaimCollec
 import { seedRoster, testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 import { FULL_CAPS } from './collectTempRootFixture.js';
+import { FleetIdentityCell } from '../src/fleetidentity.js';
 
 export type CollectVerb = 'audit' | 'collect';
 export interface CcdAnswer { readonly code: number; readonly stdout: string; readonly stderr?: string }
@@ -173,8 +175,16 @@ export const collectRig = async (opts: CollectRigOpts = {}) => {
   };
   const fleetState = { connected: true, downSince: null, rosterFp: null, build: null, ccdVerbs: [...FULL_CAPS] };
   let visible: (id: string) => boolean = () => false;
-  const deps = { ...base, cfg, io, coord, notifyLog, fleetState, presence: { isVisible: (id: string) => visible(id) },
-    monotonicMs: () => mono };
+  // THE SWITCH'S JOURNAL (path-identity spec 2026-10-12 §5.2), at `cfg.ccrcDir`, as `index.ts` builds the one journal.
+  // It is absent until a transition, so the store's seed row and it are the bootstrap, and the legacy marker arms the
+  // lane as it did. A restart (`opts.home`) builds it over the same file.
+  const journal = collectLaneJournalAt(defaultCollectLaneJournalPath(cfg.ccrcDir));
+  // The connection-bound fleet identity (path-identity spec 2026-10-12 §5.2): a REAL cell, epoch 0 and unmeasured, as a
+  // watcher built with no fleet link reads `NO_FLEET_IDENTITY`, until a case measures a node or reconnects.
+  const identity = new FleetIdentityCell();
+  const deps = { ...base, fleetIdentity: identity, cfg, io, coord, notifyLog, fleetState,
+    presence: { isVisible: (id: string) => visible(id) },
+    monotonicMs: () => mono, collectLane: { journal, bootNonce: 'test' } };
   if (opts.armed === true) writeFileSync(path.join(reg, COLLECT_LANE_LIVE_MARKER), '');
   const watcher = new FleetWatcher(deps as never, new Bus(), 10_000);
   const startMono = mono;
@@ -274,10 +284,28 @@ export const collectRig = async (opts: CollectRigOpts = {}) => {
   const boxWide = (items: readonly ChildReclaimAttention[]): ChildReclaimCollectAttention[] =>
     items.filter((a): a is ChildReclaimCollectAttention => a.kind === 'collect' && LABELS.has(a.sessionId));
   return {
-    home, reg, cfg, coord, notifyLog, watcher, mintingRun, startMono, fleetState, calls, onCall, scripts, answers,
+    home, reg, cfg, coord, notifyLog, watcher, mintingRun, startMono, fleetState, calls, onCall, scripts, answers, journal,
     now: (): number => clock, mono: (): number => mono, names, witness, unwitness, touch, remove, pass, settled, next, advance,
     pastHoldOff, passesUntil, hold, holdGather, holdListing, occupy, goLive, audits, collects, feed, wouldCollects, attention,
     boxWide,
+    /** The connection-bound fleet identity the watcher reads (path-identity spec 2026-10-12 §5.2): epoch 0 and
+     *  unmeasured until a case measures a node or reconnects. A TICK's inventory sweep publishes this box's own node into
+     *  it (local mode), so a case that measures a node never ticks. */
+    identity,
+    /** The lane's generation journal: the adapter the watcher's `collectLane` was built with, under the fixture HOME. It is
+     *  the SAME object as the rig's `journal` (Task 7), named here for `collect-switch-lane.test.ts`; never a second journal. */
+    laneJournal: deps.collectLane.journal,
+    /** The current connection measured `nodeId` directly, now (an inventory completion under the current epoch). */
+    knowNode: (nodeId: string): void => {
+      identity.publish(identity.epochNow(), { kind: 'known', nodeId, measuredAt: clock });
+    },
+    /** A reconnect: the epoch moves, and no node is known until a case measures one again. Answers the new epoch. */
+    bumpEpoch: (): number => identity.invalidate('link-down'),
+    /** The operator's Settings writes through the store's one writer: Live expecting the row and journal read just
+     *  before (the route's expectation), Off with none. Each answers the store's `CollectLaneWrite`. */
+    setLive: (nodeId: string) => coord.setCollectLane({ kind: 'live', fleetNodeId: nodeId, expected: coord.collectLaneRow(),
+      expectedJournal: deps.collectLane.journal.read() }, clock, deps.collectLane.journal),
+    setOff: () => coord.setCollectLane({ kind: 'off' }, clock, deps.collectLane.journal),
     gatherReached: (): number => gatherReached,
     /** How many listings of the registry itself have begun: one per pass's gather, and one per act job's step 2 and
      *  step 5. Counted as each BEGINS, so a job that started at once is counted before the pass that queued it returns. */

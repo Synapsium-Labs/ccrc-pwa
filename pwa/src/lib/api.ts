@@ -2,7 +2,7 @@
 // WebSocket streams; every WRITE goes through here. Each function throws
 // ApiError { status, body } on non-2xx — callers branch on status/body
 // (e.g. 409 { error: 'draft-present', draft } from prompt).
-import type { AccountsResponse, AckAnswer, ApplyUpdateBody, AutoMode, CatalogueState, CatchUp, ClaimSummary, CoordCaps, CoordCapsView, FleetHealth, FleetSession, IntentWriteAnswer, LifecycleQueryResult, LoginRequest, MoveRequestAnswer, MoveSkipWhy, NotifyEvent, NotifyMode, PaneHistoryReply, PasskeyAssertFinish, PasskeyAssertStart, PasskeyListResponse, PasskeyRegisterFinish, PasskeyRegisterStart, ProjectPoolWire, ProjectRow, PrView, ReapResult, RollbackUpdateBody, RouteField, RouteFields, RunSummary, SlashCommand, StagedClip, StallWatchRequest, StallWatchView, UpdateChannel, UpdateRouteError, UpdatesView, WsAudit } from '../../../shared/api';
+import type { AccountsResponse, AckAnswer, ApplyUpdateBody, AutoMode, CatalogueState, CatchUp, ClaimSummary, CollectLaneRequest, CollectLaneView, CoordCaps, CoordCapsView, FleetHealth, FleetSession, IntentWriteAnswer, LifecycleQueryResult, LoginRequest, MoveRequestAnswer, MoveSkipWhy, NotifyEvent, NotifyMode, PaneHistoryReply, PasskeyAssertFinish, PasskeyAssertStart, PasskeyListResponse, PasskeyRegisterFinish, PasskeyRegisterStart, ProjectPoolWire, ProjectRow, PrView, ReapResult, RollbackUpdateBody, RouteField, RouteFields, RunSummary, SlashCommand, StagedClip, StallWatchRequest, StallWatchView, UpdateChannel, UpdateRouteError, UpdatesView, WsAudit } from '../../../shared/api';
 import { raiseAuthLostFrom } from './auth';
 import { ARCHIVE_REFUSALS, isArchiveRefusal, type ArchiveAnswer, type ArchiveBody, type ArchiveRefusal } from '../../../shared/api';
 import { isNodeRole } from '../../../shared/node-role';
@@ -1217,6 +1217,23 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
      *  read" may well have stored the value, and is not "the request never happened". */
     setStallWatch: (body: StallWatchRequest) =>
       postJsonOr<StallWatchView | 'unreadable'>('/api/coord/stall-watch', 'unreadable', body),
+    /** `GET /api/coord/collect-lane` (path-identity spec 2026-10-12 §5.6, §5.7): the Settings page's Temp root
+     *  collector section reads it through `useCollectLaneView`, whose `asCollectLaneView` is the wire guard, so the
+     *  type here is what the server promises, not what arrived. `getJson`, as `stallWatch` is: a read changes
+     *  nothing, so its failure is only a failure, which the hook classifies (404 and 501 through
+     *  `settingsReadFailure`, a 503 `state-unmeasurable` as its own kind). Session-gated when armed, open dark; no
+     *  box token. */
+    collectLane: () => getJson<CollectLaneView>('/api/coord/collect-lane'),
+    /** `POST /api/coord/collect-lane`: `{choice}`, plus `confirm` only as the key a 409 `confirm-required` or
+     *  `confirm-stale` answered with. The server decides the confirm, so a 409 rejects with `ApiError` like every
+     *  non-2xx, and the section reads its body through `collectLanePostRefusal`. Session-gated when armed, open dark,
+     *  with `live` refused while sign-in is dark; no box token.
+     *
+     *  `postJsonOr`, not `postJson`, for `setCoordCaps`' reason, stated in `postJsonOr`'s own docstring: after a
+     *  write, "the answer could not be read" may well have stored the choice, and is not "the request never
+     *  happened". */
+    setCollectLane: (body: CollectLaneRequest) =>
+      postJsonOr<CollectLaneView | 'unreadable'>('/api/coord/collect-lane', 'unreadable', body),
     commands: (id: string) =>
       getJson<{ builtins: SlashCommand[]; skills: SlashCommand[] }>(`${sid(id)}/commands`),
     upload: async (id: string, file: File): Promise<StagedClip> => {
