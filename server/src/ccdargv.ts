@@ -454,7 +454,7 @@ export const CCD_ARGV = {
    *  `CollectToken` (`shared/api.ts`, spec §5.10), which only the collect audit's reader casts to, so a string from
    *  anywhere else does not compile here. The confirmation token LEADS (`['ws-collect','--expect']` is the grant); the
    *  dec trails, and ccd strips it before it binds a positional. Its ONE composer is the collector's executor
-   *  (`coord/collectTempRoot.ts`), behind `COLLECT_CAP`, armed only by `$REG/collect-lane-live`;
+   *  (`coord/collectTempRoot.ts`), behind `COLLECT_CAP`, armed by the switch (path-identity spec 2026-10-12 §5.2);
    *  `ws-collect-wiring.test.ts` pins that no other server source composes it. */
   wsCollect: (token: CollectToken, id: string, dec: ActorFlags | null) =>
     argv(['ws-collect', '--expect', token, '--session', id, ...decFlags(dec)]),
@@ -824,16 +824,24 @@ export const ROUTE_APPLY_CAP = 'route-apply-v1';
  *  the other two spellings, and that test's `toContain` assertion is what keeps
  *  THIS one equal to them (`capsupported.test.ts` scans for the "once" half).
  *
- *  READ IT WITH `capSupported`, NEVER `verbSupported`, wherever wave 3 gates the
- *  un-pin. `verbSupported` PERMITS on no evidence ("an absent list must never
- *  grey out the fleet") — the right default for verbs that have always existed
- *  and the wrong one for a verb that never did: it would send `ccd win-size` to
+ *  NOTHING CALLS `ccd win-size` TODAY. The drawer wave that was to gate the
+ *  un-pin on this token was superseded unbuilt (spec 2026-10-14, D-5013): the
+ *  drawer now attaches a client the window's own size, so no drawer needs the
+ *  window moved, and the sizer that spec's stage 2 plans resizes through the
+ *  server's granted `resize-window`, not through this verb. The rule below
+ *  stands for any caller that ever does call it.
+ *
+ *  READ IT WITH `capSupported`, NEVER `verbSupported`, wherever a caller gates
+ *  `ccd win-size` on it. `verbSupported` PERMITS on no evidence ("an absent
+ *  list must never grey out the fleet") — the right default for verbs that
+ *  have always existed and the wrong one for a verb that never did: it would
+ *  send `ccd win-size` to
  *  an agent that grants no such prefix, and, worse, would treat a box whose
  *  readers have NOT learned to stand down as though they had. `capSupported`
  *  refuses on no evidence, so an un-upgraded agent simply leaves the window
  *  pinned: wave 1 behaviour, no fallback path, no second mechanism (spec §6.1).
  *  This is a note on the token, not a wrapper function — the gate belongs at
- *  wave 3's own seam, where its mutation test can red on it. */
+ *  that caller's own seam, where its mutation test can red on it. */
 export const WIN_SIZE_CAP = 'win-size-v1';
 
 /** The `ccd caps` token that says this box has child-workspace reclamation

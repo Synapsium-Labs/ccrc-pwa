@@ -1333,6 +1333,49 @@ export const MIGRATIONS: readonly string[] = [
   );
   `,
   // ── 20: user_version 19 -> 20 ─────────────────────────────────────────────
+  // The temp-root collector's Settings switch (path-identity spec 2026-10-12 §5.2; child reclamation wave 10). ONE
+  // ROW, `CHECK (id = 1)`, the `stall_settings` idiom. Its one writer is `CoordStore.setCollectLane`, called only by
+  // `POST /api/coord/collect-lane` and the collector's one latch helper; its reader is `CoordStore.collectLaneRow`,
+  // whose raw values `measureCollectLaneRow` (`collectLane.ts`, L1) decides, never cast. camelCase columns, the house
+  // style: `choice` is the raw stored token (only exact `live` arms); `fleetNodeId` the directly measured fleet node
+  // the operator confirmed (null for `off`); `markerRetiredAt` the legacy marker's journaled latch (null until a
+  // listing proves the marker absent, and never cleared once set); `generation` the database half of the generation
+  // proof; `updatedAt` a diagnostic wall time, never an arming input.
+  //
+  // THE SEED IS TODAY'S BEHAVIOUR, and it is EXACT: `off`, no node, no latch, generation 0, updatedAt 0. Beside a
+  // missing journal it is the one bootstrap, under which the legacy marker alone still arms the lane, so this entry
+  // changes nothing on deploy. An absent row, or a row that differs from the seed in any field, is not the seed, and
+  // nothing inserts one. `choice` deliberately carries NO CHECK: a token a newer build writes must not stop an older
+  // build opening the file; this build reads it as readable but ineffective.
+  //
+  // The proof's other half is `~/.ccrc/collect-lane-generation.log`, the server-owned generation journal: appended
+  // BEFORE this row is updated, never replayed into it, never rebuilt from it, and never restored with a snapshot of
+  // this file. The row is coherent only when the journal's maximum equals `generation`.
+  //
+  // A NEW TABLE AND NOTHING ELSE, the `dead_claimants` entry's shape and for its reason: an older build opening a file
+  // at `user_version 20` takes rule 3 (it warns, reads as-is and migrates nothing), never names this table, and boots;
+  // the legacy marker alone then arms its lane.
+  //
+  // Every earlier entry is frozen: `db.ts` iterates from the live `user_version`, so an edit to an applied entry never
+  // runs. THIS ENTRY WAS SLOT 19 WHEN ITS PLAN WAS WRITTEN. Workspace lifecycle W6 (#351) merged first and took
+  // `user_version 18 -> 19`, so this one moved up a slot rather than sharing an index, as entry 18 did before it. The
+  // delegation-broker wave 3 plan names a slot too, and whichever branch holding one merges second moves up.
+  // RE-MEASURE immediately before the PR and before merge:
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE collect_lane_settings (
+    id              INTEGER PRIMARY KEY CHECK (id = 1),
+    choice          TEXT NOT NULL,
+    fleetNodeId     TEXT,
+    markerRetiredAt INTEGER,
+    generation      INTEGER NOT NULL,
+    updatedAt       INTEGER NOT NULL
+  );
+  INSERT INTO collect_lane_settings (id, choice, fleetNodeId, markerRetiredAt, generation, updatedAt)
+    VALUES (1, 'off', NULL, NULL, 0, 0);
+  `,
+  // ── 21: user_version 20 -> 21 ─────────────────────────────────────────────
   // The delegation broker's REPORT-ONLY coordination projection (delegation broker wave 3, spec §5.2): the six
   // `delegation_*` tables, of the complete future-facing shape, in ONE step — waves 4-7 add code and no schema.
   //   - `delegation_sessions`, `_attempts`, `_activities`, `_leases`, `_lineage`, `_events`. Columns are camelCase, tables and
@@ -1362,14 +1405,16 @@ export const MIGRATIONS: readonly string[] = [
   //   - An unresolved, conflicting or unmeasured ATTEMPT may keep `canonicalPath` NULL; a linked one may not.
   //   - `delegation_lineage.runId` is a foreign key to `runs(id)`; every other key is internal to the six.
   //
-  // A NEW SET OF TABLES AND NOTHING ELSE, entries 18 and 19's argument, and the choice that keeps a ROLLBACK bootable: an
-  // older build opening a file at `user_version 20` takes `db.ts` rule 3 (it warns, reads as-is, migrates nothing) and
+  // A NEW SET OF TABLES AND NOTHING ELSE, entries 18, 19 and 20's argument, and the choice that keeps a ROLLBACK bootable: an
+  // older build opening a file at `user_version 21` takes `db.ts` rule 3 (it warns, reads as-is, migrates nothing) and
   // never names these tables, so its runs, mail, claims and ledger work unchanged, and no table it owns was altered.
   //
-  // MIGRATIONS[0..18] are frozen: `db.ts` iterates from the live `user_version`, so an edit to an applied entry never
-  // runs. THIS ENTRY IS SLOT 20 AS WRITTEN, measured against origin/main (19 entries) at the wave-3 task that wrote it;
-  // whichever branch holding the same slot merges second moves up a slot rather than sharing an index, and the tests find
-  // this entry by its DDL, so that renumber edits no test line. RE-MEASURE immediately before the PR and before merge:
+  // MIGRATIONS[0..19] are frozen: `db.ts` iterates from the live `user_version`, so an edit to an applied entry never
+  // runs. THIS ENTRY WAS SLOT 20 WHEN IT WAS WRITTEN, measured against origin/main (19 entries) at the wave-3 task that
+  // wrote it. The child reclamation wave 10 collector switch (#384) merged first and took `user_version 19 -> 20`, so this
+  // one moved up a slot rather than sharing an index, as entries 18 and 19 did before it. Whichever branch holding the
+  // same slot merges second moves up the same way, and the tests find this entry by its DDL, so a renumber edits only the
+  // version pins that name the slot. RE-MEASURE immediately before the PR and before merge:
   //     git fetch origin main
   //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
   `

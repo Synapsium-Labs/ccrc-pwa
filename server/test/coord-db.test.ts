@@ -660,8 +660,8 @@ describe('coord.db: migration 4 — runs.dispatchStartedAt', () => {
     db.close();
   });
 
-  it('COORD_SCHEMA_VERSION derives to 20 — never hand-edited beside a growing array', () => {
-    // Bumped to 20 by ten migrations: MIGRATIONS[10] (runs.kind/runs.reviews,
+  it('COORD_SCHEMA_VERSION derives to 21 — never hand-edited beside a growing array', () => {
+    // Bumped to 21 by eleven migrations: MIGRATIONS[10] (runs.kind/runs.reviews,
     // design 2026-09-14 §5.1), MIGRATIONS[11] (runs.coordProject, board
     // placement wave 1 Task 1), MIGRATIONS[12] (pool_edges/pool_epoch,
     // account-pool membership wave 1 Task 6), MIGRATIONS[13] (releases,
@@ -672,10 +672,12 @@ describe('coord.db: migration 4 — runs.dispatchStartedAt', () => {
     // §5.3), MIGRATIONS[16] (stall_settings and run_events_by_at — stall
     // watch settings design 2026-10-05 §8), MIGRATIONS[17] (dead_claimants,
     // workspace lifecycle spec §5.4), MIGRATIONS[18]
-    // (dead_coordinator_breaker_state, the breaker's typed state, §5.4/§12) and MIGRATIONS[19]
-    // (the six delegation_* tables, delegation broker wave 3, spec §5.2).
-    expect(COORD_SCHEMA_VERSION).toBe(20);
-    expect(MIGRATIONS.length).toBe(20);
+    // (dead_coordinator_breaker_state, the breaker's typed state, §5.4/§12),
+    // MIGRATIONS[19] (collect_lane_settings, the collector switch,
+    // path-identity spec 2026-10-12 §5.2) and MIGRATIONS[20] (the six
+    // delegation_* tables, delegation broker wave 3, spec §5.2).
+    expect(COORD_SCHEMA_VERSION).toBe(21);
+    expect(MIGRATIONS.length).toBe(21);
   });
 
   it('is ADDITIVE: every column migration 1 wrote is still on the table, unchanged', () => {
@@ -730,13 +732,14 @@ describe('coord.db: migration 11 — runs.kind and runs.reviews (design 2026-09-
     const db = openCoordDb(p);
     expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version)
       .toBe(COORD_SCHEMA_VERSION);
-    // 20 since MIGRATIONS[14] (the stall read's indexes), MIGRATIONS[15]
+    // 21 since MIGRATIONS[14] (the stall read's indexes), MIGRATIONS[15]
     // (runs.sessionBornAt/sessionBornFor, child-reclamation spec §5.1, §5.3)
     // MIGRATIONS[16] (stall_settings and run_events_by_at, stall watch
     // settings §8), MIGRATIONS[17] (dead_claimants), MIGRATIONS[18]
-    // (dead_coordinator_breaker_state) and MIGRATIONS[19] (the six delegation_*
+    // (dead_coordinator_breaker_state), MIGRATIONS[19]
+    // (collect_lane_settings) and MIGRATIONS[20] (the six delegation_*
     // tables); the migration above is still entry 11.
-    expect(COORD_SCHEMA_VERSION).toBe(20);
+    expect(COORD_SCHEMA_VERSION).toBe(21);
     const row = db.prepare('SELECT kind, reviews FROM runs').get() as { kind: string; reviews: number | null };
     expect(row).toEqual({ kind: 'work', reviews: null });
     db.close();

@@ -36,6 +36,13 @@ import {
   delegationLeaseCodec, delegationLineageCodec, delegationSessionCodec, DelegationModelError,
   type DelegationCheckpointV1, type DelegationEventRow, type DelegationInsertEventsResult, type DelegationRowCodec, type DelegationSqlValue,
 } from './delegation-model.js';
+// Child reclamation wave 10 (path-identity spec 2026-10-12 §5.2): the collector switch's read vocabularies, its journal
+// port and its write decision are declared by their CONSUMER, the L1 `collectLane.ts`. This file implements the row read
+// and the one writer, and runs the decision inside its transaction.
+import {
+  decideCollectLaneWrite, type CollectLaneJournal, type CollectLaneJournalRead, type CollectLaneRowRead,
+  type CollectLaneWriteRefusal, type CollectLaneWriteRequest,
+} from '../collectLane.js';
 // `bodyDigest` comes from `shared/mark.mjs` — `server.ts:30` imports it as
 // `'../../shared/mark.mjs'`; from `server/src/coord/` the path is one level
 // deeper.
@@ -8184,7 +8191,7 @@ export class CoordStore {
   }
 
   // ── delegation broker wave 3, Task 7: the report-only coordination projection ────────────────────────────────────
-  // The six `delegation_*` tables (MIGRATIONS entry 20) are REPAIRABLE OUTPUT. The journal and the checkpoint are the
+  // The six `delegation_*` tables (MIGRATIONS entry 21) are REPAIRABLE OUTPUT. The journal and the checkpoint are the
   // authority (Task 8 owns both, and `delegation-model.ts` owns their shapes); these three methods only make SQLite say
   // what they say. `CoordStore` stays synchronous and holds no health and no coordinator intent as an authority: the
   // checkpoint's `observationIntervals` and `coordinatorIntentByParent` do, and the session rows below are DERIVED from that
@@ -8351,6 +8358,75 @@ export class CoordStore {
       lineage: read(delegationLineageCodec, 'lineageId'),
     });
   }
+
+  // ── the collector switch (path-identity spec 2026-10-12 §5.2, §5.3; child reclamation wave 10) ─────────────────
+  //
+  // `collect_lane_settings` has ONE reader, `collectLaneRow`, and ONE writer, `setCollectLane`, which only
+  // `POST /api/coord/collect-lane` and the collector's one latch helper (`collectRetireLatch`) call. The journal file is
+  // its adapter's (`collectLaneJournal.ts`) and reaches this section only through the port. Nothing here decides: L1's
+  // `decideCollectLaneWrite` runs INSIDE the transaction, and this section orders the reads, the append and the update
+  // around it.
+
+  /** The switch row, every value as read: a row, no row, or a read that failed, never one `null` and never a throw.
+   *  `stallSettings()`'s shape and for its reason: the statement is prepared AND run inside the `try`, so a missing
+   *  table or a driver throw is `unreadable` with the driver's detail; `setReadBigInts(true)`, so an oversize INTEGER
+   *  reaches `measureCollectLaneRow` (L1) as a `bigint` it names malformed, never a throw that would cost every field.
+   *  An absent row is `absent`, and nothing here or anywhere inserts one. */
+  collectLaneRow(): CollectLaneRowRead {
+    try {
+      const st = this.db.prepare('SELECT choice, fleetNodeId, markerRetiredAt, generation, updatedAt FROM collect_lane_settings WHERE id = 1');
+      st.setReadBigInts(true);
+      const r = st.get() as { choice: unknown; fleetNodeId: unknown; markerRetiredAt: unknown; generation: unknown; updatedAt: unknown } | undefined;
+      return r === undefined
+        ? { kind: 'absent' }
+        : { kind: 'row', row: { choice: r.choice, fleetNodeId: r.fleetNodeId, markerRetiredAt: r.markerRetiredAt, generation: r.generation, updatedAt: r.updatedAt } };
+    } catch (err) {
+      return { kind: 'unreadable', detail: err instanceof Error ? err.message : String(err) };
+    }
+  }
+
+  /** The switch's ONE writer (spec §5.2), in ONE `tx()` (`BEGIN IMMEDIATE`), in the spec's order:
+   *  1. re-read the complete row; 2. read the journal (`journalBefore`); 3. L1's `decideCollectLaneWrite` (conflict,
+   *  confirmation, policy, no-op); 4. append the next generation; 5. `UPDATE` the complete row to it; 6. commit; then,
+   *  after the commit, 7. re-read both for the caller's proof.
+   *  - A refusal or a true no-op returns from step 3: no append, no `UPDATE`, no generation consumed. Its empty
+   *    transaction commits, harmlessly.
+   *  - The journal is appended BEFORE the row changes, so a failure after the append leaves the journal AHEAD: a
+   *    measurable mismatch, safety-stopped until a fresh operator transition repairs it, never the reverse.
+   *  - It never INSERTs. An absent row is unmeasurable, the decision refuses it, and it stays absent (spec §5.2: "An
+   *    absent or malformed row is not the seed and arms nothing").
+   *  - Only a throw AT OR AFTER the append is a write failure: `failed`, with its phase and the error's code word, never
+   *    its message, which names the journal's path. A throw before the append (the row read, the journal read, the
+   *    decision, or `BEGIN` itself) is a defect or a busy database, and propagates as itself.
+   *  - Synchronous, and never called from inside another `tx()`: `BEGIN IMMEDIATE` is not re-entrant. */
+  setCollectLane(req: CollectLaneWriteRequest, at: number, journal: CollectLaneJournal): CollectLaneWrite {
+    let phase = 'decide' as 'decide' | 'append' | 'update' | 'commit';
+    let done: CollectLaneTxOutcome;
+    try {
+      done = tx(this.db, (): CollectLaneTxOutcome => {
+        const before = this.collectLaneRow();
+        const journalBefore = journal.read();
+        const d = decideCollectLaneWrite(req, before, journalBefore, at);
+        if (d.kind === 'refuse') return { kind: 'refused', code: d.code, detail: d.detail };
+        if (d.kind === 'unchanged') return { kind: 'unchanged', before };
+        phase = 'append';
+        journal.appendGeneration(d.generation);
+        phase = 'update';
+        const r = this.db.prepare(
+          'UPDATE collect_lane_settings SET choice = ?, fleetNodeId = ?, markerRetiredAt = ?, generation = ?, updatedAt = ? WHERE id = 1',
+        ).run(d.next.choice, d.next.fleetNodeId, d.next.markerRetiredAt, d.generation, at);
+        if (Number(r.changes) !== 1) throw new Error('the switch row update changed no row');
+        phase = 'commit';
+        return { kind: 'appended', generation: d.generation, before, journalBefore };
+      });
+    } catch (err) {
+      if (phase === 'decide') throw err;
+      return { kind: 'failed', phase, code: collectLaneFailCode(err) };
+    }
+    if (done.kind !== 'appended') return done;
+    return { kind: 'written', generation: done.generation, before: done.before, journalBefore: done.journalBefore,
+      after: this.collectLaneRow(), journalAfter: journal.read() };
+  }
 }
 
 // ── delegation broker wave 3, Task 7: the projection's two SQL spellings ─────────────────────────────────────────────
@@ -8393,3 +8469,42 @@ function delegationUpsertSql<Row, Col extends string>(codec: DelegationRowCodec<
 function delegationSelectSql<Row, Col extends string>(codec: DelegationRowCodec<Row, Col>, orderBy: string): string {
   return `SELECT ${codec.columns.join(', ')} FROM ${codec.table} ORDER BY ${orderBy}`;
 }
+
+/** `setCollectLane`'s answer (path-identity spec 2026-10-12 §5.2). The caller binds it and discriminates every arm.
+ *  - `written`: the generation appended and the row updated to it, committed. `before` and `journalBefore` are the
+ *    reads the decision saw; `after` and `journalAfter` are the reads taken AFTER the commit, the caller's proof.
+ *  - `unchanged`: a true no-op, with the row it found. No generation is consumed.
+ *  - `refused`: the decision's refusal and its bounded detail. Nothing is written and no generation is consumed.
+ *  - `failed`: a throw at or after the append, which the route answers 503 `write-failed`. `code` is the error's code
+ *    word, never its message. At `append` the adapter undoes itself (path-identity spec 2026-10-12 §5.2): it cuts the
+ *    journal back to its bytes before the call, or removes the file the call created, so the row and the journal are
+ *    left as they stood and the lane is exactly as it stood before (a failed Off over a stored Live leaves it armed).
+ *    At `update` or `commit` the journal is AHEAD of the row. Each stops the lane and arms nothing. What the undo cannot
+ *    cover: (1) a process killed inside the write, or a power loss before the data is on disk, can leave a torn, empty
+ *    or zero-filled tail, unmeasurable until a hand repair; (2) a kill after the write but before COMMIT, an undo that
+ *    fails after a full write, or a close that throws after a durable record leaves the journal one generation AHEAD,
+ *    a mismatch a fresh confirmed change repairs (Live, or Off once the latch is recorded); (3) an undo that itself
+ *    fails after a short write, or on a file the call created, leaves a torn or empty file, and the same hand repair
+ *    applies. */
+export type CollectLaneWrite =
+  | { readonly kind: 'written'; readonly generation: number; readonly before: CollectLaneRowRead;
+      readonly journalBefore: CollectLaneJournalRead;
+      readonly after: CollectLaneRowRead; readonly journalAfter: CollectLaneJournalRead }
+  | { readonly kind: 'unchanged'; readonly before: CollectLaneRowRead }
+  | { readonly kind: 'refused'; readonly code: CollectLaneWriteRefusal; readonly detail: string }
+  | { readonly kind: 'failed'; readonly phase: 'append' | 'update' | 'commit'; readonly code: string };
+
+/** What `setCollectLane`'s transaction returns before the post-commit re-read: a refusal or a no-op as answered, or
+ *  the generation it appended with the two reads the decision saw. Module-private. */
+type CollectLaneTxOutcome =
+  | Extract<CollectLaneWrite, { kind: 'refused' | 'unchanged' }>
+  | { readonly kind: 'appended'; readonly generation: number; readonly before: CollectLaneRowRead;
+      readonly journalBefore: CollectLaneJournalRead };
+
+/** `failed.code`: the thrown error's code word as Node or `node:sqlite` set it (`ENOSPC`, `EACCES`, `ERR_SQLITE_ERROR`),
+ *  never its message, which for a filesystem error names the journal's path (spec §5.6). An error with no such word
+ *  answers `UNKNOWN`. */
+const collectLaneFailCode = (err: unknown): string => {
+  const code = typeof err === 'object' && err !== null ? (err as { code?: unknown }).code : undefined;
+  return typeof code === 'string' && /^[A-Z][A-Z0-9_]{0,63}$/.test(code) ? code : 'UNKNOWN';
+};

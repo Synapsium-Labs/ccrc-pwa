@@ -15,7 +15,15 @@
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import '@xterm/xterm/css/xterm.css';
+import { PINNED_WINDOW_COLS, PINNED_WINDOW_ROWS, TMUX_STATUS_ROWS } from '../../../shared/api';
 import { BASE_CONSOLE_FONT_PX } from './consoleFit';
+import { GLASS_ANSI, readModel } from './drawerModel';
+import type { ModelRow } from './drawerModel';
+
+/** The grid every attach dials and the live terminal is pinned at: the
+ *  window's own size, plus the row tmux takes for its status line (D-5005).
+ *  The factory builds the terminal at it and the drawer pins and dials it. */
+export const ATTACH = { cols: PINNED_WINDOW_COLS, rows: PINNED_WINDOW_ROWS + TMUX_STATUS_ROWS } as const;
 
 /** The slice of xterm the drawer drives — injectable so tests can script it. */
 export interface DrawerTerm {
@@ -24,11 +32,13 @@ export interface DrawerTerm {
   /** Install the wheel handler. `false` means "xterm must not process this" —
    *  the return value xterm's own `attachCustomWheelEventHandler` takes. */
   onWheel(cb: (ev: WheelEvent) => boolean): void;
-  /** Fit the grid to the host element; returns the measured cols/rows. */
-  fit(): { cols: number; rows: number };
+  /** Fix the grid at exactly this size (`term.resize`). Never follows a host:
+   *  the drawer pins it once, at the window's size, before it attaches. */
+  pin(cols: number, rows: number): void;
   /**
    * The grid the host WOULD show at this type size (CSS px), measured by the
-   * terminal itself, or null when the host cannot be measured.
+   * terminal itself, or null when it is not open or the host cannot be
+   * measured.
    *
    * IT DOES NOT RESIZE THE LIVE GRID, and that is its whole contract. tmux
    * attaches this client on the alternate screen, where shrinking the grid
@@ -37,15 +47,25 @@ export interface DrawerTerm {
    * terminal's own type size is put back before it returns.
    */
   propose(px: number): { cols: number; rows: number } | null;
-  /** Render at this type size (CSS px) and fit, once; returns the grid. A fit
-   *  that lands on the grid the terminal already has leaves the buffer alone.
-   *  The drawer shrinks the type so the whole pinned tmux window lands on the
-   *  glass; see `consoleFit`. */
-  setFontSize(px: number): { cols: number; rows: number };
+  /** Render at this type size (CSS px). It moves no grid — the grid is pinned —
+   *  so there is nothing to return. */
+  setFontSize(px: number): void;
+  /** Open into this host, once. A later call is a no-op: the host may move,
+   *  the terminal does not. Opening is the drawer's choice, not the factory's. */
+  open(host: HTMLElement): void;
+  isOpen(): boolean;
+  /** The window's rows as styled cells: `readModel` over the active buffer,
+   *  `term.rows − TMUX_STATUS_ROWS` of them, so tmux's status row is never part
+   *  of it. Every reader of the screen reads this (D-5006). */
+  model(): ModelRow[];
+  /** tmux's status row, for the grid's display only; nothing decides on it. */
+  statusRow(): ModelRow;
+  /** Fires after parsed writes; returns the unsubscribe. */
+  onParsed(cb: () => void): () => void;
   focus(): void;
   dispose(): void;
 }
-export type MakeTerm = (host: HTMLElement) => DrawerTerm;
+export type MakeTerm = () => DrawerTerm;
 
 /** The history view's terminal: written once, never typed into. Separate from
  *  `DrawerTerm` because it is a different job — it has no pty behind it, and
@@ -192,8 +212,11 @@ const tokenValue = (name: string): string | undefined => {
 /** Voice and glass from the tokens: the mono face, well background, on-well
  *  ink, phosphor cursor. --bg-well stays dark under [data-theme='light'], so
  *  the terminal is dark regardless of theme. Both terminals start at the base
- *  size (xterm takes a number); the drawer may then shrink the live one so the
- *  whole tmux window fits, and the history one follows it (`consoleFit`).
+ *  size (xterm takes a number). The live one's grid never moves (it is pinned
+ *  at the window's size, D-5005); the drawer may shrink its TYPE, down to the
+ *  floor, so the grid view shows all 220 columns, and the history one follows
+ *  it (`consoleFit`). Where even the floor cannot, the live one stays at the
+ *  base size off-screen and the wrapped view shows its screen.
  *  Spelled once, worn by both terminals — the
  *  live one and the history one have to read as the same glass or scrolling
  *  back would look like leaving the session. */
@@ -212,14 +235,13 @@ const glass = () => ({
     foreground: tokenValue('--ink-on-well'),
     cursor: tokenValue('--accent'),
     cursorAccent: tokenValue('--bg-well'),
-    // On-brand ANSI palette (Phosphor & Ink) so 16-colour content reads
-    // cohesively. 256/truecolor content bypasses this and paints direct —
-    // Claude emits truecolor once COLORTERM+tmux RGB are in place (ccd spawn).
-    black: '#1B1F1D', red: '#F08A78', green: '#57E08B', yellow: '#F2B84B',
-    blue: '#96B4F4', magenta: '#C7A7F4', cyan: '#6FD6EA', white: '#ADB6AE',
-    brightBlack: '#5A635C', brightRed: '#FF9E8A', brightGreen: '#7BEDA6',
-    brightYellow: '#FFD27A', brightBlue: '#B3C8FF', brightMagenta: '#DDC2FF',
-    brightCyan: '#93E6F5', brightWhite: '#EDF1EE',
+    // The 16-colour palette has one home, `GLASS_ANSI`, which the wrapped
+    // view's `cellCss` reads too (D-5006).
+    black: GLASS_ANSI[0], red: GLASS_ANSI[1], green: GLASS_ANSI[2], yellow: GLASS_ANSI[3],
+    blue: GLASS_ANSI[4], magenta: GLASS_ANSI[5], cyan: GLASS_ANSI[6], white: GLASS_ANSI[7],
+    brightBlack: GLASS_ANSI[8], brightRed: GLASS_ANSI[9], brightGreen: GLASS_ANSI[10],
+    brightYellow: GLASS_ANSI[11], brightBlue: GLASS_ANSI[12], brightMagenta: GLASS_ANSI[13],
+    brightCyan: GLASS_ANSI[14], brightWhite: GLASS_ANSI[15],
   },
 });
 
@@ -284,7 +306,8 @@ export function paintLag(): PaintLag {
   };
 }
 
-/** `fit()` over a FitAddon, with the one failure both terminals share. */
+/** `fit()` over a FitAddon, with the one failure a host with no layout causes.
+ *  The history terminal's alone: the live one is pinned and never fitted. */
 const fitter = (term: Terminal, fit: FitAddon) => () => {
   try {
     fit.fit();
@@ -294,9 +317,15 @@ const fitter = (term: Terminal, fit: FitAddon) => () => {
   return { cols: term.cols, rows: term.rows };
 };
 
-export const defaultMakeTerm: MakeTerm = (host) => {
+/** The live terminal: built at the window's own size and NOT opened here.
+ *  Where it opens is the drawer's choice (D-5005). The FitAddon is loaded for
+ *  `propose` alone; nothing on this terminal ever calls its `fit`.
+ *  `drawer-model-equals-capture.test.ts` builds one to pin `model()`'s row count. */
+export const defaultMakeTerm: MakeTerm = () => {
   const term = new Terminal({
     ...glass(),
+    cols: ATTACH.cols,
+    rows: ATTACH.rows,
     cursorBlink: true,
     // INERT ON THIS TERMINAL, and kept for the one case where it is not:
     // `tmux attach` puts the client on the ALTERNATE screen (every attach
@@ -307,14 +336,14 @@ export const defaultMakeTerm: MakeTerm = (host) => {
   });
   const fit = new FitAddon();
   term.loadAddon(fit);
-  term.open(host);
+  let opened = false;
   return {
     write: (d) => term.write(d),
     onData: (cb) => {
       term.onData(cb);
     },
     onWheel: (cb) => term.attachCustomWheelEventHandler(cb),
-    fit: fitter(term, fit),
+    pin: (cols, rows) => term.resize(cols, rows),
     // MEASURED, NOT RESIZED. xterm 6.0.0 re-measures its cell synchronously
     // when the type size changes (CharSizeService measures on the option
     // change and RenderService hands the new cell to the renderer in the same
@@ -336,11 +365,35 @@ export const defaultMakeTerm: MakeTerm = (host) => {
         if (was !== px) term.options.fontSize = was;
       }
     },
+    // THE TYPE ONLY. A fit here would hand the grid back to the glass, and a
+    // client narrower or wider than the window is one tmux pans or fills.
     setFontSize: (px) => {
       if (term.options.fontSize !== px) term.options.fontSize = px;
-      return fitter(term, fit)();
     },
-    focus: () => term.focus(),
+    open: (host) => {
+      if (opened) return;
+      opened = true;
+      term.open(host);
+    },
+    isOpen: () => opened,
+    model: () => readModel(term.buffer.active, term.cols, term.rows - TMUX_STATUS_ROWS),
+    statusRow: () => readModel(term.buffer.active, term.cols, term.rows).at(-1) ?? [],
+    onParsed: (cb) => {
+      const sub = term.onWriteParsed(cb);
+      return () => sub.dispose();
+    },
+    // A FOCUS THAT SCROLLS NOTHING. In the wrapped view this textarea is in a
+    // host moved off-screen, and a tap on the view focuses it so the keyboard
+    // types live (operator ruling R-LIVE, 2026-10-15); a focus that scrolled
+    // it into view would drag the sheet sideways under the reader's thumb.
+    // xterm 6.0.0's own `focus()` does exactly this; it is spelled here so an
+    // upgrade that stops doing it reds `drawer-view.test.tsx` rather than
+    // moving the glass.
+    focus: () => {
+      const ta = term.textarea;
+      if (ta === undefined) term.focus();
+      else ta.focus({ preventScroll: true });
+    },
     dispose: () => term.dispose(),
   };
 };

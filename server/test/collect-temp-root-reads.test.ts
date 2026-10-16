@@ -146,18 +146,18 @@ describe('readCollectPopulation — the two listings, read exactly', () => {
 describe('collectSwitches — the pause and the live marker, from ONE listing', () => {
   it('reads each from the one listing', async () => {
     const reg = registry();
-    expect(await collectSwitches(localIO, reg)).toEqual({ paused: false, live: false });
+    expect(await collectSwitches(localIO, reg)).toEqual({ paused: false, marker: false });
     writeFileSync(path.join(reg, COLLECT_LANE_LIVE_MARKER), '');
-    expect(await collectSwitches(localIO, reg)).toEqual({ paused: false, live: true });
+    expect(await collectSwitches(localIO, reg)).toEqual({ paused: false, marker: true });
     writeFileSync(path.join(reg, RECLAIM_PAUSE_MARKER), '');
-    expect(await collectSwitches(localIO, reg)).toEqual({ paused: true, why: 'raised', live: true });
+    expect(await collectSwitches(localIO, reg)).toEqual({ paused: true, why: 'raised', marker: true });
   });
 
   it.each<[string, FleetIO['readdir']]>([
     ['a listing that comes back null', async () => null],
     ['a listing that rejects', async () => { throw new Error('EIO'); }],
   ])('%s cannot rule a raised pause out: paused', async (_what, readdir) => {
-    expect(await collectSwitches({ readdir }, registry())).toEqual({ paused: true, why: 'unlistable', live: false });
+    expect(await collectSwitches({ readdir }, registry())).toStrictEqual({ paused: true, why: 'unlistable' });
   });
 
   it('a raised pause and a registry that did not list are two answers, never one: each pause says which', async () => {

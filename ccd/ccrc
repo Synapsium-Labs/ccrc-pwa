@@ -2107,23 +2107,23 @@ already running).
             ~/ccrc-backups/<ts>/, then re-run the install spine from the
             verified staged tree (role-aware, from ccrc.env's CCRC_ROLE) and
             print the from -> to report. [--to vX.Y.Z] pins a version — the
-            rollback path too: a downgrade prints the coord.db restore
-            commands and never auto-restores. A target below this box's
-            floor (~/.ccrc/floor, the highest version it completed an
-            install of — a promotion can point latest at an older tag) is
-            refused; --downgrade is the typed way below it, and the floor
-            stays. A box already running the target, whose install
-            completed, is left alone (--force reinstalls). --check only
-            compares this box with what is published (exit 0 current, 1
-            otherwise) and writes nothing; its first line also carries caps=
-            (what this ccrc can do) and floor=, and a target below the floor
-            reads below-floor. Every release since W1 ships a
-            provenance bundle; the installed tree's verifier checks it
-            before extraction. --allow-unsigned admits a release with NO
-            bundle (never one that fails), and the box records the install
-            as unsigned (ccrc version says so). Every run that moves this
-            box reports each phase to ~/.ccrc/update.json, which the console
-            reads; [--from <who>] names who started it
+            rollback path too: a downgrade prints the coord.db restore commands,
+            never auto-restores, and leaves ~/.ccrc/collect-lane-generation.log
+            in place (no backup holds it). A target below this box's floor
+            (~/.ccrc/floor, the highest version it completed an install of — a
+            promotion can point latest at an older tag) is refused; --downgrade
+            is the typed way below it, and the floor stays. A box already
+            running the target, whose install completed, is left alone (--force
+            reinstalls). --check only compares this box with what is published
+            (exit 0 current, 1 otherwise) and writes nothing; its first line
+            also carries caps= (what this ccrc can do) and floor=, and a target
+            below the floor reads below-floor. Every release since W1 ships a
+            provenance bundle; the installed tree's verifier checks it before
+            extraction. --allow-unsigned admits a release with NO bundle (never
+            one that fails), and the box records the install as unsigned (ccrc
+            version says so). Every run that moves this box reports each phase
+            to ~/.ccrc/update.json, which the console reads; [--from <who>]
+            names who started it
             (${UPD_FROM_WORDS[*]}; default cli). restore, rollback and
             watchdog are CALLER words, not operator ones (D-3257): spoken
             only by the automatic restore and by 'ccrc rollback' itself,
@@ -2131,16 +2131,14 @@ already running).
             that caller, any of the three may go below the floor, which
             stays.
             --detach (Linux only, and it needs --to) hands the run to a
-            transient systemd --user unit and returns at once, so the
-            update survives the restart of the unit that asked for it; the
-            detached run gets the user manager's environment, not yours
-            (its argv is the whole contract), and its progress is
-            ~/.ccrc/update.json.
-            After the install a health gate waits up to
-            CCRC_UPDATE_HEALTH_S (default 90) for this role's unit to come
-            back and, with a server, for /health to answer the new version:
-            a failed gate exits 4; a doctor FAIL with the gate passed exits
-            3; --no-gate skips it.
+            transient systemd --user unit and returns at once, so the update
+            survives the restart of the unit that asked for it; the detached
+            run gets the user manager's environment, not yours (its argv is
+            the whole contract), and its progress is ~/.ccrc/update.json.
+            After the install a health gate waits up to CCRC_UPDATE_HEALTH_S
+            (default 90) for this role's unit to come back and, with a server,
+            for /health to answer the new version: a failed gate exits 4; a
+            doctor FAIL with the gate passed exits 3; --no-gate skips it.
             After a passed gate and a finished sweep, ~/ccrc-backups is
             pruned to the newest CCRC_BACKUP_KEEP (default 10) timestamped
             backups, never this run's own. CCRC_BACKUP_KEEP is read from the
@@ -2226,7 +2224,9 @@ already running).
   backup    take update's backup step standalone: coord.db snapshot, the
             delegation journal and checkpoint with their manifest
             (coordination-snapshot.json), dists, ccd and the units to
-            ~/ccrc-backups/<ts>/, then prune to the
+            ~/ccrc-backups/<ts>/ (never
+            ~/.ccrc/collect-lane-generation.log: a restore leaves it in
+            place), then prune to the
             newest \$CCRC_BACKUP_KEEP (default 10) timestamped backups — never
             this run's own or one named after it began, nor the newest earlier
             tree backup, valid coordination snapshot and valid one that holds
@@ -16545,9 +16545,10 @@ _inst_floor() {
 #      snapshot (the delegation journal and checkpoint, with the manifest
 #      `coordination-snapshot.json` that describes them and the coord.db
 #      snapshot; `deploy/coordination-snapshot.mjs capture`), all under ONE
-#      `~/ccrc-backups/<ts>/`. BEFORE the install touches anything, so a
-#      fault at any later step leaves the backup complete — the ordering is
-#      pinned by a test that injects exactly that fault.
+#      `~/ccrc-backups/<ts>/`, never `~/.ccrc/collect-lane-generation.log`.
+#      BEFORE the install touches anything, so a fault at any later step leaves
+#      the backup complete — the ordering is pinned by a test that injects
+#      exactly that fault.
 #   3. INSTALL: the `_inst_*` spine, re-run FROM THE STAGED TREE by invoking
 #      the staged `ccrc install` (role-aware, per the CCRC_ROLE this box
 #      recorded in ccrc.env). Not a re-implementation and not a sourced
@@ -16569,13 +16570,13 @@ _inst_floor() {
 #      one scoped exception to CLAUDE.md's never-touch rule). A failed
 #      preflight refuses the SWEEP, never the UPDATE: the run continues to
 #      its report, degraded and saying so.
-#   5. REPORT (`_upd_report`): from → to off the build stamps — the old one
-#      read before anything changed, the new one re-measured off disk, never
-#      inferred from what step 3 was expected to do. A `--to` DOWNGRADE also
-#      prints the coord.db restore commands from this run's backup and NEVER
-#      performs them: migrations are forward-only, and an older server READS
-#      a newer coord.db (shipped behavior) — auto-restoring would destroy
-#      rows to fix a compatibility problem the system does not have.
+#   5. REPORT (`_upd_report`): from → to off the build stamps — the old one read
+#      before anything changed, the new one re-measured off disk, never inferred
+#      from what step 3 was expected to do. A `--to` DOWNGRADE also prints the
+#      coord.db restore commands from this run's backup (the collector's journal
+#      left in place) and NEVER performs them: migrations are forward-only, and an
+#      older server READS a newer coord.db (shipped behavior) — auto-restoring
+#      would destroy rows to fix a compatibility problem the system does not have.
 #
 # THE FLEET-FIRST WARNING (`_upd_fleet_warn`, D-150 aware): on a box that
 # knows its server's address, `/api/fleet/health` saying `skewed` earns a
@@ -20193,9 +20194,9 @@ _upd_backup_copy() {
 # `_upd_backup_pairs` — `<class>\t<source>\t<name>` per row of `_upd_backup_set`,
 # every row whether or not it exists (arm 3 checks the BACKUP's side).
 # coord.db is no row: it goes through backup-coord.mjs and is never restored
-# (design §11 — an older server reads a newer db, the `current >
-# COORD_SCHEMA_VERSION` arm's own "Rule 3" comment in
-# `server/src/coord/db.ts`).
+# (design §11 — an older server reads a newer db, `server/src/coord/db.ts`'s
+# Rule 3). Nor is `~/.ccrc/collect-lane-generation.log`: no backup copies it,
+# so no arm puts an older copy back (path-identity spec §5.3).
 _upd_backup_pairs() {
   local UPD_BACKUP_LISTING=1
   _upd_backup_set
@@ -20436,12 +20437,12 @@ _upd_restore_arm2() {
   return 0
 }
 
-# Arm 3 — best effort, and said so. Removes the completed-install record,
-# copies every `tree` row of this run's backup back (never `data`, never
-# coord.db), then restarts the role's main unit so it runs the copied-back
-# dists. The tree is usually MIXED: shared/, ccd/ and node_modules are the
-# new install's, the dists the old one's — and the remedy for that is
-# deploy.sh, which the sentence names.
+# Arm 3 — best effort, and said so. Removes the completed-install record, copies
+# every `tree` row of this run's backup back (never `data`, never coord.db,
+# never the collector's journal, which no backup holds), then restarts the
+# role's main unit so it runs the copied-back dists. The tree is usually MIXED:
+# shared/, ccd/ and node_modules are the new install's, the dists the old one's
+# — and the remedy for that is deploy.sh, which the sentence names.
 #
 # THE VERDICT IS THREE CASES, AND THE STAGED SHA DECIDES MIXED (fix round 2,
 # F1, review 167, and the coordinator's ruling on review 173's F1r, W6 Task 8A):
@@ -21518,6 +21519,7 @@ _upd_report() {   # $1 = old description, $2 = old version ("" when unknown)
       echo "update: rollback:   $([ "$CCD_OS" = darwin ] && printf 'launchctl bootout %s/%s' "$(_svc_domain)" "$(_svc_label ccrc.service)" || printf 'systemctl --user stop ccrc.service')"
       echo "update: rollback:   cp $(_upd_redact "$UPD_BACKUP_DIR")/coord.db ~/.ccrc/coord.db"
       echo "update: rollback:   $(_svc_restart_hint ccrc.service)"
+      echo "update: rollback:   (leave ~/.ccrc/collect-lane-generation.log in place: no backup holds it and no arm restores it; if the collector switch changed after this snapshot, the restored coord.db leaves the temp-root collector stopped until a fresh choice in Settings)"
     else
       echo "update: rollback:   (no coord.db existed before this run — there is nothing to restore)"
     fi

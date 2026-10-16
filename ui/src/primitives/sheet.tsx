@@ -20,6 +20,12 @@ export interface SheetProps {
    *  title goes screen-reader-only so the glass keeps its full height. */
   full?: boolean;
   className?: string;
+  /** Called with a physical Escape before the sheet dismisses on it, as
+   *  Radix's `onEscapeKeyDown` (vaul passes it through). `preventDefault()`
+   *  keeps the sheet open; the keydown still reaches what has focus. Absent,
+   *  Escape dismisses as it always has. The terminal drawer passes one so an
+   *  Esc typed into its terminal goes to the session and never closes it. */
+  onEscapeKeyDown?: (event: KeyboardEvent) => void;
 }
 
 export function Sheet({
@@ -30,6 +36,7 @@ export function Sheet({
   eyebrow,
   full,
   className,
+  onEscapeKeyDown,
 }: SheetProps): ReactNode {
   // The visible title rides INSIDE the scroller, above the children it heads.
   // Outside it, the header row is flex-none and uncapped while only the body
@@ -88,6 +95,7 @@ export function Sheet({
         />
         <Drawer.Content
           aria-describedby={undefined}
+          onEscapeKeyDown={onEscapeKeyDown}
           className={cn(
             // NO z-index HERE, on purpose: each arm states its own. `z-sheet` and
             // `z-drawer` are custom utilities cn() cannot tell apart, so both

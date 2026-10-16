@@ -6,7 +6,7 @@ import { readFileSync, readdirSync, mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { FastifyInstance } from 'fastify';
-import { MAIL_REJECT_CODES, RUN_REFUSE_CODES, ASK_REFUSE_CODES, isRunRefuseCode, isLifecycleGapReason, isClaimRefuseCode, isSessionLifecycle, isReclaimRefuseCode, isAskRefuseCode, isRunRouteRefuseCode, isSetAccountPoolsRefuseCode, isUpdateStoreRefuseCode } from '../../shared/api.js';
+import { MAIL_REJECT_CODES, RUN_REFUSE_CODES, ASK_REFUSE_CODES, isRunRefuseCode, isLifecycleGapReason, isClaimRefuseCode, isSessionLifecycle, isReclaimRefuseCode, isAskRefuseCode, isRunRouteRefuseCode, isSetAccountPoolsRefuseCode, isUpdateStoreRefuseCode, isCollectLaneRefusal } from '../../shared/api.js';
 import { buildServer } from '../src/server.js';
 import type { Deps } from '../src/server.js';
 import { openCoordDb } from '../src/coord/db.js';
@@ -29,6 +29,7 @@ import { isDelegationIngestKebab } from '../src/coord/delegation-ingest.js';
 import { isDelegationCorrelationKebab } from '../src/coord/delegation-correlation.js';
 import { isDelegationCensusKebab } from '../src/coord/gitref.js';
 import { isDelegationPolicyKebab } from '../src/coord/delegation-policy.js';
+import { isCollectLaneKebab } from '../src/collectLane.js';
 
 const TOKEN = 'f'.repeat(64);
 const UUID = 'a'.repeat(36);
@@ -880,8 +881,22 @@ describe('the rejection table is total, in both directions', () => {
         // reason every union above gives.
         || isDelegationModelKebab(tok) || isDelegationJournalKebab(tok) || isDelegationCheckpointKebab(tok)
         || isDelegationIngestKebab(tok) || isDelegationCorrelationKebab(tok) || isDelegationCensusKebab(tok)
-        || isDelegationPolicyKebab(tok),
-        `${tok} is not a declared MailRejectCode, RunRefuseCode, LifecycleGapReason, ClaimRefuseCode, SessionLifecycle, ReclaimRefuseCode, AskRefuseCode, RunRouteRefuseCode, SetAccountPoolsRefuseCode, UpdateStoreRefuseCode, child-reclaim word, stall-watch word, expiry word, stall-watch settings word, dead-coordinator word, temp-root collector word or delegation word`).toBe(true);
+        || isDelegationPolicyKebab(tok)
+        // CHILD RECLAMATION, WAVE 10: the next union, re-counted on the merged tree, checked together and never merged,
+        // on the standing rule `enter-ignored` above states. `coord/collectLaneJournal.ts` (the collector switch's
+        // generation journal adapter) spells its read kinds as literals, and the switch's other coord-side code
+        // answers in words L1 declares: the journal's read kinds and faults, the control whys, the write refusals and
+        // the latch outcomes. None is a mail rejection or a run refusal. Admitted through the exported guard, derived
+        // from `collectLane.ts`'s tables, never NOT_CODES, for the reason every union above gives.
+        || isCollectLaneKebab(tok)
+        // CHILD RECLAMATION, WAVE 10, THE ROUTE: the next union after `isCollectLaneKebab`, its ordinal counted on the
+        // merged tree rather than fixed here. It is checked together and never merged, on the standing rule
+        // `enter-ignored` above states. `GET`/`POST /api/coord/collect-lane` (coord/routes.ts) answers with the
+        // collector switch's route refusals, spelled there as literals. They are L0's own vocabulary, the words the
+        // PWA reads off the wire. Admitted through the exported guard, derived from `shared/api.ts`'s table, never
+        // NOT_CODES, for the reason every union above gives.
+        || isCollectLaneRefusal(tok),
+        `${tok} is not a declared MailRejectCode, RunRefuseCode, LifecycleGapReason, ClaimRefuseCode, SessionLifecycle, ReclaimRefuseCode, AskRefuseCode, RunRouteRefuseCode, SetAccountPoolsRefuseCode, UpdateStoreRefuseCode, child-reclaim word, stall-watch word, expiry word, stall-watch settings word, dead-coordinator word, temp-root collector word, delegation word, collector switch word or collector-switch route refusal`).toBe(true);
     }
   });
 });

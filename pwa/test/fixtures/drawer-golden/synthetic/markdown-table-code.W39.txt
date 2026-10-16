@@ -1,0 +1,39 @@
+ ❯ summarise the services in project-a
+
+ ● Here is the current state of
+   project-a:
+
+⇆  ┌─────────┬──────────┬─────────┐
+⇆  │ Service │ Status   │ Tokens  │
+⇆  ├─────────┼──────────┼─────────┤
+⇆  │ api     │ ready    │    1234 │
+⇆  ├─────────┼──────────┼─────────┤
+⇆  │ worker  │ busy     │     892 │
+⇆  ├─────────┼──────────┼─────────┤
+⇆  │ cache   │ warming  │     445 │
+⇆  └─────────┴──────────┴─────────┘
+
+   The helper, in src/lib/sum.ts:
+
+     1  export function sum(xs:
+        number[]): number {
+     2    let total = 0;
+     3    for (const x of xs) {
+     4      total += x;
+     5    }
+     6  const note = 'this constant is
+        deliberately long, because a
+        code line wider than the window
+        is wrapped by the renderer under
+        the code gutter, and the
+        re-wrapper must keep that gutter
+        as the hanging indent rather
+        than re-join it as prose';
+     7    return total;
+     8  }
+
+──
+ ❯
+──
+   ? for shortcuts
+

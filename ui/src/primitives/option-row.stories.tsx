@@ -121,9 +121,30 @@ export const Disabled: Story = {
       <OptionRow
         index={2}
         label="Answer this one in the terminal"
-        sublabel="Only the first question of an envelope is ever tappable."
+        sublabel="Another question of the same ask, listed read-only until the terminal shows it."
         disabled
       />
+    </div>
+  ),
+};
+
+/** Boxes: a multiSelect question, where several rows may be ticked at once
+ *  (`checked`). CHECK that (1) the glyph column draws an 18px box: on the
+ *  ticked rows filled with the accent and ticked in the ink made for it, on
+ *  the others an empty frame in secondary ink, legible in light AND dark, and
+ *  the labels still line up; (2) the read-only row (the last) dims its frame
+ *  with its label; (3) the DOM says it too: each row is `role="checkbox"` with
+ *  `aria-checked`, a button while it can be tapped and a div when it is
+ *  read-only, and the box is `aria-hidden` decoration; (4) a ticked row is not
+ *  tinted — the tint is the cursor's, and a box says ticked by its fill and
+ *  tick alone. */
+export const Checkboxes: Story = {
+  render: () => (
+    <div style={{ borderTop: '1px solid var(--edge-subtle)' }}>
+      <OptionRow checked index={1} label="Logging" sublabel="Record application events" onClick={() => {}} />
+      <OptionRow checked={false} index={2} label="Metrics" sublabel="Collect numeric measurements" onClick={() => {}} />
+      <OptionRow checked index={3} label="Tracing" sublabel="Follow requests across calls" onClick={() => {}} />
+      <OptionRow checked={false} index={4} label="Sampling" disabled />
     </div>
   ),
 };

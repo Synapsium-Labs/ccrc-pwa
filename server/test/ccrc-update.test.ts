@@ -55,6 +55,8 @@ import { IN_FLIGHT_UPDATE_PHASES, UPDATE_PHASES } from '../../shared/api.js';
 import { reportFrom, type NodeFileRead } from '../src/update/inventory.js';
 import { emptyDelegationCheckpoint } from '../src/coord/delegation-model.js';
 import { encodeDelegationCheckpoint } from '../src/coord/delegation-checkpoint.js';
+// CCR-15 wave 10: the collector's generation journal's ONE name (path-identity spec 2026-10-12 §5.3).
+import { COLLECT_LANE_JOURNAL_BASENAME } from '../src/coord/collectLaneJournal.js';
 import {
   SPINE_CONTAINMENT_PROBE, spineRunCalls, adoptPlantedSystemd, assertSpineFrontContained, spineSystemctlArms,
   spineSystemdRun, plantLiveShape, foreignSnapshot, stateCallsNaming,
@@ -797,6 +799,35 @@ function plantCoordDb(home: string): void {
   db.exec('CREATE TABLE fixture (x INTEGER); INSERT INTO fixture VALUES (42);');
   db.close();
 }
+
+/** The temp-root collector's generation journal (path-identity spec 2026-10-12 §5.3), planted with one record under
+ *  the fixture HOME. Its name is the server adapter's ONE constant, never retyped here. It comes back with what a later
+ *  assertion compares: the path, the exact bytes and the inode, so a copy placed back by rename reads as touched even
+ *  when its bytes agree. */
+function plantCollectJournal(home: string): { readonly path: string; readonly bytes: Buffer; readonly ino: number } {
+  mkdirSync(join(home, '.ccrc'), { recursive: true });
+  const p = join(home, '.ccrc', COLLECT_LANE_JOURNAL_BASENAME);
+  writeFileSync(p, '{"generation":3}\n', { mode: 0o600 });
+  return { path: p, bytes: readFileSync(p), ino: statSync(p).ino };
+}
+
+/** The journal is still the file planted: present, the same inode, the same bytes. */
+function expectJournalUntouched(j: { readonly path: string; readonly bytes: Buffer; readonly ino: number }, by: string): void {
+  expect(existsSync(j.path), `${by} removed the journal`).toBe(true);
+  expect(statSync(j.path).ino, `${by} replaced the journal (a copy placed back by rename)`).toBe(j.ino);
+  expect(readFileSync(j.path).equals(j.bytes), `${by} rewrote the journal`).toBe(true);
+}
+
+/** Every file under a backup directory that carries the journal's name. No backup holds one (§5.3). */
+function journalCopiesUnder(dir: string): string[] {
+  expect(existsSync(dir), `no backup directory at ${dir}`).toBe(true);
+  return readdirSync(dir, { recursive: true, encoding: 'utf8' })
+    .filter((p) => path.basename(p) === COLLECT_LANE_JOURNAL_BASENAME);
+}
+
+/** `_upd_report`'s one leave-the-journal line in a downgrade's report, its name read off the constant. */
+const JOURNAL_NAME_RE = COLLECT_LANE_JOURNAL_BASENAME.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+const LEAVE_JOURNAL_LINE = new RegExp(`^update: rollback: {3}\\(leave ~/\\.ccrc/${JOURNAL_NAME_RE} in place: `, 'm');
 
 /** The two files an update clears before its staged spine (`~/.ccrc/installed`,
  *  the completed-install record; `~/.ccrc/ccrc-caps`), planted as a box that
@@ -2000,6 +2031,36 @@ describe('ccrc update: fetch + verify, then back up, then install, then report',
       'update wrote the live coord.db').toBe(true);
     // No skew was reported and none was asked about (no server address).
     expect(r.stdout).not.toMatch(/WARN/);
+  });
+
+  it('a downgrade prints the leave-the-journal line, and the journal bytes are unchanged and absent from the backup (path-identity spec 2026-10-12 §5.3)', () => {
+    const home = freshUpdateBox('ccrc-update-rollback-journal-');
+    plantOldBox(home, { version: 'v2.0.0' });
+    plantCoordDb(home);
+    const journal = plantCollectJournal(home);
+    packRelease(home, stubTree(home, { version: 'v1.0.0' }), { tag: 'v1.0.0', latest: false });
+    const r = runUpdate(home, ['--to', 'v1.0.0']);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    expect(r.stdout).toMatch(/^update: rollback: v2\.0\.0 -> v1\.0\.0 is a DOWNGRADE/m);
+    expect(r.stdout).toMatch(LEAVE_JOURNAL_LINE);
+    // One line, inside the snapshot arm, after the cp it qualifies: the operator reads it before running anything.
+    const out = r.stdout.split('\n');
+    const cpAt = out.findIndex((l) => /^update: rollback: {3}cp ~\/ccrc-backups\/\d{8}-\d{6}\/coord\.db /.test(l));
+    expect(cpAt, 'the coord.db cp line').toBeGreaterThan(-1);
+    expect(out.findIndex((l) => LEAVE_JOURNAL_LINE.test(l))).toBeGreaterThan(cpAt);
+    expect(out.filter((l) => LEAVE_JOURNAL_LINE.test(l))).toHaveLength(1);
+    expectJournalUntouched(journal, 'the downgrade');
+    expect(journalCopiesUnder(announcedBackupDir(r.stdout, home)), 'the backup holds a copy of the journal').toEqual([]);
+    // CONTROL: with no coord.db before the run there is no snapshot to restore, and no leave line beside nothing.
+    const bare = freshUpdateBox('ccrc-update-rollback-journal-nodb-');
+    plantOldBox(bare, { version: 'v2.0.0' });
+    const bareJournal = plantCollectJournal(bare);
+    packRelease(bare, stubTree(bare, { version: 'v1.0.0' }), { tag: 'v1.0.0', latest: false });
+    const b = runUpdate(bare, ['--to', 'v1.0.0']);
+    expect(b.code, `stderr: ${b.stderr}\nstdout: ${b.stdout}`).toBe(0);
+    expect(b.stdout).toMatch(/^update: rollback: {3}\(no coord\.db existed before this run/m);
+    expect(b.stdout).not.toMatch(LEAVE_JOURNAL_LINE);
+    expectJournalUntouched(bareJournal, 'the downgrade with no coord.db');
   });
 
   it('the recorded role reaches the staged install — CCRC_ROLE=fleet becomes --role fleet, absence becomes none', () => {
@@ -6219,6 +6280,20 @@ describe('ccrc update: the automatic restore (arms 2 and 3)', () => {
     expect(last['phase']).toBe('reverted');
     expect(String(last['detail'])).toMatch(/^arm3: /);
   });
+
+  it('arm 3 leaves the collector\'s generation journal byte-identical: no backup holds it, so nothing copies it back (path-identity spec 2026-10-12 §5.3)', () => {
+    const home = freshUpdateBox('ccrc-update-restore-arm3-journal-');
+    plantRestoreBox(home, { oldVersion: null });
+    plantCoordDb(home);
+    const journal = plantCollectJournal(home);
+    const r = runUpdate(home);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(4);
+    expect(r.stdout).toMatch(/^update: arm 2: previous build carried no tag — arm 3$/m);
+    expect(String(lastReport(home)['detail'])).toMatch(/^arm3: /);
+    expectJournalUntouched(journal, 'arm 3');
+    expect(journalCopiesUnder(announcedBackupDir(r.stdout, home)), 'the backup arm 3 restored from holds a copy of the journal')
+      .toEqual([]);
+  });
 });
 
 // Final review, B4 — D-3259's own promise, unnumbered (no new deviation):
@@ -7238,6 +7313,22 @@ describe('ccrc rollback (design §11 — a verb, not a recipe)', () => {
     expect(r.stdout).toMatch(/already runs v2\.0\.0/);
     expect(existsSync(join(home, 'staged-ccrc-argv'))).toBe(false);
     expect(r.stdout).toMatch(/probe-inline=0/);
+  });
+
+  itLinux('ccrc rollback, by hand and --from watchdog, prints the leave-the-journal line and leaves the journal byte-identical (path-identity spec 2026-10-12 §5.3)', () => {
+    const cases: string[][] = [[], ['--from', 'watchdog']];
+    for (const from of cases) {
+      const by = from.length === 0 ? 'ccrc rollback' : `ccrc rollback ${from.join(' ')}`;
+      const home = rollbackBox(`ccrc-rollback-journal-${from.length === 0 ? 'cli' : 'watchdog'}-`, { previous: PREV });
+      plantCoordDb(home);
+      const journal = plantCollectJournal(home);
+      const r = runRollback(home, from);
+      expect(r.code, `${by}\nstderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+      expect(r.stdout, by).toMatch(/^update: rollback: v2\.0\.0 -> v1\.0\.0 is a DOWNGRADE/m);
+      expect(r.stdout, by).toMatch(LEAVE_JOURNAL_LINE);
+      expectJournalUntouched(journal, by);
+      expect(journalCopiesUnder(announcedBackupDir(r.stdout, home)), `${by}: the backup holds a copy of the journal`).toEqual([]);
+    }
   });
 });
 
@@ -8945,6 +9036,17 @@ describe('ccrc watchdog: a re-measurement, never a timestamp alone (design §11)
     expect(lines(home, 'launcher-argv')).toEqual(['rollback --from watchdog']);
     expect(lines(home, 'launcher-lock')).toEqual(['free']);
   }, 60_000);
+
+  itLinux('the watchdog leaves the collector\'s generation journal byte-identical when it reverts (path-identity spec 2026-10-12 §5.3)', () => {
+    const home = watchBox('ccrc-watchdog-journal-');
+    const journal = plantCollectJournal(home);
+    report(home, { phase: 'installing', ageS: 90 });
+    writeFileSync(join(home, 'fixture-unit-state'), 'failed\n');
+    const r = runWatchdog(home);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    expect(lines(home, 'launcher-argv'), 'CONTROL: the watchdog reached its rollback').toEqual(['rollback --from watchdog']);
+    expectJournalUntouched(journal, 'the watchdog');
+  });
 });
 
 describe('ccrc update: the migration keeps the old tree until the gate (W6 Task 3)', () => {
