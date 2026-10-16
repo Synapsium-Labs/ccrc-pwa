@@ -26,10 +26,11 @@
 //   (d)  no colour literal;
 //   (d2) no colour by reference: every var() inside its class's allowlist, and
 //        no currentColor;
-//   (e)  choose, never mint: a type role names a step of its own scale;
+//   (e)  choose, never mint: a type role names a step of its own scale, in
+//        skins.css and in Refined's own `:root` (D-5243);
 //   (f)  motion only under `prefers-reduced-motion: no-preference`;
 //   (f2) the tap floor: no tap-bearing token below --tap-min outside
-//        `(pointer: fine)`, in skins.css or in tokens.css;
+//        `(pointer: fine)`, in skins.css or in tokens.css (D-5243);
 //   (g)  no palette block declares a skin token of a class it does not share;
 //   (h)  no !important;
 //   (i)  the contrast gate's stylesheet walk lists skins.css by its exact path;
@@ -386,7 +387,11 @@ const SCALE_PREFIXES: readonly string[] = ['--fs-', '--weight-', '--ls-'];
  *  `:root` declares that is not itself a skin token, so a role cannot point at
  *  another role and inherit a value nobody chose. A family role is one of the
  *  Geist pair. Judged in skins.css and in tokens.css's `:root` blocks alike,
- *  because Refined's values are roles too. */
+ *  because Refined's values are roles too.
+ *
+ *  D-5243: the plan's (e) and spec §3.2 read skins.css and name the `--fs-*`
+ *  roles only. This rule also judges Refined's `:root` values, covers the
+ *  `--weight-*` and `--ls-*` roles, and refuses a role pointed at a role. */
 function scaleChoice(tree: string, cat: Catalogue): string[] {
   const root = rootValues(tree);
   const members = memberNames(cat);
@@ -424,7 +429,8 @@ function motionScope(tree: string, cat: Catalogue): string[] {
 const tapBearing = (cat: Catalogue): Set<string> =>
   new Set(CLASSES.flatMap((c) => cat.tokens[c].filter((t) => t.tapBearing === true).map((t) => t.name)));
 
-/** (f2) Read from both files: Refined's `:root` value is a tap target too. */
+/** (f2) Read from both files: Refined's `:root` value is a tap target too.
+ *  D-5243: the plan's (f2) reads skins.css only; tokens.css is judged too. */
 function tapFloor(tree: string, cat: Catalogue): string[] {
   const root = rootValues(tree);
   const floor = px(root.get('--tap-min') ?? '', root);
@@ -735,6 +741,9 @@ function replaceOnce(tree: string, rel: string, from: string, to: string): strin
  *  nowhere else. */
 const INSTRUMENT_BLOCK = ":root[data-skin='instrument'] {\n  /* type";
 
+/** Instrument's block inside its ≥900px width query, by its exact text. */
+const INSTRUMENT_WIDE_BLOCK = "@media (min-width: 900px) {\n  :root[data-skin='instrument'] {";
+
 // ── the token channel ───────────────────────────────────────────────────────
 
 describe('(a) every declaration sits in a skin block', () => {
@@ -757,6 +766,13 @@ describe('(a) every declaration sits in a skin block', () => {
     expect(blockShape(supports, REAL)).toContain(
       "skins.css: \"@supports (display: grid) { :root[data-skin='instrument']\" is neither @media nor a :root[data-skin='<id>'] block for a skin in SKINS");
   });
+
+  it('reds a declaration planted at the top level, outside every block', () => {
+    // No block encloses it, so it has no chain, and only the stray-statement
+    // check sees it.
+    const tree = append(plantedTree(), SKINS_CSS, '--r-md: 1px;');
+    expect(blockShape(tree, REAL)).toEqual(['skins.css: "--r-md: 1px" stands outside every block']);
+  });
 }, 30_000);
 
 describe('(b) every declared property is a SKIN_TOKENS member', () => {
@@ -770,6 +786,14 @@ describe('(b) every declared property is a SKIN_TOKENS member', () => {
     const problems = membership(tree, REAL);
     expect(problems).toContain('skins.css: --accent is not a SKIN_TOKENS member');
     expect(problems).toContain('skins.css: color is not a SKIN_TOKENS member');
+  });
+
+  it("reds a palette token planted inside one of Instrument's @media blocks", () => {
+    // Three of Instrument's four blocks sit inside @media (width, pointer,
+    // motion), so the rule must read a nested block as closely as the bare one.
+    const tree = replaceOnce(plantedTree(), SKINS_CSS, INSTRUMENT_WIDE_BLOCK,
+      `${INSTRUMENT_WIDE_BLOCK}\n    --accent: inherit;`);
+    expect(membership(tree, REAL)).toEqual(['skins.css: --accent is not a SKIN_TOKENS member']);
   });
 }, 30_000);
 
@@ -815,6 +839,12 @@ describe('(d) skins.css holds no colour literal', () => {
   ])('reds %s planted as --elev-card', (_what, value, hit) => {
     const tree = replaceOnce(plantedTree(), SKINS_CSS, '--elev-card: none;', `--elev-card: ${value};`);
     expect(colourLiterals(tree)).toContain(`skins.css: --elev-card: ${value} carries the colour literal ${hit}`);
+  });
+
+  it("reds a hex planted inside one of Instrument's @media blocks: a desktop-only shadow", () => {
+    const tree = replaceOnce(plantedTree(), SKINS_CSS, INSTRUMENT_WIDE_BLOCK,
+      `${INSTRUMENT_WIDE_BLOCK}\n    --elev-card: 0 1px 2px #000;`);
+    expect(colourLiterals(tree)).toEqual(['skins.css: --elev-card: 0 1px 2px #000 carries the colour literal #000']);
   });
 
   it('reads no colour into a token name, a keyword or a length', () => {
@@ -877,18 +907,22 @@ describe('(e) type roles choose a step on their scale, and family roles one of t
     expect(scaleChoice(tree, REAL)).toContain('skins.css: --fs-ui: 13px is not var() of a step on the --fs-* scale');
   });
 
-  it('reds a role pointed at another role, a minted weight and a third family', () => {
+  it('reds a role pointed at another role, a minted weight, a minted tracking and a third family', () => {
+    // D-5243: the --weight-* and --ls-* roles and the role-to-role refusal
+    // are this guard's widening of the plan's (e).
     const tree = plantedTree();
     replaceOnce(tree, SKINS_CSS, '--fs-page:    var(--fs-md);', '--fs-page:    var(--fs-meta);');
     replaceOnce(tree, SKINS_CSS, '--weight-section: var(--weight-medium);', '--weight-section: 650;');
+    replaceOnce(tree, SKINS_CSS, '--ls-section:     var(--ls-caps);', '--ls-section:     0.08em;');
     replaceOnce(tree, SKINS_CSS, '--family-section: var(--family-mono);', '--family-section: Georgia, serif;');
     const problems = scaleChoice(tree, REAL);
     expect(problems).toContain('skins.css: --fs-page: var(--fs-meta) is not var() of a step on the --fs-* scale');
     expect(problems).toContain('skins.css: --weight-section: 650 is not var() of a step on the --weight-* scale');
+    expect(problems).toContain('skins.css: --ls-section: 0.08em is not var() of a step on the --ls-* scale');
     expect(problems).toContain('skins.css: --family-section: Georgia, serif is neither var(--family-ui) nor var(--family-mono)');
   });
 
-  it("reds a minted size in Refined's own :root", () => {
+  it("reds a minted size in Refined's own :root (D-5243)", () => {
     const tree = replaceOnce(plantedTree(), TOKENS_CSS, '--fs-meta:    var(--fs-xs);', '--fs-meta:    12px;');
     expect(scaleChoice(tree, REAL)).toEqual(['tokens.css: --fs-meta: 12px is not var() of a step on the --fs-* scale']);
   });
@@ -960,7 +994,7 @@ describe('(f2) no tap-bearing density token below --tap-min outside (pointer: fi
       'skins.css: --row-h: 32px is below --tap-min (44px) outside @media (pointer: fine)']);
   });
 
-  it("reds a short row in Refined's :root, and a value it cannot measure", () => {
+  it("reds a short row in Refined's :root (D-5243), and a value it cannot measure", () => {
     const refined = replaceOnce(plantedTree(), TOKENS_CSS, '--row-h:       52px;', '--row-h:       40px;');
     expect(tapFloor(refined, REAL)).toEqual([
       'tokens.css: --row-h: 40px is below --tap-min (44px) outside @media (pointer: fine)']);
@@ -986,7 +1020,11 @@ describe('(g) no palette block declares a type, density, radius, meter or motion
     expect(seen.size).toBe(THEMES.filter((t) => t.id !== PHOSPHOR).length);
   });
 
-  it('reds a radius in the first palette block and in the last', () => {
+  it("reds a radius in the first palette block (Phosphor Daylight's), the first generated one (Nord's) and the last (Catppuccin Latte's)", () => {
+    // In file order the hand-written [data-theme='light'] comes first, then
+    // the generated blocks, Nord first and Catppuccin Latte last.
+    const light = replaceOnce(plantedTree(), TOKENS_CSS, "[data-theme='light'] {", "[data-theme='light'] {\n  --r-md: 2px;");
+    expect(paletteBlocks(light, REAL)).toEqual(["tokens.css: [data-theme='light'] declares --r-md, a radius skin token"]);
     const nord = replaceOnce(plantedTree(), TOKENS_CSS, "[data-theme='nord'] {", "[data-theme='nord'] {\n  --r-md: 2px;");
     expect(paletteBlocks(nord, REAL)).toEqual(["tokens.css: [data-theme='nord'] declares --r-md, a radius skin token"]);
     const latte = replaceOnce(plantedTree(), TOKENS_CSS, "[data-theme='catppuccin-latte'] {",

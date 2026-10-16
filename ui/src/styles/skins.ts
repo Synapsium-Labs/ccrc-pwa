@@ -81,7 +81,8 @@ export const SKIN_TOKENS: { readonly [C in SkinTokenClass]: readonly SkinToken[]
   // at another role. A `--family-*` role is `var(--family-ui)` or
   // `var(--family-mono)`, the Geist pair, never a third face. `var()` may name
   // only `--fs-*`, `--ls-*`, `--weight-*` and those two families. Refined's
-  // values in tokens.css obey the same rule. `--case-section` is a keyword.
+  // values in tokens.css obey the same rule (D-5243). `--case-section` is a
+  // keyword.
   type: [
     { name: '--fs-ui' },
     { name: '--fs-prose' },
@@ -93,10 +94,13 @@ export const SKIN_TOKENS: { readonly [C in SkinTokenClass]: readonly SkinToken[]
     { name: '--case-section' },
     { name: '--ls-section' },
   ],
-  // DENSITY. A length, or `var(--sp-<step>)` and nothing else: never a floor
-  // (`--tap-min`) and never another role. A token marked `tapBearing` is never
-  // below `--tap-min` outside an `@media (pointer: fine)` block, in skins.css
-  // or in tokens.css.
+  // DENSITY. A length, `var(--sp-<step>)`, or a keyword such as `none`
+  // (`--page-max-wide` in skins.css). The guard holds the reference half: a
+  // `var()` may name only `--sp-*`, so never a floor (`--tap-min`) and never
+  // another role, and no colour. It does not check that the rest is a length;
+  // only a token marked `tapBearing` is measured. That one is never below
+  // `--tap-min` outside an `@media (pointer: fine)` block, in skins.css or in
+  // tokens.css (D-5243).
   density: [
     { name: '--gutter' },
     { name: '--row-h', tapBearing: true },

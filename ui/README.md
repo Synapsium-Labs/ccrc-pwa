@@ -159,11 +159,11 @@ fire. It reads `skins.css` and `tokens.css` and fails when:
   name `--sp-*`. Radius, meter and motion name nothing;
 - a type role is not `var()` of a step on its own scale, or a family role is
   not one of the Geist pair. This is checked in `skins.css` and in Refined's
-  own `:root` values alike;
+  own `:root` values alike (D-5243);
 - a `--dur-*` sits outside `@media (prefers-reduced-motion: no-preference)`.
   A skin block is (0,2,0) and outranks the reduced-motion `:root`;
 - a tap-bearing density token (`--row-h`) is below `--tap-min` outside
-  `@media (pointer: fine)`, in either file;
+  `@media (pointer: fine)`, in either file (D-5243);
 - a `[data-theme]` palette block declares a type, density, radius, meter or
   motion skin token (elevation is the one shared class);
 - `skins.css` holds `!important`;
