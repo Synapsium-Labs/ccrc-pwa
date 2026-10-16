@@ -22086,7 +22086,7 @@ cmd_backup() {
 # `restore --from <dir>` replaces the live delegation journal, checkpoint and coord.db (with its WAL and SHM) from a VALID v1
 # snapshot, as one set: it validates the source first, requires ccrc.service MEASURED inactive (running and unmeasurable both
 # refuse; asked again once the marker is durable), stages, publishes an active restore marker (delegation recovery refuses to run
-# while it stands; the server's boot is not yet wired to that refusal), replaces, and makes `COMMITTED` durable before it cleans up.
+# while it stands, and so does the server's boot: it exits 1 before it opens coord.db), replaces, and makes `COMMITTED` durable first.
 # `recover` finishes an interrupted restore from that marker: before `COMMITTED` back to the old set, after it forward to the new.
 # Both take ~/.ccrc/update.lock (`_ver_lock_try`) for the whole act, so `ccrc update` cannot restart the unit mid-restore.
 # The verb is a thin door: the helper is the whole implementation, and its exit code is this verb's. Its OWN refusals follow the
