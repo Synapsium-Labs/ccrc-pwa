@@ -21224,7 +21224,7 @@ _upd_sweep() {
   # for a reason that has nothing to do with this box.
   : "${XDG_RUNTIME_DIR:=/run/user/$UID}"; export XDG_RUNTIME_DIR
   : "${DBUS_SESSION_BUS_ADDRESS:=unix:path=${XDG_RUNTIME_DIR}/bus}"; export DBUS_SESSION_BUS_ADDRESS
-  local u km listing lu _ll la _lr lrc=0
+  local u km listing lu _ll la _lr lrc=0 fb fin
   local -a before=() after=() failed=()
   listing="$(systemctl --user list-units "claude-session@*" --plain --no-legend)" || lrc=$?
   # fix round 1 item 1 (D-3599): the plan's Task 5 code dropped this rc with
@@ -21264,8 +21264,13 @@ _upd_sweep() {
     || _upd_sweep_die "systemctl --user try-restart claude-session@* failed — the supervisors' state is now mixed; read: systemctl --user list-units 'claude-session@*'"
   # try-restart is a no-op on a failed unit (its own man page), so a
   # pre-existing failed session was neither restarted nor verified — not this
-  # update's doing, must not fail it, must not be silent either.
+  # update's doing, must not fail it, must not be silent either. A unit in
+  # `before` that reads failed here WAS restarted: it is the verify's below
+  # (D-3984), or item G's line when that cannot run, so it gets neither this
+  # line nor a place in `failed` (wave 16, D-5135; item 3 of 2026-10-06 01:29).
   for u in $(systemctl --user list-units "claude-session@*" --state=failed --plain --no-legend | awk '{print $1}'); do
+    fin=0; for fb in ${before[@]+"${before[@]}"}; do [ "$fb" = "$u" ] && { fin=1; break; }; done
+    [ "$fin" -eq 0 ] || continue
     echo "update: warning: $u is FAILED — try-restart skipped it and this sweep did not verify it. On the box: systemctl --user reset-failed $u, then ccd start the session" >&2
     failed+=("$u")
   done

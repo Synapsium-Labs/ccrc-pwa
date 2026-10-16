@@ -1036,3 +1036,73 @@ describe('_upd_sweep, Linux arm, with the FROZEN wave-10 script S10 (a rollback 
     noPoison(box);
   }, 60_000);
 });
+
+// WAVE 16 (centralised update management; D-5135, D-5136): what the sweep SAYS about a unit that did not come back
+// active. Two listings decide it, and before wave 16 the fixture could plant only one of them. `--state=failed`, read
+// right after try-restart for item 3's "is FAILED" warning, answered nothing for every case (`sweepFixture.ts`'s
+// `failedListed` is opt-in, so every case above still sees that). The other is the PRE-restart listing's ACTIVE
+// column, which builds `before` (verified) and, since wave 16, `prior` (`activating` or `failed` there: named, never
+// verified, never fatal — the operator's Reading 9 ruling of 2026-10-15, "warn only").
+describe('_upd_sweep, Linux arm: a unit that did not come back active is named truly (wave 16, D-5135, D-5136)', () => {
+  const F = U('f');
+  const X = U('x');
+  const SKIPPED = (u: string): string => `${u} is FAILED — try-restart skipped it and this sweep did not verify it`;
+  const VERIFIED = (u: string, w: string): string =>
+    `${u} was active before try-restart and reads '${w}' after it — it is verified with the rest (wave 11, D-3984)`;
+  const UNSEEN = (u: string): string => `${u} was active before try-restart and is not active after it`;
+
+  // ── item 3 (D-5135): the failed listing names only a unit that was NOT active before ──
+  itLinux('W23a active before, failed after: verified, and never also told it was skipped and unverified', () => {
+    const box = makeBox({
+      units: [stable(A, 0), { unit: B, active: ['failed'], mainPid: [], listed: 'crash:failed', failedListed: true }],
+    });
+    const r = runSweep(box);
+    expect(r.stderr, ctx(r)).toContain(VERIFIED(B, 'failed'));
+    expect(r.stderr, ctx(r)).not.toContain(SKIPPED(B));
+    expect(count(box, act(B)), 'demo-b is verified: its first call and its re-check').toBe(2);
+    expect(r.code, ctx(r)).toBe(1);
+    expect(dieOf(r.stderr), ctx(r)).toBe(dieLine(1, 2, 0, B));
+    noPoison(box);
+  }, 60_000);
+
+  itLinux('W23b active before, failed after, the crash listing unread: item G\'s true line, never the skipped one', () => {
+    const box = makeBox({
+      units: [stable(A, 0), { unit: B, active: ['failed'], mainPid: [], listed: 'crash:failed', failedListed: true }],
+      crashListingRc: 94,
+    });
+    const r = runSweep(box);
+    expect(r.code, ctx(r)).toBe(0);
+    expect(r.stderr, ctx(r)).not.toContain(SKIPPED(B));
+    expect(r.stderr, 'the unit must not drop out of item G\'s accounting').toContain(UNSEEN(B));
+    expect(count(box, act(B))).toBe(0);
+    expect(r.stdout).toContain(SWEEP_OK);
+    noPoison(box);
+  }, 60_000);
+
+  itLinux('W23c failed before and after: named ONCE, by item 3, and never verified', () => {
+    const box = makeBox({
+      units: [stable(A, 0),
+        { unit: F, active: ['failed'], mainPid: [], listed: 'crash:failed', preRestart: 'failed', failedListed: true }],
+    });
+    const r = runSweep(box);
+    expect(r.code, ctx(r)).toBe(0);
+    expect(r.stderr, ctx(r)).toContain(SKIPPED(F));
+    expect(lines(r.stderr, F), 'item 3 names it, and nothing else does').toBe(1);
+    expect(count(box, act(F))).toBe(0);
+    expect(r.stdout).toContain(SWEEP_OK);
+    noPoison(box);
+  }, 60_000);
+
+  itLinux('W23d absent from the pre-restart listing, failed after: named once, by item 3, never verified', () => {
+    const box = makeBox({
+      units: [stable(A, 0),
+        { unit: X, active: ['failed'], mainPid: [], listed: 'crash:failed', preRestart: null, failedListed: true }],
+    });
+    const r = runSweep(box);
+    expect(r.code, ctx(r)).toBe(0);
+    expect(r.stderr, ctx(r)).toContain(SKIPPED(X));
+    expect(lines(r.stderr, X), ctx(r)).toBe(1);
+    expect(count(box, act(X))).toBe(0);
+    noPoison(box);
+  }, 60_000);
+});
