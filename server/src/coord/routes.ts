@@ -4321,9 +4321,14 @@ export function registerCoordRoutes(
     // Durable now (or already so). The incarnation is read once more: the declaration was made for the one measured BEFORE the queued
     // write, and a session that was swapped or recreated meanwhile has a new one. Only a PROVEN move counts (a different value, or no
     // generation at all); a re-read that cannot be measured is no evidence, and the answer then stands. Nothing is undone: the row
-    // of the incarnation it landed on is the truth for that incarnation.
-    const after = await generationOf(byId);
+    // of the incarnation it landed on is the truth for that incarnation. A port that REJECTS is a read that failed (`unreadable`), as it
+    // is for the reads before the write (Task 15 N3), never a 500 for a declaration that is durable.
+    let after: Awaited<ReturnType<typeof generationOf>>;
+    try { after = await generationOf(byId); } catch { after = { kind: 'unreadable' }; }
     const moved = after.kind === 'absent' || (after.kind === 'value' && after.v !== incarnation.incarnation);
+    // N1 (D-4008): a 200 says whether the re-read CONFIRMED the incarnation (`same`) or could not measure it (`unmeasured`), so an unknown
+    // incarnation never reads as a confirmed one. `ccrc-api` prints the whole body, so the session sees it with no client change.
+    const incarnationAfter: 'same' | 'unmeasured' = after.kind === 'value' && after.v === incarnation.incarnation ? 'same' : 'unmeasured';
 
     // SQLite is repairable output, and a call that wrote nothing still attempts the repair (queued, and cheap when nothing drifted),
     // so a retry after a stale answer heals it and the answer reports what is true. If the repair fails too, the answer says so
@@ -4334,15 +4339,20 @@ export function registerCoordRoutes(
     }
     if (moved) {
       const changedWord: keyof typeof COORDINATOR_INTENT_REFUSALS = 'incarnation-changed';
-      return reply.code(409).send({ ok: false, error: changedWord, incarnation: incarnation.incarnation, projection,
-        detail: `the registry incarnation of ${byId} changed while the declaration was queued: it landed on the previous incarnation ` +
-          `(${incarnation.incarnation}) and the new one has none — retry to declare for the new one` });
+      // N2: the detail follows what the re-read found and what was asked.
+      const landed = `the ${request.action} landed on the previous incarnation (${incarnation.incarnation}) and stands there`;
+      const detail = after.kind === 'absent'
+        ? `the registry row of ${byId} is gone (no generation) since the ${request.action} was queued: ${landed}; there is nothing to retry until the id is recreated`
+        : request.action === 'set'
+          ? `the registry incarnation of ${byId} changed while the declaration was queued: ${landed}, and the new one has none — retry to declare for the new one`
+          : `the registry incarnation of ${byId} changed while the clear was queued: ${landed}; the new incarnation never had a declaration, so there is nothing to clear for it`;
+      return reply.code(409).send({ ok: false, error: changedWord, incarnation: incarnation.incarnation, projection, detail });
     }
     const mine = applied.state.checkpoint.sessions.find((s) => s.sessionId === byId && s.parentIncarnation === incarnation.incarnation);
     return reply.code(200).send({
       ok: true, action: request.action, session: byId, incarnation: incarnation.incarnation, changed: applied.durable,
       explicitIntentAt: mine?.explicitIntentAt ?? null, effective: mine?.effective ?? false, effectiveBasis: mine?.effectiveBasis ?? [],
-      projection,
+      projection, incarnationAfter,
     });
   });
 

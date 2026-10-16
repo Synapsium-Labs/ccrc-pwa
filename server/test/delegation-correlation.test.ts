@@ -1942,7 +1942,7 @@ describe('the verdict reasons are one closed list (m4)', () => {
 describe('the correlation module is L1: pure, with no clock, no randomness and no IO', () => {
   const file = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'src', 'coord', 'delegation-correlation.ts');
   const code = readFileSync(file, 'utf8').split('\n').filter((l) => !/^\s*(\*|\/\/|\/\*)/.test(l)).join('\n');
-  it('imports shared/api.ts types and the pure model only', () => {
+  it('imports shared/api.ts (L0) and the pure model only', () => {
     const specs = [...code.matchAll(/^import\s[^;]*?from\s+'([^']+)';/gms)].map((m) => m[1]);
     expect(specs.sort()).toEqual(['../../../shared/api.js', './delegation-model.js']);
   });

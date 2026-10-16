@@ -7,7 +7,7 @@ and **follows a session across account/wrapper swaps**
 (the thing claude.ai's own app can't do). Weigh every feature by the loop it serves:
 spec → plan → subagent execution with per-PR review lenses + whole-branch pass → coordinated multi-wave programs.
 
-**`README.md` (~6200 lines) is the canonical system overview. This file is only the non-obvious operational rules
+**`README.md` (~6409 lines) is the canonical system overview. This file is only the non-obvious operational rules
 — read the README for anything below in depth.** Deep design lives in `docs/superpowers/specs/` (esp.
 `2026-08-10-architecture-ddd-clean-solid.md`, `2026-08-07-build7-fleet-coordination-design.md`).
 
@@ -431,7 +431,7 @@ each tell absent from unreadable, and the B64 arm tells a THIRD condition, over-
 size beside it. The four convenience reads — `readFile`, `readFileFrom`, `readFileB64`, `stat` — still
 fold every failure to one `null`, DELIBERATELY, so an older caller keeps its exact meaning; each now
 names its own collapse in `io.ts` and points at its measured sibling, and each derives from it, so no
-adapter narrows a distinction it received. **The one read left with no measured sibling is `readdir`.**
+adapter narrows a distinction it received. **`readdir` has its measured sibling too:** `readdirMeasured`.
 The agent's wire no longer lies either: `absent` is a separate positive marker spread ONLY on a proven
 ENOENT (`statPayload`, `agent/src/server.ts`), so EACCES answers a bare `{missing: true}` and a newer
 server reads that as UNMEASURED rather than as absence (D-1396) — the sentence here previously said the

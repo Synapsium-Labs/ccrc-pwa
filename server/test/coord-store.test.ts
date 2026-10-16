@@ -7,7 +7,7 @@
 // from the ledger + the registry + .prhistory after the database is LOST.
 import { describe, it, expect } from 'vitest';
 import path from 'node:path';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { openCoordDb, tx } from '../src/coord/db.js';
 import { CoordStore, MAIL_RECLAIM_CANCELLED_ERROR, MAIL_REPLAY_CEILING_ERROR,
@@ -1431,13 +1431,15 @@ describe('CoordStore: the delegation projection (delegation broker wave 3, Task 
       expect(s.insertDelegationEvents([changed, thief, ev(3)])).toEqual({ inserted: 1, duplicate: 0, conflicts: [changed, thief] });
     });
 
-    it('is ONE transaction for the whole list, however long (and none for an empty list’s writes)', () => {
+    it('is ONE transaction for the whole list, however long; an empty list writes no row', () => {
       const { t, s } = live();
       s.insertDelegationEvents(Array.from({ length: 25 }, (_, k) => ev(k + 1)));
       expect(t.execs.filter((e) => e === 'BEGIN IMMEDIATE')).toHaveLength(1);
       expect(t.execs.filter((e) => e === 'COMMIT')).toHaveLength(1);
       expect(t.log.filter((w) => w.kind === 'insert' && w.table === 'delegation_events')).toHaveLength(25);
+      const writesBefore = t.log.length;
       expect(s.insertDelegationEvents([])).toEqual({ inserted: 0, duplicate: 0, conflicts: [] });
+      expect(t.log.length, 'the empty list wrote nothing').toBe(writesBefore);
       expect(stored(s)).toHaveLength(25);
     });
 
@@ -1501,11 +1503,14 @@ describe('CoordStore: the delegation projection (delegation broker wave 3, Task 
       expect(s.delegationEventStats()).toEqual({ count: 3, maxSequence: 101 });
     });
 
-    it('the result type has one home: the L1 model. store.ts imports it from there and never from delegation-checkpoint.ts', () => {
+    it('the result type has one home: the L1 model, across the whole server tree. store.ts imports it from there and never from delegation-checkpoint.ts', () => {
       const here = path.dirname(fileURLToPath(import.meta.url));
-      const src = (f: string): string => readFileSync(path.join(here, '..', 'src', 'coord', f), 'utf8');
-      expect(src('delegation-model.ts')).toMatch(/export interface DelegationInsertEventsResult\b/);
-      expect(src('delegation-checkpoint.ts')).not.toMatch(/interface DelegationInsertEventsResult\b/);
+      const root = path.join(here, '..', 'src');
+      const src = (f: string): string => readFileSync(path.join(root, 'coord', f), 'utf8');
+      // the TREE, not three files: every declaration of the type anywhere under server/src
+      const walk = (d: string): string[] => readdirSync(d, { withFileTypes: true }).flatMap((e) => (e.isDirectory() ? walk(path.join(d, e.name)) : e.name.endsWith('.ts') ? [path.join(d, e.name)] : []));
+      const homes = walk(root).filter((f) => /(?:interface|type)\s+DelegationInsertEventsResult\b\s*[={<]/.test(readFileSync(f, 'utf8')));
+      expect(homes.map((f) => path.relative(root, f))).toEqual([path.join('coord', 'delegation-model.ts')]);
       expect(src('store.ts')).not.toMatch(/delegation-checkpoint/);
       expect(src('store.ts')).toMatch(/type DelegationInsertEventsResult\b/);
     });

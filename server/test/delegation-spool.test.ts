@@ -350,10 +350,12 @@ describe('the hook\'s literal bounds equal DELEGATION_SPOOL_BOUNDS', () => {
   });
   it('the prefilter that decides whether the spool\'s jq text is compiled names exactly the delegation tools and events (a necessary condition: no delegation payload can lack its own name)', async () => {
     const { DELEGATION_EVENT_KINDS } = await import('../../shared/api.js');
-    const m = src.match(/case "\$payload" in ((?:\*'"[A-Za-z<>-]+"?'\*\|?)+)\)/);
+    const m = src.match(/case "\$payload" in ((?:\*'"?[A-Za-z<>-]+"?'\*\|?)+)\)/);
     expect(m, 'the hook carries the prefilter').not.toBeNull();
-    // Each alternative is `*'"Word"'*` (a quoted JSON string value), except the notification, whose value only STARTS with the tag.
-    const words = m![1]!.split('|').map((w) => w.replace(/^\*'"/, '').replace(/"?'\*$/, '')).map((w) => (w === '<task-notification>' ? 'task-notification' : w)).sort();
+    // Each alternative is `*'"Word"'*` (a quoted JSON string value), except the notification, matched by its bare tag
+    // `task-notification>` (Task 5 hardening: a `<` escaped as `\u003c` matches too, and so does the quoted opening).
+    expect(m![1]).toContain(`*'task-notification>'*`);
+    const words = m![1]!.split('|').map((w) => w.replace(/^\*'"?/, '').replace(/"?'\*$/, '')).map((w) => (w === 'task-notification>' ? 'task-notification' : w)).sort();
     // A tool event is named by its tool (Pre/PostToolUse carry no other delegation word), a notification by its tag, the rest by
     // their own event name. The vocabulary decides the set, so a new kind in it reds this until the prefilter learns it.
     const viaTool = new Set(['PreToolUse', 'PostToolUse']);
@@ -1425,12 +1427,15 @@ describe('the delegation spool: the hook appends evidence to a directory ccd mad
     it('text that merely mentions the names (a Read result, an Edit string, a prompt, even with quotes round them) compiles the parse alone', () => {
       const small = parseLength(post('Read', { file_path: '/x' }, { file: { content: WORDS } }));
       const quoted = parseLength(post('Edit', { file_path: '/x', new_string: `say "Bash" and "Agent" and "Workflow" and "SessionStart" and "SubagentStop"` }, 'ok'));   // quotes in a JSON string's content are \" , never a bare quote after the name
-      const prompt = parseLength(ev('UserPromptSubmit', { prompt: `${WORDS} <task-notification> mentioned` }));
+      const prompt = parseLength(ev('UserPromptSubmit', { prompt: `${WORDS} mentioned` }));
       const big = parseLength(post('Bash', { command: 'true' }, { stdout: '' }));
       expect(big, 'a Bash event compiles the spool text').toBeGreaterThan(5000);
       for (const [n, len] of [['Read', small], ['Edit with quoted names in its text', quoted], ['a prompt', prompt]] as const) {
         expect(len, `${n} compiles only the parse (${len} characters)`).toBeLessThan(2000);
       }
+      // Task 5 hardening: the notification is matched by its bare TAG (`task-notification>`), so a `<` the payload escapes as \u003c
+      // still compiles it; the price is that a prompt that merely mentions the tag compiles it too (a compile, never a line).
+      expect(parseLength(ev('UserPromptSubmit', { prompt: `see <task-notification> in the docs` })), 'the tag, anywhere').toBeGreaterThan(5000);
     });
     it('each delegation name, and a notification, in its real position does compile it', () => {
       for (const [n, payload] of [

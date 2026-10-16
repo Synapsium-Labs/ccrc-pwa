@@ -206,10 +206,10 @@ describe('workflow and package posture', () => {
 describe('the docs only name commands ccrc actually has', () => {
   const ccrc = (): string => read('ccd/ccrc');
 
-  /** The `{a|b|c}` set from the usage line ccrc prints for itself. A verb may carry a hyphen
-   *  (`coordination-snapshot`), as the doc scan's own `[a-z-]+` below already allows. */
+  /** The `{a|b|c}` set from the usage line ccrc prints for itself. A verb may carry a hyphen BETWEEN words
+   *  (`coordination-snapshot`), never a trailing or a doubled one (`logs-`, `a--b`: chore B review, N1). */
   function verbs(): Set<string> {
-    const m = /^usage: \$PROG \{([a-z][a-z-]*(?:\|[a-z][a-z-]*)*)\}$/m.exec(ccrc());
+    const m = /^usage: \$PROG \{([a-z]+(?:-[a-z]+)*(?:\|[a-z]+(?:-[a-z]+)*)*)\}$/m.exec(ccrc());
     if (!m) throw new Error('ccd/ccrc no longer prints a usage line in the shape this test reads');
     return new Set(m[1].split('|'));
   }

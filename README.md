@@ -1140,7 +1140,7 @@ every member is durable. `ccrc coordination-snapshot validate|restore|recover` c
 journal, checkpoint and `coord.db` (with its WAL and SHM) from a valid one as a single set — only with `ccrc.service`
 measured inactive, asked again once its marker is durable — and finishes an interrupted restore from that marker; delegation
 recovery refuses to run while the marker stands, and so does the server's boot (it exits 1 naming `recover`). Its exits are
-`validate` 0 for `v1` and `legacy`, 1 for `none`, 2 for `invalid`, and 70 for a usage error or a helper that cannot run (SQLite included); `restore` and `recover` 0 done, 1 failed, 2 refused before any live change (an invalid source, a pending earlier restore, an unreadable marker, a missing `~/.ccrc`, a running or unmeasured service, a held update lock), 70 usage or a helper that cannot run. A restore that is rolled back puts the old set back whole: any file it did not place and that is not old is moved, never deleted, into `~/.ccrc/coordination-restore.foreign/<id>/`, and the report names it (exit 1).
+`validate` 0 for `v1` and `legacy`, 1 for `none`, 2 for `invalid`, and 70 for a usage error or a helper that cannot run (SQLite included); `restore` and `recover` 0 done, 1 failed, 2 refused before any live change (an invalid source, a pending earlier restore, an unreadable marker, a missing `~/.ccrc`, a running or unmeasured service, a held update lock), 70 usage or a helper that cannot run. A restore that is rolled back puts the old set back whole: any file it did not place and that is not old is moved, never deleted, into `~/.ccrc/coordination-restore.foreign/<id>/`, and the report names it (exit 1, or 70 when the failure was the helper's own); a rollback that cannot finish says so and keeps the marker and stage for `recover` (exit 1).
 Rollback arm 3 never copies the sidecars back: they are authority a running server wrote since the backup. Capture refuses a
 journal or checkpoint that does not validate, so `ccrc backup`, `ccrc update` and the fallback deploy stop on a damaged journal. A torn tail is not damage: the server cuts it off its own journal, keeping the bytes in `~/.ccrc/delegation-events.torn/` and saying so in its log and in `/api/fleet/health`'s `delegation.lastTailHeal`;
 capture, which never writes the journal, leaves it out of the snapshot (`delegation.journalTailOmitted` in the manifest, one warning line) and succeeds.
@@ -6332,7 +6332,10 @@ fleet that lacks the capability or never answered, and a recovery that is not re
 only its own 24-hour buckets and creates no authority and no cleanup. Run `ccrc doctor` on every rostered home: hook registration and
 the spool directory are measured separately from the capability, and a missing registration is unavailable, not healthy. After the
 server rolls, take a fresh coordination snapshot and restore it into a fixture before starting the clock: the seven-day window starts
-only when the capability, doctor registration, server recovery and health reporting are all measured. During it, read the malformed
+only when the capability, doctor registration, server recovery and health reporting are all measured. That order is what makes the
+count safe, because the health does not consult doctor: a home with NO session hook registered still has its sessions' spool
+directories (ccd makes them at spawn), so its hours read as MEASURED-EMPTY, not unmeasured, exactly like a quiet session's. A session
+the lane never saw live (born and gone while the server was down) counts in neither the measured nor the unmeasured hours. During it, read the malformed
 lines, vanished buckets, the unresolved, conflicting and unmeasured counts, the breaker, the snapshot validation and the retention
 daily. Eligibility activates nothing: Project, Adopt, Clean-shadow and Clean-live (waves 4 to 7) are each separately planned,
 approved, opened, reviewed and gated. `server/test/delegation-wave3.integration.test.ts` holds the closed scope census, which turns

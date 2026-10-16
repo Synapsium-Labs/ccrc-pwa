@@ -788,6 +788,17 @@ function claimsOf(input: DelegationCorrelationInput, sourceKind: 'agent' | 'work
  * links, and `createLease` journals a permanent, immutable lease for possibly the wrong parent. A too-small margin re-opens exactly
  * that wrong lease. A too-large one costs little: more rung-4 trees answer `unmeasured` while the slice spans less than the margin plus
  * the birth wait. Twenty minutes is twice the default ceiling; raise it with the ceiling.
+ *
+ * BACKGROUND TOOLS (coordinator 5443, measured from the hook and the corpus). The ceiling binds FOREGROUND Bash only; a
+ * `run_in_background` Bash call and Monitor have none. Neither can break THIS margin: a window is the hook's own PreToolUse listing
+ * and PostToolUse listing of one Bash call, and a background call's PostToolUse fires as the call returns, at once, so its window is
+ * short whatever the background process then does; Monitor is not Bash, so it makes no window at all (the hook takes a listing only
+ * for a Bash command that names `worktree`). What they CAN do is a different hazard, stated plainly for wave 4: a `git worktree add`
+ * run by a background job happens AFTER its own window closed, so it lies inside no window of its creator. Rung 4 then cannot tie the
+ * tree to its creator (no link: safe), but if ANOTHER session's worktree-naming Bash window happens to be open at that moment and adds
+ * nothing else, that window's delta shows exactly the new record and rung 4 links the tree to the wrong session, with no overlapping
+ * window to veto it. It needs that coincidence; the captured corpus holds no background worktree creation. Wave 4 owns it (for
+ * example: refuse a rung-4 link while a session of the repository has a background Bash task outstanding).
  */
 export const DELEGATION_EVIDENCE_MARGIN_MS = 20 * 60 * 1000;
 

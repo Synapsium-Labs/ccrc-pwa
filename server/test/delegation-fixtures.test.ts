@@ -6,7 +6,7 @@
 // (`delegation-rig.test.ts` pins the derivation). This file pins what that corpus must HOLD before any parser reads it:
 //
 //   - every current-lane version has a corpus directory with a fixture for every scenario of the rig, and a matrix cell
-//     for each (W3-M73: omit a current-lane recapture, or any one of its fixtures, and the first row reds);
+//     for each (W3-M73: omit a current-lane recapture, or any one of its fixtures, and the second row, the per-lane `it.each`, reds);
 //   - the matrix's unmeasured cells are exactly the ones a controller ruled on, so a new unmeasured cell, or one that
 //     silently becomes measured, reds and forces a ruling instead of passing unseen;
 //   - the corpus directories and the matrix's own version list agree.

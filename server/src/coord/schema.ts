@@ -1386,9 +1386,10 @@ export const MIGRATIONS: readonly string[] = [
   //     lineage, and `CoordStore.projectDelegationCheckpoint` rebuilds exactly those five in one transaction: it deletes the
   //     lineage, leases, attempts and activities, deletes the sessions (and, first, the events) that LEFT the checkpoint,
   //     upserts the staying sessions in place, and inserts the activities, attempts, leases and lineage. The checkpoint
-  //     carries NO events, so `delegation_events` is journal-derived: only `CoordStore.insertDelegationEvent` writes it, a
+  //     carries NO events, so `delegation_events` is journal-derived: only `CoordStore.insertDelegationEvent` and its batch
+  //     `insertDelegationEvents` write it, a
   //     projection deletes the events of a session that leaves and touches no other, and a lost or damaged events table is
-  //     repaired by replaying the retained journal through `insertDelegationEvent` (Task 8), NOT by projecting. Nothing else
+  //     repaired by replaying the retained journal through those two (Task 8), NOT by projecting. Nothing else
   //     writes any of the six. So SQLite never becomes a second identity source, and it holds no health and no
   //     coordinator intent as an authority (the checkpoint's `observationIntervals` and `coordinatorIntentByParent` do).
   //     Bucket cursors and pruning holds have NO table: they live in the checkpoint alone.

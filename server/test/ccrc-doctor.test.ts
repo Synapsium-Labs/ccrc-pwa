@@ -15313,6 +15313,51 @@ CCRC_DOCTOR_CHECKS=(delegation-hooks)
       expect(r.stdout).not.toMatch(/^(FAIL|WARN) delegation-hooks: [^\n]*their-shared-hook/m);
     });
 
+    // Task 14 re-review 2: N4 (shapes the installer's sweep walks although they are not valid settings), N5 (an event key is never
+    // word-split or globbed), N6 (several events: "A and B hold ... under each of A and B").
+    const reshaped = (prefix: string, shape: (j: { hooks: Record<string, unknown> }) => void): { home: string; f: string } => {
+      const { home, f } = mixedHome(prefix, 'SessionEnd');
+      const j = JSON.parse(readFileSync(f, 'utf8'));
+      j.hooks.SessionEnd = [{ hooks: [{ type: 'command', command: installerHook().command }] }];
+      shape(j);
+      writeFileSync(f, JSON.stringify(j, null, 2));
+      return { home, f };
+    };
+    it.each<[string, string, (j: { hooks: Record<string, unknown> }) => void]>([
+      ['an object-shaped `hooks` list', 'Stop', (j) => { j.hooks.Stop = [{ hooks: { a: { type: 'command', command: installerHook().command }, b: THEIRS('their-object-hook') } }]; }],
+      ['an object-shaped Worktree event value', 'WorktreeCreate', (j) => { j.hooks.WorktreeCreate = { x: { hooks: [{ type: 'command', command: installerHook().command }, THEIRS('their-object-hook')] } }; }],
+    ])('N4: REFUSES %s that mixes ccrc\'s hook with another command (the sweep would walk it): byte-identical', (_name, ev, shape) => {
+      const { home, f } = reshaped(`ccrc-doctor-dh-fix-shape-${ev}-`, shape);
+      const before = readFileSync(f);
+      const r = runDoctor(home, ['doctor', '--fix']);
+      expect(r.stdout).toMatch(REFUSAL(ev));
+      expect(Buffer.compare(readFileSync(f), before), 'the settings file changed').toBe(0);
+    });
+
+    it('N5: an event key `*` is named as itself, never glob-expanded or word-split', () => {
+      const { home, f } = reshaped('ccrc-doctor-dh-fix-star-', (j) => {
+        j.hooks['*'] = [{ hooks: [{ type: 'command', command: installerHook().command }, THEIRS('their-star-hook')] }];
+        delete j.hooks.SessionEnd;                                               // a defect, so the check FAILs and --fix runs
+      });
+      writeFileSync(join(home, 'aa.txt'), 'a file a glob would name');
+      const before = readFileSync(f);
+      const r = runDoctor(home, ['doctor', '--fix']);
+      expect(r.stdout).toMatch(/^FIX delegation-hooks: refused — claude: \* holds an entry that mixes ccrc's session hook with another command, .*an entry of its own under \*, then re-run ccrc doctor --fix$/m);
+      expect(Buffer.compare(readFileSync(f), before)).toBe(0);
+    });
+
+    it('N6: several mixed events are named together, with the plural verb: "A and B hold ... under each of A and B"', () => {
+      const { home, f } = reshaped('ccrc-doctor-dh-fix-two-', (j) => {
+        j.hooks.Stop = [{ hooks: [{ type: 'command', command: installerHook().command }, THEIRS('their-stop-hook')] }];
+        j.hooks.WorktreeCreate = [{ hooks: [{ type: 'command', command: installerHook().command }, THEIRS('their-wt-hook')] }];
+      });
+      const order = Object.keys(JSON.parse(readFileSync(f, 'utf8')).hooks).filter((k) => k === 'Stop' || k === 'WorktreeCreate');
+      const named = `${order[0]} and ${order[1]}`;
+      const r = runDoctor(home, ['doctor', '--fix']);
+      expect(r.stdout).toContain(`FIX delegation-hooks: refused — claude: ${named} hold an entry that mixes ccrc's session hook with another command`);
+      expect(r.stdout).toContain(`move the other command into an entry of its own under each of ${named}, then re-run ccrc doctor --fix`);
+    });
+
     it('refuses only the mixed home: another home is fixed as before', () => {
       const { home, f } = mixedHome('ccrc-doctor-dh-fix-mixed-one-home-', 'PostToolUse', { omit: ['SessionEnd'] });
       writeRoster(home, [UPSTREAM, { id: 'lane-a', exec: { kind: 'generated' }, telemetry: 'anthropic' } as RosterEntry]);

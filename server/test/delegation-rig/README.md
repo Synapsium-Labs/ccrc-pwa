@@ -37,7 +37,7 @@ whole run, exit 2, before anything is made. The script then runs, in order, what
 (`<versions>` is the list it resolved, `$RAW` the raw root it made; `--dry-run` prints the same steps, in order):
 
     RAW=$(mktemp -d "${TMPDIR:-/tmp}/ccrc-dlg-raw.XXXXXX")      # with <versions>, one per line, and the UTC start time in $RAW/versions-at-start
-    bash server/test/delegation-rig/rig.sh all "$RAW" <versions> 2>&1 | tee "$RAW/all.log"     # and $RAW/.done must exist after it
+    set -o pipefail; bash server/test/delegation-rig/rig.sh all "$RAW" <versions> 2>&1 | tee "$RAW/all.log"     # and $RAW/.done must exist after it, and all.log hold no `rig: N of M run(s) failed` line
     node server/test/delegation-rig/sanitize.mjs "$RAW" server/test/fixtures/delegation
     node server/test/delegation-rig/build-matrix.mjs server/test/fixtures/delegation server/test/delegation-rig/scenarios --write
     node server/test/delegation-rig/sanitize.mjs --scan server/test/fixtures/delegation        # the committed corpus's own residue check

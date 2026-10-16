@@ -323,7 +323,7 @@ describe('POST /api/coordinators/:session/intent: set and clear', () => {
     const hi = Date.now();
     expect(res.statusCode).toBe(200);
     const out = res.json();
-    expect(out).toMatchObject({ ok: true, action: 'set', session: A.id, incarnation: GEN1, changed: true, effective: true, effectiveBasis: ['explicit'], projection: 'projected' });
+    expect(out).toMatchObject({ ok: true, action: 'set', session: A.id, incarnation: GEN1, changed: true, effective: true, effectiveBasis: ['explicit'], projection: 'projected', incarnationAfter: 'same' });
     expect(out.explicitIntentAt).toMatch(INSTANT);
     expect(Date.parse(out.explicitIntentAt)).toBeGreaterThanOrEqual(lo);
     expect(Date.parse(out.explicitIntentAt)).toBeLessThanOrEqual(hi);
@@ -366,7 +366,7 @@ describe('POST /api/coordinators/:session/intent: set and clear', () => {
     await declare(w, A.id, bodyOf('set'));
     const res = await declare(w, A.id, bodyOf('clear'));
     expect(res.statusCode).toBe(200);
-    expect(res.json()).toMatchObject({ ok: true, action: 'clear', changed: true, explicitIntentAt: null, effective: false, effectiveBasis: [], projection: 'projected' });
+    expect(res.json()).toMatchObject({ ok: true, action: 'clear', changed: true, explicitIntentAt: null, effective: false, effectiveBasis: [], projection: 'projected', incarnationAfter: 'same' });
     const cp = onDisk(w);
     expect(rowOf(cp, A.id, GEN1), 'wave 3 never removes a session row').toMatchObject({ explicitIntentAt: null, effective: false, effectiveBasis: [] });
     expect(cp.coordinatorIntentByParent).toEqual({});
@@ -562,6 +562,7 @@ describe('POST /api/coordinators/:session/intent: the lane, the incarnation, the
     expect(res.statusCode).toBe(409);
     expect(res.json()).toMatchObject({ ok: false, error: 'incarnation-changed', incarnation: GEN1 });
     expect(res.json().detail).toContain('previous incarnation');
+    expect(res.json().detail).toContain('retry to declare for the new one');
     // Nothing is undone: the row of the incarnation it landed on is the truth for that incarnation.
     const landed = onDisk(w);
     expect(rowOf(landed, A.id, GEN1)!.explicitIntentAt).toMatch(INSTANT);
@@ -580,6 +581,33 @@ describe('POST /api/coordinators/:session/intent: the lane, the incarnation, the
     expect(res.statusCode).toBe(409);
     expect(res.json()).toMatchObject({ ok: false, error: 'incarnation-changed' });
     expect(rowOf(onDisk(w), A.id, GEN1)!.explicitIntentAt).toMatch(INSTANT);
+    // N2: no "new one" to retry for: the row is gone
+    expect(res.json().detail).toContain('nothing to retry until the id is recreated');
+    expect(res.json().detail).not.toContain('retry to declare');
+  });
+
+  it('N2: a CLEAR that the incarnation moved under is told there is nothing to clear for the new one, never to retry a declaration', async () => {
+    let move: (() => void) | null = null;
+    const w = await world({ faults: { onEdge: (e, when) => { if (e === 'checkpoint-write' && when === 'before') { move?.(); move = null; } } } });
+    expect((await declare(w, A.id, bodyOf('set'))).statusCode).toBe(200);
+    move = () => seed(w.home, A, GEN2);
+    const res = await declare(w, A.id, bodyOf('clear'));
+    expect(res.statusCode).toBe(409);
+    expect(res.json().detail).toContain('the clear landed on the previous incarnation');
+    expect(res.json().detail).toContain('nothing to clear for it');
+    expect(res.json().detail).not.toContain('retry to declare');
+  });
+
+  it('N3: a port that REJECTS on the re-read after a durable write answers 200 with incarnationAfter unmeasured, never a 500', async () => {
+    let reject = false;
+    const rejecting: FleetIO = {
+      ...localIO,
+      readFileMeasured: async (p, t, s) => { if (reject && p.endsWith(`${A.id}.generation`)) throw new Error('the agent link dropped'); return localIO.readFileMeasured(p, t, s); },
+    };
+    const w = await world({ over: { io: rejecting }, faults: { onEdge: (e, when) => { if (e === 'checkpoint-write' && when === 'before') reject = true; } } });
+    const res = await declare(w, A.id, bodyOf('set'));
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ ok: true, changed: true, incarnation: GEN1, incarnationAfter: 'unmeasured' });
   });
 
   it('does not call a re-read it cannot measure a move: an unreadable generation after the write is not evidence', async () => {
@@ -588,7 +616,8 @@ describe('POST /api/coordinators/:session/intent: the lane, the incarnation, the
     move = () => writeFileSync(path.join(w.home, '.cc-sessions', `${A.id}.generation`), 'not-a-generation');
     const res = await declare(w, A.id, bodyOf('set'));
     expect(res.statusCode).toBe(200);
-    expect(res.json()).toMatchObject({ ok: true, changed: true, incarnation: GEN1 });
+    // N1 (D-4008): durable, and SAID to be unconfirmed: an unmeasured re-read never reads as a confirmed incarnation
+    expect(res.json()).toMatchObject({ ok: true, changed: true, incarnation: GEN1, incarnationAfter: 'unmeasured' });
   });
 
   it('a retry after a stale answer repairs the projection and says so: a no-op attempts the repair too', async () => {

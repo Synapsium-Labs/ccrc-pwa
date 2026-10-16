@@ -311,7 +311,7 @@ const minimalPath = (omit: string[]): string => {
  *  `timeout` IS INVOKED TWICE PER HOOK RUN, and a stub that does not know that
  *  is a barrier in the wrong place. BEFORE the `case "$event"`, the hook
  *  resolves `timeout`/`gtimeout` into `$hooktmo` and asks
- *  `"$hooktmo" 2 tmux display-message -p '#S'` — the bound on the one tmux
+ *  `"$hooktmo" 2 tmux display-message -p -t "$TMUX_PANE" '#S'` — the bound on the one tmux
  *  question every hook event asks, which exists because a wedged tmux server
  *  answers nothing and never returns. That is invocation ONE, and it happens
  *  before the compaction arms are reached at all; the helper's
@@ -2847,7 +2847,7 @@ describe('the compaction card — PreCompact and the helper (spec §3.1)', () =>
     // hook-owned set standing for PostCompact. That is no longer what this
     // userland gets. The tmux bound sits ABOVE the event switch: the hook
     // resolves `timeout`/`gtimeout` into `$hooktmo` BEFORE it reads the event,
-    // and with neither present it does not ask `tmux display-message -p '#S'`
+    // and with neither present it does not ask `tmux display-message -p -t "$TMUX_PANE" '#S'`
     // at all — `$tname` stays empty and `[[ "$tname" == cc-?* ]] || exit 0`
     // ends the run before there is a session id to write anything under.
     // "A hook that cannot bound its own tmux call must not make it" is the
@@ -10700,7 +10700,7 @@ describe('the delegation spool leaves the hook\'s other writers alone', () => {
 
 // ── The tmux question's BOUND (slice-0 carry) ──────────────────────────────
 //
-// `tmux display-message -p '#S'` talks to the tmux SERVER over its socket, and
+// `tmux display-message -p -t "$TMUX_PANE" '#S'` talks to the tmux SERVER over its socket, and
 // a wedged server (SIGSTOP, a swapping box) answers nothing and never returns.
 // Unbounded, that hangs the HOOK — which runs on the hot path of every tool
 // call in every live session on the box, not once per render in one pane the
@@ -10732,7 +10732,7 @@ describe('the tmux session-name read is bounded', () => {
   });
 
   it('a tmux that never answers costs the hook the bound, not the turn', () => {
-    // Mutation: drop the bound (`tname=$(tmux display-message -p '#S' …)`) and
+    // Mutation: drop the bound (`tname=$(tmux display-message -p -t "$TMUX_PANE" '#S' …)`) and
     // this waits the stub's full 30 s instead of ~2.
     fs.writeFileSync(path.join(home, 'bin', 'tmux'), '#!/bin/sh\nsleep 30\n', { mode: 0o755 });
     const t0 = Date.now();

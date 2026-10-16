@@ -8933,8 +8933,8 @@ _check_delegation-hooks() {
 # The cure `ccrc doctor --fix` runs for `delegation-hooks` (FAIL only, R-C8): the SHIPPED installer, `$CCRC_HERE/
 # install-session-hooks.sh`, into every rostered home that exists on this box — the tree the check measured, never a
 # copy of its logic, so this is not a second hook installer. The installer validates before it writes, backs up what it
-# replaces, swaps managed entries only (ccrc's own hook under a Worktree event included) and leaves every foreign one (a
-# `WorktreeCreate` hook naming another command included) byte-identical; a home it refuses (invalid JSON) stays a FAIL on
+# replaces, swaps managed entries only (ccrc's own hook under a Worktree event included) and leaves every foreign entry of its
+# own (a `WorktreeCreate` hook naming another command included) byte-identical; a home it refuses (invalid JSON) stays a FAIL on
 # the re-measurement, which is the verdict. It creates no spool directory: that is ccd's, at spawn.
 #
 # ONE HOME IT DOES NOT HAND TO THE INSTALLER (R55, coordinator 5180). The installer's sweep (`JQ_UNMANAGED`) drops a whole
@@ -8944,19 +8944,21 @@ _check_delegation-hooks() {
 # home goes to the installer its settings.json is read for any such mixed entry, under any event. A home that has one is
 # REFUSED (its file untouched, byte for byte), the refusal names the event and the manual step, and the other homes are
 # fixed as before. A settings.json jq cannot read is left to the installer, which refuses it in its own words.
+# The test MIRRORS the installer's own sweep (Task 14 re-review 2, N4): `map(...)` and `any(...)` iterate an event value and
+# a `hooks` list whatever their JSON type, so an object-shaped value or `hooks` (not valid Claude Code settings, but what
+# the sweep would still walk) is walked here too, and a mixed entry there is refused like any other.
 _dh_mixed_events() {   # <settings.json> -> the events (one per line) holding an entry that mixes ccrc's hook with another command
   jq -r '
     (.hooks // {}) | if type == "object" then to_entries[] else empty end
-    | select(.value | type == "array")
-    | select(any(.value[]?; type == "object" and ((.hooks // []) | type) == "array"
-        and ([.hooks[]? | type == "object" and ((.command // "") | tostring | contains("/session-hook.sh"))] as $o
+    | select(any(.value[]?; type == "object"
+        and ([(.hooks // [])[]? | type == "object" and ((.command // "") | tostring | contains("/session-hook.sh"))] as $o
           | ($o | any) and ($o | any(not)))))
     | .key' "$1" 2>/dev/null
 }
 
 _fix_delegation-hooks() {
-  local inst="$CCRC_HERE/install-session-hooks.sh" roster="$HOME/.ccrc/accounts.json" rows id suffix dir said n=0 list="" mixed evs refused=0
-  local -a dirs=()
+  local inst="$CCRC_HERE/install-session-hooks.sh" roster="$HOME/.ccrc/accounts.json" rows id suffix dir said n=0 list="" mixed evs verb e refused=0
+  local -a dirs=() evarr=()
   rows="$(_skills_roster_rows "$roster")" || { echo "FIX delegation-hooks: refused — \$HOME/.ccrc/accounts.json could not be read as a roster"; return 1; }
   while IFS=$'\t' read -r id suffix; do
     [ -n "$id" ] || continue
@@ -8965,12 +8967,17 @@ _fix_delegation-hooks() {
     if [ -f "$dir/settings.json" ] && [ -r "$dir/settings.json" ] && command -v jq >/dev/null 2>&1; then
       mixed="$(_dh_mixed_events "$dir/settings.json")"
       if [ -n "$mixed" ]; then
-        evs="$(_dr_join $mixed)"; evs="${evs//; /, }"
-        case "$evs" in
-          *,*) said="under each of $evs" ;;
-          *) said="under $evs" ;;
-        esac
-        echo "FIX delegation-hooks: refused — $id: $evs holds an entry that mixes ccrc's session hook with another command, and the sweep that --fix, ccrc install and ccrc update run removes the whole entry that carries ccrc's hook, other commands included; move the other command into an entry of its own $said, then re-run ccrc doctor --fix"
+        # One event per line, read as lines (N5: never word-split or glob-expanded, so a key like `*` names itself).
+        evarr=()
+        while IFS= read -r e; do [ -n "$e" ] && evarr+=("$e"); done <<< "$mixed"
+        if [ "${#evarr[@]}" -eq 1 ]; then
+          evs="${evarr[0]}"; verb="holds"; said="under $evs"
+        else
+          # N6: "WorktreeCreate and Stop hold", "A, B and C hold"
+          evs=""; for e in "${evarr[@]:0:${#evarr[@]}-1}"; do evs="${evs:+$evs, }$e"; done
+          evs="$evs and ${evarr[${#evarr[@]}-1]}"; verb="hold"; said="under each of $evs"
+        fi
+        echo "FIX delegation-hooks: refused — $id: $evs $verb an entry that mixes ccrc's session hook with another command, and the sweep that --fix, ccrc install and ccrc update run removes the whole entry that carries ccrc's hook, other commands included; move the other command into an entry of its own $said, then re-run ccrc doctor --fix"
         refused=1; continue
       fi
     fi

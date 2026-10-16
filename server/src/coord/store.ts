@@ -8192,16 +8192,18 @@ export class CoordStore {
 
   // ── delegation broker wave 3, Task 7: the report-only coordination projection ────────────────────────────────────
   // The six `delegation_*` tables (MIGRATIONS entry 21) are REPAIRABLE OUTPUT. The journal and the checkpoint are the
-  // authority (Task 8 owns both, and `delegation-model.ts` owns their shapes); these three methods only make SQLite say
+  // authority (Task 8 owns both, and `delegation-model.ts` owns their shapes); these five methods (the projection, the event
+  // insert and its batch, the event stats and the read-back) only make SQLite say
   // what they say. `CoordStore` stays synchronous and holds no health and no coordinator intent as an authority: the
   // checkpoint's `observationIntervals` and `coordinatorIntentByParent` do, and the session rows below are DERIVED from that
   // map before they reach this method.
   //
   // TWO KINDS OF TABLE. The checkpoint carries sessions, attempts, activities, leases and lineage, so projecting it rebuilds
-  // those five. It carries NO events: `delegation_events` is journal-derived, written only by `insertDelegationEvent`, and a
+  // those five. It carries NO events: `delegation_events` is journal-derived, written only by `insertDelegationEvent` and its
+  // one-transaction batch `insertDelegationEvents` (one shared row writer), and a
   // projection neither inserts nor rewrites one (ruling R20: a full delete and re-insert of the events table is O(events) on
   // this synchronous loop, about 3 s per 100K rows). A lost or damaged events table is repaired by replaying the retained
-  // journal through `insertDelegationEvent`, not by projecting.
+  // journal through those two, not by projecting.
 
   /**
    * Makes the five non-event tables say what `checkpoint` says, in ONE transaction, in this order (every step is a
@@ -8218,7 +8220,8 @@ export class CoordStore {
    * O(the five tables) plus O(the events of the sessions that leave), never O(all events).
    *
    * Everything refusable is refused BEFORE the transaction opens: the checkpoint's version and applied position, the wave-3
-   * lease invariants (`assertWave3Leases`), every row's encoding, and a handle that does not enforce foreign keys. A row the
+   * lease invariants (`assertWave3Leases`), every row's encoding, a session key repeated inside the checkpoint, and a handle that
+   * does not enforce foreign keys. A row the
    * schema itself refuses (a CHECK, a unique index, a foreign key) throws SQLite's error from inside the transaction.
    */
   projectDelegationCheckpoint(checkpoint: DelegationCheckpointV1): void {
