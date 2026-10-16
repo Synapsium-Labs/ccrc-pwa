@@ -65,8 +65,23 @@ export interface SkinToken {
  *  step, a length, `none`, or an elevation recipe on `var(--edge-*)` — never a
  *  colour, never a new size. Holds exactly what this task declares; later
  *  tasks append their own (the meter's in Task 5, `--elev-pop` with the
- *  sheet's desktop arm). */
+ *  sheet's desktop arm).
+ *
+ *  THE IDENTITY CORE'S TOKEN GUARD (D-5094) holds every rule written beside a
+ *  class below: `pwa/test/skin-identity.test.ts`. For every class: declared
+ *  only inside a `:root[data-skin='<id>']` block (optionally inside `@media`),
+ *  no colour literal, no `currentColor`, no `!important`, and no `[data-theme]`
+ *  palette block may declare one, elevation excepted. The `var()` each class
+ *  may name is that test's allowlist, not a list kept here, so the file it
+ *  guards cannot widen it. */
 export const SKIN_TOKENS: { readonly [C in SkinTokenClass]: readonly SkinToken[] } = {
+  // TYPE. Choose, never mint: a `--fs-*` role is exactly `var(--fs-<step>)`,
+  // and a `--weight-*` or `--ls-*` role is a step of its own scale. A "step"
+  // is a `:root` token that is not itself a skin token, so a role never points
+  // at another role. A `--family-*` role is `var(--family-ui)` or
+  // `var(--family-mono)`, the Geist pair, never a third face. `var()` may name
+  // only `--fs-*`, `--ls-*`, `--weight-*` and those two families. Refined's
+  // values in tokens.css obey the same rule. `--case-section` is a keyword.
   type: [
     { name: '--fs-ui' },
     { name: '--fs-prose' },
@@ -78,6 +93,10 @@ export const SKIN_TOKENS: { readonly [C in SkinTokenClass]: readonly SkinToken[]
     { name: '--case-section' },
     { name: '--ls-section' },
   ],
+  // DENSITY. A length, or `var(--sp-<step>)` and nothing else: never a floor
+  // (`--tap-min`) and never another role. A token marked `tapBearing` is never
+  // below `--tap-min` outside an `@media (pointer: fine)` block, in skins.css
+  // or in tokens.css.
   density: [
     { name: '--gutter' },
     { name: '--row-h', tapBearing: true },
@@ -87,16 +106,27 @@ export const SKIN_TOKENS: { readonly [C in SkinTokenClass]: readonly SkinToken[]
     { name: '--page-max-wide' },
     { name: '--measure-chat' },
   ],
+  // RADIUS. A length, with no `var()`. `--r-full` is not here: lamps and pills
+  // stay round in every skin.
   radius: [
     { name: '--r-sm' },
     { name: '--r-md' },
     { name: '--r-lg' },
     { name: '--r-xl' },
   ],
+  // ELEVATION. The one class a palette shares, because its values carry
+  // shadow colour: every palette block declares its own. A skin only REPLACES
+  // one, with `none` or a hairline whose `var()` names `--edge-subtle` or
+  // `--edge-strong` and nothing else. Never a glow: glow means life.
   elevation: [
     { name: '--elev-card' },
   ],
+  // METER. Lengths and counts, with no `var()`.
   meter: [],
+  // MOTION. Durations, with no `var()`, declared only inside
+  // `@media (prefers-reduced-motion: no-preference)`. A skin block is (0,2,0)
+  // and outranks tokens.css's reduced-motion `:root`, so a duration anywhere
+  // else would re-animate the app for a reader who asked for stillness.
   motion: [
     { name: '--dur-fast' },
     { name: '--dur-base' },

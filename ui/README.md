@@ -118,6 +118,75 @@ To return to the default, remove it and reload:
 
     localStorage.removeItem('ccrc-skin')
 
+## Identity core
+
+Some things never vary between skins (D-5094, spec §3.1). A skin may change
+how dense the console is. It never changes what the console is:
+
+- **The wordmark `❯ ccrc`.** The `❯` is in `--accent`, then `ccrc` in mono at
+  medium weight, top-left in every shell.
+- **The `❯` caret** means "selected" or "acting" wherever it appears, page
+  titles included. A skin never adds a second cursor glyph.
+- **The phosphor accent** (`--accent` and its family) marks commit actions, the
+  active selection and living status, and nothing else.
+- **Glow means life.** Only `busy` and `attention` emit light, at the same
+  rhythm in both skins.
+- **Lamp dots** (`StatusDot`) pair a glyph with a word, and stay round.
+- **Dark wells.** Terminals and code sit in wells that stay dark in every
+  palette.
+- **The Geist pair** sets every glyph in both skins.
+- **Lane hues.** Each lane keeps its hue and its mono name, and never glows.
+- **The twelve palettes**, light and dark, render in both skins. A skin cannot
+  add, remove or retint one.
+- **The rule of voice.** Mono for what the machine says, sans for prose, and
+  tabular figures for readouts.
+- **The accessibility floors.** `--tap-min` (44px), `--fs-input` (16px),
+  `--fs-2xs` (11px) as the smallest type, and `prefers-reduced-motion`. Rows
+  are 44px tall unless the primary pointer is fine.
+
+`pwa/test/skin-identity.test.ts` holds the token half. Every rule is run
+against the real tree and against a planted copy, so each one is shown to
+fire. It reads `skins.css` and `tokens.css` and fails when:
+
+- a declaration in `skins.css` sits outside a `:root[data-skin='<id>']` block
+  (optionally inside `@media`), or the id is not a non-default skin in `SKINS`;
+- a declared property is not a `SKIN_TOKENS` member, or a member has no
+  default in `tokens.css`'s top-level `:root`;
+- `skins.css` holds a colour literal (hex, a colour function, a named or
+  system colour), names `currentColor`, or uses a `var()` outside its class's
+  allowlist. Elevation may name `--edge-subtle` and `--edge-strong`. Type may
+  name `--fs-*`, `--ls-*`, `--weight-*` and the two families. Density may
+  name `--sp-*`. Radius, meter and motion name nothing;
+- a type role is not `var()` of a step on its own scale, or a family role is
+  not one of the Geist pair. This is checked in `skins.css` and in Refined's
+  own `:root` values alike;
+- a `--dur-*` sits outside `@media (prefers-reduced-motion: no-preference)`.
+  A skin block is (0,2,0) and outranks the reduced-motion `:root`;
+- a tap-bearing density token (`--row-h`) is below `--tap-min` outside
+  `@media (pointer: fine)`, in either file;
+- a `[data-theme]` palette block declares a type, density, radius, meter or
+  motion skin token (elevation is the one shared class);
+- `skins.css` holds `!important`;
+- the contrast gate's stylesheet walk (`pwa/design/audit.mjs`) no longer lists
+  `ui/src/styles/skins.css` by that exact path.
+
+Three censuses in the same file keep the skin out of shared code:
+
+- `data-skin` appears in no stylesheet under `pwa/src` or `ui/src` but
+  `skins.css`. W2's skin stylesheets select on their own classes, never on
+  the attribute.
+- `data-skin` and `dataset.skin` appear in no source under `pwa/src`,
+  `ui/src`, `ui/.storybook` or `pwa/index.html` but `skins.ts`,
+  `pwa/src/lib/skin.ts` and `index.html`. Tests and stories are excluded.
+- `useSkin` is reached only from a file its registry lists. The registry is
+  empty until the skin picker and W2's shells add theirs.
+
+To give a skin a new token, add it to `SKIN_TOKENS` in the right class, give it
+a default in `tokens.css`'s `:root`, and only then set it in `skins.css`. If
+its class's rule does not fit the value, the value is probably a colour or a
+new size, and it belongs in a palette or on a scale instead. The element half
+of the guard, which covers the shells themselves, lands with W2.
+
 ## Hook classes
 
 Components carry their original bare class names (`btn-primary`, `sheet-panel`,
