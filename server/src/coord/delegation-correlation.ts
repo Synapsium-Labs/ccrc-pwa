@@ -1021,12 +1021,15 @@ const spanOf = (w: DelegationListingWindow): [number, number] =>
  * `after` is unknown. The census instants are the server's clock and the windows the fleet's, so both ends widen by the clock skew
  * allowance (`DELEGATION_CLOCK_SKEW_MS`). True when:
  *   - the evidence horizon reaches the bracket (an evicted window may have begun inside it); or
- *   - a lost window that may be on the tree's repository (a shed listing, an unmeasured hour, the retention floor) overlaps the bracket.
+ *   - a lost window that may be on the tree's repository (a shed listing, an unmeasured hour, the retention floor) overlaps the bracket; or
+ *   - a HELD window that may have been the creator but cannot be a candidate because part of its evidence is missing (`heldCreators`,
+ *     R85) BEGAN inside the bracket: a creator's call began there, and a call lasts at most the margin, so one begun before it cannot be
+ *     the creator.
  * An instant that is not canonical fails SAFE: the bracket is then all of time. The census bracket only ever VETOES: it never links.
  */
-function creatorMayBeLost(input: DelegationCorrelationInput, lostWindows: readonly DelegationListingWindow[]): boolean {
+function creatorMayBeLost(input: DelegationCorrelationInput, lostWindows: readonly DelegationListingWindow[], heldCreators: readonly DelegationListingWindow[]): boolean {
   const horizon = horizonMsOf(input);
-  if (horizon === null && lostWindows.length === 0) return false;
+  if (horizon === null && lostWindows.length === 0 && heldCreators.length === 0) return false;
   let lo = Number.NEGATIVE_INFINITY;
   let hi = Number.POSITIVE_INFINITY;
   try {
@@ -1042,6 +1045,11 @@ function creatorMayBeLost(input: DelegationCorrelationInput, lostWindows: readon
     let span: [number, number];
     try { span = spanOf(w); } catch (err) { if (err instanceof DelegationModelError) return true; throw err; }
     if (span[0] <= hi && lo <= span[1]) return true;
+  }
+  for (const w of heldCreators) {
+    let start: number;
+    try { start = parseDelegationInstant(w.startedAt); } catch (err) { if (err instanceof DelegationModelError) return true; throw err; }
+    if (lo <= start && start <= hi) return true;
   }
   return false;
 }
@@ -1065,7 +1073,14 @@ function rung4(input: DelegationCorrelationInput, x1: boolean): Answer | null {
   const held = input.listingWindows.filter((w) => w.lost !== true);
   const lostWindows = input.listingWindows.filter((w) => w.lost === true && mayBeOn(w, record.project));
   const candidates = held.filter((w) => w.repository !== null && w.repository === record.project && addedExactly(w, record.adminRecord));
-  if (candidates.length === 0) return x1 && creatorMayBeLost(input, lostWindows) ? { ...unmeasured('evidence-horizon'), lostCreator: true } : null;
+  if (candidates.length === 0) {
+    // R85 (B-F1; spec §5.3: "a held Pre with no Post is a lost Post"): a HELD window that may be on this repository and may have been the
+    // creator, but cannot be a candidate because part of its evidence is missing, is lost evidence for X1 too: one that is OPEN-ENDED (its
+    // PostToolUse never came), or one whose session's project was lost at a restart (a null repository) that ADDS the record. Exactly
+    // that narrow (it is liveness): a closed window that does not add the record is evidence of nothing here, and vetoes nothing.
+    const heldCreators = held.filter((w) => mayBeOn(w, record.project) && (w.endedAt === null || (w.repository === null && addedIncludes(w, record.adminRecord))));
+    return x1 && creatorMayBeLost(input, lostWindows, heldCreators) ? { ...unmeasured('evidence-horizon'), lostCreator: true } : null;
+  }
   let ambiguous = false;
   try {
     // Overlap first: a delta that another session's window overlaps is `unresolved` however many windows also show the record.
@@ -1078,8 +1093,9 @@ function rung4(input: DelegationCorrelationInput, x1: boolean): Answer | null {
         if (!(start <= otherEnd && otherStart <= end)) continue;
         if (parentKey(other.sessionId, other.parentIncarnation) !== mineKey) return unresolved('overlapping-listing-window');
         // E2 (R84): "one Bash tool call of S". A window of the SAME session that overlaps the candidate and also added the record (with
-        // others or alone) may be the call that made it: ambiguous, never a link to the first toolUseId.
-        if (addedIncludes(other, record.adminRecord)) ambiguous = true;
+        // others or alone) may be the call that made it: ambiguous, never a link to the first toolUseId. So may an OPEN-ENDED one (R85,
+        // B-F2), whose after-listing is unknown: a lease must name the call that made the tree (5480).
+        if (addedIncludes(other, record.adminRecord) || other.endedAt === null) ambiguous = true;
       }
     }
   } catch (err) {

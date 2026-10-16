@@ -3221,6 +3221,15 @@ describe('2c (R84) in the lane: a shed listing, an unmeasured hour or a lost cre
     });
   });
 
+  it('R85 (B-F2): a same-session OPEN-ENDED window (its subagent\'s call never wrote its PostToolUse) over the creator\'s: unresolved, and no lease names either call', async () => {
+    const w = world();
+    creator(w, bashPre('demo-b', 'toolu_sub1', ['old-tree'], '2026-10-15T10:05:01.000Z'));
+    await run(w, [sessionOf('demo-b')]);
+    expect(leasesOf(w.home)).toEqual([]);
+    expect(attemptsOf(w.home)).toEqual([]);
+    expect(report(w).verdicts).toEqual({ unresolved: 2, conflicting: 0, unmeasured: 0 });
+  });
+
   describe('step 2: an unmeasured hour', () => {
     const overlapping = (w: World): void => writeBucket(w, 'demo-a', BUCKET10,
       bashPre('demo-a', 'toolu_o1', ['old-tree'], '2026-10-15T10:05:01.000Z'), bashPost('demo-a', 'toolu_o1', ['old-tree'], '2026-10-15T10:05:02.000Z'));
@@ -3421,6 +3430,18 @@ describe('2c (R84) in the lane: a shed listing, an unmeasured hour or a lost cre
       plant(control, false);
       await born(control, 0, 9);
       expect(leased(control)).toEqual([['raw-tree', 'agent', 'demo-b']]);
+    });
+
+    it('R85 (B-F1): the creator\'s PreToolUse is held and its PostToolUse never came (a lost Post): no rung-3 lease to the other session, unmeasured, counted as lost evidence', async () => {
+      const w = world();
+      makeOwner(w, 'demo-a');
+      writeBucket(w, 'demo-a', BUCKET10, bashPre('demo-a', 'toolu_q1', ['old-tree'], '2026-10-15T10:31:10.000Z'));
+      writeBucket(w, 'demo-b', BUCKET10, subStart('demo-b', '2026-10-15T10:31:20.000Z'), inTree('demo-b', '2026-10-15T10:31:30.000Z'));
+      await born(w, 0, 8);
+      noLink(w);
+      expect(attemptsOf(w.home).filter((a) => a.adminRecord === 'raw-tree')).toEqual([]);
+      expect(report(w).verdicts).toEqual({ unresolved: 1, conflicting: 0, unmeasured: 1 });
+      expect(report(w).lostEvidence.forced).toBe(1);
     });
   });
 

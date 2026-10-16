@@ -996,6 +996,13 @@ describe('2c (R84): a lost window, a lost hour or a lost creator never decides a
     expect(answer(decide([mine, subWindow({ startedAt: T(20), endedAt: T(22) })], {}, w)), 'CONTROL: it does not overlap').toBe('linked:4');
   });
 
+  it('R85 (B-F2): a same-session OPEN-ENDED window over the candidate may be the call that made the tree (its after-listing is unknown): ambiguous, never a link naming either call', () => {
+    const w = world([bashPre(9, 'toolu_s1', ['main-wt']), bashPre(10, 'toolu_b1', ['main-wt']), bashPost(12, 'toolu_b1', ['main-wt', RAW])]);
+    const open = (over: Partial<DelegationListingWindow>): DelegationListingWindow => win({ toolUseId: 'toolu_s1', startedAt: T(9), endedAt: null, after: null, ...over });
+    expect(answer(decide([mine, open({})], {}, w))).toBe('unresolved:ambiguous-listing-windows');
+    expect(answer(decide([mine, open({ startedAt: T(13) })], {}, w)), 'CONTROL: begun after the candidate ended').toBe('linked:4');
+  });
+
   it('d: a window may be on its session\'s project OR the repository its cwd is attributed to (`listedRepository`; null is every repository)', () => {
     const other = (over: Partial<DelegationListingWindow>): DelegationListingWindow =>
       win({ sessionId: OTHER, toolUseId: 'toolu_o1', startedAt: T(11), endedAt: T(13), before: ['main-wt'], after: ['main-wt'], ...over });
@@ -1068,6 +1075,32 @@ describe('2c (R84): a lost window, a lost hour or a lost creator never decides a
       const v = decideX({ evidenceHorizon: T(12), acceptedEvidence: [] }, none);
       expect(answer(v)).toBe('unresolved:no-correlating-evidence');
       expect(answer(decideX({ evidenceHorizon: T(12) })), 'beside a link it is the link that yields').toBe('unmeasured:evidence-horizon');
+    });
+
+    it('R85 (B-F1): a HELD creator window that cannot be a candidate because its evidence is missing is lost evidence: open-ended (its PostToolUse never came: a lost Post), or of a session whose project was lost at a restart (a null repository) and adding the record', () => {
+      const qPreOnly = world([...pEvents, bashPre(10, 'toolu_q1', ['main-wt'], { sessionId: OTHER })]);
+      expect(answer(decideX({ acceptedEvidence: qPreOnly.acceptedEvidence, listingWindows: [win({ sessionId: OTHER, toolUseId: 'toolu_q1', endedAt: null, after: null })] }, qPreOnly)),
+        'open-ended: the lost Post').toBe('unmeasured:evidence-horizon');
+      expect(answer(decideX({ acceptedEvidence: all.acceptedEvidence, listingWindows: [{ ...qWindow, repository: null }] })), 'the restart route: a null repository').toBe('unmeasured:evidence-horizon');
+      expect(answer(decideX({ acceptedEvidence: all.acceptedEvidence, listingWindows: [qWindow] })), 'CONTROL: held in full, the final conflict').toBe('conflicting:rungs-disagree');
+      const i = input({ record: rec, activities: all.activities, acceptedEvidence: all.acceptedEvidence, listingWindows: [{ ...qWindow, repository: null }], firstSighting: SIGHTED });
+      expect(delegationLostEvidenceForced(i, correlateDelegation(i)), 'counted as lost evidence').toBe(true);
+    });
+
+    it('R85 (B-F1), liveness: the clause is exactly that narrow: a held window that is closed and does NOT add the record, one that began before the bracket, and one on another repository leave rung 3 linking', () => {
+      const qPreOnly = world([...pEvents, bashPre(10, 'toolu_q1', ['main-wt'], { sessionId: OTHER })]);
+      const open = (over: Partial<DelegationListingWindow>): DelegationListingWindow => win({ sessionId: OTHER, toolUseId: 'toolu_q1', endedAt: null, after: null, ...over });
+      expect(answer(decideX({ acceptedEvidence: qPreOnly.acceptedEvidence, listingWindows: [open({})] }, qPreOnly)), 'the open-ended creator itself').toBe('unmeasured:evidence-horizon');
+      for (const [label, w] of [
+        ['closed, not adding the record', win({ sessionId: OTHER, toolUseId: 'toolu_o1', after: ['main-wt'] })],
+        ['closed, a null repository, not adding the record', win({ sessionId: OTHER, toolUseId: 'toolu_o1', repository: null, after: ['main-wt'] })],
+        ['closed, a null repository, adding ANOTHER record', win({ sessionId: OTHER, toolUseId: 'toolu_o1', repository: null, after: ['main-wt', 'wt-other'] })],
+        ['open-ended, begun before the bracket (a call lasts at most the margin)', open({ startedAt: before(10) })],
+        ['open-ended, begun after the first sighting', open({ startedAt: AFTER.startedAt })],
+        ['open-ended, on another repository', open({ repository: 'project-b' })],
+      ] as const) {
+        expect(answer(decideX({ listingWindows: [w] })), label).toBe('linked:3');
+      }
     });
 
     it('delegationLostEvidenceForced counts a link that lost evidence held back (a lost window, or X1), and nothing else', () => {
