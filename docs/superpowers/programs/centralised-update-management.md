@@ -3511,6 +3511,25 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
     `auto=stable` it flags only a stable release above the fleet box an hour after the last `release-stable` run.
     The mechanism did nothing wrong, and no wave is needed.
 
+- **2026-10-16 21:15 UTC: an operator ruling for wave 16: `deploy.sh`'s `prune_backups` must refuse KEEP=0.**
+  - The delegation broker's coordinator relayed it (run 360, PR #448). Its wave 3 makes `deploy.sh`'s server arm
+    write the coordination snapshot into the same `<backups>/<ts>` directories that `prune_backups` prunes, and
+    that pruner goes by age alone (`sort | head -n -$keep`). At KEEP=0 it removes the directory the deploy has just
+    captured; review 518's refuter measured it. Wave 16 at `9c355b049` accepts 0 to 9999 (D-5142). That range is
+    right for `_bak_prune` and `_bak_gc`, whose keep sets hold the current operation's directory, and wrong here.
+    The operator accepted the age-only pruner for wave 3's soak on one condition: wave 16 refuses 0 there, or never
+    removes the newest directory.
+  - **Ruled: wave 16 takes it in its landing round,** after #448 lands. The D-5142 test stays byte-equal to
+    `_keep_ok`, so D1c is unchanged. A second, separate test on the next line refuses any all-zeros KEEP (0, 00,
+    0000) with `[[ $keep =~ ^0+$ ]]`. It is a string test, so a non-ASCII digit never reaches arithmetic (R34). It
+    has its own warning, prunes nothing and returns 1, the invalid-KEEP path. The directory selection and the delete
+    line stay byte-unchanged, inside run 360's fence (mail 5255). The worker defines it as number 5144, the next
+    unspent (bare here until defined), and pins it with deploy-verify rows (KEEP=0 and KEEP=0000 remove nothing, and
+    the newest directory survives; KEEP=1 still prunes to one) and a measured mutation row. Answered by mail 5517.
+    The head goes to run 360's coordinator with the merge.
+  - **The order is now:** #448 lands, then the landing mail: merge `main`, number 5144 with its rows, re-gate, and
+    a fresh wave-done. One scoped review covers F3, F4, the merge and number 5144. Then the merge.
+
 ## Carried constraints
 
 From W1's whole-branch review (minors, not patched in W1) — each lands in the wave named:
