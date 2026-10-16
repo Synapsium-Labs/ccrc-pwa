@@ -21224,8 +21224,8 @@ _upd_sweep() {
   # for a reason that has nothing to do with this box.
   : "${XDG_RUNTIME_DIR:=/run/user/$UID}"; export XDG_RUNTIME_DIR
   : "${DBUS_SESSION_BUS_ADDRESS:=unix:path=${XDG_RUNTIME_DIR}/bus}"; export DBUS_SESSION_BUS_ADDRESS
-  local u km listing lu _ll la _lr lrc=0 fb fin
-  local -a before=() after=() failed=()
+  local u km listing lu _ll la _lr lrc=0 fb fin pi pin pb
+  local -a before=() after=() failed=() prior=() priorw=() pback=()
   listing="$(systemctl --user list-units "claude-session@*" --plain --no-legend)" || lrc=$?
   # fix round 1 item 1 (D-3599): the plan's Task 5 code dropped this rc with
   # `|| :` and built `before` from this listing alone, so a transient failure
@@ -21242,9 +21242,12 @@ _upd_sweep() {
   # Wave 8 item G: the supervisors the restart below can touch are the ones
   # ACTIVE before it runs — read from THIS listing's ACTIVE column (`--plain
   # --no-legend`: UNIT LOAD ACTIVE SUB DESCRIPTION), so no systemctl call is
-  # added, and the argv order below is unchanged.
+  # added, and the argv order below is unchanged. A unit that column shows
+  # `activating` or `failed` goes to `prior`, with its word: never verified,
+  # and named below (wave 16, D-5136).
   while read -r lu _ll la _lr; do
-    [ "$la" = active ] && before+=("$lu")
+    if [ "$la" = active ]; then before+=("$lu")
+    else case "$la" in activating|failed) prior+=("$lu"); priorw+=("$la") ;; esac; fi
   done <<< "$listing"
   for u in $(printf '%s\n' "$listing" | awk '{print $1}') \
            claude-session@ccrc-update-preflight.service; do
@@ -21307,7 +21310,13 @@ _upd_sweep() {
   local -a units=() missing=() crash=() unrec=() ncfail=()
   local vdir="" vjobs="${CCRC_SWEEP_VERIFY_JOBS:-128}" i j k r lrc d o cu _cl cw _cs _cd clist crc=0 m inb cb kc=0 mn=0 rfail="" lpid="" ltrap=""
   [[ "$vjobs" =~ ^[1-9][0-9]{0,3}$ ]] || vjobs=128
-  for u in $(printf '%s\n' "$after_listing" | awk '{print $1}'); do units+=("$u"); done
+  # A unit the pre-restart listing showed `activating` or `failed` is never verified, even when this listing shows it
+  # active (wave 16, D-5136; the ruling: only units active before the restart are verified). Type=simple reads
+  # `active` the moment try-restart forks it, so a crash-looping one is usually here: it goes to `pback`, named below.
+  for u in $(printf '%s\n' "$after_listing" | awk '{print $1}'); do
+    pin=0; for pb in ${prior[@]+"${prior[@]}"}; do [ "$pb" = "$u" ] && { pin=1; break; }; done
+    if [ "$pin" -eq 1 ]; then pback+=("$u"); else units+=("$u"); fi
+  done
   if [ -f "$verify" ]; then
     for cb in ${before[@]+"${before[@]}"}; do
       inb=0; for u in ${units[@]+"${units[@]}"}; do [ "$u" = "$cb" ] && { inb=1; break; }; done
@@ -21434,6 +21443,21 @@ _upd_sweep() {
     seen=0
     for a in ${after[@]+"${after[@]}"} ${failed[@]+"${failed[@]}"}; do [ "$a" = "$b" ] && { seen=1; break; }; done
     [ "$seen" -eq 1 ] || echo "update: warning: $b was active before try-restart and is not active after it — this sweep did not verify it. On the box: systemctl --user status $b" >&2
+  done
+  # Reading 9's sweep half (the operator, 2026-10-15: warn only; wave 16, D-5136): a unit the pre-restart listing showed
+  # `activating` or `failed` is NAMED, once, and is never verified and never fails this update. One that item 3 named
+  # above is in `failed` and gets no second line. One the post-restart listing shows active is in `pback`. Only when
+  # that listing was READ (`arc` 0): an unread one proves nothing about "after it". Above the zero line, so a box
+  # with nothing active before still names it.
+  for ((pi = 0; arc == 0 && pi < ${#prior[@]}; pi++)); do
+    b="${prior[pi]}"; seen=""
+    for a in ${pback[@]+"${pback[@]}"}; do [ "$a" = "$b" ] && { seen=back; break; }; done
+    for a in ${failed[@]+"${failed[@]}"}; do [ "$a" = "$b" ] && { seen=failed; break; }; done
+    case "$seen" in
+      back) echo "update: warning: $b was already '${priorw[pi]}' before try-restart and reads 'active' after it — it is named, not verified, and does not fail this update (only a supervisor that was active before the restart is verified; wave 16, D-5136). On the box: systemctl --user status $b" >&2 ;;
+      failed) ;;
+      *) echo "update: warning: $b was already '${priorw[pi]}' before try-restart and is not active after it — it is named, not verified, and does not fail this update (only a supervisor that was active before the restart is verified; wave 16, D-5136). On the box: systemctl --user status $b" >&2 ;;
+    esac
   done
   if [ "${#before[@]}" -eq 0 ]; then
     echo "update: sweep: no claude-session@ supervisor was active when the sweep began, so try-restart had nothing running to restart (KillMode=process verified before the restart; panes untouched)"

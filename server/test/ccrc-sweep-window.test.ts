@@ -518,8 +518,10 @@ describe('_upd_sweep, Linux arm: one shared verify window, a re-check, crash-sha
   // (review 281 F1; wave 12, R19b, D-4070). Demo-b is missing, so the listing is read; demo-x is in it but was not
   // active before, so it is neither verified nor warned about. In (b) the pre-restart listing does not show demo-x at
   // all, and try-restart leaves such a unit alone. In (a) demo-x read `activating` before the restart, and systemd's
-  // try-restart DOES restart an activating unit: (a) pins the shipped choice, to verify only units that were active,
-  // and is no proof that the choice is right (a question for wave 13).
+  // try-restart DOES restart an activating unit: (a) pins the shipped choice, to verify only units that were active.
+  // The operator ruled that choice on 2026-10-15 (Reading 9, "warn only"; wave 16, D-5136): such a unit, still down
+  // after the restart, is NAMED by its own line and is still never verified, and never fails the update. (b) is not
+  // named by that line: the pre-restart listing never showed it.
   const X = U('x');
   const W17E: ReadonlyArray<readonly [string, string, UnitPlant]> = [
     ['a', 'crash-looping before the restart too',
@@ -534,6 +536,9 @@ describe('_upd_sweep, Linux arm: one shared verify window, a re-check, crash-sha
     expect(count(box, LIST_CRASH), 'demo-b is missing, so the crash listing is read').toBe(1);
     expect(r.stderr, ctx(r)).not.toContain(`${X} was active before try-restart`);
     expect(count(box, act(X)), 'demo-x is never verified').toBe(0);
+    const named = `${X} was already 'activating' before try-restart and is not active after it — it is named, not verified`;
+    if (_k === 'a') expect(r.stderr, ctx(r)).toContain(named);
+    else expect(r.stderr, ctx(r)).not.toContain('before try-restart and is not active after it — it is named');
     expect(r.stderr).toContain(`${B} was active before try-restart and is not active after it`);
     expect(r.stderr).not.toContain(RECHECK);
     expect(r.stdout).toContain(SWEEP_OK);
@@ -1050,6 +1055,15 @@ describe('_upd_sweep, Linux arm: a unit that did not come back active is named t
   const VERIFIED = (u: string, w: string): string =>
     `${u} was active before try-restart and reads '${w}' after it — it is verified with the rest (wave 11, D-3984)`;
   const UNSEEN = (u: string): string => `${u} was active before try-restart and is not active after it`;
+  const TAIL = (u: string): string => 'it is named, not verified, and does not fail this update (only a supervisor that '
+    + `was active before the restart is verified; wave 16, D-5136). On the box: systemctl --user status ${u}`;
+  const PRIOR = (u: string, w: string): string =>
+    `update: warning: ${u} was already '${w}' before try-restart and is not active after it — ${TAIL(u)}`;
+  const BACK = (u: string, w: string): string =>
+    `update: warning: ${u} was already '${w}' before try-restart and reads 'active' after it — ${TAIL(u)}`;
+  const PRIOR_ANY = 'before try-restart and is not active after it — it is named, not verified';
+  const NAMED_ANY = 'it is named, not verified';
+  const ZERO = 'update: sweep: no claude-session@ supervisor was active when the sweep began';
 
   // ── item 3 (D-5135): the failed listing names only a unit that was NOT active before ──
   itLinux('W23a active before, failed after: verified, and never also told it was skipped and unverified', () => {
@@ -1103,6 +1117,89 @@ describe('_upd_sweep, Linux arm: a unit that did not come back active is named t
     expect(r.stderr, ctx(r)).toContain(SKIPPED(X));
     expect(lines(r.stderr, X), ctx(r)).toBe(1);
     expect(count(box, act(X))).toBe(0);
+    noPoison(box);
+  }, 60_000);
+
+  // ── Reading 9's sweep half (D-5136): already down before the restart: named once, never verified, never fatal ──
+  itLinux.each([
+    ['activating', 'crash:activating'],
+    ['failed', 'gone'],
+    ['activating', 'gone'],
+  ] as const)('W24a %s before the restart, %s after: named with its pre-restart word, never verified, never fatal', (pre, listed) => {
+    const box = makeBox({ units: [stable(A, 0), { unit: X, active: ['inactive'], mainPid: [], listed, preRestart: pre }] });
+    const r = runSweep(box);
+    expect(r.code, ctx(r)).toBe(0);
+    expect(r.stderr.split('\n'), ctx(r)).toContain(PRIOR(X, pre));
+    expect(lines(r.stderr, X), 'one line, and only that one').toBe(1);
+    expect(count(box, act(X))).toBe(0);
+    expect(count(box, LIST_CRASH), 'nothing active before is missing, so the crash listing is not read').toBe(0);
+    expect(r.stdout).toContain(SWEEP_OK);
+    noPoison(box);
+  }, 60_000);
+
+  itLinux('W24b activating before, failed after: named once, by item 3, never a second line', () => {
+    const box = makeBox({
+      units: [stable(A, 0),
+        { unit: X, active: ['failed'], mainPid: [], listed: 'crash:failed', preRestart: 'activating', failedListed: true }],
+    });
+    const r = runSweep(box);
+    expect(r.code, ctx(r)).toBe(0);
+    expect(r.stderr, ctx(r)).toContain(SKIPPED(X));
+    expect(lines(r.stderr, X), ctx(r)).toBe(1);
+    expect(r.stderr).not.toContain(NAMED_ANY);
+    noPoison(box);
+  }, 60_000);
+
+  // Type=simple reads `active` the moment try-restart forks a unit, so a crash-looping one is usually IN the
+  // post-restart active listing, and then dies inside the verify's window. It is still never verified (the ruling:
+  // only units active before the restart are verified), so its crash cannot fail the update.
+  itLinux('W24c activating before, listed active after, crashing in the window: named, never verified, never fatal', () => {
+    const box = makeBox({
+      units: [stable(A, 0), { unit: X, active: ['activating'], mainPid: [], listed: 'active', preRestart: 'activating' }],
+    });
+    const r = runSweep(box);
+    expect(r.code, ctx(r)).toBe(0);
+    expect(count(box, act(X)), 'a unit that was not active before the restart is never verified').toBe(0);
+    expect(r.stderr.split('\n'), ctx(r)).toContain(BACK(X, 'activating'));
+    expect(lines(r.stderr, X), 'one line, and only that one').toBe(1);
+    expect(r.stderr).not.toContain(PRIOR_ANY);
+    expect(r.stdout).toContain(SWEEP_OK);
+    noPoison(box);
+  }, 60_000);
+
+  itLinux('W24e nothing active before, and the post-restart listing unread: no unit is called "not active after it"', () => {
+    const box = makeBox({
+      units: [{ unit: X, active: ['inactive'], mainPid: [], listed: 'gone', preRestart: 'activating' }],
+      activeListingRc: 94,
+    });
+    const r = runSweep(box);
+    expect(r.code, ctx(r)).toBe(0);
+    expect(r.stderr, ctx(r)).not.toContain(X);
+    expect(r.stdout).toContain(ZERO);
+    noPoison(box);
+  }, 60_000);
+
+  itLinux('W24f nothing active before, one unit crash-looping before and down after, the listing read: named, then the zero line', () => {
+    const box = makeBox({ units: [{ unit: X, active: ['inactive'], mainPid: [], listed: 'gone', preRestart: 'activating' }] });
+    const r = runSweep(box);
+    expect(r.code, ctx(r)).toBe(0);
+    expect(r.stderr.split('\n'), ctx(r)).toContain(PRIOR(X, 'activating'));
+    expect(lines(r.stderr, X), ctx(r)).toBe(1);
+    expect(count(box, act(X))).toBe(0);
+    expect(r.stdout).toContain(ZERO);
+    noPoison(box);
+  }, 60_000);
+
+  itLinux('W24d a pre-restart word other than active, activating or failed is not named (inactive, deactivating)', () => {
+    const box = makeBox({
+      units: [stable(A, 0),
+        { unit: X, active: ['inactive'], mainPid: [], listed: 'gone', preRestart: 'inactive' },
+        { unit: F, active: ['inactive'], mainPid: [], listed: 'gone', preRestart: 'deactivating' }],
+    });
+    const r = runSweep(box);
+    expect(r.code, ctx(r)).toBe(0);
+    expect(r.stderr, ctx(r)).not.toContain(X);
+    expect(r.stderr, ctx(r)).not.toContain(F);
     noPoison(box);
   }, 60_000);
 });
