@@ -23,6 +23,10 @@
 //  - E7, W2 Task 9's rows (D-4962), per locale: `_limit_field` and `_limit_field_to` over every limits row at three
 //    clocks, both fields and four maxages; into its callers' names; the one-read row; and `_avail`/`_limit_score`
 //    against their vendored legacy, called bare as the tick calls them. (E6 and E7 also sit above E4 in the file.)
+//  - E8, W3 Task 13's registry rows (D-4963), per locale: `_reg_get`, `_reg_get_to`, `_reg_read` and `_reg_read_to`
+//    over every registry row and 500 random ones; into the names the tick's hot sites pass; the open-failure ladder
+//    driven by a field that vanishes between the type check and the open; and the one stated edge, `_reg_get`'s raw
+//    stdout, with the static census that says no call site reads it (E8d). (E8 also sits above E4 in the file.)
 //  - E4, the corpus module: deterministic, and every row plants the shape it names.
 //
 // RED FIRST, AND STILL A GREEN COMMIT. A row whose live helper has not landed yet is PENDING: its live side must fail,
@@ -49,8 +53,8 @@ import { inheritedEnv } from './gitEnvStrip.js';
 import { DEFAULT_TEST_ROSTER } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 import {
-  FILE_ROW_SETS, LIMIT_KEYS, LIMITS_IN_CAP_SIGPIPE, LIMITS_REWRITE, LIMITS_ROWS, LIMITS_TS, RANDOM_ALPHABET, ROUTE_ROWS, blocksByName,
-  inLimitsDomain, needsNonRoot, randomRows, type FileRow,
+  FILE_ROW_SETS, LIMIT_KEYS, LIMITS_IN_CAP_SIGPIPE, LIMITS_REWRITE, LIMITS_ROWS, LIMITS_TS, RANDOM_ALPHABET, REGISTRY_ROWS, ROUTE_ROWS,
+  blocksByName, inLimitsDomain, needsNonRoot, randomRows, type FileRow,
 } from './tickDietCorpus.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -108,10 +112,11 @@ const PLANNED_FORMS: Readonly<Record<string, string>> = {
  *  The task that lands a name deletes it here in the same commit (the header's "RED FIRST"). D-4961 (Task 4) landed
  *  `_now_s_to` and `_now_s`; Task 5 landed `_cfg_dir_to`; W2 Task 8 (D-4962) landed `_limit_text_to`,
  *  `_limit_num_in_to` and `_limit_json_num_to`; W2 Task 9 (D-4962) landed `_limit_pick_to` and `_limit_field_to`;
- *  W2 Task 10 (D-4962) landed `_share_pct_to`; W3 removes its own. */
+ *  W2 Task 10 (D-4962) landed `_share_pct_to`; W3 Task 13 (D-4963) landed `_file_read_to`, `_reg_get_to` and
+ *  `_reg_read_to`; the rest of W3 removes its own. */
 const LANDED: ReadonlySet<string> = new Set([
   '_now_s_to', '_now_s', '_cfg_dir_to', '_limit_text_to', '_limit_num_in_to', '_limit_json_num_to',
-  '_limit_pick_to', '_limit_field_to', '_share_pct_to',
+  '_limit_pick_to', '_limit_field_to', '_share_pct_to', '_file_read_to', '_reg_get_to', '_reg_read_to',
 ]);
 const PENDING: ReadonlySet<string> = new Set(
   [...Object.keys(PLANNED_FORMS), '_now_s'].filter((n) => !LANDED.has(n)),
@@ -1734,6 +1739,250 @@ describe.each(LOCALES)('E7 W2 Task 9 under $name: `_limit_field_to`, its one rea
   it(`E7e the first 100 of ${LIM_SEED}'s random limits files: both forms, both fields, maxage 0 and 60 (D-4962)`, (ctx) => {
     const b = got(ctx).random;
     for (const row of rows.random) expectEquivalent(row, b.results.get(row.id)!, locale!);
+  });
+});
+
+// ── E8: W3 Task 13's registry rows — `_file_read_to`, `_reg_get_to`, `_reg_read_to` (D-4963) ───────────────────────
+
+/** Where every registry row plants its field: `$REG/diet.f`, so the helpers read id `diet`, field `f` (E4d's path). */
+const REG_AT = '"$REG/diet.f"';
+/** W3's random corpus seed (E4a pins that it draws other rows than W2's 4962). */
+const REG_SEED = 4963;
+/** Every `REGISTRY_ROWS` row, the blocking shapes INCLUDED: both readers ask their type checks (`-L`, `-f`) before
+ *  any open, legacy and live alike, so a FIFO or a link to /dev/zero is never opened, and a hang here is the finding
+ *  (plan Review Focus 6), which the batch's bound names. Under root, not the rows whose meaning needs a non-root
+ *  reader (`needsNonRoot`). */
+const RG_ROWS: readonly FileRow[] = REGISTRY_ROWS.filter((r) => !(AS_ROOT && needsNonRoot(r)));
+/** The live names W3 Task 13 lands; every E8 row needs them. */
+const RG_NEEDS: readonly string[] = ['_file_read_to', '_reg_get_to', '_reg_read_to'];
+const regRow = (id: string): FileRow => {
+  const r = REGISTRY_ROWS.find((x) => x.id === id);
+  if (!r) throw new Error(`no REGISTRY_ROWS row ${id}`);
+  return r;
+};
+
+/** One side over one field: four calls, each answer and rc on stdout.
+ *  - `_reg_get` through `$( )`, which is how every call site in `ccd/ccd` reads it (E8d; its raw stdout is E8f's);
+ *  - the `_to` form into `v`, set to `__P` first, so a form that does not empty its out-var shows;
+ *  - `_reg_read`'s RAW stdout: its legacy body already printed `$(cat)`'s value, so its printing contract is raw;
+ *  - `_reg_read_to` into `rv`, set to `__P` first. NOT into `v`: `_reg_read_to` is `_reg_read` renamed in place, and
+ *    keeps its legacy locals `f` and `v` (plan §Interfaces), so `v` is a name it would catch in its own local and the
+ *    caller's `v` would keep `__P` (measured; E8g holds the census that forbids it). */
+const rg4 = (get: string, getTo: string, read: string, readTo: string): string => [
+  '__rg4() {',
+  '  local r rv',
+  `  v=$(${get} diet f); r=$?; printf '[get %s|%s]\\n' "$v" "$r"`,
+  `  v=__P; ${getTo}; r=$?; printf '[get_to %s|%s]\\n' "$v" "$r"`,
+  `  ${read} diet f; r=$?; printf '<read rc=%s>\\n' "$r"`,
+  `  rv=__P; ${readTo}; r=$?; printf '[read_to %s|%s]\\n' "$rv" "$r"`,
+  '}',
+  '__diet_caller v __rg4',
+].join('\n');
+const RG4_LEGACY = rg4('_legacy_reg_get', 'v=$(_legacy_reg_get diet f)', '_legacy_reg_read', 'rv=$(_legacy_reg_read diet f)');
+const RG4_LIVE = rg4('_reg_get', '_reg_get_to v diet f', '_reg_read', '_reg_read_to rv diet f');
+
+/** The open-failure ladder's driver (plan Task 13, its last mutation row): the field is deleted between the type
+ *  check and the open. The legacy side's `cat` is a function that deletes its last argument first; the live side's
+ *  `_file_read_to` is a shadow that does the same and then runs the real one. Each writes `vanished` to its note, so
+ *  a side that never reached the open reds by name. The shadow is planted only when `_file_read_to` exists: before it
+ *  lands, the live side reads through the legacy `cat` and answers rc 0, which is this row's red. */
+const VANISH_LEGACY = 'cat() { command rm -f -- "${@: -1}"; printf vanished > "$PWD/note"; command cat "$@"; }';
+const VANISH_LIVE = [
+  'if declare -F _file_read_to >/dev/null; then',
+  '  eval "__diet_real_file_read_to() $(declare -f _file_read_to | command tail -n +2)"',
+  '  _file_read_to() { command rm -f -- "$2"; printf vanished > "$PWD/note"; __diet_real_file_read_to "$@"; }',
+  'fi',
+].join('\n');
+
+/** The rows whose `_reg_get` RAW stdout differs from the legacy `cat`'s (E8f): a readable regular field that ends in
+ *  a newline or holds a NUL. `$( )` drops both, every call site reads through one (E8d), and the printing form prints
+ *  what `$( )` leaves. */
+const rawGetDiverges = (r: FileRow): boolean =>
+  r.shape === 'regular' && (r.bytes.includes(0) || (r.bytes.length > 0 && r.bytes[r.bytes.length - 1] === 0x0a));
+
+/** Every W3 Task 13 row (plan Task 13 Step 1, tick-diet spec §6.4):
+ *  - `files`: each `REGISTRY_ROWS` row through `rg4`, against the legacy;
+ *  - `named`: the `_to` forms into the variables the tick's hot sites pass (plan Task 14's table), one call per row, so
+ *    the out-var and the caller frame are compared for exactly that call;
+ *  - `random`: `randomRows(4963, 500)`, as `files`;
+ *  - `vanish`: the ladder (above), for `_reg_read`, `_reg_read_to` and `_reg_get_to`;
+ *  - `raw`: structural, `_reg_get`'s raw stdout against the legacy's raw bytes and its captured value (E8f). */
+function w3RegRows(): { files: Row[]; named: Row[]; random: Row[]; vanish: Row[]; raw: DomainRow[] } {
+  const both = (id: string, r: FileRow): Row => ({
+    id, setup: plant(r, REG_AT), needs: RG_NEEDS,
+    sides: [{ label: 'legacy', body: RG4_LEGACY }, { label: 'live', body: RG4_LIVE }],
+  });
+  const named: Row[] = [];
+  const NAMED_IDS = ['plain', 'three-newlines', 'nul-inside', 'missing-field', 'symlink-regular', ...(AS_ROOT ? [] : ['mode-000'])];
+  for (const id of NAMED_IDS) {
+    const setup = plant(regRow(id), REG_AT);
+    for (const ov of ['last', 'scan', 'blocked', 'lastswap', 'wrapper']) {
+      named.push(toRow(`_reg_get_to ${ov} ${id}`, '_legacy_reg_get', '_reg_get_to', ['diet', 'f'], setup, ov));
+    }
+    named.push(toRow(`_reg_read_to wrapper ${id}`, '_legacy_reg_read', '_reg_read_to', ['diet', 'f'], setup, 'wrapper'));
+  }
+  const vanish = ([
+    ['_reg_read', 'v', '_legacy_reg_read diet f', '_reg_read diet f'],
+    ['_reg_read_to', 'rv', 'rv=$(_legacy_reg_read diet f)', '_reg_read_to rv diet f'],
+    ['_reg_get_to', 'v', 'v=$(_legacy_reg_get diet f)', '_reg_get_to v diet f'],
+  ] as const).map(([fn, ov, legacy, live]): Row => ({
+    id: `vanish: ${fn}`, setup: plant(regRow('plain'), REG_AT), needs: RG_NEEDS,
+    sides: [
+      { label: 'legacy', body: `${VANISH_LEGACY}\n__diet_caller ${ov} ${q(legacy)}` },
+      { label: 'live', body: `${VANISH_LIVE}\n__diet_caller ${ov} ${q(live)}` },
+    ],
+  }));
+  const raw = RG_ROWS.map((r): DomainRow => ({
+    id: `_reg_get raw: ${r.id}`, row: r, setup: plant(r, REG_AT), needs: RG_NEEDS,
+    sides: [{
+      label: 'raw',
+      body: [
+        '_reg_get diet f > "$PWD/live.raw"; __a=$?',
+        '_legacy_reg_get diet f > "$PWD/legacy.raw"; __b=$?',
+        '__v=$(_legacy_reg_get diet f) 2>/dev/null; printf \'%s\' "$__v" > "$PWD/legacy.cap"',
+        'if command cmp -s "$PWD/live.raw" "$PWD/legacy.raw"; then __r=raw-equal; else __r=raw-differs; fi',
+        'if command cmp -s "$PWD/live.raw" "$PWD/legacy.cap"; then __c=captured; else __c=not-captured; fi',
+        'printf \'%s %s %s %s\' "$__r" "$__c" "$__a" "$__b" > "$PWD/note"',
+      ].join('\n'),
+    }],
+  }));
+  return {
+    files: RG_ROWS.map((r) => both(`registry, four calls: ${r.id}`, r)),
+    named,
+    random: randomRows(REG_SEED, 500).map((r) => both(`registry, four calls: ${r.id}`, r)),
+    vanish,
+    raw,
+  };
+}
+
+/** Every `_reg_get` call in `src`'s code that is NOT the first word of a command substitution, as `line: text`: a
+ *  caller that would see the printing form's raw stdout, which E8f states differs from the legacy `cat`'s for a field
+ *  ending in a newline or holding a NUL. The definition is no call, and a word right after a backquote is the head of
+ *  the old-style substitution (it is also how prose inside a quoted program text, which `stripShellComments` keeps,
+ *  names the helper). Conservative: a call inside a `$( )` but not at its head is reported. */
+function rawRegGetCalls(src: string): string[] {
+  const out: string[] = [];
+  stripShellComments(src).split('\n').forEach((l, i) => {
+    for (const m of l.matchAll(/(^|[^A-Za-z0-9_])_reg_get(?![A-Za-z0-9_])/g)) {
+      const at = (m.index ?? 0) + m[1]!.length;
+      if (/^_reg_get\(\)/.test(l.slice(at))) continue;
+      if (!/(?:\$\(\s*|`)$/.test(l.slice(0, at))) out.push(`${i + 1}: ${l.trim()}`);
+    }
+  });
+  return out;
+}
+
+describe('E8d no call site reads `_reg_get`\'s raw stdout: every call is the head of a `$( )` (D-4963)', () => {
+  it('E8d ccd/ccd calls `_reg_get` only as `$(_reg_get …)`, and the census names a raw call when one is planted', () => {
+    const src = fs.readFileSync(CCD, 'utf8');
+    const code = stripShellComments(src);
+    const calls = (code.match(/(^|[^A-Za-z0-9_])_reg_get(?![A-Za-z0-9_(])/gm) ?? []).length;
+    expect(calls, 'the census found no call — its pattern no longer matches ccd/ccd').toBeGreaterThan(100);
+    expect(rawRegGetCalls(src), 'a `_reg_get` call outside a `$( )` reads the printing form\'s raw stdout, which drops '
+      + 'a field\'s trailing newlines and NULs (E8f) — capture it, or call `_reg_get_to`').toEqual([]);
+    // The census's own red: one raw call, and one inside a `$( )` but behind another word, each named.
+    const planted = `${src}\n_diet_raw() { _reg_get "$1" f > "$2"; x=$(LC_ALL=C _reg_get "$1" f); }\n`;
+    expect(rawRegGetCalls(planted)).toEqual([
+      `${planted.split('\n').length - 1}: _diet_raw() { _reg_get "$1" f > "$2"; x=$(LC_ALL=C _reg_get "$1" f); }`,
+      `${planted.split('\n').length - 1}: _diet_raw() { _reg_get "$1" f > "$2"; x=$(LC_ALL=C _reg_get "$1" f); }`,
+    ]);
+  });
+});
+
+describe('E8g the out-var census forbids the legacy locals `_reg_read_to` kept in place (plan §Interfaces, D-4963)', () => {
+  it('E8g a caller passing `v` or `f` to `_reg_read_to` is a named collision, and ccd/ccd has none', () => {
+    const src = fs.readFileSync(CCD, 'utf8');
+    expect(outVarCensus(src).forms, 'the census does not see `_reg_read_to` as a form').toContain('_reg_read_to');
+    const planted = `${src}\n_diet_v() { local w; _reg_read_to v "$1" wrapper; _reg_read_to f "$1" wrapper; _reg_read_to w "$1" wrapper; }\n`;
+    expect(outVarCensus(planted).findings.filter((f) => f.caller === '_diet_v')).toEqual([
+      { kind: 'collision', caller: '_diet_v', form: '_reg_read_to', word: 'v', via: ['_reg_read_to'] },
+      { kind: 'collision', caller: '_diet_v', form: '_reg_read_to', word: 'f', via: ['_reg_read_to'] },
+    ]);
+  });
+});
+
+describe.each(LOCALES)('E8 W3 Task 13 under $name: `_reg_get`, `_reg_read` and their `_to` forms (tick-diet spec §6.4, D-4963)', ({ locale }) => {
+  const rows = w3RegRows();
+  let h: CcdHarness;
+  let fixed: Batch | null = null;
+  let random: Batch | null = null;
+  beforeAll(() => {
+    h = makeCcdHarness('ccrc-diet-e8-');
+    if (locale !== null) {
+      fixed = runBatch(h, [...rows.files, ...rows.named, ...rows.vanish, ...rows.raw], locale, 600);
+      random = runBatch(h, rows.random, locale, 600);
+    }
+  }, 1_300_000);
+  afterAll(() => h.cleanup());
+  const got = (ctx: { skip: (note?: string) => never }): { fixed: Batch; random: Batch } => {
+    if (locale === null) {
+      if (process.platform === 'darwin') ctx.skip(NO_UTF8);
+      throw new Error(`${NO_UTF8} — the supervisors run under one, so this half cannot be skipped here`);
+    }
+    return { fixed: fixed!, random: random! };
+  };
+  const out = (b: Batch, id: string): string => b.results.get(id)![0]!.out.toString('latin1');
+
+  it('E8x both batches ran every row to the end, inside their deadlines: no reader opened a FIFO or /dev/zero', (ctx) => {
+    for (const b of Object.values(got(ctx))) {
+      expect(b.hung, `a row never finished: ${b.stderr.slice(0, 2000)}`).toBeNull();
+      expect(b.status).toBe(0);
+    }
+  });
+
+  it('E8a every registry row: `$(_reg_get)`, `_reg_get_to`, `_reg_read` and `_reg_read_to` leave what the legacy `cat` did (D-4963)', (ctx) => {
+    const b = got(ctx).fixed;
+    for (const row of rows.files) expectEquivalent(row, b.results.get(row.id)!, locale!);
+    // Non-vacuity: the legacy sides really answered — every trailing newline stripped, a NUL dropped, a resolving
+    // link refused by both readers, a vanished registry and an unreadable field told apart by `_reg_read`.
+    const leg = (id: string): string => out(b, `registry, four calls: ${id}`);
+    expect(leg('three-newlines')).toBe('[get abc|0]\n[get_to abc|0]\nabc<read rc=0>\n[read_to abc|0]\n');
+    expect(leg('nul-inside')).toContain('[get ab|0]\n');
+    expect(leg('symlink-regular')).toBe('[get |1]\n[get_to |1]\n<read rc=2>\n[read_to |2]\n');
+    expect(leg('missing-field')).toBe('[get |1]\n[get_to |1]\n<read rc=1>\n[read_to |1]\n');
+    expect(leg('fifo')).toContain('<read rc=2>\n');
+    if (!AS_ROOT) {
+      expect(leg('mode-000')).toBe('[get |1]\n[get_to |1]\n<read rc=2>\n[read_to |2]\n');
+      expect(leg('reg-unsearchable')).toContain('<read rc=2>\n');
+    }
+    expect(b.results.get('registry, four calls: nul-inside')![0]!.err).toContain('ignored null byte');
+  });
+
+  it('E8b `_reg_get_to` and `_reg_read_to` into the names the tick\'s hot sites pass, one call per row (D-4963)', (ctx) => {
+    const b = got(ctx).fixed;
+    for (const row of rows.named) expectEquivalent(row, b.results.get(row.id)!, locale!);
+    expect(b.results.get('_reg_get_to last three-newlines')![0]!.val!.toString('latin1')).toBe('abc');
+    expect(b.results.get('_reg_read_to wrapper symlink-regular')![0]!.rc).toBe(2);
+  });
+
+  it(`E8c ${REG_SEED}'s 500 random registry fields: the four calls, as the legacy \`cat\` (D-4963)`, (ctx) => {
+    const b = got(ctx).random;
+    for (const row of rows.random) expectEquivalent(row, b.results.get(row.id)!, locale!);
+  });
+
+  it('E8e a field that vanishes between the type check and the open: absent (rc 1), as the failed `cat` left it, never unreadable (D-4963)', (ctx) => {
+    const b = got(ctx).fixed;
+    for (const row of rows.vanish) {
+      const res = b.results.get(row.id)!;
+      expectEquivalent(row, res, locale!);
+      for (const s of res) expect(s.note, `${row.id}: a side never reached the open, so nothing vanished`).toBe('vanished');
+      expect(res[0]!.rc, `${row.id}: the legacy answer`).toBe(1);
+    }
+  });
+
+  it('E8f `_reg_get`\'s raw stdout is what `$( )` leaves: the legacy `cat`\'s bytes, except a field\'s trailing newlines and NULs (D-4963)', (ctx) => {
+    const b = got(ctx).fixed;
+    for (const row of rows.raw) {
+      const s = b.results.get(row.id)![0]!;
+      expect(s.setupRc, `${row.id}: the setup failed: ${s.setupLog}`).toBe(0);
+      const [r, c, a, l] = s.note.split(' ');
+      expect({ c, a }, `${row.id}: the printing form prints the captured value with the legacy's rc`).toEqual({ c: 'captured', a: l });
+      expect(r, `${row.id}: raw stdout ${rawGetDiverges(row.row) ? 'drops the trailing newlines or NULs' : 'is the legacy\'s'}`)
+        .toBe(rawGetDiverges(row.row) ? 'raw-differs' : 'raw-equal');
+    }
+    // Non-vacuity: the edge is real, both ways.
+    expect(b.results.get('_reg_get raw: three-newlines')![0]!.note).toMatch(/^raw-differs /);
+    expect(b.results.get('_reg_get raw: plain')![0]!.note).toMatch(/^raw-equal /);
   });
 });
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=ca3a62cd1e810809c14e1c8517d0497e6d3359713d45a1aea78d83ab3df91d13
+# ccrc:generated 1 sha256=f7fae3fb11905bc8806c591bed1ee62b7b27344d2f3a9f569d1e036f6341e879
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -3130,7 +3130,7 @@ _reg_set() {   # id field value -> 0 iff the value is on disk under its own name
 # diverging from a pattern this tree names as doctrine. The divergence is
 # written down here rather than discovered later, and it is now written down
 # at its real price.
-_reg_get() { [[ -f "$REG/$1.$2" && ! -L "$REG/$1.$2" ]] || return 1; cat "$REG/$1.$2" 2>/dev/null; }   # id field
+_reg_get() { [[ -f "$REG/$1.$2" && ! -L "$REG/$1.$2" ]] || return 1; local __rg_v; _file_read_to __rg_v "$REG/$1.$2" || return $?; printf '%s' "$__rg_v"; }   # id field
 # THE FOLD `_reg_get` KEEPS, AND THE READ THAT DOES NOT. `_reg_get` answers `""`
 # for a field that is ABSENT, one that is UNREADABLE and one that is EMPTY — the
 # overloaded null the ring rules forbid at a seam. It stays exactly as it is,
@@ -3235,8 +3235,8 @@ _reg_get() { [[ -f "$REG/$1.$2" && ! -L "$REG/$1.$2" ]] || return 1; cat "$REG/$
 # deleted a crossing marker off a read that had failed, and logged a move that
 # never happened. `grep -n '_reg_read ' ccd/ccd` is the census of who needs the
 # distinction; every other reader keeps `_reg_get` and keeps the fold.
-_reg_read() {   # id field -> stdout the value; rc 0 = read, 1 = absent, 2 = unreadable
-  local f="$REG/$1.$2" v
+_reg_read_to() {   # var id field -> var = the value; rc 0 = read, 1 = absent, 2 = unreadable (printing form `_reg_read`: the tick-diet block, D-4963)
+  local __rr_out="$1"; shift; local f="$REG/$1.$2" v; printf -v "$__rr_out" ''
   # THE TYPE CHECK COMES BEFORE THE OPEN, and it is not defensive dressing:
   # `cat -- "$f"` opens whatever is at `$f` with no regard for its TYPE, and
   # C1 put this function inside the `cmd_supervise` loop. A FIFO with no
@@ -3273,7 +3273,7 @@ _reg_read() {   # id field -> stdout the value; rc 0 = read, 1 = absent, 2 = unr
   # DANGLING case already got at the field level below. That case reached rc 2;
   # the RESOLVING case, which is the one that fabricates, did not.
   [[ -L "$f" ]] && return 2
-  if [[ -f "$f" ]] && v=$(cat -- "$f" 2>/dev/null); then printf '%s' "$v"; return 0; fi
+  if [[ -f "$f" ]] && _file_read_to v "$f"; then printf -v "$__rr_out" '%s' "$v"; return 0; fi
   # `cat` failed, so the question is now WHY, and the two levels are asked in
   # the order `_project_pool_state` asks them (`grep -n '^_project_pool_state()'
   # ccd/ccd`): the DIRECTORY the field sits in first, then the field.
@@ -24424,6 +24424,49 @@ _share_pct_to() {   # var wrapper -> var and rc as `v=$(_share_pct w); rc=$?` le
   fi
   printf -v "$1" '%s' "$__sp_v"; return "$__sp_rc"
 }
+
+# D-4963 (tick-diet spec §6.4): registry reads with builtins. `_reg_get` and `_reg_read`
+# forked a `cat` for every read. `_file_read_to` reads the field with `IFS= read -r -d ''`
+# instead, and leaves exactly what `$(cat path)` leaves:
+#  - EOF with no NUL: the bytes with EVERY trailing newline stripped, as `$( )` strips them; rc 0.
+#  - the open failed (the redirection failed, so the group never ran): rc 1 and an empty var.
+#    That is the unreadable rung: `_reg_get` answers rc 1, as the failed `cat` did, and
+#    `_reg_read_to`'s unchanged ladder answers 2, or 1 for a field that vanished.
+#  - a NUL: the legacy `cat`, whose NULs `$( )` drops with bash's warning, as it always did.
+# The read runs under a scoped `LC_ALL=C`: under a UTF-8 locale bash 5.x misses a NUL that
+# follows a lead byte in `read -d ''` (D-3833, D-3979; platform-hazards R14(i)).
+# THE TYPE CHECKS STAY THE CALLERS', AND COME FIRST: `_reg_get` and `_reg_get_to` require a
+# regular file that is not a symlink (`-f`, `! -L`), and `_reg_read_to` asks `-L` and then
+# `-f`, before anything is opened. That order is what keeps a FIFO with no writer, or a link
+# to /dev/zero, from blocking a supervisor forever, and it keeps a directory away from
+# `read`, which fails on one the way it meets EOF. The comments inside `_reg_read_to` still
+# say `cat`: the open they argue about is `_file_read_to`'s now, at the same place and in
+# the same order.
+# `_reg_get` keeps its own line, with its guard at the head of it, a direct path test and
+# never a listing (ccd-collect-recycle-pins pins that text), and then reads through
+# `_file_read_to`; `_reg_get_to` asks the same guard for the out-var form. `_reg_get` prints
+# what `$( )` leaves, so a field that ends in newlines or holds a NUL no longer prints its
+# raw bytes. Every call site in this file captures it with `$( )`, which drops both: the
+# equivalence suite's E8d holds that census, and its E8f states the edge.
+# `_reg_get_to` and `_reg_read_to` are the out-var forms the tick's hot reads call.
+_file_read_to() {   # var path -> rc 0: var = the bytes `$(cat path)` gives | 1: the open failed (var empty). LC_ALL=C:
+  # under UTF-8, bash 5.x misses a NUL after a lead byte in `read -d ''` (D-3833/D-3979, platform-hazards R14(i)).
+  local LC_ALL=C __fr_v='' __fr_ran='' __fr_rc
+  { __fr_ran=1; IFS= read -r -d '' __fr_v; } 2>/dev/null < "$2"; __fr_rc=$?
+  if [[ -z "$__fr_ran" ]]; then printf -v "$1" '%s' ''; return 1; fi
+  if (( __fr_rc == 0 )); then                                  # a NUL: the legacy read, which drops it
+    __fr_v=$(cat -- "$2" 2>/dev/null); __fr_rc=$?
+    printf -v "$1" '%s' "$__fr_v"; return "$__fr_rc"
+  fi
+  __fr_v=${__fr_v%"${__fr_v##*[!$'\n']}"}                      # strip EVERY trailing newline, as `$( )` does
+  printf -v "$1" '%s' "$__fr_v"; return 0
+}
+_reg_get_to() {   # var id field -> var = the value; rc 0 read | 1 absent or unreadable (`_reg_get`'s fold, kept)
+  printf -v "$1" '%s' ''
+  [[ -f "$REG/$2.$3" && ! -L "$REG/$2.$3" ]] || return 1
+  _file_read_to "$1" "$REG/$2.$3"
+}
+_reg_read() { local __rrw_v __rrw_rc; _reg_read_to __rrw_v "$@"; __rrw_rc=$?; printf '%s' "$__rrw_v"; return "$__rrw_rc"; }   # the printing form (D-4963)
 
 cmd_supervise() {   # systemd ExecStart: ensure then block until the session dies
   local id="${1:?usage: ccd supervise <id>}"

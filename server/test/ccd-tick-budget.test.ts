@@ -86,17 +86,28 @@ import {
  *    idle-home 167/73 -> 128/46 · busy 164/72 -> 125/45 · narrow 75/28 (=) · away-over-ceiling 193/91 -> 128/46 ·
  *    hard-blocked 406/218 -> 172/56 · cooldown 97/36 (=) · fable 156/65 -> 130/47 · leaving 391/224 -> 151/56 ·
  *    fable-leaving 375/211 -> 159/60.
+ *
+ *  LOWERED BY W3 Task 13 (D-4963, `_reg_get` and `_reg_read` read through `_file_read_to`; macOS, bash 5.3): every
+ *  registry read that finds its field loses its `cat`. A `$(_reg_get …)` loses 1 fork and 1 exec, the `cat` its
+ *  subshell forked. A `$(_reg_read …)` loses 2 forks and 1 exec: its inner `v=$(cat -- "$f" 2>/dev/null)` carries a
+ *  redirection, which keeps bash from exec'ing `cat` in the substitution's own child, so it was two processes
+ *  (measured on bash 5.3 with a logging `cat`, xtrace off). So execs fall by the reads that found a field, and forks by
+ *  those plus the `_reg_read` reads among them (4 on most fixtures, 6 on hard-blocked, 3 on cooldown, none on
+ *  narrow). The plan's model was about -15 `cat` execs per tick [I]; measured -11 to -19. Before -> after:
+ *    idle-home 128/46 -> 111/33 · busy 125/45 -> 109/33 · narrow 75/28 -> 64/17 · away-over-ceiling 128/46 -> 111/33 ·
+ *    hard-blocked 172/56 -> 147/37 · cooldown 97/36 -> 82/24 · fable 130/47 -> 113/34 · leaving 151/56 -> 134/43 ·
+ *    fable-leaving 159/60 -> 142/47.
  */
 const TICK_BUDGET: Record<FixtureName, { forks: number; execs: number }> = {
-  'idle-home': { forks: 128, execs: 46 },
-  busy: { forks: 125, execs: 45 },
-  narrow: { forks: 75, execs: 28 },
-  'away-over-ceiling': { forks: 128, execs: 46 },
-  'hard-blocked': { forks: 172, execs: 56 },
-  cooldown: { forks: 97, execs: 36 },
-  fable: { forks: 130, execs: 47 },
-  leaving: { forks: 151, execs: 56 },
-  'fable-leaving': { forks: 159, execs: 60 },
+  'idle-home': { forks: 111, execs: 33 },
+  busy: { forks: 109, execs: 33 },
+  narrow: { forks: 64, execs: 17 },
+  'away-over-ceiling': { forks: 111, execs: 33 },
+  'hard-blocked': { forks: 147, execs: 37 },
+  cooldown: { forks: 82, execs: 24 },
+  fable: { forks: 113, execs: 34 },
+  leaving: { forks: 134, execs: 43 },
+  'fable-leaving': { forks: 142, execs: 47 },
 };
 
 /** `_plat_timeout`'s `-k` probe, per tick inside the loop. On `main` at
