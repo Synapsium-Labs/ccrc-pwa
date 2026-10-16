@@ -9,8 +9,9 @@
 // SAFETY. `sweepFixture.ts`'s fixture HOME and env, built from scratch, with every tool that is not a stub a recording
 // POISON (`launchctl` among them), and `assertContained` on the spawn's final env before every spawn. The shadowed
 // `_svc_launchctl` never execs a binary. J6, the INT case, leaves the helper's own orphaned background `sleep` behind
-// by design: it REAPS any orphaned sleep and then asserts that none survives, before any other assertion. It does not
-// show that an orphan existed, only that none is left behind.
+// by design: in a `finally`, so a failed assertion still does it, it kills the shell and REAPS any orphaned sleep, and it
+// asserts that none survives before any assertion on the run's outcome. It does not show that an orphan existed, only
+// that none is left behind.
 import { describe, expect } from 'vitest';
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -132,16 +133,22 @@ describe('_ccrc_job_stayed_up: an INT to the shell alone ends it at once (wave 1
     const done = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((res) => {
       child.on('exit', (code, signal) => { res({ code, signal }); });
     });
-    const deadline = Date.now() + 20_000;
-    while (!existsSync(join(b.home, 'lc', marker)) && Date.now() < deadline) await pause(25);
-    expect(existsSync(join(b.home, 'lc', marker)), 'the helper never reached the sleep under test').toBe(true);
-    await pause(300);
-    const sent = Date.now();
-    child.kill('SIGINT');
-    const end = await Promise.race([done, pause(15_000).then(() => null)]);
-    const elapsed = Date.now() - sent;
-    if (end === null) child.kill('SIGKILL');
-    reapSurvivors(b);
+    let end: { code: number | null; signal: NodeJS.Signals | null } | null = null;
+    let elapsed = 0;
+    try {
+      const deadline = Date.now() + 20_000;
+      while (!existsSync(join(b.home, 'lc', marker)) && Date.now() < deadline) await pause(25);
+      expect(existsSync(join(b.home, 'lc', marker)), 'the helper never reached the sleep under test').toBe(true);
+      await pause(300);
+      const sent = Date.now();
+      child.kill('SIGINT');
+      end = await Promise.race([done, pause(15_000).then(() => null)]);
+      elapsed = Date.now() - sent;
+    } finally {
+      // Always, so a failed assertion above still ends the shell and its sleep (review 512, F4).
+      if (end === null) child.kill('SIGKILL');
+      reapSurvivors(b);
+    }
     expect(survivors(b)).toEqual([]);
     expect(end, 'the shell never exited').not.toBeNull();
     expect(end!.signal, `stdout: ${stdout}`).toBe('SIGINT');

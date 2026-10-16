@@ -1584,3 +1584,14 @@ Built on `origin/main` at `0b3ff2f62`. Every anchor quoted in Tasks 1 to 7 measu
 - **One gap the wave leaves, for the coordinator:** when the update DIES (a unit active before fails its verify and its re-check),
   `_upd_sweep_die` exits before Task 2's naming loop, so a `prior` unit gets no line on that path. Item G's lines share the
   property. The die line names the unit that failed the update. Review Focus 1's table describes the success paths.
+- **Fix round 1 (review 512, the coordinator's rulings on F3 and F4):**
+  - **F3:** the two D-5136 warnings now end "(a supervisor already 'activating' or 'failed' before the restart is never
+    verified; …)". The old "(only a supervisor that was active before the restart is verified; …)" was wrong, because Reading 1
+    (a) still verifies a unit that was absent from the pre-restart listing or shown in any other state. The comment above the
+    `units` builder says the same thing, in the same two lines, so `ccd/ccrc` keeps every line where it was. W24's `TAIL`, P5
+    and W24c's comment follow.
+  - **F3, measured:** putting the old wording back in the `back)` arm reds P5 and W24c. Putting it back in the `*)` arm reds
+    W24a ×3 and W24f.
+  - **F4:** J6's kill and reap now run in a `finally`, and the header says so.
+  - **F4, measured:** with the marker assertion forced to fail (the settle row waits for a marker that never appears), the old
+    J6 left its bash child and that child's `sleep 8` running, and the new J6 leaves nothing.
