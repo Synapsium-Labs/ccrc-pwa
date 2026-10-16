@@ -1139,7 +1139,8 @@ describe('_upd_sweep, Linux arm, with the FROZEN pre-wave-16 script S15 (a rollb
     expect(count(box, act(X15)), 'a unit that was not active before the restart is never verified').toBe(0);
     expect(r.stderr.split('\n'), ctx(r)).toContain(
       `update: warning: ${X15} was already 'activating' before try-restart and reads 'active' after it — it is named, not `
-      + 'verified, and does not fail this update (only a supervisor that was active before the restart is verified; '
+      + "verified, and does not fail this update (a supervisor already 'activating' or 'failed' before the restart is "
+      + 'never verified; '
       + `wave 16, D-5136). On the box: systemctl --user status ${X15}`);
     expect(r.stdout).toContain(SWEEP_OK);
     ranS15(box);
@@ -1226,8 +1227,9 @@ describe('_upd_sweep, Linux arm: a unit that did not come back active is named t
   const VERIFIED = (u: string, w: string): string =>
     `${u} was active before try-restart and reads '${w}' after it — it is verified with the rest (wave 11, D-3984)`;
   const UNSEEN = (u: string): string => `${u} was active before try-restart and is not active after it`;
-  const TAIL = (u: string): string => 'it is named, not verified, and does not fail this update (only a supervisor that '
-    + `was active before the restart is verified; wave 16, D-5136). On the box: systemctl --user status ${u}`;
+  const TAIL = (u: string): string => "it is named, not verified, and does not fail this update (a supervisor already "
+    + `'activating' or 'failed' before the restart is never verified; wave 16, D-5136). On the box: systemctl --user `
+    + `status ${u}`;
   const PRIOR = (u: string, w: string): string =>
     `update: warning: ${u} was already '${w}' before try-restart and is not active after it — ${TAIL(u)}`;
   const BACK = (u: string, w: string): string =>
@@ -1323,7 +1325,7 @@ describe('_upd_sweep, Linux arm: a unit that did not come back active is named t
 
   // Type=simple reads `active` the moment try-restart forks a unit, so a crash-looping one is usually IN the
   // post-restart active listing, and then dies inside the verify's window. It is still never verified (the ruling:
-  // only units active before the restart are verified), so its crash cannot fail the update.
+  // a unit already `activating` or `failed` before the restart is never verified), so its crash cannot fail the update.
   itLinux('W24c activating before, listed active after, crashing in the window: named, never verified, never fatal', () => {
     const box = makeBox({
       units: [stable(A, 0), { unit: X, active: ['activating'], mainPid: [], listed: 'active', preRestart: 'activating' }],

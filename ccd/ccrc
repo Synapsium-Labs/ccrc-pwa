@@ -21326,8 +21326,8 @@ _upd_sweep() {
   local vdir="" vjobs="${CCRC_SWEEP_VERIFY_JOBS:-128}" i j k r lrc d o cu _cl cw _cs _cd clist crc=0 m inb cb kc=0 mn=0 rfail="" lpid="" ltrap=""
   [[ "$vjobs" =~ ^[1-9][0-9]{0,3}$ ]] || vjobs=128
   # A unit the pre-restart listing showed `activating` or `failed` is never verified, even when this listing shows it
-  # active (wave 16, D-5136; the ruling: only units active before the restart are verified). Type=simple reads
-  # `active` the moment try-restart forks it, so a crash-looping one is usually here: it goes to `pback`, named below.
+  # active (wave 16, D-5136; one absent from that listing, or shown in any other state, is still verified). Type=simple
+  # reads `active` the moment try-restart forks it, so a crash-looping one is usually here: it goes to `pback`, named below.
   for u in $(printf '%s\n' "$after_listing" | awk '{print $1}'); do
     pin=0; for pb in ${prior[@]+"${prior[@]}"}; do [ "$pb" = "$u" ] && { pin=1; break; }; done
     if [ "$pin" -eq 1 ]; then pback+=("$u"); else units+=("$u"); fi
@@ -21469,9 +21469,9 @@ _upd_sweep() {
     for a in ${pback[@]+"${pback[@]}"}; do [ "$a" = "$b" ] && { seen=back; break; }; done
     for a in ${failed[@]+"${failed[@]}"}; do [ "$a" = "$b" ] && { seen=failed; break; }; done
     case "$seen" in
-      back) echo "update: warning: $b was already '${priorw[pi]}' before try-restart and reads 'active' after it — it is named, not verified, and does not fail this update (only a supervisor that was active before the restart is verified; wave 16, D-5136). On the box: systemctl --user status $b" >&2 ;;
+      back) echo "update: warning: $b was already '${priorw[pi]}' before try-restart and reads 'active' after it — it is named, not verified, and does not fail this update (a supervisor already 'activating' or 'failed' before the restart is never verified; wave 16, D-5136). On the box: systemctl --user status $b" >&2 ;;
       failed) ;;
-      *) echo "update: warning: $b was already '${priorw[pi]}' before try-restart and is not active after it — it is named, not verified, and does not fail this update (only a supervisor that was active before the restart is verified; wave 16, D-5136). On the box: systemctl --user status $b" >&2 ;;
+      *) echo "update: warning: $b was already '${priorw[pi]}' before try-restart and is not active after it — it is named, not verified, and does not fail this update (a supervisor already 'activating' or 'failed' before the restart is never verified; wave 16, D-5136). On the box: systemctl --user status $b" >&2 ;;
     esac
   done
   if [ "${#before[@]}" -eq 0 ]; then
