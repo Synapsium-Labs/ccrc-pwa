@@ -1748,6 +1748,9 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
       - `box-token` PASS on both; the server's generation #3 is 5 days old, so the first scheduled rotation is near.
       - STATUS: fleet and server v0.0.206, newest v0.0.208, intent dev/auto=stable, backups fleet 183M/server 750M,
         disk free fleet 216G/work volume 143G/server 32G, no anomalies at 10:58.
+    - **2026-10-16 11:58 UTC:** v0.0.209 released at 11:07:09; under `auto=stable` no box moved, as designed.
+      STATUS: fleet and server v0.0.206, newest v0.0.209, intent dev/auto=stable, backups fleet 183M/server 750M, disk free fleet
+      216G/work volume 140G/server 32G, no anomalies at 11:58.
 
 - **2026-09-30 12:22 UTC — wave 8 opened (run 182) for the live audit's residue, and dispatched.**
   - **Planning:** two Opus scoping agents measured each defect at `a742eb6a`, and an Opus writer assembled the
