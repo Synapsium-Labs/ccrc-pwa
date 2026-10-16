@@ -131,7 +131,8 @@ export const SKIN_TOKENS: { readonly [C in SkinTokenClass]: readonly SkinToken[]
 /** What a stored value ASKS for — the choice a picker shows. A known id is
  *  itself. Anything else — nothing stored, an empty value, `auto`, a skin from
  *  a newer build, a hand-edited value — is AUTO (spec §7: "an unknown value
- *  means AUTO"). `skins` is injectable for tests; the app never passes it. */
+ *  means AUTO"). `skins` is injectable for tests; the app never passes it.
+ *  The choice, kept apart from its resolution, is D-5246. */
 export function skinPreference(
   stored: string | null | undefined,
   skins: readonly SkinChoice[] = SKINS,
@@ -154,7 +155,8 @@ export function skinPreference(
  *
  *  `deviceIsDesk` defaults to false — a caller that has not read the device
  *  (Storybook, whose toolbar names a skin explicitly) gets the touch answer.
- *  `skins` is injectable so a test can see the world W2's flip makes. */
+ *  `skins` is injectable so a test can see the world W2's flip makes. Both
+ *  are beyond the plan's two-argument shape (D-5246). */
 export function resolveSkin(
   stored: string | null | undefined,
   deviceIsDesk = false,

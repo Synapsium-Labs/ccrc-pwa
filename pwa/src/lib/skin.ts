@@ -25,7 +25,8 @@ import {
 } from '@ccrc/ui';
 
 /** The stored choice — a skin, or AUTO ("Match this device") — and AUTO when
- *  nothing is stored, the value is unknown, or storage is unreadable.
+ *  nothing is stored, the value is unknown, or storage is unreadable. The
+ *  CHOICE, not what it resolves to: the picker shows it (D-5246).
  *
  *  Storage throws in a private window, in previews and in thumbnail capture,
  *  and this runs before first render — an exception here is a blank app, so
@@ -78,7 +79,9 @@ function stamp(id: SkinId): void {
  *  resolves to against the BOOT reading of the device — never a fresh one.
  *  Applied BEFORE it is written, so storage that throws still leaves the
  *  chosen skin on screen. An unknown id asks for AUTO, rather than stamping an
- *  attribute no block answers. */
+ *  attribute no block answers. The choice is what is remembered, never its
+ *  resolution, so a desk handed an unknown id is not pinned to Refined once
+ *  Instrument stops being a preview (D-5246). */
 export function setSkin(choice: string): void {
   const asked = skinPreference(choice);
   stamp(resolveSkin(asked, deskAtBoot));

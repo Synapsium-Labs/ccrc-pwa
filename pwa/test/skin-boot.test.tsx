@@ -11,9 +11,10 @@
 // renders `:root`, which is Refined, until `initSkin` corrects the attribute.
 //
 // And the per-device default's app half (D-5096): the device is read ONCE per
-// page load, at `initSkin()`, and never subscribed to, so a skin never flips
-// under the person using it; the snippet carries the same rule behind a
-// literal that mirrors Instrument's preview flag, bound here to `skins.ts`.
+// page load, at `initSkin()`, and never subscribed to or re-read on any event,
+// so a skin never flips under the person using it; the snippet carries the
+// same rule behind a literal that mirrors Instrument's preview flag, bound
+// here to `skins.ts`.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, render, screen } from '@testing-library/react';
 import type { ReactNode } from 'react';
@@ -227,19 +228,23 @@ describe('a choice', () => {
 describe('the per-device default (D-5096)', () => {
   /** A `matchMedia` whose answer can change under the page — a tablet docking
    *  a keyboard, device emulation toggled in a desktop browser — and which
-   *  records every way a caller could subscribe to it: `addEventListener`,
-   *  the legacy `addListener`, and `onchange`. */
+   *  records every query it is asked (`reads`) and every way a caller could
+   *  subscribe to it: `addEventListener`, the legacy `addListener`, and
+   *  `onchange`. */
   function liveDevice(desk: boolean): {
     matchMedia: (q: string) => MediaQueryList;
     change: (next: boolean) => void;
     subscribers: () => number;
+    reads: () => readonly string[];
   } {
     let isDesk = desk;
     type Heard = (e: { matches: boolean; media: string }) => void;
     const heard: Heard[] = [];
     const lists: { onchange: Heard | null }[] = [];
+    const asked: string[] = [];
     return {
       matchMedia: (q: string) => {
+        asked.push(q);
         const list = {
           get matches(): boolean { return isDesk && q === DEVICE_QUERY; },
           media: q,
@@ -260,36 +265,73 @@ describe('the per-device default (D-5096)', () => {
         for (const list of lists) list.onchange?.(e);
       },
       subscribers: () => heard.length + lists.filter((l) => l.onchange !== null).length,
+      reads: () => [...asked],
     };
   }
 
-  it('AUTO is resolved once per load: a device change mid-session changes nothing, and a reload re-resolves', () => {
+  /** What else fires around a device change while the page lives, each a way
+   *  to re-resolve WITHOUT subscribing to the query: a resize (a docked
+   *  keyboard, devtools' device toolbar, a rotated tablet), a rotation, the
+   *  tab coming back to the foreground, the window regaining focus, a
+   *  back-forward cache restore, and a minute of timers for a poll. Each is
+   *  fired at `window` or `document` as the browser fires it. */
+  const NUDGES: readonly (readonly [name: string, fire: () => void])[] = [
+    ['resize', () => window.dispatchEvent(new Event('resize'))],
+    ['orientationchange', () => window.dispatchEvent(new Event('orientationchange'))],
+    ['visibilitychange', () => document.dispatchEvent(new Event('visibilitychange'))],
+    ['focus', () => window.dispatchEvent(new Event('focus'))],
+    ['pageshow', () => window.dispatchEvent(new Event('pageshow'))],
+    ['a minute of timers', () => vi.advanceTimersByTime(60_000)],
+  ];
+
+  it('AUTO is resolved once per load: a device change mid-session changes nothing, whatever fires, and a reload re-resolves', () => {
     // O2: a skin never flips under the person using it. Under W2's
     // `SKIN_SETS[useSkin()].Shell` a live re-resolve would remount the shell
     // mid-task — which is why this departs from `initTheme`, which does follow
     // the colour scheme live. Run in the catalogue W2 ships, the one in which
     // the device decides anything; as committed, AUTO is Refined everywhere and
     // a flip would be invisible.
+    //
+    // ONCE is pinned two ways. The device is READ once — `matchMedia` is asked
+    // DEVICE_QUERY at boot and never again until a reload, whatever fires — so
+    // a re-read from any trigger reds even when it happens to answer the same.
+    // And the STAMP never changes after boot, after the device change and
+    // after each nudge in turn, so a re-resolve from any trigger reds by name.
+    // A subscription is the third way, counted at the end. Fake timers are
+    // installed before the boot, so a poll the boot starts is under them.
     const device = liveDevice(true);
     vi.stubGlobal('matchMedia', device.matchMedia);
-    asW2Ships(() => {
-      localStorage.removeItem(SKIN_STORAGE_KEY);
-      initSkin();
-      expect(stamped(), 'a desk with nothing stored boots into Instrument').toBe(INSTRUMENT);
+    vi.useFakeTimers();
+    try {
+      asW2Ships(() => {
+        localStorage.removeItem(SKIN_STORAGE_KEY);
+        initSkin();
+        expect(stamped(), 'a desk with nothing stored boots into Instrument').toBe(INSTRUMENT);
+        expect(device.reads(), 'the boot did not read the device exactly once').toEqual([DEVICE_QUERY]);
 
-      device.change(false);
-      expect(stamped(), 'the skin flipped under the person using it').toBe(INSTRUMENT);
+        device.change(false);
+        expect(stamped(), 'the skin flipped under the person using it').toBe(INSTRUMENT);
+        for (const [name, fire] of NUDGES) {
+          fire();
+          expect(stamped(), `the skin flipped under the person using it on ${name}`).toBe(INSTRUMENT);
+          expect(device.reads(), `the device was read again on ${name}`).toEqual([DEVICE_QUERY]);
+        }
 
-      // "Match this device", chosen now, resolves against the BOOT reading,
-      // and is remembered as the choice itself rather than as its answer.
-      setSkin(AUTO);
-      expect(stamped(), 'Match this device re-read the device mid-session').toBe(INSTRUMENT);
-      expect(localStorage.getItem(SKIN_STORAGE_KEY)).toBe(AUTO);
+        // "Match this device", chosen now, resolves against the BOOT reading,
+        // and is remembered as the choice itself rather than as its answer.
+        setSkin(AUTO);
+        expect(stamped(), 'Match this device re-read the device mid-session').toBe(INSTRUMENT);
+        expect(localStorage.getItem(SKIN_STORAGE_KEY)).toBe(AUTO);
+        expect(device.reads(), 'Match this device read the device again').toEqual([DEVICE_QUERY]);
 
-      // A reload is a new reading.
-      initSkin();
-      expect(stamped(), 'a reload re-resolves').toBe(REFINED);
-    });
+        // A reload is a new reading — the one other read there is.
+        initSkin();
+        expect(stamped(), 'a reload re-resolves').toBe(REFINED);
+        expect(device.reads(), 'a reload reads the device once more').toEqual([DEVICE_QUERY, DEVICE_QUERY]);
+      });
+    } finally {
+      vi.useRealTimers();
+    }
     expect(device.subscribers(), 'something subscribed to the device query').toBe(0);
   });
 

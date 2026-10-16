@@ -132,13 +132,19 @@ const asW2Ships = (): readonly SkinChoice[] =>
 
 /** Primary-input profiles (Media Queries 4, `hover` and `pointer`), each with
  *  the skin `AUTO` gives it once Instrument is no longer a preview. A tablet's
- *  primary pointer is coarse, so it is Refined (spec §12, O1). A stylus-first
- *  device points finely but cannot hover, so it is a tablet too: that row is
- *  what tells the hover-and-fine rule from `(pointer: fine)` alone. */
+ *  primary pointer is coarse, so it is Refined (spec §12, O1). The rule is a
+ *  CONJUNCTION, and each half has a row that only it decides:
+ *  - a stylus-first device points finely but cannot hover, so it is a tablet
+ *    too: that row tells the rule from `(pointer: fine)` alone;
+ *  - a coarse pointer that can hover is not a desk either, because its
+ *    pointer is coarse: that row tells the rule from `(hover: hover)` alone.
+ *  So narrowing DEVICE_QUERY to either half — in skins.ts and the snippet
+ *  together, which no binding between the two can see — reds here. */
 const DEVICES: readonly { readonly name: string; readonly hover: string; readonly pointer: string; readonly skin: string }[] = [
   { name: 'a phone', hover: 'none', pointer: 'coarse', skin: REFINED },
   { name: 'a tablet', hover: 'none', pointer: 'coarse', skin: REFINED },
   { name: 'a stylus-first tablet', hover: 'none', pointer: 'fine', skin: REFINED },
+  { name: 'a coarse pointer that can hover', hover: 'hover', pointer: 'coarse', skin: REFINED },
   { name: 'a device with no pointer', hover: 'none', pointer: 'none', skin: REFINED },
   { name: 'a desktop with a mouse', hover: 'hover', pointer: 'fine', skin: INSTRUMENT },
   { name: 'a touch laptop driven by its trackpad', hover: 'hover', pointer: 'fine', skin: INSTRUMENT },
