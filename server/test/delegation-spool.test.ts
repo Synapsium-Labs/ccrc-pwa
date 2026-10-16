@@ -1183,7 +1183,9 @@ describe('the delegation spool: the hook appends evidence to a directory ccd mad
     });
 
     it('when the listing is dropped the line is exactly the line it would have been with no listing, plus truncated:true', () => {
-      mkRepo(Array.from({ length: 140 }, (_, i) => `agent-${String(i).padStart(4, '0')}-0123456789ab`));
+      // 160 names of 23 bytes are 4,160 bytes of listing on their own, so the line passes the cap wherever the run is: with 140,
+      // the drop rested on the rest of the line, which a short TMPDIR (CI's /tmp) kept under it.
+      mkRepo(Array.from({ length: 160 }, (_, i) => `agent-${String(i).padStart(4, '0')}-0123456789ab`));
       const withDrop = one(pre('Bash', { command: WT }, 'toolu_01', { cwd: repo }));
       const plain = one(pre('Bash', { command: 'git status' }, 'toolu_01', { cwd: repo }));
       const strip = (l: any) => { const { observedAt: _o, truncated: _t, ...rest } = l; return rest; };
