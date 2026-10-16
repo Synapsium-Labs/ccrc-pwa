@@ -1626,3 +1626,4 @@ Found mid-wave (issued from the block above, taken in order; each defined in the
     Bounding it by the call's start rests on rung 4's existing premise that a Bash call lasts at most the margin. A closed window that does not add the record still lets rung 3 link. E2 likewise counts a same-session open-ended window as ambiguous.
 
   Rows and 26 mutant runs are in `delegation-correlation`, `delegation-watch` and `delegation-policy`; every new row was red first except the pins and one carve-out guard row, which is pinned by its mutant. Commits `321575468`, `5e7a55223`, `9854b654d`, `cd98cfd85`.
+- **Unused:** D-4660, D-4661, D-4662, D-4663 and D-4664 were issued to this wave (block D-4633..D-4664) and are unused.
