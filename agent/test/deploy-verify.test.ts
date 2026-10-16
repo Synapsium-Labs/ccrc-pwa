@@ -2820,3 +2820,103 @@ describe('verify-service.sh tells a deliberate supervisor stop from a crash (wav
     expect(r.calls.trim().split('\n').slice(0, 4)).toEqual(SETTLED(U));
   }, 30_000);
 });
+
+// WAVE 16 (centralised update management; R8c, R10c(3); D-5142, D-5143): the fallback deploy's backup prune refuses a
+// KEEP that is not a whole number, and its supervisor sweep refuses when it cannot list the supervisors. Both are RUN,
+// extracted from deploy.sh, on a fixture HOME with a stub `ssh` (a shell function in the SSH array, and recording
+// poisons for the real `ssh` and `scp` first on PATH) or a stub `systemctl`; nothing reaches a box.
+describe('deploy.sh refuses what it cannot measure: the prune KEEP and the sweep listing (wave 16, D-5142, D-5143)', () => {
+  const deploySh = readFileSync(path.join(deployDir, 'deploy.sh'), 'utf8');
+
+  /** `prune_backups` out of deploy.sh, run with `SSH` a function that records the remote command and does nothing.
+   *  `ssh` and `scp` on PATH are recording poisons, proven to resolve before the spawn: a prune that ever reached for
+   *  a real binary would write `poison`, and every row asserts it is empty. */
+  const runPrune = (keep: string | undefined): { code: number; stderr: string; remote: string | null; poison: string } => {
+    const fn = /prune_backups\(\) \{([\s\S]*?)\n\}/.exec(deploySh);
+    expect(fn, 'deploy.sh has no prune_backups() helper').toBeTruthy();
+    const home = mkTmp('ccrc-agent-prunekeep-');
+    const rec = path.join(home, 'remote');
+    const poison = path.join(home, 'poison');
+    const bin = path.join(home, 'stubbin');
+    mkdirSync(bin, { recursive: true });
+    for (const t of ['ssh', 'scp']) {
+      writeFileSync(path.join(bin, t), `#!/bin/sh\necho "${t} $*" >> ${JSON.stringify(poison)}\nexit 97\n`, { mode: 0o755 });
+    }
+    const script = [
+      `ssh_stub() { printf '%s' "$2" > ${JSON.stringify(rec)}; }`,
+      'SSH=(ssh_stub); BOX=box.invalid',
+      `prune_backups() {${fn![1]!}\n}`,
+      'prune_backups',
+    ].join('\n');
+    const env: NodeJS.ProcessEnv = { PATH: `${bin}${path.delimiter}${process.env.PATH ?? ''}`, HOME: home, LANG: 'C' };
+    if (keep !== undefined) env.CCRC_BACKUP_KEEP = keep;
+    assertStubsResolve(env, bin, ['ssh', 'scp']);
+    const r = spawnSync('bash', ['-c', script], { encoding: 'utf8', timeout: 15_000, env });
+    return {
+      code: r.status ?? -1, stderr: r.stderr ?? '',
+      remote: existsSync(rec) ? readFileSync(rec, 'utf8') : null,
+      poison: existsSync(poison) ? readFileSync(poison, 'utf8') : '',
+    };
+  };
+
+  it.each([
+    ['abc', 'abc'], ['10000', '10000'], ['-1', '-1'], ['1; touch x', '1; touch x'], ['3 ', '3 '],
+    ['\u001b[31m', '?[31m'], ['9'.repeat(40), `${'9'.repeat(32)}...`],
+  ])('D1: CCRC_BACKUP_KEEP=%j is refused before anything is sent: one warning, rc 1 (D-5142)', (keep, shown) => {
+    const r = runPrune(keep);
+    expect(r.code, r.stderr).toBe(1);
+    expect(r.remote, 'the remote prune ran with an unchecked KEEP').toBeNull();
+    expect(r.poison, 'a real ssh or scp was reached').toBe('');
+    expect(r.stderr).toContain(`deploy: warning: CCRC_BACKUP_KEEP='${shown}' is not a whole number from 0 to 9999 — nothing pruned`);
+  }, 30_000);
+
+  it.each([
+    [undefined, '10'], ['3', '3'], ['0', '0'], ['9999', '9999'],
+  ])('D1b: CCRC_BACKUP_KEEP=%j reaches the remote prune as `head -n -%s`, unchanged (D-5142)', (keep, n) => {
+    const r = runPrune(keep);
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stderr).toBe('');
+    expect(r.poison, 'a real ssh or scp was reached').toBe('');
+    expect(r.remote).toContain(`| sort | head -n -${n} | xargs -r rm -rf --`);
+  }, 30_000);
+
+  it('D1c: the KEEP test is ccd/ccrc\'s `_keep_ok`, spelled a second time on purpose and held equal here (D-5142)', () => {
+    // deploy.sh runs on the operator's machine and never sources ccd/ccrc, so the test is a second spelling by
+    // design. This holds the two regexes together: a widened or narrowed copy on either side is a red suite.
+    // `_keep_ok` sits in a region another programme owns, so its regex is found ANYWHERE in the function's body:
+    // re-wrapping the one-liner does not red this case; changing the regex on one side does.
+    const ccrc = readFileSync(path.resolve(deployDir, '..', 'ccd', 'ccrc'), 'utf8');
+    const ours = /\[\[ "\$keep" =~ (\S+) \]\]/.exec(deploySh);
+    const body = /^_keep_ok\(\) \{([\s\S]*?)(?:; \}$|\n\})/m.exec(ccrc);
+    const theirs = body ? /=~ (\S+)/.exec(body[1]!) : null;
+    expect(ours, 'deploy.sh lost its KEEP test').toBeTruthy();
+    expect(body, 'ccd/ccrc lost _keep_ok').toBeTruthy();
+    expect(theirs, '_keep_ok no longer tests a regex').toBeTruthy();
+    expect(ours![1]).toBe(theirs![1]);
+    expect(ours![1]).toBe('^[0-9]{1,4}$');
+  }, 30_000);
+
+  it('D2: the sweep refuses, and restarts nothing, when `list-units claude-session@*` fails (D-5143)', () => {
+    const sweep = /SWEEP_CMD='([\s\S]*?)'\n/.exec(deploySh);
+    expect(sweep, 'the supervisor sweep is no longer a single quoted block').toBeTruthy();
+    const home = mkTmp('ccrc-agent-deploysweep-list-');
+    const bin = path.join(home, 'stubbin');
+    mkdirSync(bin, { recursive: true });
+    writeFileSync(path.join(bin, 'systemctl'),
+      '#!/bin/sh\necho "systemctl $*" >> "$HOME/calls"\n'
+      + 'case "$*" in\n'
+      + '  *"list-units claude-session@* --plain --no-legend") echo "Failed to connect to bus" >&2; exit 1 ;;\n'
+      + '  *"show -p KillMode"*) echo "KillMode=process"; exit 0 ;;\n'
+      + 'esac\nexit 0\n', { mode: 0o755 });
+    const env: NodeJS.ProcessEnv = { PATH: `${bin}${path.delimiter}${process.env.PATH ?? ''}`, HOME: home, LANG: 'C' };
+    assertStubsResolve(env, bin, ['systemctl']);
+    const r = spawnSync('bash', ['-c', sweep![1]!], { encoding: 'utf8', timeout: 15_000, env });
+    expect(r.status, `stderr:\n${r.stderr}`).toBe(1);
+    expect(r.stderr).toContain('deploy: FAILED — systemctl --user list-units claude-session@* failed, so the supervisors to be '
+      + 'checked could not be listed. REFUSING to sweep.');
+    const calls = readFileSync(path.join(home, 'calls'), 'utf8').trim().split('\n');
+    expect(calls, 'the sweep went on past a listing it could not read').toEqual([
+      'systemctl --user list-units claude-session@* --plain --no-legend',
+    ]);
+  }, 30_000);
+});
