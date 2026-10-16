@@ -168,6 +168,19 @@ describe('Settings while a node halts — Install and Update wait, with Update a
     for (const b of updates) expect(b).toBeDisabled();
     expect(screen.queryByText(ONE_HALT)).toBeNull();
   });
+
+  it('an Update with nothing pending is disabled but not described by the halt line', () => {
+    const { list } = renderNodes([node(failed()), server({ desiredTag: null })]);
+    const updates = within(list).getAllByRole('button', { name: 'Update' });
+    expect(updates).toHaveLength(2);
+    expect(screen.getAllByText(ONE_HALT), 'the pending row\'s Update gates the line: it shows once').toHaveLength(1);
+    const pending = within(rowOf(list, FLEET_ID)).getByRole('button', { name: 'Update' });
+    expect(pending).toBeDisabled();
+    expect(pending).toHaveAccessibleDescription(ONE_HALT);
+    const none = within(rowOf(list, SERVER_ID)).getByRole('button', { name: 'Update' });
+    expect(none).toBeDisabled();
+    expect(none).not.toHaveAttribute('aria-describedby');
+  });
 });
 
 // Wave 19's claim-gated fold (R24(d), and R24(b)'s Settings half): the screen asks the L0 gate read and says the
@@ -181,7 +194,7 @@ describe('SettingsScreen asks the shared reads (wave 19, R24(d))', () => {
   });
   it('the stale line is UPDATES_STALE_TEXT, imported, not a copy', () => {
     expect(settingsSrc).toContain('{stale && <p className="settings-note">{UPDATES_STALE_TEXT}</p>}');
-    expect(settingsSrc).not.toContain("'The latest read failed — this is the last answer that landed.'");
+    expect(settingsSrc).not.toContain('The latest read failed — this is the last answer that landed.');
   });
 });
 

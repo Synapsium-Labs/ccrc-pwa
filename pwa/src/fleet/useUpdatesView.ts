@@ -44,8 +44,8 @@ export type UpdatesFailure = 'not-configured' | 'failed';
 /** A later poll failed, so what a surface shows is the last answer that landed (`view` is kept, `failure` stands).
  *  The update plane's one sentence for it (wave 19, R24(b)), shown by every surface that reads this poll's kept
  *  view: the home screen's skew, halt and release banners and BuildLine, and announced once by the fleet screen's
- *  own status region (D-5124). Settings' `STALE_TEXT` spells the same words until its own fold imports this one
- *  (another run's claim holds that file). */
+ *  own status region (D-5124). Settings' own stale line says it too (its own exposure, a separate screen),
+ *  imported from here. */
 export const UPDATES_STALE_TEXT = 'The latest read failed — this is the last answer that landed.';
 
 export interface UpdatesPoll {
