@@ -2301,11 +2301,101 @@ describe('docs draft snapshot (docs W1a Task 14)', () => {
     it('row 64: a status stdout overflow under a lowered `stdout_cap` is too-many; the committed listing is intact', () => {
       const { wt, head } = t14holder({ [`${T14_S}a.md`]: 'aaaa\n' });
       for (let i = 0; i < 20; i++) t14fs.writeFileSync(t14path.join(wt, T14_S, `long-name-${i}-${'x'.repeat(40)}.md`), 'n\n');
-      const o = t14phase({ served: head, kw: 'stdout_cap=200' });
-      expect(o.facts).toMatchObject({ state: 'too-many', branch: 'ws/a', worktree: wt });
-      expect(o.facts['bytes']).toBe(200);
-      expect(o.facts['count']).toBeLessThan(20);
-      expect(o.entries).toBe(1);
+      const body = [
+        ...t14prelude(),
+        'import sys',
+        'observations = []',
+        'class Diagnostic(H.Sys):',
+        '    def __init__(self):',
+        '        self.active = False',
+        '    def _record_error(self, seam, e):',
+        "        item = {'event': 'error', 'seam': seam, 'type': type(e).__name__}",
+        '        if isinstance(e, OSError):',
+        "            item['errno'] = e.errno",
+        "            item['message'] = None if e.strerror is None else str(e.strerror)",
+        '        frames = []',
+        '        tb = e.__traceback__',
+        '        spawn_locals = None',
+        '        while tb is not None:',
+        "            frames.append({'function': tb.tb_frame.f_code.co_name, 'line': tb.tb_lineno})",
+        '            if tb.tb_frame.f_code is H.Sys.spawn.__code__:',
+        '                local = tb.tb_frame.f_locals',
+        "                spawn_locals = {'timed_out': local.get('timed_out'), 'overflow': local.get('overflow'),",
+        "                                'out_len': len(local['out']) if 'out' in local else None,",
+        "                                'err_len': len(local['err']) if 'err' in local else None}",
+        '            tb = tb.tb_next',
+        "        item['traceback'] = frames",
+        "        item['spawn_locals'] = spawn_locals",
+        '        observations.append(item)',
+        '    def spawn(self, argv, *a, **k):',
+        "        if 'status' not in argv:",
+        '            return H.Sys.spawn(self, argv, *a, **k)',
+        "        observations.append({'event': 'status-spawn'})",
+        '        self.active = True',
+        '        try:',
+        '            got = H.Sys.spawn(self, argv, *a, **k)',
+        '        except Exception as e:',
+        "            self._record_error('status-spawn', e)",
+        '            raise',
+        '        else:',
+        "            observations.append({'event': 'status-return', 'rc': got.rc, 'out_len': len(got.out), 'err_len': len(got.err),",
+        "                                 'timed_out': got.timed_out, 'overflow': got.overflow})",
+        '            return got',
+        '        finally:',
+        '            self.active = False',
+        '    def _stop(self, proc):',
+        '        if not self.active:',
+        '            return H.Sys._stop(self, proc)',
+        "        observations.append({'event': 'stop', 'pid': proc.pid, 'returncode': proc.returncode})",
+        '        try:',
+        '            return H.Sys._stop(self, proc)',
+        '        except Exception as e:',
+        "            self._record_error('stop', e)",
+        '            raise',
+        '    def _signal_group(self, pgid, sig):',
+        '        if not self.active:',
+        '            return H.Sys._signal_group(self, pgid, sig)',
+        "        observations.append({'event': 'signal-attempt', 'pgid': pgid, 'sig': int(sig)})",
+        '        try:',
+        '            got = H.Sys._signal_group(self, pgid, sig)',
+        '        except Exception as e:',
+        "            self._record_error('signal-group', e)",
+        '            raise',
+        '        else:',
+        "            observations.append({'event': 'signal-return', 'pgid': pgid, 'sig': int(sig)})",
+        '            return got',
+        '    def _group_alive(self, pgid):',
+        '        if not self.active:',
+        '            return H.Sys._group_alive(self, pgid)',
+        '        try:',
+        '            got = H.Sys._group_alive(self, pgid)',
+        '        except Exception as e:',
+        "            self._record_error('group-alive', e)",
+        '            raise',
+        '        else:',
+        "            observations.append({'event': 'group-alive', 'pgid': pgid, 'reported_alive': got})",
+        '            return got',
+        'diag = Diagnostic()',
+        'H.SYS = diag',
+        `listed = H.list_committed(repo, ${t14q(head)}, dl)`,
+        `ph = H.draft_phase(ctx, repo, 'ws/a', {'name': 'ws/a', 'commit': ${t14q(head)}}, listed[3], dl, stdout_cap=200)`,
+        "out({'facts': ph.facts, 'rows': dict((k[0] + ':' + k[1], v) for k, v in ph.rows.items()),",
+        "     'unlisted': ph.unlisted, 'entries': len(listed[1]),",
+        "     'main': None if ph.main is None else os.fsdecode(ph.main['path_bytes']),",
+        "     'diagnostics': {'python': {'version': sys.version, 'platform': sys.platform},",
+        "                     'observations': observations,",
+        "                     'limits': {'signal_group': 'Internally swallowed ESRCH is not observable; only propagated errors are recorded.',",
+        "                                'group_alive': 'reported_alive is the existing conservative boolean, not direct group membership or empty-group proof.'}}})",
+      ].join('\n');
+      const o = t14unitJson<T14Phase & { diagnostics: Record<string, unknown> }>(h.home, body);
+      const diagnosticMessage = JSON.stringify(
+        { facts: o.facts, diagnostics: o.diagnostics },
+        (_key, value) => typeof value === 'string' ? value.split(h.home).join('<fixture-home>') : value,
+      );
+      expect(o.facts, diagnosticMessage).toMatchObject({ state: 'too-many', branch: 'ws/a', worktree: wt });
+      expect(o.facts['bytes'], diagnosticMessage).toBe(200);
+      expect(o.facts['count'], diagnosticMessage).toBeLessThan(20);
+      expect(o.entries, diagnosticMessage).toBe(1);
     }, 60000);
 
     it('row 64: a lowered `call_s` against a sleeping status is unreadable {step:status, detail:timeout}', () => {
