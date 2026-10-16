@@ -58,6 +58,24 @@
         }
       } catch {}
     </script>
+    <script>
+      // Pre-paint skin stamp (D-5093), on the theme snippet's terms above.
+      // The skin is ALWAYS stamped, Refined included: the stored value
+      // verbatim, or the default when nothing is stored.
+      //
+      // Deliberately NOT validated against the skin catalogue, for the theme
+      // snippet's reason: the list is in the bundle, and a copy here is the
+      // second copy `single-definition` forbids. An unknown value matches no
+      // block in skins.css, so the frame renders :root — which IS the
+      // default skin — and `initSkin` corrects the attribute when the bundle
+      // runs. This never throws. The key and the default are bound to
+      // skins.ts by test/skin-boot.test.tsx, which also runs this script.
+      try {
+        var s = null;
+        try { s = localStorage.getItem('ccrc-skin'); } catch {}
+        document.documentElement.setAttribute('data-skin', s === null || s === '' ? 'refined' : s);
+      } catch {}
+    </script>
     <meta name="mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />

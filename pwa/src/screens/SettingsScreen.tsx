@@ -26,8 +26,9 @@ import type {
   UpdateRouteRefusal, UpdatesView,
 } from '../../../shared/api';
 import {
-  AUTO_MODES, FLEET_SCOPE, NOTIFY_MODES, UPDATE_CHANNELS, UPDATE_GATE_CAP, isNotifyMode,
+  AUTO_MODES, FLEET_SCOPE, NOTIFY_MODES, UPDATE_CHANNELS, isNotifyMode,
 } from '../../../shared/api';
+import { carriesUpdateGate } from '../../../shared/update-move';
 import { LOOPBACK_HOSTS } from '../../../shared/base-url';
 import {
   BackButton, Button, PHOSPHOR, RADIO_FIELDSET, RADIO_LEGEND, Radio, RadioFieldset,
@@ -39,7 +40,7 @@ import { CollectLaneSection } from '../fleet/CollectLaneSection';
 import { UNCONFIRMED_TEXT } from './settingsText';
 import { planMove, type MoveIntent, type PlannedMove } from '../fleet/movePlan';
 import { UpdateMoveSheet } from '../fleet/UpdateMoveSheet';
-import { isPlaceableInstant, useUpdatesView, type UpdatesPoll } from '../fleet/useUpdatesView';
+import { UPDATES_STALE_TEXT, isPlaceableInstant, useUpdatesView, type UpdatesPoll } from '../fleet/useUpdatesView';
 import { ApiError, api, apiErrorText, readBoxTokenView, updateErrorText } from '../lib/api';
 // `dayClock` and `elapsedWords` come THROUGH the update plane's reading
 // surface, which is where the twenty wire-row-to-sentence helpers moved: the
@@ -100,8 +101,6 @@ const AUTO_GATE_NOTE = 'Auto-install needs the rollback gate on every node — n
 export { UNCONFIRMED_TEXT };
 /** The first poll never landed and was not a 501 — a read that failed, said as one, not a skeleton forever. */
 const UNREAD_TEXT = 'The update plane could not be read — the screen tries again every minute.';
-/** A later poll failed: what is shown is the last answer that landed, and it says so. */
-const STALE_TEXT = 'The latest read failed — this is the last answer that landed.';
 /** The update surface's own sentence for a box with no control plane — Task 5's table, read through its one
  *  translator, so this file holds no second copy of it. */
 const NOT_CONFIGURED_TEXT = updateErrorText(new ApiError(501, { ok: false, error: 'not-configured' }));
@@ -111,7 +110,7 @@ const AUTO_GATE_REFUSAL = 'auto-needs-rollback-gate' satisfies UpdateRouteError;
 export function autoGateMissing(nodes: readonly NodeWire[]): NodeWire[] {
   // Array.isArray, not a bare `.includes`: a caps field that arrived as a
   // STRING would answer by substring and read as gated.
-  return nodes.filter((n) => !(Array.isArray(n.caps) && n.caps.includes(UPDATE_GATE_CAP)));
+  return nodes.filter((n) => !(Array.isArray(n.caps) && carriesUpdateGate(n.caps)));
 }
 
 /** The node ids a `409 auto-needs-rollback-gate` names; null for any other failure, and for a 409 naming no id
@@ -678,7 +677,8 @@ function UpdatesBody({ view, stale, now, reload }: {
 
   return (
     <>
-      {stale && <p className="settings-note">{STALE_TEXT}</p>}
+      {/* A later poll failed: the update plane's one sentence for the last answer that landed (wave 19, R24(b)). */}
+      {stale && <p className="settings-note">{UPDATES_STALE_TEXT}</p>}
       <RadioFieldset
         legend="Channel"
         name="settings-channel"

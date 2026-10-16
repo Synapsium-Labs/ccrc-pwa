@@ -43,6 +43,8 @@ import { bodyDigest } from '../../../shared/mark.mjs';
 // Fix round 1, item 5 (ruling A): the same tag comparator every other
 // ordering in this design uses — never `publishedAt` — for `newestUnyankedStable`.
 import { newestTag } from '../../../shared/semver.js';
+// Centralised-update wave 19 (R24(d)): `rowHalts` asks the dispatcher's own halt rule rather than restating it.
+import { isHaltingUpdate } from '../../../shared/update-move.js';
 import {
   CLEAR_REFUSED_STRANDS_TEXT,
   holdReasonVerdict,
@@ -1067,8 +1069,7 @@ const haltingRowSql = (t: string): string =>
   `substr(${t}.updateDetail, 1, ${PROVENANCE_DETAIL_PREFIX.length}) = '${PROVENANCE_DETAIL_PREFIX}'))`;
 /** The same notion over a read-back row (`handOffLease`'s `why`). A state this build cannot name reads `unknown`,
  *  which is busy and never halts. */
-const rowHalts = (state: UpdateState, detail: string | null): boolean =>
-  haltedOf(state) !== null && !(state === 'failed' && detail !== null && detail.startsWith(PROVENANCE_DETAIL_PREFIX));
+const rowHalts = (state: UpdateState, detail: string | null): boolean => isHaltingUpdate(state, detail);
 
 /** The shape of a node id: the lowercase uuid `_inst_node_id` mints
  *  (`ccd/ccrc:9494-9513`) and nothing else, so an uppercase, padded or

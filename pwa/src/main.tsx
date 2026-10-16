@@ -5,11 +5,15 @@ import './styles/base.css';
 import { App } from './app';
 import { RenderBoundary, RootFallback } from './components/RenderBoundary';
 import { initTheme } from './lib/theme';
+import { initSkin } from './lib/skin';
 import { setUpdater } from './lib/swupdate';
 
 // Theme before first render (index.html pre-stamps the attribute so even the
 // pre-bundle paint is right; this adds the live change listener + meta sync).
 initTheme();
+// The skin likewise (D-5093): index.html stamped the stored value verbatim;
+// this resolves it against the catalogue, so an unknown one becomes Refined.
+initSkin();
 
 // The root boundary (design 2026-10-01 section 4.12): a throw anywhere in the
 // app while rendering shows "ccrc could not draw this screen." and Reload

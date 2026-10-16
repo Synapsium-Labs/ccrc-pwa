@@ -142,8 +142,10 @@ const duplicated = (m: Map<string, string[]>): string[] =>
 const REGISTERED: Record<string, string> = {
   // No NEXT. The one entry below is argued, not deferred.
   'The latest read failed — this is the last answer that landed.':
-    'TWO SECTIONS, TWO COPIES, agreeing today. `SettingsScreen`\'s `STALE_TEXT` '
-    + 'is the UPDATE plane\'s sentence for a poll that failed after one landed; '
+    'TWO SECTIONS, TWO COPIES, agreeing today. `UPDATES_STALE_TEXT` '
+    + '(fleet/useUpdatesView.ts) is the UPDATE plane\'s sentence for a poll that '
+    + 'failed after one landed, said by Settings and every update surface on the '
+    + 'home screen (centralised-update wave 19); '
     + '`STALL_SECTION_TEXT.stale` (shared/api.ts) is the stall-watch section\'s '
     + 'for its own read. They are two surfaces with two owners — the stall '
     + 'watch\'s whole copy table is in L0 because the SERVER composes some of '

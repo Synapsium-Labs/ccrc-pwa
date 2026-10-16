@@ -15,7 +15,7 @@ import { FleetHostBanner } from '../fleet/FleetHostBanner';
 import { HaltBanner } from '../fleet/HaltBanner';
 import { useFleetHealth } from '../fleet/useFleetHealth';
 import { UpdateBanner } from '../fleet/UpdateBanner';
-import { useUpdatesView } from '../fleet/useUpdatesView';
+import { UPDATES_STALE_TEXT, useUpdatesView } from '../fleet/useUpdatesView';
 import { SubstrateBanner } from '../fleet/SubstrateBanner';
 import { PasskeyNotice } from '../fleet/PasskeyNotice';
 import { HotFilesStrip } from '../fleet/HotFilesStrip';
@@ -176,6 +176,8 @@ export function FleetScreen({
   // which polls on its own.
   const fleetHealth = useFleetHealth();
   const updates = useUpdatesView();
+  // Wave 19, R24(b): a later poll failed and the view is the last answer that landed; every reader below says so.
+  const stale = updates.view !== null && updates.failure !== null;
   // The ··· sheet's own lifecycle (`useActionsSheet`) — which session it is
   // about, and what it does when that session changes or vanishes.
   const actions = useActionsSheet(sessions);
@@ -238,11 +240,11 @@ export function FleetScreen({
         poolLag={poolLag}
         unreadMail={unreadMail}
       />
-      <FleetHostBanner health={fleetHealth} nodes={updates.view?.nodes ?? null} intent={updates.view?.intent ?? null} />
+      <FleetHostBanner health={fleetHealth} nodes={updates.view?.nodes ?? null} intent={updates.view?.intent ?? null} stale={stale} />
       {/* The halt, with each halting node's Ack in place (programme wave 14, R15(a)): above Update all, which it
           disables while it stands. Re-polls on every Ack. */}
-      <HaltBanner updates={updates.view} seq={updates.seq} onAcked={updates.reload} />
-      <UpdateBanner updates={updates.view} health={fleetHealth} onMoved={updates.reload} />
+      <HaltBanner updates={updates.view} seq={updates.seq} onAcked={updates.reload} stale={stale} />
+      <UpdateBanner updates={updates.view} health={fleetHealth} onMoved={updates.reload} stale={stale} />
 
       {/* The substrate fault, said once (spec §4) — derived from the SAME
           injected store the rows render from, so the banner and the chips can
@@ -532,7 +534,9 @@ export function FleetScreen({
         onReaped={() => setReapId(null)}
       />
 
-      <BuildLine health={fleetHealth} nodes={updates.view?.nodes ?? null} />
+      {/* Wave 19, D-5124: the four surfaces show the stale sentence; this one region announces it, once. */}
+      <div className="sr-only" role="status">{stale ? UPDATES_STALE_TEXT : null}</div>
+      <BuildLine health={fleetHealth} nodes={updates.view?.nodes ?? null} staleNote={stale ? UPDATES_STALE_TEXT : null} />
     </main>
   );
 }
