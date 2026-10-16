@@ -8,8 +8,9 @@
 //
 // SAFETY. `sweepFixture.ts`'s fixture HOME and env, built from scratch, with every tool that is not a stub a recording
 // POISON (`launchctl` among them), and `assertContained` on the spawn's final env before every spawn. The shadowed
-// `_svc_launchctl` never execs a binary. A case that leaves a background `sleep` behind (the INT cases: the helper's
-// own orphan, by design) COLLECTS it, REAPS it, and only then asserts.
+// `_svc_launchctl` never execs a binary. J6, the INT case, leaves the helper's own orphaned background `sleep` behind
+// by design: it REAPS any orphaned sleep and then asserts that none survives, before any other assertion. It does not
+// show that an orphan existed, only that none is left behind.
 import { describe, expect } from 'vitest';
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';

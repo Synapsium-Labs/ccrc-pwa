@@ -1161,9 +1161,12 @@ describe('_upd_sweep, Linux arm, with the FROZEN pre-wave-16 script S15 (a rollb
   }, 60_000);
 
   // P7, the differential. Two boxes with one plant, S15 on one and this tree's script on the other. The sweep can see
-  // an exit code, the systemctl calls each unit's verify made, stdout and stderr; none of those may differ for a shape
-  // the script change does not touch. What it does touch — an unsearchable registry, and a purge caught between its two
-  // unlinks — cannot be planted through the sweep fixture.
+  // an exit code, the systemctl calls each unit's verify made, stdout and stderr. For a shape the script change does not
+  // touch, the case compares the exit code, each unit's OWN systemctl calls in order, whether SWEEP_OK is in stdout, and
+  // the stderr lines that name the unit under test. It does not compare the interleaving of two units' calls (the verifies
+  // run concurrently, so that is the scheduler's), nor stderr lines that name no unit: the script-level V31b and V31c cases
+  // in `agent/test/deploy-verify.test.ts` pin the unit-less cause line. What the script change does touch — an unsearchable
+  // registry, and a purge caught between its two unlinks — cannot be planted through the sweep fixture.
   const SHAPES: ReadonlyArray<readonly [string, () => Parameters<typeof makeBox>[0]]> = [
     ['healthy', () => ({ units: [stable(A, 0), stable(B, 1)] })],
     ['a stamped stop', () => ({
