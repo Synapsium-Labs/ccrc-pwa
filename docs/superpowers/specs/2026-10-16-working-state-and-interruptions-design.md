@@ -1,6 +1,6 @@
 # Working-state truth and session interruptions (design)
 
-**Status:** rev 2 (2026-10-16), after two adversarial reviews. It records the operator's rulings of 2026-10-16 (§2) and
+**Status:** rev 3 (2026-10-16), after three adversarial reviews. It records the operator's rulings of 2026-10-16 (§2) and
 the coordinator calls made under them. Every number in it is issued: D-5231 to D-5242, defined once in the plan's
 §Deviations found. The four box acts (§5.10's verification, rollout and the tmux-server drop-in; §5.11's arming) are
 operator acts under the SAFETY rules and are not authorised by this document.
@@ -188,7 +188,7 @@ the stale-`waiting` rung and the `/ws/fleet` heartbeat (§10).
   `/health` advertises the word for it, as the fleet box last measured it. Every mover is then safe in any order: `ccrc
   rollout` with or without `--server-first`, the PWA's one-tap, the update control plane's unattended `auto` dispatcher
   (which always moves fleet nodes first, `planDispatch`'s `waiting-for-fleet` hold, `server/src/update/dispatch.ts`
-  ≈:282), `deploy.sh`, and a server rolled back below the release that brought the word.
+  ≈:269–308), `deploy.sh`, and a server rolled back below the release that brought the word.
 
 ---
 
@@ -409,14 +409,19 @@ close, reclaim, settle and the abandon arms the dead-coordinator lane uses. So w
 answer is not `alive: <id>`, ≈:748) is followed by an `unmeasured` verdict, because the new pane has not yet published its
 live file, `dispatchRun` returns at once with a new retryable refusal, `worker-starting`, having done nothing after the
 `ensure` (no hold, no route write, no transition, no `/clear`). The route then leaves the mutex and polls the verdict
-every 2 s, bounded at 15 s, and re-enters the mutex once to run the whole decision again from the top; that second run's
-`ensure` answers `alive:`, and its verdict decides. If the pane is still not readable, or was started again, the route
-answers `409 worker-starting` and the coordinator dispatches again. The bound has a measured basis in code: the
-coordinator's only client, `ccrc-api`, caps every request at 30 s (`curl -m 30`, `ccd/ccrc-api` ≈:444), and a dispatch
-the server completed after its caller had given up would read to the coordinator as a transport failure. So the wait is
-at most half that cap, leaving the other half for the two decisions around it; a test holds the two numbers together.
-How long a resumed pane takes to come up is measured before the PR (the plan's Task 9), to say how often the retry path
-is the common one. And the verdict is read again immediately before the `/clear` is typed, since the hold and the route
+every 2 s, bounded at 15 s. Only a poll that ends on a measured verdict re-enters the mutex, once, to run the whole
+decision again from the top; that second run's `ensure` answers `alive:`, and its verdict decides. A poll that ends with
+the verdict still `unmeasured` answers `409 worker-starting` at once and never re-runs `dispatchRun` (a re-run would
+read the same `unmeasured` after an `alive:` ensure and answer `status-unmeasurable`, which is not retryable); a re-run
+whose `ensure` started the pane again answers `409 worker-starting` as it stands. Either way the coordinator dispatches
+again. The bound has a basis in code: the coordinator's only client, `ccrc-api`, caps every request at 30 s (`curl -m
+30`, `ccd/ccrc-api` ≈:444), and a dispatch the server completed after its caller had given up would read to the
+coordinator as a transport failure. So the wait is at most half that cap; that the other half covers the two decisions
+around it (ensure, the registry and field reads, the hold, and `sendPrompt`'s `/clear` with its echo polling, plus any
+queueing behind other dispatches on the mutex) is measured before the PR, as today's dispatch-route latency at p95 and
+maximum, and if the worst case does not fit, the wait is lowered until it does; a test holds the two numbers together.
+How long a resumed pane takes to come up is measured before the PR too (the plan's Task 9), to say how often the retry
+path is the common one. And the verdict is read again immediately before the `/clear` is typed, since the hold and the route
 write sit between the gate and the act (the existing comment at ≈:911 names that window).
 
 **The hooks of §5.8 and §5.2 engage only behind this gate** (§6.1 says how). With the compaction carry alone, an idle
@@ -454,7 +459,10 @@ whose own doctrine is that "the stamp belongs to the move, not to the decision" 
 a later settle compose `--model <rung>` for a degrade that never happened. With act-time gates the decision is no longer
 the move, so `_dispatch_swap` passes the rung (`from` and `to`) into the transient unit instead, and `cmd_swap` stamps it
 after its act-time gates pass, immediately before `_operator_choice_keep`; a stamp that cannot be written stands still
-there, as it did at the decision (ruling S3-R5). A gate that refuses therefore leaves the row exactly as the decision
+there (ruling S3-R5). Standing still at the act is no longer free, as it was at the decision, where the stamp came
+first so that a failure cost nothing (≈:19144): by then a rescue decision has written the `five:100` limits row and
+perhaps the `authdead` marker. So that arm undoes what a `rescue-cancel` undoes, the limits row restored by compare,
+and leaves what a cancel leaves, the `authdead` marker. A gate that refuses therefore leaves the row exactly as the decision
 found it, `lastswap` aside (restored below).
 
 - **Auto, non-rescue.** `_dispatch_swap` passes the arm, the row's previous `lastswap` and the decision's epoch into the
@@ -614,7 +622,9 @@ hold has a name):
   notifications). A browser throttles a hidden tab's timers to about once a minute at the most [I, browser documentation],
   inside the 10-minute TTL, so **a hidden but open tab holds its session**. A page the browser has frozen or the OS has
   suspended runs no timer and sends nothing; its claim lapses after the TTL, and that is the case the wake trigger below
-  covers when the operator returns;
+  covers when the operator returns. Presence is never persisted (`presence.ts`: "a server that just restarted
+  correctly believes nobody is watching"), so for `PRESENCE_OPEN_TTL_MS` after the server starts every candidate holds
+  as `viewer`: a hidden tab that has not yet reconnected after a deploy is not taken for an empty screen;
 - not stranded, swap-blocked, under a substrate fault, archived or expiring; no opt-out marker `$REG/<id>.no-hibernate`.
 
 `ccd hibernate` re-measures the box-local half at the act: live `idle`, no `esc to interrupt`, a prompt with an empty box,
@@ -653,11 +663,16 @@ never badges it.
 
 **Every reader that treats a session as dead for good** consults `hibernatedAt` first. A census test derives the readers
 and fails on one that does not state its stance. Not every such reader calls `lifecycleIsDead`, so the derivation takes
-four sources, by scanning `server/src`, `shared` and `pwa/src`: every reader of `lifecycleIsDead` or `DEAD_LIFECYCLES`;
+five sources, by scanning `server/src`, `shared` and `pwa/src`: every reader of `lifecycleIsDead` or `DEAD_LIFECYCLES`;
 every total `Record<SessionLifecycle, …>` table (`coord/peers.ts`'s `LIFECYCLE_RUNG` ≈:38 and `ARCHIVE_CONTRADICTS` ≈:69
 among them); every comparison of a lifecycle or a claimant cause with `'stopped'`; and every reader of the tmux verdict,
 which can call a session gone without any lifecycle (`tmux.sessionVerdict(` calls, a probe field typed from it such as
-`PeerProbe.tmux`, and `coord/claims.ts`'s `LivenessVerdict`). A hit whose word means something else (the collector's own
+`PeerProbe.tmux`, and `coord/claims.ts`'s `LivenessVerdict`); and every comparison of `status`, `bucket` or
+`effectiveStatus` with `'dead'`, which calls a row dead with no lifecycle word at all (the session's own header,
+`pwa/src/session/SessionHeader.tsx` ≈:192 and ≈:251–259, paints such a row "✕ not running"; it reads `hibernatedAt` and
+words it `hibernated`, so a sleeping session's screen never shows "not running" above "Waking…"). The census covers the
+server tree; the box-side sweeps keyed on a live process were audited by hand, and `ccd-tmp-sweep`, the only one today,
+counts a hibernated row as live (below). A hit whose word means something else (the collector's own
 `stopped` lane state) states that as its stance. Each stance is argued from what the reader actually reads, not only from
 the verdict's holds (a run can be opened naming a sleeping session: `POST /api/runs` takes `claimedBy` from its body):
 - the mail lane (`watch.ts` ≈:6826) wakes the recipient instead of backing off and parking: `ensure`, at most once per id
@@ -690,6 +705,13 @@ the verdict's holds (a run can be opened naming a sleeping session: `POST /api/r
   dead non-workspace row today, is hidden on one and replaced by Wake. `ccd stop` on a hibernated row turns it into an
   ordinary stop and `ccd ws-archive` into an archive (each removes `.hibernated`), after which Forget works as before;
 - the PWA's `coordWords.ts` words it `hibernated`.
+
+**What sleep keeps.** A sleeping session has no process, and `ccd-tmp-sweep` reaps the Claude Code temp directory
+(scratchpad and task outputs) of a session with no live process once nothing in it has changed for its maximum age
+(7 days by default; liveness is a `sessions/<pid>.json` whose pid runs, or a running `--resume <uuid>`). Left as it is,
+a session asleep past that age would wake, resuming the same uuid, into an empty directory. So the sweep counts every
+registry row with `.hibernated` as live, its uuid read from `.uuid`, and refuses the pass when such a row's uuid cannot
+be read, its own fail-closed rule.
 
 **Waking.** `cmd_ensure` and `cmd_start` remove `.hibernated` with `.stopped`. The paths:
 - **the PWA, whenever a screen shows a sleeping session.** A mounted SessionScreen wakes its session once whenever its
@@ -737,7 +759,7 @@ Items 1 and 2 are the two places where a fleet-side change is safe only behind a
 has the fleet first, or no order at all: `ccrc rollout`'s default (the fleet box, then the server box), the PWA's one-tap
 and the update control plane's dispatcher, which with `auto` on moves a node to its desired tag with nobody involved and
 holds a server-role node `waiting-for-fleet` until the fleet nodes have moved (`planDispatch`, `server/src/update/
-dispatch.ts` ≈:269–300); `deploy.sh`'s fallback and a hand-run `ccrc update` on one box have none. A rollout form cannot
+dispatch.ts` ≈:269–308); `deploy.sh`'s fallback and a hand-run `ccrc update` on one box have none. A rollout form cannot
 reach all of them, and a server rolled back below its release, or a server leg that fails its health gate and restores
 the old build, would leave the fleet ahead of it with nothing to notice. So **the fleet half gates itself on the server
 it talks to**, and the order becomes a property of what is merged rather than of who moves the boxes:
@@ -752,9 +774,11 @@ it talks to**, and the order becomes a property of what is merged rather than of
 - **The fleet box records what its server advertises** in `~/.ccrc/server-caps`, three lines (`at <unix seconds>`, `caps
   <word> …`, `end`), written tmp-then-rename by the box's own clock: on a `fleet`-role node by `ccd-update-sync`, which
   already pulls from the same server every minute (`OnUnitActiveSec=60s`; armed on that role alone, `ccd/ccrc` ≈:15353),
-  in a second request of its own to `/health` whose failure writes nothing and never stops the intent pull; on a `server`
-  or `both` node by the server process itself, on the same minute beat that rewrites its own update-intent projection
-  (`watch.ts` ≈:1670), as it does that file. A `/health` with no `caps` (an older server) is written as an empty list:
+  in a second request of its own to `/health` whose failure writes nothing and never stops the intent pull, placed right
+  after the server URL is read and before the node-id and box-token checks, each of which exits; on a `server` or `both`
+  node by the server process itself, once at boot and then on a minute beat of its own. That beat is deliberately not
+  the inventory lane's, which runs only with a coordination database (`watch.ts` ≈:2003): tied to it, a coord-less
+  server's file would lapse after boot and its fleet would never engage the arms. A `/health` with no `caps` (an older server) is written as an empty list:
   the whole answer arrived and it names nothing.
 - **The hook reads it with builtins only** (one `read` of a three-line file, no fork, inside the PostToolUse budget) and
   engages a gated arm only when the file is whole, its `at` is no more than 180 s old by the hook's own clock (three sync
@@ -768,9 +792,11 @@ What each mover does then:
   the old build keeps the arms off indefinitely, which is today's behaviour.
 - **Server first** (`--server-first`): the word is listed before the hook arrives; `--server-first` is now a way to shorten
   the window above, never a requirement.
-- **A server rolled back below the word's release:** the next sync, at most a minute after the old server answers, lists
-  no such word, and the arms go off. A rolled-back server is never asked to read the new meanings for longer than that
-  minute, and a server that stays unreachable ages the file out in 180 s. A server rolled back between the two words'
+- **A server rolled back below the word's release:** on a `fleet` node, the next sync, at most a minute after the old
+  server answers, lists no such word, and the arms go off. On a `server` or `both` node the file is the server's own,
+  and an older server never rewrites it, so the arms go off when it ages out, within the 180 s lease. A rolled-back
+  server is never asked to read the new meanings for longer than that (about a minute behind a fleet node, at most
+  180 s on a `server` or `both` node), and a server that stays unreachable ages the file out in 180 s. A server rolled back between the two words'
   releases keeps §5.8's skip and turns §5.2's carry off, which is exactly what it can read.
 - **A box whose sync is not armed** (a fleet box moved by `deploy.sh`, or one with no recorded role) never engages the
   arms; doctor's `server-caps` check says so, and the remedy is the box's ordinary first move onto the release lane.
@@ -855,7 +881,7 @@ needs to classify a push stay on the box; no text leaves it.
 | Swaps that killed output | auto-home 0/132, rescue 5/45, manual 8/24 (15 days) | 0 without consent |
 | Interrupts by source per week | not measurable (nothing logged) | reported |
 | Hibernations and wakes per day, by wake path; memory freed (slice `memory.current`) | about 40 idle processes at about 0.24 GB anonymous memory each [M, verifier's correction] | reported |
-| Memory around wakes: the session slice's and the user tree's peak in the 2 minutes after each wake and each wake burst, and OOM kills within 120 s of a wake | the same window after each cold `--resume` restart in the shadow week (a restart is the same spawn) | reported; Task 19's stop rule disarms on it |
+| Memory around wakes: the session slice's and the user tree's peak anon memory (`memory.stat` `anon`, not page cache), `memory.events` `oom`/`oom_kill` deltas and `memory.pressure` in the 2 minutes after each wake and each wake burst, and OOM kills within 120 s of a wake | the same window after each cold `--resume` restart in the shadow week (a restart is the same spawn) | reported; Task 19's stop rule disarms on it |
 | Gated hook arms engaged: fleet boxes whose `server-caps` is current and lists each word | not applicable | every fleet box within a minute of its server's move |
 
 **Windows.** The investigation's figures (2026-10-08 to 10-15) are the baseline of record. If the instrument lands before
@@ -870,8 +896,9 @@ it. Each lane is measured again seven days after it deploys. Results are recorde
 - That `oom_score_adj` makes Claude Code safe: a Claude Code process larger than every child is still the likelier victim.
   The 32 deaths with no `Failed` line are reported by signature after rollout, not promised away.
 - That N, the hibernation threshold, is right: the shadow week and the idle-age distribution decide it.
-- That a rolled-back server never reads a gated arm's meaning: for at most one sync period (a minute) after the old
-  server first answers, the fleet's hook may still have the arm on (§6.1).
+- That a rolled-back server never reads a gated arm's meaning: after the old server first answers, the hook may still
+  have the arm on for about one sync period (a minute) on a `fleet` node, and for up to the 180 s lease on a `server`
+  or `both` node, whose file the older server never rewrites (§6.1).
 - That a hibernated row keeps a badge: the verdict never sleeps a `done` row, but a `done` row already lapses to `idle`,
   and loses its badge, 30 minutes after its newest hookstate stamp, today, before any hibernation.
 - That "N in background" counts only what is running: it counts what the last Stop listed.
