@@ -1171,8 +1171,9 @@ describe('the delegation spool: the hook appends evidence to a directory ccd mad
     });
 
     it('listing is dropped FIRST when it cannot fit: the other optional fields stay, truncated is set, the line is under the cap', () => {
-      // 160 names of 23 bytes are 4,160 bytes of listing on their own, so the drop never rests on the TMPDIR's length. The plan's
-      // measured ~3.9 KiB case (140 names) passed the cap by only 4 bytes under a short TMPDIR such as CI's /tmp.
+      // 160 names of 23 bytes are 3,680 bytes raw and 4,161 serialized (25 a quoted name, 159 commas, 2 brackets), over the 4,096
+      // cap on their own, so the drop never rests on the TMPDIR's length. The plan's measured ~3.9 KiB case (140 names) passed the
+      // cap by only 4 bytes under a short TMPDIR such as CI's /tmp.
       mkRepo(Array.from({ length: 160 }, (_, i) => `agent-${String(i).padStart(4, '0')}-0123456789ab`));
       const l = one(pre('Bash', { command: WT }, 'toolu_01', { cwd: repo }), { CLAUDE_CODE_EXECPATH: '/x/versions/2.1.296' });
       expect('listing' in l).toBe(false);
@@ -1185,13 +1186,110 @@ describe('the delegation spool: the hook appends evidence to a directory ccd mad
     });
 
     it('when the listing is dropped the line is exactly the line it would have been with no listing, plus truncated:true', () => {
-      // 160 names of 23 bytes are 4,160 bytes of listing on their own, so the line passes the cap wherever the run is: with 140,
-      // the drop rested on the rest of the line, which a short TMPDIR (CI's /tmp) kept under it.
+      // 160 names of 23 bytes serialize to 4,161 bytes of listing on their own (3,680 raw; 25 a quoted name, 159 commas, 2
+      // brackets), so the line passes the cap wherever the run is: with 140, the drop rested on the rest of the line, which a
+      // short TMPDIR (CI's /tmp) kept under it.
       mkRepo(Array.from({ length: 160 }, (_, i) => `agent-${String(i).padStart(4, '0')}-0123456789ab`));
       const withDrop = one(pre('Bash', { command: WT }, 'toolu_01', { cwd: repo }));
       const plain = one(pre('Bash', { command: 'git status' }, 'toolu_01', { cwd: repo }));
       const strip = (l: any) => { const { observedAt: _o, truncated: _t, ...rest } = l; return rest; };
       expect(strip(withDrop)).toEqual(strip(plain));
+    });
+
+    // ── The listing against the cap (review 518, F1 and F2) ──
+    // The listing is spliced onto the jq's line as text, so two rules live in the splice and in the jq text beside it, and
+    // neither was pinned by a row that reaches them:
+    //   R96  the jq reserves 17 bytes (`,"truncated":true`) on a worktree-Bash line, because the splice adds exactly that
+    //        when it drops a listing, and a line that is then over the cap is not written at all;
+    //   R97  the splice adds a listing only to a line that shed nothing (the plan's "listing first" order).
+    // Both rows size their line from a MEASURED one (the same call with its padding at its smallest, not naming a worktree, so
+    // nothing is shed on account of a listing), so they land on the byte wherever the run's TMPDIR puts the cwd.
+    describe('the listing against the cap: the 17-byte reservation and the listing-first order (R96, R97)', () => {
+      const ctl = (n: number): string => '\u0001'.repeat(n);   // 6 bytes each in a JSON line, 1 raw
+      /** A path under the repo (its walk up finds the repo) with `n` more 200-byte components: all plain bytes, none shed before cwd. */
+      const deep = (n: number): string => `${repo}${`/${'d'.repeat(199)}`.repeat(n)}`;
+      /** A Bash call by a sub-agent (so `agentType` can carry padding, as the transcript path does) whose text is `command`. */
+      const call = (command: string, tp: string, at: string, cwd: string): Record<string, unknown> =>
+        pre('Bash', { command }, 'toolu_pad', { cwd, agent_id: 'a1', agent_type: at, transcript_path: tp });
+      const clear = (): void => { for (const f of bucketFiles()) fs.rmSync(path.join(ownerDir(), f)); };
+      const lastRaw = (): string => rawLines().at(-1)!;
+      /** The size of the line a call that does NOT name a worktree writes: it reserves nothing and never gets a listing, so it is the n=0 line. */
+      const measured = (tp: string, at: string, cwd: string): number => {
+        clear();
+        one(call('git status', tp, at, cwd));
+        const n = bytes(lastRaw());
+        clear();
+        return n;
+      };
+      /** Padding strings (the transcript path, from `/`, and the agent type, from `x`) that add exactly `extra` bytes to a measured line. */
+      const fill = (extra: number): { tp: string; at: string } => {
+        const plain = extra % 6;                                    // a plain character costs one byte, a control character six
+        const m = (extra - plain) / 6;
+        const k1 = Math.min(m, 511);                                // the path bound is 512 characters, and the probe's path is one
+        const k2 = m - k1;                                          // the type bound is 128 characters, and the probe's type is one
+        if (k2 + plain > 127) throw new Error(`cannot add ${extra} bytes to a line from its transcript path and agent type`);
+        return { tp: `/${ctl(k1)}`, at: `x${ctl(k2)}${'y'.repeat(plain)}` };
+      };
+
+      it.each([
+        [4077, 'one byte below the band: the n=0 line itself passes the jq, the splice adds truncated to it, and the cwd stays'],
+        [4078, 'the first byte of the band'],
+        [4086, 'the middle of the band'],
+        [4094, 'the last byte that fits when nothing is reserved'],
+      ])('a worktree Bash line that is %i bytes at n=0 is written with truncated:true and no listing, never lost with it (R96): %s', (target) => {
+        const cwd = deep(1);
+        const { tp, at } = fill(target - measured('/', 'x', cwd));
+        // The sizing is exact: the same call, not naming a worktree, is not a trigger, reserves nothing and lands on `target`.
+        const plain = one(call('git status', tp, at, cwd));
+        expect(bytes(lastRaw()), 'the padding sized the n=0 line to the byte').toBe(target);
+        expect('truncated' in plain).toBe(false);
+        clear();
+        // The worktree call sees a listing it cannot fit (three names are 52 more bytes). The line without it, plus the 17 bytes
+        // of `,"truncated":true`, must still be under the cap: the jq left room for exactly that.
+        const l = one(call(WT, tp, at, cwd));
+        expect(l.truncated, 'the line says its listing was dropped').toBe(true);
+        expect('listing' in l).toBe(false);
+        expect(l).toMatchObject({ eventKind: 'PreToolUse', toolName: 'Bash', toolUseId: 'toolu_pad', sessionId: OWNER,
+          parentIncarnation: GENERATION, claudeSessionId: CLAUDE_SID, agentId: 'a1' });
+        expect(lastRaw().match(/"truncated"/g), 'one truncated key').toHaveLength(1);
+        if (target === 4077) expect(l.cwd, 'the reservation is no wider than 17 bytes: nothing was shed for it').toBe(cwd);
+      });
+
+      const SHED = 3900;
+      /** A worktree call whose n=0 and n=1 lines are over the cap and whose n=2 line (the cwd gone) is `SHED` bytes, well under it: three names would fit beside it. */
+      const shedCall = (): { l: any; raw: string } => {
+        // The transcript path and agent type are inflated and the cwd has two 200-byte components (400 more bytes, all of them
+        // shed with the cwd at n=2), so n=0 and n=1 are over the cap and n=2 is the first line that fits.
+        const cwd = deep(2);
+        expect(bytes(cwd), 'this run\'s TMPDIR leaves room for the padded cwd').toBeLessThanOrEqual(B.pathBytes);
+        const base = measured('/', 'x', repo);
+        const { tp, at } = fill(SHED - 17 - (base - (7 + bytes(JSON.stringify(repo)))));   // everything but the cwd, plus `,"truncated":true`
+        clear();
+        const l = one(call(WT, tp, at, cwd));
+        return { l, raw: lastRaw() };
+      };
+
+      it('a line that already shed fields carries NO listing, even one that would fit, and has one truncated key (R97)', () => {
+        const control = one(call(WT, '/', 'x', repo));
+        expect(control.listing, 'control: a line that shed nothing gets the same repo\'s listing').toHaveLength(3);
+        expect('truncated' in control).toBe(false);
+        const { l, raw } = shedCall();
+        expect(l.truncated).toBe(true);
+        expect('cwd' in l, 'the premise: this line shed its cwd').toBe(false);
+        expect('listing' in l, 'listing goes first, and only onto a line that shed nothing').toBe(false);
+        expect(raw.match(/"truncated"/g), 'one truncated key').toHaveLength(1);
+        expect(bytes(raw), 'the premise: the n=2 line is the size the padding was cut for').toBe(SHED);
+      });
+
+      it('a line that already shed fields and meets a listing it cannot keep gets no second truncated key (R97)', () => {
+        admin('has space');                                  // a name outside the grammar: the whole listing is dropped
+        const { l, raw } = shedCall();
+        expect(l.truncated).toBe(true);
+        expect('cwd' in l, 'the premise: this line shed its cwd').toBe(false);
+        expect('listing' in l).toBe(false);
+        expect(raw.match(/"truncated"/g), 'one truncated key, not one spliced on again').toHaveLength(1);
+        expect(bytes(raw), 'the premise: the n=2 line is the size the padding was cut for').toBe(SHED);
+      });
     });
   });
 
