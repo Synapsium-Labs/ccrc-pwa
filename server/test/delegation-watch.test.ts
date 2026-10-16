@@ -1039,6 +1039,19 @@ describe('rung 4 end to end: a raw worktree the session itself created becomes a
     expect(leasesOf(w.home)).toEqual([]);
     expect(w.watcher.delegationReport().verdicts).toMatchObject({ unresolved: 0, conflicting: 0 });     // a registered workspace is not unowned work (R59)
   });
+
+  it('5477 b, L9: a rung-4 lease whose tree a registry row then names (a ccd workspace) gets ONE final conflicting attempt under the lease\'s parent; the lease is untouched and journaled once', async () => {
+    const w = rawTreeWorld();
+    const ws = record('demo', 'raw-tree', { canonicalPath: '/data/worktrees/demo/raw-tree' });
+    for (let i = 0; i < 3; i++) await censusPass(w, at(i), { demo: [OLD, ws] });
+    expect(leasesOf(w.home).map((l) => [l.adminRecord, l.sourceKind, l.parentId])).toEqual([['raw-tree', 'raw', 'demo-a']]);
+    for (let i = 3; i < 6; i++) await censusPass(w, at(i), { demo: [OLD, ws] }, [sessionOf('demo-a')], [recordOf('demo-a'), recordOf('demo-raw-tree')]);
+    expect(attemptsOf(w.home).map((a) => [a.adminRecord, a.rung, a.verdict, a.detail, a.parentId])).toEqual([
+      ['raw-tree', 4, 'linked', null, 'demo-a'], ['raw-tree', null, 'conflicting', 'rungs-disagree', 'demo-a'],
+    ]);
+    expect(leasesOf(w.home).map((l) => [l.parentageState, l.releasedAt]), 'wave 3 has no lease transition').toEqual([['linked', null]]);
+    expect(readFileSync(path.join(w.ccrcDir, DELEGATION_JOURNAL_FILE), 'utf8').split('"kind":"lease-created"').length - 1).toBe(1);
+  });
 });
 
 describe('the pairs and the census the policy is handed (hand-offs 12 and 14)', () => {

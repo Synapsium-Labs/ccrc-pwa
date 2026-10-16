@@ -491,6 +491,37 @@ describe('one lease per tree (R51): a tree an unreleased lease holds is never re
   });
 });
 
+describe('5477 b: a later rung-1 answer that disagrees with a rung-4 lease is a final conflict (W3-M46), and nothing re-links the tree', () => {
+  // raw-tree was leased at rung 4 (source raw) to PARENT's Bash call; a registry row or `.child` now names it (a ccd workspace).
+  const rawLease = lease({ leaseId: hex('lease-raw'), activityId: rawAct.activityId, adminRecord: RAW, canonicalPath: WT(RAW), sourceKind: 'raw' });
+  const rc = (over: Partial<DelegationCheckpointV1> = {}) => recovery({ leases: [rawLease], ...over });
+  const workspace = unresolvedV('ccd-workspace-not-a-lease');
+  it('files ONE conflicting attempt (`rungs-disagree`, no rung) under the LEASE\'s parent, with the lease activity\'s identity as its evidence; it requests nothing', () => {
+    const effects = substantive(planDelegationReconciliation(one(rawRec(), workspace, { recovery: rc() })));
+    expect(kinds(effects)).toEqual(['record-unowned-worktree']);
+    const e = effects[0]!;
+    if (e.kind !== 'record-unowned-worktree') throw new Error('unreachable');
+    expect(e.attempt).toMatchObject({ verdict: 'conflicting', detail: 'rungs-disagree', rung: null, parentId: PARENT, parentIncarnation: INC, adminRecord: RAW, evidenceJournalIds: [rawAct.identityJournalId] });
+    // held by PATH and by KEY, as a link's holder rule reads it
+    expect(kinds(substantive(planDelegationReconciliation(one(rawRec({ adminRecord: 'wt-renamed' }), workspace, { recovery: rc() })))), 'by path').toEqual(['record-unowned-worktree']);
+    expect(kinds(substantive(planDelegationReconciliation(one(rawRec(), workspace, { recovery: rc({ leases: [{ ...rawLease, canonicalPath: '/fixture/old/path' }] }) })))), 'by key').toEqual(['record-unowned-worktree']);
+    // CONTROLS: no lease holds it (a ccd workspace is not unowned work), the lease is released, the lease's parent has no session row
+    // (no parent is invented), or the breaker is suspended (no claim this pass)
+    expect(substantive(planDelegationReconciliation(one(rawRec(), workspace))), 'no lease').toEqual([]);
+    expect(substantive(planDelegationReconciliation(one(rawRec(), workspace, { recovery: rc({ leases: [{ ...rawLease, releasedAt: T(5) }] }) }))), 'released').toEqual([]);
+    expect(substantive(planDelegationReconciliation(one(rawRec(), workspace, { recovery: rc({ sessions: [] }) }))), 'no session row').toEqual([]);
+    expect(substantive(planDelegationReconciliation(one(rawRec(), workspace, { recovery: rc(), registryReadable: false }))), 'suspended').toEqual([]);
+  });
+  it('the conflict is final: the next pass files nothing more, and a later rung-4 or rung-3 link of the tree requests nothing', () => {
+    const first = substantive(planDelegationReconciliation(one(rawRec(), workspace, { recovery: rc() })))[0];
+    if (first?.kind !== 'record-unowned-worktree') throw new Error('no conflicting attempt was filed');
+    const next = rc({ attempts: [first.attempt] });
+    expect(substantive(planDelegationReconciliation(one(rawRec(), workspace, { recovery: next, now: T(36060) })))).toEqual([]);
+    expect(substantive(planDelegationReconciliation(one(rawRec(), linkedV(rawAct, 4), { recovery: next, now: T(36120) }))), 'rung 4 again').toEqual([]);
+    expect(substantive(planDelegationReconciliation(one(rawRec(), linkedV(agentAct, 3), { recovery: next, now: T(36180) }))), 'rung 3').toEqual([]);
+  });
+});
+
 describe('run versus worker is read from the rows, never from spelling (R52)', () => {
   const RUN = 'wf_5440bac3-123';                                   // a measured run-ID shape whose tail is all digits
   const runRow = activity('workflow', RUN);

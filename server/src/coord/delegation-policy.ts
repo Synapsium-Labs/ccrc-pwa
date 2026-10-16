@@ -158,7 +158,8 @@ const UNOWNED_BY_REASON: Readonly<Record<DelegationCorrelationReason, boolean>> 
   'ambiguous-listing-windows': true,
   'rungs-disagree': true,
   'no-correlating-evidence': true,
-  // R57: an eviction made the answer unmeasured. Nothing is known of the tree, so it is retried, never reported as work.
+  // R57, 2c (R84): an eviction, a lost window or a lost hour made the answer unmeasured. Nothing is known of the tree, so it is retried,
+  // never reported as work.
   'evidence-horizon': false,
 };
 
@@ -238,7 +239,7 @@ interface Ground {
   attemptIds: ReadonlySet<string>;
   finalConflicts: ReadonlySet<string>;
   /** Every unreleased lease: whoever holds a tree holds it, whichever activity it names. */
-  openLeases: readonly { activityId: string; project: string; adminRecord: string; canonicalPath: string }[];
+  openLeases: readonly { activityId: string; parentId: string; parentIncarnation: string; project: string; adminRecord: string; canonicalPath: string }[];
 }
 
 function groundOf(now: string, recovery: DelegationRecoveryState): Ground {
@@ -253,7 +254,9 @@ function groundOf(now: string, recovery: DelegationRecoveryState): Ground {
     sessions: new Set(cp.sessions.map((s) => parentKey(s.sessionId, s.parentIncarnation))),
     attemptIds: new Set(cp.attempts.map((a) => a.attemptId)),
     finalConflicts: new Set(cp.attempts.filter((a) => a.verdict === 'conflicting').map((a) => treeKey(a.project, a.adminRecord))),
-    openLeases: cp.leases.filter((l) => l.releasedAt === null).map((l) => ({ activityId: l.activityId, project: l.project, adminRecord: l.adminRecord, canonicalPath: l.canonicalPath })),
+    openLeases: cp.leases.filter((l) => l.releasedAt === null).map((l) => ({
+      activityId: l.activityId, parentId: l.parentId, parentIncarnation: l.parentIncarnation, project: l.project, adminRecord: l.adminRecord, canonicalPath: l.canonicalPath,
+    })),
   };
 }
 
@@ -318,7 +321,7 @@ function planLinked(ground: Ground, record: DelegationCensusRecord, verdict: Ext
   const parent = { parentId: activity.parentId, parentIncarnation: activity.parentIncarnation };
   // A tree or path an unreleased lease holds is held, whichever activity holds it. The same activity: nothing to do. Another
   // activity's link is a later answer that disagrees with an existing one, so it turns conflicting (and requests nothing).
-  const holders = ground.openLeases.filter((l) => l.canonicalPath === canonicalPath || (l.project === record.project && l.adminRecord === record.adminRecord));
+  const holders = holdersOf(ground, record);
   if (holders.length > 0) {
     if (holders.every((l) => l.activityId === activity.activityId)) return [];
     const attempt = attemptOf(ground, parent, record, { rung: null, verdict: 'conflicting', detail: 'rungs-disagree', evidence: verdict.evidenceJournalIds });
@@ -338,6 +341,35 @@ function planLinked(ground: Ground, record: DelegationCensusRecord, verdict: Ext
     firstObservedAt: ground.now,
   };
   return [{ kind: 'request-linked-lease-identity', attempt, request }];
+}
+
+/** The unreleased leases that hold this tree: by its canonical path, or by its (project, admin record). */
+function holdersOf(ground: Ground, record: DelegationCensusRecord): Ground['openLeases'] {
+  return ground.openLeases.filter((l) => (record.canonicalPath !== null && l.canonicalPath === record.canonicalPath) || (l.project === record.project && l.adminRecord === record.adminRecord));
+}
+
+/**
+ * 5477 b (R84): a LATER rung-1 answer that disagrees with a lease. A tree an unreleased lease holds (a rung-4 lease in wave 3) that has
+ * since gained a registry row or a `.child` is a ccd workspace, which is never a lease: the two answers disagree, so ONE conflicting
+ * attempt (`rungs-disagree`, no rung) is filed under the LEASE's parent (which must have a session row: no parent is invented), with the
+ * lease activity's identity record beside the verdict's evidence. The conflict is then final (`finalConflicts`): nothing re-links the
+ * tree, and no second lease is requested. Wave 3 has no lease-level transition: the lease itself stays `linked`, the conflict is a
+ * checkpoint attempt only, and a leased tree is outside the health counts. (A `run-child-owned` verdict beside a lease would be the same
+ * disagreement; wave 3 hands correlation no run-child agreement, so it cannot arise here: a note for wave 5.)
+ */
+function planWorkspaceOverLease(ground: Ground, record: DelegationCensusRecord, verdict: Extract<DelegationCorrelationVerdict, { kind: 'unresolved' }>): DelegationReportEffect[] {
+  const out: DelegationReportEffect[] = [];
+  for (const holder of holdersOf(ground, record)) {
+    if (!ground.sessions.has(parentKey(holder.parentId, holder.parentIncarnation))) continue;
+    const identity = ground.activitiesById.get(holder.activityId)?.identityJournalId;
+    const attempt = attemptOf(ground, holder, record, {
+      rung: null, verdict: 'conflicting', detail: 'rungs-disagree', evidence: identity === undefined ? verdict.evidenceJournalIds : [...verdict.evidenceJournalIds, identity],
+    });
+    if (!ground.attemptIds.has(attempt.attemptId) && !out.some((e) => e.kind === 'record-unowned-worktree' && e.attempt.attemptId === attempt.attemptId)) {
+      out.push({ kind: 'record-unowned-worktree', attempt });
+    }
+  }
+  return out;
 }
 
 function planUnowned(ground: Ground, record: DelegationCensusRecord, verdict: Extract<DelegationCorrelationVerdict, { kind: 'unresolved' | 'conflicting' }>): DelegationReportEffect[] {
@@ -360,6 +392,8 @@ function planRecord(ground: Ground, claimsAllowed: boolean, record: DelegationCe
     case 'linked':
       return claimsAllowed && !finalConflict ? planLinked(ground, record, verdict) : [];
     case 'unresolved':
+      if (!claimsAllowed || finalConflict) return [];
+      return verdict.reason === 'ccd-workspace-not-a-lease' ? planWorkspaceOverLease(ground, record, verdict) : planUnowned(ground, record, verdict);
     case 'conflicting':
       return claimsAllowed && !finalConflict ? planUnowned(ground, record, verdict) : [];
     case 'unmeasured':
