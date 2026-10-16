@@ -1769,6 +1769,11 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
       26/0/0). The fleet run warned "is FAILED — try-restart skipped it" for three supervisors that had failed before
       the run: the warning wave 16's item 3 rewords. STATUS: fleet and server v0.0.212, newest v0.0.212, intent
       dev/auto=stable, backups fleet 184M/server 759M, disk free fleet 216G/work volume 139G/server 32G, no anomalies.
+    - **2026-10-16 21:58 UTC:** v0.0.213 to v0.0.216 released between 21:20 and 21:37 (#449 to #452, UI and docs). A
+      tap moved both boxes from v0.0.212 to v0.0.214, read from the feed as "requested update" (fleet 21:37:56 to
+      21:39:36, doctor 34/6/0; server 21:40:27 to 21:40:53, restarted at 21:40:39, doctor 26/0/0). STATUS: fleet and
+      server v0.0.214, newest v0.0.216, intent dev/auto=stable, backups fleet 185M/server 764M, disk free fleet
+      215G/work volume 138G/server 32G, no anomalies.
 
 - **2026-09-30 12:22 UTC — wave 8 opened (run 182) for the live audit's residue, and dispatched.**
   - **Planning:** two Opus scoping agents measured each defect at `a742eb6a`, and an Opus writer assembled the
