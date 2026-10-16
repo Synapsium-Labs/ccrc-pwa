@@ -28,12 +28,23 @@
 // an unreadable `gitdir` read as an absent canonical path) are no evidence of anything, and a source scan pins that nothing here reads
 // them.
 //
-// THE EVIDENCE HORIZON (R57, D-4653; spec §5.3: "a lost event can delay or prevent a link, never create one"). The caller holds a bounded
-// slice of the journal. Rung 4's overlap rule and the claimed-by-more-than-one-session rules of rungs 2 and 3 are NEGATIVE evidence: they
-// keep a tree from linking only while the other party's events are still held. So the caller says how far its eviction reached
-// (`evidenceHorizon`: the latest `observedAt` among events it no longer holds, or null when it dropped none), and a link that rests on
-// such negative evidence becomes `unmeasured('evidence-horizon')` when the evidence it rests on reaches back to that horizon. A verdict
-// that was not a link is never touched: an eviction can make a verdict less decided and never more.
+// WHAT THE CALLER NO LONGER HOLDS (R57, R65, D-4653; spec §5.3: "a lost event can delay or prevent a link, never create one"). The
+// caller holds a bounded slice of the journal. Several rules that keep a tree from linking are NEGATIVE evidence: they fire only while
+// the other party's events are still held. A rival claim on the same upstream ID (rungs 2 and 3), the parent's own working directory and
+// a second subagent on the path (rung 3), and another session's overlapping window (rung 4). An eviction can empty any of them, and a
+// link that rests on an emptied rule is a permanent, wrong lease. So an eviction may only make a verdict LESS decided, and the two
+// halves of that are decided differently, because an instant can bound a listing window but cannot see an event that is gone:
+//   - RUNG 4 reads `evidenceHorizon` (the latest `observedAt` among evicted events) and the windows it holds, and refuses a link when a
+//     window it holds could have been overlapped by one it lost.
+//   - RUNGS 2 AND 3 read `droppedEvidence`, an index of the keys the caller kept of every event it dropped (the caller drops one by
+//     eviction, by a reload that truncates, and, by its one-event-per-tuple rule, every later event of a tuple whose first was evicted).
+//     A link of activity A (parent p, upstream id X, at path C) is `unmeasured('evidence-horizon')` if a dropped event (a) names X from
+//     a parent other than p, or (b) reported C and either carries no agent id and comes from p, or carries an agent id other than X and
+//     is not a SubagentStart or SubagentStop. That is membership, not a comparison with an instant. A caller that has not measured what
+//     it dropped says so, and an unmeasured index is not an empty one: every link is then `unmeasured('evidence-horizon')` (D-4008).
+//   - `combine` never lets a link beat an `evidence-horizon` answer from the other rung: that answer is a rung that found an activity
+//     and was about to link, and its real answer may have been a link to another parent.
+// A verdict that was not a link is never touched: the rules above only ever turn a link into a non-answer.
 //
 // INTERPRETATIONS (each recorded in the task report): `conflicting` is decided over PARENTS: two linked rungs that name the same
 // parent are agreement (the lowest rung's activity is reported) and two that name different parents conflict; `repository` on a
@@ -88,8 +99,13 @@ export interface DelegationCorrelationInput {
   hasRegistryRow: boolean;
   hasChildMarker: boolean;
   /** R57 (D-4653): the latest `observedAt` among events the caller has evicted from `acceptedEvidence` and `listingWindows`, or null when
-   *  it evicted none. Every event observed AFTER it is held; an event at or before it may have been lost. */
+   *  it evicted none. It decides RUNG 4 ONLY (a listing window is an instant and an interval, which an instant can bound). It cannot
+   *  decide rungs 2 and 3: an event observed AFTER it may still be missing, because the caller keeps one event per (session,
+   *  incarnation, agent, directory) and hides that tuple's later events once its first is evicted. Those rungs read `droppedEvidence`. */
   evidenceHorizon: string | null;
+  /** R65 (D-4653): what the caller remembers of the events it no longer holds, reduced to the keys rungs 2 and 3 read. NEVER null: a
+   *  caller that has not measured it says so (`DELEGATION_DROPPED_UNMEASURED`), and an unmeasured index is not an empty one. */
+  droppedEvidence: DelegationDroppedEvidence;
 }
 
 export type DelegationCorrelationVerdict =
@@ -142,6 +158,134 @@ export const DELEGATION_CORRELATION_REASONS = [
   'evidence-horizon',
 ] as const;
 export type DelegationCorrelationReason = (typeof DELEGATION_CORRELATION_REASONS)[number];
+
+// ── The dropped-evidence index (R65, part of D-4653) ─────────────────────────────────────────────────────────────────
+
+/**
+ * One event the caller no longer holds, reduced to the fields the negative-evidence rules of rungs 2 and 3 read, and nothing else. The
+ * caller keeps DISTINCT keys, never events. A SubagentStart or SubagentStop is told apart because the host emits them with the parent's
+ * context, so they are not "emitted from inside" a subagent (the rule `rung3` applies to the events it holds).
+ */
+export interface DelegationDroppedKey {
+  parentId: string;
+  parentIncarnation: string;
+  /** The event's own `agentId` (its emitter), or null. */
+  agentId: string | null;
+  /** The agent an Agent/Task launch response named, or null. */
+  launchAgentId: string | null;
+  /** The run a Workflow launch response named, or null. */
+  runId: string | null;
+  /** The working directory the event reported, or null. */
+  cwd: string | null;
+  startStop: boolean;
+}
+
+/** The index correlation queries. `measured: false` is the caller saying it has NOT (re)read what it dropped; it is not "nothing". */
+export type DelegationDroppedEvidence =
+  | { readonly measured: false }
+  | {
+      readonly measured: true;
+      /** An agent id or a run id -> the parents (by key) of the dropped events that named it. */
+      readonly named: ReadonlyMap<string, ReadonlySet<string>>;
+      /** A working directory -> the dropped events that reported it. */
+      readonly atPath: ReadonlyMap<string, readonly { parent: string; agentId: string | null; startStop: boolean }[]>;
+    };
+
+/** A lost or never-built index. Every link answers `unmeasured('evidence-horizon')` against it (D-4008: unknown is never empty). */
+export const DELEGATION_DROPPED_UNMEASURED: DelegationDroppedEvidence = Object.freeze({ measured: false as const });
+
+/** The keys of one dropped event. */
+export function delegationDroppedKeyOf(event: DelegationEventEnvelopeV1): DelegationDroppedKey {
+  const launch = event.eventKind === 'PostToolUse' && 'launch' in event && typeof event.launch === 'object' && event.launch !== null ? event.launch : null;
+  return {
+    parentId: event.sessionId,
+    parentIncarnation: event.parentIncarnation,
+    agentId: text(event.agentId) ? event.agentId : null,
+    launchAgentId: launch !== null && 'agentId' in launch && text(launch.agentId) ? launch.agentId : null,
+    runId: launch !== null && 'runId' in launch && text(launch.runId) ? launch.runId : null,
+    cwd: text(event.cwd) ? event.cwd : null,
+    startStop: event.eventKind === 'SubagentStart' || event.eventKind === 'SubagentStop',
+  };
+}
+
+/** The identity of a key, for the caller's de-duplication. */
+export const delegationDroppedKeyId = (k: DelegationDroppedKey): string =>
+  JSON.stringify([k.parentId, k.parentIncarnation, k.agentId, k.launchAgentId, k.runId, k.cwd, k.startStop]);
+
+/** A MEASURED index over these keys (empty keys: measured, nothing dropped). */
+export function indexDelegationDropped(keys: Iterable<DelegationDroppedKey>): DelegationDroppedEvidence {
+  const named = new Map<string, Set<string>>();
+  const atPath = new Map<string, { parent: string; agentId: string | null; startStop: boolean }[]>();
+  for (const k of keys) {
+    const parent = parentKey(k.parentId, k.parentIncarnation);
+    for (const name of [k.agentId, k.launchAgentId, k.runId]) {
+      if (name === null) continue;
+      const parents = named.get(name) ?? new Set<string>();
+      parents.add(parent);
+      named.set(name, parents);
+    }
+    if (k.cwd !== null) {
+      const here = atPath.get(k.cwd) ?? [];
+      if (!here.some((e) => e.parent === parent && e.agentId === k.agentId && e.startStop === k.startStop)) here.push({ parent, agentId: k.agentId, startStop: k.startStop });
+      atPath.set(k.cwd, here);
+    }
+  }
+  return { measured: true, named, atPath };
+}
+
+/**
+ * Which dropped keys can be forgotten: those no present census record and no activity row can still ask about. Answers the keys'
+ * ids; it changes nothing. The caller prunes only against a census in which EVERY project was measured (a project whose view was
+ * null contributes no paths, and would read as "nothing needs this").
+ *
+ * WHY THIS IS SOUND. A key changes a verdict only through the two queries above, and each asks about something specific:
+ *   - clause (b) asks about the canonical path of the census record being decided, so a key whose `cwd` is no present record's path is
+ *     never asked, and a path that is a present record's keeps EVERY key that reported it;
+ *   - clause (a) asks about an upstream id X: rung 2's is the name of a present `agent-<id>` tree (the id) or `wf_<run>-<n>` tree (the
+ *     run), and rung 3's is the upstream id of an `agent` activity row. A key whose names are none of those is never asked. And a key
+ *     naming X from parent R is REDUNDANT when the checkpoint already holds R's activity row for X, because `claimsOf` reads rows and
+ *     sees R as a claimant whatever the lane holds: only a rival with NO row (a parent that sent a bare event naming X, whose meta was
+ *     never read) can be hidden by an eviction, and that is the key kept. Wave 3 never deletes an activity row; a wave that does must
+ *     revisit this rule. A run id is never redundant by rows (a row names a worker, not the run), so it is kept while a present tree or
+ *     a workflow row carries the run.
+ * THE ONE LOSS: a path that is reused after its tree left the census loses the veto events of its earlier life. The full evidence
+ * would still read them (rung 3 compares paths, not lives), so such a reused path can link where the full evidence would not decide.
+ */
+export function prunableDelegationDropped(
+  keys: Iterable<readonly [string, DelegationDroppedKey]>,
+  census: readonly DelegationCensusRecord[],
+  activities: readonly DelegationActivityRow[],
+): string[] {
+  const paths = new Set<string>();
+  const askedAgents = new Set<string>();
+  const askedRuns = new Set<string>();
+  for (const r of census) {
+    if (r.canonicalPath !== null) paths.add(r.canonicalPath);
+    if (r.adminRecord.startsWith(AGENT_PREFIX)) askedAgents.add(r.adminRecord.slice(AGENT_PREFIX.length));
+    const wf = /^(wf_.+)-(\d+)$/.exec(r.adminRecord);
+    if (wf !== null) askedRuns.add(wf[1]!);
+  }
+  const rows = new Set<string>();
+  for (const a of activities) {
+    if (a.sourceKind === 'agent') {
+      askedAgents.add(a.upstreamId);
+      rows.add(JSON.stringify([a.parentId, a.parentIncarnation, a.upstreamId]));
+    } else if (a.sourceKind === 'workflow') {
+      const wf = /^(wf_.+)-(\d+)$/.exec(a.upstreamId);
+      if (wf !== null) askedRuns.add(wf[1]!);
+    }
+  }
+  const forget: string[] = [];
+  for (const [id, k] of keys) {
+    if (k.cwd !== null && paths.has(k.cwd)) continue;
+    const needsAgent = (name: string | null): boolean =>
+      name !== null && askedAgents.has(name) && !rows.has(JSON.stringify([k.parentId, k.parentIncarnation, name]));
+    if (needsAgent(k.agentId) || needsAgent(k.launchAgentId)) continue;
+    if (k.runId !== null && askedRuns.has(k.runId)) continue;
+    forget.push(id);
+  }
+  return forget;
+}
 
 // ── Small helpers ─────────────────────────────────────────────────────────────────────────────────────────────────────
 
@@ -204,41 +348,57 @@ function claimsOf(input: DelegationCorrelationInput, sourceKind: 'agent' | 'work
 // ── The evidence horizon (R57, D-4653) ───────────────────────────────────────────────────────────────────────────────
 
 /**
- * How long after the horizon a listing window must have begun for rung 4 to trust that no evicted window overlaps it: ten minutes.
- * A window is a Bash call, and Claude Code's Bash tool ends a call at its timeout, ten minutes at the longest by default; a call that
- * began at or before the horizon and was still running a margin later is a call that outlived its own ceiling, and a call that never
- * reported its end is an OPEN-ENDED window, which the rule below already refuses. So a candidate window that began a full margin after
- * the horizon cannot overlap a window whose events were evicted, and one that began sooner might.
+ * How long after the horizon a listing window must have begun for rung 4 to trust that no evicted window overlaps it: twenty minutes.
+ * A window is a Bash call. Claude Code's Bash tool ends a call at its timeout, ten minutes at the longest by default, and a call that
+ * never reported its end is an OPEN-ENDED window, which the rule below already refuses. A call that began at or before the horizon was
+ * therefore over by the horizon plus the tool's longest call, so a candidate that began MORE than that after the horizon cannot overlap
+ * an evicted window; one that began sooner, or exactly then (the test is closed, like the overlap test), might.
+ *
+ * THIS ASSUMES BASH CALLS STAY WITHIN CLAUDE CODE'S MAXIMUM BASH TIMEOUT, WHICH `BASH_MAX_TIMEOUT_MS` CAN RAISE. A fleet that raises it
+ * past this margin breaks the premise silently: a sibling call longer than the margin, whose start was evicted, no longer vetoes, rung 4
+ * links, and `createLease` journals a permanent, immutable lease for possibly the wrong parent. A too-small margin re-opens exactly
+ * that wrong lease. A too-large one costs little: more rung-4 trees answer `unmeasured` while the slice spans less than the margin plus
+ * the birth wait. Twenty minutes is twice the default ceiling; raise it with the ceiling.
  */
-export const DELEGATION_EVIDENCE_MARGIN_MS = 10 * 60 * 1000;
+export const DELEGATION_EVIDENCE_MARGIN_MS = 20 * 60 * 1000;
 
 /** The horizon as epoch milliseconds, or `null` when the caller evicted nothing. A horizon that is not a canonical instant fails SAFE:
- *  `NaN` makes every comparison below false, which the callers read as "reaches the horizon" (see `reachesHorizon`). */
+ *  `NaN` is read by rung 4 as "reaches the horizon": it refuses the link. */
 function horizonMsOf(input: DelegationCorrelationInput): number | null {
   if (input.evidenceHorizon === null) return null;
   try { return parseDelegationInstant(input.evidenceHorizon); } catch (err) { if (err instanceof DelegationModelError) return Number.NaN; throw err; }
 }
 
-/**
- * Do this activity's claims reach back to the horizon? Its claim set is complete only if no claim of it, or of a rival for the same
- * upstream ID, can have been evicted; an event can have been evicted only if it was observed at or before the horizon. So the claim set
- * is complete only when the activity's identity record AND its earliest claiming event (a start, a stop or a launch response naming its
- * agent, from its own parent) were observed strictly after it. With no horizon nothing was evicted. An unreadable horizon reaches.
- */
-function reachesHorizon(input: DelegationCorrelationInput, activity: DelegationActivityRow): boolean {
-  const horizon = horizonMsOf(input);
-  if (horizon === null) return false;
-  if (Number.isNaN(horizon)) return true;
-  let earliest: number;
-  try { earliest = parseDelegationInstant(activity.openedAt); } catch (err) { if (err instanceof DelegationModelError) return true; throw err; }
-  for (const { event } of input.acceptedEvidence) {
-    if (event.sessionId !== activity.parentId || event.parentIncarnation !== activity.parentIncarnation) continue;
-    const named = event.agentId === activity.upstreamId || (event.eventKind === 'PostToolUse' && 'launch' in event && event.launch !== null
-      && typeof event.launch === 'object' && 'agentId' in event.launch && event.launch.agentId === activity.upstreamId);
-    if (!named) continue;
-    try { earliest = Math.min(earliest, parseDelegationInstant(event.observedAt)); } catch (err) { if (err instanceof DelegationModelError) return true; throw err; }
+// ── Queries over the dropped-evidence index (R65) ───────────────────────────────────────────────────────────────────────
+
+/** The index once it is known to be measured. Each rung checks `measured` itself, once: an index that was lost is not an empty one. */
+type MeasuredDropped = Extract<DelegationDroppedEvidence, { measured: true }>;
+
+/** (a) Did a dropped event name one of these ids from a parent other than `parent`? Reads only the index, so it is false for an
+ *  index that dropped nothing and for a dropped event of the activity's own parent. */
+function droppedRival(d: MeasuredDropped, ids: readonly string[], parent: string): boolean {
+  for (const id of ids) {
+    const parents = d.named.get(id);
+    if (parents === undefined) continue;
+    for (const p of parents) if (p !== parent) return true;
   }
-  return earliest <= horizon;
+  return false;
+}
+
+/** (b) Did a dropped event report this path as a working directory in a way that vetoes a rung-3 link of agent `agentId` of `parent`:
+ *  the parent's own (no agent id), or another agent's that is not the host's own SubagentStart/SubagentStop about it? */
+function droppedPathVeto(d: MeasuredDropped, canonical: string, parent: string, agentId: string): boolean {
+  for (const e of d.atPath.get(canonical) ?? []) {
+    if (e.agentId === null ? e.parent === parent : e.agentId !== agentId && !e.startStop) return true;
+  }
+  return false;
+}
+
+/** The ids a rung-2 claim on `upstreamId` can have been made under: the id itself and, for a workflow worker `wf_<run>-<n>`, the run's. */
+function claimIdsOf(sourceKind: 'agent' | 'workflow', upstreamId: string): readonly string[] {
+  if (sourceKind === 'agent') return [upstreamId];
+  const m = /^(wf_.+)-(\d+)$/.exec(upstreamId);
+  return m === null ? [upstreamId] : [upstreamId, m[1]!];
 }
 
 // ── Rung 2: exact upstream identity ──────────────────────────────────────────────────────────────────────────────────
@@ -274,8 +434,12 @@ function rung2(input: DelegationCorrelationInput, sourceKind: 'agent' | 'workflo
   }
   const activity = activities[0];
   if (activity === undefined) return unmeasured('activity-not-durably-open', [...metaIds, ...spool]);
-  // R57: the "one parent" and "one activity row" checks above are negative evidence an eviction could have emptied.
-  if (reachesHorizon(input, activity)) return unmeasured('evidence-horizon', [...spool, ...metaIds, activity.identityJournalId]);
+  // R65: the "one parent" check above is negative evidence an eviction could have emptied. A rival with an activity row is seen through
+  // the checkpoint; one that only ever sent a bare event, whose meta was never read, is seen only here.
+  const dropped = input.droppedEvidence;
+  if (!dropped.measured || droppedRival(dropped, claimIdsOf(sourceKind, upstreamId), parentKey(activity.parentId, activity.parentIncarnation))) {
+    return unmeasured('evidence-horizon', [...spool, ...metaIds, activity.identityJournalId]);
+  }
   return linked(activity.activityId, 2, [...spool, ...metaIds, activity.identityJournalId]);
 }
 
@@ -318,8 +482,13 @@ function rung3(input: DelegationCorrelationInput, canonical: string): Answer | n
   }
   const [only] = [...hits.values()];
   if (only === undefined) return null;
-  // R57: the vetoes above (`parent-cwd`, a second claimant, a second subagent on the path) are negative evidence an eviction could have emptied.
-  if (reachesHorizon(input, only.activity)) return unmeasured('evidence-horizon', only.journalIds);
+  // R65: the vetoes above (`parent-cwd`, a second claimant, a second subagent on the path) are negative evidence an eviction could have
+  // emptied, and an instant cannot see what is gone: the dropped-evidence index is asked instead (clauses (a) and (b)).
+  const parent = parentKey(only.activity.parentId, only.activity.parentIncarnation);
+  const dropped = input.droppedEvidence;
+  if (!dropped.measured || droppedRival(dropped, [only.activity.upstreamId], parent) || droppedPathVeto(dropped, canonical, parent, only.activity.upstreamId)) {
+    return unmeasured('evidence-horizon', only.journalIds);
+  }
   return linked(only.activity.activityId, 3, only.journalIds);
 }
 
@@ -366,14 +535,15 @@ function rung4(input: DelegationCorrelationInput): Answer | null {
     .map(({ journalId }) => journalId);
   // R57: the overlap rule above is negative evidence. A window whose pre-listing was evicted is a window that is not there to overlap.
   // The link stands only if every window the caller holds on this repository is closed and began after the horizon, and the candidate
-  // began a full margin after it (`DELEGATION_EVIDENCE_MARGIN_MS`).
+  // began MORE than a full margin after it (`DELEGATION_EVIDENCE_MARGIN_MS`; the boundary is closed, like the overlap test). An index
+  // the caller has not measured says nothing about what it dropped: no link.
   const horizon = horizonMsOf(input);
-  if (horizon !== null) {
+  if (horizon !== null || !input.droppedEvidence.measured) {
     let reaches: boolean;
     try {
-      reaches = Number.isNaN(horizon)
+      reaches = horizon === null || Number.isNaN(horizon)
         || input.listingWindows.some((w) => w.repository === mine.repository && (w.endedAt === null || parseDelegationInstant(w.startedAt) <= horizon))
-        || parseDelegationInstant(mine.startedAt) < horizon + DELEGATION_EVIDENCE_MARGIN_MS;
+        || parseDelegationInstant(mine.startedAt) <= horizon + DELEGATION_EVIDENCE_MARGIN_MS;
     } catch (err) {
       if (!(err instanceof DelegationModelError)) throw err;
       reaches = true;
@@ -386,7 +556,9 @@ function rung4(input: DelegationCorrelationInput): Answer | null {
 /**
  * Rungs 3 and 4 are both tried, and a conflict at either is final. Two linked answers that name different PARENTS conflict; two that
  * name the same parent agree, and the lowest rung's activity is the answer. A link beside a merely unresolved or unmeasured answer is
- * the link (a linked answer decides).
+ * the link (a linked answer decides) EXCEPT beside an `evidence-horizon` answer (R65, N1): a rung that answered that had found an
+ * activity and was about to link, so the full evidence may have made it a link to ANOTHER parent, which is a conflict and a final
+ * state. A link never beats a horizon; the pair is itself `unmeasured('evidence-horizon')`, and is retried.
  */
 function combine(input: DelegationCorrelationInput, answers: readonly (Answer | null)[]): Answer {
   const present = answers.filter((a): a is Answer => a !== null);
@@ -395,6 +567,7 @@ function combine(input: DelegationCorrelationInput, answers: readonly (Answer | 
   if (conflict !== undefined) return conflicting(conflict.reason, [...conflict.evidenceJournalIds, ...present.filter((a) => a.kind === 'linked').flatMap((a) => a.evidenceJournalIds)]);
   const links = present.filter((a): a is DelegationLinkedVerdict => a.kind === 'linked');
   const [lowest] = links;
+  if (lowest !== undefined && present.some((a) => a.kind === 'unmeasured' && a.reason === 'evidence-horizon')) return unmeasured('evidence-horizon', everything);
   if (lowest !== undefined) {
     const parentOf = (v: DelegationLinkedVerdict): string => {
       const a = input.activities.find((row) => row.activityId === v.activityId);

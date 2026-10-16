@@ -31,11 +31,17 @@ import {
 } from '../src/coord/delegation-checkpoint.js';
 import {
   DELEGATION_CORRELATION_REASONS,
+  DELEGATION_DROPPED_UNMEASURED,
   DELEGATION_EVIDENCE_MARGIN_MS,
   correlateDelegation,
+  delegationDroppedKeyId,
+  delegationDroppedKeyOf,
   delegationLeaseSourceOfLinked,
+  indexDelegationDropped,
+  prunableDelegationDropped,
   type DelegationCorrelationInput,
   type DelegationCorrelationVerdict,
+  type DelegationDroppedKey,
   type DelegationListingWindow,
 } from '../src/coord/delegation-correlation.js';
 import {
@@ -124,7 +130,7 @@ const record = (over: Partial<DelegationCensusRecord> = {}): DelegationCensusRec
 });
 const input = (over: Partial<DelegationCorrelationInput> = {}): DelegationCorrelationInput => ({
   record: record(), runChildAgreement: null, activities: [], acceptedEvidence: [], pointMetas: [], listingWindows: [],
-  birthPassesRemaining: 0, hasRegistryRow: false, hasChildMarker: false, evidenceHorizon: null, ...over,
+  birthPassesRemaining: 0, hasRegistryRow: false, hasChildMarker: false, evidenceHorizon: null, droppedEvidence: indexDelegationDropped([]), ...over,
 });
 const meta = (over: Partial<DelegationCorrelationInput['pointMetas'][number]> & { evidenceJournalId: string }): DelegationCorrelationInput['pointMetas'][number] => ({
   parentId: PARENT, parentIncarnation: INC, sourceKind: 'agent', upstreamId: AGENT, worktreePath: WT(`agent-${AGENT}`), ...over,
@@ -1144,14 +1150,15 @@ describe('evidence horizon (R57, D-4653): an eviction never decides a link', () 
     }
   });
 
-  it('rung 4, the margin: a candidate window that began less than one evidence margin after the horizon is unmeasured; exactly one margin after, it links', () => {
-    expect(MARGIN).toBeGreaterThan(0);
+  it('rung 4, the margin (N3): a candidate window that began AT OR BEFORE one evidence margin after the horizon is unmeasured; one instant later it links', () => {
+    expect(MARGIN, 'twenty minutes: twice the default Bash ceiling').toBe(20 * 60 * 1000);
     const horizon = at(0);
     expect(decide([winAt(MARGIN - 1, MARGIN + 5_000)], horizon).kind).toBe('unmeasured');
-    expect(decide([winAt(MARGIN, MARGIN + 5_000)], horizon).kind).toBe('linked');
+    expect(decide([winAt(MARGIN, MARGIN + 5_000)], horizon).kind, 'EXACTLY one margin after: the boundary is closed, like the overlap test').toBe('unmeasured');
+    expect(decide([winAt(MARGIN + 1, MARGIN + 5_000)], horizon).kind).toBe('linked');
     expect(decide([winAt(1, 5_000)], horizon).kind, 'a window that began after the horizon by less than a margin').toBe('unmeasured');
     expect(decide([winAt(-5_000, -1)], horizon).kind, 'a window wholly before the horizon').toBe('unmeasured');
-    const v = decide([winAt(MARGIN - 1, MARGIN + 5_000)], horizon);
+    const v = decide([winAt(MARGIN, MARGIN + 5_000)], horizon);
     expect(v.kind === 'unmeasured' && v.reason).toBe('evidence-horizon');
   });
 
@@ -1176,52 +1183,22 @@ describe('evidence horizon (R57, D-4653): an eviction never decides a link', () 
     }
   });
 
-  it('rung 2 (agent): a claim set that reaches back to the horizon is unmeasured; one wholly after it links', () => {
-    const { w, base } = agentWorld();
-    const opened = activityOf(w.activities, 'agent', AGENT)!.openedAt;
-    expect(opened).toBe(T(1));
-    const at1 = (horizon: string | null) => correlateDelegation({ ...base, evidenceHorizon: horizon });
-    expect(at1(null).kind).toBe('linked');
-    expect(at1(T(0)).kind, 'the horizon is before the first claim').toBe('linked');
-    const exactly = at1(T(1));
-    expect(exactly.kind, 'AT the identity record').toBe('unmeasured');
-    expect(exactly.kind === 'unmeasured' && exactly.reason).toBe('evidence-horizon');
-    expect(at1(T(5)).kind, 'after it').toBe('unmeasured');
-  });
-
-  it('rung 2 (agent): the EARLIEST naming record counts, not the join: a bare occurrence before the launch is where the claim set begins', () => {
-    const w = world([bareTool(1, AGENT), agentLaunch(2, AGENT), subagentStart(3, AGENT)]);
-    const act = activityOf(w.activities, 'agent', AGENT)!;
-    expect(act.openedAt).toBe(T(1));
-    const base = input({ activities: w.activities, acceptedEvidence: w.acceptedEvidence, pointMetas: [meta({ evidenceJournalId: w.records[1]!.journalId })] });
-    expect(correlateDelegation({ ...base, evidenceHorizon: T(0) }).kind).toBe('linked');
-    expect(correlateDelegation({ ...base, evidenceHorizon: T(1) }).kind).toBe('unmeasured');
-    expect(correlateDelegation({ ...base, evidenceHorizon: T(2) }).kind).toBe('unmeasured');
-  });
-
-  it('rung 2 (workflow): the worker\'s identity record is the run\'s: a horizon at or after it is unmeasured', () => {
-    const w = world([workflowLaunch(1, 'wf_run1'), subagentStart(2, AGENT)]);
-    w.builder.openWorkflowWorkerFromMeta(PARENT, INC, 'wf_run1', 1);
-    const activities = w.builder.build(1).activities;
-    const m = meta({ sourceKind: 'workflow', upstreamId: 'wf_run1-1', worktreePath: WT('wf_run1-1'), evidenceJournalId: w.records[0]!.journalId });
-    const base = input({ record: record({ adminRecord: 'wf_run1-1', canonicalPath: WT('wf_run1-1') }), activities, acceptedEvidence: w.acceptedEvidence, pointMetas: [m] });
-    expect(correlateDelegation(base).kind).toBe('linked');
-    expect(correlateDelegation({ ...base, evidenceHorizon: T(0) }).kind).toBe('linked');
-    const v = correlateDelegation({ ...base, evidenceHorizon: T(1) });
-    expect(v.kind === 'unmeasured' && v.reason).toBe('evidence-horizon');
-  });
-
-  it('rung 3: a subagent whose first claim is at or before the horizon is unmeasured; after it, it links', () => {
+  it('rungs 2 and 3 do NOT read the horizon instant (R65): an instant cannot see an event the lane dropped, so with only a horizon set they link as ever', () => {
     const toolIn = (n: number): DelegationEventEnvelopeV1 =>
       ({ ...base(n, { cwd: WT(RAW) }), eventKind: 'PostToolUse', toolName: 'Bash', toolUseId: `toolu_${n}`, outcome: 'completed', agentId: AGENT });
-    const w = world([subagentStart(1, AGENT), toolIn(2)]);
-    const go = (horizon: string | null) => correlateDelegation(input({ record: rec, activities: w.activities, acceptedEvidence: w.acceptedEvidence, evidenceHorizon: horizon }));
-    expect(go(null).kind).toBe('linked');
-    expect(go(T(0)).kind).toBe('linked');
-    const v = go(T(1));
-    expect(v.kind).toBe('unmeasured');
-    expect(v.kind === 'unmeasured' && v.reason).toBe('evidence-horizon');
-    expect(go(T(2)).kind).toBe('unmeasured');
+    const { base: agentBase } = agentWorld();
+    const r3 = world([subagentStart(1, AGENT), toolIn(2)]);
+    const wf = world([workflowLaunch(1, 'wf_run1'), subagentStart(2, AGENT)]);
+    wf.builder.openWorkflowWorkerFromMeta(PARENT, INC, 'wf_run1', 1);
+    const wfBase = input({
+      record: record({ adminRecord: 'wf_run1-1', canonicalPath: WT('wf_run1-1') }), activities: wf.builder.build(1).activities, acceptedEvidence: wf.acceptedEvidence,
+      pointMetas: [meta({ sourceKind: 'workflow', upstreamId: 'wf_run1-1', worktreePath: WT('wf_run1-1'), evidenceJournalId: wf.records[0]!.journalId })],
+    });
+    for (const horizon of [T(0), T(1), T(2), T(10_000)]) {
+      expect(correlateDelegation({ ...agentBase, evidenceHorizon: horizon }).kind, `rung 2 agent at ${horizon}`).toBe('linked');
+      expect(correlateDelegation({ ...wfBase, evidenceHorizon: horizon }).kind, `rung 2 workflow at ${horizon}`).toBe('linked');
+      expect(correlateDelegation(input({ record: rec, activities: r3.activities, acceptedEvidence: r3.acceptedEvidence, evidenceHorizon: horizon })).kind, `rung 3 at ${horizon}`).toBe('linked');
+    }
   });
 
   it('a verdict that was not a link is unchanged by any horizon (the module only ever makes a link less decided)', () => {
@@ -1236,6 +1213,339 @@ describe('evidence horizon (R57, D-4653): an eviction never decides a link', () 
     const { base } = agentWorld();
     const frozen = deepFreeze({ ...base, evidenceHorizon: T(1) });
     expect(() => correlateDelegation(frozen)).not.toThrow();
+  });
+});
+
+// ── R65 (part of D-4653): a lane that dropped an event never lets a link stand on evidence it can no longer see ──────────────────────
+
+describe('dropped evidence (R65): the vetoes of rungs 2 and 3 rest on events an eviction can remove, so the lane remembers what it dropped', () => {
+  const rec = rawRecord();
+  const C = WT(RAW);
+  const ELSEWHERE = `/fixture/${REPO}`;
+  const toolAt = (n: number, agentId: string | undefined, cwd: string, over: Over = {}): DelegationEventEnvelopeV1 =>
+    ({ ...base(n, { ...over, cwd }), eventKind: 'PostToolUse', toolName: 'Bash', toolUseId: `toolu_${n}`, outcome: 'completed', ...(agentId === undefined ? {} : { agentId }) });
+
+  /** The fold of ALL the events (the checkpoint is durable: it keeps every activity), the evidence the lane still HOLDS, and what the lane
+   *  REMEMBERS of the rest. `dropped` are indexes into `events`. */
+  function evicting(events: readonly DelegationEventEnvelopeV1[], dropped: readonly number[]) {
+    const w = world(events);
+    const gone = new Set(dropped);
+    return {
+      w,
+      held: w.acceptedEvidence.filter((_, i) => !gone.has(i)),
+      index: indexDelegationDropped(dropped.map((i) => delegationDroppedKeyOf(events[i]!))),
+    };
+  }
+  type Evicting = ReturnType<typeof evicting>;
+  /** What a lane that FORGOT its drops would hand over: measured, and empty. */
+  const NOTHING = indexDelegationDropped([]);
+  const decide = (e: Evicting, record: DelegationCensusRecord, remembered: boolean, extra: Partial<DelegationCorrelationInput> = {}): DelegationCorrelationVerdict =>
+    correlateDelegation(input({ record, activities: e.w.activities, acceptedEvidence: e.held, droppedEvidence: remembered ? e.index : NOTHING, ...extra }));
+  const horizonOf = (v: DelegationCorrelationVerdict): string | false => v.kind === 'unmeasured' && v.reason;
+
+  describe('the minimal keys of a dropped event', () => {
+    it('keeps the parent, the agent ids it names, its working directory, and whether it is a SubagentStart or SubagentStop, and nothing else', () => {
+      const keys = (e: DelegationEventEnvelopeV1) => delegationDroppedKeyOf(e);
+      expect(keys(subagentStart(1, AGENT, { cwd: C }))).toEqual({ parentId: PARENT, parentIncarnation: INC, agentId: AGENT, launchAgentId: null, runId: null, cwd: C, startStop: true });
+      expect(keys(subagentStop(1, AGENT))).toEqual({ parentId: PARENT, parentIncarnation: INC, agentId: AGENT, launchAgentId: null, runId: null, cwd: null, startStop: true });
+      expect(keys(agentLaunch(1, AGENT, 'async-launched', { sessionId: OTHER }))).toEqual({ parentId: OTHER, parentIncarnation: INC, agentId: null, launchAgentId: AGENT, runId: null, cwd: null, startStop: false });
+      expect(keys(workflowLaunch(1, 'wf_run1'))).toEqual({ parentId: PARENT, parentIncarnation: INC, agentId: null, launchAgentId: null, runId: 'wf_run1', cwd: null, startStop: false });
+      expect(keys(toolAt(1, AGENT, C))).toEqual({ parentId: PARENT, parentIncarnation: INC, agentId: AGENT, launchAgentId: null, runId: null, cwd: C, startStop: false });
+      expect(keys(toolAt(1, undefined, C))).toEqual({ parentId: PARENT, parentIncarnation: INC, agentId: null, launchAgentId: null, runId: null, cwd: C, startStop: false });
+      expect(keys(sessionStart(1, { cwd: C, parentIncarnation: 'g2' }))).toEqual({ parentId: PARENT, parentIncarnation: 'g2', agentId: null, launchAgentId: null, runId: null, cwd: C, startStop: false });
+      expect(Object.keys(keys(toolAt(1, AGENT, C))).sort()).toEqual(['agentId', 'cwd', 'launchAgentId', 'parentId', 'parentIncarnation', 'runId', 'startStop']);
+    });
+    it('indexes nothing as a MEASURED, empty index (not the unmeasured state), and the same keys twice as the same index', () => {
+      expect(indexDelegationDropped([])).toMatchObject({ measured: true });
+      expect(indexDelegationDropped([])).not.toEqual(DELEGATION_DROPPED_UNMEASURED);
+      expect(DELEGATION_DROPPED_UNMEASURED).toEqual({ measured: false });
+      const once = indexDelegationDropped([delegationDroppedKeyOf(toolAt(1, AGENT, C))]);
+      const twice = indexDelegationDropped([delegationDroppedKeyOf(toolAt(1, AGENT, C)), delegationDroppedKeyOf(toolAt(2, AGENT, C))]);
+      expect(twice).toEqual(once);
+    });
+  });
+
+  describe('PA: the parent\'s own working directory (rung 3\'s parent-cwd veto)', () => {
+    // The parent sits in the raw tree (event 0), moves elsewhere (1), launches a subagent from elsewhere (2) and the subagent works inside
+    // the tree (3). Held in full the parent's cwd refuses the placement. Drop event 0 and nothing refuses it.
+    const events = [toolAt(1, undefined, C), toolAt(15, undefined, ELSEWHERE), subagentStart(20, AGENT, { cwd: ELSEWHERE }), toolAt(22, AGENT, C)];
+    it('with every event held: unresolved(parent-cwd)', () => {
+      const v = decide(evicting(events, []), rec, true);
+      expect(v.kind === 'unresolved' && v.reason).toBe('parent-cwd');
+    });
+    it('with the parent\'s event dropped and NOT remembered the placement would link: the failure the index exists to close', () => {
+      expect(decide(evicting(events, [0]), rec, false).kind).toBe('linked');
+    });
+    it('with the parent\'s event dropped and remembered: unmeasured(evidence-horizon), never linked', () => {
+      const v = decide(evicting(events, [0]), rec, true);
+      expect(v.kind).toBe('unmeasured');
+      expect(horizonOf(v)).toBe('evidence-horizon');
+    });
+    it('the veto is the parent\'s: the same dropped event from ANOTHER session or incarnation does not make the link unmeasured', () => {
+      for (const over of [{ sessionId: OTHER }, { parentIncarnation: 'g2' }]) {
+        const e = [toolAt(1, undefined, C, over), toolAt(15, undefined, ELSEWHERE), subagentStart(20, AGENT, { cwd: ELSEWHERE }), toolAt(22, AGENT, C)];
+        expect(decide(evicting(e, [0]), rec, true).kind, JSON.stringify(over)).toBe('linked');
+      }
+    });
+  });
+
+  describe('PE: a second subagent on the path (rung 3\'s ambiguous-subagent-path and path-claimed-by-multiple-parents vetoes)', () => {
+    const sameParent = [subagentStart(1, AGENT_2), toolAt(2, AGENT_2, C), toolAt(3, AGENT_2, C), subagentStart(20, AGENT, { cwd: ELSEWHERE }), toolAt(21, AGENT, C)];
+    const otherParent = [subagentStart(1, AGENT_2, { sessionId: OTHER }), toolAt(2, AGENT_2, C, { sessionId: OTHER }), subagentStart(20, AGENT, { cwd: ELSEWHERE }), toolAt(21, AGENT, C)];
+    it('the same parent\'s other subagent: unresolved in full, unmeasured when its events were dropped and remembered, linked when forgotten', () => {
+      const full = decide(evicting(sameParent, []), rec, true);
+      expect(full.kind === 'unresolved' && full.reason).toBe('ambiguous-subagent-path');
+      expect(decide(evicting(sameParent, [1, 2]), rec, false).kind, 'forgotten').toBe('linked');
+      const v = decide(evicting(sameParent, [1, 2]), rec, true);
+      expect(v.kind).toBe('unmeasured');
+      expect(horizonOf(v)).toBe('evidence-horizon');
+    });
+    it('ANOTHER parent\'s subagent: conflicting in full, unmeasured when its events were dropped and remembered, linked when forgotten', () => {
+      const full = decide(evicting(otherParent, []), rec, true);
+      expect(full.kind === 'conflicting' && full.reason).toBe('path-claimed-by-multiple-parents');
+      expect(decide(evicting(otherParent, [1]), rec, false).kind, 'forgotten').toBe('linked');
+      const v = decide(evicting(otherParent, [1]), rec, true);
+      expect(v.kind).toBe('unmeasured');
+      expect(horizonOf(v)).toBe('evidence-horizon');
+    });
+    it('a SubagentStart or SubagentStop of another agent at the path is not "emitted from inside" it: dropping one decides nothing', () => {
+      for (const make of [subagentStart, subagentStop]) {
+        const e = [make(1, AGENT_2, { cwd: C }), subagentStart(20, AGENT, { cwd: ELSEWHERE }), toolAt(21, AGENT, C)];
+        expect(decide(evicting(e, [0]), rec, true).kind, make.name).toBe('linked');
+      }
+    });
+  });
+
+  describe('what does NOT make a link unmeasured', () => {
+    const own = [subagentStart(1, AGENT, { cwd: ELSEWHERE }), toolAt(2, AGENT, C)];
+    const go = (extra: DelegationEventEnvelopeV1): Evicting => evicting([...own, extra], [own.length]);
+    it('a dropped event at another path, from the subagent itself, or from the same parent naming the same agent', () => {
+      expect(decide(go(toolAt(30, undefined, ELSEWHERE)), rec, true).kind, 'the parent elsewhere').toBe('linked');
+      expect(decide(go(toolAt(30, AGENT_2, ELSEWHERE)), rec, true).kind, 'another agent elsewhere').toBe('linked');
+      expect(decide(go(toolAt(30, AGENT, C)), rec, true).kind, 'the subagent\'s own event at the path').toBe('linked');
+      expect(decide(go(agentLaunch(30, AGENT)), rec, true).kind, 'the same parent\'s own launch of it').toBe('linked');
+    });
+    it('a dropped parent-cwd event of ANOTHER session, or at a path nobody asked about', () => {
+      expect(decide(go(toolAt(30, undefined, C, { sessionId: OTHER })), rec, true).kind).toBe('linked');
+      expect(decide(go(toolAt(30, undefined, `${C}/sub`)), rec, true).kind).toBe('linked');
+    });
+  });
+
+  describe('clause (a): a rival claim from another parent', () => {
+    // A rival whose claim opened a durable activity row is seen through the checkpoint whatever is evicted (PB). The case an eviction can
+    // hide is a rival with NO row: a parent that only ever emitted a bare event naming the agent, whose meta the lane never read.
+    it('PB: a rival claim that opened a durable activity row stays conflicting after its event is dropped, with or without the index', () => {
+      const events = [subagentStart(1, AGENT, { sessionId: OTHER }), agentLaunch(10, AGENT), subagentStart(11, AGENT), subagentStop(12, AGENT)];
+      const mine = (e: Evicting, remembered: boolean) => decide(e, record(), remembered, { pointMetas: [meta({ evidenceJournalId: e.w.records[1]!.journalId })] });
+      const full = mine(evicting(events, []), true);
+      expect(full.kind === 'conflicting' && full.reason).toBe('same-upstream-id-in-multiple-sessions');
+      for (const remembered of [true, false]) {
+        const v = mine(evicting(events, [0]), remembered);
+        expect(v.kind === 'conflicting' && v.reason, `remembered=${remembered}`).toBe('same-upstream-id-in-multiple-sessions');
+      }
+    });
+    it('the narrow case, rung 2 (agent): a rival with only a bare event (no activity row, no meta) that was dropped makes the link unmeasured', () => {
+      const bare = bareTool(1, AGENT, { sessionId: OTHER, cwd: ELSEWHERE });
+      const events = [bare, agentLaunch(10, AGENT), subagentStart(11, AGENT), subagentStop(12, AGENT)];
+      const mine = (e: Evicting, remembered: boolean) => decide(e, record(), remembered, { pointMetas: [meta({ evidenceJournalId: e.w.records[1]!.journalId })] });
+      expect(world(events).activities.filter((a) => a.parentId === OTHER), 'a bare event is not a join: it opens no activity').toEqual([]);
+      expect(mine(evicting(events, [0]), false).kind, 'forgotten').toBe('linked');
+      const v = mine(evicting(events, [0]), true);
+      expect(v.kind).toBe('unmeasured');
+      expect(horizonOf(v)).toBe('evidence-horizon');
+      const withMeta = decide(evicting(events, [0]), record(), true, { pointMetas: [meta({ evidenceJournalId: 'j1' }), meta({ parentId: OTHER, evidenceJournalId: 'j2' })] });
+      expect(withMeta.kind === 'conflicting' && withMeta.reason, 'the rival\'s meta WAS read before the event left: conflicting, as ever').toBe('same-upstream-id-in-multiple-sessions');
+    });
+    it('rung 3: the same bare rival, dropped, makes the subagent\'s link unmeasured', () => {
+      const events = [bareTool(1, AGENT, { sessionId: OTHER, cwd: ELSEWHERE }), subagentStart(2, AGENT, { cwd: ELSEWHERE }), toolAt(3, AGENT, C)];
+      expect(decide(evicting(events, [0]), rec, false).kind, 'forgotten').toBe('linked');
+      expect(horizonOf(decide(evicting(events, [0]), rec, true))).toBe('evidence-horizon');
+    });
+    it('rung 2 (workflow): a dropped Workflow launch of the SAME run id from another parent makes the worker\'s link unmeasured', () => {
+      const events = [workflowLaunch(1, 'wf_run1', 'async-launched', { sessionId: OTHER }), workflowLaunch(2, 'wf_run1'), subagentStart(3, AGENT)];
+      const e = evicting(events, [0]);
+      e.w.builder.openWorkflowWorkerFromMeta(PARENT, INC, 'wf_run1', 1);
+      const activities = e.w.builder.build(1).activities;
+      const m = meta({ sourceKind: 'workflow', upstreamId: 'wf_run1-1', worktreePath: WT('wf_run1-1'), evidenceJournalId: e.w.records[1]!.journalId });
+      const ask = (remembered: boolean) => correlateDelegation(input({
+        record: record({ adminRecord: 'wf_run1-1', canonicalPath: WT('wf_run1-1') }), activities, acceptedEvidence: e.held, pointMetas: [m], droppedEvidence: remembered ? e.index : NOTHING,
+      }));
+      expect(ask(false).kind, 'forgotten').toBe('linked');
+      expect(horizonOf(ask(true))).toBe('evidence-horizon');
+    });
+    it('the same parent\'s own dropped events naming the agent never make its own link unmeasured', () => {
+      const events = [agentLaunch(1, AGENT), subagentStart(2, AGENT), subagentStop(3, AGENT)];
+      const e = evicting(events, [0]);
+      expect(correlateDelegation(input({ activities: e.w.activities, acceptedEvidence: e.held, pointMetas: [meta({ evidenceJournalId: 'j1' })], droppedEvidence: e.index })).kind).toBe('linked');
+    });
+  });
+
+  describe('N1: combine never lets a link beat an evidence-horizon answer', () => {
+    // Session OTHER's Bash call created the raw tree (rung 4 would link OTHER's activity); this parent's isolated subagent works inside it
+    // (rung 3 would link the subagent's). Held in full: the two rungs name different parents, so the tree is conflicting.
+    const events = [
+      bashPre(10, 'toolu_b1', ['main-wt'], { sessionId: OTHER }), bashPost(12, 'toolu_b1', ['main-wt', RAW], { sessionId: OTHER }),
+      subagentStart(1, AGENT, { cwd: ELSEWHERE }), toolAt(20, AGENT, C),
+    ];
+    const windows = [win({ sessionId: OTHER, startedAt: T(10), endedAt: T(12), before: ['main-wt'], after: ['main-wt', RAW] })];
+    const ask = (over: Partial<DelegationCorrelationInput>) => { const e = evicting(events, []); return decide(e, rec, true, { listingWindows: windows, ...over }); };
+    it('with nothing dropped the two parents conflict', () => {
+      const v = ask({});
+      expect(v.kind === 'conflicting' && v.reason).toBe('rungs-disagree');
+    });
+    it('rung 4 answering evidence-horizon (the candidate began within the margin of the horizon) beside rung 3\'s link is unmeasured, never the link', () => {
+      const v = ask({ evidenceHorizon: T(0) });
+      expect(v.kind).toBe('unmeasured');
+      expect(horizonOf(v)).toBe('evidence-horizon');
+    });
+    it('the mirror: rung 3 answering evidence-horizon beside rung 4\'s link is unmeasured, never the link', () => {
+      const pa = [toolAt(1, undefined, C), toolAt(15, undefined, ELSEWHERE), subagentStart(20, AGENT, { cwd: ELSEWHERE }), toolAt(22, AGENT, C),
+        bashPre(30, 'toolu_b1', ['main-wt'], { sessionId: OTHER }), bashPost(32, 'toolu_b1', ['main-wt', RAW], { sessionId: OTHER })];
+      const e = evicting(pa, [0]);
+      const w = [win({ sessionId: OTHER, startedAt: T(30), endedAt: T(32), before: ['main-wt'], after: ['main-wt', RAW] })];
+      const full = decide(evicting(pa, []), rec, true, { listingWindows: w });
+      expect(full.kind === 'linked' && full.rung, 'held in full: the parent\'s cwd refuses rung 3 and the creator\'s window links alone').toBe(4);
+      const v = decide(e, rec, true, { listingWindows: w });
+      expect(v.kind).toBe('unmeasured');
+      expect(horizonOf(v)).toBe('evidence-horizon');
+    });
+    it('the same parent on both rungs agrees, and still does not beat a horizon answer', () => {
+      const same = [bashPre(10, 'toolu_b1', ['main-wt']), bashPost(12, 'toolu_b1', ['main-wt', RAW]), subagentStart(1, AGENT, { cwd: ELSEWHERE }), toolAt(20, AGENT, C)];
+      const e = evicting(same, []);
+      const w = [win({ startedAt: T(10), endedAt: T(12), before: ['main-wt'], after: ['main-wt', RAW] })];
+      expect(decide(e, rec, true, { listingWindows: w }).kind, 'no horizon: the two agree').toBe('linked');
+      const v = decide(e, rec, true, { listingWindows: w, evidenceHorizon: T(0) });
+      expect(v.kind).toBe('unmeasured');
+      expect(horizonOf(v)).toBe('evidence-horizon');
+    });
+    it('a link beside a merely unresolved or unmeasured answer that is NOT a horizon answer is still the link', () => {
+      const e = evicting([subagentStart(1, AGENT, { cwd: ELSEWHERE }), toolAt(2, AGENT, C)], []);
+      const v = decide(e, rec, true, { listingWindows: [win({ after: ['main-wt', RAW] }), win({ sessionId: OTHER, toolUseId: 'toolu_o1', startedAt: T(11), endedAt: T(13), before: ['main-wt'], after: ['main-wt'] })] });
+      expect(v.kind, 'rung 4 is unresolved (an overlap), rung 3 links').toBe('linked');
+    });
+    it('the evidence of the unmeasured answer names every witness', () => {
+      const v = ask({ evidenceHorizon: T(0) });
+      expect(v.evidenceJournalIds.length).toBeGreaterThan(0);
+    });
+  });
+
+  describe('an index that was never measured is not an empty one (D-4008: unknown is never empty)', () => {
+    // A lane that restarted has lost its in-memory index. Until it has streamed the whole retained journal again, it cannot say what it
+    // dropped, so no link may stand: the UNMEASURED state answers `evidence-horizon` for a link on every rung, and a measured-empty
+    // index (nothing was dropped) answers exactly as before.
+    const agent = agentWorld();
+    const r3 = world([subagentStart(1, AGENT, { cwd: ELSEWHERE }), toolAt(2, AGENT, C)]);
+    const wf = world([workflowLaunch(1, 'wf_run1'), subagentStart(2, AGENT)]);
+    wf.builder.openWorkflowWorkerFromMeta(PARENT, INC, 'wf_run1', 1);
+    const wfInput = input({
+      record: record({ adminRecord: 'wf_run1-1', canonicalPath: WT('wf_run1-1') }), activities: wf.builder.build(1).activities, acceptedEvidence: wf.acceptedEvidence,
+      pointMetas: [meta({ sourceKind: 'workflow', upstreamId: 'wf_run1-1', worktreePath: WT('wf_run1-1'), evidenceJournalId: wf.records[0]!.journalId })],
+    });
+    const r4 = world([bashPre(10, 'toolu_b1', ['main-wt']), bashPost(12, 'toolu_b1', ['main-wt', RAW])]);
+    const worlds: readonly (readonly [string, DelegationCorrelationInput])[] = [
+      ['rung 2 (agent)', agent.base],
+      ['rung 2 (workflow)', wfInput],
+      ['rung 3', input({ record: rec, activities: r3.activities, acceptedEvidence: r3.acceptedEvidence })],
+      ['rung 4', input({ record: rec, activities: r4.activities, acceptedEvidence: r4.acceptedEvidence, listingWindows: [win({ after: ['main-wt', RAW] })] })],
+    ];
+    it('every link answers unmeasured(evidence-horizon) while the index is unmeasured, and links once it is measured and empty', () => {
+      for (const [name, w] of worlds) {
+        expect(correlateDelegation({ ...w, droppedEvidence: NOTHING }).kind, `${name}, measured and empty`).toBe('linked');
+        const v = correlateDelegation({ ...w, droppedEvidence: DELEGATION_DROPPED_UNMEASURED });
+        expect(v.kind, `${name}, unmeasured`).toBe('unmeasured');
+        expect(horizonOf(v), name).toBe('evidence-horizon');
+      }
+    });
+    it('a verdict that was not a link is unchanged by the unmeasured state', () => {
+      const cases: DelegationCorrelationInput[] = [
+        input({ hasRegistryRow: true }), input({ birthPassesRemaining: 2 }), agentWorld({ pointMetas: [] }).base,
+        input({ record: record({ state: 'unreadable' }) }), input({ record: record({ canonicalPath: null }) }),
+      ];
+      for (const c of cases) expect(correlateDelegation({ ...c, droppedEvidence: DELEGATION_DROPPED_UNMEASURED })).toEqual(correlateDelegation(c));
+    });
+  });
+
+  describe('forgetting a key (prunableDelegationDropped): only what no present tree and no activity row can still ask about', () => {
+    const key = (over: Partial<DelegationDroppedKey>): DelegationDroppedKey =>
+      ({ parentId: PARENT, parentIncarnation: INC, agentId: null, launchAgentId: null, runId: null, cwd: null, startStop: false, ...over });
+    const entries = (ks: readonly DelegationDroppedKey[]) => ks.map((k) => [delegationDroppedKeyId(k), k] as const);
+    const forgotten = (ks: readonly DelegationDroppedKey[], census: readonly DelegationCensusRecord[], activities: readonly DelegationActivityRow[] = []): DelegationDroppedKey[] => {
+      const ids = new Set(prunableDelegationDropped(entries(ks), census, activities));
+      return ks.filter((k) => ids.has(delegationDroppedKeyId(k)));
+    };
+    const rival = (agentId: string) => key({ parentId: OTHER, agentId });
+    const agentRow = (parentId: string, agentId: string): DelegationActivityRow =>
+      world([subagentStart(1, agentId, { sessionId: parentId })]).activities.find((a) => a.sourceKind === 'agent')!;
+    const workflowRow = (parentId: string): DelegationActivityRow => {
+      const w = world([workflowLaunch(1, 'wf_run1', 'async-launched', { sessionId: parentId })]);
+      w.builder.openWorkflowWorkerFromMeta(parentId, INC, 'wf_run1', 1);
+      return w.builder.build(1).activities.find((a) => a.sourceKind === 'workflow' && a.upstreamId === 'wf_run1-1')!;
+    };
+
+    it('a path: kept while a present record has it, forgotten otherwise; a key with no cwd and no name is forgotten', () => {
+      const at = key({ cwd: C, agentId: AGENT_2 });
+      expect(forgotten([at], [rec])).toEqual([]);
+      expect(forgotten([at], [rawRecord({ adminRecord: 'other', canonicalPath: WT('other') })])).toEqual([at]);
+      expect(forgotten([at], [record({ canonicalPath: null })])).toEqual([at]);
+      expect(forgotten([key({})], [rec])).toEqual([key({})]);
+    });
+    it('an agent id a present agent-named tree asks about: kept for a rival with no activity row, forgotten once the rival has one', () => {
+      const census = [record()];                                                    // agent-AGENT
+      expect(forgotten([rival(AGENT)], census)).toEqual([]);
+      expect(forgotten([rival(AGENT)], census, [agentRow(OTHER, AGENT)])).toEqual([rival(AGENT)]);
+      expect(forgotten([rival(AGENT_2)], census), 'nobody asks about it').toEqual([rival(AGENT_2)]);
+      expect(forgotten([key({ parentId: OTHER, launchAgentId: AGENT })], census), 'a launch response names it too').toEqual([]);
+    });
+    it('an agent id rung 3 asks about (an agent activity row exists for another parent): kept for a rival with no row', () => {
+      const mine = agentRow(PARENT, AGENT);
+      expect(forgotten([rival(AGENT)], [rec], [mine])).toEqual([]);
+      expect(forgotten([key({ agentId: AGENT })], [rec], [mine]), 'the parent\'s own key is redundant by its own row').toEqual([key({ agentId: AGENT })]);
+    });
+    it('a run id: kept while a present workflow tree or a workflow row carries the run, forgotten otherwise', () => {
+      const k = key({ parentId: OTHER, runId: 'wf_run1' });
+      expect(forgotten([k], [record({ adminRecord: 'wf_run1-1', canonicalPath: WT('wf_run1-1') })])).toEqual([]);
+      expect(forgotten([k], [rec], [workflowRow(PARENT)])).toEqual([]);
+      expect(forgotten([k], [rec])).toEqual([k]);
+      const other = key({ parentId: OTHER, runId: 'wf_other' });
+      expect(forgotten([other], [record({ adminRecord: 'wf_run1-1', canonicalPath: WT('wf_run1-1') })])).toEqual([other]);
+    });
+    it('SOUND: against every world above, the verdict from the index with every key equals the verdict from the index without the forgotten ones', () => {
+      const scenarios: readonly { events: readonly DelegationEventEnvelopeV1[]; dropped: readonly number[]; record: DelegationCensusRecord }[] = [
+        { events: [toolAt(1, undefined, C), toolAt(15, undefined, ELSEWHERE), subagentStart(20, AGENT, { cwd: ELSEWHERE }), toolAt(22, AGENT, C)], dropped: [0], record: rec },
+        { events: [subagentStart(1, AGENT_2), toolAt(2, AGENT_2, C), subagentStart(20, AGENT, { cwd: ELSEWHERE }), toolAt(21, AGENT, C)], dropped: [1], record: rec },
+        { events: [subagentStart(1, AGENT_2, { sessionId: OTHER }), toolAt(2, AGENT_2, C, { sessionId: OTHER }), subagentStart(20, AGENT, { cwd: ELSEWHERE }), toolAt(21, AGENT, C)], dropped: [1], record: rec },
+        { events: [bareTool(1, AGENT, { sessionId: OTHER, cwd: ELSEWHERE }), agentLaunch(10, AGENT), subagentStart(11, AGENT), subagentStop(12, AGENT)], dropped: [0], record: record() },
+        { events: [bareTool(1, AGENT, { sessionId: OTHER, cwd: ELSEWHERE }), subagentStart(2, AGENT, { cwd: ELSEWHERE }), toolAt(3, AGENT, C)], dropped: [0], record: rec },
+        { events: [toolAt(1, AGENT_2, ELSEWHERE), toolAt(2, undefined, ELSEWHERE), subagentStart(3, AGENT, { cwd: ELSEWHERE }), toolAt(4, AGENT, C)], dropped: [0, 1], record: rec },
+      ];
+      for (const [i, sc] of scenarios.entries()) {
+        const e = evicting(sc.events, sc.dropped);
+        const keys = sc.dropped.map((d) => delegationDroppedKeyOf(sc.events[d]!));
+        const gone = new Set(prunableDelegationDropped(entries(keys), [sc.record], e.w.activities));
+        const kept = keys.filter((k) => !gone.has(delegationDroppedKeyId(k)));
+        const ask = (ks: readonly DelegationDroppedKey[]) => correlateDelegation(input({ record: sc.record, activities: e.w.activities, acceptedEvidence: e.held, droppedEvidence: indexDelegationDropped(ks) }));
+        expect(ask(kept), `scenario ${i}`).toEqual(ask(keys));
+      }
+    });
+  });
+
+  describe('purity', () => {
+    it('a verdict that was not a link is unchanged by any dropped evidence', () => {
+      const big = indexDelegationDropped([
+        delegationDroppedKeyOf(toolAt(1, undefined, C)), delegationDroppedKeyOf(toolAt(2, AGENT_2, C)), delegationDroppedKeyOf(bareTool(3, AGENT, { sessionId: OTHER })),
+      ]);
+      const cases: DelegationCorrelationInput[] = [
+        input({ hasRegistryRow: true }), input({ birthPassesRemaining: 2 }), agentWorld({ pointMetas: [] }).base,
+        input({ record: record({ state: 'unreadable' }) }), input({ record: record({ canonicalPath: null }) }),
+      ];
+      for (const c of cases) expect(correlateDelegation({ ...c, droppedEvidence: big })).toEqual(correlateDelegation(c));
+    });
+    it('the index is only read: a frozen input is not changed by it', () => {
+      const e = evicting([toolAt(1, undefined, C), subagentStart(20, AGENT, { cwd: ELSEWHERE }), toolAt(22, AGENT, C)], [0]);
+      const frozen = deepFreeze(input({ record: rec, activities: e.w.activities, acceptedEvidence: e.held, droppedEvidence: e.index }));
+      expect(() => correlateDelegation(frozen)).not.toThrow();
+      expect(horizonOf(correlateDelegation(frozen))).toBe('evidence-horizon');
+    });
   });
 });
 

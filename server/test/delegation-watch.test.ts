@@ -1303,6 +1303,260 @@ describe('evidence horizon in the lane (R57, D-4653): an event the slice no long
   });
 });
 
+// ── R65 (D-4653): the lane remembers what it dropped, so an eviction never links ──────────────────────────────────────────
+
+describe('the lane remembers what it dropped (R65): a link that rests on an event the slice no longer holds is unmeasured, never made', () => {
+  const C = RAW.canonicalPath!;                                                    // the raw tree's path
+  const A1 = 'a1b2c3d4e5f60718';
+  const tool = (owner: string, n: number, cwd: string, when: string, agentId?: string): string =>
+    lineOf(common(owner, { eventKind: 'PostToolUse', toolName: 'Bash', toolUseId: `toolu_${n}`, outcome: 'completed', cwd, ...(agentId === undefined ? {} : { agentId }) }, when));
+  const subStart = (owner: string, agentId: string, cwd: string, when: string): string =>
+    lineOf(common(owner, { eventKind: 'SubagentStart', agentId, agentType: null, cwd }, when));
+  /** PA, and the lane's one-event-per-tuple rule (PD): the parent sits in the raw tree for three events (the lane holds only the FIRST,
+   *  its tuple-mates are never held), moves elsewhere, launches a subagent from there, and the subagent works inside the tree. Held in
+   *  full the parent's own cwd refuses the placement. Evict the parent's first event and nothing in the slice does. */
+  function paWorld(): World {
+    const w = world();
+    writeBucket(w, 'demo-a', BUCKET10,
+      tool('demo-a', 1, C, '2026-10-15T10:01:00.000Z'), tool('demo-a', 2, C, '2026-10-15T10:01:30.000Z'), tool('demo-a', 3, C, '2026-10-15T10:01:45.000Z'),
+      tool('demo-a', 4, '/w/demo', '2026-10-15T10:02:00.000Z'),
+      subStart('demo-a', A1, '/w/demo', '2026-10-15T10:03:00.000Z'),
+      tool('demo-a', 5, C, '2026-10-15T10:04:00.000Z', A1));
+    return w;
+  }
+  const census = { demo: [RAW] };
+  const run = async (w: World, n = 4): Promise<void> => { for (let i = 0; i < n; i++) await censusPass(w, at(i), census); };
+
+  it('control: held in full, the parent\'s own cwd refuses the placement: unresolved, no lease, no attempt of a link', async () => {
+    const w = paWorld();
+    await run(w);
+    expect(w.watcher.delegationReport().droppedEvidence).toMatchObject({ measured: true, keys: 0 });
+    expect(leasesOf(w.home)).toEqual([]);
+    expect(w.watcher.delegationReport().verdicts).toEqual({ unresolved: 1, conflicting: 0, unmeasured: 0 });
+  });
+
+  it('PA + PD: the parent\'s first event evicted by the cap (its tuple-mates were never held): unmeasured, and no lease and no attempt is filed', async () => {
+    const w = paWorld();
+    w.watcher.setDelegationSeams({ evidenceCap: 3 });
+    await run(w);
+    expect(w.watcher.delegationReport().droppedEvidence).toMatchObject({ measured: true, keys: 1 });
+    expect(leasesOf(w.home), 'an eviction minted a lease identity').toEqual([]);
+    expect(attemptsOf(w.home)).toEqual([]);
+    expect(w.watcher.delegationReport().verdicts).toEqual({ unresolved: 0, conflicting: 0, unmeasured: 1 });
+    expect(readFileSync(path.join(w.ccrcDir, DELEGATION_JOURNAL_FILE), 'utf8')).not.toContain('"kind":"lease-created"');
+  });
+
+  it('a restart that truncates the journal is the same drop, found again by loadEvidence: unmeasured, and no lease', async () => {
+    const first = paWorld();
+    await run(first);                                                                // default cap: held in full
+    const again = world({ home: first.home });
+    again.watcher.setDelegationSeams({ evidenceCap: 3 });
+    for (let i = 4; i < 8; i++) await censusPass(again, at(i), census);
+    expect(again.watcher.delegationReport().droppedEvidence).toMatchObject({ measured: true, keys: 1 });
+    expect(leasesOf(first.home)).toEqual([]);
+    expect(again.watcher.delegationReport().verdicts).toEqual({ unresolved: 0, conflicting: 0, unmeasured: 1 });
+  });
+
+  describe('a lost index is not an empty one (D-4008)', () => {
+    /** A restarted lane whose journal read is held open, so the moment BEFORE loadEvidence completes can be looked at. */
+    async function restartHeld(cap: number | undefined) {
+      const first = paWorld();
+      await run(first);
+      const again = world({ home: first.home });
+      if (cap !== undefined) again.watcher.setDelegationSeams({ evidenceCap: cap });
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => { release = resolve; });
+      const real = DelegationDurability.prototype.visitRetainedRecords;
+      const visit = vi.spyOn(DelegationDurability.prototype, 'visitRetainedRecords').mockImplementation(async function (this: DelegationDurability, v) { await gate; return real.call(this, v); });
+      const running = censusPass(again, at(4), census);
+      return { first, again, release, visit, running };
+    }
+
+    it('before loadEvidence completes the index is UNMEASURED and nothing is reconciled; after it re-indexes the drops the same link is unmeasured (the cap) or what the full rules say (no cap)', async () => {
+      const held = await restartHeld(3);
+      await vi.waitFor(() => expect(held.visit).toHaveBeenCalled());
+      expect(held.again.watcher.delegationReport().droppedEvidence).toMatchObject({ measured: false, keys: 0 });
+      expect(held.again.watcher.delegationReport().reconciliations, 'a reconciliation ran on a lost index').toBe(0);
+      expect(leasesOf(held.first.home)).toEqual([]);
+      held.release();
+      await held.running;
+      for (let i = 5; i < 7; i++) await censusPass(held.again, at(i), census);                    // the restarted lane waits out the tree's birth wait again
+      expect(held.again.watcher.delegationReport().droppedEvidence).toMatchObject({ measured: true, keys: 1 });
+      expect(held.again.watcher.delegationReport().verdicts).toEqual({ unresolved: 0, conflicting: 0, unmeasured: 1 });
+      expect(leasesOf(held.first.home)).toEqual([]);
+    });
+
+    it('with nothing to truncate the re-indexed lane answers exactly what the full evidence says: unresolved(parent-cwd), not unmeasured', async () => {
+      const held = await restartHeld(undefined);
+      await vi.waitFor(() => expect(held.visit).toHaveBeenCalled());
+      expect(held.again.watcher.delegationReport().droppedEvidence).toMatchObject({ measured: false, keys: 0 });
+      held.release();
+      await held.running;
+      for (let i = 5; i < 7; i++) await censusPass(held.again, at(i), census);
+      expect(held.again.watcher.delegationReport().droppedEvidence).toMatchObject({ measured: true, keys: 0 });
+      expect(held.again.watcher.delegationReport().verdicts).toEqual({ unresolved: 1, conflicting: 0, unmeasured: 0 });
+    });
+
+    it('a visit that fails midway leaves the index unmeasured again (a partial index is not a measured one), and the next whole read measures it', async () => {
+      const first = paWorld();
+      await run(first);
+      const again = world({ home: first.home });
+      again.watcher.setDelegationSeams({ evidenceCap: 3 });
+      const real = DelegationDurability.prototype.visitRetainedRecords;
+      let broken = true;
+      vi.spyOn(DelegationDurability.prototype, 'visitRetainedRecords').mockImplementation(function (this: DelegationDurability, visit) {
+        let n = 0;
+        return real.call(this, (r) => { visit(r); n += 1; if (broken && n === 6) throw new Error('journal read failed midway, after the eviction'); });
+      });
+      vi.spyOn(console, 'warn').mockImplementation(() => {});
+      await censusPass(again, at(4), census);
+      expect(again.watcher.delegationReport().droppedEvidence).toMatchObject({ measured: false, keys: 0 });
+      broken = false;
+      await censusPass(again, at(5), census);
+      expect(again.watcher.delegationReport().droppedEvidence).toMatchObject({ measured: true, keys: 1 });
+    });
+  });
+
+  describe('the index is bounded by what a present tree or an activity row can still ask about', () => {
+    function farWorld(): World {
+      const w = world();
+      writeBucket(w, 'demo-a', BUCKET10,
+        tool('demo-a', 1, C, '2026-10-15T10:01:00.000Z'), tool('demo-a', 2, '/w/demo/gone-1', '2026-10-15T10:02:00.000Z'),
+        tool('demo-a', 3, '/w/demo/gone-2', '2026-10-15T10:03:00.000Z'), tool('demo-a', 4, '/w/demo/gone-3', '2026-10-15T10:04:00.000Z'),
+        tool('demo-a', 5, '/w/demo/gone-4', '2026-10-15T10:05:00.000Z'));
+      return w;
+    }
+    it('after a reconcile over a measured census, the keys that report no present tree\'s path are forgotten and the one that does is kept', async () => {
+      const w = farWorld();
+      w.watcher.setDelegationSeams({ evidenceCap: 2, droppedPruneEvery: 1 });
+      await censusPass(w, at(0), census);
+      expect(w.watcher.delegationReport().droppedEvidence).toMatchObject({ measured: true, keys: 1 });
+      await run(w, 3);
+      expect(w.watcher.delegationReport().droppedEvidence).toMatchObject({ measured: true, keys: 1 });
+    });
+    it('while loadEvidence streams a long journal the keys are pruned as it goes: the peak is the bound, not every key the journal ever dropped', async () => {
+      const first = world();
+      writeBucket(first, 'demo-a', BUCKET10, tool('demo-a', 1, C, '2026-10-15T10:01:00.000Z'),
+        ...Array.from({ length: 40 }, (_, i) => tool('demo-a', 100 + i, `/w/demo/far-${i}`, `2026-10-15T10:02:${String(i).padStart(2, '0')}.000Z`)));
+      await censusPass(first, at(0), census);                                          // the default cap holds all 41: nothing is dropped
+      expect(first.watcher.delegationReport().droppedEvidence).toMatchObject({ measured: true, keys: 0, peak: 0 });
+      const again = world({ home: first.home });
+      again.watcher.setDelegationSeams({ evidenceCap: 2, droppedPruneEvery: 5 });
+      await censusPass(again, at(1), census);
+      const dropped = again.watcher.delegationReport().droppedEvidence;
+      expect(dropped.keys, 'the survivors (the key that reports a present tree\'s path) plus less than one batch').toBeLessThanOrEqual(1 + 4);
+      expect(dropped.keys).toBeGreaterThanOrEqual(1);
+      expect(dropped.peak, 'the load held every key it dropped at once: the bound is the survivors (1) plus one batch (5)').toBeLessThanOrEqual(1 + 5);
+      expect(dropped.peak).toBeGreaterThan(1);
+    });
+    it('a reconcile prunes only after a batch of new keys, so a busy fleet does not pay for it on every pass', async () => {
+      const w = farWorld();
+      w.watcher.setDelegationSeams({ evidenceCap: 2 });
+      const prune = vi.spyOn(correlation, 'prunableDelegationDropped');
+      await run(w, 3);
+      expect(w.watcher.delegationReport().droppedEvidence).toMatchObject({ measured: true, keys: 3 });
+      expect(prune, 'pruned with a handful of new keys').not.toHaveBeenCalled();
+      w.watcher.setDelegationSeams({ evidenceCap: 2, droppedPruneEvery: 3 });
+      await censusPass(w, at(3), census);
+      expect(prune).toHaveBeenCalledTimes(1);
+      expect(w.watcher.delegationReport().droppedEvidence).toMatchObject({ measured: true, keys: 1 });
+    });
+    it('a load under a census with a project unmeasured prunes nothing as it streams either (a project with no view contributes no paths)', async () => {
+      const first = farWorld();
+      await censusPass(first, at(0), census);                                          // the default cap holds all five events
+      const again = world({ home: first.home });
+      again.watcher.setDelegationSeams({ evidenceCap: 2, droppedPruneEvery: 1 });
+      await censusPass(again, at(1), { demo: [RAW], other: null });
+      expect(again.watcher.delegationReport().droppedEvidence).toMatchObject({ measured: true, keys: 3 });
+      await censusPass(again, at(2), census);
+      expect(again.watcher.delegationReport().droppedEvidence).toMatchObject({ measured: true, keys: 1 });
+    });
+    it('a pass in which a project\'s census view was null forgets nothing (that project\'s paths are not in the census)', async () => {
+      const w = farWorld();
+      w.watcher.setDelegationSeams({ evidenceCap: 2, droppedPruneEvery: 1 });
+      await censusPass(w, at(0), { demo: [RAW], other: null });
+      expect(w.watcher.delegationReport().droppedEvidence).toMatchObject({ measured: true, keys: 3 });
+      await censusPass(w, at(1), census);
+      expect(w.watcher.delegationReport().droppedEvidence).toMatchObject({ measured: true, keys: 1 });
+    });
+  });
+
+  it('the index lives in lane memory only: the source names no file for it and writes it nowhere (no new file, no SQLite-only state, the journal untouched)', () => {
+    const lane = watchSrc().slice(watchSrc().indexOf('THE DELEGATION LANE'));
+    expect(lane).toMatch(/lane memory/i);
+    expect(lane).toContain('delegationDroppedKeyOf(');
+    expect(lane).toContain('prunableDelegationDropped(');
+    expect(lane).toContain('indexDelegationDropped(');
+  });
+});
+
+// ── N4, N5, N6 ───────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+describe('fix round 2, minors N4 to N6', () => {
+  it('N4: a project whose census view was null in a pass keeps its cached metas and misses; a measured census that no longer has the tree still prunes them', async () => {
+    const w = world();
+    const AGENT = 'a1b2c3d4e5f60718';
+    const tdirA = path.join(w.home, '.claude-fix', 'projects', '-demo');
+    writeBucket(w, 'demo-a', BUCKET10, startLine('demo-a', '2026-10-15T10:01:00.000Z'),
+      lineOf(common('demo-a', { eventKind: 'SubagentStart', agentId: AGENT, agentType: null, cwd: '/w/demo', transcriptPath: path.join(tdirA, `${CLAUDE}.jsonl`) }, '2026-10-15T10:02:00.000Z')));
+    const tree = record('demo', `agent-${AGENT}`, { canonicalPath: `/w/demo/.claude/worktrees/agent-${AGENT}` });
+    for (let i = 0; i < 3; i++) await censusPass(w, at(i), { demo: [tree] });
+    expect(w.watcher.delegationReport().metaMisses).toBe(1);
+    mkdirSync(path.join(tdirA, CLAUDE, 'subagents'), { recursive: true });
+    writeFileSync(path.join(tdirA, CLAUDE, 'subagents', `agent-${AGENT}.meta.json`), JSON.stringify({ worktreePath: tree.canonicalPath }));
+    await censusPass(w, at(2) + 6 * 60_000, { demo: [tree] });
+    expect(w.watcher.delegationReport()).toMatchObject({ pointMetas: 1 });
+    await censusPass(w, at(3) + 6 * 60_000, { demo: null });                           // the project's worktree listing failed this pass
+    expect(w.watcher.delegationReport(), 'a flapping census erased the project\'s cached reads').toMatchObject({ pointMetas: 1 });
+    await censusPass(w, at(4) + 6 * 60_000, { demo: [] });                             // measured, and the tree is gone
+    expect(w.watcher.delegationReport()).toMatchObject({ metaMisses: 0, pointMetas: 0 });
+  });
+
+  it('N4: a miss stays through a null view too (the miss is keyed by project)', async () => {
+    const w = world();
+    const AGENT = 'a1b2c3d4e5f60718';
+    const tdirA = path.join(w.home, '.claude-fix', 'projects', '-demo');
+    writeBucket(w, 'demo-a', BUCKET10, startLine('demo-a', '2026-10-15T10:01:00.000Z'),
+      lineOf(common('demo-a', { eventKind: 'SubagentStart', agentId: AGENT, agentType: null, cwd: '/w/demo', transcriptPath: path.join(tdirA, `${CLAUDE}.jsonl`) }, '2026-10-15T10:02:00.000Z')));
+    const tree = record('demo', `agent-${AGENT}`, { canonicalPath: `/w/demo/.claude/worktrees/agent-${AGENT}` });
+    for (let i = 0; i < 3; i++) await censusPass(w, at(i), { demo: [tree] });
+    expect(w.watcher.delegationReport().metaMisses).toBe(1);
+    await censusPass(w, at(3), { demo: null });
+    expect(w.watcher.delegationReport().metaMisses).toBe(1);
+  });
+
+  it('N5: a tree that holds an unreleased lease is owned: as its evidence leaves the slice it is counted as neither unresolved, conflicting nor unmeasured', async () => {
+    const w = rawTreeWorld();
+    for (let i = 0; i < 3; i++) await censusPass(w, at(i), { demo: [OLD, RAW] });
+    expect(leasesOf(w.home)).toHaveLength(1);
+    expect(w.watcher.delegationReport().verdicts).toEqual({ unresolved: 1, conflicting: 0, unmeasured: 0 });       // OLD, which nothing explains
+    w.watcher.setDelegationSeams({ evidenceCap: 1 });
+    appendBucket(w, 'demo-a', BUCKET10, lineOf(common('demo-a', { eventKind: 'PostToolUse', toolName: 'Bash', toolUseId: 'toolu_late', outcome: 'completed', cwd: '/w/demo/late' }, '2026-10-15T10:20:00.000Z')));
+    await censusPass(w, at(3), { demo: [OLD, RAW] });
+    await censusPass(w, at(4), { demo: [OLD, RAW] });
+    expect(w.watcher.delegationReport().evidenceEvents).toBe(1);                                                    // the creating window is gone
+    expect(w.watcher.delegationReport().verdicts, 'the leased tree was counted as the evidence aged').toEqual({ unresolved: 1, conflicting: 0, unmeasured: 0 });
+    expect(leasesOf(w.home)).toHaveLength(1);
+  });
+
+  it('N6: a prune that FAILED is retried at most once per UTC hour, like one that succeeded', async () => {
+    const DAY3 = 72 * 3_600_000;
+    const w = world();
+    writeBucket(w, 'demo-a', BUCKET10, startLine('demo-a', '2026-10-15T10:01:00.000Z'));
+    await censusPass(w, NOW, { demo: [] });
+    await censusPass(w, Date.UTC(2026, 9, 15, 11, 3, 0), { demo: [] });                // the close write
+    const prune = vi.spyOn(DelegationDurability.prototype, 'pruneBucketCursors').mockRejectedValue(new Error('disk full'));
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    await censusPass(w, NOW + DAY3, { demo: [] });
+    await censusPass(w, NOW + DAY3 + 60_000, { demo: [] });
+    await censusPass(w, NOW + DAY3 + 120_000, { demo: [] });
+    expect(prune, 'a failed prune was retried on every pass').toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls.filter((c) => String(c[0]).includes('cursor retention failed'))).toHaveLength(1);
+    await censusPass(w, NOW + DAY3 + 3_600_000, { demo: [] });
+    expect(prune).toHaveBeenCalledTimes(2);
+  });
+});
+
 // ── R58 (D-4654): the lane reads nothing past the lookback, and cursors retire behind that horizon ─────────────────────
 
 describe('the read horizon and cursor retention in the lane (R58, D-4654)', () => {

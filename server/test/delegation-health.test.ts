@@ -514,7 +514,8 @@ describe('cursor retention (R58, D-4654): one horizon, derived once; a cursor re
       expect(out.dropped).toBe(1);
       expect(d.state().checkpoint.bucketCursors.map((c) => c.bucket)).toEqual([bucketAt(5)]);
       expect(canonicalDelegationJson(d.state().checkpoint.observationIntervals)).toBe(before.intervals);
-      // the health is identical in everything it measures; the checkpoint revision, which any replacement advances, is the one field that moves
+      // the health is identical in everything it measures; the checkpoint revision, which any replacement advances, is the one field that
+      // moves (the controller accepted +1 as replacement metadata, fix round 2): every other field, the intervals' arithmetic included, is equal
       const after = health();
       expect(after.lastCheckpointRevision).toBe(before.health.lastCheckpointRevision! + 1);
       expect({ ...after, lastCheckpointRevision: null }).toEqual({ ...before.health, lastCheckpointRevision: null });

@@ -63,6 +63,10 @@ import {
   unreadableDelegationBucketResult, type DelegationBucketDurability, type DelegationBucketResult,
 } from './coord/delegation-ingest.js';
 import { correlateDelegation, type DelegationCorrelationInput, type DelegationListingWindow } from './coord/delegation-correlation.js';
+import {
+  DELEGATION_DROPPED_UNMEASURED, delegationDroppedKeyId, delegationDroppedKeyOf, indexDelegationDropped, prunableDelegationDropped,
+  type DelegationDroppedEvidence, type DelegationDroppedKey,
+} from './coord/delegation-correlation.js';
 import { delegationCircuitBreaker, planDelegationReconciliation, type DelegationReportEffect } from './coord/delegation-policy.js';
 import { isUnownedWorkReason } from './coord/delegation-policy.js';
 import { delegationBucketReadable, planDelegationCursorRetention } from './coord/delegation-model.js';
@@ -8250,10 +8254,23 @@ function renderAskBrief(askId: number, childId: string, question: string, option
 //   that moved during the read is a disagreement ingestion reports, not a coordinate this lane overwrites. Cursors move ONLY through
 //   ingestion (`applyAccepted`): nothing here rewrites `bucketCursors` through a checkpoint-only change.
 //
-//   THE EVIDENCE HORIZON (R57, D-4653). The slice of the journal the lane keeps for correlation is bounded, and an eviction is never
-//   allowed to decide a link: the latest `observedAt` among events the lane no longer holds is handed to correlation (`evidenceHorizon`,
-//   at an eviction by the cap and when a reload at a restart truncates the whole journal), which answers `unmeasured('evidence-horizon')`
-//   in place of a link that the missing events could have vetoed (spec §5.3: a lost event delays or prevents a link, never creates one).
+//   WHAT THE LANE DROPPED (R57, R65, D-4653). The slice of the journal the lane keeps for correlation is bounded, and an eviction is
+//   never allowed to decide a link (spec §5.3: a lost event delays or prevents a link, never creates one). Rung 4 reads the HORIZON,
+//   the latest `observedAt` among the events the lane evicted, which bounds a listing window. Rungs 2 and 3 cannot be bounded by an
+//   instant: an event that is gone is invisible, and the lane's one-event-per-tuple rule hides a tuple's LATER events once its first is
+//   evicted. So the lane REMEMBERS what it dropped: at every eviction (the cap, and a reload that truncates the whole journal) it keeps
+//   the minimal keys correlation reads (the parent, the agent and run ids the event named, its directory, whether it was a
+//   SubagentStart or SubagentStop), de-duplicated, never the event. A tuple's held event stands for the later events of its tuple that
+//   the rule hid (their keys are the tuple's own), so recording the holder's eviction records them. Correlation asks the index, by
+//   membership, whether a link rests on an event the lane no longer holds (`delegation-correlation.ts`, clauses (a) and (b)).
+//   WHERE IT LIVES: LANE MEMORY ONLY: a Map of distinct keys on this class. It adds no file, no
+//   SQLite-only state, and writes nothing to the journal; `loadEvidence` rebuilds it from nothing at every reload, exactly as it
+//   recomputes the horizon. A LOST INDEX IS NOT AN EMPTY ONE: the index is measured only once `loadEvidence` has streamed the whole
+//   retained journal and indexed every event it dropped while doing so; until then (a restart, a recovery, a visit that failed
+//   midway) it is UNMEASURED (`DELEGATION_DROPPED_UNMEASURED`), the lane reconciles nothing, and correlation answers
+//   `unmeasured('evidence-horizon')` for every link against it (D-4008: unknown is never empty). BOUNDED: after each reconcile over a
+//   census in which every project was measured, the keys no present tree and no activity row can still ask about are forgotten
+//   (`prunableDelegationDropped`, which argues why that is sound, and names its one loss: a path reused after its tree left).
 //
 //   THE READ HORIZON AND CURSOR RETENTION (R58, D-4654). The lane reads no bucket older than the spool lookback, and decides that in
 //   ONE place (`delegationBucketReadable`), for a live owner's listing and for a dead owner's unclosed hour alike. Bucket cursors retire
@@ -8287,6 +8304,10 @@ const DELEGATION_RECOVERY_RETRY_MS = 5 * 60_000;
 /** The evidence the lane keeps for correlation, newest. Evicting the oldest makes a verdict less decided (`evidence-horizon`), never
  *  more: the horizon of what was evicted is handed to correlation, which will not link on evidence an eviction could have emptied. */
 const DELEGATION_EVIDENCE_CAP = 20_000;
+/** The dropped-evidence keys are pruned each time this many new ones have been collected, while `loadEvidence` streams the journal and at
+ *  a reconcile, so a long journal cannot hold every key it ever dropped at once and a busy fleet does not pay a prune every pass (R65: the
+ *  peak is this many plus what survives). */
+const DELEGATION_DROPPED_PRUNE_EVERY = 4096;
 /** A tree seen for the first time may be a ccd workspace being BORN: two reconciliation passes of waiting (spec §5.4, rung 1). */
 const DELEGATION_BIRTH_PASSES = 2;
 /** How long a first-measured-dead instant is remembered: far past the breaker's ten-minute window. */
@@ -8302,7 +8323,7 @@ const DELEGATION_META_MAX_CHARS = 65_536;
 /** Test seams of the lane: production passes none. `evidenceCap` scales the evidence slice so an eviction can be provoked with a handful
  *  of events; `readEveryListedBucket` bypasses the read horizon and the settled/closed filters, so the second line of defence
  *  (eventId idempotence against the retained journal) can be pinned. */
-export interface DelegationLaneSeams { evidenceCap?: number; readEveryListedBucket?: boolean }
+export interface DelegationLaneSeams { evidenceCap?: number; readEveryListedBucket?: boolean; droppedPruneEvery?: number }
 
 type LaneSession = Pick<FleetSession, 'id' | 'project' | 'status'>;
 type LaneRecord = Pick<SessionRecord, 'id' | 'project' | 'child'>;
@@ -8337,6 +8358,26 @@ const laneCloseAt = (hourMs: number): number => hourMs + DELEGATION_HOUR_MS + DE
 const laneInstantMs = (iso: string): number | null => {
   try { return parseDelegationInstant(iso); } catch (err) { if (err instanceof DelegationModelError) return null; throw err; }
 };
+
+/** The census, flat: every project whose delegation census was a MEASURED success contributes its records, each (project, adminRecord)
+ *  once. A project whose view was null is left OUT of `censused` and contributes nothing: an empty list would read as "every tree is gone"
+ *  (hand-off 12), so a caller that prunes against the census does so only when `censused` is every project. */
+function laneFlatCensus(census: DelegationCensusPass): { censused: string[]; flat: DelegationCensusRecord[]; held: Set<string>; allMeasured: boolean } {
+  const censused: string[] = [];
+  const flat: DelegationCensusRecord[] = [];
+  const held = new Set<string>();
+  for (const [project, view] of census.projects) {
+    if (view.delegation === null) continue;
+    censused.push(project);
+    for (const r of view.delegation) {
+      const k = laneTreeKey(r.project, r.adminRecord);
+      if (held.has(k)) continue;
+      held.add(k);
+      flat.push(r);
+    }
+  }
+  return { censused, flat, held, allMeasured: censused.length === census.projects.size };
+}
 
 /** A cursor row nobody needs to store: the state of a bucket with nothing read from it. */
 const laneFreshCursor = (c: DelegationBucketCursor): boolean =>
@@ -8391,6 +8432,13 @@ class DelegationLane {
   /** R57: the latest `observedAt` (epoch ms) among events evicted from `evidence`; null while none was. Only ever rises, and is
    *  recomputed from nothing at every reload from the journal. */
   private evidenceHorizonMs: number | null = null;
+  /** R65: the DISTINCT keys of every event this lane no longer holds, by key id. Lane memory only: no file, no SQLite state, no journal
+   *  write. Rebuilt from nothing by `loadEvidence`; measured only while `evidenceLoaded` (see `droppedIndex`). */
+  private readonly dropped = new Map<string, DelegationDroppedKey>();
+  private droppedIndexCache: DelegationDroppedEvidence | null = null;
+  /** New keys since the last prune, and the most keys held at once since the last load began (a report figure: the bound is real). */
+  private droppedAdded = 0;
+  private droppedPeak = 0;
   private seams: DelegationLaneSeams = {};
   private lastPruneHour = -1;
   private cursorsPruned = 0;
@@ -8430,12 +8478,41 @@ class DelegationLane {
     return this.evidenceHorizonMs === null ? null : formatDelegationInstant(this.evidenceHorizonMs);
   }
 
+  /** What correlation is handed about the events this lane dropped. UNMEASURED until `loadEvidence` has read the whole retained journal
+   *  (`evidenceLoaded` IS the measured state): an index that was lost, or never built, is not an empty one. */
+  private droppedIndex(): DelegationDroppedEvidence {
+    if (!this.evidenceLoaded) return DELEGATION_DROPPED_UNMEASURED;
+    this.droppedIndexCache ??= indexDelegationDropped(this.dropped.values());
+    return this.droppedIndexCache;
+  }
+
+  /** The lane no longer holds this event: keep the keys correlation reads of it. */
+  private noteDropped(event: DelegationEventEnvelopeV1): void {
+    const key = delegationDroppedKeyOf(event);
+    const id = delegationDroppedKeyId(key);
+    if (this.dropped.has(id)) return;
+    this.dropped.set(id, key);
+    this.droppedIndexCache = null;
+    this.droppedAdded += 1;
+    this.droppedPeak = Math.max(this.droppedPeak, this.dropped.size);
+  }
+
+  /** Forgets the dropped-evidence keys no present tree and no activity row can still ask about (`prunableDelegationDropped` argues why
+   *  that is sound). The caller has checked that the census it passes has every project measured. */
+  private pruneDropped(flat: readonly DelegationCensusRecord[], activities: DelegationCheckpointV1['activities']): void {
+    const forget = prunableDelegationDropped(this.dropped, flat, activities);
+    for (const id of forget) this.dropped.delete(id);
+    if (forget.length > 0) this.droppedIndexCache = null;
+    this.droppedAdded = 0;
+  }
+
   report() {
     return {
       passes: this.passes, reconciliations: this.reconciliations, skippedApplications: this.skipped,
       verdicts: { ...this.verdicts }, absences: [...this.absences.values()], breaker: this.breakerNow(Date.now()),
       evidenceEvents: this.evidence.size, evidenceHorizon: this.evidenceHorizon(), cursorsPruned: this.cursorsPruned,
       metaMisses: this.metaMiss.size, pointMetas: this.pointMetas.size,
+      droppedEvidence: { measured: this.evidenceLoaded, keys: this.dropped.size, peak: this.droppedPeak },
     };
   }
 
@@ -8538,11 +8615,13 @@ class DelegationLane {
       if (pass.now - this.lastRecoverAt < DELEGATION_RECOVERY_RETRY_MS) return;
       this.lastRecoverAt = pass.now;
       await durable.recover();
-      this.evidenceLoaded = false;
+      this.evidenceLoaded = false;                                     // the slice and the dropped-evidence index are measured again by the next load
+      this.dropped.clear();
+      this.droppedIndexCache = null;
       if (durable.state().phase !== 'ready' || durable.failure() !== null || pass.signal.aborted) return;
     }
     this.passes += 1;
-    await this.loadEvidence(durable);
+    await this.loadEvidence(durable, pass);
     if (pass.signal.aborted) return;
 
     for (const owner of this.ownersOf(pass, durable.state())) {
@@ -8581,11 +8660,13 @@ class DelegationLane {
       this.warnedUnparseableCursors = true;
       console.warn(`ccrc-server: ${plan.unparseable.length} delegation bucket cursor(s) name no hour and are kept: ${plan.unparseable.slice(0, 3).map((c) => JSON.stringify(c.bucket)).join(', ')}`);
     }
+    // The hour is spent BEFORE the attempt (N6): a prune that failed is retried at most once per UTC hour, like one that succeeded, and
+    // not on every pass (each attempt is a planner run, a commit attempt and a warning line).
+    this.lastPruneHour = hour;
     if (plan.drop.length > 0) {
       try { this.cursorsPruned += (await durable.pruneBucketCursors(pass.now)).dropped; }
-      catch (err) { console.warn(`ccrc-server: the delegation cursor retention failed: ${err instanceof Error ? err.message : String(err)}`); return; }
+      catch (err) { console.warn(`ccrc-server: the delegation cursor retention failed: ${err instanceof Error ? err.message : String(err)}`); }
     }
-    this.lastPruneHour = hour;
   }
 
   /** Who died since the last pass, by what this process watched: a parent first seen DEAD is not a fresh death (a restart is not a
@@ -8807,6 +8888,9 @@ class DelegationLane {
       this.evidence.delete(oldest);
       if (gone === undefined) continue;
       if (gone.key !== null) this.evidenceKeys.delete(gone.key);
+      // R65: remember what was lost. A tuple's held event stands for the later events of its tuple that the one-event-per-tuple rule
+      // hid, and their keys are the tuple's own, so this records them too.
+      this.noteDropped(gone.event);
       // The horizon only rises. An `observedAt` that cannot be read (accepted events always carry a canonical one) is treated as now.
       this.evidenceHorizonMs = Math.max(this.evidenceHorizonMs ?? 0, laneInstantMs(gone.event.observedAt) ?? Date.now());
     }
@@ -8814,7 +8898,7 @@ class DelegationLane {
 
   /** Streams the retained journal once, through the applier (which alone names the file), after it is ready; from then on every
    *  application adds what it journals. */
-  private async loadEvidence(durable: DelegationDurability): Promise<void> {
+  private async loadEvidence(durable: DelegationDurability, pass: LanePass): Promise<void> {
     if (this.evidenceLoaded) return;
     this.evidenceLoading ??= (async () => {
       try {
@@ -8823,12 +8907,28 @@ class DelegationLane {
         this.evidence.clear();
         this.evidenceKeys.clear();
         this.evidenceHorizonMs = null;
-        await durable.visitRetainedRecords((r) => { if (r.entry.kind === 'evidence-accepted') this.noteEvidence(r.journalId, r.entry.event); });
+        this.dropped.clear();
+        this.droppedIndexCache = null;
+        this.droppedAdded = 0;
+        this.droppedPeak = 0;
+        // A long journal drops far more keys than any census can still ask about, so while it streams the keys are pruned every
+        // `DELEGATION_DROPPED_PRUNE_EVERY` new ones, against the census this pass holds and the checkpoint's activities (the visit folds
+        // nothing, so they are already whole). With a census that has a project unmeasured nothing is pruned until a reconcile can.
+        const census = laneFlatCensus(pass.census);
+        const every = this.seams.droppedPruneEvery ?? DELEGATION_DROPPED_PRUNE_EVERY;
+        const activities = durable.state().checkpoint.activities;
+        await durable.visitRetainedRecords((r) => {
+          if (r.entry.kind !== 'evidence-accepted') return;
+          this.noteEvidence(r.journalId, r.entry.event);
+          if (census.allMeasured && this.droppedAdded >= every) this.pruneDropped(census.flat, activities);
+        });
         this.evidenceLoaded = true;
       } catch (err) {
         console.warn(`ccrc-server: the delegation evidence could not be read from the journal: ${err instanceof Error ? err.message : String(err)}`);
         this.evidence.clear();
         this.evidenceKeys.clear();
+        this.dropped.clear();                                          // a partial index is not a measured one
+        this.droppedIndexCache = null;
       } finally {
         this.evidenceLoading = null;
       }
@@ -8843,22 +8943,8 @@ class DelegationLane {
     if (durable.state().phase !== 'ready') return;
     const now = formatDelegationInstant(pass.now);
 
-    // The census, flat: every project whose delegation census was a MEASURED success contributes its records, each (project,
-    // adminRecord) once. A project whose view was null is left OUT of `censusedProjects` and contributes nothing: an empty list would
-    // read as "every tree is gone" (hand-off 12).
-    const censused: string[] = [];
-    const flat: DelegationCensusRecord[] = [];
-    const held = new Set<string>();
-    for (const [project, view] of pass.census.projects) {
-      if (view.delegation === null) continue;
-      censused.push(project);
-      for (const r of view.delegation) {
-        const k = laneTreeKey(r.project, r.adminRecord);
-        if (held.has(k)) continue;
-        held.add(k);
-        flat.push(r);
-      }
-    }
+    // The census, flat (hand-off 12): a project whose view was null contributes nothing and is not in `censused`.
+    const { censused, flat, held, allMeasured } = laneFlatCensus(pass.census);
     this.reconciliations += 1;
     const nextFirstSeen = new Map(flat.map((r) => [laneTreeKey(r.project, r.adminRecord), this.firstSeen.get(laneTreeKey(r.project, r.adminRecord)) ?? this.reconciliations] as const));
     const recordsById = new Map(pass.records.map((r) => [r.id, r] as const));
@@ -8870,10 +8956,13 @@ class DelegationLane {
       DELEGATION_BIRTH_PASSES - (this.reconciliations - (nextFirstSeen.get(laneTreeKey(record.project, record.adminRecord)) ?? this.reconciliations));
 
     // M6: the lane's memory is bounded by the census. A miss and a positive meta leave with their tree; a measured absence leaves when
-    // its tree is back in the census.
+    // its tree is back in the census. N4: only against projects that were CENSUSED in this pass. A project whose view was null
+    // contributes no trees, which is not the same as having none, so its cached reads stay (a positive meta carries no project, so
+    // those are pruned only when every project was measured).
+    const censusedProjects = new Set(censused);
     const names = new Set(flat.map((r) => r.adminRecord));
-    for (const k of [...this.metaMiss.keys()]) if (!held.has(k)) this.metaMiss.delete(k);
-    for (const [k, m] of [...this.pointMetas]) if (!names.has(m.sourceKind === 'agent' ? `agent-${m.upstreamId}` : m.upstreamId)) this.pointMetas.delete(k);
+    for (const k of [...this.metaMiss.keys()]) if (!held.has(k) && censusedProjects.has((JSON.parse(k) as [string, string])[0])) this.metaMiss.delete(k);
+    if (allMeasured) for (const [k, m] of [...this.pointMetas]) if (!names.has(m.sourceKind === 'agent' ? `agent-${m.upstreamId}` : m.upstreamId)) this.pointMetas.delete(k);
     for (const k of [...this.absences.keys()]) if (held.has(k)) this.absences.delete(k);
 
     // The evidence, indexed once (M5), for the rung-2 lookups.
@@ -8905,6 +8994,10 @@ class DelegationLane {
     const heldByCheckpoint = new Set([...state.checkpoint.leases, ...state.checkpoint.attempts].map((r) => laneTreeKey(r.project, r.adminRecord)));
     for (const k of [...this.absences.keys()]) if (!heldByCheckpoint.has(k)) this.absences.delete(k);
     const evidenceHorizon = this.evidenceHorizon();
+    // R65: forget the dropped-evidence keys no present tree and no activity row can still ask about, but only against a census in which
+    // every project was measured (a project with no view contributes no paths, and would read as "nothing needs this").
+    if (allMeasured && this.droppedAdded >= (this.seams.droppedPruneEvery ?? DELEGATION_DROPPED_PRUNE_EVERY)) this.pruneDropped(flat, state.checkpoint.activities);
+    const droppedEvidence = this.droppedIndex();
 
     const evidence = [...this.evidence].map(([journalId, v]) => ({ journalId, event: v.event }));
     const windows = delegationListingWindowsOf([...this.evidence.values()].map((v) => v.event), (sessionId) => this.sessionProject.get(sessionId));
@@ -8919,7 +9012,7 @@ class DelegationLane {
         activities: state.checkpoint.activities, acceptedEvidence: evidence, pointMetas, listingWindows: windows,
         birthPassesRemaining: Math.max(0, Math.min(DELEGATION_BIRTH_PASSES, waitRemaining(record))) as 0 | 1 | 2,
         hasRegistryRow: row !== undefined, hasChildMarker: row !== undefined && row.child.kind !== 'none',
-        evidenceHorizon,
+        evidenceHorizon, droppedEvidence,
       };
     };
     // ONE expression: each pair is a census record and the verdict about it, never sorted or filtered apart.
@@ -8935,8 +9028,12 @@ class DelegationLane {
     // The counts are the pass's VERDICTS, one per census record that is a tree or could not be read; an `absent` record is a tree
     // being removed. Never attempt rows: policy files none for work no parent is named for.
     const counts: DelegationVerdictCounts = { unresolved: 0, conflicting: 0, unmeasured: 0 };
+    // N5: a tree that holds an UNRELEASED lease is owned work, whatever its evidence has since become (the creating window leaves the
+    // slice, or rung 4's horizon test refuses to repeat the link): it is counted in none of the three.
+    const leased = new Set(state.checkpoint.leases.filter((l) => l.releasedAt === null).map((l) => laneTreeKey(l.project, l.adminRecord)));
     for (const { record, verdict } of pairs) {
       if (record.state === 'absent') continue;
+      if (leased.has(laneTreeKey(record.project, record.adminRecord))) continue;
       // `unresolved` and `conflicting` count UNOWNED WORK only (R59), by the one classifier policy files its reports with: a ccd
       // workspace and a tree being born are not work. An `unmeasured` verdict (an eviction among them) is always counted.
       if (verdict.kind === 'unmeasured') counts.unmeasured += 1;
