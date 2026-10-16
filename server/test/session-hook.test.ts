@@ -12395,6 +12395,77 @@ describe('history card line: SessionStart(compact) serves the sweep\'s predictio
     });
   });
 
+  // D-5064 (fix round 2, follow-up 2): a NUL probe that cannot open its file withholds. The window is the microseconds between
+  // `_ct_read` and the probe's `<`, so no fixture reaches it from outside; the harness below defines the hook's OWN `_ct_read`, the
+  // HISTORY_* lines and `_hook_history_card`, extracted by content at test time (a copy would not follow the hook), wraps
+  // `_ct_read` so that after the real read it makes the file unreadable (chmod 000), and runs the reader on a fixture HOME. A
+  // probe that never opened its file used to keep the `''` it carried in: an empty record (a legacy family) that served where
+  // the CLI exits 8. Each probe seeds `x` with a value outside the grammar, so that probe withholds.
+  describe.skipIf(ROOT)('a NUL probe that cannot open its file withholds (the file turns unreadable between the two reads)', () => {
+    const hookText = (): string => fs.readFileSync(HOOK, 'utf8');
+    const fn = (name: string): string => {
+      const m = new RegExp(`^${name}\\(\\) \\{[^\\n]*\\n[\\s\\S]*?\\n\\}\\n`, 'm').exec(hookText());
+      expect(m, `${name} is defined in the hook`).not.toBeNull();
+      return m![0];
+    };
+    const assign = (name: string): string => {
+      const m = new RegExp(`^${name}=[^\\n]*\\n`, 'm').exec(hookText());
+      expect(m, `${name} is assigned in the hook`).not.toBeNull();
+      return m![0];
+    };
+    /** Run the reader over the planted fixture; `armed` is the suffix of the file `_ct_read` makes unreadable after its real read. */
+    const reader = (armed: string | null): string => {
+      const script = path.join(home, 'reader-harness.sh');
+      fs.writeFileSync(script, [
+        'set -uo pipefail',
+        ...['REG', 'CCRC_ID_MAX', 'COMPACT_CARD_MAX_CHARS', 'COMPACT_CARD_MAX_AGE', 'HISTORY_CARD_MAX', 'HISTORY_CARD_RE', 'HISTORY_SCOPE_DIR', 'HISTORY_CARD_DIR'].map(assign),
+        fn('_ct_read').replace('_ct_read() {', '_ct_read_real() {'),
+        // The race: the file is read, then it goes unreadable (a chmod by hand, a purge) before the probe opens it.
+        `_ct_read() { _ct_read_real "$1"; local rc=$?; case "$1" in *${armed ?? 'NEVER-MATCHES'}) [[ -f "$1" ]] && chmod 000 "$1" ;; esac; return $rc; }`,
+        fn('_hook_history_card'),
+        `id=${ID} psid=${SID} paid="" CARD_COMPACT=""`,
+        '_hook_history_card',
+        'printf "%s" "$CARD_COMPACT"',
+        '',
+      ].join('\n'));
+      const r = spawnSync('bash', [script], { encoding: 'utf8', env: hookEnv({ ...HISTORY_HOOK_SCRUB, CCRC_SESSION_GENERATION: '' }) });
+      expect(r.stderr, 'the reader is silent on stderr').toBe('');
+      expect(r.status).toBe(0);
+      return r.stdout;
+    };
+    afterEach(() => {
+      for (const f of [reg(`${ID}.generation`), histDir('card', ID, `${SID}.gen`)]) { try { fs.chmodSync(f, 0o600); } catch { /* absent */ } }
+    });
+
+    it('CONTROL: the harness serves the line when nothing is armed (a stale recall-off beside a G record, and beside a G2 .generation)', () => {
+      plantAll();
+      plantParity('absent', 'G2', 'G');
+      expect(reader(null)).toBe(LINE);
+      plantParity('G2', 'G', 'G2');
+      expect(reader(null)).toBe(LINE);
+    });
+
+    it('CONTROL: armed on a file the reader does not probe, the same fixtures still serve', () => {
+      plantAll();
+      plantParity('absent', 'G2', 'G');
+      expect(reader('.generation')).toBe(LINE);           // no .generation exists: the wrapper never fires
+      plantParity('G2', 'G', 'G2');
+      expect(reader('.gen')).toBe(LINE);                  // the .generation arm decides: the record is never read
+    });
+
+    it('the record arm: the record turns unreadable after its first read, recall-off names G, the record is G (the probe once read an empty record and served)', () => {
+      plantAll();
+      plantParity('absent', 'G', 'G');
+      expect(reader('.gen')).toBe('');
+    });
+
+    it('the .generation arm: .generation turns unreadable after its first read, recall-off is stale, the record is G2', () => {
+      plantAll();
+      plantParity('G2', 'G', 'G2');
+      expect(reader('.generation')).toBe('');
+    });
+  });
+
   itLinux('forks nothing at runtime: serving the line takes exactly the forks a box without history takes', () => {
     const traced = (env: Record<string, string> = {}): { forks: number; stdout: string } => {
       const trace = path.join(home, 'card-trace.txt');
