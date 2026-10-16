@@ -1733,6 +1733,21 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
       - `box-token` PASS, generation #3 at 5 days. Two of the merges touched no file of wave 15; #411 edits `ccd/ccd`.
       - STATUS: fleet and server v0.0.201, newest v0.0.201, backups fleet 181M/server 741M, disk free fleet 216G/work
         volume 153G/server 32G, no anomalies at 21:41.
+    - **2026-10-16 10:58 UTC: auto moved the boxes to v0.0.203; then the intent was set to `auto=stable`, and a tap
+      moved them to v0.0.206. v0.0.207 and v0.0.208 stay unapplied, as designed.**
+      - Auto moves, read off coord.db's `update` feed rows (wave 8's source record): v0.0.201 to v0.0.202 (fleet 21:59,
+        server 22:01) and v0.0.202 to v0.0.203 (fleet 22:32, server 22:36), each row reading "auto update".
+      - 22:36:38: the fleet-wide intent was set from the PWA (`setBy: pwa`) to channel `dev`, `auto=stable`. Auto now
+        installs only a stable release. v0.0.204 to v0.0.206 (22:45, 23:00, 23:22) moved no box.
+      - 10:05:45 (fleet) and 10:08:21 (server): "requested update from v0.0.203 to v0.0.206", a tap. This is the
+        first live proof that the feed tells a tap from an auto move (defect A, closed 2026-10-15). Fleet 10:05:45 to
+        10:07:21, doctor 34 passed, 6 warned, 0 failed; the server restarted at 10:08:35, doctor 26/0/0. Both
+        reports read `phase: done`.
+      - v0.0.207 (10:44:32) and v0.0.208 (10:55:35) are newer dev releases. Under `auto=stable`, nothing moves until
+        a stable promotion or a tap. So a stable promotion now moves both boxes, by auto.
+      - `box-token` PASS on both; the server's generation #3 is 5 days old, so the first scheduled rotation is near.
+      - STATUS: fleet and server v0.0.206, newest v0.0.208, intent dev/auto=stable, backups fleet 183M/server 750M,
+        disk free fleet 216G/work volume 143G/server 32G, no anomalies at 10:58.
 
 - **2026-09-30 12:22 UTC — wave 8 opened (run 182) for the live audit's residue, and dispatched.**
   - **Planning:** two Opus scoping agents measured each defect at `a742eb6a`, and an Opus writer assembled the
