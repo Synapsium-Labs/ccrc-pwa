@@ -38,6 +38,7 @@ import {
   delegationLineageCodec,
   delegationSessionCodec,
   delegationSha256Hex,
+  delegationIntentKey,
   deriveCoordinatorIntentByParent,
   deriveDelegationActivityId,
   deriveDelegationLineageId,
@@ -788,7 +789,9 @@ describe('the projection view — what a checkpoint looks like once projected an
 
   it('derives the natural-key map from the activity rows and the intent map from the session rows', () => {
     const view = projectionViewOfDelegationCheckpoint(checkpoint());
-    expect(view.coordinatorIntentByParent).toEqual({ 'lane-a-demo': T1 });
+    // One entry per (session, incarnation) that carries a declaration; the stale bare-id entry the input held is gone.
+    expect(view.coordinatorIntentByParent).toEqual({ [delegationIntentKey('lane-a-demo', 'g1')]: T1, [delegationIntentKey('lane-a-demo', 'g2')]: T1 });
+    expect(view.coordinatorIntentByParent).not.toHaveProperty('lane-a-demo');
     expect(view.activityIdsByNaturalKey).toEqual({
       [KEY_ENCODING]: ACTIVITY_ID_FROM_JOURNAL,
       '11:lane-a-demo2:g15:agent7:agent-2': 'b'.repeat(64),
@@ -796,12 +799,13 @@ describe('the projection view — what a checkpoint looks like once projected an
     expect(view.activityIdsByNaturalKey).not.toHaveProperty('stale');
   });
 
-  it('takes the LATEST explicit intent when a parent’s incarnations disagree, and none for a parent without one', () => {
+  it('keeps one entry per incarnation when a parent’s incarnations disagree, and none for a parent without intent (never the latest of them)', () => {
     const cp = {
       ...emptyDelegationCheckpoint(),
       sessions: [session({ explicitIntentAt: T0 }), session({ parentIncarnation: 'g2', explicitIntentAt: T2 }), session({ sessionId: 'lane-b-demo' })],
     };
-    expect(projectionViewOfDelegationCheckpoint(cp).coordinatorIntentByParent).toEqual({ 'lane-a-demo': T2 });
+    expect(projectionViewOfDelegationCheckpoint(cp).coordinatorIntentByParent)
+      .toEqual({ [delegationIntentKey('lane-a-demo', 'g1')]: T0, [delegationIntentKey('lane-a-demo', 'g2')]: T2 });
   });
 
   it('orders every row array by its primary key in UTF-8 byte order, the order the store reads them in', () => {
@@ -851,9 +855,30 @@ describe('Task 8A additions: the lease lineage ID, the intent derivation and the
     sessionId, parentIncarnation: inc, explicitIntentAt: intent, effective: intent !== null, effectiveBasis: intent === null ? [] : ['explicit'],
     claudeSessionIds: [], firstObservedAt: T0, lastObservedAt: T0,
   });
-  it('derives the intent map from the session rows: the LATEST explicitIntentAt per parent, none for a parent without intent', () => {
-    expect(deriveCoordinatorIntentByParent([session('a', 'g1', T1), session('a', 'g2', T2), session('b', 'g1', null)])).toEqual({ a: T2 });
+  it('derives the intent map from the session rows: one entry per (session, incarnation) with a declaration, none without', () => {
+    expect(deriveCoordinatorIntentByParent([session('a', 'g1', T1), session('a', 'g2', T2), session('b', 'g1', null)]))
+      .toEqual({ [delegationIntentKey('a', 'g1')]: T1, [delegationIntentKey('a', 'g2')]: T2 });
     expect(deriveCoordinatorIntentByParent([])).toEqual({});
+  });
+
+  describe('delegationIntentKey, the one encoder of the intent map\'s key', () => {
+    it('is the length-prefixed pair, the spelling the natural-key map already uses (fixed vector)', () => {
+      expect(delegationIntentKey('lane-a-demo', 'g1')).toBe('11:lane-a-demo2:g1');
+      expect(delegationIntentKey('', '')).toBe('0:0:');
+    });
+    it('cannot collide: a boundary moved between the two parts, or a separator inside one, is a different key', () => {
+      expect(delegationIntentKey('ab', 'c')).not.toBe(delegationIntentKey('a', 'bc'));
+      expect(delegationIntentKey('a:1', 'b')).not.toBe(delegationIntentKey('a', '1:b'));
+      expect(delegationIntentKey('1:a', 'b')).not.toBe(delegationIntentKey('1', 'a:b'));
+      expect(delegationIntentKey('a', 'b')).not.toBe(delegationIntentKey('b', 'a'));
+    });
+    it('measures bytes, not characters, so a multi-byte id stays unambiguous', () => {
+      expect(delegationIntentKey('é', 'g')).toBe('2:é1:g');
+    });
+    it('is never a bare session id: no key of the derived map equals a session id', () => {
+      const rows = [session('a', 'g1', T1), session('b', 'g1', T2)];
+      for (const key of Object.keys(deriveCoordinatorIntentByParent(rows))) expect(rows.map((r) => r.sessionId)).not.toContain(key);
+    });
   });
 
   describe('assertDelegationCheckpointIdentity', () => {
@@ -879,7 +904,11 @@ describe('Task 8A additions: the lease lineage ID, the intent derivation and the
     it('refuses a natural-key map that disagrees with the rows in either direction, and an intent map that disagrees with the sessions', () => {
       expect(code({ ...cp, activityIdsByNaturalKey: {} })).toBe('natural-key-map');
       expect(code({ ...cp, activityIdsByNaturalKey: { ...cp.activityIdsByNaturalKey, '1:x1:y5:agent1:z': ACTIVITY_ID_FROM_EVENT } })).toBe('natural-key-map');
-      expect(code({ ...cp, coordinatorIntentByParent: { 'lane-a-demo': T1 } })).toBe('intent-map');
+      expect(code({ ...cp, coordinatorIntentByParent: { [delegationIntentKey('lane-a-demo', 'g1')]: T1 } })).toBe('intent-map');
+      // …and the old spelling (the bare session id) is no key of the map, even when the rows do carry the declaration.
+      const declared = { ...cp, sessions: [session('lane-a-demo', 'g1', T1)] };
+      expect(code({ ...declared, coordinatorIntentByParent: { [delegationIntentKey('lane-a-demo', 'g1')]: T1 } })).toBe('accepted');
+      expect(code({ ...declared, coordinatorIntentByParent: { 'lane-a-demo': T1 } })).toBe('intent-map');
     });
   });
 });

@@ -14,7 +14,7 @@
 //   W3-M55 (A declares for B; a declaration visible before it is durable) -> 'who may declare' and 'durability' rows
 //   W3-M56 (clear drops another basis; SQLite as the authority)           -> 'clear' and 'SQLite' rows
 import { afterEach, describe, it, expect } from 'vitest';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
@@ -35,6 +35,7 @@ import {
 import {
   COORDINATOR_INTENT_ACTIONS,
   declareCoordinatorIntent,
+  delegationIntentKey,
   deriveCoordinatorIntentByParent,
   emptyDelegationCheckpoint,
   formatDelegationInstant,
@@ -84,7 +85,12 @@ afterEach(async () => {
 interface WorldOptions {
   over?: Partial<Deps>;
   /** A fault-injected applier handed to the route through a stand-in watcher, so an edge can be made to fail. */
-  faults?: { onEdge?: DelegationDurabilityDeps['onEdge']; projection?: (real: DelegationProjectionPort) => DelegationProjectionPort };
+  faults?: {
+    onEdge?: DelegationDurabilityDeps['onEdge'];
+    projection?: (real: DelegationProjectionPort) => DelegationProjectionPort;
+    /** The stand-in watcher the route is handed, built from the applier this world opened (default: one that returns it). */
+    watcher?: (durable: DelegationDurability) => unknown;
+  };
   seeded?: boolean;
 }
 
@@ -116,7 +122,8 @@ async function world(opts: WorldOptions = {}): Promise<World> {
     dir, projection: opts.faults.projection === undefined ? real : opts.faults.projection(real),
     now: () => Date.now(), randomUUID: () => randomUUID(), ...(opts.faults.onEdge === undefined ? {} : { onEdge: opts.faults.onEdge }),
   });
-  const standIn = { delegationApplier: () => Promise.resolve(durable) } as unknown as FleetWatcher;
+  // `stop` is what `buildServer` calls when the app closes.
+  const standIn = { stop: () => undefined, ...((opts.faults.watcher?.(durable) ?? { delegationApplier: () => Promise.resolve(durable) }) as object) } as unknown as FleetWatcher;
   const app = await buildServer(deps, bus, standIn);
   closers.push(() => app.close(), () => durable.close());
   return { home, dir, app, coord, db, durable, watcher: null };
@@ -323,7 +330,8 @@ describe('POST /api/coordinators/:session/intent: set and clear', () => {
     // DURABLE: the checkpoint FILE says it, and so does the map, which equals what the rows derive.
     const cp = onDisk(w);
     expect(rowOf(cp, A.id, GEN1)).toMatchObject({ explicitIntentAt: out.explicitIntentAt, effective: true, effectiveBasis: ['explicit'] });
-    expect(cp.coordinatorIntentByParent).toEqual({ [A.id]: out.explicitIntentAt });
+    expect(cp.coordinatorIntentByParent).toEqual({ [delegationIntentKey(A.id, GEN1)]: out.explicitIntentAt });
+    expect(Object.keys(cp.coordinatorIntentByParent), 'a bare session id is never a key of the map').not.toContain(A.id);
     expect(cp.coordinatorIntentByParent).toEqual(deriveCoordinatorIntentByParent(cp.sessions));
     // …and the lane's own instance holds the same state without a re-read: the route and the lane share ONE applier.
     expect(w.durable.state().checkpoint).toEqual(cp);
@@ -348,7 +356,7 @@ describe('POST /api/coordinators/:session/intent: set and clear', () => {
     const bytes = readFileSync(diskPath(w));
     const second = await declare(w, A.id, bodyOf('set'));
     expect(second.statusCode).toBe(200);
-    expect(second.json()).toMatchObject({ ok: true, changed: false, explicitIntentAt: first.explicitIntentAt, effective: true, projection: 'unchanged' });
+    expect(second.json()).toMatchObject({ ok: true, changed: false, explicitIntentAt: first.explicitIntentAt, effective: true, projection: 'projected' });
     expect(w.durable.state().checkpoint.revision, 'no checkpoint replacement').toBe(revision);
     expect(readFileSync(diskPath(w)).equals(bytes)).toBe(true);
   });
@@ -369,7 +377,7 @@ describe('POST /api/coordinators/:session/intent: set and clear', () => {
     const w = await world();
     const none = await declare(w, A.id, bodyOf('clear'));
     expect(none.statusCode).toBe(200);
-    expect(none.json()).toMatchObject({ ok: true, changed: false, explicitIntentAt: null, effective: false, effectiveBasis: [], projection: 'unchanged' });
+    expect(none.json()).toMatchObject({ ok: true, changed: false, explicitIntentAt: null, effective: false, effectiveBasis: [], projection: 'projected' });
     expect(existsSync(diskPath(w)), 'a clear with nothing to clear writes no checkpoint').toBe(false);
     await declare(w, A.id, bodyOf('set'));
     await declare(w, A.id, bodyOf('clear'));
@@ -392,15 +400,50 @@ describe('POST /api/coordinators/:session/intent: set and clear', () => {
     expect(onDisk(w).coordinatorIntentByParent).toEqual({});
   });
 
-  it('keeps an earlier incarnation\'s declaration in the map when the current one is cleared (the map is derived from the rows)', async () => {
+  it('keys the map by (session, incarnation): clearing the current one leaves a historical declaration exactly as it is', async () => {
     const w = await world();
     const earlier = '2026-10-14T09:10:00.000Z';
     await plant(w, [row(A.id, OLD_GEN, { explicitIntentAt: earlier, effective: true, effectiveBasis: ['explicit'] })]);
-    await declare(w, A.id, bodyOf('set'));
+    const set = (await declare(w, A.id, bodyOf('set'))).json();
     const mid = onDisk(w);
-    expect(mid.coordinatorIntentByParent[A.id], 'the latest of the incarnations').toBe(rowOf(mid, A.id, GEN1)!.explicitIntentAt);
+    expect(mid.coordinatorIntentByParent, 'one entry per incarnation, neither standing for the other')
+      .toEqual({ [delegationIntentKey(A.id, OLD_GEN)]: earlier, [delegationIntentKey(A.id, GEN1)]: set.explicitIntentAt });
+    expect(Object.keys(mid.coordinatorIntentByParent)).not.toContain(A.id);
     await declare(w, A.id, bodyOf('clear'));
-    expect(onDisk(w).coordinatorIntentByParent).toEqual({ [A.id]: earlier });
+    expect(onDisk(w).coordinatorIntentByParent, 'clear removes only the current incarnation\'s key')
+      .toEqual({ [delegationIntentKey(A.id, OLD_GEN)]: earlier });
+  });
+
+  it('a NEW incarnation does not inherit a historical declaration: it starts undeclared, and clearing it creates nothing', async () => {
+    const w = await world();
+    const earlier = '2026-10-14T09:10:00.000Z';
+    await plant(w, [row(A.id, OLD_GEN, { explicitIntentAt: earlier, effective: true, effectiveBasis: ['explicit', 'run-owner'] })]);
+    const cleared = await declare(w, A.id, bodyOf('clear'));
+    expect(cleared.json()).toMatchObject({ ok: true, changed: false, incarnation: GEN1, explicitIntentAt: null, effective: false, effectiveBasis: [] });
+    expect(rowOf(w.durable.state().checkpoint, A.id, GEN1), 'the new incarnation got no row, and so no inherited intent').toBeUndefined();
+    expect(w.durable.state().checkpoint.coordinatorIntentByParent).toEqual({ [delegationIntentKey(A.id, OLD_GEN)]: earlier });
+    // Its own declaration is its own: the historical row and entry stay as they were.
+    const set = (await declare(w, A.id, bodyOf('set'))).json();
+    expect(set).toMatchObject({ changed: true, effectiveBasis: ['explicit'] });
+    expect(set.explicitIntentAt).not.toBe(earlier);
+    expect(rowOf(onDisk(w), A.id, OLD_GEN)).toMatchObject({ explicitIntentAt: earlier, effectiveBasis: ['explicit', 'run-owner'] });
+  });
+
+  it('a recreated session id inherits nothing: a declaration made under the old incarnation stays historical', async () => {
+    const w = await world();
+    const first = (await declare(w, A.id, bodyOf('set'))).json();
+    expect(first.incarnation).toBe(GEN1);
+    // `forget`, then the id is reused: the registry row comes back with a fresh generation.
+    seed(w.home, A, GEN2);
+    const again = await declare(w, A.id, bodyOf('clear'));
+    expect(again.json()).toMatchObject({ ok: true, changed: false, incarnation: GEN2, explicitIntentAt: null, effective: false });
+    const cp = w.durable.state().checkpoint;
+    expect(rowOf(cp, A.id, GEN2)).toBeUndefined();
+    expect(cp.coordinatorIntentByParent).toEqual({ [delegationIntentKey(A.id, GEN1)]: first.explicitIntentAt });
+    const recreated = (await declare(w, A.id, bodyOf('set'))).json();
+    expect(recreated).toMatchObject({ changed: true, incarnation: GEN2 });
+    expect(Object.keys(onDisk(w).coordinatorIntentByParent).sort())
+      .toEqual([delegationIntentKey(A.id, GEN1), delegationIntentKey(A.id, GEN2)].sort());
   });
 
   it('declares for each session separately: A\'s set leaves B\'s row alone', async () => {
@@ -411,7 +454,7 @@ describe('POST /api/coordinators/:session/intent: set and clear', () => {
     const cp = onDisk(w);
     expect(rowOf(cp, A.id, GEN1)!.explicitIntentAt).toBeNull();
     expect(rowOf(cp, B.id, GEN1)!.explicitIntentAt).toMatch(INSTANT);
-    expect(Object.keys(cp.coordinatorIntentByParent)).toEqual([B.id]);
+    expect(Object.keys(cp.coordinatorIntentByParent)).toEqual([delegationIntentKey(B.id, GEN1)]);
   });
 });
 
@@ -498,6 +541,79 @@ describe('POST /api/coordinators/:session/intent: durability', () => {
   });
 });
 
+describe('POST /api/coordinators/:session/intent: the lane, the incarnation, the projection (fix round 1)', () => {
+  it.each<[string, () => unknown]>([
+    ['resolves null (the open has not happened)', () => ({ delegationApplier: () => Promise.resolve(null) })],
+    ['rejects (the open failed)', () => ({ delegationApplier: () => Promise.reject(new Error('the open failed')) })],
+  ])('answers 503 not-ready, never a silent success, when the lane\'s applier %s, and writes nothing', async (_name, watcher) => {
+    const w = await world({ faults: { watcher } });
+    const res = await declare(w, A.id, bodyOf('set'));
+    expect(res.statusCode).toBe(503);
+    expect(res.json()).toMatchObject({ ok: false, error: 'not-ready' });
+    expect(existsSync(diskPath(w)), 'no checkpoint was written').toBe(false);
+    expect(w.coord.readDelegationProjection().sessions, 'nothing was projected').toEqual([]);
+  });
+
+  it('answers 409 incarnation-changed when the generation moves during the queued write: the declaration stays on the incarnation it was made for', async () => {
+    let move: (() => void) | null = null;
+    const w = await world({ faults: { onEdge: (e, when) => { if (e === 'checkpoint-write' && when === 'before') { move?.(); move = null; } } } });
+    move = () => seed(w.home, A, GEN2);
+    const res = await declare(w, A.id, bodyOf('set'));
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toMatchObject({ ok: false, error: 'incarnation-changed', incarnation: GEN1 });
+    expect(res.json().detail).toContain('previous incarnation');
+    // Nothing is undone: the row of the incarnation it landed on is the truth for that incarnation.
+    const landed = onDisk(w);
+    expect(rowOf(landed, A.id, GEN1)!.explicitIntentAt).toMatch(INSTANT);
+    expect(rowOf(landed, A.id, GEN2), 'the new incarnation got nothing').toBeUndefined();
+    // The retry declares for the new incarnation and leaves the old one exactly as it was.
+    const retry = await declare(w, A.id, bodyOf('set'));
+    expect(retry.json()).toMatchObject({ ok: true, changed: true, incarnation: GEN2 });
+    expect(rowOf(onDisk(w), A.id, GEN1)).toEqual(rowOf(landed, A.id, GEN1));
+  });
+
+  it('answers 409 incarnation-changed too when the generation file is gone after the write', async () => {
+    let move: (() => void) | null = null;
+    const w = await world({ faults: { onEdge: (e, when) => { if (e === 'checkpoint-write' && when === 'before') { move?.(); move = null; } } } });
+    move = () => rmSync(path.join(w.home, '.cc-sessions', `${A.id}.generation`));
+    const res = await declare(w, A.id, bodyOf('set'));
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toMatchObject({ ok: false, error: 'incarnation-changed' });
+    expect(rowOf(onDisk(w), A.id, GEN1)!.explicitIntentAt).toMatch(INSTANT);
+  });
+
+  it('does not call a re-read it cannot measure a move: an unreadable generation after the write is not evidence', async () => {
+    let move: (() => void) | null = null;
+    const w = await world({ faults: { onEdge: (e, when) => { if (e === 'checkpoint-write' && when === 'before') { move?.(); move = null; } } } });
+    move = () => writeFileSync(path.join(w.home, '.cc-sessions', `${A.id}.generation`), 'not-a-generation');
+    const res = await declare(w, A.id, bodyOf('set'));
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ ok: true, changed: true, incarnation: GEN1 });
+  });
+
+  it('a retry after a stale answer repairs the projection and says so: a no-op attempts the repair too', async () => {
+    let broken = true;
+    const w = await world({
+      faults: {
+        projection: (real) => ({
+          project: (cp) => { if (broken) throw new Error('the database is gone'); real.project(cp); },
+          insertEvents: real.insertEvents, eventStats: real.eventStats,
+        }),
+      },
+    });
+    const first = (await declare(w, A.id, bodyOf('set'))).json();
+    expect(first).toMatchObject({ ok: true, changed: true, projection: 'stale' });
+    // Still broken: the retry writes nothing, attempts the repair, and reports what is true.
+    const still = await declare(w, A.id, bodyOf('set'));
+    expect(still.json()).toMatchObject({ ok: true, changed: false, projection: 'stale' });
+    expect(w.coord.readDelegationProjection().sessions).toEqual([]);
+    broken = false;
+    const retry = await declare(w, A.id, bodyOf('set'));
+    expect(retry.json()).toMatchObject({ ok: true, changed: false, explicitIntentAt: first.explicitIntentAt, projection: 'projected' });
+    expect(rowOf(w.coord.readDelegationProjection(), A.id, GEN1)!.explicitIntentAt, 'the no-op repaired SQLite').toBe(first.explicitIntentAt);
+  });
+});
+
 // ── SQLite is not the authority (W3-M56, the second half) ────────────────────────────────────────────────────────────────
 
 describe('POST /api/coordinators/:session/intent: SQLite is repairable output', () => {
@@ -564,7 +680,7 @@ describe('declareCoordinatorIntent', () => {
   it('set on an empty checkpoint creates the row the intent door owns, and the map that agrees with it', () => {
     const out = declareCoordinatorIntent(deepFreeze(cp([])), req('set'));
     expect(out.sessions).toEqual([row(A.id, GEN1, { explicitIntentAt: AT, effective: true, effectiveBasis: ['explicit'], firstObservedAt: AT, lastObservedAt: AT })]);
-    expect(out.coordinatorIntentByParent).toEqual({ [A.id]: AT });
+    expect(out.coordinatorIntentByParent).toEqual({ [delegationIntentKey(A.id, GEN1)]: AT });
   });
 
   it('is pure: the input is frozen and comes back untouched', () => {
@@ -610,7 +726,19 @@ describe('declareCoordinatorIntent', () => {
     const out = declareCoordinatorIntent(cp([old, other]), req('set'));
     expect(rowOf(out, A.id, OLD_GEN)).toEqual(old);
     expect(rowOf(out, B.id, GEN1)).toEqual(other);
-    expect(out.coordinatorIntentByParent).toEqual({ [A.id]: AT, [B.id]: '2026-10-14T09:20:00.000Z' });
+    expect(out.coordinatorIntentByParent).toEqual({
+      [delegationIntentKey(A.id, OLD_GEN)]: '2026-10-14T09:10:00.000Z', [delegationIntentKey(A.id, GEN1)]: AT,
+      [delegationIntentKey(B.id, GEN1)]: '2026-10-14T09:20:00.000Z',
+    });
+  });
+
+  it('a new incarnation inherits nothing: clearing it leaves a historical declaration, and the map, exactly as they were', () => {
+    const old = row(A.id, OLD_GEN, { explicitIntentAt: '2026-10-14T09:10:00.000Z', effective: true, effectiveBasis: ['explicit'] });
+    const start = cp([old]);
+    expect(declareCoordinatorIntent(start, req('clear'))).toEqual(start);
+    const set = declareCoordinatorIntent(start, req('set'));
+    expect(set.coordinatorIntentByParent).toEqual({ [delegationIntentKey(A.id, OLD_GEN)]: '2026-10-14T09:10:00.000Z', [delegationIntentKey(A.id, GEN1)]: AT });
+    expect(declareCoordinatorIntent(set, req('clear')).coordinatorIntentByParent).toEqual({ [delegationIntentKey(A.id, OLD_GEN)]: '2026-10-14T09:10:00.000Z' });
   });
 
   it('refuses an instant that is not canonical', () => {

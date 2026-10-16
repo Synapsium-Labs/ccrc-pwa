@@ -27,6 +27,9 @@ import { SESSION_COOKIE, serializeCookie } from '../src/auth/cookie.js';
 import { SessionStore } from '../src/auth/sessions.js';
 import { hashLine, type ScryptParams } from '../src/auth/secret.js';
 import type { PtyLike } from '../src/pty.js';
+import type { FleetWatcher } from '../src/watch.js';
+import { openCoordDb } from '../src/coord/db.js';
+import { CoordStore } from '../src/coord/store.js';
 import { testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 
@@ -149,6 +152,10 @@ interface AppOpts {
   secretText?: string;
   generation?: number;
   cookieSecure?: boolean;
+  /** Give the server a coordination database (in the fixture home) — the routes that answer 501 without one then run their own gates. */
+  coord?: boolean;
+  /** A stand-in watcher, as `buildServer`'s third argument. */
+  watcher?: unknown;
 }
 
 const openApp = async (opts: AppOpts = {}): Promise<{ app: FastifyInstance; home: string }> => {
@@ -173,8 +180,9 @@ const openApp = async (opts: AppOpts = {}): Promise<{ app: FastifyInstance; home
     // the thing this file wants to measure.
     mailToken: BOX_TOKEN,
     spawnPty: stubPty,
+    ...(opts.coord === true ? { coord: new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db'))) } : {}),
   };
-  const app = await buildServer(deps);
+  const app = await buildServer(deps, undefined, opts.watcher as FleetWatcher | undefined);
   await app.ready();
   return { app, home };
 };
@@ -754,13 +762,28 @@ describe('the coordinator intent door: exempt from the session gate, and not for
     }
   });
 
-  it('with the gate ARMED, a cookieless caller reaches the route (the gate refuses nothing); the ROUTE then asks for its own token', async () => {
-    const w = await openApp(); app = w.app;
-    const res = await app.inject({ method: 'POST', url: '/api/coordinators/demo-ws/intent', payload: { action: 'set', byId: 'demo-ws', byUuid: 'u' } });
-    expect(gateRefused(res), 'the session gate answered a route that is EXEMPT').toBe(false);
-    // This server has no coordination database, so the route answers 501 before it asks for the token.
-    expect([501, 401]).toContain(res.statusCode);
-    expect(res.body).not.toContain('no-session');
+  it('with the gate ARMED and the lane configured, a missing or wrong token gets the ROUTE\'s own 401 (no gate verdict), and nothing is touched', async () => {
+    let applierCalls = 0;
+    const watcher = { stop: () => undefined, delegationApplier: () => { applierCalls++; return Promise.resolve(null); } };
+    const w = await openApp({ coord: true, watcher }); app = w.app;
+    mkdirSync(path.join(w.home, '.cc-sessions'), { recursive: true });         // an EMPTY registry: a sender with no row is unknown
+    const payload = { action: 'set', byId: 'demo-ws', byUuid: 'u' };
+    for (const headers of [{}, { 'x-ccrc-mail-token': 'not-the-box-token' }] as Array<Record<string, string>>) {
+      const res = await app.inject({ method: 'POST', url: '/api/coordinators/demo-ws/intent', headers, payload });
+      expect(res.statusCode, JSON.stringify(headers)).toBe(401);
+      const body = JSON.parse(res.body) as Record<string, unknown>;
+      expect(body.error).toBe('unauthenticated');
+      expect(body, 'the SESSION gate answered a route that is EXEMPT from it').not.toHaveProperty('verdict');
+      expect(gateRefused(res)).toBe(false);
+    }
+    expect(applierCalls, 'a refused token reached the lane').toBe(0);
+    // With the box token and no cookie the gate lets the call through to the route's own checks (this fixture home has no registry
+    // row for the sender, so attribution refuses it before the lane is reached).
+    const ok = await app.inject({ method: 'POST', url: '/api/coordinators/demo-ws/intent', headers: { 'x-ccrc-mail-token': BOX_TOKEN }, payload });
+    expect(gateRefused(ok)).toBe(false);
+    expect(ok.statusCode).toBe(403);
+    expect(JSON.parse(ok.body)).toMatchObject({ ok: false, error: 'unknown-sender' });
+    expect(applierCalls).toBe(0);
   });
 });
 

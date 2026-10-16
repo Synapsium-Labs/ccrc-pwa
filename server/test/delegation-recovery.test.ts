@@ -21,6 +21,7 @@ import {
   assertDelegationCheckpointIdentity,
   canonicalDelegationJson,
   delegationSha256Hex,
+  delegationIntentKey,
   deriveDelegationActivityId,
   deriveDelegationLineageId,
   emptyDelegationCheckpoint,
@@ -439,10 +440,12 @@ describe('the checkpoint identity invariants (one pure helper, at build and at r
     expect(failureCode(() => assertDelegationCheckpointIdentity({ ...cp, activities: [act, act] }))).toBe('natural-key-map');
   });
   it('refuses an intent map that disagrees with the session rows\' explicitIntentAt', () => {
-    expect(failureCode(() => assertDelegationCheckpointIdentity({ ...cp, coordinatorIntentByParent: { [PARENT]: T(5) } }))).toBe('intent-map');
+    expect(failureCode(() => assertDelegationCheckpointIdentity({ ...cp, coordinatorIntentByParent: { [delegationIntentKey(PARENT, INC)]: T(5) } }))).toBe('intent-map');
     const withIntent = { ...cp, sessions: cp.sessions.map((s) => ({ ...s, explicitIntentAt: T(5) })) };
     expect(failureCode(() => assertDelegationCheckpointIdentity(withIntent))).toBe('intent-map');
-    expect(failureCode(() => assertDelegationCheckpointIdentity({ ...withIntent, coordinatorIntentByParent: { [PARENT]: T(5) } }))).toBe('accepted');
+    expect(failureCode(() => assertDelegationCheckpointIdentity({ ...withIntent, coordinatorIntentByParent: { [delegationIntentKey(PARENT, INC)]: T(5) } }))).toBe('accepted');
+    // The map is keyed by (session, incarnation): the bare session id is no key at all, so the old spelling is refused.
+    expect(failureCode(() => assertDelegationCheckpointIdentity({ ...withIntent, coordinatorIntentByParent: { [PARENT]: T(5) } }))).toBe('intent-map');
   });
 
   describe('each lease\'s opening lineage row (hand-off 1 from the Task 7 re-review)', () => {
@@ -736,7 +739,7 @@ describe('recoverDelegationState: reconstruction phases (O2)', () => {
       ['a non-canonical checkpoint', new TextEncoder().encode(`${uncanonical(new TextDecoder().decode(goodBytes).trimEnd())}\n`), records, 'checkpoint-decode'],
       ['an activity whose ID is not the derivation from its identity journalId', corrupt((c) => { (c['activities'] as Array<Record<string, unknown>>)[0]!['identityJournalId'] = eid(99); }), records, 'checkpoint-validate'],
       ['a natural-key map with an orphan mapping', corrupt((c) => { (c['activityIdsByNaturalKey'] as Record<string, string>)[encodeDelegationNaturalKey(keyOf(Y))] = '1'.repeat(64); }), records, 'checkpoint-validate'],
-      ['an intent map the session rows do not say', corrupt((c) => { c['coordinatorIntentByParent'] = { [PARENT]: T(9) }; }), records, 'checkpoint-validate'],
+      ['an intent map the session rows do not say', corrupt((c) => { c['coordinatorIntentByParent'] = { [delegationIntentKey(PARENT, INC)]: T(9) }; }), records, 'checkpoint-validate'],
       ['a journal with a sequence gap', null, [records[0]!, records[1]!, records[3]!, records[4]!], 'journal-validate'],
       ['a journal with a broken chain (a record from another history)', null, [records[0]!, ...evidenceChain([sessionStart(2)], 2, 'd'.repeat(64)), records[2]!], 'journal-validate'],
       ['a checkpoint ahead of its journal (the journal was lost)', goodBytes, [], 'journal-validate'],
@@ -1769,14 +1772,14 @@ describe('checkpoint-only changes, and wave 3 never removes a session (hand-off 
     const dur = await h.open();
     await dur.applyAccepted(batch([sessionStart(1)]));
     const out = await dur.applyCheckpointChange((cp) => ({
-      ...cp, coordinatorIntentByParent: { [PARENT]: T(5) },
+      ...cp, coordinatorIntentByParent: { [delegationIntentKey(PARENT, INC)]: T(5) },
       sessions: cp.sessions.map((s) => ({ ...s, explicitIntentAt: T(5), effective: true, effectiveBasis: ['explicit' as const] })),
     }));
     expect(out.durable).toBe(true);
     expect(dur.state().checkpoint.revision).toBe(2);
     expect(dur.state().checkpoint.appliedJournalSequence).toBe(1);
     const fresh = await harness({ dir: h.dir }).open();
-    expect(fresh.state().checkpoint.coordinatorIntentByParent).toEqual({ [PARENT]: T(5) });
+    expect(fresh.state().checkpoint.coordinatorIntentByParent).toEqual({ [delegationIntentKey(PARENT, INC)]: T(5) });
     await expect(dur.applyCheckpointChange((cp) => ({ ...cp, coordinatorIntentByParent: {} }))).rejects.toMatchObject({ code: 'intent-map' });
   });
 

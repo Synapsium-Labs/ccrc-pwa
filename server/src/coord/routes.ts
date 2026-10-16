@@ -24,7 +24,7 @@ import { renderEnvelope } from './envelope.js';
 import { MAIL_TOKEN_HEADER, checkMailToken } from './token.js';
 import { childReclaimGenerationRead } from './childReclaim.js';
 import { DelegationCheckpointError, type DelegationDurability } from './delegation-checkpoint.js';
-import { COORDINATOR_INTENT_ACTIONS, declareCoordinatorIntent, formatDelegationInstant } from './delegation-model.js';
+import { COORDINATOR_INTENT_ACTIONS, COORDINATOR_INTENT_REFUSALS, declareCoordinatorIntent, formatDelegationInstant } from './delegation-model.js';
 import { readParentGenerations, settleParentIncarnations } from './gitref.js';
 import { NO_SESSION, type GateDecision } from '../auth/gate.js';
 import { verifyDone, type DoneClaim } from './fingerprint.js';
@@ -4081,7 +4081,9 @@ export function registerCoordRoutes(
    * THE ORDER IS THE DESIGN, cheapest refusal first: the lane is configured (501), the box token (401), the body is exactly
    * `{action, byId, byUuid}` and `byId` is the session in the path (400, 403), the registry proves `byId` holds `byUuid`
    * (the claim lanes' attribution gate), the session's CURRENT incarnation is measured (`$REG/<id>.generation`, read before and
-   * after, ruling R38), and only then the declaration is made DURABLE through the lane's own checkpoint door. Attribution is
+   * after, ruling R38), and only then the declaration is made DURABLE through the lane's own checkpoint door. The generation is read
+   * once more when that write resolves: a proven move answers 409 `incarnation-changed` (the declaration landed on the previous
+   * incarnation, nothing is undone, the retry declares for the new one). Attribution is
    * freshness, not forgery-proofness (`requireAttribution`'s own honesty): a session declares for itself, and the single UNIX
    * user means a determined one could present a neighbour's pair.
    *
@@ -4089,9 +4091,9 @@ export function registerCoordRoutes(
    * delegation lane opened (`watcher.delegationApplier()`); a second instance on the directory would race its journal, so this file
    * opens none. The change rebuilds the row and `coordinatorIntentByParent` together (`declareCoordinatorIntent`), and the answer is
    * sent only after the checkpoint is durably replaced. Nothing writes SQLite directly: the projection is the lane's repairable
-   * output, so a projection that fails is repaired once here and, if it stays broken, reported as `stale` while the declaration
-   * stands in the checkpoint. A failed application answers 503 and says nothing landed that it can confirm; `set` and `clear` are
-   * idempotent, so the retry is safe.
+   * output, so a projection that did not land (and any call that wrote nothing) is repaired once here and, if it stays broken,
+   * reported as `stale` while the declaration stands in the checkpoint. A lane with no applier answers 503 `not-ready`; a failed
+   * application answers 503 and says nothing landed that it can confirm; `set` and `clear` are idempotent, so the retry is safe.
    */
   app.post('/api/coordinators/:session/intent', async (req, reply) => {
     if (!deps.coord || watcher === undefined) return notConfigured(reply);
@@ -4142,14 +4144,25 @@ export function registerCoordRoutes(
           : 'the declaration is not confirmed durable; set and clear are idempotent, so retry' });
     }
 
-    // Durable now. SQLite is repairable output: a projection that failed is repaired once, and if that fails too the answer says so
+    // Durable now (or already so). The incarnation is read once more: the declaration was made for the one measured BEFORE the queued
+    // write, and a session that was swapped or recreated meanwhile has a new one. Only a PROVEN move counts (a different value, or no
+    // generation at all); a re-read that cannot be measured is no evidence, and the answer then stands. Nothing is undone: the row
+    // of the incarnation it landed on is the truth for that incarnation.
+    const after = await generationOf(byId);
+    const moved = after.kind === 'absent' || (after.kind === 'value' && after.v !== incarnation.incarnation);
+
+    // SQLite is repairable output, and a call that wrote nothing still attempts the repair (queued, and cheap when nothing drifted),
+    // so a retry after a stale answer heals it and the answer reports what is true. If the repair fails too, the answer says so
     // while the checkpoint keeps the declaration.
-    let projection: 'projected' | 'stale' | 'unchanged' = 'unchanged';
-    if (applied.durable) {
-      projection = applied.projection.status === 'projected' ? 'projected' : 'stale';
-      if (projection === 'stale') {
-        try { projection = (await durable.repairProjection()) === null ? 'stale' : 'projected'; } catch { projection = 'stale'; }
-      }
+    let projection: 'projected' | 'stale' = applied.durable && applied.projection.status === 'projected' ? 'projected' : 'stale';
+    if (projection === 'stale') {
+      try { projection = (await durable.repairProjection()) === null ? 'stale' : 'projected'; } catch { projection = 'stale'; }
+    }
+    if (moved) {
+      const changedWord: keyof typeof COORDINATOR_INTENT_REFUSALS = 'incarnation-changed';
+      return reply.code(409).send({ ok: false, error: changedWord, incarnation: incarnation.incarnation, projection,
+        detail: `the registry incarnation of ${byId} changed while the declaration was queued: it landed on the previous incarnation ` +
+          `(${incarnation.incarnation}) and the new one has none — retry to declare for the new one` });
     }
     const mine = applied.state.checkpoint.sessions.find((s) => s.sessionId === byId && s.parentIncarnation === incarnation.incarnation);
     return reply.code(200).send({

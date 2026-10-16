@@ -383,12 +383,12 @@ export const DELEGATION_MODEL_REFUSALS: Readonly<Record<DelegationModelRefusal, 
 };
 
 /** Every kebab word this file spells, for `mail-routes.test.ts`'s scan of `server/src/coord`: the model's refusals, the journal
- *  entry kinds, the pruning hold reasons, and two words that belong to `shared/api.ts` (`bash-worktree`, a source kind, and
+ *  entry kinds, the pruning hold reasons, the intent route's one answer of its own, and two words that belong to `shared/api.ts` (`bash-worktree`, a source kind, and
  *  `not-due`, a cleanup state), read from there and never re-spelled. Derived from tables, never a list, so a word added to a
  *  union is admitted and a typo is not. None is a mail rejection or a run refusal. */
 export function isDelegationModelKebab(v: string): boolean {
   const own = (o: object): boolean => Object.prototype.hasOwnProperty.call(o, v);
-  return own(DELEGATION_MODEL_REFUSALS) || own(DELEGATION_JOURNAL_ENTRY_KINDS) || own(DELEGATION_PRUNING_HOLD_REASONS)
+  return own(DELEGATION_MODEL_REFUSALS) || own(DELEGATION_JOURNAL_ENTRY_KINDS) || own(DELEGATION_PRUNING_HOLD_REASONS) || own(COORDINATOR_INTENT_REFUSALS)
     || (DELEGATION_ACTIVITY_SOURCE_KINDS as readonly string[]).includes(v) || (DELEGATION_CLEANUP_STATES as readonly string[]).includes(v)
     || isDelegationHealthKebab(v);
 }
@@ -1061,23 +1061,41 @@ export function sortedProjectionRows(rows: DelegationProjectionRows): Delegation
 }
 
 /**
- * The coordinator-intent map the session rows say: per parent session ID, the LATEST `explicitIntentAt` when its incarnations
- * disagree. The one statement of what `coordinatorIntentByParent` must agree with, shared by the drift view above and by
- * `assertDelegationCheckpointIdentity`, so the key spelling is changed in one place if Task 15 changes it.
+ * THE KEY OF `coordinatorIntentByParent`, spelled once: a parent is (ccd session id, registry incarnation) (spec §5.1), so the
+ * map holds one entry per PAIR, never one per session id. The encoding is `lengthPrefixed(sessionId) + lengthPrefixed(incarnation)`,
+ * the spelling `encodeDelegationNaturalKey` already gives the persisted `activityIdsByNaturalKey`: each part is its UTF-8 byte
+ * count, a colon, then the part, so the concatenation parses back into exactly one pair whatever either string holds. A delimiter
+ * join cannot say that (ids may hold `-`, `_`, `.`, and a recreated id's incarnation is a free string), and a JSON array would
+ * spell the same facts with escapes. The key is never a bare session id (it starts with a digit and a colon, and ids are not that
+ * shape), so a map written under the old session-id-only spelling is refused by the validator rather than half-read.
+ *
+ * Every writer and reader of the map goes through this function: `deriveCoordinatorIntentByParent`, the validator behind it, the
+ * intent route's `declareCoordinatorIntent`, and the tests. Nothing else spells a key.
+ */
+export function delegationIntentKey(sessionId: string, parentIncarnation: string): string {
+  return lengthPrefixed(sessionId) + lengthPrefixed(parentIncarnation);
+}
+
+/**
+ * The coordinator-intent map the session rows say: one entry per (session id, incarnation) whose row carries an
+ * `explicitIntentAt`, keyed by `delegationIntentKey`. A declaration belongs to the incarnation that made it: a later incarnation
+ * of the same id inherits none (its own entry is its own), and clearing one incarnation removes only its key. The rows are unique
+ * by that pair, so there is nothing to fold. This is the one statement of what `coordinatorIntentByParent` must agree with, shared
+ * by the drift view above and by `assertDelegationCheckpointIdentity`.
  */
 export function deriveCoordinatorIntentByParent(sessions: readonly DelegationSessionRow[]): Record<string, string> {
-  const intent = new Map<string, string>();
-  for (const s of sessions) {
-    if (s.explicitIntentAt === null) continue;
-    const seen = intent.get(s.sessionId);
-    if (seen === undefined || s.explicitIntentAt > seen) intent.set(s.sessionId, s.explicitIntentAt);
-  }
-  return Object.fromEntries(intent);
+  return Object.fromEntries(sessions.flatMap((s): Array<[string, string]> =>
+    (s.explicitIntentAt === null ? [] : [[delegationIntentKey(s.sessionId, s.parentIncarnation), s.explicitIntentAt]])));
 }
 
 /** What a session can say about its own coordinator intent. Declared once: the intent route reads it, and so does its test. */
 export const COORDINATOR_INTENT_ACTIONS = ['set', 'clear'] as const;
 export type CoordinatorIntentAction = (typeof COORDINATOR_INTENT_ACTIONS)[number];
+
+/** The one answer of the intent route that no vocabulary already admitted spells: the session's incarnation moved while the
+ *  declaration was queued, so it landed on the previous one. A TOTAL table (read by `isDelegationModelKebab`, so the route's literal
+ *  is admitted and a typo is not). A refusal of the request, never of the checkpoint: nothing is undone. */
+export const COORDINATOR_INTENT_REFUSALS: Readonly<Record<'incarnation-changed', true>> = { 'incarnation-changed': true };
 
 export interface CoordinatorIntentRequest {
   action: CoordinatorIntentAction;
@@ -1104,8 +1122,10 @@ export interface CoordinatorIntentRequest {
  *            `retained-lineage` stay, and so does the effective identity they give. The row stays, because wave 3 never removes a
  *            session from the checkpoint. A clear for a session with no row creates none.
  *
- * `coordinatorIntentByParent` is rebuilt from the rows by `deriveCoordinatorIntentByParent`, the one statement of its key and its
- * value, in the same checkpoint; the validator refuses a map that disagrees with the rows.
+ * `coordinatorIntentByParent` is rebuilt from the rows by `deriveCoordinatorIntentByParent`, the one statement of its key
+ * (`delegationIntentKey`, one entry per (session, incarnation)) and its value, in the same checkpoint; the validator refuses a map
+ * that disagrees with the rows. So `set` adds only the current incarnation's key, `clear` removes only that key, and a
+ * historical incarnation's entry stays exactly as it was.
  */
 export function declareCoordinatorIntent(
   checkpoint: DeepReadonly<DelegationCheckpointV1>, request: CoordinatorIntentRequest,
@@ -1135,8 +1155,7 @@ export function declareCoordinatorIntent(
 /**
  * Assembles the checkpoint a set of PROJECTED rows stands for. Only what the rows can say is filled in:
  *   - `activityIdsByNaturalKey` is derived from the activity rows (each carries its own natural key);
- *   - `coordinatorIntentByParent` is derived from the session rows' `explicitIntentAt`, the LATEST one per parent when its
- *     incarnations disagree;
+ *   - `coordinatorIntentByParent` is derived from the session rows' `explicitIntentAt`, one entry per (session, incarnation);
  *   - everything the checkpoint alone holds — the revision and the applied-journal anchor, the bucket cursors, the
  *     observation intervals, the pruning holds — comes back empty, zero or null. NONE OF THAT IS EVER READ BACK AS
  *     AUTHORITY: the round trip through SQLite is a drift check, not a read path.

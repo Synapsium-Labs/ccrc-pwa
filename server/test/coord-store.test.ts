@@ -29,7 +29,7 @@ import { mkTmp } from './tmpHelpers.js';
 import { okRun, okRuns, okSiblings } from './coordReadHelpers.js';
 import type { DatabaseSync } from 'node:sqlite';
 import {
-  DelegationModelError, delegationActivityCodec, delegationAttemptCodec, delegationEventCodec, delegationLeaseCodec, delegationLineageCodec,
+  DelegationModelError, delegationActivityCodec, delegationAttemptCodec, delegationEventCodec, delegationIntentKey, delegationLeaseCodec, delegationLineageCodec,
   delegationSessionCodec, delegationSha256Hex, deriveDelegationActivityId, emptyDelegationCheckpoint,
   encodeDelegationNaturalKey, formatDelegationInstant, projectionViewOfDelegationCheckpoint,
   type DelegationActivityRow, type DelegationAttemptRow, type DelegationCheckpointV1, type DelegationEventRow,
@@ -879,7 +879,10 @@ describe('CoordStore: the delegation projection (delegation broker wave 3, Task 
     return {
       v: 1, revision: 3, appliedJournalSequence: 6, appliedJournalId: jid(6), appliedJournalDigest: delegationSha256Hex('digest-6'),
       activityIdsByNaturalKey: Object.fromEntries(activities.map((a) => [encodeDelegationNaturalKey(a), a.activityId])),
-      coordinatorIntentByParent: variant === 0 ? { 'lane-a-demo': at(10) } : { 'lane-a-demo': at(11), 'lane-b-demo': at(12) },
+      // One entry per (session, incarnation) that carries a declaration, through the model's one encoder.
+      coordinatorIntentByParent: variant === 0
+        ? { [delegationIntentKey('lane-a-demo', 'g1')]: at(10), [delegationIntentKey('lane-a-demo', 'g2')]: at(10) }
+        : { [delegationIntentKey('lane-a-demo', 'g1')]: at(11), [delegationIntentKey('lane-a-demo', 'g2')]: at(11), [delegationIntentKey('lane-b-demo', 'g1')]: at(12) },
       sessions: [
         { sessionId: 'lane-a-demo', parentIncarnation: 'g1', explicitIntentAt: variant === 0 ? at(10) : at(11), effective: variant === 0,
           effectiveBasis: variant === 0 ? ['explicit', 'delegation-inferred'] : ['run-owner'],
@@ -1017,7 +1020,7 @@ describe('CoordStore: the delegation projection (delegation broker wave 3, Task 
     const read = s.readDelegationProjection();
     expect(read).toEqual(projectionViewOfDelegationCheckpoint(cp));
     // The same facts, spelled out, so the comparison above is not the only witness:
-    expect(read.coordinatorIntentByParent).toEqual({ 'lane-a-demo': at(10) });
+    expect(read.coordinatorIntentByParent).toEqual({ [delegationIntentKey('lane-a-demo', 'g1')]: at(10), [delegationIntentKey('lane-a-demo', 'g2')]: at(10) });
     expect(Object.values(read.activityIdsByNaturalKey).sort()).toEqual(cp.activities.map((a) => a.activityId).sort());
     expect(read.leases.map((l) => l.leaseId)).toEqual(cp.leases.map((l) => l.leaseId).sort());
     const l2 = read.leases.find((l) => l.creationBase === 'abc123')!;
@@ -1175,12 +1178,12 @@ describe('CoordStore: the delegation projection (delegation broker wave 3, Task 
   it('SQLite never invents intent: deleting the rows and reprojecting restores it from the checkpoint, and clearing it in the checkpoint clears it', () => {
     const { s, cp, fixture: fx } = setup();
     s.projectDelegationCheckpoint(cp);
-    expect(s.readDelegationProjection().coordinatorIntentByParent).toEqual({ 'lane-a-demo': at(10) });
+    expect(s.readDelegationProjection().coordinatorIntentByParent).toEqual({ [delegationIntentKey('lane-a-demo', 'g1')]: at(10), [delegationIntentKey('lane-a-demo', 'g2')]: at(10) });
     // The projection is lost, wholesale (the FK-safe order, by hand).
     for (const t of DELEGATION_TABLES) s.db.prepare(`DELETE FROM ${t}`).run();
     expect(s.readDelegationProjection().coordinatorIntentByParent, 'nothing to read').toEqual({});
     s.projectDelegationCheckpoint(cp);
-    expect(s.readDelegationProjection().coordinatorIntentByParent, 'restored from the checkpoint alone').toEqual({ 'lane-a-demo': at(10) });
+    expect(s.readDelegationProjection().coordinatorIntentByParent, 'restored from the checkpoint alone').toEqual({ [delegationIntentKey('lane-a-demo', 'g1')]: at(10), [delegationIntentKey('lane-a-demo', 'g2')]: at(10) });
     // The checkpoint stops carrying it: the next projection must not remember it.
     const cleared: DelegationCheckpointV1 = {
       ...cp, coordinatorIntentByParent: {}, sessions: cp.sessions.map((x) => ({ ...x, explicitIntentAt: null })),
@@ -1191,7 +1194,8 @@ describe('CoordStore: the delegation projection (delegation broker wave 3, Task 
     // A row someone edited by hand is drift the read SHOWS, and the next projection overwrites.
     s.projectDelegationCheckpoint(fx(0));
     s.db.prepare("UPDATE delegation_sessions SET explicitIntentAt = ? WHERE sessionId = 'lane-b-demo'").run(Date.parse(at(11)));
-    expect(s.readDelegationProjection().coordinatorIntentByParent).toEqual({ 'lane-a-demo': at(10), 'lane-b-demo': at(11) });
+    expect(s.readDelegationProjection().coordinatorIntentByParent).toEqual(
+      { [delegationIntentKey('lane-a-demo', 'g1')]: at(10), [delegationIntentKey('lane-a-demo', 'g2')]: at(10), [delegationIntentKey('lane-b-demo', 'g1')]: at(11) });
     expect(s.readDelegationProjection()).not.toEqual(projectionViewOfDelegationCheckpoint(fx(0)));
     s.projectDelegationCheckpoint(fx(0));
     expect(s.readDelegationProjection()).toEqual(projectionViewOfDelegationCheckpoint(fx(0)));
