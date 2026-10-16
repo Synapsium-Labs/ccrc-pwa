@@ -1547,3 +1547,40 @@ Reserve: numbers **5144 to 5148**, the worker's, in order, each defined here in 
 - **Fences.** The delegation programme's consent (mail 5255) is quoted in the Global Constraints. Its claim is now
   1472, on the same paths plus `deploy/coordination-snapshot.mjs`, `ccd/ccrc-doctor-checks` and the two test files.
   The fences are unchanged. Task 8's wait for run 360 stands.
+
+## What the worker measured (run 484, 2026-10-16)
+
+Built on `origin/main` at `0b3ff2f62`. Every anchor quoted in Tasks 1 to 7 measured at its stated line, except `_keep_ok`
+(`:22056`) and the `_ver_*` anchors (one line lower). Every *(revised, unmeasured)* row and count is measured below.
+
+- **Counts at the tip:**
+
+  | File | Plan | Measured |
+  |---|---|---|
+  | `ccrc-sweep-window` | 77 | 77 after Task 2; **89** with the S15 describe (P0 to P7, Reading 6 (b)) |
+  | `deploy-verify` | 92, then 105 | 92, then 105 |
+  | `ccrc-darwin-job-helpers` | 8 | 8 |
+  | `ccrc-versions-warn-arms` | 4 | 4 |
+  | agent, whole | 514 in 26 files | 514 in 26 files |
+  | `ccrc-update` | 518 listed after #384 | 506 titles listed; seven `-t` parts (the plan's), passed-title union 506, 0 failed |
+  | `ccrc-install` | in parts | 299 titles; four parts, union 299, 0 failed |
+- **Red-first:** T1-0 2 failed of 4; T2-0 6 failed of 10; T4-0 5 failed of 7; T5-0 6 failed of 8; T6-0 9 failed of 13. Each red set
+  is the plan's.
+- **Mutation rows:** every row, T1-0 to T7-3, was measured through the real files and restored with `cp` + `cmp`. Each red set is
+  the listed one except three, whose measured sets are these:
+  - **T4-6** (delete `STOP_WHY=""`) reds 6, not V31c alone: under `set -u`, `fail`'s `[ -z "$STOP_WHY" ]` aborts on every
+    failure path. The precise inheritance mutation, `STOP_WHY="${STOP_WHY:-}"`, reds exactly V31c.
+  - **T6-1** reds D1 ×7 and D1c: the mutation also removes the regex text D1c extracts.
+  - **V32**'s first red against `main`'s script fires on `code`, before `sleeps`; same cause.
+- **Reading 6 (b):** `server/test/fixtures/verify-service-pre-wave16.sh` is `git show 0b3ff2f62:deploy/verify-service.sh`, byte
+  for byte (218 lines, sha256 `efcfa3be9797212995ad6d206b997a5d6b00fa82853ba4f8a5b2775f0b6062dc`), exported as
+  `FROZEN_VERIFY_S15`. Rows R6-1 (a byte appended: all 12 P cases red), R6-2 (S15 pointed at S10: all 12 red) and R6-3 (the
+  tree's purged arm skips `LoadState`: P7's purged-stop row alone red). P7 compares per-unit call order, because concurrent
+  verifies interleave across units. The scope check's `server/test/fixtures` entry is superseded by that ruling.
+- **The hand pairing** (Task 4 Step 6: `main`'s sweep and window file with the new script): 65 of 65.
+- **Task 3:** T3-1 left the window file green, 89 of 89 in 2 of 2 runs. T3-INT stayed green, 12 of 12 in 3 of 3 runs.
+- **This box's `~/.cc-sessions`:** `drwxrwxr-x`, measured by one `stat`.
+- **Shards:** tried at load 18. Shard 1 of 6 passed the 590 s bound (`timeout(1)`) before its summary, so the shards were not run.
+- **One gap the wave leaves, for the coordinator:** when the update DIES (a unit active before fails its verify and its re-check),
+  `_upd_sweep_die` exits before Task 2's naming loop, so a `prior` unit gets no line on that path. Item G's lines share the
+  property. The die line names the unit that failed the update. Review Focus 1's table describes the success paths.
