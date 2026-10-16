@@ -2847,6 +2847,12 @@ replies, the watch's `orphaned:` and `failed:` self-wake mail, and a run's move 
 and never pushed. Nothing is pushed for a session a client has on screen;
 mail and run records still land in the feed.
 
+A `✓ Finished` push means a main turn ended inside the busy stretch that just went idle (D-5233): the session's turn
+marker records a Stop at or after the stretch began (2 s of slack), with no newer turn opened after it. A stretch of
+compaction only, a restart, an overload tick, and a turn ended by Escape or a kill push nothing. A session whose hook
+writes no turn marker falls back to its hook state (`done` from a `Stop` inside the stretch); with neither file, the
+edge pushes as before. Delegated background work keeps its push for the moment that work ends (D-5231).
+
 - **Unseen watermark** (`pwa/src/lib/seen.ts`): a session is unseen when it
   entered a human-wanting bucket (`attention`, `done`, `cleanup`) after this
   device last acknowledged it. Per-device in `localStorage` on purpose — ccrc

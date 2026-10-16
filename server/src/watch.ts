@@ -18,6 +18,7 @@ import {
 import { readLiveState, readLiveStateMeasured } from './livestate.js';
 import { mailTurnIdle, mailTurnModeOf, mailTurnReadsMark, type MailTurnMode } from './turnidle.js';
 import { readTurnMarkMeasured } from './turnmark.js';
+import { finishedAfter } from './coord/finished.js';
 import { readHookState, readHookStateRawMeasured, type HookState, type HookStateRawRead } from './hookstate.js';
 import { readUsageMeasured, USAGE_FRESH_S } from './usage.js';
 import { sendPrompt } from './inject/send.js';
@@ -777,6 +778,10 @@ export class FleetWatcher {
   private headsBootWaited = false;
   /** Prior status per session — drives the busy→idle push. */
   private prevStatus = new Map<string, SessionStatus>();
+  /** When each row's current busy stretch began (D-5233): set on the tick a measured row turns `busy`, from its
+   *  `statusUpdatedAt` (the live file writes on change, so that stamp is the stretch's start), else the tick's clock;
+   *  cleared when a measured row is anything but `busy`. The Finished push asks for a main Stop at or after it. */
+  private episodeBusySince = new Map<string, number>();
   /** Last swept task progress per session id, and when the sweep ran. */
   private taskProgress = new Map<string, TaskProgress>();
   private lastTaskSweep = 0;
@@ -2250,7 +2255,12 @@ export class FleetWatcher {
           // instant `prevStatus` was overwritten to an unmeasured 'idle'.
           if (unmeasuredIds.has(s.id)) continue;
           if (this.prevStatus.get(s.id) === 'busy' && s.status === 'idle') {
-            this.pushOne({ kind: 'done', sessionId: s.id, project: s.project, title: '✓ Finished', body: 'Finished — back to idle' }, projects);
+            // D-5233: the edge alone is no evidence a turn ended (a compaction, a restart, an overload tick and an
+            // Escape all make one); a main Stop inside this busy stretch is.
+            const since = this.episodeBusySince.get(s.id);
+            if (since !== undefined && await this.finishedEvidence(s.id, s.wrapper, records, panePids, since)) {
+              this.pushOne({ kind: 'done', sessionId: s.id, project: s.project, title: '✓ Finished', body: 'Finished — back to idle' }, projects);
+            }
           }
         }
         // Build 7's two new notify kinds ride the SAME primed gate as the
@@ -2295,7 +2305,16 @@ export class FleetWatcher {
       // Skips the SAME unmeasured ids the push loop above skips — see its own
       // comment: overwriting `prevStatus` with a guessed 'idle' here would
       // permanently lose the real busy→idle edge the instant the row heals.
-      for (const s of sessions) { if (!unmeasuredIds.has(s.id)) this.prevStatus.set(s.id, s.status); }
+      for (const s of sessions) {
+        if (unmeasuredIds.has(s.id)) continue;
+        this.prevStatus.set(s.id, s.status);
+        // The busy stretch's start (D-5233; not the mail gate's own `busySince`), kept from the tick the row turned
+        // busy, priming tick included, and under the same unmeasured skip as `prevStatus`, so a guessed status
+        // neither opens nor closes a stretch.
+        if (s.status !== 'busy') this.episodeBusySince.delete(s.id);
+        else if (!this.episodeBusySince.has(s.id)) this.episodeBusySince.set(s.id, s.statusUpdatedAt ?? Date.now());
+      }
+      for (const id of this.episodeBusySince.keys()) { if (!sessionProjects.has(id)) this.episodeBusySince.delete(id); }
       this.activeProjects = projects;
       // Build 9 wave 7: the claim lease rides THIS tick, on its own slower
       // clocks — no new timer (D12), and the mail sweep below this block is
@@ -5939,6 +5958,30 @@ export class FleetWatcher {
     return read.ok
       ? { live: { ok: true, word: read.state.status, since: read.state.statusUpdatedAt }, startedAt: read.state.startedAt }
       : { live: { ok: false, reason: read.reason }, startedAt: null };
+  }
+
+  /** D-5233: did a main Stop fall inside this busy stretch? Asked only at a busy→idle edge, so the reads are rare. The
+   *  turn marker is read for this id only, with the row's identity, and judged stale against the live process's start
+   *  (a second live read: the tick's row carries no `startedAt`). A live read that fails here leaves the marker
+   *  unjudgeable, so it counts as `unmeasured` and pushes nothing. An `absent` marker falls back to the hookstate the
+   *  tick already holds. The rule is `finishedAfter`'s (L1). */
+  private async finishedEvidence(id: string, wrapper: string, records: readonly SessionRecord[],
+    panePids: ReadonlyMap<string, number | null>, busySince: number): Promise<boolean> {
+    const rec = records.find((r) => r.id === id);
+    const ident = rec === undefined ? null : measuredIdentity(rec);
+    const pid = panePids.get(id) ?? null;
+    const cfgDir = configDirFor(this.deps.cfg, wrapper);
+    let mark: TurnMarkRead;
+    if (ident === null || !pid || !cfgDir) {
+      mark = { ok: false, reason: 'unmeasured' };
+    } else {
+      const live = await readLiveStateMeasured(this.deps.io, cfgDir, pid);
+      mark = live.ok
+        ? await readTurnMarkMeasured(this.deps.io, this.deps.cfg.registryDir, id, ident.uuid, { startedAt: live.state.startedAt })
+        : { ok: false, reason: 'unmeasured' };
+    }
+    const hs = this.hookStates.get(id);
+    return finishedAfter(mark, hs === undefined ? null : { state: hs.state, event: hs.event, updatedAt: hs.updatedAt }, busySince);
   }
 
   /** Read 2: the turn marker. Judged for staleness against the live process when the live file was read; with no
