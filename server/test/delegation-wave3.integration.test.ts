@@ -31,7 +31,7 @@ import { CoordStore } from '../src/coord/store.js';
 import { openCoordDb } from '../src/coord/db.js';
 import { buildServer } from '../src/server.js';
 import { type DelegationCensusPass, type ParentIncarnation, type WorktreeCensus } from '../src/coord/gitref.js';
-import { DELEGATION_CHECKPOINT_FILE, decodeDelegationCheckpoint, encodeDelegationCheckpoint, validateDelegationCheckpoint } from '../src/coord/delegation-checkpoint.js';
+import { DELEGATION_CHECKPOINT_FILE, type DelegationDurability, decodeDelegationCheckpoint, encodeDelegationCheckpoint, validateDelegationCheckpoint } from '../src/coord/delegation-checkpoint.js';
 import { DELEGATION_JOURNAL_FILE } from '../src/coord/delegation-journal.js';
 import { parseDelegationSpoolLine } from '../src/coord/delegation-ingest.js';
 import { correlateDelegation, DELEGATION_DROPPED_UNMEASURED } from '../src/coord/delegation-correlation.js';
@@ -45,7 +45,6 @@ import {
   encodeDelegationNaturalKey,
   formatDelegationInstant,
   projectionViewOfDelegationCheckpoint,
-  type DelegationAttemptRow,
   type DelegationCensusRecord,
   type DelegationCheckpointV1,
   type DelegationLeaseRow,
@@ -647,9 +646,11 @@ describe('6. run-child agreement remains owned without a lease', () => {
       firstDeadParents: [], previousSuccessfulCensus: null, censusedProjects: ['demo'], previousCensusedProjects: ['demo'],
     });
     expect(effects.map((e) => e.kind).filter((k) => k !== 'repair-report-projection')).toEqual(['record-run-child-owned']);
-    const owned = effects.find((e) => e.kind === 'record-run-child-owned') as { attempt: DelegationAttemptRow };
-    await durable.applyCheckpointChange((cp) => ({ ...cp, attempts: [...cp.attempts, owned.attempt] }));
-    await durable.repairProjection();
+    // The effects go through the lane's OWN effect applier (a private method, reached by a cast), not through a restatement of it: a
+    // lease request, a lease creation or a transition added to its `record-run-child-owned` arm would show here. The limit is stated: rung 1
+    // has no production producer in wave 3 (the lane hands correlation `runChildAgreement: null`), so the verdict itself is made here.
+    const lane = (w.watcher as unknown as { delegationLane(): { applyEffects(pass: { signal: AbortSignal }, durable: DelegationDurability, effects: unknown): Promise<void> } }).delegationLane();
+    await lane.applyEffects({ signal: new AbortController().signal }, durable, effects);
     const cp = disk(w.home).checkpoint!;
     expect(cp.attempts.map((a) => [a.adminRecord, a.verdict, a.rung]), 'rung 1 is the run/child model\'s own claim, filed as an attempt').toEqual([['brisk-ridge', 'linked', 1]]);
     expect(cp.leases).toEqual([]);
@@ -785,20 +786,210 @@ const SHIPPED = [
   ...filesUnder('ccd/coordinator-skill'), ...filesUnder('ccd/worker-skill'), ...filesUnder('ccd/reviewer-skill'),
   ...filesUnder('agent/src'), ...filesUnder('server/src'), ...filesUnder('shared'), ...filesUnder('deploy', /\.(mjs|js|sh|json)$/),
 ];
-/** Wave 5 to 7 verbs, capability words, markers and paths, as exact tokens. The error code `lease-cleanup-state` is not one. */
-const LATER_WAVE = /\bws-lease-(mark|audit|clean)\b|\blease-(mark|audit|clean)-v1\b|\bws-add-base(-v1)?\b|ws-add\s+--base|delegation\/leases|delegation-adopt|lease-clean-live|\b_?cmd_ws_lease|\bpromotesLease\b/;
+/** Wave 5 to 7 verbs, capability words, markers and paths. `ws-release` and the error code `lease-cleanup-state` are not among them:
+ *  `(?<!re)lease` keeps `release` legal while `ws-adopt-lease` and `cmd_ws_x_lease` are not. */
+const LATER_WAVE = new RegExp([
+  String.raw`\bws-[\w-]*?(?<!re)lease`, String.raw`\bcmd_ws_\w*?(?<!re)lease`, String.raw`\blease-(?:mark|audit|clean)-v1\b`,
+  String.raw`\bws-add-base(?:-v1)?\b`, String.raw`ws-add\s+--base`, 'delegation/leases', 'delegation-adopt', 'lease-clean-live', String.raw`\bpromotesLease\b`,
+].join('|'), 'i');
+
+// ── a small bash command extractor, for the doctor clause ───────────────────────────────────────────────────────────────────
+interface ShellCmd { word: string; args: string[] }
+/**
+ * The simple commands a bash body would run, and the files it would write: enough bash to read `ccd/ccrc-doctor-checks`'s own
+ * functions, not a bash. Comments, quoted text (jq programs and messages included) and `$((...))` are skipped; `$(...)`, `<(...)` and
+ * `( ... )` are entered, so a command inside a substitution is found; `case` patterns are skipped; leading keywords, assignments
+ * and `for`/`case` heads are not commands. A redirection other than to `/dev/null` or a descriptor is reported as a write. A shape it
+ * cannot read (a backtick substitution, a here-document, an unbalanced quote) throws, so an unreadable body fails the clause rather
+ * than passing it. The CONTROL row below holds it to what the clause needs it to see.
+ */
+function shellCommands(src: string): { cmds: ShellCmd[]; writes: string[] } {
+  const cmds: ShellCmd[] = [];
+  const writes: string[] = [];
+  const n = src.length;
+  let i = 0;
+  let caseDepth = 0;
+  let armStart = false;
+  const KEYWORDS = new Set(['if', 'then', 'elif', 'else', 'fi', 'while', 'until', 'do', 'done', 'in', 'esac', '!', '{', '}', 'time']);
+  const fail = (m: string): never => { throw new Error(`shellCommands: ${m} near ${JSON.stringify(src.slice(Math.max(0, i - 40), i + 40))}`); };
+  const skipSingle = (): void => { const j = src.indexOf("'", i + 1); i = j < 0 ? n : j + 1; };
+
+  function skipBalancedParens(): void {
+    let depth = 0;
+    while (i < n) {
+      const c = src[i]!;
+      if (c === '"') { readDq(); continue; }
+      if (c === "'") { skipSingle(); continue; }
+      if (c === '\\') { i += 2; continue; }
+      if (c === '$' && src[i + 1] === '(' && src[i + 2] !== '(') { readSubst(); continue; }
+      if (c === '(') depth++;
+      else if (c === ')') { depth--; if (depth === 0) { i++; return; } }
+      i++;
+    }
+    fail('unbalanced (');
+  }
+  function readBrace(): void {
+    let depth = 0;
+    while (i < n) {
+      const c = src[i]!;
+      if (c === '"') { readDq(); continue; }
+      if (c === '\\') { i += 2; continue; }
+      if (c === '$' && src[i + 1] === '(') { readSubst(); continue; }
+      if (c === '{') depth++;
+      else if (c === '}') { depth--; if (depth === 0) { i++; return; } }
+      i++;
+    }
+    fail('unbalanced {');
+  }
+  function readSubst(): void { i += 2; parseList(true); }
+  function readDq(): void {
+    i++;
+    while (i < n) {
+      const c = src[i]!;
+      if (c === '\\') { i += 2; continue; }
+      if (c === '"') { i++; return; }
+      if (c === '$' && src.startsWith('$((', i)) { i += 1; skipBalancedParens(); continue; }
+      if (c === '$' && src[i + 1] === '(') { readSubst(); continue; }
+      if (c === '$' && src[i + 1] === '{') { readBrace(); continue; }
+      if (c === '`') fail('a backtick substitution is not read');
+      i++;
+    }
+    fail('unbalanced "');
+  }
+  function readWord(): string {
+    const start = i;
+    while (i < n) {
+      const c = src[i]!;
+      if (/[\s;|&<>()]/.test(c)) break;
+      if (c === '\\') { i += 2; continue; }
+      if (c === "'") { skipSingle(); continue; }
+      if (c === '"') { readDq(); continue; }
+      if (c === '`') fail('a backtick substitution is not read');
+      if (c === '$') {
+        if (src.startsWith('$((', i)) { i += 1; skipBalancedParens(); continue; }
+        if (src[i + 1] === '(') { readSubst(); continue; }
+        if (src[i + 1] === '{') { readBrace(); continue; }
+      }
+      i++;
+    }
+    let w = src.slice(start, i);
+    if (/[+]?=$/.test(w) && src[i] === '(') { skipBalancedParens(); w = src.slice(start, i); }          // an array literal, a=(...) or a+=(...)
+    return w;
+  }
+  function parseList(inSubst: boolean): void {
+    let cur: string[] = [];
+    const record = (words: string[]): void => {
+      if (words[0] === 'for' || words[0] === 'select') return;
+      if (words[0] === 'case') { caseDepth++; armStart = true; return; }
+      let k = 0;
+      while (k < words.length && (KEYWORDS.has(words[k]!) || /^[A-Za-z_]\w*[+]?=/.test(words[k]!))) k++;
+      if (k < words.length) cmds.push({ word: words[k]!, args: words.slice(k + 1) });
+    };
+    const flush = (): void => { if (cur.length > 0) { record(cur); cur = []; } };
+    while (i < n) {
+      const c = src[i]!;
+      if (c === ' ' || c === '\t' || c === '\r') { i++; continue; }
+      if (c === '\n') { flush(); i++; continue; }
+      if (c === ';') { flush(); if (src[i + 1] === ';') { i += 2; if (caseDepth > 0) armStart = true; } else i++; continue; }
+      if (c === '#') { while (i < n && src[i] !== '\n') i++; continue; }
+      if (c === '\\' && src[i + 1] === '\n') { i += 2; continue; }
+      if (c === '&' || c === '|') { flush(); i += src[i + 1] === c ? 2 : 1; continue; }
+      if (c === ')') { flush(); i++; if (inSubst) return; continue; }
+      if (c === '(') { flush(); i++; parseList(true); continue; }
+      if (c === '<' || c === '>') {
+        if (cur.length > 0 && /^\d+$/.test(cur[cur.length - 1]!)) cur.pop();                            // `2>` : the descriptor belongs to the redirection
+        if (src.startsWith('<(', i)) { i += 2; parseList(true); continue; }
+        if (src.startsWith('<<<', i)) { i += 3; while (src[i] === ' ') i++; readWord(); continue; }
+        if (src.startsWith('<<', i)) fail('a here-document is not read');
+        if (c === '<') { i++; while (src[i] === ' ') i++; readWord(); continue; }
+        let op = '>';
+        i++;
+        if (src[i] === '>') { op = '>>'; i++; } else if (src[i] === '&') { op = '>&'; i++; } else if (src[i] === '|') { op = '>|'; i++; }
+        while (src[i] === ' ') i++;
+        const target = readWord();
+        if (!(target === '/dev/null' || (op === '>&' && /^(\d+|-)$/.test(target)))) writes.push(`${op}${target}`);
+        continue;
+      }
+      if (armStart && !/^esac\b/.test(src.slice(i, i + 5))) {                                          // a case pattern list, up to its unquoted ')'
+        while (i < n && src[i] !== ')') {
+          if (src[i] === '"') readDq(); else if (src[i] === "'") skipSingle(); else if (src[i] === '\\') i += 2; else i++;
+        }
+        i++;
+        armStart = false;
+        continue;
+      }
+      const w = readWord();
+      if (w === '') { i++; continue; }
+      if (w === 'esac') { caseDepth--; armStart = false; }
+      cur.push(w);
+    }
+    flush();
+  }
+  parseList(false);
+  return { cmds, writes };
+}
+/** A function's body (without its header line and closing brace) from a bash file, for a function that spans lines. */
+function shellBody(file: string, name: string): string {
+  const at = file.indexOf(`\n${name}() {`);
+  if (at < 0) throw new Error(`${name} is not defined`);
+  const end = file.indexOf('\n}\n', at);
+  const body = file.slice(file.indexOf('\n', at + 1) + 1, end);
+  if (/\n[A-Za-z_][\w-]*\(\) \{/.test(body)) throw new Error(`${name} is not a multi-line function (the next definition starts inside it)`);
+  return body;
+}
+type CommandRules = Readonly<Record<string, true | ((args: readonly string[]) => boolean)>>;
+/** Every command the body runs that the closed `rules` do not allow (with its arguments), and every write it makes. */
+function commandsOutside(body: string, rules: CommandRules): string[] {
+  const { cmds, writes } = shellCommands(body);
+  const bad = cmds.filter((c) => { const r = rules[c.word]; return r === undefined || (r !== true && !r(c.args)); }).map((c) => [c.word, ...c.args].join(' ').slice(0, 90));
+  return [...bad, ...writes.map((w) => `a write: ${w}`)];
+}
 
 describe('8. the closed scope census', () => {
-  it('no new PWA source, state or frame: the PWA and the design system do not name the broker, and no WebSocket frame is delegation\'s', () => {
+  it('no new PWA source, state or frame: measured against main, the PWA holds no name of the broker and the frame union is exactly main\'s seven', () => {
     const ui = [...filesUnder('pwa/src', /\.(ts|tsx|css|html|js)$/), ...filesUnder('ui/src', /\.(ts|tsx|css|html|js)$/)];
-    expect(ui.length, 'the scan reached the PWA').toBeGreaterThan(50);
-    expect(ui.filter((f) => /delegation/i.test(f) || /delegation/i.test(read(f)))).toEqual([]);
+    expect(ui.length, 'the scan reached the PWA').toBeGreaterThan(200);
+    // NAMES. A stem of the family at the start of a word in any path segment: main has none (`archiveReleased.ts` is not one: the stem
+    // must start the word), so a new `leaseRows.ts` or `DelegationRows.tsx` is a file wave 3 may not add.
+    const FAMILY_NAME = /(?:^|[^A-Za-z])(?:delegat|lease|spool|carrier|adopt|retain|dispos|cleanup)/i;
+    expect(ui.filter((f) => f.split('/').some((seg) => FAMILY_NAME.test(seg))), 'a PWA file named for the broker').toEqual([]);
+    // CONTENT, in two parts, both measured on origin/main at 0b3ff2f62 (the merge base). Stems main never names are allowed nowhere...
+    const NEVER = /delegation|disposition|\bspool|cleanup(?:Due|State|Population|Evidence|Queue|Token)|auditToken|explicitIntent|coordinatorIntent|stageGate/i;
+    expect(ui.filter((f) => NEVER.test(read(f))), 'a PWA file that names the broker').toEqual([]);
+    // ...and the stems main already uses in other senses (the update lease, a roster `adopt`, CSS `retain`, a `carrier` in account copy)
+    // are allowed in exactly the files main has them in. A new file that names one is a new PWA source to look at.
+    const MAIN_HAS: ReadonlyArray<[string, RegExp, readonly string[]]> = [
+      ['lease', /\bleases?\b|\blease[A-Z]\w*/, ['pwa/src/fleet/FleetHostBanner.tsx', 'pwa/src/fleet/HaltBanner.tsx', 'pwa/src/fleet/HotFilesStrip.tsx', 'pwa/src/fleet/updateAck.ts',
+        'pwa/src/fleet/updateHalt.ts', 'pwa/src/screens/FleetScreen.tsx', 'pwa/src/screens/updates.tsx']],
+      ['adopt', /\badopt\w*/i, ['pwa/src/fleet/SessionActionsSheet.tsx', 'pwa/src/lib/notifymark.ts', 'pwa/src/lib/seen.ts', 'pwa/src/screens/FleetScreen.tsx',
+        'pwa/src/screens/SettingsScreen.tsx', 'ui/src/primitives/banner.tsx', 'ui/src/primitives/list-row.tsx', 'ui/src/styles/tokens.css']],
+      ['retain', /\bretain\w*/i, ['pwa/src/fleet/PoolSheet.tsx', 'pwa/src/fleet/SwapSheet.tsx', 'pwa/src/fleet/fleet.css', 'pwa/src/lib/notifymark.ts', 'ui/src/styles/theme.css']],
+      ['carrier', /\bcarrier\w*/i, ['pwa/src/app.tsx', 'pwa/src/fleet/AccountPoolSheet.tsx', 'pwa/src/fleet/useProjectRows.ts', 'pwa/src/lib/accounts.ts',
+        'pwa/src/screens/AccountsScreen.tsx', 'pwa/src/screens/RunsScreen.tsx', 'pwa/src/screens/useColdRuns.ts']],
+      ['cleanup', /\bcleanup[A-Z]\w*/, ['pwa/src/fleet/SessionMeta.tsx']],
+    ];
+    for (const [stem, re, allowed] of MAIN_HAS) {
+      expect(ui.filter((f) => re.test(read(f)) && !allowed.includes(f)), `${stem}: a PWA file new to this word`).toEqual([]);
+    }
+    // FRAMES. The union is exactly main's seven, and every arm is written inline: a named `interface DelegationRowsFrame` joined by `|`
+    // would have no `{ type: '...' }` for a parse to see, so each arm is required to open with a brace.
     const api = read('shared/api.ts');
     const at = api.indexOf('export type FleetMsg =');
-    const union = api.slice(at, api.indexOf(';\n', at));
-    const frames = [...union.matchAll(/\{\s*type:\s*'([a-z-]+)'/g)].map((m) => m[1]!);
-    expect(frames, 'the union was parsed').toEqual(expect.arrayContaining(['hello', 'fleet', 'notice', 'runs', 'coord', 'divergence', 'pools']));
-    expect(frames.filter((f) => FAMILY.test(f)), 'no delegation frame').toEqual([]);
+    const union = api.slice(at + 'export type FleetMsg ='.length, api.indexOf(';\n', at))
+      .replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+    const arms: string[] = [];
+    let depth = 0;
+    let armStart = 0;
+    for (let k = 0; k < union.length; k++) {
+      const ch = union[k]!;
+      if ('{[(<'.includes(ch)) depth++; else if ('}])>'.includes(ch)) depth--;
+      else if (ch === '|' && depth === 0) { arms.push(union.slice(armStart, k)); armStart = k + 1; }
+    }
+    arms.push(union.slice(armStart));
+    const armsTrimmed = arms.map((a) => a.trim()).filter((a) => a !== '');
+    expect(armsTrimmed.filter((a) => !a.startsWith('{')), 'every FleetMsg arm is an inline object type').toEqual([]);
+    expect(armsTrimmed.map((a) => /^\{\s*type:\s*'([a-z-]+)'/.exec(a)?.[1]), 'the frame union is exactly main\'s seven').toEqual(
+      ['hello', 'fleet', 'notice', 'runs', 'coord', 'divergence', 'pools']);
     for (const f of filesUnder('server/src', /\.ts$/)) expect(code(read(f)), f).not.toMatch(/\b(type|t):\s*'delegation'/);
     // the one wire exposure is a member of the health route's answer, which the PWA does not read
     expect(read('shared/api.ts')).toMatch(/delegation\?: DelegationObservationHealth/);
@@ -807,9 +998,17 @@ describe('8. the closed scope census', () => {
   it('no carrier, adoption, promotion or `ws-add --base` command, capability, marker or file anywhere that ships', () => {
     const offenders = SHIPPED.filter((f) => LATER_WAVE.test(read(f)));
     expect(offenders, 'a later wave\'s door is in a shipped file').toEqual([]);
-    // the fleet advertises the one wave-3 capability and nothing else of the family
+    // a path COMPOSED from parts (`"$base/leases"`) has no token for the scan above to find, so the word itself is out of the fleet tools
+    // and the agent altogether (the checkpoint's `leases` list is the server's and the deploy helper's, which are not scanned for it)
+    const FLEET_SIDE = ['ccd/ccd', 'ccd/ccrc', 'ccd/ccrc-api', 'ccd/ccrc-doctor-checks', 'ccd/session-hook.sh', 'ccd/install-session-hooks.sh', ...filesUnder('agent/src')];
+    expect(FLEET_SIDE.filter((f) => /\bleases\b/i.test(read(f))), 'the word `leases` in a fleet-side file').toEqual([]);
     const h = makeCcdHarness('ccrc-dlgint-ccd-');
     try {
+      // and the real thing: the function that makes the spool directory, run, leaves `delegation/` holding exactly `spool`
+      expect(h.sh('_delegation_spool_dir demo-quiet-mesa; echo "[rc=$?]"')).toContain('[rc=0]');
+      expect(readdirSync(path.join(h.home, '.cc-sessions', 'delegation')), '`$REG/delegation` holds the spool and nothing else').toEqual(['spool']);
+      expect(walk(path.join(h.home, '.cc-sessions')).filter((q) => LATER_WAVE_NAME.test(q))).toEqual([]);
+      // the fleet advertises the one wave-3 capability and nothing else of the family
       const caps = h.sh('cmd_caps').split('\n').filter((c) => c !== '');
       expect(caps.filter((c) => /(^|-)lease|delegation|adopt|carrier/i.test(c))).toEqual(['delegation-events-v1']);
     } finally { h.cleanup(); }
@@ -833,6 +1032,27 @@ describe('8. the closed scope census', () => {
     const sql = filesUnder('server/src', /\.ts$/).flatMap((f) => (code(read(f)).match(/(INSERT|UPDATE|DELETE)[^;'"`]*\bdelegation_leases\b/gi) ?? []).map((m) => `${f}: ${m}`));
     expect(sql.map((s) => s.replace(/\s+/g, ' ')), 'one DELETE (a projection replaces the table) and no UPDATE').toEqual(['server/src/coord/store.ts: DELETE FROM delegation_leases']);
     expect(filesUnder('server/src', /\.ts$/).filter((f) => /delegationLeaseCodec/.test(code(read(f)))).sort()).toEqual(['server/src/coord/delegation-model.ts', 'server/src/coord/store.ts']);
+    // a statement that names its table through a constant or a template (`UPDATE ${LEASES} ...`) has no `delegation_leases` for the scan above
+    // to find, so no UPDATE anywhere in the server names its target by interpolation, none sits inside a delegation method of the store, and
+    // the one `DO UPDATE` of the delegation tables is the sessions upsert
+    for (const f of filesUnder('server/src', /\.ts$/)) expect(code(read(f)), `${f}: an UPDATE that names its table by interpolation`).not.toMatch(/\bUPDATE\s+\$/);
+    const storeLines = code(read('server/src/coord/store.ts')).split('\n');
+    let inMethod = '';
+    const updatesInDelegationMethods: string[] = [];
+    for (const l of storeLines) {
+      const m = /^ {2}(?:(?:private|public|static|async|readonly)\s+)*([A-Za-z_]\w*)\(/.exec(l) ?? /^(?:export )?(?:async )?function\*? ([A-Za-z_]\w*)/.exec(l);
+      if (m !== null && !/^(?:if|for|while|switch|return|catch)$/.test(m[1]!)) inMethod = m[1]!;
+      if (/\bUPDATE\b/.test(l) && /elegation/.test(inMethod) && inMethod !== 'delegationUpsertSql') updatesInDelegationMethods.push(`${inMethod}: ${l.trim().slice(0, 80)}`);
+    }
+    expect(updatesInDelegationMethods, 'an UPDATE inside a delegation method of the store').toEqual([]);
+    const store = code(read('server/src/coord/store.ts'));
+    expect(store.match(/delegationUpsertSql\([^)]*\)/g), 'the only upsert of the delegation tables is the sessions\'').toEqual(["delegationUpsertSql(delegationSessionCodec, ['sessionId', 'parentIncarnation'])"]);
+    expect(store.match(/^.*delegationLeaseCodec.*$/gm)?.map((l) => l.trim()), 'every use of the lease codec in the store: its import, the projection\'s encode, insert and read').toEqual([
+      'delegationLeaseCodec, delegationLineageCodec, delegationSessionCodec, DelegationModelError,',
+      'const leases = checkpoint.leases.map((r) => delegationLeaseCodec.toDb(r));',
+      'run(delegationInsertSql(delegationLeaseCodec), delegationLeaseCodec, leases);',
+      "leases: read(delegationLeaseCodec, 'leaseId'),",
+    ]);
     expect(Object.keys(DELEGATION_JOURNAL_ENTRY_KINDS).sort(), 'the journal has no transition entry: only evidence and a lease\'s creation').toEqual(['evidence-accepted', 'lease-created']);
 
     // and every door a checkpoint passes through refuses a lease that has moved past its inert initialization
@@ -895,12 +1115,19 @@ describe('8. the closed scope census', () => {
     await censusPass(w, NOW, { demo: [] });
     const before = disk(w.home);
     const journalBefore = before.journal;
+    // "creates no run, hold or capacity slot": the run and claim rows, the registry's hold files and the whole registry, measured around the POST
+    const outside = (): { runs: unknown; claims: unknown; holds: string[]; registry: string } => ({
+      runs: w.coord.db.prepare('SELECT COUNT(*) AS n FROM runs').get(), claims: w.coord.db.prepare('SELECT COUNT(*) AS n FROM claims').get(),
+      holds: readdirSync(w.reg).filter((f) => f.endsWith('.hold')), registry: treeDigest(w.reg),
+    });
+    const outsideBefore = outside();
     const app = await buildServer({ ...w.deps, mailToken: TOKEN } as never, new Bus(), w.watcher);
     try {
       const res = await app.inject({ method: 'POST', url: `/api/coordinators/${OWNER}/intent`, headers: { 'x-ccrc-mail-token': TOKEN }, payload: { action: 'set', byId: OWNER, byUuid: uuid } });
       expect(res.statusCode, res.body).toBe(200);
     } finally { await app.close(); }
     const after = disk(w.home);
+    expect(outside(), 'no run, claim or hold was made, and the registry is as it was').toEqual(outsideBefore);
     const strip = (cp: DelegationCheckpointV1): Record<string, unknown> => {
       const { revision, coordinatorIntentByParent, sessions, ...rest } = cp;
       void revision; void coordinatorIntentByParent;
@@ -926,28 +1153,89 @@ describe('8. the closed scope census', () => {
     }
   });
 
-  it('no physical journal compaction or truncation, except the torn-tail heal: ONE caller of the port\'s `truncate`, and no other source names the journal', () => {
-    const named = filesUnder('server/src', /\.ts$/).filter((f) => /delegation-events\.log|DELEGATION_JOURNAL_FILE/.test(code(read(f))));
-    expect(named, 'only the journal module and the applier name the file').toEqual(['server/src/coord/delegation-checkpoint.ts', 'server/src/coord/delegation-journal.ts']);
-    const calls = filesUnder('server/src', /\.ts$/).flatMap((f) => (code(read(f)).match(/[\w.]+\.truncate\(/g) ?? []).map((m) => `${f}: ${m}`));
-    expect(calls, 'every `.truncate(` call in the server: the heal\'s call on the port, and the node adapter\'s own call to the file system').toEqual([
-      'server/src/coord/delegation-checkpoint.ts: this.port.truncate(', 'server/src/coord/delegation-journal.ts: fsp.truncate(',
+  it('no physical journal compaction or truncation, except the torn-tail heal: every production use of the journal path is on a closed list, by caller', () => {
+    const SRC = filesUnder('server/src', /\.ts$/);
+    expect(SRC.filter((f) => /delegation-events\.log|DELEGATION_JOURNAL_FILE/.test(code(read(f)))), 'only the journal module and the applier name the file').toEqual(
+      ['server/src/coord/delegation-checkpoint.ts', 'server/src/coord/delegation-journal.ts']);
+
+    // 1. EVERY truncating call in the server, by spelling (`truncate`, `truncateSync`, `ftruncate`, `fsp.truncate`...). The delegation
+    //    ones are the port member and its node adapter and the heal's one call; the other two files cut something that is not the broker's
+    //    journal (#384's own collector journal, and a string helper), and neither names the journal (the list above).
+    const cuts = SRC.flatMap((f) => (code(read(f)).match(/[\w.]*truncate\w*\(/gi) ?? []).map((m) => `${f}: ${m}`)).sort();
+    expect(cuts).toEqual([
+      'server/src/coord/collectLaneJournal.ts: ftruncateSync(',
+      'server/src/coord/delegation-checkpoint.ts: this.port.truncate(',
+      'server/src/coord/delegation-journal.ts: fsp.truncate(',
+      'server/src/coord/delegation-journal.ts: truncate(',
+      'server/src/transcript/parse.ts: truncate(',
+      'server/src/transcript/parse.ts: truncate(',
     ]);
-    expect(filesUnder('server/src', /\.ts$/).filter((f) => /\bport\.truncate\(/.test(code(read(f)))), 'the heal is the port\'s only caller').toEqual(['server/src/coord/delegation-checkpoint.ts']);
+
+    // 2. EVERY use of the journal's path in the applier, by the method that makes it. A temp-and-rename over the journal, a second cut, an
+    //    alias or a write through the file would all need a line that is not on this list, whatever they are spelt.
+    const lines = code(read('server/src/coord/delegation-checkpoint.ts')).split('\n');
+    let method = '(file)';
+    let inClass = false;
+    const hits: Array<{ method: string; text: string }> = [];
+    for (const l of lines) {
+      if (/^(?:export )?class DelegationDurability\b/.test(l)) { inClass = true; method = '(class)'; }
+      const top = /^(?:export )?(?:async )?function\*? ([A-Za-z_]\w*)/.exec(l);
+      if (top !== null) { inClass = false; method = top[1]!; }
+      const m = inClass ? /^ {2}(?:(?:private|public|protected|static|async|readonly)\s+)*(constructor|[A-Za-z_]\w*)\(/.exec(l) : null;
+      if (m !== null && !/^(?:if|for|while|switch|return|catch)$/.test(m[1]!)) method = m[1]!;
+      if (/journalPath|DELEGATION_JOURNAL_FILE|delegation-events\.log/.test(l)) hits.push({ method, text: l.trim() });
+    }
+    const ALLOWED: ReadonlyArray<[string, RegExp]> = [
+      ['(file)', /^DELEGATION_JOURNAL_FILE,$/],                                                                       // the import
+      ['recoverDelegationFromFiles', /^for await \(const record of readDelegationJournalRecords\(port, path\.join\(dir, DELEGATION_JOURNAL_FILE\), undefined, /],   // recovery's read
+      ['(class)', /^private readonly journalPath: string;$/],
+      ['constructor', /^this\.journalPath = path\.join\(deps\.dir, DELEGATION_JOURNAL_FILE\);$/],
+      ['constructor', /^this\.writer = new DelegationJournalWriter\(this\.port, this\.journalPath, deps\.dir\);$/],   // the appender
+      ['recover', /^this\.writer = new DelegationJournalWriter\(this\.port, this\.journalPath, this\.deps\.dir\);$/],  // the appender, again
+      ['healTailLocked', /^await this\.port\.truncate\(this\.journalPath, plan\.offset\);$/],                        // THE ONE CUT (D-4655)
+      ['healTailLocked', /^await this\.port\.fsyncFile\(this\.journalPath\);$/],
+      ['remeasureTail', /^const handle = await this\.port\.openRead\(this\.journalPath\);$/],                        // the heal's re-measure: a read
+      ['repairLocked', /^projection, checkpoint: this\.current\.checkpoint, journal: \(\) => readDelegationJournalRecords\(this\.port, this\.journalPath\), /],
+      ['visitRetainedRecords', /^for await \(const record of readDelegationJournalRecords\(this\.port, this\.journalPath\)\) visit\(record\);$/],
+      ['planPruning', /^if \(this\.pruningEnabled\(\)\) for await \(const r of readDelegationJournalRecords\(this\.port, this\.journalPath\)\) collector\.add\(r\);$/],
+    ];
+    const used = new Map<number, number>();
+    const unlisted = hits.filter((h) => {
+      const k = ALLOWED.findIndex(([mth, re]) => mth === h.method && re.test(h.text));
+      if (k < 0) return true;
+      used.set(k, (used.get(k) ?? 0) + 1);
+      return false;
+    }).map((h) => `${h.method}: ${h.text.slice(0, 110)}`);
+    expect(unlisted, 'a use of the journal path that is not on the closed list').toEqual([]);
+    expect([...used.entries()].filter(([, count]) => count !== 1), 'each listed use exists exactly once').toEqual([]);
+    expect(used.size).toBe(ALLOWED.length);
+    // the heal is declared once and called once, from recovery, on the plan recovery made; the copy is durable before the cut
     const checkpoint = code(read('server/src/coord/delegation-checkpoint.ts'));
-    expect(checkpoint.match(/await this\.port\.truncate\(this\.journalPath, plan\.offset\);/g), 'at the plan\'s offset only').toHaveLength(1);
     const heal = checkpoint.slice(checkpoint.indexOf('private async healTailLocked'), checkpoint.indexOf('private async remeasureTail'));
-    expect(heal, 'the one caller is the heal').toContain('await this.port.truncate(this.journalPath, plan.offset);');
     expect(checkpoint.match(/healTailLocked\(/g), 'declared once and called once').toHaveLength(2);
     expect(checkpoint).toMatch(/if \(report\.tailHeal !== null\) \{\s*try \{\s*await this\.healTailLocked\(report\.tailHeal\);/);
-    // the heal keeps the bytes first: the copy is durable before the cut, and the cut is the only change to the journal's length
+    expect(heal.indexOf('this.port.rename(temp, kept)')).toBeGreaterThan(-1);
     expect(heal.indexOf('this.port.rename(temp, kept)')).toBeLessThan(heal.indexOf('this.port.truncate('));
     expect(checkpoint).not.toMatch(/unlink|rmSync|\.writeFile\(/);
-    // the deploy helper reads the live journal (capture) and replaces it whole from a validated snapshot (restore): neither cuts it
-    expect(read('deploy/coordination-snapshot.mjs')).not.toMatch(/\btruncate|ftruncate/);
-    // the update tool only looks at the backup copies' names
+
+    // 3. The journal module: its writer opens the path for append or for read and nothing else, its reader for read, and the module makes
+    //    five calls on the port in all (the writer's mkdirp, openRead, openAppend and fsyncDir, and the reader's openRead).
+    const jr = code(read('server/src/coord/delegation-journal.ts'));
+    const writer = jr.slice(jr.indexOf('export class DelegationJournalWriter'));
+    expect(writer.split('\n').filter((l) => /this\.path\b/.test(l)).map((l) => l.trim()), 'the writer\'s every use of its path').toEqual([
+      'const existing = await this.port.openRead(this.path);',
+      'this.handle = await this.port.openAppend(this.path);',
+    ]);
+    expect(jr.match(/\bport\.\w+\(/g), 'every call the journal module makes on the port').toEqual(['port.openRead(', 'port.mkdirp(', 'port.openRead(', 'port.openAppend(', 'port.fsyncDir(']);
+
+    // 4. Outside the server: the deploy helper reads the live journal (capture) and replaces it whole from a validated snapshot (restore),
+    //    and cuts nothing; the update tool only looks at the backup copies' names.
+    const helper = code(read('deploy/coordination-snapshot.mjs'));
+    expect(helper).not.toMatch(/\btruncate|ftruncate/);
+    expect(helper.match(/^.*path\.join\(ccrcDir, JOURNAL_FILE\).*$/gm)?.map((l) => l.trim()), 'the live journal is opened for reading only').toEqual(
+      ['const h = fs.openRead(path.join(ccrcDir, JOURNAL_FILE));']);
     expect((read('ccd/ccrc').match(/^[^#\n]*delegation-events\.log.*$/gm) ?? []).map((l) => l.trim())).toEqual(['for n in coordination-snapshot.json delegation-events.log delegation-checkpoint.json coord.db; do']);
-    // pruning is a PLAN: the plan is data, nothing applies it, and asking for it leaves the journal byte for byte
+    // pruning is a PLAN: the plan is data, nothing applies it, and asking for it leaves the journal byte for byte (the next row)
     expect(code(read('server/src/watch.ts'))).not.toMatch(/planPruning|planDelegationPruning/);
   });
 
@@ -962,15 +1250,20 @@ describe('8. the closed scope census', () => {
   it('no `ws-*lease*` skill text: the coordinator, worker and reviewer skills name no lease verb', () => {
     const skills = ['ccd/coordinator-skill', 'ccd/worker-skill', 'ccd/reviewer-skill'].flatMap((d) => filesUnder(d, /\.md$/));
     expect(skills.length).toBeGreaterThan(3);
-    expect(skills.filter((f) => /\bws-lease|\blease-(mark|audit|clean)\b|ws-add\s+--base/i.test(read(f)))).toEqual([]);
+    // `ws-release` is a verb the skills legitimately name; `(?<!re)lease` keeps it legal and still catches `ws-adopt-lease`
+    expect(skills.filter((f) => /\bws-[\w-]*?(?<!re)lease|\blease-(?:mark|audit|clean)\b|ws-add\s+--base/i.test(read(f)))).toEqual([]);
   });
 
   it('no new agent request operation, capability word or protocol bump: `readFrom` is the same op with one optional field', () => {
     expect([FLEET_PROTO, FLEET_PROTO_MIN]).toEqual([1, 1]);
     const proto = read('shared/agent-protocol.ts');
-    const ops = [...proto.matchAll(/interface \w+Req\s*\{[^}]*\bop:\s*'([\w-]+)'/g)].map((m) => m[1]!);
-    expect(ops, 'the request union was parsed').toEqual(expect.arrayContaining(['exec', 'read', 'readFrom', 'readB64', 'readdir', 'stat', 'caps']));
-    expect(ops.filter((o) => FAMILY.test(o)), 'no delegation op').toEqual([]);
+    // the request ops are a small closed set: exactly main's fourteen, whatever form a new one is declared in (an interface, or a
+    // `type X = { ...; op: 'x' }` alias, which an interface-shaped parse cannot see), and exactly main's fourteen members of the union
+    const ops = [...proto.matchAll(/\bop:\s*'([\w-]+)'/g)].map((m) => m[1]!);
+    expect(ops, 'every request op the protocol declares').toEqual(['exec', 'read', 'readFrom', 'readB64', 'readdir', 'stat', 'lstat', 'caps', 'writeB64', 'tailOpen',
+      'tailClose', 'ptyOpen', 'update', 'token-sync']);
+    expect(/export type AgentReq = ([^;]+);/.exec(proto)![1]!.split('|').map((m) => m.trim()), 'the union of requests').toEqual(['ExecReq', 'ReadReq', 'ReadFromReq',
+      'ReadB64Req', 'ReaddirReq', 'StatReq', 'LstatReq', 'WriteB64Req', 'TailOpenReq', 'TailCloseReq', 'PtyOpenReq', 'CapsReq', 'UpdateReq', 'TokenSyncReq']);
     expect(proto).toMatch(/export interface ReadFromReq \{ t: 'req'; id: number; op: 'readFrom'; path: string; offset: number; maxBytes\?: number \}/);
     expect(proto.match(/\bmaxBytes\b/g)!.length).toBeGreaterThan(0);
     // the ready frame, the advertised words and the agent's op switch carry nothing of the broker's
@@ -1008,29 +1301,70 @@ describe('8. the closed scope census', () => {
       ['activityId', 'adminRecord', 'canonicalPath', 'correlationJournalIds', 'creationBase', 'firstObservedAt', 'parentId', 'parentIncarnation', 'project', 'sourceKind']);
   });
 
-  it('doctor is read-only: the `delegation-hooks` check writes nothing, and its fixer\'s only write path is the shipped installer', () => {
+  it('CONTROL: the command extractor sees a second script, an `install`, a write, an `eval` and a nested substitution, and not words in quotes or comments', () => {
+    const words = (src: string): string[] => shellCommands(src).cmds.map((c) => c.word);
+    expect(words('install -m 0600 /dev/null "$HOME/x"')).toEqual(['install']);
+    expect(shellCommands('said="$("${BASH:-bash}" "$CCRC_HERE/install-claude-hooks.sh" --homes a 2>&1)"').cmds).toEqual([{ word: '"${BASH:-bash}"', args: ['"$CCRC_HERE/install-claude-hooks.sh"', '--homes', 'a'] }]);
+    expect(shellCommands('echo hi > "$f"').writes).toEqual(['>"$f"']);
+    expect(shellCommands('echo hi >> f; jq . x 2>/dev/null; echo ok >&2').writes).toEqual(['>>f']);
+    expect(words('x="$(rm -f "$f")"')).toEqual(['rm']);
+    expect(words('if ! cp a b; then return 1; fi')).toEqual(['cp', 'return']);
+    expect(words('case "$k" in\n  A) a=1 ;;\n  B|C) rm -f x ;;\nesac\necho done')).toEqual(['rm', 'echo']);
+    expect(words('for p in "$(ls)" b; do echo "$p"; done')).toEqual(['ls', 'echo']);
+    expect(words('while IFS= read -r l; do [ -n "$l" ] || continue; done <<< "$x"')).toEqual(['read', '[', 'continue']);
+    expect(words('eval "$x"')).toEqual(['eval']);
+    expect(words('echo x | tee "$f"')).toEqual(['echo', 'tee']);
+    expect(words('want+=("$(whoami)"); y=(a b)')).toEqual(['whoami']);
+    expect(words("echo 'a; rm b' \"c; rm d\" # rm e")).toEqual(['echo']);
+    expect(words('n=$((n + 1)); echo "${n:-$(date)}"')).toEqual(['date', 'echo']);          // a substitution is read where it stands, before its command is complete
+    expect(() => shellCommands('x=`rm f`')).toThrow(/backtick/);
+    expect(() => shellCommands('cat <<EOF\nx\nEOF')).toThrow(/here-document/);
+    expect(commandsOutside('echo a; rm b', { echo: true })).toEqual(['rm b']);
+  });
+
+  it('doctor is read-only: the `delegation-hooks` check runs only readers, and its fixer runs ONLY the shipped installer and the readers it names', () => {
     const checks = read('ccd/ccrc-doctor-checks');
-    const body = (name: string): string => {
-      const at = checks.indexOf(`\n${name}() {`);
-      expect(at, `${name} exists`).toBeGreaterThan(-1);
-      return checks.slice(at, checks.indexOf('\n}\n', at));
+    // THE CHECK: every command it runs, from a closed list of readers and verdict printers. Nothing here writes, execs a file or asks
+    // the service manager to change anything: `systemctl` is only ever `--user is-active`, and `command` only ever `-v node|jq`.
+    const READERS: CommandRules = {
+      local: true, '[': true, read: true, return: true, continue: true, break: true, ':': true, echo: true,
+      _box_env_value: true, _skills_roster_rows: true, _dh_events: true, _dr_join: true, _dr_skip: true, _dr_fail: true, _dr_warn: true, _dr_pass: true,
+      _svc_is_active: true, _svc_status_hint: true,
+      command: (a) => a.length === 2 && a[0] === '-v' && (a[1] === 'node' || a[1] === 'jq'),
+      jq: (a) => a[0] === '-rs' && !a.some((x) => /^(-i|--in-place)$/.test(x)),
+      systemctl: (a) => a[0] === '--user' && a[1] === 'is-active',
     };
-    /** A shell body with comments, quoted text (jq programs and messages included) and the harmless redirections removed, so only a
-     *  command or a write is left to match. */
-    const bare = (b: string): string => b.split('\n').filter((l) => !/^\s*#/.test(l)).map((l) => l.replace(/(^|\s)#(\s.*)?$/, '')).join('\n')
-      .replace(/\\["']/g, '').replace(/"(?:[^"\\]|\\.)*"/g, '""').replace(/'[^']*'/g, "''")
-      .replace(/\d?>\s*\/dev\/null/g, '').replace(/\d?>&\d/g, '').replace(/<<<?/g, '');
-    const WRITES = /(^|[^<>&|])\d?>>?\s*[^\s>&]|\|\s*tee\b|(^|[\s;&|(`])(rm|mv|cp|mkdir|touch|tee|chmod|chown|ln|truncate|dd|git|curl|systemctl\s+--user\s+(start|stop|restart|enable|disable))\s|sed\s+-i/;
-    for (const name of ['_check_delegation-hooks', '_dh_mixed_events']) expect(bare(body(name)), `${name} writes nothing`).not.toMatch(WRITES);
-    const fixer = bare(body('_fix_delegation-hooks'));
-    expect(fixer, 'the fixer writes only through the installer').not.toMatch(WRITES);
-    const raw = code(body('_fix_delegation-hooks'));
-    expect(raw.match(/"\$\{BASH:-bash\}" "\$inst" --homes "\$\{dirs\[@\]\}"/g), 'one invocation of the shipped installer').toHaveLength(1);
+    expect(commandsOutside(shellBody(checks, '_check_delegation-hooks'), READERS), 'the check runs something that is not a reader').toEqual([]);
+    expect(commandsOutside(shellBody(checks, '_dh_mixed_events'), { jq: (a) => a[0] === '-r' }), 'the mixed-group reader').toEqual([]);
+    // the readers it calls: the installer's event list (a file read), the roster read (one node program, with no write in it), the
+    // joiner, and the four one-line verdict printers, which are pinned whole
+    expect(commandsOutside(shellBody(checks, '_dh_events'), { local: true, '[': true, read: true, return: true, printf: true }), '_dh_events').toEqual([]);
+    expect(commandsOutside(shellBody(checks, '_dr_join'), { local: true, '[': true, printf: true }), '_dr_join').toEqual([]);
+    expect(commandsOutside(shellBody(checks, '_skills_roster_rows'), {
+      node: (a) => a[0] === '-e' && !/writeFile|appendFile|rename|unlink|mkdir|rmSync|child_process|spawn|exec|process\.chdir/.test(a.join(' ')),
+    }), '_skills_roster_rows').toEqual([]);
+    expect(checks.match(/^_dr_(?:line|pass|warn|fail|skip)\(\) \{.*$/gm), 'the verdict printers, whole').toEqual([
+      "_dr_line() { printf '%s %s: %s\\n' \"$1\" \"$2\" \"${3//$'\\n'/ }\"; }",
+      '_dr_pass() { _dr_line PASS "$1" "$2"; return 0; }',
+      "_dr_warn() { _dr_line WARN \"$1\" \"$2\"; printf '  remedy: %s\\n' \"${3//$'\\n'/ }\"; return 2; }",
+      "_dr_fail() { _dr_line FAIL \"$1\" \"$2\"; printf '  remedy: %s\\n' \"${3//$'\\n'/ }\"; return 1; }",
+      '_dr_skip() { _dr_line SKIP "$1" "$2"; return 3; }',
+    ]);
+    // THE FIXER: the shipped installer, once, with exactly `--homes <dirs>`, and the readers it uses today. `install`, a second script, `rm`,
+    // `eval`, `sh -c` and every redirection to a file are each outside this list.
+    const fixBody = shellBody(checks, '_fix_delegation-hooks');
+    const FIXER: CommandRules = {
+      local: true, echo: true, return: true, read: true, '[': true, continue: true, _skills_roster_rows: true, _dh_mixed_events: true, _dr_join: true,
+      command: (a) => a.length === 2 && a[0] === '-v' && a[1] === 'jq',
+      '"${BASH:-bash}"': (a) => a.length === 3 && a[0] === '"$inst"' && a[1] === '--homes' && a[2] === '"${dirs[@]}"',
+    };
+    expect(commandsOutside(fixBody, FIXER), 'the fixer runs something that is not the shipped installer or a reader').toEqual([]);
+    expect(shellCommands(fixBody).cmds.filter((c) => c.word === '"${BASH:-bash}"'), 'one invocation of the installer').toHaveLength(1);
+    const raw = code(fixBody);
     expect(raw.match(/"\$inst"/g), '`$inst` is used once, to run').toHaveLength(1);
-    expect(raw).toContain('local inst="$CCRC_HERE/install-session-hooks.sh"');
+    expect(code(checks.slice(checks.indexOf('\n_fix_delegation-hooks() {'))).split('\n').slice(0, 3).join('\n')).toContain('local inst="$CCRC_HERE/install-session-hooks.sh"');
     // it refuses a home with a mixed hook group before the installer could touch it (R55), and removes nothing itself
     expect(raw).toContain('_dh_mixed_events');
-    expect(raw).not.toMatch(/\bjq\b[^\n]*(del\(|map\(|walk\(|\|=)/);
   });
 
   it('the lane\'s in-memory structures are not durable state: the lane class opens no file and no SQLite handle of its own', () => {
@@ -1038,6 +1372,16 @@ describe('8. the closed scope census', () => {
     const lane = code(watch.slice(watch.indexOf('class DelegationLane {')));
     expect(lane.length).toBeGreaterThan(10_000);
     expect(lane, 'every durable write goes through DelegationDurability').not.toMatch(/\b(writeFile|appendFile|mkdir|rename|unlink|rmSync|createWriteStream|truncate)\w*\(|\.prepare\(|\bdb\.exec\(|openCoordDb|new DatabaseSync/);
+    // the lane's whole contact with the coordination store: three calls, all through the applier's projection port (and the store's
+    // presence, tested once); a fourth (`coord.setSetting(...)` with the marks in it) would be a durable state the journal does not hold
+    expect(lane.split('\n').filter((l) => /\bcoord\b/.test(l)).map((l) => l.replace(/\s*\/\/.*$/, '').trim()), 'every mention of the store in the lane').toEqual([
+      'const coord = this.deps.coord;',
+      'projection: coord === undefined ? null : {',
+      'project: (cp) => coord.projectDelegationCheckpoint(cp),',
+      'insertEvents: (rows) => coord.insertDelegationEvents(rows),',
+      'eventStats: () => coord.delegationEventStats(),',
+      'if (this.deps.coord === undefined) return;',
+    ]);
     expect(lane).toMatch(/private readonly dropped = new Map/);
     expect(lane).toMatch(/pathsByProject = new Map/);
     expect(lane).toMatch(/private readonly knownPaths = new Map/);
