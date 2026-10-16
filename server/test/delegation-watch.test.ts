@@ -13,12 +13,12 @@
 //   R24 (boot refuses an active restore marker) -> 'boot refusal' rows
 import { afterEach, describe, it, expect, vi } from 'vitest';
 import { spawn } from 'node:child_process';
-import { appendFileSync, existsSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { Bus } from '../src/bus.js';
 import { loadConfig } from '../src/config.js';
 import { localIO, type FleetIO } from '../src/io.js';
-import { FleetWatcher, DELEGATION_PASS_BUDGET_MS, DELEGATION_SWEEP_MS } from '../src/watch.js';
+import { FleetWatcher, DELEGATION_PASS_BUDGET_MS, DELEGATION_SWEEP_MS, delegationListingWindowsOf, delegationLostWindowsOf } from '../src/watch.js';
 import { CoordStore } from '../src/coord/store.js';
 import { coordinationRestoreRefusal, openCoordDb } from '../src/coord/db.js';
 import { buildServer } from '../src/server.js';
@@ -36,6 +36,7 @@ import {
   DELEGATION_EVENTS_CAP,
   DELEGATION_HOUR_CLOSE_MARGIN_MS,
   DELEGATION_HOUR_MS,
+  DELEGATION_INTERVAL_RETENTION_HOURS,
   DELEGATION_UNMEASURED_INCARNATION,
   canonicalDelegationJson,
   emptyDelegationCheckpoint,
@@ -1898,7 +1899,7 @@ describe('the lane remembers what it dropped (R65): a link that rests on an even
         expect(restarted.watcher.delegationReport().verdicts).toEqual({ unresolved: 0, conflicting: 0, unmeasured: 1 });
       });
 
-      it('the path mark, liveness to a link: when the forgotten key could not veto (the subagent\'s own event), the restart clears the mark and the tree links as the full evidence says', async () => {
+      it('the path mark, liveness to a link: when the forgotten key could not veto (the subagent\'s own event), the restart clears the mark; the tree, listed before the restart, then waits on its lost first sighting (5484 (3)) until a measured census shows it gone and lists it anew, and links as the full evidence says', async () => {
         const first = world();
         writeBucket(first, 'demo-a', BUCKET10,
           subStart('demo-a', A1, '/w/demo', '2026-10-15T10:01:00.000Z'), tool('demo-a', 1, C, '2026-10-15T10:02:00.000Z', A1),
@@ -1917,6 +1918,10 @@ describe('the lane remembers what it dropped (R65): a link that rests on an even
         restarted.watcher.setDelegationSeams({ evidenceCap: 3, droppedPruneEvery: 1 });
         for (let i = 7; i < 10; i++) await censusPass(restarted, at(i), census, [sessionOf('demo-b')]);
         expect(marksOf(restarted).forced).toEqual(NONE);
+        expect(leasesOf(restarted.home), '5484 (3): its first sighting was lost with the restart').toEqual([]);
+        expect(restarted.watcher.delegationReport().lostEvidence.forced, 'held by lost evidence, not by the mark').toBe(1);
+        await censusPass(restarted, at(10), { demo: [] }, [sessionOf('demo-b')]);                // measured: the tree is not listed
+        for (let i = 11; i < 14; i++) await censusPass(restarted, at(i), census, [sessionOf('demo-b')]);
         expect(leasesOf(restarted.home).map((l) => [l.adminRecord, l.sourceKind])).toEqual([['raw-tree', 'agent']]);
         expect(attemptsOf(restarted.home).map((a) => [a.adminRecord, a.verdict, a.rung])).toEqual([['raw-tree', 'linked', 3]]);
       });
@@ -2017,7 +2022,7 @@ describe('the lane remembers what it dropped (R65): a link that rests on an even
           expect(marksOf(w).forced).toEqual({ ...NONE, lossy: 1 });
         });
 
-        it('liveness: a restart whose re-index fits under the cap clears the flag and the tree links; one that overflows again raises it again', async () => {
+        it('liveness: a restart whose re-index fits under the cap clears the flag (the tree, listed before the restart, links once its first sighting is measured again: 5484 (3)); one that overflows again raises it again', async () => {
           const w = linkable(unattributed);
           w.watcher.setDelegationSeams({ evidenceCap: 3, droppedPruneEvery: 1, markCap: 1 });
           for (let i = 0; i < 4; i++) await censusPass(w, at(i), census);
@@ -2030,6 +2035,10 @@ describe('the lane remembers what it dropped (R65): a link that rests on an even
           fits.watcher.setDelegationSeams({ evidenceCap: 3, droppedPruneEvery: 1, markCap: 100 });
           for (let i = 5; i < 9; i++) await censusPass(fits, at(i), census);
           expect(marksOf(fits).lossy).toBe(false);
+          expect(leasesOf(fits.home), 'held by its lost first sighting, not by the flag').toEqual([]);
+          expect(fits.watcher.delegationReport().lostEvidence.forced).toBe(1);
+          await censusPass(fits, at(9), { demo: [] });
+          for (let i = 10; i < 13; i++) await censusPass(fits, at(i), census);
           expect(leasesOf(fits.home).map((l) => [l.adminRecord, l.sourceKind])).toEqual([['raw-tree', 'agent']]);
         });
       });
@@ -2708,9 +2717,10 @@ describe('boot refusal (R24): an active restore marker, or one that cannot be me
 describe('final review I-1: a restart never re-creates an evicted-session veto as a link', () => {
   // `demo-a`'s call [10:05:01, 10:05:02] is inside `demo-b`'s, which created raw-tree [10:05:00, 10:05:03]: held in full, unresolved. After a
   // restart with `demo-a` gone from the registry (a reclaimed child, a forgotten session) the lane cannot name `demo-a`'s project.
-  function overlapWorld(aWindow: readonly [string, string] = ['2026-10-15T10:05:01.000Z', '2026-10-15T10:05:02.000Z']): World {
+  function overlapWorld(aWindow: readonly [string, string] = ['2026-10-15T10:05:01.000Z', '2026-10-15T10:05:02.000Z'], aCwd?: (w: World) => string): World {
     const w = world();
-    writeBucket(w, 'demo-a', BUCKET10, bashPre('demo-a', 'toolu_o1', ['old-tree'], aWindow[0]), bashPost('demo-a', 'toolu_o1', ['old-tree'], aWindow[1]));
+    const cwd = aCwd === undefined ? '/w/demo' : aCwd(w);
+    writeBucket(w, 'demo-a', BUCKET10, bashPre('demo-a', 'toolu_o1', ['old-tree'], aWindow[0], cwd), bashPost('demo-a', 'toolu_o1', ['old-tree'], aWindow[1], cwd));
     writeBucket(w, 'demo-b', BUCKET10,
       bashPre('demo-b', 'toolu_wt1', ['old-tree'], '2026-10-15T10:05:00.000Z'), bashPost('demo-b', 'toolu_wt1', ['old-tree', 'raw-tree'], '2026-10-15T10:05:03.000Z'));
     return w;
@@ -2719,12 +2729,14 @@ describe('final review I-1: a restart never re-creates an evicted-session veto a
   const both = [sessionOf('demo-a'), sessionOf('demo-b')];
   const onlyB = [sessionOf('demo-b')];
   /** The first lane sees both sessions and makes no lease; then `demo-a` leaves the registry and the server restarts. */
-  async function restarted(aWindow?: readonly [string, string], passes = 4): Promise<World> {
-    const first = overlapWorld(aWindow);
+  async function restarted(aWindow?: readonly [string, string], passes = 4, aCwd?: (w: World) => string): Promise<World> {
+    const first = overlapWorld(aWindow, aCwd);
     for (let i = 0; i < passes; i++) await censusPass(first, at(i), census, both);
     expect(leasesOf(first.home), 'control: held in full, no lease').toEqual([]);
     await first.watcher.closeDelegation();
-    return world({ home: first.home });
+    const again = world({ home: first.home });
+    (again.cfg as { projectsRoot: string }).projectsRoot = first.cfg.projectsRoot;     // the same box: the same projects root
+    return again;
   }
 
   it('SAFETY (FINALRV-P1): the unknown session\'s window still vetoes: no lease and no attempt, pass after pass past an hour, counted as `window`', async () => {
@@ -2737,8 +2749,8 @@ describe('final review I-1: a restart never re-creates an evicted-session veto a
     expect(again.watcher.delegationReport().marks.forced, 'counted apart from every other mark').toMatchObject({ window: 1, path: 0, id: 0, project: 0, lossy: 0, prefix: 0 });
   });
 
-  it('LIVENESS: a registry row naming the session\'s project again clears it: under another project the tree links; under the same one the overlap stands', async () => {
-    const again = await restarted();
+  it('LIVENESS: a registry row naming the session\'s project again clears it: under another project (whose checkout its cwd lists, 2c d) the tree links; under the same one the overlap stands', async () => {
+    const again = await restarted(undefined, 4, (w) => `${realpathSync(w.cfg.projectsRoot)}/other`);
     for (let i = 4; i < 7; i++) await censusPass(again, at(i), census, onlyB);
     expect(leasesOf(again.home)).toEqual([]);
     await censusPass(again, at(7), census, onlyB, [recordOf('demo-b'), recordOf('demo-a', 'demo')]);
@@ -3042,5 +3054,372 @@ describe('how session-hours count toward spec §5.3\'s gate (coordinator 5443): 
     expect(w.calls.listings, 'its owner directory is never listed').not.toContain('demo-gone');
     expect(intervalsOf(w.home).some((r) => r.sessionId === 'demo-gone'), 'no interval at all').toBe(false);
     expect(intervalFor(w.home, 'demo-a')).toMatchObject({ state: 'measured' });
+  });
+});
+
+// ── 2c (R84; coordinator 5477, 5480, 5484): lost evidence never decides a link, in the lane ───────────────────────────────
+
+describe('2c (R84): the lane hands correlation the windows it LOST (pure builders)', () => {
+  const MARGIN = correlation.DELEGATION_EVIDENCE_MARGIN_MS;
+  const ev = (over: Record<string, unknown>): never => ({
+    v: 1, observedAt: '2026-10-15T10:05:00.000Z', sessionId: 'demo-a', parentIncarnation: INC, claudeSessionId: CLAUDE, toolName: 'Bash', toolUseId: 'toolu_1',
+    cwd: '/w/demo', eventId: 'e'.repeat(64), bucket: BUCKET10, startOffset: 0, endOffset: 1, ...over,
+  }) as never;
+  const pre = (at: string, over: Record<string, unknown> = {}) => ev({ eventKind: 'PreToolUse', observedAt: at, ...over });
+  const post = (at: string, over: Record<string, unknown> = {}) => ev({ eventKind: 'PostToolUse', outcome: 'completed', observedAt: at, ...over });
+  const demo = (): string => 'demo';
+  const t = (s: number): string => iso(Date.UTC(2026, 9, 15, 10, 5, s));
+
+  it('step 1: a SHED listing (`truncated`, no `listing`) is a LOST window: a shed PreToolUse to its PostToolUse (or open-ended), and a shed PostToolUse bounds its PreToolUse\'s window', () => {
+    const shedPre = delegationListingWindowsOf([pre(t(0), { truncated: true }), post(t(3), { truncated: true })], demo);
+    expect(shedPre).toEqual([expect.objectContaining({ toolUseId: 'toolu_1', repository: 'demo', lost: true, startedAt: t(0), endedAt: t(3) })]);
+    expect(delegationListingWindowsOf([pre(t(0), { truncated: true }), post(t(3), { listing: ['a'] })], demo)[0], 'its PostToolUse listing does not rescue it').toMatchObject({ lost: true, endedAt: t(3) });
+    expect(delegationListingWindowsOf([pre(t(0), { truncated: true })], demo)[0], 'no PostToolUse yet').toMatchObject({ lost: true, endedAt: null });
+    expect(delegationListingWindowsOf([pre(t(0), { listing: ['a'] }), post(t(3), { truncated: true })], demo)[0], 'bounded at the shed PostToolUse (L2)').toMatchObject({ lost: true, startedAt: t(0), endedAt: t(3) });
+    // unchanged: a PostToolUse that carries no listing and is not truncated leaves the window open-ended, and not lost
+    const open = delegationListingWindowsOf([pre(t(0), { listing: ['a'] }), post(t(3))], demo)[0]!;
+    expect(open).toMatchObject({ endedAt: null, after: null });
+    expect(open.lost).toBeUndefined();
+    // a Bash call that carries neither a listing nor `truncated` is no window at all (the line cannot say it lost one)
+    expect(delegationListingWindowsOf([pre(t(0)), post(t(3))], demo)).toEqual([]);
+  });
+
+  it('d: with an attribution, each window carries the repository its cwd lists (`listedRepository`): one cwd, or both ends agreeing; null when absent, unattributed or the two ends disagree', () => {
+    const listed = (cwd: string): string | null => (cwd.startsWith('/w/demo') ? 'demo' : cwd.startsWith('/w/other') ? 'other' : null);
+    const one = (preOver: Record<string, unknown>, postOver: Record<string, unknown>) =>
+      delegationListingWindowsOf([pre(t(0), { listing: ['a'], ...preOver }), post(t(3), { listing: ['a', 'b'], ...postOver })], demo, listed)[0]!.listedRepository;
+    expect(one({}, {})).toBe('demo');
+    expect(one({ cwd: '/w/other/x' }, { cwd: '/w/other/x' })).toBe('other');
+    expect(one({ cwd: '/elsewhere' }, { cwd: '/elsewhere' }), 'no tree and no root names it').toBeNull();
+    expect(one({ cwd: undefined }, {}), 'a PreToolUse with no cwd').toBeNull();
+    expect(one({}, { cwd: '/w/other/x' }), 'the two ends list different repositories').toBeNull();
+    expect(delegationListingWindowsOf([pre(t(0), { listing: ['a'] })], demo)[0]!.listedRepository, 'no attribution handed over: not measured').toBeUndefined();
+  });
+
+  describe('step 2: delegationLostWindowsOf (the checkpoint\'s intervals and cursors)', () => {
+    const interval = (sessionId: string, state: 'measured' | 'unmeasured', detail: string | null, hour = HOUR10) =>
+      ({ sessionId, parentIncarnation: INC, utcHour: hour, state, detail, recordedAt: '2026-10-15T10:30:00.000Z' });
+    const cursor = (sessionId: string, detail: string | null, bucket = BUCKET10) =>
+      ({ sessionId, parentIncarnation: INC, bucket, cursor: 10, lastSize: 70, lastCompleteAt: null, intervalState: 'measured' as const, detail, anchor: null, replaced: false });
+    const hourWindow = (sessionId: string) => expect.objectContaining({
+      sessionId, parentIncarnation: INC, toolUseId: '', repository: null, lost: true, startedAt: HOUR10, endedAt: iso(Date.parse(HOUR10) + DELEGATION_HOUR_MS + MARGIN),
+    });
+    const of = (intervals: readonly ReturnType<typeof interval>[], cursors: readonly ReturnType<typeof cursor>[] = []) =>
+      delegationLostWindowsOf(intervals, cursors, NOW).filter((w) => w.sessionId !== '');
+
+    it('an unmeasured hour is a lost window on EVERY repository, from the hour\'s start to one hour and one margin later; a measured one is none', () => {
+      for (const detail of ['range-unreadable: x', '1 of 2 complete lines refused: malformed-json=1', 'capability-unmeasured', 'directory-unreadable: x', 'bucket-vanished-unread: x', 'incarnation-unmeasured: x', 'never-closed: x']) {
+        expect(of([interval('demo-a', 'unmeasured', detail)]), detail).toEqual([hourWindow('demo-a')]);
+      }
+      expect(of([interval('demo-a', 'measured', null)])).toEqual([]);
+      expect(of([interval('demo-a', 'measured', 'capped-read: 9 bytes beyond the read window are unread')]), 'more to read is not lost').toEqual([]);
+    });
+
+    it('5484 (1), the carve-out: `directory-absent` vetoes only for an owner that HAD a spool (a cursor row, or a measured hour); `capability-absent` never does', () => {
+      const absent = interval('demo-a', 'unmeasured', 'directory-absent: the owner spool directory does not exist');
+      expect(of([absent]), 'never had a spool: no window (the class carried to the operator)').toEqual([]);
+      expect(of([absent], [cursor('demo-a', null, '2026101508')]), 'a cursor row: the spool existed and vanished').toEqual([hourWindow('demo-a')]);
+      expect(of([absent, interval('demo-a', 'measured', null, '2026-10-15T08:00:00.000Z')]), 'a measured hour: its directory was listed').toEqual([hourWindow('demo-a')]);
+      expect(of([absent], [cursor('demo-b', null)]), 'ANOTHER owner\'s cursor row does not count').toEqual([]);
+      expect(of([interval('demo-a', 'unmeasured', 'capability-absent: the fleet does not offer delegation events')], [cursor('demo-a', null, '2026101508')])).toEqual([]);
+      expect(of([interval('demo-a', 'unmeasured', 'capability-absent')])).toEqual([]);
+    });
+
+    it('a torn tail (a line that may never complete) is lost while the cursor names it, and after the cursor retires while the measured hour still does', () => {
+      expect(of([], [cursor('demo-a', 'torn-tail: 60 unframed bytes after offset 0')]), 'the cursor').toEqual([hourWindow('demo-a')]);
+      expect(of([interval('demo-a', 'measured', 'torn-tail: 60 unframed bytes after offset 0')]), 'the hour, its cursor retired').toEqual([hourWindow('demo-a')]);
+      expect(of([interval('demo-a', 'measured', null)], [cursor('demo-a', null)]), 'CONTROL: nothing torn').toEqual([]);
+    });
+
+    it('the retention floor: one lost window on every repository from the epoch to the oldest hour the checkpoint still keeps, plus a margin', () => {
+      const keepFrom = Math.floor(NOW / DELEGATION_HOUR_MS) * DELEGATION_HOUR_MS - DELEGATION_INTERVAL_RETENTION_HOURS * DELEGATION_HOUR_MS;
+      const floor = delegationLostWindowsOf([], [], NOW).filter((w) => w.sessionId === '');
+      expect(floor).toEqual([expect.objectContaining({ repository: null, lost: true, startedAt: iso(0), endedAt: iso(keepFrom + MARGIN) })]);
+    });
+  });
+});
+
+describe('2c (R84) in the lane: a shed listing, an unmeasured hour or a lost creator never decides a link', () => {
+  const both = [sessionOf('demo-a'), sessionOf('demo-b')];
+  const census = { demo: [OLD, RAW] };
+  /** The hook's spelling of a SHED listing: `truncated: true` and no `listing` (the first field it drops to fit). */
+  const shed = (owner: string, eventKind: 'PreToolUse' | 'PostToolUse', toolUseId: string, when: string, extra: Record<string, unknown> = {}): string =>
+    lineOf(common(owner, { eventKind, toolName: 'Bash', toolUseId, ...(eventKind === 'PostToolUse' ? { outcome: 'completed' } : {}), cwd: '/w/demo', truncated: true, ...extra }, when));
+  /** demo-b creates raw-tree in [10:05:00, 10:05:03]: a clean one-record delta. */
+  const creator = (w: World, ...extra: string[]): void => writeBucket(w, 'demo-b', BUCKET10,
+    bashPre('demo-b', 'toolu_wt1', ['old-tree'], '2026-10-15T10:05:00.000Z'), bashPost('demo-b', 'toolu_wt1', ['old-tree', 'raw-tree'], '2026-10-15T10:05:03.000Z'), ...extra);
+  const run = async (w: World, sessions: readonly Sess[] = both, projects: Record<string, CensusView> = census, n = 4): Promise<void> => {
+    for (let i = 0; i < n; i++) await censusPass(w, at(i), projects, sessions);
+  };
+  const leased = (w: World) => leasesOf(w.home).map((l) => [l.adminRecord, l.sourceKind, l.parentId]);
+  const noLink = (w: World, label?: string): void => {
+    expect(leasesOf(w.home), label).toEqual([]);
+    expect(attemptsOf(w.home).filter((a) => a.verdict === 'linked'), label).toEqual([]);
+  };
+  const report = (w: World) => w.watcher.delegationReport();
+
+  describe('step 1: a shed listing', () => {
+    it('L1: another session\'s overlapping call whose before- and after-listings were both shed: unmeasured, no lease, no attempt, counted as lost evidence', async () => {
+      const w = world();
+      creator(w);
+      writeBucket(w, 'demo-a', BUCKET10, shed('demo-a', 'PreToolUse', 'toolu_o1', '2026-10-15T10:05:01.000Z'), shed('demo-a', 'PostToolUse', 'toolu_o1', '2026-10-15T10:05:02.000Z'));
+      await run(w);
+      noLink(w);
+      expect(attemptsOf(w.home)).toEqual([]);
+      expect(report(w).verdicts).toEqual({ unresolved: 1, conflicting: 0, unmeasured: 1 });
+      expect(report(w).lostEvidence.forced, 'the link lost evidence held back').toBe(1);
+    });
+
+    it('L1b: only the BEFORE-listing shed (the PostToolUse carries one): the same', async () => {
+      const w = world();
+      creator(w);
+      writeBucket(w, 'demo-a', BUCKET10, shed('demo-a', 'PreToolUse', 'toolu_o1', '2026-10-15T10:05:01.000Z'), bashPost('demo-a', 'toolu_o1', ['old-tree'], '2026-10-15T10:05:02.000Z'));
+      await run(w);
+      noLink(w);
+      expect(report(w).verdicts.unmeasured).toBe(1);
+    });
+
+    it('L3: the SAME session\'s subagent ran an overlapping call whose listings were shed: unmeasured, never a link to the main thread\'s call', async () => {
+      const w = world();
+      creator(w,
+        shed('demo-b', 'PreToolUse', 'toolu_sub1', '2026-10-15T10:05:01.000Z', { agentId: 'sub1' }),
+        shed('demo-b', 'PostToolUse', 'toolu_sub1', '2026-10-15T10:05:02.000Z', { agentId: 'sub1' }));
+      await run(w, [sessionOf('demo-b')]);
+      noLink(w);
+      expect(report(w).verdicts.unmeasured).toBe(1);
+    });
+
+    it('L2: only the AFTER-listing shed: unmeasured, and the window ends at that PostToolUse, so a clean creation twenty minutes later links', async () => {
+      const w = world();
+      creator(w, bashPre('demo-b', 'toolu_wt2', ['old-tree', 'raw-tree'], '2026-10-15T10:25:00.000Z'), bashPost('demo-b', 'toolu_wt2', ['old-tree', 'raw-tree', 'raw2'], '2026-10-15T10:25:03.000Z'));
+      writeBucket(w, 'demo-a', BUCKET10, bashPre('demo-a', 'toolu_o1', ['old-tree'], '2026-10-15T10:05:01.000Z'), shed('demo-a', 'PostToolUse', 'toolu_o1', '2026-10-15T10:05:02.000Z'));
+      await run(w, both, { demo: [OLD, RAW, record('demo', 'raw2')] });
+      expect(leased(w)).toEqual([['raw2', 'raw', 'demo-b']]);
+      expect(report(w).verdicts).toEqual({ unresolved: 1, conflicting: 0, unmeasured: 1 });
+    });
+
+    it('a shed call whose (session, incarnation, agent, cwd) tuple already held an event is still a window: the one-event-per-tuple rule never hides it', async () => {
+      const w = world();
+      creator(w);
+      writeBucket(w, 'demo-a', BUCKET10, lineOf(common('demo-a', { eventKind: 'SessionStart', source: 'startup', cwd: '/w/demo' }, '2026-10-15T10:01:00.000Z')),
+        shed('demo-a', 'PreToolUse', 'toolu_o1', '2026-10-15T10:05:01.000Z'), shed('demo-a', 'PostToolUse', 'toolu_o1', '2026-10-15T10:05:02.000Z'));
+      await run(w);
+      noLink(w);
+    });
+  });
+
+  describe('step 2: an unmeasured hour', () => {
+    const overlapping = (w: World): void => writeBucket(w, 'demo-a', BUCKET10,
+      bashPre('demo-a', 'toolu_o1', ['old-tree'], '2026-10-15T10:05:01.000Z'), bashPost('demo-a', 'toolu_o1', ['old-tree'], '2026-10-15T10:05:02.000Z'));
+
+    it('L4: the overlapping session\'s bucket range is unreadable: its hour is unmeasured, and the tree is unmeasured with no lease and no attempt', async () => {
+      const w = world();
+      creator(w);
+      overlapping(w);
+      w.faults.range.add('demo-a');
+      await run(w);
+      expect(intervalFor(w.home, 'demo-a')).toMatchObject({ state: 'unmeasured' });
+      noLink(w);
+      expect(attemptsOf(w.home)).toEqual([]);
+      expect(report(w).verdicts).toEqual({ unresolved: 1, conflicting: 0, unmeasured: 1 });
+    });
+
+    it('L5: a refused line in the overlapping session\'s bucket: unmeasured, no lease', async () => {
+      const w = world();
+      creator(w);
+      writeBucket(w, 'demo-a', BUCKET10, '{"v":1,"eventKind":"PreToolUse",garbage}\n', bashPost('demo-a', 'toolu_o1', ['old-tree'], '2026-10-15T10:05:02.000Z'));
+      await run(w);
+      expect(intervalFor(w.home, 'demo-a')).toMatchObject({ state: 'unmeasured' });
+      noLink(w);
+    });
+
+    it('L6: a TORN tail in the overlapping session\'s bucket (a line that may never complete; the hour reads measured): no lease', async () => {
+      const w = world();
+      creator(w);
+      writeBucket(w, 'demo-a', BUCKET10, bashPre('demo-a', 'toolu_o1', ['old-tree'], '2026-10-15T10:05:01.000Z').slice(0, 60));
+      await run(w);
+      expect(intervalFor(w.home, 'demo-a')).toMatchObject({ state: 'measured' });
+      expect(intervalFor(w.home, 'demo-a')!.detail).toMatch(/^torn-tail:/);
+      noLink(w);
+    });
+
+    it('an unmeasured hour of a session of ANOTHER project vetoes this repository too: what a lost hour held cannot be told', async () => {
+      const w = world();
+      creator(w);
+      writeBucket(w, 'other-x', BUCKET10, startLine('other-x'));
+      w.faults.range.add('other-x');
+      await run(w, [sessionOf('demo-b'), sessionOf('other-x', 'idle', 'other')], { demo: [OLD, RAW], other: [] });
+      noLink(w);
+    });
+
+    it('the retention floor: a candidate a lost hour vetoed stays unmeasured after the checkpoint prunes that hour', async () => {
+      const w = world();
+      creator(w);
+      overlapping(w);
+      w.faults.range.add('demo-a');
+      await run(w);
+      noLink(w);
+      const later = NOW + (DELEGATION_INTERVAL_RETENTION_HOURS + 24) * DELEGATION_HOUR_MS;
+      for (let i = 0; i < 3; i++) await censusPass(w, later + i * STEP, census, both);
+      expect(intervalsOf(w.home).some((r) => r.sessionId === 'demo-a' && r.utcHour === HOUR10), 'the hour was pruned').toBe(false);
+      noLink(w, 'the pruned hour still vetoes');
+    });
+
+    it('5484 (1), the carve-out: a directory-absent hour of an owner that NEVER had a spool does not veto: rung 4 links across it', async () => {
+      const w = world();
+      creator(w);                                                       // demo-a has no spool directory at all (an old pane, or no ccd)
+      await run(w);
+      expect(intervalFor(w.home, 'demo-a')!.detail).toMatch(/^directory-absent/);
+      expect(leased(w)).toEqual([['raw-tree', 'raw', 'demo-b']]);
+    });
+
+    it('5484 (1): a directory-absent hour of an owner that HAD a spool (a cursor row: it existed and vanished) vetoes', async () => {
+      const w = world();
+      creator(w);
+      writeBucket(w, 'demo-a', BUCKET09, startLine('demo-a', '2026-10-15T09:10:00.000Z'));
+      await censusPass(w, at(0), census, both);
+      expect(disk(w.home).checkpoint!.bucketCursors.some((c) => c.sessionId === 'demo-a'), 'its spool was read').toBe(true);
+      rmSync(spoolDir(w, 'demo-a'), { recursive: true, force: true });
+      for (let i = 1; i < 4; i++) await censusPass(w, at(i), census, both);
+      expect(intervalFor(w.home, 'demo-a')!.detail).toMatch(/^directory-absent/);
+      noLink(w);
+    });
+
+    it('5484 (1): a capability-absent hour does not veto (fleet-wide, it captured nothing): once the fleet offers the capability, rung 4 links', async () => {
+      const old = world({ ccdVerbs: ['caps'] });
+      creator(old);
+      makeOwner(old, 'demo-a');
+      await censusPass(old, at(0), census, both);
+      expect(intervalFor(old.home, 'demo-b')!.detail).toMatch(/^capability-absent/);
+      const w = world({ home: old.home });
+      for (let i = 1; i < 5; i++) await censusPass(w, at(i), census, both);
+      expect(intervalFor(w.home, 'demo-b')).toMatchObject({ state: 'unmeasured' });
+      expect(leased(w)).toEqual([['raw-tree', 'raw', 'demo-b']]);
+    });
+  });
+
+  describe('d: a window counts for the repository its cwd lists, attributed by the trees (R84)', () => {
+    const fromCwd = (w: World, owner: string, cwd: string, listing = ['old-tree']): void => writeBucket(w, owner, BUCKET10,
+      bashPre(owner, 'toolu_o1', listing, '2026-10-15T10:05:01.000Z', cwd), bashPost(owner, 'toolu_o1', listing, '2026-10-15T10:05:02.000Z', cwd));
+    const otherSessions = [sessionOf('demo-b'), sessionOf('other-x', 'idle', 'other')];
+
+    it('L8: a session of ANOTHER project whose cwd is in a linked worktree of demo lists demo: it vetoes demo\'s creation (L7, a demo session there, as ever)', async () => {
+      const w = world();
+      creator(w);
+      fromCwd(w, 'other-x', '/w/demo/.claude/worktrees/feature');
+      await run(w, otherSessions, { demo: [OLD, RAW, record('demo', 'feature')], other: [] });
+      noLink(w, 'L8');
+      const l7 = world();
+      creator(l7);
+      fromCwd(l7, 'demo-a', '/w/demo/.claude/worktrees/feature/src/sub');
+      await run(l7, both, { demo: [OLD, RAW, record('demo', 'feature')] });
+      noLink(l7, 'L7');
+    });
+
+    it('the projects root unmeasured: a cwd inside a known tree of its own repository vetoes that repository only; a cwd outside every tree vetoes every repository', async () => {
+      for (const [cwd, expected] of [['/w/other/.claude/worktrees/o-tree/src', [['raw-tree', 'raw', 'demo-b']]], ['/elsewhere/scratch', []]] as const) {
+        const w = world();
+        w.io.realpath = async () => null;
+        creator(w);
+        fromCwd(w, 'other-x', cwd, ['o-tree']);
+        await run(w, otherSessions, { demo: [OLD, RAW], other: [record('other', 'o-tree')] });
+        expect(report(w).projectsRoot).toBe('unmeasured');
+        expect(leased(w), cwd).toEqual(expected);
+      }
+    });
+
+    it('a MAIN-checkout cwd matches no census tree (the census lists linked worktrees only): the RESOLVED root attributes it to its project; with the root unmeasured it vetoes every repository', async () => {
+      for (const resolves of [true, false]) {
+        const w = world();
+        if (!resolves) w.io.realpath = async () => null;
+        creator(w);
+        fromCwd(w, 'other-x', `${realpathSync(w.cfg.projectsRoot)}/other`, ['o-tree']);
+        await run(w, otherSessions, { demo: [OLD, RAW], other: [record('other', 'o-tree')] });
+        expect(leased(w), `root resolves: ${resolves}`).toEqual(resolves ? [['raw-tree', 'raw', 'demo-b']] : []);
+      }
+    });
+
+    it('a nested worktree of ANOTHER repository attributes to that repository (the longest prefix wins); the enclosing tree\'s own cwd vetoes its repository', async () => {
+      const inner = '/w/demo/.claude/worktrees/feature/nested-other';
+      const projects = { demo: [OLD, RAW, record('demo', 'feature')], other: [record('other', 'inner', { canonicalPath: inner })] };
+      const nested = world();
+      creator(nested);
+      fromCwd(nested, 'other-x', `${inner}/src`, ['inner']);
+      await run(nested, otherSessions, projects);
+      expect(leased(nested), 'the nested tree is other\'s: it does not veto demo').toEqual([['raw-tree', 'raw', 'demo-b']]);
+      const outer = world();
+      creator(outer);
+      fromCwd(outer, 'other-x', '/w/demo/.claude/worktrees/feature/src', ['inner']);
+      await run(outer, otherSessions, projects);
+      noLink(outer, 'feature is demo\'s: it vetoes demo');
+    });
+  });
+
+  describe('X1: a lost creator never leaves a rung-3 link standing (R84; coordinator 5484, condition 3)', () => {
+    const A1 = 'a1b2c3d4e5f60718';
+    const C = RAW.canonicalPath!;
+    const subStart = (owner: string, when: string): string => lineOf(common(owner, { eventKind: 'SubagentStart', agentId: A1, agentType: null, cwd: '/w/demo' }, when));
+    const inTree = (owner: string, when: string): string =>
+      lineOf(common(owner, { eventKind: 'PostToolUse', toolName: 'Bash', toolUseId: 'toolu_in1', outcome: 'completed', cwd: C, agentId: A1 }, when));
+    /** demo-a (Q) creates raw-tree in [10:31:10, 10:31:13]; demo-b's (P's) subagent works inside it. The census at 10:31 does not list the
+     *  tree; the one at 10:32 does. */
+    const plant = (w: World, creatorToo: boolean): void => {
+      makeOwner(w, 'demo-a');
+      if (creatorToo) writeBucket(w, 'demo-a', BUCKET10, bashPre('demo-a', 'toolu_q1', ['old-tree'], '2026-10-15T10:31:10.000Z'), bashPost('demo-a', 'toolu_q1', ['old-tree', 'raw-tree'], '2026-10-15T10:31:13.000Z'));
+      writeBucket(w, 'demo-b', BUCKET10, subStart('demo-b', '2026-10-15T10:31:20.000Z'), inTree('demo-b', '2026-10-15T10:31:30.000Z'));
+    };
+    const withTree = { demo: [OLD, RAW] };
+    const born = async (w: World, from = 0, to = 6): Promise<void> => {
+      for (let i = from; i < to; i++) await censusPass(w, at(i), i < 2 ? { demo: [OLD] } : withTree, both);
+    };
+
+    it('the creator\'s window EVICTED (no lease, no attempt); held in full the two rungs disagree; with nothing lost rung 3 links', async () => {
+      const evicted = world();
+      plant(evicted, true);
+      evicted.watcher.setDelegationSeams({ evidenceCap: 2 });
+      await born(evicted);
+      expect(report(evicted).evidenceHorizon).toBe('2026-10-15T10:31:13.000Z');
+      noLink(evicted, 'evicted');
+      expect(attemptsOf(evicted.home).filter((a) => a.adminRecord === 'raw-tree')).toEqual([]);
+      expect(report(evicted).lostEvidence.forced).toBe(1);
+      const full = world();
+      plant(full, true);
+      await born(full);
+      expect(leasesOf(full.home), 'held in full').toEqual([]);
+      expect(attemptsOf(full.home).map((a) => a.verdict)).toContain('conflicting');
+      const control = world();
+      plant(control, false);
+      await born(control);
+      expect(leased(control), 'nothing lost').toEqual([['raw-tree', 'agent', 'demo-b']]);
+    });
+
+    it('5484 (3): after a RESTART, a tree first listed before it has a lost first-sighting instant: its rung-3 link stays unmeasured, pass after pass; without the restart it links', async () => {
+      const first = world();
+      plant(first, false);
+      await born(first, 0, 3);                                          // first listed at 10:32, inside the birth wait
+      expect(leasesOf(first.home)).toEqual([]);
+      const again = world({ home: first.home });
+      for (let i = 3; i < 9; i++) await censusPass(again, at(i), withTree, both);
+      noLink(again);
+      expect(attemptsOf(again.home)).toEqual([]);
+      expect(report(again).verdicts.unmeasured, 'the liveness cost, counted').toBe(1);
+      expect(report(again).lostEvidence.forced).toBe(1);
+      const control = world();
+      plant(control, false);
+      await born(control, 0, 9);
+      expect(leased(control)).toEqual([['raw-tree', 'agent', 'demo-b']]);
+    });
+  });
+
+  it('the hourly warn line names, apart from every mark kind, how many trees lost evidence held at unmeasured since the last line', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const w = world();
+    creator(w);
+    writeBucket(w, 'demo-a', BUCKET10, shed('demo-a', 'PreToolUse', 'toolu_o1', '2026-10-15T10:05:01.000Z'), shed('demo-a', 'PostToolUse', 'toolu_o1', '2026-10-15T10:05:02.000Z'));
+    await run(w);
+    const line = warn.mock.calls.map((c) => String(c[0])).find((l) => l.startsWith('ccrc-server: delegation dropped-evidence marks'));
+    expect(line, 'the line is written when only lost evidence held a tree').toBeDefined();
+    expect(line).toContain('trees held unmeasured by lost evidence (a shed listing, an unmeasured hour, a lost creator) since the last line: 1');
+    expect(line).toContain('unknown-repository window 0');
   });
 });

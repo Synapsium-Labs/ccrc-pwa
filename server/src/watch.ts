@@ -60,9 +60,10 @@ import type { MeasuredDirectoryRead } from './io.js';
 import { DelegationDurability, type DelegationDurableBatch } from './coord/delegation-checkpoint.js';
 import {
   DelegationIngestError, delegationBucketDurabilityOf, delegationBucketUtcHour, ingestAndApplyDelegationBucket, readDelegationBucket,
-  unreadableDelegationBucketResult, type DelegationBucketDurability, type DelegationBucketResult,
+  unreadableDelegationBucketResult, type DelegationBucketDurability, type DelegationBucketResult, type DelegationBucketUnreadableReason,
 } from './coord/delegation-ingest.js';
 import { correlateDelegation, type DelegationCorrelationInput, type DelegationListingWindow } from './coord/delegation-correlation.js';
+import { DELEGATION_EVIDENCE_MARGIN_MS, delegationLostEvidenceForced, delegationMarkAttributionOf } from './coord/delegation-correlation.js';
 import {
   DELEGATION_DROPPED_UNMEASURED, delegationDroppedKeyId, delegationDroppedKeyOf, delegationGoneTrees, delegationTreeKey, indexDelegationDropped,
   planDelegationDroppedPrune, type DelegationDroppedEvidence, type DelegationDroppedKey, type DelegationPruneProject,
@@ -75,13 +76,13 @@ import type { WorktreeRead } from './coord/gitref.js';
 import type { DelegationCensusDiagnostic } from './coord/gitref.js';
 import { delegationCircuitBreaker, planDelegationReconciliation, type DelegationReportEffect } from './coord/delegation-policy.js';
 import { isUnownedWorkReason } from './coord/delegation-policy.js';
-import { delegationBucketReadable, planDelegationCursorRetention } from './coord/delegation-model.js';
+import { delegationBucketHourMs, delegationBucketReadable, planDelegationCursorRetention } from './coord/delegation-model.js';
 import {
-  DELEGATION_HOUR_CLOSE_MARGIN_MS, DELEGATION_HOUR_MS, DELEGATION_UNMEASURED_INCARNATION, DelegationModelError,
+  DELEGATION_HOUR_CLOSE_MARGIN_MS, DELEGATION_HOUR_MS, DELEGATION_INTERVAL_RETENTION_HOURS, DELEGATION_UNMEASURED_INCARNATION, DelegationModelError,
   canonicalDelegationJson, delegationCapabilityState, delegationHealthInputOf, delegationObservationHealthOf, formatDelegationInstant,
   parseDelegationInstant, upkeepDelegationIntervals,
   type DeepReadonly, type DelegationAttemptRow, type DelegationBucketCursor, type DelegationCensusRecord, type DelegationCheckpointV1,
-  type DelegationRecoveryState,
+  type DelegationObservationInterval, type DelegationRecoveryState,
 } from './coord/delegation-model.js';
 import { claimExpiry, type LivenessProbe } from './coord/claims.js';
 import { measureClaimant } from './coord/reclaim.js';
@@ -8668,6 +8669,10 @@ function laneFlatCensus(census: DelegationCensusPass, standing: ReadonlySet<stri
 const laneNoForced = (): Record<DelegationMarkKind, Set<string>> =>
   ({ path: new Set(), id: new Set(), project: new Set(), lossy: new Set(), prefix: new Set(), window: new Set() });
 
+/** X1: a tree's first sighting as correlation reads it (canonical instants; `after` null when unknown). */
+const laneSightingOf = (s: { after: number | null; at: number }): DelegationCorrelationInput['firstSighting'] =>
+  ({ after: s.after === null ? null : formatDelegationInstant(s.after), at: formatDelegationInstant(s.at) });
+
 /** A cursor row nobody needs to store: the state of a bucket with nothing read from it. */
 const laneFreshCursor = (c: DelegationBucketCursor): boolean =>
   c.cursor === 0 && c.lastSize === 0 && c.anchor === null && !c.replaced && c.lastCompleteAt === null;
@@ -8684,28 +8689,111 @@ const laneFreshCursor = (c: DelegationBucketCursor): boolean =>
  * window is never a candidate, and rung 4 treats it as on every repository (`delegation-correlation.ts`), so it can only move a verdict
  * toward unresolved or unmeasured. It is rebuilt at every reconcile from the evidence slice and the session map, both lane memory (the
  * slice itself is rebuilt from the journal at a load): no file, no SQLite-only state.
+ *
+ * A SHED LISTING IS A LOST WINDOW (2c, R84). The hook spells a listing it dropped to fit the line as `truncated: true` with no `listing`
+ * (and a line already truncated for another field never attempts one), so a Bash PreToolUse or PostToolUse that is truncated and carries
+ * no listing may have lost one. A shed PreToolUse makes a window from its own instant to its PostToolUse's (whatever that carries), or
+ * open-ended; a shed PostToolUse makes its PreToolUse's window LOST and ENDS it at its own instant (an unbounded window would veto every
+ * later call). A lost window's listings mean nothing. A PostToolUse with neither a listing nor `truncated` cannot say whether it lost one
+ * (a command without the token, or a listing the hook could not read), so it leaves its window open-ended, as before, and a call with
+ * neither on both ends makes no window at all.
+ *
+ * THE LISTED REPOSITORY (2c d, R84). `listedOf`, when handed over, attributes a working directory to the repository whose admin records
+ * the hook listed there (the lane: the nearest tree it lists or remembers, else its RESOLVED projects root). A window whose two ends'
+ * directories are attributed alike carries that repository; one whose directory is absent, unattributed or disagrees between its ends
+ * carries null: every repository. Without `listedOf` the field is absent, and only `repository` is read.
  */
 export function delegationListingWindowsOf(
   evidence: Iterable<DelegationEventEnvelopeV1>, projectOf: (sessionId: string) => string | undefined,
+  listedOf?: (cwd: string) => string | null,
 ): DelegationListingWindow[] {
-  const pre = new Map<string, DelegationEventEnvelopeV1 & { eventKind: 'PreToolUse'; toolName: 'Bash' }>();
-  const post = new Map<string, DelegationEventEnvelopeV1 & { eventKind: 'PostToolUse'; toolName: 'Bash' }>();
+  type BashPre = DelegationEventEnvelopeV1 & { eventKind: 'PreToolUse'; toolName: 'Bash' };
+  type BashPost = DelegationEventEnvelopeV1 & { eventKind: 'PostToolUse'; toolName: 'Bash' };
+  const pre = new Map<string, BashPre>();
+  const post = new Map<string, BashPost>();
   const keyOf = (e: DelegationEventEnvelopeV1 & { toolUseId: string }): string => JSON.stringify([e.sessionId, e.parentIncarnation, e.toolUseId]);
+  /** A listing, or a line that may have shed one. */
+  const listingOrShed = (e: { listing?: readonly string[]; truncated?: true }): boolean => e.listing !== undefined || e.truncated === true;
   for (const e of evidence) {
-    if (e.eventKind === 'PreToolUse' && e.toolName === 'Bash' && e.listing !== undefined) pre.set(keyOf(e), e);
-    else if (e.eventKind === 'PostToolUse' && e.toolName === 'Bash' && e.listing !== undefined) post.set(keyOf(e), e);
+    if (e.eventKind === 'PreToolUse' && e.toolName === 'Bash' && listingOrShed(e)) pre.set(keyOf(e), e);
+    else if (e.eventKind === 'PostToolUse' && e.toolName === 'Bash' && listingOrShed(e)) post.set(keyOf(e), e);
   }
+  const listedAt = (cwd: string | undefined): string | null => (listedOf === undefined || cwd === undefined || cwd === '' ? null : listedOf(cwd));
   const out: DelegationListingWindow[] = [];
   for (const [key, start] of pre) {
     const repository = projectOf(start.sessionId) ?? null;
-    if (start.listing === undefined) continue;
     const end = post.get(key);
+    const lost = start.listing === undefined || (end !== undefined && end.listing === undefined);
+    let listedRepository: string | null | undefined;
+    if (listedOf !== undefined) {
+      const first = listedAt(start.cwd);
+      listedRepository = end === undefined || (first !== null && listedAt(end.cwd) === first) ? first : null;
+    }
     out.push({
       sessionId: start.sessionId, parentIncarnation: start.parentIncarnation, toolUseId: start.toolUseId, repository,
-      startedAt: start.observedAt, endedAt: end === undefined ? null : end.observedAt, before: start.listing,
-      after: end === undefined || end.listing === undefined ? null : end.listing,
+      ...(listedRepository === undefined ? {} : { listedRepository }), ...(lost ? { lost: true as const } : {}),
+      startedAt: start.observedAt, endedAt: end === undefined ? null : end.observedAt, before: start.listing ?? [],
+      after: lost || end === undefined || end.listing === undefined ? null : end.listing,
     });
   }
+  return out;
+}
+
+/** The two unmeasured-hour words that do NOT veto a link (R84, the carve-out), typed against the reader's own vocabulary. */
+const LANE_HOUR_NO_SPOOL: DelegationBucketUnreadableReason = 'directory-absent';
+const LANE_HOUR_NO_CAPABILITY: DelegationBucketUnreadableReason = 'capability-absent';
+/** The detail head ingestion gives a bucket whose last bytes are a line that may still complete (`delegation-ingest.ts`, step 9). */
+const LANE_TORN_TAIL = 'torn-tail:';
+
+/**
+ * The windows the CHECKPOINT says the lane lost (2c, R84; coordinator 5477, 5484): every one is lost (`lost: true`), names no call (an
+ * empty `toolUseId`), and is on EVERY repository (`repository: null`), because what an unread hour held cannot be told. Pure.
+ *   - AN UNMEASURED HOUR of a session (a vanished bucket, an unreadable range, a refused or over-long line, an unmeasured incarnation, an
+ *     hour that never closed): a window from the hour's start to one hour and one margin later, since a call that began in the hour may
+ *     have ended up to the margin after it. THE CARVE-OUT (R84, ruled narrowly): an hour whose detail begins `capability-absent` never
+ *     vetoes (fleet-wide, it captured nothing, and rung 4 then has no window either); one whose detail begins `directory-absent` vetoes
+ *     only for an owner that HAD a spool: a cursor row (the lane read a bucket of it), or a measured hour (the lane listed its
+ *     directory). An owner with neither never had a spool, by construction: the no-spool class carried to the operator, across which
+ *     rung 4 links. (The measured-hour arm outlives the cursor rows, which retire at 48 hours: a spool that existed and vanished is
+ *     still seen for the interval rows' 192.)
+ *   - A TORN TAIL: a bucket whose last bytes are a line that may never complete. Its hour is MEASURED, so it is read from the cursor row's
+ *     detail while the cursor lives, and from the measured hour's detail (written by the same application) after it retires.
+ *   - THE RETENTION FLOOR: one window from the epoch to the oldest hour the checkpoint still keeps, plus a margin, so a candidate a lost
+ *     hour vetoed does not link once that hour's row is pruned (192 hours), and a tree whose first sighting is unknown (a restart) meets
+ *     lost evidence by construction.
+ * An hour or a bucket name that cannot be placed fails SAFE: a window over all of time.
+ */
+export function delegationLostWindowsOf(
+  intervals: readonly DeepReadonly<DelegationObservationInterval>[], cursors: readonly DeepReadonly<DelegationBucketCursor>[], nowMs: number,
+): DelegationListingWindow[] {
+  const hadSpool = new Set<string>();
+  for (const c of cursors) hadSpool.add(c.sessionId);
+  for (const r of intervals) if (r.state === 'measured') hadSpool.add(r.sessionId);
+  const out: DelegationListingWindow[] = [];
+  const seen = new Set<string>();
+  const add = (sessionId: string, parentIncarnation: string, hourMs: number | null): void => {
+    const id = JSON.stringify([sessionId, parentIncarnation, hourMs]);
+    if (seen.has(id)) return;
+    seen.add(id);
+    out.push({
+      sessionId, parentIncarnation, toolUseId: '', repository: null, lost: true,
+      startedAt: formatDelegationInstant(hourMs ?? 0),
+      endedAt: hourMs === null ? null : formatDelegationInstant(hourMs + DELEGATION_HOUR_MS + DELEGATION_EVIDENCE_MARGIN_MS), before: [], after: null,
+    });
+  };
+  for (const r of intervals) {
+    const detail = r.detail ?? '';
+    const lost = r.state === 'unmeasured'
+      ? !detail.startsWith(LANE_HOUR_NO_CAPABILITY) && (!detail.startsWith(LANE_HOUR_NO_SPOOL) || hadSpool.has(r.sessionId))
+      : detail.startsWith(LANE_TORN_TAIL);
+    if (lost) add(r.sessionId, r.parentIncarnation, laneInstantMs(r.utcHour));
+  }
+  for (const c of cursors) if ((c.detail ?? '').startsWith(LANE_TORN_TAIL)) add(c.sessionId, c.parentIncarnation, delegationBucketHourMs(c.bucket));
+  const keepFrom = laneHourOf(nowMs) - DELEGATION_INTERVAL_RETENTION_HOURS * DELEGATION_HOUR_MS;
+  out.push({
+    sessionId: '', parentIncarnation: '', toolUseId: '', repository: null, lost: true,
+    startedAt: formatDelegationInstant(0), endedAt: formatDelegationInstant(keepFrom + DELEGATION_EVIDENCE_MARGIN_MS), before: [], after: null,
+  });
   return out;
 }
 
@@ -8768,6 +8856,11 @@ class DelegationLane {
   private markForced: Record<DelegationMarkKind, number> = { path: 0, id: 0, project: 0, lossy: 0, prefix: 0, window: 0 };
   /** N16: the trees (by tree key) each kind of mark held back, cumulatively since the last hourly warn line, which prints and resets them. */
   private forcedSinceLine: Record<DelegationMarkKind, Set<string>> = laneNoForced();
+  /** 2c (R84): how many verdicts of the last reconcile LOST evidence held back from a link (a shed listing, an unmeasured hour, a lost
+   *  creator; `delegationLostEvidenceForced`), a gauge, and the trees it held since the last hourly line, which prints and resets them.
+   *  Counted apart from every mark kind. Lane memory only. */
+  private lostForced = 0;
+  private lostSinceLine = new Set<string>();
   private lastMarkWarnHour = -1;
   private droppedIndexCache: DelegationDroppedEvidence | null = null;
   /** New keys since the last prune, and the most keys held at once since the last load began (a report figure: the bound is real). */
@@ -8784,6 +8877,15 @@ class DelegationLane {
   private reconciledAt = 0;
   private reconciliations = 0;
   private firstSeen = new Map<string, number>();
+  /** X1 (R84; coordinator 5484, condition 3): per tree, the census instant (ms) that first listed it (`at`) and the latest earlier census of
+   *  its project, which did not (`after`; null when this process measured none: a restart lost it, and a lost first-sighting instant is not
+   *  an empty one). Kept like `knownPaths`: a tree leaves it only when a census of its own project, measured in a reconcile, does not list
+   *  it; a project whose view was null keeps its trees' sightings. Lane memory only: no file, no SQLite-only state. A tree first listed
+   *  before a restart therefore reads `after: null` for as long as it stays listed; its instant is measured again only if it leaves a
+   *  measured census and is listed anew. */
+  private sighted = new Map<string, { after: number | null; at: number }>();
+  /** The census instant (ms) of the last reconcile that MEASURED each project, for the next new tree's `after`. Bounded by the projects. */
+  private censusedAt = new Map<string, number>();
   private previous: { flat: readonly DelegationCensusRecord[]; projects: readonly string[] } | null = null;
   private verdicts: DelegationVerdictCounts = { unresolved: 0, conflicting: 0, unmeasured: 0 };
   private reconciled = false;
@@ -9004,6 +9106,7 @@ class DelegationLane {
         forcedSinceLine: Object.fromEntries(Object.entries(this.forcedSinceLine).map(([k, v]) => [k, v.size])) as Record<DelegationMarkKind, number>,
       },
       projectsRoot: this.projectsRoot === null ? 'none' : typeof this.projectsRoot === 'string' ? 'resolved' : 'unmeasured',
+      lostEvidence: { forced: this.lostForced, sinceLine: this.lostSinceLine.size },
     };
   }
 
@@ -9471,7 +9574,8 @@ class DelegationLane {
 
   /**
    * What the lane keeps of the journal for correlation, which is a thin slice: the join events (a subagent's start and stop, a
-   * launch response), every Bash call that carries a worktree listing, and ONE event per (session, incarnation, agent, working
+   * launch response), every Bash call that carries a worktree listing or may have SHED one (2c: `truncated`, no listing; the
+   * one-event-per-tuple rule would otherwise hide it behind an earlier event of its tuple), and ONE event per (session, incarnation, agent, working
    * directory) for anything else that names a directory (rung 3 compares only `cwd`). Bounded by `DELEGATION_EVIDENCE_CAP`, oldest
    * first out. An eviction makes a verdict LESS decided, never more (R57, D-4653): the latest `observedAt` among the events evicted
    * is kept as the evidence horizon and handed to correlation, which refuses a link that rests on evidence reaching back to it. (The
@@ -9485,7 +9589,8 @@ class DelegationLane {
     const tupleKey = (): string | null => (typeof event.cwd === 'string' ? JSON.stringify([event.sessionId, event.parentIncarnation, event.agentId ?? '', event.cwd]) : null);
     if (event.eventKind === 'SubagentStart' || event.eventKind === 'SubagentStop') key = null;
     else if (event.eventKind === 'PostToolUse' && 'launch' in event && event.launch !== null) key = null;
-    else if ((event.eventKind === 'PreToolUse' || event.eventKind === 'PostToolUse') && event.toolName === 'Bash' && 'listing' in event && event.listing !== undefined) key = null;
+    else if ((event.eventKind === 'PreToolUse' || event.eventKind === 'PostToolUse') && event.toolName === 'Bash'
+      && (('listing' in event && event.listing !== undefined) || event.truncated === true)) key = null;   // 2c: a shed listing is a (lost) window too
     else {
       const t = tupleKey();
       if (t === null) return;
@@ -9578,6 +9683,14 @@ class DelegationLane {
     const { censused, flat, held, allMeasured } = laneFlatCensus(pass.census, this.standingProjects(pass.census));
     this.reconciliations += 1;
     const nextFirstSeen = new Map(flat.map((r) => [laneTreeKey(r.project, r.adminRecord), this.firstSeen.get(laneTreeKey(r.project, r.adminRecord)) ?? this.reconciliations] as const));
+    // X1: a tree new to this census was born after the last census that measured its project, if this process took one.
+    const nextSighted = new Map<string, { after: number | null; at: number }>();
+    for (const r of flat) {
+      const k = laneTreeKey(r.project, r.adminRecord);
+      nextSighted.set(k, this.sighted.get(k) ?? { after: this.censusedAt.get(r.project) ?? null, at: pass.census.measuredAt });
+    }
+    const measuredNow = new Set(censused);
+    for (const [k, v] of this.sighted) if (!nextSighted.has(k) && !measuredNow.has((JSON.parse(k) as [string, string])[0])) nextSighted.set(k, v);
     const recordsById = new Map(pass.records.map((r) => [r.id, r] as const));
     const registryRowOf = (record: DelegationCensusRecord): LaneRecord | undefined => {
       const ccdId = record.canonicalPath === null ? null : ccdIdForWorktree(record.project, record.canonicalPath);
@@ -9631,7 +9744,18 @@ class DelegationLane {
     const droppedEvidence = this.droppedIndex();
 
     const evidence = [...this.evidence].map(([journalId, v]) => ({ journalId, event: v.event }));
-    const windows = delegationListingWindowsOf([...this.evidence.values()].map((v) => v.event), (sessionId) => this.sessionProject.get(sessionId));
+    // 2c d (R84): a call's listing is the repository its cwd is attributed to, by the TREES (every census path and every remembered one; the
+    // nearest wins, so a nested worktree is its own repository's), and by the projects root only when it is RESOLVED. Unattributed: null.
+    const trees = new Map<string, string>();
+    for (const [k, p] of this.knownPaths) trees.set(p, (JSON.parse(k) as [string, string])[0]);
+    for (const r of flat) if (r.canonicalPath !== null) trees.set(r.canonicalPath, r.project);
+    const root = this.projectsRoot;
+    const listedOf = (cwd: string): string | null => delegationMarkAttributionOf(cwd, root, trees)?.project ?? null;
+    // 2c (R84): the windows the slice holds, the shed ones lost, and the windows the checkpoint says were lost (hours, torn tails, the floor).
+    const windows = [
+      ...delegationListingWindowsOf([...this.evidence.values()].map((v) => v.event), (sessionId) => this.sessionProject.get(sessionId), listedOf),
+      ...delegationLostWindowsOf(state.checkpoint.observationIntervals, state.checkpoint.bucketCursors, pass.now),
+    ];
     const pointMetas = [...this.pointMetas.values()];
     const inputFor = (record: DelegationCensusRecord): DelegationCorrelationInput => {
       const row = registryRowOf(record);
@@ -9644,6 +9768,7 @@ class DelegationLane {
         birthPassesRemaining: Math.max(0, Math.min(DELEGATION_BIRTH_PASSES, waitRemaining(record))) as 0 | 1 | 2,
         hasRegistryRow: row !== undefined, hasChildMarker: row !== undefined && row.child.kind !== 'none',
         evidenceHorizon, droppedEvidence,
+        firstSighting: laneSightingOf(nextSighted.get(laneTreeKey(record.project, record.adminRecord)) ?? { after: null, at: pass.census.measuredAt }),
       };
     };
     // ONE expression: each pair is a census record and the verdict about it, never sorted or filtered apart.
@@ -9652,7 +9777,7 @@ class DelegationLane {
     // apart from every other `unmeasured` reason: a gauge of this reconcile, and the trees, cumulatively until the next hourly line.
     const forced: Record<DelegationMarkKind, number> = { path: 0, id: 0, project: 0, lossy: 0, prefix: 0, window: 0 };
     // I-1: a verdict an unknown-repository listing window changed is counted as `window`, after every mark (it is not one of the index's).
-    const unknownWindows = windows.some((w) => w.repository === null);
+    const unknownWindows = windows.some((w) => w.repository === null && w.lost !== true);
     if (droppedEvidence.measured || unknownWindows) {
       for (const { record, verdict } of pairs) {
         const input = inputFor(record);
@@ -9664,6 +9789,16 @@ class DelegationLane {
       }
     }
     this.markForced = forced;
+    // 2c (R84): the links lost evidence held back, counted apart from the marks. A tree an unreleased lease holds is owned already (N5).
+    const leasedNow = new Set(state.checkpoint.leases.filter((l) => l.releasedAt === null).map((l) => laneTreeKey(l.project, l.adminRecord)));
+    let lostForced = 0;
+    for (const { record, verdict } of pairs) {
+      if (verdict.kind !== 'unmeasured' || leasedNow.has(laneTreeKey(record.project, record.adminRecord))) continue;   // the reason is correlation's to read
+      if (!delegationLostEvidenceForced(inputFor(record), verdict)) continue;
+      lostForced += 1;
+      this.lostSinceLine.add(laneTreeKey(record.project, record.adminRecord));
+    }
+    this.lostForced = lostForced;
 
     const deaths = this.firstDeadParents();
     const effects = planDelegationReconciliation({
@@ -9677,7 +9812,7 @@ class DelegationLane {
     const counts: DelegationVerdictCounts = { unresolved: 0, conflicting: 0, unmeasured: 0 };
     // N5: a tree that holds an UNRELEASED lease is owned work, whatever its evidence has since become (the creating window leaves the
     // slice, or rung 4's horizon test refuses to repeat the link): it is counted in none of the three.
-    const leased = new Set(state.checkpoint.leases.filter((l) => l.releasedAt === null).map((l) => laneTreeKey(l.project, l.adminRecord)));
+    const leased = leasedNow;
     for (const { record, verdict } of pairs) {
       if (record.state === 'absent') continue;
       if (leased.has(laneTreeKey(record.project, record.adminRecord))) continue;
@@ -9688,6 +9823,8 @@ class DelegationLane {
     }
     this.verdicts = counts;
     this.firstSeen = nextFirstSeen;
+    this.sighted = nextSighted;
+    for (const p of censused) this.censusedAt.set(p, pass.census.measuredAt);
     this.previous = { flat, projects: censused };
     this.reconciled = true;
     this.reconciledWallMs = pass.now;
@@ -9703,7 +9840,7 @@ class DelegationLane {
    */
   private warnMarks(nowMs: number): void {
     const f = this.forcedSinceLine;
-    const present = this.heldBack.size > 0 || this.lostProjects.size > 0 || this.lossy || Object.values(f).some((set) => set.size > 0);
+    const present = this.heldBack.size > 0 || this.lostProjects.size > 0 || this.lossy || Object.values(f).some((set) => set.size > 0) || this.lostSinceLine.size > 0;
     const hour = laneHourOf(nowMs);
     if (!present || hour === this.lastMarkWarnHour) return;
     this.lastMarkWarnHour = hour;
@@ -9712,8 +9849,10 @@ class DelegationLane {
     console.warn(`ccrc-server: delegation dropped-evidence marks (R73): projects held back: ${held}; lost projects: ${lost}; global lossy flag: ${this.lossy ? 'up' : 'down'}; `
       + `marks held: ${this.pathMarkCount()} paths (${this.unattributedPaths.size} in no project), ${this.markIds.size} ids, ${this.lostPrefixes().size} lost-project prefixes; `
       + `trees held unmeasured by a mark since the last line: path ${f.path.size}, id ${f.id.size}, project ${f.project.size}, lossy ${f.lossy.size}, `
-      + `prefix ${f.prefix.size}, unknown-repository window ${f.window.size}`);
+      + `prefix ${f.prefix.size}, unknown-repository window ${f.window.size}; `
+      + `trees held unmeasured by lost evidence (a shed listing, an unmeasured hour, a lost creator) since the last line: ${this.lostSinceLine.size}`);
     this.forcedSinceLine = laneNoForced();
+    this.lostSinceLine = new Set();
   }
 
   // ── rung 2: the positive meta reads ───────────────────────────────────────────────────────────────────────────────────

@@ -47,6 +47,7 @@ import {
   DELEGATION_ROOT_UNMEASURED,
   delegationMarkAttributionOf,
   delegationUnknownWindowForced,
+  delegationLostEvidenceForced,
   delegationHashSetAdd,
   delegationHashSetHas,
   delegationMarkForced,
@@ -144,7 +145,9 @@ const record = (over: Partial<DelegationCensusRecord> = {}): DelegationCensusRec
 });
 const input = (over: Partial<DelegationCorrelationInput> = {}): DelegationCorrelationInput => ({
   record: record(), runChildAgreement: null, activities: [], acceptedEvidence: [], pointMetas: [], listingWindows: [],
-  birthPassesRemaining: 0, hasRegistryRow: false, hasChildMarker: false, evidenceHorizon: null, droppedEvidence: indexDelegationDropped([]), ...over,
+  birthPassesRemaining: 0, hasRegistryRow: false, hasChildMarker: false, evidenceHorizon: null, droppedEvidence: indexDelegationDropped([]),
+  // X1 (R84): a first sighting far after every instant the rows use, so no row meets the creator bracket unless it names its own
+  firstSighting: { after: T(1_000_000), at: T(1_000_060) }, ...over,
 });
 const meta = (over: Partial<DelegationCorrelationInput['pointMetas'][number]> & { evidenceJournalId: string }): DelegationCorrelationInput['pointMetas'][number] => ({
   parentId: PARENT, parentIncarnation: INC, sourceKind: 'agent', upstreamId: AGENT, worktreePath: WT(`agent-${AGENT}`), ...over,
@@ -905,6 +908,159 @@ describe('a listing window whose repository the caller cannot name (final review
     expect(ask([mine]), 'none held').toBe(false);
     expect(ask([mine, unknown({ startedAt: T(13), endedAt: T(14) })]), 'a link').toBe(false);
     expect(ask([mine, unknown(), win({ sessionId: OTHER, toolUseId: 'toolu_o2', startedAt: T(11), endedAt: T(13), before: ['main-wt'], after: ['main-wt'] })]), 'a known window vetoes by itself').toBe(false);
+  });
+});
+
+// ── 2c (R84; coordinator 5477, 5484): lost evidence never decides a link ─────────────────────────────────────────────
+
+describe('2c (R84): a lost window, a lost hour or a lost creator never decides a link', () => {
+  const rec = rawRecord();
+  const MARGIN = DELEGATION_EVIDENCE_MARGIN_MS;
+  const bashWorld = () => world([bashPre(10, 'toolu_b1', ['main-wt']), bashPost(12, 'toolu_b1', ['main-wt', RAW])]);
+  const decide = (windows: readonly DelegationListingWindow[], extra: Partial<DelegationCorrelationInput> = {}, w = bashWorld()) =>
+    correlateDelegation(input({ record: rec, activities: w.activities, acceptedEvidence: w.acceptedEvidence, listingWindows: windows, ...extra }));
+  const mine = win({ after: ['main-wt', RAW] });                                                      // [T10, T12]
+  /** A window whose listings were LOST (a shed listing, an unmeasured hour): it says when a call may have run, never what it listed. */
+  const lost = (over: Partial<DelegationListingWindow> = {}): DelegationListingWindow =>
+    win({ sessionId: OTHER, toolUseId: 'toolu_o1', startedAt: T(11), endedAt: T(13), before: [], after: null, lost: true, ...over });
+  const answer = (v: DelegationCorrelationVerdict): string => (v.kind === 'linked' ? `linked:${v.rung}` : v.kind === 'run-child-owned' ? v.kind : `${v.kind}:${v.reason}`);
+
+  it('step 1: a lost window that may be on the repository and overlaps the candidate makes it unmeasured(evidence-horizon), never a link', () => {
+    for (const [label, w] of [
+      ['another session', lost()],
+      ['the SAME session (its subagent\'s call)', lost({ sessionId: PARENT, toolUseId: 'toolu_s1' })],
+      ['a repository nobody can name', lost({ repository: null })],
+      ['a listing nobody can attribute, filed under another project', lost({ repository: 'project-b', listedRepository: null })],
+      ['a lost HOUR (no call, an empty toolUseId), open-ended', lost({ toolUseId: '', startedAt: T(0), endedAt: null })],
+    ] as const) {
+      expect(answer(decide([mine, w])), label).toBe('unmeasured:evidence-horizon');
+    }
+    expect(answer(decide([mine, lost({ startedAt: T(13), endedAt: T(14) })])), 'CONTROL: disjoint in time').toBe('linked:4');
+    expect(answer(decide([mine, lost({ repository: 'project-b' })])), 'CONTROL: on another repository').toBe('linked:4');
+    expect(answer(decide([mine, lost({ sessionId: PARENT, toolUseId: 'toolu_b1' })])), 'CONTROL: the candidate\'s own call is not its own lost window').toBe('linked:4');
+  });
+
+  it('step 1: a lost window is never a candidate: its listings mean nothing, even when they read as the one-record delta', () => {
+    expect(decide([win({ after: ['main-wt', RAW], lost: true })]).kind).not.toBe('linked');
+  });
+
+  it('step 1, liveness: the horizon\'s held-window clause does not count a lost window: it vetoes only what it overlaps', () => {
+    const late = (ms: number): string => formatDelegationInstant(Date.parse(T(0)) + ms);
+    const far = win({ startedAt: late(MARGIN + 60_000), endedAt: late(MARGIN + 61_000), after: ['main-wt', RAW] });
+    expect(answer(decide([far, lost({ startedAt: T(-5), endedAt: T(-4) })], { evidenceHorizon: T(0) })), 'begun before the horizon').toBe('linked:4');
+    expect(answer(decide([far, lost({ startedAt: late(MARGIN + 120_000), endedAt: null })], { evidenceHorizon: T(0) })), 'open-ended, after the candidate').toBe('linked:4');
+  });
+
+  it('step 1: an unknown-repository window that is LOST is counted as lost evidence, not as the I-1 `window` kind', () => {
+    const w = bashWorld();
+    const i = input({ record: rec, activities: w.activities, acceptedEvidence: w.acceptedEvidence, listingWindows: [mine, lost({ repository: null })] });
+    const v = correlateDelegation(i);
+    expect(answer(v)).toBe('unmeasured:evidence-horizon');
+    expect(delegationUnknownWindowForced(i, v)).toBe(false);
+    expect(delegationLostEvidenceForced(i, v)).toBe(true);
+  });
+
+  it('E2: a same-session window that overlaps the candidate and whose added set CONTAINS the record is ambiguous, never a link to the first call', () => {
+    const sub = (e: DelegationEventEnvelopeV1): DelegationEventEnvelopeV1 => ({ ...e, agentId: 'sub1' });
+    const w = world([bashPre(10, 'toolu_b1', ['main-wt']), bashPost(12, 'toolu_b1', ['main-wt', RAW]),
+      sub(bashPre(11, 'toolu_s1', ['main-wt'])), sub(bashPost(13, 'toolu_s1', ['main-wt', RAW, 'wt-x']))]);
+    const subWindow = (over: Partial<DelegationListingWindow>): DelegationListingWindow =>
+      win({ toolUseId: 'toolu_s1', startedAt: T(11), endedAt: T(13), after: ['main-wt', RAW, 'wt-x'], ...over });
+    expect(answer(decide([mine, subWindow({})], {}, w))).toBe('unresolved:ambiguous-listing-windows');
+    expect(answer(decide([mine, subWindow({ after: ['main-wt', 'wt-x'] })], {}, w)), 'CONTROL: it did not add the record').toBe('linked:4');
+    expect(answer(decide([mine, subWindow({ startedAt: T(20), endedAt: T(22) })], {}, w)), 'CONTROL: it does not overlap').toBe('linked:4');
+  });
+
+  it('d: a window may be on its session\'s project OR the repository its cwd is attributed to (`listedRepository`; null is every repository)', () => {
+    const other = (over: Partial<DelegationListingWindow>): DelegationListingWindow =>
+      win({ sessionId: OTHER, toolUseId: 'toolu_o1', startedAt: T(11), endedAt: T(13), before: ['main-wt'], after: ['main-wt'], ...over });
+    expect(answer(decide([mine, other({ repository: 'project-b', listedRepository: REPO })])), 'filed under another project, listing this one').toBe('unresolved:overlapping-listing-window');
+    expect(answer(decide([mine, other({ repository: 'project-b', listedRepository: null })])), 'a listing nobody can attribute').toBe('unresolved:overlapping-listing-window');
+    expect(answer(decide([mine, other({ repository: REPO, listedRepository: 'project-b' })])), 'its session\'s own project still counts').toBe('unresolved:overlapping-listing-window');
+    expect(answer(decide([mine, other({ repository: 'project-b', listedRepository: 'project-b' })])), 'CONTROL: both another').toBe('linked:4');
+    expect(answer(decide([mine, other({ repository: 'project-b' })])), 'CONTROL: no listed repository is today\'s rule').toBe('linked:4');
+    // the horizon's held-window clause asks the same question
+    const late = (ms: number): string => formatDelegationInstant(Date.parse(T(0)) + ms);
+    const far = win({ startedAt: late(MARGIN + 60_000), endedAt: late(MARGIN + 61_000), after: ['main-wt', RAW] });
+    expect(answer(decide([far, other({ repository: 'project-b', listedRepository: REPO, startedAt: T(-5), endedAt: T(-4) })], { evidenceHorizon: T(0) }))).toBe('unmeasured:evidence-horizon');
+    // a window filed under another project is never a candidate here, whatever its listing
+    expect(decide([win({ repository: 'project-b', listedRepository: REPO, after: ['main-wt', RAW] })]).kind).not.toBe('linked');
+  });
+
+  describe('X1: a lost creator never leaves a rung-3 link standing', () => {
+    // P's subagent works at the path (rung 3); Q's Bash call [T10, T12] created it (rung 4). Held in full the two disagree, final.
+    const toolAt = (n: number): DelegationEventEnvelopeV1 =>
+      ({ ...base(n, { cwd: WT(RAW) }), eventKind: 'PostToolUse', toolName: 'Bash', toolUseId: `toolu_${n}`, outcome: 'completed', agentId: AGENT });
+    const pEvents = [subagentStart(1, AGENT, { cwd: '/elsewhere' }), toolAt(2)];
+    const all = world([...pEvents, bashPre(10, 'toolu_q1', ['main-wt'], { sessionId: OTHER }), bashPost(12, 'toolu_q1', ['main-wt', RAW], { sessionId: OTHER })]);
+    const qWindow = win({ sessionId: OTHER, toolUseId: 'toolu_q1' });
+    /** The tree was first listed at T(60); the census before it, at T(0), did not list it. */
+    const SIGHTED = { after: T(0), at: T(60) };
+    const decideX = (over: Partial<DelegationCorrelationInput>, w = all): DelegationCorrelationVerdict =>
+      correlateDelegation(input({ record: rec, activities: w.activities, acceptedEvidence: w.acceptedEvidence.slice(0, 2), listingWindows: [], firstSighting: SIGHTED, ...over }));
+    /** `s` seconds before the bracket's lower end: the census that did not list the tree, less a margin and the clock skew allowance. */
+    const before = (s: number): string => formatDelegationInstant(Date.parse(T(0)) - MARGIN - DELEGATION_CLOCK_SKEW_MS - s * 1000);
+    /** After the bracket's upper end: the first census that listed it, plus the clock skew allowance. */
+    const AFTER = { startedAt: T(60 + DELEGATION_CLOCK_SKEW_MS / 1000 + 10), endedAt: T(60 + DELEGATION_CLOCK_SKEW_MS / 1000 + 20) };
+
+    it('Q\'s window EVICTED (the horizon at its PostToolUse, inside the bracket): unmeasured, never P\'s rung-3 link. Held in full it is the final conflict; with nothing lost rung 3 links', () => {
+      expect(answer(decideX({ acceptedEvidence: all.acceptedEvidence, listingWindows: [qWindow] })), 'held in full').toBe('conflicting:rungs-disagree');
+      expect(answer(decideX({ evidenceHorizon: T(12) })), 'Q evicted').toBe('unmeasured:evidence-horizon');
+      expect(answer(decideX({})), 'CONTROL: nothing lost, nothing hides a creator').toBe('linked:3');
+      expect(answer(decideX({ evidenceHorizon: before(1) })), 'CONTROL: evicted only before the bracket').toBe('linked:3');
+    });
+
+    it('the horizon arm\'s boundary is closed: a horizon AT one margin (and the clock skew allowance) before the census that did not list the tree reaches the bracket', () => {
+      expect(answer(decideX({ evidenceHorizon: before(0) }))).toBe('unmeasured:evidence-horizon');
+      expect(answer(decideX({ evidenceHorizon: formatDelegationInstant(Date.parse(before(0)) - 1) }))).toBe('linked:3');
+    });
+
+    it('Q\'s listings SHED or its hour LOST (a lost window that may be on the repository, inside the bracket): unmeasured', () => {
+      expect(answer(decideX({ listingWindows: [lost({ toolUseId: 'toolu_q1', startedAt: T(10), endedAt: T(12) })] })), 'shed').toBe('unmeasured:evidence-horizon');
+      expect(answer(decideX({ listingWindows: [lost({ toolUseId: '', startedAt: T(-3600), endedAt: T(1200), repository: null })] })), 'a lost hour').toBe('unmeasured:evidence-horizon');
+      expect(answer(decideX({ listingWindows: [lost({ startedAt: before(20), endedAt: before(10) })] })), 'CONTROL: lost only before the bracket').toBe('linked:3');
+      expect(answer(decideX({ listingWindows: [lost(AFTER)] })), 'CONTROL: lost only after the first sighting').toBe('linked:3');
+      expect(answer(decideX({ listingWindows: [lost({ startedAt: T(70), endedAt: T(80) })] })), 'inside the clock skew allowance after it').toBe('unmeasured:evidence-horizon');
+      expect(answer(decideX({ listingWindows: [lost({ repository: 'project-b' })] })), 'CONTROL: lost on another repository').toBe('linked:3');
+    });
+
+    it('5484 (3): a LOST first-sighting instant (after a restart) is not an empty one: (-inf, at], so any lost evidence that may be on the repository keeps the link unmeasured', () => {
+      const unknown = { after: null, at: T(60) };
+      expect(answer(decideX({ firstSighting: unknown, evidenceHorizon: before(100_000) })), 'an eviction long before').toBe('unmeasured:evidence-horizon');
+      expect(answer(decideX({ firstSighting: unknown, listingWindows: [lost({ startedAt: before(100_000), endedAt: before(99_000), repository: null })] })), 'a lost hour long before').toBe('unmeasured:evidence-horizon');
+      expect(answer(decideX({ firstSighting: unknown })), 'CONTROL: nothing lost at all').toBe('linked:3');
+      expect(answer(decideX({ firstSighting: unknown, listingWindows: [lost(AFTER)] })), 'CONTROL: lost only after the first sighting').toBe('linked:3');
+    });
+
+    it('a first-sighting instant that is not canonical fails safe: any lost evidence keeps the link unmeasured', () => {
+      for (const firstSighting of [{ after: 'yesterday', at: T(60) }, { after: T(0), at: '' }]) {
+        expect(answer(decideX({ firstSighting, evidenceHorizon: before(100_000) })), JSON.stringify(firstSighting)).toBe('unmeasured:evidence-horizon');
+      }
+    });
+
+    it('X1 decides nothing by itself: a tree with no rung-3 link keeps the answer it had (the module only ever makes a LINK less decided)', () => {
+      const none = world([bashPre(10, 'toolu_q1', ['main-wt'], { sessionId: OTHER }), bashPost(12, 'toolu_q1', ['main-wt', RAW], { sessionId: OTHER })]);
+      const v = decideX({ evidenceHorizon: T(12), acceptedEvidence: [] }, none);
+      expect(answer(v)).toBe('unresolved:no-correlating-evidence');
+      expect(answer(decideX({ evidenceHorizon: T(12) })), 'beside a link it is the link that yields').toBe('unmeasured:evidence-horizon');
+    });
+
+    it('delegationLostEvidenceForced counts a link that lost evidence held back (a lost window, or X1), and nothing else', () => {
+      const ask = (over: Partial<DelegationCorrelationInput>, w = all): boolean => {
+        const i = input({ record: rec, activities: w.activities, acceptedEvidence: w.acceptedEvidence.slice(0, 2), listingWindows: [], firstSighting: SIGHTED, ...over });
+        return delegationLostEvidenceForced(i, correlateDelegation(i));
+      };
+      expect(ask({ evidenceHorizon: T(12) }), 'X1, the horizon arm').toBe(true);
+      expect(ask({ listingWindows: [lost({ toolUseId: 'toolu_q1', startedAt: T(10), endedAt: T(12) })] }), 'X1, a lost window').toBe(true);
+      expect(ask({}), 'a link').toBe(false);
+      expect(ask({ acceptedEvidence: all.acceptedEvidence, listingWindows: [qWindow] }), 'a held conflict').toBe(false);
+      expect(ask({ droppedEvidence: DELEGATION_DROPPED_UNMEASURED }), 'an unmeasured index holds it, not a lost window').toBe(false);
+      const b = bashWorld();
+      const step1 = input({ record: rec, activities: b.activities, acceptedEvidence: b.acceptedEvidence, listingWindows: [mine, lost()] });
+      expect(delegationLostEvidenceForced(step1, correlateDelegation(step1)), 'step 1, a lost window over the candidate').toBe(true);
+      const held = input({ record: rec, activities: b.activities, acceptedEvidence: b.acceptedEvidence, listingWindows: [mine, lost(), win({ sessionId: OTHER, toolUseId: 'toolu_o2', startedAt: T(11), endedAt: T(13), before: [], after: [] })] });
+      expect(delegationLostEvidenceForced(held, correlateDelegation(held)), 'a held overlap decides it without the lost window').toBe(false);
+    });
   });
 });
 

@@ -638,7 +638,7 @@ describe('6. run-child agreement remains owned without a lease', () => {
     const verdict = correlateDelegation({
       record: rec, runChildAgreement: { activityId: activity.activityId, evidenceJournalIds: [activity.identityJournalId] }, activities: durable.state().checkpoint.activities,
       acceptedEvidence: [], pointMetas: [], listingWindows: [], birthPassesRemaining: 0, hasRegistryRow: true, hasChildMarker: true, evidenceHorizon: null,
-      droppedEvidence: DELEGATION_DROPPED_UNMEASURED,
+      droppedEvidence: DELEGATION_DROPPED_UNMEASURED, firstSighting: { after: null, at: iso(NOW) },
     });
     expect(verdict).toMatchObject({ kind: 'run-child-owned', activityId: activity.activityId });
     const effects = policy.planDelegationReconciliation({

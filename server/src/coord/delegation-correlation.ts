@@ -46,6 +46,12 @@
 //     path hash, an id hash, a lost project, or a global flag), and a rung-2 or rung-3 link that any mark covers is `unmeasured` too.
 //   - `combine` never lets a link beat an `evidence-horizon` answer from the other rung: that answer is a rung that found an activity
 //     and was about to link, and its real answer may have been a link to another parent.
+//   - LOST WINDOWS (2c, R84; coordinator 5477: "lost evidence must never decide a link"). The caller also hands over windows whose
+//     listings it LOST: a Bash call whose listing the hook shed (`truncated`), and a session-hour it could not measure. Such a window says
+//     when a call may have run, never what it listed. A rung-4 candidate it may overlap is `unmeasured('evidence-horizon')`, and so is
+//     a tree with NO rung-4 candidate whose creator's call such a window, or an eviction, may have held (X1: the bracket between the census
+//     that did not list the tree and the first that did, `firstSighting`), which stops a rung-3 link beside it. The reason is the same
+//     `evidence-horizon`, because the remedy is the same: the full evidence was not a link to this activity, or was not known to be.
 // A verdict that was not a link is never touched: the rules above only ever turn a link into a non-answer.
 //
 // INTERPRETATIONS (each recorded in the task report): `conflicting` is decided over PARENTS: two linked rungs that name the same
@@ -74,6 +80,15 @@ export interface DelegationListingWindow {
    *  is gone, after a restart). A null repository is UNKNOWN, never "another repository": rung 4 treats such a window as on every
    *  repository for its overlap and horizon tests, and never takes it as a candidate. */
   repository: string | null;
+  /** 2c d (R84): the repository the call's working directory is attributed to (the nearest tree the caller lists or remembers, else its
+   *  resolved projects root), which is the repository the hook LISTED. Null when the caller cannot attribute it (no `cwd`, or no tree and
+   *  no resolved root names it): UNKNOWN, so the window may be on every repository. Absent: the caller did not measure it, and only
+   *  `repository` is read (the rule before R84). It widens the overlap and horizon tests only; a candidate is still chosen by `repository`. */
+  listedRepository?: string | null;
+  /** 2c (R84): the window's listings were LOST (a shed listing, an unmeasured hour), so its listings mean nothing: it is never a candidate
+   *  and never a held window to the horizon test, and a link it may hide is `unmeasured('evidence-horizon')`. An hour's window names no
+   *  call: its `toolUseId` is the empty string. */
+  lost?: true;
   startedAt: string;
   endedAt: string | null;
   before: readonly string[];
@@ -111,6 +126,11 @@ export interface DelegationCorrelationInput {
   /** R65 (D-4653): what the caller remembers of the events it no longer holds, reduced to the keys rungs 2 and 3 read. NEVER null: a
    *  caller that has not measured it says so (`DELEGATION_DROPPED_UNMEASURED`), and an unmeasured index is not an empty one. */
   droppedEvidence: DelegationDroppedEvidence;
+  /** X1 (R84): when the census first listed this tree. `at` is the census that first listed it; `after` the latest earlier census of the
+   *  tree's project, which did not, or NULL when the caller has none (a restart lost it, or no earlier census of the project was measured):
+   *  a LOST first-sighting instant is not an empty one, so the bracket is then (-inf, at] (coordinator 5484, condition 3). The tree was
+   *  created in (after, at], so the call that created it began in [after - margin, at]. Read only to VETO a link (never to make one). */
+  firstSighting: { after: string | null; at: string };
 }
 
 export type DelegationCorrelationVerdict =
@@ -689,13 +709,18 @@ function pruneDropped(
  * unmeasured index (which is not a mark), and for a verdict the same input without marks answers the same way (a real key, a horizon or
  * the unmeasured state decided it). Otherwise the first kind that applies, in the order the rungs ask: the global flag, the lost project,
  * the tree's path, and (since nothing else could have) an id.
+ * A mark is asked BEFORE lost evidence (2c): both sides of the question are read without the lost windows and without X1, so a verdict a
+ * mark and lost evidence both hold is the mark's, and `delegationLostEvidenceForced` does not count it.
  */
 export function delegationMarkForced(input: DelegationCorrelationInput, verdict: DelegationCorrelationVerdict): DelegationMarkKind | null {
   const d = input.droppedEvidence;
   if (!d.measured || verdict.kind !== 'unmeasured' || verdict.reason !== 'evidence-horizon') return null;
   const m = d.marks;
   if (!m.lossy && m.projects.size === 0 && m.prefixes.size === 0 && m.paths.every((s) => s.size === 0) && m.ids.size === 0) return null;
-  const without = correlateDelegation({ ...input, droppedEvidence: { ...d, marks: DELEGATION_NO_MARKS } });
+  const held = { ...input, listingWindows: input.listingWindows.filter((w) => w.lost !== true) };
+  const withMarks = correlate(held, false);
+  if (withMarks.kind !== 'unmeasured' || withMarks.reason !== 'evidence-horizon') return null;
+  const without = correlate({ ...held, droppedEvidence: { ...d, marks: DELEGATION_NO_MARKS } }, false);
   if (without.kind === 'unmeasured' && without.reason === 'evidence-horizon') return null;
   if (m.lossy) return 'lossy';
   if (m.projects.has(input.record.project)) return 'project';
@@ -711,9 +736,24 @@ export function delegationMarkForced(input: DelegationCorrelationInput, verdict:
  */
 export function delegationUnknownWindowForced(input: DelegationCorrelationInput, verdict: DelegationCorrelationVerdict): boolean {
   if (verdict.kind === 'linked' || verdict.kind === 'run-child-owned') return false;
-  if (!input.listingWindows.some((w) => w.repository === null)) return false;
-  const without = correlateDelegation({ ...input, listingWindows: input.listingWindows.filter((w) => w.repository !== null) });
-  return without.kind !== verdict.kind || !('reason' in without) || without.reason !== verdict.reason;
+  // A LOST window is not counted here (2c): it is lost evidence, counted apart (`delegationLostEvidenceForced`), and asked after this
+  // kind, so both sides of the question are read without the lost windows and without X1.
+  if (!input.listingWindows.some((w) => w.repository === null && w.lost !== true)) return false;
+  const held = input.listingWindows.filter((w) => w.lost !== true);
+  const base = correlate({ ...input, listingWindows: held }, false);
+  const without = correlate({ ...input, listingWindows: held.filter((w) => w.repository !== null) }, false);
+  return without.kind !== base.kind || !('reason' in without) || !('reason' in base) || without.reason !== base.reason;
+}
+
+/**
+ * 2c (R84): did LOST evidence hold back a link? True when the verdict is `unmeasured('evidence-horizon')` and the same input, without its
+ * lost windows (a shed listing, an unmeasured hour) and without X1's lost-creator arm, is a LINK. So it counts the links lost evidence
+ * cost, for the lane's hourly warn line, apart from every mark kind and from the I-1 `window` kind. A verdict that two causes hold (a lost
+ * window and a mark, say) is counted by neither, as with the marks: the count is a floor on what lost evidence cost, never more.
+ */
+export function delegationLostEvidenceForced(input: DelegationCorrelationInput, verdict: DelegationCorrelationVerdict): boolean {
+  if (verdict.kind !== 'unmeasured' || verdict.reason !== 'evidence-horizon') return false;
+  return correlate({ ...input, listingWindows: input.listingWindows.filter((w) => w.lost !== true) }, false).kind === 'linked';
 }
 
 // ── Small helpers ─────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -722,6 +762,8 @@ interface Unlinked {
   kind: 'unresolved' | 'conflicting' | 'unmeasured';
   reason: DelegationCorrelationReason;
   evidenceJournalIds: readonly string[];
+  /** X1 (R84): rung 4's lost-creator answer, which only ever stops a link beside it (`combine`); it never leaves this module. */
+  lostCreator?: true;
 }
 type Answer = DelegationLinkedVerdict | Unlinked;
 
@@ -956,38 +998,109 @@ function addedExactly(window: DelegationListingWindow, adminRecord: string): boo
   return added.length === 1 && added[0] === adminRecord && removed.length === 0;
 }
 
-/** I-1: may this window be on `repository`? Its own repository, or one the caller cannot name (null: UNKNOWN, so possibly this one). */
-const mayBeOn = (w: DelegationListingWindow, repository: string): boolean => w.repository === null || w.repository === repository;
+/** Did this window's listings add the record (among others, or alone)? A window with no after-listing measured no delta. */
+function addedIncludes(window: DelegationListingWindow, adminRecord: string): boolean {
+  return window.after !== null && window.after.includes(adminRecord) && !window.before.includes(adminRecord);
+}
+
+/** I-1 and 2c d: may this window be on `repository`? Its session's own repository, the repository its listing is attributed to, or
+ *  either one the caller cannot name (null: UNKNOWN, so possibly this one). An absent `listedRepository` is not read. */
+const mayBeOn = (w: DelegationListingWindow, repository: string): boolean =>
+  w.repository === null || w.repository === repository
+  || (w.listedRepository !== undefined && (w.listedRepository === null || w.listedRepository === repository));
+
+/** A window as epoch milliseconds; an open-ended one runs for ever. Throws the model's error for an instant that is not canonical. */
+const spanOf = (w: DelegationListingWindow): [number, number] =>
+  [parseDelegationInstant(w.startedAt), w.endedAt === null ? Number.POSITIVE_INFINITY : parseDelegationInstant(w.endedAt)];
+
+/**
+ * X1 (R84; coordinator 5477, 5484): could evidence the caller LOST have held the Bash call that created this tree? Rung 4 found no
+ * candidate, and rung 3 may be about to link; with the creator's window held, the two might have disagreed (a final conflict), so a link
+ * that rests on its absence rests on lost evidence (spec §5.3). The creator's call began in the bracket [after - margin, at] (the tree
+ * was born between a census that did not list it and the first that did; a call lasts at most the margin), or anywhere up to `at` when
+ * `after` is unknown. The census instants are the server's clock and the windows the fleet's, so both ends widen by the clock skew
+ * allowance (`DELEGATION_CLOCK_SKEW_MS`). True when:
+ *   - the evidence horizon reaches the bracket (an evicted window may have begun inside it); or
+ *   - a lost window that may be on the tree's repository (a shed listing, an unmeasured hour, the retention floor) overlaps the bracket.
+ * An instant that is not canonical fails SAFE: the bracket is then all of time. The census bracket only ever VETOES: it never links.
+ */
+function creatorMayBeLost(input: DelegationCorrelationInput, lostWindows: readonly DelegationListingWindow[]): boolean {
+  const horizon = horizonMsOf(input);
+  if (horizon === null && lostWindows.length === 0) return false;
+  let lo = Number.NEGATIVE_INFINITY;
+  let hi = Number.POSITIVE_INFINITY;
+  try {
+    hi = parseDelegationInstant(input.firstSighting.at) + DELEGATION_CLOCK_SKEW_MS;
+    if (input.firstSighting.after !== null) lo = parseDelegationInstant(input.firstSighting.after) - DELEGATION_EVIDENCE_MARGIN_MS - DELEGATION_CLOCK_SKEW_MS;
+  } catch (err) {
+    if (!(err instanceof DelegationModelError)) throw err;
+    lo = Number.NEGATIVE_INFINITY;
+    hi = Number.POSITIVE_INFINITY;
+  }
+  if (horizon !== null && (Number.isNaN(horizon) || lo <= horizon)) return true;
+  for (const w of lostWindows) {
+    let span: [number, number];
+    try { span = spanOf(w); } catch (err) { if (err instanceof DelegationModelError) return true; throw err; }
+    if (span[0] <= hi && lo <= span[1]) return true;
+  }
+  return false;
+}
 
 /**
  * Rung 4. A window whose repository the caller cannot name (null; I-1: a session whose registry row is gone, after a restart) is never
  * a candidate, and it counts as a window ON EVERY repository for the overlap and the horizon tests: overlapping a candidate in time makes
  * the tree `unresolved`, and an open-ended or early one makes it `unmeasured('evidence-horizon')`. An unknown repository therefore moves
- * a verdict toward unresolved or unmeasured, never toward a link.
+ * a verdict toward unresolved or unmeasured, never toward a link. A window whose LISTING the caller attributes to another repository, or
+ * cannot attribute (2c d, `listedRepository`), counts the same way for the tests that veto, and never makes a candidate.
+ *
+ * LOST WINDOWS (2c, R84). A window whose listings were lost (a shed listing, an unmeasured hour) is never a candidate and never a held
+ * window to the horizon test. A candidate it may overlap, on the candidate's repository, is `unmeasured('evidence-horizon')`, whichever
+ * session it belongs to (the candidate's own session included: it may have been a second call that added the record), except the
+ * candidate's own call. And with NO candidate, a lost window or an eviction that may have held the creator answers
+ * `unmeasured('evidence-horizon')` too (X1, `creatorMayBeLost`), which only ever stops a link beside it (`combine`). Each of these only
+ * ever turns a would-be LINK into a non-answer: a verdict that was not a link is never touched.
  */
-function rung4(input: DelegationCorrelationInput): Answer | null {
+function rung4(input: DelegationCorrelationInput, x1: boolean): Answer | null {
   const { record } = input;
-  const candidates = input.listingWindows.filter((w) => w.repository !== null && w.repository === record.project && addedExactly(w, record.adminRecord));
-  if (candidates.length === 0) return null;
+  const held = input.listingWindows.filter((w) => w.lost !== true);
+  const lostWindows = input.listingWindows.filter((w) => w.lost === true && mayBeOn(w, record.project));
+  const candidates = held.filter((w) => w.repository !== null && w.repository === record.project && addedExactly(w, record.adminRecord));
+  if (candidates.length === 0) return x1 && creatorMayBeLost(input, lostWindows) ? { ...unmeasured('evidence-horizon'), lostCreator: true } : null;
+  let ambiguous = false;
   try {
-    const span = (w: DelegationListingWindow): [number, number] => [parseDelegationInstant(w.startedAt), w.endedAt === null ? Number.POSITIVE_INFINITY : parseDelegationInstant(w.endedAt)];
     // Overlap first: a delta that another session's window overlaps is `unresolved` however many windows also show the record.
     for (const mine of candidates) {
-      const [start, end] = span(mine);
+      const [start, end] = spanOf(mine);
       const mineKey = parentKey(mine.sessionId, mine.parentIncarnation);
-      for (const other of input.listingWindows) {
-        if (!mayBeOn(other, record.project) || parentKey(other.sessionId, other.parentIncarnation) === mineKey) continue;
-        const [otherStart, otherEnd] = span(other);
-        if (start <= otherEnd && otherStart <= end) return unresolved('overlapping-listing-window');
+      for (const other of held) {
+        if (other === mine || !mayBeOn(other, record.project)) continue;
+        const [otherStart, otherEnd] = spanOf(other);
+        if (!(start <= otherEnd && otherStart <= end)) continue;
+        if (parentKey(other.sessionId, other.parentIncarnation) !== mineKey) return unresolved('overlapping-listing-window');
+        // E2 (R84): "one Bash tool call of S". A window of the SAME session that overlaps the candidate and also added the record (with
+        // others or alone) may be the call that made it: ambiguous, never a link to the first toolUseId.
+        if (addedIncludes(other, record.adminRecord)) ambiguous = true;
       }
     }
   } catch (err) {
     if (err instanceof DelegationModelError) return unmeasured('listing-window-instant-unreadable');
     throw err;
   }
-  if (candidates.length > 1) return unresolved('ambiguous-listing-windows');
+  if (ambiguous || candidates.length > 1) return unresolved('ambiguous-listing-windows');
   const [mine] = candidates;
   if (mine === undefined) return null;
+  // 2c step 1: a lost window over the candidate may have been another session's call (an overlap) or a second call that added the record.
+  try {
+    const [start, end] = spanOf(mine);
+    for (const w of lostWindows) {
+      if (w.sessionId === mine.sessionId && w.parentIncarnation === mine.parentIncarnation && w.toolUseId === mine.toolUseId) continue;
+      const [lostStart, lostEnd] = spanOf(w);
+      if (start <= lostEnd && lostStart <= end) return unmeasured('evidence-horizon');
+    }
+  } catch (err) {
+    if (err instanceof DelegationModelError) return unmeasured('listing-window-instant-unreadable');
+    throw err;
+  }
   const activity = input.activities.find((a) => a.sourceKind === 'bash-worktree' && a.upstreamId === mine.toolUseId && a.parentId === mine.sessionId && a.parentIncarnation === mine.parentIncarnation);
   if (activity === undefined) return unmeasured('activity-not-durably-open');
   const call = input.acceptedEvidence
@@ -995,7 +1108,8 @@ function rung4(input: DelegationCorrelationInput): Answer | null {
       && (event.eventKind === 'PreToolUse' || event.eventKind === 'PostToolUse') && event.toolName === 'Bash' && event.toolUseId === mine.toolUseId)
     .map(({ journalId }) => journalId);
   // R57: the overlap rule above is negative evidence. A window whose pre-listing was evicted is a window that is not there to overlap.
-  // The link stands only if every window the caller holds on this repository is closed and began after the horizon, and the candidate
+  // The link stands only if every window the caller HOLDS (a lost window is not held: 2c) on this repository is closed and began after
+  // the horizon, and the candidate
   // began MORE than a full margin after it (`DELEGATION_EVIDENCE_MARGIN_MS`; the boundary is closed, like the overlap test). An index
   // the caller has not measured says nothing about what it dropped: no link.
   const horizon = horizonMsOf(input);
@@ -1003,7 +1117,7 @@ function rung4(input: DelegationCorrelationInput): Answer | null {
     let reaches: boolean;
     try {
       reaches = horizon === null || Number.isNaN(horizon)
-        || input.listingWindows.some((w) => mayBeOn(w, record.project) && (w.endedAt === null || parseDelegationInstant(w.startedAt) <= horizon))
+        || held.some((w) => mayBeOn(w, record.project) && (w.endedAt === null || parseDelegationInstant(w.startedAt) <= horizon))
         || parseDelegationInstant(mine.startedAt) <= horizon + DELEGATION_EVIDENCE_MARGIN_MS;
     } catch (err) {
       if (!(err instanceof DelegationModelError)) throw err;
@@ -1038,12 +1152,18 @@ function combine(input: DelegationCorrelationInput, answers: readonly (Answer | 
     // The proof of a link is the links' own evidence: a non-answer beside it (a refused parent-cwd, an overlap) proves nothing.
     return linked(lowest.activityId, lowest.rung, links.flatMap((l) => l.evidenceJournalIds));
   }
-  return present[0] ?? unresolved('no-correlating-evidence');
+  // X1: a lost creator stops a link (above) and decides nothing by itself, so a tree with no link keeps the answer it had.
+  return present.find((a) => !('lostCreator' in a)) ?? unresolved('no-correlating-evidence');
 }
 
 // ── The ladder ───────────────────────────────────────────────────────────────────────────────────────────────────────
 
 export function correlateDelegation(input: DelegationCorrelationInput): DelegationCorrelationVerdict {
+  return correlate(input, true);
+}
+
+/** The ladder; `x1: false` leaves out rung 4's lost-creator arm, for `delegationLostEvidenceForced` alone. */
+function correlate(input: DelegationCorrelationInput, x1: boolean): DelegationCorrelationVerdict {
   const { record } = input;
   // Rung 1: the existing model owns the workspace. Terminal, and never a lease.
   if (input.runChildAgreement !== null) {
@@ -1061,7 +1181,7 @@ export function correlateDelegation(input: DelegationCorrelationInput): Delegati
   // Rung 2 is the END of the road for a tree whose NAME routes it there: the name never links, and it never reaches rungs 3 and 4.
   if (record.adminRecord.startsWith(AGENT_PREFIX)) return rung2(input, 'agent', record.adminRecord.slice(AGENT_PREFIX.length), canonical);
   if (record.adminRecord.startsWith(WORKFLOW_PREFIX)) return rung2(input, 'workflow', record.adminRecord, canonical);
-  return combine(input, [rung3(input, canonical), rung4(input)]);
+  return combine(input, [rung3(input, canonical), rung4(input, x1)]);
 }
 
 /**
