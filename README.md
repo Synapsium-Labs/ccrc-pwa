@@ -1140,7 +1140,7 @@ every member is durable. `ccrc coordination-snapshot validate|restore|recover` c
 journal, checkpoint and `coord.db` (with its WAL and SHM) from a valid one as a single set — only with `ccrc.service`
 measured inactive, asked again once its marker is durable — and finishes an interrupted restore from that marker; delegation
 recovery refuses to run while the marker stands, and so does the server's boot (it exits 1 naming `recover`). Its exits are
-`validate` 0 for `v1` and `legacy`, 1 for `none`, 2 for `invalid`, and 70 for a usage error or a helper that cannot run (SQLite included); `restore` and `recover` 0 done, 1 failed, 2 refused before any live change (an invalid source, a pending earlier restore, an unreadable marker, a missing `~/.ccrc`, a running or unmeasured service, a held update lock), 70 usage or a helper that cannot run. A restore that is rolled back puts the old set back whole: any file it did not place and that is not old is moved, never deleted, into `~/.ccrc/coordination-restore.foreign/<id>/`, and the report names it (exit 1, or 70 when the failure was the helper's own); a rollback that cannot finish says so and keeps the marker and stage for `recover` (exit 1).
+`validate` 0 for `v1` and `legacy`, 1 for `none`, 2 for `invalid`, and 70 for a usage error or a helper that cannot run (SQLite included); `restore` and `recover` 0 done, 1 failed, 2 refused before any live change (an invalid source, a pending earlier restore, an unreadable marker, a missing `~/.ccrc`, a running or unmeasured service, a held update lock), 70 usage or a helper that cannot run. A restore that is rolled back puts the old set back whole: any file it did not place and that is not old is moved, never deleted, into `~/.ccrc/coordination-restore.foreign/<id>/`, and the report names it (exit 1, or 70 when the failure was the helper's own); a rollback that cannot finish says so and keeps the marker and stage for `recover` (`recover` exits 1; `restore` exits with its original failure's code, 1, or 70 when that failure was the helper's own).
 Rollback arm 3 never copies the sidecars back: they are authority a running server wrote since the backup. Capture refuses a
 journal or checkpoint that does not validate, so `ccrc backup`, `ccrc update` and the fallback deploy stop on a damaged journal. A torn tail is not damage: the server cuts it off its own journal, keeping the bytes in `~/.ccrc/delegation-events.torn/` and saying so in its log and in `/api/fleet/health`'s `delegation.lastTailHeal`;
 capture, which never writes the journal, leaves it out of the snapshot (`delegation.journalTailOmitted` in the manifest, one warning line) and succeeds.
@@ -6295,11 +6295,14 @@ and an unmeasured hour is final: it is never read later as empty.
   (the registry could not be listed, or two or more parents were first measured dead within ten minutes, so the pass makes no
   ownership claim) or `unmeasured`, and `unresolved`, `conflicting` and `unmeasured` are the last reconciliation's
   verdict counts, which read 0 and must be taken as unknown while the breaker is `unmeasured`. `lastJournalSequence`,
-  `lastCheckpointRevision` and `lastIngestedAt` are the checkpoint's own anchors, and `lastTailHeal` (`at`, `bytes`, `quarantinePath`)
-  appears only after this server process has healed a torn journal tail. Nothing in the PWA reads any of it.
+  `lastCheckpointRevision` and `lastIngestedAt` are the checkpoint's own anchors. `lastTailHeal` (`at`, `bytes`, `quarantinePath`)
+  appears after this server process has healed a torn journal tail, and also at EVERY boot, with `foundAtBoot: true` and the kept file's
+  own time, for the newest tail an earlier process left in the quarantine (below), until an operator removes that file.
+  `tailQuarantineUnmeasured: true` appears when the quarantine, or a tail in it, could not be read (a time no instant can spell
+  included), so whether a heal went unreported is unknown; recovery still proceeds. Nothing in the PWA reads any of it.
 - **A `ccrc-server:` warning line, once per UTC hour** while a project's dropped-evidence keys are held back or lost, the global flag is
   up, a mark held a verdict back, or lost evidence held a link back: it names the held-back and lost projects (names and counts, never a
-  path), the number of marks held, and, per kind of mark (path, id, project, lossy), how many trees were held at `unmeasured` since the
+  path), the number of marks held, and, per kind of mark (path, id, project, lossy, prefix, and the unknown-repository window), how many trees were held at `unmeasured` since the
   last line, and, apart from the marks, how many trees lost evidence held there (a shed listing, an unmeasured hour, a lost creator;
   below). Marks live in the lane's memory only and last until the server restarts, because this wave never compacts the journal.
 - **`ccrc doctor`'s `delegation-hooks` check** (skipped on a box recording `CCRC_ROLE=server`). Per rostered home it reads
@@ -6315,7 +6318,8 @@ and an unmeasured hour is final: it is never read later as empty.
 - **The torn-tail heal.** A crash in the middle of an append leaves at most one partial line after the journal's last newline. At
   start the server, and only the server, keeps those bytes under `~/.ccrc/delegation-events.torn/<offset>-<sha256>.tail`, cuts the
   journal back to the end of its last complete validated record, and says so in its log and in `lastTailHeal`; the next pass reads the
-  same spool line again. Any other damage (a record that does not validate, a broken chain, a checkpoint that names the torn record
+  same spool line again. Every later boot reports the kept file again (a warning line, and `lastTailHeal` with `foundAtBoot`) until an
+  operator removes it: nothing marks it reported. Any other damage (a record that does not validate, a broken chain, a checkpoint that names the torn record
   or a record the journal lacks) is not healed: recovery fails, the lane applies and reads nothing, pruning stays off, the health is
   `unmeasured`, and the lane tries again every five minutes.
 - **`ccrc-api coordinators intent set|clear --session <this session's id>`** lets a session say that it is about to delegate, or that it
@@ -6362,6 +6366,22 @@ while the root does not resolve (remote mode) that includes every main checkout,
   anything outside Claude Code. A Bash line with neither `listing` nor `truncated` cannot be told from a command without the token. The
   no-spool class includes the lost-hour rule's one carve-out: an hour recorded `directory-absent` for a session the lane never read a
   spool of (no cursor row, no measured hour), and any `capability-absent` hour, vetoes nothing, so rung 4 links across both.
+- **Three more limits the soak reader must know.**
+  - *An owner with no generation file* (`$REG/<id>.generation` absent) writes no spool, because the hook needs that file, but the
+    carve-out does not reach it: its hours read `incarnation-unmeasured` with the reason `absent`, so each one vetoes every repository.
+    They are the checkpoint's observation-interval rows under the stand-in incarnation `unmeasured` whose detail ends `is absent`:
+    `jq '[.observationIntervals[] | select(.parentIncarnation == "unmeasured" and ((.detail // "") | startswith("incarnation-unmeasured") and endswith(" absent"))) | .sessionId] | unique | length' ~/.ccrc/delegation-checkpoint.json`
+    counts the owners. At the deploy measurement on 2026-10-16 no live pane lacked its file (0).
+  - *The installer does not register `PostToolUseFailure`*, so a Bash call that fails never closes its window: it keeps every later
+    rung-4 candidate it may overlap unresolved until it leaves the slice, and holds a rung-3 link of a tree first listed within the
+    margin after it began. Registering it is a wave-4 installer item.
+  - *Shedding.* The hook drops the WHOLE listing past 256 names, or when the line would reach 4096 bytes. On 2026-10-16 the largest
+    repository under the projects root had 124 linked worktrees, about 2,082 bytes as the quoted list. The name-list budget left under
+    the line cap is about 2,603 bytes at the hook's own path bounds (cwd and transcript path at 512 bytes each, a subagent's
+    PostToolUse), and about 3,390 to 3,550 bytes at typical paths, so that repository's listings do not shed today; at today's average
+    name length (about 16.8 bytes with quotes and comma) they would start to shed past about 155 names at the path bounds, or about 200
+    at typical paths. The live shed rate is unmeasured. Shedding and the census's missing main checkouts are the two reasons rung 4 may
+    read mostly unmeasured live; both are wave 4's.
 - **Two closures contain it.** A tree named `agent-*` or `wf_*` is decided at rung 2 or not at all, and a tree a registry row or a
   `.child` names is a ccd workspace (rung 1), never a lease.
 - **Named honestly.** Spec §5.3 says a lost event can delay or prevent a link, never create one, and §5.1 that a parent that is not a
