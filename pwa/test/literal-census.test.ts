@@ -140,10 +140,13 @@ const duplicated = (m: Map<string, string[]>): string[] =>
  *  two decisions that happen to agree today, or this is the next fold and the
  *  reason says what it is waiting on. Checked in both directions. */
 const REGISTERED: Record<string, string> = {
-  // No NEXT. The one entry below is argued, not deferred.
+  // One NEXT, inside the entry below: Settings' own copy of the update plane's sentence (centralised-update wave 19).
   'The latest read failed — this is the last answer that landed.':
-    'TWO SECTIONS, TWO COPIES, agreeing today. `SettingsScreen`\'s `STALE_TEXT` '
-    + 'is the UPDATE plane\'s sentence for a poll that failed after one landed; '
+    'TWO SECTIONS, agreeing today. The UPDATE plane\'s sentence for a poll that '
+    + 'failed after one landed is `UPDATES_STALE_TEXT` (fleet/useUpdatesView.ts, '
+    + 'wave 19), said by every update surface on the home screen. NEXT: '
+    + '`SettingsScreen`\'s `STALE_TEXT` still spells it while another run\'s claim '
+    + 'holds that file; its fold imports the fleet constant. '
     + '`STALL_SECTION_TEXT.stale` (shared/api.ts) is the stall-watch section\'s '
     + 'for its own read. They are two surfaces with two owners — the stall '
     + 'watch\'s whole copy table is in L0 because the SERVER composes some of '

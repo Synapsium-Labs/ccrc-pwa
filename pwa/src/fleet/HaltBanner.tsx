@@ -26,6 +26,7 @@ import { Button } from '@ccrc/ui';
 import { canAck, keepFocusInRow, sendAck } from './updateAck';
 import type { AckOutcome } from './updateAck';
 import { haltLine, haltingNodes } from './updateHalt';
+import { UPDATES_STALE_TEXT } from './useUpdatesView';
 import './fleet.css';
 
 /** The banner's lead sentence. */
@@ -103,8 +104,8 @@ function HaltRow({ node: n, releases, seq, onAcked, listRef }: {
   );
 }
 
-export function HaltBanner({ updates: view, seq, onAcked }: {
-  updates: UpdatesView | null; seq: number; onAcked: () => number;
+export function HaltBanner({ updates: view, seq, onAcked, stale = false }: {
+  updates: UpdatesView | null; seq: number; onAcked: () => number; stale?: boolean;
 }): ReactNode {
   const listRef = useRef<HTMLUListElement>(null);
   if (view === null) return null;
@@ -115,6 +116,9 @@ export function HaltBanner({ updates: view, seq, onAcked }: {
   return (
     <div className="halt-banner" role="status">
       <span className="halt-banner-msg">{HALT_LEAD_TEXT}</span>
+      {/* Wave 19, R24(b): a later poll failed, so these rows are the last answer that landed. Shown, not announced:
+          the fleet screen's one status region says it (D-5124). */}
+      {stale && <span className="halt-banner-msg" aria-hidden="true">{UPDATES_STALE_TEXT}</span>}
       <ul className="halt-banner-list" aria-label="Halted nodes" ref={listRef} tabIndex={-1}>
         {halting.map((n) => <HaltRow key={n.nodeId} node={n} releases={releases} seq={seq} onAcked={onAcked} listRef={listRef} />)}
       </ul>

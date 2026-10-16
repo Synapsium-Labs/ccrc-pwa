@@ -15,7 +15,7 @@ import { isHaltingUpdate } from '../../shared/update-move';
 import { ApiError, api, updateErrorText } from '../src/lib/api';
 import { buttonVariants, ToastHost } from '@ccrc/ui';
 import { HALT_LEAD_TEXT, HaltBanner } from '../src/fleet/HaltBanner';
-import { useUpdatesView } from '../src/fleet/useUpdatesView';
+import { UPDATES_STALE_TEXT, useUpdatesView } from '../src/fleet/useUpdatesView';
 import { ACK_UNREADABLE_TEXT, canAck, sendAck } from '../src/fleet/updateAck';
 import * as updates from '../src/screens/updates';
 import { declValue, ruleIn } from './cssRule';
@@ -522,6 +522,25 @@ describe('HaltBanner — a class of its own, a tap floor, and text only', () => 
 
   it('puts wire text into the DOM only as text children', () => {
     expect(bannerSrc).not.toMatch(/dangerouslySetInnerHTML/);
+  });
+});
+
+// Centralised-update wave 19, R24(b): a later poll failed, so the rows are the last answer that landed, and the
+// banner says so in the update plane's own sentence (UPDATES_STALE_TEXT, Settings' words), under its lead. It is
+// shown, not announced: the fleet screen's one status region says it once (D-5124).
+describe('HaltBanner — a stale view says so (wave 19, R24(b))', () => {
+  it('stale: one line under the lead, in the update plane\'s own sentence, hidden from assistive tech; fresh or absent: none', () => {
+    render(<HaltBanner updates={view([failed()])} seq={1} onAcked={() => 2} stale />);
+    expect(UPDATES_STALE_TEXT).toBe('The latest read failed — this is the last answer that landed.');
+    const msgs = [...banner()!.querySelectorAll('.halt-banner-msg')].map((e) => e.textContent);
+    expect(msgs).toEqual([HALT_LEAD_TEXT, UPDATES_STALE_TEXT]);
+    expect(screen.getByText(UPDATES_STALE_TEXT)).toHaveAttribute('aria-hidden', 'true');
+    cleanup();
+    render(<HaltBanner updates={view([failed()])} seq={1} onAcked={() => 2} stale={false} />);
+    expect(screen.queryByText(UPDATES_STALE_TEXT)).toBeNull();
+    cleanup();
+    mount(view([failed()]));
+    expect(screen.queryByText(UPDATES_STALE_TEXT)).toBeNull();
   });
 });
 
