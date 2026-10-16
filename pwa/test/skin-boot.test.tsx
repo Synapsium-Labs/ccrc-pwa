@@ -27,7 +27,7 @@ const stamped = (): string | null => document.documentElement.getAttribute('data
  *  frame cannot know the stored skin. */
 function skinSnippet(): string {
   const html = readFileSync(INDEX, 'utf8');
-  const inline = [...html.matchAll(/<script\b[^>]*>([\s\S]*?)<\/script\s*>/gi)].map((m) => m[1] as string);
+  const inline = [...html.matchAll(/<script\b[^>]*>([\s\S]*?)<\/script[^>]*>/gi)].map((m) => m[1] as string);
   const hits = inline.filter((s) => /data-skin/.test(s));
   expect(hits, 'index.html carries no pre-paint skin stamp').toHaveLength(1);
   return hits[0] as string;
