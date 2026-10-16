@@ -43,6 +43,12 @@ import {
   indexDelegationDropped,
   planDelegationDroppedPrune,
   prunableDelegationDropped,
+  DELEGATION_NO_MARKS,
+  delegationHashSetAdd,
+  delegationHashSetHas,
+  delegationMarkForced,
+  emptyDelegationHashSet,
+  type DelegationLostMarks,
   type DelegationCorrelationInput,
   type DelegationCorrelationVerdict,
   type DelegationDroppedKey,
@@ -1539,18 +1545,22 @@ describe('dropped evidence (R65): the vetoes of rungs 2 and 3 rest on events an 
     const key = (over: Partial<DelegationDroppedKey>): DelegationDroppedKey =>
       ({ parentId: PARENT, parentIncarnation: INC, agentId: null, launchAgentId: null, runId: null, cwd: null, startStop: false, ...over });
     const AT = Date.UTC(2026, 9, 14) + 10_000_000;                                  // the census's measuredAt
-    const proj = (over: Partial<DelegationPruneProject> = {}): DelegationPruneProject => ({ records: [], standing: false, measuredSinceStart: true, ...over });
+    const proj = (over: Partial<DelegationPruneProject> = {}): DelegationPruneProject => ({ records: [], standing: false, measuredSinceStart: true, unplacedHold: false, ...over });
     const at = (k: DelegationDroppedKey) => k;
+    const planOf = (
+      ks: readonly DelegationDroppedKey[], projects: Record<string, DelegationPruneProject>, known: Record<string, string> = {},
+      over: Partial<Parameters<typeof planDelegationDroppedPrune>[0]> = {},
+    ) => planDelegationDroppedPrune({
+      keys: ks.map((k) => [delegationDroppedKeyId(k), k, AT - 10 * DELEGATION_CLOCK_SKEW_MS] as const), projects: new Map(Object.entries(projects)),
+      known: new Map(Object.entries(known)), gonePaths: new Set(), projectOfParent: () => undefined, activities: [], measuredAtMs: AT,
+      lost: new Set(), holdCap: 1000, ...over,
+    });
+    /** The keys the plan forgets (R73: a plan always answers; there is no fleet-wide skip any more). */
     const plan = (
       ks: readonly DelegationDroppedKey[], projects: Record<string, DelegationPruneProject>, known: Record<string, string> = {},
       over: Partial<Parameters<typeof planDelegationDroppedPrune>[0]> = {},
-    ): DelegationDroppedKey[] | null => {
-      const ids = planDelegationDroppedPrune({
-        keys: ks.map((k) => [delegationDroppedKeyId(k), k, AT - 10 * DELEGATION_CLOCK_SKEW_MS] as const), projects: new Map(Object.entries(projects)),
-        known: new Map(Object.entries(known)), projectOfParent: () => undefined, activities: [], measuredAtMs: AT, ...over,
-      });
-      if (ids === null) return null;
-      const gone = new Set(ids);
+    ): DelegationDroppedKey[] => {
+      const gone = new Set(planOf(ks, projects, known, over).forget);
       return ks.filter((k) => gone.has(delegationDroppedKeyId(k)));
     };
     const TREE = delegationTreeKey(REPO, RAW);
@@ -1571,11 +1581,58 @@ describe('dropped evidence (R65): the vetoes of rungs 2 and 3 rest on events an 
       expect(plan([kC], { 'project-b': proj({ records: [] }) }, known), 'the project is absent from the census').toEqual([]);
     });
 
-    it('a present record with a null path and no remembered path skips the prune; one with a remembered path, or an unreadable one, does not', () => {
-      const nullPath = listed({ state: 'present', canonicalPath: null });
-      expect(plan([kC], { [REPO]: proj({ records: [nullPath] }) })).toBeNull();
-      expect(plan([kC], { [REPO]: proj({ records: [nullPath] }) }, { [TREE]: C }), 'remembered: protected, not skipped').toEqual([]);
-      expect(plan([kC], { [REPO]: proj({ records: [listed({ state: 'unreadable', canonicalPath: null })] }) })).toEqual([kC]);
+    it('R73 (N12): a null-path record never stops the prune by itself, whatever its state; the caller holds a project back only through unplacedHold', () => {
+      for (const state of ['present', 'unreadable'] as const) {
+        const nullPath = listed({ state, canonicalPath: null });
+        expect(plan([kC], { [REPO]: proj({ records: [nullPath] }) }), state).toEqual([kC]);
+        expect(plan([kC], { [REPO]: proj({ records: [nullPath] }) }, { [TREE]: C }), `${state}, remembered: protected`).toEqual([]);
+      }
+      const ofDemo = key({ parentId: PARENT, cwd: '/fixture/unknown', agentId: AGENT_2 });
+      const ofOther = key({ parentId: OTHER, cwd: '/fixture/unknown-2', agentId: AGENT_2 });
+      const projectOfParent = (id: string): string | undefined => (id === PARENT ? REPO : id === OTHER ? 'project-b' : undefined);
+      const projects = { [REPO]: proj({ records: [listed({ adminRecord: 'flaky', canonicalPath: null, state: 'unreadable' })], unplacedHold: true }), 'project-b': proj() };
+      expect(plan([ofDemo, ofOther], projects, {}, { projectOfParent }), 'the held project keeps ITS OWN keys; the other prunes').toEqual([ofOther]);
+      expect(planOf([ofDemo, ofOther], projects, {}, { projectOfParent }).held).toEqual(new Map([[REPO, 1]]));
+    });
+
+    it('R73 rule 2: a key forgotten while no tree shown gone in this census had its path leaves a path mark; one at such a tree\'s path does not', () => {
+      const far = key({ cwd: '/fixture/never-a-tree' });
+      const atGone = key({ cwd: '/fixture/gone-tree' });
+      const p = planOf([far, atGone], { [REPO]: proj() }, {}, { gonePaths: new Set(['/fixture/gone-tree']) });
+      expect(p.forget.sort()).toEqual([delegationDroppedKeyId(far), delegationDroppedKeyId(atGone)].sort());
+      expect(p.markPaths).toEqual(['/fixture/never-a-tree']);
+      const known = { [delegationTreeKey(REPO, 'gone-tree')]: '/fixture/gone-tree' };
+      expect(planOf([atGone], { [REPO]: proj() }, known).markPaths, 'a remembered tree its own measured census shows gone, in this pass').toEqual([]);
+      expect(planOf([key({})], { [REPO]: proj() }).markPaths, 'no cwd, no path mark').toEqual([]);
+    });
+
+    it('R73 rule 2: a forgotten name nobody asks about yet leaves an id mark; a name made redundant by its own parent\'s row does not', () => {
+      const mine = world([subagentStart(1, AGENT)]).activities.find((a) => a.sourceKind === 'agent')!;
+      const p = planOf([key({ parentId: OTHER, agentId: AGENT_2 }), key({ agentId: AGENT }), key({ parentId: OTHER, runId: 'wf_unasked' }), key({ parentId: OTHER, launchAgentId: 'b0b0b0b0' })],
+        { [REPO]: proj() }, {}, { activities: [mine] });
+      expect(p.forget).toHaveLength(4);
+      expect([...p.markIds].sort()).toEqual([AGENT_2, 'b0b0b0b0', 'wf_unasked'].sort());
+    });
+
+    it('R73 rule 3: a held project over the cap is lost: its keys go through the prune, and a key at its remembered path goes with no path mark (the project mark covers it)', () => {
+      const down = proj({ records: null, measuredSinceStart: false });
+      const projectOfParent = (id: string): string | undefined => (id === OTHER ? 'down' : undefined);
+      const known = { [delegationTreeKey('down', 'tree')]: '/fixture/down/tree' };
+      const atTree = key({ parentId: OTHER, cwd: '/fixture/down/tree', agentId: AGENT_2 });
+      const elsewhere = key({ parentId: OTHER, cwd: '/fixture/down/elsewhere', agentId: AGENT_2 });
+      const under = planOf([atTree, elsewhere], { [REPO]: proj(), down }, known, { projectOfParent, holdCap: 2 });
+      expect(under.forget, 'at the cap: held').toEqual([]);
+      expect(under.lose).toEqual([]);
+      expect(under.held).toEqual(new Map([['down', 2]]));
+      const over = planOf([atTree, elsewhere], { [REPO]: proj(), down }, known, { projectOfParent, holdCap: 1 });
+      expect(over.lose).toEqual(['down']);
+      expect(over.forget.sort()).toEqual([delegationDroppedKeyId(atTree), delegationDroppedKeyId(elsewhere)].sort());
+      expect(over.markPaths, 'the tree\'s own path is covered by the lost project; the unknown one is marked').toEqual(['/fixture/down/elsewhere']);
+      expect(over.held).toEqual(new Map());
+      const already = planOf([atTree], { [REPO]: proj(), down }, known, { projectOfParent, lost: new Set(['down']) });
+      expect(already.forget, 'a lost project holds nothing back and protects none of its remembered paths').toEqual([delegationDroppedKeyId(atTree)]);
+      expect(already.markPaths).toEqual([]);
+      expect(already.lose).toEqual([]);
     });
 
     it('R70: a standing refusal counts as measured with no trees: it does not block, and what it remembered is gone', () => {
@@ -1607,8 +1664,9 @@ describe('dropped evidence (R65): the vetoes of rungs 2 and 3 rest on events an 
     it('R69 item 5: a key whose latest dropped event is not before the census (less the clock skew allowance) is kept; one before it is forgotten', () => {
       const cutoff = AT - DELEGATION_CLOCK_SKEW_MS;
       const stamped = (stamp: number) => planDelegationDroppedPrune({
-        keys: [[delegationDroppedKeyId(kC), kC, stamp]], projects: new Map([[REPO, proj({ records: [] })]]), known: new Map(), projectOfParent: () => undefined, activities: [], measuredAtMs: AT,
-      });
+        keys: [[delegationDroppedKeyId(kC), kC, stamp]], projects: new Map([[REPO, proj({ records: [] })]]), known: new Map(), gonePaths: new Set(), projectOfParent: () => undefined, activities: [], measuredAtMs: AT,
+        lost: new Set(), holdCap: 1000,
+      }).forget;
       expect(stamped(cutoff - 1)).toEqual([delegationDroppedKeyId(kC)]);
       expect(stamped(cutoff), 'exactly at the cutoff').toEqual([]);
       expect(stamped(AT + 1), 'dropped after the census was measured').toEqual([]);
@@ -1642,6 +1700,102 @@ describe('dropped evidence (R65): the vetoes of rungs 2 and 3 rest on events an 
       const frozen = deepFreeze(input({ record: rec, activities: e.w.activities, acceptedEvidence: e.held, droppedEvidence: e.index }));
       expect(() => correlateDelegation(frozen)).not.toThrow();
       expect(horizonOf(correlateDelegation(frozen))).toBe('evidence-horizon');
+    });
+  });
+
+  describe('R73: the lossy marks a forgetting lane leaves behind move every link a forgotten key could have vetoed to unmeasured', () => {
+    const setOf = (...texts: string[]) => { const s = emptyDelegationHashSet(); for (const t of texts) delegationHashSetAdd(s, t, 1000); return s; };
+    const marks = (over: Partial<DelegationLostMarks>): DelegationLostMarks => ({ ...DELEGATION_NO_MARKS, ...over });
+    const withMarks = (m: DelegationLostMarks) => indexDelegationDropped([], m);
+    const r3 = world([subagentStart(1, AGENT, { cwd: ELSEWHERE }), toolAt(2, AGENT, C)]);
+    const rung3 = (m: DelegationLostMarks) => input({ record: rec, activities: r3.activities, acceptedEvidence: r3.acceptedEvidence, droppedEvidence: withMarks(m) });
+    const agent = agentWorld();
+    const rung2 = (m: DelegationLostMarks) => ({ ...agent.base, droppedEvidence: withMarks(m) });
+    const wf = world([workflowLaunch(1, 'wf_run1'), subagentStart(2, AGENT)]);
+    wf.builder.openWorkflowWorkerFromMeta(PARENT, INC, 'wf_run1', 1);
+    const wfRung2 = (m: DelegationLostMarks) => input({
+      record: record({ adminRecord: 'wf_run1-1', canonicalPath: WT('wf_run1-1') }), activities: wf.builder.build(1).activities, acceptedEvidence: wf.acceptedEvidence,
+      pointMetas: [meta({ sourceKind: 'workflow', upstreamId: 'wf_run1-1', worktreePath: WT('wf_run1-1'), evidenceJournalId: wf.records[0]!.journalId })], droppedEvidence: withMarks(m),
+    });
+    const r4 = world([bashPre(10, 'toolu_b1', ['main-wt']), bashPost(12, 'toolu_b1', ['main-wt', RAW])]);
+    const rung4 = (m: DelegationLostMarks) => input({ record: rec, activities: r4.activities, acceptedEvidence: r4.acceptedEvidence, listingWindows: [win({ after: ['main-wt', RAW] })], droppedEvidence: withMarks(m) });
+    const horizon = (v: DelegationCorrelationVerdict) => v.kind === 'unmeasured' && v.reason === 'evidence-horizon';
+
+    it('the hash set: a text added is found, one not added is not, and a full set refuses a new text (the caller raises the global flag)', () => {
+      const s = emptyDelegationHashSet();
+      expect(delegationHashSetHas(s, '/fixture/a')).toBe(false);
+      for (let i = 0; i < 5000; i++) expect(delegationHashSetAdd(s, `/fixture/p-${i}`, 6000)).toBe(true);
+      expect(s.size).toBe(5000);
+      for (let i = 0; i < 5000; i++) expect(delegationHashSetHas(s, `/fixture/p-${i}`)).toBe(true);
+      expect(delegationHashSetHas(s, '/fixture/p-5000')).toBe(false);
+      expect(delegationHashSetAdd(s, '/fixture/p-1', 6000), 'present already').toBe(true);
+      expect(s.size).toBe(5000);
+      const full = setOf();
+      expect(delegationHashSetAdd(full, 'a', 2)).toBe(true);
+      expect(delegationHashSetAdd(full, 'b', 2)).toBe(true);
+      expect(delegationHashSetAdd(full, 'c', 2), 'at the cap').toBe(false);
+      expect(delegationHashSetHas(full, 'c')).toBe(false);
+      expect(delegationHashSetAdd(full, 'a', 2), 'a text already in a full set is still present').toBe(true);
+    });
+
+    it('control: with no marks each world links', () => {
+      for (const [name, i] of [['rung 2', rung2(DELEGATION_NO_MARKS)], ['rung 2 (workflow)', wfRung2(DELEGATION_NO_MARKS)], ['rung 3', rung3(DELEGATION_NO_MARKS)], ['rung 4', rung4(DELEGATION_NO_MARKS)]] as const) {
+        expect(correlateDelegation(i).kind, name).toBe('linked');
+      }
+    });
+
+    it('a path mark: the tree\'s own path hashed in the set makes a rung-2 or rung-3 link unmeasured; another path does not', () => {
+      expect(horizon(correlateDelegation(rung3(marks({ paths: setOf(C) }))))).toBe(true);
+      expect(correlateDelegation(rung3(marks({ paths: setOf(`${C}/sub`) }))).kind).toBe('linked');
+      expect(horizon(correlateDelegation(rung2(marks({ paths: setOf(WT(`agent-${AGENT}`)) }))))).toBe(true);
+    });
+
+    it('an id mark: the activity\'s upstream id (or, for a workflow worker, its run) hashed in the set makes the link unmeasured', () => {
+      expect(horizon(correlateDelegation(rung3(marks({ ids: setOf(AGENT) }))))).toBe(true);
+      expect(horizon(correlateDelegation(rung2(marks({ ids: setOf(AGENT) }))))).toBe(true);
+      expect(horizon(correlateDelegation(wfRung2(marks({ ids: setOf('wf_run1') }))))).toBe(true);
+      expect(correlateDelegation(rung3(marks({ ids: setOf(AGENT_2) }))).kind).toBe('linked');
+    });
+
+    it('a lost project: every rung-2 or rung-3 link of a tree in it is unmeasured; a tree of another project is not', () => {
+      expect(horizon(correlateDelegation(rung3(marks({ projects: new Set([REPO]) }))))).toBe(true);
+      expect(horizon(correlateDelegation(rung2(marks({ projects: new Set([REPO]) }))))).toBe(true);
+      expect(correlateDelegation(rung3(marks({ projects: new Set(['project-b']) }))).kind).toBe('linked');
+    });
+
+    it('the global flag: every rung-2 and rung-3 link is unmeasured; rung 4, which no forgotten key can veto, still links', () => {
+      const lossy = marks({ lossy: true });
+      for (const i of [rung2(lossy), wfRung2(lossy), rung3(lossy)]) expect(horizon(correlateDelegation(i))).toBe(true);
+      expect(correlateDelegation(rung4(lossy)).kind).toBe('linked');
+    });
+
+    it('a verdict that was not a link is unchanged by any mark', () => {
+      const all = marks({ lossy: true, projects: new Set([REPO]), paths: setOf(C), ids: setOf(AGENT) });
+      const cases: DelegationCorrelationInput[] = [
+        input({ hasRegistryRow: true }), input({ birthPassesRemaining: 2 }), agentWorld({ pointMetas: [] }).base,
+        input({ record: record({ state: 'unreadable' }) }), input({ record: record({ canonicalPath: null }) }),
+      ];
+      for (const c of cases) expect(correlateDelegation({ ...c, droppedEvidence: withMarks(all) })).toEqual(correlateDelegation(c));
+    });
+
+    it('delegationMarkForced names the kind of mark that changed a verdict, and nothing for a verdict no mark changed', () => {
+      const ask = (i: DelegationCorrelationInput) => delegationMarkForced(i, correlateDelegation(i));
+      expect(ask(rung3(marks({ paths: setOf(C) })))).toBe('path');
+      expect(ask(rung3(marks({ ids: setOf(AGENT) })))).toBe('id');
+      expect(ask(rung3(marks({ projects: new Set([REPO]) })))).toBe('project');
+      expect(ask(rung3(marks({ lossy: true, paths: setOf(C) })))).toBe('lossy');
+      expect(ask(rung3(DELEGATION_NO_MARKS)), 'a link').toBeNull();
+      const e = evicting([toolAt(1, undefined, C), subagentStart(20, AGENT, { cwd: ELSEWHERE }), toolAt(22, AGENT, C)], [0]);
+      const real = input({ record: rec, activities: e.w.activities, acceptedEvidence: e.held, droppedEvidence: indexDelegationDropped([delegationDroppedKeyOf(toolAt(1, undefined, C))], marks({ paths: setOf(C) })) });
+      expect(horizon(correlateDelegation(real))).toBe(true);
+      expect(ask(real), 'the held key vetoes by itself: the mark changed nothing').toBeNull();
+      expect(ask({ ...rung3(DELEGATION_NO_MARKS), droppedEvidence: DELEGATION_DROPPED_UNMEASURED }), 'an unmeasured index is not a mark').toBeNull();
+    });
+
+    it('a correlation input carrying marks stays plain data: it clones, and an empty one freezes', () => {
+      const i = rung3(marks({ paths: setOf(C) }));
+      expect(horizon(correlateDelegation(structuredClone(i)))).toBe(true);
+      expect(() => deepFreeze(structuredClone(rung3(DELEGATION_NO_MARKS)))).not.toThrow();
     });
   });
 });

@@ -67,7 +67,11 @@ import {
   DELEGATION_DROPPED_UNMEASURED, delegationDroppedKeyId, delegationDroppedKeyOf, delegationGoneTrees, delegationTreeKey, indexDelegationDropped,
   planDelegationDroppedPrune, type DelegationDroppedEvidence, type DelegationDroppedKey, type DelegationPruneProject,
 } from './coord/delegation-correlation.js';
+import {
+  delegationHashSetAdd, delegationMarkForced, emptyDelegationHashSet, type DelegationHashSet, type DelegationMarkKind,
+} from './coord/delegation-correlation.js';
 import type { WorktreeRead } from './coord/gitref.js';
+import type { DelegationCensusDiagnostic } from './coord/gitref.js';
 import { delegationCircuitBreaker, planDelegationReconciliation, type DelegationReportEffect } from './coord/delegation-policy.js';
 import { isUnownedWorkReason } from './coord/delegation-policy.js';
 import { delegationBucketReadable, planDelegationCursorRetention } from './coord/delegation-model.js';
@@ -8429,6 +8433,33 @@ function renderAskBrief(askId: number, childId: string, question: string, option
 //   on three consecutive census passes spanning ten minutes (R71), because `gitref.ts` names a residual in which one dropped round trip
 //   reads as that answer. The keys are pruned as the journal streams (every 4,096 new ones) and at a reconcile after a batch.
 //
+//   A FORGOTTEN VETO IS PROVED GONE OR MARKED (R73, D-4653). A key is forgotten only if a census of its project, measured in this pass,
+//   shows every tree it could veto gone, or it is replaced by a COARSER mark that still moves every link it could have vetoed to
+//   `unmeasured('evidence-horizon')`: so a tree the lane does not know (an unseeded tree after a restart, a project with no live session)
+//   loses nothing to a prune. A project that lists a TRANSIENT null-path record it has no path for holds its own keys back, per project,
+//   for a streak of three censuses over ten minutes (`LANE_NULL_PATH` decides transient from standing; a standing null path never holds
+//   anything back). A held-back project over `DELEGATION_PROJECT_HOLD_CAP` keys is lost. Lane memory only, like the index: no file, no
+//   SQLite-only state, the journal untouched. What sets and what clears each mark (R73):
+//     - PATH MARKS (64-bit hashes of directories, `DELEGATION_MARK_CAP`). Set by a prune that forgets a key at a directory no tree shown
+//       gone by THAT census, and no lost project's remembered tree, had (a SubagentStart or SubagentStop leaves none). A census alone
+//       never clears one: it cannot show what the forgotten events said. Cleared by a re-index: a restart, a recovery, or the lane's own
+//       re-read (`rereadForMarks`), each of which rebuilds every mark from the complete journal (wave 3 never compacts it). The lane
+//       re-reads, at most hourly, once a mark has held a verdict: that tree is then listed with its path in a measured census, so the
+//       re-read protects its keys and does not mark its path again, and its verdict becomes what the keys themselves say.
+//     - ID MARKS (64-bit hashes of agent and run ids). Set by a prune that forgets a key naming an id nobody asks about yet (a name made
+//       redundant by its own parent's activity row is exact and leaves none). Cleared the same way: once the id is asked about (a row or
+//       a tree names it), a re-read keeps the key itself.
+//     - LOST PROJECTS. Set when a held-back project holds more than its cap. Cleared by a re-index; a re-read is made once a tree of the
+//       project is held back by it, which means the project is measured now and holds nothing back.
+//     - THE GLOBAL LOSSY FLAG. Set when a mark set reaches its cap. Cleared by a re-index whose marks fit under the cap. A flag a prune
+//       raised after the last load asks for one re-read; a flag the load itself raised does not (it would rise again), so it stands until
+//       the journal holds fewer forgettable directories than the cap, which in wave 3 (no compaction) is never: from then on no rung-2 or
+//       rung-3 link is made. That is the honest end state of a lane whose journal outgrows the cap, and it is on the warn line.
+//   A mark that never clears for a tree that stays alive and invisible (in a project that never returns) is the intended answer: that
+//   tree is never decided. Every verdict a mark changed is counted by kind (`delegationMarkForced`), apart from every other `unmeasured`
+//   reason, in the lane's report and on the hourly warn line, which also names the held-back projects (with their key counts), the lost
+//   projects and the flag, and never a path.
+//
 //   THE READ HORIZON AND CURSOR RETENTION (R58, D-4654). The lane reads no bucket older than the spool lookback, and decides that in
 //   ONE place (`delegationBucketReadable`), for a live owner's listing and for a dead owner's unclosed hour alike. Bucket cursors retire
 //   behind that horizon through `DelegationDurability.pruneBucketCursors` (under the applier's lock, on its own rows, never on this
@@ -8467,9 +8498,50 @@ const DELEGATION_EVIDENCE_CAP = 20_000;
 const DELEGATION_DROPPED_PRUNE_EVERY = 4096;
 /** R71: a project's `not-a-checkout` answer is trusted as a STANDING fact only after it has recurred on this many consecutive census
  *  passes spanning at least this long; any other answer for the project resets the streak. `gitref.ts` names the residual: one dropped
- *  round trip that lands on one stat and not its neighbour reads as that answer. */
+ *  round trip that lands on one stat and not its neighbour reads as that answer. The streak counts only the censuses the lane NOTES (at a
+ *  load and at a reconcile): a good answer in a census the lane never reconciled (a pass cut before its reconcile) does not reset it. The
+ *  ten-minute span still holds, so that costs at most a streak that ends one census early, never one pass that forgets a path.
+ *  R73 rule 1 bounds the transient null-path hold with the same streak. */
 const DELEGATION_STANDING_PASSES = 3;
 const DELEGATION_STANDING_SPAN_MS = 10 * 60_000;
+/**
+ * R73 rule 3: the most dropped keys a held-back project (not measured since the start, or listing a transient null-path record it has no
+ * path for) may keep. Past it the project is LOST: its keys go through the prune with their marks, and every tree of it answers
+ * `unmeasured('evidence-horizon')` at rungs 2 and 3 until a re-index. It equals the evidence slice's own cap, so a held-back project
+ * never holds more than the slice itself does; at the 30-day fixture's traffic a project carrying a tenth of it reaches it in about 25
+ * days, which is where the round-3 hold (24,353 keys at 30 days, rising without a ceiling) is now cut.
+ */
+const DELEGATION_PROJECT_HOLD_CAP = DELEGATION_EVIDENCE_CAP;
+/**
+ * R73 rule 2: the most 64-bit hashes each mark set (forgotten paths, forgotten ids) holds: 3/4 of 2^20 slot pairs, so a set never exceeds
+ * 8 MB (`delegationHashSetAdd` grows it by doubling, from 16 KB). A set at its cap raises the GLOBAL lossy flag. A restart re-indexes the
+ * journal, and wave 3 never compacts it, so a set fills with the DISTINCT directories (and row-less ids) the journal has ever forgotten
+ * without a census showing their tree gone. Measured at a restart's load over the 30-day fixture (20 sessions; each a day 60 subagents,
+ * each in its own tree and two directories under it, and 40 fresh directories of its own): 121,199 path marks (2 MB), or 88,266 when
+ * every tree's path is seeded from a lease; no id marks (every agent there has its row). So the cap is about six and a half months of
+ * that pessimistic journal (nine, seeded). Past it, every rung-2 and rung-3 link is unmeasured until a journal that compacts (a later
+ * wave) brings the count back under it; the flag is on the warn line and in the lane's report.
+ */
+const DELEGATION_MARK_CAP = 786_432;
+/** A re-read of the journal to clear marks (the restart's own `loadEvidence`, without a restart) is made at most this often. */
+const DELEGATION_MARK_RELOAD_MS = 60 * 60_000;
+/**
+ * R73 rule 1: what a census record whose canonical path is null says about that path, by its diagnostic words, as a TOTAL table over
+ * them (a new word is a compile error until it is placed). `standing` names a path that will not read differently next time (a
+ * relative or malformed `gitdir`, a name the census refuses): such a record never holds anything back, because a null path is never a
+ * rung-2 or rung-3 candidate, and if it is ever repaired the path marks of the keys forgotten meanwhile catch it. `transient` names a read
+ * that may do better (a failed `gitdir` read, a record being born). `other` is about something else than the path. A null path with no
+ * `standing` word is transient, whatever else it carries: unknown resolves toward holding, never toward forgetting.
+ */
+const LANE_NULL_PATH: Readonly<Record<DelegationCensusDiagnostic, 'standing' | 'transient' | 'other'>> = {
+  'gitdir-absent': 'transient', 'gitdir-unreadable': 'transient', 'gitdir-malformed': 'standing', 'gitdir-relative': 'standing',
+  'head-absent': 'other', 'head-unreadable': 'other', 'head-malformed': 'other',
+  'first-log-unreadable': 'other', 'first-log-malformed': 'other',
+  'claude-base-malformed': 'other', 'claude-base-unreadable': 'other',
+  'lock-unreadable': 'other', 'name-refused': 'standing', 'record-initializing': 'transient',
+};
+const laneNullPathStanding = (diagnostic: string | null): boolean =>
+  (diagnostic ?? '').split(',').some((w) => Object.prototype.hasOwnProperty.call(LANE_NULL_PATH, w) && LANE_NULL_PATH[w as DelegationCensusDiagnostic] === 'standing');
 /** What a failed census read means for pruning, as a TOTAL table over the read's reasons (a new reason is a compile error until it is
  *  placed): `always` is a project that can never be censused (the name is refused before anything is read), `streak` is a standing
  *  fact only once it has recurred (R71), `never` is a read that may do better next time. */
@@ -8491,8 +8563,12 @@ const DELEGATION_META_MAX_CHARS = 65_536;
 /** Test seams of the lane: production passes none. `evidenceCap` scales the evidence slice so an eviction can be provoked with a handful
  *  of events; `readEveryListedBucket` bypasses the read horizon and the settled/closed filters, so the second line of defence
  *  (eventId idempotence against the retained journal) can be pinned; `reconcileBeforeLoad` lets a pass reconcile although the evidence
- *  load did not complete, so the second layer of the lost-index condition (the index handed to correlation is unmeasured) can be pinned. */
-export interface DelegationLaneSeams { evidenceCap?: number; readEveryListedBucket?: boolean; droppedPruneEvery?: number; reconcileBeforeLoad?: boolean }
+ *  load did not complete, so the second layer of the lost-index condition (the index handed to correlation is unmeasured) can be pinned.
+ *  `projectHoldCap`, `markCap` and `markReloadMs` scale R73's three bounds down to a handful of keys and passes. */
+export interface DelegationLaneSeams {
+  evidenceCap?: number; readEveryListedBucket?: boolean; droppedPruneEvery?: number; reconcileBeforeLoad?: boolean;
+  projectHoldCap?: number; markCap?: number; markReloadMs?: number;
+}
 
 type LaneSession = Pick<FleetSession, 'id' | 'project' | 'status'>;
 type LaneRecord = Pick<SessionRecord, 'id' | 'project' | 'child'>;
@@ -8615,6 +8691,26 @@ class DelegationLane {
   private readonly measuredProjects = new Set<string>();
   /** R71: the current run of consecutive `not-a-checkout` answers, per project. */
   private readonly notCheckout = new Map<string, { firstAt: number; lastAt: number; passes: number }>();
+  /** R73 rule 1: the current run of consecutive censuses in which a project listed a transient null-path record it has no path for. */
+  private readonly unplaced = new Map<string, { firstAt: number; lastAt: number; passes: number }>();
+  /** The paths of the trees the census measured at `measuredAt` showed gone (forgotten from `knownPaths` already): a key at one of them is
+   *  forgotten against THAT census with no path mark. */
+  private gone: { measuredAt: number; paths: Set<string> } = { measuredAt: Number.NaN, paths: new Set() };
+  /** R73: the lossy marks (lane memory, like the index; see the lane's docstring for what sets and clears each). */
+  private markPaths: DelegationHashSet = emptyDelegationHashSet();
+  private markIds: DelegationHashSet = emptyDelegationHashSet();
+  private readonly lostProjects = new Set<string>();
+  private lossy = false;
+  /** The flag was raised by a prune after the last load completed (a re-read might fit under the cap), not by the load itself. */
+  private lossyAfterLoad = false;
+  /** The projects the last prune held back, and how many keys each holds. */
+  private heldBack: ReadonlyMap<string, number> = new Map();
+  /** How many verdicts of the last reconcile each kind of mark changed (R73), and how many re-reads the marks have caused. */
+  private markForced: Record<DelegationMarkKind, number> = { path: 0, id: 0, project: 0, lossy: 0 };
+  private markReloads = 0;
+  /** When the last load began (epoch ms): a re-read for the marks waits `DELEGATION_MARK_RELOAD_MS` after it. */
+  private lastLoadAt = 0;
+  private lastMarkWarnHour = -1;
   private droppedIndexCache: DelegationDroppedEvidence | null = null;
   /** New keys since the last prune, and the most keys held at once since the last load began (a report figure: the bound is real). */
   private droppedAdded = 0;
@@ -8662,8 +8758,26 @@ class DelegationLane {
    *  (`evidenceLoaded` IS the measured state): an index that was lost, or never built, is not an empty one. */
   private droppedIndex(): DelegationDroppedEvidence {
     if (!this.evidenceLoaded) return DELEGATION_DROPPED_UNMEASURED;
-    this.droppedIndexCache ??= indexDelegationDropped([...this.dropped.values()].map((e) => e.key));
+    this.droppedIndexCache ??= indexDelegationDropped([...this.dropped.values()].map((e) => e.key), {
+      lossy: this.lossy, projects: new Set(this.lostProjects), paths: this.markPaths, ids: this.markIds,
+    });
     return this.droppedIndexCache;
+  }
+
+  /** R73: forgets every mark, because the load that follows rebuilds them from the complete journal (a restart, a recovery, a re-read). */
+  private resetMarks(): void {
+    this.markPaths = emptyDelegationHashSet();
+    this.markIds = emptyDelegationHashSet();
+    this.lostProjects.clear();
+    this.lossy = false;
+    this.lossyAfterLoad = false;
+    this.heldBack = new Map();
+    this.droppedIndexCache = null;
+  }
+
+  /** A record whose path is null for a transient reason, and which has no remembered path (R73 rule 1). */
+  private unplacedRecord(r: DelegationCensusRecord): boolean {
+    return r.state !== 'absent' && r.canonicalPath === null && !laneNullPathStanding(r.diagnostic) && !this.knownPaths.has(laneTreeKey(r.project, r.adminRecord));
   }
 
   /** The lane no longer holds this event: keep the keys correlation reads of it, stamped with the time of the latest event dropped
@@ -8688,11 +8802,19 @@ class DelegationLane {
       if (!notCheckout) this.notCheckout.delete(project);
       else if (run === undefined) this.notCheckout.set(project, { firstAt: census.measuredAt, lastAt: census.measuredAt, passes: 1 });
       else if (census.measuredAt > run.lastAt) { run.lastAt = census.measuredAt; run.passes += 1; }
-      if (view.delegation === null) continue;
-      this.measuredProjects.add(project);
-      for (const r of view.delegation) if (r.state !== 'absent' && r.canonicalPath !== null) this.knownPaths.set(laneTreeKey(r.project, r.adminRecord), r.canonicalPath);
+      if (view.delegation !== null) {
+        this.measuredProjects.add(project);
+        for (const r of view.delegation) if (r.state !== 'absent' && r.canonicalPath !== null) this.knownPaths.set(laneTreeKey(r.project, r.adminRecord), r.canonicalPath);
+      }
+      // R73 rule 1: the run of censuses listing a transient null-path record with no remembered path. Anything else resets it.
+      const unplaced = view.delegation !== null && view.delegation.some((r) => this.unplacedRecord(r));
+      const held = this.unplaced.get(project);
+      if (!unplaced) this.unplaced.delete(project);
+      else if (held === undefined) this.unplaced.set(project, { firstAt: census.measuredAt, lastAt: census.measuredAt, passes: 1 });
+      else if (census.measuredAt > held.lastAt) { held.lastAt = census.measuredAt; held.passes += 1; }
     }
     for (const project of [...this.notCheckout.keys()]) if (!census.projects.has(project)) this.notCheckout.delete(project);
+    for (const project of [...this.unplaced.keys()]) if (!census.projects.has(project)) this.unplaced.delete(project);
   }
 
   /** The projects that hold no tree the lane could decide, for pruning (R70): a refused name; and `not-a-checkout` once it has recurred
@@ -8711,27 +8833,47 @@ class DelegationLane {
 
   private pruneProjects(census: DelegationCensusPass): Map<string, DelegationPruneProject> {
     const standing = this.standingProjects(census);
-    return new Map([...census.projects].map(([project, view]) => [project, {
-      records: view.delegation, standing: standing.has(project), measuredSinceStart: this.measuredProjects.has(project),
-    }] as const));
+    return new Map([...census.projects].map(([project, view]) => {
+      // R73 rule 1: held back while the streak has not run its course (no run on file for a census that lists one: held, the safe side).
+      const run = this.unplaced.get(project);
+      const settled = run !== undefined && run.passes >= DELEGATION_STANDING_PASSES && run.lastAt - run.firstAt >= DELEGATION_STANDING_SPAN_MS;
+      const unplacedHold = view.delegation !== null && view.delegation.some((r) => this.unplacedRecord(r)) && !settled;
+      return [project, {
+        records: view.delegation, standing: standing.has(project), measuredSinceStart: this.measuredProjects.has(project), unplacedHold,
+      }] as const;
+    }));
   }
 
-  /** Forgets the remembered path of every tree a measured census of its own project shows gone. */
+  /** Forgets the remembered path of every tree a measured census of its own project shows gone, keeping the paths for the prunes against
+   *  that same census (a key at one of them is forgotten with no path mark). */
   private forgetGoneTrees(census: DelegationCensusPass): void {
-    for (const k of delegationGoneTrees(this.knownPaths, this.pruneProjects(census))) this.knownPaths.delete(k);
+    if (this.gone.measuredAt !== census.measuredAt) this.gone = { measuredAt: census.measuredAt, paths: new Set() };
+    for (const k of delegationGoneTrees(this.knownPaths, this.pruneProjects(census))) {
+      const path = this.knownPaths.get(k);
+      if (path !== undefined) this.gone.paths.add(path);
+      this.knownPaths.delete(k);
+    }
   }
 
-  /** Forgets the dropped-evidence keys that only a tree a measured census shows gone could still ask about (`planDelegationDroppedPrune`
-   *  decides, and argues why it is sound; it answers nothing to forget while a path is unknown). */
+  /** Forgets the dropped-evidence keys `planDelegationDroppedPrune` lets go, after recording the marks that stand for them (R73: both in
+   *  this one synchronous step, so no index is ever built between them). A mark set at its cap raises the global lossy flag. */
   private pruneDropped(census: DelegationCensusPass, activities: DelegationCheckpointV1['activities']): void {
     const plan = planDelegationDroppedPrune({
       keys: [...this.dropped].map(([id, e]) => [id, e.key, e.at] as const), projects: this.pruneProjects(census), known: this.knownPaths,
+      gonePaths: this.gone.measuredAt === census.measuredAt ? this.gone.paths : new Set(),
       projectOfParent: (parentId) => this.sessionProject.get(parentId), activities, measuredAtMs: census.measuredAt,
+      lost: this.lostProjects, holdCap: this.seams.projectHoldCap ?? DELEGATION_PROJECT_HOLD_CAP,
     });
     this.droppedAdded = 0;
-    if (plan === null || plan.length === 0) return;
-    for (const id of plan) this.dropped.delete(id);
-    this.droppedIndexCache = null;
+    this.heldBack = plan.held;
+    const cap = this.seams.markCap ?? DELEGATION_MARK_CAP;
+    let full = false;
+    for (const project of plan.lose) this.lostProjects.add(project);
+    for (const path of plan.markPaths) if (!delegationHashSetAdd(this.markPaths, path, cap)) full = true;
+    for (const id of plan.markIds) if (!delegationHashSetAdd(this.markIds, id, cap)) full = true;
+    if (full && !this.lossy) { this.lossy = true; this.lossyAfterLoad = this.evidenceLoaded; }
+    for (const id of plan.forget) this.dropped.delete(id);
+    if (plan.forget.length > 0 || plan.lose.length > 0 || full) this.droppedIndexCache = null;
   }
 
   report() {
@@ -8741,6 +8883,10 @@ class DelegationLane {
       evidenceEvents: this.evidence.size, evidenceHorizon: this.evidenceHorizon(), cursorsPruned: this.cursorsPruned,
       metaMisses: this.metaMiss.size, pointMetas: this.pointMetas.size,
       droppedEvidence: { measured: this.evidenceLoaded, keys: this.dropped.size, peak: this.droppedPeak }, knownTrees: this.knownPaths.size,
+      marks: {
+        paths: this.markPaths.size, ids: this.markIds.size, lostProjects: [...this.lostProjects].sort(), lossy: this.lossy,
+        heldBack: Object.fromEntries(this.heldBack), forced: { ...this.markForced }, reloads: this.markReloads,
+      },
     };
   }
 
@@ -9148,6 +9294,8 @@ class DelegationLane {
         this.droppedIndexCache = null;
         this.droppedAdded = 0;
         this.droppedPeak = 0;
+        this.resetMarks();                                             // R73: rebuilt from the complete journal as it streams
+        this.lastLoadAt = pass.now;
         // R69: a restart lost the remembered paths. Seed them from what the checkpoint durably holds (a lease and an attempt both carry
         // their tree's canonical path), then add what this pass's census lists, and let a measured census of a tree's own project retire it.
         const checkpoint = durable.state().checkpoint;
@@ -9173,6 +9321,7 @@ class DelegationLane {
         this.evidenceKeys.clear();
         this.dropped.clear();                                          // a partial index is not a measured one
         this.tupleLatest.clear();
+        this.resetMarks();                                             // nor are partial marks
         this.droppedIndexCache = null;
       } finally {
         this.evidenceLoading = null;
@@ -9264,6 +9413,15 @@ class DelegationLane {
     };
     // ONE expression: each pair is a census record and the verdict about it, never sorted or filtered apart.
     const pairs = flat.map((record) => ({ record, verdict: correlateDelegation(inputFor(record)) }));
+    // R73: how many of this pass's verdicts each kind of mark changed, counted apart from every other `unmeasured` reason.
+    const forced: Record<DelegationMarkKind, number> = { path: 0, id: 0, project: 0, lossy: 0 };
+    if (droppedEvidence.measured) {
+      for (const { record, verdict } of pairs) {
+        const kind = delegationMarkForced(inputFor(record), verdict);
+        if (kind !== null) forced[kind] += 1;
+      }
+    }
+    this.markForced = forced;
 
     const deaths = this.firstDeadParents();
     const effects = planDelegationReconciliation({
@@ -9290,8 +9448,43 @@ class DelegationLane {
     this.firstSeen = nextFirstSeen;
     this.previous = { flat, projects: censused };
     this.reconciled = true;
+    this.warnMarks(pass.now);
     if (pass.signal.aborted) return;
     await this.applyEffects(pass, durable, effects);
+    this.rereadForMarks(pass.now);
+  }
+
+  /**
+   * R73, rule 4: once per UTC hour while any project is held back or lost, the global flag is up, or a mark changed a verdict, ONE line
+   * names them: project names and counts only, never a path or a payload.
+   */
+  private warnMarks(nowMs: number): void {
+    const f = this.markForced;
+    const present = this.heldBack.size > 0 || this.lostProjects.size > 0 || this.lossy || f.path + f.id + f.project + f.lossy > 0;
+    const hour = laneHourOf(nowMs);
+    if (!present || hour === this.lastMarkWarnHour) return;
+    this.lastMarkWarnHour = hour;
+    const held = [...this.heldBack].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)).map(([p, n]) => `${p} (${n} keys)`).join(', ') || 'none';
+    const lost = [...this.lostProjects].sort().join(', ') || 'none';
+    console.warn(`ccrc-server: delegation dropped-evidence marks (R73): projects held back: ${held}; lost projects: ${lost}; global lossy flag: ${this.lossy ? 'up' : 'down'}; `
+      + `marks held: ${this.markPaths.size} paths, ${this.markIds.size} ids; verdicts held unmeasured by a mark in the last reconcile: path ${f.path}, id ${f.id}, project ${f.project}, lossy ${f.lossy}`);
+  }
+
+  /**
+   * R73 liveness: a mark that changed a verdict stands for keys the lane could not measure when it forgot them, about a tree it
+   * can measure NOW (a verdict is only ever given for a listed record with a path, in a measured census). The journal still holds every
+   * one of them (wave 3 never compacts it), so the lane re-reads it: the next pass runs the restart's own `loadEvidence`, which protects
+   * that tree's path and asked-about names and rebuilds every mark from the complete journal against what the lane knows now. While it
+   * reads, the index is unmeasured and nothing is reconciled (D-4008). At most once per `DELEGATION_MARK_RELOAD_MS` after the last load.
+   * The global flag asks for a re-read only when a prune raised it after the last load: a load that raised it would raise it again.
+   */
+  private rereadForMarks(nowMs: number): void {
+    const f = this.markForced;
+    const wanted = f.path + f.id + f.project > 0 || (this.lossy && this.lossyAfterLoad);
+    if (!wanted || nowMs - this.lastLoadAt < (this.seams.markReloadMs ?? DELEGATION_MARK_RELOAD_MS)) return;
+    this.markReloads += 1;
+    this.evidenceLoaded = false;
+    this.droppedIndexCache = null;
   }
 
   // ── rung 2: the positive meta reads ───────────────────────────────────────────────────────────────────────────────────

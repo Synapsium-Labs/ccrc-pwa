@@ -1549,10 +1549,12 @@ describe('the lane remembers what it dropped (R65): a link that rests on an even
       const w = padded();
       w.watcher.setDelegationSeams(SEAMS);
       await settled(w, 0);
+      const before = w.watcher.delegationReport().marks.paths;
       another(w);
       await censusPass(w, at(4), { demo: [] });
       expect(keysOf(w)).toBe(0);
       expect(w.watcher.delegationReport().knownTrees).toBe(0);
+      expect(w.watcher.delegationReport().marks.paths - before, 'R73 (1): the gone tree\'s key needs no mark; only the new pad\'s directory is marked').toBe(1);
     });
 
     it('R69 item 5: a key is stamped with the latest event dropped under it, hidden tuple-mates included: a mate observed after the census keeps the key, until a later census', async () => {
@@ -1571,7 +1573,9 @@ describe('the lane remembers what it dropped (R65): a link that rests on an even
 
     it('a restart loses the remembered paths: until the project has been measured since, its own keys are kept, and the tree is not linked', async () => {
       const first = padded();
-      await settled(first, 0);                                                         // the default cap holds every event: nothing is dropped
+      first.watcher.setDelegationSeams({ evidenceCap: 3 });                           // N13: the tree stays unmeasured, so no attempt is filed and nothing seeds its path
+      await settled(first, 0);
+      expect(attemptsOf(first.home), 'the first lane seeded the path it is meant not to').toEqual([]);
       const again = world({ home: first.home });
       again.watcher.setDelegationSeams(SEAMS);
       await censusPass(again, at(4), { demo: null });                                  // the load drops two keys; the project has not been measured since the restart
@@ -1580,7 +1584,7 @@ describe('the lane remembers what it dropped (R65): a link that rests on an even
       await settled(again, 5);
       expect(keysOf(again)).toBe(1);                                                   // measured now: the pad goes, the key at the listed tree's path stays
       expect(leasesOf(again.home), 'a restart, then a prune, minted a lease identity').toEqual([]);
-      expect(attemptsOf(again.home).filter((a) => a.verdict === 'linked')).toEqual([]);     // the held-in-full world filed its `unresolved` attempt; nothing links
+      expect(attemptsOf(again.home)).toEqual([]);
       expect(again.watcher.delegationReport().verdicts).toEqual({ unresolved: 0, conflicting: 0, unmeasured: 1 });
     });
 
@@ -1687,6 +1691,218 @@ describe('the lane remembers what it dropped (R65): a link that rests on an even
         expect(leasesOf(w.home), 'a lane with a lost index made a lease').toEqual([]);
       });
     });
+
+    describe('R73: a restart never forgets a veto it cannot prove gone (every forget is proved, or leaves a coarser mark)', () => {
+      const marksOf = (w: World) => w.watcher.delegationReport().marks;
+      const NONE = { path: 0, id: 0, project: 0, lossy: 0 };
+      /** The raw tree's record read with a null path for a TRANSIENT reason: its `gitdir` read failed. */
+      const flaky = (over: Partial<DelegationCensusRecord> = {}): DelegationCensusRecord => ({ ...RAW, state: 'unreadable', canonicalPath: null, diagnostic: 'gitdir-unreadable', ...over });
+      /** The reviewer's P-restart: the first lane runs at cap 3, so the tree stays unmeasured and NO attempt is filed (nothing can seed its
+       *  path); then a new lane on the same home. */
+      async function unseeded(seams: Parameters<FleetWatcher['setDelegationSeams']>[0] = {}): Promise<World> {
+        const first = paWorld();
+        first.watcher.setDelegationSeams({ evidenceCap: 3 });
+        await run(first);
+        expect(attemptsOf(first.home), 'an attempt would seed the path').toEqual([]);
+        const again = world({ home: first.home });
+        again.watcher.setDelegationSeams({ evidenceCap: 3, droppedPruneEvery: 1, ...seams });
+        return again;
+      }
+      /** One new event from `owner` at a fresh directory: it evicts something, so a prune is due. */
+      let n = 0;
+      const fresh = (w: World, owner: string): void => {
+        n += 1;
+        const line = tool(owner, 600 + n, `/w/demo/later-${n}`, `2026-10-15T10:${String(20 + (n % 9)).padStart(2, '0')}:00.000Z`);
+        if (existsSync(bucketFile(w, owner, BUCKET10))) appendBucket(w, owner, BUCKET10, line);
+        else writeBucket(w, owner, BUCKET10, line);
+      };
+      const farLines = (owner: string, count: number, from = 0): string[] =>
+        Array.from({ length: count }, (_, i) => tool(owner, 400 + from + i, `/w/demo/far-${from + i}`, `2026-10-15T10:0${Math.floor((from + i) / 12)}:${String(((from + i) % 12) * 5).padStart(2, '0')}.000Z`));
+      const other = [sessionOf('other-s', 'idle', 'other')];
+
+      it('N11 shape A: after a restart the first census lists the unseeded tree unreadable with a null path: its project holds its keys, and no lease and no attempt follow', async () => {
+        const again = await unseeded();
+        await censusPass(again, at(4), { demo: [flaky()] });
+        expect(keysOf(again), 'the transient null path held its project\'s key').toBe(1);
+        expect(marksOf(again).heldBack).toEqual({ demo: 1 });
+        fresh(again, 'demo-a');
+        for (let i = 5; i < 9; i++) await censusPass(again, at(i), census);
+        unlinked(again);
+      });
+
+      it('N11 shape B: after a restart the tree\'s project has no live session, so its parent\'s key belongs to no known project: it goes WITH a path mark, and when the project returns the tree is not linked', async () => {
+        const again = await unseeded();
+        await censusPass(again, at(4), { other: [] }, other);
+        expect(keysOf(again)).toBe(0);
+        fresh(again, 'demo-b');
+        for (let i = 5; i < 9; i++) await censusPass(again, at(i), census, [sessionOf('demo-b')]);
+        expect(leasesOf(again.home), 'a restart, then a prune, minted a lease identity').toEqual([]);
+        expect(attemptsOf(again.home)).toEqual([]);
+        expect(again.watcher.delegationReport().verdicts).toEqual({ unresolved: 0, conflicting: 0, unmeasured: 1 });
+        expect(marksOf(again).paths).toBeGreaterThanOrEqual(1);
+        expect(marksOf(again).forced, 'counted by kind, apart from every other unmeasured reason').toEqual({ ...NONE, path: 1 });
+      });
+
+      it('N12: a record with a STANDING null path (a relative or malformed gitdir, a refused name) never stops the prune', async () => {
+        const standing: readonly DelegationCensusRecord[] = [
+          record('demo', 'rel-tree', { canonicalPath: null, diagnostic: 'gitdir-relative' }),
+          record('demo', 'bad-tree', { canonicalPath: null, diagnostic: 'head-unreadable,gitdir-malformed' }),
+          record('demo', 'bad name', { state: 'unreadable', canonicalPath: null, diagnostic: 'name-refused' }),
+        ];
+        for (const r of standing) {
+          const w = world();
+          writeBucket(w, 'demo-a', BUCKET10, ...farLines('demo-a', 30));
+          w.watcher.setDelegationSeams({ evidenceCap: 2, droppedPruneEvery: 1 });
+          for (let i = 0; i < 4; i++) await censusPass(w, at(i), { demo: [RAW, r] });
+          expect(keysOf(w), r.diagnostic!).toBe(0);
+          expect(marksOf(w).heldBack, r.diagnostic!).toEqual({});
+        }
+      });
+
+      it('R73 rule 1: a TRANSIENT null path with no remembered path holds its own project\'s keys only for a streak of 3 passes spanning 10 minutes; then they go, with their marks', async () => {
+        const w = world();
+        writeBucket(w, 'demo-a', BUCKET10, ...farLines('demo-a', 30));
+        w.watcher.setDelegationSeams({ evidenceCap: 2, droppedPruneEvery: 1 });
+        const flakyPass = async (minute: number): Promise<void> => {
+          fresh(w, 'demo-a');
+          await censusPass(w, NOW + minute * 60_000, { demo: [RAW, flaky({ adminRecord: 'flaky-tree' })] });
+        };
+        await flakyPass(0);
+        expect(keysOf(w), 'held: the unplaced record may be at any of their paths').toBeGreaterThan(20);
+        await flakyPass(5);
+        expect(keysOf(w)).toBeGreaterThan(20);
+        await flakyPass(9);
+        expect(keysOf(w), 'three passes, but not yet ten minutes').toBeGreaterThan(20);
+        await flakyPass(11);
+        expect(keysOf(w), 'the streak has run its course').toBe(0);
+        expect(marksOf(w).paths, 'every far directory forgotten leaves its mark').toBeGreaterThanOrEqual(30);
+        expect(marksOf(w).heldBack).toEqual({});
+      });
+
+      it('the path mark, safety: a re-read once the mark has held a tree back still refuses the link the forgotten key vetoed (the key, read again, vetoes)', async () => {
+        const again = await unseeded({ markReloadMs: 0 });
+        await censusPass(again, at(4), { other: [] }, other);
+        fresh(again, 'demo-b');
+        for (let i = 5; i < 12; i++) await censusPass(again, at(i), census, [sessionOf('demo-b')]);
+        expect(marksOf(again).reloads).toBeGreaterThanOrEqual(1);
+        expect(leasesOf(again.home)).toEqual([]);
+        expect(attemptsOf(again.home)).toEqual([]);
+        expect(marksOf(again).forced, 'the mark no longer decides: the key does').toEqual(NONE);
+        expect(keysOf(again), 'the parent\'s key at the listed tree\'s path, read again').toBe(1);
+        expect(again.watcher.delegationReport().verdicts).toEqual({ unresolved: 0, conflicting: 0, unmeasured: 1 });
+      });
+
+      it('the path mark, liveness: when the forgotten key could not veto (the subagent\'s own event), the re-read clears the mark and the tree links as the full evidence says', async () => {
+        const first = world();
+        writeBucket(first, 'demo-a', BUCKET10,
+          subStart('demo-a', A1, '/w/demo', '2026-10-15T10:01:00.000Z'), tool('demo-a', 1, C, '2026-10-15T10:02:00.000Z', A1),
+          tool('demo-a', 2, '/w/demo/pad-a', '2026-10-15T10:03:00.000Z'), tool('demo-a', 3, '/w/demo/pad-b', '2026-10-15T10:04:00.000Z'),
+          tool('demo-a', 4, '/w/demo/pad-c', '2026-10-15T10:05:00.000Z'), tool('demo-a', 5, C, '2026-10-15T10:06:00.000Z', A1));
+        for (let i = 0; i < 3; i++) await censusPass(first, at(i), { demo: [] });           // the tree is not there yet
+        const again = world({ home: first.home });
+        again.watcher.setDelegationSeams({ evidenceCap: 3, droppedPruneEvery: 1 });
+        await censusPass(again, at(3), { other: [] }, other);
+        expect(keysOf(again)).toBe(0);
+        for (let i = 4; i < 7; i++) await censusPass(again, at(i), census, [sessionOf('demo-b')]);
+        expect(leasesOf(again.home), 'held back by the mark').toEqual([]);
+        expect(marksOf(again).forced).toEqual({ ...NONE, path: 1 });
+        again.watcher.setDelegationSeams({ evidenceCap: 3, droppedPruneEvery: 1, markReloadMs: 0 });
+        for (let i = 7; i < 10; i++) await censusPass(again, at(i), census, [sessionOf('demo-b')]);
+        expect(marksOf(again).forced).toEqual(NONE);
+        expect(leasesOf(again.home).map((l) => [l.adminRecord, l.sourceKind])).toEqual([['raw-tree', 'agent']]);
+        expect(attemptsOf(again.home).map((a) => [a.adminRecord, a.verdict, a.rung])).toEqual([['raw-tree', 'linked', 3]]);
+      });
+
+      it('the id mark: a rival\'s bare event naming the agent, forgotten while nobody asked about the agent, keeps the agent\'s later link unmeasured; a re-read clears the mark and the rival\'s key, read again, holds it', async () => {
+        const w = world();
+        writeBucket(w, 'demo-b', BUCKET10, tool('demo-b', 1, '/w/demo/b-dir', '2026-10-15T10:01:00.000Z', A1),
+          ...Array.from({ length: 4 }, (_, i) => tool('demo-b', 10 + i, `/w/demo/b-pad-${i}`, `2026-10-15T10:02:0${i}.000Z`)));
+        w.watcher.setDelegationSeams({ evidenceCap: 3, droppedPruneEvery: 1 });
+        const both = [sessionOf('demo-a'), sessionOf('demo-b')];
+        await censusPass(w, at(0), { demo: [] }, both);
+        expect(keysOf(w), 'the rival\'s key is forgotten: nobody asks about the agent yet').toBe(0);
+        writeBucket(w, 'demo-a', BUCKET10, subStart('demo-a', A1, '/w/demo', '2026-10-15T10:10:00.000Z'), tool('demo-a', 2, C, '2026-10-15T10:11:00.000Z', A1));
+        for (let i = 1; i < 5; i++) await censusPass(w, at(i), census, both);
+        expect(leasesOf(w.home), 'the forgotten rival key no longer vetoes, and nothing stood for it').toEqual([]);
+        expect(attemptsOf(w.home)).toEqual([]);
+        expect(marksOf(w).ids, 'the agent nobody asked about when its rival key went').toBe(1);
+        expect(marksOf(w).forced).toEqual({ ...NONE, id: 1 });
+        w.watcher.setDelegationSeams({ evidenceCap: 3, droppedPruneEvery: 1, markReloadMs: 0 });
+        for (let i = 5; i < 8; i++) await censusPass(w, at(i), census, both);
+        expect(marksOf(w).forced, 'the agent is asked about now: its rival key is kept, not marked').toEqual(NONE);
+        expect(leasesOf(w.home)).toEqual([]);
+        expect(w.watcher.delegationReport().verdicts).toEqual({ unresolved: 0, conflicting: 0, unmeasured: 1 });
+      });
+
+      it('R73 rule 3: a project held back past the per-project cap is lost: its keys go, every tree of it answers unmeasured, and a re-read once it is measured clears the mark', async () => {
+        const first = padded();
+        await settled(first, 0);                                                     // held in full: its unresolved attempt seeds the tree's path
+        expect(attemptsOf(first.home).map((a) => a.verdict)).toEqual(['unresolved']);
+        const again = world({ home: first.home });
+        again.watcher.setDelegationSeams({ ...SEAMS, projectHoldCap: 1 });
+        await censusPass(again, at(4), { demo: null });
+        expect(marksOf(again).lostProjects).toEqual(['demo']);
+        expect(keysOf(again), 'the lost project holds nothing back, and its remembered path no longer protects').toBe(0);
+        another(first);
+        await settled(again, 5);
+        expect(leasesOf(again.home)).toEqual([]);
+        expect(attemptsOf(again.home).filter((a) => a.verdict === 'linked')).toEqual([]);
+        expect(marksOf(again).forced).toEqual({ ...NONE, project: 1 });
+        again.watcher.setDelegationSeams({ ...SEAMS, projectHoldCap: 1, markReloadMs: 0 });
+        await settled(again, 9, 3);
+        expect(marksOf(again).lostProjects, 'measured now: the re-read holds the project\'s keys again').toEqual([]);
+        expect(marksOf(again).forced).toEqual(NONE);
+        expect(keysOf(again), 'the parent\'s key at the listed tree, read again').toBe(1);
+        expect(leasesOf(again.home)).toEqual([]);
+      });
+
+      describe('the global flag', () => {
+        /** The agent works in the tree and nothing vetoes it (the full evidence links at rung 3); three far events come first, so the cap of
+         *  the slice evicts two of them and the lane forgets two directories. */
+        function linkable(): World {
+          const w = world();
+          writeBucket(w, 'demo-a', BUCKET10, ...farLines('demo-a', 3), subStart('demo-a', A1, '/w/demo', '2026-10-15T10:05:00.000Z'), tool('demo-a', 1, C, '2026-10-15T10:06:00.000Z', A1));
+          return w;
+        }
+        it('a full mark set raises it: every rung-2 and rung-3 link is unmeasured; a re-read that fits clears it and the tree links', async () => {
+          const w = linkable();
+          w.watcher.setDelegationSeams({ evidenceCap: 3, droppedPruneEvery: 1, markCap: 1 });
+          for (let i = 0; i < 4; i++) await censusPass(w, at(i), census);
+          expect(leasesOf(w.home), 'two directories forgotten past a cap of one: nothing may link at rung 3').toEqual([]);
+          expect(marksOf(w).lossy).toBe(true);
+          expect(marksOf(w).forced).toEqual({ ...NONE, lossy: 1 });
+          w.watcher.setDelegationSeams({ evidenceCap: 3, droppedPruneEvery: 1, markCap: 100, markReloadMs: 0 });
+          for (let i = 4; i < 7; i++) await censusPass(w, at(i), census);
+          expect(marksOf(w).lossy).toBe(false);
+          expect(leasesOf(w.home).map((l) => [l.adminRecord, l.sourceKind])).toEqual([['raw-tree', 'agent']]);
+        });
+        it('a re-read that overflows again keeps it, and the lane does not re-read again for it', async () => {
+          const w = linkable();
+          w.watcher.setDelegationSeams({ evidenceCap: 3, droppedPruneEvery: 1, markCap: 1, markReloadMs: 0 });
+          for (let i = 0; i < 8; i++) await censusPass(w, at(i), census);
+          expect(leasesOf(w.home)).toEqual([]);
+          expect(marksOf(w).lossy).toBe(true);
+          expect(marksOf(w).reloads).toBe(1);
+        });
+      });
+
+      it('visibility: once per UTC hour while a project is held back or lost or the flag is up, one warn line names them, and never a path', async () => {
+        const first = padded();
+        await settled(first, 0);
+        const again = world({ home: first.home });
+        again.watcher.setDelegationSeams({ ...SEAMS, projectHoldCap: 1 });
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        const lines = (): string[] => warn.mock.calls.map((c) => String(c[0])).filter((m) => m.includes('dropped-evidence marks'));
+        await censusPass(again, at(4), { demo: null });
+        await censusPass(again, at(5), { demo: null });
+        expect(lines()).toHaveLength(1);
+        expect(lines()[0]).toMatch(/^ccrc-server: /);
+        expect(lines()[0]).toContain('demo');
+        expect(lines()[0]).not.toContain('/w/');
+        await censusPass(again, NOW + 61 * 60_000, { demo: null });
+        expect(lines()).toHaveLength(2);
+      });
+    });
   });
 
   it('the index lives in lane memory only: the source names no file for it and writes it nowhere (no new file, no SQLite-only state, the journal untouched)', () => {
@@ -1695,6 +1911,11 @@ describe('the lane remembers what it dropped (R65): a link that rests on an even
     expect(lane).toContain('delegationDroppedKeyOf(');
     expect(lane).toContain('planDelegationDroppedPrune(');
     expect(lane).toContain('indexDelegationDropped(');
+    // R73: the marks live beside the index, in lane memory, and the docstring says what sets and clears each.
+    expect(lane).toMatch(/Lane memory only, like the index: no file, no\s*\/\/\s*SQLite-only state, the journal untouched/);
+    expect(lane).toContain('delegationHashSetAdd(');
+    for (const mark of ['PATH MARKS', 'ID MARKS', 'LOST PROJECTS', 'THE GLOBAL LOSSY FLAG']) expect(lane, mark).toContain(`//     - ${mark}`);
+    for (const word of ['Set by', 'Set when', 'Cleared by']) expect(lane).toContain(word);
   });
 });
 

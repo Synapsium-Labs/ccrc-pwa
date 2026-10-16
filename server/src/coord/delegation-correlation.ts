@@ -42,6 +42,8 @@
 //     a parent other than p, or (b) reported C and either carries no agent id and comes from p, or carries an agent id other than X and
 //     is not a SubagentStart or SubagentStop. That is membership, not a comparison with an instant. A caller that has not measured what
 //     it dropped says so, and an unmeasured index is not an empty one: every link is then `unmeasured('evidence-horizon')` (D-4008).
+//     A caller that FORGETS a key without a measured census showing its tree gone leaves a coarser MARK in the index instead (R73: a
+//     path hash, an id hash, a lost project, or a global flag), and a rung-2 or rung-3 link that any mark covers is `unmeasured` too.
 //   - `combine` never lets a link beat an `evidence-horizon` answer from the other rung: that answer is a rung that found an activity
 //     and was about to link, and its real answer may have been a link to another parent.
 // A verdict that was not a link is never touched: the rules above only ever turn a link into a non-answer.
@@ -189,10 +191,116 @@ export type DelegationDroppedEvidence =
       readonly named: ReadonlyMap<string, ReadonlySet<string>>;
       /** A working directory -> the dropped events that reported it. */
       readonly atPath: ReadonlyMap<string, readonly { parent: string; agentId: string | null; startStop: boolean }[]>;
+      /** R73: what the caller FORGOT without a measured census showing the tree gone, kept as coarse marks. */
+      readonly marks: DelegationLostMarks;
     };
 
 /** A lost or never-built index. Every link answers `unmeasured('evidence-horizon')` against it (D-4008: unknown is never empty). */
 export const DELEGATION_DROPPED_UNMEASURED: DelegationDroppedEvidence = Object.freeze({ measured: false as const });
+
+// ── The lossy marks (R73, part of D-4653) ────────────────────────────────────────────────────────────────────────────
+
+/**
+ * A set of 64-bit hashes of texts, in bounded memory: open addressing over a `Uint32Array` of (high, low) pairs, the pair (0, 0) being an
+ * empty slot. PLAIN DATA (no methods, no closures), so a correlation input that carries one stays cloneable; an empty one is a zero-length
+ * array, which also freezes. A collision can only make a text read as present: a mark that is wrongly present makes a link `unmeasured`,
+ * never makes one, and at 64 bits and the caller's cap (well under a million) the chance per query is below one in ten million million.
+ */
+export interface DelegationHashSet {
+  slots: Uint32Array;
+  size: number;
+}
+
+export const emptyDelegationHashSet = (): DelegationHashSet => ({ slots: new Uint32Array(0), size: 0 });
+
+/** Two independent 32-bit lanes over the UTF-16 code units (a cyrb53-style mix kept at its full 64 bits); never the pair (0, 0). */
+function hash64(text: string): readonly [number, number] {
+  let h1 = 0xdeadbeef;
+  let h2 = 0x41c6ce57;
+  for (let i = 0; i < text.length; i++) {
+    const c = text.charCodeAt(i);
+    h1 = Math.imul(h1 ^ c, 2654435761);
+    h2 = Math.imul(h2 ^ c, 1597334677);
+  }
+  h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);
+  h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
+  const hi = h1 >>> 0;
+  const lo = h2 >>> 0;
+  return hi === 0 && lo === 0 ? [0, 1] : [hi, lo];
+}
+
+/** The pair index where `hash` is, or the empty one where it would go. `slots` holds at least one empty pair (the load stays under 3/4). */
+function probeOf(slots: Uint32Array, hi: number, lo: number): number {
+  const mask = slots.length / 2 - 1;
+  let i = (lo ^ Math.imul(hi, 0x9e3779b1)) & mask;
+  for (;;) {
+    const a = slots[2 * i]!;
+    const b = slots[2 * i + 1]!;
+    if ((a === hi && b === lo) || (a === 0 && b === 0)) return i;
+    i = (i + 1) & mask;
+  }
+}
+
+export function delegationHashSetHas(set: Readonly<DelegationHashSet>, text: string): boolean {
+  if (set.size === 0) return false;
+  const [hi, lo] = hash64(text);
+  const i = probeOf(set.slots, hi, lo);
+  return set.slots[2 * i] === hi && set.slots[2 * i + 1] === lo;
+}
+
+/** Adds `text`; answers false ONLY when the set already holds `cap` texts and `text` is not one of them (the caller then raises its global
+ *  lossy flag). The array grows by doubling, so its memory is at most 16 bytes a slot pair over the smallest power of two above 4/3 cap. */
+export function delegationHashSetAdd(set: DelegationHashSet, text: string, cap: number): boolean {
+  const [hi, lo] = hash64(text);
+  if (set.slots.length > 0) {
+    const i = probeOf(set.slots, hi, lo);
+    if (set.slots[2 * i] === hi && set.slots[2 * i + 1] === lo) return true;
+  }
+  if (set.size >= cap) return false;
+  const pairs = set.slots.length / 2;
+  if ((set.size + 1) * 4 > pairs * 3) {
+    const grown = new Uint32Array(Math.max(2048, set.slots.length * 2));
+    for (let j = 0; j < pairs; j++) {
+      const a = set.slots[2 * j]!;
+      const b = set.slots[2 * j + 1]!;
+      if (a === 0 && b === 0) continue;
+      const k = probeOf(grown, a, b);
+      grown[2 * k] = a;
+      grown[2 * k + 1] = b;
+    }
+    set.slots = grown;
+  }
+  const i = probeOf(set.slots, hi, lo);
+  set.slots[2 * i] = hi;
+  set.slots[2 * i + 1] = lo;
+  set.size += 1;
+  return true;
+}
+
+/**
+ * THE LOSSY MARKS (R73). The caller forgets a dropped key either because a census of its project, measured in this pass, shows every tree
+ * the key could veto gone, or by replacing it with one of these COARSER marks, each of which still moves every link the key could have
+ * vetoed to `unmeasured('evidence-horizon')` (rungs 2 and 3; rung 4 reads no key):
+ *   - `paths`: 64-bit hashes of the working directories of the clause-(b) keys it forgot; a tree whose canonical path is one of them;
+ *   - `ids`: 64-bit hashes of the agent and run ids of the clause-(a) keys it forgot; an activity whose upstream id (or run) is one of them;
+ *   - `projects`: the projects whose held keys it dropped at its per-project cap; every tree of such a project;
+ *   - `lossy`: a hash set reached its cap; every rung-2 and rung-3 link.
+ * A false mark only ever delays a link. What sets and clears each is the caller's (the lane's docstring, `watch.ts`).
+ */
+export interface DelegationLostMarks {
+  readonly lossy: boolean;
+  readonly projects: ReadonlySet<string>;
+  readonly paths: Readonly<DelegationHashSet>;
+  readonly ids: Readonly<DelegationHashSet>;
+}
+
+/** No marks: a lane that has forgotten nothing it could not prove gone. */
+export const DELEGATION_NO_MARKS: DelegationLostMarks = Object.freeze({
+  lossy: false, projects: Object.freeze(new Set<string>()) as ReadonlySet<string>, paths: Object.freeze(emptyDelegationHashSet()), ids: Object.freeze(emptyDelegationHashSet()),
+});
+
+/** The kinds of mark, for the caller's count of the verdicts each changed. */
+export type DelegationMarkKind = 'lossy' | 'project' | 'path' | 'id';
 
 /** The keys of one dropped event. */
 export function delegationDroppedKeyOf(event: DelegationEventEnvelopeV1): DelegationDroppedKey {
@@ -212,8 +320,8 @@ export function delegationDroppedKeyOf(event: DelegationEventEnvelopeV1): Delega
 export const delegationDroppedKeyId = (k: DelegationDroppedKey): string =>
   JSON.stringify([k.parentId, k.parentIncarnation, k.agentId, k.launchAgentId, k.runId, k.cwd, k.startStop]);
 
-/** A MEASURED index over these keys (empty keys: measured, nothing dropped). */
-export function indexDelegationDropped(keys: Iterable<DelegationDroppedKey>): DelegationDroppedEvidence {
+/** A MEASURED index over these keys and the marks of what the caller forgot (empty keys and no marks: measured, nothing dropped). */
+export function indexDelegationDropped(keys: Iterable<DelegationDroppedKey>, marks: DelegationLostMarks = DELEGATION_NO_MARKS): DelegationDroppedEvidence {
   const named = new Map<string, Set<string>>();
   const atPath = new Map<string, { parent: string; agentId: string | null; startStop: boolean }[]>();
   for (const k of keys) {
@@ -230,7 +338,7 @@ export function indexDelegationDropped(keys: Iterable<DelegationDroppedKey>): De
       atPath.set(k.cwd, here);
     }
   }
-  return { measured: true, named, atPath };
+  return { measured: true, named, atPath, marks };
 }
 
 /** The identity of a tree the census lists: its project and its admin record. */
@@ -239,7 +347,9 @@ export const delegationTreeKey = (project: string, adminRecord: string): string 
 /**
  * The slack allowed between the fleet's clock (the time an event was observed) and the server's (the time a census was measured): the
  * remote deployment has two boxes. A key whose latest dropped event is within this of the census is kept, because a tree born after the
- * census could have an event that looks earlier than it.
+ * census could have an event that looks earlier than it. It ASSUMES THE TWO BOXES ARE NTP-SYNCED: a fleet box whose clock drifts further
+ * than this can make an event observed after the census read as one before it. (Accepted interpretations, R73: the drop time is the
+ * event's own `observedAt`, and the allowance is 60 s.)
  */
 export const DELEGATION_CLOCK_SKEW_MS = 60_000;
 
@@ -257,6 +367,14 @@ export interface DelegationPruneProject {
   /** A measured census of the project has been read since this lane started: until then what it remembers is only what the checkpoint
    *  gave it, and a project this lane has not seen is not a project it can prune for. */
   readonly measuredSinceStart: boolean;
+  /**
+   * R73 rule 1: the project's census lists a record whose path is null for a TRANSIENT reason (a `gitdir` read that failed, a record being
+   * born) and which has no remembered path, and the caller's streak for it has not run its course. Such a project keeps its own keys, as
+   * one not measured since the start does. The caller decides it (this module never reads a census diagnostic): a STANDING null path
+   * (a relative or malformed `gitdir`, a refused name) never holds anything back, because a record with a null path is never a rung-2 or
+   * rung-3 candidate (`canonical-path-unmeasured`), and its keys, forgotten, leave path marks that catch it if it is ever repaired.
+   */
+  readonly unplacedHold: boolean;
 }
 
 /**
@@ -283,80 +401,137 @@ export interface DelegationPruneInput {
   projects: ReadonlyMap<string, DelegationPruneProject>;
   /** The last MEASURED canonical path of each tree, by `delegationTreeKey`. */
   known: ReadonlyMap<string, string>;
+  /** The paths of the trees that THIS census (the one the plan prunes against) showed gone, which the caller has already stopped
+   *  remembering. A key at one of them is forgotten with no path mark: invariant (1). A path shown gone by an earlier census is not one. */
+  gonePaths: ReadonlySet<string>;
   /** The project a session belongs to, when the caller knows it. */
   projectOfParent: (parentId: string) => string | undefined;
   activities: readonly DelegationActivityRow[];
   /** When the census was measured (epoch ms). */
   measuredAtMs: number;
+  /** R73: the projects already lost (their keys were dropped at the per-project cap): every tree of one is covered by its project mark. */
+  lost: ReadonlySet<string>;
+  /** R73 rule 3: the most keys a held-back project may keep; past it, the project is lost. */
+  holdCap: number;
+}
+
+/** What one prune decides. The caller applies the marks BEFORE it forgets the keys (both in one synchronous step). */
+export interface DelegationPrunePlan {
+  /** The ids of the keys to forget. */
+  forget: string[];
+  /** The working directories to path-mark: of forgotten keys whose directory no tree shown gone in this census, and no lost project's
+   *  remembered tree, had. */
+  markPaths: string[];
+  /** The agent and run ids to id-mark: the names of forgotten keys that nobody asks about yet (a name redundant by its own parent's
+   *  activity row is exact, and is not marked). */
+  markIds: string[];
+  /** Projects lost in THIS plan (rule 3). */
+  lose: string[];
+  /** The projects still held back after this plan, and how many keys each holds (for the caller's report). */
+  held: ReadonlyMap<string, number>;
 }
 
 /**
- * Which dropped keys to forget in this pass, or `null` to forget none (R69: unknown is never empty, D-4008).
+ * Which dropped keys to forget in this pass, and the marks that stand for them (R69 to R71, R73; unknown is never empty, D-4008).
  *
- * A key is forgotten only for a tree that a MEASURED census of its project shows gone. A path protects its keys while any census
- * record lists it, and while it is the remembered path of a tree no measured census of that tree's own project shows gone: so a
- * record whose `gitdir` read failed this pass (a null path), a project whose view is null this pass, and a project that is not in
- * the census at all each keep what they had. A present record with a null path that has no remembered path is a path the planner
- * cannot know: it answers `null`, and nothing is forgotten in this pass.
+ * THE INVARIANT (R73). A key is forgotten only if either (1) a census of its project, measured in this pass, shows every tree the key could
+ * veto gone, or (2) it is replaced by a COARSER mark that still moves every link the key could have vetoed to `unmeasured('evidence-horizon')`
+ * (`DelegationLostMarks`). So the plan answers which keys to forget AND which marks to leave: a forgotten key's directory is path-marked
+ * unless a tree shown gone by this census had it (1), or a lost project's remembered tree had it (its project mark covers it); a forgotten
+ * key's names are id-marked unless its own parent's activity row makes them redundant (`claimsOf` reads rows, so nothing is lost). A key no
+ * protected path or asked-about name needs is forgotten (`prunableDelegationDropped` argues which those are).
  *
- * PER PROJECT. A project this lane has not yet measured since it started, and which is not a standing refusal, keeps ITS OWN keys: those
- * of its sessions' events (the dropped key's parent belongs to it) and those at a path one of its remembered trees has. The other
- * projects prune theirs, so one project that stays unreachable cannot stop pruning everywhere. A key no project can be named for is
- * not held back by this (the sessions that made most of a long journal's keys are long gone from the registry).
+ * A path protects its keys while any census record lists it, and while it is the remembered path of a tree no measured census of that
+ * tree's own project shows gone (and whose project is not lost): so a record whose `gitdir` read failed this pass (a null path), a project
+ * whose view is null this pass, and a project that is not in the census at all each keep what they had of the trees the lane knows. A tree
+ * the lane does NOT know (never listed with a path since the start, and in no lease or attempt) protects nothing: its keys are forgotten
+ * WITH their path marks, which is what makes a restart safe for a tree the checkpoint cannot seed (N11).
+ *
+ * PER PROJECT, HELD BACK, BOUNDED. A project that is not a standing refusal and either has not been measured since the lane started (its
+ * view null) or lists a transient null-path record it has no path for (`unplacedHold`, rule 1) keeps ITS OWN keys: those of its sessions'
+ * events and those at a path one of its remembered trees has. The other projects prune theirs. A held-back project that holds more than
+ * `holdCap` keys is LOST (rule 3): it stops holding anything back, its remembered paths stop protecting (its project mark covers every
+ * tree of it), and its keys go through the prune with their marks. So the index is bounded by what present trees and asked-about names
+ * need, plus `holdCap` per held-back project, whatever stays unmeasured and for however long.
  *
  * A key is also kept unless its latest dropped event predates the census by more than `DELEGATION_CLOCK_SKEW_MS`: a tree born after the
  * census was measured can have events only after it, and a key that has such an event must not be forgotten against a census that
  * could not have listed the tree. The stamp is the event's own observed time, not the lane's clock: a restart replays the journal, and
- * the lane's clock would make every replayed key look newer than the census.
+ * the lane's clock would make every replayed key look newer than the census. (Accepted interpretations, R73: "drop time" is the event's
+ * `observedAt`; the 60 s allowance assumes the fleet box and the server are NTP-synced, and a box drifting further can make an event
+ * after the census read as one before it.)
  *
- * WHAT THIS FORGETS, AND WHY THAT IS SOUND (R68, as revised). The forgotten events belong to a tree that no longer exists: it was shown
- * gone by a measured census of its project. A tree later created at that path does not inherit them. (The held events of an earlier life
- * still veto a tree at the same path, because rung 3 compares paths and not lives; the controller ruled that the forgotten ones need
- * not, because the alternative, remembering them for ever, is the unbounded index.)
+ * WHAT THIS FORGETS WITHOUT A MARK, AND WHY THAT IS SOUND (R68, as revised). The forgotten events belong to a tree that no longer exists:
+ * it was shown gone by a measured census of its project, in this pass. A tree later created at that path does not inherit them. (The held
+ * events of an earlier life still veto a tree at the same path, because rung 3 compares paths and not lives; the controller ruled that the
+ * forgotten ones need not, because the alternative, remembering them for ever, is the unbounded index.)
  *
  * THE CLAUSE-(a) OBSERVATION. A rival key naming X is forgotten when nobody asks about X (no present `agent-<X>` tree and no agent
- * activity row for X). A rival event naming X would have to be dropped, which takes 20,000 or more events, before X's own first join
- * opens its row; agent ids are random, and a session that is resumed or swapped keeps its earlier incarnation's row. No realistic path
- * leads there.
+ * activity row for X). It now leaves an id mark, so an X asked about later answers `unmeasured` until a re-index reads the key again.
  */
-export function planDelegationDroppedPrune(input: DelegationPruneInput): string[] | null {
+export function planDelegationDroppedPrune(input: DelegationPruneInput): DelegationPrunePlan {
   const { projects, known } = input;
   const measured: DelegationCensusRecord[] = [];
   for (const p of projects.values()) if (p.records !== null) measured.push(...p.records);
-  // A present record whose path is null and was never measured: its keys' path is unknown, so this pass forgets nothing.
-  for (const r of measured) {
-    if (r.state === 'present' && r.canonicalPath === null && !known.has(delegationTreeKey(r.project, r.adminRecord))) return null;
-  }
   const gone = new Set(delegationGoneTrees(known, projects));
-  const protectedPaths = new Set<string>();
-  for (const r of measured) if (r.canonicalPath !== null) protectedPaths.add(r.canonicalPath);
+  const projectOfTree = (treeKey: string): string => (JSON.parse(treeKey) as [string, string])[0];
+
+  // Who can hold keys back, and which paths each owns (the paths the census lists, and the remembered ones not shown gone).
+  const blocked = new Set<string>();
+  for (const [project, p] of projects) {
+    if (input.lost.has(project) || p.standing) continue;
+    if ((p.records === null && !p.measuredSinceStart) || p.unplacedHold) blocked.add(project);
+  }
   const pathProjects = new Map<string, Set<string>>();
   const ownedBy = (path: string, project: string): void => { const set = pathProjects.get(path) ?? new Set<string>(); set.add(project); pathProjects.set(path, set); };
   for (const r of measured) if (r.canonicalPath !== null) ownedBy(r.canonicalPath, r.project);
+  for (const [treeKey, path] of known) if (!gone.has(treeKey)) ownedBy(path, projectOfTree(treeKey));
+  const entries = [...input.keys];
+  const holdersOf = (k: DelegationDroppedKey, among: ReadonlySet<string>): string[] => {
+    if (among.size === 0) return [];
+    const out = new Set<string>();
+    const owner = input.projectOfParent(k.parentId);
+    if (owner !== undefined && among.has(owner)) out.add(owner);
+    if (k.cwd !== null) for (const q of pathProjects.get(k.cwd) ?? []) if (among.has(q)) out.add(q);
+    return [...out];
+  };
+  const countHeld = (among: ReadonlySet<string>): Map<string, number> => {
+    const held = new Map<string, number>();
+    for (const [, k] of entries) for (const q of holdersOf(k, among)) held.set(q, (held.get(q) ?? 0) + 1);
+    return held;
+  };
+
+  // Rule 3: a held-back project over the cap is lost, and stops holding anything back.
+  const lose = [...countHeld(blocked)].filter(([, n]) => n > input.holdCap).map(([project]) => project).sort();
+  for (const project of lose) blocked.delete(project);
+  const lost = new Set([...input.lost, ...lose]);
+
+  // What protects a path, and what covers one (a key forgotten at a covered path needs no path mark).
+  const protectedPaths = new Set<string>();
+  const covered = new Set<string>(input.gonePaths);
+  for (const r of measured) if (r.canonicalPath !== null) protectedPaths.add(r.canonicalPath);
   for (const [treeKey, path] of known) {
-    if (gone.has(treeKey)) continue;
-    protectedPaths.add(path);
-    ownedBy(path, (JSON.parse(treeKey) as [string, string])[0]);
+    if (gone.has(treeKey) || lost.has(projectOfTree(treeKey))) covered.add(path);
+    else protectedPaths.add(path);
   }
-  const blocked = new Set<string>();
-  for (const [project, p] of projects) if (!p.standing && p.records === null && !p.measuredSinceStart) blocked.add(project);
-  const candidates: (readonly [string, DelegationDroppedKey, number])[] = [];
-  for (const entry of input.keys) {
-    const [, k] = entry;
-    if (blocked.size > 0) {
-      const owner = input.projectOfParent(k.parentId);
-      if (owner !== undefined && blocked.has(owner)) continue;
-      if (k.cwd !== null && [...(pathProjects.get(k.cwd) ?? [])].some((q) => blocked.has(q))) continue;
-    }
-    candidates.push(entry);
+  for (const path of protectedPaths) covered.delete(path);
+
+  const candidates = entries.filter(([, k]) => holdersOf(k, blocked).length === 0);
+  const forgotten = pruneDropped(candidates, measured, protectedPaths, input.activities, input.measuredAtMs - DELEGATION_CLOCK_SKEW_MS);
+  const markPaths = new Set<string>();
+  const markIds = new Set<string>();
+  for (const f of forgotten) {
+    // A SubagentStart or SubagentStop never vetoes by its path (clause (b) skips them; it carries an agent id), so it needs no path mark.
+    if (f.key.cwd !== null && !f.key.startStop && !covered.has(f.key.cwd)) markPaths.add(f.key.cwd);
+    for (const name of f.unaskedNames) markIds.add(name);
   }
-  return prunableDelegationDropped(candidates, measured, protectedPaths, input.activities, input.measuredAtMs - DELEGATION_CLOCK_SKEW_MS);
+  return { forget: forgotten.map((f) => f.id), markPaths: [...markPaths], markIds: [...markIds], lose, held: countHeld(blocked) };
 }
 
 /**
  * Which dropped keys can be forgotten: those no protected path, no present census record's name and no activity row can still ask
  * about, whose latest dropped event is before `cutoffMs`. Answers the keys' ids; it changes nothing. `planDelegationDroppedPrune` decides
- * what is protected and when to call this; it is exported for its own rows.
+ * what is protected and when to call this, and which marks a forgotten key leaves; it is exported for its own rows.
  *
  * WHY THIS IS SOUND. A key changes a verdict only through the two queries above, and each asks about something specific:
  *   - clause (b) asks about the canonical path of the census record being decided, so a key whose `cwd` is no protected path is never
@@ -368,6 +543,7 @@ export function planDelegationDroppedPrune(input: DelegationPruneInput): string[
  *     never read) can be hidden by an eviction, and that is the key kept. Wave 3 never deletes an activity row; a wave that does must
  *     revisit this rule. A run id is never redundant by rows (a row names a worker, not the run), so it is kept while a present tree or
  *     a workflow row carries the run.
+ * "Never asked" is about NOW: a path or a name asked about later is what the planner's marks are for (R73).
  */
 export function prunableDelegationDropped(
   keys: Iterable<readonly [string, DelegationDroppedKey, number]>,
@@ -376,6 +552,17 @@ export function prunableDelegationDropped(
   activities: readonly DelegationActivityRow[],
   cutoffMs: number,
 ): string[] {
+  return pruneDropped(keys, census, protectedPaths, activities, cutoffMs).map((f) => f.id);
+}
+
+/** `prunableDelegationDropped`, with each forgotten key's names that nobody asks about (the ones that must leave an id mark). */
+function pruneDropped(
+  keys: Iterable<readonly [string, DelegationDroppedKey, number]>,
+  census: readonly DelegationCensusRecord[],
+  protectedPaths: ReadonlySet<string>,
+  activities: readonly DelegationActivityRow[],
+  cutoffMs: number,
+): { id: string; key: DelegationDroppedKey; unaskedNames: string[] }[] {
   const askedAgents = new Set<string>();
   const askedRuns = new Set<string>();
   for (const r of census) {
@@ -393,17 +580,42 @@ export function prunableDelegationDropped(
       if (wf !== null) askedRuns.add(wf[1]!);
     }
   }
-  const forget: string[] = [];
+  const forget: { id: string; key: DelegationDroppedKey; unaskedNames: string[] }[] = [];
   for (const [id, k, at] of keys) {
     if (!(at < cutoffMs)) continue;
     if (k.cwd !== null && protectedPaths.has(k.cwd)) continue;
-    const needsAgent = (name: string | null): boolean =>
-      name !== null && askedAgents.has(name) && !rows.has(JSON.stringify([k.parentId, k.parentIncarnation, name]));
+    const ownRow = (name: string): boolean => rows.has(JSON.stringify([k.parentId, k.parentIncarnation, name]));
+    const needsAgent = (name: string | null): boolean => name !== null && askedAgents.has(name) && !ownRow(name);
     if (needsAgent(k.agentId) || needsAgent(k.launchAgentId)) continue;
     if (k.runId !== null && askedRuns.has(k.runId)) continue;
-    forget.push(id);
+    // Reaching here, an agent name is either not asked about (it leaves a mark) or redundant by its own parent's row (exact: no mark);
+    // a run id is not asked about (a mark).
+    const unaskedNames: string[] = [];
+    for (const name of [k.agentId, k.launchAgentId]) if (name !== null && !askedAgents.has(name)) unaskedNames.push(name);
+    if (k.runId !== null) unaskedNames.push(k.runId);
+    forget.push({ id, key: k, unaskedNames });
   }
   return forget;
+}
+
+/**
+ * Did one of the caller's marks change this verdict, and which kind (R73: the links each kind of mark held at `unmeasured`,
+ * counted apart from every other `unmeasured` reason)? Null for any verdict that is not `unmeasured('evidence-horizon')`, for an
+ * unmeasured index (which is not a mark), and for a verdict the same input without marks answers the same way (a real key, a horizon or
+ * the unmeasured state decided it). Otherwise the first kind that applies, in the order the rungs ask: the global flag, the lost project,
+ * the tree's path, and (since nothing else could have) an id.
+ */
+export function delegationMarkForced(input: DelegationCorrelationInput, verdict: DelegationCorrelationVerdict): DelegationMarkKind | null {
+  const d = input.droppedEvidence;
+  if (!d.measured || verdict.kind !== 'unmeasured' || verdict.reason !== 'evidence-horizon') return null;
+  const m = d.marks;
+  if (!m.lossy && m.projects.size === 0 && m.paths.size === 0 && m.ids.size === 0) return null;
+  const without = correlateDelegation({ ...input, droppedEvidence: { ...d, marks: DELEGATION_NO_MARKS } });
+  if (without.kind === 'unmeasured' && without.reason === 'evidence-horizon') return null;
+  if (m.lossy) return 'lossy';
+  if (m.projects.has(input.record.project)) return 'project';
+  if (input.record.canonicalPath !== null && delegationHashSetHas(m.paths, input.record.canonicalPath)) return 'path';
+  return 'id';
 }
 
 // ── Small helpers ─────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -513,6 +725,13 @@ function droppedPathVeto(d: MeasuredDropped, canonical: string, parent: string, 
   return false;
 }
 
+/** (R73) Does one of the caller's lossy marks stand for a key that could have vetoed a link of this tree, for an activity named by one of
+ *  these ids? The marks are coarse on purpose: any of them makes the link `unmeasured('evidence-horizon')`. */
+function droppedMarked(d: MeasuredDropped, record: DelegationCensusRecord, canonical: string, ids: readonly string[]): boolean {
+  const m = d.marks;
+  return m.lossy || m.projects.has(record.project) || delegationHashSetHas(m.paths, canonical) || ids.some((id) => delegationHashSetHas(m.ids, id));
+}
+
 /** The ids a rung-2 claim on `upstreamId` can have been made under: the id itself and, for a workflow worker `wf_<run>-<n>`, the run's. */
 function claimIdsOf(sourceKind: 'agent' | 'workflow', upstreamId: string): readonly string[] {
   if (sourceKind === 'agent') return [upstreamId];
@@ -555,8 +774,10 @@ function rung2(input: DelegationCorrelationInput, sourceKind: 'agent' | 'workflo
   if (activity === undefined) return unmeasured('activity-not-durably-open', [...metaIds, ...spool]);
   // R65: the "one parent" check above is negative evidence an eviction could have emptied. A rival with an activity row is seen through
   // the checkpoint; one that only ever sent a bare event, whose meta was never read, is seen only here.
+  // R73: a key the caller forgot without proof that its tree was gone is a mark, and a mark is asked like the key it stands for.
   const dropped = input.droppedEvidence;
-  if (!dropped.measured || droppedRival(dropped, claimIdsOf(sourceKind, upstreamId), parentKey(activity.parentId, activity.parentIncarnation))) {
+  if (!dropped.measured || droppedRival(dropped, claimIdsOf(sourceKind, upstreamId), parentKey(activity.parentId, activity.parentIncarnation))
+    || droppedMarked(dropped, input.record, canonical, claimIdsOf(sourceKind, upstreamId))) {
     return unmeasured('evidence-horizon', [...spool, ...metaIds, activity.identityJournalId]);
   }
   return linked(activity.activityId, 2, [...spool, ...metaIds, activity.identityJournalId]);
@@ -605,7 +826,8 @@ function rung3(input: DelegationCorrelationInput, canonical: string): Answer | n
   // emptied, and an instant cannot see what is gone: the dropped-evidence index is asked instead (clauses (a) and (b)).
   const parent = parentKey(only.activity.parentId, only.activity.parentIncarnation);
   const dropped = input.droppedEvidence;
-  if (!dropped.measured || droppedRival(dropped, [only.activity.upstreamId], parent) || droppedPathVeto(dropped, canonical, parent, only.activity.upstreamId)) {
+  if (!dropped.measured || droppedRival(dropped, [only.activity.upstreamId], parent) || droppedPathVeto(dropped, canonical, parent, only.activity.upstreamId)
+    || droppedMarked(dropped, input.record, canonical, [only.activity.upstreamId])) {
     return unmeasured('evidence-horizon', only.journalIds);
   }
   return linked(only.activity.activityId, 3, only.journalIds);
