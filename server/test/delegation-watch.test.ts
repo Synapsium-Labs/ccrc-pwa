@@ -31,7 +31,7 @@ import {
   DelegationDurability,
   decodeDelegationCheckpoint,
 } from '../src/coord/delegation-checkpoint.js';
-import { DELEGATION_JOURNAL_FILE, DELEGATION_TORN_DIR } from '../src/coord/delegation-journal.js';
+import { DELEGATION_JOURNAL_FILE, DELEGATION_TORN_DIR, nodeDelegationFilePort, type DelegationFilePort } from '../src/coord/delegation-journal.js';
 import {
   DELEGATION_EVENTS_CAP,
   DELEGATION_HOUR_CLOSE_MARGIN_MS,
@@ -537,6 +537,36 @@ describe('D-4655: the lane heals a torn journal tail and the next pass reproduce
     const health = w.watcher.currentDelegationHealth()!;
     expect(health.lastTailHeal).toMatchObject({ bytes: 412, quarantinePath: kept, foundAtBoot: true });
     expect(health).not.toHaveProperty('tailQuarantineUnmeasured');
+  });
+
+  it('MUST 1: an unlistable quarantine is on the health as tailQuarantineUnmeasured, and the health\'s own verdict is unchanged by it', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    // The reference: the same lane over a quarantine directory that exists, can be listed, and is empty.
+    const listable = world();
+    mkdirSync(path.join(listable.ccrcDir, DELEGATION_TORN_DIR), { recursive: true });
+    await censusPass(listable, at(0), { demo: [] });
+    const reference = listable.watcher.currentDelegationHealth()!;
+    expect(reference, 'a listable, empty quarantine says nothing about the quarantine').not.toHaveProperty('tailQuarantineUnmeasured');
+    expect(reference).not.toHaveProperty('lastTailHeal');
+    expect(warn.mock.calls.some(([m]) => String(m).includes('could not be listed'))).toBe(false);
+
+    // The lane's applier boots over a quarantine directory that exists but whose listing fails (the recovery row's EACCES, through the lane's own open).
+    const w = world();
+    mkdirSync(path.join(w.ccrcDir, DELEGATION_TORN_DIR), { recursive: true });
+    const unlistable: DelegationFilePort = { ...nodeDelegationFilePort, listDir: async () => { throw Object.assign(new Error('EACCES: permission denied'), { code: 'EACCES' }); } };
+    const realOpen = DelegationDurability.open.bind(DelegationDurability);
+    vi.spyOn(DelegationDurability, 'open').mockImplementation((deps) => realOpen({ ...deps, port: unlistable }));
+    await censusPass(w, at(0), { demo: [] });
+    const health = w.watcher.currentDelegationHealth()!;
+    expect(warn.mock.calls.some(([m]) => String(m).includes('could not be listed')), 'the failure is the listing').toBe(true);
+    expect(health.tailQuarantineUnmeasured).toBe(true);
+    expect(health, 'an unlistable quarantine is no heal').not.toHaveProperty('lastTailHeal');
+
+    // The report is unmeasured; the delegation health itself is not: every other member equals the run whose quarantine could be listed.
+    const verdictOf = (h: object): Record<string, unknown> =>
+      Object.fromEntries(Object.entries(h).filter(([k]) => k !== 'tailQuarantineUnmeasured' && k !== 'lastTailHeal'));
+    expect(Object.keys(verdictOf(reference)).length, 'the comparison is not over an empty object').toBeGreaterThan(3);
+    expect(verdictOf(health)).toEqual(verdictOf(reference));
   });
 
   it('a corrupt journal is NOT healed by the lane: the pass applies nothing, the journal is untouched, nothing is kept', async () => {
