@@ -635,3 +635,67 @@ These are departures from the ruling, or from what shipped text at `8b0547b4` do
 - **Reading 5:** residue. This wave is "alone": the two platform-block comments are not edited here.
 - **Reading 6:** land independently of #299, #301 and #303. Whichever lands later rebases and restamps `ccd/ccd` by
   recomputing the marker, never by copying it.
+
+## Coordinator re-measure and rulings before dispatch (2026-10-16)
+
+This section supersedes the body wherever they differ. A read-only re-measure (workflow, 2026-10-15) checked every
+anchor at `main` `a3cebde1b`. Every one holds by its quoted text; only line numbers moved. `ccd/ccd` and both edited
+test files are unchanged from there to the dispatch base `0b3ff2f62`. `ccd/ccrc` gained one line at about :21491
+(#384), so its anchors after that point sit one line lower. The worker measures every anchor and count again at
+the dispatch base before Task 1, and records them.
+
+- **Scope.** `--no-reload` in `_svc_enable` (`ccd/ccd:882` and its twin `ccd/ccrc:911`), plus R25(c): the
+  platform-block comments at `ccd/ccd:866` and `:881`, and `ccd/ccrc:895` and `:910`, line-neutral. R25(a)'s
+  code-comment half (`deploy/deploy.sh:764` and `agent/test/deploy-verify.test.ts:934`) is NOT in this wave.
+  `deploy/deploy.sh` is under another run's claim, so that half goes to wave 17.
+- **Consents (they replace Reading 7's dispatch hold).**
+  - `ccd/ccd`: the session-continuity programme ratified it, and its claim's holder consented, to exactly
+    `--no-reload` plus the two platform-block comments, with no other file of that claim and no `ccdWsHelpers.ts`
+    edit. That claim has since ended.
+  - `ccd/ccrc`: the delegation programme consented to the twin at :911 and its comment (its claim 1472 holds the
+    file).
+  - Any new overlap with a helper, fixture or region needs fresh agreement. Stop and report it.
+- **Reading 7, re-ruled 2026-10-15.** Unlanded work in a file holds a dispatch only when it has a hunk in the region
+  the wave edits; otherwise it sets the landing order. Measured: #410, the delegation branch and the continuity
+  branch have no hunk in either platform block.
+- **Landing.** Wave 15 lands after the other `ccd/ccd` and `ccd/ccrc` landers it meets: #410, the delegation
+  programme's run 360, and the continuity programme's #435.
+  - Never rebase, force-push or use Update branch. Absorb `main` by an ordinary `git merge` only on a permitted
+    trigger: a measured conflict, a required check red while `main` passes the same tests, or the coordinator's
+    landing mail.
+  - On a conflict in the `# ccrc:generated` line, take either side of that line only, keep the real source, and run
+    `~/.local/bin/ccrc restamp ccd/ccd`.
+  - Then verify the marker, the file mode, the session-hook citation census and the affected gates. Line-neutral is
+    not an exemption from measurement.
+- **Counts.** Replace every count in Task 1 Step 3, Step 6 and Task 2 Step 3 with the value measured at the dispatch
+  base, never the typed one. The re-measure estimated `macos-platform` at about 98 before and 100 after, and found
+  `ccd-supervised-start` unchanged.
+- **Merge partners in the Risk notes:** #299, #301 and #303 have merged. The current set is #410, run 360's branch
+  and #435.
+- **Anchors that moved (at `a3cebde1b`; `ccd/ccrc` lines after about :21491 are one higher at the base):**
+- _svc_enable callers (plan:15, :297, :299): ccd/ccd:21810 (cmd_start alive branch), :22197 (cmd_supervise) -> ccd/ccd:23981 and :24493 (same quoted text, still the only two calls; ccd/ccrc still has no call)
+- cmd_supervise def (Review Focus 2): ccd/ccd:22132 -> ccd/ccd:24428
+- cmd_start already-alive branch (RF2): ccd/ccd:21809-21812 -> ccd/ccd:23980-23983 (guard `if _have_systemctl && ! _resupervise_live "$id"; then` at :23980, unchanged)
+- _resupervise_live (RF2): ccd/ccd:21540 -> ccd/ccd:23711
+- self-heal comment `enable without --now asks systemd for nothing else` (plan:64): ccd/ccd:22192-22195 -> ccd/ccd:24489-24492; the `_reg_set "$id" supervised` before it is at :24488
+- _ws_unit_state -L/-e wants-link read (RF3): ccd/ccd:21449-21451 -> ccd/ccd:23592-23594 (function at :23541)
+- grep config/systemd ccd/ccd (plan:300): :2369, :21449, :22187 -> :2369, :23592, :24483 (same three kinds)
+- wc -l ccd/ccd ccd/ccrc (plan:143, :306, :423): 29868 / 23805 -> 39777 / 24038
+- _inst_enable daemon-reload (plan:17, :301, RF2): ccd/ccrc:15247 (and :23000) -> ccd/ccrc:15324 (_inst_enable at :15313) and :23119
+- _inst_units, the only _inst_atomic writer into the unit dir (RF2): ccd/ccrc:14799-14900 -> ccd/ccrc:14854-14980
+- CCRC_INST_SPINE units/codex_runtime/enable (RF2): ccd/ccrc:12442-12444 -> ccd/ccrc:12486-12488 (array opens :12473); order unchanged, _inst_bins at :12482
+- _inst_enable_timer count on a fleet role (plan:17): up to eight -> ten on a fleet role (pool-sync, update-sync, graphify, usage-sweep, tmp-sweep, scope-sweep, account-health, keepalive, models, history), plus _inst_codex_usage; ccd/ccrc:15348-15405
+- spine's direct enable --now (Risk notes): ccd/ccrc:15198, :15251 -> ccd/ccrc:15275 (_inst_enable_timer), :15328; there is also a new direct one in expose at :5814 (not _svc_enable)
+- gate-failure restore arm 3 daemon-reload; `changed on disk` comment (RF2/RF3): ccd/ccrc:20466; :20462 -> ccd/ccrc:20554; :20550 (still the only changed-on-disk/NeedDaemonReload hit in ccd deploy server/src agent/src)
+- _ver_flip_back runs the kept tree's spine (RF2): ccd/ccrc:20638 -> ccd/ccrc:20722 (spine=(bash "$BOX_TREE_DIR/ccd/ccrc" install) at :20726)
+- _svc_list_sessions callers, Darwin arm of _upd_sweep (RF3): ccd/ccrc:21055, :21085 -> ccd/ccrc:21143, :21173 (_upd_sweep at :21123). The callers pass no `--all`; the Linux arm of _svc_list_sessions (:1057) carries `--all` itself, so the plan's wording `_svc_list_sessions --all` is slightly off
+- sweep try-restart claude-session@* (RF3): ccd/ccrc:21175 -> ccd/ccrc:21263
+- cmd_restamp (Global Constraints, Step 5): ccd/ccrc:23701-23733 -> ccd/ccrc:23932 to about :23965; still prints `restamp: $f: restamped` and refuses $HOME/.local/bin and $HOME/.ccrc
+- deploy.sh stale _svc_enable reload prose (plan:71, Risk notes 769-773): deploy/deploy.sh:771 (769-773) -> deploy/deploy.sh:764 (argument at :759-766)
+- deploy.sh sweep / AGENT_CMD daemon-reload (RF2): deploy/deploy.sh:1105 / :963 -> deploy/deploy.sh:1117 / :973
+- agent/test/deploy-verify.test.ts stale comment (plan:72): :907 -> :934
+- macos-platform verb-set string (plan:304): :348 -> :405 (case at :399; the `arms` describe at :364; insertion after the `_svc_run_supervised (the call)` row at :391, not around :335)
+- vitest list counts (plan:311-312, Step 3/6): ccd-supervised-start 25; macos-platform 96 (98 after) -> ccd-supervised-start: file unchanged, so probably 25 (not measured, no suites run). macos-platform: +1 it and +1 arms row since the base (#326, #344), so an estimate of 98 before and 100 after (not measured)
+- citations into macos-platform (Risk notes): ccrc-install.test.ts:4994, timer-first-run:112, ccd/ccrc:9219, ccd-account-auth:143 -> ccrc-install.test.ts:5080, timer-first-run:112, ccd/ccrc:9263, ccd-account-auth:143. All still cite lines above the new insertion
+- $3-reading fixtures (Risk notes): ccrc-install.test.ts:522-534, ccrc-install-graphify.test.ts:155-159, ccrc-update.test.ts:428 -> ccrc-install.test.ts:~556-570, ccrc-install-graphify.test.ts:155-159, ccrc-update.test.ts:458. Still unreached: ccd/ccrc never calls _svc_enable
+- run-only suites exist (File structure): ownership, mark-check, ccrc-restamp, ccd-start-id, ccd-harness-containment, ccd-svc-real-home, install-census, single-definition, session-hook, typecheck-tests, topology-clean, dtbd, deviation-refs -> all present. Unchanged since the base except install-census (2 commits), single-definition (15) and session-hook (8), so their counts (22/275/335) are stale
