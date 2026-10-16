@@ -177,6 +177,13 @@ const censusPass = async (
   await w.watcher.sweepDelegation(sessions as never, (records ?? sessions.map((s) => recordOf(s.id, s.project))) as never);
 };
 
+/** R88: the lane's FIRST READY PASS at `atMs`, over no session and an empty census: it reads no spool and decides no tree, and a call
+ *  made after it can be linked at rung 4 (one made before the lane's latest ready instant never is). */
+const primed = async (w: World, atMs: number): Promise<void> => {
+  setNow(atMs);
+  setCensus(w, {}, {}, atMs);
+  await w.watcher.sweepDelegation([] as never, [] as never);
+};
 const disk = (home: string): { checkpoint: DelegationCheckpointV1 | null; journal: string } => {
   const cp = path.join(home, '.ccrc', DELEGATION_CHECKPOINT_FILE);
   const jr = path.join(home, '.ccrc', DELEGATION_JOURNAL_FILE);
@@ -335,6 +342,9 @@ const AGENT_ID = 'a516cb53d83b231c7';
 /** A session that started, ran a subagent, and ran a raw `git worktree add` through the REAL hook; then four lane passes over it. */
 async function endToEnd(): Promise<{ w: World; hw: HookWorld; at: (n: number) => number }> {
   const hw = hookWorld();
+  const w = world({ home: hw.home });
+  expect(w.reg, 'the lane reads the registry the hook wrote').toBe(hw.reg);
+  await primed(w, Date.now() - 1000);                                // R88: the lane was ready before the hook's first event
   hw.fire(hookEvent(hw, 'SessionStart', { source: 'startup' }));
   hw.fire(hookEvent(hw, 'SubagentStart', { agent_id: AGENT_ID, agent_type: 'general-purpose' }));
   hw.fire(hookEvent(hw, 'PreToolUse', { tool_name: 'Bash', tool_input: { command: WORKTREE_CMD }, tool_use_id: 'toolu_wt1' }));
@@ -342,8 +352,6 @@ async function endToEnd(): Promise<{ w: World; hw: HookWorld; at: (n: number) =>
   hw.fire(hookEvent(hw, 'PostToolUse', { tool_name: 'Bash', tool_input: { command: WORKTREE_CMD }, tool_response: { stdout: '', interrupted: false }, tool_use_id: 'toolu_wt1' }));
   const last = hw.lines().at(-1)!['observedAt'] as string;
   const t0 = Date.parse(last) + 1000;
-  const w = world({ home: hw.home });
-  expect(w.reg, 'the lane reads the registry the hook wrote').toBe(hw.reg);
   const at = (n: number): number => t0 + n * STEP;
   for (let i = 0; i < 4; i++) await censusPass(w, at(i), { demo: [OLD, RAW] });
   return { w, hw, at };
@@ -1507,6 +1515,7 @@ async function leaseWorld(): Promise<World> {
   const pre = lineOf(common(OWNER, { eventKind: 'PreToolUse', toolName: 'Bash', toolUseId: 'toolu_wt1', listing: ['old-tree'], cwd: '/w/demo' }, '2026-10-15T10:05:00.000Z'));
   const post = lineOf(common(OWNER, { eventKind: 'PostToolUse', toolName: 'Bash', toolUseId: 'toolu_wt1', outcome: 'completed', listing: ['old-tree', 'raw-tree'], cwd: '/w/demo' }, '2026-10-15T10:05:03.000Z'));
   writeBucket(w, OWNER, bucketOf(NOW), startLine(OWNER, '2026-10-15T10:01:00.000Z'), pre, post);
+  await primed(w, Date.UTC(2026, 9, 15, 10, 0, 30));                // R88: the lane was ready before the call (10:05)
   for (let i = 0; i < 4; i++) await censusPass(w, NOW + i * STEP, { demo: [OLD, RAW] });
   expect(leasesOf(w.home), 'the fixture made its lease identity').toHaveLength(1);
   return w;

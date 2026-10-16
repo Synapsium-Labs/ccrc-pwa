@@ -18,7 +18,9 @@ import path from 'node:path';
 import { Bus } from '../src/bus.js';
 import { loadConfig } from '../src/config.js';
 import { localIO, type FleetIO } from '../src/io.js';
-import { FleetWatcher, DELEGATION_PASS_BUDGET_MS, DELEGATION_SWEEP_MS, delegationListingWindowsOf, delegationLostWindowsOf } from '../src/watch.js';
+import {
+  FleetWatcher, DELEGATION_PASS_BUDGET_MS, DELEGATION_SWEEP_MS, delegationListingWindowsOf, delegationLostWindowsOf, delegationNotReadyWindowOf,
+} from '../src/watch.js';
 import { CoordStore } from '../src/coord/store.js';
 import { coordinationRestoreRefusal, openCoordDb } from '../src/coord/db.js';
 import { buildServer } from '../src/server.js';
@@ -88,6 +90,8 @@ interface World {
   faults: Faults;
   calls: { listings: string[]; ranges: string[]; metas: string[]; metaListings: string[] };
   ccrcDir: string;
+  /** The fleet state the lane reads each pass (its `ccdVerbs` say whether the fleet offers the capability): a row may change it. */
+  fleet: { connected: boolean; downSince: null; ccdVerbs: string[] | null };
 }
 interface WorldOptions { home?: string; ccdVerbs?: string[] | null; coord?: boolean }
 
@@ -137,11 +141,12 @@ function world(opts: WorldOptions = {}): World {
   };
   const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
   const ccdVerbs = opts.ccdVerbs === undefined ? ['caps', DELEGATION_EVENTS_CAP] : opts.ccdVerbs;
+  const fleet = { connected: true, downSince: null, ccdVerbs };
   const deps = {
     ...testDeps(home), cfg, io, ...(opts.coord === false ? {} : { coord }),
-    fleetState: { connected: true, downSince: null, ccdVerbs },
+    fleetState: fleet,
   };
-  const made: World = { home, cfg, watcher: new FleetWatcher(deps as never, new Bus(), 10_000), coord, io, faults, calls, ccrcDir: path.join(home, '.ccrc') };
+  const made: World = { home, cfg, watcher: new FleetWatcher(deps as never, new Bus(), 10_000), coord, io, faults, calls, ccrcDir: path.join(home, '.ccrc'), fleet };
   worlds.push(made);
   return made;
 }
@@ -188,6 +193,16 @@ const censusPass = async (w: World, at: number, projects: Record<string, CensusV
   setNow(at);
   setCensus(w, projects, Object.fromEntries(sessions.map((s) => [s.id, measured()])), at);
   await pass(w, sessions, records);
+};
+/** R88: the lane's latest ready instant must precede a call for rung 4 to link it. `primed` makes the lane's FIRST READY PASS at
+ *  `PRIMED_AT`, before every call a fixture's spool holds (the earliest is 10:01): one pass over no session and an empty census, which
+ *  reads no spool (there is no owner) and decides no tree (there is none). A fixture's bucket may be on disk already: nothing reads it. */
+const PRIMED_AT = Date.UTC(2026, 9, 15, 10, 0, 30);
+const primed = async (w: World, atMs: number = PRIMED_AT): Promise<World> => {
+  setNow(atMs);
+  setCensus(w, {}, {}, atMs);
+  await pass(w, [], []);
+  return w;
 };
 const disk = (home: string): { checkpoint: DelegationCheckpointV1 | null; journalLines: number } => {
   const cp = path.join(home, '.ccrc', DELEGATION_CHECKPOINT_FILE);
@@ -725,7 +740,7 @@ describe('cursors (hand-off 4): they move only through ingestion, and a replaced
   });
 
   it('the lane never rewrites bucketCursors through a checkpoint-only change: every change it makes (attempts, interval upkeep) returns the cursor rows it was given', async () => {
-    const w = rawTreeWorld();
+    const w = await rawTreeWorld();
     const proto = DelegationDurability.prototype;
     const real = proto.applyCheckpointChange;
     const seen: Array<{ before: string; after: string; attempts: number; intervals: number }> = [];
@@ -943,14 +958,17 @@ const bashPost = (owner: string, toolUseId: string, listing: string[], at: strin
   lineOf(common(owner, { eventKind: 'PostToolUse', toolName: 'Bash', toolUseId, outcome: 'completed', listing, cwd }, at));
 const RAW = record('demo', 'raw-tree');
 const OLD = record('demo', 'old-tree');
-/** The incident's case: a session ran a raw `git worktree add`, and its before/after listings differ by exactly the one new record. */
-function rawTreeWorld(): World {
+/** The incident's case: a session ran a raw `git worktree add`, and its before/after listings differ by exactly the one new record. R88:
+ *  the lane was READY before the call (`primed`), as a lane that has been running is; a call before the lane's first ready pass is
+ *  held at rung 4 (the R88 rows). */
+async function rawTreeWorld(before?: (w: World) => void): Promise<World> {
   const w = world();
   writeBucket(w, 'demo-a', BUCKET10,
     startLine('demo-a', '2026-10-15T10:01:00.000Z'),
     bashPre('demo-a', 'toolu_wt1', ['old-tree'], '2026-10-15T10:05:00.000Z'),
     bashPost('demo-a', 'toolu_wt1', ['old-tree', 'raw-tree'], '2026-10-15T10:05:03.000Z'));
-  return w;
+  before?.(w);                                                       // what must hold from the lane's first pass on
+  return primed(w);
 }
 const STEP = DELEGATION_SWEEP_MS;
 const at = (n: number): number => NOW + n * STEP;
@@ -959,7 +977,7 @@ const attemptsOf = (home: string) => disk(home).checkpoint?.attempts ?? [];
 
 describe('rung 4 end to end: a raw worktree the session itself created becomes a journaled lease identity, and nothing else', () => {
   it('is waited on for two passes (a ccd workspace may be being BORN), then linked and leased on the third', async () => {
-    const w = rawTreeWorld();
+    const w = await rawTreeWorld();
     const census = { demo: [OLD, RAW] };
     await censusPass(w, at(0), census);
     expect(leasesOf(w.home)).toEqual([]);
@@ -982,20 +1000,25 @@ describe('rung 4 end to end: a raw worktree the session itself created becomes a
     expect(attemptsOf(w.home).some((a) => a.adminRecord === 'old-tree')).toBe(false);
   });
 
-  it('a restart keeps the evidence: a NEW watcher reads the retained journal and still links what the old one saw', async () => {
-    const first = rawTreeWorld();
+  it('a restart keeps the evidence: a NEW watcher reads the retained journal once, and what the old one saw is still the evidence (R88: its call began before the new lane was ready, so it is held, never linked)', async () => {
+    const first = await rawTreeWorld();
     const census = { demo: [OLD, RAW] };
     await censusPass(first, at(0), census);                          // the events are ingested and journaled here; no lease yet
     const again = world({ home: first.home });                       // a restart: no memory, the same ~/.ccrc
     const spy = vi.spyOn(DelegationDurability.prototype, 'visitRetainedRecords');
     for (let i = 1; i < 4; i++) await censusPass(again, at(i), census);
     expect(spy, 'the journal is streamed once, not every pass').toHaveBeenCalledTimes(1);
-    expect(leasesOf(first.home).map((l) => l.adminRecord)).toEqual(['raw-tree']);
     expect(again.watcher.delegationReport().evidenceEvents).toBeGreaterThan(0);
+    // R88 (the pre-ready case itself): the call began before the restarted lane's first ready pass, and what the server was down for may
+    // hold a session nothing listed. It is unmeasured, and the evidence the old lane journaled is still there: with the lost windows
+    // set aside it links, which is what the lost-evidence count measures.
+    expect(leasesOf(first.home)).toEqual([]);
+    expect(again.watcher.delegationReport().verdicts).toEqual({ unresolved: 1, conflicting: 0, unmeasured: 1 });
+    expect(again.watcher.delegationReport().lostEvidence.forced, 'the full evidence would link it').toBe(1);
   });
 
   it('hand-off 7: the listing window\'s repository and the census record\'s project are ONE key. A session registered under another project links nothing', async () => {
-    const w = rawTreeWorld();
+    const w = await rawTreeWorld();
     const census = { demo: [OLD, RAW] };
     for (let i = 0; i < 4; i++) {
       await censusPass(w, at(i), census, [sessionOf('demo-a', 'idle', 'other-project')], [recordOf('demo-a', 'other-project')]);
@@ -1005,7 +1028,7 @@ describe('rung 4 end to end: a raw worktree the session itself created becomes a
   });
 
   it('hand-off 8: the pass\'s attempts are made durable by a checkpoint change BEFORE the lease is journaled and before SQLite is repaired', async () => {
-    const w = rawTreeWorld();
+    const w = await rawTreeWorld();
     const calls = durableCalls();
     const census = { demo: [OLD, RAW] };
     for (let i = 0; i < 3; i++) await censusPass(w, at(i), census);
@@ -1036,7 +1059,7 @@ describe('rung 4 end to end: a raw worktree the session itself created becomes a
   });
 
   it('hand-off 12: a request re-emitted after a crash (the attempt is durable, the lease is not) upserts the attempt and creates the lease once', async () => {
-    const w = rawTreeWorld();
+    const w = await rawTreeWorld();
     const census = { demo: [OLD, RAW] };
     const realCreate = DelegationDurability.prototype.createLease;
     const boom = vi.spyOn(DelegationDurability.prototype, 'createLease').mockRejectedValueOnce(new Error('crash between the attempt and the lease'));
@@ -1072,7 +1095,7 @@ describe('rung 4 end to end: a raw worktree the session itself created becomes a
   });
 
   it('5477 b, L9: a rung-4 lease whose tree a registry row then names (a ccd workspace) gets ONE final conflicting attempt under the lease\'s parent; the lease is untouched and journaled once', async () => {
-    const w = rawTreeWorld();
+    const w = await rawTreeWorld();
     const ws = record('demo', 'raw-tree', { canonicalPath: '/data/worktrees/demo/raw-tree' });
     for (let i = 0; i < 3; i++) await censusPass(w, at(i), { demo: [OLD, ws] });
     expect(leasesOf(w.home).map((l) => [l.adminRecord, l.sourceKind, l.parentId])).toEqual([['raw-tree', 'raw', 'demo-a']]);
@@ -1118,7 +1141,7 @@ describe('the pairs and the census the policy is handed (hand-offs 12 and 14)', 
   });
 
   it('a project whose census view was NULL is left out of censusedProjects and contributes no records: never an empty list standing in for "unknown"', async () => {
-    const w = rawTreeWorld();
+    const w = await rawTreeWorld();
     const plan = vi.spyOn(policy, 'planDelegationReconciliation');
     for (let i = 0; i < 3; i++) await censusPass(w, at(i), { demo: [OLD, RAW] });
     expect(leasesOf(w.home)).toHaveLength(1);
@@ -1147,7 +1170,7 @@ describe('the pairs and the census the policy is handed (hand-offs 12 and 14)', 
   });
 
   it('correlation and policy read ONE snapshot: the activities correlation was handed are the very rows the policy\'s recovery state holds', async () => {
-    const w = rawTreeWorld();
+    const w = await rawTreeWorld();
     const corr = vi.spyOn(correlation, 'correlateDelegation');
     const plan = vi.spyOn(policy, 'planDelegationReconciliation');
     await censusPass(w, at(0), { demo: [OLD, RAW] });
@@ -1158,7 +1181,7 @@ describe('the pairs and the census the policy is handed (hand-offs 12 and 14)', 
   });
 
   it('measured absence is recorded once per tree however often policy re-emits it, with the first instant', async () => {
-    const w = rawTreeWorld();
+    const w = await rawTreeWorld();
     for (let i = 0; i < 3; i++) await censusPass(w, at(i), { demo: [OLD, RAW] });
     expect(leasesOf(w.home)).toHaveLength(1);
     await censusPass(w, at(3), { demo: [OLD] });                      // gone from ONE listing: not absence yet
@@ -1203,7 +1226,7 @@ describe('the circuit breaker is the policy\'s, fed by deaths this process watch
   const everyone = (list: Sess[]) => [sessionOf('demo-a'), ...list];
 
   it('two parents seen alive and then dead inside ten minutes suspend ownership claims for that pass; ten minutes later they are old news', async () => {
-    const w = rawTreeWorld();
+    const w = await rawTreeWorld();
     const census = { demo: [OLD, RAW] };
     await censusPass(w, at(0), census, everyone(extras));
     await censusPass(w, at(1), census, everyone(extras));
@@ -1217,7 +1240,7 @@ describe('the circuit breaker is the policy\'s, fed by deaths this process watch
   });
 
   it('parents that were already dead when this process first looked are not fresh deaths: a restart is not a mass-death event', async () => {
-    const w = rawTreeWorld();
+    const w = await rawTreeWorld();
     const census = { demo: [OLD, RAW] };
     for (let i = 0; i < 3; i++) await censusPass(w, at(i), census, everyone(deadExtras));
     expect(w.watcher.delegationReport().breaker).toBe('clear');
@@ -1734,7 +1757,7 @@ describe('the lane remembers what it dropped (R65): a link that rests on an even
     });
 
     it('a restart seeds the remembered paths from the checkpoint\'s leases and attempts', async () => {
-      const first = rawTreeWorld();
+      const first = await rawTreeWorld();
       for (let i = 0; i < 3; i++) await censusPass(first, at(i), { demo: [OLD, RAW] });
       expect(leasesOf(first.home)).toHaveLength(1);
       const again = world({ home: first.home });
@@ -1800,9 +1823,11 @@ describe('the lane remembers what it dropped (R65): a link that rests on an even
 
     describe('N10: each layer of the lost-index condition has its own row', () => {
       it('the load fails and the same pass ingests the events that would complete a link: nothing is reconciled and correlation is never asked', async () => {
-        const w = rawTreeWorld();
-        vi.spyOn(DelegationDurability.prototype, 'visitRetainedRecords').mockRejectedValue(new Error('journal read failed'));
-        vi.spyOn(console, 'warn').mockImplementation(() => {});
+        // R88: the load fails from the lane's first (priming) pass on, so no load ever completes
+        const w = await rawTreeWorld(() => {
+          vi.spyOn(DelegationDurability.prototype, 'visitRetainedRecords').mockRejectedValue(new Error('journal read failed'));
+          vi.spyOn(console, 'warn').mockImplementation(() => {});
+        });
         const correlate = vi.spyOn(correlation, 'correlateDelegation');
         for (let i = 0; i < 4; i++) await censusPass(w, at(i), { demo: [OLD, RAW] });
         expect(w.watcher.delegationReport().reconciliations).toBe(0);
@@ -1811,10 +1836,12 @@ describe('the lane remembers what it dropped (R65): a link that rests on an even
         expect(w.watcher.delegationReport().droppedEvidence).toMatchObject({ measured: false });
       });
       it('a reconcile forced to run with the load incomplete (a seam) is handed an UNMEASURED index, and links nothing', async () => {
-        const w = rawTreeWorld();
-        w.watcher.setDelegationSeams({ reconcileBeforeLoad: true });
-        vi.spyOn(DelegationDurability.prototype, 'visitRetainedRecords').mockRejectedValue(new Error('journal read failed'));
-        vi.spyOn(console, 'warn').mockImplementation(() => {});
+        // R88: the load fails from the lane's first (priming) pass on, so no load ever completes
+        const w = await rawTreeWorld((x) => {
+          x.watcher.setDelegationSeams({ reconcileBeforeLoad: true });
+          vi.spyOn(DelegationDurability.prototype, 'visitRetainedRecords').mockRejectedValue(new Error('journal read failed'));
+          vi.spyOn(console, 'warn').mockImplementation(() => {});
+        });
         const correlate = vi.spyOn(correlation, 'correlateDelegation');
         for (let i = 0; i < 4; i++) await censusPass(w, at(i), { demo: [OLD, RAW] });
         expect(correlate).toHaveBeenCalled();
@@ -1964,8 +1991,10 @@ describe('the lane remembers what it dropped (R65): a link that rests on an even
         expect(marksOf(restarted).forced).toEqual(NONE);
         expect(leasesOf(restarted.home), '5484 (3): its first sighting was lost with the restart').toEqual([]);
         expect(restarted.watcher.delegationReport().lostEvidence.forced, 'held by lost evidence, not by the mark').toBe(1);
-        await censusPass(restarted, at(10), { demo: [] }, [sessionOf('demo-b')]);                // measured: the tree is not listed
-        for (let i = 11; i < 14; i++) await censusPass(restarted, at(i), census, [sessionOf('demo-b')]);
+        // measured: the tree is not listed. R88: more than the margin and the clock skew after this lane's ready instant (at(7)), so the
+        // tree's creator bracket no longer reaches back to it (X1)
+        await censusPass(restarted, at(29), { demo: [] }, [sessionOf('demo-b')]);
+        for (let i = 30; i < 33; i++) await censusPass(restarted, at(i), census, [sessionOf('demo-b')]);
         expect(leasesOf(restarted.home).map((l) => [l.adminRecord, l.sourceKind])).toEqual([['raw-tree', 'agent']]);
         expect(attemptsOf(restarted.home).map((a) => [a.adminRecord, a.verdict, a.rung])).toEqual([['raw-tree', 'linked', 3]]);
       });
@@ -2081,8 +2110,9 @@ describe('the lane remembers what it dropped (R65): a link that rests on an even
           expect(marksOf(fits).lossy).toBe(false);
           expect(leasesOf(fits.home), 'held by its lost first sighting, not by the flag').toEqual([]);
           expect(fits.watcher.delegationReport().lostEvidence.forced).toBe(1);
-          await censusPass(fits, at(9), { demo: [] });
-          for (let i = 10; i < 13; i++) await censusPass(fits, at(i), census);
+          // R88: the census that shows the tree gone is more than the margin and the clock skew after this lane's ready instant (at(5))
+          await censusPass(fits, at(28), { demo: [] });
+          for (let i = 29; i < 32; i++) await censusPass(fits, at(i), census);
           expect(leasesOf(fits.home).map((l) => [l.adminRecord, l.sourceKind])).toEqual([['raw-tree', 'agent']]);
         });
       });
@@ -2283,7 +2313,7 @@ describe('fix round 2, minors N4 to N6', () => {
   });
 
   it('N5: a tree that holds an unreleased lease is owned: as its evidence leaves the slice it is counted as neither unresolved, conflicting nor unmeasured', async () => {
-    const w = rawTreeWorld();
+    const w = await rawTreeWorld();
     for (let i = 0; i < 3; i++) await censusPass(w, at(i), { demo: [OLD, RAW] });
     expect(leasesOf(w.home)).toHaveLength(1);
     expect(w.watcher.delegationReport().verdicts).toEqual({ unresolved: 1, conflicting: 0, unmeasured: 0 });       // OLD, which nothing explains
@@ -2444,8 +2474,10 @@ describe('the verdict counts count unowned work (R59): a workspace or a tree bei
 
 describe('the evidence read can fail (M1, M3): partial evidence never reaches correlation, and the counts read as unknown while the breaker is unmeasured', () => {
   it('a visit that fails midway leaves the lane unmeasured: no reconciliation, no lease, no attempt; a later pass that reads whole proceeds', async () => {
-    const first = rawTreeWorld();
-    await censusPass(first, at(0), { demo: [OLD, RAW] });                           // everything is ingested; the lane is reconciled once
+    // R88: the old lane journals two session starts; the creator's call is made AFTER the restarted lane's first ready pass
+    const first = world();
+    writeBucket(first, 'demo-a', BUCKET10, startLine('demo-a', '2026-10-15T10:01:00.000Z'), startLine('demo-a', '2026-10-15T10:02:00.000Z'));
+    await censusPass(first, at(0), { demo: [OLD] });                                // ingested; the lane is reconciled once
     const again = world({ home: first.home });
     const real = DelegationDurability.prototype.visitRetainedRecords;
     let broken = true;
@@ -2454,7 +2486,10 @@ describe('the evidence read can fail (M1, M3): partial evidence never reaches co
       return real.call(this, (r) => { visit(r); n += 1; if (broken && n === 2) throw new Error('journal read failed midway'); });
     });
     vi.spyOn(console, 'warn').mockImplementation(() => {});
-    for (let i = 1; i < 5; i++) await censusPass(again, at(i), { demo: [OLD, RAW] });
+    await censusPass(again, at(1), { demo: [OLD] });                                // the restarted lane's first ready pass
+    appendBucket(again, 'demo-a', BUCKET10,
+      bashPre('demo-a', 'toolu_wt1', ['old-tree'], iso(at(1) + 10_000)), bashPost('demo-a', 'toolu_wt1', ['old-tree', 'raw-tree'], iso(at(1) + 13_000)));
+    for (let i = 2; i < 5; i++) await censusPass(again, at(i), { demo: [OLD, RAW] });
     expect(again.watcher.delegationReport().reconciliations, 'a reconciliation ran on partial evidence').toBe(0);
     expect(leasesOf(first.home)).toEqual([]);
     expect(attemptsOf(first.home)).toEqual([]);
@@ -2528,7 +2563,7 @@ describe('the lane\'s documented relaxations and its bounds (M2, M5, M6)', () =>
   });
 
   it('M6: a measured absence is dropped when the tree comes back, and re-recorded with its new first instant if it goes again', async () => {
-    const w = rawTreeWorld();
+    const w = await rawTreeWorld();
     for (let i = 0; i < 3; i++) await censusPass(w, at(i), { demo: [OLD, RAW] });
     for (let i = 3; i < 6; i++) await censusPass(w, at(i), { demo: [OLD] });
     expect(w.watcher.delegationReport().absences).toHaveLength(1);
@@ -2578,7 +2613,7 @@ describe('currentDelegationHealth: absent until the lane has tried, then report-
   });
 
   it('a lost coord.db does not change it: the same checkpoint on a new store reports the same basis', async () => {
-    const w = rawTreeWorld();
+    const w = await rawTreeWorld();
     for (let i = 0; i < 3; i++) await censusPass(w, at(i), { demo: [OLD, RAW] });
     const before = w.watcher.currentDelegationHealth()!;
     for (const f of ['coord.db', 'coord.db-wal', 'coord.db-shm']) rmSync(path.join(w.ccrcDir, f), { force: true });
@@ -2799,14 +2834,23 @@ describe('final review I-1: a restart never re-creates an evicted-session veto a
     expect(leasesOf(again.home)).toEqual([]);
     await censusPass(again, at(7), census, onlyB, [recordOf('demo-b'), recordOf('demo-a', 'demo')]);
     expect(leasesOf(again.home), 'the same project: the full evidence\'s answer, unresolved').toEqual([]);
+    expect(again.watcher.delegationReport().verdicts, 'the same project: unresolved').toEqual({ unresolved: 2, conflicting: 0, unmeasured: 0 });
     await censusPass(again, at(8), census, onlyB, [recordOf('demo-b'), recordOf('demo-a', 'other')]);
-    expect(leasesOf(again.home).map((l) => [l.adminRecord, l.parentId]), 'another project: no veto on this repository').toEqual([['raw-tree', 'demo-b']]);
+    // R88: the creator's call began before this lane's first ready pass (a restart is the I-1 case), so it is held and never linked. What
+    // holds it is lost evidence alone (with the lost windows set aside it links), never the I-1 window, which no longer counts.
+    expect(leasesOf(again.home), 'another project: R88 holds a call made before the restart').toEqual([]);
+    expect(again.watcher.delegationReport().verdicts, 'another project: no veto on this repository').toEqual({ unresolved: 1, conflicting: 0, unmeasured: 1 });
+    expect(again.watcher.delegationReport().lostEvidence.forced, 'another project: held by lost evidence only').toBe(1);
+    expect(again.watcher.delegationReport().marks.forced.window, 'another project: not by the unknown window').toBe(0);
   });
 
   it('LIVENESS: an unknown window that does not overlap the creator\'s in time leaves the link possible', async () => {
     const again = await restarted(['2026-10-15T10:06:00.000Z', '2026-10-15T10:06:01.000Z'], 1);    // ingested; still inside the birth wait
     for (let i = 4; i < 8; i++) await censusPass(again, at(i), census, onlyB);
-    expect(leasesOf(again.home).map((l) => [l.adminRecord, l.parentId])).toEqual([['raw-tree', 'demo-b']]);
+    // R88: the creator's call began before this lane's first ready pass, so it is held; lost evidence alone holds it, never the I-1 window
+    expect(leasesOf(again.home)).toEqual([]);
+    expect(again.watcher.delegationReport().lostEvidence.forced, 'the unknown window leaves the link possible: only lost evidence holds it').toBe(1);
+    expect(again.watcher.delegationReport().marks.forced.window).toBe(0);
   });
 });
 
@@ -2864,7 +2908,7 @@ describe('final review M-1: after a recovery or a failed evidence load the verdi
   const UNKNOWN = { breaker: 'unmeasured', unresolved: 0, conflicting: 0, unmeasured: 0 };
 
   it('an applier found failed, a recovery, then a load that fails: unmeasured with 0 throughout, until a reconcile vouches again', async () => {
-    const w = rawTreeWorld();
+    const w = await rawTreeWorld();
     for (let i = 0; i < 4; i++) await censusPass(w, at(i), census);
     expect(counts(w)).toEqual({ breaker: 'clear', unresolved: 1, conflicting: 0, unmeasured: 0 });
     vi.spyOn(console, 'warn').mockImplementation(() => {});
@@ -2884,7 +2928,7 @@ describe('final review M-1: after a recovery or a failed evidence load the verdi
   });
 
   it('a reconcile older than three census cadences no longer vouches for its counts', async () => {
-    const w = rawTreeWorld();
+    const w = await rawTreeWorld();
     for (let i = 0; i < 4; i++) await censusPass(w, at(i), census);
     setNow(at(3) + 3 * STEP);
     expect(counts(w).breaker, 'three cadences: still vouched for').toBe('clear');
@@ -3254,7 +3298,9 @@ describe('2c (R84) in the lane: a shed listing, an unmeasured hour or a lost cre
   /** demo-b creates raw-tree in [10:05:00, 10:05:03]: a clean one-record delta. */
   const creator = (w: World, ...extra: string[]): void => writeBucket(w, 'demo-b', BUCKET10,
     bashPre('demo-b', 'toolu_wt1', ['old-tree'], '2026-10-15T10:05:00.000Z'), bashPost('demo-b', 'toolu_wt1', ['old-tree', 'raw-tree'], '2026-10-15T10:05:03.000Z'), ...extra);
+  /** R88: the lane is READY before the fixture's calls (`primed`), so what holds a link here is the row's own lost evidence. */
   const run = async (w: World, sessions: readonly Sess[] = both, projects: Record<string, CensusView> = census, n = 4): Promise<void> => {
+    await primed(w);
     for (let i = 0; i < n; i++) await censusPass(w, at(i), projects, sessions);
   };
   const leased = (w: World) => leasesOf(w.home).map((l) => [l.adminRecord, l.sourceKind, l.parentId]);
@@ -3392,6 +3438,7 @@ describe('2c (R84) in the lane: a shed listing, an unmeasured hour or a lost cre
       const w = world();
       creator(w);
       writeBucket(w, 'demo-a', BUCKET09, startLine('demo-a', '2026-10-15T09:10:00.000Z'));
+      await primed(w);                                                  // R88: ready before the creator's call
       await censusPass(w, at(0), census, both);
       expect(disk(w.home).checkpoint!.bucketCursors.some((c) => c.sessionId === 'demo-a'), 'its spool was read').toBe(true);
       rmSync(spoolDir(w, 'demo-a'), { recursive: true, force: true });
@@ -3401,12 +3448,13 @@ describe('2c (R84) in the lane: a shed listing, an unmeasured hour or a lost cre
     });
 
     it('5484 (1): a capability-absent hour does not veto (fleet-wide, it captured nothing): once the fleet offers the capability, rung 4 links', async () => {
-      const old = world({ ccdVerbs: ['caps'] });
-      creator(old);
-      makeOwner(old, 'demo-a');
-      await censusPass(old, at(0), census, both);
-      expect(intervalFor(old.home, 'demo-b')!.detail).toMatch(/^capability-absent/);
-      const w = world({ home: old.home });
+      const w = world({ ccdVerbs: ['caps'] });
+      creator(w);
+      makeOwner(w, 'demo-a');
+      await primed(w);                                                  // R88: ready before the creator's call
+      await censusPass(w, at(0), census, both);
+      expect(intervalFor(w.home, 'demo-b')!.detail).toMatch(/^capability-absent/);
+      w.fleet.ccdVerbs = ['caps', DELEGATION_EVENTS_CAP];               // the fleet offers it now (in process: a restart would be R88's case)
       for (let i = 1; i < 5; i++) await censusPass(w, at(i), census, both);
       expect(intervalFor(w.home, 'demo-b')).toMatchObject({ state: 'unmeasured' });
       expect(leased(w)).toEqual([['raw-tree', 'raw', 'demo-b']]);
@@ -3484,7 +3532,9 @@ describe('2c (R84) in the lane: a shed listing, an unmeasured hour or a lost cre
       writeBucket(w, 'demo-b', BUCKET10, subStart('demo-b', '2026-10-15T10:31:20.000Z'), inTree('demo-b', '2026-10-15T10:31:30.000Z'));
     };
     const withTree = { demo: [OLD, RAW] };
+    /** R88: a lane that starts here is primed first, so its ready instant is more than the margin and the skew before the tree's bracket. */
     const born = async (w: World, from = 0, to = 6): Promise<void> => {
+      if (from === 0) await primed(w);
       for (let i = from; i < to; i++) await censusPass(w, at(i), i < 2 ? { demo: [OLD] } : withTree, both);
     };
 
@@ -3548,5 +3598,159 @@ describe('2c (R84) in the lane: a shed listing, an unmeasured hour or a lost cre
     expect(line, 'the line is written when only lost evidence held a tree').toBeDefined();
     expect(line).toContain('trees held unmeasured by lost evidence (a shed listing, an unmeasured hour, a lost creator) since the last line: 1');
     expect(line).toContain('unknown-repository window 0');
+  });
+});
+
+// ── W1 (coordinator 5512; R88, R89): the lane never links across a stretch it knows it did not read ───────────────────────
+
+/** demo-a creates raw-tree in a call 20 to 23 seconds after `t` (a clean one-record delta); `other`, when named, runs a call inside it, on
+ *  demo, 21 to 22 seconds after `t`. */
+const creatorAfter = (w: World, t: number, other?: string): void => {
+  writeBucket(w, 'demo-a', BUCKET10, bashPre('demo-a', 'toolu_wt1', ['old-tree'], iso(t + 20_000)), bashPost('demo-a', 'toolu_wt1', ['old-tree', 'raw-tree'], iso(t + 23_000)));
+  if (other !== undefined) writeBucket(w, other, BUCKET10, bashPre(other, 'toolu_o1', ['old-tree'], iso(t + 21_000)), bashPost(other, 'toolu_o1', ['old-tree'], iso(t + 22_000)));
+};
+const leasedOf = (w: World) => leasesOf(w.home).map((l) => [l.adminRecord, l.sourceKind, l.parentId]);
+const BEFORE_TREE = { demo: [OLD] };
+const WITH_TREE = { demo: [OLD, RAW] };
+
+describe('R88 (W1 a, coordinator 5512): the lane never links across a stretch it was not ready for', () => {
+  it('R88 pure: the not-ready window runs from the epoch to the latest ready instant, on every repository and naming no call; with no ready instant yet it runs for ever (it fails safe)', () => {
+    expect(delegationNotReadyWindowOf(at(3))).toEqual({
+      sessionId: '', parentIncarnation: '', toolUseId: '', repository: null, lost: true, startedAt: iso(0), endedAt: iso(at(3)), before: [], after: null,
+    });
+    expect(delegationNotReadyWindowOf(null)).toMatchObject({ repository: null, lost: true, startedAt: iso(0), endedAt: null });
+  });
+
+  it('R88 down: a call made while the server was down (after the old lane\'s last pass, before the new lane\'s first ready pass) is held: no lease, unmeasured, counted as lost evidence', async () => {
+    const old = world();
+    makeOwner(old, 'demo-a');
+    await censusPass(old, at(0), BEFORE_TREE);                         // the old lane's last pass; then the server is down
+    await old.watcher.closeDelegation();
+    creatorAfter(old, at(0));                                          // the call, while nothing ran
+    const w = world({ home: old.home });                               // a fresh lane over the durable state
+    for (let i = 1; i < 6; i++) await censusPass(w, at(i), WITH_TREE);
+    expect(leasesOf(w.home), 'a call before the lane\'s first ready pass was linked').toEqual([]);
+    expect(attemptsOf(w.home).filter((a) => a.verdict === 'linked')).toEqual([]);
+    expect(w.watcher.delegationReport().verdicts).toEqual({ unresolved: 1, conflicting: 0, unmeasured: 1 });
+    expect(w.watcher.delegationReport().lostEvidence.forced, 'counted under the existing lost-evidence count').toBe(1);
+  });
+
+  it('R88 in-process recovery: a call made after the lane was ready, before its applier failed closed and recovered in process, is held after the recovery (the recovery moved the ready instant)', async () => {
+    const w = world();
+    makeOwner(w, 'demo-a');
+    await censusPass(w, at(0), BEFORE_TREE);                           // ready at at(0)
+    creatorAfter(w, at(0));
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    vi.spyOn(DelegationDurability.prototype as never as { replaceCheckpoint: (b: Uint8Array) => Promise<void> }, 'replaceCheckpoint')
+      .mockImplementationOnce(async () => { throw new Error('EIO: a fixture fault at the checkpoint rename'); });
+    await censusPass(w, at(1), WITH_TREE);                             // the pass that ingests the call fails after its first byte
+    const durable = (await w.watcher.delegationApplier())!;
+    expect(durable.failure(), 'failed closed').not.toBeNull();
+    const recover = vi.spyOn(DelegationDurability.prototype, 'recover');
+    for (let i = 2; i < 10; i++) await censusPass(w, at(i), WITH_TREE);   // past the retry interval: recovered in process, then the birth wait
+    expect(recover, 'recovered in process').toHaveBeenCalledTimes(1);
+    expect(durable.failure()).toBeNull();
+    expect(leasesOf(w.home), 'the call precedes the instant the recovery returned').toEqual([]);
+    expect(w.watcher.delegationReport().verdicts).toEqual({ unresolved: 1, conflicting: 0, unmeasured: 1 });
+    expect(w.watcher.delegationReport().lostEvidence.forced).toBe(1);
+  });
+
+  it('R88 liveness: a candidate wholly after the ready instant, with every owner read, links at rung 4', async () => {
+    const w = world();
+    makeOwner(w, 'demo-a');
+    await censusPass(w, at(0), BEFORE_TREE);                           // the lane's first ready pass
+    creatorAfter(w, at(0));
+    for (let i = 1; i < 5; i++) await censusPass(w, at(i), WITH_TREE);
+    expect(leasedOf(w)).toEqual([['raw-tree', 'raw', 'demo-a']]);
+  });
+
+  it('R88 through X1, measured: a rung-3 link is held while its creator bracket reaches back to the ready instant, which is while the last census that did not list the tree is at most the margin plus the clock skew (21 minutes) after it', async () => {
+    const A1 = 'a1b2c3d4e5f60718';
+    const both = [sessionOf('demo-a'), sessionOf('demo-b')];
+    /** demo-b's subagent works inside raw-tree, which no census listed at `at(before)` and every census lists after it. */
+    const outcome = async (before: number): Promise<unknown[]> => {
+      const w = world();
+      makeOwner(w, 'demo-a');
+      makeOwner(w, 'demo-b');
+      await censusPass(w, at(0), BEFORE_TREE, both);                   // the ready instant: at(0)
+      writeBucket(w, 'demo-b', BUCKET10,
+        lineOf(common('demo-b', { eventKind: 'SubagentStart', agentId: A1, agentType: null, cwd: '/w/demo' }, iso(at(before) + 20_000))),
+        lineOf(common('demo-b', { eventKind: 'PostToolUse', toolName: 'Bash', toolUseId: 'toolu_in1', outcome: 'completed', cwd: RAW.canonicalPath, agentId: A1 }, iso(at(before) + 30_000))));
+      await censusPass(w, at(before), BEFORE_TREE, both);
+      for (let i = 1; i < 6; i++) await censusPass(w, at(before + i), WITH_TREE, both);
+      return leasedOf(w);
+    };
+    expect(await outcome(21), '21 minutes after the ready instant: the bracket reaches it').toEqual([]);
+    expect(await outcome(22), '22 minutes after: rung 3 links').toEqual([['raw-tree', 'agent', 'demo-b']]);
+  });
+});
+
+describe('R89 (W1 b, coordinator 5512): an owner a pass listed is read once before it is let go, and an hour it cannot be read in is a loss', () => {
+  const pair = [sessionOf('demo-a'), sessionOf('demo-x')];
+  /** A pass at `t` that lists `sessions` and is CUT at its budget while `held`'s listing does not answer (owners are visited in id order,
+   *  so every owner after `held` is never reached). Its late answer arrives after the cut, and is discarded. */
+  async function cutAt(w: World, t: number, projects: Record<string, CensusView>, sessions: readonly Sess[], incarnations: Record<string, ParentIncarnation>, held: string): Promise<void> {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    let release!: () => void;
+    w.faults.hold.set(held, new Promise<void>((resolve) => { release = resolve; }));
+    const listed = w.calls.listings.filter((o) => o === held).length;
+    setNow(t);
+    setCensus(w, projects, incarnations, t);
+    const cut = pass(w, sessions);
+    await vi.waitFor(() => expect(w.calls.listings.filter((o) => o === held).length, 'the pass reached the held listing').toBe(listed + 1));
+    await vi.advanceTimersByTimeAsync(DELEGATION_PASS_BUDGET_MS + 1);
+    await cut;
+    w.faults.hold.delete(held);
+    release();
+    await vi.advanceTimersByTimeAsync(10);
+    vi.useRealTimers();
+  }
+
+  it('R89: a pass cut before it reaches an owner it listed: the owner, gone by the next census, is read anyway, and rung 4 does not link across its overlapping call', async () => {
+    const w = world();
+    makeOwner(w, 'demo-a');
+    await censusPass(w, at(0), BEFORE_TREE);                            // ready
+    creatorAfter(w, at(0), 'demo-x');                                   // demo-x's call overlaps demo-a's, on demo
+    await cutAt(w, at(1), WITH_TREE, pair, { 'demo-a': measured(), 'demo-x': measured() }, 'demo-x');
+    expect(w.calls.ranges.some((r) => r.startsWith('demo-x/')), 'the cut pass read demo-x').toBe(false);
+    const corr = vi.spyOn(correlation, 'correlateDelegation');
+    for (let i = 2; i < 6; i++) await censusPass(w, at(i), WITH_TREE);   // demo-x is in no census from here on
+    expect(w.calls.ranges, 'read anyway: it was listed').toContain(`demo-x/${BUCKET10}.spool`);
+    expect(leasesOf(w.home)).toEqual([]);
+    expect(attemptsOf(w.home).filter((a) => a.verdict === 'linked')).toEqual([]);
+    const raw = corr.mock.calls.flatMap((c, i) => (c[0].record.adminRecord === 'raw-tree' ? [corr.mock.results[i]!.value] : []));
+    expect(raw.at(-1), 'the overlap rule decides it, as with the full evidence').toMatchObject({ kind: 'unresolved', reason: 'overlapping-listing-window' });
+  });
+
+  it('R89: an owner whose read fails until the hour it was listed in leaves the read horizon: until then that hour vetoes, and then it is recorded as a LOSS (never a carve-out word) that goes on vetoing', async () => {
+    const w = world();
+    makeOwner(w, 'demo-a');
+    await censusPass(w, at(0), BEFORE_TREE);                            // ready
+    creatorAfter(w, at(0), 'demo-x');
+    const dropped = Promise.reject(new Error('agent socket dropped'));
+    dropped.catch(() => undefined);
+    w.faults.holdRange.set('demo-x', dropped);                          // every range read of demo-x throws: no observation of it completes
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    await censusPass(w, at(1), WITH_TREE, pair);                        // demo-x is listed once
+    for (let i = 2; i < 6; i++) await censusPass(w, at(i), WITH_TREE);  // and is gone after
+    expect(intervalFor(w.home, 'demo-x'), 'no observation of it completed').toBeUndefined();
+    expect(leasesOf(w.home), 'listed and unread: the hour it was listed in vetoes').toEqual([]);
+    await censusPass(w, at(33), WITH_TREE);                             // demo-a's hour closes (11:03)
+    const later = Date.parse(HOUR10) + (DELEGATION_SPOOL_LOOKBACK_HOURS + 1) * DELEGATION_HOUR_MS + 5 * 60_000;
+    for (let i = 0; i < 3; i++) await censusPass(w, later + i * STEP, WITH_TREE);
+    expect(leasesOf(w.home), 'the durable loss vetoes').toEqual([]);
+    expect(intervalFor(w.home, 'demo-x')).toMatchObject({ state: 'unmeasured', detail: expect.stringMatching(/^hour-never-closed: listed in this hour/) });
+    expect(w.watcher.delegationReport().lostEvidence.forced).toBe(1);
+  });
+
+  it('R89: a listed owner whose incarnation was unmeasured, gone by the next census, still gets its incarnation-unmeasured gap for the hour it was listed in', async () => {
+    const w = world();
+    makeOwner(w, 'demo-0');
+    await censusPass(w, at(0), { demo: [] }, [sessionOf('demo-0')]);   // ready
+    await cutAt(w, at(1), { demo: [] }, [sessionOf('demo-0'), sessionOf('demo-x')], { 'demo-0': measured(), 'demo-x': { kind: 'unmeasured', reason: 'changing' } }, 'demo-0');
+    expect(intervalFor(w.home, 'demo-x', HOUR10, DELEGATION_UNMEASURED_INCARNATION), 'the cut pass never reached it').toBeUndefined();
+    await censusPass(w, at(2), { demo: [] }, [sessionOf('demo-0')]);    // demo-x is gone
+    expect(intervalFor(w.home, 'demo-x', HOUR10, DELEGATION_UNMEASURED_INCARNATION))
+      .toMatchObject({ state: 'unmeasured', detail: 'incarnation-unmeasured: the parent\'s registry incarnation is changing' });
   });
 });

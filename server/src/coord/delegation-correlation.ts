@@ -742,7 +742,11 @@ export function delegationUnknownWindowForced(input: DelegationCorrelationInput,
   const held = input.listingWindows.filter((w) => w.lost !== true);
   const base = correlate({ ...input, listingWindows: held }, false);
   const without = correlate({ ...input, listingWindows: held.filter((w) => w.repository !== null) }, false);
-  return without.kind !== base.kind || !('reason' in without) || !('reason' in base) || without.reason !== base.reason;
+  if (without.kind !== base.kind) return true;
+  // R88: two LINKS to the same activity are the same answer. Lost evidence alone can hold such a verdict back (the latest ready instant,
+  // after every restart, which is when an unknown window exists), and it is counted as lost evidence, never as this kind as well.
+  if (base.kind === 'linked' && without.kind === 'linked') return base.activityId !== without.activityId;
+  return !('reason' in without) || !('reason' in base) || without.reason !== base.reason;
 }
 
 /**

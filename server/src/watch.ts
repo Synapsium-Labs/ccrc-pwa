@@ -78,7 +78,8 @@ import { delegationCircuitBreaker, planDelegationReconciliation, type Delegation
 import { isUnownedWorkReason } from './coord/delegation-policy.js';
 import { delegationBucketHourMs, delegationBucketReadable, planDelegationCursorRetention } from './coord/delegation-model.js';
 import {
-  DELEGATION_HOUR_CLOSE_MARGIN_MS, DELEGATION_HOUR_MS, DELEGATION_INTERVAL_RETENTION_HOURS, DELEGATION_UNMEASURED_INCARNATION, DelegationModelError,
+  DELEGATION_HOUR_CLOSE_MARGIN_MS, DELEGATION_HOUR_MS, DELEGATION_HOUR_NEVER_CLOSED, DELEGATION_INTERVAL_RETENTION_HOURS, DELEGATION_UNMEASURED_INCARNATION,
+  DelegationModelError,
   canonicalDelegationJson, delegationCapabilityState, delegationHealthInputOf, delegationObservationHealthOf, formatDelegationInstant,
   parseDelegationInstant, upkeepDelegationIntervals,
   type DeepReadonly, type DelegationAttemptRow, type DelegationBucketCursor, type DelegationCensusRecord, type DelegationCheckpointV1,
@@ -8505,6 +8506,19 @@ function renderAskBrief(askId: number, childId: string, question: string, option
 //   not offer, an unreadable directory or range, malformed evidence and a parent whose incarnation is unmeasured are each an
 //   UNMEASURED hour, never a measured-empty one. Only a listing that SUCCEEDED and does not name the bucket is an empty hour.
 //
+//   THE LANE NEVER LINKS ACROSS A STRETCH IT KNOWS IT DID NOT READ (W1, coordinator 5512; R88, R89). Lane memory only, both:
+//     - THE LATEST READY INSTANT (R88, `readyAt`). Set by the first pass of a process that reaches the owners, and again by the first
+//       pass to reach them after a pass found the lane NOT READY (no census, no applier, or an applier not `ready` or failed): to the
+//       instant the recovery of that same pass returned, or else to the pass's own clock. Correlation gets one lost window from the
+//       epoch to it on every repository (`delegationNotReadyWindowOf`): a stretch's start cannot be measured, so every rung-4 candidate
+//       whose creator began at or before it is held, and through X1 so is a rung-3 link whose creator bracket reaches back to it.
+//       Cleared by nothing; only a later ready instant moves it, and a restart starts again from none.
+//     - THE OWNERS A PASS LISTED (R89, `pendingOwners`). Every owner a census lists is remembered, with the hours it was listed in, until
+//       one observation of it COMPLETES in a pass that was not cut: so a pass cut before it reaches an owner leaves that owner to the
+//       next pass, live or not, whatever the next census says. Until then its listed hours are lost windows. An hour that leaves the
+//       read horizon before the owner is read is recorded as a durable gap with a LOSS word (`hour-never-closed`, never a carve-out
+//       word), and the owner is forgotten once it has no listed hour left: so the memory is bounded by the read horizon.
+//
 //   REPORT-ONLY EFFECTS. Attempts are made durable through one checkpoint-only change BEFORE any lease is journaled (so the next pass
 //   sees them), then each lease request goes through `createLease` (which deduplicates on the identity key, so a request re-emitted
 //   after a crash is a no-op), then the projection is repaired. Measured absence has no durable field in wave 3 (a checkpoint-only
@@ -8617,8 +8631,15 @@ interface LaneEvidenceIndex {
   /** run ID -> its first Workflow launch response, with the transcript directory it names. */
   launches: Map<string, { event: DelegationEventEnvelopeV1; journalId: string; dir: string }>;
 }
-/** One owner to observe in a pass. `incarnation: null` is a parent whose incarnation could not be measured (`reason` says why). */
-interface LaneOwner { id: string; incarnation: string | null; reason: string; live: boolean }
+/** One owner to observe in a pass. `incarnation: null` is a parent whose incarnation could not be measured (`reason` says why).
+ *  `listedHours` are the hours (ms) a pass listed it in and no completed observation has covered yet, inside the read horizon (R89). */
+interface LaneOwner { id: string; incarnation: string | null; reason: string; live: boolean; listedHours: readonly number[] }
+/** R89: an owner a pass LISTED from the census, and the hours (ms) it was listed in, until one observation of it completes. */
+interface LanePendingOwner { id: string; incarnation: string | null; reason: string; hours: Set<number> }
+/** An owner's identity in a pass and in the pending memory: (id, incarnation or null). */
+const laneOwnerKey = (id: string, incarnation: string | null): string => JSON.stringify([id, incarnation]);
+/** The detail of an hour whose parent's incarnation could not be measured. */
+const laneIncarnationGap = (reason: string): string => `incarnation-unmeasured: the parent's registry incarnation is ${reason}`;
 /** One staged bucket result (D-4658, R82). */
 interface LaneStaged { batch: DelegationDurableBatch; key: string; label: string }
 interface LanePass {
@@ -8745,6 +8766,33 @@ const LANE_HOUR_NO_CAPABILITY: DelegationBucketUnreadableReason = 'capability-ab
 /** The detail head ingestion gives a bucket whose last bytes are a line that may still complete (`delegation-ingest.ts`, step 9). */
 const LANE_TORN_TAIL = 'torn-tail:';
 
+/** One LOST hour of one owner as a listing window (2c, R84): on every repository, naming no call, from the hour's start to one hour and
+ *  one margin later (a call that began in the hour may have ended up to the margin after it). An hour that cannot be placed (null) is a
+ *  window over all of time: it fails SAFE. Pure. */
+function delegationLostHourWindow(sessionId: string, parentIncarnation: string, hourMs: number | null): DelegationListingWindow {
+  return {
+    sessionId, parentIncarnation, toolUseId: '', repository: null, lost: true,
+    startedAt: formatDelegationInstant(hourMs ?? 0),
+    endedAt: hourMs === null ? null : formatDelegationInstant(hourMs + DELEGATION_HOUR_MS + DELEGATION_EVIDENCE_MARGIN_MS), before: [], after: null,
+  };
+}
+
+/**
+ * R88 (W1 a; coordinator 5512): the stretch the lane was NOT READY for, as ONE lost window on every repository, from the epoch to the
+ * lane's LATEST READY INSTANT. While the lane is down, in recovery, without a census or without an applier, it lists no owner, so a
+ * session born and gone in that stretch is never read; and the start of such a stretch cannot be measured (a restart remembers
+ * nothing of the process before it). So every candidate whose creator began at or before the ready instant is held, on every
+ * repository, and an in-process recovery moves the instant (the lane's own memory, `DelegationLane.readyAt`: no durable fact bounds the
+ * window). A null instant (no ready pass yet) is an OPEN-ENDED window from the epoch, which vetoes everything: it fails safe, and it is
+ * never reached, since the lane reconciles only after a pass has set the instant. Pure.
+ */
+export function delegationNotReadyWindowOf(readyAtMs: number | null): DelegationListingWindow {
+  return {
+    sessionId: '', parentIncarnation: '', toolUseId: '', repository: null, lost: true,
+    startedAt: formatDelegationInstant(0), endedAt: readyAtMs === null ? null : formatDelegationInstant(readyAtMs), before: [], after: null,
+  };
+}
+
 /**
  * The windows the CHECKPOINT says the lane lost (2c, R84; coordinator 5477, 5484): every one is lost (`lost: true`), names no call (an
  * empty `toolUseId`), and is on EVERY repository (`repository: null`), because what an unread hour held cannot be told. Pure.
@@ -8775,11 +8823,7 @@ export function delegationLostWindowsOf(
     const id = JSON.stringify([sessionId, parentIncarnation, hourMs]);
     if (seen.has(id)) return;
     seen.add(id);
-    out.push({
-      sessionId, parentIncarnation, toolUseId: '', repository: null, lost: true,
-      startedAt: formatDelegationInstant(hourMs ?? 0),
-      endedAt: hourMs === null ? null : formatDelegationInstant(hourMs + DELEGATION_HOUR_MS + DELEGATION_EVIDENCE_MARGIN_MS), before: [], after: null,
-    });
+    out.push(delegationLostHourWindow(sessionId, parentIncarnation, hourMs));
   };
   for (const r of intervals) {
     const detail = r.detail ?? '';
@@ -8815,6 +8859,14 @@ class DelegationLane {
   private readonly refusedBuckets = new Set<string>();
   private passes = 0;
   private skipped = 0;
+  /** R88 (W1 a): the LATEST READY INSTANT (epoch ms), or null before the first pass of this process reached the owners. Lane memory
+   *  only: no durable fact bounds it, and a restart starts from none. */
+  private readyAt: number | null = null;
+  /** R88: a pass found the lane not ready since `readyAt` was set (a fresh process starts so): the next pass to reach the owners sets it. */
+  private notReady = true;
+  /** R89 (W1 b): the owners a pass LISTED and no completed observation has read since, by `laneOwnerKey`. Lane memory only; bounded by the
+   *  read horizon (an hour past it is recorded as a gap and leaves, and an owner with no hour left leaves with it). */
+  private readonly pendingOwners = new Map<string, LanePendingOwner>();
   // evidence for correlation
   private readonly evidence = new Map<string, { event: DelegationEventEnvelopeV1; key: string | null }>();
   private readonly evidenceKeys = new Map<string, string>();
@@ -9195,7 +9247,10 @@ class DelegationLane {
     const now = Date.now();
     if (this.lastSweepAt !== 0 && now - this.lastSweepAt < DELEGATION_SWEEP_MS) return;
     const census = this.census();
-    if (census === null) return;                                         // no census yet: wait, and keep the cadence unspent
+    if (census === null) {                                               // no census yet: wait, and keep the cadence unspent
+      this.notReady = true;                                              // R88: nothing is listed, so nothing is read
+      return;
+    }
     this.sweeping = true;
     this.lastSweepAt = now;
     const ac = new AbortController();
@@ -9222,13 +9277,21 @@ class DelegationLane {
   private async run(pass: LanePass): Promise<void> {
     this.noteSessions(pass);
     const durable = await this.applier();
-    if (durable === null || pass.signal.aborted) return;
+    if (durable === null) {
+      this.notReady = true;                                            // R88: no applier, nothing is read
+      return;
+    }
+    if (pass.signal.aborted) return;
+    /** R88: the instant a recovery of THIS pass returned, measured after its await (so an in-process recovery moves the ready instant). */
+    let recoveredAt: number | null = null;
     if (durable.state().phase !== 'ready' || durable.failure() !== null) {
+      this.notReady = true;                                            // R88: in recovery, or failed: what happens now is not read
       this.unreconcile();                                              // M-1: what was counted is not this state's
       // A recovery that failed applies NOTHING and reads nothing: the files are left exactly as they are. It is tried again, rarely.
       if (pass.now - this.lastRecoverAt < DELEGATION_RECOVERY_RETRY_MS) return;
       this.lastRecoverAt = pass.now;
       await durable.recover();
+      recoveredAt = Date.now();
       this.evidenceLoaded = false;                                     // the slice and the dropped-evidence index are measured again by the next load
       this.dropped.clear();
       this.tupleLatest.clear();
@@ -9241,10 +9304,20 @@ class DelegationLane {
     await this.loadEvidence(durable, pass);
     if (pass.signal.aborted) return;
 
+    // R88: the first pass to reach the owners after a not-ready mark (and the first of a process) is the latest ready instant: the
+    // instant this pass's own recovery returned, else this pass's clock. Everything at or before it may hold a session nothing listed.
+    if (this.notReady) {
+      this.readyAt = recoveredAt ?? pass.now;
+      this.notReady = false;
+    }
+    await this.expirePendingOwners(pass, durable);
     for (const owner of this.ownersOf(pass, durable.state())) {
       if (pass.signal.aborted) break;
-      try { await this.observeOwner(pass, durable, owner); }
-      catch (err) { console.warn(`ccrc-server: delegation owner ${owner.id} could not be observed: ${err instanceof Error ? err.message : String(err)}`); }
+      try {
+        await this.observeOwner(pass, durable, owner);
+        // R89: one observation COMPLETED, in a pass that was not cut: the owner's spool has been read once, so it is no longer pending.
+        if (!pass.signal.aborted) this.pendingOwners.delete(laneOwnerKey(owner.id, owner.incarnation));
+      } catch (err) { console.warn(`ccrc-server: delegation owner ${owner.id} could not be observed: ${err instanceof Error ? err.message : String(err)}`); }
     }
     // D-4658: what the owners staged, as ONE durable application. Also after a cut: everything staged came from a read that answered
     // before the cut (an abort check follows every read), and a fleet whose passes are always cut must still make progress. Its FIRST
@@ -9331,19 +9404,28 @@ class DelegationLane {
     this.aliveSeen = true;
   }
 
-  /** The live sessions the census took an incarnation of, and the owners with an hour still to close, in a stable order. */
+  /** The live sessions the census took an incarnation of, the owners a pass listed and no observation has read since (R89), and the
+   *  owners with an hour still to close, in a stable order. Every owner the census lists is remembered as listed in this hour. */
   private ownersOf(pass: LanePass, state: DeepReadonly<DelegationRecoveryState>): LaneOwner[] {
     const out = new Map<string, LaneOwner>();
-    const keyOf = (id: string, inc: string | null): string => JSON.stringify([id, inc]);
+    const nowHour = laneHourOf(pass.now);
     for (const s of pass.sessions) {
       if (s.status === 'dead') continue;
       const inc = pass.census.incarnations.get(s.id);
       if (inc === undefined) continue;                                   // born after the census: the next census names it
-      const owner: LaneOwner = inc.kind === 'measured'
-        ? { id: s.id, incarnation: inc.incarnation, reason: '', live: true }
-        : { id: s.id, incarnation: null, reason: inc.reason, live: true };
-      out.set(keyOf(owner.id, owner.incarnation), owner);
+      const incarnation = inc.kind === 'measured' ? inc.incarnation : null;
+      const reason = inc.kind === 'measured' ? '' : inc.reason;
+      const k = laneOwnerKey(s.id, incarnation);
+      // R89: LISTED, so it stays an owner, live or not, until one observation of it completes (the loop in `run` forgets it then).
+      const pending = this.pendingOwners.get(k) ?? { id: s.id, incarnation, reason, hours: new Set<number>() };
+      pending.reason = reason;
+      pending.hours.add(nowHour);
+      this.pendingOwners.set(k, pending);
+      out.set(k, { id: s.id, incarnation, reason, live: true, listedHours: [] });
     }
+    // R89: an owner a pass listed whose observation never completed (a cut pass, an observation that threw), which the census no longer
+    // names alive: it is read anyway, once, as an owner that is not live.
+    for (const [k, p] of this.pendingOwners) if (!out.has(k)) out.set(k, { id: p.id, incarnation: p.incarnation, reason: p.reason, live: false, listedHours: [] });
     // An owner that is no longer live still has its last hour to close (a session that ended mid-hour).
     for (const r of state.checkpoint.observationIntervals) {
       if (r.state !== 'measured' || r.parentIncarnation === DELEGATION_UNMEASURED_INCARNATION) continue;
@@ -9352,20 +9434,55 @@ class DelegationLane {
       if (at === null || recorded === null || at % DELEGATION_HOUR_MS !== 0) continue;
       if (pass.now < laneCloseAt(at) || recorded >= laneCloseAt(at)) continue;
       if (!this.readable(at, pass.now)) continue;             // past the read horizon: nothing of it is read, and upkeep turns the hour into a gap
-      const k = keyOf(r.sessionId, r.parentIncarnation);
-      if (!out.has(k)) out.set(k, { id: r.sessionId, incarnation: r.parentIncarnation, reason: '', live: false });
+      const k = laneOwnerKey(r.sessionId, r.parentIncarnation);
+      if (!out.has(k)) out.set(k, { id: r.sessionId, incarnation: r.parentIncarnation, reason: '', live: false, listedHours: [] });
     }
-    return [...out.values()].sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+    return [...out].map(([k, o]): LaneOwner => {
+      const hours = [...(this.pendingOwners.get(k)?.hours ?? [])].filter((h) => this.readable(h, pass.now)).sort((a, b) => a - b);
+      return { ...o, listedHours: hours };
+    }).sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+  }
+
+  /**
+   * R89: a listed hour of a pending owner that has LEFT THE READ HORIZON before any observation of it completed can never be read: it is
+   * recorded as a durable gap with a LOSS word, never `directory-absent` or `capability-absent` (nothing measured either), under the
+   * owner's incarnation (the stand-in for an unmeasured one, whose own word it keeps), and leaves the memory; an owner with no listed
+   * hour left is forgotten. So the memory is bounded by the read horizon.
+   */
+  private async expirePendingOwners(pass: LanePass, durable: DelegationDurability): Promise<void> {
+    for (const [k, p] of [...this.pendingOwners]) {
+      for (const hourMs of [...p.hours].sort((a, b) => a - b)) {
+        if (this.readable(hourMs, pass.now)) continue;
+        if (pass.signal.aborted) return;
+        const detail = p.incarnation === null
+          ? laneIncarnationGap(p.reason)
+          : `${DELEGATION_HOUR_NEVER_CLOSED}: listed in this hour, and never read before the hour left the read horizon`;
+        await this.noteGap(pass, durable, p.id, p.incarnation ?? DELEGATION_UNMEASURED_INCARNATION, hourMs, detail);
+        p.hours.delete(hourMs);
+      }
+      if (p.hours.size === 0) this.pendingOwners.delete(k);
+    }
+  }
+
+  /** R89: the hours of every owner a pass listed and no completed observation has read, as lost windows (on every repository). */
+  private pendingWindows(): DelegationListingWindow[] {
+    const out: DelegationListingWindow[] = [];
+    for (const p of this.pendingOwners.values()) {
+      for (const hourMs of p.hours) out.push(delegationLostHourWindow(p.id, p.incarnation ?? DELEGATION_UNMEASURED_INCARNATION, hourMs));
+    }
+    return out;
   }
 
   // ── one owner, one hour ───────────────────────────────────────────────────────────────────────────────────────────────
 
   private async observeOwner(pass: LanePass, durable: DelegationDurability, owner: LaneOwner): Promise<void> {
-    const nowHour = laneHourOf(pass.now);
     if (owner.incarnation === null) {
       // The parent's incarnation could not be measured (absent, unreadable, changing): nothing can be bound to it, so nothing is read,
-      // and the hour is a gap under a stand-in incarnation so that it counts.
-      if (owner.live) await this.noteGap(pass, durable, owner.id, DELEGATION_UNMEASURED_INCARNATION, nowHour, `incarnation-unmeasured: the parent's registry incarnation is ${owner.reason}`);
+      // and the hour is a gap under a stand-in incarnation so that it counts. R89: every hour a pass LISTED it in and no completed
+      // observation covered, live or not (a live owner's open hour is one: it was listed in this pass).
+      for (const hourMs of owner.listedHours) {
+        await this.noteGap(pass, durable, owner.id, DELEGATION_UNMEASURED_INCARNATION, hourMs, laneIncarnationGap(owner.reason));
+      }
       return;
     }
     const inc = owner.incarnation;
@@ -9392,6 +9509,7 @@ class DelegationLane {
     const nowHour = laneHourOf(pass.now);
     const hours = new Set<number>();
     if (owner.live) hours.add(nowHour);
+    for (const hourMs of owner.listedHours) hours.add(hourMs);           // R89: every hour a pass listed it in and nothing has read since
     if (listing.ok) {
       for (const name of listing.entries) {
         const m = /^(\d{10})\.spool$/.exec(name);
@@ -9766,9 +9884,13 @@ class DelegationLane {
     const root = this.projectsRoot;
     const listedOf = (cwd: string): string | null => delegationMarkAttributionOf(cwd, root, trees)?.project ?? null;
     // 2c (R84): the windows the slice holds, the shed ones lost, and the windows the checkpoint says were lost (hours, torn tails, the floor).
+    // W1 (R88, R89): and the stretches the lane's own memory knows it did not read: everything up to the latest ready instant, and every
+    // listed hour of an owner no completed observation has read.
     const windows = [
       ...delegationListingWindowsOf([...this.evidence.values()].map((v) => v.event), (sessionId) => this.sessionProject.get(sessionId), listedOf),
       ...delegationLostWindowsOf(state.checkpoint.observationIntervals, state.checkpoint.bucketCursors, pass.now),
+      delegationNotReadyWindowOf(this.readyAt),
+      ...this.pendingWindows(),
     ];
     const pointMetas = [...this.pointMetas.values()];
     const inputFor = (record: DelegationCensusRecord): DelegationCorrelationInput => {
