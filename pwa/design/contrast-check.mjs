@@ -277,6 +277,107 @@ for (const [label, fg, bg, min] of ALL_PALETTES.flatMap(([n, t]) => pairs(palett
   console.log(`${ok ? 'PASS' : 'FAIL'}  ${r.toFixed(2).padStart(6)}  (min ${min})  ${label}  ${hex(fg)} on ${hex(bg)}`);
 }
 
+// ── ink tiers (D-5097) ──────────────────────────────────────────────────────
+// THREE TOKENS ARE NOT THREE INKS UNLESS SOMETHING MEASURES THE DISTANCE.
+// Every pair above holds a FLOOR, and a floor is satisfied just as well by
+// one ink wearing three names: the generator once fitted primary, secondary
+// and tertiary from the same seed against the same floor, and wherever the
+// seed already cleared it all three came out equal — ten of twelve palettes,
+// measured ΔL(primary, tertiary) 0.000 to 0.085, with this gate printing ALL
+// PASS. So the tiers are measured as a SEPARATION, in OKLab lightness (the
+// axis a reader perceives as "quieter"), signed toward the ground: tertiary
+// must sit at least 0.12 nearer the card than primary, and secondary strictly
+// between, at least 0.04 from each. The generator's quiet tiers aim at 0.14
+// (ui/design/make-themes.mjs), the generator-and-gate split of every floor
+// above — but primary is held to the palette's own ink (D-5155), so where the
+// aim is out of reach the band sits nearer this floor, and below it this file
+// is what says so, for every palette but the two named exceptions below. The
+// maths is the generator's, restated here because this file is the authority
+// and must not import what it rules on.
+const TIER_FLOOR = 0.12;
+const TIER_STEP = 0.04;
+/** THE ΔL FLOOR'S NAMED EXCEPTIONS (D-5155): exactly two palettes, each with
+ *  its reason. Primary is held within ΔEOK 0.02 of each palette's own ink, and
+ *  on these two light palettes that cap binds before the band reaches 0.12.
+ *  Their dark ink sits low on the lightness axis, where the same contrast span
+ *  is a shorter OKLab distance, and tertiary is already at the 4.5 text floor
+ *  on its binding ground. Both palettes are low-contrast by design and keep
+ *  their character, so the gate holds each to its measured band rounded DOWN
+ *  to 0.10 (0.100 and 0.105 when this was ruled). That is still a floor: a
+ *  drift below it reds.
+ *
+ *  Only the ΔL row is excepted. Both step rows keep 0.04, and every other
+ *  palette keeps 0.12. Two-way, like the audit's registries: an entry whose
+ *  palette clears 0.12 again is stale, and an entry that names no palette is
+ *  a typo or a leftover. An entry with a blank reason is a ruling nobody can
+ *  read. All three are FAIL rows. `pwa/test/ink-tiers.test.ts` pins the list
+ *  to exactly these two, at exactly these floors, so a third entry reds there
+ *  even for a palette that measures under 0.12, and so does a floor nudged
+ *  inside its rounding (0.105, 0.119): widening the exception is a ruling,
+ *  not an edit. */
+const TIER_FLOOR_EXCEPTIONS = {
+  'SOLARIZED-LIGHT': {
+    floor: 0.10,
+    why: 'light palette, low-contrast by design: primary held within ΔEOK 0.02 of its own ink, tertiary at the 4.5 floor on the accent tint',
+  },
+  'CATPPUCCIN-LATTE': {
+    floor: 0.10,
+    why: 'light palette, low-contrast by design: primary held within ΔEOK 0.02 of its own ink, tertiary at the 4.5 floor on raised',
+  },
+};
+const linear = (c) => {
+  const s = c / 255;
+  return s <= 0.04045 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4;
+};
+/** OKLab L of an sRGB triple (0–255). */
+const oklabL = (c) => {
+  const [r, g, b] = [c[0], c[1], c[2]].map(linear);
+  const l = Math.cbrt(0.4122214708 * r + 0.5363325363 * g + 0.0514459929 * b);
+  const m = Math.cbrt(0.2119034982 * r + 0.6806995451 * g + 0.1073969566 * b);
+  const s = Math.cbrt(0.0883024619 * r + 0.2817188376 * g + 0.6299787005 * b);
+  return 0.2104542553 * l + 0.7936177850 * m - 0.0040720468 * s;
+};
+
+console.log(`\n# ink tiers — OKLab lightness, signed from primary toward the ground`);
+const tierBand = new Map();
+for (const [name, theme] of ALL_PALETTES) {
+  const T = palette(theme);
+  const [p, s, t] = [T.inkP, T.inkS, T.inkT].map(oklabL);
+  // Toward the ground: down on a dark palette, up on a light one. An unsigned
+  // distance would pass a tertiary LOUDER than primary.
+  const toward = Math.sign(oklabL(T.surface) - p) || 1;
+  const excepted = Object.hasOwn(TIER_FLOOR_EXCEPTIONS, name.trim()) ? TIER_FLOOR_EXCEPTIONS[name.trim()] : undefined;
+  tierBand.set(name.trim(), (t - p) * toward);
+  for (const [label, d, min, a, b, note] of [
+    ['ΔL primary → tertiary', (t - p) * toward, excepted?.floor ?? TIER_FLOOR, T.inkP, T.inkT,
+      excepted ? `  — exception (D-5155): ${excepted.why}` : ''],
+    ['step primary → secondary', (s - p) * toward, TIER_STEP, T.inkP, T.inkS, ''],
+    ['step secondary → tertiary', (t - s) * toward, TIER_STEP, T.inkS, T.inkT, ''],
+  ]) {
+    const ok = d >= min;
+    if (!ok) fail++;
+    n++;
+    // The floor is printed EXACTLY, as the pair rows above print theirs: a
+    // floor rounded for display hides a wrong one (0.119 and 0.1201 both
+    // printed 0.12, and 0.098 and 0.104 both printed 0.10), and the tests read
+    // these rows.
+    console.log(`${ok ? 'PASS' : 'FAIL'}  ${d.toFixed(3).padStart(6)}  (min ${min})  TIER ${name.trim()}  ${label}  ${hex(a)} → ${hex(b)}${note}`);
+  }
+}
+// The exceptions' own two-way check, and their reasons. A FAIL row each,
+// never a PASS row: a registry that is in order adds nothing to the count.
+for (const [name, { floor, why }] of Object.entries(TIER_FLOOR_EXCEPTIONS)) {
+  const d = tierBand.get(name);
+  let problem = null;
+  if (d === undefined) problem = `names no palette: remove it`;
+  else if (d >= TIER_FLOOR) problem = `is stale: ${name} measures ${d.toFixed(3)}, which clears ${TIER_FLOOR} without it — remove it`;
+  else if (typeof why !== 'string' || !/\S/.test(why)) problem = `gives no reason: an exception is a ruling, and its row says why`;
+  if (problem === null) continue;
+  fail++;
+  n++;
+  console.log(`FAIL  ------  (tier)  TIER_FLOOR_EXCEPTIONS entry ${name} (floor ${floor}) ${problem}`);
+}
+
 console.log(`\n# stylesheets — ${report.sheets.join(', ')}`);
 console.log(
   `# ${report.counts.rules} rules, ${report.counts.selfGrounded} self-grounded, `

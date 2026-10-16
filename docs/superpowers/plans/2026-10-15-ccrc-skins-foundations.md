@@ -1325,6 +1325,25 @@ A worker never allocates: it names a departure by slug in its report, and the co
 
 - **D-5244** — `storybook-static-glob-ignored` (Task 3): `ui/.gitignore`'s `storybook-static/` becomes `storybook-static*/`. Step 5's second build writes `ui/storybook-static-instrument/` (`-o storybook-static-instrument`, as `ui/README.md` now gives it), which the old pattern left untracked in every worktree that ran it. The glob ignores both outputs and any later per-skin directory. Departs Task 3's file list, which names no edit to `ui/.gitignore`. No test reads the file, and nothing in flight edits it.
 
+### Issued 2026-10-15 for Task 4's departures, and defined here
+
+`POST /api/ledger/deviations` issued two numbers for the departures Task 4 named by slug. One is defined here. The other, 5156 (`tier-walk-keeps-fitted-hue`), is not used and stays undefined: under the ruling D-5155 records, primary's move holds its hue and chroma, so the tertiary walk reads them from primary exactly as D-5097 says, and there is no departure left to record. It is spelled without its prefix on purpose, because `deviation-refs.test.ts` requires every tracked ref to be defined.
+
+- **D-5155** — `tier-band-from-the-quiet-tiers` (Task 4; departs from D-5097's derivation by the coordinator's 2026-10-15 ruling that palettes keep their character, and from D-5097's gate floor for two named palettes by the 2026-10-16 ruling below): primary is never lifted to white, or to any value that erases a palette's own ink (Nord's `#ECEFF4`), so the band is opened by the quiet tiers, and primary moves last, under a stated cap.
+  - **What departs.** D-5097 lifted primary "toward 9:1 on every ground as far as the gamut allows", which carried Nord's and Gruvbox Dark's primary to pure white and Dracula's and Mocha's within a step of it; it held tertiary at 4.9 and secondary at 6.0; and the generator refused a band under ΔL 0.14.
+  - **Tertiary** walks to the last value at 4.9 or better on the same six grounds, as D-5097 says. While the band is under 0.14 it walks on, toward the gate's own 4.5, and stops as soon as the band reaches 0.14 or the floor arrives.
+  - **Primary** moves only while the band is still under the gate's 0.12, and only as far as reaching it takes: lightness alone, hue and chroma held, and at most **ΔEOK 0.02** from the ink it was fitted to. That cap is one just-noticeable difference, the JND that CSS Color 4's gamut mapping uses. A step whose chroma the gamut cannot hold ends the move, so primary is never carried to white or black.
+  - **Secondary** stays the OKLab midpoint, without D-5097's 6.0 floor, and the generator refuses it under 4.5. **0.14 is an aim, not a refusal:** where the cap leaves a palette under 0.12, the generator writes and says so, and the gate rules.
+  - **Measured** (`ui/design/make-themes.mjs`'s `inkTiers`; pinned by `pwa/test/ink-tiers.test.ts`, which replays the fit independently):
+    - Nord, Tokyo Night, Dracula and GitHub Light keep their primary exactly.
+    - Catppuccin Mocha moves ΔEOK 0.009, and Gruvbox Dark, One Dark and Solarized Dark 0.015, reaching ΔL 0.121 to 0.123.
+    - Solarized Light and Catppuccin Latte move 0.019 and still measure ΔL 0.100 and 0.105, under the gate's 0.12. On a light palette the dark ink sits low on the lightness axis, where the same contrast span is a shorter OKLab distance.
+    - Tertiary reads 4.50 to 4.54 on its worst ground in eight palettes, and 4.92 to 4.94 in Dracula and GitHub Light.
+  - **The exception (the coordinator's 2026-10-16 ruling).** Solarized Light and Catppuccin Latte are low-contrast by design, so they keep their character. The gate's ΔL floor for exactly those two palettes is their measured band rounded down, **0.10**. Every other palette keeps 0.12, and both step rows keep 0.04 everywhere.
+    - It is registered in `pwa/design/contrast-check.mjs` as `TIER_FLOOR_EXCEPTIONS`, one named entry per palette, each with its reason. Each excepted row prints `(min 0.1)` and that reason: the gate prints every TIER floor exactly, as its pair rows print theirs, because a floor rounded to two places hides a wrong one (0.119 printed `0.12`, 0.098 and 0.104 printed `0.10`).
+    - It is two-way: an entry whose palette clears 0.12 again is stale, and an entry that names no palette is an orphan. An entry whose reason is blank gives no ruling to read. Each is a FAIL row.
+    - `pwa/test/ink-tiers.test.ts` pins the list to exactly these two, twice: off the gate's own declarations, evaluated from its source as exact numbers (0.12, 0.04, and 0.10 for each of the two, each with a non-blank reason), and off the gate's own output. A third entry reds even for a palette that measures under 0.12, because widening the exception is a ruling, not an edit, and so does a floor nudged inside its rounding, such as 0.105 or 0.119. It also reds when either palette drifts below 0.10.
+
 ### Found while executing Task 13
 
 A worker never allocates: it names a departure by slug in its report, and the coordinator allocates through `POST /api/ledger/deviations` and defines it here, once, in the PR that introduces it. Task 13 named one, issued 2026-10-15.
