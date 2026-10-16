@@ -2133,7 +2133,10 @@ button.proj-card-pool::before {
   font: var(--weight-medium) var(--fs-base) / var(--lh-tight) var(--family-mono);
   color: var(--ink-primary);
 }
-.accounts-projection { font-family: var(--family-mono); font-size: var(--fs-xs); color: var(--ink-secondary); }
+/* Prose in the UI face, by the rule of voice: "Next workspace lands on … —
+   least-loaded" is a sentence. `.accounts-fresh` ("last reported 5m ago") is a
+   readout beside a gauge and stays mono; so do the percentages. */
+.accounts-projection { font-family: var(--family-ui); font-size: var(--fs-xs); color: var(--ink-secondary); }
 .accounts-list { display: grid; gap: var(--sp-3); }
 /* ONE CARD IDIOM, two places. `.auth-block` (the passkey block, further down
    this sheet) declared the identical six. Both are SELF-GROUNDED, which is what
@@ -2150,7 +2153,9 @@ button.proj-card-pool::before {
   border-radius: var(--r-md);
 }
 .accounts-row-head { display: flex; align-items: center; gap: var(--sp-2); }
-.accounts-disabled-note { font-family: var(--family-mono); font-size: var(--fs-2xs); color: var(--ink-tertiary); }
+/* A sentence ("disabled on the fleet host"), so the UI face — see
+   `.accounts-projection`. */
+.accounts-disabled-note { font-family: var(--family-ui); font-size: var(--fs-2xs); color: var(--ink-tertiary); }
 /* A disabled lane greys the WHOLE row, not just its label: without this, a
    lane disabled while its 5h/7d telemetry sat at crit keeps a solid red bar
    forever (nothing runs there to refresh it), which reads as live pressure

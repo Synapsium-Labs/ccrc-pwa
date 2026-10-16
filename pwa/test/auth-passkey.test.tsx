@@ -527,6 +527,25 @@ describe('PasskeySection', () => {
     expect(await screen.findByRole('button', { name: /revoke passkey/i })).toBeInTheDocument();
   });
 
+  it("a passkey enrolled 5 minutes ago reads 'added 5m ago'; one used just now reads 'last used just now'", async () => {
+    // `formatAge` already says the whole phrase — "5m ago", or "just now"
+    // under two minutes — and both sites appended " ago" to it again, so the
+    // list read "added 5m ago ago, last used just now ago". The clock is
+    // pinned: `useNow` reads `Date.now()`, and a fixture minted a moment
+    // before the render must not land on the 4m/5m boundary.
+    const T = 1_760_000_000_000;
+    vi.spyOn(Date, 'now').mockReturnValue(T);
+    supportBrowser();
+    vi.stubGlobal('fetch', screenFetch({
+      list: listBody({
+        credentials: [{ ...CRED, enrolledAt: T - 5 * 60_000, lastUsedAt: T - 30_000 }],
+      }),
+    }));
+    render(<AccountsScreen />);
+    const dates = await screen.findByText(/^\s*added /);
+    expect(dates.textContent?.trim()).toBe('added 5m ago, last used just now');
+  });
+
   it('REVOKES through DELETE and re-reads the list', async () => {
     supportBrowser();
     const fetchImpl = screenFetch({ list: listBody({ credentials: [CRED] }) });
