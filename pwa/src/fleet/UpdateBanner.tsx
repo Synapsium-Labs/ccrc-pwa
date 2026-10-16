@@ -51,7 +51,9 @@ import { navigate } from '../lib/router';
 import { planMove, type PlannedMove } from './movePlan';
 import { haltingNodes, updateAllHaltedText } from './updateHalt';
 import { UpdateMoveSheet } from './UpdateMoveSheet';
-import { UPDATES_POLL_MS, isPlaceableInstant, nodeVersion, pendingTag, useUpdatesView } from './useUpdatesView';
+import {
+  UPDATES_POLL_MS, UPDATES_STALE_TEXT, isPlaceableInstant, nodeVersion, pendingTag, useUpdatesView,
+} from './useUpdatesView';
 import './fleet.css';
 import { Button } from '@ccrc/ui';
 
@@ -113,13 +115,15 @@ export function updateBannerText(view: UpdatesView, health?: FleetHealth | null)
   return `${release.tag} is out on ${release.channel} — ${summaryFromSides(sides)}.`;
 }
 
-export function UpdateBanner({ updates: injected, health = null, onMoved }: {
-  updates?: UpdatesView | null; health?: FleetHealth | null; onMoved?: () => void;
+export function UpdateBanner({ updates: injected, health = null, onMoved, stale: staleInjected = false }: {
+  updates?: UpdatesView | null; health?: FleetHealth | null; onMoved?: () => void; stale?: boolean;
 } = {}): ReactNode {
   // Polls only when nothing was injected: FleetScreen polls once for the whole
   // screen; the standalone shape (tests, any other mount) still self-polls.
   const polled = useUpdatesView(injected === undefined ? UPDATES_POLL_MS : 0);
   const view = injected === undefined ? polled.view : injected;
+  // Wave 19, R24(b): a later poll failed and the view is the last answer that landed — said, never a gate.
+  const stale = injected === undefined ? polled.view !== null && polled.failure !== null : staleInjected;
   // The move being confirmed — a plan taken at the tap, so a poll landing
   // while the sheet is open cannot change the list under a thumb.
   const [move, setMove] = useState<PlannedMove | null>(null);
@@ -137,6 +141,7 @@ export function UpdateBanner({ updates: injected, health = null, onMoved }: {
         <div className="update-banner" role="status">
           <span className="update-banner-msg">{text}</span>
           {halted !== null && <span className="update-banner-msg" id={haltedId}>{halted}</span>}
+          {stale && <span className="update-banner-msg" aria-hidden="true">{UPDATES_STALE_TEXT}</span>}
           <div className="update-banner-actions">
             <Button
               variant="ghost"

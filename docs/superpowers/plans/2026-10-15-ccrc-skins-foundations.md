@@ -36,7 +36,7 @@
 | Task 11 (gated) | scaffolded secondary screens; radii lg 14, xl 20 | dense scaffold |
 | Task 12a | unchanged: `AUTO` resolves to Refined everywhere while B is a preview | the same |
 | Task 12b (gated) | a Layout picker, and the fonts' licence line under it | the same |
-| Task 13 | native controls in the accent; themed scrollbars; padded full-width buttons; the wordmark never wraps; "ago" said once; one focus cue on a text field; Accounts prose in sans | the same |
+| Task 13 | native controls in the accent; themed scrollbars; padded full-width buttons; "ago" said once; one focus cue on a text field; Accounts prose in sans (the wordmark's wrap moved to W2's shells, 2026-10-16) | the same |
 | Task 14 | pixel-identical to `main` (every role equals the step it replaces) | rows, controls, chips and meta take Instrument's density and type |
 | Task 14b (gated) | pixel-identical | the app sheets' rows, chips and sheet copy, sheet bodies and option rows take them too |
 | Task 15 | unchanged (a store and a model, no UI) | the same |
@@ -64,7 +64,7 @@ Measured on 2026-10-15 from each branch's diff against `origin/main`. **A file i
 1. **`contrast.test.ts` and `audit.mjs` are frozen.** That freezes the contrast gate's census of colour-bearing rules (`GRANDFATHERED_UNCOVERED`, which reds on an added identity *and* on a stale one) and its grounds registries.
    - So, until #402 and drawer stage 1 merge, no task may add, rename or remove a colour-bearing rule those name. The retired ones include `.wordmark`, `.acct-pct`, `.mail-title`, `.runs-title`, `.accounts-title`, the `.archive-*` rows and the empty states.
    - Every task here that edits a stylesheet runs `contrast.test.ts` alone before its PR. If that suite names an identity the change added or made stale, the step STOPs and the work moves behind the gate. It is never fixed by editing the frozen file.
-   - An identity is a rule's selector (`audit.mjs`'s `ruleKey`). So a non-colour declaration added to an existing rule, such as Task 13's `white-space` on `.wordmark`, leaves the census as it was. Removing a rule, renaming its selector, or adding a `color` to a new one does not.
+   - An identity is a rule's selector (`audit.mjs`'s `ruleKey`). So a non-colour declaration added to or changed in an existing rule, such as Task 13's `font-family` on `.accounts-projection`, leaves the census as it was. Removing a rule, renaming its selector, or adding a `color` to a new one does not.
 2. **The censuses are frozen.** `control-census.test.ts`, `shape-census.test.ts` and `markup-census.test.ts` are each being edited in flight. A new control is built from the primitives (`Button`, `ListRow`, `BareRow`, `Door`, `TextInput`), never hand-drawn, so no census needs a new registry entry.
 
 ## Landing order
@@ -132,7 +132,7 @@ Every task's requirements include this section. `CLAUDE.md` is the authority; th
 | `ui/src/styles/skins.css` | **Create** | `:root[data-skin='instrument']` and its media blocks: Instrument's token values, no colour | 1, 5, 11 |
 | `ui/src/styles/tokens.css` | Modify | `:root` gains the role tokens with Refined's values, `--fs-md` and `--ls-tight` (Task 1); meter tokens (5); `--ink-on-danger` (6); the Geist stacks (7); `--bg-hover` and `--bg-pressed` (9); Refined's radii (11). The generated block is regenerated in Tasks 4, 6 and 9. | 1, 4–7, 9, 11 |
 | `ui/src/styles/theme.css` | Modify | imports `skins.css` (1) and `fonts.css` (7) after `tokens.css`; maps the new tokens | 1, 6, 7, 9 |
-| `ui/src/lib/cn.ts` | Modify | the merge learns the new utilities: the font-size group gains `md`, `ui`, `prose`, `meta`, `page` and `section`; the spacing scale gains `gutter`, `row`, `card` and `section` | 1 |
+| `ui/src/lib/cn.ts` | Modify | the merge learns the new utilities: the font-size group gains `md`, `ui`, `prose`, `meta`, `title` and `section`; the spacing scale gains `gutter`, `row`, `card` and `section` | 1 |
 | `ui/src/styles/fonts.css` | **Create** | the two `@font-face` rules | 7 |
 | `ui/src/fonts/Geist-Variable.woff2`, `GeistMono-Variable.woff2`, `OFL.txt` | **Create** | the vendored Geist pair and its licence | 7 |
 | `pwa/public/licenses/Geist-OFL.txt` | **Create** | the licence as shipped with the app (a bound copy) | 7 |
@@ -166,7 +166,7 @@ Every task's requirements include this section. `CLAUDE.md` is the authority; th
 | `pwa/src/styles/base.css` | Modify | `accent-color` and `scrollbar-color` from the palette | 13 |
 | `pwa/src/fleet/AccountMeterRow.tsx`, `AccountRow.tsx` | Modify | both draw through `Meter`, keeping their hook classes | 5 |
 | `pwa/src/screens/AccountsScreen.tsx` | Modify | a disabled lane's meter takes `off` (5); the scaffold (11) | 5, 11 |
-| `pwa/src/fleet/fleet.css` | Modify | the meter's colour, height and radius rules go (5); `.sess-line:hover` and the tint-plus-rail selected row (9); retired screen heads (11); the wordmark's `nowrap` and the Accounts prose in sans (13); the roles on rows, chips and sheet copy (14b, after drawer stage 1) | 5, 9, 11, 13, 14b |
+| `pwa/src/fleet/fleet.css` | Modify | the meter's colour, height and radius rules go (5); `.sess-line:hover` and the tint-plus-rail selected row (9); retired screen heads (11); the Accounts prose in sans (13); the roles on rows, chips and sheet copy (14b, after drawer stage 1) | 5, 9, 11, 13, 14b |
 | `pwa/src/styles/shell.css` | Modify | `.shell-accounts .acct-meter`'s height rule goes (5); the roles (14b, after drawer stage 1) | 5, 14b |
 | `pwa/src/session/chat.css` | Modify (after the ask sheet half and drawer stage 1) | the roles (14b); the jump pill clears the last row (17) | 14b, 17 |
 | `pwa/src/fleet/FleetHostBanner.tsx` | Modify | Reboot becomes `danger-ghost`, its confirm `danger` | 6 |
@@ -229,12 +229,13 @@ Every Modify path above exists at `a3cebde1` (checked when this plan was written
   - `--row-h: 44px` in the bare block, and `32px` only inside `@media (pointer: fine)`. A device reporting `pointer: none` or `coarse` keeps 44, so the dense value fails toward the tap floor, never away from it;
   - `--dur-fast`, `--dur-base` and `--dur-slow` at 120ms, inside `@media (prefers-reduced-motion: no-preference)` only.
 - **Nothing reads the roles yet.** No existing component consumes a type or density role until Task 14, so in this task Instrument differs only in radii, card elevation and motion (spec §4.2).
-- `theme.css`: `@import './skins.css';` directly after `@import './tokens.css';`. Map `--text-md`, `--text-ui`, `--text-prose`, `--text-meta`, `--text-page`, `--text-section`, `--spacing-gutter`, `--spacing-row`, `--spacing-card` (`--pad-card`) and `--spacing-section` (`--gap-section`) onto their tokens.
+- `theme.css`: `@import './skins.css';` directly after `@import './tokens.css';`. Map `--text-md`, `--text-ui`, `--text-prose`, `--text-meta`, `--text-title` (`--fs-page`), `--text-section`, `--spacing-gutter`, `--spacing-row`, `--spacing-card` (`--pad-card`) and `--spacing-section` (`--gap-section`) onto their tokens.
+  - **Corrected in review (2026-10-15):** rev 1 of this step mapped the page title as `--text-page`. `page` is already `--color-page`'s key, and Tailwind's `text-*` reads `--color-*` as well as `--text-*`, so `text-page` compiled to `color: var(--bg-page)` and never to a size. The key is `title`; the token keeps the name `--fs-page`. `skin-catalogue.test.ts` compiles every key `theme.css` maps, and every key of Tailwind's own theme, through every utility that reads it, and reds on a key another namespace claims, whichever side loses.
 - **`cn.ts` learns every new key** in the same change. Without it, tailwind-merge places an unknown utility by its prefix. Measured with `cn.ts`'s own config on tailwind-merge 3.7.0:
-  - `cn('text-ink-primary', 'text-meta')` returns `"text-meta"`, and the same holds for `text-ui` and `text-page`. The ink is deleted.
+  - `cn('text-ink-primary', 'text-meta')` returns `"text-meta"`, and the same holds for `text-ui` and `text-title`. The ink is deleted.
   - `cn('p-4', 'p-gutter')` and `cn('h-8', 'h-row')` keep both classes, so they never dedupe.
 
-  So the `font-size` group gains `md`, `ui`, `prose`, `meta`, `page` and `section`, and the merge's `theme.spacing` gains `gutter`, `row`, `card` and `section`. One theme entry covers `p`, `px`, `gap`, `m`, `h` and `min-h` at once (measured). The header's "seven class strings lost a utility" paragraph gains this case.
+  So the `font-size` group gains `md`, `ui`, `prose`, `meta`, `title` and `section`, and the merge's `theme.spacing` gains `gutter`, `row`, `card` and `section`. One theme entry covers `p`, `px`, `gap`, `m`, `h` and `min-h` at once (measured). The header's "seven class strings lost a utility" paragraph gains this case.
 - `pwa/src/lib/skin.ts`, modelled on `lib/theme.ts`:
   - `storedSkin()` and `rememberSkin()`, both inside try/catch;
   - `setSkin(id)`: apply, remember, notify;
@@ -259,7 +260,7 @@ Every Modify path above exists at `a3cebde1` (checked when this plan was written
   - "the index.html pre-paint snippet renders what initSkin renders". The test extracts the snippet text from `index.html` and runs it with `new Function` against a stub `localStorage`, for `instrument`, `refined`, missing, garbage and a throwing store. For a known id both stamp it. For missing or throwing both stamp `refined`. For garbage the snippet stamps it verbatim, the test asserts that no `skins.css` block answers it (so the frame is `:root`), and `initSkin` then stamps `refined`.
   - "the snippet names SKIN_STORAGE_KEY and REFINED, and no other skin id" (the bound literals).
 - [ ] **Step 1 (cont.).** `utility-pairs.test.ts`, in its "every class string survives the merge that renders it" describe:
-  - "an ink survives beside every new size key": `cn('text-ink-primary', 'text-<k>')` keeps both, for each of `md`, `ui`, `prose`, `meta`, `page` and `section`. Red: the ink is dropped.
+  - "an ink survives beside every new size key": `cn('text-ink-primary', 'text-<k>')` keeps both, for each of `md`, `ui`, `prose`, `meta`, `title` and `section`. Red: the ink is dropped.
   - "a new spacing key replaces its scale twin": `cn('p-4', 'p-gutter')` is `"p-gutter"`, `cn('min-h-[52px]', 'min-h-row')` is `"min-h-row"`, and `cn('gap-2', 'gap-section')` is `"gap-section"`. Red: both kept.
 - [ ] **Step 2: Green.** Implement the shape above. `cd ui && npm run themes:check` stays green: the generated block is untouched.
 - [ ] **Step 3: Mutation table, RUN.**
@@ -981,9 +982,13 @@ The two Phosphor palettes pass as hand-tuned (measured ΔL 0.294 and 0.274; step
 
 ### Task 13: the audit's quick wins (B0) — lands now
 
-**Routing:** band 1 for items 1 to 5 and 7; band 2 for item 6. **Needs:** nothing. **Frozen files touched:** none. **Deviation number:** none of its own. Each item fixes a measured defect against a rule the tree already states. Item 6 reverses a recorded choice and cites D-5101's focus clause.
+**Routing:** band 1 for items 1 to 3, 5 and 7; band 2 for item 6. **Needs:** nothing. **Frozen files touched:** none. **Deviation number:** none of its own (D-5159 was issued while executing it; see §Deviations). Each item fixes a measured defect against a rule the tree already states. Item 6 reverses a recorded choice and cites D-5101's focus clause.
 
-**Census safety.** Items 4 and 7 add a non-colour declaration to three existing `fleet.css` rules, all of them `GRANDFATHERED_UNCOVERED` keys (`.wordmark`, `.accounts-projection`, `.accounts-disabled-note`). The census keys rules by selector, so it does not move (§In flight). Items 1 and 2 add a rule that sets no `color`: `audit.mjs`'s `declOf` matches `color` only after `;`, whitespace or the body's start, so `accent-color` and `scrollbar-color` are not read as one. Each rule touched here stays under four declarations, which the frozen shape census does not cluster. Run both alone before the PR. A red is a STOP.
+**Item 4 dropped, 2026-10-16 (coordinator ruling, review round 3).** Task 13 ships six items; the wordmark's `nowrap` and the fleet-head compaction built for it are reverted, with their cases, and the head is `main`'s.
+- **Why.** Unwrapped, the wordmark is 68px where the wrapped one was 48, and in the fleet head (a phone's, or the desktop sidebar's) those 20px came out of the door group and the count readout. Review measured both costs. The head grew taller with real head contents that the default fixture did not show: with the pool-lag readout it went from 67 to 111px at 438, and with a long count from 67 to 92px at 1470. And at 1920 the wordmark sat 3px from the count readout, where `main` leaves 23. A compaction tuned to one count string could not hold the ruling that the head must not grow.
+- **Re-scoped to W2's shells.** W2 moves the wordmark out of the sidebar, into Refined's app bar and Instrument's rail (every shell renders `Wordmark`: spec §3.1, D-5094). Whether it can wrap is then a question about the slot it lands in, so W2 answers it there. Until then the audit's defect stands on `main`: in a narrow fleet head the caret can sit above `ccrc`.
+
+**Census safety.** Item 7 changes a non-colour declaration in two existing `fleet.css` rules, both of them `GRANDFATHERED_UNCOVERED` keys (`.accounts-projection`, `.accounts-disabled-note`). The census keys rules by selector, so it does not move (§In flight). Items 1 and 2 add a rule that sets no `color`: `audit.mjs`'s `declOf` matches `color` only after `;`, whitespace or the body's start, so `accent-color` and `scrollbar-color` are not read as one. Each rule touched here stays under four declarations, which the frozen shape census does not cluster. Run both alone before the PR. A red is a STOP.
 
 **Files:** Modify `pwa/src/styles/base.css`, `ui/src/primitives/button.tsx`, `ui/src/primitives/text-input.tsx`, `pwa/src/fleet/fleet.css`, `pwa/src/screens/AuthSection.tsx`, `pwa/test/focus-ring.test.ts`, `pwa/test/fleet-css.test.ts`, `pwa/test/auth-passkey.test.tsx` and `pwa/test/primitives.test.tsx`. Create `pwa/test/base-defaults.test.ts`.
 
@@ -994,7 +999,7 @@ The two Phosphor palettes pass as hand-tuned (measured ΔL 0.294 and 0.274; step
 | 1 | native checkboxes and radios draw in the browser's blue | a new `html { accent-color: var(--accent); … }` rule in `base.css` | "html takes accent-color from --accent" (base-defaults) | delete the declaration |
 | 2 | scrollbars are the browser's grey for the mode | the same rule gains `scrollbar-color: var(--edge-strong) transparent`, which inherits into every scroll container | "html takes scrollbar-color from palette tokens, with no colour literal but `transparent`" (base-defaults) | write the thumb as `#888` |
 | 3 | a full-width `Button` has no side padding | `size: { full: 'w-full px-4' }` | "a full-width Button carries side padding" (primitives) | drop `px-4` |
-| 4 | the wordmark can wrap between `❯` and `ccrc` | `.wordmark` gains `white-space: nowrap` | "the wordmark never wraps" (fleet-css) | delete it |
+| 4 | the wordmark can wrap between `❯` and `ccrc` | **Dropped 2026-10-16** (above): moved to W2's shells. ~~`.wordmark` gains `white-space: nowrap`~~ | — | — |
 | 5 | "added 5m ago ago" in the passkey list | `AuthSection.tsx`'s two sites stop appending " ago" to `formatAge`, which already says "…ago" or "just now" | "a passkey enrolled 5 minutes ago reads 'added 5m ago'; one used just now reads 'last used just now'" (auth-passkey) | restore " ago" at one site |
 | 6 | a focused text field draws two cues | `TEXT_INPUT` drops `focus:border-phosphor` and keeps `FOCUS_RING`, the cue every other control draws and the one `base.css` draws in the app anyway; `SELECT` inherits it. The field's comment is rewritten. | "a text field draws one focus cue: TEXT_INPUT carries FOCUS_RING and no `focus:border-*`" (focus-ring) | restore `focus:border-phosphor` |
 | 7 | two Accounts prose sentences are set in mono | `.accounts-projection` and `.accounts-disabled-note` take `var(--family-ui)`; `.accounts-fresh` ("last reported 5m ago") is a readout and stays mono | "the Accounts screen's prose is sans and its readouts stay mono" (fleet-css) | `.accounts-projection` back to mono |
@@ -1004,11 +1009,11 @@ Item 6's alternative was a border-only cue. That would need `base.css`'s blanket
 Item 2's one hazard: Chrome lets the standard scrollbar properties win over `::-webkit-scrollbar`. The tree's only such rule, `.term-keys-seq`, also sets `scrollbar-width: none`, so the key bar's scrollbar stays hidden. Check it at 1440.
 
 - [ ] **Step 1: Red.** Each case in the table, seen red for the reason named.
-- [ ] **Step 2: Green.** The seven fixes.
+- [ ] **Step 2: Green.** The six fixes (item 4 dropped).
 - [ ] **Step 3: Mutation table, RUN** (the table's last column).
 - [ ] **Step 4: Per width and per skin.**
   - **Both skins, both Phosphor palettes, and Dracula and GitHub Light** (item 2 is palette colour): scrollbars at 1440 and 1920 take the palette's strong edge; phones keep their overlay scrollbars. Settings' toggles and radios, where native, draw in the accent.
-  - **360:** the wordmark stays on one line, and the head's door group wraps no more than today (D-3303's budget). Full-width sheet buttons with long labels wrap inside 16px of padding.
+  - **360:** full-width sheet buttons with long labels wrap inside 16px of padding.
   - **The sign-in cover at 390 and 1440:** the focused passphrase shows one ring.
   - **Accounts at 390 and 1440:** the projection and the disabled note read in sans; timestamps and percentages stay mono.
 - [ ] **Step 5: Verify.**
@@ -1226,7 +1231,7 @@ Mark it ✓, or write the defect and its fix.
   - **Values.** `refined` (A) is `:root`'s token values, so an absent attribute renders Refined. `instrument` (B) is `:root[data-skin='instrument']` in `ui/src/styles/skins.css`, imported by `theme.css` directly after `tokens.css`. Its (0,2,0) specificity outranks every palette block, so no source order decides a tie. Instrument's `--row-h` is 44, and 32 only inside `(pointer: fine)`.
   - **Stamped always,** unlike Phosphor's palette, which is stamped by absence. The boot path tells "no choice" from "Refined", and W2's skin stylesheets select on their own classes. Recorded because it departs from `applyTheme`'s convention. The pre-paint snippet stamps a stored value verbatim on the theme snippet's terms, and never re-lists the catalogue's ids.
   - **The catalogue** (`SKINS`, `SKIN_STORAGE_KEY = 'ccrc-skin'`, `SKIN_TOKENS`, `resolveSkin`, `applySkin`) lives in `ui/src/styles/skins.ts`. The app's half (`storedSkin`, `setSkin`, `initSkin`, `useSkin`) lives in `pwa/src/lib/skin.ts`. A pre-paint stamp in `pwa/index.html` is bound to the storage key by test.
-  - **The merge learns the new utilities.** `ui/src/lib/cn.ts`'s font-size group gains `md`, `ui`, `prose`, `meta`, `page` and `section`, and its spacing scale gains `gutter`, `row`, `card` and `section`. Untaught, tailwind-merge 3.7.0 deletes the ink beside `text-meta` (measured with `cn.ts`'s own config). Pinned both ways in `utility-pairs.test.ts`.
+  - **The merge learns the new utilities.** `ui/src/lib/cn.ts`'s font-size group gains `md`, `ui`, `prose`, `meta`, `title` (the page title's key, never `page`, which is `--color-page`'s: Task 1) and `section`, and its spacing scale gains `gutter`, `row`, `card` and `section`. Untaught, tailwind-merge 3.7.0 deletes the ink beside `text-meta` (measured with `cn.ts`'s own config). Pinned both ways in `utility-pairs.test.ts`.
   - **The roles are adopted, pixel-neutral in Refined** (Task 14, the primitives; Task 14b, the app sheets, `Sheet`'s body and `OptionRow`, gated). A role replaces a scale step only where its Refined value equals that step, and a census (`role-census.test.ts`) refuses a scale size in a role-bearing primitive outside a reasoned allowlist. `ListRow`'s literal 52px becomes `--row-h`. Its header's argument against a token ("would imply the two numbers move together" with `--tap-min`) is answered: the role's floor is `--tap-min` everywhere but inside `(pointer: fine)`, held by D-5094's floor case. Until Task 14 lands, Instrument varies only radii, card elevation, motion and meters.
   - **Its verification clause** (Tasks 3 and 3b, folded in here by the 2026-10-15 ruling on the spec's O4). Storybook takes its initial skin from `STORYBOOK_SKIN`, and its viewport presets are the verification widths (360, 390, 438, 1280, 1470, 1920). After #402, the advisory `storybook-a11y` job builds and runs axe once per catalogue skin, and `ci-pipeline.test.ts` pins that its runs equal the catalogue's ids. Every foundations PR carries the skins × widths × modes matrix (§Acceptance). No per-skin contrast run is needed, because a skin carries no colour (D-5094).
   - **One data model:** skins contribute layout components chosen by `useSkin()` (spec §5), never forked logic.
@@ -1295,3 +1300,27 @@ Mark it ✓, or write the defect and its fix.
   - **The session facts (F6):** a pure model (`pwa/src/session/sessionFacts.ts`) reads `FleetSession.version` and `usage.cost` (US dollars, the statusline's `cost.total_cost_usd`) with `usage.stale`. A missing or null value is unmeasured, never `$0.00`.
   - **No wire change:** the frame and both fields already cross the wire. No new frame, field or `FLEET_PROTO` bump.
   - **Their UI halves are gated** on #402's `FleetScreen.tsx` (the integrity strip) and `SessionHeader.tsx` (version and cost). They then move into W2's status bar and inspectors. A later plan places them, citing this number.
+
+### Found while executing Task 1
+
+A worker never allocates: it names a departure by slug in its report, and the coordinator allocates through `POST /api/ledger/deviations` and defines it here, once, in the PR that introduces it. Task 1 named two, issued 2026-10-15.
+
+- **D-5157** — `theme-catalogue-initial-globals-pin` (Task 1): `pwa/test/theme-catalogue.test.ts`'s case "defaults to the same palette the app defaults to" pinned the whole literal `initialGlobals: { theme: PHOSPHOR }` in `ui/.storybook/preview.ts`. The skin axis puts a second global in that object (`skin: REFINED`), so the literal could not survive Task 1. The case now pins the theme's own entry inside the object (`/initialGlobals:\s*\{[^}]*\btheme:\s*PHOSPHOR\b/`) and leaves the skin's entry to `skin-catalogue.test.ts`, which runs the preview's decorators and asserts `initialGlobals.skin` is `refined`. Its intent is unchanged: a Storybook theme default other than Phosphor still reds (measured). Departs Task 1's file list, which names no edit to `theme-catalogue.test.ts` (Step 5 only runs it). Nothing in flight freezes the file.
+- **D-5158** — `ds-boundary-not-vocabulary-card` (Task 1): `design-system-boundary.test.ts`'s hook-class census ("completes every hook class @ccrc/ui emits") reads every single-quoted literal in `ui/src` as a class the package emits, and intersects that set with every class a stylesheet selects. `cn.ts`'s new spacing-theme name `'card'` (the `--pad-card` role's key, which tailwind-merge needs bare to place `p-card`, `px-card` and the rest) meets `fleet.css`'s own `.card` rule there, and so reads as an unowned hook class. It is registered in `NOT_VOCABULARY` with that reason: a merge-config name that is never emitted as a class. It is not added to `OWNED`, which would refuse the app's own `card` class (`FleetScreen.tsx` writes it). The registry's stale-entry case keeps it honest, because the entry reds once `card` leaves the intersection. A later task that teaches `cn.ts` a name an app stylesheet also selects meets the same census and registers it the same way. Departs §Global constraints' boundary bullet, which foresaw only cva-emitted classes joining `OWNED`, and Task 1's file list. The file is in the plan's follow-the-change row.
+
+### Found while executing Task 3
+
+A worker never allocates: it names a departure by slug in its report, and the coordinator allocates through `POST /api/ledger/deviations` and defines it here, once, in the PR that introduces it. Task 3 named one, issued 2026-10-16.
+
+- **D-5244** — `storybook-static-glob-ignored` (Task 3): `ui/.gitignore`'s `storybook-static/` becomes `storybook-static*/`. Step 5's second build writes `ui/storybook-static-instrument/` (`-o storybook-static-instrument`, as `ui/README.md` now gives it), which the old pattern left untracked in every worktree that ran it. The glob ignores both outputs and any later per-skin directory. Departs Task 3's file list, which names no edit to `ui/.gitignore`. No test reads the file, and nothing in flight edits it.
+
+### Found while executing Task 13
+
+A worker never allocates: it names a departure by slug in its report, and the coordinator allocates through `POST /api/ledger/deviations` and defines it here, once, in the PR that introduces it. Task 13 named one, issued 2026-10-15.
+
+- **D-5159** — `scrollbar-thumb-contrast` (Task 13's item 2): the scrollbar thumb is a fitted token, `--scrollbar-thumb`, not `--edge-strong` as item 2 wrote it.
+  - **Measured:** a hairline carries no contrast claim (tokens.css: "Decorative — no contrast claim"), and as the thumb it read 1.03 in One Dark and 1.06 in Solarized Light over page, surface and raised, 2.60 at best (Dracula). Captured at 1440, Solarized Light's thumb did not show at all where the browser's own grey had. Once an author sets `scrollbar-color`, the thumb is a graphical object the page drew, owed 3:1 (WCAG 2.1 SC 1.4.11).
+  - **Its grounds:** the track stays `transparent`, so the thumb sits on whatever its scroll container paints: the page, a surface, a raised field, a sheet, or a well (`Well`, code blocks, tool output), which is dark in every palette, the light ones included. A light palette needs a mid-tone that clears its white grounds and its near-black well at once, and no ink does: `--ink-tertiary` reads 1.08 (GitHub Light), 2.05 (Catppuccin Latte) and 2.51 (Solarized Light) on the well. A search over two-token `color-mix` blends of the five inks, both hairlines and three grounds, in 5% steps, found none that clears all five grounds in all twelve palettes; only blends with the idle dot did.
+  - **The derivation:** `--scrollbar-thumb: var(--status-idle)`, declared once in `:root` and re-resolved by every palette, like `--status-dead-tint-solid`. The idle lamp's matte grey is the one token already fitted to exactly this contract: the generator fits every status dot to 3:1, plus margin, against surface, page, raised and the well, and the gate holds Phosphor's two hand-tuned values to it. Measured as the thumb: 3.10 at worst (Solarized Dark, on raised), 3.14 on a light well (GitHub Light). It is matte, so it never glows, and grey in every palette, so it reads as chrome, not as a state. Never a per-palette hex tuned until the numbers pass.
+  - **Held by:** five `scrollbar thumb / <ground> (UI 3:1)` token pairs in `pwa/design/contrast-check.mjs`, in every palette; and `pwa/test/base-defaults.test.ts`, which measures the token `html` names on all five grounds in all twelve palettes, and holds `--scrollbar-thumb` to one declaration, in `:root`, naming tokens and no colour literal.
+  - **Departs** item 2's `var(--edge-strong)` and its census-safety note ("the contrast gate gains no pair"): the gate gains sixty. It adds a `:root` token and edits `contrast-check.mjs`, neither in Task 13's file list. No generated value moves, and `contrast-check.mjs` is in no in-flight table.

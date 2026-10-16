@@ -11,8 +11,9 @@
 // rule asks `stampUnread` (D-4270). Every caller keeps its path, because `dispatch.ts` re-exports DETACH_CAP and
 // autoPermits.
 //
-// NOT HERE: `server/src/coord/store.ts`'s SQL (`haltingRowSql`) and JS (`rowHalts`) forms of the halt. They are
-// the store's own notion and are pinned equal to `isHalting` by `update-store-nodes.test.ts`.
+// Since wave 19 (R24(d), R26(b)) the store's JS form of the halt (`rowHalts`, `server/src/coord/store.ts`) calls
+// `isHaltingUpdate`, and the resolver's `autoGateBlockers` calls `carriesUpdateGate`. NOT HERE: the store's SQL form
+// (`haltingRowSql`), which SQL cannot call; `update-store-nodes.test.ts` pins it equal to `isHalting`.
 import {
   PROVENANCE_DETAIL_PREFIX, SETTLED_UPDATE_STATES, UPDATE_GATE_CAP, isReleaseTag, type AutoMode, type UpdateChannel,
 } from './api.js';
