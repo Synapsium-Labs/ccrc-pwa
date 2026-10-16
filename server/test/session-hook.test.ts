@@ -12041,9 +12041,9 @@ describe('history card line: SessionStart(compact) serves the sweep\'s predictio
   const NBSP_G = `${String.fromCharCode(0xa0)}${GENERATION}\n`;
   const BOM_G = `${String.fromCharCode(0xfeff)}${GENERATION}\n`;
   const EMSP_G = `${GENERATION}${String.fromCharCode(0x2003)}\n`;   // D-5064: U+2003 after G; glibc's UTF-8 [:space:] takes it
-  type Reg = 'G-lf' | 'G-ws' | 'blank-ws' | 'G-emsp' | 'G-nul' | 'G2-nul' | 'G2-nul-split' | 'nul-only' | 'G' | 'G2' | 'absent' | 'unreadable' | 'symlink-G' | 'junk' | 'G-wide' | 'G-nbsp' | 'empty' | 'blank-wide' | 'G2-wide-junk' | 'dangling';
+  type Reg = 'fifo' | 'G-lf' | 'G-ws' | 'blank-ws' | 'G-emsp' | 'G-nul' | 'G2-nul' | 'G2-nul-split' | 'nul-only' | 'G' | 'G2' | 'absent' | 'unreadable' | 'symlink-G' | 'junk' | 'G-wide' | 'G-nbsp' | 'empty' | 'blank-wide' | 'G2-wide-junk' | 'dangling';
   type Off = 'absent' | 'G' | 'G-padded' | 'G-wide' | 'G-nbsp' | 'G-bom' | 'G2' | 'empty' | 'unreadable' | 'dir' | 'symlink-G' | 'unsearchable' | 'parent-file' | 'G2-tabcr' | 'link-loop' | 'link-notdir' | 'link-000' | 'link-dangling' | 'G-nul';
-  type Rec = 'G-ws' | 'G-emsp' | 'G' | 'G2' | 'legacy' | 'absent' | 'junk' | 'symlink-G' | 'G-nul' | 'G-wide';
+  type Rec = 'fifo' | 'G-ws' | 'G-emsp' | 'G' | 'G2' | 'legacy' | 'absent' | 'junk' | 'symlink-G' | 'G-nul' | 'G-wide';
   /** B1's Presence, as a type-only import expression: this file gains no import line (the census cites it by line). */
   type Pres = import('../../ccd/history/lib.mjs').Presence<string>;
   /** A row is an AGREE row (the hook's verdict is the CLI's) unless its sixth cell reads 'fail-closed': the hook
@@ -12132,6 +12132,12 @@ describe('history card line: SessionStart(compact) serves the sweep\'s predictio
     // for empty would compare '' with G and serve. The window check withholds, as `.generation`'s does.
     ['a generation record padded past the read window, recall-off names G', '', 'absent', 'G', 'G-wide'],
     ['a generation record padded past the read window, recall-off is stale (fail-closed: the CLI recalls)', '', 'absent', 'G2', 'G-wide', 'fail-closed'],
+    // D-5063 (review 495 F1): the two readability guards decide ONLY a non-regular file, since the probes' `x=.` seed decides an
+    // absent or unreadable one. `.generation`'s `(( CT_RAWN >= CCRC_ID_MAX ))` and the record's `_ct_read … || return 0` each stop
+    // the probe's `<` from opening a FIFO, where it would block: SessionStart(compact) would hang to the hook timeout and the whole
+    // compact card be lost. These rows run bounded (the FIFO runner below), so a dropped guard reds on the bound, not by wedging.
+    ['a FIFO .generation is unusable: the hook returns at once and withholds (fail-closed: the CLI recalls)', '', 'fifo', 'G2', 'G', 'fail-closed'],
+    ['a FIFO generation record is no record: the hook returns at once and withholds', '', 'absent', 'G2', 'fifo'],
     // The safe direction, named (R-recalloff-parity): the hook drops the NUL and reads G, so it withholds; the CLI reads
     // 'G' + NUL, which is not the generation, so recall-off is stale there and the line is served.
     ['recall-off holds G and a NUL, the generation is G (fail-closed: the CLI recalls)', GENERATION, 'G', 'G-nul', 'G', 'fail-closed'],
@@ -12147,7 +12153,10 @@ describe('history card line: SessionStart(compact) serves the sweep\'s predictio
     ['the env generation wins over the record', GENERATION, 'absent', 'G2', 'G2'],
     ['the registry generation wins over the record', '', 'G', 'G2', 'G2'],
   ];
-  const parityRows = PARITY.filter(([, , r, o]) => !ROOT || (r !== 'unreadable' && o !== 'unreadable' && o !== 'unsearchable' && o !== 'link-000'))
+  const parityRows = PARITY.filter(([, , r, o, k]) => r !== 'fifo' && k !== 'fifo' && (!ROOT || (r !== 'unreadable' && o !== 'unreadable' && o !== 'unsearchable' && o !== 'link-000')))
+    .map(([what, env, r, o, k, kind]) => [what, env, r, o, k, kind ?? 'agree'] as const);
+  /** The FIFO rows stay in PARITY (CONTROL and the CLI model cover them) but run through `fifoServed`, which bounds the spawn. */
+  const fifoRows = PARITY.filter(([, , r, , k]) => r === 'fifo' || k === 'fifo')
     .map(([what, env, r, o, k, kind]) => [what, env, r, o, k, kind ?? 'agree'] as const);
   /** The text each Reg kind plants in $REG/<id>.generation (the CLI reads the same text through presenceOf's trim). */
   const REG_TEXT: Partial<Record<Reg, string>> = {
@@ -12161,6 +12170,7 @@ describe('history card line: SessionStart(compact) serves the sweep\'s predictio
     if (regKind in REG_TEXT) fs.writeFileSync(genFile, REG_TEXT[regKind]!);
     if (regKind === 'unreadable') { fs.writeFileSync(genFile, GENERATION); fs.chmodSync(genFile, 0o000); }
     if (regKind === 'dangling') fs.symlinkSync(path.join(home, 'gen-nowhere'), genFile);
+    if (regKind === 'fifo') execFileSync('mkfifo', [genFile]);   // removed with the fixture HOME; nothing ever opens it but a guard-less hook
     if (regKind === 'symlink-G') { fs.writeFileSync(path.join(home, 'gen-target'), GENERATION); fs.symlinkSync(path.join(home, 'gen-target'), genFile); }
     const off = histDir('recall-off', ID);
     if (offKind === 'parent-file' || offKind.startsWith('link-')) fs.rmSync(histDir('recall-off'), { recursive: true, force: true });
@@ -12199,6 +12209,7 @@ describe('history card line: SessionStart(compact) serves the sweep\'s predictio
     if (recKind === 'G-nul') fs.writeFileSync(rec, `${GENERATION}\0\n`);
     if (recKind === 'G-wide') fs.writeFileSync(rec, `${' '.repeat(130)}${GENERATION}\n`);
     if (recKind === 'G-emsp') fs.writeFileSync(rec, EMSP_G);
+    if (recKind === 'fifo') execFileSync('mkfifo', [rec]);
     if (recKind === 'G-ws') fs.writeFileSync(rec, ` \t\r${GENERATION}\v\f \r\n`);
     if (recKind === 'legacy') fs.writeFileSync(rec, '\n');
     if (recKind === 'junk') fs.writeFileSync(rec, 'not-a-generation\n');
@@ -12246,20 +12257,40 @@ describe('history card line: SessionStart(compact) serves the sweep\'s predictio
     expect([NBSP_G, BOM_G].map((t) => t.trim()), 'the CLI reads both as the generation').toEqual([GENERATION, GENERATION]);
   });
 
-  it.each(parityRows)('C19/C68 (card half), recall-off parity: %s', (_what, envGen, regKind, offKind, recKind, kind) => {
+  /** One parity row: plant it, then assert the hook's answer against the CLI's own decision over the fixture. */
+  const parityCase = (serve: (envGen: string) => string | null, envGen: string, regKind: Reg, offKind: Off, recKind: Rec, kind: string): void => {
     plantAll();
     plantParity(regKind, offKind, recKind);
     try {
       const verdict = cliVerdict(envGen, regKind, offKind, recKind);
       // R-recalloff-parity: never LINE where the CLI refuses; a fail-closed row withholds where the CLI serves.
-      expect(served(start(), { CCRC_SESSION_GENERATION: envGen }), `the CLI reads ${verdict}${kind === 'fail-closed' ? ' (fail-closed)' : ''}`)
+      expect(serve(envGen), `the CLI reads ${verdict}${kind === 'fail-closed' ? ' (fail-closed)' : ''}`)
         .toBe(serves(verdict) && kind === 'agree' ? LINE : null);
     } finally {
       for (const f of [reg(`${ID}.generation`), histDir('recall-off'), histDir('recall-off', ID), path.join(home, 'off-root')]) {
         try { fs.chmodSync(f, 0o700); } catch { /* absent or a symlink */ }
       }
     }
+  };
+  it.each(parityRows)('C19/C68 (card half), recall-off parity: %s', (_what, envGen, regKind, offKind, recKind, kind) => {
+    parityCase((g) => served(start(), { CCRC_SESSION_GENERATION: g }), envGen, regKind, offKind, recKind, kind);
   });
+
+  // The FIFO rows' runner (D-5063): `served` goes through `runFull`, whose spawnSync has no timeout, and a hook blocked on a FIFO's
+  // open is a sync call vitest's test timeout cannot interrupt. C21's numbers: a 20 s spawn with SIGKILL, a 30 s test above it. A killed
+  // run has status null, so the exit-0 assertion reds it as "the hook blocked", and it never reads as the no-line answer.
+  const fifoServed = (envGen: string): string | null => {
+    const r = spawnSync('bash', [HOOK], {
+      input: JSON.stringify(start()), encoding: 'utf8', timeout: 20_000, killSignal: 'SIGKILL',
+      env: hookEnv({ ...HISTORY_HOOK_SCRUB, CCRC_SESSION_GENERATION: envGen }),
+    });
+    expect(r.status, 'the hook blocked on a FIFO (exit 0 within 20 s is its contract)').toBe(0);
+    expect(r.stderr, 'the hook is silent on stderr').toBe('');
+    return r.stdout === '' ? null : card(r.stdout);
+  };
+  it.each(fifoRows)('C19/C68 (card half), recall-off parity: %s', (_what, envGen, regKind, offKind, recKind, kind) => {
+    parityCase(fifoServed, envGen, regKind, offKind, recKind, kind);
+  }, 30_000);
 
   it.each([
     ['POSIXLY_CORRECT=1', { POSIXLY_CORRECT: '1' }],
