@@ -2720,4 +2720,103 @@ describe('verify-service.sh tells a deliberate supervisor stop from a crash (wav
     expect(verify).toContain('_svc_real_home');
     expect(verify).toMatch(/range is collation-dependent\s+# under some UTF-8 locales/);
   }, 30_000);
+
+  // ── wave 16, R18(a) (D-5137, D-5138) ─────────────────────────────────────
+  const UNSEARCHABLE = '## ~/.cc-sessions cannot be searched (no x permission), so ccd\'s stop stamp and registry row cannot be '
+    + 'read — a deliberate stop cannot be told from a crash';
+  const isRoot = (process.getuid?.() ?? 1) === 0;
+  /** The settle's exact query order: the check's is-active, its MainPID, the window's is-active, then the classifier's
+   *  own is-active (its settle read). The `-x` refusal comes AFTER the fourth (D-5137; Reading 4). */
+  const SETTLED = (u: string): string[] => [
+    `systemctl --user is-active ${u}`,
+    `systemctl --user show -p MainPID --value ${u}`,
+    `systemctl --user is-active ${u}`,
+    `systemctl --user is-active ${u}`,
+  ];
+
+  // Root ignores mode bits, so the plant would not be unsearchable there. The mode is restored in `finally`: a 0600
+  // directory would defeat the fixture's own cleanup.
+  it.skipIf(isRoot).each([
+    ['a stamped stop with its row kept', { 'demo-gone.uuid': 'u', 'demo-gone.stopped': '1791151850 ccd' }],
+    ['an empty registry', {}],
+  ] as const)('V31: an unsearchable registry (%s) is not a purged row — the unit fails, and says why (D-5137)', (_label, files) => {
+    const home = fixtureHome(); plantReg(home, files);
+    const reg = path.join(home, '.cc-sessions');
+    chmodSync(reg, 0o600);
+    try {
+      const r = runVerify(stubs({ isActive: ['active', 'inactive', 'inactive'], mainPid: ['4242'] }), U, { home });
+      expect(r.code, `stdout:\n${r.stdout}\nstderr:\n${r.stderr}`).toBe(1);
+      expect(r.stdout).not.toContain('stopped on purpose');
+      expect(r.stderr.split('\n')).toContain(UNSEARCHABLE);
+      expect(r.stderr).toContain("became 'inactive'");
+      expect(nLoadState(r.calls), 'the purged arm was never reached').toBe(0);
+      expect(r.calls.trim().split('\n').slice(0, 4), 'the -x test sits after the settle (D-5137)').toEqual(SETTLED(U));
+    } finally {
+      chmodSync(reg, 0o755);
+    }
+  }, 30_000);
+
+  it('V31b: a searchable registry never prints that cause (V5\'s hand stop)', () => {
+    const home = fixtureHome(); plantReg(home, { 'demo-gone.uuid': 'u' });
+    const r = runVerify(stubs({ isActive: ['active', 'inactive', 'inactive'], mainPid: ['4242'] }), U, { home });
+    expect(r.code).toBe(1);
+    expect(r.stderr).not.toContain('cannot be searched');
+  }, 30_000);
+
+  it('V31c: a STOP_WHY in the caller\'s environment never prints a cause line (a crash; D-5137)', () => {
+    const home = fixtureHome(); plantReg(home, {});
+    const r = runVerify(stubs({ isActive: ['active', 'active'], mainPid: ['4242', '5151'] }), U,
+      { home, env: { STOP_WHY: 'planted' } });
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain('CRASH-LOOPING');
+    expect(r.stderr).not.toContain('## planted');
+  }, 30_000);
+
+  /** A stub `sleep` that records its argument and, when it is the distinctive STOP_INTERVAL 7, acts on the registry:
+   *  the second half of a purge (`rm` the uuid), a stamp landing, or nothing. */
+  const sleepActing = (dir: string, home: string, act: 'purge' | 'stamp' | 'none'): void => {
+    const reg = path.join(home, '.cc-sessions');
+    const action = act === 'purge' ? `rm -f ${JSON.stringify(path.join(reg, 'demo-gone.uuid'))}`
+      : act === 'stamp' ? `printf '%s\\n' '1791151850 ccd' > ${JSON.stringify(path.join(reg, 'demo-gone.stopped'))}`
+        : ':';
+    writeFileSync(path.join(dir, 'sleep'),
+      `#!/bin/sh\nD=${JSON.stringify(dir)}\nprintf '%s\\n' "$1" >> "$D/sleeps"\n[ "$1" = 7 ] && ${action}\nexit 0\n`,
+      { mode: 0o755 });
+  };
+  const sleeps = (dir: string): string[] => readFileSync(path.join(dir, 'sleeps'), 'utf8').trim().split('\n');
+
+  it('V32: a purge caught between its two unlinks is re-read once, STOP_INTERVAL later, and passes as purged (D-5138)', () => {
+    const home = fixtureHome(); plantReg(home, { 'demo-gone.uuid': 'u' });
+    const dir = stubs({ isActive: ['active', 'inactive', 'inactive'], mainPid: ['4242'] });
+    sleepActing(dir, home, 'purge');
+    const r = runVerify(dir, U, { home, env: { CCRC_VERIFY_STOP_INTERVAL: '7' }, provesSleep: true });
+    expect(r.code, `stderr:\n${r.stderr}`).toBe(0);
+    expect(r.stdout.trim()).toBe(PURGED_LINE);
+    expect(sleeps(dir)).toEqual(['0', '0', '7']);
+    expect(nLoadState(r.calls)).toBe(1);
+  }, 30_000);
+
+  it('V32b: a stamp that lands by the re-read passes as stamped, with no LoadState query (D-5138)', () => {
+    const home = fixtureHome(); plantReg(home, { 'demo-gone.uuid': 'u' });
+    const dir = stubs({ isActive: ['active', 'inactive', 'inactive'], mainPid: ['4242'] });
+    sleepActing(dir, home, 'stamp');
+    const r = runVerify(dir, U, { home, env: { CCRC_VERIFY_STOP_INTERVAL: '7' }, provesSleep: true });
+    expect(r.code, `stderr:\n${r.stderr}`).toBe(0);
+    expect(r.stdout.trim()).toBe(STAMPED_LINE);
+    expect(sleeps(dir)).toEqual(['0', '0', '7']);
+    expect(nLoadState(r.calls)).toBe(0);
+  }, 30_000);
+
+  it('V32c: a hand stop (the row kept, no stamp, at both reads) still fails — after exactly one re-read (D-5138)', () => {
+    const home = fixtureHome(); plantReg(home, { 'demo-gone.uuid': 'u' });
+    const dir = stubs({ isActive: ['active', 'inactive', 'inactive'], mainPid: ['4242'] });
+    sleepActing(dir, home, 'none');
+    const r = runVerify(dir, U, { home, env: { CCRC_VERIFY_STOP_INTERVAL: '7' }, provesSleep: true });
+    expect(r.code).toBe(1);
+    expect(r.stdout).not.toContain('stopped on purpose');
+    expect(r.stderr).toContain('DEPLOY FAILED');
+    expect(sleeps(dir)).toEqual(['0', '0', '7']);
+    expect(nLoadState(r.calls)).toBe(0);
+    expect(r.calls.trim().split('\n').slice(0, 4)).toEqual(SETTLED(U));
+  }, 30_000);
 });
