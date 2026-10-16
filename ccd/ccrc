@@ -20997,9 +20997,16 @@ _upd_legacy_target() {   # <tag> -> 0, or dies before anything is installed
 # (wave 10), so the arms differ there (D-3949, D-3975) (single-definition's
 # sweep pin holds the Linux halves together; the Darwin halves are pinned by
 # the same file's Darwin-arm test).
-_ccrc_job_pid() {   # <unit> -> the job's pid on stdout, or nothing when it has none
-  local out
-  out="$(_svc_launchctl print "$(_svc_domain)/$(_svc_label "$1")" 2>/dev/null)" || return 0
+# `_ccrc_job_pid` tells a `launchctl print` that FAILED from a job launchd does not hold (wave 16, R10j; D-5141): 113 is
+# launchd's one positive "not loaded" answer (`_svc_is_active`'s rule), so it prints nothing, as a job with no pid does;
+# any other non-zero exit prints `!<rc>`, a question never answered. It runs inside `$(…)`, so the answer rides stdout.
+_ccrc_job_pid() {   # <unit> -> the job's pid on stdout; nothing when it has none or is not loaded (113); `!<rc>` when print failed
+  local out rc=0
+  out="$(_svc_launchctl print "$(_svc_domain)/$(_svc_label "$1")" 2>/dev/null)" || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    [ "$rc" -eq 113 ] || printf '!%s' "$rc"
+    return 0
+  fi
   case "$out" in
     *"pid = "*) out="${out#*pid = }"; printf '%s' "${out%%[!0-9]*}" ;;
   esac
@@ -21009,17 +21016,25 @@ _ccrc_job_stayed_up() {   # <unit>... -> 0 iff ONE pid held across ONE shared wi
   # One settle, one pid read per job, one window, a second read per job. With ONE unit this is the call sequence and
   # the CCRC_STAYED_DETAIL the gate and `_inst_enable` have always had. With several: CCRC_STAYED_BAD lists the jobs
   # whose pid did not hold, CCRC_STAYED_WHY their details in the same order, and CCRC_STAYED_DETAIL is the first one's.
-  local u i=0 d p2
+  # Wave 16 (R18(b); D-5139, D-5140): no unit is a refusal, never a vacuous pass, and each sleep runs in the background
+  # under a `wait`, which an INT to this shell alone interrupts at once (a foreground `sleep` defers it to the sleep's
+  # end). The orphaned `sleep` ends by itself. A caller that traps another signal and returns would cut the window short:
+  # no caller does. An unmeasured read (`!<rc>`, D-5141) never holds, even against an equal one.
+  local u i=0 d p2 a b
   local -a p1=()
   CCRC_STAYED_BAD=(); CCRC_STAYED_WHY=(); CCRC_STAYED_DETAIL=""
-  sleep "${CCRC_VERIFY_SETTLE:-3}"
+  [ "$#" -gt 0 ] || return 1
+  sleep "${CCRC_VERIFY_SETTLE:-3}" & wait $!
   for u in "$@"; do p1+=("$(_ccrc_job_pid "$u")"); done
-  sleep "${CCRC_VERIFY_WINDOW:-5}"
+  sleep "${CCRC_VERIFY_WINDOW:-5}" & wait $!
   for u in "$@"; do
     p2="$(_ccrc_job_pid "$u")"
-    d="pid ${p1[i]:-none} -> ${p2:-none} across ${CCRC_VERIFY_SETTLE:-3}s+${CCRC_VERIFY_WINDOW:-5}s"
+    a="${p1[i]:-none}"; b="${p2:-none}"
+    case "$a" in '!'*) a="unmeasured (launchctl print exited ${a#!})" ;; esac
+    case "$b" in '!'*) b="unmeasured (launchctl print exited ${b#!})" ;; esac
+    d="pid $a -> $b across ${CCRC_VERIFY_SETTLE:-3}s+${CCRC_VERIFY_WINDOW:-5}s"
     [ "$#" -eq 1 ] && CCRC_STAYED_DETAIL="$d"
-    if [ -z "${p1[i]}" ] || [ "${p1[i]}" != "$p2" ]; then
+    if [ -z "${p1[i]}" ] || [ "${p1[i]}" != "$p2" ] || [ "${p1[i]:0:1}" = '!' ]; then
       CCRC_STAYED_BAD+=("$u"); CCRC_STAYED_WHY+=("$d")
       [ -n "$CCRC_STAYED_DETAIL" ] || CCRC_STAYED_DETAIL="$d"
     fi
