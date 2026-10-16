@@ -10303,6 +10303,22 @@ export interface DelegationObservationHealth {
   lastJournalSequence: number | null;
   lastCheckpointRevision: number | null;
   lastIngestedAt: string | null;
+  /**
+   * The last torn journal tail this server process cut off and kept (D-4655). Absent until one has been: absence is not "healthy" or
+   * "unhealthy", it says no heal happened in this process. A heal is never a failure and never makes the health unmeasured by itself.
+   */
+  lastTailHeal?: DelegationTailHeal;
+}
+
+/** A torn delegation-journal tail the server healed: a crash or a failed append left a partial last line, the server kept those bytes
+ *  under `quarantinePath` and cut the journal back to its last complete record. The spool still holds what the fragment carried. */
+export interface DelegationTailHeal {
+  /** When the heal finished, as a canonical UTC millisecond instant. */
+  at: string;
+  /** How many bytes were cut off and kept. */
+  bytes: number;
+  /** Where the kept bytes are, on the server box. */
+  quarantinePath: string;
 }
 
 /** What the health projection is computed from; every field is a measurement the server already holds. */

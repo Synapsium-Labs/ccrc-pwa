@@ -8,7 +8,7 @@
 // FIXTURE directory: nothing here reads or writes the live `~/.ccrc`.
 import { afterEach, describe, it, expect, vi } from 'vitest';
 import { createHash } from 'node:crypto';
-import { appendFileSync, cpSync, existsSync, readFileSync, readdirSync, rmSync, statSync, truncateSync, writeFileSync } from 'node:fs';
+import { appendFileSync, cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, truncateSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { DatabaseSync } from 'node:sqlite';
@@ -38,6 +38,7 @@ import {
 } from '../src/coord/delegation-model.js';
 import {
   DELEGATION_JOURNAL_FILE,
+  DELEGATION_TORN_DIR,
   DelegationJournalError,
   DelegationJournalWriter,
   buildDelegationJournalRecord,
@@ -45,14 +46,17 @@ import {
   delegationJournalDigest,
   delegationJournalId,
   delegationRetentionViewOf,
+  delegationTailHealPlan,
   encodeDelegationJournalRecord,
   findDelegationJsonDefect,
   nodeDelegationFilePort,
   parseDelegationJournal,
   planDelegationJournalAppend,
   planDelegationPruning,
+  readDelegationJournalRecords,
   type DelegationFileHandle,
   type DelegationFilePort,
+  type DelegationJournalTail,
 } from '../src/coord/delegation-journal.js';
 import {
   DELEGATION_CHECKPOINT_FILE,
@@ -539,7 +543,7 @@ function spyPort(log: string[], inner: DelegationFilePort = nodeDelegationFilePo
     liveHandles.add(id);
     return () => { liveHandles.delete(id); };
   };
-  const wrap = (kind: 'journal' | 'checkpoint', h: DelegationFileHandle): DelegationFileHandle => {
+  const wrap = (kind: 'journal' | 'checkpoint' | 'quarantine', h: DelegationFileHandle): DelegationFileHandle => {
     const release = track(kind);
     return {
       write: async (b) => {
@@ -553,9 +557,13 @@ function spyPort(log: string[], inner: DelegationFilePort = nodeDelegationFilePo
   };
   return {
     openAppend: async (p) => wrap('journal', await inner.openAppend(p)),
-    createTemp: async (p) => wrap('checkpoint', await inner.createTemp(p)),
+    // The tail heal's quarantine copy goes through `createTemp` too (D-4655): it is logged under its own name.
+    createTemp: async (p) => wrap(p.includes(DELEGATION_TORN_DIR) ? 'quarantine' : 'checkpoint', await inner.createTemp(p)),
     rename: async (a, b) => { log.push(`rename:${path.basename(a)}->${path.basename(b)}`); await inner.rename(a, b); },
     fsyncDir: async (d) => { log.push('dir.sync'); await inner.fsyncDir(d); },
+    // The heal's two journal operations (D-4655): the cut, and the fsync of what is left.
+    truncate: async (p, length) => { log.push(`${path.basename(p) === DELEGATION_JOURNAL_FILE ? 'journal' : 'file'}.truncate:${length}`); await inner.truncate(p, length); },
+    fsyncFile: async (p) => { log.push(`file.sync:${path.basename(p)}`); await inner.fsyncFile(p); },
     readFile: (p) => inner.readFile(p),
     openRead: async (p) => {
       const h = await inner.openRead(p);
@@ -1202,10 +1210,11 @@ function copyDisk(from: string, opts: { journalSyncedSize?: number; checkpointBy
 // THE TWO DISK MODELS, AND THE THIRD OUTCOME. Each crash below is recovered under a process crash (every issued write survives) and a
 // power loss (only fsynced bytes survive). Both models treat an unfsynced journal tail as vanishing WHOLE, which is the clean case.
 // A real power loss in the middle of an append can instead leave a PARTIAL last record, and that is the honest third result: not the
-// old state and not the new one but a recovery FAILURE (`torn-tail`), fail-closed, with the phase `reconstructing`, pruning off and
-// nothing appended behind the fragment (the plan forbids any truncate caller, so only a restore repairs it). It is pinned by "every
-// position of a torn tail on disk is a recovery failure" and "a torn journal tail is a recovery failure" below; this matrix is the
-// "old or new" half of the guarantee, and those rows are the third.
+// old state and not the new one but a torn tail. Under D-4655 (the operator's ruling of 2026-10-15) a torn tail HEALS ITSELF: it is
+// healable when every complete record validates with an intact chain and the checkpoint names a complete record or none, and then
+// recovery cuts it off (keeping the bytes) so the next pass re-mints what it held; anything else is corruption and stays a recovery
+// FAILURE. It is pinned by "every position of a torn tail on disk" and "a torn journal tail the checkpoint names" below and by the
+// D-4655 describe; this matrix is the "old or new" half of the guarantee, and those rows are the third.
 describe('O5 fault matrix (W3-M15): a crash injected at EVERY edge, before and after, leaves the old state or the new one', () => {
   const EDGES = DELEGATION_DURABILITY_EDGES.filter((e) => e !== 'project');
   /** After these (edge, when) pairs the checkpoint replacement has completed in the process-crash model. */
@@ -1472,18 +1481,21 @@ describe('O5 fault matrix (W3-M15): a crash injected at EVERY edge, before and a
     expect(existsSync(path.join(h.dir, `${DELEGATION_CHECKPOINT_FILE}.tmp`))).toBe(false);
   });
 
-  it('every position of a torn tail on disk is a recovery failure, not a repair', async () => {
+  it('every position of a torn tail on disk is a HEALABLE recovery when no checkpoint names it (D-4655): ready, a plan for the tail, the disk untouched', async () => {
     const [r1, r2] = evidenceChain([sessionStart(1), sessionStart(2)]);
     const first = Buffer.from(encodeDelegationJournalRecord(r1!));
     const second = Buffer.from(encodeDelegationJournalRecord(r2!));
     const lineLen = second.length - 1;
     for (const k of [1, 2, 7, 100, Math.floor(lineLen / 2), lineLen - 2, lineLen - 1, lineLen]) {
       const dir = mkTmp('ccrc-deleg-torn-');
-      writeFileSync(path.join(dir, DELEGATION_JOURNAL_FILE), Buffer.concat([first, second.subarray(0, k)]));
+      const bytes = Buffer.concat([first, second.subarray(0, k)]);
+      writeFileSync(path.join(dir, DELEGATION_JOURNAL_FILE), bytes);
       const report = await recoverDelegationFromFiles(nodeDelegationFilePort, dir);
-      expect(report.failure, `cut ${k}`).toMatchObject({ phase: 'journal-validate', code: k === lineLen ? 'missing-final-lf' : 'torn-tail' });
-      expect(report.state.phase).toBe('reconstructing');
-      expect(report.pruning).toBe('disabled');
+      expect(report.failure, `cut ${k}`).toBeNull();
+      expect(report.tailHeal, `cut ${k}`).toMatchObject({ offset: first.length, bytes: k, code: k === lineLen ? 'missing-final-lf' : 'torn-tail' });
+      expect(report.state.phase).toBe('ready');
+      expect(report.pruning).toBe('enabled');
+      expect(readFileSync(path.join(dir, DELEGATION_JOURNAL_FILE)), 'recovery itself never writes').toEqual(bytes);
     }
   });
 
@@ -1501,24 +1513,527 @@ describe('O5 fault matrix (W3-M15): a crash injected at EVERY edge, before and a
     await dur.applyAccepted(batch([sessionStart(2)]));
   });
 
-  it('a torn journal tail is a recovery failure: reconstructing, pruning off, and nothing is appended behind it', async () => {
+  it('a torn journal tail the checkpoint names is still a recovery failure: reconstructing, pruning off, and nothing is appended behind it', async () => {
+    // The checkpoint's applied position is record 2, and the journal holds record 1 and a FRAGMENT of record 2: the fragment is not a
+    // crash artefact (a checkpoint is replaced only after its record is durable), so it is corruption and nothing is cut.
     const h = harness();
     const dur = await h.open();
-    await dur.applyAccepted(batch([sessionStart(1)]));
+    await dur.applyAccepted(batch([sessionStart(1), sessionStart(2)]));
     await dur.close();
     const file = path.join(h.dir, DELEGATION_JOURNAL_FILE);
-    const before = readFileSync(file);
-    appendFileSync(file, '{"acceptedAt":"2026-10-1');
-    const torn = readFileSync(file);
+    const whole = readFileSync(file);
+    const firstLen = Buffer.from(encodeDelegationJournalRecord(parseDelegationJournal(new Uint8Array(whole))[0]!)).length;
+    const torn = whole.subarray(0, firstLen + 25);
+    writeFileSync(file, torn);
     const fresh = await harness({ dir: h.dir }).open();
     expect(fresh.failure()).toMatchObject({ phase: 'journal-validate', code: 'torn-tail' });
     expect(fresh.state().phase).toBe('reconstructing');
     expect(fresh.pruningEnabled()).toBe(false);
-    await expect(fresh.applyAccepted(batch([sessionStart(2)]))).rejects.toMatchObject({ code: 'not-ready' });
+    await expect(fresh.applyAccepted(batch([sessionStart(3)]))).rejects.toMatchObject({ code: 'not-ready' });
     expect(readFileSync(file)).toEqual(torn);                           // not truncated, not repaired, not appended to
-    expect(torn.length).toBeGreaterThan(before.length);
+    expect(existsSync(path.join(h.dir, DELEGATION_TORN_DIR))).toBe(false);
   });
 });
+
+// ── D-4655: a torn journal tail heals itself ─────────────────────────────────────────────────────────────────────────
+//
+// THE SAFETY ARGUMENT THESE ROWS PROVE. Under O5 a record is applied only after the journal fsync, and the checkpoint is replaced only
+// after that. So a crash or a failed write in the middle of an append leaves at most ONE partial line after the last LF, and no
+// checkpoint, cursor, ID or interval refers to it: the bucket cursor still points before its spool line. The next pass reads that line
+// again and mints the same eventId, so cutting the partial line loses nothing the spool does not still hold (and a bucket that has
+// gone meanwhile is already an unmeasured hour, spec 5.3). That argument holds ONLY when the journal's complete records validate with
+// an intact chain and the checkpoint names a complete record (or none). Everything else is corruption and stays fail-closed.
+//
+// THE ONE NAMED EXCEPTION. Task 8 Step 4's "no production caller truncates the journal" pin, W3-M22 (every torn position is refused) and
+// W3-M38 (no rewrite, truncate or rename of the journal) each carry exactly one exception: the server's tail heal, which cuts only to
+// the end of the last complete validated record after the cut bytes are durable somewhere else. Every other truncate, rewrite or
+// rename path stays red (the pin rows below, and the mutation table in the task report).
+describe('D-4655: a torn journal tail heals itself (the one named exception to the no-truncate pin)', () => {
+  const chain = evidenceChain([sessionStart(1), sessionStart(2), sessionStart(3), sessionStart(4)]);
+  const line = (i: number): Buffer => Buffer.from(encodeDelegationJournalRecord(chain[i]!));
+  const sha256 = (b: Uint8Array): string => createHash('sha256').update(b).digest('hex');
+  const tornDirOf = (dir: string): string => path.join(dir, DELEGATION_TORN_DIR);
+  const tornFiles = (dir: string): string[] => (existsSync(tornDirOf(dir)) ? readdirSync(tornDirOf(dir)).sort() : []);
+  const journalOf = (dir: string): Buffer => readFileSync(path.join(dir, DELEGATION_JOURNAL_FILE));
+  /** A checkpoint at the first `n` records (revision 1: every persisted checkpoint has one). */
+  const checkpointAt = (n: number): Buffer => Buffer.from(encodeDelegationCheckpoint({ ...recoverDelegation(null, chain.slice(0, n)).state.checkpoint, revision: 1 }));
+  /** A fixture directory: `complete` records, then `tail` (bytes with no LF after the last one), and a checkpoint at `applied` records. */
+  function plant(opts: { complete: number; tail?: Uint8Array; applied?: number; journal?: Buffer }): { dir: string; whole: Buffer; prefixLen: number } {
+    const dir = mkTmp('ccrc-deleg-heal-');
+    const prefix = Buffer.concat(Array.from({ length: opts.complete }, (_, i) => line(i)));
+    const whole = opts.journal ?? Buffer.concat([prefix, opts.tail ?? Buffer.alloc(0)]);
+    writeFileSync(path.join(dir, DELEGATION_JOURNAL_FILE), whole);
+    if (opts.applied !== undefined) writeFileSync(path.join(dir, DELEGATION_CHECKPOINT_FILE), checkpointAt(opts.applied));
+    return { dir, whole, prefixLen: prefix.length };
+  }
+  const nameOf = (offset: number, tail: Uint8Array): string => `${offset}-${sha256(tail)}.tail`;
+  /** The cut points of the next record: a few bytes, the middle, all but its LF (a complete record with no LF after it). */
+  const cuts = (): number[] => { const n = line(2).length - 1; return [1, 2, 7, 100, Math.floor(n / 2), n - 2, n - 1, n]; };
+
+  describe('the rule, once (delegation-journal.ts): healable only when a tail exists AND the complete records and the checkpoint are sound', () => {
+    const tail = (bytes: Uint8Array, offset = 500, code: 'torn-tail' | 'missing-final-lf' = 'torn-tail'): DelegationJournalTail => ({ offset, bytes, sha256: sha256(bytes), code });
+
+    it('a tail on a sound prefix is a plan whose name is content-addressed: <offset>-<sha256>.tail', () => {
+      const bytes = new TextEncoder().encode('{"acceptedAt":"2026-10-1');
+      expect(delegationTailHealPlan(tail(bytes), true)).toEqual({ offset: 500, bytes: bytes.length, sha256: sha256(bytes), code: 'torn-tail', name: `500-${sha256(bytes)}.tail` });
+      expect(delegationTailHealPlan(tail(bytes, 0), true)!.name).toBe(`0-${sha256(bytes)}.tail`);
+    });
+    it('no tail is no plan, and an unsound prefix is no plan, whatever the tail looks like', () => {
+      const bytes = new Uint8Array([0x7b, 0x22]);
+      expect(delegationTailHealPlan(null, true)).toBeNull();
+      expect(delegationTailHealPlan(null, false)).toBeNull();
+      expect(delegationTailHealPlan(tail(bytes), false)).toBeNull();
+    });
+    it('the plan is a pure function of the tail: no clock, no randomness, so the same bytes at the same offset always get the same name', () => {
+      const bytes = new TextEncoder().encode('xyz');
+      const a = delegationTailHealPlan(tail(bytes, 77), true)!;
+      const b = delegationTailHealPlan(tail(new Uint8Array(bytes), 77), true)!;
+      expect(a).toEqual(b);
+      expect(delegationTailHealPlan(tail(bytes, 78), true)!.name).not.toBe(a.name);
+      expect(delegationTailHealPlan(tail(new TextEncoder().encode('xyZ'), 77), true)!.name).not.toBe(a.name);
+    });
+  });
+
+  describe('the strict reader reports a tail to a sink and still throws without one', () => {
+    it('with a sink: every complete record is yielded, then the sink gets {offset, bytes, sha256, code}, and nothing throws', async () => {
+      for (const k of cuts()) {
+        const { dir, prefixLen } = plant({ complete: 2, tail: line(2).subarray(0, k) });
+        const seen: DelegationJournalTail[] = [];
+        const got: number[] = [];
+        for await (const r of readDelegationJournalRecords(nodeDelegationFilePort, path.join(dir, DELEGATION_JOURNAL_FILE), undefined, (t) => seen.push(t))) got.push(r.sequence);
+        expect(got, `cut ${k}`).toEqual([1, 2]);
+        expect(seen, `cut ${k}`).toHaveLength(1);
+        expect(seen[0]).toMatchObject({ offset: prefixLen, sha256: sha256(line(2).subarray(0, k)), code: k === line(2).length - 1 ? 'missing-final-lf' : 'torn-tail' });
+        expect(Buffer.from(seen[0]!.bytes)).toEqual(line(2).subarray(0, k));
+      }
+    });
+    it('a chunk size that splits the tail does not change the answer', async () => {
+      const { dir, prefixLen } = plant({ complete: 2, tail: line(2).subarray(0, 90) });
+      for (const chunk of [1, 7, 64, 4096]) {
+        const seen: DelegationJournalTail[] = [];
+        for await (const r of readDelegationJournalRecords(nodeDelegationFilePort, path.join(dir, DELEGATION_JOURNAL_FILE), chunk, (t) => seen.push(t))) void r;
+        expect(seen[0], `chunk ${chunk}`).toMatchObject({ offset: prefixLen, sha256: sha256(line(2).subarray(0, 90)) });
+      }
+    });
+    it('without a sink the reader throws exactly as before: torn-tail, or missing-final-lf for a whole record with no LF', async () => {
+      for (const [k, code] of [[40, 'torn-tail'], [line(2).length - 1, 'missing-final-lf']] as const) {
+        const { dir } = plant({ complete: 2, tail: line(2).subarray(0, k) });
+        const drain = async (): Promise<void> => { for await (const r of readDelegationJournalRecords(nodeDelegationFilePort, path.join(dir, DELEGATION_JOURNAL_FILE))) void r; };
+        await expect(drain()).rejects.toMatchObject({ code });
+      }
+    });
+    it('a journal with no tail never calls the sink', async () => {
+      const { dir } = plant({ complete: 2 });
+      const seen: DelegationJournalTail[] = [];
+      for await (const r of readDelegationJournalRecords(nodeDelegationFilePort, path.join(dir, DELEGATION_JOURNAL_FILE), undefined, (t) => seen.push(t))) void r;
+      expect(seen).toEqual([]);
+    });
+  });
+
+  describe('recovery classifies a tail: healable, or the same refusal as before', () => {
+    it('HEALABLE: no checkpoint, a checkpoint at the last complete record, and a checkpoint BEHIND it (the journal is ahead), at every cut', async () => {
+      for (const applied of [undefined, 2, 1] as const) {
+        for (const k of cuts()) {
+          const tail = line(2).subarray(0, k);
+          const { dir, prefixLen } = plant({ complete: 2, tail, ...(applied === undefined ? {} : { applied }) });
+          const report = await recoverDelegationFromFiles(nodeDelegationFilePort, dir);
+          const what = `applied ${applied}, cut ${k}`;
+          expect(report.failure, what).toBeNull();
+          expect(report.tailHeal, what).toEqual({ offset: prefixLen, bytes: k, sha256: sha256(tail), code: k === line(2).length - 1 ? 'missing-final-lf' : 'torn-tail', name: nameOf(prefixLen, tail) });
+          expect(report.state.phase).toBe('ready');
+          expect(report.facts!.head!.sequence, what).toBe(2);
+        }
+      }
+    });
+
+    it('NOT healable: the checkpoint names the record that is the LF-less one (a durable, applied record with no LF is corruption)', async () => {
+      const { dir, whole } = plant({ complete: 2, tail: line(2).subarray(0, line(2).length - 1), applied: 3 });
+      // The checkpoint at 3 needs record 3 to exist; build it from the real chain.
+      const report = await recoverDelegationFromFiles(nodeDelegationFilePort, dir);
+      expect(report.tailHeal).toBeNull();
+      expect(report.failure).toMatchObject({ phase: 'journal-validate', code: 'missing-final-lf' });
+      expect(report.failure!.detail).toMatch(/anchor-missing/);
+      expect(report.state.phase).toBe('reconstructing');
+      expect(journalOf(dir)).toEqual(whole);
+    });
+
+    it('NOT healable: the checkpoint names a record that is torn, or one past the last complete record', async () => {
+      for (const applied of [3, 4]) {
+        const { dir, whole } = plant({ complete: 2, tail: line(2).subarray(0, 60), applied });
+        const report = await recoverDelegationFromFiles(nodeDelegationFilePort, dir);
+        expect(report.tailHeal, `applied ${applied}`).toBeNull();
+        expect(report.failure, `applied ${applied}`).toMatchObject({ phase: 'journal-validate', code: 'torn-tail' });
+        expect(report.state.phase).toBe('reconstructing');
+        expect(journalOf(dir)).toEqual(whole);
+      }
+    });
+
+    it('NOT healable: a held record the tail would have to carry (a checkpoint hold on the LF-less record)', async () => {
+      const { dir } = plant({ complete: 2, tail: line(2).subarray(0, line(2).length - 1) });
+      const cp = recoverDelegation(null, chain.slice(0, 2)).state.checkpoint;
+      const held = { ...cp, revision: 1, pruningHolds: [...cp.pruningHolds, { journalId: chain[2]!.journalId, reason: 'identity-candidate' as const, ownerId: 'agent-1' }] };
+      writeFileSync(path.join(dir, DELEGATION_CHECKPOINT_FILE), encodeDelegationCheckpoint(held));
+      const report = await recoverDelegationFromFiles(nodeDelegationFilePort, dir);
+      expect(report.tailHeal).toBeNull();
+      expect(report.failure).toMatchObject({ phase: 'journal-validate', code: 'missing-final-lf' });
+    });
+
+    it('CORRUPTION is never healable, with or without a tail: an invalid complete record, a chain break, a gap, a duplicate', async () => {
+      const text = (i: number): string => line(i).toString('utf8');
+      const rows: Array<[string, Buffer, string]> = [
+        ['a digest that is not the hash of its preimage', Buffer.concat([line(0), Buffer.from(text(1).replace(/"digest":"[0-9a-f]{64}"/, `"digest":"${'0'.repeat(64)}"`)), line(2).subarray(0, 50)]), 'digest-mismatch'],
+        ['an invalid complete record that is the LAST complete one', Buffer.concat([line(0), Buffer.from(text(1).replace(/"journalId":"[0-9a-f]{64}"/, `"journalId":"${'0'.repeat(64)}"`)), line(2).subarray(0, 50)]), 'journal-id-mismatch'],
+        ['a record whose previousDigest is not the prior digest', Buffer.concat([line(0), Buffer.from(encodeDelegationJournalRecord(buildDelegationJournalRecord({ sequence: 2, acceptedAt: T(5), previousDigest: 'd'.repeat(64), entry: evidence(sessionStart(2)) }))), line(2).subarray(0, 50)]), 'previous-digest'],
+        ['a sequence gap', Buffer.concat([line(0), line(2), line(3).subarray(0, 50)]), 'sequence-gap'],
+        ['a duplicated record', Buffer.concat([line(0), line(0), line(1).subarray(0, 50)]), 'sequence-duplicate'],
+        ['a record that is not canonical JSON', Buffer.concat([line(0), Buffer.from('{"a":1}\n'), line(2).subarray(0, 50)]), 'unknown-key'],
+        ['a blank line', Buffer.concat([line(0), Buffer.from('\n'), line(1).subarray(0, 50)]), 'blank-line'],
+      ];
+      for (const [name, journal, code] of rows) {
+        const { dir } = plant({ complete: 0, journal });
+        const report = await recoverDelegationFromFiles(nodeDelegationFilePort, dir);
+        expect(report.tailHeal, name).toBeNull();
+        expect(report.failure, name).toMatchObject({ phase: 'journal-validate', code });
+        expect(report.state.phase, name).toBe('reconstructing');
+      }
+    });
+
+    it('a journal with no tail has no plan', async () => {
+      const { dir } = plant({ complete: 3, applied: 3 });
+      const report = await recoverDelegationFromFiles(nodeDelegationFilePort, dir);
+      expect(report.failure).toBeNull();
+      expect(report.tailHeal).toBeNull();
+    });
+  });
+
+  describe('the applier heals the live journal, and stays its only writer', () => {
+    /** Every operation of one port, mutating ones numbered, with a way to die (or fail once) at the k-th. */
+    function faultPort(inner: DelegationFilePort, opts: { dieAt?: number; failAt?: number } = {}): { port: DelegationFilePort; ops: string[]; count: () => number } {
+      const ops: string[] = [];
+      let n = 0;
+      let dead = false;
+      const read = (what: string): void => { if (dead) throw new Error('process is dead'); ops.push(what); };
+      const mutate = (what: string): void => {
+        if (dead) throw new Error('process is dead');
+        const i = n++;
+        ops.push(`${i}:${what}`);
+        if (opts.dieAt !== undefined && i >= opts.dieAt) { dead = true; throw new Error(`crash at op ${i}`); }
+        if (opts.failAt === i) throw new Error(`fault at op ${i}`);
+      };
+      const wrapHandle = (label: string, h: DelegationFileHandle): DelegationFileHandle => ({
+        write: async (b) => { mutate(`${label}.write`); return h.write(b); },
+        sync: async () => { mutate(`${label}.sync`); await h.sync(); },
+        close: async () => { await h.close(); },
+      });
+      const port: DelegationFilePort = {
+        openAppend: async (p) => { mutate('journal.open'); return wrapHandle('journal', await inner.openAppend(p)); },
+        createTemp: async (p) => { mutate(`create:${path.basename(p)}`); return wrapHandle(p.includes(DELEGATION_TORN_DIR) ? 'quarantine' : 'checkpoint', await inner.createTemp(p)); },
+        rename: async (a, b) => { mutate(`rename:${path.basename(a)}->${path.basename(b)}`); await inner.rename(a, b); },
+        fsyncDir: async (d) => { mutate(`dirsync:${path.basename(d)}`); await inner.fsyncDir(d); },
+        truncate: async (p, len) => { mutate(`truncate:${path.basename(p)}:${len}`); await inner.truncate(p, len); },
+        fsyncFile: async (p) => { mutate(`filesync:${path.basename(p)}`); await inner.fsyncFile(p); },
+        mkdirp: async (d) => { mutate(`mkdirp:${path.basename(d)}`); await inner.mkdirp(d); },
+        readFile: async (p) => { read(`readFile:${path.basename(p)}`); return inner.readFile(p); },
+        openRead: async (p) => { read(`openRead:${path.basename(p)}`); return inner.openRead(p); },
+      };
+      return { port, ops, count: () => n };
+    }
+
+    it('heals: the tail is kept under a content-addressed name, the journal is cut to the last complete record, and the applier opens READY', async () => {
+      const tail = line(2).subarray(0, 61);
+      const { dir, prefixLen } = plant({ complete: 2, tail, applied: 2 });
+      const h = harness({ dir });
+      const warned: string[] = [];
+      const dur = await h.open({ warn: (m) => warned.push(m) });
+      expect(dur.failure()).toBeNull();
+      expect(dur.state().phase).toBe('ready');
+      expect(dur.pruningEnabled()).toBe(true);
+      expect(journalOf(dir)).toEqual(Buffer.concat([line(0), line(1)]));
+      expect(journalOf(dir).length).toBe(prefixLen);
+      expect(tornFiles(dir)).toEqual([nameOf(prefixLen, tail)]);
+      expect(readFileSync(path.join(tornDirOf(dir), nameOf(prefixLen, tail)))).toEqual(tail);
+      expect(warned).toHaveLength(1);
+      expect(warned[0]).toMatch(/^ccrc-server: /);
+      expect(warned[0]).toContain(`${tail.length} byte`);
+      expect(warned[0]).toContain(path.join(tornDirOf(dir), nameOf(prefixLen, tail)));
+      expect(warned[0]).toMatch(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z/);
+      // and the next application appends behind the cut, continuing the chain
+      const out = await dur.applyAccepted(batch([sessionStart(3)]));
+      expect(out.appended.map((r) => r.sequence)).toEqual([3]);
+      expect(parseDelegationJournal(new Uint8Array(journalOf(dir)), { completeFromStart: true }).map((r) => r.sequence)).toEqual([1, 2, 3]);
+    });
+
+    it('a LF-less COMPLETE record that no checkpoint names is cut and kept too', async () => {
+      const tail = line(2).subarray(0, line(2).length - 1);
+      const { dir, prefixLen } = plant({ complete: 2, tail, applied: 2 });
+      const dur = await harness({ dir }).open();
+      expect(dur.failure()).toBeNull();
+      expect(journalOf(dir)).toEqual(Buffer.concat([line(0), line(1)]));
+      expect(readFileSync(path.join(tornDirOf(dir), nameOf(prefixLen, tail)))).toEqual(tail);
+    });
+
+    it('with no checkpoint and nothing but a fragment, the journal is cut to empty and the applier is ready', async () => {
+      const tail = Buffer.from('{"acceptedAt":"2026-10-1');
+      const { dir } = plant({ complete: 0, tail });
+      const dur = await harness({ dir }).open();
+      expect(dur.failure()).toBeNull();
+      expect(journalOf(dir)).toEqual(Buffer.alloc(0));
+      expect(tornFiles(dir)).toEqual([nameOf(0, tail)]);
+      expect((await dur.applyAccepted(batch([sessionStart(1)]))).appended.map((r) => r.sequence)).toEqual([1]);
+    });
+
+    it('a journal with no tail is never touched: no quarantine directory, no truncate, no extra fsync of the journal file', async () => {
+      const { dir, whole } = plant({ complete: 2, applied: 2 });
+      const h = harness({ dir });
+      await h.open();
+      expect(journalOf(dir)).toEqual(whole);
+      expect(existsSync(tornDirOf(dir))).toBe(false);
+      expect(h.log.filter((l) => /truncate|file\.sync/.test(l))).toEqual([]);
+    });
+
+    it('the order is quarantine (temp write, fsync, rename, directory fsyncs), THEN the cut, THEN the journal fsync and its directory (W3-M38 mutant c)', async () => {
+      const tail = line(2).subarray(0, 61);
+      const { dir, prefixLen } = plant({ complete: 2, tail, applied: 2 });
+      const h = harness({ dir });
+      await h.open();
+      const name = nameOf(prefixLen, tail);
+      const heal = h.log.filter((l) => l !== 'project' && !l.startsWith('insertEvents'));
+      expect(heal).toEqual([
+        `quarantine.write:${tail.length}:${tail[tail.length - 1]}`, 'quarantine.sync', `rename:${name}.tmp->${name}`, 'dir.sync', 'dir.sync',
+        `journal.truncate:${prefixLen}`, `file.sync:${DELEGATION_JOURNAL_FILE}`, 'dir.sync',
+      ]);
+      expect(existsSync(path.join(tornDirOf(dir), `${name}.tmp`))).toBe(false);
+    });
+
+    it('recover() on a LIVE applier heals too: a failed append that left a fragment is cut by the retry, and the next application appends', async () => {
+      const h = harness();
+      const dur = await h.open();
+      await dur.applyAccepted(batch([sessionStart(1)]));
+      appendFileSync(path.join(h.dir, DELEGATION_JOURNAL_FILE), '{"acceptedAt":"2026-10-1');
+      const report = await dur.recover();
+      expect(report.failure).toBeNull();
+      expect(report.tailHeal).not.toBeNull();
+      expect(dur.state().phase).toBe('ready');
+      expect(tornFiles(h.dir)).toHaveLength(1);
+      expect((await dur.applyAccepted(batch([sessionStart(2)]))).appended.map((r) => r.sequence)).toEqual([2]);
+    });
+
+    it('the applier appends NOTHING until the heal is durable: an application queued behind a held heal writes after the cut, never before', async () => {
+      const h = harness();
+      const journal = path.join(h.dir, DELEGATION_JOURNAL_FILE);
+      let armed = false;
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => { release = resolve; });
+      const inner = spyPort(h.log);
+      const port: DelegationFilePort = { ...inner, truncate: async (p, len) => { if (armed) await gate; return inner.truncate(p, len); } };
+      const dur = await h.open({ port });
+      await dur.applyAccepted(batch([sessionStart(1)]));
+      const clean = readFileSync(journal);
+      appendFileSync(journal, '{"acceptedAt":"2026-10-1');
+      armed = true;
+      h.log.length = 0;
+      const recovering = dur.recover();
+      const applying = dur.applyAccepted(batch([sessionStart(2)]));
+      await new Promise((r) => setTimeout(r, 40));
+      expect(h.log.filter((l) => l.startsWith('journal.write')), 'nothing is appended while the heal is held').toEqual([]);
+      expect(readFileSync(journal).length, 'and nothing is cut before the gate opens').toBe(clean.length + '{"acceptedAt":"2026-10-1'.length);
+      release();
+      await recovering;
+      await applying;
+      const cut = h.log.findIndex((l) => l.startsWith('journal.truncate'));
+      const wrote = h.log.findIndex((l) => l.startsWith('journal.write'));
+      expect(cut).toBeGreaterThan(-1);
+      expect(wrote, 'the first append comes after the cut').toBeGreaterThan(cut);
+      expect(parseDelegationJournal(new Uint8Array(readFileSync(journal)), { completeFromStart: true }).map((r) => r.sequence)).toEqual([1, 2]);
+    });
+
+    it('a defect that is NOT a crash artefact is never cut: the journal is byte-identical, nothing is kept, no truncate is issued (W3-M38 mutants b)', async () => {
+      const text = (i: number): string => line(i).toString('utf8');
+      const rows: Array<[string, Buffer, number | undefined, string]> = [
+        ['a chain break before the tail', Buffer.concat([line(0), Buffer.from(encodeDelegationJournalRecord(buildDelegationJournalRecord({ sequence: 2, acceptedAt: T(5), previousDigest: 'd'.repeat(64), entry: evidence(sessionStart(2)) }))), line(2).subarray(0, 50)]), undefined, 'previous-digest'],
+        ['an invalid complete record that is the last complete one', Buffer.concat([line(0), Buffer.from(text(1).replace(/"digest":"[0-9a-f]{64}"/, `"digest":"${'0'.repeat(64)}"`)), line(2).subarray(0, 50)]), undefined, 'digest-mismatch'],
+        ['a sequence gap', Buffer.concat([line(0), line(2), line(3).subarray(0, 50)]), undefined, 'sequence-gap'],
+        ['a checkpoint that names the LF-less record', Buffer.concat([line(0), line(1), line(2).subarray(0, line(2).length - 1)]), 3, 'missing-final-lf'],
+        ['a checkpoint that names a torn record', Buffer.concat([line(0), line(1), line(2).subarray(0, 60)]), 3, 'torn-tail'],
+        ['a checkpoint past the last complete record', Buffer.concat([line(0), line(1), line(2).subarray(0, 60)]), 4, 'torn-tail'],
+      ];
+      for (const [name, journal, applied, code] of rows) {
+        const { dir } = plant({ complete: 0, journal, ...(applied === undefined ? {} : { applied }) });
+        const h = harness({ dir });
+        const dur = await h.open();
+        expect(dur.failure(), name).toMatchObject({ phase: 'journal-validate', code });
+        expect(dur.state().phase, name).toBe('reconstructing');
+        expect(dur.pruningEnabled(), name).toBe(false);
+        expect(journalOf(dir), name).toEqual(journal);
+        expect(existsSync(tornDirOf(dir)), `${name}: nothing is kept`).toBe(false);
+        expect(h.log.filter((l) => /truncate|quarantine|file\.sync/.test(l)), name).toEqual([]);
+        await expect(dur.applyAccepted(batch([sessionStart(9)])), name).rejects.toMatchObject({ code: 'not-ready' });
+        expect(journalOf(dir), `${name}: nothing was appended behind it`).toEqual(journal);
+      }
+    });
+
+    it('the name is DETERMINISTIC: the same tail at the same offset gets the same name in another directory, under another clock', async () => {
+      const tail = line(2).subarray(0, 77);
+      const names: string[] = [];
+      for (const ms of [Date.UTC(2026, 9, 15), Date.UTC(2031, 1, 2)]) {
+        const { dir } = plant({ complete: 2, tail, applied: 2 });
+        const h = harness({ dir });
+        h.clock.ms = ms;
+        await h.open();
+        names.push(...tornFiles(dir));
+      }
+      expect(names).toEqual([nameOf(line(0).length + line(1).length, tail), nameOf(line(0).length + line(1).length, tail)]);
+      expect(names[0]).toMatch(/^\d+-[0-9a-f]{64}\.tail$/);
+    });
+
+    it('lastTailHeal() reports the heal for /api/fleet/health: when (the injected clock), how many bytes, and where they are kept', async () => {
+      const tail = line(2).subarray(0, 45);
+      const { dir, prefixLen } = plant({ complete: 2, tail, applied: 2 });
+      const h = harness({ dir });
+      const dur = await h.open();
+      expect(dur.lastTailHeal()).toEqual({ at: formatDelegationInstant(h.clock.ms), bytes: 45, quarantinePath: path.join(tornDirOf(dir), nameOf(prefixLen, tail)) });
+      const clean = await harness({ dir: plant({ complete: 2, applied: 2 }).dir }).open();
+      expect(clean.lastTailHeal()).toBeNull();
+    });
+
+    it('a quarantine file that is already there with the SAME bytes (an earlier heal that died after its rename) is reused: nothing is rewritten, nothing duplicated', async () => {
+      const tail = line(2).subarray(0, 52);
+      const { dir, prefixLen } = plant({ complete: 2, tail, applied: 2 });
+      mkdirSync(tornDirOf(dir), { recursive: true });
+      writeFileSync(path.join(tornDirOf(dir), nameOf(prefixLen, tail)), tail);
+      const h = harness({ dir });
+      const dur = await h.open();
+      expect(dur.failure()).toBeNull();
+      expect(h.log.filter((l) => l.startsWith('quarantine.write')), 'no second copy is written').toEqual([]);
+      expect(tornFiles(dir)).toEqual([nameOf(prefixLen, tail)]);
+      expect(journalOf(dir).length).toBe(prefixLen);
+    });
+
+    it('a quarantine file of that name with DIFFERENT bytes is never overwritten and never trusted: the heal fails closed and the journal is untouched', async () => {
+      const tail = line(2).subarray(0, 52);
+      const { dir, prefixLen, whole } = plant({ complete: 2, tail, applied: 2 });
+      mkdirSync(tornDirOf(dir), { recursive: true });
+      writeFileSync(path.join(tornDirOf(dir), nameOf(prefixLen, tail)), 'something else entirely');
+      const dur = await harness({ dir }).open();
+      expect(dur.failure()).toMatchObject({ code: 'tail-heal-failed' });
+      expect(dur.state().phase).toBe('reconstructing');
+      expect(journalOf(dir)).toEqual(whole);
+      expect(readFileSync(path.join(tornDirOf(dir), nameOf(prefixLen, tail)), 'utf8')).toBe('something else entirely');
+    });
+
+    it('the tail is re-measured at the cut: bytes that changed between recovery\'s read and the heal are not cut, and are not kept as if they were the tail', async () => {
+      const tail = line(2).subarray(0, 52);
+      const { dir, whole } = plant({ complete: 2, tail, applied: 2 });
+      let opens = 0;
+      const inner = nodeDelegationFilePort;
+      const port: DelegationFilePort = {
+        ...inner,
+        openRead: async (p) => {
+          if (p.endsWith(DELEGATION_JOURNAL_FILE) && ++opens === 2) appendFileSync(p, 'more bytes behind the tail');
+          return inner.openRead(p);
+        },
+      };
+      const dur = await harness({ dir }).open({ port });
+      expect(dur.failure()).toMatchObject({ code: 'tail-heal-failed' });
+      expect(journalOf(dir)).toEqual(Buffer.concat([whole, Buffer.from('more bytes behind the tail')]));
+      expect(existsSync(tornDirOf(dir))).toBe(false);
+    });
+
+    describe('a crash or a fault at EVERY operation of the heal (W3-M38 mutant c): the tail is always in the journal or in quarantine, and the next recovery heals the same way', () => {
+      const TAIL = line(2).subarray(0, 61);
+      const fixture = (): { dir: string; prefixLen: number; whole: Buffer } => plant({ complete: 2, tail: TAIL, applied: 2 });
+      let total = 0;
+      it('a recording run counts the heal\'s mutating operations (ten: the directory, the temp file, its write and fsync, the rename, two directory fsyncs, the cut, the file fsync, the directory fsync)', async () => {
+        const { dir } = fixture();
+        const rec = faultPort(nodeDelegationFilePort);
+        await harness({ dir }).open({ port: rec.port });
+        total = rec.count();
+        expect(rec.ops.filter((o) => /^\d+:/.test(o)).map((o) => o.replace(/^\d+:/, '').replace(/[0-9a-f]{64}/g, '<sha>').replace(/\d+-<sha>/g, '<name>'))).toEqual([
+          'mkdirp:delegation-events.torn', 'create:<name>.tail.tmp', 'quarantine.write', 'quarantine.sync', 'rename:<name>.tail.tmp-><name>.tail',
+          'dirsync:delegation-events.torn', expect.stringMatching(/^dirsync:/), expect.stringMatching(/^truncate:delegation-events\.log:\d+$/),
+          'filesync:delegation-events.log', expect.stringMatching(/^dirsync:/),
+        ]);
+        expect(total).toBe(10);
+      });
+
+      for (let k = 0; k < 10; k++) {
+        it(`the process dies at operation ${k}: nothing is lost, and a fresh open heals it with no duplicate`, async () => {
+          const { dir, prefixLen, whole } = fixture();
+          const dying = faultPort(nodeDelegationFilePort, { dieAt: k });
+          const dur = await harness({ dir }).open({ port: dying.port });
+          expect(dur.failure(), `op ${k}`).toMatchObject({ code: 'tail-heal-failed' });
+          expect(dur.state().phase).toBe('reconstructing');
+          await expect(dur.applyAccepted(batch([sessionStart(9)]))).rejects.toMatchObject({ code: 'not-ready' });
+          // THE INVARIANT: the tail's bytes are in the journal, or whole in quarantine, at every instant.
+          const inJournal = journalOf(dir).length === whole.length;
+          const keptAs = path.join(tornDirOf(dir), nameOf(prefixLen, TAIL));
+          const inQuarantine = existsSync(keptAs) && readFileSync(keptAs).equals(TAIL);
+          expect(inJournal || inQuarantine, `op ${k}: the tail is nowhere`).toBe(true);
+          if (!inJournal) expect(journalOf(dir), `op ${k}`).toEqual(whole.subarray(0, prefixLen));
+          // The next recovery (a restart) heals it the same way.
+          const fresh = await harness({ dir }).open();
+          expect(fresh.failure(), `op ${k}`).toBeNull();
+          expect(journalOf(dir), `op ${k}`).toEqual(whole.subarray(0, prefixLen));
+          expect(tornFiles(dir), `op ${k}: one copy, no temp file`).toEqual([nameOf(prefixLen, TAIL)]);
+          expect(readFileSync(keptAs)).toEqual(TAIL);
+          expect((await fresh.applyAccepted(batch([sessionStart(3)]))).appended.map((r) => r.sequence)).toEqual([3]);
+        });
+
+        it(`one transient fault at operation ${k}: the applier is not ready, and its own recover() heals it`, async () => {
+          const { dir, prefixLen, whole } = fixture();
+          const flaky = faultPort(nodeDelegationFilePort, { failAt: k });
+          const dur = await harness({ dir }).open({ port: flaky.port });
+          expect(dur.failure(), `op ${k}`).toMatchObject({ code: 'tail-heal-failed' });
+          const again = await dur.recover();
+          expect(again.failure, `op ${k}`).toBeNull();
+          expect(dur.state().phase).toBe('ready');
+          expect(journalOf(dir)).toEqual(whole.subarray(0, prefixLen));
+          expect(tornFiles(dir)).toEqual([nameOf(prefixLen, TAIL)]);
+        });
+      }
+      it('the count is the one the rows above visit', () => { expect(total).toBe(10); });
+    });
+
+    it('a failed append that leaves a fragment is healed by the retry and LOSES NOTHING: the next application reproduces the run that never tore (the lossless row)', async () => {
+      const tear = { on: false };
+      const tearing = (inner: DelegationFilePort): DelegationFilePort => ({
+        ...inner,
+        openAppend: async (p) => {
+          const handle = await inner.openAppend(p);
+          return { ...handle, write: async (b) => (tear.on ? handle.write(b.subarray(0, Math.max(1, b.length - 3))) : handle.write(b)) };
+        },
+      });
+      const first = batch([sessionStart(1)]);
+      const second = batch([bareTool(2, X), subagentStart(3, X)], { cursor: cursorFor('2026101400', 300), interval: intervalFor('2026101400', 'measured', T(3)) });
+      const a = harness();
+      const never = await a.open();
+      await never.applyAccepted(first);
+      await never.applyAccepted(second);
+
+      const b = harness();
+      const torn = await b.open({ port: tearing(spyPort(b.log)) });
+      await torn.applyAccepted(first);
+      tear.on = true;
+      await expect(torn.applyAccepted(second)).rejects.toMatchObject({ code: 'short-write' });
+      tear.on = false;
+      expect(torn.failure()).toMatchObject({ phase: 'durable-application' });
+      const fragment = readFileSync(path.join(b.dir, DELEGATION_JOURNAL_FILE));
+      expect(fragment[fragment.length - 1], 'the failed append really left a fragment').not.toBe(0x0a);
+      const report = await torn.recover();
+      expect(report.failure).toBeNull();
+      expect(torn.lastTailHeal()).not.toBeNull();
+      await torn.applyAccepted(second);                                   // the bucket is read again: the same events mint the same eventIds
+
+      expect(canonicalDelegationJson(torn.state().checkpoint)).toBe(canonicalDelegationJson(never.state().checkpoint));
+      expect(torn.state().checkpoint.activityIdsByNaturalKey).toEqual(never.state().checkpoint.activityIdsByNaturalKey);
+      expect(torn.state().checkpoint.bucketCursors).toEqual(never.state().checkpoint.bucketCursors);
+      expect(torn.state().checkpoint.observationIntervals).toEqual(never.state().checkpoint.observationIntervals);
+      expect(readFileSync(path.join(b.dir, DELEGATION_JOURNAL_FILE))).toEqual(readFileSync(path.join(a.dir, DELEGATION_JOURNAL_FILE)));
+      expect(tornFiles(b.dir)).toHaveLength(1);
+    });
+  });
+});
+
 
 // ── O1: a meta-opened ID is not exposed before the checkpoint replacement (W3-M12) ──────────────────────────────────────
 
@@ -2420,18 +2935,41 @@ describe('no-compaction / hold table (W3-M38): holds are computed and tested, an
     const stripComments = (src: string): string => src.split('\n').filter((l) => !/^\s*(\*|\/\/|\/\*)/.test(l)).join('\n');
     const code = (file: string): string => stripComments(readFileSync(path.join(srcDir, 'coord', file), 'utf8'));
 
-    it('the journal module has no method that could: no truncate, no rename of its own file, no unlink, no writeFile, no rewrite', () => {
+    // THE ONE NAMED EXCEPTION (D-4655, the operator's ruling of 2026-10-15): the server's tail heal. It is the ONLY production path that
+    // cuts the journal, it cuts only to the end of the last complete validated record, and only after the cut bytes are durable in
+    // `delegation-events.torn/`. The two rows below pin its exact shape, so a second truncate, a truncate to any other offset, a truncate
+    // outside the heal, or a rename of anything but the two temp files each turn them red.
+    it('the journal module has no method that could rewrite it: its ONLY truncate is the port member the tail heal calls, and the writer has none', () => {
       const j = code('delegation-journal.ts');
-      expect(j).not.toMatch(/\.truncate\(|ftruncate|\bunlink\(|\brm\(|\.writeFile\(|\bcreateWriteStream\(|O_TRUNC\b.*journal/i);
-      expect(j.match(/O_TRUNC/g)?.length ?? 0).toBe(1);                      // only createTemp (the checkpoint's temp file) truncates
+      expect(j).not.toMatch(/ftruncate|\bunlink\(|\brm\(|\.writeFile\(|\bcreateWriteStream\(|O_TRUNC\b.*journal/i);
+      expect(j.match(/\btruncate\b/g), 'the port member, its node adapter and the adapter\'s fsp call: three words, no more').toHaveLength(3);
+      expect(j).toMatch(/^  truncate\(path: string, length: number\): Promise<void>;$/m);
+      expect(j).toMatch(/^  truncate: \(p, length\) => fsp\.truncate\(p, length\),$/m);
+      expect(j.slice(j.indexOf('export class DelegationJournalWriter')), 'the writer cannot cut').not.toMatch(/truncate/);
+      expect(j.match(/O_TRUNC/g)?.length ?? 0).toBe(1);                      // only createTemp (the checkpoint's and the quarantine copy's temp file) truncates
       expect(j).toMatch(/createTemp:[^\n]*O_TRUNC/);
       expect(j.match(/O_APPEND/g)?.length).toBe(1);
     });
-    it('the checkpoint module renames only the checkpoint\'s own temp file, and opens the journal only for append or read', () => {
+    it('the checkpoint module cuts the journal in ONE place (the heal, at the plan\'s offset), renames only its two temp files, and opens the journal only for append or read', () => {
       const c = code('delegation-checkpoint.ts');
-      expect(c.match(/\.rename\(/g)).toEqual(['.rename(']);
+      expect(c.match(/\.rename\(/g), 'the checkpoint temp file and the quarantine temp file').toEqual(['.rename(', '.rename(']);
       expect(c).toMatch(/this\.port\.rename\(this\.tempPath, this\.checkpointPath\)/);
-      expect(c).not.toMatch(/truncate|unlink|\.writeFile\(|rmSync/);
+      expect(c).toMatch(/this\.port\.rename\(temp, kept\)/);
+      expect(c).toMatch(/const temp = `\$\{kept\}\.tmp`;/);
+      expect(c).toMatch(/const kept = path\.join\(this\.deps\.dir, DELEGATION_TORN_DIR, plan\.name\);/);
+      expect(c).not.toMatch(/unlink|\.writeFile\(|rmSync/);
+      expect(c.match(/truncate/g), 'exactly one truncate in the module').toEqual(['truncate']);
+      expect(c).toMatch(/await this\.port\.truncate\(this\.journalPath, plan\.offset\);/);
+      const heal = c.slice(c.indexOf('private async healTailLocked'), c.indexOf('private async remeasureTail'));
+      expect(heal, 'the cut is inside the heal').toMatch(/await this\.port\.truncate\(this\.journalPath, plan\.offset\);/);
+      expect(c.match(/healTailLocked\(/g), 'the heal is declared once and called once').toHaveLength(2);
+      expect(c).toMatch(/if \(report\.tailHeal !== null\) \{\s*try \{\s*await this\.healTailLocked\(report\.tailHeal\);/);
+      // the cut comes after the copy is durable: the copy's fsyncs precede the truncate in the heal's text
+      expect(heal.indexOf('await handle.sync();')).toBeGreaterThan(-1);
+      expect(heal.indexOf('await handle.sync();')).toBeLessThan(heal.indexOf('this.port.truncate('));
+      expect(heal.indexOf('this.port.rename(temp, kept)')).toBeLessThan(heal.indexOf('await this.port.fsyncDir(path.dirname(kept))'));
+      expect(heal.indexOf('await this.port.fsyncDir(path.dirname(kept))')).toBeLessThan(heal.indexOf('this.port.truncate('));
+      expect(heal.indexOf('this.port.truncate(')).toBeLessThan(heal.indexOf('this.port.fsyncFile(this.journalPath)'));
       expect(c).not.toMatch(/createTemp\([^)]*journalPath/);
     });
     it('a full run of every application kind renames exactly one file name, never the journal', async () => {

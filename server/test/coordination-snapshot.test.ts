@@ -1841,3 +1841,319 @@ describe('8B: backup-coord.mjs stays the SQLite-only snapshot, and the helper ne
     expect(src).not.toMatch(/await import\(|import\(['"`]\./);
   });
 });
+
+// ═══ 8C (D-4655): a torn journal tail heals itself ═══════════════════════════════════════════════════════════════════════
+// The operator ruled on 2026-10-15 that a torn tail must heal itself in wave 3. THE SERVER heals the live journal (`delegation-recovery.test.ts`,
+// its D-4655 describe: quarantine, cut, fsync). THIS FILE holds the other side: CAPTURE NEVER WRITES THE JOURNAL. A torn tail stays retryable
+// (a writer may be mid-append); when the five attempts are spent and the ONLY defect is a healable tail, the last attempt captures the
+// complete prefix (up to and including the last LF, never past it) with its checkpoint, writes the additive manifest field
+// `delegation.journalTailOmitted: {bytes, sha256}` (version 1 still; absence means nothing was left out), and the CLI says so on stderr.
+// The rule is the server's, restated once on this side (it cannot import server TypeScript); the differential below holds the two together.
+import { statSync } from 'node:fs';
+import { nodeDelegationFilePort } from '../src/coord/delegation-journal.js';
+import { DelegationDurability, recoverDelegation, recoverDelegationFromFiles } from '../src/coord/delegation-checkpoint.js';
+
+describe('8C: capture of a torn tail (D-4655): the complete prefix, the checkpoint, an additive manifest field, and a warning', () => {
+  const LAST_LINE = encodeDelegationJournalRecord(RC);
+  const tornJournal = (k: number): Uint8Array => new Uint8Array([...bytesOf(RA, RB), ...LAST_LINE.subarray(0, k)]);
+  const CP_AT_RB = cpBytes(3, RB);
+  const NOW = (): Date => new Date('2026-10-14T12:00:00.000Z');
+  const captureOf = (home: string, dir: string, extra: { fs?: unknown; sleep?: (ms: number) => void; hooks?: unknown } = {}): any =>
+    H.capture({ home, dir, sleep: () => undefined, now: NOW, ...extra });
+
+  it('the retries are kept: a tail is retried four times with 10, 25, 50 and 100 ms, and only the fifth attempt may leave it out', () => {
+    const home = mkHome();
+    setLive(home, { journal: tornJournal(40), checkpoint: CP_AT_RB });
+    const dir = snapDirOf(home);
+    const sleeps: number[] = [];
+    let attempts = 0;
+    const m = captureOf(home, dir, { sleep: (ms: number) => sleeps.push(ms), hooks: { afterJournalCopy: () => { attempts++; } } });
+    expect(sleeps).toEqual([10, 25, 50, 100]);
+    expect(attempts).toBe(5);
+    expect(m.delegation.journalTailOmitted).toEqual({ bytes: 40, sha256: sha(LAST_LINE.subarray(0, 40)) });
+  });
+
+  it('a tail that is whole again within the retries is captured whole and nothing is reported left out', () => {
+    const home = mkHome();
+    setLive(home, { journal: tornJournal(40), checkpoint: CP_AT_RB });
+    const dir = snapDirOf(home);
+    const sleeps: number[] = [];
+    let seen = 0;
+    const m = captureOf(home, dir, {
+      sleep: (ms: number) => sleeps.push(ms),
+      hooks: { afterJournalCopy: () => { seen++; if (seen === 3) writeFileSync(liveFile(home, 'delegation-events.log'), bytesOf(RA, RB, RC)); } },
+    });
+    expect(sleeps, 'the hook rewrites the journal after the third copy, so the fourth attempt is the whole one').toEqual([10, 25, 50]);
+    expect(m.delegation).not.toHaveProperty('journalTailOmitted');
+    expect(m.delegation.journal.lastSequence).toBe(3);
+  });
+
+  it('at every cut: the journal member is EXACTLY the bytes up to and including the last LF, the manifest names the tail left out, and the pair restores as v1', () => {
+    for (const k of [1, 2, 40, 100, Math.floor(LAST_LINE.length / 2), LAST_LINE.length - 3, LAST_LINE.length - 2, LAST_LINE.length - 1]) {
+      const home = mkHome();
+      const live = tornJournal(k);
+      setLive(home, { journal: live, checkpoint: CP_AT_RB });
+      const dir = snapDirOf(home);
+      const m = captureOf(home, dir);
+      const prefix = bytesOf(RA, RB);
+      expect(readFileSync(path.join(dir, 'delegation-events.log')), `cut ${k}`).toEqual(Buffer.from(prefix));
+      expect(readFileSync(path.join(dir, 'delegation-checkpoint.json')), `cut ${k}`).toEqual(Buffer.from(CP_AT_RB));
+      expect(m.members.delegationJournal, `cut ${k}`).toEqual({ filename: 'delegation-events.log', present: true, bytes: prefix.length, sha256: sha(prefix) });
+      expect(m.delegation.journalTailOmitted, `cut ${k}`).toEqual({ bytes: k, sha256: sha(LAST_LINE.subarray(0, k)) });
+      expect(m.delegation.journal, `cut ${k}`).toMatchObject({ firstSequence: 1, lastSequence: 2, recordCount: 2, copiedEof: posOf(RB) });
+      expect(m.delegation.anchor).toEqual(posOf(RB));
+      expect(readFileSync(path.join(dir, 'coordination-snapshot.json'), 'utf8'), `cut ${k}`).toBe(`${H.canonicalJson(m)}\n`);
+      expect(H.classify({ from: dir }), `cut ${k}`).toMatchObject({ kind: 'v1' });
+      expect(readFileSync(liveFile(home, 'delegation-events.log')), `capture never writes the live journal (cut ${k})`).toEqual(Buffer.from(live));
+    }
+  });
+
+  it('with no checkpoint a journal of nothing but a fragment captures as an empty journal member, and the field names the fragment', () => {
+    const home = mkHome();
+    setLive(home, { journal: text('{"acceptedAt":"2026-10-1'), checkpoint: null });
+    const m = captureOf(home, snapDirOf(home));
+    expect(m.members.delegationJournal).toEqual({ filename: 'delegation-events.log', present: true, bytes: 0, sha256: sha(new Uint8Array(0)) });
+    expect(m.delegation).toMatchObject({ state: 'initialized', journal: { recordCount: 0, copiedEof: null }, journalTailOmitted: { bytes: 24, sha256: sha('{"acceptedAt":"2026-10-1') } });
+  });
+
+  it('a journal with no tail has no field: the manifest is byte-for-byte what 8B wrote', () => {
+    const home = mkHome();
+    setLive(home, { journal: J3, checkpoint: CP3 });
+    const m = captureOf(home, snapDirOf(home));
+    expect(Object.keys(m.delegation).sort()).toEqual(['anchor', 'checkpointRevision', 'journal', 'state']);
+  });
+
+  it('CORRUPTION still refuses, with no manifest and nothing left behind: an invalid complete record, a chain break, and a tail the checkpoint names', () => {
+    const cases: Array<[string, Uint8Array, Uint8Array | null, string]> = [
+      ['an invalid complete record then a tail', new Uint8Array([...bytesOf(RA), ...text(`${new TextDecoder().decode(encodeDelegationJournalRecord(RB)).replace(B.digest, '0'.repeat(64))}`), ...LAST_LINE.subarray(0, 40)]), null, 'digest-mismatch'],
+      ['a chain break then a tail', new Uint8Array([...bytesOf(RA, rec({ ...B, previousDigest: 'd'.repeat(64) }, EVENT_B)), ...LAST_LINE.subarray(0, 40)]), null, 'previous-digest'],
+      ['a checkpoint that names the LF-less record', tornJournal(LAST_LINE.length - 1), cpBytes(5, RC), 'capture-exhausted'],
+      ['a checkpoint that names a torn record', tornJournal(40), cpBytes(5, RC), 'capture-exhausted'],
+      ['a checkpoint that holds the LF-less record', tornJournal(LAST_LINE.length - 1), cpBytes(3, RB, { pruningHolds: [{ journalId: RB.journalId, reason: 'checkpoint-anchor', ownerId: 'c' }, { journalId: RC.journalId, reason: 'identity-candidate', ownerId: 'agent-1' }] }), 'capture-exhausted'],
+    ];
+    for (const [name, journal, checkpoint, code] of cases) {
+      const home = mkHome();
+      setLive(home, { journal, checkpoint });
+      const dir = snapDirOf(home);
+      const r = outcome(() => captureOf(home, dir));
+      expect(r, name).toMatchObject({ ok: false, code });
+      expect(dirListing(dir), name).toEqual([]);
+      expect(readFileSync(liveFile(home, 'delegation-events.log')), name).toEqual(Buffer.from(journal));
+    }
+  });
+
+  it('CAPTURE NEVER WRITES THE JOURNAL: the live journal and checkpoint keep their bytes, inode and mtime, and no mutating operation names a live path', () => {
+    const home = mkHome();
+    setLive(home, { journal: tornJournal(40), checkpoint: CP_AT_RB });
+    const j = liveFile(home, 'delegation-events.log');
+    const before = { st: statSync(j), bytes: readFileSync(j) };
+    const dir = snapDirOf(home);
+    const { fs, log } = loggedFs(home);
+    captureOf(home, dir, { fs });
+    const after = statSync(j);
+    expect(readFileSync(j)).toEqual(before.bytes);
+    expect([after.ino, after.mtimeMs, after.size]).toEqual([before.st.ino, before.st.mtimeMs, before.st.size]);
+    const mutating = log.ops.filter((o) => !NO_MUTATION.has(o.split(' ')[0]!));
+    expect(mutating.length).toBeGreaterThan(8);
+    for (const o of mutating) expect(o, 'a mutating operation on a live path').not.toContain('<root>/.ccrc');
+    // the journal is opened for reading (a symlink is never followed), and the copy goes to the backup directory's own partial file
+    expect(log.ops.some((o) => o.startsWith('openRead <root>/.ccrc/delegation-events.log'))).toBe(true);
+  });
+
+  it('the manifest field is validated: a wrong shape, an extra key, or a field on an absent delegation is an invalid snapshot; a valid one classifies v1', () => {
+    const home = mkHome();
+    setLive(home, { journal: tornJournal(40), checkpoint: CP_AT_RB });
+    const { dir } = { dir: snapDirOf(home) };
+    captureOf(home, dir);
+    const manifestPath = path.join(dir, 'coordination-snapshot.json');
+    const original = readFileSync(manifestPath, 'utf8');
+    const edit = (f: (m: any) => void): string => {
+      const m = JSON.parse(original);
+      f(m);
+      writeFileSync(manifestPath, `${H.canonicalJson(m)}\n`);
+      return H.classify({ from: dir }).kind;
+    };
+    expect(H.classify({ from: dir }).kind).toBe('v1');
+    expect(edit(() => undefined)).toBe('v1');
+    expect(edit((m) => { m.delegation.journalTailOmitted.bytes = 0; })).toBe('invalid');
+    expect(edit((m) => { m.delegation.journalTailOmitted.bytes = 1.5; })).toBe('invalid');
+    expect(edit((m) => { m.delegation.journalTailOmitted.bytes = '40'; })).toBe('invalid');
+    expect(edit((m) => { m.delegation.journalTailOmitted.sha256 = 'XYZ'; })).toBe('invalid');
+    expect(edit((m) => { m.delegation.journalTailOmitted.extra = 1; })).toBe('invalid');
+    expect(edit((m) => { delete m.delegation.journalTailOmitted.sha256; })).toBe('invalid');
+    expect(edit((m) => { m.delegation.journalTailOmitted = null; })).toBe('invalid');
+    expect(edit((m) => { m.delegation.journalTailOmitted = 40; })).toBe('invalid');
+    expect(edit((m) => { m.delegation = { state: 'absent', checkpointRevision: null, anchor: null, journal: null, journalTailOmitted: { bytes: 1, sha256: 'a'.repeat(64) } }; })).toBe('invalid');
+    // absent means nothing was left out, which is a valid description of a prefix; it is version 1 either way
+    expect(edit((m) => { delete m.delegation.journalTailOmitted; })).toBe('v1');
+    expect(JSON.parse(readFileSync(manifestPath, 'utf8')).version).toBe(1);
+  });
+
+  it('the command line says so ONCE on stderr, naming the bytes, the sha256 and the backup directory, and exits 0 with its usual line on stdout', () => {
+    const home = mkHome();
+    setLive(home, { journal: tornJournal(40), checkpoint: CP_AT_RB });
+    const dir = snapDirOf(home);
+    const r = captureCli(home, dir);
+    expect(r.status, r.stderr).toBe(0);
+    expect(r.stdout).toBe('coordination snapshot: initialized delegation, coord.db absent, manifest written\n');
+    const warnings = r.stderr.split('\n').filter((l) => l !== '');
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toMatch(/^coordination snapshot: warning: /);
+    expect(warnings[0]).toContain('40 bytes');
+    expect(warnings[0]).toContain(sha(LAST_LINE.subarray(0, 40)));
+    expect(warnings[0]).toContain(dir);
+    // and a whole journal prints nothing on stderr
+    const clean = mkHome();
+    setLive(clean, { journal: J3, checkpoint: CP3 });
+    expect(captureCli(clean, snapDirOf(clean)).stderr).toBe('');
+  });
+
+  it('deploy.sh runs the helper through ssh with its stderr and exit status passed through: no redirect, no quiet flag, no `|| true`', () => {
+    const deploy = readFileSync(path.join(HERE8B, '..', '..', 'deploy', 'deploy.sh'), 'utf8');
+    const line = deploy.split('\n').find((l) => l.includes('coordination-snapshot.mjs capture --dir'));
+    expect(line, 'deploy.sh no longer runs the capture').toBeDefined();
+    expect(line!.trim()).toBe('"${SSH[@]}" "$BOX" "node --no-warnings ~/ccrc-backups/coordination-snapshot.mjs capture --dir ~/ccrc-backups/$TS"');
+    expect(deploy).toMatch(/^SSH=\(ssh -p "\$CCRC_SSH_PORT" -i "\$CCRC_SSH_KEY"\)$/m);
+  });
+});
+
+describe('8C: W3-M22 keeps its meaning with ONE named exception (D-4655): the validators still refuse every torn position, and only the server\'s heal may cut one', () => {
+  const FULL = encodeDelegationJournalRecord(RC);
+  const noLf = FULL.subarray(0, FULL.length - 1);
+  it('the strict validators refuse each cut on BOTH sides, even where recovery would find the tail healable', async () => {
+    for (const k of [1, 2, 40, Math.floor(noLf.length / 2), noLf.length - 1, noLf.length]) {
+      const torn = new Uint8Array([...bytesOf(RA, RB), ...noLf.subarray(0, k)]);
+      const code = k === noLf.length ? 'missing-final-lf' : 'torn-tail';
+      expect(bothAgree(`cut ${k}`, torn), `cut ${k}`).toEqual({ ok: false, code });
+      const home = mkHome();
+      setLive(home, { journal: torn, checkpoint: null });
+      const report = await recoverDelegationFromFiles(nodeDelegationFilePort, liveDir(home));
+      expect(report.tailHeal, `cut ${k}: the exception is the heal, not the validator`).toMatchObject({ offset: bytesOf(RA, RB).length, bytes: k, code });
+    }
+  });
+});
+
+describe('8C: the server and the helper agree on what is healable (the rule, once per side)', () => {
+  const FULL = encodeDelegationJournalRecord(RC);
+  const torn = (k: number): Uint8Array => new Uint8Array([...bytesOf(RA, RB), ...FULL.subarray(0, k)]);
+  /** A checkpoint the SERVER's full recovery accepts, built by its own fold. */
+  const realCp = (...records: DelegationJournalRecordV1[]): Uint8Array => encodeDelegationCheckpoint({ ...recoverDelegation(null, records).state.checkpoint, revision: 1 });
+  const rows: Array<[string, Uint8Array, Uint8Array | null]> = [
+    ['no checkpoint, a fragment', torn(40), null],
+    ['a checkpoint at the last complete record', torn(40), realCp(RA, RB)],
+    ['a checkpoint behind the last complete record', torn(40), realCp(RA)],
+    ['a whole record with no LF, not named', torn(FULL.length - 1), realCp(RA, RB)],
+    ['one byte of the next record', torn(1), realCp(RA, RB)],
+    ['a checkpoint that names the LF-less record', torn(FULL.length - 1), realCp(RA, RB, RC)],
+    ['a checkpoint that names a torn record', torn(40), realCp(RA, RB, RC)],
+    ['an invalid complete record then a tail', new Uint8Array([...bytesOf(RA), ...text(new TextDecoder().decode(encodeDelegationJournalRecord(RB)).replace(B.digest, '0'.repeat(64))), ...FULL.subarray(0, 40)]), null],
+    ['a chain break then a tail', new Uint8Array([...bytesOf(RA, rec({ ...B, previousDigest: 'd'.repeat(64) }, EVENT_B)), ...FULL.subarray(0, 40)]), null],
+    ['a gap then a tail', new Uint8Array([...bytesOf(RA, RC), ...FULL.subarray(0, 40)]), null],
+    ['no tail at all', bytesOf(RA, RB), realCp(RA, RB)],
+  ];
+  for (const [name, journal, checkpoint] of rows) {
+    it(`${name}: the same verdict, the same tail`, async () => {
+      const home = mkHome();
+      setLive(home, { journal, checkpoint });
+      // The server: recovery over the files.
+      const report = await recoverDelegationFromFiles(nodeDelegationFilePort, liveDir(home));
+      const server = report.tailHeal !== null
+        ? { healable: true as const, tail: { offset: report.tailHeal.offset, bytes: report.tailHeal.bytes, sha256: report.tailHeal.sha256 } }
+        : { healable: false as const, code: report.failure?.code ?? null };
+      // The helper: a capture into a fresh directory.
+      const dir = snapDirOf(home);
+      const r = outcome(() => H.capture({ home, dir, sleep: () => undefined, now: () => new Date('2026-10-14T12:00:00.000Z') }));
+      if (server.healable) {
+        expect(r.ok, name).toBe(true);
+        const m = (r as { ok: true; value: any }).value;
+        expect(m.delegation.journalTailOmitted, name).toEqual({ bytes: server.tail.bytes, sha256: server.tail.sha256 });
+        expect(m.members.delegationJournal.bytes, name).toBe(server.tail.offset);
+      } else if (server.code === null) {
+        expect(r.ok, name).toBe(true);
+        expect((r as { ok: true; value: any }).value.delegation, name).not.toHaveProperty('journalTailOmitted');
+      } else {
+        expect(r.ok, name).toBe(false);
+        const surfaced = (r as { code: string; message: string }).code === 'capture-exhausted' ? /last: ([a-z-]+):/.exec((r as { message: string }).message)?.[1] : (r as { code: string }).code;
+        expect(surfaced, `${name}: the helper's refusal (${(r as { message: string }).message})`).toBe(server.code);
+        expect(dirListing(dir), name).toEqual([]);
+      }
+    });
+  }
+});
+
+describe('8C: a snapshot taken past a torn tail restores as a valid pair, and the server opens READY on it', () => {
+  it('capture a torn journal, restore into an EMPTY fixture ~/.ccrc, recover: a clean journal with no tail, no heal to do, and the server opens ready', async () => {
+    const src = mkHome();
+    const prefix = bytesOf(RA, RB);
+    const cp = encodeDelegationCheckpoint({ ...recoverDelegation(null, [RA, RB]).state.checkpoint, revision: 1 });
+    setLive(src, { journal: new Uint8Array([...prefix, ...encodeDelegationJournalRecord(RC).subarray(0, 77)]), checkpoint: cp });
+    const { dir, manifest } = snapshotOf(src);
+    expect(manifest.delegation.journalTailOmitted).toMatchObject({ bytes: 77 });
+    const target = mkHome();                                              // an empty ~/.ccrc
+    expect(dirListing(liveDir(target))).toEqual([]);
+    H.restore({ home: target, from: dir, probe: inactive });
+    expect(H.recover({ home: target, probe: inactive })).toBe('none');
+    expect(readFileSync(liveFile(target, 'delegation-events.log'))).toEqual(Buffer.from(prefix));
+    expect(readFileSync(liveFile(target, 'delegation-checkpoint.json'))).toEqual(Buffer.from(cp));
+    const report = await recoverDelegationFromFiles(nodeDelegationFilePort, liveDir(target));
+    expect(report.failure).toBeNull();
+    expect(report.tailHeal, 'the restored journal has no tail').toBeNull();
+    const dur = await DelegationDurability.open({ dir: liveDir(target), projection: null, now: () => Date.now(), randomUUID: () => 'u' });
+    try {
+      expect(dur.failure()).toBeNull();
+      expect(dur.state().phase).toBe('ready');
+      expect(dur.lastTailHeal()).toBeNull();
+      expect(dirListing(liveDir(target))).toEqual(['delegation-checkpoint.json', 'delegation-events.log']);
+    } finally { await dur.close(); }
+  });
+});
+
+describe('8C (#384): the temp-root collector\'s generation log is never part of a coordination snapshot', () => {
+  // Main's #384 keeps `~/.ccrc/collect-lane-generation.log` and says that no snapshot copies it and no restore moves it. Merge 4 measured that
+  // this code leaves it alone; this row pins it: capture, restore, recover, and a restore that QUARANTINES a foreign file.
+  const LOG_NAME = 'collect-lane-generation.log';
+  it('capture (torn or whole), restore, a rolled-back restore that quarantines a foreign file, and recover leave its bytes, inode and mtime alone, and it is never in a backup dir or the foreign directory', () => {
+    const f = restoreFixture();
+    const log = liveFile(f.home, LOG_NAME);
+    writeFileSync(log, 'generation 7\ngeneration 8\n');
+    const was = statSync(log);
+    const bytes = readFileSync(log);
+    const unchanged = (what: string): void => {
+      const now = statSync(log);
+      expect([now.ino, now.mtimeMs, now.size], what).toEqual([was.ino, was.mtimeMs, was.size]);
+      expect(readFileSync(log), what).toEqual(bytes);
+    };
+    // 1. captures, whole and torn: the backup directory holds no copy of it
+    const whole = snapshotOf(f.home, '20261014-000001');
+    expect(dirListing(whole.dir)).not.toContain(LOG_NAME);
+    setLive(f.home, { journal: new Uint8Array([...bytesOf(RA, RB), ...encodeDelegationJournalRecord(RC).subarray(0, 40)]), checkpoint: cpBytes(3, RB) });
+    const torn = snapshotOf(f.home, '20261014-000002');
+    expect(torn.manifest.delegation.journalTailOmitted).toBeDefined();
+    for (const d of [whole.dir, torn.dir]) {
+      expect(dirListing(d)).not.toContain(LOG_NAME);
+      expect(JSON.stringify(JSON.parse(readFileSync(path.join(d, 'coordination-snapshot.json'), 'utf8')))).not.toContain(LOG_NAME);
+    }
+    unchanged('after the captures');
+    // 2. a restore, then a restore whose verify fails because a foreign WAL appeared after placement: the rollback QUARANTINES that file
+    H.restore({ home: f.home, from: whole.dir, probe: inactive });
+    unchanged('after a restore');
+    rmSync(liveFile(f.home, 'coord.db-wal'), { force: true });
+    rmSync(liveFile(f.home, 'coord.db-shm'), { force: true });
+    const { fs } = loggedFs(f.home);
+    const rename = fs.rename;
+    fs.rename = (a: string, b: string) => {
+      rename(a, b);
+      if (b === liveFile(f.home, 'coord.db') && a.includes('coordination-restore.stage/new')) writeFileSync(liveFile(f.home, 'coord.db-wal'), 'a foreign WAL\n');
+    };
+    expect(outcome(() => H.restore({ home: f.home, from: whole.dir, fs, probe: inactive }))).toMatchObject({ ok: false, code: 'verify-failed' });
+    unchanged('after a rolled-back restore');
+    const foreignRoot = liveFile(f.home, 'coordination-restore.foreign');
+    const quarantined = existsSync(foreignRoot) ? readdirSync(foreignRoot).flatMap((id) => readdirSync(path.join(foreignRoot, id))) : [];
+    expect(quarantined).toEqual(['coord.db-wal']);
+    expect(quarantined).not.toContain(LOG_NAME);
+    // 3. recover has nothing left, and the log is still the log
+    expect(H.recover({ home: f.home, probe: inactive })).toBe('none');
+    unchanged('after recover');
+    expect(dirListing(liveDir(f.home))).toContain(LOG_NAME);
+  });
+});

@@ -15,13 +15,24 @@
 // journal record must sit at or below the checkpoint's applied sequence plus one). It cannot fire in wave 3, which compacts
 // nothing, and it is tested on this side only.
 //
+// THE TORN TAIL (D-4655, the operator's ruling of 2026-10-15). The SERVER heals its own journal; capture NEVER writes it. A journal that
+// ends in bytes after its last LF is retried like a checkpoint that moved (a writer may be mid-append), through the same five
+// attempts. When they are spent and the ONLY defect is a healable tail, the last attempt captures the complete prefix instead: the
+// journal bytes up to and including the last LF, never past it, with the checkpoint, and writes the additive manifest field
+// `delegation.journalTailOmitted: {bytes, sha256}` (version 1 still; absence means nothing was left out). The rule is the server's
+// (`delegationTailHealPlan` in `server/src/coord/delegation-journal.ts`), restated once here because this file imports nothing:
+// healable iff the journal ends in bytes after its last LF AND every complete record validates with an intact chain AND the checkpoint's
+// applied position names a complete record (or none) and every record it holds is retained. A tail the checkpoint names, a defect
+// inside a complete record, a chain break: all are corruption, not a crash artefact, and refuse capture exactly as before. A differential
+// row in `coordination-snapshot.test.ts` feeds both sides the same files.
+//
 // WHAT IT NEVER DOES. It never opens `coord.db` for writing, never follows a symlink for a member or a marker, never writes
 // outside the directory it is given (capture) or `~/.ccrc` (restore), and never touches a service: restore asks whether the
 // server is running and refuses unless it MEASURES it inactive, and asks again once its marker is durable. While the marker stands,
 // delegation recovery (`recoverDelegationFromFiles`) refuses to run; the server's boot is not yet wired to that refusal (Task 13). `backup-coord.mjs` stays the SQLite-only snapshot; this file
 // reads the DB snapshot it made and describes it.
 //
-// VERBS (exit codes). `capture --dir <timestamp dir>`: 0 manifest durable, 1 refused or exhausted (no manifest, no partials).
+// VERBS (exit codes). `capture --dir <timestamp dir>`: 0 manifest durable (a tail it left out is one warning line on stderr), 1 refused or exhausted (no manifest, no partials).
 // `classify --from <dir>` prints `v1`, `legacy`, `none` or `invalid` and exits 0, 0, 1, 2. `validate --from <dir>` is `classify`
 // with its reasons: line 1 is `<word>: <reason>`, line 2 is `data: yes|no` (a v1 snapshot with any member present, or a legacy
 // one, holds data; the retention keeps the newest such snapshot beside the newest valid one, D-4641). `restore --from <dir>`: 0 done, 1 failed (the live set is the old one, or `recover` finishes it), 2 refused
@@ -594,9 +605,12 @@ export function validateSidecars(fs, { checkpointBytes, journalPath }) {
   return { revision: header?.revision ?? 0, anchor: header?.anchor ?? null, coverage, journalPresent: present, checkpointPresent: header !== null };
 }
 
-function delegationOf(v) {
+/** The manifest's `delegation` section for a validated pair. `tailOmitted` is `{bytes, sha256}` of the torn tail a capture left out, or null; the
+ *  field exists only then (absence means nothing was left out), so a manifest of an untorn journal is exactly what 8B wrote. */
+function delegationOf(v, tailOmitted = null) {
   if (!v.journalPresent && !v.checkpointPresent) return { state: 'absent', checkpointRevision: null, anchor: null, journal: null };
-  return { state: 'initialized', checkpointRevision: v.revision, anchor: v.anchor, journal: v.coverage };
+  const section = { state: 'initialized', checkpointRevision: v.revision, anchor: v.anchor, journal: v.coverage };
+  return tailOmitted === null ? section : { ...section, journalTailOmitted: tailOmitted };
 }
 
 // ── Capture ──────────────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -611,8 +625,10 @@ const memberOf = (filename, m) => (m === null ? { filename, present: false } : {
  * following a symlink and copy exactly the byte count `fstat` reports on that opened inode; read checkpoint B and require it
  * byte-equal to A (else the checkpoint moved: retry); validate the checkpoint, the whole copied journal (pre-anchor records,
  * anchor, suffix, copied EOF); validate and hash the expected SQLite snapshot; make every member durable; and only then write
- * the manifest. A torn tail or a moved checkpoint is retryable (a writer was mid-append); a refusal is not. Exhaustion, or any
- * failure, removes the files this run created and writes no manifest.
+ * the manifest. A torn tail or a moved checkpoint is retryable (a writer was mid-append); a refusal is not. The LAST attempt differs
+ * in one way (D-4655): it copies the complete records alone, so a journal that still ends in a healable tail is captured up to its
+ * last LF and the manifest names what was left out; a tail the checkpoint names, or any defect of a complete record, is refused as
+ * before. Exhaustion, or any failure, removes the files this run created and writes no manifest.
  *
  * @param {{home: string, dir: string, fs?: typeof realFs, sleep?: (ms: number) => void, now?: () => Date,
  *          hooks?: {afterJournalCopy?: (attempt: number) => void}}} opts
@@ -651,22 +667,33 @@ export function capture(opts) {
   }
   throw new SnapError('capture-exhausted', `the sidecars kept moving or tearing for ${attempts} attempts (last: ${last?.message ?? 'unknown'})`);
 
-  function copyJournal() {
+  /**
+   * Copies the journal's `fstat` size into the backup directory's own partial file. In PREFIX mode (the last attempt only) it copies
+   * the complete records alone: every byte up to and including the last LF, and holds back whatever follows it, which is returned as
+   * `tail` (the bytes themselves, so the caller can name them in the manifest; they are never written anywhere). Reading only: the live
+   * journal is opened for read and never followed through a symlink.
+   */
+  function copyJournal(prefixMode) {
     const h = fs.openRead(path.join(ccrcDir, JOURNAL_FILE));
     if (h === null) return null;
     try {
       const out = fs.create(partials[0]);
       try {
         const hash = createHash('sha256');
+        let written = 0;
+        let held = [];          // prefix mode: the chunks after the last LF seen so far
         for (let at = 0; at < h.size;) {
           const chunk = h.read(at, Math.min(CHUNK, h.size - at));
           if (chunk.length === 0) refuse('journal-shrank', 'the journal ended before the size fstat reported', { retryable: true });
-          out.write(chunk);
-          hash.update(chunk);
           at += chunk.length;
+          const lf = prefixMode ? chunk.lastIndexOf(0x0a) : chunk.length - 1;
+          if (prefixMode && lf === -1) { held.push(chunk); continue; }
+          for (const part of [...held, chunk.subarray(0, lf + 1)]) { out.write(part); hash.update(part); written += part.length; }
+          held = prefixMode && lf + 1 < chunk.length ? [chunk.subarray(lf + 1)] : [];
         }
         out.fsync();
-        return { bytes: h.size, sha256: hash.digest('hex') };
+        const tail = held.length === 0 ? null : Buffer.concat(held);
+        return { bytes: written, sha256: hash.digest('hex'), tail };
       } finally { out.close(); }
     } finally { h.close(); }
   }
@@ -674,14 +701,28 @@ export function capture(opts) {
   function attemptOnce(attempt) {
     const liveCheckpoint = path.join(ccrcDir, CHECKPOINT_FILE);
     const a = fs.readFile(liveCheckpoint);
-    const journal = copyJournal();
+    // Only the LAST attempt may leave a tail out: the first four see a tail as a writer mid-append and retry it.
+    const journal = copyJournal(attempt === attempts);
     opts.hooks?.afterJournalCopy?.(attempt);
     const b = fs.readFile(liveCheckpoint);
     if ((a === null) !== (b === null) || (a !== null && b !== null && Buffer.compare(Buffer.from(a), Buffer.from(b)) !== 0)) {
       refuse('checkpoint-moved', 'the checkpoint changed while the journal was copied', { retryable: true });
     }
-    // A checkpoint with no journal is a sound state only at sequence 0; validateSidecars refuses the anchored case.
-    const verdict = validateSidecars(fs, { checkpointBytes: a, journalPath: journal === null ? names.journal : partials[0] });
+    // A checkpoint with no journal is a sound state only at sequence 0; validateSidecars refuses the anchored case. What it validates is
+    // the COPY, which in prefix mode holds the complete records alone: any defect of those is a refusal of its own, and a checkpoint that
+    // names, or holds, a record the prefix lacks (the LF-less one, or one past the last complete) leaves the tail NOT left out: the refusal
+    // is the tail's, retryable and exhausted, as it was before the heal existed.
+    let verdict;
+    try {
+      verdict = validateSidecars(fs, { checkpointBytes: a, journalPath: journal === null ? names.journal : partials[0] });
+    } catch (err) {
+      if (journal?.tail != null && err instanceof SnapError && (err.code === 'anchor-missing' || err.code === 'held-evidence-missing')) {
+        const refusal = tornTailError(journal.tail);
+        throw new SnapError(refusal.code, `${refusal.message.slice(refusal.code.length + 2)}; the checkpoint does not leave it out: ${err.message}`, { retryable: true });
+      }
+      throw err;
+    }
+    const tailOmitted = journal?.tail != null ? { bytes: journal.tail.length, sha256: createHash('sha256').update(journal.tail).digest('hex') } : null;
     let checkpoint = null;
     if (a !== null) {
       const out = fs.create(partials[1]);
@@ -715,7 +756,7 @@ export function capture(opts) {
         delegationCheckpoint: memberOf(CHECKPOINT_FILE, checkpoint),
         coordDb: memberOf(DB_FILE, db),
       },
-      delegation: delegationOf(verdict),
+      delegation: delegationOf(verdict, tailOmitted),
     };
     writeAtomic(fs, names.manifest, asBytes(`${canonicalJson(manifest)}\n`));
     owned.length = 0;
@@ -753,7 +794,14 @@ function readManifest(fs, p) {
   }
   const d = m.delegation;
   if (!isRecord(d)) refuse('manifest-invalid', 'delegation is not an object');
-  exactKeys2(d, ['state', 'checkpointRevision', 'anchor', 'journal'], 'delegation');
+  exactKeys2(d, Object.hasOwn(d, 'journalTailOmitted') ? ['state', 'checkpointRevision', 'anchor', 'journal', 'journalTailOmitted'] : ['state', 'checkpointRevision', 'anchor', 'journal'], 'delegation');
+  if (Object.hasOwn(d, 'journalTailOmitted')) {
+    // ADDITIVE (D-4655): the length and SHA-256 of the torn tail a capture left out. Informational (the tail is in no snapshot), so only its shape is checked.
+    const t = d.journalTailOmitted;
+    if (d.state !== 'initialized' || !isRecord(t)) refuse('manifest-invalid', 'journalTailOmitted is only a description of a torn tail, on an initialized delegation');
+    exactKeys2(t, ['bytes', 'sha256'], 'journalTailOmitted');
+    if (!Number.isSafeInteger(t.bytes) || t.bytes < 1 || !isHex64(t.sha256)) refuse('manifest-invalid', 'journalTailOmitted bytes or sha256 is malformed');
+  }
   if (d.state === 'absent') {
     if (d.checkpointRevision !== null || d.anchor !== null || d.journal !== null) refuse('manifest-invalid', 'an absent delegation carries no revision, anchor or journal');
   } else if (d.state === 'initialized') {
@@ -801,7 +849,7 @@ function verifyV1(fs, from) {
   const cp = manifest.members.delegationCheckpoint.present ? fs.readFile(path.join(from, CHECKPOINT_FILE)) : null;
   const verdict = validateSidecars(fs, { checkpointBytes: cp, journalPath: path.join(from, JOURNAL_FILE) });
   if (verdict.journalPresent !== manifest.members.delegationJournal.present) refuse('member-undeclared', 'the journal member disagrees with the manifest');
-  if (canonicalJson(delegationOf(verdict)) !== canonicalJson(manifest.delegation)) refuse('delegation-mismatch', 'the manifest\'s delegation section does not describe the copied sidecars');
+  if (canonicalJson(delegationOf(verdict, manifest.delegation.journalTailOmitted ?? null)) !== canonicalJson(manifest.delegation)) refuse('delegation-mismatch', 'the manifest\'s delegation section does not describe the copied sidecars');
   return manifest;
 }
 
@@ -1160,6 +1208,9 @@ export function main(argv, env = process.env, io = { out: (s) => process.stdout.
       if (dir === null || rest.length !== 2) { io.err(`${USAGE}\n`); return 70; }
       const m = capture({ home, dir: path.resolve(dir) });
       io.out(`coordination snapshot: ${m.delegation.state} delegation, coord.db ${m.members.coordDb.present ? 'present' : 'absent'}, manifest written\n`);
+      const left = m.delegation.journalTailOmitted;
+      // ONE warning line, on stderr, and still exit 0: `ccrc backup`, `ccrc update` and the fallback deploy show it to the operator.
+      if (left !== undefined) io.err(`coordination snapshot: warning: left out ${left.bytes} bytes (sha256 ${left.sha256}) that follow the last complete record of the delegation journal; ${path.resolve(dir)} holds the journal up to that record, which is a valid snapshot\n`);
       return 0;
     }
     if (verb === 'restore') {

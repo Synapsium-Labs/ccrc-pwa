@@ -20124,6 +20124,17 @@ _upd_backup() {
   cerr="$(node --no-warnings "$CCRC_HERE/../deploy/coordination-snapshot.mjs" capture --dir "$UPD_BACKUP_DIR" 2>&1 >/dev/null)" \
     || _ccrc_die "the coordination snapshot failed — refusing to install with an incomplete backup (${cerr//$'\n'/ })"
   local shown="$UPD_BACKUP_DIR"; [ "${UPD_REDACT_ACTIVE:-0}" = 1 ] && shown="$(_upd_redact "$shown")"; echo "$say: $shown (coord.db snapshot, coordination sidecars and manifest, dists, ccd and its body, units — taken before anything was installed)"   # redacted only in an update-family run (X1's scope): `ccrc backup`'s result line stays a usable absolute path
+  # A torn journal tail (D-4655): the capture never writes the journal and the server heals its own, so a tail it finds is LEFT OUT of the
+  # snapshot, which is still a valid one, and the helper says so in one warning line on its stderr. The backup succeeded; the operator is
+  # told, after the result line, in the same WARN shape every other line of this family uses. Only the helper's own line is relayed.
+  local warn_line=""
+  while IFS= read -r warn_line; do
+    case "$warn_line" in
+      "coordination snapshot: warning: "*)
+        [ "${UPD_REDACT_ACTIVE:-0}" = 1 ] && warn_line="$(_upd_redact "$warn_line")"
+        echo "$say: WARN: ${warn_line#coordination snapshot: warning: }" ;;
+    esac
+  done <<<"$cerr"
 }
 
 # ── _upd_backup_set — the ONE list of what a backup copies ────────────────

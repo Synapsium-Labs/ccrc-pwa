@@ -1224,7 +1224,9 @@ else
   # the delegation journal and checkpoint are authority a running server wrote, and the rsync is the first step that can touch
   # a box's tree. The helper (shipped fresh above, like backup-coord.mjs; it imports nothing from this tree) describes the SQLite
   # snapshot just taken, copies both sidecars from one stable view, validates them, and writes its manifest only when every
-  # member is durable. A failure here aborts the deploy (`set -e` through ssh) before anything on the box has changed.
+  # member is durable. A failure here aborts the deploy (`set -e` through ssh) before anything on the box has changed. A torn journal
+  # tail (D-4655) is NOT a failure: the helper leaves it out, exits 0 and prints one warning line on its stderr, which ssh passes
+  # through to this terminal (no redirect and no `-q` here, on purpose; a test pins both).
   "${SSH[@]}" "$BOX" "node --no-warnings ~/ccrc-backups/coordination-snapshot.mjs capture --dir ~/ccrc-backups/$TS"
   # See the agent path's identical exclude, above, for why: this rsync also
   # ships `deploy/` whole, and without the exclude a stale, retired token left

@@ -31,11 +31,12 @@ import {
   DelegationDurability,
   decodeDelegationCheckpoint,
 } from '../src/coord/delegation-checkpoint.js';
-import { DELEGATION_JOURNAL_FILE } from '../src/coord/delegation-journal.js';
+import { DELEGATION_JOURNAL_FILE, DELEGATION_TORN_DIR } from '../src/coord/delegation-journal.js';
 import {
   DELEGATION_EVENTS_CAP,
   DELEGATION_HOUR_MS,
   DELEGATION_UNMEASURED_INCARNATION,
+  canonicalDelegationJson,
   emptyDelegationCheckpoint,
   formatDelegationInstant,
   type DelegationCensusRecord,
@@ -465,6 +466,77 @@ describe('ingestion is durable: journal, checkpoint, then SQLite, and a restart 
     await censusPass(w, NOW + DELEGATION_SWEEP_MS, { demo: [] });
     expect(w.coord.delegationEventStats()).toEqual({ count: 2, maxSequence: 2 });
     expect(w.coord.readDelegationProjection().sessions.map((s) => s.sessionId)).toEqual(['demo-a']);
+  });
+});
+
+// ── D-4655: a torn journal tail heals itself, and the next pass loses nothing ───────────────────────────────────────────────
+//
+// A crash or a failed write in the middle of the lane's append leaves at most one partial line after the journal's last LF; no cursor,
+// ID, interval or checkpoint row refers to it, because the checkpoint is replaced only after the journal fsync. The restarted lane
+// recovers (the heal keeps the bytes and cuts the journal back to the last complete record), reads the same spool line again from its
+// durable cursor and mints the same eventId. The row compares the whole result with a run that never tore.
+describe('D-4655: the lane heals a torn journal tail and the next pass reproduces the run that never tore', () => {
+  const lines = [startLine('demo-a', '2026-10-15T10:01:00.000Z'), startLine('demo-a', '2026-10-15T10:02:00.000Z')];
+  const third = startLine('demo-a', '2026-10-15T10:03:00.000Z');
+  const journalPath = (w: World): string => path.join(w.ccrcDir, DELEGATION_JOURNAL_FILE);
+  /** The world that never tore: two lines ingested, then the third on the next pass. */
+  async function neverTore(): Promise<World> {
+    const a = world();
+    writeBucket(a, 'demo-a', BUCKET10, ...lines);
+    await censusPass(a, NOW, { demo: [] });
+    appendBucket(a, 'demo-a', BUCKET10, third);
+    await censusPass(a, NOW + DELEGATION_SWEEP_MS, { demo: [] });
+    return a;
+  }
+
+  it('at every cut of the third append: the checkpoint (rows, IDs, cursors, intervals), the journal and SQLite equal the run that never tore', async () => {
+    const a = await neverTore();
+    const thirdRecord = `${readFileSync(journalPath(a), 'utf8').split('\n')[2]!}\n`;
+    expect(thirdRecord.length).toBeGreaterThan(300);
+    const reference = canonicalDelegationJson(disk(a.home).checkpoint!);
+    expect(disk(a.home).journalLines).toBe(3);
+    for (const k of [1, 37, Math.floor(thirdRecord.length / 2), thirdRecord.length - 2, thirdRecord.length - 1]) {
+      const b = world();
+      writeBucket(b, 'demo-a', BUCKET10, ...lines);
+      await censusPass(b, NOW, { demo: [] });
+      await b.watcher.closeDelegation();
+      appendBucket(b, 'demo-a', BUCKET10, third);
+      appendFileSync(journalPath(b), thirdRecord.slice(0, k));                      // the crash: a partial third record, no LF unless k reaches it
+      const torn = readFileSync(journalPath(b));
+      const restarted = world({ home: b.home });                                  // a NEW server process over the same home
+      await censusPass(restarted, NOW + DELEGATION_SWEEP_MS, { demo: [] });
+      const what = `cut ${k} of ${thirdRecord.length}`;
+      expect(canonicalDelegationJson(disk(restarted.home).checkpoint!), what).toBe(reference);
+      expect(readFileSync(journalPath(restarted), 'utf8'), what).toBe(readFileSync(journalPath(a), 'utf8'));
+      expect(restarted.coord.delegationEventStats(), what).toEqual(a.coord.delegationEventStats());
+      // and the heal is on the record: the cut bytes are kept whole, and the health says so
+      const heal = restarted.watcher.currentDelegationHealth()?.lastTailHeal;
+      expect(heal, what).toMatchObject({ bytes: k });
+      expect(readFileSync(heal!.quarantinePath), what).toEqual(torn.subarray(torn.length - k));
+      expect(heal!.quarantinePath.startsWith(path.join(restarted.ccrcDir, DELEGATION_TORN_DIR)), what).toBe(true);
+    }
+  });
+
+  it('a lane that finds NO tail heals nothing: no quarantine directory, no lastTailHeal on the health', async () => {
+    const a = await neverTore();
+    expect(existsSync(path.join(a.ccrcDir, DELEGATION_TORN_DIR))).toBe(false);
+    expect(a.watcher.currentDelegationHealth()).not.toHaveProperty('lastTailHeal');
+  });
+
+  it('a corrupt journal is NOT healed by the lane: the pass applies nothing, the journal is untouched, nothing is kept', async () => {
+    const a = world();
+    writeBucket(a, 'demo-a', BUCKET10, ...lines);
+    await censusPass(a, NOW, { demo: [] });
+    await a.watcher.closeDelegation();
+    const text = readFileSync(journalPath(a), 'utf8');
+    const damaged = `${text.replace(/"digest":"[0-9a-f]{64}"/, `"digest":"${'0'.repeat(64)}"`)}{"acceptedAt":"2026-10-1`;   // a bad first record AND a torn tail
+    writeFileSync(journalPath(a), damaged);
+    appendBucket(a, 'demo-a', BUCKET10, third);
+    const restarted = world({ home: a.home });
+    await censusPass(restarted, NOW + DELEGATION_SWEEP_MS, { demo: [] });
+    expect(readFileSync(journalPath(restarted), 'utf8')).toBe(damaged);
+    expect(existsSync(path.join(restarted.ccrcDir, DELEGATION_TORN_DIR))).toBe(false);
+    expect(restarted.watcher.currentDelegationHealth()).not.toHaveProperty('lastTailHeal');
   });
 });
 

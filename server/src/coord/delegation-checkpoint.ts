@@ -34,6 +34,7 @@ import {
   type DelegationActivityNaturalKey,
   type DelegationActivitySourceKind,
   type DelegationEventEnvelopeV1,
+  type DelegationTailHeal,
 } from '../../../shared/api.js';
 import {
   DelegationJsonError,
@@ -75,12 +76,16 @@ import {
 import {
   DELEGATION_JOURNAL_ERROR_CODES,
   DELEGATION_JOURNAL_FILE,
+  DELEGATION_TORN_DIR,
   DelegationJournalChain,
   DelegationJournalError,
   DelegationJournalWriter,
   DelegationRetentionCollector,
+  delegationBytesSha256,
   delegationEventRowOfRecord,
   delegationLeaseIdentityKey,
+  delegationTailHealPlan,
+  delegationTornTailError,
   findDelegationJsonDefect,
   planDelegationJournalAppend,
   planDelegationPruning,
@@ -92,8 +97,10 @@ import {
   type DelegationJournalCoverage,
   type DelegationFileHandle,
   type DelegationJournalPosition,
+  type DelegationJournalTail,
   type DelegationLeaseView,
   type DelegationPruningPlan,
+  type DelegationTailHealPlan,
 } from './delegation-journal.js';
 
 /** The checkpoint's file name under the coordination directory (`~/.ccrc`). */
@@ -945,7 +952,7 @@ export interface DelegationRecoveryFailure {
 
 /** The failure codes this file mints for itself, closed. Every other `code` a failure carries is a thrown error's own (a journal,
  *  checkpoint or model refusal), and `DELEGATION_RESTORE_IN_PROGRESS` is the restore marker's. */
-export type DelegationOwnFailureCode = 'not-recovered' | 'recovering' | 'no-facts' | 'application-failed';
+export type DelegationOwnFailureCode = 'not-recovered' | 'recovering' | 'no-facts' | 'application-failed' | 'tail-heal-failed';
 
 /** How many evidence records the retained journal holds, in all and up to a sequence. Recovery counts them while it reads, so the
  *  projection repair can tell from SQLite's `(COUNT, MAX(journalSequence))` alone whether it has anything to read the journal for. */
@@ -1012,6 +1019,12 @@ export interface DelegationRecoveryReport {
   scanned: number;
   journal: DelegationJournalCoverage | null;
   facts: DelegationRecoveryFacts | null;
+  /**
+   * The torn tail recovery found AND the heal rule allows cutting (D-4655): a tail on a journal whose complete records and checkpoint are
+   * sound. Null when there is no tail, and null when there is one that must not be cut (that one is a `failure`, as before). Recovery
+   * itself writes nothing; `DelegationDurability` carries the plan out before it reports ready.
+   */
+  tailHeal: DelegationTailHealPlan | null;
 }
 
 /**
@@ -1127,7 +1140,7 @@ export class DelegationRecovery {
     }
     return {
       state, failure: this.failureNow, completedPhases: this.done, pruning: state.phase === 'ready' ? 'enabled' : 'disabled',
-      replayed: this.replayed, scanned: this.scanned, journal, facts,
+      replayed: this.replayed, scanned: this.scanned, journal, facts, tailHeal: null,
     };
   }
 }
@@ -1151,7 +1164,9 @@ export function recoverDelegationState(checkpointBytes: Uint8Array | null, retai
 // IMPURE SHELL: from here down the module reads and writes files (through the injected port), calls the injected clock and
 // randomness, and drives SQLite through the synchronous store. Nothing above does any of it.
 // ═══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
-/** Reads both files and recovers (an active restore marker refuses first). A journal read that fails (a torn tail, an unreadable chunk) is a recovery failure. */
+/** Reads both files and recovers (an active restore marker refuses first). A journal read that fails (an unreadable chunk, a record that does
+ *  not validate, a torn tail the checkpoint names) is a recovery failure. A torn tail that nothing names is not: it is a successful recovery of
+ *  the complete records that carries `tailHeal`, the plan `DelegationDurability` carries out (D-4655). */
 export async function recoverDelegationFromFiles(port: DelegationFilePort, dir: string): Promise<DelegationRecoveryReport> {
   // An active restore marker comes FIRST: the files below may be half replaced, so none of them is read (a refusal, not a repair).
   if (await port.readFile(path.join(dir, COORDINATION_RESTORE_MARKER_FILE)) !== null) {
@@ -1161,13 +1176,25 @@ export async function recoverDelegationFromFiles(port: DelegationFilePort, dir: 
   }
   const checkpointBytes = await port.readFile(path.join(dir, DELEGATION_CHECKPOINT_FILE));
   const recovery = new DelegationRecovery(checkpointBytes);
+  // A tail is NOT failed on the way in (D-4655): the complete records are recovered first, and the tail is judged against the result.
+  const found: { tail: DelegationJournalTail | null } = { tail: null };
   try {
-    for await (const record of readDelegationJournalRecords(port, path.join(dir, DELEGATION_JOURNAL_FILE))) recovery.accept(record);
+    for await (const record of readDelegationJournalRecords(port, path.join(dir, DELEGATION_JOURNAL_FILE), undefined, (t) => { found.tail = t; })) recovery.accept(record);
   } catch (err) {
     if (err instanceof DelegationJournalError) recovery.fail('journal-validate', err.code, err.message);
     else throw err;
   }
-  return recovery.finish();
+  const cleanScan = !recovery.failed();
+  const report = recovery.finish();
+  const plan = delegationTailHealPlan(found.tail, report.failure === null);
+  if (plan !== null) return { ...report, tailHeal: plan };
+  if (found.tail !== null && cleanScan && report.failure !== null) {
+    // The complete records scanned clean but the recovery they feed refused (the checkpoint names the LF-less record, or one past the last
+    // complete one, or holds one that is not retained): the tail is NOT left to cut, and it is reported as it always was, with the reason.
+    const refusal = delegationTornTailError(found.tail.bytes);
+    return { ...report, failure: { phase: 'journal-validate', code: refusal.code, detail: `${refusal.message}; the checkpoint does not leave it to cut: ${report.failure.code}: ${report.failure.detail}` } };
+  }
+  return report;
 }
 
 // ── The SQLite projection port and its repair (ruling R20) ───────────────────────────────────────────────────────────
@@ -1423,6 +1450,8 @@ export class DelegationDurability {
   private projectionStale = false;
   /** Sessions whose SQLite events an application found in conflict with the journal's: healed by the next repair. */
   private drifted = new Map<string, { sessionId: string; incarnation: string }>();
+  /** The last torn tail this process cut off and kept (D-4655): for `/api/fleet/health`. Never cleared by a later recovery. */
+  private healed: DelegationTailHeal | null = null;
 
   private constructor(private readonly deps: DelegationDurabilityDeps) {
     this.port = deps.port ?? nodeDelegationFilePort;
@@ -1443,6 +1472,9 @@ export class DelegationDurability {
   /** The last DURABLE state (or the best decoded one while `reconstructing`). */
   state(): DeepReadonly<DelegationRecoveryState> { return this.current; }
   failure(): DelegationDurabilityFailure | null { return this.failureNow; }
+  /** The last torn journal tail this process healed, or null: when, how many bytes, and where they are kept (D-4655). A heal is a
+   *  measurement, never a failure, and never makes the applier unhealthy by itself. */
+  lastTailHeal(): DelegationTailHeal | null { return this.healed; }
   /** True only while the state is `ready` and nothing has failed (O2): never during reconstruction, never after a failure. */
   pruningEnabled(): boolean { return this.current.phase === 'ready' && this.failureNow === null; }
 
@@ -1474,6 +1506,19 @@ export class DelegationDurability {
       await this.writer.close().catch(() => undefined);
       this.writer = new DelegationJournalWriter(this.port, this.journalPath, this.deps.dir);
       const report = await recoverDelegationFromFiles(this.port, this.deps.dir);
+      // THE TAIL HEAL (D-4655). `report.tailHeal` exists ONLY for a tail on a sound prefix (the rule, once, in `delegation-journal.ts`), so
+      // it is the single gate. It runs first, inside this serialized turn and before anything of the recovery is adopted: the applier stays
+      // not ready (and appends nothing) until the tail is kept elsewhere AND the journal is cut and fsynced. A failure is a recovery failure.
+      if (report.tailHeal !== null) {
+        try {
+          await this.healTailLocked(report.tailHeal);
+        } catch (err) {
+          this.current = { checkpoint: report.state.checkpoint, phase: 'reconstructing' };
+          this.failureNow = { phase: 'durable-application', code: 'tail-heal-failed' satisfies DelegationOwnFailureCode, detail: err instanceof Error ? err.message : String(err) };
+          this.deps.warn?.(`ccrc-server: delegation journal tail heal failed: ${this.failureNow.detail}`);
+          return { ...report, state: this.current, failure: this.failureNow, facts: null, pruning: 'disabled' };
+        }
+      }
       if (report.failure !== null || report.facts === null) {
         this.current = report.state;
         this.failureNow = report.failure ?? { phase: 'final-validate', code: 'no-facts' satisfies DelegationOwnFailureCode, detail: 'recovery produced no state' };
@@ -1503,6 +1548,60 @@ export class DelegationDurability {
       await this.repairLocked();
       return { ...report, state: this.current };
     });
+  }
+
+  /**
+   * THE TAIL HEAL (D-4655), the only place the journal is ever cut, and the server stays its only writer. The steps, in this order, each
+   * made durable before the next:
+   *   0. re-measure: the bytes after the cut point are still exactly the ones recovery classified (same size, same SHA-256);
+   *   1. keep them: a content-addressed file under `delegation-events.torn/` (temp, fsync, rename), then the quarantine directory and its
+   *      parent are fsynced; a file of that name that already exists must hold the SAME bytes (an earlier heal that died after its rename)
+   *      and is reused, so a re-heal makes no duplicate, and a different one fails the heal closed;
+   *   2. cut the journal to the end of the last complete validated record (`plan.offset`), the one place anything truncates it;
+   *   3. fsync the journal and its directory.
+   * A crash or a failure at ANY step leaves the tail in the journal or whole in quarantine, and the next recovery heals it the same way.
+   */
+  private async healTailLocked(plan: DelegationTailHealPlan): Promise<void> {
+    const kept = path.join(this.deps.dir, DELEGATION_TORN_DIR, plan.name);
+    const tail = await this.remeasureTail(plan);
+    await this.port.mkdirp(path.dirname(kept));
+    const existing = await this.port.readFile(kept);
+    if (existing === null) {
+      const temp = `${kept}.tmp`;
+      const handle = await this.port.createTemp(temp);
+      try {
+        const n = await handle.write(tail);
+        if (n !== tail.length) throw new DelegationJournalError('short-write', `wrote ${n} of ${tail.length} quarantine bytes`);
+        await handle.sync();
+      } finally {
+        await handle.close().catch(() => undefined);
+      }
+      await this.port.rename(temp, kept);
+    } else if (existing.length !== tail.length || !existing.every((b, i) => b === tail[i])) {
+      throw new DelegationJournalError('torn-tail', `${kept} already exists with other bytes than the tail it is named for; the journal is left as it is`);
+    }
+    await this.port.fsyncDir(path.dirname(kept));
+    await this.port.fsyncDir(this.deps.dir);
+    await this.port.truncate(this.journalPath, plan.offset);
+    await this.port.fsyncFile(this.journalPath);
+    await this.port.fsyncDir(this.deps.dir);
+    this.healed = { at: nowInstant(this.deps.now()), bytes: plan.bytes, quarantinePath: kept };
+    this.deps.warn?.(`ccrc-server: delegation journal: healed a torn tail at ${this.healed.at}: ${plan.bytes} byte(s) after offset ${plan.offset} cut off and kept at ${kept}`);
+  }
+
+  /** Step 0 of the heal: the tail's bytes, read again, and proved to be the ones the plan names (nothing was appended behind them, nothing changed). */
+  private async remeasureTail(plan: DelegationTailHealPlan): Promise<Uint8Array> {
+    const handle = await this.port.openRead(this.journalPath);
+    if (handle === null) throw new DelegationJournalError('torn-tail', 'the journal vanished between recovery and its heal');
+    try {
+      const size = await handle.size();
+      if (size !== plan.offset + plan.bytes) throw new DelegationJournalError('torn-tail', `the journal is ${size} bytes, not the ${plan.offset + plan.bytes} recovery measured; nothing is cut`);
+      const bytes = await handle.read(plan.offset, plan.bytes);
+      if (bytes.length !== plan.bytes || await delegationBytesSha256(bytes) !== plan.sha256) throw new DelegationJournalError('torn-tail', 'the tail changed between recovery and its heal; nothing is cut');
+      return bytes;
+    } finally {
+      await handle.close();
+    }
   }
 
   /** Repairs `coord.db` from the checkpoint and the journal now (a lost or rolled-back file, or after a failed projection). */
@@ -1889,7 +1988,7 @@ const DELEGATION_CHECKPOINT_ERROR_CODES: Readonly<Record<DelegationCheckpointErr
 
 /** The failure codes this file mints for itself, as a TOTAL table over `DelegationOwnFailureCode`. */
 const DELEGATION_OWN_FAILURE_CODES: Readonly<Record<DelegationOwnFailureCode, true>> = {
-  'not-recovered': true, recovering: true, 'no-facts': true, 'application-failed': true,
+  'not-recovered': true, recovering: true, 'no-facts': true, 'application-failed': true, 'tail-heal-failed': true,
 };
 
 /** Why `createLease` declined, as a TOTAL table over `DelegationLeaseRefusalReason`. */

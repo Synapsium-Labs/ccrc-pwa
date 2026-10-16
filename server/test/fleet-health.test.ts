@@ -22,6 +22,7 @@ import { openCoordDb } from '../src/coord/db.js';
 import { LC_CAP_TOKEN } from '../src/coord/mirrorplan.js';
 import { genFile } from './lifecycleHelpers.js';
 import { LC_ACT_UNKNOWN, LC_DIR_NAME, LIFECYCLE_ACTS } from '../../shared/api.js';
+import { DELEGATION_JOURNAL_FILE, DELEGATION_TORN_DIR, buildDelegationJournalRecord, encodeDelegationJournalRecord } from '../src/coord/delegation-journal.js';
 import type { BuildInfo } from '../../shared/buildinfo.js';
 import type { NodeMeasurement } from '../src/coord/store.js';
 
@@ -365,11 +366,12 @@ describe('/api/fleet/health: the delegation observation health (wave 3, Task 13)
   const INC = '0189abcd-1234-5678-9abc-0123456789ab';
 
   /** A watcher over a store, with a census pass planted for one live session whose spool directory exists: the lane then has run. */
-  async function lane(env: Record<string, string> = {}, verbs: string[] = DELEGATION_CAPS) {
+  async function lane(env: Record<string, string> = {}, verbs: string[] = DELEGATION_CAPS, plant?: (ccrcDir: string) => void) {
     const home = mkTmp('ccrc-fh-dg-');
     seedRoster(home);
     const cfg = loadConfig({ CCRC_HOME: home, ...env });
     const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
+    plant?.(path.join(home, '.ccrc'));
     mkdirSync(path.join(cfg.registryDir, 'delegation', 'spool', 'demo-a'), { recursive: true });
     const full = {
       cfg, runCcd: ccdRunner(deadRunner, cfg), tmux: new Tmux(deadRunner), io: localIO, queue: new KeyedQueue(), coord,
@@ -427,6 +429,53 @@ describe('/api/fleet/health: the delegation observation health (wave 3, Task 13)
         expect('delegation' in body).toBe(false);
       }
     } finally { await a.close(); await b.close(); }
+  });
+
+  // D-4655: a torn journal tail the server healed at boot is reported here, additively, and is never a failure.
+  describe('a healed torn journal tail (D-4655): lastTailHeal on the member, never a failure', () => {
+    const record = buildDelegationJournalRecord({
+      sequence: 1, acceptedAt: '2026-10-15T10:00:00.000Z', previousDigest: null,
+      entry: {
+        kind: 'evidence-accepted',
+        event: {
+          v: 1, eventKind: 'SessionStart', source: 'startup', observedAt: '2026-10-15T09:59:00.000Z', sessionId: 'demo-a', parentIncarnation: INC,
+          claudeSessionId: '6350faa0-a1be-4e78-939c-57485268f6fc', eventId: 'e'.repeat(64), bucket: '2026101509', startOffset: 0, endOffset: 120,
+        },
+      },
+    });
+    const torn = (ccrcDir: string): void => {
+      mkdirSync(ccrcDir, { recursive: true });
+      writeFileSync(path.join(ccrcDir, DELEGATION_JOURNAL_FILE), Buffer.concat([Buffer.from(encodeDelegationJournalRecord(record)), Buffer.from('{"acceptedAt":"2026-10-15T1')]));
+    };
+
+    it('the member carries {at, bytes, quarantinePath} after the lane has healed a tail, and the rest of the member is what it was', async () => {
+      const { app, runLane } = await lane({}, DELEGATION_CAPS, torn);
+      try {
+        await runLane();
+        const body = (await app.inject({ method: 'GET', url: '/api/fleet/health' })).json() as Body;
+        const heal = body.delegation!['lastTailHeal'] as { at: string; bytes: number; quarantinePath: string };
+        expect(heal.bytes).toBe('{"acceptedAt":"2026-10-15T1'.length);
+        expect(heal.at).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
+        expect(heal.quarantinePath).toMatch(new RegExp(`${DELEGATION_TORN_DIR.replace('.', '\\.')}/\\d+-[0-9a-f]{64}\\.tail$`));
+        expect(readFileSync(heal.quarantinePath, 'utf8')).toBe('{"acceptedAt":"2026-10-15T1');
+        // never a failure, never unhealthy, and not made unmeasured by itself: the gates read what they read without it
+        expect(body.delegation).toMatchObject({ mode: 'report-only', stageGate: 'unmeasured', circuitBreaker: 'clear', unmeasuredRate: null });
+        expect(Object.keys(body.delegation!).sort()).toEqual([
+          'circuitBreaker', 'conflicting', 'lastCheckpointRevision', 'lastIngestedAt', 'lastJournalSequence', 'lastTailHeal', 'measuredSessionHours', 'mode',
+          'stageGate', 'unmeasured', 'unmeasuredRate', 'unresolved', 'unmeasuredSessionHours', 'windowEndedAt', 'windowStartedAt',
+        ].sort());
+        expect(body.delegation!['lastJournalSequence']).toBe(1);
+      } finally { await app.close(); }
+    });
+
+    it('without a heal the member has no lastTailHeal key at all (absence is not "healthy" and not an empty object)', async () => {
+      const { app, runLane } = await lane();
+      try {
+        await runLane();
+        const body = (await app.inject({ method: 'GET', url: '/api/fleet/health' })).json() as Body;
+        expect('lastTailHeal' in body.delegation!).toBe(false);
+      } finally { await app.close(); }
+    });
   });
 
   it('adds no PWA state and no fleet frame: the type is an optional member and the PWA source never names it', () => {

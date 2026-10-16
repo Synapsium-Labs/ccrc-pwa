@@ -8943,11 +8943,15 @@ class DelegationLane {
   health(): DelegationObservationHealth | undefined {
     if (!this.attempted) return undefined;
     const now = Date.now();
-    return delegationObservationHealthOf(delegationHealthInputOf({
+    const health = delegationObservationHealthOf(delegationHealthInputOf({
       nowMs: now, state: this.durable === null ? null : this.durable.state(),
       capabilityState: delegationCapabilityState(this.deps.fleetState?.ccdVerbs), registryReadable: this.registryListed,
       circuitBreaker: this.breakerNow(now), verdictCounts: this.verdicts,
     }));
+    // A torn journal tail this process healed (D-4655) rides on the member as a plain fact. It is not an input to any gate: a heal is
+    // never a failure, never makes the health unhealthy, and never makes it unmeasured by itself.
+    const healed = this.durable === null ? null : this.durable.lastTailHeal();
+    return healed === null ? health : { ...health, lastTailHeal: healed };
   }
 
   // ── a pass ────────────────────────────────────────────────────────────────────────────────────────────────────────────

@@ -8,7 +8,9 @@
 //   - deduplication planning (a duplicate evidence `eventId` and a duplicate or path-held lease identity are not appended);
 //   - retention PLANNING (`DelegationPruningHold`): computed and tested, and the only thing a caller may do with it is read it.
 //     NO production caller rewrites, truncates, renames or deletes `delegation-events.log` (physical compaction is deferred
-//     until a separately approved plan specifies a crash-safe rewrite);
+//     until a separately approved plan specifies a crash-safe rewrite), WITH ONE NAMED EXCEPTION (D-4655): the server's tail heal,
+//     which cuts a torn tail off the end after keeping the bytes (`delegationTailHealPlan` is its rule; `DelegationDurability` carries
+//     it out through the port's `truncate`, the only one);
 //   - the serialized writer: `O_APPEND`, ONE complete write of record plus LF, then `fsync`.
 //
 // THE SPLIT. Everything above the `IMPURE SHELL` banner is pure: no fs, no clock, no randomness, no SQLite. A test pins that
@@ -408,6 +410,51 @@ export function delegationTornTailError(leftover: Uint8Array, where?: { line?: n
   }
 }
 
+// ── The torn tail: what a crash can leave, and the one thing the server may cut (D-4655) ─────────────────────────────────
+
+/** Where the tail heal keeps the bytes it cuts, under the coordination directory (`~/.ccrc` in production): one file per tail,
+ *  named by `delegationTailHealPlan`, never overwritten and never deleted by anything here. */
+export const DELEGATION_TORN_DIR = 'delegation-events.torn';
+
+/** The bytes after a journal's last LF, as the strict reader found them. */
+export interface DelegationJournalTail {
+  /** The byte offset of the first byte after the last LF: where the last complete record ends. */
+  offset: number;
+  bytes: Uint8Array;
+  /** SHA-256 of `bytes`, lowercase hex. */
+  sha256: string;
+  /** `missing-final-lf` when the bytes are one complete valid record with no LF after it, `torn-tail` otherwise. */
+  code: 'torn-tail' | 'missing-final-lf';
+}
+
+/** What the heal will do about one tail: cut the journal back to `offset`, after keeping `bytes` bytes under `name`. */
+export interface DelegationTailHealPlan {
+  offset: number;
+  bytes: number;
+  sha256: string;
+  code: DelegationJournalTail['code'];
+  /** `<offset>-<sha256>.tail`: content-addressed, so a heal that died and runs again finds the identical file and makes no second one. */
+  name: string;
+}
+
+/**
+ * THE HEAL RULE (D-4655), the server's ONE copy. A tail may be cut off only when ALL of these hold:
+ *   1. the journal ends in bytes after its last LF (`tail`);
+ *   2. every complete record validates and the hash chain is intact;
+ *   3. the checkpoint's applied position names a complete record, or none (and every record it holds is retained).
+ * `prefixSound` is 2 and 3 together: recovery over the COMPLETE records, anchor and holds included, found no defect. Anything else is
+ * corruption, not a crash artefact, and stays a recovery failure exactly as before. Why a tail that passes is safe to drop: under O5 a
+ * record is applied only after the journal fsync, and the checkpoint is replaced only after that, so a crash or a failed write in the
+ * middle of an append leaves at most one partial line after the last LF and nothing (no checkpoint row, cursor, ID or interval) refers
+ * to it; the bucket cursor still points before its spool line, so the next pass reads that line again and mints the same eventId. A
+ * complete record with no LF is still bytes after the last LF, so it is healable too, unless the checkpoint names it: then the append
+ * was durable and applied, and a missing LF is corruption (the `anchor-missing` of `prefixSound`).
+ */
+export function delegationTailHealPlan(tail: DelegationJournalTail | null, prefixSound: boolean): DelegationTailHealPlan | null {
+  if (tail === null || !prefixSound) return null;
+  return { offset: tail.offset, bytes: tail.bytes.length, sha256: tail.sha256, code: tail.code, name: `${tail.offset}-${tail.sha256}.tail` };
+}
+
 // ── The hash chain ────────────────────────────────────────────────────────────────────────────────────────────────────
 
 /** A point in the journal: what the checkpoint's anchor and a snapshot's end-of-file both name. */
@@ -736,6 +783,11 @@ export interface DelegationFilePort {
   readFile(path: string): Promise<Uint8Array | null>;
   openRead(path: string): Promise<DelegationReadHandle | null>;
   mkdirp(dir: string): Promise<void>;
+  /** Cuts a file to `length` bytes. THE tail heal's cut (D-4655) and nothing else: the one caller is `DelegationDurability`'s heal, which
+   *  has already made the cut bytes durable elsewhere and passes the end of the last complete validated record. */
+  truncate(path: string, length: number): Promise<void>;
+  /** `fsync` of an existing file by path: the journal, once the heal has cut it. */
+  fsyncFile(path: string): Promise<void>;
 }
 
 const isEnoent = (err: unknown): boolean => typeof err === 'object' && err !== null && (err as { code?: unknown }).code === 'ENOENT';
@@ -772,15 +824,34 @@ export const nodeDelegationFilePort: DelegationFilePort = {
     };
   },
   mkdirp: async (dir) => { await fsp.mkdir(dir, { recursive: true, mode: 0o700 }); },
+  truncate: (p, length) => fsp.truncate(p, length),
+  fsyncFile: async (p) => {
+    const fh = await fsp.open(p, fsConstants.O_RDONLY);
+    try { await fh.sync(); } finally { await fh.close(); }
+  },
 };
+
+/**
+ * SHA-256 of raw bytes, lowercase hex. It uses the platform's Web Crypto digest rather than `node:crypto`: a pin in
+ * `delegation-recovery.test.ts` reads this module for that import by name (the module draws no randomness and reads no clock), and a digest
+ * is neither. `delegationSha256Hex` in the model hashes TEXT and cannot take a tail that is not valid UTF-8.
+ */
+export async function delegationBytesSha256(bytes: Uint8Array): Promise<string> {
+  const digest = new Uint8Array(await globalThis.crypto.subtle.digest('SHA-256', new Uint8Array(bytes)));
+  return Array.from(digest, (b) => b.toString(16).padStart(2, '0')).join('');
+}
 
 /**
  * Reads a journal file as validated records, a bounded chunk at a time, so recovery over a journal of millions of records holds
  * one chunk and one partial line, never the file. Each record is individually validated (the grammar, both hashes); the chain
  * is the consumer's (`DelegationJournalChain`). An absent file yields nothing. Bytes after the last LF throw
- * `torn-tail` / `missing-final-lf` AFTER every complete record has been yielded.
+ * `torn-tail` / `missing-final-lf` AFTER every complete record has been yielded, unless the caller passes `onTail`: then they are handed
+ * to it instead (offset, bytes, SHA-256 and the code the strict reader would have thrown) and nothing throws. Only recovery passes one
+ * (D-4655); every other reader of the journal stays strict.
  */
-export async function* readDelegationJournalRecords(port: DelegationFilePort, path: string, chunkBytes = 1 << 18): AsyncGenerator<DelegationJournalRecordV1, void, undefined> {
+export async function* readDelegationJournalRecords(
+  port: DelegationFilePort, path: string, chunkBytes = 1 << 18, onTail?: (tail: DelegationJournalTail) => void,
+): AsyncGenerator<DelegationJournalRecordV1, void, undefined> {
   const handle = await port.openRead(path);
   if (handle === null) return;
   try {
@@ -798,7 +869,14 @@ export async function* readDelegationJournalRecords(port: DelegationFilePort, pa
       }
     }
     const tail = splitter.leftover();
-    if (tail.length > 0) throw delegationTornTailError(tail, { line: lineNo + 1 });
+    if (tail.length > 0) {
+      const refusal = delegationTornTailError(tail, { line: lineNo + 1 });
+      if (onTail === undefined) throw refusal;
+      onTail({
+        offset: position - tail.length, bytes: new Uint8Array(tail), sha256: await delegationBytesSha256(tail),
+        code: refusal.code === 'missing-final-lf' ? 'missing-final-lf' : 'torn-tail',
+      });
+    }
   } finally {
     await handle.close();
   }

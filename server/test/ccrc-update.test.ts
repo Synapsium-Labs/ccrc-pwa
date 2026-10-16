@@ -55,6 +55,7 @@ import { IN_FLIGHT_UPDATE_PHASES, UPDATE_PHASES } from '../../shared/api.js';
 import { reportFrom, type NodeFileRead } from '../src/update/inventory.js';
 import { emptyDelegationCheckpoint } from '../src/coord/delegation-model.js';
 import { encodeDelegationCheckpoint } from '../src/coord/delegation-checkpoint.js';
+import { buildDelegationJournalRecord, encodeDelegationJournalRecord } from '../src/coord/delegation-journal.js';
 // CCR-15 wave 10: the collector's generation journal's ONE name (path-identity spec 2026-10-12 §5.3).
 import { COLLECT_LANE_JOURNAL_BASENAME } from '../src/coord/collectLaneJournal.js';
 import {
@@ -13176,6 +13177,91 @@ describe('ccrc backup and update: the coordination snapshot callers (delegation 
     expect(u.stderr).toMatch(/the coordination snapshot failed — refusing to install with an incomplete backup/);
     expect(existsSync(join(home2, 'ccrc', 'server', 'OLD-MARKER')), 'the old tree must still be in place').toBe(true);
     expect(existsSync(join(home2, 'ccrc', 'ccd', 'ccrc-doctor-checks')), 'nothing of the new tree was installed').toBe(false);
+  });
+
+  // D-4655: a torn journal tail no longer stops a backup, an update or the fallback deploy. Capture leaves it out, says so ONCE, and the
+  // callers pass that line to the operator and go on. The rows of the helper itself are in `coordination-snapshot.test.ts`.
+  describe('a torn journal tail is left out with a warning, never a refusal (D-4655)', () => {
+    const RECORD = buildDelegationJournalRecord({
+      sequence: 1, acceptedAt: '2026-10-15T10:00:00.000Z', previousDigest: null,
+      entry: {
+        kind: 'evidence-accepted',
+        event: {
+          v: 1, eventKind: 'SessionStart', source: 'startup', observedAt: '2026-10-15T09:59:00.000Z', sessionId: 'lane-a-demo', parentIncarnation: 'g1',
+          claudeSessionId: '11111111-2222-3333-4444-555555555555', eventId: 'e'.repeat(64), bucket: '2026101509', startOffset: 0, endOffset: 120,
+        },
+      },
+    });
+    const WHOLE = Buffer.from(encodeDelegationJournalRecord(RECORD));
+    const FRAGMENT = Buffer.from('{"acceptedAt":"2026-10-15T1');
+    const plantJournal = (home: string, bytes: Buffer): void => {
+      mkdirSync(join(home, '.ccrc'), { recursive: true });
+      writeFileSync(join(home, '.ccrc', 'delegation-events.log'), bytes);
+    };
+    const sha = (b: Buffer): string => createHash('sha256').update(b).digest('hex');
+
+    it('`ccrc backup` exits 0, prints the helper\'s warning (bytes, sha256, the backup directory) after its result line, and the snapshot holds the prefix', () => {
+      const home = freshUpdateBox('ccrc-fx-8c-backup-');
+      plantOldBox(home, { version: 'v1.0.0' });
+      plantJournal(home, Buffer.concat([WHOLE, FRAGMENT]));
+      const r = runBackup(home);
+      expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+      const dir = ownDir(r);
+      const warning = r.stdout.split('\n').filter((l) => /^backup: WARN: /.test(l));
+      expect(warning, r.stdout).toHaveLength(1);
+      expect(warning[0]).toContain(`left out ${FRAGMENT.length} bytes (sha256 ${sha(FRAGMENT)})`);
+      expect(warning[0]).toContain(dir);
+      expect(r.stdout.indexOf('backup: WARN:'), 'after the result line').toBeGreaterThan(r.stdout.indexOf(`backup: ${dir}`));
+      expect(readFileSync(join(dir, 'delegation-events.log'))).toEqual(WHOLE);
+      expect(JSON.parse(readFileSync(manifestOf(dir), 'utf8')).delegation.journalTailOmitted).toEqual({ bytes: FRAGMENT.length, sha256: sha(FRAGMENT) });
+      expect(helper(home, ['classify', '--from', dir])).toMatchObject({ code: 0, stdout: 'v1\n' });
+      expect(readFileSync(join(home, '.ccrc', 'delegation-events.log')), 'capture never writes the live journal').toEqual(Buffer.concat([WHOLE, FRAGMENT]));
+    });
+
+    it('a whole journal prints no warning', () => {
+      const home = freshUpdateBox('ccrc-fx-8c-whole-');
+      plantOldBox(home, { version: 'v1.0.0' });
+      plantJournal(home, WHOLE);
+      const r = runBackup(home);
+      expect(r.code, r.stderr).toBe(0);
+      expect(r.stdout).not.toMatch(/WARN: left out/);
+    });
+
+    it('`ccrc update` goes on past it: the install completes and the warning is in the transcript (the directory redacted like every update-family path)', () => {
+      const home = freshUpdateBox('ccrc-fx-8c-update-');
+      plantOldBox(home, { version: 'v1.0.0' });
+      plantCoordDb(home);
+      plantJournal(home, Buffer.concat([WHOLE, FRAGMENT]));
+      packRelease(home, fullTree(home, { version: 'v2.0.0', sha: 'newsha0000000000000000000000000000000000' }), { tag: 'v2.0.0' });
+      const u = runUpdate(home);
+      expect(u.code, `stderr: ${u.stderr}\nstdout: ${u.stdout}`).toBe(0);
+      const warning = u.stdout.split('\n').filter((l) => /^update: backup: WARN: /.test(l));
+      expect(warning, u.stdout).toHaveLength(1);
+      expect(warning[0]).toContain(`left out ${FRAGMENT.length} bytes (sha256 ${sha(FRAGMENT)})`);
+      expect(warning[0], 'redacted like every update-family path').toContain('~/ccrc-backups/');
+      expect(warning[0]).not.toContain(home);
+      expect(existsSync(join(home, 'ccrc', 'ccd', 'ccrc-doctor-checks')), 'the new tree was installed').toBe(true);
+    });
+
+    it('a journal that is CORRUPT, not merely torn, still stops the backup and the update before anything is installed', () => {
+      const bad = Buffer.concat([Buffer.from(WHOLE.toString('utf8').replace(RECORD.digest, '0'.repeat(64))), FRAGMENT]);
+      const home = freshUpdateBox('ccrc-fx-8c-corrupt-');
+      plantOldBox(home, { version: 'v1.0.0' });
+      plantJournal(home, bad);
+      const r = runBackup(home);
+      expect(r.code).toBe(1);
+      expect(r.stderr).toMatch(/the coordination snapshot failed — refusing to install with an incomplete backup/);
+      expect(r.stderr).toMatch(/digest-mismatch/);
+      expect(r.stdout).not.toMatch(/WARN: left out/);
+      const home2 = freshUpdateBox('ccrc-fx-8c-corrupt-update-');
+      plantOldBox(home2, { version: 'v1.0.0' });
+      plantCoordDb(home2);
+      plantJournal(home2, bad);
+      packRelease(home2, fullTree(home2, { version: 'v2.0.0', sha: 'newsha0000000000000000000000000000000000' }), { tag: 'v2.0.0' });
+      const u = runUpdate(home2);
+      expect(u.code).toBe(1);
+      expect(existsSync(join(home2, 'ccrc', 'server', 'OLD-MARKER')), 'the old tree must still be in place').toBe(true);
+    });
   });
 
   it('the backup set and its listing never carry the sidecars: no row of `_upd_backup_set` or `_upd_backup_pairs` names them', () => {
