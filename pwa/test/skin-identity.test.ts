@@ -386,8 +386,9 @@ const SCALE_PREFIXES: readonly string[] = ['--fs-', '--weight-', '--ls-'];
  *  `--weight-*`, `--ls-*`) is exactly `var()` of a STEP of that scale: a token
  *  `:root` declares that is not itself a skin token, so a role cannot point at
  *  another role and inherit a value nobody chose. A family role is one of the
- *  Geist pair. Judged in skins.css and in tokens.css's `:root` blocks alike,
- *  because Refined's values are roles too.
+ *  Geist pair. Judged in every block of skins.css and in every `:root` block
+ *  of tokens.css, top level or inside @media alike, because Refined's values
+ *  are roles too.
  *
  *  D-5243: the plan's (e) and spec §3.2 read skins.css and name the `--fs-*`
  *  roles only. This rule also judges Refined's `:root` values, covers the
@@ -889,6 +890,13 @@ describe('(d2) no colour by reference', () => {
       "skins.css: --elev-card (elevation) reads var(--accent), outside its class's allowlist"]);
   });
 
+  it("reds a glow planted inside one of Instrument's @media blocks", () => {
+    const tree = replaceOnce(plantedTree(), SKINS_CSS, INSTRUMENT_WIDE_BLOCK,
+      `${INSTRUMENT_WIDE_BLOCK}\n    --elev-card: 0 0 8px var(--accent);`);
+    expect(colourByReference(tree, REAL)).toEqual([
+      "skins.css: --elev-card (elevation) reads var(--accent), outside its class's allowlist"]);
+  });
+
   it('passes the recipe the allowlist exists for: a hairline on var(--edge-strong)', () => {
     const tree = replaceOnce(plantedTree(), SKINS_CSS, '--elev-card: none;', '--elev-card: 0 0 0 1px var(--edge-strong);');
     expect(colourByReference(tree, REAL)).toEqual([]);
@@ -905,6 +913,11 @@ describe('(e) type roles choose a step on their scale, and family roles one of t
     const tree = replaceOnce(plantedTree(), SKINS_CSS, '--fs-ui:      var(--fs-base);      /* 15 below 900 */',
       '--fs-ui:      13px;');
     expect(scaleChoice(tree, REAL)).toContain('skins.css: --fs-ui: 13px is not var() of a step on the --fs-* scale');
+  });
+
+  it("reds a minted size inside Instrument's ≥900px block", () => {
+    const tree = replaceOnce(plantedTree(), SKINS_CSS, '--fs-ui:     var(--fs-sm);', '--fs-ui:     13px;');
+    expect(scaleChoice(tree, REAL)).toEqual(['skins.css: --fs-ui: 13px is not var() of a step on the --fs-* scale']);
   });
 
   it('reds a role pointed at another role, a minted weight, a minted tracking and a third family', () => {
@@ -925,6 +938,11 @@ describe('(e) type roles choose a step on their scale, and family roles one of t
   it("reds a minted size in Refined's own :root (D-5243)", () => {
     const tree = replaceOnce(plantedTree(), TOKENS_CSS, '--fs-meta:    var(--fs-xs);', '--fs-meta:    12px;');
     expect(scaleChoice(tree, REAL)).toEqual(['tokens.css: --fs-meta: 12px is not var() of a step on the --fs-* scale']);
+  });
+
+  it("reds a minted size in Refined's ≥900px :root (D-5243)", () => {
+    const tree = replaceOnce(plantedTree(), TOKENS_CSS, '--fs-page: var(--fs-2xl);', '--fs-page: 26px;');
+    expect(scaleChoice(tree, REAL)).toEqual(['tokens.css: --fs-page: 26px is not var() of a step on the --fs-* scale']);
   });
 }, 30_000);
 
