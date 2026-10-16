@@ -1646,7 +1646,16 @@ export class DelegationDurability {
         continue;
       }
       if (st === null) continue;                                       // gone between the listing and the stat
-      const found: DelegationTailHeal = { at: nowInstant(Math.trunc(st.mtimeMs)), bytes: st.size, quarantinePath: kept, foundAtBoot: true };
+      // R85 (A-F1): a time no instant can spell (before 1970, after the year 9999: a `touch -d`, a copy that kept a bogus stamp) is that
+      // file's report UNMEASURED, like one that cannot be stat'ed; the boot report only reads, so it must never stop recovery.
+      let at: string;
+      try { at = nowInstant(Math.trunc(st.mtimeMs)); } catch (err) {
+        if (!(err instanceof DelegationModelError)) throw err;
+        this.quarantineUnmeasured = true;
+        this.deps.warn?.(`ccrc-server: delegation journal: the quarantined tail ${kept} has a time that is no instant, so its report is unmeasured: ${err.message}`);
+        continue;
+      }
+      const found: DelegationTailHeal = { at, bytes: st.size, quarantinePath: kept, foundAtBoot: true };
       if (!this.reportedTails.has(kept)) {
         this.reportedTails.add(kept);
         this.deps.warn?.(`ccrc-server: delegation journal: a quarantined torn tail no report of this process covers: ${st.size} byte(s) kept at ${kept}, cut at ${found.at}`);

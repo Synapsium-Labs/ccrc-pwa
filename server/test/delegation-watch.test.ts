@@ -37,6 +37,7 @@ import {
   DELEGATION_HOUR_CLOSE_MARGIN_MS,
   DELEGATION_HOUR_MS,
   DELEGATION_INTERVAL_RETENTION_HOURS,
+  DELEGATION_SPOOL_LOOKBACK_HOURS,
   DELEGATION_UNMEASURED_INCARNATION,
   canonicalDelegationJson,
   emptyDelegationCheckpoint,
@@ -3018,6 +3019,68 @@ describe('D-4658 (ruling R79): one durable application per pass, with per-bucket
       expect(seen[n]!, `pass ${n}: demo-a advanced`).toBeGreaterThan(seen[n - 1]!);
     }
     expect(disk(w.home).checkpoint!.bucketCursors.some((c) => c.sessionId === 'demo-p')).toBe(false);
+  });
+
+  /** The batches an `applyAcceptedBatch` spy saw that carry this owner's cursor. */
+  const stagedFor = (calls: { mock: { calls: unknown[][] } }, owner: string): number =>
+    calls.mock.calls.filter((c) => (c[0] as readonly { cursor: { sessionId: string } | null }[]).some((b) => b.cursor !== null && b.cursor.sessionId === owner)).length;
+
+  it('R85 (A-F2): a REFUSED result is never settled: a refused bucket of a CLOSED hour with nothing new to accept is read and staged again on the next pass', async () => {
+    const w = world();
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    writeBucket(w, 'demo-p', BUCKET10, startLine('demo-p', '2026-10-15T10:03:00.000Z').slice(0, 40));   // a torn tail only: nothing to accept
+    const calls = poison('demo-p');
+    const closeAt = Date.parse(HOUR10) + DELEGATION_HOUR_MS + DELEGATION_HOUR_CLOSE_MARGIN_MS;
+    const counts: number[] = [];
+    for (const t of [closeAt + 60_000, closeAt + 60_000 + DELEGATION_SWEEP_MS]) {
+      setNow(t);
+      setCensus(w, { demo: [] }, { 'demo-p': measured() }, t);
+      await pass(w, [sessionOf('demo-p')]);
+      counts.push(stagedFor(calls, 'demo-p'));
+    }
+    expect(counts[0], 'refused on the first pass after the hour closed').toBeGreaterThan(0);
+    expect(counts[1]! - counts[0]!, 'staged again on the next: its closed hour was not settled by the refusal').toBeGreaterThan(0);
+    expect(disk(w.home).checkpoint!.bucketCursors.some((c) => c.sessionId === 'demo-p')).toBe(false);
+  });
+
+  it('R85 (A-F2): a standing refusal is FORGOTTEN once it applies: the pass after makes one application, not the refused bucket alone and then the rest', async () => {
+    const w = threeOwners({}, true);
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const ids = ['demo-a', 'demo-c', 'demo-p'];
+    const poisoned = poison('demo-p');
+    await passOver(w, 0, ids);
+    expect(w.watcher.delegationReport().refusedBuckets, 'standing').toBe(1);
+    poisoned.mockRestore();
+    const calls = vi.spyOn(DelegationDurability.prototype, 'applyAcceptedBatch');
+    const grow = (n: number): void => {
+      appendBucket(w, 'demo-a', BUCKET10, startLine('demo-a', `2026-10-15T10:2${n}:00.000Z`));
+      appendBucket(w, 'demo-p', BUCKET10, startLine('demo-p', `2026-10-15T10:2${n}:30.000Z`));
+    };
+    grow(1);
+    await passOver(w, 1, ids);
+    expect(calls.mock.calls.length, 'the poison lifted: the standing bucket alone (it applies now), then the rest').toBe(2);
+    expect(disk(w.home).checkpoint!.bucketCursors.some((c) => c.sessionId === 'demo-p'), 'it applied').toBe(true);
+    expect(w.watcher.delegationReport().refusedBuckets).toBe(0);
+    grow(2);
+    const before = calls.mock.calls.length;
+    await passOver(w, 2, ids);
+    expect(calls.mock.calls.length - before, 'forgotten: one application for the whole pass').toBe(1);
+  });
+
+  it('R85 (A-F4): a refusal is forgotten once its bucket is past the read horizon, so the refusal memory is bounded', async () => {
+    const w = threeOwners({}, true);
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const ids = ['demo-a', 'demo-c', 'demo-p'];
+    poison('demo-p');
+    await passOver(w, 0, ids);
+    expect(w.watcher.delegationReport().refusedBuckets).toBe(1);
+    await passOver(w, 1, ids);
+    expect(w.watcher.delegationReport().refusedBuckets, 'inside the horizon: still standing').toBe(1);
+    const later = NOW + (DELEGATION_SPOOL_LOOKBACK_HOURS + 2) * DELEGATION_HOUR_MS;
+    setNow(later);
+    setCensus(w, { demo: [] }, Object.fromEntries(ids.map((o) => [o, measured()])), later);
+    await pass(w, ids.map((o) => sessionOf(o)));
+    expect(w.watcher.delegationReport().refusedBuckets, 'past the read horizon: never staged again, and forgotten').toBe(0);
   });
 
   it('cursors only move forward across batched passes, and a replaced bucket stays replaced when it grows again', async () => {

@@ -2128,6 +2128,24 @@ describe('D-4655: a torn journal tail heals itself (the one named exception to t
       const absent = await harness({ dir: plant({ complete: 2, applied: 2 }).dir }).open();
       expect(absent.tailQuarantineUnmeasured(), 'no quarantine directory at all is a measured "none"').toBe(false);
     });
+
+    it('R85 (A-F1): a quarantined tail whose time cannot be an instant (stamped 1960) is UNMEASURED for that file and never stops recovery; the other tails are still reported', async () => {
+      const { dir } = plant({ complete: 2, applied: 2 });
+      mkdirSync(tornDirOf(dir), { recursive: true });
+      const bogus = path.join(tornDirOf(dir), `10-${'a'.repeat(64)}.tail`);
+      const good = path.join(tornDirOf(dir), `20-${'b'.repeat(64)}.tail`);
+      writeFileSync(bogus, 'abc');
+      writeFileSync(good, 'defgh');
+      utimesSync(bogus, new Date(Date.UTC(1960, 0, 1)), new Date(Date.UTC(1960, 0, 1)));
+      utimesSync(good, new Date(Date.UTC(2026, 9, 14, 2)), new Date(Date.UTC(2026, 9, 14, 2)));
+      const warned: string[] = [];
+      const dur = await harness({ dir, store: new CoordStore(openCoordDb(path.join(dir, 'coord.db'))) }).open({ warn: (m) => warned.push(m) });
+      expect(dur.failure(), 'recovery is ready').toBeNull();
+      expect(dur.tailQuarantineUnmeasured(), 'that file\'s report is unmeasured').toBe(true);
+      expect(dur.lastTailHeal(), 'the other tail is still reported').toEqual({ at: '2026-10-14T02:00:00.000Z', bytes: 5, quarantinePath: good, foundAtBoot: true });
+      expect(warned.some((m) => m.startsWith('ccrc-server: ') && m.includes(bogus) && m.includes('unmeasured'))).toBe(true);
+      await dur.close();
+    });
   });
 });
 

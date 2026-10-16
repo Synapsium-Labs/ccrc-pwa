@@ -8810,7 +8810,8 @@ class DelegationLane {
   private readonly settled = new Set<string>();
   /** R82: the buckets (by settle key) whose result the applier refused before writing anything: applied alone on later passes, so a
    *  standing refusal costs one small application a pass. Lane memory, this process only (no file, no SQLite); a bucket leaves it when
-   *  its result applies. Bounded by the buckets the lane reads. */
+   *  its result applies, or when its hour passes the read horizon (R85, A-F4: it is never staged again), so it is bounded by the buckets
+   *  the lane can still read. */
   private readonly refusedBuckets = new Set<string>();
   private passes = 0;
   private skipped = 0;
@@ -9106,7 +9107,7 @@ class DelegationLane {
         forcedSinceLine: Object.fromEntries(Object.entries(this.forcedSinceLine).map(([k, v]) => [k, v.size])) as Record<DelegationMarkKind, number>,
       },
       projectsRoot: this.projectsRoot === null ? 'none' : typeof this.projectsRoot === 'string' ? 'resolved' : 'unmeasured',
-      lostEvidence: { forced: this.lostForced, sinceLine: this.lostSinceLine.size },
+      lostEvidence: { forced: this.lostForced, sinceLine: this.lostSinceLine.size }, refusedBuckets: this.refusedBuckets.size,
     };
   }
 
@@ -9246,8 +9247,12 @@ class DelegationLane {
       catch (err) { console.warn(`ccrc-server: delegation owner ${owner.id} could not be observed: ${err instanceof Error ? err.message : String(err)}`); }
     }
     // D-4658: what the owners staged, as ONE durable application. Also after a cut: everything staged came from a read that answered
-    // before the cut (an abort check follows every read), and a fleet whose passes are always cut must still make progress. The flush
-    // is enqueued at once, so it reaches the applier's queue ahead of any later pass's.
+    // before the cut (an abort check follows every read), and a fleet whose passes are always cut must still make progress. Its FIRST
+    // application is enqueued at once; its standing refusals go one by one, and a bisection's halves only after the attempt before them
+    // settles, so after a cut a later pass's flush CAN land between them (R85, A-F5), and apply a bucket from a newer cursor before this
+    // pass applies it from an older one. Nothing applies twice (events dedupe by `eventId`), intervals never regress (their merge is
+    // order-independent and `unmeasured` is sticky), `replaced` stays sticky, and a cursor that steps back once is re-read and deduped by
+    // the next pass.
     await this.flushPass(pass, durable);
     if (pass.signal.aborted) return;
 
@@ -9460,6 +9465,11 @@ class DelegationLane {
   private async flushPass(pass: LanePass, durable: DelegationDurability): Promise<void> {
     const staged = pass.pending.splice(0);
     const refused = new Set<string>();
+    // R85 (A-F4): a refusal whose bucket is past the read horizon is never staged again, so remembering it would only grow the set.
+    for (const k of [...this.refusedBuckets]) {
+      const hourMs = (JSON.parse(k) as [string, string, number])[2];
+      if (!this.readable(hourMs, pass.now)) this.refusedBuckets.delete(k);
+    }
     try {
       // a standing refusal goes first, alone (it may apply now, and then leaves the set); every other result goes as one application
       const standing = new Set(staged.filter((x) => this.refusedBuckets.has(x.key)).map((x) => x.key));
@@ -9477,10 +9487,9 @@ class DelegationLane {
    *  (its warn line, remembered in `refusedBuckets`); a failure after the first byte (the applier failed) is rethrown, whole. */
   private async applyIsolating(durable: DelegationDurability, entries: readonly LaneStaged[], refused: Set<string>): Promise<void> {
     if (entries.length === 0) return;
+    let out: Awaited<ReturnType<DelegationDurability['applyAcceptedBatch']>>;
     try {
-      const out = await durable.applyAcceptedBatch(entries.map((e) => e.batch));
-      for (const r of out.appended) if (r.entry.kind === 'evidence-accepted') this.noteEvidence(r.journalId, r.entry.event);
-      for (const e of entries) this.refusedBuckets.delete(e.key);
+      out = await durable.applyAcceptedBatch(entries.map((e) => e.batch));
     } catch (err) {
       if (durable.failure() !== null) throw err;                         // after the first byte: fail closed, the whole pass stops
       if (entries.length === 1) {
@@ -9493,7 +9502,12 @@ class DelegationLane {
       const mid = entries.length >> 1;
       await this.applyIsolating(durable, entries.slice(0, mid), refused);
       await this.applyIsolating(durable, entries.slice(mid), refused);
+      return;
     }
+    // R85 (A-F6): the bookkeeping after a DURABLE application stays outside the try that reads every throw as a pre-write refusal: a
+    // throw here must never re-apply what was written, nor leave its records out of the evidence slice unnoticed.
+    for (const r of out.appended) if (r.entry.kind === 'evidence-accepted') this.noteEvidence(r.journalId, r.entry.event);
+    for (const e of entries) this.refusedBuckets.delete(e.key);
   }
 
   /** An hour recorded as a gap without a bucket to read: written once. */
