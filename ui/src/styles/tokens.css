@@ -122,6 +122,24 @@
   --status-cleanup:        var(--status-idle);
   --status-cleanup-text:   var(--ink-secondary);
 
+  /* The scrollbar thumb (base.css's `html` rule; D-5159). Its track is
+     `transparent`, so the thumb sits on whatever its scroll container paints:
+     the page, a surface, a raised field, a sheet, or a WELL — dark in every
+     palette, the light ones included. It owes 3:1 on all five (WCAG 1.4.11:
+     an author-set thumb is a graphical object), and --edge-strong, the
+     hairline the plan first named, owed nothing: it measured 1.03 (One Dark)
+     and 1.06 (Solarized Light), an invisible thumb. No ink clears both sides
+     of a light palette (white grounds AND a near-black well); the idle lamp's
+     matte grey does, because that is the contract the generator fits every
+     status dot to — 3:1 plus margin against surface, page, raised and the
+     well — and the gate holds Phosphor's two hand-tuned values to it. So the
+     thumb is DERIVED from it, declared once here and re-resolved by every
+     palette, never a hex tuned until the numbers pass. Matte, so it never
+     glows; grey in every palette, so it reads as chrome, not as a state.
+     Held at 3:1 on all five grounds by contrast-check.mjs's token pairs and
+     by base-defaults.test.ts. */
+  --scrollbar-thumb:       var(--status-idle);
+
   /* Account accents — chip text on chip tint. Six hues (shared/roster.ts's
      HUES): cyan/violet/blue/magenta live in the cool half of the wheel
      (~190/265/222/330), 40°+ apart, so none of them collides with status
@@ -211,6 +229,7 @@
   --fs-2xs:  11px;   /* eyebrows, limit labels, keycap legends */
   --fs-xs:   12px;   /* timestamps, tool-card meta */
   --fs-sm:   13px;   /* chips, tool summaries, mono code */
+  --fs-md:   14px;   /* the step between: Instrument's prose and page title (D-5093) */
   --fs-base: 15px;   /* chat body, buttons, dialog options */
   --fs-lg:   17px;   /* card titles (mono), sheet titles */
   --fs-xl:   20px;   /* screen titles */
@@ -235,6 +254,10 @@
      nothing moves; what changes is that the eighth consumer has somewhere to
      take it from. */
   --ls-caps-sm: 0.04em;
+  /* Slightly tight tracking for a sans heading set at body size — Refined's
+     section titles (D-5093). A scale step like the two above: shared, and not
+     a skin token, so a skin may point a role at it but never move it. */
+  --ls-tight: -0.011em;
 
   /* ------------------------------------------------------------------ *
    *  SPACE, RADIUS, TOUCH, SIZE                                         *
@@ -262,6 +285,36 @@
   --lamp-size: 18px;   /* status-dot lamp bezel: --bg-well floor + inset ring */
   --well-max:  240px;  /* tool-output wells cap here and scroll internally */
   --measure-prose: 72ch;   /* assistant prose caps here; pre/table/img opt out. Inert <640px. */
+
+  /* ------------------------------------------------------------------ *
+   *  ROLES — the skin axis (D-5093)                                     *
+   * ------------------------------------------------------------------ */
+  /* A ROLE names what a size is FOR; the scales above say how big a step
+     is. These are Refined's values — Refined IS :root — and skins.css
+     re-points them for Instrument. Each one CHOOSES a step from a scale (or
+     a length, for the measures), so no value below is new: that is what
+     keeps this pixel-neutral, and what lets Task 14 swap a primitive's scale
+     step for its role without moving a pixel in Refined. The closed list a
+     skin may override is SKIN_TOKENS in skins.ts. Two of these change with
+     the width; their wider values are in the ROLES BY WIDTH block at the end
+     of this file. Nothing reads a role until Task 14. */
+  --fs-ui:      var(--fs-base);   /* controls and rows */
+  --fs-prose:   var(--fs-base);   /* chat and Markdown */
+  --fs-meta:    var(--fs-xs);     /* timestamps, chips */
+  --fs-page:    var(--fs-xl);     /* a screen's title (24 at ≥900) */
+  --fs-section: var(--fs-base);   /* a section's heading, with the four below */
+  --weight-section: var(--weight-semibold);
+  --family-section: var(--family-ui);
+  --case-section:   none;         /* text-transform */
+  --ls-section:     var(--ls-tight);
+
+  --gutter:      var(--sp-4);     /* a screen's side gutter (24 at ≥900, 32 at ≥1600) */
+  --row-h:       52px;            /* a list row: ListRow's height today. Tap-bearing — see SKIN_TOKENS */
+  --pad-card:    var(--sp-4);     /* inside a card */
+  --gap-section: var(--sp-8);     /* between a page's sections */
+  --page-max:      760px;         /* a secondary screen's column */
+  --page-max-wide: 1120px;        /* a wide screen's column (Runs) */
+  --measure-chat:  780px;         /* the transcript's reading column (820 at ≥1600) */
 
   /* ------------------------------------------------------------------ *
    *  ELEVATION & GLOW                                                   *
@@ -1103,6 +1156,25 @@
    pair `.chip--archived` above and `accountColorVar`'s own hue-less fallback
    already use, both already gated at 4.5+ in both themes. */
 [data-acct='unknown'] { --acct-active: var(--ink-tertiary); --acct-active-tint: var(--bg-raised); }
+
+/* ==========================================================================
+   ROLES BY WIDTH — Refined's roles that grow with the screen (D-5093). The
+   roles themselves are declared in :root above. Instrument's values in
+   skins.css are (0,2,0) and outrank these (0,1,0) at every width, so a role
+   Instrument fixes stays fixed on a wide screen.
+   ========================================================================== */
+@media (min-width: 900px) {
+  :root {
+    --fs-page: var(--fs-2xl);
+    --gutter:  var(--sp-6);
+  }
+}
+@media (min-width: 1600px) {
+  :root {
+    --gutter:       var(--sp-8);
+    --measure-chat: 820px;
+  }
+}
 
 /* ==========================================================================
    REDUCED MOTION — glow freezes at mid-intensity, springs become fades,

@@ -76,6 +76,9 @@ const palette = (theme) => {
     // --pr-merged (tokens.css) aliases --acct-violet, so it resolves to that
     // same hex per theme rather than being a second colour to keep in sync.
     prMerged: of('--pr-merged'),
+    // The scrollbar thumb (D-5159), derived in :root and re-resolved here per
+    // palette like every other token.
+    thumb: of('--scrollbar-thumb'),
   };
 };
 
@@ -249,6 +252,18 @@ const pairs = (T, name) => [
   // nobody meant to rely on.
   [`${name} ink-primary / dead banner tint`, T.inkP, T.deadTintSolid, 4.5],
   [`${name} ink-primary / attention tint`, T.inkP, T.attTint, 4.5],
+
+  // THE SCROLLBAR THUMB (D-5159). base.css paints `scrollbar-color:
+  // var(--scrollbar-thumb) transparent` on `html`, and the stylesheet half
+  // never reads it (`scrollbar-color` is not `color`). Its track is
+  // transparent, so its ground is whatever the scroll container paints —
+  // these five, the well included: dark in every palette, so a light
+  // palette's thumb must clear white AND near-black. A non-text mark, 3:1.
+  [`${name} scrollbar thumb / page (UI 3:1)`, T.thumb, T.page, 3],
+  [`${name} scrollbar thumb / surface (UI 3:1)`, T.thumb, T.surface, 3],
+  [`${name} scrollbar thumb / raised (UI 3:1)`, T.thumb, T.raised, 3],
+  [`${name} scrollbar thumb / sheet (UI 3:1)`, T.thumb, T.sheet, 3],
+  [`${name} scrollbar thumb / well (UI 3:1)`, T.thumb, T.well, 3],
 ];
 
 let fail = 0, n = 0;

@@ -21,7 +21,7 @@
 // `NodeItem` is their consumer, and `pwa/test/halt-banner.test.tsx` asserts
 // the re-export is the SAME binding as the one in `fleet/updateAck` — the
 // point of that assertion is the identity, not which file carries it.
-import { useState } from 'react';
+import { useId, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import type {
   CatalogueErrorReason, CatalogueState, NodeWire, ReleaseWire, UpdateChannel,
@@ -40,7 +40,8 @@ export { elapsedWords };
 import {
   isManagedNode, rollbackBlockers, type MoveIntent, type RollbackBlocker,
 } from '../fleet/movePlan';
-import { ACK_UNREADABLE_TEXT, canAck, sendAck } from '../fleet/updateAck';
+import { ACK_UNREADABLE_TEXT, canAck, keepFocusInRow, sendAck } from '../fleet/updateAck';
+import { haltingNodes, updateAllHaltedText } from '../fleet/updateHalt';
 import { isPlaceableInstant, nodeVersion, pendingTag } from '../fleet/useUpdatesView';
 import { moveSkipText, noBundleRollbackText } from '../lib/api';
 import '../fleet/fleet.css';
@@ -183,17 +184,34 @@ export function releaseDate(ms: number): string {
  *  `.settings-move`), not the decision: each carries its own label, its own
  *  disabled condition and its own intent. Named so the triple is written once
  *  and a fifth control cannot style itself differently by accident. */
-function MoveButton({ disabled, onClick, children }: {
+function MoveButton({ disabled, onClick, children, describedBy }: {
   disabled: boolean;
   onClick: () => void;
   children: ReactNode;
+  describedBy?: string;
 }): ReactNode {
   return (
     <Button variant="ghost" size="fit" className="settings-move"
-            disabled={disabled} onClick={onClick}>
+            disabled={disabled} aria-describedby={describedBy} onClick={onClick}>
       {children}
     </Button>
   );
+}
+
+/** Wave 19, R24(a): while a node halts the fleet the dispatcher refuses every move but the Ack (spec §10;
+ *  `moveRefusal`'s first clause), so the release row's Install (`{all: true}`) and every node's Update wait, and say
+ *  why with Update all's own reason line, verbatim (`updateAllHaltedText`; who halts is `haltingNodes`, the
+ *  dispatcher's own rule from L0). Null when nothing halts. Roll back is not gated here (the residue item names
+ *  Install and Update; the route still refuses it with the `halted` sentence). */
+function haltedReason(nodes: readonly NodeWire[]): string | null {
+  const halting = haltingNodes(nodes);
+  return halting.length > 0 ? updateAllHaltedText(halting) : null;
+}
+
+/** The reason line, once per list, above it, and only where it gates a control on screen; the gated buttons point
+ *  at it by `aria-describedby`. */
+function HaltedLine({ id, text }: { id: string; text: string }): ReactNode {
+  return <p className="settings-release-refused" id={id}>{text}</p>;
 }
 
 /** Wave 8 item C: the reason a Roll back to `tag` is not offered, grouped by word. `no-bundle` is said with the tag
@@ -208,8 +226,8 @@ export function rollbackBlockedText(blockers: readonly RollbackBlocker[], tag: s
   }).join(' ');
 }
 
-function ReleaseItem({ release: r, nodes, onMove }: {
-  release: ReleaseWire; nodes: readonly NodeWire[]; onMove: (intent: MoveIntent) => void;
+function ReleaseItem({ release: r, nodes, haltedBy, onMove }: {
+  release: ReleaseWire; nodes: readonly NodeWire[]; haltedBy: string | null; onMove: (intent: MoveIntent) => void;
 }): ReactNode {
   const refused = refusedLine(r, nodes);
   const direction = releaseDirection(r.tag, nodes);
@@ -243,7 +261,11 @@ function ReleaseItem({ release: r, nodes, onMove }: {
         {direction === 'running'
           ? <span className="settings-release-running">{releaseRunningText(r.tag, nodes)}</span>
           : (
-            <MoveButton disabled={blockers.length > 0} onClick={() => onMove(intent as MoveIntent)}>
+            <MoveButton
+              disabled={blockers.length > 0 || (direction === 'install' && haltedBy !== null)}
+              describedBy={direction === 'install' && haltedBy !== null ? haltedBy : undefined}
+              onClick={() => onMove(intent as MoveIntent)}
+            >
               {direction === 'rollback' ? 'Roll back' : 'Install'}
             </MoveButton>
           )}
@@ -255,11 +277,21 @@ function ReleaseItem({ release: r, nodes, onMove }: {
 export function ReleaseList({ releases, nodes, onMove }: {
   releases: readonly ReleaseWire[]; nodes: readonly NodeWire[]; onMove: (intent: MoveIntent) => void;
 }): ReactNode {
+  const haltedId = useId();
   if (releases.length === 0) return null;
+  const sorted = sortReleases(releases);
+  const halted = haltedReason(nodes);
+  // Wave 19 (UI-4): the line is said only where it gates a control on screen — some row in the install direction.
+  const shown = halted !== null && sorted.some((r) => releaseDirection(r.tag, nodes) === 'install') ? halted : null;
   return (
-    <ul className={`settings-releases ${RESET_LIST}`} aria-label="Releases">
-      {sortReleases(releases).map((r) => <ReleaseItem key={r.tag} release={r} nodes={nodes} onMove={onMove} />)}
-    </ul>
+    <>
+      {shown !== null && <HaltedLine id={haltedId} text={shown} />}
+      <ul className={`settings-releases ${RESET_LIST}`} aria-label="Releases">
+        {sorted.map((r) => (
+          <ReleaseItem key={r.tag} release={r} nodes={nodes} haltedBy={shown !== null ? haltedId : null} onMove={onMove} />
+        ))}
+      </ul>
+    </>
   );
 }
 
@@ -286,7 +318,8 @@ export function ReleaseList({ releases, nodes, onMove }: {
 //     desired and offers no move (D-3308); its arrow is
 //     already null in pendingTag (D-3309).
 // Update and Roll back open the one move sheet (UpdateMoveSheet, programme
-// wave 5): Update iff pendingTag names a tag, Roll back iff previousVersion
+// wave 5): Update iff pendingTag names a tag and no node halts the fleet (wave
+// 19, R24(a): `haltedReason`), Roll back iff previousVersion
 // is a tag the node runs newer than. Ack is live — its route is W2's — and is
 // offered only on a SETTLED lease, because W2's ackNode acks from nothing
 // else (D-3183; D-3310). The route stays the
@@ -378,11 +411,13 @@ export function finishedLine(n: NodeWire, now: number): string | null {
   return `${lead}${phase} ${target} · ${when}${said}`;
 }
 
-function NodeItem({ node: n, releases, now, catalogueLastOkAt, onAcked, onMove }: {
-  node: NodeWire; releases: readonly ReleaseWire[]; now: number; catalogueLastOkAt: number | null; onAcked: () => void;
+function NodeItem({ node: n, releases, now, catalogueLastOkAt, haltedBy, onAcked, onMove }: {
+  node: NodeWire; releases: readonly ReleaseWire[]; now: number; catalogueLastOkAt: number | null; haltedBy: string | null;
+  onAcked: () => void;
   onMove: (intent: MoveIntent) => void;
 }): ReactNode {
   const [acking, setAcking] = useState(false);
+  const rowRef = useRef<HTMLLIElement>(null);
   const darwin = n.os === 'darwin';
   const next = pendingTag(n);   // null for a Darwin node too — the predicate's own guard
   // Roll back needs somewhere to go: the stamp's previous version, when it is a tag this node runs NEWER than
@@ -401,6 +436,7 @@ function NodeItem({ node: n, releases, now, catalogueLastOkAt, onAcked, onMove }
   const ackable = canAck(n, releases);
 
   const ack = (): void => {
+    keepFocusInRow(rowRef.current);   // the tap disables this Ack while it is in flight (wave 19, R26(a))
     setAcking(true);
     void sendAck(n.nodeId).finally(() => {
       setAcking(false);
@@ -431,7 +467,7 @@ function NodeItem({ node: n, releases, now, catalogueLastOkAt, onAcked, onMove }
   const finished = finishedLine(n, now);
 
   return (
-    <li className="settings-node" data-node-id={n.nodeId}>
+    <li className="settings-node" data-node-id={n.nodeId} ref={rowRef} tabIndex={-1}>
       <div className="settings-node-head">
         <span className="settings-node-label">{n.label}</span>
         <span className="settings-node-detail">{`${n.role ?? 'unknown role'} · ${typeof n.os === 'string' ? n.os : 'unknown'}`}</span>
@@ -459,7 +495,8 @@ function NodeItem({ node: n, releases, now, catalogueLastOkAt, onAcked, onMove }
         {!darwin && (
           <>
             <MoveButton
-              disabled={next === null}
+              disabled={next === null || haltedBy !== null}
+              describedBy={next !== null && haltedBy !== null ? haltedBy : undefined}
               onClick={() => { if (next !== null) onMove({ scope: 'node', direction: 'update', nodeId: n.nodeId, tag: next }); }}
             >
               Update
@@ -482,15 +519,23 @@ export function NodeList({ nodes, releases, now, catalogueLastOkAt, onAcked, onM
   nodes: readonly NodeWire[]; releases: readonly ReleaseWire[]; now: number; catalogueLastOkAt: number | null; onAcked: () => void;
   onMove: (intent: MoveIntent) => void;
 }): ReactNode {
+  const haltedId = useId();
   if (nodes.length === 0) return null;
+  const halted = haltedReason(nodes);
+  // Wave 19 (UI-4): said only where it gates a control on screen — some row has an Update to wait on.
+  const shown = halted !== null && nodes.some((n) => pendingTag(n) !== null) ? halted : null;
   return (
-    <ul className={`settings-nodes ${RESET_LIST}`} aria-label="Nodes">
-      {nodes.map((n) => (
-        <NodeItem
-          key={n.nodeId} node={n} releases={releases} now={now} catalogueLastOkAt={catalogueLastOkAt} onAcked={onAcked} onMove={onMove}
-        />
-      ))}
-    </ul>
+    <>
+      {shown !== null && <HaltedLine id={haltedId} text={shown} />}
+      <ul className={`settings-nodes ${RESET_LIST}`} aria-label="Nodes">
+        {nodes.map((n) => (
+          <NodeItem
+            key={n.nodeId} node={n} releases={releases} now={now} catalogueLastOkAt={catalogueLastOkAt}
+            haltedBy={shown !== null ? haltedId : null} onAcked={onAcked} onMove={onMove}
+          />
+        ))}
+      </ul>
+    </>
   );
 }
 

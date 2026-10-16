@@ -3,7 +3,7 @@
 // D-3187) reads the store, calls these and writes the one
 // file; the update routes (Task 13) call the same functions and decide
 // nothing these do not. Ring membership is a property of the import block
-// below — two shared/ modules and nothing else — and update-resolve.test.ts
+// below — three shared/ modules and nothing else — and update-resolve.test.ts
 // pins it by reading it.
 //
 // THE CANONICAL FORM IS THE TAG (decision 2). Every value in and out is
@@ -14,6 +14,8 @@ import {
   FLEET_SCOPE, UNIX_SECONDS_MAX, UPDATE_GATE_CAP, isReleaseTag, type AutoMode, type TagFileRead, type UpdateChannel,
 } from '../../../shared/api.js';
 import { compareReleaseTags, isNewerTag } from '../../../shared/semver.js';
+// Centralised-update wave 19 (R26(b)): the gate word is read by the L0 predicate the dispatcher and the PWA ask.
+import { carriesUpdateGate } from '../../../shared/update-move.js';
 
 /** The ccrc-caps word a node needs before `auto ≠ off` may reach it (§9; written by W4's spine). Declared in
  *  shared/api.ts since W3 (D-3305), because the settings screen disables its auto-install
@@ -233,7 +235,7 @@ export function resolveNodeIntent(input: ResolveInput): Resolution {
  *  measured or not (no caps is no gate). The dispatcher (W4) is the enforcement; this is the route's 409. */
 export function autoGateBlockers(scope: string, nodes: readonly { nodeId: string; caps: readonly string[] }[]): string[] {
   return nodes
-    .filter((n) => (scope === FLEET_SCOPE || n.nodeId === scope) && !n.caps.includes(UPDATE_GATE_CAP))
+    .filter((n) => (scope === FLEET_SCOPE || n.nodeId === scope) && !carriesUpdateGate(n.caps))
     .map((n) => n.nodeId);
 }
 
