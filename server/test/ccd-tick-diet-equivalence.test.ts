@@ -27,6 +27,10 @@
 //    over every registry row and 500 random ones; into the names the tick's hot sites pass; the open-failure ladder
 //    driven by a field that vanishes between the type check and the open; and the one stated edge, `_reg_get`'s raw
 //    stdout, with the static census that says no call site reads it (E8d). (E8 also sits above E4 in the file.)
+//  - E9, W3 Task 15's route rows (D-4963), per locale: every `ROUTE_ROWS` record through the route chain's printing
+//    forms, their `_to` forms and `_route_apply_pending`'s rc, each side asserting the quiet chain left the registry
+//    (`swap.log`, the floor markers) byte-unchanged; and the `_to` forms into the names their call sites pass. (E9 also
+//    sits above E4 in the file.)
 //  - E4, the corpus module: deterministic, and every row plants the shape it names.
 //
 // RED FIRST, AND STILL A GREEN COMMIT. A row whose live helper has not landed yet is PENDING: its live side must fail,
@@ -54,7 +58,7 @@ import { DEFAULT_TEST_ROSTER } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 import {
   FILE_ROW_SETS, LIMIT_KEYS, LIMITS_IN_CAP_SIGPIPE, LIMITS_REWRITE, LIMITS_ROWS, LIMITS_TS, RANDOM_ALPHABET, REGISTRY_ROWS, ROUTE_ROWS,
-  blocksByName, inLimitsDomain, needsNonRoot, randomRows, type FileRow,
+  blocksByName, inLimitsDomain, needsNonRoot, randomRows, type FileRow, type RouteRow,
 } from './tickDietCorpus.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -113,10 +117,12 @@ const PLANNED_FORMS: Readonly<Record<string, string>> = {
  *  `_now_s_to` and `_now_s`; Task 5 landed `_cfg_dir_to`; W2 Task 8 (D-4962) landed `_limit_text_to`,
  *  `_limit_num_in_to` and `_limit_json_num_to`; W2 Task 9 (D-4962) landed `_limit_pick_to` and `_limit_field_to`;
  *  W2 Task 10 (D-4962) landed `_share_pct_to`; W3 Task 13 (D-4963) landed `_file_read_to`, `_reg_get_to` and
- *  `_reg_read_to`; the rest of W3 removes its own. */
+ *  `_reg_read_to`; W3 Task 15 (D-4963) landed `_route_peek_to`, `_route_effort_for_to`, `_route_applied_get_to`,
+ *  `_route_wanted_to` and `_route_pending_word_to`; the rest of W3 removes its own. */
 const LANDED: ReadonlySet<string> = new Set([
   '_now_s_to', '_now_s', '_cfg_dir_to', '_limit_text_to', '_limit_num_in_to', '_limit_json_num_to',
   '_limit_pick_to', '_limit_field_to', '_share_pct_to', '_file_read_to', '_reg_get_to', '_reg_read_to',
+  '_route_peek_to', '_route_effort_for_to', '_route_applied_get_to', '_route_wanted_to', '_route_pending_word_to',
 ]);
 const PENDING: ReadonlySet<string> = new Set(
   [...Object.keys(PLANNED_FORMS), '_now_s'].filter((n) => !LANDED.has(n)),
@@ -1983,6 +1989,170 @@ describe.each(LOCALES)('E8 W3 Task 13 under $name: `_reg_get`, `_reg_read` and t
     // Non-vacuity: the edge is real, both ways.
     expect(b.results.get('_reg_get raw: three-newlines')![0]!.note).toMatch(/^raw-differs /);
     expect(b.results.get('_reg_get raw: plain')![0]!.note).toMatch(/^raw-equal /);
+  });
+});
+
+// ── E9: W3 Task 15's route rows — the route chain's out-var forms (D-4963) ─────────────────────────────────────────
+
+/** The forms W3 Task 15 lands; every E9 row needs them. */
+const RT_NEEDS: readonly string[] = [
+  '_route_peek_to', '_route_effort_for_to', '_route_applied_get_to', '_route_wanted_to', '_route_pending_word_to',
+];
+const RT_FIELDS = ['class', 'degraded', 'effort', 'inert', 'routeapplied'] as const;
+/** Bash that plants one route record as `$REG/diet.<field>`, each value as `_reg_set` writes it (`printf '%s'`). */
+const plantRoute = (r: RouteRow): string =>
+  RT_FIELDS.filter((f) => r[f] !== undefined).map((f) => `printf '%s' ${q(r[f]!)} > "$REG/diet.${f}"`).join('\n') || ':';
+const routeRow = (id: string): RouteRow => {
+  const r = ROUTE_ROWS.find((x) => x.id === id);
+  if (!r) throw new Error(`no ROUTE_ROWS row ${id}`);
+  return r;
+};
+
+/** The registry as one listing, read with builtins: every entry's name and, for a regular file, its bytes `%q`-quoted.
+ *  Written to a file before and after the calls, so a side that appended a `swap.log` line, left a floor marker or
+ *  rewrote a field says so in its note (plan Task 15 Step 1: "the quiet arm writes nothing"). */
+const RT_SNAP = [
+  '__rt_snap() {',
+  '  local p c',
+  '  for p in "$REG"/* "$REG"/.[!.]*; do',
+  '    [[ -e "$p" || -L "$p" ]] || continue',
+  '    c=; [[ -f "$p" && ! -L "$p" ]] && IFS= read -r -d \'\' c < "$p"',
+  '    printf \'%s=%q\\n\' "${p##*/}" "$c"',
+  '  done',
+  '}',
+].join('\n');
+
+/** One side over one route record: each chain helper's printing form RAW (its contract: the legacy printed a
+ *  captured value), then its `_to` form into `rv`, set to `__P` first, so a form that does not empty its out-var
+ *  shows; `_route_apply_pending`'s rc (it prints nothing and has no `_to` form); and, in the note, whether the
+ *  registry moved. NOT into `v`: `_route_peek_to` is `_route_peek` renamed in place and keeps its legacy local `v`
+ *  (plan §Interfaces), so `v` is a name it would catch in its own local (E1's census forbids it). */
+const rtChain = (legacy: boolean): string => {
+  const print = (n: string): string => (legacy ? `_legacy${n}` : n);
+  const to = (n: string, args: string): string => (legacy ? `rv=$(_legacy${n} ${args})` : `${n}_to rv ${args}`);
+  const both = (n: string, args: string, tag: string): string[] => [
+    `  ${print(n)} ${args}; r=$?; printf '<%s rc=%s>\\n' ${q(tag)} "$r"`,
+    `  rv=__P; ${to(n, args)}; r=$?; printf '[%s %s|%s]\\n' ${q(tag)} "$rv" "$r"`,
+  ];
+  return [
+    RT_SNAP,
+    '__rt() {',
+    '  local r rv',
+    '  __rt_snap > "$PWD/reg.before"',
+    ...both('_route_pending_word', 'diet', 'pending_word'),
+    `  ${print('_route_apply_pending')} diet; r=$?; printf '<apply_pending rc=%s>\\n' "$r"`,
+    ...both('_route_wanted', 'diet', 'wanted'),
+    ...['class', 'degraded', 'effort', 'inert'].flatMap((f) => both('_route_peek', `diet ${f}`, `peek ${f}`)),
+    ...['', 'opus', 'haiku'].flatMap((c) => both('_route_effort_for', `diet ${q(c)} quiet`, `effort_for ${c || '<none>'} quiet`)),
+    ...['class', 'effort'].flatMap((f) => both('_route_applied_get', `diet ${f}`, `applied_get ${f}`)),
+    '  __rt_snap > "$PWD/reg.after"',
+    '  if command cmp -s "$PWD/reg.before" "$PWD/reg.after"; then printf unchanged > "$PWD/note"; else printf changed > "$PWD/note"; fi',
+    '}',
+    '__diet_caller v __rt',
+  ].join('\n');
+};
+const RT_LEGACY = rtChain(true);
+const RT_LIVE = rtChain(false);
+
+/** The records E9b drives one call at a time: nothing at all, a record fully applied, a served `degraded` rung with an
+ *  inert effort, every field refused, an invalid class with a valid effort, and haiku with a level. */
+const RT_NAMED_IDS = [
+  'class=absent,degraded=absent,effort=absent,inert=absent,routeapplied=absent',
+  'class=valid,degraded=absent,effort=valid,inert=absent,routeapplied=both',
+  'class=valid,degraded=valid,effort=auto,inert=effort,routeapplied=class-only',
+  'class=default,degraded=invalid,effort=invalid,inert=junk,routeapplied=junk',
+  'class=invalid,degraded=absent,effort=valid,inert=absent,routeapplied=absent',
+  'class=haiku,effort=valid',
+];
+
+/** Every W3 Task 15 row (plan Task 15 Step 1, tick-diet spec §6.4):
+ *  - `chain`: each `ROUTE_ROWS` record (every combination of the five fields' cases, plus haiku with each effort)
+ *    through `rtChain`, against the legacy;
+ *  - `named`: each form into the variable its call sites pass (`_swap_target`'s and `_route_wanted_to`'s `cls`,
+ *    `_route_wanted_to`'s `deg` and `ine`, `_route_effort_for_to`'s `e`, `_route_wanted_to`'s `eff`,
+ *    `_route_pending_word_to`'s `want` and `ap`, `_route_apply_pending`'s `w`), one call per row, so the out-var and
+ *    the caller frame are compared for exactly that call. Each starts from the frame's `__S`, so a form that does not
+ *    empty its out-var first leaks it on every record whose answer is empty. */
+function w3RouteRows(): { chain: Row[]; named: Row[] } {
+  const chain = ROUTE_ROWS.map((r): Row => ({
+    id: `route chain: ${r.id}`, setup: plantRoute(r), needs: RT_NEEDS,
+    sides: [{ label: 'legacy', body: RT_LEGACY }, { label: 'live', body: RT_LIVE }],
+  }));
+  const named: Row[] = [];
+  for (const id of RT_NAMED_IDS) {
+    const setup = plantRoute(routeRow(id));
+    const one = (to: string, legacy: string, args: readonly string[], ov: string): void => {
+      const rest = args.slice(1).map((a) => ` ${a}`).join('');
+      named.push({ ...toRow(`${to} ${ov}${rest}: ${id}`, legacy, to, args, setup, ov), needs: RT_NEEDS });
+    };
+    one('_route_peek_to', '_legacy_route_peek', ['diet', 'class'], 'cls');
+    one('_route_peek_to', '_legacy_route_peek', ['diet', 'degraded'], 'deg');
+    one('_route_peek_to', '_legacy_route_peek', ['diet', 'inert'], 'ine');
+    one('_route_peek_to', '_legacy_route_peek', ['diet', 'effort'], 'e');
+    one('_route_effort_for_to', '_legacy_route_effort_for', ['diet', 'opus', 'quiet'], 'eff');
+    one('_route_effort_for_to', '_legacy_route_effort_for', ['diet', 'haiku', 'quiet'], 'eff');
+    one('_route_applied_get_to', '_legacy_route_applied_get', ['diet', 'class'], 'ap');
+    one('_route_applied_get_to', '_legacy_route_applied_get', ['diet', 'effort'], 'ap');
+    one('_route_wanted_to', '_legacy_route_wanted', ['diet'], 'want');
+    one('_route_pending_word_to', '_legacy_route_pending_word', ['diet'], 'w');
+  }
+  return { chain, named };
+}
+
+describe.each(LOCALES)('E9 W3 Task 15 under $name: the route chain\'s out-var forms (tick-diet spec §6.4, D-4963)', ({ locale }) => {
+  const rows = w3RouteRows();
+  let h: CcdHarness;
+  let batch: Batch | null = null;
+  beforeAll(() => {
+    h = makeCcdHarness('ccrc-diet-e9-');
+    if (locale !== null) batch = runBatch(h, [...rows.chain, ...rows.named], locale, 900);
+  }, 1_000_000);
+  afterAll(() => h.cleanup());
+  const got = (ctx: { skip: (note?: string) => never }): Batch => {
+    if (locale === null) {
+      if (process.platform === 'darwin') ctx.skip(NO_UTF8);
+      throw new Error(`${NO_UTF8} — the supervisors run under one, so this half cannot be skipped here`);
+    }
+    return batch!;
+  };
+
+  it('E9x the batch ran every row to the end, inside its deadline', (ctx) => {
+    const b = got(ctx);
+    expect(b.hung, `a row never finished: ${b.stderr.slice(0, 2000)}`).toBeNull();
+    expect(b.status).toBe(0);
+  });
+
+  it('E9a every route record: the chain\'s printing forms, their `_to` forms and `_route_apply_pending`\'s rc answer as the legacy did, and the quiet chain writes nothing (D-4963)', (ctx) => {
+    const b = got(ctx);
+    for (const row of rows.chain) {
+      const res = b.results.get(row.id)!;
+      expectEquivalent(row, res, locale!);
+      for (const [k, s] of res.entries()) {
+        expect(s.note, `${row.id} [${row.sides[k]!.label}]: the quiet chain moved the registry (swap.log, a floor marker or a field)`)
+          .toBe('unchanged');
+      }
+    }
+    // Non-vacuity: the legacy sides answered every shape the gate decides on — a class pending, nothing pending, the
+    // served `degraded` rung with an inert effort, and haiku's level dropped without a note.
+    const leg = (id: string): string => b.results.get(`route chain: ${id}`)![0]!.out.toString('latin1');
+    expect(leg('class=valid,degraded=absent,effort=valid,inert=absent,routeapplied=absent'))
+      .toMatch(/^class=opus<pending_word rc=0>\n\[pending_word class=opus\|0\]\n<apply_pending rc=0>\nopus high<wanted rc=0>\n/);
+    expect(leg('class=valid,degraded=absent,effort=valid,inert=absent,routeapplied=both'))
+      .toMatch(/^<pending_word rc=0>\n\[pending_word \|0\]\n<apply_pending rc=1>\n/);
+    expect(leg('class=valid,degraded=valid,effort=valid,inert=effort,routeapplied=class-only'))
+      .toMatch(/^class=sonnet<pending_word rc=0>\n\[pending_word class=sonnet\|0\]\n<apply_pending rc=0>\nsonnet <wanted rc=0>\n/);
+    expect(leg('class=haiku,effort=valid')).toContain('\n[effort_for haiku quiet |0]\n');
+    expect(leg('class=absent,degraded=absent,effort=absent,inert=absent,routeapplied=absent'))
+      .toContain('\n<apply_pending rc=1>\n');
+  });
+
+  it('E9b the `_to` forms into the names their call sites pass, one call per row (D-4963)', (ctx) => {
+    const b = got(ctx);
+    for (const row of rows.named) expectEquivalent(row, b.results.get(row.id)!, locale!);
+    const val = (id: string): string => b.results.get(id)![0]!.val!.toString('latin1');
+    expect(val('_route_peek_to cls class: class=valid,degraded=absent,effort=valid,inert=absent,routeapplied=both')).toBe('opus');
+    expect(val('_route_peek_to cls class: class=absent,degraded=absent,effort=absent,inert=absent,routeapplied=absent')).toBe('');
+    expect(val('_route_pending_word_to w: class=valid,degraded=valid,effort=auto,inert=effort,routeapplied=class-only')).toBe('class=sonnet');
   });
 });
 

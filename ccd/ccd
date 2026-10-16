@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=d64a3cd57cfd4fbba569fe84846b0166353e16a1f220c95d576c19a0060a3486
+# ccrc:generated 1 sha256=cf93a6c1355130d651222cc18679dd7196797a8e67a4d5f088c04f61c5088790
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -3134,10 +3134,10 @@ _reg_get() { [[ -f "$REG/$1.$2" && ! -L "$REG/$1.$2" ]] || return 1; local __rg_
 # THE FOLD `_reg_get` KEEPS, AND THE READ THAT DOES NOT. `_reg_get` answers `""`
 # for a field that is ABSENT, one that is UNREADABLE and one that is EMPTY — the
 # overloaded null the ring rules forbid at a seam. It stays exactly as it is,
-# and the reason is a count rather than a preference: this file makes 201
-# invocations across 170 non-comment lines.
+# and the reason is a count rather than a preference: this file makes 200
+# invocations across 169 non-comment lines.
 #
-# THE LAST MOVE WAS the tick diet's `_reg_get_to` conversions (D-4963), the −8 (`_session_hard_blocked` 2, `_auto_stale_check` 1, `_auto_swap_check` 2, `_auto_compact_check` 3: each hot read now fills its variable with builtins, no subshell); before it the forked-session transcript's review round 2 — the held-conversation wait (`_ci_held_wait` +3, `_supervised_start` +2, `_ci_bgwait_open`/`_ci_bgwait_close` +1 each — D-4944), the +7; before it its review round 1 (`_ci_bg_follow`, `_ci_chain_end`, `_ci_resume_follow` — D-4944/D-4945), the +3; before it the forked-session transcript's continued-in walk (`_sync_uuid`, `_follow_continued_in`), the +2; before it the read-back's lane gate (`_route_readback_transcript`), the +1; before it the read-back's transcript memo (`_route_readback_transcript`), the +1; before it the return gate's unarchive (workspace lifecycle wave 3b), the +2; before it the route read-back's uuid read (`_route_readback`), the +1; before it the EXPIRE region's reads (workspace lifecycle wave 3), the +10; before that the operator-choice reads (session-continuity wave 3), the +3; before that the rescue wait's reads (session-continuity wave 2), the +3;
+# THE LAST MOVE WAS the tick diet's `_reg_get_to` conversions (D-4963), the −9 (`_session_hard_blocked` 2, `_auto_stale_check` 1, `_auto_swap_check` 2, `_auto_compact_check` 3, `_route_applied_get_to` 1: each hot read now fills its variable with builtins, no subshell); before it the forked-session transcript's review round 2 — the held-conversation wait (`_ci_held_wait` +3, `_supervised_start` +2, `_ci_bgwait_open`/`_ci_bgwait_close` +1 each — D-4944), the +7; before it its review round 1 (`_ci_bg_follow`, `_ci_chain_end`, `_ci_resume_follow` — D-4944/D-4945), the +3; before it the forked-session transcript's continued-in walk (`_sync_uuid`, `_follow_continued_in`), the +2; before it the read-back's lane gate (`_route_readback_transcript`), the +1; before it the read-back's transcript memo (`_route_readback_transcript`), the +1; before it the return gate's unarchive (workspace lifecycle wave 3b), the +2; before it the route read-back's uuid read (`_route_readback`), the +1; before it the EXPIRE region's reads (workspace lifecycle wave 3), the +10; before that the operator-choice reads (session-continuity wave 3), the +3; before that the rescue wait's reads (session-continuity wave 2), the +3;
 # then D-3526's carried-in verdict, the +6 (`_limit_dated`, `_limit_read`, `_never_came_up`, three in `_carried_in_note`); then the RECLAIM region's reads (CCR-15 wave 3, Task 5), `_child_tmpdir`'s and CCR-10's.
 # BEFORE THAT IT WAS ROUTING SLICE 4's, and naming it is what stops the next
 # reader hunting for a merge that did not happen: the applier and its registry
@@ -17799,7 +17799,7 @@ _swap_target() {   # id cur home [force] [hrc] -> destination on stdout; rc 0 = 
   # the same thing here: today's walk, byte for byte — every rc-2/3/4 pin in the
   # pool suites holds by construction because nothing below runs without `cls`.
   local cls src pass pcls unserv unmeas
-  cls=$(_route_peek "$id" class); [[ "$cls" == default ]] && cls=""
+  _route_peek_to cls "$id" class; [[ "$cls" == default ]] && cls=""   # D-4963: the out-var form, no subshell
   # ── POOLS (§5.5.3) ───────────────────────────────────────────────────────
   # The project's tag is read ONCE per decision and the WORD is passed down, so
   # a loop over five candidates costs one `cat`, not five. `_project_pool_state`
@@ -19655,7 +19655,7 @@ _route_get() {   # id field -> stdout the VALIDATED value, or nothing. Always 0.
   esac
   return 0
 }
-_route_peek() {   # id field -> stdout the VALIDATED value, or nothing. PURE: no journal
+_route_peek_to() {   # var id field -> var = the VALIDATED value, or empty (printing form `_route_peek`: the tick-diet block, D-4963). PURE: no journal
   # line, no floor marker, no registry write of any kind. For a caller that
   # reads a field only to DECIDE, and may `die` before it writes anything —
   # `cmd_route`'s haiku+effort pair check, where `_route_get` used to leave a
@@ -19665,12 +19665,12 @@ _route_peek() {   # id field -> stdout the VALIDATED value, or nothing. PURE: no
   # Both conditions `_route_valid` refuses are silent here — this read makes no
   # claim about which it saw, and the caller's own `die` is not reached from
   # here anyway.
-  local id="$1" f="$2" v
+  local __rp_out="$1"; shift; local id="$1" f="$2" v; printf -v "$__rp_out" ''
   v=$(_reg_get "$id" "$f") || return 0
-  _route_valid "$f" "$v" && printf '%s' "$v"
+  _route_valid "$f" "$v" && printf -v "$__rp_out" '%s' "$v"
   return 0
 }
-_route_effort_for() {   # id class [quiet] -> stdout the effort to apply. Haiku 4.5 takes no effort
+_route_effort_for_to() {   # var id class [quiet] -> var = the effort to apply (printing form `_route_effort_for`: the tick-diet block, D-4963). Haiku 4.5 takes no effort
   # level (the served catalogue gives it `thinking.type: none`), so the PAIR is
   # refused here with its own note and nothing is typed. `auto` is spec
   # §5.1's ABSENT-equivalent — haiku+auto types nothing and notes nothing,
@@ -19690,15 +19690,15 @@ _route_effort_for() {   # id class [quiet] -> stdout the effort to apply. Haiku 
   # every live session. A tick may not write, and this used to: a haiku+level
   # record left a `routenotepair` floor marker and a `route-refuse` line the
   # first time the applier's own gate looked at it.
-  local id="$1" cls="$2" quiet="${3:-}" e
-  if [[ "$quiet" == quiet ]]; then e=$(_route_peek "$id" effort); else e=$(_route_get "$id" effort); fi
+  local __ref_out="$1"; shift; local id="$1" cls="$2" quiet="${3:-}" e; printf -v "$__ref_out" ''
+  if [[ "$quiet" == quiet ]]; then _route_peek_to e "$id" effort; else e=$(_route_get "$id" effort); fi
   if [[ "$cls" == haiku && "$e" == auto ]]; then
     e=""
   elif [[ "$cls" == haiku && -n "$e" ]]; then
     [[ "$quiet" == quiet ]] || _route_pair_note "$id"
     e=""
   fi
-  printf '%s' "$e"
+  printf -v "$__ref_out" '%s' "$e"
   return 0
 }
 _compact_note() {   # id reason [detail] — record why the compactor declined this tick.
@@ -20084,12 +20084,12 @@ _route_applied_set() {   # id field value — rewrite the list with <field> repl
   _reg_set "$id" routeapplied "${out:+$out }$f=$v"
 }
 
-_route_applied_get() {   # id field -> stdout the recorded value, or nothing. Always 0.
-  local id="$1" f="$2" w
+_route_applied_get_to() {   # var id field -> var = the recorded value, or empty (printing form `_route_applied_get`: the tick-diet block, D-4963). Always 0.
+  local __rag_out="$1"; shift; local id="$1" f="$2" w ra; printf -v "$__rag_out" ''
   local -a words=()
-  read -r -a words <<< "$(_reg_get "$id" routeapplied 2>/dev/null)"
+  _reg_get_to ra "$id" routeapplied; read -r -a words <<< "$ra"
   for w in ${words[@]+"${words[@]}"}; do
-    [[ "$w" == "$f="* ]] && { printf '%s' "${w#*=}"; return 0; }
+    [[ "$w" == "$f="* ]] && { printf -v "$__rag_out" '%s' "${w#*=}"; return 0; }
   done
   return 0
 }
@@ -20103,7 +20103,7 @@ _route_inert_has() {   # <inert list> field -> 0 iff the comma list names the fi
   _route_word_in "$f" "${list//,/ }"
 }
 
-_route_wanted() {   # id -> stdout "<class> <effort>": the two values the applier would type.
+_route_wanted_to() {   # var id -> var = "<class> <effort>": the two values the applier would type (printing form `_route_wanted`: the tick-diet block, D-4963).
   # ONE SPELLING, read by both the cheap pending check and the applier itself —
   # two copies of "what does this record ask for" is exactly the drift that would
   # make the tick loop for ever on a field it then declines to type.
@@ -20141,24 +20141,24 @@ _route_wanted() {   # id -> stdout "<class> <effort>": the two values the applie
   # a sixth read (`effort`) through the same pure reader. That is the whole
   # contract this function owes `_route_apply_pending`, which runs on every live
   # session every five seconds.
-  local id="$1" cls deg eff
-  cls=$(_route_peek "$id" class)
-  deg=$(_route_peek "$id" degraded)
+  local __rw_out="$1"; shift; local id="$1" cls deg eff ine; printf -v "$__rw_out" ''
+  _route_peek_to cls "$id" class
+  _route_peek_to deg "$id" degraded
   [[ -n "$deg" ]] && cls="$deg"
-  eff=$(_route_effort_for "$id" "$cls" quiet)
-  _route_inert_has "$(_route_peek "$id" inert)" effort && eff=""
-  printf '%s %s' "$cls" "$eff"
+  _route_effort_for_to eff "$id" "$cls" quiet
+  _route_peek_to ine "$id" inert; _route_inert_has "$ine" effort && eff=""
+  printf -v "$__rw_out" '%s %s' "$cls" "$eff"
   return 0
 }
 
-_route_pending_word() {   # id -> "<field>=<value>" for the FIRST field the applier would type, or nothing
+_route_pending_word_to() {   # var id -> var = "<field>=<value>" for the FIRST field the applier would type, or empty (printing form `_route_pending_word`: the tick-diet block, D-4963)
   # THE ONE PLACE "is this field pending" is decided, so the cheap gate, the
   # applier and the give-up note can never disagree about WHICH field is stuck.
   # Class first, then effort — `_route_apply_now`'s own order (D-2811).
-  local id="$1" want cls eff
-  want=$(_route_wanted "$id"); cls="${want%% *}"; eff="${want#* }"
-  [[ -n "$cls" && "$cls" != "$(_route_applied_get "$id" class)" ]] && { printf 'class=%s' "$cls"; return 0; }
-  [[ -n "$eff" && "$eff" != "$(_route_applied_get "$id" effort)" ]] && { printf 'effort=%s' "$eff"; return 0; }
+  local __rpw_out="$1"; shift; local id="$1" want cls eff ap; printf -v "$__rpw_out" ''
+  _route_wanted_to want "$id"; cls="${want%% *}"; eff="${want#* }"
+  _route_applied_get_to ap "$id" class; [[ -n "$cls" && "$cls" != "$ap" ]] && { printf -v "$__rpw_out" 'class=%s' "$cls"; return 0; }
+  _route_applied_get_to ap "$id" effort; [[ -n "$eff" && "$eff" != "$ap" ]] && { printf -v "$__rpw_out" 'effort=%s' "$eff"; return 0; }
   return 0
 }
 
@@ -20171,9 +20171,9 @@ _route_apply_pending() {   # id -> 0 iff the record asks for a class or effort `
   # or two `_route_applied_get`s. This is the tick's first act on every live
   # session — ~20 sessions x 12 ticks a minute — so the healthy answer, nothing
   # pending, has to cost a few stats and no tmux at all.
-  local id="$1"
+  local id="$1" w
   _route_any "$id" || return 1
-  [[ -n "$(_route_pending_word "$id")" ]] && return 0
+  _route_pending_word_to w "$id"; [[ -n "$w" ]] && return 0   # D-4963: the whole chain in this shell, no subshell
   return 1
 }
 
@@ -24467,6 +24467,27 @@ _reg_get_to() {   # var id field -> var = the value; rc 0 read | 1 absent or unr
   _file_read_to "$1" "$REG/$2.$3"
 }
 _reg_read() { local __rrw_v __rrw_rc; _reg_read_to __rrw_v "$@"; __rrw_rc=$?; printf '%s' "$__rrw_v"; return "$__rrw_rc"; }   # the printing form (D-4963)
+
+# D-4963 (tick-diet spec §6.4), W3 Task 15: the route chain through out-vars. `_route_apply_pending` runs on every
+# live session's tick, and its one `$(_route_pending_word …)` nested 15 subshells: `_route_wanted`'s three
+# `_route_peek` reads and `_route_effort_for … quiet` (each with the `$(_reg_get …)` inside it), and one or two
+# `_route_applied_get` reads (each with its own). `_route_peek_to`, `_route_effort_for_to`, `_route_applied_get_to`,
+# `_route_wanted_to` and `_route_pending_word_to` are those five renamed in place: the same bodies, the answer in the
+# caller's variable, every capture of a converted helper now its out-var call. Each empties its out-var first, so a
+# fresh `local` it fills is never unbound under `set -u`, and a pre-set one never keeps a stale value. Below, each old
+# name is a one-line printing form with the old stdout and rc 0. Two consequences, both stated:
+#  - `_route_pending_word_to` reads `routeapplied` at the head of each line, even when `cls` or `eff` is empty, where
+#    the `$( )` inside the `[[ ]]` was skipped: a pure registry read, with no side effect.
+#  - `_route_valid` now runs in the caller's shell, so its `=~` arms (`compact`, `inert`) set the caller's
+#    `BASH_REMATCH`; no caller of these forms reads it after the call (W3's audit).
+# `_route_effort_for_to`'s non-quiet arm keeps its `$(_route_get …)`: its journal lines and floor markers are the
+# settle's, and only the quiet arm, the tick's, is converted. `_route_peek_to` keeps its own read as a captured
+# `_reg_get`, `|| return 0` on the rc: that rc reader is one of the two that `ccd-crosspool` enumerates by text.
+_route_peek() { local __w; _route_peek_to __w "$@"; printf '%s' "$__w"; return 0; }
+_route_applied_get() { local __w; _route_applied_get_to __w "$@"; printf '%s' "$__w"; return 0; }
+_route_effort_for() { local __w; _route_effort_for_to __w "$@"; printf '%s' "$__w"; return 0; }
+_route_wanted() { local __w; _route_wanted_to __w "$@"; printf '%s' "$__w"; return 0; }
+_route_pending_word() { local __w; _route_pending_word_to __w "$@"; printf '%s' "$__w"; return 0; }
 
 cmd_supervise() {   # systemd ExecStart: ensure then block until the session dies
   local id="${1:?usage: ccd supervise <id>}"

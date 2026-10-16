@@ -111,17 +111,29 @@ import {
  *    idle-home 111/33 -> 104/33 · busy 109/33 -> 104/33 · narrow 64/17 -> 62/17 · away-over-ceiling 111/33 -> 104/33 ·
  *    hard-blocked 147/37 -> 142/37 · cooldown 82/24 -> 78/24 · fable 113/34 -> 106/34 · leaving 134/43 -> 127/43 ·
  *    fable-leaving 142/47 -> 135/47.
+ *
+ *  LOWERED BY W3 Task 15 (D-4963, the route chain through out-vars and `_swap_target`'s class peek; macOS bash 5.3
+ *  and Linux bash 5.2 print the same table, ticks 1-4 included): every fixture plants a route record that is fully
+ *  applied, so each steady tick walks `_route_apply_pending`'s whole chain. It nested 15 subshells; 4 remain, one per
+ *  `_route_peek_to` read (`class`, `degraded`, `effort`, `inert`), whose own `$(_reg_get …)` stays a capture because
+ *  `ccd-crosspool` enumerates that rc reader by its text. So the chain is -11 forks on every fixture, and
+ *  `_swap_target`'s class peek, `$(_route_peek …)` around its own capture, is -1 per call: one call per steady tick
+ *  on idle-home, busy, away-over-ceiling, fable, leaving and fable-leaving, two on hard-blocked, none on narrow or
+ *  cooldown. Execs do not move (Task 13 took the `cat`s). Before -> after:
+ *    idle-home 104/33 -> 92/33 · busy 104/33 -> 92/33 · narrow 62/17 -> 51/17 · away-over-ceiling 104/33 -> 92/33 ·
+ *    hard-blocked 142/37 -> 129/37 · cooldown 78/24 -> 67/24 · fable 106/34 -> 94/34 · leaving 127/43 -> 115/43 ·
+ *    fable-leaving 135/47 -> 123/47.
  */
 const TICK_BUDGET: Record<FixtureName, { forks: number; execs: number }> = {
-  'idle-home': { forks: 104, execs: 33 },
-  busy: { forks: 104, execs: 33 },
-  narrow: { forks: 62, execs: 17 },
-  'away-over-ceiling': { forks: 104, execs: 33 },
-  'hard-blocked': { forks: 142, execs: 37 },
-  cooldown: { forks: 78, execs: 24 },
-  fable: { forks: 106, execs: 34 },
-  leaving: { forks: 127, execs: 43 },
-  'fable-leaving': { forks: 135, execs: 47 },
+  'idle-home': { forks: 92, execs: 33 },
+  busy: { forks: 92, execs: 33 },
+  narrow: { forks: 51, execs: 17 },
+  'away-over-ceiling': { forks: 92, execs: 33 },
+  'hard-blocked': { forks: 129, execs: 37 },
+  cooldown: { forks: 67, execs: 24 },
+  fable: { forks: 94, execs: 34 },
+  leaving: { forks: 115, execs: 43 },
+  'fable-leaving': { forks: 123, execs: 47 },
 };
 
 /** `_plat_timeout`'s `-k` probe, per tick inside the loop. On `main` at
