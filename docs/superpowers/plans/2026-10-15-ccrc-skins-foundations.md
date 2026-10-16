@@ -1344,6 +1344,22 @@ A worker never allocates: it names a departure by slug in its report, and the co
     - It is two-way: an entry whose palette clears 0.12 again is stale, and an entry that names no palette is an orphan. An entry whose reason is blank gives no ruling to read. Each is a FAIL row.
     - `pwa/test/ink-tiers.test.ts` pins the list to exactly these two, twice: off the gate's own declarations, evaluated from its source as exact numbers (0.12, 0.04, and 0.10 for each of the two, each with a non-blank reason), and off the gate's own output. A third entry reds even for a palette that measures under 0.12, because widening the exception is a ruling, not an edit, and so does a floor nudged inside its rounding, such as 0.105 or 0.119. It also reds when either palette drifts below 0.10.
 
+### Found while executing Task 12a
+
+A worker never allocates: it names a departure by slug in its report, and the coordinator allocates through `POST /api/ledger/deviations` and defines it here, once, in the PR that introduces it. Task 12a named two, issued 2026-10-16.
+
+- **D-5245** — `ui-index-exports-device-default` (Task 12a): `ui/src/index.ts` exports `AUTO`, `DEVICE_QUERY`, `skinPreference` and `SkinPreference`.
+  - **Why the file:** `pwa/src/lib/skin.ts` reads the catalogue through `@ccrc/ui`, whose one script entry is `src/index.ts` (`exports['.']`; the others are stylesheets), so a name `skins.ts` adds reaches the app only through that file.
+  - **Why a statement of its own:** the four names go in a second `export … from './styles/skins'` rather than into Task 1's. Task 1's line stays byte for byte, and a parallel branch that edits `index.ts` meets an added line here, not a changed one.
+  - **Departs** Task 12a's file list, which does not name `ui/src/index.ts`. Nothing in flight freezes the file.
+- **D-5246** — `stored-skin-answers-the-choice` (Task 12a): the app's half stores and reports the CHOICE ("Match this device" or a skin), never what it resolves to.
+  - **`skinPreference(stored)` and its type `SkinPreference`** (`ui/src/styles/skins.ts`) answer what a stored value asks for: a known id, or `AUTO` for anything else (spec §7: "an unknown value means `AUTO`"). `resolveSkin` is built on it. The plan's shape names neither.
+  - **`storedSkin()`** (`pwa/src/lib/skin.ts`) returns that choice, `AUTO` for nothing stored, an unknown value or unreadable storage, instead of Task 1's resolved `SkinId`. Task 12b's picker shows the stored choice, `auto` included, and its header already offers `storedSkin()` as the read.
+  - **`setSkin(choice)`** remembers `skinPreference(choice)`, so `auto` for `AUTO` and for an unknown id, instead of the resolved skin. `rememberSkin` takes a `SkinPreference`. Remembering the resolution would pin a desk handed an unknown id to Refined after W2 flips `preview`.
+  - **`resolveSkin`** takes an optional third argument, the catalogue (default `SKINS`), so a test resolves against the catalogue W2 ships without committing the flip. Its `deviceIsDesk` defaults to `false`, so neither one-argument call in `ui/.storybook/preview.ts` needs an edit: the toolbar decorator's, whose global always names a skin, and Task 3's `initialGlobals` read of `STORYBOOK_SKIN`, where an unset value means `AUTO` and so Refined, before W2's flip and after it, because Storybook never reads the device.
+  - **Held by** `skin-catalogue.test.ts`'s `skinPreference` case, and by `skin-boot.test.tsx`'s once-per-load case, which reds with `expected 'instrument' to be 'auto'` when `setSkin` stores the resolution.
+  - **Departs** the plan's shape for Task 12a (`resolveSkin(stored, deviceIsDesk)`, nothing more) and Task 1's `storedSkin(): SkinId`.
+
 ### Found while executing Task 13
 
 A worker never allocates: it names a departure by slug in its report, and the coordinator allocates through `POST /api/ledger/deviations` and defines it here, once, in the PR that introduces it. Task 13 named one, issued 2026-10-15.
