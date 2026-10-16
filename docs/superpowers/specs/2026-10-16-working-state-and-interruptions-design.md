@@ -1,18 +1,19 @@
 # Working-state truth and session interruptions (design)
 
-**Status:** rev 1 (2026-10-16), after one adversarial review. It records the operator's rulings of 2026-10-16 (§2) and
+**Status:** rev 2 (2026-10-16), after two adversarial reviews. It records the operator's rulings of 2026-10-16 (§2) and
 the coordinator calls made under them. Every number in it is issued: D-5231 to D-5242, defined once in the plan's
 §Deviations found. The four box acts (§5.10's verification, rollout and the tmux-server drop-in; §5.11's arming) are
 operator acts under the SAFETY rules and are not authorised by this document.
 
-**Date:** 2026-10-16 · **Branch:** `docs/working-state` (cut from `origin/main` `0b3ff2f6`, merged up to `a6b2606c`)
+**Date:** 2026-10-16 · **Branch:** `docs/working-state` (cut from `origin/main` `0b3ff2f6`, merged up to `256b25ec`)
 
 **Plan:** `docs/superpowers/plans/2026-10-16-working-state-and-interruptions.md` (tasks, tests, mutation tables, lanes, the
 measurement plan and the ledger entries).
 
-**Citations** are to `origin/main` `a6b2606c`. Line numbers are hints, written `≈:`, and every citation also names its
-function or constant. **[M]** marks a measured figure, **[I]** an inferred one, and **[B]** a reading of Claude Code's
-own hook-input schema and task code in an installed 2.1.300 binary (read-only `strings`, no execution).
+**Citations** are to `origin/main` `256b25ec`. Its last two merges (#446, #447) touched only UI, CSS, Storybook and another
+plan, so the line hints first taken on `a6b2606c` still hold. Line numbers are hints, written `≈:`, and every citation also
+names its function or constant. **[M]** marks a measured figure, **[I]** an inferred one, and **[B]** a reading of Claude
+Code's own hook-input schema and task code in an installed 2.1.300 binary (read-only `strings`, no execution).
 
 **Where the numbers come from.** A read-only investigation of the fleet box on 2026-10-15 and 16: four investigators
 (status from code, status live, interruptions from code, interruptions live), a diagnosis, and an adversarial verifier
@@ -183,8 +184,11 @@ the stale-`waiting` rung and the `/ws/fleet` heartbeat (§10).
 - **`ccd` is the authority on the box.** The server refuses, forecasts and composes; `ccd` re-measures at every act that
   kills a process.
 - **Deploy order is a mechanism, not a sentence.** Where a fleet-side change is safe only behind a server-side one (§6.1),
-  the release carrying it is rolled out server first (`ccrc rollout --server-first`), unless the server box's `/health`
-  `version` already reads at or past the prerequisite's release.
+  the fleet half gates itself on the server it talks to: the hook engages a changed meaning only while that server's
+  `/health` advertises the word for it, as the fleet box last measured it. Every mover is then safe in any order: `ccrc
+  rollout` with or without `--server-first`, the PWA's one-tap, the update control plane's unattended `auto` dispatcher
+  (which always moves fleet nodes first, `planDispatch`'s `waiting-for-fleet` hold, `server/src/update/dispatch.ts`
+  ≈:282), `deploy.sh`, and a server rolled back below the release that brought the word.
 
 ---
 
@@ -293,18 +297,28 @@ ends any wait, as now.
 **The roster.** Entries gain `id` (the payload's `agent_id`, cleaned to `[A-Za-z0-9_-]{1,64}`). A SubagentStart adds an
 entry unless that id is already listed; a SubagentStop removes the entry with its id, and is a no-op when none matches
 (the side agents' Stops). SessionStart `startup`, `clear` and `resume` empty the list; `compact` keeps it (its arm exits
-first, ≈:3017, and a compaction kills no agent). At a main Stop: a measured `bg` of 0 empties the list; a `bg` of 1 to 8
-with no `workflow` kind keeps only entries whose id is among the Stop's background ids; anything else leaves the list
-alone (workflow agents are not listed individually, and the hook keeps at most eight ids). Entries without an `id`
-(written by an older hook) are dropped at the first prune. A background subagent's task id equals its SubagentStart
-`agent_id` on 2.1.280: in the committed capture `agent-iso-bg.json`, the Stop lists task `a73ff…` and the SubagentStart
-before it carries the same `agent_id` [M]. The plan re-measures that on the fleet's current builds (2.1.296 to 2.1.301)
-only; if it no longer holds there, only the `bg = 0` rule ships.
+first, ≈:3017, and a compaction kills no agent). At a main Stop: a measured `bg` of 0 (Claude Code lists every running
+or pending backgrounded task [B], so nothing delegated runs) empties the list; a `bg` of 1 to 8 (every listed id known:
+the hook keeps at most eight) prunes to the listed ids, but only under the rule below; anything else, `bg` −1 included,
+leaves the list alone. **The bounded prune runs only for the kind whose ids are measured:** a background subagent's task
+id equals its SubagentStart `agent_id` on 2.1.280 (in the committed capture `agent-iso-bg.json`, the Stop lists task
+`a73ff…` and the SubagentStart before it carries the same `agent_id` [M]), and no capture shows a teammate's or a cloud
+session's, while workflow agents are not listed individually at all. So the list is cut to the listed ids only when every
+delegated task the Stop lists is a `subagent`; a listed `workflow`, `teammate`, `cloud-session` or unseen kind leaves the
+list alone, until the plan's re-measure on the fleet's current builds (2.1.296 to 2.1.301) shows that kind's ids match
+too. If even the subagent match no longer holds there, only the `bg = 0` rule ships. Entries without an `id` (written by
+an older hook) are dropped at the first prune.
 
-**Order.** This must not reach the fleet before §5.1's server half, nor before §5.7. With agent events no longer writing
-`working`, a Stop's `done` would otherwise stand unopposed over the whole delegated run, which is worse than today's
-flap; and the dispatch gate, which today reads only the hookstate, would see that `done` and type `/clear` into a session
-whose delegated work still runs. §6.1 says how the rollout enforces both.
+**Order.** The carry must not engage before §5.1's server half, §5.7 and this section's own stall-clock change are on the
+server the fleet talks to. With agent events no longer writing `working`, a Stop's `done` would otherwise stand unopposed
+over the whole delegated run, which is worse than today's flap; the dispatch gate, which today reads only the hookstate,
+would see that `done` and type `/clear` into a session whose delegated work still runs; and a stall watch still reading
+`updatedAt` would mail stall checks to workers idle over working subagents and call long foreground Agent calls frozen.
+So the carry (the keep-the-main-state write and the `waitPrev` restore) runs only while the server advertises
+`hook-main-state-v1` (§6.1); otherwise an agent event writes exactly what it writes today. The word is added to the
+server's list in the same change as the stall clocks, and that change is cut after §5.1's and §5.7's, so no server can
+advertise it without all three. The roster rules and the no-file print change no existing field's meaning and are not
+gated.
 
 ### 5.3 Finished means a main Stop (D-5233)
 
@@ -389,15 +403,26 @@ module both callers import. `idle` proceeds; `busy` refuses `worker-busy`; `unme
 `status-unmeasurable`. **The teammate caveat:** the gate reads the live word and never a background count. A Stop that
 lists idle teammates leaves the live file `idle`, and gating on the count would refuse that session for ever.
 
-Two refinements. An `ensure` that just started the pane (its answer is not `alive: <id>`) is polled, bounded at 60 s,
-until the verdict is `idle`, because a pane that has not yet published its live file reads `unmeasured`. And the verdict
-is read again immediately before the `/clear` is typed, since the hold and the route write sit between the gate and the
-act (the existing comment at ≈:911 names that window).
+Two refinements. **A pane this dispatch just started is waited for, but never under the coordination mutex.** The
+dispatch route runs `dispatchRun` inside `coordMutex` (`coord/routes.ts` ≈:1605), the one serialiser that also covers
+close, reclaim, settle and the abandon arms the dead-coordinator lane uses. So when an `ensure` that started the pane (its
+answer is not `alive: <id>`, ≈:748) is followed by an `unmeasured` verdict, because the new pane has not yet published its
+live file, `dispatchRun` returns at once with a new retryable refusal, `worker-starting`, having done nothing after the
+`ensure` (no hold, no route write, no transition, no `/clear`). The route then leaves the mutex and polls the verdict
+every 2 s, bounded at 15 s, and re-enters the mutex once to run the whole decision again from the top; that second run's
+`ensure` answers `alive:`, and its verdict decides. If the pane is still not readable, or was started again, the route
+answers `409 worker-starting` and the coordinator dispatches again. The bound has a measured basis in code: the
+coordinator's only client, `ccrc-api`, caps every request at 30 s (`curl -m 30`, `ccd/ccrc-api` ≈:444), and a dispatch
+the server completed after its caller had given up would read to the coordinator as a transport failure. So the wait is
+at most half that cap, leaving the other half for the two decisions around it; a test holds the two numbers together.
+How long a resumed pane takes to come up is measured before the PR (the plan's Task 9), to say how often the retry path
+is the common one. And the verdict is read again immediately before the `/clear` is typed, since the hold and the route
+write sit between the gate and the act (the existing comment at ≈:911 names that window).
 
-**This is on the server box before §5.8 or §5.2 reaches the fleet** (§6.1 says how). With the compaction carry alone, an
-idle compaction leaves hook `done` standing while the pane compacts, and the hook-only gate would type `/clear` into it;
-with §5.2 alone, a Stop's `done` stands through a whole delegated run, which agent events used to overwrite with
-`working` every few seconds.
+**The hooks of §5.8 and §5.2 engage only behind this gate** (§6.1 says how). With the compaction carry alone, an idle
+compaction leaves hook `done` standing while the pane compacts, and the hook-only gate would type `/clear` into it; with
+§5.2 alone, a Stop's `done` stands through a whole delegated run, which agent events used to overwrite with `working`
+every few seconds. The server that carries this gate advertises the word `dispatch-live-gate-v1`.
 
 ### 5.8 Compactions carry the prior state (D-5239)
 
@@ -410,7 +435,9 @@ stall watch's rule that plumbing never refreshes a hold survives §5.2's move to
 leaves `done` (or `idle`) exactly as it was, with no fresh `bucketSince` and no badge; a compaction in mid-turn leaves
 `working`. The tail's compaction helpers (`_hook_compact_pre`, `_hook_compact_post`, ≈:4066) still run: only the
 hookstate write is skipped. The turn marker is untouched (it never recorded compactions). During the compaction the live
-file reads `busy` [M], which is what the mail gate and §5.7's gate act on.
+file reads `busy` [M], which is what the mail gate and §5.7's gate act on. **Gated like §5.2's carry:** the skip (and the
+`/compact` arm below) runs only while the server advertises `dispatch-live-gate-v1` (§6.1); otherwise a compaction writes
+what it writes today.
 
 **Measured first:** whether a typed `/compact` (the operator's or `ccd`'s auto-compact) fires UserPromptSubmit, and with
 what `prompt`. If it does, the tail treats a main UserPromptSubmit whose prompt is `/compact` or starts with `/compact `
@@ -421,26 +448,46 @@ as the start of a compaction: it writes no state and opens no turn in the marker
 
 **Where the gates sit in `cmd_swap`.** Every act-time gate runs before the first write the stop path makes:
 before `_operator_choice_keep` (≈:27208), which leaves `$REG/<id>.choicekept` behind and would make the next stop or
-spawn skip reading the operator's model choice, and before `_svc_stop`. A gate that refuses therefore leaves the row
-exactly as the decision found it, `lastswap` aside (restored below).
+spawn skip reading the operator's model choice, and before `_svc_stop`. **The degrade stamp moves to the act.** Both
+automatic arms stamp `degraded` at the decision today (`_route_degrade_at_move`, ≈:17599, called at ≈:19147 and ≈:19245),
+whose own doctrine is that "the stamp belongs to the move, not to the decision" (≈:17578), because a standing stamp makes
+a later settle compose `--model <rung>` for a degrade that never happened. With act-time gates the decision is no longer
+the move, so `_dispatch_swap` passes the rung (`from` and `to`) into the transient unit instead, and `cmd_swap` stamps it
+after its act-time gates pass, immediately before `_operator_choice_keep`; a stamp that cannot be written stands still
+there, as it did at the decision (ruling S3-R5). A gate that refuses therefore leaves the row exactly as the decision
+found it, `lastswap` aside (restored below).
 
 - **Auto, non-rescue.** `_dispatch_swap` passes the arm, the row's previous `lastswap` and the decision's epoch into the
   transient unit. `cmd_swap`, for an automatic affinity swap, runs the same idle gate the decision ran (`_auto_swap_check`'s
   non-blocked arm, ≈:19217–19241: no `esc to interrupt`, a prompt, live `idle`, `SWAP_CEIL_QUIET` of quiet, extracted
   into one function both call). Busy: it writes `requeue <id>: busy after jitter`, restores `lastswap`, and stops nothing.
   The next tick decides again.
-- **Rescue.** At the act, `cmd_swap` re-runs the blocked verdict (`_session_hard_blocked`, ≈:18299) on a fresh pane
-  capture. A measured "not blocked" is `rescue-cancel`; a verdict that cannot be read proceeds as decided, today's
-  behaviour, and never cancels. Then it reads the transcript from the byte offset recorded at the decision: an appended
-  assistant entry that is not an API-error message means the session is working: `rescue-backoff`. Both restore
-  `lastswap` and stop nothing; a lane that is still blocked is re-decided on the next tick. **The decision's account
-  writes.** The rescue arm writes two account-level facts at the decision (≈:19152–19167): the `five:100` limits row for
-  a non-Anthropic lane, and the `<wrapper>-authdead` marker after a fresh 401. A `rescue-cancel` measured that this
-  session's lane is not blocked, so it undoes those two writes **only while they are still the decision's own bytes**
-  (the limits row whose `ts` is the decision's epoch, the marker reading `<epoch> rescue-401`), and leaves any newer write
-  by another session or by `ccd-account-health` alone. Without that, a cancelled rescue would leave the account looking
-  blocked and other sessions would keep evacuating it. A `rescue-backoff` undoes nothing: the lane may still be blocked,
-  and the session is merely producing output past it.
+- **Rescue.** At the act, `cmd_swap` re-runs the decision's own detector, `_session_hard_blocked` (≈:18299), on a fresh
+  pane capture. Its `rc 1` is not one answer: its own comment calls it "what no verdict has to look like", and it returns
+  1 for an unmeasurable pane (≈:18367), a carried-in banner (≈:18370, ≈:18378), a running turn (≈:18379), a fresh
+  stale-press (≈:18381), a negative transcript verdict, fresh or cached for 30 s (≈:18382–18392), and a draft in the box
+  (≈:18396). So the function also names why it said no, in a global beside `HARD_BLOCK_VIA` (≈:18356), the predicate's
+  established shape: `HARD_BLOCK_NO` = `unmeasurable`, `carried-in`, `running`, `stalepress`, `negative` or `draft`. The
+  act reads it in three ways:
+  - **measured not blocked** (`negative` or `carried-in` on a measurable pane, no stand-down fired): `rescue-cancel`;
+  - **the session is moving** (`running`, or a transcript that gained, since the byte offset recorded at the decision, an
+    assistant entry that is not an API-error message): `rescue-backoff`;
+  - **undecidable** (`draft`, `stalepress`): `rescue-backoff` too, because a human typing or a continuation Claude Code
+    has just resumed is exactly what a swap would discard; `unmeasurable` proceeds as decided, today's behaviour.
+  A still-blocked verdict proceeds unless the transcript shows output (`rescue-backoff`). Cancel and back-off both restore
+  `lastswap`, stamp no `degraded` and stop nothing; a lane that is still blocked is re-decided on the next tick. A draft
+  meets the transcript arm only: a banner on screen still answers blocked whatever the box holds, which is the pane rung's
+  standing contract, so the decision and the act cannot disagree about it and re-decide in a loop. **The decision's
+  account writes.** The rescue arm writes two account-level facts at the decision (≈:19152–19167): the `five:100` limits
+  row for a non-Anthropic lane, and the `<wrapper>-authdead` marker after a fresh 401. A `rescue-cancel` restores the first
+  and never touches the second: the decision saves the limits file's prior bytes (or that it was absent) beside the row
+  before it overwrites them, and the cancel restores those bytes **only while the file is still the decision's own row** (its `ts`
+  the decision's epoch), leaving any newer write by another session or by the lane's own usage poller alone. The
+  `authdead` marker is never undone on a pane reading: it is a verdict on a credential, not on this pane, and its other
+  writer, `ccd-account-health`, is systemd-only and silent for an account it cannot probe, so removing it would send
+  sessions straight back to a dead credential through `_swap_target`'s home-recovered arm. It clears the way it clears
+  today. A `rescue-backoff` undoes nothing: the lane may still be blocked, and the session is merely producing output
+  past it.
 - **Manual.** `cmd_swap` without `CCD_SWAP_AUTO` reads the status the way `ws-archive` does, through `_ws_status`
   (≈:5115): `busy` refuses `ccd: session-busy …` unless `--interrupt` is passed, and a status it cannot read refuses
   `ccd: status-unknown …` **whatever the flags**, `--interrupt` included: consent covers a measured turn only, the archive
@@ -450,14 +497,20 @@ exactly as the decision found it, `lastswap` aside (restored below).
   told "detached: will restart" and then refused by a process nobody is waiting for. `swap-self` passes `--interrupt`,
   because a session asking for its own move is busy by definition, and the detach branch's re-run (≈:27163) passes
   `--interrupt` through beside `--force` and `--cross-pool`; inside that re-run (`CCD_SWAP_DETACHED=1`) the same gate runs
-  again, and a refusal there goes through `_swap_refuse`, as that run's other refusals do, so it reaches the operator.
-  `ccd caps` advertises `swap-busy-v1`.
+  again (a turn can start in the 2 s before it), and a refusal there is recorded on two channels, a `swap-refused-status
+  <id>: <reason>` line in `swap.log` and `notify.sh`, **never through `_swap_refuse`**: that function stamps
+  `swapblocked`, which holds auto-rescue for `SWAPBLOCK_COOLDOWN` (and would trip hibernation's `swap-blocked` hold), and
+  clears `lastswap`, and the detach arm's own comment already rejects it for a failure that has nothing to do with
+  carrying the conversation (≈:27156). `ccd caps` advertises `swap-busy-v1`.
 - **The server and the PWA.** The swap route reads the same fail-closed verdict as archive. Without consent: `busy` is
   `409 session-busy`, `unmeasured` `409 status-unknown`. With `{interrupt: true}`: `busy` proceeds, `unmeasured` is still
   refused. The argv carries `--interrupt` when the fleet's `ccd` advertises `swap-busy-v1`, else the old argv (an old
   `ccd` refuses nothing). Because `ccd` refuses an unreadable status whatever the flag, a status that becomes unreadable
-  between the server's read and `ccd`'s act is refused too. SwapSheet answers `session-busy` with "It's working — swap
-  anyway? The turn in progress and its background tasks are lost."
+  between the server's read and `ccd`'s act is refused too. The route maps `ccd`'s own two refusals, `ccd: session-busy:`
+  and `ccd: status-unknown:`, to the same two 409s rather than to the generic 502 every other `ccd` failure gets
+  (`server.ts` ≈:3285), so a turn that starts without consent between the route's read and `ccd`'s act still reaches the
+  operator as `session-busy`, with its "swap anyway". SwapSheet answers `session-busy` with "It's working — swap anyway?
+  The turn in progress and its background tasks are lost."
 - **What it does not subsume.** `--interrupt` consents to losing what is running now: a measured busy turn, delegated work
   included, because a live word over delegated work is `busy`. #197's wave 7 refusal is wider: it also refuses on
   `stopped-agent` manifest items younger than two hours, which never read busy, and its override is a distinct flag,
@@ -527,10 +580,17 @@ by prefix in the agent and gated on `verbSupported`.
 **What "idle" means.** All of these, on one assembled row (`server/src/coord/hibernate.ts`, a pure L1 verdict whose every
 hold has a name):
 - the pane is alive and its status measured; the live word is `idle` (not `busy`, `waiting` or `shell`); no pane menu;
-- the bucket is `idle` or `done`; `background` is null; the roster is empty;
+- the bucket is `idle` (hold `bucket` otherwise, `done` included); `background` is null; the roster is empty. **Why not
+  `done`:** `done` is a badged bucket (`pwa/src/lib/seen.ts`'s `BADGED` ≈:10) and a dead row never is, so sleeping a
+  `done` row could hide a result nobody has read. Holding it costs nothing in practice: the bucket reads `done` only
+  while the hookstate is fresh, which is 30 minutes after its newest stamp (`HOOKSTATE_FRESH_MS`, `hookstate.ts` ≈:9 and
+  the age cut ≈:358), and N is at least an hour, so a quiet row has already fallen from `done` to `idle`, and lost its
+  badge, long before the verdict's clock runs out. That 30-minute lapse is today's behaviour, not this design's (§9);
 - the turn marker reads `done` (a StopFailure tail is left alone), its last Stop listed no background task of any kind
-  (shells and monitors would die too), and its latest of `turnAt`, `stopAt` and `restartAt` is more than N hours ago.
-  Compactions do not move that clock, so a session that Claude Code compacts while it idles still ages;
+  (`bg` exactly 0: shells and monitors would die too, and a `bg` of −1, a Stop whose `background_tasks` was absent or not
+  an array, says nothing about them, so it holds as `marker-background`), and its latest of `turnAt`, `stopAt` and
+  `restartAt` is more than N hours ago. Compactions do not move that clock, so a session that Claude Code compacts while
+  it idles still ages;
 - **nothing is scheduled** (hold `scheduled`): the last Stop's `session_crons` was an empty array. Claude Code's crons and
   wakeups (CronCreate, ScheduleWakeup, `/loop`) are session-scoped and are not tasks [B; stall-watch spec §3.1], so no
   live word, background list or roster shows them, and a hibernated session's process is gone when they fall due:
@@ -543,12 +603,22 @@ hold has a name):
   (`coord/store.ts` ≈:3185 and ≈:3228; the archive door's `coordinator-has-open-runs` refusal reads the first), and the
   population the dead-coordinator lane sweeps, so a coordinator whose runs wait at `awaiting-review` or `merging` is never
   put to sleep. A run read that fails holds (`runs-unreadable`); no claim it holds; no queued mail to it;
-- nobody has it open: no unexpired claim on it in the server's `Presence` from any `/ws/session` connection, visible or
-  not (`server/src/presence.ts` gains `isOpen(id)` beside `isVisible`);
+- nobody has it open (hold `viewer`), under this **presence contract**. `Presence` (`server/src/presence.ts`) keeps,
+  beside today's visible claim, an *open* claim per `/ws/session/:id` connection: stamped when the socket connects
+  (`server.ts` ≈:1734) and re-stamped by every frame the client sends, visible or not, dropped when the socket closes,
+  and believed for `PRESENCE_OPEN_TTL_MS` (10 minutes, beside `PRESENCE_TTL_MS` in `shared/api.ts` ≈:4166) after its last
+  frame; `isOpen(id)` answers whether any such claim stands. The PWA's heartbeat (`pwa/src/stores/session.ts`'s `beat`
+  ≈:682) today re-states the claim only while visible, so a hidden tab sends one `visible:false` and then nothing, and an
+  open claim on the visible TTL would lapse in 45 s; it now re-states every `PRESENCE_REFRESH_MS` whatever the
+  visibility, sending `visible:false` while hidden, which `isVisible` reads exactly as today (a hidden tab still gets its
+  notifications). A browser throttles a hidden tab's timers to about once a minute at the most [I, browser documentation],
+  inside the 10-minute TTL, so **a hidden but open tab holds its session**. A page the browser has frozen or the OS has
+  suspended runs no timer and sends nothing; its claim lapses after the TTL, and that is the case the wake trigger below
+  covers when the operator returns;
 - not stranded, swap-blocked, under a substrate fault, archived or expiring; no opt-out marker `$REG/<id>.no-hibernate`.
 
 `ccd hibernate` re-measures the box-local half at the act: live `idle`, no `esc to interrupt`, a prompt with an empty box,
-60 s of quiet, the marker `done` with `bg` and `crons` both 0, no `.hold`, no `.no-hibernate`, no fresh `lastswap`, and
+60 s of quiet, the marker `done` with `bg` and `crons` both exactly 0 (−1, unknown, refuses in both), no `.hold`, no `.no-hibernate`, no fresh `lastswap`, and
 **nobody attached**: tmux's `#{session_attached}` reads 0. That last hold (`attached`) is the one the server cannot see —
 an operator in a terminal attach or `cc`, or the PWA's own terminal drawer, which attaches a pty through `tmux attach`
 (`server/src/pty.ts` ≈:22, `agent/src/pty.ts` ≈:39) — and it lives in `ccd` because only the box can read it.
@@ -565,40 +635,74 @@ as it does the stall-watch markers). The sweep runs on its own clock, every 5 mi
 hibernate`, added to `_LC_ACTS` and to `LifecycleAct` together, as `lifecycle-vocabulary.test.ts` requires), then keeps
 the operator's model choice (`_operator_choice_keep`), writes `$REG/<id>.hibernated` (`<epoch> <idle-hours>`),
 unsupervises through `_ws_unsupervise` (a `stopped` stamp) and kills the pane. The lifecycle reads `stopped`, honestly:
-hibernation is a deliberate stop, and no new lifecycle word is needed on the wire. The journal row is what makes it
-deliberate to the dead-coordinator lane: `_ws_unsupervise`'s own row carries the surface `none` when `ccd` acts on its own
-account, which `deadCoordinator.ts`'s `isDeliberate` reads as a crash, so `hibernate` joins
-`DEAD_COORDINATOR_DELIBERATE_ACTS`. A server older than the act parses it as `unknown`, which that clause already counts as
-deliberate ("doubt never reads as a crash"), so the version skew is safe in both directions.
+hibernation is a deliberate stop, and no new lifecycle word is needed on the wire. **What the journal row protects.**
+While the row reads `stopped`, the dead-coordinator lane never counts it: `deadCoordinatorCrash` answers `stopped` before
+it reads the journal at all (`deadCoordinator.ts` ≈:248). The row matters after a wake that failed: `cmd_ensure` has
+removed `.stopped` and `.hibernated`, the spawn failed, and the row reads `orphan`, a dead cause the lane does count. The
+lane then reads the journal since the last successful start, where `_ws_unsupervise`'s own row carries the surface `none`
+when `ccd` acts on its own account, which `isDeliberate` reads as a crash; the `hibernate` row before it is what makes
+that history deliberate, so `hibernate` joins `DEAD_COORDINATOR_DELIBERATE_ACTS`. A server older than the act parses it
+as `unknown`, which that clause already counts as deliberate ("doubt never reads as a crash"), so the version skew is safe
+in both directions. Every other deliberate stop ends a hibernation: `ccd stop` and `ccd ws-archive` remove `.hibernated`
+with their own stamp, so an archived or stopped row is never woken by mail.
 
 **What the server shows.** `FleetSession.hibernatedAt` (additive). Its presence comes from the registry listing the reader
 already takes, so it costs no read per tick; the bytes are read only when it is listed. The bucket stays `dead` (no new
 bucket member); the PWA words a dead row with `hibernatedAt` as `hibernated · 6h` with a calm dot, never as a death, and
 never badges it.
 
-**Every reader that treats `stopped` as dead for good** consults `hibernatedAt` first. A census test derives the readers
-from `lifecycleIsDead` and `DEAD_LIFECYCLES` and fails on one that does not state its stance, and each stance is argued
-from what the reader actually reads, not only from the verdict's holds (a run can be opened naming a sleeping session:
-`POST /api/runs` takes `claimedBy` from its body):
+**Every reader that treats a session as dead for good** consults `hibernatedAt` first. A census test derives the readers
+and fails on one that does not state its stance. Not every such reader calls `lifecycleIsDead`, so the derivation takes
+four sources, by scanning `server/src`, `shared` and `pwa/src`: every reader of `lifecycleIsDead` or `DEAD_LIFECYCLES`;
+every total `Record<SessionLifecycle, …>` table (`coord/peers.ts`'s `LIFECYCLE_RUNG` ≈:38 and `ARCHIVE_CONTRADICTS` ≈:69
+among them); every comparison of a lifecycle or a claimant cause with `'stopped'`; and every reader of the tmux verdict,
+which can call a session gone without any lifecycle (`tmux.sessionVerdict(` calls, a probe field typed from it such as
+`PeerProbe.tmux`, and `coord/claims.ts`'s `LivenessVerdict`). A hit whose word means something else (the collector's own
+`stopped` lane state) states that as its stance. Each stance is argued from what the reader actually reads, not only from
+the verdict's holds (a run can be opened naming a sleeping session: `POST /api/runs` takes `claimedBy` from its body):
 - the mail lane (`watch.ts` ≈:6826) wakes the recipient instead of backing off and parking: `ensure`, at most once per id
-  per 10 minutes, and only for a delivery that would otherwise be sent (mail not disabled);
-- `inArchivedFold` (`shared/api.ts` ≈:9472) leaves a hibernated main checkout at the top level;
+  per 10 minutes, only for a delivery that would otherwise be sent (mail not disabled), and only inside the fleet-wide
+  **wake budget**: hibernation turns mail, dispatch and opens into cold `--resume` spawns on a box measured at its memory
+  cap, and `ccd`'s spawn path has no concurrency control of its own (the swap path needed `SWAP_JITTER` for exactly this
+  herd). So the server starts at most 2 automatic wakes in any 60 s, fleet-wide, oldest delivery first; the rest stay
+  outstanding under gate `hibernated`, not counted toward parking, until the window has room. A wake an operator or a
+  coordinator asks for (the PWA's open or Wake, a dispatch) is never refused for the budget, but it counts in the window,
+  so it pushes automatic wakes back. A kickoff is mail: the kickoff route queues system mail (`queueProgramKickoff` →
+  `queueSystemMail`, `coord/kickoff.ts` ≈:146) and never refuses a dead session, so it wakes through this lane and needs
+  no change of its own;
+- `GET /api/peers` (`coord/peers.ts`'s `peerDeliverable` ≈:51), which worker-skill clause 11 names as discovery, answers
+  `no:session-gone` from the tmux rung before it reaches `LIFECYCLE_RUNG`. Its probe gains `hibernated`, read from the same
+  registry listing, and a hibernated peer answers `yes`, because mail to it is delivered once the lane has woken it;
+  `PeerSummary` gains an additive `hibernatedAt` so the reader can tell why its lifecycle reads `stopped`.
+  `deliverability-parity.test.ts`, which holds `sweepMail` and `peerDeliverable` to one decision, gains a hibernated row
+  on both sides;
+- `inArchivedFold` (`shared/api.ts` ≈:9472): its second clause (a stopped main checkout) leaves a hibernated row at the
+  top level; an archived row stays in the fold by its first clause;
+- `coord/claims.ts`'s `claimExpiry` lapses a claim whose holder is `gone`: it meets no hibernated holder, because the
+  verdict holds `claim` and a sleeping session takes none;
 - `measureClaimant` (`coord/reclaim.ts` ≈:125), which both the reclaim door and the dead-coordinator lane read, answers a
   hibernated claimant `alive` (why: `hibernated`): the reclaim door then refuses as it does for any live claimant, and the
-  PWA offers Wake; the dead-coordinator lane, should it meet one, reads the `hibernate` journal row as deliberate as a
-  second wall;
+  PWA offers Wake; the dead-coordinator lane releases it, and after a wake that failed (the row then `orphan`, no longer
+  hibernated) it reads the `hibernate` journal row as deliberate (above);
 - the stall watch (`coord/stall.ts` ≈:1061) meets none through a run the verdict let it sleep under; a run opened later
   dispatches through `ensure`, which wakes it;
 - `ccd forget` refuses a hibernated row (`hibernated`: wake it, or stop it first), and the PWA's Forget, offered for any
   dead non-workspace row today, is hidden on one and replaced by Wake. `ccd stop` on a hibernated row turns it into an
-  ordinary stop (it removes `.hibernated`), after which Forget works as before;
+  ordinary stop and `ccd ws-archive` into an archive (each removes `.hibernated`), after which Forget works as before;
 - the PWA's `coordWords.ts` words it `hibernated`.
 
-**Waking.** `cmd_ensure` and `cmd_start` remove `.hibernated` with `.stopped`. The paths: the PWA opening the session
-(SessionScreen calls `POST /api/sessions/:id/ensure` once, shows "Waking…", and enables the composer when the row is
-alive); a dispatch (the resume arm already calls `ensure`, ≈:748, and §5.7's bounded wait then covers the spawn); mail
-(above); a kickoff (it wakes and then types, like the mail lane). The spawn is the ordinary `--resume`; a hibernated
-session's tail is a finished turn, so nothing is re-driven.
+**Waking.** `cmd_ensure` and `cmd_start` remove `.hibernated` with `.stopped`. The paths:
+- **the PWA, whenever a screen shows a sleeping session.** A mounted SessionScreen wakes its session once whenever its
+  row reads hibernated (`dead` with `hibernatedAt`) while the page is visible: at mount, when the page becomes visible
+  again (an operator returning to a background tab or a resumed phone), and when a frame turns the row hibernated while it
+  is in view. One `POST /api/sessions/:id/ensure` is in flight per screen at a time, re-armed only once the row reads
+  alive or the call fails. The screen shows "Waking…" and a Wake control, and the composer is disabled while the row is
+  hibernated, so nothing is typed toward a pane that does not exist;
+- a dispatch: the resume arm already calls `ensure` (≈:748); §5.7's `worker-starting` answer and its wait outside the
+  mutex cover the spawn;
+- mail, and with it a kickoff (above), inside the wake budget.
+
+The spawn is the ordinary `--resume`; a hibernated session's tail is a finished turn, so nothing is re-driven.
 
 **Interactions.**
 - *Swaps.* A hibernated session has no supervisor, so no auto swap or rescue runs. A manual swap of one is refused
@@ -618,40 +722,72 @@ session's tail is a finished turn, so nothing is re-driven.
 
 ## 6. Ordering, lanes and other programmes
 
-### 6.1 Order, and how the rollout enforces it
+### 6.1 Order, and how it is enforced
 
-1. §5.2's hook reaches the fleet only behind §5.1's server half and §5.7 on the server box (§5.2's "Order").
-2. §5.8's hook reaches the fleet only behind §5.7 on the server box.
+1. §5.2's carry engages on the fleet only behind §5.1's server half, §5.7 and §5.2's own stall clocks on the server the
+   fleet talks to (§5.2's "Order").
+2. §5.8's skip engages on the fleet only behind §5.7 on that server.
 3. §5.9's `ccd` half before its server half (the server needs `swap-busy-v1`; `capSupported` enforces it).
 4. §5.10's verification before its shipping PR; its rollout after both.
 5. §5.11's `ccd` half, then server, then PWA, then a shadow week, then arming. It depends on §5.2 (an empty roster must
    mean something) and benefits from §5.10. `verbSupported` enforces the first step; nothing can hibernate until the
    server half that carries the wake paths is live (the plan's Task 17b).
 
-Items 1 and 2 are the two places where a fleet-side change is safe only behind a server-side one, and `ccrc rollout`'s
-default order (the fleet box, then the server box) is the wrong way round for them, as is the PWA's one-tap apply, which
-always moves the fleet node first. A sentence cannot enforce them; the rollout can:
-- the release that first carries §5.2's or §5.8's hook is rolled out with `ccrc rollout --to <tag> --server-first`,
-  unless the server box's `/health` `version` (or `ccrc update --check`, or `GET /api/updates`) already reads at or past
-  the release carrying the prerequisite, in which case the default order is safe;
-- `--server-first` is safe for every server half in this design, because each server reader treats an absent new field
-  as the old behaviour;
-- a server leg whose health gate fails restores the server and exits 4, and `rollout` stops there, so the fleet box is
-  never moved past a server that did not take the release. An exit 3 (installed under a failing doctor) leaves the
-  server on the new build, so continuing to the fleet is still behind its prerequisite;
-- the PWA's one-tap apply is not used for such a release until the server box reads at or past the prerequisite.
+Items 1 and 2 are the two places where a fleet-side change is safe only behind a server-side one. Every way a node moves
+has the fleet first, or no order at all: `ccrc rollout`'s default (the fleet box, then the server box), the PWA's one-tap
+and the update control plane's dispatcher, which with `auto` on moves a node to its desired tag with nobody involved and
+holds a server-role node `waiting-for-fleet` until the fleet nodes have moved (`planDispatch`, `server/src/update/
+dispatch.ts` ≈:269–300); `deploy.sh`'s fallback and a hand-run `ccrc update` on one box have none. A rollout form cannot
+reach all of them, and a server rolled back below its release, or a server leg that fails its health gate and restores
+the old build, would leave the fleet ahead of it with nothing to notice. So **the fleet half gates itself on the server
+it talks to**, and the order becomes a property of what is merged rather than of who moves the boxes:
 
-The plan's ordering table names, per task, which form its release takes.
+- **The server advertises its capabilities as words.** `/health` (`server.ts` ≈:1182, exempt from the auth gate,
+  `auth/gate.ts` ≈:211) gains an additive `caps`, the list `SERVER_CAPS` defined once in `shared/api.ts`. A word is added
+  by the change that builds what it names, or, for what was built before the list existed, by the change that creates
+  the list; either way that change is cut after everything the word promises (it edits test files those changes create),
+  so a server cannot advertise a word without everything behind it. `dispatch-live-gate-v1` names §5.7 and seeds the
+  list; `hook-main-state-v1` names §5.1's rung, §5.7 and §5.2's stall clocks together, because §5.2's change, which adds
+  it, is cut after the other two.
+- **The fleet box records what its server advertises** in `~/.ccrc/server-caps`, three lines (`at <unix seconds>`, `caps
+  <word> …`, `end`), written tmp-then-rename by the box's own clock: on a `fleet`-role node by `ccd-update-sync`, which
+  already pulls from the same server every minute (`OnUnitActiveSec=60s`; armed on that role alone, `ccd/ccrc` ≈:15353),
+  in a second request of its own to `/health` whose failure writes nothing and never stops the intent pull; on a `server`
+  or `both` node by the server process itself, on the same minute beat that rewrites its own update-intent projection
+  (`watch.ts` ≈:1670), as it does that file. A `/health` with no `caps` (an older server) is written as an empty list:
+  the whole answer arrived and it names nothing.
+- **The hook reads it with builtins only** (one `read` of a three-line file, no fork, inside the PostToolUse budget) and
+  engages a gated arm only when the file is whole, its `at` is no more than 180 s old by the hook's own clock (three sync
+  periods) and not in the future, and the arm's word is listed. Absent, stale, torn or not listed reads as not
+  advertised, and the arm writes exactly what it writes today, which every server reads correctly; that is the fail-safe
+  direction.
+
+What each mover does then:
+- **Fleet first, by any route** (the default rollout, the one-tap, `auto`): the new hook runs with its gated arms off
+  until the server moves and the next sync lists the word, at most a minute later. A server leg that fails and restores
+  the old build keeps the arms off indefinitely, which is today's behaviour.
+- **Server first** (`--server-first`): the word is listed before the hook arrives; `--server-first` is now a way to shorten
+  the window above, never a requirement.
+- **A server rolled back below the word's release:** the next sync, at most a minute after the old server answers, lists
+  no such word, and the arms go off. A rolled-back server is never asked to read the new meanings for longer than that
+  minute, and a server that stays unreachable ages the file out in 180 s. A server rolled back between the two words'
+  releases keeps §5.8's skip and turns §5.2's carry off, which is exactly what it can read.
+- **A box whose sync is not armed** (a fleet box moved by `deploy.sh`, or one with no recorded role) never engages the
+  arms; doctor's `server-caps` check says so, and the remedy is the box's ordinary first move onto the release lane.
 
 ### 6.2 Lanes
 
 - **Fleet first** (hook or `ccd`): §5.1, §5.6, §5.9's `ccd` half, §5.10, §5.11's `ccd` half. Every server reader of a
   new hook or registry field treats its absence as the old behaviour, so the default `rollout` order (fleet box, then
   server box) is safe for them.
-- **Server first** (hook): §5.2 and §5.8. They add no field the server must read; they change what an existing field
-  means (a hook `done` now stands through delegated work and through a compaction), and two server halves must already
-  be reading the live word beside it (§6.1).
-- **Server lane** (server and PWA bundle): §5.3, §5.4, §5.5, §5.7, §5.9's server half, §5.11's server and PWA halves.
+- **Fleet, self-gated** (hook): §5.2's carry and §5.8's skip. They add no field the server must read; they change what an
+  existing field means (a hook `done` now stands through delegated work and through a compaction), so they engage only
+  while the server advertises their word (§6.1), and every mover's order is then safe. §5.2's server half (the stall
+  clocks) and the word ride the same change.
+- **Server lane** (server and PWA bundle): §5.3, §5.4, §5.5, §5.7, §5.9's server half, §5.11's server and PWA halves, and
+  the server's half of §6.1's words (`/health`'s `caps` and the server-written file), whose fleet half (`ccd-update-sync`'s
+  pull) is safe in either order: a puller ahead of its server records an empty list, and a server ahead of its puller is
+  simply not yet recorded.
 
 ### 6.3 Session continuity (#197)
 
@@ -678,16 +814,23 @@ this design's shell prefix both compose at `_spawn_start`; the same rule applies
    a live `busy` after a newer main Stop, or the live word `shell`. (The terminal drawer is a terminal: a physical
    Escape typed into its focused pane goes to Claude Code by ruling P4, and is recorded as `drawer-escape`.)
 6. Every Escape the server or `ccd` sends, and every process end `ccd` observes, leaves a record naming its source or cause.
-7. The dispatch `/clear` is typed only into a pane whose live word was measured `idle`, twice: at the gate and at the act.
+7. The dispatch `/clear` is typed only into a pane whose live word was measured `idle`, twice: at the gate and at the act;
+   and waiting for a pane the dispatch started never holds the coordination mutex.
 8. A compaction never moves `bucketSince` and never mints a `done`.
-9. Every swap that kills a process re-measures at the act, before any write of the stop path; a manual one needs
-   consent to kill a measured turn and never kills an unmeasured one, from any surface.
+9. Every swap that kills a process re-measures at the act, before any write of the stop path, `degraded` included; a
+   manual one needs consent to kill a measured turn and never kills an unmeasured one, from any surface; a cancelled
+   rescue undoes only the decision's own limits row, only on a measured not-blocked answer, and never a credential
+   verdict.
 10. A tool child is a likelier OOM victim than its Claude Code, and its death does not end the pane.
-11. A hibernated session is never worded, badged, parked, reclaimed, forgotten or ended as dead, and every path that
-    needs it wakes it. Nothing is hibernated while it has scheduled work, an open run in any non-terminal state, a
-    viewer or an attached terminal.
+11. A hibernated session is never worded, badged, parked, reclaimed, forgotten, reported undeliverable or ended as dead,
+    and every path that needs it wakes it, a screen already showing it included; automatic wakes are bounded fleet-wide.
+    Nothing is hibernated while it has scheduled work, an unknown background list, an open run in any non-terminal state,
+    a `done` bucket, an open screen (visible or hidden) or an attached terminal.
 12. The stall watch reads subagent activity wherever it lives: `delegates` and `frozen` read `aliveAt` beside
     `updatedAt`, and a compaction refreshes neither.
+13. A hook arm that changes what an existing field means engages only while the server the fleet talks to advertises
+    the word for it, as measured within the last 180 s; absent, stale or unreadable reads as not advertised, and the arm
+    then writes what it writes today.
 
 ---
 
@@ -712,6 +855,8 @@ needs to classify a push stay on the box; no text leaves it.
 | Swaps that killed output | auto-home 0/132, rescue 5/45, manual 8/24 (15 days) | 0 without consent |
 | Interrupts by source per week | not measurable (nothing logged) | reported |
 | Hibernations and wakes per day, by wake path; memory freed (slice `memory.current`) | about 40 idle processes at about 0.24 GB anonymous memory each [M, verifier's correction] | reported |
+| Memory around wakes: the session slice's and the user tree's peak in the 2 minutes after each wake and each wake burst, and OOM kills within 120 s of a wake | the same window after each cold `--resume` restart in the shadow week (a restart is the same spawn) | reported; Task 19's stop rule disarms on it |
+| Gated hook arms engaged: fleet boxes whose `server-caps` is current and lists each word | not applicable | every fleet box within a minute of its server's move |
 
 **Windows.** The investigation's figures (2026-10-08 to 10-15) are the baseline of record. If the instrument lands before
 the first deploy it re-captures them and must reproduce them within tolerance, which validates it; no status fix waits for
@@ -725,6 +870,10 @@ it. Each lane is measured again seven days after it deploys. Results are recorde
 - That `oom_score_adj` makes Claude Code safe: a Claude Code process larger than every child is still the likelier victim.
   The 32 deaths with no `Failed` line are reported by signature after rollout, not promised away.
 - That N, the hibernation threshold, is right: the shadow week and the idle-age distribution decide it.
+- That a rolled-back server never reads a gated arm's meaning: for at most one sync period (a minute) after the old
+  server first answers, the fleet's hook may still have the arm on (§6.1).
+- That a hibernated row keeps a badge: the verdict never sleeps a `done` row, but a `done` row already lapses to `idle`,
+  and loses its badge, 30 minutes after its newest hookstate stamp, today, before any hibernation.
 - That "N in background" counts only what is running: it counts what the last Stop listed.
 - **That `done` always survives a long delegated run.** The badge and the bucket read the hookstate, which ages out
   30 minutes after its newest stamp. Under §5.2 agent events keep it fresh through `aliveAt`, and the common ends write
