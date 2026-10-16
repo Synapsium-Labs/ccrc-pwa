@@ -12457,12 +12457,15 @@ describe('history card line: SessionStart(compact) serves the sweep\'s predictio
       plantAll();
       plantParity('absent', 'G', 'G');
       expect(reader('.gen')).toBe('');
+      // The verdict above is the unarmed one too (o == gen), so this proves the wrapper fired: the record went unreadable.
+      expect(fs.statSync(histDir('card', ID, `${SID}.gen`)).mode & 0o777, 'the wrapper made the record unreadable').toBe(0);
     });
 
     it('the .generation arm: .generation turns unreadable after its first read, recall-off is stale, the record is G2', () => {
       plantAll();
       plantParity('G2', 'G', 'G2');
       expect(reader('.generation')).toBe('');
+      expect(fs.statSync(reg(`${ID}.generation`)).mode & 0o777, 'the wrapper made .generation unreadable').toBe(0);
     });
   });
 
