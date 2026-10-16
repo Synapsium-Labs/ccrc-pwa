@@ -39,6 +39,8 @@ import type { FleetIO, MeasuredDirectoryRead } from '../io.js';
 import type { DelegationDurableBatch } from './delegation-checkpoint.js';
 import { findDelegationJsonDefect } from './delegation-journal.js';
 import {
+  DELEGATION_HOUR_NO_CAPABILITY,
+  DELEGATION_HOUR_NO_SPOOL,
   DELEGATION_JOURNAL_ENTRY_KINDS,
   formatDelegationInstant,
   parseDelegationInstant,
@@ -452,22 +454,12 @@ function gap(
 }
 
 /** Why a bucket could not be read at all. The reader's and `unreadableDelegationBucketResult`'s shared vocabulary. Server-internal
- *  detail words (R34), not wire words. */
+ *  detail words (R34), not wire words. Its two carve-out words are the model's (R90: defined once, `isDelegationHourCarveOut`). */
 export const DELEGATION_BUCKET_UNREADABLE_REASONS = [
-  'capability-absent', 'capability-unmeasured', 'directory-absent', 'directory-unreadable', 'range-unreadable', 'bucket-vanished-unread', 'input-invalid',
+  DELEGATION_HOUR_NO_CAPABILITY, 'capability-unmeasured', DELEGATION_HOUR_NO_SPOOL, 'directory-unreadable', 'range-unreadable', 'bucket-vanished-unread', 'input-invalid',
 ] as const;
 export type DelegationBucketUnreadableReason = (typeof DELEGATION_BUCKET_UNREADABLE_REASONS)[number];
 
-/** The two unmeasured-hour words that are CARVE-OUTS and not losses (R84, R90), defined once here, beside the vocabulary they come from,
- *  and imported by the lane and by the checkpoint's interval merge. `directory-absent` names an owner whose spool directory does not
- *  exist (it vetoes only for an owner that had a spool); `capability-absent` names a fleet that offers no delegation events (it never
- *  vetoes). Every other unmeasured word is a LOSS word. */
-export const DELEGATION_HOUR_NO_SPOOL = 'directory-absent' satisfies DelegationBucketUnreadableReason;
-export const DELEGATION_HOUR_NO_CAPABILITY = 'capability-absent' satisfies DelegationBucketUnreadableReason;
-/** Whether an unmeasured hour's detail begins with a carve-out word (a null detail is not one). */
-export function isDelegationHourCarveOut(detail: string | null): boolean {
-  return detail !== null && (detail.startsWith(DELEGATION_HOUR_NO_SPOOL) || detail.startsWith(DELEGATION_HOUR_NO_CAPABILITY));
-}
 
 /** The result for a bucket whose read could not be made: unmeasured, nothing accepted, the durable row kept (the replaced flag too). */
 export function unreadableDelegationBucketResult(

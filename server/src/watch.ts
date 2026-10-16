@@ -61,7 +61,6 @@ import { DelegationDurability, type DelegationDurableBatch } from './coord/deleg
 import {
   DelegationIngestError, delegationBucketDurabilityOf, delegationBucketUtcHour, ingestAndApplyDelegationBucket, readDelegationBucket,
   unreadableDelegationBucketResult, type DelegationBucketDurability, type DelegationBucketResult,
-  DELEGATION_HOUR_NO_CAPABILITY, DELEGATION_HOUR_NO_SPOOL, isDelegationHourCarveOut,
 } from './coord/delegation-ingest.js';
 import { correlateDelegation, type DelegationCorrelationInput, type DelegationListingWindow } from './coord/delegation-correlation.js';
 import { DELEGATION_EVIDENCE_MARGIN_MS, delegationLostEvidenceForced, delegationMarkAttributionOf } from './coord/delegation-correlation.js';
@@ -78,6 +77,7 @@ import type { DelegationCensusDiagnostic } from './coord/gitref.js';
 import { delegationCircuitBreaker, planDelegationReconciliation, type DelegationReportEffect } from './coord/delegation-policy.js';
 import { isUnownedWorkReason } from './coord/delegation-policy.js';
 import { delegationBucketHourMs, delegationBucketReadable, planDelegationCursorRetention } from './coord/delegation-model.js';
+import { DELEGATION_HOUR_NO_CAPABILITY, DELEGATION_HOUR_NO_SPOOL, isDelegationHourCarveOut } from './coord/delegation-model.js';
 import {
   DELEGATION_HOUR_CLOSE_MARGIN_MS, DELEGATION_HOUR_MS, DELEGATION_HOUR_NEVER_CLOSED, DELEGATION_INTERVAL_RETENTION_HOURS, DELEGATION_UNMEASURED_INCARNATION,
   DelegationModelError,
@@ -8767,7 +8767,7 @@ export function delegationListingWindowsOf(
 }
 
 // The two unmeasured-hour words that do NOT veto a link (R84, the carve-out) are `DELEGATION_HOUR_NO_SPOOL` and
-// `DELEGATION_HOUR_NO_CAPABILITY`, defined once beside the reader's own vocabulary (`delegation-ingest.ts`, R90) and imported.
+// `DELEGATION_HOUR_NO_CAPABILITY`, defined once in the model (R90), which the reader's own vocabulary is built from, and imported.
 /** The detail head ingestion gives a bucket whose last bytes are a line that may still complete (`delegation-ingest.ts`, step 9). */
 const LANE_TORN_TAIL = 'torn-tail:';
 

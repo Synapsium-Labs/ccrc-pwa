@@ -1225,6 +1225,16 @@ export const DELEGATION_UNMEASURED_INCARNATION = 'unmeasured';
 const HEALTH_MODE = 'report-only' as const satisfies DelegationObservationHealth['mode'];
 /** The detail of an interval upkeep turned into a gap: an hour recorded before it ended, whose bucket is gone before it was closed. */
 export const DELEGATION_HOUR_NEVER_CLOSED = 'hour-never-closed';
+/** The two unmeasured-hour words that are CARVE-OUTS and not losses (R84, R90), defined once HERE and imported by the lane, by the
+ *  checkpoint's interval merge and by the bucket reader, whose unreadable vocabulary (`DELEGATION_BUCKET_UNREADABLE_REASONS`) is built from
+ *  them. `directory-absent` names an owner whose spool directory does not exist (it vetoes only for an owner that had a spool);
+ *  `capability-absent` names a fleet that offers no delegation events (it never vetoes). Every other unmeasured word is a LOSS word. */
+export const DELEGATION_HOUR_NO_SPOOL = 'directory-absent';
+export const DELEGATION_HOUR_NO_CAPABILITY = 'capability-absent';
+/** Whether an unmeasured hour's detail begins with a carve-out word (a null detail is not one). */
+export function isDelegationHourCarveOut(detail: string | null): boolean {
+  return detail !== null && (detail.startsWith(DELEGATION_HOUR_NO_SPOOL) || detail.startsWith(DELEGATION_HOUR_NO_CAPABILITY));
+}
 
 /** The words this section spells, as a TOTAL table, for the coordination scanner's guard. */
 const DELEGATION_HEALTH_WORDS: Readonly<Record<typeof HEALTH_MODE | typeof DELEGATION_HOUR_NEVER_CLOSED, true>> = {

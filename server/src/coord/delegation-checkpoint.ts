@@ -48,6 +48,7 @@ import {
   emptyDelegationCheckpoint,
   encodeDelegationNaturalKey,
   formatDelegationInstant,
+  isDelegationHourCarveOut,
   isLowerHex64,
   leaseSourceKindOfActivity,
   parseDelegationInstant,
@@ -102,8 +103,6 @@ import {
   type DelegationPruningPlan,
   type DelegationTailHealPlan,
 } from './delegation-journal.js';
-// R90: the carve-out words, defined once beside the unreadable vocabulary (`delegation-ingest.ts` imports this module for a type only).
-import { isDelegationHourCarveOut } from './delegation-ingest.js';
 
 /** The checkpoint's file name under the coordination directory (`~/.ccrc`). */
 export const DELEGATION_CHECKPOINT_FILE = 'delegation-checkpoint.json';
