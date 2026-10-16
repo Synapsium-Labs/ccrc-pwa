@@ -11,8 +11,9 @@ app resolves it.)
 
 Storybook's toolbar carries the things the system is actually about: the
 **theme** switch (every palette, dark and light), the **skin** switch (Refined
-and Instrument, below) and the **viewport** (phone, tablet, desktop). The a11y
-addon runs axe against each story.
+and Instrument, below) and the **viewport**, whose presets are the widths
+every change is checked at: phone 360, 390 and 438, laptop 1280 and 1470, and
+wide 1920. The a11y addon runs axe against each story.
 
 ## Using it
 
@@ -105,6 +106,30 @@ and the contrast gate measures each palette once, for both skins.
 Storybook's **Skin** toolbar applies the skin through the same `applySkin`
 the app calls, and the token reference has a **Skin roles** page that shows
 every `SKIN_TOKENS` value as the selected skin resolves it.
+
+### Axe in each skin
+
+A build opens every story in the skin named by `STORYBOOK_SKIN`, read through
+`resolveSkin`, so an unset or unknown value is Refined. CI's `storybook-a11y`
+job runs axe over the default build only, for now. To run it over every story
+in both skins locally, build twice:
+
+    npm run build-storybook -- --quiet
+    STORYBOOK_SKIN=instrument npm run build-storybook -- --quiet -o storybook-static-instrument
+
+Serve each build in the background:
+
+    ./node_modules/.bin/vite preview --outDir storybook-static --host 127.0.0.1 --port 6006 --strictPort &
+    ./node_modules/.bin/vite preview --outDir storybook-static-instrument --host 127.0.0.1 --port 6007 --strictPort &
+
+Then run the test runner once against each:
+
+    npm run test-storybook -- --maxWorkers=2 --url http://127.0.0.1:6006
+    npm run test-storybook -- --maxWorkers=2 --url http://127.0.0.1:6007
+
+The test runner drives Playwright's Chromium, which
+`./node_modules/.bin/playwright install chromium` fetches once. Stop the two
+servers when the runs finish.
 
 ### Reaching Instrument before there is a picker
 
