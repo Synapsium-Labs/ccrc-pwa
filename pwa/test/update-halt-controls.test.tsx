@@ -6,6 +6,8 @@
 //
 // It renders the exported `ReleaseList` and `NodeList` directly, so the screen's own suite (another run's claim)
 // is not edited; that suite's idle fixtures stay green beside these.
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import type { NodeWire, ReleaseWire } from '../../shared/api';
@@ -165,6 +167,21 @@ describe('Settings while a node halts — Install and Update wait, with Update a
     expect(updates, 'CONTROL: the rows still offer an Update control').toHaveLength(2);
     for (const b of updates) expect(b).toBeDisabled();
     expect(screen.queryByText(ONE_HALT)).toBeNull();
+  });
+});
+
+// Wave 19's claim-gated fold (R24(d), and R24(b)'s Settings half): the screen asks the L0 gate read and says the
+// update plane's one stale sentence, rather than spelling either itself. Read from source: the screen's own suite is
+// another run's to edit, and behaviour is pinned there already (its gated fixtures and T7_STALE).
+describe('SettingsScreen asks the shared reads (wave 19, R24(d))', () => {
+  const settingsSrc = readFileSync(path.join(import.meta.dirname, '..', 'src', 'screens', 'SettingsScreen.tsx'), 'utf8');
+  it('autoGateMissing asks carriesUpdateGate, keeping its Array.isArray guard', () => {
+    expect(settingsSrc).toContain('nodes.filter((n) => !(Array.isArray(n.caps) && carriesUpdateGate(n.caps)))');
+    expect(settingsSrc).not.toMatch(/caps\.includes\(UPDATE_GATE_CAP\)/);
+  });
+  it('the stale line is UPDATES_STALE_TEXT, imported, not a copy', () => {
+    expect(settingsSrc).toContain('{stale && <p className="settings-note">{UPDATES_STALE_TEXT}</p>}');
+    expect(settingsSrc).not.toContain("'The latest read failed — this is the last answer that landed.'");
   });
 });
 

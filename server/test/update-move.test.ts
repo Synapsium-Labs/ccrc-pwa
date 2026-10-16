@@ -226,13 +226,10 @@ describe('centralised-update wave 19: the store and the resolver ask the L0 rule
     expect(src).toContain('.filter((n) => (scope === FLEET_SCOPE || n.nodeId === scope) && !carriesUpdateGate(n.caps))');
   });
 
-  it('the gate word is tested by includes(UPDATE_GATE_CAP) on a code line only in shared/update-move.ts, and in Settings until its fold', () => {
-    // SettingsScreen.tsx's `autoGateMissing` is the one other holder while another run's claim holds that file; the
-    // claim-gated last task of wave 19 folds it onto `carriesUpdateGate` and drops it from this list.
+  it('the gate word is tested by includes(UPDATE_GATE_CAP) on a code line only in shared/update-move.ts', () => {
+    // SettingsScreen.tsx's `autoGateMissing` asks `carriesUpdateGate` too since wave 19's claim-gated fold (R24(d)).
     const GATE_TEST = /includes\(UPDATE_GATE_CAP\)/;
     expect(GATE_TEST.test('n.caps.includes(UPDATE_GATE_CAP)'), 'CONTROL: the pattern sees the copy').toBe(true);
-    expect(ALL.filter((f) => GATE_TEST.test(codeOnly(f))).map(rel).sort()).toEqual([
-      'pwa/src/screens/SettingsScreen.tsx', 'shared/update-move.ts',
-    ]);
+    expect(ALL.filter((f) => GATE_TEST.test(codeOnly(f))).map(rel).sort()).toEqual(['shared/update-move.ts']);
   });
 });
