@@ -12043,7 +12043,7 @@ describe('history card line: SessionStart(compact) serves the sweep\'s predictio
   const EMSP_G = `${GENERATION}${String.fromCharCode(0x2003)}\n`;   // D-5064: U+2003 after G; glibc's UTF-8 [:space:] takes it
   type Reg = 'fifo' | 'G-lf' | 'G-ws' | 'blank-ws' | 'G-emsp' | 'G-nul' | 'G2-nul' | 'G2-nul-split' | 'nul-only' | 'G' | 'G2' | 'absent' | 'unreadable' | 'symlink-G' | 'junk' | 'G-wide' | 'G-nbsp' | 'empty' | 'blank-wide' | 'G2-wide-junk' | 'dangling';
   type Off = 'absent' | 'G' | 'G-padded' | 'G-wide' | 'G-nbsp' | 'G-bom' | 'G2' | 'empty' | 'unreadable' | 'dir' | 'symlink-G' | 'unsearchable' | 'parent-file' | 'G2-tabcr' | 'link-loop' | 'link-notdir' | 'link-000' | 'link-dangling' | 'G-nul';
-  type Rec = 'fifo' | 'G-ws' | 'G-emsp' | 'G' | 'G2' | 'legacy' | 'absent' | 'junk' | 'symlink-G' | 'G-nul' | 'G-wide';
+  type Rec = 'fifo' | 'G-nbsp' | 'G-ws' | 'G-emsp' | 'G' | 'G2' | 'legacy' | 'absent' | 'junk' | 'symlink-G' | 'G-nul' | 'G-wide';
   /** B1's Presence, as a type-only import expression: this file gains no import line (the census cites it by line). */
   type Pres = import('../../ccd/history/lib.mjs').Presence<string>;
   /** A row is an AGREE row (the hook's verdict is the CLI's) unless its sixth cell reads 'fail-closed': the hook
@@ -12127,11 +12127,18 @@ describe('history card line: SessionStart(compact) serves the sweep\'s predictio
     ['a NUL-only .generation (once empty to the hook, so the record decided), recall-off is stale (fail-closed: the CLI recalls)', '', 'nul-only', 'G2', 'G', 'fail-closed'],
     ['a NUL-only .generation, recall-off names the recorded G', '', 'nul-only', 'G', 'G'],
     ['a record holding G and a NUL is no record', '', 'absent', 'G2', 'G-nul'],
-    // D-5063 (review 479 F1): a record padded past the read window is read as empty (legacy) by `_ct_read`, which holds the first
-    // CCRC_ID_MAX characters. The CLI resolves the newest family, G, and recall-off names it: exit 8. A hook that took the record
-    // for empty would compare '' with G and serve. The window check withholds, as `.generation`'s does.
+    // D-5063 (review 479 F1): a record padded past the read window would read as empty (legacy) from `_ct_read`, which holds only the
+    // first CCRC_ID_MAX characters. The CLI resolves the newest family, G, and recall-off names it: exit 8. A hook that took the record
+    // for empty would compare '' with G and serve. The record's one guard is the bounded NUL probe (`read -d '' -n CCRC_ID_MAX`),
+    // which answers rc 0 on a NUL or on CCRC_ID_MAX characters read, so it withholds both shapes; the value it tests is the probe's own
+    // read, ASCII-trimmed, never `_ct_read`'s `CT_V` (D-5064). The record spells no window test of its own.
     ['a generation record padded past the read window, recall-off names G', '', 'absent', 'G', 'G-wide'],
     ['a generation record padded past the read window, recall-off is stale (fail-closed: the CLI recalls)', '', 'absent', 'G2', 'G-wide', 'fail-closed'],
+    // D-5064 (review 495 F2): the record arm trims the probe's raw read of ASCII whitespace only, so U+00A0 stays and fails the
+    // grammar, where the CLI's JS trim strips it and reads G (stale beside G2: it recalls). A record that tested `_ct_read`'s CT_V
+    // instead would trim U+00A0 on a libc whose [:space:] takes it (Darwin's) and serve, so this row reds there for that mutant, as
+    // the U+2003 case does on glibc. On glibc it pins only the withhold; the macOS leg (`test-macos`) is its proof.
+    ['a generation record behind a no-break space, recall-off is stale (fail-closed: the CLI recalls)', '', 'absent', 'G2', 'G-nbsp', 'fail-closed'],
     // D-5063 (review 495 F1): the two readability guards decide ONLY a non-regular file, since the probes' `x=.` seed decides an
     // absent or unreadable one. `.generation`'s `(( CT_RAWN >= CCRC_ID_MAX ))` and the record's `_ct_read … || return 0` each stop
     // the probe's `<` from opening a FIFO, where it would block: SessionStart(compact) would hang to the hook timeout and the whole
@@ -12209,6 +12216,7 @@ describe('history card line: SessionStart(compact) serves the sweep\'s predictio
     if (recKind === 'G-nul') fs.writeFileSync(rec, `${GENERATION}\0\n`);
     if (recKind === 'G-wide') fs.writeFileSync(rec, `${' '.repeat(130)}${GENERATION}\n`);
     if (recKind === 'G-emsp') fs.writeFileSync(rec, EMSP_G);
+    if (recKind === 'G-nbsp') fs.writeFileSync(rec, NBSP_G);
     if (recKind === 'fifo') execFileSync('mkfifo', [rec]);
     if (recKind === 'G-ws') fs.writeFileSync(rec, ` \t\r${GENERATION}\v\f \r\n`);
     if (recKind === 'legacy') fs.writeFileSync(rec, '\n');
@@ -12222,7 +12230,7 @@ describe('history card line: SessionStart(compact) serves the sweep\'s predictio
   const cliGeneration = (envGen: string, regGen: Pres, recKind: Rec): string | null => {
     const r = lib.resolveGeneration({ envGen, regGen });
     if (r.via !== 'newest') return r.value;
-    return recKind === 'G' || recKind === 'G-wide' || recKind === 'G-emsp' || recKind === 'G-ws' ? GENERATION : recKind === 'G2' ? G2 : recKind === 'legacy' ? '' : null;
+    return recKind === 'G' || recKind === 'G-wide' || recKind === 'G-emsp' || recKind === 'G-nbsp' || recKind === 'G-ws' ? GENERATION : recKind === 'G2' ? G2 : recKind === 'legacy' ? '' : null;
   };
   /** The CLI's reading of the same fixture (B2's presenceOf: absent, unreadable — a symlink or a non-file
    *  included — or the trimmed value), handed to B2's own decideRecallOff with the CLI's generation. `unknown`:
@@ -12531,7 +12539,9 @@ describe('history card line: SessionStart(compact) serves the sweep\'s predictio
     // of their own, with an env generation that names none (the parity rows' arm; no compact card is served then, so the line
     // stands alone in both runs). DIRECT has no `.generation` and no recall-off file: neither probe runs. PROBED has an EMPTY
     // `.generation` (the first probe runs, rc 1, no NUL, and the record decides), a recall-off file naming G2 and a record naming
-    // G (the second probe runs, rc 1), so o != gen and the line is served. A pipeline or a subshell in either probe costs PROBED a fork.
+    // G (the second probe runs, rc 1), so o != gen and the line is served. Since the probes' `x=.` seed a `: |` prefix
+    // reds earlier, at the served-line assertion (the subshelled `read` leaves the parent's `x=.`, so the line withholds). The tally
+    // still reds a fork that keeps the verdict: `( : );`, `true | true;` or `x=$(printf .)` inside a probe costs PROBED a fork or two (12 or 13 vs 11).
     const noGen = { CCRC_SESSION_GENERATION: '' };
     plantAll();
     plantParity('absent', 'absent', 'G');
