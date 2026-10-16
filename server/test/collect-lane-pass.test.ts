@@ -22,7 +22,7 @@ import {
 import { CHILD_RECLAIM_DEFER_CEILING_MS } from '../src/childReclaimSweep.js';
 import {
   COLLECT_AUDITS_PER_PASS, COLLECT_FEED_TITLE, COLLECT_LANE_LIVE_MARKER, collectFeedAnswerBody, collectFeedReadBody,
-  collectFeedSwitchBody, parseCollectAudit, type CollectReadWhat,
+  parseCollectAudit, type CollectReadWhat,
 } from '../src/collectLane.js';
 import { COLLECT_CAP, RECLAIM_PAUSE_CAP } from '../src/ccdargv.js';
 import { COLLECT_BOX_LABELS } from '../../shared/api.js';
@@ -40,9 +40,10 @@ const methodOf = (src: string, sig: string): string => {
   expect(at, `${sig.trim()} is gone`).toBeGreaterThan(-1);
   return src.slice(at, src.indexOf('\n  }\n', at));
 };
-/** The feed rows of one flip, by Task 5's own title and words. */
-const flipRows = (f: CollectRig, live: boolean) =>
-  f.feed().filter((e) => e.title === COLLECT_FEED_TITLE.switch && e.body === collectFeedSwitchBody(live));
+/** The feed rows of one flip, by Task 5's own title and the body's kept prefixes (path-identity spec 2026-10-12 §5.5:
+ *  the body names its source now, so a row is matched by the way it went, never by its whole text). */
+const flipRows = (f: CollectRig, live: boolean) => f.feed().filter((e) => e.title === COLLECT_FEED_TITLE.switch
+  && e.body.startsWith(live ? 'the collector lane is now live' : 'the collector lane is now shadowed'));
 
 describe('the lane’s constants are derived, and the tick dispatches it (spec §5.10)', () => {
   it('the observation interval IS the sweep interval, spelled from it, never a second literal', () => {
@@ -85,7 +86,7 @@ describe('the lane’s constants are derived, and the tick dispatches it (spec �
 });
 
 describe('one gather, one pass at a time, a monotonic throttle (spec §5.10)', () => {
-  it('the pass awaits ONE thing — the gather, after the throttle — never a call it queued, and reads the pause alone', () => {
+  it('the pass awaits ONE thing — the gather, after the throttle — never a call it queued, reads the pause, and hands its listing to the latch alone', () => {
     const src = watchSrc();
     const outer = methodOf(src, '  async sweepTempRootCollect(');
     const stamp = outer.indexOf('this.lastCollectSweep = gate;');
@@ -98,7 +99,17 @@ describe('one gather, one pass at a time, a monotonic throttle (spec §5.10)', (
     expect(pass.indexOf('readCollectPopulation(this.deps.io, this.deps.cfg.registryDir)')).toBeGreaterThan(gather);
     expect(pass.indexOf('collectSwitches(this.deps.io, this.deps.cfg.registryDir)')).toBeGreaterThan(gather);
     expect(pass.indexOf('this.lastCollectSweep = mono;')).toBeGreaterThan(gather);
-    expect(pass, 'the live marker is the executor’s to read, at its act').not.toMatch(/\.live\b/);
+    expect(pass, 'the marker is the executor’s and the latch helper’s to read, never the pass’s').not.toMatch(/\.marker\b/);
+    // The listing's one other reader is the latch helper (path-identity spec 2026-10-12 §5.4): every code line naming
+    // `switches`, its `.paused` reads aside, is its binding or the one `collectRetireLatch(` call.
+    const handed = (code: string): string[] => code.split('\n').map((l) => l.trim())
+      .filter((l) => /\bswitches\b/.test(l.replace(/\bswitches\.paused\b/g, '')));
+    expect(handed('const [a, switches] = g;\nif (switches.paused) {\ncollectRetireLatch(d, switches, e);\nother(switches);'),
+      'CONTROL: a second reader is seen').toHaveLength(3);
+    expect(handed(pass), 'the pass hands its listing to collectRetireLatch( alone').toEqual([
+      'const [listings, switches] = gathered;',
+      expect.stringMatching(/^this\.collectLatchNote\(collectRetireLatch\([^;]*\bswitches\b[^;]*\)\);$/),
+    ]);
   });
 
   it('a tick that lands while a pass gathers returns at once: a second gather never starts', async () => {
@@ -321,12 +332,15 @@ describe('every collector call rides the id’s queue key (spec §5.10)', () => 
 });
 
 describe('stale answers, the live flag and a restart (spec §5.10)', () => {
-  it('a learning audit composed before a job sees the marker appear, answering collectable after it, seeds no observation; each first live act follows two observations composed after the flip', async () => {
+  it('a learning audit composed before a job first sees the marker, answering collectable after it, seeds no observation; each first live act follows two observations composed after the flip', async () => {
     const f = await collectRig();
     f.pastHoldOff();
+    // Armed BEFORE the lane's first listing (path-identity spec 2026-10-12 §5.4): a first listing that proved the marker
+    // absent would retire its latch, and a touch after it would be a re-created file this build ignores. No act job has
+    // run yet, so the lane has not seen the marker: demo-b's first act job is still the one that sees the arming.
+    f.touch(COLLECT_LANE_LIVE_MARKER);
     f.witness('demo-b');
     await f.pass(); await f.settled();                      // demo-b: observation 1
-    f.touch(COLLECT_LANE_LIVE_MARKER);
     f.witness('demo-a');
     const late = f.hold('audit', 'demo-a');
     f.next();

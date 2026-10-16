@@ -13,6 +13,10 @@ import {
   COLLECT_LANE_LIVE_MARKER, collectLicence, collectLicenceStands, parseCollectAudit, parseCollectResult,
   type CollectAudit, type CollectCapture, type CollectHoldWhy, type CollectListing, type CollectObservation,
   COLLECT_HOLD_WHYS, type CollectResult,
+  collectLaneControl, collectLaneEffective, collectLaneLive, collectLatchDue, collectLatchFeedBody, measureCollectLaneRow,
+  type CollectCurrentNode, type CollectEpochPair, type CollectLaneCaps, type CollectLaneControl, type CollectLaneEffective,
+  type CollectLaneJournal, type CollectLaneJournalRead, type CollectLaneRowRead, type CollectLaneSettled,
+  type CollectLaneSwitches, type CollectLatchOutcome,
 } from '../collectLane.js';
 import { TERMINAL_RUN_STATES, TMPROOT_ID_MAX_CHARS, isTmpRootId, type RunState } from '../../../shared/api.js';
 
@@ -25,8 +29,10 @@ import { TERMINAL_RUN_STATES, TMPROOT_ID_MAX_CHARS, isTmpRootId, type RunState }
  * pass. Every call runs on the id's `KeyedQueue` key, the key the reclaim and expiry executors use, so no two lanes
  * touch one id at once.
  *
- * THE JOB, in order. Every doubt is "not this time". Nothing here paces, frees a slot or writes a feed row: the job
- * REPORTS (`CollectJobOutcome`), and the lane folds the report through its L1 rules (`collectLane.ts`).
+ * THE JOB, in order. Every doubt is "not this time". Nothing here paces or frees a slot, and nothing here writes a feed
+ * row: the job REPORTS (`CollectJobOutcome`), and the lane folds the report through its L1 rules (`collectLane.ts`). Its
+ * one durable write is the marker's latch, through the store's one writer, and the lane writes that latch's row
+ * (`collectRetireLatch`, path-identity spec 2026-10-12 §5.4).
  *   1. The box must PROVE both capabilities, `collect-v1` and `reclaim-pause-v1` (`capSupported`, which refuses on no
  *      evidence). An automatic destructive lane never runs on a box the phone cannot pause. Then the id predicate
  *      AGAIN, on the job's own id: the population gated it, and this is the second check before any argv.
@@ -36,12 +42,21 @@ import { TERMINAL_RUN_STATES, TMPROOT_ID_MAX_CHARS, isTmpRootId, type RunState }
  *      clear generation moved while it was in flight. It licenses the act only under the lane's one licence rule
  *      (`collectLicence`): observation 1 stands, with the same token, and arrived at least the interval before. Then
  *      the open-run hold is judged on observation 2's document, licensed or not, so a held id never seeds a pair.
- *   5. The switches once more, with the live marker, from one fresh listing. This is the job's LAST await. A marker that
- *      differs from the lane's last-seen flag is a flip: every pair clears, and this job composes nothing.
- *   6. SYNCHRONOUSLY, with no await before the argv: observation 1 is re-read (`collectLicenceStands`: a pair cleared
- *      since composes nothing), presence is read again, the hold's store reads are made again (CoordStore is
- *      synchronous), and the capability is asked again in the act's own scope. Shadow: "would collect", and stop.
- *      Live: the verb, on observation 2's token and the job's id. The start hold-off is the lane's, asked at its offer.
+ *   5. The switches once more, from one fresh listing: the job's LAST await. The connection epoch is read before it. The
+ *      pair the switch is resolved under runs from the epoch the job was QUEUED under to the epoch after it
+ *      (path-identity spec 2026-10-12 §5.2, §5.5).
+ *   6. SYNCHRONOUSLY, with no await before the argv:
+ *      - the marker's latch, through its one helper (`collectRetireLatch`, §5.4);
+ *      - both capabilities;
+ *      - the Settings row and its generation journal, read again;
+ *      - the node measured on the current connection, read again;
+ *      - then `collectLaneEffective` (L1) resolves the switch.
+ *      A stop (a pause, an unlistable registry, a moved epoch, a stored Live for an unmeasured node) or a missing
+ *      capability clears every pair. A flip of the effective boolean clears every pair, writes its one row and composes
+ *      nothing. A safety stop composes nothing. Then observation 1 is re-read (`collectLicenceStands`: a pair cleared
+ *      since composes nothing), presence is read again, and the hold's store reads are made again (CoordStore is
+ *      synchronous). Shadow: "would collect", and stop. Live: the verb, on observation 2's token and the job's id. The
+ *      start hold-off is the lane's, asked at its offer.
  * It never kills a holder. It never passes `--defer-expired`: the builder has no such flag, and ccd's arity guard
  * dies on it. It never retries inside itself: ccd recomputes the token inside the reap lock before anything moves.
  */
@@ -54,7 +69,8 @@ export interface CollectClock { readonly mono: number; readonly wall: number }
 
 /** The lane's two clear generations for one id (spec §5.10):
  *  - the lane-wide one moves on a raised pause or an unlistable registry, a missing capability (at a pass, a job or a
- *    learning audit), or a marker flip;
+ *    learning audit), a flip of the switch's effective boolean, a moved connection epoch, or a stored Live whose node
+ *    the current connection has not measured (path-identity spec 2026-10-12 §5.5);
  *  - the id's own moves on any reset of its pair.
  *  Both are captured when a call is composed. Its answer is an observation only if both still stand when it arrives.
  *  It is L1's `CollectCapture`, spelled once there. */
@@ -84,19 +100,50 @@ export interface CollectLanePort {
   generations(id: string): CollectGenerations;
   /** Observation 1: the standing pair's token and its first answer's arrival, or null when no pair stands. */
   observation(id: string): CollectObservation | null;
-  /** A lane-wide clear this job saw. `paused` is `reclaim-paused` raised, or a registry that did not list; `caps` is a
-   *  missing capability. Every pair clears now, and the per-id pacing stays. */
-  cleared(why: 'paused' | 'caps'): void;
-  /** The live marker as this job read it at its last await. Answers true when it differs from the lane's last-seen
-   *  flag, which starts `shadowed` when the lane is constructed. The lane has then set the flag, cleared every pair and
-   *  written the flip's one feed row, and this job composes nothing. Answers false otherwise, and nothing changed. */
-  flipped(live: boolean): boolean;
+  /** A lane-wide clear this job saw (path-identity spec 2026-10-12 §5.5). The whys:
+   *  - `paused`: `reclaim-paused` raised, or a registry that did not list;
+   *  - `caps`: a missing capability;
+   *  - `epoch`: a connection replaced since the job was queued;
+   *  - `node`: a stored Live whose fleet node the current connection has not measured.
+   *  Every pair clears now, and the per-id pacing stays. */
+  cleared(why: 'paused' | 'caps' | 'epoch' | 'node'): void;
+  /** The switch as this job resolved it after its last await (`CollectLaneSettled`, path-identity spec 2026-10-12
+   *  §5.5). Answers true when its effective boolean (`collectLaneLive`) differs from the lane's last-seen flag, which
+   *  starts `shadowed` when the lane is constructed. The lane has then set the flag, cleared every pair and written
+   *  the flip's one feed row, and this job composes nothing. Answers false otherwise, and nothing changed. A change of
+   *  SOURCE alone, the marker handing over to Settings while both resolve live, is no flip. */
+  flipped(r: CollectLaneSettled): boolean;
+}
+
+/** The connection-bound fleet identity, as this job reads it (path-identity spec 2026-10-12 §5.2): L2, declared by
+ *  this consumer. `FleetIdentityCell` and `NO_FLEET_IDENTITY` (`fleetidentity.ts`) satisfy it. Both members are
+ *  synchronous. The epoch is read before the job's last await and again after it, and the node after it, with nothing
+ *  awaited between those reads and the argv. */
+export interface CollectLinkPort { epochNow(): number; current(): CollectCurrentNode }
+
+/** The switch's control state and the one latch writer's needs (path-identity spec 2026-10-12 §5.2, §5.4): L2,
+ *  declared by this consumer, built by `watch.ts` (`collectControlDeps`):
+ *  - `coord`: the row's reader and the store's ONE writer, which only the latch calls from here;
+ *  - `journal`: the process's one generation journal, or null when the server was built without one. Null reads as
+ *    `not-configured`, an unmeasurable control state, never as a missing journal;
+ *  - `wallNow`: the wall clock the latch and the row's `updatedAt` are stamped with;
+ *  - `latchRetired`: the lane's writer of the latch's one feed row. `watch.ts` writes rows; this file never does. It
+ *    must never throw: `collectRetireLatch` calls it after the durable write and outside its catch, so the helper's
+ *    never-throws answer holds only while this writer is total. */
+export interface CollectControlDeps {
+  readonly coord: Pick<CoordStore, 'collectLaneRow' | 'setCollectLane'>;
+  readonly journal: CollectLaneJournal | null;
+  readonly wallNow: () => number;
+  readonly latchRetired: (body: string) => void;
 }
 
 /** The executor's ports. Each is narrowed to what is asked of it:
  *  - `coord` to the three destructive-grade reads the hold makes;
  *  - `io` to the one listing the switches read;
- *  - `presence` to its one question.
+ *  - `presence` to its one question;
+ *  - `control` to the switch's row, its journal, the latch's clock and the latch's row (path-identity spec 2026-10-12
+ *    §5.2, §5.4);
+ *  - `link` to the connection epoch and the node measured on it (§5.2).
  *  `observeIntervalMs` is the lane's `COLLECT_OBSERVE_INTERVAL_MS`, passed in, as the L1 licence takes it. `runCcd` is
  *  the lane's stamping wrapper (Task 7), which reads `argv[0]` to tell this job's audit from its act. */
 export interface CollectTempRootDeps {
@@ -108,11 +155,16 @@ export interface CollectTempRootDeps {
   presence?: Pick<Presence, 'isVisible'>;
   lane: CollectLanePort;
   observeIntervalMs: number;
+  control: CollectControlDeps;
+  link: CollectLinkPort;
 }
 
-/** One job: the id the lane offered. Observation 1 is read from the lane's memory and never carried: a token is a
- *  comparand, never a request's payload. */
-export interface CollectJob { readonly id: string }
+/** One job: the id the lane offered, and the connection epoch the lane's pairs stood under when it was QUEUED
+ *  (path-identity spec 2026-10-12 §5.5). The lane reads that epoch outside the queue callback. So after a reconnect
+ *  between the pass that queued the job and the job's start, the job's last listing does not stand under it, and the
+ *  job composes nothing. Observation 1 is read from the lane's memory and never carried: a token is a comparand, never
+ *  a request's payload. */
+export interface CollectJob { readonly id: string; readonly epoch: number }
 
 // ── what a job reports ───────────────────────────────────────────────────────
 
@@ -122,7 +174,8 @@ export type CollectHoldRead = { readonly kind: 'clear' } | CollectHeld;
 
 /** Why a job that asked the box for observation 2 composed nothing. */
 export type CollectAnsweredWhy =
-  | 'stale' | 'not-collectable' | 'not-licensed' | 'paused' | 'marker-flip' | 'pair-cleared' | 'presence' | 'caps';
+  | 'stale' | 'not-collectable' | 'not-licensed' | 'paused' | 'switch-flip' | 'epoch-changed' | 'unknown-fleet'
+  | 'safety-stopped' | 'pair-cleared' | 'presence' | 'caps';
 
 /** What one job did (spec §5.10), for the lane to fold. Only `acted` composed the collector's verb. Every other arm
  *  composed none, and the lane frees the slot on it. Each arm says what was measured, never what to do next.
@@ -165,11 +218,16 @@ const COLLECT_NOT_ASKED_WHYS: Readonly<Record<Extract<CollectJobOutcome, { kind:
   caps: true, 'id-refused': true, paused: true, presence: true,
 };
 const COLLECT_ANSWERED_WHYS: Readonly<Record<CollectAnsweredWhy, true>> = {
-  stale: true, 'not-collectable': true, 'not-licensed': true, paused: true, 'marker-flip': true, 'pair-cleared': true,
-  presence: true, caps: true,
+  stale: true, 'not-collectable': true, 'not-licensed': true, paused: true, 'switch-flip': true, 'epoch-changed': true,
+  'unknown-fleet': true, 'safety-stopped': true, 'pair-cleared': true, presence: true, caps: true,
 };
 const COLLECT_AUDIT_KINDS: Readonly<Record<CollectAudit['kind'], true>> = {
   collectable: true, verdict: true, unmeasured: true, unreadable: true, 'no-document': true,
+};
+/** The resolver's arms step 6 branches on (`CollectLaneEffective`, L1; path-identity spec 2026-10-12 §5.5), as a TOTAL
+ *  table: step 6 quotes its kinds. */
+const COLLECT_RESOLVED_KINDS: Readonly<Record<CollectLaneEffective['kind'], true>> = {
+  stopped: true, 'not-running': true, 'safety-stopped': true, live: true, shadowed: true,
 };
 
 /** Every kebab word this file spells, for `mail-routes.test.ts`'s scan of `server/src/coord`, where this executor
@@ -178,7 +236,7 @@ const COLLECT_AUDIT_KINDS: Readonly<Record<CollectAudit['kind'], true>> = {
 export function isCollectExecutorKebab(v: string): boolean {
   const own = (o: object): boolean => Object.prototype.hasOwnProperty.call(o, v);
   return own(COLLECT_OUTCOME_KINDS) || own(COLLECT_NOT_ASKED_WHYS) || own(COLLECT_ANSWERED_WHYS)
-    || own(COLLECT_AUDIT_KINDS) || (COLLECT_HOLD_WHYS as readonly string[]).includes(v);
+    || own(COLLECT_AUDIT_KINDS) || own(COLLECT_RESOLVED_KINDS) || (COLLECT_HOLD_WHYS as readonly string[]).includes(v);
 }
 
 // ── words ────────────────────────────────────────────────────────────────────
@@ -205,8 +263,21 @@ const COLLECT_ID_REFUSED = 'the id is not one the collector may name: a session 
   + `of at most ${TMPROOT_ID_MAX_CHARS} characters`;
 const COLLECT_STALE = 'a clear landed while the audit was in flight, so its answer is no observation';
 const COLLECT_NOT_LICENSED = 'no earlier audit answered collectable with this token at least the interval before this one';
-const COLLECT_FLIPPED = 'the live marker changed since this lane last read it, so every pair was cleared and this job '
-  + 'composes nothing';
+const COLLECT_FLIPPED = 'the collector’s effective switch changed since this lane last read it, so every pair was '
+  + 'cleared and this job composes nothing';
+/** Each cause of step 6's other stops in its own sentence (path-identity spec 2026-10-12 §5.5). A connection replaced
+ *  since the job was queued is worded by WHEN: before the final listing began (`queued`) or while it was out
+ *  (`listing`). The epoch read before that listing tells the two apart. Both stop the job alike. */
+const COLLECT_EPOCH_MOVED: Readonly<Record<'queued' | 'listing', string>> = {
+  queued: 'the connection to the fleet host was replaced after this job was queued, so nothing it measured stands for '
+    + 'the box now connected',
+  listing: 'the connection to the fleet host was replaced while the last listing was out, so nothing it said stands '
+    + 'for the box now connected',
+};
+const COLLECT_UNKNOWN_FLEET = 'Settings stores live, and the fleet node on the current connection is unmeasured or its '
+  + 'id is in collision, so nothing arms the collector for this box';
+const COLLECT_SAFETY_STOPPED = 'the collector’s control state could not be proved coherent, so this job composes nothing';
+const COLLECT_NOT_RUNNING = `the fleet host no longer advertises both ${COLLECT_CAP} and ${RECLAIM_PAUSE_CAP}`;
 const COLLECT_PAIR_CLEARED = 'the observations this act rested on were cleared before it could be composed';
 
 const said = (err: unknown): string => (err instanceof Error ? err.message : String(err));
@@ -275,24 +346,81 @@ async function readCollectListing(
 
 // ── the switches ─────────────────────────────────────────────────────────────
 
-/** The two switches as one listing read them (spec §5.10). `paused` and `live` mean what they always meant; a pause
- *  also says WHY, because its two causes are not one fact: `raised` is `reclaim-paused` standing in the listing, and
- *  `unlistable` is a listing that could not be taken, which cannot rule a raised one out. Both stop a job alike, and
- *  neither is ever shadow. */
-export type CollectSwitches =
-  | { readonly paused: false; readonly live: boolean }
-  | { readonly paused: true; readonly why: 'raised' | 'unlistable'; readonly live: boolean };
+/** The two switches as one listing read them: L1's `CollectLaneSwitches`, aliased, never re-declared (path-identity
+ *  spec 2026-10-12 §5.5). A pause says WHY, because its two causes are not one fact. `raised` is `reclaim-paused`
+ *  standing in the listing. `unlistable` is a listing that could not be taken, which cannot rule a raised one out. Both
+ *  stop a job alike, and neither is ever shadow. `marker` is the legacy marker's MEASURED presence. An unlistable
+ *  registry carries none, because a measured absence now retires the marker's latch, and a listing never taken proves
+ *  nothing absent. */
+export type CollectSwitches = CollectLaneSwitches;
 
 /** The two switches, from ONE registry listing (spec §5.10). A raised `reclaim-paused` is `paused`, `raised`. A listing
- *  that could not be taken is `paused` too, `unlistable`, because it cannot rule a pause out, and that is never shadow.
- *  `live` is whether `collect-lane-live` stands, which no writer in the tree touches. It is meaningful only when `paused`
- *  is false, and the executor asks `paused` first. */
+ *  that could not be taken is `paused` too, `unlistable`, with NO `marker` field: it cannot rule a pause out, and it
+ *  measured nothing. `marker` is whether `collect-lane-live` stands, which no writer in the tree touches. */
 export async function collectSwitches(io: Pick<FleetIO, 'readdir'>, registryDir: string): Promise<CollectSwitches> {
   let names: readonly string[] | null;
   try { names = await io.readdir(registryDir); } catch { names = null; }
-  if (names === null) return { paused: true, why: 'unlistable', live: false };
-  const live = names.includes(COLLECT_LANE_LIVE_MARKER);
-  return names.includes(RECLAIM_PAUSE_MARKER) ? { paused: true, why: 'raised', live } : { paused: false, live };
+  if (names === null) return { paused: true, why: 'unlistable' };
+  const marker = names.includes(COLLECT_LANE_LIVE_MARKER);
+  return names.includes(RECLAIM_PAUSE_MARKER) ? { paused: true, why: 'raised', marker } : { paused: false, marker };
+}
+
+// ── the switch's control state and the marker's latch (path-identity spec 2026-10-12 §5.2, §5.4) ──────────────
+
+/** The switch's control state, read NOW (path-identity spec 2026-10-12 §5.2): the row and the journal, each exactly as
+ *  read, and their coherence decided by L1 (`collectLaneControl`). It is synchronous and never throws: the store's
+ *  reader and the journal adapter answer every failure as a read state. A server built with no journal reads
+ *  `not-configured`, an unmeasurable state, never `missing`: only a proven ENOENT is the bootstrap's missing journal.
+ *  The executor, the latch helper and the route each read through it. */
+export function collectControlNow(c: Pick<CollectControlDeps, 'coord' | 'journal'>):
+  { readonly row: CollectLaneRowRead; readonly journal: CollectLaneJournalRead; readonly control: CollectLaneControl } {
+  const row = c.coord.collectLaneRow();
+  const journal: CollectLaneJournalRead = c.journal === null ? { kind: 'not-configured' } : c.journal.read();
+  return { row, journal, control: collectLaneControl(measureCollectLaneRow(row), journal) };
+}
+
+/** THE ONE LATCH HELPER (path-identity spec 2026-10-12 §5.4). It is synchronous. It reads the control state, and asks
+ *  the store's one writer to retire the marker only when L1's `collectLatchDue` says the latch is due. That needs a
+ *  listing that is not paused, is listed, is on the same epoch and proves the marker absent, beside a coherent row and
+ *  journal whose latch is unset. The request expects exactly the row and the journal it read. The writer appends the
+ *  next generation before it updates the row, inside one transaction.
+ *
+ *  On `retired`, and on nothing else, it hands the lane the latch's row body, once. It never heals a mismatch: an
+ *  incoherent state is never due, and the writer refuses one anyway. Its callers are the executor's step 6 and the
+ *  lane's pass, each right after a registry listing, never the route. Whatever it answers, the caller reads the control
+ *  state again before deciding anything. A throw from the writer, which the store raises only before its append, is
+ *  answered `store-threw` (the coordinator's extension of the warn-latch ruling, 2026-10-12): the helper never throws,
+ *  so neither the executor's job nor the lane's pass rejects on it. */
+export function collectRetireLatch(c: CollectControlDeps, switches: CollectSwitches, epoch: CollectEpochPair): CollectLatchOutcome {
+  const seen = collectControlNow(c);
+  if (c.journal === null || !collectLatchDue(switches, epoch, seen.control)) return { kind: 'not-due' };
+  let w: ReturnType<CollectControlDeps['coord']['setCollectLane']>;
+  try {
+    w = c.coord.setCollectLane({ kind: 'retire', expected: seen.row, expectedJournal: seen.journal }, c.wallNow(),
+      c.journal);
+  } catch {
+    // A throw BEFORE the store's append (`BEGIN IMMEDIATE` busy past its timeout, an I/O fault at `BEGIN`): nothing was
+    // appended or written, and the store propagates it by design. Answered, never rethrown; the caller re-reads.
+    return { kind: 'store-threw' };
+  }
+  switch (w.kind) {
+    case 'written':
+      c.latchRetired(collectLatchFeedBody(COLLECT_ACTOR));
+      return { kind: 'retired' };
+    // The store's own read, inside its transaction, found the latch already set: there was nothing to retire.
+    case 'unchanged': return { kind: 'not-due' };
+    case 'refused': return { kind: 'refused', code: w.code };
+    case 'failed': return { kind: 'failed', phase: w.phase };
+    default: { const unnamed: never = w; return unnamed; }
+  }
+}
+
+/** Both capabilities, as the route and the Settings view read them (path-identity spec 2026-10-12 §5.6, §5.7). This is
+ *  the ONE helper they call, so neither spells the capability. The executor's own step 6 asks the same pair inline, in
+ *  the act's own scope (`collect-lane-scans.test.ts` counts that literal). `capSupported` refuses on no evidence, so a
+ *  server with no fleet state reads both absent. */
+export function collectLaneCaps(state: FleetState | undefined): CollectLaneCaps {
+  return { collect: capSupported(state, COLLECT_CAP), reclaimPause: capSupported(state, RECLAIM_PAUSE_CAP) };
 }
 
 // ── the one audit site ───────────────────────────────────────────────────────
@@ -348,6 +476,10 @@ export async function collectTempRoot(deps: CollectTempRootDeps, job: CollectJob
       detail: `the fleet host does not advertise both ${COLLECT_CAP} and ${RECLAIM_PAUSE_CAP}` };
   }
   if (!isTmpRootId(job.id)) return { kind: 'not-asked', step: 1, why: 'id-refused', detail: COLLECT_ID_REFUSED };
+  // THE EPOCH THIS JOB WAS QUEUED UNDER (path-identity spec 2026-10-12 §5.5). The lane read it outside the queue
+  // callback, so the pair the switch is resolved under starts here. A reconnect anywhere between the queueing and the
+  // job's last listing, observation 2 included, composes nothing.
+  const queuedUnder = job.epoch;
   // 2 — THE SWITCH, from one listing. A registry that did not list cannot rule a raised pause out, so it is a pause.
   const first = await collectSwitches(deps.io, deps.cfg.registryDir);
   if (first.paused) {
@@ -378,25 +510,51 @@ export async function collectTempRoot(deps: CollectTempRootDeps, job: CollectJob
   if (hold.kind === 'held') return { kind: 'held', step: 4, hold, audit: observed };
   if (licence.kind !== 'licensed') return answered(4, 'not-licensed', `${COLLECT_NOT_LICENSED} (${licence.kind})`);
   const obs1 = licence.first;
-  // 5 — THE SWITCHES ONCE MORE, with the live marker: the job's LAST await.
+  // 5 — THE SWITCHES ONCE MORE: the job's LAST await. The connection epoch is read before it (path-identity spec
+  // 2026-10-12 §5.2). Epochs only rise, so the pair below, from the job's epoch to the one after the listing, already
+  // covers a move across the listing; this read words WHEN the connection moved.
+  const listedUnder = deps.link.epochNow();
   const last = await collectSwitches(deps.io, deps.cfg.registryDir);
-  // ── 6 — SYNCHRONOUS from here to the argv: no await may stand between these reads and the act (spec §5.10). ──
-  if (last.paused) {
-    deps.lane.cleared('paused');
-    return answered(5, 'paused', COLLECT_PAUSED[last.why]);
+  // ── 6 — SYNCHRONOUS from here to the argv: no await may stand between these reads and the act (spec §5.10;
+  // path-identity spec 2026-10-12 §5.5). ──
+  const epoch: CollectEpochPair = { before: queuedUnder, after: deps.link.epochNow() };
+  // The marker's latch, through its ONE helper, decided apart from the arm (§5.4). Whatever it answers, the row and the
+  // journal are read again below, so a refused, failed or thrown (`store-threw`) retire is resolved from what now stands.
+  collectRetireLatch(deps.control, last, epoch);
+  const caps: CollectLaneCaps = {
+    collect: capSupported(deps.fleetState, COLLECT_CAP), reclaimPause: capSupported(deps.fleetState, RECLAIM_PAUSE_CAP),
+  };
+  const lane = collectLaneEffective({
+    switches: last, epoch, caps, control: collectControlNow(deps.control).control, node: deps.link.current(),
+  });
+  // A STOP: no flip, no row, a lane-wide clear (§5.5).
+  if (lane.kind === 'stopped') {
+    if (lane.why === 'raised' || lane.why === 'unlistable') {
+      deps.lane.cleared('paused');
+      return answered(5, 'paused', COLLECT_PAUSED[lane.why]);
+    }
+    if (lane.why === 'epoch-changed') {
+      deps.lane.cleared('epoch');
+      return answered(5, 'epoch-changed', COLLECT_EPOCH_MOVED[listedUnder === epoch.after ? 'queued' : 'listing']);
+    }
+    const unknownFleet: 'unknown-fleet' = lane.why;       // the last stop: a new one is a compile error here
+    deps.lane.cleared('node');
+    return answered(5, unknownFleet, COLLECT_UNKNOWN_FLEET);
   }
-  if (deps.lane.flipped(last.live)) return answered(5, 'marker-flip', COLLECT_FLIPPED);
+  if (lane.kind === 'not-running') {
+    deps.lane.cleared('caps');
+    return answered(6, 'caps', COLLECT_NOT_RUNNING);
+  }
+  // The flip is on the effective BOOLEAN, never on its source (§5.5).
+  if (deps.lane.flipped(lane)) return answered(5, 'switch-flip', COLLECT_FLIPPED);
+  if (lane.kind === 'safety-stopped') return answered(5, 'safety-stopped', `${COLLECT_SAFETY_STOPPED} (${lane.why})`);
   if (!collectLicenceStands(obs1, audit.composed, deps.lane.generations(job.id), deps.lane.observation(job.id))) {
     return answered(6, 'pair-cleared', COLLECT_PAIR_CLEARED);
   }
   if (deps.presence?.isVisible(job.id) === true) return answered(6, 'presence', COLLECT_SEEN);
   const holdAtAct = collectOpenRunHold(deps.coord, job.id, obs2);
   if (holdAtAct.kind === 'held') return { kind: 'held', step: 6, hold: holdAtAct, audit: observed };
-  if (!capSupported(deps.fleetState, COLLECT_CAP)) {
-    deps.lane.cleared('caps');
-    return answered(6, 'caps', `the fleet host no longer advertises ${COLLECT_CAP}`);
-  }
-  if (!last.live) return { kind: 'would-collect', audit: observed };
+  if (!collectLaneLive(lane)) return { kind: 'would-collect', audit: observed };
   const now = deps.lane.clock();
   let act: CcdResult;
   try {
