@@ -699,3 +699,34 @@ the dispatch base before Task 1, and records them.
 - citations into macos-platform (Risk notes): ccrc-install.test.ts:4994, timer-first-run:112, ccd/ccrc:9219, ccd-account-auth:143 -> ccrc-install.test.ts:5080, timer-first-run:112, ccd/ccrc:9263, ccd-account-auth:143. All still cite lines above the new insertion
 - $3-reading fixtures (Risk notes): ccrc-install.test.ts:522-534, ccrc-install-graphify.test.ts:155-159, ccrc-update.test.ts:428 -> ccrc-install.test.ts:~556-570, ccrc-install-graphify.test.ts:155-159, ccrc-update.test.ts:458. Still unreached: ccd/ccrc never calls _svc_enable
 - run-only suites exist (File structure): ownership, mark-check, ccrc-restamp, ccd-start-id, ccd-harness-containment, ccd-svc-real-home, install-census, single-definition, session-hook, typecheck-tests, topology-clean, dtbd, deviation-refs -> all present. Unchanged since the base except install-census (2 commits), single-definition (15) and session-hook (8), so their counts (22/275/335) are stale
+## As built (worker, 2026-10-16)
+
+Measured at the dispatch base `0b3ff2f62`, before Task 1. `main` had not moved at the push, so there was no merge and no remerge-diff.
+
+- **Anchors.** Every Step 1 anchor holds by its quoted text, at the lines the re-measure above gives. The arm is at `ccd/ccd:882` / `ccd/ccrc:911`, its definition at `:881` / `:910` and the platform comment at `:866` / `:895`. The callers are `ccd/ccd:23981` and `:24493` only, and `ccd/ccrc` has none. The sentinels are at `ccd/ccd:41`/`:1221` and `ccd/ccrc:70`/`:1250`. `_inst_enable`'s `daemon-reload` is at `ccd/ccrc:15324` (and `:23120`). The guard is at `ccd/ccd:23980`, and the `supervised` stamp before the self-heal at `:24488`. The test pins are at `ccd-supervised-start.test.ts:222`/`:357` and `macos-platform.test.ts:67`/`:405`, with the arms row `'_svc_run_supervised (the call)'` at `:391`.
+- **Line counts.** `wc -l` gives 39777 / **24039** both before and after: `ccd/ccrc` is one line above the re-measure's 24038, which was taken at `a3cebde1b` and before #384's line. Both files stay mode 100755.
+- **The fleet box's systemd.** `systemctl --version` prints `systemd 255 (255.4-1ubuntu8.18)`, and its man page documents `--no-reload` ("When used with enable and disable, do not implicitly reload daemon configuration after executing the changes.").
+- **The claims.** At the edit and at the push, the only live claim on a File-structure path was claim 1472 on `ccd/ccrc` (the delegation programme), which consented. Claim 1478 (run 300) holds `ccd/ccd`, the two test files and this plan.
+- **R25(c), line-neutral and byte-identical in both files.**
+  - `:866` / `:895` reads ``which is why `_svc_enable` below drops the start (and, on systemd, the reload):``.
+  - `:881` / `:910` reads `# <unit> — boot persistence only, no start, no reload`.
+  - So `git diff --numstat` gives `4 4 ccd/ccd` and `3 3 ccd/ccrc`, not the body's `2 2` / `1 1`.
+- **Restamp:** the verb, `~/.local/bin/ccrc restamp ccd/ccd`, printed `restamp: ccd/ccd: restamped`. `mark.mjs --check` gives `ccrc-unmodified`.
+- **Counts.** `vitest list` gives `ccd-supervised-start` 25 → 28 and `macos-platform` **102 → 104**. The estimate was 98 → 100 and was never measured.
+- **Red-first (T1-0):** `ccd-supervised-start` had 4 failed, 24 passed and 4 skipped; `macos-platform` had 2 failed, 102 passed and 11 skipped. Both are the named sets.
+- **Mutation table.** Every row's measured red set equals the listed set:
+  - T1-1: 4 + 3.
+  - T1-2: 0 + 1.
+  - T1-3: 8 + 2 + 2.
+  - T1-4: 2 + 2, with the three modelled cases green.
+  - T1-5: `--check` printed `ccrc-edited`, `ownership` had 1 red and `mark-check` was 7 green.
+- **Gate (load 19–24 on 16 cores), every file green:**
+  - edited: `ccd-supervised-start` 28 (4 skipped), `macos-platform` 104 (11 skipped);
+  - the stamp: `ownership` 14, `mark-check` 7, `ccrc-restamp` 9;
+  - ccd: `ccd-start-id` 30, `ccd-harness-containment` 14, `ccd-svc-real-home` 16;
+  - run only: `install-census` 25, `single-definition` 585, `session-hook` 516 (133 s);
+  - the rest: `typecheck-tests` 12, `topology-clean` 55, `dtbd` 1, `deviation-refs` 31.
+- **Review (per task, Opus): approved, with two minor points, retained.**
+  - (1) `:866`'s "which is why" now joins launchd's fused verb to the dropped reload, which has its own reason. The parenthesis is accurate as a fact, and it is left as is.
+  - (2) Residue: `server/test/coord-prhistory.test.ts:41` cites `ccd/ccd:881-884` for an unrelated behaviour. That citation was already stale before this wave, and it is out of scope.
+- **Reserve.** No reserve number was spent: 4287 to 4291 are unused.
