@@ -39,7 +39,7 @@ numbers; the spec wave each one implements is named beside it.
 | 15 | — (`ccd/ccd`) | `--no-reload` for `_svc_enable`, alone | fleet-first | — | **Reviewed and accepted** (2026-10-16): PR #441 at `9888457bc`; review 510 found one prose minor (R31); lands after #410, run 360 and #435. Was: **cleared to dispatch** (2026-10-16): both consents in; plan `527296ffc` + `ca3abb150`. Was: **planned; dispatch on consent** (2026-10-15 22:11): claim 1396 (run 308) holds `ccd/ccd`, claim 1423 (run 360) holds `ccd/ccrc`; Reading 7 re-ruled; lands last among the `ccd/ccd` landers; adds R25(c) and R25(a)'s code-comment half. Was: **planned; dispatch held on three claims.** Plan `527296ffc` (workflow `wf_f9c94b88-140`; 2 tasks; it defines D-4286, and the reserve is numbers 4287 to 4291). It waits until claims 1057 (`ccd/ccd`), 1058 (`macos-platform.test.ts`) and 1055 (`ccd/ccrc`) have ended (Reading 7). Was: **Run 300 open, planned** 2026-10-06 16:07 UTC. Deviation block 4286 to 4295 (bare until defined). To plan. `ccd/ccd` is unclaimed, but open PRs #299, #301 and #303 also edit it, so whichever lands later rebases and restamps. |
 | 16 | — (sweep and verify; before stable) | R18(e) (item 3's false "is FAILED" warning, the stale-pid comment), Reading 9's sweep half (warn only), the pgid clause's comment, T6-INT-W closed, R18(a), R18(b), R10j, R8c, R10c(3), R8g | fleet-first; auto moves it, the coordinator watches | — | **Fix round 1** (2026-10-16): PR #444 at `e2c48be75`, review 512: F3 and F4 fixed now, then the run-360 merge and one scoped review. Was: run 484, plan `0f07ddcb9` |
 | 17 | — (install, doctor, backup prune) | `ccrc-api` placed by the install spine and removed by uninstall (README's `ccrc-api` lines), Reading 9's doctor half (WARN only), R10k, R8f, R14(a), R10i, R34 (both KEEP spellings; D1c pins them equal), R25(a)'s code-comment half | fleet-first; auto moves it, the coordinator watches | — | waits for run 360 to land (claims 1388, 1410, 1423) and claim 1403 (run 468, #425) on README (2026-10-15 22:11) |
-| 18 | — (test containment) | `makeCcdHarness` containment parity, R14(b)'s raw-spawn census, R23(a), R23(b), R23(d) | none (tests) | — | to plan; `ccdWsHelpers.ts` held by claim 1396 (run 308); R14(b) and R23 can go first (2026-10-15 22:11) |
+| 18 | — (test containment) | `makeCcdHarness` containment parity, R14(b)'s raw-spawn census, R23(a), R23(b), R23(d) | none (tests) | — | **PLANNING** 2026-10-16 18:00 UTC: run 517 opened (planned), block 5247 to 5266; the plan workflow runs (`wf_21fbd9dc-804`). `ccdWsHelpers.ts` is unclaimed since claim 1396 ended. Was: to plan; `ccdWsHelpers.ts` held by claim 1396 (run 308); R14(b) and R23 can go first (2026-10-15 22:11) |
 | 19 | — (PWA and server residue) | R24(a), (b), (d), R26(a)-(d), R27(a), R27(b)'s test half; B5, the `update-inventory.test.ts` stable flake | server | — | **MERGED** `a6b2606c9` (PR #443, 2026-10-16 12:54 UTC, run 483 done); tree equals merge-tree of the reviewed tip `95aa8f3bf`; review 511 found 4 minor (R33) |
 | — | — | docs PR: R22, R24(e), R23(c), (e), R27(b)'s plan half, R27(c), R25(a), (b), README's Reading 9 clause, the closure sentences | none (docs) | — | to write; README half waits for claim 1403 (#425) (2026-10-15 22:11) |
 | — | — | final rollout: promote to `stable` (the coordinator, ruling 2026-10-15), auto convergence and a read-only `ccrc rollout --check` (no hand `ccrc rollout`, ruling 2026-09-30), the exit criteria measured live (the operator taps the rehearsal) | — | — | planned; stable waits on B1, B2, B5 and wave 16 |
@@ -3490,6 +3490,19 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
     cleanly onto `main` at `a6b2606c9`. The server accepted the advance to `awaiting-review`.
   - **Unchanged order:** when run 360 lands, the landing mail; the worker merges `main`, re-gates and sends a fresh
     wave-done; then one scoped review of F3, F4 and the merge; then the merge.
+
+- **2026-10-16 18:00 UTC: wave 18 opened for planning; the probe's auto rule reads the intent.**
+  - **Wave 18** (test containment) is the one wave nothing blocks. Run 517 is open, `planned`, with block 5247 to
+    5266. A plan workflow (`wf_21fbd9dc-804`: a scout, a drafter that prototypes red-first in its own worktree,
+    three attack lenses and a reviser) writes it from `main` at `256b25ecb`. Scope: the parity the wave 9 plan
+    deferred (`makeCcdHarness` and `ghContainedEnv` still pass the real `XDG_RUNTIME_DIR` and
+    `DBUS_SESSION_BUS_ADDRESS`, and leave ssh, scp and curl unpoisoned; the plan first measures what is still open),
+    R14(b)'s raw-spawn census, and R23(a), (b) and (d). Tests only. 175 test files import the harness, so the plan
+    runs each that spawns `ccd` before and after.
+  - **The hourly probe** flagged v0.0.212 at 15:58 as unapplied. Under `auto=stable` that is the design: the newest
+    stable release is still v0.0.11. The coordinator's probe now reads the `*` intent row's auto mode. Under
+    `auto=stable` it flags only a stable release above the fleet box an hour after the last `release-stable` run.
+    The mechanism did nothing wrong, and no wave is needed.
 
 ## Carried constraints
 
