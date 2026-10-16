@@ -658,6 +658,14 @@ describe('rung 4: the session\'s own creation delta', () => {
     const b = win({ toolUseId: 'toolu_b2', startedAt: T(20), endedAt: T(22), after: ['main-wt', RAW] });
     const v = correlateDelegation(input({ record: rec, activities: w.activities, acceptedEvidence: w.acceptedEvidence, listingWindows: [a, b] }));
     expect(v.kind).toBe('unresolved');
+    expect(v.kind === 'unresolved' && v.reason, '5477 e: the ambiguity is named').toBe('ambiguous-listing-windows');
+  });
+  it('5477 e: a main-thread window and its OWN subagent\'s window that overlap and each add the record are ambiguous, never a link to the first toolUseId', () => {
+    const sub = (e: DelegationEventEnvelopeV1): DelegationEventEnvelopeV1 => ({ ...e, agentId: 'sub1' });
+    const w = world([bashPre(10, 'toolu_b1', ['main-wt']), bashPost(12, 'toolu_b1', ['main-wt', RAW]), sub(bashPre(11, 'toolu_s1', ['main-wt'])), sub(bashPost(13, 'toolu_s1', ['main-wt', RAW]))]);
+    const v = correlateDelegation(input({ record: rec, activities: w.activities, acceptedEvidence: w.acceptedEvidence,
+      listingWindows: [win({ after: ['main-wt', RAW] }), win({ toolUseId: 'toolu_s1', startedAt: T(11), endedAt: T(13), after: ['main-wt', RAW] })] }));
+    expect(v.kind === 'unresolved' && v.reason).toBe('ambiguous-listing-windows');
   });
   it('a delta whose bash-worktree activity is not yet durably open is `unmeasured`, retried', () => {
     const v = correlateDelegation(input({ record: rec, activities: [], acceptedEvidence: [], listingWindows: [win({ after: ['main-wt', RAW] })] }));
@@ -711,6 +719,23 @@ describe('a tree named agent-* or wf_* stops at rung 2 (W3-M43)', () => {
   });
   it('a raw name with the SAME evidence is reachable by rungs 3 and 4 (control: the stop is the routing, not the evidence)', () => {
     for (const which of ['rung3', 'rung4'] as const) expect(correlateDelegation(bait('wt-plain', which)).kind, which).toBe('linked');
+  });
+  it('5477 a: an agent-* tree that appears inside ANOTHER session\'s Bash window is never that session\'s: without the parent\'s meta it is unmeasured(rung-2-meta-absent); with it, rung 2 links the parent', () => {
+    const name = `agent-${AGENT}`;
+    // P (PARENT) started the agent; Q (OTHER) ran a worktree-naming Bash call whose delta is exactly the agent's tree
+    const w = world([subagentStart(1, AGENT), bashPre(10, 'toolu_q1', ['main-wt'], { sessionId: OTHER }), bashPost(12, 'toolu_q1', ['main-wt', name], { sessionId: OTHER })]);
+    const qWindow = win({ sessionId: OTHER, toolUseId: 'toolu_q1', after: ['main-wt', name] });
+    const rec = record({ adminRecord: name, canonicalPath: WT(name) });
+    const partial = correlateDelegation(input({ record: rec, activities: w.activities, acceptedEvidence: w.acceptedEvidence, listingWindows: [qWindow] }));
+    expect(partial.kind === 'unmeasured' && partial.reason, 'no meta yet: retried, never Q\'s link').toBe('rung-2-meta-absent');
+    const full = correlateDelegation(input({ record: rec, activities: w.activities, acceptedEvidence: w.acceptedEvidence, listingWindows: [qWindow],
+      pointMetas: [meta({ evidenceJournalId: w.records[0]!.journalId })] }));
+    expect(full).toMatchObject({ kind: 'linked', rung: 2, activityId: activityOf(w.activities, 'agent', AGENT)!.activityId });
+    // control: the same window on a raw name is rung 4's, to Q
+    const raw = world([bashPre(10, 'toolu_q1', ['main-wt'], { sessionId: OTHER }), bashPost(12, 'toolu_q1', ['main-wt', 'wt-plain'], { sessionId: OTHER })]);
+    const control = correlateDelegation(input({ record: record({ adminRecord: 'wt-plain', canonicalPath: WT('wt-plain') }), activities: raw.activities, acceptedEvidence: raw.acceptedEvidence,
+      listingWindows: [win({ sessionId: OTHER, toolUseId: 'toolu_q1', after: ['main-wt', 'wt-plain'] })] }));
+    expect(control).toMatchObject({ kind: 'linked', rung: 4, activityId: activityOf(raw.activities, 'bash-worktree', 'toolu_q1', OTHER)!.activityId });
   });
   it('the name never links: an activity whose upstream id equals the name, with no meta, is still `unmeasured`', () => {
     const w = world([subagentStart(1, AGENT)]);

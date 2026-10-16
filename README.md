@@ -6298,9 +6298,10 @@ and an unmeasured hour is final: it is never read later as empty.
   `lastCheckpointRevision` and `lastIngestedAt` are the checkpoint's own anchors, and `lastTailHeal` (`at`, `bytes`, `quarantinePath`)
   appears only after this server process has healed a torn journal tail. Nothing in the PWA reads any of it.
 - **A `ccrc-server:` warning line, once per UTC hour** while a project's dropped-evidence keys are held back or lost, the global flag is
-  up, or a mark held a verdict back: it names the held-back and lost projects (names and counts, never a path), the number of marks
-  held, and, per kind of mark (path, id, project, lossy), how many trees were held at `unmeasured` since the last line. Marks live in the
-  lane's memory only and last until the server restarts, because this wave never compacts the journal.
+  up, a mark held a verdict back, or lost evidence held a link back: it names the held-back and lost projects (names and counts, never a
+  path), the number of marks held, and, per kind of mark (path, id, project, lossy), how many trees were held at `unmeasured` since the
+  last line, and, apart from the marks, how many trees lost evidence held there (a shed listing, an unmeasured hour, a lost creator;
+  below). Marks live in the lane's memory only and last until the server restarts, because this wave never compacts the journal.
 - **`ccrc doctor`'s `delegation-hooks` check** (skipped on a box recording `CCRC_ROLE=server`). Per rostered home it reads
   `settings.json` and requires the shipped session hook under every event `install-session-hooks.sh` writes; it FAILs a missing or
   unreadable registration, a home or roster it cannot read, a spool root that is a symlink or unsearchable, and a directory that exists
@@ -6334,12 +6335,63 @@ the spool directory are measured separately from the capability, and a missing r
 server rolls, take a fresh coordination snapshot and restore it into a fixture before starting the clock: the seven-day window starts
 only when the capability, doctor registration, server recovery and health reporting are all measured. That order is what makes the
 count safe, because the health does not consult doctor: a home with NO session hook registered still has its sessions' spool
-directories (ccd makes them at spawn), so its hours read as MEASURED-EMPTY, not unmeasured, exactly like a quiet session's. A session
+directories (ccd makes them at spawn), so its hours read as MEASURED-EMPTY, not unmeasured, exactly like a quiet session's, and never
+`directory-absent`: the rung-4 carve-out below does not reach such a home. A session
 the lane never saw live (born and gone while the server was down) counts in neither the measured nor the unmeasured hours. During it, read the malformed
 lines, vanished buckets, the unresolved, conflicting and unmeasured counts, the breaker, the snapshot validation and the retention
 daily. Eligibility activates nothing: Project, Adopt, Clean-shadow and Clean-live (waves 4 to 7) are each separately planned,
 approved, opened, reviewed and gated. `server/test/delegation-wave3.integration.test.ts` holds the closed scope census, which turns
 red if a door of those waves opens in this tree.
+
+**Rung 4: lost evidence, what it cannot see, and how its leases are listed.** Rung 4 links a raw tree to the one Bash call whose
+before- and after-listings differ by exactly that admin record, so what the lane does not hold is negative evidence. Lost evidence
+makes such a link `unmeasured` (retried, and counted on the warning line), never made: a Bash call of any session (the creator's own
+included) whose listing the hook shed to fit its line (`truncated: true`, no `listing`) and whose window overlaps the creator's; a
+session-hour recorded `unmeasured`, or whose bucket ends in a torn line, read as a window on every repository from the hour's start
+to twenty minutes after its end, and still after the checkpoint prunes the hour; and, when rung 4 has no candidate, an eviction or a
+lost window reaching back to the census that first listed the tree, which then keeps a rung-3 link of that tree `unmeasured`. After a
+restart that first sighting is unknown, so a tree listed before the restart links at rung 3 only once a measured census shows it gone
+and it is listed anew. A call counts for its session's project and for the repository its working directory lists (the nearest tree
+the census lists or the lane remembers, else the resolved projects root); a directory neither names counts for every repository, and
+while the root does not resolve (remote mode) that includes every main checkout, because the census lists linked worktrees only.
+
+- **What rung 4 cannot see**, carried to the operator: a `run_in_background` Bash call or a Monitor (its window closes before the job
+  adds the tree); a child process a foreground call leaves running (`&`, `nohup`, `setsid`); a foreground call whose text lacks the
+  `worktree` token (a script, a make or npm target, a git alias); a tool that is not Bash (`EnterWorktree`); a session with no spool
+  (not a ccd session, or no hook); a creator whose window is filed under another repository or under none (`git -C`, `cd <other> &&`);
+  anything outside Claude Code. A Bash line with neither `listing` nor `truncated` cannot be told from a command without the token. The
+  no-spool class includes the lost-hour rule's one carve-out: an hour recorded `directory-absent` for a session the lane never read a
+  spool of (no cursor row, no measured hour), and any `capability-absent` hour, vetoes nothing, so rung 4 links across both.
+- **Two closures contain it.** A tree named `agent-*` or `wf_*` is decided at rung 2 or not at all, and a tree a registry row or a
+  `.child` names is a ccd workspace (rung 1), never a lease.
+- **Named honestly.** Spec §5.3 says a lost event can delay or prevent a link, never create one, and §5.1 that a parent that is not a
+  ccd session is unmeasured by construction; rung 4 links across the classes above, so both cannot hold for it. A tree removed and
+  re-added under the same admin name between two census passes keeps the earlier lease. A rung-4 lease rests on one witness (its
+  creator's two listings), so the soak's rung-4 counts are not evidence that those links are correct. By the operator's ruling of
+  2026-10-16, rung-4 links are journaled during the soak, and the operator rules on their treatment before wave 4 displays them.
+- **Listing them.** In this wave a `lease-created` journal entry with `sourceKind: "raw"` is a rung-4 lease (nothing else writes `raw`).
+  Its `correlationJournalIds` name the creator's PreToolUse and PostToolUse records, which carry the call's `toolUseId` and both
+  listings verbatim:
+
+  ```sh
+  jq -s '(map(select(.entry.kind == "evidence-accepted")) | map({key: .journalId, value: .entry.event}) | from_entries) as $ev
+    | map(select(.entry.kind == "lease-created" and .entry.sourceKind == "raw"))
+    | map(.entry as $l | ($l.correlationJournalIds | map($ev[.] // {missing: .})) as $p
+      | {sequence, acceptedAt, leaseId: $l.leaseId, adminRecord: $l.adminRecord,
+         toolUseIds: ([$p[].toolUseId | select(. != null)] | unique),
+         before: [$p[] | select(.eventKind == "PreToolUse") | .listing],
+         after: [$p[] | select(.eventKind == "PostToolUse") | .listing],
+         missing: [$p[] | select(has("missing")) | .missing]})' ~/.ccrc/delegation-events.log
+  ```
+
+  Missing: the journal records no rung (`raw` means rung 4 in this wave only) and the lease no `toolUseId`; the negative evidence that
+  allowed the link is not kept with it (other sessions' calls around it are not held by the lease, unmeasured hours live only in the
+  checkpoint for 192 hours and torn-tail notes in its cursors for 48, the lane's horizon and dropped index are memory, and drops in the
+  hook and sessions with no spool leave no trace); the repository the listing was taken in is never recorded; and `firstObservedAt` is
+  the linking pass's time, not the creation's.
+- **No lease transition in wave 3.** A later answer that disagrees with a rung-4 lease (a rung-3 link to another parent, or a registry
+  row or `.child` naming the tree) files one final `conflicting` attempt (`rungs-disagree`) in the checkpoint only, and nothing
+  re-links the tree; the lease stays `linked`, and a leased tree is outside the health's verdict counts.
 
 ## Contributing
 
