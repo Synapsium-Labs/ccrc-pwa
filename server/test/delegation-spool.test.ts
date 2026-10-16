@@ -1258,9 +1258,10 @@ describe('the delegation spool: the hook appends evidence to a directory ccd mad
       const SHED = 3900;
       /** A worktree call whose n=0 and n=1 lines are over the cap and whose n=2 line (the cwd gone) is `SHED` bytes, well under it: three names would fit beside it. */
       const shedCall = (): { l: any; raw: string } => {
-        // The transcript path and agent type are inflated and the cwd has two 200-byte components (400 more bytes, all of them
-        // shed with the cwd at n=2), so n=0 and n=1 are over the cap and n=2 is the first line that fits.
-        const cwd = deep(2);
+        // The transcript path and agent type are inflated and the cwd has one 200-byte component more (all of it shed with the
+        // cwd at n=2), so n=0 and n=1 are over the cap and n=2 is the first line that fits: n=0 is 4,083 bytes plus the cwd's
+        // field, and n=1 (17 bytes more, with 17 reserved beside it) stops fitting at an n=0 of 4,061, whatever the repository path.
+        const cwd = deep(1);
         expect(bytes(cwd), 'this run\'s TMPDIR leaves room for the padded cwd').toBeLessThanOrEqual(B.pathBytes);
         const base = measured('/', 'x', repo);
         const { tp, at } = fill(SHED - 17 - (base - (7 + bytes(JSON.stringify(repo)))));   // everything but the cwd, plus `,"truncated":true`
