@@ -12129,8 +12129,8 @@ describe('history card line: SessionStart(compact) serves the sweep\'s predictio
     ['a record holding G and a NUL is no record', '', 'absent', 'G2', 'G-nul'],
     // D-5063 (review 479 F1): a record padded past the read window would read as empty (legacy) from `_ct_read`, which holds only the
     // first CCRC_ID_MAX characters. The CLI resolves the newest family, G, and recall-off names it: exit 8. A hook that took the record
-    // for empty would compare '' with G and serve. The record's one guard is the bounded NUL probe (`read -d '' -n CCRC_ID_MAX`),
-    // which answers rc 0 on a NUL or on CCRC_ID_MAX characters read, so it withholds both shapes; the value it tests is the probe's own
+    // for empty would compare '' with G and serve. Against both shapes, a window-filling pad and a NUL, the record's one guard is the
+    // bounded NUL probe (`read -d '' -n CCRC_ID_MAX`), which answers rc 0 on either, so it withholds both; the value it tests is the probe's own
     // read, ASCII-trimmed, never `_ct_read`'s `CT_V` (D-5064). The record spells no window test of its own.
     ['a generation record padded past the read window, recall-off names G', '', 'absent', 'G', 'G-wide'],
     ['a generation record padded past the read window, recall-off is stale (fail-closed: the CLI recalls)', '', 'absent', 'G2', 'G-wide', 'fail-closed'],
