@@ -1538,11 +1538,19 @@ Found mid-wave (issued from the block above, taken in order; each defined in the
     A crash at any step re-heals the same way, with no duplicate. This is the ONE named exception to Task 8 Step 4's no-truncate pin, W3-M22 and W3-M38.
   - **Capture never writes the journal.** Its last attempt copies the complete prefix and the checkpoint, and adds the additive field `delegation.journalTailOmitted {bytes, sha256}` to the version-1 manifest. It prints one warning line on stderr, which `ccrc backup`, `ccrc update` and `deploy.sh` pass through. The restore classifier accepts the field, and such a snapshot restores as a valid pair.
   - **Surfaces.**
-    - The server: a `console.warn('ccrc-server: …')` line, plus `/api/fleet/health`'s `delegation.lastTailHeal {at, bytes, quarantinePath}`. That one is in memory, the heal is never a failure, and it never makes health unmeasured.
+    - The server: a `console.warn('ccrc-server: …')` line, plus `/api/fleet/health`'s `delegation.lastTailHeal {at, bytes, quarantinePath}`. A heal is never a failure, and it never makes health unmeasured.
     - Capture: the stderr line, plus the manifest field.
   - **#384.** Its `collect-lane-generation.log` is never captured, restored or quarantined, and a row pins it.
 
   Commit `3075c75ff`.
+
+  **Amended after the held-out review of run 518 (F8; coordinator mails 5424, 5443 and 5504).** The server surface above is no longer "in memory". The quarantine directory `delegation-events.torn/` is read at every boot and every recovery, after any heal (`reportQuarantineLocked`, `server/src/coord/delegation-checkpoint.ts`). Two additive, optional fields carry what that read finds. Mail 5504 licensed both as D-4655's own surface, with no `FLEET_PROTO` change:
+  - **`foundAtBoot?: true` on `DelegationTailHeal`** (`shared/api.ts`). The read writes nothing, so no "reported" marker exists. A quarantined tail that no report of this process covers sets `lastTailHeal` at every boot, with the file's own modification time as `at` and its size as `bytes`, until an operator removes the file. The newest such file wins, unless this process reported a later heal itself. The field is absent for a heal this process made and reported.
+  - **`tailQuarantineUnmeasured?: true` on `DelegationObservationHealth`** (`shared/api.ts`). A quarantine directory that cannot be listed, a file in it that cannot be stat'ed, or a file whose time is no instant sets it. It is added to the member after the health is computed (`DelegationLane.health`, `server/src/watch.ts`), so it never moves `stageGate`, `circuitBreaker` or `unmeasuredRate`: it marks the heal REPORT unmeasured, not the health. An unlistable quarantine is no heal, so `lastTailHeal` stays absent for it.
+  - **Readers.** `server/src/server.ts` passes the member through to `/api/fleet/health`. No PWA, ui, agent or ccd code names either field. A wave-4 reader must read their absence as "not reported", never as "measured clean".
+  - **Rows.** In `delegation-recovery.test.ts`, "MUST 1: killed between the cut and the report, the NEXT boot reports the heal from the quarantine" and "MUST 1: every boot reports the newest quarantined tail again until it is removed" assert `foundAtBoot: true` and go red when it stops being set. "MUST 1: a quarantine that cannot be listed is UNMEASURED, never \"no heal\"" pins `tailQuarantineUnmeasured` at the durability level. In `delegation-watch.test.ts`, "MUST 1: a heal no report of this process covers … is on the health" pins `foundAtBoot` through the lane. The R86 row, "MUST 1: an unlistable quarantine is on the health as tailQuarantineUnmeasured, and the health's own verdict is unchanged by it", pins the second field and that every other member equals a run whose quarantine could be listed. In `fleet-health.test.ts`, "a healed torn journal tail (D-4655)" pins that `lastTailHeal` reaches `/api/fleet/health` and, through its exact key list, that `tailQuarantineUnmeasured` is absent when the quarantine listed. No `fleet-health` row sets `foundAtBoot` or `tailQuarantineUnmeasured`.
+
+  Commits `4690b2537` (the boot report and both fields) and `6a4e7d7ee` (the R86 row).
 - **D-4656** — `the-intent-door-is-exempt-like-the-claim-lanes` (Task 15): plan Task 15 Step 3 calls `POST /api/coordinators/:id/intent` "box-token gated and session-gated when auth is armed". The spec's route table gives it the credential "box token" and the check "caller is :id". Its census column calls it a box-token lane outside `/api/mail*` and `/api/runs*`, with an `auth/gate.ts` EXEMPT entry that carries a reason. Its only caller is a cookieless fleet session using `ccrc-api`, so session-gating it when armed would make it unreachable whenever auth is armed. On main, every lane such a session writes is EXEMPT, with the box token checked in the route:
   - the claim lanes;
   - the ask answer/release pair;
@@ -1626,4 +1634,79 @@ Found mid-wave (issued from the block above, taken in order; each defined in the
     Bounding it by the call's start rests on rung 4's existing premise that a Bash call lasts at most the margin. A closed window that does not add the record still lets rung 3 link. E2 likewise counts a same-session open-ended window as ambiguous.
 
   Rows and 26 mutant runs are in `delegation-correlation`, `delegation-watch` and `delegation-policy`; every new row was red first except the pins and one carve-out guard row, which is pinned by its mutant. Commits `321575468`, `5e7a55223`, `9854b654d`, `cd98cfd85`.
-- **Unused:** D-4660, D-4661, D-4662, D-4663 and D-4664 were issued to this wave (block D-4633..D-4664) and are unused.
+- **D-4660** — `the-restore-marker-refusal-sits-beside-the-opener` (Task 8; held-out review 518 F7; coordinator mail 5512): Task 8 Step 7 requires that "startup refuses active marker" and names no file for that check. The File Map's ownership note for Task 7's files (`schema.ts`, `store.ts`) and Task 7 Step 6 admit an edit to `server/src/coord/db.ts` only when an injected migration fault first proves its loop inadequate. Neither the File Map nor Task 8 names `server/src/index.ts`. The refusal was built in those two files all the same:
+  - `coordinationRestoreRefusal(ccrcDir, markerFile)` is exported from `server/src/coord/db.ts`, after `openCoordDb`, and the file gains one `lstatSync` import. `server/src/index.ts` calls it once, before `new CoordStore(openCoordDb(...))`, prints the answer with `console.error` and exits 1.
+  - It returns the refusal text when the restore marker exists, and `null` only on ENOENT. Any other answer (a directory, a dangling link, a parent that is not a directory, a permission error) is a refusal, because a marker that cannot be measured is not a marker that is missing.
+  - **Why it lives there.** The check must answer before the coordination database is opened, so that the process stops instead of opening a `coord.db` that disagrees with half-replaced sidecars. `db.ts` is the module that decides whether `coord.db` may be opened, and it already holds the server's other refusal to start (`CoordDbUnmigratable`). `index.ts` is the wiring ring (L5, which decides nothing) and starts the server when it is imported, so a decision placed there could not be called by a row. The marker's file name is handed in by the caller, because `config.ts` imports `db.ts` and the delegation modules must not enter every importer's graph.
+  - **What did not change.** `openCoordDb`, its migration loop and the `CoordDbUnmigratable` path are as they were; the diff to `db.ts` is the import and the new function. No migration fault asked for the edit, so Task 7 Step 6's admission is not what licensed it. The review's minority reading, that the note is scoped to the migration loop, is recorded here and not relied on. No code moved in the fix round for review 518.
+  - **Rows**, all in `delegation-watch.test.ts`, in "boot refusal (R24): an active restore marker, or one that cannot be measured, stops the server before coord.db is opened":
+    - "a marker present is a refusal that names the recovery command and says it is the server";
+    - "no marker (ENOENT, even when the directory itself does not exist yet) is no refusal";
+    - "fail closed: any other answer than \"absent\" is a refusal, because an unmeasurable marker is not a missing one";
+    - "a marker that is a directory or a dangling link is still a marker";
+    - "index.ts checks it BEFORE the line that opens coord.db, says it with console.error, and exits nonzero";
+    - "the real server process exits 1 with the refusal on stderr and never opens coord.db".
+
+  Commit `739735f38`.
+- **D-4661** — `the-worktree-listing-is-spliced-onto-the-jq-line` (Task 5; held-out review 518 F9; coordinator mail 5512): spec §5.3 ("the line is built in the hook's existing single `jq` call") and Task 5 Step 7 ("Implement the hook append in its existing `jq` call") put the whole spool line in that call. Two parts of a Bash worktree line are not built there, and the hook comment "THE LISTING" in `ccd/session-hook.sh` says so:
+  - The `listing` is built by a shell function, `_hook_spool_listing`, from the `.git` entry found walking up from the line's cwd. `_hook_spool_append` splices it onto the jq-built line as text.
+  - When the listing is dropped, `"truncated":true` is added to the line the same way, by cutting the closing brace and appending the key.
+
+  **Why.** jq cannot list a directory, and the cwd that names the directory is itself learned from the payload by that one jq call. So the listing cannot be built inside the call, and it cannot be built before it, because the cwd is not yet parsed. A second jq call after the cwd is known would add a fork to every Bash worktree event.
+
+  **The hot-path contract still holds.** Each part, checked in the hook at this commit:
+  - **No extra fork.** `_hook_spool_listing` runs no external command: it uses `[[ ]]`, `read -N`, parameter expansion, `shopt` and the glob `"$w"/*`. The one jq call stays the payload parse. (The hourly prune's `rm`, only when a stale bucket exists, is older and unrelated.)
+  - **One write.** The finished line goes out in one `printf '%s\n' "$dsp_line" >> "$f"` to an O_APPEND descriptor, after the splice.
+  - **Under 4 KiB.** `_hook_spool_append` writes nothing unless `${#dsp_line} + 1 < DSP_LINE_BELOW` (4096), under `LC_ALL=C`, so the count is bytes. The spliced candidate is tested against the same bound before it is taken. On a trigger line the jq reserves the 17 bytes of `,"truncated":true` (`$rs`), so the dropped-listing form still fits.
+  - **The listing is shed first.** It is added only when the jq line shed nothing (the line does not end in `"truncated":true}`), so a line that already shed fields never carries one. When it does not fit, or a name or the count is out of bound, it is dropped whole and the line is marked truncated. No other optional field is shed for it.
+
+  **Pins.** The review found the splice's two edge conditions unpinned (F1: the 17-byte reservation; F2: the rule that a line that already shed carries no listing). They are pinned in `delegation-spool.test.ts` by R96 (a near-cap worktree Bash line whose listing is dropped is still written) and R97 (a line that already shed fields carries no listing), both added in the fix round for review 518. The contract's other parts are pinned by existing rows in the same file:
+  - "listing is dropped FIRST when it cannot fit: the other optional fields stay, truncated is set, the line is under the cap";
+  - "when the listing is dropped the line is exactly the line it would have been with no listing, plus truncated:true";
+  - "the shed order is listing, claudeVersion, cwd, agentType, transcriptPath: ...";
+  - "the strict boundary: a line that is 4095 bytes with its LF is kept whole; 4096 is shed";
+  - "a name outside [A-Za-z0-9._@+-] (or over the name bound) drops the WHOLE listing and marks the line; a name at the bound stays";
+  - "more names than the count bound drops the whole listing; exactly the bound keeps it";
+  - "lines near the cap do not interleave: twelve hooks at once, each writing ~3.9 KiB";
+  - under "the append forks nothing the event did not already fork", "PreToolUse Bash that names a worktree: the same externals run whether the spool directory exists or not, so a line costs no fork".
+
+  Commit `e0cbd11cb`.
+- **D-4662** — `spool-bounds-and-grammars-are-chosen-in-shared-api` (Task 5; held-out review 518 F10; coordinator mail 5512): the vocabulary (Fixed Vocabulary and Interfaces, under the raw spool line) says "String and array bounds are fixed in Task 5's validation table". Task 5 has no such table. Its Step 3 names "identifier/list bounds" and fixes only the 4096-byte line cap. The worker chose the rest, from measurement, and declared them once:
+  - `DELEGATION_SPOOL_BOUNDS` in `shared/api.ts`: `lineBytesBelow` 4096 (the plan's), `idBytes` 64, `ownerIdBytes` 128 (the hook's `CCRC_ID_MAX`), `labelBytes` 128, `pathBytes` 512, `listingNames` 256 and `listingNameBytes` 64. The constant's doc comment gives each value's measured basis. Every count is UTF-8 bytes.
+  - The id grammar `[A-Za-z0-9_-]{1,64}`, for agent, tool-use, task, run and Claude session ids. It reuses the hook's own agent-id grammar (`idch`, `idmax`). Ingest spells it as `ID`.
+  - The listing-name grammar `[A-Za-z0-9._@+-]{1,64}`, tested in the hook against `DSP_NAME_BYTES` and a `=~` match, and in ingest as `LISTING_NAME`.
+  - A hook cannot import the constant, so `session-hook.sh` spells the numbers again (`def idmax:`, `def maxline:`, `def maxlabel:`, `def maxpath:`, `CCRC_ID_MAX`, `DSP_LINE_BELOW`, `DSP_LIST_NAMES`, `DSP_NAME_BYTES`). The server's ingest imports the constant.
+
+  **A hook drop that leaves no trace.** An id outside the grammar is never cleaned into one. An event whose agent id is outside it writes no line, and neither does a SubagentStart or SubagentStop with one; a session id or a tool-use id outside it does the same. The hook exits 0 with nothing printed and nothing recorded: no marker, no counter, no stderr. The server cannot tell such an event from one that never happened, and only the census backstops it. A lost event can delay or prevent a link and never create one (spec §5.3, D-4659).
+
+  **Rows.** In `delegation-spool.test.ts`:
+  - "the hook's literal bounds equal DELEGATION_SPOOL_BOUNDS" (the jq defs, and the shell constants, each spelled exactly once);
+  - "every bound is a positive integer, and the cap is the plan's 4096";
+  - "with every bound at its maximum, the REQUIRED fields of the largest variants still fit one line (so a line that cannot fit is a bug, not a case)";
+  - "an agent_id outside [A-Za-z0-9_-]{1,64}: no line, from any event (a cleaned lookalike must not ride, and a line without the id would read as the main thread)";
+  - "a PreToolUse with no tool_use_id, or an id outside [A-Za-z0-9_-]{1,64}, records nothing";
+  - "the Claude session id is the payload's, not the environment's; a missing or malformed one records nothing";
+  - "an owner id at the bound writes a line; one byte over writes nothing";
+  - "a source at the label bound is kept; one byte more is not";
+  - "an optional path over the byte bound is dropped, never cut, and marks the line; multibyte is counted in BYTES";
+  - the two listing rows named in D-4661 for the name grammar and the name and count bounds.
+
+  In `delegation-ingest.test.ts`: "identifiers are [A-Za-z0-9_-] and at most the bound", "labels, paths and the agent type are bounded in UTF-8 BYTES, not characters", "a listing is a bounded list of admin-record NAMES: ...", "the list-count bound alone refuses a listing of 257 SHORT names" and "the module reads no bound from a literal: every number comes from DELEGATION_SPOOL_BOUNDS or READ_FROM_MAX_BYTES".
+
+  Commits `e0cbd11cb` and `8453b53e1` (the bounds comment, and the owner bound read from `CCRC_ID_MAX`).
+- **D-4663** — `the-fallback-deploys-prune-takes-no-keep-set` (Task 8 Step 6; held-out review 518 W2; coordinator mails 5512 and 5515): Step 6 says "Keep newest N timestamp dirs, current operation dir, newest valid pre-operation coordination snapshot, and newest pre-operation tree backup independently", and D-4641 added a fifth set. Those keep sets bind only `_bak_prune` and `_bak_gc` in `ccd/ccrc`. A third pruner applies none of them:
+  - `prune_backups` in `deploy/deploy.sh` lists `~/ccrc-backups/[0-9]{8}-[0-9]{6}`, sorts by name and runs `rm -rf` on all but the newest `CCRC_BACKUP_KEEP` (default 10), through `head -n -$keep`. That is age only, with no classifier and no update lock. `ccrc update`'s `_upd_backup` names its directories in the same `%Y%m%d-%H%M%S` shape, so the glob reaches them too. The fallback deploy calls it once on each of its two arms, after that arm's own verification.
+  - Since this wave, the server arm of the same deploy writes the O3 coordination snapshot into one of those directories (`coordination-snapshot.mjs capture`, before the rsync). So the eviction D-4641 reserves to the operator, an empty snapshot displacing the newest data-bearing one past `CCRC_BACKUP_KEEP`, can happen through this pruner, which counts directories and cannot tell them apart.
+  - At `CCRC_BACKUP_KEEP=0`, `head -n -0` lists every directory, so the pruner removes the directory the same run just captured. At the default, the directory just captured always survives.
+
+  Wave 3 makes no `deploy.sh` edit. The file is inside the centralised-update programme's W16 fenced region (PR #444, which replaces the line that reads `CCRC_BACKUP_KEEP` with a check that accepts 0 through 9999).
+
+  **The operator's ruling of 2026-10-16 (mail 5515):**
+  1. The fallback deploy's age-only `prune_backups` is accepted for the soak.
+  2. Centralised-update W16 (#444) meets the operator's condition as D-5144. At `9c355b049`, #444's `CCRC_BACKUP_KEEP` check accepts 0 through 9999 (`deploy/deploy.sh` line 242). W16 keeps that test byte-equal to `_keep_ok` (D-5142) and adds a second, separate test: `prune_backups` refuses any all-zeros `CCRC_BACKUP_KEEP` (`0`, `00`, `0000`), prunes nothing, warns and returns 1. Its directory selection and its delete line stay byte-unchanged. `_bak_prune` and `_bak_gc` keep accepting 0 through 9999. D-5144 lands in W16's landing round, after #448, so it is pending at this writing (its head is not yet known).
+  3. `prune_backups` gets the full keep sets in a later wave, which the coordinator carries on delegation-broker wave 4's list.
+
+  **Rows.** None pins the keep sets on this pruner, because it has none. "both branches prune timestamped backups to a bounded set, without failing a completed deploy" in `agent/test/deploy-verify.test.ts` pins its present shape (timestamped directories only, `head -n -`, `xargs -r rm -rf`, one call per arm).
+
+  Commits: none in this wave changed `prune_backups`; the coordination snapshot that now shares its directories is `a0c385acc`.
+- **Unused:** D-4664 was issued to this wave (block D-4633..D-4664) and is unused.
