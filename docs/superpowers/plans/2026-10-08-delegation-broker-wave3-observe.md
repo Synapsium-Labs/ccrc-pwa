@@ -1412,7 +1412,7 @@ Found mid-wave (issued from the block above, taken in order; each defined in the
 - **D-4639** — `fixture-census-owner-created-and-q6-unmeasured` (Task 6): Step 4 names `server/test/delegation-fixtures.test.ts` (W3-M73's owner) and `server/test/public-content.test.ts`; neither existed and the File Map creates neither. `delegation-fixtures.test.ts` was created as the current-lane census: a committed current-lane list measured on 2026-10-14 from the fleet's running session executables (2.1.291, 2.1.296, 2.1.299), every rig scenario covered per lane, corpus versions equal the matrix's, and the matrix's unmeasured cells equal an explicit expected list. "Public content" is the repository's existing guards: `topology-clean`, `source-bytes`, `gitignore-secrets` and the sanitiser's `--scan`. The `--missing` capture (2.1.294, 2.1.295, 2.1.296, 2.1.299; run from a snapshot of `19c74281e`, no constituent failure, no residue) measured 53 of 56 new cells: `interrupt-exit` (spec §8.1 Q6, exit with a background agent) is `unmeasured` on 2.1.295, 2.1.296 and 2.1.299 (`waitLabels ["sub-hang","main-hang"]: timeout`; the mock never saw the main thread's post-launch call), recorded as unmeasured, never as absence, and listed in the census so a change reds. No parser or correlation may rely on that scenario's shape for those versions. Fixing the scenario and mock for 2.1.295+ is a rig follow-up outside this wave's files. Commit `85384c207`.
 - **D-4640** — `projection-upserts-sessions-and-never-inserts-events` (Task 7): the projection paragraph under the migration DDL prescribes a whole replacement that deletes and re-inserts `delegation_events` in a fixed order, but `DelegationCheckpointV1` carries no events. A literal replacement therefore either drops every event or must read every event back and re-insert it, which is synchronous O(events) work on each projection (measured 4.4 s at 100,000 events). `projectDelegationCheckpoint` instead runs one transaction with foreign keys on (asserted before BEGIN). The leaving sessions are those in SQLite but not in the checkpoint. It deletes lineage and leases, then only the leaving sessions' events (by index), then attempts and activities, then the leaving sessions. It upserts the checkpoint's sessions and inserts its activities, attempts, leases and lineage. It never inserts an event. Events reach SQLite only from the journal, through `insertDelegationEvent` or the batch `insertDelegationEvents`, which runs one transaction and reports conflicts rather than throwing. A checkpoint that repeats a session key is refused before BEGIN. Measured: 18 ms at 100,000 events when no session leaves, and 360 ms for a leaving session with 5,000 events (about 70–85 µs per event). Wave 3 never removes a session from the checkpoint (Task 8 pins this), so a leaving session arises only when the repair heals a drifted session. W3-M72 keeps its intent: FK-safe dependency order and a full rollback at every statement fault. It adds a mutant that deletes leaving sessions before their events, and a row proving that a projection over a large events table touches no event row of a staying session. Commits `ec00a2cbe`, `2388d04b5`.
 - **D-4641** — `an-empty-snapshot-never-evicts-the-newest-data-bearing-one` (Task 8): Step 6 keeps "the newest valid pre-operation coordination snapshot", and the manifest contract makes a nothing-present snapshot a valid v1 (every member `present:false`, delegation `absent`). Read literally, a backup taken after `coord.db` was lost would take that slot and let the older snapshot that holds data age out past `CCRC_BACKUP_KEEP`. That older snapshot is the only remaining copy of what `coord.db` adds over the flat files. Restoring the newer one would also remove the live DB, through its explicit absent-DB acknowledgement. `_bak_gc` therefore keeps a fifth independent set: the newest valid pre-operation snapshot that holds data (a `v1` with at least one member present, or a `legacy` dir). Both pruners skip it. `coordination-snapshot.mjs validate` prints a second line, `data: yes|no`; the four classifier words and their exits are unchanged. The coordinator licensed this reading because it deletes less (mail 5088). Letting an empty snapshot evict the data-bearing one would need an operator ruling. A mutant that drops the fifth set reds the keep rows in `ccrc-update.test.ts`. Commit `e07f315b6`.
-- **D-4642** — `a-torn-journal-blocks-capture-and-every-caller` (Task 8): Steps 5 and 8 make capture validate the live journal and checkpoint, and make `_upd_backup` and the fallback deploy continue only after a durable manifest. Task 8's recovery fails closed on a torn tail and never truncates the journal (W3-M22, W3-M38). Together, once a crash leaves the journal torn, that box can take no `ccrc backup`, no `ccrc update` and no fallback deploy until someone edits `~/.ccrc` by hand, and that includes the release that might repair it. Wave 3 accepts this and adds no override, because an override would change the O3 backup contract, which needs an operator ruling. The coordinator has put a typed as-found capture escape to the operator (mail 5090). The README's backup paragraph states the refusal. Commits `a0c385acc`, `e07f315b6`.
+- **D-4642** — `a-torn-journal-blocks-capture-and-every-caller` (Task 8): Steps 5 and 8 make capture validate the live journal and checkpoint, and make `_upd_backup` and the fallback deploy continue only after a durable manifest. Task 8's recovery fails closed on a torn tail and never truncates the journal (W3-M22, W3-M38). Together, once a crash leaves the journal torn, that box can take no `ccrc backup`, no `ccrc update` and no fallback deploy until someone edits `~/.ccrc` by hand, and that includes the release that might repair it. Wave 3 accepts this and adds no override, because an override would change the O3 backup contract, which needs an operator ruling. The coordinator has put a typed as-found capture escape to the operator (mail 5090). The README's backup paragraph states the refusal. Commits `a0c385acc`, `e07f315b6`. **Superseded by D-4655** (the operator's ruling of 2026-10-15, coordinator mail 5246): a torn tail now heals itself, and capture keeps the complete prefix.
 - **D-4643** — `restore-measures-the-service-through-systemd-only` (Task 8): Step 7 requires the service "stopped and measured inactive". The helper measures it with `systemctl --user is-active` and treats only `inactive` or `failed` as stopped. Any other word, a missing `systemctl`, a signal or the 10 s timeout is unmeasured, and the restore refuses. So a macOS (launchd) server box can never restore in wave 3. That is the fail-closed direction the ruling chose (unmeasurable refuses, W3-M34). A `launchctl print` probe is a follow-up. The helper also probes again once the restore marker is durable, and the verb takes `~/.ccrc/update.lock` for `restore` and `recover`. Commits `a0c385acc`, `e07f315b6`.
 - **D-4644** — `red-first-observed-by-mutants-for-two-caller-files` (Task 8): the Global Constraints require red-first. For `coordination-snapshot`, `delegation-recovery` and `install-census`, Task 8's second half recorded RED before implementing. It first ran `ccrc-update.test.ts` and `agent/test/deploy-verify.test.ts` only after the implementation existed. For those two files the evidence is the mutation record:
   - `deploy-verify`: W3-M32, 1 failed.
@@ -1482,3 +1482,86 @@ Found mid-wave (issued from the block above, taken in order; each defined in the
   - no O1–O5 decision is touched.
 
   Commits `e8ce55f27` (doctor) and `739735f38` (health).
+- **D-4652** — `the-lane-reads-retained-evidence-through-the-applier` (Task 13): the plan fixes `DelegationDurability`'s doors, and none lets the watcher lane read retained journal evidence. Its correlation needs that evidence after a restart, and no other production source may name the journal file. So `DelegationDurability` gains one read-only door, `visitRetainedRecords(visit)`. Within the coordinator's bounds (mail 5213 (a)):
+  - it enqueues on the applier's own serialized queue, so it never reads a half-appended record and never races a prune;
+  - it calls `requireReady()`;
+  - it opens no write, rename or truncate target, so Task 8 Step 4's pin stays green, and `delegation-events.log` is still named only inside the durability adapter;
+  - a read or validation failure DURING a visit folds the lane to unmeasured, and partial evidence never reaches correlation (D-4008);
+  - retained records before `appliedJournalSequence` take part only where the checkpoint lacks the activity, and ids already mapped are used verbatim.
+
+  Rows pin the serialization and the mid-visit failure. Commits `739735f38`, `6dcc8b2ec`.
+- **D-4653** — `an-evicted-event-never-decides-a-link` (Task 13): spec §5.3 says a lost event can delay or prevent a link, never create one. The lane holds evidence in memory under a cap, and at a restart `loadEvidence` truncates the whole journal to that cap. Rung 4's overlap rule, and the vetoes of rungs 2 and 3, are NEGATIVE evidence. So eviction could turn an unresolved tree into a permanent `lease-created`. The plan's `DelegationCorrelationInput` has no field that can say this. The fix, built over five review rounds:
+  - **Rung 4.** The input gains an evidence horizon. Rung 4 answers `unmeasured('evidence-horizon')` when any same-repository window is open-ended or starts at or before the horizon, or the candidate starts within a 20-minute inclusive margin of it. The margin assumes Bash calls stay within Claude Code's maximum Bash timeout, which `BASH_MAX_TIMEOUT_MS` can raise. A new reason, `evidence-horizon`, joins `DELEGATION_CORRELATION_REASONS`, and policy's total table maps it to not-work.
+  - **Rungs 2 and 3.** The lane keeps a dropped-evidence index: distinct keys of every dropped event, including the tuple-mates of an evicted event. A rung-2 or rung-3 link of activity A (parent p, upstream X) at path C answers `unmeasured('evidence-horizon')` if a dropped event either:
+    - (a) names X from a parent other than p; or
+    - (b) has cwd C and either carries no `agentId` and comes from p, or carries another `agentId` and is not a SubagentStart/Stop.
+
+    `combine` never lets a link beat an `evidence-horizon` answer.
+  - **A lost index is not an empty one.** The index is unmeasured until `loadEvidence` has re-streamed the whole retained journal, and every rung-2/3 link (rung 4 too) answers unmeasured until then (D-4008, coordinator mail 5354).
+  - **Pruning, rulings R69–R71 and R73–R75.** A key is forgotten only when a census of its project, measured in the same pass, shows every tree it could veto is gone. Otherwise it is replaced by a coarser mark that still forces unmeasured:
+    - a 64-bit hash of a forgotten cwd path;
+    - a 64-bit hash of a forgotten upstream id;
+    - a lost project, at a per-project held-key cap or a mark-set overflow;
+    - one global flag, only for marks attributable to no project that exceed the cap.
+
+    Further rules:
+    - a transient null-path diagnostic holds only its own project, for at most 3 passes over 10 minutes; a standing one never holds;
+    - `refused-project` counts as measured-with-no-trees;
+    - `not-a-checkout` counts only after 3 consecutive passes spanning at least 10 minutes;
+    - after a restart, remembered paths are seeded from the checkpoint's leases and attempts, and each project waits until it is re-measured.
+  - **Liveness (coordinator mail 5406).** Marks last until a restart, whose `loadEvidence` rebuilds the exact keys, because wave 3 never compacts the journal. A mark set for a tree that stays alive therefore keeps that tree's rung-2 and rung-3 links unmeasured until the next restart. An hourly `ccrc-server:` warn line counts, per mark kind, the links each forced to unmeasured. It also names blocked and lost projects and the global flag.
+  - **Bounds.** The index and marks live in lane memory only: no file, no SQLite-only state, journal untouched (mails 5213, 5354). Wave 4's journal compaction is what makes marks finite.
+
+  Commits `6dcc8b2ec`, `4f89ae867`, `90c573042`, `46c5ec4bf`, `c689445e2`.
+- **D-4654** — `bucket-cursors-retire-past-the-read-horizon` (Task 13): spec §5.3 keeps spool buckets 24 h and gives the server one cursor per (session, bucket). The plan keeps cursors checkpoint-only and sets no retention, so cursor rows grew without bound, and every application rewrites the whole checkpoint. Measured at 20 owners: 166 ms per application at the new retention, against 774 ms with 30 days of cursors.
+  - `delegation-model.ts` gains `DELEGATION_CURSOR_RETENTION_HOURS = DELEGATION_SPOOL_LOOKBACK_HOURS + 24` (48 h), a pure `delegationBucketReadable`, and a pure `planDelegationCursorRetention(cursors, intervals, nowMs)`.
+  - The lane reads no bucket past the 24 h lookback. `DelegationDurability.pruneBucketCursors(nowMs)` drops, under the applier's own lock and through the normal checkpoint application, only cursors whose interval row is already recorded and whose hour is past 48 h. It runs at most once per UTC hour, and a failed prune retries hourly too.
+
+  It stays within the coordinator's bounds (mail 5213 (b)):
+  - no new file, no SQLite-only state, no journal change;
+  - a relisted bucket is never read as new evidence, because the read horizon forbids it and eventIds dedupe against the retained journal;
+  - intervals and the health arithmetic are identical across a prune. `lastCheckpointRevision` moves by +1 as replacement metadata (mail 5354).
+
+  Commits `6dcc8b2ec`, `4f89ae867`.
+- **D-4655** — `a-torn-journal-tail-heals-itself` (Task 8C; the operator's ruling of 2026-10-15, coordinator mail 5246; supersedes D-4642): a crash or failed write in the middle of an append leaves at most one partial line after the last LF, and nothing refers to it. Under O5 a record is applied only after the journal fsync, the checkpoint is replaced only after that, and the bucket cursor still points before its spool line. So the next pass reads the line again and mints the same eventId.
+  - **What is healable.** A tail is HEALABLE iff all of these hold:
+    - the journal ends in bytes after its last LF;
+    - every complete record validates, with an intact chain;
+    - the checkpoint's applied position names a complete record, or none.
+
+    `missing-final-lf` is healable unless the checkpoint names that record. Everything else stays fail-closed.
+  - **The server heals.** Recovery classifies a healable tail as a successful recovery that carries a heal plan. `DelegationDurability` then, inside its serialized queue and before any append:
+    - keeps the bytes in `delegation-events.torn/<offset>-<sha256>.tail` (temp write, fsync, rename, directory fsyncs);
+    - cuts the journal to the end of the last complete record;
+    - fsyncs the journal and its directory.
+
+    A crash at any step re-heals the same way, with no duplicate. This is the ONE named exception to Task 8 Step 4's no-truncate pin, W3-M22 and W3-M38.
+  - **Capture never writes the journal.** Its last attempt copies the complete prefix and the checkpoint, and adds the additive field `delegation.journalTailOmitted {bytes, sha256}` to the version-1 manifest. It prints one warning line on stderr, which `ccrc backup`, `ccrc update` and `deploy.sh` pass through. The restore classifier accepts the field, and such a snapshot restores as a valid pair.
+  - **Surfaces.**
+    - The server: a `console.warn('ccrc-server: …')` line, plus `/api/fleet/health`'s `delegation.lastTailHeal {at, bytes, quarantinePath}`. That one is in memory, the heal is never a failure, and it never makes health unmeasured.
+    - Capture: the stderr line, plus the manifest field.
+  - **#384.** Its `collect-lane-generation.log` is never captured, restored or quarantined, and a row pins it.
+
+  Commit `3075c75ff`.
+- **D-4656** — `the-intent-door-is-exempt-like-the-claim-lanes` (Task 15): plan Task 15 Step 3 calls `POST /api/coordinators/:id/intent` "box-token gated and session-gated when auth is armed". The spec's route table gives it the credential "box token" and the check "caller is :id". Its census column calls it a box-token lane outside `/api/mail*` and `/api/runs*`, with an `auth/gate.ts` EXEMPT entry that carries a reason. Its only caller is a cookieless fleet session using `ccrc-api`, so session-gating it when armed would make it unreachable whenever auth is armed. On main, every lane such a session writes is EXEMPT, with the box token checked in the route:
+  - the claim lanes;
+  - the ask answer/release pair;
+  - the ledger allocator.
+
+  The plan is therefore corrected to the spec's row (coordinator mail 5354). The route checks, in order:
+  1. configured;
+  2. box token;
+  3. closed body;
+  4. `byId === :session`;
+  5. attribution;
+  6. current incarnation;
+  7. serialized checkpoint mutation;
+  8. projection.
+
+  The route parameter is spelled `:session`, because `routes.test.ts` integer-parses every `:id` in `coord/routes.ts`. The EXEMPT table, CLAUDE.md and the census all key on that pattern. Task 15's review confirmed all four of these:
+  - an armed gate passes only this exact (POST, pattern) pair;
+  - a missing or wrong token is refused before any state is touched;
+  - a session sets or clears only its own intent;
+  - the door is in neither UNGATED nor SESSION_ONLY.
+
+  Commits `ab01f78c8`, `69b605cf4`.
