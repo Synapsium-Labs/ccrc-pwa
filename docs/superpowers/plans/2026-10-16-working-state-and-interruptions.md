@@ -4,49 +4,56 @@
 
 **Spec:** `docs/superpowers/specs/2026-10-16-working-state-and-interruptions-design.md` (the measurements, the rulings, the design and the invariants). This plan does not restate the design's reasoning; read the spec section named in each task first.
 
-**Branch of this file:** `docs/working-state`, cut from `origin/main` `0b3ff2f6`. Each task's branch is its own (`fix/…` or `feat/…`), cut from `origin/main` at dispatch.
+**Branch of this file:** `docs/working-state`, cut from `origin/main` `0b3ff2f6` and merged up to `a6b2606c`. Each task's branch is its own (`fix/…` or `feat/…`), cut from `origin/main` at dispatch.
 
-**Status:** rev 0 (2026-10-16). Task 0 is done in the commit that adds this file. Tasks 1 to 10 are the status fixes, ruled "build now, merge when green". Tasks 11 to 19 follow.
+**Status:** rev 1 (2026-10-16), after one adversarial review: the stall watch's clocks move with the agent-event change (Task 2), the probe cannot set off a user-tree OOM (Task 13), hibernation holds on scheduled work, every non-terminal run and an attached terminal and journals itself as deliberate (Tasks 16 to 17b), the two fleet-after-server gates are enforced by the rollout's form, and Task 17 is split into 17a and 17b. Task 0 is done in the commits that add this file. Tasks 1 to 10 are the status fixes, ruled "build now, merge when green". Tasks 11 to 19 follow.
 
 **Operator rulings this plan builds on** (2026-10-16; the spec's §2 has them in full):
-- **Capacity:** hibernate long-idle sessions (Tasks 16 to 19); the OOM victim policy, verified on throwaway transient scopes first and shipped through ccrc's deploy together with the tmux-server drop-in (Tasks 13 to 15). No hard session cap, no bigger box.
+- **Capacity:** hibernate long-idle sessions (Tasks 16 to 19, with 17 split into 17a and 17b); the OOM victim policy, verified on throwaway transient scopes first and shipped through ccrc's deploy together with the tmux-server drop-in (Tasks 13 to 15). No hard session cap, no bigger box.
 - **Display:** `working · N in background` until the delegated work ends; `done`, its badge and its Finished push only after (Task 1).
 - **Swaps:** auto swaps re-check idle at the act and re-queue; rescues re-confirm the block and back off while output flows; manual swaps refuse a busy session without "swap anyway" (Tasks 11 and 12).
 - **Status fixes, now:** Tasks 1 to 10.
-- **Coordinator calls:** an interrupt over delegated work warns (Task 6); an Escape- or kill-ended turn pushes no Finished (Task 3).
+- **Coordinator calls:** an interrupt over background-only work (delegated work after the main turn, or the live word `shell`) warns (Task 6); an Escape- or kill-ended turn pushes no Finished (Task 3).
 
-**Citations** are to `origin/main` `0b3ff2f6`, written `≈:` and always with a function or constant name. Every path in this plan was checked to exist there, except the files a task says it creates.
+**Citations** are to `origin/main` `a6b2606c`, written `≈:` and always with a function or constant name. Every path in this plan was checked to exist there, except the files a task says it creates. **[B]** marks a reading of Claude Code's hook-input schema or task code in an installed 2.1.300 binary (read-only `strings`, nothing executed).
 
 ---
 
 ## The fix ordering
 
-The verifier required one order (the dispatch gate before the compaction carry); the design adds the others below. A task's PR may merge as soon as it is green and reviewed; the **deploy gates** below are what order the fleet.
+The verifier required one order (the dispatch gate before the compaction carry); the design adds the others below. A task's PR may merge as soon as it is green and reviewed; the **deploy gates** below are what order the fleet, and the **rollout form** column is how each gate is enforced rather than stated (spec §6.1).
 
-| # | Task | D | Lane | Depends on | Deploy gate |
-|---|---|---|---|---|---|
-| 1 | background-aware working | D-5231 | FLEET FIRST (hook), then server | — | — |
-| 2 | agent events keep the main state; the roster by `agent_id` | D-5232 | FLEET (hook) | 1 | never on the fleet before Task 1; the same release is fine |
-| 3 | Finished needs a main Stop | D-5233 | server | — | — |
-| 4 | failed reads are unmeasured | D-5234 | server | — | — |
-| 5 | Escape on a sheet never interrupts | D-5235 | server (PWA bundle) | — | — |
-| 6 | an interrupt over delegated work warns | D-5236 | server (and PWA) | 1 | — |
-| 7 | interrupt sources recorded | D-5237 | server (and PWA) | 6 | — |
-| 8 | restart causes recorded and named | D-5237 | FLEET FIRST (`ccd`), then server | — | — |
-| 9 | the dispatch `/clear` gate needs live idle | D-5238 | server | — | **must be on the server box before Task 10's hook reaches the fleet** |
-| 10 | compactions carry the prior state | D-5239 | FLEET (hook) | 9 | `/health`'s `version` on the server box is at or past Task 9's release |
-| 11 | swap guards, `ccd` half | D-5240 | FLEET (`ccd`) | — | — |
-| 12 | swap guards, server and PWA half | D-5240 | server | 11 | the fleet box's `ccd caps` lists `swap-busy-v1` (otherwise it degrades, see the task) |
-| 13 | victim policy: verification | D-5241 | **operator act** | — | operator approval naming the SAFETY rule |
-| 14 | victim policy: ship it | D-5241 | FLEET (install spine, `ccd`) | 13 | — |
-| 15 | victim policy: rollout | D-5241 | **operator act** | 14 | — |
-| 16 | hibernation, `ccd` half | D-5242 | FLEET (`ccd`, agent) | 2 | — |
-| 17 | hibernation, server half | D-5242 | server | 16 | the fleet box's `ccd caps` lists `hibernate` |
-| 18 | hibernation, PWA half | D-5242 | server (PWA bundle) | 17 | — |
-| 19 | hibernation: shadow week, then arming | D-5242 | **operator act** | 18 | a shadow week with no wrong verdict |
-| M | the instrument, the baseline and every after-measurement | — | read-only | — | never holds a status fix back (see the task) |
+| # | Task | D | Lane | Depends on | Deploy gate | Rollout form |
+|---|---|---|---|---|---|---|
+| 1 | background-aware working | D-5231 | FLEET FIRST (hook), then server | — | — | default |
+| 2 | agent events keep the main state; the roster by `agent_id`; the stall clocks read `aliveAt` | D-5232 | **SERVER FIRST** (hook, and the stall watch on the server) | 1, 9 | the server box's `/health` `version` at or past Task 1's and Task 9's releases | `--server-first`, unless the server box already reads at or past both |
+| 3 | Finished needs a main Stop | D-5233 | server | — | — | default |
+| 4 | failed reads are unmeasured | D-5234 | server | — | — | default |
+| 5 | Escape on a sheet never interrupts | D-5235 | server (PWA bundle) | — | — | default |
+| 6 | an interrupt over background-only work warns | D-5236 | server (and PWA) | 1, 9 | — | default |
+| 7 | interrupt sources recorded | D-5237 | server (and PWA) | 6 | — | default |
+| 8 | restart causes recorded and named | D-5237 | FLEET FIRST (`ccd`), then server | — | — | default |
+| 9 | the dispatch `/clear` gate needs live idle | D-5238 | server | — | — | default |
+| 10 | compactions write no hookstate | D-5239 | **SERVER FIRST** (hook) | 9 | the server box's `/health` `version` at or past Task 9's release | `--server-first`, unless the server box already reads at or past it |
+| 11 | swap guards, `ccd` half | D-5240 | FLEET (`ccd`) | — | — | default |
+| 12 | swap guards, server and PWA half | D-5240 | server | 11 | the fleet box's `ccd caps` lists `swap-busy-v1` (otherwise it degrades, see the task) | default (`capSupported` enforces it) |
+| 13 | victim policy: verification | D-5241 | **operator act** | — | operator approval naming the SAFETY rule | — |
+| 14 | victim policy: ship it | D-5241 | FLEET (install spine, `ccd`) | 13 | — | default |
+| 15 | victim policy: rollout | D-5241 | **operator act** | 14 | — | default |
+| 16 | hibernation, `ccd` half (and the hook's `crons`) | D-5242 | FLEET (`ccd`, hook, agent) | 2 | — | default |
+| 17a | hibernation, server: the verdict, the shadow sweep, `hibernatedAt` | D-5242 | server | 16 | — (it never acts; before Task 16's hook every row holds `scheduled`) | default |
+| 17b | hibernation, server: the live act, the wake paths, the census | D-5242 | server | 17a | the fleet box's `ccd caps` lists `hibernate` | default (`verbSupported` enforces it) |
+| 18 | hibernation, PWA half | D-5242 | server (PWA bundle) | 17b | — | default |
+| 19 | hibernation: shadow week, then arming | D-5242 | **operator act** | 18 | a shadow week with no wrong verdict | — |
+| M | the instrument, the baseline and every after-measurement | — | read-only | — | never holds a status fix back (see the task) | — |
 
-**Lanes, in this repository's terms.** FLEET FIRST is `ccrc rollout`'s default order (the fleet box, then the server box): the server reads what the hook and `ccd` write, and every reader in this plan treats an absent new field as the old behaviour, so a fleet box ahead of its server is always safe. A server-lane task changes nothing on the fleet box.
+**Lanes, in this repository's terms.** FLEET FIRST is `ccrc rollout`'s default order (the fleet box, then the server box): the server reads what the hook and `ccd` write, and every reader in this plan treats an absent new field as the old behaviour, so a fleet box ahead of its server is safe **for a new field**. Tasks 2 and 10 add no field the server must read: they change what an existing field means (a hook `done` now stands through delegated work and through a compaction), and they are safe only once the server is reading the live word beside it (Task 1's `!delegated` rung, Task 9's dispatch gate). They are SERVER FIRST:
+- the release that first carries Task 2's or Task 10's hook is rolled out with `ccrc rollout --to <tag> --server-first`, unless the server box's `/health` `version` (or `ccrc update --check`, or `GET /api/updates`) already reads at or past every release in that row's Depends on;
+- `--server-first` is safe for every server half in this plan, because each reader treats an absent field as before; a server leg whose health gate fails restores the server and exits 4, and `rollout` stops there, so the fleet box is never moved past a server that did not take the release (an exit 3 leaves the server on the new build, so continuing is still behind the prerequisite);
+- the PWA's one-tap apply (`POST /api/updates/apply`), which always moves the fleet node first, is not used for such a release until the server box reads at or past its prerequisites;
+- the coordinator records, in the task's PR or its landing note, the release tag, the rollout command used and the server box's `version` before the fleet leg.
+
+A server-lane task changes nothing on the fleet box.
 
 ---
 
@@ -55,13 +62,14 @@ The verifier required one order (the dispatch gate before the compaction carry);
 `CLAUDE.md` is the authority. This is its working subset for this plan.
 
 - **Public repository.** Fixtures use neutral names: session ids `lane-a-project-a` and `project-a-quiet-basin`, wrappers `lane-a`/`lane-b`, agent ids such as `a0000000000000001`, workflow ids such as `w00000001`. No hostnames, accounts, project names, absolute home or scratch paths, emails, or anything read from a transcript.
+- **Hook payload fixtures copy a committed real shape.** Every Stop, SubagentStart/Stop, PreToolUse or compaction payload this plan's tests build copies the key set of the matching event in a committed capture under `server/test/fixtures/delegation/` (2.1.280 onwards: a Stop carries `session_id`, `transcript_path`, `cwd`, `prompt_id`, `permission_mode`, `effort`, `hook_event_name`, `stop_hook_active`, `last_assistant_message`, `background_tasks` and `session_crons`, and each task `{id, type, status, description}` plus its type's own key), with neutral ids, the captures' own neutral rig paths and neutral free text. A fixture never carries a key set no capture shows, and the five measured fleet type strings (`workflow`, `subagent`, `shell`, `monitor`, `teammate`) are the ones it uses; any other label is marked DERIVED with its source ([B]).
 - **Commands.** From inside the package, in the foreground, tool timeout at least 600000 ms, one suite process at a time: `./node_modules/.bin/vitest run test/<file>.test.ts`. Never bare `npx vitest`. Typecheck with `./node_modules/.bin/tsc --noEmit -p .` in `server/` and `pwa/`. Every task also runs `single-definition`, `deviation-refs` (after `git fetch -q origin main`), `dtbd` and `topology-clean`, and `routes` when it touches a route.
 - **Fixture HOMEs only.** Every `ccd` test runs under `makeCcdHarness` (`server/test/ccdWsHelpers.ts`) with stubbed `tmux`, `systemctl` and `journalctl`. Nothing in a test touches the live `$HOME`, tmux, `~/.cc-sessions`, `~/.cc-limits` or a `claude-session@*` unit.
 - **The hook.** Nothing new above `ccd/session-hook.sh:2900` (README anchors that line; `marker-logic-in-the-tail`, D-3615). New hook tests go in new files with the harness copied from `server/test/session-hook-turnmark.test.ts`; `session-hook.test.ts` is edited only for its hot-path budget pin. The PostToolUse budget (p95 of 20 runs under 150 ms) holds for main and agent payloads alike.
 - **`ccd/ccd` carries a generated marker** (`# ccrc:generated 1 sha256=…`, `shared/mark.mjs`). Re-stamp it after every edit and verify it independently; keep the executable mode.
 - **Mutation discipline.** Every guard ships with a test that goes RED when the guard is deleted and when it is made wrong. Apply each mutant to the uncommitted change, run the named suite alone, record the red line in the PR, restore the file and compare it byte for byte.
 - **Wire discipline.** New fields are additive and read through one reader each; absent means the old behaviour; `reviveFleetSession` computes each one (it returns a literal, so a missing field is a compile error). No new `SessionBucket` or `SessionLifecycle` member. `FLEET_PROTO` stays 1. A new refusal code joins its union and its map in `shared/api.ts`, never spelled at a call site.
-- **Single definition.** The delegated-kind rule (every kind but `shell` and `monitor`), the turn verdict (`stopVerdict`) and the hibernation markers each have one home, registered in `server/test/single-definition.test.ts`.
+- **Single definition.** The delegated-task rule (D-5231: the six non-delegating kinds and the three terminal statuses), the turn verdict's reads (`turnVerdictFor`) and the hibernation markers each have one home, registered in `server/test/single-definition.test.ts`; the hook's `jq` spelling of the delegated-task rule is the documented second copy, held equal to the TypeScript one by a test that iterates over it (Task 1).
 - **SAFETY.** No session runs an operator act. Each operator act names, in its approval request, the SAFETY rule it is taken under (`CLAUDE.md`, "SAFETY — sacred, never violate").
 - **Branches and commits.** One PR per task. Never push from a worker; the coordinator lands through the merge queue. End commit messages with the attribution trailer the run's system prompt gives.
 - **Deviation ledger.** D-5231 to D-5242 are issued and defined once, in §Deviations found. No tracked file carries a concrete placeholder of the `D-TBD-<slug>` form (`dtbd.test.ts`).
@@ -74,46 +82,59 @@ The verifier required one order (the dispatch gate before the compaction carry);
 
 - [x] The spec and this plan, written from the investigation's verified record, with the verifier's corrections applied where they override the diagnosis (the roster's mechanism, the OOM victim ranking, the memory per process, the swap and Finished-push counts, the fix ordering, the teammate caveat, the type strings).
 - [x] D-5231 to D-5242 defined in §Deviations found; `deviation-refs`, `dtbd`, `topology-clean` and `single-definition` green.
+- [x] Rev 1: every defect of the adversarial review corrected, each against the cited code on `a6b2606c` (the stall clocks, the probe's safety, scheduled work, every non-terminal run, the deliberate journal row, the enforced rollout form, the compaction field set, the swap path's gate order and flags, the status rule, Forget, attached terminals, the drawer, the done-badge limit, the 17a/17b split and Task 9's seam); no new number.
 
 ### Task 1: background-aware working (D-5231)
 
 **Spec:** §5.1. **Routing:** band 3. **Lane:** FLEET FIRST, then server; one PR.
 
 **Files:**
-- Modify `ccd/session-hook.sh`: the Stop arm's `background_tasks` parse (≈:3024) emits two more lines, the delegated count and the delegated kinds; `_hook_fresh_read` (≈:3954) reads `bgDelegated` and `bgDelegatedKinds` as two more lines, appended last; the SubagentStart/SubagentStop arm (≈:3980) carries them; the hookstate write (≈:4031) adds both on a main Stop whose `bg` is not `-1`, and on an agent event that carried them.
+- Modify `ccd/session-hook.sh`: the Stop arm's `background_tasks` parse (≈:3024) emits two more lines, the delegated count and the delegated kinds, both over the tasks that pass the delegated-task rule (below); `_hook_fresh_read` (≈:3954) reads `bgDelegated` and `bgDelegatedKinds` as two more lines, appended last; the SubagentStart/SubagentStop arm (≈:3980) carries them; the hookstate write (≈:4029) adds both on a main Stop whose `bg` is not `-1`, and on an agent event that carried them.
 - Modify `server/src/hookstate.ts` (`readHookStateRawMeasured`, ≈:270): `HookState.background?: {count, kinds}`; a malformed value is absent.
-- Modify `shared/api.ts`: `FleetSession.background` (beside `subagents`, ≈:233), `BucketInput` (≈:1367) gains `'background'`, `sessionBucket` (≈:1444), `reviveFleetSession` (absent → null), and `DELEGATED_KIND` (the one rule: `(k) => k !== 'shell' && k !== 'monitor'`) for the server's and the PWA's wording.
+- Modify `shared/api.ts`: `FleetSession.background` (beside `subagents`, ≈:233), `BucketInput` (≈:1367) gains `'background'`, `sessionBucket` (≈:1444), `reviveFleetSession` (absent → null), and the one home of **the delegated-task rule** (`NON_DELEGATING_TASK_KINDS` = `shell`, `monitor`, `mcp-task`, `dream`, `auto-mode-scan`, `memory-import`; `TERMINAL_TASK_STATUSES` = `completed`, `failed`, `killed`; `isDelegatedTask({type, status})`), for the server's and the PWA's wording. The kinds are Claude Code's own type labels (`t_r` map) after the hook's existing cleaning, and the statuses its task code's terminal words [B]; a kind or status no build has shown counts as delegated and running.
 - Modify `server/src/fleet.ts` (`assembleFleet`, ≈:574 where `liveCoversWorkflows` is set, and the row literal).
 - Modify `pwa/src/fleet/SessionLine.tsx` (≈:118), `pwa/src/fleet/SessionMeta.tsx` (the wedge qualifier, ≈:248), `pwa/src/session/SessionHeader.tsx` (≈:189–201), `pwa/src/screens/SessionScreen.tsx` (≈:198, ≈:436).
 - Modify `README.md`, "The attention bucket" (≈:5779, the D-75 paragraph): what a Stop with delegated work does now, and the correction to the 2026-08-17 spec's §3 claim.
-- Create `server/test/session-hook-background.test.ts`. Modify `server/test/bucket.test.ts`, `server/test/hookstate.test.ts`, `server/test/fleet.test.ts`, `pwa/test/session-line.test.tsx`, `pwa/test/header.test.tsx`, `pwa/test/fleetFixture.ts`, `server/test/single-definition.test.ts`.
+- Create `server/test/session-hook-background.test.ts` and its fixtures. Modify `server/test/bucket.test.ts`, `server/test/hookstate.test.ts`, `server/test/fleet.test.ts`, `pwa/test/session-line.test.tsx`, `pwa/test/header.test.tsx`, `pwa/test/fleetFixture.ts`, `server/test/single-definition.test.ts`.
 
-**Fixture: a main Stop payload with the five measured kinds** (`server/test/fixtures/hook/stop-bg-five-kinds.json`, created; the types are the strings measured in the fleet's turn markers, never Claude Code's internal `local_*` names):
+**Fixture: a main Stop with the five measured kinds** (`server/test/fixtures/hook/stop-bg-five-kinds.json`, created). Its shape is copied from the Stop in the committed capture `server/test/fixtures/delegation/2.1.280/agent-iso-bg.json` (seq 6), every key kept, with neutral ids and text; the type strings are the ones measured in the fleet's turn markers, never Claude Code's internal `local_*` names; each task carries its type's own key as the builder writes it ([B]: `agent_type` for a subagent, `name` for a workflow, `command` for a shell, `server` and `tool` for an MCP monitor, nothing extra for a teammate):
 
 ```json
-{"hook_event_name":"Stop","session_id":"00000000-0000-4000-8000-000000000001",
- "background_tasks":[{"id":"w00000001","type":"workflow"},{"id":"a0000000000000001","type":"subagent"},
-                     {"id":"b0000001","type":"shell"},{"id":"m0000001","type":"monitor"},{"id":"t0000001","type":"teammate"}]}
+{"session_id":"00000000-0000-4000-8000-000000000001",
+ "transcript_path":"/rig/fixhome/cfg/projects/-rig-repo/00000000-0000-4000-8000-000000000001.jsonl",
+ "cwd":"/rig/repo","prompt_id":"00000000-0000-4000-8000-0000000000a1","permission_mode":"default",
+ "effort":{"level":"medium"},"hook_event_name":"Stop","stop_hook_active":false,"last_assistant_message":"fixture",
+ "background_tasks":[
+  {"id":"w00000001","type":"workflow","status":"running","description":"fixture workflow","name":"fixwf"},
+  {"id":"a0000000000000001","type":"subagent","status":"running","description":"fixture agent","agent_type":"general-purpose"},
+  {"id":"b0000001","type":"shell","status":"running","description":"fixture shell","command":"sleep 600"},
+  {"id":"m0000001","type":"monitor","status":"running","description":"fixture monitor","server":"fixture-mcp","tool":"watch"},
+  {"id":"t0000001","type":"teammate","status":"running","description":"fixture teammate"}],
+ "session_crons":[]}
 ```
+
+Variants are built from it in the test by editing `background_tasks` only: the same subagent with `"status":"completed"`; with `"status":"pending"`; a task typed `"MCP task"`, `"cloud session"` and `"local_newkind"` (DERIVED from the builder's label map and its raw-name fallback [B]).
 
 - [ ] **Step 1: Red.** Each seen red for the reason named.
   - `session-hook-background.test.ts`, describe "the Stop records delegated background work (D-5231)":
     - the five-kinds fixture writes `bgDelegated: 3` and `bgDelegatedKinds: "subagent,teammate,workflow"` (red: fields absent);
     - `[shell, monitor]` writes `bgDelegated: 0` and `bgDelegatedKinds: ""`;
     - `[]` writes `bgDelegated: 0`; no `background_tasks` key and a non-array value write neither field (bg `-1`);
-    - an unknown kind, `remote-agent` (DERIVED: no build has shown it), counts as delegated;
+    - **the status rule:** the subagent alone with `"status":"completed"` writes `bgDelegated: 0` (red against a count that ignores status); with `"failed"` and `"killed"` the same; with `"pending"` it counts; with a status no build has shown (`"parked"`, DERIVED) it counts;
+    - **the kind rule:** `"MCP task"` alone writes 0 (it cleans to `mcp-task`); `"cloud session"` counts (`cloud-session`); `"local_newkind"` counts; and the test iterates over `NON_DELEGATING_TASK_KINDS` and `TERMINAL_TASK_STATUSES` imported from `shared/api.ts`, so the hook's `jq` copy and the TypeScript one cannot drift;
     - a main UserPromptSubmit after that Stop writes neither field;
     - a SubagentStop (with `agent_id`) after that Stop keeps both (the carry).
   - `hookstate.test.ts`: the pair parses into `background: {count: 3, kinds: ['subagent','teammate','workflow']}`; a negative, fractional or string count, or kinds that fail `^[a-z_-]+(,[a-z_-]+)*$` or exceed 200 bytes, leave `background` absent and the file `ok`.
   - `bucket.test.ts`, describe "a Stop that leaves delegated work running (D-5231)":
     - (a) `status:'busy'`, hook `done`/`Stop` newer, `background: {count: 2}` → `working`, `bucketSince` = `statusUpdatedAt` (red: `done`);
     - (b) every existing D-75 wedge fixture, with `background: null` and with `{count: 0}` → still `done`;
+    - (b2) **a finished task does not switch off D-75:** the wedge fixture whose Stop listed only a `completed` subagent (so the hook wrote `bgDelegated: 0`, and `fleet.ts` sets `background` null) → `done` (pins the status rule end to end);
     - (c) live `idle` at T2 after a Stop at T1 with `background` set → `done`, `bucketSince` T2 (red: T1);
     - (d) the measured flap shape as a replay (DERIVED from the investigation's timeline, times only): working at +18.2 s, a Stop with two workflows at +20.2 s, an agent PostToolUse at +32.3 s, live busy throughout: no sample reads `done` (red at +20.2 s);
     - (e) `reviveFleetSession` of a cached row with no `background` → `null`, the ladder's old answers.
-  - `fleet.test.ts`: on a 2.1.296 live file with hook `done`/`Stop` and the pair set, `background` is set; on a 2.1.270 file (below the floor) it is null; with hook `working` it is null.
+  - `fleet.test.ts`: on a 2.1.296 live file with hook `done`/`Stop` and the pair set, `background` is set; on a 2.1.270 file (below the floor) it is null; with hook `working` it is null; with the pair at count 0 it is null.
   - `session-line.test.tsx` and `header.test.tsx`: a `working` row with `background: {count: 2, kinds: ['workflow']}` reads `working · 2 in background`; the wedge qualifier does not render on it at high context and long busy age; the chat pulse follows the bucket (`done` on a wedged-busy row whose bucket is `done`).
-  - `single-definition.test.ts`: the delegated-kind rule is spelled once, in `shared/api.ts` (the hook's `jq` is its documented second spelling, pinned by the hook test above rather than by text).
+  - `single-definition.test.ts`: `NON_DELEGATING_TASK_KINDS` and `TERMINAL_TASK_STATUSES` are spelled once, in `shared/api.ts` (the hook's `jq` is the documented second spelling, held equal by the iterating hook case above rather than by text).
 - [ ] **Step 2: Green.** As the Files list says. The Stop arm's comment ("the program emits its three lines only together") becomes five; a `jq` without Oniguruma still leaves every line empty together. `fleet.ts` sets `background` only when `liveCoversWorkflows`, `hs.state.state === 'done'`, `hs.state.event === 'Stop'` and the count is above zero.
 - [ ] **Step 3: Mutation table, run.**
 
@@ -123,6 +144,10 @@ The verifier required one order (the dispatch gate before the compaction carry);
   | `done`'s `bucketSince` reads `hookUpdatedAt` only | bucket (c) |
   | the hook counts `shell` and `monitor` | the `[shell, monitor]` case, the five-kinds count |
   | the hook skips `teammate` | the five-kinds count |
+  | the hook ignores `status` | the `completed`, `failed`, `killed` cases; bucket (b2) |
+  | the hook counts only `running` (drops `pending` and unseen statuses) | the `pending` and `parked` cases |
+  | the hook's kind list loses `mcp-task` (or any one of the six) | the iterating case |
+  | the hook treats an unseen kind as non-delegating | the `local_newkind` case |
   | the hook keeps the pair on UserPromptSubmit | its case |
   | the subagent arm drops the carry | the SubagentStop case |
   | `fleet.ts` ignores `liveCoversWorkflows` | the 2.1.270 case |
@@ -131,24 +156,50 @@ The verifier required one order (the dispatch gate before the compaction carry);
 
 - [ ] **Step 4: Gates:** the suites above, `session-hook-turnmark`, `session-hook-subagent-ask`, `session-hook` (budget), `push-copy`, `fleetws`, `sessionws`, `archive-door` (`archiveInterrupts` reads the bucket), the four ledger and hygiene suites, tsc for `server/` and `pwa/`.
 - [ ] **Step 5: Commit** `fix(status): a Stop that leaves delegated work running keeps the session working (D-5231)`.
-- [ ] **Deploy note for the coordinator:** fleet first. Until the hook is on the fleet box, `background` is always null and nothing changes.
+- [ ] **Deploy note for the coordinator:** default order. Until the hook is on the fleet box, `background` is always null and nothing changes; until the server half is on the server box, the pair is written and ignored. Task 2's gate depends on this task's server half.
 
-### Task 2: agent events keep the main state; the roster by `agent_id` (D-5232)
+### Task 2: agent events keep the main state; the roster by `agent_id`; the stall clocks read `aliveAt` (D-5232)
 
-**Spec:** §5.2. **Routing:** band 3. **Lane:** FLEET (hook); `server/src/hookstate.ts` changes a docstring and its `reviveSubagents` keeps tolerating the extra `id`. **Depends on:** Task 1 (never on the fleet before it).
+**Spec:** §5.2. **Routing:** band 3. **Lane:** SERVER FIRST: the hook on the fleet box, and the stall watch's clocks on the server box, in one PR. **Depends on:** Task 1's server half and Task 9, both on the server box before this hook reaches the fleet (the ordering table's rollout form).
 
-**Measured first** (recorded in the PR; read-only): from the `-hookcap` captures already on the box, reduced by `deploy/hook-capture-reduce.mjs` (keys, types and validated tokens only), whether a background subagent's task id in a Stop's `background_tasks` equals its SubagentStart `agent_id`. If it does not, the bounded-prune rule below is dropped and only `bg = 0` empties the roster.
+**Measured first** (recorded in the PR; read-only). On 2.1.280 the answer is already committed: in `server/test/fixtures/delegation/2.1.280/agent-iso-bg.json` the Stop lists task `a73ff…` and the SubagentStart before it carries the same `agent_id`. Re-measure on the fleet's current builds only (2.1.296 to 2.1.301), from the `-hookcap` captures already on the box, reduced by `deploy/hook-capture-reduce.mjs` (keys, types and validated tokens only). If the ids no longer match there, the bounded-prune rule below is dropped and only `bg = 0` empties the roster.
 
 **Files:**
-- Modify `ccd/session-hook.sh`: in the tail, before the hookstate write, an agent event (`$paid` set; PreToolUse other than AskUserQuestion, PostToolUse, SubagentStart, SubagentStop) takes `_hook_fresh_read` and keeps `state`, `event`, `updatedAt`, `ask`, `interrupted`, `waitBy` and the Task 1 pair, writing `aliveAt` = now; with no file, it exits 0. A subagent's own wait (its AskUserQuestion PreToolUse or PermissionRequest) writes `waiting`, `waitBy:"subagent"`, a fresh stamp and `waitPrev: {state, event, updatedAt}`; the next agent tool event over a `waitBy:"subagent"` wait restores `waitPrev` with `aliveAt`, or writes today's `working` when `waitPrev` is absent. The roster (≈:3980): entries `{name, startedAt, id}`; add unless the id is listed; remove by id; unmatched Stop is a no-op; SessionStart (not `compact`) empties it; a main Stop with `bg` 0 empties it; `bg` 1–8 with no `workflow` kind keeps only listed ids; id-less entries are dropped at the first prune. The deny and nudge print (`pre_json`, ≈:4060) still runs for agent events.
-- Modify `server/src/hookstate.ts` (the `aliveAt` docstring at ≈:253: no longer "only a carried wait"), `server/src/registry.ts` (≈:1267, the same sentence) and `server/src/coord/store.ts` (≈:7293, the same sentence).
-- Create `server/test/session-hook-agent-events.test.ts`. Modify `server/test/hookstate.test.ts`, `server/test/session-hook.test.ts` (the agent-payload budget pin only).
+- Modify `ccd/session-hook.sh`, the tail only:
+  - an agent event (`$paid` set; PreToolUse other than AskUserQuestion, PostToolUse, SubagentStart, SubagentStop) takes `_hook_fresh_read` and keeps `state`, `event`, `updatedAt`, `ask`, `interrupted`, `waitBy`, `waitPrev` and the Task 1 pair, writing `aliveAt` = now;
+  - **with no file it writes no hookstate but does not exit**: it sets a skip flag that the hookstate write (≈:4029) honours, and still reaches the one print (`pre_json`, ≈:4061), so a subagent's role-skill deny or nudge prints on a session that has no file. (The subagent arm's two `exit 0` lines for a missing or unreadable file, ≈:3994 and ≈:3996, become the same flag.)
+  - a subagent's own wait (its AskUserQuestion PreToolUse or PermissionRequest) writes `waiting`, `waitBy:"subagent"`, a fresh stamp and `waitPrev: {state, event, updatedAt, ask, interrupted}`; the next agent tool event over a `waitBy:"subagent"` wait restores `waitPrev` with `aliveAt`, or writes today's `working` when `waitPrev` is absent;
+  - the roster (≈:3980): entries `{name, startedAt, id}`; add unless the id is listed; remove by id; unmatched Stop is a no-op; SessionStart (not `compact`) empties it; a main Stop with `bg` 0 empties it; `bg` 1–8 with no `workflow` kind keeps only listed ids; id-less entries are dropped at the first prune.
+- Modify `server/src/coord/stall.ts`: `HookRawFact` (≈:455) gains `aliveAt?: number`; one helper, `stallHookActivityAt(hook)`, answers the newest non-plumbing activity (`updatedAt` unless the event is in `STALL_PLUMBING_EVENTS`, maxed with `aliveAt` when present, null when neither counts); `stallFrozenSince` (≈:460) returns `max(turnStart, activity ?? turnStart)` and `stallHookFresh` (≈:883) tests `now - activity < DELEGATE_WINDOW_MS`. The helper's docstring says why `aliveAt` is never plumbing: only agent events write it once Task 10 stops compactions writing (and before Task 10, compactions write no `aliveAt` either).
+- Modify `server/src/watch.ts`, `stallHookFactOf` (≈:333): carry `raw.aliveAt`.
+- Modify `server/src/hookstate.ts` (the `aliveAt` docstring at ≈:253: no longer "only a carried wait"), `server/src/registry.ts` (≈:1267, the same sentence) and `server/src/coord/store.ts` (≈:7294, the same sentence).
+- Create `server/test/session-hook-agent-events.test.ts`. Modify `server/test/hookstate.test.ts`, `server/test/session-hook.test.ts` (the agent-payload budget pin only), `server/test/session-hook-role-skill-deny.test.ts` (the no-file case), `server/test/stall-verdict.test.ts`, `server/test/stall-sweep.test.ts`.
+
+**The audit of every reader of the hookstate's `updatedAt`** (measured on `a6b2606c` with `grep` over `server/src`, `shared` and `pwa/src`; the PR re-runs it and appends any reader added since):
+
+| Reader | What it reads the stamp for | After this task |
+|---|---|---|
+| `hookstate.ts` age cut (≈:358) | is the file fresh | already the later of `updatedAt` and `aliveAt`: unchanged |
+| `fleet.ts` → `sessionBucket` (≈:841 → `shared/api.ts` ≈:1502, ≈:1532) | D-75's comparison with the live stamp; `bucketSince` | must stay the main thread's stamp: that is the point of D-5232; unchanged |
+| `watch.ts` `stallHookFactOf` (≈:333) → `stallFrozenSince`, `stallHookFresh` | subagent activity | **changed**: reads `aliveAt` beside it (above) |
+| `watch.ts` `stallHookAskOf` (≈:325) | the stamp of a main ask (hold 2a's correlation) | a main wait's stamp is already kept through agent events (D-4041); unchanged |
+| `watch.ts` ask rows' `askAt` (≈:7987, ≈:8223) and `registry.ts`'s child ask stamp (≈:1313) | the stamp of a question | unchanged, for the same reason |
+| `watch.ts` mail lane's ingestion edge (≈:6582: `event === 'UserPromptSubmit' && updatedAt > deliveredAt`) | proof the injected turn started | unchanged code; the edge now survives the agent events that used to overwrite the event within seconds |
+| `dispatch.ts` hookstate gate (≈:883), `sessionws.ts` ask frames (≈:536), `server.ts` ask read (≈:1656) and `liveRowFor` (≈:3039) | the state and the ask, through the aged read | the aged read is unchanged; the dispatch gate's new exposure (a `done` standing through delegation) is why Task 9 is a prerequisite |
 
 - [ ] **Step 1: Red.**
-  - "an agent event never rewrites the main state (D-5232)": a main Stop at T0 (two subagents listed), then an agent PostToolUse at T1: `state` `done`, `event` `Stop`, `updatedAt` T0, `aliveAt` T1, the Task 1 pair kept (red: `working`, T1). The same for an agent PreToolUse with no SubagentStart before it (a side agent), a SubagentStart and a SubagentStop.
+  - "an agent event never rewrites the main state (D-5232)": a main Stop at T0 (two subagents listed), then an agent PostToolUse at T1: `state` `done`, `event` `Stop`, `updatedAt` T0, `aliveAt` T1, the Task 1 pair kept (red: `working`, T1). The same for an agent PreToolUse with no SubagentStart before it (a side agent), a SubagentStart and a SubagentStop. Payloads copy the capture's key sets (`agent_id`, `agent_type`, and for SubagentStop `agent_transcript_path`, `last_assistant_message`, `background_tasks`, `session_crons`).
   - "a main event still opens the turn": a main UserPromptSubmit after that writes `working` with a fresh stamp (green before and after).
-  - "a subagent's own wait is attention, and its end restores the main state": PermissionRequest with `agent_id` over `done`/`Stop`/T0 writes `waiting`, `waitBy:"subagent"`, `waitPrev`; the next agent PostToolUse writes `done`/`Stop`/T0 plus `aliveAt` (red: `working`). A file with no `waitPrev` falls back to `working`.
-  - "freshness moves to `aliveAt`": a main Stop 40 minutes ago, then an agent PostToolUse 1 minute ago, reads fresh through `readHookStateMeasured` (red: the base writes a fresh `updatedAt` instead, so the case's assertion that `updatedAt` is still the Stop's fails); with no agent event since, the same file reads `NO_STATE`. The reader is unchanged: it already takes the later of `updatedAt` and `aliveAt` for every state.
+  - "a subagent's own wait is attention, and its end restores the main state": PermissionRequest with `agent_id` over `done`/`Stop`/T0 writes `waiting`, `waitBy:"subagent"`, `waitPrev`; the next agent PostToolUse writes `done`/`Stop`/T0, the ask and `interrupted` as they were, plus `aliveAt` (red: `working`). A file with no `waitPrev` falls back to `working`.
+  - "freshness moves to `aliveAt`": a main Stop 40 minutes ago, then an agent PostToolUse 1 minute ago, reads fresh through `readHookStateMeasured` (red: the base writes a fresh `updatedAt` instead, so the case's assertion that `updatedAt` is still the Stop's fails); with no agent event since, the same file reads `NO_STATE`.
+  - `stall-verdict.test.ts`, describe "subagent activity lives in `aliveAt` (D-5232)":
+    - (s1) **the delegates hold:** a run worker under `stall-watch-w2-live`, the worker's ball, marker `done` with `stopAt` 2.5 hours ago (past `STALL_QUIET_MS`, 2 h, and under `DELEGATE_CAP_MS`, 4 h), hook `{event: 'Stop', updatedAt: stopAt, aliveAt: now − 60 s}` → `hold: delegates` (red: the quiet arm's notice, because `updatedAt` alone is far outside `DELEGATE_WINDOW_MS`, 30 min);
+    - (s2) **no frozen during a long foreground Agent call:** marker `working`, `turnAt` 70 minutes ago, live `busy`, hook `{event: 'PreToolUse', updatedAt: turnAt + 5 s, aliveAt: now − 2 min}` (the Agent call's own PreToolUse, then subagent events) → no `frozen` notice (red: `frozen`, `no-hook-event`);
+    - (s3) the same with no `aliveAt` and `updatedAt` 61 minutes old → `frozen` (green before and after: the arm still fires);
+    - (s4) **plumbing still never refreshes:** an older hook's file whose event is `PostCompact`, `updatedAt` 1 minute ago, no `aliveAt` → the frozen clock is `turnStart` (green before and after);
+    - (s5) `aliveAt` older than `DELEGATE_WINDOW_MS` → no `delegates` hold.
+  - `stall-sweep.test.ts`: one lane case, a fixture hookstate file carrying `aliveAt`, proves `stallHookFactOf` carries it into the verdict (red: the field is dropped at the lane).
+  - `session-hook-role-skill-deny.test.ts`: a subagent PreToolUse that loads a role skill, on a session with **no hookstate file**, still prints its deny and writes no file (written green against the base, which writes the file; its red is the mutation row "the no-file path exits 0").
   - the roster, describe "the roster is keyed by agent_id (D-5232)":
     - Start(A, `general-purpose`) then Stop(A, `general-purpose`) → `[]` (green before: name-keyed works for matched pairs, as the verifier found);
     - Start(A) twice → one entry (red: two);
@@ -159,24 +210,30 @@ The verifier required one order (the dispatch gate before the compaction carry);
     - an id-less legacy entry is dropped at the first main Stop.
   - `session-hook.test.ts`: p95 of 20 agent PostToolUse runs under 150 ms (written green; it guards the added fresh read).
   - The D-4039 and D-4041 pins in `session-hook-subagent-ask.test.ts` stay green throughout.
-- [ ] **Step 2: Green.** As the Files list says, all in the tail.
+- [ ] **Step 2: Green.** As the Files list says; the hook's part all in the tail.
 - [ ] **Step 3: Mutation table, run.**
 
   | Mutant | Expected RED |
   |---|---|
   | the agent arm writes the fresh stamp | the T0 cases |
   | the agent arm writes `working` | the T0 cases |
-  | the agent arm omits `aliveAt` | the freshness pin |
+  | the agent arm omits `aliveAt` | the freshness pin; stall (s1), (s2) through the sweep case |
+  | the no-file path exits 0 (skips the print) | the role-skill-deny no-file case |
   | `waitPrev` not restored | the subagent-wait case |
+  | `waitPrev` restores state but not the ask | the subagent-wait case's ask assertion |
+  | `stallFrozenSince` ignores `aliveAt` | stall (s2) |
+  | `stallHookFresh` ignores `aliveAt` | stall (s1) |
+  | the activity helper lets a plumbing event's `updatedAt` count | stall (s4) |
+  | `stallHookFactOf` drops `aliveAt` | the stall-sweep lane case |
   | the roster dedupe removed | Start(A) twice |
   | remove by name, not id | the empty-`agent_type` Stop |
   | SessionStart reset removed | the reset cases |
   | the `bg = 0` prune removed | its case |
   | the bounded prune ignores the `workflow` exception | the workflow case |
-  | the agent arm skips the `pre_json` print | `session-hook-role-skill-deny` |
 
-- [ ] **Step 4: Gates:** the suites above, `session-hook-subagent-ask`, `session-hook-role-skill-deny`, `session-hook-turnmark`, `ask-instance-guard`, `asks-sweep`, `stall-sweep`, `bucket`, the four ledger and hygiene suites, tsc.
-- [ ] **Step 5: Commit** `fix(hook): agent events keep the main state, with aliveAt for freshness; the roster keyed by agent_id (D-5232)`.
+- [ ] **Step 4: Gates:** the suites above, `session-hook-subagent-ask`, `session-hook-turnmark`, `ask-instance-guard`, `asks-sweep`, `stall-sweep`, `stall-verdict`, `stall-session`, `mail-sweep` (the ingestion edge), `bucket`, `dispatch-route`, the four ledger and hygiene suites, tsc.
+- [ ] **Step 5: Commit** `fix(hook): agent events keep the main state, with aliveAt for freshness and for the stall watch; the roster keyed by agent_id (D-5232)`.
+- [ ] **Deploy gate for the coordinator:** the release that first carries this hook rolls out `--server-first`, unless the server box's `version` already reads at or past Task 1's and Task 9's releases; record the tag, the command and the server's `version` before the fleet leg.
 
 ### Task 3: Finished needs a main Stop (D-5233)
 
@@ -238,13 +295,16 @@ The verifier required one order (the dispatch gate before the compaction carry);
 
 **Spec:** §5.5. **Routing:** band 2. **Lane:** server (PWA bundle).
 
-**Files:** modify `pwa/src/session/SessionHeader.tsx` (the window `keydown` listener, ≈:209–223); modify `pwa/test/header.test.tsx`.
+**Files:** modify `pwa/src/session/SessionHeader.tsx` (the window `keydown` listener, ≈:209–223); modify `pwa/test/header.test.tsx` and `pwa/test/drawer-view.test.tsx`.
+
+**The terminal drawer is already ruled, and this task pins its meeting with the header.** Operator ruling P4 (2026-10-15): with the drawer's live terminal focused, a physical Escape goes to Claude Code as `\x1b` and the drawer stays open (`TerminalDrawer`'s `keepEscapeInTerminal`, ≈:742, cancels Radix's dismissal); with focus elsewhere in the drawer, Escape closes it and sends nothing. `drawer-view.test.tsx`'s P4 describe (≈:914) pins the drawer alone. What nothing pins is the header's window listener on the same keystroke: it skips a focused textarea (xterm's input is one), and before this task it does not skip a dismissed sheet.
 
 - [ ] **Step 1: Red** (`header.test.tsx`, fine pointer, `busy`):
   - a Sheet (`@ccrc/ui`'s sheet primitive) is open with focus on a button inside it; Escape closes it and `onInterrupt` is not called (red: called once);
   - a synthetic Escape whose `defaultPrevented` is already true → not called (red);
   - no sheet open → called once (green before and after);
   - focus in a textarea → not called (unchanged).
+  - `drawer-view.test.tsx`, a new case in the P4 describe that renders `SessionHeader` (busy, fine pointer) beside the open drawer: Escape with the live terminal focused → exactly one `{type:'input', data:'\x1b'}` frame and `onInterrupt` not called (green before and after: the textarea skip); Escape with focus on the drawer's close control → the drawer closes, no frame, and `onInterrupt` not called (red: called once, the same defect as the sheet case).
 - [ ] **Step 2: Green.** Return on `e.defaultPrevented`, and when `document.querySelector('[role="dialog"][data-state="open"]')` finds an open dialog or sheet.
 - [ ] **Step 3: Mutation table, run.**
 
@@ -252,40 +312,46 @@ The verifier required one order (the dispatch gate before the compaction carry);
   |---|---|
   | the `defaultPrevented` check removed | the synthetic case (the sheet case may stay green through the open-dialog check; record it) |
   | the open-dialog check removed | none expected while Radix prevents default; record the result, which shows whether the second check is load-bearing |
-  | both removed | the sheet case |
-- [ ] **Step 4: Gates:** `header`, `session-screen-refusals`, `dialog-sheet`, `drawer-view`, pwa tsc.
+  | both removed | the sheet case, the drawer's focus-elsewhere case |
+  | the textarea skip removed | the drawer's terminal-focused case (two interrupts: the pty's `\x1b` and the route's) |
+- [ ] **Step 4: Gates:** `header`, `session-screen-refusals`, `dialog-sheet`, `drawer-view`, `drawer-keybar`, pwa tsc.
 - [ ] **Step 5: Commit** `fix(pwa): Escape that closes a sheet no longer interrupts the turn on desktop (D-5235)`.
 
-### Task 6: an interrupt over delegated work warns (D-5236)
+### Task 6: an interrupt over background-only work warns (D-5236)
 
-**Spec:** §5.5. **Routing:** band 3. **Lane:** server (and PWA). **Depends on:** Task 1.
+**Spec:** §5.5. **Routing:** band 3. **Lane:** server (and PWA). **Depends on:** Task 1 (the row's `background`) and Task 9 (the one home of the turn reads, which this route reads too).
 
-**Measured first** (on a workstation, Claude Code at the fleet's version, in a throwaway `tmux -L` server killed afterwards; nothing on the fleet box): whether Claude Code exposes an operator command or key that stops background tasks, what screen it paints, and whether a capture can prove it worked. Recorded in the PR. If it exists, the route that drives it is named by slug (`stop-background-route`, §Pending a number) and is not built here.
+**Measured first** (on a workstation, Claude Code at the fleet's version, in a throwaway `tmux -L` server killed afterwards; nothing on the fleet box): whether Claude Code exposes an operator command or key that stops background tasks, what screen it paints, and whether a capture can prove it worked. The 2.1.300 binary carries a `background_tasks_stop_unavailable` event name [B], which suggests a stop path exists in some form; the measurement says whether an operator can drive it. Recorded in the PR. If it exists, the route that drives it is named by slug (`stop-background-route`, §Pending a number) and is not built here.
 
 **Files:**
-- Modify `server/src/inject/send.ts` (`interrupt`, ≈:1708): it takes a verdict function returning `{kind: 'turn'} | {kind: 'background-only', count, kinds} | {kind: 'idle'}` instead of `isBusy`, and refuses `background-only` with zero keys.
-- Modify `server/src/server.ts` (the route, ≈:2374): the verdict reads the row the way archive's `liveRowFor` does (one record through `assembleFleet`, ≈:3040) plus `liveStatus()`; `background-only` when the live word is `busy`, the row's `background` is set, its hook state is `done` from a `Stop` and `dialogPending` is false.
+- Modify `server/src/inject/send.ts` (`interrupt`, ≈:1708): it takes a verdict function returning `{kind: 'turn'} | {kind: 'background-only', count: number | null, kinds: string[]} | {kind: 'idle'}` instead of `isBusy`, and refuses `background-only` with zero keys. Its docstring loses the sentence that says it can Escape a session with no turn in flight.
+- Modify `server/src/server.ts` (the route, ≈:2374): the verdict reads the raw live word (`liveWordFor`, Task 9's module: the pane pid and `readLiveStateMeasured`, never `liveStatus()`'s collapse) and the row (`liveRowFor`, the same module). `background-only` when no pane menu is pending (`dialogPending` false) and either (a) the word is `busy`, the row's `background` is set, and its hook state is `done` from a `Stop` whose stamp is **newer than the live file's `statusUpdatedAt`** (spec §5.5: a main turn begun after that Stop re-stamps the live file, and Escape then interrupts it), with the count and kinds; or (b) the word is `shell` (an idle main loop over a background shell or monitor), with `count: null` and no kinds. `waiting` and every other non-idle word stay a turn. An unreadable word keeps today's answer (`liveStatus()` reads it idle: `not-busy`, D-115's asymmetry).
 - Modify `shared/api.ts`: `InterruptRefusal` (`'not-alive' | 'not-busy' | 'background-only'`) with its map.
-- Modify `pwa/src/screens/SessionScreen.tsx` (`interrupt`, ≈:236): the 409 `background-only` toast with the count and kinds; `pwa/src/lib/api.ts` (≈:1169) passes the refusal body through.
+- Modify `pwa/src/screens/SessionScreen.tsx` (`interrupt`, ≈:236): the 409 `background-only` toast with the count and kinds, or the shell wording when the count is null; `pwa/src/lib/api.ts` (≈:1169) passes the refusal body through.
 - Create `server/test/interrupt-route.test.ts`. Modify `server/test/routes.test.ts`, `pwa/test/session-screen-refusals.test.tsx`.
 
 - [ ] **Step 1: Red.**
-  - `interrupt-route.test.ts`: live `busy`, hook `done`/`Stop` newer, `background: {count: 2, kinds: ['workflow']}`, no menu → 409 `{error: 'background-only', count: 2, kinds: ['workflow']}` and no `send-keys` (red: Escape sent);
+  - `interrupt-route.test.ts`: live `busy` at T0, hook `done`/`Stop` at T1 > T0, `background: {count: 2, kinds: ['workflow']}`, no menu → 409 `{error: 'background-only', count: 2, kinds: ['workflow']}` and no `send-keys` (red: Escape sent);
+  - the same, but the live file re-stamped `busy` at T2 > T1 (a turn begun after the Stop with no hook event) → Escape (written green; its red is the mutation row that drops "newer");
+  - live `shell`, no menu → 409 `{error: 'background-only', count: null, kinds: []}`, no `send-keys` (red: Escape sent);
   - live `busy`, hook `working` → Escape (green before and after);
-  - a pane menu pending with `background` set (a Deny) → Escape;
-  - live `waiting` → Escape; live `idle` → 409 `not-busy`; no pane → 409 `not-alive`.
-  - `session-screen-refusals.test.tsx`: the 409 shows "The main turn has finished; 2 background tasks (workflow) are still running. Escape would not stop them." (red: the generic "nothing to stop").
+  - a pane menu pending with `background` set (a Deny) → Escape; a menu pending under `shell` → Escape;
+  - live `waiting` → Escape; live `idle` → 409 `not-busy`; an unreadable live file → 409 `not-busy` (unchanged); no pane → 409 `not-alive`.
+  - `session-screen-refusals.test.tsx`: the 409 shows "The main turn has finished; 2 background tasks (workflow) are still running. Escape would not stop them." (red: the generic "nothing to stop"); with `count: null`, "The main turn has finished; a background shell or monitor is still running. Escape would not stop it."
 - [ ] **Step 2: Green.**
 - [ ] **Step 3: Mutation table, run.**
 
   | Mutant | Expected RED |
   |---|---|
   | the background-only arm removed | the 409 case |
-  | it ignores `dialogPending` | the Deny case |
+  | the `shell` arm removed | the `shell` case |
+  | "newer than the live stamp" dropped | the re-stamped case |
+  | it ignores `dialogPending` | the Deny cases |
   | it ignores the hook state (any `background` refuses) | the `working` case |
-  | the refusal sends Escape before answering | the zero-keys assertion |
+  | the route reads `liveStatus()` instead of the raw word | the `shell` case (it reads `busy` there) |
+  | the refusal sends Escape before answering | the zero-keys assertions |
 
-- [ ] **Step 4: Gates:** the suites above, `send`, `answer`, `routes`, `auth-gate` (no new route; the count is unchanged), the four ledger and hygiene suites, tsc for both.
+- [ ] **Step 4: Gates:** the suites above, `send`, `answer`, `routes`, `auth-gate` (no new route; the count is unchanged), `archive-door`, `dispatch-live-gate`, the four ledger and hygiene suites, tsc for both.
 - [ ] **Step 5: Commit** `fix(interrupt): an idle main loop over background work warns instead of sending Escape (D-5236)`.
 
 ### Task 7: interrupt sources recorded (D-5237, first half)
@@ -313,7 +379,7 @@ The verifier required one order (the dispatch gate before the compaction carry);
 - Modify `ccd/ccd`:
   - `_spawn_start` (≈:22545), once the pane exists: one `tmux list-panes … '#{pane_pid}'` and one read of `/proc/<pid>/cgroup`, writing the pane's scope unit to `$REG/<id>.panescope` (Linux only). Nothing is added to the supervise tick (#387's budget).
   - `cmd_supervise` (≈:24428), at the `gone` exit (≈:24643): classify `tmux-server` (`tmux list-sessions` fails), `oom` (`timeout 5 journalctl --user -u <panescope> --since @<now-120> -q -g 'killed by the OOM killer' -n 1 --no-pager` prints a line), `exited`, or `unknown` (the journal read failed); write `$REG/<id>.lastend` = `<epoch> <cause>` and `ended <id>: <cause>` to `swap.log`.
-  - `cmd_swap` (≈:27003): before `_svc_stop`, `lastend` = `swap-auto-home`, `swap-auto-rescue` or `swap-manual` (from `CCD_SWAP_AUTO` and the arm `_dispatch_swap` passes, Task 11's `CCD_SWAP_ARM`; until Task 11 lands, `swap-auto` and `swap-manual`).
+  - `cmd_swap` (≈:27003): before `_svc_stop` and after every act-time gate (Task 11's, once it lands), so a refused or re-queued swap records no end, `lastend` = `swap-auto-home`, `swap-auto-rescue` or `swap-manual` (from `CCD_SWAP_AUTO` and the arm `_dispatch_swap` passes, Task 11's `CCD_SWAP_ARM`; until Task 11 lands, `swap-auto` and `swap-manual`).
   - `_resume_env` (≈:22333) and `_redrive_after_spawn` (≈:23528): a composed prompt from `_resume_prompt_for <id>`, which keeps `RESUME_PROMPT`'s first sentence and names the cause of a `lastend` at most 10 minutes old (for `oom`: the pane ran out of memory, the number of `oom` ends in the last 10 minutes, and "do not re-run the step that was running at the same parallelism"). No single quote in any output.
   - `_route_escape` (≈:20447): `route-escape <id>` to `swap.log` before each `send-keys Escape`.
 - Modify `server/src/registry.ts` (read `lastend` only when the listing names it), `shared/api.ts` (`FleetSession.lastEnd: {at, cause} | null`; `RestartCause` with an `unknown` degrade; `reviveFleetSession`), `server/src/fleet.ts`, `pwa/src/fleet/SessionMeta.tsx` and `pwa/src/session/SessionHeader.tsx` ("restarted · out of memory · 3m ago" for an hour).
@@ -334,12 +400,31 @@ The verifier required one order (the dispatch gate before the compaction carry);
 
 ### Task 9: the dispatch `/clear` gate needs live idle (D-5238)
 
-**Spec:** §5.7. **Routing:** band 3. **Lane:** server. **Deploy gate:** on the server box before Task 10's hook reaches the fleet.
+**Spec:** §5.7. **Routing:** band 3. **Lane:** server. **Deploy gate:** on the server box before Task 2's or Task 10's hook reaches the fleet (their rollout form enforces it).
+
+**The dependency-injection seam.** `liveRowFor` (`server.ts` ≈:3038) closes over three things `dispatch.ts` cannot import: the watcher's newest pane reads (`watcher?.currentPending()`, `watcher?.currentStatuslines()`) and `server.ts`'s `deps`. The move turns each into a declared port, the shape `DispatchRunDeps.configDir` already has (≈:81–103, the consumer-declared L2 port, D-1015):
+
+```ts
+// server/src/turnverdict.ts (L3: tmux, the live file, the hookstate, assembleFleet; it decides nothing — stopVerdict, L1, does)
+export interface TurnReadDeps {
+  io: FleetIO; cfg: CcrcConfig; tmux: Tmux;
+  /** The watcher's newest pane-scraped reads, read at call time (thunks, so a call never sees a stale snapshot
+   *  captured when the deps object was built); `undefined` when no watcher runs, as today. */
+  pendingDialogs: () => ReadonlySet<string> | undefined;
+  statuslines: () => ReturnType<FleetWatcher['currentStatuslines']> | undefined;
+}
+export function liveRowFor(d: TurnReadDeps, rec: SessionRecord, uuid: string): Promise<FleetSession | null>;
+export function liveWordFor(d: TurnReadDeps, rec: SessionRecord): Promise<{ ok: true; word: string; since: number | null } | { ok: false; reason: 'no-pane' | 'no-config-dir' | 'unmeasured' }>;
+export function turnVerdictFor(d: TurnReadDeps, rec: SessionRecord, uuid: string): Promise<TurnVerdict>;
+```
+
+`server.ts` builds one `TurnReadDeps` (`pendingDialogs: () => watcher?.currentPending()`, `statuslines: () => watcher?.currentStatuslines()`) for the archive, interrupt and swap routes. `DispatchRunDeps` gains a **required** port, `turnVerdict: (rec: SessionRecord, uuid: string) => Promise<TurnVerdict>` — required for `configDir`'s reason: an optional port a caller forgot to wire would answer `unmeasured` on a healthy fleet for ever. `coord/routes.ts` (≈:1597, where `dispatchDeps` is built) wires it from the same `TurnReadDeps`, built from the `watcher` that `registerCoordRoutes` already receives (≈:531). Every test that builds a `DispatchRunDeps` gains the port, which `tsc` enforces.
 
 **Files:**
-- Create `server/src/turnverdict.ts` (L3): `turnVerdictFor(deps, rec, uuid)`, moved verbatim from `server.ts`'s `stopVerdictFor` (≈:3056) with `liveRowFor` (≈:3040) beside it; `server.ts`'s archive route imports it.
-- Modify `server/src/coord/dispatch.ts`: after the hookstate gate (≈:893) the resume arm reads `turnVerdictFor`: `busy` → `worker-busy`; `unmeasured` → `status-unmeasurable`, except after an `ensure` (≈:748) whose answer was not `alive: <id>`, where it polls every 2 s, bounded at 60 s, until `idle`. Immediately before the `/clear` (≈:995) it reads the verdict again and refuses the same way. The refusal union (≈:143) gains `status-unmeasurable`.
-- Modify `server/test/single-definition.test.ts` (the verdict's one home). Create `server/test/dispatch-live-gate.test.ts`. `server/test/archive-door.test.ts`, `archive-coord-handle.test.ts` and `dispatch-route.test.ts` stay green.
+- Create `server/src/turnverdict.ts` as above: `liveRowFor` and `turnVerdictFor` moved verbatim from `server.ts` (`liveRowFor` ≈:3038, `stopVerdictFor` ≈:3056), and `liveWordFor` extracted from `stopVerdictFor`'s own pid-then-live-file reads (Task 6 reads it). `server.ts`'s archive route imports them.
+- Modify `server/src/coord/dispatch.ts`: `DispatchRunDeps` gains `turnVerdict`; after the hookstate gate (≈:893) the resume arm reads it: `busy` → `worker-busy`; `unmeasured` → `status-unmeasurable`, except after an `ensure` (≈:748) whose answer was not `alive: <id>`, where it polls every 2 s, bounded at 60 s, until `idle`. Immediately before the `/clear` (≈:995) it reads the verdict again and refuses the same way. The refusal union (≈:143) and `RunRefuseCode` with its map (`shared/api.ts` ≈:5635) gain `status-unmeasurable`.
+- Modify `server/src/coord/routes.ts` (≈:1597): wire the port.
+- Modify `server/test/single-definition.test.ts` (the reads' one home). Create `server/test/dispatch-live-gate.test.ts`. `server/test/archive-door.test.ts`, `archive-coord-handle.test.ts` and `dispatch-route.test.ts` stay green (the last gains the port in its deps builder).
 
 - [ ] **Step 1: Red.**
   - hook `done`, live `busy` (delegated) → `worker-busy`, no `/clear`, no hold (red: proceeds);
@@ -360,57 +445,88 @@ The verifier required one order (the dispatch gate before the compaction carry);
   | no second read before `/clear` | the race case |
   | no bounded wait after a spawning `ensure` | the spawn case |
   | a second copy of `stopVerdict` in `dispatch.ts` | `single-definition` |
+  | `routes.ts` wires a port that answers `idle` without reading | the `busy`, `shell`, `waiting` cases through the route |
 
 - [ ] **Step 4: Gates:** the suites above, `dispatch-adopt`, `dispatch-child-argv`, `dispatch-hold-order`, `dispatch-mutex-gate`, `dispatch-skillstate`, `run-routes`, `kickoff-route`, `unattended-actor`, `archive-*`, the four ledger and hygiene suites, tsc.
 - [ ] **Step 5: Commit** `fix(dispatch): /clear needs the live file measured idle at the gate and at the act (D-5238)`.
 
-### Task 10: compactions carry the prior state (D-5239)
+### Task 10: compactions write no hookstate (D-5239)
 
-**Spec:** §5.8. **Routing:** band 3. **Lane:** FLEET (hook). **Depends on:** Task 9. **Deploy gate:** the server box's `/health` `version` is at or past Task 9's release before this hook is installed on the fleet box; the coordinator records both versions in the PR.
+**Spec:** §5.8. **Routing:** band 3. **Lane:** SERVER FIRST (hook). **Depends on:** Task 9. **Deploy gate:** the server box's `/health` `version` is at or past Task 9's release before this hook is installed on the fleet box: the release that first carries it rolls out `--server-first` unless the server already reads at or past it; the coordinator records the tag, the command and both versions.
 
 **Measured first** (on a workstation, Claude Code at the fleet's version, a throwaway `tmux -L` server with a scratch hook that logs event names and the UserPromptSubmit `prompt` only): which events a typed `/compact` fires, in what order, and whether UserPromptSubmit carries the text `/compact`. Recorded in the PR. The tail arm below is written to what is measured.
 
 **Files:**
-- Modify `ccd/session-hook.sh`, the tail only: PreCompact and PostCompact (both triggers) set `state` from `_hook_fresh_read`, keep `event`, `updatedAt` and `ask`, and write `aliveAt`; with no file, nothing is written. If the measurement shows UserPromptSubmit for `/compact`, a main UserPromptSubmit whose prompt is `/compact` or starts with `/compact ` writes no state and opens no turn in the marker (the marker block, ≈:3122, skips it). The case-block arms at ≈:2908–2911 are left as they are; the tail overrides them, so nothing lands above `:2900`.
-- Create `server/test/session-hook-compact-carry.test.ts`. Modify `server/test/fleet.test.ts` (a `bucketSince` pin across a compaction) and `server/test/dispatch-live-gate.test.ts` (the integration pin below).
+- Modify `ccd/session-hook.sh`, the tail only: PreCompact and PostCompact (both triggers) set Task 2's skip flag, so the hookstate write (≈:4029) is skipped and the file stays byte for byte as it was; nothing else in the tail changes for them, and the compaction helpers (`_hook_compact_pre`, `_hook_compact_post`, ≈:4066) still run after it. If the measurement shows UserPromptSubmit for `/compact`, a main UserPromptSubmit whose prompt is `/compact` or starts with `/compact ` writes no state and opens no turn in the marker (the marker block, ≈:3122, skips it). The case-block arms at ≈:2908–2911 are left as they are; the tail overrides them, so nothing lands above `:2900`. (If Task 2 has not landed when this one is cut, this task introduces the skip flag itself and Task 2 reuses it.)
+- Create `server/test/session-hook-compact-carry.test.ts`. Modify `server/test/fleet.test.ts` (a `bucketSince` pin across a compaction), `server/test/bucket.test.ts` (the delegated row across a compaction), `server/test/stall-verdict.test.ts` (one pin) and `server/test/dispatch-live-gate.test.ts` (the integration pin below).
 
 - [ ] **Step 1: Red.**
-  - Stop at T0, then PreCompact → `done`/`Stop`/T0 with `aliveAt` (red: `working`, fresh);
-  - then PostCompact `auto` → the same (red: `working`); PostCompact `manual` → the same (red: a fresh `done`, the badge);
+  - Stop at T0, then PreCompact → the file byte-identical to before (red: `working`, fresh);
+  - then PostCompact `auto` → byte-identical (red: `working`); PostCompact `manual` → byte-identical (red: a fresh `done`, the badge);
+  - **the whole field set survives:** a Stop listing two workflows (Task 1's pair set, a roster of two, `interrupted` true from an earlier write, a `waitPrev`), then PreCompact, PostCompact `auto` and PostCompact `manual` in turn → `bgDelegated`, `bgDelegatedKinds`, `subagents`, `interrupted`, `waitPrev` and `aliveAt` all as they were (red: the base's full rewrite drops the pair and `waitPrev`);
+  - `bucket.test.ts`: a row with live `busy`, hook `done`/`Stop` newer and `background: {count: 2}`, after that compaction sequence → still `working` (red against the base hook's output: the pair is gone and D-75 paints `done`);
   - UserPromptSubmit at T1, then PreCompact and PostCompact `auto` → `working`/T1 kept;
-  - `waiting` carried; no file → no file;
+  - `waiting` carried; no file → no file; the compaction helpers still ran (their journal line, as `compact-card.test.ts` observes it);
   - the `/compact` UserPromptSubmit arm, per the measurement (red against the base: `working`);
   - `fleet.test.ts`: a row `done` at T0, through a compaction, keeps `bucketSince` T0;
+  - `stall-verdict.test.ts`: a hookstate carried through a compaction has no fresh `aliveAt` and no fresh `updatedAt`, so the `frozen` clock and the `delegates` hold read the pre-compaction activity (green after Task 2; it pins that compactions stay plumbing);
   - `dispatch-live-gate.test.ts`: hook `done` carried through an idle compaction, live `busy` → `worker-busy` (green, because Task 9 is in; its point is that the carry is safe only behind it).
 - [ ] **Step 2: Green.**
-- [ ] **Step 3: Mutation table, run:** PostCompact `manual` writes `done` fresh (its case); PreCompact writes `working` (its case); the carry drops the stamp (the T0 cases); the `/compact` arm opens a turn in the marker (a marker assertion in its case).
-- [ ] **Step 4: Gates:** the suites above, `session-hook-turnmark`, `session-hook-agent-events`, `ccd-auto-compact`, `turnidle`, `mail-sweep`, the four ledger and hygiene suites.
-- [ ] **Step 5: Commit** `fix(hook): compactions carry the prior state and its stamp — no fresh done, no stale working (D-5239)`.
+- [ ] **Step 3: Mutation table, run:** PostCompact `manual` writes `done` fresh (its case); PreCompact writes `working` (its case); the compaction writes the file with `aliveAt` (the byte-identity cases and the stall pin); the compaction rewrites the file but drops the background pair (the field-set case, the bucket case); the skip also skips the compaction helpers (the helpers case); the `/compact` arm opens a turn in the marker (a marker assertion in its case).
+- [ ] **Step 4: Gates:** the suites above, `session-hook-turnmark`, `session-hook-agent-events`, `ccd-auto-compact`, `turnidle`, `mail-sweep`, `stall-sweep`, the compaction-card suites the helpers feed (`compact-card`, `compact-card-ship`), the four ledger and hygiene suites.
+- [ ] **Step 5: Commit** `fix(hook): compactions write no hookstate — no fresh done, no stale working, no lost field (D-5239)`.
 
 ### Task 11: swap guards, `ccd` half (D-5240)
 
 **Spec:** §5.9. **Routing:** band 3. **Lane:** FLEET (`ccd`).
 
+**Where each gate goes in `cmd_swap`** (≈:27003), in this order, every one before `[[ -e "$REG/$id.choicekept" ]] || _operator_choice_keep "$id"` (≈:27208) and `_svc_stop`, so a refusal leaves no `.choicekept` marker and no account write behind:
+1. after the pool policy and **before the detach branch** (≈:27147): the manual gate (no `CCD_SWAP_AUTO`);
+2. after the transcript pre-flight and the background-job check (≈:27170–27206), immediately before `_operator_choice_keep`: the automatic gates (`requeue`, `rescue-cancel`, `rescue-backoff`).
+
 **Files:**
 - Modify `ccd/ccd`:
-  - `_dispatch_swap` (≈:17290): pass `CCD_SWAP_ARM` (`affinity` or `rescue`), `CCD_SWAP_PREV` (the row's `lastswap` before the caller stamped it) and, for a rescue, `CCD_SWAP_TX` and `CCD_SWAP_TX_BYTES` (the transcript and its size at the decision) into the `bash -c` string, single-quote-safe.
+  - `_dispatch_swap` (≈:17290): pass `CCD_SWAP_ARM` (`affinity` or `rescue`), `CCD_SWAP_PREV` (the row's `lastswap` before the caller stamped it), `CCD_SWAP_DECIDED` (the decision's epoch, the `now` its writes used) and, for a rescue, `CCD_SWAP_TX` and `CCD_SWAP_TX_BYTES` (the transcript and its size at the decision) into the `bash -c` string, single-quote-safe.
   - Extract `_swap_idle_gate <id>` from `_auto_swap_check`'s non-blocked arm (≈:19217–19241: no `esc to interrupt`, a prompt, live `idle`, `SWAP_CEIL_QUIET`); the arm calls it.
-  - `cmd_swap` (≈:27003): with `CCD_SWAP_AUTO=1` and arm `affinity`, `_swap_idle_gate` immediately before `_svc_stop`; busy → `requeue <id>: busy after jitter` in `swap.log`, `lastswap` restored to `CCD_SWAP_PREV` (or removed), exit 0, nothing stopped. With arm `rescue`: re-run the blocked verdict (`rescue-cancel <id>: no longer blocked`), then read the transcript from `CCD_SWAP_TX_BYTES`: an appended assistant entry that is not an API-error message → `rescue-backoff <id>: output since decision`; both restore `lastswap` and stop nothing. Without `CCD_SWAP_AUTO`: a busy session (live word not `idle`, `esc to interrupt` on the pane, or a turn marker `working`) dies `ccd: session-busy: …` unless `--interrupt`; an unreadable status dies `ccd: status-unknown: …` unless `--interrupt`.
-  - `cmd_swap_self` (≈:27390): passes `--interrupt`.
+  - `cmd_swap`, gate 1 (manual): parse `--interrupt` in the flag loop beside `--force` and `--cross-pool`. Without `CCD_SWAP_AUTO`, read `_ws_status` (≈:5115, the read `ws-archive` uses): `busy` dies `ccd: session-busy: …` unless `--interrupt`; a non-zero return (unreadable) dies `ccd: status-unknown: …` **whatever the flags** (no override exists; the message says to `ccd stop` first, after which there is no pane and `_ws_status` reads `idle`); `idle` proceeds. Inside the detached re-run (`CCD_SWAP_DETACHED=1`) a refusal goes through `_swap_refuse` instead of `die`, as that run's other refusals do, so it reaches the operator.
+  - `cmd_swap`'s detach branch (≈:27163): the re-run's argv gains `${interrupt:+--interrupt}` beside `${force:+--force}` and `${cross:+--cross-pool}`, and the failure message's retry hint carries it too.
+  - `cmd_swap`, gate 2 (automatic): with `CCD_SWAP_AUTO=1` and arm `affinity`, `_swap_idle_gate`; busy → `requeue <id>: busy after jitter` in `swap.log`, `lastswap` restored to `CCD_SWAP_PREV` (or removed), exit 0, nothing stopped. With arm `rescue`: capture the pane and re-run `_session_hard_blocked` (≈:18299); a measured "not blocked" → `rescue-cancel <id>: no longer blocked`, and the decision's own account writes are undone **by compare**: `$LIMITS_DIR/<wrapper>.json` is removed only while it is byte-equal to `{"five":100,"seven":0,"ts":<CCD_SWAP_DECIDED>}`, and `$REG/<wrapper>-authdead` only while it reads `<CCD_SWAP_DECIDED> rescue-401`; anything newer is left. An unreadable re-check proceeds as decided (today's behaviour). Then read the transcript from `CCD_SWAP_TX_BYTES`: an appended assistant entry that is not an API-error message → `rescue-backoff <id>: output since decision`, undoing nothing. Both restore `lastswap` and stop nothing.
+  - `cmd_swap_self` (≈:27390): calls `cmd_swap --interrupt "$id" "$target"`.
   - `cmd_caps` (≈:8487): `swap-busy-v1`.
 - Create `server/test/ccd-swap-guards.test.ts`. Modify `server/test/ccd-swap.test.ts` (its manual cases now run on an idle fixture, or pass `--interrupt`), `server/test/ccd-swap-pin.test.ts`, `server/test/ccd-swap-refuse.test.ts`.
 
-- [ ] **Step 1: Red** (fixture HOME; the transient unit's `bash -c` run inline by a stubbed `systemd-run`):
-  - an affinity swap whose pane turns busy during the jitter → `requeue`, `lastswap` restored, `systemctl stop` never called (red: stopped);
+- [ ] **Step 1: Red** (fixture HOME; the transient unit's `bash -c` run inline by a stubbed `systemd-run`; a stubbed `tmux` whose `display-message -p '#S'` answers per case):
+  - an affinity swap whose pane turns busy during the jitter → `requeue`, `lastswap` restored, `systemctl stop` never called, **no `.choicekept`** (red: stopped);
   - idle → proceeds (green before and after);
-  - a rescue whose banner is gone at the act → `rescue-cancel` (red);
-  - a rescue whose transcript gained one assistant entry → `rescue-backoff` (red); one that gained only an API-error entry → proceeds;
-  - manual `ccd swap` on a busy fixture → exit non-zero, `session-busy`, the pane untouched (red); with `--interrupt` → proceeds; on an unreadable status file → `status-unknown`;
-  - `ccd swap-self` from inside a busy fixture session → proceeds (red without the implicit flag);
+  - a rescue whose banner is gone at the act → `rescue-cancel`, no `.choicekept`; the decision's `five:100` row and its `rescue-401` marker are removed (red: stopped, and both left);
+  - the same, with another writer's newer limits row (a different `ts`) and an `authdead` marker of another epoch → both left;
+  - a rescue whose re-check cannot read the pane → proceeds as decided;
+  - a rescue whose transcript gained one assistant entry → `rescue-backoff`, both account writes left (red); one that gained only an API-error entry → proceeds;
+  - manual `ccd swap` on a busy fixture → exit non-zero, `session-busy`, the pane untouched, no `.choicekept` (red); with `--interrupt` → proceeds;
+  - manual on an unreadable status → `status-unknown` (red: proceeds); **with `--interrupt` → still `status-unknown`** (red against a gate that lets the flag through);
+  - **the detach path:** `TMUX` set and `display-message` answering the session's own tmux name, busy fixture, no `--interrupt` → refused synchronously, `systemd-run` never called (red: "detached" printed, then the re-run refuses where nobody waits); with `--interrupt` → the stubbed `systemd-run` receives an argv containing `--interrupt`, and running that job inline proceeds (red: the re-run drops the flag and refuses `session-busy`);
+  - `ccd swap-self` from inside a busy fixture session → reaches the detach branch with `--interrupt` and the job proceeds (red without the implicit flag);
   - `ccd caps` lists `swap-busy-v1`.
 - [ ] **Step 2: Green.** Re-stamp the marker.
-- [ ] **Step 3: Mutation table, run:** the act-time gate removed (the jitter case); `lastswap` not restored (an assertion in the requeue case); the rescue re-confirm removed; API-error entries counted as output (its case); the manual refusal removed; `swap-self` loses the flag.
-- [ ] **Step 4: Gates:** the suites above, `ccd-swap-carry`, `ccd-swap-carry-merge`, `ccd-swap-target-class`, `swap-timeout-budget`, `ccd-project-pool`, `capsupported`, the four ledger and hygiene suites.
+- [ ] **Step 3: Mutation table, run:**
+
+  | Mutant | Expected RED |
+  |---|---|
+  | the act-time affinity gate removed | the jitter case |
+  | the affinity gate moved after `_operator_choice_keep` | the jitter case's `.choicekept` assertion |
+  | `lastswap` not restored | an assertion in the requeue case |
+  | the rescue re-confirm removed | the rescue-cancel case |
+  | rescue-cancel undoes nothing | the rescue-cancel case's account assertions |
+  | rescue-cancel removes without comparing | the newer-writer case |
+  | an unreadable re-check cancels | the unreadable-pane case |
+  | API-error entries counted as output | its case |
+  | the manual refusal removed | the manual busy case |
+  | `--interrupt` overrides `status-unknown` | the unreadable-with-flag case |
+  | the manual gate moved below the detach branch | the synchronous detach-refusal case |
+  | the detach re-run drops `--interrupt` | the detach job case |
+  | `swap-self` loses the flag | the swap-self case |
+
+- [ ] **Step 4: Gates:** the suites above, `ccd-swap-carry`, `ccd-swap-carry-merge`, `ccd-swap-target-class`, `swap-timeout-budget`, `ccd-project-pool`, `capsupported`, `ccd-lifecycle-sites`, the four ledger and hygiene suites.
 - [ ] **Step 5: Commit** `fix(ccd): swaps re-measure at the act — auto re-queues, rescue re-confirms, manual needs --interrupt (D-5240)`.
 
 ### Task 12: swap guards, server and PWA half (D-5240)
@@ -418,34 +534,40 @@ The verifier required one order (the dispatch gate before the compaction carry);
 **Spec:** §5.9. **Routing:** band 2. **Lane:** server. **Depends on:** Task 11.
 
 **Files:**
-- Modify `server/src/server.ts` (the swap route, ≈:3193): before the queue, `turnVerdictFor` (Task 9's module); without `{interrupt: true}`: `busy` → 409 `session-busy`, `unmeasured` → 409 `status-unknown`; with it: `unmeasured` still 409. Inside the queued job, read it again (a turn that began in the wait refuses the same way). Both arms, the declared crossing included.
+- Modify `server/src/server.ts` (the swap route, ≈:3193): before the queue, `turnVerdictFor` (Task 9's module); without `{interrupt: true}`: `busy` → 409 `session-busy`, `unmeasured` → 409 `status-unknown`; with it: `unmeasured` still 409. Inside the queued job, read it again (a turn that began in the wait refuses the same way). Both arms, the declared crossing included. `ccd`'s own `status-unknown` (Task 11: it refuses an unreadable status whatever the flag) maps to the same 409, never the generic 502, so a status that turns unreadable between the server's read and `ccd`'s act reads the same to the operator.
 - Modify `server/src/ccdargv.ts`: `SWAP_BUSY_CAP = 'swap-busy-v1'`; `CCD_ARGV.swapInterrupt` and `swapCrossInterrupt`, used only when `capSupported(fleetState, SWAP_BUSY_CAP)`; otherwise the old argv.
 - Modify `agent/src/whitelist.ts` (≈:413) only if `whitelist-subset.test.ts` shows the prefix grant on `['swap']` does not already admit the flag.
 - Modify `pwa/src/lib/api.ts` (`swap(id, wrapper, {crossPool, interrupt})`), `pwa/src/fleet/SwapSheet.tsx` (the confirm step, archive's words and shape).
 - Create `server/test/swap-route-busy.test.ts`. Modify `server/test/swap-route-pool.test.ts`, `server/test/lifecycle.test.ts`, `server/test/whitelist-subset.test.ts`, `pwa/test/swap-sheet.test.tsx`.
 
-- [ ] **Step 1: Red.** Busy → 409 `session-busy`, no ccd call (red: 200); unmeasured → 409 `status-unknown`; `interrupt: true` + busy + cap → the argv carries `--interrupt`; no cap → the old argv; the crossing arm the same; a turn that begins while queued → refused inside the job; idle → 200 as before. SwapSheet: a 409 `session-busy` shows the confirm, whose primary sends `interrupt: true` (red: an error toast).
+- [ ] **Step 1: Red.** Busy → 409 `session-busy`, no ccd call (red: 200); unmeasured → 409 `status-unknown`; `interrupt: true` + unmeasured → 409 `status-unknown`, no ccd call; `interrupt: true` + busy + cap → the argv carries `--interrupt`; no cap → the old argv; the crossing arm the same; a turn that begins while queued → refused inside the job; `ccd` answering `ccd: status-unknown: …` → 409 `status-unknown` (red: 502); idle → 200 as before. SwapSheet: a 409 `session-busy` shows the confirm, whose primary sends `interrupt: true` (red: an error toast).
 - [ ] **Step 2: Green.**
-- [ ] **Step 3: Mutation table, run:** the pre-queue gate removed; the in-queue re-read removed; consent accepted for `unmeasured`; `--interrupt` sent without the cap; the crossing arm skips the gate.
+- [ ] **Step 3: Mutation table, run:** the pre-queue gate removed; the in-queue re-read removed; consent accepted for `unmeasured`; `--interrupt` sent without the cap; the crossing arm skips the gate; `ccd`'s `status-unknown` mapped to 502.
 - [ ] **Step 4: Gates:** the suites above, `routes`, `auth-gate`, `capsupported`, `ccdargv-brand`, `ccdargv-dec-parity`, `archive-door`, the four ledger and hygiene suites, tsc for both.
 - [ ] **Step 5: Commit** `fix(swap): the swap route and sheet refuse a busy session without "swap anyway" (D-5240)`.
 
 ### Task 13: victim policy — verification on throwaway scopes (D-5241; operator act, no PR)
 
-**Spec:** §5.10. **Who:** the operator, from an ordinary SSH login shell on the fleet box (never from inside a fleet session's pane, so no probe process lands in a pane scope).
+**Spec:** §5.10. **Who:** the operator. On the fleet box, from an ordinary SSH login shell (never from inside a fleet session's pane, so no probe process lands in a pane scope). The allocating steps preferably not on the fleet box at all (below).
 
 **The SAFETY rule, named:** "NEVER touch tmux, `~/.cc-sessions`, `~/.cc-limits`, or `claude-session@*.service` directly." These steps touch none of them. They create units named `ccrc-oomprobe-*` and `ccrc-oomstop-*` in a slice named `ccrc-oomprobe.slice`, and one drop-in directory for the `ccrc-oomprobe-` prefix. They run `systemctl --user daemon-reload`, an act on the live user manager that every `ccrc update` already performs. The operator approved the victim policy on 2026-10-16 on the condition that this verification runs first.
 
-- [ ] **0. The slice.** `~/.config/systemd/user/ccrc-oomprobe.slice` with `[Slice] MemoryMax=256M` and `MemorySwapMax=0`, so every OOM below is local to it; `daemon-reload`.
-- [ ] **1. A prefix drop-in reaches a new transient scope.** `~/.config/systemd/user/ccrc-oomprobe-.scope.d/50-oom-continue.conf` = `[Scope]` / `OOMPolicy=continue`; `daemon-reload`; start `ccrc-oomprobe-1.scope` (`systemd-run --user --scope --unit=ccrc-oomprobe-1 --slice=ccrc-oomprobe.slice -- sleep 300` in a second login shell); `systemctl --user show ccrc-oomprobe-1.scope -p OOMPolicy` reads `continue`. Record the systemd version.
-- [ ] **2. Continue, a child victim.** In a new `ccrc-oomprobe-2.scope`: a parent that holds about 64 MB and waits, and a child that raises its own `oom_score_adj` to 800 and allocates until killed. Record: the child killed, the parent alive, the scope `active`, and the journal lines for the scope (the "A process of this unit has been killed by the OOM killer" line, and whether any `Failed` line follows).
-- [ ] **3. Stop, for contrast.** The same in `ccrc-oomstop-1.scope` (the prefix does not match): the scope ends with `Result=oom-kill`; record the lines.
-- [ ] **4. A main-process victim.** In `ccrc-oomprobe-3.scope`, the parent larger than the child, both at 200: the parent is killed; record the lines. This is the signature the measurement plan uses for the 32 deaths with no `Failed` line.
-- [ ] **5. Running scopes.** With `ccrc-oomprobe-4.scope` running and the drop-in removed, `daemon-reload`, read `OOMPolicy`; put the drop-in back, `daemon-reload`, read it again (does a reload reach a running transient scope?). Then try `systemctl --user set-property --runtime ccrc-oomprobe-4.scope OOMPolicy=continue` and record whether it is accepted.
-- [ ] **6. The prefix script.** With Task 14's `ccd-tool-adj` copied to a scratch path: `ccd-tool-adj bash -c 'cat /proc/self/oom_score_adj'` prints 800.
-- [ ] **7. The shell prefix's argument convention** (a workstation, not the fleet box): Claude Code at the fleet's version in a throwaway `tmux -L` server, `CLAUDE_CODE_SHELL_PREFIX` pointing at a scratch script that logs its argv and execs it; one Bash tool call (`echo hi`); record how the command arrives (one string or several arguments). Kill the server. On the fleet box, read-only, for every installed Claude Code version: the variable's name occurs in the binary.
-- [ ] **8. Clean up.** Stop every probe unit, remove the slice file and the drop-in directory, `daemon-reload`, and confirm `systemctl --user list-units 'ccrc-oom*'` is empty.
-- [ ] **9. Record** steps 1 to 7 (versions, yes/no answers, and the journal lines with probe names only) in this plan's §Measurements by a docs PR. **Stop rule:** if step 1 fails (prefix drop-ins do not reach transient scopes on this systemd), Task 14 ships the `ccrc-tmux-server.scope` drop-in and the tool priority only, and pane scopes get `OOMPolicy=continue` from `ccd-cap-scopes` at runtime if step 5 shows `set-property` accepts it, else not at all; the coordinator records which.
+**Why the probe itself is dangerous, and what makes it safe.** The investigation measured the user manager's cgroup **at its `MemoryMax`**, with tens of thousands of OOM events there and about half of all OOM kills outside the session slice. The probe slice is a child of that tree: its own cap keeps the probe's OOM local only while its ancestors have room, and an OOM at an ancestor picks its victim across the whole fleet by size. Three rules, each one a gate:
+1. **Read before allocating** (step 0), and again immediately before each allocating step: every ancestor has at least 1 GiB of headroom, or nothing allocating runs that day.
+2. **Allocate off the fleet box when possible.** Steps 2, 3 and 4 allocate; they run on a non-fleet Linux host whose systemd version (step 1 records the fleet box's) and cgroup v2 setup match. Only the allocation-free steps 1, 5 and 6, and step 7's read-only binary check, must run on the fleet box, because they measure its systemd and its binaries.
+3. **If the allocating steps must run on the fleet box** (no matching host exists, recorded as such): the probe slice is capped at **64M** with no swap; every probe process raises its own `oom_score_adj` to at least 900, and above step 0's highest reading, before it allocates, so an OOM at any ancestor level picks a probe first; and the operator runs them at a quiet moment, watching step 0's figures.
+
+- [ ] **0. Headroom, read-only.** For `user@$(id -u).service` and each slice between it and where `ccrc-oomprobe.slice` will sit: `memory.current`, `memory.max`, `memory.swap.current`, `memory.swap.max` (`systemctl --user show -p MemoryCurrent,MemoryMax …` or the cgroup files); whether `systemd-oomd` is active and any of them carries `ManagedOOM*`; the box's `MemAvailable`; and the highest `oom_score_adj` among the user manager's processes (`/proc/*/oom_score_adj`, read only). **Abort** unless every ancestor has at least 1 GiB below `memory.max` and its swap is not at its cap. If `systemd-oomd` watches an ancestor, the allocating steps run off the fleet box only. Nothing is written in this step.
+- [ ] **0b. The slice.** `~/.config/systemd/user/ccrc-oomprobe.slice` with `[Slice] MemoryMax=64M` and `MemorySwapMax=0`; `daemon-reload`. (On the non-fleet host the cap may be larger; the rules above bind the fleet box.)
+- [ ] **1. A prefix drop-in reaches a new transient scope (allocation-free).** `~/.config/systemd/user/ccrc-oomprobe-.scope.d/50-oom-continue.conf` = `[Scope]` / `OOMPolicy=continue`; `daemon-reload`; start `ccrc-oomprobe-1.scope` (`systemd-run --user --scope --unit=ccrc-oomprobe-1 --slice=ccrc-oomprobe.slice -- sleep 300` in a second login shell); `systemctl --user show ccrc-oomprobe-1.scope -p OOMPolicy` reads `continue`. Record the systemd version and the kernel's.
+- [ ] **2. Continue, a child victim (allocates).** Step 0 re-read. In a new `ccrc-oomprobe-2.scope`: a parent at `oom_score_adj` 900 that holds about 16 MB and waits, and a child that raises its own score to 1000 and allocates until killed. Record: the child killed, the parent alive, the scope `active`, and the journal lines for the scope (the "A process of this unit has been killed by the OOM killer" line, and whether any `Failed` line follows).
+- [ ] **3. Stop, for contrast (allocates).** Step 0 re-read. The same in `ccrc-oomstop-1.scope` (the prefix does not match): the scope ends with `Result=oom-kill`; record the lines.
+- [ ] **4. A main-process victim (allocates).** Step 0 re-read. In `ccrc-oomstop-2.scope` (policy `stop`, the policy the 32 measured deaths ran under) and then in `ccrc-oomprobe-3.scope` (`continue`): the parent at 1000 and larger than the child, the child at 900 and exiting when its parent is gone (it polls `kill -0 $PPID`, as a pane's processes end when tmux closes the pane). The parent is killed; record the lines under both policies. This is the signature the measurement plan uses for the 32 deaths with no `Failed` line.
+- [ ] **5. Running scopes (allocation-free).** With `ccrc-oomprobe-4.scope` running `sleep` and the drop-in removed, `daemon-reload`, read `OOMPolicy`; put the drop-in back, `daemon-reload`, read it again (does a reload reach a running transient scope?). Then try `systemctl --user set-property --runtime ccrc-oomprobe-4.scope OOMPolicy=continue` and record whether it is accepted.
+- [ ] **6. The prefix script (allocation-free).** With Task 14's `ccd-tool-adj` copied to a scratch path: `ccd-tool-adj bash -c 'cat /proc/self/oom_score_adj'` prints 800.
+- [ ] **7. The shell prefix's argument convention** (a workstation, not the fleet box): Claude Code at the fleet's version in a throwaway `tmux -L` server, `CLAUDE_CODE_SHELL_PREFIX` pointing at a scratch script that logs its argv and execs it; one Bash tool call (`echo hi`); record how the command arrives (one string or several arguments). Kill the server. On the fleet box, read-only, for every installed Claude Code version: the variable's name occurs in the binary, and so do the four things this plan reads from Claude Code's code (spec §9): the live file's delegation set, the task-type label map, the terminal task statuses and the Stop payload's `background_tasks` and `session_crons` keys.
+- [ ] **8. Clean up.** Stop every probe unit, remove the slice file and the drop-in directory, `daemon-reload`, and confirm `systemctl --user list-units 'ccrc-oom*'` is empty, on every host used.
+- [ ] **9. Record** steps 0 to 7 (versions, which host ran which step, the headroom figures, yes/no answers, and the journal lines with probe names only) in this plan's §Measurements by a docs PR. **Stop rules:** if step 0 fails on the fleet box and no matching host exists, steps 2 to 4 are not run and Task 14 ships with the signatures marked unmeasured; if step 1 fails (prefix drop-ins do not reach transient scopes on this systemd), Task 14 ships the `ccrc-tmux-server.scope` drop-in and the tool priority only, and pane scopes get `OOMPolicy=continue` from `ccd-cap-scopes` at runtime if step 5 shows `set-property` accepts it, else not at all; the coordinator records which.
 
 ### Task 14: victim policy — ship it (D-5241)
 
@@ -478,57 +600,95 @@ The verifier required one order (the dispatch gate before the compaction carry);
 
 ### Task 16: hibernation, `ccd` half (D-5242)
 
-**Spec:** §5.11. **Routing:** band 3. **Lane:** FLEET (`ccd`, and the agent's whitelist). **Depends on:** Task 2 (an empty roster means something).
+**Spec:** §5.11. **Routing:** band 3. **Lane:** FLEET (`ccd`, the hook, and the agent's whitelist). **Depends on:** Task 2 (an empty roster means something).
 
 **Files:**
+- Modify `ccd/session-hook.sh`, below `:2900`: the Stop arm's one `jq` (≈:3024) emits one more line, `crons`, the length of `session_crons` when it is an array and −1 otherwise; `TURN_MARK_PROGRAM` (≈:3086) gains `crons` (set on `done`, carried on every other kind for the same session, −1 on `clear` and for a foreign line) and `_hook_turn_mark` passes it with `--argjson`. Claude Code's schema names it "session-scoped cron tasks (CronCreate, ScheduleWakeup, /loop) that will wake this session later. Empty array when none are scheduled" [B]; every committed capture carries it, empty (`server/test/fixtures/delegation/`).
 - Modify `ccd/ccd`:
-  - `cmd_hibernate <id>` (one positional, the `cmd_ensure` security note applies): re-measure at the act — `_idle_for_keystroke`'s checks (≈:19788: width, no `esc to interrupt`, a prompt, live `idle`, 60 s quiet, an empty box), the turn marker's `state` `done` with `bg` 0 or less, no `.hold`, no `.no-hibernate`, no `lastswap` younger than `SWAP_JITTER` + 60 s. Refuse `ccd: session-busy: <reason>` with exit 3. Then `_operator_choice_keep`, write `$REG/<id>.hibernated` (`<epoch> <idle-hours>`), `_ws_unsupervise "$id" ccd`, `tmux kill-session`, `hibernate <id>: idle <h>h` to `swap.log`, print `hibernated <id>`.
-  - The verb table and `cmd_caps` (≈:8487) list `hibernate`.
+  - `cmd_hibernate <id>` (one positional, the `cmd_ensure` security note applies): re-measure at the act — `_idle_for_keystroke`'s checks (≈:19788: width, no `esc to interrupt`, a prompt, live `idle`, 60 s quiet, an empty box), the turn marker's `state` `done` with `bg` 0 or less **and `crons` exactly 0** (absent or −1 refuses: `scheduled`), no `.hold`, no `.no-hibernate`, no `lastswap` younger than `SWAP_JITTER` + 60 s, and **nobody attached**: `tmux display-message -p -t <target> '#{session_attached}'` reads 0 (a terminal attach, `cc`, or the PWA drawer's `tmux attach`; an unreadable answer refuses). Refuse `ccd: session-busy: <reason>` with exit 3, the reasons `busy`, `draft`, `marker`, `background`, `scheduled`, `held`, `opted-out`, `recent-swap`, `attached`. Then, in this order: `_lc_done hibernate "$id" ""` (the journal row that makes the act deliberate), `_operator_choice_keep`, write `$REG/<id>.hibernated` (`<epoch> <idle-hours>`), `_ws_unsupervise "$id" ccd`, `tmux kill-session`, `hibernate <id>: idle <h>h` to `swap.log`, print `hibernated <id>`.
+  - `_LC_ACTS` (≈:4368) gains `hibernate`; the verb table and `cmd_caps` (≈:8487) list `hibernate`.
   - `cmd_ensure` (≈:24152) and `cmd_start` (≈:23767): remove `.hibernated` beside `.stopped`, and when one was removed write `$REG/<id>.woke` (epoch).
+  - `cmd_stop` (≈:27513): on a hibernated row, remove `.hibernated` (it becomes an ordinary stop).
+  - `cmd_forget` (≈:27571): refuse `hibernated` through `_lc_refuse` ("hibernated: wake it (ccd ensure) or stop it (ccd stop) first"), beside its `held` rung.
   - `_auto_swap_check`'s non-rescue arm: skip while `.woke` is younger than `SWAP_COOLDOWN` (a builtin test and read, no fork).
   - `cmd_swap`: refuse `ccd: hibernated` while `.hibernated` stands.
+- Modify `shared/api.ts`: `LifecycleAct` gains `'hibernate'` and `LIFECYCLE_ACT_MAP` its key (≈:7197, ≈:7265), with a comment: a deliberate stop, its own act so the journal never has to be read with a filter. Modify `server/src/deadCoordinator.ts`: `DEAD_COORDINATOR_DELIBERATE_ACTS` (≈:63) gains `'hibernate'`, its docstring saying why (`_ws_unsupervise`'s own row carries the surface `none` when ccd acts on its own account, which reads as a crash) and that an older server reads the act as `unknown`, which `isDeliberate` already counts.
 - Modify `agent/src/whitelist.ts` (≈:413): `['hibernate']`. Modify `server/src/ccdargv.ts`: `CCD_ARGV.hibernate(id, dec)`.
-- Create `server/test/ccd-hibernate.test.ts`. Modify `server/test/whitelist-subset.test.ts`, `server/test/ccdargv-brand.test.ts`, `server/test/ccd-supervised-start.test.ts`, `server/test/ccd-swap-guards.test.ts`.
+- Create `server/test/ccd-hibernate.test.ts`. Modify `server/test/session-hook-turnmark.test.ts`, `server/test/whitelist-subset.test.ts`, `server/test/ccdargv-brand.test.ts`, `server/test/ccd-supervised-start.test.ts`, `server/test/ccd-swap-guards.test.ts`, `server/test/ccd-forget.test.ts`, `server/test/lifecycle-vocabulary.test.ts`, `server/test/dead-coordinator-policy.test.ts`.
 
-- [ ] **Step 1: Red** (fixture HOME; stubbed tmux and systemctl): an idle fixture hibernates (marker, `stopped` stamp, unit disabled, pane killed, the `swap.log` line); each refusal reason refuses with exit 3 and touches nothing (busy live word, `esc to interrupt`, a draft in the box, marker `working`, marker `bg: 1` with kind `shell`, a `.hold`, a `.no-hibernate`, a fresh `lastswap`); `ccd ensure` on a hibernated row removes both markers and writes `.woke`; an affinity swap within `SWAP_COOLDOWN` of a wake is skipped; `ccd swap` on a hibernated row refuses `hibernated`; `ccd caps` lists `hibernate`; `whitelist-subset` enumerates the new argv.
+- [ ] **Step 1: Red** (fixture HOME; stubbed tmux and systemctl):
+  - the hook: a Stop whose `session_crons` holds one entry (the schema's own shape [B]: `{"id":"c0000001","schedule":"0 9 * * 1-5","recurring":true,"prompt":"fixture"}`, every other key copied from the five-kinds fixture) writes `crons: 1` to the marker (red: absent); `[]` writes 0; no key writes −1; a UserPromptSubmit after it carries the 1;
+  - an idle fixture hibernates (the journal row `hibernate` first, marker, `stopped` stamp, unit disabled, pane killed, the `swap.log` line);
+  - each refusal reason refuses with exit 3 and touches nothing, no journal row of `hibernate` included: busy live word, `esc to interrupt`, a draft in the box, marker `working`, marker `bg: 1` with kind `shell`, **marker `crons: 1`**, **a marker with no `crons`**, a `.hold`, a `.no-hibernate`, a fresh `lastswap`, **`#{session_attached}` reading 1**, and **`#{session_attached}` unreadable**;
+  - `ccd ensure` on a hibernated row removes both markers and writes `.woke`; `ccd stop` on one removes `.hibernated`;
+  - `ccd forget` on a hibernated non-workspace row refuses `hibernated` and removes nothing (red: it purges the row); after `ccd stop`, forget succeeds as before;
+  - an affinity swap within `SWAP_COOLDOWN` of a wake is skipped; `ccd swap` on a hibernated row refuses `hibernated`; `ccd caps` lists `hibernate`; `whitelist-subset` enumerates the new argv;
+  - `lifecycle-vocabulary.test.ts`: `_LC_ACTS` and `LIFECYCLE_ACTS` stay set-equal with `hibernate` in both (red if either side lacks it);
+  - `dead-coordinator-policy.test.ts`: a claimant whose journal since its last successful spawn holds `hibernate` then `unsupervise` (surface `none`) reads `deliberate`, never crashed (red: crashed); the same row parsed as `unknown` (an older server) also reads deliberate (green before and after).
 - [ ] **Step 2: Green.** Re-stamp the marker.
-- [ ] **Step 3: Mutation table, run:** each re-measure condition removed in turn (its refusal case); the marker written after the kill (a kill stub that ends the shell leaves no marker); `ensure` keeps `.hibernated`; the wake hold removed; `cmd_swap` ignores the marker.
-- [ ] **Step 4: Gates:** the suites above, `ccd-lifecycle-purge` (the new fields are suffix-purged), `ccd-lifecycle-sites`, `ccd-swap`, `ccd-route-apply`, `capsupported`, the four ledger and hygiene suites.
-- [ ] **Step 5: Commit** `feat(ccd): ccd hibernate stops a long-idle session cleanly after re-measuring it; ensure wakes it (D-5242)`.
+- [ ] **Step 3: Mutation table, run:** each re-measure condition removed in turn (its refusal case); the `crons` hold removed (both cron cases); `crons` absent read as 0 (the no-`crons` case); the attached hold removed (its two cases); the `hibernate` journal row written after the kill (a kill stub that ends the shell leaves no row) or not at all (the dead-coordinator case through the store's journal fixture); the marker written after the kill; `ensure` keeps `.hibernated`; the forget refusal removed; the wake hold removed; `cmd_swap` ignores the marker; `hibernate` dropped from `DEAD_COORDINATOR_DELIBERATE_ACTS`.
+- [ ] **Step 4: Gates:** the suites above, `ccd-lifecycle-purge` (the new fields are suffix-purged), `ccd-lifecycle-sites`, `ccd-lifecycle-emit`, `ccd-lifecycle-pairs`, `ccd-swap`, `ccd-route-apply`, `capsupported`, `turnmark`, `stall-sweep` (the marker gains a field), `dead-coordinator-lane`, the four ledger and hygiene suites, tsc.
+- [ ] **Step 5: Commit** `feat(ccd): ccd hibernate stops a long-idle session cleanly after re-measuring it, journalled as deliberate; ensure wakes it (D-5242)`.
 
-### Task 17: hibernation, server half (D-5242)
+### Task 17a: hibernation, server — the verdict, the shadow sweep, `hibernatedAt` (D-5242)
 
-**Spec:** §5.11. **Routing:** band 3. **Lane:** server. **Depends on:** Task 16 on the fleet box (`verbSupported` refuses the verb otherwise, and the sweep then does nothing).
+**Spec:** §5.11. **Routing:** band 3. **Lane:** server. **Depends on:** Task 16 on the fleet box for the marker's `crons` (without it every row holds `scheduled`, which is safe). **Nothing in this task can hibernate a session:** its sweep only logs. The live act arrives in 17b, with the wake paths it needs.
 
 **Files:**
-- Create `server/src/coord/hibernate.ts` (L1): `hibernateVerdict(input, now, afterMs): {act: 'hibernate'} | {act: 'hold', reason: HibernateHold}`, every hold of the spec's §5.11 a named member, and `HIBERNATE_AFTER_MS_DEFAULT` (6 h).
-- Create `server/src/hibernateSweep.ts` (L4): every 5 minutes, off the watcher's tick; reads `$REG/hibernate-live`, `$REG/hibernate-disabled` and `$REG/hibernate-after-hours` from the registry listing; the turn marker per candidate only; open runs, claims and queued mail from the coordination store; viewers from the session socket hub (`server/src/sessionws.ts` gains `viewedIds()`); at most 3 acts a sweep; shadow logs `ccrc-server: hibernate-shadow <id> idle=<h>h`; live calls `CCD_ARGV.hibernate` and treats exit 3 as a quiet skip.
-- Modify `shared/api.ts`: `FleetSession.hibernatedAt: number | null` and its revive; `inArchivedFold` (≈:9472) excludes a hibernated row. Modify `server/src/registry.ts` (presence from the listing, bytes read only when listed) and `server/src/fleet.ts`.
-- Modify `server/src/watch.ts`, the mail lane (≈:6826): a recipient whose `hibernatedAt` is set is woken (`CCD_ARGV.ensure`, at most once per id per 10 minutes, only when mail is not disabled) and gated `hibernated`, never `session-dead`. Modify the kickoff route (`server/src/server.ts`) the same way. The swap route answers 409 `hibernated`.
-- Modify `server/test/unattended-actor.test.ts` (two new unattended call sites: the sweep's `hibernate` and the mail lane's `ensure`) and `server/test/single-definition.test.ts` (`hibernate-live`, `hibernate-disabled`, `hibernate-after-hours` and `no-hibernate` have no writer in the tree).
-- Create `server/test/hibernate-verdict.test.ts`, `server/test/hibernate-sweep.test.ts` and `server/test/hibernate-census.test.ts` (every reader of `lifecycleIsDead` or `DEAD_LIFECYCLES` — derived by scanning `server/src`, `shared` and `pwa/src`, never listed by hand — is in a table with its stance: it consults `hibernatedAt`, or the verdict proves it never meets a hibernated row, with the argument). Modify `server/test/mail-sweep.test.ts`, `server/test/registry.test.ts`, `server/test/fleet-lifecycle.test.ts`, `server/test/swap-route-busy.test.ts`.
+- Create `server/src/coord/hibernate.ts` (L1): `hibernateVerdict(input, now, afterMs): {act: 'hibernate'} | {act: 'hold', reason: HibernateHold}`, every hold of the spec's §5.11 a named member of a `Record`-derived union (`HIBERNATE_HOLDS`), and `HIBERNATE_AFTER_MS_DEFAULT` (6 h). The holds the server can see: `pane`, `unmeasured`, `live-word`, `menu`, `bucket`, `background`, `roster`, `marker`, `marker-background`, `scheduled` (the marker's `crons` not exactly 0, absent included), `recent`, `held`, `run-worker`, `run-claimant`, `runs-unreadable`, `claim`, `mail`, `viewer`, `stranded`, `swap-blocked`, `substrate`, `archived`, `opted-out`. (`attached` is `ccd`'s, Task 16.)
+- Modify `server/src/turnmark.ts`: the marker's `crons` (an integer ≥ −1; anything else reads as absent, never condemning the line).
+- Modify `server/src/presence.ts`: keep the id of every claim, visible or not, and add `isOpen(id)` (an unexpired claim from any `/ws/session` connection); `isVisible` keeps its exact meaning. Modify `server/src/server.ts`'s `/ws/session/:id` handler (≈:1734) to record the id at connect.
+- Create `server/src/hibernateSweep.ts` (L4), **shadow only**: every 5 minutes, off the watcher's tick; reads `$REG/hibernate-disabled` and `$REG/hibernate-after-hours` from the registry listing; the turn marker per candidate only; open runs from the coordination store with `openRunsForSession(id)` (worker) and `openRunsClaimedBy(id)` (claimant), both `state NOT IN` `TERMINAL_RUN_STATES`, so `planned`, `awaiting-review`, `merging`, `closing` and `unknown` hold too, and an `ok: false` answer holds as `runs-unreadable`; claims and queued mail from the store; viewers from `Presence.isOpen`; logs `ccrc-server: hibernate-shadow <id> idle=<h>h` for a `hibernate` verdict, and nothing else.
+- Modify `shared/api.ts`: `FleetSession.hibernatedAt: number | null` and its revive. Modify `server/src/registry.ts` (presence from the listing, bytes read only when listed) and `server/src/fleet.ts`.
+- Modify `server/test/single-definition.test.ts` (`hibernate-live`, `hibernate-disabled`, `hibernate-after-hours` and `no-hibernate` have no writer in the tree; `HIBERNATE_HOLDS` spelled once).
+- Create `server/test/hibernate-verdict.test.ts`, `server/test/hibernate-sweep.test.ts`. Create `server/test/presence.test.ts` (no suite of its own exists; `push-copy.test.ts` and `asks-mint.test.ts` construct `Presence` and stay green). Modify `server/test/turnmark.test.ts`, `server/test/registry.test.ts`, `server/test/fleet.test.ts`.
 
 - [ ] **Step 1: Red.**
-  - `hibernate-verdict.test.ts`: an idle row whose marker `stopAt` is 7 h old → `hibernate`; one hold case per §5.11 condition (live `busy`, `shell`, `waiting`; a pane menu; bucket `working` or `attention`; `background` set; roster non-empty; marker `failed`; marker `bg` 1 with kind `monitor`; 5 h old; `held`; an open run as worker; as claimant; a claim held; queued mail; a viewer; stranded; swap-blocked; substrate; archived; `no-hibernate`; status unmeasured) — each red against an implementation that answers `hibernate`; and the clock: idle compactions that moved `statusUpdatedAt` 50 minutes ago do not hold a row whose marker is 7 h old.
-  - `hibernate-sweep.test.ts`: no `hibernate-live` → shadow lines and no ccd call; `hibernate-live` → at most 3 calls; `hibernate-disabled` → nothing; `hibernate-after-hours` of 2 → a 3 h row acts; an out-of-range value → the default; exit 3 → no warning storm (one line per id per hour); `verbSupported` false → nothing.
+  - `hibernate-verdict.test.ts`: an idle row whose marker `stopAt` is 7 h old with `crons: 0` → `hibernate`; one hold case per member of `HIBERNATE_HOLDS` (live `busy`, `shell`, `waiting`; a pane menu; bucket `working` or `attention`; `background` set; roster non-empty; marker `failed`; marker `bg` 1 with kind `monitor`; **marker `crons: 1`**; **a marker with no `crons`**; 5 h old; `held`; **an open run as worker in each non-terminal state** (`planned`, `dispatched`, `working`, `awaiting-review`, `merging`, `closing`, `unknown`); **an open run as claimant in each of those states**, the `awaiting-review` and `merging` cases written first; a claimant read that fails; a claim held; queued mail; a viewer whose page is not visible; stranded; swap-blocked; substrate; archived; `no-hibernate`; status unmeasured) — each red against an implementation that answers `hibernate`; a claimant whose only runs are `done` or `failed` → `hibernate`; and the clock: idle compactions that moved `statusUpdatedAt` 50 minutes ago do not hold a row whose marker is 7 h old.
+  - `hibernate-sweep.test.ts`: a `hibernate` verdict → one shadow line and **no ccd call, whatever the markers** (17a has no live arm); `hibernate-disabled` → nothing; `hibernate-after-hours` of 2 → a 3 h row logs; an out-of-range value → the default; at most one shadow line per id per hour.
+  - `presence.test.ts`: a connection that reported `visible: false` makes `isOpen` true and `isVisible` false; an expired claim makes both false; a closed socket drops it.
+  - `turnmark.test.ts`: `crons` parses; `-1` parses; `"1"`, `1.5` and `-2` read as absent and the line stays `ok`.
+  - `registry.test.ts` and `fleet.test.ts`: `hibernatedAt` from a listed `.hibernated`, null when unlisted, null on a malformed body with the row still parsed.
+- [ ] **Step 2: Green.**
+- [ ] **Step 3: Mutation table, run:** one row per verdict hold (each hold deleted → its case red); open runs read through `ACTIVE_RUN_STATES` only (the `awaiting-review`, `merging`, `closing`, `planned` claimant and worker cases); the claimant side not read (the claimant cases); a failed run read treated as none (`runs-unreadable`); `crons` absent treated as 0 (the no-`crons` case); `Presence.isOpen` answering `isVisible` (the not-visible viewer case); the sweep calling ccd (the no-call assertion).
+- [ ] **Step 4: Gates:** the suites above, `stall-sweep`, `stall-verdict`, `fleetws`, `sessionws`, `archive-door`, `dead-coordinator-lane`, the four ledger and hygiene suites, tsc.
+- [ ] **Step 5: Commit** `feat(hibernate): the server's hibernation verdict and a shadow sweep that only logs (D-5242)`.
+
+### Task 17b: hibernation, server — the live act, the wake paths, the census (D-5242)
+
+**Spec:** §5.11. **Routing:** band 3. **Lane:** server. **Depends on:** Task 17a, and Task 16 on the fleet box (`verbSupported` refuses the verb otherwise, and the sweep then does nothing). Arming stays an operator act (Task 19); this task makes the live arm exist, behind `$REG/hibernate-live`, together with every path that wakes a session, so no build can hibernate without being able to wake.
+
+**Files:**
+- Modify `server/src/hibernateSweep.ts`: with `$REG/hibernate-live` listed (and `hibernate-disabled` not), at most 3 acts a sweep through `CCD_ARGV.hibernate`, gated on `verbSupported`; exit 3 is a quiet skip (one line per id per hour).
+- Modify `server/src/watch.ts`, the mail lane (≈:6826): a recipient whose `hibernatedAt` is set is woken (`CCD_ARGV.ensure`, at most once per id per 10 minutes, only when mail is not disabled) and gated `hibernated`, never `session-dead`, and its attempts do not count toward parking. Modify the kickoff route (`server/src/server.ts`) the same way. The swap route answers 409 `hibernated`.
+- Modify `server/src/coord/reclaim.ts`, `measureClaimant` (≈:125), which both the reclaim door and the dead-coordinator lane read: a `stopped` claimant with `.hibernated` listed answers `alive` (why `hibernated`), so the reclaim door refuses as it does for a live claimant and the dead-coordinator lane never counts it (the `hibernate` journal row, Task 16, is the second wall).
+- Modify `shared/api.ts`: `inArchivedFold` (≈:9472) excludes a hibernated row.
+- Modify `server/test/unattended-actor.test.ts` (two new unattended call sites: the sweep's `hibernate` and the mail lane's `ensure`).
+- Create `server/test/hibernate-census.test.ts`: every reader of `lifecycleIsDead` or `DEAD_LIFECYCLES` — derived by scanning `server/src`, `shared` and `pwa/src`, never listed by hand — plus `measureClaimant`, `ccd`'s `cmd_forget` and the PWA's Forget affordance, is in a table with its stance, and each stance is argued from **what that reader reads**, not only from the verdict's holds (a run can be opened naming a sleeping session, because `POST /api/runs` takes `claimedBy` from its body): it consults `hibernatedAt` (or `.hibernated`); or it meets a hibernated row only through a path that wakes it first (dispatch's `ensure`); or the journal makes it deliberate. Modify `server/test/mail-sweep.test.ts`, `server/test/fleet-lifecycle.test.ts`, `server/test/swap-route-busy.test.ts`, `server/test/coord-reclaim.test.ts`, `server/test/dead-coordinator-lane.test.ts`, `server/test/kickoff-route.test.ts`.
+
+- [ ] **Step 1: Red.**
+  - `hibernate-sweep.test.ts`: no `hibernate-live` → shadow lines and no ccd call (green, 17a's pin); `hibernate-live` → at most 3 calls (red: none); `hibernate-disabled` beside it → nothing; exit 3 → no warning storm; `verbSupported` false → nothing.
   - `mail-sweep.test.ts`: a queued delivery to a hibernated recipient → one `ensure`, gated `hibernated`, attempts not counted toward parking (red: `session-dead`, then parked); a second sweep inside 10 minutes → no second `ensure`; `mail-disabled` → no wake.
+  - `kickoff-route.test.ts`: a kickoff to a hibernated session wakes it and then types, like the mail lane (red: refused as dead).
+  - `coord-reclaim.test.ts`: `POST /api/runs/:id/reclaim` on a run whose claimant is hibernated → refused as a live claimant would be (red: reclaimed); `measureClaimant` answers `alive`, why `hibernated`.
+  - `dead-coordinator-lane.test.ts`: a run opened naming a hibernated claimant, past the lane's hour → no programme end (red: closed `failed` once the lane is live).
   - `fleet-lifecycle.test.ts`: a hibernated main checkout is not in the archived fold (red).
   - `hibernate-census.test.ts`: the derived reader list equals the table (red until every reader has a row).
   - `swap-route-busy.test.ts`: a hibernated row → 409 `hibernated`.
 - [ ] **Step 2: Green.**
-- [ ] **Step 3: Mutation table, run:** one row per verdict hold (each hold deleted → its case red); the shadow gate inverted; the per-sweep cap removed; the mail wake's 10-minute floor removed; the mail lane parks a hibernated recipient; `inArchivedFold` ignores the field; a new `lifecycleIsDead` reader added in a scratch file (the census red).
-- [ ] **Step 4: Gates:** the suites above, `stall-sweep`, `stall-verdict`, `dispatch-route`, `kickoff-route`, `fleetws`, `sessionws`, `archive-door`, `routes`, the four ledger and hygiene suites, tsc.
-- [ ] **Step 5: Commit** `feat(hibernate): the server sweeps long-idle sessions to hibernation, shadow until armed, and wakes them for mail (D-5242)`.
+- [ ] **Step 3: Mutation table, run:** the shadow gate inverted; the per-sweep cap removed; the mail wake's 10-minute floor removed; the mail lane parks a hibernated recipient; the kickoff skips the wake; `measureClaimant` reads a hibernated claimant as dead (the reclaim and dead-coordinator cases); `inArchivedFold` ignores the field; a new `lifecycleIsDead` reader added in a scratch file (the census red).
+- [ ] **Step 4: Gates:** the suites above, `stall-sweep`, `stall-verdict`, `dispatch-route`, `fleetws`, `sessionws`, `archive-door`, `routes`, `auth-gate`, `box-token-census`, the four ledger and hygiene suites, tsc.
+- [ ] **Step 5: Commit** `feat(hibernate): the live hibernation act behind its marker, and every path that wakes a session (D-5242)`.
 
 ### Task 18: hibernation, PWA half (D-5242)
 
-**Spec:** §5.11. **Routing:** band 2. **Lane:** server (PWA bundle). **Depends on:** Task 17.
+**Spec:** §5.11. **Routing:** band 2. **Lane:** server (PWA bundle). **Depends on:** Task 17b.
 
-**Files:** modify `pwa/src/fleet/SessionLine.tsx` and `pwa/src/fleet/SessionMeta.tsx` (a `dead` row with `hibernatedAt` reads `hibernated · 6h`, a calm dot, no restart affordance), `pwa/src/fleet/coordWords.ts` (≈:114), `pwa/src/lib/seen.ts` (never badged; it is `dead` already, pinned), `pwa/src/screens/SessionScreen.tsx` (on mount with `hibernatedAt` set and `status` `dead`: one `api.ensure`, "Waking…", the composer disabled until alive, a failure toast), `pwa/src/fleet/SwapSheet.tsx` (a hibernated row offers Wake). Create `pwa/test/hibernate-wake.test.tsx`; modify `pwa/test/session-line.test.tsx`, `pwa/test/swap-sheet.test.tsx`, `pwa/test/seen.test.ts`, `pwa/test/fleetFixture.ts`.
+**Files:** modify `pwa/src/fleet/SessionLine.tsx` and `pwa/src/fleet/SessionMeta.tsx` (a `dead` row with `hibernatedAt` reads `hibernated · 6h`, a calm dot, no restart affordance), `pwa/src/fleet/coordWords.ts` (≈:114), `pwa/src/lib/seen.ts` (never badged; it is `dead` already, pinned), `pwa/src/screens/SessionScreen.tsx` (on mount with `hibernatedAt` set and `status` `dead`: one `api.ensure`, "Waking…", the composer disabled until alive, a failure toast), `pwa/src/fleet/SwapSheet.tsx` (a hibernated row offers Wake), `pwa/src/fleet/SessionActionsSheet.tsx` (≈:432–438: "Forget session…" is offered for a dead non-workspace row today; a hibernated row hides it and offers Wake, because `ccd forget` now refuses it). Create `pwa/test/hibernate-wake.test.tsx`; modify `pwa/test/session-line.test.tsx`, `pwa/test/swap-sheet.test.tsx`, `pwa/test/session-actions-sheet.test.tsx`, `pwa/test/seen.test.ts`, `pwa/test/fleetFixture.ts`.
 
-- [ ] **Step 1: Red.** The line wording; one `ensure` per mount (not per render, not on a re-render after the frame changes); "Waking…" until the row is alive; the failure toast; the composer's disabled state; SwapSheet's Wake.
+- [ ] **Step 1: Red.** The line wording; one `ensure` per mount (not per render, not on a re-render after the frame changes); "Waking…" until the row is alive; the failure toast; the composer's disabled state; SwapSheet's Wake; the actions sheet hides Forget and shows Wake on a hibernated row (red: Forget offered) and still offers Forget on a dead row with no `hibernatedAt`.
 - [ ] **Step 2: Green.**
-- [ ] **Step 3: Mutation table, run:** the wake fired on every render; the wake fired for a `dead` row with no `hibernatedAt` (a crash must not be silently restarted by opening it); the word shown for a live row with a stale `hibernatedAt`.
+- [ ] **Step 3: Mutation table, run:** the wake fired on every render; the wake fired for a `dead` row with no `hibernatedAt` (a crash must not be silently restarted by opening it); the word shown for a live row with a stale `hibernatedAt`; Forget offered on a hibernated row.
 - [ ] **Step 4: Gates:** the suites above, `fleet-screen`, `groupFleet`, `session-screen-refusals`, pwa tsc.
 - [ ] **Step 5: Commit** `feat(pwa): hibernated sessions read as asleep and wake when opened (D-5242)`.
 
@@ -536,11 +696,11 @@ The verifier required one order (the dispatch gate before the compaction carry);
 
 **The SAFETY rule, named:** "NEVER touch … `~/.cc-sessions` … directly" binds sessions; the arming marker is written by the operator by hand, as `mail-disabled` is, and no tool in the tree writes it.
 
-- [ ] **Shadow week.** With Tasks 16 to 18 deployed and no `hibernate-live`, collect the server's `hibernate-shadow` lines for seven days. For each, Task M's instrument checks, read-only, that the session really was idle at that moment (live word, marker, roster) and whether anything needed it within the next hour.
+- [ ] **Shadow week.** With Tasks 16 to 18 deployed (17a and 17b both) and no `hibernate-live`, collect the server's `hibernate-shadow` lines for seven days. For each, Task M's instrument checks, read-only, that the session really was idle at that moment (live word, marker, roster) and whether anything needed it within the next hour.
 - [ ] **Decide N.** From Task M's idle-age distribution and the shadow lines; write `$REG/hibernate-after-hours` only if N should differ from 6.
 - [ ] **Arm.** `touch ~/.cc-sessions/hibernate-live` on the fleet box.
 - [ ] **Watch the first day:** hibernations and wakes by path; any wake that failed; slice `memory.current` before and after.
-- [ ] **Disarm** at any doubt: `touch ~/.cc-sessions/hibernate-disabled` (it wins over `hibernate-live`). **Before rolling the server back past Task 17**, wake every hibernated session (`ccd ensure <id>` for each `$REG/*.hibernated`) and disarm: an older server reads a hibernated row as an ordinary stop and would park its mail.
+- [ ] **Disarm** at any doubt: `touch ~/.cc-sessions/hibernate-disabled` (it wins over `hibernate-live`). **Before rolling the server back past Task 17b**, wake every hibernated session (`ccd ensure <id>` for each `$REG/*.hibernated`) and disarm: an older server reads a hibernated row as an ordinary stop and would park its mail.
 
 ### Task M: the instrument, the baseline and the after-measurements
 
@@ -550,7 +710,7 @@ The verifier required one order (the dispatch gate before the compaction carry);
 
 **What it reads, and nothing else:** `<config>/sessions/*.json`, `$REG/*.hookstate.json`, `$REG/*.turn.json`, `$REG/swap.log`, `journalctl --user` (read), the server's feed through `ccrc-api` (read), and main transcripts **on the box only**, to find turn ends for push classification. It runs no tmux, writes only its own output file, and prints counts; no transcript text, session name or path leaves the box in what is committed.
 
-**Metrics and baselines** (the spec's §8 has the table): delegation-caused `done`-while-busy episodes per hour and busy-second share (14 in 420 s, 1.9%); false Finished pushes by class (about 77 of 385 classifiable, 20%); fresh no-turn `done` badges; stale roster entries (316 across 32 of 92); idle `working/PostCompact` rows (12 of 58); session deaths per day, OOM-associated, by Task 13's journal signatures (102 in 7 days, 92 OOM-associated, 61 with a `Failed` line); re-drive crash loops (9 of 26); swaps that cut output (0/132, 5/45, 8/24 over 15 days); interrupts by source; hibernations, wakes and slice memory; and, for Task 19, the idle-age distribution of live sessions (counts above 2, 4, 6, 12 and 24 hours).
+**Metrics and baselines** (the spec's §8 has the table): delegation-caused `done`-while-busy episodes per hour and busy-second share (14 in 420 s, 1.9%); false Finished pushes by class (about 77 of 385 classifiable, 20%); fresh no-turn `done` badges; stale roster entries (316 across 32 of 92); idle `working/PostCompact` rows (12 of 58); session deaths per day, OOM-associated, by Task 13's journal signatures (102 in 7 days, 92 OOM-associated, 61 with a `Failed` line); re-drive crash loops (9 of 26); swaps that cut output (0/132, 5/45, 8/24 over 15 days); interrupts by source; hibernations, wakes and slice memory; delegated episodes that end with no `done` (the spec's §9 known limit: live `busy`→`idle` after a Stop that listed delegated work, marker `done`, row `idle` because the hookstate aged out); stall-watch notices to workers idle over background agents and `frozen` notices during foreground Agent calls, the week before Task 2 against the week after (the §5.2 regression guard); and, for Task 19, the idle-age distribution of live sessions (counts above 2, 4, 6, 12 and 24 hours) and how many idle sessions the `scheduled` and `attached` holds keep awake.
 
 - [ ] **Step 1: Red/green** for the instrument on fixtures, each metric pinned on a constructed fixture with a known answer, and the "no text leaves" rule pinned (a fixture transcript line with a sentinel string never appears in the output).
 - [ ] **Step 2: Baseline.** The investigation's figures (2026-10-08 to 10-15, the spec's §1 and §8) are the baseline of record. If the instrument lands before Task 1 deploys, it re-captures them (two 7-minute 2-second polls, the 42-hour push classification, the seven-day journal and swap counts) and must reproduce them within tolerance, which validates it; a status fix is never held back to wait for it. If it lands later, it is validated against a recorded window instead.
@@ -572,6 +732,8 @@ Filled by Task 13 (the probe answers) and Task M (baseline and after-runs). Empt
 - **Memory outside the session slice** (the usage scan and the graph sweep): the capacity ruling covered sessions; these need their own.
 - **A ceiling on `liveStatusCoversDelegation`**: every Claude Code bump re-runs Task 13 step 7's read-only binary check and the delegation-set grep the investigation used; a narrowed set would need a ceiling and a plan.
 - **An operator control in Settings** for the hibernation threshold and arming: markers only, in this plan.
+- **Session crons lost to a restart.** Claude Code's crons and wakeups are session-scoped [B]; an OOM end or a swap may lose them as a hibernation would. Hibernation holds on them (Task 16); restarts are not addressed here (spec §9).
+- **The lost `done` after a long silent delegated run** (spec §9): counted by Task M, not fixed.
 
 ## Pending a number (named by slug; the coordinator allocates)
 
@@ -582,17 +744,17 @@ Filled by Task 13 (the probe answers) and Task M (baseline and after-runs). Empt
 
 ### Issued 2026-10-16 and defined here
 
-- **D-5231** — `background-aware-working` (Task 1): a hook `done` unseats a live `busy` (D-75's `finishedAfterStatus`) only when the main Stop behind it listed no delegated background work. The Stop arm records `bgDelegated` (the number of `background_tasks` whose cleaned type is neither `shell` nor `monitor`; measured types are `workflow`, `subagent`, `shell`, `monitor` and `teammate`, and an unseen kind counts as delegated) and `bgDelegatedKinds` in hookstate; `FleetSession.background` carries them only on builds whose live word covers delegation (2.1.277 and later) and only while the hook state is a Stop's `done`. The session shows `working · N in background`; when the delegated work ends, `done` is dated from the live file's idle write, so its badge and its Finished push (D-5233) fire then. The chat pulse reads the bucket, and the wedge qualifier stands down while `background` is set. This corrects the 2026-08-17 spec's §3 claim that D-75 covers the Workflow-orchestrator case, which assumed a live `idle` during delegation that Claude Code stopped writing at 2.1.277. D-75's wedge protection is kept for a Stop with no delegated work.
-- **D-5232** — `agent-events-keep-the-main-state` (Task 2): an event carrying an `agent_id` (PreToolUse, PostToolUse, SubagentStart, SubagentStop) keeps the hookstate's `state`, `event`, `updatedAt`, `ask`, `interrupted`, `waitBy` and D-5231's pair, and writes `aliveAt`, generalising D-4041 from a main-thread wait to every main state; `aliveAt` is the freshness replacement, since `hookstate.ts`'s 30-minute cut already reads the later of the two stamps. The one exception is a subagent's own wait, which still writes `waiting` (attention) and now stores `waitPrev`, restored by the next agent tool event. The roster is keyed by `agent_id`: deduplicated Starts, id-matched Stops (an unmatched Stop is a no-op), emptied at SessionStart `startup`/`clear`/`resume`, and pruned at a main Stop (emptied at `bg` 0; at `bg` 1–8 with no `workflow` kind, cut to the listed ids, a rule that ships only if the measurement shows those ids are the agents' ids). The leak's mechanism is the verifier's, not the diagnosis's: Starts whose Stop never came, and no reset; the empty-`agent_type` Stops belong to side agents with no Start. Must not reach the fleet before D-5231.
+- **D-5231** — `background-aware-working` (Task 1): a hook `done` unseats a live `busy` (D-75's `finishedAfterStatus`) only when the main Stop behind it listed no delegated background work. The Stop arm records `bgDelegated` and `bgDelegatedKinds` in hookstate over the tasks that pass one rule, defined once in `shared/api.ts` and mirrored in the hook's `jq`: a task counts unless its cleaned type is one of the six labels whose work never holds the live file `busy` (`shell`, `monitor`, `mcp-task`, `dream`, `auto-mode-scan`, `memory-import`, from Claude Code's own label map and delegation set) or its status is terminal (`completed`, `failed`, `killed`); an unseen kind or status counts. Measured fleet types are `workflow`, `subagent`, `shell`, `monitor` and `teammate`, and the status rule keeps a finished task some later build might list from switching off D-75's wedge recovery. `FleetSession.background` carries the pair only on builds whose live word covers delegation (2.1.277 and later) and only while the hook state is a Stop's `done`. The session shows `working · N in background`; when the delegated work ends, `done` is dated from the live file's idle write, so its badge and its Finished push (D-5233) fire then. The chat pulse reads the bucket, and the wedge qualifier stands down while `background` is set. This corrects the 2026-08-17 spec's §3 claim that D-75 covers the Workflow-orchestrator case, which assumed a live `idle` during delegation that Claude Code stopped writing at 2.1.277. D-75's wedge protection is kept for a Stop with no delegated work. Known limit (spec §9): a delegated run whose end follows more than 30 minutes of agent silence can end `idle` with no `done`; it is counted, not fixed.
+- **D-5232** — `agent-events-keep-the-main-state` (Task 2): an event carrying an `agent_id` (PreToolUse, PostToolUse, SubagentStart, SubagentStop) keeps the hookstate's `state`, `event`, `updatedAt`, `ask`, `interrupted`, `waitBy`, `waitPrev` and D-5231's pair, and writes `aliveAt`, generalising D-4041 from a main-thread wait to every main state; with no hookstate file it writes none but still prints its deny or nudge. `aliveAt` is the freshness replacement for **every** reader that read subagent activity off `updatedAt`: `hookstate.ts`'s 30-minute cut already reads the later of the two stamps, and the stall watch's `HookRawFact` gains `aliveAt` so `stallFrozenSince` and `stallHookFresh` read the newest non-plumbing activity (`updatedAt` unless its event is plumbing, maxed with `aliveAt`); every other reader of `updatedAt` is audited in Task 2 and keeps the main stamp on purpose. The one exception is a subagent's own wait, which still writes `waiting` (attention) and now stores `waitPrev` (state, event, stamp, ask, `interrupted`), restored by the next agent tool event. The roster is keyed by `agent_id`: deduplicated Starts, id-matched Stops (an unmatched Stop is a no-op), emptied at SessionStart `startup`/`clear`/`resume`, and pruned at a main Stop (emptied at `bg` 0; at `bg` 1–8 with no `workflow` kind, cut to the listed ids, a rule that ships only if the current builds still show those ids are the agents' ids, as the committed 2.1.280 capture does). The leak's mechanism is the verifier's, not the diagnosis's: Starts whose Stop never came, and no reset; the empty-`agent_type` Stops belong to side agents with no Start. Server first: it reaches the fleet only behind D-5231's server half and D-5238, enforced by `ccrc rollout --server-first` for the release that first carries it.
 - **D-5233** — `finished-needs-a-main-stop` (Task 3): the "✓ Finished" push at a live busy→idle edge requires a main-thread Stop inside that busy episode: a turn marker that reads `ok`, `done`, `stopAt` not before `turnAt`, and `stopAt` at or after the episode's start (the busy row's `statusUpdatedAt`) less 2 s; an `absent` marker falls back to a hookstate `done` from a `Stop` in the episode; every other marker reading pushes nothing. Compaction-only stretches, restarts and overload ticks no longer push, and by the coordinator's call a turn ended by Escape or a kill pushes nothing either. The rule is the pure `finishedAfter` in `server/src/coord/finished.ts`.
 - **D-5234** — `failed-reads-are-unmeasured` (Task 4): an alive pane whose `panePid` read fails is `statusUnmeasured` and painted `busy` (D-115's shape), never a measured `idle`; `liveStatus()` keeps answering `idle` there for the interrupt route. A live file that reads empty or not JSON is read once more after 50 ms and is then `unmeasured`, not `no-state`, because Claude Code rewrites it in place; an absent file and a well-formed one naming no session stay `no-state`.
-- **D-5235** — `sheet-escape-never-interrupts` (Task 5): `SessionHeader`'s desktop Escape binding returns when the event is already `defaultPrevented` (Radix's dismiss handled it in its document capture listener without stopping propagation) or when an open dialog or sheet is in the document. Escape with nothing open still interrupts.
-- **D-5236** — `background-only-interrupt-warns` (Task 6): `POST /api/sessions/:id/interrupt` refuses `409 background-only`, with the count and kinds and zero keys, when the live word is `busy`, the main turn has ended (hook `done` from a Stop) with `background` set, and no pane menu is pending; the PWA tells the operator that Escape would not stop the background work. A Deny over a pending menu still sends Escape. A route that stops background tasks is built only if Claude Code exposes a drivable, provable command for it (slug `stop-background-route`).
-- **D-5237** — `interrupt-and-restart-causes-recorded` (Tasks 7 and 8): every Escape the console sends is recorded with its source (`keycap`, `escape-key`, `deny`, `drawer-escape`, `drawer-ctrl-c`, `unknown`) and outcome as a feed event of a new kind, `interrupt`, recorded and never pushed (an older client degrades it to `unknown`); `ccd`'s `_route_escape` logs each Escape to `swap.log`. `ccd` classifies every process end (`oom` from the pane scope's journal, `tmux-server`, `exited`, `unknown`, and `swap-auto-home`, `swap-auto-rescue`, `swap-manual` from `cmd_swap`) into `$REG/<id>.lastend` and `swap.log`; the resume prompt, composed per spawn, names a cause at most 10 minutes old (for OOM: the count in 10 minutes and "do not re-run the step at the same parallelism") while keeping Claude Code's first sentence and no single quote; `FleetSession.lastEnd` shows it in the PWA for an hour. This takes the cause clause of #197 wave 6's composed redrive prompt.
-- **D-5238** — `dispatch-clear-needs-live-idle` (Task 9): the dispatch resume arm types `/clear` only when the fail-closed turn verdict archive already uses (`stopVerdict`, its readings moved from `server.ts` into `server/src/turnverdict.ts` as the one home) reads `idle`, at the gate and again immediately before the act; `busy` refuses `worker-busy` and `unmeasured` a new code, `status-unmeasurable`, except after an `ensure` that started the pane, which is polled up to 60 s. By the verifier's teammate caveat the gate reads the live word and never a background count: idle teammates listed at a Stop leave the live file `idle`. Lands, and reaches the server box, before D-5239.
-- **D-5239** — `compaction-carries-the-prior-state` (Task 10): PreCompact and PostCompact, both triggers, keep the hookstate's state, event, stamp and ask and write `aliveAt`, so an idle compaction (Claude Code's idle-compaction timer, present in every fleet build, or `ccd`'s typed `/compact`, which arrives as trigger `manual`) neither mints a fresh `done` badge nor leaves a stale `working/PostCompact`; a mid-turn one stays `working`. If a typed `/compact` fires UserPromptSubmit (measured first), that prompt opens no state and no turn. All of it in the hook's tail. Safe only behind D-5238, because a hook `done` now stands through a compaction while the pane is busy.
-- **D-5240** — `swap-guards` (Tasks 11 and 12): an automatic affinity swap re-runs its idle gate in the transient unit immediately before the kill and, if busy, re-queues (`requeue`, `lastswap` restored, nothing stopped); a rescue re-confirms the block at the act (`rescue-cancel`) and backs off when assistant output that is not an API error was appended since the decision (`rescue-backoff`); a manual `ccd swap` refuses `session-busy` (and an unreadable status `status-unknown`) without `--interrupt`, `swap-self` passing it; `ccd caps` advertises `swap-busy-v1`. The swap route reads the archive verdict and answers `409 session-busy` or `409 status-unknown` unless `{interrupt: true}` (which never covers an unmeasured status), re-reading inside the queue; SwapSheet asks "swap anyway". One consent word, `--interrupt`, replaces #197 wave 7's planned `--cut-delegated`, since delegated work already reads `busy`.
-- **D-5241** — `oom-victim-policy` (Tasks 13, 14 and 15): pane scopes get `OOMPolicy=continue` from a prefix drop-in (`tmux-spawn-.scope.d/50-oom-continue.conf`), and the existing box-only `ccrc-tmux-server.scope.d/50-oom-continue.conf` (#358) is shipped beside it, both placed by `ccrc update`'s install spine and `deploy.sh`; Bash tool children run at `oom_score_adj` 800 through `CLAUDE_CODE_SHELL_PREFIX` and a shipped `ccd-tool-adj`, while Claude Code stays at 200; doctor's `oom-policy` check reads both. Verified first on throwaway `ccrc-oomprobe-*` scopes in a capped throwaway slice, as an operator act that names the SAFETY rule, with a stop rule if prefix drop-ins do not reach transient scopes; rolled out by `ccrc rollout`, rolled back by removing the files explicitly. This takes #197 wave 5's `OOMPolicy=continue` spike. The trade, accepted: a test run that outgrows memory fails as a test run.
-- **D-5242** — `hibernate-long-idle-sessions` (Tasks 16 to 19): the server decides (`hibernateVerdict`, L1) and `ccd hibernate <id>` acts after re-measuring at the act. Idle means: live word `idle` and measured, no pane menu, bucket `idle` or `done`, no `background`, an empty roster, a turn marker `done` whose last Stop listed no background task of any kind and whose latest main event is more than N hours old (default 6, `$REG/hibernate-after-hours` overrides; compactions do not move the clock), no hold, no open run as worker or claimant, no claim, no queued mail, no viewer, not stranded, swap-blocked, under a substrate fault or archived, and no `no-hibernate` marker. Shadow until `$REG/hibernate-live`; `hibernate-disabled` wins; none of these markers has a writer in the tree. The act stamps `stopped` (surface `ccd`) plus `$REG/<id>.hibernated`; `FleetSession.hibernatedAt` is additive, the bucket stays `dead` and the PWA words it `hibernated`. Every reader of `lifecycleIsDead` states its stance in a census test: the mail lane wakes the recipient (`ensure`, once per 10 minutes) instead of parking, `inArchivedFold` keeps it at the top level, and the readers the verdict keeps it from (stall, reclaim, dead coordinator) record why. It wakes through `ensure` when the PWA opens it, a dispatch resumes it, mail is due or a kickoff types into it; a manual swap refuses it (`409 hibernated`), and a woken row takes no cosmetic swap for `SWAP_COOLDOWN`.
+- **D-5235** — `sheet-escape-never-interrupts` (Task 5): `SessionHeader`'s desktop Escape binding returns when the event is already `defaultPrevented` (Radix's dismiss handled it in its document capture listener without stopping propagation) or when an open dialog or sheet is in the document. Escape with nothing open still interrupts. The terminal drawer keeps operator ruling P4 (2026-10-15): Escape in its focused live terminal goes to Claude Code once, through the pty, and never also through the header.
+- **D-5236** — `background-only-interrupt-warns` (Task 6): `POST /api/sessions/:id/interrupt` refuses `409 background-only` with zero keys, reading the raw live word rather than `liveStatus()`'s collapse, when no pane menu is pending and either the live word is `busy`, the main turn has ended (hook `done` from a Stop newer than the live file's stamp) and `background` is set (the body carries the count and kinds), or the live word is `shell`, an idle main loop over a background shell or monitor (no count). The PWA tells the operator that Escape would not stop the background work. A Deny over a pending menu, and live `waiting`, still send Escape. A route that stops background tasks is built only if Claude Code exposes a drivable, provable command for it (slug `stop-background-route`).
+- **D-5237** — `interrupt-and-restart-causes-recorded` (Tasks 7 and 8): every Escape the console sends is recorded with its source (`keycap`, `escape-key`, `deny`, `drawer-escape`, `drawer-ctrl-c`, `unknown`) and outcome as a feed event of a new kind, `interrupt`, recorded and never pushed (an older client degrades it to `unknown`); `ccd`'s `_route_escape` logs each Escape to `swap.log`. `ccd` classifies every process end (`oom` from the pane scope's journal, `tmux-server`, `exited`, `unknown`, and `swap-auto-home`, `swap-auto-rescue`, `swap-manual` from `cmd_swap`, recorded only once a swap has passed its act-time gates) into `$REG/<id>.lastend` and `swap.log`; the resume prompt, composed per spawn, names a cause at most 10 minutes old (for OOM: the count in 10 minutes and "do not re-run the step at the same parallelism") while keeping Claude Code's first sentence and no single quote; `FleetSession.lastEnd` shows it in the PWA for an hour. This proposes to take the cause clause of #197 wave 6's composed redrive prompt, subject to that programme's coordinator.
+- **D-5238** — `dispatch-clear-needs-live-idle` (Task 9): the dispatch resume arm types `/clear` only when the fail-closed turn verdict archive already uses (`stopVerdict`, its reads moved from `server.ts` into `server/src/turnverdict.ts` as the one home, behind a `TurnReadDeps` whose watcher reads are thunks, and reached from `dispatch.ts` through a required `DispatchRunDeps.turnVerdict` port) reads `idle`, at the gate and again immediately before the act; `busy` refuses `worker-busy` and `unmeasured` a new code, `status-unmeasurable`, except after an `ensure` that started the pane, which is polled up to 60 s. By the verifier's teammate caveat the gate reads the live word and never a background count: idle teammates listed at a Stop leave the live file `idle`. On the server box before D-5232's and D-5239's hooks reach the fleet.
+- **D-5239** — `compaction-carries-the-prior-state` (Task 10): PreCompact and PostCompact, both triggers, write no hookstate at all, so the file — state, event, stamp, ask, `interrupted`, `waitBy`, `waitPrev`, D-5231's pair, the roster and `aliveAt` — stays byte for byte as it was, and the compaction helpers still run. An idle compaction (Claude Code's idle-compaction timer, present in every fleet build, or `ccd`'s typed `/compact`, which arrives as trigger `manual`) neither mints a fresh `done` badge nor leaves a stale `working/PostCompact`; a mid-turn one stays `working`; a compaction during a delegated run keeps the background pair, so D-75 cannot paint `done` over the live `busy`; and with no `aliveAt` written, a compaction stays plumbing to the stall watch after D-5232. If a typed `/compact` fires UserPromptSubmit (measured first), that prompt opens no state and no turn. All of it in the hook's tail. Safe only behind D-5238, because a hook `done` now stands through a compaction while the pane is busy; enforced by `--server-first` as D-5232 is.
+- **D-5240** — `swap-guards` (Tasks 11 and 12): every act-time gate in `cmd_swap` runs before `_operator_choice_keep` and `_svc_stop`, so a refusal leaves no `.choicekept` marker. An automatic affinity swap re-runs its idle gate in the transient unit and, if busy, re-queues (`requeue`, `lastswap` restored, nothing stopped); a rescue re-confirms the block at the act (`rescue-cancel`, which also undoes the decision's own `five:100` limits row and `rescue-401` marker only while they are still its bytes; an unreadable re-check proceeds as decided) and backs off when assistant output that is not an API error was appended since the decision (`rescue-backoff`). A manual `ccd swap` reads `_ws_status` as `ws-archive` does: `busy` refuses `session-busy` without `--interrupt`, and an unreadable status refuses `status-unknown` whatever the flags, with no override; the manual gate runs before the detach branch, `swap-self` passes `--interrupt`, and the detach re-run passes it through. `ccd caps` advertises `swap-busy-v1`. The swap route reads the archive verdict and answers `409 session-busy` or `409 status-unknown` unless `{interrupt: true}` (which never covers an unmeasured status), re-reading inside the queue and mapping `ccd`'s own `status-unknown` to the same 409; SwapSheet asks "swap anyway". `--interrupt` consents to losing a measured busy turn, delegated work included; #197 wave 7's wider refusal (`stopped-agent` manifest items) and its `--cut-delegated` stay wave 7's, a separate consent.
+- **D-5241** — `oom-victim-policy` (Tasks 13, 14 and 15): pane scopes get `OOMPolicy=continue` from a prefix drop-in (`tmux-spawn-.scope.d/50-oom-continue.conf`), and the existing box-only `ccrc-tmux-server.scope.d/50-oom-continue.conf` (#358) is shipped beside it, both placed by `ccrc update`'s install spine and `deploy.sh`; Bash tool children run at `oom_score_adj` 800 through `CLAUDE_CODE_SHELL_PREFIX` and a shipped `ccd-tool-adj`, while Claude Code stays at 200; doctor's `oom-policy` check reads both. Verified first on throwaway `ccrc-oomprobe-*` scopes as an operator act that names the SAFETY rule, and verified without risking the fleet: a read-only headroom precondition (at least 1 GiB below every ancestor's cap, re-read before each allocating step), the allocating steps on a non-fleet Linux host with the same systemd where one exists, and otherwise a 64M probe slice whose every process scores at least 900, so an ancestor's OOM picks a probe first; a stop rule if prefix drop-ins do not reach transient scopes. Rolled out by `ccrc rollout`, rolled back by removing the files explicitly. This proposes to take #197 wave 5's `OOMPolicy=continue` spike, subject to that programme's coordinator. The trade, accepted: a test run that outgrows memory fails as a test run.
+- **D-5242** — `hibernate-long-idle-sessions` (Tasks 16 to 19, Task 17 in two parts): the server decides (`hibernateVerdict`, L1) and `ccd hibernate <id>` acts after re-measuring at the act. Idle means: live word `idle` and measured, no pane menu, bucket `idle` or `done`, no `background`, an empty roster, a turn marker `done` whose last Stop listed no background task of any kind and whose latest main event is more than N hours ago (default 6, `$REG/hibernate-after-hours` overrides; compactions do not move the clock), **nothing scheduled** (the Stop's `session_crons` length, recorded in the marker as `crons`, exactly 0: Claude Code's crons and wakeups are session-scoped and no other signal shows them), no hold, **no open run as worker or claimant in any non-terminal `RunState`** (`planned` and `awaiting-review` to `closing` and `unknown` included; a failed read holds), no claim, no queued mail, no `/ws/session` connection open on it (visible or not), **nobody attached to its tmux session** (`ccd`'s own hold), not stranded, swap-blocked, under a substrate fault or archived, and no `no-hibernate` marker. Shadow until `$REG/hibernate-live` (and 17a's sweep cannot act at all; 17b adds the act with its wake paths); `hibernate-disabled` wins; none of these markers has a writer in the tree. The act journals a new lifecycle act, `hibernate`, which joins `DEAD_COORDINATOR_DELIBERATE_ACTS` (an older server reads it as `unknown`, also deliberate), then stamps `stopped` plus `$REG/<id>.hibernated`; `FleetSession.hibernatedAt` is additive, the bucket stays `dead` and the PWA words it `hibernated`. Every reader of `lifecycleIsDead` states its stance in a census test argued from what it reads: the mail lane and a kickoff wake the recipient (`ensure`, once per 10 minutes) instead of parking, `inArchivedFold` keeps it at the top level, `measureClaimant` answers a hibernated claimant `alive` so the reclaim door refuses and the dead-coordinator lane never ends its programme, `ccd forget` refuses it and the PWA offers Wake instead of Forget, and `ccd stop` turns it into an ordinary stop. It wakes through `ensure` when the PWA opens it, a dispatch resumes it, mail is due or a kickoff types into it; a manual swap refuses it (`409 hibernated`), and a woken row takes no cosmetic swap for `SWAP_COOLDOWN`.
 
 Issued and unused: none. All twelve numbers, 5231 to 5242, are defined above.

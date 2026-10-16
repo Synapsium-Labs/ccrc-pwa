@@ -1,17 +1,18 @@
 # Working-state truth and session interruptions (design)
 
-**Status:** rev 0 (2026-10-16). It records the operator's rulings of 2026-10-16 (§2) and the coordinator calls made
-under them. Every number in it is issued: D-5231 to D-5242, defined once in the plan's §Deviations found. The four box
-acts (§5.10's verification, rollout and the tmux-server drop-in; §5.11's arming) are operator acts under the SAFETY rules
-and are not authorised by this document.
+**Status:** rev 1 (2026-10-16), after one adversarial review. It records the operator's rulings of 2026-10-16 (§2) and
+the coordinator calls made under them. Every number in it is issued: D-5231 to D-5242, defined once in the plan's
+§Deviations found. The four box acts (§5.10's verification, rollout and the tmux-server drop-in; §5.11's arming) are
+operator acts under the SAFETY rules and are not authorised by this document.
 
-**Date:** 2026-10-16 · **Branch:** `docs/working-state` (from `origin/main` `0b3ff2f6`)
+**Date:** 2026-10-16 · **Branch:** `docs/working-state` (cut from `origin/main` `0b3ff2f6`, merged up to `a6b2606c`)
 
 **Plan:** `docs/superpowers/plans/2026-10-16-working-state-and-interruptions.md` (tasks, tests, mutation tables, lanes, the
 measurement plan and the ledger entries).
 
-**Citations** are to `origin/main` `0b3ff2f6`. Line numbers are hints, written `≈:`, and every citation also names its
-function or constant. **[M]** marks a measured figure and **[I]** an inferred one.
+**Citations** are to `origin/main` `a6b2606c`. Line numbers are hints, written `≈:`, and every citation also names its
+function or constant. **[M]** marks a measured figure, **[I]** an inferred one, and **[B]** a reading of Claude Code's
+own hook-input schema and task code in an installed 2.1.300 binary (read-only `strings`, no execution).
 
 **Where the numbers come from.** A read-only investigation of the fleet box on 2026-10-15 and 16: four investigators
 (status from code, status live, interruptions from code, interruptions live), a diagnosis, and an adversarial verifier
@@ -136,9 +137,10 @@ cause logged and named in the resume prompt and the PWA; the dispatch `/clear` g
 verifier's teammate caveat; compactions, automatic and `ccd`'s typed `/compact` alike, carry the prior state and never
 mint a fresh `done` badge.
 
-**Coordinator calls, made under those rulings.** The interrupt route on a session idle over delegated work warns instead
-of sending Escape, with a separate explicit "stop background tasks" only if Claude Code exposes one (otherwise it only
-warns). A turn ended by Escape or a kill no longer pushes Finished.
+**Coordinator calls, made under those rulings.** The interrupt route on a session whose main loop is idle over background
+work (delegated work under a live `busy`, or a shell or monitor under the live word `shell`) warns instead of sending
+Escape, with a separate explicit "stop background tasks" only if Claude Code exposes one (otherwise it only warns). A turn
+ended by Escape or a kill no longer pushes Finished.
 
 ---
 
@@ -167,6 +169,10 @@ the stale-`waiting` rung and the `/ws/fleet` heartbeat (§10).
 - **D-115.** An unreadable status is `unmeasured`, painted `busy` on the card and never a push; `liveStatus()` keeps its
   opposite answer for the interrupt route, deliberately (`fleet.ts` ≈:324).
 - **D-4039 and D-4041.** A main-thread wait is carried through agent events with its own stamp; `aliveAt` keeps it fresh.
+- **The stall watch's clocks** (`docs/superpowers/specs/2026-09-29-worker-stall-watch-design.md`). Subagent activity holds
+  `delegates` and resets the `frozen` clock, and plumbing (SessionStart, PreCompact, PostCompact) never refreshes either.
+  §5.2 moves subagent activity off `updatedAt` and onto `aliveAt`, so both clocks read `aliveAt` from then on, and §5.8
+  stops compactions writing anything, so `aliveAt` stays subagent activity only.
 - **Wire discipline.** Every new field is additive, read through a single reader, absent means the old behaviour, and
   `reviveFleetSession` computes it. **No new `SessionBucket` member** (README, "The attention bucket": the live frame is
   cast, so an unknown bucket crashes a deployed PWA). No new `SessionLifecycle` member.
@@ -176,6 +182,9 @@ the stale-`waiting` rung and the `/ws/fleet` heartbeat (§10).
   `claude-session@*` units. Box configuration changes are operator acts that name the rule they are taken under.
 - **`ccd` is the authority on the box.** The server refuses, forecasts and composes; `ccd` re-measures at every act that
   kills a process.
+- **Deploy order is a mechanism, not a sentence.** Where a fleet-side change is safe only behind a server-side one (§6.1),
+  the release carrying it is rolled out server first (`ccrc rollout --server-first`), unless the server box's `/health`
+  `version` already reads at or past the prerequisite's release.
 
 ---
 
@@ -183,14 +192,34 @@ the stale-`waiting` rung and the `/ws/fleet` heartbeat (§10).
 
 ### 5.1 Background-aware working (D-5231)
 
+**What a Stop carries.** The committed captures (`server/test/fixtures/delegation/2.1.280/*.json` and later builds) show
+the real Stop payload: `stop_hook_active`, `last_assistant_message`, `background_tasks` and `session_crons` beside the
+common keys, and every task as `{id, type, status, description}` plus one type-specific key (`agent_type` for a subagent,
+`name` for a workflow) [M]. Claude Code's schema describes `background_tasks` as "in-flight background work
+(running/pending + backgrounded)" and `session_crons` as "session-scoped cron tasks (CronCreate, ScheduleWakeup, /loop)
+that will wake this session later" [B]. Its builder lists a task only when its status is `running` or `pending` and it
+is backgrounded, and labels each type through a fixed map: `subagent`, `workflow`, `shell`, `monitor`, `MCP task`,
+`teammate`, `dream`, `auto-mode scan`, `memory import` and `cloud session`, falling back to the raw type name for any
+other [B]. The live file's own delegation set is four of those: local agents, local workflows, in-process teammates and
+remote agents (`liveStatusCoversDelegation`'s docstring, `livestate.ts` ≈:66, measured there on 2.1.277 to 2.1.283) [B].
+
 **What the hook records.** The Stop arm already parses `background_tasks` (≈:3024). Its one `jq` gains two more output
-lines: the number of listed tasks whose cleaned `type` is neither `shell` nor `monitor`, and those kinds, unique and
-comma-joined. The measured types in Stop payloads are `workflow`, `subagent`, `shell`, `monitor` and `teammate` [M]. The
-rule is **every kind except `shell` and `monitor`**, which mirrors Claude Code's own delegation set: an idle main loop
-over only a shell or a monitor writes the word `shell`, not `busy` [M, binary], and that is the case D-75 was written for,
-so a Stop listing only those still settles `done`. A kind no build has shown yet counts as delegated: it only matters while the live file
-reads `busy`, and after a Stop that word means delegated work or a wedge, so an unknown kind is likelier the former. The
-hookstate gains `bgDelegated` (an integer) and `bgDelegatedKinds` (a string), written on a main Stop whose
+lines: the number of listed tasks that are **delegated and not finished**, and their kinds, unique and comma-joined. The
+measured types in fleet Stop payloads are `workflow`, `subagent`, `shell`, `monitor` and `teammate` [M]; the hook's
+existing cleaning turns the other labels into `mcp-task`, `auto-mode-scan`, `memory-import`, `dream` and `cloud-session`.
+- **The kind rule:** every kind except the six labels whose work never holds the live file `busy`: `shell`, `monitor`,
+  `mcp-task`, `dream`, `auto-mode-scan` and `memory-import`. An idle main loop over only shells or monitors writes
+  `shell` (a shell task, the shell Monitor included) or `idle` (an MCP monitor), never `busy` [M, B; stall-watch spec
+  §3.1], and the other four are outside the live file's delegation set too [B]; a Stop listing only those still settles
+  `done`, which is the case D-75 was written for. `subagent`, `workflow`, `teammate` and
+  `cloud-session` count, and so does a raw type name no build has shown yet: it only matters while the live file reads
+  `busy`, and after a Stop that word means delegated work or a wedge, so an unknown kind is likelier the former.
+- **The status rule:** a task counts unless its status is one of the terminal words in Claude Code's task code,
+  `completed`, `failed` or `killed` [B]; `running`, `pending` and any status no build has shown count as running. The
+  builder already leaves finished tasks out [B], so the rule is a second wall: a finished task listed by some later build
+  must not keep a wedged `busy` on `working` and so switch off D-75's recovery.
+
+The hookstate gains `bgDelegated` (an integer) and `bgDelegatedKinds` (a string), written on a main Stop whose
 `background_tasks` is an array, and absent everywhere else. A new main turn's first write leaves them out.
 
 **What the server reads.** `hookstate.ts` parses the pair into `HookState.background` (`{count, kinds}`). A malformed value
@@ -230,16 +259,36 @@ its busy episode, so it pushes then, once.
 
 **Agent events never rewrite the main state.** An event whose payload carries an `agent_id` (`$paid`): PreToolUse,
 PostToolUse, SubagentStart, SubagentStop. It keeps the file's `state`, `event`, `updatedAt`, `ask`, `interrupted`,
-`waitBy` and the two background fields, read by the one fresh read the hook already takes (`_hook_fresh_read`, ≈:3954),
-and writes `aliveAt` = now. That is D-4041's carry generalised from a main-thread wait to every main state, and it is the
-**freshness replacement** the verifier required: agent events used to be what kept a long foreground Agent call's
-hookstate inside the 30-minute cut, and `hookstate.ts`'s age clock already reads the later of `updatedAt` and `aliveAt`
-(≈:358), so they still do. An agent event with no hookstate file yet is inert.
+`waitBy`, `waitPrev` and the two background fields, read by the one fresh read the hook already takes
+(`_hook_fresh_read`, ≈:3954), and writes `aliveAt` = now. That is D-4041's carry generalised from a main-thread wait to
+every main state. An agent event with no hookstate file yet writes no hookstate, but it is not a silent exit: it still
+reaches the tail's one print, so a subagent's PreToolUse keeps its deny or nudge (`pre_json`, ≈:4061) on a session that
+has no file.
+
+**The freshness replacement, for every reader.** Agent events used to be what kept a long foreground Agent call's
+hookstate fresh, and what told the stall watch that subagents were working. Both readers move to `aliveAt`:
+- the aged read: `hookstate.ts`'s age clock already reads the later of `updatedAt` and `aliveAt` (≈:358), so nothing
+  changes there;
+- the stall watch: its raw fact (`HookRawFact`, `coord/stall.ts` ≈:455, built by `watch.ts`'s `stallHookFactOf` ≈:333)
+  gains `aliveAt`, and its two clocks read the newest non-plumbing activity, which is `updatedAt` unless the event behind
+  it is plumbing, maxed with `aliveAt`: `stallFrozenSince` (≈:460, the `frozen` arm's 60-minute clock, so a foreground
+  Agent call whose subagents keep working never reads frozen) and `stallHookFresh` (≈:883, the `delegates` hold, so a
+  worker idle over working subagents keeps its hold). Without this, the hook change alone would mail stall checks to
+  every worker idle over background agents and call a 70-minute foreground Agent call frozen;
+- every other reader of the hookstate's `updatedAt` keeps reading it, and is right to: the bucket ladder compares the
+  main thread's last word with the live file's (D-75 needs the main stamp, not agent liveness); the ask stamps
+  (`stallHookAskOf`, the ask rows' `askAt`, the child ask in `registry.ts`) date a question, which agent events never
+  move; and the mail lane's UserPromptSubmit edge (`watch.ts` ≈:6582) now survives the agent events that used to overwrite
+  that event within seconds. The plan's Task 2 carries the audit as a table.
+
+`aliveAt` stays agent activity only, because §5.8 stops compactions writing the file at all; that is what lets the stall
+watch read it without breaking its own rule that plumbing never refreshes a hold.
 
 **One exception: a subagent's own wait.** A subagent's AskUserQuestion or PermissionRequest still writes `waiting` with
-`waitBy: "subagent"` and a fresh stamp (attention needs it), and now also stores `waitPrev`: the state, event and stamp
-it replaced. The next agent tool event over that wait restores `waitPrev` (plus `aliveAt`) instead of writing `working`.
-A file with no `waitPrev` (written by an older hook) falls back to today's `working`. A main event ends any wait, as now.
+`waitBy: "subagent"` and a fresh stamp (attention needs it), and now also stores `waitPrev`: the state, event, stamp, ask
+and `interrupted` flag it replaced. The next agent tool event over that wait restores `waitPrev` (plus `aliveAt`) instead
+of writing `working`. A file with no `waitPrev` (written by an older hook) falls back to today's `working`. A main event
+ends any wait, as now.
 
 **The roster.** Entries gain `id` (the payload's `agent_id`, cleaned to `[A-Za-z0-9_-]{1,64}`). A SubagentStart adds an
 entry unless that id is already listed; a SubagentStop removes the entry with its id, and is a no-op when none matches
@@ -247,11 +296,15 @@ entry unless that id is already listed; a SubagentStop removes the entry with it
 first, ≈:3017, and a compaction kills no agent). At a main Stop: a measured `bg` of 0 empties the list; a `bg` of 1 to 8
 with no `workflow` kind keeps only entries whose id is among the Stop's background ids; anything else leaves the list
 alone (workflow agents are not listed individually, and the hook keeps at most eight ids). Entries without an `id`
-(written by an older hook) are dropped at the first prune. **Measured first:** that a background subagent's task id
-equals its SubagentStart `agent_id`. If it does not, only the `bg = 0` rule ships.
+(written by an older hook) are dropped at the first prune. A background subagent's task id equals its SubagentStart
+`agent_id` on 2.1.280: in the committed capture `agent-iso-bg.json`, the Stop lists task `a73ff…` and the SubagentStart
+before it carries the same `agent_id` [M]. The plan re-measures that on the fleet's current builds (2.1.296 to 2.1.301)
+only; if it no longer holds there, only the `bg = 0` rule ships.
 
-**Order.** This must not reach the fleet before §5.1. With agent events no longer writing `working`, a Stop's `done`
-would otherwise stand unopposed over the whole delegated run, which is worse than today's flap.
+**Order.** This must not reach the fleet before §5.1's server half, nor before §5.7. With agent events no longer writing
+`working`, a Stop's `done` would otherwise stand unopposed over the whole delegated run, which is worse than today's
+flap; and the dispatch gate, which today reads only the hookstate, would see that `done` and type `/clear` into a session
+whose delegated work still runs. §6.1 says how the rollout enforces both.
 
 ### 5.3 Finished means a main Stop (D-5233)
 
@@ -281,15 +334,28 @@ busy→idle edge later [M, code].
 
 - **Desktop Escape on a sheet (D-5235).** `SessionHeader`'s window listener returns when `e.defaultPrevented` is set
   (Radix's dismiss has already handled the key, in its document capture listener) or when an open dialog or sheet is in
-  the document. Escape with nothing open still interrupts, as today.
-- **Escape over delegated work warns (D-5236).** The interrupt route assembles the one row it is asked about (as archive
-  does). When the live word is `busy`, the hook says the main turn ended (`done` from a Stop, newer than the live stamp),
-  `background` is set and no menu is pending, it answers `409 background-only` with the count and kinds and sends no key.
+  the document. Escape with nothing open still interrupts, as today. **The terminal drawer is already ruled** (operator
+  ruling P4, 2026-10-15, pinned by `drawer-view.test.tsx`'s P4 describe): with the drawer's live terminal focused, a
+  physical Escape goes to Claude Code as `\x1b` and the drawer stays open (`TerminalDrawer`'s `keepEscapeInTerminal`
+  cancels the dismissal); with focus anywhere else in the drawer, Escape closes it and sends nothing. The header's
+  listener skips a focused textarea already, so the drawer's Escape is never sent twice; after D-5235 the
+  focus-elsewhere case no longer reaches the header's interrupt either. Task 5 pins both.
+- **Escape over background-only work warns (D-5236).** The interrupt route reads the one row it is asked about (as
+  archive does) and the raw live word, not `liveStatus()`'s collapse. It answers `409 background-only` and sends no key
+  in two cases, each with no pane menu pending:
+  - the live word is `busy`, the hook says the main turn ended (`done` from a `Stop` whose stamp is newer than the live
+    file's `statusUpdatedAt`, the same comparison D-75 makes) and `background` is set: the body carries the count and
+    kinds. "Newer" is load-bearing: a main turn that began after that Stop without a hook event (a task-notification turn
+    with no tool call) re-stamps the live file, and Escape then interrupts it, as it should;
+  - the live word is `shell`: an idle main loop over a background shell or monitor, the word Claude Code writes only when
+    no main turn runs [M, stall-watch spec §3.1]. The body carries no count.
+
   Escape there interrupts nothing and stops none of the background work. The PWA says so: "The main turn has finished;
-  N background tasks (kinds) are still running. Escape would not stop them." A menu that is up (a Deny) is never
-  background-only. **Measured first:** whether the fleet's Claude Code build exposes an operator command that stops
-  background tasks and can be driven and proved by pane captures. If it does, its route is a separate decision, named by
-  slug in the plan; if not, the route only warns.
+  N background tasks (kinds) are still running. Escape would not stop them." (for `shell`: "a background shell or
+  monitor is still running"). A menu that is up (a Deny) is never background-only, and live `waiting` still sends
+  Escape. **Measured first:** whether the fleet's Claude Code build exposes an operator command that stops background
+  tasks and can be driven and proved by pane captures. If it does, its route is a separate decision, named by slug in
+  the plan; if not, the route only warns.
 - **Every interrupt is logged with its source (D-5237).** The route takes an optional `source` (`keycap`, `escape-key`,
   `deny`; anything else or absent is `unknown`) and records a feed event of a new kind, `interrupt`, with source and
   outcome (`sent`, `not-busy`, `background-only`, `not-alive`). It is recorded, never pushed. An older client degrades the
@@ -303,7 +369,8 @@ busy→idle edge later [M, code].
   `/proc` read per spawn, nothing per tick). When tmux pronounces the session gone (≈:24643), `ccd` classifies the end:
   `tmux-server` when the tmux server itself is gone; `oom` when the scope's own journal shows an OOM kill in the last
   120 s (`journalctl --user -u <scope>`, bounded by `timeout 5`); `exited` otherwise; `unknown` when the journal read
-  fails. `cmd_swap` records `swap-auto-home`, `swap-auto-rescue` or `swap-manual` before it stops the unit. The cause goes
+  fails. `cmd_swap` records `swap-auto-home`, `swap-auto-rescue` or `swap-manual` once its act-time gates (§5.9) have
+  passed and before it stops the unit, so a refused or re-queued swap records no end. The cause goes
   to `$REG/<id>.lastend` (`<epoch> <cause>`) and to a `swap.log` line, `ended <id>: <cause>`.
 - **Named in the resume prompt.** `_resume_env` composes the prompt per spawn from a `lastend` at most 10 minutes old. It
   keeps Claude Code's own first sentence (the PWA's `RESUME_PROMPT_PREFIX`) and replaces "an account swap or a supervisor
@@ -327,16 +394,23 @@ until the verdict is `idle`, because a pane that has not yet published its live 
 is read again immediately before the `/clear` is typed, since the hold and the route write sit between the gate and the
 act (the existing comment at ≈:911 names that window).
 
-**This lands before §5.8, and is on the server box before §5.8 reaches the fleet.** With the compaction carry alone, an
-idle compaction leaves hook `done` standing while the pane compacts, and the hook-only gate would type `/clear` into it.
+**This is on the server box before §5.8 or §5.2 reaches the fleet** (§6.1 says how). With the compaction carry alone, an
+idle compaction leaves hook `done` standing while the pane compacts, and the hook-only gate would type `/clear` into it;
+with §5.2 alone, a Stop's `done` stands through a whole delegated run, which agent events used to overwrite with
+`working` every few seconds.
 
 ### 5.8 Compactions carry the prior state (D-5239)
 
-PreCompact and PostCompact, `auto` and `manual` alike, keep the file's `state`, `event`, `updatedAt` and `ask`, and write
-`aliveAt`. An idle compaction therefore leaves `done` (or `idle`) exactly as it was, with no fresh `bucketSince` and no
-badge; a compaction in mid-turn leaves `working`. A compaction with no hookstate file writes nothing. The turn marker is
-untouched (it never recorded compactions). During the compaction the live file reads `busy` [M], which is what the mail
-gate and §5.7's gate act on.
+PreCompact and PostCompact, `auto` and `manual` alike, **write no hookstate at all**: the file stays byte for byte as it
+was. That carries the whole field set by construction — `state`, `event`, `updatedAt`, `ask`, `interrupted`, `waitBy`,
+`waitPrev`, the background pair (§5.1), the roster and `aliveAt` — where a partial carry would have dropped the
+background pair, and a compaction during a delegated run (Claude Code's idle-compaction timer fires 54–55 minutes after
+the last Stop [M]) would then have let D-75 paint `done` over the live `busy` again. It writes no `aliveAt` either, so the
+stall watch's rule that plumbing never refreshes a hold survives §5.2's move to `aliveAt`. An idle compaction therefore
+leaves `done` (or `idle`) exactly as it was, with no fresh `bucketSince` and no badge; a compaction in mid-turn leaves
+`working`. The tail's compaction helpers (`_hook_compact_pre`, `_hook_compact_post`, ≈:4066) still run: only the
+hookstate write is skipped. The turn marker is untouched (it never recorded compactions). During the compaction the live
+file reads `busy` [M], which is what the mail gate and §5.7's gate act on.
 
 **Measured first:** whether a typed `/compact` (the operator's or `ccd`'s auto-compact) fires UserPromptSubmit, and with
 what `prompt`. If it does, the tail treats a main UserPromptSubmit whose prompt is `/compact` or starts with `/compact `
@@ -345,27 +419,51 @@ as the start of a compaction: it writes no state and opens no turn in the marker
 
 ### 5.9 Swap guards (D-5240)
 
-- **Auto, non-rescue.** `_dispatch_swap` passes the arm and the row's previous `lastswap` into the transient unit.
-  `cmd_swap`, for an automatic affinity swap, runs the same idle gate the decision ran (`_auto_swap_check`'s non-blocked
-  arm, ≈:19217–19241: no `esc to interrupt`, a prompt, live `idle`, `SWAP_CEIL_QUIET` of quiet) immediately before
-  `_svc_stop`. Busy: it writes `requeue <id>: busy after jitter`, restores `lastswap`, and stops nothing. The next tick
-  decides again.
-- **Rescue.** At the act, `cmd_swap` re-runs the blocked verdict for the current lane; not blocked any more:
-  `rescue-cancel`. And it reads the transcript from the byte offset recorded at the decision: an appended assistant entry
-  that is not an API-error message means the session is working: `rescue-backoff`. Both restore `lastswap` and stop
-  nothing; a lane that is still blocked is re-decided on the next tick.
-- **Manual.** `cmd_swap` without `CCD_SWAP_AUTO` refuses a busy session (live word not `idle`, or `esc to interrupt` on the
-  pane, or a turn marker `working`) with `ccd: session-busy …` unless `--interrupt` is passed. An unreadable status refuses
-  `status-unknown` unless `--interrupt`. `swap-self` passes `--interrupt`, because a session asking for its own move is
-  busy by definition. `ccd caps` advertises `swap-busy-v1`.
+**Where the gates sit in `cmd_swap`.** Every act-time gate runs before the first write the stop path makes:
+before `_operator_choice_keep` (≈:27208), which leaves `$REG/<id>.choicekept` behind and would make the next stop or
+spawn skip reading the operator's model choice, and before `_svc_stop`. A gate that refuses therefore leaves the row
+exactly as the decision found it, `lastswap` aside (restored below).
+
+- **Auto, non-rescue.** `_dispatch_swap` passes the arm, the row's previous `lastswap` and the decision's epoch into the
+  transient unit. `cmd_swap`, for an automatic affinity swap, runs the same idle gate the decision ran (`_auto_swap_check`'s
+  non-blocked arm, ≈:19217–19241: no `esc to interrupt`, a prompt, live `idle`, `SWAP_CEIL_QUIET` of quiet, extracted
+  into one function both call). Busy: it writes `requeue <id>: busy after jitter`, restores `lastswap`, and stops nothing.
+  The next tick decides again.
+- **Rescue.** At the act, `cmd_swap` re-runs the blocked verdict (`_session_hard_blocked`, ≈:18299) on a fresh pane
+  capture. A measured "not blocked" is `rescue-cancel`; a verdict that cannot be read proceeds as decided, today's
+  behaviour, and never cancels. Then it reads the transcript from the byte offset recorded at the decision: an appended
+  assistant entry that is not an API-error message means the session is working: `rescue-backoff`. Both restore
+  `lastswap` and stop nothing; a lane that is still blocked is re-decided on the next tick. **The decision's account
+  writes.** The rescue arm writes two account-level facts at the decision (≈:19152–19167): the `five:100` limits row for
+  a non-Anthropic lane, and the `<wrapper>-authdead` marker after a fresh 401. A `rescue-cancel` measured that this
+  session's lane is not blocked, so it undoes those two writes **only while they are still the decision's own bytes**
+  (the limits row whose `ts` is the decision's epoch, the marker reading `<epoch> rescue-401`), and leaves any newer write
+  by another session or by `ccd-account-health` alone. Without that, a cancelled rescue would leave the account looking
+  blocked and other sessions would keep evacuating it. A `rescue-backoff` undoes nothing: the lane may still be blocked,
+  and the session is merely producing output past it.
+- **Manual.** `cmd_swap` without `CCD_SWAP_AUTO` reads the status the way `ws-archive` does, through `_ws_status`
+  (≈:5115): `busy` refuses `ccd: session-busy …` unless `--interrupt` is passed, and a status it cannot read refuses
+  `ccd: status-unknown …` **whatever the flags**, `--interrupt` included: consent covers a measured turn only, the archive
+  rule. There is no override flag; an operator who must move a session whose status cannot be read stops it first (`ccd
+  stop`), after which there is no pane and `_ws_status` answers `idle`. The refusal runs **before the detach branch**
+  (≈:27147), so a session swapping itself without consent is refused synchronously, on its own stderr, rather than being
+  told "detached: will restart" and then refused by a process nobody is waiting for. `swap-self` passes `--interrupt`,
+  because a session asking for its own move is busy by definition, and the detach branch's re-run (≈:27163) passes
+  `--interrupt` through beside `--force` and `--cross-pool`; inside that re-run (`CCD_SWAP_DETACHED=1`) the same gate runs
+  again, and a refusal there goes through `_swap_refuse`, as that run's other refusals do, so it reaches the operator.
+  `ccd caps` advertises `swap-busy-v1`.
 - **The server and the PWA.** The swap route reads the same fail-closed verdict as archive. Without consent: `busy` is
   `409 session-busy`, `unmeasured` `409 status-unknown`. With `{interrupt: true}`: `busy` proceeds, `unmeasured` is still
-  refused (the archive rule: consent covers a measured turn only). The argv carries `--interrupt` when the fleet's `ccd`
-  advertises `swap-busy-v1`, else the old argv (an old `ccd` refuses nothing). SwapSheet answers `session-busy` with
-  "It's working — swap anyway? The turn in progress and its background tasks are lost."
-- **What this subsumes.** #197's wave 7 planned `--cut-delegated`; one consent word, `--interrupt`, already covers
-  delegated work, because a live word over delegated work is `busy`. The diagnosis's "a pending swap holds auto-compact"
-  is subsumed too: a compaction makes the live word `busy`, and the re-check then re-queues the swap.
+  refused. The argv carries `--interrupt` when the fleet's `ccd` advertises `swap-busy-v1`, else the old argv (an old
+  `ccd` refuses nothing). Because `ccd` refuses an unreadable status whatever the flag, a status that becomes unreadable
+  between the server's read and `ccd`'s act is refused too. SwapSheet answers `session-busy` with "It's working — swap
+  anyway? The turn in progress and its background tasks are lost."
+- **What it does not subsume.** `--interrupt` consents to losing what is running now: a measured busy turn, delegated work
+  included, because a live word over delegated work is `busy`. #197's wave 7 refusal is wider: it also refuses on
+  `stopped-agent` manifest items younger than two hours, which never read busy, and its override is a distinct flag,
+  `--cut-delegated`. That refusal and its flag stay wave 7's; the two consents are separate and neither implies the
+  other. The diagnosis's "a pending swap holds auto-compact" is covered: a compaction makes the live word `busy`, and the
+  re-check then re-queues the swap.
 
 ### 5.10 Victim policy (D-5241)
 
@@ -378,17 +476,34 @@ as the start of a compaction: it writes no state and opens no turn in the marker
   command. Children inherit it; Claude Code stays at 200. Raising one's own score needs no privilege.
 - A doctor check, `oom-policy`, that reads both units' `OOMPolicy` and one live pane scope's, read-only.
 
-**Verified first, on the fleet box, on throwaway transient scopes only** (an operator act; the plan lists the steps). A
-scope named `ccrc-oomprobe-<n>.scope` in a throwaway slice capped at a few hundred megabytes, so its OOM is cgroup-local
-and cannot reach the fleet:
+**Verified first, on throwaway transient scopes only, without risking the fleet** (an operator act; the plan lists the
+steps). The investigation measured the user manager's tree **at its cap** (the user-level cgroup at its `MemoryMax`, tens
+of thousands of OOM events there, and about half of all OOM kills outside the session slice) [M]. A probe slice is a
+child of that tree, so a slice-local cap does not keep a probe's allocation from tipping an ancestor into its own OOM,
+and an ancestor's OOM picks its victim across the whole fleet by size. So:
+- **Step 0 reads before anything allocates.** `memory.current`, `memory.max`, `memory.swap.current` and
+  `memory.swap.max` of the user manager's service and of every slice between it and the probe, and whether
+  `systemd-oomd` watches any of them, and the highest `oom_score_adj` among the user manager's processes (`/proc`, read
+  only; the investigation measured 200 throughout the session slice [M]). Every ancestor must have at least 1 GiB of
+  headroom, or nothing allocating runs. It is read again immediately before each allocating step.
+- **Allocating steps run off the fleet box when possible**: on a non-fleet Linux host with the same systemd version and
+  cgroup v2. Only the allocation-free steps (the drop-in reaching a scope, a reload reaching a running scope,
+  `set-property`, the prefix script) must run on the fleet box itself, because they measure its systemd.
+- **If the allocating steps must run on the fleet box**: the probe slice is capped at 64M with no swap, and every probe
+  process raises its own `oom_score_adj` to 900 or more, and above step 0's highest reading, before it allocates
+  (raising one's own score needs no privilege), so an OOM at any ancestor level picks a probe first. Within the probe,
+  the one meant to die scores 1000 and the other 900.
+
+The questions:
 1. a prefix drop-in for `ccrc-oomprobe-` applies to a new transient scope (`OOMPolicy` reads `continue`), and whether a
-   `daemon-reload` applies it to one already running;
-2. with `continue`: the child (at 800) is killed, the scope stays active, the parent survives; the journal signature is
-   recorded;
+   `daemon-reload` applies it to one already running (allocation-free);
+2. with `continue`: the child (the higher score) is killed, the scope stays active, the parent survives; the journal
+   signature is recorded;
 3. with `stop` (a name the drop-in does not match): the scope fails with `oom-kill`; signature recorded;
-4. the parent as the victim (child smaller): the signature of "the main process died", which is what the 32 no-`Failed`
-   deaths look like;
-5. whether `systemctl set-property --runtime … OOMPolicy=` is accepted on a running scope.
+4. the parent as the victim (the parent larger and scored higher than the child, the child exiting when its parent
+   does, as a pane's processes do when tmux closes the pane), under `stop` and under `continue`: the signature of "the
+   main process died", which is what the 32 no-`Failed` deaths look like;
+5. whether `systemctl set-property --runtime … OOMPolicy=` is accepted on a running scope (allocation-free).
 
 The shell prefix's argument convention is measured separately, on a workstation, with Claude Code in a throwaway local
 `tmux -L` server (the way `2026-10-15-ask-server-half.md` measured AskUserQuestion), and the variable's name is checked
@@ -416,9 +531,27 @@ hold has a name):
 - the turn marker reads `done` (a StopFailure tail is left alone), its last Stop listed no background task of any kind
   (shells and monitors would die too), and its latest of `turnAt`, `stopAt` and `restartAt` is more than N hours ago.
   Compactions do not move that clock, so a session that Claude Code compacts while it idles still ages;
-- no hold (`.hold`), no open run naming it as worker or claimant, no claim it holds, no queued mail to it;
-- nobody has it open: no `/ws/session` socket for it;
+- **nothing is scheduled** (hold `scheduled`): the last Stop's `session_crons` was an empty array. Claude Code's crons and
+  wakeups (CronCreate, ScheduleWakeup, `/loop`) are session-scoped and are not tasks [B; stall-watch spec §3.1], so no
+  live word, background list or roster shows them, and a hibernated session's process is gone when they fall due:
+  nothing would ever wake it. The Stop arm records the array's length in the turn marker as `crons` (−1 when the key is
+  absent or not an array), and the verdict holds unless it reads exactly 0, so an older hook's marker, which has no
+  `crons`, holds as `scheduled` too;
+- no hold (`.hold`); **no open run** naming it as worker (`openRunsForSession`) or as claimant (`openRunsClaimedBy`), where
+  open is every `RunState` outside `TERMINAL_RUN_STATES` — `planned`, `dispatched`, `working`, `awaiting-review`,
+  `merging`, `closing` and `unknown`. That is the `state NOT IN` the terminal set predicate both store reads already use
+  (`coord/store.ts` ≈:3185 and ≈:3228; the archive door's `coordinator-has-open-runs` refusal reads the first), and the
+  population the dead-coordinator lane sweeps, so a coordinator whose runs wait at `awaiting-review` or `merging` is never
+  put to sleep. A run read that fails holds (`runs-unreadable`); no claim it holds; no queued mail to it;
+- nobody has it open: no unexpired claim on it in the server's `Presence` from any `/ws/session` connection, visible or
+  not (`server/src/presence.ts` gains `isOpen(id)` beside `isVisible`);
 - not stranded, swap-blocked, under a substrate fault, archived or expiring; no opt-out marker `$REG/<id>.no-hibernate`.
+
+`ccd hibernate` re-measures the box-local half at the act: live `idle`, no `esc to interrupt`, a prompt with an empty box,
+60 s of quiet, the marker `done` with `bg` and `crons` both 0, no `.hold`, no `.no-hibernate`, no fresh `lastswap`, and
+**nobody attached**: tmux's `#{session_attached}` reads 0. That last hold (`attached`) is the one the server cannot see —
+an operator in a terminal attach or `cc`, or the PWA's own terminal drawer, which attaches a pty through `tmux attach`
+(`server/src/pty.ts` ≈:22, `agent/src/pty.ts` ≈:39) — and it lives in `ccd` because only the box can read it.
 
 N defaults to 6 hours and is read from `$REG/hibernate-after-hours` when the operator writes one (1 to 168). Six hours is
 past Claude Code's one-hour prompt-cache lifetime, so a wake costs no cache that idling would have kept; the measurement
@@ -428,10 +561,15 @@ plan reports the idle-age distribution before the operator arms it.
 `$REG/hibernate-disabled` it does nothing. Neither marker has a writer in the tree (`single-definition.test.ts` pins that,
 as it does the stall-watch markers). The sweep runs on its own clock, every 5 minutes, at most 3 hibernations a sweep.
 
-**The act.** `cmd_hibernate` keeps the operator's model choice (`_operator_choice_keep`), writes
-`$REG/<id>.hibernated` (`<epoch> <idle-hours>`), unsupervises through `_ws_unsupervise` (a `stopped` stamp, surface
-`ccd`) and kills the pane. The lifecycle reads `stopped`, honestly: hibernation is a deliberate stop, and no new
-lifecycle word is needed on the wire.
+**The act, journalled as a deliberate one.** `cmd_hibernate` journals a new lifecycle act, `hibernate` (`_lc_done
+hibernate`, added to `_LC_ACTS` and to `LifecycleAct` together, as `lifecycle-vocabulary.test.ts` requires), then keeps
+the operator's model choice (`_operator_choice_keep`), writes `$REG/<id>.hibernated` (`<epoch> <idle-hours>`),
+unsupervises through `_ws_unsupervise` (a `stopped` stamp) and kills the pane. The lifecycle reads `stopped`, honestly:
+hibernation is a deliberate stop, and no new lifecycle word is needed on the wire. The journal row is what makes it
+deliberate to the dead-coordinator lane: `_ws_unsupervise`'s own row carries the surface `none` when `ccd` acts on its own
+account, which `deadCoordinator.ts`'s `isDeliberate` reads as a crash, so `hibernate` joins
+`DEAD_COORDINATOR_DELIBERATE_ACTS`. A server older than the act parses it as `unknown`, which that clause already counts as
+deliberate ("doubt never reads as a crash"), so the version skew is safe in both directions.
 
 **What the server shows.** `FleetSession.hibernatedAt` (additive). Its presence comes from the registry listing the reader
 already takes, so it costs no read per tick; the bytes are read only when it is listed. The bucket stays `dead` (no new
@@ -439,12 +577,21 @@ bucket member); the PWA words a dead row with `hibernatedAt` as `hibernated · 6
 never badges it.
 
 **Every reader that treats `stopped` as dead for good** consults `hibernatedAt` first. A census test derives the readers
-from `lifecycleIsDead` and `DEAD_LIFECYCLES` and fails on one that does not state its stance:
+from `lifecycleIsDead` and `DEAD_LIFECYCLES` and fails on one that does not state its stance, and each stance is argued
+from what the reader actually reads, not only from the verdict's holds (a run can be opened naming a sleeping session:
+`POST /api/runs` takes `claimedBy` from its body):
 - the mail lane (`watch.ts` ≈:6826) wakes the recipient instead of backing off and parking: `ensure`, at most once per id
   per 10 minutes, and only for a delivery that would otherwise be sent (mail not disabled);
 - `inArchivedFold` (`shared/api.ts` ≈:9472) leaves a hibernated main checkout at the top level;
-- the stall watch (`coord/stall.ts` ≈:1061), the reclaim door (`coord/reclaim.ts`) and the dead-coordinator path
-  (`deadCoordinator.ts`) never meet one, because the verdict excludes runs and claims; the census records that argument;
+- `measureClaimant` (`coord/reclaim.ts` ≈:125), which both the reclaim door and the dead-coordinator lane read, answers a
+  hibernated claimant `alive` (why: `hibernated`): the reclaim door then refuses as it does for any live claimant, and the
+  PWA offers Wake; the dead-coordinator lane, should it meet one, reads the `hibernate` journal row as deliberate as a
+  second wall;
+- the stall watch (`coord/stall.ts` ≈:1061) meets none through a run the verdict let it sleep under; a run opened later
+  dispatches through `ensure`, which wakes it;
+- `ccd forget` refuses a hibernated row (`hibernated`: wake it, or stop it first), and the PWA's Forget, offered for any
+  dead non-workspace row today, is hidden on one and replaced by Wake. `ccd stop` on a hibernated row turns it into an
+  ordinary stop (it removes `.hibernated`), after which Forget works as before;
 - the PWA's `coordWords.ts` words it `hibernated`.
 
 **Waking.** `cmd_ensure` and `cmd_start` remove `.hibernated` with `.stopped`. The paths: the PWA opening the session
@@ -462,6 +609,8 @@ session's tail is a finished turn, so nothing is re-driven.
 - *Auto-compact.* No tick, no compaction while asleep. The verdict requires the live word `idle`, so it never fires
   during a compaction, and compactions do not reset its clock.
 - *Stall watch.* Covered by the census above.
+- *Scheduled work.* Held, never hibernated (the `scheduled` hold above). A session with a recurring cron therefore never
+  hibernates; the operator removes the cron, or accepts that.
 - *Remote control.* A hibernated `--remote-control` session disappears from Claude Code's own app until ccrc wakes it. The
   opt-out marker is the remedy for a session the operator drives from there.
 
@@ -469,29 +618,51 @@ session's tail is a finished turn, so nothing is re-driven.
 
 ## 6. Ordering, lanes and other programmes
 
-### 6.1 Order
+### 6.1 Order, and how the rollout enforces it
 
-1. §5.1 before §5.2 reaches the fleet (they may ride one release).
-2. §5.7 merged and on the server box before §5.8's hook ships (the plan gates on `/health`'s version).
-3. §5.9's `ccd` half before its server half (the server needs `swap-busy-v1`).
+1. §5.2's hook reaches the fleet only behind §5.1's server half and §5.7 on the server box (§5.2's "Order").
+2. §5.8's hook reaches the fleet only behind §5.7 on the server box.
+3. §5.9's `ccd` half before its server half (the server needs `swap-busy-v1`; `capSupported` enforces it).
 4. §5.10's verification before its shipping PR; its rollout after both.
 5. §5.11's `ccd` half, then server, then PWA, then a shadow week, then arming. It depends on §5.2 (an empty roster must
-   mean something) and benefits from §5.10.
+   mean something) and benefits from §5.10. `verbSupported` enforces the first step; nothing can hibernate until the
+   server half that carries the wake paths is live (the plan's Task 17b).
+
+Items 1 and 2 are the two places where a fleet-side change is safe only behind a server-side one, and `ccrc rollout`'s
+default order (the fleet box, then the server box) is the wrong way round for them, as is the PWA's one-tap apply, which
+always moves the fleet node first. A sentence cannot enforce them; the rollout can:
+- the release that first carries §5.2's or §5.8's hook is rolled out with `ccrc rollout --to <tag> --server-first`,
+  unless the server box's `/health` `version` (or `ccrc update --check`, or `GET /api/updates`) already reads at or past
+  the release carrying the prerequisite, in which case the default order is safe;
+- `--server-first` is safe for every server half in this design, because each server reader treats an absent new field
+  as the old behaviour;
+- a server leg whose health gate fails restores the server and exits 4, and `rollout` stops there, so the fleet box is
+  never moved past a server that did not take the release. An exit 3 (installed under a failing doctor) leaves the
+  server on the new build, so continuing to the fleet is still behind its prerequisite;
+- the PWA's one-tap apply is not used for such a release until the server box reads at or past the prerequisite.
+
+The plan's ordering table names, per task, which form its release takes.
 
 ### 6.2 Lanes
 
-- **Fleet first** (hook or `ccd`): §5.1, §5.2, §5.6, §5.8, §5.9's `ccd` half, §5.10, §5.11's `ccd` half. Every server
-  reader of a new hook or registry field treats its absence as the old behaviour, so the default `rollout` order (fleet
-  box, then server box) is safe.
+- **Fleet first** (hook or `ccd`): §5.1, §5.6, §5.9's `ccd` half, §5.10, §5.11's `ccd` half. Every server reader of a
+  new hook or registry field treats its absence as the old behaviour, so the default `rollout` order (fleet box, then
+  server box) is safe for them.
+- **Server first** (hook): §5.2 and §5.8. They add no field the server must read; they change what an existing field
+  means (a hook `done` now stands through delegated work and through a compaction), and two server halves must already
+  be reading the live word beside it (§6.1).
 - **Server lane** (server and PWA bundle): §5.3, §5.4, §5.5, §5.7, §5.9's server half, §5.11's server and PWA halves.
 
 ### 6.3 Session continuity (#197)
 
-This design takes, by the operator's ruling of 2026-10-16: wave 5's third item (`OOMPolicy=continue` on a scratch pane
-scope, done here on throwaway scopes with no scratch account needed); wave 7's refusal (one consent word, `--interrupt`,
-instead of `--cut-delegated`); and the cause clause of wave 6's composed redrive prompt (§5.6 composes only the cause;
-wave 6 builds on it). Wave 4b's spawn-environment variable and this design's shell prefix both compose at
-`_spawn_start`; whichever lands second merges onto the first. The programme's coordinator re-scopes waves 5 to 7.
+This design overlaps three items of that programme, and **proposes** to take them; the take-over is conditional on that
+programme's coordinator agreeing, and the operator's ruling of 2026-10-16 does not decide it. The items: wave 5's third
+(`OOMPolicy=continue` on a scratch pane scope, done here on throwaway scopes with no scratch account needed); the cause
+clause of wave 6's composed redrive prompt (§5.6 composes only the cause; wave 6 builds on it); and, partly, wave 7's swap
+refusal: `--interrupt` (§5.9) covers a measured busy turn, delegated work included, while wave 7's refusal on
+`stopped-agent` manifest items and its `--cut-delegated` override stay wave 7's. Until the coordinator agrees, those
+items stay in both programmes and whichever lands second merges onto the first. Wave 4b's spawn-environment variable and
+this design's shell prefix both compose at `_spawn_start`; the same rule applies.
 
 ---
 
@@ -503,14 +674,20 @@ wave 6 builds on it). Wave 4b's spawn-environment variable and this design's she
    restoration.
 3. A Finished push has a main Stop inside its busy episode.
 4. A status this tick could not read is never painted as a measured idle.
-5. No path sends Escape to a session whose only activity is background work.
+5. No path the console drives sends Escape to a session whose only activity is background work: delegated work under
+   a live `busy` after a newer main Stop, or the live word `shell`. (The terminal drawer is a terminal: a physical
+   Escape typed into its focused pane goes to Claude Code by ruling P4, and is recorded as `drawer-escape`.)
 6. Every Escape the server or `ccd` sends, and every process end `ccd` observes, leaves a record naming its source or cause.
 7. The dispatch `/clear` is typed only into a pane whose live word was measured `idle`, twice: at the gate and at the act.
 8. A compaction never moves `bucketSince` and never mints a `done`.
-9. Every swap that kills a process re-measures at the act; a manual one needs consent to kill a measured turn and never
-   kills an unmeasured one from the PWA.
+9. Every swap that kills a process re-measures at the act, before any write of the stop path; a manual one needs
+   consent to kill a measured turn and never kills an unmeasured one, from any surface.
 10. A tool child is a likelier OOM victim than its Claude Code, and its death does not end the pane.
-11. A hibernated session is never worded, badged, parked or reclaimed as dead, and every path that needs it wakes it.
+11. A hibernated session is never worded, badged, parked, reclaimed, forgotten or ended as dead, and every path that
+    needs it wakes it. Nothing is hibernated while it has scheduled work, an open run in any non-terminal state, a
+    viewer or an attached terminal.
+12. The stall watch reads subagent activity wherever it lives: `delegates` and `frozen` read `aliveAt` beside
+    `updatedAt`, and a compaction refreshes neither.
 
 ---
 
@@ -526,6 +703,8 @@ needs to classify a push stay on the box; no text leaves it.
 | `done` while the live file is busy and the last Stop listed delegated work: episodes per hour, and share of busy session-seconds | 14 episodes in 420 s, about 12 of them delegation-caused; 1.9% | 0 delegation-caused (the two race shapes may remain) |
 | False Finished pushes: compaction-only, mid-turn, restart, overload | about 77 of 385 classifiable in 42 h (20%, about 44 a day) | at most 2% of classifiable |
 | Fresh `done` badges with no turn (after a `manual` PostCompact) | about 20 a day [I] | 0 |
+| Delegated episodes that end with no `done`: the live file goes `busy`→`idle` after a Stop that listed delegated work, the turn marker reads `done`, and the row reads `idle` because the hookstate aged out (§9) | not measured | reported; a fix is ruled on if it is not rare |
+| Stall-watch notices to workers idle over background agents, and `frozen` notices during a foreground Agent call (the §5.2 regression guard) | baseline from the week before Task 2 | no increase |
 | Roster entries older than their session's process | 316 entries across 32 of 92 files | 0 |
 | Idle rows with hookstate `working/PostCompact` | 12 of 58 | 0 |
 | Session deaths per day; of them within 15 s of a pane OOM kill; by journal signature (child victim, main victim) | 102 in 7 days (about 14.6 a day); 92 OOM-associated; 61 with a `Failed` line | OOM-associated deaths with a child victim: 0; the rest reported, not targeted |
@@ -547,7 +726,18 @@ it. Each lane is measured again seven days after it deploys. Results are recorde
   The 32 deaths with no `Failed` line are reported by signature after rollout, not promised away.
 - That N, the hibernation threshold, is right: the shadow week and the idle-age distribution decide it.
 - That "N in background" counts only what is running: it counts what the last Stop listed.
-- That Claude Code will keep its delegation set: every build bump re-runs the binary check the plan names.
+- **That `done` always survives a long delegated run.** The badge and the bucket read the hookstate, which ages out
+  30 minutes after its newest stamp. Under §5.2 agent events keep it fresh through `aliveAt`, and the common ends write
+  one more: a subagent's end fires a SubagentStop (an agent event), and Claude Code then runs a notification turn that
+  ends in a fresh main Stop [M, verifier]. A delegated kind whose end fires no hook event after more than 30 minutes of
+  agent silence (one long command inside a subagent, then a teammate or cloud session finishing) leaves the row `idle`
+  with no `done`, while §5.3's marker-based push still fires. That is a known limit, counted by §8's row, not fixed:
+  feeding the turn marker into the bucket would add a read per busy row per tick (#390).
+- That session crons survive a restart. They are session-scoped [B], so an OOM restart or a swap may lose them as a
+  hibernation would; §5.11 holds hibernation on them, and the restart case is not addressed here.
+- That Claude Code will keep its delegation set, its task-type labels, its task statuses or the Stop payload's
+  `background_tasks` and `session_crons`: every build bump re-runs the read-only binary check the plan names (Task 13,
+  step 7), extended to those four.
 
 ---
 
