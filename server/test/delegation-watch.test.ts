@@ -55,7 +55,13 @@ const iso = (ms: number): string => formatDelegationInstant(ms);
 const srcRoot = path.resolve(__dirname, '../src');
 const watchSrc = (): string => readFileSync(path.join(srcRoot, 'watch.ts'), 'utf8');
 
-afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); });
+/** Every world this file made: each one's applier is closed when its test ends (M9), so no journal descriptor is left to the collector. */
+const worlds: Array<{ watcher: FleetWatcher }> = [];
+afterEach(async () => {
+  vi.useRealTimers();
+  vi.restoreAllMocks();
+  await Promise.all(worlds.splice(0).map((w) => w.watcher.closeDelegation().catch(() => undefined)));
+});
 
 // ── the world: a fixture home, a watcher over it, and the spool the hook would have written ───────────────────────────
 
@@ -76,7 +82,7 @@ interface World {
   coord: CoordStore;
   io: FleetIO;
   faults: Faults;
-  calls: { listings: string[]; ranges: string[]; metas: string[] };
+  calls: { listings: string[]; ranges: string[]; metas: string[]; metaListings: string[] };
   ccrcDir: string;
 }
 interface WorldOptions { home?: string; ccdVerbs?: string[] | null; coord?: boolean }
@@ -93,7 +99,7 @@ function world(opts: WorldOptions = {}): World {
   mkdirSync(path.join(home, '.cc-sessions'), { recursive: true });
   const cfg = loadConfig({ CCRC_HOME: home, CCRC_PROJECTS_ROOT: projectsRoot } as never);
   const faults: Faults = { listing: new Map(), hold: new Map(), holdRange: new Map(), range: new Set() };
-  const calls = { listings: [] as string[], ranges: [] as string[], metas: [] as string[] };
+  const calls = { listings: [] as string[], ranges: [] as string[], metas: [] as string[], metaListings: [] as string[] };
   const spoolOwner = (p: string): string | null => (p.includes('/delegation/spool/') ? path.basename(p.endsWith('.spool') ? path.dirname(p) : p) : null);
   const io: FleetIO = {
     ...localIO,
@@ -107,6 +113,7 @@ function world(opts: WorldOptions = {}): World {
         if (f === 'throw') throw new Error('agent socket dropped');
         if (f === 'unreadable') return { ok: false, reason: 'unreadable' };
       }
+      if (p.includes('/subagents/workflows/')) calls.metaListings.push(p);
       return localIO.readdirMeasured(p, t, s);
     },
     readFileMeasured: async (p, t, s) => {
@@ -130,7 +137,9 @@ function world(opts: WorldOptions = {}): World {
     ...testDeps(home), cfg, io, ...(opts.coord === false ? {} : { coord }),
     fleetState: { connected: true, downSince: null, ccdVerbs },
   };
-  return { home, cfg, watcher: new FleetWatcher(deps as never, new Bus(), 10_000), coord, io, faults, calls, ccrcDir: path.join(home, '.ccrc') };
+  const made: World = { home, cfg, watcher: new FleetWatcher(deps as never, new Bus(), 10_000), coord, io, faults, calls, ccrcDir: path.join(home, '.ccrc') };
+  worlds.push(made);
+  return made;
 }
 
 const spoolDir = (w: World, owner: string): string => path.join(w.cfg.registryDir, 'delegation', 'spool', owner);
@@ -832,7 +841,7 @@ describe('rung 4 end to end: a raw worktree the session itself created becomes a
     const census = { demo: [OLD, RAW] };
     await censusPass(w, at(0), census);
     expect(leasesOf(w.home)).toEqual([]);
-    expect(w.watcher.delegationReport().verdicts).toMatchObject({ unresolved: 2 });          // both trees inside the birth wait
+    expect(w.watcher.delegationReport().verdicts).toMatchObject({ unresolved: 0 });          // both trees are inside the birth wait: not unowned work (R59)
     await censusPass(w, at(1), census);
     expect(leasesOf(w.home)).toEqual([]);
     await censusPass(w, at(2), census);
@@ -937,7 +946,7 @@ describe('rung 4 end to end: a raw worktree the session itself created becomes a
     const kinds = plan.mock.results.flatMap((r) => (r.value as ReturnType<typeof policy.planDelegationReconciliation>).map((e) => e.kind));
     expect(new Set(kinds)).toEqual(new Set(['repair-report-projection']));
     expect(leasesOf(w.home)).toEqual([]);
-    expect(w.watcher.delegationReport().verdicts).toMatchObject({ unresolved: 1 });
+    expect(w.watcher.delegationReport().verdicts).toMatchObject({ unresolved: 0, conflicting: 0 });     // a registered workspace is not unowned work (R59)
   });
 });
 
@@ -1227,6 +1236,296 @@ describe('rung 2: a tree named agent-<id> or wf_<run>-<n> is decided by a point 
   });
 });
 
+// ── R57 (D-4653): an eviction never decides a link ────────────────────────────────────────────────────────────────────────
+
+describe('evidence horizon in the lane (R57, D-4653): an event the slice no longer holds can make a verdict less decided, never more', () => {
+  // `demo-a` (journaled first: owners are read in id order) ran a call whose window [10:05:01, 10:05:02] is INSIDE `demo-b`'s call, the
+  // one that created raw-tree: [10:05:00, 10:05:03]. Held in full the two windows overlap, so the tree is unresolved. Evict `demo-a`'s
+  // pre-listing and the overlap is invisible, and the creator's window alone would link a tree it may not own.
+  function overlapWorld(): World {
+    const w = world();
+    writeBucket(w, 'demo-a', BUCKET10,
+      bashPre('demo-a', 'toolu_o1', ['old-tree'], '2026-10-15T10:05:01.000Z'), bashPost('demo-a', 'toolu_o1', ['old-tree'], '2026-10-15T10:05:02.000Z'));
+    writeBucket(w, 'demo-b', BUCKET10,
+      bashPre('demo-b', 'toolu_wt1', ['old-tree'], '2026-10-15T10:05:00.000Z'), bashPost('demo-b', 'toolu_wt1', ['old-tree', 'raw-tree'], '2026-10-15T10:05:03.000Z'));
+    return w;
+  }
+  const both = [sessionOf('demo-a'), sessionOf('demo-b')];
+  const census = { demo: [OLD, RAW] };
+
+  it('held in full the overlap keeps the tree unresolved, with no lease and no attempt (the control)', async () => {
+    const w = overlapWorld();
+    for (let i = 0; i < 4; i++) await censusPass(w, at(i), census, both);
+    expect(leasesOf(w.home)).toEqual([]);
+    expect(attemptsOf(w.home)).toEqual([]);
+    expect(w.watcher.delegationReport().verdicts).toEqual({ unresolved: 2, conflicting: 0, unmeasured: 0 });
+  });
+
+  it('P1: the other session\'s pre-listing evicted by the cap (a test seam): the tree is UNMEASURED, and no lease and no attempt is filed', async () => {
+    const w = overlapWorld();
+    w.watcher.setDelegationSeams({ evidenceCap: 3 });
+    for (let i = 0; i < 4; i++) await censusPass(w, at(i), census, both);
+    expect(w.watcher.delegationReport().evidenceHorizon).toBe('2026-10-15T10:05:01.000Z');
+    expect(leasesOf(w.home), 'an eviction minted a lease identity').toEqual([]);
+    expect(attemptsOf(w.home)).toEqual([]);
+    expect(w.watcher.delegationReport().verdicts).toEqual({ unresolved: 1, conflicting: 0, unmeasured: 1 });
+    expect(readFileSync(path.join(w.ccrcDir, DELEGATION_JOURNAL_FILE), 'utf8')).not.toContain('"kind":"lease-created"');
+  });
+
+  it('the same truncation at a RESTART (loadEvidence keeps only the cap of the whole journal) is the same horizon, and the same answer', async () => {
+    const first = overlapWorld();
+    await censusPass(first, at(0), census, both);                    // ingest everything with the shipped cap
+    expect(first.watcher.delegationReport().evidenceHorizon).toBeNull();
+    const again = world({ home: first.home });
+    again.watcher.setDelegationSeams({ evidenceCap: 3 });
+    for (let i = 1; i < 5; i++) await censusPass(again, at(i), census, both);
+    expect(again.watcher.delegationReport().evidenceHorizon).toBe('2026-10-15T10:05:01.000Z');
+    expect(leasesOf(first.home)).toEqual([]);
+    expect(again.watcher.delegationReport().verdicts.unmeasured).toBe(1);
+  });
+
+  it('with no eviction the horizon is null, whatever the volume of ordinary events', async () => {
+    const w = overlapWorld();
+    for (let i = 0; i < 3; i++) await censusPass(w, at(i), census, both);
+    expect(w.watcher.delegationReport().evidenceHorizon).toBeNull();
+  });
+
+  it('the horizon only ever rises, and a reload that truncates less lowers nothing it has not recomputed', async () => {
+    const w = overlapWorld();
+    w.watcher.setDelegationSeams({ evidenceCap: 3 });
+    await censusPass(w, at(0), census, both);
+    const first = w.watcher.delegationReport().evidenceHorizon;
+    expect(first).not.toBeNull();
+    appendBucket(w, 'demo-a', BUCKET10, bashPre('demo-a', 'toolu_o2', ['old-tree'], '2026-10-15T10:20:00.000Z'));
+    setNow(at(1));
+    await pass(w, both);
+    expect(w.watcher.delegationReport().evidenceHorizon! >= first!).toBe(true);
+  });
+});
+
+// ── R58 (D-4654): the lane reads nothing past the lookback, and cursors retire behind that horizon ─────────────────────
+
+describe('the read horizon and cursor retention in the lane (R58, D-4654)', () => {
+  const DAY3 = 72 * 3_600_000;
+  const closeOf = Date.UTC(2026, 9, 15, 11, 3, 0);
+
+  /** One session with a closed, measured hour at 10:00 and a cursor behind it, three days before the lane's next pass. */
+  async function agedWorld(): Promise<World> {
+    const w = world();
+    writeBucket(w, 'demo-a', BUCKET10, startLine('demo-a', '2026-10-15T10:01:00.000Z'));
+    await censusPass(w, NOW, { demo: [] });                                          // read at 10:30
+    await censusPass(w, closeOf, { demo: [] });                                      // the close write at 11:03
+    expect(intervalFor(w.home, 'demo-a')).toMatchObject({ state: 'measured' });
+    expect(Date.parse(intervalFor(w.home, 'demo-a')!.recordedAt)).toBeGreaterThanOrEqual(closeOf);
+    expect(disk(w.home).checkpoint!.bucketCursors).toHaveLength(1);
+    return w;
+  }
+
+  it('an old bucket of a LIVE idle session is never range-read, and its interval is unchanged', async () => {
+    const w = await agedWorld();
+    const before = JSON.stringify(intervalFor(w.home, 'demo-a'));
+    const reads = w.calls.ranges.length;
+    await censusPass(w, NOW + DAY3, { demo: [] });
+    await censusPass(w, NOW + DAY3 + 60_000, { demo: [] });
+    expect(w.calls.ranges.slice(reads), 'the three-day-old bucket was range-read').toEqual([]);
+    expect(JSON.stringify(intervalFor(w.home, 'demo-a'))).toBe(before);
+    expect(disk(w.home).journalLines).toBe(1);
+  });
+
+  it('a three-day-old bucket left in a DEAD session\'s spool directory is never range-read, and the hour it was recorded before closing becomes a gap', async () => {
+    const w = world();
+    writeBucket(w, 'demo-x', BUCKET10, startLine('demo-x', '2026-10-15T10:01:00.000Z'));
+    await censusPass(w, NOW, { demo: [] }, [sessionOf('demo-x')]);                    // recorded mid-hour, never closed
+    const reads = w.calls.ranges.length;
+    setNow(NOW + DAY3);
+    setCensus(w, { demo: [] }, {}, NOW + DAY3);
+    await pass(w, [sessionOf('demo-x', 'dead')]);
+    expect(w.calls.ranges.slice(reads), 'a dead owner\'s three-day-old bucket was range-read').toEqual([]);
+    expect(w.calls.listings.filter((o) => o === 'demo-x')).toHaveLength(1);          // not even listed again: nothing to close
+    expect(intervalFor(w.home, 'demo-x')).toMatchObject({ state: 'unmeasured', detail: expect.stringMatching(/^hour-never-closed/) });
+  });
+
+  it('a cursor past the retention whose interval is on file is dropped by the lane\'s upkeep, once per UTC hour, and a bucket still listed is not read as new', async () => {
+    const w = await agedWorld();
+    const prune = vi.spyOn(DelegationDurability.prototype, 'pruneBucketCursors');
+    await censusPass(w, NOW + DAY3, { demo: [] });
+    expect(prune).toHaveBeenCalledTimes(1);
+    expect(disk(w.home).checkpoint!.bucketCursors).toEqual([]);
+    expect(w.watcher.delegationReport().cursorsPruned).toBe(1);
+    await censusPass(w, NOW + DAY3 + 60_000, { demo: [] });                           // the same UTC hour
+    expect(prune, 'the prune ran twice in one hour').toHaveBeenCalledTimes(1);
+    await censusPass(w, NOW + DAY3 + 2 * 3_600_000, { demo: [] });                    // a later hour with nothing droppable
+    expect(prune, 'the prune ran with nothing to drop').toHaveBeenCalledTimes(1);
+    expect(disk(w.home).journalLines).toBe(1);
+  });
+
+  it('the prune runs at most once per UTC hour even when a droppable cursor reappears inside it, and again in the next hour', async () => {
+    const w = await agedWorld();
+    const prune = vi.spyOn(DelegationDurability.prototype, 'pruneBucketCursors');
+    await censusPass(w, NOW + DAY3, { demo: [] });
+    expect(prune).toHaveBeenCalledTimes(1);
+    w.watcher.setDelegationSeams({ readEveryListedBucket: true });                    // the old bucket is read again: its cursor is back, and droppable
+    await censusPass(w, NOW + DAY3 + 60_000, { demo: [] });
+    expect(disk(w.home).checkpoint!.bucketCursors, 'the seam did not bring the cursor back').toHaveLength(1);
+    expect(prune, 'a second prune inside the same UTC hour').toHaveBeenCalledTimes(1);
+    await censusPass(w, NOW + DAY3 + 3_600_000, { demo: [] });
+    expect(prune).toHaveBeenCalledTimes(2);
+    expect(disk(w.home).checkpoint!.bucketCursors).toEqual([]);
+  });
+
+  it('the prune is called only when the planner has something to drop: a fleet of young cursors never calls it', async () => {
+    const w = world();
+    writeBucket(w, 'demo-a', BUCKET10, startLine('demo-a'));
+    const prune = vi.spyOn(DelegationDurability.prototype, 'pruneBucketCursors');
+    for (let i = 0; i < 3; i++) await censusPass(w, NOW + i * 3_600_000, { demo: [] });
+    expect(prune).not.toHaveBeenCalled();
+  });
+
+  it('with the read horizon bypassed (a test seam), re-ingesting a pruned bucket accepts nothing new: the eventIds dedupe against the retained journal', async () => {
+    const w = await agedWorld();
+    await censusPass(w, NOW + DAY3, { demo: [] });
+    expect(disk(w.home).checkpoint!.bucketCursors).toEqual([]);
+    const journalBefore = readFileSync(path.join(w.ccrcDir, DELEGATION_JOURNAL_FILE), 'utf8');
+    const stats = w.coord.delegationEventStats();
+    const reads = w.calls.ranges.length;
+    w.watcher.setDelegationSeams({ readEveryListedBucket: true });
+    await censusPass(w, NOW + DAY3 + 3_600_000, { demo: [] });
+    expect(w.calls.ranges.length, 'the seam did not make the lane read the old bucket').toBeGreaterThan(reads);
+    expect(readFileSync(path.join(w.ccrcDir, DELEGATION_JOURNAL_FILE), 'utf8'), 'a pruned bucket was journaled twice').toBe(journalBefore);
+    expect(w.coord.delegationEventStats()).toEqual(stats);
+  });
+
+  it('the lane\'s prune is not a checkpoint-only change: it never reaches applyCheckpointChange, and the source names the one door', () => {
+    const lane = watchSrc().slice(watchSrc().indexOf('THE DELEGATION LANE'));
+    expect(lane).toContain('pruneBucketCursors(');
+    expect(lane).toContain('delegationBucketReadable(');
+    expect(lane).toContain('planDelegationCursorRetention(');
+  });
+});
+
+// ── R59: unresolved and conflicting count unowned work only ────────────────────────────────────────────────────────────────
+
+describe('the verdict counts count unowned work (R59): a workspace or a tree being born is not work', () => {
+  it('a fleet of registered ccd workspaces plus trees in the birth wait, with no unowned tree, reports unresolved 0 and conflicting 0', async () => {
+    const w = world();
+    makeOwner(w, 'demo-a');
+    const ws = [record('demo', 'one', { canonicalPath: '/data/worktrees/demo/one' }), record('demo', 'two', { canonicalPath: '/data/worktrees/demo/two' })];
+    const born = record('demo', 'fresh-tree');
+    const records = [recordOf('demo-a'), recordOf('demo-one'), recordOf('demo-two', 'demo', { kind: 'child' })];
+    await censusPass(w, at(0), { demo: [...ws, born] }, [sessionOf('demo-a')], records);
+    expect(w.watcher.delegationReport().verdicts).toEqual({ unresolved: 0, conflicting: 0, unmeasured: 0 });
+    expect(w.watcher.currentDelegationHealth()).toMatchObject({ unresolved: 0, conflicting: 0, unmeasured: 0 });
+    await censusPass(w, at(1), { demo: [...ws, born] }, [sessionOf('demo-a')], records);
+    expect(w.watcher.delegationReport().verdicts).toEqual({ unresolved: 0, conflicting: 0, unmeasured: 0 });
+  });
+
+  it('once the wait is over, a tree nothing explains IS unowned work and is counted; a tree the lane could not decide is counted as unmeasured', async () => {
+    const w = world();
+    makeOwner(w, 'demo-a');
+    const lonely = record('demo', 'lonely-tree');
+    const unreadable = record('demo', 'broken-tree', { state: 'unreadable', canonicalPath: null });
+    for (let i = 0; i < 4; i++) await censusPass(w, at(i), { demo: [lonely, unreadable] });
+    expect(w.watcher.delegationReport().verdicts).toEqual({ unresolved: 1, conflicting: 0, unmeasured: 1 });
+  });
+});
+
+// ── M1 (D-4652), M3: a failed evidence read leaves the lane unmeasured ─────────────────────────────────────────────────────
+
+describe('the evidence read can fail (M1, M3): partial evidence never reaches correlation, and the counts read as unknown while the breaker is unmeasured', () => {
+  it('a visit that fails midway leaves the lane unmeasured: no reconciliation, no lease, no attempt; a later pass that reads whole proceeds', async () => {
+    const first = rawTreeWorld();
+    await censusPass(first, at(0), { demo: [OLD, RAW] });                           // everything is ingested; the lane is reconciled once
+    const again = world({ home: first.home });
+    const real = DelegationDurability.prototype.visitRetainedRecords;
+    let broken = true;
+    vi.spyOn(DelegationDurability.prototype, 'visitRetainedRecords').mockImplementation(function (this: DelegationDurability, visit) {
+      let n = 0;
+      return real.call(this, (r) => { visit(r); n += 1; if (broken && n === 2) throw new Error('journal read failed midway'); });
+    });
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    for (let i = 1; i < 5; i++) await censusPass(again, at(i), { demo: [OLD, RAW] });
+    expect(again.watcher.delegationReport().reconciliations, 'a reconciliation ran on partial evidence').toBe(0);
+    expect(leasesOf(first.home)).toEqual([]);
+    expect(attemptsOf(first.home)).toEqual([]);
+    // M3: while the evidence is unread the counts are zero, and the breaker says so: a reader treats the counts as unknown
+    expect(again.watcher.currentDelegationHealth()).toMatchObject({ circuitBreaker: 'unmeasured', unresolved: 0, conflicting: 0, unmeasured: 0 });
+    broken = false;
+    for (let i = 5; i < 9; i++) await censusPass(again, at(i), { demo: [OLD, RAW] });
+    expect(again.watcher.delegationReport().reconciliations).toBeGreaterThan(0);
+    expect(again.watcher.currentDelegationHealth()!.circuitBreaker).toBe('clear');
+    expect(leasesOf(first.home)).toHaveLength(1);
+  });
+
+  it('M3: before the first reconciliation the health says breaker unmeasured while its counts are 0; they are numbers only once the breaker is measured', async () => {
+    const w = world();
+    makeOwner(w, 'demo-a');
+    setNow(NOW);
+    await w.watcher.delegationApplier();
+    expect(w.watcher.currentDelegationHealth()).toMatchObject({ circuitBreaker: 'unmeasured', unresolved: 0, conflicting: 0, unmeasured: 0 });
+    await censusPass(w, at(0), { demo: [record('demo', 'lonely-tree')] });
+    expect(w.watcher.currentDelegationHealth()!.circuitBreaker).toBe('clear');
+  });
+});
+
+// ── M2, M5, M6 ────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+describe('the lane\'s documented relaxations and its bounds (M2, M5, M6)', () => {
+  const lane = (): string => watchSrc().slice(watchSrc().indexOf('THE DELEGATION LANE'));
+
+  it('M2: the docstring states that a budget cut releases the latch while the cut pass\'s late work is inert, and that statMeasured takes no signal', () => {
+    const src = lane();
+    expect(src).toMatch(/releases the (?:single-flight )?latch/);
+    expect(src).toMatch(/statMeasured/);
+    expect(src).toMatch(/dedupe/i);
+  });
+
+  it('M5: a workflow\'s meta directory listing is charged to the per-pass budget, and claimants are indexed once per reconcile (no scan of the evidence map per tree)', async () => {
+    const w = world();
+    const runs = Array.from({ length: 12 }, (_, i) => `wf_r${String(i).padStart(2, '0')}`);
+    const tdir = path.join(w.home, '.claude-fix', 'projects', '-demo', CLAUDE, 'subagents', 'workflows');
+    writeBucket(w, 'demo-a', BUCKET10, startLine('demo-a', '2026-10-15T10:01:00.000Z'), ...runs.map((r, i) => lineOf(common('demo-a', {
+      eventKind: 'PostToolUse', toolName: 'Workflow', toolUseId: `toolu_${r}`, outcome: 'async-launched', cwd: '/w/demo',
+      launch: { status: 'async-launched', taskId: `task_${i}`, taskType: 'local_workflow', workflowName: 'rev', runId: r, transcriptDir: path.join(tdir, r), scriptPath: '/w/s.js' },
+    }, `2026-10-15T10:02:${String(i).padStart(2, '0')}.000Z`))));
+    const trees = runs.map((r) => record('demo', `${r}-1`, { canonicalPath: `/w/demo/.claude/worktrees/${r}-1` }));
+    for (let i = 0; i < 3; i++) await censusPass(w, at(i), { demo: trees });
+    expect(w.calls.metaListings.length, 'more than eight workflow directories were listed in one pass').toBe(8);
+    await censusPass(w, at(3), { demo: trees });
+    expect(w.calls.metaListings.length).toBe(12);
+    const body = (name: string): string => { const m = new RegExp(`private async ${name}\\([\\s\\S]*?\\n  }\\n`).exec(lane()); return m === null ? '' : m[0]; };
+    for (const name of ['readAgentMeta', 'readWorkflowMeta']) {
+      expect(body(name), `${name} not found`).not.toBe('');
+      expect(body(name), `${name} scans the evidence map`).not.toMatch(/of this\.evidence\b/);
+    }
+  });
+
+  it('M6: the lane\'s memory is bounded by the census: meta misses and positive metas leave with their tree, and an absence leaves when the tree returns', async () => {
+    const w = world();
+    const AGENT = 'a1b2c3d4e5f60718';
+    const tdirA = path.join(w.home, '.claude-fix', 'projects', '-demo');
+    writeBucket(w, 'demo-a', BUCKET10, startLine('demo-a', '2026-10-15T10:01:00.000Z'),
+      lineOf(common('demo-a', { eventKind: 'SubagentStart', agentId: AGENT, agentType: null, cwd: '/w/demo', transcriptPath: path.join(tdirA, `${CLAUDE}.jsonl`) }, '2026-10-15T10:02:00.000Z')));
+    const tree = record('demo', `agent-${AGENT}`, { canonicalPath: `/w/demo/.claude/worktrees/agent-${AGENT}` });
+    for (let i = 0; i < 3; i++) await censusPass(w, at(i), { demo: [tree] });
+    expect(w.watcher.delegationReport().metaMisses).toBe(1);                         // no meta file: a miss, remembered
+    mkdirSync(path.join(tdirA, CLAUDE, 'subagents'), { recursive: true });
+    writeFileSync(path.join(tdirA, CLAUDE, 'subagents', `agent-${AGENT}.meta.json`), JSON.stringify({ worktreePath: tree.canonicalPath }));
+    await censusPass(w, at(2) + 6 * 60_000, { demo: [tree] });
+    expect(w.watcher.delegationReport().pointMetas).toBe(1);
+    await censusPass(w, at(3) + 6 * 60_000, { demo: [] });                           // the tree is gone from the census
+    expect(w.watcher.delegationReport()).toMatchObject({ metaMisses: 0, pointMetas: 0 });
+  });
+
+  it('M6: a measured absence is dropped when the tree comes back, and re-recorded with its new first instant if it goes again', async () => {
+    const w = rawTreeWorld();
+    for (let i = 0; i < 3; i++) await censusPass(w, at(i), { demo: [OLD, RAW] });
+    for (let i = 3; i < 6; i++) await censusPass(w, at(i), { demo: [OLD] });
+    expect(w.watcher.delegationReport().absences).toHaveLength(1);
+    await censusPass(w, at(6), { demo: [OLD, RAW] });
+    expect(w.watcher.delegationReport().absences, 'a tree that is back is not absent').toEqual([]);
+  });
+});
+
 // ── 5. the health surface ───────────────────────────────────────────────────────────────────────────────────────────────
 
 describe('currentDelegationHealth: absent until the lane has tried, then report-only and honest', () => {
@@ -1408,7 +1707,12 @@ describe('boot refusal (R24): an active restore marker, or one that cannot be me
     // listening, is killed whole: only the PIDs this test started are ever signalled.
     const child = spawn(tsx, [path.resolve(srcRoot, 'index.ts')], {
       cwd: path.resolve(__dirname, '..'),
-      env: { PATH: process.env['PATH'] ?? '', HOME: home, CCRC_HOME: home, CCRC_PORT: String(23000 + (process.pid % 3000)), CCRC_HOST: '127.0.0.1' },
+      env: {
+        PATH: process.env['PATH'] ?? '', HOME: home, CCRC_HOME: home, CCRC_PORT: String(23000 + (process.pid % 3000)), CCRC_HOST: '127.0.0.1',
+        // Fail-safe insurance for a mutant that disables the refusal: a server that DID boot would find a fixture tmux directory, never
+        // the caller's default tmux socket (M7).
+        TMUX_TMPDIR: mkTmp('ccrc-boot-tmux-'),
+      },
       stdio: ['ignore', 'pipe', 'pipe'],
       detached: true,
     });

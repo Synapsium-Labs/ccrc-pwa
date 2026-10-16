@@ -16,17 +16,23 @@ import path from 'node:path';
 import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
 import {
+  DELEGATION_CURSOR_RETENTION_HOURS,
   DELEGATION_EVENTS_CAP,
   DELEGATION_HEALTH_WINDOW_HOURS,
   DELEGATION_HOUR_MS,
   DELEGATION_INTERVAL_RETENTION_HOURS,
+  DELEGATION_SPOOL_LOOKBACK_HOURS,
+  delegationBucketReadable,
   delegationCapabilityState,
   delegationHealthInputOf,
   delegationHealthWindowOf,
   delegationObservationHealthOf,
   emptyDelegationCheckpoint,
   formatDelegationInstant,
+  planDelegationCursorRetention,
   upkeepDelegationIntervals,
+  canonicalDelegationJson,
+  type DelegationBucketCursor,
   type DelegationCheckpointV1,
   type DelegationObservationInterval,
 } from '../src/coord/delegation-model.js';
@@ -102,11 +108,33 @@ describe('the rolling window: 168 complete UTC hours ending at the start of the 
     expect(delegationHealthWindowOf(withOpen, NOW)).toMatchObject({ measuredSessionHours: 168, unmeasuredSessionHours: 0, complete: true });
   });
 
-  it('counts one session-hour per (session, incarnation, hour), measured or unmeasured', () => {
-    const rows = [...grid(2, 5), iv(3, 'measured', 's0', 'g2')];                // a second incarnation of s0 in one hour
-    const w = delegationHealthWindowOf(rows, NOW);
-    expect(w.measuredSessionHours + w.unmeasuredSessionHours).toBe(2 * 168 + 1);
+  it('counts one session-hour per (session, hour), measured or unmeasured', () => {
+    const w = delegationHealthWindowOf(grid(2, 5), NOW);
+    expect(w.measuredSessionHours + w.unmeasuredSessionHours).toBe(2 * 168);
     expect(w.unmeasuredSessionHours).toBe(5);
+  });
+
+  it('R60: an incarnation change mid-hour is ONE session-hour, not two (the denominator is not inflated by a second row)', () => {
+    const measuredBoth = delegationHealthWindowOf([...grid(1, 0), iv(10, 'measured', 's0', 'g2')], NOW);
+    expect(measuredBoth).toMatchObject({ measuredSessionHours: 168, unmeasuredSessionHours: 0, complete: true });
+    const rows = [...grid(2, 0), iv(10, 'measured', 's0', 'g2'), iv(11, 'measured', 's0', 'g2'), iv(10, 'measured', 's1', 'g9')];
+    const w = delegationHealthWindowOf(rows, NOW);
+    expect(w.measuredSessionHours + w.unmeasuredSessionHours).toBe(2 * 168);
+  });
+
+  it('R60: one unmeasured row and one measured row in the same session-hour make ONE unmeasured session-hour (spec section 7: any unmeasured interval)', () => {
+    for (const order of [[iv(10, 'measured', 's0', 'g1'), iv(10, 'unmeasured', 's0', 'g2')], [iv(10, 'unmeasured', 's0', 'g2'), iv(10, 'measured', 's0', 'g1')]]) {
+      const rows = [...grid(1, 0).filter((r) => r.utcHour !== hourAt(10)), ...order];
+      expect(delegationHealthWindowOf(rows, NOW)).toMatchObject({ measuredSessionHours: 167, unmeasuredSessionHours: 1, complete: true });
+    }
+    const sentinel = [...grid(1, 0), iv(20, 'unmeasured', 's0', 'unmeasured')];
+    expect(delegationHealthWindowOf(sentinel, NOW)).toMatchObject({ measuredSessionHours: 167, unmeasuredSessionHours: 1 });
+  });
+
+  it('R60 keeps the strict threshold: the aggregation changes nothing at the 1.00% edge (42 of 4200 is still ineligible)', () => {
+    const rows = [...grid(25, 41), iv(1, 'measured', 's24', 'g2'), iv(2, 'measured', 's24', 'g2')];
+    expect(delegationObservationHealthOf(inputFrom(cpWith(rows))).stageGate).toBe('eligible');
+    expect(delegationObservationHealthOf(inputFrom(cpWith([...grid(25, 42)]))).stageGate).toBe('ineligible');
   });
 
   it('is incomplete when ANY hour of the window has no row at all (the lane did not run), however many hours do', () => {
@@ -397,6 +425,100 @@ describe('W3-M68 checkpoint-interval restart table: an unmeasured session-hour i
     const again = await open(dir, null);
     expect(again.state().checkpoint.observationIntervals).toHaveLength(168);
     expect(healthOf(again)).toMatchObject({ measuredSessionHours: 167, unmeasuredSessionHours: 1, stageGate: 'eligible' });
+  });
+});
+
+// ── R58 (D-4654): bucket cursors retire past the read horizon ─────────────────────────────────────────────────────────
+
+describe('cursor retention (R58, D-4654): one horizon, derived once; a cursor retires only where its hour is already on file', () => {
+  const bucketAt = (back: number): string => iso(NOW_HOUR - back * DELEGATION_HOUR_MS).replace(/[-:T]/g, '').slice(0, 10);
+  const cur = (back: number, over: Partial<DelegationBucketCursor> = {}): DelegationBucketCursor => ({
+    sessionId: 's1', parentIncarnation: 'g1', bucket: bucketAt(back), cursor: 10, lastSize: 10, lastCompleteAt: null, intervalState: 'measured',
+    detail: null, anchor: null, replaced: false, ...over,
+  });
+  const ivOf = (c: DelegationBucketCursor, state: 'measured' | 'unmeasured' = 'measured'): DelegationObservationInterval => ({
+    sessionId: c.sessionId, parentIncarnation: c.parentIncarnation,
+    utcHour: iso(Date.UTC(+c.bucket.slice(0, 4), +c.bucket.slice(4, 6) - 1, +c.bucket.slice(6, 8), +c.bucket.slice(8, 10))),
+    state, detail: state === 'measured' ? null : 'range-unreadable: x', recordedAt: iso(NOW),
+  });
+  const plan = (cursors: readonly DelegationBucketCursor[], intervals: readonly DelegationObservationInterval[]) => planDelegationCursorRetention(cursors, intervals, NOW);
+
+  it('the horizons are derived from the spool lookback: the read horizon is 24 h, the retention is that plus 24 h', () => {
+    expect(DELEGATION_SPOOL_LOOKBACK_HOURS).toBe(24);
+    expect(DELEGATION_CURSOR_RETENTION_HOURS).toBe(DELEGATION_SPOOL_LOOKBACK_HOURS + 24);
+    expect(DELEGATION_CURSOR_RETENTION_HOURS).toBe(48);
+  });
+
+  it('delegationBucketReadable: true only from the lookback to the open hour; a stale or a future bucket is never read', () => {
+    const readable = (back: number): boolean => delegationBucketReadable(NOW_HOUR - back * DELEGATION_HOUR_MS, NOW);
+    expect(readable(0)).toBe(true);
+    expect(readable(1)).toBe(true);
+    expect(readable(DELEGATION_SPOOL_LOOKBACK_HOURS)).toBe(true);
+    expect(readable(DELEGATION_SPOOL_LOOKBACK_HOURS + 1)).toBe(false);
+    expect(readable(72)).toBe(false);
+    expect(readable(-1), 'a bucket named for a future hour').toBe(false);
+    expect(delegationBucketReadable(NOW_HOUR - 5 * DELEGATION_HOUR_MS + 60_000, NOW), 'not an hour boundary').toBe(false);
+  });
+
+  it('47 h is kept and 49 h is dropped (48 h is the edge and is kept), when the hour is on file', () => {
+    const rows = [47, 48, 49, 100].map((back) => cur(back));
+    const p = plan(rows, rows.map((r) => ivOf(r)));
+    expect(p.keep.map((r) => r.bucket)).toEqual([bucketAt(47), bucketAt(48)]);
+    expect(p.drop.map((r) => r.bucket)).toEqual([bucketAt(49), bucketAt(100)]);
+    expect(p.unparseable).toEqual([]);
+  });
+
+  it('a cursor whose interval is not on file is KEPT however old; an unmeasured interval counts as on file; another session or incarnation does not', () => {
+    const old = cur(100);
+    expect(plan([old], []).drop).toEqual([]);
+    expect(plan([old], [ivOf(old, 'unmeasured')]).drop).toEqual([old]);
+    expect(plan([old], [{ ...ivOf(old), sessionId: 's2' }]).drop).toEqual([]);
+    expect(plan([old], [{ ...ivOf(old), parentIncarnation: 'g2' }]).drop).toEqual([]);
+    expect(plan([old], [{ ...ivOf(old), utcHour: iso(Date.parse(ivOf(old).utcHour) + DELEGATION_HOUR_MS) }]).drop, 'another hour').toEqual([]);
+  });
+
+  it('a row whose bucket hour does not parse is KEPT (fail safe) and reported', () => {
+    const odd = [cur(100, { bucket: 'garbage' }), cur(100, { bucket: '2026101399' }), cur(100, { bucket: '202610150' })];
+    const p = plan(odd, [ivOf(cur(100))]);
+    expect(p.drop).toEqual([]);
+    expect(p.keep).toHaveLength(3);
+    expect(p.unparseable).toEqual(odd);
+  });
+
+  it('the plan is a partition: every row is kept or dropped once, none is edited, a kept replaced row is the very row, and input order is irrelevant', () => {
+    const rows = [cur(47, { replaced: true, intervalState: 'unmeasured', detail: 'bucket-replaced: x' }), cur(60), cur(10), cur(70, { replaced: true })];
+    const frozen = rows.map((r) => Object.freeze({ ...r }));
+    const intervals = rows.map((r) => ivOf(r));
+    const forward = plan(frozen, intervals);
+    const backward = plan([...frozen].reverse(), [...intervals].reverse());
+    expect(forward.keep.find((r) => r.bucket === bucketAt(47))).toBe(frozen[0]);
+    expect([...forward.keep, ...forward.drop].length).toBe(rows.length);
+    expect(new Set([...forward.keep, ...forward.drop]).size).toBe(rows.length);
+    const names = (p: typeof forward) => ({ keep: p.keep.map((r) => r.bucket).sort(), drop: p.drop.map((r) => r.bucket).sort() });
+    expect(names(forward)).toEqual(names(backward));
+  });
+
+  it('dropping a cursor moves no interval from unmeasured to measured and does not change the health (the seven-day arithmetic is untouched)', async () => {
+    const dir = mkTmp('ccrc-dh-');
+    const d = await DelegationDurability.open({ dir, projection: null, now: () => NOW, randomUUID: () => '5b0d9d9e-6d3c-4d2e-9f7a-0a1b2c3d4e5f' });
+    try {
+      const rows = [...grid(2, 3), ivOf(cur(60, { sessionId: 's0' }), 'unmeasured')];
+      await d.applyCheckpointChange((cp) => ({ ...cp, observationIntervals: rows }));
+      const cursors = [cur(60, { sessionId: 's0' }), cur(5, { sessionId: 's0' })];
+      for (const c of cursors) await d.applyAccepted({ accepted: [], cursor: c, interval: null });
+      const health = () => delegationObservationHealthOf(delegationHealthInputOf({
+        nowMs: NOW, state: d.state(), capabilityState: 'present', registryReadable: true, circuitBreaker: 'clear', verdictCounts: COUNTS,
+      }));
+      const before = { intervals: canonicalDelegationJson(d.state().checkpoint.observationIntervals), health: health() };
+      const out = await d.pruneBucketCursors(NOW);
+      expect(out.dropped).toBe(1);
+      expect(d.state().checkpoint.bucketCursors.map((c) => c.bucket)).toEqual([bucketAt(5)]);
+      expect(canonicalDelegationJson(d.state().checkpoint.observationIntervals)).toBe(before.intervals);
+      // the health is identical in everything it measures; the checkpoint revision, which any replacement advances, is the one field that moves
+      const after = health();
+      expect(after.lastCheckpointRevision).toBe(before.health.lastCheckpointRevision! + 1);
+      expect({ ...after, lastCheckpointRevision: null }).toEqual({ ...before.health, lastCheckpointRevision: null });
+    } finally { await d.close(); }
   });
 });
 

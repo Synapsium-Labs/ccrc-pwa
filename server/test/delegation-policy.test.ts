@@ -20,6 +20,7 @@ import {
   DELEGATION_CIRCUIT_BREAKER_WINDOW_MS,
   delegationCircuitBreaker,
   isDelegationPolicyKebab,
+  isUnownedWorkReason,
   planDelegationReconciliation,
   type DelegationReconciliationInput,
   type DelegationReportEffect,
@@ -361,6 +362,33 @@ describe('state transitions: a ccrc workspace being born, and other census reaso
       'agent-id-claimed-by-multiple-sessions', 'ambiguous-listing-windows', 'ambiguous-subagent-path', 'duplicate-activity-rows', 'meta-paths-disagree',
       'no-correlating-evidence', 'overlapping-listing-window', 'parent-cwd', 'path-claimed-by-multiple-parents', 'rungs-disagree', 'same-upstream-id-in-multiple-sessions',
     ].sort());
+  });
+});
+
+describe('isUnownedWorkReason (R59): the ONE classifier of what counts as unowned work, derived from the total table', () => {
+  it('answers true exactly for the reasons policy REPORTS as unowned work, for every reason correlation can emit', () => {
+    for (const reason of DELEGATION_CORRELATION_REASONS) {
+      const reported = kinds(substantive(planDelegationReconciliation(one(rec(), unresolvedV(reason, [agentAct.identityJournalId]))))).includes('record-unowned-worktree');
+      expect(isUnownedWorkReason(reason), reason).toBe(reported);
+    }
+  });
+  it('is false for a tree that is not work: a ccd workspace, a tree being born, an absent record, and an eviction (evidence-horizon)', () => {
+    for (const reason of ['ccd-workspace-not-a-lease', 'ccrc-birth-wait', 'record-absent', 'record-unreadable', 'evidence-horizon', 'rung-2-meta-absent']) {
+      expect(isUnownedWorkReason(reason), reason).toBe(false);
+    }
+  });
+  it('is true for unowned work (attempted and undecided), and fails closed for a word it has never heard of', () => {
+    for (const reason of ['no-correlating-evidence', 'overlapping-listing-window', 'parent-cwd', 'rungs-disagree']) expect(isUnownedWorkReason(reason), reason).toBe(true);
+    for (const reason of ['some-future-reason', '', 'toString', '__proto__', 'constructor']) expect(isUnownedWorkReason(reason), reason).toBe(false);
+  });
+  it('there is no second table: the policy defines UNOWNED_BY_REASON once, and the watcher spells none of the reasons it classifies', () => {
+    const dir = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'src');
+    const policy = readFileSync(path.join(dir, 'coord', 'delegation-policy.ts'), 'utf8');
+    expect(policy.match(/const UNOWNED_BY_REASON\b/g)).toHaveLength(1);
+    const watch = readFileSync(path.join(dir, 'watch.ts'), 'utf8');
+    const lane = watch.slice(watch.indexOf('THE DELEGATION LANE')).split('\n').filter((l) => !/^\s*(\*|\/\/|\/\*)/.test(l)).join('\n');
+    for (const reason of DELEGATION_CORRELATION_REASONS) expect(lane.includes(`'${reason}'`), `${reason} is spelled in the lane`).toBe(false);
+    expect(lane).toContain('isUnownedWorkReason(');
   });
 });
 

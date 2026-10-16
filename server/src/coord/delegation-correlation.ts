@@ -28,6 +28,13 @@
 // an unreadable `gitdir` read as an absent canonical path) are no evidence of anything, and a source scan pins that nothing here reads
 // them.
 //
+// THE EVIDENCE HORIZON (R57, D-4653; spec §5.3: "a lost event can delay or prevent a link, never create one"). The caller holds a bounded
+// slice of the journal. Rung 4's overlap rule and the claimed-by-more-than-one-session rules of rungs 2 and 3 are NEGATIVE evidence: they
+// keep a tree from linking only while the other party's events are still held. So the caller says how far its eviction reached
+// (`evidenceHorizon`: the latest `observedAt` among events it no longer holds, or null when it dropped none), and a link that rests on
+// such negative evidence becomes `unmeasured('evidence-horizon')` when the evidence it rests on reaches back to that horizon. A verdict
+// that was not a link is never touched: an eviction can make a verdict less decided and never more.
+//
 // INTERPRETATIONS (each recorded in the task report): `conflicting` is decided over PARENTS: two linked rungs that name the same
 // parent are agreement (the lowest rung's activity is reported) and two that name different parents conflict; `repository` on a
 // listing window is compared to the census record's `project`, the one repository key the census carries; an `unresolved` ccd
@@ -80,6 +87,9 @@ export interface DelegationCorrelationInput {
   birthPassesRemaining: 0 | 1 | 2;
   hasRegistryRow: boolean;
   hasChildMarker: boolean;
+  /** R57 (D-4653): the latest `observedAt` among events the caller has evicted from `acceptedEvidence` and `listingWindows`, or null when
+   *  it evicted none. Every event observed AFTER it is held; an event at or before it may have been lost. */
+  evidenceHorizon: string | null;
 }
 
 export type DelegationCorrelationVerdict =
@@ -129,6 +139,7 @@ export const DELEGATION_CORRELATION_REASONS = [
   'ambiguous-listing-windows',
   'rungs-disagree',
   'no-correlating-evidence',
+  'evidence-horizon',
 ] as const;
 export type DelegationCorrelationReason = (typeof DELEGATION_CORRELATION_REASONS)[number];
 
@@ -190,6 +201,46 @@ function claimsOf(input: DelegationCorrelationInput, sourceKind: 'agent' | 'work
   return claims;
 }
 
+// ── The evidence horizon (R57, D-4653) ───────────────────────────────────────────────────────────────────────────────
+
+/**
+ * How long after the horizon a listing window must have begun for rung 4 to trust that no evicted window overlaps it: ten minutes.
+ * A window is a Bash call, and Claude Code's Bash tool ends a call at its timeout, ten minutes at the longest by default; a call that
+ * began at or before the horizon and was still running a margin later is a call that outlived its own ceiling, and a call that never
+ * reported its end is an OPEN-ENDED window, which the rule below already refuses. So a candidate window that began a full margin after
+ * the horizon cannot overlap a window whose events were evicted, and one that began sooner might.
+ */
+export const DELEGATION_EVIDENCE_MARGIN_MS = 10 * 60 * 1000;
+
+/** The horizon as epoch milliseconds, or `null` when the caller evicted nothing. A horizon that is not a canonical instant fails SAFE:
+ *  `NaN` makes every comparison below false, which the callers read as "reaches the horizon" (see `reachesHorizon`). */
+function horizonMsOf(input: DelegationCorrelationInput): number | null {
+  if (input.evidenceHorizon === null) return null;
+  try { return parseDelegationInstant(input.evidenceHorizon); } catch (err) { if (err instanceof DelegationModelError) return Number.NaN; throw err; }
+}
+
+/**
+ * Do this activity's claims reach back to the horizon? Its claim set is complete only if no claim of it, or of a rival for the same
+ * upstream ID, can have been evicted; an event can have been evicted only if it was observed at or before the horizon. So the claim set
+ * is complete only when the activity's identity record AND its earliest claiming event (a start, a stop or a launch response naming its
+ * agent, from its own parent) were observed strictly after it. With no horizon nothing was evicted. An unreadable horizon reaches.
+ */
+function reachesHorizon(input: DelegationCorrelationInput, activity: DelegationActivityRow): boolean {
+  const horizon = horizonMsOf(input);
+  if (horizon === null) return false;
+  if (Number.isNaN(horizon)) return true;
+  let earliest: number;
+  try { earliest = parseDelegationInstant(activity.openedAt); } catch (err) { if (err instanceof DelegationModelError) return true; throw err; }
+  for (const { event } of input.acceptedEvidence) {
+    if (event.sessionId !== activity.parentId || event.parentIncarnation !== activity.parentIncarnation) continue;
+    const named = event.agentId === activity.upstreamId || (event.eventKind === 'PostToolUse' && 'launch' in event && event.launch !== null
+      && typeof event.launch === 'object' && 'agentId' in event.launch && event.launch.agentId === activity.upstreamId);
+    if (!named) continue;
+    try { earliest = Math.min(earliest, parseDelegationInstant(event.observedAt)); } catch (err) { if (err instanceof DelegationModelError) return true; throw err; }
+  }
+  return earliest <= horizon;
+}
+
 // ── Rung 2: exact upstream identity ──────────────────────────────────────────────────────────────────────────────────
 
 /**
@@ -223,6 +274,8 @@ function rung2(input: DelegationCorrelationInput, sourceKind: 'agent' | 'workflo
   }
   const activity = activities[0];
   if (activity === undefined) return unmeasured('activity-not-durably-open', [...metaIds, ...spool]);
+  // R57: the "one parent" and "one activity row" checks above are negative evidence an eviction could have emptied.
+  if (reachesHorizon(input, activity)) return unmeasured('evidence-horizon', [...spool, ...metaIds, activity.identityJournalId]);
   return linked(activity.activityId, 2, [...spool, ...metaIds, activity.identityJournalId]);
 }
 
@@ -264,7 +317,10 @@ function rung3(input: DelegationCorrelationInput, canonical: string): Answer | n
     return parents.size > 1 ? conflicting('path-claimed-by-multiple-parents', all) : unresolved('ambiguous-subagent-path', all);
   }
   const [only] = [...hits.values()];
-  return only === undefined ? null : linked(only.activity.activityId, 3, only.journalIds);
+  if (only === undefined) return null;
+  // R57: the vetoes above (`parent-cwd`, a second claimant, a second subagent on the path) are negative evidence an eviction could have emptied.
+  if (reachesHorizon(input, only.activity)) return unmeasured('evidence-horizon', only.journalIds);
+  return linked(only.activity.activityId, 3, only.journalIds);
 }
 
 // ── Rung 4: the session's own creation delta ─────────────────────────────────────────────────────────────────────────
@@ -308,6 +364,22 @@ function rung4(input: DelegationCorrelationInput): Answer | null {
     .filter(({ event }) => event.sessionId === mine.sessionId && event.parentIncarnation === mine.parentIncarnation
       && (event.eventKind === 'PreToolUse' || event.eventKind === 'PostToolUse') && event.toolName === 'Bash' && event.toolUseId === mine.toolUseId)
     .map(({ journalId }) => journalId);
+  // R57: the overlap rule above is negative evidence. A window whose pre-listing was evicted is a window that is not there to overlap.
+  // The link stands only if every window the caller holds on this repository is closed and began after the horizon, and the candidate
+  // began a full margin after it (`DELEGATION_EVIDENCE_MARGIN_MS`).
+  const horizon = horizonMsOf(input);
+  if (horizon !== null) {
+    let reaches: boolean;
+    try {
+      reaches = Number.isNaN(horizon)
+        || input.listingWindows.some((w) => w.repository === mine.repository && (w.endedAt === null || parseDelegationInstant(w.startedAt) <= horizon))
+        || parseDelegationInstant(mine.startedAt) < horizon + DELEGATION_EVIDENCE_MARGIN_MS;
+    } catch (err) {
+      if (!(err instanceof DelegationModelError)) throw err;
+      reaches = true;
+    }
+    if (reaches) return unmeasured('evidence-horizon', [...call, activity.identityJournalId]);
+  }
   return linked(activity.activityId, 4, [...call, activity.identityJournalId]);
 }
 

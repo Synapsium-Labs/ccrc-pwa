@@ -158,10 +158,16 @@ const UNOWNED_BY_REASON: Readonly<Record<DelegationCorrelationReason, boolean>> 
   'ambiguous-listing-windows': true,
   'rungs-disagree': true,
   'no-correlating-evidence': true,
+  // R57: an eviction made the answer unmeasured. Nothing is known of the tree, so it is retried, never reported as work.
+  'evidence-horizon': false,
 };
 
-/** A reason this table does not name fails closed. */
-const isUnownedReason = (reason: string): boolean =>
+/**
+ * The ONE classifier of what counts as unowned work (R59): true when a tree left with this reason is attempted-and-undecided work.
+ * Policy files a report with it, and the watcher counts `unresolved` and `conflicting` with it, so the two cannot disagree; neither
+ * keeps a second table. A reason this table does not name fails closed (false).
+ */
+export const isUnownedWorkReason = (reason: string): boolean =>
   Object.hasOwn(UNOWNED_BY_REASON, reason) && UNOWNED_BY_REASON[reason as DelegationCorrelationReason] === true;
 
 /** The effect tags, as a TOTAL table over the union: an effect added to it is a compile error until it is named here. */
@@ -335,7 +341,7 @@ function planLinked(ground: Ground, record: DelegationCensusRecord, verdict: Ext
 }
 
 function planUnowned(ground: Ground, record: DelegationCensusRecord, verdict: Extract<DelegationCorrelationVerdict, { kind: 'unresolved' | 'conflicting' }>): DelegationReportEffect[] {
-  if (!isUnownedReason(verdict.reason)) return [];
+  if (!isUnownedWorkReason(verdict.reason)) return [];
   const out: DelegationReportEffect[] = [];
   for (const parent of parentsNamedBy(ground, verdict.evidenceJournalIds)) {
     const attempt = attemptOf(ground, parent, record, { rung: null, verdict: verdict.kind, detail: verdict.reason, evidence: verdict.evidenceJournalIds });

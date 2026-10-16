@@ -50,6 +50,7 @@ import {
   isLowerHex64,
   leaseSourceKindOfActivity,
   parseDelegationInstant,
+  planDelegationCursorRetention,
   restoreOrAllocateActivityId,
   sortedProjectionRows,
   WAVE3_LEASE_SOURCE_KINDS,
@@ -847,6 +848,16 @@ export class DelegationCheckpointBuilder {
     this.intervals.set(k, mergeDelegationObservationInterval(this.intervals.get(k), interval));
   }
 
+  /**
+   * Retires the cursor rows `planDelegationCursorRetention` drops (R58, D-4654), decided on THIS builder's own rows: its cursors and
+   * its intervals, as they stand under the applier's lock. It is the only place a cursor row is removed, and it never edits one.
+   */
+  dropBucketCursors(nowMs: number): { dropped: number; unparseable: number } {
+    const plan = planDelegationCursorRetention([...this.cursors.values()], [...this.intervals.values()], nowMs);
+    for (const c of plan.drop) this.cursors.delete(cursorKeyOf(c));
+    return { dropped: plan.drop.length, unparseable: plan.unparseable.length };
+  }
+
   /** Replaces the ROWS from a checkpoint a checkpoint-only change produced, keeping the applied position, the identity candidates
    *  and the lease facts (a change cannot move any of them). A candidate whose key the change mapped is no longer one. */
   replaceRows(cp: DelegationCheckpointV1): void {
@@ -1521,9 +1532,16 @@ export class DelegationDurability {
    * the applier's queue (so no application is half-written while it reads). It is how the watcher lane (Task 13) learns the evidence
    * correlation reads without NAMING the journal file: this module and the journal module stay the only sources that do (a guard in
    * `delegation-recovery.test.ts` pins that). A decode or IO failure rejects and changes nothing; the applier stays as it was.
+   *
+   * D-4652, with the coordinator's bounds: it opens no write, rename or truncate target (it calls the read door and nothing else); it
+   * runs only `ready` (`requireReady`), on the queue, so no application is half-written while it reads and an application enqueued
+   * during a held visit completes after it; a caller must treat a failure DURING a visit as an unmeasured evidence set, never as the
+   * records seen so far (a missing counter-event could link a tree, D-4008); and it re-derives nothing: records the checkpoint already
+   * covers are only handed over, and every activity ID the checkpoint maps stays as it is (O4).
    */
   visitRetainedRecords(visit: (record: DelegationJournalRecordV1) => void): Promise<void> {
     return this.enqueue(async () => {
+      this.requireReady();                                  // a reconstructing or failed applier streams nothing: its journal is not yet folded
       for await (const record of readDelegationJournalRecords(this.port, this.journalPath)) visit(record);
     });
   }
@@ -1660,6 +1678,26 @@ export class DelegationDurability {
       });
       const result = box.result;
       return result.kind === 'opened' ? { kind: 'opened', activityId: result.activityId, applied } : result;
+    });
+  }
+
+  /**
+   * Retires bucket cursors past the retention (R58, D-4654; see `planDelegationCursorRetention` for the rule and its two horizons).
+   * It is a checkpoint replacement through the one application path (O5 steps 3 to 8; no journal record, no new file, nothing in
+   * SQLite but the usual projection), and the decision is taken on the BUILDER's own rows INSIDE the queue, never on a caller's copy:
+   * a plan made from an earlier read could drop a cursor that an ingestion has since changed, or write back a stale `replaced`
+   * (hand-off 4, R36). Nothing droppable is a no-op that writes nothing. `unparseable` counts the kept rows whose bucket names no hour.
+   */
+  pruneBucketCursors(nowMs: number): Promise<{ dropped: number; unparseable: number; applied: DelegationApplyOutcome }> {
+    return this.enqueue(async () => {
+      this.requireReady();
+      const box = { dropped: 0, unparseable: 0 };
+      const applied = await this.commitLocked({
+        items: [],
+        mutate: (b) => { Object.assign(box, b.dropBucketCursors(nowMs)); },
+        force: false,
+      });
+      return { ...box, applied };
     });
   }
 

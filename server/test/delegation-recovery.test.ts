@@ -2700,3 +2700,228 @@ describe('Task 13: applyPositiveWorkflowMeta opens a workflow worker exactly as 
     await expect(dur.applyPositiveWorkflowMeta(meta(1))).rejects.toMatchObject({ code: 'not-ready' });
   });
 });
+
+// ── Task 13 fix round 1, R58 (D-4654): bucket cursors retire through the one application path ──────────────────────────
+
+describe('Task 13 fix 1 (R58, D-4654): pruneBucketCursors drops a cursor only under the applier\'s lock, only where its hour is on file, only past the read horizon', () => {
+  const NOW_MS = Date.UTC(2026, 9, 15, 10, 30);
+  const NOW_HOUR_MS = Date.UTC(2026, 9, 15, 10);
+  const HOUR = 3_600_000;
+  const bucketBack = (back: number): string => formatDelegationInstant(NOW_HOUR_MS - back * HOUR).replace(/[-:T]/g, '').slice(0, 10);
+  const hourBack = (back: number): string => formatDelegationInstant(NOW_HOUR_MS - back * HOUR);
+  const cursorBack = (back: number, over: Record<string, unknown> = {}) => ({ ...cursorFor(bucketBack(back), 10), ...over });
+  /** A cursor and (when asked) its interval row, through the ingestion door. */
+  async function put(dur: DelegationDurability, back: number, o: { interval?: 'measured' | 'unmeasured' | null; replaced?: boolean } = {}) {
+    await dur.applyAccepted(batch([], {
+      cursor: cursorBack(back, o.replaced === true ? { replaced: true, intervalState: 'unmeasured', detail: 'bucket-replaced: x' } : {}),
+      interval: o.interval === null ? null : intervalFor(hourBack(back), o.interval ?? 'measured', T(1)),
+    }));
+  }
+  const buckets = (dur: DelegationDurability): string[] => dur.state().checkpoint.bucketCursors.map((c) => c.bucket).sort();
+
+  it('47 h is kept, 49 h is dropped, and an old cursor with NO interval row is kept: the drop is conditional on the hour being on file', async () => {
+    const h = harness();
+    const dur = await h.open();
+    await put(dur, 47);
+    await put(dur, 49);
+    await put(dur, 100, { interval: null });
+    await put(dur, 90, { interval: 'unmeasured' });
+    const before = dur.state().checkpoint.revision;
+    const out = await dur.pruneBucketCursors(NOW_MS);
+    expect(out.dropped).toBe(2);
+    expect(buckets(dur)).toEqual([bucketBack(47), bucketBack(100)].sort());
+    expect(dur.state().checkpoint.revision).toBe(before + 1);
+    expect(out.applied.durable).toBe(true);
+    // the intervals are exactly what they were
+    expect(dur.state().checkpoint.observationIntervals.map((r) => [r.utcHour, r.state]).sort()).toEqual([[hourBack(47), 'measured'], [hourBack(49), 'measured'], [hourBack(90), 'unmeasured']].sort());
+  });
+
+  it('it goes through the ONE application path: the O5 edges in order, the journal untouched, SQLite projected after the rename', async () => {
+    const h = harness();
+    const dur = await h.open();
+    await put(dur, 49);
+    const journalBefore = readDisk(h.dir).journal;
+    h.log.length = 0;
+    const edges: string[] = [];
+    const dur2 = await h.open({ onEdge: (edge, when) => { edges.push(`${edge}:${when}`); } });
+    h.log.length = 0;
+    edges.length = 0;
+    const out = await dur2.pruneBucketCursors(NOW_MS);
+    expect(out.dropped).toBe(1);
+    // a checkpoint-only application: O5's steps 3 to 8, with no journal record (so no journal-write and no journal-fsync edge)
+    expect(edges).toEqual(DELEGATION_DURABILITY_EDGES.filter((e) => e !== 'journal-write' && e !== 'journal-fsync').flatMap((e) => [`${e}:before`, `${e}:after`]));
+    expect(h.log.filter((l) => l.startsWith('journal.'))).toEqual([]);             // no journal write, fsync or open for append
+    expect(h.log).toContain('rename:delegation-checkpoint.json.tmp->delegation-checkpoint.json');
+    expect(h.log.indexOf('project')).toBeGreaterThan(h.log.indexOf('rename:delegation-checkpoint.json.tmp->delegation-checkpoint.json'));
+    expect(readDisk(h.dir).journal).toEqual(journalBefore);
+  });
+
+  it('a no-op prune costs no write: nothing droppable changes neither the file, the revision nor SQLite', async () => {
+    const h = harness();
+    const dur = await h.open();
+    await put(dur, 47);
+    await put(dur, 100, { interval: null });
+    const before = readDisk(h.dir);
+    const revision = dur.state().checkpoint.revision;
+    h.log.length = 0;
+    const out = await dur.pruneBucketCursors(NOW_MS);
+    expect(out.dropped).toBe(0);
+    expect(out.applied.durable).toBe(false);
+    expect(dur.state().checkpoint.revision).toBe(revision);
+    expect(readDisk(h.dir)).toEqual(before);
+    expect(h.log).toEqual([]);
+  });
+
+  it('a kept row\'s replaced:true survives the prune and a restart; a dropped row stays dropped', async () => {
+    const h = harness();
+    const dur = await h.open();
+    await put(dur, 47, { replaced: true });
+    await put(dur, 49, { replaced: true });
+    await dur.pruneBucketCursors(NOW_MS);
+    await dur.close();
+    const again = await h.open();
+    expect(again.state().checkpoint.bucketCursors.map((c) => [c.bucket, c.replaced])).toEqual([[bucketBack(47), true]]);
+  });
+
+  it('it refuses to run unless the applier is ready, and writes nothing', async () => {
+    const h = harness();
+    const dur = await h.open();
+    await put(dur, 49);
+    writeFileSync(path.join(h.dir, COORDINATION_RESTORE_MARKER_FILE), 'x\n');
+    await dur.recover();
+    expect(dur.state().phase).toBe('reconstructing');
+    const before = readDisk(h.dir);
+    await expect(dur.pruneBucketCursors(NOW_MS)).rejects.toMatchObject({ code: 'not-ready' });
+    expect(readDisk(h.dir)).toEqual(before);
+  });
+
+  it('the decision is the applier\'s, on its OWN rows, inside the lock: an ingestion queued while a prune is pending marks a kept bucket replaced, and the prune does not undo it', async () => {
+    const h = harness();
+    let hold: Promise<void> | null = null;
+    let release!: () => void;
+    const dur = await h.open({ onEdge: async (edge, when) => { if (edge === 'build' && when === 'before' && hold !== null) { const g = hold; hold = null; await g; } } });
+    await put(dur, 47);                                                                // the kept bucket, not replaced yet
+    await put(dur, 49);                                                                // the droppable one
+    hold = new Promise<void>((resolve) => { release = resolve; });
+    const ingestion = dur.applyAccepted(batch([], { cursor: cursorBack(47, { replaced: true, intervalState: 'unmeasured', detail: 'bucket-replaced: x' }), interval: null }));
+    const prune = dur.pruneBucketCursors(NOW_MS);                                      // a copy taken NOW would still show 47 as not replaced
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    release();
+    await Promise.all([ingestion, prune]);
+    expect(dur.state().checkpoint.bucketCursors.map((c) => [c.bucket, c.replaced])).toEqual([[bucketBack(47), true]]);
+    await dur.close();
+    expect((await h.open()).state().checkpoint.bucketCursors.map((c) => [c.bucket, c.replaced])).toEqual([[bucketBack(47), true]]);
+  });
+
+  it('a bucket whose hour does not parse is kept, and the drop reports it', async () => {
+    const h = harness();
+    const dur = await h.open();
+    await dur.applyAccepted(batch([], { cursor: { ...cursorFor('garbage', 10) }, interval: null }));
+    await put(dur, 49);
+    const out = await dur.pruneBucketCursors(NOW_MS);
+    expect(out.dropped).toBe(1);
+    expect(out.unparseable).toBe(1);
+    expect(buckets(dur)).toEqual(['garbage']);
+  });
+});
+
+// ── Task 13 fix round 1, M1 (D-4652): the lane reads retained evidence through the applier, read-only and on its queue ──
+
+describe('Task 13 fix 1 (M1, D-4652): visitRetainedRecords is read-only, serialized with every application, and only ever runs ready', () => {
+  /** A port whose journal READS wait on a gate: the visit is then held open mid-stream. */
+  function gatedPort(inner: DelegationFilePort, gate: { wait: Promise<void> | null }): DelegationFilePort {
+    return {
+      ...inner,
+      openRead: async (p) => {
+        const handle = await inner.openRead(p);
+        if (handle === null) return null;
+        // The gate holds the FIRST read after it is armed and then disarms: the visit's first read waits, while an application's own reads
+        // (the journal writer checks the tail it appends behind) go straight through, so only a queue can keep the two apart.
+        return { size: () => handle.size(), close: () => handle.close(), read: async (pos, len) => { const held = gate.wait; if (held !== null) { gate.wait = null; await held; } return handle.read(pos, len); } };
+      },
+    };
+  }
+
+  it('an application enqueued during a held visit completes only after the visit', async () => {
+    const h = harness();
+    const first = await h.open();
+    await first.applyAccepted(batch([sessionStart(1), subagentStart(2, X)]));
+    await first.close();
+    const gate: { wait: Promise<void> | null } = { wait: null };
+    const dur = await h.open({ port: gatedPort(spyPort(h.log), gate) });
+    let release!: () => void;
+    gate.wait = new Promise<void>((resolve) => { release = resolve; });
+    const order: string[] = [];
+    const seen: number[] = [];
+    const visit = dur.visitRetainedRecords((r) => { seen.push(r.sequence); }).then(() => { order.push('visit'); });
+    const apply = dur.applyAccepted(batch([sessionStart(3)])).then(() => { order.push('apply'); });
+    try {
+      await new Promise((resolve) => setTimeout(resolve, 60));
+      expect(order, 'the application ran beside the visit').toEqual([]);
+    } finally {
+      release();                                                    // a failed assertion must not leave the gate shut: the test's cleanup awaits the queue
+    }
+    await Promise.all([visit, apply]);
+    expect(order).toEqual(['visit', 'apply']);
+    expect(seen).toEqual([1, 2]);                                   // the visit saw the journal as it stood when it began, not the application's record
+  });
+
+  it('it refuses unless the applier is ready (a reconstructing applier streams nothing), and visits nothing', async () => {
+    const h = harness();
+    const dur = await h.open();
+    await dur.applyAccepted(batch([sessionStart(1)]));
+    writeFileSync(path.join(h.dir, COORDINATION_RESTORE_MARKER_FILE), 'x\n');
+    await dur.recover();
+    const seen: number[] = [];
+    await expect(dur.visitRetainedRecords((r) => { seen.push(r.sequence); })).rejects.toMatchObject({ code: 'not-ready' });
+    expect(seen).toEqual([]);
+  });
+
+  it('it is read-only: no file, no revision, no SQLite row and no log entry changes, and it opens no write, rename or truncate target', async () => {
+    const h = harness();
+    const first = await h.open();
+    await first.applyAccepted(batch([sessionStart(1), subagentStart(2, X)]));
+    await first.close();
+    const dur = await h.open();
+    const before = { disk: readDisk(h.dir), revision: dur.state().checkpoint.revision, stats: h.store.delegationEventStats() };
+    h.log.length = 0;
+    const seen: number[] = [];
+    await dur.visitRetainedRecords((r) => { seen.push(r.sequence); });
+    expect(seen).toEqual([1, 2]);
+    expect(readDisk(h.dir)).toEqual(before.disk);
+    expect(dur.state().checkpoint.revision).toBe(before.revision);
+    expect(h.store.delegationEventStats()).toEqual(before.stats);
+    expect(h.log.filter((l) => /^(journal|checkpoint)\.|^rename|^dir\.sync|^project|^insertEvents/.test(l))).toEqual([]);
+  });
+
+  it('retained records before the applied position change nothing: an activity the checkpoint already maps keeps its ID verbatim', async () => {
+    const h = harness();
+    const first = await h.open();
+    const named = await first.applyAccepted(batch([sessionStart(1), bareTool(2, X), subagentStart(3, X)]));
+    const idBefore = activityOf(first.state().checkpoint, X)!.activityId;
+    expect(idBefore).toBe(deriveDelegationActivityId(keyOf(X), named.appended[1]!.journalId));
+    await first.close();
+    const dur = await h.open();
+    const mapped = { ...dur.state().checkpoint.activityIdsByNaturalKey };
+    const seen: Array<[number, string]> = [];
+    await dur.visitRetainedRecords((r) => { seen.push([r.sequence, r.entry.kind]); });
+    expect(seen.map(([n]) => n)).toEqual([1, 2, 3]);                                // every retained record, including those before the applied position
+    expect(activityOf(dur.state().checkpoint, X)!.activityId).toBe(idBefore);
+    expect(dur.state().checkpoint.activityIdsByNaturalKey).toEqual(mapped);
+    expect(dur.state().checkpoint.activities.map((a) => a.activityId)).toEqual([idBefore]);
+  });
+
+  it('a failure DURING a visit rejects, leaves the applier ready and unchanged, and a later application still works', async () => {
+    const h = harness();
+    const first = await h.open();
+    await first.applyAccepted(batch([sessionStart(1), subagentStart(2, X)]));
+    await first.close();
+    const dur = await h.open();
+    const before = readDisk(h.dir);
+    await expect(dur.visitRetainedRecords((r) => { if (r.sequence === 2) throw new Error('visit failed midway'); })).rejects.toThrow('visit failed midway');
+    expect(dur.state().phase).toBe('ready');
+    expect(dur.failure()).toBeNull();
+    expect(readDisk(h.dir)).toEqual(before);
+    await expect(dur.applyAccepted(batch([sessionStart(3)]))).resolves.toBeDefined();
+  });
+});

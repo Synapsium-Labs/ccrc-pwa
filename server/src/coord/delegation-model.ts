@@ -1178,16 +1178,22 @@ export function delegationHealthWindowOf(intervals: readonly DelegationObservati
   const endMs = hourFloor(nowMs);
   const startMs = endMs - DELEGATION_HEALTH_WINDOW_HOURS * DELEGATION_HOUR_MS;
   const covered = new Set<number>();
-  let measuredHours = 0;
-  let unmeasuredHours = 0;
+  // A session-hour is a (session, UTC hour), whatever incarnations or reasons recorded it (R60; spec §7: "session-hours with an
+  // `unmeasured` interval"): any unmeasured row makes it unmeasured, so a second row for one session-hour never inflates the
+  // denominator and never turns a gap into a measurement.
+  const sessionHours = new Map<string, boolean>();
   let placeable = true;
   for (const r of intervals) {
     const at = intervalHourMs(r.utcHour);
     if (at === null) { placeable = false; continue; }
     if (at < startMs || at >= endMs) continue;
     covered.add(at);
-    if (r.state === 'measured') measuredHours += 1; else unmeasuredHours += 1;
+    const key = JSON.stringify([r.sessionId, at]);
+    sessionHours.set(key, (sessionHours.get(key) ?? false) || r.state !== 'measured');
   }
+  let measuredHours = 0;
+  let unmeasuredHours = 0;
+  for (const unmeasured of sessionHours.values()) { if (unmeasured) unmeasuredHours += 1; else measuredHours += 1; }
   return {
     windowStartedAt: formatDelegationInstant(startMs), windowEndedAt: formatDelegationInstant(endMs),
     measuredSessionHours: measuredHours, unmeasuredSessionHours: unmeasuredHours,
@@ -1285,4 +1291,60 @@ export function upkeepDelegationIntervals(
 /** Every kebab word this section spells, for `isDelegationModelKebab`. */
 export function isDelegationHealthKebab(v: string): boolean {
   return Object.prototype.hasOwnProperty.call(DELEGATION_HEALTH_WORDS, v);
+}
+
+// ── Cursor retention (R58, D-4654) ────────────────────────────────────────────────────────────────────────────────────
+//
+// A bucket cursor is checkpoint-owned state the lane needs for as long as the bucket can still be READ, and not a moment longer; kept
+// for ever it is the checkpoint's one unbounded member, and every application rewrites the whole checkpoint. Two horizons, one
+// derivation:
+//   * THE READ HORIZON is `DELEGATION_SPOOL_LOOKBACK_HOURS` (24 h, the hook's own retention): the lane reads no bucket older than that,
+//     whoever it belongs to, through `delegationBucketReadable` and nothing else.
+//   * THE RETENTION is the read horizon plus a day: a cursor older than `DELEGATION_CURSOR_RETENTION_HOURS` (48 h) is retired, and only
+//     if the checkpoint ALREADY holds an observation interval row for that cursor's (session, incarnation, hour), measured or not. A cursor
+//     whose hour is not on file is KEPT, however old: retiring it would lose the only record that bucket was ever read. The day of margin
+//     covers the hook's 24-to-25-hour pruning, a closing hour, fleet and server clock skew, and a lane outage of up to a day.
+// Retiring a cursor changes no interval and no journal record, so the seven-day arithmetic is untouched. It is safe ONLY because of the
+// read horizon: a bucket listed again after its cursor went would be read from offset 0 with no anchor and no sticky `replaced`.
+
+/** The cursor retention: the read horizon plus 24 hours. */
+export const DELEGATION_CURSOR_RETENTION_HOURS = DELEGATION_SPOOL_LOOKBACK_HOURS + 24;
+
+/** Whether a bucket's hour (epoch milliseconds, on an hour boundary) may be READ at `nowMs`: from the spool lookback up to the open
+ *  hour. An hour older than that, a future hour and an instant that is not an hour boundary are never read. */
+export function delegationBucketReadable(bucketHourMs: number, nowMs: number): boolean {
+  if (!Number.isSafeInteger(bucketHourMs) || bucketHourMs % DELEGATION_HOUR_MS !== 0) return false;
+  const openHour = hourFloor(nowMs);
+  return bucketHourMs >= openHour - DELEGATION_SPOOL_LOOKBACK_HOURS * DELEGATION_HOUR_MS && bucketHourMs <= openHour;
+}
+
+const BUCKET_HOUR = /^(\d{4})(\d{2})(\d{2})(\d{2})$/;
+/** A bucket name (`YYYYMMDDHH`) as the epoch milliseconds of its hour, or null when it names no hour. */
+export function delegationBucketHourMs(bucket: string): number | null {
+  const m = BUCKET_HOUR.exec(bucket);
+  if (m === null) return null;
+  try { return parseDelegationInstant(`${m[1]}-${m[2]}-${m[3]}T${m[4]}:00:00.000Z`); } catch (err) { if (err instanceof DelegationModelError) return null; throw err; }
+}
+
+export interface DelegationCursorRetentionPlan {
+  keep: DelegationBucketCursor[];
+  drop: DelegationBucketCursor[];
+  /** The kept rows whose bucket names no hour: kept because nothing can be said of their age, and reported. A subset of `keep`. */
+  unparseable: DelegationBucketCursor[];
+}
+
+/** Which cursors to retire at `nowMs` (see above): pure, a partition of its input, the very rows and in input order, no row edited. */
+export function planDelegationCursorRetention(
+  cursors: readonly DelegationBucketCursor[], intervals: readonly DelegationObservationInterval[], nowMs: number,
+): DelegationCursorRetentionPlan {
+  const onFile = new Set(intervals.map((r) => JSON.stringify([r.sessionId, r.parentIncarnation, r.utcHour])));
+  const cutoff = hourFloor(nowMs) - DELEGATION_CURSOR_RETENTION_HOURS * DELEGATION_HOUR_MS;
+  const plan: DelegationCursorRetentionPlan = { keep: [], drop: [], unparseable: [] };
+  for (const c of cursors) {
+    const at = delegationBucketHourMs(c.bucket);
+    if (at === null) { plan.keep.push(c); plan.unparseable.push(c); continue; }
+    if (at < cutoff && onFile.has(JSON.stringify([c.sessionId, c.parentIncarnation, formatDelegationInstant(at)]))) plan.drop.push(c);
+    else plan.keep.push(c);
+  }
+  return plan;
 }

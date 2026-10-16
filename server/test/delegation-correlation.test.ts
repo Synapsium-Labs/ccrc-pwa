@@ -31,6 +31,7 @@ import {
 } from '../src/coord/delegation-checkpoint.js';
 import {
   DELEGATION_CORRELATION_REASONS,
+  DELEGATION_EVIDENCE_MARGIN_MS,
   correlateDelegation,
   delegationLeaseSourceOfLinked,
   type DelegationCorrelationInput,
@@ -123,7 +124,7 @@ const record = (over: Partial<DelegationCensusRecord> = {}): DelegationCensusRec
 });
 const input = (over: Partial<DelegationCorrelationInput> = {}): DelegationCorrelationInput => ({
   record: record(), runChildAgreement: null, activities: [], acceptedEvidence: [], pointMetas: [], listingWindows: [],
-  birthPassesRemaining: 0, hasRegistryRow: false, hasChildMarker: false, ...over,
+  birthPassesRemaining: 0, hasRegistryRow: false, hasChildMarker: false, evidenceHorizon: null, ...over,
 });
 const meta = (over: Partial<DelegationCorrelationInput['pointMetas'][number]> & { evidenceJournalId: string }): DelegationCorrelationInput['pointMetas'][number] => ({
   parentId: PARENT, parentIncarnation: INC, sourceKind: 'agent', upstreamId: AGENT, worktreePath: WT(`agent-${AGENT}`), ...over,
@@ -1101,6 +1102,140 @@ describe('openWorkflowWorkerFromMeta refuses an index a meta file cannot be trus
   it('the decoded checkpoint of a run round-trips (the run row is an ordinary activity row in checkpoint v1)', () => {
     const w = world([workflowLaunch(1, 'wf_run1')]);
     expect(decodeDelegationCheckpoint(encodeDelegationCheckpoint(w.cp))).toEqual(w.cp);
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+// R57 (D-4653): an evicted event can make a verdict LESS decided, never more (spec §5.3: a lost event can delay or prevent a link,
+// never create one). The caller says how far its eviction reached (`evidenceHorizon`, the latest `observedAt` among events it no
+// longer holds, or null); correlation, which knows which rung rests on what, answers `unmeasured('evidence-horizon')` in place of a
+// link that the missing events could have vetoed.
+// ═══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+
+describe('evidence horizon (R57, D-4653): an eviction never decides a link', () => {
+  const rec = rawRecord();
+  const MARGIN = DELEGATION_EVIDENCE_MARGIN_MS;
+  const at = (ms: number): string => formatDelegationInstant(Date.UTC(2026, 9, 14) + ms);
+  const bashWorld = () => world([bashPre(10, 'toolu_b1', ['main-wt']), bashPost(12, 'toolu_b1', ['main-wt', RAW])]);
+  const decide = (windows: readonly DelegationListingWindow[], horizon: string | null, w = bashWorld()) =>
+    correlateDelegation(input({ record: rec, activities: w.activities, acceptedEvidence: w.acceptedEvidence, listingWindows: windows, evidenceHorizon: horizon }));
+  const winAt = (startMs: number, endMs: number | null, over: Partial<DelegationListingWindow> = {}): DelegationListingWindow =>
+    win({ startedAt: at(startMs), endedAt: endMs === null ? null : at(endMs), after: endMs === null ? null : ['main-wt', RAW], ...over });
+
+  it('P1: two overlapping windows, one pre-listing evicted (the horizon between the two pre-listings): unmeasured, never linked. The same pair with no horizon stays unresolved', () => {
+    const mine = win({ after: ['main-wt', RAW] });                                                    // [T10, T12]
+    const other = win({ sessionId: OTHER, toolUseId: 'toolu_o1', startedAt: T(11), endedAt: T(13), before: ['main-wt'], after: ['main-wt'] });
+    const whole = decide([mine, other], null);
+    expect(whole.kind).toBe('unresolved');
+    expect(whole.kind === 'unresolved' && whole.reason).toBe('overlapping-listing-window');
+    const evicted = decide([mine], T(11));                                                            // the other's window is gone with its pre-listing
+    expect(evicted.kind).toBe('unmeasured');
+    expect(evicted.kind === 'unmeasured' && evicted.reason).toBe('evidence-horizon');
+    expect(decide([mine], null).kind, 'with no eviction the lone window links, as ever').toBe('linked');
+  });
+
+  it('a horizon never turns the verdicts that were NOT links into anything else: an overlap held in full stays unresolved, whatever the horizon', () => {
+    const mine = win({ after: ['main-wt', RAW] });
+    const other = win({ sessionId: OTHER, toolUseId: 'toolu_o1', startedAt: T(11), endedAt: T(13), before: ['main-wt'], after: ['main-wt'] });
+    for (const horizon of [T(-1000), T(11), T(10_000)]) {
+      const v = decide([mine, other], horizon);
+      expect(v.kind, horizon).toBe('unresolved');
+      expect(v.kind === 'unresolved' && v.reason).toBe('overlapping-listing-window');
+    }
+  });
+
+  it('rung 4, the margin: a candidate window that began less than one evidence margin after the horizon is unmeasured; exactly one margin after, it links', () => {
+    expect(MARGIN).toBeGreaterThan(0);
+    const horizon = at(0);
+    expect(decide([winAt(MARGIN - 1, MARGIN + 5_000)], horizon).kind).toBe('unmeasured');
+    expect(decide([winAt(MARGIN, MARGIN + 5_000)], horizon).kind).toBe('linked');
+    expect(decide([winAt(1, 5_000)], horizon).kind, 'a window that began after the horizon by less than a margin').toBe('unmeasured');
+    expect(decide([winAt(-5_000, -1)], horizon).kind, 'a window wholly before the horizon').toBe('unmeasured');
+    const v = decide([winAt(MARGIN - 1, MARGIN + 5_000)], horizon);
+    expect(v.kind === 'unmeasured' && v.reason).toBe('evidence-horizon');
+  });
+
+  it('rung 4, other windows on the same repository: one open-ended, or one begun at or before the horizon, makes the link unmeasured; on another repository they do not matter', () => {
+    const horizon = at(0);
+    const mine = winAt(2 * MARGIN, 2 * MARGIN + 5_000);
+    const later = (over: Partial<DelegationListingWindow>) => win({ sessionId: OTHER, toolUseId: 'toolu_o1', before: [], after: [], ...over });
+    expect(decide([mine], horizon).kind, 'the control: a lone window far past the horizon links').toBe('linked');
+    expect(decide([mine, later({ startedAt: at(3 * MARGIN), endedAt: null, after: null })], horizon).kind, 'open-ended').toBe('unmeasured');
+    expect(decide([mine, later({ startedAt: at(-60_000), endedAt: at(-30_000) })], horizon).kind, 'began before the horizon').toBe('unmeasured');
+    expect(decide([mine, later({ startedAt: at(0), endedAt: at(1_000) })], horizon).kind, 'began AT the horizon').toBe('unmeasured');
+    expect(decide([mine, later({ startedAt: at(0 - 1), endedAt: at(500) })], horizon).kind).toBe('unmeasured');
+    expect(decide([mine, later({ startedAt: at(MARGIN), endedAt: at(MARGIN + 1_000) })], horizon).kind, 'closed, after the horizon, disjoint').toBe('linked');
+    expect(decide([mine, later({ repository: 'project-b', startedAt: at(-60_000), endedAt: null, after: null })], horizon).kind, 'another repository').toBe('linked');
+  });
+
+  it('a horizon that is not a canonical instant fails safe: unmeasured, never a link and never a throw', () => {
+    for (const horizon of ['yesterday', '2026-10-14T00:00:00Z', '']) {
+      const v = decide([winAt(2 * MARGIN, 2 * MARGIN + 5_000)], horizon);
+      expect(v.kind, horizon).toBe('unmeasured');
+      expect(v.kind === 'unmeasured' && v.reason).toBe('evidence-horizon');
+    }
+  });
+
+  it('rung 2 (agent): a claim set that reaches back to the horizon is unmeasured; one wholly after it links', () => {
+    const { w, base } = agentWorld();
+    const opened = activityOf(w.activities, 'agent', AGENT)!.openedAt;
+    expect(opened).toBe(T(1));
+    const at1 = (horizon: string | null) => correlateDelegation({ ...base, evidenceHorizon: horizon });
+    expect(at1(null).kind).toBe('linked');
+    expect(at1(T(0)).kind, 'the horizon is before the first claim').toBe('linked');
+    const exactly = at1(T(1));
+    expect(exactly.kind, 'AT the identity record').toBe('unmeasured');
+    expect(exactly.kind === 'unmeasured' && exactly.reason).toBe('evidence-horizon');
+    expect(at1(T(5)).kind, 'after it').toBe('unmeasured');
+  });
+
+  it('rung 2 (agent): the EARLIEST naming record counts, not the join: a bare occurrence before the launch is where the claim set begins', () => {
+    const w = world([bareTool(1, AGENT), agentLaunch(2, AGENT), subagentStart(3, AGENT)]);
+    const act = activityOf(w.activities, 'agent', AGENT)!;
+    expect(act.openedAt).toBe(T(1));
+    const base = input({ activities: w.activities, acceptedEvidence: w.acceptedEvidence, pointMetas: [meta({ evidenceJournalId: w.records[1]!.journalId })] });
+    expect(correlateDelegation({ ...base, evidenceHorizon: T(0) }).kind).toBe('linked');
+    expect(correlateDelegation({ ...base, evidenceHorizon: T(1) }).kind).toBe('unmeasured');
+    expect(correlateDelegation({ ...base, evidenceHorizon: T(2) }).kind).toBe('unmeasured');
+  });
+
+  it('rung 2 (workflow): the worker\'s identity record is the run\'s: a horizon at or after it is unmeasured', () => {
+    const w = world([workflowLaunch(1, 'wf_run1'), subagentStart(2, AGENT)]);
+    w.builder.openWorkflowWorkerFromMeta(PARENT, INC, 'wf_run1', 1);
+    const activities = w.builder.build(1).activities;
+    const m = meta({ sourceKind: 'workflow', upstreamId: 'wf_run1-1', worktreePath: WT('wf_run1-1'), evidenceJournalId: w.records[0]!.journalId });
+    const base = input({ record: record({ adminRecord: 'wf_run1-1', canonicalPath: WT('wf_run1-1') }), activities, acceptedEvidence: w.acceptedEvidence, pointMetas: [m] });
+    expect(correlateDelegation(base).kind).toBe('linked');
+    expect(correlateDelegation({ ...base, evidenceHorizon: T(0) }).kind).toBe('linked');
+    const v = correlateDelegation({ ...base, evidenceHorizon: T(1) });
+    expect(v.kind === 'unmeasured' && v.reason).toBe('evidence-horizon');
+  });
+
+  it('rung 3: a subagent whose first claim is at or before the horizon is unmeasured; after it, it links', () => {
+    const toolIn = (n: number): DelegationEventEnvelopeV1 =>
+      ({ ...base(n, { cwd: WT(RAW) }), eventKind: 'PostToolUse', toolName: 'Bash', toolUseId: `toolu_${n}`, outcome: 'completed', agentId: AGENT });
+    const w = world([subagentStart(1, AGENT), toolIn(2)]);
+    const go = (horizon: string | null) => correlateDelegation(input({ record: rec, activities: w.activities, acceptedEvidence: w.acceptedEvidence, evidenceHorizon: horizon }));
+    expect(go(null).kind).toBe('linked');
+    expect(go(T(0)).kind).toBe('linked');
+    const v = go(T(1));
+    expect(v.kind).toBe('unmeasured');
+    expect(v.kind === 'unmeasured' && v.reason).toBe('evidence-horizon');
+    expect(go(T(2)).kind).toBe('unmeasured');
+  });
+
+  it('a verdict that was not a link is unchanged by any horizon (the module only ever makes a link less decided)', () => {
+    const cases: DelegationCorrelationInput[] = [
+      input({ hasRegistryRow: true }), input({ birthPassesRemaining: 2 }), agentWorld({ pointMetas: [] }).base,
+      input({ record: record({ state: 'unreadable' }) }), input({ record: record({ canonicalPath: null }) }),
+    ];
+    for (const c of cases) expect(correlateDelegation({ ...c, evidenceHorizon: T(1000) })).toEqual(correlateDelegation(c));
+  });
+
+  it('the horizon is only read: the input is not changed by it', () => {
+    const { base } = agentWorld();
+    const frozen = deepFreeze({ ...base, evidenceHorizon: T(1) });
+    expect(() => correlateDelegation(frozen)).not.toThrow();
   });
 });
 
