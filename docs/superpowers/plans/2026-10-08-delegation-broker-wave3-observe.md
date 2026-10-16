@@ -1565,3 +1565,8 @@ Found mid-wave (issued from the block above, taken in order; each defined in the
   - the door is in neither UNGATED nor SESSION_ONLY.
 
   Commits `ab01f78c8`, `69b605cf4`.
+- **D-4657** — `w3-m18c-is-owned-by-the-census-and-the-model-table` (Task 16): the Mutation Matrix names W3-M18C's red owner as `delegation-policy.test.ts`'s "inert-future-fields table", and no such table exists. No mutant had been recorded against W3-M18C until Task 16. Its two halves are owned instead by two pieces that already exist:
+  - **Transition:** Task 16's closed scope census row in `server/test/delegation-wave3.integration.test.ts`. Its mutants C7 (a static `UPDATE` of the lease table) and C8 (the generation guard removed) go red. So do R9a and R9b (each door's guard removed) and R4a and R4b (a replay builder writing `disposition:'retained'`, or populating `retainedAt`).
+  - **Populate:** `delegation-model.test.ts`'s `assertWave3Lease` table.
+
+  The plan's owner text is corrected here; no code moved. Commits `91545846a`, `70310e6e3`.
