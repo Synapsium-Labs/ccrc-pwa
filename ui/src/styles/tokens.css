@@ -122,6 +122,24 @@
   --status-cleanup:        var(--status-idle);
   --status-cleanup-text:   var(--ink-secondary);
 
+  /* The scrollbar thumb (base.css's `html` rule; D-5159). Its track is
+     `transparent`, so the thumb sits on whatever its scroll container paints:
+     the page, a surface, a raised field, a sheet, or a WELL — dark in every
+     palette, the light ones included. It owes 3:1 on all five (WCAG 1.4.11:
+     an author-set thumb is a graphical object), and --edge-strong, the
+     hairline the plan first named, owed nothing: it measured 1.03 (One Dark)
+     and 1.06 (Solarized Light), an invisible thumb. No ink clears both sides
+     of a light palette (white grounds AND a near-black well); the idle lamp's
+     matte grey does, because that is the contract the generator fits every
+     status dot to — 3:1 plus margin against surface, page, raised and the
+     well — and the gate holds Phosphor's two hand-tuned values to it. So the
+     thumb is DERIVED from it, declared once here and re-resolved by every
+     palette, never a hex tuned until the numbers pass. Matte, so it never
+     glows; grey in every palette, so it reads as chrome, not as a state.
+     Held at 3:1 on all five grounds by contrast-check.mjs's token pairs and
+     by base-defaults.test.ts. */
+  --scrollbar-thumb:       var(--status-idle);
+
   /* Account accents — chip text on chip tint. Six hues (shared/roster.ts's
      HUES): cyan/violet/blue/magenta live in the cool half of the wheel
      (~190/265/222/330), 40°+ apart, so none of them collides with status
