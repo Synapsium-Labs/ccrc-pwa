@@ -12136,13 +12136,17 @@ describe('history card line: SessionStart(compact) serves the sweep\'s predictio
     ['a generation record padded past the read window, recall-off is stale (fail-closed: the CLI recalls)', '', 'absent', 'G2', 'G-wide', 'fail-closed'],
     // D-5064 (review 495 F2): the record arm trims the probe's raw read of ASCII whitespace only, so U+00A0 stays and fails the
     // grammar, where the CLI's JS trim strips it and reads G (stale beside G2: it recalls). A record that tested `_ct_read`'s CT_V
-    // instead would trim U+00A0 on a libc whose [:space:] takes it (Darwin's) and serve, so this row reds there for that mutant, as
-    // the U+2003 case does on glibc. On glibc it pins only the withhold; the macOS leg (`test-macos`) is its proof.
+    // instead would trim U+00A0 on a libc whose [:space:] takes it (Darwin's, measured by 116663ad5's macOS leg on the `.generation`
+    // twin) and serve, so under a UTF-8 runner locale (the row inherits the runner's) this row would red there for that mutant, as the
+    // U+2003 case does on glibc: argued, not measured. On glibc it pins only the withhold; the macOS leg (`test-macos`) proves the
+    // withhold there, never the mutant's red.
     ['a generation record behind a no-break space, recall-off is stale (fail-closed: the CLI recalls)', '', 'absent', 'G2', 'G-nbsp', 'fail-closed'],
-    // D-5063 (review 495 F1): the two readability guards decide ONLY a non-regular file, since the probes' `x=.` seed decides an
-    // absent or unreadable one. `.generation`'s `(( CT_RAWN >= CCRC_ID_MAX ))` and the record's `_ct_read … || return 0` each stop
-    // the probe's `<` from opening a FIFO, where it would block: SessionStart(compact) would hang to the hook timeout and the whole
-    // compact card be lost. These rows run bounded (the FIFO runner below), so a dropped guard reds on the bound, not by wedging.
+    // D-5063 (review 495 F1, review 503 F2 and F5): `.generation`'s `(( CT_RAWN >= CCRC_ID_MAX ))` and the record's `_ct_read … ||
+    // return 0`. Their only unique work is a non-regular file: drop either and only a FIFO changes the verdict, because the probes'
+    // `x=.` seed would withhold an unreadable file too. A FIFO present at `_ct_read`'s `-f` test is refused there, so the probe's `<`
+    // never opens it; without the guards it would block, SessionStart(compact) would hang to the hook timeout and the whole compact
+    // card be lost. The tests are builtin, so one swapped in after the test still blocks, a window no row can measure. These rows
+    // run bounded (the FIFO runner below), so a dropped guard reds on the bound, not by wedging.
     ['a FIFO .generation is unusable: the hook returns at once and withholds (fail-closed: the CLI recalls)', '', 'fifo', 'G2', 'G', 'fail-closed'],
     ['a FIFO generation record is no record: the hook returns at once and withholds', '', 'absent', 'G2', 'fifo'],
     // The safe direction, named (R-recalloff-parity): the hook drops the NUL and reads G, so it withholds; the CLI reads
