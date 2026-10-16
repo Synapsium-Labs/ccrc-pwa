@@ -187,9 +187,18 @@ export type WorktreeRead =
    *  the chain is proof the link was up, so an absence read beside it is a
    *  measurement. Its residual is the one `readWorktreeRecords` already names
    *  and accepts below: a single dropped round trip landing on one stat and not
-   *  its neighbour is read as the standing fact. Today that costs nothing (both
-   *  refusals contribute nothing to the census), and the direction is the safe
-   *  one — it can only ever suppress a finding, never manufacture one. */
+   *  its neighbour is read as the standing fact. That cost nothing while both
+   *  refusals contributed nothing to the census: the direction is the safe one
+   *  for a finding, which it can only suppress. It is no longer the whole truth.
+   *  The delegation lane reads a standing refusal as "measured, with no trees"
+   *  when it decides which dropped evidence it may FORGET (R70), and forgetting
+   *  evidence on a misread answer is the unsafe direction: a live tree's older
+   *  events would be gone, and a link they would have vetoed could be made. So
+   *  the lane forgets a project's remembered paths through this answer only
+   *  after it has recurred on at least three consecutive census passes spanning
+   *  at least ten minutes, and any other answer for the project resets the run
+   *  (R71; `DELEGATION_STANDING_PASSES` in `watch.ts`). What that rule guards is
+   *  that ONE pass reading this answer never forgets a path. */
   | { ok: false; reason: 'not-a-checkout' }
   /** NOTHING on the path answered — not the admin directory, not the project's
    *  own `.git`, not the project directory, not even `projectsRoot`. Absence was

@@ -24,7 +24,7 @@ import { coordinationRestoreRefusal, openCoordDb } from '../src/coord/db.js';
 import { buildServer } from '../src/server.js';
 import * as policy from '../src/coord/delegation-policy.js';
 import * as correlation from '../src/coord/delegation-correlation.js';
-import type { DelegationCensusPass, ParentIncarnation, WorktreeCensus } from '../src/coord/gitref.js';
+import { readWorktreeCensus, type DelegationCensusPass, type ParentIncarnation, type WorktreeCensus } from '../src/coord/gitref.js';
 import {
   COORDINATION_RESTORE_MARKER_FILE,
   DELEGATION_CHECKPOINT_FILE,
@@ -160,9 +160,13 @@ const record = (project: string, adminRecord: string, over: Partial<DelegationCe
   claudeBase: 'b'.repeat(40), locked: false, baseAgreesFirstLog: true, state: 'present', diagnostic: null, ...over,
 });
 /** Plants a census pass the lane will consume: `null` for a project is one whose worktree listing failed (no delegation census). */
-function setCensus(w: World, projects: Record<string, DelegationCensusRecord[] | null>, incarnations: Record<string, ParentIncarnation>, measuredAt: number = Date.now()): DelegationCensusPass {
-  const view = (recs: DelegationCensusRecord[] | null): WorktreeCensus =>
-    recs === null ? { read: { ok: false, reason: 'unlistable' }, delegation: null } : { read: { ok: true, records: [] }, delegation: recs };
+type CensusView = DelegationCensusRecord[] | null | 'not-a-checkout' | 'unreachable' | WorktreeCensus;
+function setCensus(w: World, projects: Record<string, CensusView>, incarnations: Record<string, ParentIncarnation>, measuredAt: number = Date.now()): DelegationCensusPass {
+  const view = (recs: CensusView): WorktreeCensus =>
+    recs === null ? { read: { ok: false, reason: 'unlistable' }, delegation: null }
+      : recs === 'not-a-checkout' ? { read: { ok: false, reason: 'not-a-checkout' }, delegation: null }
+        : recs === 'unreachable' ? { read: { ok: false, reason: 'unreachable' }, delegation: null }
+          : Array.isArray(recs) ? { read: { ok: true, records: [] }, delegation: recs } : recs;
   const pass: DelegationCensusPass = {
     measuredAt, projects: new Map(Object.entries(projects).map(([p, recs]) => [p, view(recs)] as const)),
     incarnations: new Map(Object.entries(incarnations)),
@@ -176,7 +180,7 @@ const pass = async (w: World, sessions: readonly Sess[] = [sessionOf('demo-a')],
   await w.watcher.sweepDelegation(sessions as never, records as never);
 };
 /** One whole pass at `at`, with a census taken at `at` for `projects` (the lane reconciles only a census it has not reconciled yet). */
-const censusPass = async (w: World, at: number, projects: Record<string, DelegationCensusRecord[] | null>, sessions: readonly Sess[] = [sessionOf('demo-a')], records?: readonly Rec[]): Promise<void> => {
+const censusPass = async (w: World, at: number, projects: Record<string, CensusView>, sessions: readonly Sess[] = [sessionOf('demo-a')], records?: readonly Rec[]): Promise<void> => {
   setNow(at);
   setCensus(w, projects, Object.fromEntries(sessions.map((s) => [s.id, measured()])), at);
   await pass(w, sessions, records);
@@ -1452,7 +1456,7 @@ describe('the lane remembers what it dropped (R65): a link that rests on an even
     it('a reconcile prunes only after a batch of new keys, so a busy fleet does not pay for it on every pass', async () => {
       const w = farWorld();
       w.watcher.setDelegationSeams({ evidenceCap: 2 });
-      const prune = vi.spyOn(correlation, 'prunableDelegationDropped');
+      const prune = vi.spyOn(correlation, 'planDelegationDroppedPrune');
       await run(w, 3);
       expect(w.watcher.delegationReport().droppedEvidence).toMatchObject({ measured: true, keys: 3 });
       expect(prune, 'pruned with a handful of new keys').not.toHaveBeenCalled();
@@ -1461,23 +1465,227 @@ describe('the lane remembers what it dropped (R65): a link that rests on an even
       expect(prune).toHaveBeenCalledTimes(1);
       expect(w.watcher.delegationReport().droppedEvidence).toMatchObject({ measured: true, keys: 1 });
     });
-    it('a load under a census with a project unmeasured prunes nothing as it streams either (a project with no view contributes no paths)', async () => {
-      const first = farWorld();
-      await censusPass(first, at(0), census);                                          // the default cap holds all five events
-      const again = world({ home: first.home });
-      again.watcher.setDelegationSeams({ evidenceCap: 2, droppedPruneEvery: 1 });
-      await censusPass(again, at(1), { demo: [RAW], other: null });
-      expect(again.watcher.delegationReport().droppedEvidence).toMatchObject({ measured: true, keys: 3 });
-      await censusPass(again, at(2), census);
-      expect(again.watcher.delegationReport().droppedEvidence).toMatchObject({ measured: true, keys: 1 });
-    });
-    it('a pass in which a project\'s census view was null forgets nothing (that project\'s paths are not in the census)', async () => {
+    it('per project: a project whose census view is null does not stop the others pruning', async () => {
       const w = farWorld();
       w.watcher.setDelegationSeams({ evidenceCap: 2, droppedPruneEvery: 1 });
       await censusPass(w, at(0), { demo: [RAW], other: null });
-      expect(w.watcher.delegationReport().droppedEvidence).toMatchObject({ measured: true, keys: 3 });
-      await censusPass(w, at(1), census);
       expect(w.watcher.delegationReport().droppedEvidence).toMatchObject({ measured: true, keys: 1 });
+    });
+  });
+
+  describe('R69 to R71: a dropped key is forgotten only for a tree a measured census of its own project shows gone', () => {
+    const SEAMS = { evidenceCap: 8, droppedPruneEvery: 1 };
+    /** paWorld, padded: seven harmless events at other directories, so later events evict harmless keys and never the ones under test. The cap
+     *  of eight evicts the parent's first event (at the raw tree) and the first pad when the world is first read. */
+    function padded(): World {
+      const w = world();
+      writeBucket(w, 'demo-a', BUCKET10,
+        tool('demo-a', 1, C, '2026-10-15T10:01:00.000Z'), tool('demo-a', 2, C, '2026-10-15T10:01:30.000Z'), tool('demo-a', 3, C, '2026-10-15T10:01:45.000Z'),
+        ...Array.from({ length: 7 }, (_, i) => tool('demo-a', 10 + i, `/w/demo/pad-${i}`, `2026-10-15T10:02:${String(10 + i)}.000Z`)),
+        subStart('demo-a', A1, '/w/demo', '2026-10-15T10:03:00.000Z'),
+        tool('demo-a', 5, C, '2026-10-15T10:04:00.000Z', A1));
+      return w;
+    }
+    /** One more event at a fresh directory: it evicts a pad, so the lane has a new dropped key and a prune is due. */
+    let more = 0;
+    const another = (w: World): void => { more += 1; appendBucket(w, 'demo-a', BUCKET10, tool('demo-a', 200 + more, `/w/demo/more-${more}`, `2026-10-15T10:${String(10 + more).padStart(2, '0')}:00.000Z`)); };
+    const keysOf = (w: World): number => w.watcher.delegationReport().droppedEvidence.keys;
+    const unreadable = { ...RAW, state: 'unreadable' as const, canonicalPath: null };
+    const settled = async (w: World, from: number, n = 4): Promise<void> => { for (let i = from; i < from + n; i++) await censusPass(w, at(i), census); };
+    const unlinked = (w: World): void => {
+      expect(leasesOf(w.home), 'an eviction, then a prune, minted a lease identity').toEqual([]);
+      expect(attemptsOf(w.home)).toEqual([]);
+      expect(w.watcher.delegationReport().verdicts).toEqual({ unresolved: 0, conflicting: 0, unmeasured: 1 });
+    };
+
+    it('control: the padded world holds the parent\'s event dropped and the tree unmeasured, with only the key that reports the tree\'s path', async () => {
+      const w = padded();
+      w.watcher.setDelegationSeams(SEAMS);
+      await settled(w, 0);
+      expect(keysOf(w)).toBe(1);
+      expect(w.watcher.delegationReport().knownTrees).toBe(1);
+      unlinked(w);
+    });
+
+    it('N8, a null path: the tree\'s record read with a null path in the pass that prunes: its keys are kept, and the next measured pass does not link', async () => {
+      const w = padded();
+      w.watcher.setDelegationSeams(SEAMS);
+      await settled(w, 0);
+      another(w);
+      await censusPass(w, at(4), { demo: [unreadable] });
+      expect(keysOf(w), 'the remembered path protected the key').toBe(1);
+      another(w);
+      await settled(w, 5);
+      unlinked(w);
+    });
+
+    it('N8, an absent project: the tree\'s project is missing from the census in the pass that prunes: its keys are kept, and the next measured pass does not link', async () => {
+      const w = padded();
+      w.watcher.setDelegationSeams(SEAMS);
+      await settled(w, 0);
+      another(w);
+      await censusPass(w, at(4), { other: [] });
+      expect(keysOf(w)).toBe(1);
+      another(w);
+      await settled(w, 5);
+      unlinked(w);
+    });
+
+    it('N9, a transient null: a project that answers unlistable or unreachable for a pass keeps its known paths, and does not stop the prune', async () => {
+      for (const view of [null, 'unreachable'] as const) {
+        const w = padded();
+        w.watcher.setDelegationSeams(SEAMS);
+        await settled(w, 0);
+        another(w);
+        await censusPass(w, at(4), { demo: view });
+        expect(keysOf(w), `${String(view)}: the known path protects the key and the new pad is forgotten`).toBe(1);
+        another(w);
+        await settled(w, 5);
+        unlinked(w);
+      }
+    });
+
+    it('a tree that a measured census of its project no longer lists is gone: its key is forgotten, and its remembered path with it', async () => {
+      const w = padded();
+      w.watcher.setDelegationSeams(SEAMS);
+      await settled(w, 0);
+      another(w);
+      await censusPass(w, at(4), { demo: [] });
+      expect(keysOf(w)).toBe(0);
+      expect(w.watcher.delegationReport().knownTrees).toBe(0);
+    });
+
+    it('R69 item 5: a key is stamped with the latest event dropped under it, hidden tuple-mates included: a mate observed after the census keeps the key, until a later census', async () => {
+      const w = world();
+      writeBucket(w, 'demo-a', BUCKET10,
+        tool('demo-a', 1, C, '2026-10-15T10:01:00.000Z'), tool('demo-a', 2, C, '2026-10-15T10:45:00.000Z'),         // the mate is observed after the first census
+        ...Array.from({ length: 7 }, (_, i) => tool('demo-a', 10 + i, `/w/demo/pad-${i}`, `2026-10-15T10:02:${String(10 + i)}.000Z`)),
+        subStart('demo-a', A1, '/w/demo', '2026-10-15T10:03:00.000Z'), tool('demo-a', 5, C, '2026-10-15T10:04:00.000Z', A1));
+      w.watcher.setDelegationSeams(SEAMS);
+      await censusPass(w, NOW, { demo: [] });
+      expect(keysOf(w), 'the key was forgotten against a census that predates its latest event').toBe(1);
+      another(w);
+      await censusPass(w, NOW + 20 * 60_000, { demo: [] });
+      expect(keysOf(w)).toBe(0);
+    });
+
+    it('a restart loses the remembered paths: until the project has been measured since, its own keys are kept, and the tree is not linked', async () => {
+      const first = padded();
+      await settled(first, 0);                                                         // the default cap holds every event: nothing is dropped
+      const again = world({ home: first.home });
+      again.watcher.setDelegationSeams(SEAMS);
+      await censusPass(again, at(4), { demo: null });                                  // the load drops two keys; the project has not been measured since the restart
+      expect(keysOf(again), 'the unmeasured project\'s keys were forgotten').toBe(2);
+      another(first);                                                                  // a new batch of keys: the project is measured now, so the pad goes
+      await settled(again, 5);
+      expect(keysOf(again)).toBe(1);                                                   // measured now: the pad goes, the key at the listed tree's path stays
+      expect(leasesOf(again.home), 'a restart, then a prune, minted a lease identity').toEqual([]);
+      expect(attemptsOf(again.home).filter((a) => a.verdict === 'linked')).toEqual([]);     // the held-in-full world filed its `unresolved` attempt; nothing links
+      expect(again.watcher.delegationReport().verdicts).toEqual({ unresolved: 0, conflicting: 0, unmeasured: 1 });
+    });
+
+    it('per project: after a restart one project stays unreachable and another is re-measured: the re-measured one prunes, the unreachable one keeps its keys', async () => {
+      const w = padded();
+      writeBucket(w, 'bad-s', BUCKET10, ...Array.from({ length: 4 }, (_, i) => tool('bad-s', 300 + i, `/w/bad/far-${i}`, `2026-10-15T10:00:0${i}.000Z`)));
+      const sessions = [sessionOf('bad-s', 'idle', 'bad'), sessionOf('demo-a')];
+      await censusPass(w, at(0), { demo: [RAW], bad: [] }, sessions);                  // everything is held: nothing is dropped
+      const again = world({ home: w.home });
+      again.watcher.setDelegationSeams(SEAMS);
+      await censusPass(again, at(1), { demo: [RAW], bad: 'unreachable' }, sessions);
+      expect(keysOf(again), 'the re-measured project kept its pad, or the unreachable project lost its keys').toBe(1 + 4);
+      another(w);                                                                      // a new batch of keys, and `bad` has been measured since the restart
+      await censusPass(again, at(2), { demo: [RAW], bad: [] }, sessions);
+      expect(keysOf(again)).toBe(1);
+    });
+
+    it('a restart seeds the remembered paths from the checkpoint\'s leases and attempts', async () => {
+      const first = rawTreeWorld();
+      for (let i = 0; i < 3; i++) await censusPass(first, at(i), { demo: [OLD, RAW] });
+      expect(leasesOf(first.home)).toHaveLength(1);
+      const again = world({ home: first.home });
+      await censusPass(again, at(3), { demo: null });
+      expect(again.watcher.delegationReport().knownTrees, 'the lease\'s tree is not remembered after a restart').toBeGreaterThanOrEqual(1);
+    });
+
+    describe('R71: a not-a-checkout answer is trusted only after it has recurred', () => {
+      const naPass = async (w: World, minute: number): Promise<void> => { another(w); await censusPass(w, NOW + minute * 60_000, { demo: 'not-a-checkout' }); };
+      const good = async (w: World, minute: number): Promise<void> => { another(w); await censusPass(w, NOW + minute * 60_000, census); };
+      it('a live tree, then ONE not-a-checkout pass, then a good pass: nothing the forgotten evidence would have vetoed is linked', async () => {
+        const w = padded();
+        w.watcher.setDelegationSeams(SEAMS);
+        await settled(w, 0);
+        await naPass(w, 5);
+        expect(keysOf(w), 'one such pass forgot the project\'s paths').toBe(1);
+        await good(w, 6);
+        await settled(w, 7);
+        unlinked(w);
+      });
+      it('three consecutive passes spanning at least ten minutes forget the project\'s paths; fewer, a shorter span, or an interrupted run do not', async () => {
+        const cases: readonly { name: string; script: readonly (readonly [number, 'na' | 'ok'])[]; forgets: boolean }[] = [
+          { name: '3 passes over 11 minutes', script: [[5, 'na'], [10, 'na'], [16, 'na']], forgets: true },
+          { name: '3 passes over 4 minutes', script: [[5, 'na'], [7, 'na'], [9, 'na']], forgets: false },
+          { name: '2 passes over 20 minutes', script: [[5, 'na'], [25, 'na']], forgets: false },
+          { name: 'a good pass in the run', script: [[5, 'na'], [10, 'na'], [11, 'ok'], [16, 'na'], [17, 'na']], forgets: false },
+        ];
+        for (const c of cases) {
+          const w = padded();
+          w.watcher.setDelegationSeams(SEAMS);
+          await settled(w, 0);
+          for (const [minute, answer] of c.script) await (answer === 'na' ? naPass : good)(w, minute);
+          expect(keysOf(w), c.name).toBe(c.forgets ? 0 : 1);
+        }
+      });
+      it('R70: a session of a project that is a confirmed not-a-checkout does not keep its keys for ever; before it is confirmed it does', async () => {
+        const w = padded();
+        writeBucket(w, 'bad-s', BUCKET10, ...Array.from({ length: 4 }, (_, i) => tool('bad-s', 300 + i, `/w/bad/far-${i}`, `2026-10-15T10:00:0${i}.000Z`)));
+        w.watcher.setDelegationSeams(SEAMS);
+        const sessions = [sessionOf('bad-s', 'idle', 'bad'), sessionOf('demo-a')];
+        const asked = async (minute: number): Promise<void> => { another(w); await censusPass(w, NOW + minute * 60_000, { demo: [RAW], bad: 'not-a-checkout' }, sessions); };
+        await asked(0);
+        expect(keysOf(w), 'its keys, kept until the answer is confirmed').toBe(1 + 4);
+        await asked(5);
+        expect(keysOf(w)).toBe(1 + 4);
+        await asked(11);
+        expect(keysOf(w), 'the answer recurred: it holds no tree, and its keys go').toBe(1);
+      });
+    });
+
+    describe('refused-project: the name is refused before anything is read, so no path in it is ever a candidate', () => {
+      it('the real census of a refused name has no records, and the lane prunes the keys of a session in it at once', async () => {
+        const refused = await readWorktreeCensus(localIO, mkTmp('ccrc-dlane-root-'), '..');
+        expect(refused).toEqual({ read: { ok: false, reason: 'refused-project' }, delegation: null });
+        const w = padded();
+        writeBucket(w, 'bad-s', BUCKET10, ...Array.from({ length: 4 }, (_, i) => tool('bad-s', 300 + i, `/w/bad/far-${i}`, `2026-10-15T10:00:0${i}.000Z`)));
+        w.watcher.setDelegationSeams(SEAMS);
+        for (let i = 0; i < 4; i++) await censusPass(w, at(i), { demo: [RAW], '..': refused }, [sessionOf('bad-s', 'idle', '..'), sessionOf('demo-a')]);
+        expect(keysOf(w)).toBe(1);
+        expect(w.watcher.delegationReport().verdicts, 'a refused project\'s tree was decided').toEqual({ unresolved: 0, conflicting: 0, unmeasured: 1 });
+      });
+    });
+
+    describe('N10: each layer of the lost-index condition has its own row', () => {
+      it('the load fails and the same pass ingests the events that would complete a link: nothing is reconciled and correlation is never asked', async () => {
+        const w = rawTreeWorld();
+        vi.spyOn(DelegationDurability.prototype, 'visitRetainedRecords').mockRejectedValue(new Error('journal read failed'));
+        vi.spyOn(console, 'warn').mockImplementation(() => {});
+        const correlate = vi.spyOn(correlation, 'correlateDelegation');
+        for (let i = 0; i < 4; i++) await censusPass(w, at(i), { demo: [OLD, RAW] });
+        expect(w.watcher.delegationReport().reconciliations).toBe(0);
+        expect(correlate).not.toHaveBeenCalled();
+        expect(leasesOf(w.home)).toEqual([]);
+        expect(w.watcher.delegationReport().droppedEvidence).toMatchObject({ measured: false });
+      });
+      it('a reconcile forced to run with the load incomplete (a seam) is handed an UNMEASURED index, and links nothing', async () => {
+        const w = rawTreeWorld();
+        w.watcher.setDelegationSeams({ reconcileBeforeLoad: true });
+        vi.spyOn(DelegationDurability.prototype, 'visitRetainedRecords').mockRejectedValue(new Error('journal read failed'));
+        vi.spyOn(console, 'warn').mockImplementation(() => {});
+        const correlate = vi.spyOn(correlation, 'correlateDelegation');
+        for (let i = 0; i < 4; i++) await censusPass(w, at(i), { demo: [OLD, RAW] });
+        expect(correlate).toHaveBeenCalled();
+        for (const call of correlate.mock.calls) expect(call[0].droppedEvidence).toEqual({ measured: false });
+        expect(leasesOf(w.home), 'a lane with a lost index made a lease').toEqual([]);
+      });
     });
   });
 
@@ -1485,7 +1693,7 @@ describe('the lane remembers what it dropped (R65): a link that rests on an even
     const lane = watchSrc().slice(watchSrc().indexOf('THE DELEGATION LANE'));
     expect(lane).toMatch(/lane memory/i);
     expect(lane).toContain('delegationDroppedKeyOf(');
-    expect(lane).toContain('prunableDelegationDropped(');
+    expect(lane).toContain('planDelegationDroppedPrune(');
     expect(lane).toContain('indexDelegationDropped(');
   });
 });

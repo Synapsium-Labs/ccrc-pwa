@@ -30,19 +30,24 @@ import {
   recoverDelegation,
 } from '../src/coord/delegation-checkpoint.js';
 import {
+  DELEGATION_CLOCK_SKEW_MS,
   DELEGATION_CORRELATION_REASONS,
   DELEGATION_DROPPED_UNMEASURED,
   DELEGATION_EVIDENCE_MARGIN_MS,
   correlateDelegation,
   delegationDroppedKeyId,
   delegationDroppedKeyOf,
+  delegationGoneTrees,
   delegationLeaseSourceOfLinked,
+  delegationTreeKey,
   indexDelegationDropped,
+  planDelegationDroppedPrune,
   prunableDelegationDropped,
   type DelegationCorrelationInput,
   type DelegationCorrelationVerdict,
   type DelegationDroppedKey,
   type DelegationListingWindow,
+  type DelegationPruneProject,
 } from '../src/coord/delegation-correlation.js';
 import {
   delegationSha256Hex,
@@ -1468,9 +1473,10 @@ describe('dropped evidence (R65): the vetoes of rungs 2 and 3 rest on events an 
   describe('forgetting a key (prunableDelegationDropped): only what no present tree and no activity row can still ask about', () => {
     const key = (over: Partial<DelegationDroppedKey>): DelegationDroppedKey =>
       ({ parentId: PARENT, parentIncarnation: INC, agentId: null, launchAgentId: null, runId: null, cwd: null, startStop: false, ...over });
-    const entries = (ks: readonly DelegationDroppedKey[]) => ks.map((k) => [delegationDroppedKeyId(k), k] as const);
+    const entries = (ks: readonly DelegationDroppedKey[], at = 0) => ks.map((k) => [delegationDroppedKeyId(k), k, at] as const);
+    const pathsOf = (census: readonly DelegationCensusRecord[]): ReadonlySet<string> => new Set(census.flatMap((r) => (r.canonicalPath === null ? [] : [r.canonicalPath])));
     const forgotten = (ks: readonly DelegationDroppedKey[], census: readonly DelegationCensusRecord[], activities: readonly DelegationActivityRow[] = []): DelegationDroppedKey[] => {
-      const ids = new Set(prunableDelegationDropped(entries(ks), census, activities));
+      const ids = new Set(prunableDelegationDropped(entries(ks), census, pathsOf(census), activities, Number.POSITIVE_INFINITY));
       return ks.filter((k) => ids.has(delegationDroppedKeyId(k)));
     };
     const rival = (agentId: string) => key({ parentId: OTHER, agentId });
@@ -1521,11 +1527,102 @@ describe('dropped evidence (R65): the vetoes of rungs 2 and 3 rest on events an 
       for (const [i, sc] of scenarios.entries()) {
         const e = evicting(sc.events, sc.dropped);
         const keys = sc.dropped.map((d) => delegationDroppedKeyOf(sc.events[d]!));
-        const gone = new Set(prunableDelegationDropped(entries(keys), [sc.record], e.w.activities));
+        const gone = new Set(prunableDelegationDropped(entries(keys), [sc.record], pathsOf([sc.record]), e.w.activities, Number.POSITIVE_INFINITY));
         const kept = keys.filter((k) => !gone.has(delegationDroppedKeyId(k)));
         const ask = (ks: readonly DelegationDroppedKey[]) => correlateDelegation(input({ record: sc.record, activities: e.w.activities, acceptedEvidence: e.held, droppedEvidence: indexDelegationDropped(ks) }));
         expect(ask(kept), `scenario ${i}`).toEqual(ask(keys));
       }
+    });
+  });
+
+  describe('the prune plan (R69, R70, R71): a key is forgotten only for a tree a measured census of its project shows gone', () => {
+    const key = (over: Partial<DelegationDroppedKey>): DelegationDroppedKey =>
+      ({ parentId: PARENT, parentIncarnation: INC, agentId: null, launchAgentId: null, runId: null, cwd: null, startStop: false, ...over });
+    const AT = Date.UTC(2026, 9, 14) + 10_000_000;                                  // the census's measuredAt
+    const proj = (over: Partial<DelegationPruneProject> = {}): DelegationPruneProject => ({ records: [], standing: false, measuredSinceStart: true, ...over });
+    const at = (k: DelegationDroppedKey) => k;
+    const plan = (
+      ks: readonly DelegationDroppedKey[], projects: Record<string, DelegationPruneProject>, known: Record<string, string> = {},
+      over: Partial<Parameters<typeof planDelegationDroppedPrune>[0]> = {},
+    ): DelegationDroppedKey[] | null => {
+      const ids = planDelegationDroppedPrune({
+        keys: ks.map((k) => [delegationDroppedKeyId(k), k, AT - 10 * DELEGATION_CLOCK_SKEW_MS] as const), projects: new Map(Object.entries(projects)),
+        known: new Map(Object.entries(known)), projectOfParent: () => undefined, activities: [], measuredAtMs: AT, ...over,
+      });
+      if (ids === null) return null;
+      const gone = new Set(ids);
+      return ks.filter((k) => gone.has(delegationDroppedKeyId(k)));
+    };
+    const TREE = delegationTreeKey(REPO, RAW);
+    const kC = key({ cwd: C, agentId: AGENT_2 });
+    const listed = (over: Partial<DelegationCensusRecord> = {}): DelegationCensusRecord => rawRecord(over);
+
+    it('a measured census that lists no tree at the path forgets the key; a listed record\'s path protects it', () => {
+      expect(plan([kC], { [REPO]: proj({ records: [] }) })).toEqual([kC]);
+      expect(plan([kC], { [REPO]: proj({ records: [listed()] }) })).toEqual([]);
+    });
+
+    it('N8: a remembered path is protected until a measured census of ITS project shows the tree gone: a null path, a null view and an absent project each keep it', () => {
+      const known = { [TREE]: C };
+      expect(plan([kC], { [REPO]: proj({ records: [] }) }, known), 'listed nowhere in a measured census: gone').toEqual([kC]);
+      expect(plan([kC], { [REPO]: proj({ records: [listed({ state: 'absent', canonicalPath: null })] }) }, known), 'listed absent: gone').toEqual([kC]);
+      expect(plan([kC], { [REPO]: proj({ records: [listed({ state: 'unreadable', canonicalPath: null })] }) }, known), 'listed with a null path').toEqual([]);
+      expect(plan([kC], { [REPO]: proj({ records: null }) }, known), 'the project\'s view is null this pass').toEqual([]);
+      expect(plan([kC], { 'project-b': proj({ records: [] }) }, known), 'the project is absent from the census').toEqual([]);
+    });
+
+    it('a present record with a null path and no remembered path skips the prune; one with a remembered path, or an unreadable one, does not', () => {
+      const nullPath = listed({ state: 'present', canonicalPath: null });
+      expect(plan([kC], { [REPO]: proj({ records: [nullPath] }) })).toBeNull();
+      expect(plan([kC], { [REPO]: proj({ records: [nullPath] }) }, { [TREE]: C }), 'remembered: protected, not skipped').toEqual([]);
+      expect(plan([kC], { [REPO]: proj({ records: [listed({ state: 'unreadable', canonicalPath: null })] }) })).toEqual([kC]);
+    });
+
+    it('R70: a standing refusal counts as measured with no trees: it does not block, and what it remembered is gone', () => {
+      const projects = { [REPO]: proj({ records: [listed()] }), bad: proj({ records: null, standing: true, measuredSinceStart: false }) };
+      const far = key({ cwd: '/fixture/gone', agentId: AGENT_2 });
+      expect(plan([far], projects)).toEqual([far]);
+      expect(plan([kC], { ...projects, bad: proj({ records: null, standing: true, measuredSinceStart: false }) }, { [delegationTreeKey('bad', 'tree')]: '/fixture/bad/tree' })).toEqual([]);
+      const ofBad = key({ parentId: OTHER, cwd: '/fixture/gone', agentId: AGENT_2 });
+      expect(plan([ofBad], projects, {}, { projectOfParent: (id) => (id === OTHER ? 'bad' : undefined) }), 'a session of a standing project holds nothing back').toEqual([ofBad]);
+      const underBad = key({ cwd: '/fixture/bad/tree', agentId: AGENT_2 });
+      expect(plan([underBad], projects, { [delegationTreeKey('bad', 'tree')]: '/fixture/bad/tree' }), 'a path a standing project once had is gone').toEqual([underBad]);
+    });
+
+    it('per project: a project that was never measured since the restart keeps ITS OWN keys (its sessions\' and the paths it remembers); the others prune', () => {
+      const projects = { [REPO]: proj({ records: [] }), down: proj({ records: null, measuredSinceStart: false }) };
+      const mine = key({ parentId: PARENT, cwd: '/fixture/a/gone', agentId: AGENT_2 });
+      const theirs = key({ parentId: OTHER, cwd: '/fixture/b/gone', agentId: AGENT_2 });
+      const atTheirPath = key({ parentId: PARENT, cwd: '/fixture/down/tree', agentId: AGENT_2 });
+      const nobody = key({ parentId: 'lane-z-demo', cwd: '/fixture/z/gone', agentId: AGENT_2 });
+      const projectOfParent = (id: string): string | undefined => (id === PARENT ? REPO : id === OTHER ? 'down' : undefined);
+      const known = { [delegationTreeKey('down', 'tree')]: '/fixture/down/tree' };
+      const out = plan([mine, theirs, atTheirPath, nobody], projects, known, { projectOfParent });
+      expect(out).toEqual(expect.arrayContaining([mine, nobody]));
+      expect(out).toHaveLength(2);
+      const measuredLater = plan([mine, theirs, nobody], { ...projects, down: proj({ records: null, measuredSinceStart: true }) }, {}, { projectOfParent });
+      expect(measuredLater, 'once it has been measured since the restart its keys prune too').toHaveLength(3);
+    });
+
+    it('R69 item 5: a key whose latest dropped event is not before the census (less the clock skew allowance) is kept; one before it is forgotten', () => {
+      const cutoff = AT - DELEGATION_CLOCK_SKEW_MS;
+      const stamped = (stamp: number) => planDelegationDroppedPrune({
+        keys: [[delegationDroppedKeyId(kC), kC, stamp]], projects: new Map([[REPO, proj({ records: [] })]]), known: new Map(), projectOfParent: () => undefined, activities: [], measuredAtMs: AT,
+      });
+      expect(stamped(cutoff - 1)).toEqual([delegationDroppedKeyId(kC)]);
+      expect(stamped(cutoff), 'exactly at the cutoff').toEqual([]);
+      expect(stamped(AT + 1), 'dropped after the census was measured').toEqual([]);
+      expect(stamped(Number.POSITIVE_INFINITY), 'an event time nobody could read').toEqual([]);
+    });
+
+    it('delegationGoneTrees: only a measured census of the tree\'s own project (or a standing one) shows it gone', () => {
+      const known = new Map([[TREE, C], [delegationTreeKey('project-b', 'x'), '/fixture/b/x']]);
+      const gone = (projects: Record<string, DelegationPruneProject>) => delegationGoneTrees(known, new Map(Object.entries(projects)));
+      expect(gone({ [REPO]: proj({ records: [] }) })).toEqual([TREE]);
+      expect(gone({ [REPO]: proj({ records: [listed()] }) })).toEqual([]);
+      expect(gone({ [REPO]: proj({ records: null }) })).toEqual([]);
+      expect(gone({ [REPO]: proj({ records: null, standing: true }) })).toEqual([TREE]);
+      expect(gone({})).toEqual([]);
     });
   });
 

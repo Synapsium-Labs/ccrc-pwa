@@ -233,14 +233,134 @@ export function indexDelegationDropped(keys: Iterable<DelegationDroppedKey>): De
   return { measured: true, named, atPath };
 }
 
+/** The identity of a tree the census lists: its project and its admin record. */
+export const delegationTreeKey = (project: string, adminRecord: string): string => JSON.stringify([project, adminRecord]);
+
 /**
- * Which dropped keys can be forgotten: those no present census record and no activity row can still ask about. Answers the keys'
- * ids; it changes nothing. The caller prunes only against a census in which EVERY project was measured (a project whose view was
- * null contributes no paths, and would read as "nothing needs this").
+ * The slack allowed between the fleet's clock (the time an event was observed) and the server's (the time a census was measured): the
+ * remote deployment has two boxes. A key whose latest dropped event is within this of the census is kept, because a tree born after the
+ * census could have an event that looks earlier than it.
+ */
+export const DELEGATION_CLOCK_SKEW_MS = 60_000;
+
+/** What the planner needs to know of one project's census in this pass. */
+export interface DelegationPruneProject {
+  /** The project's delegation records as MEASURED in this pass, or null when this pass measured none. */
+  readonly records: readonly DelegationCensusRecord[] | null;
+  /**
+   * The project can hold no tree the lane decides, so for pruning it counts as measured with no trees (R70). That is a refused
+   * project name (`refused-project`: the census returns before it reads anything, so the project never produces a record and no path in
+   * it can become a rung-2 or rung-3 candidate, which is always a census RECORD) and a `not-a-checkout` answer the caller has seen on
+   * enough consecutive passes to trust (R71: one such pass may be a dropped round trip that landed on one stat and not its neighbour).
+   */
+  readonly standing: boolean;
+  /** A measured census of the project has been read since this lane started: until then what it remembers is only what the checkpoint
+   *  gave it, and a project this lane has not seen is not a project it can prune for. */
+  readonly measuredSinceStart: boolean;
+}
+
+/**
+ * The trees (by `delegationTreeKey`) that a MEASURED census of their own project shows gone: the project's records, measured in this
+ * pass, do not list the record or list it `absent`; or the project is a standing refusal and holds no tree at all. A tree whose project
+ * has no view this pass, is absent from the map, or whose record is listed with a null path (a `gitdir` read that failed) is NOT gone.
+ */
+export function delegationGoneTrees(known: ReadonlyMap<string, string>, projects: ReadonlyMap<string, DelegationPruneProject>): string[] {
+  const gone: string[] = [];
+  for (const treeKey of known.keys()) {
+    const [project, adminRecord] = JSON.parse(treeKey) as [string, string];
+    const p = projects.get(project);
+    if (p === undefined) continue;
+    if (p.standing) { gone.push(treeKey); continue; }
+    if (p.records === null) continue;
+    if (!p.records.some((r) => r.adminRecord === adminRecord && r.state !== 'absent')) gone.push(treeKey);
+  }
+  return gone;
+}
+
+export interface DelegationPruneInput {
+  /** Every dropped key: its id, the keys, and the time of the LATEST event dropped under it (epoch ms; Infinity when unreadable). */
+  keys: Iterable<readonly [string, DelegationDroppedKey, number]>;
+  projects: ReadonlyMap<string, DelegationPruneProject>;
+  /** The last MEASURED canonical path of each tree, by `delegationTreeKey`. */
+  known: ReadonlyMap<string, string>;
+  /** The project a session belongs to, when the caller knows it. */
+  projectOfParent: (parentId: string) => string | undefined;
+  activities: readonly DelegationActivityRow[];
+  /** When the census was measured (epoch ms). */
+  measuredAtMs: number;
+}
+
+/**
+ * Which dropped keys to forget in this pass, or `null` to forget none (R69: unknown is never empty, D-4008).
+ *
+ * A key is forgotten only for a tree that a MEASURED census of its project shows gone. A path protects its keys while any census
+ * record lists it, and while it is the remembered path of a tree no measured census of that tree's own project shows gone: so a
+ * record whose `gitdir` read failed this pass (a null path), a project whose view is null this pass, and a project that is not in
+ * the census at all each keep what they had. A present record with a null path that has no remembered path is a path the planner
+ * cannot know: it answers `null`, and nothing is forgotten in this pass.
+ *
+ * PER PROJECT. A project this lane has not yet measured since it started, and which is not a standing refusal, keeps ITS OWN keys: those
+ * of its sessions' events (the dropped key's parent belongs to it) and those at a path one of its remembered trees has. The other
+ * projects prune theirs, so one project that stays unreachable cannot stop pruning everywhere. A key no project can be named for is
+ * not held back by this (the sessions that made most of a long journal's keys are long gone from the registry).
+ *
+ * A key is also kept unless its latest dropped event predates the census by more than `DELEGATION_CLOCK_SKEW_MS`: a tree born after the
+ * census was measured can have events only after it, and a key that has such an event must not be forgotten against a census that
+ * could not have listed the tree. The stamp is the event's own observed time, not the lane's clock: a restart replays the journal, and
+ * the lane's clock would make every replayed key look newer than the census.
+ *
+ * WHAT THIS FORGETS, AND WHY THAT IS SOUND (R68, as revised). The forgotten events belong to a tree that no longer exists: it was shown
+ * gone by a measured census of its project. A tree later created at that path does not inherit them. (The held events of an earlier life
+ * still veto a tree at the same path, because rung 3 compares paths and not lives; the controller ruled that the forgotten ones need
+ * not, because the alternative, remembering them for ever, is the unbounded index.)
+ *
+ * THE CLAUSE-(a) OBSERVATION. A rival key naming X is forgotten when nobody asks about X (no present `agent-<X>` tree and no agent
+ * activity row for X). A rival event naming X would have to be dropped, which takes 20,000 or more events, before X's own first join
+ * opens its row; agent ids are random, and a session that is resumed or swapped keeps its earlier incarnation's row. No realistic path
+ * leads there.
+ */
+export function planDelegationDroppedPrune(input: DelegationPruneInput): string[] | null {
+  const { projects, known } = input;
+  const measured: DelegationCensusRecord[] = [];
+  for (const p of projects.values()) if (p.records !== null) measured.push(...p.records);
+  // A present record whose path is null and was never measured: its keys' path is unknown, so this pass forgets nothing.
+  for (const r of measured) {
+    if (r.state === 'present' && r.canonicalPath === null && !known.has(delegationTreeKey(r.project, r.adminRecord))) return null;
+  }
+  const gone = new Set(delegationGoneTrees(known, projects));
+  const protectedPaths = new Set<string>();
+  for (const r of measured) if (r.canonicalPath !== null) protectedPaths.add(r.canonicalPath);
+  const pathProjects = new Map<string, Set<string>>();
+  const ownedBy = (path: string, project: string): void => { const set = pathProjects.get(path) ?? new Set<string>(); set.add(project); pathProjects.set(path, set); };
+  for (const r of measured) if (r.canonicalPath !== null) ownedBy(r.canonicalPath, r.project);
+  for (const [treeKey, path] of known) {
+    if (gone.has(treeKey)) continue;
+    protectedPaths.add(path);
+    ownedBy(path, (JSON.parse(treeKey) as [string, string])[0]);
+  }
+  const blocked = new Set<string>();
+  for (const [project, p] of projects) if (!p.standing && p.records === null && !p.measuredSinceStart) blocked.add(project);
+  const candidates: (readonly [string, DelegationDroppedKey, number])[] = [];
+  for (const entry of input.keys) {
+    const [, k] = entry;
+    if (blocked.size > 0) {
+      const owner = input.projectOfParent(k.parentId);
+      if (owner !== undefined && blocked.has(owner)) continue;
+      if (k.cwd !== null && [...(pathProjects.get(k.cwd) ?? [])].some((q) => blocked.has(q))) continue;
+    }
+    candidates.push(entry);
+  }
+  return prunableDelegationDropped(candidates, measured, protectedPaths, input.activities, input.measuredAtMs - DELEGATION_CLOCK_SKEW_MS);
+}
+
+/**
+ * Which dropped keys can be forgotten: those no protected path, no present census record's name and no activity row can still ask
+ * about, whose latest dropped event is before `cutoffMs`. Answers the keys' ids; it changes nothing. `planDelegationDroppedPrune` decides
+ * what is protected and when to call this; it is exported for its own rows.
  *
  * WHY THIS IS SOUND. A key changes a verdict only through the two queries above, and each asks about something specific:
- *   - clause (b) asks about the canonical path of the census record being decided, so a key whose `cwd` is no present record's path is
- *     never asked, and a path that is a present record's keeps EVERY key that reported it;
+ *   - clause (b) asks about the canonical path of the census record being decided, so a key whose `cwd` is no protected path is never
+ *     asked, and a protected path keeps EVERY key that reported it;
  *   - clause (a) asks about an upstream id X: rung 2's is the name of a present `agent-<id>` tree (the id) or `wf_<run>-<n>` tree (the
  *     run), and rung 3's is the upstream id of an `agent` activity row. A key whose names are none of those is never asked. And a key
  *     naming X from parent R is REDUNDANT when the checkpoint already holds R's activity row for X, because `claimsOf` reads rows and
@@ -248,19 +368,17 @@ export function indexDelegationDropped(keys: Iterable<DelegationDroppedKey>): De
  *     never read) can be hidden by an eviction, and that is the key kept. Wave 3 never deletes an activity row; a wave that does must
  *     revisit this rule. A run id is never redundant by rows (a row names a worker, not the run), so it is kept while a present tree or
  *     a workflow row carries the run.
- * THE ONE LOSS: a path that is reused after its tree left the census loses the veto events of its earlier life. The full evidence
- * would still read them (rung 3 compares paths, not lives), so such a reused path can link where the full evidence would not decide.
  */
 export function prunableDelegationDropped(
-  keys: Iterable<readonly [string, DelegationDroppedKey]>,
+  keys: Iterable<readonly [string, DelegationDroppedKey, number]>,
   census: readonly DelegationCensusRecord[],
+  protectedPaths: ReadonlySet<string>,
   activities: readonly DelegationActivityRow[],
+  cutoffMs: number,
 ): string[] {
-  const paths = new Set<string>();
   const askedAgents = new Set<string>();
   const askedRuns = new Set<string>();
   for (const r of census) {
-    if (r.canonicalPath !== null) paths.add(r.canonicalPath);
     if (r.adminRecord.startsWith(AGENT_PREFIX)) askedAgents.add(r.adminRecord.slice(AGENT_PREFIX.length));
     const wf = /^(wf_.+)-(\d+)$/.exec(r.adminRecord);
     if (wf !== null) askedRuns.add(wf[1]!);
@@ -276,8 +394,9 @@ export function prunableDelegationDropped(
     }
   }
   const forget: string[] = [];
-  for (const [id, k] of keys) {
-    if (k.cwd !== null && paths.has(k.cwd)) continue;
+  for (const [id, k, at] of keys) {
+    if (!(at < cutoffMs)) continue;
+    if (k.cwd !== null && protectedPaths.has(k.cwd)) continue;
     const needsAgent = (name: string | null): boolean =>
       name !== null && askedAgents.has(name) && !rows.has(JSON.stringify([k.parentId, k.parentIncarnation, name]));
     if (needsAgent(k.agentId) || needsAgent(k.launchAgentId)) continue;

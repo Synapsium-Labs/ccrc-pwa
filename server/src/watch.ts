@@ -64,9 +64,10 @@ import {
 } from './coord/delegation-ingest.js';
 import { correlateDelegation, type DelegationCorrelationInput, type DelegationListingWindow } from './coord/delegation-correlation.js';
 import {
-  DELEGATION_DROPPED_UNMEASURED, delegationDroppedKeyId, delegationDroppedKeyOf, indexDelegationDropped, prunableDelegationDropped,
-  type DelegationDroppedEvidence, type DelegationDroppedKey,
+  DELEGATION_DROPPED_UNMEASURED, delegationDroppedKeyId, delegationDroppedKeyOf, delegationGoneTrees, delegationTreeKey, indexDelegationDropped,
+  planDelegationDroppedPrune, type DelegationDroppedEvidence, type DelegationDroppedKey, type DelegationPruneProject,
 } from './coord/delegation-correlation.js';
+import type { WorktreeRead } from './coord/gitref.js';
 import { delegationCircuitBreaker, planDelegationReconciliation, type DelegationReportEffect } from './coord/delegation-policy.js';
 import { isUnownedWorkReason } from './coord/delegation-policy.js';
 import { delegationBucketReadable, planDelegationCursorRetention } from './coord/delegation-model.js';
@@ -8268,9 +8269,19 @@ function renderAskBrief(askId: number, childId: string, question: string, option
 //   recomputes the horizon. A LOST INDEX IS NOT AN EMPTY ONE: the index is measured only once `loadEvidence` has streamed the whole
 //   retained journal and indexed every event it dropped while doing so; until then (a restart, a recovery, a visit that failed
 //   midway) it is UNMEASURED (`DELEGATION_DROPPED_UNMEASURED`), the lane reconciles nothing, and correlation answers
-//   `unmeasured('evidence-horizon')` for every link against it (D-4008: unknown is never empty). BOUNDED: after each reconcile over a
-//   census in which every project was measured, the keys no present tree and no activity row can still ask about are forgotten
-//   (`prunableDelegationDropped`, which argues why that is sound, and names its one loss: a path reused after its tree left).
+//   `unmeasured('evidence-horizon')` for every link against it (D-4008: unknown is never empty). BOUNDED, AND FORGETFUL ONLY
+//   FOR A TREE A MEASURED CENSUS SHOWS GONE (R69 to R71). The lane keeps the last measured canonical path of every tree the census lists
+//   (lane memory; after a restart it is seeded from the checkpoint's leases and attempts). A dropped key is forgotten only when no
+//   protected path and no asked-about name needs it (`planDelegationDroppedPrune`, which argues why that is sound): a path protects its
+//   keys while a census record lists it and while it is the remembered path of a tree that no census of ITS OWN project, measured in
+//   this pass, shows gone, so a record whose `gitdir` read failed (a null path), a project with no view this pass and a project missing
+//   from the census each keep what they had. The restart is per project: a project not yet measured since the lane started keeps ITS OWN
+//   keys (its sessions' and the paths it remembers) while the others prune. A key is stamped with the time of the latest event dropped
+//   under it and is forgotten only if that predates the census that prunes it (less the clock skew allowance). A standing refusal
+//   holds no tree and counts as measured with none (R70): a refused project name always (the census returns before it reads anything,
+//   so no path in it can be a rung-2 or rung-3 candidate, which is always a census record); `not-a-checkout` only after it has recurred
+//   on three consecutive census passes spanning ten minutes (R71), because `gitref.ts` names a residual in which one dropped round trip
+//   reads as that answer. The keys are pruned as the journal streams (every 4,096 new ones) and at a reconcile after a batch.
 //
 //   THE READ HORIZON AND CURSOR RETENTION (R58, D-4654). The lane reads no bucket older than the spool lookback, and decides that in
 //   ONE place (`delegationBucketReadable`), for a live owner's listing and for a dead owner's unclosed hour alike. Bucket cursors retire
@@ -8308,6 +8319,17 @@ const DELEGATION_EVIDENCE_CAP = 20_000;
  *  a reconcile, so a long journal cannot hold every key it ever dropped at once and a busy fleet does not pay a prune every pass (R65: the
  *  peak is this many plus what survives). */
 const DELEGATION_DROPPED_PRUNE_EVERY = 4096;
+/** R71: a project's `not-a-checkout` answer is trusted as a STANDING fact only after it has recurred on this many consecutive census
+ *  passes spanning at least this long; any other answer for the project resets the streak. `gitref.ts` names the residual: one dropped
+ *  round trip that lands on one stat and not its neighbour reads as that answer. */
+const DELEGATION_STANDING_PASSES = 3;
+const DELEGATION_STANDING_SPAN_MS = 10 * 60_000;
+/** What a failed census read means for pruning, as a TOTAL table over the read's reasons (a new reason is a compile error until it is
+ *  placed): `always` is a project that can never be censused (the name is refused before anything is read), `streak` is a standing
+ *  fact only once it has recurred (R71), `never` is a read that may do better next time. */
+const LANE_READ_REFUSAL: Readonly<Record<Extract<WorktreeRead, { ok: false }>['reason'], 'always' | 'streak' | 'never'>> = {
+  'refused-project': 'always', 'not-a-checkout': 'streak', unlistable: 'never', unreachable: 'never',
+};
 /** A tree seen for the first time may be a ccd workspace being BORN: two reconciliation passes of waiting (spec §5.4, rung 1). */
 const DELEGATION_BIRTH_PASSES = 2;
 /** How long a first-measured-dead instant is remembered: far past the breaker's ten-minute window. */
@@ -8322,8 +8344,9 @@ const DELEGATION_META_MAX_CHARS = 65_536;
 
 /** Test seams of the lane: production passes none. `evidenceCap` scales the evidence slice so an eviction can be provoked with a handful
  *  of events; `readEveryListedBucket` bypasses the read horizon and the settled/closed filters, so the second line of defence
- *  (eventId idempotence against the retained journal) can be pinned. */
-export interface DelegationLaneSeams { evidenceCap?: number; readEveryListedBucket?: boolean; droppedPruneEvery?: number }
+ *  (eventId idempotence against the retained journal) can be pinned; `reconcileBeforeLoad` lets a pass reconcile although the evidence
+ *  load did not complete, so the second layer of the lost-index condition (the index handed to correlation is unmeasured) can be pinned. */
+export interface DelegationLaneSeams { evidenceCap?: number; readEveryListedBucket?: boolean; droppedPruneEvery?: number; reconcileBeforeLoad?: boolean }
 
 type LaneSession = Pick<FleetSession, 'id' | 'project' | 'status'>;
 type LaneRecord = Pick<SessionRecord, 'id' | 'project' | 'child'>;
@@ -8350,7 +8373,7 @@ interface LanePass {
   capability: DelegationHealthInput['capabilityState'];
 }
 
-const laneTreeKey = (project: string, adminRecord: string): string => JSON.stringify([project, adminRecord]);
+const laneTreeKey = delegationTreeKey;
 /** `YYYYMMDDHH`, the bucket name of an hour. */
 const laneBucketOf = (hourMs: number): string => formatDelegationInstant(hourMs).replace(/[-:T]/g, '').slice(0, 10);
 const laneHourOf = (ms: number): number => Math.floor(ms / DELEGATION_HOUR_MS) * DELEGATION_HOUR_MS;
@@ -8361,8 +8384,8 @@ const laneInstantMs = (iso: string): number | null => {
 
 /** The census, flat: every project whose delegation census was a MEASURED success contributes its records, each (project, adminRecord)
  *  once. A project whose view was null is left OUT of `censused` and contributes nothing: an empty list would read as "every tree is gone"
- *  (hand-off 12), so a caller that prunes against the census does so only when `censused` is every project. */
-function laneFlatCensus(census: DelegationCensusPass): { censused: string[]; flat: DelegationCensusRecord[]; held: Set<string>; allMeasured: boolean } {
+ *  (hand-off 12), so a caller that prunes by project name does so only when `allMeasured`: every project is censused or a standing refusal. */
+function laneFlatCensus(census: DelegationCensusPass, standing: ReadonlySet<string>): { censused: string[]; flat: DelegationCensusRecord[]; held: Set<string>; allMeasured: boolean } {
   const censused: string[] = [];
   const flat: DelegationCensusRecord[] = [];
   const held = new Set<string>();
@@ -8376,7 +8399,8 @@ function laneFlatCensus(census: DelegationCensusPass): { censused: string[]; fla
       flat.push(r);
     }
   }
-  return { censused, flat, held, allMeasured: censused.length === census.projects.size };
+  // A standing refusal holds no tree: it counts as measured (R70), or one `not-a-checkout` project would stop every prune for ever.
+  return { censused, flat, held, allMeasured: [...census.projects.keys()].every((p) => censused.includes(p) || standing.has(p)) };
 }
 
 /** A cursor row nobody needs to store: the state of a bucket with nothing read from it. */
@@ -8434,7 +8458,17 @@ class DelegationLane {
   private evidenceHorizonMs: number | null = null;
   /** R65: the DISTINCT keys of every event this lane no longer holds, by key id. Lane memory only: no file, no SQLite state, no journal
    *  write. Rebuilt from nothing by `loadEvidence`; measured only while `evidenceLoaded` (see `droppedIndex`). */
-  private readonly dropped = new Map<string, DelegationDroppedKey>();
+  private readonly dropped = new Map<string, { key: DelegationDroppedKey; at: number }>();
+  /** The latest observed time (ms) of any event of a held tuple, the hidden tuple-mates included, so a key's stamp is not earlier than a
+   *  hidden mate. Deleted with the tuple's held event. */
+  private readonly tupleLatest = new Map<string, number>();
+  /** R69: the last MEASURED canonical path of each tree the census listed, by tree key. Lane memory, lost at a restart and then seeded
+   *  from the checkpoint's leases and attempts. A tree leaves it only when a measured census of its own project shows it gone. */
+  private readonly knownPaths = new Map<string, string>();
+  /** Projects whose delegation census has been MEASURED since this lane started. */
+  private readonly measuredProjects = new Set<string>();
+  /** R71: the current run of consecutive `not-a-checkout` answers, per project. */
+  private readonly notCheckout = new Map<string, { firstAt: number; lastAt: number; passes: number }>();
   private droppedIndexCache: DelegationDroppedEvidence | null = null;
   /** New keys since the last prune, and the most keys held at once since the last load began (a report figure: the bound is real). */
   private droppedAdded = 0;
@@ -8482,28 +8516,76 @@ class DelegationLane {
    *  (`evidenceLoaded` IS the measured state): an index that was lost, or never built, is not an empty one. */
   private droppedIndex(): DelegationDroppedEvidence {
     if (!this.evidenceLoaded) return DELEGATION_DROPPED_UNMEASURED;
-    this.droppedIndexCache ??= indexDelegationDropped(this.dropped.values());
+    this.droppedIndexCache ??= indexDelegationDropped([...this.dropped.values()].map((e) => e.key));
     return this.droppedIndexCache;
   }
 
-  /** The lane no longer holds this event: keep the keys correlation reads of it. */
-  private noteDropped(event: DelegationEventEnvelopeV1): void {
+  /** The lane no longer holds this event: keep the keys correlation reads of it, stamped with the time of the latest event dropped
+   *  under them (outside their identity). */
+  private noteDropped(event: DelegationEventEnvelopeV1, at: number): void {
     const key = delegationDroppedKeyOf(event);
     const id = delegationDroppedKeyId(key);
-    if (this.dropped.has(id)) return;
-    this.dropped.set(id, key);
+    const have = this.dropped.get(id);
+    if (have !== undefined) { have.at = Math.max(have.at, at); return; }
+    this.dropped.set(id, { key, at });
     this.droppedIndexCache = null;
     this.droppedAdded += 1;
     this.droppedPeak = Math.max(this.droppedPeak, this.dropped.size);
   }
 
-  /** Forgets the dropped-evidence keys no present tree and no activity row can still ask about (`prunableDelegationDropped` argues why
-   *  that is sound). The caller has checked that the census it passes has every project measured. */
-  private pruneDropped(flat: readonly DelegationCensusRecord[], activities: DelegationCheckpointV1['activities']): void {
-    const forget = prunableDelegationDropped(this.dropped, flat, activities);
-    for (const id of forget) this.dropped.delete(id);
-    if (forget.length > 0) this.droppedIndexCache = null;
+  /** What this census says, remembered: the `not-a-checkout` streak (R71), the projects measured since this lane started, and the last
+   *  measured path of every tree it lists. Idempotent for one census (a streak counts a census once). */
+  private noteCensus(census: DelegationCensusPass): void {
+    for (const [project, view] of census.projects) {
+      const notCheckout = view.delegation === null && !view.read.ok && view.read.reason === 'not-a-checkout';
+      const run = this.notCheckout.get(project);
+      if (!notCheckout) this.notCheckout.delete(project);
+      else if (run === undefined) this.notCheckout.set(project, { firstAt: census.measuredAt, lastAt: census.measuredAt, passes: 1 });
+      else if (census.measuredAt > run.lastAt) { run.lastAt = census.measuredAt; run.passes += 1; }
+      if (view.delegation === null) continue;
+      this.measuredProjects.add(project);
+      for (const r of view.delegation) if (r.state !== 'absent' && r.canonicalPath !== null) this.knownPaths.set(laneTreeKey(r.project, r.adminRecord), r.canonicalPath);
+    }
+    for (const project of [...this.notCheckout.keys()]) if (!census.projects.has(project)) this.notCheckout.delete(project);
+  }
+
+  /** The projects that hold no tree the lane could decide, for pruning (R70): a refused name; and `not-a-checkout` once it has recurred
+   *  on enough consecutive passes (R71). A transient null (`unlistable`, `unreachable`) is not one. */
+  private standingProjects(census: DelegationCensusPass): Set<string> {
+    const out = new Set<string>();
+    for (const [project, view] of census.projects) {
+      if (view.delegation !== null || view.read.ok) continue;
+      const how = LANE_READ_REFUSAL[view.read.reason];
+      const run = this.notCheckout.get(project);
+      if (how === 'always') out.add(project);
+      else if (how === 'streak' && run !== undefined && run.passes >= DELEGATION_STANDING_PASSES && run.lastAt - run.firstAt >= DELEGATION_STANDING_SPAN_MS) out.add(project);
+    }
+    return out;
+  }
+
+  private pruneProjects(census: DelegationCensusPass): Map<string, DelegationPruneProject> {
+    const standing = this.standingProjects(census);
+    return new Map([...census.projects].map(([project, view]) => [project, {
+      records: view.delegation, standing: standing.has(project), measuredSinceStart: this.measuredProjects.has(project),
+    }] as const));
+  }
+
+  /** Forgets the remembered path of every tree a measured census of its own project shows gone. */
+  private forgetGoneTrees(census: DelegationCensusPass): void {
+    for (const k of delegationGoneTrees(this.knownPaths, this.pruneProjects(census))) this.knownPaths.delete(k);
+  }
+
+  /** Forgets the dropped-evidence keys that only a tree a measured census shows gone could still ask about (`planDelegationDroppedPrune`
+   *  decides, and argues why it is sound; it answers nothing to forget while a path is unknown). */
+  private pruneDropped(census: DelegationCensusPass, activities: DelegationCheckpointV1['activities']): void {
+    const plan = planDelegationDroppedPrune({
+      keys: [...this.dropped].map(([id, e]) => [id, e.key, e.at] as const), projects: this.pruneProjects(census), known: this.knownPaths,
+      projectOfParent: (parentId) => this.sessionProject.get(parentId), activities, measuredAtMs: census.measuredAt,
+    });
     this.droppedAdded = 0;
+    if (plan === null || plan.length === 0) return;
+    for (const id of plan) this.dropped.delete(id);
+    this.droppedIndexCache = null;
   }
 
   report() {
@@ -8512,7 +8594,7 @@ class DelegationLane {
       verdicts: { ...this.verdicts }, absences: [...this.absences.values()], breaker: this.breakerNow(Date.now()),
       evidenceEvents: this.evidence.size, evidenceHorizon: this.evidenceHorizon(), cursorsPruned: this.cursorsPruned,
       metaMisses: this.metaMiss.size, pointMetas: this.pointMetas.size,
-      droppedEvidence: { measured: this.evidenceLoaded, keys: this.dropped.size, peak: this.droppedPeak },
+      droppedEvidence: { measured: this.evidenceLoaded, keys: this.dropped.size, peak: this.droppedPeak }, knownTrees: this.knownPaths.size,
     };
   }
 
@@ -8617,6 +8699,7 @@ class DelegationLane {
       await durable.recover();
       this.evidenceLoaded = false;                                     // the slice and the dropped-evidence index are measured again by the next load
       this.dropped.clear();
+      this.tupleLatest.clear();
       this.droppedIndexCache = null;
       if (durable.state().phase !== 'ready' || durable.failure() !== null || pass.signal.aborted) return;
     }
@@ -8643,7 +8726,7 @@ class DelegationLane {
     if (pass.signal.aborted) return;
 
     // A census this lane has not reconciled yet; an older or equal one is left alone.
-    if (pass.census.measuredAt > this.reconciledAt && this.evidenceLoaded) await this.reconcile(pass, durable);
+    if (pass.census.measuredAt > this.reconciledAt && (this.evidenceLoaded || this.seams.reconcileBeforeLoad === true)) await this.reconcile(pass, durable);
   }
 
   /**
@@ -8868,6 +8951,8 @@ class DelegationLane {
    */
   private noteEvidence(journalId: string, event: DelegationEventEnvelopeV1): void {
     if (this.evidence.has(journalId)) return;
+    // The time of this event, for the stamp of any key dropped under it; an instant nobody can read is never old enough to forget.
+    const observed = laneInstantMs(event.observedAt) ?? Number.POSITIVE_INFINITY;
     let key: string | null = null;
     const tupleKey = (): string | null => (typeof event.cwd === 'string' ? JSON.stringify([event.sessionId, event.parentIncarnation, event.agentId ?? '', event.cwd]) : null);
     if (event.eventKind === 'SubagentStart' || event.eventKind === 'SubagentStop') key = null;
@@ -8875,11 +8960,15 @@ class DelegationLane {
     else if ((event.eventKind === 'PreToolUse' || event.eventKind === 'PostToolUse') && event.toolName === 'Bash' && 'listing' in event && event.listing !== undefined) key = null;
     else {
       const t = tupleKey();
-      if (t === null || this.evidenceKeys.has(t)) return;
+      if (t === null) return;
+      if (this.evidenceKeys.has(t)) {                                  // a hidden tuple-mate: it adds nothing correlation reads, but its time counts
+        this.tupleLatest.set(t, Math.max(this.tupleLatest.get(t) ?? 0, observed));
+        return;
+      }
       key = t;
     }
     this.evidence.set(journalId, { event, key });
-    if (key !== null) this.evidenceKeys.set(key, journalId);
+    if (key !== null) { this.evidenceKeys.set(key, journalId); this.tupleLatest.set(key, observed); }
     const cap = this.seams.evidenceCap ?? DELEGATION_EVIDENCE_CAP;
     while (this.evidence.size > cap) {
       const [oldest] = this.evidence.keys();
@@ -8887,10 +8976,11 @@ class DelegationLane {
       const gone = this.evidence.get(oldest);
       this.evidence.delete(oldest);
       if (gone === undefined) continue;
-      if (gone.key !== null) this.evidenceKeys.delete(gone.key);
+      const goneAt = Math.max(laneInstantMs(gone.event.observedAt) ?? Number.POSITIVE_INFINITY, gone.key === null ? 0 : this.tupleLatest.get(gone.key) ?? 0);
+      if (gone.key !== null) { this.evidenceKeys.delete(gone.key); this.tupleLatest.delete(gone.key); }
       // R65: remember what was lost. A tuple's held event stands for the later events of its tuple that the one-event-per-tuple rule
-      // hid, and their keys are the tuple's own, so this records them too.
-      this.noteDropped(gone.event);
+      // hid, and their keys are the tuple's own, so this records them too (stamped with the latest of them, the hidden ones included).
+      this.noteDropped(gone.event, goneAt);
       // The horizon only rises. An `observedAt` that cannot be read (accepted events always carry a canonical one) is treated as now.
       this.evidenceHorizonMs = Math.max(this.evidenceHorizonMs ?? 0, laneInstantMs(gone.event.observedAt) ?? Date.now());
     }
@@ -8906,21 +8996,29 @@ class DelegationLane {
         // horizon is recomputed from this load's own evictions. A slice that is not whole is never handed to correlation (D-4008).
         this.evidence.clear();
         this.evidenceKeys.clear();
+        this.tupleLatest.clear();
         this.evidenceHorizonMs = null;
         this.dropped.clear();
         this.droppedIndexCache = null;
         this.droppedAdded = 0;
         this.droppedPeak = 0;
+        // R69: a restart lost the remembered paths. Seed them from what the checkpoint durably holds (a lease and an attempt both carry
+        // their tree's canonical path), then add what this pass's census lists, and let a measured census of a tree's own project retire it.
+        const checkpoint = durable.state().checkpoint;
+        for (const r of [...checkpoint.leases, ...checkpoint.attempts]) {
+          if (r.canonicalPath !== null && !this.knownPaths.has(laneTreeKey(r.project, r.adminRecord))) this.knownPaths.set(laneTreeKey(r.project, r.adminRecord), r.canonicalPath);
+        }
+        this.noteCensus(pass.census);
+        this.forgetGoneTrees(pass.census);
         // A long journal drops far more keys than any census can still ask about, so while it streams the keys are pruned every
         // `DELEGATION_DROPPED_PRUNE_EVERY` new ones, against the census this pass holds and the checkpoint's activities (the visit folds
-        // nothing, so they are already whole). With a census that has a project unmeasured nothing is pruned until a reconcile can.
-        const census = laneFlatCensus(pass.census);
+        // nothing, so they are already whole). The plan forgets nothing for a project this lane has not measured since it started.
         const every = this.seams.droppedPruneEvery ?? DELEGATION_DROPPED_PRUNE_EVERY;
-        const activities = durable.state().checkpoint.activities;
+        const activities = checkpoint.activities;
         await durable.visitRetainedRecords((r) => {
           if (r.entry.kind !== 'evidence-accepted') return;
           this.noteEvidence(r.journalId, r.entry.event);
-          if (census.allMeasured && this.droppedAdded >= every) this.pruneDropped(census.flat, activities);
+          if (this.droppedAdded >= every) this.pruneDropped(pass.census, activities);
         });
         this.evidenceLoaded = true;
       } catch (err) {
@@ -8928,6 +9026,7 @@ class DelegationLane {
         this.evidence.clear();
         this.evidenceKeys.clear();
         this.dropped.clear();                                          // a partial index is not a measured one
+        this.tupleLatest.clear();
         this.droppedIndexCache = null;
       } finally {
         this.evidenceLoading = null;
@@ -8944,7 +9043,9 @@ class DelegationLane {
     const now = formatDelegationInstant(pass.now);
 
     // The census, flat (hand-off 12): a project whose view was null contributes nothing and is not in `censused`.
-    const { censused, flat, held, allMeasured } = laneFlatCensus(pass.census);
+    this.noteCensus(pass.census);
+    this.forgetGoneTrees(pass.census);
+    const { censused, flat, held, allMeasured } = laneFlatCensus(pass.census, this.standingProjects(pass.census));
     this.reconciliations += 1;
     const nextFirstSeen = new Map(flat.map((r) => [laneTreeKey(r.project, r.adminRecord), this.firstSeen.get(laneTreeKey(r.project, r.adminRecord)) ?? this.reconciliations] as const));
     const recordsById = new Map(pass.records.map((r) => [r.id, r] as const));
@@ -8996,7 +9097,7 @@ class DelegationLane {
     const evidenceHorizon = this.evidenceHorizon();
     // R65: forget the dropped-evidence keys no present tree and no activity row can still ask about, but only against a census in which
     // every project was measured (a project with no view contributes no paths, and would read as "nothing needs this").
-    if (allMeasured && this.droppedAdded >= (this.seams.droppedPruneEvery ?? DELEGATION_DROPPED_PRUNE_EVERY)) this.pruneDropped(flat, state.checkpoint.activities);
+    if (this.droppedAdded >= (this.seams.droppedPruneEvery ?? DELEGATION_DROPPED_PRUNE_EVERY)) this.pruneDropped(pass.census, state.checkpoint.activities);
     const droppedEvidence = this.droppedIndex();
 
     const evidence = [...this.evidence].map(([journalId, v]) => ({ journalId, event: v.event }));
