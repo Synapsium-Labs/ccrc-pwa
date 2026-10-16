@@ -1762,6 +1762,13 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
     - **2026-10-16 14:58 UTC:** v0.0.212 released at 14:14:21 (#447, a UI change); under `auto=stable` no box moved,
       as designed. STATUS: fleet and server v0.0.209, newest v0.0.212, intent dev/auto=stable, backups fleet
       184M/server 754M, disk free fleet 216G/work volume 140G/server 32G, no anomalies at 14:58.
+    - **2026-10-16 15:58 UTC:** the probe's auto rule fired on v0.0.212 under `auto=stable`, a false anomaly. The
+      rule now reads the intent (see the 18:00 entry). Nothing else changed through 19:58.
+    - **2026-10-16 20:58 UTC:** a tap moved both boxes from v0.0.209 to v0.0.212, read from the feed as "requested
+      update" (fleet 20:51:55 to 20:53:36, doctor 34/6/0; server 20:54:33 to 20:54:59, restarted at 20:54:46, doctor
+      26/0/0). The fleet run warned "is FAILED — try-restart skipped it" for three supervisors that had failed before
+      the run: the warning wave 16's item 3 rewords. STATUS: fleet and server v0.0.212, newest v0.0.212, intent
+      dev/auto=stable, backups fleet 184M/server 759M, disk free fleet 216G/work volume 139G/server 32G, no anomalies.
 
 - **2026-09-30 12:22 UTC — wave 8 opened (run 182) for the live audit's residue, and dispatched.**
   - **Planning:** two Opus scoping agents measured each defect at `a742eb6a`, and an Opus writer assembled the
