@@ -6263,6 +6263,81 @@ Known real-format subtleties already encoded:
 Anything the parser can't handle degrades to `parsed:false` / the terminal
 drawer rather than crashing.
 
+## Delegation observation (the broker's wave 3: report-only)
+
+The delegation broker is built in waves. Wave 3 only **observes**: it measures how much of the fleet's `Agent`, `Workflow` and raw
+`git worktree` use it can see, and reports it. It leaves delegation as free as before, forces no isolation, starts no run, and writes no
+carrier, adoption, retention, promotion or cleanup. This section records what the shipped build measures and where an operator reads it.
+
+**The path of one fact.** `ccd` creates `~/.cc-sessions/delegation/spool/<id>/` when it spawns a session and lists `delegation-events-v1`
+in `ccd caps`. `session-hook.sh` appends one line per delegation-relevant hook event to that directory's hourly bucket
+`<YYYYMMDDHH>.spool` (a strict UTF-8 JSON line plus LF, under 4096 bytes; a `listing` of git admin-record names rides a Bash call that
+names a worktree, and is the first field dropped to fit). The hook never makes the directory, never prunes outside its own, and keeps
+its own buckets for about 24 hours. The directory of a session that is removed, or never runs again, is not pruned by anything in
+this wave. On the server the watcher's delegation lane, once per census cadence and never awaited by the poll, lists each live session's
+directory, reads the buckets as bounded byte ranges (the existing `readFrom` request with an optional `maxBytes` of at most 262144; an
+agent that answers without `dataB64` is unmeasured, never rebuilt from text) and applies them durably in this order: the journal
+`~/.ccrc/delegation-events.log` is appended and fsynced, then `~/.ccrc/delegation-checkpoint.json` is replaced atomically, then
+`coord.db` is repaired from the pair. The journal and the checkpoint are the authority; the six `delegation_*` tables in `coord.db` are
+repairable output, and a lost `coord.db` is rebuilt from the pair with the same activity, lease and lineage IDs. The lane correlates
+the worktree census against that evidence and reports: a session's own raw `git worktree add` can become a journaled lease **identity**
+(`lease-created`), a ccd workspace or a run's child never does, and nothing in this wave transitions a lease, writes a carrier or
+starts a cleanup clock. An old fleet (no `delegation-events-v1`), an old peer (no `dataB64`), a session whose directory does not exist
+yet or whose registry incarnation cannot be read, an unreadable bucket and a malformed line each make that session-hour `unmeasured`,
+and an unmeasured hour is final: it is never read later as empty.
+
+**Where it is read.**
+- **`/api/fleet/health`'s `delegation` member** (absent until the lane has tried to open its applier, and an absent member means unknown,
+  never healthy and never zero). `mode` is always `report-only`. `windowStartedAt` and `windowEndedAt` bound the rolling window of 168
+  complete UTC hours that ends at the start of the current hour; `measuredSessionHours` and `unmeasuredSessionHours` count its
+  session-hours (a session-hour is unmeasured if any interval for it is); `unmeasuredRate` is a number only when `stageGate` has an
+  answer and is `null` otherwise; `stageGate` is `eligible`, `ineligible` or `unmeasured`. `circuitBreaker` is `clear`, `suspended`
+  (the registry could not be listed, or two or more parents were first measured dead within ten minutes, so the pass makes no
+  ownership claim) or `unmeasured`, and `unresolved`, `conflicting` and `unmeasured` are the last reconciliation's
+  verdict counts, which read 0 and must be taken as unknown while the breaker is `unmeasured`. `lastJournalSequence`,
+  `lastCheckpointRevision` and `lastIngestedAt` are the checkpoint's own anchors, and `lastTailHeal` (`at`, `bytes`, `quarantinePath`)
+  appears only after this server process has healed a torn journal tail. Nothing in the PWA reads any of it.
+- **A `ccrc-server:` warning line, once per UTC hour** while a project's dropped-evidence keys are held back or lost, the global flag is
+  up, or a mark held a verdict back: it names the held-back and lost projects (names and counts, never a path), the number of marks
+  held, and, per kind of mark (path, id, project, lossy), how many trees were held at `unmeasured` since the last line. Marks live in the
+  lane's memory only and last until the server restarts, because this wave never compacts the journal.
+- **`ccrc doctor`'s `delegation-hooks` check** (skipped on a box recording `CCRC_ROLE=server`). Per rostered home it reads
+  `settings.json` and requires the shipped session hook under every event `install-session-hooks.sh` writes; it FAILs a missing or
+  unreadable registration, a home or roster it cannot read, a spool root that is a symlink or unsearchable, and a directory that exists
+  but is unreadable; it WARNs for a running session whose own directory does not exist yet (the session is not observed until its next
+  spawn: nothing is lost by waiting, and `ccd stop` then `ccd start` observes it now at the cost of an in-flight turn) and for a
+  `WorktreeCreate` or `WorktreeRemove` hook that is not ccrc's (ccrc never registers either). The check writes nothing. `ccrc doctor --fix`
+  runs only the shipped `install-session-hooks.sh`, refuses a home whose `settings.json` has an entry mixing ccrc's hook with another
+  command (the installer's sweep would drop it), leaves every foreign registration byte for byte, and makes no spool directory.
+- **`ccrc coordination-snapshot`** (above, under "The maintenance verbs") is how the journal and checkpoint are backed up, validated
+  and restored as one set with `coord.db`.
+- **The torn-tail heal.** A crash in the middle of an append leaves at most one partial line after the journal's last newline. At
+  start the server, and only the server, keeps those bytes under `~/.ccrc/delegation-events.torn/<offset>-<sha256>.tail`, cuts the
+  journal back to the end of its last complete validated record, and says so in its log and in `lastTailHeal`; the next pass reads the
+  same spool line again. Any other damage (a record that does not validate, a broken chain, a checkpoint that names the torn record
+  or a record the journal lacks) is not healed: recovery fails, the lane applies and reads nothing, pruning stays off, the health is
+  `unmeasured`, and the lane tries again every five minutes.
+- **`ccrc-api coordinators intent set|clear --session <this session's id>`** lets a session say that it is about to delegate, or that it
+  has stopped. It is an identity declaration, not adoption: with the box token and the registry's proof that the caller holds the
+  session, it writes only that session's `explicitIntentAt` (and the map derived from it) in the checkpoint, changes no lease and
+  creates no run, hold or capacity slot, and `Agent` and `Workflow` use needs no declaration.
+
+**The gate.** The gate is eligible only after a complete seven-day window with `unmeasuredSessionHours / totalSessionHours < 0.01`;
+0.99% passes, 1.00% does not. Zero denominator or any incomplete/unavailable basis is unmeasured. The build computes it in integers
+(`unmeasuredSessionHours * 100 < total`), from the checkpoint alone, so a lost `coord.db` does not change it, and an hour in the
+window with no interval at all (a lane that did not run) makes the window incomplete rather than quiet. An unreadable registry, a
+fleet that lacks the capability or never answered, and a recovery that is not ready each make the gate `unmeasured`.
+
+**Rolling it out.** Fleet first, then the server, then doctor on every rostered home. Old servers ignore the spools, and a hook retains
+only its own 24-hour buckets and creates no authority and no cleanup. Run `ccrc doctor` on every rostered home: hook registration and
+the spool directory are measured separately from the capability, and a missing registration is unavailable, not healthy. After the
+server rolls, take a fresh coordination snapshot and restore it into a fixture before starting the clock: the seven-day window starts
+only when the capability, doctor registration, server recovery and health reporting are all measured. During it, read the malformed
+lines, vanished buckets, the unresolved, conflicting and unmeasured counts, the breaker, the snapshot validation and the retention
+daily. Eligibility activates nothing: Project, Adopt, Clean-shadow and Clean-live (waves 4 to 7) are each separately planned,
+approved, opened, reviewed and gated. `server/test/delegation-wave3.integration.test.ts` holds the closed scope census, which turns
+red if a door of those waves opens in this tree.
+
 ## Contributing
 
 There is no root runner — `cd` into the package you are changing; "Develop" above has the
