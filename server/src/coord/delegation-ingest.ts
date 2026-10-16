@@ -458,6 +458,17 @@ export const DELEGATION_BUCKET_UNREADABLE_REASONS = [
 ] as const;
 export type DelegationBucketUnreadableReason = (typeof DELEGATION_BUCKET_UNREADABLE_REASONS)[number];
 
+/** The two unmeasured-hour words that are CARVE-OUTS and not losses (R84, R90), defined once here, beside the vocabulary they come from,
+ *  and imported by the lane and by the checkpoint's interval merge. `directory-absent` names an owner whose spool directory does not
+ *  exist (it vetoes only for an owner that had a spool); `capability-absent` names a fleet that offers no delegation events (it never
+ *  vetoes). Every other unmeasured word is a LOSS word. */
+export const DELEGATION_HOUR_NO_SPOOL = 'directory-absent' satisfies DelegationBucketUnreadableReason;
+export const DELEGATION_HOUR_NO_CAPABILITY = 'capability-absent' satisfies DelegationBucketUnreadableReason;
+/** Whether an unmeasured hour's detail begins with a carve-out word (a null detail is not one). */
+export function isDelegationHourCarveOut(detail: string | null): boolean {
+  return detail !== null && (detail.startsWith(DELEGATION_HOUR_NO_SPOOL) || detail.startsWith(DELEGATION_HOUR_NO_CAPABILITY));
+}
+
 /** The result for a bucket whose read could not be made: unmeasured, nothing accepted, the durable row kept (the replaced flag too). */
 export function unreadableDelegationBucketResult(
   id: { sessionId: string; parentIncarnation: string; bucket: string },

@@ -32,6 +32,7 @@ import {
   DELEGATION_CHECKPOINT_FILE,
   DelegationDurability,
   decodeDelegationCheckpoint,
+  mergeDelegationObservationInterval,
 } from '../src/coord/delegation-checkpoint.js';
 import { DELEGATION_JOURNAL_FILE, DELEGATION_TORN_DIR, nodeDelegationFilePort, type DelegationFilePort } from '../src/coord/delegation-journal.js';
 import {
@@ -3752,5 +3753,79 @@ describe('R89 (W1 b, coordinator 5512): an owner a pass listed is read once befo
     await censusPass(w, at(2), { demo: [] }, [sessionOf('demo-0')]);    // demo-x is gone
     expect(intervalFor(w.home, 'demo-x', HOUR10, DELEGATION_UNMEASURED_INCARNATION))
       .toMatchObject({ state: 'unmeasured', detail: 'incarnation-unmeasured: the parent\'s registry incarnation is changing' });
+  });
+});
+
+describe('R90 (W3, coordinator 5512): within one hour a loss word displaces a carve-out word, and a carve-out word never displaces a loss word', () => {
+  const pair = [sessionOf('demo-a'), sessionOf('demo-x')];
+  const T1 = '2026-10-15T10:31:00.000Z';
+  const T2 = '2026-10-15T10:32:00.000Z';
+  const hour = (detail: string, recordedAt: string) => ({ sessionId: 'demo-x', parentIncarnation: INC, utcHour: HOUR10, state: 'unmeasured' as const, detail, recordedAt });
+
+  it('R90 pure merge: carve-out then loss is the loss; loss then a LATER carve-out is still the loss; for both carve-out words and either loss word', () => {
+    for (const carve of ['directory-absent: the owner spool directory does not exist', 'capability-absent: the fleet does not offer delegation events']) {
+      for (const loss of ['range-unreadable: the byte range of the bucket could not be read', 'directory-unreadable: the owner spool directory could not be listed']) {
+        expect(mergeDelegationObservationInterval(hour(carve, T1), hour(loss, T2)), `${carve} then ${loss}`).toEqual(hour(loss, T2));
+        expect(mergeDelegationObservationInterval(hour(loss, T1), hour(carve, T2)), `${loss} then a later ${carve}`).toEqual(hour(loss, T1));
+        expect(mergeDelegationObservationInterval(hour(carve, T2), hour(loss, T1)), `a later ${carve} stored, then ${loss}`).toEqual(hour(loss, T1));
+      }
+    }
+    // unchanged: two loss words, or two carve-out words, keep the later; a measured row never displaces an unmeasured one
+    expect(mergeDelegationObservationInterval(hour('range-unreadable: a', T1), hour('directory-unreadable: b', T2))).toEqual(hour('directory-unreadable: b', T2));
+    expect(mergeDelegationObservationInterval(hour('directory-absent: a', T1), hour('capability-absent: b', T2))).toEqual(hour('capability-absent: b', T2));
+    expect(mergeDelegationObservationInterval(hour('directory-absent: a', T2), { ...hour('x', T1), state: 'measured', detail: null })).toEqual(hour('directory-absent: a', T2));
+  });
+
+  it('R90 in the lane: an hour of an owner with no cursor first recorded directory-absent, then directory-unreadable in the same hour, is the loss, and vetoes the link (the no-op skip re-stages it)', async () => {
+    const w = world();
+    makeOwner(w, 'demo-a');
+    await censusPass(w, at(0), BEFORE_TREE);                             // ready
+    creatorAfter(w, at(0));
+    await censusPass(w, at(1), WITH_TREE, pair);                         // demo-x has no spool directory: the carve-out word
+    expect(intervalFor(w.home, 'demo-x')!.detail).toMatch(/^directory-absent/);
+    makeOwner(w, 'demo-x');                                              // then one it cannot list, in the same hour: a loss word
+    w.faults.listing.set('demo-x', 'unreadable');
+    for (let i = 2; i < 6; i++) await censusPass(w, at(i), WITH_TREE, pair);
+    expect(leasesOf(w.home), 'the hour vetoes').toEqual([]);
+    expect(intervalFor(w.home, 'demo-x')!.detail, 'the loss word displaced the carve-out word').toMatch(/^directory-unreadable/);
+    expect(w.watcher.delegationReport().lostEvidence.forced).toBe(1);
+  });
+
+  it('R90 in the lane: an hour first recorded range-unreadable, then capability-absent in the same hour (its cursor row moves, so that result is applied), stays the loss and vetoes the link', async () => {
+    const w = world();
+    makeOwner(w, 'demo-a');
+    writeBucket(w, 'demo-x', BUCKET10, startLine('demo-x', '2026-10-15T10:01:00.000Z'));
+    await censusPass(w, at(0), BEFORE_TREE, pair);                       // ready; demo-x's bucket is read: it has a cursor row
+    creatorAfter(w, at(0));
+    appendBucket(w, 'demo-x', BUCKET10, bashPre('demo-x', 'toolu_o1', ['old-tree'], iso(at(0) + 21_000)), bashPost('demo-x', 'toolu_o1', ['old-tree'], iso(at(0) + 22_000)));
+    w.faults.range.add('demo-x');
+    await censusPass(w, at(1), WITH_TREE, pair);                         // its range cannot be read: a loss word
+    expect(intervalFor(w.home, 'demo-x')!.detail).toMatch(/^range-unreadable/);
+    w.fleet.ccdVerbs = ['caps'];                                         // the fleet stops offering the capability: a carve-out word, later
+    for (let i = 2; i < 6; i++) await censusPass(w, at(i), WITH_TREE, pair);
+    expect(leasesOf(w.home), 'the hour vetoes').toEqual([]);
+    expect(disk(w.home).checkpoint!.bucketCursors.find((c) => c.sessionId === 'demo-x')!.detail, 'the carve-out result was applied').toMatch(/^capability-absent/);
+    expect(intervalFor(w.home, 'demo-x')!.detail, 'a carve-out word never displaces a loss word').toMatch(/^range-unreadable/);
+  });
+
+  it('R90 in the lane: a listed hour that leaves the read horizon unread (R89) is a loss over the carve-out word recorded earlier in that hour, and vetoes (a noted gap re-stages it too)', async () => {
+    const w = world();
+    makeOwner(w, 'demo-a');
+    await censusPass(w, at(0), BEFORE_TREE);                             // ready
+    creatorAfter(w, at(0));
+    await censusPass(w, at(1), WITH_TREE, pair);                         // demo-x has no spool directory: the carve-out word
+    expect(intervalFor(w.home, 'demo-x')!.detail).toMatch(/^directory-absent/);
+    writeBucket(w, 'demo-x', BUCKET10, bashPre('demo-x', 'toolu_o1', ['old-tree'], iso(at(0) + 21_000)), bashPost('demo-x', 'toolu_o1', ['old-tree'], iso(at(0) + 22_000)));
+    const dropped = Promise.reject(new Error('agent socket dropped'));
+    dropped.catch(() => undefined);
+    w.faults.holdRange.set('demo-x', dropped);                           // now listed, and never read: no observation of it completes
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    await censusPass(w, at(2), WITH_TREE, pair);
+    for (let i = 3; i < 6; i++) await censusPass(w, at(i), WITH_TREE);   // demo-x is gone
+    await censusPass(w, at(33), WITH_TREE);                              // demo-a's hour closes
+    const later = Date.parse(HOUR10) + (DELEGATION_SPOOL_LOOKBACK_HOURS + 1) * DELEGATION_HOUR_MS + 5 * 60_000;
+    for (let i = 0; i < 3; i++) await censusPass(w, later + i * STEP, WITH_TREE);
+    expect(leasesOf(w.home), 'the hour vetoes').toEqual([]);
+    expect(intervalFor(w.home, 'demo-x')!.detail, 'the loss word displaced the carve-out word').toMatch(/^hour-never-closed: listed in this hour/);
   });
 });

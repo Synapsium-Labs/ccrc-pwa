@@ -102,6 +102,8 @@ import {
   type DelegationPruningPlan,
   type DelegationTailHealPlan,
 } from './delegation-journal.js';
+// R90: the carve-out words, defined once beside the unreadable vocabulary (`delegation-ingest.ts` imports this module for a type only).
+import { isDelegationHourCarveOut } from './delegation-ingest.js';
 
 /** The checkpoint's file name under the coordination directory (`~/.ccrc`). */
 export const DELEGATION_CHECKPOINT_FILE = 'delegation-checkpoint.json';
@@ -571,13 +573,22 @@ const sortedMap = (m: Readonly<Record<string, string>>): Record<string, string> 
 
 /**
  * Merges one hour's observation interval. An hour with a gap stays a gap: `unmeasured` is sticky, so a later measured read
- * of the same hour cannot erase a measured loss. Otherwise the later `recordedAt` wins, and an equal one keeps the stored row.
- * Deterministic and order-independent for the sticky rule; Task 13 owns retention.
+ * of the same hour cannot erase a measured loss. R90: between two UNMEASURED rows, a LOSS word displaces a CARVE-OUT word
+ * (`directory-absent`, `capability-absent`, `isDelegationHourCarveOut`) and a carve-out word never displaces a loss word, whichever
+ * `recordedAt` is later: a carve-out lets rung 4 link across the hour, so a later carve-out must never mask an earlier loss in it.
+ * Otherwise the later `recordedAt` wins, and an equal one keeps the stored row. Deterministic and order-independent for the sticky
+ * rule and for R90's; Task 13 owns retention.
  */
 export function mergeDelegationObservationInterval(prior: DelegationObservationInterval | undefined, next: DelegationObservationInterval): DelegationObservationInterval {
   if (prior === undefined) return next;
   if (prior.state === 'unmeasured' && next.state === 'measured') return prior;
   if (prior.state === 'measured' && next.state === 'unmeasured') return next;
+  if (prior.state === 'unmeasured' && next.state === 'unmeasured') {
+    const priorCarve = isDelegationHourCarveOut(prior.detail);
+    const nextCarve = isDelegationHourCarveOut(next.detail);
+    if (priorCarve && !nextCarve) return next;
+    if (!priorCarve && nextCarve) return prior;
+  }
   return next.recordedAt > prior.recordedAt ? next : prior;
 }
 

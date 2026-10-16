@@ -60,7 +60,8 @@ import type { MeasuredDirectoryRead } from './io.js';
 import { DelegationDurability, type DelegationDurableBatch } from './coord/delegation-checkpoint.js';
 import {
   DelegationIngestError, delegationBucketDurabilityOf, delegationBucketUtcHour, ingestAndApplyDelegationBucket, readDelegationBucket,
-  unreadableDelegationBucketResult, type DelegationBucketDurability, type DelegationBucketResult, type DelegationBucketUnreadableReason,
+  unreadableDelegationBucketResult, type DelegationBucketDurability, type DelegationBucketResult,
+  DELEGATION_HOUR_NO_CAPABILITY, DELEGATION_HOUR_NO_SPOOL, isDelegationHourCarveOut,
 } from './coord/delegation-ingest.js';
 import { correlateDelegation, type DelegationCorrelationInput, type DelegationListingWindow } from './coord/delegation-correlation.js';
 import { DELEGATION_EVIDENCE_MARGIN_MS, delegationLostEvidenceForced, delegationMarkAttributionOf } from './coord/delegation-correlation.js';
@@ -8504,7 +8505,9 @@ function renderAskBrief(askId: number, childId: string, question: string, option
 //   THE INTERVALS. Each observed (session, incarnation, UTC hour) has one checkpoint-owned `measured` or `unmeasured` row; unmeasured
 //   is sticky. A session whose spool directory does not exist (a pane older than the spool code, D-4651), a capability the fleet does
 //   not offer, an unreadable directory or range, malformed evidence and a parent whose incarnation is unmeasured are each an
-//   UNMEASURED hour, never a measured-empty one. Only a listing that SUCCEEDED and does not name the bucket is an empty hour.
+//   UNMEASURED hour, never a measured-empty one. Only a listing that SUCCEEDED and does not name the bucket is an empty hour. Between
+//   two unmeasured words in one hour a LOSS word displaces a CARVE-OUT word (`directory-absent`, `capability-absent`), and a carve-out
+//   word never displaces a loss word (R90): the checkpoint's merge holds that, and the no-op skip re-stages a loss over a carve-out.
 //
 //   THE LANE NEVER LINKS ACROSS A STRETCH IT KNOWS IT DID NOT READ (W1, coordinator 5512; R88, R89). Lane memory only, both:
 //     - THE LATEST READY INSTANT (R88, `readyAt`). Set by the first pass of a process that reaches the owners, and again by the first
@@ -8640,6 +8643,9 @@ interface LanePendingOwner { id: string; incarnation: string | null; reason: str
 const laneOwnerKey = (id: string, incarnation: string | null): string => JSON.stringify([id, incarnation]);
 /** The detail of an hour whose parent's incarnation could not be measured. */
 const laneIncarnationGap = (reason: string): string => `incarnation-unmeasured: the parent's registry incarnation is ${reason}`;
+/** R90: whether an UNMEASURED result with `next` as its detail changes a stored UNMEASURED row with `prior`: only a loss word arriving over
+ *  a carve-out word does (the checkpoint's merge keeps the loss either way). */
+const laneLossOverCarveOut = (prior: string | null, next: string | null): boolean => isDelegationHourCarveOut(prior) && !isDelegationHourCarveOut(next);
 /** One staged bucket result (D-4658, R82). */
 interface LaneStaged { batch: DelegationDurableBatch; key: string; label: string }
 interface LanePass {
@@ -8760,9 +8766,8 @@ export function delegationListingWindowsOf(
   return out;
 }
 
-/** The two unmeasured-hour words that do NOT veto a link (R84, the carve-out), typed against the reader's own vocabulary. */
-const LANE_HOUR_NO_SPOOL: DelegationBucketUnreadableReason = 'directory-absent';
-const LANE_HOUR_NO_CAPABILITY: DelegationBucketUnreadableReason = 'capability-absent';
+// The two unmeasured-hour words that do NOT veto a link (R84, the carve-out) are `DELEGATION_HOUR_NO_SPOOL` and
+// `DELEGATION_HOUR_NO_CAPABILITY`, defined once beside the reader's own vocabulary (`delegation-ingest.ts`, R90) and imported.
 /** The detail head ingestion gives a bucket whose last bytes are a line that may still complete (`delegation-ingest.ts`, step 9). */
 const LANE_TORN_TAIL = 'torn-tail:';
 
@@ -8828,7 +8833,7 @@ export function delegationLostWindowsOf(
   for (const r of intervals) {
     const detail = r.detail ?? '';
     const lost = r.state === 'unmeasured'
-      ? !detail.startsWith(LANE_HOUR_NO_CAPABILITY) && (!detail.startsWith(LANE_HOUR_NO_SPOOL) || hadSpool.has(r.sessionId))
+      ? !detail.startsWith(DELEGATION_HOUR_NO_CAPABILITY) && (!detail.startsWith(DELEGATION_HOUR_NO_SPOOL) || hadSpool.has(r.sessionId))
       : detail.startsWith(LANE_TORN_TAIL);
     if (lost) add(r.sessionId, r.parentIncarnation, laneInstantMs(r.utcHour));
   }
@@ -9632,7 +9637,8 @@ class DelegationLane {
   private async noteGap(pass: LanePass, durable: DelegationDurability, id: string, inc: string, hourMs: number, detail: string): Promise<void> {
     const hour = formatDelegationInstant(hourMs);
     const prior = durable.state().checkpoint.observationIntervals.find((r) => r.sessionId === id && r.parentIncarnation === inc && r.utcHour === hour);
-    if (prior !== undefined && prior.state === 'unmeasured') { this.skipped += 1; return; }
+    // R90: an unmeasured hour is written once, unless this is a loss word over a carve-out word
+    if (prior !== undefined && prior.state === 'unmeasured' && !laneLossOverCarveOut(prior.detail, detail)) { this.skipped += 1; return; }
     if (pass.signal.aborted) return;
     await this.stage(pass, durable, {
       accepted: [], cursor: null,
@@ -9685,7 +9691,9 @@ class DelegationLane {
         const cursorSame = row === undefined ? laneFreshCursor(result.cursor) : canonicalDelegationJson(row) === canonicalDelegationJson(result.cursor);
         const recorded = prior === undefined ? null : laneInstantMs(prior.recordedAt);
         const needsClose = pass.now >= laneCloseAt(hourMs) && prior !== undefined && prior.state === 'measured' && (recorded === null || recorded < laneCloseAt(hourMs));
-        const intervalMoves = prior === undefined || (prior.state === 'measured' && result.interval === 'unmeasured');
+        // R90: a loss word arriving over a carve-out word in the same hour moves the interval too (the merge keeps the loss)
+        const intervalMoves = prior === undefined || (prior.state === 'measured' && result.interval === 'unmeasured')
+          || (prior.state === 'unmeasured' && result.interval === 'unmeasured' && laneLossOverCarveOut(prior.detail, result.detail));
         if (result.accepted.length === 0 && cursorSame && !needsClose && !intervalMoves) {
           this.skipped += 1;
           return state;
