@@ -1127,35 +1127,48 @@ describe('notify ingestion', () => {
 // answered 404 unknown-session (a LIE: the row is right there, just
 // unmeasured) rather than 503.
 describe('POST /api/sessions/:id/stop', () => {
+  // A well-formed legacy row, shared by the three `/stop` cases below: `seedSession` writes `project: id`, which the
+  // stop pair clause refuses 503 on its own, so it would neither isolate the identity arm nor stop normally.
+  const seedWellFormed = (home: string, id: string) => {
+    const reg = path.join(home, '.cc-sessions');
+    mkdirSync(reg, { recursive: true });
+    const fields = { wrapper: 'demo-a', project: 'demo', workdir: '/w/demo', uuid: '1'.repeat(36), started: '1' };
+    for (const [k, v] of Object.entries(fields)) writeFileSync(path.join(reg, `${id}.${k}`), v);
+  };
+
   it('refuses 503 registry-unmeasurable, NOT 404 unknown-session, when the row is listed but its ' +
      'identity could not be measured', async () => {
     const home = mkTmp('ccrc-');
     seedRoster(home);
-    seedSession(home, ID, 'claude-a');
-    const run: Runner = async () => ({ code: 0, stdout: '', stderr: '' });
+    seedWellFormed(home, 'demo-a-demo');
+    const calls: string[][] = [];
+    const run: Runner = async (_c, args) => { calls.push(args); return { code: 0, stdout: '', stderr: '' }; };
     const cfg = loadConfig({ CCRC_HOME: home });
     const app = await buildServer(
-      { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: unreadableField(ID, 'wrapper'), queue: new KeyedQueue() },
+      { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: unreadableField('demo-a-demo', 'wrapper'),
+        queue: new KeyedQueue() },
       new Bus(),
     );
-    const res = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/stop` });
+    const res = await app.inject({ method: 'POST', url: '/api/sessions/demo-a-demo/stop' });
     expect(res.statusCode).toBe(503);
     expect(res.json()).toMatchObject({ ok: false, error: 'registry-unmeasurable' });
+    expect(calls.filter((c) => c[0] === 'stop')).toEqual([]);
     await app.close();
   });
 
   it('the archive door refuses 503 registry-unmeasurable too, and runs no ccd verb (workspace lifecycle §5.2)', async () => {
     const home = mkTmp('ccrc-');
     seedRoster(home);
-    seedSession(home, ID, 'claude-a');
+    seedWellFormed(home, 'demo-a-demo');
     const calls: string[][] = [];
     const run: Runner = async (_c, args) => { calls.push(args); return { code: 0, stdout: '', stderr: '' }; };
     const cfg = loadConfig({ CCRC_HOME: home });
     const app = await buildServer(
-      { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: unreadableField(ID, 'wrapper'), queue: new KeyedQueue() },
+      { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: unreadableField('demo-a-demo', 'wrapper'),
+        queue: new KeyedQueue() },
       new Bus(),
     );
-    const res = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/archive` });
+    const res = await app.inject({ method: 'POST', url: '/api/sessions/demo-a-demo/archive' });
     expect(res.statusCode).toBe(503);
     expect(res.json()).toMatchObject({ ok: false, error: 'registry-unmeasurable' });
     expect(calls.filter((c) => c[0] === 'ws-archive' || c[0] === 'stop')).toEqual([]);
@@ -1213,14 +1226,18 @@ describe('POST /api/sessions/:id/stop', () => {
   it('stops normally (200) when the row is fully measured', async () => {
     const home = mkTmp('ccrc-');
     seedRoster(home);
-    seedSession(home, ID, 'claude-a');
-    const run: Runner = async () => ({ code: 0, stdout: '', stderr: '' });
+    const id = 'demo-a-demo';
+    seedWellFormed(home, id);
+    const calls: string[][] = [];
+    const run: Runner = async (_c, args) => { calls.push([...args]); return { code: 0, stdout: '', stderr: '' }; };
     const cfg = loadConfig({ CCRC_HOME: home });
     const app = await buildServer(
       { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue() }, new Bus(),
     );
-    const res = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/stop` });
+    const res = await app.inject({ method: 'POST', url: `/api/sessions/${id}/stop` });
     expect(res.statusCode).toBe(200);
+    // No capability evidence, so the bare pair form: ccd recomputes `demo-a-demo`, the row that was tapped.
+    expect(calls).toEqual([['stop', 'demo-a', 'demo']]);
     await app.close();
   });
 });

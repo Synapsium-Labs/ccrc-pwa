@@ -9806,25 +9806,43 @@ export function leafKeptWord(v: unknown): LeafKeptWord {
  * The three edits above (`ChildReclaimAttention`'s doc line pair, its `runId` sentence and its last arm's line) are
  * rewritten in place, line for line. */
 
-/** The longest temp-root id (spec §5.10): 255 characters.
- *  - A session id is a FILE NAME component (`$REG/<id>.uuid`, `$REG/tmproots/<id>`), and no file system this runs on
- *    takes a component over 255 bytes. The session-id shape is ASCII, so a character is a byte.
- *  - ccd's own names run out sooner: `.reap-<id>.lock` past 244, and a slot's or a record's name sooner still (spec §7).
- *  - The coordination store's displacement parsers bound a candidate id by it too. */
-export const TMPROOT_ID_MAX_CHARS = 255;
+/** The longest registry id (spec 2026-10-12 §2.3): 255 characters, one file-name component (`$REG/<id>.uuid`); the session-id
+ *  shape is ASCII, so a character is a byte.
+ *  - No file system this runs on takes a component over 255 bytes. A temp root is named by the same id
+ *    (`$REG/tmproots/<id>`), so the collector's cap below is this one.
+ *  - ccd's own names run out sooner: `.reap-<id>.lock` past 244, and a slot's name sooner still. A tighter cap belongs
+ *    where ccd mints an id (spec 2026-10-12 §2.6), not here: this cap is the longest name the registry can hold at all. */
+export const REGISTRY_ID_MAX_CHARS = 255;
 
-/** THE ONE PREDICATE of a temp-root id (spec §5.10): ccd's `_ws_tmproot_id_ok` (a session id's shape, no leading
- *  `.`), plus NO LEADING `-` and at most `TMPROOT_ID_MAX_CHARS` characters.
- *  - The leading `-` is a SAFETY rule, not defence in depth. ccd's destructive verbs read their decision flags from any
- *    position, `--session`'s value included, and every such flag begins `--`. The shape refuses `=`, so no
- *    `--flag=value` can be an id either.
+/** THE ONE PREDICATE of a registry id (spec 2026-10-12 §2.3): length first, then the session-id shape, then no leading `.` or `-`.
+ *  - The leading `-` is a SAFETY rule, not defence in depth (spec 2026-10-12 §2.1). ccd's verbs read their decision flags from any
+ *    position, `--session`'s value included, and every such flag begins `--`. An id of `--actor` is read as a flag,
+ *    and the verb binds another token as its id. The shape refuses `=`, so no `--flag=value` can be an id either.
+ *  - The leading `.` keeps `.`, `..` and a hidden name out, as ccd's own `_ws_tmproot_id_ok` does.
+ *  - It is the rule for an id the server composes into an id-taking argv, whether the id came from a request, a
+ *    stored run row, a registry file name or an executor's job.
+ *  - It sits at this foot, beside the collector's names, and not after `isSessionIdShape`: README cites this file by
+ *    line, and an insertion there would move every anchor it names.
+ *  - A non-string is not an id. The length is asked first, so a long string never reaches the shape's regex. */
+export function isRegistryId(id: unknown): id is string {
+  return typeof id === 'string' && id.length <= REGISTRY_ID_MAX_CHARS && isSessionIdShape(id)
+    && !id.startsWith('.') && !id.startsWith('-');
+}
+
+/** The longest temp-root id (spec §5.10) is the longest registry id: a temp root is named by a registry id.
+ *  - A derived alias, never a second literal. The coordination store's displacement parsers bound a candidate id by
+ *    this name, and their move to `REGISTRY_ID_MAX_CHARS` waits for a wave that edits the store. */
+export const TMPROOT_ID_MAX_CHARS = REGISTRY_ID_MAX_CHARS;
+
+/** THE ONE PREDICATE of a temp-root id (spec 2026-09-22 §5.10) is the registry id predicate, so the dash, dot and length clauses
+ *  are written once (spec 2026-10-12 §2.3) and the accepted set is unchanged.
  *  - The collector asks it of every listed name before any argv, and again of a job's id before its audit or its act.
  *  - The kept-leaf reader asks it before it names a leaf, so an id the collector never audits is not listed there
  *    either.
- *  - A non-string is not an id. The length is asked first, so a long string never reaches the shape's regex. */
+ *  - It stays a `function` declaration that calls `isRegistryId`, never a `const` alias of it, so the temp-root name
+ *    keeps its one function definer. */
 export function isTmpRootId(id: unknown): id is string {
-  return typeof id === 'string' && id.length <= TMPROOT_ID_MAX_CHARS && isSessionIdShape(id)
-    && !id.startsWith('.') && !id.startsWith('-');
+  return isRegistryId(id);
 }
 
 declare const collectTokenBrand: unique symbol;

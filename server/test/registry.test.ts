@@ -388,7 +388,7 @@ describe('the measured read reaching the registry ladder (Task 5)', () => {
     });
 
     it('a LISTED .uuid whose measured read is absent drops the row, and readSessionRecord ' +
-       'reports {found:false, reason:\'absent\'} (B4)', async () => {
+       'reports {kind:\'absent\'} (B4)', async () => {
       // `.uuid` is the one identity-triple member `buildRecord`'s own
       // docstring calls TRUE BY CONSTRUCTION — `names.includes(id+'.uuid')`
       // holds for every id either caller ever derives `id` from, so before
@@ -404,7 +404,7 @@ describe('the measured read reaching the registry ladder (Task 5)', () => {
       const io = absentField('demo-quiet-basin', 'uuid');
       const out = await readRegistry(io, cfg());
       expect(out.find((r) => r.id === 'demo-quiet-basin')).toBeUndefined();
-      expect(await readSessionRecord(io, cfg(), 'demo-quiet-basin')).toEqual({ found: false, reason: 'absent' });
+      expect(await readSessionRecord(io, cfg(), 'demo-quiet-basin')).toEqual({ kind: 'absent' });
     });
   });
 
@@ -644,12 +644,12 @@ describe('readSessionRecord', () => {
     const whole = await readRegistry(localIO, cfg);
     const single = await readSessionRecord(localIO, cfg, 'claude-a-MekWarLive');
 
-    expect(single).toEqual({ found: true, record: whole.find((r) => r.id === 'claude-a-MekWarLive') });
-    expect(single.found && single.record.pool).toEqual(['claude', 'claude-a']);
-    expect(single.found && single.record.lastswap).toBe(1784500000);
+    expect(single).toEqual({ kind: 'found', record: whole.find((r) => r.id === 'claude-a-MekWarLive') });
+    expect(single.kind === 'found' && single.record.pool).toEqual(['claude', 'claude-a']);
+    expect(single.kind === 'found' && single.record.lastswap).toBe(1784500000);
   });
 
-  it('answers {found:false, reason:\'absent\'} for an id with no .uuid in the registry, without reading any of its fields', async () => {
+  it('answers {kind:\'absent\'} for an id with no .uuid in the registry, without reading any of its fields', async () => {
     const reg = path.join(home, '.cc-sessions');
     let fieldReads = 0;
     const countingIO: FleetIO = {
@@ -663,26 +663,26 @@ describe('readSessionRecord', () => {
     const cfg = loadConfig({ CCRC_HOME: home });
 
     const rec = await readSessionRecord(countingIO, cfg, 'nope');
-    expect(rec).toEqual({ found: false, reason: 'absent' });
+    expect(rec).toEqual({ kind: 'absent' });
     // A miss must not fire the full-field Promise.all `buildRecord` would —
     // the whole point of checking the listing FIRST. (F15: untagged, so it
     // does not hard-code a field count that goes stale as the census grows.)
     expect(fieldReads).toBe(0);
   });
 
-  it('answers {found:false, reason:\'unlistable\'} when the registry dir cannot be listed', async () => {
+  it('answers {kind:\'unlistable\'} when the registry dir cannot be listed', async () => {
     const cfg = loadConfig({
       CCRC_HOME: path.join(home, 'nope'), CCRC_ACCOUNTS: path.join(home, '.ccrc', 'accounts.json'),
     });
-    expect(await readSessionRecord(localIO, cfg, 'claude-demo')).toEqual({ found: false, reason: 'unlistable' });
+    expect(await readSessionRecord(localIO, cfg, 'claude-demo')).toEqual({ kind: 'unlistable' });
   });
 
-  it('answers {found:false, reason:\'absent\'} for an incomplete entry (own field never written, not just ' +
+  it('answers {kind:\'absent\'} for an incomplete entry (own field never written, not just ' +
      'unreadable), same as readRegistry dropping it', async () => {
     const reg = path.join(home, '.cc-sessions');
     seed(reg, 'claude-demo', { uuid: 'c'.repeat(36), wrapper: 'claude' }); // no workdir file at all
     const cfg = loadConfig({ CCRC_HOME: home });
-    expect(await readSessionRecord(localIO, cfg, 'claude-demo')).toEqual({ found: false, reason: 'absent' });
+    expect(await readSessionRecord(localIO, cfg, 'claude-demo')).toEqual({ kind: 'absent' });
   });
 
   it('costs exactly one readdir plus the one id\'s buildRecord field reads — never a per-session Promise.all for a sibling', async () => {
@@ -726,7 +726,7 @@ describe('readSessionRecord', () => {
     };
     const cfg = loadConfig({ CCRC_HOME: home });
     const rec = await readSessionRecord(holdUnreadableIO, cfg, 'demo-quiet-basin');
-    expect(rec.found && rec.record.held).toBe(HOLD_UNREADABLE);
+    expect(rec.kind === 'found' && rec.record.held).toBe(HOLD_UNREADABLE);
   });
 });
 
@@ -846,7 +846,7 @@ describe('the identity ladder (unmeasured evidence)', () => {
     expect(listings).toBe(2);
   });
 
-  it('readSessionRecord retires a degraded row to {found:false, reason:\'absent\'} on twice-observed absence', async () => {
+  it('readSessionRecord retires a degraded row to {kind:\'absent\'} on twice-observed absence', async () => {
     const reg = path.join(home, '.cc-sessions');
     seed(reg, 'demo-quiet-basin', { wrapper: 'claude', project: 'demo', workdir: '/w', uuid: 'e'.repeat(36) });
     const cfg = loadConfig({ CCRC_HOME: home });
@@ -862,7 +862,7 @@ describe('the identity ladder (unmeasured evidence)', () => {
       },
       readFileMeasured: async (p) => (p.endsWith('.wrapper') ? { ok: false, reason: 'unreadable' } : localIO.readFileMeasured(p)),
     };
-    expect(await readSessionRecord(reapedMidRead, cfg, 'demo-quiet-basin')).toEqual({ found: false, reason: 'absent' });
+    expect(await readSessionRecord(reapedMidRead, cfg, 'demo-quiet-basin')).toEqual({ kind: 'absent' });
   });
 });
 

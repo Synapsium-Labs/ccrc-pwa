@@ -115,6 +115,15 @@ export interface DivergenceInput {
   /** Ids of every OPEN run — the same `runs()` read `openRunSessionIds`
    *  already comes from, carried as a set so this module stays pure. */
   readonly openRunIds: ReadonlySet<number>;
+  /**
+   * The ids the tick's registry listing REFUSED (`RegistryRead.refused`, path
+   * identity spec §2.3): listed, but never read or built, so in no `records`.
+   * Rule 3's open-run side leaves them out (slug `tick-lanes-hold-a-refused-id`):
+   * "carries no hold" would be read off a hold this census never measured. A
+   * FACT carried in, decided here. An id with no listed row at all is not in
+   * it, and still reads as carrying no hold.
+   */
+  readonly refusedIds: ReadonlySet<string>;
 }
 
 const key = (project: string, name: string): string => `${project}/${name}`;
@@ -339,7 +348,8 @@ export function divergences(input: DivergenceInput): Divergence[] {
   }
   const heldIds = new Set(live.filter((r) => r.held !== null).map((r) => r.id));
   for (const id of input.openRunSessionIds) {
-    if (heldIds.has(id)) continue;
+    // A refused id was never built, so whether it carries a hold is unmeasured: never a finding.
+    if (heldIds.has(id) || input.refusedIds.has(id)) continue;
     out.push({
       kind: 'claim-divergence', id, path: null,
       detail: 'an open run names this session, which carries no hold',

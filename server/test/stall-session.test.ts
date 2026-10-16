@@ -867,3 +867,67 @@ describe('mail-stuck under busy delivery is timed from when it began (busy-clock
     expect(stallMailStuckVerdicts(idle, NOW)).toEqual([stuck]);
   });
 });
+
+// Path identity, fix round 2 (spec §2.3; slug `tick-lanes-hold-a-refused-id`): a run worker or a run-less coordinator
+// whose id the registry listing refused reaches the session verdicts as its own `StallWorker` arm. Every verdict holds
+// it unmeasured, the coordinator's marker verdict included. Mail-stuck's `registry-unmeasurable` clause stays AHEAD of
+// that hold (slug `stuck-gate-precedes-holds`): it is the one signal for a delivery that can never land.
+describe('a refused id: every session verdict holds it unmeasured, and mail-stuck still reports its gate', () => {
+  const REFUSED: StallWorker = { present: 'refused' };
+  /** A Stop 30 min ago that left a monitor and a subagent running, and a StopFailure 20 min ago: each draws E or failed on a present, idle worker. */
+  const eMark = mark({ at: NOW - 30 * MIN, turnAt: NOW - 50 * MIN, stopAt: NOW - 30 * MIN, bg: 2, bgKinds: ['monitor', 'subagent'], bgIds: ['b989ocn62', 'm1'] });
+  const fMark = mark({ state: 'failed', event: 'StopFailure', at: NOW - 20 * MIN, turnAt: NOW - 25 * MIN, stopAt: NOW - 20 * MIN, err: 'server_error' });
+  const dMark = mark({
+    event: 'SessionStart', at: NOW - 2 * H, turnAt: NOW - 3 * H - 20 * MIN, stopAt: NOW - 3 * H, restartAt: NOW - 2 * H,
+    lostBg: 2, lostKinds: ['shell', 'subagent'], lostIds: ['b1', 'a2'],
+  });
+
+  it.each(['worker', 'coordinator', 'other'] as const)('the shared holds: a %s holds unmeasured, never absent', (role) => {
+    const input = sessionInput({ role, sessionId: role === 'coordinator' ? COORD : WORKER, worker: REFUSED });
+    expect(stallSessionHold(input, NOW)).toEqual(hold('unmeasured'));
+  });
+
+  it('run-unnamed still comes first for a run worker', () => {
+    expect(stallSessionHold(sessionInput({ run: runRow({ state: 'unknown' }), worker: REFUSED }), NOW)).toEqual(hold('run-unnamed'));
+  });
+
+  it.each(['worker', 'coordinator'] as const)('orphan E and failed hold a refused %s', (role) => {
+    const base = { role, sessionId: role === 'coordinator' ? COORD : WORKER };
+    // CONTROL: each fires on a present, idle worker with the same marker.
+    expect(stallOrphanEVerdict(sessionInput({ ...base, worker: workerAt('idle', NOW - 30 * MIN + 2_000), mark: eMark }), NOW).act).toBe('notify');
+    expect(stallFailedVerdict(sessionInput({ ...base, worker: workerAt('idle', NOW - 20 * MIN + 1_000), mark: fMark }), NOW).act).toBe('notify');
+    expect(stallOrphanEVerdict(sessionInput({ ...base, worker: REFUSED, mark: eMark }), NOW)).toEqual(hold('unmeasured'));
+    expect(stallFailedVerdict(sessionInput({ ...base, worker: REFUSED, mark: fMark }), NOW)).toEqual(hold('unmeasured'));
+  });
+
+  it.each(['worker', 'coordinator', 'other'] as const)('orphan D holds a refused %s', (role) => {
+    const base = { role, sessionId: role === 'coordinator' ? COORD : WORKER, liveStartedAt: NOW - 2 * H - 5_000, mark: dMark };
+    // CONTROL: it fires on a present session idle since a minute after the restart.
+    expect(stallOrphanDVerdict(sessionInput({ ...base, worker: workerAt('idle', NOW - 2 * H + MIN) }), NOW).act).toBe('notify');
+    expect(stallOrphanDVerdict(sessionInput({ ...base, worker: REFUSED }), NOW)).toEqual(hold('unmeasured'));
+  });
+
+  it('the coordinator marker verdict holds a refused claimant, whatever its first-seen time', () => {
+    const mk = (worker: StallWorker): StallSessionInput => sessionInput({
+      role: 'coordinator', sessionId: COORD, worker, mark: { ok: false, reason: 'malformed' },
+      markUnreadableSince: NOW - MARKER_UNREADABLE_MS - MIN,
+    });
+    // CONTROL: an absent claimant with the same facts is pushed (holds 1 and 2 do not apply to this verdict).
+    expect(stallSessionMarkerVerdict(mk({ present: false }), NOW).act).toBe('notify');
+    expect(stallSessionMarkerVerdict(mk(REFUSED), NOW)).toEqual(hold('unmeasured'));
+  });
+
+  it.each(['worker', 'coordinator'] as const)('mail-stuck: a refused %s\'s registry-unmeasurable gate past MAIL_STUCK_MS still pushes, and the idle clause holds', (role) => {
+    const to = role === 'coordinator' ? COORD : WORKER;
+    const stuckFor = (gate: Partial<StallDeliveryRow>): StallVerdict[] => stallMailStuckVerdicts(sessionInput({
+      role, sessionId: to, worker: REFUSED, mark: { ok: false, reason: 'unmeasured' },
+      mail: [mailRow(501, NOW - 3 * H, role === 'coordinator' ? WORKER : COORD, to, 'brief', role === 'coordinator' ? null : 67)],
+      deliveries: [delivery(901, 501, { toId: to, ...gate })],
+    }), NOW);
+    expect(stuckFor({ lastGate: 'registry-unmeasurable', gateSince: NOW - MAIL_STUCK_MS }))
+      .toEqual([{ act: 'notify', arm: 'mail-stuck', rung: 1, key: 901, to: 'operator' }]);
+    expect(stuckFor({ lastGate: 'registry-unmeasurable', gateSince: NOW - MAIL_STUCK_MS + MIN }), 'one minute short')
+      .toEqual([hold('unmeasured')]);
+    expect(stuckFor({ lastGate: 'not-idle', gateSince: NOW - 5 * H }), 'any other gate').toEqual([hold('unmeasured')]);
+  });
+});

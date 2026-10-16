@@ -42,7 +42,7 @@ import {
   sendPrompt, answerDialog, answerDialogMulti, answerDialogText, interrupt, submitEnter, type SendDeps,
 } from './inject/send.js';
 import { answerAsk, type AskDeps } from './inject/ask.js';
-import { freshAskAt, measuredIdentity, readRegistry, readSessionRecord } from './registry.js';
+import { freshAskAt, measuredIdentity, readRegistry, readRegistryMeasured, readSessionRecord } from './registry.js';
 import type { SessionRecord } from './registry.js';
 import { readHookState } from './hookstate.js';
 import { listProjects, type CcdResult } from './lifecycle.js';
@@ -91,7 +91,7 @@ import {
   type RunSummary,
   type SessionClientMsg, type SessionStreamMsg, type TaskItem,
   type FloorState, type ProjectRow, type ProjectPoolsWire, type ProjectPoolWire, type ProjectRepoWire,
-  parseRouteFields, programKickoffVerdict, routeFieldsOrNull, routeParseDetail, type RouteFields,
+  isRegistryId, parseRouteFields, programKickoffVerdict, routeFieldsOrNull, routeParseDetail, type RouteFields,
 } from '../../shared/api.js';
 import { ARCHIVE_REFUSALS, archiveInterrupts } from '../../shared/api.js';
 import {
@@ -1201,6 +1201,19 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       // "unknown" on the PWA, which is the truth here.
       if (snap) return { sessions: snap.sessions, stale: true, downSince: deps.fleetState.downSince };
     }
+    // ONE registry read for this request (spec §2.3), handed to `assembleFleet` as its `records`; that function's own
+    // fallback read is reached by tests alone. An UNLISTABLE registry is not an empty fleet: `{sessions: []}` would
+    // tell the phone every session had gone. So this serves what the process last knew (the watcher's last
+    // broadcast, else the last-known-good snapshot, else nothing), marked `stale: true`, the disconnected arm's word.
+    // No `pools` key, for that arm's reason (nothing measured to serve). No `downSince` either, even when the link
+    // recorded one: the link may be up and the listing failed, or a disconnected remote box had no snapshot and fell
+    // through to here, and only the disconnected arm above carries `downSince`. Its counterpart on a listable
+    // registry is `fleet-health.test.ts`'s disconnected case with no cache, which takes the live assemble.
+    // [registry-refused:stale]
+    const reg = await readRegistryMeasured(deps.io, deps.cfg);
+    if (!reg.listed) {
+      return { sessions: watcher?.currentFleet() ?? (await loadSnapshot(stateCachePath))?.sessions ?? [], stale: true };
+    }
     // FIRST PAINT (spec §5.4.4). The `pools` frame is emitted ON CHANGE from
     // the watcher tick, so a client connecting into a quiet fleet would
     // otherwise see no tags until one moved; this is where it gets the
@@ -1223,7 +1236,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       readObservedEpochFromRegistry(deps.io, deps.cfg, PROJECT_POOLS_REQUEST_BUDGET_MS),
     ]);
     return {
-      sessions: await assembleFleet(deps.io, deps.cfg, deps.tmux, undefined, watcher?.currentPending(), watcher?.currentStatuslines(), watcher?.currentTaskProgress(), watcher?.currentPrStates(), watcher?.currentHookStates(), undefined, deps.coord, watcher?.currentUsage(), watcher?.currentHeadBranches()),
+      sessions: await assembleFleet(deps.io, deps.cfg, deps.tmux, undefined, watcher?.currentPending(), watcher?.currentStatuslines(), watcher?.currentTaskProgress(), watcher?.currentPrStates(), watcher?.currentHookStates(), reg.records, deps.coord, watcher?.currentUsage(), watcher?.currentHeadBranches()),
       pools: poolsWire(
         poolsRead,
         poolsEnforcement(deps.fleetState?.ccdVerbs ?? null),
@@ -1507,13 +1520,24 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     // while a `coord.runs()` read is synchronous, so firing both
     // independently would race — and often WIN, sending `runs` before
     // `fleet` ever resolves. Chaining pins the wire order every client (and
-    // `fleetws.test.ts`) can rely on: hello, fleet, runs.
+    // `fleetws.test.ts`) can rely on: hello, fleet, runs — or hello, runs when
+    // the cold read could not list the registry, which sends no `fleet` frame.
     const broadcast = watcher?.currentFleet() ?? null;
-    const cold = broadcast !== null
-      ? Promise.resolve(broadcast)
-      : assembleFleet(deps.io, deps.cfg, deps.tmux, undefined, watcher?.currentPending(), watcher?.currentStatuslines(), watcher?.currentTaskProgress(), watcher?.currentPrStates(), watcher?.currentHookStates(), undefined, deps.coord, watcher?.currentUsage(), watcher?.currentHeadBranches());
+    // `null` means the registry could not be listed (spec §2.3). This socket then gets NO cold `fleet` frame: an
+    // assembled `[]` would tell it every session had gone, and the `fleet` frame has no stale marker to say
+    // otherwise (this wave adds no wire field). The next broadcast reaches it as it reaches any connected client,
+    // and the `runs` frame below is still sent.
+    let cold: Promise<FleetSession[] | null>;
+    if (broadcast !== null) {
+      cold = Promise.resolve(broadcast);
+    } else {
+      // [registry-refused:stale]
+      cold = readRegistryMeasured(deps.io, deps.cfg).then((reg) => (reg.listed
+        ? assembleFleet(deps.io, deps.cfg, deps.tmux, undefined, watcher?.currentPending(), watcher?.currentStatuslines(), watcher?.currentTaskProgress(), watcher?.currentPrStates(), watcher?.currentHookStates(), reg.records, deps.coord, watcher?.currentUsage(), watcher?.currentHeadBranches())
+        : null));
+    }
     void cold.then((sessions) => {
-      if (!broadcastSeen) sendFleet(sessions);
+      if (sessions !== null && !broadcastSeen) sendFleet(sessions);
       // Cold start for THIS socket, same reasoning as the `fleet` push just
       // above: the `runs` frame is only emitted ON CHANGE (`FleetWatcher.
       // emitRuns`'s own byte-equality guard), so a client connecting into a
@@ -1646,7 +1670,20 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     // `registry.ts`'s `readSessionRecord`.
     readAsk: async (id: string) => {
       const read = await readSessionRecord(deps.io, deps.cfg, id);
-      if (!read.found) return null;
+      switch (read.kind) {
+        case 'found': break;
+        case 'absent': case 'unlistable': return null;
+        // Masked on both of its paths (spec §2.3): `knownId` refuses a
+        // non-registry id on `POST /api/sessions/:id/ask`, and on
+        // `POST /api/asks/:id/answer` `freshAskAt`'s own `bad-id` answers
+        // `child-unmeasurable` before `answerAsk` reaches this read. `null`,
+        // the safe word, all the same.
+        case 'bad-id': return null;
+        default: {
+          const _x: never = read;
+          return _x;
+        }
+      }
       // Display/connectivity — DEGRADE-AND-HEAL: an unmeasured uuid would
       // look up hookstate under a value that matches no real file, reading
       // as "no ask" rather than "we don't know" — null here is the honest
@@ -1939,9 +1976,19 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   // fleet's baseline is 745 agent-WS operations [registry-read-census:fleet]
   // per call in remote mode, before conditional reconfirmation, in front of
   // every human keystroke — purely to answer "does
-  // this id exist". It carries no identity of its own: `isSafeSessionId` is
-  // the real injection guard, and ccd re-checks `[[ -f "$REG/$id.uuid" ]]` on
-  // the box regardless. One
+  // this id exist". Its FIRST statement is the registry-id predicate
+  // (`isRegistryId`, L0; path-identity spec §2.3): a name ccd could read as a
+  // flag (`--actor`), a dot-leading name, or one past the file-name cap is
+  // unknown before any listing is spent on it, so these routes hand an
+  // id-taking argv nothing but a registry id. `isSafeSessionId`, which most of
+  // them still ask first, stays the clip path-component rule: it admits
+  // `--actor` and is not the injection guard. ccd re-checks
+  // `[[ -f "$REG/$id.uuid" ]]` on the box regardless. Two request-id routes
+  // stand outside this census and ask the predicate at their own heads
+  // (`/ensure`, and the crossing arm of `/swap`), so the count above is still
+  // what `routes.test.ts` measures. An `:id` over 100 characters reaches none
+  // of these handlers: Fastify's default `maxParamLength` answers 414 first.
+  // One
   // `readdir` plus membership in the listing is the SAME evidence
   // `coord/routes.ts`'s `names.includes(`${fromId}.uuid`)` already trusts for
   // exactly this question, and it fails shut the same way `readRegistry`
@@ -1954,6 +2001,9 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   // failure to read one of a LIVE session's own sibling fields (e.g.
   // `workdir`) can no longer 404 a prompt typed into that session.
   const knownId = async (id: string, names?: readonly string[] | null): Promise<boolean> => {
+    // Before the listing, and whatever a passed-in listing says (path-identity
+    // spec §2.3): a planted `$REG/--actor.uuid` is exactly the row this refuses.
+    if (!isRegistryId(id)) return false;
     // `names` PASSED IN by a caller that already listed (the sessions route,
     // which needs the same listing for `readProjectPools`): one readdir, one
     // membership test, and the two answers cannot disagree. `undefined` — every
@@ -2109,11 +2159,17 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     // the sheet's only remaining act would be to give up. Same split, and the
     // same two bodies, as `POST /api/sessions/:id/stop` below.
     const read = await readSessionRecord(deps.io, deps.cfg, id);
-    if (!read.found) {
-      return reply.code(read.reason === 'unlistable' ? 503 : 404).send({
-        ok: false,
-        error: read.reason === 'unlistable' ? 'registry-unmeasurable' : 'unknown-session',
-      });
+    switch (read.kind) {
+      case 'found': break;
+      case 'unlistable': return reply.code(503).send({ ok: false, error: 'registry-unmeasurable' });
+      case 'absent': return reply.code(404).send({ ok: false, error: 'unknown-session' });
+      // An id `isRegistryId` refuses (spec §2.3) is a malformed request, never an unknown session: 400 in
+      // this file's request-shape word, the one `isSafeSessionId` above answers.
+      case 'bad-id': return reply.code(400).send({ ok: false, error: 'bad-session-id' });
+      default: {
+        const _x: never = read;
+        return reply.code(500).send({ ok: false, error: 'internal', kind: (_x as { kind: string }).kind });
+      }
     }
     const out = queueProgramKickoff({ coord }, id,
       { slug: kickoff.slug, title: kickoff.title }, kickoff.resume);
@@ -2703,6 +2759,12 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
 
   app.post('/api/sessions/:id/ensure', async (req, reply) => {
     const { id } = req.params as { id: string };
+    // NOT behind `knownId`, whose census of 18 stays what `routes.test.ts`
+    // measures: the route asks the registry-id predicate itself, first
+    // (path-identity spec §2.3, as built). ccd's `cmd_ensure` binds its argument
+    // literally and dies on an absent row, so this is no redirect today; the
+    // check keeps a name ccd could read as a flag from ever reaching the argv.
+    if (!isRegistryId(id)) return reply.code(400).send({ ok: false, error: 'bad-session-id' });
     return runCcdOr502(reply, CCD_ARGV.ensure(id));
   });
 
@@ -2987,6 +3049,51 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   });
 
   /**
+   * The wrapper a legacy stop names: the ORIGINAL one baked into the id when the id ends in `-<project>`, else the
+   * row's `.wrapper`. One rule, read by `stopArgvFor`, which composes the pair, and by `stopPairRefused`, which vets
+   * it first, so the part the check reads is the part the argv carries.
+   */
+  function stopPairWrapper(id: string, rec: SessionRecord, identity: { wrapper: string }): string {
+    return id.endsWith(`-${rec.project}`) ? id.slice(0, id.length - rec.project.length - 1) : identity.wrapper;
+  }
+
+  /**
+   * True when a stop of this row would hand `CCD_ARGV.stopPair` a pair that is not the id, or a part that is not a
+   * registry id (path identity W1a, a coordinator ruling at plan review).
+   *
+   * THE PAIR IS THE ID, and that clause is the rule that does the work. ccd recomputes `<wrapper>-<project>`, so an
+   * id that does not end in `-<project>` makes the pair name a different session (a workspace row whose `.workspace`
+   * read failed reads as legacy, and its pair would stop the project's main checkout; a legacy row whose `.project`
+   * is absent or unreadable reads as `project = id`, and its pair would stop `<wrapper>-<id>`). Those are exactly the
+   * fallback-arm rows, whose wrapper would be the row's `.wrapper`: the clause refuses every one, so that fallback
+   * never reaches `stopPair`, and the pair it carries is always the id split at its `-<project>` suffix. Refusing it
+   * changes no well-formed stop, because an id ending in `-<project>` always equals its pair.
+   *
+   * THE PARTS stay checked, as defence in depth: each part must pass `isRegistryId` (the session-id charset, which has
+   * no `=`, and no leading `-` or `.`), though a part reading `--surface=<word>`, which `cmd_stop`'s `--surface=*` arm
+   * strips from ANY position to make the pair a one-argument stop of the OTHER token, is always on the fallback arm,
+   * where the pair clause refuses alone, and on the prefix arm neither part can hold `=`, being a piece of the id the
+   * caller already vetted.
+   * - The project clause is defence in depth. ccd refuses a dash-leading project only once ccd's own half of the id
+   *   gate lands (W1b); until then this clause refuses a row whose id ends in `-<project>` with a project that is not
+   *   a registry id (`demo-a--x` with `.project` `-x`), which the pair clause passes.
+   * - The wrapper clause is an equivalent mutant, kept as the part check's other half. On the fallback arm the pair
+   *   clause refuses on its own (`<wrapper>-<project>` ends in `-<project>`, so it never equals an id that does not);
+   *   on the prefix arm the wrapper is a non-empty prefix of an id the caller already vetted with `isRegistryId`, so
+   *   it passes. Deleting the clause changes no outcome.
+   *
+   * Both callers of `stopArgvFor` ask this in their identity arm and answer what an unmeasured identity field
+   * answers, 503 `registry-unmeasurable`, with no argv composed; the archive door asks it before its turn read, its
+   * claim reads and the programme's end. A workspace row is never refused here: it stops by its id, which each
+   * caller's id gate has already vetted.
+   */
+  function stopPairRefused(id: string, rec: SessionRecord, identity: { wrapper: string }): boolean {
+    if (rec.workspace !== null) return false;
+    const wrapper = stopPairWrapper(id, rec, identity);
+    return !isRegistryId(wrapper) || !isRegistryId(rec.project) || `${wrapper}-${rec.project}` !== id;
+  }
+
+  /**
    * The stop argv — ONE spelling, two callers, both the PWA's own controls: `POST /api/sessions/:id/stop` ("Stop only",
    * offered after an archive refusal the phone cannot fix) and the archive door (workspace lifecycle §5.2), which stops
    * a main checkout, or a busy session the operator chose to interrupt.
@@ -2997,13 +3104,28 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
    * declaration could honestly carry. `null` — omit the flag — when the
    * deployed ccd is not KNOWN to understand it (fix round 2, task 14,
    * Important #1): a bare `['stop', id]` is what every ccd generation has
-   * always understood, where `['stop', id, '--surface', 'pwa']` against an
-   * old one parses as a stop of a session named `<id>---surface` — exit 0,
-   * nothing real touched, and the caller reads that as success. This is the
+   * always understood, where a flagged argv against an old one misparses —
+   * measured on the old trailing spelling `['stop', id, '--surface', 'pwa']`,
+   * it stopped a session named `<id>---surface`: exit 0, nothing real
+   * touched, and the caller reads that as success. This is the
    * deploy-ordering hazard `deploy/deploy.sh` itself does not close (the
    * agent target installs `ccd`; the default server target never does, and
    * neither cross-checks the other's version), so the check has to live here
    * instead of being a rollout note.
+   *
+   * With the capability, the pair LEADS the id (path identity W1a, spec §2.3,
+   * §2.4): `['stop', '--surface', 'pwa', id]` for a workspace id and
+   * `['stop', '--surface', 'pwa', w, p]` for a legacy one. With the id first,
+   * an id spelled `--surface` became a stop of `pwa`; with the pair first,
+   * ccd consumes the pair and refuses that id by usage. Both callers refuse
+   * such an id before this runs (`/stop` through `readSessionRecord`'s
+   * `bad-id`, the archive door through `knownId`); the order is the lock
+   * behind them, argued once on `CCD_ARGV.stopId`.
+   *
+   * A legacy row's PAIR PARTS are vetted before this runs as well: both
+   * callers ask `stopPairRefused` (above) in their identity arm and answer
+   * 503 `registry-unmeasurable` for a wrapper part or project part that is
+   * not a registry id, so `stopPair` below never carries one.
    *
    * A `function` declaration on purpose: `verb-gate.test.ts` reads a call site's skew gate off its enclosing
    * function, and `stop` is ungated by decision (every ccd generation has the verb), as it was inside `/stop`.
@@ -3020,10 +3142,9 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     // Legacy ids DO encode a wrapper, and ccd stop's two-argument form
     // recomputes them — so it needs the ORIGINAL wrapper baked into the id, not
     // identity.wrapper, which a prior swap flips to the new account while the
-    // id/tmux name keep the old prefix.
-    const originalWrapper = id.endsWith(`-${rec.project}`)
-      ? id.slice(0, id.length - rec.project.length - 1)
-      : identity.wrapper;
+    // id/tmux name keep the old prefix. `stopPairWrapper` holds that rule, and
+    // both callers have already asked `stopPairRefused` of the same two parts.
+    const originalWrapper = stopPairWrapper(id, rec, identity);
     return CCD_ARGV.stopPair(originalWrapper, rec.project, surface);
   }
 
@@ -3070,28 +3191,38 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     const { id } = req.params as { id: string };
     // C0.3: one session's own row, not the whole registry.
     const read = await readSessionRecord(deps.io, deps.cfg, id);
-    if (!read.found) {
-      // Fix (blocking review finding 3): `reason: 'unlistable'` is the SAME
-      // registry-unmeasurable fact the identity gate three lines below
-      // already answers 503 for — the whole-fleet cousin of a degraded row,
-      // and just as much not a proof this session is unknown ("404 would be
-      // a LIE" applies here too: the whole-fleet collapse proves nothing
-      // about THIS id one way or the other). Only `reason: 'absent'` — a
-      // listing that plainly does not name this id at all — earns the
-      // terminal unknown-session answer; a route that answered 404 for both
-      // would be reopening the exact overloaded-null this 503 gate exists
-      // to close, one branch over.
-      return reply.code(read.reason === 'unlistable' ? 503 : 404)
-        .send({ ok: false, error: read.reason === 'unlistable' ? 'registry-unmeasurable' : 'unknown-session' });
+    switch (read.kind) {
+      case 'found': break;
+      // Fix (blocking review finding 3): `unlistable` is the SAME
+      // registry-unmeasurable fact the identity gate below already answers
+      // 503 for — the whole-fleet cousin of a degraded row, and just as much
+      // not a proof this session is unknown ("404 would be a LIE" applies
+      // here too: the whole-fleet collapse proves nothing about THIS id one
+      // way or the other). Only `absent` — a listing that plainly does not
+      // name this id at all — earns the terminal unknown-session answer; a
+      // route that answered 404 for both would be reopening the exact
+      // overloaded-null this 503 gate exists to close, one branch over.
+      case 'unlistable': return reply.code(503).send({ ok: false, error: 'registry-unmeasurable' });
+      case 'absent': return reply.code(404).send({ ok: false, error: 'unknown-session' });
+      // This read is the ONLY gate in front of `stopArgvFor` (spec §2.3), so an id `isRegistryId` refuses
+      // is refused here, before any argv: 400, this file's request-shape word, never a proven absence's 404.
+      case 'bad-id': return reply.code(400).send({ ok: false, error: 'bad-session-id' });
+      default: {
+        const _x: never = read;
+        return reply.code(500).send({ ok: false, error: 'internal', kind: (_x as { kind: string }).kind });
+      }
     }
     // REFUSE, not degrade: this is identity, and stopPair below RECOMPUTES a
     // wrapper/project pair from these very fields to kill a tmux session by
     // name. Two unmeasured fields could otherwise conspire to name the WRONG
     // session — 404 unknown-session would be a LIE (the row is right there,
     // just unmeasured), so this answers 503, the fleet's own
-    // registry-unmeasurable shape, instead.
+    // registry-unmeasurable shape, instead. A legacy row whose pair part is
+    // not a registry id (`stopPairRefused`) is refused the same way: a
+    // measured field that would aim the stop at a session nobody named is no
+    // more an identity than an unmeasured one.
     const identity = measuredIdentity(read.record);
-    if (identity === null) {
+    if (identity === null || stopPairRefused(id, read.record, identity)) {
       return reply.code(503).send({ ok: false, error: 'registry-unmeasurable' });
     }
     const rec = read.record;
@@ -3197,8 +3328,9 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       return reply.code(400).send({ ok: false, error: 'bad-request' });
     }
     // ONE queued invocation for both arms (D-2177, below), but that is the only
-    // server-side preflight they share. A declared crossing gets the 501 skew
-    // refusal and deliberately skips `readSessionRecord` plus the pool verdict;
+    // server-side preflight they share. A declared crossing asks the registry-id
+    // predicate of its id first (400 `bad-session-id`), then gets the 501 skew
+    // refusal, and deliberately skips `readSessionRecord` plus the pool verdict;
     // ccd re-measures session and tag on the fleet box. The ordinary arm owns
     // the early 404/503 ladder and pool refusal. Every applicable refusal is
     // decided BEFORE queue entry. `lifecycle.test.ts` pins ordinary-arm queueing;
@@ -3206,6 +3338,12 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     // applicable held-slot refusals (D-1684, D-2468, D-2481).
     let argv: CcdArgv;
     if (body.crossPool === true) {
+      // FIRST in this arm, ahead of the skew gate (path-identity spec §2.3, as
+      // built): the crossing skips `readSessionRecord`, the ordinary arm's gate,
+      // so nothing else stands between a request id and `swap --cross-pool <id>`.
+      // It sits in the arm, not at the route's head, where it would also answer
+      // for the ordinary arm and mask that arm's own read.
+      if (!isRegistryId(id)) return reply.code(400).send({ ok: false, error: 'bad-session-id' });
       // The declared crossing skips the verdict entirely — that IS the
       // override. It does not skip the SKEW gate: `capSupported` refuses on no
       // evidence, for the reason spelled out on `CCD_ARGV.swapCross`. An
@@ -3224,9 +3362,16 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       // not the fleet; the ladder is `/stop`'s because an unlistable registry
       // proves nothing about THIS id and 404 would be a lie.
       const read = await readSessionRecord(deps.io, deps.cfg, id);
-      if (!read.found) {
-        return reply.code(read.reason === 'unlistable' ? 503 : 404)
-          .send({ ok: false, error: read.reason === 'unlistable' ? 'registry-unmeasurable' : 'unknown-session' });
+      switch (read.kind) {
+        case 'found': break;
+        case 'unlistable': return reply.code(503).send({ ok: false, error: 'registry-unmeasurable' });
+        case 'absent': return reply.code(404).send({ ok: false, error: 'unknown-session' });
+        // The ordinary arm's id gate (spec §2.3): an id `isRegistryId` refuses is a malformed request.
+        case 'bad-id': return reply.code(400).send({ ok: false, error: 'bad-session-id' });
+        default: {
+          const _x: never = read;
+          return reply.code(500).send({ ok: false, error: 'internal', kind: (_x as { kind: string }).kind });
+        }
       }
       const pool = poolFor(await readProjectPools(
         deps.io,
@@ -3299,6 +3444,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   // wrapper, i.e. no task list could be looked for at all — and `draftPr`
   // treats that as "print no Plan section", same as an empty list.
   const prTasks = async (id: string): Promise<TaskItem[] | null> => {
+    // [registry-refused:knownId] GET /pr's knownId refuses a non-registry id before this read.
     const rec = (await readRegistry(deps.io, deps.cfg)).find((r) => r.id === id);
     const cfgDir = rec ? configDirFor(deps.cfg, rec.wrapper) : undefined;
     return rec && cfgDir ? (await readTasks(deps.io, cfgDir, rec.uuid)).tasks : null;
@@ -3393,12 +3539,24 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     // below can only answer if the registry goes unreadable between the two reads (503 too). The identity fields are a
     // separate arm: an unmeasured one is refused rather than guessed at — the stop argv recomputes a tmux name from them.
     const read = await readSessionRecord(deps.io, deps.cfg, id);
-    if (!read.found) {
-      return reply.code(read.reason === 'unlistable' ? 503 : 404)
-        .send({ ok: false, error: read.reason === 'unlistable' ? 'registry-unmeasurable' : 'unknown-session' });
+    switch (read.kind) {
+      case 'found': break;
+      case 'unlistable': return reply.code(503).send({ ok: false, error: 'registry-unmeasurable' });
+      case 'absent': return reply.code(404).send({ ok: false, error: 'unknown-session' });
+      // Masked by `knownId` above (spec §2.3), which answers 404 for an id `isRegistryId` refuses before
+      // its listing. This arm answers the request-shape word all the same.
+      case 'bad-id': return reply.code(400).send({ ok: false, error: 'bad-session-id' });
+      default: {
+        const _x: never = read;
+        return reply.code(500).send({ ok: false, error: 'internal', kind: (_x as { kind: string }).kind });
+      }
     }
     const identity = measuredIdentity(read.record);
-    if (identity === null) return reply.code(503).send({ ok: false, error: 'registry-unmeasurable' });
+    // `/stop`'s pair-part refusal (`stopPairRefused`), asked HERE, before the turn read, the claim reads and the
+    // programme's end, so a refused part ends nothing, stops nothing and composes no argv.
+    if (identity === null || stopPairRefused(id, read.record, identity)) {
+      return reply.code(503).send({ ok: false, error: 'registry-unmeasurable' });
+    }
     const rec = read.record;
     const archiveArgv = rec.workspace === null ? null : CCD_ARGV.wsArchive(id, pwaDec(req));
     const measure: ArchiveMeasure = {

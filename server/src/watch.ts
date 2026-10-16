@@ -37,7 +37,7 @@ import type {
 // ONE LINE, deliberately: `single-definition.test.ts` scans for `UNCHECKED_PR`
 // arriving from shared/api on a single import line, and a prettier multi-line
 // form is invisible to it.
-import { FLEET_SCOPE, LEDGER_STALE_MS, MAIL_MAX_ATTEMPTS, MAIL_REPLAY_MS, STALL_FOLLOW_LABEL, STALL_LEVEL_TEXT, TERMINAL_DELIVERY_STATES, UNCHECKED_PR, lifecycleIsDead, sessionLifecycle } from '../../shared/api.js';
+import { FLEET_SCOPE, LEDGER_STALE_MS, MAIL_MAX_ATTEMPTS, MAIL_REPLAY_MS, STALL_FOLLOW_LABEL, STALL_LEVEL_TEXT, TERMINAL_DELIVERY_STATES, UNCHECKED_PR, isRegistryId, lifecycleIsDead, sessionLifecycle } from '../../shared/api.js';
 import { JournalMirror } from './coord/mirror.js';
 // The pause marker's ONE definition in the tree. `MAIL_DISABLED_MARKER` is
 // NOT imported beside it: this file holds its own module-local literal
@@ -303,6 +303,11 @@ interface StallResolution {
 export interface StallTick {
   readonly panePids: ReadonlyMap<string, number | null>;
   readonly records: readonly SessionRecord[];
+  /** The ids this tick's listing REFUSED (`RegistryRead.refused`, path identity spec §2.3): listed, never read or built,
+   *  so in no `records` and no `sessions`. A run worker or a claimant among them is held as unmeasured, never read as
+   *  absent: the lane takes no live, marker or hookstate read and composes no path or argv from it, and drops its clocks
+   *  (slug `tick-lanes-hold-a-refused-id`). */
+  readonly refused: ReadonlySet<string>;
 }
 
 /** The registry uuid the stall lane reads a marker and a hookstate against, off the tick's rows: `uuid: null` for no
@@ -315,6 +320,10 @@ interface StallLive { readonly live: LiveWordRead; readonly startedAt: number | 
 const STALL_HOOK_ASK_UNREAD: HookAskFact = { kind: 'unmeasured' };
 /** An identity the tick could not measure: the hookstate cannot be compared with it, so it is not read. */
 const STALL_RAW_UNMEASURED: HookStateRawRead = { ok: false, reason: 'unmeasured' };
+/** A turn marker this lane did not read (a refused id, `tick-lanes-hold-a-refused-id`): `unmeasured` says it was not
+ *  read, as `stallMarkRead` answers for an identity the tick could not measure. No verdict reaches it: each holds the
+ *  refused arm first. */
+const STALL_MARK_UNREAD: TurnMarkRead = { ok: false, reason: 'unmeasured' };
 
 /** The hookstate ask the run verdict's holds 2a and 2b read, projected from the ONE raw read
  *  (`readHookStateRawMeasured`). A foreign or unregistered file carries no ask of this session's. `absent` and
@@ -1068,7 +1077,8 @@ export class FleetWatcher {
    *  restart re-times each one, which the spec accepts (slug `absent-worker-is-dead-after-grace` (D-3631)): when a run worker
    *  was first seen with no fleet row; when it was first seen with an `orphan` or `never-started` lifecycle; when a
    *  worker's or coordinator's turn marker was first READ `unmeasured` or `malformed` (`stallMarkClock`: an unmeasured
-   *  identity reads no marker, so it neither starts nor keeps that clock). */
+   *  identity reads no marker, so it neither starts nor keeps that clock). A subject's clocks are also dropped on a
+   *  sweep that refuses its id (`judgeStall`, `judgeStallCoordinator`). */
   private stallAbsentSince = new Map<string, number>();
   private stallDeadSince = new Map<string, number>();
   private stallMarkUnreadableSince = new Map<string, number>();
@@ -1080,7 +1090,8 @@ export class FleetWatcher {
    *  the prune keys on. IN MEMORY (slug `run-less-push-latches-are-in-memory` (D-3751)): a restart re-pushes a run-less orphan D
    *  rung 2, a mail-stuck, a marker-unreadable or a coordinator's failed rung 2 to the operator while it stands. A
    *  coordinator's marker-unreadable push is keyed on its first-seen time, which a restart or a clock drop (an
-   *  unobserved gap, `dropStallClocks`) re-times, so one push can go out on each side of it. Pushes only, never mail. */
+   *  unobserved gap, `dropStallClocks`, or a sweep that refuses its id) re-times, so one push can go out on each side
+   *  of it. Pushes only, never mail. */
   private stallLatch = new Map<string, string>();
   /** Warn-once keys, `<sessionId>|<what>`: a run-less shadow rung, `failed-unknown`, and the defensive r2-with-no-r1
    *  line (`applyStall`; no real input reaches it today). */
@@ -2026,6 +2037,10 @@ export class FleetWatcher {
       // `!registryRead.listed` return) and `registry.ts`'s own docstring
       // states for this exact read: "a failed second listing proves nothing
       // and changes nothing".
+      // A refused id's absence from `records` is no measure of the session. The lanes on this tick that would read
+      // it as one are handed `registryRead.refused` and hold the id, or leave it out (`tick-lanes-hold-a-refused-id`):
+      // the stall watch on `StallTick`, the claim lease lanes and the divergence census.
+      // [registry-refused:omits] a refused id is in no `records`: no state and no field read here, and the lanes handed `refused` hold it, never read it as absent.
       const registryRead = await readRegistryMeasured(this.deps.io, this.deps.cfg);
       // BEFORE the fail-shut return below, and on BOTH arms (D-283 (was D-B4-10)). An
       // unlistable registry is not "nothing is set": it is the exact state
@@ -2130,7 +2145,13 @@ export class FleetWatcher {
       // AFTER git's records — the census weighs the two against each other, and
       // a listing snapshotted here would be three awaited lanes older than the
       // records it is compared with. `sweepDivergences` states the race in full.
-      void this.sweepDivergences(records)
+      // HANDED `registryRead.refused`, though: rule 3's open-run side leaves a
+      // refused id out rather than name it as carrying no hold
+      // (`tick-lanes-hold-a-refused-id`). Rule 3 weighs `refused` against
+      // `records`, never against the census's own listing (that feeds rule 1
+      // only), and both come from this one tick read, so rule 3 compares two
+      // halves of one listing and has no skew.
+      void this.sweepDivergences(records, registryRead.refused)
         .catch(() => { /* one bad sweep must not kill the poll */ });
       // NEVER awaited, same reasoning as `sweepNames` above and then some: this
       // lane joins the per-session KeyedQueue behind wave 3's `ws-reclaim`,
@@ -2301,20 +2322,24 @@ export class FleetWatcher {
       // clocks — no new timer (D12), and the mail sweep below this block is
       // untouched by name (D10: a second producer lands BESIDE the most
       // load-bearing loop on the box, never inside it). Liveness comes off
-      // the SAME `sessions` this tick assembled. Wrapped like `pushNewMail`,
-      // for its reason: both walk straight into synchronous `node:sqlite`.
+      // the SAME `sessions` this tick assembled, and off the listing's refused
+      // ids, which are in no `sessions` and so must not read as gone
+      // (`tick-lanes-hold-a-refused-id`). Wrapped like `pushNewMail`, for its
+      // reason: both walk straight into synchronous `node:sqlite`.
       try {
-        this.renewClaims(sessions);
-        this.lapseClaims(sessions);
+        this.renewClaims(sessions, registryRead.refused);
+        this.lapseClaims(sessions, registryRead.refused);
       } catch (err) {
         console.warn(`ccrc-server: claim sweep failed (${err instanceof Error ? err.message : String(err)}) — one bad sweep must not kill the poll`);
       }
       // The stall watch (spec 2026-09-29 §4.2, §5) runs after the claim lanes, on THIS tick's `sessions`, its
       // registry listing (the listing carries the markers) and what this tick already measured: the pane pids
-      // `assembleFleet` read and the registry rows (`StallTick`), so the lane reads neither again. It is never
-      // awaited: its reads are async, so it cannot sit in the claim pair's synchronous try-block. It gates itself
-      // on `primed`, which is set below, so the priming tick never judges.
-      void this.sweepStalls(sessions, registryRead.names, { panePids, records }).catch(() => { /* one bad sweep must not kill the poll */ });
+      // `assembleFleet` read and the registry rows (`StallTick`), so the lane reads neither again. It is handed the
+      // listing's refused ids too, so a refused worker or claimant holds as unmeasured rather than reading as absent
+      // from `sessions` (`tick-lanes-hold-a-refused-id`). It is never awaited: its reads are async, so it cannot sit in
+      // the claim pair's synchronous try-block. It gates itself on `primed`, which is set below, so the priming tick
+      // never judges.
+      void this.sweepStalls(sessions, registryRead.names, { panePids, records, refused: registryRead.refused }).catch(() => { /* one bad sweep must not kill the poll */ });
       // NEVER awaited, same reasoning as `sweepDivergences`: each is a
       // handful of io reads per PROJECT, on an hourly / 15-minute clock.
       void this.sweepLedgerFloor(records).catch(() => { /* one bad sweep must not kill the poll */ });
@@ -2396,7 +2421,12 @@ export class FleetWatcher {
               const survivingIds = new Set(sessions.map((s) => s.id));
               const missingIds = prior.sessions.map((s) => s.id).filter((id) => !survivingIds.has(id));
               const names = await this.deps.io.readdir(this.deps.cfg.registryDir);
-              const allGenuinelyPurged = names !== null && missingIds.every((id) => !names.includes(`${id}.uuid`));
+              // Spec §2.3: a REFUSED id (not a registry id) is never assembled, so a
+              // snapshot an older build wrote may still carry it while its `.uuid`
+              // stays listed. Its absence from `sessions` is not a partial read and
+              // never heals, so it counts as purged — or one stray file would freeze
+              // every snapshot write for as long as it stands.
+              const allGenuinelyPurged = names !== null && missingIds.every((id) => !isRegistryId(id) || !names.includes(`${id}.uuid`));
               if (allGenuinelyPurged) {
                 await saveSnapshot(sessions, this.cachePath);
                 this.snapshotWriteSkippedWarned = false;
@@ -2847,6 +2877,7 @@ export class FleetWatcher {
       // UNTOUCHED on `{listed:false}` rather than rebuilt from an empty `[]`
       // — a failed listing must not wipe every retained entry the branch
       // below exists to protect.
+      // [registry-refused:tests-only] `tick()` hands this lane its own `records`; the census pins that hand-off.
       const registryRead = await readRegistryMeasured(this.deps.io, this.deps.cfg);
       if (!registryRead.listed) return;
       recs = registryRead.records;
@@ -2936,6 +2967,7 @@ export class FleetWatcher {
     // failed listing still consumes this sweep's slot rather than retrying
     // every 2 s tick, the same throttle discipline every other sweep here
     // keeps.
+    // [registry-refused:omits] a refused id is in no `records`: no `taskProgress` entry and no read.
     const registryRead = await readRegistryMeasured(this.deps.io, this.deps.cfg);
     if (!registryRead.listed) return;
     const records = registryRead.records;
@@ -3090,6 +3122,7 @@ export class FleetWatcher {
     // is the pane's branch, else the worktree HEAD's, else this (fleet.ts), so it
     // lags a rename by however long Claude Code takes to re-render its pane.
     // Same reason sweepTasks and sweepPr read the registry themselves.
+    // [registry-refused:omits] a refused row is never in `records`, so it is never renamed.
     const records = await readRegistry(this.deps.io, this.deps.cfg);
     for (const r of records) {
       // SKIP a degraded row before anything else: an unmeasured `uuid`
@@ -3262,7 +3295,7 @@ export class FleetWatcher {
    * `this.deps.coord` is `?.`-chained because `testDeps` supplies none — a
    * non-optional call TypeErrors fourteen `hold-gate` tests plus `pr-sweep`'s.
    */
-  async sweepDivergences(records: SessionRecord[]): Promise<void> {
+  async sweepDivergences(records: SessionRecord[], refused: ReadonlySet<string>): Promise<void> {
     // `Date.now()`, not an injected clock: this class has none, and `sweepNames`
     // just above reads the same way. `!== 0` is not a style tic — it is what
     // makes the FIRST sweep run immediately after a restart instead of waiting a
@@ -3441,6 +3474,9 @@ export class FleetWatcher {
         supervisedAtMs: registrySecondsToMs(r.supervisedAt),
       })),
       worktrees, headBranch, openRunSessionIds, openRunIds, liveClaims,
+      // THE TICK'S REFUSED IDS, carried as a fact: `divergence.ts` decides that
+      // rule 3's open-run side leaves them out (`tick-lanes-hold-a-refused-id`).
+      refusedIds: refused,
       // THE REGISTRY'S OWN DIRECTORY LISTING — the evidence that a workspace
       // mid-`ws-add` is claimed before its row parses (see
       // `unclaimedWorktrees`), taken above AFTER git's records for the ordering
@@ -5536,13 +5572,22 @@ export class FleetWatcher {
    * `Pick<…>` in the sweep signatures is deliberate: the sweeps read exactly
    * three fields, and a test should not have to fabricate a whole
    * `FleetSession` to exercise a lease.
+   *
+   * `refused` is the tick listing's refused ids (`RegistryRead.refused`). A
+   * holder among them is in no `sessions`, and that proves nothing about it:
+   * it answers `unmeasurable` — doubt, which D12 renews and holds, while the
+   * hard cap still fells it — and is checked BEFORE the absent test, which
+   * would answer `gone` (slug `tick-lanes-hold-a-refused-id`). A holder with
+   * no listed row at all still reads `gone`.
    */
   private claimProbe(
     sessions: readonly Pick<FleetSession, 'id' | 'status' | 'unmeasured'>[],
+    refused: ReadonlySet<string>,
   ): LivenessProbe {
     const byId = new Map(sessions.map((s) => [s.id, s]));
     return {
       liveness: (id: string) => {
+        if (refused.has(id)) return 'unmeasurable';        // listed but refused: never read, so never gone
         const s = byId.get(id);
         if (s === undefined) return 'gone';                 // the fleet no longer lists it
         if (s.unmeasured.length > 0) return 'unmeasurable'; // doubt reads as HELD (D12)
@@ -5570,13 +5615,13 @@ export class FleetWatcher {
    * lapse lane below keeps the honest verdict, which is where "doubt is not
    * death" does its other half of the work.
    */
-  renewClaims(sessions: readonly Pick<FleetSession, 'id' | 'status' | 'unmeasured'>[]): void {
+  renewClaims(sessions: readonly Pick<FleetSession, 'id' | 'status' | 'unmeasured'>[], refused: ReadonlySet<string>): void {
     const now = Date.now();
     if (this.lastClaimRenew !== 0 && now - this.lastClaimRenew < CLAIM_SWEEP_MS) return;
     this.lastClaimRenew = now;
     const store = this.deps.coord;
     if (!store) return;
-    const probe = this.claimProbe(sessions);
+    const probe = this.claimProbe(sessions, refused);
     for (const c of store.activeClaims()) {
       const v = probe.liveness(c.heldBy);
       const d = claimExpiry(c, now, v === 'unmeasurable' ? 'running' : v);
@@ -5588,13 +5633,13 @@ export class FleetWatcher {
    *  gone lapses at the STANDING `expiresAt` with `endedBy:'session-gone'`;
    *  the 8 h hard cap lapses whatever the liveness said. Rows survive —
    *  `lapseClaimRow` lapses, never deletes. */
-  lapseClaims(sessions: readonly Pick<FleetSession, 'id' | 'status' | 'unmeasured'>[]): void {
+  lapseClaims(sessions: readonly Pick<FleetSession, 'id' | 'status' | 'unmeasured'>[], refused: ReadonlySet<string>): void {
     const now = Date.now();
     if (this.lastClaimLapse !== 0 && now - this.lastClaimLapse < CLAIM_SWEEP_MS) return;
     this.lastClaimLapse = now;
     const store = this.deps.coord;
     if (!store) return;
-    const probe = this.claimProbe(sessions);
+    const probe = this.claimProbe(sessions, refused);
     for (const c of store.activeClaims()) {
       const d = claimExpiry(c, now, probe.liveness(c.heldBy));
       if (d.act === 'lapse') store.lapseClaimRow(c.id, d.endedBy, now);
@@ -5673,7 +5718,9 @@ export class FleetWatcher {
       // every judged sweep since it was set. More than STALL_CLOCK_GAP_MS from the END of the last judged sweep to this
       // start means nobody watched in between (a disabled window, unreadable or throwing candidate reads, ticks that
       // never reached the lane), so every clock restarts here. The early returns above never stamp it: they are that
-      // unobserved time. A judged sweep's own duration is observed time, so `finally` stamps its end.
+      // unobserved time. A judged sweep's own duration is observed time, so `finally` stamps its end. A sweep that
+      // refuses a subject's id is unobserved time for that subject too, so its clocks restart there: `judgeStall` and
+      // `judgeStallCoordinator` drop them (slug `tick-lanes-hold-a-refused-id`).
       if (this.lastStallJudgedAt !== null && now - this.lastStallJudgedAt > STALL_CLOCK_GAP_MS) this.dropStallClocks();
       judging = true;
       const workers = stallSubjects(candidates.runs);
@@ -5799,16 +5846,30 @@ export class FleetWatcher {
     const primary = subject.primary;
     const id = primary.sessionId;
     const s = sessions.find((x) => x.id === id);
-    this.stallSince(this.stallAbsentSince, id, s === undefined, now);
-    this.stallSince(this.stallDeadSince, id, s !== undefined && stallDeadShaped(s.lifecycle), now);
-    const ident = this.stallUuid(tick, id);
-    const lr = s === undefined ? null : await this.stallLiveRead(id, s.wrapper, tick);
-    const mark = await this.stallMarkRead(id, ident, lr);
-    this.stallMarkClock(id, ident, mark, now);
-    const raw = ident.ok
-      ? await readHookStateRawMeasured(this.deps.io, this.deps.cfg.registryDir, id, ident.uuid)
-      : STALL_RAW_UNMEASURED;
-    const worker = this.stallWorkerFor(store, s, lr, stallHookAskOf(raw));
+    // A worker id this tick's listing refused (`tick-lanes-hold-a-refused-id`) is in no `sessions`, and that is no
+    // measure of absence. The lane carries the fact and decides nothing: it composes no path or argv from the id, takes
+    // no live, marker or hookstate read, and DROPS its absent, dead and marker-unreadable clocks, because a refused sweep
+    // observes nothing about the subject: an unlisting after it starts them afresh. L1 holds the arm.
+    const refused = tick.refused.has(id);
+    let lr: StallLive | null = null;
+    let mark: TurnMarkRead = STALL_MARK_UNREAD;
+    let raw: HookStateRawRead = STALL_RAW_UNMEASURED;
+    if (refused) {
+      this.stallAbsentSince.delete(id);
+      this.stallDeadSince.delete(id);
+      this.stallMarkUnreadableSince.delete(id);
+    } else {
+      this.stallSince(this.stallAbsentSince, id, s === undefined, now);
+      this.stallSince(this.stallDeadSince, id, s !== undefined && stallDeadShaped(s.lifecycle), now);
+      const ident = this.stallUuid(tick, id);
+      lr = s === undefined ? null : await this.stallLiveRead(id, s.wrapper, tick);
+      mark = await this.stallMarkRead(id, ident, lr);
+      this.stallMarkClock(id, ident, mark, now);
+      raw = ident.ok
+        ? await readHookStateRawMeasured(this.deps.io, this.deps.cfg.registryDir, id, ident.uuid)
+        : STALL_RAW_UNMEASURED;
+    }
+    const worker = this.stallWorkerFor(store, s, lr, stallHookAskOf(raw), refused);
     const runIds = subject.runs.map((r) => r.id);
     const read = store.stallMailFor(id, runIds, now - BACKLOG_HORIZON_MS);
     if (!read.ok) {
@@ -5860,11 +5921,21 @@ export class FleetWatcher {
   ): Promise<void> {
     const id = c.sessionId;
     const s = sessions.find((x) => x.id === id);
-    const ident = this.stallUuid(tick, id);
-    const lr = s === undefined ? null : await this.stallLiveRead(id, s.wrapper, tick);
-    const mark = await this.stallMarkRead(id, ident, lr);
-    this.stallMarkClock(id, ident, mark, now);
-    const worker = this.stallWorkerFor(store, s, lr, STALL_HOOK_ASK_UNREAD);
+    // A refused claimant id, as `judgeStall`'s refused worker (`tick-lanes-hold-a-refused-id`): no composed path, no
+    // live or marker read, and its marker clock is DROPPED (a refused sweep observes nothing about the subject, so a
+    // later unlisting starts it afresh). Every session verdict below holds the arm.
+    const refused = tick.refused.has(id);
+    let lr: StallLive | null = null;
+    let mark: TurnMarkRead = STALL_MARK_UNREAD;
+    if (refused) {
+      this.stallMarkUnreadableSince.delete(id);
+    } else {
+      const ident = this.stallUuid(tick, id);
+      lr = s === undefined ? null : await this.stallLiveRead(id, s.wrapper, tick);
+      mark = await this.stallMarkRead(id, ident, lr);
+      this.stallMarkClock(id, ident, mark, now);
+    }
+    const worker = this.stallWorkerFor(store, s, lr, STALL_HOOK_ASK_UNREAD, refused);
     const read = store.stallMailFor(id, [], now - BACKLOG_HORIZON_MS);
     if (!read.ok) {
       console.warn(`ccrc-server: stall-watch coordinator ${id} mail unreadable (${read.kind}: ${read.detail}) — held this sweep`);
@@ -5903,7 +5974,8 @@ export class FleetWatcher {
     if (!mark.ok || !stallOrphanDCandidate(mark)) return;
     const s = sessions.find((x) => x.id === r.id);
     const lr = s === undefined ? null : await this.stallLiveRead(r.id, s.wrapper, tick);
-    const worker = this.stallWorkerFor(store, s, lr, STALL_HOOK_ASK_UNREAD);
+    // A row of `records` is never refused: the listing builds no refused row.
+    const worker = this.stallWorkerFor(store, s, lr, STALL_HOOK_ASK_UNREAD, false);
     const read = store.stallMailFor(r.id, [], now - BACKLOG_HORIZON_MS);
     if (!read.ok) {
       console.warn(`ccrc-server: stall-watch session ${r.id} mail unreadable (${read.kind}: ${read.detail}) — held this sweep`);
@@ -5952,8 +6024,10 @@ export class FleetWatcher {
 
   /** The session's facts. They come from this tick's fleet row, the live read and the hookstate ask; the two store
    *  reads are synchronous. A failed auto-continue read has no slot of its own: it is a failed store read, hold 1,
-   *  so it raises `unmeasured`. */
-  private stallWorkerFor(store: CoordStore, s: FleetSession | undefined, lr: StallLive | null, hookAsk: HookAskFact): StallWorker {
+   *  so it raises `unmeasured`. The one constructor of `StallWorker`: an id this tick's listing refused is its own
+   *  arm, built before the absent test and never folded into it (`tick-lanes-hold-a-refused-id`), with no store read. */
+  private stallWorkerFor(store: CoordStore, s: FleetSession | undefined, lr: StallLive | null, hookAsk: HookAskFact, refused: boolean): StallWorker {
+    if (refused) return { present: 'refused' };
     if (s === undefined || lr === null) return { present: false };
     const ask = store.currentAskFor(s.id);
     const askRow: AskRowFact = !ask.ok ? { kind: 'unmeasured' }
@@ -6530,6 +6604,7 @@ export class FleetWatcher {
     // own unreadable listing already does three lines up, rather than
     // silently emptying `records` and letting every row downstream mistake
     // "we could not read the fleet this pass" for "this recipient is gone".
+    // [registry-refused:holds] a refused recipient is held `registry-unmeasurable` below, never parked.
     const registryRead = await readRegistryMeasured(this.deps.io, this.deps.cfg);
     if (!registryRead.listed) return;
     const records = registryRead.records;
@@ -6687,7 +6762,11 @@ export class FleetWatcher {
         // assertion being a claim nothing checks, which is the shape this tree
         // asks a guard not to be.
         if (rec === undefined || identity === null) {
-          const unmeasurable = rec !== undefined;
+          // Spec §2.3: a REFUSED recipient (listed, never read, because its id is
+          // not a registry id) is absent from `records` but is not proven gone. It
+          // is held exactly as a degraded row is: backed off, never ratcheted,
+          // never parked.
+          const unmeasurable = rec !== undefined || registryRead.refused.has(d.toId);
           // Fix — review finding 30: a row whose recipient's registry row is
           // genuinely ABSENT (reaped, purged) used to `continue` here with
           // `attempts` untouched forever — `MAIL_MAX_ATTEMPTS` can only ever be
@@ -7207,6 +7286,7 @@ export class FleetWatcher {
     const mySweep = now;
     this.prSweepStartedAt = mySweep;
     try {
+      // [registry-refused:omits] a refused row is never in `records`: no pr-state, no prStates key.
       const records = await readRegistry(this.deps.io, this.deps.cfg);
       const projects = [...new Set(records.filter((r) => r.workspace !== null).map((r) => r.project))];
       for (const project of projects) {
@@ -7648,6 +7728,7 @@ export class FleetWatcher {
    */
   private async detectDialogs(notify: boolean, records?: SessionRecord[]): Promise<Set<string>> {
     const pending = new Set<string>();
+    // [registry-refused:tests-only] tick() passes its records; only tests reach this read, which omits refused rows.
     const recs = records ?? await readRegistry(this.deps.io, this.deps.cfg);
     for (const r of recs) {
       const pane = await this.deps.tmux.capture(r.id);

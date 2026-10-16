@@ -729,7 +729,7 @@ describe('reclaimChild — the one executor', () => {
     const s = await rig();
     writeFileSync(path.join(s.reg, `${ID}.workdir`), '');
     const probe = await readSessionRecord(s.deps.io, s.deps.cfg, ID);
-    expect(probe, 'the fixture really is the DROPPED population').toEqual({ found: false, reason: 'absent' });
+    expect(probe, 'the fixture really is the DROPPED population').toEqual({ kind: 'absent' });
     expect(await reclaimChild(s.deps, s.req())).toMatchObject({ kind: 'deferred', why: 'marker-unreadable' });
     expect(s.calls).toEqual([]);
     expect(s.deliveryState().state).toBe('queued');

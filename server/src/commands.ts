@@ -49,6 +49,7 @@ function lastSkillListing(jsonl: string): string {
 
 /** Built-ins plus the session's skills (from its transcript's skill_listing). */
 export async function sessionCommands(deps: Deps, id: string): Promise<{ builtins: SlashCommand[]; skills: SlashCommand[] }> {
+  // [registry-refused:knownId] the route's knownId refuses a non-registry id before this read.
   const rec = (await readRegistry(deps.io, deps.cfg)).find((r) => r.id === id);
   if (!rec) return { builtins: BUILTINS, skills: [] };
   const cfgDir = configDirFor(deps.cfg, rec.wrapper);

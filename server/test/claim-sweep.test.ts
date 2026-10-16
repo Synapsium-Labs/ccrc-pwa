@@ -17,6 +17,9 @@ import { mkTmp } from './tmpHelpers.js';
 import { CLAIM_LEASE_MS, CLAIM_HARD_CAP_MS, type Divergence } from '../../shared/api.js';
 
 const NOW = 1_785_300_000_000;
+/** No id the listing refused: every holder in these cases is an ordinary registry id. A refused holder's lease is
+ *  pinned in `tick-refused-lanes.test.ts` (slug `tick-lanes-hold-a-refused-id`). */
+const NO_REFUSED: ReadonlySet<string> = new Set();
 
 afterEach(() => { vi.restoreAllMocks(); });
 
@@ -118,7 +121,7 @@ describe('renewClaims / lapseClaims on the FleetWatcher tick', () => {
     const h = fixture();
     const c = h.claim();
     at(NOW + 600_000);
-    h.watcher.renewClaims([h.running('demo-quiet-basin')]);
+    h.watcher.renewClaims([h.running('demo-quiet-basin')], NO_REFUSED);
     expect(h.coord.activeClaims()[0]!.expiresAt).toBe(NOW + 600_000 + CLAIM_LEASE_MS);
     expect(h.coord.activeClaims()[0]!.id).toBe(c.id);
   });
@@ -127,8 +130,8 @@ describe('renewClaims / lapseClaims on the FleetWatcher tick', () => {
     const h = fixture();
     h.claim();
     at(NOW + CLAIM_LEASE_MS + 1);                          // past the lease…
-    h.watcher.renewClaims([{ id: 'demo-quiet-basin', status: 'idle', unmeasured: ['uuid'] }]);
-    h.watcher.lapseClaims([{ id: 'demo-quiet-basin', status: 'idle', unmeasured: ['uuid'] }]);
+    h.watcher.renewClaims([{ id: 'demo-quiet-basin', status: 'idle', unmeasured: ['uuid'] }], NO_REFUSED);
+    h.watcher.lapseClaims([{ id: 'demo-quiet-basin', status: 'idle', unmeasured: ['uuid'] }], NO_REFUSED);
     expect(h.coord.activeClaims()).toHaveLength(1);        // …and still held
     expect(h.coord.activeClaims()[0]!.expiresAt).toBe(NOW + CLAIM_LEASE_MS + 1 + CLAIM_LEASE_MS);
   });
@@ -140,7 +143,7 @@ describe('renewClaims / lapseClaims on the FleetWatcher tick', () => {
     const h = fixture();
     h.claim();
     at(NOW + CLAIM_LEASE_MS + 1);
-    h.watcher.renewClaims([{ id: 'demo-quiet-basin', status: 'idle', unmeasured: ['uuid'] }]);
+    h.watcher.renewClaims([{ id: 'demo-quiet-basin', status: 'idle', unmeasured: ['uuid'] }], NO_REFUSED);
     const rival = h.coord.claimAttempt({
       project: 'demo', paths: ['server/src/io.ts'], sessionId: 'demo-calm-mesa',
       uuid: 'u-2', runId: null, intent: 'rival', now: NOW + CLAIM_LEASE_MS + 2,
@@ -152,10 +155,10 @@ describe('renewClaims / lapseClaims on the FleetWatcher tick', () => {
     const h = fixture();
     h.claim();
     at(NOW + 60_000);                                      // gone, but the lease still stands
-    h.watcher.lapseClaims([]);
+    h.watcher.lapseClaims([], NO_REFUSED);
     expect(h.coord.activeClaims()).toHaveLength(1);
     at(NOW + CLAIM_LEASE_MS + 1);                          // the standing expiry has passed
-    h.watcher.lapseClaims([]);
+    h.watcher.lapseClaims([], NO_REFUSED);
     expect(h.coord.activeClaims()).toEqual([]);
     expect(h.coord.claimsForProject('demo', true)[0]).toMatchObject(
       { state: 'lapsed', endedBy: 'session-gone' });
@@ -165,7 +168,7 @@ describe('renewClaims / lapseClaims on the FleetWatcher tick', () => {
     const h = fixture();
     h.claim();
     at(NOW + CLAIM_LEASE_MS + 1);
-    h.watcher.lapseClaims([{ id: 'demo-quiet-basin', status: 'dead', unmeasured: [] }]);
+    h.watcher.lapseClaims([{ id: 'demo-quiet-basin', status: 'dead', unmeasured: [] }], NO_REFUSED);
     expect(h.coord.claimsForProject('demo', true)[0]).toMatchObject(
       { state: 'lapsed', endedBy: 'session-gone' });
   });
@@ -174,8 +177,8 @@ describe('renewClaims / lapseClaims on the FleetWatcher tick', () => {
     const h = fixture();
     h.claim();
     at(NOW + CLAIM_HARD_CAP_MS + 1);
-    h.watcher.renewClaims([h.running('demo-quiet-basin')]);   // must NOT resurrect
-    h.watcher.lapseClaims([h.running('demo-quiet-basin')]);
+    h.watcher.renewClaims([h.running('demo-quiet-basin')], NO_REFUSED);   // must NOT resurrect
+    h.watcher.lapseClaims([h.running('demo-quiet-basin')], NO_REFUSED);
     expect(h.coord.claimsForProject('demo', true)[0]).toMatchObject(
       { state: 'lapsed', endedBy: 'hard-cap' });
   });
@@ -183,22 +186,22 @@ describe('renewClaims / lapseClaims on the FleetWatcher tick', () => {
   it('own clock: a second sweep inside CLAIM_SWEEP_MS does not act', () => {
     const h = fixture();
     at(NOW);
-    h.watcher.lapseClaims([]);                             // first sweep runs (the !== 0 rule), arms the clock
+    h.watcher.lapseClaims([], NO_REFUSED);                             // first sweep runs (the !== 0 rule), arms the clock
     // a claim whose lease is ALREADY past due the next time anyone looks:
     const c = h.claim({ now: NOW - CLAIM_LEASE_MS - 1 });
     expect(c.expiresAt).toBeLessThan(NOW);
     at(NOW + 30_000);                                      // 30 s later: inside the interval
-    h.watcher.lapseClaims([]);
+    h.watcher.lapseClaims([], NO_REFUSED);
     expect(h.coord.activeClaims()).toHaveLength(1);        // the gate held — no read, no lapse
     at(NOW + 60_001);                                      // past CLAIM_SWEEP_MS (module-private, 60 s)
-    h.watcher.lapseClaims([]);
+    h.watcher.lapseClaims([], NO_REFUSED);
     expect(h.coord.activeClaims()).toEqual([]);            // now it acted: gone + expired => lapsed
   });
 
   it('runs with NO coord at all — the testDeps shape every watcher test depends on', () => {
     const home = mkTmp('ccrc-claim-sweep-');
     const w = new FleetWatcher(testDeps(home), new Bus(), 10_000);
-    expect(() => { w.renewClaims([]); w.lapseClaims([]); }).not.toThrow();
+    expect(() => { w.renewClaims([], NO_REFUSED); w.lapseClaims([], NO_REFUSED); }).not.toThrow();
   });
 });
 
@@ -215,7 +218,7 @@ describe('sweepDivergences feeds claim-orphan from what it already read', () => 
     h.coord.db.prepare("UPDATE runs SET state = 'failed' WHERE id = ?").run(open.id);
     const seen: Divergence[][] = [];
     h.bus.on('divergence', (d: Divergence[]) => seen.push(d));
-    await h.watcher.sweepDivergences(await h.records());
+    await h.watcher.sweepDivergences(await h.records(), NO_REFUSED);
     expect(seen.at(-1) ?? []).toContainEqual(
       expect.objectContaining({ kind: 'claim-orphan', id: 'demo-quiet-basin' }));
   });
@@ -231,7 +234,7 @@ describe('sweepDivergences feeds claim-orphan from what it already read', () => 
       handoffCommit: null, program: 'build9b', viaClosing: false });
     const seen: Divergence[][] = [];
     h.bus.on('divergence', (d: Divergence[]) => seen.push(d));
-    await h.watcher.sweepDivergences(await h.records());
+    await h.watcher.sweepDivergences(await h.records(), NO_REFUSED);
     expect(seen.at(-1) ?? []).not.toContainEqual(
       expect.objectContaining({ kind: 'claim-orphan' }));
   });

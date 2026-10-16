@@ -1043,32 +1043,44 @@ async function childReclaimOutcome(deps: ChildReclaimDeps, req: ChildReclaimRequ
 
   // 1 — the box's authority, re-read: the marker must name THIS request's run.
   const read = await readSessionRecord(deps.io, deps.cfg, sessionId);
-  if (!read.found && read.reason === 'absent') {
-    // `absent` is read the way wave 2's `childBindGate` reads it: re-listed ONCE.
-    // Absent twice is `gone`; a second listing that still names this id's
-    // `.child` (or `.uuid`) — a row that exists and could not be built — is
-    // `marker-unreadable`, and so is a second listing that fails. See
-    // `childReclaimRowListing`.
-    const again = await childReclaimRowListing(deps, sessionId);
-    if (again.kind === 'unlistable') return deferred('marker-unreadable', 'the registry could not be listed');
-    // The executor's OWN gone-check: `.uuid`-OR-`.child` (fix round 1, review
-    // Important #1) — `childReclaimRowListing` no longer folds this for us.
-    if (again.uuid || again.child) {
-      return deferred('marker-unreadable', 'the registry lists this workspace but its row could not be built');
+  switch (read.kind) {
+    case 'found': break;
+    case 'absent': {
+      // `absent` is read the way wave 2's `childBindGate` reads it: re-listed ONCE.
+      // Absent twice is `gone`; a second listing that still names this id's
+      // `.child` (or `.uuid`) — a row that exists and could not be built — is
+      // `marker-unreadable`, and so is a second listing that fails. See
+      // `childReclaimRowListing`.
+      const again = await childReclaimRowListing(deps, sessionId);
+      if (again.kind === 'unlistable') return deferred('marker-unreadable', 'the registry could not be listed');
+      // The executor's OWN gone-check: `.uuid`-OR-`.child` (fix round 1, review
+      // Important #1) — `childReclaimRowListing` no longer folds this for us.
+      if (again.uuid || again.child) {
+        return deferred('marker-unreadable', 'the registry lists this workspace but its row could not be built');
+      }
+      // GONE, AND THE MAIL GOES WITH IT. The box half of a reclaim can finish
+      // without step 7 ever running: the server restarted between `ws-reclaim`
+      // and the cancel, or the verb answered `purge-incomplete` (the row WAS
+      // purged, and it reads as `failed`). The next attempt lands HERE, and
+      // without this its outstanding mail would wait for `sweepMail`'s
+      // abandonment park — listed as a human's to act on — through exactly the
+      // slug-recycling window spec §5.6 moved the cancel into this wave to close.
+      // Safe: a listing that names neither `<id>.uuid` nor `<id>.child` means no
+      // session holds this id now.
+      childReclaimCancelMail(deps, sessionId, 'gone');
+      return { kind: 'gone', sessionId };
     }
-    // GONE, AND THE MAIL GOES WITH IT. The box half of a reclaim can finish
-    // without step 7 ever running: the server restarted between `ws-reclaim`
-    // and the cancel, or the verb answered `purge-incomplete` (the row WAS
-    // purged, and it reads as `failed`). The next attempt lands HERE, and
-    // without this its outstanding mail would wait for `sweepMail`'s
-    // abandonment park — listed as a human's to act on — through exactly the
-    // slug-recycling window spec §5.6 moved the cancel into this wave to close.
-    // Safe: a listing that names neither `<id>.uuid` nor `<id>.child` means no
-    // session holds this id now.
-    childReclaimCancelMail(deps, sessionId, 'gone');
-    return { kind: 'gone', sessionId };
+    case 'unlistable': return deferred('marker-unreadable', 'the registry could not be listed');
+    // Path identity (spec §2.3): UNMEASURED, never gone. Read as `absent`, an
+    // id nothing lists would come out of the re-listing above as `gone`, and
+    // the mail addressed to it would be cancelled. A non-registry id was never
+    // listed for at all. No listing, no mail cancel, no argv.
+    case 'bad-id': return deferred('marker-unreadable', 'the session id is not a registry id');
+    default: {
+      const _x: never = read;
+      return _x;
+    }
   }
-  if (!read.found) return deferred('marker-unreadable', 'the registry could not be listed');
   const mark = read.record.child;
   if (mark.kind === 'unreadable') return deferred('marker-unreadable', 'the child marker could not be read');
   if (mark.kind === 'none') return deferred('marker-mismatch', 'the workspace carries no child marker');
@@ -1228,7 +1240,7 @@ export type ChildReclaimRowListing =
   | { readonly kind: 'unlistable' }
   | { readonly kind: 'listed'; readonly uuid: boolean; readonly child: boolean };
 
-/** `readSessionRecord`'s `{ found: false, reason: 'absent' }` is TWO
+/** `readSessionRecord`'s `{ kind: 'absent' }` is TWO
  *  populations (its own docstring; wave 2's `childBindGate` reads it the same
  *  way): no `.uuid` in a listing that succeeded, AND a row `buildRecord`
  *  DROPPED — an identity field (`uuid`, `wrapper`, `workdir`) read back empty
@@ -1447,7 +1459,21 @@ export async function releaseRetiredChildHold(
       + `(${err instanceof Error ? err.message : String(err)})`);
     return 'failed';
   }
-  if (!read.found) return read.reason === 'unlistable' ? 'failed' : 'changed';
+  switch (read.kind) {
+    case 'found': break;
+    case 'unlistable': return 'failed';
+    case 'absent': return 'changed';
+    // An id `isRegistryId` refuses (spec §2.3) answers `changed`, as `absent`
+    // does, by design. The row this job relied on cannot be measured, and the
+    // id never heals, so a `failed` would retry and warn on every pass.
+    // Folding it into `absent` changes nothing observable; its pin is
+    // `readSessionRecord`'s zero-listing case.
+    case 'bad-id': return 'changed';
+    default: {
+      const _x: never = read;
+      return _x;
+    }
+  }
   const mark = read.record.child;
   if (mark.kind !== 'child' || mark.runId !== runId) return 'changed';
   if (read.record.held === null || read.record.held.trim() !== reason) return 'changed';

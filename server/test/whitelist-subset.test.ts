@@ -436,14 +436,14 @@ describe('layer 3 — the list never drifts wider than the code', () => {
   // unconstrained") is what already covers `--surface` with zero widening.
   // Executed here directly, past `CCD_ARGV`, so this is proof the PREFIX
   // governs the shape rather than an assumption about which one does — and
-  // for both forms `stop` actually takes, since the id form and the
-  // `<wrapper> <project>` form put the flag at different offsets.
+  // for both forms `stop` actually takes: since path identity W1a the flag
+  // LEADS in both (spec §2.4), and the two forms leave different residues.
   it('stop is a bare one-token grant, so --surface crosses with no widening, in both argv forms', () => {
     const grant = EXEC_WHITELIST.ccd.filter((p) => p[0] === 'stop');
     expect(grant.length, 'exactly one stop grant').toBe(1);
     expect(grant[0]).toEqual(['stop']);
-    expect(isExecAllowed('ccd', ['stop', 'demo-quiet-basin', '--surface', 'pwa'])).toBe(true);
-    expect(isExecAllowed('ccd', ['stop', 'claude', 'demo', '--surface', 'pwa'])).toBe(true);
+    expect(isExecAllowed('ccd', ['stop', '--surface', 'pwa', 'demo-quiet-basin'])).toBe(true);
+    expect(isExecAllowed('ccd', ['stop', '--surface', 'pwa', 'claude', 'demo'])).toBe(true);
     // The exact argv the route actually builds, both forms.
     expect(isExecAllowed('ccd', [...CCD_ARGV.stopId('demo-quiet-basin', 'pwa')])).toBe(true);
     expect(isExecAllowed('ccd', [...CCD_ARGV.stopPair('claude', 'demo', 'pwa')])).toBe(true);
@@ -532,8 +532,12 @@ describe('layer 2c — exact argv, not just prefix compliance (mutation-sweep fi
     start: ['start', 'claude', 'demo'],
     enable: ['enable', 'claude', 'demo'],
     ensure: ['ensure', 'demo-quiet-basin'],
-    stopId: ['stop', 'demo-quiet-basin', '--surface', 'pwa'],
-    stopPair: ['stop', 'claude', 'demo', '--surface', 'pwa'],
+    // LEADING pair, then the id (path identity W1a, spec §2.3, §2.4): with the
+    // id first, an id spelled `--surface` reached cmd_stop as `stop --surface
+    // --surface pwa`, and its loop stopped `pwa`. `ccd-stop-argv-order.test.ts`
+    // runs both rows through the real binary.
+    stopId: ['stop', '--surface', 'pwa', 'demo-quiet-basin'],
+    stopPair: ['stop', '--surface', 'pwa', 'claude', 'demo'],
     forget: ['forget', 'claude-corp-demo'],
     swap: ['swap', 'demo-quiet-basin', 'claude2'],
     // LEADING flag, before the positionals — the token order is

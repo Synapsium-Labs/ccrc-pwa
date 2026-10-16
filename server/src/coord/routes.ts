@@ -51,7 +51,7 @@ import {
   LEDGER_STALE_MS, LEDGER_TITLE_MAX_BYTES, ledgerPath, shapeProgramSlug,
   MAIL_ARTIFACTS_MAX, MAIL_ARTIFACT_PATH_MAX_BYTES, MAIL_BODY_MAX_BYTES,
   MAIL_SUBJECT_MAX_BYTES, PEER_ETIQUETTE, PEER_MAIL_HOURLY, PEER_MAIL_MAX_OUTSTANDING, transitionsFor, IDLE_RUN_STATES,
-  FAILURE_KINDS, ROUTE_CONTROL_CHAR_RE, isSessionIdShape, parseRouteEventDetail, parseRouteFields, routeEventDetail, RUN_STATES, TERMINAL_RUN_STATES,
+  FAILURE_KINDS, ROUTE_CONTROL_CHAR_RE, isRegistryId, parseRouteEventDetail, parseRouteFields, routeEventDetail, RUN_STATES, TERMINAL_RUN_STATES,
   type AskState, type ClaimConflict, type CoordCapsView, type LifecycleQueryResult, type MailRejectCode,
   type MirroredLifecycleEvent, type PeerDeliverable, type PeerSummary, type RunState, type RunSummary,
   type FailureKind, type RouteField, type RunRouteBody, type RouteMode,
@@ -172,6 +172,8 @@ function sendDispatchOutcome(reply: FastifyReply, r: DispatchOutcome) {
     case 'unknown-run': return reply.code(404).send({ ok: false, error: 'unknown-run' });
     case 'bad-transition':
       return reply.code(409).send({ ok: false, error: 'bad-transition', from: r.from, to: r.to });
+    // Spec §2.3, a stored defect: the run's session id is not a registry id, and nothing was read or composed.
+    case 'bad-session': return reply.code(409).send({ ok: false, error: 'bad-session' });
     // `detail` spread, not `detail: r.detail`: an L4 adapter may not narrow a
     // distinction it received (`route: <why>[ <field>]`, present only for the
     // malformed-route refusal), so its PRESENCE rides the wire exactly as
@@ -245,6 +247,8 @@ function sendCloseOutcome(reply: FastifyReply, r: CloseOutcome) {
     case 'unknown-run': return reply.code(404).send({ ok: false, error: 'unknown-run' });
     case 'bad-transition':
       return reply.code(409).send({ ok: false, error: 'bad-transition', from: r.from, to: r.to });
+    // Spec §2.3, a stored defect: every close but the abandon refuses it, and nothing was read or composed.
+    case 'bad-session': return reply.code(409).send({ ok: false, error: 'bad-session' });
     case 'bad-request': return reply.code(400).send({ ok: false, error: 'bad-request' });
     case 'refused': return reply.code(409).send({ ok: false, refused: r.code });
     case 'doneVerdict': return reply.code(409).send({ ok: false, error: r.code, detail: r.detail });
@@ -624,6 +628,7 @@ export function registerCoordRoutes(
         detail: 'the registry directory could not be listed — transient, not a fact about the sender' });
       return false;
     }
+    // [registry-refused:raw-name] a refused row is in `names`, never in `registry`: the ladder reads it as unmeasurable.
     const registry = await readRegistry(deps.io, deps.cfg);
     const row = registry.find((r) => r.id === whoId);
     if (!row) {
@@ -829,6 +834,7 @@ export function registerCoordRoutes(
       return refuse(reply, 502, 'registry-unmeasurable', { fromId, toId, kind, subject, runId },
         'the registry directory could not be listed — transient, not a fact about the sender');
     }
+    // [registry-refused:raw-name] a refused row is in `names`, never in `registry`: the ladder reads it as unmeasurable.
     const registry = await readRegistry(deps.io, deps.cfg);
 
     // 5: sender — a registry row must exist for fromId.
@@ -1059,6 +1065,7 @@ export function registerCoordRoutes(
       return refuse(reply, 502, 'registry-unmeasurable', { fromId },
         'the registry directory could not be listed — transient, not a fact about the sender');
     }
+    // [registry-refused:raw-name] a refused row is in `names`, never in `registry`: the ladder reads it as unmeasurable.
     const registry = await readRegistry(deps.io, deps.cfg);
     const sender = registry.find((r) => r.id === fromId);
     if (!sender) {
@@ -1310,6 +1317,27 @@ export function registerCoordRoutes(
     // `kind`'s own vocabulary was already proven above, before this guard.
     // Each further refusal below names its field so the caller can tell
     // "malformed JSON" from "you sent the wrong thing".
+    //
+    // Path identity (spec §2.3). Every id this route stores can later reach an
+    // id-taking argv: `wsHold` below, then dispatch, close and the routing door.
+    // So each is asked the ONE predicate here, AS GIVEN. `openRun` stores the
+    // untrimmed body field, so a padded id is refused rather than stored. These
+    // checks stand ahead of the review arm, so a review open with a bad
+    // `sessionId` answers `bad-session` before that arm refuses any `sessionId`.
+    // The project check is a work run's only: a review run's project is the
+    // reviewed run's, compared below. A new WORK row can then never carry a
+    // project ccd could read as a flag to `ws-add`. A new review row copies the
+    // reviewed run's STORED project, which this check does not read (carried as
+    // `work-run-project-reaches-ws-add-unchecked`).
+    if (!isRegistryId(claimedBy)) {
+      return reply.code(400).send({ ok: false, error: 'bad-session', detail: 'claimedBy is not a registry id' });
+    }
+    if (sessionId !== undefined && !isRegistryId(sessionId)) {
+      return reply.code(400).send({ ok: false, error: 'bad-session', detail: 'sessionId is not a registry id' });
+    }
+    if (kind !== 'review' && /^[-.]/.test(body.project as string)) {
+      return reply.code(400).send({ ok: false, error: 'bad-request', detail: 'project must not begin with - or .' });
+    }
     const runKind: 'work' | 'review' = kind === 'review' ? 'review' : 'work';
     if (runKind === 'work' && reviews !== undefined) {
       return reply.code(400).send({ ok: false, error: 'bad-request', detail: 'reviews is only accepted with kind review' });
@@ -1752,6 +1780,11 @@ export function registerCoordRoutes(
         return reply.code(409).send({ ok: false, refused: 'claimant-alive', by: r.by, detail: r.detail });
       case 'heir-is-a-worker':
         return reply.code(409).send({ ok: false, refused: 'heir-is-a-worker', by: r.by });
+      // spec §2.3: `which` names the side that is not a registry id. The HEIR is
+      // this request's own value, so 400. The stored CLAIMANT is a row no retry
+      // heals, so 409, and its detail names the abandon door. Nothing was re-pointed.
+      case 'bad-session':
+        return reply.code(r.which === 'claimant' ? 409 : 400).send({ ok: false, error: 'bad-session', detail: r.detail });
       default: {
         const _exhaustive: never = r;
         return reply.code(500).send({ ok: false, error: 'internal', kind: (_exhaustive as { kind: string }).kind });
@@ -1870,6 +1903,14 @@ export function registerCoordRoutes(
     // Forward motion toward a review claim re-measures; retreating to
     // `working` does not — see this route's own docstring.
     if (to === 'awaiting-review' || to === 'merging') {
+      // Spec §2.3: a STORED sessionId is re-checked where the row enters an
+      // id-taking flow. `verifyDone` composes `pr-state --session <id>`, and a
+      // refusal from it records a rejection and queues mail to that id, so
+      // this check stands before it and outside it. A row written before
+      // POST /api/runs checked its ids can hold an id ccd would read as a
+      // flag. Retreating to `working` composes no argv, so such a row can
+      // still be sent back: the check guards this block alone.
+      if (!isRegistryId(run.sessionId)) return reply.code(409).send({ ok: false, reject: { code: 'bad-session' } });
       const verdict = await verifyDone(
         { io: deps.io, cfg: deps.cfg, runCcd: deps.runCcd, fleetState: deps.fleetState },
         { sessionId: run.sessionId, project: run.project, branch: run.branch ?? '' },
@@ -2014,18 +2055,26 @@ export function registerCoordRoutes(
       if (sid === null || sid === '') {
         return reply.code(409).send({ ok: false, error: 'no-session' });
       }
-      // Fix round 1, finding #2: `sid` comes off `run.sessionId`/
-      // `run.claimedBy` (`POST /api/runs` shape-checks `claimedBy`/
-      // `sessionId` only for "non-empty string", no charset guard), but
-      // `routeEventDetail` below embeds `sid` unescaped as the sixth segment
-      // of a `:`-delimited grammar that `ROUTE_EVENT_DETAIL_RE`'s own group
-      // accepts only `[A-Za-z0-9._-]+` for. Refuse the bad shape HERE, before
-      // ever building an argv or writing an event this door's own reader
-      // would later refuse to parse back — `no-session` (nothing to route
-      // to) and `bad-session` (something to route to, but not a name this
-      // door can safely write) are two different conditions and must not
-      // collapse to one refusal.
-      if (!isSessionIdShape(sid)) {
+      // The stored id is re-checked HERE, before any field read, argv or
+      // event (spec §2.3). `sid` comes off `run.sessionId`/`run.claimedBy`,
+      // a STORED row: `POST /api/runs` now refuses a `claimedBy` or
+      // `sessionId` that is not a registry id, but a row written before that
+      // check can still hold one, so this door asks again rather than
+      // trusting the open. The rule is THE registry-id predicate,
+      // `isRegistryId` (`shared/api.ts`): the session-id shape, no leading
+      // `-` or `.`, and at most 255 characters. Fix round 1, finding #2
+      // checked the SHAPE alone, because `routeEventDetail` below embeds
+      // `sid` unescaped as the sixth segment of a `:`-delimited grammar whose
+      // `ROUTE_EVENT_DETAIL_RE` group accepts only `[A-Za-z0-9._-]+`. The
+      // predicate keeps that guarantee and closes what the shape let through:
+      // a stored `--actor` would reach `CCD_ARGV.route`/`routeSet` as
+      // `route --session --actor`, an id the one predicate refuses (spec §2.3).
+      // A manual-field write reads no registry field, so nothing but this
+      // check stands between a bad stored id and that argv. `no-session`
+      // (nothing to route to) and `bad-session` (something to route to, but
+      // not a name this door can safely write or compose) are two different
+      // conditions and must not collapse to one refusal.
+      if (!isRegistryId(sid)) {
         return reply.code(409).send({ ok: false, error: 'bad-session' });
       }
 
@@ -3318,21 +3367,27 @@ export function registerCoordRoutes(
         detail: 'exactly one of ?project= or ?of= — a peer list is scoped or it is nothing' });
     }
 
-    // ONE listing, reused below for the presence ladder — the same
-    // fail-shut-on-unlistable idiom the mail ingress uses for this directory.
-    const names = await deps.io.readdir(deps.cfg.registryDir);
-    if (names === null) {
+    // A `?of=` that is not a registry id is refused BEFORE any read (spec §2.3): it can never name a row this server
+    // reads, so the presence ladder below would answer 502 for it forever. Checked on the trimmed value `selfId`
+    // takes below.
+    if (hasOf && !isRegistryId((q.of as string).trim())) {
+      return reply.code(400).send({ ok: false, error: 'bad-session' });
+    }
+
+    // ONE read (spec §2.3). Its listing is the presence ladder's. Its rows are `assembleFleet`'s (its own `records`
+    // parameter's contract: every lane of one pass describes one observation) and this route's own for `uuid`,
+    // which `FleetSession` does not carry. Its refused count rides the 200 as `refusedRows`. Unlistable keeps the
+    // fail-shut 502 that the mail ingress uses for this directory.
+    // [registry-refused:reports]
+    const reg = await readRegistryMeasured(deps.io, deps.cfg);
+    if (!reg.listed) {
       return reply.code(502).send({ ok: false, error: 'registry-unmeasurable',
         detail: 'the registry directory could not be listed — transient, not a fact about any peer' });
     }
-    // The records are read ONCE and handed to `assembleFleet` (its own
-    // `records` parameter's contract: every lane of one pass describes one
-    // observation) — this route needs them itself for `uuid`, which
-    // `FleetSession` does not carry.
-    const recs = await readRegistry(deps.io, deps.cfg);
-    const recById = new Map(recs.map((r) => [r.id, r]));
+    const names = reg.names;
+    const recById = new Map(reg.records.map((r) => [r.id, r]));
     const sessions = await assembleFleet(deps.io, deps.cfg, deps.tmux,
-      undefined, undefined, undefined, undefined, undefined, undefined, recs, deps.coord, undefined);
+      undefined, undefined, undefined, undefined, undefined, undefined, reg.records, deps.coord, undefined);
 
     let project: string;
     let selfId: string | null = null;
@@ -3412,7 +3467,10 @@ export function registerCoordRoutes(
       });
 
     const projects = [...new Set(sessions.map((s) => s.project))].sort();
-    return reply.code(200).send({ ok: true, peers, projects, etiquette: PEER_ETIQUETTE });
+    // `refusedRows` (spec §2.3): additive and absence-permitting, present only when a listed `.uuid` was refused, so a
+    // peer list that is silently short of a row says that it is. One writer of the field: this line.
+    return reply.code(200).send({ ok: true, peers, projects, etiquette: PEER_ETIQUETTE,
+      ...(reg.refused.size > 0 ? { refusedRows: reg.refused.size } : {}) });
   });
 
   /**
@@ -3520,9 +3578,14 @@ export function registerCoordRoutes(
         // conflict row is REPLACED by what was measured — with the mailHint
         // re-derived through the L1's own `claimMailHint`, so the degradation
         // rule (no:<reason> -> null, never a silent send) has one spelling.
-        const names = await deps.io.readdir(deps.cfg.registryDir);
+        // ONE registry read (spec §2.3): its rows are `assembleFleet`'s and its listing is the presence ladder's, so
+        // the two describe one observation. Unlistable gives no rows and a `null` listing: every holder reads
+        // unmeasurable, never absent and never `yes` off a second read the ladder did not see.
+        // [registry-refused:reports]
+        const reg = await readRegistryMeasured(deps.io, deps.cfg);
+        const names = reg.listed ? reg.names : null;
         const sessions = await assembleFleet(deps.io, deps.cfg, deps.tmux,
-          undefined, undefined, undefined, undefined, undefined, undefined, undefined, deps.coord, undefined);
+          undefined, undefined, undefined, undefined, undefined, undefined, reg.listed ? reg.records : [], deps.coord, undefined);
         const deliverableOf = (id: string): PeerDeliverable => {
           const row = sessions.find((s) => s.id === id);
           if (row) {

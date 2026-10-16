@@ -45,7 +45,11 @@ export type ChildBindVerdict =
  *   - `child.kind === 'none'` → `ok`: non-children are untouched, even one
  *     whose branch has had a PR;
  *   - `child.kind === 'unreadable'` → `spent-unmeasured`: a bind REFUSES what
- *     it cannot read (wave 3's reclaim will DEFER on the same answer).
+ *     it cannot read (wave 3's reclaim will DEFER on the same answer);
+ *   - `bad-id` → `spent-unmeasured` (path identity, spec §2.3): an id
+ *     `isRegistryId` refuses was never listed for, so it is UNMEASURED. It is
+ *     never the `absent` arm's `ok`, which would let the open or the `ensure`
+ *     that follows compose it. No second listing is taken.
  * A child is then asked `childSpent`, whose three answers map one to one —
  * with its BIRTH, read from the minting run its marker names (`runs.run(
  * mark.runId)`, through `childBirthOf`). A spent answer refuses in EITHER
@@ -58,17 +62,29 @@ export async function childBindGate(
   deps: ChildSpentDeps, runs: ChildBindRuns, sessionId: string,
 ): Promise<ChildBindVerdict> {
   const read = await readSessionRecord(deps.io, deps.cfg, sessionId);
-  if (!read.found) {
-    if (read.reason === 'unlistable') {
+  switch (read.kind) {
+    case 'found': break;
+    case 'unlistable':
       return { ok: false, code: 'spent-unmeasured', detail: 'the registry could not be listed' };
+    case 'absent': {
+      const names = await deps.io.readdir(deps.cfg.registryDir);
+      if (names === null) return { ok: false, code: 'spent-unmeasured', detail: 'the registry could not be listed' };
+      if (names.includes(`${sessionId}.child`)) {
+        return { ok: false, code: 'spent-unmeasured',
+          detail: 'the child marker is listed but its registry row could not be built' };
+      }
+      return { ok: true };
     }
-    const names = await deps.io.readdir(deps.cfg.registryDir);
-    if (names === null) return { ok: false, code: 'spent-unmeasured', detail: 'the registry could not be listed' };
-    if (names.includes(`${sessionId}.child`)) {
-      return { ok: false, code: 'spent-unmeasured',
-        detail: 'the child marker is listed but its registry row could not be built' };
+    // Path identity (spec §2.3): unmeasured, never absent (see the docstring).
+    // Two gates mask it: dispatch's stored-id gate on the resume arm, and
+    // `POST /api/runs`'s open gate, which checks `claimedBy` and `sessionId` as
+    // given before this read. It holds whichever door reaches it.
+    case 'bad-id':
+      return { ok: false, code: 'spent-unmeasured', detail: 'the session id is not a registry id' };
+    default: {
+      const _x: never = read;
+      return _x;
     }
-    return { ok: true };
   }
   const mark = read.record.child;
   if (mark.kind === 'none') return { ok: true };

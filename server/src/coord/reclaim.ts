@@ -4,7 +4,7 @@ import { lifecycleInputFor } from '../fleet.js';
 import type { FleetIO } from '../io.js';
 import { fieldMeasured, readSessionRecord } from '../registry.js';
 import type { CoordStore } from './store.js';
-import { lifecycleIsDead, sessionLifecycle, type SessionLifecycle } from '../../../shared/api.js';
+import { isRegistryId, lifecycleIsDead, sessionLifecycle, type SessionLifecycle } from '../../../shared/api.js';
 import type { ClaimantDeadCause } from '../deadCoordinator.js';
 
 /**
@@ -70,7 +70,8 @@ export interface ReclaimDeps {
  *                     `restarting` is the arm this file exists to keep.
  *    `unmeasurable` — the registry directory did not list at all; or it listed `<id>.uuid` while the
  *                     row behind it could not be ASSEMBLED (D-1144, the arm below); or the
- *                     re-listing that tells those two apart failed; or tmux did not answer.
+ *                     re-listing that tells those two apart failed; or tmux did not answer; or the
+ *                     id is not a registry id (`bad-id`, answered before any listing).
  *                     Doubt is not evidence, in either direction: the identical line
  *                     `LIFECYCLE_DEAD` draws for its own `unmeasurable` key (shared/api.ts:2108-2110),
  *                     drawn again for the whole ladder. */
@@ -102,13 +103,13 @@ const isDeadLifecycle = (lc: SessionLifecycle): lc is Exclude<ClaimantDeadCause,
  * coming back'".
  *
  * WHY `readSessionRecord` AND NOT `readRegistry`. `readRegistry`
- * (registry.ts:929-932) is two lines over `readRegistryMeasured` ending
+ * (in `registry.ts`) is two lines over `readRegistryMeasured` ending
  * `r.listed ? r.records : []` — an unlistable directory arrives wearing the exact
  * shape "nobody is in the registry" wears. Fed to this ladder it reports a
  * fleet-wide outage as proof the coordinator is gone: the fail-open `dispatchRun`
- * already had to close on its own registry read (dispatch.ts:462-480, blocking
- * review finding 7). `readSessionRecord` (registry.ts:973) answers `unlistable`
- * and `absent` separately (`SingleRead`, registry.ts:863-866), and nothing below
+ * already had to close on its own post-spawn registry read (`dispatch.ts`, blocking
+ * review finding 7). `readSessionRecord` answers `unlistable`, `absent` and
+ * `bad-id` separately (`SingleRead`, one `kind` each), and nothing below
  * re-collapses them — but `absent` is ITSELF a fold, of three conditions that do
  * not all mean the claimant is gone, so rung 1 re-splits it at the consumer
  * rather than trusting the word. The argument is D-1144 in the body; the debt
@@ -126,14 +127,30 @@ export async function measureClaimant(
   deps: ReclaimDeps, id: string, nowMs: number,
 ): Promise<ClaimantVerdict> {
   const read = await readSessionRecord(deps.io, deps.cfg, id);
-  if (!read.found) {
-    if (read.reason === 'unlistable') {
+  switch (read.kind) {
+    case 'found': break;
+    // Rung 1, below the switch: `absent` is re-split before any verdict.
+    case 'absent': break;
+    case 'unlistable':
       return { state: 'unmeasurable',
         why: 'the registry directory could not be listed — transient, not a fact about the claimant' };
+    // Path identity (spec §2.3): UNMEASURABLE, never dead. `readSessionRecord`
+    // answers `bad-id` before any listing, so it proves nothing about the
+    // claimant. Read as `absent`, an id nothing lists would reach rung 1's
+    // `dead`, and `dead` PROCEEDS: a reclaim, or the dead-coordinator lane's
+    // abandon. That lane reaches this arm unmasked.
+    case 'bad-id':
+      return { state: 'unmeasurable',
+        why: 'the claimant id is not a registry id, so it is never measured or composed' };
+    default: {
+      const _x: never = read;
+      return _x;
     }
+  }
+  if (read.kind !== 'found') {
     // D-1144 — RUNG 1 ANSWERS THREE WAYS, AND THE THIRD IS THE ONE THAT MATTERS.
     // `SingleRead`'s `absent` is THREE conditions wearing one shape
-    // (registry.ts:973, three `reason: 'absent'` returns): the listing did not
+    // (`readSessionRecord`, three `kind: 'absent'` returns): the listing did not
     // name `<id>.uuid` at all — a PROVEN absence; `buildRecord` came back null
     // for a row the listing DID name — its own docstring's "a session mid-write
     // or mid-teardown", a triple member that is empty or not yet written; and
@@ -146,7 +163,7 @@ export async function measureClaimant(
     //
     // The split is one `readdir` at the consumer — the same evidence, in the
     // same direction, that the mail ingress already draws for the same fold
-    // (routes.ts:578-585: `names.includes(<toId>.uuid)` -> 502
+    // (`coord/routes.ts`'s mail ingress: `names.includes(<toId>.uuid)` -> 502
     // `registry-unmeasurable`, otherwise 404 `unknown-recipient`). It sits AHEAD
     // of the tmux consultation deliberately: a pane's absence must not get to
     // speak about a row the registry itself is still writing, and the rung that
@@ -163,11 +180,13 @@ export async function measureClaimant(
     // conditions AT THE SOURCE, and this is the SECOND consumer to re-split them
     // by hand; the mail ingress cited above was the first. Widening the type was
     // considered for this fix and declined on scope, not on merit: `SingleRead`
-    // has ~8 consumers (sessionws.ts:500, skillstate.ts:82, server.ts:1532 and
-    // 1699, fleet.ts:116, watch.ts:3104, this file's own rung 3 below, and the
-    // readiness/hookstate/livestate analogues), each of which needs a deliberate
-    // direction rather than a mechanical one, and the ruling that produced this
-    // arm is scoped to the one rung that stands in front of a destructive act.
+    // had 14 direct consumers (path identity spec §2.3 lists them), each of
+    // which needed a deliberate direction rather than a mechanical one, and the
+    // ruling that produced this arm is scoped to the one rung that stands in
+    // front of a destructive act. Path identity W1a then gave it a `kind` per
+    // answer and a fourth answer, `bad-id`, placed in every consumer by an
+    // exhaustive switch. `absent` still folds the three conditions above, so
+    // this rung's re-split, and the debt it names, both stand.
     // THE THIRD CONSUMER THAT NEEDS THE DISTINCTION MUST WIDEN THE TYPE INSTEAD:
     // three hand-copies of a split the source could carry is "no overloaded null
     // at a seam" losing by attrition instead of by argument.
@@ -246,7 +265,13 @@ export type ReclaimOutcome =
   | { ok: false; kind: 'registry-unmeasurable'; detail: string }
   | { ok: false; kind: 'claimant-alive'; detail: string; by: string }
   // the NEW claimant is a live worker of another run (spec §12)
-  | { ok: false; kind: 'heir-is-a-worker'; by: string };
+  | { ok: false; kind: 'heir-is-a-worker'; by: string }
+  /** spec §2.3. `which` names the side that is not a registry id. `heir` is this
+   *  request's `claimedBy`, refused by `readSessionRecord`'s `bad-id` before any
+   *  listing; the route answers 400. `claimant` is the run's STORED `claimedBy`,
+   *  a row no retry heals; the route answers 409, and `detail` names the abandon
+   *  door, the one way to end such a programme. */
+  | { ok: false; kind: 'bad-session'; which: 'heir' | 'claimant'; detail: string };
 
 /**
  * Hand a program's coordination to `to`, after PROVING the session holding it is
@@ -258,8 +283,16 @@ export type ReclaimOutcome =
  *      `claimedBy` to NULL because it cannot know who will resume, and `openRun`'s
  *      D-12 clause skips exactly those rows (store.ts:373-383); adopting one here
  *      would invent an owner for a row that never had one;
+ *    • the CLAIMANT'S SHAPE (spec §2.3), deliberately UNNUMBERED like the heir rung
+ *      below, so the cited numbers hold: a stored `claimedBy` that is not a registry
+ *      id — else `bad-session` with `which: 'claimant'`. It runs before any read,
+ *      because such an id is never measured and never composed. A row stored before
+ *      `POST /api/runs` asked the predicate is the only way to reach it, and nothing
+ *      is re-pointed;
  *   3. `to` is a session this box can SEE — else `unknown-session`, or
- *      `registry-unmeasurable` when the directory would not list. Ahead of the
+ *      `registry-unmeasurable` when the directory would not list, or
+ *      `bad-session` (`which: 'heir'`) for an id `isRegistryId` refuses, which
+ *      `readSessionRecord` answers before any listing (spec §2.3). Ahead of the
  *      ladder on purpose: handing a program to an id that does not exist strands
  *      it exactly as thoroughly as leaving it on a corpse, and one listing rules
  *      it out;
@@ -311,13 +344,32 @@ export async function reclaimRun(
   if (run === null) return { ok: false, kind: 'unknown-run' };
   const from = run.claimedBy;
   if (from === null) return { ok: false, kind: 'no-claimant' };
+  // spec §2.3: the STORED claimant is asked the one predicate before any read.
+  // The heir's own check is `readSessionRecord`'s `bad-id` below, inside the
+  // incoming read, and the route head carries no copy that would mask it.
+  // Answering this through `measureClaimant` instead would be a 502
+  // `registry-unmeasurable` that no retry ever clears.
+  if (!isRegistryId(from)) {
+    return { ok: false, kind: 'bad-session', which: 'claimant',
+      detail: 'the run\'s stored claimedBy is not a registry id, so it is never measured or composed: '
+        + 'end the programme by abandoning each of its open runs through POST /api/runs/:id/abandon' };
+  }
   const incoming = await readSessionRecord(deps.io, deps.cfg, to);
-  if (!incoming.found) {
-    if (incoming.reason === 'unlistable') {
+  switch (incoming.kind) {
+    case 'found': break;
+    case 'unlistable':
       return { ok: false, kind: 'registry-unmeasurable',
         detail: 'the registry directory could not be listed, so the incoming coordinator could not be checked' };
+    case 'absent': return { ok: false, kind: 'unknown-session' };
+    // Path identity (spec §2.3): the heir is gated HERE, by the read's own
+    // `bad-id`, before any listing. The route head has no copy that would
+    // mask this one. Nothing is re-pointed.
+    case 'bad-id':
+      return { ok: false, kind: 'bad-session', which: 'heir', detail: 'claimedBy is not a registry id' };
+    default: {
+      const _x: never = incoming;
+      return _x;
     }
-    return { ok: false, kind: 'unknown-session' };
   }
   if (to !== from) {
     // §12 / D-3011: a worker of SOMEBODY ELSE's open run may not inherit a

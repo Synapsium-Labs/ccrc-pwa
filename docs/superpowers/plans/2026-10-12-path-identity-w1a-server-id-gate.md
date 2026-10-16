@@ -11754,7 +11754,7 @@ Read at the tip, against `origin/main`:
 
 ## Deviations found
 
-This wave's numbers come from the block the allocator issued for run 399 on 2026-10-12: twenty-four single numbers, 4860, 4861, 4862, 4863, 4864, 4865, 4866, 4867, 4868, 4869, 4870, 4871, 4872, 4873, 4874, 4875, 4876, 4877, 4878, 4879, 4880, 4881, 4882 and 4883. The coordinator assigns them at the fix round, one per departure. Each is defined here, singly.
+This wave's numbers come from the block the allocator issued for run 399 on 2026-10-12: twenty-four single numbers, 4860, 4861, 4862, 4863, 4864, 4865, 4866, 4867, 4868, 4869, 4870, 4871, 4872, 4873, 4874, 4875, 4876, 4877, 4878, 4879, 4880, 4881, 4882 and 4883, and one more issued at fix round 1 for that round's own substantive departure: 5004, and one more issued at fix round 2 for its substantive departure: 5044. The coordinator assigns them at the fix round, one per departure. Each is defined here, singly.
 
 - The worker never calls the allocator (worker clause 11; coordinator clause 10).
 - A departure from this plan is named by a short kebab-case slug in the wave-done mail. The worker never gives it a number.
@@ -11779,8 +11779,356 @@ This wave's numbers come from the block the allocator issued for run 399 on 2026
 
 ### Substantive departures, one number each
 
-None defined yet.
+- **D-4860** (Task 1) `registry-id-at-foot` — spec §2.3 placed `isRegistryId` right after `isSessionIdShape` and renamed `TMPROOT_ID_MAX_CHARS` to `REGISTRY_ID_MAX_CHARS`, and as built `REGISTRY_ID_MAX_CHARS` (255) and `isRegistryId` stand in the foot block of `shared/api.ts`, immediately above `TMPROOT_ID_MAX_CHARS`, which stays as a derived alias while `isTmpRootId` returns `isRegistryId(id)`, so no line that README or the compaction-card corpus cites moves (R1).
+- **D-4861** (Task 2) `over-long-request-ids-stop-at-the-router` — the scope's control asked for a 255-character id released normally and a 404 for the 256-character refused id, and as built the router's default parameter-length cap answers 414 `FST_ERR_MAX_PARAM_LENGTH` for any request `:id` over 100 characters before a handler runs, with no call composed and no listing, so the HTTP cases pin the router's answer and their longest control is 100 characters.
+- **D-4862** (Task 3) `resume-dispatch-refuses-not-holds` — spec §2.3 said resume dispatch "holds" when the requested id is refused, and as built `dispatchRun` re-checks a stored `sessionId` right after its hold verdict and before every other read, so the run stays `planned`, the route answers 409 `bad-session`, and the abandon door is the way out.
+- **D-4863** (Task 4) `masked-arms-pinned-by-their-masks` — spec §2.3 asked for a pin each for every absence-acting caller, and as built an arm that an earlier gate already masks answers the safe word, its comment names its mask, and its pins are the mask's cases and `readSessionRecord`'s zero-listing case; by the coordinator's amendment of R17, `childGateAtClose` is exported and pinned directly with an unlisted bad id, so all four absence-acting callers that spec §2.3 names carry a pin each (R17).
+- **D-4864** (Task 7) `fleet-fallback-is-tests-only` — spec §2.3 migrated the fleet fallback as a production reader, and as built `assembleFleet`'s own fallback is reached by tests alone: the three production callers that passed `records: undefined` (`GET /api/fleet`, the ws cold start and the claims-conflict path) each read `readRegistryMeasured` and pass its records, the fallback reads `readRegistryMeasured` and uses `[]` on an unlistable registry, and a census pins each of the six production `assembleFleet(` calls as passing its records (R19).
+- **D-4865** (Task 7) `cold-start-skips-an-unmeasured-fleet` — R12 never serves an empty fleet that is not marked stale, and the ws `fleet` frame has no stale marker, so as built the ws cold start with no watcher broadcast sends no `fleet` frame on an unlistable registry and still sends its `runs` frame (the socket gets `hello`, then `runs`), and this wave adds no L0 wire field (R19).
+- **D-4866** (Task 8) `tag-lines-carry-no-digit` — the plan's tag lines for Tasks 6, 7 and 8 carried the citation "(spec §2.3)", and its three raw-name tags the status "502", and as built no `[registry-refused:<word>]` tag line carries a digit (ruling C2): the rule is applied in Tasks 6, 7 and 8, whose tag lines drop the citation and the status number, the raw-name tags say "the ladder reads it as unmeasurable", the slug is named at Task 8, and Task 6's census case pins the rule.
+- **D-4867** (Task 14) `stop-pair-fields-refused-at-composition` — the stop builders' reorder alone left the legacy pair's parts unchecked: `stopPair` takes its project from a legacy row's `.project`, and its wrapper from `.wrapper` when the id does not end in `-<project>`, fields no id gate reads, so a field spelled `--surface=<word>` made the pair a one-argument stop of the other token; as built, by a coordinator ruling at plan review, `/stop` and the archive door ask `stopPairRefused` in their identity arm, and a row whose wrapper part or project part fails `isRegistryId` answers 503 `registry-unmeasurable` with no argv composed, the archive door asking before its turn read and the programme's end.
+- **D-4868** (Task 14) `stop-pair-refused-when-the-pair-is-not-the-id` — the plan's `stopPairRefused` checked the pair's two parts only, and as built from the final fix round it also refuses a legacy row whose `<wrapper>-<project>` pair is not its id (503 `registry-unmeasurable`, no argv), because the fallback wrapper's stop of such a row (a workspace row whose `.workspace` read failed, or a row whose absent or unreadable `.project` reads as the id) named a different session, such as the operator's main checkout; the id-argv census's `stop-pair-refused` pattern follows the new body.
+- **D-4869** (Task 14) `stop-normal-case-seeds-a-well-formed-row` — the plan left `routes.test.ts`'s "stops normally (200) when the row is fully measured" case on `seedSession`, which writes `project: id`, and as built from the final fix round that one case seeds a well-formed legacy row by hand (id `demo-a-demo`, wrapper `demo-a`, project `demo`) and asserts its composed argv, because the old fixture's row composed a stop that named a different session, which the pair clause now refuses.
+- **D-5004** (Task 4) `lone-surrogate-claimant-case-re-pointed` — workspace-lifecycle's lone-surrogate claimant case in `server/test/dead-coordinator-lane.test.ts` expected its lone-surrogate coordinator to read crashed and trip the breaker beside its partner, which this wave makes impossible because `measureClaimant` answers `unmeasurable` for any non-registry id, and as built from fix round 1 that one case, re-pointed under that programme's consent, proves that a dirty seed holds the claimant flagged with its exact spelling across a restart, that a sealed start reads it unmeasured while its partner ends as a lone crash, and that it never receives a crash anchor. As built from fix round 2 (F7), the case's dirty-seed block moves the clock 1 ms at its partner's first tmux read, so the seed instant stays T0 while the lone-surrogate claimant's measurement instant is T0 + 1; the two snapshots' `writtenAt` read T0 + 1, and the claimant's held member is asserted exactly (`firstDeadAt` T0, flagged, no crash instants), which reds once `bad-id` is folded into `absent` in `measureClaimant`.
+- **D-5044** (Task 6) `tick-lanes-hold-a-refused-id` — the plan named the main watch's `records` hand-offs but none of the lanes that run on its tick, and four of them read a listed-but-refused id as absent (review 457's F1), so as built from fix round 2 `tick` hands this tick's `registryRead.refused` to each, and each places that id as unmeasured: (i) the stall lane's run verdict receives a refused worker as its own `StallWorker` arm, `{ present: 'refused' }`, never `{ present: false }`, which `stallVerdict` holds `unmeasured` at a new step (1b) and `stallSessionHolds` holds `unmeasured`, so its dead, orphan, failed and marker-unreadable arms hold while mail-stuck's `registry-unmeasurable` gate clause still reports its held delivery, and `judgeStall` composes no path or argv for it and takes no live, marker or hook-state read; (ii) the run-less coordinator judge does the same for a refused claimant, whose marker verdict holds; (iii) the claim lease lane's `claimProbe` answers `unmeasurable` for a refused holder before its `gone` test, so `renewClaims` renews the claim, `lapseClaims` holds its lease lapse, and the 8 h hard cap still fells it; (iv) the divergence census leaves a refused id out of rule 3's open-run side, so no `claim-divergence` is reported for it. From fix round 3 (review 463's F1) the stall lane drops a refused subject's clocks: on a sweep that refuses the id, `judgeStall` drops the worker's absent, dead and marker-unreadable clocks and `judgeStallCoordinator` the claimant's marker-unreadable clock, because a refused sweep observes nothing about the subject, so its clocks restart, as `stall-clocks-drop-on-an-unobserved-gap` restarts every clock after an unobserved gap; fix round 2 kept them, and the first sweep after a re-unlisting then reported the worker dead at once, counting the refused minutes as absence and skipping `DEAD_GRACE_MS`. Red first, each with its fix reverted: the six refused cases in `stall-verdict.test.ts`; the coordinator marker case in `stall-session.test.ts`; the lane cases under a fixture HOME in the new `tick-refused-lanes.test.ts`, (A), (A'), the two (C) cases and (D), and fix round 3's (E) and (E'), the second for a worker's and a claimant's marker clock, which red with the drop deleted (the dead notice "registry row absent for 1h 3m", or the marker push, at the first sweep after the re-unlisting); the `divergence.test.ts` case; and one `registry-refused-census.test.ts` case per hand-off, with `tick`'s census line naming the hand-off. (A2) and (A3), added by the review of fix round 2 as pins of behaviour already built, red with the lane hold reverted, or with a clock call moved past the drop, so no clock starts while the id is refused (a clock call moved out of the refused guard but above the drop is now an equivalent mutant). Red only under a named mutation: ten of the refused session cases (the shared holds, orphan E and failed, orphan D, and the two mail-stuck cases) red under the session verdicts' fold of the refused arm into absent; and "run-unnamed still comes first" reds when the refused hold moves above run-unnamed. Two measured re-points of the rulings' predictions: (1) the ruled R2 mutation on the ruled combined input, the absent and marker clocks both past their bounds, reds with the marker-unreadable push, not the dead notice, because the spec takes (2a) first, so an absent-only case was added, which reds R2 with the dead notice and stays green under R3; (2) eleven of the refused session cases passed on the unfixed code, because there the arm's missing lifecycle already held `unmeasured`, so their red is the named mutations above. For the same reason `stallSessionHolds`' refused line is runtime-equivalent to its deletion, which only tsc reds. Two survivors are equivalent at lane level, and recorded: deleting the dead clock's drop alone, since a refused id is in no `sessions` and that clock is never set for it; and the fold of the refused arm into `{ present: false }` in `stallWorkerFor`, since under the drop the clocks are null whenever the arm reaches L1 (green under it in `tick-refused-lanes`, the one suite that reaches that line, and in `stall-sweep`, `stall-verdict` and `stall-session`). The arm is kept as the distinct fact the rulings require, and the L1 pins hold its meaning. Placing the refused hold ahead of step (2a) departs from the evaluation order of the stall-watch spec (`2026-09-29-worker-stall-watch-design.md`, which takes (2a) first, then any unmeasured input), and `stallVerdictInner`'s docstring records it. Carried, with no number: `unlisted-non-registry-id-reads-absent-on-the-tick`, a non-registry id that no row lists still reads absent on the tick, as on main.
 
 ### Plan-text corrections and extra pins, one number per task
 
-None defined yet.
+- **D-4870** (Task 0) plan-text corrections and extra pins — (c3) README's `shared/api.ts` citation measured at line 4962, not the plan's 4956, and was re-pointed by content; (d2) #351's measured diff figures differed from the plan's, because #351 had grown since planning (`watch.ts` 287 and `store.ts` 206 in its diff stat, against 142 and 72 at planning; `expireArchived.ts` 35, as planned).
+- **D-4871** (Task 2) plan-text corrections and extra pins — T2.4's expected red, which also named the composed `[['ensure', '--actor']]`, measured as the status assertion alone (`expected 200 to be 400`), because that assertion comes first in the case; the census comment and the describe title "the two request-id routes outside knownId" read as exhaustive, though more routes never call `knownId` (the as-built's R7 correction counts seven); the plan's `knownId` rule also governs `POST /api/sessions`' revival probe, which its text did not name: a failing candidate id reads not-a-revival and takes the creating arm's pool check, and under `crossPool: true` it composes `startCross`/`enableCross`.
+- **D-4872** (Task 3) plan-text corrections and extra pins — `overlong-id-plants-no-row`: the 256-character refused id cannot name a file, so the stored-row suite plants no registry row for it, and the gate still refuses it because no registry read stands before the gate; the brief's counts re-pointed: `grep -c storedRun` on the fixture printed 1, not 0 (its header comment's mention), `git diff --stat` showed four tracked files plus one untracked test file where the plan said five files, mutation 5 also reds the sweep re-measure case, and mutation 3's composed argv was inferred from the outcomes, because each case's first `toEqual` stops it; Task 3's fix round 1 added the planned-run and review-run abandon cases with a refused stored id (pinning `viaClosing: true` by mutation) and corrected the `close.ts` abandon-arm docstring to name its third commit copy.
+- **D-4873** (Task 4) plan-text corrections and extra pins — `generation-pin-follows-kind`: `child-reclaim-generation.test.ts`'s close text pin spells `read.kind === 'found' ? childReclaimRowUuid(read.record) : null`, because `SingleRead` has no `found` boolean; `bad-id-is-not-a-code` (R20), ruled a pin rather than a departure from the spec: `'bad-id'` joins `mail-routes.test.ts`'s `NOT_CODES`; T4.7 to T4.9 (the `/kickoff`, `/stop` and `/swap` fold rows) were measured with the `--actor` row PLANTED, as Task 4's case prescribes, not unlisted as R15 says, and the arms diverge either way, because `readSessionRecord` answers `bad-id` before any listing. As built from fix round 2 (F6), `ClaimantVerdict`'s docstring lists the `bad-id` arm among its `unmeasurable` answers: a non-registry id answers `unmeasurable` before any listing.
+- **D-4874** (Task 5) plan-text corrections and extra pins — `refused-test-warn-spy-typed`: the refused-row test's log helper types its two callback parameters, because the spy's `mock.calls` is untyped under the tests' tsconfig; Step 4 says its tag line has no quote character, but the line's exact text carries an apostrophe (`caller's`), kept byte for byte; the census header sentence was corrected in the final fix round, because four tags (`stale` twice, `reports` in `lifecycle.ts`, and the pre-spawn `refuses`) describe the unlistable-registry behaviour, not the refused-row behaviour.
+- **D-4875** (Task 6) plan-text corrections and extra pins — `pre-spawn-listing-is-the-second`: dispatch's pause-marker listing is a fresh dispatch's first registry listing and the pre-spawn read its second, so the test that fails the pre-spawn read fails the second listing; `registry-unmeasurable-docstring-names-the-pre-spawn-refusal`: `DispatchOutcome`'s `registry-unmeasurable` docstring says its `stderr` is also absent on the pre-spawn read; `adopted-birth-comment-names-the-old-tolerance`: the adopted-arm comment in `dispatch.ts` still said the pre-spawn read tolerates an unlistable registry as empty, fixed in the final fix round; the census scan is memoised, so it reads `server/src` once per run; fix round 1's F8 resume-arm case proves that the dispatch resume arm resumes the valid row while a refused row is listed.
+- **D-4876** (Task 7) plan-text corrections and extra pins — `fleet-health-fixtures-list-their-registry`: two live-arm cases in `fleet-health.test.ts` create an empty registry directory, because an unlistable registry now serves the stale arm; `claims-conflict-pinned-on-its-own-listing`: the claims-conflict case fails exactly the conflict arm's own registry read; `census-helpers-shared-not-copied`: the migrated readers' census cases reuse the census file's own scan and add `callArgs` and `isDefinition` once; the claims case's listing count is attribution + 2, not + 1, because `readLimits` also lists the registry inside `assembleFleet`; Step 1 (10)'s expected test list differed (`auth-passkey` missing, and three files that name the doors in comments only added); the two cold-start `vi.waitFor` calls take `{ timeout: 3000 }`, where the plan's text used the default (final fix round); fix round 1 corrected the stale arm's comment, which said "the link may be up", to name the disconnected remote box with no snapshot as well, and F8 added the listed-fleet and projects cases (with one refused row listed, the valid row is still listed, with no `stale` key, and `registry` reads `listed`).
+- **D-4877** (Task 8) plan-text corrections and extra pins — `census-comments-left-stale`: three census comments and `expect` messages still said later tasks, or Task 8, would place sites, fixed in the final fix round; `EXPECTED_SITES` and the `wrapper` case sit in Task 5's first describe, not Task 7's as the brief worded it.
+- **D-4878** (Task 9) plan-text corrections and extra pins — Step 4a (the import) was skipped, because Task 7 had already imported `isRegistryId` into `routes.ts`; T9.2's drafted `spent-unmeasured` body was not separately observed, because the failing status assertion stops each case first; from the final fix round, a case abandons a run whose stored `claimedBy` is not a registry id, `routes.ts`'s comment says "a new WORK row" where the plan said "a new row", and `childBind.ts`'s `bad-id` comment names its second mask, `POST /api/runs`' open gate.
+- **D-4879** (Task 10) plan-text corrections and extra pins — ruling B1: Step 3(a)'s Before line no longer existed once Task 7 had added `isRegistryId` to the `routes.ts` import, so only `isSessionIdShape, ` was deleted and `isRegistryId` stays imported.
+- **D-4880** (Task 14) plan-text corrections and extra pins — `lifecycle-rows-edited-by-pattern`: `lifecycle.test.ts`'s six stop rows were rewritten by a count-guarded pattern edit, each keeping its fixture ids; `stop-pair-project-redirect-pinned`: the real-binary file also proves that a project spelled `--surface` redirected the legacy pair to `<wrapper>-pwa` under the old order and is refused by usage under the new one; the final fix round's nested-describe cases (a legacy row whose id does not end in `-<project>`, at `/stop` and at the archive door); fix round 1's F2 (the `stopPair` and `stopPairRefused` docstrings name the pair rule), F3 (the project clause pinned by a `/stop` case for `demo-a--x` with `.project` `-x`, the wrapper clause recorded as an equivalent mutant, the four part cases and their describe retitled to name the clauses that refuse them, and mutation rows 6 and 7 corrected in the as-built), F4 (the comment naming both reachable fallback shapes) and F7 (the two identity-arm cases re-seeded with the well-formed `demo-a-demo`, so the pair clause no longer masks their arm); measured, deleting `/stop`'s `identity === null` check reds that case by a composed stop (200, `stop demo-a demo`, because an id ending in `-<project>` never reads `identity.wrapper`), while the archive door reds by a TypeError (500), where the ruling expected a TypeError at both; mutation I (the identity ignoring `unmeasured`) stayed green on the old seed and reds both cases after the re-seed (`/stop` 200 with the stop composed; the archive door 409 `status-unknown`, no stop). As built from fix round 2, F2: the real-binary file's header and `stopPairRefused`'s lead-in say the part checks stand as defence in depth (the project check alone refuses a project that is empty or leads with `-` or `.`, the `demo-a--x` case, and the wrapper check is an equivalent mutant); and F12: the "stops normally (200)" case calls `seedWellFormed`, the helper the three `/stop` cases now share, with its assertions unchanged.
+- **D-4881** (Task 15) plan-text corrections and extra pins — `census-names-the-stop-pair-gate`: the brief's census text predated the stop-pair ruling and named `readSessionRecord` and `knownId` as the `stopPair` row's gates, so after Task 15's fix round `id-argv-census.test.ts` lists `stopPairRefused` among its gates and in the `stopPair` row and requires it above each of `stopArgvFor`'s three call sites; the same fix round's pins: `childSpent`, `childSpentLive` and the two `sweepNames` rows pinned through their callers or an entry, and a title that said two callers corrected to the three call sites. As built from fix round 2 (F4), the census's three comments on the `stopPair` row say that the wrapper `stopPair` carries is always a prefix of a vetted id, that the row's `.wrapper` fallback never reaches the builder, and that the project is the row's `.project`, which `stopPairRefused` vets; every pattern and pinned count is unchanged.
+- **D-4882** (Task 16) plan-text corrections and extra pins — the nine as-built template sentences that disagreed with the code were corrected to it; Task 16 review's I1 (a new review row copies the reviewed run's stored `project`, so the `POST /api/runs` check covers new WORK rows only) and M1 to M5 were corrected with `f65651af8`'s other as-built corrections, and M6 (line length) was left as is; (m7)'s `grep -c` with the double-quoted pattern counts 2, not 1 (the `CloseOutcome.released` docstring and the code), so the single-quoted pattern was used; fix round 1's F5 (the `/kickoff`, `/stop` and `/swap` fold rows measured with the row planted) and F6 (the empty string among the ids `isSafeSessionId` refuses) as-built fixes.
+- **D-4883** (Task 17) plan-text corrections and extra pins — `shards-27-32-7-overrun-at-48`: shards 7, 27 and 32 overran 600 s twice at /48 and completed, and the plan's shard rule has no clause past /48; the PR-body template was corrected for the final fix wave before the PR opened; fix round 1 merged `origin/main` (clause 16, main-passes-red, named by the coordinator), which departs from Task 17's "absorb nothing".
+
+---
+
+## As built (W1a, run 399)
+
+This note records where wave 1 of the path-identity programme (the spec's W1a) differs, as built, from the spec
+`docs/superpowers/specs/2026-10-12-path-identity-design.md`, and what it carries to later waves. The spec is not edited:
+its corrections live here (R7, R3). The note amends; it edits no earlier text of this plan. It names each departure by
+slug and carries no number. The coordinator assigns this wave's numbers at the fix round and defines them under
+**Deviations found** above. The comments and test titles this wave added cite spec §2.3, and §2.4 for stop's order.
+
+### What the gate does not claim
+
+The server gate keeps a non-registry id out of every id-taking `CCD_ARGV` call the server composes, which is the id-argv
+census's scope. It is not an OS wall: a session can still run `ccd` directly with any id, and ccd's own loops and
+predicates are W1b's (spec §2.4). Until W1b merges, ccd's half of spec §2 stays open.
+
+### Corrections to spec §2.3
+
+- **`knownId` is not the one choke point (R7).** §2.3 calls `knownId` "one choke point for every request-id route".
+  Of the 25 routes in `server.ts` that take a session `:id`, 18 call it and seven never do, measured route by route at
+  the tip. Two of the seven compose an id-taking ccd argv and ask the predicate themselves:
+  - `POST /api/sessions/:id/ensure` asks `isRegistryId(id)` first, before any call is composed;
+  - `POST /api/sessions/:id/swap`'s `crossPool: true` arm asks it as the arm's first statement, ahead of the skew gate
+    (R22).
+
+  Each answers 400 `bad-session-id`. Of the other five, `/stop` and `/swap`'s ordinary arm compose an id-taking argv
+  behind `readSessionRecord`'s `bad-id` (400 `bad-session-id`), and `/kickoff` gates through the same read and composes
+  no ccd argv. `GET /api/sessions/:id/pane/history`, `/ws/session/:id` and `/ws/pty/:id` compose no ccd argv: the
+  session stream's `readSessionRecord` answers `bad-id` as absent, and the history and pty routes reach only tmux,
+  through `tmuxTarget`'s exact-match target. `knownId` refuses a failing id before its listing, and its census stays
+  at 18 routes (14 POST, 4 GET).
+- **The watches omit a refused id, and nothing is retained (R3).**
+  - §2.3 says the main, hook-state and task-state watches "retain prior state for refused ids". It also says the
+    watch sweeps keep the wrapper because omission suppresses observation "while retaining prior state".
+  - Refusal is a pure function of the id string, so a refused id never had state to retain, and code that retained
+    it would be unobservable.
+  - As built, omission is the behaviour: a refused id gets no state, no reads and no acts, and the reader census tags
+    those sites `omits`.
+  - The snapshot shrink guard counts a refused id as purged, so a refused row cannot freeze snapshot writes.
+- **The predicate sits at the foot of `shared/api.ts` (R1, `registry-id-at-foot`).**
+  - §2.3 places `isRegistryId` "right after `isSessionIdShape` (about `:6231`)". README and the compaction-card
+    corpus cite `shared/api.ts` by line, and an insertion there would move every cited anchor below it.
+  - `REGISTRY_ID_MAX_CHARS` (255) and `isRegistryId` stand in the foot block, immediately above
+    `TMPROOT_ID_MAX_CHARS`.
+  - §2.3's "`TMPROOT_ID_MAX_CHARS` becomes a `REGISTRY_ID_MAX_CHARS`" is built as a derived alias,
+    `TMPROOT_ID_MAX_CHARS = REGISTRY_ID_MAX_CHARS`, and `isTmpRootId` returns `isRegistryId(id)`.
+  - The accepted set is unchanged. The full rename is carried (below).
+- **Masked arms are pinned by their masks (R17, `masked-arms-pinned-by-their-masks`).**
+  - §2.3 asks for "a pin each" for every absence-acting caller. The request-route gates and the stored-row gates
+    landed before the reader widening, so some reader arms were masked from the moment they existed.
+  - Each masked arm answers the safe word and its comment names its mask. Its pins are the outer gate's cases and
+    `readSessionRecord`'s zero-listing case (the table below).
+  - One exception, by the coordinator's amendment of R17: `close.ts`'s `childGateAtClose` is exported for its pin and
+    pinned directly with an unlisted bad id. So all four absence-acting callers that §2.3 names, `measureClaimant`,
+    `childGateAtClose`, `reclaimChild` and `childBindGate`, carry a pin each.
+- **Resume dispatch refuses; it does not hold (`resume-dispatch-refuses-not-holds`).**
+  - §2.3 says resume dispatch "holds when the requested id is refused".
+  - As built, `dispatchRun` re-checks a stored `sessionId` right after its hold verdict, before the pause listing and
+    every other read. A run with no stored id is not asked, so the only arm that meets a stored id is the resume
+    dispatch: the run stays `planned`, and the route answers 409 `bad-session`. The abandon door is the way out.
+- **The readers that pass `records: undefined` measure the registry themselves (R19).**
+  - §2.3 migrates four `readRegistry` callers to `RegistryRead`: project enumeration, the fleet fallback, peer
+    enumeration and dispatch's pre-spawn read. All four migrated.
+  - Beyond them, the three production callers that passed `records: undefined` to `assembleFleet` each call
+    `readRegistryMeasured` and pass its records: `GET /api/fleet`, the ws cold start and the claims-conflict path.
+  - `readRegistry` keeps eight call sites, each classified below. One of them, `detectDialogs`'s fallback, is reached
+    by tests alone.
+
+### The readers as built
+
+- `readSessionRecord` answers `{ kind: 'bad-id' }` for an id that fails `isRegistryId`, before any listing.
+  - `SingleRead` has four kinds, and each of its 14 callers is an exhaustive switch ending in a `never` check.
+  - A fold of `bad-id` into `absent` was measured against an UNLISTED bad id at each site where the two arms diverge
+    (R15), except the `/kickoff`, `/stop` and `/swap` fold rows (T4.7 to T4.9). Those were measured with the `--actor`
+    row PLANTED, as Task 4's case prescribes. The arms diverge either way, because `readSessionRecord` answers `bad-id`
+    before any listing.
+- `bad-id` is a read result, not a code (R20, `bad-id-is-not-a-code`). It joins `mail-routes.test.ts`'s `NOT_CODES`,
+  and no refusal or wire field carries it.
+- `readRegistryMeasured` names its refused rows (R2):
+  - `refused` holds ids (the basename less `.uuid`), and `names` keeps every raw name.
+  - A refused row is never read, never built into `records` and never composed.
+  - `pruneWarnState` receives the valid ids only.
+  - Each refused id is logged once while it stays listed, quoted by `JSON.stringify`, through a module-private set
+    pruned on each listing. That set is never `warnState`'s keys.
+- Dispatch's pre-spawn read migrated in the same commit as the post-spawn clause (R18), because the clause needs the
+  pre-spawn `refused` set. On an unlistable registry, the pre-spawn read refuses `registry-unmeasurable` before
+  anything is spawned. The post-spawn clause refuses a refused name that was absent before the spawn.
+- The fallbacks that only tests reach:
+  - `assembleFleet`'s own fallback reads `readRegistryMeasured` and uses `[]` on an unlistable registry. A census
+    pins each of the six production `assembleFleet(` calls as passing its records, never `undefined` (R19,
+    `fleet-fallback-is-tests-only`).
+  - `sweepHookStates`'s own read and `detectDialogs`'s fallback: `tick` passes its `records` to both, and a census
+    describe pins that hand-off.
+- On an unlistable registry, the ws cold start with no watcher broadcast sends no `fleet` frame and still sends its
+  `runs` frame, so the socket gets `hello` and then `runs` (R19, `cold-start-skips-an-unmeasured-fleet`). The `fleet`
+  frame has no stale marker, and this wave adds no L0 wire field. With a watcher broadcast, the cold start reads no
+  registry.
+- The census (`registry-refused-census.test.ts`) classifies 23 sites, with no site `unplaced`. They are eight
+  `readRegistry` calls and fifteen `readRegistryMeasured` calls, `readRegistry`'s own wrapper call among them:
+
+| Reader | Word | Sites |
+|---|---|---|
+| `readRegistry` | `knownId` | `sessionCommands` (`commands.ts`), `prTasks` (`server.ts`) |
+| `readRegistry` | `omits` | `sweepNames`, `sweepPr` (`watch.ts`) |
+| `readRegistry` | `tests-only` | `detectDialogs`'s fallback (`watch.ts`; `tick` passes `records`) |
+| `readRegistry` | `raw-name` | `requireAttribution`, `POST /api/mail`, `POST /api/mail/:id/ack` (`coord/routes.ts`) |
+| `readRegistryMeasured` | `wrapper` | `readRegistry` (`registry.ts`) |
+| `readRegistryMeasured` | `holds` | `resolveDoneBranch` (`coord/fingerprint.ts`), `sweepMail` (`watch.ts`) |
+| `readRegistryMeasured` | `refuses` | dispatch's pre-spawn and post-spawn reads (`coord/dispatch.ts`) |
+| `readRegistryMeasured` | `gated` | dispatch's resume arm (`coord/dispatch.ts`) |
+| `readRegistryMeasured` | `omits` | `tick`, `sweepTasks` (`watch.ts`) |
+| `readRegistryMeasured` | `tests-only` | `sweepHookStates`'s own read (`watch.ts`; `tick` passes `records`), `assembleFleet`'s fallback (`fleet.ts`) |
+| `readRegistryMeasured` | `stale` | `GET /api/fleet`, the ws cold start (`server.ts`) |
+| `readRegistryMeasured` | `reports` | `listProjects` (`lifecycle.ts`), `GET /api/peers`, the claims-conflict path (`coord/routes.ts`) |
+
+- Fingerprint keeps its own check (R26). `resolveDoneBranch` refuses a run whose `sessionId` fails the predicate with
+  `tip-unmeasurable`, before its read. `verifyReviewDone` reads the WORK run's `sessionId`, which a review run's close
+  gate does not check, so the check is reachable through a review close and is pinned there as well as directly.
+
+### The masked arms and their masks
+
+These arms answer the safe word, and their comments name the mask. Unless the last column names a pin of the arm's
+own (R17 as amended, and the exported functions' unit pins), their pins are the mask's cases and
+`readSessionRecord`'s zero-listing case (R17).
+
+| Arm | Its answer for `bad-id` | Its mask | Pinned by |
+|---|---|---|---|
+| `/archive`'s `readSessionRecord` switch (`server.ts`) | 400 `bad-session-id` | `knownId` | `knownId`'s cases; the zero-listing case |
+| `liveStatus` (`fleet.ts`), behind `/interrupt` | `'dead'` | `knownId` | `knownId`'s cases; the zero-listing case |
+| `readAsk` on `/ask` (`server.ts`) | `null` | `knownId` | `knownId`'s cases; the zero-listing case |
+| `readAsk` under `POST /api/asks/:id/answer` | never reached | `freshAskAt`'s `bad-id`, giving `UNMEASURED_ASK_AT` and then 409 `child-unmeasurable` before `answerAsk` reaches `readAsk` | the ask case, end to end: no keys sent, the ask stays `held` |
+| dispatch's resume `childBindGate` | `spent-unmeasured` | the dispatch gate | the dispatch gate's cases; `childBindGate`'s own unit pin |
+| `POST /api/runs`'s `childBindGate` | `spent-unmeasured` | the open gate | the open gate's cases; `childBindGate`'s own unit pin |
+| `childGateAtClose` (`coord/close.ts`) | mark `unreadable` | both close gates | its own direct pin (R17 as amended), with an unlisted bad id |
+| `measureClaimant` (`coord/reclaim.ts`) | `unmeasurable`, never `dead` | none on the dead-coordinator lane | its unit pin, and the lane case (no abandon, no ccd verb) |
+
+Three arms that no outer gate masks answer exactly what absence answers, by design: `sessionws`'s `resolve`,
+`freshAskAt`, and `releaseRetiredChildHold` (`changed`, R13). A fold changes nothing observable there, so their pin is
+the zero-listing case. `freshAskAt`'s path is also pinned end to end by the ask case. `reclaimChild`'s own arm is not
+masked either: it defers `marker-unreadable`, never `gone`, and its pin is `reclaimChild`'s unit case.
+
+### The answers this wave adds
+
+Every word already existed (R13). This wave adds no route, table, migration, ccd verb, capability token, agent grant,
+L0 wire type or refusal word.
+
+| Where | Condition | Answer |
+|---|---|---|
+| `knownId`'s 18 routes | id fails `isRegistryId` | 404 `{ ok: false, error: 'unknown-session' }`, before `knownId`'s own listing. `/archive` lists the registry before it asks `knownId`, so on an unlistable registry it answers 503 `registry-unmeasurable` first; and the 11 routes that ask `isSafeSessionId` first answer 400 for an id it refuses (the empty string, `.`, `..`, or one holding `/`, `\` or NUL): `bad-session-id`, or `bad-request` at the clip route |
+| `POST /api/sessions/:id/ensure` | id fails | 400 `{ ok: false, error: 'bad-session-id' }` |
+| `POST /api/sessions/:id/swap`, `crossPool: true` | id fails | 400 `bad-session-id`, ahead of the skew gate (R22) |
+| `/stop`, `/swap` (ordinary arm), `/kickoff` | `readSessionRecord` answers `bad-id` | 400 `bad-session-id` |
+| `/archive` | masked by `knownId` (R17) | the arm answers 400 `bad-session-id` |
+| `/stop`, `/archive`, a legacy row | its wrapper part or `.project` fails `isRegistryId`, or its id does not end in `-<project>` (`stopPairRefused`) | 503 `{ ok: false, error: 'registry-unmeasurable' }` from the identity arm, with no argv composed; at `/archive`, before the turn read and the programme's end |
+| `POST /api/asks/:id/answer` | stored `ask.childId` fails | 409 `{ ok: false, error: 'child-unmeasurable', detail }` (the existing answer, through `freshAskAt`'s `bad-id`, R17); no keys sent, the ask stays `held` |
+| `POST /api/runs` | `claimedBy` or `sessionId` fails | 400 `{ ok: false, error: 'bad-session', detail: 'claimedBy is not a registry id' }`, or the same naming `sessionId` |
+| `POST /api/runs` | a work `project` (as given) beginning `-` or `.` | 400 `{ ok: false, error: 'bad-request', detail: 'project must not begin with - or .' }` |
+| `POST /api/runs/:id/reclaim` | the heir fails | 400 `{ ok: false, error: 'bad-session', detail }` (`which: 'heir'`) |
+| `POST /api/runs/:id/reclaim` | the stored claimant fails | 409 `{ ok: false, error: 'bad-session', detail }` (`which: 'claimant'`), the detail naming `POST /api/runs/:id/abandon` |
+| `POST /api/runs/:id/dispatch` (resume too) | stored `sessionId` fails | 409 `{ ok: false, error: 'bad-session' }` |
+| `POST /api/runs/:id/close` (review runs too) | stored `sessionId` fails | 409 `{ ok: false, error: 'bad-session' }` |
+| abandon, programme end, dead-coordinator sweep | stored `sessionId` fails | closed `failed`, `released: false`, `childReclaim: 'not-queued'`, `childReclaimWhy: 'marker-unreadable'`, no fleet act, one event (R6, R27) |
+| `POST /api/runs/:id/advance` to `awaiting-review` or `merging` | stored `sessionId` fails | 409 `{ ok: false, reject: { code: 'bad-session' } }` |
+| `POST /api/runs/:id/route` | stored `sid` fails | 409 `{ ok: false, error: 'bad-session' }` (the existing word, now from `isRegistryId`) |
+| `GET /api/peers?of=` | trimmed `of` fails | 400 `{ ok: false, error: 'bad-session' }`, before any read (R23) |
+| `GET /api/peers` (200) | refused rows exist | additive `refusedRows: number`, only when greater than 0 |
+| `GET /api/projects` | always | additive `registry: 'listed' \| 'unlistable'` |
+| `GET /api/fleet` | registry unlistable | `{ sessions, stale: true }`, where `sessions` is the watcher's last broadcast, else the last-known-good snapshot's sessions, else `[]`; no `pools` key and no `downSince` |
+| the ws cold start (no watcher broadcast) | registry unlistable | no `fleet` frame; the `runs` frame is still sent (R19) |
+| the mail sweep | recipient refused | held with gate `registry-unmeasurable`, never `rejectDelivery` |
+
+Notes on the table:
+- **What `POST /api/runs` checks (R29, R8).** It checks `claimedBy`, `sessionId` and a work run's `project` as given,
+  untrimmed, which is how it stores them. A padded id that it once accepted now answers 400. The project check is a
+  coordinator extension that closes the server's half of spec §2.2's ws-add row.
+- **The reclaim door (R21).** It keeps its trim, because it stores the trimmed heir. Its stored-claimant check sits
+  right after `no-claimant`, before any read.
+- **The abandon arm (R6, R27).** It takes no fleet act for such a run: no sibling read, no child gate, no hold and no
+  release. When the dead-coordinator sweep closes the run, the sweep's own gate still runs first (the operator's
+  abandon carries none). The arm then closes the run through the store, and writes its one
+  `fleet-act-omitted:bad-session` event only after that close succeeds. `abandonRefusal` refuses nothing new for such
+  a run, so the archive door's programme end ends such a programme whole.
+- **Advance (R11).** The gate stands before `verifyDone` only, so a legacy row can still retreat to `working`.
+- **Expiry (R9, R28).** `expireArchived` refuses a non-registry id as its step 0, before the capability read, with
+  the existing `composition` outcome. `learnExpiry` refuses it before its own capability read, with `unreadable`.
+  Both use one detail sentence saying the server refused the id, so neither `wsExpireAudit` nor `wsExpire` is ever
+  built for it.
+- **The collector (R10).** It has no source change. Mutation pins prove two things: the population gate keeps a bad
+  id from the learning audit, and the executor's step-1 `isTmpRootId` keeps it from both builders.
+- **Readers on an unlistable registry (R12).** The `GET /api/fleet` (`stale: true`), `GET /api/projects` (`registry`)
+  and `GET /api/peers` (`refusedRows`) rows above are R12's answers, with dispatch's pre-spawn refusal of
+  `registry-unmeasurable` (under the readers, above).
+- **Stop's order (spec §2.4).** `stopId` and `stopPair` send `['stop', '--surface', surface, id]` and
+  `['stop', '--surface', surface, w, p]`. On the real binary, an id spelled `--surface` is now refused by usage, and a
+  planted row named `pwa` is not stopped; a project spelled `--surface` is refused the same way. With no surface, the
+  bare form is unchanged.
+- **Stop's pair parts (`stop-pair-fields-refused-at-composition`, a coordinator ruling at plan review).** `stopPair`
+  takes its project from a legacy row's `.project`, and its wrapper from the row's `.wrapper` when the id does not end
+  in `-<project>`: fields no id gate reads. `cmd_stop`'s `--surface=*` arm strips a token of that spelling from any
+  position, so a field reading `--surface=<word>` made the pair a one-argument stop of the other token, in the
+  leading, trailing and bare forms alike. No ccd rule closes that without also refusing the pre-W1a trailing order
+  while the fleet box runs ahead of the server, so the server closes it. `/stop` and the archive door ask
+  `stopPairRefused` in their identity arm: a row whose wrapper part or project part fails `isRegistryId` answers 503
+  `registry-unmeasurable` with no argv composed, and the archive door asks before its turn read and the programme's
+  end. A row whose id does not end in `-<project>` answers the same, because ccd would recompute its pair into a
+  different session (`stop-pair-refused-when-the-pair-is-not-the-id`). At planning, none of the fleet box's 18
+  distinct registry projects began with `-` or `.`; the whole-charset measurement once carried below is withdrawn.
+- **Task 14's mutation rows 6 and 7, as measured at fix round 1.** The plan's body is not edited; this corrects it.
+  Since the pair clause, deleting either part check alone leaves the four Task 14 part cases green (each still answers
+  503), because the pair clause refuses every fallback-arm row on its own. The project check is pinned instead by a
+  `/stop` case whose id ends in `-<project>` with a dash-leading project (`demo-a--x`, `.project` `-x`): deleting the
+  check reds that case, which then answers 200 and composes `['stop', '--surface', 'pwa', 'demo-a', '-x']`, and the
+  id-argv census's "every gate stands where the census says", through its `stop-pair-refused` text pattern (2 of the
+  21 cases in `ccd-stop-argv-order.test.ts` and `id-argv-census.test.ts`, measured at fix round 2). The wrapper check
+  is an equivalent mutant, kept as the part check's other half: on the fallback arm the pair clause refuses alone, and
+  on the prefix arm the wrapper is a prefix of an id already vetted. Deleting it reds nothing in
+  `ccd-stop-argv-order.test.ts`, and reds only the id-argv census's "every gate stands where the census says", through
+  its `stop-pair-refused` text pattern (1 of the 21). Deleting the pair clause reds the two cases whose id does not end
+  in `-<project>`, and the id-argv census's "every gate stands where the census says", through its `stop-pair-refused`
+  text pattern (3 of the 21).
+- **The id-argv census.** `id-argv-census.test.ts` classifies all 41 id-taking calls across 10 files by file, builder,
+  origin and gate (SEC2 B, as R98 widens it). A new call, or a new `CCD_ARGV` key, must classify itself, or the suite
+  goes red. The `stopPair` row's gate is `stopPairRefused`, required above each of `stopArgvFor`'s three call sites
+  (one at `/stop`, two at `/archive`); `childSpent` and `childSpentLive` are pinned through their callers, and the two
+  `sweepNames` rows through an entry listing. The 41 and the 10 hold while #351 and run 400's PR stay unmerged: the
+  second lander re-measures.
+
+### Carried lines, and README
+
+- **README stop prose: carried.** #351 had not merged when Task 0 ran (R14), so README's two `stop` prose lines still
+  spell the trailing order: the exec-whitelist bullet's `ccd stop <id> --surface <word>`, and the old-ccd hazard line.
+  The edit is one line-neutral change to each line, carried to the first wave that lands after #351.
+- **The coordinator skill's `bad-session` rows (R24, `wave-lifecycle-rows-carried`).**
+  - `references/wave-lifecycle.md`'s rows for `bad-session` live under `ccd/`, outside this wave's boundary: open,
+    dispatch, close, advance and reclaim, with "stop and report a stored defect; no fleet act ran". They are carried
+    to W1b, which edits `ccd/`.
+  - One more row for the same file: a review close whose WORK run's stored `sessionId` is not a registry id answers
+    409 `tip-unmeasurable` on every retry, because `verifyReviewDone` reads that id and the review's own close gate
+    does not check it. The coordinator closes that review `failed`, which skips the re-measurement.
+- **The abandon sheet (`abandon-sheet-misreads-an-omitted-fleet-act`).**
+  - `pwa/src/fleet/AbandonSheet.tsx` speaks for `released: false` whenever the run had a session id.
+  - After R6, it tells the operator `<workspace> is still claimed by another open run` for an abandon that performed
+    no fleet act.
+  - `pwa/` is outside this boundary, so this is carried.
+- **The reclaim sheet drops the abandon pointer (`reclaim-sheet-drops-the-bad-session-detail`).**
+  - `pwa/src/fleet/ResumeSheet.tsx`'s `reclaimErrorText` reads a 409's code only through `isReclaimRefuseCode`, and
+    `bad-session` is not a `ReclaimRefuseCode`.
+  - So the reclaim door's 409 for a stored claimant that is not a registry id (R5) reaches the operator as "the
+    hand-over was refused, for a reason this build does not recognise". Its `detail`, which names
+    `POST /api/runs/:id/abandon`, is not shown.
+  - `pwa/` is outside this boundary, so this is carried. Measured: 0 such stored rows at Task 0.
+- **A stored work-run `project` reaches `ws-add` unchecked (`work-run-project-reaches-ws-add-unchecked`).**
+  - At dispatch, a stored `project` reaches `CCD_ARGV.wsAddWorker(run.project, …)` with no server re-check.
+  - The `POST /api/runs` check covers every new WORK row (`kind !== 'review'`), as the note on the table says. A new
+    review row copies the reviewed run's stored `project`, which the check does not read, and a review run always
+    spawns fresh, so that copied value reaches `ws-add` through dispatch exactly as a legacy work row's does.
+  - Measured: 0 such stored rows at Task 0.
+  - W1b's ws-add loop and `_ws_project_valid` close it.
+- **A legacy stop row's pair fields (`legacy-pair-fields-charset-unmeasured`): withdrawn.** A row whose id ends in
+  `-<project>` has a wrapper part that is a prefix of its vetted id and a project part that is a suffix of it, so its
+  parts pass whenever its id passes, unless the project is empty or begins with `-` or `.` (none of the 18 projects
+  measured at planning did); any other row is now refused by `stopPairRefused`'s pair-is-the-id clause, so no fleet
+  read is needed.
+- **The mail ingress ladders' detail for a refused row (`raw-name-refused-detail-says-transient`).** The three
+  raw-name ladders (`requireAttribution`, `POST /api/mail`, `POST /api/mail/:id/ack`) answer a refused row 502
+  `registry-unmeasurable`, the right word, but with a detail saying "listed but unreadable — transient", which is never
+  true of a refused id. This wave edited their tag lines only. `sweepMail`'s back-off detail for a refused recipient,
+  `registry row listed but unreadable (registry-unmeasurable)`, stays: it is literally true, because the row is listed
+  and never read, and it says nothing transient.
+- **The expiry lane's words for the executor's own refusal (`expiry-composition-words-misread-a-server-refusal`).** R9 answers a non-registry id with `composition`, whose detail says no call was composed, but `expireFeedBody`'s `composition` arm still says "ccd rejected the call this server composed" and `archivedExpiry.ts`'s lane report says "the server composed a call ccd rejected". The lane's population omits refused rows (Task 5), so production does not reach it. `archivedExpiry.ts` is outside this boundary, and Task 12 keeps its hunk in `coord/expireArchived.ts`, where `expireFeedBody`'s `composition` arm lives, to the guards while #351 shares that file, so this is carried.
+- **The collector's learning audit relies on the population gate alone (`collector-learning-audit-relies-on-the-population-gate`).**
+  The collector's learning audit (`learnCollect`) relies only on the lane's population gate, while expiry also
+  re-checks at its executor (`learnExpiry`). R10 and the never-edit boundary keep the collector files unchanged in this
+  wave, so the two executor seams are made to agree in the next wave that edits them.
+- **The executor's docstring lists no step 0 (`expiry-docstring-lists-no-step-0`).** The numbered docstring at the top of `expireArchived.ts` lists steps 1 to 7 and not the new step 0. Task 12 kept its edit to the guards, because #351 shares the file, so the sentence is carried.
+- **The advance reject docstring omits `bad-session` (`advance-reject-docstring-omits-bad-session`).** `shared/api.ts`'s docstring above `RunRefuseCode` says every typed refusal code of `POST /api/runs/:id/advance` is a `MailRejectCode` or a `RunRefuseCode`. The advance gate's `reject.code` of `bad-session` is in neither, and the kebab scan admits it through the routing door's union. The docstring sits above the foot block, so this wave could not edit it.
+- **The real-binary parity rows.** Spec §2.8's `ccdargv-dec-parity` rows on the real binary, with the ids `--actor`,
+  `--surface`, `--reason`, `--expect` and `--defer-expired`, go green only with W1b's loops, so they ride W1b.
+- **Prose that still calls `POST /api/runs` unguarded (`session-shape-prose-predates-the-id-gate`).** After Tasks 9 and 10, these comments still say that `POST /api/runs` checks `claimedBy`/`sessionId` only for a non-empty string, or that the routing door asks `isSessionIdShape`:
+  - `shared/api.ts`'s docstring above `SESSION_ID_SEGMENT`, which sits above the foot block;
+  - `coord/store.ts`'s docstring above the `reclaim:` run-event reader, a file this wave never edits;
+  - the comments in `run-signals-routing.test.ts` (above its `isSessionIdShape` describe), `run-route-route.test.ts` (above the `'bad claimant'` case) and `child-reclaim-paused-at-server.test.ts` (above its `from` round-trip cases).
+
+  Legacy rows can still hold such ids, so each comment's conclusion stands; only its description of the route is stale. Carried to the first wave that edits each file.
+- **The dead-coordinator docstring predates the `claimedBy` gate (`dead-coordinator-docstring-predates-the-claimedby-gate`).**
+  `server/src/deadCoordinator.ts`'s docstring says `claimedBy` is not shape-checked at `POST /api/runs`, which this
+  wave's gate makes false. The file is workspace-lifecycle's, so this wave leaves it, and the coordinator reports it to
+  that programme.
+- **An unlisted non-registry id on the tick (`unlisted-non-registry-id-reads-absent-on-the-tick`).** Fix round 2's
+  lanes hold a listed-but-refused id, but a non-registry id that no row lists still reads absent on the main watch's
+  tick, as on main, and the stall lane's marker and hook-state reads still compose `$REG/<id>.*` for it.
+- **The stale fleet arm's remote case (`fleet-stale-arm-remote-case-unpinned`).** No test pins the remote,
+  disconnected, no-snapshot, unlistable case of `GET /api/fleet`'s stale arm.
+- **The stale fleet arm's `downSince` (`fleet-stale-arm-down-since`).** Whether `GET /api/fleet`'s stale arm should
+  carry a measured `downSince`, which it now drops even when the link recorded one, is review 432's open question.
+- **The full rename of `TMPROOT_ID_MAX_CHARS`.** It touches `coord/store.ts`, so it waits until after #351. Until
+  then, the alias stands.
+- **SEC2 C and D.** A `RegistryId` brand on every builder, or an assertion inside each id-taking builder, stays in the
+  spec's "Later".
+
+### Departures recorded while building
+
+These are the departures the SDD ledger recorded for Tasks 0 to 15, the final fix round, fix rounds 1 to 3 and the landing round that the
+sections above do not already name, one measured sentence each.
+
+- `over-long-request-ids-stop-at-the-router`: the router's default parameter-length cap answers 414 `FST_ERR_MAX_PARAM_LENGTH` for a request `:id` over 100 characters before any handler, so a 255- or 256-character request id never reaches `knownId`; the cases pin the router's answer, and their longest control is 100 characters.
+- `overlong-id-plants-no-row`: a 256-character id cannot name a file, so the stored-row suite plants no registry row for it, and the gate still refuses it because no registry read stands before the gate.
+- `generation-pin-follows-kind`: `child-reclaim-generation.test.ts`'s one text pin of the close now spells `read.kind === 'found' ? childReclaimRowUuid(read.record) : null`, because `SingleRead` has no `found` boolean.
+- `refused-test-warn-spy-typed`: the refused-row test's log helper types its two callback parameters, because the spy's `mock.calls` is untyped under the tests' tsconfig.
+- `pre-spawn-listing-is-the-second`: dispatch's pause-marker listing is the first registry listing of a fresh dispatch and the pre-spawn read is the second, so the test that fails the pre-spawn read fails the second listing.
+- `registry-unmeasurable-docstring-names-the-pre-spawn-refusal`: `DispatchOutcome`'s `registry-unmeasurable` docstring now says its `stderr` is also absent on the pre-spawn read, where no ccd call has been made.
+- `fleet-health-fixtures-list-their-registry`: two live-arm cases in `fleet-health.test.ts` create an empty registry directory, because an unlistable registry now serves the stale arm instead of the live one.
+- `claims-conflict-pinned-on-its-own-listing`: the claims-conflict case calibrates the listings an uncontested claim spends, then fails exactly the conflict arm's own registry read, the next one, because `assembleFleet`'s limits read also lists the registry directory inside that arm.
+- `census-helpers-shared-not-copied`: the census cases for the migrated readers reuse the census file's own scan (`sourceTexts`, `allSites` and `codeOnly`) and add two helpers once at module scope, `callArgs` and `isDefinition`, instead of a second copy of the scanner.
+- `tag-lines-carry-no-digit`: no `[registry-refused:<word>]` tag line carries a digit, so the spec citation and the status number that tag lines once held are dropped from them, and a census case pins the rule.
+- `stop-pair-project-redirect-pinned`: the real-binary file also proves that a project spelled `--surface` redirected the legacy pair form to `<wrapper>-pwa` under the old order, and is refused by usage under the new one.
+- `lifecycle-rows-edited-by-pattern`: `lifecycle.test.ts`'s six stop rows were rewritten by a count-guarded pattern edit rather than retyped from the plan, so each row keeps its fixture ids and changes only the position of the surface pair.
+- `census-names-the-stop-pair-gate`: after the census's fix round, `id-argv-census.test.ts` lists `stopPairRefused` among its gates and in the `stopPair` row, requires it above each of `stopArgvFor`'s three call sites, and pins `childSpent`, `childSpentLive` and the two `sweepNames` rows through their callers or an entry.
+- `stop-pair-refused-when-the-pair-is-not-the-id`: after the final review, `stopPairRefused` also refuses a legacy row whose `<wrapper>-<project>` pair is not its id, because the fallback wrapper's stop of such a row (a workspace row whose `.workspace` read failed, or a malformed legacy row) named a different session; the id-argv census's `stop-pair-refused` pattern follows the new body.
+- `stop-normal-case-seeds-a-well-formed-row`: `routes.test.ts`'s "stops normally (200)" case now seeds a well-formed legacy row by hand and asserts its composed argv, because its old fixture's `project: id` row composed a stop that named a different session, which the new clause refuses.
+- `lone-surrogate-claimant-case-re-pointed`: fix round 1 re-pointed workspace-lifecycle's lone-surrogate claimant case in `server/test/dead-coordinator-lane.test.ts` (one case, under that programme's consent), because after this wave `measureClaimant` answers `unmeasurable` for any non-registry id, so the case's crashed lone-surrogate coordinator cannot happen; the case now proves that the dirty seed holds it flagged with its exact spelling across a restart, that a sealed start reads it unmeasured while its partner ends as a lone crash, and that it never receives a crash anchor.
+- The merges of main: fix round 1 merged `origin/main` at `b953aefa4` into the wave's tip `f65651af8` with `git merge` (clause 16, main-passes-red, named by the coordinator); the probe `git merge-tree --write-tree` was clean (exit 0, tree `0f6f7efb5`), and the merge commit's tree equals it. Fix round 3 merged `origin/main` at `cb72ca064` as `eac01c765` (clause 16, a conflict: the probe exited 1), and the landing round merged it at `0b3ff2f62`, once #384 had landed, as `f42c74874`, which brought #418, #411, #419, #426, #427, #428, #431 and #384. Both later merges conflicted in `server/test/single-definition.test.ts` alone, where main's appended describe blocks met this branch's: every block is kept whole, this branch's first, each closing before the next opens, and no line of any block changed. After the landing merge, `collect-id-pins.test.ts`'s two executor cases pass the rig's `r.job(id)` instead of a bare `{ id }` (`4cafb17cf`): #384's collector job carries its epoch, so the bare object no longer type-checks under the tests' tsconfig, though both cases passed at run time either way.
+- `tick-lanes-hold-a-refused-id`: fix round 2 hands the main watch's tick's `refused` set to the four lanes that read a listed-but-refused id as absent (the stall lane's run verdict, its run-less coordinator judge, the claim lease lane and the divergence census's open-run side), and each holds that id as unmeasured or leaves it out; it is defined under Deviations found.
