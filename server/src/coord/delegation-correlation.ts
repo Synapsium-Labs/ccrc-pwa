@@ -290,14 +290,19 @@ export function delegationHashSetAdd(set: DelegationHashSet, text: string, cap: 
 export interface DelegationLostMarks {
   readonly lossy: boolean;
   readonly projects: ReadonlySet<string>;
-  readonly paths: Readonly<DelegationHashSet>;
+  /** The path marks, as the caller keeps them (R75: one set per project they are attributed to, and one for none); a path in ANY of
+   *  them is marked. */
+  readonly paths: readonly Readonly<DelegationHashSet>[];
   readonly ids: Readonly<DelegationHashSet>;
 }
 
 /** No marks: a lane that has forgotten nothing it could not prove gone. */
 export const DELEGATION_NO_MARKS: DelegationLostMarks = Object.freeze({
-  lossy: false, projects: Object.freeze(new Set<string>()) as ReadonlySet<string>, paths: Object.freeze(emptyDelegationHashSet()), ids: Object.freeze(emptyDelegationHashSet()),
+  lossy: false, projects: Object.freeze(new Set<string>()) as ReadonlySet<string>, paths: Object.freeze([]) as readonly DelegationHashSet[], ids: Object.freeze(emptyDelegationHashSet()),
 });
+
+/** Is this path in one of the path-mark sets? */
+const pathMarked = (m: DelegationLostMarks, path: string): boolean => m.paths.some((s) => delegationHashSetHas(s, path));
 
 /** The kinds of mark, for the caller's count of the verdicts each changed. */
 export type DelegationMarkKind = 'lossy' | 'project' | 'path' | 'id';
@@ -413,6 +418,31 @@ export interface DelegationPruneInput {
   lost: ReadonlySet<string>;
   /** R73 rule 3: the most keys a held-back project may keep; past it, the project is lost. */
   holdCap: number;
+  /** R75: the directory the census reads each project's checkout under (`<projectsRoot>/<project>`), or null when the caller has none.
+   *  Only attribution reads it. */
+  projectsRoot: string | null;
+}
+
+/**
+ * R75: the project a path mark is attributed to, so that at its cap the caller can turn a project lost (its project mark covers every
+ * tree of it) instead of raising the global flag. A directory belongs to project P when it is at or under a tree the caller lists or
+ * remembers for P (the nearest such tree), or at or under P's own checkout `<projectsRoot>/<P>`, which is where the census reads P from;
+ * otherwise to no project. THE ASSUMPTION, stated: a tree of ANOTHER project at a path inside P's checkout or inside one of P's trees
+ * (worktrees nested across repositories) would lose the mark's veto when P is lost. Git allows that layout; nothing on a ccrc fleet makes it.
+ */
+export function delegationMarkProjectOf(path: string, projectsRoot: string | null, trees: ReadonlyMap<string, string>): string | null {
+  for (let p = path; p.length > 0;) {
+    const owner = trees.get(p);
+    if (owner !== undefined) return owner;
+    const cut = p.lastIndexOf('/');
+    if (cut <= 0) break;
+    p = p.slice(0, cut);
+  }
+  if (projectsRoot === null) return null;
+  const root = projectsRoot.replace(/\/+$/, '');
+  if (root === '' || !path.startsWith(`${root}/`)) return null;
+  const project = path.slice(root.length + 1).split('/')[0];
+  return project === undefined || project === '' ? null : project;
 }
 
 /** What one prune decides. The caller applies the marks BEFORE it forgets the keys (both in one synchronous step). */
@@ -420,8 +450,8 @@ export interface DelegationPrunePlan {
   /** The ids of the keys to forget. */
   forget: string[];
   /** The working directories to path-mark: of forgotten keys whose directory no tree shown gone in this census, and no lost project's
-   *  remembered tree, had. */
-  markPaths: string[];
+   *  remembered tree, had; each with the project it is attributed to (`delegationMarkProjectOf`), or null. */
+  markPaths: { path: string; project: string | null }[];
   /** The agent and run ids to id-mark: the names of forgotten keys that nobody asks about yet (a name redundant by its own parent's
    *  activity row is exact, and is not marked). */
   markIds: string[];
@@ -525,7 +555,15 @@ export function planDelegationDroppedPrune(input: DelegationPruneInput): Delegat
     if (f.key.cwd !== null && !f.key.startStop && !covered.has(f.key.cwd)) markPaths.add(f.key.cwd);
     for (const name of f.unaskedNames) markIds.add(name);
   }
-  return { forget: forgotten.map((f) => f.id), markPaths: [...markPaths], markIds: [...markIds], lose, held: countHeld(blocked) };
+  // R75: each path mark's project, by the nearest tree the census lists or the caller remembers, else by the checkout root.
+  const trees = new Map<string, string>();
+  for (const [treeKey, path] of known) trees.set(path, projectOfTree(treeKey));
+  for (const r of measured) if (r.canonicalPath !== null) trees.set(r.canonicalPath, r.project);
+  return {
+    forget: forgotten.map((f) => f.id),
+    markPaths: [...markPaths].map((path) => ({ path, project: delegationMarkProjectOf(path, input.projectsRoot, trees) })),
+    markIds: [...markIds], lose, held: countHeld(blocked),
+  };
 }
 
 /**
@@ -609,12 +647,12 @@ export function delegationMarkForced(input: DelegationCorrelationInput, verdict:
   const d = input.droppedEvidence;
   if (!d.measured || verdict.kind !== 'unmeasured' || verdict.reason !== 'evidence-horizon') return null;
   const m = d.marks;
-  if (!m.lossy && m.projects.size === 0 && m.paths.size === 0 && m.ids.size === 0) return null;
+  if (!m.lossy && m.projects.size === 0 && m.paths.every((s) => s.size === 0) && m.ids.size === 0) return null;
   const without = correlateDelegation({ ...input, droppedEvidence: { ...d, marks: DELEGATION_NO_MARKS } });
   if (without.kind === 'unmeasured' && without.reason === 'evidence-horizon') return null;
   if (m.lossy) return 'lossy';
   if (m.projects.has(input.record.project)) return 'project';
-  if (input.record.canonicalPath !== null && delegationHashSetHas(m.paths, input.record.canonicalPath)) return 'path';
+  if (input.record.canonicalPath !== null && pathMarked(m, input.record.canonicalPath)) return 'path';
   return 'id';
 }
 
@@ -729,7 +767,7 @@ function droppedPathVeto(d: MeasuredDropped, canonical: string, parent: string, 
  *  these ids? The marks are coarse on purpose: any of them makes the link `unmeasured('evidence-horizon')`. */
 function droppedMarked(d: MeasuredDropped, record: DelegationCensusRecord, canonical: string, ids: readonly string[]): boolean {
   const m = d.marks;
-  return m.lossy || m.projects.has(record.project) || delegationHashSetHas(m.paths, canonical) || ids.some((id) => delegationHashSetHas(m.ids, id));
+  return m.lossy || m.projects.has(record.project) || pathMarked(m, canonical) || ids.some((id) => delegationHashSetHas(m.ids, id));
 }
 
 /** The ids a rung-2 claim on `upstreamId` can have been made under: the id itself and, for a workflow worker `wf_<run>-<n>`, the run's. */

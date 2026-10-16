@@ -1553,7 +1553,7 @@ describe('dropped evidence (R65): the vetoes of rungs 2 and 3 rest on events an 
     ) => planDelegationDroppedPrune({
       keys: ks.map((k) => [delegationDroppedKeyId(k), k, AT - 10 * DELEGATION_CLOCK_SKEW_MS] as const), projects: new Map(Object.entries(projects)),
       known: new Map(Object.entries(known)), gonePaths: new Set(), projectOfParent: () => undefined, activities: [], measuredAtMs: AT,
-      lost: new Set(), holdCap: 1000, ...over,
+      lost: new Set(), holdCap: 1000, projectsRoot: null, ...over,
     });
     /** The keys the plan forgets (R73: a plan always answers; there is no fleet-wide skip any more). */
     const plan = (
@@ -1600,10 +1600,25 @@ describe('dropped evidence (R65): the vetoes of rungs 2 and 3 rest on events an 
       const atGone = key({ cwd: '/fixture/gone-tree' });
       const p = planOf([far, atGone], { [REPO]: proj() }, {}, { gonePaths: new Set(['/fixture/gone-tree']) });
       expect(p.forget.sort()).toEqual([delegationDroppedKeyId(far), delegationDroppedKeyId(atGone)].sort());
-      expect(p.markPaths).toEqual(['/fixture/never-a-tree']);
+      expect(p.markPaths).toEqual([{ path: '/fixture/never-a-tree', project: null }]);
       const known = { [delegationTreeKey(REPO, 'gone-tree')]: '/fixture/gone-tree' };
       expect(planOf([atGone], { [REPO]: proj() }, known).markPaths, 'a remembered tree its own measured census shows gone, in this pass').toEqual([]);
       expect(planOf([key({})], { [REPO]: proj() }).markPaths, 'no cwd, no path mark').toEqual([]);
+    });
+
+    it('R75: a path mark is attributed to the project whose checkout root or known tree holds it, and to no project otherwise', () => {
+      const ROOT = '/fixture/projects';
+      const known = { [delegationTreeKey('project-b', 'ws')]: '/fixture/elsewhere/ws' };
+      const ks = [
+        key({ cwd: `${ROOT}/project-a/sub/dir` }), key({ cwd: `${ROOT}/project-a` }), key({ cwd: '/fixture/elsewhere/ws/sub' }),
+        key({ cwd: '/fixture/elsewhere/other' }), key({ cwd: `${ROOT}-sibling/x` }),
+      ];
+      const p = planOf(ks, { [REPO]: proj(), 'project-b': proj({ records: null }) }, known, { projectsRoot: ROOT });
+      expect(new Map(p.markPaths.map((m) => [m.path, m.project]))).toEqual(new Map<string, string | null>([
+        [`${ROOT}/project-a/sub/dir`, 'project-a'], [`${ROOT}/project-a`, 'project-a'], ['/fixture/elsewhere/ws/sub', 'project-b'],
+        ['/fixture/elsewhere/other', null], [`${ROOT}-sibling/x`, null],
+      ]));
+      expect(planOf([key({ cwd: `${ROOT}/project-a/x` })], { [REPO]: proj() }, {}, { projectsRoot: null }).markPaths, 'no root configured').toEqual([{ path: `${ROOT}/project-a/x`, project: null }]);
     });
 
     it('R73 rule 2: a forgotten name nobody asks about yet leaves an id mark; a name made redundant by its own parent\'s row does not', () => {
@@ -1627,7 +1642,7 @@ describe('dropped evidence (R65): the vetoes of rungs 2 and 3 rest on events an 
       const over = planOf([atTree, elsewhere], { [REPO]: proj(), down }, known, { projectOfParent, holdCap: 1 });
       expect(over.lose).toEqual(['down']);
       expect(over.forget.sort()).toEqual([delegationDroppedKeyId(atTree), delegationDroppedKeyId(elsewhere)].sort());
-      expect(over.markPaths, 'the tree\'s own path is covered by the lost project; the unknown one is marked').toEqual(['/fixture/down/elsewhere']);
+      expect(over.markPaths, 'the tree\'s own path is covered by the lost project; the unknown one is marked').toEqual([{ path: '/fixture/down/elsewhere', project: null }]);
       expect(over.held).toEqual(new Map());
       const already = planOf([atTree], { [REPO]: proj(), down }, known, { projectOfParent, lost: new Set(['down']) });
       expect(already.forget, 'a lost project holds nothing back and protects none of its remembered paths').toEqual([delegationDroppedKeyId(atTree)]);
@@ -1665,7 +1680,7 @@ describe('dropped evidence (R65): the vetoes of rungs 2 and 3 rest on events an 
       const cutoff = AT - DELEGATION_CLOCK_SKEW_MS;
       const stamped = (stamp: number) => planDelegationDroppedPrune({
         keys: [[delegationDroppedKeyId(kC), kC, stamp]], projects: new Map([[REPO, proj({ records: [] })]]), known: new Map(), gonePaths: new Set(), projectOfParent: () => undefined, activities: [], measuredAtMs: AT,
-        lost: new Set(), holdCap: 1000,
+        lost: new Set(), holdCap: 1000, projectsRoot: null,
       }).forget;
       expect(stamped(cutoff - 1)).toEqual([delegationDroppedKeyId(kC)]);
       expect(stamped(cutoff), 'exactly at the cutoff').toEqual([]);
@@ -1745,9 +1760,10 @@ describe('dropped evidence (R65): the vetoes of rungs 2 and 3 rest on events an 
     });
 
     it('a path mark: the tree\'s own path hashed in the set makes a rung-2 or rung-3 link unmeasured; another path does not', () => {
-      expect(horizon(correlateDelegation(rung3(marks({ paths: setOf(C) }))))).toBe(true);
-      expect(correlateDelegation(rung3(marks({ paths: setOf(`${C}/sub`) }))).kind).toBe('linked');
-      expect(horizon(correlateDelegation(rung2(marks({ paths: setOf(WT(`agent-${AGENT}`)) }))))).toBe(true);
+      expect(horizon(correlateDelegation(rung3(marks({ paths: [setOf(C)] }))))).toBe(true);
+      expect(correlateDelegation(rung3(marks({ paths: [setOf(`${C}/sub`)] }))).kind).toBe('linked');
+      expect(horizon(correlateDelegation(rung3(marks({ paths: [setOf('/fixture/x'), setOf(C)] })))), 'in any project\'s set').toBe(true);
+      expect(horizon(correlateDelegation(rung2(marks({ paths: [setOf(WT(`agent-${AGENT}`))] }))))).toBe(true);
     });
 
     it('an id mark: the activity\'s upstream id (or, for a workflow worker, its run) hashed in the set makes the link unmeasured', () => {
@@ -1770,7 +1786,7 @@ describe('dropped evidence (R65): the vetoes of rungs 2 and 3 rest on events an 
     });
 
     it('a verdict that was not a link is unchanged by any mark', () => {
-      const all = marks({ lossy: true, projects: new Set([REPO]), paths: setOf(C), ids: setOf(AGENT) });
+      const all = marks({ lossy: true, projects: new Set([REPO]), paths: [setOf(C)], ids: setOf(AGENT) });
       const cases: DelegationCorrelationInput[] = [
         input({ hasRegistryRow: true }), input({ birthPassesRemaining: 2 }), agentWorld({ pointMetas: [] }).base,
         input({ record: record({ state: 'unreadable' }) }), input({ record: record({ canonicalPath: null }) }),
@@ -1780,20 +1796,20 @@ describe('dropped evidence (R65): the vetoes of rungs 2 and 3 rest on events an 
 
     it('delegationMarkForced names the kind of mark that changed a verdict, and nothing for a verdict no mark changed', () => {
       const ask = (i: DelegationCorrelationInput) => delegationMarkForced(i, correlateDelegation(i));
-      expect(ask(rung3(marks({ paths: setOf(C) })))).toBe('path');
+      expect(ask(rung3(marks({ paths: [setOf(C)] })))).toBe('path');
       expect(ask(rung3(marks({ ids: setOf(AGENT) })))).toBe('id');
       expect(ask(rung3(marks({ projects: new Set([REPO]) })))).toBe('project');
-      expect(ask(rung3(marks({ lossy: true, paths: setOf(C) })))).toBe('lossy');
+      expect(ask(rung3(marks({ lossy: true, paths: [setOf(C)] })))).toBe('lossy');
       expect(ask(rung3(DELEGATION_NO_MARKS)), 'a link').toBeNull();
       const e = evicting([toolAt(1, undefined, C), subagentStart(20, AGENT, { cwd: ELSEWHERE }), toolAt(22, AGENT, C)], [0]);
-      const real = input({ record: rec, activities: e.w.activities, acceptedEvidence: e.held, droppedEvidence: indexDelegationDropped([delegationDroppedKeyOf(toolAt(1, undefined, C))], marks({ paths: setOf(C) })) });
+      const real = input({ record: rec, activities: e.w.activities, acceptedEvidence: e.held, droppedEvidence: indexDelegationDropped([delegationDroppedKeyOf(toolAt(1, undefined, C))], marks({ paths: [setOf(C)] })) });
       expect(horizon(correlateDelegation(real))).toBe(true);
       expect(ask(real), 'the held key vetoes by itself: the mark changed nothing').toBeNull();
       expect(ask({ ...rung3(DELEGATION_NO_MARKS), droppedEvidence: DELEGATION_DROPPED_UNMEASURED }), 'an unmeasured index is not a mark').toBeNull();
     });
 
     it('a correlation input carrying marks stays plain data: it clones, and an empty one freezes', () => {
-      const i = rung3(marks({ paths: setOf(C) }));
+      const i = rung3(marks({ paths: [setOf(C)] }));
       expect(horizon(correlateDelegation(structuredClone(i)))).toBe(true);
       expect(() => deepFreeze(structuredClone(rung3(DELEGATION_NO_MARKS)))).not.toThrow();
     });
