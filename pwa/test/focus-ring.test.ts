@@ -114,7 +114,7 @@ function reachesRing(code: string, expr: string, seen = new Set<string>()): bool
   for (const [id] of expr.matchAll(/[A-Za-z_$][\w$]*/g)) {
     if (seen.has(id)) continue;
     seen.add(id);
-    const decl = new RegExp(`\\b(?:const|let)\\s+${id.replace(/\$/g, '\\$')}\\b\\s*(?::[^=]+)?=(?![=>])`).exec(code);
+    const decl = new RegExp(`\\b(?:const|let)\\s+${id.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b\\s*(?::[^=]+)?=(?![=>])`).exec(code);
     if (decl === null) continue;
     const at = decl.index + decl[0].length;
     if (reachesRing(code, code.slice(at, stopAt(code, at, ';')), seen)) return true;
