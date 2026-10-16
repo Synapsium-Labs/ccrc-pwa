@@ -389,6 +389,12 @@ describe('the Linux arms are the original GNU commands', () => {
     ['_svc_have_user_manager', /command -v systemd-run >\/dev\/null 2>&1 && systemctl --user show-environment >\/dev\/null 2>&1/],
     ['_svc_run_supervised', /local -a sr=\(--user --collect --quiet "--unit=\$unit" --slice=app\.slice "--working-directory=\$HOME"\n\s+-p Restart=always -p RestartSec=3 -p StartLimitIntervalSec=300 -p StartLimitBurst=20\n\s+-p "StandardOutput=append:\$log" -p "StandardError=append:\$log"\)/],
     ['_svc_run_supervised (the call)', /systemctl --user reset-failed "\$unit" >\/dev\/null 2>&1\n\s+systemd-run "\$\{sr\[@\]\}" -- "\$@" \|\| return \$\?/],
+    // Wave 15: the boot-persistence enable links the unit WITHOUT reloading the
+    // user manager (every restarted supervisor runs it, so a sweep reloaded once
+    // per unit), and `enable --now` keeps its reload. Each row binds the NAME,
+    // so the flag cannot move from one function to the other unseen.
+    ['_svc_enable', /^_svc_enable\(\) \{[^\n]*\n {2}if \[ "\$CCD_OS" != darwin \]; then systemctl --user enable --no-reload "\$1" 2>\/dev\/null; return \$\?; fi$/m],
+    ['_svc_enable_now', /^_svc_enable_now\(\) \{[^\n]*\n {2}if \[ "\$CCD_OS" != darwin \]; then systemctl --user enable --now "\$1" 2>\/dev\/null; return \$\?; fi$/m],
   ];
   for (const [name, re] of arms) {
     it(`${name} still runs the GNU command on Linux`, () => {
@@ -402,7 +408,7 @@ describe('the Linux arms are the original GNU commands', () => {
     // without one gets noticed.
     const verbs = [
       'systemctl --user enable --now "$1"',
-      'systemctl --user enable "$1"',
+      'systemctl --user enable --no-reload "$1"',
       'systemctl --user disable --now "$1"',
       'systemctl --user start "$1"',
       'systemctl --user stop "$1"',
