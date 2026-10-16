@@ -9,9 +9,10 @@ app resolves it.)
 
     cd ui && npm ci && npm run storybook      # every component, every state
 
-Storybook's toolbar carries the two things the system is actually about: the
-**theme** switch (Phosphor dark / Paper light) and the **viewport** (phone,
-tablet, desktop). The a11y addon runs axe against each story.
+Storybook's toolbar carries the things the system is actually about: the
+**theme** switch (every palette, dark and light), the **skin** switch (Refined
+and Instrument, below) and the **viewport** (phone, tablet, desktop). The a11y
+addon runs axe against each story.
 
 ## Using it
 
@@ -50,6 +51,72 @@ Tailwind v4's namespaces first: `--text-*`, `--font-*`, `--leading-*`,
 makes `@theme inline` emit a circular reference that CSS drops — silently, in
 one theme. That is why the local families are spelled `--fs-*`, `--family-*`,
 `--lh-*`, `--ls-*`, `--elev-*` and `--curve-*`.
+
+Then check the KEY, the utility's spelling, against every namespace its
+utility reads, not just its own. `text-*` reads `--color-*` as well as
+`--text-*`, `font-*` reads `--font-weight-*` as well as `--font-*`, and `w-*`
+and `max-w-*` read Tailwind's `--container-*` beside `--spacing-*`. A key two
+of them share compiles as whichever one Tailwind tries first, with no warning.
+That is why the page title's role is `text-title` and not `text-page`: `page`
+is the page ground's colour, so `text-page` paints text in it.
+`pwa/test/skin-catalogue.test.ts` compiles every key the bridge maps, and
+every key of Tailwind's own theme, through every utility that reads it, and
+reds on a key that another namespace claims, whichever side loses.
+
+## Skins
+
+The skin is a third axis beside the palette and light/dark (D-5093):
+`data-skin` on `<html>`, `refined` or `instrument`. A skin varies density,
+structure and chrome. It never varies colour: colour is the palette's axis,
+and the contrast gate measures each palette once, for both skins.
+
+- `src/styles/skins.ts` holds the catalogue (`SKINS`), the storage key
+  (`SKIN_STORAGE_KEY`, `ccrc-skin`), the closed list of tokens a skin may
+  override (`SKIN_TOKENS`, by class), `resolveSkin` and `applySkin`.
+- `src/styles/skins.css` holds Instrument's values as
+  `:root[data-skin='instrument']` blocks. Refined is `:root` itself and has no
+  block. The selector's (0,2,0) specificity outranks every palette block, so
+  source order never decides a tie. Two rules follow from that:
+  - Every duration sits inside `@media (prefers-reduced-motion: no-preference)`,
+    because the same specificity would otherwise beat `:root`'s reduced-motion
+    block and re-animate the app.
+  - `--row-h` is 44px, and 32px only inside `@media (pointer: fine)`, so a
+    coarse pointer, or one reporting `pointer: none`, keeps the tap floor.
+- The attribute is always stamped, Refined included, unlike Phosphor's palette,
+  which is stamped by absence. The app's half is `pwa/src/lib/skin.ts`
+  (`setSkin`, `initSkin`, `useSkin`), and `pwa/index.html` stamps the stored
+  value before first paint.
+- **The roles.** `tokens.css`'s `:root` declares the type and density roles at
+  Refined's values (`--fs-ui`, `--fs-prose`, `--fs-meta`, `--fs-page`, the
+  `--*-section` set, `--gutter`, `--row-h`, `--pad-card`, `--gap-section`,
+  `--page-max`, `--page-max-wide`, `--measure-chat`). Each one chooses a step
+  from a scale, so it adds no new size. `theme.css` maps them as `text-md`
+  (the 14px scale step), `text-ui`, `text-prose`, `text-meta`, `text-title`
+  (the page title, `--fs-page`) and `text-section`, and as the spacing keys
+  `gutter`, `row`, `card` and `section` (`px-gutter`, `min-h-row`, `p-card`,
+  `gap-section`). `cn()` is taught every one of these names, or it would
+  delete the ink beside `text-meta`. A role sets the font size only: Tailwind
+  attaches no line height to a key it did not define. The page title's key is
+  `title` because `page` is already a colour (see "Adding a token").
+- **Nothing reads the roles yet.** The shared primitives adopt them in a later
+  change. Until then, Instrument differs from Refined only in radii, card
+  elevation and motion.
+
+Storybook's **Skin** toolbar applies the skin through the same `applySkin`
+the app calls, and the token reference has a **Skin roles** page that shows
+every `SKIN_TOKENS` value as the selected skin resolves it.
+
+### Reaching Instrument before there is a picker
+
+Instrument is a preview until its shell lands, and the Settings picker comes
+later. Until the command palette offers "Switch layout", select it from the
+browser console on the app's own page, then reload:
+
+    localStorage.setItem('ccrc-skin', 'instrument')
+
+To return to the default, remove it and reload:
+
+    localStorage.removeItem('ccrc-skin')
 
 ## Hook classes
 

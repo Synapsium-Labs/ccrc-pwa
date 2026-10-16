@@ -90,6 +90,13 @@ export {
   THEMES, THEME_STORAGE_KEY, PHOSPHOR, SYSTEM, resolveTheme, applyTheme, type ThemeChoice,
 } from './styles/themes';
 
+// — skins — the third axis (D-5093). The token values live in styles/skins.css;
+// this exports the catalogue, the closed token list and the stamping helpers.
+export {
+  SKINS, SKIN_STORAGE_KEY, SKIN_TOKENS, REFINED, INSTRUMENT, resolveSkin, applySkin,
+  type SkinChoice, type SkinId, type SkinToken, type SkinTokenClass,
+} from './styles/skins';
+
 export { cn } from './lib/cn';
 export { FOCUS_RING } from './lib/focus';
 // Pure utilities the composites above brought with them. `useNow` is the one

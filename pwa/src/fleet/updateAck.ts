@@ -49,3 +49,12 @@ export function sendAck(nodeId: string): Promise<AckOutcome> {
     },
   );
 }
+
+/** Before an Ack disables itself (wave 19, R26(a)): a focused control that becomes disabled drops focus to <body>.
+ *  So when focus is inside the Ack's row, the row takes it first. The row is `tabIndex={-1}`, focusable from script
+ *  only, and its text names what the Ack was for. Focus anywhere else is left where it is. Both Ack surfaces call
+ *  this, before they set their busy flag. */
+export function keepFocusInRow(row: HTMLElement | null): void {
+  const active = document.activeElement;
+  if (row !== null && active !== null && row.contains(active)) row.focus();
+}
