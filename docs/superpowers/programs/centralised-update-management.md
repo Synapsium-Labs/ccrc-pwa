@@ -40,7 +40,7 @@ numbers; the spec wave each one implements is named beside it.
 | 16 | — (sweep and verify; before stable) | R18(e) (item 3's false "is FAILED" warning, the stale-pid comment), Reading 9's sweep half (warn only), the pgid clause's comment, T6-INT-W closed, R18(a), R18(b), R10j, R8c, R10c(3), R8g | fleet-first; auto moves it, the coordinator watches | — | **run 484**, plan `0f07ddcb9`, cleared (run 360 consented, fenced); lands after run 360 (2026-10-16) |
 | 17 | — (install, doctor, backup prune) | `ccrc-api` placed by the install spine and removed by uninstall (README's `ccrc-api` lines), Reading 9's doctor half (WARN only), R10k, R8f, R14(a), R10i | fleet-first; auto moves it, the coordinator watches | — | waits for run 360 to land (claims 1388, 1410, 1423) and claim 1403 (run 468, #425) on README (2026-10-15 22:11) |
 | 18 | — (test containment) | `makeCcdHarness` containment parity, R14(b)'s raw-spawn census, R23(a), R23(b), R23(d) | none (tests) | — | to plan; `ccdWsHelpers.ts` held by claim 1396 (run 308); R14(b) and R23 can go first (2026-10-15 22:11) |
-| 19 | — (PWA and server residue) | R24(a), (b), (d), R26(a)-(d), R27(a), R27(b)'s test half; B5, the `update-inventory.test.ts` stable flake | server | — | **run 483**, plan `8fe4b7cee`, cleared; Task 2's store half and Task 7 wait on run 360's consent or are cut (2026-10-16) |
+| 19 | — (PWA and server residue) | R24(a), (b), (d), R26(a)-(d), R27(a), R27(b)'s test half; B5, the `update-inventory.test.ts` stable flake | server | — | **Reviewed and accepted** (2026-10-16): PR #443 at `95aa8f3bf`, review 511 found 4 minor (R33); merging. Was: run 483, plan `8fe4b7cee` |
 | — | — | docs PR: R22, R24(e), R23(c), (e), R27(b)'s plan half, R27(c), R25(a), (b), README's Reading 9 clause, the closure sentences | none (docs) | — | to write; README half waits for claim 1403 (#425) (2026-10-15 22:11) |
 | — | — | final rollout: promote to `stable` (the coordinator, ruling 2026-10-15), auto convergence and a read-only `ccrc rollout --check` (no hand `ccrc rollout`, ruling 2026-09-30), the exit criteria measured live (the operator taps the rehearsal) | — | — | planned; stable waits on B1, B2, B5 and wave 16 |
 
@@ -1749,8 +1749,8 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
       - STATUS: fleet and server v0.0.206, newest v0.0.208, intent dev/auto=stable, backups fleet 183M/server 750M,
         disk free fleet 216G/work volume 143G/server 32G, no anomalies at 10:58.
     - **2026-10-16 11:58 UTC:** v0.0.209 released at 11:07:09; under `auto=stable` no box moved, as designed.
-      STATUS: fleet and server v0.0.206, newest v0.0.209, intent dev/auto=stable, backups fleet 183M/server 750M, disk free fleet
-      216G/work volume 140G/server 32G, no anomalies at 11:58.
+      STATUS: fleet and server v0.0.206, newest v0.0.209, intent dev/auto=stable, backups fleet 183M/server 750M, disk
+      free fleet 216G/work volume 140G/server 32G, no anomalies at 11:58.
 
 - **2026-09-30 12:22 UTC — wave 8 opened (run 182) for the live audit's residue, and dispatched.**
   - **Planning:** two Opus scoping agents measured each defect at `a742eb6a`, and an Opus writer assembled the
@@ -3410,6 +3410,32 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
   - **Landing:** after #410, run 360 and #435, by the consents. Then the worker merges `main` (never a rebase),
     restamps, re-runs the gate, and sends a fresh wave-done. The worker holds at `9888457bc` until the landing mail.
 
+- **2026-10-16 12:53 UTC: wave 19 reviewed and accepted (run 483, PR #443 at `95aa8f3bf`); B2 diagnosed, its repair
+  authorised.**
+  - **Wave-done** (5458): `suite: green`. The whole pwa package was green on its first full run (6627 tests), all 8
+    tasks landed and none was cut, and the reserve is unspent. The two consented spans held: `rowHalts`' body plus an
+    import, and the `PROVENANCE_DETAIL_PREFIX` comment. PR CI is all green.
+  - **Review run 511:** the held-out panel plus PWA and server lenses. No lens was unverified, 4 findings survived, all
+    minor, no behaviour defect, and 5 were refuted. The rulings:
+    - **F1:** `rowHalts`' docstring is kept as shipped. The consent's fence (body only) governs, and the old text is
+      still true. Naming `isHaltingUpdate` in it is residue R33(a), for when `store.ts` is free.
+    - **F2:** `fleet-screen.test.tsx`'s "marked seen" assertion was narrowed to `[role="status"]`. D-5124's
+      always-mounted announcement region forced it, and the test's comment says so. It is accepted as part of D-5124's
+      footprint, recorded here, with no plan addendum.
+    - **F3:** the measured red sets are supersets of the plan's table. Every listed case is among the reds: T4-1 reds
+      2, T4-2 2, T4-3 5, T4-5 4 and T4-7 2. `update-halt-controls` has 15 cases (two were added: T4-8's survivor and
+      T4-12), and the package has 6627. Accepted. The plan's table stays as the drafting record.
+    - **F4:** B5's comment (`update-inventory.test.ts:415-416`) names `expired()` where the deciding path is
+      `deadline.race`'s null. The case keeps its meaning, and T1-1 still reds it. Residue R33(b), one line, in the
+      docs PR.
+  - **B2** (the native Docs reader programme's diagnostic, run 38893503016): on Darwin the helper's `_stop` gets EPERM
+    from its first `killpg(SIGTERM)`, the error escapes before `Spawned` returns, and row 64 reads `unreadable`. Public
+    XNU source fits an existing zombie-only group answering EPERM; that is unconfirmed for the runner. The operator
+    authorised that programme's repair through its own plan, wave, review and merge. The coordinator offered a
+    reap-before-signal shape as input; the shape is theirs.
+  - **Residue added:** R32 (wave 16's worker: when an update dies, `_upd_sweep_die` exits before Reading 9's naming
+    loop, so a prior unit gets no line on that path) and R33.
+
 ## Carried constraints
 
 From W1's whole-branch review (minors, not patched in W1) — each lands in the wave named:
@@ -3662,6 +3688,11 @@ merges. The ones marked **before stable** are fixed, reviewed and merged before 
   package declares `>=22.16.0`, pinned by `node-floor.test.ts`. Also from wave 15's own review:
   `server/test/coord-prhistory.test.ts:41` cites `ccd/ccd:881-884` for unrelated behaviour, a citation already stale
   before the wave.
+- **R32 (wave 16's worker; a node wave).** When an update dies, `_upd_sweep_die` exits before Reading 9's naming loop,
+  so a unit already down before the restart is not named on that path. Item G shares the path.
+- **R33 (wave 19, review 511; the docs PR and a later store fold).** (a) `rowHalts`' docstring could name
+  `isHaltingUpdate`; the consent allowed the body only. (b) `server/test/update-inventory.test.ts:415-416`: B5's comment
+  names `expired()`, but the deciding path is `deadline.race`'s null (`server/src/pools.ts:65-66`).
 
 ## Next-wave brief
 
