@@ -1588,3 +1588,35 @@ Found mid-wave (issued from the block above, taken in order; each defined in the
   - **Bounds:** no new file, no SQLite-only state, no snapshot or journal-format change, and no O5 order change.
 
   Rows cover crashes after k records, an input-invalid result in the middle of a batch, per-bucket cursors and `replaced`, the compare, the refusal isolation, and the realistic pass (1 application, 1 checkpoint replacement, 1 projection, 1 repair). Commits `4690b2537`, `8e55d7241`.
+- **D-4659** — `lost-evidence-never-decides-a-link` (coordinator mails 5477, 5480 and 5484; ruling R84): spec §5.3 says a lost event can delay or prevent a link, never create one. D-4653 made that true for evicted events, but three other kinds of lost evidence could still decide a link:
+  - a Bash listing the hook shed (`truncated:true` with no `listing`);
+  - an hour recorded unmeasured;
+  - a creator's window lost before rung 3 met it.
+
+  A shed or lost-hour window beside another session's window still led to a rung-4 lease. A lost rung-4 creator turned a final rung-3/rung-4 conflict into a plain rung-3 link (X1). Measured by a read-only analysis with probes and mutants, then fixed. Every arm below moves toward unmeasured, and rung 4's positive rule is unchanged.
+
+  The operator's ruling of 2026-10-16 stands beside this entry, and it is a ruling, not a deviation: rung-4 links are journaled during the soak, and the operator rules their treatment before wave 4 displays them.
+
+  The changes:
+  - **Lost windows.** A shed Bash Pre or Post makes a LOST window: from the shed Pre to its Post, or open-ended; a shed Post ends its Pre's window. Every unmeasured hour of any session makes a lost window `[hour, hour + 1 h + margin]` with no repository, because a lost hour cannot say which repository its events touched. A torn tail does the same, read from the cursor's detail and from the measured hour's detail. A retention floor covers hours already pruned. A lost window is never a candidate and never holds the horizon. One that may be on the repository and overlaps the single candidate answers `unmeasured('evidence-horizon')`; this applies to any session's window except the candidate's own call.
+  - **The carve-out, a fold toward linking pinned like a guard.** These hours do not veto:
+    - a `capability-absent` hour;
+    - a `directory-absent` hour of an owner that never had a spool: no cursor row and no measured hour.
+
+    Such a session is in the no-spool class carried to the operator, and rung 4 links across it. A vanished spool vetoes. A home with no hook registered still has its spool directory, because ccd makes it at spawn. Its hours are therefore measured-empty, and the carve-out does not reach them.
+  - **The window's repository is also read from its cwd.** The cwd is attributed by the trees: every census canonical path and every remembered path, the nearest winning. The projects root is used too, but only when it resolved. The window's repository is null, meaning every repository, when the cwd is absent or unattributed, or when the Pre and Post cwds disagree.
+  - **X1.** With no candidate, rung 4 answers `unmeasured('evidence-horizon')` when the horizon, or a lost window that may be on the repository, reaches the tree's birth bracket. The bracket is `[after − margin − skew, at + skew]`, from the last census of the project that did not list the tree to the first that did. `combine` lets this answer stop a link but never decide alone, so a tree with no evidence stays `unresolved`. The sighting bracket lives in lane memory. A restart empties it, so a tree first listed in the first census after a restart reads `(−∞, at]`, and its rung-3 link stays unmeasured until a measured census omits the tree and a later one lists it again (mail 5354: a lost instant is not an empty one).
+  - **E2.** A same-session window that overlaps the candidate and whose added set contains the record is ambiguous ("one Bash tool call of S").
+  - **A rung-1 answer after a lease.** A `ccd-workspace-not-a-lease` answer beside an unreleased lease files ONE final `conflicting` attempt under the lease's parent. The lease is untouched, because wave 3 journals no lease-level transition.
+  - **Count.** The hourly `ccrc-server:` warn line counts trees held unmeasured by lost evidence, separately from the mark kinds.
+
+  **Measured liveness cost:**
+  - Six probe leases and one rung-3 link became unmeasured; one probe lease became unresolved (d).
+  - The open-ended window a shed Post used to leave no longer blocks a later clean creation, which now links.
+  - After every server restart, a pre-restart tree whose link would come from rung 3 with no rung-4 candidate is unmeasured for as long as it stays listed.
+  - A session with an unmeasured hour vetoes every repository's overlapping rung-4 candidates.
+  - **On the live path form:** in the captured corpus, 4 of 4 worktree-token windows came from a main checkout and match no tree while the projects root is unresolved, which in remote mode is always. The census lists linked worktrees only, never the main checkout. So on the live fleet every worktree-naming Bash call made from a main checkout counts for EVERY repository: it vetoes any candidate it overlaps, and an interrupted one (a Pre with no Post) holds every repository's later candidates until it leaves the evidence slice. Expect rung 4 to be largely unresolved or unmeasured live during the soak. The corpus cannot tell whether the hook's main-checkout cwd uses the symlinked or the resolved spelling, because the rig runs under a real temporary directory. Attributing main checkouts is wave 4's, for the operator; nothing here makes the symlinked spelling authoritative.
+
+  **Bounds held:** lane memory only, no new file, no SQLite-only state, no `shared/api.ts` type, no health field, and no journal, snapshot or hook change (5213, 5354).
+
+  Rows and 21 mutants are in `delegation-correlation`, `delegation-watch` and `delegation-policy`; every new row was red first except the pins. Commits `321575468`, `5e7a55223`, `9854b654d`.
