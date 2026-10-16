@@ -5,7 +5,7 @@ import type { Preview, Decorator } from '@storybook/react-vite';
 // where preflight beats `@layer utilities` and every button loses its fill.
 import './preview.css';
 import { THEMES, PHOSPHOR, applyTheme } from '../src/styles/themes';
-import { SKINS, REFINED, applySkin, resolveSkin } from '../src/styles/skins';
+import { SKINS, applySkin, resolveSkin } from '../src/styles/skins';
 
 /** Stamp the theme on <html>, THE WAY THE APP DOES — which is the whole point.
  *
@@ -75,15 +75,29 @@ const preview: Preview = {
       },
     },
   },
-  initialGlobals: { theme: PHOSPHOR, skin: REFINED },
+  // The initial skin is the build's `STORYBOOK_SKIN`, through the catalogue's
+  // own resolver (D-5093, its verification clause): `STORYBOOK_SKIN=instrument
+  // npm run build-storybook` makes a build whose every story opens in
+  // Instrument, so the a11y run over it is axe in that skin. Unset, empty or
+  // not a catalogue id, it is Refined, exactly as a stored value is in the app
+  // — never an attribute no block answers, which would measure Refined while
+  // claiming the other skin. Storybook's vite builder exposes `STORYBOOK_*`
+  // variables on `import.meta.env` and replaces them at build time.
+  initialGlobals: { theme: PHOSPHOR, skin: resolveSkin(import.meta.env.STORYBOOK_SKIN) },
   parameters: {
     layout: 'centered',
     backgrounds: { disable: true }, // the decorator owns the ground
+    // The verification widths (spec §9): every foundations PR is checked at
+    // these, so the toolbar offers exactly these. Phone 360, 390 and 438;
+    // laptop 1280 and 1470; wide 1920. Pinned by `skin-catalogue.test.ts`.
     viewport: {
       options: {
-        phone: { name: 'Phone', styles: { width: '390px', height: '844px' } },
-        tablet: { name: 'Tablet', styles: { width: '834px', height: '1112px' } },
-        desktop: { name: 'Desktop', styles: { width: '1440px', height: '900px' } },
+        'phone-sm': { name: 'Phone S · 360', styles: { width: '360px', height: '780px' } },
+        phone: { name: 'Phone · 390', styles: { width: '390px', height: '844px' } },
+        'phone-lg': { name: 'Phone L · 438', styles: { width: '438px', height: '926px' } },
+        laptop: { name: 'Laptop · 1280', styles: { width: '1280px', height: '800px' } },
+        'laptop-lg': { name: 'Laptop L · 1470', styles: { width: '1470px', height: '920px' } },
+        wide: { name: 'Wide · 1920', styles: { width: '1920px', height: '1080px' } },
       },
     },
     a11y: { test: 'error' },
