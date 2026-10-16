@@ -36,7 +36,7 @@
 | Task 11 (gated) | scaffolded secondary screens; radii lg 14, xl 20 | dense scaffold |
 | Task 12a | unchanged: `AUTO` resolves to Refined everywhere while B is a preview | the same |
 | Task 12b (gated) | a Layout picker, and the fonts' licence line under it | the same |
-| Task 13 | native controls in the accent; themed scrollbars; padded full-width buttons; the wordmark never wraps; "ago" said once; one focus cue on a text field; Accounts prose in sans | the same |
+| Task 13 | native controls in the accent; themed scrollbars; padded full-width buttons; "ago" said once; one focus cue on a text field; Accounts prose in sans (the wordmark's wrap moved to W2's shells, 2026-10-16) | the same |
 | Task 14 | pixel-identical to `main` (every role equals the step it replaces) | rows, controls, chips and meta take Instrument's density and type |
 | Task 14b (gated) | pixel-identical | the app sheets' rows, chips and sheet copy, sheet bodies and option rows take them too |
 | Task 15 | unchanged (a store and a model, no UI) | the same |
@@ -64,7 +64,7 @@ Measured on 2026-10-15 from each branch's diff against `origin/main`. **A file i
 1. **`contrast.test.ts` and `audit.mjs` are frozen.** That freezes the contrast gate's census of colour-bearing rules (`GRANDFATHERED_UNCOVERED`, which reds on an added identity *and* on a stale one) and its grounds registries.
    - So, until #402 and drawer stage 1 merge, no task may add, rename or remove a colour-bearing rule those name. The retired ones include `.wordmark`, `.acct-pct`, `.mail-title`, `.runs-title`, `.accounts-title`, the `.archive-*` rows and the empty states.
    - Every task here that edits a stylesheet runs `contrast.test.ts` alone before its PR. If that suite names an identity the change added or made stale, the step STOPs and the work moves behind the gate. It is never fixed by editing the frozen file.
-   - An identity is a rule's selector (`audit.mjs`'s `ruleKey`). So a non-colour declaration added to an existing rule, such as Task 13's `white-space` on `.wordmark`, leaves the census as it was. Removing a rule, renaming its selector, or adding a `color` to a new one does not.
+   - An identity is a rule's selector (`audit.mjs`'s `ruleKey`). So a non-colour declaration added to or changed in an existing rule, such as Task 13's `font-family` on `.accounts-projection`, leaves the census as it was. Removing a rule, renaming its selector, or adding a `color` to a new one does not.
 2. **The censuses are frozen.** `control-census.test.ts`, `shape-census.test.ts` and `markup-census.test.ts` are each being edited in flight. A new control is built from the primitives (`Button`, `ListRow`, `BareRow`, `Door`, `TextInput`), never hand-drawn, so no census needs a new registry entry.
 
 ## Landing order
@@ -166,7 +166,7 @@ Every task's requirements include this section. `CLAUDE.md` is the authority; th
 | `pwa/src/styles/base.css` | Modify | `accent-color` and `scrollbar-color` from the palette | 13 |
 | `pwa/src/fleet/AccountMeterRow.tsx`, `AccountRow.tsx` | Modify | both draw through `Meter`, keeping their hook classes | 5 |
 | `pwa/src/screens/AccountsScreen.tsx` | Modify | a disabled lane's meter takes `off` (5); the scaffold (11) | 5, 11 |
-| `pwa/src/fleet/fleet.css` | Modify | the meter's colour, height and radius rules go (5); `.sess-line:hover` and the tint-plus-rail selected row (9); retired screen heads (11); the wordmark's `nowrap` and the Accounts prose in sans (13); the roles on rows, chips and sheet copy (14b, after drawer stage 1) | 5, 9, 11, 13, 14b |
+| `pwa/src/fleet/fleet.css` | Modify | the meter's colour, height and radius rules go (5); `.sess-line:hover` and the tint-plus-rail selected row (9); retired screen heads (11); the Accounts prose in sans (13); the roles on rows, chips and sheet copy (14b, after drawer stage 1) | 5, 9, 11, 13, 14b |
 | `pwa/src/styles/shell.css` | Modify | `.shell-accounts .acct-meter`'s height rule goes (5); the roles (14b, after drawer stage 1) | 5, 14b |
 | `pwa/src/session/chat.css` | Modify (after the ask sheet half and drawer stage 1) | the roles (14b); the jump pill clears the last row (17) | 14b, 17 |
 | `pwa/src/fleet/FleetHostBanner.tsx` | Modify | Reboot becomes `danger-ghost`, its confirm `danger` | 6 |
@@ -981,9 +981,13 @@ The two Phosphor palettes pass as hand-tuned (measured ΔL 0.294 and 0.274; step
 
 ### Task 13: the audit's quick wins (B0) — lands now
 
-**Routing:** band 1 for items 1 to 5 and 7; band 2 for item 6. **Needs:** nothing. **Frozen files touched:** none. **Deviation number:** none of its own. Each item fixes a measured defect against a rule the tree already states. Item 6 reverses a recorded choice and cites D-5101's focus clause.
+**Routing:** band 1 for items 1 to 3, 5 and 7; band 2 for item 6. **Needs:** nothing. **Frozen files touched:** none. **Deviation number:** none of its own (D-5159 was issued while executing it; see §Deviations). Each item fixes a measured defect against a rule the tree already states. Item 6 reverses a recorded choice and cites D-5101's focus clause.
 
-**Census safety.** Items 4 and 7 add a non-colour declaration to three existing `fleet.css` rules, all of them `GRANDFATHERED_UNCOVERED` keys (`.wordmark`, `.accounts-projection`, `.accounts-disabled-note`). The census keys rules by selector, so it does not move (§In flight). Items 1 and 2 add a rule that sets no `color`: `audit.mjs`'s `declOf` matches `color` only after `;`, whitespace or the body's start, so `accent-color` and `scrollbar-color` are not read as one. Each rule touched here stays under four declarations, which the frozen shape census does not cluster. Run both alone before the PR. A red is a STOP.
+**Item 4 dropped, 2026-10-16 (coordinator ruling, review round 3).** Task 13 ships six items; the wordmark's `nowrap` and the fleet-head compaction built for it are reverted, with their cases, and the head is `main`'s.
+- **Why.** Unwrapped, the wordmark is 68px where the wrapped one was 48, and in the fleet head (a phone's, or the desktop sidebar's) those 20px came out of the door group and the count readout. Review measured both costs. The head grew taller with real head contents that the default fixture did not show: with the pool-lag readout it went from 67 to 111px at 438, and with a long count from 67 to 92px at 1470. And at 1920 the wordmark sat 3px from the count readout, where `main` leaves 23. A compaction tuned to one count string could not hold the ruling that the head must not grow.
+- **Re-scoped to W2's shells.** W2 moves the wordmark out of the sidebar, into Refined's app bar and Instrument's rail (every shell renders `Wordmark`: spec §3.1, D-5094). Whether it can wrap is then a question about the slot it lands in, so W2 answers it there. Until then the audit's defect stands on `main`: in a narrow fleet head the caret can sit above `ccrc`.
+
+**Census safety.** Item 7 changes a non-colour declaration in two existing `fleet.css` rules, both of them `GRANDFATHERED_UNCOVERED` keys (`.accounts-projection`, `.accounts-disabled-note`). The census keys rules by selector, so it does not move (§In flight). Items 1 and 2 add a rule that sets no `color`: `audit.mjs`'s `declOf` matches `color` only after `;`, whitespace or the body's start, so `accent-color` and `scrollbar-color` are not read as one. Each rule touched here stays under four declarations, which the frozen shape census does not cluster. Run both alone before the PR. A red is a STOP.
 
 **Files:** Modify `pwa/src/styles/base.css`, `ui/src/primitives/button.tsx`, `ui/src/primitives/text-input.tsx`, `pwa/src/fleet/fleet.css`, `pwa/src/screens/AuthSection.tsx`, `pwa/test/focus-ring.test.ts`, `pwa/test/fleet-css.test.ts`, `pwa/test/auth-passkey.test.tsx` and `pwa/test/primitives.test.tsx`. Create `pwa/test/base-defaults.test.ts`.
 
@@ -994,7 +998,7 @@ The two Phosphor palettes pass as hand-tuned (measured ΔL 0.294 and 0.274; step
 | 1 | native checkboxes and radios draw in the browser's blue | a new `html { accent-color: var(--accent); … }` rule in `base.css` | "html takes accent-color from --accent" (base-defaults) | delete the declaration |
 | 2 | scrollbars are the browser's grey for the mode | the same rule gains `scrollbar-color: var(--edge-strong) transparent`, which inherits into every scroll container | "html takes scrollbar-color from palette tokens, with no colour literal but `transparent`" (base-defaults) | write the thumb as `#888` |
 | 3 | a full-width `Button` has no side padding | `size: { full: 'w-full px-4' }` | "a full-width Button carries side padding" (primitives) | drop `px-4` |
-| 4 | the wordmark can wrap between `❯` and `ccrc` | `.wordmark` gains `white-space: nowrap` | "the wordmark never wraps" (fleet-css) | delete it |
+| 4 | the wordmark can wrap between `❯` and `ccrc` | **Dropped 2026-10-16** (above): moved to W2's shells. ~~`.wordmark` gains `white-space: nowrap`~~ | — | — |
 | 5 | "added 5m ago ago" in the passkey list | `AuthSection.tsx`'s two sites stop appending " ago" to `formatAge`, which already says "…ago" or "just now" | "a passkey enrolled 5 minutes ago reads 'added 5m ago'; one used just now reads 'last used just now'" (auth-passkey) | restore " ago" at one site |
 | 6 | a focused text field draws two cues | `TEXT_INPUT` drops `focus:border-phosphor` and keeps `FOCUS_RING`, the cue every other control draws and the one `base.css` draws in the app anyway; `SELECT` inherits it. The field's comment is rewritten. | "a text field draws one focus cue: TEXT_INPUT carries FOCUS_RING and no `focus:border-*`" (focus-ring) | restore `focus:border-phosphor` |
 | 7 | two Accounts prose sentences are set in mono | `.accounts-projection` and `.accounts-disabled-note` take `var(--family-ui)`; `.accounts-fresh` ("last reported 5m ago") is a readout and stays mono | "the Accounts screen's prose is sans and its readouts stay mono" (fleet-css) | `.accounts-projection` back to mono |
@@ -1004,11 +1008,11 @@ Item 6's alternative was a border-only cue. That would need `base.css`'s blanket
 Item 2's one hazard: Chrome lets the standard scrollbar properties win over `::-webkit-scrollbar`. The tree's only such rule, `.term-keys-seq`, also sets `scrollbar-width: none`, so the key bar's scrollbar stays hidden. Check it at 1440.
 
 - [ ] **Step 1: Red.** Each case in the table, seen red for the reason named.
-- [ ] **Step 2: Green.** The seven fixes.
+- [ ] **Step 2: Green.** The six fixes (item 4 dropped).
 - [ ] **Step 3: Mutation table, RUN** (the table's last column).
 - [ ] **Step 4: Per width and per skin.**
   - **Both skins, both Phosphor palettes, and Dracula and GitHub Light** (item 2 is palette colour): scrollbars at 1440 and 1920 take the palette's strong edge; phones keep their overlay scrollbars. Settings' toggles and radios, where native, draw in the accent.
-  - **360:** the wordmark stays on one line, and the head's door group wraps no more than today (D-3303's budget). Full-width sheet buttons with long labels wrap inside 16px of padding.
+  - **360:** full-width sheet buttons with long labels wrap inside 16px of padding.
   - **The sign-in cover at 390 and 1440:** the focused passphrase shows one ring.
   - **Accounts at 390 and 1440:** the projection and the disabled note read in sans; timestamps and percentages stay mono.
 - [ ] **Step 5: Verify.**

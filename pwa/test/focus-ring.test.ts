@@ -32,7 +32,7 @@ import { BACK_BUTTON, BARE_ROW, DOOR, FOCUS_RING, LIST_ROW, SELECT, TEXT_INPUT }
 /** The ring, by any of its names. `FOCUS_RING` itself, or one of the shared
  *  class strings built from it — each of which is asserted to contain it
  *  below, so this list cannot drift into naming something that does not ring. */
-const RINGED = /\b(FOCUS_RING|BARE_ROW|LIST_ROW|TEXT_INPUT|SELECT|BACK_BUTTON|DOOR)\b/g;
+const RINGED = /\b(FOCUS_RING|BARE_ROW|LIST_ROW|TEXT_INPUT|SELECT|BACK_BUTTON|DOOR)\b/;
 
 const UI_SRC = path.join(import.meta.dirname, '..', '..', 'ui', 'src');
 const BASE_CSS = readFileSync(
@@ -58,7 +58,7 @@ const codeOnly = (s: string): string =>
 
 /** `select` joined with Task 13: `Select` is a focusable primitive, and a
  *  census that never counted a `<select>` could not notice one losing its
- *  ring. */
+ *  ring. Counting it was not enough on its own — see the per-control case. */
 const RENDERS_CONTROL = /<(button|input|textarea|select)([\s>]|$)/;
 
 const files = componentFiles(UI_SRC).map((f) => ({
@@ -66,10 +66,75 @@ const files = componentFiles(UI_SRC).map((f) => ({
   code: codeOnly(readFileSync(f, 'utf8')),
 }));
 
+/** The index of the quote that closes the string or template literal opening
+ *  at `i`. A template's `${…}` holes are skipped as code, so a backtick or a
+ *  brace inside one does not end it. */
+function closeQuote(code: string, i: number): number {
+  const q = code[i];
+  for (let j = i + 1; j < code.length; j += 1) {
+    const ch = code[j];
+    if (ch === '\\') j += 1;
+    else if (q === '`' && ch === '$' && code[j + 1] === '{') j = stopAt(code, j + 2, '}');
+    else if (ch === q) return j;
+  }
+  return code.length;
+}
+
+/** The index of the first `stops` character at bracket depth 0 from `from`,
+ *  or of the bracket that closes the one `from` sits inside. Strings and
+ *  templates are stepped over, so `=>` in an `onClick` never ends a tag and a
+ *  `;` in a class string never ends a declaration. */
+function stopAt(code: string, from: number, stops: string): number {
+  let depth = 0;
+  for (let j = from; j < code.length; j += 1) {
+    const ch = code[j]!;
+    if (ch === '"' || ch === "'" || ch === '`') j = closeQuote(code, j);
+    else if ('([{'.includes(ch)) depth += 1;
+    else if (')]}'.includes(ch)) { if (depth === 0) return j; depth -= 1; }
+    else if (depth === 0 && stops.includes(ch)) return j;
+  }
+  return code.length;
+}
+
+/** A tag's `className` expression: the braces' contents, or the quoted text. */
+function classNameOf(tag: string): string | null {
+  const m = /\bclassName=/.exec(tag);
+  if (m === null) return null;
+  const at = m.index + m[0].length;
+  if (tag[at] === '{') return tag.slice(at + 1, stopAt(tag, at + 1, '}'));
+  if (tag[at] === '"' || tag[at] === "'") return tag.slice(at + 1, closeQuote(tag, at));
+  return null;
+}
+
+/** Does this expression reach the ring? By a carrier's name, or through a
+ *  constant this file declares whose initializer does — `KEYCAP`,
+ *  `RADIO_INPUT`, `buttonVariants`, `OptionRow`'s `cls` — however deep. */
+function reachesRing(code: string, expr: string, seen = new Set<string>()): boolean {
+  if (RINGED.test(expr)) return true;
+  for (const [id] of expr.matchAll(/[A-Za-z_$][\w$]*/g)) {
+    if (seen.has(id)) continue;
+    seen.add(id);
+    const decl = new RegExp(`\\b(?:const|let)\\s+${id.replace(/\$/g, '\\$')}\\b\\s*(?::[^=]+)?=(?![=>])`).exec(code);
+    if (decl === null) continue;
+    const at = decl.index + decl[0].length;
+    if (reachesRing(code, code.slice(at, stopAt(code, at, ';')), seen)) return true;
+  }
+  return false;
+}
+
+/** Every focusable control a component file renders, with its own tag.
+ *  Named by its tag, not a line: the code is comment-free, so its line
+ *  numbers are not the file's. */
+const CONTROLS = files.flatMap((f) =>
+  [...f.code.matchAll(/<(button|input|textarea|select)\b/g)].map((m) => {
+    const tag = f.code.slice(m.index, stopAt(f.code, m.index + 1, '>') + 1);
+    return { at: `${f.rel}: ${tag.replace(/\s+/g, ' ').slice(0, 120)}`, code: f.code, tag };
+  }));
+
 describe('every focusable control in @ccrc/ui carries the ring', () => {
   it('found controls to check — the census is not vacuously empty', () => {
     // Without this the suite passes by matching nothing, which is how a census
-    // guard dies. Measured 13 component files rendering a control today.
+    // guard dies. Measured 17 component files rendering a control with Task 13.
     const controls = files.filter((f) => RENDERS_CONTROL.test(f.code));
     expect(controls.length).toBeGreaterThanOrEqual(12);
   });
@@ -90,46 +155,53 @@ describe('every focusable control in @ccrc/ui carries the ring', () => {
     }
   });
 
-  it('carries one FOCUS_RING per control, not one per FILE', () => {
+  it('carries one FOCUS_RING per control, not one per FILE — read from the control\'s own className', () => {
     // PER CONTROL, and that distinction was measured rather than assumed. The
     // first spelling of this test asked only whether the file MENTIONED
     // FOCUS_RING; deleting the ring from one of tool-card's three buttons left
     // it green, because the other two still mentioned it. A census that counts
     // files cannot see a control regress inside a file that already passes.
-    const short = files
-      .map((f) => {
-        // A control REMOVED FROM THE TAB ORDER needs no ring, and that is a
-        // rule rather than an escape hatch: `tabIndex={-1}` means the thing
-        // cannot be keyboard-focused, so a focus style on it would be dead
-        // code pretending to be coverage. AttachButton's `<input type="file">`
-        // is the live case — `display: none` AND `tabIndex={-1}`, clicked
-        // through a ref by the visible button beside it.
-        const controls = [...f.code.matchAll(/<(button|input|textarea|select)\b[^>]*>/g)]
-          .filter((m) => !/tabIndex=\{-1\}|tabindex="-1"|type="hidden"/.test(m[0])).length;
-        // Uses, not mentions: the import line names it once and rings nothing.
-        // A control is ringed by naming FOCUS_RING, or by wearing a shared
-        // class string that already carries it. The second arm arrived with
-        // `CollapsibleStrip`, whose head became `<BareRow>`'s six utilities —
-        // the ring among them — so the component stopped importing FOCUS_RING
-        // and this census went red on a control that is in fact ringed. The
-        // fix is to count the carriers, not to re-import a constant for the
-        // census's benefit: a second spelling of the ring on one element is
-        // the duplication the whole wave is removing.
-        // An IMPORT is not a use. The subtraction used to name FOCUS_RING
-        // alone, so when `CollapsibleStrip` switched to `BARE_ROW` its import
-        // line counted as the ring — and a mutation that removed the constant
-        // from the className while leaving the import kept this census green.
-        // Measured. Every carrier is discounted the same way now.
-        const imported = [...f.code.matchAll(/import \{([^}]*)\} from/g)]
-          .flatMap((m) => [...(m[1] ?? '').matchAll(RINGED)]).length;
-        const uses = [...f.code.matchAll(RINGED)].length - imported;
-        return { rel: f.rel, controls, uses };
-      })
-      .filter((f) => f.controls > 0 && f.uses < f.controls)
-      .map((f) => `${f.rel}: ${f.controls} control(s), ${f.uses} ring(s)`);
+    //
+    // A control REMOVED FROM THE TAB ORDER needs no ring, and that is a rule
+    // rather than an escape hatch: `tabIndex={-1}` means the thing cannot be
+    // keyboard-focused, so a focus style on it would be dead code pretending
+    // to be coverage. AttachButton's `<input type="file">` is the live case —
+    // `display: none` AND `tabIndex={-1}`, clicked through a ref by the
+    // visible button beside it.
+    //
+    // A control is ringed by naming FOCUS_RING, or by wearing a shared class
+    // string that already carries it. The second arm arrived with
+    // `CollapsibleStrip`, whose head became `<BareRow>`'s six utilities — the
+    // ring among them — so the component stopped importing FOCUS_RING; the
+    // fix is to accept the carriers, not to re-import a constant for the
+    // census's benefit: a second spelling of the ring on one element is the
+    // duplication the whole wave is removing.
+    //
+    // NOT BY COUNTING MENTIONS, which this case did until Task 13's review,
+    // and twice it counted the wrong ones. First an IMPORT: when
+    // `CollapsibleStrip` switched to `BARE_ROW` its import line counted as the
+    // ring, and a mutation that removed the constant from the className while
+    // leaving the import stayed green. The import was discounted. Then a
+    // DEFINITION: `select.tsx` defines `SELECT = cn(TEXT_INPUT, 'px-2')`, and
+    // `text-input.tsx` writes `${FOCUS_RING}` into `TEXT_INPUT` — two mentions
+    // each, against one control. So `<select className={cn('w-full',
+    // className)}>`, a Select with no ring, stayed green, and so did the same
+    // TextInput (measured; the TextInput half predates Task 13). A file that
+    // builds a carrier will always mention the ring more often than it renders
+    // controls. So the census no longer counts: it reads each control's own
+    // `className` and asks whether THAT reaches the ring — by a carrier's name
+    // or through a constant the file declares (`reachesRing`). A control with
+    // no className, or one that reaches the ring only through a prop, reds.
+    const checked = CONTROLS.filter((c) => !/tabIndex=\{-1\}|tabindex="-1"|type="hidden"/.test(c.tag));
+    // Measured with Task 13: 21 controls in 17 files, plus AttachButton's
+    // file input, which is out of the tab order.
+    expect(checked.length, 'the per-control read found nothing to check').toBeGreaterThanOrEqual(20);
+    const bare = checked
+      .filter((c) => { const cls = classNameOf(c.tag); return cls === null || !reachesRing(c.code, cls); })
+      .map((c) => c.at);
     expect(
-      short,
-      'every <button>/<input> a component renders owns a focus ring — import FOCUS_RING from lib/focus',
+      bare,
+      'every <button>/<input>/<select> a component renders owns a focus ring — import FOCUS_RING from lib/focus',
     ).toEqual([]);
   });
 
