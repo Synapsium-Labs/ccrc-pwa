@@ -276,10 +276,38 @@ for (const [label, fg, bg, min] of ALL_PALETTES.flatMap(([n, t]) => pairs(palett
 // (ui/design/make-themes.mjs), the generator-and-gate split of every floor
 // above — but primary is held to the palette's own ink (D-5155), so where the
 // aim is out of reach the band sits nearer this floor, and below it this file
-// is what says so. The maths is the generator's, restated here because this
-// file is the authority and must not import what it rules on.
+// is what says so, for every palette but the two named exceptions below. The
+// maths is the generator's, restated here because this file is the authority
+// and must not import what it rules on.
 const TIER_FLOOR = 0.12;
 const TIER_STEP = 0.04;
+/** THE ΔL FLOOR'S NAMED EXCEPTIONS (D-5155): exactly two palettes, each with
+ *  its reason. Primary is held within ΔEOK 0.02 of each palette's own ink, and
+ *  on these two light palettes that cap binds before the band reaches 0.12.
+ *  Their dark ink sits low on the lightness axis, where the same contrast span
+ *  is a shorter OKLab distance, and tertiary is already at the 4.5 text floor
+ *  on its binding ground. Both palettes are low-contrast by design and keep
+ *  their character, so the gate holds each to its measured band rounded DOWN
+ *  to 0.10 (0.100 and 0.105 when this was ruled). That is still a floor: a
+ *  drift below it reds.
+ *
+ *  Only the ΔL row is excepted. Both step rows keep 0.04, and every other
+ *  palette keeps 0.12. Two-way, like the audit's registries: an entry whose
+ *  palette clears 0.12 again is stale, and an entry that names no palette is
+ *  a typo or a leftover. Both are FAIL rows. `pwa/test/ink-tiers.test.ts`
+ *  pins the list to exactly these two, so a third entry reds there even for a
+ *  palette that measures under 0.12: widening the exception is a ruling, not
+ *  an edit. */
+const TIER_FLOOR_EXCEPTIONS = {
+  'SOLARIZED-LIGHT': {
+    floor: 0.10,
+    why: 'light palette, low-contrast by design: primary held within ΔEOK 0.02 of its own ink, tertiary at the 4.5 floor on the accent tint',
+  },
+  'CATPPUCCIN-LATTE': {
+    floor: 0.10,
+    why: 'light palette, low-contrast by design: primary held within ΔEOK 0.02 of its own ink, tertiary at the 4.5 floor on raised',
+  },
+};
 const linear = (c) => {
   const s = c / 255;
   return s <= 0.04045 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4;
@@ -294,22 +322,38 @@ const oklabL = (c) => {
 };
 
 console.log(`\n# ink tiers — OKLab lightness, signed from primary toward the ground`);
+const tierBand = new Map();
 for (const [name, theme] of ALL_PALETTES) {
   const T = palette(theme);
   const [p, s, t] = [T.inkP, T.inkS, T.inkT].map(oklabL);
   // Toward the ground: down on a dark palette, up on a light one. An unsigned
   // distance would pass a tertiary LOUDER than primary.
   const toward = Math.sign(oklabL(T.surface) - p) || 1;
-  for (const [label, d, min, a, b] of [
-    ['ΔL primary → tertiary', (t - p) * toward, TIER_FLOOR, T.inkP, T.inkT],
-    ['step primary → secondary', (s - p) * toward, TIER_STEP, T.inkP, T.inkS],
-    ['step secondary → tertiary', (t - s) * toward, TIER_STEP, T.inkS, T.inkT],
+  const excepted = Object.hasOwn(TIER_FLOOR_EXCEPTIONS, name.trim()) ? TIER_FLOOR_EXCEPTIONS[name.trim()] : undefined;
+  tierBand.set(name.trim(), (t - p) * toward);
+  for (const [label, d, min, a, b, note] of [
+    ['ΔL primary → tertiary', (t - p) * toward, excepted?.floor ?? TIER_FLOOR, T.inkP, T.inkT,
+      excepted ? `  — exception (D-5155): ${excepted.why}` : ''],
+    ['step primary → secondary', (s - p) * toward, TIER_STEP, T.inkP, T.inkS, ''],
+    ['step secondary → tertiary', (t - s) * toward, TIER_STEP, T.inkS, T.inkT, ''],
   ]) {
     const ok = d >= min;
     if (!ok) fail++;
     n++;
-    console.log(`${ok ? 'PASS' : 'FAIL'}  ${d.toFixed(3).padStart(6)}  (min ${min})  TIER ${name.trim()}  ${label}  ${hex(a)} → ${hex(b)}`);
+    console.log(`${ok ? 'PASS' : 'FAIL'}  ${d.toFixed(3).padStart(6)}  (min ${min.toFixed(2)})  TIER ${name.trim()}  ${label}  ${hex(a)} → ${hex(b)}${note}`);
   }
+}
+// The exceptions' own two-way check. A FAIL row each, never a PASS row: a
+// registry that is in order adds nothing to the count.
+for (const [name, { floor }] of Object.entries(TIER_FLOOR_EXCEPTIONS)) {
+  const d = tierBand.get(name);
+  let problem = null;
+  if (d === undefined) problem = `names no palette: remove it`;
+  else if (d >= TIER_FLOOR) problem = `is stale: ${name} measures ${d.toFixed(3)}, which clears ${TIER_FLOOR} without it — remove it`;
+  if (problem === null) continue;
+  fail++;
+  n++;
+  console.log(`FAIL  ------  (tier)  TIER_FLOOR_EXCEPTIONS entry ${name} (floor ${floor.toFixed(2)}) ${problem}`);
 }
 
 console.log(`\n# stylesheets — ${report.sheets.join(', ')}`);

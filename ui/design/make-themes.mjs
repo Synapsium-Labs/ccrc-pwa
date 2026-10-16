@@ -262,19 +262,21 @@ const bleedNote = (label, kept) => {
  *  Where the cap binds before the band reaches 0.12 (the light palettes: their
  *  dark ink sits low on the lightness axis, where the same contrast span is a
  *  shorter OKLab distance), the run says so and writes — the gate is the
- *  authority on the band, and it rules.
+ *  authority on the band, and it rules. It names two exceptions, Solarized
+ *  Light and Catppuccin Latte, held to 0.10 (D-5155); any other palette this
+ *  leaves under 0.12 reds it.
  *
  *  THE TERTIARY'S GROUNDS INCLUDE TWO NO TOKEN NAMES YET: the accent tint (the
  *  selected fleet row's ground once the reverse-video slab goes) and the
  *  pressed recipe, primary at 9% over surface in sRGB — the value
  *  `--bg-pressed` will hold (D-5101). The gate adds the neutral inks on both
  *  AFTER this lands, so the walk holds them from the start: walked on the four
- *  card grounds alone, tertiary measured 4.44 on the tint (Tokyo Night) and as
- *  low as 4.27 on the pressed recipe (Tokyo Night; GitHub Light 4.38). The
- *  pressed recipe moves with primary, which is why tertiary is re-walked for
- *  every primary the move tries. It also bounds the hover recipe (5%): the mix
- *  moves the ground monotonically toward the ink, so a tertiary that clears 9%
- *  clears 5%.
+ *  card grounds alone, tertiary measured as low as 4.44 on the tint (Tokyo
+ *  Night and Gruvbox Dark) and 4.32 on the pressed recipe (Tokyo Night;
+ *  GitHub Light 4.38). The pressed recipe moves with primary, which is why
+ *  tertiary is re-walked for every primary the move tries. It also bounds the
+ *  hover recipe (5%): the mix moves the ground monotonically toward the ink,
+ *  so a tertiary that clears 9% clears 5%.
  *
  *  Refusals, not warnings: a quiet tier under the text floor is UNREACHABLE,
  *  and nothing is written. */
