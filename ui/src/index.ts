@@ -96,6 +96,9 @@ export {
   SKINS, SKIN_STORAGE_KEY, SKIN_TOKENS, REFINED, INSTRUMENT, resolveSkin, applySkin,
   type SkinChoice, type SkinId, type SkinToken, type SkinTokenClass,
 } from './styles/skins';
+// The per-device default (D-5096): the stored "Match this device" choice, the
+// device query, and what a stored value asks for.
+export { AUTO, DEVICE_QUERY, skinPreference, type SkinPreference } from './styles/skins';
 
 export { cn } from './lib/cn';
 export { FOCUS_RING } from './lib/focus';

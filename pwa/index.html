@@ -61,19 +61,34 @@
     <script>
       // Pre-paint skin stamp (D-5093), on the theme snippet's terms above.
       // The skin is ALWAYS stamped, Refined included: the stored value
-      // verbatim, or the default when nothing is stored.
+      // verbatim, or the device's default when nothing is stored, the value is
+      // empty, or it is "Match this device".
       //
       // Deliberately NOT validated against the skin catalogue, for the theme
       // snippet's reason: the list is in the bundle, and a copy here is the
       // second copy `single-definition` forbids. An unknown value matches no
-      // block in skins.css, so the frame renders :root — which IS the
-      // default skin — and `initSkin` corrects the attribute when the bundle
-      // runs. This never throws. The key and the default are bound to
-      // skins.ts by test/skin-boot.test.tsx, which also runs this script.
+      // block in skins.css, so the frame renders :root — which IS Refined —
+      // and `initSkin` stamps its resolution when the bundle runs.
+      //
+      // The device's default (D-5096): Instrument on a pointer that can hover
+      // and is fine, Refined on everything else — by primary input, never by
+      // width, and read once, here and in initSkin, never subscribed to. The
+      // flag below mirrors Instrument's `preview` in skins.ts (it is the
+      // negation), so while Instrument is a preview the rule answers Refined
+      // on every device. The W2 commit that flips `preview` must flip it too.
+      // A missing or throwing matchMedia means not a desk. This never throws.
+      // The key, the choice, the query, both results and the flag are bound
+      // to skins.ts by test/skin-boot.test.tsx, which also runs this script.
       try {
+        var AUTO_DESK = false;
         var s = null;
+        var desk = false;
         try { s = localStorage.getItem('ccrc-skin'); } catch {}
-        document.documentElement.setAttribute('data-skin', s === null || s === '' ? 'refined' : s);
+        if (s === null || s === '' || s === 'auto') {
+          try { desk = AUTO_DESK && matchMedia('(hover: hover) and (pointer: fine)').matches === true; } catch {}
+          s = desk ? 'instrument' : 'refined';
+        }
+        document.documentElement.setAttribute('data-skin', s);
       } catch {}
     </script>
     <meta name="mobile-web-app-capable" content="yes" />
