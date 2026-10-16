@@ -1170,8 +1170,10 @@ describe('the delegation spool: the hook appends evidence to a directory ccd mad
       expect(l.truncated).toBe(true);
     });
 
-    it('listing is dropped FIRST at the measured ~3.9 KiB case: the other optional fields stay, truncated is set, the line is under the cap', () => {
-      mkRepo(Array.from({ length: 140 }, (_, i) => `agent-${String(i).padStart(4, '0')}-0123456789ab`));   // 140 x 3 + names ~ 3.9 KiB of listing
+    it('listing is dropped FIRST when it cannot fit: the other optional fields stay, truncated is set, the line is under the cap', () => {
+      // 160 names of 23 bytes are 4,160 bytes of listing on their own, so the drop never rests on the TMPDIR's length. The plan's
+      // measured ~3.9 KiB case (140 names) passed the cap by only 4 bytes under a short TMPDIR such as CI's /tmp.
+      mkRepo(Array.from({ length: 160 }, (_, i) => `agent-${String(i).padStart(4, '0')}-0123456789ab`));
       const l = one(pre('Bash', { command: WT }, 'toolu_01', { cwd: repo }), { CLAUDE_CODE_EXECPATH: '/x/versions/2.1.296' });
       expect('listing' in l).toBe(false);
       expect(l.truncated).toBe(true);
