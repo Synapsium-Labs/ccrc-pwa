@@ -1319,6 +1319,12 @@ A worker never allocates: it names a departure by slug in its report, and the co
   - **Held by:** planted cases in `pwa/test/skin-identity.test.ts`: Refined's `--fs-meta: 12px`, `--fs-page: var(--fs-meta)`, `--weight-section: 650`, `--ls-section: 0.08em`, and Refined's `--row-h: 40px`. Five mutants are red when run, one per widening: (e) reading `skins.css` only, (e) judging `--fs-*` only, (e) skipping `--ls-*`, (e) accepting a role as a step, and (f2) reading `skins.css` only. Both rules hold on the tree with no change to `tokens.css`.
   - **Departs** Task 2's (e) ("type roles are `var(--fs-*)`") and (f2), and spec §3.2's token half, which reads `ui/src/styles/skins.css` only.
 
+### Found while executing Task 3
+
+A worker never allocates: it names a departure by slug in its report, and the coordinator allocates through `POST /api/ledger/deviations` and defines it here, once, in the PR that introduces it. Task 3 named one, issued 2026-10-16.
+
+- **D-5244** — `storybook-static-glob-ignored` (Task 3): `ui/.gitignore`'s `storybook-static/` becomes `storybook-static*/`. Step 5's second build writes `ui/storybook-static-instrument/` (`-o storybook-static-instrument`, as `ui/README.md` now gives it), which the old pattern left untracked in every worktree that ran it. The glob ignores both outputs and any later per-skin directory. Departs Task 3's file list, which names no edit to `ui/.gitignore`. No test reads the file, and nothing in flight edits it.
+
 ### Found while executing Task 13
 
 A worker never allocates: it names a departure by slug in its report, and the coordinator allocates through `POST /api/ledger/deviations` and defines it here, once, in the PR that introduces it. Task 13 named one, issued 2026-10-15.
