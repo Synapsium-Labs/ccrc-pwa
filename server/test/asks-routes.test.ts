@@ -1000,6 +1000,22 @@ describe('late answer wins; declined (D-5289)', () => {
     expect(sendKeysCalls(calls)).toHaveLength(1);
   });
 
+  // D-5290: a row MINTED released (`parent-not-live`, `parent-project-mismatch`)
+  // was never mailed to the parent and never held: the operator owns it from
+  // the first tick, so late answer wins does not reach it, and the parent's
+  // route refuses it as no longer pre-emptible.
+  for (const reason of ['parent-not-live', 'parent-project-mismatch'] as const) {
+    it(`a row minted released (${reason}) is refused to the parent 409 not-held, and nothing is pressed`, async () => {
+      const { coord, id, calls } = await setup(Date.now());
+      coord.db.prepare("UPDATE asks SET state = 'released', releasedAt = 1, releaseReason = ? WHERE id = ?").run(reason, id);
+      const res = await by(id, 'answer', { optionIndexes: [1] });
+      expect(res.statusCode).toBe(409);
+      expect(res.json()).toEqual({ ok: false, error: 'not-held' });
+      expect(sendKeysCalls(calls)).toEqual([]);
+      expect(okAsk(coord.askById(id))!.state).toBe('released');
+    });
+  }
+
   it('an answer inside the window replaces nothing — there was no notification to replace', async () => {
     const { id, sent } = await setup(Date.now() + 60_000);
     expect((await by(id, 'answer', { optionIndexes: [0] })).statusCode).toBe(200);
