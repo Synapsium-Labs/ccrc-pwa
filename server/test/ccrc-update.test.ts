@@ -4764,6 +4764,48 @@ describe('ccrc update: update.json at every phase, and --from (design §10)', ()
     expect(rep['detail']).toBe('unreadable: ~/.ccrc/ccrc.env is not a regular file');
   });
 
+  // Wave 17 (D-5314): `_upd_json_str` cuts a value at 200 characters, which would split the last unit id into a fragment
+  // the doctor reads as a unit of its own. `_upd_sweep_set_down` therefore appends WHOLE ids only while the word stays
+  // within 200, count first. Run through the real `_upd_phase`, so the STORED `sweep` is what is read. Without the cap
+  // line twelve of these names give 264 characters and a stored last token `a` (measured).
+  it('_upd_sweep_set_down keeps the recorded word within 200 characters and cuts only between WHOLE ids, the count first (wave 17, D-5314)', () => {
+    const src = readFileSync(join(REPO, 'ccd', 'ccrc'), 'utf8');
+    const pick = (re: RegExp, what: string): string => {
+      const m = re.exec(src);
+      expect(m, `ccd/ccrc has no ${what}`).not.toBeNull();
+      return m![0];
+    };
+    const home = mkTmp('ccrc-update-sweep-word-cap-');
+    const jsonPath = join(home, '.ccrc', 'update.json');
+    const ids = Array.from({ length: 12 }, (_, i) => `acct-${i + 1}-project-alpha`);
+    const harness = [
+      'set -uo pipefail',
+      pick(/^_upd_redact\(\) \{[\s\S]*?\n\}$/m, '_upd_redact'),
+      pick(/^_upd_json_str\(\) \([\s\S]*?\n\)$/m, '_upd_json_str'),
+      pick(/^_EXIT_CHAIN=\(\)$/m, '_EXIT_CHAIN'),
+      pick(/^_exit_run\(\) \{[\s\S]*?\n\}$/m, '_exit_run'),
+      pick(/^_exit_add\(\) \{[\s\S]*?\n\}$/m, '_exit_add'),
+      pick(/^_tmp_guard\(\) \{.*\}$/m, '_tmp_guard'),
+      pick(/^_upd_phase\(\) \{[\s\S]*?\n\}$/m, '_upd_phase'),
+      pick(/^_upd_sweep_set_down\(\) \{[\s\S]*?\n\}$/m, '_upd_sweep_set_down'),
+      `BOX_UPDATE_JSON=${JSON.stringify(jsonPath)}`,
+      'UPD_REPORT_TARGET=""', 'UPD_REPORT_STARTED=""', 'UPD_FROM=cli', 'UPD_SWEEP_WORD=""',
+      `_upd_sweep_set_down ${ids.map((id) => `claude-session@${id}.service`).join(' ')}`,
+      '_upd_phase done',
+    ].join('\n');
+    mkdirSync(join(home, '.ccrc'), { recursive: true });
+    const r = spawnSync(BASH, ['-c', harness], { env: { HOME: home }, encoding: 'utf8' });
+    expect(r.status, r.stderr).toBe(0);
+    const word = String((JSON.parse(readFileSync(jsonPath, 'utf8')) as Record<string, unknown>)['sweep']);
+    expect(word.startsWith('down: 12: '), word).toBe(true);
+    expect(word.length, word).toBeLessThanOrEqual(200);
+    const named = word.slice('down: 12: '.length).split(' ');
+    expect(named.length, 'a long list loses names, never the whole list').toBeGreaterThan(0);
+    expect(named.length, 'twelve of these names do not fit in 200 characters').toBeLessThan(12);
+    // Every name after the count is an input id, whole, and in input order from the first.
+    expect(named, word).toEqual(ids.slice(0, named.length));
+  });
+
   // Wave 9 M1-M3 (D-3808): five harnesses run functions extracted from ccd/ccrc
   // under a PATH-less env, and a bare `bash` under that env resolves macOS's
   // /bin/bash 3.2 (no BASHPID, `\/` in a ${//} replacement). They spawn the
