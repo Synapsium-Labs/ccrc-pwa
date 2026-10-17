@@ -1884,6 +1884,9 @@ describe('the coordinator-resume runbook (program-leverage wave 1, spec S3 item 
 describe('the ask-answer 409 contract distinguishes route/CAS guards from answerAsk refusals', () => {
   const ROUTE_CAS_409 = [
     'not-held', 'ask-moved', 'child-unmeasurable', 'declined', 'already-answered',
+    // D-5368: the parent's route refuses an `askKey` that is not the row's
+    // before it takes the row — the same word `answerAsk` refuses downstream.
+    'ask-mismatch',
   ] as const;
   /** D-5357: Task 4's two route refusals (D-5289, late answer wins), named in
    *  the skill AGENT-FIRST — this text ships before the server that sends them,
@@ -1928,8 +1931,8 @@ describe('the ask-answer 409 contract distinguishes route/CAS guards from answer
     }
 
     expect(flat(section), 'the route/CAS refusals are not scoped before answerAsk')
-      .toContain(flat('five route/CAS guards before `answerAsk` (`not-held`, ' +
-        '`ask-moved`, `child-unmeasurable`, `declined`, or `already-answered`)'));
+      .toContain(flat('six route/CAS guards before `answerAsk` (`not-held`, ' +
+        '`ask-moved`, `child-unmeasurable`, `declined`, `already-answered`, or `ask-mismatch`)'));
     // D-5357: the contract Task 4 (D-5289) ships — a lapse leaves the row
     // answerable, a refused press goes back where it was taken from, and a
     // parent's own release is final.
@@ -1955,7 +1958,10 @@ describe('the ask-answer 409 contract distinguishes route/CAS guards from answer
     // refusal from `answerAsk` or rewriting the prose back to a three-condition
     // claim both red here rather than only in a phrasing the regex happens to know.
     expect(section, 'the ask lane no longer states the 409 split as its two derived halves')
-      .toContain(`(${ROUTE_CAS_409.length} + ${downstream.length}) distinct codes`);
+      .toContain(`${new Set([...ROUTE_CAS_409, ...downstream]).size} distinct codes ` +
+        `(${ROUTE_CAS_409.length} + ${downstream.length}, \`ask-mismatch\` in both halves)`);
+    // D-5368: the one code both halves spell is the one the prose names as shared.
+    expect(ROUTE_CAS_409.filter((c) => downstream.includes(c))).toEqual(['ask-mismatch']);
     expect(section, 'the ask lane regressed to one of the literal three-condition phrasings')
       .not.toMatch(/409[^.]{0,240}(?:only|is|has) three (?:possible )?(?:conditions|refusals)/i);
   });

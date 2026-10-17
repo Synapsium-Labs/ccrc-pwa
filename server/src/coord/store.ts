@@ -64,7 +64,7 @@ import {
 } from '../deadCoordinator.js';
 import {
   CLAIM_HARD_CAP_MS, CLAIM_LEASE_MS, DONE_AUTHORITY_CODES,
-  isAskState, isClaimState, isDeviationAllocState, isLifecycleAct, isLifecycleGapReason,
+  isAskReleaseReason, isAskState, isClaimState, isDeviationAllocState, isLifecycleAct, isLifecycleGapReason,
   isLifecycleOutcome,
   isMailDeliveryState, isMailGate, isMailKind, isNotifyKind, isProgramState, isRunKind, isRunState,
   isWorkItemState,
@@ -95,7 +95,7 @@ import {
   RUN_HOLD_NUMBER_MAX,
   IDLE_RUN_STATES, transitionsFor, TERMINAL_DELIVERY_STATES, TERMINAL_RUN_STATES, TMPROOT_ID_MAX_CHARS,
   WAVE_DONE_SUBJECT,
-  type AskState,
+  type AskReleaseReason, type AskState,
   type ClaimConflict, type ClaimState, type ClaimSummary,
   type CoordCaps, type DeviationAllocation, type DeviationAllocState,
   type LifecycleAct, type LifecycleGap, type LifecycleGapReason, type LifecycleOutcome,
@@ -707,6 +707,9 @@ export interface AskRow {
   state: AskState;
   answeredBy: string | null; answer: string | null;
   answeredAt: number | null; releasedAt: number | null;
+  /** D-5290: why the row was MINTED `released`; `null` for every row the hold
+   *  minted, whatever happened to it after. Read through `isAskReleaseReason`. */
+  releaseReason: AskReleaseReason | null;
 }
 
 /** `takeAskForAnswer`'s two refusals are DIFFERENT conditions a caller acts on
@@ -6966,13 +6969,13 @@ export class CoordStore {
   private static readonly ASK_COLS =
     'CAST(id AS TEXT) AS idText, at, childId, parentId, CAST(runId AS TEXT) AS runIdText, ' +
     'askKey, askAt, dialogId, question, options, ' +
-    'state, answeredBy, answer, answeredAt, releasedAt';
+    'state, answeredBy, answer, answeredAt, releasedAt, releaseReason';
 
   private hydrateAsk(r: {
     idText: string; at: number; childId: string; parentId: string; runIdText: string | null;
     askKey: string; askAt: number; dialogId: string; question: string; options: string;
     state: string; answeredBy: string | null; answer: string | null;
-    answeredAt: number | null; releasedAt: number | null;
+    answeredAt: number | null; releasedAt: number | null; releaseReason: string | null;
   }): { ok: true; ask: AskRow } | { ok: false; detail: string } {
     const id = persistedInt(r.idText, 'ask id');
     if (!id.ok) return id;
@@ -6997,6 +7000,10 @@ export class CoordStore {
         runId,
         options: JSON.parse(r.options) as string[],
         state: isAskState(r.state) ? r.state : 'unknown',
+        // D-5290, the same rule for the release reason: null stays null (the
+        // hold minted it), a word this build does not know reads `unknown`.
+        releaseReason: r.releaseReason === null ? null
+          : isAskReleaseReason(r.releaseReason) ? r.releaseReason : 'unknown',
       },
     };
   }
@@ -7017,7 +7024,9 @@ export class CoordStore {
     return this.readAsk(id);
   }
 
-  /** Minted at hold time (Task 6), state `'held'` — the only state an ask is
+  /** Minted at hold time (Task 6), state `'held'` — or, with a
+   *  `releaseReason` (D-5290), `'released'` at once, for a child whose parent
+   *  is not live or of another project. Those are the only states an ask is
    *  ever inserted in; nothing else writes a fresh row.
    *
    *  THE `runId` GUARD IS DEFENSIVE (D-2545) and unreachable by construction
@@ -7035,6 +7044,9 @@ export class CoordStore {
   insertAsk(a: {
     childId: string; parentId: string; runId: number | null; askKey: string;
     askAt: number; dialogId: string; question: string; options: string[]; now: number;
+    /** D-5290: present, the row is minted `released` at `now` with this reason
+     *  (the parent is not live, or of another project), never `held`. */
+    releaseReason?: Exclude<AskReleaseReason, 'unknown'>;
   }): number {
     if (a.runId !== null && !isPositiveDecimalSafeInteger(a.runId)) {
       // The COLUMN and nothing else — the offending value never leaves here.
@@ -7042,14 +7054,16 @@ export class CoordStore {
     }
     const insertAsk = this.db.prepare(
       'INSERT INTO asks (at, childId, parentId, runId, askKey, askAt, dialogId, ' +
-      "question, options, state) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'held')",
+      'question, options, state, releasedAt, releaseReason) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
     );
     insertAsk.setReadBigInts(true);
+    const reason = a.releaseReason ?? null;
 
     return tx(this.db, () => {
       const exactId = insertAsk.run(
         a.now, a.childId, a.parentId, a.runId, a.askKey, a.askAt, a.dialogId,
         a.question, JSON.stringify(a.options),
+        reason === null ? 'held' : 'released', reason === null ? null : a.now, reason,
       ).lastInsertRowid;
       if (typeof exactId !== 'bigint' || exactId < 1n || exactId > BigInt(Number.MAX_SAFE_INTEGER)) {
         throw new Error('insertAsk: generated ask id is not a positive safe integer');
@@ -8239,7 +8253,7 @@ export class CoordStore {
   }
 
   // ── delegation broker wave 3, Task 7: the report-only coordination projection ────────────────────────────────────
-  // The six `delegation_*` tables (MIGRATIONS entry 21) are REPAIRABLE OUTPUT. The journal and the checkpoint are the
+  // The six `delegation_*` tables (MIGRATIONS entry 22) are REPAIRABLE OUTPUT. The journal and the checkpoint are the
   // authority (Task 8 owns both, and `delegation-model.ts` owns their shapes); these five methods (the projection, the event
   // insert and its batch, the event stats and the read-back) only make SQLite say
   // what they say. `CoordStore` stays synchronous and holds no health and no coordinator intent as an authority: the

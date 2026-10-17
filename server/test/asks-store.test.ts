@@ -15,7 +15,7 @@ describe('the asks table', () => {
   it('the cross-repo columns added at schema version 10 are still present at the current version', () => {
     const home = mkTmp('ccrc-coord-');
     const db = openCoordDb(dbPathIn(home));
-    // ELEVEN migrations have landed since this test's own version: MIGRATIONS[10]
+    // TWELVE migrations have landed since this test's own version: MIGRATIONS[10]
     // (`runs.kind`/`runs.reviews`, review runs, design 2026-09-14 §5.1),
     // MIGRATIONS[11] (`runs.coordProject`, board placement wave 1 Task 1),
     // MIGRATIONS[12] (`pool_edges`/`pool_epoch`, account-pool membership wave 1
@@ -27,17 +27,18 @@ describe('the asks table', () => {
     // watch settings §8), MIGRATIONS[17] (`dead_claimants`, workspace
     // lifecycle §5.4), MIGRATIONS[18] (`dead_coordinator_breaker_state`,
     // workspace lifecycle §5.4), MIGRATIONS[19] (`collect_lane_settings`,
-    // path-identity §5.2) and MIGRATIONS[20] (the six `delegation_*` tables,
-    // delegation broker wave 3). None touches the asks table. This pin only needs the
-    // CURRENT total — it asserts "no migration after the one this test knows
-    // about has changed the asks table's columns", not anything about any of
-    // the eleven.
-    expect(COORD_SCHEMA_VERSION).toBe(21);
+    // path-identity §5.2), MIGRATIONS[20] (`asks.releaseReason`, D-5290,
+    // coordinator-first routing §5.2) and MIGRATIONS[21] (the six
+    // `delegation_*` tables, delegation broker wave 3). Only MIGRATIONS[20]
+    // touches the asks table. This pin only needs the CURRENT total — it
+    // asserts "no migration after the one this test knows about has changed
+    // the asks table's columns", not anything about any of the twelve.
+    expect(COORD_SCHEMA_VERSION).toBe(22);
     const cols = (db.prepare("SELECT name FROM pragma_table_info('asks')").all() as
       { name: string }[]).map((r) => r.name).sort();
     expect(cols).toEqual([
       'answer', 'answeredAt', 'answeredBy', 'askAt', 'askKey', 'at', 'childId',
-      'dialogId', 'id', 'options', 'parentId', 'question', 'releasedAt', 'runId', 'state',
+      'dialogId', 'id', 'options', 'parentId', 'question', 'releaseReason', 'releasedAt', 'runId', 'state',
     ]);
     db.close();
   });
@@ -500,5 +501,38 @@ describe('late answer wins; declined (D-5289)', () => {
     const olderFold = (v: string): string => (OLDER.includes(v) ? v : 'unknown');
     expect(olderFold('declined')).toBe('unknown');
     expect([...ASK_STATES].sort()).toEqual([...OLDER, 'declined'].sort());
+  });
+});
+
+describe('a row minted released, with its reason (D-5290)', () => {
+  const CHILD = 'project-a-quiet-basin';
+  const PARENT = 'project-a-calm-mesa';
+  const mk = (): CoordStore => new CoordStore(openCoordDb(dbPathIn(mkTmp('ccrc-coord-'))));
+
+  it('insertAsk with a release reason mints the row released at once, and reads the reason back', () => {
+    const s = mk();
+    const id = s.insertAsk({ childId: CHILD, parentId: PARENT, runId: null, askKey: 'k', askAt: 1000,
+      dialogId: 'd', question: 'q', options: ['a', 'b'], now: 7, releaseReason: 'parent-not-live' });
+    const row = okAsk(s.askById(id));
+    expect(row).toMatchObject({ state: 'released', releasedAt: 7, releaseReason: 'parent-not-live' });
+    // the operator's route still finds it (`heldAskFor` takes held or released)
+    expect(okAsk(s.heldAskFor(CHILD))?.id).toBe(id);
+  });
+
+  it('a held mint carries no reason, and the lapse leaves it so', () => {
+    const s = mk();
+    const id = s.insertAsk({ childId: CHILD, parentId: PARENT, runId: null, askKey: 'k', askAt: 1000,
+      dialogId: 'd', question: 'q', options: ['a', 'b'], now: 7 });
+    expect(okAsk(s.askById(id))).toMatchObject({ state: 'held', releaseReason: null });
+    expect(s.releaseAsk(id, 8)).toBe(true);
+    expect(okAsk(s.askById(id))).toMatchObject({ state: 'released', releaseReason: null });
+  });
+
+  it('an out-of-vocabulary reason a newer build wrote reads back as unknown, never cast', () => {
+    const s = mk();
+    const id = s.insertAsk({ childId: CHILD, parentId: PARENT, runId: null, askKey: 'k', askAt: 1000,
+      dialogId: 'd', question: 'q', options: ['a'], now: 7, releaseReason: 'parent-not-live' });
+    s.db.prepare("UPDATE asks SET releaseReason = 'a-later-word' WHERE id = ?").run(id);
+    expect(okAsk(s.askById(id))?.releaseReason).toBe('unknown');
   });
 });

@@ -660,8 +660,8 @@ describe('coord.db: migration 4 — runs.dispatchStartedAt', () => {
     db.close();
   });
 
-  it('COORD_SCHEMA_VERSION derives to 21 — never hand-edited beside a growing array', () => {
-    // Bumped to 21 by eleven migrations: MIGRATIONS[10] (runs.kind/runs.reviews,
+  it('COORD_SCHEMA_VERSION derives to 22 — never hand-edited beside a growing array', () => {
+    // Bumped to 22 by twelve migrations: MIGRATIONS[10] (runs.kind/runs.reviews,
     // design 2026-09-14 §5.1), MIGRATIONS[11] (runs.coordProject, board
     // placement wave 1 Task 1), MIGRATIONS[12] (pool_edges/pool_epoch,
     // account-pool membership wave 1 Task 6), MIGRATIONS[13] (releases,
@@ -674,10 +674,12 @@ describe('coord.db: migration 4 — runs.dispatchStartedAt', () => {
     // workspace lifecycle spec §5.4), MIGRATIONS[18]
     // (dead_coordinator_breaker_state, the breaker's typed state, §5.4/§12),
     // MIGRATIONS[19] (collect_lane_settings, the collector switch,
-    // path-identity spec 2026-10-12 §5.2) and MIGRATIONS[20] (the six
-    // delegation_* tables, delegation broker wave 3, spec §5.2).
-    expect(COORD_SCHEMA_VERSION).toBe(21);
-    expect(MIGRATIONS.length).toBe(21);
+    // path-identity spec 2026-10-12 §5.2), MIGRATIONS[20]
+    // (asks.releaseReason, D-5290, coordinator-first routing §5.2) and
+    // MIGRATIONS[21] (the six delegation_* tables, delegation broker wave 3,
+    // spec §5.2).
+    expect(COORD_SCHEMA_VERSION).toBe(22);
+    expect(MIGRATIONS.length).toBe(22);
   });
 
   it('is ADDITIVE: every column migration 1 wrote is still on the table, unchanged', () => {
@@ -732,14 +734,15 @@ describe('coord.db: migration 11 — runs.kind and runs.reviews (design 2026-09-
     const db = openCoordDb(p);
     expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version)
       .toBe(COORD_SCHEMA_VERSION);
-    // 21 since MIGRATIONS[14] (the stall read's indexes), MIGRATIONS[15]
+    // 22 since MIGRATIONS[14] (the stall read's indexes), MIGRATIONS[15]
     // (runs.sessionBornAt/sessionBornFor, child-reclamation spec §5.1, §5.3)
     // MIGRATIONS[16] (stall_settings and run_events_by_at, stall watch
     // settings §8), MIGRATIONS[17] (dead_claimants), MIGRATIONS[18]
     // (dead_coordinator_breaker_state), MIGRATIONS[19]
-    // (collect_lane_settings) and MIGRATIONS[20] (the six delegation_*
-    // tables); the migration above is still entry 11.
-    expect(COORD_SCHEMA_VERSION).toBe(21);
+    // (collect_lane_settings), MIGRATIONS[20] (asks.releaseReason) and
+    // MIGRATIONS[21] (the six delegation_* tables); the migration above is
+    // still entry 11.
+    expect(COORD_SCHEMA_VERSION).toBe(22);
     const row = db.prepare('SELECT kind, reviews FROM runs').get() as { kind: string; reviews: number | null };
     expect(row).toEqual({ kind: 'work', reviews: null });
     db.close();
@@ -2083,6 +2086,26 @@ describe('coord.db: stall_settings and run_events_by_at (stall watch settings W1
     expect(db.prepare('SELECT id, level, quietMs, updatedAt FROM stall_settings').all())
       .toEqual([{ id: 1, level: 'follow', quietMs: null, updatedAt: 0 }]);
     expect(db.prepare('SELECT runId, at, detail FROM run_events').all()).toEqual([{ runId: 1, at: 5, detail: 'x' }]);
+    db.close();
+  });
+});
+
+describe('coord.db: migration 21 — asks.releaseReason (D-5290, coordinator-first routing §5.2)', () => {
+  it('reaches a database ALREADY at user_version 20 and keeps its asks rows, each with no release reason', () => {
+    const p = dbPathIn(mkTmp('ccrc-coord-'));
+    mkdirSync(path.dirname(p), { recursive: true });
+    const raw = new DatabaseSync(p);
+    tx(raw, () => {
+      for (let v = 0; v < 20; v++) raw.exec(MIGRATIONS[v]!);
+      raw.exec('PRAGMA user_version = 20');
+      raw.exec('INSERT INTO asks (at, childId, parentId, runId, askKey, askAt, dialogId, question, options, state, releasedAt) ' +
+               "VALUES (1, 'project-a-quiet-basin', 'project-a-calm-mesa', NULL, 'k', 1, 'd', 'Which colour?', '[\"Red\"]', 'released', 2)");
+    });
+    raw.close();
+    const db = openCoordDb(p);
+    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(COORD_SCHEMA_VERSION);
+    const rows = db.prepare('SELECT childId, state, releasedAt, releaseReason FROM asks').all();
+    expect(rows).toEqual([{ childId: 'project-a-quiet-basin', state: 'released', releasedAt: 2, releaseReason: null }]);
     db.close();
   });
 });

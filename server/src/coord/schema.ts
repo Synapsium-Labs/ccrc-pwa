@@ -1376,6 +1376,23 @@ export const MIGRATIONS: readonly string[] = [
     VALUES (1, 'off', NULL, NULL, 0, 0);
   `,
   // ── 21: user_version 20 -> 21 ─────────────────────────────────────────────
+  // D-5290 (coordinator-first routing spec 2026-10-17 §5.2): an ask row may be MINTED `released`, never held, when
+  // its child's parent is not live (`parent-not-live`) or is a session of another project (`parent-project-mismatch`):
+  // the operator is pushed on the same tick, and the row is the journal of why the parent was skipped. `releaseReason`
+  // is that why, NULL for every row the hold minted (a lapse or a decline leaves it NULL too). Read back through
+  // `isAskReleaseReason`, never a cast; NO CHECK, for the reason `collect_lane_settings.choice` gives: a token a newer
+  // build writes must not stop an older build opening the file.
+  //
+  // ONE ADDITIVE COLUMN, nullable, no default, and nothing else: an older build opening a file at `user_version 21`
+  // takes rule 3 (it warns, reads as-is and migrates nothing); its `ASK_COLS` never names the column, so it reads these
+  // rows as the lapsed `released` rows they look like. Every earlier entry is frozen. RE-MEASURE the slot immediately
+  // before the PR and before merge:
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  ALTER TABLE asks ADD COLUMN releaseReason TEXT;
+  `,
+  // ── 22: user_version 21 -> 22 ─────────────────────────────────────────────
   // The delegation broker's REPORT-ONLY coordination projection (delegation broker wave 3, spec §5.2): the six
   // `delegation_*` tables, of the complete future-facing shape, in ONE step — waves 4-7 add code and no schema.
   //   - `delegation_sessions`, `_attempts`, `_activities`, `_leases`, `_lineage`, `_events`. Columns are camelCase, tables and
@@ -1407,15 +1424,18 @@ export const MIGRATIONS: readonly string[] = [
   //   - `delegation_lineage.runId` is a foreign key to `runs(id)`; every other key is internal to the six.
   //
   // A NEW SET OF TABLES AND NOTHING ELSE, entries 18, 19 and 20's argument, and the choice that keeps a ROLLBACK bootable: an
-  // older build opening a file at `user_version 21` takes `db.ts` rule 3 (it warns, reads as-is, migrates nothing) and
+  // older build opening a file at `user_version 22` takes `db.ts` rule 3 (it warns, reads as-is, migrates nothing) and
   // never names these tables, so its runs, mail, claims and ledger work unchanged, and no table it owns was altered.
   //
-  // MIGRATIONS[0..19] are frozen: `db.ts` iterates from the live `user_version`, so an edit to an applied entry never
+  // MIGRATIONS[0..20] are frozen: `db.ts` iterates from the live `user_version`, so an edit to an applied entry never
   // runs. THIS ENTRY WAS SLOT 20 WHEN IT WAS WRITTEN, measured against origin/main (19 entries) at the wave-3 task that
   // wrote it. The child reclamation wave 10 collector switch (#384) merged first and took `user_version 19 -> 20`, so this
-  // one moved up a slot rather than sharing an index, as entries 18 and 19 did before it. Whichever branch holding the
-  // same slot merges second moves up the same way, and the tests find this entry by its DDL, so a renumber edits only the
-  // version pins that name the slot. RE-MEASURE immediately before the PR and before merge:
+  // one moved up a slot rather than sharing an index, as entries 18 and 19 did before it. It moved up once more on its
+  // landing merge, because the asks release reason (#511) had taken `user_version 20 -> 21`. A move is safe only because
+  // this entry has never shipped: no release and no box carries it at an earlier index, so no database applied it there,
+  // and a move changes its index and this comment, never its SQL. Whichever branch holding the same slot merges second
+  // moves up the same way, and the tests find this entry by its DDL, so a renumber edits only the version pins that name
+  // the slot. RE-MEASURE immediately before the PR and before merge:
   //     git fetch origin main
   //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
   `
