@@ -12,6 +12,7 @@ import { parseRoster } from '../../shared/roster.js';
 import { generateAccountsSh } from '../../shared/generate.mjs';
 import { asManagerCalls } from './platformFixtures.js';
 import { inheritedEnv } from './gitEnvStrip.js';
+import { CONTAINED_TOOLS, busUnder, plantPoison } from './containedTools.js';
 
 /** The home-able ids of the test roster — the set ccd reads as `CCRC_HOME_ABLE`
  *  out of the roster `seedAccountsSh` writes below. Derived, not hand-typed,
@@ -340,6 +341,29 @@ export interface ContainOpts {
    *  Same create-if-absent shape as systemd, for the same displaceability
    *  reason, and a bash FUNCTION stub still wins over both. */
   tmux?: boolean;
+  /** Plant the `ssh`, `scp` and `curl` poisons (wave 18, D-5247), `plantPoison`'s create-if-absent ones, so a stub
+   *  written through `stubContainedTool` replaces the poison and is kept. `makeCcdHarness` asks. OPT-IN for the reason
+   *  `systemd` is: suites run a FUNCTIONAL curl from a directory of their own or the real one against a loopback
+   *  listener, and a poison here outranks both. Measured with it on for every `systemd: true` caller: 91 reds in
+   *  ccd-update-sync, ccrc-api and ccrc-token-sync (116 before two files moved their stub here). */
+  net?: boolean;
+}
+
+/** The ssh, scp and curl poisons `net` plants: the three CONTAINED_TOOLS names the other options do not cover. */
+const NET_TOOLS = ['ssh', 'scp', 'curl'] as const;
+
+/** THE named door for a test that needs a FUNCTIONAL contained tool under the harness, a curl stub above all (wave
+ *  18, D-5249): writes `body` as `<harnessBin(home)>/<name>`, REPLACING the poison `net` (or `systemd`, `tmux`)
+ *  plants there. A poison is create-if-absent, so every later plant keeps the stub. Refuses a name outside
+ *  CONTAINED_TOOLS, so the call site names the tool it takes over. Returns the stub's path. */
+export function stubContainedTool(home: string, name: (typeof CONTAINED_TOOLS)[number], body: string): string {
+  if (!(CONTAINED_TOOLS as readonly string[]).includes(name)) {
+    throw new Error(`stubContainedTool: ${String(name)} is not a contained tool`);
+  }
+  const p = path.join(harnessBin(home), name);
+  fs.writeFileSync(p, body, { mode: 0o755 });
+  fs.chmodSync(p, 0o755); // the mode above applies only when the file is created, and a poison may already be there
+  return p;
 }
 
 export function ghContainedEnv(
@@ -354,7 +378,7 @@ export function ghContainedEnv(
   // consumer it hurts, because the damage shows up as a wrong ANSWER in a file
   // that never mentioned systemd (see the header). Opt-in makes the widening
   // land at the call site, where the reviewer of that call site can see it.
-  if (!opts.systemd && !opts.tmux) return { ...env, PATH: `${bin}:${env['PATH'] ?? ''}` };
+  if (!opts.systemd && !opts.tmux && !opts.net) return { ...env, PATH: `${bin}:${env['PATH'] ?? ''}` };
   // THE SECOND STRUCTURAL BOUNDARY for the ccd runners, and the reason it is a
   // poison rather than an absence: `_have_systemctl` is `command -v systemctl`,
   // so REMOVING systemctl would send every ccd test down `_supervised_start`'s
@@ -411,10 +435,19 @@ export function ghContainedEnv(
       + '[ "$rc" = 0 ] || echo "ccd tests must never reach the real user manager" >&2\nexit "$rc"\n',
       { mode: 0o755 });
   }
+  if (opts.net) for (const n of NET_TOOLS) plantPoison(bin, n);
+  // The user bus rides the manager poisons (wave 18, D-5248): the managers are what read it, and ccd's
+  // `: "${XDG_RUNTIME_DIR:=/run/user/$(id -u)}"` would turn an absence back into the real one, so it is SET, after
+  // the caller's env, to two paths under HOME that do not exist. A caller's own pair stands only when BOTH name a
+  // path under HOME (`busUnder`, the rule `assertNoRealTool` applies): a fixture runtime dir a test made itself.
+  const bus = opts.systemd && !busUnder(env, home) ? {
+    XDG_RUNTIME_DIR: path.join(home, 'no-runtime-dir'),
+    DBUS_SESSION_BUS_ADDRESS: `unix:path=${path.join(home, 'no-bus')}`,
+  } : {};
   // Prepended to whatever the caller passed, never the other way round: a
   // snippet that supplies its own PATH must not be able to displace the poison,
   // which is the difference between structural and advisory.
-  return { ...env, PATH: `${bin}:${env['PATH'] ?? ''}` };
+  return { ...env, ...bus, PATH: `${bin}:${env['PATH'] ?? ''}` };
 }
 
 /** The one reader every append-only call log in this file goes through: absent
@@ -507,6 +540,8 @@ export const FIXTURE_MOUNTINFO = '.fixture-mountinfo';
 
 export interface CcdHarness {
   home: string;
+  /** The env `sh(snippet, extra)` spawns with, built the same way (wave 18): what `assertNoRealTool` reads. */
+  env(extra?: NodeJS.ProcessEnv): NodeJS.ProcessEnv;
   sh(snippet: string, env?: NodeJS.ProcessEnv): string;
   reg(id: string, field: string): string | null;
   calls(): string[];
@@ -554,8 +589,10 @@ export function makeCcdHarness(prefix: string): CcdHarness {
   // harness runs ccd, so it asks for the systemd boundary too, here and on
   // every `sh()` below: that is what makes "every test that can reach
   // `_supervised_start` is contained" a property of the harness rather than a
-  // rule each ccd test file remembers.
-  ghContainedEnv(home, {}, { systemd: true, tmux: true });
+  // rule each ccd test file remembers. Since wave 18 it asks for ssh, scp and
+  // curl (`net`) too, and the fixture user bus rides `systemd` (D-5248), so every
+  // CONTAINED_TOOLS name is planted here, at creation.
+  ghContainedEnv(home, {}, { systemd: true, tmux: true, net: true });
 
   const gitEnv = (): NodeJS.ProcessEnv => ({
     ...inheritedEnv(), HOME: home,
@@ -582,25 +619,32 @@ export function makeCcdHarness(prefix: string): CcdHarness {
     return main;
   };
 
+  // `cwd: home` is part of the isolation, not a convenience. Without it the
+  // snippet inherits vitest's cwd — `infra/ccrc/server` — so any ccd path that
+  // resolves a RELATIVE path writes into the repository. Measured: the hostile
+  // -CDPATH ws-add case makes `$common` two lines long, and `mkdir -p
+  // "$common/info"` then created 74 directories under `server/`, two of them
+  // holding a real `.git/info/exclude`. `git status` cannot see them (the tree
+  // walk skips a component named `.git`, and empty dirs are unreported), so
+  // the suite littered the checkout invisibly and `git add -A` would have
+  // committed newline-bearing paths. HOME is only the ONLY boundary this file
+  // claims if the process starts inside it.
+  //
+  // `env` is the ONE expression `sh` spawns with (wave 18), exposed so a test can
+  // hand it to `assertNoRealTool`. `CCD_MOUNTINFO` sits BEFORE `...extra` so a
+  // snippet can override it: see `FIXTURE_MOUNTINFO` for why the host's table
+  // never decides a verdict. A bus pair outside HOME cannot override the fixture's.
+  const env = (extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv =>
+    ghContainedEnv(home, { ...inheritedEnv(), HOME: home,
+      CCD_MOUNTINFO: path.join(home, FIXTURE_MOUNTINFO), ...extra }, { systemd: true, tmux: true, net: true });
+  const sh = (snippet: string, extra: NodeJS.ProcessEnv = {}): string =>
+    execFileSync('bash', ['-c', `source "${CCD}"; ${snippet}`],
+      { encoding: 'utf8', cwd: home, env: env(extra) }).trim();
+
   return {
     home,
-    // `cwd: home` is part of the isolation, not a convenience. Without it the
-    // snippet inherits vitest's cwd — `infra/ccrc/server` — so any ccd path that
-    // resolves a RELATIVE path writes into the repository. Measured: the hostile
-    // -CDPATH ws-add case makes `$common` two lines long, and `mkdir -p
-    // "$common/info"` then created 74 directories under `server/`, two of them
-    // holding a real `.git/info/exclude`. `git status` cannot see them (the tree
-    // walk skips a component named `.git`, and empty dirs are unreported), so
-    // the suite littered the checkout invisibly and `git add -A` would have
-    // committed newline-bearing paths. HOME is only the ONLY boundary this file
-    // claims if the process starts inside it.
-    sh: (snippet, env = {}) =>
-      execFileSync('bash', ['-c', `source "${CCD}"; ${snippet}`],
-        { encoding: 'utf8', cwd: home,
-          // `CCD_MOUNTINFO` sits BEFORE `...env` so a snippet can override it:
-          // see `FIXTURE_MOUNTINFO` for why the host's table never decides a verdict.
-          env: ghContainedEnv(home, { ...inheritedEnv(), HOME: home,
-            CCD_MOUNTINFO: path.join(home, FIXTURE_MOUNTINFO), ...env }, { systemd: true, tmux: true }) }).trim(),
+    env,
+    sh,
     reg: (id, field) => {
       const p = path.join(home, '.cc-sessions', `${id}.${field}`);
       return fs.existsSync(p) ? fs.readFileSync(p, 'utf8').trim() : null;

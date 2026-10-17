@@ -180,14 +180,31 @@ function busPath(name: string, value: string): string | null {
   return m ? m[1]! : null;
 }
 
+/** The one "inside the fixture HOME" predicate: the path itself or under it, for HOME as given or its realpath
+ *  (macOS's `/var` is `/private/var`). `assertNoRealTool` and `busUnder` both read it (wave 18). */
+export function insideOf(home: string): (p: string) => boolean {
+  const homes = [path.resolve(home), fs.realpathSync(home)];
+  return (p) => homes.some((h) => p === h || p.startsWith(h + path.sep));
+}
+
+/** True when BOTH bus variables are set and name paths inside `home`: a fixture bus the test made itself, which
+ *  `ghContainedEnv` keeps (wave 18, D-5248). Exactly the condition `assertNoRealTool` refuses the negation of. */
+export function busUnder(env: NodeJS.ProcessEnv, home: string): boolean {
+  const inside = insideOf(home);
+  return (['XDG_RUNTIME_DIR', 'DBUS_SESSION_BUS_ADDRESS'] as const).every((name) => {
+    const v = env[name];
+    const p = v === undefined || v === '' ? null : busPath(name, v);
+    return p !== null && inside(path.resolve(p));
+  });
+}
+
 /** THROWS unless, under `env`, every CONTAINED_TOOLS name resolves to NOTHING or to a file whose REALPATH is inside
  *  realpath(home) — a symlink from the fixture to a real binary fails — and unless XDG_RUNTIME_DIR and
  *  DBUS_SESSION_BUS_ADDRESS are both SET and name a path inside home. One `/bin/sh -c 'command -v …'` per name; the
  *  resolved file is never executed. It reads RESOLUTION: a stub under home that itself execs a real binary is that
  *  stub's own contract (the rsync recorder's and the loopback curl front's are two), not this check's. */
 export function assertNoRealTool(env: NodeJS.ProcessEnv, home: string): void {
-  const homes = [path.resolve(home), fs.realpathSync(home)];
-  const inside = (p: string): boolean => homes.some((h) => p === h || p.startsWith(h + path.sep));
+  const inside = insideOf(home);
   for (const name of ['XDG_RUNTIME_DIR', 'DBUS_SESSION_BUS_ADDRESS']) {
     const v = env[name];
     if (v === undefined || v === '') {
