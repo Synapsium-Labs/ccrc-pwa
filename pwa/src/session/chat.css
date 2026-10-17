@@ -446,6 +446,9 @@ button.metachip:active {
 /* D-2366: a limit is "waiting on the world", the same attention ink as the
    stall — the tree defines no third tone for it. */
 .sys-divider--limit { color: var(--status-attention-text); border-color: var(--status-attention-text); }
+/* D-5371: an idle compaction is the session at rest, not a stall — the
+   resume prompt's neutral ink, never the attention tone. */
+.sys-divider--idle { color: var(--ink-secondary); }
 
 /* ------------------------------------------------------------------ *
  *  User turns — input: right-aligned raised bubbles + mono receipts.  *

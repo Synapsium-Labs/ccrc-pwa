@@ -114,7 +114,7 @@ export const OWNED = [
   'attach-btn',                                                  // AttachButton
   'build-line-side--warn',                                       // BuildLine
   'task-card-status--ok', 'task-card-status--bad',               // TaskCard
-  'task-mark--running',                                          // TaskStrip
+  'task-mark--running', 'task-row--stale',                       // TaskStrip (D-5372)
   // QuickConfirm's QC_CONSEQUENCE / QC_ACTIONS. Their LOOK is utilities, not a
   // stylesheet rule, so an app call site that wrote the hook bare rendered
   // unstyled: ArchiveSheet and UpdateMoveSheet did, after the branch deleted

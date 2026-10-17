@@ -320,6 +320,36 @@ describe('POST /api/asks/:id/answer', () => {
     expect(good.json()).toEqual({ ok: true });
     expect(okAsk(coord.askById(id))!.state).toBe('answered');
   });
+
+  // D-5293: the parent's route reads the operator's body shape (`readAskAnswer`, `inject/ask.ts`, the reader
+  // `POST /api/sessions/:id/ask` reads), so `askKey`, the key the operator's route requires, is understood here too:
+  // the key the parent was shown must be the row's, or nothing is pressed.
+  it("accepts the operator's body shape: the row's own askKey beside optionIndexes presses the digit (D-5293)", async () => {
+    const { coord, id, calls } = await setup(Date.now());
+    const res = await answer(app!, id, { fromId: PARENT, fromUuid: PARENT_UUID, askKey: ASK_KEY, optionIndexes: [1] });
+    expect(res.statusCode).toBe(200);
+    expect(sendKeysCalls(calls)).toEqual([['tmux', 'send-keys', '-t', `=cc-${CHILD}:`, '2']]);
+    expect(okAsk(coord.askById(id))!.state).toBe('answered');
+  });
+
+  it('refuses ask-mismatch for an askKey that is not the row\'s, before any key, and the row stays held (D-5293, D-5368)', async () => {
+    const { coord, id, calls } = await setup(Date.now());
+    const res = await answer(app!, id,
+      { fromId: PARENT, fromUuid: PARENT_UUID, askKey: 'deadbeefdeadbeef', optionIndexes: [1] });
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toEqual({ ok: false, error: 'ask-mismatch' });
+    expect(sendKeysCalls(calls)).toEqual([]);
+    expect(okAsk(coord.askById(id))!.state).toBe('held');
+  });
+
+  it("400s an askKey that is not a string, as the operator's route does (D-5293)", async () => {
+    const { coord, id, calls } = await setup(Date.now());
+    const res = await answer(app!, id, { fromId: PARENT, fromUuid: PARENT_UUID, askKey: 7, optionIndexes: [1] });
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toMatchObject({ ok: false, error: 'bad-request' });
+    expect(sendKeysCalls(calls)).toEqual([]);
+    expect(okAsk(coord.askById(id))!.state).toBe('held');
+  });
 });
 
 /**
@@ -386,7 +416,7 @@ describe('POST /api/asks/:id/release', () => {
       options: QUESTION.options.map((o) => o.label), now,
     });
     heldMap(built.w).set(CHILD, {
-      until: now + 120_000, askId: id, answeringSince: null,
+      until: now + 180_000, askId: id, answeringSince: null,
       ev: { kind: 'ask', sessionId: CHILD, project: 'demo', title: 'question needs you',
         body: QUESTION.question, tag: `ask-${CHILD}` },
     });
@@ -999,6 +1029,22 @@ describe('late answer wins; declined (D-5289)', () => {
     expect(res.json()).toEqual({ ok: false, error: 'already-answered' });
     expect(sendKeysCalls(calls)).toHaveLength(1);
   });
+
+  // D-5290: a row MINTED released (`parent-not-live`, `parent-project-mismatch`)
+  // was never mailed to the parent and never held: the operator owns it from
+  // the first tick, so late answer wins does not reach it, and the parent's
+  // route refuses it as no longer pre-emptible.
+  for (const reason of ['parent-not-live', 'parent-project-mismatch'] as const) {
+    it(`a row minted released (${reason}) is refused to the parent 409 not-held, and nothing is pressed`, async () => {
+      const { coord, id, calls } = await setup(Date.now());
+      coord.db.prepare("UPDATE asks SET state = 'released', releasedAt = 1, releaseReason = ? WHERE id = ?").run(reason, id);
+      const res = await by(id, 'answer', { optionIndexes: [1] });
+      expect(res.statusCode).toBe(409);
+      expect(res.json()).toEqual({ ok: false, error: 'not-held' });
+      expect(sendKeysCalls(calls)).toEqual([]);
+      expect(okAsk(coord.askById(id))!.state).toBe('released');
+    });
+  }
 
   it('an answer inside the window replaces nothing — there was no notification to replace', async () => {
     const { id, sent } = await setup(Date.now() + 60_000);

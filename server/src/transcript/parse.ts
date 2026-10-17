@@ -1,5 +1,5 @@
 import {
-  envelopeMembers, NO_RESPONSE_TEXT, RATE_LIMIT_ERROR, RESUME_PROMPT_PREFIX, SYNTHETIC_MODEL,
+  envelopeMembers, IDLE_COMPACT_NOTICE_PREFIXES, NO_RESPONSE_TEXT, RATE_LIMIT_ERROR, RESUME_PROMPT_PREFIX, SYNTHETIC_MODEL,
   type ChatEvent,
 } from '../../../shared/api.js';
 
@@ -191,6 +191,8 @@ export function parseTranscriptLine(line: string): ChatEvent[] {
     error?: unknown;
     quotaLimits?: unknown;
     attachment?: unknown;
+    subtype?: unknown;
+    content?: unknown;
   };
   if (env.isSidechain === true) return [];
 
@@ -201,6 +203,16 @@ export function parseTranscriptLine(line: string): ChatEvent[] {
   if (env.type === 'attachment') {
     const text = absorbedPrompt(env.attachment);
     return text === null ? [] : [{ kind: 'user', uuid, ts, text }];
+  }
+  // D-5371: Claude Code's idle-compaction notice, the one system row kept.
+  // Read on the row's TOP-LEVEL `content` and its literal, not on `subtype`
+  // alone: `informational` carries every kind of harness notice. Every other
+  // system row (the boundary, turn_duration, stop_hook_summary) stays a drop.
+  if (env.type === 'system') {
+    const text = typeof env.content === 'string' ? env.content.trim() : '';
+    return env.subtype === 'informational' && IDLE_COMPACT_NOTICE_PREFIXES.some((p) => text.startsWith(p))
+      ? [{ kind: 'system', uuid, ts, text, origin: 'idle-compact' }]
+      : [];
   }
   if (env.type !== 'user' && env.type !== 'assistant') return [];
   const content = env.message?.content;
