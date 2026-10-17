@@ -6349,13 +6349,14 @@ red if a door of those waves opens in this tree.
 
 **Rung 4: lost evidence, what it cannot see, and how its leases are listed.** Rung 4 links a raw tree to the one Bash call whose
 before- and after-listings differ by exactly that admin record, so what the lane does not hold is negative evidence. Lost evidence
-makes such a link `unmeasured` (retried, and counted on the warning line), never made: a Bash call of any session (the creator's own
-included) whose listing the hook shed to fit its line (`truncated: true`, no `listing`) and whose window overlaps the creator's; a
-session-hour recorded `unmeasured`, or whose bucket ends in a torn line, read as a window on every repository from the hour's start
-to twenty minutes after its end, and still after the checkpoint prunes the hour; and, when rung 4 has no candidate, an eviction or a
-lost window reaching back to the census that first listed the tree, which then keeps a rung-3 link of that tree `unmeasured`. After a
-restart that first sighting is unknown, so a tree listed before the restart links at rung 3 only once a measured census shows it gone
-and it is listed anew. A call counts for its session's project and for the repository its working directory lists (the nearest tree
+makes such a link `unmeasured` (retried, counted on the warning line), never made: a Bash call of any session (the creator's too) whose
+listing the hook shed to fit its line (`truncated: true`, no `listing`) and whose window overlaps the creator's; a session-hour
+recorded `unmeasured`, or whose bucket ends in a torn line, read as a window on every repository from the hour's start to 20 minutes
+after its end, and still after the checkpoint prunes the hour; until a listed session is read, each of its hours not yet closed, alike;
+after a restart, recovery or outage, a creator that began by the lane's ready instant plus the clock skew; and, when rung 4 has no
+candidate, an eviction or a lost window reaching back to the census that first listed the tree, keeping that tree's rung-3 link
+`unmeasured`. After a restart that first sighting is unknown: a tree listed before it links at rung 3 only once a measured census shows
+it gone and it is listed anew. A call counts for its session's project and the repository its working directory lists (the nearest tree
 the census lists or the lane remembers, else the resolved projects root); a directory neither names counts for every repository, and
 while the root does not resolve (remote mode) that includes every main checkout, because the census lists linked worktrees only.
 
@@ -6367,8 +6368,7 @@ while the root does not resolve (remote mode) that includes every main checkout,
   no-spool class includes the lost-hour rule's one carve-out: an hour recorded `directory-absent` for a session the lane never read a
   spool of (no cursor row, no measured hour), and any `capability-absent` hour, vetoes nothing, so rung 4 links across both.
   A session born and gone between two census passes (one census interval, which a loaded box or a stalled tick stretches) is never
-  listed or read, so rung 4 links across it; the operator placed closing that, by listing the spool root, in wave 4. After a restart,
-  recovery or outage, a candidate whose creator began by the lane's ready instant, or within the clock skew after it, is unmeasured.
+  listed or read, so rung 4 links across it; the operator placed closing that, by listing the spool root, in wave 4.
 - **Three more limits the soak reader must know.**
   - *An owner with no generation file* (`$REG/<id>.generation` absent) writes no spool, because the hook needs that file, but the
     carve-out does not reach it: its hours read `incarnation-unmeasured` with the reason `absent`, so each one vetoes every repository.
