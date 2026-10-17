@@ -7,10 +7,12 @@ import type { CoordStore } from './coord/store.js';
 import type { TurnVerdict } from './coord/archiveDoor.js';
 import { CCD_ARGV, stopSurfaceSupported } from './ccdargv.js';
 import { RECLAIM_PAUSE_MARKER } from './coord/rundefs.js';
+import { expiryReviewing } from './coord/expireArchived.js';
 import { PRESENCE_TTL_MS, type FleetSession } from '../../shared/api.js';
 import {
   STOP_DONE_DISABLED_MARKER, STOP_DONE_GRACE_MS, STOP_DONE_MEASURES_PER_PASS, STOP_DONE_PER_PASS, STOP_DONE_RETRY_MS,
-  stopDoneVerdict, type StopDoneInput, type StopDoneLive, type StopDoneStoreRead, type StopDoneVerdict,
+  stopDoneVerdict, type StopDoneInput, type StopDoneLive, type StopDoneMark, type StopDoneRow, type StopDoneStoreRead,
+  type StopDoneVerdict,
 } from './stopDone.js';
 
 /**
@@ -23,12 +25,15 @@ import {
  *  1. the switches, read from the tick's registry listing: `$REG/stop-done-disabled` (this lane's kill switch) or
  *     `$REG/reclaim-paused` (the fleet's one cleanup switch, which every cleanup lane honours) listed, nothing happens;
  *  2. the population is the rows the frame shows as dispatched children that are neither stopped nor archived, and the
- *     store is asked ONCE for all of them (`lastRunBySession`, `activeClaims`, `outstandingMailFor` per candidate);
- *  3. the verdict runs on what is known; a row it answers `measure` for has its live word and its turn verdict read
- *     (at most `STOP_DONE_MEASURES_PER_PASS`), and the verdict runs again;
+ *     store is asked ONCE for all of them (`lastRunBySession`, `activeClaims`, and `outstandingMailFor` and
+ *     `expiryReviewing` per candidate);
+ *  3. the verdict runs on what is known; a row it answers `measure` for has its live word, its turn verdict and its turn
+ *     marker read (at most `STOP_DONE_MEASURES_PER_PASS`), and the verdict runs again;
  *  4. at most `STOP_DONE_PER_PASS` stops, each ON THE COORDINATION SERIALISER and then the session's own queue, so a
  *     dispatch that is opening a run onto this worker, or a mail delivery typing into its pane, finishes first; inside
- *     them the store and the live state are read AGAIN and the verdict asked again, and only `stop` composes
+ *     them the registry record (and the row the frame assembles from it), the store, presence and the live state are read
+ *     AGAIN and the verdict asked again — the tick's roster read alone is kept when the re-read row has none — and only
+ *     `stop` composes
  *     `ccd stop <id> --surface agent` — the existing, already-granted `CCD_ARGV.stopId` (no new ccd verb).
  *
  * WHY THE STOP READS AS DELIBERATE. `cmd_stop` journals a `stop` row with the declared surface before it unsupervises,
@@ -42,7 +47,8 @@ import {
  */
 
 export interface StopDoneSweepDeps {
-  readonly coord: Pick<CoordStore, 'lastRunBySession' | 'activeClaims' | 'outstandingMailFor' | 'recordFeedEvent'>;
+  readonly coord: Pick<CoordStore, 'lastRunBySession' | 'activeClaims' | 'outstandingMailFor' | 'recordFeedEvent'
+    | 'runsNamingSession' | 'run'>;
   readonly runCcd: Deps['runCcd'];
   readonly fleetState: FleetState | undefined;
   readonly presence: Pick<Presence, 'isVisible'> | undefined;
@@ -51,6 +57,11 @@ export interface StopDoneSweepDeps {
   readonly liveWord: (rec: SessionRecord) => Promise<
     { ok: true; word: string; since: number | null } | { ok: false; reason: 'no-pane' | 'no-config-dir' | 'unmeasured' }>;
   readonly turnVerdict: (rec: SessionRecord, uuid: string) => Promise<TurnVerdict>;
+  /** `turnverdict.ts`'s `turnMarkFor`: the turn marker, judged against the live process. */
+  readonly mark: (rec: SessionRecord) => Promise<StopDoneMark>;
+  /** At the act: the registry record read again and the frame's row assembled from it (`readSessionRecord`, then
+   *  `liveRowFor`). `ok: false` when either could not be read — the act then holds `unmeasured`. */
+  readonly rowAtAct: (rec: SessionRecord) => Promise<{ ok: true; row: StopDoneRow } | { ok: false }>;
   /** The coordination serialiser (`CoordRoutesHandle.serial`); null until `buildServer` hands it over, and while it
    *  is the lane measures and stops nothing. */
   readonly serial: (<T>(fn: () => Promise<T>) => Promise<T>) | null;
@@ -87,6 +98,11 @@ function storeReadFor(
       openClaimant: last.openClaimants.includes(id),
       claim: claimants.has(id),
       mail: coord.outstandingMailFor(id, 1).length > 0,
+      reviewing: (() => {
+        const r = expiryReviewing(coord, id);
+        if (!r.ok) throw new Error(r.detail);
+        return r.reviewing;
+      })(),
     };
   } catch (err) {
     return { ok: false, detail: err instanceof Error ? err.message : String(err) };
@@ -110,7 +126,8 @@ function storeReads(coord: StopDoneSweepDeps['coord'], ids: readonly string[]): 
 async function readLive(deps: StopDoneSweepDeps, rec: SessionRecord): Promise<StopDoneLive> {
   const w = await deps.liveWord(rec);
   const turn = await deps.turnVerdict(rec, rec.uuid);
-  return { kind: 'read', word: w.ok ? { ok: true, word: w.word } : { ok: false, reason: w.reason }, turn };
+  const mark = await deps.mark(rec);
+  return { kind: 'read', word: w.ok ? { ok: true, word: w.word } : { ok: false, reason: w.reason }, turn, mark };
 }
 
 function recordFeed(deps: StopDoneSweepDeps, id: string, runId: number): void {
@@ -147,7 +164,7 @@ export async function stopDonePass(
   if (pop.length === 0) return [];
   const reads = storeReads(deps.coord, pop.map((s) => s.id));
   const surface = stopSurfaceSupported(deps.fleetState);
-  const inputFor = (row: FleetSession, store: StopDoneStoreRead, live: StopDoneLive, at: number): StopDoneInput => ({
+  const inputFor = (row: StopDoneRow, store: StopDoneStoreRead, live: StopDoneLive, at: number): StopDoneInput => ({
     row, store, viewer: deps.presence?.isVisible(row.id) ?? false, sinceStartMs: at - deps.startedAt,
     presenceTtlMs: PRESENCE_TTL_MS, surface, live, now: at, graceMs: STOP_DONE_GRACE_MS,
   });
@@ -168,10 +185,14 @@ export async function stopDonePass(
     const rec = byId.get(row.id)!;
     try {
       out.push(await serial(() => deps.queueRun(row.id, async (): Promise<StopDoneOutcome> => {
-        // AT THE ACT, everything again: a run may have been opened onto it, mail queued, a screen opened.
+        // AT THE ACT, again: a run may have been opened onto it, a hold written, mail queued, a screen opened. The
+        // record and its row are re-read; only the roster falls back to the tick's read when the re-read has none.
+        const fresh = await deps.rowAtAct(rec);
+        if (!fresh.ok) return { id: row.id, kind: 'held-at-act', verdict: { act: 'hold', reason: 'unmeasured' } };
+        const again: StopDoneRow = { ...fresh.row, subagents: fresh.row.subagents ?? row.subagents };
         const at = deps.now();
         const store = storeReads(deps.coord, [row.id]).get(row.id)!;
-        const v = stopDoneVerdict(inputFor(row, store, await readLive(deps, rec), at));
+        const v = stopDoneVerdict(inputFor(again, store, await readLive(deps, rec), at));
         if (v.act !== 'stop') return { id: row.id, kind: 'held-at-act', verdict: v };
         const res = await deps.runCcd(CCD_ARGV.stopId(row.id, 'agent'));
         if (!res.ok) {

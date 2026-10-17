@@ -40,11 +40,16 @@ interface Fake {
   openWorkers: Set<string>;
   mailTo: Set<string>;
   ccdOk: boolean;
+  /** Per session: what its row reads when the record is re-read at the act (`rowAtAct`); absent → the tick's row. */
+  atAct: Map<string, Partial<FleetSession> | 'unreadable'>;
+  /** Per session: the open run it reviews, if any (`runsNamingSession` → `run.reviews` → an open state). */
+  reviewsOpen: Set<string>;
 }
 
 function fake(ids: readonly string[], o: { surface?: boolean; serial?: boolean } = {}): Fake {
   const f: Fake = {
     argv: [], feed: [], serialCalls: 0, runs: new Map(), openWorkers: new Set(), mailTo: new Set(), ccdOk: true,
+    atAct: new Map(), reviewsOpen: new Set(),
     deps: undefined as unknown as StopDoneSweepDeps,
   };
   ids.forEach((id, i) => f.runs.set(id, { runId: 10 + i, state: 'done', closedAt: NOW - STOP_DONE_GRACE_MS - 1 }));
@@ -63,6 +68,8 @@ function fake(ids: readonly string[], o: { surface?: boolean; serial?: boolean }
       activeClaims: () => [],
       outstandingMailFor: (toId: string) => (f.mailTo.has(toId) ? [{}] : []) as never,
       recordFeedEvent: () => undefined,
+      runsNamingSession: (id: string) => ({ ok: true as const, runs: f.reviewsOpen.has(id) ? [{ id: 900 }] : [] }) as never,
+      run: (runId: number) => ({ ok: true as const, run: runId === 900 ? { reviews: 901 } : { state: 'working', reviews: null } }) as never,
     },
     runCcd: async (a) => { f.argv.push([...a]); return { ok: f.ccdOk, stdout: '', stderr: f.ccdOk ? '' : 'refused', killed: false, signal: null }; },
     fleetState: { ccdVerbs: o.surface === false ? [] : ['stop-surface'] } as unknown as FleetState,
@@ -73,6 +80,11 @@ function fake(ids: readonly string[], o: { surface?: boolean; serial?: boolean }
     } as unknown as StopDoneSweepDeps['notifyLog'],
     liveWord: async () => ({ ok: true, word: 'idle', since: null }),
     turnVerdict: async () => 'idle',
+    mark: async () => ({ ok: true, state: 'done', bg: 0 }),
+    rowAtAct: async (r) => {
+      const a = f.atAct.get(r.id);
+      return a === 'unreadable' ? { ok: false } : { ok: true, row: row(r.id, a ?? {}) };
+    },
     serial: o.serial === false ? null : async (fn) => { f.serialCalls++; return fn(); },
     queueRun: async (_id, fn) => fn(),
     startedAt: STARTED,
@@ -230,6 +242,42 @@ describe('stopDonePass (D-5370)', () => {
     f.ccdOk = true;
     await stopDonePass({ ...f.deps, now: () => NOW + STOP_DONE_RETRY_MS }, m, [row(ID)], [rec(ID)], []);
     expect(f.argv.length).toBe(2);
+  });
+
+  it('a stale hookstate (row background null) whose turn marker lists a background shell is not stopped', async () => {
+    const f = fake([ID]);
+    const out = await stopDonePass({ ...f.deps, mark: async () => ({ ok: true, state: 'done', bg: 1 }) }, mem(), [row(ID)], [rec(ID)], []);
+    expect(out).toEqual([]);
+    expect(f.argv).toEqual([]);
+  });
+
+  it('a turn marker that cannot be read holds (marker), never a stop', async () => {
+    const f = fake([ID]);
+    await stopDonePass({ ...f.deps, mark: async () => ({ ok: false, reason: 'unmeasured' }) }, mem(), [row(ID)], [rec(ID)], []);
+    expect(f.argv).toEqual([]);
+  });
+
+  it('AT THE ACT the registry record is read again: a hold written in the window holds it', async () => {
+    const f = fake([ID]);
+    f.atAct.set(ID, { held: 'wave 4 next' });
+    const out = await stopDonePass(f.deps, mem(), [row(ID)], [rec(ID)], []);
+    expect(out).toEqual([{ id: ID, kind: 'held-at-act', verdict: { act: 'hold', reason: 'held' } }]);
+    expect(f.argv).toEqual([]);
+  });
+
+  it('AT THE ACT a record that cannot be re-read holds as unmeasured', async () => {
+    const f = fake([ID]);
+    f.atAct.set(ID, 'unreadable');
+    const out = await stopDonePass(f.deps, mem(), [row(ID)], [rec(ID)], []);
+    expect(out).toEqual([{ id: ID, kind: 'held-at-act', verdict: { act: 'hold', reason: 'unmeasured' } }]);
+    expect(f.argv).toEqual([]);
+  });
+
+  it('a reviewer whose reviewed run is still open is not stopped (reviewing)', async () => {
+    const f = fake([ID]);
+    f.reviewsOpen.add(ID);
+    await stopDonePass(f.deps, mem(), [row(ID)], [rec(ID)], []);
+    expect(f.argv).toEqual([]);
   });
 
   it('within the grace after the run closed, the worker is left alone', async () => {

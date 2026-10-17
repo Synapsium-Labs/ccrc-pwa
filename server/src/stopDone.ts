@@ -13,12 +13,17 @@ import type { FleetSession } from '../../shared/api.js';
  *
  * L1: decisions only, over what the sweep (`stopDoneSweep.ts`, L4) measured. It imports L0 alone.
  *
- * A STRICT SUBSET OF HIBERNATION (D-5242, plan Tasks 16 to 19, spec §5.11), on purpose: every hold below that
- * hibernation also has carries hibernation's own word (`HIBERNATE_HOLDS`, Task 17a), so when hibernation lands this
- * lane is absorbed by it — the same population, the same holds, with `hibernate` (which a viewer's open screen wakes)
- * in place of `stop` (which a re-dispatch's `ensure` wakes). The words that are this lane's alone say why the lane is
- * narrower: only a dispatched child (`not-a-child`), only once its newest run is `done` (`no-run`, `not-done`,
- * `close-unplaced`) and a grace has passed (`grace`), and only through a declared stop (`no-surface`).
+ * ABSORBED BY HIBERNATION LATER (D-5242, plan Tasks 16 to 19, spec §5.11), on purpose: every hold below that
+ * hibernation also has carries hibernation's own word (`HIBERNATE_HOLDS`, Task 17a) — `marker` and
+ * `marker-background` included — so when hibernation lands it can absorb this lane, with `hibernate` (which a
+ * viewer's open screen wakes) in place of `stop` (which a re-dispatch's `ensure` wakes). It is NOT yet a strict
+ * subset: the population is a subset of hibernation's only once N (6 h idle, against this lane's 10 minutes from the
+ * close) has passed, and until Task 17b it holds strictly fewer facts — 17b adds `recent`, `viewer` through
+ * `Presence.isOpen` (a hidden but open tab) with its post-start hold on `PRESENCE_OPEN_TTL_MS`, `opted-out`,
+ * `scheduled` and `attached`. The words that are this lane's alone say why it is narrower: only a dispatched child
+ * (`not-a-child`), only once its newest run is `done` (`no-run`, `not-done`, `close-unplaced`) and a grace has passed
+ * (`grace`), and only through a declared stop (`no-surface`); `reviewing` is the archived-expiry lane's
+ * (`expiryReviewing`).
  */
 
 /** Every reason the lane leaves a session running this pass — a `Record`, so the list below is derived and a word
@@ -42,6 +47,7 @@ const STOP_DONE_HOLD_MAP = {
   'run-claimant': 'it claims an open run (it coordinates)',
   claim: 'it holds a live claim',
   mail: 'mail to it is outstanding',
+  reviewing: 'it reviews a run that is still open: the coordinator may come back to it for a re-review',
   viewer: 'somebody has it on screen, or the server started too recently to know',
   menu: 'a pane menu is pending',
   bucket: 'its bucket is not `idle` (a `done` row is badged: its result may be unread)',
@@ -51,6 +57,8 @@ const STOP_DONE_HOLD_MAP = {
   pane: 'no live pane to stop',
   'live-word': 'its live word is not `idle`',
   turn: 'the fail-closed turn verdict is not `idle`',
+  marker: 'its turn marker does not read a finished turn (`done`), or could not be read, or is not this process\'s',
+  'marker-background': 'its turn marker\'s last Stop listed background work, or could not say (`bg` not exactly 0; −1 holds)',
 } as const satisfies Record<string, string>;
 
 export type StopDoneHold = keyof typeof STOP_DONE_HOLD_MAP;
@@ -94,7 +102,15 @@ export type StopDoneStoreRead =
     readonly openClaimant: boolean;
     readonly claim: boolean;
     readonly mail: boolean;
+    /** `expiryReviewing`: it reviews a run that is still open. */
+    readonly reviewing: boolean;
   };
+
+/** The turn marker, as `turnMarkFor` (`turnverdict.ts`) reads it, judged against the live process — the two fields the
+ *  verdict reads, structurally, so this L1 file still imports L0 alone. Any `ok: false` reason holds. */
+export type StopDoneMark =
+  | { readonly ok: true; readonly state: string; readonly bg: number }
+  | { readonly ok: false; readonly reason: string };
 
 /** The live reads, made only for a session every other hold has passed. `unread` asks the sweep to make them. */
 export type StopDoneLive =
@@ -105,6 +121,8 @@ export type StopDoneLive =
     readonly word: { readonly ok: true; readonly word: string } | { readonly ok: false; readonly reason: 'no-pane' | 'no-config-dir' | 'unmeasured' };
     /** `turnVerdictFor`'s answer. */
     readonly turn: 'idle' | 'busy' | 'unmeasured';
+    /** The turn marker (spec §5.1), hibernation's `marker` and `marker-background` reads. */
+    readonly mark: StopDoneMark;
   };
 
 export interface StopDoneInput {
@@ -154,6 +172,7 @@ export function stopDoneVerdict(i: StopDoneInput): StopDoneVerdict {
   if (s.openClaimant) return hold('run-claimant');
   if (s.claim) return hold('claim');
   if (s.mail) return hold('mail');
+  if (s.reviewing) return hold('reviewing');
   if (i.viewer || i.sinceStartMs < i.presenceTtlMs) return hold('viewer');
   if (r.dialogPending) return hold('menu');
   if (r.bucket !== 'idle') return hold('bucket');
@@ -165,5 +184,10 @@ export function stopDoneVerdict(i: StopDoneInput): StopDoneVerdict {
   if (!w.ok) return hold(w.reason === 'unmeasured' ? 'unmeasured' : 'pane');
   if (w.word !== 'idle') return hold('live-word');
   if (i.live.turn !== 'idle') return hold(i.live.turn === 'unmeasured' ? 'unmeasured' : 'turn');
+  // Hibernation's two marker holds (§5.11), in its words: a row's `background` is null whenever its hookstate aged out,
+  // so a shell or a Monitor left running after the last Stop is visible only here — and it would die with the pane.
+  const m = i.live.mark;
+  if (!m.ok || m.state !== 'done') return hold('marker');
+  if (m.bg !== 0) return hold('marker-background');
   return { act: 'stop', runId: s.last.runId };
 }

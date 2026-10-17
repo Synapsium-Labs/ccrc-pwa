@@ -3,7 +3,7 @@ import type { Deps } from './server.js';
 import type { Bus } from './bus.js';
 import { assembleFleet, lifecycleInputFor, registrySecondsToMs } from './fleet.js';
 import { answeredByBody, askPushBody } from './askbody.js';
-import { measuredIdentity, readRegistry, readRegistryMeasured } from './registry.js';
+import { measuredIdentity, readRegistry, readRegistryMeasured, readSessionRecord } from './registry.js';
 import {
   accountPoolsEnforcement, poolsEnforcement, poolsWire, readObservedEpochFromRegistry, readPoolEpoch,
   readProjectPools,
@@ -145,7 +145,7 @@ import type { ChildReclaimCollectInput } from './childReclaimSweep.js';
 import { NO_FLEET_IDENTITY } from './fleetidentity.js';
 import { stopDonePass, type StopDoneMemory } from './stopDoneSweep.js';
 import { STOP_DONE_SWEEP_MS } from './stopDone.js';
-import { liveWordFor, turnReadDeps, turnVerdictFor } from './turnverdict.js';
+import { liveRowFor, liveWordFor, turnMarkFor, turnReadDeps, turnVerdictFor } from './turnverdict.js';
 import {
   COLLECT_AUDITS_PER_PASS, COLLECT_FEED_TITLE, collectAfterAct, collectAfterAudit, collectAfterFoldFailed, collectAfterHold,
   collectAfterPresence, collectAfterWouldCollect, collectAttentionItems, collectAttentionViews, collectBoxAfterPopulation,
@@ -2023,6 +2023,13 @@ export class FleetWatcher {
         coord, runCcd: this.deps.runCcd, fleetState: this.deps.fleetState, presence: this.deps.presence,
         notifyLog: this.deps.notifyLog,
         liveWord: (rec) => liveWordFor(reads, rec), turnVerdict: (rec, uuid) => turnVerdictFor(reads, rec, uuid),
+        mark: (rec) => turnMarkFor(reads, rec),
+        rowAtAct: async (rec) => {
+          const again = await readSessionRecord(this.deps.io, this.deps.cfg, rec.id);
+          if (!again.found) return { ok: false };
+          const row = await liveRowFor(reads, again.record, again.record.uuid);
+          return row === null ? { ok: false } : { ok: true, row };
+        },
         serial: this.stopDoneSerial, queueRun: (id, fn) => this.deps.queue.run(id, fn),
         startedAt: this.stopDoneStartedAt, now: Date.now,
       }, this.stopDoneMemory, sessions, records, names);
