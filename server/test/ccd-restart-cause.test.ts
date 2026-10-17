@@ -93,6 +93,7 @@ const supervise = (o: Parameters<typeof LOOP>[0] = {}, pre = ''): ReturnType<typ
   fs.writeFileSync(reg('panescope'), SCOPE);
   return run(`${LOOP(o)} ${pre} ${seq('live', 'live', 'live', 'gone')}; cmd_supervise ${ID}`);
 };
+const reEscape = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 const lastEnd = (): string | null => (fs.existsSync(reg('lastend')) ? fs.readFileSync(reg('lastend'), 'utf8') : null);
 
 describe('the supervise loop classifies the end it exits on (D-5237)', () => {
@@ -104,7 +105,7 @@ describe('the supervise loop classifies the end it exits on (D-5237)', () => {
     expect(swapLog()).toMatch(new RegExp(`ended ${ID}: oom\\n`));
     const j = h.calls().find((l) => l.startsWith('journalctl'))!;
     expect(j).toContain(`--user -u ${SCOPE}`);
-    expect(j).toMatch(new RegExp(`^journalctl --user -u ${SCOPE.replace(/\./g, '\\.')} --since @\\d+ -q -g killed by the OOM killer -n 1 --no-pager$`));
+    expect(j).toMatch(new RegExp(`^journalctl --user -u ${reEscape(SCOPE)} --since @\\d+ -q -g killed by the OOM killer -n 1 --no-pager$`));
     const since = Number(/--since @(\d+)/.exec(j)![1]);
     expect(Math.abs(nowS() - 120 - since)).toBeLessThan(30);
   });
@@ -213,10 +214,16 @@ describe('_spawn_start records the pane scope once (D-5237)', () => {
 
 describe('cmd_swap records its cause before it stops the unit (D-5237)', () => {
   /** `systemctl stop` kills the shell outright: whatever is not on disk by
-   *  then was written after the stop. */
+   *  then was written after the stop. The pane is GONE (`has-session` fails
+   *  with `can't find session`, which `_ws_status` reads idle), so D-5240's manual gate passes, as in
+   *  D-5350's fixtures. The automatic arms' own act-time gates
+   *  (`_swap_idle_gate`, `_swap_rescue_act_gate`) pass by seam: they are held
+   *  by `ccd-swap-guards.test.ts`, and this block asks only what a swap that
+   *  passed every gate records. */
   const SWAP = `systemctl() { echo "systemctl $*" >> "$HOME/ccd-calls"; case "$*" in *stop*) kill -9 $$ ;; esac; };
     launchctl() { echo "launchctl $*" >> "$HOME/ccd-calls"; case "$*" in *bootout*) kill -9 $$ ;; esac; };
-    tmux() { echo "tmux $*" >> "$HOME/ccd-calls"; }; sleep() { :; };`;
+    tmux() { echo "tmux $*" >> "$HOME/ccd-calls"; case "$1" in has-session) echo "can't find session: x" >&2; return 1 ;; esac; }; sleep() { :; };
+    _swap_idle_gate() { :; }; _swap_rescue_act_gate() { :; };`;
   const seed = (): void => {
     const wd = path.join(h.home, 'projects', 'project-a');
     fs.mkdirSync(wd, { recursive: true });
@@ -239,7 +246,7 @@ describe('cmd_swap records its cause before it stops the unit (D-5237)', () => {
     expect(swapLog()).toContain(`ended ${ID}: swap-manual`);
   });
   it.each([
-    ['home', 'swap-auto-home'], ['rescue', 'swap-auto-rescue'], ['', 'swap-auto'],
+    ['affinity', 'swap-auto-home'], ['rescue', 'swap-auto-rescue'], ['', 'swap-auto'], ['home', 'swap-auto'],
   ])('an automatic swap with arm %j writes %s', (arm, cause) => {
     seed(); swap({ CCD_SWAP_AUTO: '1', CCD_SWAP_ARM: arm });
     expect(lastEnd()).toBe(lastEnd()!.split(' ')[0] + ' ' + cause);

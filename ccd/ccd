@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=0584617a5bf605aa7f9354e872a1450f18179ec9a5fe3ee01d0e118d51a576af
+# ccrc:generated 1 sha256=e2192ee7db804cf293a2cd6bbbfc570cc5bc44302e2915ae757518d6b3c59a6b
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -22483,12 +22483,14 @@ _end_note_gone() {   # id — the supervise loop's `gone` exit: classify and rec
 }
 _swap_end_cause() {   # -> this swap's cause word: swap-manual | swap-auto-home | swap-auto-rescue | swap-auto
   # CCD_SWAP_AUTO=1 is `_dispatch_swap`'s mark; CCD_SWAP_ARM names its arm
-  # (D-5240, Task 11). An automatic swap whose arm is not named is `swap-auto` (D-5348).
+  # (D-5240, Task 11): `affinity` (the move home) or `rescue`, the same two
+  # words `cmd_swap`'s act-time gates read. An automatic swap whose arm is not
+  # one of them is `swap-auto` (D-5348).
   if [[ "${CCD_SWAP_AUTO:-}" != 1 ]]; then printf 'swap-manual'; return 0; fi
   case "${CCD_SWAP_ARM:-}" in
-    home)   printf 'swap-auto-home' ;;
-    rescue) printf 'swap-auto-rescue' ;;
-    *)      printf 'swap-auto' ;;
+    affinity) printf 'swap-auto-home' ;;
+    rescue)   printf 'swap-auto-rescue' ;;
+    *)        printf 'swap-auto' ;;
   esac
 }
 _resume_prompt_for() {   # id -> the resume prompt this spawn submits (D-5237). Always rc 0.
