@@ -281,6 +281,8 @@ describe('the loopback curl front parses argv — an option it does not allowlis
     ['an unquoted header value', ['-K', '-', ok], 'header = x-ccrc-mail-token: zz\n'],
     ['the long-option config spelling', ['-K', '-', ok], '--header "x-ccrc-mail-token: zz"\n'],
     ['a blank line inside the config', ['-K', '-', ok], `${HDR}\n${HDR}`],
+    // `cfg=$(cat)` strips only TRAILING newlines, so a leading one survives to the check (wave 18, R23(d)).
+    ['a LEADING blank line', ['-K', '-', ok], `\n${HDR}`],
     ['--data-binary @file', ['--data-binary', '@/etc/passwd', ok], ''],
     ['-d @file', ['-d', '@/etc/passwd', ok], ''],
     ['-X with a URL in its value', ['-X', 'GET http://127.0.0.1:7788/', ok], ''],
@@ -333,8 +335,8 @@ describe('the loopback curl front parses argv — an option it does not allowlis
   }
   // The front reads the config with `cfg=$(cat)`, which strips EVERY trailing newline before the check runs (wave 13 fix
   // round 1, review 294 F2). So trailing blank lines pass, and the real curl gets the NORMALISED text (one trailing
-  // newline), not the caller's bytes. A leading or interior blank line is refused (the `a blank line inside the config`
-  // row above). An input of only `\n` reads as the empty config, which "passes an empty config" already
+  // newline), not the caller's bytes. A leading or interior blank line is refused (the `a LEADING blank line` and `a
+  // blank line inside the config` rows above). An input of only `\n` reads as the empty config, which "passes an empty config" already
   // covers; it needs no row of its own.
   it('passes a config with trailing blank lines, handing the real curl the NORMALISED text: one trailing newline (wave 13 fix round 1, F2)', () => {
     const t = setup();
@@ -353,7 +355,7 @@ describe('the loopback curl front parses argv — an option it does not allowlis
     const args = ['-sS', '-K', '-'];
     expect(t.run(args, HDR), args.join(' ')).toBe(97);
     expect(t.fakeArgv(), 'the (fake) real curl must not have run').toEqual([]);
-    expect(t.poison()).toContain(args.join(' '));
+    expect(t.poison(), 'the log holds the refusal record and nothing else').toBe(`${args.join(' ')}\n`);
     expect(t.poison(), 'the config reached the refusal log').not.toContain(HDR.trim());
     expect(t.passed()).toBe('');
   });
@@ -372,7 +374,7 @@ describe('the loopback curl front parses argv — an option it does not allowlis
     const args = ['-sS', '-K', '-'];
     expect(t.run(args, 'url = "http://203.0.113.9/x"\n'), args.join(' ')).toBe(97);
     expect(t.fakeArgv(), 'the (fake) real curl must not have run').toEqual([]);
-    expect(t.poison()).toContain(args.join(' '));
+    expect(t.poison(), 'the log holds the refusal record and nothing else').toBe(`${args.join(' ')}\n`);
     expect(t.poison(), 'the config reached the refusal log').not.toContain('203.0.113.9');
     expect(t.passed()).toBe('');
   });
