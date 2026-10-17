@@ -204,6 +204,25 @@ describe('the control: a real substitution still refuses', () => {
   });
 });
 
+describe('late answer wins keeps the guard (D-5289)', () => {
+  it('a row the lapse released still refuses a re-minted dialog ask-moved, and stays released', () => {
+    const first = blockOnAsk();
+    const coord = store();
+    const id = mintAskAt(coord, first.updatedAt);
+    expect(coord.releaseAsk(id, Date.now())).toBe(true);   // the lapse
+
+    run({ hook_event_name: 'PostToolUse', tool_name: 'AskUserQuestion', tool_input: {} });
+    const second = blockOnAsk();
+    expect(second.updatedAt).toBeGreaterThan(first.updatedAt);
+
+    const refused = coord.takeAskForAnswer(id, second.updatedAt);
+    expect(refused.ok === false && refused.why).toBe('ask-moved');
+    expect(okAsk(coord.askById(id))?.state).toBe('released');
+    // The number it was minted on still takes it: late answer wins.
+    expect(coord.takeAskForAnswer(id, first.updatedAt).ok).toBe(true);
+  });
+});
+
 describe('still open: a wait a SUBAGENT raised is not carried', () => {
   it('a subagent-raised dialog is stored waitBy:"subagent" and a SubagentStop moves its stamp', () => {
     run({ hook_event_name: 'PermissionRequest', agent_id: 'a1', agent_type: 'general-purpose',

@@ -782,6 +782,21 @@ describe('ask chip', () => {
       unmount();
     }
   });
+
+  // D-5289: `declined` (a parent's own release) gets no words of its own — the
+  // operator's push fired at once and the parent may no longer answer, so the
+  // chip has nothing true to explain. Pinned through the reader too: this
+  // build's `sessionAsk` must pass the member through (it is vocabulary), and
+  // the fold to "no chip" is SessionMeta's, as for `released`.
+  it('renders no chip for declined, and sessionAsk passes declined through as vocabulary (D-5289)', () => {
+    expect(sessionAsk({ ask: { state: 'declined', parentId: 'project-a-calm-mesa', answeredBy: null } }))
+      .toEqual({ state: 'declined', parentId: 'project-a-calm-mesa', answeredBy: null });
+    const { container } = render(
+      <SessionLine session={s({ ask: { state: 'declined', parentId: 'project-a-calm-mesa', answeredBy: null } })}
+                   onOpen={() => {}} onActions={() => {}} />,
+    );
+    expect(container.querySelector('.sess-ask-state')).not.toBeInTheDocument();
+  });
 });
 
 // Registry ladder (Task 2): a degraded row's small, honest note — the

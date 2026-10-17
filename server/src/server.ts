@@ -2353,7 +2353,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       // back to `held`, not stranded `answering`: the same rollback verb
       // `/api/asks/:id/answer` uses on its own refused press; see
       // `untakeAsk`'s own docstring (`store.ts`) for the full argument.
-      if (!coord.untakeAsk(held.id)) {
+      if (!coord.untakeAsk(held.id, taken.from)) {
         console.warn(`ccrc-server: untakeAsk(${held.id}) returned false after a refused operator ` +
           "press — the ask row was not 'answering' when the rollback ran; it may be stranded");
       }
