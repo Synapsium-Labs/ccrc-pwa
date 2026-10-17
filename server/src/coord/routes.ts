@@ -8,6 +8,8 @@ import {
 } from '../registry.js';
 import { answerAsk, type AskDeps } from '../inject/ask.js';
 import { assembleFleet } from '../fleet.js';
+import { turnReadDeps, turnVerdictFor } from '../turnverdict.js';
+import type { TurnVerdict } from './archiveDoor.js';
 import { configDirFor } from '../config.js';
 import { peerDeliverable, archiveContradicted } from './peers.js';
 import { claimMailHint } from './claims.js';
@@ -125,6 +127,36 @@ class CoordMutex {
 }
 
 /**
+ * D-5238: the dispatch route's wait for a pane its own `ensure` just started. The route (L4) owns the timer and
+ * decides nothing: it leaves `coordMutex`, polls the same `turnVerdict` port every `DISPATCH_SPAWN_POLL_MS` for at
+ * most `DISPATCH_SPAWN_WAIT_MS`, and only a MEASURED verdict re-runs `dispatchRun`, once, inside the mutex again.
+ *
+ * THE BOUND HAS A BASIS IN CODE: the coordinator's only client, `ccd/ccrc-api`, caps every request at 30 s
+ * (`curl -m 30`), and a dispatch the server completed after its caller gave up would read to the coordinator as a
+ * transport failure (its retry then meets `bad-transition`). So the wait is at most HALF that cap, leaving the other
+ * half for the two decisions around it (the `ensure`, the registry reads, the hold, `sendPrompt`'s `/clear` with its
+ * echo polling, and any queueing behind other dispatches on the mutex). `dispatch-live-gate.test.ts` reads `-m` from
+ * `ccd/ccrc-api` and holds `2 × DISPATCH_SPAWN_WAIT_MS` within it. The rule is judged on the resumed path's measured
+ * latency, the only path that waits (D-5276).
+ */
+export const DISPATCH_SPAWN_WAIT_MS = 15_000;
+export const DISPATCH_SPAWN_POLL_MS = 2_000;
+const WORKER_STARTING_DETAIL =
+  'the pane this dispatch started is not up yet; nothing was held, cleared or sent and the run is untouched — send the dispatch again';
+
+/** Poll `read` every `DISPATCH_SPAWN_POLL_MS` until it answers anything but `unmeasured`, for at most
+ *  `DISPATCH_SPAWN_WAIT_MS` in all. `true` = a measured verdict came back; `false` = the bound ran out. */
+async function waitForMeasuredVerdict(read: () => Promise<TurnVerdict>): Promise<boolean> {
+  for (let waited = 0; waited < DISPATCH_SPAWN_WAIT_MS;) {
+    const step = Math.min(DISPATCH_SPAWN_POLL_MS, DISPATCH_SPAWN_WAIT_MS - waited);
+    await new Promise<void>((resolve) => { setTimeout(resolve, step); });
+    waited += step;
+    if ((await read()) !== 'unmeasured') return true;
+  }
+  return false;
+}
+
+/**
  * `dispatchRun`'s typed result union -> HTTP status + body (architecture doc
  * increment 4: "the routes become union->status maps"). The ONLY place in
  * this file that turns a `DispatchOutcome` into wire JSON — every shape
@@ -223,6 +255,10 @@ function sendDispatchOutcome(reply: FastifyReply, r: DispatchOutcome) {
         ...(r.detail === undefined ? {} : { detail: r.detail }),
         unbound: r.unbound });
     case 'unsupported': return reply.code(501).send({ ok: false, error: 'unsupported' });
+    // D-5238: the `poll` target is the route's own business and never rides the wire; the sentence is what the
+    // coordinator needs to act — dispatch again, nothing to undo.
+    case 'worker-starting':
+      return reply.code(409).send({ ok: false, refused: 'worker-starting', detail: WORKER_STARTING_DETAIL });
     case 'fleetFailed': return reply.code(502).send({ ok: false, stderr: r.stderr });
     case 'advanceFailed': return reply.code(409).send(r.adv);
     default: {
@@ -535,6 +571,8 @@ export function registerCoordRoutes(
   // One instance for this server (see `CoordMutex`'s own docstring) —
   // serialises the WRITE routes' bodies below: open, dispatch, close, advance.
   const coordMutex = new CoordMutex();
+  // The turn reads' deps (D-5238), built once from the watcher this function receives.
+  const turnReads = turnReadDeps(deps, watcher);
 
   /** `closeRun`'s abandon arm exactly as `POST /api/runs/:id/abandon` runs it — `{intent:'abandon'}` built here and
    *  never read off a body (D-280), `causedBy:'operator'`, CCR-15 wave 3's `childReclaim` port onto the session's own
@@ -1601,8 +1639,25 @@ export function registerCoordRoutes(
       // importing `configDirFor` itself, because `config.ts` imports
       // `./coord/db.js` and a value import would drag the store's module graph
       // into a policy module (D-1015).
-      configDir: (wrapper: string) => configDirFor(deps.cfg, wrapper) };
-    const outcome = await coordMutex.run(() => dispatchRun(dispatchDeps, id, body.brief, body.items, body.route));
+      configDir: (wrapper: string) => configDirFor(deps.cfg, wrapper),
+      // D-5238: the live `/clear` gate's reads — `turnverdict.ts`, their one home, over the watcher this function
+      // already receives (thunks: each call reads the watcher's newest pane-scraped pieces).
+      turnVerdict: (rec, uuid) => turnVerdictFor(turnReads, rec, uuid) };
+    const run = () => coordMutex.run(() => dispatchRun(dispatchDeps, id, body.brief, body.items, body.route));
+    const outcome = await run();
+    // D-5238: a pane this dispatch STARTED and has not published a live file. The wait is HERE, outside
+    // `coordMutex` (close, reclaim, settle and the dead-coordinator lane's abandons share it), and only a measured
+    // verdict re-runs the WHOLE decision, once — pause, caps, transition, the child gate, `ensure`, the verdict are
+    // re-checked against whatever happened meanwhile. A poll that runs out answers `worker-starting` at once (a re-run
+    // would read the same `unmeasured` after an `alive:` ensure, `status-unmeasurable`, which nobody retries); a
+    // second `worker-starting` is answered as it stands, never waited for twice.
+    if (!outcome.ok && outcome.kind === 'worker-starting') {
+      const { record, uuid } = outcome.poll;
+      if (!(await waitForMeasuredVerdict(() => dispatchDeps.turnVerdict(record, uuid)))) {
+        return sendDispatchOutcome(reply, outcome);
+      }
+      return sendDispatchOutcome(reply, await run());
+    }
     return sendDispatchOutcome(reply, outcome);
   });
 

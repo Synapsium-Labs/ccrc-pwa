@@ -14,6 +14,7 @@ import type { FleetHealth, NodeWire } from '../../shared/api';
 import type { BuildInfo } from '../../shared/buildinfo';
 import { BuildLine } from '@ccrc/ui';
 import { declValue, ruleIn } from './cssRule';
+import { UPDATES_STALE_TEXT } from '../src/fleet/useUpdatesView';
 
 afterEach(cleanup);
 
@@ -42,6 +43,18 @@ const node = (role: 'fleet' | 'server' | 'both', current: BuildInfo | null, over
 const line = (): Element | null => document.querySelector('.build-line');
 
 describe('BuildLine', () => {
+  it('wave 19, R24(b): a stale note the caller passes is said after the server side, amber, hidden from assistive tech; none when absent', () => {
+    const nodes = [node('fleet', stamp(SHA_A, 'v0.0.7')), node('server', stamp(SHA_A, 'v0.0.7'))];
+    const { rerender } = render(<BuildLine health={remote()} nodes={nodes} staleNote={UPDATES_STALE_TEXT} />);
+    expect(line()!.textContent).toBe(`fleet v0.0.7 · server v0.0.7 · ${UPDATES_STALE_TEXT}`);
+    expect(screen.getByText(UPDATES_STALE_TEXT)).toHaveClass('build-line-next');
+    expect(screen.getByText(UPDATES_STALE_TEXT), 'the caller announces it (D-5124)').toHaveAttribute('aria-hidden', 'true');
+    rerender(<BuildLine health={remote()} nodes={nodes} staleNote={null} />);
+    expect(line()!.textContent).toBe('fleet v0.0.7 · server v0.0.7');
+    rerender(<BuildLine health={remote()} nodes={nodes} />);
+    expect(line()!.textContent).toBe('fleet v0.0.7 · server v0.0.7');
+  });
+
   it('renders both versions when both nodes run a tagged release', () => {
     render(<BuildLine health={remote({ build: 'agreed' })}
       nodes={[node('fleet', stamp(SHA_A, 'v0.0.7')), node('server', stamp(SHA_A, 'v0.0.7'))]} />);

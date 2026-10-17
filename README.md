@@ -2847,6 +2847,12 @@ replies, the watch's `orphaned:` and `failed:` self-wake mail, and a run's move 
 and never pushed. Nothing is pushed for a session a client has on screen;
 mail and run records still land in the feed.
 
+A `✓ Finished` push means a main turn ended inside the busy stretch that just went idle (D-5233): the session's turn
+marker records a Stop at or after the stretch began (2 s of slack), with no newer turn opened after it. A stretch of
+compaction only, a restart, an overload tick, and a turn ended by Escape or a kill push nothing. A session whose hook
+writes no turn marker falls back to its hook state (`done` from a `Stop` inside the stretch); with neither file, the
+edge pushes as before. Delegated background work keeps its push for the moment that work ends (D-5231).
+
 - **Unseen watermark** (`pwa/src/lib/seen.ts`): a session is unseen when it
   entered a human-wanting bucket (`attention`, `done`, `cleanup`) after this
   device last acknowledged it. Per-device in `localStorage` on purpose — ccrc
@@ -5113,8 +5119,8 @@ working set, `SessionStart(compact)` serves the card once beside the graph card 
 `PostCompact` measures the summary and commits the journal line. No compaction MEASUREMENT reaches the server, the wire or
 the PWA: there is no compaction field on `FleetSession`, no chip, and no hookstate cache. The one thing that
 does cross is ccd's purge refusal vocabulary — `purge-refused`, `purge-incomplete` and
-`purge-mechanism-absent` (`shared/api.ts:7954-7956`), each with an operator sentence of its own at `:8006`,
-`:8014` and `:8027`, which the session History tab renders through `lcRefusalWord`
+`purge-mechanism-absent` (`shared/api.ts:8048-8050`), each with an operator sentence of its own at `:8100`,
+`:8108` and `:8121`, which the session History tab renders through `lcRefusalWord`
 (`pwa/src/session/HistoryTab.tsx:17`, rendered at `pwa/src/session/HistoryTab.tsx:61`). The journal is the whole deliverable, and reading it is a later
 plan's job.
 
@@ -5794,6 +5800,29 @@ unknown wrapper. So `sessionBucket` compares `hookUpdatedAt` against
 `SessionStart`'s synthetic write, which proves "never started", not
 "finished"), and a newer hook `working` raises a stale or absent `idle`.
 `status` itself is untouched by this — it stays frozen and hook-blind.
+
+**A Stop that leaves delegated work running keeps the session `working`**
+(D-5231). From 2.1.277 Claude Code keeps the live file `busy` while delegated
+work it started runs (local agents, workflows, teammates, remote agents —
+`liveStatusCoversDelegation`), so after such a Stop a live `busy` is that work,
+not a wedge. The hook records, on every main Stop whose `background_tasks` is an
+array, `bgDelegated` and `bgDelegatedKinds`: the count and kinds of the listed
+tasks that are delegated and not finished, by one rule defined in `shared/api.ts`
+(`NON_DELEGATING_TASK_KINDS`, `TERMINAL_TASK_STATUSES`, mirrored in the hook's
+`jq`): every kind counts except `shell`, `monitor`, `mcp-task`, `dream`,
+`auto-mode-scan` and `memory-import`, and every status except `completed`,
+`failed` and `killed`; an unseen kind or status counts. A subagent event carries
+the pair; a new main turn's first write leaves it out. `fleet.ts` ships it as
+`FleetSession.background` only on a build whose live word covers delegation and
+only while the hook state is that Stop's `done`, and while it is set the hook
+`done` does not unseat a live `busy`: the row reads `working · N in background`,
+the wedge qualifier stands down, and the chat pulse follows the bucket. When the
+work ends the live file writes `idle` and the row reads `done` dated from that
+write, so its badge fires then. D-75's wedge recovery is unchanged for a Stop
+with no delegated work, a Stop listing only shells or monitors included. This
+corrects the 2026-08-17 working-detection spec's §3, which held that D-75 covers
+the Workflow-orchestrator case for free: that assumed a live `idle` during
+delegation, which Claude Code stopped writing at 2.1.277.
 
 `bucketSince` is *derived* from evidence already on the record — never
 remembered by the watcher, which would reset on every deploy and paint the whole

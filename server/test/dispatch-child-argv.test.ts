@@ -87,7 +87,7 @@ const harness = (cfg: HarnessCfg) => {
   const deps: DispatchRunDeps = {
     ...base, coord,
     fleetState: { connected: true, downSince: null, ccdVerbs: cfg.ccdVerbs, rosterFp: null, build: null },
-    configDir: (w: string) => configDirFor(base.cfg, w),
+    configDir: (w: string) => configDirFor(base.cfg, w), turnVerdict: async () => 'idle' as const,
   };
   return {
     runId: opened.id, calls,

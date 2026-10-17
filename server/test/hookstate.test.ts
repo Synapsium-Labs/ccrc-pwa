@@ -709,3 +709,63 @@ describe('aliveAt — the age cut reads the later of updatedAt and aliveAt (D-40
     if (folded.ok) expect(Object.keys(folded.state)).not.toContain('aliveAt');
   });
 });
+
+// ── `background-aware-working` (D-5231) ──
+// The hook's `bgDelegated` and `bgDelegatedKinds` parse into `HookState.background`. A malformed pair is ABSENT and never
+// condemns the file (the `aliveAt` rule above): a bad pair must not cost the session its whole hook state.
+describe('background — the delegated pair parses, and a malformed one is absent (D-5231)', () => {
+  const stop = (o: Record<string, unknown>): Record<string, unknown> =>
+    base({ state: 'done', event: 'Stop', ...o });
+
+  it('the pair parses into background: {count, kinds}', async () => {
+    const reg = mkTmp('ccrc-hookstate-');
+    seed(reg, ID, stop({ bgDelegated: 3, bgDelegatedKinds: 'subagent,teammate,workflow' }));
+    const r = await readHookStateRawMeasured(localIO, reg, ID, UUID);
+    expect(r).toMatchObject({ ok: true, state: { background: { count: 3, kinds: ['subagent', 'teammate', 'workflow'] } } });
+    const m = await readHookStateMeasured(localIO, reg, ID, UUID, NOW);
+    expect(m).toMatchObject({ ok: true, state: { background: { count: 3, kinds: ['subagent', 'teammate', 'workflow'] } } });
+  });
+
+  it('a measured zero parses with no kinds', async () => {
+    const reg = mkTmp('ccrc-hookstate-');
+    seed(reg, ID, stop({ bgDelegated: 0, bgDelegatedKinds: '' }));
+    expect(await readHookStateRawMeasured(localIO, reg, ID, UUID))
+      .toMatchObject({ ok: true, state: { background: { count: 0, kinds: [] } } });
+  });
+
+  it('no pair: background is absent', async () => {
+    const reg = mkTmp('ccrc-hookstate-');
+    seed(reg, ID, stop({}));
+    const r = await readHookStateRawMeasured(localIO, reg, ID, UUID);
+    expect(r).toMatchObject({ ok: true });
+    if (r.ok) expect(r.state.background).toBeUndefined();
+  });
+
+  const BAD: [string, Record<string, unknown>][] = [
+    ['a negative count', { bgDelegated: -1, bgDelegatedKinds: 'subagent' }],
+    ['a fractional count', { bgDelegated: 1.5, bgDelegatedKinds: 'subagent' }],
+    ['a string count', { bgDelegated: '2', bgDelegatedKinds: 'subagent' }],
+    ['kinds with an upper-case letter', { bgDelegated: 1, bgDelegatedKinds: 'Subagent' }],
+    ['kinds with a space', { bgDelegated: 1, bgDelegatedKinds: 'sub agent' }],
+    ['kinds with an empty item', { bgDelegated: 2, bgDelegatedKinds: 'subagent,,workflow' }],
+    ['kinds with a trailing comma', { bgDelegated: 1, bgDelegatedKinds: 'subagent,' }],
+    ['kinds that are not a string', { bgDelegated: 1, bgDelegatedKinds: ['subagent'] }],
+    ['kinds over 200 bytes', { bgDelegated: 1, bgDelegatedKinds: 'a'.repeat(201) }],
+    ['a count with no kinds', { bgDelegated: 1 }],
+  ];
+  it.each(BAD)('%s: background absent, the file still ok', async (_label, o) => {
+    const reg = mkTmp('ccrc-hookstate-');
+    seed(reg, ID, stop(o));
+    const r = await readHookStateRawMeasured(localIO, reg, ID, UUID);
+    expect(r).toMatchObject({ ok: true, state: { state: 'done', event: 'Stop' } });
+    if (r.ok) expect(r.state.background).toBeUndefined();
+    expect(await readHookStateMeasured(localIO, reg, ID, UUID, NOW)).toMatchObject({ ok: true });
+  });
+
+  it('kinds at exactly 200 bytes parse', async () => {
+    const reg = mkTmp('ccrc-hookstate-');
+    seed(reg, ID, stop({ bgDelegated: 1, bgDelegatedKinds: 'a'.repeat(200) }));
+    expect(await readHookStateRawMeasured(localIO, reg, ID, UUID))
+      .toMatchObject({ ok: true, state: { background: { count: 1, kinds: ['a'.repeat(200)] } } });
+  });
+});

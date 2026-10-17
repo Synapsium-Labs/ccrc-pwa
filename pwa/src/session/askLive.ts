@@ -20,13 +20,14 @@
 //   `Submit` and lands on the review (D-5091).
 import type { Dialog, DialogMulti, HookAskQuestion } from '../../../shared/api';
 import {
+  ASK_TAB_ROW_RE,
   CHAT_ABOUT_ROW_RE,
   COMMIT_LAST_RE,
   FREE_TEXT_PLACEHOLDER_RE,
-  REVIEW_CANCEL_ROW_RE,
   REVIEW_HEADING_RE,
   REVIEW_READY_RE,
-  REVIEW_SUBMIT_ROW_RE,
+  reviewRows,
+  type AskTab,
 } from '../../../shared/ask-menu';
 
 /** The questions of an AskUserQuestion envelope (`HookAsk`'s question arm). */
@@ -127,19 +128,33 @@ export function namedQuestion(ask: AskQuestions, dialog: Dialog | null): number 
   return named.length === 1 ? named[0]! : null;
 }
 
-/** Is the pane on the review screen an ask ends on? Parsed, exactly two rows reading `Submit answers` and `Cancel`
- *  (`REVIEW_SUBMIT_ROW_RE`, `REVIEW_CANCEL_ROW_RE`), and the body ending with the ready line (`REVIEW_READY_RE`). Never
- *  keyed on the body's first line or the title: a review too tall for `parseDialog`'s climb loses both. */
-export function isAskReview(dialog: Dialog | null): boolean {
-  if (dialog === null || !dialog.parsed || dialog.options.length !== 2) return false;
-  const [submit, cancel] = dialog.options as [Dialog['options'][number], Dialog['options'][number]];
-  return REVIEW_SUBMIT_ROW_RE.test(submit.label.trim())
-    && REVIEW_CANCEL_ROW_RE.test(cancel.label.trim())
-    && REVIEW_READY_RE.test((dialog.body ?? '').trimEnd());
+/** Which screen of the ask the pane is on, by QUESTION IDENTITY (decision `ask-envelope-dismissal-per-screen`):
+ *  `review` for the review screen (`isAskReview`), `q<i>` for question `i` (`liveQuestion`, else `namedQuestion` by its
+ *  title), or null for a screen the sheet cannot place (no menu, or an unparsed or unmatched grab). Never the raw
+ *  dialog id: that hashes every row's label, so typing into the free-text row in the terminal repaints the SAME
+ *  question under a new id, and a mid-redraw grab of it comes back unparsed under another. */
+export function askScreen(ask: AskQuestions, dialog: Dialog | null): string | null {
+  if (dialog === null) return null;
+  if (isAskReview(dialog)) return 'review';
+  const i = liveQuestion(ask, dialog) ?? namedQuestion(ask, dialog);
+  return i === null ? null : `q${i}`;
 }
 
-/** The tab row a multi-question ask paints at the top of its box: `←  ☒ Caching  ☐ Tracing  ✔ Submit  →`. */
-const TAB_ROW_RE = /^←.*→$/;
+/** Is the pane on the review screen an ask ends on? `reviewRows` (`shared/ask-menu.ts`) says, and which rows are its
+ *  Submit and Cancel: the strict D-5089 shape, or the lenient arm (decision `ask-review-lenient-arm`), which finds both
+ *  rows by label on any screen that paints the ready line. Never keyed on the body's first line or the title: a review
+ *  too tall for `parseDialog`'s climb loses both. */
+export function isAskReview(dialog: Dialog | null): boolean {
+  return reviewRows(dialog) !== null;
+}
+
+/** The transcript's Answer control's word for the live pane menu (decision `ask-answer-control-says-submit`): while
+ *  it is an ask's review screen, the pane's own Submit row (`Submit answers`), so a hidden sheet is one labelled click
+ *  from Submit; otherwise undefined, the control's own `Answer`. It still only raises the sheet. */
+export function answerControlLabel(dialog: Dialog | null): string | undefined {
+  const rows = reviewRows(dialog);
+  return rows === null ? undefined : dialog?.options.find((o) => o.index === rows.submit)?.label.trim();
+}
 
 /** Mirrors server/src/pane/dialog.ts's `isRule`: a line of `─` (spaces allowed), at least 8 wide. */
 const isRule = (line: string): boolean => {
@@ -165,7 +180,7 @@ export function reviewSummary(dialog: Dialog): string[] {
   let from = 0;
   for (let i = ready - 1; i >= 0; i--) {
     const t = lines[i]!.trim();
-    if (TAB_ROW_RE.test(t) || isRule(t)) {
+    if (ASK_TAB_ROW_RE.test(t) || isRule(t)) {
       from = i + 1;
       break;
     }
@@ -188,7 +203,7 @@ export function reviewSummary(dialog: Dialog): string[] {
  *    trimmed. A body that never paints the title keeps the title as the question and the whole body.
  */
 export function paneQuestion(dialog: Dialog): { question: string; preamble: string } {
-  const lines = (dialog.body ?? '').split('\n').map((l) => l.trimEnd()).filter((l) => !TAB_ROW_RE.test(l.trim()));
+  const lines = (dialog.body ?? '').split('\n').map((l) => l.trimEnd()).filter((l) => !ASK_TAB_ROW_RE.test(l.trim()));
   const title = dialog.title.trim();
   let at = -1;
   for (let i = lines.length - 1; i >= 0 && at < 0; i--) if (title !== '' && lines[i]!.trim() === title) at = i;
@@ -299,4 +314,21 @@ export function wantedTicks(multi: DialogMulti, ticked: readonly number[]): numb
  *  (`COMMIT_LAST_RE` on the commit row's word)? */
 export function commitsToReview(multi: DialogMulti): boolean {
   return COMMIT_LAST_RE.test(multi.commit.trim());
+}
+
+/** Which tab of the pane's tab row is the question with this `header` (decision `ask-tab-strip`): its 0-based place when
+ *  exactly one tab carries it, else null. The pane marks its active tab by colour alone, so the scraped sheet knows its
+ *  place only through the transcript's header for the question, and two tabs with one header say nothing. */
+export function headerTab(tabs: readonly AskTab[], header: string | undefined): number | null {
+  if (header === undefined || header.trim() === '') return null;
+  const at = tabs.flatMap((t, i) => (t.header === header.trim() ? [i] : []));
+  return at.length === 1 ? at[0]! : null;
+}
+
+/** Has the sheet changed this multiSelect question's boxes without committing them (`picked` against the pane's
+ *  ticks)? A tab move leaves the pane's ticks as they are, so it would lose them: ←/→ and the tab strip wait. */
+export function picksUncommitted(multi: DialogMulti, picked: readonly number[] | null): boolean {
+  if (picked === null) return false;
+  const pane = paneTicks(multi);
+  return picked.length !== pane.length || picked.some((k) => !pane.includes(k));
 }
