@@ -12,7 +12,7 @@
 // suite drives BOTH a parent/child `CoordStore` relationship and a dialog
 // scrape in the same fixture, because this is the first task that needs to.
 import { describe, it, expect } from 'vitest';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -66,6 +66,14 @@ function seedSessions(home: string, specs: string[]): Map<string, Seeded> {
   return info;
 }
 
+/** One registry row and nothing else (no live-status file): a parent whose
+ *  own panes this suite never drives. The identity triple `seedSessions` writes. */
+function seedRow(home: string, id: string, project: string): void {
+  const reg = path.join(home, '.cc-sessions');
+  const fields: Record<string, string> = { wrapper: 'claude', project, workdir: `/w/${id}`, uuid: `u-${id}`, started: '1' };
+  for (const [f, v] of Object.entries(fields)) writeFileSync(path.join(reg, `${id}.${f}`), v);
+}
+
 /** `~/.cc-sessions/<id>.hookstate.json`, the way `session-hook.sh` writes
  *  it — verbatim from `push-copy.test.ts`. `sessionId` matches `seedSessions`'
  *  `uuid` field so `readHookState`'s identity gate accepts it. */
@@ -99,14 +107,21 @@ function fixture(opts: {
   tick: () => Promise<void>;
   showMenu: (id: string, text?: string) => void;
   writeAsk: (id: string, ask: unknown, state?: string) => void;
+  child: (id: string, runId: number, mark?: string) => void;
+  gone: Set<string>;
 } {
   const home = mkTmp('ccrc-');
   const info = seedSessions(home, opts.sessions);
   const panes = new Map<string, string>(opts.sessions.map((spec) => [spec.split('/')[1]!, BARE_PROMPT]));
+  // D-5290: the sessions tmux answers `can't find session` for — a parent the
+  // dead-coordinator predicate can measure dead (pane gone, lifecycle `orphan`).
+  const gone = new Set<string>();
   const runner: Runner = async (_cmd, args) => {
-    if (args[0] === 'has-session') return { code: 0, stdout: '', stderr: '' };
     const target = args[2] ?? '';
     const id = /^=cc-(.*):$/.exec(target)?.[1] ?? '';   // the exact target `=cc-<id>:` (D-3525)
+    if (args[0] === 'has-session') {
+      return gone.has(id) ? { code: 1, stdout: '', stderr: `can't find session: cc-${id}` } : { code: 0, stdout: '', stderr: '' };
+    }
     if (args[0] === 'list-panes') {
       const pid = info.get(id)?.pid;
       return { code: 0, stdout: pid ? `${pid}\n` : '', stderr: '' };
@@ -125,6 +140,20 @@ function fixture(opts: {
     tick: () => w.tick(),
     showMenu: (id: string, text: string = MENU_PANE) => { panes.set(id, text); },
     writeAsk: (id: string, ask: unknown, state?: string) => writeHookState(home, id, ask, state),
+    // D-5290: make `id` a dispatched child as `ws-add --child <run>` leaves it —
+    // its `.child` marker naming the run (or `mark`, verbatim) — and give the
+    // run's claimant a registry row in the run's project unless it has one, so
+    // the parent is live.
+    child: (id: string, runId: number, mark?: string) => {
+      const reg = path.join(home, '.cc-sessions');
+      writeFileSync(path.join(reg, `${id}.child`), mark ?? String(runId));
+      const run = coord.db.prepare('SELECT claimedBy, project FROM runs WHERE id = ?').get(runId) as
+        { claimedBy: string | null; project: string } | undefined;
+      const parent = run?.claimedBy ?? null;
+      if (parent === null || parent === id || existsSync(path.join(reg, `${parent}.uuid`))) return;
+      seedRow(home, parent, run!.project);
+    },
+    gone,
   };
 }
 
@@ -162,7 +191,7 @@ describe('the ask mint point (D-2172, D-2173)', () => {
       program: 'prog', title: 'Prog', project: 'ccrc-pwa',
       wave: 1, waveOf: null, claimedBy: 'coord-1',
     }) as { id: number };
-    f.coord.setSession(run.id, 'cc-a');
+    f.coord.setSession(run.id, 'cc-a'); f.child('cc-a', run.id);
 
     await f.tick();                                    // priming: no menu
     f.writeAsk('cc-a', oneQuestion([{ label: 'Red' }, { label: 'Blue' }]));
@@ -216,7 +245,7 @@ describe('the ask mint point (D-2172, D-2173)', () => {
       program: 'prog', title: 'Prog', project: 'ccrc-pwa',
       wave: 1, waveOf: null, claimedBy: 'coord-1',
     }) as { id: number };
-    f.coord.setSession(run.id, 'cc-a');
+    f.coord.setSession(run.id, 'cc-a'); f.child('cc-a', run.id);
 
     // The dialog is on the pane BEFORE the very first tick — a server that
     // restarted while a child was blocked on its question.
@@ -264,7 +293,7 @@ describe('the ask mint point (D-2172, D-2173)', () => {
       program: 'prog', title: 'Prog', project: 'ccrc-pwa',
       wave: 1, waveOf: null, claimedBy: 'coord-1',
     }) as { id: number };
-    f.coord.setSession(run.id, 'cc-a');
+    f.coord.setSession(run.id, 'cc-a'); f.child('cc-a', run.id);
 
     await f.tick();
     // Two questions — `askActions` refuses multi-question no matter who would
@@ -293,12 +322,12 @@ describe('the ask mint point (D-2172, D-2173)', () => {
       program: 'prog-a', title: 'A', project: 'ccrc-pwa',
       wave: 1, waveOf: null, claimedBy: 'coord-1',
     }) as { id: number };
-    f.coord.setSession(runA.id, 'cc-a');
+    f.coord.setSession(runA.id, 'cc-a'); f.child('cc-a', runA.id);
     const runB = f.coord.openRun({
       program: 'prog-b', title: 'B', project: 'ccrc-pwa',
       wave: 1, waveOf: null, claimedBy: 'coord-1',
     }) as { id: number };
-    f.coord.setSession(runB.id, 'cc-b');
+    f.coord.setSession(runB.id, 'cc-b'); f.child('cc-b', runB.id);
 
     await f.tick();                                     // priming
     f.writeAsk('cc-a', oneQuestion([{ label: 'Red' }, { label: 'Blue' }]));
@@ -335,7 +364,7 @@ describe('the ask mint point (D-2172, D-2173)', () => {
       program: 'prog', title: 'Prog', project: 'ccrc-pwa',
       wave: 1, waveOf: null, claimedBy: 'coord-1',
     }) as { id: number };
-    f.coord.setSession(run.id, 'cc-a');
+    f.coord.setSession(run.id, 'cc-a'); f.child('cc-a', run.id);
 
     await f.tick();
     f.writeAsk('cc-a', oneQuestion([{ label: 'Red' }, { label: 'Blue' }]));
@@ -368,7 +397,7 @@ describe('the ask mint point (D-2172, D-2173)', () => {
       program: 'prog', title: 'Prog', project: 'ccrc-pwa',
       wave: 1, waveOf: null, claimedBy: 'coord-1',
     }) as { id: number };
-    f.coord.setSession(run.id, 'cc-a');
+    f.coord.setSession(run.id, 'cc-a'); f.child('cc-a', run.id);
     f.coord.insertAsk = () => { throw new Error('boom — simulated coord.db failure'); };
 
     await f.tick();
@@ -394,7 +423,7 @@ describe('the ask mint point (D-2172, D-2173)', () => {
       program: 'prog', title: 'Prog', project: 'ccrc-pwa',
       wave: 1, waveOf: null, claimedBy: 'coord-1',
     }) as { id: number };
-    f.coord.setSession(run.id, 'cc-a');
+    f.coord.setSession(run.id, 'cc-a'); f.child('cc-a', run.id);
     // The row a newer build wrote and a rollback left behind. `parentOfSession`
     // reads only `claimedBy`, so the parent still derives and the lane reaches
     // `hold` exactly as it would on a healthy box.
@@ -435,7 +464,7 @@ describe('the ask mint point (D-2172, D-2173)', () => {
       program: 'prog', title: 'Prog', project: 'ccrc-pwa',
       wave: 1, waveOf: null, claimedBy: 'coord-1',
     }) as { id: number };
-    f.coord.setSession(run.id, 'cc-a');
+    f.coord.setSession(run.id, 'cc-a'); f.child('cc-a', run.id);
 
     await f.tick();
     f.writeAsk('cc-a', oneQuestion([{ label: 'Red' }, { label: 'Blue' }]));
@@ -460,7 +489,7 @@ describe('the ask mint point (D-2172, D-2173)', () => {
       program: 'prog', title: 'Prog', project: 'ccrc-pwa',
       wave: 1, waveOf: null, claimedBy: 'cc-a',
     }) as { id: number };
-    f.coord.setSession(run.id, 'cc-a');
+    f.coord.setSession(run.id, 'cc-a'); f.child('cc-a', run.id);
 
     await f.tick();
     f.writeAsk('cc-a', oneQuestion([{ label: 'Red' }, { label: 'Blue' }]));
@@ -489,7 +518,7 @@ describe('the ask mint point (D-2172, D-2173)', () => {
       program: 'prog', title: 'Prog', project: 'ccrc-pwa',
       wave: 1, waveOf: null, claimedBy: 'coord-1',
     }) as { id: number };
-    f.coord.setSession(run.id, 'cc-a');
+    f.coord.setSession(run.id, 'cc-a'); f.child('cc-a', run.id);
 
     await f.tick();                                        // priming
     f.writeAsk('cc-a', oneQuestion([{ label: 'Red' }, { label: 'Blue' }]));
@@ -531,7 +560,7 @@ describe('the ask mint point (D-2172, D-2173)', () => {
       program: 'prog', title: 'Prog', project: 'ccrc-pwa',
       wave: 1, waveOf: null, claimedBy: 'coord-1',
     }) as { id: number };
-    f.coord.setSession(run.id, 'cc-a');
+    f.coord.setSession(run.id, 'cc-a'); f.child('cc-a', run.id);
 
     await f.tick();                                          // priming
     f.writeAsk('cc-a', oneQuestion([{ label: 'Red' }, { label: 'Blue' }]));
@@ -572,7 +601,7 @@ describe('the ask mint point (D-2172, D-2173)', () => {
       program: 'prog', title: 'Prog', project: 'ccrc-pwa',
       wave: 1, waveOf: null, claimedBy: 'coord-1',
     }) as { id: number };
-    f.coord.setSession(run.id, 'cc-a');
+    f.coord.setSession(run.id, 'cc-a'); f.child('cc-a', run.id);
     f.coord.insertMail = () => { throw new Error('boom — simulated coord.db failure'); };
 
     await f.tick();
@@ -641,7 +670,7 @@ describe('the ask instance guard advances under a live dialog', () => {
       program: 'prog', title: 'Prog', project: 'ccrc-pwa',
       wave: 1, waveOf: null, claimedBy: 'coord-1',
     }) as { id: number };
-    f.coord.setSession(run.id, 'cc-a');
+    f.coord.setSession(run.id, 'cc-a'); f.child('cc-a', run.id);
     await f.tick();                                     // priming: no menu
     const ask = oneQuestion([{ label: 'Red' }, { label: 'Blue' }]);
     f.writeAsk('cc-a', ask);
@@ -685,5 +714,272 @@ describe('the ask instance guard advances under a live dialog', () => {
     // The clear branch settled the row `stale`; nothing is held, so there is
     // nothing to advance and the CAS could not have applied anyway.
     expect(okAsks(f.coord.asksForParent('coord-1', 'held'))).toEqual([]);
+  });
+});
+
+// D-5290 (coordinator-first routing spec §5.2): ONE `tryHold` decides every
+// hold — at the first sighting and in the amendment branch — and holds only
+// for a child (its `.child` marker naming the binding run), under a live
+// parent of its own project. Neutral ids, per the plan's Global constraints.
+describe('the first-sighting race and a parent that is not live (D-5290)', () => {
+  const CHILD = 'project-a-quiet-basin';
+  const PARENT = 'project-a-calm-mesa';
+  const OPS = 'project-a-open-dune';
+  const FAR = 'project-b-far-ridge';
+  const ENVELOPE = oneQuestion([{ label: 'Red' }, { label: 'Blue' }]);
+  const asksRows = (f: ReturnType<typeof fixture>) =>
+    f.coord.db.prepare('SELECT childId, parentId, state, releaseReason, releasedAt FROM asks ORDER BY id').all() as
+      { childId: string; parentId: string; state: string; releaseReason: string | null; releasedAt: number | null }[];
+  const mailTo = (f: ReturnType<typeof fixture>, to: string) =>
+    (f.coord.db.prepare("SELECT COUNT(*) AS n FROM mail WHERE toId = ?").get(to) as { n: number }).n;
+  const pushesFor = (sent: PushPayload[], id: string) => sent.filter((p) => p.tag === askTag(id));
+
+  /** A child of `parent` in `project`: the run, the binding, the marker. */
+  const dispatch = (f: ReturnType<typeof fixture>, child: string, parent: string, project = 'project-a') => {
+    const run = f.coord.openRun({
+      program: 'prog', title: 'Prog', project, wave: 1, waveOf: null, claimedBy: parent,
+    }) as { id: number };
+    f.coord.setSession(run.id, child);
+    return run.id;
+  };
+
+  it('tick 1 the menu with no envelope, tick 2 the envelope: held, the parent mailed, no answerable push', async () => {
+    const sent: PushPayload[] = [];
+    const push = { notify: async (p: PushPayload) => { sent.push(p); } };
+    const f = fixture({ push, sessions: [`project-a/${CHILD}`, `project-a/${PARENT}`] });
+    const runId = dispatch(f, CHILD, PARENT);
+    f.child(CHILD, runId);
+    await f.tick();                                   // priming
+    f.writeAsk(CHILD, null, 'waiting');               // hookstate waiting, the envelope not yet written
+    f.showMenu(CHILD);
+    await f.tick();                                   // first sighting: actionless, raised as today
+    expect(pushesFor(sent, CHILD)).toHaveLength(1);
+    expect(pushesFor(sent, CHILD)[0]!.actions).toBeUndefined();
+    expect(asksRows(f)).toEqual([]);
+    f.writeAsk(CHILD, ENVELOPE);
+    await f.tick();                                   // the amendment branch: tryHold
+    const rows = asksRows(f);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ childId: CHILD, parentId: PARENT, state: 'held', releaseReason: null });
+    expect(mailTo(f, PARENT)).toBe(1);
+    // No answerable push ever reached the operator: the actionless one is
+    // replaced, same tag, by the quiet "with coordinator" body.
+    expect(pushesFor(sent, CHILD).filter((p) => p.actions !== undefined)).toEqual([]);
+    expect(pushesFor(sent, CHILD)).toHaveLength(2);
+    expect(pushesFor(sent, CHILD)[1]!.body).toBe(`With coordinator ${PARENT}`);
+  });
+
+  it('the tick-2 hold under presence suppression still writes the record (recordOnly, D-2172)', async () => {
+    const sent: PushPayload[] = [];
+    const push = { notify: async (p: PushPayload) => { sent.push(p); } };
+    const presence = new Presence();
+    presence.setVisible(Symbol('t'), CHILD);
+    const log = new NotifyLog(path.join(await dir(), 'n.json'));
+    await log.load();
+    const f = fixture({ push, notifyLog: log, presence, sessions: [`project-a/${CHILD}`, `project-a/${PARENT}`] });
+    const runId = dispatch(f, CHILD, PARENT);
+    f.child(CHILD, runId);
+    await f.tick();
+    f.writeAsk(CHILD, null, 'waiting');
+    f.showMenu(CHILD);
+    await f.tick();
+    f.writeAsk(CHILD, ENVELOPE);
+    await f.tick();
+    expect(sent).toEqual([]);
+    expect(asksRows(f).map((r) => r.state)).toEqual(['held']);
+    const recorded = log.catchUp(log.epoch, 0).events.filter((e) => e.kind === 'ask');
+    // the actionless raise was suppressed and so never recorded; the held
+    // ask's record is the operator's one durable trace.
+    expect(recorded).toHaveLength(1);
+    expect(recorded[0]!.sessionId).toBe(CHILD);
+  });
+
+  it('defers the first actionless raise while hookstate is not waiting, and an envelope then holds with no push at all', async () => {
+    const sent: PushPayload[] = [];
+    const push = { notify: async (p: PushPayload) => { sent.push(p); } };
+    const f = fixture({ push, sessions: [`project-a/${CHILD}`, `project-a/${PARENT}`] });
+    const runId = dispatch(f, CHILD, PARENT);
+    f.child(CHILD, runId);
+    await f.tick();
+    f.writeAsk(CHILD, null, 'busy');                  // the menu painted before the hook wrote `waiting`
+    f.showMenu(CHILD);
+    await f.tick();
+    expect(sent).toEqual([]);                         // deferred, not raised
+    f.writeAsk(CHILD, ENVELOPE);
+    await f.tick();
+    expect(sent).toEqual([]);
+    expect(asksRows(f).map((r) => r.state)).toEqual(['held']);
+    expect(mailTo(f, PARENT)).toBe(1);
+  });
+
+  it('the deferral is bounded: tick 1 raises nothing, tick 3 with still no envelope raises the actionless push', async () => {
+    const sent: PushPayload[] = [];
+    const push = { notify: async (p: PushPayload) => { sent.push(p); } };
+    const f = fixture({ push, sessions: [`project-a/${CHILD}`, `project-a/${PARENT}`] });
+    const runId = dispatch(f, CHILD, PARENT);
+    f.child(CHILD, runId);
+    await f.tick();
+    f.writeAsk(CHILD, null, 'busy');
+    f.showMenu(CHILD);
+    await f.tick();                                   // tick 1
+    expect(pushesFor(sent, CHILD)).toEqual([]);
+    await f.tick();                                   // tick 2
+    expect(pushesFor(sent, CHILD)).toEqual([]);
+    await f.tick();                                   // tick 3: the bound
+    expect(pushesFor(sent, CHILD)).toHaveLength(1);
+    expect(pushesFor(sent, CHILD)[0]!.actions).toBeUndefined();
+    await f.tick();                                   // and once only
+    expect(pushesFor(sent, CHILD)).toHaveLength(1);
+  });
+
+  const notLive: [string, (f: ReturnType<typeof fixture>) => void][] = [
+    ['a parent with no registry row', () => {}],
+    ['an archived parent', (f) => {
+      seedRow(f.home, PARENT, 'project-a');
+      writeFileSync(path.join(f.home, '.cc-sessions', `${PARENT}.archived`), '1700000000');
+    }],
+    ['a stopped parent', (f) => {
+      seedRow(f.home, PARENT, 'project-a');
+      writeFileSync(path.join(f.home, '.cc-sessions', `${PARENT}.stopped`), '1700000000 pwa');
+    }],
+    ['a parent the dead predicate measures dead', (f) => {
+      seedRow(f.home, PARENT, 'project-a');
+      f.gone.add(PARENT);
+    }],
+  ];
+  for (const [name, arrange] of notLive) {
+    it(`${name}: the row is minted released (parent-not-live) and the operator is pushed on the same tick`, async () => {
+      const sent: PushPayload[] = [];
+      const push = { notify: async (p: PushPayload) => { sent.push(p); } };
+      const f = fixture({ push, sessions: [`project-a/${CHILD}`] });
+      arrange(f);
+      const runId = dispatch(f, CHILD, PARENT);
+      // the marker alone, so `f.child` seeds no parent row the arrangement did not
+      writeFileSync(path.join(f.home, '.cc-sessions', `${CHILD}.child`), String(runId));
+      await f.tick();
+      f.writeAsk(CHILD, ENVELOPE);
+      f.showMenu(CHILD);
+      await f.tick();
+      const rows = asksRows(f);
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toMatchObject({ childId: CHILD, parentId: PARENT, state: 'released', releaseReason: 'parent-not-live' });
+      expect(rows[0]!.releasedAt).not.toBeNull();
+      expect(mailTo(f, PARENT)).toBe(0);
+      expect(pushesFor(sent, CHILD)).toHaveLength(1);
+      expect(pushesFor(sent, CHILD)[0]!.actions).toBeDefined();
+    });
+  }
+
+  const amendmentReleased: [string, string, (f: ReturnType<typeof fixture>) => number][] = [
+    ['a parent with no registry row', 'parent-not-live', (f) => {
+      const runId = dispatch(f, CHILD, PARENT);
+      writeFileSync(path.join(f.home, '.cc-sessions', `${CHILD}.child`), String(runId));
+      return runId;
+    }],
+    ['a parent of another project', 'parent-project-mismatch', (f) => {
+      const runId = dispatch(f, CHILD, FAR, 'project-a');
+      f.child(CHILD, runId);
+      return runId;
+    }],
+  ];
+  for (const [name, reason, arrange] of amendmentReleased) {
+    it(`released from the amendment branch (${name}): the envelope on tick 2 mints released (${reason}) and pushes the answerable notification once`, async () => {
+      const sent: PushPayload[] = [];
+      const push = { notify: async (p: PushPayload) => { sent.push(p); } };
+      const f = fixture({ push, sessions: [`project-a/${CHILD}`, `project-b/${FAR}`] });
+      arrange(f);
+      await f.tick();                                 // priming
+      f.writeAsk(CHILD, null, 'waiting');
+      f.showMenu(CHILD);
+      await f.tick();                                 // first sighting: actionless
+      expect(pushesFor(sent, CHILD).map((p) => p.actions === undefined)).toEqual([true]);
+      f.writeAsk(CHILD, ENVELOPE);
+      await f.tick();                                 // the amendment branch: tryHold releases at once
+      const rows = asksRows(f);
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toMatchObject({ childId: CHILD, state: 'released', releaseReason: reason });
+      expect(mailTo(f, PARENT) + mailTo(f, FAR)).toBe(0);
+      // Exactly one answerable push after the actionless one: `tryHold`'s own.
+      // The amendment arm must not raise a second (and record a duplicate).
+      expect(pushesFor(sent, CHILD).map((p) => p.actions === undefined)).toEqual([true, false]);
+      await f.tick();
+      expect(pushesFor(sent, CHILD)).toHaveLength(2);
+    });
+  }
+
+  it("a top-level session's late envelope raises to the operator as today", async () => {
+    const sent: PushPayload[] = [];
+    const push = { notify: async (p: PushPayload) => { sent.push(p); } };
+    const f = fixture({ push, sessions: [`project-a/${PARENT}`] });
+    await f.tick();
+    f.writeAsk(PARENT, null, 'waiting');
+    f.showMenu(PARENT);
+    await f.tick();
+    f.writeAsk(PARENT, ENVELOPE);
+    await f.tick();
+    expect(pushesFor(sent, PARENT).map((p) => p.actions === undefined)).toEqual([true, false]);
+    expect(askRowCount(f)).toBe(0);
+  });
+
+  it('a self-claimed child is not held from the amendment branch either', async () => {
+    const sent: PushPayload[] = [];
+    const push = { notify: async (p: PushPayload) => { sent.push(p); } };
+    const f = fixture({ push, sessions: [`project-a/${CHILD}`] });
+    const runId = dispatch(f, CHILD, CHILD);
+    f.child(CHILD, runId);
+    await f.tick();
+    f.writeAsk(CHILD, null, 'waiting');
+    f.showMenu(CHILD);
+    await f.tick();
+    f.writeAsk(CHILD, ENVELOPE);
+    await f.tick();
+    expect(askRowCount(f)).toBe(0);
+    expect(pushesFor(sent, CHILD).map((p) => p.actions === undefined)).toEqual([true, false]);
+  });
+
+  const notAChild: [string, (f: ReturnType<typeof fixture>, runId: number) => void][] = [
+    ['no `.child` marker', () => {}],
+    ['an unreadable mark', (f) => { writeFileSync(path.join(f.home, '.cc-sessions', `${OPS}.child`), 'not-a-run'); }],
+    ['a mark naming a different run', (f) => {
+      const other = f.coord.openRun({
+        program: 'other', title: 'Other', project: 'project-a', wave: 1, waveOf: null, claimedBy: OPS,
+      }) as { id: number };
+      writeFileSync(path.join(f.home, '.cc-sessions', `${OPS}.child`), String(other.id));
+    }],
+  ];
+  for (const [name, arrange] of notAChild) {
+    it(`not a child (${name}): a run naming an operator-created session never holds its question`, async () => {
+      const sent: PushPayload[] = [];
+      const push = { notify: async (p: PushPayload) => { sent.push(p); } };
+      const f = fixture({ push, sessions: [`project-a/${OPS}`, `project-a/${PARENT}`] });
+      const runId = dispatch(f, OPS, PARENT);
+      arrange(f, runId);
+      await f.tick();
+      f.writeAsk(OPS, ENVELOPE);
+      f.showMenu(OPS);
+      await f.tick();
+      expect(askRowCount(f)).toBe(0);
+      expect(mailTo(f, PARENT)).toBe(0);
+      expect(pushesFor(sent, OPS)).toHaveLength(1);
+      expect(pushesFor(sent, OPS)[0]!.actions).toBeDefined();
+    });
+  }
+
+  it('project mismatch: a legacy run claimed from another project mints released (parent-project-mismatch) and pushes at once', async () => {
+    const sent: PushPayload[] = [];
+    const push = { notify: async (p: PushPayload) => { sent.push(p); } };
+    const f = fixture({ push, sessions: [`project-a/${CHILD}`, `project-b/${FAR}`] });
+    const runId = dispatch(f, CHILD, FAR, 'project-a');
+    f.child(CHILD, runId);
+    await f.tick();
+    f.writeAsk(CHILD, ENVELOPE);
+    f.showMenu(CHILD);
+    await f.tick();
+    const rows = asksRows(f);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ childId: CHILD, parentId: FAR, state: 'released', releaseReason: 'parent-project-mismatch' });
+    expect(mailTo(f, FAR)).toBe(0);
+    expect(pushesFor(sent, CHILD)).toHaveLength(1);
+    expect(pushesFor(sent, CHILD)[0]!.actions).toBeDefined();
   });
 });

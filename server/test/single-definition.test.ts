@@ -6368,6 +6368,50 @@ describe('the ask push body is built once, in server/src/askbody.ts (D-5302)', (
   });
 });
 
+// D-5290 (plan docs/superpowers/plans/2026-10-17-coordinator-first-routing.md, Task 5; spec §5.2). APPENDED. ONE
+// `tryHold` decides every ask hold: it is defined once, in `server/src/watch.ts`; it is the only caller of `hold` (the
+// mint) and the watcher's only reader of `parentOfSession`, so no raise site can hold on its own checks; and the
+// first sighting, the deferred first raise and the amendment branch all call it. Its parent-live check reads the
+// dead-coordinator sweep's own predicate, `claimantMeasuredDead`, defined once in `server/src/coord/reclaim.ts` and
+// read by both. Code lines only (`stallCode`).
+describe('one tryHold decides every ask hold (D-5290)', () => {
+  const holders = (re: RegExp): string[] => ALL.filter((f) => re.test(stallCode(f))).map(rel).sort();
+  const DEFINES_TRY = /\basync\s+tryHold\s*\(|\bfunction\s+tryHold\b|\btryHold\s*=\s*(?:async\s*)?\(/;
+  const DEFINES_DEAD = /\bfunction\s+claimantMeasuredDead\b|\bclaimantMeasuredDead\s*=\s*\(/;
+
+  it('CONTROL: the patterns see a definition and pass over a call and a comment line', () => {
+    expect(DEFINES_TRY.test('  private async tryHold(')).toBe(true);
+    expect(DEFINES_TRY.test('await this.tryHold(r, dialog, actions, recs)')).toBe(false);
+    expect(DEFINES_DEAD.test('export function claimantMeasuredDead(v: ClaimantVerdict): boolean {')).toBe(true);
+    expect(stallCodeText('// private async tryHold(\nconst x = 1;')).not.toMatch(DEFINES_TRY);
+  });
+
+  it('tryHold is defined in server/src/watch.ts and nowhere else', () => {
+    expect(holders(DEFINES_TRY)).toEqual(['server/src/watch.ts']);
+  });
+
+  it("watch.ts mints only inside tryHold, reads parentOfSession only there, and calls it from all three raise paths", () => {
+    const watch = stallCode(path.join(ccrcRoot, 'server/src/watch.ts'));
+    const start = watch.search(/\basync\s+tryHold\s*\(/);
+    const end = watch.indexOf('\n  }\n', start);
+    expect(start).toBeGreaterThan(-1);
+    const body = watch.slice(start, end);
+    const rest = watch.slice(0, start) + watch.slice(end);
+    expect(body.match(/\bthis\.hold\(/g) ?? []).toHaveLength(1);
+    expect(rest).not.toMatch(/\bthis\.hold\(/);
+    expect(body).toMatch(/\.parentOfSession\(/);
+    expect(rest).not.toMatch(/\.parentOfSession\(/);
+    expect(rest.match(/\bthis\.tryHold\(/g) ?? []).toHaveLength(3);
+    expect(body).toMatch(/\bclaimantMeasuredDead\(/);
+  });
+
+  it('claimantMeasuredDead is defined in server/src/coord/reclaim.ts and read by the dead-coordinator sweep', () => {
+    expect(holders(DEFINES_DEAD)).toEqual(['server/src/coord/reclaim.ts']);
+    const watch = stallCode(path.join(ccrcRoot, 'server/src/watch.ts'));
+    expect(watch).toMatch(/const dead = ids\.filter\(\(id\) => claimantMeasuredDead\(/);
+  });
+});
+
 // D-5370 (`stop-worker-at-run-done`). APPENDED, for the reason the stall-watch blocks above state. The stop-done lane
 // ships LIVE (the operator's ruling), and its kill switch `$REG/stop-done-disabled` is the operator's to touch and
 // remove BY HAND, beside `stall-watch-disabled` — so no line of shell names it, its one TS holder on a code line is its
