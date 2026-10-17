@@ -887,6 +887,7 @@
    .sess-ask-state (Task 19) joins already knowing better — no new pair for
    design/contrast-check.mjs: it joins the pair this rule already declares. */
 .sess-line--active .sess-held,
+.sess-line--active .sess-restart,
 .sess-line--active .sess-lifecycle,
 .sess-line--active .sess-swapblocked,
 .sess-line--active .sess-stranded,
@@ -1385,6 +1386,20 @@
   flex: none;
 }
 
+/* D-5237: "restarted · out of memory · 3m ago", for an hour after a recorded
+   process end. The .sess-held register (mono, ink-tertiary) and, like it, a
+   cell that truncates rather than pushing the row: `overflow: hidden` lets it
+   shrink below its text at phone width, the full words staying in `title`.
+   Its truncating mono shape is the grouped rule of the session line's
+   truncating mono cells (below), so the shape census sees one rule; its ink
+   is its own rule, not a member of .sess-held's colour group, so that
+   grandfathered selector stays as it is, and design/audit.mjs grounds it on
+   the project card. The selected row is answered by the achromatic group
+   above. */
+.sess-restart {
+  color: var(--ink-tertiary);
+}
+
 /* The program's claim, as its own meta cell — reuses .sess-ask's
    ink-tertiary token (below), so it needs no new contrast pair. Truncates
    like .sess-acct next door; the reason can run long ("program:x wave:2/4")
@@ -1404,16 +1419,18 @@
    what takes these cells out of .sess-meta's inheritance, so each one also
    has to be named in .sess-line--active's achromatic group above — see the
    comment on that rule for the ratios this cost while they were not. */
-/* ONE TRUNCATING MONO CELL, six slots of the session line. The four
+/* ONE TRUNCATING MONO CELL, seven slots of the session line. The four
    declarations under the colour are the same four `.sess-stranded` and
    `.sess-acct` each declared for themselves — siblings in one component, so
    they are written once here and each slot keeps only the ink that makes it
-   what it is. `.sess-acct` keeps none: its hue comes from the account chip. */
+   what it is (`.sess-restart`, D-5237, keeps its own ink rule above). `.sess-acct`
+   keeps none: its hue comes from the account chip. */
 .sess-held,
 .sess-lifecycle,
 .sess-swapblocked,
 .sess-ask-state,
 .sess-stranded,
+.sess-restart,
 .sess-acct {
   font-family: var(--family-mono);
   white-space: nowrap;

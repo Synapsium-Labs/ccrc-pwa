@@ -1142,3 +1142,20 @@ describe('Escape that closes a sheet never interrupts (D-5235)', () => {
     expect(p.onInterrupt).not.toHaveBeenCalled();
   });
 });
+
+// `interrupt-and-restart-causes-recorded` (D-5237; plan 2026-10-16-working-state-and-interruptions Task 8): the
+// header names a recent process end as the card does, for an hour.
+describe('a recent restart is named (D-5237)', () => {
+  const row = (over: Partial<FleetSession> = {}): FleetSession => baseSession({
+    id: 'lane-a:project-a', project: 'project-a', ...over,
+  });
+  it('an oom end 3 minutes ago reads `restarted · out of memory · 3m ago`', () => {
+    renderHeader({ status: 'idle', session: row({ lastEnd: { at: Date.now() - 3 * 60_000 - 5_000, cause: 'oom' } }) });
+    const chip = screen.getByText('restarted · out of memory · 3m ago');
+    expect(chip.closest('[data-restart]')?.getAttribute('data-restart')).toBe('oom');
+  });
+  it('after an hour, or with no end, nothing', () => {
+    renderHeader({ status: 'idle', session: row({ lastEnd: { at: Date.now() - 61 * 60_000, cause: 'oom' } }) });
+    expect(screen.queryByText(/^restarted · /)).not.toBeInTheDocument();
+  });
+});
