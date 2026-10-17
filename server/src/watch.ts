@@ -60,7 +60,7 @@ import {
   stallFailedVerdict, stallLastCheck, stallMailClass, stallMailStuckVerdicts, stallMarkUnreadable,
   stallNotifyDelivery, stallOrphanDCandidate, stallOrphanDVerdict, stallOrphanEVerdict, stallPushRoute, stallPushText, stallReportKind, stallReportMail, stallReportTitle,
   stallRunMail, stallSessionMail, stallNewestDelivery, stallSessionMarkerVerdict, stallSessionPushText, stallSubjects,
-  stallReactivation, stallVerdict, stallW2ReportMail,
+  stallReactivation, stallVerdict, stallW2ReportMail, turnMarkStale,
   type AskRowFact, type HookAskFact, type HookRawFact, type LiveWordRead, type StallArming,
   type StallInput, type StallNotice, type StallNotify, type StallRunRow, type StallSessionInput, type StallSubject,
   type StallVerdict, type StallWorker, type TurnMarkRead,
@@ -5961,27 +5961,36 @@ export class FleetWatcher {
   }
 
   /** D-5233: did a main Stop fall inside this busy stretch? Asked only at a busy→idle edge, so the reads are rare. The
-   *  turn marker is read for this id only, with the row's identity, and judged stale against the live process's start
-   *  (a second live read: the tick's row carries no `startedAt`). A live read that fails here leaves the marker
-   *  unjudgeable, so it counts as `unmeasured` and pushes nothing. An `absent` marker falls back to the hookstate the
-   *  tick already holds. The rule is `finishedAfter`'s (L1). */
+   *  turn marker is read for this id only, with the row's identity. Its `absent`, `malformed` and `foreign` readings
+   *  need no live read, so a session with no live-status file (`no-state`: an older build, or one that has not
+   *  published yet) still reaches the `absent` fallback. A readable marker is then judged stale against the live
+   *  process's start (a second live read: the tick's row carries no `startedAt`); with no pane, no config dir, or a
+   *  live read that is `no-state` or `unmeasured`, that start is unknown, so the marker is unjudgeable, counts as
+   *  `unmeasured` and pushes nothing. An `absent` marker falls back to the hookstate the tick already holds. The rule
+   *  is `finishedAfter`'s (L1). */
   private async finishedEvidence(id: string, wrapper: string, records: readonly SessionRecord[],
     panePids: ReadonlyMap<string, number | null>, busySince: number): Promise<boolean> {
+    const hs = this.hookStates.get(id);
+    const mark = await this.finishedMark(id, wrapper, records, panePids);
+    return finishedAfter(mark, hs === undefined ? null : { state: hs.state, event: hs.event, updatedAt: hs.updatedAt }, busySince);
+  }
+
+  /** `finishedEvidence`'s marker read: the shape and identity first, with no staleness judgement; a readable marker
+   *  then needs the live process's start, or it is `unmeasured`. */
+  private async finishedMark(id: string, wrapper: string, records: readonly SessionRecord[],
+    panePids: ReadonlyMap<string, number | null>): Promise<TurnMarkRead> {
     const rec = records.find((r) => r.id === id);
     const ident = rec === undefined ? null : measuredIdentity(rec);
+    if (ident === null) return { ok: false, reason: 'unmeasured' };
+    const mark = await readTurnMarkMeasured(this.deps.io, this.deps.cfg.registryDir, id, ident.uuid, null);
+    if (!mark.ok) return mark;
     const pid = panePids.get(id) ?? null;
     const cfgDir = configDirFor(this.deps.cfg, wrapper);
-    let mark: TurnMarkRead;
-    if (ident === null || !pid || !cfgDir) {
-      mark = { ok: false, reason: 'unmeasured' };
-    } else {
-      const live = await readLiveStateMeasured(this.deps.io, cfgDir, pid);
-      mark = live.ok
-        ? await readTurnMarkMeasured(this.deps.io, this.deps.cfg.registryDir, id, ident.uuid, { startedAt: live.state.startedAt })
-        : { ok: false, reason: 'unmeasured' };
-    }
-    const hs = this.hookStates.get(id);
-    return finishedAfter(mark, hs === undefined ? null : { state: hs.state, event: hs.event, updatedAt: hs.updatedAt }, busySince);
+    if (!pid || !cfgDir) return { ok: false, reason: 'unmeasured' };
+    const live = await readLiveStateMeasured(this.deps.io, cfgDir, pid);
+    if (!live.ok) return { ok: false, reason: 'unmeasured' };
+    // As `readTurnMarkMeasured` judges it: a live file with no process start cannot vouch for the marker.
+    return live.state.startedAt === null || turnMarkStale(mark, live.state.startedAt) ? { ok: false, reason: 'stale' } : mark;
   }
 
   /** Read 2: the turn marker. Judged for staleness against the live process when the live file was read; with no

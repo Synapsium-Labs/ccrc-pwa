@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { Bus } from '../src/bus.js';
 import type { Runner } from '../src/exec.js';
@@ -100,6 +100,8 @@ interface Fixture {
   sent: PushPayload[];
   /** Rewrite the live file: `status` stamped at `at`, the process started at `startedAt`. */
   live: (status: 'busy' | 'idle', at: number, startedAt?: number) => void;
+  /** Remove the live file: the read is `no-state` (an older build, or one that has not published yet). */
+  noLive: () => void;
   mark: (fields: Record<string, unknown>) => void;
   markRaw: (content: string) => void;
   markUnreadable: () => void;
@@ -122,6 +124,7 @@ function fixture(busyAt: number, startedAt: number): Fixture {
     }));
   };
   live('busy', busyAt);
+  const noLive = (): void => rmSync(path.join(cfgDir, 'sessions', `${PID}.json`));
   const runner: Runner = async (_cmd, args) => {
     if (args[0] === 'has-session') return { code: 0, stdout: '', stderr: '' };
     if (args[0] === 'list-panes') return { code: 0, stdout: `${PID}\n`, stderr: '' };
@@ -137,6 +140,7 @@ function fixture(busyAt: number, startedAt: number): Fixture {
     tick: () => w.tick(),
     sent,
     live,
+    noLive,
     mark: (over) => writeFileSync(markPath, JSON.stringify({
       v: 1, sessionId: UUID, state: 'done', event: 'Stop', at: busyAt + SEC, turnAt: busyAt + SEC / 2, stopAt: busyAt + SEC,
       bg: 0, bgKinds: '', bgIds: '', err: null, restartAt: null, lostBg: 0, lostKinds: '', lostIds: '', ...over,
@@ -226,6 +230,24 @@ describe('the watcher pushes Finished only when a main Stop falls inside the bus
     await f.tick();
     f.hookstate('done', 'PostCompact', t0 + 2 * SEC);
     f.live('idle', Date.now());
+    await f.tick();
+    expect(finished(f.sent)).toHaveLength(0);
+  });
+
+  it('(f) no live file at the edge (`no-state`): an absent marker still reaches the hookstate fallback and pushes', async () => {
+    const { f, t0 } = setup();
+    await f.tick();
+    f.hookstate('done', 'Stop', t0 + 2 * SEC);
+    f.noLive();
+    await f.tick();
+    expect(finished(f.sent)).toHaveLength(1);
+  });
+
+  it('(d) no live file at the edge: a readable marker cannot be judged against a process start, so no push', async () => {
+    const { f, t0 } = setup();
+    await f.tick();
+    f.mark({ turnAt: t0 + SEC, stopAt: t0 + 2 * SEC, at: t0 + 2 * SEC });
+    f.noLive();
     await f.tick();
     expect(finished(f.sent)).toHaveLength(0);
   });
