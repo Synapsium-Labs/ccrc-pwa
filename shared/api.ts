@@ -10072,6 +10072,19 @@ export interface CollectLaneConfirmRequired {
   };
 }
 
+/** The 200 answer of the three answer routes (`POST /api/sessions/:id/dialog`, `/dialog/text`, `/dialog/multi`):
+ *  the screen the pane settled on after the answer's last key (decision `ask-answer-returns-next-screen`).
+ *  - `next` a Dialog: the pane moved to that menu (the next question, or the review screen an ask ends on);
+ *  - `next: null`: no menu is on screen any more (the ask was submitted or declined);
+ *  - `next` absent: the pane had not settled on another screen within the route's budget, or the route predates this
+ *    field. The caller then waits for the session stream's next `dialog` frame, as it always did.
+ *  Additive: a client that ignores it keeps the old behaviour. The answering sheet applies it at once, so the next
+ *  screen never waits on the stream's 2 s poll, or on a poll that captured nothing (the 2026-10-16 report). */
+export interface DialogAnswered {
+  readonly ok: true;
+  readonly next?: Dialog | null;
+}
+
 /** Every refusal `POST /api/sessions/:id/dialog` answers with (`answerDialog`, `server/src/inject/send.ts`), each a 409.
  *  Spelled once, as a total table's keys, and the list derived: a code that leaves the union and stays here, or joins it
  *  without a row here, is a compile error.

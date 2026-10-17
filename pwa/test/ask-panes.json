@@ -1098,5 +1098,81 @@
     "selectedIndex": 1,
     "parsed": false,
     "body": "Select the tools to allow"
+  },
+  "cc296-ask-2q-long-q1": {
+    "id": "a9d0d51f2f4f2bde84a2360b30f4edcf67efb7a0",
+    "title": "│ cost about two hundred pounds and needs a flat spot beside the shed, which the parish council must approve first. Until then, how should the weekly watering rota cope?",
+    "body": "←  ☐ Water rota  ☐ Table supply  ✔ Submit  →\n\n│ The garden club waters the north beds from one shared tank. On hot weeks the tank runs dry by Thursday, and the volunteers on the late shift find nothing left for the tomato rows near the fence. A second tank would\n│ cost about two hundred pounds and needs a flat spot beside the shed, which the parish council must approve first. Until then, how should the weekly watering rota cope?",
+    "options": [
+      {
+        "index": 1,
+        "label": "Split shifts (Recommended)",
+        "description": "Early shifts water only the bean rows, so the tomato rows keep half the tank. Each shift then logs the gauge reading on the chart."
+      },
+      {
+        "index": 2,
+        "label": "Wait for the second tank",
+        "description": "Keep the current rota and ask the council for a decision. The late shift may still find the tank empty for weeks."
+      },
+      {
+        "index": 3,
+        "label": "Type something."
+      },
+      {
+        "index": 4,
+        "label": "Chat about this"
+      }
+    ],
+    "selectedIndex": 1,
+    "parsed": true
+  },
+  "cc296-ask-2q-long-q2": {
+    "id": "be6a2df7697b27d9b0f3feaab81f263d12c7ac86",
+    "title": "│ own four tables, but the swap usually fills nine. Two neighbouring groups have offered to lend theirs if we collect them on Friday evening in a hired van. Which arrangement should the club confirm with the hall?",
+    "body": "←  ☒ Water rota  ☐ Table supply  ✔ Submit  →\n\n│ The spring seed swap is booked at the village hall on the second Saturday in April. The hall committee now asks every group to bring its own folding tables, since theirs went to the school fete and never came back. We\n│ own four tables, but the swap usually fills nine. Two neighbouring groups have offered to lend theirs if we collect them on Friday evening in a hired van. Which arrangement should the club confirm with the hall?",
+    "options": [
+      {
+        "index": 1,
+        "label": "Borrow and transport (Recommended)",
+        "description": "Accept both offers and book a van for Friday evening. Two members load the tables after work, and they go back on Sunday before the church service."
+      },
+      {
+        "index": 2,
+        "label": "Move the swap outdoors",
+        "description": "Hold the swap on the green beside the hall, where the stalls can use the picnic benches. Rain would mean a very late cancellation."
+      },
+      {
+        "index": 3,
+        "label": "Hire five big tables",
+        "description": "Pay the hire shop for five tables, delivered on Saturday at dawn."
+      },
+      {
+        "index": 4,
+        "label": "Type something."
+      },
+      {
+        "index": 5,
+        "label": "Chat about this"
+      }
+    ],
+    "selectedIndex": 1,
+    "parsed": true
+  },
+  "cc296-ask-2q-long-review": {
+    "id": "021c8be8e7a1e797736127535bdbee9ea622c4cb",
+    "title": "←  ☒ Water rota  ☒ Table supply  ✔ Submit  →",
+    "body": "Review your answers\n\n │ ● The garden club waters the north beds from one shared tank. On hot weeks the tank runs dry by Thursday, and the volunteers on the late shift find nothing left for the tomato rows near the fence. A second tank would\n │   cost about two hundred pounds and needs a flat spot beside the shed, which the parish council must approve first. Until then, how should the weekly watering rota cope?\n   → Split shifts (Recommended)\n │ ● The spring seed swap is booked at the village hall on the second Saturday in April. The hall committee now asks every group to bring its own folding tables, since theirs went to the school fete and never came back.\n │   We own four tables, but the swap usually fills nine. Two neighbouring groups have offered to lend theirs if we collect them on Friday evening in a hired van. Which arrangement should the club confirm with the hall?\n   → Borrow and transport (Recommended)\n\nReady to submit your answers?",
+    "options": [
+      {
+        "index": 1,
+        "label": "Submit answers"
+      },
+      {
+        "index": 2,
+        "label": "Cancel"
+      }
+    ],
+    "selectedIndex": 1,
+    "parsed": true
   }
 }

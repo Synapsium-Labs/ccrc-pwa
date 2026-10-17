@@ -75,3 +75,46 @@ export const REVIEW_CANCEL_ROW_RE = /^cancel$/i;
 /** The review's heading, the first line under its tab row; gone from the capture when the review is too tall
  *  (`cc300-ask-review-4q-long`). Tested against a trimmed line. */
 export const REVIEW_HEADING_RE = /^review your answers$/i;
+
+/** The tab row a multi-question ask paints at the top of its box: `←  ☒ Caching  ☐ Tracing  ✔ Submit  →` (measured on
+ *  2.1.296, 2.1.300 and 2.1.302). Tested against a trimmed line. The active tab is marked by colour alone, so a plain
+ *  capture cannot say which tab is up. */
+export const ASK_TAB_ROW_RE = /^←.*→$/;
+
+/** The review screen's two rows, as the option indexes the pane printed them under (`Submit answers`, `Cancel`). */
+export interface ReviewRows {
+  readonly submit: number;
+  readonly cancel: number;
+}
+
+/** What `reviewRows` reads off a parsed pane menu: `shared/api.ts`'s `Dialog`, structurally (this file imports nothing). */
+export interface ReviewScreen {
+  readonly parsed: boolean;
+  readonly options: readonly { readonly index: number; readonly label: string }[];
+  readonly body?: string;
+  readonly raw: string;
+}
+
+/**
+ * Is a parsed pane menu the review screen an ask ends on, and which of its rows are Submit and Cancel? Null when it is
+ * not one. Two arms:
+ * - strict (D-5089): exactly two rows, `Submit answers` then `Cancel`, under a body whose last line is the ready line
+ *   (`REVIEW_READY_RE`). Every recorded review reads this way.
+ * - lenient (decision `ask-review-lenient-arm`): one row `Submit answers` and one row `Cancel`, wherever they sit, on a
+ *   screen that paints the ready line. A review with anything numbered painted after its rows (a rule and a status row
+ *   under the box, which `parseDialog` reads as more options) or a changed body tail is still a review, and the sheet
+ *   still offers Submit. The rows are found by label, never by position.
+ * The ready line is required by both, so a question whose own options read `Submit answers` and `Cancel` is never taken
+ * for the review. Unparsed menus are never one.
+ */
+export function reviewRows(dialog: ReviewScreen | null): ReviewRows | null {
+  if (dialog === null || !dialog.parsed) return null;
+  const submit = dialog.options.filter((o) => REVIEW_SUBMIT_ROW_RE.test(o.label.trim()));
+  const cancel = dialog.options.filter((o) => REVIEW_CANCEL_ROW_RE.test(o.label.trim()));
+  if (submit.length !== 1 || cancel.length !== 1) return null;
+  const rows = { submit: submit[0]!.index, cancel: cancel[0]!.index };
+  const strict = dialog.options.length === 2 && rows.submit === 1 && rows.cancel === 2
+    && REVIEW_READY_RE.test((dialog.body ?? '').trimEnd());
+  if (strict) return rows;
+  return dialog.raw.split('\n').some((l) => REVIEW_READY_RE.test(l.trim())) ? rows : null;
+}

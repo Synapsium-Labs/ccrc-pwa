@@ -504,6 +504,30 @@ describe('write routes', () => {
     await app.close();
   });
 
+  // Decision `ask-answer-returns-next-screen` (the 2026-10-16 report). A recorded Claude Code 2.1.296 ask in unrelated made-up content:
+  // its last question answered, the pane moves to the review, and the route answers with that screen and hands it to
+  // every open stream of the session (`answered:<id>`).
+  it('POST dialog answers with the screen the pane moved to, and hands it to the session\'s streams', async () => {
+    const q2 = askPane('cc296-ask-2q-long-q2.txt');
+    const review = askPane('cc296-ask-2q-long-review.txt');
+    const { app, bus } = await makeApp([q2, q2, review]);
+    const seen: unknown[] = [];
+    bus.on(`answered:${ID}`, (next) => seen.push(next));
+    const res = await app.inject({
+      method: 'POST', url: `/api/sessions/${ID}/dialog`, payload: { dialogId: parseDialog(q2)!.id, optionIndex: 1 },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ ok: true, next: parseDialog(review) });
+    expect(seen).toEqual([parseDialog(review)]);
+    // A refusal hands nothing on.
+    const stale = await app.inject({
+      method: 'POST', url: `/api/sessions/${ID}/dialog`, payload: { dialogId: 'deadbeef', optionIndex: 1 },
+    });
+    expect(stale.statusCode).toBe(409);
+    expect(seen).toHaveLength(1);
+    await app.close();
+  });
+
   // D-5048. Recorded Claude Code 2.1.300 screens: "Which features do you want?" with Logging ticked, then with Logging
   // and Tracing ticked (the cursor on row 1 both times), then the next question, "Which tools?", once Tab committed it.
   const MULTI_1 = askPane('cc300-ask-multiselect-digit1.txt');
@@ -518,7 +542,8 @@ describe('write routes', () => {
       payload: { dialogId: parseDialog(MULTI_1)!.id, optionIndexes: [1, 3] },
     });
     expect(res.statusCode).toBe(200);
-    expect(res.json()).toEqual({ ok: true });
+    // Decision `ask-answer-returns-next-screen`: the 200 carries the screen the commit moved to.
+    expect(res.json()).toEqual({ ok: true, next: parseDialog(askPane('cc300-ask-multiselect-submit-open.txt')) });
     expect(sendKeysCalls(calls)).toEqual([
       ['tmux', 'send-keys', '-t', `=cc-${ID}:`, '3'],
       ['tmux', 'send-keys', '-t', `=cc-${ID}:`, 'Tab'],
