@@ -3959,7 +3959,8 @@ waitby=""
 # empty, which both arms read as "nothing to carry". Lines printed before a later error still come out.
 # `background-aware-working` (D-5231): two more lines, appended LAST, read D-5231's delegated pair for the subagent arm's
 # carry: `bgDelegated` prints only as a non-negative integer, `bgDelegatedKinds` only as a string of at most 200 bytes of
-# `a-z`, `_`, `-` and `,` (no regex, so a jq without Oniguruma reads it too); either one failing carries neither.
+# `a-z`, `_`, `-` and `,` (no regex, so a jq without Oniguruma reads it too); either one failing carries neither (the
+# count is dropped with a malformed kinds value, and the kinds with a malformed count).
 fr_state="" fr_by="" fr_ask="" fr_int="" fr_upd="" fr_ev="" fr_bgd="" fr_bgdk=""
 _hook_fresh_read() {
   fr_state="" fr_by="" fr_ask="" fr_int="" fr_upd="" fr_ev="" fr_bgd="" fr_bgdk=""
@@ -3972,8 +3973,10 @@ _hook_fresh_read() {
      (.updatedAt | if type == "number" then floor | tostring else "" end),
      (.event | if type == "string" then keep(alpha) else "" end),
      (.bgDelegated | if type == "number" and . >= 0 and . == floor then floor | tostring else "" end),
-     (.bgDelegatedKinds | if type == "string" and length <= 200 and (explode | all(. == 44 or . == 45 or . == 95 or (. >= 97 and . <= 122))) then . else "" end)' "$f" 2>/dev/null)
-  [[ "$fr_bgd" =~ ^[0-9]+$ ]] || fr_bgd=""
+     (.bgDelegatedKinds | if type == "string" and length <= 200 and (explode | all(. == 44 or . == 45 or . == 95 or (. >= 97 and . <= 122))) then "k" + . else "" end)' "$f" 2>/dev/null)
+  # Both or neither: a valid kinds value arrives behind a `k` marker (a measured zero's "" is valid and prints "k"),
+  # so a failed one (empty, no marker) is told apart from it and clears the count too.
+  if [[ "$fr_bgd" =~ ^[0-9]+$ && "$fr_bgdk" == k* ]]; then fr_bgdk="${fr_bgdk#k}"; else fr_bgd="" fr_bgdk=""; fi
 }
 # The stamp a carried wait keeps. A MAIN-thread wait (fresh state `waiting`, not raised by a subagent) that a subagent
 # event writes over keeps the file's own `updatedAt` and `event` (the wait's START, which the attention bucket, the ask

@@ -1012,6 +1012,12 @@ describe('delegated background work (D-5231)', () => {
     renderHeader({ status: 'busy', session: row({ bucket: 'done' }) });
     expect(screen.queryByText(/in background/)).not.toBeInTheDocument();
     expect(screen.getByRole('img', { name: 'finished' })).toBeInTheDocument();
+    // Nor the kinds in a title: the row's `background` is still set (fleet.ts does not clear it once the live file
+    // goes idle after the Stop), so only the `bucket === 'working'` gate keeps a stale title off the done line.
+    const line = document.querySelector('.status-line');
+    expect(line).not.toBeNull();
+    expect(line!.textContent).toMatch(/^done/);
+    expect(line!.hasAttribute('title')).toBe(false);
   });
 
   // The pulse rule is tested directly: `ChatList` renders through Virtuoso, which cannot measure in jsdom, so a

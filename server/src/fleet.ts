@@ -29,8 +29,8 @@ import { ASK_HELD_CHIP_MAX_MS } from './askwindow.js';
 
 /** `FleetSession.askSummary`'s ceiling — a fleet card row, not a transcript. */
 const ASK_SUMMARY_MAX_LEN = 80;
-/** D-5231: the hook events whose `done` can hold the delegated pair — the main
- *  `Stop` that writes it, and the two subagent events that carry it. */
+/** D-5231, D-5272: the hook events whose `done` can hold the delegated pair —
+ *  the main `Stop` that writes it, and the two subagent events that carry it. */
 const BACKGROUND_CARRIER_EVENTS: ReadonlySet<string> = new Set(['Stop', 'SubagentStart', 'SubagentStop']);
 
 /**
@@ -746,7 +746,7 @@ export async function assembleFleet(
       // A subagent event after that Stop carries the pair but, until D-5232's
       // gated arm keeps the main event, rewrites `event`: so the `done` may
       // read `SubagentStart`/`SubagentStop`, the two events that carry it
-      // (`BACKGROUND_CARRIER_EVENTS`); no other event writes the pair.
+      // (`BACKGROUND_CARRIER_EVENTS`, D-5272); no other event writes the pair.
       background: liveCoversWorkflows && hs !== null && hs.state === 'done'
         && hs.event !== null && BACKGROUND_CARRIER_EVENTS.has(hs.event)
         && hs.background !== undefined && hs.background.count > 0

@@ -170,4 +170,33 @@ describe('the Stop records delegated background work (D-5231)', () => {
     expect(readState()).toMatchObject({ state: 'done' });
     expect(pair()).toEqual({ bgDelegated: 3, bgDelegatedKinds: 'subagent,teammate,workflow' });
   });
+
+  it('a SubagentStop carries a measured zero (count 0, kinds "")', () => {
+    run(stopWith([]));
+    expect(pair()).toEqual({ bgDelegated: 0, bgDelegatedKinds: '' });
+    run(subagentStop);
+    expect(pair()).toEqual({ bgDelegated: 0, bgDelegatedKinds: '' });
+  });
+
+  /** The file the Stop wrote, with the delegated pair overwritten (a damaged or hand-edited file). */
+  const damage = (over: Record<string, unknown>): void => {
+    fs.writeFileSync(stateFile(), JSON.stringify({ ...readState(), ...over }));
+  };
+
+  it.each([['BAD!'], [null], [7], ['x'.repeat(201)]])(
+    'a malformed kinds value (%j) before a SubagentStop carries neither field, not the count alone', (kinds) => {
+      run(fiveKinds());
+      damage({ bgDelegatedKinds: kinds });
+      run(subagentStop);
+      expect(readState()).toMatchObject({ state: 'done' });
+      expect(pair()).toEqual(NEITHER);
+    });
+
+  it.each([[-1], [1.5], ['3'], [null]])(
+    'a malformed count (%j) before a SubagentStop carries neither field, not the kinds alone', (count) => {
+      run(fiveKinds());
+      damage({ bgDelegated: count });
+      run(subagentStop);
+      expect(pair()).toEqual(NEITHER);
+    });
 });
