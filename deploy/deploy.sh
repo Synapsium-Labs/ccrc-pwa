@@ -239,10 +239,10 @@ install_ccd_pair() {
 # this runs the deploy has verifiably succeeded, and a nonzero exit here
 # would report failure for services that are live and green.
 prune_backups() {   # keep the newest $CCRC_BACKUP_KEEP (default 10) timestamped backups
-  local keep="${CCRC_BACKUP_KEEP:-10}" v; [[ "$keep" =~ ^[0-9]{1,4}$ ]] || { v="${keep:0:32}"; [ "${#keep}" -le 32 ] || v="$v..."; echo "deploy: warning: CCRC_BACKUP_KEEP='${v//[![:print:]]/?}' is not a whole number from 0 to 9999 — nothing pruned" >&2; return 1; }; ! [[ "$keep" =~ ^0+$ ]] || { echo "deploy: warning: CCRC_BACKUP_KEEP='$keep' keeps no backup, so the prune would remove every one — nothing pruned" >&2; return 1; }   # D-5142: ccd/ccrc's _keep_ok and _keep_why, spelled again (this file never sources ccd/ccrc); D-5144: an all-zeros KEEP is refused too, a separate test on this same line (lines keep their places)
+  local keep="${CCRC_BACKUP_KEEP:-10}" v; [[ "$keep" =~ ^[0123456789]{1,4}$ ]] || { v="${keep:0:32}"; [ "${#keep}" -le 32 ] || v="$v..."; echo "deploy: warning: CCRC_BACKUP_KEEP='${v//[![:print:]]/?}' is not a whole number from 0 to 9999 — nothing pruned" >&2; return 1; }; ! [[ "$keep" =~ ^0+$ ]] || { echo "deploy: warning: CCRC_BACKUP_KEEP='$keep' keeps no backup, so the prune would remove every one — nothing pruned" >&2; return 1; }   # D-5142: ccd/ccrc's _keep_ok and _keep_why, spelled again (this file never sources ccd/ccrc); D-5144: an all-zeros KEEP is refused too, a separate test on this same line (lines keep their places)
   "${SSH[@]}" "$BOX" "cd ~/ccrc-backups 2>/dev/null || exit 0
     ls -d [0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]-[0-9][0-9][0-9][0-9][0-9][0-9] 2>/dev/null \
-      | sort | head -n -$keep | xargs -r rm -rf --"
+      | sort | head -n -$keep | grep -vxF -- '$TS' | xargs -r rm -rf --"
 }
 
 # The build stamp: what a box is RUNNING, stated by the box itself. Computed
@@ -761,7 +761,7 @@ if [ "$TARGET" = "agent" ]; then
   # condition on this box, which is why `ccd` carries CCD_DISK_FLOOR_GB) or an
   # ssh that drops — leaves a TRUNCATED unit at its live name. `set -euo
   # pipefail` then aborts the deploy before AGENT_CMD's `daemon-reload`, which
-  # sounds like containment and is not: `ccd`'s own `_svc_enable`/
+  # sounds like containment and is not: `ccd`'s own `_svc_enable_now`/
   # `_svc_disable_now` reload on the next session start or stop, and on a box
   # with ~20 live sessions that is minutes away.
   #

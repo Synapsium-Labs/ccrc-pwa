@@ -931,7 +931,7 @@ describe('the verification is actually wired into the deploy, and can observe a 
     // or a dropped ssh) leaves a TRUNCATED unit at its live name.
     //
     // "The deploy aborts before daemon-reload" is not containment: `ccd`'s own
-    // `_svc_enable`/`_svc_disable_now` reload on the next session start or
+    // `_svc_enable_now`/`_svc_disable_now` reload on the next session start or
     // stop. And the truncation that PARSES is worse than the one that fails —
     // `claude-session@.service` carries `KillMode=process` as the last key of
     // its `[Service]` section, six lines below `ExecStart=`, so a file cut in
@@ -2831,7 +2831,8 @@ describe('deploy.sh refuses what it cannot measure: the prune KEEP and the sweep
   /** `prune_backups` out of deploy.sh, run with `SSH` a function that records the remote command and does nothing.
    *  `ssh` and `scp` on PATH are recording poisons, proven to resolve before the spawn: a prune that ever reached for
    *  a real binary would write `poison`, and every row asserts it is empty. */
-  const runPrune = (keep: string | undefined): { code: number; stderr: string; remote: string | null; poison: string } => {
+  const PRUNE_TS = '20261231-235959';   // the deploy's own `$TS`: digits and one dash, from `date +%Y%m%d-%H%M%S`
+  const runPrune = (keep: string | undefined, locale: NodeJS.ProcessEnv = { LANG: 'C' }): { code: number; stderr: string; remote: string | null; poison: string } => {
     const fn = /prune_backups\(\) \{([\s\S]*?)\n\}/.exec(deploySh);
     expect(fn, 'deploy.sh has no prune_backups() helper').toBeTruthy();
     const home = mkTmp('ccrc-agent-prunekeep-');
@@ -2844,11 +2845,11 @@ describe('deploy.sh refuses what it cannot measure: the prune KEEP and the sweep
     }
     const script = [
       `ssh_stub() { printf '%s' "$2" > ${JSON.stringify(rec)}; }`,
-      'SSH=(ssh_stub); BOX=box.invalid',
+      `SSH=(ssh_stub); BOX=box.invalid; TS=${PRUNE_TS}`,
       `prune_backups() {${fn![1]!}\n}`,
       'prune_backups',
     ].join('\n');
-    const env: NodeJS.ProcessEnv = { PATH: `${bin}${path.delimiter}${process.env.PATH ?? ''}`, HOME: home, LANG: 'C' };
+    const env: NodeJS.ProcessEnv = { PATH: `${bin}${path.delimiter}${process.env.PATH ?? ''}`, HOME: home, ...locale };
     if (keep !== undefined) env.CCRC_BACKUP_KEEP = keep;
     assertStubsResolve(env, bin, ['ssh', 'scp']);
     const r = spawnSync('bash', ['-c', script], { encoding: 'utf8', timeout: 15_000, env });
@@ -2877,7 +2878,7 @@ describe('deploy.sh refuses what it cannot measure: the prune KEEP and the sweep
     expect(r.code, r.stderr).toBe(0);
     expect(r.stderr).toBe('');
     expect(r.poison, 'a real ssh or scp was reached').toBe('');
-    expect(r.remote).toContain(`| sort | head -n -${n} | xargs -r rm -rf --`);
+    expect(r.remote).toContain(`| sort | head -n -${n} | grep -vxF -- '${PRUNE_TS}' | xargs -r rm -rf --`);   // D-5326 changed this pin
   }, 30_000);
 
   it('D1c: the KEEP test is ccd/ccrc\'s `_keep_ok`, spelled a second time on purpose and held equal here (D-5142)', () => {
@@ -2893,23 +2894,38 @@ describe('deploy.sh refuses what it cannot measure: the prune KEEP and the sweep
     expect(body, 'ccd/ccrc lost _keep_ok').toBeTruthy();
     expect(theirs, '_keep_ok no longer tests a regex').toBeTruthy();
     expect(ours![1]).toBe(theirs![1]);
-    expect(ours![1]).toBe('^[0-9]{1,4}$');
+    expect(ours![1]).toBe('^[0123456789]{1,4}$');
   }, 30_000);
+
+  // R34 (wave 17, D-5320): under a UTF-8 locale bash's `=~` RANGE `[0-9]` accepts non-ASCII decimal digits, and
+  // deploy.sh then SENT `head -n -<U+0663>` to the box (measured at planning: rc 0, the remote command carried it).
+  // The class is enumerated now. The row measures its own premise first: where this bash and locale do not
+  // reproduce the range (C.UTF-8, a box without en_US.UTF-8, BSD regcomp), it skips with the reason, never passes.
+  const UTF8 = { LC_ALL: 'en_US.UTF-8' };
+  const rangeAccepts = spawnSync('bash', ['-c', `[[ $'\\xd9\\xa3' =~ ^[0-9]{1,4}$ ]]`], { env: { ...UTF8, PATH: process.env.PATH ?? '' } }).status === 0;
+  it.skipIf(!rangeAccepts).each([['٣'], ['7٣'], ['５']])(
+    'D1d: CCRC_BACKUP_KEEP=%j (a non-ASCII digit) is refused under en_US.UTF-8: one warning, rc 1, nothing sent (D-5320)', (keep) => {
+      const r = runPrune(keep, UTF8);
+      expect(r.code).toBe(1);
+      expect(r.stderr).toMatch(/^deploy: warning: CCRC_BACKUP_KEEP='.*' is not a whole number from 0 to 9999 — nothing pruned\n$/);
+      expect(r.remote, 'the prune reached the box').toBeNull();
+      expect(r.poison, 'a real ssh or scp was reached').toBe('');
+    }, 30_000);
 
   /** `prune_backups` run for real against a fixture `~/ccrc-backups`: the stub `ssh` records the remote command and
    *  then runs it with `bash -c` under the fixture HOME, so `cd ~/ccrc-backups`, the listing and the delete act on
    *  three timestamped directories and one hand-made one, and the rows read what is left. */
   const STAMPS = ['20261001-010101', '20261002-020202', '20261003-030303'];
-  const runPruneOnDisk = (keep: string): { code: number; stderr: string; remote: string | null; left: string[] } => {
+  const runPruneOnDisk = (keep: string, dirs: string[] = STAMPS, ts = '20270101-000000'): { code: number; stderr: string; remote: string | null; left: string[] } => {
     const fn = /prune_backups\(\) \{([\s\S]*?)\n\}/.exec(deploySh);
     expect(fn, 'deploy.sh has no prune_backups() helper').toBeTruthy();
     const home = mkTmp('ccrc-agent-prunedisk-');
     const backups = path.join(home, 'ccrc-backups');
-    for (const d of [...STAMPS, 'pre-flip-hand-made']) mkdirSync(path.join(backups, d), { recursive: true });
+    for (const d of [...dirs, 'pre-flip-hand-made']) mkdirSync(path.join(backups, d), { recursive: true });
     const rec = path.join(home, 'remote');
     const script = [
       `ssh_stub() { printf '%s' "$2" > ${JSON.stringify(rec)}; bash -c "$2"; }`,
-      'SSH=(ssh_stub); BOX=box.invalid',
+      `SSH=(ssh_stub); BOX=box.invalid; TS=${ts}`,
       `prune_backups() {${fn![1]!}\n}`,
       'prune_backups',
     ].join('\n');
@@ -2938,8 +2954,19 @@ describe('deploy.sh refuses what it cannot measure: the prune KEEP and the sweep
     const r = runPruneOnDisk('1');
     expect(r.code, r.stderr).toBe(0);
     expect(r.stderr).toBe('');
-    expect(r.remote).toContain('| sort | head -n -1 | xargs -r rm -rf --');
+    expect(r.remote).toContain("| sort | head -n -1 | grep -vxF -- '20270101-000000' | xargs -r rm -rf --");
     expect(r.left).toEqual([STAMPS[2], 'pre-flip-hand-made']);
+  }, 30_000);
+
+  it('D3d: the prune never removes this run\'s own $TS directory, even when the box\'s clock is ahead of the deploying machine\'s (D-5326)', () => {
+    // The deploy's own backup is stamped from the DEPLOYING machine's clock (`TS="$(date ...)"`), the prune sorts
+    // by name, and a box whose clock runs ahead holds a newer-named directory, so at KEEP=1 the run's own directory
+    // sorts into `head`'s output and was removed: the backup this deploy had just taken. The remote side filters it.
+    const own = '20250101-230000';
+    const r = runPruneOnDisk('1', ['20250102-000000', own], own);
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stderr).toBe('');
+    expect(r.left, 'the deploy\'s own backup was pruned').toEqual([own, '20250102-000000', 'pre-flip-hand-made']);
   }, 30_000);
 
   it('D2: the sweep refuses, and restarts nothing, when `list-units claude-session@*` fails (D-5143)', () => {

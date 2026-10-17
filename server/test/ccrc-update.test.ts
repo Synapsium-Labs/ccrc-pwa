@@ -12763,6 +12763,22 @@ describe('ccrc update and rollback: ~/ccrc-backups is pruned after a completed r
     assertNoExtras(home);
   });
 
+  // R34 (wave 17, D-5320): `_keep_ok`'s class is enumerated, so a non-ASCII decimal digit is refused under a UTF-8
+  // locale as well (a `[0-9]` range accepted U+0663 there, and the prune then died on an arithmetic error). The
+  // row measures its own premise first and skips, with the reason, where this bash and locale do not reproduce the range.
+  const rangeAcceptsNonAscii = spawnSync(BASH, ['-c', `[[ $'\\xd9\\xa3' =~ ^[0-9]{1,4}$ ]]`], { env: { LC_ALL: 'en_US.UTF-8', PATH: process.env.PATH ?? '' } }).status === 0;
+  it.skipIf(!rangeAcceptsNonAscii)('P11b: a non-ASCII digit in CCRC_BACKUP_KEEP (U+0663) only WARNs and prunes nothing under en_US.UTF-8 (D-5320)', () => {
+    const home = freshUpdateBox('ccrc-fx-b-p11b-');
+    plantOldBox(home, { version: 'v1.0.0' });
+    packRelease(home, stubTree(home, { version: 'v2.0.0' }), { tag: 'v2.0.0' });
+    plantDir(home, '20250101-000000');
+    const r = runUpdate(home, [], { CCRC_BACKUP_KEEP: '٣', LC_ALL: 'en_US.UTF-8' });
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    expect(r.stdout).toMatch(/^update: backups: WARN: CCRC_BACKUP_KEEP='٣' is not a whole number from 0 to 9999 — nothing pruned$/m);
+    expect(existsSync(join(backupRoot(home), '20250101-000000'))).toBe(true);
+    assertNoExtras(home);
+  });
+
   // Fix round 2 (controller ruling): itLinux — this fixture's `fixture-sweep-hold-lock` knob lives only in the systemctl stub's try-restart arm (Darwin's launchctl sweep never reaches it), and its `flock -F` is util-linux only.
   itLinux('P12: another ccrc holding ~/.ccrc/update.lock at prune time — skipped, nothing removed', () => {
     const home = freshUpdateBox('ccrc-fx-b-p12-');

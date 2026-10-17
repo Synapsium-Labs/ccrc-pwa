@@ -22141,18 +22141,26 @@ cmd_backup() {
 }
 
 # `_keep_ok <value>` and `_keep_why <knob> <value>` — the ONE validator for
-# every KEEP knob (review 179 F6; D-3423): `CCRC_BACKUP_KEEP` below,
+# every KEEP knob in this file (review 179 F6; D-3423; `deploy/deploy.sh`'s
+# `prune_backups` spells the same DIGIT test a second time on purpose, held
+# equal by deploy-verify's D1c, D-5142; deploy.sh alone also refuses an
+# all-zeros KEEP, because its remote prune has no keeps, D-5144, wave 17's
+# Reading 4): `CCRC_BACKUP_KEEP` below,
 # `CCRC_VERSIONS_KEEP` in `_ver_gc` and `cmd_versions`. A whole number of one
 # to four digits, `0` to `9999`, and nothing else. `^[0-9]+$` let
 # `99999999999999999999` through, and there `[ -le ]`, `[ -lt ]` and bash
 # arithmetic fail or WRAP (`18446744073709551615` is -1), which read as "remove
 # everything" — an operator who meant "keep everything" got the opposite. Four
 # digits is far past any number of trees or backups a box keeps, and no value
-# that long can overflow anything. `_keep_why` is the refusal's own sentence:
+# that long can overflow anything. The class is ENUMERATED, `[0123456789]`, never
+# the range `[0-9]`: under a UTF-8 locale bash's `=~` range accepts non-ASCII
+# decimal digits (U+0663, U+FF15), which then fail as an arithmetic error
+# instead of this sentence (R34, D-5320); the enumeration needs no locale.
+# `_keep_why` is the refusal's own sentence:
 # it names the knob and the value, the value sanitised as `_upd_validate_timeout`
 # does (a non-printable byte becomes `?`) and capped at 32 characters, so a hostile
 # or absurd value cannot fill a line or drive a terminal.
-_keep_ok() { [[ "$1" =~ ^[0-9]{1,4}$ ]]; }
+_keep_ok() { [[ "$1" =~ ^[0123456789]{1,4}$ ]]; }
 _keep_why() {   # <knob> <value>
   local val="$2"
   [ "${#val}" -le 32 ] || val="${val:0:32}..."
