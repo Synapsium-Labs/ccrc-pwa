@@ -12,17 +12,11 @@ import type { FleetSession } from '../../shared/api';
 import { sessionDocsHref } from '../src/docs/docsLinks';
 import { SessionActionsSheet } from '../src/fleet/SessionActionsSheet';
 import { SessionHeader, type SessionHeaderProps } from '../src/session/SessionHeader';
+import { fleetSession } from './fleetFixture';
 
-const s = (over: Partial<FleetSession> = {}): FleetSession => ({
+const s = (over: Partial<FleetSession> = {}): FleetSession => fleetSession({
   id: 'lane-a-demo', wrapper: 'lane-a', home: 'lane-a', project: 'demo',
-  workdir: '/repo/wt/ws-old', workspace: 'ws-old', name: null,
-  status: 'idle', statusUpdatedAt: null, limits: null, dialogPending: false,
-  version: null, model: null, effort: null, ultracode: false, branch: 'feat/renamed',
-  ctxPct: null, paneCols: null, tasks: null, pr: null, archivedAt: null, archivedBytes: null, held: null,
-  hookState: null, askSummary: null, subagents: null, graphQueries: null, graphGateDenials: null,
-  bucket: 'idle', bucketSince: null, unmeasured: [], statusUnmeasured: false,
-  lifecycle: null, stoppedBy: null, swapBlocked: null, stranded: null, substrate: null, started: true, spawnState: null,
-  ask: null, usage: null, boardProject: null, route: null, child: { kind: 'none' }, releasedFrom: null, background: null, ...over,
+  workdir: '/repo/wt/ws-old', workspace: 'ws-old', branch: 'feat/renamed', ...over,
 });
 
 const headerProps = (session: FleetSession): SessionHeaderProps => ({
