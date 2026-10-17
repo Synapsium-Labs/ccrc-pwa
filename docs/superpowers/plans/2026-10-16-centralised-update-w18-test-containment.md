@@ -164,8 +164,8 @@ Reviewers: do not raise these.
 - **Darwin.** `ccd/ccd` skips the bus-defaulting block on darwin (`ccd/ccd:1639`, `[ "$CCD_OS" != darwin ]`), and `ccd/ccrc`'s `_box_units` skips its pair there too (`:3339`), so the fixture pair is inert. `macos-platform.test.ts:1043-1044` already sets the same fixture values.
   - The poisons are `#!/bin/sh` and run under macOS's bash-as-sh. macOS ships `/usr/bin/ssh`, `scp` and `curl`, so the poisons shadow real binaries exactly as on Linux.
   - `assertNoRealTool` and `busUnder` resolve `/var` to `/private/var` through the realpath of HOME (`insideOf`).
-  - Nothing here was run on a Mac. `test-macos` runs only on the daily, dispatched and stable-gate full runs, advisory and flaky by ruling. A `ccdWsHelpers.ts` change selects nearly every server test there too, where spawns are several times slower. R23(a) is itself a macOS fact (Task 4).
-- **CI selection.** A change to `ccdWsHelpers.ts` makes the PR's selection run nearly every server test (about 235 importers, 278 by transitive reach), so the PR's `test (server)` is close to a full run. The census reads every file under both trees. Whether `select-tests.mjs`'s READ rule traces that walk is not measured here, so a later PR that edits a test file may or may not be selected to run the census. Task 7 Step 7 reads the summary.
+  - Nothing here was run on a Mac. `test-macos` runs only on the daily, dispatched and stable-gate full runs, advisory and flaky by ruling. A `ccdWsHelpers.ts` change selects every harness reacher there too, where spawns are several times slower. R23(a) is itself a macOS fact (Task 4).
+- **CI selection.** A change to `ccdWsHelpers.ts` makes the PR's selection run every file that reaches it (about 235 importers, 278 by transitive reach). Measured on the PR's run 38996554132 (review 535, F17): it selected 305 of 714 server test files, all 280 harness reachers, all 283 `containedTools.ts` reachers and the census among them. So the PR's `test (server)` covers the change, but it is not a full run: the dispatched full run is the whole-suite arbiter. The census reads every file under both trees. Whether `select-tests.mjs`'s READ rule traces that walk is not measured here, so a later PR that edits a test file may or may not be selected to run the census. Task 7 Step 7 reads the summary.
 - **A count pinned in a file another run edits.** `ALLOWED` and `SLICED_ALLOWED` pin exact counts in `ccrc-doctor.test.ts` and `ccrc-install.test.ts`, and run 360's open fix round (claim 1499) is editing both. If run 360's PR lands after this wave and adds, moves or fixes a bare script spawn there, it reds on this census (Reading 4).
 - **Line moves.** `ccdWsHelpers.ts` grows by about 45 lines at `:340` and below. `containedTools.ts` grows by about 18 lines near `:182`, below Task 4's anchors. `ccrc-containment.test.ts` grows by 2 at `:281`, `ccd-pool-sync.test.ts` changes near its top and at its five stub sites, and `ccrc-memory.test.ts` grows by 14 near its top. No machine-checked corpus cites those files (Anchors).
 
@@ -215,7 +215,7 @@ These are departures from the brief, the ledger, or what shipped text at `256b25
     - That last spawn sources `ccrc` and calls `_box_role`, which reads only the preset `BOX_UNITS` array (`ccd/ccrc:3378-3379`). Measured under `env -i`, with HOME a path that does not exist and PATH an empty directory, `BOX_UNITS=(active inactive); _box_role` printed `server (inferred from the units below, not declared — no box records its own role yet)` with rc 0, so no tool runs *(prototype)*. The scout's reading that it reaches the real bus is refuted.
   - **The fix in each file** uses the builder its neighbours use:
     - `ghContainedEnv(…, { systemd, tmux, net })` for `projected-home`'s two `source CCD` helpers, through one `phEnv` and an `assertNoRealTool` row;
-    - `ccrcContainedEnv(home, process.env, { managers: true, curl: 'poison' })` plus an `assertNoRealTool` for `ccrc-memory` and `runbook-holds`, whose stub PATHs now prepend to the CONTAINED PATH, never the parent's.
+    - `ccrcContainedEnv(home, process.env, { managers: true, curl: 'poison' })` for `ccrc-memory` and `runbook-holds`, whose stub PATHs now prepend to the CONTAINED PATH, never the parent's. `ccrc-memory` gains an `assertNoRealTool` row; `runbook-holds` gains inline `assertNoRealTool` calls in its spawning helpers, not a row (corrected after review 535, F15).
 - **D-5251** — *A spawn that runs text SLICED from a script executes no script file, so it is not an `ALLOWED` hit. Its class is still ENUMERATED: a bare one is listed in `SLICED_ALLOWED` with its reason and exact count, pinned both ways. `ccrc-install.test.ts`'s `_inst_installed` harness, the spawn R14(b) said the census "also covers", is one entry, and its own row pins that it is classified sliced* (revised; the prototype declared the class out of scope and pinned only that one spawn).
   - **Why:** the census cannot decide such a spawn's reach from its argument text, because the slice may or may not call a contained tool. A list makes a new one a decision rather than a pass. The R14(b) spawn was already refuted as harmless: it reads `CCRC_UPDATE_VERIFIED` and `CCRC_UPDATE_SPINE` from the inherited env, and runs no contained tool.
   - **The members** *(reviser, measured standalone)*: 12 bare sliced spawns in 6 files, the same at `256b25ecb` and on the prototype tree.
@@ -247,6 +247,11 @@ These are departures from the brief, the ledger, or what shipped text at `256b25
   - **The plan:** the census header named only D-5253's two blind spots, and Task 3 fixed only the census's hits.
   - **Read by the review** (a scratch copy of the census, run standalone with its NAMES widened, never committed): widened from `ccd`/`ccrc` to the sibling scripts in that directory and the skill installers, it counts 64 bare hits in 26 files and six unplaced programs; several of those scripts (the doctor checks, the session hook, the telemetry keepalive) name a contained tool. Two structural blind spots: a script path bound through a call the census does not follow (`fileURLToPath(new URL(…))`), and a script handed to a helper as a parameter. Nothing bare of `ccd` or `ccrc` hides behind either today.
   - **The change:** one header paragraph names the scope (R14(b)'s two scripts) and both blind spots; the sibling scripts join the residue (Not in this wave). `runbook-holds.test.ts`'s one other spawn, `_dr_rc_state` from the doctor checks, sat bare beside the spawn Task 3 contained, so it takes the same `ccrcContainedEnv`.
+- **D-5257** — *`busPath` refuses a bus value that holds `;` or `%`, so `busUnder` answers false (the fixture pair wins in `ghContainedEnv`) and `assertNoRealTool` throws* (the worker, fix round 1, from review 535's F4, as the coordinator ruled).
+  - **The plan:** Task 1 made `busUnder` a GATE (a caller pair it accepts is kept), but it inherited `busPath`'s grammar, which reads only the first `unix:` address and resolves the path lexically.
+  - **Read by the review** (node against the real module): `unix:path=<home>/bus;unix:path=/run/user/<uid>/bus` was kept although a D-Bus client falls through to the second address, and `unix:path=<home>/%2e%2e/%2e%2e/run/user/<uid>/bus` was kept although D-Bus unescapes it and `path.resolve` does not. No test passes either today.
+  - **The change:** one refusal in `busPath`, in a file this wave owns, and rows H18-10 (`;`) and H18-11 (`%`) in `ccd-harness-containment.test.ts`, each on a HOME holding neither character: the caller's pair is not kept, and `assertNoRealTool` throws on it.
+  - **Named, not fixed:** a SYMLINK under HOME that points at the real runtime dir still passes both functions, because neither takes a realpath of the bus value. `busUnder`'s and `assertNoRealTool`'s docstrings say so, and so does Not in this wave.
 
 ## File structure
 
@@ -2108,7 +2113,7 @@ for f in sorted(set(b) & set(a)):
 
 - [ ] **Step 1: Merge `main` forward if it moved.** Run `git fetch origin main`. If `origin/main` is not in HEAD, run `git merge --no-edit origin/main`: an ordinary merge, never a rebase, a force-push or GitHub's Update branch.
   - Stop and report only on a conflict, or on a hunk that overlaps one of this wave's in a File-structure file. A disjoint change to one is merged and named.
-  - **If the merge carries #435, or any other change to `ccdWsHelpers.ts` or `containedTools.ts`,** re-run `ccd-harness-containment`, `ccd-workspaces`, `ccd-tmux-anchor` and `raw-spawn-census`, and re-measure rows T1-1 to T1-13.
+  - **If the merge carries #435, or any other change to `ccdWsHelpers.ts` or `containedTools.ts`,** re-run `ccd-harness-containment`, `ccd-workspaces`, `ccd-tmux-anchor` and `raw-spawn-census`, and re-measure rows T1-1 to T1-14.
   - **After every merge of `main`,** re-run `raw-spawn-census`: `main` may have changed a file its lists count.
   - Re-read the claims and the open PRs.
 - [ ] **Step 2: The touched and pinning suites, one file per call** (counts *prototype* unless marked):
@@ -2130,7 +2135,7 @@ for f in sorted(set(b) & set(a)):
   - Task 6's after phase is not re-run on the final tip unless `main` moved under `server/test`, `ccd` or `shared` after it ran (Step 1).
   - **The sharded gate, as wave 16 runs it:** if the 1-minute load is under 20 and the slice's memory under 21 GB, run `TMPDIR="$T/shard-<i>" ./node_modules/.bin/vitest run --shard=<i>/6 --maxWorkers=2` for `i` = 1 to 6, in sequence. The sum of their `Test Files` must equal `find server/test -name '*.test.ts' | wc -l`.
   - Otherwise, after the bounded wait, the wave-done says the shards were not run and gives the load and the memory. Then `gh workflow run ci.yml --ref <branch> -f mode=full`, and name that run, without waiting on it.
-  - A `ccdWsHelpers.ts` change makes the PR's CI selection run nearly every server test, so the PR's own `test (server)` is close to the full suite either way.
+  - A `ccdWsHelpers.ts` change makes the PR's CI selection run every file that reaches it (305 of 714 at `b5b83ad66`, review 535, F17), so the PR's own `test (server)` covers the change, but only a full run is the whole suite.
 - [ ] **Step 6: The ledger, scope and residue guards, last.**
   *(to be measured by the worker: none of the three ran with this plan in the tree; the D-number loop below printed nothing over the finisher's uncommitted tree.)*
   ```bash
@@ -2160,7 +2165,7 @@ for f in sorted(set(b) & set(a)):
     - every `systemd` caller's user bus now points under HOME;
     - one named door, `stubContainedTool`, for a functional stub;
     - the census reads both test trees, and lists bare sliced spawns on their own;
-    - a `ccdWsHelpers.ts` change makes CI's selection run nearly every server test.
+    - a `ccdWsHelpers.ts` change makes CI's selection run every file that reaches it (not the whole suite).
   - **The body:** one section per task, carrying D-5247 to D-5253 by number. It includes the mutation tables' measured results, Task 6's before/after table and both reach-log summaries, and the not-in-this-wave list.
     - It names #435 as a disjoint open change to `ccdWsHelpers.ts`.
     - It says that `ALLOWED` and `SLICED_ALLOWED` pin counts in `ccrc-doctor.test.ts` and `ccrc-install.test.ts` (Reading 4).
@@ -2214,7 +2219,7 @@ for f in sorted(set(b) & set(a)):
 
    Recommendation: (a), and a docs-PR note.
 6. **The census's helper-call blind spot** (D-5253, rows T3-7 and T3-9): a bare env returned by a local helper (`memEnv()`, `phEnv()`) is invisible to the census. Options:
-   - (a) **leave it to each file's own `assertNoRealTool` row** (this plan, which adds that row to `ccrc-memory`, `runbook-holds` and `projected-home`);
+   - (a) **leave it to each file's own `assertNoRealTool` check** (this plan, which adds that row to `ccrc-memory` and `projected-home`, and an inline call in `runbook-holds`' spawning helpers);
    - (b) follow a call to a same-file arrow function's returned literal, one more resolution rule.
 
    Recommendation: (a). Option (b) costs a rule the census then has to pin, for a shape with two instances that are already pinned.

@@ -366,6 +366,33 @@ describe('the harness contains ssh, scp, curl and the user bus too (wave 18)', (
     expect(h.sh(PROBE, { ...own, DBUS_SESSION_BUS_ADDRESS: 'unix:path=/run/user/0/bus' })).toBe(BUS(h.home));
   });
 
+  // D-5257: `busPath` refuses a value with `;` or `%`, so `busUnder` is false and the fixture pair wins. The caller's
+  // FIRST path is under HOME in both rows, which is what a lexical check alone would accept. Each row runs on a HOME
+  // with neither character (an `mkTmp` name), so the refusal can only be the value's.
+  it('H18-10 a bus address LIST (`;`) whose first path is under HOME is not kept: a client falls through to the later address', () => {
+    expect(h.home).not.toMatch(/[;%]/);
+    const own = {
+      XDG_RUNTIME_DIR: path.join(h.home, 'xdg'),
+      DBUS_SESSION_BUS_ADDRESS: `unix:path=${path.join(h.home, 'xdg', 'bus')};unix:path=/run/user/1000/bus`,
+    };
+    expect(h.sh(PROBE, own)).toBe(BUS(h.home));
+    const env = ghContainedEnv(h.home, { PATH: '/usr/bin:/bin', ...own }, { systemd: true });
+    expect(`${env['XDG_RUNTIME_DIR']}|${env['DBUS_SESSION_BUS_ADDRESS']}`, 'the fixture pair wins').toBe(BUS(h.home));
+    expect(() => assertNoRealTool({ ...process.env, ...own }, h.home)).toThrow(/does not name a path inside the fixture HOME/);
+  });
+
+  it('H18-11 a bus path with `%` is not kept: D-Bus unescapes %2e%2e, path.resolve does not, so it climbs out of HOME', () => {
+    expect(h.home).not.toMatch(/[;%]/);
+    const own = {
+      XDG_RUNTIME_DIR: path.join(h.home, 'xdg'),
+      DBUS_SESSION_BUS_ADDRESS: `unix:path=${h.home}/%2e%2e/%2e%2e/run/user/1000/bus`,
+    };
+    expect(h.sh(PROBE, own)).toBe(BUS(h.home));
+    const env = ghContainedEnv(h.home, { PATH: '/usr/bin:/bin', ...own }, { systemd: true });
+    expect(`${env['XDG_RUNTIME_DIR']}|${env['DBUS_SESSION_BUS_ADDRESS']}`, 'the fixture pair wins').toBe(BUS(h.home));
+    expect(() => assertNoRealTool({ ...process.env, ...own }, h.home)).toThrow(/does not name a path inside the fixture HOME/);
+  });
+
   it('H18-9 stubContainedTool is the one named door: it writes into harnessBin and refuses a name it does not contain', () => {
     expect(() => stubContainedTool(h.home, 'git' as never, '#!/bin/sh\n')).toThrow(/not a contained tool/);
     // gh is contained, but its poison is rewritten on every ghContainedEnv call, so this door would not keep it (D-5254).
