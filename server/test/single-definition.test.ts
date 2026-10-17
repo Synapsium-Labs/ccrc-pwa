@@ -6163,10 +6163,18 @@ describe('the review screen\'s rows and last line are spelled once, in shared/as
 
   it('the sheet reads the L0 rules: askLive.ts imports and tests each review rule', () => {
     const live = stallCode(path.join(ccrcRoot, 'pwa/src/session/askLive.ts'));
-    for (const name of ['REVIEW_READY_RE', 'REVIEW_SUBMIT_ROW_RE', 'REVIEW_CANCEL_ROW_RE', 'REVIEW_HEADING_RE']) {
-      expect(live, `askLive.ts does not import ${name} from L0`)
-        .toMatch(new RegExp(`import\\s*\\{[^}]*\\b${name}\\b[^}]*\\}\\s*from\\s*'(?:\\.\\./)+shared/ask-menu(?:\\.js)?'`));
+    const fromL0 = (name: string): RegExp =>
+      new RegExp(`import\\s*\\{[^}]*\\b${name}\\b[^}]*\\}\\s*from\\s*'(?:\\.\\./)+shared/ask-menu(?:\\.js)?'`);
+    for (const name of ['REVIEW_READY_RE', 'REVIEW_HEADING_RE']) {
+      expect(live, `askLive.ts does not import ${name} from L0`).toMatch(fromL0(name));
       expect(live, `askLive.ts does not test ${name}`).toMatch(new RegExp(`\\b${name}\\.test\\(`));
+    }
+    // Decision `ask-review-lenient-arm`: the two rows are told by ONE L0 reader, `reviewRows`, which the sheet and the
+    // server's frame log both call, so neither spells the row rules again. It tests each of them; askLive imports it.
+    expect(live, 'askLive.ts does not import reviewRows from L0').toMatch(fromL0('reviewRows'));
+    const menu = stallCode(path.join(ccrcRoot, 'shared/ask-menu.ts'));
+    for (const name of ['REVIEW_READY_RE', 'REVIEW_SUBMIT_ROW_RE', 'REVIEW_CANCEL_ROW_RE']) {
+      expect(menu, `reviewRows does not test ${name}`).toMatch(new RegExp(`\\b${name}\\.test\\(`));
     }
   });
 });

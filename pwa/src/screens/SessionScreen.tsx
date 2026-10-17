@@ -30,6 +30,7 @@ import { HistoryTab } from '../session/HistoryTab';
 import { TerminalDrawer } from '../session/TerminalDrawer';
 import { modelOptions, effortOptions, type PickOption } from '../lib/models';
 import '../session/chat.css';
+import { answerControlLabel } from '../session/askLive';
 
 /** Keyboard discipline: the bottom inset the on-screen keyboard covers. The
  *  screen pads its shell by this much so the composer stays above the
@@ -84,6 +85,9 @@ export function SessionScreen({
   const liveAsk = useStore((s) => s.ask);
   const liveDialog = useStore((s) => s.dialog);
   const askPending = liveAsk !== null || liveDialog !== null;
+  // Decision `ask-answer-control-says-submit`: while the pane is on an ask's review screen, the transcript's control
+  // says what the sheet it raises is waiting on, so a hidden sheet is one labelled click from Submit.
+  const answerLabel = answerControlLabel(liveDialog);
   // This session's fleet entry — live name, account, dialogPending badge.
   const live = useFleet((s) => s.sessions.find((x) => x.id === id) ?? null);
   const roster = useFleet((s) => s.roster);
@@ -450,6 +454,7 @@ export function SessionScreen({
             onRetry={(key) => useStore.getState().retry(key)}
             onDiscard={(key) => useStore.getState().discard(key)}
             askPending={askPending}
+            answerLabel={answerLabel}
             onAnswer={() => setRaise((n) => n + 1)}
           />
         )}
