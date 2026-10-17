@@ -1436,3 +1436,19 @@ describe('the fleet head holds one row, and the class chooser is not on it', () 
     expect(offenders).toEqual([]);
   });
 });
+
+describe('the Accounts screen keeps its voices (the audit\'s quick wins)', () => {
+  it("the Accounts screen's prose is sans and its readouts stay mono", () => {
+    // The rule of voice: a sentence a person reads is set in the UI face, a
+    // value the machine reports is set in mono. "Next workspace lands on … —
+    // least-loaded" and "disabled on the fleet host" are sentences;
+    // "last reported 5m ago" is a readout beside a gauge.
+    for (const sel of ['.accounts-projection', '.accounts-disabled-note']) {
+      expect(declaredValues(css, sel, 'font-family'), `${sel} is prose`).toEqual(['var(--family-ui)']);
+      // A `font` shorthand would restate the family and pass a longhand read.
+      expect(declaredValues(css, sel, 'font'), `${sel} restates its family in a shorthand`).toEqual([]);
+    }
+    expect(declaredValues(css, '.accounts-fresh', 'font-family'), 'the freshness readout is mono')
+      .toEqual(['var(--family-mono)']);
+  });
+});

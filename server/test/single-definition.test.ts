@@ -6242,3 +6242,38 @@ describe('the review screen\'s rows and last line are spelled once, in shared/as
     }
   });
 });
+
+// D-5238 (plan docs/superpowers/plans/2026-10-16-working-state-and-interruptions.md, Task 9). APPENDED at the very end,
+// for the reason the note above the 'tmux unreachable' block states. The turn verdict's READS have one home,
+// `server/src/turnverdict.ts` (`turnVerdictFor`, `liveRowFor`, `liveWordFor`); the RULE has one home,
+// `server/src/coord/archiveDoor.ts` (`stopVerdict`). The dispatch gate reaches them through its required
+// `DispatchRunDeps.turnVerdict` port, never through a second copy of either. Code lines only (`stallCode`).
+describe('the turn verdict\'s reads and rule each have one home (D-5238)', () => {
+  const holders = (re: RegExp): string[] => ALL.filter((f) => re.test(stallCode(f))).map(rel).sort();
+
+  it('CONTROL: the patterns see a definition and a call, and pass over comment lines', () => {
+    expect(/\bfunction stopVerdict\b/.test('export function stopVerdict(r: StopReadings): TurnVerdict {')).toBe(true);
+    expect(/\bstopVerdict\(/.test("return stopVerdict({ configDir: 'none' });")).toBe(true);
+    expect(stallCodeText('// stopVerdict( in prose\n * stopVerdict(\nconst x = 1;')).not.toMatch(/\bstopVerdict\(/);
+  });
+
+  it('the rule is defined once, in coord/archiveDoor.ts', () => {
+    expect(holders(/\bfunction stopVerdict\b|\bconst stopVerdict\b/)).toEqual(['server/src/coord/archiveDoor.ts']);
+  });
+
+  it('the rule is CALLED only from turnverdict.ts (its definition aside)', () => {
+    expect(holders(/(?<!function )\bstopVerdict\(/)).toEqual(['server/src/turnverdict.ts']);
+  });
+
+  it('the reads are defined once, in turnverdict.ts', () => {
+    for (const name of ['turnVerdictFor', 'liveRowFor', 'liveWordFor']) {
+      expect(holders(new RegExp(`\\bfunction ${name}\\b|\\bconst ${name}\\s*=`)), name).toEqual(['server/src/turnverdict.ts']);
+    }
+  });
+
+  it('dispatch.ts reads no live file of its own: it asks the turnVerdict port', () => {
+    const dispatch = stallCode(path.join(ccrcRoot, 'server/src/coord/dispatch.ts'));
+    expect(dispatch).toMatch(/deps\.turnVerdict\(/);
+    expect(dispatch).not.toMatch(/readLiveStateMeasured|readLiveState\b|panePid\(/);
+  });
+});

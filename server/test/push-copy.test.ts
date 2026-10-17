@@ -149,11 +149,15 @@ function watcher(opts: {
   /** Item 3, fix round 1 (F3/F4): a remote-mode `fleetState` double, so a test can drive the agent link
    *  down (or later flip it up) and exercise `inventorySwept`'s gate for real, through `inventoryNow()`. */
   fleetState?: FleetState;
+  /** D-5234: lays a test's own behaviour over the seeded runner — a tick on
+   *  which `list-panes` fails, say — delegating everything else to it. */
+  wrapRunner?: (seeded: Runner) => Runner;
 }): { tick: () => Promise<void>; markIdle: (id: string) => void; markBusy: (id: string) => void; home: string; coord?: CoordStore; w: FleetWatcher } {
   const home = opts.home ?? mkTmp('ccrc-');
   const info = seedSessions(home, opts.sessions);
   const coord = opts.coord ? new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db'))) : undefined;
-  const base = testDeps(home, runnerFor(info, opts.pane));
+  const seededRunner = runnerFor(info, opts.pane);
+  const base = testDeps(home, opts.wrapRunner ? opts.wrapRunner(seededRunner) : seededRunner);
   const deps = {
     ...base,
     ...(opts.cfg ? { cfg: { ...base.cfg, ...opts.cfg } } : {}),
@@ -487,6 +491,48 @@ describe('an unreadable live-status file must never fire the busy→idle "✓ Fi
     // `prevStatus` absorb the guess, this would silently push nothing.
     w.markBusy('cc-a');
     await w.tick();
+    w.markIdle('cc-a');
+    await w.tick();
+    expect(sent).toHaveLength(1);
+    expect(sent[0]!.title).toBe('✓ Finished');
+  });
+});
+
+// D-5234: the overload tick. A loaded box fails `list-panes` for every busy
+// row at once; before this fix each failed `panePid` read left the row at the
+// `alive` default `idle`, and the watcher spent six measured-looking busy→idle
+// edges as six "✓ Finished" pushes for turns that never ended. A failed pid
+// read is now `busy` and `statusUnmeasured`, which the watcher skips, keeping
+// each row's previous status. The seventh, idle row is what the declaration
+// itself is for: painted `busy` WITHOUT it, that row's blip would read as a
+// turn starting, and the healthy tick would push a Finished for it.
+describe('an overload tick whose panePid reads fail fires no "✓ Finished" push (D-5234)', () => {
+  it('six busy rows and one idle, every list-panes failing for one tick: zero pushes on it and on the next healthy one', async () => {
+    const sent: PushPayload[] = [];
+    const push = { notify: async (p: PushPayload) => { sent.push(p); } };
+    let overloaded = false;
+    const ids = ['cc-a', 'cc-b', 'cc-c', 'cc-d', 'cc-e', 'cc-f'];
+    const w = watcher({
+      push,
+      sessions: [...ids, 'cc-quiet'].map((id) => `project-a/${id}`),
+      wrapRunner: (seeded) => async (cmd, args) => (overloaded && args[0] === 'list-panes'
+        ? { code: 1, stdout: '', stderr: 'server exited unexpectedly' }
+        : seeded(cmd, args)),
+    });
+
+    w.markIdle('cc-quiet');
+    await w.tick();                    // priming tick: six busy, one idle
+    expect(sent, 'priming must never push').toEqual([]);
+
+    overloaded = true;
+    await w.tick();                    // every panePid read fails
+    expect(sent, 'a failed panePid read is not a turn ending').toEqual([]);
+
+    overloaded = false;
+    await w.tick();                    // healthy again: six still busy, one still idle
+    expect(sent).toEqual([]);
+
+    // The positive control: a real edge on the same fixture still lands.
     w.markIdle('cc-a');
     await w.tick();
     expect(sent).toHaveLength(1);

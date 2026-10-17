@@ -6,7 +6,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-libra
 import type { ReactNode } from 'react';
 import type { FleetSession } from '../../shared/api';
 import { fleetSession as baseSession } from './fleetFixture';
-import { ToastHost } from '@ccrc/ui';
+import { Sheet, ToastHost } from '@ccrc/ui';
 import { api, ApiError } from '../src/lib/api';
 import { SessionHeader, type SessionHeaderProps } from '../src/session/SessionHeader';
 import { SessionScreen, useKeyboardInsets } from '../src/screens/SessionScreen';
@@ -983,5 +983,107 @@ describe('the Escape binding ignores every other key', () => {
     expect(p.onInterrupt, 'an ordinary keystroke interrupted the turn').not.toHaveBeenCalled();
     fireEvent.keyDown(document, { key: 'Escape' });
     expect(p.onInterrupt, 'the control: Escape still interrupts').toHaveBeenCalledTimes(1);
+  });
+});
+
+// D-5235 (spec 2026-10-16 §5.5; plan Task 5). The desktop Escape binding sits
+// on the window, in the bubble phase, so the same keystroke that dismisses a
+// sheet (Radix's dismiss, in its document capture listener, preventDefault()s
+// without stopping propagation) reached it and interrupted the running turn.
+// The operator closed a sheet and lost the turn.
+//
+// RED FIRST, measured 2026-10-16 against origin/main 0a06ebb9: the sheet case
+// and the already-handled case failed (onInterrupt called once each); the
+// nothing-open and textarea cases passed before and after, as they should.
+//
+// MUTATION TABLE (plan Task 5 Step 3; RUN 2026-10-16 on an isolated copy, each
+// mutant applied, header + drawer-view run, restored and compared byte for byte;
+// the open-dialog rows re-run 2026-10-17 with the window-dispatched case added):
+//   the defaultPrevented check removed ......... RED: the already-handled case
+//                                                (the sheet case stays green
+//                                                through the open-dialog check)
+//   the open-dialog check removed .............. RED: the open-sheet,
+//                                                window-dispatched case (Radix
+//                                                never sees that Escape, so only
+//                                                the open-dialog check holds it)
+//   both removed ............................... RED: the sheet case, the
+//                                                already-handled case, the
+//                                                window-dispatched case, and the
+//                                                drawer's focus-elsewhere case
+//   the textarea skip removed .................. RED: both textarea cases; the
+//                                                drawer's terminal-focused case
+//                                                stays GREEN (see drawer-view)
+//   the textarea skip and both checks removed .. the drawer's terminal-focused
+//                                                case is STILL green: xterm's
+//                                                `cancel(e, true)` stops the
+//                                                keydown's propagation, so it
+//                                                never reaches the window
+describe('Escape that closes a sheet never interrupts (D-5235)', () => {
+  const neutral = baseSession({ id: 'project-a-quiet-basin', project: 'project-a', workdir: '/w' });
+
+  it('a sheet is open with focus on a button inside it: Escape closes the sheet and interrupts nothing', () => {
+    stubPointer(true);
+    const onClose = vi.fn();
+    const p = props({ session: neutral, status: 'busy' });
+    render(
+      <>
+        <SessionHeader {...p} />
+        <Sheet open onClose={onClose} title="a sheet"><button type="button">inside</button></Sheet>
+      </>,
+    );
+    const inside = screen.getByRole('button', { name: 'inside' });
+    act(() => inside.focus());
+    fireEvent.keyDown(inside, { key: 'Escape', code: 'Escape', keyCode: 27 });
+    expect(onClose, 'the control: Escape dismisses the sheet').toHaveBeenCalledTimes(1);
+    expect(p.onInterrupt, 'closing the sheet interrupted the turn').not.toHaveBeenCalled();
+  });
+
+  it('an Escape something earlier already handled (defaultPrevented) interrupts nothing', () => {
+    stubPointer(true);
+    const p = props({ session: neutral, status: 'busy' });
+    render(<SessionHeader {...p} />);
+    // What Radix's dismiss does: a document capture listener that prevents
+    // the default and lets the event go on bubbling.
+    const handled = (e: Event): void => { e.preventDefault(); };
+    document.addEventListener('keydown', handled, { capture: true });
+    try {
+      fireEvent.keyDown(document.body, { key: 'Escape', code: 'Escape', keyCode: 27 });
+    } finally {
+      document.removeEventListener('keydown', handled, { capture: true });
+    }
+    expect(p.onInterrupt, 'an already-handled Escape interrupted the turn').not.toHaveBeenCalled();
+  });
+
+  it('a sheet is open and an Escape reaches the window without Radix preventing it: nothing is interrupted', () => {
+    stubPointer(true);
+    const p = props({ session: neutral, status: 'busy' });
+    render(
+      <>
+        <SessionHeader {...p} />
+        <Sheet open onClose={vi.fn()} title="a sheet"><button type="button">inside</button></Sheet>
+      </>,
+    );
+    // Dispatched straight on window: Radix's document listener never sees it,
+    // so its default is not prevented and only the open-dialog check holds it.
+    act(() => { window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); });
+    expect(p.onInterrupt, 'an Escape with a sheet open interrupted the turn').not.toHaveBeenCalled();
+  });
+
+  it('with nothing open, Escape still interrupts, once', () => {
+    stubPointer(true);
+    const p = props({ session: neutral, status: 'busy' });
+    render(<SessionHeader {...p} />);
+    fireEvent.keyDown(document.body, { key: 'Escape', code: 'Escape', keyCode: 27 });
+    expect(p.onInterrupt).toHaveBeenCalledTimes(1);
+  });
+
+  it('with focus in a textarea, Escape does not interrupt (unchanged)', () => {
+    stubPointer(true);
+    const p = props({ session: neutral, status: 'busy' });
+    render(<><textarea data-testid="box" /><SessionHeader {...p} /></>);
+    const box = screen.getByTestId('box');
+    act(() => box.focus());
+    fireEvent.keyDown(box, { key: 'Escape', code: 'Escape', keyCode: 27 });
+    expect(p.onInterrupt).not.toHaveBeenCalled();
   });
 });

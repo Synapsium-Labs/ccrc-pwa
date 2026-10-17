@@ -141,7 +141,7 @@ const harness = async (cfg: HarnessCfg) => {
     // consumer-declared port (wave 2, F2). NOTE: the `as` assertion below does
     // NOT make this optional — a missing property would pass the compiler here
     // and throw at the call, which is why it is written out.
-    configDir: (w: string) => configDirFor(base.cfg as CcrcConfig, w),
+    configDir: (w: string) => configDirFor(base.cfg as CcrcConfig, w), turnVerdict: async () => 'idle' as const,
   } as DispatchRunDeps;
 
   return {

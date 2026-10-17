@@ -5,6 +5,8 @@ import type { FleetState } from '../fleetstate.js';
 import type { Deps } from '../server.js';
 import { cutShort } from '../lifecycle.js';
 import type { KeyedQueue } from '../inject/queue.js';
+import type { SessionRecord } from '../registry.js';
+import type { TurnVerdict } from './archiveDoor.js';
 import { fieldMeasured, measuredIdentity, readRegistryMeasured } from '../registry.js';
 import { readHookStateMeasured } from '../hookstate.js';
 import {
@@ -100,6 +102,25 @@ export interface DispatchRunDeps {
    * failure the preflight exists to delete.
    */
   configDir: (wrapper: string) => string | undefined;
+  /**
+   * The fail-closed turn verdict (`turnVerdictFor`, `server/src/turnverdict.ts`, the reads' one home; the rule is
+   * `stopVerdict`'s) for the session the resume arm is about to `/clear` — D-5238's live gate. A PORT, for
+   * `configDir`'s reason: the reads close over the watcher and `server.ts`'s deps, which this policy module cannot
+   * import. REQUIRED, for `configDir`'s reason too: an optional port a caller forgot to wire would answer
+   * `unmeasured` on a healthy fleet for ever.
+   */
+  turnVerdict: (rec: SessionRecord, uuid: string) => Promise<TurnVerdict>;
+}
+
+/** What the dispatch route polls while a pane this dispatch's `ensure` started comes up (D-5238): the registry row
+ *  and the uuid the resume arm measured, handed back so the route asks the SAME `turnVerdict` port outside
+ *  `coordMutex`. */
+export interface SpawnPollTarget { readonly record: SessionRecord; readonly uuid: string }
+
+/** `cmd_ensure` prints `alive: <id>` ONLY on its early return for an already-live pane (`ccd/ccd`); any other answer
+ *  is an ensure that (re)started the pane, whose live file may not exist yet. */
+export function ensureFoundAlive(stdout: string, sessionId: string): boolean {
+  return stdout.split('\n').some((line) => line.trim() === `alive: ${sessionId}`);
 }
 
 export type DispatchOutcome =
@@ -145,7 +166,7 @@ export type DispatchOutcome =
   | Extract<HoldReasonVerdict, { ok: false }>
   | { ok: false; kind: 'refused';
       code: Extract<RunRefuseCode, 'paused' | 'mail-disabled' | 'cap-concurrency' | 'cap-daily' |
-        'ambiguous-dispatch' | 'worker-busy' | 'hookstate-unmeasurable' | 'project-mismatch'>;
+        'ambiguous-dispatch' | 'worker-busy' | 'hookstate-unmeasurable' | 'project-mismatch' | 'status-unmeasurable'>;
       limit?: number; running?: number; used?: number; candidates?: number;
       /** WHICH project the measured party belongs to — `project-mismatch`'s
        *  own field, and the only refusal on this union that carries a string.
@@ -175,6 +196,11 @@ export type DispatchOutcome =
    *  increment is about — so the distinction is PRESENCE, never `''`. */
   | { ok: false; kind: 'registry-unmeasurable'; stderr?: string }
   | { ok: false; kind: 'unsupported' }
+  /** D-5238: the pane this dispatch's `ensure` just STARTED has not published a measurable live file. Answered at
+   *  once, with NOTHING after the `ensure` done (no hold, no route write, no transition, no `/clear`): this function
+   *  runs inside `coordMutex` and never waits. The route waits for `poll` OUTSIDE the mutex and re-runs the whole
+   *  decision once on a measured verdict; on the wire it is `409 {refused:'worker-starting'}`. */
+  | { ok: false; kind: 'worker-starting'; poll: SpawnPollTarget }
   | { ok: false; kind: 'fleetFailed'; stderr: string }
   | { ok: false; kind: 'advanceFailed'; adv: Extract<AdvanceResult, { ok: false }> }
   /** Rule 3 at dispatch (child-reclamation spec §5.4): the resumed session is
@@ -502,6 +528,9 @@ export async function dispatchRun(
   // session absent from a listable registry) — and that is `unmeasurable`,
   // never `absent`.
   let wrapper: string | null = null;
+  // D-5238: what the resume arm's live gate measured, read again immediately before the `/clear`. `null` on a fresh
+  // spawn, which types no `/clear`.
+  let liveGate: SpawnPollTarget | null = null;
 
   // ONE MEASUREMENT, SPENT TWICE — the dispatch's own dec, hoisted above the
   // fresh-spawn branch because BOTH of this function's ccd writes are the same
@@ -785,6 +814,7 @@ export async function dispatchRun(
     const argv = CCD_ARGV.ensure(sessionId);
     const res = await deps.runCcd(argv);
     if (!res.ok) return { ok: false, kind: 'fleetFailed', stderr: res.stderr };
+    const ensureStarted = !ensureFoundAlive(res.stdout, sessionId);
     resumed = true;
     // The live registry, falling back to the run row — the identical
     // fallback `fingerprint.ts`'s `verifyDone` uses for the same reason
@@ -939,6 +969,26 @@ export async function dispatchRun(
     if (hs !== null && hs.ok && hs.state.state !== 'done') {
       return { ok: false, kind: 'refused', code: 'worker-busy' };
     }
+    // D-5238: the LIVE gate. The hookstate above can say `done` while the pane works — a Stop's `done` standing
+    // through a delegated run, or through a compaction — so the `/clear` also needs the fail-closed turn verdict the
+    // archive door asks (`stopVerdict`, through the `turnVerdict` port) to read `idle`: the raw live word and the
+    // frame's row, NEVER a background count (the teammate caveat: a Stop listing idle teammates leaves the live file
+    // `idle`, and gating on the count would refuse that session for ever). `busy` is `worker-busy`; `unmeasured` is
+    // `status-unmeasurable` — EXCEPT after an `ensure` that started the pane, whose live file may simply not exist
+    // yet: that answers `worker-starting` at once, with nothing after the `ensure` done, and the route waits OUTSIDE
+    // `coordMutex` (this function never waits). An honest-stale row (`record` undefined on a listable registry) has
+    // no wrapper to read a live file under, so nothing can be measured and it is `status-unmeasurable` (D-5273).
+    if (record === undefined || recordIdentity === null) {
+      return { ok: false, kind: 'refused', code: 'status-unmeasurable' };
+    }
+    liveGate = { record, uuid: recordIdentity.uuid };
+    const verdict = await deps.turnVerdict(record, recordIdentity.uuid);
+    if (verdict === 'busy') return { ok: false, kind: 'refused', code: 'worker-busy' };
+    if (verdict === 'unmeasured') {
+      return ensureStarted
+        ? { ok: false, kind: 'worker-starting', poll: liveGate }
+        : { ok: false, kind: 'refused', code: 'status-unmeasurable' };
+    }
   }
 
   // 5: hold, behind `verbSupported` — the standing convention reason string,
@@ -1039,6 +1089,14 @@ export async function dispatchRun(
   // gating on it here reproduces that arm's scope precisely, just on the far
   // side of the hold.
   if (resumed) {
+    // D-5238, at the act: the hold, `verbSupported` and the route write sit between the gate above and this
+    // keystroke (the window the hold's own comment names), so the verdict is read AGAIN here, immediately before the
+    // `/clear`, and refuses the same way. `liveGate` is set on every path that reaches here with `resumed`.
+    if (liveGate !== null) {
+      const atAct = await deps.turnVerdict(liveGate.record, liveGate.uuid);
+      if (atAct === 'busy') return { ok: false, kind: 'refused', code: 'worker-busy' };
+      if (atAct === 'unmeasured') return { ok: false, kind: 'refused', code: 'status-unmeasurable' };
+    }
     const clearRes = await sendPrompt({ tmux: deps.tmux, queue: deps.queue }, sessionId, '/clear');
     // A refused `/clear` (dialog open, draft present, an ignored Enter…) is
     // not fatal to dispatch itself — the run still lands in `dispatched`

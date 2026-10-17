@@ -62,7 +62,11 @@ async function makeApp(
   const calls: string[][] = [];
   const run: Runner = async (cmd, args) => {
     calls.push([cmd, ...args]);
-    return opts.fail ? { code: 1, stdout: '', stderr: 'boom' } : { code: 0, stdout: '', stderr: '' };
+    if (opts.fail) return { code: 1, stdout: '', stderr: 'boom' };
+    // A real pane pid, as routes.test.ts's makeApp gives: since D-5234 a null pid on an alive pane is an unmeasured
+    // row, which the archive door refuses `status-unknown` (D-5274).
+    if (args[0] === 'list-panes') return { code: 0, stdout: '4242\n', stderr: '' };
+    return { code: 0, stdout: '', stderr: '' };
   };
   const env: NodeJS.ProcessEnv = { CCRC_HOME: home };
   if (opts.projectsRoot) env.CCRC_PROJECTS_ROOT = opts.projectsRoot;

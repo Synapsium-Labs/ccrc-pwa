@@ -100,7 +100,7 @@ const harness = async (cfg: HarnessCfg = {}) => {
   const deps: DispatchRunDeps = {
     ...base, coord,
     fleetState: { connected: true, downSince: null, ccdVerbs: cfg.ccdVerbs ?? DEFAULT_VERBS, rosterFp: null, build: null },
-    configDir: (w: string) => configDirFor(base.cfg, w),
+    configDir: (w: string) => configDirFor(base.cfg, w), turnVerdict: async () => 'idle' as const,
   };
   return {
     coord, deps, runId: opened.id, calls,
