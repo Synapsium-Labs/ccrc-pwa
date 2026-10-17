@@ -1841,6 +1841,9 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
       34 passed, 8 warned (two new graphify-sweep warnings, not the update path), 0 failed; server 26 passed, twice.
       v0.0.245 and v0.0.246 released. STATUS: fleet and server v0.0.244, newest v0.0.246, intent dev/auto=stable,
       backups fleet 131M/server 826M, disk free fleet 214G/work volume 81G/server 32G, no anomalies.
+    - **2026-10-17 23:59 UTC:** v0.0.247 to v0.0.251 released (the last at 23:56) and stay unapplied under
+      `auto=stable`; no box moved. STATUS: fleet and server v0.0.244, newest v0.0.251, intent dev/auto=stable, backups
+      fleet 131M/server 826M, disk free fleet 214G/work volume 78G/server 32G, no anomalies.
 
 - **2026-09-30 12:22 UTC — wave 8 opened (run 182) for the live audit's residue, and dispatched.**
   - **Planning:** two Opus scoping agents measured each defect at `a742eb6a`, and an Opus writer assembled the
