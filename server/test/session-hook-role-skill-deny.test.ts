@@ -23,6 +23,7 @@ import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { mkTmp } from './tmpHelpers.js';
+import { renderServerCaps, SERVER_CAPS_FILE } from '../../shared/api.js';
 
 const HOOK = path.resolve(__dirname, '../../ccd/session-hook.sh');
 const SKILL_FILES = {
@@ -319,5 +320,22 @@ describe('the three names, written once (D-4934)', () => {
     expect(inHook).toEqual(frontmatter);
     // And the test's own table agrees, so a fourth skill added to one side only is red on both.
     expect(ROLE_SKILLS.slice().sort()).toEqual(frontmatter);
+  });
+});
+
+// D-5232 (plan 2026-10-16 Task 2): behind the server's word `hook-main-state-v1`, an agent event with no hookstate file
+// to carry writes none, and is NOT a silent exit: the tail's one print is still reached, so a subagent's role-skill deny
+// is printed on a session that has no file yet. The server's words are written the way Task 9b's writers write them.
+describe('the deny prints on a session with no hookstate file (D-5232)', () => {
+  it('a subagent\'s role-skill load with no hookstate file prints its deny and writes no file', () => {
+    fs.mkdirSync(path.join(home, '.ccrc'), { recursive: true });
+    fs.writeFileSync(path.join(home, '.ccrc', SERVER_CAPS_FILE),
+      renderServerCaps(['dispatch-live-gate-v1', 'hook-main-state-v1'], Math.floor(Date.now() / 1000)));
+    const state = path.join(home, '.cc-sessions', `${ID}.hookstate.json`);
+    expect(fs.existsSync(state)).toBe(false);
+    const r = subagentSkill('ccrc-worker');
+    expect(r.deny).not.toBeNull();
+    expect(r.envelope!.hookSpecificOutput.permissionDecision).toBe('deny');
+    expect(fs.existsSync(state), 'no file to carry: no hookstate is written').toBe(false);
   });
 });

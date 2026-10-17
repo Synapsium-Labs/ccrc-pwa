@@ -7340,7 +7340,11 @@ export class CoordStore {
    *  blocked at a dialog rewrote the identical envelope under a fresh number.
    *  Since D-4041 a MAIN-thread wait keeps its `updatedAt` and gains `aliveAt`,
    *  so that bump survives only for a wait a SUBAGENT raised (`waitBy:"subagent"`,
-   *  not carried) and for any other bump. Nothing re-stamped the row, so ONE
+   *  not carried) and for any other bump. Since D-5232, behind the server's word
+   *  `hook-main-state-v1`, `aliveAt` is no longer only a carried wait's: every
+   *  agent event keeps the main state's stamp and writes `aliveAt`, and a
+   *  subagent's own wait keeps its stamp across SubagentStart and SubagentStop
+   *  (its next tool event restores the `waitPrev` it stored). Nothing re-stamped the row, so ONE
    *  such bump refused every parent answer for the row's whole life and the lane
    *  degraded, silently and greenly, to the pre-feature behaviour. Measured in
    *  `server/test/ask-instance-guard.test.ts` (its last describe: the stamp that still moves).
