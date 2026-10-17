@@ -654,7 +654,8 @@ function stubSystemctl(home: string): void {
     + '  exit 0\n'
     + 'fi\n'
     + 'if [ "$1" = "--user" ] && [ "$2" = "show" ]; then\n'
-    + '  f="$HOME/fixture-cgroup-of-$3"\n'
+    // D-5241: `-p OOMPolicy` answers from its own file, so the oom-policy check can never read a ControlGroup.
+    + '  f="$HOME/fixture-cgroup-of-$3"; [ "$5" = OOMPolicy ] && f="$HOME/fixture-oompolicy-of-$3"\n'
     + '  if [ -f "$f" ]; then IFS= read -r v < "$f"; echo "$v"; fi\n'
     + '  exit 0\n'
     + 'fi\n'
@@ -958,6 +959,24 @@ function plantScope(home: string, o: {
   writeFileSync(join(home, `fixture-cgroup-of-${unit}`), `${cg}\n`);
 }
 
+/** D-5241: the victim policy's two OOMPolicy=continue drop-ins, at the paths `_inst_units` places them (systemd only,
+ *  so the Linux unit directory whatever the host). `fixture-oompolicy-of-<unit>` is what the stub's `show -p OOMPolicy`
+ *  answers for a scope. */
+const OOM_DROPIN = {
+  pane: join('tmux-spawn-.scope.d', '50-oom-continue.conf'),
+  server: join('ccrc-tmux-server.scope.d', '50-oom-continue.conf'),
+} as const;
+function plantOomDropins(home: string, which: ReadonlyArray<keyof typeof OOM_DROPIN> = ['pane', 'server']): void {
+  for (const k of which) {
+    const p = join(home, '.config', 'systemd', 'user', OOM_DROPIN[k]);
+    mkdirSync(path.dirname(p), { recursive: true });
+    writeFileSync(p, '[Scope]\nOOMPolicy=continue\n');
+  }
+}
+function plantOomPolicy(home: string, unit: string, value: string): void {
+  writeFileSync(join(home, `fixture-oompolicy-of-${unit}`), `${value}\n`);
+}
+
 /** The fixture's stand-in for /etc/caddy/Caddyfile — outside `~/.ccrc`, since
  *  the real one is outside the home entirely and `ccrcDirEntries`-style
  *  assertions elsewhere would otherwise see it. */
@@ -1077,6 +1096,9 @@ function healthy(prefix: string): string {
   // A pane scope with nothing parked: `_check_scopes` PASSes, and returns
   // WITHOUT settling, so the healthy fixture costs no extra second.
   plantScope(home, { procs: [4101, 4102] });
+  // D-5241: both scope drop-ins on disk and the pane scope reading `continue`: `oom-policy` PASSes.
+  plantOomDropins(home);
+  plantOomPolicy(home, 'tmux-spawn-fixture.scope', 'continue');
   // The pane-scope sweep's verdict record, fresh and empty: `scope-sweep` PASSes.
   writeFileSync(join(home, 'fixture-scope-sweep.state'), `# ccd-scope-sweep v1 tick=${Math.floor(Date.now() / 1000)} up=8640000 mode=shadow\n`);
   // tmux answers its versions, client and server agreeing — a healthy box is
@@ -1531,8 +1553,14 @@ const anyVerdictFor = (out: string, name: string): string | undefined =>
  *  fleet agent's `agent.env`, so neither arm has a subject. Measured the same
  *  way: with the check in the table and this `+ 1` absent, "every line is
  *  exactly PASS|WARN|FAIL|SKIP" and "prints a summary count LAST" red, and so
- *  does every `(N skipped)` pin that reads this constant. */
-const HEALTHY_SKIPS = (process.platform === 'darwin' ? 2 : 0) + 7;   // +1 server-caps (no role): its block at the end
+ *  does every `(N skipped)` pin that reads this constant.
+ *
+ *  RAISED BY ONE ON macOS ONLY (D-5241): `oom-policy` SKIPs there (launchd has
+ *  no OOMPolicy). On Linux `healthy()` plants both scope drop-ins and a pane
+ *  reading `continue`, so it PASSes and the count is unchanged there. Measured:
+ *  without this, the macOS run reds `counts BOTH lines in the summary` and
+ *  `every line is exactly PASS|WARN|FAIL|SKIP` (`expected 10 to be 9`). */
+const HEALTHY_SKIPS = (process.platform === 'darwin' ? 3 : 0) + 7;   // +1 server-caps (no role): its block at the end
 
 // ── the table itself ──────────────────────────────────────────────────────
 
@@ -15001,3 +15029,67 @@ describe('ccrc doctor: server-caps (D-5232\'s mechanism)', () => {
   });
 });
 
+
+// ── oom-policy (D-5241, plan 2026-10-16 Task 14) ─────────────────────────────
+describe('oom-policy: the victim policy\'s two scope drop-ins, on disk and applied', () => {
+  const SRV = 'ccrc-tmux-server.scope';
+  const PANE = 'tmux-spawn-fixture.scope';
+  const listServer = (home: string): void => { appendFileSync(join(home, 'fixture-scopes'), `${SRV} loaded active running\n`); };
+  const verdict = (home: string): { line: string; remedy: string } => {
+    const lines = runDoctor(home).stdout.split('\n');
+    const i = lines.findIndex((l) => / oom-policy: /.test(l));
+    expect(i, 'an oom-policy line').toBeGreaterThanOrEqual(0);
+    return { line: lines[i]!, remedy: lines[i + 1] ?? '' };
+  };
+
+  itLinux('PASS: both drop-ins in place and the live pane scope reads continue', () => {
+    const home = healthy('ccrc-doctor-oom-pass-');
+    expect(verdict(home).line).toBe(`PASS oom-policy: both OOMPolicy=continue drop-ins are in place and ${PANE} read continue`);
+  });
+
+  itLinux('PASS: the tmux server scope is read too, when it is listed', () => {
+    const home = healthy('ccrc-doctor-oom-pass-srv-');
+    listServer(home); plantOomPolicy(home, SRV, 'continue');
+    expect(verdict(home).line).toBe(`PASS oom-policy: both OOMPolicy=continue drop-ins are in place and ${SRV} and ${PANE} read continue`);
+  });
+
+  itLinux('WARN: the pane-scope drop-in is missing — named, with its trailing-hyphen directory', () => {
+    const home = healthy('ccrc-doctor-oom-nopane-');
+    rmSync(join(home, '.config', 'systemd', 'user', OOM_DROPIN.pane));
+    plantOomPolicy(home, PANE, 'stop');
+    const v = verdict(home);
+    expect(v.line).toMatch(/^WARN oom-policy: ~\/\.config\/systemd\/user\/tmux-spawn-\.scope\.d\/50-oom-continue\.conf is missing; tmux-spawn-fixture\.scope reads OOMPolicy=stop: /);
+    expect(v.remedy).toMatch(/^ {2}remedy: ccrc update \(or ccrc install\) places both drop-ins; then systemctl --user daemon-reload/);
+  });
+
+  itLinux('WARN: the tmux-server drop-in is missing, even with no tmux server scope running', () => {
+    const home = healthy('ccrc-doctor-oom-nosrv-');
+    rmSync(join(home, '.config', 'systemd', 'user', OOM_DROPIN.server));
+    expect(verdict(home).line).toMatch(/^WARN oom-policy: ~\/\.config\/systemd\/user\/ccrc-tmux-server\.scope\.d\/50-oom-continue\.conf is missing: /);
+  });
+
+  itLinux('WARN: a pane scope reading stop with its drop-in in place (not reloaded)', () => {
+    const home = healthy('ccrc-doctor-oom-panestop-');
+    listServer(home); plantOomPolicy(home, SRV, 'continue');
+    plantOomPolicy(home, PANE, 'stop');
+    expect(verdict(home).line).toMatch(/^WARN oom-policy: tmux-spawn-fixture\.scope reads OOMPolicy=stop although ~\/\.config\/systemd\/user\/tmux-spawn-\.scope\.d\/50-oom-continue\.conf is in place \(not reloaded\): /);
+  });
+
+  itLinux('WARN: the tmux server scope reading stop', () => {
+    const home = healthy('ccrc-doctor-oom-srvstop-');
+    listServer(home); plantOomPolicy(home, SRV, 'stop');
+    expect(verdict(home).line).toMatch(/^WARN oom-policy: ccrc-tmux-server\.scope reads OOMPolicy=stop although .* is in place \(not reloaded\): /);
+  });
+
+  itLinux('PASS, saying so, when no tmux scope is running to read (an unlisted scope is never asked)', () => {
+    const home = healthy('ccrc-doctor-oom-noscope-');
+    rmSync(join(home, 'fixture-scopes'));
+    plantOomPolicy(home, PANE, 'stop');   // would WARN if it were asked
+    expect(verdict(home).line).toBe('PASS oom-policy: both OOMPolicy=continue drop-ins are in place; no tmux scope is running to read');
+  });
+
+  itDarwin('SKIP on macOS: launchd has no OOMPolicy', () => {
+    const home = healthy('ccrc-doctor-oom-darwin-');
+    expect(verdict(home).line).toBe('SKIP oom-policy: OOMPolicy is a systemd mechanism, and this box runs launchd');
+  });
+});
