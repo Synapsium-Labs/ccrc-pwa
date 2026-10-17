@@ -3795,6 +3795,12 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
     every read, and its mutation row restores the old flush. It rides wave 16's branch as D-5145 (mail 5982), before
     review 568. Review 568's brief now covers it, and the review waits for that wave-done. No other PR or claim
     touches the file.
+  - **17:05 UTC: wave 18's held rows (mail 5988), ruled (mail 5989).** Every row reds as recorded except T1-3 and
+    T1-4 (6 of 27, was 4 of 25) and T1-6 (3 of 27, was 1). Each also reds H18-10 and H18-11, fix round 1's D-5257
+    rows, which a mutation that stops the fixture pair, or keeps a pair half under HOME, must red. The measured
+    sets are supersets, so the plan's T1 table records them as the landing-tip values in one prose commit, with a
+    fresh wave-done. `typecheck-tests` timed out twice under load (CLAUDE.md lists it as a load flake). A direct
+    `tsc` over the test config and `server/` exits 0, and PR CI 39050279614 is green.
 
 ## Carried constraints
 
