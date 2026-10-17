@@ -6,7 +6,7 @@ import type { AccountsResponse, AckAnswer, ApplyUpdateBody, AutoMode, CatalogueS
 import { raiseAuthLostFrom } from './auth';
 import { ARCHIVE_REFUSALS, isArchiveRefusal, type ArchiveAnswer, type ArchiveBody, type ArchiveRefusal } from '../../../shared/api';
 import { SWAP_REFUSALS, type SwapRefusal } from '../../../shared/api';
-import type { Dialog, DialogAnswered, DialogTabRequest } from '../../../shared/api';
+import type { Dialog, DialogAnswered, DialogTabRequest, InterruptRouteSource } from '../../../shared/api';
 
 import { isNodeRole } from '../../../shared/node-role';
 import { TOKEN_TRANSPORTS } from '../../../shared/agent-protocol';
@@ -1207,7 +1207,8 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
     claims: (opts?: { all?: boolean }): Promise<{ claims: ClaimSummary[] }> =>
       getJson<{ claims: ClaimSummary[] }>(
         opts?.all === true ? '/api/claims?all=1' : '/api/claims'),
-    interrupt: (id: string) => post(`${sid(id)}/interrupt`),
+    /** D-5237: `source` names the control that sent it (the keycap, the Escape key, a Deny); the server records it. */
+    interrupt: (id: string, source: InterruptRouteSource) => post(`${sid(id)}/interrupt`, { source }),
     /** `POST /api/coord/pause` (spec §4.2) — request `{paused}`, response
      *  `{ok:true, requested}` on success (the field is `requested`, never
      *  `paused`: the route ran a verb, it did not read the marker back).

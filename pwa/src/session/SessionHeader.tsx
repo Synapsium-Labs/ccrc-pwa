@@ -34,7 +34,8 @@ export interface SessionHeaderProps {
   session: FleetSession | null;
   status: SessionStatus | null;
   statusUpdatedAt: number | null;
-  onInterrupt: () => void;
+  /** D-5237: called with the control that sent it, which the server records. */
+  onInterrupt: (source: 'keycap' | 'escape-key') => void;
   onOpenTerminal: () => void;
   onBack: () => void;
   /** "Change model" — opens the one-tap model chooser. */
@@ -226,7 +227,7 @@ export function SessionHeader({
       const el = e.target as HTMLElement | null;
       const tag = el?.tagName;
       if (tag === 'INPUT' || tag === 'TEXTAREA' || el?.isContentEditable === true) return;
-      onInterrupt();
+      onInterrupt('escape-key');
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
@@ -408,7 +409,7 @@ export function SessionHeader({
         <PrKeycap pr={session.pr} onOpen={() => setPrOpen(true)} />
       )}
       {!finePointer && (
-        <Keycap className="keycap--esc" aria-label="Stop" disabled={!busy} onClick={onInterrupt}>
+        <Keycap className="keycap--esc" aria-label="Stop" disabled={!busy} onClick={() => onInterrupt('keycap')}>
           esc
         </Keycap>
       )}

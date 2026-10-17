@@ -43,7 +43,7 @@ import {
   sendPrompt, answerDialog, answerDialogMulti, answerDialogText, interrupt, interruptVerdict, moveDialogTab, submitEnter,
   type InterruptVerdict, type SendDeps,
 } from './inject/send.js';
-import { answerAsk, type AskDeps } from './inject/ask.js';
+import { answerAsk, readAskAnswer, type AskDeps } from './inject/ask.js';
 import { freshAskAt, measuredIdentity, readRegistry, readSessionRecord } from './registry.js';
 import type { SessionRecord } from './registry.js';
 import { readHookState } from './hookstate.js';
@@ -95,7 +95,8 @@ import {
   type FloorState, type ProjectRow, type ProjectPoolsWire, type ProjectPoolWire, type ProjectRepoWire,
   parseRouteFields, programKickoffVerdict, routeFieldsOrNull, routeParseDetail, type RouteFields,
 } from '../../shared/api.js';
-import { ARCHIVE_REFUSALS, SERVER_CAPS, type SwapRefusal } from '../../shared/api.js';
+import { ARCHIVE_REFUSALS, SERVER_CAPS, interruptRouteSource, type SwapRefusal } from '../../shared/api.js';
+import { DrawerInterruptThrottle, drawerInterruptSource, recordInterrupt } from './interruptlog.js';
 import type { Dialog } from '../../shared/api.js';
 import {
   archiveFlags, archiveOutcome, busyReadFailsClosed, decideArchive, frameRowVerdict, refusedAtStop, worktreeOf, type ArchiveMeasure,
@@ -1705,6 +1706,9 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   // handed the sweep's abandon here, and has no other way to close a run. Called optionally: a test's stand-in watcher
   // (a structural double, not a `FleetWatcher`) carries no such method, and has no lane to hand it to.
   watcher?.useCoordSerialiser?.(coordRoutes);
+  // The stop-done lane (D-5370) stops a finished run's worker on the same serialiser, so a dispatch opening a run onto
+  // it cannot fall between the lane's store read and its `ccd stop`. Optional for the same stand-in watcher's reason.
+  watcher?.useStopDoneSerialiser?.(coordRoutes);
 
   // The update control plane (design 2026-09-20 §12, update-management W2),
   // registered from its own file — which is why `auth-gate.test.ts`'s `ROUTES`
@@ -1770,6 +1774,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     return Number.isFinite(n) && n > 0 ? Math.floor(n) : dflt;
   };
 
+  const drawerInterrupts = new DrawerInterruptThrottle();   // D-5237: one lone ESC / Ctrl-C row per session per 2 s
   app.get('/ws/pty/:id', { websocket: true }, (socket, req) => {
     const { id } = req.params as { id: string };
     const q = req.query as { cols?: string; rows?: string };
@@ -1848,8 +1853,11 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     socket.on('message', (raw) => {
       try {
         const m = JSON.parse(String(raw)) as { type?: unknown; data?: unknown; cols?: unknown; rows?: unknown };
-        if (m.type === 'input' && typeof m.data === 'string') p.write(m.data);
-        else if (m.type === 'resize' && typeof m.cols === 'number' && typeof m.rows === 'number') {
+        if (m.type === 'input' && typeof m.data === 'string') {
+          p.write(m.data);   // D-5237: the bytes pass through unchanged; a lone ESC or Ctrl-C is also recorded
+          const src = drawerInterruptSource(m.data);
+          if (src !== null && drawerInterrupts.admit(id, Date.now())) recordInterrupt(deps, id, src, 'sent');
+        } else if (m.type === 'resize' && typeof m.cols === 'number' && typeof m.rows === 'number') {
           p.resize(m.cols, m.rows);
         }
       } catch { /* ignore malformed frames */ }
@@ -2257,13 +2265,12 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   app.post('/api/sessions/:id/ask', async (req, reply) => {
     const { id } = req.params as { id: string };
     if (!(await knownId(id))) return reply.code(404).send({ ok: false, error: 'unknown-session' });
-    const body = (req.body ?? {}) as { askKey?: unknown; optionIndexes?: unknown };
-    if (typeof body.askKey !== 'string' ||
-        !Array.isArray(body.optionIndexes) ||
-        !body.optionIndexes.every((n) => typeof n === 'number')) {
+    // D-5293: one reader for this body and the parent's (`readAskAnswer`).
+    const body = readAskAnswer(req.body ?? {});
+    if (body === null || body.askKey === undefined) {
       return reply.code(400).send({ ok: false, error: 'bad-request' });
     }
-    const optionIndexes = body.optionIndexes as number[];
+    const optionIndexes = body.optionIndexes;
     // Narrowed to `string` by the guard above, but that narrowing does not
     // cross into `pressPlain`'s own closure below — a fresh `const` of the
     // narrowed type carries it there.
@@ -2425,6 +2432,8 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       }
       return interruptVerdict({ word, ...(await liveRowWithHookFor(turnReads, read.record, identity.uuid)) });
     });
+    // D-5237: every answer is recorded with the client's source (anything else is `unknown`) and its outcome; never pushed.
+    recordInterrupt(deps, id, interruptRouteSource((req.body as { source?: unknown } | null)?.source), res.ok ? 'sent' : res.error);
     return res.ok ? res : reply.code(409).send(res);
   });
 
@@ -3219,7 +3228,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     // server-side preflight they share. A declared crossing gets the 501 skew
     // refusal and deliberately skips the pool verdict;
     // ccd re-measures session and tag on the fleet box. The ordinary arm owns
-    // the pool refusal; both own the early 404/503 ladder, the crossing since D-5240, whose turn gate needs the row.
+    // the pool refusal; both own the early 404/503 ladder, the crossing since D-5240 (D-5379), whose turn gate needs the row.
     // Every applicable refusal is
     // decided BEFORE queue entry. `lifecycle.test.ts` pins ordinary-arm queueing;
     // `swap-route-pool.test.ts` pins crossing-arm queueing and each arm's
@@ -3261,7 +3270,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     // D-5240: the turn gate, archive's fail-closed `turnVerdictFor` under archive's consent rule (`swapTurnRefusal`):
     // `busy` without consent is `409 session-busy`, `unmeasured` is `409 status-unknown` with or without it. Read here,
     // before the queue, and again inside the job, so a turn that began during the wait is refused the same way. An
-    // identity field that could not be read is `/archive`'s 503: the turn reads need the uuid.
+    // identity field that could not be read is `/archive`'s 503 (D-5380): the turn reads need the uuid.
     const identity = measuredIdentity(read.record);
     if (identity === null) return reply.code(503).send({ ok: false, error: 'registry-unmeasurable' });
     const rec = read.record;

@@ -100,6 +100,8 @@ describe('SessionHeader', () => {
     expect(stop).toBeEnabled();
     fireEvent.click(stop);
     expect(props.onInterrupt).toHaveBeenCalledOnce();
+    // D-5237: the keycap names itself as the interrupt's source.
+    expect(props.onInterrupt).toHaveBeenCalledWith('keycap');
     expect(screen.getByText(/working/)).toBeInTheDocument();
   });
 
@@ -266,6 +268,8 @@ describe('interrupt control', () => {
     render(<SessionHeader {...props({ status: 'busy', onInterrupt })} />);
     fireEvent.keyDown(window, { key: 'Escape' });
     expect(onInterrupt).toHaveBeenCalled();
+    // D-5237: the physical key names itself as the interrupt's source.
+    expect(onInterrupt).toHaveBeenCalledWith('escape-key');
   });
 
   it('does not interrupt an idle session, matching the keycap\'s disabled state', () => {
@@ -302,7 +306,7 @@ describe('SessionScreen interrupt wiring', () => {
     return { store, fleet };
   };
 
-  it('the stop keycap calls api.interrupt with the session id', () => {
+  it('the stop keycap calls api.interrupt with the session id and its source (D-5237)', () => {
     const spy = vi.spyOn(api, 'interrupt').mockResolvedValue(undefined);
     const { store, fleet } = makeStores();
     render(<SessionScreen id="claude:OpenClawHetzner" store={store} fleet={fleet} />);
@@ -310,7 +314,7 @@ describe('SessionScreen interrupt wiring', () => {
       store.setState({ uuid: 'u1', status: 'busy' });
     });
     fireEvent.click(screen.getByRole('button', { name: 'Stop' }));
-    expect(spy).toHaveBeenCalledWith('claude:OpenClawHetzner');
+    expect(spy).toHaveBeenCalledWith('claude:OpenClawHetzner', 'keycap');
   });
 
   it('a 409 not-busy answer surfaces as a quiet toast', async () => {

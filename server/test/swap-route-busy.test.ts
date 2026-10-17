@@ -38,6 +38,8 @@ interface BoxCfg {
   /** `ccd swap`'s answer; every other call exits 0. */
   swap?: { code: number; stderr: string };
   queue?: KeyedQueue;
+  /** The row's `.uuid` is listed but its read fails: the identity is unmeasured (D-5380). */
+  uuidUnreadable?: boolean;
 }
 
 let open: Array<{ app: FastifyInstance; home: string }> = [];
@@ -60,7 +62,13 @@ const box = async (cfg: BoxCfg = {}) => {
   seedRoster(home, ROSTER);
   const config = loadConfig({ CCRC_HOME: home });
   const deps = {
-    cfg: config, runCcd: ccdRunner(run, config), tmux: new Tmux(run), io: localIO, queue: cfg.queue ?? new KeyedQueue(),
+    cfg: config, runCcd: ccdRunner(run, config), tmux: new Tmux(run),
+    io: cfg.uuidUnreadable !== true ? localIO : {
+      ...localIO,
+      readFileMeasured: async (p: string, t?: number, sig?: AbortSignal) =>
+        (p.endsWith('.uuid') ? { ok: false, reason: 'unreadable' } as const : localIO.readFileMeasured(p, t, sig)),
+    },
+    queue: cfg.queue ?? new KeyedQueue(),
     ...(cfg.caps === undefined ? {} : {
       fleetState: { connected: true, downSince: null, ccdVerbs: cfg.caps, rosterFp: null, build: null },
     }),
@@ -89,6 +97,26 @@ const post = (app: FastifyInstance, payload: Record<string, unknown>) =>
 const ALL_CAPS = [POOLS_CAP, SWAP_BUSY_CAP];
 
 describe('the swap route refuses a turn it was not told to lose (D-5240)', () => {
+  it('D-5379: the declared crossing reads the row: an unknown id is 404 unknown-session, and ccd is never called', async () => {
+    const b = await box({ caps: ALL_CAPS });
+    const res = await b.app.inject({
+      method: 'POST', url: '/api/sessions/lane-a-nothing/swap', payload: { wrapper: 'lane-b', crossPool: true } });
+    expect(res.statusCode).toBe(404);
+    expect(res.json()).toEqual({ ok: false, error: 'unknown-session' });
+    expect(b.ccd()).toEqual([]);
+  });
+
+  it('D-5380: a row whose identity could not be read is 503 registry-unmeasurable on both arms, with or without consent', async () => {
+    for (const payload of [{ wrapper: 'lane-b' }, { wrapper: 'lane-b', crossPool: true, interrupt: true }]) {
+      const b = await box({ caps: ALL_CAPS, uuidUnreadable: true });
+      liveStatus(b.home, 'idle');
+      const res = await post(b.app, payload);
+      expect(res.statusCode).toBe(503);
+      expect(res.json()).toEqual({ ok: false, error: 'registry-unmeasurable' });
+      expect(b.ccd()).toEqual([]);
+    }
+  });
+
   it('an idle session swaps as before: 200, the old argv', async () => {
     const b = await box();
     liveStatus(b.home, 'idle');
