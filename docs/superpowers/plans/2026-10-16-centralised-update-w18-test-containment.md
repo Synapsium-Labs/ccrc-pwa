@@ -247,6 +247,11 @@ These are departures from the brief, the ledger, or what shipped text at `256b25
   - **The plan:** the census header named only D-5253's two blind spots, and Task 3 fixed only the census's hits.
   - **Read by the review** (a scratch copy of the census, run standalone with its NAMES widened, never committed): widened from `ccd`/`ccrc` to the sibling scripts in that directory and the skill installers, it counts 64 bare hits in 26 files and six unplaced programs; several of those scripts (the doctor checks, the session hook, the telemetry keepalive) name a contained tool. Two structural blind spots: a script path bound through a call the census does not follow (`fileURLToPath(new URL(…))`), and a script handed to a helper as a parameter. Nothing bare of `ccd` or `ccrc` hides behind either today.
   - **The change:** one header paragraph names the scope (R14(b)'s two scripts) and both blind spots; the sibling scripts join the residue (Not in this wave). `runbook-holds.test.ts`'s one other spawn, `_dr_rc_state` from the doctor checks, sat bare beside the spawn Task 3 contained, so it takes the same `ccrcContainedEnv`.
+- **D-5256** — *Fix round 1 widens the census, as review 535's rulings direct: a command line built as an array `.join(…)` or a `+` concatenation (F1), names resolved per binding rather than per file (F1), a script segment joined onto a directory binding inside the spawn itself (F7), a spread after the last builder followed (F5), a decided env kept across an unfollowable spread (F6), and a callback with no options and `env: undefined` read as bare (F8(1), (2)). The header's opening claim narrows to the spellings it lists, and the spellings it does not follow are named* (the worker, fix round 1).
+  - **The plan:** Task 3's census, D-5250's spellings, and the header's claim of "every spawn of the real ccd or ccrc script".
+  - **Read by the review** (standalone): each shape above was missed on a synthetic input, and F1's shape and F7's are live in the tree on contained spawns (six and four sites), so a revert of any of them to the parent's env would not red. Four detector arms had no corpus line, so deleting them redded nothing (F2).
+  - **The change:** the rules above, a corpus line for each, and for each of F2's arms, and a pin on the corpus's unplaced list for the PROGRAM rule's "the script itself" arm (kept, not deleted). `bashPath` joins `RUNNERS`. Rows T3-11 to T3-26, measured standalone. The ten new script spawns are all contained, and `ALLOWED` and `SLICED_ALLOWED` are unchanged.
+  - **Named, not fixed** (the header's blind spots): a script path followed by its arguments in one string (F8(3)), a directory binding joined in a template, the three namespace spellings (F8(4)), and lexical scope and destructuring, both ways (F9).
 - **D-5257** — *`busPath` refuses a bus value that holds `;` or `%`, so `busUnder` answers false (the fixture pair wins in `ghContainedEnv`) and `assertNoRealTool` throws* (the worker, fix round 1, from review 535's F4, as the coordinator ruled).
   - **The plan:** Task 1 made `busUnder` a GATE (a caller pair it accepts is kept), but it inherited `busPath`'s grammar, which reads only the first `unix:` address and resolves the path lexically.
   - **Read by the review** (node against the real module): `unix:path=<home>/bus;unix:path=/run/user/<uid>/bus` was kept although a D-Bus client falls through to the second address, and `unix:path=<home>/%2e%2e/%2e%2e/run/user/<uid>/bus` was kept although D-Bus unescapes it and `path.resolve` does not. No test passes either today.
@@ -624,6 +629,8 @@ diff --git a/server/test/ccdWsHelpers.ts b/server/test/ccdWsHelpers.ts
   | T1-12 | the bus keyed on `opts.systemd \|\| opts.tmux` | H18-7, its tmux-only case ("no systemd, no bus") |
   | T1-13 | `stubContainedTool`'s refusal removed | H18-9 ("expected [Function] to throw") |
   | T1-14 | `stubContainedTool`'s `gh` refusal removed (D-5254) | H18-9 only, 1 of 25: "expected [Function] to throw an error" *(worker, measured)* |
+  | T1-15 | `busPath`'s refusal of `;` removed (D-5257, fix round 1) | H18-10 only: the caller's address list is kept *(expected; vitest pending the landing tip)* |
+  | T1-16 | `busPath`'s refusal of `%` removed (D-5257, fix round 1) | H18-11 only: the caller's escaped path is kept *(expected; vitest pending the landing tip)* |
 
 - [ ] **Step 5: Commit** `test(update): the ccd harness poisons ssh, scp and curl, the user bus under HOME rides systemd, and one door for a functional stub (wave 18, D-5247, D-5248, D-5249)`.
 
@@ -828,6 +835,8 @@ diff --git a/server/test/pool-accounts-route.test.ts b/server/test/pool-accounts
   | T2-3 | `syncInto` reverted to `<home>/bin` | `pool-accounts-route`'s three C1/W1 rows (Step 1's set). [prototype, as the red-first: the same three] |
   | T2-4 | `run()`'s `net: true` dropped | the new row only ("the poison answered the curl: expected false to be true"). The host's curl runs against `example.invalid`, which does not resolve, so nothing is contacted |
   | T2-5 | T2-1 with the `afterEach` guard removed (the control) | only the stub tests that assert a positive side effect: the absence-only rows go green, which is what the guard exists for |
+  | T2-6 | `runFull` drops `net` (fix round 1, review 535 F10) | every `runFull` row, by `assertNoRealTool: ssh resolved to …` *(expected; vitest pending the landing tip)* |
+  | T2-7 | the strays listing drops `net` (F10) | that row only, by `assertNoRealTool: ssh resolved to …` *(expected; vitest pending the landing tip)* |
 
 - [ ] **Step 5: Commit** `test(update): the pool-sync curl stubs go through stubContainedTool, and ccd-pool-sync's runners ask net (wave 18, D-5249)`.
 
@@ -1811,11 +1820,35 @@ index 98588f683..78b7d1959 100644
   | T3-4 | `'bash'` removed from `RUNNERS` | row 4 only, listing every `'bash'` spawn. [prototype: 1 of 5] |
   | T3-5 | `'cat'` added to `READERS` | row 4 only: "'cat' is placed but no spawn uses it". [prototype: 1 of 5] |
   | T3-5r | `deploy-env-guard`'s reason cut to `'x'` | row 5 only |
-  | T3-6 | `runbook-holds`' env reverted to `{ ...process.env, HOME: home }`; run `runbook-holds` and the census | the census (`runbook-holds.test.ts:157`), and two `runbook-holds` rows ("the exposure PASS line …", "the name PASS line …"), each by `assertNoRealTool: XDG_RUNTIME_DIR=/run/user/<uid> does not name a path inside the fixture HOME`. [prototype: 3 of 28] |
+  | T3-6 | `runbook-holds`' env reverted to `{ ...process.env, HOME: home }`; run `runbook-holds` and the census | the census (`runbook-holds.test.ts:160` at the fix-round tip; `:158` at `b5b83ad66`, `:157` at `51baba484`), and two `runbook-holds` rows ("the exposure PASS line …", "the name PASS line …"), each by `assertNoRealTool: XDG_RUNTIME_DIR=/run/user/<uid> does not name a path inside the fixture HOME`. [prototype: 3 of 28] |
   | T3-7 | `ccrc-memory`'s `memEnv` reverted to `({ ...process.env, HOME: home, ...extra })`; run `ccrc-memory` and the census | `ccrc-memory`'s "the env every spawn here uses passes assertNoRealTool" only. The census stays GREEN: every spawn passes `memEnv(…)`, a call (D-5253). [prototype: 1 of 64] |
   | T3-8 | either `projected-home` call site reverted to `env: { ...process.env, HOME: … }` | row 2, naming that line. [prototype, on the inline form: the census reddened its line] |
   | T3-9 | `phEnv` drops `net` | `projected-home`'s new row: "assertNoRealTool: ssh resolved to …". The census stays green (a helper call) |
   | T3-10 | `phEnv` drops `systemd` | `projected-home`'s new row: the bus pair and `systemctl` are no longer under HOME |
+  | T3-6b | `runDrRcState`'s env reverted to `{ ...process.env, HOME: home }` (fix round 1, review 535 F11) | every `runbook-holds` row that calls `runDrRcState`, by `assertNoRealTool`; the census stays green, the doctor checks being outside its names *(expected; vitest pending the landing tip)* |
+
+  Fix round 1's census rows (D-5256), each measured standalone *(worker, standalone: node type stripping and a minimal `describe`/`it`/`expect` shim, at the fix-round tip; row numbers: 1 found, 2 ALLOWED, 3 SLICED_ALLOWED, 4 placement, 5 reasons, 6 R14(b)'s spawn, 7 corpus)*. Unmutated: 7 of 7. On `git archive 0a06ebb9a`: row 2 only, the seven predicted hits plus the `ALLOWED` one.
+
+  | Row | Mutation | Red set |
+  |---|---|---|
+  | T3-11 | `joinLike`'s array arm answers false (F1) | rows 4 and 7: "bashPath is placed but no spawn uses it", and the corpus `.join` line |
+  | T3-12 | `joinLike`'s `+` arm needs 99 operands (F1) | row 7 only: the corpus `+` line |
+  | T3-13 | `isScript` resolves by name file-wide, not per binding (F1) | rows 2 and 7: "ALLOWED says 1 for server/test/ccrc-doctor.test.ts; measured 8375, 8574" (the second `script` binding, a false hit in a claimed file), and the corpus `rebind` line |
+  | T3-14 | `importsOf` adds the original name, not the `as` alias (F2(a)) | row 7 only |
+  | T3-15 | the `for … of` arm no longer follows an identifier-bound list (F2(b)) | row 7 only |
+  | T3-16 | `stripCast` no longer unwraps parentheses (F2(c)) | row 7 only |
+  | T3-17 | `mask` no longer blanks `//` comments (F2(d)) | rows 2, 3 and 7 (commented-out spawns in the tree become hits) |
+  | T3-18 | `mask` no longer blanks string contents (F2(d)) | rows 3 and 7 |
+  | T3-19 | the PROGRAM rule's "the script itself" arm removed (F2) | row 7 only: the corpus `spawnSync(CCRC, …)` line becomes unplaced |
+  | T3-20 | `namesAt` drops the inline directory join (F7) | row 7 only |
+  | T3-21 | the object-literal arm returns null on any builder again (F5) | row 7 only: the spread after the builder is missed |
+  | T3-22 | the object-literal arm follows a spread before the builder (F5) | row 7 only: `{ ...e2, ...ghContainedEnv(d) }` becomes a hit |
+  | T3-23 | an unfollowable spread erases a decided verdict again (F6) | row 7 only |
+  | T3-24 | `envOf` no longer drops a trailing callback (F8(1)) | row 7 only |
+  | T3-25 | `env: undefined` no longer bare (F8(2)) | row 7 only |
+  | T3-26 | `'sh'` added to `RUNNERS` (the unplaced pin) | rows 4 and 7: "'sh' is placed but no spawn uses it", and the corpus's unplaced list |
+
+  The whole tree, `b5b83ad66` against the fix-round tip *(worker, standalone)*: 854 sources and 1215 spawns both times; script spawns 181 → 191, sliced 24 → 24, hits 1 → 1 (`ccrc-doctor.test.ts:8375`), sliced hits 12 → 12, unplaced 0 → 0. The ten new script spawns are all contained: `ccrc-doctor.test.ts:4260`, `:5201`, `:5389` (F1, an array `.join`), `:13878`, `:14545`, `:14791`, `:14819` (F7), `ccrc-models.test.ts:461`, `ccrc-token-sync.test.ts:847` (program `bashPath`, now in `RUNNERS`) and `doctor-box-token.test.ts:76` (F1). No site stopped being one (`runbook-holds.test.ts`' spawn moved from `:158` to `:160`). No `ALLOWED` or `SLICED_ALLOWED` entry changed.
 
 - [ ] **Step 5: Commit** `test(update): a census of raw spawns of the ccd and ccrc scripts and of text sliced from them, and the hits it found (wave 18, R14(b), D-5250, D-5251, D-5253)`.
 

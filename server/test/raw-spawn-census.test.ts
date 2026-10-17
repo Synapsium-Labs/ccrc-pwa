@@ -1,5 +1,7 @@
-// raw-spawn-census.test.ts — every spawn of the real ccd or ccrc script in server/test and agent/test hands it a
-// CONTAINED env, or is named here with its reason (centralised update management, wave 18, R14(b); D-5250, D-5251).
+// raw-spawn-census.test.ts — every spawn of the real ccd or ccrc script in server/test and agent/test, in the
+// spellings THE RULE below lists, hands it a CONTAINED env, or is named here with its reason (centralised update
+// management, wave 18, R14(b); D-5250, D-5251, D-5256). The listed rules and the blind spots after them are the
+// contract: a spelling in neither is not seen.
 //
 // WHY. HOME is the only isolation boundary ccd and ccrc have, and the second boundary — no real gh, systemctl,
 // systemd-run, launchctl, tmux, curl, ssh or scp, and no real user bus — is what `ghContainedEnv` (with its options)
@@ -14,21 +16,29 @@
 //     any of those spellings (comments, strings and regex literals skipped; the call's extent found by matching its
 //     parentheses). A member call on anything else (`re.exec(…)`) is never one.
 //   * It EXECUTES a script when its argument text names one: a literal path ending in the scripts' directory and
-//     name; an identifier bound to one in that file (a `const`/`let` whose initialiser names the path, or joins a
-//     script name onto a binding of the scripts' directory, and READS nothing); one imported under that name, or
-//     reached as `<ns>.<name>` through a namespace import, from a module that exports one; or a `for … of` variable
-//     over a list naming one, inside that loop's body.
+//     name; a script name joined onto a binding of the scripts' directory inline (`join(SCRIPTS_DIR, 'ccrc')`); an
+//     identifier bound to one in that file (a `const`/`let` whose initialiser names the path, joins a script name onto
+//     a binding of the scripts' directory, or builds a command line naming one as an array `.join(…)`ed or a `+`
+//     concatenation, and READS nothing); one imported under that name or an `as` alias, or reached as `<ns>.<name>`
+//     through a namespace import, from a module that exports one; or a `for … of` variable over a list naming one
+//     (inline, or bound to an identifier), inside that loop's body. A name resolves PER BINDING: to its nearest
+//     earlier binding in the file, else the first one (a function declared above a module-level `const`), else an
+//     import, so a second binding that reuses a script binding's name is judged on its own initialiser (D-5256).
 //   * It runs SLICED text when it executes no script file but its argument text names a binding derived from a READ
 //     of a script (its text read, then sliced, matched or handed to a helper). Those are counted on their own
 //     (D-5251): a BARE one is listed in `SLICED_ALLOWED` with its reason and exact count.
-//   * Its env is BARE when it has no `env` at all, `env: process.env` (a trailing `as`/`satisfies` cast ignored), or
-//     an object literal or `Object.assign` that takes the parent's env with no builder call AFTER it — directly,
-//     through the binding an identifier names, through a spread options object, or through a parameter's default.
-//     Anything else (a builder call after the parent's env, a member such as `b.env`, an env built from scratch, a
-//     parameter with no default, a helper function's return) is not one of the three shapes, and is the builder's
-//     own file's to pin.
+//   * Its env is BARE when it has no `env` at all (no options, or only a trailing callback), `env: process.env` or
+//     `env: undefined` (a trailing `as`/`satisfies` cast and wrapping parentheses ignored), or an object literal or
+//     `Object.assign` that takes the parent's env with no builder call AFTER it — directly, through a top-level spread
+//     of an identifier after the last builder call, through the binding an identifier names, through a spread options
+//     object, or through a parameter's default. A spread in the options that cannot be followed keeps a verdict an
+//     `env` key, the `env` shorthand or a followed spread already gave, and otherwise leaves the env undecided
+//     (D-5256). Anything else (a builder call after the parent's env, a member such as `b.env`, an env built from
+//     scratch, a parameter with no default, a helper function's return) is not one of the three shapes, and is the
+//     builder's own file's to pin.
 //   * The PROGRAM (the first argument; for `exec`/`execSync`, the command line's first word) of every script-naming
-//     spawn is a runner, a reader or the script itself, or the census reds until it is placed.
+//     spawn is a runner, a reader or the script itself, or the census reds until it is placed. The corpus pins the
+//     unplaced list itself, so the "script itself" arm, which no real spawn uses, reds when it is deleted.
 //   * A BARE spawn that EXECUTES a script is a HIT. Every hit is fixed, or listed in `ALLOWED` with its reason and its
 //     exact count. Both lists are pinned both ways: an unlisted hit reds, and so does a listed file whose count no
 //     longer matches (a stale entry).
@@ -43,6 +53,15 @@
 // URL('…'))`), or one handed to a helper as a parameter that the helper then spawns; and its NAMES are the ccd and
 // ccrc scripts only, as R14(b) scoped it. A bare spawn of a sibling script in that directory (the doctor checks,
 // the session hook, the skill installers) is outside this file, and some of those scripts call a contained tool.
+//
+// And (D-5256, named after review 535, none of them in the tree today): a script path followed by its arguments
+// inside one string (`` `bash ${ROOT}/ccd/ccrc version` ``, `` `. ${ROOT}/ccd/ccrc; fn` ``), which a looser match
+// would confuse with the sibling scripts sharing that prefix; a directory binding joined in a template
+// (`` `${SCRIPTS_DIR}/ccrc` ``); the namespace spellings `require('node:child_process')`, `await import(…)` and a
+// combined default-and-named import (`import cp, { spawnSync as s }`); and scope. A name resolves by text, not by
+// lexical scope, and a destructured binding (`const { env } = setup(…)`) is never seen, so a contained destructured
+// env read after an unrelated bare `const env` in another function is a false hit, and the mirror case, a bare
+// destructured env read after an unrelated contained `const env`, is missed.
 //
 // The script names are built from fragments below, never written as two quoted adjacent segments:
 // `single-definition.test.ts`'s scan allows exactly one file to spell the ccd script's path that way.
@@ -272,31 +291,87 @@ const SOURCES: Src[] = ROOTS.flatMap((r) => walk(path.join(REPO, r)))
 const lineOf = (s: Src, at: number): number => s.raw.slice(0, at).split('\n').length;
 
 interface Paths { scripts: Set<string>; dirs: Set<string> }
-interface Names extends Paths { scoped: Array<{ name: string; from: number; to: number }> }
+interface Names extends Paths {
+  scoped: Array<{ name: string; from: number; to: number }>;
+  /** Whether a name used at an offset is a script (or the scripts' directory): its binding decides (D-5256). */
+  isScript: (name: string, at: number) => boolean;
+  isDir: (name: string, at: number) => boolean;
+  /** The bindings decided a script, by offset (`exportsOf` reads an exported binding's own verdict). */
+  scriptAt: Set<number>;
+  /** Whether a stretch of code at an offset names a script: a name that resolves to one there, or a script segment
+   *  joined onto a directory binding inline (`join(SCRIPTS_DIR, 'ccrc')`, D-5256). */
+  namesAt: (code: string, text: string, at: number) => boolean;
+}
 
-/** The identifiers a file binds to a script path or to the scripts' directory, closed over aliases within the file,
- *  and the `for … of` variables over a list naming a script, each with its loop body's extent. */
+/** A command line built in two steps (D-5256): an array literal `.join(…)`ed, or a `+` concatenation of strings,
+ *  templates and names. Read on the masked code, so it judges shape, never content. */
+function joinLike(code: string): boolean {
+  if (code.startsWith('[')) return /^\s*\.\s*join\s*\([^()]*\)\s*$/.test(code.slice(closeOf(code, 0) + 1));
+  const ops: string[] = [];
+  let d = 0;
+  let start = 0;
+  for (let i = 0; i < code.length; i++) {
+    const c = code[i]!;
+    if (c === '(' || c === '[' || c === '{') d++;
+    else if (c === ')' || c === ']' || c === '}') d--;
+    else if (c === '+' && d === 0 && code[i + 1] !== '+' && code[i + 1] !== '=' && code[i - 1] !== '+') {
+      ops.push(code.slice(start, i).trim());
+      start = i + 1;
+    }
+  }
+  ops.push(code.slice(start).trim());
+  const operand = /^(?:'[^']*'|"[^"]*"|`[\s\S]*`|[A-Za-z_$][\w$]*(?:\s*\.\s*[A-Za-z_$][\w$]*)*)$/;
+  return ops.length > 1 && ops.every((o) => operand.test(o));
+}
+
+/** The bindings a file decides are a script path or the scripts' directory, closed over aliases within the file, and
+ *  the `for … of` variables over a list naming a script, each with its loop body's extent. A name resolves PER
+ *  BINDING, as `slicedAt`'s do: to its nearest earlier binding, else (a function declared above a module-level
+ *  `const`) the first binding of that name in the file, else an import (D-5256). So a second, unrelated binding that
+ *  reuses a script binding's name is judged on its own initialiser. */
 function namesOf(s: Src, imported: Paths): Names {
-  const scripts = new Set(imported.scripts);
-  const dirs = new Set(imported.dirs);
   const bs = bindingsOf(s);
+  const scriptAt = new Set<number>();
+  const dirAt = new Set<number>();
+  const bindingOf = (name: string, at: number): Binding | undefined =>
+    nearest(bs, name, at) ?? bs.find((x) => x.name === name);
+  const isScript = (name: string, at: number): boolean => {
+    const b = bindingOf(name, at);
+    return b ? scriptAt.has(b.at) : imported.scripts.has(name);
+  };
+  const isDir = (name: string, at: number): boolean => {
+    const b = bindingOf(name, at);
+    return b ? dirAt.has(b.at) : imported.dirs.has(name);
+  };
+  // The dotted names (`ns.CCRC`) come only from a namespace import; `idents` sees `ns` alone, so they are matched
+  // whole.
+  const dotted = (set: Set<string>): string[] => [...set].filter((n) => n.includes('.'));
+  const namesScript = (code: string, at: number): boolean =>
+    idents(code).some((n) => isScript(n, at)) || dotted(imported.scripts).some((n) => word(n).test(code));
+  const dirNames = (): string[] =>
+    [...new Set([...bs.filter((x) => dirAt.has(x.at)).map((x) => x.name), ...imported.dirs])];
+  const underDir = (text: string, at: number): boolean => dirNames().some((d) => under(d).test(text) && isDir(d, at));
   for (let changed = true; changed;) {
     changed = false;
     for (const b of bs) {
-      if (scripts.has(b.name) || dirs.has(b.name)) continue;
+      if (scriptAt.has(b.at) || dirAt.has(b.at)) continue;
       const text = s.text.slice(...b.init).trim();
       const code = s.code.slice(...b.init).trim();
-      if (READS.test(code) || !PATHLIKE.test(code)) continue;
-      if (SCRIPT_PATH.test(text) || [...scripts].some((n) => word(n).test(code))
-        || [...dirs].some((d) => under(d).test(text))) {
-        scripts.add(b.name);
+      if (READS.test(code)) continue;
+      const pathLike = PATHLIKE.test(code);
+      if (!pathLike && !joinLike(code)) continue;
+      if (SCRIPT_PATH.test(text) || namesScript(code, b.at) || underDir(text, b.at)) {
+        scriptAt.add(b.at);
         changed = true;
-      } else if (SCRIPT_DIR.test(text) || [...dirs].some((d) => new RegExp(`^${pat(d)}$`).test(code))) {
-        dirs.add(b.name);
+      } else if (pathLike && (SCRIPT_DIR.test(text)
+        || (/^[A-Za-z_$][\w$.]*$/.test(code) && isDir(code.replace(/\s+/g, ''), b.at)))) {
+        dirAt.add(b.at);
         changed = true;
       }
     }
   }
+  const scripts = new Set([...imported.scripts, ...bs.filter((x) => scriptAt.has(x.at)).map((x) => x.name)]);
+  const dirs = new Set(dirNames());
   const scoped: Names['scoped'] = [];
   for (const m of s.code.matchAll(/\bfor\s*\(\s*(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s+of\s+/g)) {
     const head = s.code.indexOf('(', m.index!);
@@ -310,7 +385,7 @@ function namesOf(s: Src, imported: Paths): Names {
     }
     const iterCode = s.code.slice(a, b).trim();
     if (!iterCode.startsWith('[')) continue;
-    if (!SCRIPT_PATH.test(s.text.slice(a, b)) && ![...scripts].some((n) => word(n).test(iterCode))) continue;
+    if (!SCRIPT_PATH.test(s.text.slice(a, b)) && !namesScript(iterCode, a)) continue;
     let from = headEnd + 1;
     while (from < s.code.length && /\s/.test(s.code[from]!)) from++;
     let to = from;
@@ -325,7 +400,8 @@ function namesOf(s: Src, imported: Paths): Names {
     }
     scoped.push({ name: m[1]!, from, to });
   }
-  return { scripts, dirs, scoped };
+  const namesAt = (code: string, text: string, at: number): boolean => namesScript(code, at) || underDir(text, at);
+  return { scripts, dirs, scoped, isScript, isDir, scriptAt, namesAt };
 }
 
 /** Every module's exported script and directory names (its own bindings only). */
@@ -333,8 +409,12 @@ function exportsOf(srcs: Src[]): Map<string, Paths> {
   const out = new Map<string, Paths>();
   for (const s of srcs) {
     const own = namesOf(s, { scripts: new Set(), dirs: new Set() });
-    const ex = [...s.code.matchAll(/\bexport\s+(?:const|let)\s+([A-Za-z_$][\w$]*)/g)].map((m) => m[1]!);
-    const p: Paths = { scripts: new Set(ex.filter((n) => own.scripts.has(n))), dirs: new Set(ex.filter((n) => own.dirs.has(n))) };
+    const ex = [...s.code.matchAll(/\bexport\s+(?:const|let)\s+([A-Za-z_$][\w$]*)/g)]
+      .map((m) => ({ name: m[1]!, at: m.index! + m[0].length }));
+    const p: Paths = {
+      scripts: new Set(ex.filter((x) => own.isScript(x.name, x.at)).map((x) => x.name)),
+      dirs: new Set(ex.filter((x) => own.isDir(x.name, x.at)).map((x) => x.name)),
+    };
     if (p.scripts.size + p.dirs.size > 0) out.set(s.rel, p);
   }
   return out;
@@ -470,6 +550,7 @@ function parentWins(inner: string, parent: RegExp): boolean {
 function bareEnv(s: Src, a: number, b: number, bs: Binding[], hops = 0): Shape | null {
   const expr = stripCast(s.code.slice(a, b));
   if (expr === 'process.env') return 'env: process.env';
+  if (expr === 'undefined') return 'no env'; // node reads `env: undefined` as the parent's env (D-5256)
   if (/^Object\s*\.\s*assign\s*\(/.test(expr)) {
     const o = s.code.indexOf('(', s.code.indexOf('assign', a));
     const inner = s.code.slice(o, closeOf(s.code, o) + 1);
@@ -477,12 +558,17 @@ function bareEnv(s: Src, a: number, b: number, bs: Binding[], hops = 0): Shape |
   }
   if (expr.startsWith('{')) {
     const open = s.code.indexOf('{', a);
-    const inner = s.code.slice(open, closeOf(s.code, open) + 1);
+    const close = closeOf(s.code, open);
+    const inner = s.code.slice(open, close + 1);
     if (parentWins(inner, SPREAD_PARENT)) return LITERAL;
-    if (BUILDER.test(inner)) return null;
-    // `{ ...env, X }`: the spread identifier's own binding decides.
-    for (const m of inner.matchAll(/\.\.\.\s*([A-Za-z_$][\w$]*)\s*(?=[,}])/g)) {
-      const r = identEnv(s, m[1]!, a, bs, hops);
+    // `{ ...env, X }`: a top-level spread identifier's own binding decides, but only one AFTER the last builder call
+    // ends (D-5256): a later spread wins over the builder, and one before it, or inside its arguments, is contained.
+    let end = -1;
+    for (const m of inner.matchAll(BUILDER_G)) end = Math.max(end, closeOf(inner, m.index! + m[0].length - 1));
+    for (const [pa, pb] of partsOf(s.code, open, close)) {
+      if (pa - open <= end) continue;
+      const m = /^\.\.\.\s*([A-Za-z_$][\w$]*)$/.exec(s.code.slice(pa, pb).trim());
+      const r = m ? identEnv(s, m[1]!, a, bs, hops) : null;
       if (r) return r;
     }
     return null;
@@ -511,7 +597,10 @@ function identEnv(s: Src, name: string, at: number, bs: Binding[], hops: number)
 }
 
 /** The env of an options object at [a, b): the LAST `env` key or spread decides, as it does in JS. A spread that
- *  cannot be followed leaves the env undecided here (null); one that names no env changes nothing. */
+ *  cannot be followed leaves the env undecided here (null) only while nothing has decided it: it KEEPS a verdict an
+ *  `env` key, the `env` shorthand or a followed spread already gave, so a trailing `...(cond ? {} : { timeout })`
+ *  cannot erase a bare `env:` before it (D-5256). The initial `no env` is a default, not a verdict. A followed spread
+ *  that names no env changes nothing. */
 function optsEnv(s: Src, a: number, b: number, bs: Binding[], hops: number): Shape | null {
   if (hops > 3) return null;
   const opt = stripCast(s.code.slice(a, b));
@@ -522,23 +611,29 @@ function optsEnv(s: Src, a: number, b: number, bs: Binding[], hops: number): Sha
   if (!opt.startsWith('{')) return opt.startsWith('[') || /^['"`]/.test(opt) ? 'no env' : null;
   const o = s.code.indexOf('{', a);
   let result: Shape | null = 'no env';
+  let decided = false;
   for (const [pa, pb] of partsOf(s.code, o, closeOf(s.code, o))) {
     const p = s.code.slice(pa, pb).trim();
-    if (/^env\s*:/.test(p)) result = bareEnv(s, pa + s.code.slice(pa, pb).indexOf(':') + 1, pb, bs);
-    else if (p === 'env') result = identEnv(s, 'env', pa, bs, 0);
+    if (/^env\s*:/.test(p)) { result = bareEnv(s, pa + s.code.slice(pa, pb).indexOf(':') + 1, pb, bs); decided = true; }
+    else if (p === 'env') { result = identEnv(s, 'env', pa, bs, 0); decided = true; }
     else if (p.startsWith('...')) {
       const name = p.slice(3).trim();
       const bind = IDENT.test(name) ? nearest(bs, name, pa) : undefined;
-      if (!bind) { result = null; continue; }
+      if (!bind) { if (!decided) result = null; continue; }
       const r = optsEnv(s, bind.init[0], bind.init[1], bs, hops + 1);
-      if (r !== 'no env') result = r;
+      if (r !== 'no env') { result = r; decided = true; }
     }
   }
   return result;
 }
-/** The env of a spawn call: its last argument when it has two or more, else none. */
+/** A callback argument: an arrow function or a `function` expression. */
+const CALLBACK = /^(?:async\s+)?(?:function\b|(?:\([^()]*\)|[A-Za-z_$][\w$]*)\s*(?::[^=]*)?=>)/;
+/** The env of a spawn call: its last argument when it has two or more, else none. A trailing callback is not the
+ *  options (`exec(cmd, cb)`, `execFile('bash', [s], cb)`): it is dropped first, so no options reads as no env
+ *  (D-5256). */
 function envOf(s: Src, open: number, close: number, bs: Binding[]): Shape | null {
-  const parts = partsOf(s.code, open, close);
+  let parts = partsOf(s.code, open, close);
+  if (parts.length >= 2 && CALLBACK.test(s.code.slice(...parts[parts.length - 1]!).trim())) parts = parts.slice(0, -1);
   if (parts.length < 2) return 'no env';
   const [a, b] = parts[parts.length - 1]!;
   return optsEnv(s, a, b, bs, 0);
@@ -547,7 +642,9 @@ function envOf(s: Src, open: number, close: number, bs: Binding[]): Shape | null
 /** The PROGRAM (a spawn's first argument) decides whether a script it names is run or only read. Every program a
  *  script-naming spawn uses is in one of these two sets, or the census reds until it is placed: a new spelling (a
  *  `'sh'`, a `'timeout'`) is a decision, never a default. */
-const RUNNERS = new Set(["'bash'", 'BASH', 'DEADLINE_BIN', 'DOCTOR_DEADLINE_BIN']);
+// `bashPath` is `ccrc-token-sync.test.ts`'s `command -v bash`, read before PATH is narrowed (D-5256 made its joined
+// command line a script spawn).
+const RUNNERS = new Set(["'bash'", 'BASH', 'DEADLINE_BIN', 'DOCTOR_DEADLINE_BIN', 'bashPath']);
 const READERS = new Set(["'git'"]); // `git show <rev>:<path>` and `git ls-files <path>` name the script as a path
 interface Spawn {
   file: string; line: number; kind: 'script' | 'sliced' | null; prog: string; placed: boolean;
@@ -576,7 +673,8 @@ function analyse(srcs: Src[]): Census {
       const code = s.code.slice(open, close + 1);
       const argText = s.text.slice(open, close + 1);
       const scoped = n.scoped.filter((x) => m.index! >= x.from && m.index! <= x.to).map((x) => x.name);
-      const named = SCRIPT_PATH.test(argText) || [...n.scripts, ...scoped].some((x) => word(x).test(code));
+      const named = SCRIPT_PATH.test(argText) || n.namesAt(code, argText, m.index!)
+        || scoped.some((x) => word(x).test(code));
       const prog = programOf(s, open, close, member);
       const reader = READERS.has(prog);
       const slice = !named && idents(code).some((x) => sliced(x, m.index!));
@@ -584,7 +682,7 @@ function analyse(srcs: Src[]): Census {
         file: s.rel, line: lineOf(s, m.index!),
         kind: named && !reader ? 'script' : slice && !reader ? 'sliced' : null,
         prog: named ? prog : '',
-        placed: !named || RUNNERS.has(prog) || reader || n.scripts.has(prog) || scoped.includes(prog),
+        placed: !named || RUNNERS.has(prog) || reader || n.isScript(prog, m.index!) || scoped.includes(prog),
         shape: envOf(s, open, close, bs), argText,
       });
     }
@@ -614,7 +712,9 @@ function pinned(hs: Hit[], list: Map<string, { count: number }>, name: string, w
 }
 
 /** Inline sources, one spelling per line, each line that must be a hit carrying its verdict in a trailing
- *  `// expect: <script|sliced> <shape>` comment; a line with no comment must be no hit. */
+ *  `// expect: <script|sliced> <shape>` comment; a line with no comment must be no hit. A line whose spawn's program
+ *  must be UNPLACED ends its comment with `| unplaced` (`// expect: unplaced` when it is no hit), so the PROGRAM
+ *  rule's arms are pinned too: every other line's program is placed. */
 const fixture = (rel: string, lines: string[]): Src => toSrc(rel, `${lines.join('\n')}\n`);
 const CORPUS: Src[] = [
   fixture('fixture/test/paths.ts', [
@@ -628,6 +728,7 @@ const CORPUS: Src[] = [
     "import * as pty from 'node-pty';",
     "import * as P from './paths.js';",
     "import { CCRC, SCRIPTS_DIR } from './paths.js';",
+    "import { CCRC as C } from './paths.js';",
     "const SRC = path.join(SCRIPTS_DIR, 'ccrc');",
     "const text = readFileSync(CCRC, 'utf8');",
     'const base = { env: process.env };',
@@ -654,6 +755,33 @@ const CORPUS: Src[] = [
     "spawnSync('git', ['show', `HEAD:${CCRC}`]);",
     "spawnSync('bash', ['-c', 'command -v curl'], { env: process.env });",
     '/re/.exec(CCRC);',
+    // D-5256, and the arms review 535 found unpinned (F2): each line below reds when its arm is deleted.
+    "spawnSync('bash', [C], { env: process.env }); // expect: script env: process.env",
+    "const L = [CCRC]; for (const s2 of L) spawnSync('bash', [s2], { env: process.env }); // expect: script env: process.env",
+    "spawnSync('bash', [CCRC], { env: (process.env) }); // expect: script env: process.env",
+    "// spawnSync('bash', [CCRC], { env: process.env });",
+    `const note = "spawnSync('bash', [CCRC], { env: process.env })";`,
+    "spawnSync(CCRC, [], { env: process.env }); // expect: script env: process.env",
+    "spawnSync('sh', [CCRC], { env: ghContainedEnv(d) }); // expect: unplaced",
+    "spawnSync('sh', [CCRC]); // expect: script no env | unplaced",
+    "const j = ['set -u', `. ${CCRC}`, 'cmd_x'].join('\\n'); spawnSync('bash', ['-c', j], { env: process.env }); // expect: script env: process.env",
+    "const k = '. ' + CCRC + '; cmd_x'; spawnSync('bash', ['-c', k], { env: process.env }); // expect: script env: process.env",
+    "spawnSync('bash', [path.join(SCRIPTS_DIR, 'ccrc')], { env: process.env }); // expect: script env: process.env",
+    "const e2 = { ...process.env, HOME: d }; spawnSync('bash', [CCRC], { env: { ...ghContainedEnv(d), ...e2 } }); // expect: script { ...process.env } without a builder",
+    "spawnSync('bash', [CCRC], { env: { ...e2, ...ghContainedEnv(d) } });",
+    "spawnSync('bash', [CCRC], { env: { ...ghContainedEnv(d, { ...e2 }) } });",
+    "spawnSync('bash', [CCRC], { encoding: 'utf8', env: { ...process.env, HOME: d }, ...(o.timeout === undefined ? {} : { timeout: o.timeout }) }); // expect: script { ...process.env } without a builder",
+    "spawnSync('bash', [CCRC], { encoding: 'utf8', ...(o.timeout === undefined ? {} : { timeout: o.timeout }) });",
+    'exec(`bash ${CCRC}`, (e) => {}); // expect: script no env',
+    "execFile('bash', [CCRC], (e) => {}); // expect: script no env",
+    "spawnSync('bash', [CCRC], { env: undefined }); // expect: script no env",
+  ]),
+  // Per binding, not per name (D-5256): the second `script` is not a script, so its bare spawn is no hit.
+  fixture('fixture/test/rebind.test.ts', [
+    "import { spawnSync } from 'node:child_process';",
+    "import { CCRC } from './paths.js';",
+    "function a() { const script = ['set -u', `. ${CCRC}`].join('\\n'); return spawnSync('bash', ['-c', script], { env: ghContainedEnv(d) }); }",
+    "function b() { const script = ['set -u', 'echo hi'].join('\\n'); return spawnSync('bash', ['-c', script], { env: process.env }); }",
   ]),
 ];
 
@@ -701,10 +829,14 @@ describe('every spawn of the real ccd or ccrc script gets a contained env (wave 
   it('decides every spelling on a fixture corpus: each line gets the verdict its comment names, and no other line gets one', () => {
     const got = analyse(CORPUS);
     const want = (k: 'script' | 'sliced'): string[] => CORPUS.flatMap((s) => s.raw.split('\n').flatMap((l, i) => {
-      const m = /\/\/ expect: (script|sliced) (.+)$/.exec(l);
+      const m = /\/\/ expect: (script|sliced) (.+?)(?: \| unplaced)?$/.exec(l);
       return m && m[1] === k ? [`${s.rel}:${i + 1} (${m[2]})`] : [];
     }));
     expect(got.hits.map(fmt).sort(), 'scripts').toEqual(want('script').sort());
     expect(got.slicedHits.map(fmt).sort(), 'sliced text').toEqual(want('sliced').sort());
+    // The PROGRAM rule, pinned by its own list: a script used AS the program is placed, and an unplaced one is named.
+    const unplaced = CORPUS.flatMap((s) => s.raw.split('\n').flatMap((l, i) =>
+      (/\/\/ expect: (?:.* \| )?unplaced$/.test(l) ? [`${s.rel}:${i + 1}`] : [])));
+    expect(got.unplaced.map((x) => x.replace(/ \(.*\)$/, '')).sort(), 'unplaced programs').toEqual(unplaced.sort());
   });
 });
