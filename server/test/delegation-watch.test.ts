@@ -4046,7 +4046,7 @@ describe('R107 to R109 (re-review N1 to N3): a cut pass never forgets what a new
   });
 });
 
-describe('R110 to R112 (review 533 F1, F2): each arm of R109 holds alone, and the ready instant carries the skew allowance from the recovery\'s return', () => {
+describe('R110 to R112 (review 533 F1, F2): each arm of R109 holds alone, and the ready instant carries the skew allowance from the recovery\'s settle', () => {
   /** A pass at `t` over `sessions`, CUT at its budget while the read `reached` reports is still held; the read is NOT released here. */
   async function cutHeld(w: World, t: number, projects: Record<string, CensusView>, sessions: readonly Sess[], reached: () => boolean): Promise<void> {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
@@ -4103,7 +4103,7 @@ describe('R110 to R112 (review 533 F1, F2): each arm of R109 holds alone, and th
     expect(leasedOf(w), 'the cut came after the owners, so the instant did not move').toEqual([['raw-tree', 'raw', 'demo-a']]);
   });
 
-  it('R112 (F2 G): the ready instant after an in-process recovery is when the recovery RETURNED: a creator call stamped inside a held-open recover() is held', async () => {
+  it('R112 (F2 G): the ready instant after an in-process recovery is no earlier than when the recovery SETTLED: a creator call stamped inside a held-open recover() is held', async () => {
     const w = world();
     makeOwner(w, 'demo-a');
     await censusPass(w, at(-1), BEFORE_TREE);                           // ready; the applier opened at at(-1)
@@ -4128,9 +4128,12 @@ describe('R110 to R112 (review 533 F1, F2): each arm of R109 holds alone, and th
     writeBucket(w, 'demo-a', BUCKET10,
       bashPre('demo-a', 'toolu_wt1', ['old-tree'], iso(at(5) + 120_000)), bashPost('demo-a', 'toolu_wt1', ['old-tree', 'raw-tree'], iso(at(5) + 123_000)));
     // A MOCKED timeline beyond the pass budget: the recovery "returns" 180 s after the pass began while the budget timer (real time) does
-    // not fire. Measuring after the await carries the clock-skew allowance from the recovery's return: that covers a call made during the
-    // recovery by a hook clock running ahead of the server's; when the clocks agree, the pass budget (45 s) already keeps a recovery
-    // inside the skew (60 s), unless a starved event loop fires the budget timer late.
+    // not fire, so the recovering pass is not cut and sets the instant itself. The settle is measured in the recovery's `finally` (the
+    // lane's `recoveredAt`, consumed by the next instant), and the instant is no earlier than it, whichever pass sets it: R116 is the order
+    // in which the recovering pass is cut and a later pass sets it. Measuring at the settle carries the clock-skew allowance from it: that
+    // covers a call made during the recovery by a hook clock running ahead of the server's; when the clocks agree, the pass budget (45 s)
+    // keeps a recovery whose pass is not cut inside the skew (60 s), unless a starved event loop fires the budget timer late. Mutant G
+    // (the recoveredAt arm removed, `readyAt = Math.max(pass.now, appliedAt)`): this row reds (a lease).
     setNow(at(5) + 180_000);
     openRecover();
     await recovering;                                                   // the same pass reaches the owners and reconciles
@@ -4142,13 +4145,14 @@ describe('R110 to R112 (review 533 F1, F2): each arm of R109 holds alone, and th
 });
 
 describe('R113 and R114 (review 544 P2, P1): the ready instant covers the boot recovery, and the late-return marks\' second move is pinned', () => {
-  it('R113 (P2): the ready instant set by a fresh lane\'s first pass is no earlier than the BOOT recovery\'s return: a creator call stamped inside a held-open DelegationDurability.open is held', async () => {
+  it('R113 (P2): the ready instant set by a fresh lane\'s first pass, the one that starts the open, is no earlier than the BOOT recovery\'s return: a creator call stamped inside a held-open DelegationDurability.open is held', async () => {
     // A MOCKED timeline beyond the pass budget: the clock moves 180 s while the open is held, and the budget timer (real time) does not
     // fire, so the pass is not cut. One arm (`appliedAt`, measured when the applier answers) covers both the pass that started the open
-    // and a later pass awaiting the cached applier after the first was cut: the cached promise resolves only after `open()` recovered.
-    // Measuring after the await carries the clock-skew allowance from the recovery's return: that covers a call made during the recovery
-    // by a hook clock running ahead of the server's; when the clocks agree, the pass budget (45 s) already keeps a recovery inside the
-    // skew (60 s), unless a starved event loop fires the budget timer late.
+    // (this row) and a later pass awaiting the cached applier after the first was cut (R117's row): the cached promise resolves only after
+    // `open()` recovered. The instant is also never earlier than the pass's own clock (R115's clamp). Measuring after the await carries
+    // the clock-skew allowance from the recovery's return: that covers a call made during the recovery by a hook clock running ahead of
+    // the server's; when the clocks agree, the pass budget (45 s) keeps a recovery whose pass is not cut inside the skew (60 s), unless a
+    // starved event loop fires the budget timer late. Mutant `appliedAt = pass.now`: this row reds (a lease).
     const w = world();
     makeOwner(w, 'demo-a');
     const realOpen = DelegationDurability.open.bind(DelegationDurability);
@@ -4347,6 +4351,38 @@ describe('R115 to R117 (review 556 F3, W1, F2): the ready instant is never earli
     creatorAfter(w, at(11));
     for (let i = 12; i < 16; i++) await censusPass(w, at(i), WITH_TREE);
     expect(leasedOf(w), 'after the settle, the lane reads again and links').toEqual([['raw-tree', 'raw', 'demo-a']]);
+  });
+
+  it('R117 (F2): a pass that awaits the CACHED applier after the opening pass was cut inside the boot open sets an instant no earlier than the open\'s return: a creator call between its clock plus the skew and the open\'s return plus the skew is held', async () => {
+    // R113's second case. A MOCKED timeline: pass A at at(0) starts the open, which is held, and is cut at its budget (the budget timer is
+    // faked and advanced); pass B at at(1) awaits the same cached applier; the open returns at at(1) + 180 s. demo-a's creator call
+    // begins at at(1) + 120 s: more than the skew after B's clock, within the skew after the open's return. A's late continuation
+    // returns at its abort check, so B, which measures `appliedAt` when the cached promise resolves, sets the instant. Mutant: `appliedAt`
+    // stamped only for the pass that started the open (`const opener = this.opening === null;` before the await, then
+    // `appliedAt = opener ? Date.now() : pass.now`): B's instant is its own clock, and the call links.
+    const w = world();
+    makeOwner(w, 'demo-a');
+    const open = holdOpen();
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    setNow(at(0));
+    setCensus(w, BEFORE_TREE, { 'demo-a': measured() }, at(0));
+    const opener = pass(w);                                             // A: the lane's first pass starts the open
+    await vi.waitFor(() => expect(open.held(), 'the open is held').toBe(true));
+    await vi.advanceTimersByTimeAsync(DELEGATION_PASS_BUDGET_MS + 1);  // A is cut inside the open
+    await opener;
+    vi.useRealTimers();
+    setNow(at(1));
+    setCensus(w, BEFORE_TREE, { 'demo-a': measured() }, at(1));
+    const next = pass(w);                                               // B: awaits the cached applier, still held
+    writeBucket(w, 'demo-a', BUCKET10,                                  // inside the boot recovery, more than the skew after B's clock
+      bashPre('demo-a', 'toolu_wt1', ['old-tree'], iso(at(1) + 120_000)), bashPost('demo-a', 'toolu_wt1', ['old-tree', 'raw-tree'], iso(at(1) + 123_000)));
+    open.release(at(1) + 180_000);                                      // the open returns
+    await next;                                                         // B reaches the owners
+    for (let i = 5; i < 9; i++) await censusPass(w, at(i), WITH_TREE);
+    expect(leasesOf(w.home), 'the creator began inside the boot recovery').toEqual([]);
+    expect(w.watcher.delegationReport().lostEvidence.forced, 'held by lost evidence: the full evidence links it').toBe(1);
+    expect(DelegationDurability.open, 'one open: B awaited the cached applier').toHaveBeenCalledTimes(1);
   });
 });
 
