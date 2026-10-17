@@ -65,6 +65,7 @@ Reviewers: do not raise these.
 - **Fixing the hits in claimed files, and the sliced class.** `ccrc-doctor.test.ts` (claim 1499, run 360) is on `ALLOWED` (Task 3). Every bare SLICED spawn, `ccrc-install.test.ts`'s `_inst_installed` harness among them (the spawn R14(b) named), is listed in `SLICED_ALLOWED` with its reason and count, not fixed (D-5251).
 - **Routing the second ring's direct curl stubs through `stubContainedTool`** (`ccrc-api.test.ts`, claimed; `ccrc-token-sync.test.ts`). They ask no `net`, so no poison of this wave's displaces them (D-5249).
 - **Other inherited variables:** `TMUX`, `TMUX_PANE`, `SSH_AUTH_SOCK`, `CLAUDE_CONFIG_DIR` and `GIT_CONFIG_GLOBAL`/`SYSTEM` still pass through `inheritedEnv()`. Among them, `ccd/ccd` reads only `SSH_CONNECTION` (informational, `:4550`) and `GIT_CONFIG_GLOBAL`, a residual `gitEnvStrip.ts` already states.
+- **Bare spawns of the sibling scripts** (D-5255): the census names only `ccd` and `ccrc`. Widened to the other scripts in that directory and the skill installers, a scratch run counted 64 bare hits in 26 files, some of whose scripts name a contained tool. A later test wave decides whether the census widens.
 - **R23(c) and (e).** They are the docs PR's (ledger row "docs PR").
 - **Making `sweepFixture.ts`'s Darwin helper cases plain `it`.** Wave 16's Reading 9 named wave 18 as a possible home, but it is not in R14 or R23 and the brief's items do not name it. The coordinator may scope it later.
 
@@ -242,6 +243,10 @@ These are departures from the brief, the ledger, or what shipped text at `256b25
   - **The plan:** Task 1 Step 3's `stubContainedTool` refuses only a name outside `CONTAINED_TOOLS`, and its docstring says "every later plant keeps the stub".
   - **Measured by reading:** `ghContainedEnv` REWRITES the `gh` poison with `writeFileSync` on every call (its first statement after `harnessBin`), so a `gh` stub written through the door is overwritten by the next `sh()`. A test asserting only that its stub's log is empty would then pass on the poison: the silent displacement D-5249's door exists to rule out. `gh`'s functional stub is a bash function (`GH_STUB`), which wins over PATH.
   - **The change:** the `name` parameter is `Exclude<(typeof CONTAINED_TOOLS)[number], 'gh'>`, a runtime refusal names `GH_STUB`, and H18-9 gains a `gh` case that reds without the refusal (row T1-14).
+- **D-5255** — *The census's scope and blind spots are named in its header, and `runbook-holds.test.ts`'s `_dr_rc_state` spawn is contained too* (the worker, from the Opus per-task review of Tasks 2 to 4).
+  - **The plan:** the census header named only D-5253's two blind spots, and Task 3 fixed only the census's hits.
+  - **Read by the review** (a scratch copy of the census, run standalone with its NAMES widened, never committed): widened from `ccd`/`ccrc` to the sibling scripts in that directory and the skill installers, it counts 64 bare hits in 26 files and six unplaced programs; several of those scripts (the doctor checks, the session hook, the telemetry keepalive) name a contained tool. Two structural blind spots: a script path bound through a call the census does not follow (`fileURLToPath(new URL(…))`), and a script handed to a helper as a parameter. Nothing bare of `ccd` or `ccrc` hides behind either today.
+  - **The change:** one header paragraph names the scope (R14(b)'s two scripts) and both blind spots; the sibling scripts join the residue (Not in this wave). `runbook-holds.test.ts`'s one other spawn, `_dr_rc_state` from the doctor checks, sat bare beside the spawn Task 3 contained, so it takes the same `ccrcContainedEnv`.
 
 ## File structure
 
@@ -1782,7 +1787,7 @@ index 98588f683..78b7d1959 100644
   | T3-1 | (the prototype's scratch module, now the corpus) | [prototype: a scratch `w18CensusMutant.ts` spawning the real ccrc three ways reddened "every BARE spawn …" (1 of 5), listing `:7 ({ ...process.env } without a builder)`, `:8 (env: process.env)` and `:9 (no env)`; those three shapes are the corpus's first lines] |
   | T3-1a | `envOf`'s `parts.length < 2` returns `null` | row 7 only (the one-argument `execSync` line, which the corpus gained because this row survived without it) |
   | T3-1b | `bareEnv`'s `expr === 'process.env'` branch deleted | row 7 only |
-  | T3-1c | `stripCast` returns its input unchanged | row 7 only |
+  | T3-1c | `stripCast` returns its input unchanged | row 7 only. *(worker, measured: the literal `return e;` also drops the `.trim()` and reds rows 2, 3, 6 and 7; the cast-only form, `return e.trim();`, reds row 7 only)* |
   | T3-1d | `calleesOf` returns the bare names only | row 7 only |
   | T3-1e | `importsOf` drops its namespace loop | row 7 only |
   | T3-1f | `namesOf` drops `under(d)` | row 7 only |

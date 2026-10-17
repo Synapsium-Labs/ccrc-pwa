@@ -39,6 +39,11 @@
 // `assertNoRealTool` row is what pins it). The fixture corpus at the end decides every spelling above on inline
 // sources, so a detector that stops seeing one reds there, not only when a real file regresses.
 //
+// Nor does it see (D-5255): a script whose path is bound through a call it does not follow (`fileURLToPath(new
+// URL('…'))`), or one handed to a helper as a parameter that the helper then spawns; and its NAMES are the ccd and
+// ccrc scripts only, as R14(b) scoped it. A bare spawn of a sibling script in that directory (the doctor checks,
+// the session hook, the skill installers) is outside this file, and some of those scripts call a contained tool.
+//
 // The script names are built from fragments below, never written as two quoted adjacent segments:
 // `single-definition.test.ts`'s scan allows exactly one file to spell the ccd script's path that way.
 import { describe, it, expect } from 'vitest';

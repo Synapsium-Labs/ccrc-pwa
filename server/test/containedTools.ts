@@ -75,7 +75,7 @@ export const CLAIM_DATA_LINE_ERE = String.raw`^data = "\{\\"code\\":\\"[A-Za-z0-
  *    character; an EMPTY config passes too. Nothing in-tree sends one now (notify.sh exits 0 before curl when it has no token, D-4393,
  *    and ccrc-api, ccrc-token-sync and the sync scripts always send a header or a data line); the allowance is kept
  *    because an empty config can name nothing (a CLOSED stdin reads as one under dash; under bash, macOS's /bin/sh,
- *    `cfg=$(cat)` hangs instead, which fails closed — wave 18, R23(a)). Since the box-token lifecycle
+ *    `cfg=$(cat)` hangs instead: it never passes, and leaves no refusal record — wave 18, R23(a)). Since the box-token lifecycle
  *    (wave 1, Task B1) ONE more line shape passes: `ccrc token sync`'s claim body, `CLAIM_DATA_LINE_ERE` above — a
  *    `data = "…"` line that is exactly `{"code":<43 base64url>,"nodeId":<lowercase uuid>}` with its quotes escaped,
  *    so it names no file (no leading `@`), no URL and no other field. Any other key (`url`, `proxy`,
@@ -137,7 +137,8 @@ export function loopbackCurlFront(realCurl: string): string {
     // when it has no token; it is allowed because it can name nothing), and a second `-K -` is refused. The config is never logged: a refusal records argv only.
     // `cat`'s own status is deliberately not a verdict: what the check sees is exactly what is re-fed, so a read that
     // fails part-way checks and feeds the same prefix (a closed stdin is an empty config under dash, and passes; under
-    // bash the substitution's pipe lands on fd 0, `cat` reads its own output, and the front hangs: fails closed).
+    // bash the substitution's pipe lands on fd 0, `cat` blocks reading a pipe whose only writer is itself, and the
+    // front hangs: it never passes, and leaves no refusal record).
     'cfg=; have_cfg=',
     // FAILS CLOSED (wave 13 fix round 1, review 294 F1): grep -qv exits 1 only when NO line falls outside the rule, and
     // that is the one status that passes. 0 is a line outside the rule; 2 (an error) and 127 (no grep on PATH) are a
