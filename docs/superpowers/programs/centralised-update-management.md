@@ -42,7 +42,7 @@ numbers; the spec wave each one implements is named beside it.
 | 18 | — (test containment) | `makeCcdHarness` containment parity, R14(b)'s raw-spawn census, R23(a), R23(b), R23(d) | none (tests) | — | **FIX ROUND 1 DONE** 2026-10-17 04:35 UTC: verified at `81bf1f135` (PR #482), run 517 awaiting-review, held for #448; then the landing round and one scoped review. Was: **FIX ROUND 1** 2026-10-17 03:45 UTC: review 535 (18 findings) ruled in plan `3098b03ea`, mail 5698. Was: **IN REVIEW** 2026-10-17 02:55 UTC: wave-done at `b5b83ad66` (PR #482), run 517 awaiting-review, review run 535. Was: **DISPATCHED** 2026-10-17 00:50 UTC (run 517, worker still-delta): plan `f9abdcc0e` (D-5247 to D-5253, reserve 5254 to 5258), readings ruled; lands after run 360. Was: **PLANNING** 2026-10-16 18:00 UTC: run 517 opened (planned), block 5247 to 5266; the plan workflow runs (`wf_21fbd9dc-804`). `ccdWsHelpers.ts` is unclaimed since claim 1396 ended. Was: to plan; `ccdWsHelpers.ts` held by claim 1396 (run 308); R14(b) and R23 can go first (2026-10-15 22:11) |
 | 19 | — (PWA and server residue) | R24(a), (b), (d), R26(a)-(d), R27(a), R27(b)'s test half; B5, the `update-inventory.test.ts` stable flake | server | — | **MERGED** `a6b2606c9` (PR #443, 2026-10-16 12:54 UTC, run 483 done); tree equals merge-tree of the reviewed tip `95aa8f3bf`; review 511 found 4 minor (R33) |
 | — | — | docs PR: R22, R24(e), R23(c), (e), R27(b)'s plan half, R27(c), R25(a), (b), R35(c), README's Reading 9 clause, the closure sentences | none (docs) | — | to write; README half waits for claim 1403 (#425) (2026-10-15 22:11) |
-| — | — | final rollout: promote to `stable` (the coordinator, ruling 2026-10-15), auto convergence and a read-only `ccrc rollout --check` (no hand `ccrc rollout`, ruling 2026-09-30), the exit criteria measured live (the operator taps the rehearsal) | — | — | planned; stable waits on B1, B2, B5 and wave 16 |
+| — | — | final rollout: promote to `stable` (the coordinator, ruling 2026-10-15), auto convergence and a read-only `ccrc rollout --check` (no hand `ccrc rollout`, ruling 2026-09-30), the exit criteria measured live (the operator taps the rehearsal) | — | — | planned; stable waits on B1 (its fix #429 merged 2026-10-17 13:20; a green macOS run confirms it), B2 and wave 16. Was: on B1, B2, B5 and wave 16 (B5 left with wave 19) |
 
 **Order.** 2 → {3, 4} → {5, 6} → rollout. Waves 3 and 4 touch disjoint files (PWA + notifier vs `ccd/ccrc` +
 deploy units) and both need only wave 2's interfaces, so they may run concurrently on two workspaces once wave 2
@@ -3644,6 +3644,32 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
   - **Re-measured by the coordinator:** the tip and the handoff commit match. The diff is the same 11 files, with
     nothing outside them. It merges cleanly onto `main` at `0a06ebb9a`. Nothing private appears in it. Numbers 5256
     and 5257 are defined. The server accepted `working` to `awaiting-review`.
+
+- **2026-10-17 13:20 UTC: an operator ruling: the coordinator merges the PRs this programme needs, in order; #429
+  merged.**
+  - **The ruling,** given in chat just after 13:00: "You can merge required PRs in the correct order." It covers
+    the PRs this programme's completion needs, including other programmes' PRs on its path that were waiting for a
+    merge approval. It does not cover their content acceptance, or plans like #436. A coordinator that already has
+    its own merge authority (for #425 and #448) keeps it.
+  - **#429 (B1) merged** at 13:20:17 as `5fa7efddc`, squashed with `--admin` and pinned to the head `51c371227`.
+    One test file, +7/-2, every check green on its head. Its parent is the measured main `71fb70189`, and its tree
+    equals `merge-tree`'s prediction. `main` had not touched the test file or the lock function since its base.
+    B1 clears when a full run shows the row-generation case green on macOS. Today's daily run, before the merge,
+    still failed it at test-macos 2/4. #434 is superseded by #440 (the same one-line change, merged 10-16).
+  - **Main moved** with #483 to #489 since the morning. Against `5fa7efddc`, #444 and #482 merge cleanly, and
+    #397, #410, #425, #435, #441 and #448 conflict: #489 in `dispatch.ts`, `single-definition.test.ts` and
+    `README.md`, #487 in `README.md`, and #485 in `ccd/ccd`.
+  - **The order:**
+    1. #429, done.
+    2. #397, then #410, after their landing rounds (mail 5889 to path identity's coordinator).
+    3. #425, after both, by its own coordinator (mail 5890).
+    4. #448, by its own coordinator (mail 5892). Then waves 16 (#444) and 18 (#482), each after its landing
+       round and one scoped review.
+    5. #435, then wave 15 (#441), the last `ccd/ccd` lander.
+  - **#435 is still blocked.** Its review (run 489) was refused on 10-16, because the deployed `ccd` has only
+    `haiku` and `sonnet` as subagent classes, and its brief named `opus`. That is still so on v0.0.221. Mail 5891
+    told its coordinator that, under clause 14, a route with `subagent=sonnet` does not demote the review panel.
+    If #435 stays blocked, wave 15 may land ahead of it, and the second lander restamps `ccd/ccd`.
 
 ## Carried constraints
 
