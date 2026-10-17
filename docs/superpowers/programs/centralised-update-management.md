@@ -3954,6 +3954,11 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
     is the single landing re-measure, by the 15:40 split; the plan records the split. F2 and F3, changed arms
     with no pin, get corpus lines and mutation rows; F5's shapes, none live, are named; F1, F6 and F8 are prose.
   - **Then** a short scoped review of the round, while #448 has not landed; part 2 follows #448.
+  - **23:36 UTC: wave 17's full run 39077484519** (on #566 at `a695bde11`): Task 16's proof is green, because
+    `ccrc-darwin-job-helpers` ran on `test-macos 1/4` (11 tests, 9 passed, 2 Linux-only skipped). Two legs are red.
+    `server 3/12`: one exact-set case in `ccrc-install.test.ts` (the Darwin arm forced on Linux) does not expect
+    `ccrc-api`, a Task 1 miss, sent back now (mail 6066). `test-macos 2/4`: row 64, which is B2 itself, red on
+    `main` the same way until #441 lands.
 
 ## Carried constraints
 
