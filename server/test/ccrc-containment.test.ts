@@ -9,8 +9,8 @@
 //        slides back to `ghContainedEnv(home, { ...process.env … })`, and a new `...process.env, HOME: home`
 //        literal — each reds here and names its line. It cannot see a raw spawn of the real `ccd/ccrc` with no
 //        `env` option, with `env: process.env`, or with `{ ...process.env, HOME: <any other name> }` (fix round 1,
-//        F5: a scan for raw `ccd/ccrc` spawns is residue). The per-builder pins and `assertNoRealTool` are what
-//        hold those today.
+//        F5). Since wave 18 (R14(b)) `raw-spawn-census.test.ts` reads every file of both test trees for exactly
+//        those three shapes.
 import { describe, it, expect } from 'vitest';
 import { spawnSync } from 'node:child_process';
 import {
@@ -416,7 +416,7 @@ describe('keepDigest\'s env (wave 9 R9-F8, 3b)', () => {
 });
 
 // Two shapes only (fix round 1, F5): a raw `ccd/ccrc` spawn with no `env`, with `env: process.env`, or with
-// `{ ...process.env, HOME: dir }` is invisible to both scans below.
+// `{ ...process.env, HOME: dir }` is invisible to both scans below; `raw-spawn-census.test.ts` is that scan (wave 18).
 describe('the census — two shapes of a bare parent env: a `ghContainedEnv({ ...process.env` builder, and the `...process.env, HOME: home` literal (wave 9 R10d, 3c)', () => {
   const FILES = ['ccrc-update.test.ts', 'ccrc-install.test.ts', 'ccrc-cli.test.ts', 'ccrc-install-graphify.test.ts',
     'installTreeFixture.ts'] as const;
