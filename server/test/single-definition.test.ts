@@ -6411,3 +6411,22 @@ describe('one tryHold decides every ask hold (D-5290)', () => {
     expect(watch).toMatch(/const dead = ids\.filter\(\(id\) => claimantMeasuredDead\(/);
   });
 });
+
+// D-5373 `idle-compact-nudge`: APPENDED, the stall pins' reason. The lane's kill switch is a hand-touched registry
+// marker with no writer in the tree, on the `stall-watch-disabled` precedent; and the prompt the lane types is
+// compared by EQUALITY in the transcript parser, so a second literal would be a second rule.
+describe('idle-compact-nudge: the kill switch has no writer, and the prompt is spelled once (D-5373)', () => {
+  it('idle-compact-nudge-disabled: no shell line names it, and its one TS holder is its pure definer', () => {
+    const name = 'idle-compact-nudge-disabled';
+    const definer = 'server/src/idlenudge.ts';
+    expect(holdersOf(name), `${name}: a line of shell names it`).toEqual([]);
+    expect(ALL.filter((f) => stallCode(f).includes(name)).map(rel).sort(), `${name}: spelled on a code line outside ${definer}`)
+      .toEqual([definer]);
+    expect(stallCode(path.join(ccrcRoot, definer)), `${definer} reaches a node: module — it could write the marker`)
+      .not.toMatch(/from\s+['"]node:|import\s*\(\s*['"]node:|\brequire\s*\(/);
+  });
+  it("the nudge prompt's sentence is spelled on a code line in shared/api.ts alone", () => {
+    const needle = 'Continue with your open tasks.';
+    expect(ALL.filter((f) => stallCode(f).includes(needle)).map(rel).sort()).toEqual(['shared/api.ts']);
+  });
+});

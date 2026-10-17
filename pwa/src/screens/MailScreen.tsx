@@ -50,10 +50,10 @@ const loadRunsDefault = (): Promise<{ runs: RunSummary[] }> => api.runs(true);
  *  `unknown` has to read as an honest answer rather than as a bug. */
 const KIND_WORD: Record<NotifyEvent['kind'], string> = {
   mail: 'mail', run: 'run', ask: 'asked', done: 'finished', merged: 'merged',
-  coord: 'config', update: 'update', queue: 'queue', unknown: 'unknown',
+  coord: 'config', update: 'update', queue: 'queue', nudge: 'nudged', unknown: 'unknown',
 };
 const KIND_GLYPH: Record<NotifyEvent['kind'], string> = {
-  mail: MAIL_GLYPH, run: '⟳', ask: '?', done: '✓', merged: '⑂', coord: SETTINGS_GLYPH, update: '⇡', queue: '⤺', unknown: '·',
+  mail: MAIL_GLYPH, run: '⟳', ask: '?', done: '✓', merged: '⑂', coord: SETTINGS_GLYPH, update: '⇡', queue: '⤺', nudge: '↻', unknown: '·',
 };
 
 export function MailScreen({
