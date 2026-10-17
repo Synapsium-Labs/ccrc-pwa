@@ -9,8 +9,9 @@
 // server adds is a compile error here until it has its sentence. Task 5 reconciles these with the other dialog
 // routes' tables.
 import {
-  DIALOG_MULTI_REFUSE_CODES, DIALOG_REFUSE_CODES, DIALOG_TEXT_MAX, DIALOG_TEXT_REFUSE_CODES, isDialogMultiIndexes,
-  isDialogText, type DialogMulti, type DialogMultiRefuseCode, type DialogRefuseCode, type DialogTextRefuseCode,
+  DIALOG_MULTI_REFUSE_CODES, DIALOG_REFUSE_CODES, DIALOG_TAB_REFUSE_CODES, DIALOG_TEXT_MAX, DIALOG_TEXT_REFUSE_CODES,
+  isDialogMultiIndexes, isDialogText, type DialogMulti, type DialogMultiRefuseCode, type DialogRefuseCode,
+  type DialogTabRefuseCode, type DialogTextRefuseCode,
 } from '../../../shared/api';
 import { ApiError, failedTo, sendErrorText } from '../lib/api';
 
@@ -188,4 +189,27 @@ const isDialogRefuseCode = (code: string): code is DialogRefuseCode =>
 export function dialogRefusal(err: unknown, underEnvelope: boolean): string {
   if (!(err instanceof ApiError) || !isDialogRefuseCode(err.message)) return failedTo('answer', err);
   return err.message === 'stale-dialog' && underEnvelope ? STALE_UNDER_ENVELOPE : DIALOG_REFUSE_TEXT[err.message];
+}
+
+/** What the sheet says when a tab move (`api.answerDialogTab`, decision `ask-dialog-tab-route`) is refused, by its code.
+ *  Total over the union, as the other tables are. No refusal pressed Enter, and none closes the sheet. */
+export const DIALOG_TAB_REFUSE_TEXT: Readonly<Record<DialogTabRefuseCode, string>> = {
+  'bad-request': "The sheet couldn't tell which tab is up, so the terminal wasn't moved.",
+  'not-alive': sendErrorText('not-alive'),
+  'stale-dialog': `${MOVED_ON}, so the terminal wasn't moved.`,
+  'no-tabs': 'This ask has no other questions to move to.',
+  'unparsed-dialog': "The terminal's menu couldn't be read just now, so it wasn't moved. Try again, or move it there.",
+  'walk-failed': "The terminal's cursor didn't leave the own-words row, so it wasn't moved. Try again.",
+  'no-move': "The terminal didn't move to another question.",
+  'menu-gone': "The terminal's question went away while moving — check it there.",
+};
+
+const isDialogTabRefuseCode = (code: string): code is DialogTabRefuseCode =>
+  (DIALOG_TAB_REFUSE_CODES as readonly string[]).includes(code);
+
+/** The sentence for a refused tab move: the route's refusal by its code, else the app's one sentence for a write that
+ *  did not go through. */
+export function dialogTabRefusal(err: unknown): string {
+  if (err instanceof ApiError && isDialogTabRefuseCode(err.message)) return DIALOG_TAB_REFUSE_TEXT[err.message];
+  return failedTo('move', err);
 }
